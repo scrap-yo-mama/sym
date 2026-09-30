@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Test de fumée : chaque site du registre répond sur /health (chaque hôte) et sur sa requête de fumée déclarée.
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { startClient, type Client } from './test-helpers.ts';

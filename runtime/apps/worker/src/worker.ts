@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 import { pino, type Logger } from 'pino';
 import { loggerRedaction, PACKAGE_NAME as CORE } from '@runtime/core';
 

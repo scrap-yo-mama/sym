@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Routes de la bibliothèque d'auth, en liste blanche (13 § 5) : connexion, déconnexion, lecture de session. Tout
 // autre chemin /api/auth/* (inscription, réinitialisation, listes de sessions…) répond 404. Chaque connexion, échec de
 // connexion et déconnexion est audité (13 § 9) ; le jeton de session ne sort que dans le cookie HttpOnly.

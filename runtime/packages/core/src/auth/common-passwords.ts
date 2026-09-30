@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Liste locale des mots de passe compromis les plus courants d'au moins 12 caractères (13 § 5), en minuscules.
 // Embarquée : aucun appel externe (INV9). Taille de la liste « à valider » (13 § 14) : amorce issue des palmarès
 // publics de fuites, à étendre sans changer l'API.

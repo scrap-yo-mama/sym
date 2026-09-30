@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Serveur de test (tâche 0.3b) : base migrée jetable, MASTER_KEY et jeton d'amorçage générés à l'exécution (aucun
 // secret en dur), owner créé par l'assistant, membres créés en base (les invitations arrivent en 3.7).
 import { randomBytes } from 'node:crypto';

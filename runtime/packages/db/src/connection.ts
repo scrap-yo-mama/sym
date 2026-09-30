@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Connexions PostgreSQL (14 § 2 et § 4) : DATABASE_URL pour les requêtes, DATABASE_URL_DIRECT (défaut : DATABASE_URL)
 // pour LISTEN, pg-boss, migrations et verrous. Un pooler en mode transaction casse LISTEN et les verrous de session :
 // sans URL directe, démarrage refusé avec le message « connexion de session requise ».

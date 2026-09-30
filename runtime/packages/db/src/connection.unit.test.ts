@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 import { describe, expect, test } from 'vitest';
 import { describeUrl, resolveConnections, transactionPoolerHint } from './connection.js';
 import { expectedSchemaVersion, loadMigrations } from './migrate.js';

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Proxy d'egress local du worker (08b §1) : tout Chromium passe par lui (`--proxy-server`). Il résout une fois,
 // refuse les adresses interdites, se connecte à l'adresse validée. HTTP (forme absolue) et CONNECT (HTTPS, ws et
 // wss : Chromium tunnelle tous les WebSocket par CONNECT derrière un proxy HTTP, vérifié par le test ws://).

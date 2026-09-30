@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Point d'entrée de `pnpm fixtures` : FIXTURES_PORT (défaut 4010), FIXTURES_TOKEN, FIXTURES_SEED.
 import { DEFAULT_SEED, DEFAULT_TOKEN, startFixtureServer } from './server.ts';
 

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Sites de données : API JSON, SSR, SPA, DOM, HTML irrégulier, volume, données personnelles, défilement, blobs, curseur, Link.
 import { ControlError, type FxRequest, type FxResponse, type SiteFactory } from '../core.ts';
 import { formatEuro, makeContacts, makePeople, makeProducts, slicePage, type Product } from '../data.ts';

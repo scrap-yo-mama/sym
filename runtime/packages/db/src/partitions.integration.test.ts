@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Partitions mensuelles de dataset_items : création (mois courant et suivant, idempotente) et purge (DETACH + DROP).
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, inject, test } from 'vitest';

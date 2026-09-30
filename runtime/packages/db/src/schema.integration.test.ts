@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Concordance schéma Drizzle ↔ base migrée (colonnes, types, nullabilité, ensemble des tables),
 // owner_id NOT NULL indexé sur les tables métier, contraintes structurelles (INV5, INV11, 13 § 2 et § 8).
 import { eq, getTableName, is } from 'drizzle-orm';

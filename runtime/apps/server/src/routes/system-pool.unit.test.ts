@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Garde de régression RLS (assert_routes_use_rls) : une route ne lit ni n'écrit une table de contenu (owner_id, ou
 // api_keys) par la connexion système `ctx.pool` : elle doit passer par `withActor` (runtime_app, RLS). Analyse
 // statique simple des appels `ctx.pool.query(...)` de routes/*.ts. Exceptions : lectures d'authentification légitimes.

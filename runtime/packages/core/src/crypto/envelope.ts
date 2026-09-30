@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Enveloppe DEK/KEK (INV8, 08 § 3) : AES-256-GCM (node:crypto), nonce aléatoire de 12 octets par chiffrement,
 // tag de 16 octets explicite, AAD liée à la ligne. Une DEK aléatoire par valeur, enveloppée par la KEK.
 import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';

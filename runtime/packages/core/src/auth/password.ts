@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Mots de passe (13 § 5, ASVS 5.0 L2) : argon2id natif de Node (>= 24.7), profil OWASP m = 19 456 Kio, t = 2, p = 1.
 // Format PHC stocké : $argon2id$v=19$m=…,t=…,p=…$sel$hash (paramètres stockés avec le hash).
 import { argon2, randomBytes, timingSafeEqual } from 'node:crypto';

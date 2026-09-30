@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // DATABASE_URL_DIRECT sur base réelle : la sonde LISTEN/NOTIFY passe sur une connexion directe ; un pooler
 // transactionnel (simulé par la sonde ou détecté par l'heuristique) sans URL directe fait refuser le démarrage.
 import { afterAll, beforeAll, describe, expect, inject, test } from 'vitest';

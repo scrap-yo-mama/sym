@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Garde X6 (assert_x6_guard) : aucun Python ni notebook, nulle part dans le dépôt.
 // Vérifie depuis la racine git (et non depuis runtime/) : `git ls-files '*.py' '*.ipynb'` = 0,
 // et aucun fichier indexé n'a un nom suspect (legs historique, cdc/scrapyomama-runtime/_exclusions.md X6).

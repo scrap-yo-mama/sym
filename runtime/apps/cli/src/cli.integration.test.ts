@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // `runtime migrate` de bout en bout sur base réelle : application, rejeu idempotent, descente hors production.
 import { afterAll, beforeAll, expect, inject, test } from 'vitest';
 import { createTestDatabase, type TestDatabase } from '../../../tests/helpers/pg.js';

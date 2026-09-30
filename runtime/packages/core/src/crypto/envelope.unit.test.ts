@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 import { randomBytes, randomUUID } from 'node:crypto';
 import { describe, expect, test } from 'vitest';
 import { kekFor, openSecret, rotate, SEAL_ALG, sealSecret, SecretDecryptError, secretAad } from './envelope.js';

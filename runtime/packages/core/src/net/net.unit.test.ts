@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Garde SSRF (tâche 0.7, INV10) : classification des adresses, politique, résolution unique, épinglage.
 import { readFileSync } from 'node:fs';
 import { describe, expect, test } from 'vitest';

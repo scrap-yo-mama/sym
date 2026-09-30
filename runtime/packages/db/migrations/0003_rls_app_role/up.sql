@@ -1,3 +1,4 @@
+-- SPDX-License-Identifier: AGPL-3.0-only
 -- 0003_rls_app_role : isolement entre utilisateurs (INV12, 13 § 3) et journal d'audit en ajout seul (13 § 9). Tâche 0.3b.
 --
 -- Modèle : la connexion de l'application (propriétaire des tables : migrations, key_check, rekey, bibliothèque d'auth)

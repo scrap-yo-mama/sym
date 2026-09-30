@@ -1,3 +1,4 @@
+-- SPDX-License-Identifier: AGPL-3.0-only
 -- 0001_init : schéma v3 (cdc/scrapyomama-runtime/03 § Schéma PostgreSQL, 13 § 12, 14 § 9-10, 17 § 4 et 6).
 -- Écrit à la main. Appliqué par le runner (packages/db/src/migrate.ts) dans une transaction, sous pg_advisory_lock.
 -- Énumérations : text + CHECK (pas de type ENUM : évolution par migration simple, sans ALTER TYPE).

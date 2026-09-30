@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Garde unique de toutes les routes (13 § 2-5, 13.1) : 503 avant l'owner, identité (clé d'API ou session), rôle et
 // statut relus en base à chaque requête (ASVS 8.3.2), scope de clé, permission de rôle, contrôle d'Origin sur les
 // mutations d'interface. Aucune route ne choisit l'identité : elle vient d'ici seulement (pas d'impersonation, INV5).

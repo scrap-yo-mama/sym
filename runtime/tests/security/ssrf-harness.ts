@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Banc SSRF partagé (INV10) : serveur de métadonnées simulé qui compte ses requêtes (doit rester à 0), fixture
 // « autorisée », résolveur injecté (rebinding), vecteurs OWASP. Réutilisé par la tâche 2.5 (webhooks).
 // Tout tourne en boucle locale, ports éphémères ; aucune adresse publique n'est jamais contactée.

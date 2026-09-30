@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // CI locale (remplace GitHub Actions tant que la facturation est bloquée) : rejoue en séquence les étapes des jobs
 // quality, unit et integration de .github/workflows/ci.yml. S'arrête au premier échec (code ≠ 0).
 import { spawnSync } from 'node:child_process';

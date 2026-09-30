@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Options de lancement de Chromium figées dans le code (08b §1) : tout le trafic passe par le proxy d'egress local.
 // Pas de liste de contournement : Playwright ajoute alors `<-loopback>` (Chromium contourne la boucle locale sinon).
 // Le DNS de Chromium ne sert à aucune décision : toute résolution locale est refusée (`~NOTFOUND`), c'est le proxy

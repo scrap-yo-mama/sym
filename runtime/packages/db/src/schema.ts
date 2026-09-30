@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Schéma Drizzle : miroir typé de migrations/*/up.sql, qui fait foi. Jamais de `drizzle-kit push`.
 // Concordance vérifiée par schema.integration.test.ts (colonnes, types, nullabilité) sur base migrée.
 import {

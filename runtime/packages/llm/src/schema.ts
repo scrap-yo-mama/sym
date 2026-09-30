@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Schéma de transport dérivé du schéma utilisateur, extraction du JSON et validation Ajv finale (INV1, 08 §1).
 import { findRemoteRefs } from '@runtime/core';
 import { Ajv2020, type ValidateFunction } from 'ajv/dist/2020.js';

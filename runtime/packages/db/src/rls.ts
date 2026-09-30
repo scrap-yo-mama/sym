@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Contexte d'utilisateur des requêtes (INV12, 13 § 3, migration 0003) : chaque transaction de requête passe sous le
 // rôle `runtime_app` (ni propriétaire, ni BYPASSRLS) et pose `app.user_id` / `app.role` avec `set_config(..., true)`,
 // donc limités à la transaction (compatible pooler en mode transaction). Hors de `withActor`, la connexion est

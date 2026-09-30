@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 import { afterEach, describe, expect, test } from 'vitest';
 import { createFakeProvider, scripted, type FakeProvider } from './fake-provider.js';
 

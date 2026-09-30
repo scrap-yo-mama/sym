@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Horloge pilotable : gelée à EPOCH_MS après chaque reset, ne bouge que sur commande (POST /__control).
 export const EPOCH_MS = Date.UTC(2026, 0, 1);
 

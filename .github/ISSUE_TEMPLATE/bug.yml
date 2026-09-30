@@ -1,0 +1,43 @@
+name: Bug
+description: Un comportement du produit ne correspond pas à la documentation.
+labels: ["needs-repro"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Une faille de sécurité ne se signale **jamais** ici : voir `runtime/SECURITY.md`.
+        Ne collez aucun secret, cookie, clé ni URL cible réelle.
+  - type: checkboxes
+    id: perimetre
+    attributes:
+      label: Périmètre
+      options:
+        - label: Cette demande ne relève pas de la page « Hors périmètre » (`runtime/docs/hors-perimetre.md`).
+          required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version (sortie de GET /api/version)
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostic
+    attributes:
+      label: Diagnostic (obligatoire)
+      description: Sortie de la commande locale `runtime diagnostics` (JSON masqué, jamais envoyé automatiquement). Relisez-la avant de la coller.
+      render: json
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Étapes pour reproduire
+      description: De préférence avec une fixture locale, sans site réel.
+    validations:
+      required: true
+  - type: textarea
+    id: attendu
+    attributes:
+      label: Comportement attendu et comportement observé
+    validations:
+      required: true

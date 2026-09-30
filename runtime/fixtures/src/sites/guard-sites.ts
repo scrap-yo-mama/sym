@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Sites de refus et de détection : connexion, défis simulés, 429, géo-restriction, injection, 403 signé fictif, 503, SSRF, lenteur.
 // Les défis et signatures sont des SIMULATIONS GÉNÉRIQUES (aucun produit réel imité, aucun mécanisme de résolution) :
 // elles servent à vérifier que le produit s'arrête.

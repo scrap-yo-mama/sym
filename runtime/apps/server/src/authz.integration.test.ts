@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // INV12 et INV5 sur les routes existantes (tâche 0.3b) : harnais paramétré par le registre des routes.
 // Toute nouvelle route rejoint routes/registry.ts ; si elle porte une ressource, RESOURCE_CASES doit savoir créer un
 // objet de A (sinon le test échoue), et si elle prend un corps, VALID_BODIES doit en fournir un.

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Échoue si un test nommé de tests/invariants.json (table 15 §12) n'existe nulle part dans le code de test.
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';

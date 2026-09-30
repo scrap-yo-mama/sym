@@ -1,0 +1,28 @@
+# CLA Assistant : NON ACTIVE. Le texte du CLA (runtime/CLA.md) est provisoire, à valider par un avocat.
+# Seul déclencheur : workflow_dispatch (manuel). Pour activer, après relecture juridique et décision de
+# publication (tâche 4.5) : remplacer `on:` par pull_request_target (opened, closed, synchronize) et
+# issue_comment (created). Configuration de référence : .github/cla/cla-assistant.json.
+name: cla
+
+on:
+  workflow_dispatch:
+
+permissions:
+  actions: write
+  contents: read
+  pull-requests: write
+  statuses: write
+
+jobs:
+  cla:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: contributor-assistant/github-action@ca4a40a7d1004f18d9960b404b97e5f30a505a08 # v2.6.1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PERSONAL_ACCESS_TOKEN: ${{ secrets.CLA_SIGNATURES_TOKEN }}
+        with:
+          path-to-document: runtime/CLA.md
+          path-to-signatures: cla/signatures.json
+          branch: cla-signatures
+          allowlist: bot*

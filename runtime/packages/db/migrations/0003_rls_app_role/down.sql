@@ -1,3 +1,4 @@
+-- SPDX-License-Identifier: AGPL-3.0-only
 -- Retour de 0003_rls_app_role. Le rôle runtime_app (objet du cluster) est conservé ; ses droits dans cette base sont retirés.
 DROP VIEW admin_run_metadata;
 CREATE VIEW admin_run_metadata AS

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 import { describe, expect, test } from 'vitest';
 import { classifyFailure, parseRetryAfter } from './classify.js';
 import { backoffDelay, FALLBACK_CLASSES, isFallbackEligible, LLM_ERROR_CLASSES, LlmError, NEVER_FALLBACK, RETRY_LIMITS, toFailureClass } from './errors.js';

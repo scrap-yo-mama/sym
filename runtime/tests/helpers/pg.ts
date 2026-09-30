@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Une base jetable par fichier de test d'intégration, dans le conteneur du globalSetup.
 import { randomBytes } from 'node:crypto';
 import pg from 'pg';

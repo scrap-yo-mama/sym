@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Webhooks (08b §1) : même garde, mêmes exceptions (ALLOWED_PRIVATE_HOSTS), pas de variable à part.
 // Squelette pour la tâche 2.5 : refus précoce à l'enregistrement, puis envoi par guardedFetch (recontrôle à la
 // connexion, donc aussi après un rebinding entre l'enregistrement et l'envoi). Aucune redirection n'est suivie :

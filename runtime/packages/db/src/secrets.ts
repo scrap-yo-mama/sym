@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Dépôt des secrets (INV8, 08 § 3, 14 § 7) : scellement par ligne, key_check au démarrage, état `unreadable`,
 // rotation `rekey` reprenable. Aucune fonction ne renvoie une valeur en clair hors d'un `Secret`.
 import { randomUUID } from 'node:crypto';

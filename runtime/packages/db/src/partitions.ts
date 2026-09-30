@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Partitions mensuelles de dataset_items (14 § 9). Création : fonction SQL ensure_dataset_items_partitions (0001_init).
 // Purge physique d'un mois entier : DETACH … CONCURRENTLY puis DROP (hors transaction). Le choix des mois purgeables
 // (datasets expirés, non épinglés) appartient à la tâche 1.8.

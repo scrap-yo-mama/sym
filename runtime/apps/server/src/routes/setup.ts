@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Assistant de premier démarrage (13 § 4) : jeton ADMIN_BOOTSTRAP_TOKEN (comparaison à temps constant, limite par IP),
 // création de l'owner, puis 404 pour toujours (`assert_bootstrap_once`). Le jeton n'est ni stocké ni réaffiché.
 import { createHash, timingSafeEqual } from 'node:crypto';

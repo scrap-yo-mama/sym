@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Santé et disponibilité (joignables avant l'initialisation, 13 § 4).
 import { currentSchemaVersion } from '@runtime/db';
 import { healthResponseSchema } from '@runtime/schemas';

@@ -3,6 +3,7 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
+  "license": "AGPL-3.0-only",
   "packageManager": "pnpm@11.13.0",
   "engines": {
     "node": ">=24 <25"
@@ -25,6 +26,7 @@
     "test:coverage": "vitest run --project unit --coverage",
     "check:deps-pinned": "node scripts/check-deps-pinned.ts",
     "check:licenses": "node scripts/check-licenses.ts",
+    "spdx:add": "node scripts/spdx-headers.ts",
     "check:blacklist": "node scripts/check-blacklist.ts",
     "hooks:install": "git config core.hooksPath runtime/scripts/hooks",
     "ci:local": "node scripts/ci-local.ts"

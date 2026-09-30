@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Schéma Drizzle, migrations SQL versionnées, runner verrouillé, connexions (tâche 0.2), dépôt des secrets (0.3a), RLS et audit (0.3b).
 import { drizzle, type NodePgDatabase } from 'drizzle-orm/node-postgres';
 import pg from 'pg';

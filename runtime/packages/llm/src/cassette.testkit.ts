@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Cassettes msw pour le contrat du client LLM (15 §4) : `replay` strict par défaut (requête inconnue => échec),
 // `record` seulement si LLM_CASSETTE_MODE=record, clé de correspondance normalisée (jamais le prompt brut),
 // secrets purgés (en-têtes, valeurs de clé), cas synthétiques marqués et toujours rejoués.

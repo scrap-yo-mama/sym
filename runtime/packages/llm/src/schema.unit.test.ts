@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 import { describe, expect, test } from 'vitest';
 import { LlmError } from './errors.js';
 import { assertNoRemoteRefs, extractJson, restoreOptionals, toTransportSchema, validateOriginal, wrapRoot } from './schema.js';

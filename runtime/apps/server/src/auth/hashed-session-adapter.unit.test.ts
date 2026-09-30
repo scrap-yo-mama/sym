@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Surcouche de l'adaptateur : la base (ici un faux adaptateur) ne reçoit jamais le jeton de session en clair.
 import type { DBAdapter } from 'better-auth/types';
 import { expect, test } from 'vitest';

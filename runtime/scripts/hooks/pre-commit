@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: AGPL-3.0-only
 # Garde X6 (pre-commit) : refuse tout *.py, *.ipynb ou nom suspect indexé. POSIX, sans node ni pnpm : instantané.
 # Activation : pnpm hooks:install (git config core.hooksPath runtime/scripts/hooks).
 bad=""

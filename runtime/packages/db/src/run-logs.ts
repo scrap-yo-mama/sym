@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Écriture de `run_logs` (INV4, INV8) : le filtre de masquage s'applique avant l'insertion, jamais après.
 import { redact, secretValues, type SecretValueRegistry } from '@runtime/core';
 import type pg from 'pg';

@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: AGPL-3.0-only
 # Choisit le processus à lancer selon RUNTIME_MODE (server | worker | all | migrate, défaut all).
 set -uo pipefail
 

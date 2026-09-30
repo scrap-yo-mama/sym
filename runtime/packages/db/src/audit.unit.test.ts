@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 import { REDACTED, Secret } from '@runtime/core';
 import { expect, test } from 'vitest';
 import { auditMeta } from './audit.js';

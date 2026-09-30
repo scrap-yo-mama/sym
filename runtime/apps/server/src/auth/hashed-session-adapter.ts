@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Surcouche de l'adaptateur Better Auth (13 § 5, point imposé 1 de 0.3b) : la base ne contient qu'un SHA-256 du jeton
 // de session (colonne `auth_sessions.token_hash`), jamais le jeton. Better Auth manipule le jeton en clair (cookie
 // signé) : à l'écriture on hache `token`, dans chaque clause `where` sur `token` on hache la valeur, et en sortie on

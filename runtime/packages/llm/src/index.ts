@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Couche LLM (tâche 0.4) : transport Chat Completions maison, providers[] par rôle, sonde de capacités, échelle S1-S4 + Ajv final.
 export const PACKAGE_NAME = '@runtime/llm';
 

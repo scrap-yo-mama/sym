@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 import { spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { inspect } from 'node:util';

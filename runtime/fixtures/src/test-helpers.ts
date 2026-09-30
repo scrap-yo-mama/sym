@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 import { request } from 'node:http';
 import { startFixtureServer, type FixtureServer } from './server.ts';
 

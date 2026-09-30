@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Garde SSRF (08b §1, INV10) : politique, résolution unique A + AAAA, décision sur les adresses résolues.
 // Activée par défaut, non désactivable par un membre. Seules dérogations : ALLOWED_PRIVATE_HOSTS (admin).
 import { lookup } from 'node:dns/promises';

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Comptage tokens et coût (INV4) : d'après l'usage renvoyé, cache et raisonnement compris ; prix absent => null, jamais 0.
 import type { ChatMessage, RawUsage } from './types.js';
 

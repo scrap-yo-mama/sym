@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 import type pg from 'pg';
 import { expect, test, vi } from 'vitest';
 import { withActor } from './rls.js';

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Rôles fixes et matrice de permissions (13 § 2, arbitrage A3). Pas de rôle personnalisé.
 // P = sur ses propres objets, O = oui, M = métadonnées seulement, '-' = non. Le propriétaire limite les données
 // (owner_id + RLS) ; cette matrice ne dit que si le rôle peut tenter l'action.

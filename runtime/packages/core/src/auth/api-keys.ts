@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Clés d'API à scopes (13 § 8) : `sy_live_` + préfixe lisible + secret de 32 octets CSPRNG ; stockée en SHA-256
 // (pas de sel utile pour 256 bits d'aléa) ; affichée une seule fois ; expiration obligatoire.
 import { createHash, randomBytes } from 'node:crypto';

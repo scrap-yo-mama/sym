@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // GET /api/me : l'identité de l'appelant, relue en base (session d'interface ou clé d'API).
 import type { FastifyInstance } from 'fastify';
 import type { ServerContext } from '../context.js';

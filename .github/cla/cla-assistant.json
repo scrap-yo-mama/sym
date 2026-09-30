@@ -1,0 +1,12 @@
+{
+  "_etat": "NON ACTIVE. Configuration prévue pour CLA Assistant (contributor-assistant/github-action). Texte du CLA provisoire, à valider par un avocat avant toute activation (runtime/CLA.md).",
+  "active": false,
+  "action": "contributor-assistant/github-action",
+  "path-to-document": "runtime/CLA.md",
+  "path-to-signatures": "cla/signatures.json",
+  "branch": "cla-signatures",
+  "allowlist": "bot*",
+  "scope": "cœur AGPL-3.0-only ; packages/client et packages/schemas (MIT) : DCO seul",
+  "signature-phrase": "I have read the CLA Document and I hereby sign the CLA",
+  "reactivation": "remplacer 'workflow_dispatch' par 'pull_request_target' et 'issue_comment' dans .github/workflows/cla.yml, après relecture juridique (tâche 4.5)"
+}

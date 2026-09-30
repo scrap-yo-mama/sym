@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Contrat du client LLM (08 §1 « Tests de contrat », 15 §4) : P0 = DeepInfra zai-org/GLM-5.3 et OpenRouter, en réponses
 // ENREGISTRÉES (cassettes msw, replay strict). Les cas qu'on ne peut pas obtenir réellement (5xx, refus, 429, vide) sont
 // des cassettes écrites à la main, marquées `synthetic: true`. Réenregistrement : LLM_CASSETTE_MODE=record (voir CONTRIBUTING).

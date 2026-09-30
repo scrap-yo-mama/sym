@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Journal d'audit (13 § 9) : ajout seul. Écrit sous `runtime_app` (INSERT seul, ni SELECT, ni UPDATE, ni DELETE).
 // `meta` passe par `redact` (couche 3) puis perd toute clé au nom sensible : ni secret, ni cookie, ni jeton (INV8).
 import { redact, REDACTED } from '@runtime/core';

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Better Auth 1.7 limité au noyau (13 § 5) : e-mail + mot de passe, sessions d'interface. Aucun plugin chargé
 // (ni admin/impersonation, ni SSO, ni oidcProvider, ni mcp, ni twoFactor : la 2FA arrive en 3.7, voir README).
 // Inscription publique fermée ; le contrôle d'accès reste dans notre code (routes/guard.ts).
