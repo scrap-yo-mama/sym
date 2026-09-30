@@ -20,6 +20,8 @@ export default defineConfig({
             'apps/*/src/**/*.{unit,prop}.test.ts',
             'tests/**/*.{unit,prop}.test.ts',
             'tests/invariants.todo.test.ts',
+            // Banc d'évaluation (15 §11) : seuls ses tests unitaires tournent en PR, jamais un run LLM.
+            'eval/**/*.{unit,prop}.test.ts',
           ],
         },
       },

@@ -9,6 +9,7 @@
     "apps/*/src/**/*.ts",
     "tests/**/*.ts",
     "scripts/**/*.ts",
+    "eval/**/*.ts",
     "vitest.config.ts"
   ]
 }

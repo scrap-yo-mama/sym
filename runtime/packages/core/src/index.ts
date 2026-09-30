@@ -6,3 +6,4 @@ export function assertNever(value: never): never {
 }
 
 export * from './crypto/index.js';
+export type * from './agent/engine.js';
