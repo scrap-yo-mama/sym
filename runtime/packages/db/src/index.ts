@@ -8,6 +8,7 @@ export const PACKAGE_NAME = '@runtime/db';
 export * from './audit.js';
 export * from './connection.js';
 export * from './migrate.js';
+export * from './pacing.js';
 export * from './partitions.js';
 export * from './rls.js';
 export * from './run-logs.js';
