@@ -15,7 +15,7 @@
     "test:e2e": "node scripts/not-implemented.ts test:e2e 'tâches 3.x (interface) et 4.x (recette)'",
     "test:security": "node scripts/not-implemented.ts test:security 'tâche 0.7 puis 4.3'",
     "eval": "node scripts/not-implemented.ts eval 'tâche 2.8'",
-    "fixtures": "node scripts/not-implemented.ts fixtures 'tâche 0.5'",
+    "fixtures": "node fixtures/src/main.ts",
     "zz:cleanup": "node scripts/not-implemented.ts zz:cleanup 'tâche 0.5'",
     "lint": "eslint .",
     "typecheck": "tsc -p tsconfig.typecheck.json",
