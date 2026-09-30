@@ -11,3 +11,4 @@ export * from './auth/index.js';
 export type * from './agent/engine.js';
 export * from './model/index.js';
 export * from './schema/index.js';
+export * from './dsl/index.js';

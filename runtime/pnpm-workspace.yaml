@@ -30,6 +30,11 @@ catalog:
   msw: 2.15.0
   # Garde SSRF (tâche 0.7) : fetch épinglé à undici (8.11.1 et 8.11.2 < 7 jours au 2026-09-30, minimumReleaseAge).
   undici: 8.11.0
+  # DSL déclaratif (tâche 1.1b) : JSONPath RFC 9535 (json-p3, MIT, sans dépendance, sans eval ; 2.3.2 publié sans fichiers de types) ; CSS + HTML (css-select, htmlparser2, domhandler : BSD-2/MIT, sans eval).
+  json-p3: 2.3.1
+  css-select: 7.0.0
+  htmlparser2: 12.0.0
+  domhandler: 6.0.1
 
 # Durcissement supply chain (08b §5). Le durcissement complet est la tâche 0.8.
 minimumReleaseAge: 10080
