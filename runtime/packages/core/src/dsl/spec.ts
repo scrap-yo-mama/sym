@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Format de stratégie déclarative (04b § 2, `schema_version: 1`) : types, JSON Schema 2020-12 et validation à l'enregistrement
 // (schéma, compilation des JSONPath et CSS, opérateurs, `allowed_hosts`, absence de secret, couverture des `required` de `output_schema`).
 import { Ajv2020, type ErrorObject } from 'ajv/dist/2020.js';

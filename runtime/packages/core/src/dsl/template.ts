@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Gabarits de requête : `{{input.x}}`, `{{page.x}}`, `{{steps.id.nom}}`, rien d'autre (aucune expression). L'hôte de l'URL est statique
 // (vérifié à l'enregistrement) et doit rester dans `allowed_hosts` après rendu (INV10 ; la garde SSRF de `net/` s'applique en plus).
 import { DslError } from './errors.js';

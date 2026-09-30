@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Validation d'un patch de réparation RFC 6902 BORNÉ (04b § 2, 04 § 5) : `sources`, `fields`, `pagination` seulement.
 // Tout chemin hors de ces trois racines est rejeté, en particulier `request.allowed_hosts`, `request.session` et `output_schema`
 // (l'agent ne doit étendre seul ni le périmètre réseau, ni l'identité, ni assouplir le schéma de sortie).

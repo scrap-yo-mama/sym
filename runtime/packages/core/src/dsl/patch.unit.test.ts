@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Patch de réparation RFC 6902 borné (04b § 2, 04 § 5) : critère 1.1b « patch sur allowed_hosts rejeté ».
 import { describe, expect, it } from 'vitest';
 import { patchKey, validateRepairPatch, type PatchRejectionCode } from './patch.js';

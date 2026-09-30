@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Empreinte de forme (`expect.shape_fingerprint`) : hash des CHEMINS et des TYPES d'un document, jamais des valeurs.
 import { createHash } from 'node:crypto';
 

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // HTML (htmlparser2, MIT) + sélecteurs CSS (css-select, BSD-2-Clause) : aucun `eval`, aucune pseudo-classe personnalisée,
 // aucune évaluation de script (le contenu des balises <script> reste du texte). Bornes : taille, profondeur de l'arbre, longueur
 // et complexité du sélecteur.

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Critère 1.1b (tableau 10) : les fixtures API, SSR et blobs sont extraites en E1 par l'interpréteur déclaratif, sortie validée par le
 // validateur de 1.1a contre un output_schema. Le serveur de fixtures (0.5) est démarré pour de bon : les réponses sont réelles.
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Motifs I-Regexp (RFC 9485) bornés. Aucun motif d'utilisateur n'atteint `RegExp` sans être passé ici :
 // grammaire I-Regexp stricte, puis bornes qui écartent le retour arrière catastrophique.
 //   - longueur du motif <= 256 caractères ; profondeur de groupes <= 8 ;

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Erreurs de l'interpréteur déclaratif (tâche 1.1b). Les messages ne contiennent jamais de valeur issue d'une page ou d'une API.
 
 export type DslErrorCode =

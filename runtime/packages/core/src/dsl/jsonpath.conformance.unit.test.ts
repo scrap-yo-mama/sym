@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Suite de conformité officielle RFC 9535 (jsonpath-compliance-test-suite, BSD-2-Clause, voir conformance/SOURCE.md),
 // exécutée contre l'interpréteur DURCI (mêmes bornes qu'en production), pas contre la bibliothèque brute.
 import { readFileSync } from 'node:fs';

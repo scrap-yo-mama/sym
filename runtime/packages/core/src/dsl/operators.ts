@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Opérateurs de transformation : liste FERMÉE (04b § 2). Ajouter un opérateur = nouvelle `schema_version`.
 // Aucune chaîne d'expression, aucune fonction utilisateur : un opérateur est un nom, plus des options validées ici.
 import { DslError } from './errors.js';

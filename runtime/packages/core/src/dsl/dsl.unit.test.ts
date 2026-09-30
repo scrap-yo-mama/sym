@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Interpréteur déclaratif : opérateurs fermés, motifs bornés, limites, blobs, validation à l'enregistrement, gabarits.
 import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { createRequire } from 'node:module';

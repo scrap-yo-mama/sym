@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Limites de l'interpréteur (04b § 2, `limits`) : taille, profondeur, nombre d'items, temps. Tout dépassement lève `DslError`.
 import { DslError } from './errors.js';
 

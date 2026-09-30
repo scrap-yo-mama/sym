@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // JSONPath RFC 9535 via `json-p3` (MIT, sans dépendance, aucun `eval` ni `new Function`, vérifié sur la source publiée).
 // Durcissements propres à Scrapyomama :
 //   - `match()` / `search()` passent par `regex.ts` (motif I-Regexp borné, texte <= 4 096 caractères) ;

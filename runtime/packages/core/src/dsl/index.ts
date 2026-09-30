@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Interpréteur de stratégie déclarative (tâche 1.1b, 04b § 2) : sans I/O réseau.
 export { DslError, type DslErrorCode } from './errors.js';
 export { DEFAULT_DSL_LIMITS, HARD_DSL_LIMITS, resolveLimits, type DslLimits } from './limits.js';

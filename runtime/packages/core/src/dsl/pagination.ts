@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Pagination : valeur du paramètre pour la page suivante et règles d'arrêt (04b § 2). L'arrêt est certain : `hard_max_pages`
 // est obligatoire (vérifié à l'enregistrement) et un curseur déjà vu arrête toujours la boucle.
 import { DslError } from './errors.js';

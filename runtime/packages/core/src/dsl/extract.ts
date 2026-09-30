@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Interpréteur d'extraction (04b § 2) : applique les `sources[]` dans l'ordre à UNE réponse, retient la première source conforme.
 // Conforme = assez d'enregistrements, aucun champ requis manquant ou mal typé, et sortie valide contre `output_schema` (INV1) si fourni.
 // Une source de repli retenue est un signal `escalated` (machine à états, transition 5).

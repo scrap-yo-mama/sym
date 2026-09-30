@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Décodeurs de blobs embarqués (04b § 2, `sources[].from = "embedded"`) : `__NEXT_DATA__`, Nuxt (`__NUXT_DATA__` à plat, `window.__NUXT__`),
 // état Apollo (`window.__APOLLO_STATE__`, références `__ref` résolues), JSON-LD, `script#id`.
 // Rien n'est exécuté : le texte de la balise est lu comme JSON, ou comme un littéral JSON après `window.VARIABLE =`.
