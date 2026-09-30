@@ -10,10 +10,13 @@
   },
   "dependencies": {
     "@runtime/core": "workspace:*",
+    "@runtime/db": "workspace:*",
+    "pg": "catalog:",
     "pino": "catalog:"
   },
   "devDependencies": {
     "@types/node": "catalog:",
+    "@types/pg": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:"
   }

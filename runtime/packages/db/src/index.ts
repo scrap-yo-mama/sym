@@ -12,6 +12,8 @@ export * from './partitions.js';
 export * from './rls.js';
 export * from './run-logs.js';
 export * from './secrets.js';
+export * from './queue.js';
+export * from './runs.js';
 export { schema };
 
 /** Extrait le nom de la base d'une URL PostgreSQL, sans exposer le mot de passe. */

@@ -14,10 +14,11 @@ import { describe, test } from "vitest";
 // refusé à 0 requête) ; le volet « sortie LLM » et « réparation » est repris par 2.3.
 // INV10 (0.7) : assert_ssrf_guard et assert_webhook_ssrf_blocked (squelette repris par 2.5) sont dans
 // tests/security/ssrf-guard.security.test.ts (projet Vitest security, pnpm test:security).
+// INV4 et D-12 (1.3) : assert_run_traced et assert_worker_key_mismatch sont dans apps/worker/src/worker.integration.test.ts (worker réel,
+// kill -9 et SIGTERM compris) ; file, balayeur et bail : packages/db/src/runs.integration.test.ts.
 describe("invariants (à implémenter)", () => {
   test.todo("assert_cheapest_first_logged"); // INV2, tâche(s) 2.1
   test.todo("assert_status_transitions"); // INV3, tâche(s) 1.2
-  test.todo("assert_run_traced"); // INV4, tâche(s) 1.3
   test.todo("assert_identity_pinned"); // INV5, tâche(s) 2.6, 2.7
   test.todo("assert_tunnel_single_user"); // INV5, tâche(s) 2.6, 2.7
   test.todo("assert_no_circumvention"); // INV6, tâche(s) 1.7, 4.3

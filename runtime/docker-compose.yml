@@ -61,9 +61,12 @@ services:
     environment:
       RUNTIME_MODE: worker
       DATABASE_URL: postgres://runtime:runtime-dev@postgres:5432/runtime
+      MASTER_KEY: ${MASTER_KEY:-}
     depends_on:
       postgres:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
 
 volumes:
   pgdata:
