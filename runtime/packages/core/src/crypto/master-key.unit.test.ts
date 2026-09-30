@@ -18,7 +18,9 @@ describe('MASTER_KEY stricte', () => {
   test.each([
     ['31 octets', b64(randomBytes(31))],
     ['33 octets', b64(randomBytes(33))],
-    ['base64url', b64(randomBytes(32)).replace(/\+/g, '-').replace(/\//g, '_')],
+    // Tirage jusqu'à obtenir au moins un « + » ou « / » : sinon (≈ 25 % des cas) la forme base64url
+    // est identique à la base64 canonique et le test échouerait sans défaut du code.
+    ['base64url', withUrlChars().replace(/\+/g, '-').replace(/\//g, '_')],
     ['sans remplissage', b64(randomBytes(32)).replace(/=$/, '')],
     ['hex', randomBytes(32).toString('hex')],
     ['phrase secrète', 'correct horse battery staple, très long et mémorisable'],
@@ -136,3 +138,10 @@ describe('loadKeyring : _FILE et _PREVIOUS', () => {
     expect(warnings).toEqual([]);
   });
 });
+
+function withUrlChars(): string {
+  for (;;) {
+    const k = b64(randomBytes(32));
+    if (/[+/]/.test(k)) return k;
+  }
+}

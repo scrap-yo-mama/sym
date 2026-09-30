@@ -1,0 +1,50 @@
+// Garde de régression RLS (assert_routes_use_rls) : une route ne lit ni n'écrit une table de contenu (owner_id, ou
+// api_keys) par la connexion système `ctx.pool` : elle doit passer par `withActor` (runtime_app, RLS). Analyse
+// statique simple des appels `ctx.pool.query(...)` de routes/*.ts. Exceptions : lectures d'authentification légitimes.
+import { readdirSync, readFileSync } from 'node:fs';
+import { expect, test } from 'vitest';
+
+const ROUTES_DIR = new URL('./', import.meta.url);
+const MIGRATION = new URL('../../../../packages/db/migrations/0003_rls_app_role/up.sql', import.meta.url);
+
+/** Tables sous RLS, lues dans la migration qui les protège (source unique). */
+function rlsTables(): string[] {
+  const sql = readFileSync(MIGRATION, 'utf8');
+  const list = /FOREACH t IN ARRAY ARRAY\[([\s\S]*?)\]/.exec(sql)?.[1] ?? '';
+  return [...list.matchAll(/'([a-z_]+)'/g)].map((m) => m[1]!).concat(/ALTER TABLE (\w+) ENABLE ROW LEVEL SECURITY;/.exec(sql)?.[1] ?? []);
+}
+
+/**
+ * Exceptions commentées (fichier → fragment SQL normalisé). Toute autre requête système sur une table sous RLS échoue.
+ */
+const EXCEPTIONS: Record<string, string> = {
+  // Authentification par clé d'API : lecture par l'empreinte AVANT de connaître l'utilisateur (étape système).
+  'guard.ts|SELECT k.id, k.user_id, k.prefix, k.scopes': 'authentification',
+  // Horodatage de dernière utilisation de la clé qui vient d'être authentifiée.
+  'guard.ts|UPDATE api_keys SET last_used_at = now() WHERE id = $1': 'authentification',
+  // Audit `denied` d'un accès à la clé d'autrui : existence seulement, la réponse reste 404 uniforme.
+  'api-keys.ts|SELECT 1 FROM api_keys WHERE id = $1': 'audit denied',
+};
+
+test('assert_routes_use_rls : aucune requête système sur une table de contenu hors exceptions commentées', () => {
+  const tables = rlsTables();
+  expect(tables).toEqual(expect.arrayContaining(['runs', 'datasets', 'site_sessions', 'secrets', 'api_keys']));
+  const offending: string[] = [];
+  const used = new Set<string>();
+  for (const file of readdirSync(ROUTES_DIR).filter((f) => f.endsWith('.ts') && !f.endsWith('.test.ts'))) {
+    const source = readFileSync(new URL(file, ROUTES_DIR), 'utf8');
+    for (const m of source.matchAll(/ctx\.pool\.query(?:<[^>]*>)?\(\s*([`'"])([\s\S]*?)\1/g)) {
+      const sql = m[2]!.replace(/\s+/g, ' ').trim();
+      const touched = tables.filter((t) => new RegExp(`\\b(FROM|JOIN|UPDATE|INTO)\\s+${t}\\b`, 'i').test(sql));
+      if (touched.length === 0) continue;
+      const exception = Object.keys(EXCEPTIONS).find((k) => k.startsWith(`${file}|`) && sql.includes(k.slice(file.length + 1)));
+      if (exception) used.add(exception);
+      else offending.push(`${file} : ${sql.slice(0, 120)} (${touched.join(', ')})`);
+    }
+    // Une connexion système détournée (`const pool = ctx.pool`, `ctx.pool.connect`) échappe à l'analyse : interdite.
+    if (/=\s*ctx\.pool\b|ctx\.pool\.connect\(/.test(source) && file !== 'setup.ts') offending.push(`${file} : ctx.pool détourné`);
+  }
+  expect(offending).toEqual([]);
+  // Une exception devenue inutile est retirée (la liste reste exacte).
+  expect([...used].sort()).toEqual(Object.keys(EXCEPTIONS).sort());
+});

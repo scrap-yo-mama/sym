@@ -12,6 +12,8 @@ Schéma PostgreSQL v3, migrations SQL versionnées et runner verrouillé (tâche
 | `src/connection.ts` | `DATABASE_URL` / `DATABASE_URL_DIRECT` et détection du pooler en mode transaction. |
 | `src/secrets.ts` | Secrets (INV8, 0.3a) : `keyCheck` (témoin `settings.key_check`), `secretStore` (`put`, `get` → `Secret`, `list` en métadonnées), `rekey` reprenable, `acceptKeyLoss`, registre `ENCRYPTED_COLUMNS`. Crypto pure dans `@runtime/core` (`crypto/`). |
 | `src/run-logs.ts` | `appendRunLog` : masquage (`redact`) avant insertion dans `run_logs`. |
+| `src/rls.ts` | `withActor(pool, actor, fn)` : transaction sous le rôle `runtime_app` avec `app.user_id` / `app.role` (0.3b). |
+| `src/audit.ts` | `appendAudit` : ligne d’`audit_events` (ajout seul), `meta` masquée (`redact` + clés sensibles). |
 | `src/partitions.ts` | Partitions mensuelles de `dataset_items` : création, liste, purge (`DETACH … CONCURRENTLY` puis `DROP`). |
 
 Secrets : `runtime keygen`, `runtime key-check`, `runtime rekey --confirm` (MASTER_KEY = nouvelle, MASTER_KEY_PREVIOUS = ancienne ; lots transactionnels, état dans `settings.rekey_state`, relance = reprise). Enveloppe : KEK = HKDF-SHA256(MASTER_KEY, libellé `kek:secrets`) ; DEK aléatoire par valeur ; AAD `secret|id|kind|owner_id|instance` recalculée à chaque lecture ; `kek_version` = génération de la clé maîtresse. Migration `0002_secret_state` : `secrets.state` (`ok` | `unreadable`), `unreadable_since`.
@@ -41,21 +43,21 @@ Partitionnement déclaratif `RANGE (created_at)`, clé primaire `(created_at, da
 
 ## Tables
 
-33 tables (plus `schema_migrations`, gérée par le runner) et 2 vues (`admin_run_metadata`, `admin_dataset_usage`, métadonnées seulement). Tables métier avec `owner_id` NOT NULL indexé et `project_id` NOT NULL (défaut : projet `default`, `00000000-0000-0000-0000-000000000001`) : `apis`, `strategy_versions`, `runs`, `run_attempts`, `run_logs`, `run_artifacts`, `investigation_events`, `status_events`, `datasets`, `dataset_items`, `dedup_keys`, `schedules`, `site_sessions`, `tunnels`, `tunnel_jobs`, `webhook_subscriptions`, `webhook_deliveries`. `secrets` porte `project_id` et un `owner_id` **nullable** (NULL = secret d'instance : LLM, proxys, SMTP). Sans propriétaire par nature : `users` et tables d'auth (rattachées par `user_id`), `audit_events`, `settings`, `projects`, `domain_pacing_state` (clé = domaine seulement, `assert_pacing_key_is_domain`), `worker_heartbeats`, `subject_exclusions` (liste d'instance). RLS : tâche 0.3b.
+33 tables (plus `schema_migrations`, gérée par le runner) et 2 vues (`admin_run_metadata`, `admin_dataset_usage`, métadonnées seulement). Tables métier avec `owner_id` NOT NULL indexé et `project_id` NOT NULL (défaut : projet `default`, `00000000-0000-0000-0000-000000000001`) : `apis`, `strategy_versions`, `runs`, `run_attempts`, `run_logs`, `run_artifacts`, `investigation_events`, `status_events`, `datasets`, `dataset_items`, `dedup_keys`, `schedules`, `site_sessions`, `tunnels`, `tunnel_jobs`, `webhook_subscriptions`, `webhook_deliveries`. `secrets` porte `project_id` et un `owner_id` **nullable** (NULL = secret d'instance : LLM, proxys, SMTP). Sans propriétaire par nature : `users` et tables d'auth (rattachées par `user_id`), `audit_events`, `settings`, `projects`, `domain_pacing_state` (clé = domaine seulement, `assert_pacing_key_is_domain`), `worker_heartbeats`, `subject_exclusions` (liste d'instance). RLS : migration `0003_rls_app_role` (ci-dessous).
 
 ## Mapping Better Auth 1.7 (adaptateur Drizzle, branché en 0.3b)
 
 Vérifié sur `@better-auth/core@1.7.5` (`db/get-tables`) et `better-auth@1.7.5` (`plugins/two-factor/schema`). Options à passer :
 
 ```ts
-drizzleAdapter(db, { provider: 'pg', schema: { users, auth_sessions: authSessions, auth_accounts: authAccounts, verifications, two_factor: twoFactor } }),
+drizzleAdapter(db, { provider: 'pg', schema: { users, auth_sessions: authSessions, auth_accounts: authAccounts, verifications } }), // enveloppé par withHashedSessionTokens
 advanced: { database: { generateId: 'uuid' } },           // colonnes id en uuid
-user: { modelName: 'users', fields: { name: 'displayName' },   // clés = propriétés du schéma Drizzle
-        additionalFields: { role, status, locale, theme } }, // input: false pour role et status
-session: { modelName: 'auth_sessions', fields: { token: 'tokenHash', updatedAt: 'lastSeenAt', ipAddress: 'ip' } },
+user: { modelName: 'users', fields: { name: 'displayName' } },  // clés = propriétés du schéma Drizzle ; rôle et statut relus par notre garde
+session: { modelName: 'auth_sessions', fields: { token: 'tokenHash', updatedAt: 'lastSeenAt', ipAddress: 'ip' },
+           additionalFields: { absoluteExpiresAt } },            // durée absolue, posée par databaseHooks
 account: { modelName: 'auth_accounts', fields: { password: 'passwordHash' } },
 verification: { modelName: 'verifications' },
-plugins: [twoFactor({ schema: { twoFactor: { modelName: 'two_factor', fields: { secret: 'secretCiphertext' } } } })],
+// plugins : aucun en 0.3b (twoFactor écarté, voir « Décisions 0.3b »)
 ```
 
 | Modèle Better Auth | Table | Champs attendus → colonnes |
@@ -66,6 +68,22 @@ plugins: [twoFactor({ schema: { twoFactor: { modelName: 'two_factor', fields: { 
 | `verification` | `verifications` | id, identifier, value, expiresAt, createdAt, updatedAt |
 | `twoFactor` (plugin) | `two_factor` | id, secret → `secret_ciphertext`, backupCodes → `backup_codes`, userId (unique), verified, failedVerificationCount, lockedUntil |
 
-Colonnes propres au produit, ignorées par Better Auth : `users.role/status/locale/theme/email_verified_at/disabled_at/last_login_at`, `auth_sessions.absolute_expires_at/revoked_at`, `two_factor.nonce/key_version/confirmed_at`, table `backup_codes`. Le plugin `apiKey` n'est **pas** utilisé : `api_keys` est notre table (format `sy_live_`, SHA-256, scopes contrôlés en base). Le stockage `rateLimit` en base n'est pas prévu (mémoire par défaut).
+Colonnes propres au produit, ignorées par Better Auth : `users.role/status/locale/theme/email_verified_at/disabled_at/last_login_at`, `auth_sessions.revoked_at`, `two_factor.nonce/key_version/confirmed_at`, table `backup_codes`. Le plugin `apiKey` n'est **pas** utilisé : `api_keys` est notre table (format `sy_live_`, SHA-256, scopes contrôlés en base). Le stockage `rateLimit` en base n'est pas prévu (mémoire par défaut).
 
-**À trancher en 0.3b** : Better Auth écrit le jeton de session tel quel dans `token` (colonne `token_hash`) et chiffre le secret TOTP avec son propre secret, pas avec `MASTER_KEY` + AAD (13 § 5 et § 7) ; les codes de secours du plugin sont une chaîne chiffrée dans `two_factor.backup_codes`, pas des hachés dans `backup_codes`. Il faut soit des crochets (hooks de base) qui hachent et chiffrent, soit un TOTP maison.
+## Décisions 0.3b (auth noyau)
+
+Branchement réel : `apps/server/src/auth/better-auth.ts` (Better Auth **1.7.5**, entrée `better-auth/minimal`, sans Kysely).
+
+- **Jeton de session haché** : surcouche de l'adaptateur Drizzle (`apps/server/src/auth/hashed-session-adapter.ts`). Pour le modèle `session`, `token` est remplacé par son SHA-256 à l'écriture et dans chaque clause `where` (y compris `in` et dans les transactions de la bibliothèque) ; le jeton reçu est rendu à l'appelant. La base ne contient que `auth_sessions.token_hash` (test : aucun jeton en clair dans aucune table).
+- **2FA non activée en 0.3b** : le plugin `twoFactor` chiffre la graine TOTP avec le secret de la bibliothèque (pas `MASTER_KEY` + AAD) et garde les codes de secours dans une chaîne chiffrée réversible (`storeBackupCodes`), pas hachés. Solution retenue pour 3.7 : **TOTP maison** sur nos primitives — graine CSPRNG scellée par `sealSecret` (KEK `secrets`, AAD `two_factor|user_id|key_version`) dans `two_factor.secret_ciphertext`/`nonce`/`key_version`, vérification RFC 6238 (`node:crypto` HMAC-SHA1, fenêtre ±1, anti-rejeu par dernier pas accepté), 10 codes de secours hachés (SHA-256 d'un aléa de 64 bits minimum) dans `backup_codes`, colonne `two_factor.backup_codes` inutilisée. `ENCRYPTED_COLUMNS` marque `two_factor.secret_ciphertext` pour 3.7.
+- **Télémétrie** (`@better-auth/telemetry` 1.7.5, lu) : aucun envoi sans `BETTER_AUTH_TELEMETRY_ENDPOINT` (vide par défaut) ; la variable `BETTER_AUTH_TELEMETRY` l'emporte sur l'option. Donc `telemetry: { enabled: false }` **et** retrait des variables `BETTER_AUTH_TELEMETRY*` de l'environnement au démarrage. Test : intercepteur global (fetch, undici, http, sockets), 0 requête sortante (démarrage, assistant, connexion, session).
+- **Aucun plugin** (ni `admin`, ni impersonation, ni SSO) ; seules trois routes de la bibliothèque sont exposées : `POST /api/auth/sign-in/email`, `POST /api/auth/sign-out`, `GET /api/auth/get-session` ; tout autre chemin répond 404. `verifications.value` reste en clair tant qu'aucun flux ne l'utilise (réinitialisation par e-mail : 3.7, à hacher alors comme la session).
+- **Secret de la bibliothèque** : HKDF de `MASTER_KEY`, libellé `kek:sessions` (une rotation de clé ferme toutes les sessions).
+- **Mots de passe** : `crypto.argon2` (argon2id, m = 19 456, t = 2, p = 1), fonctions `hash`/`verify` passées à la bibliothèque ; politique 12-128 caractères + liste locale (`@runtime/core`, `auth/`).
+
+## RLS (migration 0003)
+
+- Rôle `runtime_app` : `NOLOGIN`, ni superutilisateur, ni `BYPASSRLS`, propriétaire d'aucune table ; accordé à l'utilisateur de connexion (`GRANT runtime_app TO current_user`) pour `SET LOCAL ROLE`. Objet du cluster : créé s'il manque, **non supprimé** par `down.sql` (qui retire ses droits dans la base).
+- RLS activée sur les 18 tables à `owner_id` (dont `secrets` et `dataset_items`) et sur `api_keys` (`user_id`) ; politique `owner_isolation` (`owner_id = app_current_user_id()`, lecture et écriture) ; `instance_read` : API `instance` sans session (et ses versions de stratégie) lisible par un utilisateur authentifié.
+- **Sans `FORCE ROW LEVEL SECURITY`** (écart à 13 § 3) : le propriétaire des tables est l'identité système (`keyCheck`, `rekey`, vues d'administration, bibliothèque d'auth). Sur un hébergeur où il n'est pas superutilisateur, `FORCE` sans politique pour lui rendrait ces opérations silencieusement vides. Les requêtes d'utilisateur ne l'utilisent jamais : elles passent par `withActor` (`SET LOCAL ROLE runtime_app`).
+- Droits de `runtime_app` : contenu en CRUD (sous RLS), `api_keys` en SELECT/INSERT + UPDATE de `revoked_at`, `revoked_by`, `last_used_at`, `audit_events` en **INSERT seul** (`assert_audit_append_only`), vues `admin_run_metadata` / `admin_dataset_usage` (filtrées : toutes les lignes si `app.role` ∈ admin/owner, sinon les siennes). Aucun droit sur `users`, les tables d'auth, `settings`.

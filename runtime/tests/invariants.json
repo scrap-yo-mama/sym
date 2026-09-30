@@ -32,5 +32,12 @@
   { "test": "assert_x6_guard", "invariant": "X6", "tasks": ["0.1", "0.8"], "stage": "quality" },
   { "test": "assert_deps_pinned", "invariant": "supply-chain", "tasks": ["0.8"], "stage": "quality" },
   { "test": "assert_licenses_compatible", "invariant": "supply-chain", "tasks": ["0.8"], "stage": "quality" },
-  { "test": "assert_deps_blacklist_inv6", "invariant": "INV6", "tasks": ["0.8"], "stage": "quality" }
+  { "test": "assert_deps_blacklist_inv6", "invariant": "INV6", "tasks": ["0.8"], "stage": "quality" },
+  { "test": "assert_authz_matrix", "invariant": "INV12", "tasks": ["0.3b", "4.3"], "stage": "I1, S" },
+  { "test": "assert_bootstrap_once", "invariant": "13 § 4", "tasks": ["0.3b"], "stage": "I1" },
+  { "test": "assert_audit_append_only", "invariant": "13 § 9", "tasks": ["0.3b"], "stage": "I1" },
+  { "test": "assert_api_key_scopes", "invariant": "13 § 8", "tasks": ["0.3b"], "stage": "U1, I1" },
+  { "test": "assert_auth_baseline", "invariant": "13 § 5", "tasks": ["0.3b"], "stage": "U1, I1" },
+  { "test": "assert_login_rate_limited", "invariant": "13 § 5", "tasks": ["0.3b"], "stage": "I1" },
+  { "test": "assert_routes_use_rls", "invariant": "INV12", "tasks": ["0.3b"], "stage": "U1" }
 ]

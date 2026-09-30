@@ -40,7 +40,7 @@ export const ENCRYPTED_COLUMNS = [
   { table: 'settings', column: 'value', key: KEY_CHECK_SETTING, coveredBy: 'rekey' },
   { table: 'site_sessions', column: 'ciphertext', coveredBy: '1.10' },
   { table: 'run_artifacts', column: 'ciphertext', coveredBy: '1.10' },
-  { table: 'two_factor', column: 'secret_ciphertext', coveredBy: '0.3b' },
+  { table: 'two_factor', column: 'secret_ciphertext', coveredBy: '3.7' },
 ] as const;
 
 export class KeyCheckError extends Error {

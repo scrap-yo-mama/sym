@@ -1,5 +1,7 @@
 # Dev local : postgres 16 + server + worker. Démarrer : docker compose up --build
 # Port hôte du serveur : SERVER_PORT (défaut 3100). Identifiants de dev uniquement, aucun secret.
+# Le serveur exige (0.3b) : MASTER_KEY (`runtime keygen`) et, tant qu’aucun owner n’existe, ADMIN_BOOTSTRAP_TOKEN
+# (`openssl rand -base64 32`), passés par l’environnement du shell : MASTER_KEY=… ADMIN_BOOTSTRAP_TOKEN=… docker compose up.
 services:
   postgres:
     image: postgres:16@sha256:1a6ab3f5345eb6dbe04a1349529caabdb0ab09293a09590fad07b2246bfa4b54
@@ -15,6 +17,18 @@ services:
       timeout: 5s
       retries: 10
 
+  migrate:
+    image: runtime:dev
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile
+    environment:
+      RUNTIME_MODE: migrate
+      DATABASE_URL: postgres://runtime:runtime-dev@postgres:5432/runtime
+    depends_on:
+      postgres:
+        condition: service_healthy
+
   server:
     image: runtime:dev
     build:
@@ -23,11 +37,16 @@ services:
     environment:
       RUNTIME_MODE: server
       DATABASE_URL: postgres://runtime:runtime-dev@postgres:5432/runtime
+      PUBLIC_URL: http://localhost:${SERVER_PORT:-3100}
+      MASTER_KEY: ${MASTER_KEY:-}
+      ADMIN_BOOTSTRAP_TOKEN: ${ADMIN_BOOTSTRAP_TOKEN:-}
     ports:
       - "${SERVER_PORT:-3100}:3000"
     depends_on:
       postgres:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/health').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
       interval: 5s

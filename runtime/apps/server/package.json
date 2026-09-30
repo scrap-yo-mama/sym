@@ -9,12 +9,18 @@
     "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
+    "@runtime/core": "workspace:*",
+    "@runtime/db": "workspace:*",
     "@runtime/schemas": "workspace:*",
-    "fastify": "catalog:"
+    "better-auth": "catalog:",
+    "drizzle-orm": "catalog:",
+    "fastify": "catalog:",
+    "pg": "catalog:"
   },
   "devDependencies": {
     "@types/node": "catalog:",
     "typescript": "catalog:",
-    "vitest": "catalog:"
+    "vitest": "catalog:",
+    "@types/pg": "catalog:"
   }
 }
