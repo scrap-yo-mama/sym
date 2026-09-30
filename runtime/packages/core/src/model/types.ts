@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Entités de 04b § 1 (Api, StrategyVersion, Run). Types seuls, sans I/O.
 import type {
   ApiStatus,

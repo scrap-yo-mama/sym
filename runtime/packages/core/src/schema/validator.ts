@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Validation des `input_schema` / `output_schema` fournis par l'utilisateur (INV1) : Ajv 8, JSON Schema 2020-12.
 // Aucun `$ref` distant n'est jamais résolu : le refus a lieu avant toute compilation, donc sans aucune requête sortante.
 import { Ajv2020, type ErrorObject, type ValidateFunction } from 'ajv/dist/2020.js';

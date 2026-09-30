@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Les énumérations TS de @runtime/core et les CHECK SQL de la base migrée sont identiques (04b § 1).
 import {
   API_STATUSES,

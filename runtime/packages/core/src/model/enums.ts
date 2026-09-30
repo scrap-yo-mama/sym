@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Énumérations fermées de 04b § 1, définies une seule fois. Le schéma Drizzle (`@runtime/db`) les réutilise ;
 // model/enums.integration.test.ts (dans db) vérifie qu'elles sont identiques aux CHECK SQL de la base migrée.
 

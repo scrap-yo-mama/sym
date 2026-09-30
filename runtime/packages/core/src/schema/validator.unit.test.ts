@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 import dns from 'node:dns';
 import net from 'node:net';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
