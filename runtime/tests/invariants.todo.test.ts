@@ -10,6 +10,8 @@ import { describe, test } from "vitest";
 // assert_auth_baseline (apps/server/src/auth.integration.test.ts), assert_audit_append_only (rls.integration.test.ts),
 // assert_api_key_scopes (packages/core/src/auth/auth.unit.test.ts). Extension de assert_cross_user_denied à MCP et aux
 // ressources de 3.1 / 2.6 : registre apps/server/src/routes/registry.ts.
+// INV10 (0.7) : assert_ssrf_guard et assert_webhook_ssrf_blocked (squelette repris par 2.5) sont dans
+// tests/security/ssrf-guard.security.test.ts (projet Vitest security, pnpm test:security).
 describe("invariants (à implémenter)", () => {
   test.todo("assert_output_schema_enforced"); // INV1, tâche(s) 1.1a, 2.3
   test.todo("assert_cheapest_first_logged"); // INV2, tâche(s) 2.1
@@ -21,8 +23,6 @@ describe("invariants (à implémenter)", () => {
   test.todo("assert_sandbox"); // INV7, tâche(s) 1.5
   test.todo("assert_no_telemetry"); // INV9, tâche(s) 1.10, 4.3 (part auth de 0.3b : apps/server/src/telemetry.integration.test.ts)
   test.todo("assert_otel_off_by_default"); // INV9, tâche(s) 1.10, 4.3
-  test.todo("assert_ssrf_guard"); // INV10, tâche(s) 0.7
-  test.todo("assert_webhook_ssrf_blocked"); // INV10, tâche(s) 0.7, 2.5
   test.todo("assert_robots_respected"); // INV11, tâche(s) 1.11
   test.todo("assert_retention_purge"); // RGPD, tâche(s) 1.8
   test.todo("assert_erasure_complete"); // RGPD, tâche(s) 1.8

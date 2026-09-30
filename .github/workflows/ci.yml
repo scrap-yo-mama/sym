@@ -144,6 +144,9 @@ jobs:
         with:
           node-version-file: runtime/.node-version
       - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - name: Chromium de Playwright (garde SSRF via le proxy d'egress, INV10)
+        run: pnpm exec playwright install --with-deps chromium
       - run: pnpm test:security
       - name: pnpm audit (avertissement au début, bloquant plus tard)
         continue-on-error: true

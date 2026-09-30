@@ -42,6 +42,19 @@ export default defineConfig({
       },
       {
         test: {
+          // Étage S (15 §2) : SSRF (Chromium compris), bac à sable, télémétrie. `pnpm test:security`.
+          name: 'security',
+          testTimeout: 60_000,
+          hookTimeout: 120_000,
+          include: [
+            'packages/*/src/**/*.security.test.ts',
+            'apps/*/src/**/*.security.test.ts',
+            'tests/**/*.security.test.ts',
+          ],
+        },
+      },
+      {
+        test: {
           name: 'contract',
           include: [
             'packages/*/src/**/*.contract.test.ts',
