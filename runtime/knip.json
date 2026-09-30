@@ -7,11 +7,14 @@
     ".": {
       "entry": [
         "scripts/*.ts",
-        "tests/**/*.test.ts"
+        "tests/**/*.test.ts",
+        "eval/scripts/*.ts",
+        "eval/**/*.test.ts"
       ],
       "project": [
         "scripts/**/*.ts",
-        "tests/**/*.ts"
+        "tests/**/*.ts",
+        "eval/**/*.ts"
       ]
     },
     "packages/*": {
