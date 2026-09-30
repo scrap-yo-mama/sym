@@ -12,11 +12,14 @@
     "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
-    "@runtime/db": "workspace:*"
+    "@runtime/core": "workspace:*",
+    "@runtime/db": "workspace:*",
+    "pg": "catalog:"
   },
   "devDependencies": {
     "@types/node": "catalog:",
     "typescript": "catalog:",
-    "vitest": "catalog:"
+    "vitest": "catalog:",
+    "@types/pg": "catalog:"
   }
 }

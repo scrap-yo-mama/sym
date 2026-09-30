@@ -89,13 +89,22 @@ importers:
 
   apps/cli:
     dependencies:
+      '@runtime/core':
+        specifier: workspace:*
+        version: link:../../packages/core
       '@runtime/db':
         specifier: workspace:*
         version: link:../../packages/db
+      pg:
+        specifier: 'catalog:'
+        version: 8.23.0
     devDependencies:
       '@types/node':
         specifier: 'catalog:'
         version: 24.13.6
+      '@types/pg':
+        specifier: 'catalog:'
+        version: 8.23.1
       typescript:
         specifier: 'catalog:'
         version: 5.9.3
@@ -158,6 +167,9 @@ importers:
       '@types/node':
         specifier: 'catalog:'
         version: 24.13.6
+      pino:
+        specifier: 'catalog:'
+        version: 10.3.1
       typescript:
         specifier: 'catalog:'
         version: 5.9.3
@@ -167,6 +179,9 @@ importers:
 
   packages/db:
     dependencies:
+      '@runtime/core':
+        specifier: workspace:*
+        version: link:../core
       drizzle-orm:
         specifier: 'catalog:'
         version: 0.45.3(@types/pg@8.23.1)(pg@8.23.0)
@@ -180,6 +195,9 @@ importers:
       '@types/pg':
         specifier: 'catalog:'
         version: 8.23.1
+      pino:
+        specifier: 'catalog:'
+        version: 10.3.1
       typescript:
         specifier: 'catalog:'
         version: 5.9.3

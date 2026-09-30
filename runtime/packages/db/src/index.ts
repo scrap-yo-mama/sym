@@ -1,4 +1,4 @@
-// Schéma Drizzle, migrations SQL versionnées, runner verrouillé, connexions (tâche 0.2).
+// Schéma Drizzle, migrations SQL versionnées, runner verrouillé, connexions (tâche 0.2), dépôt des secrets (0.3a).
 import { drizzle, type NodePgDatabase } from 'drizzle-orm/node-postgres';
 import pg from 'pg';
 import * as schema from './schema.js';
@@ -8,6 +8,8 @@ export const PACKAGE_NAME = '@runtime/db';
 export * from './connection.js';
 export * from './migrate.js';
 export * from './partitions.js';
+export * from './run-logs.js';
+export * from './secrets.js';
 export { schema };
 
 /** Extrait le nom de la base d'une URL PostgreSQL, sans exposer le mot de passe. */

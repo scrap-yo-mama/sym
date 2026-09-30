@@ -21,6 +21,7 @@
     "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
+    "@runtime/core": "workspace:*",
     "drizzle-orm": "catalog:",
     "pg": "catalog:"
   },
@@ -28,6 +29,7 @@
     "@types/node": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:",
-    "@types/pg": "catalog:"
+    "@types/pg": "catalog:",
+    "pino": "catalog:"
   }
 }

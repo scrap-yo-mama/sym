@@ -262,10 +262,13 @@ export const secrets = pgTable(
     alg: text('alg').notNull().default('aes-256-gcm'),
     dekWrapped: bytea('dek_wrapped').notNull(),
     kekVersion: integer('kek_version').notNull(),
+    // 0002 : 'unreadable' = indéchiffrable avec la clé courante, conservé pour « À ressaisir ».
+    state: text('state', { enum: ['ok', 'unreadable'] }).notNull().default('ok'),
+    unreadableSince: tstz('unreadable_since'),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
-  (t) => [index('secrets_owner_id_idx').on(t.ownerId)],
+  (t) => [index('secrets_owner_id_idx').on(t.ownerId), index('secrets_kek_version_idx').on(t.kekVersion)],
 );
 
 // --- Catalogue (04b § 1) -----------------------------------------------------

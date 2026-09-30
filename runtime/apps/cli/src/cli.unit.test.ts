@@ -34,3 +34,25 @@ test('migrate down refusé en production', async () => {
   expect(res.code).toBe(2);
   expect(res.out).toContain('refusé en production');
 });
+
+test('keygen : une clé base64 de 32 octets, rien d’autre', async () => {
+  const res = await run(['keygen']);
+  expect(res.code).toBe(0);
+  expect(res.out).toMatch(/^[A-Za-z0-9+/]{43}=$/);
+  expect(Buffer.from(res.out, 'base64')).toHaveLength(32);
+  expect((await run(['keygen'])).out).not.toBe(res.out);
+});
+
+test('rekey sans --confirm : sauvegarde exigée, aucune connexion', async () => {
+  const res = await run(['rekey'], { env: {} });
+  expect(res.code).toBe(1);
+  expect(res.out).toContain('sauvegarde exigée');
+});
+
+test('key-check avec une MASTER_KEY de 31 octets : refus nommant keygen, sans la valeur', async () => {
+  const value = Buffer.alloc(31, 7).toString('base64');
+  const res = await run(['key-check'], { env: { MASTER_KEY: value, DATABASE_URL: 'postgres://u:p@db.example:5432/x' } });
+  expect(res.code).toBe(2);
+  expect(res.out).toMatch(/Refus de démarrer : MASTER_KEY invalide.*runtime keygen/);
+  expect(res.out).not.toContain(value);
+});

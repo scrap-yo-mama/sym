@@ -2,6 +2,9 @@
 // Vérifié par scripts/check-invariants.ts (job quality) : chaque assert_* de tests/invariants.json doit exister ici ou dans un autre fichier de test.
 import { describe, test } from "vitest";
 
+// INV8 (0.3a) : assert_encrypted_at_rest, assert_aad_binding, assert_rekey_complete, assert_key_loss_detected, assert_no_secret_in_logs
+// sont dans packages/core/src/crypto/*.unit.test.ts et packages/db/src/secrets.integration.test.ts (extension aux spans,
+// métriques et artefacts : tâche 1.10).
 describe("invariants (à implémenter)", () => {
   test.todo("assert_output_schema_enforced"); // INV1, tâche(s) 1.1a, 2.3
   test.todo("assert_cheapest_first_logged"); // INV2, tâche(s) 2.1
@@ -12,10 +15,6 @@ describe("invariants (à implémenter)", () => {
   test.todo("assert_no_impersonation"); // INV5, tâche(s) 0.3b
   test.todo("assert_no_circumvention"); // INV6, tâche(s) 1.7, 4.3
   test.todo("assert_sandbox"); // INV7, tâche(s) 1.5
-  test.todo("assert_encrypted_at_rest"); // INV8, tâche(s) 0.3a, 1.10
-  test.todo("assert_no_secret_in_logs"); // INV8, tâche(s) 0.3a, 1.10
-  test.todo("assert_aad_binding"); // INV8, tâche(s) 0.3a
-  test.todo("assert_rekey_complete"); // INV8, tâche(s) 0.3a
   test.todo("assert_no_telemetry"); // INV9, tâche(s) 1.10, 4.3
   test.todo("assert_otel_off_by_default"); // INV9, tâche(s) 1.10, 4.3
   test.todo("assert_ssrf_guard"); // INV10, tâche(s) 0.7

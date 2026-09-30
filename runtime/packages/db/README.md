@@ -10,7 +10,11 @@ Schéma PostgreSQL v3, migrations SQL versionnées et runner verrouillé (tâche
 | `src/schema.ts` | Schéma Drizzle 0.45 (pilote `pg`), miroir typé des migrations. Concordance vérifiée par `schema.integration.test.ts`. |
 | `src/migrate.ts` | Runner : table `schema_migrations` (version, nom, sha256 de `up.sql`), `pg_advisory_lock` sur la clé fixe `8315178094305570145`, une transaction par migration, idempotent, refus si une migration appliquée a changé ou si la base est plus récente que le code. `migrateDown` refusé si `NODE_ENV=production`. |
 | `src/connection.ts` | `DATABASE_URL` / `DATABASE_URL_DIRECT` et détection du pooler en mode transaction. |
+| `src/secrets.ts` | Secrets (INV8, 0.3a) : `keyCheck` (témoin `settings.key_check`), `secretStore` (`put`, `get` → `Secret`, `list` en métadonnées), `rekey` reprenable, `acceptKeyLoss`, registre `ENCRYPTED_COLUMNS`. Crypto pure dans `@runtime/core` (`crypto/`). |
+| `src/run-logs.ts` | `appendRunLog` : masquage (`redact`) avant insertion dans `run_logs`. |
 | `src/partitions.ts` | Partitions mensuelles de `dataset_items` : création, liste, purge (`DETACH … CONCURRENTLY` puis `DROP`). |
+
+Secrets : `runtime keygen`, `runtime key-check`, `runtime rekey --confirm` (MASTER_KEY = nouvelle, MASTER_KEY_PREVIOUS = ancienne ; lots transactionnels, état dans `settings.rekey_state`, relance = reprise). Enveloppe : KEK = HKDF-SHA256(MASTER_KEY, libellé `kek:secrets`) ; DEK aléatoire par valeur ; AAD `secret|id|kind|owner_id|instance` recalculée à chaque lecture ; `kek_version` = génération de la clé maîtresse. Migration `0002_secret_state` : `secrets.state` (`ok` | `unreadable`), `unreadable_since`.
 
 Commande : `runtime migrate` (applique), `runtime migrate down [--steps N | --all]` (tests et CI seulement). Dans l'image : `RUNTIME_MODE=migrate`.
 

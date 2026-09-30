@@ -4,3 +4,5 @@ export const PACKAGE_NAME = '@runtime/core';
 export function assertNever(value: never): never {
   throw new Error(`Valeur inattendue : ${String(value)}`);
 }
+
+export * from './crypto/index.js';
