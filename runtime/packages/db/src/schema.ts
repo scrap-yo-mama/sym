@@ -1,5 +1,18 @@
 // Schéma Drizzle : miroir typé de migrations/*/up.sql, qui fait foi. Jamais de `drizzle-kit push`.
 // Concordance vérifiée par schema.integration.test.ts (colonnes, types, nullabilité) sur base migrée.
+import {
+  API_STATUSES,
+  EXECUTIONS,
+  FAILURE_CLASSES,
+  INVESTIGATION_PHASES,
+  NETWORKS,
+  RUN_OUTCOMES,
+  RUN_STATES,
+  RUN_TRIGGERS,
+  STRATEGY_CREATORS,
+  VISIBILITIES,
+  type FailureClass,
+} from '@runtime/core';
 import { sql } from 'drizzle-orm';
 import {
   bigint,
@@ -272,9 +285,10 @@ export const secrets = pgTable(
 );
 
 // --- Catalogue (04b § 1) -----------------------------------------------------
-export const API_STATUSES = ['enquete', 'sain', 'warning', 'reparation', 'erreur', 'action_requise', 'bloquee'] as const;
-export const EXECUTIONS = ['fetch', 'fetch_in_page', 'playwright', 'agent_fetch', 'hybrid', 'agent'] as const;
-export const NETWORKS = ['direct', 'dc_proxy', 'res_proxy', 'tunnel'] as const;
+// Énumérations définies une fois dans @runtime/core (model/enums.ts), réexportées ici ; concordance avec les CHECK SQL
+// vérifiée par enums.integration.test.ts.
+export { API_STATUSES, EXECUTIONS, FAILURE_CLASSES, NETWORKS, RUN_STATES };
+export type { FailureClass };
 
 /** access_policy par défaut (17 § 4) : `robots` n'a qu'une valeur (INV11), paiement jamais en V1. */
 export const DEFAULT_ACCESS_POLICY = {
@@ -292,14 +306,14 @@ export const apis = pgTable(
     slug: text('slug').notNull(),
     ownerId: ownerId(),
     projectId: projectId(),
-    visibility: text('visibility', { enum: ['private', 'instance'] }).notNull().default('private'),
+    visibility: text('visibility', { enum: VISIBILITIES }).notNull().default('private'),
     description: text('description').notNull().default(''),
     inputSchema: jsonb('input_schema').notNull().default({}),
     outputSchema: jsonb('output_schema').notNull().default({}),
     views: jsonb('views').notNull().default({}),
     status: text('status', { enum: API_STATUSES }).notNull().default('enquete'),
     investigationPhase: text('investigation_phase', {
-      enum: ['access_check', 'reconnaissance', 'awaiting_schema_validation', 'testing', 'done'],
+      enum: INVESTIGATION_PHASES,
     }),
     statusReason: text('status_reason'),
     stale: boolean('stale').notNull().default(false),
@@ -349,7 +363,7 @@ export const strategyVersions = pgTable(
     spec: jsonb('spec').notNull().default({}),
     scriptRef: text('script_ref'),
     estCostUsd: usd('est_cost_usd'),
-    createdBy: text('created_by', { enum: ['investigation', 'repair', 'user', 'revert', 'import'] }).notNull(),
+    createdBy: text('created_by', { enum: STRATEGY_CREATORS }).notNull(),
     parentVersion: integer('parent_version'),
     patch: jsonb('patch'),
     createdAt: createdAt(),
@@ -358,39 +372,6 @@ export const strategyVersions = pgTable(
 );
 
 // --- Exécutions ----------------------------------------------------------------
-export const RUN_STATES = [
-  'queued',
-  'running',
-  'waiting_tunnel',
-  'succeeded',
-  'failed',
-  'cancelled',
-  'skipped_tunnel_offline',
-  'skipped_window',
-  'skipped_quota',
-  'skipped_status',
-  'skipped_overlap',
-] as const;
-
-/** Classes d'échec (04b § 1) ; `llm_*` est validé en base par motif. */
-export const FAILURE_CLASSES = [
-  'transient',
-  'network',
-  'rate_limited',
-  'forbidden',
-  'blocked_by_protection',
-  'robots_disallowed',
-  'robots_unreachable',
-  'payment_required',
-  'auth_required',
-  'account_limit',
-  'not_found',
-  'extraction',
-  'code_error',
-  'run_budget_exceeded',
-  'budget_exceeded',
-] as const;
-export type FailureClass = (typeof FAILURE_CLASSES)[number] | `llm_${string}`;
 
 export const runs = pgTable(
   'runs',
@@ -405,9 +386,9 @@ export const runs = pgTable(
       .references(() => users.id),
     projectId: projectId(),
     strategyVersion: integer('strategy_version'),
-    trigger: text('trigger', { enum: ['mcp', 'rest', 'schedule', 'ui', 'canary'] }).notNull(),
+    trigger: text('trigger', { enum: RUN_TRIGGERS }).notNull(),
     state: text('state', { enum: RUN_STATES }).notNull().default('queued'),
-    outcome: text('outcome', { enum: ['clean', 'degraded', 'failed'] }),
+    outcome: text('outcome', { enum: RUN_OUTCOMES }),
     degradedReasons: text('degraded_reasons').array().notNull().default(sql`'{}'`),
     input: jsonb('input'),
     costLlmUsd: usd('cost_llm_usd').notNull().default('0'),

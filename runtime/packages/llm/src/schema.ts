@@ -1,4 +1,5 @@
 // Schéma de transport dérivé du schéma utilisateur, extraction du JSON et validation Ajv finale (INV1, 08 §1).
+import { findRemoteRefs } from '@runtime/core';
 import { Ajv2020, type ValidateFunction } from 'ajv/dist/2020.js';
 import { LlmError } from './errors.js';
 import type { JsonSchema } from './types.js';
@@ -16,18 +17,9 @@ const MOVED_TO_DESCRIPTION = [
 const DROPPED = ['$schema', '$id', '$comment'];
 
 /** Un `$ref` qui ne commence pas par `#` est distant : jamais résolu (08b, 03). */
-export function assertNoRemoteRefs(schema: unknown, path = '#'): void {
-  if (Array.isArray(schema)) {
-    schema.forEach((item, i) => assertNoRemoteRefs(item, `${path}/${i}`));
-    return;
-  }
-  if (!isRecord(schema)) return;
-  for (const [key, value] of Object.entries(schema)) {
-    if ((key === '$ref' || key === '$dynamicRef') && typeof value === 'string' && !value.startsWith('#')) {
-      throw new LlmError('bad_request', `schéma refusé : $ref distant non résolu (${path})`, { code: 'remote_ref' });
-    }
-    assertNoRemoteRefs(value, `${path}/${key}`);
-  }
+export function assertNoRemoteRefs(schema: unknown): void {
+  const [first] = findRemoteRefs(schema);
+  if (first !== undefined) throw new LlmError('bad_request', `schéma refusé : $ref distant non résolu (${first})`, { code: 'remote_ref' });
 }
 
 function makeNullable(node: JsonSchema): JsonSchema {

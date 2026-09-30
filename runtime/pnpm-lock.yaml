@@ -225,6 +225,9 @@ importers:
 
   packages/core:
     dependencies:
+      ajv:
+        specifier: 'catalog:'
+        version: 8.20.0
       undici:
         specifier: 'catalog:'
         version: 8.11.0

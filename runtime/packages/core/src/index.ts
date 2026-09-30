@@ -9,3 +9,5 @@ export function assertNever(value: never): never {
 export * from './crypto/index.js';
 export * from './auth/index.js';
 export type * from './agent/engine.js';
+export * from './model/index.js';
+export * from './schema/index.js';

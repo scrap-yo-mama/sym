@@ -10,10 +10,11 @@ import { describe, test } from "vitest";
 // assert_auth_baseline (apps/server/src/auth.integration.test.ts), assert_audit_append_only (rls.integration.test.ts),
 // assert_api_key_scopes (packages/core/src/auth/auth.unit.test.ts). Extension de assert_cross_user_denied à MCP et aux
 // ressources de 3.1 / 2.6 : registre apps/server/src/routes/registry.ts.
+// INV1 (1.1a) : assert_output_schema_enforced est dans packages/core/src/schema/validator.unit.test.ts (validateOutput, `$ref` distant
+// refusé à 0 requête) ; le volet « sortie LLM » et « réparation » est repris par 2.3.
 // INV10 (0.7) : assert_ssrf_guard et assert_webhook_ssrf_blocked (squelette repris par 2.5) sont dans
 // tests/security/ssrf-guard.security.test.ts (projet Vitest security, pnpm test:security).
 describe("invariants (à implémenter)", () => {
-  test.todo("assert_output_schema_enforced"); // INV1, tâche(s) 1.1a, 2.3
   test.todo("assert_cheapest_first_logged"); // INV2, tâche(s) 2.1
   test.todo("assert_status_transitions"); // INV3, tâche(s) 1.2
   test.todo("assert_run_traced"); // INV4, tâche(s) 1.3
