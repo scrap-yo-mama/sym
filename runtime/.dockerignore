@@ -1,0 +1,9 @@
+**/node_modules
+**/dist
+**/*.tsbuildinfo
+coverage
+blob-report
+test-results
+.env*
+.git
+docs

@@ -1,0 +1,22 @@
+packages:
+  - packages/*
+  - apps/*
+
+# Catalogue unique : versions exactes (aucune plage ouverte), une seule source de vérité.
+catalog:
+  typescript: 5.9.3
+  '@types/node': 24.13.6
+  vitest: 5.0.1
+  fast-check: 4.10.2
+  '@playwright/test': 1.63.0
+  fastify: 5.12.5
+  pino: 10.3.1
+
+# Durcissement supply chain (08b §5). Le durcissement complet est la tâche 0.8.
+minimumReleaseAge: 10080
+blockExoticSubdeps: true
+trustPolicy: no-downgrade
+strictDepBuilds: true
+engineStrict: true
+allowBuilds:
+  esbuild: true

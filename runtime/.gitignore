@@ -1,0 +1,16 @@
+node_modules/
+dist/
+*.tsbuildinfo
+coverage/
+blob-report/
+test-results/
+playwright-report/
+.env
+.env.*
+!.env.example
+# Garde X6 : aucun Python ni notebook, nulle part
+*.py
+*.pyc
+*.ipynb
+__pycache__/
+.DS_Store

@@ -1,0 +1,50 @@
+# Dev local : postgres 16 + server + worker. Démarrer : docker compose up --build
+# Port hôte du serveur : SERVER_PORT (défaut 3100). Identifiants de dev uniquement, aucun secret.
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: runtime
+      POSTGRES_PASSWORD: runtime-dev
+      POSTGRES_DB: runtime
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U runtime -d runtime"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  server:
+    image: runtime:dev
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile
+    environment:
+      RUNTIME_MODE: server
+      DATABASE_URL: postgres://runtime:runtime-dev@postgres:5432/runtime
+    ports:
+      - "${SERVER_PORT:-3100}:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/health').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  worker:
+    image: runtime:dev
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile
+    environment:
+      RUNTIME_MODE: worker
+      DATABASE_URL: postgres://runtime:runtime-dev@postgres:5432/runtime
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  pgdata:

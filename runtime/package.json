@@ -1,0 +1,30 @@
+{
+  "name": "runtime",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "packageManager": "pnpm@11.13.0",
+  "engines": {
+    "node": ">=24 <25"
+  },
+  "scripts": {
+    "build": "pnpm -r build",
+    "test": "vitest run",
+    "test:fast": "vitest run --project unit --project contract",
+    "test:e2e": "node scripts/not-implemented.ts test:e2e 'tâches 3.x (interface) et 4.x (recette)'",
+    "test:security": "node scripts/not-implemented.ts test:security 'tâche 0.7 puis 4.3'",
+    "eval": "node scripts/not-implemented.ts eval 'tâche 2.8'",
+    "fixtures": "node scripts/not-implemented.ts fixtures 'tâche 0.5'",
+    "zz:cleanup": "node scripts/not-implemented.ts zz:cleanup 'tâche 0.5'",
+    "lint": "node scripts/not-implemented.ts lint 'tâche 0.8'",
+    "typecheck": "tsc -p tsconfig.typecheck.json",
+    "knip": "node scripts/not-implemented.ts knip 'tâche 0.8'",
+    "check:invariants": "node scripts/check-invariants.ts",
+    "check:x6": "node scripts/check-x6.ts"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}
