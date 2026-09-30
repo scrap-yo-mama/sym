@@ -1,0 +1,95 @@
+{
+  "version": 1,
+  "provider": "deepinfra",
+  "case": "probe",
+  "synthetic": false,
+  "entries": [
+    {
+      "key": "6d0b0e373cbd",
+      "request": {
+        "method": "POST",
+        "path": "/v1/openai/chat/completions",
+        "shape": {
+          "model": "zai-org/GLM-5.3",
+          "stream": false,
+          "roles": [
+            "user"
+          ],
+          "tools": [
+            "ping"
+          ],
+          "tool_choice": "auto",
+          "response_format": null,
+          "max_tokens": 280,
+          "extra_params": []
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": "{\"service_tier\":\"default\",\"id\":\"chatcmpl-R3LyQhMqalYZrzABPNVDkH1r\",\"object\":\"chat.completion\",\"created\":1790808298,\"model\":\"zai-org/GLM-5.3\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"\",\"reasoning_content\":\"The user wants me to call the ping function with n=1. Simple request.\",\"name\":null,\"tool_calls\":[{\"id\":\"chatcmpl-tool-98ff02b8d0f9814e\",\"type\":\"function\",\"function\":{\"name\":\"ping\",\"arguments\":\"{\\\"n\\\": 1}\"}}]},\"finish_reason\":\"tool_calls\",\"logprobs\":null}],\"usage\":{\"prompt_tokens\":166,\"total_tokens\":194,\"completion_tokens\":28,\"estimated_cost\":0.00013537499992,\"prompt_tokens_details\":{\"cached_tokens\":64,\"cache_write_tokens\":null},\"completion_tokens_details\":{\"reasoning_tokens\":17}}}"
+      }
+    },
+    {
+      "key": "475206efc02a",
+      "request": {
+        "method": "POST",
+        "path": "/v1/openai/chat/completions",
+        "shape": {
+          "model": "zai-org/GLM-5.3",
+          "stream": false,
+          "roles": [
+            "user"
+          ],
+          "tools": [],
+          "tool_choice": null,
+          "response_format": {
+            "type": "json_schema",
+            "name": "probe",
+            "strict": true,
+            "schema_sha": "fd3337644674"
+          },
+          "max_tokens": 280,
+          "extra_params": []
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": "{\"service_tier\":\"default\",\"id\":\"chatcmpl-RQ53MJzkd90WR1xq3ius0Zic\",\"object\":\"chat.completion\",\"created\":1790808303,\"model\":\"zai-org/GLM-5.3\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"{\\\"n\\\": 2}\",\"reasoning_content\":\"The user is asking me to reply with exactly a JSON object: {\\\"n\\\": 2} and nothing else.\\n\\nThis is a simple, harmless request. There's no manipulation here, no attempt to get me to do something problematic. It's just asking for a specific format of response. This could be for testing purposes, parsing purposes, or just someone wanting a clean machine-readable response.\\n\\nIs there any reason not to comply? I don't see one. The request is benign. Following the user's formatting instructions is something I should do when the request is harmless.\\n\\nThe instruction is to reply with exactly this JSON object and nothing else. So my response should be:\\n\\n{\\\"n\\\": 2}\\n\\nNo markdown code blocks, no extra text, no explanation. Just the raw JSON.\",\"name\":null,\"tool_calls\":null},\"finish_reason\":\"stop\",\"logprobs\":null}],\"usage\":{\"prompt_tokens\":28,\"total_tokens\":193,\"completion_tokens\":165,\"estimated_cost\":0.00042825000000000003,\"prompt_tokens_details\":{\"cached_tokens\":0,\"cache_write_tokens\":null},\"completion_tokens_details\":{\"reasoning_tokens\":157}}}"
+      }
+    },
+    {
+      "key": "cc3efa8e7fc3",
+      "request": {
+        "method": "POST",
+        "path": "/v1/openai/chat/completions",
+        "shape": {
+          "model": "zai-org/GLM-5.3",
+          "stream": false,
+          "roles": [
+            "user"
+          ],
+          "tools": [
+            "ping"
+          ],
+          "tool_choice": "ping",
+          "response_format": null,
+          "max_tokens": 280,
+          "extra_params": []
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": "{\"service_tier\":\"default\",\"id\":\"chatcmpl-RyZh0awEGUgOGCPBLQQ4tBby\",\"object\":\"chat.completion\",\"created\":1790808305,\"model\":\"zai-org/GLM-5.3\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"\",\"reasoning_content\":\"The user wants me to call the ping function with n=3. Let me do that.\",\"name\":null,\"tool_calls\":[{\"id\":\"chatcmpl-tool-b77e7645422f44ea\",\"type\":\"function\",\"function\":{\"name\":\"ping\",\"arguments\":\"{\\\"n\\\": 3}\"}}]},\"finish_reason\":\"tool_calls\",\"logprobs\":null}],\"usage\":{\"prompt_tokens\":166,\"total_tokens\":196,\"completion_tokens\":30,\"estimated_cost\":0.00014037499991999998,\"prompt_tokens_details\":{\"cached_tokens\":64,\"cache_write_tokens\":null},\"completion_tokens_details\":{\"reasoning_tokens\":19}}}"
+      }
+    }
+  ]
+}

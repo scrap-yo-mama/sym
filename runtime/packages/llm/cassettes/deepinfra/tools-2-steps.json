@@ -1,0 +1,66 @@
+{
+  "version": 1,
+  "provider": "deepinfra",
+  "case": "tools-2-steps",
+  "synthetic": false,
+  "entries": [
+    {
+      "key": "0f7b8f1cebf0",
+      "request": {
+        "method": "POST",
+        "path": "/v1/openai/chat/completions",
+        "shape": {
+          "model": "zai-org/GLM-5.3",
+          "stream": false,
+          "roles": [
+            "user"
+          ],
+          "tools": [
+            "get_weather"
+          ],
+          "tool_choice": "auto",
+          "response_format": null,
+          "max_tokens": 700,
+          "extra_params": []
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": "{\"service_tier\":\"default\",\"id\":\"chatcmpl-RARkpd6omv2ziOpOTvfPp4QI\",\"object\":\"chat.completion\",\"created\":1790808195,\"model\":\"zai-org/GLM-5.3\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"\",\"reasoning_content\":\"The user wants to know the weather in Paris. I have a get_weather tool available. Let me call it with the city \\\"Paris\\\".\",\"name\":null,\"tool_calls\":[{\"id\":\"chatcmpl-tool-b37ea3e8090578aa\",\"type\":\"function\",\"function\":{\"name\":\"get_weather\",\"arguments\":\"{\\\"city\\\": \\\"Paris\\\"}\"}}]},\"finish_reason\":\"tool_calls\",\"logprobs\":null}],\"usage\":{\"prompt_tokens\":172,\"total_tokens\":212,\"completion_tokens\":40,\"estimated_cost\":0.00019675,\"prompt_tokens_details\":{\"cached_tokens\":0,\"cache_write_tokens\":null},\"completion_tokens_details\":{\"reasoning_tokens\":28}}}"
+      }
+    },
+    {
+      "key": "1e210a6f7999",
+      "request": {
+        "method": "POST",
+        "path": "/v1/openai/chat/completions",
+        "shape": {
+          "model": "zai-org/GLM-5.3",
+          "stream": false,
+          "roles": [
+            "user",
+            "assistant",
+            "tool"
+          ],
+          "tools": [
+            "get_weather"
+          ],
+          "tool_choice": null,
+          "response_format": null,
+          "max_tokens": 700,
+          "extra_params": []
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": "{\"service_tier\":\"default\",\"id\":\"chatcmpl-RybJjG9FKpXKPiN0uIfI5T9W\",\"object\":\"chat.completion\",\"created\":1790808197,\"model\":\"zai-org/GLM-5.3\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"The weather in Paris right now is **18°C** with **cloudy** skies. It's a mild day, though you might want to keep a light jacket handy if you're heading out!\",\"reasoning_content\":\"The tool returned that Paris currently has 18°C and cloudy skies. Let me report that to the user.\",\"name\":null,\"tool_calls\":null},\"finish_reason\":\"stop\",\"logprobs\":null}],\"usage\":{\"prompt_tokens\":227,\"total_tokens\":291,\"completion_tokens\":64,\"estimated_cost\":0.00023168749984,\"prompt_tokens_details\":{\"cached_tokens\":128,\"cache_write_tokens\":null},\"completion_tokens_details\":{\"reasoning_tokens\":22}}}"
+      }
+    }
+  ]
+}

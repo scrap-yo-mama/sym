@@ -1,0 +1,70 @@
+{
+  "version": 1,
+  "provider": "openrouter",
+  "case": "tools-2-steps",
+  "synthetic": false,
+  "entries": [
+    {
+      "key": "76e0e744abd7",
+      "request": {
+        "method": "POST",
+        "path": "/api/v1/chat/completions",
+        "shape": {
+          "model": "z-ai/glm-5.3-flash",
+          "stream": false,
+          "roles": [
+            "user"
+          ],
+          "tools": [
+            "get_weather"
+          ],
+          "tool_choice": "auto",
+          "response_format": null,
+          "max_tokens": 700,
+          "extra_params": [
+            "provider"
+          ]
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": "\n         \n{\"id\":\"gen-1790808207-UwmHfPDRvkOINVnudSh4\",\"object\":\"chat.completion\",\"created\":1790808207,\"model\":\"z-ai/glm-5.3-flash\",\"provider\":\"Together\",\"system_fingerprint\":\"default\",\"service_tier\":null,\"choices\":[{\"index\":0,\"logprobs\":null,\"finish_reason\":\"tool_calls\",\"native_finish_reason\":\"tool_calls\",\"message\":{\"role\":\"assistant\",\"content\":null,\"refusal\":null,\"reasoning\":\"The user wants to know the weather in Paris. I should use the get_weather tool with the city parameter set to \\\"Paris\\\".\",\"tool_calls\":[{\"type\":\"function\",\"index\":0,\"id\":\"call_01a0f47cbb39733588bee62d\",\"function\":{\"name\":\"get_weather\",\"arguments\":\"{\\\"city\\\":\\\"Paris\\\"}\"}}],\"reasoning_details\":[{\"type\":\"reasoning.text\",\"text\":\"The user wants to know the weather in Paris. I should use the get_weather tool with the city parameter set to \\\"Paris\\\".\",\"format\":\"unknown\",\"index\":0}]}}],\"usage\":{\"prompt_tokens\":172,\"completion_tokens\":38,\"total_tokens\":210,\"cost\":0.0000448,\"is_byok\":false,\"prompt_tokens_details\":{\"cached_tokens\":0,\"cache_write_tokens\":0,\"audio_tokens\":0,\"video_tokens\":0},\"cost_details\":{\"upstream_inference_cost\":0.0000448,\"upstream_inference_prompt_cost\":0.0000258,\"upstream_inference_completions_cost\":0.000019},\"completion_tokens_details\":{\"reasoning_tokens\":26,\"image_tokens\":0,\"audio_tokens\":0}}}"
+      }
+    },
+    {
+      "key": "240f4ce348da",
+      "request": {
+        "method": "POST",
+        "path": "/api/v1/chat/completions",
+        "shape": {
+          "model": "z-ai/glm-5.3-flash",
+          "stream": false,
+          "roles": [
+            "user",
+            "assistant",
+            "tool"
+          ],
+          "tools": [
+            "get_weather"
+          ],
+          "tool_choice": null,
+          "response_format": null,
+          "max_tokens": 700,
+          "extra_params": [
+            "provider"
+          ]
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": "{\"id\":\"gen-1790808210-bYUwsVByyltqjY3SH3qZ\",\"object\":\"chat.completion\",\"created\":1790808210,\"model\":\"z-ai/glm-5.3-flash\",\"provider\":\"Together\",\"system_fingerprint\":\"default\",\"service_tier\":null,\"choices\":[{\"index\":0,\"logprobs\":null,\"finish_reason\":\"stop\",\"native_finish_reason\":\"stop\",\"message\":{\"role\":\"assistant\",\"content\":\"The current weather in Paris is **18°C** with **cloudy** skies.\",\"refusal\":null,\"reasoning\":null}}],\"usage\":{\"prompt_tokens\":225,\"completion_tokens\":19,\"total_tokens\":244,\"cost\":0.00003557,\"is_byok\":false,\"prompt_tokens_details\":{\"cached_tokens\":64,\"cache_write_tokens\":0,\"audio_tokens\":0,\"video_tokens\":0},\"cost_details\":{\"upstream_inference_cost\":0.00003557,\"upstream_inference_prompt_cost\":0.00002607,\"upstream_inference_completions_cost\":0.0000095},\"completion_tokens_details\":{\"reasoning_tokens\":0,\"image_tokens\":0,\"audio_tokens\":0}}}"
+      }
+    }
+  ]
+}

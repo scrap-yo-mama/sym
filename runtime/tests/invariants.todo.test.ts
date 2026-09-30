@@ -24,7 +24,6 @@ describe("invariants (à implémenter)", () => {
   test.todo("assert_retention_purge"); // RGPD, tâche(s) 1.8
   test.todo("assert_erasure_complete"); // RGPD, tâche(s) 1.8
   test.todo("assert_no_personal_data_in_logs"); // RGPD, tâche(s) 1.8, 1.10
-  test.todo("assert_llm_redaction"); // RGPD, tâche(s) 0.4
   test.todo("assert_pacing_key_is_domain"); // politesse, tâche(s) 1.9
   test.todo("assert_export_no_secret"); // INV5, INV8, tâche(s) 3.12
   test.todo("assert_diagnostics_redacted"); // INV9, tâche(s) 1.10

@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "provider": "openrouter",
+  "case": "auth-401",
+  "synthetic": false,
+  "entries": [
+    {
+      "key": "1791cf635729",
+      "request": {
+        "method": "POST",
+        "path": "/api/v1/chat/completions",
+        "shape": {
+          "model": "z-ai/glm-5.3-flash",
+          "stream": false,
+          "roles": [
+            "user"
+          ],
+          "tools": [],
+          "tool_choice": null,
+          "response_format": null,
+          "max_tokens": 5,
+          "extra_params": [
+            "provider"
+          ]
+        }
+      },
+      "response": {
+        "status": 401,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": "{\"error\":{\"message\":\"Missing Authentication header\",\"code\":401}}"
+      }
+    }
+  ]
+}
