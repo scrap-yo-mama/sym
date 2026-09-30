@@ -73,22 +73,15 @@ jobs:
       # Seuils de couverture fixés après la W0 ; aucun envoi à un service tiers.
 
   integration:
+    # Matrice PostgreSQL 16, 17, 18 (14 § 4, 15 § 5). Chaque job démarre son conteneur par Testcontainers
+    # (tests/setup/postgres.global.ts), une base par fichier de test.
     runs-on: ubuntu-24.04
-    services:
-      postgres:
-        image: postgres:16@sha256:1a6ab3f5345eb6dbe04a1349529caabdb0ab09293a09590fad07b2246bfa4b54
-        env:
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: runtime_test
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U postgres"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
+    strategy:
+      fail-fast: false
+      matrix:
+        pg: ["16", "17", "18"]
     env:
-      DATABASE_URL: postgres://postgres:postgres@localhost:5432/runtime_test
+      PG_VERSIONS: ${{ matrix.pg }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -101,7 +94,11 @@ jobs:
           node-version-file: runtime/.node-version
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
-      - run: pnpm vitest run --project integration --project contract
+      - name: Intégration sur PostgreSQL ${{ matrix.pg }} (migrations, verrou, aller-retour, partitions)
+        run: pnpm test:integration
+      - name: Contrats (une seule fois)
+        if: matrix.pg == '16'
+        run: pnpm vitest run --project contract
 
   api-contract:
     runs-on: ubuntu-24.04

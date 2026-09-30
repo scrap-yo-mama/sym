@@ -16,13 +16,15 @@ const STEPS: Step[] = [
   { job: 'quality', name: 'liste noire INV6', cmd: ['pnpm', 'check:blacklist'] },
   { job: 'quality', name: 'licences', cmd: ['pnpm', 'check:licenses'] },
   { job: 'unit', name: 'tests unitaires + couverture', cmd: ['pnpm', 'test:coverage'] },
-  { job: 'integration', name: 'integration + contract', cmd: ['pnpm', 'vitest', 'run', '--project', 'integration', '--project', 'contract'] },
+  // Matrice PostgreSQL 16, 17, 18 jouée l'une après l'autre (Testcontainers, PG_VERSIONS surchargeable).
+  { job: 'integration', name: 'integration (PG ' + (process.env.PG_VERSIONS ?? '16,17,18') + ')', cmd: ['pnpm', 'test:integration'] },
+  { job: 'integration', name: 'contract', cmd: ['pnpm', 'vitest', 'run', '--project', 'contract'] },
 ];
 
 const runtimeDir = new URL('..', import.meta.url).pathname;
 const rootDir = new URL('../..', import.meta.url).pathname;
-// Même valeur que le service postgres de ci.yml (surchargeable).
-const env = { ...process.env, DATABASE_URL: process.env.DATABASE_URL ?? 'postgres://postgres:postgres@localhost:5432/runtime_test' };
+// Les tests d'intégration démarrent leur propre PostgreSQL (Testcontainers) : aucune base locale requise.
+const env = { ...process.env };
 
 for (const [index, step] of STEPS.entries()) {
   console.log(`\n==> [${index + 1}/${STEPS.length}] ${step.job} : ${step.name}`);

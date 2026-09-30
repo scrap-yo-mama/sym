@@ -26,6 +26,10 @@ export default defineConfig({
       {
         test: {
           name: 'integration',
+          // Un conteneur PostgreSQL (PG_VERSION, défaut 16) par exécution ; une base par fichier (tests/helpers/pg.ts).
+          globalSetup: ['tests/setup/postgres.global.ts'],
+          testTimeout: 60_000,
+          hookTimeout: 180_000,
           include: [
             'packages/*/src/**/*.integration.test.ts',
             'apps/*/src/**/*.integration.test.ts',

@@ -27,6 +27,7 @@
   { "test": "assert_diagnostics_redacted", "invariant": "INV9", "tasks": ["1.10"], "stage": "I1" },
   { "test": "assert_ui_strings_no_forbidden_words", "invariant": "INV6", "tasks": ["3.5"], "stage": "U1" },
   { "test": "assert_access_report_first", "invariant": "étape 0", "tasks": ["1.11", "2.1"], "stage": "I1" },
+  { "test": "assert_migrations_locked", "invariant": "exploitation", "tasks": ["0.2"], "stage": "I1" },
   { "test": "assert_x6_guard", "invariant": "X6", "tasks": ["0.1", "0.8"], "stage": "quality" },
   { "test": "assert_deps_pinned", "invariant": "supply-chain", "tasks": ["0.8"], "stage": "quality" },
   { "test": "assert_licenses_compatible", "invariant": "supply-chain", "tasks": ["0.8"], "stage": "quality" },

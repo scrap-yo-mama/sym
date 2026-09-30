@@ -17,6 +17,11 @@ catalog:
   typescript-eslint: 8.70.1
   knip: 6.37.0
   '@vitest/coverage-v8': 5.0.1
+  # Base (tâche 0.2)
+  drizzle-orm: 0.45.3
+  pg: 8.23.0
+  '@types/pg': 8.23.1
+  '@testcontainers/postgresql': 12.1.0
 
 # Durcissement supply chain (08b §5). Le durcissement complet est la tâche 0.8.
 minimumReleaseAge: 10080
@@ -26,3 +31,7 @@ strictDepBuilds: true
 engineStrict: true
 allowBuilds:
   esbuild: true
+  # Testcontainers (tâche 0.2) : scripts facultatifs refusés (liaisons natives optionnelles de ssh2, contrôle de version de protobufjs).
+  cpu-features: false
+  protobufjs: false
+  ssh2: false

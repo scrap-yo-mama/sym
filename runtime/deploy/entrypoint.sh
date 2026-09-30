@@ -1,13 +1,15 @@
 #!/bin/bash
-# Choisit le processus à lancer selon RUNTIME_MODE (server | worker | all, défaut all).
+# Choisit le processus à lancer selon RUNTIME_MODE (server | worker | all | migrate, défaut all).
 set -uo pipefail
 
 SERVER=/app/apps/server/dist/index.js
 WORKER=/app/apps/worker/dist/index.js
+CLI=/app/apps/cli/dist/index.js
 
 case "${RUNTIME_MODE:-all}" in
   server) exec node "$SERVER" ;;
   worker) exec node "$WORKER" ;;
+  migrate) exec node "$CLI" migrate ;; # pré-déploiement (14 § 5)
   all)
     node "$SERVER" & p1=$!
     node "$WORKER" & p2=$!
@@ -22,7 +24,7 @@ case "${RUNTIME_MODE:-all}" in
     exit "$status"
     ;;
   *)
-    echo "RUNTIME_MODE invalide : '${RUNTIME_MODE}' (attendu : server, worker ou all)" >&2
+    echo "RUNTIME_MODE invalide : '${RUNTIME_MODE}' (attendu : server, worker, all ou migrate)" >&2
     exit 64
     ;;
 esac
