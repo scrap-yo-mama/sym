@@ -4,6 +4,13 @@ import { defineConfig } from 'vitest/config';
 export default defineConfig({
   test: {
     passWithNoTests: true,
+    // Couverture produite localement et publiée en artefact par le job unit : aucun seuil avant la fin de la W0.
+    coverage: {
+      provider: 'v8',
+      reporter: ['text-summary', 'lcov', 'json-summary'],
+      include: ['packages/*/src/**/*.ts', 'apps/*/src/**/*.ts'],
+      exclude: ['**/*.test.ts'],
+    },
     projects: [
       {
         test: {

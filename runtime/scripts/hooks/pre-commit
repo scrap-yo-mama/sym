@@ -1,0 +1,19 @@
+#!/bin/sh
+# Garde X6 (pre-commit) : refuse tout *.py, *.ipynb ou nom suspect indexé. POSIX, sans node ni pnpm : instantané.
+# Activation : pnpm hooks:install (git config core.hooksPath runtime/scripts/hooks).
+bad=""
+set -f
+IFS='
+'
+for f in $(git -c core.quotepath=off diff --cached --name-only --diff-filter=ACR); do
+  lower=$(printf '%s' "${f##*/}" | tr 'A-Z' 'a-z')
+  case "$lower" in
+    *.py|*.ipynb|anticaptcha*|*captcha_solver*) bad="$bad
+  $f" ;;
+  esac
+done
+if [ -n "$bad" ]; then
+  echo "Garde X6 : commit refusé, fichiers interdits dans l'index (aucun Python ni notebook dans ce dépôt) :$bad" >&2
+  exit 1
+fi
+exit 0

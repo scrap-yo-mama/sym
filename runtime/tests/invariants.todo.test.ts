@@ -31,5 +31,4 @@ describe("invariants (à implémenter)", () => {
   test.todo("assert_diagnostics_redacted"); // INV9, tâche(s) 1.10
   test.todo("assert_ui_strings_no_forbidden_words"); // INV6, tâche(s) 3.5
   test.todo("assert_access_report_first"); // étape 0, tâche(s) 1.11, 2.1
-  test.todo("assert_x6_guard"); // X6, tâche(s) 0.1, 0.8
 });

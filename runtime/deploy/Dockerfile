@@ -1,7 +1,7 @@
 # Image unique, trois modes (RUNTIME_MODE=server|worker|all). Contexte de build : runtime/
 #   docker build -f deploy/Dockerfile -t runtime .
-# Épinglage par empreinte de la base : tâche 0.8. Cible GHCR : linux/amd64 (ici : architecture locale).
-ARG PLAYWRIGHT_IMAGE=mcr.microsoft.com/playwright:v1.63.0-noble
+# Base épinglée par empreinte de l'index multi-architecture (tâche 0.8 ; Renovate la met à jour). Cible GHCR : linux/amd64 (ici : architecture locale).
+ARG PLAYWRIGHT_IMAGE=mcr.microsoft.com/playwright:v1.63.0-noble@sha256:eff16c30e6f3f4af0a03fa4b706120d5e9b0891c344a27d64559aff5900a4a27
 
 # --- Étape 1 : build (même base, donc même Node 24, que l'étape d'exécution)
 FROM ${PLAYWRIGHT_IMAGE} AS build

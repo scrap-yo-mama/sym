@@ -33,16 +33,21 @@ jobs:
           node-version-file: runtime/.node-version
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
-      - name: Garde X6 (aucun .py ni .ipynb suivi dans runtime/)
-        run: |
-          test -z "$(git ls-files '*.py' '*.ipynb')" || { echo "X6 : fichiers Python interdits"; git ls-files '*.py' '*.ipynb'; exit 1; }
-          node scripts/check-x6.ts
+      - name: Garde X6 (aucun .py ni .ipynb ni nom suspect dans tout le dépôt, depuis la racine)
+        working-directory: .
+        run: node runtime/scripts/check-x6.ts
       - run: pnpm typecheck
       - run: pnpm lint
       - run: pnpm knip
       - name: Table invariants vers tests nommés (15 §12)
         run: pnpm check:invariants
-      # À venir : vue-tsc (tâche 3.x), liste noire INV6 et scan des licences (tâche 0.8).
+      - name: Versions exactes, actions et images épinglées (assert_deps_pinned)
+        run: pnpm check:deps-pinned
+      - name: Liste noire INV6 (lockfile)
+        run: pnpm check:blacklist
+      - name: Scan des licences (assert_licenses_compatible)
+        run: pnpm check:licenses
+      # À venir : vue-tsc (tâche 3.x).
 
   unit:
     runs-on: ubuntu-24.04
@@ -58,14 +63,20 @@ jobs:
           node-version-file: runtime/.node-version
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
-      - run: pnpm vitest run --project unit
-      # À venir : couverture produite localement et publiée en artefact (seuils après la W0).
+      - run: pnpm test:coverage
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: coverage-unit
+          path: runtime/coverage/
+          if-no-files-found: error
+          retention-days: 14
+      # Seuils de couverture fixés après la W0 ; aucun envoi à un service tiers.
 
   integration:
     runs-on: ubuntu-24.04
     services:
       postgres:
-        image: postgres:16
+        image: postgres:16@sha256:1a6ab3f5345eb6dbe04a1349529caabdb0ab09293a09590fad07b2246bfa4b54
         env:
           POSTGRES_PASSWORD: postgres
           POSTGRES_DB: runtime_test

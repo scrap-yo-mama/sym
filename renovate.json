@@ -1,0 +1,53 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "description": "Runtime (runtime/) et workflows (.github/) seulement. Délai npm aligné sur minimumReleaseAge de pnpm-workspace.yaml (10080 min = 7 jours).",
+  "extends": [
+    "config:recommended",
+    "helpers:pinGitHubActionDigests",
+    "docker:pinDigests",
+    "security:minimumReleaseAgeNpm",
+    ":pinDevDependencies",
+    ":maintainLockFilesWeekly"
+  ],
+  "includePaths": ["runtime/**", ".github/**"],
+  "rangeStrategy": "pin",
+  "schedule": ["before 6am on monday"],
+  "prConcurrentLimit": 5,
+  "packageRules": [
+    {
+      "description": "7 jours pour npm, comme pnpm minimumReleaseAge ; dérogation de sécurité journalisée à la main",
+      "matchDatasources": ["npm"],
+      "minimumReleaseAge": "7 days"
+    },
+    {
+      "description": "Le pin d'un digest ne doit pas attendre le délai",
+      "matchUpdateTypes": ["pinDigest"],
+      "minimumReleaseAge": null
+    },
+    {
+      "description": "Outillage qualité groupé",
+      "groupName": "outillage qualité",
+      "matchPackageNames": ["eslint", "@eslint/js", "typescript-eslint", "knip", "@vitest/coverage-v8", "vitest", "typescript"]
+    },
+    {
+      "description": "Playwright : paquet npm et image Docker montent ensemble (version épinglée identique)",
+      "groupName": "playwright",
+      "matchPackageNames": ["@playwright/test", "mcr.microsoft.com/playwright"]
+    },
+    {
+      "description": "Actions GitHub groupées",
+      "groupName": "actions github",
+      "matchManagers": ["github-actions"]
+    },
+    {
+      "description": "Images Docker (base et postgres) : digest épinglé",
+      "matchDatasources": ["docker"],
+      "pinDigests": true
+    },
+    {
+      "description": "Majeures jamais fusionnées automatiquement",
+      "matchUpdateTypes": ["major"],
+      "automerge": false
+    }
+  ]
+}
