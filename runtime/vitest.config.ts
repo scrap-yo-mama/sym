@@ -8,7 +8,7 @@ export default defineConfig({
     coverage: {
       provider: 'v8',
       reporter: ['text-summary', 'lcov', 'json-summary'],
-      include: ['packages/*/src/**/*.ts', 'apps/*/src/**/*.ts'],
+      include: ['packages/*/src/**/*.ts', 'apps/*/src/**/*.ts', 'fixtures/src/**/*.ts'],
       exclude: ['**/*.test.ts'],
     },
     projects: [
@@ -18,6 +18,7 @@ export default defineConfig({
           include: [
             'packages/*/src/**/*.{unit,prop}.test.ts',
             'apps/*/src/**/*.{unit,prop}.test.ts',
+            'fixtures/src/**/*.{unit,prop}.test.ts',
             'tests/**/*.{unit,prop}.test.ts',
             'tests/invariants.todo.test.ts',
           ],
@@ -43,6 +44,7 @@ export default defineConfig({
           include: [
             'packages/*/src/**/*.contract.test.ts',
             'apps/*/src/**/*.contract.test.ts',
+            'fixtures/src/**/*.contract.test.ts',
             'tests/**/*.contract.test.ts',
           ],
         },

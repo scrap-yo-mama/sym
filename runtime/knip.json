@@ -39,6 +39,14 @@
       "entry": [
         "src/index.ts"
       ]
+    },
+    "fixtures": {
+      "entry": [
+        "src/**/*.test.ts"
+      ],
+      "project": [
+        "src/**/*.ts"
+      ]
     }
   }
 }

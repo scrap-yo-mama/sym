@@ -1,6 +1,7 @@
 packages:
   - packages/*
   - apps/*
+  - fixtures
 
 # Catalogue unique : versions exactes (aucune plage ouverte), une seule source de vérité.
 catalog:
