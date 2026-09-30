@@ -1,0 +1,62 @@
+// Les 21 transitions de 04 §6 : table unique, source des noms de tests `transition_NN_*`.
+import type { Status, TransitionId } from './types.js';
+
+export type TransitionDef = {
+  id: TransitionId;
+  from: Status;
+  to: Status;
+  /** Suffixe stable du test nommé `transition_NN_<slug>`. */
+  slug: string;
+  /** Codes de raison stables que cette transition peut porter. */
+  reasons: readonly string[];
+};
+
+const SIGNALS = [
+  'retried', 'escalated', 'repaired', 'optional_fields_missing', 'volume_anomaly', 'pagination_short', 'slow', 'cost_anomaly',
+] as const;
+const BLOCKING = ['blocked_by_protection', 'forbidden', 'robots_disallowed'] as const;
+const REINVESTIGATION = ['reinvestigate_manual', 'output_schema_changed', 'force_investigate'] as const;
+/** Classes d'un échec non transitoire de rejeu (10, 11) : y compris les refus, qui repartent aussitôt en 14 ou 15. */
+const REPLAY_FAILURES = [
+  'extraction', 'code_error', 'network', 'not_found',
+  'auth_required', 'payment_required', 'account_limit', 'challenge_in_tunnel', ...BLOCKING,
+] as const;
+
+export const TRANSITIONS: readonly TransitionDef[] = [
+  { id: 1, from: 'enquete', to: 'sain', slug: 'enquete_to_sain', reasons: ['strategy_conform'] },
+  { id: 2, from: 'enquete', to: 'erreur', slug: 'enquete_to_erreur', reasons: ['investigation_budget_exhausted', 'robots_unreachable'] },
+  {
+    id: 3, from: 'enquete', to: 'action_requise', slug: 'enquete_to_action_requise',
+    reasons: ['auth_required', 'payment_required', 'account_limit', 'proxy_not_configured', 'tunnel_offline'],
+  },
+  { id: 4, from: 'enquete', to: 'bloquee', slug: 'enquete_to_bloquee', reasons: BLOCKING },
+  { id: 5, from: 'sain', to: 'warning', slug: 'sain_to_warning_degraded', reasons: SIGNALS },
+  { id: 6, from: 'sain', to: 'warning', slug: 'sain_to_warning_unavailable', reasons: ['unavailable'] },
+  { id: 7, from: 'sain', to: 'warning', slug: 'sain_to_warning_version_rollback', reasons: ['version_rollback'] },
+  { id: 8, from: 'warning', to: 'warning', slug: 'warning_to_warning', reasons: [...SIGNALS, 'unavailable', 'version_rollback'] },
+  { id: 9, from: 'warning', to: 'sain', slug: 'warning_to_sain', reasons: ['clean_streak', 'quiet_period'] },
+  { id: 10, from: 'sain', to: 'reparation', slug: 'sain_to_reparation', reasons: REPLAY_FAILURES },
+  { id: 11, from: 'warning', to: 'reparation', slug: 'warning_to_reparation', reasons: REPLAY_FAILURES },
+  { id: 12, from: 'reparation', to: 'warning', slug: 'reparation_to_warning', reasons: ['repaired'] },
+  { id: 13, from: 'reparation', to: 'erreur', slug: 'reparation_to_erreur', reasons: ['repair_budget_exhausted', 'repair_repeated_patch'] },
+  {
+    id: 14, from: 'reparation', to: 'action_requise', slug: 'reparation_to_action_requise',
+    reasons: ['auth_required', 'payment_required', 'account_limit', 'challenge_in_tunnel'],
+  },
+  { id: 15, from: 'reparation', to: 'bloquee', slug: 'reparation_to_bloquee', reasons: BLOCKING },
+  { id: 16, from: 'erreur', to: 'enquete', slug: 'erreur_to_enquete', reasons: ['backoff', 'reinvestigate_manual', 'force_investigate'] },
+  { id: 17, from: 'action_requise', to: 'enquete', slug: 'action_requise_to_enquete', reasons: ['user_acted'] },
+  { id: 18, from: 'bloquee', to: 'enquete', slug: 'bloquee_to_enquete_manual_only', reasons: ['reinvestigate_manual'] },
+  { id: 19, from: 'sain', to: 'enquete', slug: 'sain_to_enquete', reasons: REINVESTIGATION },
+  { id: 20, from: 'warning', to: 'enquete', slug: 'warning_to_enquete', reasons: REINVESTIGATION },
+  // 21 : `to` est le statut précédent (sain ou warning), porté par `previous_status`.
+  { id: 21, from: 'enquete', to: 'sain', slug: 'enquete_to_previous_status', reasons: ['reinvestigation_failed'] },
+];
+
+export const TRANSITION_COUNT = 21;
+
+export function transitionDef(id: TransitionId): TransitionDef {
+  const def = TRANSITIONS.find((t) => t.id === id);
+  if (def === undefined) throw new Error(`Transition inconnue : ${String(id)}`);
+  return def;
+}

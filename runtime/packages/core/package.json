@@ -30,6 +30,7 @@
     "@types/node": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:",
-    "pino": "catalog:"
+    "pino": "catalog:",
+    "fast-check": "catalog:"
   }
 }
