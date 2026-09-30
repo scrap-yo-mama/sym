@@ -6,3 +6,4 @@ export * from './fetch.js';
 export * from './egress-proxy.js';
 export * from './chromium.js';
 export * from './webhook.js';
+export * from './modes/index.js';

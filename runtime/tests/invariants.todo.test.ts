@@ -12,6 +12,7 @@ import { describe, test } from "vitest";
 // ressources de 3.1 / 2.6 : registre apps/server/src/routes/registry.ts.
 // INV10 (0.7) : assert_ssrf_guard et assert_webhook_ssrf_blocked (squelette repris par 2.5) sont dans
 // tests/security/ssrf-guard.security.test.ts (projet Vitest security, pnpm test:security).
+// INV6, X4 (1.4) : assert_no_ip_change_after_refusal est dans tests/network/network-modes.unit.test.ts (proxy de test local).
 describe("invariants (à implémenter)", () => {
   test.todo("assert_output_schema_enforced"); // INV1, tâche(s) 1.1a, 2.3
   test.todo("assert_cheapest_first_logged"); // INV2, tâche(s) 2.1
