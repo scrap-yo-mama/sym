@@ -25,6 +25,10 @@
   },
   "dependencies": {
     "ajv": "catalog:",
+    "css-select": "catalog:",
+    "domhandler": "catalog:",
+    "htmlparser2": "catalog:",
+    "json-p3": "catalog:",
     "undici": "catalog:"
   },
   "devDependencies": {
