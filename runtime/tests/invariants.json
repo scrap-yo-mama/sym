@@ -23,6 +23,8 @@
   { "test": "assert_erasure_complete", "invariant": "RGPD", "tasks": ["1.8"], "stage": "I1" },
   { "test": "assert_no_personal_data_in_logs", "invariant": "RGPD", "tasks": ["1.8", "1.10"], "stage": "I1" },
   { "test": "assert_llm_redaction", "invariant": "RGPD", "tasks": ["0.4"], "stage": "I1" },
+  { "test": "assert_llm_contract", "invariant": "contrat LLM", "tasks": ["0.4"], "stage": "I1" },
+  { "test": "assert_llm_no_fallback", "invariant": "contrat LLM", "tasks": ["0.4"], "stage": "I1" },
   { "test": "assert_pacing_key_is_domain", "invariant": "politesse", "tasks": ["1.9"], "stage": "U1, I1" },
   { "test": "assert_export_no_secret", "invariant": "INV5, INV8", "tasks": ["3.12"], "stage": "I1" },
   { "test": "assert_diagnostics_redacted", "invariant": "INV9", "tasks": ["1.10"], "stage": "I1" },
