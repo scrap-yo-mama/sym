@@ -1,0 +1,22 @@
+# Python historique (hors périmètre du site, jamais versionné)
+/*.py
+.venv/
+__pycache__/
+requirements.txt
+
+# Node / build
+node_modules/
+dist/
+site/e2e/reports/
+.lighthouseci/
+test-results/
+playwright-report/
+
+# Secrets et état Netlify
+.env
+.env.*
+.netlify/
+
+# Divers
+.DS_Store
+.vscode/
