@@ -1,3 +1,4 @@
+-- SPDX-License-Identifier: AGPL-3.0-only
 -- 0001_init (descente) : testée en CI seulement (14 § 5). Jamais un retour arrière de production.
 -- L'extension citext est conservée : d'autres objets de la base peuvent en dépendre.
 

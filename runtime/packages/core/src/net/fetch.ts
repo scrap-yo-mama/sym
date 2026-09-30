@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Niveau fetch de la garde SSRF (08b §1) : connecteur undici qui résout et contrôle à chaque connexion,
 // socket épinglé sur l'adresse validée (ferme le rebinding), redirections suivies à la main et recontrôlées.
 import { isIP } from 'node:net';

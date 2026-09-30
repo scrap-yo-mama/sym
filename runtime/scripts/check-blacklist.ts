@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Liste noire INV6 : échoue si une dépendance (directe ou transitive, lue dans pnpm-lock.yaml) porte un nom
 // de la liste de refus. Ce fichier ne contient que des NOMS à refuser (exclusions X1 à X3, cdc/.../_exclusions.md).
 import { readFileSync } from 'node:fs';

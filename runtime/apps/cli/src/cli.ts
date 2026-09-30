@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 import { readFileSync } from 'node:fs';
 import { generateMasterKey, loadKeyring, MasterKeyError } from '@runtime/core';
 import pg from 'pg';

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Test de contrat : une entrée par fixture, qui fige ce que le reste du produit peut en attendre (15 §8, 04 §7, 17).
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { startClient, type Client, type Res } from './test-helpers.ts';

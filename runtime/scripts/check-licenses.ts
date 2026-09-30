@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // assert_licenses_compatible : scan des licences installées (`pnpm licenses list --json`) contre une liste
 // autorisée compatible avec l'AGPL-3.0 du cœur (08b §5). Licence inconnue ou interdite : échec.
 import { execFileSync } from 'node:child_process';

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Client TypeScript (MIT), généré plus tard par openapi-typescript. Squelette tâche 0.1.
 export const PACKAGE_NAME = '@runtime/client';
 

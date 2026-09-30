@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Jeux de données déterministes (graine fixe). Tout est factice : identifiants zz_test_*, e-mails en .invalid,
 // téléphones dans la plage de fiction 01 99 00 xx xx, noms « Zztest ».
 import { EPOCH_MS } from './clock.ts';

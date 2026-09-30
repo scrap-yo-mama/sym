@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Empreinte SHA-256 du protocole du spike 0.6a (15 §11 : « empreinte vérifiée en CI »).
 // Usage : node eval/scripts/spike-decision-hash.ts          -> affiche l'empreinte
 //         node eval/scripts/spike-decision-hash.ts --check  -> code 1 si l'empreinte stockée diffère

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Auth noyau (0.3b) : matrice de rôles (13 § 2), format des clés d'API (13 § 8), mots de passe argon2id (13 § 5).
 import { describe, expect, test } from 'vitest';
 import { API_KEY_PREFIX, generateApiKey, GRANTABLE_SCOPES, hashApiKey, isApiKeyFormat, isGrantableScope } from './api-keys.js';

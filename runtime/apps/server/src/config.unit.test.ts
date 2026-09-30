@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 import { generateMasterKey } from '@runtime/core';
 import { afterEach, expect, test } from 'vitest';
 import { ConfigError, loadServerConfig, TELEMETRY_VARIABLES } from './config.js';

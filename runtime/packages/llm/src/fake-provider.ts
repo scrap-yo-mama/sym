@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Faux fournisseur scripté compatible OpenAI (15 §4) : serveur HTTP local, scénarios par rôle et par étape, compteur de
 // requêtes, point d'observation des appels d'outils. Sert toute la CI ; les cassettes msw ne servent qu'au contrat du client.
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';

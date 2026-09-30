@@ -1,0 +1,39 @@
+Scrapyomama Runtime
+Copyright (c) 2026 Scrapyomama Runtime contributors
+
+Ce produit est distribué sous licence AGPL-3.0-only (voir LICENSE), sauf
+packages/client et packages/schemas, distribués sous licence MIT (voir
+LICENSES/MIT.txt et le fichier LICENSE de chacun de ces deux paquets).
+
+BROUILLON, À VALIDER PAR UN AVOCAT AVANT TOUTE PUBLICATION : ce fichier est une
+liste d'attributions établie par l'équipe technique, pas un avis juridique.
+Le choix « -only » ou « -or-later » et les mentions ci-dessous restent à valider.
+Liste à revérifier en tâche 4.3 (audit des licences des dépendances).
+
+----------------------------------------------------------------------
+Composants tiers dont une attribution explicite est attendue
+----------------------------------------------------------------------
+
+Apache License 2.0 (texte : https://www.apache.org/licenses/LICENSE-2.0)
+  - Playwright (Microsoft Corporation) : pilotage du navigateur
+  - Drizzle ORM (Drizzle Team) : accès à PostgreSQL
+
+MIT License
+  - Ajv : validation de schémas JSON
+  - better-auth : authentification de l'instance
+  - Fastify, pino : serveur HTTP et journaux
+  - node-postgres (pg), undici
+  - Stagehand (Browserbase), pg-boss : prévus par l'architecture, pas encore
+    présents au moment de la rédaction de ce fichier
+
+ISC License
+  - isolated-vm : bac à sable du code généré (prévu par l'architecture, pas
+    encore présent au moment de la rédaction de ce fichier)
+
+Les autres dépendances transitives sont sous licences permissives (MIT, ISC,
+BSD-2-Clause, BSD-3-Clause, Apache-2.0, MPL-2.0, 0BSD, etc.) ; le contrôle
+automatique `pnpm check:licenses` refuse toute licence absente de la liste
+autorisée ou explicitement interdite (GPL-2.0-only, SSPL, BUSL, Commons Clause).
+
+Les textes complets des licences de chaque dépendance accompagnent leur paquet
+(répertoire node_modules ou image de conteneur publiée).

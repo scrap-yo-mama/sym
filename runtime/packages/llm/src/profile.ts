@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Profil de capacités par couple fournisseur x modèle (08 §1) et sonde de 3 appels minuscules.
 import { LlmError } from './errors.js';
 import type { ChatRequest, ChatResult, LlmTransport, ToolDef } from './types.js';

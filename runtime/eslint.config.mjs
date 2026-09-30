@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // ESLint 10, flat config. typescript-eslint en règles recommandées (sans typage : rapide, sans faux positifs de projet).
 import js from '@eslint/js';
 import { defineConfig, globalIgnores } from 'eslint/config';

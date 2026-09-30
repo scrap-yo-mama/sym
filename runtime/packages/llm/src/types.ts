@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Types du transport Chat Completions (08 §1). Les messages assistant sont gardés verbatim (champs inconnus compris).
 export type ChatRole = 'system' | 'user' | 'assistant' | 'tool';
 

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Runner de migrations SQL versionnées (14 § 5) : `migrations/NNNN_nom/{up,down}.sql`, table `schema_migrations`,
 // verrou consultatif de session sur une clé fixe (connexion directe obligatoire), une transaction par migration.
 // Idempotent : deux `runtime migrate` simultanés appliquent chaque migration une seule fois (assert_migrations_locked).

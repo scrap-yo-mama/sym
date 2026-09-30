@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Classement d'une réponse d'échec : par classe, pas par code HTTP (z.ai : 429 avec 1302/1305 réessayable, 1308 à 1321 et 1113 non).
 import type { LlmErrorClass } from './errors.js';
 

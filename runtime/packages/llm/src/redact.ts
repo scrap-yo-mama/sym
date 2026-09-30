@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // `llm.redact` (08 §1, Confidentialité) : masque e-mails, téléphones et motifs configurés AVANT l'envoi au fournisseur.
 import { secretValues, type SecretValueRegistry } from '@runtime/core';
 import type { ChatMessage } from './types.js';

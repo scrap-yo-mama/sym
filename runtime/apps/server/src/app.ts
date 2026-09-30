@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Application Fastify : registre des routes obligatoire (INV12), garde unique, 404 uniforme.
 import { loggerRedaction } from '@runtime/core';
 import Fastify, { type FastifyInstance, type FastifyServerOptions } from 'fastify';

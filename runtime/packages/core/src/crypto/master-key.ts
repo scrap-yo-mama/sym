@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // MASTER_KEY (INV8, 08 § 3, 14 § 7) : exactement 32 octets en base64, sans passphrase. Variantes _FILE et _PREVIOUS.
 import { hkdfSync, randomBytes } from 'node:crypto';
 import { readFileSync, statSync } from 'node:fs';

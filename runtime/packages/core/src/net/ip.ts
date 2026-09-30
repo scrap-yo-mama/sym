@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Classification d'une adresse IP résolue (08b §1, INV10). Pur, sans I/O.
 // La décision porte toujours sur l'adresse résolue (normalisée par net.isIP), jamais sur la chaîne de l'URL.
 import { BlockList, isIP, isIPv4, isIPv6 } from 'node:net';

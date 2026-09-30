@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Masquage en 3 couches (INV8, 08 § 3), pour tous les puits (stdout, run_logs, error_detail, spans, métriques, artefacts) :
 // (1) `Secret` se sérialise masqué ; (2) chemins explicites (redact pino, sans joker) et sérialiseurs (URL sans userinfo) ;
 // (3) balayage par valeur des textes libres, à partir du registre des valeurs de secret connues du processus.

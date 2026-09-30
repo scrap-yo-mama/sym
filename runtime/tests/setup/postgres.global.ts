@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // globalSetup du projet Vitest `integration` : un conteneur PostgreSQL par exécution, version PG_VERSION (défaut 16).
 // La matrice 16/17/18 est jouée l'une après l'autre par scripts/test-integration.ts (VM Docker de 3,8 Go).
 // Chaque fichier de test crée sa propre base dans ce conteneur (tests/helpers/pg.ts).

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Relecture sym-security de 0.3b : débit de connexion (par IP réelle ET par compte), réponse d'échec uniforme,
 // IP de session, re-hachage argon2, limite de ré-authentification, assistant limité par IP (13 § 4-5, ASVS 6.1.1, 6.3.8).
 import { hashPassword, passwordHashParams } from '@runtime/core';

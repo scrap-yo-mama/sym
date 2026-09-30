@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 import { expect, test } from 'vitest';
 import { createClient } from './index.js';
 

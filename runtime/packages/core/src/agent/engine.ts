@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Interface AgentEngine (02 P2, 03 « Moteur agentique ») : types seulement, aucune implémentation.
 // Squelette de la tâche 0.6a ; figée par l'ADR 0001 à l'issue du spike (eval/spike-0.6a-decision.md).
 // Le canal d'accès au navigateur reprend le contrat `agent_step` du tunnel (07 §3, tâche 0.6b) :

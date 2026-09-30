@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Registre des routes (INV12, 08b § 4) : toute route Fastify doit y figurer, sinon son enregistrement échoue
 // (crochet onRoute, app.ts) et le test paramétré `assert_cross_user_denied` / `assert_authz_matrix` échoue aussi.
 // Chaque route déclare son authentification, son scope pour une clé d'API, sa permission de rôle et, si elle porte

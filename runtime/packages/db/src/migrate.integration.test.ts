@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Protocole de 15 § 5 sur base réelle (matrice PG 16/17/18 via PG_VERSION) :
 // verrou (assert_migrations_locked), aller-retour par migration, rejeu idempotent.
 import pg from 'pg';

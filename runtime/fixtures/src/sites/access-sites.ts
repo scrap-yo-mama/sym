@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Accès (O8) : robots.txt (Disallow, 4xx, 5xx, redirection, gros fichier, Crawl-delay, Content-Signal) et réponse 402.
 // Chaque site sert un contenu JSON sur tout chemin hors robots.txt : le compteur de GET /__stats dit si un chemin a été visité.
 import { ControlError, type FxRequest, type FxResponse, type Site, type SiteFactory } from '../core.ts';

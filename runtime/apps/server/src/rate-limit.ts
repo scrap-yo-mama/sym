@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Compteurs d'échecs en mémoire, bornés (fenêtre fixe par clé, éviction des plus anciennes entrées au-delà de
 // `maxEntries`) : limite par compte à la connexion, ré-authentification, assistant de premier démarrage.
 // Une instance = un processus ; en multi-instance, compteurs partagés en PostgreSQL (08b § 3, à valider).

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Tâche 0.6a : le protocole du spike est figé avant les runs ; toute modification exige de mettre à jour
 // l'empreinte stockée (15 §11 : « empreinte vérifiée en CI »).
 import { describe, expect, test } from 'vitest';

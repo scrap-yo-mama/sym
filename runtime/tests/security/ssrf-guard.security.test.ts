@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // INV10 (tâche 0.7) : garde SSRF sur fetch et sur Chromium (Playwright via le proxy d'egress local).
 // Critère : métadonnées cloud, localhost, IP privées, rebinding, redirection vers IP privée → refus, et le faux
 // service de métadonnées ne reçoit aucune connexion.

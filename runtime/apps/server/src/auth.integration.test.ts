@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Auth noyau (tâche 0.3b, 13 § 4-9) sur base réelle : démarrage, assistant, sessions hachées, clés d'API, audit.
 import { createHash } from 'node:crypto';
 import { generateMasterKey, passwordHashParams } from '@runtime/core';

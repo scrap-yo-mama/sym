@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Démarrage de `server` (14 § 7, 13 § 4) : configuration, schéma à jour, verrou partagé des secrets, `keyCheck`
 // AVANT d'écouter (MASTER_KEY différente → refus clair), puis jeton d'amorçage exigé tant qu'aucun owner n'existe.
 import { currentSchemaVersion, createDb, expectedSchemaVersion, holdSecretsLock, keyCheck } from '@runtime/db';

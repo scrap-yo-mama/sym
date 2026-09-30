@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // RLS en SQL brut (INV12, 15 § 5, migration 0003) : sous `runtime_app`, l'utilisateur B ne lit ni n'écrit aucune ligne
 // de A, sur TOUTES les tables portant owner_id (découvertes dans le catalogue, pas listées à la main) ; journal d'audit
 // en ajout seul (assert_audit_append_only) ; propriétés du rôle applicatif.

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 import { prepareServer } from './start.js';
 
 let started: Awaited<ReturnType<typeof prepareServer>>;

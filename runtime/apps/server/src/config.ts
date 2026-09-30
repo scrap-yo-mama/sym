@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Configuration de `server` (14 § 3) : lue une fois au démarrage, variables sensibles retirées de l'environnement.
 import { readFileSync } from 'node:fs';
 import { loadKeyring, Secret, secretValues, type Keyring } from '@runtime/core';

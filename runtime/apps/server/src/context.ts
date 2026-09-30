@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Dépendances partagées par les routes.
 import type { Secret } from '@runtime/core';
 import type pg from 'pg';

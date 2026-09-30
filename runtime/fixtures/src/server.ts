@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Serveur de fixtures : un processus Fastify, hôtes virtuels (en-tête Host), commandes de test sur /__*.
 import { createHash, timingSafeEqual } from 'node:crypto';
 import type { AddressInfo } from 'node:net';

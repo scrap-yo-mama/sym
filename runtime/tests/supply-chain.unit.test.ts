@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Tâche 0.8 : garde X6, versions épinglées, licences, liste noire INV6.
 // Les fixtures ne contiennent que des noms de fichiers ou de paquets à refuser.
 import { readFileSync } from 'node:fs';

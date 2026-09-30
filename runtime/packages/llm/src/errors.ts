@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // 13 classes d'erreur LLM (08 §1) : la décision se prend par classe, jamais par code HTTP.
 import type { ChatResult, RawUsage } from './types.js';
 

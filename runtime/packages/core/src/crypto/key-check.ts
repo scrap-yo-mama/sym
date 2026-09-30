@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Valeur témoin `settings.key_check` (14 § 7) : une constante scellée avec la KEK `secrets` + empreinte courte.
 // Vérifiée au démarrage de `server` et `worker` : une autre clé est détectée avant toute lecture ou écriture de secret.
 import { kekFor, openSecret, sealSecret, SecretDecryptError } from './envelope.js';

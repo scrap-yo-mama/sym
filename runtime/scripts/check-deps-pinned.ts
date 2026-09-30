@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // assert_deps_pinned : versions exactes, actions épinglées par SHA, lockfile gelé, permissions minimales (08b §5).
 import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';

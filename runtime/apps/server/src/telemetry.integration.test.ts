@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // INV9 côté auth (tâche 0.3b) : Better Auth embarque @better-auth/telemetry. Lecture du code 1.7.5 : un envoi n'a
 // lieu que si la télémétrie est activée (option, ou variable BETTER_AUTH_TELEMETRY qui l'emporte sur l'option) ET
 // qu'une destination est fournie par BETTER_AUTH_TELEMETRY_ENDPOINT (vide par défaut) ; elle est aussi coupée sous

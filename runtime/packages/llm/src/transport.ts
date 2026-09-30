@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // OpenAICompatTransport : `fetch` maison sur `POST {base_url}/chat/completions` (aucun SDK, 08 §1). Une tentative par appel.
 import { redactArtifactText, Secret, SecretValueRegistry } from '@runtime/core';
 import { classifyFailure, extractErrorFields, parseRetryAfter } from './classify.js';

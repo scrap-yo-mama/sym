@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // JSON Schema publics : API, stratégie, export (MIT). Squelette tâche 0.1.
 export const PACKAGE_NAME = '@runtime/schemas';
 

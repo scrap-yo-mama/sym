@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // INV8 sur base réelle (matrice PG 16/17/18) : chiffrement au repos, AAD liée à la ligne, key_check et clé perdue,
 // rekey complet et reprenable, masquage des journaux (pino) et de run_logs. Clés et canaris générés à l'exécution.
 import { randomBytes } from 'node:crypto';

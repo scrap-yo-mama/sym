@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // LlmClient : providers[], un modèle par rôle, réessais par classe, repli restreint, échelle S1-S4, comptage (08 §1).
 import type { Secret } from '@runtime/core';
 import { backoffDelay, DEFAULT_BACKOFF, isFallbackEligible, LlmError, RETRY_LIMITS, type Backoff } from './errors.js';

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Clés d'API de l'appelant (13 § 8, 13.1) : liste, création (ré-authentification, secret renvoyé une seule fois),
 // révocation. Session d'interface seulement. Lecture et écriture sous `runtime_app` (RLS sur user_id) ET filtre
 // explicite sur l'appelant ; l'objet d'autrui répond 404 comme un objet inexistant.
