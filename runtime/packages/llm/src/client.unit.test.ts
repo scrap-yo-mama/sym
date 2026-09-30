@@ -88,9 +88,10 @@ describe('réessais par classe', () => {
     expect(fake.requests).toBe(3);
 
     fake.reset();
-    fake.setScenario('agent', Array.from({ length: 3 }, () => ({ ...scripted.text('late'), delayMs: 300 })));
+    // Marges larges : sous charge, un délai de 50 ms abandonnait la requête avant son arrivée au faux serveur (F-20261001-02).
+    fake.setScenario('agent', Array.from({ length: 3 }, () => ({ ...scripted.text('late'), delayMs: 1500 })));
     const t = createLlmClient(
-      { providers: [{ id: 'p', baseUrl: fake.baseUrl, apiKey: new Secret('k-0000-0000'), timeoutMs: 50, models: [{ id: 'agent', profile: profile() }] }], roles: { agent: { provider: 'p', model: 'agent' } } },
+      { providers: [{ id: 'p', baseUrl: fake.baseUrl, apiKey: new Secret('k-0000-0000'), timeoutMs: 200, models: [{ id: 'agent', profile: profile() }] }], roles: { agent: { provider: 'p', model: 'agent' } } },
       { sleep: async () => undefined },
     );
     await expect(t.chat('agent', { messages: user('x') })).rejects.toMatchObject({ class: 'timeout' });
