@@ -16,6 +16,8 @@ const STEPS: Step[] = [
   { job: 'quality', name: 'liste noire INV6', cmd: ['pnpm', 'check:blacklist'] },
   { job: 'quality', name: 'licences', cmd: ['pnpm', 'check:licenses'] },
   { job: 'unit', name: 'tests unitaires + couverture', cmd: ['pnpm', 'test:coverage'] },
+  // Étage S : garde SSRF sur fetch et Chromium (Playwright). Chromium : pnpm exec playwright install chromium.
+  { job: 'security', name: 'sécurité (SSRF, Chromium)', cmd: ['pnpm', 'test:security'] },
   // Matrice PostgreSQL 16, 17, 18 jouée l'une après l'autre (Testcontainers, PG_VERSIONS surchargeable).
   { job: 'integration', name: 'integration (PG ' + (process.env.PG_VERSIONS ?? '16,17,18') + ')', cmd: ['pnpm', 'test:integration'] },
   { job: 'integration', name: 'contract', cmd: ['pnpm', 'vitest', 'run', '--project', 'contract'] },

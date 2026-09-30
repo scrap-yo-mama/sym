@@ -5,6 +5,8 @@ import { describe, test } from "vitest";
 // INV8 (0.3a) : assert_encrypted_at_rest, assert_aad_binding, assert_rekey_complete, assert_key_loss_detected, assert_no_secret_in_logs
 // sont dans packages/core/src/crypto/*.unit.test.ts et packages/db/src/secrets.integration.test.ts (extension aux spans,
 // métriques et artefacts : tâche 1.10).
+// INV10 (0.7) : assert_ssrf_guard et assert_webhook_ssrf_blocked (squelette repris par 2.5) sont dans
+// tests/security/ssrf-guard.security.test.ts (projet Vitest security, pnpm test:security).
 describe("invariants (à implémenter)", () => {
   test.todo("assert_output_schema_enforced"); // INV1, tâche(s) 1.1a, 2.3
   test.todo("assert_cheapest_first_logged"); // INV2, tâche(s) 2.1
@@ -17,8 +19,6 @@ describe("invariants (à implémenter)", () => {
   test.todo("assert_sandbox"); // INV7, tâche(s) 1.5
   test.todo("assert_no_telemetry"); // INV9, tâche(s) 1.10, 4.3
   test.todo("assert_otel_off_by_default"); // INV9, tâche(s) 1.10, 4.3
-  test.todo("assert_ssrf_guard"); // INV10, tâche(s) 0.7
-  test.todo("assert_webhook_ssrf_blocked"); // INV10, tâche(s) 0.7, 2.5
   test.todo("assert_robots_respected"); // INV11, tâche(s) 1.11
   test.todo("assert_cross_user_denied"); // INV12, tâche(s) 0.3b, 4.3
   test.todo("assert_retention_purge"); // RGPD, tâche(s) 1.8

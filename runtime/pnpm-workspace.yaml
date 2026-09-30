@@ -22,6 +22,8 @@ catalog:
   pg: 8.23.0
   '@types/pg': 8.23.1
   '@testcontainers/postgresql': 12.1.0
+  # Garde SSRF (tâche 0.7) : fetch épinglé à undici (8.11.1 et 8.11.2 < 7 jours au 2026-09-30, minimumReleaseAge).
+  undici: 8.11.0
 
 # Durcissement supply chain (08b §5). Le durcissement complet est la tâche 0.8.
 minimumReleaseAge: 10080
