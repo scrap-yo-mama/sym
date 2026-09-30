@@ -1,0 +1,39 @@
+{
+  "version": 1,
+  "provider": "deepinfra",
+  "case": "schema-strict",
+  "synthetic": false,
+  "entries": [
+    {
+      "key": "593d4ad40db6",
+      "request": {
+        "method": "POST",
+        "path": "/v1/openai/chat/completions",
+        "shape": {
+          "model": "zai-org/GLM-5.3",
+          "stream": false,
+          "roles": [
+            "user"
+          ],
+          "tools": [],
+          "tool_choice": null,
+          "response_format": {
+            "type": "json_schema",
+            "name": "city",
+            "strict": true,
+            "schema_sha": "cc0a2ebce64b"
+          },
+          "max_tokens": 900,
+          "extra_params": []
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": "{\"service_tier\":\"default\",\"id\":\"chatcmpl-RGZcy4iBxOjONuMndRZIH97j\",\"object\":\"chat.completion\",\"created\":1790808200,\"model\":\"zai-org/GLM-5.3\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"{ \\\"city\\\": \\\"Paris\\\", \\\"population_millions\\\": 2.1, \\\"nickname\\\": null }\",\"reasoning_content\":\"The user is asking me to give the city Paris with its population in millions (about 2.1), and no nickname.\\n\\nSo they want something like: Paris, population about 2.1 million, without including any nickname like \\\"City of Light\\\" or \\\"City of Love.\\\"\\n\\nLet me think about the format. This seems like they want a simple statement. Perhaps: \\\"Paris — 2.1 million\\\"\\n\\nThe request is straightforward. The city of Paris proper has a population of about 2.1 million (the city proper, not the metro area which is much larger, around 12 million).\\n\\nThe user explicitly said \\\"No nickname\\\" — so I should not include \\\"City of Light\\\" or similar.\\n\\nSo a simple answer: \\\"Paris: population approximately 2.1 million.\\\"\\n\\nThat's it. Keep it brief and direct since the request is simple and constrained.\",\"name\":null,\"tool_calls\":null},\"finish_reason\":\"stop\",\"logprobs\":null}],\"usage\":{\"prompt_tokens\":31,\"total_tokens\":234,\"completion_tokens\":203,\"estimated_cost\":0.0005249375,\"prompt_tokens_details\":{\"cached_tokens\":0,\"cache_write_tokens\":null},\"completion_tokens_details\":{\"reasoning_tokens\":179}}}"
+      }
+    }
+  ]
+}

@@ -1,0 +1,34 @@
+{
+  "version": 1,
+  "provider": "deepinfra",
+  "case": "auth-401",
+  "synthetic": false,
+  "entries": [
+    {
+      "key": "27d08861ff8a",
+      "request": {
+        "method": "POST",
+        "path": "/v1/openai/chat/completions",
+        "shape": {
+          "model": "zai-org/GLM-5.3",
+          "stream": false,
+          "roles": [
+            "user"
+          ],
+          "tools": [],
+          "tool_choice": null,
+          "response_format": null,
+          "max_tokens": 5,
+          "extra_params": []
+        }
+      },
+      "response": {
+        "status": 401,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": "{\"error\":{\"message\":\"User is not authorized to access this resource\",\"type\":\"invalid_request_error\",\"param\":null,\"code\":\"invalid_api_key\"}}"
+      }
+    }
+  ]
+}

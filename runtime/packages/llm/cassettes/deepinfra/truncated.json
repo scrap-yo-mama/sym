@@ -1,0 +1,34 @@
+{
+  "version": 1,
+  "provider": "deepinfra",
+  "case": "truncated",
+  "synthetic": false,
+  "entries": [
+    {
+      "key": "946d4ab86a96",
+      "request": {
+        "method": "POST",
+        "path": "/v1/openai/chat/completions",
+        "shape": {
+          "model": "zai-org/GLM-5.3",
+          "stream": false,
+          "roles": [
+            "user"
+          ],
+          "tools": [],
+          "tool_choice": null,
+          "response_format": null,
+          "max_tokens": 12,
+          "extra_params": []
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": "{\"service_tier\":\"default\",\"id\":\"chatcmpl-R8LvhxJ2dWmpK5RMcgMsw9Av\",\"object\":\"chat.completion\",\"created\":1790808202,\"model\":\"zai-org/GLM-5.3\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"\",\"reasoning_content\":\"The user wants a long poem about the sea, at least\",\"name\":null,\"tool_calls\":null},\"finish_reason\":\"length\",\"logprobs\":null}],\"usage\":{\"prompt_tokens\":26,\"total_tokens\":38,\"completion_tokens\":12,\"estimated_cost\":4.4625e-05,\"prompt_tokens_details\":{\"cached_tokens\":0,\"cache_write_tokens\":null},\"completion_tokens_details\":{\"reasoning_tokens\":12}}}"
+      }
+    }
+  ]
+}

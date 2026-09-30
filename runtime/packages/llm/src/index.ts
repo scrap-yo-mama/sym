@@ -1,11 +1,12 @@
-// LlmTransport, providers, profils, comptage (tâche 0.4). Squelette tâche 0.1.
+// Couche LLM (tâche 0.4) : transport Chat Completions maison, providers[] par rôle, sonde de capacités, échelle S1-S4 + Ajv final.
 export const PACKAGE_NAME = '@runtime/llm';
 
-export interface LlmMessage {
-  role: 'system' | 'user' | 'assistant';
-  content: string;
-}
-
-export interface LlmTransport {
-  complete(messages: LlmMessage[]): Promise<string>;
-}
+export * from './types.js';
+export * from './errors.js';
+export { classifyFailure, extractErrorFields, parseRetryAfter, type FailureInfo } from './classify.js';
+export * from './usage.js';
+export * from './redact.js';
+export * from './profile.js';
+export * from './schema.js';
+export * from './transport.js';
+export * from './client.js';
