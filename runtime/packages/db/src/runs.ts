@@ -14,6 +14,7 @@
 import { randomUUID } from 'node:crypto';
 import {
   ACTIVE_RUN_STATES,
+  boundErrorDetail,
   maxRunRequeues,
   RUN_LOST_DETAIL,
   RUN_QUEUE,
@@ -338,7 +339,7 @@ export async function finishRun(db: Queryable, runId: string, jobId: string, res
       failed ? [] : (result.degraded_reasons ?? []),
       failed ? result.failure_class : null,
       failed ? result.retryable : null,
-      failed ? (result.error_detail ?? null) : null,
+      failed ? boundErrorDetail(result.error_detail) : null,
       result.items ?? 0,
       failed ? null : (result.dataset_id ?? null),
       result.strategy_version ?? null,

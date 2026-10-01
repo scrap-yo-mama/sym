@@ -16,6 +16,7 @@ export * from './run-logs.js';
 export * from './secrets.js';
 export * from './status.js';
 export * from './queue.js';
+export * from './retention/index.js';
 export * from './runs.js';
 export { schema };
 
