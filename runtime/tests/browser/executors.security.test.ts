@@ -720,6 +720,38 @@ describe('E3 en script dans le bac à sable (1.5) : ctx.page.*, ctx.fetch, ctx.e
     expect((await client.stats()).hosts[CHALLENGE_200]?.paths['/']).toBe(1);
   }, 60_000);
 
+  // Revue de 1.7 : une navigation qui chevauche un ctx.page.evaluate (le script attend dans la page) ou l'attente du
+  // sélecteur d'un clic n'est pas imputée au script : seule part la navigation de ctx.page.goto ou du dispatch d'un clic.
+  test.each([
+    ['evaluate qui attend dans la page (try/catch), rechargement immédiat', 'evaluate', 0],
+    ['evaluate qui attend dans la page (try/catch), rechargement après 300 ms', 'evaluate', 300],
+    ['clic qui attend son sélecteur, rechargement immédiat', 'click', 0],
+    ['clic qui attend son sélecteur, rechargement après 300 ms', 'click', 300],
+  ])('assert_no_circumvention (E3 script, revue de 1.7) : défi JS silencieux servi en 200, page de départ, %s → blocked_by_protection (self_navigation), 0 élément, la page « franchie » jamais servie', async (_name, how, delay) => {
+    await client.control({ op: 'site', site: 'challenge_200', variant: 'silent' });
+    await client.control({ op: 'site', site: 'challenge_200', resolve_after_ms: delay });
+    const wait =
+      how === 'evaluate'
+        ? `try { await ctx.page.evaluate(() => new Promise((r) => setTimeout(() => r(1), 1500))); } catch (e) { /* attente */ }\n${waitProduct}`
+        : "await ctx.page.click('h1.product', { timeoutMs: 3000 }).catch(() => null);\n";
+    const out = await script(`${wait}${firstProduct}`, { allowedHosts: [CHALLENGE_200], startUrl: `${base(CHALLENGE_200)}/` });
+    expect(out.result).toMatchObject({ ok: false, failure: { failure_class: 'blocked_by_protection', detail: 'self_navigation' } });
+    expect(out.items).toEqual([]);
+    expect(out.violations).toEqual([]);
+    expect((await client.stats()).hosts[CHALLENGE_200]?.paths['/']).toBe(1);
+  }, 60_000);
+
+  test('limite assumée (INV6, revue de 1.7) : navigation lancée par le code d’un ctx.page.evaluate (location.href vers l’API) → blocked_by_protection (self_navigation), la cible jamais demandée ; naviguer passe par ctx.page.goto', async () => {
+    const out = await script(`await ctx.page.evaluate((u) => { location.href = u; return 1; }, input.next).catch(() => null);\nawait ctx.page.waitForSelector('h1', { timeout: 3000 }).catch(() => null);\n${firstProduct}`, {
+      allowedHosts: [SSR],
+      startUrl: `${base(SSR)}/`,
+      input: { next: `${base(SSR)}/zz_test_next` },
+    });
+    expect(out.result).toMatchObject({ ok: false, failure: { failure_class: 'blocked_by_protection', detail: 'self_navigation' } });
+    expect(out.items).toEqual([]);
+    expect((await client.stats()).hosts[SSR]?.paths['/zz_test_next'] ?? 0).toBe(0);
+  }, 60_000);
+
   test('assert_no_circumvention (E3 script) : la page envoie le cadre principal vers un hôte hors API (éditeur de défi) → blocked_by_protection (self_navigation), 0 requête vers cet hôte', async () => {
     await client.control({ op: 'site', site: 'challenge_200', variant: 'offsite' });
     const out = await script(`${waitProduct}${firstProduct}`, { allowedHosts: [CHALLENGE_200], startUrl: `${base(CHALLENGE_200)}/` });

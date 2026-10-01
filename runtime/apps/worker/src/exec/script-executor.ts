@@ -17,10 +17,11 @@
 // ses scripts ne le transforment ; corps compressé lu seulement si sa taille décodée, vue par CDP, est bornée), avec
 // l'URL demandée (racine de la chaîne de redirections) pour reconnaître une redirection vers la connexion.
 // Navigations du cadre principal (même règle qu'en E2/E3 déclaratifs) : seule celle que l'hôte demande part (une par
-// page de départ, `ctx.page.goto` ou clic du script), ou celle lancée pendant un `ctx.page.evaluate` ; toute autre,
-// lancée par la page elle-même (défi muet qui pose un cookie puis recharge, redirection JS, meta refresh, vers l'API ou
-// hors API), est coupée sans connexion et arrête l'essai en `blocked_by_protection` (`self_navigation`). Attendre ne
-// franchit jamais un défi, même indétectable par son contenu. Une navigation demandée fait d'abord classer le document
+// page de départ, `ctx.page.goto` ou dispatch d'un clic du script, posée une fois l'élément trouvé et actionnable) ;
+// toute autre (défi muet qui pose un cookie puis recharge, redirection JS, meta refresh, vers l'API ou hors API) est
+// coupée sans connexion et arrête l'essai en `blocked_by_protection` (`self_navigation`), y compris pendant un
+// `ctx.page.evaluate` ou l'attente du sélecteur d'un clic (rien n'y distingue le code du script de celui de la page :
+// le script navigue par `ctx.page.goto`). Attendre ne franchit jamais un défi, même indétectable par son contenu. Une navigation demandée fait d'abord classer le document
 // courant sur son DOM (il est encore là), puis attend le verdict sur son corps brut.
 // Cadence : chaque réponse classée est rapportée AVEC sa classe (`failureClass`) : un défi servi en 200 compte pour
 // le disjoncteur du domaine comme un 403, jamais comme un succès (04 §7).
@@ -289,7 +290,10 @@ export function runScriptExecutor(options: ScriptExecutorOptions): Promise<Scrip
         return false;
       }
     };
-    /** Navigation lancée par la page elle-même (ni demandée par l'hôte, ni pendant un `evaluate`) : refus (INV6). */
+    /**
+     * Navigation non demandée par l'hôte (ni page de départ, ni `ctx.page.goto`, ni dispatch d'un clic du script) : refus
+     * (INV6), même pendant un `evaluate` (la page a pu la lancer pendant que le script attend).
+     */
     const selfNavigation = (request: Request): boolean => {
       if (!mainRoot(request) || host.claimNavigation()) return false;
       retain({ failure_class: 'blocked_by_protection', retryable: false, detail: 'self_navigation', ...(currentDocument === undefined ? {} : { status: currentDocument.status }) });
@@ -316,10 +320,20 @@ export function runScriptExecutor(options: ScriptExecutorOptions): Promise<Scrip
       egressServer: options.egress.server,
       allowedHosts: options.allowedHosts,
       onViolation: (h, request) => {
+        const state = request === undefined ? undefined : issuedState(request);
+        // Pendant un `evaluate`, une requête vers un hôte que le site n'a jamais contacté est d'abord une tentative du
+        // code du script (exfiltration par `location.href`) : violation, comme avant (D-29).
+        if (host.evaluating()) {
+          const before = host.imputed();
+          host.report(h, 'domain_not_allowed', state);
+          if (host.imputed() > before) return;
+          if (request !== undefined && refusal === undefined) selfNavigation(request);
+          return;
+        }
         // Navigation lancée par la page vers un hôte hors API (éditeur de défi) : coupée ici sans passer par `admit`,
         // c'est un refus comme toute navigation non demandée.
         if (request !== undefined && refusal === undefined) selfNavigation(request);
-        host.report(h, 'domain_not_allowed', request === undefined ? undefined : issuedState(request));
+        host.report(h, 'domain_not_allowed', state);
       },
       admit: async (request) => {
         if (refusal !== undefined) return false;
