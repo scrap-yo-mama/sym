@@ -3,6 +3,7 @@
 // enfant est tué en moins de 2 s, `sandbox_violation` est journalisé, l'enfant ne voit ni MASTER_KEY ni DATABASE_URL.
 // La même suite tourne sur le moteur isolated-vm et sur l'adaptateur QuickJS (spike) sans changer un pont.
 // Tout reste en boucle locale : « api.zz-test » et « evil.zz-test » résolvent vers 127.0.0.1 (résolveur injecté).
+import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { createServer, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
@@ -72,15 +73,30 @@ afterAll(async () => {
   }
 });
 
-type Run = SandboxResult & { logs: Record<string, unknown>[]; items: unknown[]; pid?: number; envKeys?: readonly string[]; environ?: string };
+type Run = SandboxResult & { logs: Record<string, unknown>[]; items: unknown[]; pid?: number; envKeys?: readonly string[]; environ?: string; environError?: string };
 
 function alive(pid: number): boolean {
   try {
     process.kill(pid, 0);
     return true;
-  } catch {
-    return false;
+  } catch (error) {
+    // EPERM : le processus existe, sous un autre uid (utilisateur dédié) ; seul ESRCH dit qu'il n'existe plus.
+    return (error as NodeJS.ErrnoException).code === 'EPERM';
   }
+}
+
+/**
+ * Environnement réel de l'enfant (Linux), indépendant de ce qu'il déclare. Sous l'utilisateur dédié, le parent n'a pas le
+ * droit de le lire (/proc/<pid>/environ exige l'accès ptrace : EACCES, c'est la frontière voulue) : la lecture passe par
+ * le lanceur, sous l'uid de l'enfant, comme l'arrêt forcé (killPlan).
+ */
+function readEnviron(pid: number, o: Pick<ProcessSandboxOptions, 'launcher' | 'uid' | 'gid'>): string {
+  const path = `/proc/${pid}/environ`;
+  if (o.launcher !== undefined && o.uid !== undefined && o.gid !== undefined && o.uid !== process.getuid?.()) {
+    const args = [`--reuid=${o.uid}`, `--regid=${o.gid}`, '--clear-groups', '--no-new-privs', '--', '/bin/cat', path];
+    return execFileSync(o.launcher, args, { env: {}, encoding: 'utf8', timeout: 5000 });
+  }
+  return readFileSync(path, 'utf8');
 }
 
 type RunExtra = { bridge?: Partial<SandboxBridgeOptions>; engine?: Partial<ProcessSandboxOptions> };
@@ -91,21 +107,29 @@ async function run(engineId: SandboxEngineId, code: string, limits: Partial<Sand
   let pid: number | undefined;
   let envKeys: readonly string[] | undefined;
   let environ: string | undefined;
+  let environError: string | undefined;
+  // Job CI Linux avec utilisateur dédié : SANDBOX_UID, SANDBOX_GID, SANDBOX_LAUNCHER (README § Utilisateur dédié).
+  const options: ProcessSandboxOptions = { ...sandboxOptionsFromEnv(process.env), ...extra.engine };
   const engine = new ProcessSandboxEngine({
-    // Job CI Linux avec utilisateur dédié : SANDBOX_UID, SANDBOX_GID, SANDBOX_LAUNCHER (README § Utilisateur dédié).
-    ...sandboxOptionsFromEnv(process.env),
-    ...extra.engine,
+    ...options,
     engine: engineId,
     onChildReady: (info) => {
       pid = info.pid;
       envKeys = info.envKeys;
-      // Linux : lecture directe de l'environnement du processus, indépendante de ce que l'enfant déclare.
-      if (existsSync(`/proc/${info.pid}/environ`)) environ = readFileSync(`/proc/${info.pid}/environ`, 'utf8');
+      // Linux : lecture directe de l'environnement du processus, indépendante de ce que l'enfant déclare. Une exception ici
+      // remonterait dans le gestionnaire IPC du moteur et le run ne partirait jamais : elle est rendue au test.
+      if (existsSync(`/proc/${info.pid}/environ`)) {
+        try {
+          environ = readEnviron(info.pid, options);
+        } catch (error) {
+          environError = String(error).slice(0, 300);
+        }
+      }
     },
   });
   const { bridges, items } = createSandboxBridges({ allowedDomains: ['api.zz-test'], guard, logger, ...extra.bridge });
   const result = await engine.run(code, bridges, { timeoutMs: 1000, memoryMb: 64, ...limits }, { input: { secret: 'zz_test_input' } });
-  return { ...result, logs, items, pid, envKeys, environ };
+  return { ...result, logs, items, pid, envKeys, environ, ...(environError !== undefined ? { environError } : {}) };
 }
 
 const violationLogged = (r: Run, reason?: string) =>
@@ -304,6 +328,8 @@ describe.each(ENGINES)('assert_sandbox — %s', (engineId) => {
     expect(r.envKeys).not.toContain('MASTER_KEY');
     expect(r.envKeys).not.toContain('DATABASE_URL');
     expect(unexpectedEnvKeys(r.envKeys ?? ['?'])).toEqual([]);
+    // Linux : l'environnement réel est toujours lu (sous l'uid de l'enfant s'il en a un dédié), jamais une vérification vide.
+    if (process.platform === 'linux') expect(r.environ, r.environError).toBeDefined();
     if (r.environ !== undefined) expect(r.environ).not.toContain(CANARY);
     expect(JSON.stringify(r)).not.toContain(CANARY);
   });
