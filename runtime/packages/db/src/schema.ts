@@ -641,7 +641,7 @@ export const siteSessions = pgTable(
     capturedAt: tstz('captured_at'),
     expiresAt: tstz('expires_at'),
     createdAt: createdAt(),
-    // Migration 0006_extension_pairing (tâche 2.6) : enveloppe complète, consentement daté. Colonnes chiffrées en
+    // Migration 0007_extension_pairing (tâche 2.6) : enveloppe complète, consentement daté. Colonnes chiffrées en
     // écriture seule pour runtime_app (aucun SELECT sur ciphertext, nonce, dek_wrapped, alg).
     dekWrapped: bytea('dek_wrapped'),
     alg: text('alg'),
@@ -671,13 +671,13 @@ export const tunnels = pgTable(
     revokedAt: tstz('revoked_at'),
     lastSeenAt: tstz('last_seen_at'),
     createdAt: createdAt(),
-    // Migration 0006_extension_pairing (tâche 2.6).
+    // Migration 0007_extension_pairing (tâche 2.6).
     revokedBy: uuid('revoked_by').references(() => users.id, { onDelete: 'set null' }),
   },
   (t) => [index('tunnels_owner_id_idx').on(t.ownerId)],
 );
 
-/** Code d'appairage de l'extension (07 § 1) : usage unique, 10 min, empreinte seulement (migration 0006). */
+/** Code d'appairage de l'extension (07 § 1) : usage unique, 10 min, empreinte seulement (migration 0007). */
 export const extensionPairingCodes = pgTable(
   'extension_pairing_codes',
   {

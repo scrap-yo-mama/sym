@@ -225,6 +225,59 @@ describe('révocation (07 § 2)', () => {
     expect([...h.granted]).toEqual([]);
   });
 
+  test('assert_revocation_local_first : instance coupée, « Sign out » efface tout ici d’abord, l’échec distant est signalé, 0 lecture au retour', async () => {
+    let down = false;
+    const h = await paired({ granted: [...patterns(SHOP), instance(ORIGIN)], fetchError: () => down });
+    await h.controller.connectSite({ domain: SHOP, mode: 'server', now: NOW });
+    const readsBefore = h.reads.length;
+    down = true;
+    const result = await h.controller.unpair();
+    expect(result).toMatchObject({ remoteRevoked: false, warning: expect.stringMatching(/could not be reached/i) });
+    expect(h.store.get('pairing')).toBeUndefined();
+    expect(h.store.get('consents')).toBeUndefined();
+    expect([...h.granted]).toEqual([]);
+    expect(await h.controller.status()).toEqual({ paired: false });
+    down = false; // l'instance revient
+    const callsBefore = h.calls.length;
+    expect(await h.controller.resyncAll()).toBe(0);
+    expect(h.reads.length).toBe(readsBefore);
+    expect(h.calls.length).toBe(callsBefore);
+    // Une réponse d'erreur (5xx) est signalée de même ; un jeton déjà refusé (401) vaut révocation.
+    const h5 = await paired({ statusFor: (c) => (c.method === 'DELETE' ? 503 : defaultStatus(c)) });
+    expect(await h5.controller.unpair()).toMatchObject({ remoteRevoked: false, warning: expect.stringContaining('503') });
+    expect(h5.store.get('pairing')).toBeUndefined();
+    const h401 = await paired({ statusFor: (c) => (c.method === 'DELETE' ? 401 : defaultStatus(c)) });
+    expect(await h401.controller.unpair()).toEqual({ remoteRevoked: true });
+    expect(await h401.controller.status()).toEqual({ paired: false });
+  });
+
+  test('assert_revocation_local_first : instance coupée, « Disconnect » retire consentement et permission d’abord, 0 lecture au retour', async () => {
+    let down = false;
+    const h = await paired({ granted: patterns(SHOP), fetchError: () => down });
+    await h.controller.connectSite({ domain: SHOP, mode: 'server', now: NOW });
+    const readsBefore = h.reads.length;
+    const putsBefore = h.calls.filter((c) => c.url.endsWith('/cookies')).length;
+    down = true;
+    const result = await h.controller.disconnectSite(SHOP);
+    expect(result).toMatchObject({ remoteRevoked: false, warning: expect.stringMatching(/could not be reached/i) });
+    expect(h.store.get('consents')).toEqual({});
+    expect([...h.granted]).toEqual([]);
+    expect(h.store.get('pairing')).toBeDefined(); // l'appareil reste appairé : seul le site est retiré
+    down = false; // l'instance revient, elle connaît encore le domaine
+    expect(await h.controller.resyncAll()).toBe(0);
+    expect(h.reads.length).toBe(readsBefore);
+    expect(h.calls.filter((c) => c.url.endsWith('/cookies')).length).toBe(putsBefore);
+    // Le domaine reste visible « connecté ailleurs » et déconnectable d'ici, sans aucune lecture.
+    expect(await h.controller.status()).toMatchObject({ paired: true, sites: [{ domain: SHOP, onThisBrowser: false }] });
+    expect(await h.controller.disconnectSite(SHOP)).toEqual({ remoteRevoked: true });
+    expect(h.reads.length).toBe(readsBefore);
+    const h5 = await paired({ granted: patterns(SHOP), statusFor: (c) => (c.method === 'DELETE' ? 500 : defaultStatus(c)) });
+    await h5.controller.connectSite({ domain: SHOP, mode: 'tunnel', now: NOW });
+    expect(await h5.controller.disconnectSite(SHOP)).toMatchObject({ remoteRevoked: false, warning: expect.stringContaining('500') });
+    expect(h5.store.get('consents')).toEqual({});
+    expect([...h5.granted]).toEqual([]);
+  });
+
   test('ExtensionError porte un code stable', () => {
     expect(new ExtensionError('consent_required', 'x').code).toBe('consent_required');
   });

@@ -43,6 +43,8 @@ const App = defineComponent({
       failed: false,
       busy: false,
       error: '',
+      // Révocation faite ici mais pas sur l'instance (injoignable) : avertissement gardé jusqu'au geste suivant.
+      notice: '',
       status: { paired: false } as Status,
       instanceUrl: '',
       code: '',
@@ -55,6 +57,7 @@ const App = defineComponent({
     async function run(action: () => Promise<void>) {
       state.busy = true;
       state.error = '';
+      state.notice = '';
       try {
         await action();
       } catch (error) {
@@ -104,11 +107,13 @@ const App = defineComponent({
     const disconnect = (domain: string) =>
       run(async () => {
         state.status = await send<Status>({ type: 'disconnectSite', domain });
+        state.notice = state.status.notice ?? '';
       });
 
     const unpair = () =>
       run(async () => {
         state.status = await send<Status>({ type: 'unpair' });
+        state.notice = state.status.notice ?? '';
       });
 
     void refresh();
@@ -200,6 +205,7 @@ const App = defineComponent({
       h('main', [
         h('h1', 'Scrapyomama'),
         state.error ? h('p', { id: 'error', role: 'alert' }, state.error) : null,
+        state.notice ? h('p', { id: 'notice', role: 'status' }, state.notice) : null,
         state.loading
           ? h('p', 'Loading…')
           : state.failed

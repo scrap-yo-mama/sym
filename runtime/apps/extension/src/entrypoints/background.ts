@@ -5,7 +5,7 @@
 import { browser } from 'wxt/browser';
 import { defineBackground } from 'wxt/utils/define-background';
 import { ensurePeriodicAlarm } from '../core/alarms.ts';
-import { ExtensionController, ExtensionError, type BrowserCookie } from '../core/controller.ts';
+import { ExtensionController, ExtensionError, type BrowserCookie, type Status } from '../core/controller.ts';
 import { parseRequest, type Request, type Response } from '../core/messages.ts';
 
 const RESYNC_ALARM = 'scrapyomama-cookie-resync';
@@ -35,12 +35,16 @@ export default defineBackground(() => {
         return controller.status();
       case 'connectSite':
         return controller.connectSite({ domain: request.domain, mode: request.mode, now: new Date().toISOString() });
-      case 'disconnectSite':
-        await controller.disconnectSite(request.domain);
-        return controller.status();
-      case 'unpair':
-        await controller.unpair();
-        return { paired: false };
+      case 'disconnectSite': {
+        // Effacement local d'abord, toujours ; l'échec côté instance revient en avertissement (`notice`).
+        const revocation = await controller.disconnectSite(request.domain);
+        const status = await controller.status();
+        return (revocation.remoteRevoked ? status : { ...status, notice: revocation.warning }) satisfies Status;
+      }
+      case 'unpair': {
+        const revocation = await controller.unpair();
+        return (revocation.remoteRevoked ? { paired: false } : { paired: false, notice: revocation.warning }) satisfies Status;
+      }
     }
   }
 

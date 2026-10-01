@@ -1,5 +1,5 @@
 -- SPDX-License-Identifier: AGPL-3.0-only
--- 0006_extension_pairing : extension Chrome (tâche 2.6, 07 § 1-2, 13 § 12, INV5, INV8).
+-- 0007_extension_pairing : extension Chrome (tâche 2.6, 07 § 1-2, 13 § 12, INV5, INV8).
 --   extension_pairing_codes  code d'appairage à usage unique, 10 min (empreinte seulement, jamais le code) ;
 --   tunnels                  un appareil actif par (utilisateur, device_id) ; révocation tracée (revoked_by) ;
 --   site_sessions            enveloppe complète des cookies (dek_wrapped, alg : 08 § 3), consentement daté,

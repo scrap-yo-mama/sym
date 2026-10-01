@@ -5,7 +5,7 @@
 // Identités :
 // - web, transaction `withActor` (rôle `runtime_app`, RLS) : `createPairingCode`, `listDevices`, `revokeDevice`,
 //   `listSites`, `connectSite`, `storeSiteCookies`, `disconnectSite`, `disconnectSiteById`. runtime_app n'a aucun
-//   droit de lecture sur les colonnes chiffrées de `site_sessions` (migration 0006) ;
+//   droit de lecture sur les colonnes chiffrées de `site_sessions` (migration 0007) ;
 // - système (propriétaire des tables), avant de connaître l'utilisateur : `exchangePairingCode`, `resolveExtensionToken` ;
 // - admin, transaction `withActor` : `listAllDevices` (vue de métadonnées), `adminRevokeDevice` (fonction de révocation) ;
 // - système côté worker : `siteCookiesForRun`, seule fonction qui ouvre un cookie, toujours pour le propriétaire du run.

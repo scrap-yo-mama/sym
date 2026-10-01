@@ -169,16 +169,24 @@ export async function startHarness(): Promise<Harness> {
 export type FakeInstance = {
   origin: string;
   requests: { method: string; path: string; body: string }[];
+  /** Coupe (vrai) ou rétablit l'instance : coupée, chaque connexion est fermée sans réponse (« Failed to fetch »). */
+  setDown: (down: boolean) => void;
   close: () => Promise<void>;
 };
 
 /**
  * Seconde instance factice (« B ») sur 127.0.0.1 (autre port que A) : accepte n'importe quel code d'appairage et prétend que `sites`
- * sont connectés en usage serveur (instance malveillante obtenue par ingénierie sociale). Enregistre chaque requête.
+ * sont connectés en usage serveur (instance malveillante obtenue par ingénierie sociale). Enregistre chaque requête
+ * reçue pendant qu'elle est en service ; `PUT /api/extension/sites/:domain` répond 201, le reste 204.
  */
 export async function fakeInstance(sites: { domain: string; serverUseAllowed: boolean; hasServerCookies: boolean }[]): Promise<FakeInstance> {
   const requests: FakeInstance['requests'] = [];
+  let down = false;
   const server = createServer((req, res) => {
+    if (down) {
+      req.socket.destroy();
+      return;
+    }
     let body = '';
     req.on('data', (chunk: Buffer) => (body += chunk.toString('utf8')));
     req.on('end', () => {
@@ -190,6 +198,9 @@ export async function fakeInstance(sites: { domain: string; serverUseAllowed: bo
         res.end(JSON.stringify({ token: 'sy_ext_zz_test_instance_b', email: 'zz_test_b@instance-b.test', deviceLabel: null, expiresAt: '2099-01-01T00:00:00.000Z' }));
       } else if (req.method === 'GET' && path === '/api/extension/session') {
         res.end(JSON.stringify({ email: 'zz_test_b@instance-b.test', deviceLabel: null, sites }));
+      } else if (req.method === 'PUT' && /^\/api\/extension\/sites\/[^/]+$/.test(path)) {
+        res.statusCode = 201;
+        res.end('{}');
       } else {
         res.statusCode = 204;
         res.end();
@@ -198,5 +209,17 @@ export async function fakeInstance(sites: { domain: string; serverUseAllowed: bo
   });
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
   const { port } = server.address() as AddressInfo;
-  return { origin: `http://127.0.0.1:${port}`, requests, close: () => new Promise<void>((resolve) => server.close(() => resolve())) };
+  server.on('connection', (socket) => {
+    if (down) socket.destroy();
+  });
+  return {
+    origin: `http://127.0.0.1:${port}`,
+    requests,
+    setDown: (value) => {
+      down = value;
+      // Connexions keep-alive ouvertes : fermées aussi, la prochaine requête échoue comme une instance injoignable.
+      if (value) server.closeAllConnections();
+    },
+    close: () => new Promise<void>((resolve) => server.close(() => resolve())),
+  };
 }

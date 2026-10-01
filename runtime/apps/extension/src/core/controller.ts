@@ -8,7 +8,9 @@
 //   tunnel par défaut : aucun cookie ne quitte le navigateur (assert_no_cookie_in_tunnel_mode).
 // - La liste des domaines connectés de l'instance fait foi (07 § 1.4) : un domaine déconnecté ailleurs (console, autre
 //   appareil) perd ici son consentement et sa permission d'hôte avant toute nouvelle lecture.
-// - Révocation : « Déconnecter ce site » efface le domaine sur l'instance, le consentement et la permission d'hôte.
+// - Révocation : « Déconnecter ce site » retire ici le consentement et la permission d'hôte, puis efface le domaine sur
+//   l'instance ; « Sign out » oublie tout ici, puis révoque le jeton. L'effacement local passe toujours en premier et
+//   ne dépend jamais de la réponse de l'instance (injoignable, disparue) : l'échec distant est seulement signalé.
 // Seul ce module lit des cookies, et seulement par `#readCookies` (vérifié par un test statique).
 import { checkHost, cookieMatchesDomain, originPatterns } from './host-guard.ts';
 import { checkInstanceUrl, instancePattern } from './instance.ts';
@@ -78,9 +80,10 @@ type RemoteSession = { email: string; deviceLabel: string | null; sites: RemoteS
  * être lus ici) ; sinon, domaine connecté ailleurs (autre appareil, appairage précédent), déconnectable d'ici.
  */
 export type SiteState = Consent & { serverHasCookies: boolean; onThisBrowser: boolean };
+/** `notice` : avertissement d'une révocation faite ici mais pas sur l'instance (posé par le service worker). */
 export type Status =
-  | { paired: false }
-  | { paired: true; email: string; origin: string; deviceLabel: string | null; sites: SiteState[]; instanceError?: string };
+  | { paired: false; notice?: string }
+  | { paired: true; email: string; origin: string; deviceLabel: string | null; sites: SiteState[]; instanceError?: string; notice?: string };
 
 const SAME_SITE = new Set(['no_restriction', 'lax', 'strict', 'unspecified']);
 
@@ -109,14 +112,19 @@ export class ExtensionController {
     return id;
   }
 
-  async #api(method: string, path: string, body?: unknown): Promise<{ status: number; data: unknown }> {
-    const pairing = await this.#pairing();
-    if (!pairing) throw new ExtensionError('not_paired', 'This browser is not paired with an instance.');
-    const res = await this.#deps.fetch(`${pairing.origin}${path}`, {
+  /** Requête authentifiée par le jeton de `pairing` ; lève si l'instance est injoignable. */
+  #send(pairing: Pairing, method: string, path: string, body?: unknown): Promise<{ status: number; json(): Promise<unknown> }> {
+    return this.#deps.fetch(`${pairing.origin}${path}`, {
       method,
       headers: { authorization: `Bearer ${pairing.token}`, ...(body === undefined ? {} : { 'content-type': 'application/json' }) },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     });
+  }
+
+  async #api(method: string, path: string, body?: unknown): Promise<{ status: number; data: unknown }> {
+    const pairing = await this.#pairing();
+    if (!pairing) throw new ExtensionError('not_paired', 'This browser is not paired with an instance.');
+    const res = await this.#send(pairing, method, path, body);
     if (res.status === 401) {
       // Jeton révoqué (par l'utilisateur ou un admin) ou expiré : l'appairage local est oublié.
       await this.#forget();
@@ -335,20 +343,55 @@ export class ExtensionController {
     return done;
   }
 
-  /** « Déconnecter ce site » : domaine et cookies effacés sur l'instance, consentement et permission retirés ici. */
-  async disconnectSite(domain: string): Promise<void> {
-    const { status } = await this.#api('DELETE', `/api/extension/sites/${encodeURIComponent(domain)}`);
-    if (status !== 204 && status !== 400) throw new ExtensionError('instance_error', `Instance error (HTTP ${status}).`);
+  /**
+   * « Déconnecter ce site » : consentement et permission d'hôte retirés ICI d'abord, puis domaine et cookies effacés
+   * sur l'instance. Le clic est honoré même instance injoignable ou en erreur : plus aucune lecture n'a lieu dans ce
+   * navigateur, et l'échec distant est signalé (le domaine reste alors listé « connecté ailleurs », déconnectable d'ici
+   * ou depuis la console au retour de l'instance).
+   */
+  async disconnectSite(domain: string): Promise<Revocation> {
     await this.#dropConsent(domain);
+    let status: number;
+    try {
+      ({ status } = await this.#api('DELETE', `/api/extension/sites/${encodeURIComponent(domain)}`));
+    } catch (error) {
+      return { remoteRevoked: false, warning: disconnectWarning(domain, failureReason(error)) };
+    }
+    if (status === 204 || status === 400) return { remoteRevoked: true };
+    return { remoteRevoked: false, warning: disconnectWarning(domain, `HTTP ${status}`) };
   }
 
-  /** Déconnexion de l'instance : le jeton de cet appareil est révoqué, tout est oublié localement. */
-  async unpair(): Promise<void> {
-    try {
-      await this.#api('DELETE', '/api/extension/session');
-    } catch (error) {
-      if (!(error instanceof ExtensionError && error.code === 'unauthorized')) throw error;
-    }
+  /**
+   * Déconnexion de l'instance : tout est oublié ICI d'abord (appairage, consentements, permissions d'hôte des domaines
+   * et de l'instance), puis le jeton de cet appareil est révoqué sur l'instance. Instance injoignable ou disparue : la
+   * déconnexion locale tient quand même (sinon l'extension resterait sans issue) et l'échec distant est signalé ; le
+   * jeton se révoque alors depuis la console et expire sans usage au bout de 90 jours.
+   */
+  async unpair(): Promise<Revocation> {
+    const pairing = await this.#pairing();
     await this.#forget();
+    if (!pairing) return { remoteRevoked: true };
+    let status: number;
+    try {
+      ({ status } = await this.#send(pairing, 'DELETE', '/api/extension/session'));
+    } catch (error) {
+      return { remoteRevoked: false, warning: unpairWarning(failureReason(error)) };
+    }
+    // 401 : jeton déjà révoqué ou expiré sur l'instance.
+    if (status === 204 || status === 401) return { remoteRevoked: true };
+    return { remoteRevoked: false, warning: unpairWarning(`HTTP ${status}`) };
   }
 }
+
+/** Résultat d'une révocation : l'effacement local a toujours eu lieu ; `warning` dit ce qui n'a pas pu l'être ailleurs. */
+export type Revocation = { remoteRevoked: true } | { remoteRevoked: false; warning: string };
+
+function failureReason(error: unknown): string {
+  return error instanceof ExtensionError ? error.message : 'network error';
+}
+
+const unpairWarning = (reason: string) =>
+  `Signed out in this browser, but your instance could not be reached to revoke this device (${reason}). Revoke it from Settings › Extension on your instance.`;
+
+const disconnectWarning = (domain: string, reason: string) =>
+  `${domain} is disconnected in this browser, but your instance could not be reached to delete it and its cookies (${reason}). Disconnect it again once the instance is back.`;

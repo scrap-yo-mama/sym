@@ -338,6 +338,78 @@ test('ré-appairage vers une autre instance : consentements et permissions effac
   }
 });
 
+test('assert_revocation_local_first : instance coupée, « Disconnect » et « Sign out » honorés ici d’abord, échec signalé, 0 lecture au retour', async () => {
+  // Instance C, qui sera coupée : elle connaît SHOP en usage serveur, et continuera de le lister à son retour.
+  const c = await fakeInstance([{ domain: SHOP, serverUseAllowed: true, hasServerCookies: true }]);
+  const cookiePuts = () => c.requests.filter((r) => r.method === 'PUT' && r.path.endsWith('/cookies')).length;
+  const sessionGets = () => c.requests.filter((r) => r.method === 'GET' && r.path === '/api/extension/session').length;
+  const connectShop = async (): Promise<Page> => {
+    await visit(SHOP);
+    const page = await openPopup();
+    await expect(page.locator('#site-domain')).toHaveText(SHOP);
+    await page.click('#connect-site');
+    await page.check('#mode-server');
+    await h.grantHosts(patterns(SHOP));
+    await page.click('#consent-accept');
+    await expect(page.locator(`#sites li[data-domain="${SHOP}"]`)).toContainText('(server)');
+    await expect(page.locator(`#sites li[data-domain="${SHOP}"]`)).not.toContainText('another browser');
+    return page;
+  };
+  try {
+    let page = await openPopup();
+    const res = await page.evaluate(
+      (instanceUrl) => (globalThis as unknown as { chrome: { runtime: { sendMessage(m: unknown): Promise<{ ok: boolean }> } } }).chrome.runtime.sendMessage({ type: 'pair', instanceUrl, code: 'ZZZZZ-ZZZZZ', deviceLabel: null }),
+      c.origin,
+    );
+    expect(res, JSON.stringify(res)).toMatchObject({ ok: true });
+
+    // 1. « Disconnect », instance coupée : consentement et permission retirés ici, échec distant affiché.
+    page = await connectShop();
+    expect(cookiePuts()).toBe(1);
+    let reads = (await cookieReads()).length;
+    c.setDown(true);
+    await page.locator(`#sites li[data-domain="${SHOP}"] .disconnect`).click();
+    await expect(page.locator('#notice')).toContainText('could not be reached');
+    await expect(page.locator('#instance-error')).toBeVisible();
+    await expect(page.locator(`#sites li[data-domain="${SHOP}"]`)).toHaveCount(0);
+    expect(await hasHosts(patterns(SHOP))).toBe(false);
+    // Retour de l'instance, qui liste encore SHOP en usage serveur : la resynchronisation la relit, sans lire un cookie.
+    c.setDown(false);
+    let gets = sessionGets();
+    await triggerResync();
+    await expect.poll(sessionGets, { timeout: 10_000 }).toBeGreaterThan(gets);
+    await page.waitForTimeout(500);
+    expect((await cookieReads()).length).toBe(reads);
+    expect(cookiePuts()).toBe(1);
+    page = await openPopup();
+    await expect(page.locator(`#sites li[data-domain="${SHOP}"]`)).toContainText('connected from another browser');
+
+    // 2. « Sign out », instance coupée : tout est oublié ici (appairage, consentements, permissions), échec affiché.
+    page = await connectShop();
+    expect(cookiePuts()).toBe(2);
+    reads = (await cookieReads()).length;
+    c.setDown(true);
+    page = await openPopup();
+    await expect(page.locator('#instance-error')).toBeVisible();
+    await page.click('#unpair');
+    await expect(page.locator('#pairing')).toBeVisible();
+    await expect(page.locator('#notice')).toContainText('could not be reached');
+    expect(await hasHosts(patterns(SHOP))).toBe(false);
+    expect(await hasHosts(['http://127.0.0.1/*'])).toBe(false);
+    // Retour de l'instance : plus aucune requête vers elle, aucune lecture de cookie.
+    c.setDown(false);
+    gets = c.requests.length;
+    await triggerResync();
+    await page.waitForTimeout(1_500);
+    expect(c.requests.length).toBe(gets);
+    expect((await cookieReads()).length).toBe(reads);
+    page = await openPopup();
+    await expect(page.locator('#pairing')).toBeVisible();
+  } finally {
+    await c.close();
+  }
+});
+
 test('spike chrome.debugger (07 § 4) : attach sur un hôte optionnel accordé ; la session survit à l’arrêt du service worker', async () => {
   await h.grantHosts(patterns(FORUM));
   const forum = await h.context.newPage();
