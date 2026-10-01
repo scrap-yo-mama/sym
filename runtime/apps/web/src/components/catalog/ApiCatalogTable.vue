@@ -23,7 +23,7 @@ const { t, locale } = useI18n();
 </script>
 
 <template>
-  <div class="overflow-x-auto rounded-lg border">
+  <div class="relative overflow-x-auto rounded-lg border">
     <table class="w-full min-w-[60rem] border-collapse text-left text-sm" :aria-busy="busy ? 'true' : 'false'" data-testid="catalog-table">
       <caption class="sr-only">{{ t('catalog.caption') }}</caption>
       <thead class="bg-muted text-xs uppercase tracking-wide text-muted-foreground">

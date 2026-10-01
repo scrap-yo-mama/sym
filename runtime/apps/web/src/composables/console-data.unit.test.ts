@@ -118,6 +118,32 @@ describe('useApiCatalog', () => {
   });
 });
 
+describe('useApiCatalog : Suspendre le suivi (WCAG 2.2.2, tâche 3.9)', () => {
+  test('suspendu : ni relecture périodique ni relecture par le flux SSE, donc aucune annonce ; à la reprise, une relecture rattrape', async () => {
+    let status: 'sain' | 'erreur' = 'sain';
+    const seen = installApi({ 'GET /api/apis': () => json(200, { apis: [apiSummary({ status })], next_cursor: null }) });
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    const stream = openStream();
+    const catalog = inScope(() => useApiCatalog());
+    await until(() => catalog.apis.value.length === 1);
+    expect(catalog.suspended.value).toBe(false);
+
+    catalog.suspended.value = true;
+    status = 'erreur';
+    vi.advanceTimersByTime(CATALOG_POLL_MS * 3);
+    vi.useRealTimers();
+    stream.push('status.changed', { slug: 'zz-books' }, '1');
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    expect(seen).toHaveLength(1);
+    expect(catalog.apis.value[0]?.status).toBe('sain');
+    expect(catalog.statusChanges.value).toEqual([]);
+
+    catalog.suspended.value = false;
+    await until(() => catalog.apis.value[0]?.status === 'erreur');
+    expect(seen).toHaveLength(2);
+  });
+});
+
 describe('useApiDetail : bandeau « Action requise »', () => {
   const asking = apiDetail({ status: 'action_requise', status_reason: { code: 'cookie_expired', params: { domain: 'monsite.example' } }, requires: { session_domain: 'monsite.example', tunnel: false } });
 

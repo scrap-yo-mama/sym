@@ -62,7 +62,7 @@ async function add(): Promise<void> {
     <template v-else>
       <Alert v-if="failureAction" variant="destructive"><AlertDescription>{{ t(failureAction) }}</AlertDescription></Alert>
       <p v-if="list.length === 0" class="text-sm text-muted-foreground" data-testid="proxies-empty">{{ t('settings.proxies.empty') }}</p>
-      <div v-else class="overflow-x-auto rounded-xl border">
+      <div v-else class="relative overflow-x-auto rounded-xl border">
         <table class="w-full text-left text-sm">
           <caption class="sr-only">{{ t('settings.proxies.title') }}</caption>
           <thead class="border-b bg-muted/50">

@@ -93,7 +93,7 @@ const errorText = computed(() => {
       <LoadingState v-if="versions.loading.value && versions.versions.value.length === 0" />
       <ErrorState v-else-if="versions.error.value" :error="versions.error.value" @retry="versions.refetch()" />
       <p v-else-if="versions.versions.value.length === 0" class="text-sm text-muted-foreground">{{ t('strategy.noVersions') }}</p>
-      <div v-else class="overflow-x-auto rounded-lg border">
+      <div v-else class="relative overflow-x-auto rounded-lg border">
         <table class="w-full min-w-[44rem] text-left text-sm" data-testid="versions-table">
           <caption class="sr-only">{{ t('strategy.versions') }}</caption>
           <thead class="bg-muted text-xs uppercase tracking-wide text-muted-foreground">

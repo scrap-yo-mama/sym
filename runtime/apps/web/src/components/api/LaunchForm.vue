@@ -78,6 +78,7 @@ function checked(name: string): boolean {
 }
 
 function submit(): void {
+  if (props.pending) return;
   jsonError.value = false;
   let input: Record<string, unknown>;
   if (model.value.needsJsonEditor) {
@@ -166,7 +167,8 @@ const selectClass = 'h-9 rounded-md border border-input bg-background px-2 text-
 
     <p v-if="errorText" role="alert" class="text-sm text-destructive" data-testid="launch-error">{{ errorText }}</p>
     <div>
-      <Button type="submit" :disabled="pending" data-testid="launch-submit">{{ versions ? t('actions.relaunch') : t('actions.launch') }}</Button>
+      <!-- `aria-disabled` et non `disabled` : un bouton désactivé qui a le focus le perd (le focus tombe sur <body>, 2.4.3). -->
+      <Button type="submit" :aria-disabled="pending ? 'true' : undefined" :class="pending && 'pointer-events-none opacity-50'" data-testid="launch-submit">{{ versions ? t('actions.relaunch') : t('actions.launch') }}</Button>
     </div>
   </form>
 </template>

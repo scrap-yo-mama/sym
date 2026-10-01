@@ -2,6 +2,9 @@
 // i18n : parité des clés et des variables `en` / `fr` (`assert_i18n_key_parity`, étendu à chaque code de 06 § 4.2 par la
 // tâche 3.9), chargement paresseux, choix de la langue initiale.
 import { describe, expect, test } from 'vitest';
+import { createMemoryHistory } from 'vue-router';
+import { createAppRouter } from '@/router/index';
+import { SPEC_REASON_CODES } from '@/lib/reasons';
 import { createAppI18n, detectLocale, frenchPlural, normalizeLocale, setLocale } from './index';
 import en from './locales/en.json';
 import fr from './locales/fr.json';
@@ -30,6 +33,44 @@ describe('fichiers de langue', () => {
       expect(french.get(key)?.trim(), key).not.toBe('');
       expect(variables(french.get(key) ?? ''), key).toEqual(variables(message));
     }
+  });
+
+  test('assert_i18n_key_parity : même nombre de formes de pluriel (« un | plusieurs ») et mêmes messages liés (@:clé) dans les deux langues', () => {
+    const forms = (message: string): number => message.split(' | ').length;
+    const links = (message: string): string[] => [...message.matchAll(/@(?:\.\w+)?:([\w.]+)/g)].map((m) => m[1] ?? '').sort();
+    for (const [key, message] of english) {
+      const other = french.get(key) ?? '';
+      expect(forms(other), `formes de pluriel de ${key}`).toBe(forms(message));
+      expect(links(other), `messages liés de ${key}`).toEqual(links(message));
+    }
+    // Un message lié pointe sur une clé qui existe.
+    for (const [key, message] of [...english, ...french]) {
+      for (const target of message.matchAll(/@(?:\.\w+)?:([\w.]+)/g)) expect(english.has(target[1] ?? ''), `${key} → ${target[1]}`).toBe(true);
+    }
+  });
+
+  test('assert_i18n_key_parity : chaque code de 06 § 4.2 a sa phrase (reasons) et son libellé court (reasonLabel) en en et en fr, mêmes variables', () => {
+    expect(SPEC_REASON_CODES.length).toBe(27);
+    for (const code of SPEC_REASON_CODES) {
+      for (const family of ['reasons', 'reasonLabel']) {
+        const key = `${family}.${code}`;
+        expect(english.get(key)?.trim(), `en ${key}`).toBeTruthy();
+        expect(french.get(key)?.trim(), `fr ${key}`).toBeTruthy();
+        expect(variables(french.get(key) ?? ''), key).toEqual(variables(english.get(key) ?? ''));
+      }
+    }
+  });
+
+  test('assert_i18n_key_parity : le titre du document de chaque route (meta.titleKey) existe dans les deux langues', () => {
+    const router = createAppRouter(createMemoryHistory());
+    const titles = router.getRoutes().map((route) => route.meta.titleKey).filter((key): key is string => typeof key === 'string');
+    expect(titles.length).toBeGreaterThanOrEqual(10);
+    for (const key of titles) {
+      expect(english.get(key), `en ${key}`).toBeTruthy();
+      expect(french.get(key), `fr ${key}`).toBeTruthy();
+    }
+    expect(english.get('app.titleSuffix')).toBeTruthy();
+    expect(french.get('app.titleSuffix')).toBeTruthy();
   });
 
   // Garde légère des fondations ; le test complet (messages REST et MCP compris, noms d'outils de protection) est

@@ -57,25 +57,28 @@ function figures(attempt: AttemptView): string {
   <div>
     <h3 id="attempt-log-title" class="mb-2 text-sm font-medium">{{ t('investigation.log.title') }}</h3>
     <!-- Défilement non forcé : aucune action de défilement automatique, l'utilisateur garde sa position -->
-    <ol
+    <!-- Le rôle log va sur un conteneur : sur le <ol>, il remplacerait le rôle de liste et les <li> n'auraient plus de parent de liste. -->
+    <div
       id="investigation-log"
       role="log"
       tabindex="0"
-      class="flex max-h-96 flex-col gap-2 overflow-y-auto rounded-lg border p-3 text-sm"
+      class="max-h-96 overflow-y-auto rounded-lg border p-3 text-sm"
       aria-labelledby="attempt-log-title"
       :aria-live="live ? 'polite' : 'off'"
       data-testid="attempt-log"
     >
-      <li v-for="(line, at) in accessLines" :key="`access-${at}`" class="text-muted-foreground" data-testid="access-line">{{ line }}</li>
-      <li v-if="attempts.length === 0 && accessLines.length === 0" class="text-muted-foreground">{{ t('investigation.log.empty') }}</li>
-      <li v-for="attempt in attempts" :key="attempt.index" :class="attempt.state === 'pruned' ? 'text-muted-foreground' : ''" data-testid="attempt">
-        <p>
-          <strong>{{ t('investigation.log.trial', { n: attempt.index + 1, execution: t(`execution.${attempt.execution}`), network: t(`network.${attempt.network}`) }) }}</strong>
-          — {{ statusOf(attempt) }}<template v-if="figures(attempt)"> · {{ figures(attempt) }}</template>
-        </p>
-        <p v-if="attempt.why" class="pl-3 text-muted-foreground">{{ t('investigation.log.why', { reason: reasonText(attempt.why) }) }}</p>
-        <p v-if="attempt.error" class="pl-3 text-muted-foreground">{{ reasonText(attempt.error) }}</p>
-      </li>
-    </ol>
+      <ol class="flex flex-col gap-2">
+        <li v-for="(line, at) in accessLines" :key="`access-${at}`" class="text-muted-foreground" data-testid="access-line">{{ line }}</li>
+        <li v-if="attempts.length === 0 && accessLines.length === 0" class="text-muted-foreground">{{ t('investigation.log.empty') }}</li>
+        <li v-for="attempt in attempts" :key="attempt.index" :class="attempt.state === 'pruned' ? 'text-muted-foreground' : ''" data-testid="attempt">
+          <p>
+            <strong>{{ t('investigation.log.trial', { n: attempt.index + 1, execution: t(`execution.${attempt.execution}`), network: t(`network.${attempt.network}`) }) }}</strong>
+            — {{ statusOf(attempt) }}<template v-if="figures(attempt)"> · {{ figures(attempt) }}</template>
+          </p>
+          <p v-if="attempt.why" class="pl-3 text-muted-foreground">{{ t('investigation.log.why', { reason: reasonText(attempt.why) }) }}</p>
+          <p v-if="attempt.error" class="pl-3 text-muted-foreground">{{ reasonText(attempt.error) }}</p>
+        </li>
+      </ol>
+    </div>
   </div>
 </template>

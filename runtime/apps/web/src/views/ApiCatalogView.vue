@@ -23,8 +23,11 @@ const { t } = useI18n();
 const catalog = useApiCatalog();
 const { filters } = catalog;
 
+// Suivi suspendu (2.2.2) : la région annonce l'état du bouton, puis plus rien ne change tant que le suivi reste suspendu.
 const announcement = computed(() =>
-  catalog.statusChanges.value.map((change) => t('catalog.statusChanged', { slug: change.slug, status: t(`status.${change.to}`) })).join(' '),
+  catalog.suspended.value
+    ? t('catalog.follow.suspended')
+    : catalog.statusChanges.value.map((change) => t('catalog.statusChanged', { slug: change.slug, status: t(`status.${change.to}`) })).join(' '),
 );
 
 function resetFilters(): void {
@@ -73,6 +76,9 @@ const selectClass =
           <option v-for="network in NETWORKS" :key="network" :value="network">{{ t(`network.${network}`) }}</option>
         </select>
       </div>
+      <Button type="button" variant="outline" data-testid="catalog-follow-toggle" @click="catalog.suspended.value = !catalog.suspended.value">
+        {{ catalog.suspended.value ? t('catalog.follow.resume') : t('catalog.follow.suspend') }}
+      </Button>
     </form>
 
     <!-- Région `status` du plan de 06 § 3 : seul le changement de statut d'une ligne est annoncé. Toujours présente. -->
@@ -95,7 +101,7 @@ const selectClass =
     <template v-else>
       <ErrorState v-if="catalog.error.value" :error="catalog.error.value" @retry="catalog.refetch()" />
       <ApiCatalogTable :apis="catalog.apis.value" :busy="catalog.loading.value" />
-      <nav class="flex items-center justify-between" :aria-label="t('catalog.pagination.label')">
+      <nav class="flex flex-wrap items-center justify-between gap-2" :aria-label="t('catalog.pagination.label')">
         <Button variant="outline" size="sm" :disabled="!catalog.hasPrevious.value" @click="catalog.previous()">{{ t('catalog.pagination.previous') }}</Button>
         <span class="text-sm text-muted-foreground">{{ t('catalog.pagination.page', { n: catalog.pageNumber.value }) }}</span>
         <Button variant="outline" size="sm" :disabled="!catalog.hasNext.value" @click="catalog.next()">{{ t('catalog.pagination.next') }}</Button>

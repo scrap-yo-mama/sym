@@ -69,7 +69,7 @@ async function createCode(): Promise<void> {
       <p v-if="devices.loading.value && !devices.data.value" role="status" class="text-sm text-muted-foreground">{{ t('common.loading') }}</p>
       <p v-else-if="devices.failure.value" class="text-sm text-destructive">{{ t(devices.failure.value) }}</p>
       <p v-else-if="(devices.data.value?.items ?? []).length === 0" class="text-sm text-muted-foreground" data-testid="devices-empty">{{ t('settings.extension.devicesEmpty') }}</p>
-      <div v-else class="overflow-x-auto rounded-xl border">
+      <div v-else class="relative overflow-x-auto rounded-xl border">
         <table class="w-full text-left text-sm">
           <caption class="sr-only">{{ t('settings.extension.devices') }}</caption>
           <thead class="border-b bg-muted/50">
@@ -100,7 +100,7 @@ async function createCode(): Promise<void> {
       <p v-if="sites.loading.value && !sites.data.value" role="status" class="text-sm text-muted-foreground">{{ t('common.loading') }}</p>
       <p v-else-if="sites.failure.value" class="text-sm text-destructive">{{ t(sites.failure.value) }}</p>
       <p v-else-if="(sites.data.value?.items ?? []).length === 0" class="text-sm text-muted-foreground" data-testid="sites-empty">{{ t('settings.extension.sitesEmpty') }}</p>
-      <div v-else class="overflow-x-auto rounded-xl border">
+      <div v-else class="relative overflow-x-auto rounded-xl border">
         <table class="w-full text-left text-sm">
           <caption class="sr-only">{{ t('settings.extension.sites') }}</caption>
           <thead class="border-b bg-muted/50">

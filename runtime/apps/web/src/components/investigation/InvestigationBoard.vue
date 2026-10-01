@@ -87,6 +87,9 @@ const statusLine = computed(() => {
   const status = props.state.status;
   if (props.state.terminal && (status === 'sain' || status === 'warning' || status === 'erreur' || status === 'bloquee')) return t(`investigation.result.${status}`);
   if (suspended.value) return t('investigation.controls.followSuspended');
+  // Changement d'étape (06 § 3, plan des live regions) : la région status annonce l'étape en cours.
+  const phase = props.state.phase;
+  if (phase && phase !== 'done' && !props.state.terminal) return t('investigation.phase.announce', { phase: t(`investigation.phase.${phase}`) });
   return '';
 });
 
@@ -194,7 +197,7 @@ function viewTrials(): void {
         <h2 id="col-doing" class="text-lg font-semibold">{{ t('investigation.columns.doing') }}</h2>
         <AttemptLog :attempts="shownAttempts" :access="state.access" :live="!suspended" />
         <div>
-          <Button type="button" variant="outline" size="sm" data-testid="follow-toggle" :aria-pressed="suspended" @click="toggleFollow">
+          <Button type="button" variant="outline" size="sm" data-testid="follow-toggle" @click="toggleFollow">
             {{ suspended ? t('investigation.controls.resumeFollow') : t('investigation.controls.suspendFollow') }}
           </Button>
         </div>

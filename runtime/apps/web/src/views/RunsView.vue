@@ -97,7 +97,7 @@ const outcomeOf = (run: RunSummary): string => {
       <Button v-if="!filtered" as-child><RouterLink to="/apis/new">{{ t('runs.empty.button') }}</RouterLink></Button>
     </div>
 
-    <div v-else class="overflow-x-auto rounded-xl border">
+    <div v-else class="relative overflow-x-auto rounded-xl border">
       <table class="w-full text-left text-sm" data-testid="runs-table" :aria-busy="loading">
         <caption class="sr-only">{{ t('runs.caption') }}</caption>
         <thead class="border-b bg-muted/50">
@@ -132,7 +132,7 @@ const outcomeOf = (run: RunSummary): string => {
       </table>
     </div>
 
-    <nav v-if="hasPrevious || hasNext" class="flex items-center gap-3" :aria-label="t('runs.page', { n: pageNumber })">
+    <nav v-if="hasPrevious || hasNext" class="flex flex-wrap items-center gap-3" :aria-label="t('runs.page', { n: pageNumber })">
       <Button type="button" variant="outline" :disabled="!hasPrevious || loading" @click="previous()">{{ t('runs.previous') }}</Button>
       <span class="text-sm" aria-live="polite">{{ t('runs.page', { n: pageNumber }) }}</span>
       <Button type="button" variant="outline" :disabled="!hasNext || loading" @click="next()">{{ t('runs.next') }}</Button>

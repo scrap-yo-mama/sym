@@ -61,5 +61,6 @@ describe("invariants (à implémenter)", () => {
   test.todo("assert_access_report_first"); // étape 0, tâche(s) 1.11, 2.1
   test.todo("assert_budget_and_stop_controls — Chromium (Playwright) : attempt.finished émis → [data-testid=attempt] visible en moins de 2 s"); // 06 § 4.3, tâche(s) 3.6 (3.5 : rendu SSR, sans navigateur)
   test.todo("assert_run_detail_error_open"); // 06 § 4.3 : écran Détail d'un run, confié à aucune tâche (ADR 0003 : 3.4 ou tâche nouvelle), E2E 3.6
-  test.todo("assert_a11y_axe_clean"); // 06 § 1, tâche(s) 3.9, 3.6 (passage ponctuel de 3.3 consigné dans l'ADR 0002)
+  // 3.9 : assert_a11y_axe_clean, assert_keyboard_only_path, assert_live_regions_plan sont jugés en Chromium (apps/web/e2e/*.e2e.ts,
+  // pnpm test:e2e) et leur couverture est gardée par apps/web/src/a11y.unit.test.ts ; 3.6 les rejoue sur l'instance réelle.
 });
