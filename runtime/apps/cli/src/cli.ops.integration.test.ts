@@ -146,8 +146,11 @@ describe('runtime secrets accept-key-loss --confirm (D-12)', () => {
       await c.query("INSERT INTO run_artifacts (run_id, owner_id, kind, bytes, sensitivity, ciphertext, nonce, key_version) VALUES ($1, $2, 'screenshot', 4, 'low', $3, $4, 1)", [
         seeded.runIds[0], seeded.ownerId, Buffer.from('abcd'), Buffer.from('nonce-nonce'),
       ]);
-      // Colonne chiffrée différée à 3.7 : jamais effacée par la commande, seulement signalée.
-      await c.query("INSERT INTO two_factor (user_id, secret_ciphertext) VALUES ($1, 'zz_test_scelle')", [seeded.ownerId]);
+      // Graine 2FA (3.7) : conservée et marquée illisible par la commande, jamais effacée.
+      await c.query(
+        "INSERT INTO two_factor (user_id, secret_ciphertext, nonce, dek_wrapped, alg, key_version, confirmed_at) VALUES ($1, $2, $3, $4, 'aes-256-gcm', 1, now())",
+        [seeded.ownerId, Buffer.from('zz_test_scelle'), Buffer.from('nonce-nonce1'), Buffer.from('dek-enveloppée')],
+      );
     });
   });
   afterAll(async () => {
@@ -167,8 +170,8 @@ describe('runtime secrets accept-key-loss --confirm (D-12)', () => {
       const n = async (sql: string) => (await c.query<{ n: number }>(sql)).rows[0]!.n;
       for (const col of ENCRYPTED_COLUMNS) {
         const name = `${col.table}.${col.column}`;
-        const treatment = KEY_LOSS_TREATMENT[name as keyof typeof KEY_LOSS_TREATMENT];
-        switch (treatment.action) {
+        const treatment = KEY_LOSS_TREATMENT[name];
+        switch (treatment?.action) {
           case 'unreadable':
             expect(await n(`SELECT count(*)::int AS n FROM ${col.table} WHERE state <> 'unreadable'`), name).toBe(0);
             break;
@@ -180,6 +183,10 @@ describe('runtime secrets accept-key-loss --confirm (D-12)', () => {
             break;
           case 'rewritten':
             expect(await n("SELECT (value->>'version')::int AS n FROM settings WHERE key = 'key_check'"), name).toBe(2);
+            break;
+          case 'flagged':
+            expect(await n(`SELECT count(*)::int AS n FROM ${col.table} WHERE unreadable_since IS NULL`), name).toBe(0);
+            expect(await n(`SELECT count(*)::int AS n FROM ${col.table}`), name).toBeGreaterThan(0);
             break;
           case 'deferred':
             expect(await n(`SELECT count(*)::int AS n FROM ${col.table} WHERE ${col.column} IS NOT NULL`), name).toBeGreaterThan(0);
@@ -226,7 +233,7 @@ describe('runtime secrets accept-key-loss --confirm (D-12)', () => {
     expect(res.out).toMatch(/3 secret\(s\) passés en « À ressaisir », 1 session\(s\) de site vidées, 1 artefact\(s\) supprimés ; témoin de clé réécrit \(empreinte [0-9a-f-]+, version 2\)/);
     expect(res.out).not.toContain(lost);
     expect(await counts()).toEqual({ unreadable: 3, sessions: 0, artifacts: 0 });
-    expect(res.out).toMatch(/1 secret\(s\) 2FA restent illisibles : à réinitialiser/);
+    expect(res.out).toMatch(/1 graine\(s\) 2FA marquée\(s\) illisible\(s\) : connexion par code de secours puis ré-enrôlement/);
     await expectEveryEncryptedColumnTreated();
     // La nouvelle clé démarre ; les secrets sont listés « À ressaisir » et refusent de s'ouvrir.
     const keyring = { current: MasterKey.parse(lost) };

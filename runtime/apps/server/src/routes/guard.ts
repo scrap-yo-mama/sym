@@ -2,11 +2,16 @@
 // Garde unique de toutes les routes (13 § 2-5, 13.1) : 503 avant l'owner, identité (clé d'API ou session), rôle et
 // statut relus en base à chaque requête (ASVS 8.3.2), scope de clé, permission de rôle, contrôle d'Origin sur les
 // mutations d'interface. Aucune route ne choisit l'identité : elle vient d'ici seulement (pas d'impersonation, INV5).
-import { can, hashApiKey, isApiKeyFormat, isExtensionTokenFormat, isRole, type ApiKeyScope, type Role } from '@runtime/core';
+import { can, hashApiKey, isApiKeyFormat, isExtensionTokenFormat, isRole, mfaRequiredFor, type ApiKeyScope, type Role } from '@runtime/core';
 import { appendAudit, resolveExtensionToken, withActor } from '@runtime/db';
 import type { FastifyReply, FastifyRequest } from 'fastify';
+import type { MfaMethod } from '../auth/better-auth.js';
+import { readSecuritySettings } from '../auth/security-settings.js';
 import type { ServerContext } from '../context.js';
 import { findRoute, type RouteSpec } from './registry.js';
+
+/** Une session en attente du second facteur expire après 10 minutes (mot de passe à ressaisir). */
+const MFA_PENDING_TTL_MS = 10 * 60 * 1000;
 
 export type Actor = {
   userId: string;
@@ -20,6 +25,14 @@ export type Actor = {
   sessionId?: string;
   /** Appareil appairé (jeton d'extension, 07 § 1) : l'identité vient du jeton, jamais du corps de la requête. */
   tunnelId?: string;
+  /** Session d'interface : mot de passe vérifié, second facteur attendu (13 § 7). */
+  mfaPending?: boolean;
+  /** Facteur qui a complété la session (TOTP, code de secours, amr de l'IdP). */
+  mfaMethod?: MfaMethod | null;
+  /** 2FA confirmée et lisible (compte en règle avec MFA_ENFORCED). */
+  mfaEnrolled?: boolean;
+  /** Création de la session (ré-authentification récente des comptes sans mot de passe). */
+  sessionCreatedAt?: Date;
 };
 
 declare module 'fastify' {
@@ -109,24 +122,72 @@ async function resolveSession(ctx: ServerContext, request: FastifyRequest, reply
   const cookies = headers.getSetCookie();
   if (cookies.length > 0) reply.header('set-cookie', cookies);
   if (!response) return { status: 401 };
-  const absolute = (response.session as { absoluteExpiresAt?: Date | string | null }).absoluteExpiresAt;
-  if (!absolute || new Date(absolute).getTime() <= Date.now()) {
-    await ctx.pool.query('DELETE FROM auth_sessions WHERE id = $1', [response.session.id]);
+  const session = response.session as typeof response.session & {
+    absoluteExpiresAt?: Date | string | null;
+    mfaPending?: boolean | null;
+    mfaMethod?: string | null;
+  };
+  const absolute = session.absoluteExpiresAt;
+  const createdAt = new Date(session.createdAt);
+  const expired =
+    !absolute ||
+    new Date(absolute).getTime() <= Date.now() ||
+    // Second facteur jamais fourni : la session en attente ne survit pas 10 minutes.
+    (session.mfaPending === true && Date.now() - createdAt.getTime() > MFA_PENDING_TTL_MS);
+  // Inactivité réglée par l'owner (13 § 5) : dernière activité tracée à la minute près.
+  const { rows: seen } = await ctx.pool.query<{ idle: boolean }>(
+    `WITH s AS (SELECT last_seen_at < now() - make_interval(mins => $2) AS idle FROM auth_sessions WHERE id = $1),
+          touch AS (UPDATE auth_sessions SET last_seen_at = now() WHERE id = $1 AND last_seen_at < now() - interval '1 minute' AND NOT (SELECT idle FROM s))
+     SELECT idle FROM s`,
+    [session.id, (await readSecuritySettings(ctx.pool)).session_idle_minutes],
+  );
+  if (expired || seen[0]?.idle !== false) {
+    await ctx.pool.query('DELETE FROM auth_sessions WHERE id = $1', [session.id]);
     return { status: 401 };
   }
-  const { rows } = await ctx.pool.query<{ role: string; status: string; email: string }>(
-    'SELECT role, status, email FROM users WHERE id = $1',
+  const { rows } = await ctx.pool.query<{ role: string; status: string; email: string; mfa_enrolled: boolean }>(
+    `SELECT u.role, u.status, u.email,
+            EXISTS (SELECT 1 FROM two_factor t WHERE t.user_id = u.id AND t.confirmed_at IS NOT NULL AND t.unreadable_since IS NULL) AS mfa_enrolled
+     FROM users u WHERE u.id = $1`,
     [response.user.id],
   );
   const user = rows[0];
   if (!user || user.status !== 'active' || !isRole(user.role)) return { status: 401 };
-  return { actor: { userId: response.user.id, role: user.role, email: user.email, via: 'ui', scopes: null, sessionId: response.session.id } };
+  const method = session.mfaMethod;
+  return {
+    actor: {
+      userId: response.user.id,
+      role: user.role,
+      email: user.email,
+      via: 'ui',
+      scopes: null,
+      sessionId: session.id,
+      mfaPending: session.mfaPending === true,
+      mfaMethod: method === 'totp' || method === 'backup_code' || method === 'idp' ? method : null,
+      mfaEnrolled: user.mfa_enrolled,
+      sessionCreatedAt: createdAt,
+    },
+  };
+}
+
+/**
+ * 2FA (13 § 7) pour une session d'interface : second facteur attendu → seules les routes `mfa: 'pending'` ; compte
+ * que MFA_ENFORCED concerne sans 2FA (et sans amr d'IdP) → enrôlement forcé, seules les routes `mfa: 'enroll'`.
+ * Renvoie le code d'erreur à opposer, ou null.
+ */
+function mfaBarrier(ctx: Pick<ServerContext, 'mfaEnforced'>, actor: Actor, spec: Pick<RouteSpec, 'mfa'>): 'mfa_required' | 'mfa_enrollment_required' | null {
+  if (actor.via !== 'ui') return null;
+  if (actor.mfaPending) return spec.mfa === 'pending' ? null : 'mfa_required';
+  if (spec.mfa === 'pending') return 'mfa_required';
+  if (spec.mfa === 'enroll') return null;
+  if (mfaRequiredFor(ctx.mfaEnforced, actor.role) && !actor.mfaEnrolled && actor.mfaMethod !== 'idp') return 'mfa_enrollment_required';
+  return null;
 }
 
 export async function audit(
   ctx: ServerContext,
   request: FastifyRequest,
-  actor: Pick<Actor, 'userId' | 'role' | 'via' | 'apiKey'> | null,
+  actor: (Pick<Actor, 'userId' | 'role' | 'apiKey'> & { via: Actor['via'] | 'sso' }) | null,
   event: { action: string; targetType?: string; targetId?: string; outcome: 'success' | 'denied' | 'error'; meta?: Record<string, unknown> },
 ): Promise<void> {
   const { ip, userAgent } = requestMeta(request);
@@ -175,12 +236,19 @@ export function guard(ctx: ServerContext) {
       resolution = await resolveSession(ctx, request, reply);
     }
     if ('status' in resolution) {
-      reply.header('www-authenticate', 'Bearer');
+      // RFC 9728 (13 § 11) : la réponse 401 désigne les métadonnées de ressource protégée.
+      reply.header('www-authenticate', `Bearer resource_metadata="${ctx.publicUrl}/.well-known/oauth-protected-resource"`);
       await sendError(reply, 401, 'unauthorized', 'identifiant absent, expiré ou révoqué');
       return;
     }
     const actor = resolution.actor;
     request.actor = actor;
+    // Second facteur et enrôlement forcé (13 § 7) avant tout autre contrôle : une session à moitié authentifiée n'atteint rien d'autre.
+    const barrier = mfaBarrier(ctx, actor, spec);
+    if (barrier) {
+      await sendError(reply, 403, barrier, barrier === 'mfa_required' ? 'second facteur attendu' : 'activez la double authentification pour continuer');
+      return;
+    }
 
     const denied = async (reason: string) => {
       await audit(ctx, request, actor, { action: 'access.denied', outcome: 'denied', meta: { route: `${spec.method} ${spec.url}`, reason } });
@@ -211,5 +279,7 @@ export async function identify(ctx: ServerContext, request: FastifyRequest, repl
   } else {
     resolution = await resolveSession(ctx, request, reply);
   }
-  return 'status' in resolution ? null : resolution.actor;
+  if ('status' in resolution) return null;
+  // Second facteur pas encore fourni, ou enrôlement exigé : pas d'identité pour un complément réservé.
+  return mfaBarrier(ctx, resolution.actor, {}) ? null : resolution.actor;
 }

@@ -28,6 +28,20 @@ const EXCEPTIONS: Record<string, string> = {
   // Même audit `denied` pour l'appareil ou le domaine connecté d'autrui (tâche 2.6) : existence seulement, 404 uniforme.
   'extension.ts|SELECT 1 FROM tunnels WHERE id = $1': 'audit denied',
   'extension.ts|SELECT 1 FROM site_sessions WHERE id = $1': 'audit denied',
+  // Secret du client OIDC remplacé par l'owner (tâche 3.7) : secret d'INSTANCE (owner_id NULL), jamais celui d'un membre.
+  'sso.ts|DELETE FROM secrets WHERE id = $1 AND owner_id IS NULL': 'secret d’instance remplacé',
+};
+
+/**
+ * Transactions système (`ctx.pool.connect`) permises, tâche 3.7 : tables d'authentification (hors runtime_app, 0003)
+ * et actions d'administration sur le compte d'AUTRUI (désactivation, suppression, révocations), que la RLS
+ * owner_isolation rendrait vides ; chaque requête y filtre par l'identifiant de la cible.
+ */
+const SYSTEM_TRANSACTIONS: Record<string, string> = {
+  'auth.ts': 'réinitialisation du mot de passe : lien consommé, mot de passe, révocations du compte (13 § 5)',
+  'invitations.ts': 'acceptation : invitation verrouillée, compte et identifiant créés (13 § 6)',
+  'sso.ts': 'OIDC : invitation acceptée ou compte créé à la volée (13 § 7)',
+  'users.ts': 'administration : désactivation, suppression, lien de réinitialisation, révocations du compte cible (13 § 6)',
 };
 
 test('assert_routes_use_rls : aucune requête système sur une table de contenu hors exceptions commentées', () => {
@@ -35,6 +49,7 @@ test('assert_routes_use_rls : aucune requête système sur une table de contenu 
   expect(tables).toEqual(expect.arrayContaining(['runs', 'datasets', 'site_sessions', 'secrets', 'api_keys']));
   const offending: string[] = [];
   const used = new Set<string>();
+  const usedTransactions = new Set<string>();
   for (const file of readdirSync(ROUTES_DIR).filter((f) => f.endsWith('.ts') && !f.endsWith('.test.ts'))) {
     const source = readFileSync(new URL(file, ROUTES_DIR), 'utf8');
     for (const m of source.matchAll(/ctx\.pool\.query(?:<[^>]*>)?\(\s*([`'"])([\s\S]*?)\1/g)) {
@@ -46,9 +61,14 @@ test('assert_routes_use_rls : aucune requête système sur une table de contenu 
       else offending.push(`${file} : ${sql.slice(0, 120)} (${touched.join(', ')})`);
     }
     // Une connexion système détournée (`const pool = ctx.pool`, `ctx.pool.connect`) échappe à l'analyse : interdite.
-    if (/=\s*ctx\.pool\b|ctx\.pool\.connect\(/.test(source) && file !== 'setup.ts') offending.push(`${file} : ctx.pool détourné`);
+    if (/=\s*ctx\.pool\b/.test(source) && file !== 'setup.ts') offending.push(`${file} : ctx.pool détourné`);
+    if (/ctx\.pool\.connect\(/.test(source)) {
+      if (file === 'setup.ts' || SYSTEM_TRANSACTIONS[file]) usedTransactions.add(file);
+      else offending.push(`${file} : ctx.pool détourné`);
+    }
   }
   expect(offending).toEqual([]);
   // Une exception devenue inutile est retirée (la liste reste exacte).
   expect([...used].sort()).toEqual(Object.keys(EXCEPTIONS).sort());
+  expect([...usedTransactions].filter((f) => f !== 'setup.ts').sort()).toEqual(Object.keys(SYSTEM_TRANSACTIONS).sort());
 });

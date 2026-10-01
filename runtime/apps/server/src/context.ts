@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Dépendances partagées par les routes.
-import type { Kek, Keyring, Secret } from '@runtime/core';
+import type { Kek, Keyring, MfaEnforced, Secret } from '@runtime/core';
+import type { SsrfGuard } from '@runtime/core/net';
+import type { SecretStore } from '@runtime/db';
 import type pg from 'pg';
 import type { Auth } from './auth/better-auth.js';
 import type { MetricsCollector } from './metrics.js';
@@ -34,6 +36,18 @@ export type ServerContext = {
   siteSessionKek: Kek;
   /** Vrai dès qu'un owner existe (mis en cache : l'état ne revient jamais en arrière). */
   isInitialized: () => Promise<boolean>;
+  /** `MFA_ENFORCED` (13 § 7). */
+  mfaEnforced: MfaEnforced;
+  /** Garde SSRF : relais SMTP et fournisseur OIDC passent par la politique `operator-config` (08b § 1). */
+  guard: SsrfGuard;
+  /** KEK `secrets` de la génération vérifiée par keyCheck : graines TOTP (posée par finishInit). */
+  secretsKek: Kek;
+  /** Dépôt des secrets d'instance (mot de passe SMTP, secret du client OIDC) ; posé par finishInit. */
+  secrets: SecretStore | null;
+  /** Autorités supplémentaires (relais SMTP ou IdP à certificat privé) : tests et réseaux internes. */
+  extraCa?: string[];
+  /** Tests seulement : IdP OIDC en http (jamais en production : l'issuer doit être https). */
+  oidcAllowHttp?: boolean;
 };
 
 export function initializedProbe(pool: pg.Pool): () => Promise<boolean> {

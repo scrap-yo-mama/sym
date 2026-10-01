@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { expect, test } from 'vitest';
-import { AttemptLimiter } from './rate-limit.js';
+import { AttemptLimiter, ipBucket } from './rate-limit.js';
 
 test('compteur d’échecs : seuil dans la fenêtre, remise à zéro, fenêtre glissante', () => {
   let now = 0;
@@ -35,4 +35,14 @@ test('tentative comptée avant l’opération, annulée d’une seule unité en 
   expect(limiter.blocked('ip')).toBe(true);
   limiter.cancel('absent');
   expect(limiter.size).toBe(1);
+});
+
+test('clé de limite par adresse : IPv6 agrégée par préfixe /64, IPv4 (y compris mappée en IPv6) telle quelle', () => {
+  expect(ipBucket('2001:db8:1:2:3:4:5:6')).toBe(ipBucket('2001:db8:1:2:ffff::1'));
+  expect(ipBucket('2001:DB8:1:2::1')).toBe(ipBucket('2001:db8:1:2::2'));
+  expect(ipBucket('2001:db8:1:2::1')).not.toBe(ipBucket('2001:db8:1:3::1'));
+  expect(ipBucket('2001:db8::1')).toBe('2001:db8:0:0::/64');
+  expect(ipBucket('fe80::1%eth0')).toBe('fe80:0:0:0::/64');
+  expect(ipBucket('203.0.113.7')).toBe('203.0.113.7');
+  expect(ipBucket('::ffff:203.0.113.7')).toBe('203.0.113.7');
 });

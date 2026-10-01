@@ -15,6 +15,7 @@
     "better-auth": "catalog:",
     "drizzle-orm": "catalog:",
     "fastify": "catalog:",
+    "openid-client": "catalog:",
     "pg": "catalog:"
   },
   "devDependencies": {

@@ -23,6 +23,7 @@ import {
 import type pg from 'pg';
 import { appendAudit } from './audit.js';
 import { rekeySiteSessionsBatch } from './extension.js';
+import { rekeyTwoFactorBatch } from './accounts.js';
 
 type Queryable = Pick<pg.ClientBase, 'query'>;
 
@@ -40,13 +41,22 @@ export const REKEY_LOCK_KEY = '8315178094305570146';
  * ultérieure et `rekey` refuse de tourner si elles contiennent des données (aucune colonne n'échappe en silence).
  * Vérifié contre la base par secrets.integration.test.ts (toute colonne `*ciphertext*` doit figurer ici).
  */
-export const ENCRYPTED_COLUMNS = [
+export type EncryptedColumn = {
+  table: string;
+  column: string;
+  key?: string;
+  /** `rekey`, ou la tâche qui livrera la couverture (rekey refuse alors de tourner si la colonne n'est pas vide). */
+  coveredBy: string;
+};
+
+export const ENCRYPTED_COLUMNS: readonly EncryptedColumn[] = [
   { table: 'secrets', column: 'ciphertext', coveredBy: 'rekey' },
   { table: 'settings', column: 'value', key: KEY_CHECK_SETTING, coveredBy: 'rekey' },
   { table: 'site_sessions', column: 'ciphertext', coveredBy: 'rekey' },
   { table: 'run_artifacts', column: 'ciphertext', coveredBy: 'rekey' },
-  { table: 'two_factor', column: 'secret_ciphertext', coveredBy: '3.7' },
-] as const;
+  // Graines TOTP (tâche 3.7) : KEK `secrets`, AAD two_factor|user_id ; illisible → marquée, jamais effacée en silence.
+  { table: 'two_factor', column: 'secret_ciphertext', coveredBy: 'rekey' },
+];
 
 export class KeyCheckError extends Error {
   override name = 'KeyCheckError';
@@ -359,6 +369,23 @@ export async function rekey(
       }
       await opts.afterBatch?.(rotated);
     }
+    // Graines TOTP (tâche 3.7) : KEK `secrets`, AAD two_factor|user_id ; une graine illisible est marquée (codes de secours).
+    for (;;) {
+      await client.query('BEGIN');
+      let seen: number;
+      try {
+        const batch = await rekeyTwoFactorBatch(client, from, to, batchSize);
+        await client.query('COMMIT');
+        seen = batch.seen;
+        rotated += batch.rotated;
+        unreadable += batch.unreadable;
+      } catch (error) {
+        await client.query('ROLLBACK');
+        throw error;
+      }
+      if (seen === 0) break;
+      await opts.afterBatch?.(rotated);
+    }
     // Cookies scellés des sites connectés (07 § 2) : KEK `site_sessions`, AAD liée à la version de clé.
     const fromSite = kekFor(previous, state.from, 'site_sessions');
     const toSite = kekFor(current, state.to, 'site_sessions');
@@ -389,6 +416,8 @@ export async function rekey(
       if ((leftover.rows[0]?.n ?? 0) > 0) throw new KeyCheckError(`${leftover.rows[0]?.n} artefact(s) encore hors de la version ${state.to} : rotation non terminée.`);
       const sites = await client.query<{ n: number }>('SELECT count(*)::int AS n FROM site_sessions WHERE key_version <> $1', [state.to]);
       if ((sites.rows[0]?.n ?? 0) > 0) throw new KeyCheckError(`${sites.rows[0]?.n} session(s) de site encore hors de la version ${state.to} : rotation non terminée.`);
+      const totp = await client.query<{ n: number }>('SELECT count(*)::int AS n FROM two_factor WHERE unreadable_since IS NULL AND key_version <> $1', [state.to]);
+      if ((totp.rows[0]?.n ?? 0) > 0) throw new KeyCheckError(`${totp.rows[0]?.n} graine(s) 2FA encore hors de la version ${state.to} : rotation non terminée.`);
       await writeSetting(client, KEY_CHECK_SETTING, createKeyCheck(current, state.to));
       await client.query('DELETE FROM settings WHERE key = $1', [REKEY_STATE_SETTING]);
       await client.query('COMMIT');

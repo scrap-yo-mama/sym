@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { readFileSync, writeFileSync } from 'node:fs';
-import { generateMasterKey, loadKeyring, MasterKeyError } from '@runtime/core';
+import { generateMasterKey, generateOpaqueToken, loadKeyring, MasterKeyError, RESET_LINK_TTL_HOURS } from '@runtime/core';
 import pg from 'pg';
 import {
   acceptKeyLossLocked,
@@ -17,6 +17,7 @@ import {
   formatDoctor,
   inspectKeyLoss,
   isConnectionError,
+  issueOperatorResetLink,
   KeyCheckError,
   keyCheck,
   rekey,
@@ -46,6 +47,8 @@ const USAGE = [
   '  runtime backup declare [--at DATE_ISO]   note qu’une sauvegarde pg_dump vient d’être faite (rappel de doctor)',
   '  runtime restore-prepare              avant pg_restore sur une base vide : recrée le rôle de cluster `runtime_app` (RLS) que le dump n’emporte pas',
   '  runtime secrets accept-key-loss --confirm   MASTER_KEY perdue : secrets conservés « À ressaisir », témoin de clé réécrit',
+  '  runtime user:reset-link <email>      lien de réinitialisation du mot de passe d’un compte (sans SMTP, sans 2FA), audité et signalé au titulaire',
+  '  runtime owner:reset-link             idem pour le compte owner',
 ].join('\n');
 
 export type CliDeps = { env?: NodeJS.ProcessEnv; log?: (line: string) => void; probe?: SessionProbe; now?: () => Date };
@@ -209,7 +212,9 @@ async function secretsCmd(args: string[], deps: CliDeps): Promise<CliResult> {
       out:
         `accept-key-loss : ${done.unreadable} secret(s) passés en « À ressaisir », ${done.siteSessionsCleared} session(s) de site vidées, ` +
         `${done.artifactsDeleted} artefact(s) supprimés ; témoin de clé réécrit (empreinte ${done.fingerprint}, version ${done.version}).` +
-        (done.twoFactorUnreadable > 0 ? ` ${done.twoFactorUnreadable} secret(s) 2FA restent illisibles : à réinitialiser.` : '') +
+        (done.twoFactorUnreadable > 0
+          ? ` ${done.twoFactorUnreadable} graine(s) 2FA marquée(s) illisible(s) : connexion par code de secours puis ré-enrôlement (sans code, un admin réinitialise la 2FA).`
+          : '') +
         ' Redémarrez server et worker, puis ressaisissez les secrets dans Réglages.',
     };
   });
@@ -250,6 +255,42 @@ async function rekeyCmd(args: string[], deps: CliDeps): Promise<CliResult> {
   };
 }
 
+/**
+ * `runtime user:reset-link <email>` / `runtime owner:reset-link` (13 § 4 et § 6) : sans SMTP, un compte sans 2FA ne peut pas
+ * recevoir de lien copiable d'un admin ; l'opérateur du serveur en émet un. Le lien s'affiche une fois (empreinte seule
+ * en base), les sessions du compte sont fermées, l'action est auditée et signalée au titulaire à sa connexion suivante.
+ * Le titulaire choisit lui-même son mot de passe (6.4.6) ; un compte à 2FA devra aussi fournir son code (6.4.3).
+ */
+async function resetLinkCmd(scope: 'user' | 'owner', args: string[], deps: CliDeps): Promise<CliResult> {
+  const email = args[0];
+  if (scope === 'user' && (!email || email.startsWith('-'))) return { code: 1, out: USAGE };
+  const raw = (deps.env ?? process.env)['PUBLIC_URL'];
+  if (!raw || !/^https?:\/\/[^/]+/.test(raw)) {
+    return { code: 2, out: 'Refus : PUBLIC_URL manquante ou invalide (URL http(s) de l’instance, celle du serveur) : le lien doit pointer vers la console.' };
+  }
+  const publicUrl = new URL(raw).origin;
+  const { token, hash } = generateOpaqueToken();
+  const res = await withSessionClient(deps, (client) => issueOperatorResetLink(client, scope === 'owner' ? { owner: true } : { email: email! }, hash, RESET_LINK_TTL_HOURS));
+  if (!res.ok) {
+    const why = {
+      not_found: scope === 'owner' ? 'aucun compte owner sur cette instance' : 'aucun compte pour cette adresse',
+      inactive: 'compte inactif (invité ou désactivé) : réactivez-le d’abord',
+      owner_account: 'compte owner : utilisez `runtime owner:reset-link`',
+    }[res.reason];
+    return { code: 1, out: `${scope}:reset-link : ${why}.` };
+  }
+  return {
+    code: 0,
+    stream: 'stdout',
+    out: [
+      `${scope}:reset-link : lien pour ${res.email} (${res.role}), valable jusqu’au ${res.expiresAt.toISOString()}, affiché une seule fois :`,
+      `  ${publicUrl}/reset-password/${token}`,
+      'Transmettez-le au titulaire par un canal sûr : il choisit lui-même son mot de passe (et donne son code de 2FA s’il en a une).',
+      'Ses sessions sont fermées ; l’action est inscrite au journal d’audit et lui sera signalée à sa prochaine connexion.',
+    ].join('\n'),
+  };
+}
+
 export async function run(argv: string[], deps: CliDeps = {}): Promise<CliResult> {
   const [cmd, ...args] = argv;
   if (cmd === '--version' || cmd === '-v') return { code: 0, out: version() };
@@ -264,6 +305,8 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<CliResult
     if (cmd === 'backup') return await backupCmd(args, deps);
     if (cmd === 'secrets') return await secretsCmd(args, deps);
     if (cmd === 'restore-prepare') return await restorePrepareCmd(deps);
+    if (cmd === 'user:reset-link') return await resetLinkCmd('user', args, deps);
+    if (cmd === 'owner:reset-link') return await resetLinkCmd('owner', args, deps);
   } catch (error) {
     const refusal = error instanceof DatabaseConfigError || error instanceof MasterKeyError || error instanceof KeyCheckError;
     const prefix = error instanceof BackupDeclarationError || error instanceof AppRoleError ? 'Refus' : refusal ? 'Refus de démarrer' : 'Erreur';

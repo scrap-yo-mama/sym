@@ -310,7 +310,7 @@ describe('sessions et clés d’API', () => {
   });
 
   test('chemins de la bibliothèque hors liste blanche : 404 (inscription, admin, impersonation…)', async () => {
-    for (const url of ['/api/auth/sign-up/email', '/api/auth/admin/impersonate-user', '/api/auth/list-sessions', '/api/auth/request-password-reset']) {
+    for (const url of ['/api/auth/sign-up/email', '/api/auth/admin/impersonate-user', '/api/auth/list-sessions', '/api/auth/request-password-reset', '/api/auth/reset-password', '/api/auth/two-factor/enable']) {
       const res = await srv.app.inject({ method: 'POST', url, headers: { origin: PUBLIC_URL }, payload: {} });
       expect(res.statusCode, url).toBe(404);
     }

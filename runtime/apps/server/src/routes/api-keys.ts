@@ -7,23 +7,21 @@ import {
   API_KEY_MAX_LIFETIME_DAYS,
   generateApiKey,
   GRANTABLE_SCOPES,
-  verifyPassword,
   type ApiKeyScope,
 } from '@runtime/core';
 import { withActor } from '@runtime/db';
 import type { FastifyInstance } from 'fastify';
+import { readSecuritySettings } from '../auth/security-settings.js';
 import type { ServerContext } from '../context.js';
-import { AttemptLimiter } from '../rate-limit.js';
+import { reauthenticate } from './account-helpers.js';
 import { audit, notFound, sendError } from './guard.js';
-
-/** Ré-authentification : 5 échecs par utilisateur sur 15 min → 429 et fermeture de la session utilisée. */
-const REAUTH_MAX_FAILURES = 5;
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const createSchema = {
   type: 'object',
-  required: ['label', 'scopes', 'currentPassword'],
+  // `currentPassword` : exigé par `reauthenticate` si le compte a un mot de passe local (compte OIDC seul : ignoré).
+  required: ['label', 'scopes'],
   additionalProperties: false,
   properties: {
     label: { type: 'string', minLength: 1, maxLength: 100 },
@@ -33,7 +31,7 @@ const createSchema = {
   },
 } as const;
 
-type CreateBody = { label: string; scopes: ApiKeyScope[]; expiresInDays?: number; currentPassword: string };
+type CreateBody = { label: string; scopes: ApiKeyScope[]; expiresInDays?: number; currentPassword?: string };
 
 type KeyRow = {
   id: string;
@@ -58,8 +56,6 @@ const view = (r: KeyRow) => ({
 });
 
 export function apiKeyRoutes(app: FastifyInstance, ctx: ServerContext): void {
-  const reauth = new AttemptLimiter({ max: REAUTH_MAX_FAILURES, windowMs: 15 * 60 * 1000 });
-
   app.get('/api/api-keys', async (request) => {
     const actor = request.actor!;
     const rows = await withActor(ctx.pool, actor, async (db) =>
@@ -74,26 +70,15 @@ export function apiKeyRoutes(app: FastifyInstance, ctx: ServerContext): void {
 
   app.post<{ Body: CreateBody }>('/api/api-keys', { schema: { body: createSchema } }, async (request, reply) => {
     const actor = request.actor!;
-    if (reauth.blocked(actor.userId)) return sendError(reply, 429, 'too_many_attempts', 'trop de tentatives, réessayez plus tard');
-    // Opération sensible : ré-authentification par le mot de passe (13 § 5, ASVS 7.5.1).
-    const { rows } = await ctx.pool.query<{ password_hash: string | null }>(
-      "SELECT password_hash FROM auth_accounts WHERE user_id = $1 AND provider_id = 'credential'",
-      [actor.userId],
-    );
-    const stored = rows[0]?.password_hash;
-    if (!stored || !(await verifyPassword(stored, request.body.currentPassword))) {
-      const failures = reauth.fail(actor.userId);
-      await audit(ctx, request, actor, { action: 'apikey.create', outcome: 'denied', meta: { reason: 'reauth_failed', failures } });
-      if (failures >= REAUTH_MAX_FAILURES) {
-        // Session peut-être volée : elle est fermée (l’utilisateur légitime se reconnecte).
-        if (actor.sessionId) await ctx.pool.query('DELETE FROM auth_sessions WHERE id = $1 AND user_id = $2', [actor.sessionId, actor.userId]);
-        await audit(ctx, request, actor, { action: 'auth.session_revoked', outcome: 'success', meta: { reason: 'reauth_failures' } });
-        return sendError(reply, 429, 'too_many_attempts', 'trop de tentatives : session fermée');
-      }
-      return sendError(reply, 403, 'reauth_failed', 'mot de passe actuel incorrect');
+    // Opération sensible (13 § 5, ASVS 7.5.1) : mot de passe actuel, ou connexion de moins de 10 min pour un compte
+    // OIDC sans mot de passe local ; 5 échecs → 429 et session fermée.
+    if (!(await reauthenticate(ctx, request, reply, actor, request.body.currentPassword, 'apikey.create'))) return reply;
+    // Plafond réglé par l'owner (13 § 8, `api_key_max_lifetime_days`) : jamais au-delà, la durée par défaut s'y plie.
+    const cap = (await readSecuritySettings(ctx.pool)).api_key_max_lifetime_days;
+    if (request.body.expiresInDays !== undefined && request.body.expiresInDays > cap) {
+      return sendError(reply, 400, 'lifetime_too_long', `durée maximale : ${cap} jours`);
     }
-    reauth.reset(actor.userId);
-    const days = request.body.expiresInDays ?? API_KEY_DEFAULT_LIFETIME_DAYS;
+    const days = Math.min(request.body.expiresInDays ?? API_KEY_DEFAULT_LIFETIME_DAYS, cap);
     const { key, prefix, hash } = generateApiKey();
     const row = await withActor(ctx.pool, actor, async (db) =>
       (await db.query<KeyRow>(

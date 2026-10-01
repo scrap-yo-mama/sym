@@ -27,6 +27,9 @@ catalog:
   '@testcontainers/postgresql': 12.1.0
   # Auth noyau (tâche 0.3b) : version exacte, 13 § 5
   better-auth: 1.7.5
+  # OIDC générique (tâche 3.7, 13 § 7 : « openid-client 6.x, pas le plugin SSO ») : MIT, dépendances jose et oauth4webapi (MIT) ;
+  # 6.8.8 publiée le 2026-09-05 (plus de 7 jours, minimumReleaseAge).
+  openid-client: 6.8.8
   # Couche LLM (tâche 0.4). msw 2.15.0 : msw 3.0.x a moins de 7 jours (minimumReleaseAge).
   ajv: 8.20.0
   msw: 2.15.0

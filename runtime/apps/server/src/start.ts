@@ -9,11 +9,13 @@
 // contre un retour d'image sans restauration). Une erreur fatale pendant l'initialisation différée (clé, amorçage) est
 // remise à `onFatal` (index.ts : message clair puis sortie 1).
 import { initTelemetry, kekFor, MIN_EXTENSION_VERSION, type Telemetry } from '@runtime/core';
-import { currentSchemaVersion, createDb, expectedSchemaVersion, holdSecretsLock, KeyCheckError, keyCheck, schemaVersionRefusal } from '@runtime/db';
+import { SsrfGuard } from '@runtime/core/net';
+import { currentSchemaVersion, createDb, expectedSchemaVersion, holdSecretsLock, KeyCheckError, keyCheck, schemaVersionRefusal, secretStore } from '@runtime/db';
 import type { FastifyBaseLogger, FastifyInstance } from 'fastify';
 import pg from 'pg';
 import { buildServer } from './app.js';
 import { createAuth } from './auth/better-auth.js';
+import { readSecuritySettings } from './auth/security-settings.js';
 import { loadServerConfig, type ServerConfig } from './config.js';
 import { initializedProbe, type ServerContext } from './context.js';
 import { createMetricsRegistry } from './metrics.js';
@@ -33,6 +35,10 @@ export type PrepareOptions = {
   minExtension?: string;
   /** Erreur fatale pendant l'initialisation différée (défaut : journalisée ; index.ts arrête le processus). */
   onFatal?: (error: Error) => void;
+  /** Autorités supplémentaires du relais SMTP et de l'IdP (certificats privés) : tests. */
+  extraCa?: string[];
+  /** Tests seulement : accepte un IdP OIDC en http (faux fournisseur local). */
+  oidcAllowHttp?: boolean;
 };
 
 const BOOTSTRAP_REQUIRED =
@@ -70,6 +76,7 @@ export async function prepareServer(env: NodeJS.ProcessEnv = process.env, option
     const auth = createAuth({
       db,
       pool,
+      settings: () => readSecuritySettings(pool),
       // Secret de la bibliothèque (signature des cookies) dérivé de MASTER_KEY par HKDF, libellé « sessions » (08 § 3).
       secret: config.keyring.current.kek('sessions').toString('base64'),
       publicUrl: config.publicUrl,
@@ -81,6 +88,8 @@ export async function prepareServer(env: NodeJS.ProcessEnv = process.env, option
       if (!(await isInitialized()) && !config.bootstrapToken) throw new StartupError(BOOTSTRAP_REQUIRED);
       ctx.keyFingerprint = checked.fingerprint;
       ctx.siteSessionKek = kekFor(config.keyring.current, checked.version, 'site_sessions');
+      ctx.secretsKek = kekFor(config.keyring.current, checked.version, 'secrets');
+      ctx.secrets = secretStore(pool, config.keyring, checked);
     };
 
     let state: 'waiting' | 'ready' | 'failed' = 'waiting';
@@ -132,6 +141,12 @@ export async function prepareServer(env: NodeJS.ProcessEnv = process.env, option
       // Posée par finishInit (version de clé connue après keyCheck) ; jamais lue avant : tant que le démarrage n'est pas terminé, seules les sondes répondent.
       siteSessionKek: kekFor(config.keyring.current, 0, 'site_sessions'),
       isInitialized,
+      mfaEnforced: config.mfaEnforced,
+      guard: new SsrfGuard({ policy: config.ssrfPolicy }),
+      secretsKek: kekFor(config.keyring.current, 0, 'secrets'),
+      secrets: null,
+      ...(options.extraCa ? { extraCa: options.extraCa } : {}),
+      ...(options.oidcAllowHttp ? { oidcAllowHttp: true } : {}),
     };
     if (version === expected) {
       // Cas nominal : toute erreur d'initialisation empêche de démarrer (comportement inchangé).

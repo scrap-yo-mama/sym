@@ -88,6 +88,8 @@ export const users = pgTable(
     updatedAt: updatedAt(),
     disabledAt: tstz('disabled_at'),
     lastLoginAt: tstz('last_login_at'),
+    // Migration 0012_accounts_advanced (tâche 3.7) : compte supprimé et anonymisé.
+    deletedAt: tstz('deleted_at'),
   },
   (t) => [uniqueIndex('users_single_owner').on(t.role).where(sql`role = 'owner'`)],
 );
@@ -107,8 +109,27 @@ export const authSessions = pgTable(
     ip: text('ip'),
     userAgent: text('user_agent'),
     revokedAt: tstz('revoked_at'),
+    // Migration 0012_accounts_advanced (tâche 3.7) : second facteur attendu, facteur utilisé.
+    mfaPending: boolean('mfa_pending').notNull().default(false),
+    mfaMethod: text('mfa_method', { enum: ['totp', 'backup_code', 'idp'] }),
   },
   (t) => [index('auth_sessions_user_id_idx').on(t.userId)],
+);
+
+/** Appareils reconnus (D-15, migration 0012) : empreinte du jeton seulement. */
+export const authKnownDevices = pgTable(
+  'auth_known_devices',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    tokenHash: text('token_hash').notNull().unique(),
+    createdAt: createdAt(),
+    lastSeenAt: tstz('last_seen_at').notNull().defaultNow(),
+    expiresAt: tstz('expires_at').notNull(),
+  },
+  (t) => [index('auth_known_devices_user_id_idx').on(t.userId)],
 );
 
 export const authAccounts = pgTable(
@@ -161,6 +182,8 @@ export const invitations = pgTable(
     acceptedAt: tstz('accepted_at'),
     revokedAt: tstz('revoked_at'),
     createdAt: createdAt(),
+    // Migration 0012_accounts_advanced : échéance ≤ dernier envoi + 48 h (CHECK invitations_ttl).
+    sentAt: tstz('sent_at').notNull().defaultNow(),
   },
   (t) => [index('invitations_email_idx').on(t.email)],
 );
@@ -171,10 +194,18 @@ export const twoFactor = pgTable('two_factor', {
     .notNull()
     .unique()
     .references(() => users.id, { onDelete: 'cascade' }),
-  secretCiphertext: text('secret_ciphertext').notNull(),
-  backupCodes: text('backup_codes'),
-  nonce: text('nonce'),
+  // Migration 0012_accounts_advanced (tâche 3.7) : graine TOTP scellée (enveloppe complète, AAD two_factor|user_id).
+  secretCiphertext: bytea('secret_ciphertext').notNull(),
+  nonce: bytea('nonce'),
+  dekWrapped: bytea('dek_wrapped'),
+  alg: text('alg'),
   keyVersion: integer('key_version'),
+  /** Dernier pas TOTP accepté (anti-rejeu). */
+  lastUsedStep: bigint('last_used_step', { mode: 'number' }),
+  /** Graine illisible après une perte de MASTER_KEY : codes de secours seulement, puis ré-enrôlement. */
+  unreadableSince: tstz('unreadable_since'),
+  // Colonnes du plugin Better Auth (jamais chargé, 0.3b) : gardées inutilisées (migration additive).
+  backupCodes: text('backup_codes'),
   verified: boolean('verified').notNull().default(true),
   failedVerificationCount: integer('failed_verification_count').notNull().default(0),
   lockedUntil: tstz('locked_until'),

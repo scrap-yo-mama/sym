@@ -139,3 +139,72 @@ export async function guardedFetch(input: string | URL, init: Init, options: Gua
     url = next;
   }
 }
+
+/**
+ * Politique `operator-config` (08b § 1) au niveau fetch : destination réglée par l'admin lui-même (fournisseur OIDC de
+ * l'instance), jamais par un membre, un LLM ou une API. Adresses privées et boucle locale permises (un IdP interne,
+ * Keycloak sur le réseau de l'entreprise), classes dures toujours refusées (métadonnées cloud, 0.0.0.0, multicast,
+ * diffusion). Résolution unique, socket épinglé, `remoteAddress` recontrôlée. Aucune redirection suivie.
+ */
+export function createOperatorConfigDispatcher(guard: SsrfGuard, opts: { connectTimeoutMs?: number; ca?: string[] } = {}): Agent {
+  const base = buildConnector({ timeout: opts.connectTimeoutMs ?? 10_000, ...(opts.ca ? { ca: opts.ca } : {}) });
+  const connect: buildConnector.connector = (options, callback) => {
+    const host = stripAddress(options.hostname);
+    const port = options.port === '' ? (options.protocol === 'https:' ? 443 : 80) : Number(options.port);
+    guard.resolveOperatorConfig(host, port).then(
+      (pinned) => {
+        const servername = isIP(host) === 0 ? host : options.servername;
+        base({ ...options, hostname: pinned.address, servername }, (...args) => {
+          const [error, socket] = args;
+          if (error !== null) {
+            callback(error, null);
+            return;
+          }
+          try {
+            guard.checkOperatorAddress(host, socket.remoteAddress ?? '', port);
+          } catch (blocked) {
+            socket.destroy();
+            callback(blocked as Error, null);
+            return;
+          }
+          callback(null, socket);
+        });
+      },
+      (error: unknown) => callback(error instanceof Error ? error : new Error(String(error)), null),
+    );
+  };
+  return new Agent({ connect });
+}
+
+/** fetch `operator-config` : http(s) seulement, sans identifiants dans l'URL, aucune redirection suivie. */
+export async function operatorConfigFetch(input: string | URL, init: Init, dispatcher: Dispatcher): Promise<Response> {
+  const url = new URL(input);
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') throw new SsrfBlockedError({ reason: 'scheme', host: url.hostname });
+  if (url.username !== '' || url.password !== '') throw new SsrfBlockedError({ reason: 'credentials', host: url.hostname });
+  try {
+    return await undiciFetch(url, { ...init, redirect: 'manual', dispatcher });
+  } catch (error) {
+    throw findSsrfBlocked(error) ?? error;
+  }
+}
+
+/**
+ * fetch d'un fournisseur OIDC (08b § 1). Seule l'origine de l'issuer, saisie par l'owner, relève de `operator-config`
+ * (IdP interne : privé et boucle locale permis). Les autres points d'entrée viennent du document de découverte, donc de
+ * l'IdP (`token_endpoint`, `jwks_uri`, `userinfo_endpoint`) : hors de cette origine, ils suivent la politique des cibles
+ * (`untrusted-target` : ports 80 et 443, privé seulement par `ALLOWED_PRIVATE_HOSTS`). Un IdP malveillant ou compromis
+ * ne fait donc pas poster le code, le vérificateur PKCE ni le secret du client vers un service interne. Aucune
+ * redirection suivie, dans un cas comme dans l'autre.
+ */
+export function createIssuerScopedFetch(
+  issuer: string | URL,
+  guard: SsrfGuard,
+  operatorDispatcher: Dispatcher,
+  targetDispatcher: Dispatcher = sharedGuardedDispatcher(guard),
+): (input: string | URL, init: Init) => Promise<Response> {
+  const origin = new URL(issuer).origin;
+  return (input, init) =>
+    new URL(input).origin === origin
+      ? operatorConfigFetch(input, init, operatorDispatcher)
+      : guardedFetch(input, init, { guard, dispatcher: targetDispatcher, followRedirects: false });
+}

@@ -72,8 +72,8 @@ test('accept-key-loss : toute colonne chiffrée du registre est traitée, ou dé
   }
   // Le report ne vaut que pour une colonne que `rekey` reporte lui-même : les autres sont traitées.
   for (const c of ENCRYPTED_COLUMNS) {
-    const treatment = KEY_LOSS_TREATMENT[`${c.table}.${c.column}` as keyof typeof KEY_LOSS_TREATMENT];
-    if (c.coveredBy === 'rekey') expect(treatment.action, `${c.table}.${c.column}`).not.toBe('deferred');
+    const treatment = KEY_LOSS_TREATMENT[`${c.table}.${c.column}`];
+    if (c.coveredBy === 'rekey') expect(treatment?.action, `${c.table}.${c.column}`).not.toBe('deferred');
   }
 });
 
