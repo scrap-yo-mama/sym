@@ -246,7 +246,7 @@ describe(`secrets sur PostgreSQL ${inject('pgVersion')}`, () => {
     await keyCheck(client, { current: oldKey });
     const owner = await newUser();
     await client.query(
-      "INSERT INTO site_sessions (owner_id, domain, server_use_allowed, ciphertext, nonce, key_version) VALUES ($1, 'example.test', true, '\\x00', '\\x00', 1)",
+      "INSERT INTO site_sessions (owner_id, domain, server_use_allowed, ciphertext, nonce, dek_wrapped, alg, key_version) VALUES ($1, 'example.test', true, '\\x00', '\\x00', '\\x00', 'aes-256-gcm', 1)",
       [owner],
     );
     await expect(rekey(client, { current: newKey(), previous: oldKey })).rejects.toThrow(/site_sessions\.ciphertext.*tâche 1\.10/);

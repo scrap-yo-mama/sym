@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Dépendances partagées par les routes.
-import type { Secret } from '@runtime/core';
+import type { Kek, Secret } from '@runtime/core';
 import type pg from 'pg';
 import type { Auth } from './auth/better-auth.js';
 
@@ -15,6 +15,8 @@ export type ServerContext = {
   /** Empreinte de MASTER_KEY, affichée une fois par l'assistant (13 § 4). */
   keyFingerprint: string;
   expectedSchemaVersion: number;
+  /** KEK des cookies de sites (libellé `site_sessions`, génération vérifiée par keyCheck) : scellement seul côté web. */
+  siteSessionKek: Kek;
   /** Vrai dès qu'un owner existe (mis en cache : l'état ne revient jamais en arrière). */
   isInitialized: () => Promise<boolean>;
 };

@@ -5,6 +5,7 @@ import Fastify, { type FastifyInstance, type FastifyServerOptions } from 'fastif
 import type { ServerContext } from './context.js';
 import { apiKeyRoutes } from './routes/api-keys.js';
 import { authRoutes } from './routes/auth.js';
+import { extensionRoutes } from './routes/extension.js';
 import { guard, notFound, sendError } from './routes/guard.js';
 import { meRoutes } from './routes/me.js';
 import { findRoute } from './routes/registry.js';
@@ -64,5 +65,6 @@ export function buildServer(ctx: ServerContext, options: { logger?: boolean; tru
   authRoutes(app, ctx);
   meRoutes(app, ctx);
   apiKeyRoutes(app, ctx);
+  extensionRoutes(app, ctx);
   return app;
 }

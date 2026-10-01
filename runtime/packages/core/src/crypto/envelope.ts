@@ -45,6 +45,14 @@ export function secretAad(row: { id: string; kind: string; ownerId: string | nul
   return aadString(['secret', row.id, row.kind, row.ownerId ?? 'instance']);
 }
 
+/**
+ * AAD d'une ligne de `site_sessions` (13 § 12, INV5) : `site_session|owner_id|domain|key_version`. Une valeur
+ * déplacée vers un autre utilisateur ou un autre domaine ne s'ouvre plus (assert_identity_pinned).
+ */
+export function siteSessionAad(row: { ownerId: string; domain: string; keyVersion: number }): string {
+  return aadString(['site_session', row.ownerId, row.domain, String(row.keyVersion)]);
+}
+
 function gcmEncrypt(key: Buffer, plaintext: Buffer, aad: Buffer): { nonce: Buffer; data: Buffer } {
   const nonce = randomBytes(NONCE_BYTES);
   const cipher = createCipheriv('aes-256-gcm', key, nonce, { authTagLength: TAG_BYTES });

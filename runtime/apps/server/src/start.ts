@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Démarrage de `server` (14 § 7, 13 § 4) : configuration, schéma à jour, verrou partagé des secrets, `keyCheck`
 // AVANT d'écouter (MASTER_KEY différente → refus clair), puis jeton d'amorçage exigé tant qu'aucun owner n'existe.
+import { kekFor } from '@runtime/core';
 import { currentSchemaVersion, createDb, expectedSchemaVersion, holdSecretsLock, keyCheck } from '@runtime/db';
 import type { FastifyInstance } from 'fastify';
 import pg from 'pg';
@@ -52,6 +53,7 @@ export async function prepareServer(env: NodeJS.ProcessEnv = process.env, option
       adminEmail: config.adminEmail,
       keyFingerprint: checked.fingerprint,
       expectedSchemaVersion: expected,
+      siteSessionKek: kekFor(config.keyring.current, checked.version, 'site_sessions'),
       isInitialized,
     };
     const app = buildServer(ctx, { ...options, trustProxy: config.trustProxy });

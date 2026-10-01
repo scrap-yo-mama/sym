@@ -1,0 +1,190 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Popup (07 § 1-2, § 7) en Vue 3, fonctions de rendu (pas de compilateur de gabarits : CSP MV3). Appairage, identité
+// « Connected as », consentement par domaine AVANT toute lecture de cookie, liste des domaines et déconnexion.
+// Les permissions d'hôte sont demandées ici, au clic de l'utilisateur (`chrome.permissions.request` exige un geste).
+// Aucune lecture de cookie dans ce contexte : elle n'a lieu que dans le service worker, après consentement.
+import { createApp, defineComponent, h, reactive, type VNode } from 'vue';
+import { browser } from 'wxt/browser';
+import type { SiteMode, SiteState, Status } from '../../core/controller.ts';
+import { originPatterns, siteDomainOf } from '../../core/host-guard.ts';
+import { checkInstanceUrl, instancePattern } from '../../core/instance.ts';
+import type { Request, Response } from '../../core/messages.ts';
+
+async function send<T>(request: Request): Promise<T> {
+  const res = (await browser.runtime.sendMessage(request)) as Response<T>;
+  if (!res.ok) throw new Error(res.message);
+  return res.data;
+}
+
+/** Site visé : onglet actif http(s), sinon le dernier onglet http(s) consulté (popup ouvert dans un onglet). */
+async function targetDomain(): Promise<string | null> {
+  const [active] = await browser.tabs.query({ active: true, lastFocusedWindow: true });
+  const fromActive = siteDomainOf(active?.url);
+  if (fromActive) return fromActive;
+  const tabs = (await browser.tabs.query({})).filter((t) => siteDomainOf(t.url) !== null);
+  tabs.sort((a, b) => (b.lastAccessed ?? 0) - (a.lastAccessed ?? 0));
+  return siteDomainOf(tabs[0]?.url);
+}
+
+const App = defineComponent({
+  setup() {
+    const state = reactive({
+      loading: true,
+      busy: false,
+      error: '',
+      status: { paired: false } as Status,
+      instanceUrl: '',
+      code: '',
+      deviceLabel: '',
+      domain: null as string | null,
+      consentOpen: false,
+      mode: 'tunnel' as SiteMode,
+    });
+
+    async function run(action: () => Promise<void>) {
+      state.busy = true;
+      state.error = '';
+      try {
+        await action();
+      } catch (error) {
+        state.error = error instanceof Error ? error.message : String(error);
+      } finally {
+        state.busy = false;
+      }
+    }
+
+    async function refresh() {
+      try {
+        state.status = await send<Status>({ type: 'status' });
+      } catch (error) {
+        state.status = { paired: false };
+        state.error = error instanceof Error ? error.message : String(error);
+      }
+      state.domain = await targetDomain();
+      state.loading = false;
+    }
+
+    const pair = () =>
+      run(async () => {
+        const instance = checkInstanceUrl(state.instanceUrl);
+        if (!instance.ok) throw new Error('Instance URL refused: https:// is required.');
+        // Accès à l'API de l'instance saisie (et à elle seule), demandé au clic.
+        if (!(await browser.permissions.request({ origins: [instancePattern(instance.origin)] }))) throw new Error('Access to the instance was not granted.');
+        state.status = await send<Status>({ type: 'pair', instanceUrl: instance.origin, code: state.code, deviceLabel: state.deviceLabel.trim() || null });
+        state.code = '';
+      });
+
+    const accept = () =>
+      run(async () => {
+        const domain = state.domain;
+        if (!domain) return;
+        // Clic explicite de consentement : permission d'hôte demandée maintenant, jamais à l'installation.
+        if (!(await browser.permissions.request({ origins: originPatterns(domain) }))) throw new Error(`Access to ${domain} was not granted.`);
+        await send<SiteState>({ type: 'connectSite', domain, mode: state.mode });
+        state.consentOpen = false;
+        state.status = await send<Status>({ type: 'status' });
+      });
+
+    const disconnect = (domain: string) =>
+      run(async () => {
+        state.status = await send<Status>({ type: 'disconnectSite', domain });
+      });
+
+    const unpair = () =>
+      run(async () => {
+        state.status = await send<Status>({ type: 'unpair' });
+      });
+
+    void refresh();
+
+    const field = (id: string, label: string, key: 'instanceUrl' | 'code' | 'deviceLabel', placeholder: string): VNode =>
+      h('label', { for: id }, [
+        label,
+        h('input', {
+          id,
+          value: state[key],
+          placeholder,
+          autocomplete: 'off',
+          onInput: (e: Event) => {
+            state[key] = (e.target as HTMLInputElement).value;
+          },
+        }),
+      ]);
+
+    function pairingView(): VNode {
+      return h('form', { id: 'pairing', onSubmit: (e: Event) => (e.preventDefault(), void pair()) }, [
+        h('p', 'Pair this browser with your Scrapyomama instance. Generate a code in Settings › Extension.'),
+        field('instance-url', 'Instance URL', 'instanceUrl', 'https://runtime.example.org'),
+        field('pairing-code', 'Pairing code', 'code', 'XXXXX-XXXXX'),
+        field('device-label', 'Device name (optional)', 'deviceLabel', 'Work laptop'),
+        h('button', { id: 'pair', type: 'submit', disabled: state.busy }, 'Pair'),
+      ]);
+    }
+
+    function consentView(domain: string, origin: string): VNode {
+      const radio = (mode: SiteMode, label: string) =>
+        h('label', [
+          h('input', { type: 'radio', name: 'mode', id: `mode-${mode}`, checked: state.mode === mode, onChange: () => (state.mode = mode) }),
+          label,
+        ]);
+      return h('section', { id: 'consent', role: 'dialog', 'aria-label': `Connect ${domain}` }, [
+        h('h2', `Connect ${domain}?`),
+        h('dl', [
+          h('dt', 'Site'),
+          h('dd', { id: 'consent-domain' }, domain),
+          h('dt', 'Use'),
+          h('dd', [
+            radio('tunnel', 'Tunnel (default): runs go through this browser; cookies stay here.'),
+            radio('server', 'Server: cookies are read and sent, encrypted, to your instance.'),
+          ]),
+          h('dt', 'Cookies sent to'),
+          h('dd', { id: 'recipient' }, state.mode === 'server' ? origin : 'Nobody: cookies stay in this browser.'),
+        ]),
+        h('button', { id: 'consent-accept', type: 'button', disabled: state.busy, onClick: accept }, 'I agree, connect this site'),
+        h('button', { id: 'consent-cancel', type: 'button', onClick: () => (state.consentOpen = false) }, 'Cancel'),
+      ]);
+    }
+
+    function pairedView(status: Extract<Status, { paired: true }>): VNode {
+      const connected = status.sites.some((s) => s.domain === state.domain);
+      return h('div', { id: 'paired' }, [
+        h('p', { id: 'identity' }, `Connected as ${status.email}`),
+        h('section', [
+          h('h2', 'This site'),
+          state.domain
+            ? h('p', [h('span', { id: 'site-domain' }, state.domain), connected ? ' — connected' : ''])
+            : h('p', { id: 'no-site' }, 'No site that can be connected in this tab.'),
+          state.domain && !connected && !state.consentOpen
+            ? h('button', { id: 'connect-site', type: 'button', onClick: () => ((state.mode = 'tunnel'), (state.consentOpen = true)) }, 'Connect this site')
+            : null,
+          state.domain && state.consentOpen ? consentView(state.domain, status.origin) : null,
+        ]),
+        h('section', [
+          h('h2', 'Connected sites'),
+          status.sites.length === 0
+            ? h('p', 'None yet.')
+            : h(
+                'ul',
+                { id: 'sites' },
+                status.sites.map((s) =>
+                  h('li', { 'data-domain': s.domain }, [
+                    h('span', `${s.domain} (${s.mode === 'server' ? 'server' : 'tunnel'})`),
+                    h('button', { type: 'button', class: 'disconnect', disabled: state.busy, onClick: () => disconnect(s.domain) }, 'Disconnect'),
+                  ]),
+                ),
+              ),
+        ]),
+        h('button', { id: 'unpair', type: 'button', disabled: state.busy, onClick: unpair }, 'Sign out of this instance'),
+      ]);
+    }
+
+    return () =>
+      h('main', [
+        h('h1', 'Scrapyomama'),
+        state.error ? h('p', { id: 'error', role: 'alert' }, state.error) : null,
+        state.loading ? h('p', 'Loading…') : state.status.paired ? pairedView(state.status) : pairingView(),
+      ]);
+  },
+});
+
+createApp(App).mount('#app');
