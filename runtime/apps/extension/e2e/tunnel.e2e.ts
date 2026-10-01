@@ -165,8 +165,9 @@ test('run E2 en tunnel : fetch dans un onglet du site, onglet caché, non décha
   const apiId = await insertApi('zz_test_tunnel_e2', itemsSpec('/api/items', 3), 10);
   const runId = await startRun(apiId);
   let tabs: Awaited<ReturnType<typeof automationTabs>> = [];
-  await expect.poll(async () => (tabs = await automationTabs()).length, { timeout: 30_000 }).toBeGreaterThan(0);
-  expect(tabs[0]).toMatchObject({ active: false, autoDiscardable: false, group: 'Scrapyomama' });
+  // L'onglet est créé puis groupé par le service worker : on attend le groupe, pas seulement l'onglet (course sinon).
+  await expect.poll(async () => (tabs = await automationTabs()).filter((t) => t.group !== null).length, { timeout: 30_000 }).toBeGreaterThan(0);
+  expect(tabs.find((t) => t.group !== null)).toMatchObject({ active: false, autoDiscardable: false, group: 'Scrapyomama' });
   const run = await waitRun(runId, 60_000);
   expect(run).toMatchObject({ state: 'succeeded', items: 30 });
   const attempts = await h.sql('SELECT execution, network, result_class FROM run_attempts WHERE run_id = $1', [runId]);
