@@ -1,113 +1,205 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// E3 en script (`script_ref`) : le code généré ne s'exécute QUE dans le bac à sable (INV7, tâche 1.5) et ne voit que des
-// ponts. Interface `SandboxEngine { run(code, bridges, limits) }` de 08 §3 ; les ponts sont des fonctions, valeurs en
-// chaînes JSON, chaque appel validé côté hôte (forme, taille, domaine de l'API). Sans moteur branché, la stratégie
-// échoue (`code_error`, `sandbox_unavailable`) : jamais d'exécution hors bac à sable.
-import type { NetworkSession, SsrfGuard } from '@runtime/core/net';
-import { guardedGoto } from '@runtime/core/net';
+// E3 en script (`script_ref`, tâche 1.6 ; 08 §3 ; D-29) : le code généré ne s'exécute QUE dans le bac à sable de 1.5
+// (`SandboxEngine`, processus enfant à environnement vide, isolated-vm) et ne voit que des ponts : `ctx.fetch`,
+// `ctx.emit`, `ctx.log` (1.5) et `ctx.page.*` (ici), sous-ensemble de Playwright relayé, en liste fermée.
+// - Chaque opération de page est une demande JSON validée ici (forme, tailles, domaine de l'API) ; la page Playwright
+//   reste dans le worker, jamais exposée à l'isolat.
+// - `ctx.page.evaluate` exécute le texte d'une fonction DANS LA PAGE (Chromium) : son trafic passe par le proxy
+//   d'egress de l'essai (garde SSRF, verrou de domaines) et par `context.route('**')`. Dès le premier `evaluate`, toute
+//   requête de la page coupée par la politique de domaines est une `sandbox_violation` : l'enfant est tué aussitôt
+//   (`watch` du moteur), même si la page avale l'erreur ou n'attend pas la réponse. Avant lui, le code du script n'a pas
+//   pu entrer dans la page : les requêtes tierces du site lui-même (mesure d'audience, CDN) sont coupées et notées, sans
+//   verdict contre le script.
+import type { SandboxBridges, SandboxViolation } from '@runtime/core';
+import { guardedGoto, type SsrfGuard } from '@runtime/core/net';
 import type { Page } from 'playwright-core';
-import { hostAllowed } from '../browser/run-context.js';
+import { domainAllowed, normalizeDomain, SandboxBridgeError } from '../sandbox/bridges.js';
 
-export type SandboxLimits = { readonly timeoutMs: number; readonly memoryMb: number };
-/** Pont : une fonction de l'hôte, argument et résultat en JSON (jamais un objet de l'hôte). */
-type SandboxBridge = (argsJson: string) => Promise<string>;
-type SandboxBridges = Readonly<Record<string, SandboxBridge>>;
-type SandboxOutcome = { readonly ok: true } | { readonly ok: false; readonly error: 'timeout' | 'memory' | 'code_error' | 'killed' };
+/** Opérations `ctx.page.*` (liste fermée, figée par la tâche 1.6). */
+export const PAGE_OPERATIONS = Object.freeze(['goto', 'url', 'waitForSelector', 'content', 'textAll', 'attrAll', 'click', 'evaluate'] as const);
+type PageOperation = (typeof PAGE_OPERATIONS)[number];
 
-interface SandboxEngine {
-  run(code: string, bridges: SandboxBridges, limits: SandboxLimits): Promise<SandboxOutcome>;
-}
+const MAX_SELECTOR = 500;
+const MAX_URL = 8192;
+const MAX_SOURCE_BYTES = 64 * 1024;
+const MAX_ARG_BYTES = 64 * 1024;
+const MAX_WAIT_MS = 30_000;
+const DEFAULT_WAIT_MS = 10_000;
 
-/** Branchement du bac à sable (1.5) : moteur et lecture du script référencé par la version de stratégie. */
-export type ScriptPort = {
-  readonly engine: SandboxEngine;
-  loadScript(scriptRef: string): Promise<string>;
+export type PageBridgeOptions = {
+  readonly page: Page;
+  readonly guard: SsrfGuard;
+  /** Domaines de l'API (noms exacts) : `ctx.page.goto` est refusé ailleurs, avant toute connexion. */
+  readonly allowedHosts: readonly string[];
+  /** Plafond d'une valeur rendue au script (HTML, textes, résultat d'`evaluate`), en octets. */
+  readonly maxResponseBytes: number;
+  /** Plafond d'éléments d'une liste rendue (`textAll`, `attrAll`). */
+  readonly maxItems: number;
+  /** Délai d'une opération de page (navigation, `evaluate`), en ms. */
+  readonly timeoutMs: number;
+  /** Requêtes déjà coupées par la politique de domaines (contexte de run et proxy d'egress), lues autour d'`evaluate`. */
+  readonly blockedHosts: () => readonly string[];
+  /** Appelé avant le premier `evaluate` : à partir de là, toute requête coupée est imputée au script. */
+  readonly onEvaluate?: () => void;
 };
 
-export const SCRIPT_DEFAULT_LIMITS: SandboxLimits = Object.freeze({ timeoutMs: 60_000, memoryMb: 128 });
-const MAX_ARG_BYTES = 64 * 1024;
-const MAX_LOGS = 200;
-
-export class BridgeError extends Error {
-  override name = 'BridgeError';
+function bad(detail: string): never {
+  throw new SandboxBridgeError('invalid_bridge_call', true, detail);
 }
 
-type Json = Record<string, unknown>;
-
-function parseArgs(raw: string): Json {
-  if (typeof raw !== 'string' || Buffer.byteLength(raw) > MAX_ARG_BYTES) throw new BridgeError('arguments de pont trop grands');
-  const v: unknown = JSON.parse(raw);
-  if (typeof v !== 'object' || v === null || Array.isArray(v)) throw new BridgeError('arguments de pont : objet JSON attendu');
-  return v as Json;
+function parseRequest(raw: unknown): { op: PageOperation; args: Record<string, unknown> } {
+  if (typeof raw !== 'string' || Buffer.byteLength(raw) > MAX_SOURCE_BYTES + MAX_ARG_BYTES + 1024) bad('page : demande');
+  let value: unknown;
+  try {
+    value = JSON.parse(raw);
+  } catch {
+    return bad('page : JSON invalide');
+  }
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) bad('page : objet attendu');
+  const { op, args } = value as { op?: unknown; args?: unknown };
+  if (typeof op !== 'string' || !(PAGE_OPERATIONS as readonly string[]).includes(op)) bad('page : opération');
+  if (typeof args !== 'object' || args === null || Array.isArray(args)) bad('page : arguments');
+  return { op: op as PageOperation, args: args as Record<string, unknown> };
 }
 
-const str = (v: unknown, name: string, max = 2_000): string => {
-  if (typeof v !== 'string' || v.length === 0 || v.length > max) throw new BridgeError(`argument ${name} invalide`);
+const text = (v: unknown, name: string, max: number): string => {
+  if (typeof v !== 'string' || v.length === 0 || v.length > max) bad(`page : ${name}`);
   return v;
 };
 
-export type ScriptBridgeOptions = {
-  readonly page: Page;
-  readonly guard: SsrfGuard;
-  /** Domaines de l'API : `ctx.fetch` et `ctx.page.goto` sont refusés ailleurs (08 §3). */
-  readonly allowedHosts: readonly string[];
-  readonly session: Pick<NetworkSession, 'fetch'>;
-  readonly maxItems: number;
-  readonly maxResponseBytes: number;
+const waitMs = (v: unknown): number => {
+  if (v === undefined || v === null) return DEFAULT_WAIT_MS;
+  if (typeof v !== 'number' || !Number.isFinite(v)) bad('page : délai');
+  return Math.min(Math.max(Math.floor(v), 0), MAX_WAIT_MS);
 };
 
-export type ScriptBridgeSet = { readonly bridges: SandboxBridges; readonly items: unknown[]; readonly logs: string[] };
+function capped(value: string, max: number): string {
+  if (Buffer.byteLength(value) > max) throw new SandboxBridgeError('output_limit', true, 'page');
+  return value;
+}
 
-/** Ponts d'E3 : `fetch`, sous-ensemble de lecture de `page`, `emit`, `log`. Liste fermée. */
-export function createScriptBridges(options: ScriptBridgeOptions): ScriptBridgeSet {
-  const items: unknown[] = [];
-  const logs: string[] = [];
-  const checkHost = (url: string) => {
-    if (!hostAllowed(url, options.allowedHosts)) throw new BridgeError('domaine hors de l’API');
+function within<T>(promise: Promise<T>, ms: number): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  return Promise.race([
+    promise,
+    new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new SandboxBridgeError('page_failed', false, 'timeout')), ms);
+    }),
+  ]).finally(() => clearTimeout(timer));
+}
+
+/**
+ * Pont `ctx.page.*` d'un essai E3. Chaque refus de domaine est une violation (l'enfant est tué). Une erreur de
+ * Playwright (sélecteur absent, délai) est rendue au script sous un code stable (`page_failed`), sans message.
+ */
+export function createPageBridge(options: PageBridgeOptions): NonNullable<SandboxBridges['page']> {
+  const allowed = options.allowedHosts.map(normalizeDomain);
+  const checkUrl = (raw: string): string => {
+    let url: URL;
+    try {
+      url = new URL(raw);
+    } catch {
+      return bad('page : url invalide');
+    }
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') bad('page : schéma');
+    if (url.username !== '' || url.password !== '') bad('page : identifiants dans l’url');
+    if (!domainAllowed(url.hostname, allowed)) throw new SandboxBridgeError('domain_not_allowed', true, url.hostname.toLowerCase().slice(0, 253));
+    return url.href;
   };
-  const bridges: Record<string, SandboxBridge> = {
-    fetch: async (raw) => {
-      const a = parseArgs(raw);
-      const url = str(a['url'], 'url');
-      checkHost(url);
-      const method = a['method'] === 'POST' ? 'POST' : 'GET';
-      const body = a['body'] === undefined ? undefined : str(a['body'], 'body', MAX_ARG_BYTES);
-      const response = await options.session.fetch(url, { method, ...(body === undefined ? {} : { body }) });
-      const text = await response.text();
-      if (Buffer.byteLength(text) > options.maxResponseBytes) throw new BridgeError('réponse trop grande');
-      return JSON.stringify({ status: response.status, body: text });
+  /** Une requête de la page coupée pendant `evaluate` est une violation, même si la page a avalé l'erreur. */
+  const settled = <T>(before: number, value: T): T => {
+    const blocked = options.blockedHosts();
+    if (blocked.length > before) throw new SandboxBridgeError('domain_not_allowed', true, blocked[before]?.slice(0, 253));
+    return value;
+  };
+  const passthrough = <T>(_before: number, value: T): T => value;
+  const { page } = options;
+
+  return async (raw) => {
+    const { op, args } = parseRequest(raw);
+    if (op === 'evaluate') options.onEvaluate?.();
+    const before = options.blockedHosts().length;
+    // Hors `evaluate`, les requêtes coupées pendant une navigation peuvent venir du site : elles relèvent de `watch`.
+    const check = op === 'evaluate' ? settled : passthrough;
+    try {
+      switch (op) {
+        case 'goto': {
+          const url = checkUrl(text(args['url'], 'url', MAX_URL));
+          const response = await guardedGoto(page, url, options.guard, { waitUntil: 'load' as const, timeout: options.timeoutMs });
+          return check(before, { status: response?.status() ?? 0, url: page.url() });
+        }
+        case 'url':
+          return check(before, { url: page.url() });
+        case 'waitForSelector': {
+          const selector = text(args['selector'], 'sélecteur', MAX_SELECTOR);
+          const timeout = waitMs(args['timeoutMs']);
+          await page.waitForSelector(selector, { state: 'attached', timeout });
+          return check(before, {});
+        }
+        case 'content':
+          return check(before, { html: capped(await page.content(), options.maxResponseBytes) });
+        case 'textAll': {
+          const selector = text(args['selector'], 'sélecteur', MAX_SELECTOR);
+          const texts = await page.locator(selector).allTextContents();
+          return check(before, { texts: JSON.parse(capped(JSON.stringify(texts.slice(0, options.maxItems)), options.maxResponseBytes)) as string[] });
+        }
+        case 'attrAll': {
+          const name = text(args['name'], 'attribut', 100);
+          if (!/^[a-zA-Z_:][a-zA-Z0-9_.:-]*$/.test(name)) bad('page : attribut');
+          const selector = text(args['selector'], 'sélecteur', MAX_SELECTOR);
+          const values = await page
+            .locator(selector)
+            .evaluateAll((nodes, n) => nodes.map((node) => node.getAttribute(n)), name);
+          return check(before, { values: JSON.parse(capped(JSON.stringify(values.slice(0, options.maxItems)), options.maxResponseBytes)) as (string | null)[] });
+        }
+        case 'click': {
+          const selector = text(args['selector'], 'sélecteur', MAX_SELECTOR);
+          const timeout = waitMs(args['timeoutMs']);
+          await page.click(selector, { timeout });
+          return check(before, { url: page.url() });
+        }
+        case 'evaluate': {
+          const source = text(args['source'], 'source', MAX_SOURCE_BYTES);
+          const argJson = JSON.stringify(args['arg'] ?? null);
+          if (Buffer.byteLength(argJson) > MAX_ARG_BYTES) bad('page : argument');
+          // Une fonction est appelée avec son argument (JSON) ; sinon le texte est une expression évaluée dans la page.
+          const expression = args['isFunction'] === true ? `(${source})(${argJson})` : source;
+          const value: unknown = await within(page.evaluate(expression), options.timeoutMs);
+          const json = JSON.stringify(value === undefined ? null : value) ?? 'null';
+          return check(before, { value: JSON.parse(capped(json, options.maxResponseBytes)) as unknown });
+        }
+      }
+    } catch (error) {
+      if (error instanceof SandboxBridgeError) throw error;
+      // Un `evaluate` qui échoue parce que la page a été coupée par la politique de domaines reste une violation.
+      check(before, undefined);
+      throw new SandboxBridgeError('page_failed', false, op);
+    }
+  };
+}
+
+/**
+ * Puits de violations de l'hôte branché sur le moteur (`SandboxRunOptions.watch`) : tue l'enfant à la première requête
+ * coupée APRÈS `arm()` (premier `ctx.page.evaluate`). Avant, les requêtes coupées viennent du site et sont ignorées ici.
+ */
+export type HostViolationWatch = {
+  readonly watch: (violate: (violation: SandboxViolation) => void) => void;
+  arm(): void;
+  report(host: string): void;
+};
+
+export function hostViolationWatch(): HostViolationWatch {
+  let sink: ((violation: SandboxViolation) => void) | undefined;
+  let armed = false;
+  return {
+    watch: (violate) => {
+      sink = violate;
     },
-    'page.goto': async (raw) => {
-      const url = str(parseArgs(raw)['url'], 'url');
-      checkHost(url);
-      const response = await guardedGoto(options.page, url, options.guard, { waitUntil: 'load' as const });
-      return JSON.stringify({ status: response?.status() ?? 0 });
+    arm: () => {
+      armed = true;
     },
-    'page.waitForSelector': async (raw) => {
-      const a = parseArgs(raw);
-      const timeout = typeof a['timeoutMs'] === 'number' ? Math.min(Math.max(a['timeoutMs'], 0), 30_000) : 10_000;
-      await options.page.waitForSelector(str(a['selector'], 'selector', 300), { state: 'attached', timeout });
-      return '{}';
-    },
-    'page.content': async () => {
-      const html = await options.page.content();
-      if (Buffer.byteLength(html) > options.maxResponseBytes) throw new BridgeError('page trop grande');
-      return JSON.stringify({ html });
-    },
-    'page.textAll': async (raw) => {
-      const selector = str(parseArgs(raw)['selector'], 'selector', 300);
-      const texts = await options.page.locator(selector).allTextContents();
-      return JSON.stringify({ texts: texts.slice(0, options.maxItems) });
-    },
-    emit: async (raw) => {
-      if (items.length >= options.maxItems) throw new BridgeError('trop d’éléments émis');
-      items.push(parseArgs(raw)['item']);
-      return '{}';
-    },
-    log: async (raw) => {
-      if (logs.length < MAX_LOGS) logs.push(str(parseArgs(raw)['message'], 'message', 1_000));
-      return '{}';
+    report: (host) => {
+      if (armed) sink?.({ reason: 'domain_not_allowed', detail: host.slice(0, 253) });
     },
   };
-  return { bridges: Object.freeze(bridges), items, logs };
 }

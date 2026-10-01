@@ -11,6 +11,10 @@ import {
   CGROUP_V2_MEMORY_MAX,
   cgroupMemoryCurrentBytes,
   cgroupMemoryLimitBytes,
+  cgroupMemoryWorkingSetBytes,
+  CGROUP_V1_MEMORY_STAT,
+  CGROUP_V1_MEMORY_USAGE,
+  CGROUP_V2_MEMORY_STAT,
   resolveBrowserConcurrency,
 } from './cgroup.js';
 import { assertNotRoot, ChromiumAsRootError, chromiumEnv, chromiumLaunchOptions, CHROMIUM_SILENT_ARGS } from './launch.js';
@@ -36,6 +40,18 @@ describe('BROWSER_CONCURRENCY déduit du cgroup', () => {
     expect(cgroupMemoryCurrentBytes(files({ [CGROUP_V2_MEMORY_CURRENT]: '123456' }))).toBe(123456);
   });
 
+  test('seuil de recyclage sur la mémoire de travail : page cache inactif (inactive_file) retiré, v2 puis v1', () => {
+    const stat2 = 'anon 1000\nfile 9000\ninactive_file 7000\nactive_file 2000\n';
+    expect(cgroupMemoryWorkingSetBytes(files({ [CGROUP_V2_MEMORY_CURRENT]: '10000', [CGROUP_V2_MEMORY_STAT]: stat2 }))).toBe(3000);
+    // Sans memory.stat lisible : memory.current brut (prudent : recycle plus tôt, jamais plus tard).
+    expect(cgroupMemoryWorkingSetBytes(files({ [CGROUP_V2_MEMORY_CURRENT]: '10000' }))).toBe(10000);
+    // inactive_file plus grand que current (lectures non atomiques) : jamais négatif.
+    expect(cgroupMemoryWorkingSetBytes(files({ [CGROUP_V2_MEMORY_CURRENT]: '100', [CGROUP_V2_MEMORY_STAT]: 'inactive_file 500\n' }))).toBe(0);
+    const stat1 = 'cache 9000\ninactive_file 1\ntotal_inactive_file 6000\n';
+    expect(cgroupMemoryWorkingSetBytes(files({ [CGROUP_V1_MEMORY_USAGE]: '10000', [CGROUP_V1_MEMORY_STAT]: stat1 }))).toBe(4000);
+    expect(cgroupMemoryWorkingSetBytes(files({}))).toBeUndefined();
+  });
+
   test('ordre : variable, puis cgroup, puis mémoire de la machine ; valeur invalide refusée', () => {
     const read = files({ [CGROUP_V2_MEMORY_MAX]: `${4 * GIB}` });
     expect(resolveBrowserConcurrency({ BROWSER_CONCURRENCY: '3' }, { read })).toEqual({ value: 3, source: 'env' });
@@ -59,6 +75,9 @@ describe('lancement de Chromium (options figées)', () => {
     // Un second --disable-features écraserait celui de Playwright (dernier gagnant côté Chromium).
     expect(o.args.some((a) => a.startsWith('--disable-features'))).toBe(false);
     expect(o.args.some((a) => a === '--no-sandbox' || a.startsWith('--proxy-bypass-list'))).toBe(false);
+    // Playwright ajoute --no-sandbox dès que chromiumSandbox n’est pas true : le bac à sable doit être demandé
+    // explicitement (ligne de commande effective vérifiée sur un vrai Chromium : assert_chromium_sandboxed).
+    expect(o.chromiumSandbox).toBe(true);
     expect(Object.isFrozen(CHROMIUM_SILENT_ARGS)).toBe(true);
     expect(() => chromiumLaunchOptions('http://10.0.0.1:3128', {})).toThrow();
     expect(() => chromiumLaunchOptions('http://127.0.0.1:1', { PLAYWRIGHT_DISABLE_FORCED_CHROMIUM_PROXIED_LOOPBACK: '1' })).toThrow();
@@ -188,5 +207,31 @@ describe('BrowserPool', () => {
     expect(peak).toBe(2);
     await pool.close();
     await expect(pool.run(signal, async () => undefined)).rejects.toBeInstanceOf(BrowserPoolClosedError);
+  });
+
+  test('attente interrompue retirée de la file : X tient le slot, A (annulé) et B attendent, X rend → B passe', async () => {
+    const { launch } = fakeLauncher();
+    const pool = new BrowserPool({ size: 1, launch });
+    let releaseX!: () => void;
+    const x = pool.run(signal, () => new Promise<void>((r) => (releaseX = r)));
+    await new Promise((r) => setTimeout(r, 5));
+    const ca = new AbortController();
+    const a = pool.run(ca.signal, async () => 'a');
+    let bRan = false;
+    const b = pool.run(AbortSignal.timeout(2_000), async () => {
+      bRan = true;
+      return 'b';
+    });
+    await new Promise((r) => setTimeout(r, 5));
+    ca.abort(new Error('cancelled'));
+    await expect(a).rejects.toThrow('cancelled');
+    releaseX();
+    await x;
+    // B doit obtenir le slot libéré tout de suite, pas à l'expiration de son propre signal.
+    await new Promise((r) => setTimeout(r, 50));
+    expect(bRan).toBe(true);
+    await expect(b).resolves.toBe('b');
+    expect(pool.active()).toBe(0);
+    await pool.close();
   });
 });

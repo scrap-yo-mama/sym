@@ -8,8 +8,11 @@ import { startClient, type Client } from '../../fixtures/src/test-helpers.ts';
 import { Secret } from '../../packages/core/src/crypto/index.ts';
 import {
   createUpstreamDialer,
+  DomainNotAllowedError,
   openBrowserEgress,
+  openNetworkSession,
   parseProxyDefinition,
+  ProxyBudgetExceededError,
   SsrfBlockedError,
   startEgressProxy,
   UpstreamProxyError,
@@ -173,4 +176,118 @@ test('proxy de lancement fermé : toute demande refusée (403 egress_closed) et 
   } finally {
     await closed.close();
   }
+});
+
+/** CONNECT brut vers un proxy d'egress (comme Chromium pour https et ws) : ligne de statut et corps de la réponse. */
+function connectVia(egressPort: number, authority: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const req = request({ host: '127.0.0.1', port: egressPort, method: 'CONNECT', path: authority, agent: false });
+    req.on('connect', (res, socket, head) => {
+      if (res.statusCode === 200) {
+        socket.destroy();
+        resolve('200');
+        return;
+      }
+      // Refus : Node remet aussi la réponse non 200 d'un CONNECT par « connect » ; le corps suit sur le socket.
+      const chunks: Buffer[] = [head];
+      socket.on('data', (c: Buffer) => chunks.push(c));
+      socket.on('close', () => resolve(`${res.statusCode} ${Buffer.concat(chunks).toString('utf8')}`));
+    });
+    req.on('response', (res) => {
+      const chunks: Buffer[] = [];
+      res.on('data', (c: Buffer) => chunks.push(c));
+      res.on('end', () => resolve(`${res.statusCode} ${Buffer.concat(chunks).toString('utf8')}`));
+    });
+    req.on('error', reject);
+    req.end();
+  });
+}
+
+describe('assert_domain_lock_redirects : politique de domaines de l’API dans le proxy d’egress et la session réseau', () => {
+  const SSRF = 'zz_test_ssrf.localhost';
+  const INTERNAL = 'zz_test_internal.localhost';
+
+  test('proxy d’egress : http et CONNECT vers un hôte hors API → 403 domain_not_allowed, journalisé, 0 requête reçue', async () => {
+    await client.reset();
+    const egress = await openBrowserEgress({ rung: { mode: 'direct' }, guard: fixtureGuard(client.server.port, [SSRF, INTERNAL]), allowedHosts: [SSRF] });
+    try {
+      const port = Number(new URL(egress.server).port);
+      // Le saut de redirection que Chromium suivrait : la première réponse (302) passe, la suivante est refusée.
+      const hop1 = await viaEgress(port, `http://${SSRF}:${client.server.port}/to-internal`);
+      expect(hop1.status).toBe(302);
+      expect(await viaEgress(port, `http://${INTERNAL}:${client.server.port}/secret`)).toEqual({ status: 403, body: 'domain_not_allowed' });
+      expect(await connectVia(port, `${INTERNAL}:${client.server.port}`)).toBe('403 domain_not_allowed');
+      expect(await connectVia(port, `${INTERNAL.toUpperCase()}.:${client.server.port}`)).toBe('403 domain_not_allowed');
+      expect(egress.domainBlocked.map((d) => d.host)).toEqual([INTERNAL, INTERNAL, INTERNAL]);
+      expect((await client.stats()).hosts[INTERNAL]?.total ?? 0).toBe(0);
+    } finally {
+      await egress.close();
+    }
+  });
+
+  test.each([[302], [307]] as const)('session réseau (E1, ctx.fetch) : redirection %i vers un hôte hors API refusée avant toute requête', async (status) => {
+    await client.reset();
+    const session = openNetworkSession({ rung: { mode: 'direct' }, guard: fixtureGuard(client.server.port, [SSRF, INTERNAL]), allowedHosts: [SSRF] });
+    try {
+      const init = status === 307 ? { method: 'POST', body: 'zz_test_exfil' } : {};
+      const error = await session.fetch(`http://${SSRF}:${client.server.port}/to-internal?status=${status}`, init).catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(DomainNotAllowedError);
+      expect((error as DomainNotAllowedError).host).toBe(INTERNAL);
+      await expect(session.fetch(`http://${INTERNAL}:${client.server.port}/secret`)).rejects.toBeInstanceOf(DomainNotAllowedError);
+      expect((await client.stats()).hosts[INTERNAL]?.total ?? 0).toBe(0);
+      expect((await client.stats()).hosts[SSRF]?.total ?? 0).toBe(1);
+    } finally {
+      await session.close();
+    }
+  });
+});
+
+describe('assert_run_cost_capped : max_cost_usd tenu pendant le run (proxy d’egress et session réseau)', () => {
+  // 0,004 $ par requête, rien au Go : plafond 0,01 $ → deux requêtes, la troisième est refusée (0,012 > 0,01).
+  const priced = (url: string) =>
+    parseProxyDefinition({ id: 'zz_test_dc', type: 'dc', url, credentials_secret_id: 'zz_test_secret', allow_private_address: true, price: { per_gb_usd: 0, per_request_usd: 0.004 } });
+
+  test('proxy d’egress : nouveau tunnel refusé (403 run_budget_exceeded) dès que le plafond serait dépassé', async () => {
+    await client.reset();
+    const egress = await openBrowserEgress({
+      rung: { mode: 'dc_proxy', proxy: priced(connectProxy.url), params: {} },
+      guard: fixtureGuard(client.server.port, [SPA]),
+      credentials: creds,
+      costCeiling: { maxUsd: 0.01 },
+    });
+    try {
+      const port = Number(new URL(egress.server).port);
+      const url = `http://${SPA}:${client.server.port}/api/items.json`;
+      expect((await viaEgress(port, url)).status).toBe(200);
+      expect((await viaEgress(port, url)).status).toBe(200);
+      expect(egress.budgetExceeded()).toBe(false);
+      expect(await viaEgress(port, url)).toEqual({ status: 403, body: 'run_budget_exceeded' });
+      expect(await connectVia(port, `${SPA}:${client.server.port}`)).toBe('403 run_budget_exceeded');
+      expect(egress.budgetExceeded()).toBe(true);
+      expect(egress.usage().costUsd).toBeLessThanOrEqual(0.01);
+      expect(connectProxy.log).toHaveLength(2);
+    } finally {
+      await egress.close();
+    }
+  });
+
+  test('session réseau : requête refusée avant envoi (ProxyBudgetExceededError), coût imputé ≤ plafond', async () => {
+    await client.reset();
+    const session = openNetworkSession({
+      rung: { mode: 'dc_proxy', proxy: priced(connectProxy.url), params: {} },
+      guard: fixtureGuard(client.server.port, [SPA]),
+      credentials: creds,
+      costCeiling: { maxUsd: 0.01 },
+    });
+    try {
+      const url = `http://${SPA}:${client.server.port}/api/items.json`;
+      expect((await session.fetch(url)).status).toBe(200);
+      expect((await session.fetch(url)).status).toBe(200);
+      await expect(session.fetch(url)).rejects.toBeInstanceOf(ProxyBudgetExceededError);
+      expect(session.usage().costUsd).toBeLessThanOrEqual(0.01);
+      expect((await client.stats()).hosts[SPA]?.total ?? 0).toBe(2);
+    } finally {
+      await session.close();
+    }
+  });
 });

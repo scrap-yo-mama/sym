@@ -3,6 +3,7 @@
 // I/O (DNS, sockets) et dépend d'undici, contrairement à la racine de `@runtime/core`.
 export * from './ip.js';
 export * from './guard.js';
+export * from './domain-lock.js';
 export * from './fetch.js';
 export * from './egress-proxy.js';
 export * from './chromium.js';

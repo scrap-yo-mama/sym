@@ -4,8 +4,10 @@
 // signatures de protection) sont la tâche 1.7, qui se branche par l'option `classify` de `runDeclarative`.
 // Règles tenues dès ici : un 401, un 403 ou un 429 n'est jamais `network` (aucune escalade réseau, X4, INV6).
 import { DslError } from '../dsl/errors.js';
+import { findDomainNotAllowed } from '../net/domain-lock.js';
 import { findSsrfBlocked } from '../net/guard.js';
 import { NetworkConfigError } from '../net/modes/definitions.js';
+import { ProxyBudgetExceededError } from '../net/modes/session.js';
 import { UpstreamProxyError } from '../net/modes/upstream.js';
 import type { ExecFailure, HttpExchange } from './types.js';
 
@@ -57,6 +59,11 @@ function errorCodes(error: unknown): { codes: string[]; names: string[]; message
 export function classifyTransportError(error: unknown): ExecFailure {
   const ssrf = findSsrfBlocked(error);
   if (ssrf !== undefined) return fail('forbidden', false, 'ssrf_blocked');
+  // Verrou de domaines (tâche 1.6) : une redirection ou une requête hors des domaines de l'API est une faute de stratégie.
+  if (findDomainNotAllowed(error) !== undefined) return fail('code_error', false, 'domain_not_allowed');
+  if (error instanceof ProxyBudgetExceededError || (error instanceof Error && error.cause instanceof ProxyBudgetExceededError)) {
+    return fail('run_budget_exceeded', false, 'max_cost_usd');
+  }
   if (error instanceof DslError) {
     if (error.code === 'host_not_allowed' || error.code === 'invalid_template' || error.code === 'unsupported') return fail('code_error', false, error.code);
     return fail('extraction', false, error.code);

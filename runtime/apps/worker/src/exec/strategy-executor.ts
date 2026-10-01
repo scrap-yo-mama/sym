@@ -5,21 +5,24 @@
 //    depuis la stratégie elle-même ; aucune escalade ici (l'échelle est l'affaire de l'enquête et de la réparation) ;
 // 3. exécution : E1 par la session réseau, E2 / E3 par un Chromium du pool et un proxy d'egress propre à l'essai ;
 // 4. un essai journalisé (exécution, réseau, classe, durée, coût proxy) ; sortie conforme à `output_schema` (INV1)
-//    écrite en dataset comme le propriétaire ; `max_cost_usd` dépassé → `run_budget_exceeded`.
+//    écrite en dataset comme le propriétaire ; `max_cost_usd` tenu PENDANT l'essai (requête ou tunnel refusé au-delà)
+//    → `run_budget_exceeded` ; verrou de domaines de l'API (`allowed_hosts`) à chaque saut, au niveau réseau ;
+// 5. RGPD (D-28) : chaque item extrait inscrit au registre de masquage du run (`ctx.personal`), sujets effacés retirés
+//    (`ctx.excludeSubjects`) avant collecte et avant toute écriture du dataset ; journaux du run par `ctx.log`.
 import {
   validateDeclarativeSpec,
   validateOutput,
+  type SandboxViolation,
   type DeclarativeSpec,
   type FailureClass,
   type RunContext as RunCtx,
   type RunExecutor,
   type RunResult,
 } from '@runtime/core';
-import { classifyExchange, domainRequestPacer, runFetchExecutor, type DeclarativeRunResult, type ExecFailure, type HttpExchange, type RequestPacer } from '@runtime/core/exec';
+import { domainRequestPacer, runFetchExecutor, type DeclarativeRunResult, type ExecFailure, type HttpExchange, type RequestPacer } from '@runtime/core/exec';
 import type { DomainPacer } from '@runtime/core';
 import {
   buildNetworkRungs,
-  guardedGoto,
   loadProxyCredentials,
   openBrowserEgress,
   openNetworkSession,
@@ -27,6 +30,7 @@ import {
   parseProxyDefinitions,
   type BrowserEgress,
   type NetworkRung,
+  type NetworkSession,
   type NetworkSessionOptions,
   type NetworkUsage,
   type ProxyCredentials,
@@ -36,10 +40,10 @@ import {
 } from '@runtime/core/net';
 import { loadRunTarget, readProxySettings, saveRunDataset, type RunTarget } from '@runtime/db';
 import type pg from 'pg';
+import { pino, type Logger } from 'pino';
 import type { BrowserPool } from '../browser/pool.js';
-import { openRunContext } from '../browser/run-context.js';
 import { runFetchInPageExecutor, runPlaywrightExecutor } from './browser-executors.js';
-import { createScriptBridges, SCRIPT_DEFAULT_LIMITS, type ScriptPort } from './script.js';
+import { runScriptExecutor, type ScriptPort } from './script-executor.js';
 
 export type StrategyExecutorDeps = {
   readonly pool: pg.Pool;
@@ -57,10 +61,29 @@ export type StrategyExecutorDeps = {
   readonly script?: ScriptPort;
   /** Garde de classification avant extraction (1.7). */
   readonly classify?: (exchange: HttpExchange) => ExecFailure | null;
+  /** Journal du worker (violations du bac à sable, détail admin). */
+  readonly logger?: Logger;
   readonly now?: () => number;
 };
 
-type Outcome = { result: DeclarativeRunResult; usage: NetworkUsage | null };
+type Outcome = { result: DeclarativeRunResult; usage: NetworkUsage | null; violations?: readonly SandboxViolation[] };
+
+/** Somme des usages réseau d'un essai (egress Chromium + session `ctx.fetch` du script). */
+function addUsage(a: NetworkUsage, b: NetworkUsage): NetworkUsage {
+  return { ...a, bytes: a.bytes + b.bytes, requests: a.requests + b.requests, costUsd: Math.round((a.costUsd + b.costUsd) * 1e6) / 1e6 };
+}
+
+/** Script E3 en échec après un refus de la garde SSRF au proxy d'egress : la cause journalisée est la garde. */
+function refineEgress(result: DeclarativeRunResult, egress: BrowserEgress): DeclarativeRunResult {
+  if (result.ok || egress.blocked.length === 0 || result.failure.detail === 'sandbox_violation') return result;
+  return { ...result, failure: { failure_class: 'forbidden', retryable: false, detail: 'ssrf_blocked' } };
+}
+
+const BUDGET: ExecFailure = { failure_class: 'run_budget_exceeded', retryable: false, detail: 'max_cost_usd' };
+/** Plafond atteint pendant l'essai : la classe est `run_budget_exceeded`, quel que soit l'effet vu par l'exécuteur. */
+function budgetChecked(result: DeclarativeRunResult, exceeded: boolean): DeclarativeRunResult {
+  return exceeded && !result.ok ? { ...result, failure: BUDGET } : result;
+}
 
 class TargetError extends Error {
   readonly failure: ExecFailure;
@@ -122,50 +145,60 @@ export function createStrategyExecutor(deps: StrategyExecutorDeps): RunExecutor 
           ...(target.api.domainPacing.max_wait_ms === undefined ? {} : { maxWaitMs: target.api.domainPacing.max_wait_ms }),
         });
 
+  const logger = deps.logger ?? pino({ enabled: false });
+
+  /** E3 en script : bac à sable de 1.5, ponts `ctx.fetch` (session de l'essai) et `ctx.page.*` (Chromium de l'essai). */
   const runScript = async (
     ctx: RunCtx,
     target: RunTarget,
     scriptRef: string,
-    base: { pool: BrowserPool; egress: BrowserEgress; pacer?: RequestPacer; sessionOptions: NetworkSessionOptions },
-  ): Promise<DeclarativeRunResult> => {
+    base: { pool: BrowserPool; egress: BrowserEgress; session: NetworkSession; pacer?: RequestPacer; allowedHosts: readonly string[]; startUrl: string },
+  ): Promise<Outcome> => {
     const port = deps.script;
-    if (port === undefined) return { ok: false, failure: { failure_class: 'code_error', retryable: false, detail: 'sandbox_unavailable' }, pages: 0, requests: 0 };
-    const { allowedHosts, startUrl } = scriptSpecOf(target.strategy?.spec);
-    const code = await port.loadScript(scriptRef);
-    return base.pool.run(ctx.signal, async (browser) => {
-      const rc = await openRunContext(browser, { egressServer: base.egress.server, allowedHosts });
-      // `ctx.fetch` du script : même barreau réseau que l'essai (garde SSRF, proxy BYO éventuel).
-      const session = openNetworkSession(base.sessionOptions);
-      try {
-        const slot = await base.pacer?.acquire(startUrl);
-        if (slot !== undefined && !slot.granted) return { ok: false, failure: { failure_class: 'rate_limited', retryable: true, detail: `pacing_${slot.reason}` }, pages: 0, requests: 0 };
-        const landing = await guardedGoto(rc.page, startUrl, deps.guard, { waitUntil: 'load' as const });
-        const status = landing?.status() ?? 0;
-        const refused = (deps.classify ?? classifyExchange)({
-          status,
-          headers: landing?.headers() ?? {},
-          body: await rc.page.content(),
-          url: rc.page.url(),
-        });
-        if (refused !== null) return { ok: false, failure: refused, pages: 0, requests: 1 };
-        const set = createScriptBridges({ page: rc.page, guard: deps.guard, allowedHosts, session, maxItems: 10_000, maxResponseBytes: 5_000_000 });
-        const outcome = await port.engine.run(code, set.bridges, SCRIPT_DEFAULT_LIMITS);
-        if (!outcome.ok) return { ok: false, failure: { failure_class: 'code_error', retryable: false, detail: `sandbox_${outcome.error}` }, pages: 1, requests: 1 };
-        const records = set.items.filter((i): i is Record<string, unknown> => typeof i === 'object' && i !== null && !Array.isArray(i));
-        if (records.length !== set.items.length || records.length === 0 || records.some((r) => !validateOutput(target.api.outputSchema, r).ok)) {
-          return { ok: false, failure: { failure_class: 'extraction', retryable: false, detail: records.length === 0 ? 'no_records' : 'schema_mismatch' }, pages: 1, requests: 1 };
-        }
-        return { ok: true, records, pages: 1, requests: 1, escalated: false, stop: 'no_pagination', truncated: false };
-      } finally {
-        await session.close().catch(() => undefined);
-        await rc.close();
-      }
+    if (port === undefined) return { result: { ok: false, failure: { failure_class: 'code_error', retryable: false, detail: 'sandbox_unavailable' }, pages: 0, requests: 0 }, usage: null };
+    let code: string;
+    try {
+      code = await port.loadScript(scriptRef, target.strategy?.spec);
+    } catch {
+      return refuse('code_error', 'script_not_found');
+    }
+    const run = await runScriptExecutor({
+      pool: base.pool,
+      egress: base.egress,
+      guard: deps.guard,
+      session: base.session,
+      engine: port.engine,
+      code,
+      allowedHosts: base.allowedHosts,
+      startUrl: base.startUrl,
+      input: ctx.input,
+      signal: ctx.signal,
+      logger: logger.child({ runId: ctx.runId }),
+      ...(port.limits === undefined ? {} : { limits: port.limits }),
+      ...(base.pacer === undefined ? {} : { pacer: base.pacer }),
+      ...(deps.classify === undefined ? {} : { classify: deps.classify }),
     });
+    let result = run.result;
+    if (result.ok && result.records.some((r) => !validateOutput(target.api.outputSchema, r).ok)) {
+      result = { ok: false, failure: { failure_class: 'extraction', retryable: false, detail: 'schema_mismatch' }, pages: result.pages, requests: result.requests };
+    }
+    return { result, usage: null, violations: run.violations };
   };
 
   const execute = async (ctx: RunCtx, target: RunTarget, strategy: NonNullable<RunTarget['strategy']>): Promise<Outcome> => {
     const { rung, credentials } = await rungFor(target, strategy.network);
-    const sessionOptions = { rung, guard: deps.guard, ...(credentials === undefined ? {} : { credentials }), ...(deps.proxyResolver === undefined ? {} : { proxyResolver: deps.proxyResolver }) };
+    const script = strategy.execution === 'playwright' && strategy.scriptRef !== null ? scriptSpecOf(strategy.spec) : undefined;
+    const spec = script === undefined && ['fetch', 'fetch_in_page', 'playwright'].includes(strategy.execution) ? specOf(target, strategy) : undefined;
+    // Plafond de coût de l'essai, partagé entre l'egress Chromium et la session `ctx.fetch` d'un script.
+    let otherUsd: { egress: () => number; session: () => number } = { egress: () => 0, session: () => 0 };
+    const sessionOptions = (side: 'egress' | 'session'): NetworkSessionOptions => ({
+      rung,
+      guard: deps.guard,
+      ...(credentials === undefined ? {} : { credentials }),
+      ...(deps.proxyResolver === undefined ? {} : { proxyResolver: deps.proxyResolver }),
+      allowedHosts: script?.allowedHosts ?? spec?.request.allowed_hosts ?? [],
+      costCeiling: { maxUsd: target.api.maxCostUsd, otherUsd: () => (side === 'egress' ? otherUsd.session() : otherUsd.egress()) },
+    });
     const pacer = pacerFor(target);
     const common = {
       input: ctx.input,
@@ -177,11 +210,10 @@ export function createStrategyExecutor(deps: StrategyExecutorDeps): RunExecutor 
     };
     switch (strategy.execution) {
       case 'fetch': {
-        const spec = specOf(target, strategy);
-        const session = openNetworkSession(sessionOptions);
+        const session = openNetworkSession(sessionOptions('session'));
         try {
-          const result = await runFetchExecutor(session, { ...common, spec });
-          return { result, usage: session.usage() };
+          const result = await runFetchExecutor(session, { ...common, spec: spec! });
+          return { result: budgetChecked(result, session.budgetExceeded()), usage: session.usage() };
         } finally {
           await session.close().catch(() => undefined);
         }
@@ -189,18 +221,23 @@ export function createStrategyExecutor(deps: StrategyExecutorDeps): RunExecutor 
       case 'fetch_in_page':
       case 'playwright': {
         if (deps.browsers === null) return refuse('code_error', 'browser_disabled');
-        const egress = await openBrowserEgress(sessionOptions);
+        const egress = await openBrowserEgress(sessionOptions('egress'));
+        otherUsd = { ...otherUsd, egress: () => egress.usage().costUsd };
         try {
-          const base = { ...common, pool: deps.browsers, egress, guard: deps.guard };
-          let result: DeclarativeRunResult;
-          if (strategy.execution === 'playwright' && strategy.scriptRef !== null) {
-            result = await runScript(ctx, target, strategy.scriptRef, { pool: deps.browsers, egress, ...(pacer === undefined ? {} : { pacer }), sessionOptions });
+          if (script !== undefined) {
+            const session = openNetworkSession(sessionOptions('session'));
+            otherUsd = { ...otherUsd, session: () => session.usage().costUsd };
+            try {
+              const out = await runScript(ctx, target, strategy.scriptRef!, { pool: deps.browsers, egress, session, ...(pacer === undefined ? {} : { pacer }), ...script });
+              const exceeded = egress.budgetExceeded() || session.budgetExceeded();
+              return { ...out, result: budgetChecked(refineEgress(out.result, egress), exceeded), usage: addUsage(egress.usage(), session.usage()) };
+            } finally {
+              await session.close().catch(() => undefined);
+            }
           }
-          else {
-            const spec = specOf(target, strategy);
-            result = strategy.execution === 'fetch_in_page' ? await runFetchInPageExecutor({ ...base, spec }) : await runPlaywrightExecutor({ ...base, spec });
-          }
-          return { result, usage: egress.usage() };
+          const base = { ...common, pool: deps.browsers, egress, guard: deps.guard, spec: spec! };
+          const result = strategy.execution === 'fetch_in_page' ? await runFetchInPageExecutor(base) : await runPlaywrightExecutor(base);
+          return { result: budgetChecked(result, egress.budgetExceeded()), usage: egress.usage() };
         } finally {
           await egress.close().catch(() => undefined);
         }
@@ -225,7 +262,21 @@ export function createStrategyExecutor(deps: StrategyExecutorDeps): RunExecutor 
       if (!(error instanceof TargetError)) throw error;
       outcome = { result: { ok: false, failure: error.failure, pages: 0, requests: 0 }, usage: null };
     }
-    const { result, usage } = outcome;
+    const { usage } = outcome;
+    let result = outcome.result;
+    if (outcome.violations !== undefined && outcome.violations.length > 0) {
+      await ctx.log('warn', 'sandbox_violation', { reasons: outcome.violations.map((v) => v.reason) });
+    }
+    if (result.ok) {
+      // RGPD (D-28) : registre de masquage alimenté par TOUS les items extraits, puis sujets effacés retirés avant
+      // collecte et avant toute écriture.
+      for (const item of result.records) ctx.personal.addFromItem(target.api.outputSchema, item);
+      const { kept, dropped } = ctx.excludeSubjects(target.api.outputSchema, result.records);
+      if (dropped > 0) {
+        await ctx.log('info', 'subjects_excluded', { dropped });
+        result = { ...result, records: kept };
+      }
+    }
     const proxyUsd = usage?.costUsd ?? 0;
     await ctx.recordAttempt({
       execution: strategy.execution,

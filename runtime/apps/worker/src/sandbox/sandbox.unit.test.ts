@@ -194,6 +194,9 @@ describe('protocole IPC et environnement', () => {
     expect(parseChildMessage({ t: 'ready', envKeys: [], node: '24.21.0' })).toBeDefined();
     expect(parseChildMessage({ t: 'call', id: 1, bridge: 'fetch', payload: '{}' })).toBeDefined();
     expect(parseChildMessage({ t: 'call', id: 1, bridge: 'exec', payload: '{}' })).toBeUndefined();
+    // ctx.page.* (tâche 1.6) : un second pont relayé, et lui seul.
+    expect(parseChildMessage({ t: 'call', id: 2, bridge: 'page', payload: '{"op":"url","args":{}}' })).toEqual({ t: 'call', id: 2, bridge: 'page', payload: '{"op":"url","args":{}}' });
+    expect(parseChildMessage({ t: 'call', id: 2, bridge: 'route', payload: '{}' })).toBeUndefined();
     expect(parseChildMessage({ t: 'call', id: -1, bridge: 'fetch', payload: '{}' })).toBeUndefined();
     expect(parseChildMessage({ t: 'done', outcome: 'pwned' })).toBeUndefined();
     expect(parseChildMessage({ t: 'violation', reason: 'time_limit', detail: '' })).toBeUndefined();

@@ -11,6 +11,8 @@ export type RunContextOptions = {
   readonly egressServer: string;
   /** Domaines de l'API (`allowed_hosts`) : toute autre requête du navigateur est coupée. */
   readonly allowedHosts: readonly string[];
+  /** Requête coupée par la politique de domaines (hôte seulement) : E3 en script tue alors l'enfant du bac à sable. */
+  readonly onViolation?: (host: string) => void;
 };
 
 export type RunContext = {
@@ -44,6 +46,7 @@ export async function openRunContext(browser: Browser, options: RunContextOption
       // URL illisible : seul « ? » est noté.
     }
     if (violations.length < 100) violations.push(host);
+    options.onViolation?.(host);
   };
   const context = await browser.newContext({
     proxy: { server: options.egressServer },

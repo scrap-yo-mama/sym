@@ -52,6 +52,7 @@ export class BrowserPool {
   readonly size: number;
   readonly #options: BrowserPoolOptions;
   readonly #slots: Slot[];
+  /** Runs en attente d’un slot (FIFO). Un waiter interrompu par son signal se retire lui-même de la file. */
   readonly #waiters: (() => void)[] = [];
   readonly #now: () => number;
   #closed = false;
@@ -115,12 +116,19 @@ export class BrowserPool {
         return free;
       }
       await new Promise<void>((resolve) => {
-        const onAbort = () => resolve();
-        signal.addEventListener('abort', onAbort, { once: true });
-        this.#waiters.push(() => {
+        const wake = () => {
           signal.removeEventListener('abort', onAbort);
           resolve();
-        });
+        };
+        // Interrompu (annulation, bail perdu) : retiré de la file, sinon le prochain #release le consommerait sans
+        // réveiller personne et un autre run resterait bloqué malgré un slot libre.
+        const onAbort = () => {
+          const index = this.#waiters.indexOf(wake);
+          if (index !== -1) this.#waiters.splice(index, 1);
+          resolve();
+        };
+        signal.addEventListener('abort', onAbort, { once: true });
+        this.#waiters.push(wake);
       });
     }
   }

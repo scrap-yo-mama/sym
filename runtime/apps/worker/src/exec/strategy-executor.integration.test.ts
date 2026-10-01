@@ -2,10 +2,23 @@
 // Tâche 1.6 de bout en bout sur base réelle : run mis en file côté web → worker (1.3) → exécuteur de stratégie E1 avec
 // cadence par domaine en base (1.9) → dataset écrit comme le propriétaire, essai tracé (INV4), sortie conforme (INV1).
 // Refus : 401 → auth_required sans dataset ; E2 sans navigateur (DISABLE_BROWSER) ; proxy absent → proxy_not_configured.
+// RGPD (D-28) : items extraits inscrits au registre du run, sujet effacé retiré avant écriture du dataset.
 import { randomUUID } from 'node:crypto';
-import { DomainPacer, generateMasterKey, MasterKey, validateOutput } from '@runtime/core';
+import { DomainPacer, generateMasterKey, MasterKey, validateOutput, type RunExecutor } from '@runtime/core';
 import * as net from '@runtime/core/net';
-import { createRun, keyCheck, migrateUp, PgBossJobQueue, PgPacingStore, readRun, runQueueDefinition, withActor } from '@runtime/db';
+import {
+  createRun,
+  eraseSubject,
+  keyCheck,
+  loadSubjectKey,
+  migrateUp,
+  PgBossJobQueue,
+  PgPacingStore,
+  readRun,
+  resolveSubjectValues,
+  runQueueDefinition,
+  withActor,
+} from '@runtime/db';
 import pg from 'pg';
 import { pino } from 'pino';
 import { afterAll, beforeAll, describe, expect, test, vi } from 'vitest';
@@ -26,6 +39,9 @@ let pool: pg.Pool;
 let queue: PgBossJobQueue;
 let client: Client;
 let worker: Worker;
+let masterKeyText: string;
+/** Taille du registre de masquage du dernier run, lue à la sortie de l'exécuteur (le worker le vide ensuite). */
+let lastPersonalSize = -1;
 
 async function insertApi(slug: string, strategy: { execution: string; network: string; spec: unknown }, extra: { outputSchema?: unknown } = {}): Promise<string> {
   const id = (
@@ -59,14 +75,20 @@ beforeAll(async () => {
   tdb = await createTestDatabase('exec');
   await migrateUp({ connectionString: tdb.url });
   const masterKey = generateMasterKey();
+  masterKeyText = masterKey;
   pool = new pg.Pool({ connectionString: tdb.url, max: 6 });
   await keyCheck(pool, { current: MasterKey.parse(masterKey) });
   await pool.query("INSERT INTO users (id, email, status) VALUES ($1, 'zz_test_exec@example.test', 'active')", [A]);
   queue = new PgBossJobQueue({ connectionString: tdb.url, max: 2, supervise: false });
   await queue.start();
   await queue.createQueue(runQueueDefinition());
-  const guard = fixtureGuard(client.server.port, [API_HOST, LOGIN_HOST], net);
-  const executor = createStrategyExecutor({ pool, guard, pacer: new DomainPacer(new PgPacingStore(pool)), browsers: null });
+  const guard = fixtureGuard(client.server.port, [API_HOST, LOGIN_HOST, 'zz_test_ssrf.localhost', 'zz_test_internal.localhost'], net);
+  const real = createStrategyExecutor({ pool, guard, pacer: new DomainPacer(new PgPacingStore(pool)), browsers: null });
+  const executor: RunExecutor = async (ctx) => {
+    const result = await real(ctx);
+    lastPersonalSize = ctx.personal.size;
+    return result;
+  };
   worker = await startWorker({
     config: loadWorkerConfig({ DATABASE_URL: tdb.url, MASTER_KEY: masterKey, QUEUE_POLLING_SECONDS: '0.5', RUN_HEARTBEAT_SECONDS: '0.5', RUN_STALE_SECONDS: '5', BROWSER_CONCURRENCY: '1' }),
     executor,
@@ -128,6 +150,50 @@ describe('exécuteur de stratégie branché sur le worker', () => {
     expect(dc).toMatchObject({ state: 'failed', failure_class: 'code_error' });
     expect((await pool.query<{ error_detail: string }>('SELECT error_detail FROM runs WHERE id = $1', [dc.id])).rows[0]!.error_detail).toBe('proxy_not_configured');
     expect(dc.attempts[0]).toMatchObject({ network: 'dc_proxy', result: 'code_error' });
+  });
+
+  test('RGPD (D-28) : items extraits inscrits à ctx.personal ; sujet effacé exclu avant écriture du dataset (exécuteur réel)', async () => {
+    const SCHEMA = {
+      ...SCHEMA_CONTACT,
+      properties: { ...SCHEMA_CONTACT.properties, name: { type: 'string', 'x-personal': true }, email: { type: 'string', 'x-personal': 'identifier' } },
+    };
+    const base = `http://${API_HOST}:${client.server.port}`;
+    const apiId = await insertApi('zz_test_rgpd', { execution: 'fetch', network: 'direct', spec: contactsSpecInput(base, API_HOST, 50) }, { outputSchema: SCHEMA });
+    const first = await runOf(apiId);
+    expect(first).toMatchObject({ state: 'succeeded', items: 500 });
+    // Noms et e-mails des 500 items : tous inscrits au registre de masquage du run.
+    expect(lastPersonalSize).toBeGreaterThanOrEqual(500);
+    const target = (await pool.query<{ item: { email: string } }>('SELECT item FROM dataset_items WHERE dataset_id = $1 AND seq = 7', [first.dataset_id])).rows[0]!.item;
+    const keyring = { current: MasterKey.parse(masterKeyText) };
+    const subjectKey = await loadSubjectKey(pool, keyring, await keyCheck(pool, keyring));
+    const req = { values: await resolveSubjectValues(pool, { datasetId: first.dataset_id!, seq: 7 }), key: subjectKey, actor: { userId: A, via: 'ui' as const }, scope: { ownerId: A } };
+    const dry = await eraseSubject(pool, req, { dryRun: true });
+    await eraseSubject(pool, req, { confirm: dry.plan.confirmation });
+
+    const second = await runOf(apiId);
+    expect(second).toMatchObject({ state: 'succeeded', items: 499 });
+    const emails = (await withActor(pool, actorA, (tx) => tx.query<{ email: string }>("SELECT item->>'email' AS email FROM dataset_items WHERE dataset_id = $1", [second.dataset_id]))).rows.map((r) => r.email);
+    expect(emails).toHaveLength(499);
+    expect(emails).not.toContain(target.email);
+    const logs = await pool.query<{ event: string }>("SELECT event FROM run_logs WHERE run_id = $1 AND event = 'subjects_excluded'", [second.id]);
+    expect(logs.rowCount).toBe(1);
+  });
+
+  test('assert_domain_lock_redirects (E1 de bout en bout) : redirection hors des domaines de l’API → code_error domain_not_allowed, 0 requête vers l’hôte', async () => {
+    const SSRF_HOST = 'zz_test_ssrf.localhost';
+    const base = `http://${SSRF_HOST}:${client.server.port}`;
+    await client.reset();
+    const spec = {
+      schema_version: 1,
+      kind: 'declarative',
+      request: { method: 'GET', url: `${base}/to-internal`, allowed_hosts: [SSRF_HOST] },
+      sources: [{ id: 'api', from: 'response', records: '$' }],
+      fields: { id: { path: '$.id', type: 'string', required: true } },
+    };
+    const run = await runOf(await insertApi('zz_test_redirect_out', { execution: 'fetch', network: 'direct', spec }));
+    expect(run).toMatchObject({ state: 'failed', failure_class: 'code_error', retryable: false });
+    expect((await pool.query<{ error_detail: string }>('SELECT error_detail FROM runs WHERE id = $1', [run.id])).rows[0]!.error_detail).toBe('domain_not_allowed');
+    expect((await client.stats()).hosts['zz_test_internal.localhost']?.total ?? 0).toBe(0);
   });
 
   test('version de stratégie invalide (spec hors format) → code_error, jamais un succès', async () => {

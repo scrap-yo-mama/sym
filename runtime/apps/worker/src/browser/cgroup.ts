@@ -16,7 +16,9 @@ const MAX_BROWSER_CONCURRENCY = 32;
 export const CGROUP_V2_MEMORY_MAX = '/sys/fs/cgroup/memory.max';
 export const CGROUP_V2_MEMORY_CURRENT = '/sys/fs/cgroup/memory.current';
 export const CGROUP_V1_MEMORY_LIMIT = '/sys/fs/cgroup/memory/memory.limit_in_bytes';
-const CGROUP_V1_MEMORY_USAGE = '/sys/fs/cgroup/memory/memory.usage_in_bytes';
+export const CGROUP_V1_MEMORY_USAGE = '/sys/fs/cgroup/memory/memory.usage_in_bytes';
+export const CGROUP_V2_MEMORY_STAT = '/sys/fs/cgroup/memory.stat';
+export const CGROUP_V1_MEMORY_STAT = '/sys/fs/cgroup/memory/memory.stat';
 /** cgroup v1 sans limite : valeur proche de 2^63 arrondie à la page. */
 const V1_UNLIMITED = 2 ** 60;
 
@@ -45,6 +47,30 @@ export function cgroupMemoryLimitBytes(read: FileReader = readSysFile): number |
 /** Mémoire consommée par le cgroup (worker + Chromium), en octets ; `undefined` hors cgroup. */
 export function cgroupMemoryCurrentBytes(read: FileReader = readSysFile): number | undefined {
   return bytesOf(read(CGROUP_V2_MEMORY_CURRENT)) ?? bytesOf(read(CGROUP_V1_MEMORY_USAGE));
+}
+
+/** Valeur d'une clé de memory.stat (`clé valeur` par ligne). */
+function statValue(raw: string | undefined, key: string): number | undefined {
+  if (raw === undefined) return undefined;
+  for (const line of raw.split('\n')) {
+    const [name, value] = line.trim().split(/\s+/);
+    if (name === key && value !== undefined && /^\d+$/.test(value)) return Number(value);
+  }
+  return undefined;
+}
+
+/**
+ * Mémoire de travail du cgroup : consommation moins le page cache inactif (`inactive_file`, que le noyau récupère
+ * sous pression), comme le « working set » de kubelet. `memory.current` seul compte tout le page cache : sur un
+ * conteneur chargé, le seuil de recyclage serait franchi en permanence et Chromium relancé après chaque run.
+ * Sans memory.stat lisible, la valeur brute (recyclage plus tôt, jamais plus tard).
+ */
+export function cgroupMemoryWorkingSetBytes(read: FileReader = readSysFile): number | undefined {
+  const v2 = bytesOf(read(CGROUP_V2_MEMORY_CURRENT));
+  if (v2 !== undefined) return Math.max(0, v2 - (statValue(read(CGROUP_V2_MEMORY_STAT), 'inactive_file') ?? 0));
+  const v1 = bytesOf(read(CGROUP_V1_MEMORY_USAGE));
+  if (v1 !== undefined) return Math.max(0, v1 - (statValue(read(CGROUP_V1_MEMORY_STAT), 'total_inactive_file') ?? 0));
+  return undefined;
 }
 
 /** Runs navigateur simultanés pour une mémoire donnée (formule de 14 §11). */

@@ -8,6 +8,7 @@ import type { Socket } from 'node:net';
 import { buildConnector, Pool, ProxyAgent, Socks5ProxyAgent, type Dispatcher, type RequestInit, type Response } from 'undici';
 import { Secret, secretValues } from '../../crypto/index.js';
 import { createGuardedConnector, createGuardedDispatcher, guardedFetch } from '../fetch.js';
+import { domainLock } from '../domain-lock.js';
 import { createSsrfPolicy, SsrfGuard, type Resolver } from '../guard.js';
 import { stripAddress } from '../ip.js';
 import { NetworkConfigError, renderProxyUsername, type NetworkMode, type ProviderParams, type ProxyDefinition, type ProxyPrice } from './definitions.js';
@@ -66,6 +67,27 @@ export function proxyCostUsd(price: ProxyPrice, bytes: number, requests: number)
   return Math.round(raw * 1e6) / 1e6;
 }
 
+/**
+ * Plafond `max_cost_usd` atteint PENDANT le run (04b §3, « arrêt run_budget_exceeded, coût imputé ≤ plafond ») : une
+ * nouvelle requête (ou un nouveau tunnel) n'est envoyée que si le coût projeté reste sous le plafond.
+ */
+export class ProxyBudgetExceededError extends Error {
+  readonly code = 'run_budget_exceeded';
+  constructor() {
+    super('run_budget_exceeded');
+    this.name = 'ProxyBudgetExceededError';
+  }
+}
+
+/** Plafond de coût proxy d'un essai. `otherUsd` : coût déjà engagé ailleurs dans le même essai (egress Chromium). */
+export type CostCeiling = { readonly maxUsd: number; readonly otherUsd?: () => number };
+
+/** Vrai si une requête de plus (prix par requête, octets déjà comptés) dépasserait le plafond. */
+export function wouldExceed(ceiling: CostCeiling | undefined, price: ProxyPrice | undefined, bytes: number, requests: number): boolean {
+  if (ceiling === undefined || price === undefined) return false;
+  return proxyCostUsd(price, bytes, requests + 1) + (ceiling.otherUsd?.() ?? 0) > ceiling.maxUsd;
+}
+
 /** Compteur d'octets des sockets ouverts par un connecteur (sockets fermés + sockets vivants). */
 class ByteMeter {
   #closed = 0;
@@ -104,6 +126,10 @@ export type NetworkSessionOptions = {
   /** Résolveur de la garde du proxy (tests). */
   readonly proxyResolver?: Resolver;
   readonly connectTimeoutMs?: number;
+  /** Verrou de domaines de l'essai (`allowed_hosts`) : chaque saut de redirection est contrôlé (tâche 1.6). */
+  readonly allowedHosts?: readonly string[];
+  /** Plafond `max_cost_usd` de l'API, contrôlé avant chaque requête (tâche 1.6). */
+  readonly costCeiling?: CostCeiling;
 };
 
 type FetchInit = Parameters<typeof guardedFetch>[1];
@@ -113,8 +139,10 @@ export type NetworkSession = {
   readonly proxyId: string | null;
   readonly dispatcher: Dispatcher;
   /** fetch sous garde (redirections recontrôlées, 5 sauts au plus) via le niveau de la session. */
-  fetch(input: string | URL, init?: FetchInit): Promise<Response>;
+  fetch(input: string | URL, init?: FetchInit, options?: { readonly followRedirects?: boolean }): Promise<Response>;
   usage(): NetworkUsage;
+  /** Une requête a été refusée par le plafond de coût. */
+  budgetExceeded(): boolean;
   close(): Promise<void>;
 };
 
@@ -192,11 +220,27 @@ export function openNetworkSession(options: NetworkSessionOptions): NetworkSessi
   });
   const proxyId = rung.mode === 'direct' ? null : rung.proxy.id;
   const price = rung.mode === 'direct' ? undefined : rung.proxy.price;
+  const allowHost = options.allowedHosts === undefined ? undefined : domainLock(options.allowedHosts);
+  let exceeded = false;
+  const beforeRequest = () => {
+    if (exceeded || wouldExceed(options.costCeiling, price, meter.bytes, requests)) {
+      exceeded = true;
+      throw new ProxyBudgetExceededError();
+    }
+  };
   return {
     mode: rung.mode,
     proxyId,
     dispatcher,
-    fetch: (input, init = {}) => guardedFetch(input, init as Omit<RequestInit, 'dispatcher' | 'redirect'>, { guard, dispatcher }),
+    fetch: (input, init = {}, opts = {}) =>
+      guardedFetch(input, init as Omit<RequestInit, 'dispatcher' | 'redirect'>, {
+        guard,
+        dispatcher,
+        ...(opts.followRedirects === false ? { followRedirects: false } : {}),
+        ...(allowHost === undefined ? {} : { allowHost }),
+        ...(options.costCeiling === undefined ? {} : { beforeRequest }),
+      }),
+    budgetExceeded: () => exceeded,
     usage: () => {
       const bytes = meter.bytes;
       return { mode: rung.mode, proxyId, bytes, requests, costUsd: price === undefined ? 0 : proxyCostUsd(price, bytes, requests) };

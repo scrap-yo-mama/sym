@@ -5,8 +5,13 @@
 //   les commutateurs par défaut de Playwright restent (dont son `--disable-features`, qu'un second exemplaire écraserait) ;
 // - tout le trafic passe par un proxy d'egress local : au lancement, un proxy FERMÉ (rien ne sort hors d'un contexte de
 //   run) ; chaque contexte de run reçoit son propre proxy d'egress (`browser.newContext({ proxy })`) ;
-// - jamais en root (Chromium exigerait alors `--no-sandbox` sur l'hôte) ; environnement réduit (ni MASTER_KEY, ni
-//   DATABASE_URL, ni clé LLM dans le processus Chromium) ; `--disable-dev-shm-usage` (conteneur).
+// - bac à sable de Chromium ACTIF (`chromiumSandbox: true`) : sans cette option, Playwright ajoute lui-même
+//   `--no-sandbox` à la ligne de commande. Un rendu compromis par une page hostile resterait sinon sous l'uid du worker
+//   (lecture de /proc/<worker>/environ, donc DATABASE_URL). Dans le conteneur (non root), le bac à sable exige les
+//   espaces de noms utilisateur : profil seccomp de Playwright ou userns autorisés (à valider sur l'image, tâche 4.1).
+//   Sans eux, le lancement échoue (échec fermé), jamais de repli sur `--no-sandbox` ;
+// - jamais en root (Chromium exigerait alors `--no-sandbox`) ; environnement réduit (ni MASTER_KEY, ni DATABASE_URL, ni
+//   clé LLM dans le processus Chromium) ; `--disable-dev-shm-usage` (conteneur).
 import { chromiumEgressLaunchOptions } from '@runtime/core/net';
 
 /**
@@ -73,6 +78,8 @@ export function assertNotRoot(getuid: (() => number) | undefined = process.getui
 
 export type ChromiumLaunchOptions = {
   readonly headless: true;
+  /** Bac à sable de Chromium : jamais `--no-sandbox`. */
+  readonly chromiumSandbox: true;
   readonly host: '127.0.0.1';
   readonly proxy: { readonly server: string };
   readonly args: readonly string[];
@@ -95,6 +102,7 @@ export function chromiumLaunchOptions(
   const egress = chromiumEgressLaunchOptions(launchProxyUrl, env);
   return Object.freeze({
     headless: true,
+    chromiumSandbox: true,
     host: '127.0.0.1',
     proxy: egress.proxy,
     args: Object.freeze([...egress.args, ...CHROMIUM_SILENT_ARGS]),

@@ -15,7 +15,7 @@ import { findSsrfBlocked, guardedFetch, normalizeHostname, type SsrfGuard } from
 
 /** Refus d'un pont. `code` est relayé au script ; `violation` : à journaliser comme `sandbox_violation`. */
 export class SandboxBridgeError extends Error {
-  readonly code: SandboxViolationReason | 'fetch_failed';
+  readonly code: SandboxViolationReason | 'fetch_failed' | 'page_failed' | 'page_unavailable';
   readonly violation: boolean;
   readonly detail?: string;
   constructor(code: SandboxBridgeError['code'], violation: boolean, detail?: string) {

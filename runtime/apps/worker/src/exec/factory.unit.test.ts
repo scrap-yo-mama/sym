@@ -40,6 +40,12 @@ describe('productionExecutorFactory', () => {
     await pool.end();
   });
 
+  test('production sans utilisateur dédié pour le bac à sable → refus de démarrer (D-30), avant tout Chromium', async () => {
+    const pool = new pg.Pool({ connectionString: 'postgres://zz_test@127.0.0.1:1/zz_test' });
+    await expect(productionExecutorFactory({ NODE_ENV: 'production' })({ pool, config: loadWorkerConfig(env()), checked, logger })).rejects.toThrow(/utilisateur dédié/);
+    await pool.end();
+  });
+
   test('DISABLE_BROWSER invalide → configuration refusée', () => {
     expect(() => loadWorkerConfig(env({ DISABLE_BROWSER: 'peut-être' }))).toThrow(/DISABLE_BROWSER/);
   });
