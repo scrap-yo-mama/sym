@@ -9,6 +9,7 @@
     "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
+    "@fastify/websocket": "catalog:",
     "@runtime/core": "workspace:*",
     "@runtime/db": "workspace:*",
     "@runtime/schemas": "workspace:*",
@@ -16,12 +17,14 @@
     "drizzle-orm": "catalog:",
     "fastify": "catalog:",
     "openid-client": "catalog:",
-    "pg": "catalog:"
+    "pg": "catalog:",
+    "ws": "catalog:"
   },
   "devDependencies": {
     "@types/node": "catalog:",
+    "@types/pg": "catalog:",
+    "@types/ws": "catalog:",
     "typescript": "catalog:",
-    "vitest": "catalog:",
-    "@types/pg": "catalog:"
+    "vitest": "catalog:"
   }
 }

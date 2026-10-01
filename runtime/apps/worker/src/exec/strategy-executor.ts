@@ -55,10 +55,12 @@ import {
 import type { DomainPacer } from '@runtime/core';
 import {
   buildNetworkRungs,
+  checkSiteDomain,
   loadProxyCredentials,
   openBrowserEgress,
   openNetworkSession,
   parseNetworkPolicy,
+  policyAllowsTunnel,
   parseProxyDefinitions,
   type BrowserEgress,
   type NetworkRung,
@@ -80,6 +82,8 @@ import { runScriptExecutor, type ScriptPort } from './script-executor.js';
 import type { AgentBrowser, AgentBrowserOptions } from '../browser/agent-browser.js';
 import { runAgentExecutor, runAgentFetchExecutor, runHybridExecutor, type AgentOutcome, type EngineFactory, type LlmSpend } from './agent-executors.js';
 import { AttemptCost } from './attempt-cost.js';
+import { runTunnelExecutor, TunnelSession, type TunnelStop } from './tunnel-executor.js';
+import type { TunnelPort } from '../tunnel/client.js';
 
 /**
  * Ports des exécuteurs agentiques E4-E6 (tâche 2.4). La configuration LLM est relue à chaque essai (`settings.llm`,
@@ -110,6 +114,8 @@ export type StrategyExecutorDeps = {
   readonly script?: ScriptPort;
   /** Exécuteurs agentiques E4-E6 ; absents : ces stratégies échouent en `code_error` (`execution_unavailable`). */
   readonly agent?: AgentPorts;
+  /** Client du tunnel (mode réseau `tunnel`, tâche 2.7) ; absent : `tunnel_unavailable`. */
+  readonly tunnel?: TunnelPort;
   /** Garde de classification avant extraction (1.7) ; défaut : `classifyExchange` de chaque exécuteur. */
   readonly classify?: (exchange: HttpExchange, context?: ClassifyContext) => ExecFailure | null;
   /**
@@ -148,6 +154,10 @@ type Outcome = {
   scriptItems?: readonly unknown[];
   /** Essai agentique (E4-E6) : coût LLM, compilation E6 → E5, refus du verrou de domaines. */
   agent?: Omit<AgentOutcome, 'result'>;
+  /** Mode tunnel : arrêt sans classe d'échec (défi, extension hors ligne). */
+  stop?: TunnelStop;
+  /** Mode tunnel : le site n'est pas connecté dans le navigateur de l'utilisateur. */
+  needsUser?: boolean;
 };
 
 /** Somme des usages réseau d'un essai (egress Chromium + session `ctx.fetch` du script). */
@@ -241,7 +251,6 @@ export function createStrategyExecutor(deps: StrategyExecutorDeps): RunExecutor 
   const now = deps.now ?? Date.now;
 
   const rungFor = async (target: RunTarget, network: string): Promise<{ rung: NetworkRung; credentials?: ProxyCredentials }> => {
-    if (network === 'tunnel') return refuse('code_error', 'tunnel_unavailable');
     let rungs: NetworkRung[];
     try {
       rungs = buildNetworkRungs(parseNetworkPolicy(target.api.networkPolicy), parseProxyDefinitions(await readProxySettings(deps.pool)));
@@ -307,7 +316,58 @@ export function createStrategyExecutor(deps: StrategyExecutorDeps): RunExecutor 
     return { result, usage: null, violations: run.violations, scriptLog: { lines: run.logs.length, bytes }, scriptItems: run.items };
   };
 
+  /**
+   * Mode `tunnel` (07 § 3-5) : stratégie déclarative E1-E3 par l'extension du propriétaire du run. E6 refusé (ADR 0001),
+   * script E3 refusé (aucun code dans l'extension). Domaine = `requires.session_domain` de l'API, sinon l'hôte de la
+   * requête ; toute URL de la stratégie doit y rester (vérifié aussi par la passerelle et par l'extension).
+   */
+  const executeTunnel = async (ctx: RunCtx, target: RunTarget, strategy: NonNullable<RunTarget['strategy']>): Promise<Outcome> => {
+    // Pendant de `rungFor` (04 §3.2, X3, INV6) : le tunnel n'est servi que s'il est choisi dans la politique réseau de
+    // l'API ou si l'API exige l'identité de l'utilisateur (`requires.tunnel`, `requires_session`). Une version de
+    // stratégie `tunnel` venue d'une enquête, d'une réparation ou d'un import ne passe pas d'elle-même par son IP.
+    let chosen: boolean;
+    try {
+      chosen = policyAllowsTunnel(target.api.networkPolicy);
+    } catch {
+      return refuse('code_error', 'network_config');
+    }
+    if (!chosen && target.api.requires.tunnel !== true && !target.api.requiresSession) return refuse('code_error', 'network_not_allowed');
+    try {
+      assertExecutionOnNetwork(strategy.execution, 'tunnel');
+    } catch (error) {
+      if (error instanceof ExecutionNotOnNetworkError) return refuse('code_error', 'execution_server_only');
+      throw error;
+    }
+    if (deps.tunnel === undefined) return refuse('code_error', 'tunnel_unavailable');
+    if (strategy.scriptRef !== null || !['fetch', 'fetch_in_page', 'playwright'].includes(strategy.execution)) return refuse('code_error', 'execution_not_in_tunnel');
+    const spec = specOf(target, strategy);
+    const declared = target.api.requires.session_domain;
+    const verdict = checkSiteDomain(typeof declared === 'string' && declared !== '' ? declared : new URL(spec.request.url).hostname);
+    if (!verdict.ok) return refuse('code_error', 'domain_not_allowed');
+    const session = new TunnelSession(
+      deps.tunnel,
+      { runId: ctx.runId, ownerId: ctx.ownerId, domain: verdict.domain, allowWriteActions: target.api.allowWriteActions, execution: strategy.execution },
+      ctx.signal,
+      ctx.waitingTunnel === undefined ? undefined : (waiting) => ctx.waitingTunnel!(waiting),
+    );
+    const pacer = pacerFor(target);
+    const out = await runTunnelExecutor({
+      session,
+      execution: strategy.execution as 'fetch' | 'fetch_in_page' | 'playwright',
+      spec,
+      input: ctx.input,
+      outputSchema: target.api.outputSchema,
+      signal: ctx.signal,
+      ...(pacer === undefined ? {} : { pacer }),
+      ...(target.api.domainPacing.max_requests_per_run === undefined ? {} : { maxRequests: target.api.domainPacing.max_requests_per_run }),
+      ...(deps.classify === undefined ? {} : { classify: deps.classify }),
+    });
+    if (session.refusedAfterStop > 0) await ctx.log('info', 'tunnel_commands_withheld', { count: session.refusedAfterStop, reason: session.stop });
+    return { result: out.result, usage: null, ...(out.stop === null ? {} : { stop: out.stop }), ...(out.needsUser ? { needsUser: true } : {}) };
+  };
+
   const execute = async (ctx: RunCtx, target: RunTarget, strategy: NonNullable<RunTarget['strategy']>): Promise<Outcome> => {
+    if (strategy.network === 'tunnel') return executeTunnel(ctx, target, strategy);
     // E6 limité au serveur (0.6b, ADR 0001) : refusé en tunnel avant tout réseau.
     try {
       assertExecutionOnNetwork(strategy.execution, strategy.network);
@@ -521,6 +581,15 @@ export function createStrategyExecutor(deps: StrategyExecutorDeps): RunExecutor 
       await pacerFor(target)?.report(result.evidence.url, { status: result.evidence.status, retryAfter: null, failureClass: guardedFailure.failure_class });
     }
     const proxyUsd = usage?.costUsd ?? 0;
+    // Extension hors ligne (04 §6, 05) : le run, resté en `waiting_tunnel`, se termine `skipped_tunnel_offline`. Aucun
+    // essai (aucune commande n'a abouti, ce n'est pas un échec réseau), aucune classe d'échec, statut de l'API inchangé.
+    const stop = outcome.stop;
+    if (stop === 'tunnel_offline') {
+      await ctx.log('warn', 'tunnel_offline', { network: 'tunnel' });
+      return { state: 'skipped_tunnel_offline', stop_reason: 'tunnel_offline', error_detail: 'tunnel_offline', strategy_version: strategy.version };
+    }
+    // Défi en tunnel : l'essai est journalisé avec sa cause de fait (protection), le run s'arrête SANS classe d'échec
+    // (04 §6) : `challenge_in_tunnel` → action_requise, la main revient à l'humain.
     const llm: LlmSpend | null = outcome.agent?.llm ?? null;
     // Prix absent : coût LLM inconnu, écrit null (jamais 0, 08 §1 ; INV4), avec avertissement.
     const llmUsd: number | null = llm === null ? 0 : llm.usd;
@@ -530,7 +599,7 @@ export function createStrategyExecutor(deps: StrategyExecutorDeps): RunExecutor 
       execution: strategy.execution,
       network: strategy.network,
       est_cost_usd: strategy.estCostUsd,
-      result: guardedFailure === undefined ? 'ok' : guardedFailure.failure_class,
+      result: stop === 'challenge_in_tunnel' ? 'blocked_by_protection' : guardedFailure === undefined ? 'ok' : guardedFailure.failure_class,
       ms: Math.max(0, Math.round(now() - started)),
       proxy_usd: proxyUsd,
       ...(llm === null
@@ -544,6 +613,13 @@ export function createStrategyExecutor(deps: StrategyExecutorDeps): RunExecutor 
           }),
     });
     const version = strategy.version;
+    if (stop !== undefined) {
+      await ctx.log('warn', stop, { network: 'tunnel' });
+      return { state: 'failed', failure_class: null, stop_reason: stop, retryable: false, error_detail: stop, strategy_version: version };
+    }
+    if (outcome.needsUser === true && !result.ok) {
+      return { state: 'failed', failure_class: 'auth_required', retryable: false, error_detail: 'site_not_connected', strategy_version: version };
+    }
     // Coût inconnu : le plafond n'a pas pu être tenu ; jamais un succès (04b « Schéma et coût »).
     if (llmUsd === null) {
       return { state: 'failed', failure_class: 'run_budget_exceeded', retryable: false, error_detail: 'llm_price_missing', strategy_version: version };

@@ -1,0 +1,35 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`assert_cdp_allowlist > liste figée et versionnée : Page, Input, DOM, DOMSnapshot, Accessibility, Network (lecture seule) 1`] = `
+[
+  "Accessibility.enable",
+  "Accessibility.getFullAXTree",
+  "Accessibility.getPartialAXTree",
+  "Accessibility.queryAXTree",
+  "DOM.describeNode",
+  "DOM.enable",
+  "DOM.focus",
+  "DOM.getAttributes",
+  "DOM.getBoxModel",
+  "DOM.getDocument",
+  "DOM.getNodeForLocation",
+  "DOM.getOuterHTML",
+  "DOM.querySelector",
+  "DOM.querySelectorAll",
+  "DOM.scrollIntoViewIfNeeded",
+  "DOMSnapshot.captureSnapshot",
+  "Input.dispatchKeyEvent",
+  "Input.dispatchMouseEvent",
+  "Input.insertText",
+  "Network.disable",
+  "Network.enable",
+  "Page.enable",
+  "Page.getFrameTree",
+  "Page.getLayoutMetrics",
+  "Page.getNavigationHistory",
+  "Page.navigate",
+  "Page.reload",
+  "Page.setWebLifecycleState",
+  "Page.stopLoading",
+]
+`;

@@ -52,6 +52,7 @@
     "@testcontainers/postgresql": "catalog:",
     "@types/node": "catalog:",
     "@types/pg": "catalog:",
+    "@types/ws": "catalog:",
     "@vitejs/plugin-vue": "catalog:",
     "@vitest/coverage-v8": "catalog:",
     "ajv": "catalog:",
@@ -68,6 +69,7 @@
     "vitest": "catalog:",
     "vue": "catalog:",
     "vue-eslint-parser": "catalog:",
+    "ws": "catalog:",
     "yaml": "catalog:"
   }
 }

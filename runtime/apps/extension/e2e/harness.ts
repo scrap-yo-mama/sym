@@ -25,7 +25,12 @@ export type Harness = {
   masterKey: string;
   publicUrl: string;
   sitePort: number;
+  /** Requêtes reçues par les sites de fixtures (hôte + chemin + requête). */
+  siteHits: string[];
   context: BrowserContext;
+  /** Profil Chromium (persistant) et arguments de lancement : relance HORS Playwright (aucun CDP attaché). */
+  profile: string;
+  chromiumArgs: readonly string[];
   extensionId: string;
   serviceWorker: () => Promise<Worker>;
   owner: User;
@@ -45,11 +50,43 @@ async function freePort(): Promise<number> {
   return port;
 }
 
-/** Sites de fixtures : `/login` pose des cookies de session propres à l'hôte (valeurs `zz_test_*`). */
-function fixtureSites(): Server {
+/** Défi simulé (07 § 5) : page de vérification générique, comme la fixture `challenge` de 0.5. */
+const CHALLENGE_PAGE =
+  '<!doctype html><html><head><title>Security check</title></head><body><main id="zz-test-challenge"><h1>Security check</h1><p>Please verify you are human to continue.</p><label><input type="checkbox" disabled> I am not a robot</label></main></body></html>';
+
+/**
+ * Sites de fixtures : `/login` pose des cookies de session propres à l'hôte (valeurs `zz_test_*`). Tunnel (tâche 2.7) :
+ * `/api/items?page=N&pages=P` liste JSON paginée (10 éléments par page, P pages) ; sous `/guarded/`, la page 2 et les
+ * suivantes affichent un défi (403) ; `/catalog` est un catalogue HTML de 10 articles. Chaque requête reçue est consignée
+ * (`hits` : hôte + chemin).
+ */
+function fixtureSites(hits: string[]): Server {
   return createServer((req, res) => {
     const host = (req.headers.host ?? '').split(':')[0] ?? '';
     const tag = host.replace(/^zz-test-/, '').replace(/\.example$/, '');
+    const url = new URL(req.url ?? '/', 'http://zz-test.invalid');
+    hits.push(`${host}${url.pathname}${url.search}`);
+    if (url.pathname.endsWith('/api/items')) {
+      const page = Number(url.searchParams.get('page') ?? '1');
+      const pages = Number(url.searchParams.get('pages') ?? '3');
+      if (url.pathname.startsWith('/guarded/') && page >= 2) {
+        res.statusCode = 403;
+        res.setHeader('content-type', 'text/html; charset=utf-8');
+        res.end(CHALLENGE_PAGE);
+        return;
+      }
+      const items = page <= pages ? Array.from({ length: 10 }, (_, i) => ({ id: `zz_test_${tag}_${page}_${i}`, name: `Item ${page}-${i}` })) : [];
+      res.setHeader('content-type', 'application/json');
+      res.end(JSON.stringify({ items, has_more: page < pages }));
+      return;
+    }
+    if (url.pathname === '/catalog') {
+      // Catalogue rendu côté serveur (E3 déclaratif en tunnel : navigation par le débogueur, lecture du DOM).
+      const items = Array.from({ length: 10 }, (_, i) => `<article class="item"><h2>Item ${i}</h2><span class="id">zz_test_${tag}_catalog_${i}</span></article>`).join('');
+      res.setHeader('content-type', 'text/html; charset=utf-8');
+      res.end(`<!doctype html><html><head><title>Catalog</title></head><body>${items}</body></html>`);
+      return;
+    }
     if (req.url === '/login') {
       res.setHeader('set-cookie', [`zz_test_sid=zz_test_${tag}_session; Path=/; HttpOnly; SameSite=Lax`, `zz_test_pref=${tag}; Path=/; Max-Age=86400`]);
     }
@@ -74,15 +111,34 @@ export async function startHarness(): Promise<Harness> {
     const dbUrl = container.getConnectionUri();
     await migrateUp({ connectionString: dbUrl });
 
+    // Chromium d'abord : l'identifiant de l'extension décompressée est connu avant de démarrer l'instance, qui n'accepte
+    // que lui à l'ouverture de la WSS du tunnel (TUNNEL_EXTENSION_IDS, origine fermée par défaut).
+    const profile = mkdtempSync(join(tmpdir(), 'zz-test-ext-'));
+    cleanups.push(async () => rmSync(profile, { recursive: true, force: true }));
+    const chromiumArgs = [
+      `--disable-extensions-except=${EXTENSION_DIR}`,
+      `--load-extension=${EXTENSION_DIR}`,
+      `--host-resolver-rules=${SITES.map((s) => `MAP ${s} 127.0.0.1`).join(', ')}`,
+    ];
+    const context = await chromium.launchPersistentContext(profile, {
+      channel: 'chromium', // nouveau mode headless : extensions prises en charge (07 § 7)
+      headless: true,
+      args: chromiumArgs,
+    });
+    cleanups.push(() => context.close()); // filet si le démarrage de l'instance échoue (fermer deux fois est sans effet)
+    const serviceWorker = async () => context.serviceWorkers().find((w) => w.url().startsWith('chrome-extension://')) ?? context.waitForEvent('serviceworker');
+    const extensionId = new URL((await serviceWorker()).url()).host;
+
     const port = await freePort();
     const publicUrl = `http://127.0.0.1:${port}`;
     const masterKey = generateMasterKey();
     const bootstrapToken = randomBytes(32).toString('base64url');
-    const started = await prepareServer({ DATABASE_URL: dbUrl, MASTER_KEY: masterKey, PUBLIC_URL: publicUrl, ADMIN_BOOTSTRAP_TOKEN: bootstrapToken });
+    const started = await prepareServer({ DATABASE_URL: dbUrl, MASTER_KEY: masterKey, PUBLIC_URL: publicUrl, ADMIN_BOOTSTRAP_TOKEN: bootstrapToken, TUNNEL_EXTENSION_IDS: extensionId });
     cleanups.push(() => started.close());
     await started.app.listen({ port, host: '127.0.0.1' });
 
-    const sites = fixtureSites();
+    const siteHits: string[] = [];
+    const sites = fixtureSites(siteHits);
     await new Promise<void>((resolve) => sites.listen(0, '127.0.0.1', resolve));
     cleanups.push(() => new Promise<void>((resolve) => sites.close(() => resolve())));
     const sitePort = (sites.address() as AddressInfo).port;
@@ -90,6 +146,9 @@ export async function startHarness(): Promise<Harness> {
     const pool = new pg.Pool({ connectionString: dbUrl, max: 2 });
     cleanups.push(() => pool.end());
     const sql = async <T extends Record<string, unknown>>(text: string, params: unknown[] = []) => (await pool.query<T>(text, params)).rows;
+    // Navigateur fermé EN PREMIER (nettoyage en ordre inverse), comme avant : ses connexions (WSS du tunnel, keep-alive
+    // vers les sites) retiendraient sinon la fermeture de l'instance et des sites de fixtures.
+    cleanups.push(() => context.close());
 
     const signIn = async (email: string, password: string): Promise<string> => {
       const res = await postJson(`${publicUrl}/api/auth/sign-in/email`, { origin: publicUrl }, { email, password });
@@ -118,20 +177,6 @@ export async function startHarness(): Promise<Harness> {
       return { status: res.status, data: res.status === 204 ? null : await res.json().catch(() => null) };
     };
 
-    const profile = mkdtempSync(join(tmpdir(), 'zz-test-ext-'));
-    cleanups.push(async () => rmSync(profile, { recursive: true, force: true }));
-    const context = await chromium.launchPersistentContext(profile, {
-      channel: 'chromium', // nouveau mode headless : extensions prises en charge (07 § 7)
-      headless: true,
-      args: [
-        `--disable-extensions-except=${EXTENSION_DIR}`,
-        `--load-extension=${EXTENSION_DIR}`,
-        `--host-resolver-rules=${SITES.map((s) => `MAP ${s} 127.0.0.1`).join(', ')}`,
-      ],
-    });
-    cleanups.push(() => context.close());
-    const serviceWorker = async () => context.serviceWorkers().find((w) => w.url().startsWith('chrome-extension://')) ?? context.waitForEvent('serviceworker');
-    const extensionId = new URL((await serviceWorker()).url()).host;
 
     // Page chrome://extensions : simule le clic « Autoriser » de l'invite de permission de Chrome (UI du navigateur,
     // hors d'atteinte de Playwright). `chrome.permissions.request` du popup se résout ensuite sans invite.
@@ -159,7 +204,7 @@ export async function startHarness(): Promise<Harness> {
       return page;
     };
 
-    return { dbUrl, masterKey, publicUrl, sitePort, context, extensionId, serviceWorker, owner, createMember, console: consoleCall, sql, grantHosts, popup, close };
+    return { dbUrl, masterKey, publicUrl, sitePort, siteHits, context, profile, chromiumArgs, extensionId, serviceWorker, owner, createMember, console: consoleCall, sql, grantHosts, popup, close };
   } catch (error) {
     await close();
     throw error;

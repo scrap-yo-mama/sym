@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Application Fastify : registre des routes obligatoire (INV12), garde unique, 404 uniforme.
 import { createLogger, startDetachedSpan, type LogLevel } from '@runtime/core';
+import websocket from '@fastify/websocket';
+import { TUNNEL_MAX_PAYLOAD } from '@runtime/core/tunnel';
 import Fastify, { type FastifyBaseLogger, type FastifyInstance, type FastifyServerOptions } from 'fastify';
+import type { ExtensionOriginPolicy } from './config.js';
 import type { ServerContext } from './context.js';
 import { apiKeyRoutes } from './routes/api-keys.js';
 import { authRoutes } from './routes/auth.js';
@@ -14,6 +17,7 @@ import { setupRoutes } from './routes/setup.js';
 import { ssoRoutes } from './routes/sso.js';
 import { systemRoutes } from './routes/system.js';
 import { userRoutes } from './routes/users.js';
+import { tunnelRoutes } from './routes/tunnel.js';
 
 declare module 'fastify' {
   interface FastifyInstance {
@@ -26,8 +30,16 @@ export class UnregisteredRouteError extends Error {
   override name = 'UnregisteredRouteError';
 }
 
-export function buildServer(ctx: ServerContext, options: { logger?: boolean; loggerInstance?: FastifyBaseLogger; logLevel?: LogLevel; trustProxy?: boolean | number | string } = {}): FastifyInstance {
+/** 07 § 6 : `keepAliveTimeout` ≥ 90 s (défaut Fastify : 72 s). */
+const SERVER_KEEP_ALIVE_TIMEOUT_MS = 90_000;
+
+export function buildServer(
+  ctx: ServerContext,
+  options: { logger?: boolean; loggerInstance?: FastifyBaseLogger; logLevel?: LogLevel; trustProxy?: boolean | number | string; tunnelOrigins?: ExtensionOriginPolicy } = {},
+): FastifyInstance {
   const serverOptions: FastifyServerOptions = {
+    // 07 § 6 : keep-alive ≥ 90 s (défaut Fastify 72 s), au-delà du ping de 20 s et de l'alarme de 30 s de l'extension.
+    keepAliveTimeout: SERVER_KEEP_ALIVE_TIMEOUT_MS,
     // request.ip : seule source d’IP (limites, audit, auth_sessions.ip) ; voir TRUST_PROXY (config.ts).
     // Un nombre n = faire confiance aux n premiers sauts (sémantique proxy-addr), exprimé en fonction pour les types.
     trustProxy: typeof options.trustProxy === 'number' ? ((_addr: string, hop: number) => hop < (options.trustProxy as number)) : (options.trustProxy ?? false),
@@ -83,5 +95,12 @@ export function buildServer(ctx: ServerContext, options: { logger?: boolean; log
   userRoutes(app, ctx);
   invitationRoutes(app, ctx);
   ssoRoutes(app, ctx);
+  const gateway = ctx.tunnel;
+  if (gateway !== null) {
+    // WSS du tunnel (07 § 6) : maxPayload 1 Mio, compression désactivée (08b § 2), puis la route dans un contexte enfant
+    // (le greffon doit être chargé avant qu'une route `websocket: true` soit déclarée).
+    void app.register(websocket, { options: { maxPayload: TUNNEL_MAX_PAYLOAD, perMessageDeflate: false } });
+    void app.register(async (child) => tunnelRoutes(child, gateway, options.tunnelOrigins ?? { ids: [], allowAny: false }));
+  }
   return app;
 }

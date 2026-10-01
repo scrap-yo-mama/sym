@@ -4,6 +4,7 @@
 import type { Execution, FailureClass, Network, RunOutcome } from '../model/enums.js';
 import type { LogLevel } from '../observability/config.js';
 import type { PersonalValueRegistry } from '../privacy/mask.js';
+import type { ActionReason } from '../status/types.js';
 
 /** Files de la V1 (T2 R4). `run` seule est branchée en 1.3 ; `repair`, `scheduled-run`, `maintenance` : 2.x et 1.8. */
 export const RUN_QUEUE = 'run';
@@ -115,9 +116,34 @@ export type RunResult =
   | {
       state: 'failed';
       failure_class: FailureClass;
+      stop_reason?: undefined;
       retryable: boolean;
       error_detail?: string | null;
       items?: number;
+      strategy_version?: number | null;
+    }
+  | {
+      /**
+       * Run arrêté SANS classe d'échec (04 §6, codes de raison `status_reason`) : défi dans le tunnel
+       * (`challenge_in_tunnel`, la main revient à l'humain), extension hors ligne (`tunnel_offline`), proxy requis non
+       * configuré. Le worker en déduit l'événement `run_stopped` de la machine à états ; jamais rejoué.
+       */
+      state: 'failed';
+      failure_class: null;
+      stop_reason: ActionReason;
+      retryable: false;
+      error_detail?: string | null;
+      items?: number;
+      strategy_version?: number | null;
+    }
+  | {
+      /**
+       * Tunnel requis et extension hors ligne pendant le run (04 §6, 05) : `waiting_tunnel` → `skipped_tunnel_offline`.
+       * Aucune classe d'échec, aucun essai journalisé (aucune commande n'a abouti), le statut de l'API ne change pas.
+       */
+      state: 'skipped_tunnel_offline';
+      stop_reason: 'tunnel_offline';
+      error_detail?: string | null;
       strategy_version?: number | null;
     };
 
@@ -153,6 +179,11 @@ export type RunContext = {
    * Les clés ne sont marquées comme vues qu'au succès du run : un run en échec après écriture n'en marque aucune.
    */
   writeItems(outputSchema: unknown, items: readonly unknown[]): Promise<DatasetWrite>;
+  /**
+   * Mode tunnel (07 § 6) : bascule `running ↔ waiting_tunnel` pendant que l'extension du propriétaire est hors ligne
+   * (un redéploiement de la passerelle laisse le run en `waiting_tunnel`). Absent : aucun changement d'état (tests).
+   */
+  waitingTunnel?(waiting: boolean): Promise<void>;
 };
 
 /** Bilan cumulé des écritures du run dans son dataset. */

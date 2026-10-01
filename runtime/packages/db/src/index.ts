@@ -30,6 +30,7 @@ export * from './webhooks.js';
 export * from './alerts.js';
 export * from './notify.js';
 export * from './strategies.js';
+export * from './tunnel.js';
 export { schema };
 
 /** Extrait le nom de la base d'une URL PostgreSQL, sans exposer le mot de passe. */

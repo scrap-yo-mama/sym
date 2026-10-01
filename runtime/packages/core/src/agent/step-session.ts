@@ -149,13 +149,20 @@ export interface StepExpectedTarget {
 }
 
 /**
+ * Refus d'un pilote. `write_action_not_allowed` : le pilote a lui-même reconnu une écriture au moment d'agir (bouton
+ * d'envoi trouvé dans le DOM, élément d'envoi au point du clic) alors que `classify` ne l'avait pas vue ; rien n'est
+ * exécuté.
+ */
+export type StepPerformError = 'stale_ref' | 'timeout' | 'domain_not_allowed' | 'write_action_not_allowed';
+
+/**
  * Pilote du navigateur (CDP dans l'extension). `perform` reçoit une action déjà validée ; pour `click` et `type` il
  * DOIT retrouver l'élément désigné par `ref` et refuser (`stale_ref`) s'il ne correspond plus à `expected`, au lieu
  * d'agir sur un autre élément : la page peut changer entre la vérification de fraîcheur et l'action.
  */
 export interface AgentStepDriver {
   observe(): Promise<StepObservation>;
-  perform(action: AgentStepAction, expected?: StepExpectedTarget): Promise<{ ok: true } | { ok: false; error: 'stale_ref' | 'timeout' | 'domain_not_allowed' }>;
+  perform(action: AgentStepAction, expected?: StepExpectedTarget): Promise<{ ok: true } | { ok: false; error: StepPerformError }>;
   /**
    * Un clic d'envoi, d'achat ou de suppression est une écriture (07 §5). Obligatoire : en tunnel, aucune interception
    * réseau ne rattrape une écriture (Network en lecture seule). Un pilote qui ne la fournit pas (appelant JavaScript)
@@ -200,7 +207,7 @@ export class AgentStepExecutor {
   }
 
   /** Observe après une action : un défi verrouille l'exécuteur et ne renvoie aucun contenu de page. */
-  async #finish(error?: 'timeout' | 'stale_ref' | 'domain_not_allowed'): Promise<AgentStepResult> {
+  async #finish(error?: StepPerformError): Promise<AgentStepResult> {
     const { observation, snapshot } = await this.#observe();
     if (this.#driver.challengeDetected?.(observation) === true) {
       this.#challenged = true;

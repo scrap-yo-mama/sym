@@ -211,7 +211,8 @@ export function extensionRoutes(app: FastifyInstance, ctx: ServerContext): void 
   // l'envoi passe par cette route HTTPS, authentifiée par le même jeton d'appareil (jamais une session de console),
   // avec le même schéma strict et le même scellement (`storeSiteCookies`, seul point d'écriture). Remplacement prévu
   // en 2.7 : un message WSS `cookies_sync` au même schéma appelle `storeSiteCookies`, et cette route est retirée
-  // (l'extension n'envoie alors plus aucun cookie hors de la WSS).
+  // (l'extension n'envoie alors plus aucun cookie hors de la WSS). Tâche 2.7 : route CONSERVÉE (écart consigné) — la
+  // capture a lieu au clic de consentement, souvent avant que la WSS ne soit ouverte ; même jeton, même scellement.
   app.put<{ Params: { domain: string }; Body: { cookies: SiteCookie[] } }>(
     '/api/extension/sites/:domain/cookies',
     { schema: { body: cookiesSchema }, bodyLimit: 1024 * 1024 },

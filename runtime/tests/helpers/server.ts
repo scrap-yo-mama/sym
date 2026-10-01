@@ -7,6 +7,7 @@ import { migrateUp } from '@runtime/db';
 import type { FastifyInstance, LightMyRequestResponse } from 'fastify';
 import { prepareServer, type PrepareOptions, type Started } from '../../apps/server/src/start.js';
 import { createTestDatabase, withClient, type TestDatabase } from './pg.js';
+import { SIM_EXTENSION_ID } from './tunnel-sim.js';
 
 export const PUBLIC_URL = 'http://localhost:3000';
 
@@ -28,6 +29,8 @@ export function serverEnv(url: string, masterKey: string, bootstrapToken: string
     DATABASE_URL: url,
     MASTER_KEY: masterKey,
     PUBLIC_URL,
+    // Extension simulée du tunnel (tests/helpers/tunnel-sim.ts) : origine acceptée par la passerelle (fermée par défaut).
+    TUNNEL_EXTENSION_IDS: SIM_EXTENSION_ID,
     ...(bootstrapToken ? { ADMIN_BOOTSTRAP_TOKEN: bootstrapToken } : {}),
     ...extra,
   };

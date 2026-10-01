@@ -13,6 +13,10 @@ catalog:
   fast-check: 4.10.2
   '@playwright/test': 1.63.0
   fastify: 5.12.5
+  # Passerelle tunnel WSS (tâche 2.7, 03 « Serveur HTTP ») : @fastify/websocket 11.3.1 (MIT, 2026-09-18), ws 8.21.3 (MIT ; 8.22.0 < 7 jours au 2026-10-01, minimumReleaseAge), @types/ws 8.18.1 (8.18.2 < 7 jours).
+  '@fastify/websocket': 11.3.1
+  ws: 8.21.3
+  '@types/ws': 8.18.1
   pino: 10.3.1
   # Outillage qualité (tâche 0.8)
   eslint: 10.11.0

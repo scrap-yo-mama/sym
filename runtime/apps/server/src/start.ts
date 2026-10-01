@@ -19,6 +19,7 @@ import { readSecuritySettings } from './auth/security-settings.js';
 import { loadServerConfig, type ServerConfig } from './config.js';
 import { initializedProbe, type ServerContext } from './context.js';
 import { createMetricsRegistry } from './metrics.js';
+import { TunnelGateway } from './tunnel/gateway.js';
 
 class StartupError extends Error {
   override name = 'StartupError';
@@ -39,6 +40,8 @@ export type PrepareOptions = {
   extraCa?: string[];
   /** Tests seulement : accepte un IdP OIDC en http (faux fournisseur local). */
   oidcAllowHttp?: boolean;
+  /** Passerelle tunnel : périodes de sondage, de revalidation et délai d'inactivité (tests ; défauts de production). */
+  tunnel?: { pollMs?: number; revalidateMs?: number; idleMs?: number };
 };
 
 const BOOTSTRAP_REQUIRED =
@@ -147,6 +150,16 @@ export async function prepareServer(env: NodeJS.ProcessEnv = process.env, option
       secrets: null,
       ...(options.extraCa ? { extraCa: options.extraCa } : {}),
       ...(options.oidcAllowHttp ? { oidcAllowHttp: true } : {}),
+      // Passerelle tunnel WSS (07 § 6) : LISTEN sur le canal de cette instance, démarrée avant l'écoute HTTP.
+      tunnel: config.tunnel.disabled
+        ? null
+        : new TunnelGateway({
+            pool,
+            sessionUrl: config.tunnel.sessionUrl,
+            instance: config.tunnel.instance,
+            logger: () => holder.app!.log,
+            ...options.tunnel,
+          }),
     };
     if (version === expected) {
       // Cas nominal : toute erreur d'initialisation empêche de démarrer (comportement inchangé).
@@ -158,8 +171,13 @@ export async function prepareServer(env: NodeJS.ProcessEnv = process.env, option
       ...(options.loggerInstance === undefined ? {} : { loggerInstance: options.loggerInstance }),
       logLevel: config.observability.logLevel,
       trustProxy: config.trustProxy,
+      tunnelOrigins: config.tunnel.extensionOrigins,
     });
     holder.app = app;
+    if (!config.tunnel.disabled && config.tunnel.extensionOrigins.ids.length === 0 && !config.tunnel.extensionOrigins.allowAny) {
+      app.log.warn('tunnel : aucune extension acceptée (extension pas encore publiée) : posez TUNNEL_EXTENSION_IDS, ou TUNNEL_ALLOW_ANY_EXTENSION=true en développement');
+    }
+    await ctx.tunnel?.start();
     if (state === 'waiting') {
       app.log.warn({ schema: version, expected }, 'schéma de base en retard : mode dégradé (seules les sondes répondent) jusqu’à `runtime migrate`');
       timer = setInterval(() => void tryFinish(), options.schemaPollMs ?? 5000);
@@ -170,6 +188,7 @@ export async function prepareServer(env: NodeJS.ProcessEnv = process.env, option
     lockClient.on('error', (error) => app.log.error({ err: error }, 'verrou des secrets : connexion perdue'));
     const close = async () => {
       if (timer) clearInterval(timer);
+      await ctx.tunnel?.close();
       await app.close();
       await pending?.catch(() => undefined);
       await releaseLock?.().catch(() => undefined);

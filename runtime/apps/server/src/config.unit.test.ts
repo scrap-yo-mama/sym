@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { generateMasterKey } from '@runtime/core';
 import { afterEach, expect, test } from 'vitest';
-import { ConfigError, loadServerConfig, TELEMETRY_VARIABLES } from './config.js';
+import { ConfigError, loadServerConfig, PUBLISHED_EXTENSION_IDS, TELEMETRY_VARIABLES } from './config.js';
 
 const base = () => ({ DATABASE_URL: 'postgres://u@localhost/db', PUBLIC_URL: 'https://runtime.zz-test.example/', MASTER_KEY: generateMasterKey() });
 
@@ -39,4 +39,12 @@ test('TRUST_PROXY : faux par défaut (IP de la connexion), sauts, liste d’IP/C
   expect(loadServerConfig({ ...base(), TRUST_PROXY: '1' }).trustProxy).toBe(1);
   expect(loadServerConfig({ ...base(), TRUST_PROXY: '10.0.0.0/8, 127.0.0.1' }).trustProxy).toBe('10.0.0.0/8, 127.0.0.1');
   expect(() => loadServerConfig({ ...base(), TRUST_PROXY: 'n’importe quoi' })).toThrow(/TRUST_PROXY/);
+});
+
+test('correctif 17 : origine du tunnel fermée par défaut (identifiants publiés seulement) ; toute extension en mode développement explicite', () => {
+  const closed = loadServerConfig(base()).tunnel.extensionOrigins;
+  expect(closed).toEqual({ ids: [...PUBLISHED_EXTENSION_IDS], allowAny: false });
+  expect(loadServerConfig({ ...base(), TUNNEL_EXTENSION_IDS: 'abcdefghijklmnopabcdefghijklmnop' }).tunnel.extensionOrigins).toEqual({ ids: ['abcdefghijklmnopabcdefghijklmnop'], allowAny: false });
+  expect(loadServerConfig({ ...base(), TUNNEL_ALLOW_ANY_EXTENSION: 'true' }).tunnel.extensionOrigins).toEqual({ ids: [...PUBLISHED_EXTENSION_IDS], allowAny: true });
+  expect(() => loadServerConfig({ ...base(), TUNNEL_ALLOW_ANY_EXTENSION: 'oui' })).toThrow(/TUNNEL_ALLOW_ANY_EXTENSION/);
 });

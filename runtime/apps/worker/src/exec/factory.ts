@@ -17,6 +17,7 @@ import { BrowserPool, playwrightLauncher } from '../browser/pool.js';
 import { ProcessSandboxEngine, sandboxOptionsFromEnv, type IsolationProbe } from '../sandbox/index.js';
 import type { ExecutorFactory } from '../worker.js';
 import { loadInlineScript } from './script-executor.js';
+import { TunnelJobClient } from '../tunnel/client.js';
 import type { EngineFactory } from './agent-executors.js';
 import { createStrategyExecutor, type AgentPorts } from './strategy-executor.js';
 
@@ -112,10 +113,14 @@ export function productionExecutorFactory(env: Readonly<Record<string, string | 
       // Lancé par les exécuteurs E5 et E6 DANS un slot du pool (BrowserPool.hold) : BROWSER_CONCURRENCY le borne (14 §11).
       agentBrowser: (options) => launchAgentBrowser({ ...options, env }),
     };
+    // Mode tunnel (2.7) : commandes par `tunnel_jobs`, réponses réveillées par LISTEN sur la connexion de session.
+    const tunnel = new TunnelJobClient({ pool, sessionUrl: config.databaseUrlDirect ?? config.databaseUrl, logger });
+    await tunnel.start();
     return {
-      executor: createStrategyExecutor({ pool, guard, pacer, browsers, secrets, logger, script: { engine, loadScript: loadInlineScript }, agent }),
+      executor: createStrategyExecutor({ pool, guard, pacer, browsers, secrets, logger, tunnel, script: { engine, loadScript: loadInlineScript }, agent }),
       browserContexts: () => pool_?.active() ?? 0,
       close: async () => {
+        await tunnel.close();
         await pool_?.close();
         await launchProxy?.close();
       },

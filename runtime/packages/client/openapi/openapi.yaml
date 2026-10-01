@@ -2453,6 +2453,27 @@ paths:
           description: Fait.
         '401':
           $ref: '#/components/responses/Error'
+  /api/extension/tunnel:
+    get:
+      operationId: openExtensionTunnel
+      security: []
+      tags: [tunnel]
+      summary: "WebSocket du tunnel (07 § 6) : jeton d'appareil dans le premier message, jamais dans l'URL"
+      description: >-
+        Ouverture refusée avec un paramètre d'URL (400) ou une Origin autre qu'une extension (403). Puis messages JSON
+        (schéma strict, 1 Mio au plus par message, compression désactivée) : extension → instance hello, ping, result
+        (découpé en morceaux seq/last) ; instance → extension welcome, pong, cmd (http_fetch, page_fetch, page_script,
+        agent_step). Fermetures 4401 (jeton refusé ou révoqué), 4409 (connexion plus récente du même utilisateur),
+        4400 (protocole), 4429 (débit), 4408 (pas de hello).
+      responses:
+        '101':
+          description: Protocole changé (WebSocket).
+        '400':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '426':
+          $ref: '#/components/responses/Error'
   /api/extension/sites/{domain}:
     put:
       operationId: connectExtensionSite
