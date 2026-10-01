@@ -23,7 +23,7 @@ import { issueSession } from '../auth/better-auth.js';
 import { readSecuritySettings, readSsoSettings } from '../auth/security-settings.js';
 import type { ServerContext } from '../context.js';
 import { AttemptLimiter, ipBucket } from '../rate-limit.js';
-import { iso, libraryHeaders, rememberDevice, sendAccountMail, smtpConfigured, UUID } from './account-helpers.js';
+import { iso, libraryHeaders, meView, rememberDevice, sendAccountMail, smtpConfigured, UUID } from './account-helpers.js';
 import { audit, notFound, sendError } from './guard.js';
 
 type InvitationRow = {
@@ -255,17 +255,7 @@ export function invitationRoutes(app: FastifyInstance, ctx: ServerContext): void
       // Session d'interface (nouveau jeton) ; si MFA_ENFORCED le concerne, le garde force l'enrôlement avant toute autre route.
       const issued = await issueSession(ctx.auth, libraryHeaders(request), accepted.userId);
       reply.header('set-cookie', [...issued.cookies, await rememberDevice(ctx, accepted.userId)]);
-      const { rows } = await ctx.pool.query<{ display_name: string; locale: string; theme: string }>('SELECT display_name, locale, theme FROM users WHERE id = $1', [accepted.userId]);
-      return {
-        id: accepted.userId,
-        email: accepted.email,
-        displayName: rows[0]?.display_name ?? '',
-        role: accepted.role,
-        locale: rows[0]?.locale ?? 'en',
-        theme: rows[0]?.theme ?? 'system',
-        via: 'ui',
-        scopes: null,
-      };
+      return meView(ctx, { userId: accepted.userId, email: accepted.email, role: accepted.role, via: 'ui', scopes: null });
     },
   );
 }

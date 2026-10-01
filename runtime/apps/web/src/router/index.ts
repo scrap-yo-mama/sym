@@ -3,13 +3,17 @@
 // (06 § 1) ; le titre du document est traduit dans App.vue (`meta.titleKey`).
 import { nextTick } from 'vue';
 import { createRouter, createWebHistory, START_LOCATION, type Router, type RouterHistory } from 'vue-router';
-import { ensureSession } from '@/composables/useSession';
+import { can, ensureSession, useSession, type Permission } from '@/composables/useSession';
 import { API_TABS } from '@/lib/api-tabs';
 
 declare module 'vue-router' {
   interface RouteMeta {
     /** Page joignable sans session (connexion). Une session ouverte la renvoie vers l'accueil. */
     public?: boolean;
+    /** Page joignable avec ou sans session (invitation, réinitialisation du mot de passe : le lien décide, pas la session). */
+    open?: boolean;
+    /** Permission exigée (`can()`, 13 § 2) : sans elle, la route redirige vers l'accueil. Le serveur reste seul juge. */
+    permission?: Permission;
     /** Clé i18n du titre du document. */
     titleKey: string;
   }
@@ -92,6 +96,14 @@ export function createAppRouter(history: RouterHistory = createWebHistory()): Ro
     history,
     routes: [
       { path: '/login', name: 'login', component: () => import('@/views/LoginView.vue'), meta: { public: true, titleKey: 'auth.login.title' } },
+      // Comptes (3.8). `/setup` n'existe que tant qu'aucun owner n'est créé : ensuite la garde le rend introuvable (13 § 4).
+      { path: '/setup', name: 'setup', component: () => import('@/views/SetupView.vue'), meta: { open: true, titleKey: 'setup.title' } },
+      { path: '/invite/:token', name: 'invite', component: () => import('@/views/InviteView.vue'), meta: { open: true, titleKey: 'auth.invite.title' } },
+      { path: '/forgot-password', name: 'forgot-password', component: () => import('@/views/ForgotPasswordView.vue'), meta: { public: true, titleKey: 'auth.forgot.title' } },
+      { path: '/reset-password/:token', name: 'reset-password', component: () => import('@/views/ResetPasswordView.vue'), meta: { open: true, titleKey: 'auth.reset.title' } },
+      { path: '/two-factor-setup', name: 'two-factor-setup', component: () => import('@/views/TwoFactorSetupView.vue'), meta: { titleKey: 'twoFactorSetup.title' } },
+      { path: '/admin/users', name: 'admin-users', component: () => import('@/views/admin/UsersView.vue'), meta: { permission: 'users:list', titleKey: 'users.title' } },
+      { path: '/admin/audit', name: 'admin-audit', component: () => import('@/views/admin/AuditView.vue'), meta: { permission: 'audit:read', titleKey: 'audit.title' } },
       { path: '/apis', name: 'catalog', component: () => import('@/views/ApiCatalogView.vue'), meta: { titleKey: 'catalog.title' } },
       // Les routes statiques de /apis/… (par exemple /apis/new, tâche 3.5) l'emportent sur ce paramètre.
       { path: `/apis/:slug/:tab(${API_TABS.join('|')})?`, name: 'api', component: () => import('@/views/ApiDetailView.vue'), meta: { titleKey: 'detail.title' } },
@@ -111,6 +123,11 @@ export function createAppRouter(history: RouterHistory = createWebHistory()): Ro
           { path: 'extension', name: 'settings-extension', component: () => import('@/views/settings/ExtensionSettingsView.vue'), meta: { titleKey: 'settings.extension.title' } },
           { path: 'alerts', name: 'settings-alerts', component: () => import('@/views/settings/AlertsSettingsView.vue'), meta: { titleKey: 'settings.alerts.title' } },
           { path: 'diagnostic', name: 'settings-diagnostic', component: () => import('@/views/settings/DiagnosticSettingsView.vue'), meta: { titleKey: 'settings.diagnostic.title' } },
+          { path: 'keys', name: 'settings-keys', component: () => import('@/views/settings/ApiKeysView.vue'), meta: { titleKey: 'keys.title' } },
+          // `/settings/account` : adresse de retour de la liaison SSO (`?sso=linked`), figée côté serveur.
+          { path: 'account', name: 'settings-account', component: () => import('@/views/settings/AccountView.vue'), meta: { titleKey: 'account.title' } },
+          { path: 'security', name: 'settings-security', component: () => import('@/views/settings/SecuritySettingsView.vue'), meta: { permission: 'settings:security:write', titleKey: 'instance.security.title' } },
+          { path: 'sso', name: 'settings-sso', component: () => import('@/views/settings/SsoSettingsView.vue'), meta: { permission: 'settings:sso:write', titleKey: 'instance.sso.title' } },
         ],
       },
       { path: '/:pathMatch(.*)*', name: 'not-found', component: () => import('@/views/NotFoundView.vue'), meta: { titleKey: 'notFound.title' } },
@@ -120,9 +137,20 @@ export function createAppRouter(history: RouterHistory = createWebHistory()): Ro
   router.beforeEach(async (to) => {
     const state = await ensureSession();
     if (to.name === 'not-found') return true;
+    // Instance sans owner : l'assistant est la seule page (13 § 4) ; une fois l'owner créé, `/setup` répond « introuvable » pour toujours.
+    if (state === 'not_initialized') return to.name === 'setup' ? true : { name: 'setup' };
+    if (to.name === 'setup') return { name: 'not-found', params: { pathMatch: ['setup'] } };
+    if (to.meta.open) return true;
     if (to.meta.public) return state === 'authenticated' ? { name: 'home' } : true;
-    if (state === 'authenticated') return true;
-    return { name: 'login', query: to.fullPath === '/' ? {} : { redirect: to.fullPath } };
+    // Mot de passe vérifié, second facteur attendu : la connexion montre la saisie du code et rien d'autre n'est joignable.
+    if (state === 'mfa_pending') return { name: 'login', query: { mfa: '1' } };
+    if (state !== 'authenticated') return { name: 'login', query: to.fullPath === '/' ? {} : { redirect: to.fullPath } };
+    // MFA_ENFORCED : l'enrôlement précède toute autre route (13 § 7).
+    if (useSession().mustEnrollTwoFactor.value) return to.name === 'two-factor-setup' ? true : { name: 'two-factor-setup' };
+    if (to.name === 'two-factor-setup') return { name: 'settings-account' };
+    // Écrans réservés (Utilisateurs, Audit, Sécurité, SSO) : sans la permission, la route redirige (pilotage par can()).
+    if (to.meta.permission && !can(to.meta.permission)) return { name: 'home' };
+    return true;
   });
 
   // Pas de déplacement du focus au premier affichage de la page : le lien d'évitement reste le premier arrêt de Tab.

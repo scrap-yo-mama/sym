@@ -4,8 +4,8 @@ import { createApp } from 'vue';
 import App from './App.vue';
 import './assets/main.css';
 import { createAppI18n, detectLocale, LOCALE_STORAGE_KEY, setLocale } from './i18n';
-import { onUnauthorized } from './lib/api';
-import { markExpired, ensureSession } from './composables/useSession';
+import { onMfaBarrier, onUnauthorized } from './lib/api';
+import { markExpired, ensureSession, loadSession } from './composables/useSession';
 import { createAppRouter } from './router';
 import { applyTheme } from './lib/theme';
 import { theme } from './composables/usePreferences';
@@ -23,6 +23,7 @@ async function main(): Promise<void> {
   matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => applyTheme(theme.value));
 
   onUnauthorized(markExpired);
+  onMfaBarrier(() => void loadSession());
   await ensureSession();
   const router = createAppRouter();
   createApp(App).use(i18n).use(router).mount('#app');

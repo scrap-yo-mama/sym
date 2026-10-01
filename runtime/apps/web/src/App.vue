@@ -3,28 +3,31 @@
 import { computed, watch, watchEffect } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { RouterLink, RouterView, useRoute, useRouter } from 'vue-router';
+import AccountNotices from '@/components/account/AccountNotices.vue';
 import ConnectionBanner from '@/components/ConnectionBanner.vue';
 import PreferencesBar from '@/components/PreferencesBar.vue';
 import { Button } from '@/components/ui/button';
 import { startEventStream, stopEventStream, useEventStream } from '@/composables/useEventStream';
 import { applyAccountPreferences } from '@/composables/usePreferences';
 import { markExpired, signOut, useSession } from '@/composables/useSession';
+import { visibleNav } from '@/lib/nav';
 
 const i18n = useI18n();
 const { t, locale } = i18n;
 const route = useRoute();
 const router = useRouter();
-const { isAuthenticated, me } = useSession();
+const { isAuthenticated, mustEnrollTwoFactor, state, me, can } = useSession();
 const { streamStatus } = useEventStream();
 
-/** Entrées de la navigation principale (06 § 1). Les comptes s'y ajoutent avec 3.8. */
-const NAV = [
-  { to: '/', label: 'nav.home' },
-  { to: '/apis', label: 'nav.catalog' },
-  { to: '/apis/new', label: 'nav.newApi' },
-  { to: '/runs', label: 'nav.runs' },
-  { to: '/settings', label: 'nav.settings' },
-] as const;
+/** Entrées de la navigation : Utilisateurs et Audit selon `can()` ; aucune avant l'enrôlement forcé à la 2FA (lib/nav.ts). */
+const navEntries = computed(() => visibleNav(can, mustEnrollTwoFactor.value));
+/** Bandeau « tu es owner / admin » (06 § 2) : seul un rôle qui administre l'instance le voit. */
+const roleBanner = computed(() => (me.value?.role === 'owner' || me.value?.role === 'admin' ? `nav.roleBanner.${me.value.role}` : null));
+
+/** Classe de l'entrée courante ; « Mon compte » vit sous /settings mais n'allume pas aussi « Réglages ». */
+function activeClass(to: string): string {
+  return to === '/settings' && route.path.startsWith('/settings/account') ? 'router-link-active' : 'bg-accent font-medium';
+}
 
 const displayName = computed(() => me.value?.displayName || me.value?.email || '');
 
@@ -35,17 +38,25 @@ watchEffect(() => {
   document.title = key ? `${t(key)} · ${t('app.titleSuffix')}` : t('app.name');
 });
 
-// Flux SSE unique de l'onglet : ouvert tant que la session est authentifiée. Une session perdue renvoie à la connexion.
+// Flux SSE unique de l'onglet : ouvert tant que la session est authentifiée et complète (pas d'enrôlement 2FA forcé en attente).
+// Une session perdue renvoie à la connexion ; un second facteur attendu ou un enrôlement exigé en cours de route mène à l'écran concerné.
 watch(
-  isAuthenticated,
-  (authenticated) => {
-    if (authenticated) {
+  [isAuthenticated, mustEnrollTwoFactor, state],
+  ([authenticated, mustEnroll]) => {
+    if (authenticated && !mustEnroll) {
       startEventStream(markExpired);
+      return;
+    }
+    stopEventStream();
+    if (route.name === undefined || route.meta.public === true || route.meta.open === true) return;
+    if (authenticated) {
+      if (route.name !== 'two-factor-setup') void router.replace({ name: 'two-factor-setup' });
+    } else if (state.value === 'mfa_pending') {
+      void router.replace({ name: 'login', query: { mfa: '1' } });
+    } else if (state.value === 'not_initialized') {
+      void router.replace({ name: 'setup' });
     } else {
-      stopEventStream();
-      if (route.meta.public !== true && route.name !== undefined) {
-        void router.replace({ name: 'login', query: route.fullPath === '/' ? {} : { redirect: route.fullPath } });
-      }
+      void router.replace({ name: 'login', query: route.fullPath === '/' ? {} : { redirect: route.fullPath } });
     }
   },
   { immediate: true },
@@ -76,10 +87,10 @@ function focusMain(): void {
   <ConnectionBanner :status="streamStatus" />
   <header class="flex flex-wrap items-center justify-between gap-3 border-b px-4 py-3">
     <p class="text-lg font-semibold tracking-tight">{{ t('app.name') }}</p>
-    <nav v-if="isAuthenticated" :aria-label="t('nav.main')">
+    <nav v-if="isAuthenticated && navEntries.length > 0" :aria-label="t('nav.main')">
       <ul class="flex flex-wrap items-center gap-1">
-        <li v-for="entry in NAV" :key="entry.to">
-          <RouterLink :to="entry.to" class="flex min-h-11 items-center rounded-md px-3 text-sm hover:bg-accent" active-class="bg-accent font-medium">{{ t(entry.label) }}</RouterLink>
+        <li v-for="entry in navEntries" :key="entry.to">
+          <RouterLink :to="entry.to" class="flex min-h-11 items-center rounded-md px-3 text-sm hover:bg-accent" :active-class="activeClass(entry.to)">{{ t(entry.label) }}</RouterLink>
         </li>
       </ul>
     </nav>
@@ -91,6 +102,8 @@ function focusMain(): void {
       </template>
     </div>
   </header>
+  <p v-if="isAuthenticated && roleBanner" class="border-b bg-muted/50 px-4 py-2 text-sm" data-testid="role-banner">{{ t(roleBanner) }}</p>
+  <AccountNotices v-if="isAuthenticated" />
   <main id="main" tabindex="-1" class="px-4 outline-none">
     <RouterView />
   </main>

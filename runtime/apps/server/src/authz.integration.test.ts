@@ -108,6 +108,7 @@ const VALID_BODIES: Record<string, (party: Party) => Record<string, unknown>> = 
   'POST /api/auth/two-factor/verify': () => ({ code: '123456' }),
   'POST /api/auth/password-reset/request': () => ({ email: 'zz_test_nobody@example.test' }),
   'POST /api/auth/password-reset/confirm': () => ({ token: 'zz_test_not_a_token', password: 'zz_test_long_password_1' }),
+  'POST /api/me/password': (p) => ({ current_password: p.user.password, new_password: 'zz_test_long_password_1' }),
   'POST /api/me/2fa/enroll': (p) => ({ current_password: p.user.password }),
   'POST /api/me/2fa/confirm': () => ({ code: '123456' }),
   'POST /api/me/2fa/backup-codes': (p) => ({ current_password: p.user.password, code: '123456' }),

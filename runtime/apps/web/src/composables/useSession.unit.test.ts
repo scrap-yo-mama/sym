@@ -25,7 +25,7 @@ function install(routes: Record<string, Handler>): string[] {
 
 const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
 const SESSION = { session: { id: 's' }, user: { id: '3f2b6c1e-0000-4000-8000-000000000001', email: 'a@x.test' } };
-const ME = { id: '3f2b6c1e-0000-4000-8000-000000000001', email: 'a@x.test', displayName: 'Ada', role: 'owner', locale: 'fr', theme: 'dark', via: 'ui', scopes: null };
+const ME = { id: '3f2b6c1e-0000-4000-8000-000000000001', email: 'a@x.test', displayName: 'Ada', role: 'owner', locale: 'fr', theme: 'dark', via: 'ui', scopes: null, permissions: [], mfaEnabled: false, mfaRequired: false, mfaEnrollmentRequired: false };
 
 beforeEach(() => resetSession());
 afterEach(() => setApi(undefined));

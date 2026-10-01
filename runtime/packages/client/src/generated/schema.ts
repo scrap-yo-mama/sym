@@ -1128,6 +1128,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/me/password": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Change le mot de passe de l'appelant (mot de passe actuel exigé, voir `CurrentPassword`) ; la fermeture des autres sessions est proposée
+         * @description Nouveau mot de passe soumis à la politique (13 § 5 : 12 caractères au moins, liste locale des mots de passe compromis ; 400 `weak_password`). Les sessions restent ouvertes : la réponse donne le nombre des autres sessions, que la console propose de fermer (`DELETE /api/me/sessions`, ASVS 7.4.3). Un lien de réinitialisation en cours est annulé. Audit `auth.password_changed`, sans aucune valeur. Compte sans mot de passe local (OIDC seul) : 409 `no_local_password`.
+         */
+        post: operations["changeMyPassword"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/me/sessions": {
         parameters: {
             query?: never;
@@ -1676,6 +1696,11 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
+        /**
+         * @description Permission de la matrice des rôles (13 § 2), nom de `packages/core/src/auth/roles.ts`.
+         * @enum {string}
+         */
+        Permission: "account:update" | "account:mfa" | "account:sessions" | "apikeys:manage" | "users:invite" | "users:list" | "users:deactivate" | "users:delete" | "users:set_role" | "owner:transfer" | "users:revoke_sessions" | "apis:create" | "apis:update" | "apis:delete" | "schedules:manage" | "apis:read" | "apis:set_visibility" | "apis:run" | "runs:read" | "datasets:read" | "runs:stats" | "sites:connect" | "sites:server_use" | "tunnel:pair" | "sites:read_cookies" | "tunnel:route_other" | "apikeys:read_other" | "tunnel:revoke_other" | "apikeys:revoke_other" | "settings:llm:write" | "settings:proxies:write" | "settings:smtp:write" | "settings:security:write" | "settings:sso:write" | "audit:read" | "audit:export" | "audit:purge";
         Me: {
             /** Format: uuid */
             id: string;
@@ -1689,6 +1714,14 @@ export interface components {
             via: "ui" | "apikey";
             /** @description Scopes de la clé d'API ; null pour une session d'interface. */
             scopes: components["schemas"]["ApiKeyScope"][] | null;
+            /** @description Permissions que `can(role, …)` (13 § 2) accorde au rôle de l'appelant. La console pilote ses écrans et ses routes par cette liste, sans recopier la matrice ; le serveur reste seul juge à chaque requête. */
+            permissions: components["schemas"]["Permission"][];
+            /** @description 2FA TOTP confirmée et lisible sur le compte. */
+            mfaEnabled: boolean;
+            /** @description MFA_ENFORCED concerne le rôle de l'appelant (13 § 7) : la 2FA ne peut pas être retirée (`DELETE /api/me/2fa` répond 403 `mfa_enforced`), la console ne le propose pas. */
+            mfaRequired: boolean;
+            /** @description MFA_ENFORCED concerne le rôle et la 2FA n'est pas en place (ni `amr` de l'IdP) : toute route sauf l'enrôlement répond 403 `mfa_enrollment_required` (13 § 7). */
+            mfaEnrollmentRequired: boolean;
         };
         ApiKey: {
             /** Format: uuid */
@@ -2631,6 +2664,15 @@ export interface components {
             /** Format: date-time */
             at: string;
         }[];
+        /** @description Changement du mot de passe depuis Mon compte (ré-authentification par le mot de passe actuel). */
+        PasswordChange: {
+            current_password?: components["schemas"]["CurrentPassword"];
+            new_password: string;
+        };
+        PasswordChanged: {
+            /** @description Autres sessions d'interface ouvertes du compte, restées ouvertes ; la console propose de les fermer. */
+            other_sessions: number;
+        };
         /** @description Ré-authentification et second facteur (code TOTP ou code de secours), limité par compte. */
         PasswordAndCode: {
             current_password?: components["schemas"]["CurrentPassword"];
@@ -5083,6 +5125,35 @@ export interface operations {
             401: components["responses"]["Error"];
             403: components["responses"]["Error"];
             404: components["responses"]["Error"];
+        };
+    };
+    changeMyPassword: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PasswordChange"];
+            };
+        };
+        responses: {
+            /** @description Mot de passe changé. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PasswordChanged"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["ReauthError"];
+            409: components["responses"]["Error"];
+            429: components["responses"]["Error"];
         };
     };
     listMySessions: {

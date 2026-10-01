@@ -14,48 +14,7 @@ import { buildApi, setApi } from '@/lib/api';
 import { createAppRouter } from '@/router/index';
 import HomeView from '@/views/HomeView.vue';
 import { PUBLIC_URL, runSetup, startTestServer, type TestServer, type TestUser } from '../../../tests/helpers/server.js';
-
-/** Cookies posés par le serveur, renvoyés à chaque requête (même origine). */
-class CookieJar {
-  #cookies = new Map<string, string>();
-
-  header(): string | undefined {
-    return this.#cookies.size === 0 ? undefined : [...this.#cookies].map(([name, value]) => `${name}=${value}`).join('; ');
-  }
-
-  store(cookies: { name: string; value: string; maxAge?: number; expires?: Date }[]): void {
-    for (const cookie of cookies) {
-      const expired = cookie.value === '' || (cookie.maxAge !== undefined && cookie.maxAge <= 0) || (cookie.expires !== undefined && cookie.expires.getTime() <= Date.now());
-      if (expired) this.#cookies.delete(cookie.name);
-      else this.#cookies.set(cookie.name, cookie.value);
-    }
-  }
-
-  has(suffix: string): boolean {
-    return [...this.#cookies.keys()].some((name) => name.endsWith(suffix));
-  }
-}
-
-/** `fetch` du client → `app.inject`, avec l'en-tête `Origin` qu'un navigateur ajoute aux requêtes de mutation. */
-function injectFetch(srv: TestServer, jar: CookieJar): (request: Request) => Promise<Response> {
-  return async (request) => {
-    const url = new URL(request.url);
-    const headers: Record<string, string> = Object.fromEntries(request.headers);
-    const cookie = jar.header();
-    if (cookie) headers.cookie = cookie;
-    if (request.method !== 'GET' && request.method !== 'HEAD') headers.origin = PUBLIC_URL;
-    const payload = request.method === 'GET' || request.method === 'HEAD' ? undefined : await request.text();
-    const res = await srv.app.inject({ method: request.method as 'GET', url: url.pathname + url.search, headers, payload });
-    jar.store(res.cookies);
-    const outHeaders = new Headers();
-    for (const [name, value] of Object.entries(res.headers)) {
-      if (name === 'set-cookie' || value === undefined) continue;
-      outHeaders.set(name, Array.isArray(value) ? value.join(', ') : String(value));
-    }
-    const body = res.statusCode === 204 || res.statusCode === 304 ? null : new Uint8Array(res.rawPayload);
-    return new Response(body, { status: res.statusCode, headers: outHeaders });
-  };
-}
+import { CookieJar, injectFetch } from '@/testing/inject-fetch';
 
 describe('console : connexion puis page vide authentifiée (3.3)', () => {
   let srv: TestServer;

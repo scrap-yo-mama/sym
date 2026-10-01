@@ -83,6 +83,7 @@ export const ROUTES: readonly RouteSpec[] = [
   { method: 'GET', url: '/api/sso', auth: 'public' },
   { method: 'GET', url: '/.well-known/oauth-protected-resource', auth: 'public' },
   // Compte de l'appelant : sessions, 2FA, audit.
+  { method: 'POST', url: '/api/me/password', auth: 'session', permission: 'account:update' },
   { method: 'GET', url: '/api/me/sessions', auth: 'session', permission: 'account:sessions', resource: { type: 'auth_session', kind: 'collection' } },
   { method: 'DELETE', url: '/api/me/sessions', auth: 'session', permission: 'account:sessions' },
   { method: 'DELETE', url: '/api/me/sessions/:id', auth: 'session', permission: 'account:sessions', resource: { type: 'auth_session', kind: 'item' } },
