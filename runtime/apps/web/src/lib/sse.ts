@@ -76,6 +76,12 @@ export type EventStreamOptions = {
    * Défaut : `STOP_ON_NOT_FOUND_DEFAULT`.
    */
   stopOnNotFound?: boolean;
+  /**
+   * Une réponse qui se termine proprement arrête le flux au lieu de reconnecter (lecture finie d'un run : le replay d'une
+   * enquête terminée ; le flux de l'onglet, lui, ne se termine jamais et reconnecte). Défaut : false. Une coupure réseau
+   * reconnecte toujours.
+   */
+  stopOnEnd?: boolean;
 };
 
 /**
@@ -119,6 +125,7 @@ export class EventStreamClient {
       sleep: defaultSleep,
       dedupeSize: 1_000,
       stopOnNotFound: STOP_ON_NOT_FOUND_DEFAULT,
+      stopOnEnd: false,
       fetch: (input, init) => fetch(input, init),
       ...options,
     };
@@ -184,6 +191,7 @@ export class EventStreamClient {
     let serverRetry: number | null = null;
     while (!signal.aborted) {
       const parser = new SseParser();
+      let ended = false;
       // Chaque tentative a son propre signal : le silence du serveur l'interrompt sans arrêter la boucle.
       const attemptController = new AbortController();
       const abortAttempt = () => attemptController.abort();
@@ -214,7 +222,10 @@ export class EventStreamClient {
         const reader = response.body.pipeThrough(new TextDecoderStream()).getReader();
         for (;;) {
           const { done, value } = await reader.read();
-          if (done) break;
+          if (done) {
+            ended = true;
+            break;
+          }
           armIdle();
           for (const event of parser.push(value)) this.#dispatch(event);
           if (parser.retryMs !== null) serverRetry = parser.retryMs;
@@ -227,6 +238,10 @@ export class EventStreamClient {
         attemptController.abort();
       }
       if (signal.aborted) return;
+      if (ended && this.#options.stopOnEnd) {
+        this.stop();
+        return;
+      }
       this.#setStatus('reconnecting');
       await this.#options.sleep(serverRetry ?? this.#options.backoffMs(attempt), signal);
       attempt += 1;

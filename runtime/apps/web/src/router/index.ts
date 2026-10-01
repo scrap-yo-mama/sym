@@ -4,6 +4,7 @@
 import { nextTick } from 'vue';
 import { createRouter, createWebHistory, START_LOCATION, type Router, type RouterHistory } from 'vue-router';
 import { ensureSession } from '@/composables/useSession';
+import { API_TABS } from '@/lib/api-tabs';
 
 declare module 'vue-router' {
   interface RouteMeta {
@@ -32,6 +33,9 @@ export function createAppRouter(history: RouterHistory = createWebHistory()): Ro
     history,
     routes: [
       { path: '/login', name: 'login', component: () => import('@/views/LoginView.vue'), meta: { public: true, titleKey: 'auth.login.title' } },
+      { path: '/apis', name: 'catalog', component: () => import('@/views/ApiCatalogView.vue'), meta: { titleKey: 'catalog.title' } },
+      // Les routes statiques de /apis/… (par exemple /apis/new, tâche 3.5) l'emportent sur ce paramètre.
+      { path: `/apis/:slug/:tab(${API_TABS.join('|')})?`, name: 'api', component: () => import('@/views/ApiDetailView.vue'), meta: { titleKey: 'detail.title' } },
       { path: '/', name: 'home', component: () => import('@/views/HomeView.vue'), meta: { titleKey: 'home.title' } },
       { path: '/:pathMatch(.*)*', name: 'not-found', component: () => import('@/views/NotFoundView.vue'), meta: { titleKey: 'notFound.title' } },
     ],

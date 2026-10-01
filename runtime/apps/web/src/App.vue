@@ -2,7 +2,7 @@
 <script setup lang="ts">
 import { computed, watch, watchEffect } from 'vue';
 import { useI18n } from 'vue-i18n';
-import { RouterView, useRoute, useRouter } from 'vue-router';
+import { RouterLink, RouterView, useRoute, useRouter } from 'vue-router';
 import ConnectionBanner from '@/components/ConnectionBanner.vue';
 import PreferencesBar from '@/components/PreferencesBar.vue';
 import { Button } from '@/components/ui/button';
@@ -66,7 +66,12 @@ function focusMain(): void {
   </a>
   <ConnectionBanner :status="streamStatus" />
   <header class="flex flex-wrap items-center justify-between gap-3 border-b px-4 py-3">
-    <p class="text-lg font-semibold tracking-tight">{{ t('app.name') }}</p>
+    <div class="flex flex-wrap items-center gap-4">
+      <p class="text-lg font-semibold tracking-tight">{{ t('app.name') }}</p>
+      <nav v-if="isAuthenticated" :aria-label="t('nav.main')">
+        <RouterLink to="/apis" class="inline-flex min-h-11 items-center px-2 text-sm font-medium underline-offset-4 hover:underline focus-visible:underline">{{ t('nav.catalog') }}</RouterLink>
+      </nav>
+    </div>
     <div class="flex flex-wrap items-center gap-3">
       <PreferencesBar />
       <template v-if="isAuthenticated">

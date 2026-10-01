@@ -56,6 +56,8 @@ catalog:
   # Client API (tâche 3.3) : types générés par openapi-typescript depuis l'OpenAPI spécifiée, appels par openapi-fetch.
   openapi-fetch: 0.17.0
   openapi-typescript: 7.13.0
+  # Aide cron des planifications (tâche 3.4, 06 § 2 « Cron ») : MIT, sans dépendance ; 3.27.0 publiée le 2026-09-15 (plus de 7 jours).
+  cronstrue: 3.27.0
   # Lint des composants .vue (tâche 3.3).
   eslint-plugin-vue: 10.11.0
   vue-eslint-parser: 10.4.1
