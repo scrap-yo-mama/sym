@@ -126,6 +126,9 @@ export function validateSso(input: Omit<SsoSettings, 'client_secret_id'>): Omit<
   if (input.client_id.trim() === '') throw new SettingsError('client_id : requis');
   const domains = [...new Set(input.jit_provisioning.domains.map((d) => d.trim().toLowerCase()))];
   if (!domains.every((d) => DOMAIN.test(d))) throw new SettingsError('jit_provisioning.domains : noms de domaine attendus');
+  // 13 § 7 : création à la volée « activable avec liste de domaines ». Sans liste, un IdP public (Google…) ouvrirait
+  // l'instance à toute adresse vérifiée.
+  if (input.jit_provisioning.enabled && domains.length === 0) throw new SettingsError('jit_provisioning.domains : au moins un domaine');
   for (const g of input.group_roles) {
     if (g.role !== 'member' && g.role !== 'admin') throw new SettingsError('group_roles : rôle member ou admin seulement (owner jamais attribuable)');
     if (g.group.trim() === '' || g.group.length > 256) throw new SettingsError('group_roles : nom de groupe requis');

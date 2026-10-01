@@ -466,7 +466,9 @@ export function ssoRoutes(app: FastifyInstance, ctx: ServerContext): void {
       // par e-mail, assert_oidc_no_email_linking).
       const jit = sso.jit_provisioning;
       const security = await readSecuritySettings(ctx.pool);
-      if (!jit.enabled || !email || !emailVerified || !emailDomainAllowed(email, jit.domains) || !emailDomainAllowed(email, security.allowed_email_domains)) {
+      // Liste de domaines exigée ici aussi (défense en profondeur, réglage écrit hors validation) : emailDomainAllowed
+      // accepte tout pour une liste vide.
+      if (!jit.enabled || !Array.isArray(jit.domains) || jit.domains.length === 0 || !email || !emailVerified || !emailDomainAllowed(email, jit.domains) || !emailDomainAllowed(email, security.allowed_email_domains)) {
         return denied('no_account');
       }
       const exists = await ctx.pool.query<{ id: string }>('SELECT id FROM users WHERE email = $1', [email]);

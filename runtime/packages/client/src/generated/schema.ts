@@ -2469,6 +2469,7 @@ export interface components {
             issuer_url?: string;
             client_id?: string;
             sso_required?: boolean;
+            /** @description Création à la volée (13 § 7), désactivée par défaut ; activée, `domains` doit compter au moins un domaine (sinon 400 `invalid_settings`). */
             jit_provisioning?: {
                 enabled?: boolean;
                 domains?: string[];

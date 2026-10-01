@@ -4555,6 +4555,7 @@ components:
         sso_required:
           type: boolean
         jit_provisioning:
+          description: Création à la volée (13 § 7), désactivée par défaut ; activée, `domains` doit compter au moins un domaine (sinon 400 `invalid_settings`).
           type: object
           additionalProperties: false
           properties:

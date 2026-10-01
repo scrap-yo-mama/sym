@@ -487,6 +487,37 @@ describe('OIDC générique (13 § 7)', () => {
     await configureSso(srv, ownerCookie, { group_roles: [{ group: 'zz-ops', role: 'admin' }] });
   });
 
+  test('assert_oidc_jit_requires_domains : création à la volée sans liste de domaines → 400 ; réglage forcé en base → aucun compte créé', async () => {
+    // 13 § 7 : « activable avec liste de domaines ». Sans liste, un IdP public (Google…) ouvrirait l'instance à tous.
+    const empty = await srv.app.inject({
+      method: 'PUT',
+      url: '/api/settings/sso',
+      headers: json(ownerCookie),
+      payload: { enabled: true, slug: 'zz-test-idp', issuer_url: idp.issuer, client_id: idp.clientId, jit_provisioning: { enabled: true, domains: [] } },
+    });
+    expect(empty.statusCode, empty.body).toBe(400);
+    expect(empty.body).toContain('jit_provisioning.domains');
+    const blank = await srv.app.inject({
+      method: 'PUT',
+      url: '/api/settings/sso',
+      headers: json(ownerCookie),
+      payload: { enabled: true, slug: 'zz-test-idp', issuer_url: idp.issuer, client_id: idp.clientId, jit_provisioning: { enabled: true } },
+    });
+    expect(blank.statusCode, blank.body).toBe(400);
+    expect((await srv.app.inject({ method: 'GET', url: '/api/settings/sso', headers: { cookie: ownerCookie } })).json()).toMatchObject({ jit_provisioning: { enabled: false } });
+    idp.nextClaims = { sub: 'zz_test_jit_open_sub', email: 'zz_test_jit_open@anyone.test', email_verified: true };
+    expect((await oidcLogin(srv)).location).toContain('sso_error=no_account');
+    // Défense en profondeur : réglage écrit en base sans passer par la validation (ancienne version, édition manuelle).
+    await sql(srv, "UPDATE settings SET value = jsonb_set(value, '{jit_provisioning}', '{\"enabled\": true, \"domains\": []}'::jsonb) WHERE key = 'sso'");
+    expect((await sql(srv, "SELECT value->'jit_provisioning' AS j FROM settings WHERE key = 'sso'"))[0]).toEqual({ j: { enabled: true, domains: [] } });
+    const forced = await oidcLogin(srv);
+    expect(forced.location).toContain('sso_error=no_account');
+    expect(forced.cookie).toBe('');
+    expect(await sql(srv, 'SELECT count(*)::int AS n FROM users WHERE email = $1', ['zz_test_jit_open@anyone.test'])).toEqual([{ n: 0 }]);
+    expect(await sql(srv, "SELECT user_id FROM auth_accounts WHERE account_id LIKE '%zz_test_jit_open_sub'")).toEqual([]);
+    await configureSso(srv, ownerCookie, { group_roles: [{ group: 'zz-ops', role: 'admin' }] });
+  });
+
   test('acceptation d’une invitation par l’IdP : adresse vérifiée identique exigée', async () => {
     const created = await srv.app.inject({ method: 'POST', url: '/api/invitations', headers: json(adminCookie), payload: { email: 'zz_test_oidc_invited@example.test', role: 'member' } });
     expect(created.statusCode, created.body).toBe(201);
