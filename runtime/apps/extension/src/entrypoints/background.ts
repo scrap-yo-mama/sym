@@ -24,6 +24,7 @@ export default defineBackground(() => {
     cookies: { getAll: (details) => browser.cookies.getAll(details) as Promise<BrowserCookie[]> },
     fetch: (url, init) => fetch(url, { ...init, credentials: 'omit', cache: 'no-store' }),
     randomId: () => crypto.randomUUID(),
+    version: browser.runtime.getManifest().version,
   });
 
   async function handle(request: Request): Promise<unknown> {

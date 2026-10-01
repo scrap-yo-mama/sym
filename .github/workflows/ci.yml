@@ -25,6 +25,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          fetch-depth: 0 # historique complet : audit X6 de l'historique (et release à blanc)
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
         with:
           package_json_file: runtime/package.json
@@ -36,6 +37,9 @@ jobs:
       - name: Garde X6 (aucun .py ni .ipynb ni nom suspect dans tout le dépôt, depuis la racine)
         working-directory: .
         run: node runtime/scripts/check-x6.ts
+      - name: Garde X6 sur tout l'historique git (assert_x6_history_clean)
+        working-directory: .
+        run: node runtime/scripts/check-x6.ts --history
       - run: pnpm typecheck
       - run: pnpm lint
       - run: pnpm knip
@@ -45,8 +49,20 @@ jobs:
         run: pnpm check:deps-pinned
       - name: Liste noire INV6 (lockfile)
         run: pnpm check:blacklist
-      - name: Scan des licences (assert_licenses_compatible)
+      - name: Scan des licences, global et par paquet (assert_licenses_compatible ; client et schemas MIT sans copyleft)
         run: pnpm check:licenses
+      - name: Workflows et image de release (assert_release_gates)
+        run: pnpm check:release
+      - name: Commit conventionnel (titre de la PR, 16 §3)
+        if: github.event_name == 'pull_request'
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: node scripts/release/conventional.ts
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: v3.1.3
+      - name: Release à blanc (SBOM, signature avec une clé de test, vérification ; rien n'est publié)
+        run: pnpm release:dry-run
       # À venir : vue-tsc (tâche 3.x).
 
   unit:
@@ -55,6 +71,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          fetch-depth: 0 # historique complet : le test unitaire assert_x6_history_clean audite l'historique réel (assert_ci_full_history)
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
         with:
           package_json_file: runtime/package.json
@@ -63,6 +80,9 @@ jobs:
           node-version-file: runtime/.node-version
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: v3.1.3
       - run: pnpm test:coverage
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:

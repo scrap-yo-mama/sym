@@ -39,6 +39,7 @@ export type RouteSpec = {
 export const ROUTES: readonly RouteSpec[] = [
   { method: 'GET', url: '/api/health', auth: 'public', beforeInit: true, duringStartup: true },
   { method: 'GET', url: '/api/ready', auth: 'public', beforeInit: true, duringStartup: true },
+  { method: 'GET', url: '/api/version', auth: 'public', beforeInit: true, duringStartup: true },
   // `/metrics` : jeton propre (METRICS_TOKEN), 404 sans configuration ; jamais une identité d'utilisateur.
   { method: 'GET', url: '/metrics', auth: 'public', beforeInit: true },
   { method: 'POST', url: '/api/setup', auth: 'public', beforeInit: true },

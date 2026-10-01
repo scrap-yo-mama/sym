@@ -16,3 +16,6 @@ __pycache__/
 .DS_Store
 .wxt/
 .output/
+# Release à blanc (tâche 4.9) : clés de test cosign et sorties jamais versionnées
+zz_test_cosign*
+release-out/

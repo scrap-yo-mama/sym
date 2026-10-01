@@ -19,3 +19,4 @@ export * from './pacing/index.js';
 export * from './observability/index.js';
 export * from './privacy/index.js';
 export type * from './sandbox/index.js';
+export * from './version.js';

@@ -26,6 +26,8 @@ function harness(
     /** Domaines connectés tels que l'instance les connaît ; par défaut, l'instance suit les PUT/DELETE reçus. */
     remote?: RemoteSite[];
     fetchError?: (c: Call) => boolean;
+    /** Version de l'extension (manifeste). */
+    version?: string;
   } = {},
 ) {
   const store = new Map<string, unknown>();
@@ -91,12 +93,15 @@ function harness(
         json: async () =>
           call.url.endsWith('/api/extension/pair')
             ? { token: `sy_ext_zz_test_token_${origin === ORIGIN ? 'a' : 'b'}`, email: 'zz_test_a@example.test', deviceLabel: null, expiresAt: '2027-01-01T00:00:00.000Z' }
+            : call.url.endsWith('/api/version')
+              ? { server: '0.4.2', schema: 9, min_extension: '0.4.0', mcp_spec: '2026-07-28' }
             : call.url.endsWith('/api/extension/session')
               ? { email: 'zz_test_a@example.test', deviceLabel: null, sites: structuredClone(remote) }
               : {},
       };
     },
     randomId: () => 'zz_test_device_0001',
+    version: opts.version ?? '0.4.0',
   };
   return { controller: new ExtensionController(deps), store, granted, calls, events, reads, remote };
 }
@@ -119,6 +124,28 @@ async function paired(opts: Parameters<typeof harness>[0] = {}) {
 }
 
 describe('appairage (07 § 1)', () => {
+  test('version de l’extension envoyée à l’appairage ; sous min_extension (426) : refus, message qui nomme la version requise, rien de gardé', async () => {
+    const ok = harness();
+    await ok.controller.pair({ instanceUrl: ORIGIN, code: 'ABCDE-FGHJK', deviceLabel: null });
+    expect((ok.calls[0]!.body as { extensionVersion: string }).extensionVersion).toBe('0.4.0');
+
+    const old = harness({ version: '0.3.9', statusFor: (c) => (c.url.endsWith('/pair') ? 426 : 200) });
+    await expect(old.controller.pair({ instanceUrl: ORIGIN, code: 'ABCDE-FGHJK', deviceLabel: null })).rejects.toMatchObject({
+      code: 'extension_outdated',
+      message: expect.stringContaining('0.4.0'),
+    });
+    await expect(old.controller.pair({ instanceUrl: ORIGIN, code: 'ABCDE-FGHJK', deviceLabel: null })).rejects.toThrow(/0\.3\.9/);
+    expect(old.store.get('pairing')).toBeUndefined();
+    // La version requise vient de GET /api/version de l'instance (servi localement), sans cookie ni jeton.
+    const versionCall = old.calls.find((c) => c.url.endsWith('/api/version'))!;
+    expect(versionCall.method).toBe('GET');
+    expect(JSON.stringify(versionCall.headers)).not.toMatch(/authorization|cookie/i);
+
+    // Instance injoignable pour /api/version : le refus reste clair, sans version requise.
+    const mute = harness({ version: '0.3.9', statusFor: (c) => (c.url.endsWith('/pair') ? 426 : 500), fetchError: (c) => c.url.endsWith('/api/version') });
+    await expect(mute.controller.pair({ instanceUrl: ORIGIN, code: 'ABCDE-FGHJK', deviceLabel: null })).rejects.toMatchObject({ code: 'extension_outdated', message: expect.stringContaining('update') });
+  });
+
   test('HTTPS obligatoire ; HTTP accepté pour une instance locale de développement seulement', async () => {
     const h = harness();
     await expect(h.controller.pair({ instanceUrl: 'http://runtime.zz-test.example', code: 'ABCDE-FGHJK', deviceLabel: null })).rejects.toMatchObject({ code: 'https_required' });

@@ -23,6 +23,7 @@
     "knip": "knip",
     "check:invariants": "node scripts/check-invariants.ts",
     "check:x6": "node scripts/check-x6.ts",
+    "check:x6-history": "node scripts/check-x6.ts --history",
     "test:coverage": "vitest run --project unit --coverage",
     "check:deps-pinned": "node scripts/check-deps-pinned.ts",
     "check:licenses": "node scripts/check-licenses.ts",
@@ -32,7 +33,9 @@
     "ci:local": "node scripts/ci-local.ts",
     "gen:openapi": "node scripts/gen-openapi-client.ts",
     "check:openapi-client": "node scripts/gen-openapi-client.ts --check",
-    "package:extension": "node scripts/extension-package.ts"
+    "package:extension": "node scripts/extension-package.ts",
+    "release:dry-run": "node scripts/release/dry-run.ts",
+    "check:release": "node scripts/release/gates.ts"
   },
   "devDependencies": {
     "@eslint/js": "catalog:",
