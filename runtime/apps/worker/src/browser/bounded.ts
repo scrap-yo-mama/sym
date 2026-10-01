@@ -70,6 +70,8 @@ export type DecodedSizes = {
    * reçu en entier ; `undefined` si inconnue ou pas finie dans le délai.
    */
   decodedBodySize(response: Response, timeoutMs: number): Promise<number | undefined>;
+  /** Octets reçus par la page (`encodedDataLength` des chargements finis, tous types) : coût mesuré d'une passe. */
+  received(): number;
 };
 
 /** Documents suivis au plus (les plus anciens sortent). */
@@ -77,22 +79,32 @@ const TRACKED_DOCUMENTS = 64;
 
 type TrackedDocument = { url: string; decoded: number; done: boolean };
 
-/** Suivi des tailles décodées des documents d'une page par sa session CDP (`Network.enable`). */
-export async function trackDecodedSizes(session: CDPSession): Promise<DecodedSizes> {
+/**
+ * Suivi des tailles décodées des documents d'une page par sa session CDP (`Network.enable`). `types` : types CDP
+ * suivis (défaut : `Document` ; la reconnaissance de l'enquête y ajoute `Fetch` et `XHR`, tâche 2.1).
+ */
+export async function trackDecodedSizes(session: CDPSession, types: readonly string[] = ['Document']): Promise<DecodedSizes> {
+  const tracked = new Set(types);
   const documents = new Map<string, TrackedDocument>();
+  let received = 0;
+  // Requêtes de données suivies en plus des documents : plafond plus large, pour ne pas évincer le document principal.
+  const cap = tracked.size > 1 ? TRACKED_DOCUMENTS * 4 : TRACKED_DOCUMENTS;
   const waiters = new Set<() => void>();
   const wake = (): void => {
     for (const waiter of [...waiters]) waiter();
   };
   session.on('Network.responseReceived', (event) => {
-    if (event.type !== 'Document') return;
+    if (event.type === undefined || !tracked.has(event.type)) return;
     documents.set(event.requestId, { url: event.response.url, decoded: 0, done: false });
-    if (documents.size > TRACKED_DOCUMENTS) documents.delete(documents.keys().next().value as string);
+    if (documents.size > cap) documents.delete(documents.keys().next().value as string);
     wake();
   });
   session.on('Network.dataReceived', (event) => {
     const doc = documents.get(event.requestId);
     if (doc !== undefined) doc.decoded += event.dataLength;
+  });
+  session.on('Network.loadingFinished', (event) => {
+    if (Number.isFinite(event.encodedDataLength) && event.encodedDataLength > 0) received += event.encodedDataLength;
   });
   const finish = (event: { requestId: string }): void => {
     const doc = documents.get(event.requestId);
@@ -110,6 +122,7 @@ export async function trackDecodedSizes(session: CDPSession): Promise<DecodedSiz
     return Math.max(...matching.map((d) => d.decoded));
   };
   return {
+    received: () => received,
     decodedBodySize: (response, timeoutMs) => {
       const url = response.url();
       const now = settled(url);

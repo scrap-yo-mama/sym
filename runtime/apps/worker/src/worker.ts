@@ -13,7 +13,9 @@
 //    en fin de run, appliqué à `error_detail`) et liste d'exclusion (`RunContext.excludeSubjects`, appliquée aussi par
 //    `RunContext.writeItems`, qui écrit le dataset sous l'identité du propriétaire avec la dédup de la planification) ; passe de rétention
 //    planifiée toutes les RETENTION_TICK_SECONDS (marquage horaire, purge et `ensure_partitions` quotidiens, verrou
-//    consultatif : une seule instance à la fois), sur une connexion de session.
+//    consultatif : une seule instance à la fois), sur une connexion de session ;
+// 8. enquête (2.1) : la nature du run (`runs.kind`) est passée à l'exécuteur, qui reçoit aussi la machine à états
+//    (`applyStatus`, transitions 1 à 4 et 21) et l'imputation des coûts hors couple (`chargeCost` : rôle `investigate`).
 import { randomBytes } from 'node:crypto';
 import { hostname } from 'node:os';
 import {
@@ -36,6 +38,7 @@ import {
   appendRunItems,
   applyStatusAndNotify,
   beatWorker,
+  chargeRunCost,
   claimRun,
   createRunLogger,
   currentSchemaVersion,
@@ -309,16 +312,25 @@ export async function startWorker(options: StartWorkerOptions): Promise<Worker> 
           ownerId: claim.ownerId,
           strategyVersion: claim.strategyVersion,
           input: claim.input,
+          kind: claim.kind,
           signal: controller.signal,
           recordAttempt: async (attempt) => {
             await recordAttempt(pool, runId, jobId, attempt);
           },
+          chargeCost: (cost) => chargeRunCost(pool, runId, jobId, cost),
           log: runLog.log,
           personal,
           excludeSubjects: (outputSchema, items) => filterExcludedItems(subjects, excluded, outputSchema, items),
           writeItems,
           // Mode tunnel : extension hors ligne → `waiting_tunnel`, de retour → `running` (07 § 6).
           waitingTunnel: (waiting) => setRunWaitingTunnel(pool, runId, jobId, waiting),
+          // Machine à états (04 §6) : une enquête mène son API à `sain`, `bloquee`, `action_requise` ou `erreur`
+          // (transitions 1 à 4, 21) ; status_events, webhooks et alertes dans la même transaction.
+          applyStatus: async (event) => {
+            const step = await applyStatusAndNotify(pool, q, { apiId: claim.apiId, runId, event, clock: { now: () => new Date() } });
+            await runLog.log('info', 'status_event', { event: event.type, applied: step.ok });
+            return { ok: step.ok, status: step.state.status, reason: step.state.reason };
+          },
         });
         // Le dataset du run est celui que le worker a écrit, jamais un autre nommé par l'exécuteur.
         if (result.state === 'succeeded' && dataset.written !== null) result = { ...result, dataset_id: dataset.written.dataset_id };

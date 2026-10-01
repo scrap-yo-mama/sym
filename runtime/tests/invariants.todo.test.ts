@@ -34,7 +34,10 @@ import { describe, test } from "vitest";
 // chaque saut de redirection suivi par Chromium, barre oblique finale, second hôte autorisé, WebSocket, robots.txt redirigé vers un
 // autre hôte) et apps/worker/src/browser/request-guard.security.test.ts (contrôle CDP : cadre hors processus, worker dédié) ;
 // le volet tunnel et extension (17 § 1 : 0 requête aussi en mode tunnel) est repris par 2.7 (test.todo ci-dessous) ;
-// assert_access_report_first : packages/db/src/investigation-events.integration.test.ts (migration 0015 ; repris par 2.1).
+// assert_access_report_first : packages/db/src/investigation-events.integration.test.ts (migration 0015) et, enquête réelle
+// (2.1), apps/worker/src/exec/investigation.integration.test.ts.
+// INV2 (2.1) : le test nommé du moins cher d'abord est dans apps/worker/src/exec/investigation.integration.test.ts (sans navigateur),
+// apps/worker/src/exec/investigation.security.test.ts (Chromium, capture XHR) et packages/core/src/investigation/investigation.unit.test.ts.
 // INV9 et exploitation (4.6) : assert_diagnostics_redacted (packages/db/src/ops/ops.integration.test.ts, apps/cli/src/cli.ops.integration.test.ts),
 // assert_backup_restore_roundtrip, assert_upgrade_n_minus_1, assert_rollback_restores_state (tests/operations.integration.test.ts).
 // INV9 et INV8 (1.10) : assert_no_telemetry (serveur + worker + run, 0 destination non locale), assert_otel_off_by_default,
@@ -52,9 +55,10 @@ import { describe, test } from "vitest";
 // classify.fixtures.unit.test.ts, guard.unit.test.ts, apps/worker/src/exec/classification-guard.integration.test.ts,
 // tests/browser/executors.security.test.ts (Chromium) et tests/no-circumvention.unit.test.ts (dépendances, imports) ; audit en 4.3.
 describe("invariants (à implémenter)", () => {
-  test.todo("assert_cheapest_first_logged"); // INV2, tâche(s) 2.1
   // ADR 0001, point faible connu (F-E5, pagination par bouton) : 2.4 ne compile qu'une trace à un enregistrement ; une liste
   // est refusée (`list_not_compilable`, épinglé par assert_e5_list_not_compiled) et reste rejouée par l'agent (E5 « mouvant »).
+  // 2.1 (vérification) : une trace E6 n'est jamais retenue sans compilation en E5 (retainedStrategy) ; le code de raison dédié vient avec 2.13.
+  test.todo("assert_investigation_not_compilable_reason — enquête dont seule une trace E6 non compilable est conforme, sans instructed_mode : erreur raison not_compilable (transition 2), ré-enquête : statut précédent raison not_compilable (21)"); // 2.13
   test.todo("assert_e5_list_compiled — trace E6 réussie sur F-E5 compilée en E5 (clics « Suivant » répétés, extraction par enregistrement à chaque page) et rejouée sans LLM, sortie identique"); // ADR 0001, suivi de 2.4 (tâche de rattachement à créer dans 10-taches)
   // INV11 (revue de 1.11, journal D-33) : 17 § 1 et le contrat IA de 1.11 exigent 0 requête sur un chemin interdit AUSSI en
   // tunnel et via l'extension. 2.7 (passerelle WSS) a été fusionnée avant 1.11, sans contrôle robots : la tâche de suivi 2.7b

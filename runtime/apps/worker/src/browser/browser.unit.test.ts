@@ -352,7 +352,7 @@ describe('boundedDocumentBody : corps brut d’un document lu seulement si sa ta
   type FakeResponse = Parameters<typeof boundedDocumentBody>[0];
   const response = (headers: Record<string, string>, transferred: number, text: () => Promise<string>): FakeResponse =>
     ({ headers: () => headers, url: () => 'http://zz_test_x.localhost/', request: () => ({ sizes: async () => ({ responseBodySize: transferred }) }), text }) as unknown as FakeResponse;
-  const sizes = (decoded: number | undefined): DecodedSizes => ({ decodedBodySize: async () => decoded });
+  const sizes = (decoded: number | undefined): DecodedSizes => ({ decodedBodySize: async () => decoded, received: () => 0 });
 
   test('bombe de compression (32 Kio transférés, des dizaines de Mo décodés) : jamais rapatriée dans Node', async () => {
     const text = vi.fn(async () => 'x'.repeat(10));

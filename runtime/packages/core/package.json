@@ -26,6 +26,10 @@
     "./access": {
       "types": "./dist/access/index.d.ts",
       "default": "./dist/access/index.js"
+    },
+    "./investigation": {
+      "types": "./dist/investigation/index.d.ts",
+      "default": "./dist/investigation/index.js"
     }
   },
   "files": [

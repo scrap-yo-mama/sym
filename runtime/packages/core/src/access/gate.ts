@@ -116,6 +116,11 @@ export type RobotsGateOptions = {
    * Les redirections de robots.txt, elles, sont suivies vers tout hôte (sous la garde SSRF).
    */
   readonly allowedHosts?: readonly string[];
+  /**
+   * Portées de site admises en plus d'`allowedHosts` (le domaine et ses sous-domaines), posées par le code de la
+   * reconnaissance de l'enquête seulement (2.1, 04b §2 : données sur `api.exemple.test` pour une page de `www.exemple.test`).
+   */
+  readonly allowedHostSuffixes?: readonly string[];
 };
 
 function originOf(url: URL): string {
@@ -174,7 +179,8 @@ export class RobotsGate {
     const hosts = this.#options.allowedHosts;
     if (hosts !== undefined) {
       const host = parsed.hostname.toLowerCase().replace(/\.$/, '');
-      if (!hosts.some((h) => h.toLowerCase().replace(/\.$/, '') === host)) {
+      const scopes = this.#options.allowedHostSuffixes ?? [];
+      if (!hosts.some((h) => h.toLowerCase().replace(/\.$/, '') === host) && !scopes.some((s) => host === s.toLowerCase() || host.endsWith(`.${s.toLowerCase()}`))) {
         return { allowed: false, failure: { failure_class: 'code_error', retryable: false, detail: 'domain_not_allowed' }, state: null, rule: null };
       }
     }

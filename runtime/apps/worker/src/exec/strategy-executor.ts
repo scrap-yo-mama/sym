@@ -28,6 +28,8 @@
 //    n'est collecté. `Crawl-delay` est un plancher de la cadence. User-Agent réel du moteur embarqué (sans `HeadlessChrome`),
 //    imposé à chaque requête (une stratégie ne le remplace pas), le même pour le client HTTP et pour Chromium ; avec
 //    `identify_instance` (désactivé par défaut), le jeton `compatible; Scrapyomama/<version>; +<contact>` s'y ajoute.
+// 8. enquête (2.1) : `createStrategyRuntime(...).trial` exécute une stratégie CANDIDATE avec toutes ces gardes, sans
+//    journaliser d'essai ni écrire de dataset (l'exécuteur d'enquête journalise un essai par couple).
 import {
   assertExecutionOnNetwork,
   ExecutionNotOnNetworkError,
@@ -178,6 +180,27 @@ type Outcome = {
   needsUser?: boolean;
 };
 
+/** Un essai d'une stratégie, gardes comprises, avant journalisation (`runTrial`). */
+export type StrategyTrial = {
+  readonly outcome: Outcome;
+  /** Résultat après registre de masquage et liste d'exclusion (D-28). */
+  readonly result: DeclarativeRunResult;
+  readonly evidence: readonly AgentEvidence[];
+  /** Classe retenue par la garde de classification (1.7) : un refus prime sur l'échec vu par l'exécuteur. */
+  readonly guardedFailure: ExecFailure | undefined;
+  readonly proxyUsd: number;
+  readonly llm: LlmSpend | null;
+  /** `null` : prix du modèle absent, coût inconnu (jamais 0). */
+  readonly llmUsd: number | null;
+  readonly ms: number;
+};
+
+/** Exécuteur des runs et essai d'une stratégie candidate (enquête, tâche 2.1), avec les mêmes gardes. */
+export type StrategyRuntime = {
+  readonly executor: RunExecutor;
+  readonly trial: (ctx: RunCtx, target: RunTarget, strategy: NonNullable<RunTarget['strategy']>) => Promise<StrategyTrial>;
+};
+
 /** Somme des usages réseau d'un essai (egress Chromium + session `ctx.fetch` du script). */
 function addUsage(a: NetworkUsage, b: NetworkUsage): NetworkUsage {
   return { ...a, bytes: a.bytes + b.bytes, requests: a.requests + b.requests, costUsd: Math.round((a.costUsd + b.costUsd) * 1e6) / 1e6 };
@@ -265,7 +288,7 @@ function agenticSpecOf(execution: string, spec: unknown): AgenticSpec | undefine
   return undefined;
 }
 
-export function createStrategyExecutor(deps: StrategyExecutorDeps): RunExecutor {
+export function createStrategyRuntime(deps: StrategyExecutorDeps): StrategyRuntime {
   const now = deps.now ?? Date.now;
 
   const rungFor = async (target: RunTarget, network: string): Promise<{ rung: NetworkRung; credentials?: ProxyCredentials }> => {
@@ -636,13 +659,12 @@ export function createStrategyExecutor(deps: StrategyExecutorDeps): RunExecutor 
     }
   };
 
-  return async (ctx): Promise<RunResult> => {
-    const started = now();
-    const target = await loadRunTarget(deps.pool, { apiId: ctx.apiId, ownerId: ctx.ownerId, version: ctx.strategyVersion });
-    if (target === null) return { state: 'failed', failure_class: 'code_error', retryable: false, error_detail: 'api_not_found' };
-    const strategy = target.strategy;
-    if (strategy === null) return { state: 'failed', failure_class: 'code_error', retryable: false, error_detail: 'no_strategy_version' };
-
+  /**
+   * Un essai d'une stratégie (figée ou candidate d'une enquête) avec TOUTES les gardes de l'exécution : robots.txt,
+   * SSRF, verrou de domaines, cadence, plafond de coût, bac à sable, classification avant extraction (INV6), registre
+   * de masquage et liste d'exclusion (D-28). Rien n'est journalisé dans `run_attempts` ni écrit en dataset ici.
+   */
+  const runTrial = async (ctx: RunCtx, target: RunTarget, strategy: NonNullable<RunTarget['strategy']>, started = now()): Promise<StrategyTrial> => {
     let outcome: Outcome;
     try {
       outcome = await execute(ctx, target, strategy);
@@ -650,7 +672,6 @@ export function createStrategyExecutor(deps: StrategyExecutorDeps): RunExecutor 
       if (!(error instanceof TargetError)) throw error;
       outcome = { result: { ok: false, failure: error.failure, pages: 0, requests: 0 }, usage: null };
     }
-    const { usage } = outcome;
     let result = outcome.result;
     if (outcome.violations !== undefined && outcome.violations.length > 0) {
       await ctx.log('warn', 'sandbox_violation', { reasons: outcome.violations.map((v) => v.reason) });
@@ -681,7 +702,30 @@ export function createStrategyExecutor(deps: StrategyExecutorDeps): RunExecutor 
     if (!result.ok && guardedFailure !== undefined && guardedFailure.failure_class !== result.failure.failure_class && result.evidence !== undefined) {
       await pacerFor(target)?.report(result.evidence.url, { status: result.evidence.status, retryAfter: null, failureClass: guardedFailure.failure_class });
     }
-    const proxyUsd = usage?.costUsd ?? 0;
+    const llm: LlmSpend | null = outcome.agent?.llm ?? null;
+    return {
+      outcome,
+      result,
+      evidence,
+      guardedFailure,
+      proxyUsd: outcome.usage?.costUsd ?? 0,
+      llm,
+      // Prix absent : coût LLM inconnu (jamais 0, 08 §1 ; INV4).
+      llmUsd: llm === null ? 0 : llm.usd,
+      ms: Math.max(0, Math.round(now() - started)),
+    };
+  };
+
+  const executor: RunExecutor = async (ctx): Promise<RunResult> => {
+    const started = now();
+    const target = await loadRunTarget(deps.pool, { apiId: ctx.apiId, ownerId: ctx.ownerId, version: ctx.strategyVersion });
+    if (target === null) return { state: 'failed', failure_class: 'code_error', retryable: false, error_detail: 'api_not_found' };
+    const strategy = target.strategy;
+    if (strategy === null) return { state: 'failed', failure_class: 'code_error', retryable: false, error_detail: 'no_strategy_version' };
+
+    const trial = await runTrial(ctx, target, strategy, started);
+    const { outcome, evidence, guardedFailure, proxyUsd, llm, llmUsd } = trial;
+    const result = trial.result;
     // Extension hors ligne (04 §6, 05) : le run, resté en `waiting_tunnel`, se termine `skipped_tunnel_offline`. Aucun
     // essai (aucune commande n'a abouti, ce n'est pas un échec réseau), aucune classe d'échec, statut de l'API inchangé.
     const stop = outcome.stop;
@@ -691,9 +735,7 @@ export function createStrategyExecutor(deps: StrategyExecutorDeps): RunExecutor 
     }
     // Défi en tunnel : l'essai est journalisé avec sa cause de fait (protection), le run s'arrête SANS classe d'échec
     // (04 §6) : `challenge_in_tunnel` → action_requise, la main revient à l'humain.
-    const llm: LlmSpend | null = outcome.agent?.llm ?? null;
     // Prix absent : coût LLM inconnu, écrit null (jamais 0, 08 §1 ; INV4), avec avertissement.
-    const llmUsd: number | null = llm === null ? 0 : llm.usd;
     if (llm !== null && llm.usd === null) await ctx.log('warn', 'llm_price_missing', { model: llm.modelId });
     if ((outcome.agent?.domainBlocked ?? 0) > 0) await ctx.log('warn', 'agent_domain_blocked', { count: outcome.agent?.domainBlocked });
     await ctx.recordAttempt({
@@ -701,7 +743,7 @@ export function createStrategyExecutor(deps: StrategyExecutorDeps): RunExecutor 
       network: strategy.network,
       est_cost_usd: strategy.estCostUsd,
       result: stop === 'challenge_in_tunnel' ? 'blocked_by_protection' : guardedFailure === undefined ? 'ok' : guardedFailure.failure_class,
-      ms: Math.max(0, Math.round(now() - started)),
+      ms: trial.ms,
       proxy_usd: proxyUsd,
       ...(llm === null
         ? {}
@@ -773,4 +815,10 @@ export function createStrategyExecutor(deps: StrategyExecutorDeps): RunExecutor 
       strategy_version: version,
     };
   };
+  return { executor, trial: runTrial };
+}
+
+/** Exécuteur des runs de stratégie (E1-E6, tunnel) : `createStrategyRuntime(deps).executor`. */
+export function createStrategyExecutor(deps: StrategyExecutorDeps): RunExecutor {
+  return createStrategyRuntime(deps).executor;
 }

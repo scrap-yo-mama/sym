@@ -44,6 +44,8 @@ export type RunContextOptions = {
   readonly egressServer: string;
   /** Domaines de l'API (`allowed_hosts`) : toute autre requête du navigateur est coupée. */
   readonly allowedHosts: readonly string[];
+  /** Portées de site admises en plus (domaine et sous-domaines) : reconnaissance de l'enquête seulement (2.1, 04b §2). */
+  readonly allowedHostSuffixes?: readonly string[];
   /**
    * Requête coupée par la politique de domaines (hôte seulement ; la requête Chromium quand il y en a une, absente pour
    * un WebSocket) : E3 en script tue alors l'enfant du bac à sable si la requête lui est imputable.
@@ -104,8 +106,11 @@ function websocketHandshakeUrl(url: string): string | undefined {
   }
 }
 
-/** Nom d'hôte autorisé : égal à un domaine de l'API (comparaison exacte, minuscules, sans point final). */
-export function hostAllowed(url: string, allowedHosts: readonly string[]): boolean {
+/**
+ * Nom d'hôte autorisé : égal à un domaine de l'API (comparaison exacte, minuscules, sans point final), ou dans une portée
+ * de site posée par le code (`suffixes` : le domaine et ses sous-domaines ; jamais tirée d'une stratégie).
+ */
+export function hostAllowed(url: string, allowedHosts: readonly string[], suffixes: readonly string[] = []): boolean {
   let parsed: URL;
   try {
     parsed = new URL(url);
@@ -114,7 +119,7 @@ export function hostAllowed(url: string, allowedHosts: readonly string[]): boole
   }
   if (!['http:', 'https:', 'ws:', 'wss:'].includes(parsed.protocol) || parsed.username !== '' || parsed.password !== '') return false;
   const host = parsed.hostname.toLowerCase().replace(/\.$/, '');
-  return allowedHosts.some((h) => h.toLowerCase() === host);
+  return allowedHosts.some((h) => h.toLowerCase() === host) || suffixes.some((s) => host === s.toLowerCase() || host.endsWith(`.${s.toLowerCase()}`));
 }
 
 export async function openRunContext(browser: Browser, options: RunContextOptions): Promise<RunContext> {
@@ -185,7 +190,7 @@ export async function openRunContext(browser: Browser, options: RunContextOption
         await route.abort('blockedbyclient');
         return;
       }
-      if (hostAllowed(url, options.allowedHosts)) {
+      if (hostAllowed(url, options.allowedHosts, options.allowedHostSuffixes)) {
         const admitted = options.admit === undefined ? true : await options.admit(route.request()).catch(() => false);
         // Retombée sur les routes posées avant celle-ci (aucune sur un contexte neuf : la requête part).
         if (admitted) await route.fallback();
@@ -196,7 +201,7 @@ export async function openRunContext(browser: Browser, options: RunContextOption
       }
     });
     await context.routeWebSocket(/.*/, async (ws) => {
-      if (!hostAllowed(ws.url(), options.allowedHosts)) {
+      if (!hostAllowed(ws.url(), options.allowedHosts, options.allowedHostSuffixes)) {
         note(ws.url());
         await ws.close({ code: 1008, reason: 'domain_not_allowed' });
         return;
@@ -220,7 +225,7 @@ export async function openRunContext(browser: Browser, options: RunContextOption
     if (metadata !== undefined) await installUserAgentOverride(context, page, userAgent, metadata);
     // La session du contrôle n'est jamais détachée avant la fermeture du contexte : détachée, elle laisserait repartir
     // les requêtes encore suspendues.
-    await installRequestGuard(context, page, (url) => hostAllowed(url, options.allowedHosts), options.checkRequest);
+    await installRequestGuard(context, page, (url) => hostAllowed(url, options.allowedHosts, options.allowedHostSuffixes), options.checkRequest);
     context.on('page', (other) => {
       if (other !== page) void other.close().catch(() => undefined);
     });

@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Interface de file (T2 R1) : le code métier ne voit que `JobQueue`. L'adaptateur pg-boss 12 (`@runtime/db`) est le
 // seul endroit où pg-boss est importé et le seul à toucher le schéma `pgboss` (SQL brut interdit ailleurs).
-import type { Execution, FailureClass, Network, RunOutcome } from '../model/enums.js';
+import type { Execution, FailureClass, Network, RunKind, RunOutcome } from '../model/enums.js';
 import type { LogLevel } from '../observability/config.js';
 import type { PersonalValueRegistry } from '../privacy/mask.js';
-import type { ActionReason } from '../status/types.js';
+import type { ActionReason, StatusEventInput } from '../status/types.js';
 
 /** Files de la V1 (T2 R4). `run` seule est branchée en 1.3 ; `repair`, `scheduled-run`, `maintenance` : 2.x et 1.8. */
 export const RUN_QUEUE = 'run';
@@ -154,9 +154,16 @@ export type RunContext = {
   ownerId: string;
   strategyVersion: number | null;
   input: unknown;
+  /** Nature du run (`runs.kind`, migration 0016) : exécution d'une stratégie (défaut) ou enquête (04 §4). */
+  kind?: RunKind;
   /** Levé à l'annulation, à la perte du bail (`job_id` changé), à l'expiration du job et à l'arrêt du worker. */
   signal: AbortSignal;
   recordAttempt(attempt: AttemptRecord): Promise<void>;
+  /**
+   * Coût du run hors couple (E, N) : rôle `investigate`, rapport d'accès et reconnaissance d'une enquête (2.1).
+   * Absent : rien n'est imputé (tests).
+   */
+  chargeCost?(cost: { llm_usd?: number | null; proxy_usd?: number; tokens?: AttemptRecord['tokens'] }): Promise<void>;
   /**
    * Journal du run (`run_logs`) : masqué avant l'écriture (INV8), filtré par `LOG_LEVEL`, plafonné (14 § 10). Ne lève jamais :
    * un journal qui ne s'écrit pas ne fait pas échouer l'exécution.
@@ -184,6 +191,12 @@ export type RunContext = {
    * (un redéploiement de la passerelle laisse le run en `waiting_tunnel`). Absent : aucun changement d'état (tests).
    */
   waitingTunnel?(waiting: boolean): Promise<void>;
+  /**
+   * Machine à états du statut de l'API du run (04 §6, INV3), appliquée par le worker dans la transaction qui écrit
+   * `status_events` (webhooks et alertes compris). Rend le statut atteint, ou le refus de la machine (transition
+   * absente : aucun changement). Absent : aucun changement de statut (tests).
+   */
+  applyStatus?(event: StatusEventInput): Promise<{ readonly ok: boolean; readonly status: string | null; readonly reason: string | null }>;
 };
 
 /** Bilan cumulé des écritures du run dans son dataset. */

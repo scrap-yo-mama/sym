@@ -24,6 +24,7 @@ import {
   classifyExchange,
   classifyTransportError,
   encodeRequestBody,
+  failureRoute,
   TransportRefusal,
   runDeclarative,
   type AccessCheck,
@@ -34,6 +35,7 @@ import {
   type Transport,
 } from '@runtime/core/exec';
 import { DslError } from '@runtime/core';
+import type { CapturedExchange, ReconCapture } from '@runtime/core/investigation';
 import { DomainNotAllowedError, guardedGoto, type BrowserEgress, type SsrfGuard } from '@runtime/core/net';
 import type { Page, Request, Response } from 'playwright-core';
 import { boundedContent, boundedDocumentBody, boundedRawBody, TOO_LARGE, trackDecodedSizes, type DecodedSizes } from '../browser/bounded.js';
@@ -54,6 +56,10 @@ export type BrowserExecutorOptions = Omit<DeclarativeRunOptions, 'transport' | '
   readonly renderWaitMs?: number;
   /** User-Agent du robot (1.11, `buildUserAgent`) : la chaîne du moteur, suivie du jeton si `identify_instance` est activé. */
   readonly userAgent?: string;
+  /** Suivre aussi la taille décodée des requêtes de données (`fetch`, XHR) : reconnaissance de l'enquête (2.1). */
+  readonly trackData?: boolean;
+  /** Portées de site admises en plus d'`allowed_hosts` (domaine et sous-domaines) : reconnaissance de l'enquête seulement. */
+  readonly allowedHostSuffixes?: readonly string[];
 };
 
 const maxBytesOf = (options: BrowserExecutorOptions): number => options.spec.limits?.max_response_bytes ?? 5_000_000;
@@ -191,6 +197,7 @@ async function withRunContext(
     const rc = await openRunContext(browser, {
       egressServer: options.egress.server,
       allowedHosts: options.spec.request.allowed_hosts,
+      ...(options.allowedHostSuffixes === undefined ? {} : { allowedHostSuffixes: options.allowedHostSuffixes }),
       ...(options.userAgent === undefined ? {} : { userAgent: options.userAgent }),
       // robots.txt à CHAQUE saut que Chromium suit (redirections que `admit` ne voit pas, cadres hors processus) : un saut
       // refusé du cadre principal ou d'un `fetch` de la stratégie arrête l'essai ; une sous-ressource est seulement coupée.
@@ -221,7 +228,7 @@ async function withRunContext(
       },
     });
     const cdp = await rc.context.newCDPSession(rc.page).catch(() => undefined);
-    nav.bind(rc.page, cdp === undefined ? undefined : await trackDecodedSizes(cdp).catch(() => undefined));
+    nav.bind(rc.page, cdp === undefined ? undefined : await trackDecodedSizes(cdp, options.trackData === true ? ['Document', 'Fetch', 'XHR'] : undefined).catch(() => undefined));
     const strategy = trackStrategyRequests(rc.context, options.spec.request.allowed_hosts);
     const onAbort = () => void rc.close();
     options.signal.addEventListener('abort', onAbort, { once: true });
@@ -439,4 +446,137 @@ export function runPlaywrightExecutor(options: BrowserExecutorOptions): Promise<
     };
     return runDeclarative({ ...options, transport });
   });
+}
+
+/** Requêtes de données capturées au plus par la reconnaissance, et octets de corps gardés au total. */
+const RECON_MAX_EXCHANGES = 20;
+const RECON_MAX_CAPTURE_BYTES = 10_000_000;
+const RECON_MAX_BODY_BYTES = 5_000_000;
+const RECON_MAX_REQUEST_BODY = 20_000;
+
+export type ReconnaissancePassOptions = Omit<BrowserExecutorOptions, 'spec' | 'input' | 'outputSchema' | 'maxRequests' | 'trackData'> & {
+  /** Page de la demande. */
+  readonly url: string;
+  /** Domaines de l'API : seule leur réponse de données est capturée (une sous-ressource tierce n'est jamais un gisement). */
+  readonly allowedHosts: readonly string[];
+};
+
+/** Corps lu d'une réponse de données non JSON ou en erreur, pour la seule classification (défi, refus signé). */
+const RECON_MAX_CLASSIFY_BYTES = 256 * 1024;
+/** Suites qui arrêtent la passe : refus ou défi, connexion ou paiement requis, 429 (ralentir, jamais insister). */
+const STOPPING_ROUTES = new Set(['stop', 'action_required', 'slow_down']);
+
+/**
+ * Reconnaissance de l'enquête (tâche 2.1, 04 §4) : UNE passe E3 sur la page, dans le même contexte gardé que les essais
+ * (proxy d'egress de l'essai, SSRF, verrou de domaines, robots.txt à chaque saut et chaque sous-ressource, cadence pour
+ * la page, navigations lancées par la page coupées). La réponse SERVIE est classée avant tout rendu (INV6) : un refus
+ * ou un défi arrête la passe. Sinon, on attend le calme du réseau (borné) et on garde : les réponses JSON des requêtes
+ * `fetch` / XHR vers un domaine de l'API (corps bornés, taille décodée vue par CDP), le document servi et le DOM rendu.
+ * CHAQUE réponse `fetch` / XHR d'un domaine de l'API est classée aussi (INV6, comme la reconnaissance statique) : un
+ * refus, un défi, une connexion requise ou un 429 sur un point de données arrête la passe ; un 404 ou un 5xx n'est
+ * qu'une voie vide.
+ * Aucun clic, aucune saisie : la page n'est que regardée.
+ */
+export async function runReconnaissancePass(options: ReconnaissancePassOptions): Promise<{ result: DeclarativeRunResult; capture: ReconCapture }> {
+  const url = new URL(options.url).href;
+  const spec = {
+    schema_version: 1,
+    kind: 'declarative',
+    request: { method: 'GET', url, allowed_hosts: [...options.allowedHosts] },
+    sources: [{ id: 'dom', from: 'html', records: 'body' }],
+    fields: {},
+  } as unknown as BrowserExecutorOptions['spec'];
+  const base: BrowserExecutorOptions = { ...options, spec, input: {}, trackData: true };
+  const classify = options.classify ?? classifyExchange;
+  const renderWaitMs = options.renderWaitMs ?? BROWSER_RENDER_WAIT_MS;
+  const exchanges: CapturedExchange[] = [];
+  const seen: { document: ReconCapture['document']; received: number } = { document: null, received: 0 };
+  /** Premier refus vu sur une réponse de données de la page (défi, 403, connexion requise) : il arrête la passe. */
+  let dataRefusal: { failure: ExecFailure; exchange: HttpExchange } | null = null;
+  const result = await withRunContext(base, async ({ page }, strategy, nav) => {
+    const reads: Promise<void>[] = [];
+    let captured = 0;
+    page.on('response', (response) => {
+      const request = response.request();
+      const type = request.resourceType();
+      if (type !== 'fetch' && type !== 'xhr') return;
+      if (!hostAllowed(response.url(), options.allowedHosts, options.allowedHostSuffixes) || reads.length >= RECON_MAX_EXCHANGES) return;
+      const contentType = response.headers()['content-type'] ?? '';
+      const json = /json/i.test(contentType);
+      const ok = response.status() >= 200 && response.status() < 300;
+      reads.push(
+        (async () => {
+          // Classification de chaque réponse de données (INV6) : corps lu s'il peut porter un défi (non JSON, ou erreur).
+          const body = await boundedDocumentBody(response, json && ok ? RECON_MAX_BODY_BYTES : RECON_MAX_CLASSIFY_BYTES, 10_000, nav.sizes);
+          const exchange: HttpExchange = { status: response.status(), headers: response.headers(), body: typeof body === 'string' ? body : '', url: response.url() };
+          const refused = classify(exchange, { requestUrl: request.url() });
+          if (refused !== null && STOPPING_ROUTES.has(failureRoute(refused.failure_class).next)) {
+            dataRefusal ??= { failure: refused, exchange };
+            return;
+          }
+          if (refused !== null || !json || typeof body !== 'string') return;
+          const bytes = Buffer.byteLength(body);
+          if (captured + bytes > RECON_MAX_CAPTURE_BYTES) return;
+          captured += bytes;
+          const post = request.postData();
+          exchanges.push({
+            url: response.url(),
+            method: request.method(),
+            requestBody: post === null ? null : post.slice(0, RECON_MAX_REQUEST_BODY),
+            requestContentType: request.headers()['content-type'] ?? null,
+            status: response.status(),
+            contentType,
+            body,
+            bytes,
+          });
+        })().catch(() => undefined),
+      );
+    });
+    if (options.pacer !== undefined) {
+      const slot = await options.pacer.acquire(url);
+      if (!slot.granted) return { ok: false, failure: { failure_class: 'rate_limited', retryable: true, detail: `pacing_${slot.reason}` }, pages: 0, requests: 0 };
+    }
+    let served: HttpExchange;
+    let refused: ExecFailure | null;
+    try {
+      const landing = await requestedNavigation(page, url, base, strategy, nav);
+      served = landing.html ? await servedDocument(landing, RECON_MAX_BODY_BYTES, nav) : { status: landing.status, headers: landing.headers, body: '', url: landing.response.url() };
+      if (nav.attempted()) throw nav.refusal(served);
+      refused = classify(served, { requestUrl: url });
+    } catch (error) {
+      if (options.signal.aborted) throw error;
+      const failure = classifyTransportError(error);
+      if (error instanceof TransportRefusal) {
+        await options.pacer?.report(url, { status: error.exchange?.status ?? 0, retryAfter: null, failureClass: failure.failure_class });
+        return failed(failure, error.exchange);
+      }
+      return failed(failure);
+    }
+    await options.pacer?.report(url, { status: served.status, retryAfter: served.headers['retry-after'] ?? null, failureClass: refused?.failure_class ?? null });
+    if (refused !== null) return failed(refused, served);
+    try {
+      // Calme du réseau (borné) : les requêtes de données de la page partent et reviennent. Une navigation lancée par la
+      // page (défi qui se résout seul, redirection) interrompt la passe.
+      await nav.during(() => page.waitForLoadState('networkidle', { timeout: renderWaitMs }).catch(() => undefined), () => served);
+      await nav.during(() => Promise.race([Promise.all(reads), new Promise((resolve) => setTimeout(resolve, renderWaitMs))]), () => served);
+      // Un refus sur un point de données de la page : la passe s'arrête, aucun gisement n'en sort (INV6).
+      const refusedData = dataRefusal as { failure: ExecFailure; exchange: HttpExchange } | null;
+      if (refusedData !== null) return failed(refusedData.failure, refusedData.exchange);
+      const rendered = await nav.during(() => boundedContent(page, RECON_MAX_BODY_BYTES), () => served);
+      if (nav.attempted()) throw nav.refusal(served);
+      // Le DOM rendu est classé aussi (défi injecté par un script) : un refus arrête la passe.
+      const renderedHtml = rendered === TOO_LARGE ? null : rendered;
+      const renderedRefusal = renderedHtml === null ? null : classify({ ...served, body: renderedHtml, url: page.url() }, { requestUrl: url });
+      if (renderedRefusal !== null) return failed(renderedRefusal, { ...served, body: renderedHtml ?? '' });
+      seen.document = { url: served.url, status: served.status, html: served.body !== '' ? served.body : (renderedHtml ?? ''), renderedHtml, bytes: Buffer.byteLength(served.body) };
+    } catch (error) {
+      if (options.signal.aborted) throw error;
+      const failure = classifyTransportError(error);
+      return failed(failure, error instanceof TransportRefusal ? error.exchange : undefined);
+    }
+    seen.received = nav.sizes?.received() ?? 0;
+    return { ok: true, records: [], pages: 1, requests: 1 + exchanges.length, escalated: false, stop: 'no_pagination', truncated: false };
+  });
+  const capturedBytes = exchanges.reduce((sum, e) => sum + e.bytes, 0) + (seen.document?.bytes ?? 0);
+  return { result, capture: { mode: 'browser', pageUrl: url, document: seen.document, exchanges, totalBytes: Math.max(seen.received, capturedBytes) } };
 }

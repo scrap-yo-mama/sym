@@ -388,6 +388,8 @@ const API_CLONE_EXCLUDED = new Set([
   'status',
   'status_reason',
   'investigation_phase',
+  // État d'enquête (2.1) : demande et gisements du propriétaire d'origine, jamais copiés au nouveau propriétaire.
+  'investigation',
   'stale',
   'clean_streak',
   'last_signal_at',

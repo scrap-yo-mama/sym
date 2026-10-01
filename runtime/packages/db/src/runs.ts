@@ -25,6 +25,7 @@ import {
   type QueryClient,
   type QueueDefinition,
   type Run,
+  type RunKind,
   type RunResult,
   type RunState,
   type RunTrigger,
@@ -80,6 +81,8 @@ export type CreateRunInput = {
   input?: unknown;
   traceId?: string | null;
   schedule?: ScheduleOrigin;
+  /** Nature du run (migration 0016) : `run` par défaut, `investigation` pour une enquête (2.1). */
+  kind?: RunKind;
 };
 
 /**
@@ -101,8 +104,8 @@ export async function createRun(
   const runId = randomUUID();
   const jobId = randomUUID();
   await tx.query(
-    `INSERT INTO runs (id, api_id, owner_id, api_owner_id, trigger, input, trace_id, job_id, state, heartbeat_at, schedule_id, scheduled_at, schedule_job_id)
-     VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, 'queued', now(), $9, $10, $11)`,
+    `INSERT INTO runs (id, api_id, owner_id, api_owner_id, trigger, input, trace_id, job_id, state, heartbeat_at, schedule_id, scheduled_at, schedule_job_id, kind)
+     VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, 'queued', now(), $9, $10, $11, $12)`,
     [
       runId,
       input.apiId,
@@ -115,6 +118,7 @@ export async function createRun(
       input.schedule?.scheduleId ?? null,
       input.schedule?.scheduledAt ?? null,
       input.schedule?.scheduleJobId ?? null,
+      input.kind ?? 'run',
     ],
   );
   const trace = currentTraceparent();
@@ -264,6 +268,8 @@ export type RunClaim = {
   strategyVersion: number | null;
   input: unknown;
   allowWriteActions: boolean;
+  /** `runs.kind` (0016) : le worker y choisit l'exécuteur (stratégie ou enquête). */
+  kind: RunKind;
 };
 
 /**
@@ -277,12 +283,13 @@ export async function claimRun(db: Queryable, args: { runId: string; jobId: stri
     strategy_version: number | null;
     input: unknown;
     allow_write_actions: boolean;
+    kind: RunKind;
   }>(
     `UPDATE runs r SET state = 'running', worker_id = $3, started_at = coalesce(r.started_at, now()), heartbeat_at = now(),
        strategy_version = coalesce(r.strategy_version, a.current_strategy_version)
      FROM apis a
      WHERE r.id = $1 AND r.job_id = $2 AND r.state = 'queued' AND a.id = r.api_id
-     RETURNING r.api_id, r.owner_id, r.strategy_version, r.input, a.allow_write_actions`,
+     RETURNING r.api_id, r.owner_id, r.strategy_version, r.input, a.allow_write_actions, r.kind`,
     [args.runId, args.jobId, args.workerId],
   );
   const r = rows[0];
@@ -295,6 +302,7 @@ export async function claimRun(db: Queryable, args: { runId: string; jobId: stri
     strategyVersion: r.strategy_version,
     input: r.input,
     allowWriteActions: r.allow_write_actions,
+    kind: r.kind,
   };
 }
 
@@ -365,6 +373,31 @@ export async function recordAttempt(db: Queryable, runId: string, jobId: string,
   const seq = rows[0]?.seq;
   if (seq === undefined) throw new RunLeaseLostError(`run ${runId} : bail perdu`);
   return seq;
+}
+
+/**
+ * Impute au run un coût qui n'est pas celui d'un couple (E, N) : appel du rôle `investigate`, rapport d'accès et
+ * reconnaissance d'une enquête (tâche 2.1). Même règle que `recordAttempt` : un coût LLM inconnu rend le coût du run
+ * inconnu (NULL, jamais 0). Lève RunLeaseLostError si le run n'est plus à ce job.
+ */
+export async function chargeRunCost(
+  db: Queryable,
+  runId: string,
+  jobId: string,
+  c: { llm_usd?: number | null; proxy_usd?: number; tokens?: AttemptRecord['tokens'] },
+): Promise<void> {
+  const llm = c.llm_usd === undefined ? 0 : c.llm_usd;
+  const proxy = c.proxy_usd ?? 0;
+  if ((llm !== null && llm < 0) || proxy < 0) throw new RangeError('coût négatif');
+  const t = c.tokens ?? {};
+  const { rowCount } = await db.query(
+    `UPDATE runs SET cost_llm_usd = cost_llm_usd + $3, cost_proxy_usd = cost_proxy_usd + $4,
+       tokens_in = tokens_in + $5, tokens_cached = tokens_cached + $6, tokens_out = tokens_out + $7,
+       tokens_reasoning = tokens_reasoning + $8, usage_estimated = usage_estimated OR $9, heartbeat_at = now()
+     WHERE id = $1 AND job_id = $2 AND state = ANY($10::text[])`,
+    [runId, jobId, llm, proxy, t.in ?? 0, t.cached ?? 0, t.out ?? 0, t.reasoning ?? 0, t.estimated ?? false, ['running', 'waiting_tunnel']],
+  );
+  if (rowCount !== 1) throw new RunLeaseLostError(`run ${runId} : bail perdu`);
 }
 
 /**

@@ -39,6 +39,10 @@ export const RUN_STATES = [
 ] as const;
 export type RunState = (typeof RUN_STATES)[number];
 
+/** Nature d'un run (migration 0016) : exécution d'une stratégie, ou enquête (04 §4). */
+export const RUN_KINDS = ['run', 'investigation'] as const;
+export type RunKind = (typeof RUN_KINDS)[number];
+
 export const RUN_OUTCOMES = ['clean', 'degraded', 'failed'] as const;
 export type RunOutcome = (typeof RUN_OUTCOMES)[number];
 

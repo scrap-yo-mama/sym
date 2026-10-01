@@ -20,7 +20,8 @@ import type { ExecutorFactory } from '../worker.js';
 import { loadInlineScript } from './script-executor.js';
 import { TunnelJobClient } from '../tunnel/client.js';
 import type { EngineFactory } from './agent-executors.js';
-import { createStrategyExecutor, type AgentPorts } from './strategy-executor.js';
+import { createInvestigationExecutor, dispatchByKind } from './investigation-executor.js';
+import { createStrategyRuntime, type AgentPorts } from './strategy-executor.js';
 
 /** Version du prompt du moteur : celui de Stagehand, non modifié (mesuré tel quel au spike 0.6a). */
 const STAGEHAND_PROMPT_VERSION = `stagehand-${STAGEHAND_VERSION}-dom`;
@@ -128,8 +129,33 @@ export function productionExecutorFactory(env: Readonly<Record<string, string | 
     const robotsCache = new RobotsCache();
     const instanceContact = async (): Promise<string | null> => resolveInstanceContact(await readInstanceContactSetting(pool), env);
     const identifyInstance = async (): Promise<boolean> => resolveIdentifyInstance(await readIdentifyInstanceSetting(pool), env);
+    const strategy = createStrategyRuntime({ pool, guard, pacer, browsers, secrets, logger, tunnel, script: { engine, loadScript: loadInlineScript }, agent, robotsCache, instanceContact, identifyInstance, version: config.version });
+    // Enquête (2.1) : mêmes gardes, mêmes exécuteurs ; rôles `investigate` (schéma), `extract` et `agent` (prix des couples E4, E6).
+    const investigation = createInvestigationExecutor({
+      pool,
+      guard,
+      pacer,
+      browsers,
+      secrets,
+      logger,
+      strategy,
+      // Session requise ou tunnel seul (04 §4) : étape 0 et reconnaissance par l'extension du propriétaire.
+      tunnel,
+      agentic: true,
+      llm: {
+        config: async () => {
+          const value = await readLlmSettings(pool);
+          return value === null ? null : llmConfigFromSettings(value, (id) => secrets.get(id), ['investigate', 'extract', 'agent']);
+        },
+        client: (config) => createLlmClient(config),
+      },
+      robotsCache,
+      instanceContact,
+      identifyInstance,
+      version: config.version,
+    });
     return {
-      executor: createStrategyExecutor({ pool, guard, pacer, browsers, secrets, logger, tunnel, script: { engine, loadScript: loadInlineScript }, agent, robotsCache, instanceContact, identifyInstance, version: config.version }),
+      executor: dispatchByKind({ run: strategy.executor, investigation }),
       browserContexts: () => pool_?.active() ?? 0,
       close: async () => {
         await tunnel.close();

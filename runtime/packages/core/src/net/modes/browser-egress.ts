@@ -91,6 +91,7 @@ export async function openBrowserEgress(options: BrowserEgressOptions): Promise<
       ? {}
       : {
           allowHosts: options.allowedHosts,
+          ...(options.allowedHostSuffixes === undefined ? {} : { allowHostSuffixes: options.allowedHostSuffixes }),
           onDomainBlocked: (t: EgressTarget) => {
             domainBlockedTotal += 1;
             if (domainBlocked.length < 100) domainBlocked.push(t);
