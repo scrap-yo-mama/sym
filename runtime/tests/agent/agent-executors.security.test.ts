@@ -377,6 +377,7 @@ describe('E6 sans profil sondé (production avant la route de sonde) : 400 qui n
     const rejected: string[] = [];
     const out = await withEgress([AGENT_HOSTS.e6], (egress) =>
       runAgentExecutor({
+        access: allowAllRobots,
         spec: { schema_version: 1, kind: 'agent', start_url: url(AGENT_HOSTS.e6), allowed_hosts: [AGENT_HOSTS.e6], instruction: task('F-E6').instruction, limits: { max_steps: 10, timeout_ms: 90_000 } },
         outputSchema: itemSchema('F-E6'),
         signal,
