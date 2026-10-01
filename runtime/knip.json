@@ -15,7 +15,8 @@
         "scripts/*.ts",
         "tests/**/*.test.ts",
         "eval/scripts/*.ts",
-        "eval/**/*.test.ts"
+        "eval/**/*.test.ts",
+        "tests/helpers/net-log-hook.ts"
       ],
       "project": [
         "scripts/**/*.ts",
@@ -109,6 +110,19 @@
         "src/**/*.ts",
         "e2e/**/*.ts",
         "*.ts"
+      ]
+    },
+    "apps/docs": {
+      "entry": [
+        "scripts/*.ts",
+        "content/.vitepress/config.ts",
+        "content/.vitepress/theme/index.ts",
+        "src/**/*.test.ts"
+      ],
+      "project": [
+        "src/**/*.ts",
+        "scripts/**/*.ts",
+        "content/.vitepress/**/*.ts"
       ]
     }
   }

@@ -19,7 +19,7 @@
     "fixtures": "node fixtures/src/main.ts",
     "zz:cleanup": "node scripts/not-implemented.ts zz:cleanup 'tâche 0.5'",
     "lint": "eslint .",
-    "typecheck": "tsc -p tsconfig.typecheck.json && pnpm --filter @runtime/web typecheck && pnpm --filter @runtime/extension typecheck",
+    "typecheck": "tsc -p tsconfig.typecheck.json && pnpm --filter @runtime/web typecheck && pnpm --filter @runtime/extension typecheck && pnpm --filter @runtime/docs typecheck",
     "knip": "knip",
     "check:invariants": "node scripts/check-invariants.ts",
     "check:x6": "node scripts/check-x6.ts",
@@ -35,7 +35,10 @@
     "check:openapi-client": "node scripts/gen-openapi-client.ts --check",
     "package:extension": "node scripts/extension-package.ts",
     "release:dry-run": "node scripts/release/dry-run.ts",
-    "check:release": "node scripts/release/gates.ts"
+    "check:release": "node scripts/release/gates.ts",
+    "docs:build": "pnpm --filter @runtime/docs build",
+    "docs:test": "vitest run --project unit --project contract apps/docs",
+    "docs:quickstart": "node scripts/docs-quickstart.ts"
   },
   "devDependencies": {
     "@eslint/js": "catalog:",

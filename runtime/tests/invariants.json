@@ -138,5 +138,20 @@
   { "test": "assert_revert_shows_preview", "invariant": "06 § 2 (Stratégie & versions)", "tasks": ["3.4", "3.6"], "stage": "U1",
     "note": "3.4 : « Revenir à cette version » charge le diff de la version visée contre la courante et l'affiche avec la conséquence avant le bouton de confirmation (composable + rendu) ; proposé seulement depuis sain ou warning (transitions 7 et 8), jamais sur bloquee ni les autres statuts, versions chargées (api-detail-mounted.unit.test.ts) ; 3.6 : même critère en Chromium" },
   { "test": "assert_output_schema_edit_only_from_sain_or_warning", "invariant": "06 § 2 (Schémas, panneau Bloquée), 04 § 6 (transitions 18 à 20)", "tasks": ["3.4"], "stage": "U1",
-    "note": "3.4 : « Modifier la sortie » (qui relance une enquête) n'est proposé que depuis sain ou warning ; sur bloquee et les autres statuts, la raison est écrite sans bouton (api-detail-mounted.unit.test.ts)" }
+    "note": "3.4 : « Modifier la sortie » (qui relance une enquête) n'est proposé que depuis sain ou warning ; sur bloquee et les autres statuts, la raison est écrite sans bouton (api-detail-mounted.unit.test.ts)" },
+  { "test": "assert_quickstart_replayed", "invariant": "16 § 8 (4.8)", "tasks": ["4.8"], "stage": "I1",
+    "note": "Les commandes bash du tutoriel (apps/docs/content/tutoriels/quickstart.md) sont extraites de la page et rejouées sur une instance vierge (tests/quickstart.integration.test.ts) ; D0 et « première API » restent décrits sans être rejoués tant que MCP (3.2), REST (3.1) et l'enquête (2.1) ne sont pas livrés : assert_quickstart_pending_steps_declared échoue dès qu'ils le sont" },
+  { "test": "assert_quickstart_no_egress", "invariant": "INV9, 16 § 8 (4.8)", "tasks": ["4.8"], "stage": "I1" },
+  { "test": "assert_quickstart_pending_steps_declared", "invariant": "16 § 8 (4.8)", "tasks": ["4.8"], "stage": "I1" },
+  { "test": "assert_docs_site_builds", "invariant": "16 § 4 (4.8)", "tasks": ["4.8"], "stage": "contract",
+    "note": "apps/docs/src/site.contract.test.ts : scripts/build.ts de bout en bout (pages générées, VitePress, versions .md, llms.txt, index Pagefind, 0 lien mort)" },
+  { "test": "assert_docs_no_external_resources", "invariant": "INV9, 16 § 4 (4.8)", "tasks": ["4.8"], "stage": "contract" },
+  { "test": "assert_docs_links_clean", "invariant": "16 § 8 (4.8)", "tasks": ["4.8"], "stage": "U1" },
+  { "test": "assert_llms_txt_cites_every_page", "invariant": "16 § 4, § 8 (4.8)", "tasks": ["4.8"], "stage": "U1" },
+  { "test": "assert_docs_diataxis_structure", "invariant": "16 § 4 (4.8)", "tasks": ["4.8"], "stage": "U1" },
+  { "test": "assert_docs_rest_reference_generated", "invariant": "16 § 4 (4.8)", "tasks": ["4.8"], "stage": "U1" },
+  { "test": "assert_docs_env_in_sync", "invariant": "14 § 2 (4.8)", "tasks": ["4.8"], "stage": "U1" },
+  { "test": "assert_docs_commands_exist", "invariant": "16 § 4 (4.8)", "tasks": ["4.8"], "stage": "U1" },
+  { "test": "assert_responsible_use_sections", "invariant": "17 § 9, § 11 (4.8)", "tasks": ["4.8"], "stage": "U1" },
+  { "test": "assert_out_of_scope_cites_x1_x6", "invariant": "16 § 2, _exclusions (4.8)", "tasks": ["4.8"], "stage": "U1" }
 ]
