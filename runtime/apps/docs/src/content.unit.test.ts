@@ -326,3 +326,60 @@ describe('quickstart : structure du tutoriel rejoué', () => {
     }
   });
 });
+
+/** Variables lues par un script shell (`$NOM`, `${NOM}`, `${NOM:-…}`), hors texte entre apostrophes. */
+const variablesRead = (script: string): string[] => [...script.replace(/'[^']*'/g, "''").matchAll(/\$\{?([A-Za-z_][A-Za-z0-9_]*)/g)].map((m) => m[1] ?? '');
+/** Variables définies par un script shell (`NOM=…`, `export NOM=…`, `read NOM`). */
+const variablesDefined = (script: string): string[] => [
+  ...[...script.matchAll(/(?:^|[\s;(])(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)=/gm)].map((m) => m[1] ?? ''),
+  ...[...script.matchAll(/\bread\s+(?:-\S+\s+)*([A-Za-z_][A-Za-z0-9_]*)/g)].map((m) => m[1] ?? ''),
+];
+/** Variables qu'un shell interactif a toujours. */
+const SHELL_VARIABLES = new Set(['HOME', 'PATH', 'PWD', 'USER']);
+
+describe('assert_quickstart_terminal_boundary : deux terminaux, rien ne passe de l\'un à l\'autre', () => {
+  const source = readSource('tutoriels/quickstart');
+  const steps = parseQuickstart(source);
+
+  test('l\'étape qui lance l\'instance occupe le premier terminal ; la suite se fait dans un second, annoncé par la page', () => {
+    const start = steps.findIndex((s) => s.mode === 'process');
+    expect(start).toBeGreaterThanOrEqual(0);
+    steps.forEach((step, index) => expect(step.terminal, step.id).toBe(index <= start ? 1 : 2));
+    const afterStart = source.slice(source.indexOf(`"id":"${steps[start]?.id ?? ''}"`));
+    const nextStep = afterStart.indexOf('<!-- quickstart', 1);
+    expect(afterStart.slice(0, nextStep)).toMatch(/second terminal/i);
+  });
+
+  test('chaque variable lue par une étape est définie par une étape précédente du même terminal', () => {
+    const defined = new Map<number, Set<string>>();
+    for (const step of steps) {
+      const known = defined.get(step.terminal) ?? new Set<string>();
+      for (const name of variablesRead(step.script)) {
+        if (SHELL_VARIABLES.has(name) || variablesDefined(step.script).includes(name)) continue;
+        expect(known.has(name), `${step.id} (terminal ${step.terminal}) lit $${name}, jamais défini dans ce terminal`).toBe(true);
+      }
+      for (const name of variablesDefined(step.script)) known.add(name);
+      defined.set(step.terminal, known);
+    }
+  });
+
+  test('aucune étape ne change de dossier : tout se lance depuis runtime/, comme le dit la page', () => {
+    expect(source).toMatch(/depuis son dossier `runtime\/`/);
+    for (const step of steps) expect(step.script, step.id).not.toMatch(/(^|[;&|]\s*)cd\s/m);
+  });
+
+  test('les secrets vivent dans un fichier .env lu par Compose, que git ignore', () => {
+    const secrets = steps.find((s) => s.id === 'secrets');
+    expect(secrets?.script).toMatch(/> \.env/);
+    expect(secrets?.script, 'umask 077 : fichier lisible par son seul propriétaire').toContain('umask 077');
+    expect(secrets?.script, 'set -C : ne jamais écraser une MASTER_KEY existante').toContain('set -C');
+    for (const ignore of [join(runtimeDir, '.gitignore'), join(runtimeDir, '..', '.gitignore')]) {
+      expect(readFileSync(ignore, 'utf8').split('\n'), ignore).toContain('.env');
+    }
+  });
+
+  test('la clé d\'API de l\'étape 6 est gardée dans une variable que D0 utilise', () => {
+    expect(variablesDefined(steps.find((s) => s.id === 'api-key')?.script ?? '')).toContain('SCRAPYOMAMA_KEY');
+    expect(variablesRead(steps.find((s) => s.id === 'd0')?.script ?? '')).toContain('SCRAPYOMAMA_KEY');
+  });
+});

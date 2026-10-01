@@ -8,7 +8,9 @@ FROM ${PLAYWRIGHT_IMAGE} AS build
 WORKDIR /app
 RUN corepack enable
 COPY . .
-RUN pnpm install --frozen-lockfile && pnpm -r build
+# Le site de doc (@runtime/docs) n'entre pas dans l'image : le construire ici ferait échouer l'image et la release sur un
+# lien mort de la doc, sans rien apporter à l'exécution (tâche 4.8).
+RUN pnpm install --frozen-lockfile && pnpm -r --filter '!@runtime/docs' build
 
 # --- Étape 2 : exécution, non-root
 FROM ${PLAYWRIGHT_IMAGE} AS runtime

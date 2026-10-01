@@ -7,7 +7,14 @@ description: "Votre responsabilité, le RGPD, les conditions des sites, la conse
 
 Scrapyomama Runtime est un logiciel libre, **sans restriction d'usage dans sa licence**. Ce qui suit n'est donc pas une clause du contrat : c'est une information, écrite sur un ton direct, pour que vous sachiez à quoi vous vous engagez en l'installant. Le projet ne vous surveille pas et ne peut ni consulter ni effacer ce que vous collectez. Cette page n'a **aucune valeur de décharge**, ni pour vous ni pour le projet.
 
-Dans la console, cette page s'affiche au premier lancement, puis à la création d'une API dont le schéma de sortie contient un champ `x-personal` ; une case « j'ai lu » est enregistrée (date, utilisateur, version du texte).
+Dans la console, cette page est prévue pour s'afficher au premier lancement, puis à la création d'une API dont le schéma de sortie contient un champ `x-personal`, avec une case « j'ai lu » enregistrée (date, utilisateur, version du texte), sans valeur de décharge.
+
+::: info Disponibilité
+Cette version de développement ne livre pas encore tout ce que décrit cette page.
+
+- **En préparation** : l'affichage de cette page au premier lancement, la case « j'ai lu » et le refus de créer une API à champ `x-personal` sans elle, ainsi que les avertissements de la création d'API (catégorie sensible, fournisseur de modèle distant), qui arrivent avec la création d'API (tâche 3.1) ; la lecture de `robots.txt`, le rapport d'accès et le User-Agent avec contact (module d'accès, tâche 1.11) ; l'arrêt devant un refus ou un défi (tâche 1.7) ; la fiche de traitement par API, spécifiée mais sans tâche planifiée à ce jour.
+- **Livrés** : l'effacement et l'export d'une personne avec la liste d'exclusion, la purge à échéance (tâche 1.8), la cadence par domaine (tâche 1.9), l'option `llm.redact`, l'absence de télémétrie (tâche 1.10) et la confirmation des sites à compte dans la console (tâche 3.5).
+:::
 
 ::: info Ce que l'instance fait pour vous
 Elle respecte `robots.txt` sans option pour l'ignorer, s'annonce honnêtement, limite sa cadence par domaine, efface sur demande une personne de vos jeux de données, purge les données à échéance et n'envoie rien à l'éditeur. Elle ne décide à votre place ni de la finalité, ni de la base légale, ni de la licéité de ce que vous collectez.

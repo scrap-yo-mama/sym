@@ -8,36 +8,43 @@ description: "Installer une instance, créer le compte propriétaire, obtenir un
 Ce tutoriel mène de zéro à une instance qui répond, avec un compte propriétaire et une clé d'API. Comptez une dizaine de minutes, dont la construction de l'image Docker. Il ne contacte aucun site : tout reste sur votre machine.
 
 ::: info Ce tutoriel est rejoué par la CI
-Chaque commande des étapes 1 à 7 est extraite de cette page et exécutée par un test sur une instance vierge (`tests/quickstart.integration.test.ts`), avec la preuve qu'aucune connexion ne part hors de la machine. Si une commande de cette page cesse de fonctionner, la CI échoue. Le critère humain, « un tiers installe avec la seule documentation en moins de 30 minutes », est mesuré à part, en recette.
+Chaque commande des étapes 1 à 7 est extraite de cette page et exécutée par un test sur une instance vierge (`tests/quickstart.integration.test.ts`), dans le terminal que la page indique (le second ne reçoit rien du premier), avec l'environnement que `docker-compose.yml` donne aux services et la preuve qu'aucune connexion ne part hors de la machine. Si une commande de cette page cesse de fonctionner, la CI échoue. Le critère humain, « un tiers installe avec la seule documentation en moins de 30 minutes », est mesuré à part, en recette.
 :::
 
 ## Ce qu'il vous faut
 
 - Docker avec Compose v2, et environ 4 Go de mémoire pour Docker (l'image embarque Chromium).
 - `openssl` et `curl`.
-- Le dépôt, cloné. Les commandes se lancent depuis son dossier `runtime/`.
+- Le dépôt, cloné. Les commandes se lancent depuis son dossier `runtime/`, dans les deux terminaux que le tutoriel utilise.
 
 Avant la première release, l'image se construit depuis le dépôt. Ensuite, les modèles de déploiement épingleront une version `X.Y.Z` de l'image publiée (jamais un tag `latest`).
 
 ## 1. Créer les deux secrets
 
-L'instance a besoin de deux valeurs aléatoires. `MASTER_KEY` chiffre tous les secrets en base (clés de modèle, proxys, cookies). `ADMIN_BOOTSTRAP_TOKEN` ouvre l'assistant de premier démarrage, une seule fois.
+L'instance a besoin de deux valeurs aléatoires. `MASTER_KEY` chiffre tous les secrets en base (clés de modèle, proxys, cookies). `ADMIN_BOOTSTRAP_TOKEN` ouvre l'assistant de premier démarrage, une seule fois. Elles vont dans un fichier `.env`, que Compose lit tout seul et que git ignore : elles restent valables d'un terminal à l'autre.
 
 <!-- quickstart {"id":"secrets","mode":"run"} -->
 ```bash
-export MASTER_KEY="$(openssl rand -base64 32)"
-export ADMIN_BOOTSTRAP_TOKEN="$(openssl rand -base64 32)"
+(
+  umask 077
+  set -C
+  {
+    echo "MASTER_KEY=$(openssl rand -base64 32)"
+    echo "ADMIN_BOOTSTRAP_TOKEN=$(openssl rand -base64 32)"
+  } > .env
+)
 ```
 
+Le fichier n'est lisible que par vous (`umask 077`), et la commande refuse d'écraser un `.env` existant (`set -C`) : une nouvelle `MASTER_KEY` rendrait illisibles les secrets déjà chiffrés avec l'ancienne.
+
 ::: warning Sauvegardez MASTER_KEY maintenant
-Sans cette clé, les secrets enregistrés en base sont définitivement illisibles : personne, éditeur compris, ne peut les récupérer. Rangez-la dans un gestionnaire de mots de passe, **pas** au même endroit que vos sauvegardes de base. Voir [Sauvegarder et restaurer](../guides/sauvegarde.md).
+Sans cette clé, les secrets enregistrés en base sont définitivement illisibles : personne, éditeur compris, ne peut les récupérer. Copiez la ligne `MASTER_KEY=` de `.env` dans un gestionnaire de mots de passe, **pas** au même endroit que vos sauvegardes de base. Voir [Sauvegarder et restaurer](../guides/sauvegarde.md).
 :::
 
 ## 2. Démarrer l'instance
 
-<!-- quickstart {"id":"start","mode":"process","replay":"migrations, serveur et worker lancés comme le fait Compose"} -->
+<!-- quickstart {"id":"start","mode":"process","replay":"la commande est jouée avec un faux docker, puis migrations, serveur et worker sont lancés avec l'environnement que docker-compose.yml leur donne"} -->
 ```bash
-cd runtime
 docker compose up --build
 ```
 
@@ -45,7 +52,7 @@ Compose démarre PostgreSQL 16, applique les migrations (service `migrate`), pui
 
 ## 3. Vérifier que l'instance est prête
 
-Dans un second terminal :
+Ouvrez un second terminal, lui aussi dans le dossier `runtime/`. Il ne connaît aucune des variables du premier : tout ce dont il a besoin, il le lit dans `.env` ou le définit lui-même.
 
 <!-- quickstart {"id":"ready","mode":"run","expect":["\"status\":\"ready\"","\"initialized\":false"]} -->
 ```bash
@@ -56,12 +63,13 @@ La réponse contient `"status":"ready"` et `"initialized":false` : la base est m
 
 ## 4. Créer le compte propriétaire
 
-Choisissez une adresse et un mot de passe d'au moins 12 caractères, sans règle de composition.
+Choisissez une adresse et un mot de passe d'au moins 12 caractères, sans règle de composition. La troisième ligne reprend le jeton de l'étape 1 depuis `.env` (et lui seul : `MASTER_KEY` n'a rien à faire dans ce terminal).
 
 <!-- quickstart {"id":"owner-variables","mode":"run"} -->
 ```bash
 export OWNER_EMAIL='vous@example.org'
 export OWNER_PASSWORD='une phrase longue et unique pour ce compte'
+export ADMIN_BOOTSTRAP_TOKEN="$(sed -n 's/^ADMIN_BOOTSTRAP_TOKEN=//p' .env)"
 ```
 
 L'assistant de premier démarrage est un seul appel, protégé par le jeton de l'étape 1 :
@@ -73,7 +81,7 @@ curl -fsS -X POST http://localhost:3100/api/setup \
   -d "{\"token\":\"$ADMIN_BOOTSTRAP_TOKEN\",\"email\":\"$OWNER_EMAIL\",\"password\":\"$OWNER_PASSWORD\"}"
 ```
 
-La réponse donne l'empreinte de la clé maîtresse (`keyFingerprint`) et le rappel de la sauvegarder. Une fois le propriétaire créé, cette route répond 404 pour toujours et le jeton ne sert plus à rien : vous pouvez le retirer de l'environnement.
+La réponse donne l'empreinte de la clé maîtresse (`keyFingerprint`) et le rappel de la sauvegarder. Une fois le propriétaire créé, cette route répond 404 pour toujours et le jeton ne sert plus à rien : vous pouvez retirer sa ligne de `.env`.
 
 ## 5. Se connecter
 
@@ -97,12 +105,14 @@ Votre IA et vos scripts s'authentifient par une clé d'API, jamais par votre ses
 
 <!-- quickstart {"id":"api-key","mode":"run","expect":"sy_live_"} -->
 ```bash
-curl -fsS -b cookies.txt -X POST http://localhost:3100/api/api-keys \
+RESPONSE="$(curl -fsS -b cookies.txt -X POST http://localhost:3100/api/api-keys \
   -H 'content-type: application/json' -H 'origin: http://localhost:3100' \
-  -d "{\"label\":\"mon-ia\",\"scopes\":[\"apis:read\",\"apis:run\",\"apis:write\",\"runs:read\",\"datasets:read\"],\"currentPassword\":\"$OWNER_PASSWORD\"}"
+  -d "{\"label\":\"mon-ia\",\"scopes\":[\"apis:read\",\"apis:run\",\"apis:write\",\"runs:read\",\"datasets:read\"],\"currentPassword\":\"$OWNER_PASSWORD\"}")"
+echo "$RESPONSE"
+export SCRAPYOMAMA_KEY="$(printf '%s' "$RESPONSE" | sed -n 's/.*"key":"\(sy_live_[^"]*\)".*/\1/p')"
 ```
 
-La clé (`sy_live_…`) n'apparaît **qu'une fois**, dans cette réponse : copiez-la. Seule son empreinte est conservée. Une clé n'a jamais de portée d'administration.
+La clé (`sy_live_…`) n'apparaît **qu'une fois**, dans cette réponse : la dernière ligne la garde dans `SCRAPYOMAMA_KEY` pour l'étape 8 ; copiez-la aussi dans votre gestionnaire de mots de passe. Seule son empreinte est conservée. Une clé n'a jamais de portée d'administration.
 
 ## 7. Contrôler la version
 

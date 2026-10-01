@@ -20,6 +20,11 @@ export type QuickstartStep = {
   pending?: string;
   /** Mode `process` : ce que fait le rejeu à la place de la commande. */
   replay?: string;
+  /**
+   * Terminal où l'étape se tape : 1 jusqu'à l'étape qui lance l'instance (`process`, qui garde son terminal occupé),
+   * 2 ensuite. Un second terminal ne reçoit aucune variable du premier : le rejeu le simule.
+   */
+  terminal: number;
   script: string;
 };
 
@@ -27,6 +32,7 @@ const BLOCK = /<!-- quickstart (\{[^\n]*\}) -->\n```bash\n([\s\S]*?)\n```/g;
 
 export function parseQuickstart(markdown: string): QuickstartStep[] {
   const steps: QuickstartStep[] = [];
+  let terminal = 1;
   for (const match of markdown.matchAll(BLOCK)) {
     const meta = JSON.parse(match[1] ?? '{}') as { id?: string; mode?: string; expect?: string | string[]; pending?: string; replay?: string };
     if (!meta.id || !/^[a-z0-9-]+$/.test(meta.id)) throw new Error(`quickstart : identifiant d'étape invalide (${String(meta.id)})`);
@@ -37,8 +43,10 @@ export function parseQuickstart(markdown: string): QuickstartStep[] {
       expect: meta.expect === undefined ? [] : Array.isArray(meta.expect) ? meta.expect : [meta.expect],
       ...(meta.pending !== undefined ? { pending: meta.pending } : {}),
       ...(meta.replay !== undefined ? { replay: meta.replay } : {}),
+      terminal,
       script: match[2] ?? '',
     });
+    if (meta.mode === 'process') terminal += 1;
   }
   return steps;
 }

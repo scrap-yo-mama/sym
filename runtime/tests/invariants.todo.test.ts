@@ -45,6 +45,12 @@ describe("invariants (à implémenter)", () => {
   test.todo("assert_tunnel_single_user"); // INV5, tâche(s) 2.6, 2.7
   test.todo("assert_no_circumvention"); // INV6, tâche(s) 1.7, 4.3
   test.todo("assert_robots_respected"); // INV11, tâche(s) 1.11
+  // 4.8 livrée partiellement (16 § 8, 17 § 11) : le quickstart rejoué s'arrête à la clé d'API ; D0 et la première API sont
+  // décrits (mode pending) et gardés par assert_quickstart_pending_steps_declared, qui échoue à la livraison de leurs routes.
+  test.todo("assert_quickstart_d0_first_api"); // 16 § 8, reprise : 3.1 (première API sur fixture), 3.2 (D0 en MCP), vérifié en 4.4
+  // Case « j'ai lu » (responsible_use_acks), page affichée au premier lancement, refus d'une API x-personal sans la case :
+  // gardés par assert_responsible_use_ack_pending (tests/docs-guards.unit.test.ts), qui échoue si 3.1 livre POST /api/apis sans eux.
+  test.todo("assert_responsible_use_ack"); // 17 § 11 (critère 2 de 4.8), reprise : 3.1
   // RGPD (1.8) : assert_retention_purge, assert_erasure_complete et assert_no_personal_data_in_logs sont dans
   // packages/db/src/retention/retention.integration.test.ts ; câblage worker (RunContext.personal, RunContext.excludeSubjects,
   // rekey) dans apps/worker/src/worker.integration.test.ts. Câblage par l'exécuteur réel (D-28, tâche 1.6) : items extraits

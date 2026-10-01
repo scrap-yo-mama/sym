@@ -19,6 +19,10 @@ Scrapyomama Runtime est un logiciel libre qu'on installe soi-même : **chaque in
 
 ## Comment le robot se comporte
 
+::: info Disponibilité
+Cette version de développement ne livre pas encore tout ce qui suit. Sont **en préparation** : la lecture de `robots.txt` avant toute requête et le respect de `Crawl-delay`, le rapport d'accès (signaux d'usage, voies officielles) et le User-Agent avec le contact de l'instance (module d'accès, tâche 1.11), ainsi que l'arrêt devant un refus ou un défi de vérification (tâche 1.7). Sont livrés : la cadence par domaine qui ne fait que ralentir (tâche 1.9) et l'absence de changement d'adresse IP après un refus (tâche 1.4). Cette page décrit le comportement visé, que les tests de ces tâches vérifient.
+:::
+
 - Il lit **`/robots.txt` avant toute requête de contenu**, le respecte (RFC 9309) et ne propose aucune option pour l'ignorer. Un chemin interdit reçoit **zéro requête**.
 - Si `robots.txt` répond 4xx, il le traite comme l'absence de règle ; s'il répond 5xx ou ne répond pas, il **s'abstient** par précaution.
 - Il **respecte `Crawl-delay`** comme plancher de cadence.
