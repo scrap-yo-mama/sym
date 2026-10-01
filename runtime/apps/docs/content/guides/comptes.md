@@ -70,6 +70,12 @@ Une clé porte l'identité de son propriétaire : il n'existe pas de clé « pou
 
 Chaque membre se connecte avec **son** compte et connecte **ses** sessions de site. Partager un **résultat** (une API visible par l'instance, un jeu de données exporté) est normal. Partager ou faire tourner une **session** entre plusieurs comptes pour échapper à une limite est exclu : voir [Hors périmètre](../explications/hors-perimetre.md).
 
+## Langue et fuseau
+
+Chaque compte a une langue (`en` ou `fr`) et, facultativement, un fuseau horaire, modifiables dans **Mon compte**. La langue du compte l'emporte sur celle du navigateur, qui ne sert qu'une fois, au premier démarrage et sur les pages avant connexion. Le fuseau (lu dans le navigateur à la première connexion) sert aux heures écrites dans vos e-mails et dans les messages de votre client IA. La langue de l'interface n'est **jamais** envoyée à un site : le moteur envoie la langue réelle de son propre navigateur.
+
+La langue, le fuseau et la langue d'une invitation sont des données personnelles : l'export et l'effacement d'une personne (`export_subject`, `erase_subject`) les couvrent, et la suppression d'un compte les efface. Le fuseau n'apparaît dans aucun journal, aucun webhook ni aucune requête vers un site. La variable `DEFAULT_LOCALE` fixe la langue de l'instance, jamais celle d'une personne.
+
 ## Journal d'audit
 
 Les événements sensibles (connexion, changement de rôle, clé créée ou révoquée, appairage, réglage modifié, accès refusé à un objet d'autrui) sont inscrits dans un journal en ajout seul : le rôle applicatif ne peut ni modifier ni effacer une ligne. Les réglages sont journalisés par **nom de champ**, jamais par valeur ; aucun secret, cookie ou contenu de run n'y entre. La rétention est de 12 mois par défaut.

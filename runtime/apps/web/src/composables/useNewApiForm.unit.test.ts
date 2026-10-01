@@ -3,8 +3,8 @@
 // confirmé avant la création ; le texte affiché est celui de 06 § 2, dans les deux langues.
 import { describe, expect, test } from 'vitest';
 import AccountSiteWarning from '@/components/investigation/AccountSiteWarning.vue';
-import en from '@/i18n/locales/en.json';
-import fr from '@/i18n/locales/fr.json';
+import en from '@runtime/i18n/locales/en.json';
+import fr from '@runtime/i18n/locales/fr.json';
 import { esc, view } from '@/testing/console.testkit';
 import { useNewApiForm } from './useNewApiForm';
 

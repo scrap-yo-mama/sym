@@ -60,6 +60,11 @@ export function useSession() {
   };
 }
 
+/** Remplace l'identité par celle que le serveur vient de renvoyer (préférences enregistrées). */
+export function setMe(next: Me): void {
+  me.value = next;
+}
+
 /** Efface les signalements une fois lus. */
 export function dismissNotices(): void {
   notices.value = [];

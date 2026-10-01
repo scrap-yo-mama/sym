@@ -12,6 +12,7 @@
     "@fastify/websocket": "catalog:",
     "@runtime/core": "workspace:*",
     "@runtime/db": "workspace:*",
+    "@runtime/i18n": "workspace:*",
     "@runtime/schemas": "workspace:*",
     "better-auth": "catalog:",
     "drizzle-orm": "catalog:",

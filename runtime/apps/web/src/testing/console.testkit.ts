@@ -5,8 +5,8 @@ import { createSSRApp, h, type Component } from 'vue';
 import { renderToString } from 'vue/server-renderer';
 import { createI18n } from 'vue-i18n';
 import { createMemoryHistory, createRouter } from 'vue-router';
-import en from '@/i18n/locales/en.json';
-import fr from '@/i18n/locales/fr.json';
+import en from '@runtime/i18n/locales/en.json';
+import fr from '@runtime/i18n/locales/fr.json';
 import { buildApi, setApi } from '@/lib/api';
 import { ensureSession, resetSession } from '@/composables/useSession';
 import { ROLE_PERMISSIONS } from '@/testing/permissions';
@@ -48,6 +48,7 @@ export const ME = {
   displayName: 'Ada',
   role: 'owner',
   locale: 'en',
+  timezone: 'Europe/Paris',
   theme: 'system',
   via: 'ui',
   scopes: null,
@@ -69,7 +70,7 @@ export async function signedIn(): Promise<void> {
   await ensureSession();
 }
 
-export type Locale = 'en' | 'fr';
+export type Locale = string;
 
 /** Rend un composant en HTML (SSR) avec ses traductions et un routeur en mémoire placé sur `path`. */
 async function render(component: Component, props: Record<string, unknown> = {}, options: { locale?: Locale; path?: string } = {}): Promise<string> {

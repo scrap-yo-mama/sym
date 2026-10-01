@@ -145,6 +145,7 @@ export async function prepareServer(env: NodeJS.ProcessEnv = process.env, option
       siteSessionKek: kekFor(config.keyring.current, 0, 'site_sessions'),
       isInitialized,
       mfaEnforced: config.mfaEnforced,
+      defaultLocaleEnv: config.defaultLocale,
       guard: new SsrfGuard({ policy: config.ssrfPolicy }),
       secretsKek: kekFor(config.keyring.current, 0, 'secrets'),
       secrets: null,

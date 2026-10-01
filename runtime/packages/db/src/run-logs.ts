@@ -5,6 +5,7 @@
 // (taille d'une entrée, nombre d'entrées par run) bornent la table.
 import { maskPersonal, maskPersonalText, secretValues, type PersonalValueRegistry, type SecretValueRegistry } from '@runtime/core';
 import type pg from 'pg';
+import { assertCodesOnly } from './codes-only.js';
 
 export type RunLogLevel = 'trace' | 'debug' | 'info' | 'warn' | 'error' | 'fatal';
 export type RunLogEntry = { runId: string; seq: number; ownerId: string; level: RunLogLevel; event: string; data?: unknown };
@@ -34,6 +35,8 @@ export async function appendRunLog(
   registry: SecretValueRegistry = secretValues,
   limits: Pick<RunLogLimits, 'maxDataBytes'> = RUN_LOG_LIMITS,
 ): Promise<void> {
+  // Journaux : code stable en anglais et paramètres, jamais une phrase destinée à l'utilisateur (21b M10, `assert_logs_english_codes`).
+  assertCodesOnly('run_logs', { event: entry.event, data: entry.data });
   await db.query('INSERT INTO run_logs (run_id, seq, owner_id, level, event, data) VALUES ($1, $2, $3, $4, $5, $6::jsonb)', [
     entry.runId,
     entry.seq,

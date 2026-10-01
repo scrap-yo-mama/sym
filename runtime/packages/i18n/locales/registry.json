@@ -1,0 +1,8 @@
+{
+  "languages": [
+    { "code": "en", "endonym": "English", "english_name": "English", "dir": "ltr", "maintainers": ["core"], "gate": "shipped", "completeness": 1 },
+    { "code": "fr", "endonym": "Français", "english_name": "French", "dir": "ltr", "maintainers": ["core"], "gate": "shipped", "completeness": 1 }
+  ],
+  "non_translatable": ["mcp.model"],
+  "fallback": { "narrative.light": "omit" }
+}

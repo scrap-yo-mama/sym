@@ -7,8 +7,8 @@ import { ACTION_CAUSE_CODES } from '@/lib/action-required';
 import { API_TABS } from '@/lib/api-tabs';
 import { DIFF_SUMMARY_CODES, EXTRA_REASON_CODES, REASON_CODES, SPEC_REASON_CODES } from '@/lib/reasons';
 import { API_STATUSES, EXECUTIONS, NETWORKS } from '@/lib/status';
-import en from './locales/en.json';
-import fr from './locales/fr.json';
+import en from '@runtime/i18n/locales/en.json';
+import fr from '@runtime/i18n/locales/fr.json';
 
 const locales = { en, fr } as const;
 const variables = (message: string): string[] => [...message.matchAll(/\{(\w+)\}/g)].map((match) => match[1] ?? '').sort();

@@ -178,7 +178,7 @@ describe('assert_docs_rest_reference_generated : référence REST depuis l\'Open
   });
 
   test('codes de raison : chaque code de la table figée est dans la page générée, avec le texte de la console', () => {
-    const fr = JSON.parse(readFileSync(join(runtimeDir, 'apps/web/src/i18n/locales/fr.json'), 'utf8')) as Parameters<typeof renderReasonsReference>[0];
+    const fr = JSON.parse(readFileSync(join(runtimeDir, 'packages/i18n/locales/fr.json'), 'utf8')) as Parameters<typeof renderReasonsReference>[0];
     const spec = (JSON.parse(readFileSync(join(runtimeDir, 'apps/web/src/testing/spec-reason-codes.json'), 'utf8')) as { codes: string[] }).codes;
     const reasons = renderReasonsReference(fr, spec);
     for (const code of spec) expect(reasons, code).toContain(`| \`${code}\` |`);
@@ -187,7 +187,7 @@ describe('assert_docs_rest_reference_generated : référence REST depuis l\'Open
   });
 
   test('chaque code de raison cité dans les pages écrites à la main existe dans la console', () => {
-    const fr = JSON.parse(readFileSync(join(runtimeDir, 'apps/web/src/i18n/locales/fr.json'), 'utf8')) as { reasons: Record<string, string>; failureClass: Record<string, string> };
+    const fr = JSON.parse(readFileSync(join(runtimeDir, 'packages/i18n/locales/fr.json'), 'utf8')) as { reasons: Record<string, string>; failureClass: Record<string, string> };
     const known = new Set([...Object.keys(fr.reasons), ...Object.keys(fr.failureClass)]);
     for (const page of handWritten) {
       if (page.path !== 'reference/statuts-et-raisons') continue;

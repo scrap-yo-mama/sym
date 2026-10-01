@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Standard Webhooks (08 § 5) : signature, vérification, rotation, tolérance, charges minces, barème. Étage U1.
+import { Ajv2020 } from 'ajv/dist/2020.js';
 import { Webhook } from 'standardwebhooks';
 import { describe, expect, test } from 'vitest';
 import {
@@ -13,7 +14,10 @@ import {
   verifyWebhook,
   webhookDelaySeconds,
   webhookHeaders,
+  WEBHOOK_FORBIDDEN_FIELDS,
   WEBHOOK_MAX_ATTEMPTS,
+  WEBHOOK_PAYLOAD_SCHEMA,
+  assertNoSentenceFields,
   WebhookSecretError,
   WebhookVerificationError,
 } from './index.js';
@@ -197,5 +201,37 @@ describe('barème de relance et classement', () => {
   test('refus SSRF et redirection : jamais rejoués (même résultat à chaque fois)', () => {
     expect(classifyDelivery(1, { httpStatus: null, error: 'ssrf_blocked' })).toEqual({ verdict: 'failed', errorCode: 'ssrf_blocked', delaySeconds: null });
     expect(classifyDelivery(1, { httpStatus: 307, error: null })).toEqual({ verdict: 'failed', errorCode: 'redirect_not_followed', delaySeconds: null });
+  });
+});
+
+describe('assert_webhook_payload_has_no_sentences (21 § 4.4, 21b M10)', () => {
+  const validate = new Ajv2020({ strict: false }).compile(WEBHOOK_PAYLOAD_SCHEMA);
+  const at = new Date('2026-10-02T10:00:00Z');
+  const api = { api: 'zz_test_api', api_id: 'a1' };
+  const payloads = [
+    runSucceededPayload(at, { ...api, run_id: 'r1', status: 'sain', items: 10, new_items: 2, outcome: 'clean', dataset_id: 'd1', base_url: 'https://runtime.example' }),
+    runFailedPayload(at, { ...api, run_id: 'r2', status: 'bloquee', failure_class: 'blocked_by_protection', retryable: true }),
+    statusChangedPayload(at, { ...api, from: 'sain', to: 'bloquee', reason: 'blocked_by_protection', run_id: 'r2' }),
+    itemsNewPayload(at, { ...api, run_id: 'r1', new_items: 2, items: 10, dataset_id: 'd1', base_url: 'https://runtime.example' }),
+  ];
+
+  test('le schéma de la charge interdit message, text et description à toute profondeur ; les quatre charges le respectent', () => {
+    expect(WEBHOOK_FORBIDDEN_FIELDS).toEqual(['message', 'text', 'description']);
+    for (const payload of payloads) expect(validate(payload), JSON.stringify(validate.errors)).toBe(true);
+    for (const field of WEBHOOK_FORBIDDEN_FIELDS) {
+      expect(validate({ ...payloads[0], data: { ...payloads[0]!.data, [field]: 'Le site refuse l’accès automatisé.' } }), field).toBe(false);
+      expect(validate({ ...payloads[0], data: { ...payloads[0]!.data, nested: { deep: [{ [field]: 'x' }] } } }), `${field} imbriqué`).toBe(false);
+    }
+    expect(validate({ type: 'run.succeeded', timestamp: 'hier', data: {} })).toBe(false);
+  });
+
+  test('les constructeurs refusent un champ de phrase ; aucune charge ne porte une phrase, que des codes, paramètres, identifiants et horodatages UTC', () => {
+    expect(() => assertNoSentenceFields({ ...payloads[0]!, data: { message: 'x' } })).toThrow(/interdit/);
+    expect(() => assertNoSentenceFields({ ...payloads[0]!, data: { a: { b: [{ description: 'x' }] } } })).toThrow(/interdit/);
+    for (const payload of payloads) {
+      expect(payload.timestamp).toMatch(/Z$/);
+      const text = JSON.stringify(payload);
+      expect(text).not.toMatch(/\.\s+[A-ZÉ]|\b(the|le|la|les)\s/i);
+    }
   });
 });

@@ -63,6 +63,7 @@ COPY packages/agent/package.json packages/agent/
 COPY packages/llm/package.json packages/llm/
 COPY packages/client/package.json packages/client/
 COPY packages/schemas/package.json packages/schemas/
+COPY packages/i18n/package.json packages/i18n/
 COPY apps/server/package.json apps/server/
 COPY apps/worker/package.json apps/worker/
 COPY apps/cli/package.json apps/cli/
@@ -75,6 +76,9 @@ COPY --from=build /app/packages/agent/dist packages/agent/dist
 COPY --from=build /app/packages/llm/dist packages/llm/dist
 COPY --from=build /app/packages/client/dist packages/client/dist
 COPY --from=build /app/packages/schemas/dist packages/schemas/dist
+# Catalogues de langues (JSON lus à l'exécution par le serveur et le worker : messages REST, e-mails, bloc de langue du LLM).
+COPY --from=build /app/packages/i18n/dist packages/i18n/dist
+COPY packages/i18n/locales packages/i18n/locales
 COPY --from=build /app/apps/server/dist apps/server/dist
 COPY --from=build /app/apps/worker/dist apps/worker/dist
 COPY --from=build /app/apps/cli/dist apps/cli/dist

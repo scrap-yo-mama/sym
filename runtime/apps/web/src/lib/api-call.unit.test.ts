@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Appel d'API sans exception : le serveur renvoie des codes stables, la console choisit le message traduit.
 import { describe, expect, test } from 'vitest';
-import en from '@/i18n/locales/en.json';
-import fr from '@/i18n/locales/fr.json';
+import en from '@runtime/i18n/locales/en.json';
+import fr from '@runtime/i18n/locales/fr.json';
 import { call, errorCodeOf } from './api-call';
 
 const response = (status: number) => new Response(null, { status });

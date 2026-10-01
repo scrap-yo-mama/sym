@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer as createTlsServer, TLSSocket, type TlsOptions } from 'node:tls';
 
-type ReceivedMail ={ from: string; to: string[]; raw: string; headers: Record<string, string>; text: string };
+type ReceivedMail = { from: string; to: string[]; raw: string; headers: Record<string, string>; text: string; html: string | null };
 
 export type FakeSmtpOptions = {
   mode?: 'plain' | 'starttls' | 'tls';
@@ -54,7 +54,7 @@ function makeCertificate(): { key: string; cert: string } {
   }
 }
 
-function parseMail(raw: string): { headers: Record<string, string>; text: string } {
+function parseMail(raw: string): { headers: Record<string, string>; text: string; html: string | null } {
   const split = raw.indexOf('\r\n\r\n');
   const head = raw.slice(0, split).replace(/\r\n[ \t]+/g, ' ');
   const headers: Record<string, string> = {};
@@ -62,8 +62,21 @@ function parseMail(raw: string): { headers: Record<string, string>; text: string
     const i = line.indexOf(':');
     if (i > 0) headers[line.slice(0, i).toLowerCase()] = line.slice(i + 1).trim();
   }
-  const body = raw.slice(split + 4).replace(/\r\n/g, '');
-  return { headers, text: headers['content-transfer-encoding'] === 'base64' ? Buffer.from(body, 'base64').toString('utf8') : body };
+  const rawBody = raw.slice(split + 4);
+  const boundary = /^multipart\/alternative;\s*boundary="?([^";]+)"?/i.exec(headers['content-type'] ?? '')?.[1];
+  if (boundary !== undefined) {
+    // multipart/alternative (texte brut puis HTML, parties en base64) : `text` est la partie text/plain, `html` la partie text/html.
+    const parts = rawBody.split(`--${boundary}`).slice(1).filter((p) => !p.startsWith('--'));
+    const decode = (type: string): string | null => {
+      const part = parts.find((p) => new RegExp(`Content-Type: ${type}`, 'i').test(p));
+      if (part === undefined) return null;
+      const body = part.slice(part.indexOf('\r\n\r\n') + 4).replace(/\r\n/g, '');
+      return Buffer.from(body, 'base64').toString('utf8');
+    };
+    return { headers, text: decode('text/plain') ?? '', html: decode('text/html') };
+  }
+  const body = rawBody.replace(/\r\n/g, '');
+  return { headers, text: headers['content-transfer-encoding'] === 'base64' ? Buffer.from(body, 'base64').toString('utf8') : body, html: null };
 }
 
 export async function startFakeSmtp(options: FakeSmtpOptions = {}): Promise<FakeSmtp> {

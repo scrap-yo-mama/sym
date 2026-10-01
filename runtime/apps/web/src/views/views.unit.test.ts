@@ -3,7 +3,7 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
-import en from '@/i18n/locales/en.json';
+import en from '@runtime/i18n/locales/en.json';
 import { resetSession } from '@/composables/useSession';
 import { setApi } from '@/lib/api';
 import { esc, installFakeServer, json, ME, sessionRoutes, signedIn, view } from '@/testing/console.testkit';

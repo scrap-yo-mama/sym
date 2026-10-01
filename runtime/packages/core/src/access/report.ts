@@ -18,6 +18,7 @@ import type { NetworkSession } from '../net/modes/session.js';
 import { DEFAULT_ACCESS_POLICY, type AccessPolicy } from './policy.js';
 import type { RobotsDecision, RobotsGate } from './gate.js';
 import { selectGroup } from './robots.js';
+import { ENGINE_ACCEPT_LANGUAGE } from './identity.js';
 import { detectAccessSignals, parsePaymentOffer, type AccessSignal } from './signals.js';
 
 /** Sonde d'une URL (une requête GET, redirections suivies sous garde robots, corps borné). */
@@ -300,6 +301,8 @@ export function accessReportView(report: AccessReport): {
   llms_txt: boolean;
   payment_offer: string | null;
   official_api_url: string | null;
+  /** `Accept-Language` effectif envoyé aux sites : celui du moteur (21 § 6, u6 R18), jamais la langue d'un utilisateur. */
+  accept_language: string;
 } {
   return {
     id: report.id,
@@ -310,6 +313,7 @@ export function accessReportView(report: AccessReport): {
     llms_txt: report.declared.llms_txt,
     payment_offer: report.payment.offer,
     official_api_url: report.declared.official_api_url,
+    accept_language: ENGINE_ACCEPT_LANGUAGE,
   };
 }
 

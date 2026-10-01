@@ -6,6 +6,7 @@ import { TUNNEL_MAX_PAYLOAD } from '@runtime/core/tunnel';
 import Fastify, { type FastifyBaseLogger, type FastifyInstance, type FastifyServerOptions } from 'fastify';
 import type { ExtensionOriginPolicy } from './config.js';
 import type { ServerContext } from './context.js';
+import { localizeErrors } from './i18n.js';
 import { apiKeyRoutes } from './routes/api-keys.js';
 import { authRoutes } from './routes/auth.js';
 import { extensionRoutes } from './routes/extension.js';
@@ -74,6 +75,8 @@ export function buildServer(
     span.run(done);
   });
   app.addHook('onRequest', guard(ctx));
+  // `message` des erreurs REST dans la langue résolue (21 § 4.4) : `Content-Language` et `Vary: Accept-Language` à la sortie.
+  app.addHook('onSend', localizeErrors(ctx));
 
   app.setNotFoundHandler((_request, reply) => notFound(reply));
   app.setErrorHandler((error: { validation?: unknown; statusCode?: number }, request, reply) => {

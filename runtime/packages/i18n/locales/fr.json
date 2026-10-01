@@ -1305,7 +1305,12 @@
       "motions": {
         "system": "Système",
         "reduced": "Réduites"
-      }
+      },
+      "timezone": "Fuseau horaire",
+      "timezoneHint": "Sert aux heures écrites dans tes e-mails et dans les messages de ton client IA. Il n'est jamais déduit de ta langue.",
+      "timezoneSave": "Enregistrer le fuseau",
+      "timezoneSaved": "Fuseau enregistré.",
+      "timezoneInvalid": "Ce fuseau horaire n'est pas connu."
     },
     "password": {
       "title": "Mot de passe",
@@ -1466,7 +1471,9 @@
       "link": "Lien pour {email}",
       "linkHelp": "Aucun e-mail n'est configuré : copie ce lien et envoie-le toi-même à la personne. Il n'est affiché qu'ici et maintenant.",
       "copy": "Copier le lien",
-      "dismiss": "J'ai copié le lien"
+      "dismiss": "J'ai copié le lien",
+      "locale": "Langue de l'invitation",
+      "localePreview": "L'e-mail d'invitation sera écrit en {language}, et le nouveau compte démarrera dans cette langue."
     },
     "roles": {
       "owner": "Propriétaire",
@@ -1698,6 +1705,190 @@
       "removeGroup": "Retirer le groupe {group}",
       "save": "Enregistrer",
       "notConfigured": "Le SSO n'est pas encore configuré."
+    }
+  },
+  "srv": {
+    "unknown_code": "Cette version ne sait pas décrire ce qui vient d'arriver (code : {code}).",
+    "error": {
+      "cookie_domain_mismatch": "Ce cookie est hors du domaine auquel tu es connecté.",
+      "current_password_required": "Saisis ton mot de passe actuel.",
+      "domain_not_allowed": "Ce domaine est refusé (adresse privée, nom interne ou invalide).",
+      "email_domain_not_allowed": "Cette instance n'accepte pas ce domaine d'e-mail.",
+      "invalid_code": "Ce code est invalide ou déjà utilisé.",
+      "invalid_email": "Cette adresse e-mail n'est pas valide.",
+      "invalid_pairing_code": "Ce code d'appairage est inconnu, expiré ou déjà utilisé.",
+      "invalid_request": "La requête n'est pas valide.",
+      "mfa_code_required": "Un code de double authentification est requis.",
+      "no_enrollment": "Aucun enrôlement de double authentification n'est en cours.",
+      "reset_link_invalid": "Ce lien est invalide ou expiré.",
+      "token_in_url": "Aucun paramètre d'URL : le jeton part dans le premier message.",
+      "unauthorized": "Identifiant absent, expiré ou révoqué.",
+      "forbidden": "Tu n'as pas le droit de faire ça.",
+      "mfa_enforced": "La double authentification est exigée sur cette instance.",
+      "mfa_enrollment_required": "Active la double authentification pour continuer.",
+      "mfa_required": "Un second facteur est attendu.",
+      "origin_not_allowed": "Origine refusée.",
+      "reauth_failed": "Le mot de passe actuel est incorrect.",
+      "reauth_required": "Reconnecte-toi pour confirmer cette opération.",
+      "sso_required": "Accepte l'invitation via le fournisseur d'identité de l'instance.",
+      "not_found": "Ressource introuvable.",
+      "invalid_status": "Le compte attend une invitation.",
+      "invitation_invalid": "Invitation invalide ou expirée.",
+      "invitation_pending": "Une invitation est déjà en cours : renvoie-la.",
+      "last_login_method": "C'est le dernier moyen de connexion du compte : pose d'abord un mot de passe.",
+      "mfa_already_enabled": "La double authentification est déjà active.",
+      "mfa_not_enabled": "La double authentification n'est pas active.",
+      "no_local_password": "Ce compte se connecte sans mot de passe local.",
+      "server_use_not_allowed": "Ce domaine est en mode tunnel : l'instance n'accepte aucun cookie pour lui.",
+      "smtp_configured": "SMTP est configuré : le compte réinitialise son mot de passe avec « Mot de passe oublié ».",
+      "sso_disabled": "Aucun fournisseur d'identité n'est actif sur cette instance.",
+      "user_exists": "Un compte existe déjà pour cette adresse.",
+      "user_not_active": "Le compte est inactif.",
+      "user_not_disabled": "Désactive le compte avant de le supprimer.",
+      "upgrade_required": "Une connexion WebSocket est attendue.",
+      "too_many_attempts": "Trop de tentatives, réessaie plus tard.",
+      "too_many_pairing_codes": "Trop de codes d'appairage actifs : utilises-en un ou attends son expiration (10 min).",
+      "internal": "Erreur interne.",
+      "idp_unreachable": "Le fournisseur d'identité est injoignable.",
+      "not_initialized": "Cette instance n'est pas encore configurée : termine l'assistant de premier démarrage.",
+      "not_ready": "L'instance démarre : le schéma de la base n'est pas encore à jour (runtime migrate).",
+      "invalid_locale": "Cette instance ne propose pas cette langue.",
+      "invalid_timezone": "Ce fuseau horaire est inconnu."
+    },
+    "error_by_status": {
+      "409": {
+        "mfa_required": "Ce lien est réservé aux comptes à double authentification : sur le serveur, lance `runtime user:reset-link E-MAIL`."
+      }
+    }
+  },
+  "email": {
+    "invite": {
+      "subject": "{inviter} t'invite sur {instance}",
+      "intro": "{inviter} t'invite à rejoindre {instance} sur Scrapyomama Runtime.",
+      "action": "Ouvre ce lien pour créer ton compte. Il ne sert qu'une fois et expire le {expires} :",
+      "ignore": "Si tu n'attendais pas cette invitation, ignore ce message."
+    },
+    "reset": {
+      "subject": "Réinitialise ton mot de passe sur {instance}",
+      "intro": "Une réinitialisation du mot de passe a été demandée pour ton compte sur {instance}.",
+      "action": "Ouvre ce lien pour choisir un nouveau mot de passe. Il ne sert qu'une fois et expire le {expires} :",
+      "ignore": "Si tu n'es pas à l'origine de la demande, ignore ce message : ton mot de passe ne change pas."
+    },
+    "alert": {
+      "subject": "[Scrapyomama] {api} : {cause}",
+      "label": {
+        "api": "API",
+        "run": "Run",
+        "failure_class": "Classe d'échec",
+        "warning_since": "En avertissement depuis",
+        "transitions": "Transitions",
+        "console": "Console"
+      },
+      "cause": {
+        "status_erreur": {
+          "title": "demande de l'attention (erreur)",
+          "body": "L'API est en erreur. Les données existantes sont conservées ; une nouvelle enquête est nécessaire."
+        },
+        "status_action_requise": {
+          "title": "action requise",
+          "body": "L'API attend une action de ta part avant de pouvoir tourner à nouveau."
+        },
+        "status_bloquee": {
+          "title": "bloquée par le site",
+          "body": "Le site refuse l'accès automatisé. Scrapyomama s'est arrêté volontairement : aucune relance automatique, et l'adresse IP ne change pas après un refus."
+        },
+        "warning_stale": {
+          "title": "en avertissement depuis trop longtemps",
+          "body": "L'API reste en avertissement et aucun run propre ne l'a levé dans le délai prévu."
+        },
+        "run_failed": {
+          "title": "run planifié en échec",
+          "body": "Un run planifié a échoué. Le statut de l'API suit les règles habituelles ; rien d'autre n'a été tenté."
+        }
+      }
+    }
+  },
+  "narrative": {
+    "investigation_started": "Enquête sur {domain} lancée.",
+    "phase": {
+      "access_check": "Rapport d'accès : lecture de robots.txt et des signaux d'usage du site",
+      "reconnaissance": "Reconnaissance : je regarde comment la page obtient ses données",
+      "awaiting_schema_validation": "En attente de la validation du schéma",
+      "testing": "Essais : de la méthode la moins chère à la plus chère",
+      "done": "Enquête close"
+    },
+    "phase_started": "Étape : {phase}.",
+    "access_report": {
+      "allowed": "Rapport d'accès : robots.txt autorise le chemin [{duration}, {cost}].",
+      "disallowed": "Rapport d'accès : robots.txt interdit le chemin. SYM s'arrête là [{duration}, {cost}].",
+      "absent": "Rapport d'accès : pas de robots.txt, donc rien n'interdit le chemin [{duration}, {cost}].",
+      "unreachable": "Rapport d'accès : robots.txt illisible. SYM s'arrête là [{duration}, {cost}].",
+      "unknown": "Rapport d'accès terminé [{duration}, {cost}]."
+    },
+    "reconnaissance_finished": "Reconnaissance terminée : {n} source de données trouvée | Reconnaissance terminée : {n} sources de données trouvées",
+    "schema_proposed": "Schéma proposé : {fields} champs.",
+    "schema_validated": "Schéma validé ({by}).",
+    "attempt_finished": "Essai {execution}/{network} : {result} [{duration}, {cost}].",
+    "attempt_pruned": "Essais écartés : {n} méthode plus chère écartée | Essais écartés : {n} méthodes plus chères écartées",
+    "status_changed": "Statut : {status}.",
+    "action_required": "Action requise sur {domain} : {cause}.",
+    "investigation_finished": "Enquête terminée : {outcome}.",
+    "next_step": "Prochaine étape : appelle {tool}.",
+    "light": {}
+  },
+  "ext": {
+    "manifest": {
+      "name": "Scrapyomama",
+      "description": "Laisse Scrapyomama travailler dans ta propre session de navigateur, uniquement sur les sites que tu autorises.",
+      "action_title": "Scrapyomama",
+      "command_stop_all": "Tout arrêter maintenant",
+      "command_open_panel": "Ouvrir le panneau SYM"
+    }
+  },
+  "mcp": {
+    "user": {
+      "prompt": {
+        "new_api": {
+          "title": "Nouvelle API depuis une page",
+          "description": "Transforme une page web en API que tu peux appeler."
+        },
+        "fix_api": {
+          "title": "Réparer une API",
+          "description": "Regarde pourquoi une API est cassée et répare-la."
+        },
+        "first_steps": {
+          "title": "Premiers pas",
+          "description": "Une courte démo qui crée une première API pour toi."
+        },
+        "review_catalog": {
+          "title": "Revoir le catalogue",
+          "description": "Fais le tour de tes API et dis ce qui demande de l'attention."
+        },
+        "resume_api": {
+          "title": "Reprendre une API",
+          "description": "Reprends une itération là où tu l'avais laissée, dans une autre conversation."
+        },
+        "arg_url": "La page à transformer en API",
+        "arg_slug": "L'API sur laquelle travailler"
+      },
+      "elicitation": {
+        "validate_schema": {
+          "message": "Valider ce schéma ?",
+          "decision": "Ta décision",
+          "accept": "Oui, valider",
+          "modify": "Modifier",
+          "remark": "Remarque"
+        },
+        "confirm_cost": {
+          "message": "Cela coûte plus que ta limite habituelle. Continuer ?",
+          "decision": "Ta décision",
+          "accept": "Oui, continuer",
+          "cancel": "Non, arrêter"
+        }
+      },
+      "link": {
+        "console": "Ouvrir dans la console"
+      }
     }
   }
 }

@@ -497,6 +497,7 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
           candidates,
           accessFacts: accessFactsForPrompt(report),
           ...(fixed === undefined ? {} : { fixedSchema: fixed }),
+          ...(ctx.proseLocale === undefined ? {} : { proseLocale: ctx.proseLocale }),
         };
         // Coût d'un appel borné AVANT l'envoi (sortie plafonnée, entrée estimée par excès) : jamais un appel qui
         // ferait dépasser `investigation_budget_usd` ; prix inconnu → aucun appel (08 §1, jamais 0).

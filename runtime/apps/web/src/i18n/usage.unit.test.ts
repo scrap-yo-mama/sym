@@ -5,8 +5,8 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, test } from 'vitest';
-import en from './locales/en.json';
-import fr from './locales/fr.json';
+import en from '@runtime/i18n/locales/en.json';
+import fr from '@runtime/i18n/locales/fr.json';
 
 const webSrc = new URL('../', import.meta.url).pathname;
 

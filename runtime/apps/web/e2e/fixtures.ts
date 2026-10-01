@@ -16,6 +16,7 @@ export const ME = (locale: 'en' | 'fr', theme: 'light' | 'dark', role: Schemas['
   displayName: 'Ada',
   role,
   locale,
+  timezone: 'Europe/Paris',
   theme,
   via: 'ui',
   scopes: null,
@@ -174,8 +175,8 @@ const users = (): Schemas['User'][] => [
 
 /** Invitations : une en attente, une acceptée. */
 const invitations = (): Schemas['Invitation'][] => [
-  { id: UUID(910), email: 'fay@zz-test.example', role: 'member', invited_by: UUID(900), expires_at: '2099-10-01T09:00:00.000Z', created_at: iso(29), accepted_at: null, revoked_at: null },
-  { id: UUID(911), email: 'gus@zz-test.example', role: 'admin', invited_by: UUID(900), expires_at: iso(25), created_at: iso(23), accepted_at: iso(24), revoked_at: null },
+  { id: UUID(910), email: 'fay@zz-test.example', role: 'member', invited_by: UUID(900), expires_at: '2099-10-01T09:00:00.000Z', created_at: iso(29), accepted_at: null, revoked_at: null, locale: 'fr' },
+  { id: UUID(911), email: 'gus@zz-test.example', role: 'admin', invited_by: UUID(900), expires_at: iso(25), created_at: iso(23), accepted_at: iso(24), revoked_at: null, locale: 'en' },
 ];
 
 /** Événements d'audit : métadonnées seulement (jamais de secret, de cookie ni de contenu). */

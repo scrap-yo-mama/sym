@@ -313,6 +313,7 @@ export async function startWorker(options: StartWorkerOptions): Promise<Worker> 
           strategyVersion: claim.strategyVersion,
           input: claim.input,
           kind: claim.kind,
+          proseLocale: claim.locale,
           signal: controller.signal,
           recordAttempt: async (attempt) => {
             await recordAttempt(pool, runId, jobId, attempt);

@@ -4,6 +4,7 @@
 // essai, et un rapport qui arrête l'enquête (robots.txt interdit ou injoignable, 402) interdit tout essai ensuite ;
 // la base le refuse (`AccessReportFirstError`), quel que soit l'appelant (`assert_access_report_first`).
 import type pg from 'pg';
+import { assertCodesOnly } from './codes-only.js';
 import { withActor } from './rls.js';
 
 export const ACCESS_REPORT_EVENT = 'access_report';
@@ -31,6 +32,8 @@ export async function appendInvestigationEvent(
   event: { readonly runId: string; readonly ownerId: string; readonly kind: string; readonly payload?: unknown },
 ): Promise<{ seq: number }> {
   if (event.kind.length === 0 || event.kind.length > 64) throw new Error('investigation_events.kind : 1 à 64 caractères');
+  // Le récit est rendu à la lecture (21b § 1) : la ligne ne porte que le code (`kind`) et ses paramètres (la charge).
+  assertCodesOnly('investigation_events', event.payload ?? {});
   try {
     return await withActor(pool, { userId: event.ownerId, role: 'member' }, async (tx) => {
       await tx.query('SELECT pg_advisory_xact_lock(hashtextextended($1::text, 1101))', [event.runId]);

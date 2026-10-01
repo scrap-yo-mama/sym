@@ -38,6 +38,43 @@ export type WebhookPayload = {
   data: Record<string, unknown>;
 };
 
+/**
+ * Champs qui ne figurent JAMAIS dans la charge d'un webhook signé (21 § 4.4, u6 R24, M10) : une phrase n'y a pas sa place. La charge
+ * ne porte que des codes, des paramètres, des identifiants et des horodatages ISO 8601 UTC ; la table des codes est publiée dans la doc.
+ */
+export const WEBHOOK_FORBIDDEN_FIELDS = ['message', 'text', 'description'] as const;
+
+/** Schéma JSON de la charge d'un webhook : interdit `message`, `text` et `description` à toute profondeur (`assert_webhook_payload_has_no_sentences`). */
+export const WEBHOOK_PAYLOAD_SCHEMA = {
+  $schema: 'https://json-schema.org/draft/2020-12/schema',
+  type: 'object',
+  additionalProperties: false,
+  required: ['type', 'timestamp', 'data'],
+  properties: {
+    type: { enum: [...WEBHOOK_EVENTS] },
+    timestamp: { type: 'string', pattern: '^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$' },
+    data: { $ref: '#/$defs/plain' },
+  },
+  $defs: {
+    plain: { type: 'object', propertyNames: { not: { enum: [...WEBHOOK_FORBIDDEN_FIELDS] } }, additionalProperties: { $ref: '#/$defs/value' } },
+    value: { anyOf: [{ type: ['string', 'number', 'boolean', 'null'] }, { type: 'array', items: { $ref: '#/$defs/value' } }, { $ref: '#/$defs/plain' }] },
+  },
+} as const;
+
+/** Refuse une charge qui porte un champ de phrase (à toute profondeur) ; renvoie la charge telle quelle sinon. */
+export function assertNoSentenceFields(payload: WebhookPayload): WebhookPayload {
+  const walk = (value: unknown, path: string): void => {
+    if (Array.isArray(value)) return value.forEach((v, i) => walk(v, `${path}[${i}]`));
+    if (typeof value !== 'object' || value === null) return;
+    for (const [key, inner] of Object.entries(value)) {
+      if ((WEBHOOK_FORBIDDEN_FIELDS as readonly string[]).includes(key)) throw new Error(`charge de webhook : le champ « ${path}.${key} » est interdit (codes et paramètres seulement)`);
+      walk(inner, `${path}.${key}`);
+    }
+  };
+  walk(payload.data, 'data');
+  return payload;
+}
+
 type ApiRef = { api: string; api_id: string };
 type RunRef = ApiRef & { run_id: string; status: ApiStatus; trigger?: string };
 
@@ -48,7 +85,7 @@ export function runSucceededPayload(
   at: Date,
   input: RunRef & { items: number; new_items?: number; outcome: string; dataset_id?: string | null; base_url?: string | null },
 ): WebhookPayload {
-  return {
+  return assertNoSentenceFields({
     type: 'run.succeeded',
     timestamp: at.toISOString(),
     data: {
@@ -61,14 +98,14 @@ export function runSucceededPayload(
       ...(input.new_items === undefined ? {} : { new_items: input.new_items }),
       ...datasetUrl(input.base_url, input.dataset_id),
     },
-  };
+  });
 }
 
 export function runFailedPayload(
   at: Date,
   input: RunRef & { failure_class: FailureClass | null; retryable: boolean | null },
 ): WebhookPayload {
-  return {
+  return assertNoSentenceFields({
     type: 'run.failed',
     timestamp: at.toISOString(),
     data: {
@@ -80,7 +117,7 @@ export function runFailedPayload(
       // Classe bloquante (refus, interdit, robots.txt) : jamais « réessayable », quoi que rapporte l'exécuteur (X3, X4).
       retryable: input.failure_class !== null && (BLOCKING_CLASSES as readonly string[]).includes(input.failure_class) ? false : input.retryable,
     },
-  };
+  });
 }
 
 /**
@@ -88,7 +125,7 @@ export function runFailedPayload(
  * découle (un site qui a refusé n'est pas re-sollicité), et la charge ne propose aucune échappatoire réseau.
  */
 export function statusChangedPayload(at: Date, input: ApiRef & { from: ApiStatus | null; to: ApiStatus; reason: string | null; run_id?: string | null }): WebhookPayload {
-  return {
+  return assertNoSentenceFields({
     type: 'api.status_changed',
     timestamp: at.toISOString(),
     data: {
@@ -100,14 +137,14 @@ export function statusChangedPayload(at: Date, input: ApiRef & { from: ApiStatus
       ...(input.run_id ? { run_id: input.run_id } : {}),
       retryable: input.to !== 'bloquee',
     },
-  };
+  });
 }
 
 export function itemsNewPayload(
   at: Date,
   input: ApiRef & { run_id: string; new_items: number; items: number; dataset_id?: string | null; base_url?: string | null },
 ): WebhookPayload {
-  return {
+  return assertNoSentenceFields({
     type: 'items.new',
     timestamp: at.toISOString(),
     data: {
@@ -118,7 +155,7 @@ export function itemsNewPayload(
       items: input.items,
       ...datasetUrl(input.base_url, input.dataset_id),
     },
-  };
+  });
 }
 
 export type DeliveryOutcome = {

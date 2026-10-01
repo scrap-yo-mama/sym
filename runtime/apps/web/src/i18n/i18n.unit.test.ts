@@ -5,9 +5,10 @@ import { describe, expect, test } from 'vitest';
 import { createMemoryHistory } from 'vue-router';
 import { createAppRouter } from '@/router/index';
 import { SPEC_REASON_CODES } from '@/lib/reasons';
-import { createAppI18n, detectLocale, frenchPlural, normalizeLocale, setLocale } from './index';
-import en from './locales/en.json';
-import fr from './locales/fr.json';
+import { pluralRule } from '@runtime/i18n/browser';
+import { createAppI18n, detectLocale, normalizeLocale, setLocale } from './index';
+import en from '@runtime/i18n/locales/en.json';
+import fr from '@runtime/i18n/locales/fr.json';
 
 type Tree = { [key: string]: string | Tree };
 
@@ -23,7 +24,8 @@ function flatten(tree: Tree, prefix = ''): Map<string, string> {
 const variables = (message: string): string[] => [...message.matchAll(/\{(\w+)\}/g)].map((m) => m[1] ?? '').sort();
 
 describe('fichiers de langue', () => {
-  const english = flatten(en);
+  // `mcp.model.*` (textes destinés au modèle) n'existe qu'en anglais (21b § 2) : hors de la parité de la console.
+  const english = new Map([...flatten(en)].filter(([key]) => !key.startsWith('mcp.model.')));
   const french = flatten(fr);
 
   test('assert_i18n_key_parity : mêmes clés, mêmes variables, aucune valeur vide', () => {
@@ -138,7 +140,8 @@ describe('pluriels (ADR 0002)', () => {
   });
 
   test('trois formes (aucun | un | plusieurs) : règle par défaut', () => {
-    expect([0, 1, 5].map((n) => frenchPlural(n, 3))).toEqual([0, 1, 2]);
+    expect([0, 1, 5].map((n) => pluralRule('fr')(n, 3))).toEqual([0, 1, 2]);
+    expect([0, 1, 5].map((n) => pluralRule('en')(n, 3))).toEqual([0, 1, 2]);
   });
 });
 

@@ -12,6 +12,7 @@
 import { createHash, randomBytes } from 'node:crypto';
 import type { DataCandidate } from '@runtime/core/investigation';
 import { INVESTIGATION_PROPOSAL_SCHEMA, narrativeUrl, parseProposal, type InvestigationProposal } from '@runtime/core/investigation';
+import { defaultI18n, languageBlock, withLanguageBlock } from '@runtime/i18n';
 import type { ChatMessage, JsonSchema, LlmCallResult, LlmClient } from '@runtime/llm';
 
 export const INVESTIGATE_SYSTEM_PROMPT = [
@@ -43,7 +44,20 @@ export type InvestigateArgs = {
   readonly accessFacts?: Readonly<Record<string, boolean | number | string>>;
   /** Schéma validé par l'appelant (`validate_schema` avec correction) : le modèle ne fait plus que cartographier. */
   readonly fixedSchema?: unknown;
+  /** `runs.locale` : langue de la prose destinée à l'humain (bloc `Language:` ajouté par le code, 21 § 4.5) ; sans elle, aucun bloc. */
+  readonly proseLocale?: string;
 };
+
+/**
+ * Prompt système : un seul jeu en anglais ; le bloc `Language:` (nom de langue du registre, jamais une saisie libre) est ajouté
+ * par le code quand `runs.locale` est connue. Les noms de champs, types et descriptions restent en anglais (sorties machine et
+ * lues par le modèle client, 21 § 4.5) : le bloc ne vise que la prose destinée à l'humain.
+ */
+function systemPrompt(proseLocale: string | undefined): string {
+  if (proseLocale === undefined) return INVESTIGATE_SYSTEM_PROMPT;
+  const { renderer, registry } = defaultI18n();
+  return withLanguageBlock(INVESTIGATE_SYSTEM_PROMPT, languageBlock(renderer, registry, proseLocale));
+}
 
 /** Messages du rôle `investigate` : consignes, demande du propriétaire, puis gisements encadrés par un jeton imprévisible. */
 export function investigateMessages(args: InvestigateArgs, token = randomBytes(12).toString('hex')): ChatMessage[] {
@@ -74,7 +88,7 @@ export function investigateMessages(args: InvestigateArgs, token = randomBytes(1
     .filter((line) => line !== '')
     .join('\n');
   return [
-    { role: 'system', content: INVESTIGATE_SYSTEM_PROMPT },
+    { role: 'system', content: systemPrompt(args.proseLocale) },
     { role: 'user', content: user },
   ];
 }

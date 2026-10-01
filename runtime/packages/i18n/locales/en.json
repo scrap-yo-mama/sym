@@ -1305,7 +1305,12 @@
       "motions": {
         "system": "System",
         "reduced": "Reduced"
-      }
+      },
+      "timezone": "Time zone",
+      "timezoneHint": "Used for the times written in your emails and in messages from your AI client. It is never guessed from your language.",
+      "timezoneSave": "Save time zone",
+      "timezoneSaved": "Time zone saved.",
+      "timezoneInvalid": "This time zone is not known."
     },
     "password": {
       "title": "Password",
@@ -1466,7 +1471,9 @@
       "link": "Link for {email}",
       "linkHelp": "No e-mail is set up, so copy this link and send it to the person yourself. It is shown only now.",
       "copy": "Copy the link",
-      "dismiss": "I copied the link"
+      "dismiss": "I copied the link",
+      "locale": "Language of the invitation",
+      "localePreview": "The invitation e-mail will be written in {language}, and the new account will start in that language."
     },
     "roles": {
       "owner": "Owner",
@@ -1698,6 +1705,202 @@
       "removeGroup": "Remove group {group}",
       "save": "Save",
       "notConfigured": "SSO is not configured yet."
+    }
+  },
+  "srv": {
+    "unknown_code": "Something happened that this version cannot describe (code: {code}).",
+    "error": {
+      "cookie_domain_mismatch": "That cookie is outside the domain you are connected to.",
+      "current_password_required": "Enter your current password.",
+      "domain_not_allowed": "That domain is refused (private address, internal name or invalid).",
+      "email_domain_not_allowed": "This instance does not accept that email domain.",
+      "invalid_code": "That code is invalid or already used.",
+      "invalid_email": "That email address is not valid.",
+      "invalid_pairing_code": "That pairing code is unknown, expired or already used.",
+      "invalid_request": "The request is not valid.",
+      "mfa_code_required": "A two-factor code is required.",
+      "no_enrollment": "No two-factor enrollment is in progress.",
+      "reset_link_invalid": "That link is invalid or expired.",
+      "token_in_url": "No URL parameter: the token goes in the first message.",
+      "unauthorized": "Missing, expired or revoked credentials.",
+      "forbidden": "You are not allowed to do that.",
+      "mfa_enforced": "Two-factor authentication is required on this instance.",
+      "mfa_enrollment_required": "Turn on two-factor authentication to continue.",
+      "mfa_required": "A second factor is expected.",
+      "origin_not_allowed": "Origin refused.",
+      "reauth_failed": "The current password is incorrect.",
+      "reauth_required": "Sign in again to confirm this operation.",
+      "sso_required": "Accept the invitation through the instance's identity provider.",
+      "not_found": "Resource not found.",
+      "invalid_status": "The account is waiting for an invitation.",
+      "invitation_invalid": "Invalid or expired invitation.",
+      "invitation_pending": "An invitation is already pending: resend it.",
+      "last_login_method": "This is the account's last sign-in method: set a password first.",
+      "mfa_already_enabled": "Two-factor authentication is already on.",
+      "mfa_not_enabled": "Two-factor authentication is off.",
+      "no_local_password": "This account signs in without a local password.",
+      "server_use_not_allowed": "This domain is in tunnel mode: the instance accepts no cookie for it.",
+      "smtp_configured": "SMTP is configured: the account resets its password with \"Forgot your password?\".",
+      "sso_disabled": "No identity provider is active on this instance.",
+      "user_exists": "An account already exists for this address.",
+      "user_not_active": "The account is inactive.",
+      "user_not_disabled": "Deactivate the account before deleting it.",
+      "upgrade_required": "A WebSocket is expected.",
+      "too_many_attempts": "Too many attempts, try again later.",
+      "too_many_pairing_codes": "Too many active pairing codes: use one or wait for it to expire (10 min).",
+      "internal": "Internal error.",
+      "idp_unreachable": "The identity provider is unreachable.",
+      "not_initialized": "This instance is not set up yet: finish the first-start wizard.",
+      "not_ready": "The instance is starting up: the database schema is not up to date yet (runtime migrate).",
+      "invalid_locale": "This instance does not offer that language.",
+      "invalid_timezone": "That time zone is unknown."
+    },
+    "error_by_status": {
+      "409": {
+        "mfa_required": "This link is for accounts with two-factor authentication: on the server, run `runtime user:reset-link EMAIL`."
+      }
+    }
+  },
+  "email": {
+    "invite": {
+      "subject": "{inviter} invited you to {instance}",
+      "intro": "{inviter} invited you to join {instance} on Scrapyomama Runtime.",
+      "action": "Open this link to create your account. It works once and expires on {expires}:",
+      "ignore": "If you were not expecting this invitation, you can ignore this message."
+    },
+    "reset": {
+      "subject": "Reset your password on {instance}",
+      "intro": "A password reset was requested for your account on {instance}.",
+      "action": "Open this link to choose a new password. It works once and expires on {expires}:",
+      "ignore": "If you did not ask for it, ignore this message: your password stays as it is."
+    },
+    "alert": {
+      "subject": "[Scrapyomama] {api}: {cause}",
+      "label": {
+        "api": "API",
+        "run": "Run",
+        "failure_class": "Failure class",
+        "warning_since": "In warning since",
+        "transitions": "Transitions",
+        "console": "Console"
+      },
+      "cause": {
+        "status_erreur": {
+          "title": "needs attention (error)",
+          "body": "The API is in error. Existing data is kept; a new investigation is needed."
+        },
+        "status_action_requise": {
+          "title": "action required",
+          "body": "The API waits for an action from you before it can run again."
+        },
+        "status_bloquee": {
+          "title": "blocked by the site",
+          "body": "The site refuses automated access. Scrapyomama stopped on purpose: it does not retry on its own and does not change IP address after a refusal."
+        },
+        "warning_stale": {
+          "title": "warning for too long",
+          "body": "The API is still in warning and no clean run has cleared it within the allowed delay."
+        },
+        "run_failed": {
+          "title": "scheduled run failed",
+          "body": "A scheduled run failed. The status of the API follows the usual rules; nothing else was attempted."
+        }
+      }
+    }
+  },
+  "narrative": {
+    "investigation_started": "Investigation of {domain} started.",
+    "phase": {
+      "access_check": "Access report: reading robots.txt and the usage signals of the site",
+      "reconnaissance": "Reconnaissance: looking at how the page gets its data",
+      "awaiting_schema_validation": "Waiting for the schema to be validated",
+      "testing": "Trials: from the cheapest method to the most expensive",
+      "done": "Investigation closed"
+    },
+    "phase_started": "Step: {phase}.",
+    "access_report": {
+      "allowed": "Access report: robots.txt allows the path [{duration}, {cost}].",
+      "disallowed": "Access report: robots.txt disallows the path. SYM stops here [{duration}, {cost}].",
+      "absent": "Access report: no robots.txt, so nothing forbids the path [{duration}, {cost}].",
+      "unreachable": "Access report: robots.txt could not be read. SYM stops here [{duration}, {cost}].",
+      "unknown": "Access report done [{duration}, {cost}]."
+    },
+    "reconnaissance_finished": "Reconnaissance done: {n} data source found | Reconnaissance done: {n} data sources found",
+    "schema_proposed": "Schema proposed: {fields} fields.",
+    "schema_validated": "Schema validated ({by}).",
+    "attempt_finished": "Trial {execution}/{network}: {result} [{duration}, {cost}].",
+    "attempt_pruned": "Trials skipped: {n} costlier method skipped | Trials skipped: {n} costlier methods skipped",
+    "status_changed": "Status: {status}.",
+    "action_required": "Action required on {domain}: {cause}.",
+    "investigation_finished": "Investigation finished: {outcome}.",
+    "next_step": "Next step: call {tool}.",
+    "light": {}
+  },
+  "ext": {
+    "manifest": {
+      "name": "Scrapyomama",
+      "description": "Lets Scrapyomama work in your own browser session, only on the sites you allow.",
+      "action_title": "Scrapyomama",
+      "command_stop_all": "Stop everything now",
+      "command_open_panel": "Open the SYM panel"
+    }
+  },
+  "mcp": {
+    "user": {
+      "prompt": {
+        "new_api": {
+          "title": "New API from a page",
+          "description": "Turn a web page into an API you can call."
+        },
+        "fix_api": {
+          "title": "Fix an API",
+          "description": "Look at why an API broke and repair it."
+        },
+        "first_steps": {
+          "title": "First steps",
+          "description": "A short demo that creates a first API for you."
+        },
+        "review_catalog": {
+          "title": "Review the catalog",
+          "description": "Go through your APIs and say what needs attention."
+        },
+        "resume_api": {
+          "title": "Resume an API",
+          "description": "Pick up an iteration where you left it, in another conversation."
+        },
+        "arg_url": "The page to turn into an API",
+        "arg_slug": "The API to work on"
+      },
+      "elicitation": {
+        "validate_schema": {
+          "message": "Validate this schema?",
+          "decision": "Your decision",
+          "accept": "Yes, validate",
+          "modify": "Modify",
+          "remark": "Remark"
+        },
+        "confirm_cost": {
+          "message": "This costs more than your usual limit. Continue?",
+          "decision": "Your decision",
+          "accept": "Yes, continue",
+          "cancel": "No, stop"
+        }
+      },
+      "link": {
+        "console": "Open in the console"
+      }
+    },
+    "model": {
+      "instructions": {
+        "vital": "You drive Scrapyomama, which turns web pages into APIs. Start with list_apis or create_api. Read each status: sain and warning are usable; erreur needs a new investigation; action_requise needs the user; bloquee means the site refused: tell the user, never retry in a loop and never look for a way around it. Before create_api, put what you found in brief.",
+        "rest": "To resume an API, call get_api with view \"iteration\". Show the narrative and the console link to the user. Keep numbers, links and codes as they are.",
+        "reply_language": "Reply in the user's language."
+      },
+      "what_to_do_translate": "Show message. If it is not in the user's language, translate it faithfully; keep numbers, links and code.",
+      "prompt_tail": "Answer the user in {language}.",
+      "llm": {
+        "language_block": "Language: write every sentence meant for the user in {language_name_en} ({locale}). Never translate: page content, field values, URLs, selectors, code, JSON keys, enum values, product names."
+      }
     }
   }
 }

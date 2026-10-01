@@ -188,19 +188,21 @@ const plain = (text: string | undefined): string => (text ?? '').replace(/[\u00a
 
 describe('formats et textes', () => {
   test('montants : « ~ » quand estimé, « — » quand inconnu (jamais 0 par défaut)', () => {
-    expect(formatUsd(0.002, 'fr', true)).toBe('~0,002 $');
-    expect(formatUsd(0.0024, 'en', true)).toBe('~0.0024 $');
-    expect(plain(formatUsd(12.5, 'fr'))).toBe('12,5 $');
-    expect(formatUsd(0, 'fr')).toBe('0,00 $');
+    expect(plain(formatUsd(0.002, 'fr', true))).toBe('~0,002 $');
+    expect(formatUsd(0.0024, 'en', true)).toBe('~$0.0024');
+    expect(plain(formatUsd(12.5, 'fr'))).toBe('12,50 $');
+    expect(plain(formatUsd(0, 'fr'))).toBe('0,00 $');
     expect(formatUsd(null, 'fr')).toBe('—');
     expect(plain(formatPercent(0.97, 'fr'))).toBe('97 %');
     expect(formatPercent(null, 'fr')).toBe('—');
   });
 
   test('durées et dates relatives', () => {
-    expect(formatDuration(250, 'fr')).toBe('250 ms');
-    expect(formatDuration(1500, 'fr')).toBe('1,5 s');
-    expect(formatDuration(90_000, 'en')).toBe('1.5 min');
+    expect(plain(formatDuration(250, 'fr'))).toBe('250 ms');
+    expect(plain(formatDuration(1500, 'fr'))).toBe('1,5 s');
+    // Au-delà d'une minute : `Intl.DurationFormat` (« 1 min, 30 sec » en anglais), jamais une chaîne copiée.
+    const DurationFormat = (Intl as unknown as { DurationFormat: new (l: string, o: object) => { format(d: object): string } }).DurationFormat;
+    expect(formatDuration(90_000, 'en')).toBe(new DurationFormat('en', { style: 'short' }).format({ minutes: 1, seconds: 30 }));
     expect(formatDuration(null, 'fr')).toBe('—');
     const now = Date.parse('2026-10-01T10:00:00Z');
     expect(formatAgo('2026-10-01T08:00:00Z', 'fr', now)).toContain('2');

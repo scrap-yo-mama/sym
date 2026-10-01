@@ -40,6 +40,8 @@ import { hashSessionToken } from '../auth/hashed-session-adapter.js';
 import { readSsoSettings } from '../auth/security-settings.js';
 import type { ServerContext } from '../context.js';
 import { AttemptLimiter, ipBucket } from '../rate-limit.js';
+import { defaultI18n, renderResetEmail } from '@runtime/i18n';
+import { instanceDefaultLocale, isSupportedLocale } from '../i18n.js';
 import { checkSecondFactor, knownDeviceUser, libraryHeaders, rememberDevice, sendAccountMail, smtpConfigured } from './account-helpers.js';
 import { audit, sendError, webHeaders } from './guard.js';
 
@@ -239,7 +241,7 @@ export function authRoutes(app: FastifyInstance, ctx: ServerContext): void {
       const email = request.body.email.trim().toLowerCase();
       // Tout le travail (recherche du compte, jeton, audit, e-mail) après la réponse : délai identique (6.3.8).
       void (async () => {
-        const { rows } = await ctx.pool.query<{ id: string }>("SELECT id FROM users WHERE email = $1 AND status = 'active' AND deleted_at IS NULL", [email]);
+        const { rows } = await ctx.pool.query<{ id: string; locale: string; timezone: string | null }>("SELECT id, locale, timezone FROM users WHERE email = $1 AND status = 'active' AND deleted_at IS NULL", [email]);
         const user = rows[0];
         if (!user || !(await smtpConfigured(ctx))) return;
         // Relais réglé par un admin depuis moins de 24 h : aucun lien pour un compte sans 2FA (le lien seul prendrait
@@ -253,15 +255,14 @@ export function authRoutes(app: FastifyInstance, ctx: ServerContext): void {
         await storeResetLink(ctx.pool, 'email', user.id, hash, RESET_LINK_TTL_HOURS);
         await audit(ctx, request, null, { action: 'auth.password_reset_requested', targetType: 'user', targetId: user.id, outcome: 'success' });
         const link = `${ctx.publicUrl}/reset-password/${token}`;
-        await sendAccountMail(
-          ctx,
-          request,
-          email,
-          'Scrapyomama Runtime: reset your password / réinitialiser votre mot de passe',
-          `A password reset was requested for your account. Open this link within ${RESET_LINK_TTL_HOURS} hours:\n${link}\n\n` +
-            `Une réinitialisation du mot de passe a été demandée pour votre compte. Ouvrez ce lien sous ${RESET_LINK_TTL_HOURS} h :\n${link}\n\n` +
-            'If you did not ask for it, ignore this message. / Si vous n’êtes pas à l’origine de la demande, ignorez ce message.\n',
+        // E-mail dans `users.locale` du destinataire, heure d'expiration dans `users.timezone` (sinon UTC étiqueté) : 21 § 4.6.
+        const message = renderResetEmail(
+          defaultI18n().renderer,
+          { instance: new URL(ctx.publicUrl).host, link, expiresAt: new Date(Date.now() + RESET_LINK_TTL_HOURS * 3_600_000) },
+          isSupportedLocale(user.locale) ? user.locale : await instanceDefaultLocale(ctx),
+          user.timezone,
         );
+        await sendAccountMail(ctx, request, email, message);
       })().catch((error: unknown) => request.log.warn({ code: (error as { code?: string }).code ?? 'error' }, 'demande de réinitialisation non traitée'));
       return reply.code(202).send({ status: 'accepted' });
     },

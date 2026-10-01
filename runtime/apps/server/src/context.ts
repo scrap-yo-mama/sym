@@ -49,6 +49,8 @@ export type ServerContext = {
   secrets: SecretStore | null;
   /** Autorités supplémentaires (relais SMTP ou IdP à certificat privé) : tests et réseaux internes. */
   extraCa?: string[];
+  /** `DEFAULT_LOCALE` : surcharge de `settings.default_locale` (21 § 3). */
+  defaultLocaleEnv?: string | null;
   /** Tests seulement : IdP OIDC en http (jamais en production : l'issuer doit être https). */
   oidcAllowHttp?: boolean;
 };

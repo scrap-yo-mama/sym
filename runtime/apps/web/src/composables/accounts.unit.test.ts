@@ -263,7 +263,7 @@ describe('utilisateurs et invitations', () => {
       'DELETE /api/invitations/i1': () => json(204, null),
     });
     const users = useUsers();
-    const invitation = { id: 'i1', email: 'fay@x.test', role: 'member', invited_by: ME.id, expires_at: '2099-01-01T00:00:00Z', created_at: '2026-10-01T00:00:00Z', accepted_at: null, revoked_at: null } as const;
+    const invitation = { id: 'i1', email: 'fay@x.test', role: 'member', invited_by: ME.id, expires_at: '2099-01-01T00:00:00Z', created_at: '2026-10-01T00:00:00Z', accepted_at: null, revoked_at: null, locale: 'en' } as const;
     await users.resend(invitation);
     expect(users.oneTimeLink.value?.link).toBe('https://i.test/invite/zz-nouveau');
     await users.revokeInvitation(invitation);

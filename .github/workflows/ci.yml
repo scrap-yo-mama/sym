@@ -42,6 +42,8 @@ jobs:
         run: node runtime/scripts/check-x6.ts --history
       - run: pnpm typecheck
       - run: pnpm lint
+      - name: Langues (parité de toutes les surfaces, clés typées, pseudo-locale ; tâche 3.20)
+        run: pnpm i18n:check
       - run: pnpm knip
       - name: Table invariants vers tests nommés (15 §12)
         run: pnpm check:invariants

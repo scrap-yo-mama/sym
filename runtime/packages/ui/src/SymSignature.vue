@@ -12,7 +12,7 @@
 import { computed } from 'vue';
 import { SYM_GHOST_PATH, SYM_GHOST_VIEWBOX } from './sym-ghost.ts';
 
-const props = withDefaults(defineProps<{ variant?: 'speaking' | 'badge'; locale?: 'en' | 'fr' }>(), { variant: 'badge', locale: 'en' });
+const props = withDefaults(defineProps<{ variant?: 'speaking' | 'badge'; locale?: string }>(), { variant: 'badge', locale: 'en' });
 const colon = computed(() => (props.locale === 'fr' ? ' :' : ':'));
 </script>
 

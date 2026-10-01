@@ -9,6 +9,7 @@ export const PACKAGE_NAME = '@runtime/db';
 export * from './accounts.js';
 export * from './artifacts.js';
 export * from './audit.js';
+export * from './codes-only.js';
 export * from './connection.js';
 export * from './datasets.js';
 export * from './health.js';

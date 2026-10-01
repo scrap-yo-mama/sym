@@ -12,8 +12,8 @@ import RevertConfirm from '@/components/api/RevertConfirm.vue';
 import StrategyDiffView from '@/components/api/StrategyDiffView.vue';
 import { setApi } from '@/lib/api';
 import { API_TABS } from '@/lib/api-tabs';
-import en from '@/i18n/locales/en.json';
-import fr from '@/i18n/locales/fr.json';
+import en from '@runtime/i18n/locales/en.json';
+import fr from '@runtime/i18n/locales/fr.json';
 import { apiDetail, controls, renderHtml, textOf, TUNNEL_WORDING, UUID, type Control } from '@/testing/console-fixtures';
 
 afterEach(() => setApi(undefined));
@@ -167,7 +167,7 @@ describe('formulaire Lancer', () => {
       expect(estimate).toBeGreaterThan(-1);
       expect(button).toBeGreaterThan(estimate);
       const text = textOf(html.slice(estimate, button));
-      expect(text).toContain(locale === 'fr' ? '~0,002 $' : '~0.002 $');
+      expect(text.replace(/[\u00a0\u202f]/g, ' ')).toContain(locale === 'fr' ? '~0,002 $' : '~$0.002');
       expect(text).toContain(locale === 'fr' ? 'médiane de 10 runs' : 'median of 10 runs');
     }
   });

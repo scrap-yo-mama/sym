@@ -30,6 +30,7 @@ import {
 import { createIssuerScopedFetch, createOperatorConfigDispatcher } from '@runtime/core/net';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { hasConfirmedTwoFactor } from '@runtime/db';
+import { matchLocale } from '@runtime/i18n';
 import * as oidc from 'openid-client';
 import { issueSession } from '../auth/better-auth.js';
 import {
@@ -43,6 +44,7 @@ import {
   type SsoSettings,
 } from '../auth/security-settings.js';
 import type { ServerContext } from '../context.js';
+import { instanceDefaultLocale, supportedLocales } from '../i18n.js';
 import { iso, libraryHeaders, reauthenticate, rememberDevice, requireSecondFactor, UUID } from './account-helpers.js';
 import { audit, notFound, sendError } from './guard.js';
 import { consumeInvitation } from './invitations.js';
@@ -485,8 +487,9 @@ export function ssoRoutes(app: FastifyInstance, ctx: ServerContext): void {
       try {
         await client.query('BEGIN');
         const created = await client.query<{ id: string }>(
-          "INSERT INTO users (email, display_name, role, status, email_verified, email_verified_at) VALUES ($1, $2, $3, 'active', true, now()) RETURNING id",
-          [email, (displayName ?? '').slice(0, 100), role],
+          "INSERT INTO users (email, display_name, role, status, email_verified, email_verified_at, locale) VALUES ($1, $2, $3, 'active', true, now(), $4) RETURNING id",
+          // Claim `locale` de l'IdP s'il est fourni et géré, sinon la langue d'instance (21 § 3, à valider selon l'IdP).
+          [email, (displayName ?? '').slice(0, 100), role, matchLocale(typeof claims['locale'] === 'string' ? claims['locale'] : undefined, supportedLocales()) ?? (await instanceDefaultLocale(ctx))],
         );
         userId = created.rows[0]!.id;
         await client.query('INSERT INTO auth_accounts (user_id, provider_id, account_id) VALUES ($1, $2, $3)', [userId, providerId, accountId]);

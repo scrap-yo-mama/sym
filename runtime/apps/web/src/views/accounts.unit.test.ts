@@ -8,8 +8,8 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
 import { createMemoryHistory } from 'vue-router';
 import { resetSession } from '@/composables/useSession';
-import en from '@/i18n/locales/en.json';
-import fr from '@/i18n/locales/fr.json';
+import en from '@runtime/i18n/locales/en.json';
+import fr from '@runtime/i18n/locales/fr.json';
 import { setApi } from '@/lib/api';
 import { createAppRouter } from '@/router/index';
 import { ROLE_PERMISSIONS } from '@/testing/permissions';
@@ -139,7 +139,7 @@ describe('assert_admin_metadata_only : l’admin voit l’état, le coût et la 
     expect((html.match(/data-testid="runs-tab-row"/g) ?? []).length).toBe(2);
     expect((html.match(/data-testid="run-other"/g) ?? []).length).toBe(1);
     expect(html).toContain(esc(en.runs.other));
-    expect(html).toContain('0.0123 $'); // coût
+    expect(html).toContain('$0.0123'); // coût
     expect(html).toContain('2 s'); // durée
     expect(html).not.toMatch(CONTENT_WORDS);
     // Une seule série d'actions de contenu : celles du run de l'admin lui-même.
@@ -278,7 +278,7 @@ describe('pilotage par can() : les écrans réservés disparaissent et leurs rou
       installFakeServer({ ...session(role), 'GET /api/users': () => json(200, { users: [], next_cursor: null }), 'GET /api/invitations': () => json(200, { invitations: [] }) });
       await signedIn();
       const html = await view(UsersView);
-      return [...html.slice(html.indexOf('id="invite-role"')).matchAll(/<option value="(\w+)"/g)].map((match) => match[1]).slice(0, 2);
+      return [...html.slice(html.indexOf('id="invite-role"'), html.indexOf('id="invite-locale"')).matchAll(/<option value="(\w+)"/g)].map((match) => match[1]).slice(0, 2);
     };
     expect(await roleOptions('admin')).toEqual(['member']);
     expect(await roleOptions('owner')).toEqual(['member', 'admin']);

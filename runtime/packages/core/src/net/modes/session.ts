@@ -6,6 +6,7 @@
 // risque résiduel documenté (08 §2). Identifiants lus dans le dépôt de secrets, jamais journalisés (INV8).
 import type { Socket } from 'node:net';
 import { buildConnector, Headers, Pool, ProxyAgent, Socks5ProxyAgent, type Dispatcher, type RequestInit, type Response } from 'undici';
+import { ENGINE_ACCEPT_LANGUAGE } from '../../access/identity.js';
 import { Secret, secretValues } from '../../crypto/index.js';
 import { createGuardedConnector, createGuardedDispatcher, guardedFetch } from '../fetch.js';
 import { domainLock } from '../domain-lock.js';
@@ -228,11 +229,10 @@ function proxyDispatcher(
 
 /** `Accept` et `Accept-Language` que Chromium envoie à une navigation (17 §5) : seuls ces deux-là, rien de plus. */
 const BROWSER_ACCEPT = 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7';
-const BROWSER_ACCEPT_LANGUAGE = 'en-US,en;q=0.9';
 
 /**
  * En-têtes de la requête avec l'identité du robot imposée : User-Agent (tout `user-agent` fourni est remplacé, X2),
- * `From` s'il est posé, `Accept` et `Accept-Language` standard de navigateur SEULEMENT si la requête n'en pose pas.
+ * `From` s'il est posé, `Accept` standard de navigateur SEULEMENT si la requête n'en pose pas, `Accept-Language` toujours celui du moteur.
  */
 function withRobotHeaders(init: FetchInit, options: { userAgent?: string | undefined; from?: string | undefined }): FetchInit {
   if (options.userAgent === undefined && options.from === undefined) return init;
@@ -240,7 +240,8 @@ function withRobotHeaders(init: FetchInit, options: { userAgent?: string | undef
   if (options.userAgent !== undefined) {
     headers.set('user-agent', options.userAgent);
     if (!headers.has('accept')) headers.set('accept', BROWSER_ACCEPT);
-    if (!headers.has('accept-language')) headers.set('accept-language', BROWSER_ACCEPT_LANGUAGE);
+    // Langue : celle du moteur, imposée comme le User-Agent (21 § 6 : jamais la langue d'un utilisateur, d'un compte ou d'un proxy).
+    headers.set('accept-language', ENGINE_ACCEPT_LANGUAGE);
   }
   if (options.from !== undefined) headers.set('from', options.from);
   return { ...init, headers };

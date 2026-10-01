@@ -34,7 +34,11 @@ export type SmtpConfig = {
   timeoutMs?: number;
 };
 
-export type MailMessage = { to: readonly string[]; subject: string; text: string };
+/**
+ * Message : texte brut, plus une alternative HTML minimale et la langue du message (`Content-Language`, tâche 3.20). Aucun pixel
+ * de suivi, aucune image distante (INV9) : l'appelant ne fournit que du HTML sans ressource externe.
+ */
+export type MailMessage = { to: readonly string[]; subject: string; text: string; html?: string; lang?: string };
 
 export type SmtpFailure = 'ssrf_blocked' | 'connect' | 'tls' | 'auth' | 'rejected' | 'protocol' | 'timeout' | 'invalid_message' | 'insecure_auth';
 
@@ -91,18 +95,26 @@ export function buildMessage(config: Pick<SmtpConfig, 'from' | 'helo'>, mail: Ma
   if (!isMailAddress(config.from)) throw new SmtpError('invalid_message', 'adresse d\'expéditeur invalide');
   if (mail.to.length === 0 || mail.to.length > 50 || !mail.to.every(isMailAddress)) throw new SmtpError('invalid_message', 'destinataire invalide');
   const id = `<${messageId}@${(config.helo ?? 'scrapyomama.local').replace(/[^A-Za-z0-9.-]/g, '')}>`;
-  const headers = [
+  const lang = mail.lang !== undefined && /^[A-Za-z]{2,3}(-[A-Za-z0-9]{1,8})*$/.test(mail.lang) ? mail.lang : null;
+  const common = [
     `From: ${config.from}`,
     `To: ${mail.to.join(', ')}`,
     `Subject: ${encodeHeaderValue(mail.subject)}`,
     `Date: ${at.toUTCString().replace('GMT', '+0000')}`,
     `Message-ID: ${id}`,
     'MIME-Version: 1.0',
-    'Content-Type: text/plain; charset=utf-8',
-    'Content-Transfer-Encoding: base64',
+    ...(lang === null ? [] : [`Content-Language: ${lang}`]),
     'Auto-Submitted: auto-generated',
   ];
-  return { id, data: `${headers.join('\r\n')}\r\n\r\n${base64Lines(mail.text)}\r\n` };
+  if (mail.html === undefined) {
+    const headers = [...common, 'Content-Type: text/plain; charset=utf-8', 'Content-Transfer-Encoding: base64'];
+    return { id, data: `${headers.join('\r\n')}\r\n\r\n${base64Lines(mail.text)}\r\n` };
+  }
+  // multipart/alternative : texte brut d'abord, HTML ensuite (le client affiche la dernière partie qu'il sait rendre).
+  const boundary = `=_sym_${messageId.replace(/[^A-Za-z0-9]/g, '')}`;
+  const part = (type: string, body: string) => [`--${boundary}`, `Content-Type: ${type}; charset=utf-8`, 'Content-Transfer-Encoding: base64', '', base64Lines(body)].join('\r\n');
+  const headers = [...common, `Content-Type: multipart/alternative; boundary="${boundary}"`];
+  return { id, data: `${headers.join('\r\n')}\r\n\r\n${part('text/plain', mail.text)}\r\n${part('text/html', mail.html)}\r\n--${boundary}--\r\n` };
 }
 
 type Reply = { code: number; lines: string[] };

@@ -33,11 +33,11 @@ describe('renderAlertEmail', () => {
 
   test('API, run, classe d\'échec et lien console', () => {
     const { subject, text } = renderAlertEmail(digest, 'en');
-    expect(subject).toBe('[Scrapyomama] zz_test_annonces : blocked by the site');
-    expect(text).toContain('API : zz_test_annonces');
-    expect(text).toContain('Run : r1');
-    expect(text).toContain('Failure class : blocked_by_protection');
-    expect(text).toContain('Console : https://runtime.example/apis/zz_test_annonces');
+    expect(subject).toBe('[Scrapyomama] zz_test_annonces: blocked by the site');
+    expect(text).toContain('API: zz_test_annonces');
+    expect(text).toContain('Run: r1');
+    expect(text).toContain('Failure class: blocked_by_protection');
+    expect(text).toContain('Console: https://runtime.example/apis/zz_test_annonces');
   });
 
   test('bloquee : ton factuel, aucune proposition réseau (INV6, X4)', () => {
@@ -56,5 +56,14 @@ describe('renderAlertEmail', () => {
 
   test('sans base d\'URL, pas de lien', () => {
     expect(renderAlertEmail({ ...digest, base_url: null }, 'en').text).not.toContain('Console');
+  });
+
+  test('e-mail localisé : sujet, corps et lang du HTML dans la langue demandée (M9), repli en pour une langue inconnue', () => {
+    const fr = renderAlertEmail(digest, 'fr');
+    expect(fr.subject).toBe('[Scrapyomama] zz_test_annonces : bloquée par le site');
+    expect(fr.html).toContain('<html lang="fr">');
+    expect(fr.lang).toBe('fr');
+    expect(renderAlertEmail(digest, 'zz').lang).toBe('en');
+    for (const message of [renderAlertEmail(digest, 'en'), fr]) expect(`${message.subject}${message.text}${message.html}`).not.toMatch(/[{}]|undefined|<img/);
   });
 });

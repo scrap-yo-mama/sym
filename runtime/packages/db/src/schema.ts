@@ -82,7 +82,8 @@ export const users = pgTable(
     image: text('image'),
     role: text('role', { enum: ['owner', 'admin', 'member'] }).notNull().default('member'),
     status: text('status', { enum: ['invited', 'active', 'disabled'] }).notNull().default('invited'),
-    locale: text('locale', { enum: ['en', 'fr'] }).notNull().default('en'),
+    // Migration 0017_i18n : le registre des langues (`@runtime/i18n`) valide ; la CHECK n'impose que la forme.
+    locale: text('locale').notNull().default('en'),
     theme: text('theme', { enum: ['light', 'dark', 'system'] }).notNull().default('system'),
     twoFactorEnabled: boolean('two_factor_enabled').notNull().default(false),
     createdAt: createdAt(),
@@ -91,6 +92,8 @@ export const users = pgTable(
     lastLoginAt: tstz('last_login_at'),
     // Migration 0012_accounts_advanced (tâche 3.7) : compte supprimé et anonymisé.
     deletedAt: tstz('deleted_at'),
+    // Migration 0017_i18n : fuseau IANA (indice de localisation : donnée personnelle, 17 § 6), nullable.
+    timezone: text('timezone'),
   },
   (t) => [uniqueIndex('users_single_owner').on(t.role).where(sql`role = 'owner'`)],
 );
@@ -185,6 +188,8 @@ export const invitations = pgTable(
     createdAt: createdAt(),
     // Migration 0012_accounts_advanced : échéance ≤ dernier envoi + 48 h (CHECK invitations_ttl).
     sentAt: tstz('sent_at').notNull().defaultNow(),
+    // Migration 0017_i18n : langue choisie par l'invitant, copiée dans users.locale à l'acceptation.
+    locale: text('locale').notNull().default('en'),
   },
   (t) => [index('invitations_email_idx').on(t.email)],
 );
@@ -457,6 +462,8 @@ export const runs = pgTable(
     scheduleJobId: uuid('schedule_job_id'),
     // 0016_investigation (2.1) : exécution d'une stratégie ou enquête.
     kind: text('kind', { enum: RUN_KINDS }).notNull().default('run'),
+    // Migration 0017_i18n : langue du demandeur au lancement (déclencheur `runs_set_locale`) ; prose du LLM seulement.
+    locale: text('locale').notNull(),
     createdAt: createdAt(),
     startedAt: tstz('started_at'),
     finishedAt: tstz('finished_at'),

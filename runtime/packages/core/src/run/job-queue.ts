@@ -156,6 +156,8 @@ export type RunContext = {
   input: unknown;
   /** Nature du run (`runs.kind`, migration 0016) : exécution d'une stratégie (défaut) ou enquête (04 §4). */
   kind?: RunKind;
+  /** `runs.locale` : langue de la prose écrite par le LLM (bloc `Language:`, 21 § 4.5). Jamais envoyée à un site cible. */
+  proseLocale?: string;
   /** Levé à l'annulation, à la perte du bail (`job_id` changé), à l'expiration du job et à l'arrêt du worker. */
   signal: AbortSignal;
   recordAttempt(attempt: AttemptRecord): Promise<void>;
