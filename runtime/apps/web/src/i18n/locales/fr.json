@@ -61,6 +61,10 @@
     "rate_limited": "Trop de requêtes. Réessaie dans un instant.",
     "queue_full": "La file est pleine. Réessaie dans un instant.",
     "invalid_input": "Certaines valeurs ne sont pas valides. Vérifie le formulaire et réessaie.",
+    "invalid_request": "La demande est incomplète ou invalide. Vérifie le formulaire et réessaie.",
+    "reauth_failed": "Mot de passe actuel incorrect.",
+    "too_many_attempts": "Trop de tentatives. Réessaie dans quelques minutes.",
+    "too_many_pairing_codes": "Trop de codes d'appairage actifs. Utilises-en un ou attends son expiration (10 minutes).",
     "account_site_ack_required": "Ce site demande un compte. Confirme l'avertissement pour continuer."
   },
   "common": {
@@ -515,6 +519,7 @@
       "pairing": "Code d'appairage",
       "pairingHelp": "Le code est valable 10 minutes et sert une seule fois. Saisis-le dans l'extension.",
       "currentPassword": "Mot de passe actuel",
+      "passwordRequired": "Saisis ton mot de passe actuel.",
       "createCode": "Créer un code d'appairage",
       "code": "Code : {code}",
       "codeExpires": "Valable jusqu'au {date}. Il n'est affiché que maintenant.",
