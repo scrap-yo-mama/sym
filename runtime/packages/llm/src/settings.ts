@@ -33,6 +33,7 @@ function profileOf(model: string, raw: unknown): CapabilityProfile | undefined {
     stream_usage: typeof raw['stream_usage'] === 'boolean' ? raw['stream_usage'] : null,
     cache: raw['cache'] === true,
     reasoning_field: reasoning,
+    ...(isRecord(raw['sampling']) ? { sampling: { temperature: raw['sampling']['temperature'] !== false, top_p: raw['sampling']['top_p'] !== false } } : {}),
     probed_at: typeof raw['probed_at'] === 'string' ? raw['probed_at'] : '',
     probe_tokens: 0,
     notes: [],

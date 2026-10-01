@@ -2349,6 +2349,11 @@ export interface components {
             stream_usage?: boolean;
             cache?: boolean;
             reasoning_field?: string | null;
+            /** @description Paramètres d'échantillonnage acceptés par le modèle (mesurés par la sonde) ; un paramètre refusé n'est jamais envoyé. */
+            sampling?: {
+                temperature?: boolean;
+                top_p?: boolean;
+            };
         };
         LlmPrice: {
             in?: number;

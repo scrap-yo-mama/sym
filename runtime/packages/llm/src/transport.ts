@@ -57,6 +57,7 @@ export class OpenAICompatTransport implements LlmTransport {
     if (req.response_format !== undefined) body['response_format'] = req.response_format;
     if (req.max_tokens !== undefined) body['max_tokens'] = req.max_tokens;
     if (req.temperature !== undefined) body['temperature'] = req.temperature;
+    if (req.top_p !== undefined) body['top_p'] = req.top_p;
     return JSON.stringify(body);
   }
 

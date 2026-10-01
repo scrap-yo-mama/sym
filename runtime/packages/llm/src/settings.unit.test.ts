@@ -37,6 +37,16 @@ describe('llmConfigFromSettings', () => {
     expect(agent?.model.id).toBe('glm-5.3');
   });
 
+  it('échantillonnage mesuré par la sonde : conservé dans le profil ; absent ou malformé : pas de restriction', async () => {
+    const withSampling = (sampling: unknown) => ({ ...SETTINGS, providers: [{ ...SETTINGS.providers[0]!, models: { 'glm-5.3': { profile: { tools: true, sampling } } } }] });
+    const sampling = async (raw: unknown) => (await llmConfigFromSettings(withSampling(raw), read, ['agent'])).providers[0]?.models[0]?.profile?.sampling;
+    expect(await sampling({ temperature: false, top_p: false })).toEqual({ temperature: false, top_p: false });
+    expect(await sampling({ temperature: false, top_p: true })).toEqual({ temperature: false, top_p: true });
+    expect(await sampling({ temperature: false })).toEqual({ temperature: false, top_p: true });
+    expect(await sampling(undefined)).toBeUndefined();
+    expect(await sampling('non')).toBeUndefined();
+  });
+
   it('clé illisible, fournisseur inconnu ou réglages absents : refus explicite', async () => {
     await expect(llmConfigFromSettings(SETTINGS, read, ['repair'])).rejects.toThrow(LlmSettingsError);
     await expect(llmConfigFromSettings({ ...SETTINGS, roles: { extract: { provider: 'nope', model: 'x' } } }, read, ['extract'])).rejects.toThrow(/inconnu/);

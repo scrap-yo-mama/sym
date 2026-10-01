@@ -25,11 +25,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Stagehand, type ModelConfiguration } from '@browserbasehq/stagehand';
 import type { AgentEngine, AgentRunContext, AgentRunResult, AgentRunStatus, AgentTask, AgentTraceStep } from '@runtime/core';
-import { computeUsage, createRedactor, type ModelPrice, type RawUsage, type RedactConfig } from '@runtime/llm';
+import { computeUsage, createRedactor, type CapabilityProfile, type ModelPrice, type RawUsage, type RedactConfig } from '@runtime/llm';
 import { z } from 'zod';
 import type { SemanticClick, SemanticRecorder } from './semantic-recorder.js';
 import { AgentToolsetNotClosedError, assertStagehandLocalOnly, STAGEHAND_EXCLUDED_TOOLS, toolsOutsideClosedList } from './stagehand-guards.js';
 import { sanitizeModelPrompt } from './stagehand-prompt.js';
+import { adaptSampling } from './stagehand-sampling.js';
 
 export const STAGEHAND_VERSION = '3.7.3';
 
@@ -74,6 +75,10 @@ export interface StagehandEngineOptions extends StagehandEngineHooks {
   readonly env?: NodeJS.ProcessEnv;
   /** `llm.redact` des réglages (même règle que le LlmClient : absent, aucun masquage). */
   readonly redact?: RedactConfig;
+  /** Profil sondé du modèle : un paramètre d'échantillonnage qu'il refuse (`profile.sampling`) n'est jamais envoyé (même règle que le LlmClient). */
+  readonly profile?: CapabilityProfile;
+  /** Appelé une seule fois par run et par paramètre retiré (note de journal ; ni prompt ni clé). */
+  readonly onSamplingDropped?: (param: 'temperature' | 'top_p') => void;
 }
 
 /** JSON Schema (sous-ensemble) vers Zod : `execute({ output })` attend un objet Zod. Ajv revalide hors du moteur (INV1). */
@@ -245,6 +250,7 @@ export class StagehandEngine implements AgentEngine {
     const timer = setTimeout(() => controller.abort(new Error('timeout')), task.limits.maxDurationMs);
     const signal = context.signal === undefined ? controller.signal : AbortSignal.any([controller.signal, context.signal]);
     let costExceeded = false;
+    const droppedNoted = new Set<string>();
     let pageRefused = false;
     let toolsetViolation: AgentToolsetNotClosedError | undefined;
     const redactor = this.#opts.redact === undefined ? undefined : createRedactor(this.#opts.redact);
@@ -301,7 +307,14 @@ export class StagehandEngine implements AgentEngine {
           throw toolsetViolation;
         }
         const prompt = sanitizeModelPrompt(params.prompt, { ...(redactor === undefined ? {} : { redactor }), instruction: task.instruction });
-        return { ...params, prompt, temperature };
+        const sampling = adaptSampling(this.#opts.profile, { temperature, topP: params.topP });
+        for (const param of sampling.dropped) {
+          if (!droppedNoted.has(param)) {
+            droppedNoted.add(param);
+            this.#opts.onSamplingDropped?.(param);
+          }
+        }
+        return { ...params, prompt, temperature: sampling.temperature, topP: sampling.topP };
       },
       wrapGenerate: async ({ doGenerate, params }) => {
         const result = await doGenerate();

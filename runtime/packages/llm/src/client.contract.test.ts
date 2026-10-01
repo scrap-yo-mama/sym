@@ -4,12 +4,12 @@
 // ENREGISTRÉES (cassettes msw, replay strict). Les cas qu'on ne peut pas obtenir réellement (5xx, refus, 429, vide) sont
 // des cassettes écrites à la main, marquées `synthetic: true`. Réenregistrement : LLM_CASSETTE_MODE=record et LLM_CASSETTE_PROVIDER=<id>
 // (clés chargées depuis ~/.config/scrapyomama/test.env, jamais dans le dépôt). Le profil de capacités d'Anthropic vient de SA sonde
-// (cassette `probe`), pas du profil de complaisance des deux autres : la doc officielle dit que `strict` et `response_format` y sont ignorés.
+// (cassette `probe`), pas du profil de complaisance des deux autres (temperature et top_p y sont refusés : le client les retire).
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Secret } from '@runtime/core';
 import { afterAll, afterEach, beforeAll, describe, expect, test, vi } from 'vitest';
-import { createLlmClient, type LlmClient, type ProviderConfig } from './client.js';
+import { createLlmClient, pickLevel, type LlmClient, type ProviderConfig } from './client.js';
 import { createCassetteKit, providerFixture, secretValuesFromEnv, type ProviderFixture } from './cassette.testkit.js';
 import type { CapabilityProfile } from './profile.js';
 import { probeCapabilities } from './profile.js';
@@ -50,7 +50,16 @@ const FALLBACK_OF: Record<ProviderId, ProviderId> = { deepinfra: 'openrouter', o
 const PROBED_PROFILES = new Map<ProviderId, CapabilityProfile>();
 const PROBED: readonly ProviderId[] = ['anthropic'];
 /** Comportements annoncés par la documentation officielle du fournisseur, vérifiés contre la sonde enregistrée. */
-const DOCUMENTED: Partial<Record<ProviderId, { cache: boolean }>> = { anthropic: { cache: false } };
+const DOCUMENTED: Partial<Record<ProviderId, { cache?: boolean; structured?: CapabilityProfile['structured']; sampling?: CapabilityProfile['sampling'] }>> = {
+  // Anthropic compatible OpenAI, mesuré le 2026-10-01 sur claude-opus-4-8 : pas de cache de prompt ; `response_format` json_schema RÉELLEMENT imposé
+  // (sonde au schéma sans indice dans le prompt, contre-vérifiée à la main : la doc officielle, qui le dit ignoré, est en retard) ; `temperature` et `top_p` refusés (400).
+  anthropic: { cache: false, structured: 'json_schema', sampling: { temperature: false, top_p: false } },
+  openrouter: { sampling: { temperature: true, top_p: true } },
+};
+/** Fournisseurs dont la cassette `probe` rejoue la sonde COURANTE (schéma sans indice, 2 appels de sampling). La cassette DeepInfra date du spike (GLM-5.3, clé retirée par D-42) : conservée comme mesure, non rejouée. */
+const PROBE_REPLAYABLE: readonly ProviderId[] = ['anthropic', 'openrouter'];
+/** Fournisseurs avec une cassette `sampling` : temperature et top_p demandés au client, envoyés seulement si le profil les accepte. */
+const SAMPLING_CASE: readonly ProviderId[] = ['anthropic', 'openrouter'];
 
 // Prix de TEST (USD / million) : sert à vérifier l'arithmétique, pas à chiffrer le modèle réel.
 const TEST_PRICE = { in: 1, in_cached: 0.2, out: 4 };
@@ -140,10 +149,9 @@ describe.each(PROVIDERS)('assert_llm_contract : %s', (id) => {
       messages: user('Give the city Paris with its population in millions (about 2.1). No nickname.'),
       schema,
       name: 'city',
-      level: 'S1',
-      maxTokens: 900,
+      maxTokens: 900, // niveau choisi par le profil : S1 (json_schema) pour AGENT_PROFILE, celui de la sonde pour un fournisseur sondé
     });
-    expect(out.level).toBe('S1');
+    expect(out.level).toBe(pickLevel(PROBED_PROFILES.get(id) ?? AGENT_PROFILE));
     expect(out.value.city.length).toBeGreaterThanOrEqual(2);
     expect(out.value.population_millions).toBeGreaterThan(0);
     expect(out.repairs).toBeLessThanOrEqual(2);
@@ -185,7 +193,7 @@ describe.each(PROVIDERS)('assert_llm_contract : %s', (id) => {
     expect(sleeps).toEqual([]);
   });
 
-  test('profil de capacités : sonde de 3 appels minuscules', async () => {
+  test.skipIf(!PROBE_REPLAYABLE.includes(id))('profil de capacités : sonde de 5 appels minuscules', async () => {
     kit.use(id, 'probe');
     const transport = new OpenAICompatTransport({ baseUrl: p.baseUrl, apiKey: p.apiKey, ...(p.extraBody ? { extraBody: p.extraBody } : {}) });
     const profile = await probeCapabilities(transport, p.model, () => new Date('2026-10-01T00:00:00Z'));
@@ -193,7 +201,7 @@ describe.each(PROVIDERS)('assert_llm_contract : %s', (id) => {
     expect(profile.tool_choice).toContain('auto');
     expect(profile.structured).not.toBe('none');
     expect(profile.probe_tokens).toBeGreaterThan(0);
-    expect(profile.probe_tokens).toBeLessThan(2500); // 3 appels minuscules ; un nouvel essai au plus par appel tronqué par le raisonnement
+    expect(profile.probe_tokens).toBeLessThan(2500); // 5 appels minuscules ; un nouvel essai au plus par appel tronqué par le raisonnement
     expect(profile.probed_at).toBe('2026-10-01T00:00:00.000Z');
     // Cohérence du profil, valable pour tout fournisseur : le meilleur mode est l'un des modes vérifiés ; un outil nommé vérifié donne tool_forced.
     expect(profile.structured_modes).toContain(profile.structured);
@@ -201,6 +209,24 @@ describe.each(PROVIDERS)('assert_llm_contract : %s', (id) => {
     // Attendus documentés par fournisseur (données, pas de branche sur le nom) : Anthropic compatible OpenAI, pas de cache de prompt.
     const documented = DOCUMENTED[id];
     if (documented?.cache !== undefined) expect(profile.cache).toBe(documented.cache);
+    if (documented?.structured !== undefined) expect(profile.structured).toBe(documented.structured);
+    if (documented?.sampling !== undefined) expect(profile.sampling).toEqual(documented.sampling);
+    expect(profile.sampling).toBeDefined();
+  });
+
+  test.skipIf(!SAMPLING_CASE.includes(id))('échantillonnage : temperature 0 et top_p demandés, envoyés seulement si le profil sondé les accepte', async () => {
+    kit.use(id, 'sampling');
+    const { client } = build(p);
+    const out = await client.chat('agent', { messages: user('Say ok.'), temperature: 0, topP: 0.9, maxTokens: 700 });
+    expect(typeof out.result.message.content).toBe('string');
+    expect((out.result.message.content as string).length).toBeGreaterThan(0);
+    kit.finish(); // en enregistrement, écrit la cassette avant sa relecture ci-dessous
+    // Rejeu strict : la clé de la requête porte `extra_params`. Pour Anthropic (profil sondé : refusés) elle n'en contient pas, sinon le 400 réel aurait été rejoué.
+    const entry = (JSON.parse(readFileSync(join(CASSETTES, id, 'sampling.json'), 'utf8')) as { entries: { request: { shape: { extra_params: string[] } } }[] }).entries[0];
+    const sent = entry?.request.shape.extra_params ?? [];
+    const expectedSampling = DOCUMENTED[id]?.sampling;
+    expect(sent.includes('temperature')).toBe(expectedSampling?.temperature !== false);
+    expect(sent.includes('top_p')).toBe(expectedSampling?.top_p !== false);
   });
 
   // Cas synthétiques : écrits à la main, jamais réenregistrés.
@@ -240,8 +266,8 @@ describe('cassettes : aucun secret (test canari)', () => {
   const listFiles = () => readdirSync(CASSETTES, { recursive: true, encoding: 'utf8' }).filter((f) => f.endsWith('.json'));
   const files = listFiles();
 
-  test('les cassettes existent : 3 fournisseurs x (6 réels + 4 synthétiques)', () => {
-    expect(listFiles()).toHaveLength(ALL_PROVIDERS.length * 10);
+  test('les cassettes existent : 3 fournisseurs x (6 réels + 4 synthétiques) + la cassette `sampling` de ceux qui en ont une', () => {
+    expect(listFiles()).toHaveLength(ALL_PROVIDERS.length * 10 + SAMPLING_CASE.length);
   });
 
   test.each(files)('%s ne contient ni clé, ni Authorization, ni Bearer', (file) => {

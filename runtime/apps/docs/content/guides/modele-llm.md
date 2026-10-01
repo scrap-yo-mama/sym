@@ -32,7 +32,7 @@ Affecter à un rôle un modèle dont les capacités ne couvrent pas ce que le r�
 
 ## La sonde de capacités
 
-Les services « compatibles OpenAI » ne se comportent pas tous pareil : certains acceptent un schéma strict puis répondent en prose avec un code 200, d'autres n'ont pas la sortie structurée sur tous leurs points d'accès. À l'enregistrement d'un couple fournisseur et modèle, l'administrateur lance une **sonde de trois appels minuscules** (moins de 300 jetons chacun). Elle remplit un profil visible dans l'interface : appel d'outils, `tool_choice`, mode de sortie structurée (`json_schema`, outil forcé, `json_object` ou aucun), flux, usage, cache.
+Les services « compatibles OpenAI » ne se comportent pas tous pareil : certains acceptent un schéma strict puis répondent en prose avec un code 200, d'autres n'ont pas la sortie structurée sur tous leurs points d'accès. À l'enregistrement d'un couple fournisseur et modèle, l'administrateur lance une **sonde de cinq appels minuscules** (moins de 300 jetons chacun). Elle remplit un profil visible dans l'interface : appel d'outils, `tool_choice`, mode de sortie structurée (`json_schema`, outil forcé, `json_object` ou aucun), échantillonnage (`temperature`, `top_p`), flux, usage, cache. Le `json_schema` n'est retenu que si le fournisseur impose réellement le schéma : le prompt de la sonde ne dit pas la forme attendue. Un paramètre d'échantillonnage que le modèle refuse (certains modèles répondent 400 à `temperature`) n'est jamais envoyé ; le runtime le note une fois dans son journal.
 
 La sonde ne contacte que le fournisseur que vous avez configuré, uniquement sur votre action. Elle se rejoue à chaque changement de modèle.
 

@@ -32,11 +32,11 @@
           "x-ratelimit-requests": "10000",
           "x-ratelimit-reset-requests": "0s"
         },
-        "body": "{\"id\":\"msg_011CfbrKsbVbCFRWVP3aA4xR\",\"choices\":[{\"finish_reason\":\"tool_calls\",\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"I'll call the ping function with n=1.\",\"tool_calls\":[{\"id\":\"toolu_01NJp9yrfMTjVTCyPYm51yiq\",\"type\":\"function\",\"function\":{\"name\":\"ping\",\"arguments\":\"{\\\"n\\\": 1}\"}}]}}],\"created\":1790872949,\"model\":\"claude-opus-4-8\",\"object\":\"chat.completion\",\"usage\":{\"completion_tokens\":60,\"prompt_tokens\":386,\"total_tokens\":446}}"
+        "body": "{\"id\":\"msg_011CfbvpujW8n6teYFtzQ4Qn\",\"choices\":[{\"finish_reason\":\"tool_calls\",\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"I'll call the ping function with n=1.\",\"tool_calls\":[{\"id\":\"toolu_01JzAZ3JS5eZ6MRNFH93cMnn\",\"type\":\"function\",\"function\":{\"name\":\"ping\",\"arguments\":\"{\\\"n\\\": 1}\"}}]}}],\"created\":1790876490,\"model\":\"claude-opus-4-8\",\"object\":\"chat.completion\",\"usage\":{\"completion_tokens\":60,\"prompt_tokens\":386,\"total_tokens\":446}}"
       }
     },
     {
-      "key": "2e39a3d053ee",
+      "key": "17e61fb8de3b",
       "request": {
         "method": "POST",
         "path": "/v1/chat/completions",
@@ -52,7 +52,7 @@
             "type": "json_schema",
             "name": "probe",
             "strict": true,
-            "schema_sha": "fd3337644674"
+            "schema_sha": "d9a27a34bc8f"
           },
           "max_tokens": 280,
           "extra_params": []
@@ -66,7 +66,7 @@
           "x-ratelimit-requests": "10000",
           "x-ratelimit-reset-requests": "0s"
         },
-        "body": "{\"id\":\"msg_011CfbrL11ynZzL8P46uZGSn\",\"choices\":[{\"finish_reason\":\"stop\",\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"{\\\"n\\\": 2}\"}}],\"created\":1790872950,\"model\":\"claude-opus-4-8\",\"object\":\"chat.completion\",\"usage\":{\"completion_tokens\":8,\"prompt_tokens\":216,\"total_tokens\":224}}"
+        "body": "{\"id\":\"msg_011Cfbvq3PNwqqDNHDb1XAxJ\",\"choices\":[{\"finish_reason\":\"stop\",\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"{\\\"probe_token\\\":\\\"zq7\\\"}\"}}],\"created\":1790876491,\"model\":\"claude-opus-4-8\",\"object\":\"chat.completion\",\"usage\":{\"completion_tokens\":14,\"prompt_tokens\":223,\"total_tokens\":237}}"
       }
     },
     {
@@ -97,7 +97,63 @@
           "x-ratelimit-requests": "10000",
           "x-ratelimit-reset-requests": "0s"
         },
-        "body": "{\"id\":\"msg_011CfbrL5UcWuwmGz6SmGbqs\",\"choices\":[{\"finish_reason\":\"tool_calls\",\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"\",\"tool_calls\":[{\"id\":\"toolu_01F9hYdSN8ooRwnBa8mgqyKg\",\"type\":\"function\",\"function\":{\"name\":\"ping\",\"arguments\":\"{\\\"n\\\": 3}\"}}]}}],\"created\":1790872951,\"model\":\"claude-opus-4-8\",\"object\":\"chat.completion\",\"usage\":{\"completion_tokens\":32,\"prompt_tokens\":510,\"total_tokens\":542}}"
+        "body": "{\"id\":\"msg_011Cfbvq8VDHyEgx6YxP36y4\",\"choices\":[{\"finish_reason\":\"tool_calls\",\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"\",\"tool_calls\":[{\"id\":\"toolu_019MuMFTucb2fgqou1eP7WNG\",\"type\":\"function\",\"function\":{\"name\":\"ping\",\"arguments\":\"{\\\"n\\\": 3}\"}}]}}],\"created\":1790876492,\"model\":\"claude-opus-4-8\",\"object\":\"chat.completion\",\"usage\":{\"completion_tokens\":32,\"prompt_tokens\":510,\"total_tokens\":542}}"
+      }
+    },
+    {
+      "key": "6c7c87717014",
+      "request": {
+        "method": "POST",
+        "path": "/v1/chat/completions",
+        "shape": {
+          "model": "claude-opus-4-8",
+          "stream": false,
+          "roles": [
+            "user"
+          ],
+          "tools": [],
+          "tool_choice": null,
+          "response_format": null,
+          "max_tokens": 16,
+          "extra_params": [
+            "temperature"
+          ]
+        }
+      },
+      "response": {
+        "status": 400,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": "{\"error\":{\"code\":\"invalid_request_error\",\"message\":\"`temperature` is deprecated for this model.\",\"type\":\"invalid_request_error\",\"param\":null}}"
+      }
+    },
+    {
+      "key": "581d552736d2",
+      "request": {
+        "method": "POST",
+        "path": "/v1/chat/completions",
+        "shape": {
+          "model": "claude-opus-4-8",
+          "stream": false,
+          "roles": [
+            "user"
+          ],
+          "tools": [],
+          "tool_choice": null,
+          "response_format": null,
+          "max_tokens": 16,
+          "extra_params": [
+            "top_p"
+          ]
+        }
+      },
+      "response": {
+        "status": 400,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": "{\"error\":{\"code\":\"invalid_request_error\",\"message\":\"`top_p` is deprecated for this model.\",\"type\":\"invalid_request_error\",\"param\":null}}"
       }
     }
   ]

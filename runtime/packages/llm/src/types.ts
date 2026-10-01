@@ -41,6 +41,7 @@ export interface ChatRequest {
   response_format?: ResponseFormat;
   max_tokens?: number;
   temperature?: number;
+  top_p?: number;
   /** Faux par défaut (08 §1). En flux, le transport agrège et ne rend l'appel d'outils qu'à `finish_reason: tool_calls`. */
   stream?: boolean;
   /** Champs propres au fournisseur (ex. `provider.require_parameters` d'OpenRouter), fusionnés dans le corps. */

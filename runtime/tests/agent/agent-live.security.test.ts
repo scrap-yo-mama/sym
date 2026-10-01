@@ -6,7 +6,8 @@
 // fixtures LOCALES du spike : F-E6 résolue en E6, compilée, puis rejouée en E5 sans aucun appel LLM ; F-INJ : 0 requête
 // vers le domaine piège. Aucun site réel : le seul hôte externe est l'API du fournisseur LLM.
 import { StagehandEngine } from '@runtime/agent';
-import type { AgentEngine, AgentSpec } from '@runtime/core';
+import { OpenAICompatTransport, probeCapabilities, type CapabilityProfile } from '@runtime/llm';
+import { Secret, type AgentSpec } from '@runtime/core';
 import * as net from '@runtime/core/net';
 import { openBrowserEgress, startEgressProxy, type BrowserEgress, type EgressProxy, type SsrfGuard } from '@runtime/core/net';
 import { appendFileSync } from 'node:fs';
@@ -25,11 +26,9 @@ interface LiveProvider {
   model: string;
   /** USD par million de jetons (relevé 2026-10-01). */
   price: { in: number; in_cached: number; out: number };
-  /** Température imposée au moteur quand le fournisseur refuse celle du code de production (0) : mesuré le 2026-10-01, claude-opus-4-8 répond 400 « `temperature` is deprecated for this model » à toute valeur autre que 1 (défaut). */
-  temperature?: number;
 }
 const PROVIDERS: Record<string, LiveProvider> = {
-  anthropic: { base: process.env['ANTHROPIC_BASE_URL'] ?? 'https://api.anthropic.com/v1', keyVar: 'ANTHROPIC_API_KEY', model: process.env['LLM_TEST_MODEL'] || 'claude-opus-4-8', price: { in: 5, in_cached: 0.5, out: 25 }, temperature: 1 },
+  anthropic: { base: process.env['ANTHROPIC_BASE_URL'] ?? 'https://api.anthropic.com/v1', keyVar: 'ANTHROPIC_API_KEY', model: process.env['LLM_TEST_MODEL'] || 'claude-opus-4-8', price: { in: 5, in_cached: 0.5, out: 25 } },
   // Prix de l'ADR 0001 (annexe), mesurés sur GLM-5.3.
   deepinfra: { base: process.env['DEEPINFRA_BASE_URL'] ?? 'https://api.deepinfra.com/v1/openai', keyVar: 'DEEPINFRA_API_KEY', model: process.env['LLM_TEST_MODEL'] || 'zai-org/GLM-5.3', price: { in: 0.563, in_cached: 0.125, out: 2.5 } },
   openrouter: { base: process.env['OPENROUTER_BASE_URL'] ?? 'https://openrouter.ai/api/v1', keyVar: 'OPENROUTER_API_KEY', model: process.env['LLM_TEST_MODEL'] || 'z-ai/glm-5.3-flash', price: { in: 0.15, in_cached: 0.04, out: 0.5 } },
@@ -49,6 +48,8 @@ const report = (line: string): void => {
   else process.stderr.write(`${line}\n`);
 };
 
+/** Profil réel du modèle de test, mesuré par la sonde de production au début du run (5 appels minuscules) : le moteur en tire ce qu'il peut envoyer (D-42 : claude-opus-4-8 refuse temperature et top_p). */
+let profile: CapabilityProfile | undefined;
 let client: Client;
 let guard: SsrfGuard;
 let launchProxy: EgressProxy;
@@ -60,13 +61,8 @@ const itemSchema = (key: AgentFixtureKey): Record<string, unknown> => {
   const s = task(key).outputSchema as { properties: { items?: { items: Record<string, unknown> } } };
   return s.properties.items?.items ?? task(key).outputSchema;
 };
-/** Adapte la température du contexte d'exécution à ce que le fournisseur de test accepte (config du test, pas du code de production). */
-const withProviderTemperature = (engine: AgentEngine): AgentEngine =>
-  SELECTED.temperature === undefined
-    ? engine
-    : { id: engine.id, version: engine.version, capabilities: engine.capabilities, run: (task, context) => engine.run(task, { ...context, model: { ...context.model, temperature: SELECTED.temperature! } }) };
 const engineFor: EngineFactory = ({ cdpUrl, recorder, hooks }) => ({
-  engine: withProviderTemperature(new StagehandEngine({ cdpUrl, baseURL: BASE, apiKey: () => KEY ?? '', price: PRICE, recorder, ...hooks })),
+  engine: new StagehandEngine({ cdpUrl, baseURL: BASE, apiKey: () => KEY ?? '', price: PRICE, recorder, ...(profile === undefined ? {} : { profile }), ...hooks }),
   modelId: MODEL,
   promptVersion: 'stagehand-3.7.3-dom',
 });
@@ -91,6 +87,8 @@ const e6 = (key: 'F-E6' | 'F-INJ', host: string): AgentSpec => ({
 
 describe.skipIf(!LIVE)(`E6 réel (Stagehand 3.7.3 + ${MODEL} via ${PROVIDER_ID}), fixtures locales`, () => {
   beforeAll(async () => {
+    profile = await probeCapabilities(new OpenAICompatTransport({ baseUrl: BASE, apiKey: new Secret(KEY ?? '') }), MODEL);
+    report(`[live] sonde ${MODEL} : ${JSON.stringify({ structured: profile.structured, structured_modes: profile.structured_modes, tool_choice: profile.tool_choice, sampling: profile.sampling, cache: profile.cache, probe_tokens: profile.probe_tokens })}`);
     client = await startClient();
     guard = fixtureGuard(client.server.port, [AGENT_HOSTS.e6, AGENT_HOSTS.inj, AGENT_HOSTS.trap], net);
     launchProxy = await startEgressProxy({ guard, refuseAll: true });

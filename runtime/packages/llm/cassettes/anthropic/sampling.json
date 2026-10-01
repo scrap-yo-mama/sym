@@ -1,11 +1,11 @@
 {
   "version": 1,
   "provider": "anthropic",
-  "case": "schema-strict",
+  "case": "sampling",
   "synthetic": false,
   "entries": [
     {
-      "key": "15d65a5d1577",
+      "key": "d7537a22af84",
       "request": {
         "method": "POST",
         "path": "/v1/chat/completions",
@@ -17,13 +17,8 @@
           ],
           "tools": [],
           "tool_choice": null,
-          "response_format": {
-            "type": "json_schema",
-            "name": "city",
-            "strict": true,
-            "schema_sha": "cc0a2ebce64b"
-          },
-          "max_tokens": 900,
+          "response_format": null,
+          "max_tokens": 700,
           "extra_params": []
         }
       },
@@ -35,7 +30,7 @@
           "x-ratelimit-requests": "10000",
           "x-ratelimit-reset-requests": "0s"
         },
-        "body": "{\"id\":\"msg_011CfbvpoSyuHvxgxhBWqNqa\",\"choices\":[{\"finish_reason\":\"stop\",\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"{\\\"city\\\":\\\"Paris\\\",\\\"population_millions\\\":2.1,\\\"nickname\\\":null}\"}}],\"created\":1790876488,\"model\":\"claude-opus-4-8\",\"object\":\"chat.completion\",\"usage\":{\"completion_tokens\":26,\"prompt_tokens\":319,\"total_tokens\":345}}"
+        "body": "{\"id\":\"msg_011CfbvqF4r8Umhfru8H4ZKw\",\"choices\":[{\"finish_reason\":\"stop\",\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"OK!\"}}],\"created\":1790876501,\"model\":\"claude-opus-4-8\",\"object\":\"chat.completion\",\"usage\":{\"completion_tokens\":5,\"prompt_tokens\":11,\"total_tokens\":16}}"
       }
     }
   ]

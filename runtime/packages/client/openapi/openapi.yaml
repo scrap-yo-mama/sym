@@ -4290,6 +4290,15 @@ components:
           type: boolean
         reasoning_field:
           type: [string, 'null']
+        sampling:
+          description: Paramètres d'échantillonnage acceptés par le modèle (mesurés par la sonde) ; un paramètre refusé n'est jamais envoyé.
+          type: object
+          additionalProperties: false
+          properties:
+            temperature:
+              type: boolean
+            top_p:
+              type: boolean
     LlmPrice:
       type: object
       additionalProperties: false
