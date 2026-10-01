@@ -226,6 +226,13 @@ jobs:
           # L'enfant lit son script et les paquets du moteur dans l'espace de travail : traversée des dossiers parents.
           d="$GITHUB_WORKSPACE"; while [ "$d" != / ]; do sudo chmod o+x "$d"; d="$(dirname "$d")"; done
           { echo SANDBOX_UID=1500; echo SANDBOX_GID=1500; echo SANDBOX_LAUNCHER=/usr/local/libexec/sandbox-launch; } >> "$GITHUB_ENV"
+      # L'enfant arrêté par RLIMIT_CPU reçoit SIGXCPU (action par défaut : vidage mémoire). Sur le runner, le vidage part au
+      # collecteur de plantages d'Ubuntu par un tube (core_pattern « |… », RLIMIT_CORE ignorée) et retarde la fin de l'enfant
+      # de plusieurs secondes (isolat compris) : vidage vers un fichier, refusé par RLIMIT_CORE à 0 (étapes de test).
+      - name: Pas de collecteur de vidages mémoire sur le runner de test
+        run: |
+          echo "core_pattern d'origine : $(cat /proc/sys/kernel/core_pattern)"
+          sudo sysctl -w kernel.core_pattern=core
       - name: Chromium de Playwright (garde SSRF via le proxy d'egress, INV10)
         if: matrix.node == ''
         run: pnpm exec playwright install --with-deps chromium
@@ -236,10 +243,10 @@ jobs:
         run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       # Aucune relance : un échec instable doit rester visible (rapport junit archivé).
       - if: matrix.node == ''
-        run: pnpm test:security --retry=0 --reporter=default --reporter=junit --outputFile.junit=reports/security-junit.xml
+        run: ulimit -c 0 && pnpm test:security --retry=0 --reporter=default --reporter=junit --outputFile.junit=reports/security-junit.xml
       - name: assert_sandbox et borne isolated-vm sur Node 26
         if: matrix.node == '26'
-        run: pnpm vitest run --project unit --project security --retry=0 --reporter=default --reporter=junit --outputFile.junit=reports/security-junit.xml apps/worker/src/sandbox
+        run: ulimit -c 0 && pnpm vitest run --project unit --project security --retry=0 --reporter=default --reporter=junit --outputFile.junit=reports/security-junit.xml apps/worker/src/sandbox
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: failure()
         with:
@@ -273,6 +280,72 @@ jobs:
       # utilisateur non privilégiés, restreints par AppArmor sur Ubuntu 24.04 (levée sur le runner de test seulement).
       - name: Bac à sable de Chromium (espaces de noms utilisateur)
         run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      # Dans un conteneur, c'est le profil AppArmor docker-default qui décide. Le Docker du runner le compile sans `abi` :
+      # l'analyseur d'Ubuntu 24.04 prend alors l'ABI 4.0, qui soumet la création d'un espace de noms utilisateur à une règle
+      # `userns` absente du profil (Chromium : « No usable sandbox! »). Docker en amont épingle `abi/3.0` (moby/profiles,
+      # « apparmor: Set abi conditionally ») : on charge ce profil-là, texte du modèle amont inchangé. dockerd ne recharge
+      # pas un docker-default déjà chargé. Contrôle avant et après : unshare -U sous un uid ordinaire, sans capacité.
+      - name: Profil AppArmor docker-default de Docker en amont (abi/3.0)
+        run: |
+          probe() { docker run --rm --user 65534 --entrypoint unshare "$PG_IMAGE" -U -r true; }
+          probe && echo "avant : espace de noms utilisateur permis" || echo "avant : espace de noms utilisateur refusé"
+          cat > "$RUNNER_TEMP/docker-default" <<'EOF'
+          abi <abi/3.0>,
+          # dockerd du runner : non confiné (peer de ses signaux = unconfined).
+          #include <tunables/global>
+
+          profile docker-default flags=(attach_disconnected,mediate_deleted) {
+            #include <abstractions/base>
+
+            network,
+            deny network ax25,
+            deny network ipx,
+            deny network appletalk,
+            deny network netrom,
+            deny network rose,
+            deny network econet,
+            deny network atmsvc,
+            deny network irda,
+            deny network wanpipe,
+            deny network isdn,
+            deny network caif,
+            deny network alg,
+            deny network vsock,
+            capability,
+            file,
+            umount,
+            signal (receive) peer=unconfined,
+            signal (receive) peer=runc,
+            signal (receive) peer=crun,
+            signal (send,receive) peer=docker-default,
+
+            deny @{PROC}/* w,
+            deny @{PROC}/{[^1-9/],[^1-9/][^0-9/],[^1-9s/][^0-9y/][^0-9s/],[^1-9/][^0-9/][^0-9/][^0-9/]*}/** w,
+            deny @{PROC}/sys/[^k]** w,
+            deny @{PROC}/sys/kernel/{?,??,[^s][^h][^m]**} w,
+            deny @{PROC}/sysrq-trigger rwklx,
+            deny @{PROC}/kcore rwklx,
+
+            deny mount,
+
+            deny /sys/[^f]*/** wklx,
+            deny /sys/f[^s]*/** wklx,
+            deny /sys/fs/[^c]*/** wklx,
+            deny /sys/fs/c[^g]*/** wklx,
+            deny /sys/fs/cg[^r]*/** wklx,
+            deny /sys/firmware/** rwklx,
+            deny /sys/devices/virtual/powercap/** rwklx,
+            deny /sys/kernel/security/** rwklx,
+
+            ptrace (trace,tracedby,read,readby) peer=docker-default,
+          }
+          EOF
+          sudo apparmor_parser -K -r "$RUNNER_TEMP/docker-default"
+          probe || { echo "après : espace de noms utilisateur toujours refusé"; exit 1; }
+          echo "après : espace de noms utilisateur permis"
+        env:
+          # Même PostgreSQL que tests/image (déjà tiré par le test) : util-linux y fournit unshare.
+          PG_IMAGE: postgres:16@sha256:1a6ab3f5345eb6dbe04a1349529caabdb0ab09293a09590fad07b2246bfa4b54
       # Aucune relance : un échec instable doit rester visible (rapport junit archivé).
       - run: pnpm test:image --retry=0 --reporter=default --reporter=junit --outputFile.junit=reports/image-junit.xml
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
