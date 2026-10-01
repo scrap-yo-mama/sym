@@ -11,6 +11,8 @@ export * from './crypto/index.js';
 export * from './auth/index.js';
 export type * from './agent/engine.js';
 export * from './agent/tools.js';
+export * from './agent/step-wire.js';
+export * from './agent/step-session.js';
 export * from './model/index.js';
 export * from './schema/index.js';
 export * from './dsl/index.js';
