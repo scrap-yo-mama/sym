@@ -31,11 +31,11 @@
         "headers": {
           "content-type": "application/json"
         },
-        "body": "\n         \n{\"id\":\"gen-1790808306-HCkIuvkOnd4HdvV5CGlh\",\"object\":\"chat.completion\",\"created\":1790808306,\"model\":\"z-ai/glm-5.3-flash\",\"provider\":\"Relace\",\"system_fingerprint\":null,\"service_tier\":null,\"choices\":[{\"index\":0,\"logprobs\":null,\"finish_reason\":\"tool_calls\",\"native_finish_reason\":\"tool_calls\",\"message\":{\"role\":\"assistant\",\"content\":null,\"refusal\":null,\"reasoning\":\"The user wants me to call the ping function with n=1. Simple single call.\",\"tool_calls\":[{\"type\":\"function\",\"index\":0,\"id\":\"call_9750ef2d0d864e57ba3d5668\",\"function\":{\"name\":\"ping\",\"arguments\":\"{\\\"n\\\": 1}\"}}],\"reasoning_details\":[{\"type\":\"reasoning.text\",\"text\":\"The user wants me to call the ping function with n=1. Simple single call.\",\"format\":\"unknown\",\"index\":0}]}}],\"usage\":{\"prompt_tokens\":166,\"completion_tokens\":29,\"total_tokens\":195,\"cost\":0.00002031,\"is_byok\":false,\"prompt_tokens_details\":{\"cached_tokens\":0,\"cache_write_tokens\":0,\"audio_tokens\":0,\"video_tokens\":0},\"cost_details\":{\"upstream_inference_cost\":0.00002031,\"upstream_inference_prompt_cost\":0.00000581,\"upstream_inference_completions_cost\":0.0000145},\"completion_tokens_details\":{\"reasoning_tokens\":19,\"image_tokens\":0,\"audio_tokens\":0}}}"
+        "body": "\n         \n{\"id\":\"gen-1790879511-Kj64B2m1dC1w2tDErctE\",\"object\":\"chat.completion\",\"created\":1790879511,\"model\":\"z-ai/glm-5.3-flash\",\"provider\":\"Relace\",\"system_fingerprint\":null,\"service_tier\":null,\"choices\":[{\"index\":0,\"logprobs\":null,\"finish_reason\":\"tool_calls\",\"native_finish_reason\":\"tool_calls\",\"message\":{\"role\":\"assistant\",\"content\":null,\"refusal\":null,\"reasoning\":\"The user wants me to call the ping function with n=1. This is a simple function call with no dependencies on other calls.\",\"tool_calls\":[{\"type\":\"function\",\"index\":0,\"id\":\"call_ab48a9a657a041f88e7f69d5\",\"function\":{\"name\":\"ping\",\"arguments\":\"{\\\"n\\\": 1}\"}}],\"reasoning_details\":[{\"type\":\"reasoning.text\",\"text\":\"The user wants me to call the ping function with n=1. This is a simple function call with no dependencies on other calls.\",\"format\":\"unknown\",\"index\":0}]}}],\"usage\":{\"prompt_tokens\":166,\"completion_tokens\":38,\"total_tokens\":204,\"cost\":0.00002481,\"is_byok\":false,\"prompt_tokens_details\":{\"cached_tokens\":0,\"cache_write_tokens\":0,\"audio_tokens\":0,\"video_tokens\":0},\"cost_details\":{\"upstream_inference_cost\":0.00002481,\"upstream_inference_prompt_cost\":0.00000581,\"upstream_inference_completions_cost\":0.000019},\"completion_tokens_details\":{\"reasoning_tokens\":31,\"image_tokens\":0,\"audio_tokens\":0}}}"
       }
     },
     {
-      "key": "7ca4c44ade7c",
+      "key": "f064a8c2a0e8",
       "request": {
         "method": "POST",
         "path": "/api/v1/chat/completions",
@@ -51,7 +51,7 @@
             "type": "json_schema",
             "name": "probe",
             "strict": true,
-            "schema_sha": "fd3337644674"
+            "schema_sha": "d9a27a34bc8f"
           },
           "max_tokens": 280,
           "extra_params": [
@@ -64,7 +64,7 @@
         "headers": {
           "content-type": "application/json"
         },
-        "body": "\n         \n{\"id\":\"gen-1790808308-UV6aMFMhYXxxswtfqQhw\",\"object\":\"chat.completion\",\"created\":1790808308,\"model\":\"z-ai/glm-5.3-flash\",\"provider\":\"Together\",\"system_fingerprint\":\"default\",\"service_tier\":null,\"choices\":[{\"index\":0,\"logprobs\":null,\"finish_reason\":\"stop\",\"native_finish_reason\":\"stop\",\"message\":{\"role\":\"assistant\",\"content\":\"{\\\"n\\\": 2}\",\"refusal\":null,\"reasoning\":\"The user wants me to reply with exactly the JSON object {\\\"n\\\": 2} and nothing else.\",\"reasoning_details\":[{\"type\":\"reasoning.text\",\"text\":\"The user wants me to reply with exactly the JSON object {\\\"n\\\": 2} and nothing else.\",\"format\":\"unknown\",\"index\":0}]}}],\"usage\":{\"prompt_tokens\":28,\"completion_tokens\":29,\"total_tokens\":57,\"cost\":0.0000187,\"is_byok\":false,\"prompt_tokens_details\":{\"cached_tokens\":0,\"cache_write_tokens\":0,\"audio_tokens\":0,\"video_tokens\":0},\"cost_details\":{\"upstream_inference_cost\":0.0000187,\"upstream_inference_prompt_cost\":0.0000042,\"upstream_inference_completions_cost\":0.0000145},\"completion_tokens_details\":{\"reasoning_tokens\":21,\"image_tokens\":0,\"audio_tokens\":0}}}"
+        "body": "\n         \n{\"id\":\"gen-1790879514-BBaCg9YH2IhO03XUVkxd\",\"object\":\"chat.completion\",\"created\":1790879514,\"model\":\"z-ai/glm-5.3-flash\",\"provider\":\"InferenceNet\",\"system_fingerprint\":null,\"service_tier\":null,\"choices\":[{\"index\":0,\"logprobs\":null,\"finish_reason\":\"stop\",\"native_finish_reason\":\"stop\",\"message\":{\"role\":\"assistant\",\"content\":\"{\\\"probe_token\\\": \\\"zq7\\\"}\",\"refusal\":null,\"reasoning\":\"The user is asking me to reply with exactly a specific JSON object and nothing else. This is a simple, benign request — they want the literal text `{\\\"n\\\":2}` with no additional formatting, explanation, or markdown code fences.\\n\\nThe instruction \\\"and nothing else\\\" is clear: no preamble, no code blocks, no explanation. Just the raw JSON.\",\"reasoning_details\":[{\"type\":\"reasoning.text\",\"text\":\"The user is asking me to reply with exactly a specific JSON object and nothing else. This is a simple, benign request — they want the literal text `{\\\"n\\\":2}` with no additional formatting, explanation, or markdown code fences.\\n\\nThe instruction \\\"and nothing else\\\" is clear: no preamble, no code blocks, no explanation. Just the raw JSON.\",\"format\":\"unknown\",\"index\":0}]}}],\"usage\":{\"prompt_tokens\":27,\"completion_tokens\":87,\"total_tokens\":114,\"cost\":0.000053442,\"is_byok\":false,\"prompt_tokens_details\":{\"cached_tokens\":0,\"cache_write_tokens\":0,\"audio_tokens\":0,\"video_tokens\":0},\"cost_details\":{\"upstream_inference_cost\":0.000053442,\"upstream_inference_prompt_cost\":0.000001242,\"upstream_inference_completions_cost\":0.0000522},\"completion_tokens_details\":{\"reasoning_tokens\":85,\"image_tokens\":0,\"audio_tokens\":0}}}"
       }
     },
     {
@@ -94,7 +94,65 @@
         "headers": {
           "content-type": "application/json"
         },
-        "body": "\n         \n{\"id\":\"gen-1790808309-R345lFHLie9eJHiViASE\",\"object\":\"chat.completion\",\"created\":1790808309,\"model\":\"z-ai/glm-5.3-flash\",\"provider\":\"Together\",\"system_fingerprint\":\"default\",\"service_tier\":null,\"choices\":[{\"index\":0,\"logprobs\":null,\"finish_reason\":\"tool_calls\",\"native_finish_reason\":\"tool_calls\",\"message\":{\"role\":\"assistant\",\"content\":null,\"refusal\":null,\"reasoning\":\"The user wants me to call the ping function with n=3. This is a simple single function call with no dependencies.\",\"tool_calls\":[{\"type\":\"function\",\"index\":0,\"id\":\"call_01a0f47e3f3b721bbf9bca9e\",\"function\":{\"name\":\"ping\",\"arguments\":\"{\\\"n\\\": 3}\"}}],\"reasoning_details\":[{\"type\":\"reasoning.text\",\"text\":\"The user wants me to call the ping function with n=3. This is a simple single function call with no dependencies.\",\"format\":\"unknown\",\"index\":0}]}}],\"usage\":{\"prompt_tokens\":166,\"completion_tokens\":33,\"total_tokens\":199,\"cost\":0.00003372,\"is_byok\":false,\"prompt_tokens_details\":{\"cached_tokens\":64,\"cache_write_tokens\":0,\"audio_tokens\":0,\"video_tokens\":0},\"cost_details\":{\"upstream_inference_cost\":0.00003372,\"upstream_inference_prompt_cost\":0.00001722,\"upstream_inference_completions_cost\":0.0000165},\"completion_tokens_details\":{\"reasoning_tokens\":25,\"image_tokens\":0,\"audio_tokens\":0}}}"
+        "body": "\n         \n{\"id\":\"gen-1790879517-mH7G37DXKTZLLgDga3Bb\",\"object\":\"chat.completion\",\"created\":1790879517,\"model\":\"z-ai/glm-5.3-flash\",\"provider\":\"InferenceNet\",\"system_fingerprint\":null,\"service_tier\":null,\"choices\":[{\"index\":0,\"logprobs\":null,\"finish_reason\":\"tool_calls\",\"native_finish_reason\":\"tool_calls\",\"message\":{\"role\":\"assistant\",\"content\":null,\"refusal\":null,\"reasoning\":\"The user wants me to call the function ping with n=3. This is a simple function call with a single parameter.\",\"tool_calls\":[{\"type\":\"function\",\"index\":0,\"id\":\"call_3b72ef3df0154fd8ab1fb91d\",\"function\":{\"name\":\"ping\",\"arguments\":\"{\\\"n\\\": 3}\"}}],\"reasoning_details\":[{\"type\":\"reasoning.text\",\"text\":\"The user wants me to call the function ping with n=3. This is a simple function call with a single parameter.\",\"format\":\"unknown\",\"index\":0}]}}],\"usage\":{\"prompt_tokens\":166,\"completion_tokens\":36,\"total_tokens\":202,\"cost\":0.000029236,\"is_byok\":false,\"prompt_tokens_details\":{\"cached_tokens\":0,\"cache_write_tokens\":0,\"audio_tokens\":0,\"video_tokens\":0},\"cost_details\":{\"upstream_inference_cost\":0.000029236,\"upstream_inference_prompt_cost\":0.000007636,\"upstream_inference_completions_cost\":0.0000216},\"completion_tokens_details\":{\"reasoning_tokens\":28,\"image_tokens\":0,\"audio_tokens\":0}}}"
+      }
+    },
+    {
+      "key": "03a095a70ed2",
+      "request": {
+        "method": "POST",
+        "path": "/api/v1/chat/completions",
+        "shape": {
+          "model": "z-ai/glm-5.3-flash",
+          "stream": false,
+          "roles": [
+            "user"
+          ],
+          "tools": [],
+          "tool_choice": null,
+          "response_format": null,
+          "max_tokens": 16,
+          "extra_params": [
+            "provider",
+            "temperature"
+          ]
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": "\n         \n{\"id\":\"gen-1790879518-uLwHVc5z6d5tpsKVT0y2\",\"object\":\"chat.completion\",\"created\":1790879518,\"model\":\"z-ai/glm-5.3-flash\",\"provider\":\"InferenceNet\",\"system_fingerprint\":null,\"service_tier\":null,\"choices\":[{\"index\":0,\"logprobs\":null,\"finish_reason\":\"length\",\"native_finish_reason\":\"length\",\"message\":{\"role\":\"assistant\",\"content\":null,\"refusal\":null,\"reasoning\":\"The user has sent a very simple message: \\\"Say ok.\\\"\\n\\nThis is a\",\"reasoning_details\":[{\"type\":\"reasoning.text\",\"text\":\"The user has sent a very simple message: \\\"Say ok.\\\"\\n\\nThis is a\",\"format\":\"unknown\",\"index\":0}]}}],\"usage\":{\"prompt_tokens\":15,\"completion_tokens\":16,\"total_tokens\":31,\"cost\":0.00001029,\"is_byok\":false,\"prompt_tokens_details\":{\"cached_tokens\":0,\"cache_write_tokens\":0,\"audio_tokens\":0,\"video_tokens\":0},\"cost_details\":{\"upstream_inference_cost\":0.00001029,\"upstream_inference_prompt_cost\":6.9e-7,\"upstream_inference_completions_cost\":0.0000096},\"completion_tokens_details\":{\"reasoning_tokens\":16,\"image_tokens\":0,\"audio_tokens\":0}}}"
+      }
+    },
+    {
+      "key": "f3c7fe304645",
+      "request": {
+        "method": "POST",
+        "path": "/api/v1/chat/completions",
+        "shape": {
+          "model": "z-ai/glm-5.3-flash",
+          "stream": false,
+          "roles": [
+            "user"
+          ],
+          "tools": [],
+          "tool_choice": null,
+          "response_format": null,
+          "max_tokens": 16,
+          "extra_params": [
+            "provider",
+            "top_p"
+          ]
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": "\n         \n{\"id\":\"gen-1790879518-CB2UPyFBzX1Jd3e4RIWT\",\"object\":\"chat.completion\",\"created\":1790879518,\"model\":\"z-ai/glm-5.3-flash\",\"provider\":\"InferenceNet\",\"system_fingerprint\":null,\"service_tier\":null,\"choices\":[{\"index\":0,\"logprobs\":null,\"finish_reason\":\"length\",\"native_finish_reason\":\"length\",\"message\":{\"role\":\"assistant\",\"content\":null,\"refusal\":null,\"reasoning\":\"The user has given me a very simple instruction: \\\"Say ok.\\\"\\n\\nThis is\",\"reasoning_details\":[{\"type\":\"reasoning.text\",\"text\":\"The user has given me a very simple instruction: \\\"Say ok.\\\"\\n\\nThis is\",\"format\":\"unknown\",\"index\":0}]}}],\"usage\":{\"prompt_tokens\":15,\"completion_tokens\":16,\"total_tokens\":31,\"cost\":0.00001029,\"is_byok\":false,\"prompt_tokens_details\":{\"cached_tokens\":0,\"cache_write_tokens\":0,\"audio_tokens\":0,\"video_tokens\":0},\"cost_details\":{\"upstream_inference_cost\":0.00001029,\"upstream_inference_prompt_cost\":6.9e-7,\"upstream_inference_completions_cost\":0.0000096},\"completion_tokens_details\":{\"reasoning_tokens\":18,\"image_tokens\":0,\"audio_tokens\":0}}}"
       }
     }
   ]

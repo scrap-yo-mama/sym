@@ -11,7 +11,7 @@ import { SsrfGuard, ssrfPolicyFromEnv, startEgressProxy, type EgressProxy } from
 import { STAGEHAND_VERSION, StagehandEngine } from '@runtime/agent';
 import { resolveIdentifyInstance, resolveInstanceContact, RobotsCache } from '@runtime/core/access';
 import { PgPacingStore, readIdentifyInstanceSetting, readInstanceContactSetting, readLlmSettings, secretStore } from '@runtime/db';
-import { createLlmClient, llmConfigFromSettings, roleProblems, roleTarget, type LlmConfig } from '@runtime/llm';
+import { createLlmClient, llmConfigFromSettings, roleProblems, roleTarget, type LlmConfig, type LlmNote } from '@runtime/llm';
 import { launchAgentBrowser } from '../browser/agent-browser.js';
 import { cgroupMemoryLimitBytes, cgroupMemoryWorkingSetBytes } from '../browser/cgroup.js';
 import { BrowserPool, playwrightLauncher } from '../browser/pool.js';
@@ -31,7 +31,7 @@ const STAGEHAND_PROMPT_VERSION = `stagehand-${STAGEHAND_VERSION}-dom`;
  * avec les points d'accroche de l'essai (plafond de coût partagé, garde de classification). Un modèle sans prix reste
  * permis (08 §1 : coût null avec avertissement) ; le plafond étant alors intenable, le run s'arrête après le premier appel.
  */
-export function stagehandEngineFor(config: LlmConfig, env: NodeJS.ProcessEnv = process.env): EngineFactory {
+export function stagehandEngineFor(config: LlmConfig, env: NodeJS.ProcessEnv = process.env, onNote?: (note: LlmNote) => void): EngineFactory {
   return ({ cdpUrl, recorder, hooks }) => {
     const target = roleTarget(config, 'agent');
     if (target === undefined) return null;
@@ -47,6 +47,11 @@ export function stagehandEngineFor(config: LlmConfig, env: NodeJS.ProcessEnv = p
         price,
         recorder,
         env,
+        // Profil sondé : un paramètre d'échantillonnage refusé par le modèle (claude-opus-4-8) n'est jamais envoyé.
+        ...(profile === undefined ? {} : { profile }),
+        ...(onNote === undefined ? {} : { onSamplingDropped: (param) => onNote({ event: 'llm_sampling_param_dropped', provider: target.provider.id, model: target.model.id, param }) }),
+        // Profil sans mesure (route de sonde pas encore livrée) : un 400 qui nomme le paramètre => nouvel essai sans lui, noté.
+        ...(onNote === undefined ? {} : { onSamplingRejected: (param) => onNote({ event: 'llm_sampling_param_rejected', provider: target.provider.id, model: target.model.id, param }) }),
         ...(config.redact === undefined ? {} : { redact: config.redact }),
         ...hooks,
       }),
@@ -109,8 +114,8 @@ export function productionExecutorFactory(env: Readonly<Record<string, string | 
         const value = await readLlmSettings(pool);
         return value === null ? null : llmConfigFromSettings(value, (id) => secrets.get(id), ['extract', 'agent']);
       },
-      client: (config) => createLlmClient(config),
-      engineFor: (config) => stagehandEngineFor(config, env as NodeJS.ProcessEnv),
+      client: (config) => createLlmClient(config, { note: (note) => logger.info(note, 'llm') }),
+      engineFor: (config) => stagehandEngineFor(config, env as NodeJS.ProcessEnv, (note) => logger.info(note, 'llm')),
       // Lancé par les exécuteurs E5 et E6 DANS un slot du pool (BrowserPool.hold) : BROWSER_CONCURRENCY le borne (14 §11).
       agentBrowser: (options) => launchAgentBrowser({ ...options, env }),
     };

@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "provider": "openrouter",
+  "case": "sampling",
+  "synthetic": false,
+  "entries": [
+    {
+      "key": "343010cf2529",
+      "request": {
+        "method": "POST",
+        "path": "/api/v1/chat/completions",
+        "shape": {
+          "model": "z-ai/glm-5.3-flash",
+          "stream": false,
+          "roles": [
+            "user"
+          ],
+          "tools": [],
+          "tool_choice": null,
+          "response_format": null,
+          "max_tokens": 700,
+          "extra_params": [
+            "provider",
+            "temperature",
+            "top_p"
+          ]
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": "\n         \n\n         \n{\"id\":\"gen-1790876512-PNaCWaZHg8eJNzKsmz1r\",\"object\":\"chat.completion\",\"created\":1790876512,\"model\":\"z-ai/glm-5.3-flash\",\"provider\":\"InferenceNet\",\"system_fingerprint\":null,\"service_tier\":null,\"choices\":[{\"index\":0,\"logprobs\":null,\"finish_reason\":\"stop\",\"native_finish_reason\":\"stop\",\"message\":{\"role\":\"assistant\",\"content\":\"Ok.\",\"refusal\":null,\"reasoning\":\"The user has sent a message that just says \\\"Say ok.\\\"\\n\\nThis is a very simple request. The user wants me to say \\\"ok\\\". There's nothing harmful, complex, or ambiguous about this request. It's a direct instruction to output a specific word.\\n\\nShould I just say \\\"ok\\\"? That seems like the most straightforward interpretation. The user is asking me to say a specific word, and there's no reason not to comply. This could be a test, a joke, someone checking if I'm responsive, or just playing around.\\n\\nThe simplest, most direct response is just \\\"ok.\\\" I could add more, but that would be over-explaining something that doesn't need explanation. The user asked for one thing: say ok.\\n\\nFormat considerations: This should be extremely short. Just \\\"ok\\\" or \\\"Ok.\\\" No need for headers, lists, explanations, or anything else. Adding extra text would actually go against the spirit of the request.\",\"reasoning_details\":[{\"type\":\"reasoning.text\",\"text\":\"The user has sent a message that just says \\\"Say ok.\\\"\\n\\nThis is a very simple request. The user wants me to say \\\"ok\\\". There's nothing harmful, complex, or ambiguous about this request. It's a direct instruction to output a specific word.\\n\\nShould I just say \\\"ok\\\"? That seems like the most straightforward interpretation. The user is asking me to say a specific word, and there's no reason not to comply. This could be a test, a joke, someone checking if I'm responsive, or just playing around.\\n\\nThe simplest, most direct response is just \\\"ok.\\\" I could add more, but that would be over-explaining something that doesn't need explanation. The user asked for one thing: say ok.\\n\\nFormat considerations: This should be extremely short. Just \\\"ok\\\" or \\\"Ok.\\\" No need for headers, lists, explanations, or anything else. Adding extra text would actually go against the spirit of the request.\",\"format\":\"unknown\",\"index\":0}]}}],\"usage\":{\"prompt_tokens\":15,\"completion_tokens\":197,\"total_tokens\":212,\"cost\":0.00011883,\"is_byok\":false,\"prompt_tokens_details\":{\"cached_tokens\":0,\"cache_write_tokens\":0,\"audio_tokens\":0,\"video_tokens\":0},\"cost_details\":{\"upstream_inference_cost\":0.00011883,\"upstream_inference_prompt_cost\":6.3e-7,\"upstream_inference_completions_cost\":0.0001182},\"completion_tokens_details\":{\"reasoning_tokens\":222,\"image_tokens\":0,\"audio_tokens\":0}}}"
+      }
+    }
+  ]
+}

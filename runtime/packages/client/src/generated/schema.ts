@@ -823,7 +823,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Sonde de 3 appels minuscules d'un couple fournisseur × modèle (08 § 1) ; extension de 05 § 4.2 */
+        /** Sonde de 5 appels minuscules d'un couple fournisseur × modèle (08 § 1) ; extension de 05 § 4.2 */
         post: operations["testLlmProvider"];
         delete?: never;
         options?: never;
@@ -2349,6 +2349,11 @@ export interface components {
             stream_usage?: boolean;
             cache?: boolean;
             reasoning_field?: string | null;
+            /** @description Paramètres d'échantillonnage acceptés par le modèle (mesurés par la sonde) ; un paramètre refusé n'est jamais envoyé. */
+            sampling?: {
+                temperature?: boolean;
+                top_p?: boolean;
+            };
         };
         LlmPrice: {
             in?: number;

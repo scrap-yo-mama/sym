@@ -1,0 +1,60 @@
+{
+  "version": 1,
+  "provider": "anthropic",
+  "case": "empty-response",
+  "synthetic": true,
+  "note": "Cassette synthétique écrite à la main : ce cas ne peut pas être obtenu réellement à coût maîtrisé. Jamais réenregistrée ; clé * = accepte toute requête du chemin.",
+  "entries": [
+    {
+      "key": "*",
+      "request": {
+        "method": "POST",
+        "path": "/chat/completions",
+        "shape": {
+          "note": "synthétique : toute requête du chemin"
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": "{\"id\":\"synthetic-1\",\"object\":\"chat.completion\",\"model\":\"synthetic\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":9,\"completion_tokens\":2,\"total_tokens\":11}}"
+      }
+    },
+    {
+      "key": "*",
+      "request": {
+        "method": "POST",
+        "path": "/chat/completions",
+        "shape": {
+          "note": "synthétique : toute requête du chemin"
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": "{\"id\":\"synthetic-1\",\"object\":\"chat.completion\",\"model\":\"synthetic\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":9,\"completion_tokens\":2,\"total_tokens\":11}}"
+      }
+    },
+    {
+      "key": "*",
+      "request": {
+        "method": "POST",
+        "path": "/chat/completions",
+        "shape": {
+          "note": "synthétique : toute requête du chemin"
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": "{\"id\":\"synthetic-1\",\"object\":\"chat.completion\",\"model\":\"synthetic\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":9,\"completion_tokens\":2,\"total_tokens\":11}}"
+      }
+    }
+  ]
+}

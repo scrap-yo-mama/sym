@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "provider": "anthropic",
+  "case": "rate-limited-429",
+  "synthetic": true,
+  "note": "Cassette synthétique écrite à la main : ce cas ne peut pas être obtenu réellement à coût maîtrisé. Jamais réenregistrée ; clé * = accepte toute requête du chemin.",
+  "entries": [
+    {
+      "key": "*",
+      "request": {
+        "method": "POST",
+        "path": "/chat/completions",
+        "shape": {
+          "note": "synthétique : toute requête du chemin"
+        }
+      },
+      "response": {
+        "status": 429,
+        "headers": {
+          "content-type": "application/json",
+          "retry-after": "2"
+        },
+        "body": "{\"error\":{\"message\":\"Rate limit reached, retry later\"}}"
+      }
+    },
+    {
+      "key": "*",
+      "request": {
+        "method": "POST",
+        "path": "/chat/completions",
+        "shape": {
+          "note": "synthétique : toute requête du chemin"
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": "{\"id\":\"synthetic-1\",\"object\":\"chat.completion\",\"model\":\"synthetic\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"pong\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":9,\"completion_tokens\":2,\"total_tokens\":11}}"
+      }
+    }
+  ]
+}

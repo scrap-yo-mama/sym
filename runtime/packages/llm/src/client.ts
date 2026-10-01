@@ -2,7 +2,7 @@
 // LlmClient : providers[], un modèle par rôle, réessais par classe, repli restreint, échelle S1-S4, comptage (08 §1).
 import type { Secret } from '@runtime/core';
 import { backoffDelay, DEFAULT_BACKOFF, isFallbackEligible, LlmError, RETRY_LIMITS, type Backoff } from './errors.js';
-import { resolveToolChoice, roleProblems, type CapabilityProfile, type LlmRole } from './profile.js';
+import { resolveToolChoice, roleProblems, samplingParamsRejected, withoutUnsupportedSampling, type CapabilityProfile, type LlmRole, type SamplingSupport } from './profile.js';
 import { createRedactor, type RedactConfig, type Redactor } from './redact.js';
 import { compileOriginal, extractJson, toTransportSchema, validateOriginal, wrapRoot, WRAP_KEY } from './schema.js';
 import { OpenAICompatTransport, DEFAULT_MAX_REQUEST_BYTES } from './transport.js';
@@ -48,7 +48,21 @@ export interface LlmConfig {
   backoff?: Backoff;
 }
 
+/**
+ * Note de journal du client (jamais de contenu de prompt ni de clé). Une seule par fournisseur, modèle et paramètre, pour la durée de vie du client.
+ * `dropped` : retiré parce que le profil sondé le refuse. `rejected` : profil sans mesure, le fournisseur a répondu 400 en le nommant ; un
+ * nouvel essai sans lui a suivi et il n'est plus envoyé à ce modèle par ce client.
+ */
+export interface LlmNote {
+  event: 'llm_sampling_param_dropped' | 'llm_sampling_param_rejected';
+  provider: string;
+  model: string;
+  param: keyof SamplingSupport;
+}
+
 export interface ClientHooks {
+  /** Reçoit les notes de journal (ex. paramètre d'échantillonnage retiré parce que le profil du modèle le refuse). */
+  note?: (note: LlmNote) => void;
   sleep?: (ms: number) => Promise<void>;
   random?: () => number;
   now?: () => Date;
@@ -84,6 +98,7 @@ export interface ChatCall {
   toolChoice?: 'auto' | 'required' | { name: string };
   maxTokens?: number;
   temperature?: number;
+  topP?: number;
   signal?: AbortSignal;
   /** Sait tronquer l'entrée : autorise 1 essai après `context_length`. */
   shrinkInput?: (messages: ChatMessage[]) => ChatMessage[] | null;
@@ -133,6 +148,9 @@ export class LlmClient {
   readonly #hooks: Required<Pick<ClientHooks, 'sleep' | 'random' | 'now'>> & ClientHooks;
   readonly #transports = new Map<string, LlmTransport>();
   readonly #redactor: Redactor | undefined;
+  readonly #noted = new Set<string>();
+  /** `fournisseur/modèle/paramètre` refusés en 400 alors que le profil ne le disait pas : plus jamais envoyés par ce client. */
+  readonly #rejected = new Set<string>();
 
   constructor(config: LlmConfig, hooks: ClientHooks = {}) {
     this.#config = config;
@@ -243,20 +261,36 @@ export class LlmClient {
           ...req.extraBody,
         },
       };
+      // Paramètres d'échantillonnage refusés par le profil de CETTE cible (le repli a le sien) : retirés, notés une fois.
+      const { request: profiled, dropped } = withoutUnsupportedSampling(model.profile, request);
+      for (const param of dropped) this.#noteDropped(provider.id, model.id, param);
+      const sent = this.#withoutRejected(provider.id, model.id, profiled);
       // Hors du try : une garde qui refuse n'est ni une erreur du fournisseur, ni réessayée.
       options.beforeCall?.();
       const started = Date.now();
       const callOptions: CallOptions = options.signal === undefined ? {} : { signal: options.signal };
       try {
-        const result = await transport.chat(request, callOptions);
-        const usage = this.#account(model, result.usage, request, charsOfResult(result));
+        const result = await transport.chat(sent, callOptions);
+        const usage = this.#account(model, result.usage, sent, charsOfResult(result));
         attempts.push({ provider: provider.id, model: model.id, failure_class: null, status: 200, duration_ms: result.duration_ms, usage, backoff_ms: 0 });
         return { result, usage, provider: provider.id, model: model.id };
       } catch (error) {
         if (!(error instanceof LlmError)) throw error;
         // Tentative échouée mais facturée (troncature, flux coupé) : imputée au run.
-        const usage = error.usage === null ? null : this.#account(model, error.usage, request, 0);
+        const usage = error.usage === null ? null : this.#account(model, error.usage, sent, 0);
         const cls = error.policyClass;
+
+        // Repli (profil sans mesure de `sampling`, ex. production avant la route de sonde) : un 400 qui nomme un paramètre
+        // d'échantillonnage envoyé => un nouvel essai sans lui, une seule fois par paramètre, noté.
+        const rejected = error.class === 'bad_request' ? samplingParamsRejected(error.message, sent).filter((p) => !this.#rejected.has(`${provider.id}/${model.id}/${p}`)) : [];
+        if (rejected.length > 0) {
+          for (const param of rejected) {
+            this.#rejected.add(`${provider.id}/${model.id}/${param}`);
+            this.#hooks.note?.({ event: 'llm_sampling_param_rejected', provider: provider.id, model: model.id, param });
+          }
+          attempts.push({ provider: provider.id, model: model.id, failure_class: error.failureClass, status: error.status, duration_ms: Date.now() - started, usage, backoff_ms: 0 });
+          continue;
+        }
 
         if (error.class === 'context_length' && options.shrinkInput !== undefined && !shrunk) {
           const next = options.shrinkInput(messages);
@@ -281,6 +315,21 @@ export class LlmClient {
     }
   }
 
+  #withoutRejected(provider: string, model: string, request: ChatRequest): ChatRequest {
+    const drop = (['temperature', 'top_p'] as const).filter((p) => request[p] !== undefined && this.#rejected.has(`${provider}/${model}/${p}`));
+    if (drop.length === 0) return request;
+    const next = { ...request };
+    for (const p of drop) delete next[p];
+    return next;
+  }
+
+  #noteDropped(provider: string, model: string, param: keyof SamplingSupport): void {
+    const key = `${provider}/${model}/${param}`;
+    if (this.#noted.has(key)) return;
+    this.#noted.add(key);
+    this.#hooks.note?.({ event: 'llm_sampling_param_dropped', provider, model, param });
+  }
+
   #account(model: ModelConfig, raw: ChatResult['usage'], request: ChatRequest, responseChars: number): CallUsage {
     const usage = computeUsage({ raw, price: model.price, requestChars: charsOf(request.messages), responseChars, at: this.#hooks.now() });
     this.meter.add(usage);
@@ -300,6 +349,7 @@ export class LlmClient {
         ...(choice !== undefined ? { tool_choice: choice } : {}),
         ...(call.maxTokens !== undefined ? { max_tokens: call.maxTokens } : {}),
         ...(call.temperature !== undefined ? { temperature: call.temperature } : {}),
+        ...(call.topP !== undefined ? { top_p: call.topP } : {}),
       },
       {
         ...(call.signal !== undefined ? { signal: call.signal } : {}),

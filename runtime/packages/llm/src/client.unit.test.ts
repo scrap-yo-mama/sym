@@ -474,3 +474,104 @@ describe('garde avant chaque appel (plafond de coût de l’essai, tâche 2.4)',
     expect(fake.requests).toBe(0);
   });
 });
+
+describe('échantillonnage non supporté (D-42 : claude-opus-4-8 compatible OpenAI répond 400 à temperature et top_p)', () => {
+  const noSampling = profile({ sampling: { temperature: false, top_p: false } });
+
+  test('le profil retire temperature et top_p de la requête envoyée, une seule note de journal par paramètre', async () => {
+    fake.setScenario('agent', [scripted.text('un'), scripted.text('deux')]);
+    const notes: unknown[] = [];
+    const { client } = setupWithNotes({ agent: { id: 'agent', profile: noSampling } }, notes);
+    await client.chat('agent', { messages: user('x'), temperature: 0, topP: 0.9, maxTokens: 50 });
+    await client.chat('agent', { messages: user('y'), temperature: 0, topP: 0.9, maxTokens: 50 });
+    expect(fake.calls).toHaveLength(2);
+    for (const call of fake.calls) {
+      expect(call.body).not.toHaveProperty('temperature');
+      expect(call.body).not.toHaveProperty('top_p');
+      expect(call.body['max_tokens']).toBe(50);
+    }
+    expect(notes).toEqual([
+      { event: 'llm_sampling_param_dropped', provider: 'primary', model: 'agent', param: 'temperature' },
+      { event: 'llm_sampling_param_dropped', provider: 'primary', model: 'agent', param: 'top_p' },
+    ]);
+  });
+
+  test('profil qui accepte l’échantillonnage, ou sans mesure : requête inchangée, aucune note', async () => {
+    fake.setScenario('agent', [scripted.text('un')]);
+    fake.setScenario('extract', [scripted.text('deux')]);
+    const notes: unknown[] = [];
+    const { client } = setupWithNotes({ agent: { id: 'agent', profile: profile({ sampling: { temperature: true, top_p: true } }) }, extract: { id: 'extract', profile: profile() } }, notes);
+    await client.chat('agent', { messages: user('x'), temperature: 0, topP: 0.5 });
+    await client.chat('extract', { messages: user('x'), temperature: 0 });
+    expect(fake.calls[0]?.body).toMatchObject({ temperature: 0, top_p: 0.5 });
+    expect(fake.calls[1]?.body).toMatchObject({ temperature: 0 });
+    expect(notes).toEqual([]);
+  });
+
+  test('le repli a son propre profil : retrait selon la cible réellement appelée', async () => {
+    fake.setScenario('agent', [scripted.error(503), scripted.error(503), scripted.error(503), scripted.error(503)]);
+    fallbackFake.setScenario('agent', [scripted.text('secours')]);
+    const notes: unknown[] = [];
+    const { client } = setupWithNotes({ agent: { id: 'agent', profile: profile({ sampling: { temperature: true, top_p: true } }) } }, notes, 'agent', { agent: { id: 'agent', profile: noSampling } });
+    const out = await client.chat('agent', { messages: user('x'), temperature: 0 });
+    expect(out.fallback_used).toBe(true);
+    expect(fake.calls.every((c) => c.body['temperature'] === 0)).toBe(true);
+    expect(fallbackFake.calls[0]?.body).not.toHaveProperty('temperature');
+    expect(notes).toEqual([{ event: 'llm_sampling_param_dropped', provider: 'backup', model: 'agent', param: 'temperature' }]);
+  });
+});
+
+describe('repli sans profil sondé : 400 qui nomme temperature ou top_p (production avant la route de sonde)', () => {
+  const deprecated = (param: string) => scripted.error(400, { error: { message: `\`${param}\` is deprecated for this model.`, type: 'invalid_request_error' } });
+
+  test('un nouvel essai sans le paramètre nommé, noté llm_sampling_param_rejected, retenu pour les appels suivants', async () => {
+    fake.setScenario('agent', [deprecated('temperature'), scripted.text('ok'), scripted.text('encore')]);
+    const notes: unknown[] = [];
+    const { client } = setupWithNotes({}, notes);
+    const out = await client.chat('agent', { messages: user('x'), temperature: 0, maxTokens: 50 });
+    expect(out.result.message.content).toBe('ok');
+    expect(fake.calls).toHaveLength(2);
+    expect(fake.calls[0]?.body).toMatchObject({ temperature: 0 });
+    expect(fake.calls[1]?.body).not.toHaveProperty('temperature');
+    expect(fake.calls[1]?.body['max_tokens']).toBe(50);
+    expect(out.attempts.map((a) => a.failure_class)).toEqual(['llm_bad_request', null]);
+    await client.chat('agent', { messages: user('y'), temperature: 0 });
+    expect(fake.calls).toHaveLength(3);
+    expect(fake.calls[2]?.body).not.toHaveProperty('temperature');
+    expect(notes).toEqual([{ event: 'llm_sampling_param_rejected', provider: 'primary', model: 'agent', param: 'temperature' }]);
+  });
+
+  test('temperature puis top_p refusés l’un après l’autre : un essai par paramètre, pas plus', async () => {
+    fake.setScenario('agent', [deprecated('temperature'), deprecated('top_p'), scripted.text('ok')]);
+    const notes: unknown[] = [];
+    const { client } = setupWithNotes({}, notes);
+    await client.chat('agent', { messages: user('x'), temperature: 0, topP: 0.9 });
+    expect(fake.calls).toHaveLength(3);
+    expect(fake.calls[2]?.body).not.toHaveProperty('temperature');
+    expect(fake.calls[2]?.body).not.toHaveProperty('top_p');
+    expect(notes).toHaveLength(2);
+  });
+
+  test('400 qui ne nomme aucun paramètre envoyé : pas de nouvel essai', async () => {
+    fake.setScenario('agent', [deprecated('temperature'), scripted.text('jamais')]);
+    const { client } = setupWithNotes({}, []);
+    await expect(client.chat('agent', { messages: user('x'), topP: 0.9 })).rejects.toMatchObject({ class: 'bad_request' });
+    fake.setScenario('extract', [scripted.error(400, { error: { message: 'unsupported parameter' } }), scripted.text('jamais')]);
+    await expect(client.chat('extract', { messages: user('x'), temperature: 0 })).rejects.toMatchObject({ class: 'bad_request' });
+    expect(fake.calls).toHaveLength(2);
+  });
+});
+
+function setupWithNotes(models: Partial<Record<LlmRole, ModelConfig>>, notes: unknown[], fallbackRole?: LlmRole, backupModels: Partial<Record<LlmRole, ModelConfig>> = {}) {
+  const roles: LlmConfig['roles'] = {};
+  const primaryModels: ModelConfig[] = [];
+  for (const role of ['investigate', 'repair', 'extract', 'agent'] as const) {
+    primaryModels.push({ id: role, profile: profile(), ...models[role] });
+    roles[role] = { provider: 'primary', model: role, ...(fallbackRole === role ? { fallback: { provider: 'backup', model: role } } : {}) };
+  }
+  const providers: ProviderConfig[] = [
+    { id: 'primary', baseUrl: fake.baseUrl, apiKey: new Secret('primary-key-0000'), models: primaryModels },
+    { id: 'backup', baseUrl: fallbackFake.baseUrl, apiKey: new Secret('backup-key-0000'), models: primaryModels.map((m) => ({ ...m, ...backupModels[m.id as LlmRole] })) },
+  ];
+  return { client: createLlmClient({ providers, roles }, { sleep: async () => undefined, random: () => 1, note: (n) => void notes.push(n) }) };
+}

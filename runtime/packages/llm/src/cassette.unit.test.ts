@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, afterEach, beforeAll, describe, expect, test } from 'vitest';
-import { cassetteMode, createCassetteKit, providerFixture, requestKey, requestShape, scrub, type CassetteFile } from './cassette.testkit.js';
+import { cassetteMode, createCassetteKit, providerFixture, requestKey, requestShape, scrub, secretValuesFromEnv, type CassetteFile } from './cassette.testkit.js';
 import { createFakeProvider, scripted } from './fake-provider.js';
 
 const dirs: string[] = [];
@@ -37,6 +37,20 @@ describe('clé de correspondance normalisée', () => {
     expect(cassetteMode({ LLM_CASSETTE_MODE: 'record' })).toBe('record');
     expect(() => providerFixture('deepinfra', { LLM_CASSETTE_MODE: 'record' })).toThrow(/DEEPINFRA_API_KEY absente/);
     expect(providerFixture('deepinfra', {}).apiKey.reveal()).toBe('replay-placeholder-not-a-key');
+  });
+
+  test('fournisseur anthropic (D-42) : URL, clé, modèle et purge des secrets', () => {
+    const replay = providerFixture('anthropic', {});
+    expect(replay.baseUrl).toBe('https://api.anthropic.com/v1');
+    expect(replay.model).toBe('claude-opus-4-8');
+    expect(replay.apiKey.reveal()).toBe('replay-placeholder-not-a-key');
+    expect(providerFixture('anthropic', { LLM_TEST_MODEL: 'claude-x' }).model).toBe('claude-opus-4-8'); // rejeu : jamais l'environnement
+    expect(() => providerFixture('anthropic', { LLM_CASSETTE_MODE: 'record' })).toThrow(/ANTHROPIC_API_KEY absente/);
+    const rec = providerFixture('anthropic', { LLM_CASSETTE_MODE: 'record', ANTHROPIC_API_KEY: 'zz-anthropic-key-1234', ANTHROPIC_BASE_URL: 'https://proxy.test/v1', LLM_TEST_MODEL: 'claude-x' });
+    expect(rec.baseUrl).toBe('https://proxy.test/v1');
+    expect(rec.model).toBe('claude-x');
+    expect(rec.apiKey.reveal()).toBe('zz-anthropic-key-1234');
+    expect(secretValuesFromEnv({ ANTHROPIC_API_KEY: 'zz-anthropic-key-1234' })).toEqual(['zz-anthropic-key-1234']);
   });
 
   test('scrub : retire les valeurs de clé ; en mode strict, refuse d\'enregistrer', () => {
@@ -140,5 +154,31 @@ describe('record (contre le faux fournisseur, sans réseau externe)', () => {
       recorder.stop();
       await fake.close();
     }
+  });
+});
+
+describe('aucune cassette du dépôt ne contient de secret (D-42)', () => {
+  const packages = join(import.meta.dirname, '..', '..');
+  const cassettes = readdirSync(packages, { withFileTypes: true })
+    .filter((d) => d.isDirectory())
+    .flatMap((d) => {
+      const dir = join(packages, d.name, 'cassettes');
+      try {
+        return readdirSync(dir, { recursive: true, encoding: 'utf8' }).filter((f) => f.endsWith('.json')).map((f) => join(dir, f));
+      } catch {
+        return [];
+      }
+    });
+
+  test('packages/*/cassettes/ existe et contient des cassettes anthropic', () => {
+    expect(cassettes.length).toBeGreaterThan(0);
+    expect(cassettes.some((f) => f.includes('/anthropic/'))).toBe(true);
+  });
+
+  test.each(cassettes.map((f) => [f.slice(packages.length + 1), f]))('%s : ni sk-ant-, ni Bearer suivi d\'un jeton, ni valeur de clé de l\'environnement', (_name, file) => {
+    const text = readFileSync(file as string, 'utf8');
+    expect(text).not.toContain('sk-ant-');
+    expect(text).not.toMatch(/Bearer\s+[A-Za-z0-9._~+/-]{8,}/i);
+    for (const secret of secretValuesFromEnv()) expect(text.includes(secret)).toBe(false);
   });
 });

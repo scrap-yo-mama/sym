@@ -1401,7 +1401,7 @@ paths:
       x-pending: '3.1'
       operationId: testLlmProvider
       tags: [settings]
-      summary: Sonde de 3 appels minuscules d'un couple fournisseur × modèle (08 § 1) ; extension de 05 § 4.2
+      summary: Sonde de 5 appels minuscules d'un couple fournisseur × modèle (08 § 1) ; extension de 05 § 4.2
       requestBody:
         required: true
         content:
@@ -4290,6 +4290,15 @@ components:
           type: boolean
         reasoning_field:
           type: [string, 'null']
+        sampling:
+          description: Paramètres d'échantillonnage acceptés par le modèle (mesurés par la sonde) ; un paramètre refusé n'est jamais envoyé.
+          type: object
+          additionalProperties: false
+          properties:
+            temperature:
+              type: boolean
+            top_p:
+              type: boolean
     LlmPrice:
       type: object
       additionalProperties: false

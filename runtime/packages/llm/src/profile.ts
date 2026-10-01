@@ -7,6 +7,12 @@ export type StructuredMode = 'json_schema' | 'tool_forced' | 'json_object';
 export type ToolChoiceMode = 'auto' | 'required' | 'named';
 export type LlmRole = 'investigate' | 'repair' | 'extract' | 'agent';
 
+/** Paramètres d'échantillonnage que le fournisseur accepte pour ce modèle (claude-opus-4-8 compatible OpenAI : 400 sur `temperature` et `top_p`). */
+export interface SamplingSupport {
+  temperature: boolean;
+  top_p: boolean;
+}
+
 export interface CapabilityProfile {
   model: string;
   /** Appel d'outils fonctionnel. */
@@ -23,6 +29,8 @@ export interface CapabilityProfile {
   /** Le fournisseur rend `cached_tokens`. */
   cache: boolean;
   reasoning_field: 'reasoning_content' | 'reasoning' | null;
+  /** Mesuré par la sonde. Absent (profil antérieur à la mesure, ou saisi à la main) : supposé accepté, comme avant. */
+  sampling?: SamplingSupport;
   probed_at: string;
   /** Jetons consommés par la sonde. */
   probe_tokens: number;
@@ -42,12 +50,28 @@ const PING: ToolDef = {
   },
 };
 
+/**
+ * Schéma de la sonde json_schema, avec CONTRÔLE NÉGATIF. Ni le nom du champ ni la valeur ne figurent dans le prompt, et le
+ * prompt exige explicitement une autre forme (`{"n":2}`), contraire au schéma (`additionalProperties: false`). Une couche qui
+ * met le schéma dans le contexte sans l'imposer au décodage (Anthropic compatible OpenAI : 223 jetons de prompt pour une
+ * phrase, le schéma y est injecté) peut lire la valeur dans le schéma : sans consigne contraire, elle passerait la sonde. Avec
+ * la consigne, un modèle qui obéit au prompt rend `{"n":2}` ; seul un décodage contraint rend `{"probe_token":"zq7"}`.
+ * La garantie reste empirique (un modèle pourrait préférer le schéma à la consigne) : l'Ajv final (INV1) et les réparations
+ * bornent le risque d'un json_schema conclu à tort.
+ */
+const PROBE_TOKEN = { field: 'probe_token', value: 'zq7' } as const;
 const PROBE_SCHEMA = {
   type: 'object',
-  properties: { n: { type: 'integer' } },
-  required: ['n'],
+  properties: { [PROBE_TOKEN.field]: { type: 'string', enum: [PROBE_TOKEN.value] } },
+  required: [PROBE_TOKEN.field],
   additionalProperties: false,
 };
+
+/** Consigne contraire au schéma (contrôle négatif) : la forme demandée n'a aucun champ du schéma. */
+const PROBE_JSON_PROMPT = 'Reply with exactly this JSON object and nothing else: {"n":2}';
+
+/** Sonde de sampling : 16 jetons suffisent, un modèle à raisonnement tronqué a quand même accepté le paramètre. */
+export const SAMPLING_PROBE_MAX_TOKENS = 16;
 
 function toolCallWorks(result: ChatResult): boolean {
   const call = result.message.tool_calls?.[0];
@@ -64,7 +88,7 @@ function jsonSchemaWorks(result: ChatResult): boolean {
   if (typeof result.message.content !== 'string') return false;
   try {
     const parsed: unknown = JSON.parse(result.message.content.trim());
-    return typeof parsed === 'object' && parsed !== null && Number.isInteger((parsed as { n?: unknown }).n);
+    return typeof parsed === 'object' && parsed !== null && (parsed as Record<string, unknown>)[PROBE_TOKEN.field] === PROBE_TOKEN.value;
   } catch {
     return false;
   }
@@ -115,6 +139,24 @@ export async function probeCapabilities(transport: LlmTransport, model: string, 
     }
   };
 
+  /** Un paramètre par appel : seul un 400 (`bad_request`) dit « non supporté » ; succès, troncature ou réponse vide : accepté. */
+  const probeSamplingParam = async (param: keyof SamplingSupport, value: number): Promise<boolean> => {
+    try {
+      const result = await transport.chat({ model, messages: [{ role: 'user', content: 'Say ok.' }], stream: false, max_tokens: SAMPLING_PROBE_MAX_TOKENS, [param]: value });
+      observe(result);
+      return true;
+    } catch (error) {
+      if (!(error instanceof LlmError)) throw error;
+      if (INCONCLUSIVE.has(error.policyClass)) throw error;
+      if (error.partial !== undefined) observe(error.partial);
+      else if (error.usage !== null) tokens += (error.usage.prompt_tokens ?? 0) + (error.usage.completion_tokens ?? 0);
+      if (error.class !== 'bad_request') return true;
+      notes.push(`sampling: ${param} refusé (${error.class})`);
+      return false;
+    }
+  };
+  const probeSampling = async (): Promise<SamplingSupport> => ({ temperature: await probeSamplingParam('temperature', 0), top_p: await probeSamplingParam('top_p', 0.9) });
+
   const one = await attempt('tools_auto', {
     model,
     messages: [{ role: 'user', content: 'Call the function ping with n=1.' }],
@@ -126,11 +168,11 @@ export async function probeCapabilities(transport: LlmTransport, model: string, 
 
   const two = await attempt('json_schema', {
     model,
-    messages: [{ role: 'user', content: 'Reply with exactly this JSON object and nothing else: {"n": 2}' }],
+    messages: [{ role: 'user', content: PROBE_JSON_PROMPT }],
     response_format: { type: 'json_schema', json_schema: { name: 'probe', strict: true, schema: PROBE_SCHEMA } },
   });
   const jsonSchema = two.result !== undefined && jsonSchemaWorks(two.result);
-  if (two.result !== undefined && !jsonSchema) notes.push('json_schema: accepté mais réponse hors schéma (prose)');
+  if (two.result !== undefined && !jsonSchema) notes.push('json_schema: accepté mais non imposé (réponse hors schéma, prose)');
 
   const three = await attempt('tool_forced', {
     model,
@@ -139,6 +181,8 @@ export async function probeCapabilities(transport: LlmTransport, model: string, 
     tool_choice: { type: 'function', function: { name: 'ping' } },
   });
   const forced = three.result !== undefined && toolCallWorks(three.result);
+
+  const sampling = await probeSampling();
 
   const tool_choice: ToolChoiceMode[] = [];
   if (tools) tool_choice.push('auto');
@@ -161,10 +205,40 @@ export async function probeCapabilities(transport: LlmTransport, model: string, 
     stream_usage: null,
     cache,
     reasoning_field: reasoning,
+    sampling,
     probed_at: now().toISOString(),
     probe_tokens: tokens,
     notes,
   };
+}
+
+/**
+ * Requête débarrassée des paramètres d'échantillonnage que le profil déclare refusés (point unique pour tous les appelants :
+ * LlmClient, moteur Stagehand). Profil absent ou sans mesure : requête inchangée. `dropped` liste ce qui a été retiré.
+ */
+export function withoutUnsupportedSampling<T extends object>(profile: CapabilityProfile | undefined, request: T): { request: T; dropped: (keyof SamplingSupport)[] } {
+  const sampling = profile?.sampling;
+  if (sampling === undefined) return { request, dropped: [] };
+  const dropped: (keyof SamplingSupport)[] = [];
+  const next = { ...request } as T & { temperature?: number; top_p?: number };
+  for (const param of ['temperature', 'top_p'] as const) {
+    if (!sampling[param] && next[param] !== undefined) {
+      delete next[param];
+      dropped.push(param);
+    }
+  }
+  return dropped.length === 0 ? { request, dropped } : { request: next, dropped };
+}
+
+/**
+ * Paramètres d'échantillonnage ENVOYÉS que nomme le message d'un 400 (`\`temperature\` is deprecated for this model.`).
+ * Repli quand le profil n'a pas de mesure (`sampling` absent, sonde jamais lancée) : l'appelant réessaie une fois sans eux.
+ */
+export function samplingParamsRejected(message: string, sent: { temperature?: unknown; top_p?: unknown }): (keyof SamplingSupport)[] {
+  const out: (keyof SamplingSupport)[] = [];
+  if (sent.temperature !== undefined && /\btemperature\b/i.test(message)) out.push('temperature');
+  if (sent.top_p !== undefined && /\btop[_ ]?p\b/i.test(message)) out.push('top_p');
+  return out;
 }
 
 /** Ce que chaque rôle exige du profil (refus à l'affectation, 08 §1). */
