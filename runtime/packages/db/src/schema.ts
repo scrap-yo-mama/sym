@@ -609,6 +609,18 @@ export const domainPacingState = pgTable('domain_pacing_state', {
   circuitState: text('circuit_state', { enum: ['closed', 'open', 'half_open'] }).notNull().default('closed'),
   circuitOpenedAt: tstz('circuit_opened_at'),
   consecutiveFailures: integer('consecutive_failures').notNull().default(0),
+  // Migration 0005_pacing_state (tâche 1.9) : cadence adaptative, disjoncteur, budget de retries.
+  minDelayMs: integer('min_delay_ms').notNull().default(1500),
+  adaptiveDelayMs: integer('adaptive_delay_ms').notNull().default(0),
+  calmSuccesses: integer('calm_successes').notNull().default(0),
+  adaptiveChangedAt: tstz('adaptive_changed_at'),
+  penaltyUntil: tstz('penalty_until'),
+  circuitOpenUntil: tstz('circuit_open_until'),
+  circuitTrips: integer('circuit_trips').notNull().default(0),
+  probeStartedAt: tstz('probe_started_at'),
+  windowStartedAt: tstz('window_started_at'),
+  windowRequests: integer('window_requests').notNull().default(0),
+  windowRetries: integer('window_retries').notNull().default(0),
   updatedAt: updatedAt(),
 });
 
