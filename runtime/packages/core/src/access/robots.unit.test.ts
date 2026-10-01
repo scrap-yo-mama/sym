@@ -2,7 +2,7 @@
 // robots.txt, RFC 9309 (tâche 1.11) : groupes, jeton produit puis `*`, règle la plus longue, `Allow` à égalité, `*` et
 // `$`, encodage pourcent, `/robots.txt` toujours permis, `Crawl-delay`, signaux, motifs hostiles.
 import { describe, expect, it } from 'vitest';
-import { matchRules, normalizeOctets, parseRobots, robotsAllows, selectGroup } from './robots.js';
+import { matchRules, MAX_ROBOTS_TARGET, normalizeOctets, parseRobots, robotsAllows, selectGroup } from './robots.js';
 
 const allows = (text: string, url: string, token?: string) => robotsAllows(parseRobots(text), new URL(url, 'https://zz-test.example'), token).allowed;
 
@@ -102,5 +102,27 @@ describe('robots.txt (RFC 9309) : analyse et correspondance', () => {
     const started = performance.now();
     expect(matchRules([{ allow: false, pattern }], path).allowed).toBe(true);
     expect(performance.now() - started).toBeLessThan(2000);
+  });
+
+  // Revue de 1.11 : un robots.txt hostile de 500 Kio (des milliers de règles à jokers) et des URL longues ne bloquent pas
+  // la boucle d'événements du worker (contrôle de chaque sous-ressource de la page).
+  it('fichier hostile de 500 Kio et chemin de 8 Kio : chaque contrôle en temps borné', () => {
+    let txt = 'User-agent: *\n';
+    for (let i = 0; txt.length < 500 * 1024; i++) txt += `Disallow: /a*a*a*b${i}\n`;
+    const rules = selectGroup(parseRobots(txt)).rules;
+    expect(rules.length).toBeGreaterThan(15_000);
+    const path = `/${'a'.repeat(8 * 1024 - 1)}`;
+    const started = performance.now();
+    for (let i = 0; i < 10; i++) expect(matchRules(rules, path).allowed).toBe(true);
+    expect((performance.now() - started) / 10).toBeLessThan(50);
+    // Règle effective toujours appliquée (aucune règle écartée par un plafond).
+    expect(matchRules(rules, `/${'a'.repeat(100)}b${Math.floor(rules.length / 2)}`).allowed).toBe(false);
+  });
+
+  it('chemin et requête au-delà de 8 Kio : refus par précaution (s\'il existe des règles)', () => {
+    const long = `/${'x'.repeat(MAX_ROBOTS_TARGET)}`;
+    expect(matchRules([{ allow: false, pattern: '/prive/' }], long)).toEqual({ allowed: false, rule: null });
+    expect(matchRules([], long).allowed).toBe(true);
+    expect(allows('User-agent: *\nDisallow: /prive/\n', `/public?q=${'x'.repeat(MAX_ROBOTS_TARGET)}`)).toBe(false);
   });
 });

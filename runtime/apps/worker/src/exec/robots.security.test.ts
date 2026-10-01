@@ -25,6 +25,8 @@ import { createStrategyExecutor, type RepairPort } from './strategy-executor.js'
 
 const ROBOTS = 'zz_test_robots.localhost';
 const UNREACHABLE = 'zz_test_robots_5xx.localhost';
+/** Second hôte autorisé dont robots.txt (derrière deux redirections) interdit /prive/. */
+const OTHER = 'zz_test_robots_redirect.localhost';
 const A = randomUUID();
 const actorA = { userId: A, role: 'member' as const };
 const ID_SCHEMA = { type: 'object', required: ['id'], properties: { id: { type: 'string' } } };
@@ -73,17 +75,17 @@ const forbiddenHits = async (host: string) =>
     .filter(([p]) => p.startsWith('/prive/') && !p.startsWith('/prive/ouvert'))
     .reduce((n, [, c]) => n + c, 0);
 
-const declarative = (host: string, path: string) => ({
+const declarative = (host: string, path: string, extraHosts: string[] = []) => ({
   schema_version: 1,
   kind: 'declarative',
-  request: { method: 'GET', url: `${base(host)}${path}`, allowed_hosts: [host] },
+  request: { method: 'GET', url: `${base(host)}${path}`, allowed_hosts: [host, ...extraHosts] },
   sources: [{ id: 'api', from: 'response', records: '$.items[*]' }],
   fields: { id: { path: '$.id', type: 'string', required: true } },
 });
-const htmlDeclarative = (host: string, path: string) => ({
+const htmlDeclarative = (host: string, path: string, extraHosts: string[] = []) => ({
   schema_version: 1,
   kind: 'declarative',
-  request: { method: 'GET', url: `${base(host)}${path}`, allowed_hosts: [host] },
+  request: { method: 'GET', url: `${base(host)}${path}`, allowed_hosts: [host, ...extraHosts] },
   sources: [{ id: 'dom', from: 'html', records: 'body' }],
   fields: { id: { attr: 'text', type: 'string', required: true } },
 });
@@ -119,7 +121,7 @@ beforeAll(async () => {
   await queue.start();
   await queue.createQueue(runQueueDefinition());
   client = await startClient();
-  const guard = fixtureGuard(client.server.port, [ROBOTS, UNREACHABLE], net);
+  const guard = fixtureGuard(client.server.port, [ROBOTS, UNREACHABLE, OTHER], net);
   launchProxy = await net.startEgressProxy({ guard, refuseAll: true });
   browsers = new BrowserPool({ size: 1, launch: playwrightLauncher(launchProxy.url, process.env), recycleAfterRuns: 100 });
   const engine = new ProcessSandboxEngine({ ...sandboxOptionsFromEnv(process.env), production: false });
@@ -198,6 +200,18 @@ describe('assert_robots_respected : chemin interdit, 0 requête, robots_disallow
     expect(repair).not.toHaveBeenCalled();
   }, 120_000);
 
+  // Revue de 1.11 : la lecture de robots.txt suit ses redirections vers un autre hôte (RFC 9309 : CDN, apex → www), sous la
+  // garde SSRF, sans le verrou de domaines de l'API (qui donnait à tort robots_unreachable).
+  test('robots.txt redirigé vers un autre hôte : suivi ; ses règles s’appliquent (chemin interdit, chemin permis)', async () => {
+    await client.control({ op: 'site', site: 'robots_redirect', cross: true });
+    const blocked = await runOf(await insertApi({ execution: 'fetch', spec: declarative(OTHER, '/prive/x') }));
+    expect(blocked).toMatchObject({ state: 'failed', failure_class: 'robots_disallowed', items: 0 });
+    const ok = await runOf(await insertApi({ execution: 'fetch', spec: declarative(OTHER, '/liste') }));
+    expect(ok).toMatchObject({ state: 'succeeded', items: 2 });
+    expect(Object.keys(await paths(OTHER)).filter((p) => p.startsWith('/prive/'))).toEqual([]);
+    expect((await paths(ROBOTS))['/robots.txt']).toBeGreaterThanOrEqual(1);
+  }, 120_000);
+
   test('chemin permis (Allow plus long) : collecte normale ; User-Agent du navigateur suivi de celui du robot', async () => {
     const e1 = await runOf(await insertApi({ execution: 'fetch', spec: declarative(ROBOTS, '/prive/ouvert') }));
     expect(e1).toMatchObject({ state: 'succeeded', items: 2 });
@@ -207,5 +221,76 @@ describe('assert_robots_respected : chemin interdit, 0 requête, robots_disallow
     const item = (await withActor(pool, actorA, (tx) => tx.query<{ item: { ua: string } }>('SELECT item FROM dataset_items WHERE dataset_id = $1', [run.dataset_id]))).rows[0]!.item;
     expect(item.ua).toMatch(/Chrome\/[\d.]+.* Scrapyomama\/9\.9\.9 \(\+mailto:ops@zz-test\.example\)$/);
     expect(await forbiddenHits(ROBOTS)).toBe(0);
+  }, 120_000);
+});
+
+// Revue de 1.11 : Playwright n'appelle `context.route` que pour la PREMIÈRE URL d'une chaîne de redirections, et le proxy
+// d'egress ne voit pas le chemin (CONNECT en https). Chaque saut que Chromium suit est donc contrôlé à part (CDP Fetch,
+// cadres hors processus compris : browser/request-guard.security.test.ts) : un chemin permis qui redirige vers un chemin interdit ne fait partir aucune requête
+// vers celui-ci, en E2, en E3 déclaratif et en E3 en script (`ctx.page.goto`, `fetch` dans `evaluate`).
+describe('assert_robots_respected : redirections suivies par Chromium (chaque saut contrôlé)', () => {
+  test('E2 fetch_in_page : /depart (permis) → 302 /prive/x : 0 requête sur /prive/, robots_disallowed', async () => {
+    const apiId = await insertApi({ execution: 'fetch_in_page', spec: declarative(ROBOTS, '/depart') });
+    await expectBlocked(apiId, await runOf(apiId));
+    expect((await paths(ROBOTS))['/depart']).toBe(1);
+  }, 120_000);
+
+  test('E3 playwright déclaratif : /depart → 302 /prive/x', async () => {
+    const apiId = await insertApi({ execution: 'playwright', spec: htmlDeclarative(ROBOTS, '/depart') });
+    await expectBlocked(apiId, await runOf(apiId));
+    expect((await paths(ROBOTS))['/depart']).toBe(1);
+  }, 120_000);
+
+  test('E3 playwright déclaratif : redirection de barre oblique finale /prive → 301 /prive/', async () => {
+    const apiId = await insertApi({ execution: 'playwright', spec: htmlDeclarative(ROBOTS, '/prive') });
+    await expectBlocked(apiId, await runOf(apiId));
+    expect((await paths(ROBOTS))['/prive']).toBe(1);
+  }, 120_000);
+
+  test('E3 en script : ctx.page.goto(/depart) → 302 /prive/x', async () => {
+    const source = `try { await ctx.page.goto('${base(ROBOTS)}/depart'); } catch (e) {} ctx.emit({ id: 'apres' });`;
+    const apiId = await insertApi(script(ROBOTS, '/', source));
+    await expectBlocked(apiId, await runOf(apiId));
+  }, 120_000);
+
+  test('E3 en script : fetch(/depart) dans evaluate → 302 /prive/x', async () => {
+    const source = `await ctx.page.evaluate("fetch('/depart').then((r) => r.status).catch(() => 0)"); ctx.emit({ id: 'apres' });`;
+    const apiId = await insertApi(script(ROBOTS, '/', source));
+    await expectBlocked(apiId, await runOf(apiId));
+  }, 120_000);
+
+  test('E3 déclaratif : redirection vers un second hôte autorisé dont robots.txt interdit le chemin', async () => {
+    const apiId = await insertApi({ execution: 'playwright', spec: htmlDeclarative(ROBOTS, '/vers-autre', [OTHER]) });
+    const run = await runOf(apiId);
+    expect(run).toMatchObject({ state: 'failed', failure_class: 'robots_disallowed', items: 0, dataset_id: null });
+    expect(Object.keys(await paths(OTHER)).filter((p) => p.startsWith('/prive/'))).toEqual([]);
+    expect(repair).not.toHaveBeenCalled();
+  }, 120_000);
+
+  test('E2 : redirection vers un second hôte autorisé dont robots.txt répond 503 → robots_unreachable, 0 requête de contenu', async () => {
+    const apiId = await insertApi({ execution: 'fetch_in_page', spec: declarative(ROBOTS, '/vers-injoignable', [UNREACHABLE]) });
+    const run = await runOf(apiId);
+    expect(run).toMatchObject({ state: 'failed', failure_class: 'robots_unreachable', retryable: true, items: 0, dataset_id: null });
+    expect(Object.keys(await paths(UNREACHABLE)).filter((p) => p !== '/robots.txt')).toEqual([]);
+    expect(repair).not.toHaveBeenCalled();
+  }, 120_000);
+
+  test('cadre d’un autre site autorisé : sous-ressource redirigée vers un chemin interdit, 0 requête', async () => {
+    const run = await runOf(await insertApi({ execution: 'playwright', spec: htmlDeclarative(ROBOTS, '/page-cadre', [OTHER]) }));
+    expect((await paths(OTHER))['/depart']).toBe(1);
+    expect(Object.keys(await paths(OTHER)).filter((p) => p.startsWith('/prive/'))).toEqual([]);
+    expect(run).toMatchObject({ state: 'succeeded' });
+  }, 120_000);
+
+  test('WebSocket ouvert par la page vers un chemin interdit : poignée de main jamais envoyée, le run continue', async () => {
+    const run = await runOf(await insertApi(script(ROBOTS, '/page-ws', `await ctx.page.waitForSelector('#ws'); ctx.emit({ id: 'x' });`)));
+    expect(await forbiddenHits(ROBOTS)).toBe(0);
+    expect(run).toMatchObject({ state: 'succeeded', items: 1 });
+  }, 120_000);
+
+  test('WebSocket ouvert par le code du script (evaluate) vers un chemin interdit : 0 requête, robots_disallowed', async () => {
+    const source = `await ctx.page.evaluate("new Promise((r) => { const w = new WebSocket('ws://' + location.host + '/prive/ws'); w.onclose = (e) => r(e.code); w.onopen = () => r(-1); setTimeout(() => r(0), 3000); })"); ctx.emit({ id: 'apres' });`;
+    const apiId = await insertApi(script(ROBOTS, '/', source));
+    await expectBlocked(apiId, await runOf(apiId));
   }, 120_000);
 });

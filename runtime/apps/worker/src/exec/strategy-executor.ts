@@ -22,7 +22,8 @@
 //    transitions 10 et 15) : tâche 2.3, avec la réparation ; en 1.7 le run rend la classe, la machine à états l'applique.
 // 7. module d'accès (1.11, INV11) : robots.txt relu (cache de 24 h au plus) AVANT toute requête de contenu, dans TOUS
 //    les modes, sans option pour l'ignorer : requête de la stratégie (E1-E3, pagination comprise), chaque saut de la
-//    session réseau (E1, `ctx.fetch`), chaque requête du contexte Chromium (E2, E3, page de départ d'un script). Un chemin
+//    session réseau (E1, `ctx.fetch`), chaque requête du contexte Chromium (E2, E3, page de départ d'un script), saut de
+//    redirection compris (contrôle CDP, `browser/request-guard.ts`), et chaque poignée de main WebSocket. Un chemin
 //    interdit → `robots_disallowed` sans aucune requête vers lui ; robots.txt injoignable → `robots_unreachable`, rien
 //    n'est collecté. `Crawl-delay` est un plancher de la cadence. User-Agent honnête `Scrapyomama/<version> (+contact)`
 //    imposé à chaque requête (une stratégie ne le remplace pas) ; le navigateur garde le sien et y ajoute celui-ci.
@@ -51,7 +52,7 @@ import {
   type RequestPacer,
 } from '@runtime/core/exec';
 import type { DomainPacer } from '@runtime/core';
-import { buildUserAgent, InstanceContactError, RobotsCache, RobotsGate, sessionRobotsFetcher } from '@runtime/core/access';
+import { InstanceContactError, RobotsCache, RobotsGate, sessionRobotsFetcher } from '@runtime/core/access';
 import {
   buildNetworkRungs,
   loadProxyCredentials,
@@ -74,6 +75,7 @@ import type pg from 'pg';
 import { pino, type Logger } from 'pino';
 import type { BrowserPool } from '../browser/pool.js';
 import { runFetchInPageExecutor, runPlaywrightExecutor } from './browser-executors.js';
+import { robotIdentity } from './robot-identity.js';
 import { runScriptExecutor, type ScriptPort } from './script-executor.js';
 
 export type StrategyExecutorDeps = {
@@ -222,19 +224,22 @@ export function createStrategyExecutor(deps: StrategyExecutorDeps): RunExecutor 
         });
   const robotsCache = deps.robotsCache ?? new RobotsCache();
 
-  /** User-Agent du robot pour ce run : jeton, version, contact de l'instance (17 §5). */
+  const logger = deps.logger ?? pino({ enabled: false });
+
+  /** User-Agent du robot pour ce run : jeton, version, contact de l'instance (17 §5) ; contact absent journalisé. */
+  const identity = robotIdentity({
+    ...(deps.version === undefined ? {} : { version: deps.version }),
+    ...(deps.instanceContact === undefined ? {} : { instanceContact: deps.instanceContact }),
+    warn: (code) => logger.warn({ code }, "contact d'instance absent : User-Agent sans contact (17 §5 : requis avant la première enquête)"),
+  });
   const userAgentFor = async (): Promise<string> => {
-    let contact: string | null;
     try {
-      contact = (await deps.instanceContact?.()) ?? null;
+      return await identity();
     } catch (error) {
       if (error instanceof InstanceContactError) return refuse('code_error', error.code);
       throw error;
     }
-    return buildUserAgent({ version: deps.version ?? '0.0.0', contact });
   };
-
-  const logger = deps.logger ?? pino({ enabled: false });
 
   /** E3 en script : bac à sable de 1.5, ponts `ctx.fetch` (session de l'essai) et `ctx.page.*` (Chromium de l'essai). */
   const runScript = async (
@@ -286,17 +291,24 @@ export function createStrategyExecutor(deps: StrategyExecutorDeps): RunExecutor 
     const spec = script === undefined && ['fetch', 'fetch_in_page', 'playwright'].includes(strategy.execution) ? specOf(target, strategy) : undefined;
     // Plafond de coût de l'essai, partagé entre l'egress Chromium et la session `ctx.fetch` d'un script.
     let otherUsd: { egress: () => number; session: () => number } = { egress: () => 0, session: () => 0 };
-    // Lecture de robots.txt : session du même barreau, SANS contrôle robots (pas de récursion), même User-Agent.
+    // Lecture de robots.txt : session du même barreau, SANS contrôle robots (pas de récursion), même User-Agent. Sans
+    // verrou de domaines : RFC 9309 suit les redirections de robots.txt quel que soit l'hôte (CDN, apex → www), sous la
+    // garde SSRF ; la garde ne lit que l'origine d'un domaine de l'API (`allowedHosts` du `RobotsGate`).
     const robotsSession = openNetworkSession({
       rung,
       guard: deps.guard,
       ...(credentials === undefined ? {} : { credentials }),
       ...(deps.proxyResolver === undefined ? {} : { proxyResolver: deps.proxyResolver }),
-      allowedHosts: script?.allowedHosts ?? spec?.request.allowed_hosts ?? [],
       userAgent,
     });
     const robotsPacer = pacerFor(target);
-    const robots = new RobotsGate({ fetch: sessionRobotsFetcher(robotsSession), cache: robotsCache, signal: ctx.signal, ...(robotsPacer === undefined ? {} : { pacer: robotsPacer }) });
+    const robots = new RobotsGate({
+      fetch: sessionRobotsFetcher(robotsSession),
+      cache: robotsCache,
+      signal: ctx.signal,
+      allowedHosts: script?.allowedHosts ?? spec?.request.allowed_hosts ?? [],
+      ...(robotsPacer === undefined ? {} : { pacer: robotsPacer }),
+    });
     const sessionOptions = (side: 'egress' | 'session'): NetworkSessionOptions => ({
       rung,
       guard: deps.guard,

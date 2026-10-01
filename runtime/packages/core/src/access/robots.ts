@@ -10,6 +10,10 @@
 // - `Crawl-delay` (non normatif) lu dans le groupe retenu : plancher de cadence (le plus grand si plusieurs) ;
 // - `Content-Signal` et `Content-Usage` : signaux d'accès, lus comme des DONNÉES (jamais une consigne).
 // La lecture bornée (500 Kio au moins, reste ignoré) est l'affaire du lecteur (`gate.ts`).
+// Coût borné (contrôle de chaque sous-ressource d'une page, sur un fichier hostile de 500 Kio) : chaque motif est
+// normalisé et découpé UNE fois ; la correspondance n'est qu'une suite de `startsWith` / `indexOf` (préfixe littéral
+// d'abord, segments ensuite, au plus à gauche) ; un chemin avec requête de plus de 8 Kio est refusé par précaution
+// quand des règles existent. Aucune règle n'est écartée (l'écarter pourrait permettre un chemin interdit).
 
 /** Jeton produit annoncé dans le User-Agent et cherché dans les groupes `user-agent` (17 §5). */
 export const PRODUCT_TOKEN = 'Scrapyomama';
@@ -35,6 +39,9 @@ export type RobotsFile = {
   /** Lignes de signaux hors de tout groupe (s'appliquent à tous). */
   readonly globalSignals: readonly RobotsSignalLine[];
 };
+
+/** Longueur maximale du chemin et de la requête comparés (8 Kio) : au-delà, refus par précaution s'il existe des règles. */
+export const MAX_ROBOTS_TARGET = 8 * 1024;
 
 /** Bornes d'analyse : une ligne, une règle, le nombre de règles (défense contre un fichier hostile). */
 const MAX_LINE = 4096;
@@ -93,7 +100,9 @@ export function parseRobots(text: string): RobotsFile {
         collectingAgents = false;
         // Valeur vide : aucune règle (`Disallow:` vide = rien d'interdit).
         if (value === '' || rules >= MAX_RULES) break;
-        current.rules.push({ allow: key === 'allow', pattern: value });
+        const rule: RobotsRule = { allow: key === 'allow', pattern: value };
+        compiled(rule);
+        current.rules.push(rule);
         rules += 1;
         break;
       }
@@ -171,38 +180,55 @@ export function normalizeOctets(input: string): string {
   return out;
 }
 
-/**
- * Correspondance d'un motif `*` sur tout le texte (deux pointeurs, retour arrière borné : O(n·m), sans expression
- * régulière, donc sans retour arrière exponentiel sur un motif hostile).
- */
-function globMatch(pattern: string, text: string): boolean {
-  let p = 0;
-  let t = 0;
-  let star = -1;
-  let mark = 0;
-  while (t < text.length) {
-    if (p < pattern.length && pattern[p] !== '*' && pattern[p] === text[t]) {
-      p += 1;
-      t += 1;
-    } else if (p < pattern.length && pattern[p] === '*') {
-      star = p;
-      mark = t;
-      p += 1;
-    } else if (star !== -1) {
-      p = star + 1;
-      mark += 1;
-      t = mark;
-    } else return false;
+/** Motif prêt à comparer : normalisé, jokers consécutifs fusionnés, découpé sur `*`, ancre `$` finale à part. */
+type CompiledPattern = { readonly length: number; readonly segments: readonly string[]; readonly anchored: boolean };
+
+const COMPILED = new WeakMap<RobotsRule, CompiledPattern>();
+
+function compilePattern(raw: string): CompiledPattern {
+  const normalized = normalizeOctets(raw);
+  // Longueur de la règle (RFC 9309 : nombre d'octets du motif) prise AVANT la fusion des jokers consécutifs.
+  const collapsed = normalized.replace(/\*{2,}/g, '*');
+  const anchored = collapsed.endsWith('$');
+  const body = anchored ? collapsed.slice(0, -1) : collapsed;
+  return { length: normalized.length, segments: body.split('*'), anchored };
+}
+
+/** Forme compilée d'une règle (calculée à l'analyse, ou au premier usage pour une règle construite à la main). */
+function compiled(rule: RobotsRule): CompiledPattern {
+  let out = COMPILED.get(rule);
+  if (out === undefined) {
+    out = compilePattern(rule.pattern);
+    COMPILED.set(rule, out);
   }
-  while (p < pattern.length && pattern[p] === '*') p += 1;
-  return p === pattern.length;
+  return out;
+}
+
+/**
+ * Correspondance d'un motif compilé sur un chemin normalisé : préfixe littéral, puis chaque segment au plus à gauche
+ * (`indexOf`), le dernier collé à la fin si le motif est ancré par `$`. Sans retour arrière : la recherche au plus à gauche
+ * de chaque segment suffit pour des motifs dont le seul joker est `*`.
+ */
+function compiledMatches(p: CompiledPattern, path: string): boolean {
+  const segs = p.segments;
+  const first = segs[0] as string;
+  if (!path.startsWith(first)) return false;
+  if (segs.length === 1) return p.anchored ? path.length === first.length : true;
+  let pos = first.length;
+  for (let i = 1; i < segs.length - 1; i++) {
+    const seg = segs[i] as string;
+    const at = path.indexOf(seg, pos);
+    if (at === -1) return false;
+    pos = at + seg.length;
+  }
+  const last = segs[segs.length - 1] as string;
+  if (p.anchored) return path.length - last.length >= pos && path.endsWith(last);
+  return last === '' || path.indexOf(last, pos) !== -1;
 }
 
 /** Vrai si le motif (déjà normalisé) s'applique au chemin (déjà normalisé) : préfixe, sauf `$` final. */
 export function ruleMatches(pattern: string, path: string): boolean {
-  const collapsed = pattern.replace(/\*{2,}/g, '*');
-  if (collapsed.endsWith('$')) return globMatch(collapsed.slice(0, -1), path);
-  return globMatch(`${collapsed}*`, path);
+  return compiledMatches(compilePattern(pattern), path);
 }
 
 export type RobotsVerdict = {
@@ -218,18 +244,21 @@ export function robotsTarget(url: URL): string {
 
 /** Verdict d'un chemin (avec sa requête) contre les règles retenues. */
 export function matchRules(rules: readonly RobotsRule[], pathAndQuery: string): RobotsVerdict {
-  const path = normalizeOctets(pathAndQuery === '' ? '/' : pathAndQuery);
-  if (path === '/robots.txt') return { allowed: true, rule: null };
+  const target = pathAndQuery === '' ? '/' : pathAndQuery;
+  if (target === '/robots.txt') return { allowed: true, rule: null };
+  if (rules.length === 0) return { allowed: true, rule: null };
+  // Chemin démesuré (sous-ressource hostile) : refus par précaution, sans comparaison.
+  if (target.length > MAX_ROBOTS_TARGET) return { allowed: false, rule: null };
+  const path = normalizeOctets(target);
   let best: RobotsRule | null = null;
   let bestLength = -1;
   for (const rule of rules) {
-    const pattern = normalizeOctets(rule.pattern);
-    if (!ruleMatches(pattern, path)) continue;
-    const length = pattern.length;
-    if (length > bestLength || (length === bestLength && rule.allow && best !== null && !best.allow)) {
-      best = rule;
-      bestLength = length;
-    }
+    const p = compiled(rule);
+    // Une règle plus courte que la meilleure trouvée ne peut plus l'emporter (sauf Allow à égalité, examiné ci-dessous).
+    if (p.length < bestLength || (p.length === bestLength && (!rule.allow || best?.allow === true))) continue;
+    if (!compiledMatches(p, path)) continue;
+    best = rule;
+    bestLength = p.length;
   }
   if (best === null) return { allowed: true, rule: null };
   return { allowed: best.allow, rule: `${best.allow ? 'Allow' : 'Disallow'}: ${best.pattern}` };

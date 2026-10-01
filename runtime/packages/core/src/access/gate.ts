@@ -2,10 +2,12 @@
 // Garde robots.txt (tâche 1.11, 17 §2, RFC 9309, INV11) : lue par origine AVANT toute requête de contenu, dans tous les
 // modes d'exécution (E1 et `ctx.fetch` par la session réseau, E2 et E3 par le contexte Chromium), sans aucune option
 // pour l'ignorer. Règles :
+// - origine lue : seulement celle d'un domaine de l'API (`allowedHosts`) ;
 // - `GET /robots.txt` sous la garde SSRF et la cadence par domaine, un saut à la fois, 5 redirections au plus (au-delà
-//   ou en boucle : injoignable, par précaution) ;
+//   ou en boucle : injoignable, par précaution), QUEL QUE SOIT l'hôte du saut (RFC 9309 §2.3.1.2 : CDN, apex → www) :
+//   la session de lecture n'a pas le verrou de domaines de l'API, seulement la garde SSRF ;
 // - 2xx : analysé sur ses 500 premiers Kio (le reste est ignoré, la dernière ligne coupée aussi) ;
-// - 4xx : aucune règle, tout est permis (sauf 429 : injoignable, par précaution) ;
+// - 4xx, 429 compris : aucune règle, tout est permis (17 §2, RFC 9309 §2.3.1.3) ; un 429 n'est jamais mis en cache ;
 // - 5xx, réseau, redirection refusée : `robots_unreachable`, rien n'est collecté (`erreur`, backoff) ;
 // - cache par origine de 24 h au plus (fichier lu ou 4xx) ; un échec n'est mémorisé que pour l'essai en cours ;
 // - correspondance sur le jeton produit, puis `*` ; `Crawl-delay` devient un plancher de cadence.
@@ -65,7 +67,8 @@ export class RobotsCache {
     return entry.state;
   }
   set(state: RobotsState, now: number, ttlMs: number): void {
-    if (state.kind === 'unreachable') return;
+    // Échec, ou 429 (aucune règle pour cet essai seulement : le site a pu limiter un instant la lecture de ses règles).
+    if (state.kind === 'unreachable' || (state.kind === 'absent' && state.status === 429)) return;
     if (this.#entries.size >= this.#max) {
       const oldest = this.#entries.keys().next();
       if (oldest.done !== true) this.#entries.delete(oldest.value);
@@ -108,6 +111,11 @@ export type RobotsGateOptions = {
   readonly signal?: AbortSignal;
   /** Délai d'un saut (défaut 15 s). */
   readonly timeoutMs?: number;
+  /**
+   * Domaines de l'API : seule l'origine d'un de ces hôtes est lue (une autre est refusée sans requête, `domain_not_allowed`).
+   * Les redirections de robots.txt, elles, sont suivies vers tout hôte (sous la garde SSRF).
+   */
+  readonly allowedHosts?: readonly string[];
 };
 
 function originOf(url: URL): string {
@@ -162,6 +170,13 @@ export class RobotsGate {
     }
     if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
       return { allowed: false, failure: { failure_class: 'code_error', retryable: false, detail: 'invalid_url' }, state: null, rule: null };
+    }
+    const hosts = this.#options.allowedHosts;
+    if (hosts !== undefined) {
+      const host = parsed.hostname.toLowerCase().replace(/\.$/, '');
+      if (!hosts.some((h) => h.toLowerCase().replace(/\.$/, '') === host)) {
+        return { allowed: false, failure: { failure_class: 'code_error', retryable: false, detail: 'domain_not_allowed' }, state: null, rule: null };
+      }
     }
     let state: RobotsState;
     try {
@@ -263,7 +278,6 @@ export class RobotsGate {
       if (status >= 200 && status < 300) {
         return { kind: 'rules', origin, fetchedAt, status, file: parseRobots(result.body), truncated: result.truncated };
       }
-      if (status === 429) return down('robots_http_429', status);
       if (status >= 400 && status < 500) return { kind: 'absent', origin, fetchedAt, status };
       if (status >= 500) return down('robots_http_5xx', status);
       return down('robots_unexpected_status', status);

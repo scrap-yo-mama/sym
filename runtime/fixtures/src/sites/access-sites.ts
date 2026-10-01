@@ -2,7 +2,7 @@
 // Accès (O8) : robots.txt (Disallow, 4xx, 5xx, redirection, gros fichier, Crawl-delay, Content-Signal) et réponse 402.
 // Chaque site sert un contenu JSON sur tout chemin hors robots.txt : le compteur de GET /__stats dit si un chemin a été visité.
 import { ControlError, type FxRequest, type FxResponse, type Site, type SiteFactory } from '../core.ts';
-import { json, redirect, text } from '../res.ts';
+import { html, json, page, redirect, text } from '../res.ts';
 
 const robotsText = (body: string, headers: Record<string, string> = {}): FxResponse => text(200, body, headers);
 
@@ -13,17 +13,42 @@ function base(id: string, description: string, smoke: Site['smoke']): Omit<Site,
   return { id, lot: 'o8', description, hosts: [`zz_test_${id}.localhost`], smoke, ownsRobots: true };
 }
 
-const robotsDisallow: SiteFactory = () => ({
-  ...base('robots', 'robots.txt : Disallow: /prive/ avec Allow: /prive/ouvert (règle la plus longue) ; tout chemin visité est compté', { path: '/robots.txt', status: 200 }),
-  handle: (req) =>
-    req.path === '/robots.txt' ? robotsText('User-agent: *\nDisallow: /prive/\nAllow: /prive/ouvert\n') : content(req),
+/**
+ * Redirections d'un chemin permis vers un chemin interdit (INV11 à chaque saut, Chromium compris) : `/depart` → 302
+ * `/prive/x` ; `/prive` → 301 `/prive/` (barre oblique finale) ; `/vers-autre` → 302 vers `/prive/x` d'un second hôte
+ * (`robots_redirect`, qui interdit /prive/) ; `/vers-injoignable` → 302 vers l'hôte `robots_5xx` (robots.txt en 503) ;
+ * `/page-ws` : page qui ouvre un WebSocket vers `/prive/ws` ; `/page-cadre` : page avec un cadre d'un autre site
+ * (`robots_redirect`) dont une image passe par `/depart` → 302 `/prive/x`.
+ */
+const robotsDisallow: SiteFactory = (env) => ({
+  ...base('robots', 'robots.txt : Disallow: /prive/ avec Allow: /prive/ouvert (règle la plus longue) ; redirections d\'un chemin permis vers /prive/ (même hôte, barre oblique finale, second hôte) ; tout chemin visité est compté', { path: '/robots.txt', status: 200 }),
+  handle(req) {
+    switch (req.path) {
+      case '/robots.txt':
+        return robotsText('User-agent: *\nDisallow: /prive/\nAllow: /prive/ouvert\n');
+      case '/depart':
+        return redirect(302, '/prive/x');
+      case '/prive':
+        return redirect(301, '/prive/');
+      case '/vers-autre':
+        return redirect(302, env.urlFor('zz_test_robots_redirect.localhost', '/prive/x'));
+      case '/vers-injoignable':
+        return redirect(302, env.urlFor('zz_test_robots_5xx.localhost', '/liste'));
+      case '/page-cadre':
+        return html(200, page('cadre', `<p id="cadre">cadre</p><iframe src="${env.urlFor('zz_test_robots_redirect.localhost', '/cadre')}"></iframe>`));
+      case '/page-ws':
+        return html(200, page('ws', '<p id="ws">ws</p>', `<script>try { new WebSocket('ws://' + location.host + '/prive/ws'); } catch (e) {}</script>`));
+      default:
+        return content(req);
+    }
+  },
 });
 
 const robots4xx: SiteFactory = () => {
   let status = 404;
-  const allowed = [400, 401, 403, 404, 410];
+  const allowed = [400, 401, 403, 404, 410, 429];
   return {
-    ...base('robots_4xx', 'robots.txt en 4xx (404 par défaut ; 400/401/403/410 sur commande) : aucune règle, tout est autorisé', { path: '/robots.txt', status: 404 }),
+    ...base('robots_4xx', 'robots.txt en 4xx (404 par défaut ; 400/401/403/410/429 sur commande) : aucune règle, tout est autorisé', { path: '/robots.txt', status: 404 }),
     handle: (req) => (req.path === '/robots.txt' ? text(status, 'no robots here') : content(req)),
     control(args) {
       if (typeof args['status'] !== 'number' || !allowed.includes(args['status'])) throw new ControlError(`status attendu parmi : ${allowed.join(', ')}`);
@@ -50,13 +75,16 @@ const robots5xx: SiteFactory = () => {
   };
 };
 
-const robotsRedirect: SiteFactory = () => {
+const robotsRedirect: SiteFactory = (env) => {
   let hops = 2;
   let loop = false;
+  /** robots.txt redirigé vers celui d'un AUTRE hôte (`robots` : Disallow /prive/) : RFC 9309 suit quel que soit l'hôte. */
+  let cross = false;
   return {
-    ...base('robots_redirect', 'robots.txt derrière une chaîne de redirections 301 (2 sauts par défaut, réglable ; boucle sur commande) menant à Disallow: /prive/', { path: '/robots.txt', status: 301 }),
+    ...base('robots_redirect', 'robots.txt derrière une chaîne de redirections 301 (2 sauts par défaut, réglable ; boucle ou renvoi vers le robots.txt de l\'hôte robots sur commande) menant à Disallow: /prive/', { path: '/robots.txt', status: 301 }),
     handle(req) {
       const hop = /^\/robots-hop-(\d+)\.txt$/.exec(req.path);
+      if (req.path === '/robots.txt' && cross) return redirect(301, env.urlFor('zz_test_robots.localhost', '/robots.txt'));
       if (req.path === '/robots.txt' || hop) {
         if (loop) return redirect(301, '/robots.txt');
         const index = hop ? Number(hop[1]) : 0;
@@ -64,6 +92,9 @@ const robotsRedirect: SiteFactory = () => {
         return redirect(301, index + 1 >= hops ? '/robots-final.txt' : `/robots-hop-${index + 1}.txt`);
       }
       if (req.path === '/robots-final.txt') return robotsText('User-agent: *\nDisallow: /prive/\n');
+      // Cadre d'un autre site (`robots` → `/page-cadre`) : image redirigée vers un chemin interdit.
+      if (req.path === '/cadre') return html(200, page('cadre', '<img src="/depart" alt="">'));
+      if (req.path === '/depart') return redirect(302, '/prive/x');
       return content(req);
     },
     control(args) {
@@ -72,7 +103,8 @@ const robotsRedirect: SiteFactory = () => {
         hops = args['hops'];
       }
       if (typeof args['loop'] === 'boolean') loop = args['loop'];
-      return { hops, loop };
+      if (typeof args['cross'] === 'boolean') cross = args['cross'];
+      return { hops, loop, cross };
     },
   };
 };

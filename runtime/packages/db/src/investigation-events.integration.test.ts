@@ -8,6 +8,7 @@ import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import { createTestDatabase, type TestDatabase } from '../../../tests/helpers/pg.js';
 import { AccessReportFirstError, appendInvestigationEvent, listInvestigationEvents, recordAccessReport } from './investigation-events.js';
 import { migrateUp } from './migrate.js';
+import { withActor } from './rls.js';
 import { applyStatusTransition } from './status.js';
 
 const clock = { now: () => new Date() };
@@ -76,6 +77,47 @@ describe('assert_access_report_first : l’événement access_report précède t
     await recordAccessReport(pool, { runId, ownerId, payload: report(true) });
     await expect(appendInvestigationEvent(pool, { runId, ownerId: otherId, kind: 'attempt.finished' })).rejects.toThrow(/introuvable/);
     expect(await listInvestigationEvents(pool, { runId, ownerId: otherId })).toEqual([]);
+  });
+});
+
+// Revue de 1.11 : la garde « jusque dans la base » ne couvrait que l'insertion. Le récit est en ajout seul : ni le kind,
+// ni le seq, ni le run d'un événement ne changent ; un rapport qui arrête l'enquête ne devient jamais favorable ; aucune
+// suppression directe (le récit part avec son run, ON DELETE CASCADE). La purge (charges vidées, 17 §6) et l'effacement
+// d'un sujet (valeurs remplacées) restent possibles.
+describe('assert_access_report_first : récit en ajout seul (UPDATE et DELETE gardés)', () => {
+  const actor = () => ({ userId: ownerId, role: 'member' as const });
+  const asApp = (sql: string, params: unknown[]) => withActor(pool, actor(), (tx) => tx.query(sql, params));
+  const APPEND_ONLY = { constraint: 'investigation_events_append_only' };
+
+  test('rapport défavorable : jamais rendu favorable, jamais supprimé ; kind et seq figés', async () => {
+    const { runId } = await newInvestigation();
+    await recordAccessReport(pool, { runId, ownerId, payload: report(false, 'robots_disallowed') });
+    await expect(asApp(`UPDATE investigation_events SET payload = jsonb_set(payload, '{verdict,proceed}', 'true') WHERE run_id = $1`, [runId])).rejects.toMatchObject(APPEND_ONLY);
+    await expect(asApp(`UPDATE investigation_events SET payload = '{"verdict":{"proceed":true}}' WHERE run_id = $1`, [runId])).rejects.toMatchObject(APPEND_ONLY);
+    await expect(asApp('DELETE FROM investigation_events WHERE run_id = $1', [runId])).rejects.toMatchObject(APPEND_ONLY);
+    await expect(asApp("UPDATE investigation_events SET kind = 'note' WHERE run_id = $1", [runId])).rejects.toMatchObject(APPEND_ONLY);
+    await expect(asApp('UPDATE investigation_events SET seq = seq + 10 WHERE run_id = $1', [runId])).rejects.toMatchObject(APPEND_ONLY);
+    // Même hors runtime_app (propriétaire du schéma) : la garde est un déclencheur.
+    await expect(pool.query('DELETE FROM investigation_events WHERE run_id = $1', [runId])).rejects.toMatchObject(APPEND_ONLY);
+    await expect(appendInvestigationEvent(pool, { runId, ownerId, kind: 'attempt.started' })).rejects.toBeInstanceOf(AccessReportFirstError);
+  });
+
+  test('un événement de cadre n’est pas renommé en essai après coup', async () => {
+    const { runId } = await newInvestigation();
+    await appendInvestigationEvent(pool, { runId, ownerId, kind: 'investigation.started' });
+    await expect(asApp("UPDATE investigation_events SET kind = 'attempt.finished' WHERE run_id = $1", [runId])).rejects.toMatchObject(APPEND_ONLY);
+  });
+
+  test('purge des charges et effacement d’un sujet possibles ; le récit part avec son run', async () => {
+    const { runId } = await newInvestigation();
+    await recordAccessReport(pool, { runId, ownerId, payload: report(true) });
+    await appendInvestigationEvent(pool, { runId, ownerId, kind: 'attempt.finished', payload: { sample: 'alice@example.test' } });
+    await asApp(`UPDATE investigation_events SET payload = jsonb_set(payload, '{sample}', '"[erased]"') WHERE run_id = $1 AND kind = 'attempt.finished'`, [runId]);
+    await pool.query("UPDATE investigation_events SET payload = '{}'::jsonb WHERE run_id = $1", [runId]);
+    // Rapport vidé par la purge : plus de verdict, donc plus aucun essai.
+    await expect(appendInvestigationEvent(pool, { runId, ownerId, kind: 'attempt.started' })).rejects.toBeInstanceOf(AccessReportFirstError);
+    await asApp('DELETE FROM runs WHERE id = $1', [runId]);
+    expect((await pool.query('SELECT count(*)::int AS n FROM investigation_events WHERE run_id = $1', [runId])).rows[0]).toEqual({ n: 0 });
   });
 });
 

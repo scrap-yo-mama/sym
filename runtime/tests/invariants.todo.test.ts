@@ -30,7 +30,10 @@ import { describe, test } from "vitest";
 // INV11 et étape 0 (1.11) : assert_robots_respected est dans packages/core/src/access/access.fixtures.unit.test.ts (fixtures O8,
 // session réseau réelle : E1, URL saisie à la main, saut de redirection, 4xx/5xx/redirections/500 Kio/Crawl-delay/Content-Signal/402),
 // packages/db/src/investigation-events.integration.test.ts (statuts, contrainte robots = respect) et
-// apps/worker/src/exec/robots.security.test.ts (worker réel, Chromium : E1, E2, E3, script : page de départ, ctx.fetch, ctx.page.goto) ;
+// apps/worker/src/exec/robots.security.test.ts (worker réel, Chromium : E1, E2, E3, script : page de départ, ctx.fetch, ctx.page.goto ;
+// chaque saut de redirection suivi par Chromium, barre oblique finale, second hôte autorisé, WebSocket, robots.txt redirigé vers un
+// autre hôte) et apps/worker/src/browser/request-guard.security.test.ts (contrôle CDP : cadre hors processus, worker dédié) ;
+// le volet tunnel et extension (17 § 1 : 0 requête aussi en mode tunnel) est repris par 2.7 (test.todo ci-dessous) ;
 // assert_access_report_first : packages/db/src/investigation-events.integration.test.ts (migration 0012 ; repris par 2.1).
 // INV9 et exploitation (4.6) : assert_diagnostics_redacted (packages/db/src/ops/ops.integration.test.ts, apps/cli/src/cli.ops.integration.test.ts),
 // assert_backup_restore_roundtrip, assert_upgrade_n_minus_1, assert_rollback_restores_state (tests/operations.integration.test.ts).
@@ -51,6 +54,10 @@ import { describe, test } from "vitest";
 describe("invariants (à implémenter)", () => {
   test.todo("assert_cheapest_first_logged"); // INV2, tâche(s) 2.1
   test.todo("assert_tunnel_single_user"); // INV5, tâche(s) 2.6, 2.7
+  // INV11 (revue de 1.11) : 17 § 1 et le contrat IA de 1.11 exigent 0 requête sur un chemin interdit AUSSI en tunnel et via
+  // l'extension ; la passerelle WSS et ses commandes naissent en 2.7, qui doit contrôler robots.txt avant chaque commande de
+  // navigation ou de requête (sauts de redirection compris) et remplacer ce test.todo par le vrai test.
+  test.todo("assert_robots_respected — volet tunnel et extension : 0 requête sur un chemin interdit en mode tunnel, à chaque saut"); // INV11, tâche(s) 2.7
   // 4.8 livrée partiellement (16 § 8, 17 § 11) : le quickstart rejoué s'arrête à la clé d'API ; D0 et la première API sont
   // décrits (mode pending) et gardés par assert_quickstart_pending_steps_declared, qui échoue à la livraison de leurs routes.
   test.todo("assert_quickstart_d0_first_api"); // 16 § 8, reprise : 3.1 (première API sur fixture), 3.2 (D0 en MCP), vérifié en 4.4

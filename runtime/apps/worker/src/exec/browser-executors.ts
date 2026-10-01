@@ -37,7 +37,7 @@ import { DomainNotAllowedError, guardedGoto, type BrowserEgress, type SsrfGuard 
 import type { Page, Request, Response } from 'playwright-core';
 import { boundedContent, boundedDocumentBody, boundedRawBody, TOO_LARGE, trackDecodedSizes, type DecodedSizes } from '../browser/bounded.js';
 import type { BrowserPool } from '../browser/pool.js';
-import { hostAllowed, isMainNavigation, openRunContext, trackStrategyRequests, type RunContext, type StrategyRequests } from '../browser/run-context.js';
+import { hostAllowed, isMainNavigation, openRunContext, trackStrategyRequests, type BrowserRequestCheck, type RunContext, type StrategyRequests } from '../browser/run-context.js';
 
 const BROWSER_NAVIGATION_TIMEOUT_MS = 30_000;
 /** Attente du rendu d'une page (sélecteur des enregistrements) avant lecture du DOM. */
@@ -158,9 +158,12 @@ function navigationGuard(): NavigationGuard & { bind(page: Page, sizes?: Decoded
 }
 
 /** Contexte de run neuf sur un Chromium du pool ; l'interruption du run (annulation, bail perdu) ferme le contexte. */
+/** Types CDP d'une requête de données lancée par la page (`fetch`, XHR). */
+const FETCH_TYPES = new Set(['Fetch', 'XHR']);
+
 async function withRunContext(
   options: BrowserExecutorOptions,
-  fn: (rc: RunContext, strategy: StrategyRequests, nav: NavigationGuard) => Promise<DeclarativeRunResult>,
+  fn: (rc: RunContext, strategy: StrategyRequests, nav: NavigationGuard, claimFetch: (url: string) => void) => Promise<DeclarativeRunResult>,
 ): Promise<DeclarativeRunResult> {
   return options.pool.run(options.signal, async (browser) => {
     const nav = navigationGuard();
@@ -170,13 +173,37 @@ async function withRunContext(
      */
     let robotsRefusal: ExecFailure | undefined;
     const access = options.access;
+    /** URL des `fetch` de la stratégie (transport d'E2) : un saut refusé de leur chaîne donne sa classe à l'essai. */
+    const strategyFetches = new Set<string>();
+    const claimFetch = (url: string) => {
+      strategyFetches.add(url);
+      try {
+        strategyFetches.add(new URL(url).href);
+      } catch {
+        // URL refusée en amont par l'interpréteur.
+      }
+    };
+    const robotsVerdict = (url: string) =>
+      (access as NonNullable<typeof access>)(url).catch((): { allowed: false; failure: ExecFailure } => ({ allowed: false, failure: { failure_class: 'robots_unreachable', retryable: true, detail: 'robots_check_failed' } }));
     const rc = await openRunContext(browser, {
       egressServer: options.egress.server,
       allowedHosts: options.spec.request.allowed_hosts,
       ...(options.userAgent === undefined ? {} : { userAgent: options.userAgent }),
+      // robots.txt à CHAQUE saut que Chromium suit (redirections que `admit` ne voit pas, cadres hors processus) : un saut
+      // refusé du cadre principal ou d'un `fetch` de la stratégie arrête l'essai ; une sous-ressource est seulement coupée.
+      ...(access === undefined
+        ? {}
+        : {
+            checkRequest: async (hop: BrowserRequestCheck) => {
+              const decision = await robotsVerdict(hop.url);
+              if (decision.allowed) return true;
+              if (hop.mainFrame || (FETCH_TYPES.has(hop.resourceType) && strategyFetches.has(hop.rootUrl))) robotsRefusal ??= decision.failure;
+              return false;
+            },
+          }),
       admit: async (request) => {
         if (access !== undefined) {
-          const decision = await access(request.url()).catch((): { allowed: false; failure: ExecFailure } => ({ allowed: false, failure: { failure_class: 'robots_unreachable', retryable: true, detail: 'robots_check_failed' } }));
+          const decision = await robotsVerdict(request.url());
           if (!decision.allowed) {
             let main = false;
             try {
@@ -204,7 +231,7 @@ async function withRunContext(
     try {
       rc.page.setDefaultNavigationTimeout(options.navigationTimeoutMs ?? BROWSER_NAVIGATION_TIMEOUT_MS);
       rc.page.setDefaultTimeout(options.navigationTimeoutMs ?? BROWSER_NAVIGATION_TIMEOUT_MS);
-      const result = await fn(rc, strategy, nav);
+      const result = await fn(rc, strategy, nav, claimFetch);
       options.signal.throwIfAborted();
       if (!result.ok && robotsRefusal !== undefined) return { ok: false, failure: robotsRefusal, pages: result.pages, requests: result.requests };
       return refine(result, options.egress, strategy);
@@ -270,7 +297,7 @@ export function runFetchInPageExecutor(options: BrowserExecutorOptions): Promise
   const classify = options.classify ?? classifyExchange;
   const maxBytes = maxBytesOf(options);
   const pageUrl = `${new URL(options.spec.request.url).origin}/`;
-  return withRunContext(options, async ({ page }, strategy, nav) => {
+  return withRunContext(options, async ({ page }, strategy, nav, claimFetch) => {
     // Ouverture du site : réservée à la cadence, classée avant toute requête de données (un refus arrête l'essai).
     if (options.pacer !== undefined) {
       const slot = await options.pacer.acquire(pageUrl);
@@ -314,6 +341,7 @@ export function runFetchInPageExecutor(options: BrowserExecutorOptions): Promise
       // Lecture bornée dans la page (flux coupé au-delà du plafond) ; seules des valeurs primitives bornées sont rendues :
       // une page qui surcharge `ArrayBuffer`, `TextDecoder` ou `JSON` fausse ses données, jamais la borne du transfert.
       const target = sameUrl(request.url);
+      claimFetch(request.url);
       const evaluation = nav.during(() => strategy.during((r) => r.resourceType() === 'fetch' && target(r.url()), () => page.evaluate(
         async (a: { url: string; method: string; headers: Record<string, string>; body: string | null; maxBytes: number; maxMeta: number }) => {
           try {

@@ -199,6 +199,40 @@ describe('module d’accès : statuts de robots.txt (RFC 9309) sur les fixtures 
     }
   });
 
+  // Revue de 1.11 : 17 §2 dit « 4xx = aucune règle », 429 compris (RFC 9309 §2.3.1.3). Un 429 n'est pas mis en cache :
+  // l'essai suivant relit robots.txt (le site a pu publier ses règles entre-temps).
+  it('robots.txt en 429 : aucune règle (4xx), chemin autorisé ; jamais mis en cache', async () => {
+    const host = 'zz_test_robots_4xx.localhost';
+    expect((await client.control({ op: 'site', site: 'robots_4xx', status: 429 })).status).toBe(200);
+    const cache = new RobotsCache();
+    for (let i = 0; i < 2; i++) {
+      const { gate, session } = trial({ cache });
+      try {
+        expect(await gate.check(`${base(host)}/liste`)).toMatchObject({ allowed: true, state: { kind: 'absent', status: 429 } });
+      } finally {
+        await session.close();
+      }
+    }
+    expect((await paths(host))['/robots.txt']).toBe(2);
+  });
+
+  it('origine hors des domaines de l’API : refusée sans lire son robots.txt (aucune requête)', async () => {
+    const gate = new RobotsGate({ fetch: sessionRobotsFetcher(robotsSession), allowedHosts: ['zz_test_robots.localhost'] });
+    expect(await gate.check(`${base('zz_test_robots_4xx.localhost')}/liste`)).toMatchObject({ allowed: false, failure: { failure_class: 'code_error', detail: 'domain_not_allowed' } });
+    expect(await paths('zz_test_robots_4xx.localhost')).toEqual({});
+  });
+
+  it('robots.txt redirigé vers un autre hôte (CDN, apex → www) : suivi (RFC 9309), ses règles s’appliquent', async () => {
+    const host = 'zz_test_robots_redirect.localhost';
+    await client.control({ op: 'site', site: 'robots_redirect', cross: true });
+    // Session de lecture SANS verrou de domaines (seule la garde SSRF s'applique), comme celle du worker.
+    const gate = new RobotsGate({ fetch: sessionRobotsFetcher(robotsSession), allowedHosts: [host] });
+    expect(await gate.check(`${base(host)}/prive/x`)).toMatchObject({ allowed: false, failure: { failure_class: 'robots_disallowed' } });
+    expect(await gate.check(`${base(host)}/liste`)).toMatchObject({ allowed: true });
+    expect((await paths('zz_test_robots.localhost'))['/robots.txt']).toBe(1);
+    expect(await contentRequests(host)).toBe(0);
+  });
+
   it('robots.txt en 5xx persistant ou connexion coupée : robots_unreachable, erreur, 0 collecte', async () => {
     const host = 'zz_test_robots_5xx.localhost';
     for (const mode of [503, 500, 502, 'drop'] as const) {

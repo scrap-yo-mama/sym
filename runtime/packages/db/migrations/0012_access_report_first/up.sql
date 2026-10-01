@@ -40,3 +40,36 @@ $$;
 CREATE TRIGGER investigation_events_access_report_first
   BEFORE INSERT ON investigation_events
   FOR EACH ROW EXECUTE FUNCTION investigation_events_access_report_first();
+
+-- Récit en ajout seul (revue de 1.11) : runtime_app garde UPDATE et DELETE sur `investigation_events` (0003), utiles à la
+-- purge des charges (17 § 6) et à l'effacement d'un sujet (valeurs remplacées). Un REVOKE les casserait ; un déclencheur
+-- borne donc ces droits : `run_id`, `seq`, `owner_id`, `kind` et `at` sont figés (aucun événement renommé en essai après
+-- coup), un `access_report` qui arrête l'enquête ne devient jamais favorable, et aucune ligne n'est supprimée directement :
+-- le récit part avec son run (ON DELETE CASCADE, exécuté par le déclencheur de contrainte, donc à une profondeur > 1).
+CREATE FUNCTION investigation_events_append_only() RETURNS trigger
+  LANGUAGE plpgsql AS $$
+BEGIN
+  IF TG_OP = 'DELETE' THEN
+    IF pg_trigger_depth() > 1 THEN
+      RETURN OLD;
+    END IF;
+    RAISE EXCEPTION 'récit d''enquête en ajout seul : suppression refusée (le récit part avec son run)'
+      USING ERRCODE = 'check_violation', CONSTRAINT = 'investigation_events_append_only';
+  END IF;
+  IF NEW.run_id IS DISTINCT FROM OLD.run_id OR NEW.seq IS DISTINCT FROM OLD.seq OR NEW.owner_id IS DISTINCT FROM OLD.owner_id
+     OR NEW.kind IS DISTINCT FROM OLD.kind OR NEW.at IS DISTINCT FROM OLD.at THEN
+    RAISE EXCEPTION 'récit d''enquête en ajout seul : run, seq, propriétaire, kind et date figés'
+      USING ERRCODE = 'check_violation', CONSTRAINT = 'investigation_events_append_only';
+  END IF;
+  IF OLD.kind = 'access_report' AND (NEW.payload -> 'verdict' ->> 'proceed') IS NOT DISTINCT FROM 'true'
+     AND (OLD.payload -> 'verdict' ->> 'proceed') IS DISTINCT FROM 'true' THEN
+    RAISE EXCEPTION 'un rapport d''accès qui arrête l''enquête ne devient pas favorable'
+      USING ERRCODE = 'check_violation', CONSTRAINT = 'investigation_events_append_only';
+  END IF;
+  RETURN NEW;
+END
+$$;
+
+CREATE TRIGGER investigation_events_append_only
+  BEFORE UPDATE OR DELETE ON investigation_events
+  FOR EACH ROW EXECUTE FUNCTION investigation_events_append_only();

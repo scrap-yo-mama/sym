@@ -52,7 +52,7 @@ import type { Logger } from 'pino';
 import type { CDPSession, Request, Response } from 'playwright-core';
 import { boundedContent, boundedDocumentBody, TOO_LARGE, trackDecodedSizes, type DecodedSizes } from '../browser/bounded.js';
 import type { BrowserPool } from '../browser/pool.js';
-import { chainRoot, hostAllowed, isMainNavigation, openRunContext, trackStrategyRequests } from '../browser/run-context.js';
+import { chainRoot, hostAllowed, isMainNavigation, openRunContext, trackStrategyRequests, type BrowserRequestCheck } from '../browser/run-context.js';
 import { DEFAULT_SANDBOX_LIMITS } from '../sandbox/engine.js';
 import { createSandboxBridges, SandboxBridgeError, type BridgeResponse } from '../sandbox/bridges.js';
 import { ACCESS_REFUSED, createPageBridge, hostViolationWatch, issuedForWatch } from './script.js';
@@ -267,6 +267,11 @@ export function runScriptExecutor(options: ScriptExecutorOptions): Promise<Scrip
     /** Requêtes initiales qui sont une navigation du cadre principal (relevé à l'émission). */
     const mainNavigations = new WeakSet<Request>();
     /**
+     * État du guet à l'émission, par URL de requête initiale (borné) : imputation d'un saut de redirection refusé par
+     * robots.txt, que le contrôle CDP voit sans objet `Request` de Playwright.
+     */
+    const issuedByUrl = new Map<string, boolean>();
+    /**
      * État d'émission transmis au guet : jamais appris d'un saut de redirection, d'une requête de la stratégie
      * (`ctx.page.goto`, clic du script) ni d'une navigation du cadre principal (`issuedForWatch`, D-29).
      */
@@ -350,6 +355,20 @@ export function runScriptExecutor(options: ScriptExecutorOptions): Promise<Scrip
         if (request !== undefined && refusal === undefined) selfNavigation(request);
         host.report(h, 'domain_not_allowed', state);
       },
+      // robots.txt à CHAQUE saut que Chromium suit (`ctx.page.goto`, `fetch` lancé dans `evaluate`, sous-ressources,
+      // cadres hors processus) : un saut refusé du cadre principal ou d'une chaîne lancée par le code du script arrête
+      // l'essai ; une sous-ressource du site est seulement coupée.
+      ...(options.robots === undefined
+        ? {}
+        : {
+            checkRequest: async (hop: BrowserRequestCheck) => {
+              const decision = await robotsDecision(hop.url);
+              if (decision.allowed) return true;
+              const issuedState = hop.redirect ? issuedByUrl.get(hop.rootUrl) : host.armed();
+              if (hop.mainFrame || issuedState === true) retain(decision.failure);
+              return false;
+            },
+          }),
       admit: async (request) => {
         if (refusal !== undefined) return false;
         // robots.txt (1.11) : chemin interdit ou robots.txt injoignable → coupée sans connexion ; l'essai s'arrête si la
@@ -403,6 +422,8 @@ export function runScriptExecutor(options: ScriptExecutorOptions): Promise<Scrip
       const root = chainRoot(request);
       if (root === request) {
         issued.set(request, host.armed());
+        if (issuedByUrl.size >= 2000) issuedByUrl.delete(issuedByUrl.keys().next().value as string);
+        issuedByUrl.set(request.url(), host.armed());
         try {
           if (isMainNavigation(rc.page)(request)) {
             mainNavigations.add(request);
