@@ -49,7 +49,8 @@ export function chromiumEgressLaunchOptions(
     proxy: Object.freeze({ server: `http://127.0.0.1:${url.port}` }),
     args: Object.freeze([
       '--host-resolver-rules=MAP * ~NOTFOUND , EXCLUDE 127.0.0.1',
-      // WebRTC : pas d'UDP hors proxy (drapeau à valider au spike 1.6).
+      // WebRTC : pas d'UDP hors proxy ; TURN/TCP passe en CONNECT par le proxy d'egress (verrou de domaines). Validé en 1.6
+      // (tests/browser/executors.security.test.ts, assert_sandbox WebRTC et WebTransport : 0 paquet ni connexion reçus).
       '--force-webrtc-ip-handling-policy=disable_non_proxied_udp',
     ]),
   });

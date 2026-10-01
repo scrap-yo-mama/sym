@@ -10,6 +10,7 @@ import {
 } from '@runtime/core';
 import { ssrfPolicyFromEnv, type SsrfPolicy } from '@runtime/core/net';
 import { RUN_DEFAULTS, retentionPolicyFromEnv, type RetentionPolicy } from '@runtime/db';
+import { resolveBrowserConcurrency } from './browser/cgroup.js';
 
 export class WorkerConfigError extends Error {
   override name = 'WorkerConfigError';
@@ -37,6 +38,11 @@ export type WorkerConfig = {
   warningCheckSeconds: number;
   /** Journal, OTel (coupé par défaut) : 14 § 2. */
   observability: ObservabilityConfig;
+  /** Runs navigateur simultanés (`BROWSER_CONCURRENCY`, sinon déduit du cgroup, 14 §11). */
+  browserConcurrency: number;
+  browserConcurrencySource: 'env' | 'cgroup' | 'host';
+  /** `DISABLE_BROWSER` : aucun Chromium, E2 et E3 refusés (14 §2). */
+  disableBrowser: boolean;
   /** Rétention (14 § 9) : durées lues une fois au démarrage (`RETENTION_*`, `RUN_LOG_RETENTION_DAYS`…). */
   retention: RetentionPolicy;
   /** Période de la passe de rétention planifiée (marquage horaire, purge quotidienne ; défaut 300 s). */
@@ -64,6 +70,9 @@ export function loadWorkerConfig(env: NodeJS.ProcessEnv = process.env): WorkerCo
   }
   const observability = loadObservabilityConfig(env);
   scrubOtelEnvironment(env);
+  const browser = resolveBrowserConcurrency(env);
+  const disable = env['DISABLE_BROWSER'] ?? 'false';
+  if (!['true', 'false', '1', '0', ''].includes(disable)) throw new WorkerConfigError('DISABLE_BROWSER invalide : true ou false attendu.');
   let retention: RetentionPolicy;
   try {
     retention = retentionPolicyFromEnv(env);
@@ -89,6 +98,9 @@ export function loadWorkerConfig(env: NodeJS.ProcessEnv = process.env): WorkerCo
     ssrfPolicy: ssrfPolicyFromEnv(env),
     warningCheckSeconds: positive(env, 'WARNING_CHECK_SECONDS', 900, 1),
     observability,
+    browserConcurrency: browser.value,
+    browserConcurrencySource: browser.source,
+    disableBrowser: disable === 'true' || disable === '1',
     retention,
     retentionTickSeconds: positive(env, 'RETENTION_TICK_SECONDS', 300),
   };

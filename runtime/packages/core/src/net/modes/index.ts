@@ -3,3 +3,6 @@
 export * from './definitions.js';
 export * from './ladder.js';
 export * from './session.js';
+// Tâche 1.6 : egress du contexte Chromium d'un run, chaîné au proxy BYO du barreau.
+export * from './upstream.js';
+export * from './browser-egress.js';

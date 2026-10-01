@@ -76,6 +76,8 @@ catalog:
   '@opentelemetry/exporter-trace-otlp-proto': 0.222.0
   # Extension (tâche 2.6, 07 § 7) : WXT 0.21.4 épinglé, popup en Vue 3.5 (fonctions de rendu, sans SFC ni compilateur de gabarits : CSP MV3) ; vite 8.3.0 (8.3.1 < 7 jours au 2026-10-01).
   wxt: 0.21.4
+  # Exécuteurs E2-E3 (tâche 1.6) : Playwright 1.63 (Chromium 153), noyau sans navigateurs embarqués (image Playwright).
+  playwright-core: 1.63.0
   # Téléphones des sujets en E.164 (tâche 1.8, D-25) : MIT, sans dépendance ; 1.13.14 < 7 jours au 2026-10-01 (minimumReleaseAge).
   libphonenumber-js: 1.13.13
   # Accessibilité (tâche 3.9, 06 § 1) : adaptateur Playwright d'axe-core (MPL-2.0, compatible AGPL), 4.13.0 publiée le 2026-08-11 ; il tire axe-core ~4.13.0 (4.13.0, 2026-08-05), figé par le lockfile. Plus de 7 jours.

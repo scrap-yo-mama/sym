@@ -4,12 +4,32 @@
 // wss : Chromium tunnelle tous les WebSocket par CONNECT derrière un proxy HTTP, vérifié par le test ws://).
 // Aucun gestionnaire `upgrade` : une requête Upgrade en forme absolue est relayée sans ses en-têtes hop-by-hop, donc
 // jamais surclassée. Écoute sur 127.0.0.1 seulement ; délai d'inactivité et plafond de connexions.
+// Tâche 1.6 : chaînage vers le proxy BYO du run (`upstream`, la cible reste contrôlée ici avant le tunnel) et mode
+// fermé (`refuseAll`) pour le proxy de lancement de Chromium : tout trafic hors contexte de run est refusé et compté.
+// Verrou de domaines (`allowHosts`) : Playwright n'appelle pas `context.route` sur les sauts de redirection ; seul le
+// proxy voit chaque saut, chaque sous-ressource, chaque WebSocket et chaque `APIRequestContext`. Tout hôte hors API
+// reçoit 403 `domain_not_allowed`, sans connexion sortante. Plafond de coût (`admit`) : nouveau tunnel refusé (403
+// `run_budget_exceeded`) quand le plafond du run serait dépassé.
 import { createServer, request as httpRequest, type IncomingMessage, type OutgoingHttpHeaders } from 'node:http';
 import { connect as netConnect, Socket, type AddressInfo } from 'node:net';
 import type { Duplex } from 'node:stream';
+import { domainLock, normalizeHost } from './domain-lock.js';
 import { findSsrfBlocked, type SsrfDenyDetail, type SsrfGuard } from './guard.js';
 
-export type EgressProxy = { readonly url: string; readonly port: number; close(): Promise<void> };
+export type EgressProxy = {
+  readonly url: string;
+  readonly port: number;
+  /** Demandes reçues (requêtes en forme absolue et CONNECT), refusées comprises. */
+  requests(): number;
+  /** Coupe toutes les connexions et tous les tunnels en cours (plafond de coût atteint). */
+  abortAll(): void;
+  close(): Promise<void>;
+};
+
+export type EgressTarget = { host: string; port: number; via: 'http' | 'connect' };
+
+/** Ouvre le tunnel vers une cible déjà contrôlée par la garde (proxy BYO amont, `createUpstreamDialer`). */
+export type EgressUpstream = (host: string, port: number) => Promise<Socket>;
 
 export type EgressProxyOptions = {
   guard: SsrfGuard;
@@ -20,6 +40,18 @@ export type EgressProxyOptions = {
   idleTimeoutMs?: number;
   /** Connexions clientes simultanées au plus ; au-delà, 503 et fermeture. Défaut : 256. */
   maxConnections?: number;
+  /** Chaînage vers un proxy amont : la garde contrôle la cible (résolution unique), puis `upstream` ouvre le tunnel. */
+  upstream?: EgressUpstream;
+  /** Proxy fermé : toute demande est refusée (403 `egress_closed`) et comptée. */
+  refuseAll?: boolean;
+  /** Toute demande reçue, avant décision (observation, tests « 0 requête »). */
+  onRequest?: (target: EgressTarget) => void;
+  /** Verrou de domaines de l'essai : seuls ces hôtes (comparaison exacte) sont joignables ; les autres → 403. */
+  allowHosts?: readonly string[];
+  /** Journal : demande refusée par le verrou de domaines (hôte normalisé). */
+  onDomainBlocked?: (target: EgressTarget) => void;
+  /** Admission d'une nouvelle connexion sortante (plafond de coût) : `false` → 403 `run_budget_exceeded`. */
+  admit?: () => boolean;
 };
 
 const HOP_BY_HOP = new Set([
@@ -35,6 +67,16 @@ const HOP_BY_HOP = new Set([
 ]);
 
 const BLOCKED_BODY = 'ssrf_blocked';
+
+/** Refus décidé par le proxy lui-même (fermé, hors domaines, plafond) : 403 et un corps stable. */
+class EgressRefusedError extends Error {
+  override name = 'EgressRefusedError';
+  readonly body: 'egress_closed' | 'domain_not_allowed' | 'run_budget_exceeded';
+  constructor(body: EgressRefusedError['body']) {
+    super(body);
+    this.body = body;
+  }
+}
 
 function forwardHeaders(req: IncomingMessage): OutgoingHttpHeaders {
   const headers: OutgoingHttpHeaders = {};
@@ -102,7 +144,10 @@ function rawResponse(socket: Duplex, status: string, body: string): void {
 }
 
 export async function startEgressProxy(options: EgressProxyOptions): Promise<EgressProxy> {
-  const { guard, onBlocked } = options;
+  const { guard, onBlocked, refuseAll, onRequest, onDomainBlocked, admit } = options;
+  const allowHost = options.allowHosts === undefined ? undefined : domainLock(options.allowHosts);
+  const chain = options.upstream;
+  let requests = 0;
   const timeoutMs = options.connectTimeoutMs ?? 10_000;
   const idleTimeoutMs = options.idleTimeoutMs ?? 120_000;
   const maxConnections = options.maxConnections ?? 256;
@@ -117,8 +162,25 @@ export async function startEgressProxy(options: EgressProxyOptions): Promise<Egr
   };
 
   /** Résolution unique, contrôle, connexion sur l'adresse validée, contrôle de l'adresse distante effective. */
-  const dial = async (host: string, port: number): Promise<Socket> => {
+  const dial = async (host: string, port: number, via: 'http' | 'connect'): Promise<Socket> => {
+    requests += 1;
+    onRequest?.({ host, port, via });
+    if (refuseAll === true) throw new EgressRefusedError('egress_closed');
+    if (allowHost !== undefined && !allowHost(host)) {
+      onDomainBlocked?.({ host: normalizeHost(host), port, via });
+      throw new EgressRefusedError('domain_not_allowed');
+    }
+    if (admit !== undefined && !admit()) throw new EgressRefusedError('run_budget_exceeded');
     const pinned = await guard.resolve(host, port);
+    if (chain !== undefined) {
+      // Proxy amont : la cible vient d'être contrôlée (refus précoce) ; l'adresse distante est celle du proxy,
+      // contrôlée par sa propre garde dans `upstream`.
+      const tunnel = await chain(host, port);
+      sockets.add(tunnel);
+      tunnel.once('close', () => sockets.delete(tunnel));
+      tunnel.setTimeout(idleTimeoutMs, () => tunnel.destroy());
+      return tunnel;
+    }
     const upstream = await openPinned(pinned.address, port, timeoutMs);
     try {
       guard.checkAddress(host, upstream.remoteAddress ?? '', port);
@@ -139,14 +201,14 @@ export async function startEgressProxy(options: EgressProxyOptions): Promise<Egr
       return;
     }
     const port = url.port === '' ? 80 : Number(url.port);
-    dial(url.hostname, port).then(
+    dial(url.hostname, port, 'http').then(
       (upstream) => {
         const outgoing = httpRequest(
           {
             // Pas d'option `agent` : avec `agent: false`, Node ignorerait createConnection et ouvrirait son propre
             // socket (vers localhost:80 par défaut). host et port pointent de toute façon sur l'adresse validée.
             createConnection: () => upstream,
-            host: upstream.remoteAddress,
+            host: upstream.remoteAddress ?? url.hostname,
             port,
             method: req.method,
             path: `${url.pathname}${url.search}`,
@@ -170,10 +232,11 @@ export async function startEgressProxy(options: EgressProxyOptions): Promise<Egr
         req.pipe(outgoing);
       },
       (error: unknown) => {
-        const blocked = report(error, 'http');
+        const refused = error instanceof EgressRefusedError ? error.body : undefined;
+        const blocked = refused === undefined && report(error, 'http');
         res
-          .writeHead(blocked ? 403 : 502, { 'content-type': 'text/plain', connection: 'close' })
-          .end(blocked ? BLOCKED_BODY : 'bad_gateway');
+          .writeHead(blocked || refused !== undefined ? 403 : 502, { 'content-type': 'text/plain', connection: 'close' })
+          .end(refused ?? (blocked ? BLOCKED_BODY : 'bad_gateway'));
       },
     );
   });
@@ -187,7 +250,7 @@ export async function startEgressProxy(options: EgressProxyOptions): Promise<Egr
       rawResponse(client, '400 Bad Request', 'bad_proxy_request');
       return;
     }
-    dial(target.host, target.port).then(
+    dial(target.host, target.port, 'connect').then(
       (upstream) => {
         client.write('HTTP/1.1 200 Connection Established\r\n\r\n');
         if (head.length > 0) upstream.write(head);
@@ -199,8 +262,9 @@ export async function startEgressProxy(options: EgressProxyOptions): Promise<Egr
         client.once('close', () => upstream.destroy());
       },
       (error: unknown) => {
-        const blocked = report(error, 'connect');
-        rawResponse(client, blocked ? '403 Forbidden' : '502 Bad Gateway', blocked ? BLOCKED_BODY : 'bad_gateway');
+        const refused = error instanceof EgressRefusedError ? error.body : undefined;
+        const blocked = refused === undefined && report(error, 'connect');
+        rawResponse(client, blocked || refused !== undefined ? '403 Forbidden' : '502 Bad Gateway', refused ?? (blocked ? BLOCKED_BODY : 'bad_gateway'));
       },
     );
   });
@@ -228,6 +292,11 @@ export async function startEgressProxy(options: EgressProxyOptions): Promise<Egr
   return {
     url: `http://127.0.0.1:${port}`,
     port,
+    requests: () => requests,
+    abortAll: () => {
+      for (const socket of sockets) socket.destroy();
+      server.closeAllConnections();
+    },
     close: () =>
       new Promise<void>((resolve) => {
         for (const socket of sockets) socket.destroy();

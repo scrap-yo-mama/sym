@@ -56,6 +56,7 @@ import {
   schemaVersionRefusal,
   sweepOrphans,
   withActor,
+  type KeyCheckResult,
   type SweepResult,
 } from '@runtime/db';
 import { SsrfGuard } from '@runtime/core/net';
@@ -69,8 +70,8 @@ class WorkerStartupError extends Error {
 }
 
 /**
- * Exécuteur par défaut tant que les exécuteurs E1-E3 (tâche 1.6) ne sont pas branchés : le run est clos `failed`
- * (`code_error`, `executor_unavailable`), jamais laissé `running`.
+ * Exécuteur de repli quand aucun exécuteur n'est fourni (tests du cycle de vie) : le run est clos `failed`
+ * (`code_error`, `executor_unavailable`), jamais laissé `running`. Le main de production branche E1-E3 (tâche 1.6).
  */
 export const unavailableExecutor: RunExecutor = async () => ({
   state: 'failed',
@@ -89,9 +90,22 @@ export interface Worker {
   stop(): Promise<void>;
 }
 
+/** Exécuteur construit après le `keyCheck` (dépôt de secrets lisible), avec ses ressources (Chromium). */
+type ExecutorHandle = {
+  executor: RunExecutor;
+  /** Contextes Chromium ouverts (`worker_heartbeats.browser_contexts`). */
+  browserContexts?: () => number;
+  /** Libère les ressources (pool Chromium, proxy de lancement) à l'arrêt, après les runs. */
+  close?: () => Promise<void>;
+};
+
+export type ExecutorFactory = (deps: { pool: pg.Pool; config: WorkerConfig; checked: KeyCheckResult; logger: Logger }) => Promise<ExecutorHandle>;
+
 export type StartWorkerOptions = {
   config: WorkerConfig;
   executor?: RunExecutor;
+  /** Prioritaire sur `executor` : appelé après le contrôle de clé, avant la prise du premier job. */
+  executorFactory?: ExecutorFactory;
   logger?: Logger;
   workerId?: string;
   /** Réglages de la planification (tests : horloge simulée, passages du cron rapprochés). */
@@ -116,7 +130,6 @@ export async function startWorker(options: StartWorkerOptions): Promise<Worker> 
   const log = options.logger ?? createLogger({ name: 'worker', level: config.observability.logLevel }); // masquage INV8, run_id par AsyncLocalStorage
   // OTel : coupé par défaut (aucun module chargé) ; actif seulement si `OTEL_ENABLED=true` avec un endpoint explicite.
   const telemetry = await initTelemetry(config.observability.otel);
-  const executor = options.executor ?? unavailableExecutor;
   const workerId = options.workerId ?? `${hostname()}-${process.pid}-${randomBytes(3).toString('hex')}`;
 
   const { sessionUrl } = await resolveConnections({
@@ -130,6 +143,7 @@ export async function startWorker(options: StartWorkerOptions): Promise<Worker> 
   let releaseLock: (() => Promise<void>) | undefined;
   let queue: PgBossJobQueue | undefined;
   let scheduling: Scheduling | undefined;
+  let handle: ExecutorHandle = { executor: options.executor ?? unavailableExecutor };
   let subjectKey: Buffer | undefined;
   // Passes de rétention : verrou consultatif de session et DETACH CONCURRENTLY exigent une connexion de session.
   const maintenancePool = new pg.Pool({ connectionString: sessionUrl, max: 1, application_name: 'runtime-worker-retention' });
@@ -138,6 +152,7 @@ export async function startWorker(options: StartWorkerOptions): Promise<Worker> 
   const cleanup = async () => {
     await scheduling?.stop().catch(() => undefined);
     await queue?.stop({ timeoutMs: 1000 }).catch(() => undefined);
+    await handle.close?.().catch(() => undefined);
     await releaseLock?.().catch(() => undefined);
     await lockClient.end().catch(() => undefined);
     await maintenancePool.end().catch(() => undefined);
@@ -154,6 +169,7 @@ export async function startWorker(options: StartWorkerOptions): Promise<Worker> 
     releaseLock = await holdSecretsLock(lockClient);
     // D-12 : clé différente → KeyCheckError ici, avant pg-boss, avant toute prise de job.
     const checked = await keyCheck(pool, config.keyring);
+    if (options.executorFactory !== undefined) handle = await options.executorFactory({ pool, config, checked, logger: log });
     subjectKey = await loadSubjectKey(pool, config.keyring, checked);
     queue = new PgBossJobQueue({
       connectionString: sessionUrl,
@@ -185,6 +201,7 @@ export async function startWorker(options: StartWorkerOptions): Promise<Worker> 
     throw error;
   }
   const q = queue;
+  const executor = handle.executor;
   const subjects = subjectKey!;
 
   let draining = false;
@@ -195,6 +212,7 @@ export async function startWorker(options: StartWorkerOptions): Promise<Worker> 
       workerId,
       version: config.version,
       draining,
+      browserContexts: handle.browserContexts?.() ?? 0,
       rssMb: Math.round(process.memoryUsage().rss / 1048576),
     }).catch((error: unknown) => log.warn({ err: errorDetail(error) }, 'worker_heartbeats : écriture impossible'));
   const beatTimer = setInterval(() => void beat(), config.workerHeartbeatSeconds * 1000);
@@ -367,6 +385,7 @@ export async function startWorker(options: StartWorkerOptions): Promise<Worker> 
       clearTimeout(timer);
       clearInterval(beatTimer);
       await q.stop({ timeoutMs: 2000 }).catch((error: unknown) => log.warn({ err: errorDetail(error) }, 'arrêt : pg-boss'));
+      await handle.close?.().catch((error: unknown) => log.warn({ err: errorDetail(error) }, 'arrêt : ressources de l’exécuteur'));
       await retentionRunning;
       await maintenancePool.end().catch(() => undefined);
       await removeWorkerBeat(pool, workerId).catch(() => undefined);

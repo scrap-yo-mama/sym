@@ -18,7 +18,7 @@ Comme `*.localhost` peut ne pas se résoudre selon le poste, un client se connec
 
 ## Les 32 sites
 
-**Existantes (13)** : `api_json` (500 contacts, 6 mutations du banc : `rename_field`, `move_endpoint`, `wrap_in_envelope`, `change_pagination`, `type_change`, `out_of_schema`, `empty`), `ssr`, `spa`, `login` (`zz_test_user` / `zz_test_pass`, 401 JSON, expiration), `challenge` (403), `429`, `geo`, `injection` (+ domaine piège `zz_test_evil`), `dom` (`version` 1 ou 2), `signed403` (signature FICTIVE, `/plain-forbidden` sans signature), `irregular`, `503`, `challenge_200` (défi servi en HTTP 200).
+**Existantes (13)** : `api_json` (500 contacts, 6 mutations du banc : `rename_field`, `move_endpoint`, `wrap_in_envelope`, `change_pagination`, `type_change`, `out_of_schema`, `empty`), `ssr`, `spa` (`/tiers` : ressources tierces vers `zz_test_evil` ; `mode` `hostile` : coquille qui gonfle les lectures dans la page), `login` (`zz_test_user` / `zz_test_pass`, 401 JSON, expiration), `challenge` (403), `429`, `geo`, `injection` (+ domaine piège `zz_test_evil`), `dom` (`version` 1 ou 2), `signed403` (signature FICTIVE, `/plain-forbidden` sans signature), `irregular`, `503`, `challenge_200` (défi servi en HTTP 200).
 
 **Ajouts Q1 (5)** : `ssrf` (hôtes `zz_test_internal`, `zz_test_metadata`, redirections vers `169.254.169.254`, RFC 1918, encodages d'IP), `slow` (`?wait_seconds=`), `volume` (`mode` : `normal`, `anomaly`, `empty`, `short`), `personal` (noms `Zztest`, e-mails `.invalid`, téléphones de fiction), `scroll`.
 
