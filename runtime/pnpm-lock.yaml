@@ -66,6 +66,9 @@ catalogs:
     clsx:
       specifier: 2.1.1
       version: 2.1.1
+    cronstrue:
+      specifier: 3.27.0
+      version: 3.27.0
     css-select:
       specifier: 7.0.0
       version: 7.0.0
@@ -358,6 +361,9 @@ importers:
       clsx:
         specifier: 'catalog:'
         version: 2.1.1
+      cronstrue:
+        specifier: 'catalog:'
+        version: 3.27.0
       reka-ui:
         specifier: 'catalog:'
         version: 2.10.5(vue@3.5.43(typescript@5.9.3))
@@ -2152,6 +2158,10 @@ packages:
   cron-parser@5.10.1:
     resolution: {integrity: sha512-pKRrRagItwk9rGIStcUyMxFX34x56zoX3KDf9HJ4ttwkXIK1qxK63EvXvEDmlxI9AdPJ+Y7TEKRftRlW5eSS7A==}
     engines: {node: '>=18'}
+
+  cronstrue@3.27.0:
+    resolution: {integrity: sha512-AKhV4ilvx73NmicrZCGASdszUIf2ew0A/6jQQTh4pu3lIUzgWOGjT3Gv3CGIcTQ/p8Qy/tZuCmlaOftj8PXaNg==}
+    hasBin: true
 
   cross-spawn@7.0.6:
     resolution: {integrity: sha512-uV2QOWP2nWzsy2aMp8aRibhi9dlzF5Hgh5SHaB9OiTGEyDTiJJyx0uy51QXdyWbtAHNua4XJzUKca3OzKUd3vA==}
@@ -5385,6 +5395,8 @@ snapshots:
   cron-parser@5.10.1:
     dependencies:
       luxon: 3.7.2
+
+  cronstrue@3.27.0: {}
 
   cross-spawn@7.0.6:
     dependencies:

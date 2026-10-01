@@ -17,9 +17,10 @@ const router = useRouter();
 const { isAuthenticated, me } = useSession();
 const { streamStatus } = useEventStream();
 
-/** Entrées de la navigation principale (06 § 1). Le catalogue et les comptes s'y ajoutent avec 3.4 et 3.8. */
+/** Entrées de la navigation principale (06 § 1). Les comptes s'y ajoutent avec 3.8. */
 const NAV = [
   { to: '/', label: 'nav.home' },
+  { to: '/apis', label: 'nav.catalog' },
   { to: '/apis/new', label: 'nav.newApi' },
   { to: '/runs', label: 'nav.runs' },
   { to: '/settings', label: 'nav.settings' },

@@ -18,7 +18,8 @@
     "home": "Home",
     "newApi": "New API",
     "runs": "All runs",
-    "settings": "Settings"
+    "settings": "Settings",
+    "catalog": "Catalog"
   },
   "auth": {
     "login": {
@@ -578,6 +579,564 @@
       "includes": "The file holds: instance version, schema version, minimum extension version, MCP specification version, readiness, console language. It never holds a key, a cookie or a run content.",
       "export": "Export the diagnostic (JSON)",
       "exported": "Diagnostic exported to your computer."
+    }
+  },
+  "status": {
+    "enquete": "Investigating",
+    "sain": "Healthy",
+    "warning": "To watch",
+    "reparation": "Repairing",
+    "erreur": "Error",
+    "action_requise": "Action required",
+    "bloquee": "Blocked",
+    "staleFlag": "Old data"
+  },
+  "statusDefault": {
+    "enquete": "Investigation in progress.",
+    "sain": "Recent runs are clean.",
+    "warning": "Output conforms, with a point to watch.",
+    "reparation": "Repair in progress.",
+    "erreur": "The API is in error.",
+    "action_requise": "An action from you is needed.",
+    "bloquee": "The site refuses automated access; Scrapyomama stops."
+  },
+  "access": {
+    "signal": {
+      "allowed": "Access allowed",
+      "review": "To review",
+      "disallowed": "Access disallowed",
+      "unknown": "Access not checked"
+    }
+  },
+  "reasons": {
+    "retried": "It took {n} retries.",
+    "escalated": "A costlier method than usual was needed.",
+    "repaired": "The strategy was repaired (v{a} to v{b}).",
+    "optional_fields_missing": "{p}% of items lack the {field} field.",
+    "volume_anomaly": "{n} items instead of the usual ~{m}.",
+    "pagination_short": "{n} of {m} requested pages read, without reaching the end of the list.",
+    "slow": "Run {x} times longer than the median.",
+    "cost_anomaly": "Run {x} times costlier than the median.",
+    "stale": "Last clean run {n} days ago.",
+    "unavailable": "The site is not responding. This is not a breakage.",
+    "reverted": "Manual revert to v{a} by {name} on {date}.",
+    "reinvestigation_failed": "The re-investigation found nothing conforming; the previous version is kept.",
+    "rate_limited": "The site asks to slow down (429). Rate reduced from {a} to {b} requests per minute, address unchanged.",
+    "geo_restriction": "Content unavailable from this country; trying with the proxy of the country allowed by the API.",
+    "blocked_by_protection": "The site refuses automated access. Scrapyomama stops.",
+    "forbidden": "The site refuses access to this address. The IP address does not change.",
+    "robots_disallowed": "The site asks robots not to visit this page.",
+    "robots_unreachable": "robots.txt is unreachable: as a precaution, nothing is collected.",
+    "payment_required": "The site asks for a payment: {offer}.",
+    "auth_required": "{domain} asks you to sign in.",
+    "cookie_expired": "The session on {domain} has expired.",
+    "session_device_bound": "The session on {domain} is tied to your device and cannot be copied to the server.",
+    "challenge_in_tunnel": "A check appeared in your browser. The run is paused.",
+    "secret_unreadable": "A stored key is unreadable.",
+    "account_limit": "The platform flagged a limit on your account. No automatic retry.",
+    "session_owner_required": "This API uses its owner's session.",
+    "llm_refused": "The model refused the request; no automatic fallback.",
+    "investigating": "Attempt {n} of ~{m}: {execution}",
+    "healthy": "{n} clean runs, latest on {date}.",
+    "repairing": "Extraction broken; repair {n} of {m} in progress.",
+    "repair_exhausted": "Repair budget exhausted; version v{a} kept.",
+    "proxy_not_configured": "A proxy is required for {country}.",
+    "tunnel_offline": "Your computer is not connected.",
+    "not_found": "The page no longer exists (404 or 410)."
+  },
+  "reasonLabel": {
+    "retried": "Retries needed",
+    "escalated": "Costlier method",
+    "repaired": "Strategy repaired",
+    "optional_fields_missing": "Optional fields missing",
+    "volume_anomaly": "Unusual volume",
+    "pagination_short": "Pagination incomplete",
+    "slow": "Slow run",
+    "cost_anomaly": "Unusual cost",
+    "stale": "Old data",
+    "unavailable": "Site unavailable",
+    "reverted": "Reverted to a version",
+    "reinvestigation_failed": "Re-investigation without result",
+    "rate_limited": "Rate reduced",
+    "geo_restriction": "Geographic restriction",
+    "blocked_by_protection": "Automated access refused",
+    "forbidden": "Access refused",
+    "robots_disallowed": "Page disallowed by robots.txt",
+    "robots_unreachable": "robots.txt unreachable",
+    "payment_required": "Payment requested",
+    "auth_required": "Sign-in required",
+    "cookie_expired": "Session expired",
+    "session_device_bound": "Session tied to the device",
+    "challenge_in_tunnel": "Check shown in the browser",
+    "secret_unreadable": "Key unreadable",
+    "account_limit": "Account limit",
+    "session_owner_required": "Owner session required",
+    "llm_refused": "Request refused by the model"
+  },
+  "failureClass": {
+    "transient": "Temporary error",
+    "network": "Network error",
+    "rate_limited": "Site rate limit",
+    "forbidden": "Access refused",
+    "blocked_by_protection": "Automated access refused",
+    "robots_disallowed": "Page disallowed by robots.txt",
+    "robots_unreachable": "robots.txt unreachable",
+    "payment_required": "Payment requested",
+    "auth_required": "Sign-in required",
+    "account_limit": "Account limit",
+    "not_found": "Page not found",
+    "extraction": "Extraction broken",
+    "code_error": "Script error",
+    "run_budget_exceeded": "Run budget exceeded",
+    "budget_exceeded": "Budget exceeded",
+    "llm": "Model error ({code})"
+  },
+  "diffSummary": {
+    "selector_changed": "The selector for {field} changed.",
+    "pagination_changed": "Pagination changed.",
+    "execution_changed": "Execution changed: from {from} to {to}.",
+    "network_changed": "Network changed: from {from} to {to}.",
+    "fields_changed": "{n} fields changed.",
+    "script_changed": "The script changed.",
+    "no_change": "No change.",
+    "generic": "Fields changed ({n})."
+  },
+  "ui": {
+    "none": "None",
+    "cancel": "Cancel",
+    "choose": "Choose",
+    "copied": "Copied.",
+    "copy": "Copy",
+    "copyFailed": "Copying did not work.",
+    "loadMore": "Load more",
+    "loading": "Loading…",
+    "retry": "Try again"
+  },
+  "apiErrors": {
+    "generic": "Something went wrong. Try again in a moment.",
+    "network": "The server cannot be reached. Check your connection and try again.",
+    "not_found": "This resource does not exist or is not accessible.",
+    "forbidden": "You do not have the rights for this action.",
+    "conflict": "This action is not possible in the current state of the API.",
+    "invalid_input": "The values entered do not match the input schema.",
+    "queue_full": "The queue is full. Try again in a moment."
+  },
+  "actions": {
+    "launch": "Run",
+    "reinvestigate": "Re-investigate",
+    "relaunch": "Run again"
+  },
+  "catalog": {
+    "title": "Catalog",
+    "newApi": "New API",
+    "caption": "API catalog: name, execution, network, status and reason, last run, average cost, success rate and access",
+    "columns": {
+      "name": "Name",
+      "execution": "Execution",
+      "network": "Network",
+      "status": "Status and reason",
+      "lastRun": "Last run",
+      "cost": "Average cost",
+      "success": "Success (30 d)",
+      "access": "Access"
+    },
+    "computerRequired": "Computer required",
+    "filters": {
+      "label": "Catalog filters",
+      "search": "Search",
+      "searchPlaceholder": "Name or description",
+      "status": "Status",
+      "execution": "Execution",
+      "network": "Network",
+      "all": "All"
+    },
+    "empty": {
+      "title": "Your catalog is ready to fill up",
+      "description": "No API yet. Describe what you want to get: Scrapyomama investigates."
+    },
+    "noMatch": {
+      "title": "No API matches",
+      "description": "Change or remove filters to see more results.",
+      "reset": "Reset filters"
+    },
+    "pagination": {
+      "label": "Catalog pagination",
+      "previous": "Previous",
+      "next": "Next",
+      "page": "Page {n}"
+    },
+    "statusChanged": "{slug}: {status}."
+  },
+  "detail": {
+    "title": "API page",
+    "backToCatalog": "← Back to the catalog",
+    "metadataOnly": "You see the metadata of this API (state, cost, duration): its content belongs to another user.",
+    "reinvestigationStarted": "Re-investigation started.",
+    "tabs": {
+      "label": "API sections",
+      "overview": "Overview",
+      "schemas": "Schemas",
+      "strategy": "Strategy and versions",
+      "runs": "Runs and datasets",
+      "status": "Bugs and status",
+      "schedules": "Schedules",
+      "access": "Access",
+      "investigations": "Investigations"
+    }
+  },
+  "blockedPanel": {
+    "title": "Blocked: {domain} refuses automated access.",
+    "thisSite": "this site",
+    "what": {
+      "title": "What happened",
+      "attempt": "On {date}, attempt {n} (“{execution}”, {network}), {domain} answered with {answer}.",
+      "generic": "{domain} answered with {answer}.",
+      "robots": "This site asks robots not to visit this page. Scrapyomama respects this rule.",
+      "forbidden": "The site refuses access to this address. The IP address does not change after a refusal. Check your access rights or contact the publisher."
+    },
+    "answer": {
+      "challenge": "a verification page",
+      "refusal": "an access refusal"
+    },
+    "noOtherAttempt": "No other attempt was made.",
+    "cost": "Investigation cost: {cost}.",
+    "why": {
+      "title": "Why we stop",
+      "protection": "This is the site's decision. Scrapyomama does not answer in place of a person and does not change IP address after a refusal.",
+      "robots": "This is the rule the site declares in its robots.txt file. Scrapyomama always respects it.",
+      "forbidden": "This is the site's decision. Scrapyomama does not change IP address after a refusal."
+    },
+    "todo": {
+      "title": "What you can do",
+      "official": "Look for an official API, an export or a partnership.",
+      "officialLink": "See the official API",
+      "otherSource": "Use another source.",
+      "contact": "Write to the site's publisher, using the access request template below.",
+      "later": "Re-investigate later, if the site has changed."
+    },
+    "seeAttempts": "See the attempts",
+    "request": {
+      "copy": "Copy an access request template",
+      "template": "Hello,\n\nI would like to access the data of {domain} in an automated way, while respecting your access rules. Is there an official API, an export or a partnership agreement?\n\nThank you in advance."
+    },
+    "whyStop": "Why this stop?"
+  },
+  "actionRequired": {
+    "resuming": "Resuming the investigation…",
+    "connect": {
+      "title": "Connect {domain}",
+      "button": "Connect in the extension",
+      "verify": "The session shows up here as soon as the extension sends it (live update)."
+    },
+    "deviceBound": {
+      "title": "The session on {domain} cannot be copied to the server",
+      "button": "Choose to run from my browser",
+      "verify": "The extension state is updated live."
+    },
+    "proxy": {
+      "title": "Add a proxy for {country}",
+      "button": "Open Settings > Proxies",
+      "verify": "Use the Test button in the settings to check the proxy."
+    },
+    "tunnelOffline": {
+      "title": "Your computer is not connected",
+      "button": "See the extension state",
+      "verify": "The connection state is updated live."
+    },
+    "challenge": {
+      "title": "{domain} shows a verification in your browser; the run is stopped",
+      "text": "Nothing was sent on this page and nothing will be. You can run again later; Scrapyomama never answers a verification.",
+      "button": "Try again later (new run)",
+      "verify": "No automatic resume: only a new action from you starts a run."
+    },
+    "secret": {
+      "title": "A stored key is unreadable",
+      "button": "Enter it again in Settings",
+      "verify": "Use the Test button to check the new key."
+    },
+    "payment": {
+      "title": "{domain} asks for a payment: {offer}",
+      "text": "Scrapyomama makes no payment.",
+      "button": "Open the publisher's site",
+      "verify": "No automatic check."
+    },
+    "accountLimit": {
+      "title": "{platform} flagged a limit on your account",
+      "text": "No automatic retry is made.",
+      "button": "Read the platform's message",
+      "verify": "No automatic check."
+    }
+  },
+  "overview": {
+    "about": "About",
+    "strategy": "Current strategy",
+    "version": "version {v}",
+    "dependencies": "Dependencies",
+    "requiresSession": "Session on {domain}",
+    "requiresTunnel": "Connected computer required",
+    "noDependency": "None",
+    "avgCost": "Average cost per run",
+    "launch": "Run",
+    "examples": "Call examples",
+    "rest": "REST",
+    "mcp": "MCP"
+  },
+  "launch": {
+    "title": "Run the API",
+    "relaunchTitle": "Run again",
+    "sideEffects": "Running again can repeat side effects: sends, writes or actions already done by the previous run.",
+    "noInput": "This API expects no input.",
+    "arrayHint": "Separate values with commas.",
+    "jsonLabel": "Input (JSON)",
+    "jsonHint": "The input schema has fields the form cannot display: enter the input as JSON.",
+    "jsonInvalid": "The JSON entered is not a valid object.",
+    "version": "Strategy version",
+    "versionCurrent": "v{v} (current)",
+    "versionOther": "v{v} (original version of the run)",
+    "estimate": {
+      "known": "Usual cost: {cost}, median of {n} run | Usual cost: {cost}, median of {n} runs",
+      "unknown": "Cost not estimated."
+    },
+    "started": "Run started.",
+    "followRun": "Follow the run"
+  },
+  "schemas": {
+    "input": "Input schema",
+    "output": "Output schema",
+    "edit": "Edit the output",
+    "editUnavailable": "The output can only be changed when the API is Healthy or To watch, because the change starts a re-investigation.",
+    "editLabel": "Output schema (JSON)",
+    "invalid": "The JSON entered is not a valid object.",
+    "review": "Review the change",
+    "confirm": {
+      "title": "Change the output schema?",
+      "consequence": "This change triggers a re-investigation: the API goes back to investigating and new attempts are made, with their cost.",
+      "yes": "Change and re-investigate"
+    },
+    "views": "Displayed columns",
+    "viewsHint": "The displayed columns (views) are distinct from the output schema.",
+    "noViews": "All output columns are displayed."
+  },
+  "strategy": {
+    "current": "Current strategy",
+    "none": "No validated strategy yet.",
+    "declarative": "Declarative specification (read-only)",
+    "script": "Script (read-only)",
+    "versions": "Versions",
+    "noVersions": "No version yet.",
+    "columns": {
+      "version": "Version",
+      "strategy": "Strategy",
+      "origin": "Origin",
+      "date": "Date",
+      "cost": "Estimated cost",
+      "actions": "Actions"
+    },
+    "currentTag": "current",
+    "validated": "Validated on {n} sample | Validated on {n} samples",
+    "origins": {
+      "investigation": "Investigation",
+      "repair": "Repair",
+      "user": "User",
+      "revert": "Revert to a version",
+      "import": "Import"
+    },
+    "seeInvestigation": "See the investigation",
+    "compareWith": "Compare v{a} and v{b}",
+    "revert": "Go back to this version",
+    "revertConfirm": {
+      "title": "Go back to v{v}?",
+      "consequence": "The API goes to “To watch”, with the reason “manual revert to v{v}”. The next run uses this version.",
+      "yes": "Go back to v{v}",
+      "preview": "Preview of the changes, from v{from} (current) to v{to}",
+      "previewUnavailable": "Preview of the changes unavailable for now."
+    },
+    "compare": "Compare two versions",
+    "compareFrom": "Version",
+    "compareAgainst": "Compared with",
+    "compareAction": "Compare"
+  },
+  "diff": {
+    "title": "Comparison of v{from} and v{to}",
+    "summary": "In one sentence",
+    "fields": "Changed fields",
+    "noFields": "No changed field.",
+    "columns": {
+      "path": "Field",
+      "change": "Change",
+      "before": "Before",
+      "after": "After"
+    },
+    "change": {
+      "added": "Added",
+      "removed": "Removed",
+      "changed": "Changed"
+    },
+    "raw": "Raw side-by-side diff",
+    "rawCaption": "Raw diff between v{from} and v{to}",
+    "version": "v{v}"
+  },
+  "runsTab": {
+    "history": "Run history",
+    "retention": "Runs kept {n} day by default | Runs kept {n} days by default",
+    "keptUntil": "Kept until {date}",
+    "empty": "No run yet.",
+    "columns": {
+      "run": "Run",
+      "trigger": "Trigger",
+      "result": "Result",
+      "duration": "Duration",
+      "cost": "Cost",
+      "items": "Items",
+      "actions": "Actions"
+    },
+    "triggers": {
+      "mcp": "MCP",
+      "rest": "REST",
+      "schedule": "Schedule",
+      "ui": "Console",
+      "canary": "Automatic check"
+    },
+    "states": {
+      "queued": "Queued",
+      "running": "Running",
+      "waiting_tunnel": "Waiting for the computer",
+      "succeeded": "Done",
+      "failed": "Failed",
+      "cancelled": "Cancelled",
+      "skipped_tunnel_offline": "Skipped: computer offline",
+      "skipped_window": "Skipped: outside the time window",
+      "skipped_quota": "Skipped: quota reached",
+      "skipped_status": "Skipped: API status",
+      "skipped_overlap": "Skipped: a run is already in progress"
+    },
+    "outcomes": {
+      "clean": "Clean",
+      "degraded": "Degraded",
+      "failed": "Failure"
+    },
+    "viewItems": "View items",
+    "exportJson": "Export JSON",
+    "exportCsv": "Export CSV",
+    "items": "Run items",
+    "noItems": "No item.",
+    "absent": "absent",
+    "relaunchUnavailable": "The input of this run cannot be read again. Run the API from the overview."
+  },
+  "statusTab": {
+    "timeline": "Status timeline",
+    "empty": "No transition yet.",
+    "from": "from “{status}”",
+    "transition": "transition {n}",
+    "linkedRun": "See the linked run",
+    "errors": "Errors by class",
+    "noErrors": "No error recorded.",
+    "occurrences": "{n} occurrence | {n} occurrences",
+    "lastOccurrence": "Latest occurrence"
+  },
+  "schedules": {
+    "list": "Schedules",
+    "empty": "No schedule.",
+    "paused": "Paused",
+    "nextRuns": "Next runs",
+    "pause": "Pause",
+    "resume": "Resume",
+    "delete": "Delete",
+    "create": "New schedule",
+    "cron": "Cron expression",
+    "cronHint": "Five fields: minute, hour, day of month, month, day of week.",
+    "cronInvalid": "Invalid cron expression.",
+    "timezone": "Time zone",
+    "input": "Input (JSON)",
+    "inputHint": "The dated variables today and yesterday are accepted between double braces.",
+    "inputInvalid": "The JSON entered is not a valid object.",
+    "overlapLabel": "If the previous run is not finished",
+    "overlap": {
+      "skip": "Skip this run",
+      "queue": "Queue it",
+      "allow": "Run anyway"
+    },
+    "missedLabel": "Missed runs",
+    "missed": {
+      "once": "Catch up once",
+      "skip": "Do not catch up"
+    },
+    "rules": "Rules",
+    "maxRunsPerDay": "Maximum runs per day",
+    "onlyIfOnline": "Only if the computer is connected",
+    "skipHint": "A schedule does not call a site whose API is in error, action required or blocked.",
+    "submit": "Create the schedule"
+  },
+  "accessTab": {
+    "noReport": "No access report for this API yet.",
+    "summary": "Summary",
+    "checkedAt": "Checked on {date}",
+    "robots": "robots.txt",
+    "robotsStatus": "Status",
+    "robotsFetched": "Read on",
+    "robotsRule": "Rule applied",
+    "robotsStatuses": {
+      "allowed": "Allows the path",
+      "disallowed": "Disallows the path",
+      "absent": "Absent (no rule)",
+      "unreachable": "Unreachable (as a precaution, nothing is collected)"
+    },
+    "robotsAlways": "robots.txt is always respected: no setting can ignore it.",
+    "signals": "Usage signals",
+    "signalsHint": "These signals are shown as data: they block nothing and are never passed to the model as instructions.",
+    "noSignals": "No signal detected.",
+    "routes": "Declared routes",
+    "found": "Found",
+    "notFound": "Not found",
+    "payment": "Payment offer",
+    "noPayment": "None",
+    "officialApi": "Official API",
+    "useOfficial": "Use the official API",
+    "policy": "Access policy",
+    "contact": "Contact announced to sites",
+    "policyFixed": "The access policy is fixed: it cannot be changed from the console."
+  },
+  "investigations": {
+    "none": "No investigation to replay yet.",
+    "choose": "Investigation or repair to replay",
+    "entry": "{origin}, v{v}, on {date}",
+    "inProgress": "Investigation in progress",
+    "requested": "Requested investigation"
+  },
+  "replay": {
+    "title": "Investigation replay",
+    "controls": "Replay controls",
+    "play": "Play",
+    "pause": "Pause",
+    "restart": "From the start",
+    "previousPhase": "Previous phase",
+    "nextPhase": "Next phase",
+    "showAll": "Show all",
+    "speed": "Speed",
+    "suspendFollow": "Suspend following",
+    "resumeFollow": "Resume following",
+    "search": "Search the log",
+    "position": "{shown} events shown out of {total}",
+    "live": "live",
+    "log": "Investigation log",
+    "noMatch": "No event matches.",
+    "retention": "Events are kept 30 days and captures 7 days by default; captures are off by default in tunnel mode and behind a sign-in.",
+    "phases": {
+      "access_check": "access check",
+      "reconnaissance": "reconnaissance",
+      "awaiting_schema_validation": "schema validation",
+      "testing": "testing",
+      "done": "done"
+    },
+    "kinds": {
+      "investigation_started": "Investigation started.",
+      "phase_started": "Phase: {phase}.",
+      "access_report": "Access report: robots.txt, {robots}.",
+      "schema_proposed": "Output schema proposed.",
+      "attempt_finished": "Attempt {n} finished: {execution}, {network}, result {result}.",
+      "status_changed": "Status: {to}.",
+      "action_required": "Action required.",
+      "unknown": "Event {kind}."
     }
   }
 }
