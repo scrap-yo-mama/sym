@@ -129,6 +129,9 @@ async function run(engineId: SandboxEngineId, code: string, limits: Partial<Sand
   });
   const { bridges, items } = createSandboxBridges({ allowedDomains: ['api.zz-test'], guard, logger, ...extra.bridge });
   const result = await engine.run(code, bridges, { timeoutMs: 1000, memoryMb: 64, ...limits }, { input: { secret: 'zz_test_input' } });
+  // Un moteur par run ici (le worker n'en a qu'un) : le balayage de fin de run (`kill -1` sous l'uid dédié) doit être fini
+  // avant que le moteur du run suivant lance son enfant, sinon il le tue. Le worker l'attend de lui-même (#track).
+  await engine.idle();
   return { ...result, logs, items, pid, envKeys, environ, ...(environError !== undefined ? { environError } : {}) };
 }
 
