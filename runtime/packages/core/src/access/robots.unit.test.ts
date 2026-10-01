@@ -26,12 +26,21 @@ describe('robots.txt (RFC 9309) : analyse et correspondance', () => {
     expect(allows('Disallow: /\n', '/x')).toBe(true);
   });
 
-  it('groupe du jeton produit (casse ignorée, version ignorée) prioritaire sur `*`', () => {
+  it('groupe du jeton produit (casse ignorée, version ignorée) ET groupe `*` : un chemin interdit par l’un ou l’autre est interdit', () => {
     const txt = 'User-agent: *\nDisallow: /\n\nUser-agent: scrapyomama/2.0\nAllow: /\nDisallow: /admin\n';
-    expect(allows(txt, '/page')).toBe(true);
+    // `*` interdit tout : le groupe du jeton ne lève pas cette interdiction (17 §2).
+    expect(allows(txt, '/page')).toBe(false);
     expect(allows(txt, '/admin/x')).toBe(false);
     expect(allows(txt, '/page', 'OtherBot')).toBe(false);
     expect(selectGroup(parseRobots(txt)).matched).toBe('token');
+    // Interdiction dans le seul groupe `*` : jeton envoyé ou non, même résultat ; dans le seul groupe du jeton, aussi.
+    const star = 'User-agent: *\nDisallow: /prive\n\nUser-agent: Scrapyomama\nDisallow: /autre\n';
+    expect(allows(star, '/prive/x')).toBe(false);
+    expect(allows(star, '/autre/x')).toBe(false);
+    expect(allows(star, '/public')).toBe(true);
+    expect(allows('User-agent: Scrapyomama\nDisallow: /prive\n', '/prive/x')).toBe(false);
+    expect(allows('User-agent: *\nDisallow: /prive\n', '/prive/x')).toBe(false);
+    expect(allows('User-agent: *\nDisallow: /prive\n\nUser-agent: Scrapyomama\nAllow: /\n', '/prive/x')).toBe(false);
   });
 
   it('blocage du robot par son jeton (page « Le robot Scrapyomama »)', () => {

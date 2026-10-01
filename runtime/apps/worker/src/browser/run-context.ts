@@ -21,8 +21,9 @@
 // au lancement (launch.ts).
 // Règles de spéculation (revue de 1.11) : leur préchargement part du navigateur, hors de toute interception ; la garde des
 // documents les retire, le contrôle CDP coupe celles de l'en-tête `Speculation-Rules`, le prérendu est coupé au lancement.
-import { browserUserAgent } from '@runtime/core/access';
+import { buildUserAgent } from '@runtime/core/access';
 import type { APIRequest, APIRequestContext, Browser, BrowserContext, Page, Request } from 'playwright-core';
+import { browserEngineIdentity } from './engine-identity.js';
 import { installPageGuard } from './page-guard.js';
 import { blockSharedWorkers, installRequestGuard, type RequestCheck } from './request-guard.js';
 
@@ -46,26 +47,12 @@ export type RunContextOptions = {
    */
   readonly checkRequest?: RequestCheck;
   /**
-   * User-Agent du robot (`buildUserAgent`, tâche 1.11) : ajouté APRÈS celui du navigateur, qui reste tel qu'il est
-   * (aucun masquage, X2, 17 §5).
+   * User-Agent du robot de ce run (`buildUserAgent`, tâche 1.11, 17 §5) : la chaîne du moteur, avec le jeton si
+   * `identify_instance` est activé. Seule valeur posée sur le contexte (option `userAgent` de Playwright) ; sans elle,
+   * la chaîne exacte du moteur de `browser.version()`. Jamais une autre version ni un autre navigateur, aucune rotation.
    */
   readonly userAgent?: string;
 };
-
-/** User-Agent propre du navigateur (CDP `Browser.getVersion`) ; vide s'il est illisible. */
-async function ownUserAgent(browser: Browser): Promise<string> {
-  try {
-    const session = await browser.newBrowserCDPSession();
-    try {
-      const version = (await session.send('Browser.getVersion')) as { userAgent?: unknown };
-      return typeof version.userAgent === 'string' ? version.userAgent : '';
-    } finally {
-      await session.detach().catch(() => undefined);
-    }
-  } catch {
-    return '';
-  }
-}
 
 export type RunContext = {
   readonly context: BrowserContext;
@@ -113,13 +100,13 @@ export async function openRunContext(browser: Browser, options: RunContextOption
     if (violations.length < 100) violations.push(host);
     options.onViolation?.(host, request);
   };
-  const userAgent = options.userAgent === undefined ? undefined : browserUserAgent(await ownUserAgent(browser), options.userAgent);
+  const userAgent = options.userAgent ?? buildUserAgent({ engine: browserEngineIdentity(browser) });
   // Posé avant le contexte : aucun SharedWorker de ce contexte ne peut naître avant lui (échec fermé s'il ne peut pas l'être).
   const sharedWorkers = await blockSharedWorkers(browser);
   let context: BrowserContext;
   try {
     context = await browser.newContext({
-      ...(userAgent === undefined ? {} : { userAgent }),
+      userAgent,
       proxy: { server: options.egressServer },
       serviceWorkers: 'block',
       acceptDownloads: false,

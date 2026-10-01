@@ -25,8 +25,9 @@
 //    session réseau (E1, `ctx.fetch`), chaque requête du contexte Chromium (E2, E3, page de départ d'un script), saut de
 //    redirection compris (contrôle CDP, `browser/request-guard.ts`), et chaque poignée de main WebSocket. Un chemin
 //    interdit → `robots_disallowed` sans aucune requête vers lui ; robots.txt injoignable → `robots_unreachable`, rien
-//    n'est collecté. `Crawl-delay` est un plancher de la cadence. User-Agent honnête `Scrapyomama/<version> (+contact)`
-//    imposé à chaque requête (une stratégie ne le remplace pas) ; le navigateur garde le sien et y ajoute celui-ci.
+//    n'est collecté. `Crawl-delay` est un plancher de la cadence. User-Agent réel du moteur embarqué (sans `HeadlessChrome`),
+//    imposé à chaque requête (une stratégie ne le remplace pas), le même pour le client HTTP et pour Chromium ; avec
+//    `identify_instance` (désactivé par défaut), le jeton `compatible; Scrapyomama/<version>; +<contact>` s'y ajoute.
 import {
   assertExecutionOnNetwork,
   ExecutionNotOnNetworkError,
@@ -86,7 +87,7 @@ import type pg from 'pg';
 import { pino, type Logger } from 'pino';
 import type { BrowserPool } from '../browser/pool.js';
 import { runFetchInPageExecutor, runPlaywrightExecutor } from './browser-executors.js';
-import { robotIdentity } from './robot-identity.js';
+import { robotIdentity, type RobotIdentity } from './robot-identity.js';
 import { runScriptExecutor, type ScriptPort } from './script-executor.js';
 import type { AgentBrowser, AgentBrowserOptions } from '../browser/agent-browser.js';
 import { runAgentExecutor, runAgentFetchExecutor, runHybridExecutor, type AgentOutcome, type EngineFactory, type LlmSpend } from './agent-executors.js';
@@ -138,9 +139,11 @@ export type StrategyExecutorDeps = {
   readonly now?: () => number;
   /** Cache des robots.txt du worker (24 h au plus) ; défaut : un cache propre à cet exécuteur. */
   readonly robotsCache?: RobotsCache;
-  /** Contact de l'instance (réglage `instance_contact`, puis `INSTANCE_CONTACT`) pour le User-Agent ; `null` : aucun. */
+  /** Contact de l'instance (réglage `instance_contact`, puis `INSTANCE_CONTACT`) pour le jeton et `From` ; `null` : aucun. */
   readonly instanceContact?: () => Promise<string | null>;
-  /** Version annoncée dans le User-Agent (`RUNTIME_VERSION`). */
+  /** Réglage `identify_instance` (relu à chaque run) : ajoute le jeton au User-Agent et `From` ; défaut : désactivé. */
+  readonly identifyInstance?: () => Promise<boolean>;
+  /** Version annoncée dans le jeton du User-Agent (`RUNTIME_VERSION`). */
   readonly version?: string;
 };
 
@@ -293,13 +296,17 @@ export function createStrategyExecutor(deps: StrategyExecutorDeps): RunExecutor 
 
   const logger = deps.logger ?? pino({ enabled: false });
 
-  /** User-Agent du robot pour ce run : jeton, version, contact de l'instance (17 §5) ; contact absent journalisé. */
+  /**
+   * Identité du robot pour ce run (17 §5) : le User-Agent réel du moteur embarqué ; avec `identify_instance`, le jeton
+   * (version, contact de l'instance) et `From` en plus ; contact absent journalisé.
+   */
   const identity = robotIdentity({
     ...(deps.version === undefined ? {} : { version: deps.version }),
     ...(deps.instanceContact === undefined ? {} : { instanceContact: deps.instanceContact }),
-    warn: (code) => logger.warn({ code }, "contact d'instance absent : User-Agent sans contact (17 §5 : requis avant la première enquête)"),
+    ...(deps.identifyInstance === undefined ? {} : { identifyInstance: deps.identifyInstance }),
+    warn: (code) => logger.warn({ code }, "contact d'instance absent : identification de l'instance sans contact (17 §5 : requis avant la première enquête)"),
   });
-  const userAgentFor = async (): Promise<string> => {
+  const userAgentFor = async (): Promise<RobotIdentity> => {
     try {
       return await identity();
     } catch (error) {
@@ -416,7 +423,7 @@ export function createStrategyExecutor(deps: StrategyExecutorDeps): RunExecutor 
     // que soit l'entrée (conforme au schéma, mais fausse) : refus avant tout réseau et tout appel au modèle.
     if (agentic !== undefined && hasInput(ctx.input)) return refuse('code_error', 'input_unsupported');
     const { rung, credentials } = await rungFor(target, strategy.network);
-    const userAgent = await userAgentFor();
+    const { userAgent, from } = await userAgentFor();
     const script = strategy.execution === 'playwright' && strategy.scriptRef !== null ? scriptSpecOf(strategy.spec) : undefined;
     const spec = script === undefined && ['fetch', 'fetch_in_page', 'playwright'].includes(strategy.execution) ? specOf(target, strategy) : undefined;
     // Plafond de coût de l'essai, partagé entre l'egress Chromium, la session `ctx.fetch` d'un script et le LLM d'un essai
@@ -436,6 +443,7 @@ export function createStrategyExecutor(deps: StrategyExecutorDeps): RunExecutor 
       ...(deps.proxyResolver === undefined ? {} : { proxyResolver: deps.proxyResolver }),
       costCeiling: { maxUsd: target.api.maxCostUsd, otherUsd: () => otherUsd.egress() + otherUsd.session() + llmForCeiling() },
       userAgent,
+      ...(from === null ? {} : { from }),
     });
     const robotsPacer = pacerFor(target);
     const robots = new RobotsGate({
@@ -457,6 +465,7 @@ export function createStrategyExecutor(deps: StrategyExecutorDeps): RunExecutor 
       },
       checkUrl: robots.checkUrl,
       userAgent,
+      ...(from === null ? {} : { from }),
     });
     const pacer = pacerFor(target, robots);
     const common = {
@@ -550,7 +559,7 @@ export function createStrategyExecutor(deps: StrategyExecutorDeps): RunExecutor 
         const session = agentic.kind === 'agent_fetch' && agentic.spec.via === 'fetch' ? openNetworkSession(sessionOptions('session')) : undefined;
         if (session !== undefined) args.setOther({ session: () => session.usage().costUsd });
         if (session !== undefined) cost.addProxy(() => session.usage().costUsd);
-        const agentBrowser = (o: Omit<AgentBrowserOptions, 'egressServer'>) => ports.agentBrowser({ ...o, egressServer: egress!.server });
+        const agentBrowser = (o: Omit<AgentBrowserOptions, 'egressServer'>) => ports.agentBrowser({ ...o, egressServer: egress!.server, userAgent });
         // Client du seul rôle `extract` (un client par essai : compteur de coût de l'essai) ; configuration refusée → `llm_not_configured`.
         const extractClient = (): LlmClient | null => {
           const role = config?.roles.extract;
@@ -582,7 +591,7 @@ export function createStrategyExecutor(deps: StrategyExecutorDeps): RunExecutor 
               llm,
               modelId: config?.roles.extract?.model ?? null,
               ...(session === undefined ? {} : { session }),
-              ...(egress === undefined || deps.browsers === null ? {} : { browser: { pool: deps.browsers, egress, guard: deps.guard } }),
+              ...(egress === undefined || deps.browsers === null ? {} : { browser: { pool: deps.browsers, egress, guard: deps.guard, userAgent } }),
             });
           } else if (agentic.kind === 'hybrid') {
             out = await runHybridExecutor({
@@ -591,6 +600,7 @@ export function createStrategyExecutor(deps: StrategyExecutorDeps): RunExecutor 
               guard: deps.guard,
               egress: egress!,
               pool: deps.browsers,
+              userAgent,
               agentBrowser,
               ...(config === null ? {} : { engineFor: ports.engineFor(config), llm: extractClient(), llmModelId: config.roles.extract?.model ?? null }),
               allowWriteActions: target.api.allowWriteActions,

@@ -30,6 +30,7 @@ const OTHER = 'zz_test_robots_redirect.localhost';
 const A = randomUUID();
 const actorA = { userId: A, role: 'member' as const };
 const ID_SCHEMA = { type: 'object', required: ['id'], properties: { id: { type: 'string' } } };
+let identifyInstance = false;
 const UA_SCHEMA = { type: 'object', required: ['ua'], properties: { ua: { type: 'string' } } };
 
 let container: StartedPostgreSqlContainer;
@@ -134,6 +135,8 @@ beforeAll(async () => {
     logger: pino({ level: 'silent' }),
     script: { engine, loadScript: loadInlineScript, limits: { timeoutMs: 20_000, memoryMb: 128 } },
     instanceContact: async () => 'mailto:ops@zz-test.example',
+    // Réglage `identify_instance` : désactivé par défaut, activé le temps d'un test (17 §5).
+    identifyInstance: async () => identifyInstance,
     version: '9.9.9',
   });
   worker = await startWorker({
@@ -212,14 +215,26 @@ describe('assert_robots_respected : chemin interdit, 0 requête, robots_disallow
     expect((await paths(ROBOTS))['/robots.txt']).toBeGreaterThanOrEqual(1);
   }, 120_000);
 
-  test('chemin permis (Allow plus long) : collecte normale ; User-Agent du navigateur suivi de celui du robot', async () => {
+  test('chemin permis (Allow plus long) : collecte normale ; User-Agent réel du moteur, avec le jeton de l’instance seulement si identify_instance est activé', async () => {
     const e1 = await runOf(await insertApi({ execution: 'fetch', spec: declarative(ROBOTS, '/prive/ouvert') }));
     expect(e1).toMatchObject({ state: 'succeeded', items: 2 });
     const source = `const ua = await ctx.page.evaluate('navigator.userAgent'); ctx.emit({ ua: String(ua) });`;
-    const run = await runOf(await insertApi(script(ROBOTS, '/prive/ouvert', source), UA_SCHEMA));
-    expect(run).toMatchObject({ state: 'succeeded', items: 1 });
-    const item = (await withActor(pool, actorA, (tx) => tx.query<{ item: { ua: string } }>('SELECT item FROM dataset_items WHERE dataset_id = $1', [run.dataset_id]))).rows[0]!.item;
-    expect(item.ua).toMatch(/Chrome\/[\d.]+.* Scrapyomama\/9\.9\.9 \(\+mailto:ops@zz-test\.example\)$/);
+    const uaOf = async (): Promise<string> => {
+      const run = await runOf(await insertApi(script(ROBOTS, '/prive/ouvert', source), UA_SCHEMA));
+      expect(run).toMatchObject({ state: 'succeeded', items: 1 });
+      return (await withActor(pool, actorA, (tx) => tx.query<{ item: { ua: string } }>('SELECT item FROM dataset_items WHERE dataset_id = $1', [run.dataset_id]))).rows[0]!.item.ua;
+    };
+    // Valeur attendue : browser.version() du Chromium du pool et plateforme réelle (jamais une constante).
+    const version = await browsers.run(new AbortController().signal, async (browser) => browser.version());
+    const platform = { darwin: 'Macintosh; Intel Mac OS X 10_15_7', linux: 'X11; Linux x86_64', win32: 'Windows NT 10.0; Win64; x64' }[process.platform as 'darwin' | 'linux' | 'win32'];
+    const engine = `Mozilla/5.0 (${platform}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${version.split('.')[0]}.0.0.0 Safari/537.36`;
+    expect(await uaOf()).toBe(engine);
+    identifyInstance = true;
+    try {
+      expect(await uaOf()).toBe(`${engine} (compatible; Scrapyomama/9.9.9; +mailto:ops@zz-test.example)`);
+    } finally {
+      identifyInstance = false;
+    }
     expect(await forbiddenHits(ROBOTS)).toBe(0);
   }, 120_000);
 });

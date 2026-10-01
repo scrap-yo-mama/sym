@@ -138,6 +138,15 @@ export async function readInstanceContactSetting(db: Queryable): Promise<unknown
   return rows[0]?.value;
 }
 
+/**
+ * Réglage admin `identify_instance` (17 §5) : `true`, ou `{ enabled: true }`, ajoute le jeton produit au User-Agent et
+ * l'en-tête `From` ; `undefined` s'il n'est pas posé (repli : `IDENTIFY_INSTANCE`, puis désactivé).
+ */
+export async function readIdentifyInstanceSetting(db: Queryable): Promise<unknown> {
+  const { rows } = await db.query<{ value: unknown }>("SELECT value FROM settings WHERE key = 'identify_instance'");
+  return rows[0]?.value;
+}
+
 const ITEMS_PER_INSERT = 500;
 
 /**

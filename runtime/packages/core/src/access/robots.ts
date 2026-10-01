@@ -3,8 +3,9 @@
 // ce module n'expose aucun moyen de l'ignorer. Règles tenues :
 // - groupes : une ou plusieurs lignes `user-agent`, puis leurs règles ; une ligne `user-agent` après une règle ouvre un
 //   nouveau groupe ; les règles hors groupe sont ignorées ;
-// - groupe retenu : ceux qui nomment le jeton produit (casse ignorée), fusionnés ; à défaut ceux de `*`, fusionnés ;
-//   à défaut, aucune règle (tout est permis) ;
+// - groupes retenus (17 §2) : ceux qui nomment le jeton produit (casse ignorée) ET ceux de `*`, chacun fusionné : un chemin
+//   interdit par l'un ou l'autre l'est, que le jeton soit envoyé ou non (`matchGroup`) ; sans groupe, aucune règle
+//   (tout est permis) ;
 // - correspondance sur chemin + requête, encodage pourcent normalisé des deux côtés, `*` et `$` ; la règle la plus
 //   longue l'emporte, `Allow` à égalité ; `/robots.txt` est toujours permis ;
 // - `Crawl-delay` (non normatif) lu dans le groupe retenu : plancher de cadence (le plus grand si plusieurs) ;
@@ -134,23 +135,34 @@ export type SelectedGroup = {
   /** `token` : groupe(s) nommant le jeton produit ; `*` : groupe(s) génériques ; `none` : aucun groupe applicable. */
   readonly matched: 'token' | '*' | 'none';
   readonly rules: readonly RobotsRule[];
+  /**
+   * Jeux de règles qui s'appliquent TOUS au chemin (17 §2) : celui des groupes du jeton produit ET celui des groupes `*`,
+   * chacun fusionné. Un chemin interdit par l'un ou l'autre est interdit, que le jeton soit envoyé ou non (`matchGroup`).
+   */
+  readonly ruleSets: readonly (readonly RobotsRule[])[];
   readonly crawlDelaySeconds: number | null;
   readonly signals: readonly RobotsSignalLine[];
 };
 
-/** Groupe applicable au jeton produit (RFC 9309 §2.2.1) : groupes du jeton fusionnés, sinon ceux de `*`. */
+/**
+ * Groupes applicables au jeton produit (17 §2) : ceux du jeton ET ceux de `*` (`ruleSets`), pour la correspondance des
+ * chemins. `Crawl-delay` et signaux d'accès restent lus dans le groupe du jeton, à défaut dans `*`.
+ */
 export function selectGroup(file: RobotsFile, token: string = PRODUCT_TOKEN): SelectedGroup {
   const wanted = token.toLowerCase();
-  const merge = (matched: SelectedGroup['matched'], groups: readonly RobotsGroup[]): SelectedGroup => {
-    let delay: number | null = null;
-    for (const g of groups) if (g.crawlDelaySeconds !== null) delay = Math.max(delay ?? 0, g.crawlDelaySeconds);
-    return { matched, rules: groups.flatMap((g) => g.rules), crawlDelaySeconds: delay, signals: groups.flatMap((g) => g.signals) };
-  };
   const own = file.groups.filter((g) => g.agents.includes(wanted));
-  if (own.length > 0) return merge('token', own);
   const any = file.groups.filter((g) => g.agents.includes('*'));
-  if (any.length > 0) return merge('*', any);
-  return { matched: 'none', rules: [], crawlDelaySeconds: null, signals: [] };
+  const retained = own.length > 0 ? own : any;
+  if (retained.length === 0) return { matched: 'none', rules: [], ruleSets: [], crawlDelaySeconds: null, signals: [] };
+  let delay: number | null = null;
+  for (const g of retained) if (g.crawlDelaySeconds !== null) delay = Math.max(delay ?? 0, g.crawlDelaySeconds);
+  return {
+    matched: own.length > 0 ? 'token' : '*',
+    rules: retained.flatMap((g) => g.rules),
+    ruleSets: [own, any].filter((groups) => groups.length > 0).map((groups) => groups.flatMap((g) => g.rules)),
+    crawlDelaySeconds: delay,
+    signals: retained.flatMap((g) => g.signals),
+  };
 }
 
 const UNRESERVED = /^[A-Za-z0-9\-._~]$/;
@@ -262,7 +274,21 @@ export function matchRules(rules: readonly RobotsRule[], pathAndQuery: string): 
   return { allowed: best.allow, rule: `${best.allow ? 'Allow' : 'Disallow'}: ${best.pattern}` };
 }
 
-/** Verdict d'une URL contre un robots.txt analysé, pour le jeton produit. */
+/**
+ * Verdict d'un chemin contre les groupes retenus : refusé dès que le jeu de règles du jeton produit OU celui de `*` le
+ * refuse (17 §2) ; sinon permis, avec la règle appliquée la plus spécifique s'il y en a une.
+ */
+export function matchGroup(group: SelectedGroup, pathAndQuery: string): RobotsVerdict {
+  let allowedBy: RobotsVerdict = { allowed: true, rule: null };
+  for (const rules of group.ruleSets) {
+    const verdict = matchRules(rules, pathAndQuery);
+    if (!verdict.allowed) return verdict;
+    if (verdict.rule !== null && allowedBy.rule === null) allowedBy = verdict;
+  }
+  return allowedBy;
+}
+
+/** Verdict d'une URL contre un robots.txt analysé, pour le jeton produit (groupe du jeton ET groupe `*`). */
 export function robotsAllows(file: RobotsFile, url: URL, token: string = PRODUCT_TOKEN): RobotsVerdict {
-  return matchRules(selectGroup(file, token).rules, robotsTarget(url));
+  return matchGroup(selectGroup(file, token), robotsTarget(url));
 }

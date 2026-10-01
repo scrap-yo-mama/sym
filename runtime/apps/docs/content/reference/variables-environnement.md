@@ -42,7 +42,8 @@ Pour l'instant, le TLS vers la base se règle par `sslmode` dans `DATABASE_URL` 
 | `PORT` | 3000 | server | port d'écoute ; respecte la valeur injectée par l'hébergeur | lue |
 | `HOST` | `0.0.0.0` | server | adresse d'écoute | lue |
 | `TRUST_PROXY` | `false` | server | nombre de sauts de proxy, ou liste d'adresses ou de plages CIDR. Jamais `true` sans proxy devant | lue |
-| `INSTANCE_CONTACT` | aucun | worker | contact de l'opérateur, annoncé dans le User-Agent du robot (`Scrapyomama/<version> (+<contact>)`) ; le réglage saisi à l'assistant de premier démarrage l'emporte | lue |
+| `INSTANCE_CONTACT` | aucun | worker | contact de l'opérateur, annoncé dans le jeton du User-Agent du robot et dans `From` quand `IDENTIFY_INSTANCE` est activé ; le réglage saisi à l'assistant de premier démarrage l'emporte | lue |
+| `IDENTIFY_INSTANCE` | `false` | worker | `true` : jeton `compatible; Scrapyomama/<version>; +<contact>` dans le User-Agent et en-tête `From` (adresse électronique) ; sinon le User-Agent est celui, réel, du Chromium embarqué. Le réglage admin `identify_instance` l'emporte | lue |
 | `MAX_WAIT_SECONDS` | 25 | — | plafond du paramètre `wait` (REST, MCP) | prévue |
 
 ## Premier démarrage et comptes

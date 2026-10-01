@@ -27,7 +27,8 @@ const HOSTS = [
   'zz_test_content_signal.localhost',
   'zz_test_payment_402.localhost',
 ];
-const UA = buildUserAgent({ version: '1.2.3', contact: 'ops@zz-test.example' });
+// Moteur fictif : la chaîne exacte de Chromium, plus le jeton de l'instance (identify_instance activé).
+const UA = buildUserAgent({ engine: { version: '153.0.8010.12', platform: 'linux' }, identify: { version: '1.2.3', contact: 'ops@zz-test.example' } });
 const signal = new AbortController().signal;
 
 let client: Client;
@@ -133,13 +134,43 @@ describe('assert_robots_respected : 0 requête sur un chemin interdit (INV11), r
       const url = `http://zz_test_redirect_local.localhost:${local}/depart`;
       await expect(session.fetch(url)).rejects.toMatchObject({ failureClass: 'robots_disallowed' });
       expect(hits).toEqual(['/robots.txt', '/depart']);
-      // User-Agent honnête avec le contact de l'instance, sur robots.txt comme sur le contenu.
+      // Même User-Agent (moteur et jeton de l'instance) sur robots.txt comme sur le contenu.
       expect(new Set(agents)).toEqual(new Set([UA]));
-      expect(UA).toBe('Scrapyomama/1.2.3 (+mailto:ops@zz-test.example)');
+      expect(UA).toBe('Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36 (compatible; Scrapyomama/1.2.3; +mailto:ops@zz-test.example)');
     } finally {
       await session.close();
       await robots.close();
       await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  it('groupe Scrapyomama seul, ou groupe * seul, interdit /prive ; identify_instance désactivé (aucun jeton envoyé) : robots_disallowed, 0 requête de contenu', async () => {
+    const engineOnly = buildUserAgent({ engine: { version: '153.0.8010.12', platform: 'linux' } });
+    expect(engineOnly).not.toContain('Scrapyomama');
+    for (const robotsTxt of ['User-agent: Scrapyomama\nDisallow: /prive\n', 'User-agent: *\nDisallow: /prive\n', 'User-agent: *\nAllow: /\n\nUser-agent: Scrapyomama\nDisallow: /prive\n', 'User-agent: *\nDisallow: /prive\n\nUser-agent: Scrapyomama\nAllow: /\n']) {
+      const hits: string[] = [];
+      const server: Server = createServer((req, res) => {
+        hits.push(req.url ?? '');
+        if (req.url === '/robots.txt') return void res.writeHead(200, { 'content-type': 'text/plain' }).end(robotsTxt);
+        res.writeHead(200, { 'content-type': 'application/json' }).end('{"items":[]}');
+      });
+      await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+      const local = (server.address() as { port: number }).port;
+      const guard = fixtureGuard(local, ['zz_test_groups.localhost']);
+      const robots = openNetworkSession({ rung: { mode: 'direct' }, guard, userAgent: engineOnly });
+      const gate = new RobotsGate({ fetch: sessionRobotsFetcher(robots) });
+      const session = openNetworkSession({ rung: { mode: 'direct' }, guard, checkUrl: gate.checkUrl, userAgent: engineOnly });
+      try {
+        const origin = `http://zz_test_groups.localhost:${local}`;
+        await expect(session.fetch(`${origin}/prive/liste`), robotsTxt).rejects.toMatchObject({ failureClass: 'robots_disallowed' });
+        expect(hits, robotsTxt).toEqual(['/robots.txt']);
+        // Un chemin que ni l'un ni l'autre groupe n'interdit reste servi.
+        expect((await session.fetch(`${origin}/public`)).status).toBe(200);
+      } finally {
+        await session.close();
+        await robots.close();
+        await new Promise<void>((resolve) => server.close(() => resolve()));
+      }
     }
   });
 

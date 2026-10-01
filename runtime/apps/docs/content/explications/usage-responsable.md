@@ -13,7 +13,7 @@ Dans la console, cette page est prévue pour s'afficher au premier lancement, pu
 Cette version de développement ne livre pas encore tout ce que décrit cette page.
 
 - **En préparation** : l'affichage de cette page au premier lancement, la case « j'ai lu » et le refus de créer une API à champ `x-personal` sans elle, ainsi que les avertissements de la création d'API (catégorie sensible, fournisseur de modèle distant), qui arrivent avec la création d'API (tâche 3.1) ; l'affichage du rapport d'accès dans l'enquête et la console (tâches 2.1 et 3.1) ; la fiche de traitement par API, spécifiée mais sans tâche planifiée à ce jour.
-- **Livrés** : la lecture de `robots.txt` sans option pour l'ignorer, à chaque redirection, le rapport d'accès et le User-Agent avec contact (module d'accès, tâche 1.11), l'arrêt devant un refus ou un défi (tâche 1.7), l'effacement et l'export d'une personne avec la liste d'exclusion, la purge à échéance (tâche 1.8), la cadence par domaine (tâche 1.9), l'option `llm.redact`, l'absence de télémétrie (tâche 1.10) et la confirmation des sites à compte dans la console (tâche 3.5).
+- **Livrés** : la lecture de `robots.txt` sans option pour l'ignorer, à chaque redirection, le rapport d'accès et le User-Agent réel du moteur et l'identification de l'instance en option (module d'accès, tâche 1.11), l'arrêt devant un refus ou un défi (tâche 1.7), l'effacement et l'export d'une personne avec la liste d'exclusion, la purge à échéance (tâche 1.8), la cadence par domaine (tâche 1.9), l'option `llm.redact`, l'absence de télémétrie (tâche 1.10) et la confirmation des sites à compte dans la console (tâche 3.5).
 :::
 
 ::: info Ce que l'instance fait pour vous
@@ -103,7 +103,7 @@ Ces mentions n'ajoutent aucune restriction à la licence : elles disent ce que l
 
 - `robots.txt` est lu avant tout et **respecté sans option pour l'ignorer**, y compris pour une adresse saisie à la main et en tunnel.
 - La cadence est réglée **par domaine** (1,5 seconde entre deux requêtes par défaut, plancher fixé par `Crawl-delay` quand il existe), jamais par adresse, compte ou proxy : changer de proxy ou d'utilisateur ne donne aucun débit supplémentaire. Elle ne fait que ralentir quand le site demande de ralentir.
-- Le robot **s'annonce** avec un User-Agent honnête qui contient le **contact de votre instance** : renseignez un contact joignable. Voir [Le robot Scrapyomama](./robot.md).
+- Le robot envoie par défaut le **User-Agent réel du Chromium embarqué**. Si vous activez l'identification de l'instance (`identify_instance`, désactivée par défaut), il y ajoute un jeton qui contient le **contact de votre instance** : renseignez un contact joignable. Voir [Le robot Scrapyomama](./robot.md).
 - Monter en charge, c'est traiter plus de domaines en parallèle, jamais multiplier les sources vers un même site.
 
 ## 11. Limites de ce document
