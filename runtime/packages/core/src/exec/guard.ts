@@ -6,13 +6,14 @@
 // - `auth_required`, `payment_required`, `account_limit` : la main revient à l'utilisateur (`action_requise`).
 // - Seules `extraction`, `code_error` et `not_found` (réparation limitée à retrouver l'URL) ouvrent l'agent, et
 //   seulement si aucune preuve transmise n'est une page de défi ou un refus : sinon la classe est corrigée en
-//   `blocked_by_protection` et l'agent n'est pas appelé. Sur une réponse 2xx, seul un signal fort reclasse ; un signal
-//   faible garde la classe et retire la preuve de ce que l'agent reçoit. Aucune page de défi n'entre dans un prompt
+//   `blocked_by_protection` et l'agent n'est pas appelé. Sur une réponse 2xx, seul un signal fort reclasse (deux signaux,
+//   ou le titre ENTIER d'un interstitiel sur une page courte) ; un signal faible garde la classe et retire la preuve de
+//   ce que l'agent reçoit. Aucune page de défi n'entre dans un prompt
 //   (`assertPromptSafe`).
 import type { FailureClass } from '../model/enums.js';
 import { networkDecision, type NetworkDecision } from '../net/modes/ladder.js';
 import { classifyExchange } from './classify.js';
-import { challengeInText } from './protection.js';
+import { challengeInText, interstitialPage } from './protection.js';
 import type { ExecFailure, HttpExchange } from './types.js';
 
 /** Suite d'un échec (colonne « Suite » de 04 §7). */
@@ -109,7 +110,9 @@ function evidenceVerdict(evidence: AgentEvidence): ExecFailure | 'withhold' | 's
   const failure = classifyExchange(evidence);
   if (failure !== null && !failureRoute(failure.failure_class).agent) return failure;
   if (!challengeInText(evidence.body)) return 'show';
-  return evidence.status >= 200 && evidence.status < 300 ? 'withhold' : { ...CHALLENGE_TEXT, status: evidence.status };
+  // 2xx : l'extraction a déjà échoué ; le titre ENTIER d'un interstitiel sur une page courte suffit alors (revue de 1.7).
+  if (evidence.status >= 200 && evidence.status < 300 && !interstitialPage(evidence.body, evidence.headers)) return 'withhold';
+  return { ...CHALLENGE_TEXT, status: evidence.status };
 }
 
 /** Garde sur les preuves : la classe qui interdit l'agent, ou les preuves qu'il peut recevoir (signaux faibles retirés). */

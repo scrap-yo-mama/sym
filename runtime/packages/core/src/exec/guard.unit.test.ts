@@ -11,6 +11,7 @@ import { outcomeKindOfResponse } from '../pacing/policy.js';
 import {
   assertPromptSafe,
   ClassificationGuardError,
+  classifyExchange,
   domainRequestPacer,
   failureRoute,
   guardAgentInvocation,
@@ -110,11 +111,9 @@ describe('assert_no_circumvention : agent jamais invoqué sur un refus (garde av
     expect(agent).toHaveBeenCalledOnce();
   });
 
-  it('2xx : signal faible (titre seul, phrase dans un JSON, widget sur une page courte) → extraction gardée, agent invoqué, preuve retirée de ce qu’il reçoit', async () => {
+  it('2xx : signal faible (phrase dans un JSON, widget sur une page courte) → extraction gardée, agent invoqué, preuve retirée de ce qu’il reçoit', async () => {
     const html = (title: string, body: string) => `<!doctype html><html><head><title>${title}</title></head><body>${body}</body></html>`;
     const weak: HttpExchange[] = [
-      // Article dont le titre commence comme un interstitiel : un seul signal sur une page de contenu.
-      { ...NORMAL, headers: { 'content-type': 'text/html' }, body: html('Security check: 10 tips to secure your shop', `<article>${'<p>Conseil pratique pour votre boutique.</p>'.repeat(40)}</article>`) },
       // API JSON (< 4000 caractères) qui cite la phrase : jamais une recherche de phrase sur du JSON en 2xx.
       { ...NORMAL, body: JSON.stringify({ items: [], faq: "Why do I see I'm not a robot on checkout?" }) },
       // Page courte avec un formulaire de contact protégé par un widget.
@@ -129,6 +128,39 @@ describe('assert_no_circumvention : agent jamais invoqué sur un refus (garde av
     }
     // Signal fort en 2xx (titre + phrase) : toujours reclassé.
     expect(guardAgentInvocation(f('extraction'), [CHALLENGE])).toMatchObject({ failure_class: 'blocked_by_protection' });
+  });
+
+  it('2xx, extraction en échec : un titre qui COMMENCE comme un interstitiel (article long) laisse la réparation ; le titre ENTIER d’un interstitiel (signal unique, page courte) la refuse (revue de 1.7)', async () => {
+    const html = (title: string, body: string) => `<!doctype html><html><head><title>${title}</title></head><body>${body}</body></html>`;
+    const article: HttpExchange = { ...NORMAL, headers: { 'content-type': 'text/html' }, body: html('Security check: 10 tips to secure your shop', `<article>${'<p>Conseil pratique pour votre boutique.</p>'.repeat(40)}</article>`) };
+    // Article au titre exact d'un interstitiel, mais page de contenu longue (> 4000 caractères visibles) : jamais un refus.
+    const longArticle: HttpExchange = { ...article, body: html('Just a moment', `<article>${'<p>Récit de voyage, troisième jour, sous la pluie de Brest.</p>'.repeat(90)}</article>`) };
+    for (const page of [article, longArticle]) {
+      const agent = vi.fn(async (_failure: ExecFailure, _evidence: readonly unknown[]) => 'patch');
+      expect(guardAgentInvocation(f('extraction', 'no_records'), [page]), page.body.slice(0, 80)).toBeNull();
+      expect(await invokeAgentGuarded(f('extraction', 'no_records'), [page, NORMAL], agent)).toEqual({ invoked: true, value: 'patch' });
+      // La preuve qui porte le signal est retirée de ce que l'agent reçoit.
+      expect(agent.mock.calls[0]?.[1]).toEqual([NORMAL]);
+    }
+    // Interstitiel en 200, un seul signal (titre exact), ~450 caractères d'explication : au-dessus de la page quasi vide du
+    // mode strict, donc passé avant l'extraction ; la garde de réparation le refuse.
+    const explanation = '<p>As you were browsing something about your browser made us think you were a bot. There are a few reasons this might happen, such as a super-human speed of browsing or a browser extension that blocks some content.</p><p>To regain access, please make sure that cookies and JavaScript are enabled before reloading the page, then wait a few seconds before trying again.</p><p>If you keep seeing this page, contact the site owner and quote the reference below.</p><p>Reference zz_test_0001.</p>';
+    const interstitials: HttpExchange[] = [
+      { ...article, body: html('Pardon Our Interruption', `<h1>Pardon Our Interruption</h1>${explanation}`) },
+      // Titre exact suivi d'un suffixe de marque.
+      { ...article, body: html('Attention Required! | zz_test Shield', `<h1>Sorry, you have been blocked</h1>${explanation}`) },
+      { ...article, body: html('Just a moment...', explanation) },
+    ];
+    for (const page of interstitials) {
+      // Passé par la garde avant extraction (mode strict : un seul signal, page au-dessus de la page quasi vide).
+      expect(classifyExchange(page), page.body.slice(0, 80)).toBeNull();
+      for (const failure of [f('extraction', 'no_records'), f('code_error'), f('not_found', 'http_404')]) {
+        const agent = vi.fn(async () => 'patch');
+        const out = await invokeAgentGuarded(failure, [NORMAL, page], agent);
+        expect(out, page.body.slice(0, 80)).toEqual({ invoked: false, failure: { failure_class: 'blocked_by_protection', retryable: false, detail: 'challenge_page', status: 200 } });
+        expect(agent).not.toHaveBeenCalled();
+      }
+    }
   });
 
   it('assertPromptSafe : une page de défi n’entre dans aucun prompt', () => {

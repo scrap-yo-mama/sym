@@ -69,9 +69,19 @@ const SHORT_PAGE_WIDGET = 2000;
  */
 const NEAR_EMPTY_PAGE = 400;
 
-/** Titres d'interstitiels de vérification (début du titre, en minuscules). */
-const CHALLENGE_TITLE =
-  /^(?:just a moment|attention required|security check|security verification|verifying you are (?:a )?human|human verification|bot verification|are you a robot|access to this page has been denied|pardon our interruption|checking your browser|one more step|vérification de sécurité|vérification humaine|êtes-vous un robot)(?![\p{L}\p{N}-])/u;
+/** Titres d'interstitiels de vérification (en minuscules). */
+const CHALLENGE_TITLES =
+  '(?:just a moment|attention required|security check|security verification|verifying you are (?:a )?human|human verification|bot verification|are you a robot|access to this page has been denied|pardon our interruption|checking your browser|one more step|vérification de sécurité|vérification humaine|êtes-vous un robot)';
+
+/** Titre qui COMMENCE comme un interstitiel (« Security check: 10 tips… » aussi). */
+const CHALLENGE_TITLE = new RegExp(`^${CHALLENGE_TITLES}(?![\\p{L}\\p{N}-])`, 'u');
+
+/**
+ * Titre ENTIER d'un interstitiel (revue de 1.7) : le titre, sa ponctuation (« Just a moment... », « Attention
+ * Required! »), puis au plus un suffixe de marque court (« | Éditeur », « - Site » : un séparateur, 1 à 3 mots).
+ * « Security check: 10 tips to secure your shop » n'en est pas un.
+ */
+const INTERSTITIAL_TITLE = new RegExp(`^${CHALLENGE_TITLES}[\\s!.…]*(?:[|–—-]\\s*[^\\s|–—-]+(?: [^\\s|–—-]+){0,2})?$`, 'u');
 
 /** Phrases de vérification (texte visible, en minuscules, apostrophes normalisées). */
 const CHALLENGE_PHRASES: readonly string[] = [
@@ -246,6 +256,20 @@ export function detectChallengePage(body: string, headers: Readonly<Record<strin
   if (phrase && (text.length <= SHORT_PAGE_PHRASE || markup)) return { code: 'challenge_page', source: 'phrase' };
   if (markup && text.length <= SHORT_PAGE_WIDGET) return { code: 'challenge_page', source: 'widget' };
   return null;
+}
+
+/**
+ * Interstitiel reconnu à son titre ENTIER (`INTERSTITIAL_TITLE`) sur une page courte (au plus `SHORT_PAGE_PHRASE`
+ * caractères visibles). Sert à la garde AVANT RÉPARATION (guard.ts) sur une réponse 2xx dont l'extraction a déjà échoué :
+ * le mode strict de `detectChallengePage` le laisse passer (un seul signal, au-dessus de la page quasi vide) ; ce refus du
+ * faux positif se justifie avant l'extraction, plus après. Un article dont le titre commence seulement comme un
+ * interstitiel, ou une page de contenu longue, n'en est pas un.
+ */
+export function interstitialPage(body: string, headers: Readonly<Record<string, string>>): boolean {
+  if (body === '' || body.length > MAX_SCANNED_CHARS || !looksHtml(body, headers)) return false;
+  const title = titleOf(body);
+  if (title === undefined || !INTERSTITIAL_TITLE.test(title)) return false;
+  return visibleText(body).length <= SHORT_PAGE_PHRASE;
 }
 
 /**

@@ -122,10 +122,21 @@ function blankScriptPage(script: string): string {
  * - `slow_header` : en-tête de défi, puis corps LENT (fin servie après 4 s) dont le début réécrit aussitôt le document
  *   (« Verification successful ») et recharge avec le cookie ;
  * - `gzip_rewrite` : page de défi générique compressée (gzip) dont le script remplace aussitôt le
- *   document par un titre de contenu : seul le corps brut décodé la reconnaît.
+ *   document par un titre de contenu : seul le corps brut décodé la reconnaît ;
+ * - `interruption` : interstitiel générique au titre exact « Pardon Our Interruption », sans script, sans phrase de
+ *   vérification ni widget, avec environ 450 caractères d'explication : un seul signal au-dessus de la page quasi vide du
+ *   mode strict (passe la garde avant extraction), refusé par la garde avant réparation (revue de 1.7).
  */
-type Challenge200Variant = 'silent' | 'offsite' | 'slow_header' | 'gzip_rewrite';
-const CHALLENGE_200_VARIANTS = new Set<string>(['silent', 'offsite', 'slow_header', 'gzip_rewrite']);
+type Challenge200Variant = 'silent' | 'offsite' | 'slow_header' | 'gzip_rewrite' | 'interruption';
+const CHALLENGE_200_VARIANTS = new Set<string>(['silent', 'offsite', 'slow_header', 'gzip_rewrite', 'interruption']);
+
+/** Interstitiel « Pardon Our Interruption » (variante `interruption`) : générique, aucun éditeur nommé. */
+function interruptionPage(): string {
+  return page(
+    'Pardon Our Interruption',
+    '<main><h1>Pardon Our Interruption</h1><p>As you were browsing something about your browser made us think you were a bot. There are a few reasons this might happen, such as a super-human speed of browsing or a browser extension that blocks some content.</p><p>To regain access, please make sure that cookies and JavaScript are enabled before reloading the page, then wait a few seconds before trying again.</p><p>If you keep seeing this page, contact the site owner and quote the reference below.</p><p>Reference zz_test_interruption_0001.</p></main>',
+  );
+}
 
 const challenge200: SiteFactory = (env) => {
   let withHeader = false;
@@ -136,7 +147,7 @@ const challenge200: SiteFactory = (env) => {
     id: 'challenge_200',
     lot: 'base',
     description:
-      'Défi servi en HTTP 200 : même page générique, sans en-tête de protection par défaut (détection par le corps seul) ; resolve_after_ms : le défi se résout seul en JS (cookie + rechargement) et le site sert alors des titres h1 ; variant : silent (défi muet qui recharge), offsite (défi muet vers un hôte hors API), slow_header (en-tête de défi, corps lent qui se réécrit et recharge), gzip_rewrite (défi compressé qui se réécrit)',
+      'Défi servi en HTTP 200 : même page générique, sans en-tête de protection par défaut (détection par le corps seul) ; resolve_after_ms : le défi se résout seul en JS (cookie + rechargement) et le site sert alors des titres h1 ; variant : silent (défi muet qui recharge), offsite (défi muet vers un hôte hors API, après resolve_after_ms si posé), slow_header (en-tête de défi, corps lent qui se réécrit et recharge), gzip_rewrite (défi compressé qui se réécrit), interruption (interstitiel au titre exact, un seul signal, ~450 caractères)',
     hosts: ['zz_test_challenge_200.localhost'],
     smoke: { path: '/', status: 200 },
     handle(req) {
@@ -148,8 +159,12 @@ const challenge200: SiteFactory = (env) => {
         switch (variant) {
           case 'silent':
             return html(200, blankScriptPage(resolveAfterMs === null || resolveAfterMs === 0 ? `${clear}location.reload();` : `setTimeout(function(){${clear}location.reload();}, ${resolveAfterMs});`), headers);
-          case 'offsite':
-            return html(200, blankScriptPage(`location.href=${JSON.stringify(env.urlFor('zz_test_evil.localhost', '/zz_test_verify'))};`), headers);
+          case 'offsite': {
+            const go = `location.href=${JSON.stringify(env.urlFor('zz_test_evil.localhost', '/zz_test_verify'))};`;
+            return html(200, blankScriptPage(resolveAfterMs === null || resolveAfterMs === 0 ? go : `setTimeout(function(){${go}}, ${resolveAfterMs});`), headers);
+          }
+          case 'interruption':
+            return html(200, interruptionPage(), headers);
           case 'slow_header':
             return {
               ...html(200, blankScriptPage(`document.body.textContent='Verification successful, redirecting';${clear}location.reload();`).replace('</body></html>', ''), { 'x-zz-test-shield': 'challenge' }),
@@ -170,7 +185,7 @@ const challenge200: SiteFactory = (env) => {
       if (typeof args['with_header'] === 'boolean') withHeader = args['with_header'];
       else if (typeof args['resolve_after_ms'] === 'number' && args['resolve_after_ms'] >= 0) resolveAfterMs = Math.min(10_000, Math.floor(args['resolve_after_ms']));
       else if (typeof args['variant'] === 'string' && CHALLENGE_200_VARIANTS.has(args['variant'])) variant = args['variant'] as Challenge200Variant;
-      else throw new ControlError('with_header (booléen), resolve_after_ms (nombre ≥ 0) ou variant (silent, offsite, slow_header, gzip_rewrite) attendu');
+      else throw new ControlError('with_header (booléen), resolve_after_ms (nombre ≥ 0) ou variant (silent, offsite, slow_header, gzip_rewrite, interruption) attendu');
       return { with_header: withHeader, resolve_after_ms: resolveAfterMs, variant };
     },
   };

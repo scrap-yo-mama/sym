@@ -128,6 +128,14 @@ const contracts: Record<string, Contract> = {
     expect((await fx.get(H('challenge_200'), '/', { cookie: 'zz_test_cleared=1' })).body.match(/<h1 class="product">/g)).toHaveLength(3);
     await setSite('challenge_200', { variant: 'offsite' });
     expect((await fx.get(H('challenge_200'), '/')).body).toContain('zz_test_evil.localhost');
+    await setSite('challenge_200', { resolve_after_ms: 1000 });
+    expect((await fx.get(H('challenge_200'), '/')).body).toMatch(/setTimeout\(function\(\)\{location\.href="[^"]*zz_test_evil\.localhost[^"]*";\}, 1000\)/);
+    // Interstitiel au titre exact, un seul signal, sans script (revue de 1.7).
+    await setSite('challenge_200', { variant: 'interruption' });
+    const interruption = await fx.get(H('challenge_200'), '/');
+    expect(interruption.status).toBe(200);
+    expect(interruption.body).toContain('<title>Pardon Our Interruption</title>');
+    expect(interruption.body).not.toMatch(/<script|verify|robot|challenge/i);
     await setSite('challenge_200', { variant: 'slow_header' });
     const started = Date.now();
     const slow = await fx.get(H('challenge_200'), '/');

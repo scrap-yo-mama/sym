@@ -321,12 +321,13 @@ export function runScriptExecutor(options: ScriptExecutorOptions): Promise<Scrip
       allowedHosts: options.allowedHosts,
       onViolation: (h, request) => {
         const state = request === undefined ? undefined : issuedState(request);
-        // Pendant un `evaluate`, une requête vers un hôte que le site n'a jamais contacté est d'abord une tentative du
-        // code du script (exfiltration par `location.href`) : violation, comme avant (D-29).
+        // Pendant un `evaluate`, une requête vers un hôte que le site n'a jamais contacté peut être une tentative du code
+        // du script (exfiltration par `location.href`) : violation journalisée, enfant tué, 0 requête (D-29). Si c'est
+        // une navigation du cadre principal non demandée, elle peut aussi venir de la page (défi muet qui part vers
+        // l'éditeur pendant que le script attend) : la classe est alors celle du refus (`self_navigation`, INV6), qui
+        // n'ouvre jamais la réparation (revue de 1.7) ; la violation, imputée d'abord, reste journalisée.
         if (host.evaluating()) {
-          const before = host.imputed();
           host.report(h, 'domain_not_allowed', state);
-          if (host.imputed() > before) return;
           if (request !== undefined && refusal === undefined) selfNavigation(request);
           return;
         }
@@ -611,7 +612,9 @@ export function runScriptExecutor(options: ScriptExecutorOptions): Promise<Scrip
       });
       options.signal.throwIfAborted();
       const base = { violations: sandbox.violations, killed: sandbox.killed, ...(sandbox.killLatencyMs === undefined ? {} : { killLatencyMs: sandbox.killLatencyMs }) };
-      if (sandbox.outcome === 'violation') return finish(fail(codeError('sandbox_violation'), 1, requests), base);
+      // Violation : `code_error` (réparation), sauf si un refus est retenu (navigation non demandée du cadre principal
+      // pendant un `evaluate`, qui peut être un défi de la page) : la classe du refus, la violation reste journalisée.
+      if (sandbox.outcome === 'violation') return finish(fail(refusal ?? codeError('sandbox_violation'), 1, requests), base);
       // Refus d'accès en cours de script : la classe du refus, les éléments émis sont ignorés.
       if (refusal !== undefined) return finish(fail(refusal, 1, requests), base);
       if (sandbox.outcome !== 'ok') return finish(fail(codeError(capReached ? 'max_requests_per_run' : `sandbox_${sandbox.outcome}`), 1, requests), base);

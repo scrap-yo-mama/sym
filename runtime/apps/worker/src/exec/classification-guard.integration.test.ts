@@ -220,6 +220,29 @@ describe('assert_no_circumvention : garde par preuves avant réparation (défi n
     expect(run.attempts[0]).toMatchObject({ result: 'blocked_by_protection' });
     expect(await routeLog(run.id)).toEqual([{ failure_class: 'blocked_by_protection', next: 'stop', agent_invoked: false, reclassified_from: 'extraction' }]);
   });
+
+  test('interstitiel en 200 au titre exact, un seul signal (« Pardon Our Interruption », ~450 caractères) : passé par le classifieur PAR DÉFAUT, extraction en échec, refusé par la garde avant réparation ; agent jamais invoqué, refus rapporté au disjoncteur, sain → reparation → bloquee (revue de 1.7)', async () => {
+    await pool.query('DELETE FROM domain_pacing_state');
+    await client.control({ op: 'site', site: 'challenge_200', variant: 'interruption' });
+    const spec = { ...headingSpec(HOSTS.challenge200), sources: [{ id: 'dom', from: 'html', records: 'li.item' }] };
+    const apiId = await insertApi('zz_test_interruption', spec, 'sain');
+    const run = await runOf(apiId);
+    expect(repair).not.toHaveBeenCalled();
+    expect(run).toMatchObject({ state: 'failed', failure_class: 'blocked_by_protection', retryable: false, items: 0, dataset_id: null });
+    expect(await detailOf(run.id)).toBe('challenge_page');
+    expect(run.attempts[0]).toMatchObject({ result: 'blocked_by_protection' });
+    expect(await routeLog(run.id)).toEqual([{ failure_class: 'blocked_by_protection', next: 'stop', agent_invoked: false, reclassified_from: 'extraction' }]);
+    expect((await client.stats()).hosts[HOSTS.challenge200]?.total).toBe(1);
+    // Cadence : la classe corrigée est rapportée (refus) ; le disjoncteur la compte.
+    const state = (await pool.query<{ consecutive_failures: number }>('SELECT consecutive_failures FROM domain_pacing_state WHERE domain = $1', [HOSTS.challenge200])).rows[0];
+    expect(state).toMatchObject({ consecutive_failures: 1 });
+    // Statut : bloquee (transition 15), jamais reparation → erreur ni relance automatique de l'enquête.
+    const step = await applyFailure(apiId, run.id, run.failure_class!, 200);
+    expect(step.ok && step.transitions.map((t) => [t.transition, t.to])).toEqual([
+      [10, 'reparation'],
+      [15, 'bloquee'],
+    ]);
+  });
 });
 
 describe('assert_circuit_opens_on_refusals : disjoncteur par domaine (04 §7)', () => {

