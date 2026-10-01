@@ -25,6 +25,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          fetch-depth: 0 # historique complet : audit X6 de l'historique (et release à blanc)
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
         with:
           package_json_file: runtime/package.json
@@ -36,6 +37,9 @@ jobs:
       - name: Garde X6 (aucun .py ni .ipynb ni nom suspect dans tout le dépôt, depuis la racine)
         working-directory: .
         run: node runtime/scripts/check-x6.ts
+      - name: Garde X6 sur tout l'historique git (assert_x6_history_clean)
+        working-directory: .
+        run: node runtime/scripts/check-x6.ts --history
       - run: pnpm typecheck
       - run: pnpm lint
       - run: pnpm knip

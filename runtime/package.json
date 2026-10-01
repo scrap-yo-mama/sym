@@ -23,6 +23,7 @@
     "knip": "knip",
     "check:invariants": "node scripts/check-invariants.ts",
     "check:x6": "node scripts/check-x6.ts",
+    "check:x6-history": "node scripts/check-x6.ts --history",
     "test:coverage": "vitest run --project unit --coverage",
     "check:deps-pinned": "node scripts/check-deps-pinned.ts",
     "check:licenses": "node scripts/check-licenses.ts",

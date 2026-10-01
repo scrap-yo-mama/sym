@@ -32,6 +32,12 @@ describe('version', () => {
     expect(extensionTooOld('0.0.0', MIN_EXTENSION_VERSION)).toBe(false);
   });
 
+  test('extensionTooOld : version absente refusée dès que le minimum dépasse 0.0.0 (sinon un client contourne le refus)', () => {
+    expect(extensionTooOld(undefined, '0.4.0')).toBe(true);
+    expect(extensionTooOld(undefined, '0.0.1')).toBe(true);
+    expect(extensionTooOld(undefined, '0.0.0')).toBe(false);
+  });
+
   test('constantes publiées par GET /api/version', () => {
     expect(parseSemver(MIN_EXTENSION_VERSION)).toBeDefined();
     expect(MCP_SPEC_VERSION).toMatch(/^\d{4}-\d{2}-\d{2}$/);

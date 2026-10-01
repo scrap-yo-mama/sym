@@ -5,10 +5,12 @@
 //     qui exécute du code de PR, pas de donnée de PR interpolée dans un script (`run:`) ;
 //   - workflow de release : déclenché par étiquette seulement, environnement à relecteurs, aucun cache, permissions
 //     d'écriture au niveau du job, signature + SBOM + provenance présents ;
+//   - configurations release-please : chaque version calculée tombe dans son canal (stable, ou beta X.Y.Z-beta.N) ;
 //   - image : conteneur non root (assert_image_nonroot).
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { checkWorkflow } from '../check-deps-pinned.ts';
+import { checkReleasePleaseConfigs } from './release-please.ts';
 
 const strip = (raw: string) => raw.replace(/\s+#.*$/, '');
 
@@ -81,6 +83,21 @@ export function checkReleaseWorkflow(label: string, yaml: string): string[] {
   if (!/cosign sign\b/.test(text) || !/cosign sign-blob\b/.test(text)) problems.push(`${label} : signature cosign (image et fichiers) absente`);
   if (!/cosign attest\b/.test(text) || !/cyclonedx/i.test(text)) problems.push(`${label} : SBOM CycloneDX attesté (cosign attest) absent`);
   if (!/attest-build-provenance@/.test(text)) problems.push(`${label} : attestation de provenance absente`);
+  // X6 (_exclusions, 08b §5) : l'historique git est audité avant chaque release publique ; il faut donc l'extraire en entier.
+  if (!/^\s+fetch-depth:\s*0\s*$/m.test(text)) problems.push(`${label} : actions/checkout sans fetch-depth: 0 (l'audit X6 de l'historique exige tout l'historique)`);
+  if (!/check:x6-history\b|check-x6\.ts --history\b/.test(text)) problems.push(`${label} : audit X6 de l'historique git absent (pnpm check:x6-history)`);
+  // Outils épinglés : la version vérifiée en CI est celle de la release.
+  const pinnedWith = (action: RegExp, input: string) => {
+    const uses = lines.filter((l) => action.test(l)).length;
+    const pins = lines.filter((l) => new RegExp(`^\\s+${input}:\\s*v\\d+\\.\\d+\\.\\d+\\s*$`).test(l)).length;
+    return uses <= pins;
+  };
+  if (!pinnedWith(/uses:\s*sigstore\/cosign-installer@/, 'cosign-release')) problems.push(`${label} : cosign-installer sans cosign-release: vX.Y.Z (version de cosign non épinglée)`);
+  if (!pinnedWith(/uses:\s*anchore\/sbom-action\/download-syft@/, 'syft-version')) problems.push(`${label} : download-syft sans syft-version: vX.Y.Z (version de syft non épinglée)`);
+  // SBOM de l'image : CycloneDX 1.7 demandé explicitement (08b §5), puis validé comme celui du lockfile.
+  if (/download-syft@/.test(text) && (!/cyclonedx-json@1\.7=/.test(text) || !/sbom\.ts --image\b/.test(text))) {
+    problems.push(`${label} : SBOM de l'image non épinglé en CycloneDX 1.7 (cyclonedx-json@1.7) ou non validé (scripts/release/sbom.ts --image)`);
+  }
   return problems;
 }
 
@@ -105,6 +122,7 @@ export function checkRepo(root: string): string[] {
     const yaml = readFileSync(join(dir, name), 'utf8');
     problems.push(...(name === releaseFile ? checkReleaseWorkflow : checkWorkflowSecurity)(`.github/workflows/${name}`, yaml));
   }
+  problems.push(...checkReleasePleaseConfigs(repo));
   problems.push(...checkImageNonRoot('deploy/Dockerfile', readFileSync(join(root, 'deploy/Dockerfile'), 'utf8')));
   return problems;
 }
@@ -115,5 +133,5 @@ if (import.meta.main) {
     console.error(`assert_release_gates :\n${problems.map((p) => `  - ${p}`).join('\n')}`);
     process.exit(1);
   }
-  console.log('assert_release_gates : workflows épinglés, release par étiquette, environnement, sans cache, signature + SBOM + provenance, image non root.');
+  console.log('assert_release_gates : workflows épinglés, release par étiquette, environnement, sans cache, historique complet audité (X6), outils épinglés, signature + SBOM 1.7 + provenance, canaux release-please, image non root.');
 }

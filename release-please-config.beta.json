@@ -7,8 +7,9 @@
   "include-v-in-tag": true,
   "separate-pull-requests": false,
   "changelog-path": "CHANGELOG.md",
+  "versioning": "prerelease",
   "prerelease": true,
-  "prerelease-type": "beta",
+  "prerelease-type": "beta.1",
   "packages": {
     "runtime": {
       "package-name": "scrapyomama-runtime",

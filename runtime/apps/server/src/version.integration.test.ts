@@ -63,8 +63,17 @@ describe('appairage et version minimale de l’extension', () => {
     expect(ok.statusCode, ok.body).toBe(201);
   });
 
-  test('version égale, supérieure ou pré-version supérieure : acceptée ; champ absent : acceptée', async () => {
-    for (const [i, version] of [MIN, '0.5.0', '1.0.0-beta.1', undefined].entries()) {
+  test('version absente alors que min_extension > 0.0.0 : refus 426 (sinon un client qui omet le champ contourne le refus)', async () => {
+    const code = await pairingCode();
+    const refused = await pair(code, 'zz_test_dev_nover_1');
+    expect(refused.statusCode, refused.body).toBe(426);
+    expect(refused.json()).toEqual({ error: { code: 'extension_outdated', message: expect.stringContaining(MIN) } });
+    // Le code n'a pas été consommé.
+    expect((await pair(code, 'zz_test_dev_nover_2', MIN)).statusCode).toBe(201);
+  });
+
+  test('version égale, supérieure ou pré-version supérieure : acceptée', async () => {
+    for (const [i, version] of [MIN, '0.5.0', '1.0.0-beta.1'].entries()) {
       const res = await pair(await pairingCode(), `zz_test_dev_ok_${i}`, version);
       expect(res.statusCode, `${version}: ${res.body}`).toBe(201);
     }

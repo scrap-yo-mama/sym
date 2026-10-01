@@ -47,7 +47,11 @@ export function compareSemver(a: string, b: string): -1 | 0 | 1 {
   return comparePre(x.pre, y.pre) as -1 | 0 | 1;
 }
 
-/** Vrai si l'extension est sous le minimum, ou si sa version est illisible (refus par prudence). */
-export function extensionTooOld(version: string, min: string): boolean {
+/**
+ * Vrai si l'extension est sous le minimum, si sa version est illisible (refus par prudence), ou si elle ne la donne pas
+ * alors que le minimum dépasse 0.0.0 : sans cela, un client qui omet le champ contournerait le refus.
+ */
+export function extensionTooOld(version: string | undefined, min: string): boolean {
+  if (version === undefined) return compareSemver(min, '0.0.0') > 0;
   return parseSemver(version) === undefined || compareSemver(version, min) < 0;
 }

@@ -40,6 +40,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          fetch-depth: 0 # historique complet : audit X6 de l'historique avant toute release publique (_exclusions X6)
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
         with:
           package_json_file: runtime/package.json
@@ -50,9 +51,10 @@ jobs:
       - run: pnpm build
 
       # Portes : mêmes contrôles que la CI, rejoués sur l'étiquette.
-      - name: Portes (X6, versions épinglées, liste noire, licences par paquet, workflows)
+      - name: Portes (X6 sur l'index et sur tout l'historique git, versions épinglées, liste noire, licences par paquet, workflows)
         run: |
           pnpm check:x6
+          pnpm check:x6-history
           pnpm check:deps-pinned
           pnpm check:blacklist
           pnpm check:licenses
@@ -69,8 +71,9 @@ jobs:
           VERSION: ${{ steps.plan.outputs.version }}
         run: |
           mkdir release-out
+          rm -f apps/extension/dist/*.zip
           pnpm --filter @runtime/extension exec wxt zip
-          cp apps/extension/dist/*-chrome.zip "release-out/scrapyomama-extension-${VERSION}.zip"
+          cp apps/extension/dist/*-"${VERSION}"-chrome.zip "release-out/scrapyomama-extension-${VERSION}.zip"
           pnpm sbom --sbom-format cyclonedx --sbom-spec-version 1.7 --lockfile-only --out release-out/sbom-lockfile.cdx.json
           node scripts/release/sbom.ts release-out/sbom-lockfile.cdx.json
 
@@ -97,16 +100,20 @@ jobs:
 
       - uses: anchore/sbom-action/download-syft@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
         id: syft
-      - name: SBOM de l'image (CycloneDX)
+        with:
+          syft-version: v1.51.1
+      - name: SBOM de l'image (CycloneDX 1.7, validé)
         env:
           SYFT: ${{ steps.syft.outputs.cmd }}
           IMAGE: ${{ steps.plan.outputs.image }}
           DIGEST: ${{ steps.build.outputs.digest }}
         run: |
-          "$SYFT" "${IMAGE}@${DIGEST}" -o cyclonedx-json=release-out/sbom-image.cdx.json
-          test -s release-out/sbom-image.cdx.json
+          "$SYFT" "${IMAGE}@${DIGEST}" -o cyclonedx-json@1.7=release-out/sbom-image.cdx.json
+          node scripts/release/sbom.ts --image release-out/sbom-image.cdx.json
 
       - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: v3.1.3 # même version que la CI et la release à blanc
       - name: Signature cosign sans clé, SBOM attesté (image) ; signature des fichiers
         env:
           IMAGE: ${{ steps.plan.outputs.image }}

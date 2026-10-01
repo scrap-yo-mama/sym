@@ -8,14 +8,15 @@
 // La release réelle (.github/workflows/release.yml) signe sans clé et ne s'exécute que sur une étiquette approuvée.
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { copyFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { checkMitPackages } from '../check-licenses.ts';
 import { checkRepo as checkGates } from './gates.ts';
 import { planRelease, type ReleasePlan } from './plan.ts';
 import { catalogNames, checkSbomFile, generateLockfileSbom } from './sbom.ts';
-import { attestBlob, cosignVersion, generateTestKey, refused, signBlob, userVerifyCommand, verifyBlob, verifyBlobAttestation } from './sign.ts';
+import { checkHistory as checkX6History } from '../check-x6.ts';
+import { attestBlob, cosignVersion, generateTestKey, negativeChecks, type Refusal, signBlob, userVerifyCommand, verifyBlob, verifyBlobAttestation } from './sign.ts';
 
 /** Dépôt et image de la release réelle (nom indicatif de la documentation ; rien n'y est publié). */
 export const REPOSITORY = 'mrsoyer/scrapyomama-runtime';
@@ -28,14 +29,26 @@ export type DryRunReport = {
   artifacts: Artifact[];
   /** Fichiers dont la signature (ou l'attestation) a été vérifiée avec la clé de test. */
   verified: string[];
-  /** Contrôles négatifs : chacun doit être refusé. */
-  refusals: { case: string; refused: boolean }[];
+  /** Contrôles négatifs : chacun doit être refusé, sur la vérification de signature (bundle valide d'un autre fichier). */
+  refusals: Refusal[];
   image?: { reference: string; id: string; user: string; uid: string };
   verifyCommand: string;
 };
 
 const sha256 = (path: string) => createHash('sha256').update(readFileSync(path)).digest('hex');
 const sh = (cmd: string, args: string[], cwd: string) => execFileSync(cmd, args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'] }).trim();
+
+/**
+ * Archive WXT de la version annoncée (`<nom>-<version>-chrome.zip`, gabarit par défaut `{{packageVersion}}`). Une archive
+ * d'une autre version restée dans dist/ n'est jamais prise : la signer reviendrait à publier une autre version.
+ */
+export function findExtensionZip(files: readonly string[], version: string): string {
+  const matches = files.filter((f) => f.endsWith(`-${version}-chrome.zip`));
+  if (matches.length !== 1) {
+    throw new Error(`archive de l'extension ${version} : ${matches.length === 0 ? 'introuvable' : `ambiguë (${matches.join(', ')})`} dans apps/extension/dist (la version de apps/extension/package.json doit être celle de l'étiquette)`);
+  }
+  return matches[0] as string;
+}
 
 function describeArtifact(dir: string, name: string): Artifact {
   const path = join(dir, name);
@@ -64,7 +77,8 @@ export function runDryRun(options: { runtimeDir: string; tag?: string; outDir?: 
   const { runtimeDir } = options;
   const pkg = JSON.parse(readFileSync(join(runtimeDir, 'package.json'), 'utf8')) as { version: string };
   const plan = planRelease(options.tag ?? `v${pkg.version}`);
-  const problems = [...checkGates(runtimeDir), ...checkMitPackages(runtimeDir)];
+  // Portes, dont l'audit X6 de tout l'historique git (X6 : avant chaque release publique).
+  const problems = [...checkGates(runtimeDir), ...checkMitPackages(runtimeDir), ...checkX6History(runtimeDir)];
   if (problems.length > 0) throw new Error(`portes de release en échec :\n${problems.map((p) => `  - ${p}`).join('\n')}`);
 
   const out = options.outDir ?? mkdtempSync(join(tmpdir(), 'zz_test_release-'));
@@ -73,11 +87,11 @@ export function runDryRun(options: { runtimeDir: string; tag?: string; outDir?: 
   const keyDir = mkdtempSync(join(tmpdir(), 'zz_test_cosign-'));
   try {
     // 1. Archive de l'extension (WXT, reproductible) et SHA-256.
+    const dist = join(runtimeDir, 'apps/extension/dist');
+    if (existsSync(dist)) for (const f of readdirSync(dist).filter((n) => n.endsWith('.zip'))) rmSync(join(dist, f));
     sh('pnpm', ['--filter', '@runtime/extension', 'exec', 'wxt', 'zip'], runtimeDir);
     const extensionZip = `scrapyomama-extension-${plan.version}.zip`;
-    const built = readdirSync(join(runtimeDir, 'apps/extension/dist')).find((f) => f.endsWith('-chrome.zip'));
-    if (built === undefined) throw new Error("l'archive de l'extension n'a pas été produite");
-    copyFileSync(join(runtimeDir, 'apps/extension/dist', built), join(out, extensionZip));
+    copyFileSync(join(dist, findExtensionZip(readdirSync(dist), plan.version)), join(out, extensionZip));
     writeFileSync(join(out, `${extensionZip}.sha256`), `${sha256(join(out, extensionZip))}  ${extensionZip}\n`);
 
     // 2. SBOM CycloneDX 1.7 : lockfile complet, et production seule (stand-in local du SBOM de l'image, que syft produit en release).
@@ -122,20 +136,10 @@ export function runDryRun(options: { runtimeDir: string; tag?: string; outDir?: 
     verifyBlobAttestation(key.publicKey, join(out, extensionZip), 'slsaprovenance1', join(out, `${extensionZip}.provenance.att.bundle`));
     verified.push(`${extensionZip} (attestation cyclonedx)`, `${extensionZip} (attestation slsaprovenance1)`);
 
-    // 8. Refus : non signé, altéré, autre clé.
-    const refusals: DryRunReport['refusals'] = [];
-    const zip = join(out, extensionZip);
-    writeFileSync(join(out, 'unsigned.txt'), 'artefact sans signature\n');
-    refusals.push({ case: 'artefact non signé', refused: refused(() => verifyBlob(key.publicKey, join(out, 'unsigned.txt'), join(out, 'absent.bundle'))) });
-    const tampered = join(out, 'tampered.zip');
-    copyFileSync(zip, tampered);
-    writeFileSync(tampered, Buffer.concat([readFileSync(tampered), Buffer.from('x')]));
-    refusals.push({ case: 'artefact altéré après signature', refused: refused(() => verifyBlob(key.publicKey, tampered, join(out, `${extensionZip}.bundle`))) });
+    // 8. Refus : non signé (présenté avec le bundle valide de l'archive), altéré, autre clé.
     const other = generateTestKey(join(keyDir, 'autre'));
-    refusals.push({ case: 'signature vérifiée avec une autre clé', refused: refused(() => verifyBlob(other.publicKey, zip, join(out, `${extensionZip}.bundle`))) });
-    rmSync(join(out, 'unsigned.txt'));
-    rmSync(tampered);
-    const failedRefusal = refusals.find((r) => !r.refused);
+    const refusals = negativeChecks({ key, other, signed: join(out, extensionZip), bundle: join(out, `${extensionZip}.bundle`), workDir: join(keyDir, 'negatifs') });
+    const failedRefusal = refusals.find((r) => !r.refused || /no such file|ENOENT/i.test(r.reason));
     if (failedRefusal) throw new Error(`contrôle négatif accepté à tort : ${failedRefusal.case}`);
 
     const artifacts = readdirSync(out).sort().map((name) => describeArtifact(out, name));
@@ -162,7 +166,7 @@ if (import.meta.main) {
   console.log(`  tags d'image : ${report.plan.imageTags.join(', ')} (jamais latest)`);
   for (const a of report.artifacts) console.log(`  ${a.sha256.slice(0, 12)}  ${String(a.bytes).padStart(9)}  ${a.name}`);
   console.log(`  vérifiés : ${report.verified.length} (cosign verify-blob / verify-blob-attestation : OK)`);
-  for (const r of report.refusals) console.log(`  refus attendu : ${r.case} -> ${r.refused ? 'refusé' : 'ACCEPTÉ'}`);
+  for (const r of report.refusals) console.log(`  refus attendu : ${r.case} -> ${r.refused ? `refusé (${r.reason})` : 'ACCEPTÉ'}`);
   if (report.image) console.log(`  image locale : uid ${report.image.uid}, USER ${report.image.user}, id ${report.image.id.slice(0, 19)}… (rien de poussé)`);
   console.log(`  sorties : ${outDir}`);
 }

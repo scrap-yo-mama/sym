@@ -9,6 +9,7 @@ const STEPS: Step[] = [
   { job: 'quality', name: 'install', cmd: ['pnpm', 'install', '--frozen-lockfile'] },
   { job: 'quality', name: 'build', cmd: ['pnpm', 'build'] },
   { job: 'quality', name: 'garde X6 (racine du dépôt)', cmd: ['node', 'runtime/scripts/check-x6.ts'], cwd: 'root' },
+  { job: 'quality', name: 'garde X6 (historique git complet)', cmd: ['node', 'runtime/scripts/check-x6.ts', '--history'], cwd: 'root' },
   { job: 'quality', name: 'typecheck', cmd: ['pnpm', 'typecheck'] },
   { job: 'quality', name: 'lint', cmd: ['pnpm', 'lint'] },
   { job: 'quality', name: 'knip', cmd: ['pnpm', 'knip'] },

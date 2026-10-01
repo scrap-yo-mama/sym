@@ -3,16 +3,20 @@
 // version (SemVer 0.y, canaux, jamais `latest`), les licences par paquet (D-10) et les commits conventionnels.
 // cosign est exécuté pour de bon avec une clé de test jetable (aucun réseau, aucune publication) ; les fixtures ne
 // contiennent que des fragments de workflow ou de manifeste à refuser.
+import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import { checkMitPackages, classifyForMit, evaluateMitPackage, parseLicenseReport } from '../scripts/check-licenses.ts';
+import { checkHistory as checkX6History, checkRepo as checkX6Index } from '../scripts/check-x6.ts';
 import { checkSubject, isBreaking } from '../scripts/release/conventional.ts';
 import { checkImageNonRoot, checkReleaseWorkflow, checkRepo as checkGates, checkWorkflowSecurity } from '../scripts/release/gates.ts';
 import { checkTagMatchesPackage, imageReferences, planRelease, ReleaseTagError } from '../scripts/release/plan.ts';
-import { catalogNames, checkSbomFile, generateLockfileSbom, validateSbom } from '../scripts/release/sbom.ts';
-import { attestBlob, cosignVersion, generateTestKey, refused, signBlob, userVerifyCommand, verifyBlob, verifyBlobAttestation, type TestKey } from '../scripts/release/sign.ts';
+import { checkChannelConfig, checkReleasePleaseConfigs, nextVersion, type ReleasePleaseConfig } from '../scripts/release/release-please.ts';
+import { catalogNames, checkSbomFile, generateLockfileSbom, validateImageSbom, validateSbom } from '../scripts/release/sbom.ts';
+import { findExtensionZip } from '../scripts/release/dry-run.ts';
+import { attestBlob, cosignVersion, generateTestKey, negativeChecks, refused, signBlob, userVerifyCommand, verifyBlob, verifyBlobAttestation, verifyFailure, type TestKey } from '../scripts/release/sign.ts';
 
 const runtimeDir = new URL('..', import.meta.url).pathname;
 const repoDir = join(runtimeDir, '..');
@@ -37,7 +41,18 @@ jobs:
       - uses: actions/checkout@${SHA} # v1
         with:
           persist-credentials: false
+          fetch-depth: 0
       - run: pnpm install --frozen-lockfile
+      - run: pnpm check:x6-history
+      - uses: anchore/sbom-action/download-syft@${SHA} # v1
+        with:
+          syft-version: v1.51.1
+      - run: |
+          "$SYFT" "$IMAGE" -o cyclonedx-json@1.7=sbom.json
+          node scripts/release/sbom.ts --image sbom.json
+      - uses: sigstore/cosign-installer@${SHA} # v1
+        with:
+          cosign-release: v3.1.3
       - run: |
           cosign sign --yes "$IMAGE"
           cosign attest --yes --type cyclonedx --predicate sbom.json "$IMAGE"
@@ -86,6 +101,14 @@ describe('release : portes (assert_release_gates)', () => {
     expect(bad('cosign sign-blob --yes --bundle b f', 'true')).toHaveLength(1);
     expect(bad('          cosign attest --yes --type cyclonedx --predicate sbom.json "$IMAGE"\n', '')).toHaveLength(1);
     expect(bad(`      - uses: actions/attest-build-provenance@${SHA} # v1\n`, '')).toHaveLength(1);
+    // Audit X6 de l'historique (08b §5, _exclusions X6) : historique complet extrait, puis audité.
+    expect(bad('          fetch-depth: 0\n', '')).toHaveLength(1);
+    expect(bad('      - run: pnpm check:x6-history\n', '')).toHaveLength(1);
+    // Outils épinglés : cosign (même version que la CI), syft ; SBOM de l'image en CycloneDX 1.7, validé.
+    expect(bad('        with:\n          cosign-release: v3.1.3\n', '')).toHaveLength(1);
+    expect(bad('        with:\n          syft-version: v1.51.1\n', '')).toHaveLength(1);
+    expect(bad('cyclonedx-json@1.7=', 'cyclonedx-json=')).toHaveLength(1);
+    expect(bad('          node scripts/release/sbom.ts --image sbom.json\n', '')).toHaveLength(1);
   });
 
   test('assert_image_nonroot : le dernier stage du Dockerfile tourne en non root (USER)', () => {
@@ -94,6 +117,44 @@ describe('release : portes (assert_release_gates)', () => {
     expect(checkImageNonRoot('d', 'FROM c\nUSER 0\n')).toHaveLength(1);
     expect(checkImageNonRoot('d', 'FROM c\nUSER 1001:1001\n')).toEqual([]);
   });
+
+  test('assert_x6_history_clean : l\'historique git entier est audité (fichier supprimé, autre branche) ; clone superficiel refusé', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'zz_test_x6_history-'));
+    const repo = join(dir, 'repo');
+    const git = (cwd: string, ...args: string[]) => execFileSync('git', ['-c', 'user.name=zz_test', '-c', 'user.email=zz_test@example.invalid', '-c', 'commit.gpgsign=false', ...args], { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+    try {
+      mkdirSync(join(repo, 'legacy'), { recursive: true });
+      git(repo, 'init', '--quiet');
+      writeFileSync(join(repo, 'index.ts'), 'export {};\n');
+      git(repo, 'add', '.');
+      git(repo, 'commit', '--quiet', '-m', 'feat: départ');
+      writeFileSync(join(repo, 'legacy/scraper.py'), '# zz_test\n');
+      git(repo, 'add', '.');
+      git(repo, 'commit', '--quiet', '-m', 'chore: ajout');
+      git(repo, 'rm', '--quiet', 'legacy/scraper.py');
+      git(repo, 'commit', '--quiet', '-m', 'chore: retrait');
+      const main = git(repo, 'symbolic-ref', '--short', 'HEAD').trim();
+      git(repo, 'checkout', '--quiet', '-b', 'autre');
+      writeFileSync(join(repo, 'carnet.ipynb'), '{}\n');
+      writeFileSync(join(repo, 'café "x".py'), '# zz_test\n');
+      git(repo, 'add', '.');
+      git(repo, 'commit', '--quiet', '-m', 'chore: carnet');
+      git(repo, 'checkout', '--quiet', main);
+      // L'index courant est propre : seule l'histoire révèle les fichiers interdits.
+      expect(checkX6Index(repo)).toEqual([]);
+      const history = checkX6History(repo);
+      expect(history.map((h) => h.split(' ')[0]).sort()).toEqual(['café', 'carnet.ipynb', 'legacy/scraper.py']);
+      expect(history.join('\n')).toMatch(/commit [0-9a-f]{12}/);
+      expect(history.join('\n')).toContain('café \\"x\\".py');
+      // Clone superficiel (actions/checkout par défaut) : audit impossible, donc refus.
+      git(dir, 'clone', '--quiet', '--depth', '1', `file://${repo}`, 'shallow');
+      expect(checkX6History(join(dir, 'shallow')).join('\n')).toMatch(/superficiel/);
+      // Dépôt réel : historique complet et propre.
+      expect(checkX6History(runtimeDir)).toEqual([]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 60_000);
 
   test('assert_release_gates : dépôt réel (workflows, release.yml, Dockerfile)', () => {
     expect(checkGates(runtimeDir)).toEqual([]);
@@ -120,6 +181,19 @@ describe('release : SBOM CycloneDX (assert_sbom_present)', () => {
     expect(validateSbom(JSON.stringify(GOOD), ['fastify', 'absent'])).toHaveLength(1);
     expect(checkSbomFile(join(tmpdir(), 'zz_test_absent.cdx.json'))).toHaveLength(1);
     expect(catalogNames("catalog:\n  a: 1.0.0\n  '@b/c': 2.0.0 # x\nautre:\n  d: 3\n")).toEqual(['a', '@b/c']);
+  });
+
+  test('assert_sbom_present : SBOM de l\'image (syft, CycloneDX 1.7) : paquets npm présents, composant système sans purl toléré', () => {
+    const os = { type: 'operating-system', name: 'ubuntu', version: '24.04' };
+    const image = (patch: object) => JSON.stringify({ ...GOOD, metadata: { component: { type: 'container', name: 'ghcr.io/o/r', version: 'sha256:abc' } }, ...patch });
+    expect(validateImageSbom(image({ components: [...GOOD.components, os] }))).toEqual([]);
+    // Le contrôle du lockfile, lui, refuse un composant sans purl.
+    expect(validateSbom(image({ components: [...GOOD.components, os] }))).toHaveLength(1);
+    // Version de spécification non épinglée (syft par défaut d'une autre version), aucun paquet npm, paquet sans purl.
+    expect(validateImageSbom(image({ specVersion: '1.6', components: [...GOOD.components, os] }))).toHaveLength(1);
+    expect(validateImageSbom(image({ components: [os] }))).toHaveLength(1);
+    expect(validateImageSbom(image({ components: [...GOOD.components, { type: 'library', name: 'x', version: '1' }] }))).toHaveLength(1);
+    expect(validateImageSbom('[]')).not.toEqual([]);
   });
 
   test('assert_sbom_present : SBOM réel du lockfile (pnpm sbom, CycloneDX 1.7), chaque dépendance du catalogue y figure', () => {
@@ -158,14 +232,31 @@ describe('release : signature cosign (assert_release_signed)', () => {
     writeFileSync(file, 'contenu de la release');
     signBlob(key, file, bundle);
     expect(refused(() => verifyBlob(key.publicKey, file, bundle))).toBe(false);
-    // Non signé : aucun paquet de signature.
-    expect(refused(() => verifyBlob(key.publicKey, file, join(dir, 'absent.bundle')))).toBe(true);
+    // Non signé : vérifié contre le bundle VALIDE d'un autre fichier signé, il est refusé sur la signature elle-même (un
+    // bundle absent ne prouverait qu'une erreur d'entrée-sortie).
+    const unsigned = join(dir, 'non-signe.zip');
+    writeFileSync(unsigned, 'jamais signé');
+    expect(verifyFailure(() => verifyBlob(key.publicKey, unsigned, bundle))).toMatch(/invalid signature|failed to verify/i);
+    expect(verifyFailure(() => verifyBlob(key.publicKey, unsigned, join(dir, 'absent.bundle')))).toMatch(/no such file/i);
+    expect(verifyFailure(() => verifyBlob(key.publicKey, file, bundle))).toBeUndefined();
     // Autre clé.
     expect(refused(() => verifyBlob(other.publicKey, file, bundle))).toBe(true);
     // Altéré après signature.
     const tampered = join(dir, 'altere.zip');
     writeFileSync(tampered, 'contenu de la release, modifié');
     expect(refused(() => verifyBlob(key.publicKey, tampered, bundle))).toBe(true);
+  }, 60_000);
+
+  test('assert_release_signed : contrôles négatifs de la release à blanc, chacun refusé sur la vérification de signature', () => {
+    const signed = join(dir, 'signe.zip');
+    writeFileSync(signed, 'artefact signé');
+    signBlob(key, signed, `${signed}.bundle`);
+    const refusals = negativeChecks({ key, other, signed, bundle: `${signed}.bundle`, workDir: join(dir, 'negatifs') });
+    expect(refusals.map((r) => r.case)).toEqual(['artefact non signé', 'artefact altéré après signature', 'signature vérifiée avec une autre clé']);
+    for (const r of refusals) {
+      expect(r.refused, r.case).toBe(true);
+      expect(r.reason, r.case).not.toMatch(/no such file|ENOENT|reading .*bundle/i);
+    }
   }, 60_000);
 
   test('assert_release_signed : SBOM et provenance attestés, vérifiés avec le type attendu', () => {
@@ -195,7 +286,14 @@ describe('release : signature cosign (assert_release_signed)', () => {
     expect(cmd).toContain('--certificate-oidc-issuer https://token.actions.githubusercontent.com');
     expect(cmd).not.toContain('regexp');
     // Le README de déploiement publie cette commande.
-    expect(readFileSync(join(runtimeDir, 'docs/release.md'), 'utf8')).toContain('--certificate-identity');
+    const doc = readFileSync(join(runtimeDir, 'docs/release.md'), 'utf8');
+    expect(doc).toContain('--certificate-identity');
+    // Écart assumé et écrit : la release à blanc ne pousse aucune image, donc `cosign verify` sur une IMAGE (et le refus d'une
+    // image non signée) ne s'exerce qu'à la release réelle ; la recette 4.4 doit le rejouer.
+    const gap = /### Écart de la release à blanc\n([\s\S]*?)(\n## |$)/.exec(doc)?.[1] ?? '';
+    expect(gap).toMatch(/cosign verify/);
+    expect(gap).toMatch(/image non signée/);
+    expect(gap).toMatch(/recette 4\.4/);
   });
 
   test('assert_release_signed : le workflow de release signe l\'image et chaque fichier sans clé (OIDC)', () => {
@@ -222,6 +320,15 @@ describe('release : version, canaux, tags (16 §3, 14 §6)', () => {
     expect(imageReferences(planRelease('v0.4.2'), 'ghcr.io/o/r')).toEqual(['ghcr.io/o/r:0.4.2', 'ghcr.io/o/r:0.4', 'ghcr.io/o/r:0', 'ghcr.io/o/r:stable']);
   });
 
+  test('archive de l\'extension : celle de la version annoncée, jamais une archive périmée restée dans dist/', () => {
+    const dist = ['chrome-mv3', 'runtimeextension-0.0.9-chrome.zip', 'runtimeextension-0.1.0-chrome.zip', 'runtimeextension-10.1.0-chrome.zip'];
+    expect(findExtensionZip(dist, '0.1.0')).toBe('runtimeextension-0.1.0-chrome.zip');
+    expect(findExtensionZip(['runtimeextension-0.2.0-beta.1-chrome.zip', 'runtimeextension-0.2.0-chrome.zip'], '0.2.0-beta.1')).toBe('runtimeextension-0.2.0-beta.1-chrome.zip');
+    // Seule une archive périmée : refus (et non signature d'une autre version).
+    expect(() => findExtensionZip(['runtimeextension-0.0.9-chrome.zip'], '0.1.0')).toThrow(/0\.1\.0/);
+    expect(() => findExtensionZip(['a-0.1.0-chrome.zip', 'b-0.1.0-chrome.zip'], '0.1.0')).toThrow();
+  });
+
   test('la version du package.json doit être celle de l\'étiquette', () => {
     expect(checkTagMatchesPackage(planRelease('v0.4.2'), '{"version":"0.4.2"}')).toEqual([]);
     expect(checkTagMatchesPackage(planRelease('v0.4.2'), '{"version":"0.4.1"}')).toHaveLength(1);
@@ -242,14 +349,40 @@ describe('release : version, canaux, tags (16 §3, 14 §6)', () => {
       expect(Object.keys(config['packages'] as object)).toEqual(['runtime']);
     }
     expect(stable['prerelease']).toBeUndefined();
-    expect(beta['prerelease']).toBe(true);
-    expect(beta['prerelease-type']).toBe('beta');
     const extra = ((stable['packages'] as Record<string, { 'extra-files': { path: string }[] }>)['runtime']?.['extra-files'] ?? []).map((f) => f.path.replace(/\/package.json$/, '')).sort();
     const workspace = ['apps', 'packages'].flatMap((d) => readdirSync(join(runtimeDir, d)).map((n) => `${d}/${n}`)).concat('fixtures').sort();
     expect(extra).toEqual(workspace);
     for (const dir of workspace) expect(read(join(runtimeDir, dir, 'package.json'))['version'], dir).toBe(root.version);
     // La beta lit la même liste de fichiers que la stable.
     expect((beta['packages'] as object)).toEqual(stable['packages']);
+  });
+
+  test('assert_release_gates : canal beta, la version calculée par release-please est X.Y.Z-beta.N dès la première beta', () => {
+    const read = (name: string) => JSON.parse(readFileSync(join(repoDir, name), 'utf8')) as ReleasePleaseConfig;
+    const beta = read('release-please-config.beta.json');
+    const stable = read('release-please-config.json');
+    // Première beta depuis une stable, puis betas suivantes (SemVer 0.y : un changement cassant monte la MINOR).
+    expect(nextVersion(beta, '0.1.0', ['feat'])).toBe('0.2.0-beta.1');
+    expect(nextVersion(beta, '0.1.0', ['fix'])).toBe('0.1.1-beta.1');
+    expect(nextVersion(beta, '0.1.0', ['breaking'])).toBe('0.2.0-beta.1');
+    expect(nextVersion(beta, '0.2.0-beta.1', ['feat'])).toBe('0.2.0-beta.2');
+    expect(nextVersion(beta, '0.2.0-beta.2', ['fix'])).toBe('0.2.0-beta.3');
+    expect(nextVersion(beta, '0.2.0-beta.9', ['breaking'])).toBe('0.2.0-beta.10');
+    for (const v of ['0.2.0-beta.1', '0.1.1-beta.1', '0.2.0-beta.10']) expect(planRelease(`v${v}`).channel).toBe('beta');
+    // La stable ne produit jamais de pré-version.
+    expect(nextVersion(stable, '0.1.0', ['feat'])).toBe('0.2.0');
+    expect(nextVersion(stable, '0.1.0', ['breaking'])).toBe('0.2.0');
+    expect(nextVersion(stable, '0.2.0', ['fix'])).toBe('0.2.1');
+    // Toutes les versions atteignables sont acceptées par release.yml, dans le bon canal.
+    expect(checkReleasePleaseConfigs(repoDir)).toEqual([]);
+    // Pièges de release-please : sans `versioning: prerelease`, `prerelease-type` est ignoré (beta publiée en STABLE) ;
+    // avec `prerelease-type: beta`, la première beta sort en `X.Y.Z-beta`, sans numéro (étiquette refusée).
+    const { versioning: _ignored, ...noStrategy } = beta;
+    expect(nextVersion(noStrategy, '0.1.0', ['feat'])).toBe('0.2.0');
+    expect(checkChannelConfig('b', noStrategy, 'beta').join('\n')).toMatch(/canal stable au lieu de beta/);
+    expect(nextVersion({ ...beta, 'prerelease-type': 'beta' }, '0.1.0', ['feat'])).toBe('0.2.0-beta');
+    expect(checkChannelConfig('b', { ...beta, 'prerelease-type': 'beta' }, 'beta').join('\n')).toMatch(/étiquette refusée/);
+    expect(checkChannelConfig('s', { ...stable, versioning: 'prerelease', prerelease: true, 'prerelease-type': 'beta.1' }, 'stable')).not.toEqual([]);
   });
 
   test('commits conventionnels : sujets conformes, changement cassant détecté', () => {

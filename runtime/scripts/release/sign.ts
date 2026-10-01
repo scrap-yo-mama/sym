@@ -3,7 +3,7 @@
 // journal de transparence, aucun réseau. La release réelle signe SANS clé (OIDC du workflow, journal Rekor) : voir
 // .github/workflows/release.yml. Ici on prouve la chaîne signer → vérifier → refuser l'artefact non signé ou altéré.
 import { execFileSync } from 'node:child_process';
-import { mkdirSync } from 'node:fs';
+import { copyFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 export type TestKey = { privateKey: string; publicKey: string };
@@ -51,11 +51,53 @@ export function verifyBlobAttestation(publicKey: string, subject: string, type: 
 
 /** Vrai si `verify` lève : l'artefact est refusé. */
 export function refused(verify: () => void): boolean {
+  return verifyFailure(verify) !== undefined;
+}
+
+/** Motif du refus (sortie d'erreur de cosign), ou `undefined` si la vérification passe. */
+export function verifyFailure(verify: () => void): string | undefined {
   try {
     verify();
-    return false;
-  } catch {
-    return true;
+    return undefined;
+  } catch (error) {
+    const stderr = (error as { stderr?: unknown }).stderr;
+    const text = typeof stderr === 'string' ? stderr : Buffer.isBuffer(stderr) ? stderr.toString('utf8') : '';
+    // cosign écrit d'abord des avertissements (journal de transparence ignoré) : on garde la ligne `Error:`.
+    const lines = (text || (error instanceof Error ? error.message : String(error))).split('\n').map((l) => l.trim()).filter(Boolean);
+    return lines.find((l) => l.startsWith('Error:')) ?? lines[lines.length - 1] ?? 'refus';
+  }
+}
+
+export type Refusal = { case: string; refused: boolean; reason: string };
+
+/**
+ * Contrôles négatifs (assert_release_signed) : chacun utilise un bundle VALIDE, celui de `signed`, pour que le refus
+ * vienne de la vérification de signature et non d'un fichier manquant.
+ *   - artefact non signé, présenté avec le bundle d'un autre fichier signé ;
+ *   - artefact altéré après signature ;
+ *   - bon artefact, vérifié avec une autre clé publique.
+ */
+export function negativeChecks(options: { key: TestKey; other: TestKey; signed: string; bundle: string; workDir: string }): Refusal[] {
+  const { key, other, signed, bundle, workDir } = options;
+  mkdirSync(workDir, { recursive: true });
+  const unsigned = join(workDir, 'zz_test_unsigned.bin');
+  const tampered = join(workDir, 'zz_test_tampered.bin');
+  writeFileSync(unsigned, 'artefact sans signature\n');
+  copyFileSync(signed, tampered);
+  writeFileSync(tampered, Buffer.concat([readFileSync(tampered), Buffer.from('x')]));
+  try {
+    const cases: [string, () => void][] = [
+      ['artefact non signé', () => verifyBlob(key.publicKey, unsigned, bundle)],
+      ['artefact altéré après signature', () => verifyBlob(key.publicKey, tampered, bundle)],
+      ['signature vérifiée avec une autre clé', () => verifyBlob(other.publicKey, signed, bundle)],
+    ];
+    return cases.map(([name, verify]) => {
+      const reason = verifyFailure(verify);
+      return { case: name, refused: reason !== undefined, reason: reason ?? 'accepté' };
+    });
+  } finally {
+    rmSync(unsigned, { force: true });
+    rmSync(tampered, { force: true });
   }
 }
 
