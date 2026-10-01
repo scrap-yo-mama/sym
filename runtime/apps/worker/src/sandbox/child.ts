@@ -47,6 +47,27 @@ const GUEST_BOOTSTRAP = String.raw`(function (send, inputJson) {
         json: async () => JSON.parse(res.body),
       });
     },
+    // ctx.page.* (E3, tâche 1.6) : chaque opération est une demande JSON au parent, qui seul tient la page Playwright.
+    // evaluate envoie le TEXTE de la fonction : elle s'exécute dans la page (Chromium, proxy d'egress et verrou de
+    // domaines), jamais dans l'hôte.
+    page: (() => {
+      const op = async (name, args) => JSON.parse(await call('page', toJson({ op: name, args: args }, 'ctx.page.' + name)));
+      const timeoutOf = (o) => (o !== undefined && o !== null && o.timeout !== undefined ? Number(o.timeout) : undefined);
+      return Object.freeze({
+        goto: async (url) => op('goto', { url: String(url) }),
+        url: async () => (await op('url', {})).url,
+        waitForSelector: async (selector, options) => op('waitForSelector', { selector: String(selector), timeoutMs: timeoutOf(options) }),
+        content: async () => (await op('content', {})).html,
+        textAll: async (selector) => (await op('textAll', { selector: String(selector) })).texts,
+        attrAll: async (selector, name) => (await op('attrAll', { selector: String(selector), name: String(name) })).values,
+        click: async (selector, options) => op('click', { selector: String(selector), timeoutMs: timeoutOf(options) }),
+        evaluate: async (fn, arg) => {
+          const isFunction = typeof fn === 'function';
+          const out = await op('evaluate', { source: String(fn), isFunction: isFunction, arg: arg === undefined ? null : arg });
+          return out.value;
+        },
+      });
+    })(),
     log: (...args) => { send('log', 0, '', toJson(args.map(text), 'ctx.log')); },
     emit: (item) => { send('emit', 0, '', toJson(item, 'ctx.emit')); },
   });
@@ -172,8 +193,8 @@ async function main(): Promise<void> {
         return;
       }
     }
-    if (kind === 'call' && typeof id === 'number' && a === 'fetch' && typeof b === 'string') {
-      post({ t: 'call', id, bridge: 'fetch', payload: b }, size);
+    if (kind === 'call' && typeof id === 'number' && (a === 'fetch' || a === 'page') && typeof b === 'string') {
+      post({ t: 'call', id, bridge: a, payload: b }, size);
     } else if (kind === 'log' && typeof b === 'string') post({ t: 'log', payload: b }, size);
     else if (kind === 'emit' && typeof b === 'string') post({ t: 'emit', payload: b }, size);
     else if (kind === 'violation' && (a === 'forbidden_global' || a === 'forbidden_import') && typeof b === 'string') {

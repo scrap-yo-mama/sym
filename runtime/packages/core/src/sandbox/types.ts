@@ -55,6 +55,8 @@ export type SandboxViolationReason =
   | 'time_limit'
   | 'memory_limit'
   | 'output_limit'
+  /** Action d'écriture (envoi de formulaire) sans `allow_write_actions` (08 §4 mesure 4, tâche 1.6). */
+  | 'write_action_blocked'
   | 'env_not_empty'
   | 'protocol'
   | 'child_crashed';
@@ -74,6 +76,11 @@ export interface SandboxBridges {
   fetch(request: unknown): Promise<SandboxFetchResponse>;
   log(args: unknown): void;
   emit(item: unknown): void;
+  /**
+   * `ctx.page.*` (E3, tâche 1.6, D-29) : sous-ensemble de Playwright relayé, liste fermée d'opérations validées par
+   * l'hôte (`{ op, args }` en JSON). Absent hors navigateur : l'appel est refusé (`page_unavailable`).
+   */
+  page?(request: unknown): Promise<unknown>;
   /** Puits unique des violations : journalise `sandbox_violation`. */
   violation(violation: SandboxViolation): void;
   /** Fin d'exécution : annule les requêtes en vol. */
@@ -102,6 +109,14 @@ export interface SandboxResult {
 export interface SandboxRunOptions {
   /** Entrée du script (JSON), visible sous `input`. */
   readonly input?: unknown;
+  /** Annulation du run (annulé, bail perdu, arrêt du worker) : l'enfant est tué (`crashed`, `aborted`). */
+  readonly signal?: AbortSignal;
+  /**
+   * Violations constatées par l'hôte HORS d'un appel de pont (tâche 1.6 : requête de la page coupée par la politique
+   * de domaines pendant ou après un `ctx.page.evaluate`). Le moteur passe son puits : chaque appel journalise la
+   * violation et tue l'enfant aussitôt, comme une violation de pont.
+   */
+  readonly watch?: (violate: (violation: SandboxViolation) => void) => void;
 }
 
 /** `SandboxEngine { run(code, bridges, limits) }` (08 §3). */

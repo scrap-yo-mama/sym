@@ -54,6 +54,7 @@
     "openapi-typescript": "catalog:",
     "pg": "catalog:",
     "standardwebhooks": "catalog:",
+    "playwright-core": "catalog:",
     "typescript": "catalog:",
     "typescript-eslint": "catalog:",
     "vitest": "catalog:",

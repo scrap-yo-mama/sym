@@ -3,6 +3,7 @@
 // socket épinglé sur l'adresse validée (ferme le rebinding), redirections suivies à la main et recontrôlées.
 import { isIP } from 'node:net';
 import { Agent, buildConnector, fetch as undiciFetch, Headers, type Dispatcher, type RequestInit, type Response } from 'undici';
+import { DomainNotAllowedError, findDomainNotAllowed } from './domain-lock.js';
 import { findSsrfBlocked, SsrfBlockedError, type SsrfGuard } from './guard.js';
 import { stripAddress } from './ip.js';
 
@@ -73,6 +74,13 @@ export type GuardedFetchOptions = {
   maxRedirects?: number;
   /** false : aucune redirection suivie, la réponse 3xx est rendue telle quelle (webhooks). */
   followRedirects?: boolean;
+  /**
+   * Verrou de domaines (tâche 1.6) : contrôlé à CHAQUE saut, avant toute connexion. Un hôte refusé lève
+   * `DomainNotAllowedError` ; aucun octet ne part vers lui (une redirection ouverte du site ne sort pas de l'API).
+   */
+  allowHost?: (host: string) => boolean;
+  /** Appelé avant chaque envoi (chaque saut compte) : contrôle du plafond de coût du run, qui lève pour refuser. */
+  beforeRequest?: () => void;
 };
 
 type Init = Omit<RequestInit, 'dispatcher' | 'redirect'>;
@@ -92,11 +100,13 @@ export async function guardedFetch(input: string | URL, init: Init, options: Gua
   let headers = new Headers(init.headers);
   for (let hop = 0; ; hop++) {
     guard.checkUrlStatic(url);
+    if (options.allowHost !== undefined && !options.allowHost(url.hostname)) throw new DomainNotAllowedError(url.hostname);
+    options.beforeRequest?.();
     let response: Response;
     try {
       response = await undiciFetch(url, { ...init, method, body, headers, redirect: 'manual', dispatcher });
     } catch (error) {
-      throw findSsrfBlocked(error) ?? error;
+      throw findSsrfBlocked(error) ?? findDomainNotAllowed(error) ?? error;
     }
     const location = response.headers.get('location');
     if (!REDIRECT_STATUSES.has(response.status) || location === null || options.followRedirects === false) return response;

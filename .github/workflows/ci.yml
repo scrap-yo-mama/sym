@@ -198,6 +198,11 @@ jobs:
       - name: Chromium de Playwright (garde SSRF via le proxy d'egress, INV10)
         if: matrix.node == ''
         run: pnpm exec playwright install --with-deps chromium
+      # Tâche 1.6 : Chromium du worker lancé AVEC son bac à sable (chromiumSandbox: true, jamais --no-sandbox). Ubuntu
+      # 24.04 restreint les espaces de noms utilisateur non privilégiés par AppArmor : levée sur le runner de test seulement.
+      - name: Bac à sable de Chromium (espaces de noms utilisateur)
+        if: matrix.node == ''
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       # Aucune relance : un échec instable doit rester visible (rapport junit archivé).
       - if: matrix.node == ''
         run: pnpm test:security --retry=0 --reporter=default --reporter=junit --outputFile.junit=reports/security-junit.xml

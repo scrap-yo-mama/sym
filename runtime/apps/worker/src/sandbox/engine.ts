@@ -457,7 +457,13 @@ export class ProcessSandboxEngine implements SandboxEngine {
             observeRss(message.mb);
             return;
           case 'call': {
-            const call = bridges.fetch(message.payload).then(
+            const target =
+              message.bridge === 'fetch'
+                ? bridges.fetch(message.payload)
+                : bridges.page === undefined
+                  ? Promise.reject(new SandboxBridgeError('page_unavailable', false))
+                  : bridges.page(message.payload);
+            const call = target.then(
               (response) => reply(message.id, true, JSON.stringify(response)),
               (err: unknown) => reply(message.id, false, refuse(err)),
             );
@@ -523,7 +529,22 @@ export class ProcessSandboxEngine implements SandboxEngine {
         };
         resolve(result);
       };
-      child.once('exit', finish);
+      // Annulation du run : l'enfant est tué (aucune sortie retenue).
+      const onAbort = () => {
+        if (outcome !== undefined) return;
+        error = 'run interrompu';
+        settle('crashed', { byLimit: true });
+      };
+      if (options.signal?.aborted === true) onAbort();
+      else options.signal?.addEventListener('abort', onAbort, { once: true });
+      // Violations constatées par l'hôte hors pont (navigateur) : même verdict qu'une violation de pont.
+      options.watch?.((v) => {
+        if (outcome === undefined) violate(v);
+      });
+      child.once('exit', () => {
+        options.signal?.removeEventListener('abort', onAbort);
+        finish();
+      });
       // Lancement impossible (pas de pid) : fin immédiate. Les autres erreurs (signal refusé, envoi IPC) sont ignorées.
       child.on('error', (err) => {
         if (child.pid !== undefined) return;

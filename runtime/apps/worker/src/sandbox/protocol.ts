@@ -21,7 +21,7 @@ const CHILD_VIOLATIONS = new Set<string>(['forbidden_global', 'forbidden_import'
 export type ChildMessage =
   | { t: 'ready'; envKeys: string[]; node: string }
   | { t: 'rss'; mb: number }
-  | { t: 'call'; id: number; bridge: 'fetch'; payload: string }
+  | { t: 'call'; id: number; bridge: 'fetch' | 'page'; payload: string }
   | { t: 'log'; payload: string }
   | { t: 'emit'; payload: string }
   | { t: 'violation'; reason: ChildViolationReason; detail: string }
@@ -49,7 +49,9 @@ export function parseChildMessage(raw: unknown): ChildMessage | undefined {
     case 'rss':
       return int(m.mb) ? { t: 'rss', mb: m.mb } : undefined;
     case 'call':
-      return int(m.id) && m.bridge === 'fetch' && str(m.payload) ? { t: 'call', id: m.id, bridge: 'fetch', payload: m.payload } : undefined;
+      return int(m.id) && (m.bridge === 'fetch' || m.bridge === 'page') && str(m.payload)
+        ? { t: 'call', id: m.id, bridge: m.bridge, payload: m.payload }
+        : undefined;
     case 'log':
       return str(m.payload) ? { t: 'log', payload: m.payload } : undefined;
     case 'emit':

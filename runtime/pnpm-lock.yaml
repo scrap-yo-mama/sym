@@ -123,6 +123,9 @@ catalogs:
     pino:
       specifier: 10.3.1
       version: 10.3.1
+    playwright-core:
+      specifier: 1.63.0
+      version: 1.63.0
     quickjs-emscripten-core:
       specifier: 0.32.0
       version: 0.32.0
@@ -226,6 +229,9 @@ importers:
       pg:
         specifier: 'catalog:'
         version: 8.23.0
+      playwright-core:
+        specifier: 'catalog:'
+        version: 1.63.0
       standardwebhooks:
         specifier: 'catalog:'
         version: 1.1.1
@@ -425,6 +431,9 @@ importers:
       pino:
         specifier: 'catalog:'
         version: 10.3.1
+      playwright-core:
+        specifier: 'catalog:'
+        version: 1.63.0
     devDependencies:
       '@jitl/quickjs-wasmfile-release-sync':
         specifier: 'catalog:'

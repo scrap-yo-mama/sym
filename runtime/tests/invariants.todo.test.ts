@@ -47,9 +47,13 @@ describe("invariants (à implémenter)", () => {
   test.todo("assert_robots_respected"); // INV11, tâche(s) 1.11
   // RGPD (1.8) : assert_retention_purge, assert_erasure_complete et assert_no_personal_data_in_logs sont dans
   // packages/db/src/retention/retention.integration.test.ts ; câblage worker (RunContext.personal, RunContext.excludeSubjects,
-  // rekey) dans apps/worker/src/worker.integration.test.ts. Reste le câblage par l'exécuteur réel (revue de 1.8) :
-  test.todo("assert_no_personal_data_in_logs — exécuteur réel : items extraits inscrits à RunContext.personal, journaux par appendRunLog(…, ctx.personal)"); // RGPD, tâche(s) 1.6, 1.7, 1.10
-  test.todo("assert_erasure_complete — exécuteur réel : RunContext.excludeSubjects avant collecte et avant écriture, dedup_keys.key_hash = dedupKeyHash"); // RGPD, tâche(s) 1.6, 1.7
+  // rekey) dans apps/worker/src/worker.integration.test.ts. Câblage par l'exécuteur réel (D-28, tâche 1.6) : items extraits
+  // inscrits à RunContext.personal et sujets effacés exclus avant écriture du dataset, journaux par ctx.log (appendRunLog
+  // avec le registre du run) : apps/worker/src/exec/strategy-executor.integration.test.ts (« RGPD (D-28) ») ; `ctx.log` d'un script E3
+// (run_logs masqué, jamais le journal du worker) : apps/worker/src/sandbox/sandbox.unit.test.ts, tests/browser/executors.security.test.ts
+// et apps/worker/src/exec/strategy-executor.security.test.ts (Chromium réel, base réelle). Reste la
+  // déduplication, qui naît avec `dedup_key` / `diff` des planifications (08 §5, tâche 2.5) :
+  test.todo("assert_erasure_complete — dedup_keys.key_hash = dedupKeyHash(clé des sujets, dedup_key) à l'écriture des clés"); // RGPD, tâche(s) 2.5
   test.todo("assert_pacing_key_is_domain"); // politesse, tâche(s) 1.9
   test.todo("assert_export_no_secret"); // INV5, INV8, tâche(s) 3.12
   test.todo("assert_access_report_first"); // étape 0, tâche(s) 1.11, 2.1
