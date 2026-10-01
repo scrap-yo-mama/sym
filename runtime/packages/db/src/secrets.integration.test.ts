@@ -8,6 +8,7 @@ import {
   kekFor,
   loggerRedaction,
   MasterKey,
+  PersonalValueRegistry,
   secretValues,
   type Keyring,
 } from '@runtime/core';
@@ -105,7 +106,7 @@ describe(`secrets sur PostgreSQL ${inject('pgVersion')}`, () => {
     // Un usage réel du secret, journalisé dans run_logs, ne doit pas non plus le poser en base.
     const runId = await newRun(owner);
     const used = await store.get(ids[0]!);
-    await appendRunLog(client, { runId, seq: 1, ownerId: owner, level: 'info', event: 'llm_call', data: { key: used.reveal() } });
+    await appendRunLog(client, { runId, seq: 1, ownerId: owner, level: 'info', event: 'llm_call', data: { key: used.reveal() } }, new PersonalValueRegistry());
 
     for (const v of values) {
       expect(await occurrencesInDatabase(v)).toEqual([]);
@@ -326,8 +327,8 @@ describe(`secrets sur PostgreSQL ${inject('pgVersion')}`, () => {
     logger.error(new Error(`refus du proxy ${proxyUrl}`));
 
     const data = { value: secret.reveal(), url: proxyUrl, nested: [{ detail: `x ${secret.reveal()} y` }] };
-    await appendRunLog(client, { runId, seq: 1, ownerId: owner, level: 'info', event: `proxy ${secret.reveal()}`, data });
-    await appendRunLog(client, { runId, seq: 2, ownerId: owner, level: 'error', event: 'échec', data: { err: String(new Error(secret.reveal())) } });
+    await appendRunLog(client, { runId, seq: 1, ownerId: owner, level: 'info', event: `proxy ${secret.reveal()}`, data }, new PersonalValueRegistry());
+    await appendRunLog(client, { runId, seq: 2, ownerId: owner, level: 'error', event: 'échec', data: { err: String(new Error(secret.reveal())) } }, new PersonalValueRegistry());
 
     const logged = lines.join('\n');
     const { rows } = await client.query<{ t: string }>('SELECT event || coalesce(data::text, \'\') AS t FROM run_logs ORDER BY seq');
@@ -426,7 +427,7 @@ describe(`relecture 0.3a sur PostgreSQL ${inject('pgVersion')}`, () => {
     logger.info({ headers: { Authorization: basic } }, 'basic');
     logger.info({ body: form }, `form ${form}`);
     logger.info({ proxy: `http://user:${encodeURIComponent(s)}@p.example/?sig=${encodeURIComponent(s)}&q=${encodeURIComponent(s)}` }, 'url');
-    await appendRunLog(client, { runId, seq: 1, ownerId: owner, level: 'info', event: 'x', data: { basic, form } });
+    await appendRunLog(client, { runId, seq: 1, ownerId: owner, level: 'info', event: 'x', data: { basic, form } }, new PersonalValueRegistry());
     const { rows } = await client.query<{ t: string }>('SELECT data::text AS t FROM run_logs');
     const all = lines.join('\n') + rows.map((r) => r.t).join('\n');
     const b64 = Buffer.from(`user:${s}`).toString('base64');

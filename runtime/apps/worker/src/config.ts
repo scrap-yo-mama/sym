@@ -1,7 +1,14 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Configuration de `worker` (14 § 2-4) : lue une fois au démarrage ; MASTER_KEY retirée de l'environnement.
-import { loadKeyring, loadObservabilityConfig, scrubOtelEnvironment, type Keyring, type ObservabilityConfig } from '@runtime/core';
-import { RUN_DEFAULTS } from '@runtime/db';
+import {
+  loadKeyring,
+  loadObservabilityConfig,
+  scrubOtelEnvironment,
+  subjectPhoneRegion,
+  type Keyring,
+  type ObservabilityConfig,
+} from '@runtime/core';
+import { RUN_DEFAULTS, retentionPolicyFromEnv, type RetentionPolicy } from '@runtime/db';
 import { resolveBrowserConcurrency } from './browser/cgroup.js';
 
 export class WorkerConfigError extends Error {
@@ -31,6 +38,10 @@ export type WorkerConfig = {
   browserConcurrencySource: 'env' | 'cgroup' | 'host';
   /** `DISABLE_BROWSER` : aucun Chromium, E2 et E3 refusés (14 §2). */
   disableBrowser: boolean;
+  /** Rétention (14 § 9) : durées lues une fois au démarrage (`RETENTION_*`, `RUN_LOG_RETENTION_DAYS`…). */
+  retention: RetentionPolicy;
+  /** Période de la passe de rétention planifiée (marquage horaire, purge quotidienne ; défaut 300 s). */
+  retentionTickSeconds: number;
 };
 
 function positive(env: NodeJS.ProcessEnv, name: string, fallback: number, min = 0.1): number {
@@ -57,6 +68,13 @@ export function loadWorkerConfig(env: NodeJS.ProcessEnv = process.env): WorkerCo
   const browser = resolveBrowserConcurrency(env);
   const disable = env['DISABLE_BROWSER'] ?? 'false';
   if (!['true', 'false', '1', '0', ''].includes(disable)) throw new WorkerConfigError('DISABLE_BROWSER invalide : true ou false attendu.');
+  let retention: RetentionPolicy;
+  try {
+    retention = retentionPolicyFromEnv(env);
+    subjectPhoneRegion(env); // PHONE_DEFAULT_REGION : téléphones des sujets en E.164 (D-25), validée au démarrage
+  } catch (error) {
+    throw new WorkerConfigError((error as Error).message);
+  }
   const keyring = loadKeyring(env);
   return {
     databaseUrl,
@@ -76,5 +94,7 @@ export function loadWorkerConfig(env: NodeJS.ProcessEnv = process.env): WorkerCo
     browserConcurrency: browser.value,
     browserConcurrencySource: browser.source,
     disableBrowser: disable === 'true' || disable === '1',
+    retention,
+    retentionTickSeconds: positive(env, 'RETENTION_TICK_SECONDS', 300),
   };
 }

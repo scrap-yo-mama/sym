@@ -11,6 +11,7 @@
   "dependencies": {
     "@runtime/core": "workspace:*",
     "@runtime/db": "workspace:*",
+    "isolated-vm": "catalog:",
     "pg": "catalog:",
     "pino": "catalog:",
     "playwright-core": "catalog:"
@@ -19,6 +20,9 @@
     "@types/node": "catalog:",
     "@types/pg": "catalog:",
     "typescript": "catalog:",
-    "vitest": "catalog:"
+    "vitest": "catalog:",
+    "quickjs-emscripten-core": "catalog:",
+    "@jitl/quickjs-wasmfile-release-sync": "catalog:",
+    "fast-check": "catalog:"
   }
 }

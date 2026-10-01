@@ -14,13 +14,14 @@
 import { randomUUID } from 'node:crypto';
 import {
   ACTIVE_RUN_STATES,
+  boundErrorDetail,
   currentTraceparent,
   maxRunRequeues,
   RUN_LOST_DETAIL,
   RUN_QUEUE,
-  secretValues,
   type AttemptRecord,
   type JobQueue,
+  type PersonalValueRegistry,
   type QueryClient,
   type QueueDefinition,
   type Run,
@@ -30,6 +31,7 @@ import {
   type SkippedRunState,
 } from '@runtime/core';
 import type pg from 'pg';
+import { assertStorageAvailable, defaultStorageOptions, type StorageOptions } from './retention/storage.js';
 
 type Queryable = Pick<pg.ClientBase, 'query'>;
 
@@ -54,9 +56,12 @@ export const RUN_DEFAULTS = {
   sweepIntervalSeconds: 60,
 } as const;
 
+/** Jobs terminés (14 § 9, phase 3) : supprimés par la maintenance de pg-boss 7 jours après leur fin (journaux : 30 jours). */
+export const RUN_JOB_RETENTION_SECONDS = 7 * 86_400;
+
 /** File `run` : pas de nouvel essai par pg-boss (la reprise est décidée par le balayeur, fenêtre `job_id`). */
 export function runQueueDefinition(budgetSeconds: number = RUN_DEFAULTS.budgetSeconds): QueueDefinition {
-  return { name: RUN_QUEUE, expireInSeconds: budgetSeconds + 60, heartbeatSeconds: 30, retryLimit: 0, policy: 'standard' };
+  return { name: RUN_QUEUE, expireInSeconds: budgetSeconds + 60, heartbeatSeconds: 30, retryLimit: 0, policy: 'standard', deleteAfterSeconds: RUN_JOB_RETENTION_SECONDS };
 }
 
 const ACTIVE = ACTIVE_RUN_STATES as readonly string[];
@@ -76,8 +81,16 @@ export type CreateRunInput = {
 /**
  * Insère le run `queued` **et** son job pg-boss dans la transaction `tx` (T2 R2) : un ROLLBACK n'en laisse aucun des
  * deux, un COMMIT les deux. L'API doit être visible de l'acteur (RLS).
+ * Garde disque (14 § 9, D-25) : à 95 % de `STORAGE_PLAN_GB`, `StorageFullError` (`storage_full`) avant toute écriture.
+ * `opts.storage` remplace la garde lue dans l'environnement (tests, réglages) ; elle n'est jamais désactivable ici.
  */
-export async function createRun(tx: Queryable, queue: JobQueue, input: CreateRunInput): Promise<{ runId: string; jobId: string }> {
+export async function createRun(
+  tx: Queryable,
+  queue: JobQueue,
+  input: CreateRunInput,
+  opts: { storage?: StorageOptions } = {},
+): Promise<{ runId: string; jobId: string }> {
+  await assertStorageAvailable(tx, opts.storage ?? defaultStorageOptions(tx));
   const api = await tx.query<{ owner_id: string }>('SELECT owner_id FROM apis WHERE id = $1', [input.apiId]);
   const apiOwner = api.rows[0]?.owner_id;
   if (!apiOwner) throw new RunNotFoundError(`API ${input.apiId} introuvable`);
@@ -325,8 +338,17 @@ export async function recordAttempt(db: Queryable, runId: string, jobId: string,
   return seq;
 }
 
-/** Clôt le run selon l'exécuteur. false : le run n'est plus à ce job (rien n'est écrit). */
-export async function finishRun(db: Queryable, runId: string, jobId: string, result: RunResult): Promise<boolean> {
+/**
+ * Clôt le run selon l'exécuteur. false : le run n'est plus à ce job (rien n'est écrit). `error_detail` est masqué
+ * (secrets, e-mails, téléphones et valeurs du registre de ce run, `RunContext.personal`) puis tronqué.
+ */
+export async function finishRun(
+  db: Queryable,
+  runId: string,
+  jobId: string,
+  result: RunResult,
+  opts: { personal?: PersonalValueRegistry } = {},
+): Promise<boolean> {
   const failed = result.state === 'failed';
   const { rowCount } = await db.query(
     `UPDATE runs SET state = $3, outcome = $4, degraded_reasons = $5, failure_class = $6, retryable = $7, error_detail = $8,
@@ -341,8 +363,8 @@ export async function finishRun(db: Queryable, runId: string, jobId: string, res
       failed ? [] : (result.degraded_reasons ?? []),
       failed ? result.failure_class : null,
       failed ? result.retryable : null,
-      // INV8 : `error_detail` est un puits comme les autres, masqué avant l'écriture quel que soit l'appelant.
-      failed && typeof result.error_detail === 'string' ? secretValues.redactText(result.error_detail) : null,
+      // INV8 : `error_detail` est un puits comme les autres, masqué (secrets, données personnelles) avant l'écriture quel que soit l'appelant.
+      failed ? boundErrorDetail(result.error_detail, opts.personal) : null,
       result.items ?? 0,
       failed ? null : (result.dataset_id ?? null),
       result.strategy_version ?? null,

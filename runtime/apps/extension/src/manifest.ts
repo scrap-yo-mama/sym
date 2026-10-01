@@ -8,6 +8,7 @@ const OPTIONAL_HOST_PERMISSIONS = ['https://*/*', 'http://*/*'] as const;
 export const MANIFEST = {
   name: 'Scrapyomama',
   description: 'Connects the sites you choose to your own Scrapyomama instance.',
+  icons: { 16: 'icons/16.png', 32: 'icons/32.png', 48: 'icons/48.png', 128: 'icons/128.png' },
   minimum_chrome_version: '120',
   permissions: [...PERMISSIONS],
   host_permissions: [] as string[],

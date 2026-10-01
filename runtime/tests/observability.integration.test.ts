@@ -358,7 +358,15 @@ describe('OTel opt-in explicite', () => {
     expect((await jobData(runId))?.['_trace']).toBe(enqueueSpan); // contexte W3C porté par la charge du job
     await waitDone(runId);
     await started.app.inject({ method: 'GET', url: '/api/health' });
-    await started.telemetry.forceFlush();
+    // Le span `run.execute` se termine APRÈS l'écriture de l'état `succeeded` (clôture des journaux, libération du job) :
+    // on exporte jusqu'à le voir partir, au lieu de supposer qu'il est déjà fini quand le run est vu terminé.
+    await vi.waitFor(
+      async () => {
+        await started.telemetry.forceFlush();
+        expect(exportedSpans(collector).some((s) => s.name === 'run.execute')).toBe(true);
+      },
+      { timeout: 10_000, interval: 100 },
+    );
 
     expect(collector.requests.length).toBeGreaterThan(0);
     for (const r of collector.requests) {

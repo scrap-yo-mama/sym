@@ -4,11 +4,14 @@
 import type { RunExecutor } from '@runtime/core';
 import { loadWorkerConfig } from './config.js';
 import { productionExecutorFactory } from './exec/factory.js';
+import { assertSandboxSupported } from './sandbox/index.js';
 import { startWorker, type Worker } from './worker.js';
 
 export async function main(env: NodeJS.ProcessEnv = process.env, options: { executor?: RunExecutor } = {}): Promise<Worker | null> {
   let worker: Worker;
   try {
+    // Test de démarrage (08 §3) : refus si isolated-vm est sous la borne GHSA-864f-rcv7-6rh4 ou sans binaire pour ce Node.
+    assertSandboxSupported();
     // Sans exécuteur imposé (tests), E1-E3 de production (tâche 1.6).
     const executor = options.executor === undefined ? { executorFactory: productionExecutorFactory(env) } : { executor: options.executor };
     worker = await startWorker({ config: loadWorkerConfig(env), ...executor });

@@ -53,6 +53,13 @@ catalog:
   vite: 8.3.0
   # Exécuteurs E2-E3 (tâche 1.6) : Playwright 1.63 (Chromium 153), noyau sans navigateurs embarqués (image Playwright).
   playwright-core: 1.63.0
+  # Téléphones des sujets en E.164 (tâche 1.8, D-25) : MIT, sans dépendance ; 1.13.14 < 7 jours au 2026-10-01 (minimumReleaseAge).
+  libphonenumber-js: 1.13.13
+  # Bac à sable (tâche 1.5) : isolated-vm 7.0.1 corrige GHSA-864f-rcv7-6rh4 (<= 7.0.0) et porte les binaires Node 24 (ABI 137)
+  # et Node 26 (ABI 147) ; 6.2.0 (corrigée aussi) s'arrête à Node 24. Spike QuickJS : devDependencies, MIT.
+  isolated-vm: 7.0.1
+  quickjs-emscripten-core: 0.32.0
+  '@jitl/quickjs-wasmfile-release-sync': 0.32.0
 
 # OTel coupé = aucun module de l'API ni du SDK résolu (14 § 10, assert_otel_off_by_default). Better Auth
 # (@better-auth/core) fait `import("@opentelemetry/api")` à chaque requête d'auth ; drizzle-orm et vitest déclarent le même
@@ -79,3 +86,5 @@ allowBuilds:
   ssh2: false
   # msw (tâche 0.4) : postinstall = copie du service worker navigateur, inutile côté Node.
   msw: false
+  # isolated-vm (tâche 1.5) : module natif ; node-gyp-build charge le binaire précompilé, sinon compile.
+  isolated-vm: true
