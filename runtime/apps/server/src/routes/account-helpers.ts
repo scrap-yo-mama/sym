@@ -37,15 +37,17 @@ export function libraryHeaders(request: FastifyRequest): Headers {
 // Ré-authentification (13 § 5, ASVS 7.5.1)
 // ---------------------------------------------------------------------------------------------------------------
 
-/** 5 échecs par utilisateur sur 15 min → 429 et fermeture de la session utilisée (comme la création de clé, 0.3b). */
+/** 5 échecs par utilisateur sur 15 min, toutes opérations sensibles confondues → 429 et fermeture de la session utilisée. */
 const REAUTH_MAX_FAILURES = 5;
 const reauthLimiter = new AttemptLimiter({ max: REAUTH_MAX_FAILURES, windowMs: 15 * 60 * 1000 });
 /** Compte sans mot de passe (OIDC seul) : la ré-authentification est une connexion de moins de 10 minutes. */
 const FRESH_SESSION_MS = 10 * 60 * 1000;
 
 /**
- * Vérifie le mot de passe actuel de l'acteur avant une opération sensible. Répond lui-même en cas d'échec (403, ou
- * 429 et session fermée après 5 échecs) et renvoie false ; true si l'appelant peut continuer.
+ * Vérifie le mot de passe actuel de l'acteur avant une opération sensible (clé d'API, code d'appairage, 2FA, liaison
+ * OIDC) ; compte OIDC sans mot de passe local : connexion de moins de 10 minutes, sinon 403 `reauth_required`.
+ * Répond lui-même en cas d'échec (403, ou 429 et session fermée après 5 échecs) et renvoie false ; true si l'appelant
+ * peut continuer.
  */
 export async function reauthenticate(ctx: ServerContext, request: FastifyRequest, reply: FastifyReply, actor: Actor, password: string, action: string): Promise<boolean> {
   if (reauthLimiter.blocked(actor.userId)) {
@@ -61,6 +63,8 @@ export async function reauthenticate(ctx: ServerContext, request: FastifyRequest
     // Compte OIDC sans mot de passe local : une connexion récente tient lieu de ré-authentification.
     const fresh = actor.sessionCreatedAt !== undefined && Date.now() - actor.sessionCreatedAt.getTime() < FRESH_SESSION_MS;
     if (fresh) return true;
+    // Pas un échec de secret (rien à deviner) : ni compteur ni fermeture de session, mais le refus est audité.
+    await audit(ctx, request, actor, { action, outcome: 'denied', meta: { reason: 'reauth_required' } });
     await sendError(reply, 403, 'reauth_required', 'reconnectez-vous pour confirmer cette opération');
     return false;
   }

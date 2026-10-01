@@ -487,6 +487,43 @@ describe('OIDC générique (13 § 7)', () => {
     await configureSso(srv, ownerCookie, { group_roles: [{ group: 'zz-ops', role: 'admin' }] });
   });
 
+  test('assert_oidc_only_sensitive_reauth : compte OIDC seul (création à la volée), clé d’API et code d’appairage par une connexion de moins de 10 min ; refus au-delà, session conservée', async () => {
+    await configureSso(srv, ownerCookie, { jit_provisioning: { enabled: true, domains: ['example.test'] }, group_roles: [{ group: 'zz-ops', role: 'admin' }] });
+    idp.nextClaims = { sub: 'zz_test_jit_reauth_sub', email: 'zz_test_jit_reauth@example.test', email_verified: true };
+    const login = await oidcLogin(srv);
+    expect(login.location).toBe(`${PUBLIC_URL}/`);
+    const userId = (await srv.app.inject({ method: 'GET', url: '/api/me', headers: { cookie: login.cookie } })).json<{ id: string }>().id;
+    // Aucun mot de passe local : ce que le client envoie dans `currentPassword` ne compte pas, la connexion récente fait foi.
+    expect(await sql(srv, "SELECT 1 FROM auth_accounts WHERE user_id = $1 AND provider_id = 'credential'", [userId])).toEqual([]);
+    const createKeyAs = (cookie: string) =>
+      srv.app.inject({ method: 'POST', url: '/api/api-keys', headers: json(cookie), payload: { label: 'zz_test_oidc_key', scopes: ['apis:read'], currentPassword: 'n/a' } });
+    const createPairing = (cookie: string) =>
+      srv.app.inject({ method: 'POST', url: '/api/extension/pairing-codes', headers: json(cookie), payload: { currentPassword: 'n/a' } });
+    const key = await createKeyAs(login.cookie);
+    expect(key.statusCode, key.body).toBe(201);
+    expect(key.json<{ key: string }>().key).toMatch(/^sy_/);
+    const pairing = await createPairing(login.cookie);
+    expect(pairing.statusCode, pairing.body).toBe(201);
+    expect(pairing.json<{ code: string }>().code).toBeTruthy();
+    // Connexion de plus de 10 minutes : reconnexion exigée, sans compter d'échec ni fermer la session.
+    await sql(srv, "UPDATE auth_sessions SET created_at = now() - interval '11 minutes' WHERE user_id = $1", [userId]);
+    for (let i = 0; i < 6; i++) {
+      for (const res of [await createKeyAs(login.cookie), await createPairing(login.cookie)]) {
+        expect(res.statusCode, res.body).toBe(403);
+        expect(res.json<{ error: { code: string } }>().error.code).toBe('reauth_required');
+      }
+    }
+    expect((await srv.app.inject({ method: 'GET', url: '/api/me', headers: { cookie: login.cookie } })).statusCode).toBe(200);
+    expect(await sql(srv, 'SELECT count(*)::int AS n FROM api_keys WHERE user_id = $1', [userId])).toEqual([{ n: 1 }]);
+    for (const action of ['apikey.create', 'tunnel.pairing_code']) {
+      expect((await auditOf(srv, action)).filter((e) => e.actor_user_id === userId && e.outcome === 'denied' && e.meta['reason'] === 'reauth_required')).toHaveLength(6);
+    }
+    // Nouvelle connexion chez l'IdP : de nouveau autorisé.
+    const again = await oidcLogin(srv);
+    expect((await createKeyAs(again.cookie)).statusCode).toBe(201);
+    await configureSso(srv, ownerCookie, { group_roles: [{ group: 'zz-ops', role: 'admin' }] });
+  });
+
   test('assert_oidc_jit_requires_domains : création à la volée sans liste de domaines → 400 ; réglage forcé en base → aucun compte créé', async () => {
     // 13 § 7 : « activable avec liste de domaines ». Sans liste, un IdP public (Google…) ouvrirait l'instance à tous.
     const empty = await srv.app.inject({

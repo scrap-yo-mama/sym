@@ -155,5 +155,7 @@
   { "test": "assert_oidc_link_reauth", "invariant": "13 § 5 (7.5.1), 13 § 7", "tasks": ["3.7"], "stage": "I1",
     "note": "3.7 (vérification) : liaison OIDC après ré-authentification et second facteur ; identités listées et retirées" },
   { "test": "assert_oidc_jit_requires_domains", "invariant": "INV5, 13 § 7", "tasks": ["3.7"], "stage": "I1",
-    "note": "3.7 (vérification) : création à la volée refusée sans liste de domaines (400 au réglage) ; réglage forcé en base → aucun compte créé au retour de l’IdP" }
+    "note": "3.7 (vérification) : création à la volée refusée sans liste de domaines (400 au réglage) ; réglage forcé en base → aucun compte créé au retour de l’IdP" },
+  { "test": "assert_oidc_only_sensitive_reauth", "invariant": "13 § 5 (7.5.1), 13 § 7, 13 § 8", "tasks": ["3.7"], "stage": "I1",
+    "note": "3.7 (vérification) : compte OIDC sans mot de passe local, clé d’API et code d’appairage par une connexion de moins de 10 min ; au-delà 403 reauth_required, audité, session conservée" }
 ]

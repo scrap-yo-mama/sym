@@ -6,7 +6,7 @@
 //   consentement par domaine, cookies en usage serveur (écriture seule, scellés), déconnexion d'un domaine.
 // L'utilisateur est toujours celui du jeton ou de la session (garde) : aucun corps ne choisit un propriétaire (INV5).
 import { checkSiteDomain } from '@runtime/core/net';
-import { extensionTooOld, SITE_COOKIE_LIMITS, verifyPassword, type SiteCookie } from '@runtime/core';
+import { extensionTooOld, SITE_COOKIE_LIMITS, type SiteCookie } from '@runtime/core';
 import {
   adminRevokeDevice,
   connectSite,
@@ -25,14 +25,13 @@ import {
   type DeviceView,
   type SiteView,
 } from '@runtime/db';
-import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
+import type { FastifyInstance, FastifyRequest } from 'fastify';
 import type { ServerContext } from '../context.js';
 import { AttemptLimiter } from '../rate-limit.js';
-import { audit, notFound, sendError, type Actor } from './guard.js';
+import { reauthenticate } from './account-helpers.js';
+import { audit, notFound, sendError } from './guard.js';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-/** Ré-authentification : 5 échecs par utilisateur sur 15 min → 429 et fermeture de la session (comme les clés d'API). */
-const REAUTH_MAX_FAILURES = 5;
 /** Échange de code : 10 échecs par IP sur 15 min → 429 (le code a 50 bits d'aléa et vit 10 min). */
 const PAIR_MAX_FAILURES = 10;
 const WINDOW_MS = 15 * 60 * 1000;
@@ -119,41 +118,15 @@ function domainParam(request: FastifyRequest<{ Params: { domain: string } }>): s
 }
 
 export function extensionRoutes(app: FastifyInstance, ctx: ServerContext): void {
-  const reauth = new AttemptLimiter({ max: REAUTH_MAX_FAILURES, windowMs: WINDOW_MS });
   const pairing = new AttemptLimiter({ max: PAIR_MAX_FAILURES, windowMs: WINDOW_MS });
-
-  /** Opération sensible (13 § 5, ASVS 7.5.1) : mot de passe actuel exigé. Répond lui-même en cas d'échec. */
-  async function reauthenticate(request: FastifyRequest, reply: FastifyReply, actor: Actor, password: string, action: string): Promise<boolean> {
-    if (reauth.blocked(actor.userId)) {
-      await sendError(reply, 429, 'too_many_attempts', 'trop de tentatives, réessayez plus tard');
-      return false;
-    }
-    const { rows } = await ctx.pool.query<{ password_hash: string | null }>(
-      "SELECT password_hash FROM auth_accounts WHERE user_id = $1 AND provider_id = 'credential'",
-      [actor.userId],
-    );
-    const stored = rows[0]?.password_hash;
-    if (stored && (await verifyPassword(stored, password))) {
-      reauth.reset(actor.userId);
-      return true;
-    }
-    const failures = reauth.fail(actor.userId);
-    await audit(ctx, request, actor, { action, outcome: 'denied', meta: { reason: 'reauth_failed', failures } });
-    if (failures >= REAUTH_MAX_FAILURES) {
-      if (actor.sessionId) await ctx.pool.query('DELETE FROM auth_sessions WHERE id = $1 AND user_id = $2', [actor.sessionId, actor.userId]);
-      await audit(ctx, request, actor, { action: 'auth.session_revoked', outcome: 'success', meta: { reason: 'reauth_failures' } });
-      await sendError(reply, 429, 'too_many_attempts', 'trop de tentatives : session fermée');
-      return false;
-    }
-    await sendError(reply, 403, 'reauth_failed', 'mot de passe actuel incorrect');
-    return false;
-  }
 
   // --- Console : appairage -------------------------------------------------------------------------------------------
 
   app.post<{ Body: { currentPassword: string } }>('/api/extension/pairing-codes', { schema: { body: pairingCodeSchema } }, async (request, reply) => {
     const actor = request.actor!;
-    if (!(await reauthenticate(request, reply, actor, request.body.currentPassword, 'tunnel.pairing_code'))) return reply;
+    // Opération sensible (13 § 5, ASVS 7.5.1) : mot de passe actuel, ou connexion de moins de 10 min pour un compte
+    // OIDC sans mot de passe local ; 5 échecs → 429 et session fermée.
+    if (!(await reauthenticate(ctx, request, reply, actor, request.body.currentPassword, 'tunnel.pairing_code'))) return reply;
     const created = await withActor(ctx.pool, actor, (db) => createPairingCode(db, actor.userId));
     if (!created) return sendError(reply, 429, 'too_many_pairing_codes', 'trop de codes d’appairage actifs : utilisez-en un ou attendez son expiration (10 min)');
     const { code, expiresAt } = created;
