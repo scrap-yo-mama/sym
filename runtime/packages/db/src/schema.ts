@@ -532,11 +532,20 @@ export const datasets = pgTable(
     bytes: bigint('bytes', { mode: 'number' }).notNull().default(0),
     retentionDays: integer('retention_days'),
     pinned: boolean('pinned').notNull().default(false),
+    /** Exemption datée et motivée (0007, 17 § 6) : obligatoires quand `pinned`. */
+    pinnedReason: text('pinned_reason'),
+    pinnedUntil: tstz('pinned_until'),
     expiresAt: tstz('expires_at'),
     deletedAt: tstz('deleted_at'),
     createdAt: createdAt(),
   },
-  (t) => [index('datasets_owner_id_idx').on(t.ownerId)],
+  (t) => [
+    index('datasets_owner_id_idx').on(t.ownerId),
+    check(
+      'datasets_pinned_exemption_check',
+      sql`NOT ${t.pinned} OR (${t.pinnedReason} IS NOT NULL AND btrim(${t.pinnedReason}) <> '' AND ${t.pinnedUntil} IS NOT NULL)`,
+    ),
+  ],
 );
 
 /** Table partitionnée par mois sur created_at (partitions créées par ensure_dataset_items_partitions). */

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 import { describe, expect, test } from 'vitest';
 import { scrubSubject, searchForms, subjectRegex } from './subject.js';
 

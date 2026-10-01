@@ -29,6 +29,11 @@ describe("invariants (à implémenter)", () => {
   test.todo("assert_no_telemetry"); // INV9, tâche(s) 1.10, 4.3 (part auth de 0.3b : apps/server/src/telemetry.integration.test.ts)
   test.todo("assert_otel_off_by_default"); // INV9, tâche(s) 1.10, 4.3
   test.todo("assert_robots_respected"); // INV11, tâche(s) 1.11
+  // RGPD (1.8) : assert_retention_purge, assert_erasure_complete et assert_no_personal_data_in_logs sont dans
+  // packages/db/src/retention/retention.integration.test.ts ; câblage worker (RunContext.personal, RunContext.excludeSubjects,
+  // rekey) dans apps/worker/src/worker.integration.test.ts. Reste le câblage par l'exécuteur réel (revue de 1.8) :
+  test.todo("assert_no_personal_data_in_logs — exécuteur réel : items extraits inscrits à RunContext.personal, journaux par appendRunLog(…, ctx.personal)"); // RGPD, tâche(s) 1.6, 1.7, 1.10
+  test.todo("assert_erasure_complete — exécuteur réel : RunContext.excludeSubjects avant collecte et avant écriture, dedup_keys.key_hash = dedupKeyHash"); // RGPD, tâche(s) 1.6, 1.7
   test.todo("assert_pacing_key_is_domain"); // politesse, tâche(s) 1.9
   test.todo("assert_export_no_secret"); // INV5, INV8, tâche(s) 3.12
   test.todo("assert_diagnostics_redacted"); // INV9, tâche(s) 1.10

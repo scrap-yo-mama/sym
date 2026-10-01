@@ -10,7 +10,7 @@ const BASE64_32 = /^[A-Za-z0-9+/]{42}[AEIMQUYcgkosw048]=$/;
 const HKDF_SALT = Buffer.from('scrapyomama-runtime/master-key/v1');
 
 /** Usages d'une KEK : un libellé HKDF par usage (08 § 3). */
-export type KekPurpose = 'secrets' | 'sessions' | 'subjects';
+export type KekPurpose = 'secrets' | 'sessions';
 
 export class MasterKeyError extends Error {
   override name = 'MasterKeyError';

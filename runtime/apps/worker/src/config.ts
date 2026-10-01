@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Configuration de `worker` (14 § 2-4) : lue une fois au démarrage ; MASTER_KEY retirée de l'environnement.
-import { loadKeyring, type Keyring } from '@runtime/core';
-import { RUN_DEFAULTS } from '@runtime/db';
+import { loadKeyring, subjectPhoneRegion, type Keyring } from '@runtime/core';
+import { RUN_DEFAULTS, retentionPolicyFromEnv, type RetentionPolicy } from '@runtime/db';
 
 export class WorkerConfigError extends Error {
   override name = 'WorkerConfigError';
@@ -23,6 +23,10 @@ export type WorkerConfig = {
   sweepIntervalSeconds: number;
   workerHeartbeatSeconds: number;
   queuePollingSeconds: number;
+  /** Rétention (14 § 9) : durées lues une fois au démarrage (`RETENTION_*`, `RUN_LOG_RETENTION_DAYS`…). */
+  retention: RetentionPolicy;
+  /** Période de la passe de rétention planifiée (marquage horaire, purge quotidienne ; défaut 300 s). */
+  retentionTickSeconds: number;
 };
 
 function positive(env: NodeJS.ProcessEnv, name: string, fallback: number, min = 0.1): number {
@@ -44,6 +48,13 @@ export function loadWorkerConfig(env: NodeJS.ProcessEnv = process.env): WorkerCo
   if (runStaleSeconds < 2 * runHeartbeatSeconds) {
     throw new WorkerConfigError('RUN_STALE_SECONDS doit valoir au moins 2 × RUN_HEARTBEAT_SECONDS.');
   }
+  let retention: RetentionPolicy;
+  try {
+    retention = retentionPolicyFromEnv(env);
+    subjectPhoneRegion(env); // PHONE_DEFAULT_REGION : téléphones des sujets en E.164 (D-25), validée au démarrage
+  } catch (error) {
+    throw new WorkerConfigError((error as Error).message);
+  }
   const keyring = loadKeyring(env);
   return {
     databaseUrl,
@@ -59,5 +70,7 @@ export function loadWorkerConfig(env: NodeJS.ProcessEnv = process.env): WorkerCo
     sweepIntervalSeconds: positive(env, 'SWEEP_INTERVAL_SECONDS', RUN_DEFAULTS.sweepIntervalSeconds),
     workerHeartbeatSeconds: positive(env, 'WORKER_HEARTBEAT_SECONDS', 15),
     queuePollingSeconds: positive(env, 'QUEUE_POLLING_SECONDS', 2, 0.5),
+    retention,
+    retentionTickSeconds: positive(env, 'RETENTION_TICK_SECONDS', 300),
   };
 }

@@ -1,9 +1,12 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 import { describe, expect, test } from 'vitest';
-import { MasterKey } from '../crypto/master-key.js';
+import { randomBytes } from 'node:crypto';
 import { SecretValueRegistry } from '../crypto/redact.js';
 import {
   boundErrorDetail,
   extractPersonalValues,
+  extractSubjectIdentifiers,
+  isUsableSubjectValue,
   filterExcludedItems,
   maskPersonal,
   maskPersonalText,
@@ -12,6 +15,7 @@ import {
   PersonalValueRegistry,
   schemaHasPersonalFields,
   subjectHash,
+  subjectSearchRegex,
 } from './index.js';
 
 const schema = {
@@ -33,7 +37,7 @@ describe('valeurs x-personal', () => {
     expect(schemaHasPersonalFields({ type: 'object', properties: { a: { type: 'string' } } })).toBe(false);
   });
 
-  test('normalisation : casse, espaces, téléphone réduit à ses chiffres', () => {
+  test('normalisation : casse, espaces, téléphone en E.164', () => {
     expect(normalizeSubjectValue('  Alice   MARTIN ')).toBe('alice martin');
     expect(normalizeSubjectValue('06 12 34 56 78')).toBe(normalizeSubjectValue('06.12.34.56.78'));
     expect(normalizeSubjectValue('+33 6 12 34 56 78')).toBe('+33612345678');
@@ -41,13 +45,12 @@ describe('valeurs x-personal', () => {
 });
 
 describe('empreinte HMAC des sujets', () => {
-  const key = MasterKey.generate().kek('subjects');
+  const key = randomBytes(32);
   test('stable, insensible à la forme, dépendante de la clé (pas un hash nu)', () => {
     expect(subjectHash(key, 'Alice.Martin@example.test')).toBe(subjectHash(key, ' alice.martin@EXAMPLE.test '));
     expect(subjectHash(key, 'a@example.test')).toMatch(/^[0-9a-f]{64}$/);
-    const other = MasterKey.generate().kek('subjects');
+    const other = randomBytes(32);
     expect(subjectHash(other, 'a@example.test')).not.toBe(subjectHash(key, 'a@example.test'));
-    expect(subjectHash(key, 'a@example.test')).not.toBe(MasterKey.generate().kek('secrets').toString('hex'));
   });
 
   test('filtre d’écriture : un sujet exclu n’est pas réécrit', () => {
@@ -87,5 +90,98 @@ describe('masquage des données personnelles dans les journaux', () => {
     expect(out.length).toBeLessThanOrEqual(1001);
     expect(boundErrorDetail(null)).toBeNull();
     expect(boundErrorDetail(undefined)).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------
+// Revue de 1.8 (non-régression)
+// ---------------------------------------------------------------------------------------------------------------
+describe('valeurs de sujet : chaînes identifiantes seulement (revue 1.8, points 1 et 15)', () => {
+  const authorSchema = {
+    type: 'object',
+    properties: {
+      author: { type: 'object', 'x-personal': true, properties: { name: { type: 'string' }, verified: { type: 'boolean' }, followers: { type: 'integer' } } },
+      published: { type: 'string', 'x-personal': true },
+      comment: { type: 'string', 'x-personal': 'content' },
+    },
+  };
+
+  test('un objet x-personal ne donne ni booléen ni nombre ; date et contenu ne sont pas des identifiants', () => {
+    const item = { author: { name: 'Jean-Pierre Dupont', verified: true, followers: 1234 }, published: '2026-09-15', comment: 'Bravo à toute l’équipe !' };
+    expect(extractSubjectIdentifiers(authorSchema, item)).toEqual(['Jean-Pierre Dupont']);
+    expect(extractPersonalValues(authorSchema, item)).not.toContain('true');
+    expect(extractPersonalValues(authorSchema, item)).not.toContain('1234');
+  });
+
+  test('isUsableSubjectValue : e-mail et téléphone oui ; booléen, date, nombre, prénom court non', () => {
+    for (const ok of ['alice@example.test', '+33 6 12 34 56 78', '06 12 34 56 78', 'Jean-Pierre Dupont', 'Alice Martin']) expect(isUsableSubjectValue(ok)).toBe(true);
+    for (const ko of ['true', 'false', '2026-09-15', '15/09/2026', '42', '12345678', 'Anne', 'Jean', 'null', '   ']) expect(isUsableSubjectValue(ko)).toBe(false);
+  });
+
+  test('un item dont le seul point commun est « true » ou une date n’est pas exclu', () => {
+    const key = randomBytes(32);
+    const excluded = new Set(['true', '2026-09-15', 'Alice Martin'].map((v) => subjectHash(key, v)));
+    const other = { author: { name: 'Bob Durand-Lefèvre', verified: true }, published: '2026-09-15' };
+    expect(filterExcludedItems(key, excluded, authorSchema, [other]).kept).toEqual([other]);
+  });
+});
+
+describe('téléphones en E.164 (revue 1.8, point 3)', () => {
+  test('06…, +33 6…, 0033 6… et +33 (0)6… ont la même forme et la même empreinte', () => {
+    const key = randomBytes(32);
+    const forms = ['06 12 34 56 78', '+33 6 12 34 56 78', '0033 6 12 34 56 78', '+33 (0)6 12 34 56 78', '06.12.34.56.78'];
+    for (const f of forms) {
+      expect(normalizeSubjectValue(f)).toBe('+33612345678');
+      expect(subjectHash(key, f)).toBe(subjectHash(key, '+33612345678'));
+    }
+    expect(normalizeSubjectValue('2026-09-15')).toBe('2026-09-15'); // une date n'est pas un téléphone
+  });
+
+  test('la recherche d’un +33 trouve la forme nationale 06, sans coller à d’autres chiffres', () => {
+    const re = new RegExp(subjectSearchRegex(['+33 6 12 34 56 78'])!, 'i');
+    for (const t of ['06 12 34 56 78', '06.12.34.56.78', '0612345678', '+33612345678', '+33 (0)6 12 34 56 78', '0033 6 12 34 56 78', 'tel:+33612345678']) {
+      expect(re.test(t), t).toBe(true);
+    }
+    for (const t of ['+336123456789', '106 12 34 56 78', '0612345679']) expect(re.test(t), t).toBe(false);
+    const national = new RegExp(subjectSearchRegex(['06 12 34 56 78'])!, 'i');
+    expect(national.test('+33 6 12 34 56 78')).toBe(true);
+  });
+});
+
+describe('recherche bornée aux limites de mot (revue 1.8, points 1 et 15)', () => {
+  test('« Anne Martin » ne trouve ni « Jeanne Martinez » ni « annexe » ; casse et espaces libres', () => {
+    const re = new RegExp(subjectSearchRegex(['Anne Martin'])!, 'i');
+    expect(re.test('{"name":"Jeanne Martinez"}')).toBe(false);
+    expect(re.test('Anne Martine')).toBe(false);
+    expect(re.test('{"name":"anne   MARTIN"}')).toBe(true);
+    const mail = new RegExp(subjectSearchRegex(['al@example.test'])!, 'i');
+    expect(mail.test('val@example.test')).toBe(false);
+    expect(mail.test('écrire à al@example.test.')).toBe(true);
+    expect(subjectSearchRegex(['  '])).toBeNull();
+  });
+});
+
+describe('registre de masquage par run (revue 1.8, points 8 et 19)', () => {
+  test('plafonné : les valeurs les plus anciennes sortent ; vidé en fin de run', () => {
+    const reg = new PersonalValueRegistry({ maxValues: 2 });
+    reg.add('Alice Martin');
+    reg.add('Bob Durand');
+    reg.add('Carole Petit');
+    expect(reg.size).toBe(2);
+    expect(maskPersonalText('Alice Martin, Bob Durand, Carole Petit', reg)).toBe(`Alice Martin, ${PERSONAL_MASK}, ${PERSONAL_MASK}`);
+    reg.clear();
+    expect(maskPersonalText('Bob Durand', reg)).toBe('Bob Durand');
+  });
+
+  test('ajouts nombreux : coût linéaire (motif reconstruit à la lecture, pas à chaque ajout)', () => {
+    const reg = new PersonalValueRegistry({ maxValues: 50_000 });
+    const t0 = performance.now();
+    for (let i = 0; i < 20_000; i++) reg.add(`personne numéro ${i}`);
+    expect(maskPersonalText('vu personne numéro 19999 hier', reg)).toBe(`vu ${PERSONAL_MASK} hier`);
+    expect(performance.now() - t0).toBeLessThan(3000); // ajouts + première lecture ; ancienne version : ~120 s (O(n²))
+  });
+
+  test('e-mail encodé dans une URL (%40) masqué', () => {
+    expect(maskPersonalText('GET https://example.test/p?email=alice.martin%40example.test&x=1')).not.toMatch(/alice/i);
   });
 });

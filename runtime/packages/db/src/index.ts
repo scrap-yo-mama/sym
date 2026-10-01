@@ -14,6 +14,7 @@ export * from './partitions.js';
 export * from './rls.js';
 export * from './run-logs.js';
 export * from './secrets.js';
+export * from './subject-key.js';
 export * from './status.js';
 export * from './queue.js';
 export * from './retention/index.js';

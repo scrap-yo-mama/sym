@@ -6,13 +6,27 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { createInterface } from 'node:readline';
 import { generateMasterKey, MasterKey, RUN_QUEUE, type RunExecutor } from '@runtime/core';
-import { createRun, keyCheck, KeyCheckError, migrateUp, PgBossJobQueue, readRun, runQueueDefinition, withActor } from '@runtime/db';
+import {
+  createRun,
+  ensureDatasetItemsPartitions,
+  eraseSubject,
+  keyCheck,
+  KeyCheckError,
+  loadSubjectKey,
+  migrateUp,
+  PgBossJobQueue,
+  readRun,
+  rekey,
+  resolveSubjectValues,
+  runQueueDefinition,
+  withActor,
+} from '@runtime/db';
 import pg from 'pg';
 import { pino } from 'pino';
 import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from 'vitest';
 import { createTestDatabase, type TestDatabase } from '../../../tests/helpers/pg.js';
 import { loadWorkerConfig } from './config.js';
-import { startWorker, type Worker } from './worker.js';
+import { startWorker, unavailableExecutor, type Worker } from './worker.js';
 
 const CHILD = new URL('../dist/testing/child.testkit.js', import.meta.url).pathname;
 const silent = pino({ level: 'silent' });
@@ -284,4 +298,77 @@ test('exécuteur par défaut (avant la tâche 1.6) : run `failed` executor_unava
   const { runId } = await create();
   await waitState(runId, ['failed']);
   expect(await runRow(runId)).toMatchObject({ error_detail: 'executor_unavailable', retryable: false });
+});
+
+describe('RGPD câblé dans un run réel (tâche 1.8, revue : points 2, 7, 8, 9, 18 ; D-25)', () => {
+  const SCHEMA = {
+    type: 'object',
+    properties: { email: { type: 'string', 'x-personal': 'identifier' }, name: { type: 'string', 'x-personal': true }, title: { type: 'string' } },
+  };
+  const ALICE = { email: 'alice.worker@example.test', name: 'Alice Lefebvre', title: 'fiche' };
+  const BOB = { email: 'bob.worker@example.test', name: 'Bob Marchetti', title: 'fiche' };
+
+  test('assert_erasure_survives_rekey : erase_subject, rekey complet, puis un run réel exclut toujours le sujet ; error_detail masqué par le registre du run', async () => {
+    const db2 = await createTestDatabase('workerrk');
+    const p2 = new pg.Pool({ connectionString: db2.url, max: 4 });
+    const q2 = new PgBossJobQueue({ connectionString: db2.url, max: 2, supervise: false });
+    let worker: Worker | undefined;
+    try {
+      await migrateUp({ connectionString: db2.url });
+      const oldKey = MasterKey.parse(generateMasterKey());
+      const newKey = generateMasterKey();
+      const subjectKey = await loadSubjectKey(p2, { current: oldKey }, await keyCheck(p2, { current: oldKey }));
+      const owner = randomUUID();
+      await p2.query("INSERT INTO users (id, email, status) VALUES ($1, 'zz_test_wrk@example.test', 'active')", [owner]);
+      const api = (await p2.query<{ id: string }>("INSERT INTO apis (slug, owner_id, output_schema) VALUES ('zz_test_rk', $1, $2::jsonb) RETURNING id", [owner, JSON.stringify(SCHEMA)])).rows[0]!.id;
+      await ensureDatasetItemsPartitions(p2, new Date());
+      const ds = (await p2.query<{ id: string }>('INSERT INTO datasets (api_id, owner_id) VALUES ($1, $2) RETURNING id', [api, owner])).rows[0]!.id;
+      await p2.query('INSERT INTO dataset_items (created_at, dataset_id, seq, owner_id, item, size_bytes) VALUES (now(), $1, 1, $2, $3::jsonb, 10)', [ds, owner, JSON.stringify(ALICE)]);
+      const req = { values: await resolveSubjectValues(p2, { datasetId: ds, seq: 1 }), key: subjectKey, actor: { userId: owner, via: 'ui' as const }, scope: { ownerId: owner } };
+      const dry = await eraseSubject(p2, req, { dryRun: true });
+      await eraseSubject(p2, req, { confirm: dry.plan.confirmation });
+
+      const client = await p2.connect();
+      try {
+        expect(await rekey(client, { current: MasterKey.parse(newKey), previous: oldKey })).toMatchObject({ status: 'done' });
+      } finally {
+        client.release();
+      }
+
+      let seen: { kept: unknown[]; dropped: number } | undefined;
+      let registrySize = -1;
+      const executor: RunExecutor = async (ctx) => {
+        seen = ctx.excludeSubjects(SCHEMA, [ALICE, BOB]);
+        for (const item of seen.kept) ctx.personal.addFromItem(SCHEMA, item);
+        registrySize = ctx.personal.size;
+        return { state: 'failed', failure_class: 'extraction', retryable: false, error_detail: `validation échouée pour ${BOB.name}` };
+      };
+      worker = await startWorker({ config: loadWorkerConfig(fastEnv({ DATABASE_URL: db2.url, MASTER_KEY: newKey })), executor, logger: silent });
+      await q2.start();
+      await q2.createQueue(runQueueDefinition());
+      const { runId } = await withActor(p2, { userId: owner, role: 'member' }, (tx) => createRun(tx, q2, { apiId: api, ownerId: owner, trigger: 'rest' }));
+      await vi.waitFor(
+        async () => expect((await p2.query<{ state: string }>('SELECT state FROM runs WHERE id = $1', [runId])).rows[0]!.state).toBe('failed'),
+        { timeout: 20_000, interval: 100 },
+      );
+      expect(seen).toEqual({ kept: [BOB], dropped: 1 });
+      expect(registrySize).toBe(2);
+      const detail = (await p2.query<{ error_detail: string }>('SELECT error_detail FROM runs WHERE id = $1', [runId])).rows[0]!.error_detail;
+      expect(detail).toBe('validation échouée pour [PERSONAL]');
+    } finally {
+      await worker?.stop();
+      await q2.stop({ timeoutMs: 1000 }).catch(() => undefined);
+      await p2.end();
+      await db2.drop();
+    }
+  });
+
+  test('la purge est planifiée par le worker : passe de rétention journalisée sans appel manuel', async () => {
+    await inProcessWorker(unavailableExecutor, { RETENTION_TICK_SECONDS: '0.5' });
+    await vi.waitFor(
+      async () => expect((await pool.query("SELECT 1 FROM audit_events WHERE action = 'retention.purge'")).rowCount).toBeGreaterThan(0),
+      { timeout: 15_000, interval: 200 },
+    );
+    expect((await pool.query("SELECT value FROM settings WHERE key = 'retention_state'")).rows[0]!.value).toHaveProperty('daily_at');
+  });
 });

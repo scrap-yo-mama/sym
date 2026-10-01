@@ -1,8 +1,8 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Garde disque (14 § 9) : avec un forfait `STORAGE_PLAN_GB`, alerte à 80 %, refus des nouveaux runs à 95 % avec
 // l'erreur `storage_full`. Seuils réglables ; l'occupation est mesurée sur la base (`pg_database_size`), ou injectée.
+// La garde est appliquée par `createRun` lui-même (D-25) : aucune route, aucun outil MCP ni planification ne la contourne.
 import type pg from 'pg';
-import { createRun, type CreateRunInput } from '../runs.js';
-import type { JobQueue } from '@runtime/core';
 
 type Queryable = Pick<pg.ClientBase, 'query'>;
 
@@ -21,6 +21,8 @@ export type StorageStatus = { state: StorageState; usedBytes: number; limitBytes
 
 export const DEFAULT_STORAGE_THRESHOLDS = { warnPercent: 80, fullPercent: 95 } as const;
 const GB = 1024 ** 3;
+/** Une mesure de `pg_database_size` sert au plus ce délai pour la garde de `createRun` (coût par run borné). */
+export const STORAGE_MEASURE_TTL_MS = 60_000;
 
 /** Erreur stable `storage_full` : le run n'est pas créé, aucune ligne n'est écrite. */
 export class StorageFullError extends Error {
@@ -56,13 +58,32 @@ export async function assertStorageAvailable(db: Queryable, opts: StorageOptions
   return status;
 }
 
-/** `createRun` précédé de la garde disque : à 95 % du forfait, le run est refusé (`storage_full`) et rien n'est écrit. */
-export async function createRunIfStorageAllows(
-  tx: Queryable,
-  queue: JobQueue,
-  input: CreateRunInput,
-  opts: StorageOptions = {},
-): Promise<{ runId: string; jobId: string }> {
-  await assertStorageAvailable(tx, opts);
-  return createRun(tx, queue, input);
+/** `STORAGE_PLAN_GB` (Go, nombre > 0) ; absent ou vide : pas de garde. */
+export function storagePlanFromEnv(env: NodeJS.ProcessEnv = process.env): number | undefined {
+  const raw = env['STORAGE_PLAN_GB'];
+  if (raw === undefined || raw.trim() === '') return undefined;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0) throw new Error('STORAGE_PLAN_GB invalide : nombre de Go strictement positif attendu.');
+  return n;
+}
+
+let envPlan: { planGb: number | undefined } | undefined;
+let lastMeasure: { at: number; bytes: number } | undefined;
+
+/**
+ * Garde par défaut de `createRun` : `STORAGE_PLAN_GB` lu une seule fois par processus ; mesure réelle mise en cache
+ * `STORAGE_MEASURE_TTL_MS`. Sans forfait, aucune mesure n'est faite.
+ */
+export function defaultStorageOptions(db: Queryable, now: () => number = Date.now): StorageOptions {
+  envPlan ??= { planGb: storagePlanFromEnv() };
+  if (!envPlan.planGb) return {};
+  return {
+    planGb: envPlan.planGb,
+    measure: async () => {
+      if (lastMeasure && now() - lastMeasure.at < STORAGE_MEASURE_TTL_MS) return lastMeasure.bytes;
+      const bytes = await databaseSizeBytes(db);
+      lastMeasure = { at: now(), bytes };
+      return bytes;
+    },
+  };
 }
