@@ -43,6 +43,11 @@
         },
         {
           "type": "json",
+          "path": "packages/agent/package.json",
+          "jsonpath": "$.version"
+        },
+        {
+          "type": "json",
           "path": "packages/client/package.json",
           "jsonpath": "$.version"
         },
