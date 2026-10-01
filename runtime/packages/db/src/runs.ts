@@ -14,9 +14,11 @@
 import { randomUUID } from 'node:crypto';
 import {
   ACTIVE_RUN_STATES,
+  currentTraceparent,
   maxRunRequeues,
   RUN_LOST_DETAIL,
   RUN_QUEUE,
+  secretValues,
   type AttemptRecord,
   type JobQueue,
   type QueryClient,
@@ -86,7 +88,8 @@ export async function createRun(tx: Queryable, queue: JobQueue, input: CreateRun
      VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, 'queued', now())`,
     [runId, input.apiId, input.ownerId, apiOwner, input.trigger, input.input === undefined ? null : JSON.stringify(input.input), input.traceId ?? null, jobId],
   );
-  await queue.enqueue(RUN_QUEUE, { run_id: runId }, { tx: tx as QueryClient, id: jobId });
+  const trace = currentTraceparent();
+  await queue.enqueue(RUN_QUEUE, { run_id: runId, ...(trace ? { _trace: trace } : {}) }, { tx: tx as QueryClient, id: jobId });
   return { runId, jobId };
 }
 
@@ -338,7 +341,8 @@ export async function finishRun(db: Queryable, runId: string, jobId: string, res
       failed ? [] : (result.degraded_reasons ?? []),
       failed ? result.failure_class : null,
       failed ? result.retryable : null,
-      failed ? (result.error_detail ?? null) : null,
+      // INV8 : `error_detail` est un puits comme les autres, masqué avant l'écriture quel que soit l'appelant.
+      failed && typeof result.error_detail === 'string' ? secretValues.redactText(result.error_detail) : null,
       result.items ?? 0,
       failed ? null : (result.dataset_id ?? null),
       result.strategy_version ?? null,

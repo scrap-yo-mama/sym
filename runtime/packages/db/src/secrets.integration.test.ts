@@ -219,7 +219,7 @@ describe(`secrets sur PostgreSQL ${inject('pgVersion')}`, () => {
     await expect(rekey(client, { current: newKey(), previous: oldKey })).rejects.toThrow(/rotation déjà commencée/);
 
     // Reprise : les 15 restantes.
-    expect(await rekey(client, keyring, { batchSize: 10 })).toEqual({ status: 'done', from: 1, to: 2, rotated: 15, unreadable: 0 });
+    expect(await rekey(client, keyring, { batchSize: 10 })).toEqual({ status: 'done', from: 1, to: 2, rotated: 15, unreadable: 0, rotatedArtifacts: 0, unreadableArtifacts: 0 });
     const { rows } = await client.query<{ n: number }>("SELECT count(*)::int AS n FROM secrets WHERE kek_version <> 2 OR state <> 'ok'");
     expect(rows[0]?.n).toBe(0);
     expect((await client.query('SELECT 1 FROM settings WHERE key = $1', [REKEY_STATE_SETTING])).rowCount).toBe(0);
@@ -241,7 +241,7 @@ describe(`secrets sur PostgreSQL ${inject('pgVersion')}`, () => {
     const listed = ENCRYPTED_COLUMNS.filter((c) => c.column !== 'value').map((c) => `${c.table}.${c.column}`).sort();
     expect(rows.map((r) => r.col)).toEqual(listed);
 
-    // Une colonne différée (site_sessions, tâche 1.10) non vide : rekey refuse au lieu de l'oublier.
+    // Une colonne différée (site_sessions, tâche 2.6 : l'extension y écrit la session capturée) non vide : rekey refuse au lieu de l'oublier.
     const oldKey = newKey();
     await keyCheck(client, { current: oldKey });
     const owner = await newUser();
@@ -249,7 +249,7 @@ describe(`secrets sur PostgreSQL ${inject('pgVersion')}`, () => {
       "INSERT INTO site_sessions (owner_id, domain, server_use_allowed, ciphertext, nonce, key_version) VALUES ($1, 'example.test', true, '\\x00', '\\x00', 1)",
       [owner],
     );
-    await expect(rekey(client, { current: newKey(), previous: oldKey })).rejects.toThrow(/site_sessions\.ciphertext.*tâche 1\.10/);
+    await expect(rekey(client, { current: newKey(), previous: oldKey })).rejects.toThrow(/site_sessions\.ciphertext.*tâche 2\.6/);
   });
 
   test('assert_no_secret_in_logs (I1) : pino et run_logs après usage d’un secret canari → 0 occurrence', async () => {

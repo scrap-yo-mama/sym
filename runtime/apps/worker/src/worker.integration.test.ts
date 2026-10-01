@@ -6,7 +6,7 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { createInterface } from 'node:readline';
 import { generateMasterKey, MasterKey, RUN_QUEUE, type RunExecutor } from '@runtime/core';
-import { createRun, keyCheck, KeyCheckError, migrateUp, PgBossJobQueue, readRun, runQueueDefinition, withActor } from '@runtime/db';
+import { createRun, keyCheck, KeyCheckError, listWorkers, migrateUp, PgBossJobQueue, readRun, runQueueDefinition, withActor } from '@runtime/db';
 import pg from 'pg';
 import { pino } from 'pino';
 import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from 'vitest';
@@ -221,6 +221,26 @@ describe('kill -9 en plein run (vrai processus)', () => {
     expect(await runRow(runId)).toMatchObject({ state: 'failed', error_detail: 'worker_lost', retryable: false, requeue_count: 0 });
     expect(executed).toBe(false);
   });
+});
+
+test('battement d’un worker tué (kill -9) : expire après le délai de mort (délais raccourcis), sans désinscription', async () => {
+  // Délai de mort ramené à 2 s (production : 45 s, WORKER_DEAD_AFTER_SECONDS) ; battement toutes les 0,5 s.
+  const deadAfter = 2;
+  const { runId, jobId } = await create();
+  const { child, workerId } = await childWorker(runId);
+  const status = async () => (await listWorkers(pool, deadAfter)).find((w) => w.workerId === workerId);
+  expect(await status()).toMatchObject({ alive: true });
+  child.kill('SIGKILL');
+  expect((await exited(child)).signal).toBe('SIGKILL');
+  const killedAt = Date.now();
+  // La ligne reste (aucun arrêt propre) mais n'est plus vivante une fois le délai écoulé.
+  await vi.waitFor(async () => expect(await status()).toMatchObject({ alive: false }), { timeout: 10_000, interval: 100 });
+  expect(Date.now() - killedAt).toBeGreaterThanOrEqual((deadAfter - 0.6) * 1000);
+  expect((await status())!.ageSeconds).toBeGreaterThanOrEqual(deadAfter);
+  // Nettoyage : ce run ne doit pas être repris par les tests suivants.
+  await pool.query("UPDATE runs SET state = 'cancelled' WHERE id = $1", [runId]);
+  await queue.cancel(RUN_QUEUE, jobId).catch(() => undefined);
+  await pool.query('DELETE FROM worker_heartbeats WHERE worker_id = $1', [workerId]);
 });
 
 describe('SIGTERM', () => {

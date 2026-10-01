@@ -28,13 +28,17 @@ export type RouteSpec = {
   resource?: { type: OwnedResource; kind: 'item' | 'collection' };
   /** Joignable avant la création de l'owner (sinon 503 « non initialisé », 13 § 4). */
   beforeInit?: true;
+  /** Joignable pendant le démarrage en mode dégradé, schéma pas encore à jour (sinon 503 « not_ready », 14 § 5). */
+  duringStartup?: true;
   /** Géré par la bibliothèque d'auth (liste blanche : tout autre chemin /api/auth/* répond 404). */
   library?: true;
 };
 
 export const ROUTES: readonly RouteSpec[] = [
-  { method: 'GET', url: '/api/health', auth: 'public', beforeInit: true },
-  { method: 'GET', url: '/api/ready', auth: 'public', beforeInit: true },
+  { method: 'GET', url: '/api/health', auth: 'public', beforeInit: true, duringStartup: true },
+  { method: 'GET', url: '/api/ready', auth: 'public', beforeInit: true, duringStartup: true },
+  // `/metrics` : jeton propre (METRICS_TOKEN), 404 sans configuration ; jamais une identité d'utilisateur.
+  { method: 'GET', url: '/metrics', auth: 'public', beforeInit: true },
   { method: 'POST', url: '/api/setup', auth: 'public', beforeInit: true },
   { method: 'POST', url: '/api/auth/sign-in/email', auth: 'public', library: true },
   { method: 'POST', url: '/api/auth/sign-out', auth: 'public', library: true },

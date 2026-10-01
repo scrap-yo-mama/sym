@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Dépendances partagées par les routes.
-import type { Secret } from '@runtime/core';
+import type { Keyring, Secret } from '@runtime/core';
 import type pg from 'pg';
 import type { Auth } from './auth/better-auth.js';
+import type { MetricsCollector } from './metrics.js';
 
 export type ServerContext = {
   /** Connexion de l'identité système (propriétaire des tables). Le contenu se lit via `withActor` seulement. */
@@ -12,9 +13,21 @@ export type ServerContext = {
   publicUrl: string;
   bootstrapToken: Secret | null;
   adminEmail: string | null;
-  /** Empreinte de MASTER_KEY, affichée une fois par l'assistant (13 § 4). */
+  /** Empreinte de MASTER_KEY, affichée une fois par l'assistant (13 § 4). Posée à la fin de l'initialisation. */
   keyFingerprint: string;
+  /** Version de l'application (`RUNTIME_VERSION`), seule version publiée par `/api/health`. */
+  appVersion: string;
+  /**
+   * Démarrage (14 § 5) : `ready()` vaut true dès que le schéma est à la version attendue et que l'initialisation
+   * (keyCheck, contrôle d'amorçage) est faite. Tant que false, seules `/api/health` et `/api/ready` répondent.
+   */
+  startup: { ready(): Promise<boolean> };
   expectedSchemaVersion: number;
+  /** Clés de ce processus : `/api/ready` vérifie `key_check` sans rien écrire. */
+  keyring: Keyring;
+  /** `METRICS_TOKEN` (null : `/metrics` fermé, 404). */
+  metricsToken: Secret | null;
+  metrics: MetricsCollector;
   /** Vrai dès qu'un owner existe (mis en cache : l'état ne revient jamais en arrière). */
   isInitialized: () => Promise<boolean>;
 };

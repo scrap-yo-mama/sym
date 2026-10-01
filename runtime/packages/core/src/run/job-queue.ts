@@ -2,12 +2,17 @@
 // Interface de file (T2 R1) : le code métier ne voit que `JobQueue`. L'adaptateur pg-boss 12 (`@runtime/db`) est le
 // seul endroit où pg-boss est importé et le seul à toucher le schéma `pgboss` (SQL brut interdit ailleurs).
 import type { Execution, FailureClass, Network, RunOutcome } from '../model/enums.js';
+import type { LogLevel } from '../observability/config.js';
 
 /** Files de la V1 (T2 R4). `run` seule est branchée en 1.3 ; `repair`, `scheduled-run`, `maintenance` : 2.x et 1.8. */
 export const RUN_QUEUE = 'run';
 
-/** Charge d'un job de run : l'identifiant seul (T2 R2). Le run en base fait foi. */
-export type RunJobData = { run_id: string };
+/** Charge d'un job de run : l'identifiant seul (T2 R2) et, si OTel est activé, le contexte de trace. Le run en base fait foi. */
+export type RunJobData = {
+  run_id: string;
+  /** Contexte W3C (`traceparent`) du span qui a mis le job en file ; présent seulement si OTel est activé (14 § 10). */
+  _trace?: string;
+};
 
 /** Connexion d'une transaction ouverte par l'appelant : le job est écrit dans cette transaction (même COMMIT). */
 export type QueryClient = { query: (text: string, values?: unknown[]) => Promise<{ rows: unknown[] }> };
@@ -91,6 +96,11 @@ export type RunContext = {
   /** Levé à l'annulation, à la perte du bail (`job_id` changé), à l'expiration du job et à l'arrêt du worker. */
   signal: AbortSignal;
   recordAttempt(attempt: AttemptRecord): Promise<void>;
+  /**
+   * Journal du run (`run_logs`) : masqué avant l'écriture (INV8), filtré par `LOG_LEVEL`, plafonné (14 § 10). Ne lève jamais :
+   * un journal qui ne s'écrit pas ne fait pas échouer l'exécution.
+   */
+  log(level: LogLevel, event: string, data?: unknown): Promise<void>;
 };
 
 export type RunExecutor = (ctx: RunContext) => Promise<RunResult>;

@@ -478,6 +478,11 @@ export const runArtifacts = pgTable(
     ciphertext: bytea('ciphertext').notNull(),
     nonce: bytea('nonce').notNull(),
     keyVersion: integer('key_version').notNull(),
+    dekWrapped: bytea('dek_wrapped').notNull().default(sql`'\\x'`),
+    alg: text('alg').notNull().default('aes-256-gcm'),
+    // 0005 : 'unreadable' = non ouvrable par l'ancienne clé pendant `rekey` (marqué et audité, jamais supprimé en silence).
+    state: text('state', { enum: ['ok', 'unreadable'] }).notNull().default('ok'),
+    unreadableSince: tstz('unreadable_since'),
     createdAt: createdAt(),
   },
   (t) => [index('run_artifacts_owner_id_idx').on(t.ownerId), index('run_artifacts_run_id_idx').on(t.runId)],
