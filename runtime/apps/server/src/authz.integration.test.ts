@@ -71,6 +71,17 @@ const RESOURCE_CASES: Record<OwnedResource, { create: (party: Party) => Promise<
       return list.body.includes(marker);
     },
   },
+  auth_identity: {
+    // Une identité OIDC liée au compte de la partie (issuer|sub unique).
+    create: async (party) =>
+      withClient(srv.db.url, async (c) =>
+        (await c.query<{ id: string }>('INSERT INTO auth_accounts (user_id, provider_id, account_id) VALUES ($1, $2, $3) RETURNING id', [party.user.id, 'oidc:zz-test-authz', `https://idp.example.test|zz_test_sub_${(seq += 1)}`])).rows[0]!.id,
+      ),
+    intact: async (party, id) => {
+      const list = await srv.app.inject({ method: 'GET', url: '/api/me/identities', headers: { cookie: party.cookie } });
+      return list.json<{ identities: { id: string }[] }>().identities.some((i) => i.id === id);
+    },
+  },
   site_session: {
     create: async (party) => {
       const res = await srv.app.inject({ method: 'PUT', url: `/api/extension/sites/zz-test-authz-${(seq += 1)}.example`, headers: { authorization: `Bearer ${party.ext}` }, payload: { serverUseAllowed: false } });
@@ -99,7 +110,8 @@ const VALID_BODIES: Record<string, (party: Party) => Record<string, unknown>> = 
   'POST /api/auth/password-reset/confirm': () => ({ token: 'zz_test_not_a_token', password: 'zz_test_long_password_1' }),
   'POST /api/me/2fa/enroll': (p) => ({ current_password: p.user.password }),
   'POST /api/me/2fa/confirm': () => ({ code: '123456' }),
-  'POST /api/me/2fa/backup-codes': (p) => ({ current_password: p.user.password }),
+  'POST /api/me/2fa/backup-codes': (p) => ({ current_password: p.user.password, code: '123456' }),
+  'POST /api/me/identities/oidc': (p) => ({ current_password: p.user.password }),
   'PATCH /api/users/:id': () => ({ role: 'member' }),
   'POST /api/users/:id/reset-link': () => ({}),
   'POST /api/users/:id/revoke-access': () => ({}),

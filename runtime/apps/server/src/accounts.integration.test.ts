@@ -3,7 +3,8 @@
 // 2FA TOTP « maison » (graine scellée, anti-rejeu, codes de secours), MFA_ENFORCED, OIDC générique sur un faux
 // fournisseur local, désactivation, hiérarchie, réinitialisation, audit, réglages, D-15 (appareil reconnu).
 import { randomBytes } from 'node:crypto';
-import { saveSmtpSettings } from '@runtime/db';
+import { generateOpaqueToken } from '@runtime/core';
+import { issueOperatorResetLink, saveSmtpSettings } from '@runtime/db';
 import type { LightMyRequestResponse } from 'fastify';
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import { startFakeIdp, type FakeIdp } from '../../../tests/helpers/oidc-provider.js';
@@ -99,6 +100,21 @@ async function oidcLogin(server: TestServer, query = '', cookie = ''): Promise<{
   return { location: String(res.headers.location), cookie: session ? `${session.name}=${session.value}` : '', res };
 }
 
+/** Liaison OIDC depuis une session : ré-authentification (mot de passe, code si 2FA), puis aller-retour chez le faux IdP. */
+async function oidcLink(server: TestServer, cookie: string, password: string, code?: string): Promise<{ location: string; res: LightMyRequestResponse }> {
+  const start = await server.app.inject({ method: 'POST', url: '/api/me/identities/oidc', headers: json(cookie), payload: { current_password: password, ...(code ? { code } : {}) } });
+  expect(start.statusCode, start.body).toBe(200);
+  const authorize = start.json<{ authorization_url: string }>().authorization_url;
+  expect(authorize.startsWith(`${idp.issuer}/authorize?`), authorize).toBe(true);
+  const atIdp = await fetch(authorize, { redirect: 'manual' });
+  const callback = new URL(String(atIdp.headers.get('location')));
+  const res = await server.app.inject({ method: 'GET', url: `${callback.pathname}${callback.search}`, headers: { cookie: [cookie, cookiesOf(start)].join('; ') } });
+  expect(res.statusCode, res.body).toBe(302);
+  return { location: String(res.headers.location), res };
+}
+
+const tokenOfLink = (link: string) => link.slice(link.lastIndexOf('/') + 1);
+
 beforeAll(async () => {
   idp = await startFakeIdp();
   srv = await startTestServer('acct', {}, { oidcAllowHttp: true });
@@ -190,6 +206,17 @@ describe('invitations (13 § 6)', () => {
     }
   });
 
+  test('révocation : un admin ne révoque pas l’invitation « admin » de l’owner (403, audit denied) ; l’owner, si', async () => {
+    const created = await invite('zz_test_inv_admin_rev@example.test', 'admin', ownerCookie);
+    expect(created.statusCode, created.body).toBe(201);
+    const id = created.json<{ id: string }>().id;
+    const denied = await srv.app.inject({ method: 'DELETE', url: `/api/invitations/${id}`, headers: json(adminCookie) });
+    expect(denied.statusCode).toBe(403);
+    expect(await sql(srv, 'SELECT revoked_at FROM invitations WHERE id = $1', [id])).toEqual([{ revoked_at: null }]);
+    expect((await auditOf(srv, 'invitation.revoked')).filter((e) => e.outcome === 'denied' && e.actor_user_id === admin.id)).toHaveLength(1);
+    expect((await srv.app.inject({ method: 'DELETE', url: `/api/invitations/${id}`, headers: json(ownerCookie) })).statusCode).toBe(204);
+  });
+
   test('domaines autorisés (réglage de l’owner)', async () => {
     const put = await srv.app.inject({
       method: 'PUT',
@@ -278,8 +305,13 @@ describe('2FA TOTP (13 § 7)', () => {
     const user = await createUser(srv, 'zz_test_mfa_remove@example.test');
     const cookie = await signIn(srv, user);
     const { secret, backupCodes } = await enableTwoFactor(srv, cookie, user);
-    const regen = await srv.app.inject({ method: 'POST', url: '/api/me/2fa/backup-codes', headers: json(cookie), payload: { current_password: user.password } });
-    expect(regen.statusCode).toBe(200);
+    // Régénérer les codes de secours exige aussi le second facteur (mot de passe seul : refus).
+    const passwordOnly = await srv.app.inject({ method: 'POST', url: '/api/me/2fa/backup-codes', headers: json(cookie), payload: { current_password: user.password } });
+    expect(passwordOnly.statusCode).toBe(400);
+    const wrongCode = await srv.app.inject({ method: 'POST', url: '/api/me/2fa/backup-codes', headers: json(cookie), payload: { current_password: user.password, code: '000000' } });
+    expect(wrongCode.json<{ error: { code: string } }>().error.code).toBe('invalid_code');
+    const regen = await srv.app.inject({ method: 'POST', url: '/api/me/2fa/backup-codes', headers: json(cookie), payload: { current_password: user.password, code: backupCodes[1] } });
+    expect(regen.statusCode, regen.body).toBe(200);
     const fresh = regen.json<{ backup_codes: string[] }>().backup_codes;
     expect(fresh).toHaveLength(10);
     const oldCode = await srv.app.inject({ method: 'DELETE', url: '/api/me/2fa', headers: json(cookie), payload: { current_password: user.password, code: backupCodes[0] } });
@@ -290,6 +322,37 @@ describe('2FA TOTP (13 § 7)', () => {
     expect(removed.statusCode, removed.body).toBe(204);
     expect(await sql(srv, 'SELECT count(*)::int AS n FROM two_factor WHERE user_id = $1', [user.id])).toEqual([{ n: 0 }]);
     expect((await login(srv, user)).json<{ twoFactorRequired?: boolean }>().twoFactorRequired).toBeUndefined();
+  });
+
+  test('second facteur des opérations sensibles limité par compte : 5 codes faux au retrait → 429, même le bon code ensuite', async () => {
+    const user = await createUser(srv, 'zz_test_mfa_remove_brute@example.test');
+    const cookie = await signIn(srv, user);
+    const { secret } = await enableTwoFactor(srv, cookie, user);
+    const remove = (code: string) => srv.app.inject({ method: 'DELETE', url: '/api/me/2fa', headers: json(cookie), payload: { current_password: user.password, code } });
+    const statuses: number[] = [];
+    for (let i = 0; i < 5; i += 1) statuses.push((await remove('000000')).statusCode);
+    expect(statuses).toEqual([400, 400, 400, 400, 429]);
+    await rewindTotp(srv, user.id);
+    expect((await remove(totpFor(secret))).statusCode).toBe(429);
+    expect(await sql(srv, 'SELECT count(*)::int AS n FROM two_factor WHERE user_id = $1', [user.id])).toEqual([{ n: 1 }]);
+  });
+});
+
+describe('MFA_ENFORCED=admins', () => {
+  test('assert_mfa_enforced (admins) : owner et admin sans 2FA forcés à l’enrôlement, un membre non', async () => {
+    const s = await startTestServer('mfaadm', { MFA_ENFORCED: 'admins' });
+    try {
+      const o = await runSetup(s);
+      const adminUser = await createUser(s, 'zz_test_mfaadm_admin@example.test', 'admin');
+      const memberUser = await createUser(s, 'zz_test_mfaadm_member@example.test');
+      for (const u of [o, adminUser]) {
+        const res = await s.app.inject({ method: 'GET', url: '/api/api-keys', headers: { cookie: await signIn(s, u) } });
+        expect(res.json<{ error: { code: string } }>().error.code, u.role).toBe('mfa_enrollment_required');
+      }
+      expect((await s.app.inject({ method: 'GET', url: '/api/api-keys', headers: { cookie: await signIn(s, memberUser) } })).statusCode).toBe(200);
+    } finally {
+      await s.close();
+    }
   });
 });
 
@@ -339,8 +402,8 @@ describe('assert_mfa_enforced (MFA_ENFORCED=all)', () => {
     // Identité IdP déjà liée (la liaison depuis une session est testée plus bas) : une session à enrôlement forcé
     // n'atteint pas la liaison (seule l'identité et l'enrôlement lui sont ouverts).
     await sql(enforced, 'INSERT INTO auth_accounts (user_id, provider_id, account_id) VALUES ($1, $2, $3)', [user.id, 'oidc:zz-test-idp', `${idp.issuer}|zz_test_enf_sub`]);
-    const blockedLink = await enforced.app.inject({ method: 'GET', url: '/api/auth/oidc/start?intent=link', headers: { cookie: await signIn(enforced, user), 'sec-fetch-site': 'same-origin' } });
-    expect(blockedLink.headers.location).toBe(`${PUBLIC_URL}/login?sso_error=session_required`);
+    const blockedLink = await enforced.app.inject({ method: 'POST', url: '/api/me/identities/oidc', headers: json(await signIn(enforced, user)), payload: { current_password: user.password } });
+    expect(blockedLink.json<{ error: { code: string } }>().error.code).toBe('mfa_enrollment_required');
 
     idp.nextClaims = { sub: 'zz_test_enf_sub', email: user.email, email_verified: true, amr: ['pwd'] };
     const noMfa = await oidcLogin(enforced);
@@ -391,12 +454,22 @@ describe('OIDC générique (13 § 7)', () => {
     expect((await auditOf(srv, 'auth.login_failed')).filter((e) => e.meta['reason'] === 'no_account').length).toBeGreaterThanOrEqual(2);
   });
 
-  test('création à la volée (domaines), rôle depuis les groupes réévalué à chaque connexion, jamais owner', async () => {
+  test('création à la volée (domaines) en member, rôle depuis les groupes réévalué aux connexions suivantes, jamais owner', async () => {
     idp.nextClaims = { sub: 'zz_test_jit_sub', email: 'zz_test_jit@example.test', email_verified: true, groups: ['zz-ops', 'owner'] };
     const first = await oidcLogin(srv);
     expect(first.location).toBe(`${PUBLIC_URL}/`);
     const me = await srv.app.inject({ method: 'GET', url: '/api/me', headers: { cookie: first.cookie } });
-    expect(me.json()).toMatchObject({ email: 'zz_test_jit@example.test', role: 'admin' });
+    // 13 § 7 : rôle initial member, même si les groupes de l'IdP en donneraient un autre.
+    expect(me.json()).toMatchObject({ email: 'zz_test_jit@example.test', role: 'member' });
+    const jitId = me.json<{ id: string }>().id;
+    expect((await auditOf(srv, 'user.provisioned')).find((e) => e.target_id === jitId)?.meta).toMatchObject({ role: 'member' });
+    // Compte OIDC seul : sa seule identité ne se retire pas (aucun autre moyen de connexion).
+    const identities = (await srv.app.inject({ method: 'GET', url: '/api/me/identities', headers: { cookie: first.cookie } })).json<{ identities: { id: string }[] }>().identities;
+    expect(identities).toHaveLength(1);
+    const lastOne = await srv.app.inject({ method: 'DELETE', url: `/api/me/identities/${identities[0]!.id}`, headers: json(first.cookie) });
+    expect(lastOne.json<{ error: { code: string } }>().error.code).toBe('last_login_method');
+    const promoted = await oidcLogin(srv);
+    expect((await srv.app.inject({ method: 'GET', url: '/api/me', headers: { cookie: promoted.cookie } })).json()).toMatchObject({ role: 'admin' });
     idp.nextClaims = { sub: 'zz_test_jit_sub', email: 'zz_test_jit@example.test', email_verified: true, groups: [] };
     const second = await oidcLogin(srv);
     expect((await srv.app.inject({ method: 'GET', url: '/api/me', headers: { cookie: second.cookie } })).json()).toMatchObject({ role: 'member' });
@@ -407,7 +480,7 @@ describe('OIDC générique (13 § 7)', () => {
     expect((await oidcLogin(srv)).location).toContain('sso_error=no_account');
     // L'owner relié à l'IdP reste owner, quels que soient ses groupes.
     idp.nextClaims = { sub: 'zz_test_owner_sub', email: owner.email, email_verified: true };
-    await oidcLogin(srv, '?intent=link', ownerCookie);
+    await oidcLink(srv, ownerCookie, owner.password);
     idp.nextClaims = { sub: 'zz_test_owner_sub', email: owner.email, email_verified: true, groups: [] };
     const asOwner = await oidcLogin(srv);
     expect((await srv.app.inject({ method: 'GET', url: '/api/me', headers: { cookie: asOwner.cookie } })).json()).toMatchObject({ role: 'owner' });
@@ -433,16 +506,16 @@ describe('OIDC générique (13 § 7)', () => {
   test('ID Token refusé : audience, émetteur, nonce ou signature altérés ; état absent', async () => {
     const user = await createUser(srv, 'zz_test_oidc_tamper@example.test');
     idp.nextClaims = { sub: 'zz_test_tamper_sub', email: user.email, email_verified: true };
-    await oidcLogin(srv, '?intent=link', await signIn(srv, user));
+    await oidcLink(srv, await signIn(srv, user), user.password);
     for (const tamper of ['aud', 'iss', 'nonce', 'signature'] as const) {
       idp.tamper = tamper;
       const res = await oidcLogin(srv);
       expect(res.location, tamper).toBe(`${PUBLIC_URL}/login?sso_error=idp_response_invalid`);
       expect(res.cookie, tamper).toBe('');
     }
-    // Liaison lancée par un autre site (navigation intersite) : refusée avant tout aller-retour chez l'IdP.
-    const crossSite = await srv.app.inject({ method: 'GET', url: '/api/auth/oidc/start?intent=link', headers: { cookie: ownerCookie, 'sec-fetch-site': 'cross-site' } });
-    expect(crossSite.headers.location).toBe(`${PUBLIC_URL}/login?sso_error=link_not_same_origin`);
+    // Liaison lancée par un autre site : la mutation exige l'Origin de l'instance (13 § 5).
+    const crossSite = await srv.app.inject({ method: 'POST', url: '/api/me/identities/oidc', headers: { cookie: ownerCookie, origin: 'https://evil.example.test' }, payload: { current_password: owner.password } });
+    expect(crossSite.statusCode).toBe(403);
     // Retour sans le cookie d'état du navigateur (state lié au navigateur) : refus.
     const start = await srv.app.inject({ method: 'GET', url: '/api/auth/oidc/start' });
     const atIdp = await fetch(String(start.headers.location), { redirect: 'manual' });
@@ -454,12 +527,72 @@ describe('OIDC générique (13 § 7)', () => {
   test('compte local à 2FA : la connexion OIDC sans amr exige le second facteur local', async () => {
     const user = await createUser(srv, 'zz_test_oidc_2fa@example.test');
     const local = await signIn(srv, user);
-    const { secret } = await enableTwoFactor(srv, local, user);
+    const { secret, backupCodes } = await enableTwoFactor(srv, local, user);
     idp.nextClaims = { sub: 'zz_test_oidc_2fa_sub', email: user.email, email_verified: true };
-    await oidcLogin(srv, '?intent=link', sessionCookie(await srv.app.inject({ method: 'POST', url: '/api/auth/two-factor/verify', headers: json(sessionCookie(await login(srv, user))), payload: { code: totpFor(secret, 1) } })));
+    const full = sessionCookie(await srv.app.inject({ method: 'POST', url: '/api/auth/two-factor/verify', headers: json(sessionCookie(await login(srv, user))), payload: { code: totpFor(secret, 1) } }));
+    await oidcLink(srv, full, user.password, backupCodes[0]);
     const res = await oidcLogin(srv);
     expect(res.location).toBe(`${PUBLIC_URL}/login?mfa=1`);
     expect((await srv.app.inject({ method: 'GET', url: '/api/me', headers: { cookie: res.cookie } })).json<{ error: { code: string } }>().error.code).toBe('mfa_required');
+  });
+
+  test('assert_oidc_link_reauth : liaison après ré-authentification (mot de passe, second facteur si 2FA), jamais par simple navigation ; identités listées, retirées, signalées à la révocation', async () => {
+    const user = await createUser(srv, 'zz_test_link@example.test');
+    const cookie = await signIn(srv, user);
+    // Une session seule (volée, poste resté ouvert) ne suffit plus : la liaison par GET n'existe plus.
+    expect((await srv.app.inject({ method: 'GET', url: '/api/auth/oidc/start?intent=link', headers: { cookie, 'sec-fetch-site': 'same-origin' } })).statusCode).toBe(400);
+    const wrong = await srv.app.inject({ method: 'POST', url: '/api/me/identities/oidc', headers: json(cookie), payload: { current_password: 'zz_test_wrong_password' } });
+    expect(wrong.statusCode).toBe(403);
+    idp.nextClaims = { sub: 'zz_test_link_sub', email: user.email, email_verified: true };
+    expect((await oidcLink(srv, cookie, user.password)).location).toBe(`${PUBLIC_URL}/settings/account?sso=linked`);
+    const listed = await srv.app.inject({ method: 'GET', url: '/api/me/identities', headers: { cookie } });
+    const identities = listed.json<{ identities: { id: string; provider: string; issuer: string }[] }>().identities;
+    expect(identities).toEqual([expect.objectContaining({ provider: 'oidc:zz-test-idp', issuer: idp.issuer })]);
+    expect(listed.body).not.toContain('zz_test_link_sub');
+    const linkedEvents = await sql<{ ip: string | null }>(srv, "SELECT ip FROM audit_events WHERE action = 'sso.linked' AND target_id = $1", [user.id]);
+    expect(linkedEvents).toHaveLength(1);
+    expect(linkedEvents[0]!.ip).not.toBeNull();
+
+    // 2FA active : le second facteur est exigé aussi.
+    const { backupCodes } = await enableTwoFactor(srv, cookie, user);
+    const noCode = await srv.app.inject({ method: 'POST', url: '/api/me/identities/oidc', headers: json(cookie), payload: { current_password: user.password } });
+    expect(noCode.json<{ error: { code: string } }>().error.code).toBe('mfa_code_required');
+    const badCode = await srv.app.inject({ method: 'POST', url: '/api/me/identities/oidc', headers: json(cookie), payload: { current_password: user.password, code: '000000' } });
+    expect(badCode.json<{ error: { code: string } }>().error.code).toBe('invalid_code');
+    expect((await srv.app.inject({ method: 'POST', url: '/api/me/identities/oidc', headers: json(cookie), payload: { current_password: user.password, code: backupCodes[0] } })).statusCode).toBe(200);
+
+    // Retrait par l'utilisateur (il garde son mot de passe) ; l'identité d'autrui répond 404.
+    expect((await srv.app.inject({ method: 'DELETE', url: `/api/me/identities/${identities[0]!.id}`, headers: json(adminCookie) })).statusCode).toBe(404);
+    expect((await srv.app.inject({ method: 'DELETE', url: `/api/me/identities/${identities[0]!.id}`, headers: json(cookie) })).statusCode).toBe(204);
+    expect((await srv.app.inject({ method: 'GET', url: '/api/me/identities', headers: { cookie } })).json()).toEqual({ identities: [] });
+    expect((await auditOf(srv, 'sso.unlinked')).at(-1)?.target_id).toBe(user.id);
+
+    // Révocation complète par un admin : les liaisons restantes sont signalées dans l'audit.
+    await sql(srv, 'INSERT INTO auth_accounts (user_id, provider_id, account_id) VALUES ($1, $2, $3)', [user.id, 'oidc:zz-test-idp', `${idp.issuer}|zz_test_link_sub2`]);
+    expect((await srv.app.inject({ method: 'POST', url: `/api/users/${user.id}/revoke-access`, headers: json(adminCookie) })).statusCode).toBe(204);
+    expect((await auditOf(srv, 'user.access_revoked')).at(-1)?.meta).toMatchObject({ oidc_identities: 1 });
+  });
+
+  test('sso_required : mot de passe local d’un non-owner, réponse identique juste ou faux ; owner en secours ; acceptation d’invitation par mot de passe refusée', async () => {
+    const member = await createUser(srv, 'zz_test_ssoreq@example.test');
+    const invited = await srv.app.inject({ method: 'POST', url: '/api/invitations', headers: json(adminCookie), payload: { email: 'zz_test_ssoreq_inv@example.test', role: 'member' } });
+    const token = tokenOfLink(invited.json<{ link: string }>().link);
+    await configureSso(srv, ownerCookie, { sso_required: true, group_roles: [{ group: 'zz-ops', role: 'admin' }] });
+    try {
+      const right = await login(srv, member);
+      const wrong = await login(srv, { email: member.email, password: 'zz_test_wrong_password' });
+      expect(right.statusCode).toBe(401);
+      expect({ s: right.statusCode, b: right.body }).toEqual({ s: wrong.statusCode, b: wrong.body });
+      expect(right.cookies.filter((c) => c.name.endsWith('sy.session') && c.value !== '')).toEqual([]);
+      expect(await sql(srv, 'SELECT count(*)::int AS n FROM auth_sessions WHERE user_id = $1', [member.id])).toEqual([{ n: 0 }]);
+      expect((await login(srv, owner)).statusCode).toBe(200);
+      const accept = await srv.app.inject({ method: 'POST', url: '/api/invitations/accept', remoteAddress: nextTestIp(), payload: { token, password: strongPassword() } });
+      expect(accept.statusCode).toBe(403);
+      expect(accept.json<{ error: { code: string } }>().error.code).toBe('sso_required');
+      expect(await sql(srv, 'SELECT count(*)::int AS n FROM users WHERE email = $1', ['zz_test_ssoreq_inv@example.test'])).toEqual([{ n: 0 }]);
+    } finally {
+      await configureSso(srv, ownerCookie, { group_roles: [{ group: 'zz-ops', role: 'admin' }] });
+    }
   });
 });
 
@@ -600,11 +733,80 @@ describe('réinitialisation du mot de passe (13 § 4, 13 § 5)', () => {
     expect((await login(srv, { email: user.email, password: newPassword })).statusCode).toBe(200);
   });
 
+  const confirmReset = (token: string, password: string, code?: string) =>
+    srv.app.inject({ method: 'POST', url: '/api/auth/password-reset/confirm', remoteAddress: nextTestIp(), payload: { token, password, ...(code ? { code } : {}) } });
+
+  test('assert_admin_reset_link_no_takeover : lien d’admin puis 2FA retirée → lien caduc ; 2FA disparue par un autre chemin → lien refusé, jamais consommé sans second facteur', async () => {
+    const member = await createUser(srv, 'zz_test_takeover@example.test');
+    await enableTwoFactor(srv, await signIn(srv, member), member);
+    const created = await srv.app.inject({ method: 'POST', url: `/api/users/${member.id}/reset-link`, headers: json(adminCookie) });
+    expect(created.statusCode, created.body).toBe(201);
+    const token = tokenOfLink(created.json<{ link: string }>().link);
+    // L'admin réinitialise ensuite la 2FA du membre : le lien qu'il détient ne doit plus rien valoir.
+    expect((await srv.app.inject({ method: 'DELETE', url: `/api/users/${member.id}/2fa`, headers: json(adminCookie) })).statusCode).toBe(204);
+    const takeover = await confirmReset(token, strongPassword());
+    expect(takeover.json<{ error: { code: string } }>().error.code).toBe('reset_link_invalid');
+    expect((await login(srv, member)).statusCode).toBe(200); // mot de passe inchangé
+
+    // Même schéma par l'owner sur un admin, la 2FA disparaissant hors des routes (base) : le lien d'admin est refusé.
+    const target = await createUser(srv, 'zz_test_takeover_admin@example.test', 'admin');
+    await enableTwoFactor(srv, await signIn(srv, target), target);
+    const link = (await srv.app.inject({ method: 'POST', url: `/api/users/${target.id}/reset-link`, headers: json(ownerCookie) })).json<{ link: string }>().link;
+    await sql(srv, 'DELETE FROM two_factor WHERE user_id = $1', [target.id]);
+    expect((await confirmReset(tokenOfLink(link), strongPassword())).json<{ error: { code: string } }>().error.code).toBe('reset_link_invalid');
+    expect(await sql(srv, "SELECT count(*)::int AS n FROM verifications WHERE identifier LIKE 'reset%' AND identifier LIKE '%' || $1", [target.id])).toEqual([{ n: 0 }]);
+    expect((await login(srv, target)).statusCode).toBe(200);
+  });
+
+  test('assert_reset_confirm_mfa_limited : second facteur du lien limité par compte toutes IP confondues (partagé avec la connexion) ; lien brûlé au 5e échec', async () => {
+    const user = await createUser(srv, 'zz_test_reset_brute@example.test');
+    const { secret } = await enableTwoFactor(srv, await signIn(srv, user), user);
+    // 3 échecs du second facteur à la connexion…
+    const pending = sessionCookie(await login(srv, user));
+    for (let i = 0; i < 3; i += 1) {
+      expect((await srv.app.inject({ method: 'POST', url: '/api/auth/two-factor/verify', headers: json(pending), payload: { code: '000000' } })).statusCode).toBe(400);
+    }
+    const token = tokenOfLink((await srv.app.inject({ method: 'POST', url: `/api/users/${user.id}/reset-link`, headers: json(adminCookie) })).json<{ link: string }>().link);
+    // …puis 2 sur le lien, chacun depuis une adresse différente : le 5e échec du compte ferme tout.
+    expect((await confirmReset(token, strongPassword(), '000000')).statusCode).toBe(400);
+    expect((await confirmReset(token, strongPassword(), '000000')).statusCode).toBe(429);
+    await rewindTotp(srv, user.id);
+    expect((await confirmReset(token, strongPassword(), totpFor(secret))).json<{ error: { code: string } }>().error.code).toBe('reset_link_invalid');
+    expect((await auditOf(srv, 'auth.password_reset')).some((e) => e.target_id === user.id && e.meta['reason'] === 'mfa_failures')).toBe(true);
+    expect((await login(srv, user)).statusCode).toBe(200); // ancien mot de passe toujours valable
+  });
+
+  test('assert_operator_reset_link : lien de la commande serveur (compte sans 2FA), sessions fermées, audité, signalé à la connexion suivante', async () => {
+    const user = await createUser(srv, 'zz_test_cli_reset@example.test');
+    const cookie = await signIn(srv, user);
+    const { token, hash } = generateOpaqueToken();
+    const issued = await withClient(srv.db.url, (c) => issueOperatorResetLink(c, { email: user.email.toUpperCase() }, hash, 24));
+    expect(issued).toMatchObject({ ok: true, userId: user.id });
+    expect((await srv.app.inject({ method: 'GET', url: '/api/me', headers: { cookie } })).statusCode).toBe(401);
+    const newPassword = strongPassword();
+    expect((await confirmReset(token, newPassword)).statusCode).toBe(204);
+    const next = await login(srv, { email: user.email, password: newPassword });
+    expect(next.statusCode).toBe(200);
+    expect(next.json<{ notices?: { code: string }[] }>().notices).toEqual([expect.objectContaining({ code: 'password_reset_by_operator' })]);
+    // Signalé une fois.
+    expect((await login(srv, { email: user.email, password: newPassword })).json<{ notices?: unknown }>().notices).toBeUndefined();
+    const events = await sql<{ actor_via: string; outcome: string; meta: Record<string, unknown> }>(
+      srv,
+      "SELECT actor_via, outcome, meta FROM audit_events WHERE action = 'user.reset_link' AND target_id = $1",
+      [user.id],
+    );
+    expect(events).toEqual([{ actor_via: 'system', outcome: 'success', meta: expect.objectContaining({ via: 'cli' }) }]);
+  });
+
   test('mot de passe oublié avec SMTP : même réponse que l’adresse existe ou non, e-mail seulement pour un compte actif', async () => {
     const smtp = await startFakeSmtp();
     try {
       await saveSmtpSettings(srv.started.ctx.pool, srv.started.ctx.secrets!, { host: '127.0.0.1', port: smtp.port, security: 'none', from: 'runtime@scrapyomama.zz-test' });
       const user = await createUser(srv, 'zz_test_forgot@example.test');
+      // Avec SMTP, pas de lien copiable par l'admin (13 § 4, § 6) : le membre passe par « mot de passe oublié ».
+      const copyable = await srv.app.inject({ method: 'POST', url: `/api/users/${user.id}/reset-link`, headers: json(adminCookie) });
+      expect(copyable.statusCode).toBe(409);
+      expect(copyable.json<{ error: { code: string } }>().error.code).toBe('smtp_configured');
       const known = await srv.app.inject({ method: 'POST', url: '/api/auth/password-reset/request', payload: { email: user.email } });
       const unknown = await srv.app.inject({ method: 'POST', url: '/api/auth/password-reset/request', payload: { email: 'zz_test_nobody@example.test' } });
       expect({ s: known.statusCode, b: known.body }).toEqual({ s: unknown.statusCode, b: unknown.body });

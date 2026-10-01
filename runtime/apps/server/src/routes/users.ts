@@ -3,7 +3,8 @@
 // révocation des accès, réinitialisation de la 2FA, transfert de propriété ; journal d'audit de l'instance.
 // Règles de hiérarchie relues en base à chaque requête (rôle courant de l'acteur ET de la cible) ; un refus est audité
 // `denied`. Administrer n'est pas accéder (INV5) : aucune de ces routes ne lit un contenu ni n'ouvre une session au nom
-// d'autrui ; un lien de réinitialisation ne vaut que pour un compte à 2FA (le lien seul ne suffit pas à le prendre).
+// d'autrui ; un lien de réinitialisation copiable ne vaut que sans SMTP et pour un compte à 2FA, dont le second facteur
+// est exigé à la consommation (le lien seul ne suffit pas à le prendre) ; retirer la 2FA annule tout lien en cours.
 import {
   canActOnAccount,
   generateOpaqueToken,
@@ -13,12 +14,21 @@ import {
   type AccountAction,
   type Role,
 } from '@runtime/core';
-import { deactivateUser, deleteOrAnonymizeUser, hasConfirmedTwoFactor, reactivateUser, removeTwoFactor, revokeUserAccess } from '@runtime/db';
+import {
+  countOidcIdentities,
+  deactivateUser,
+  deleteOrAnonymizeUser,
+  hasConfirmedTwoFactor,
+  reactivateUser,
+  removeTwoFactor,
+  revokeUserAccess,
+  storeResetLink,
+} from '@runtime/db';
 import { Readable } from 'node:stream';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { PoolClient } from 'pg';
 import type { ServerContext } from '../context.js';
-import { decodeCursor, encodeCursor, iso, UUID, verifySecondFactor } from './account-helpers.js';
+import { checkSecondFactor, decodeCursor, encodeCursor, iso, smtpConfigured, UUID } from './account-helpers.js';
 import { audit, notFound, sendError, type Actor } from './guard.js';
 import { AUDIT_COLUMNS, auditView } from './me.js';
 
@@ -158,27 +168,28 @@ export function userRoutes(app: FastifyInstance, ctx: ServerContext): void {
     return reply.code(204).send();
   });
 
-  // Lien de réinitialisation copiable (13 § 4 et § 6) : jamais de mot de passe choisi par l'admin (6.4.6), et seulement
-  // pour un compte à 2FA (le lien seul ne permet pas de le prendre). Toutes les sessions du compte sont fermées.
+  // Lien de réinitialisation copiable (13 § 4 et § 6) : jamais de mot de passe choisi par l'admin (6.4.6), seulement
+  // sans SMTP (avec SMTP, le membre passe par « mot de passe oublié ») et pour un compte à 2FA ; le lien est marqué
+  // « admin » : son second facteur est TOUJOURS exigé à la consommation. Toutes les sessions du compte sont fermées.
   app.post<{ Params: { id: string } }>('/api/users/:id/reset-link', async (request, reply) => {
     const actor = request.actor!;
     const target = await targetOf(ctx, request.params.id);
     if (!target) return notFound(reply);
     if (!(await allowed(ctx, request, reply, actor, target, 'manage', 'user.reset_link'))) return reply;
     if (target.status !== 'active') return sendError(reply, 409, 'user_not_active', 'compte inactif');
+    if (await smtpConfigured(ctx)) {
+      await audit(ctx, request, actor, { action: 'user.reset_link', targetType: 'user', targetId: target.id, outcome: 'denied', meta: { reason: 'smtp_configured' } });
+      return sendError(reply, 409, 'smtp_configured', 'SMTP configuré : le compte réinitialise son mot de passe par « mot de passe oublié »');
+    }
     if (!(await hasConfirmedTwoFactor(ctx.pool, target.id))) {
       await audit(ctx, request, actor, { action: 'user.reset_link', targetType: 'user', targetId: target.id, outcome: 'denied', meta: { reason: 'mfa_required' } });
-      return sendError(reply, 409, 'mfa_required', 'lien réservé aux comptes à double authentification : utilisez la commande serveur');
+      return sendError(reply, 409, 'mfa_required', 'lien réservé aux comptes à double authentification : sur le serveur, `runtime user:reset-link <email>`');
     }
     const { token, hash } = generateOpaqueToken();
     const expires = await inTransaction(ctx, async (client) => {
-      await client.query("DELETE FROM verifications WHERE identifier = 'reset:' || $1::text", [target.id]);
-      const { rows } = await client.query<{ expires_at: Date }>(
-        "INSERT INTO verifications (identifier, value, expires_at) VALUES ('reset:' || $1::text, $2, now() + make_interval(hours => $3)) RETURNING expires_at",
-        [target.id, hash, RESET_LINK_TTL_HOURS],
-      );
+      const at = await storeResetLink(client, 'admin', target.id, hash, RESET_LINK_TTL_HOURS);
       await client.query('DELETE FROM auth_sessions WHERE user_id = $1', [target.id]);
-      return rows[0]!.expires_at;
+      return at;
     });
     await audit(ctx, request, actor, { action: 'user.reset_link', targetType: 'user', targetId: target.id, outcome: 'success' });
     return reply.code(201).send({ link: `${ctx.publicUrl}/reset-password/${token}`, expires_at: expires.toISOString() });
@@ -192,11 +203,14 @@ export function userRoutes(app: FastifyInstance, ctx: ServerContext): void {
     if (!target) return notFound(reply);
     if (!(await allowed(ctx, request, reply, actor, target, 'revoke_access', 'user.access_revoked'))) return reply;
     const revoked = await inTransaction(ctx, (client) => revokeUserAccess(client, target.id, actor.userId));
-    await audit(ctx, request, actor, { action: 'user.access_revoked', targetType: 'user', targetId: target.id, outcome: 'success', meta: { revoked } });
+    // Identités OIDC liées : conservées (un compte OIDC seul en dépend), signalées dans l'audit ; le titulaire les gère.
+    const oidcIdentities = await countOidcIdentities(ctx.pool, target.id);
+    await audit(ctx, request, actor, { action: 'user.access_revoked', targetType: 'user', targetId: target.id, outcome: 'success', meta: { revoked, oidc_identities: oidcIdentities } });
     return reply.code(204).send();
   });
 
-  // Réinitialisation de la 2FA d'un membre (owner pour un admin) : action d'admin journalisée, ré-enrôlement exigé.
+  // Réinitialisation de la 2FA d'un membre (owner pour un admin) : action d'admin journalisée, ré-enrôlement exigé ;
+  // tout lien de réinitialisation en cours est annulé dans la même transaction (removeTwoFactor).
   app.delete<{ Params: { id: string } }>('/api/users/:id/2fa', async (request, reply) => {
     const actor = request.actor!;
     const target = await targetOf(ctx, request.params.id);
@@ -240,7 +254,9 @@ export function userRoutes(app: FastifyInstance, ctx: ServerContext): void {
       const stored = rows[0]?.password_hash;
       if (!stored || !(await verifyPassword(stored, request.body.current_password))) return deny('reauth_failed', 403, 'reauth_failed', 'mot de passe actuel incorrect');
       if (!(await hasConfirmedTwoFactor(ctx.pool, actor.userId))) return deny('mfa_required', 403, 'mfa_required', 'activez la double authentification avant le transfert');
-      if ((await verifySecondFactor(ctx, actor.userId, request.body.totp_code)) !== 'totp') return deny('invalid_code', 400, 'invalid_code', 'code invalide ou déjà utilisé');
+      const check = await checkSecondFactor(ctx, actor.userId, request.body.totp_code);
+      if (!check.ok) return check.blocked ? deny('mfa_failures', 429, 'too_many_attempts', 'trop de tentatives, réessayez plus tard') : deny('invalid_code', 400, 'invalid_code', 'code invalide ou déjà utilisé');
+      if (check.method !== 'totp') return deny('invalid_code', 400, 'invalid_code', 'code invalide ou déjà utilisé');
       const target = await targetOf(ctx, request.body.to_user_id);
       if (!target || target.id === actor.userId) return notFound(reply);
       if (target.status !== 'active') return sendError(reply, 409, 'user_not_active', 'compte inactif');

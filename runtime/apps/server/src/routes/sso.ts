@@ -6,9 +6,11 @@
 // de découverte, `aud` = client_id, signature vérifiée sur le JWKS (openid-client). Toute requête vers l'IdP passe par la
 // garde SSRF en politique `operator-config` (destination réglée par l'owner). Identité = (issuer, sub) — `tid:oid` pour
 // Entra —, JAMAIS l'e-mail : aucune liaison par adresse (assert_oidc_no_email_linking). Liaison depuis une session
-// ouverte (action explicite) ou à l'acceptation d'une invitation visant cette adresse. Rôle depuis les groupes de
-// l'IdP réévalué à chaque connexion, `owner` jamais attribuable. Une connexion OIDC ne dispense de la 2FA locale que si
-// l'IdP atteste un second facteur (`amr`).
+// ouverte, par une action explicite APRÈS ré-authentification (mot de passe, ou connexion de moins de 10 min pour un
+// compte OIDC seul, et second facteur si une 2FA est active : 13 § 5, 7.5.1 ; assert_oidc_link_reauth), ou à
+// l'acceptation d'une invitation visant cette adresse. Le titulaire liste et retire ses identités liées. Création à la
+// volée en `member` (13 § 7) ; rôle depuis les groupes de l'IdP réévalué à chaque connexion suivante, `owner` jamais
+// attribuable. Une connexion OIDC ne dispense de la 2FA locale que si l'IdP atteste un second facteur (`amr`).
 import {
   emailDomainAllowed,
   GRANTABLE_SCOPES,
@@ -25,6 +27,7 @@ import {
 } from '@runtime/core';
 import { createOperatorConfigDispatcher, operatorConfigFetch } from '@runtime/core/net';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
+import { hasConfirmedTwoFactor } from '@runtime/db';
 import * as oidc from 'openid-client';
 import { issueSession } from '../auth/better-auth.js';
 import {
@@ -38,8 +41,8 @@ import {
   type SsoSettings,
 } from '../auth/security-settings.js';
 import type { ServerContext } from '../context.js';
-import { libraryHeaders, rememberDevice } from './account-helpers.js';
-import { audit, identify, sendError } from './guard.js';
+import { iso, libraryHeaders, reauthenticate, rememberDevice, requireSecondFactor, UUID } from './account-helpers.js';
+import { audit, notFound, sendError } from './guard.js';
 import { consumeInvitation } from './invitations.js';
 
 /** Validité du cookie d'état OIDC (aller-retour chez l'IdP). */
@@ -261,64 +264,124 @@ export function ssoRoutes(app: FastifyInstance, ctx: ServerContext): void {
     scopes_supported: [...GRANTABLE_SCOPES],
   }));
 
-  // --- OIDC : départ ---------------------------------------------------------------------------------------
-  app.get<{ Querystring: { intent?: 'login' | 'link'; invitation?: string } }>(
+  /** URL d'autorisation et cookie d'état scellé pour un aller-retour chez l'IdP. */
+  async function authorization(sso: SsoSettings, intent: OidcState['intent'], extra: Pick<OidcState, 'userId' | 'invitation'>): Promise<{ url: URL; cookie: string }> {
+    const config = await configuration(sso);
+    const state: OidcState = {
+      state: oidc.randomState(),
+      nonce: oidc.randomNonce(),
+      verifier: oidc.randomPKCECodeVerifier(),
+      intent,
+      ...extra,
+      slug: sso.slug,
+      exp: Date.now() + STATE_TTL_MS,
+    };
+    const url = oidc.buildAuthorizationUrl(config, {
+      redirect_uri: `${ctx.publicUrl}/api/auth/oidc/callback`,
+      scope: 'openid email profile',
+      response_type: 'code',
+      code_challenge: await oidc.calculatePKCECodeChallenge(state.verifier),
+      code_challenge_method: 'S256',
+      state: state.state,
+      nonce: state.nonce,
+    });
+    return { url, cookie: stateCookie(ctx, sealState(ctx, state), STATE_TTL_MS / 1000) };
+  }
+
+  // --- OIDC : départ (connexion, acceptation d'invitation) ------------------------------------------------
+  // La liaison à un compte ouvert ne passe PAS par ici (une navigation n'est pas une ré-authentification) :
+  // `POST /api/me/identities/oidc`.
+  app.get<{ Querystring: { intent?: 'login'; invitation?: string } }>(
     '/api/auth/oidc/start',
     {
       schema: {
         querystring: {
           type: 'object',
           additionalProperties: false,
-          properties: { intent: { type: 'string', enum: ['login', 'link'] }, invitation: { type: 'string', maxLength: 128 } },
+          properties: { intent: { type: 'string', enum: ['login'] }, invitation: { type: 'string', maxLength: 128 } },
         },
       },
     },
     async (request, reply) => {
       const sso = await readSsoSettings(ctx.pool);
       if (!sso?.enabled) return fail(reply, 'sso_disabled');
-      const intent = request.query.intent ?? 'login';
-      let userId: string | undefined;
-      if (intent === 'link') {
-        // Liaison explicite depuis une session complète de l'utilisateur lui-même, lancée depuis la console : une
-        // navigation déclenchée par un autre site (Sec-Fetch-Site) est refusée (liaison par CSRF).
-        const site = request.headers['sec-fetch-site'];
-        if (site !== 'same-origin' && site !== 'none') return fail(reply, 'link_not_same_origin');
-        const actor = await identify(ctx, request, reply);
-        if (!actor || actor.via !== 'ui') return fail(reply, 'session_required');
-        userId = actor.userId;
-      }
       const invitation = request.query.invitation;
       if (invitation !== undefined && !isOpaqueTokenFormat(invitation)) return fail(reply, 'invitation_invalid');
-      let config: oidc.Configuration;
+      let started: Awaited<ReturnType<typeof authorization>>;
       try {
-        config = await configuration(sso);
+        started = await authorization(sso, 'login', invitation ? { invitation: hashOpaqueToken(invitation) } : {});
       } catch (error) {
         request.log.warn({ code: (error as { code?: string }).code ?? 'error' }, 'découverte OIDC impossible');
         return fail(reply, 'idp_unreachable');
       }
-      const state: OidcState = {
-        state: oidc.randomState(),
-        nonce: oidc.randomNonce(),
-        verifier: oidc.randomPKCECodeVerifier(),
-        intent,
-        ...(userId ? { userId } : {}),
-        ...(invitation ? { invitation: hashOpaqueToken(invitation) } : {}),
-        slug: sso.slug,
-        exp: Date.now() + STATE_TTL_MS,
-      };
-      const url = oidc.buildAuthorizationUrl(config, {
-        redirect_uri: `${ctx.publicUrl}/api/auth/oidc/callback`,
-        scope: 'openid email profile',
-        response_type: 'code',
-        code_challenge: await oidc.calculatePKCECodeChallenge(state.verifier),
-        code_challenge_method: 'S256',
-        state: state.state,
-        nonce: state.nonce,
-      });
-      reply.header('set-cookie', stateCookie(ctx, sealState(ctx, state), STATE_TTL_MS / 1000));
-      return reply.redirect(url.href, 302);
+      reply.header('set-cookie', started.cookie);
+      return reply.redirect(started.url.href, 302);
     },
   );
+
+  // --- Identités OIDC liées au compte de l'appelant (13 § 7) -----------------------------------------------
+  // Liaison : ré-authentification (mot de passe ; connexion de moins de 10 min pour un compte OIDC seul) et second
+  // facteur si une 2FA est active, AVANT d'émettre l'état de liaison (7.5.1). Une session volée ne suffit pas.
+  app.post<{ Body: { current_password: string; code?: string } }>(
+    '/api/me/identities/oidc',
+    {
+      schema: {
+        body: {
+          type: 'object',
+          required: ['current_password'],
+          additionalProperties: false,
+          properties: { current_password: { type: 'string', minLength: 1, maxLength: 1024 }, code: { type: 'string', minLength: 1, maxLength: 32 } },
+        },
+      },
+    },
+    async (request, reply) => {
+      const actor = request.actor!;
+      const sso = await readSsoSettings(ctx.pool);
+      if (!sso?.enabled) return sendError(reply, 409, 'sso_disabled', 'aucun fournisseur d’identité actif sur cette instance');
+      if (!(await reauthenticate(ctx, request, reply, actor, request.body.current_password, 'sso.link'))) return reply;
+      if ((await hasConfirmedTwoFactor(ctx.pool, actor.userId)) && !(await requireSecondFactor(ctx, request, reply, actor, request.body.code, 'sso.link'))) return reply;
+      let started: Awaited<ReturnType<typeof authorization>>;
+      try {
+        started = await authorization(sso, 'link', { userId: actor.userId });
+      } catch (error) {
+        request.log.warn({ code: (error as { code?: string }).code ?? 'error' }, 'découverte OIDC impossible');
+        return sendError(reply, 502, 'idp_unreachable', 'fournisseur d’identité injoignable');
+      }
+      await audit(ctx, request, actor, { action: 'sso.link_started', targetType: 'user', targetId: actor.userId, outcome: 'success', meta: { provider: `oidc:${sso.slug}` } });
+      reply.header('set-cookie', started.cookie);
+      return { authorization_url: started.url.href };
+    },
+  );
+
+  app.get('/api/me/identities', async (request) => {
+    const actor = request.actor!;
+    const { rows } = await ctx.pool.query<{ id: string; provider_id: string; account_id: string; created_at: Date | null }>(
+      "SELECT id, provider_id, account_id, created_at FROM auth_accounts WHERE user_id = $1 AND provider_id LIKE 'oidc:%' ORDER BY created_at, id",
+      [actor.userId],
+    );
+    // L'émetteur seulement : le `sub` de l'IdP n'est pas utile à l'affichage.
+    return { identities: rows.map((r) => ({ id: r.id, provider: r.provider_id, issuer: r.account_id.slice(0, Math.max(0, r.account_id.indexOf('|'))), created_at: iso(r.created_at) })) };
+  });
+
+  app.delete<{ Params: { id: string } }>('/api/me/identities/:id', async (request, reply) => {
+    const actor = request.actor!;
+    const id = request.params.id;
+    if (!UUID.test(id)) return notFound(reply);
+    const { rows } = await ctx.pool.query<{ user_id: string }>("SELECT user_id FROM auth_accounts WHERE id = $1 AND provider_id LIKE 'oidc:%'", [id]);
+    if (rows[0]?.user_id !== actor.userId) {
+      if (rows[0]) await audit(ctx, request, actor, { action: 'access.denied', targetType: 'auth_identity', targetId: id, outcome: 'denied' });
+      return notFound(reply);
+    }
+    // Dernier moyen de connexion d'un compte OIDC seul : le retirer fermerait le compte à son titulaire.
+    const others = await ctx.pool.query<{ n: number }>(
+      "SELECT count(*)::int AS n FROM auth_accounts WHERE user_id = $1 AND id <> $2 AND (provider_id LIKE 'oidc:%' OR (provider_id = 'credential' AND password_hash IS NOT NULL))",
+      [actor.userId, id],
+    );
+    if ((others.rows[0]?.n ?? 0) === 0) return sendError(reply, 409, 'last_login_method', 'dernier moyen de connexion du compte : posez d’abord un mot de passe');
+    await ctx.pool.query('DELETE FROM auth_accounts WHERE id = $1 AND user_id = $2', [id, actor.userId]);
+    await audit(ctx, request, actor, { action: 'sso.unlinked', targetType: 'user', targetId: actor.userId, outcome: 'success', meta: { identity: id } });
+    return reply.code(204).send();
+  });
 
   // --- OIDC : retour de l'IdP ------------------------------------------------------------------------------
   app.get('/api/auth/oidc/callback', async (request, reply) => {
@@ -360,6 +423,8 @@ export function ssoRoutes(app: FastifyInstance, ctx: ServerContext): void {
     if (state.intent === 'link') {
       if (!state.userId) return denied('session_required');
       if (userId && userId !== state.userId) return denied('identity_already_linked', state.userId);
+      const holder = await ctx.pool.query("SELECT 1 FROM users WHERE id = $1 AND status = 'active' AND deleted_at IS NULL", [state.userId]);
+      if (holder.rowCount !== 1) return denied('account_inactive', state.userId);
       if (!userId) {
         await ctx.pool.query('INSERT INTO auth_accounts (user_id, provider_id, account_id) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING', [state.userId, providerId, accountId]);
         const actor = await ctx.pool.query<{ role: string }>('SELECT role FROM users WHERE id = $1', [state.userId]);
@@ -395,6 +460,7 @@ export function ssoRoutes(app: FastifyInstance, ctx: ServerContext): void {
       }
     }
 
+    let provisioned = false;
     if (!userId) {
       // Création à la volée (désactivée par défaut) : jamais si l'adresse appartient déjà à un compte (aucune liaison
       // par e-mail, assert_oidc_no_email_linking).
@@ -405,7 +471,9 @@ export function ssoRoutes(app: FastifyInstance, ctx: ServerContext): void {
       }
       const exists = await ctx.pool.query<{ id: string }>('SELECT id FROM users WHERE email = $1', [email]);
       if (exists.rowCount !== 0) return denied('no_account', exists.rows[0]!.id);
-      const role = roleFromGroups(null, claims['groups'], sso.group_roles);
+      // Rôle initial `member` (13 § 7) : la correspondance des groupes s'applique à partir de la connexion suivante.
+      const role: Role = 'member';
+      provisioned = true;
       const client = await ctx.pool.connect();
       try {
         await client.query('BEGIN');
@@ -429,8 +497,8 @@ export function ssoRoutes(app: FastifyInstance, ctx: ServerContext): void {
     const { rows } = await ctx.pool.query<{ role: string; status: string }>('SELECT role, status FROM users WHERE id = $1 AND deleted_at IS NULL', [userId]);
     const user = rows[0];
     if (!user || user.status !== 'active' || !isRole(user.role)) return denied('account_inactive', userId);
-    // Rôle réévalué à chaque connexion (13 § 7) : jamais owner, l'owner reste owner.
-    const role: Role = roleFromGroups(user.role, claims['groups'], sso.group_roles);
+    // Rôle réévalué à chaque connexion (13 § 7), sauf celle qui vient de créer le compte : jamais owner, l'owner reste owner.
+    const role: Role = provisioned ? user.role : roleFromGroups(user.role, claims['groups'], sso.group_roles);
     if (role !== user.role) {
       await ctx.pool.query("UPDATE users SET role = $2, updated_at = now() WHERE id = $1 AND role <> 'owner'", [userId, role]);
       await audit(ctx, request, null, { action: 'user.role_changed', targetType: 'user', targetId: userId, outcome: 'success', meta: { from: user.role, to: role, via: 'sso_groups' } });

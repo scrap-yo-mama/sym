@@ -8,7 +8,10 @@
 // après une authentification complète) ni depuis une session ouverte du même compte ; la limite par IP reste.
 // 2FA « maison » (13 § 7, tâche 3.7) : un compte à 2FA confirmée reçoit une session EN ATTENTE ; le second facteur
 // (`/api/auth/two-factor/verify`) la remplace par une session complète (nouveau jeton). Réinitialisation du mot de
-// passe par lien à usage unique : jamais sans le second facteur d'un compte qui en a un (6.4.3).
+// passe par lien à usage unique : jamais sans le second facteur d'un compte qui en a un (6.4.3) ; un lien copiable
+// d'admin exige TOUJOURS le second facteur (s'il a disparu, le lien est refusé). Le second facteur est limité par
+// compte, toutes routes et IP confondues (`checkSecondFactor`) ; la limite par IP agrège les IPv6 par /64.
+// `sso_required` (13 § 7) : un non-owner reçoit la réponse d'échec unique, que son mot de passe local soit juste ou non.
 import {
   generateOpaqueToken,
   hashOpaqueToken,
@@ -19,21 +22,28 @@ import {
   passwordPolicyViolation,
   RESET_LINK_TTL_HOURS,
 } from '@runtime/core';
-import { hasConfirmedTwoFactor, revokeUserAccess } from '@runtime/db';
+import {
+  consumeResetLink,
+  countOidcIdentities,
+  deleteResetLinks,
+  findResetLink,
+  hasConfirmedTwoFactor,
+  revokeUserAccess,
+  storeResetLink,
+  takeAccountNotices,
+} from '@runtime/db';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { issueSession } from '../auth/better-auth.js';
 import { hashSessionToken } from '../auth/hashed-session-adapter.js';
 import { readSsoSettings } from '../auth/security-settings.js';
 import type { ServerContext } from '../context.js';
-import { AttemptLimiter } from '../rate-limit.js';
-import { knownDeviceUser, libraryHeaders, rememberDevice, sendAccountMail, smtpConfigured, verifySecondFactor } from './account-helpers.js';
+import { AttemptLimiter, ipBucket } from '../rate-limit.js';
+import { checkSecondFactor, knownDeviceUser, libraryHeaders, rememberDevice, sendAccountMail, smtpConfigured } from './account-helpers.js';
 import { audit, sendError, webHeaders } from './guard.js';
 
 /** Échecs de connexion tolérés par compte sur 15 minutes, toutes IP confondues. */
 const ACCOUNT_MAX_FAILURES = 10;
 const ACCOUNT_WINDOW_MS = 15 * 60 * 1000;
-/** Second facteur : 5 échecs par compte sur 15 min → session en attente fermée, 429. */
-const MFA_MAX_FAILURES = 5;
 
 /** Réponse unique à tout échec de connexion (compte inconnu, désactivé, mauvais mot de passe…), 13 § 5 (6.3.8). */
 const INVALID_CREDENTIALS = { code: 'INVALID_EMAIL_OR_PASSWORD', message: 'Invalid email or password' };
@@ -112,7 +122,6 @@ async function recognized(ctx: ServerContext, request: FastifyRequest, userId: s
 
 export function authRoutes(app: FastifyInstance, ctx: ServerContext): void {
   const accounts = new AttemptLimiter({ max: ACCOUNT_MAX_FAILURES, windowMs: ACCOUNT_WINDOW_MS });
-  const mfaFailures = new AttemptLimiter({ max: MFA_MAX_FAILURES, windowMs: 15 * 60 * 1000 });
   const resetByIp = new AttemptLimiter({ max: 10, windowMs: 15 * 60 * 1000, maxEntries: 10_000 });
 
   app.post<{ Body: { email: string; password: string } }>('/api/auth/sign-in/email', { schema: { body: signInSchema } }, async (request, reply) => {
@@ -129,23 +138,32 @@ export function authRoutes(app: FastifyInstance, ctx: ServerContext): void {
     }
     const result = await forward(ctx, request);
     const user = (result.json as { user?: { id?: string } } | null)?.user;
+    // SSO exigé (13 § 7) : connexion locale refusée sauf pour l'owner (connexion de secours). Le mot de passe a été
+    // vérifié par la bibliothèque (même délai) mais la réponse ne dit pas s'il était juste (6.3.8) : échec unique.
+    if (result.status !== 429) {
+      const sso = await readSsoSettings(ctx.pool);
+      const target = sso?.enabled && sso.sso_required ? await userFor(ctx, 'email', email) : null;
+      if (target && target.role !== 'owner') {
+        const token = (result.json as { token?: unknown } | null)?.token;
+        if (result.status === 200 && typeof token === 'string') {
+          await ctx.pool.query('DELETE FROM auth_sessions WHERE token_hash = $1 AND user_id = $2', [hashSessionToken(token), target.userId]);
+        }
+        await audit(ctx, request, target, { action: 'auth.login_failed', targetType: 'user', targetId: target.userId, outcome: 'denied', meta: { reason: 'sso_required' } });
+        accounts.fail(email);
+        return reply.code(401).send(INVALID_CREDENTIALS);
+      }
+    }
     if (result.status === 200 && user?.id) {
       const actor = await userFor(ctx, 'id', user.id);
-      // SSO exigé (13 § 7) : connexion locale refusée, sauf pour l'owner (connexion de secours). Mot de passe déjà vérifié.
-      const sso = await readSsoSettings(ctx.pool);
-      if (sso?.enabled && sso.sso_required && actor?.role !== 'owner') {
-        const token = (result.json as { token?: unknown }).token;
-        if (typeof token === 'string') await ctx.pool.query('DELETE FROM auth_sessions WHERE token_hash = $1 AND user_id = $2', [hashSessionToken(token), user.id]);
-        await audit(ctx, request, actor, { action: 'auth.login_failed', targetType: 'user', targetId: user.id, outcome: 'denied', meta: { reason: 'sso_required' } });
-        return sendError(reply, 403, 'sso_required', 'connexion par le fournisseur d’identité de l’instance exigée');
-      }
       accounts.reset(email);
       await rehashIfNeeded(ctx, user.id, request.body.password);
       const pending = await hasConfirmedTwoFactor(ctx.pool, user.id);
       await audit(ctx, request, actor, { action: 'auth.login', targetType: 'user', targetId: user.id, outcome: 'success', meta: pending ? { mfa: 'pending' } : {} });
       if (!pending) reply.header('set-cookie', await rememberDevice(ctx, user.id));
       const body = withoutTokens(result.json) as Record<string, unknown>;
-      return relay(reply, { ...result, json: pending ? { ...body, twoFactorRequired: true } : body });
+      // Signalements au titulaire (réinitialisation par la commande serveur…) : montrés une fois, après l'authentification complète.
+      const notices = pending ? [] : await takeAccountNotices(ctx.pool, user.id);
+      return relay(reply, { ...result, json: pending ? { ...body, twoFactorRequired: true } : notices.length > 0 ? { ...body, notices } : body });
     }
     // Échec : l'identifiant du compte visé (s'il existe) est gardé, pas l'adresse saisie ni le mot de passe.
     const target = await userFor(ctx, 'email', email);
@@ -184,21 +202,16 @@ export function authRoutes(app: FastifyInstance, ctx: ServerContext): void {
     async (request, reply) => {
       const actor = request.actor!;
       const closePending = () => ctx.pool.query('DELETE FROM auth_sessions WHERE id = $1 AND user_id = $2', [actor.sessionId, actor.userId]);
-      if (mfaFailures.blocked(actor.userId)) {
-        await closePending();
-        return sendError(reply, 429, 'too_many_attempts', 'trop de tentatives, reconnectez-vous plus tard');
-      }
-      const method = await verifySecondFactor(ctx, actor.userId, request.body.code);
-      if (!method) {
-        const failures = mfaFailures.fail(actor.userId);
-        await audit(ctx, request, actor, { action: 'auth.mfa_failed', targetType: 'user', targetId: actor.userId, outcome: 'denied', meta: { failures } });
-        if (failures >= MFA_MAX_FAILURES) {
+      const check = await checkSecondFactor(ctx, actor.userId, request.body.code);
+      if (!check.ok) {
+        await audit(ctx, request, actor, { action: 'auth.mfa_failed', targetType: 'user', targetId: actor.userId, outcome: 'denied', meta: { failures: check.failures } });
+        if (check.blocked) {
           await closePending();
           return sendError(reply, 429, 'too_many_attempts', 'trop de tentatives, reconnectez-vous plus tard');
         }
         return sendError(reply, 400, 'invalid_code', 'code invalide ou déjà utilisé');
       }
-      mfaFailures.reset(actor.userId);
+      const method = check.method;
       const issued = await issueSession(ctx.auth, libraryHeaders(request), actor.userId, method);
       await closePending();
       const remaining =
@@ -207,7 +220,8 @@ export function authRoutes(app: FastifyInstance, ctx: ServerContext): void {
           : undefined;
       await audit(ctx, request, actor, { action: 'auth.mfa_verified', targetType: 'user', targetId: actor.userId, outcome: 'success', meta: { method } });
       reply.header('set-cookie', [...issued.cookies, await rememberDevice(ctx, actor.userId)]);
-      return { ok: true, method, ...(remaining === undefined ? {} : { backup_codes_remaining: remaining }) };
+      const notices = await takeAccountNotices(ctx.pool, actor.userId);
+      return { ok: true, method, ...(remaining === undefined ? {} : { backup_codes_remaining: remaining }), ...(notices.length > 0 ? { notices } : {}) };
     },
   );
 
@@ -217,8 +231,9 @@ export function authRoutes(app: FastifyInstance, ctx: ServerContext): void {
     '/api/auth/password-reset/request',
     { schema: { body: { type: 'object', required: ['email'], additionalProperties: false, properties: { email: { type: 'string', minLength: 3, maxLength: 254 } } } } },
     async (request, reply) => {
-      if (resetByIp.blocked(request.ip)) return sendError(reply, 429, 'too_many_attempts', 'trop de tentatives, réessayez plus tard');
-      resetByIp.fail(request.ip);
+      const ipKey = ipBucket(request.ip);
+      if (resetByIp.blocked(ipKey)) return sendError(reply, 429, 'too_many_attempts', 'trop de tentatives, réessayez plus tard');
+      resetByIp.fail(ipKey);
       const email = request.body.email.trim().toLowerCase();
       // Tout le travail (recherche du compte, jeton, audit, e-mail) après la réponse : délai identique (6.3.8).
       void (async () => {
@@ -226,12 +241,7 @@ export function authRoutes(app: FastifyInstance, ctx: ServerContext): void {
         const user = rows[0];
         if (!user || !(await smtpConfigured(ctx))) return;
         const { token, hash } = generateOpaqueToken();
-        await ctx.pool.query("DELETE FROM verifications WHERE identifier = 'reset:' || $1::text", [user.id]);
-        await ctx.pool.query("INSERT INTO verifications (identifier, value, expires_at) VALUES ('reset:' || $1::text, $2, now() + make_interval(hours => $3))", [
-          user.id,
-          hash,
-          RESET_LINK_TTL_HOURS,
-        ]);
+        await storeResetLink(ctx.pool, 'email', user.id, hash, RESET_LINK_TTL_HOURS);
         await audit(ctx, request, null, { action: 'auth.password_reset_requested', targetType: 'user', targetId: user.id, outcome: 'success' });
         const link = `${ctx.publicUrl}/reset-password/${token}`;
         await sendAccountMail(
@@ -248,9 +258,11 @@ export function authRoutes(app: FastifyInstance, ctx: ServerContext): void {
     },
   );
 
-  // Consommation d'un lien de réinitialisation (e-mail, ou lien copiable d'un admin pour un compte à 2FA) : réponse
-  // uniforme pour un lien inconnu, expiré ou consommé ; second facteur exigé si le compte en a un ; toutes les sessions,
-  // clés, jetons de tunnel, cookies serveur et appareils reconnus du compte sont révoqués (13 § 5).
+  // Consommation d'un lien de réinitialisation (e-mail, lien copiable d'un admin, commande serveur) : réponse uniforme
+  // pour un lien inconnu, expiré ou consommé ; second facteur exigé si le compte en a un, et TOUJOURS pour un lien
+  // d'admin (s'il n'y a plus de 2FA, le lien est refusé et supprimé : jamais de prise de compte par l'admin, INV5) ;
+  // second facteur limité par compte (partagé avec la connexion), lien brûlé à la limite ; toutes les sessions, clés,
+  // jetons de tunnel, cookies serveur et appareils reconnus du compte sont révoqués (13 § 5).
   app.post<{ Body: { token: string; password: string; code?: string } }>(
     '/api/auth/password-reset/confirm',
     {
@@ -264,30 +276,42 @@ export function authRoutes(app: FastifyInstance, ctx: ServerContext): void {
       },
     },
     async (request, reply) => {
-      if (resetByIp.blocked(request.ip)) return sendError(reply, 429, 'too_many_attempts', 'trop de tentatives, réessayez plus tard');
+      const ipKey = ipBucket(request.ip);
+      if (resetByIp.blocked(ipKey)) return sendError(reply, 429, 'too_many_attempts', 'trop de tentatives, réessayez plus tard');
       // Hachage fait d'avance : même délai qu'un lien valide (aucun indice sur l'état du lien).
       const passwordHash = await hashPassword(request.body.password);
       const invalid = async () => {
-        resetByIp.fail(request.ip);
+        resetByIp.fail(ipKey);
         await audit(ctx, request, null, { action: 'auth.password_reset', outcome: 'denied', meta: { reason: 'invalid_link' } });
         return sendError(reply, 400, 'reset_link_invalid', 'lien invalide ou expiré');
       };
       if (!isOpaqueTokenFormat(request.body.token)) return invalid();
-      const { rows } = await ctx.pool.query<{ user_id: string }>(
-        `SELECT substr(v.identifier, 7) AS user_id FROM verifications v JOIN users u ON u.id::text = substr(v.identifier, 7)
-         WHERE v.identifier LIKE 'reset:%' AND v.value = $1 AND v.expires_at > now() AND u.status = 'active' AND u.deleted_at IS NULL`,
-        [hashOpaqueToken(request.body.token)],
-      );
-      const userId = rows[0]?.user_id;
-      if (!userId) return invalid();
+      const tokenHash = hashOpaqueToken(request.body.token);
+      const link = await findResetLink(ctx.pool, tokenHash);
+      if (!link) return invalid();
+      const { userId, kind } = link;
+      const hasMfa = await hasConfirmedTwoFactor(ctx.pool, userId);
+      if (kind === 'admin' && !hasMfa) {
+        // Lien d'admin délivré pour un compte à 2FA, qui n'en a plus : refusé et supprimé (jamais sans second facteur).
+        await deleteResetLinks(ctx.pool, userId);
+        await audit(ctx, request, null, { action: 'auth.password_reset', targetType: 'user', targetId: userId, outcome: 'denied', meta: { reason: 'admin_link_without_mfa' } });
+        return invalid();
+      }
       const violation = passwordPolicyViolation(request.body.password);
       if (violation) return sendError(reply, 400, 'weak_password', `mot de passe refusé (${violation})`);
       // 6.4.3 : la réinitialisation ne remplace jamais le second facteur.
-      if (await hasConfirmedTwoFactor(ctx.pool, userId)) {
-        const method = request.body.code ? await verifySecondFactor(ctx, userId, request.body.code) : null;
-        if (!method) {
-          resetByIp.fail(request.ip);
-          await audit(ctx, request, null, { action: 'auth.password_reset', targetType: 'user', targetId: userId, outcome: 'denied', meta: { reason: 'mfa_code_invalid' } });
+      if (hasMfa) {
+        if (!request.body.code) return sendError(reply, 400, 'mfa_code_required', 'code de double authentification requis ou invalide');
+        const check = await checkSecondFactor(ctx, userId, request.body.code);
+        if (!check.ok) {
+          resetByIp.fail(ipKey);
+          if (check.blocked) {
+            // Limite du compte atteinte (toutes IP confondues) : le lien est brûlé ; il faudra en demander un autre.
+            const burned = await deleteResetLinks(ctx.pool, userId);
+            await audit(ctx, request, null, { action: 'auth.password_reset', targetType: 'user', targetId: userId, outcome: 'denied', meta: { reason: 'mfa_failures', failures: check.failures, link_revoked: burned > 0 } });
+            return sendError(reply, 429, 'too_many_attempts', 'trop de tentatives : lien annulé, demandez-en un nouveau');
+          }
+          await audit(ctx, request, null, { action: 'auth.password_reset', targetType: 'user', targetId: userId, outcome: 'denied', meta: { reason: 'mfa_code_invalid', failures: check.failures } });
           return sendError(reply, 400, 'mfa_code_required', 'code de double authentification requis ou invalide');
         }
       }
@@ -295,8 +319,7 @@ export function authRoutes(app: FastifyInstance, ctx: ServerContext): void {
       let revoked: Awaited<ReturnType<typeof revokeUserAccess>>;
       try {
         await client.query('BEGIN');
-        const consumed = await client.query("DELETE FROM verifications WHERE identifier = 'reset:' || $1::text AND value = $2", [userId, hashOpaqueToken(request.body.token)]);
-        if (consumed.rowCount !== 1) {
+        if (!(await consumeResetLink(client, kind, userId, tokenHash))) {
           await client.query('ROLLBACK');
           return invalid();
         }
@@ -314,7 +337,10 @@ export function authRoutes(app: FastifyInstance, ctx: ServerContext): void {
         client.release();
       }
       const owner = await userFor(ctx, 'id', userId);
-      await audit(ctx, request, owner, { action: 'auth.password_reset', targetType: 'user', targetId: userId, outcome: 'success', meta: { revoked } });
+      // Les identités OIDC liées restent (un compte OIDC seul en dépend) mais sont signalées : le titulaire les voit
+      // et les retire dans son compte (GET/DELETE /api/me/identities).
+      const oidcIdentities = await countOidcIdentities(ctx.pool, userId);
+      await audit(ctx, request, owner, { action: 'auth.password_reset', targetType: 'user', targetId: userId, outcome: 'success', meta: { revoked, link: kind, oidc_identities: oidcIdentities } });
       return reply.code(204).send();
     },
   );

@@ -137,6 +137,15 @@ describe('graine TOTP (13 § 7)', () => {
     expect(await count('SELECT count(*)::int AS n FROM two_factor WHERE user_id = $1 AND unreadable_since IS NOT NULL', [u])).toBe(1);
     await client.query('UPDATE two_factor SET unreadable_since = NULL WHERE user_id = $1', [u]);
 
+    // Version de clé différente (rotation en cours, processus pas encore redémarré) : refus SANS marquer la graine ;
+    // la KEK de cette version, si le trousseau l'a, l'ouvre.
+    const nextKek = kekFor(MasterKey.parse(generateMasterKey()), 2);
+    const during = await loadTwoFactor(client, nextKek, u);
+    expect(during).toMatchObject({ status: 'unreadable', confirmed: true, transient: true });
+    expect(await count('SELECT count(*)::int AS n FROM two_factor WHERE user_id = $1 AND unreadable_since IS NOT NULL', [u])).toBe(0);
+    const withRing = await loadTwoFactor(client, [nextKek, kek], u);
+    expect(withRing.status === 'confirmed' && withRing.secret.equals(secret)).toBe(true);
+
     expect(await consumeTotpStep(client, u, 100)).toBe(true);
     expect(await consumeTotpStep(client, u, 100)).toBe(false);
     expect(await consumeTotpStep(client, u, 99)).toBe(false);

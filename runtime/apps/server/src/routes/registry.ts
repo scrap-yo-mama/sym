@@ -16,7 +16,7 @@ type RouteAuth =
   | 'extension';
 
 /** Ressources appartenant à un utilisateur exposées par les routes existantes (s'étend avec 3.1, 3.7, 2.6…). */
-export type OwnedResource = 'api_key' | 'tunnel' | 'site_session' | 'auth_session' | 'audit_event';
+export type OwnedResource = 'api_key' | 'tunnel' | 'site_session' | 'auth_session' | 'audit_event' | 'auth_identity';
 
 export type RouteSpec = {
   method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
@@ -87,6 +87,10 @@ export const ROUTES: readonly RouteSpec[] = [
   { method: 'POST', url: '/api/me/2fa/confirm', auth: 'session', permission: 'account:mfa', mfa: 'enroll' },
   { method: 'POST', url: '/api/me/2fa/backup-codes', auth: 'session', permission: 'account:mfa' },
   { method: 'DELETE', url: '/api/me/2fa', auth: 'session', permission: 'account:mfa' },
+  // Identités OIDC liées (13 § 7) : liaison après ré-authentification, liste et retrait par le titulaire.
+  { method: 'POST', url: '/api/me/identities/oidc', auth: 'session', permission: 'account:mfa' },
+  { method: 'GET', url: '/api/me/identities', auth: 'session', permission: 'account:mfa', resource: { type: 'auth_identity', kind: 'collection' } },
+  { method: 'DELETE', url: '/api/me/identities/:id', auth: 'session', permission: 'account:mfa', resource: { type: 'auth_identity', kind: 'item' } },
   { method: 'GET', url: '/api/me/audit', auth: 'session', resource: { type: 'audit_event', kind: 'collection' } },
   // Administration des comptes : rôle relu en base, hiérarchie vérifiée par la route (canActOnAccount).
   { method: 'GET', url: '/api/users', auth: 'session', permission: 'users:list' },

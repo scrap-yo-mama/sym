@@ -3,6 +3,8 @@
 // l'owner), 48 h, usage unique, renvoyable, révocable, jeton haché en base. Avec SMTP : lien par e-mail ; sans SMTP :
 // lien copiable affiché une fois à l'admin. Acceptation publique : réponse, message et délai IDENTIQUES pour un jeton
 // inconnu, expiré, révoqué ou consommé (assert_invitation_single_use, 6.3.8) ; aucun compte créé dans ces cas.
+// Renvoi et révocation suivent la même hiérarchie que la création (une invitation « admin » relève de l'owner).
+// `sso_required` (13 § 7) : acceptation par l'IdP seulement, jamais par un mot de passe local.
 import {
   canInviteAs,
   emailDomainAllowed,
@@ -18,9 +20,9 @@ import { isMailAddress } from '@runtime/core/net';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import type pg from 'pg';
 import { issueSession } from '../auth/better-auth.js';
-import { readSecuritySettings } from '../auth/security-settings.js';
+import { readSecuritySettings, readSsoSettings } from '../auth/security-settings.js';
 import type { ServerContext } from '../context.js';
-import { AttemptLimiter } from '../rate-limit.js';
+import { AttemptLimiter, ipBucket } from '../rate-limit.js';
 import { iso, libraryHeaders, rememberDevice, sendAccountMail, smtpConfigured, UUID } from './account-helpers.js';
 import { audit, notFound, sendError } from './guard.js';
 
@@ -159,6 +161,13 @@ export function invitationRoutes(app: FastifyInstance, ctx: ServerContext): void
   app.delete<{ Params: { id: string } }>('/api/invitations/:id', async (request, reply) => {
     const actor = request.actor!;
     if (!UUID.test(request.params.id)) return notFound(reply);
+    const current = await ctx.pool.query<{ role: 'member' | 'admin' }>('SELECT role FROM invitations WHERE id = $1 AND accepted_at IS NULL AND revoked_at IS NULL', [request.params.id]);
+    const role = current.rows[0]?.role;
+    if (!role) return notFound(reply);
+    if (!canInviteAs(actor.role, role)) {
+      await audit(ctx, request, actor, { action: 'invitation.revoked', targetType: 'invitation', targetId: request.params.id, outcome: 'denied', meta: { reason: 'role', role } });
+      return sendError(reply, 403, 'forbidden', 'action non autorisée');
+    }
     const { rowCount } = await ctx.pool.query('UPDATE invitations SET revoked_at = now() WHERE id = $1 AND accepted_at IS NULL AND revoked_at IS NULL', [request.params.id]);
     if (rowCount !== 1) return notFound(reply);
     await audit(ctx, request, actor, { action: 'invitation.revoked', targetType: 'invitation', targetId: request.params.id, outcome: 'success' });
@@ -172,7 +181,10 @@ export function invitationRoutes(app: FastifyInstance, ctx: ServerContext): void
     const current = await ctx.pool.query<{ role: 'member' | 'admin' }>('SELECT role FROM invitations WHERE id = $1 AND accepted_at IS NULL AND revoked_at IS NULL', [request.params.id]);
     const role = current.rows[0]?.role;
     if (!role) return notFound(reply);
-    if (!canInviteAs(actor.role, role)) return sendError(reply, 403, 'forbidden', 'action non autorisée');
+    if (!canInviteAs(actor.role, role)) {
+      await audit(ctx, request, actor, { action: 'invitation.resent', targetType: 'invitation', targetId: request.params.id, outcome: 'denied', meta: { reason: 'role', role } });
+      return sendError(reply, 403, 'forbidden', 'action non autorisée');
+    }
     const { token, hash } = generateOpaqueToken();
     const { rows } = await ctx.pool.query<InvitationRow>(
       `UPDATE invitations SET token_hash = $2, sent_at = now(), expires_at = now() + make_interval(hours => $3)
@@ -203,7 +215,15 @@ export function invitationRoutes(app: FastifyInstance, ctx: ServerContext): void
       },
     },
     async (request, reply) => {
-      if (acceptFailures.blocked(request.ip)) return sendError(reply, 429, 'too_many_attempts', 'trop de tentatives, réessayez plus tard');
+      const ipKey = ipBucket(request.ip);
+      if (acceptFailures.blocked(ipKey)) return sendError(reply, 429, 'too_many_attempts', 'trop de tentatives, réessayez plus tard');
+      // SSO exigé : l'invitation s'accepte par l'IdP (`/api/auth/oidc/start?invitation=…`), jamais par un mot de passe local.
+      // Refus indépendant du jeton : aucun indice sur sa validité.
+      const sso = await readSsoSettings(ctx.pool);
+      if (sso?.enabled && sso.sso_required) {
+        await audit(ctx, request, null, { action: 'invitation.accepted', outcome: 'denied', meta: { reason: 'sso_required' } });
+        return sendError(reply, 403, 'sso_required', 'acceptez l’invitation par le fournisseur d’identité de l’instance');
+      }
       const violation = passwordPolicyViolation(request.body.password);
       if (violation) return sendError(reply, 400, 'weak_password', `mot de passe refusé (${violation})`);
       // Hachage AVANT tout contrôle du jeton : même délai pour un jeton valide ou non (6.3.8).
@@ -226,7 +246,7 @@ export function invitationRoutes(app: FastifyInstance, ctx: ServerContext): void
         client.release();
       }
       if (!accepted) {
-        acceptFailures.fail(request.ip);
+        acceptFailures.fail(ipKey);
         await audit(ctx, request, null, { action: 'invitation.accepted', outcome: 'denied', meta: { reason: 'invalid_token' } });
         return sendError(reply, 400, INVITATION_INVALID.code, INVITATION_INVALID.message);
       }

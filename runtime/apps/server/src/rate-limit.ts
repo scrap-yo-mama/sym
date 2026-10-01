@@ -64,3 +64,22 @@ export class AttemptLimiter {
     if (entry.count <= 0) this.#entries.delete(key);
   }
 }
+
+/**
+ * Clé de limite par adresse : une IPv4 (ou IPv4 mappée en IPv6) telle quelle ; une IPv6 agrégée sur son préfixe /64
+ * (un hôte dispose d'ordinaire de tout un /64 : sans agrégation, la limite par IP se contourne en changeant d'adresse).
+ */
+export function ipBucket(ip: string): string {
+  const address = ip.split('%')[0]!.toLowerCase();
+  const mapped = /^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/.exec(address);
+  if (mapped) return mapped[1]!;
+  if (!address.includes(':')) return address;
+  const [head = '', tail] = address.split('::');
+  const left = head ? head.split(':') : [];
+  const right = tail ? tail.split(':') : [];
+  const groups = tail === undefined ? left : [...left, ...Array<string>(Math.max(0, 8 - left.length - right.length)).fill('0'), ...right];
+  return `${groups
+    .slice(0, 4)
+    .map((g) => (Number.parseInt(g || '0', 16) || 0).toString(16))
+    .join(':')}::/64`;
+}

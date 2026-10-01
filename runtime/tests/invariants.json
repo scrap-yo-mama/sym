@@ -145,5 +145,13 @@
   { "test": "assert_oidc_no_email_linking", "invariant": "INV5, 13 § 7", "tasks": ["3.7"], "stage": "I1" },
   { "test": "assert_clone_no_session", "invariant": "INV5, X5", "tasks": ["3.7"], "stage": "I1" },
   { "test": "assert_deactivation_revokes_all", "invariant": "INV5, 13 § 6", "tasks": ["3.7"], "stage": "I1" },
-  { "test": "assert_login_lock_recognized_device", "invariant": "13 § 5, D-15", "tasks": ["3.7"], "stage": "I1" }
+  { "test": "assert_login_lock_recognized_device", "invariant": "13 § 5, D-15", "tasks": ["3.7"], "stage": "I1" },
+  { "test": "assert_admin_reset_link_no_takeover", "invariant": "INV5, 13 § 4, 13 § 6 (6.4.3)", "tasks": ["3.7"], "stage": "I1",
+    "note": "3.7 (vérification) : un lien copiable d’admin exige toujours le second facteur ; retirer la 2FA annule tout lien en cours" },
+  { "test": "assert_reset_confirm_mfa_limited", "invariant": "13 § 5 (6.1.1, 6.4.3)", "tasks": ["3.7"], "stage": "I1",
+    "note": "3.7 (vérification) : second facteur limité par compte toutes routes et IP confondues ; lien brûlé à la limite" },
+  { "test": "assert_operator_reset_link", "invariant": "INV5, 13 § 4, 13 § 6", "tasks": ["3.7"], "stage": "I1",
+    "note": "3.7 (vérification) : runtime user:reset-link / owner:reset-link, audité et signalé au titulaire à sa connexion suivante" },
+  { "test": "assert_oidc_link_reauth", "invariant": "13 § 5 (7.5.1), 13 § 7", "tasks": ["3.7"], "stage": "I1",
+    "note": "3.7 (vérification) : liaison OIDC après ré-authentification et second facteur ; identités listées et retirées" }
 ]

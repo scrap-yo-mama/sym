@@ -3,8 +3,11 @@
 --   two_factor          graine TOTP « maison » (décision de 0.3b) : enveloppe complète (chiffré, nonce, DEK enveloppée,
 --                       format, version de clé ; AAD = two_factor|user_id), anti-rejeu par le dernier pas TOTP accepté,
 --                       état « illisible » après une perte de MASTER_KEY (les codes de secours, hachés, restent valables).
---                       Les colonnes du plugin Better Auth (jamais chargé) restent, inutilisées : migration additive
---                       (une image N-1 relit la base N, 14 § 6).
+--                       Les colonnes du plugin Better Auth (jamais chargé) restent, inutilisées. Migration NON purement
+--                       additive : secret_ciphertext et nonce passent de text à bytea et une CHECK est ajoutée. Sans
+--                       étape expand/contract (14 § 6) parce que la table n'est jamais écrite ni lue par N-1 (plugin
+--                       2FA jamais chargé, 0.3b) : elle est vide à la montée, et une image N-1 relisant la base N ne la
+--                       touche pas. Le reste de la migration est additif.
 --   auth_sessions       session en attente du second facteur (mot de passe vérifié, TOTP pas encore) et facteur utilisé.
 --   auth_known_devices  appareils reconnus (D-15) : une connexion depuis l'un d'eux n'est pas bloquée par la limite
 --                       d'échecs du compte. Empreinte SHA-256 seulement, jamais le jeton.

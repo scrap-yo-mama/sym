@@ -255,14 +255,14 @@ paths:
       operationId: startOidc
       security: []
       tags: [auth]
-      summary: Redirige vers le fournisseur OIDC de l'instance (PKCE S256, state et nonce liés au navigateur)
+      summary: Redirige vers le fournisseur OIDC de l'instance (PKCE S256, state et nonce liés au navigateur) ; connexion ou acceptation d'invitation, jamais liaison
       parameters:
         - name: intent
           in: query
-          description: '`login` (défaut) ou `link` : liaison depuis une session ouverte.'
+          description: '`login` (seule valeur). La liaison à un compte ouvert passe par `POST /api/me/identities/oidc` (ré-authentification).'
           schema:
             type: string
-            enum: [login, link]
+            enum: [login]
         - name: invitation
           in: query
           description: Jeton d'invitation à accepter par l'IdP (adresse vérifiée égale à celle de l'invitation).
@@ -1786,7 +1786,7 @@ paths:
       security:
         - sessionCookie: []
       tags: [users]
-      summary: Lien de réinitialisation (jamais de mot de passe choisi par l'admin), compte avec 2FA seulement, audité
+      summary: Lien de réinitialisation copiable (jamais de mot de passe choisi par l'admin), sans SMTP et pour un compte avec 2FA seulement (second facteur exigé à la consommation), audité
       parameters:
         - $ref: '#/components/parameters/Id'
       responses:
@@ -2081,13 +2081,13 @@ paths:
       security:
         - sessionCookie: []
       tags: [account]
-      summary: Régénère les codes de secours (les anciens sont révoqués)
+      summary: Régénère les codes de secours (mot de passe ET second facteur ; les anciens sont révoqués)
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/PasswordConfirmation'
+              $ref: '#/components/schemas/PasswordAndCode'
       responses:
         '200':
           description: Nouveaux codes (affichés une fois).
@@ -2095,6 +2095,10 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/BackupCodes'
+        '400':
+          $ref: '#/components/responses/Error'
+        '429':
+          $ref: '#/components/responses/Error'
         '401':
           $ref: '#/components/responses/Error'
         '403':
@@ -2107,7 +2111,7 @@ paths:
       security:
         - sessionCookie: []
       tags: [account]
-      summary: Retire la 2FA de l'appelant (mot de passe et code), refusé si MFA_ENFORCED le concerne
+      summary: Retire la 2FA de l'appelant (mot de passe et code, limité par compte), refusé si MFA_ENFORCED le concerne
       requestBody:
         required: true
         content:
@@ -2117,11 +2121,83 @@ paths:
       responses:
         '204':
           description: 2FA retirée.
+        '429':
+          $ref: '#/components/responses/Error'
         '400':
           $ref: '#/components/responses/Error'
         '401':
           $ref: '#/components/responses/Error'
         '403':
+          $ref: '#/components/responses/Error'
+  /api/me/identities:
+    get:
+      operationId: listMyIdentities
+      security:
+        - sessionCookie: []
+      tags: [account]
+      summary: Identités OIDC liées au compte de l'appelant (émetteur, jamais le sub)
+      responses:
+        '200':
+          description: Identités liées.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LinkedIdentityList'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+  /api/me/identities/oidc:
+    post:
+      operationId: startOidcLink
+      security:
+        - sessionCookie: []
+      tags: [account]
+      summary: Lie une identité OIDC au compte après ré-authentification (mot de passe, second facteur si 2FA) ; renvoie l'URL d'autorisation et pose le cookie d'état
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OidcLinkRequest'
+      responses:
+        '200':
+          description: Ouvrir `authorization_url` dans le navigateur ; le retour (`/api/auth/oidc/callback`) lie l'identité.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OidcLinkStart'
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+        '429':
+          $ref: '#/components/responses/Error'
+        '502':
+          $ref: '#/components/responses/Error'
+  /api/me/identities/{id}:
+    delete:
+      operationId: unlinkMyIdentity
+      security:
+        - sessionCookie: []
+      tags: [account]
+      summary: Retire une identité OIDC liée (refusé si c'est le dernier moyen de connexion du compte)
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      responses:
+        '204':
+          description: Identité retirée.
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+        '409':
           $ref: '#/components/responses/Error'
   /api/me/audit:
     get:
@@ -2779,6 +2855,8 @@ components:
         twoFactorRequired:
           description: Compte à 2FA (13 § 7) ; la session reste en attente du second facteur (`POST /api/auth/two-factor/verify`).
           type: boolean
+        notices:
+          $ref: '#/components/schemas/AccountNotices'
     SessionInfo:
       type: object
       additionalProperties: true
@@ -4756,6 +4834,82 @@ components:
         backup_codes_remaining:
           type: integer
           minimum: 0
+        notices:
+          $ref: '#/components/schemas/AccountNotices'
+    AccountNotices:
+      description: Signalements au titulaire, montrés une fois après une authentification complète (ex. `password_reset_by_operator` - lien émis par la commande serveur, 13 § 4).
+      type: array
+      items:
+        type: object
+        additionalProperties: false
+        required: [code, at]
+        properties:
+          code:
+            type: string
+          at:
+            type: string
+            format: date-time
+    PasswordAndCode:
+      description: Ré-authentification et second facteur (code TOTP ou code de secours), limité par compte.
+      type: object
+      additionalProperties: false
+      required: [current_password, code]
+      properties:
+        current_password:
+          type: string
+          minLength: 1
+          maxLength: 1024
+        code:
+          type: string
+          minLength: 1
+          maxLength: 32
+    OidcLinkRequest:
+      description: Ré-authentification avant liaison ; `code` exigé si le compte a une 2FA.
+      type: object
+      additionalProperties: false
+      required: [current_password]
+      properties:
+        current_password:
+          type: string
+          minLength: 1
+          maxLength: 1024
+        code:
+          type: string
+          minLength: 1
+          maxLength: 32
+    OidcLinkStart:
+      type: object
+      additionalProperties: false
+      required: [authorization_url]
+      properties:
+        authorization_url:
+          type: string
+          format: uri
+    LinkedIdentity:
+      type: object
+      additionalProperties: false
+      required: [id, provider, issuer, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        provider:
+          description: 'Fournisseur, sous la forme `oidc:<slug>`.'
+          type: string
+        issuer:
+          type: string
+        created_at:
+          type: [string, 'null']
+          format: date-time
+    LinkedIdentityList:
+      type: object
+      additionalProperties: false
+      required: [identities]
+      properties:
+        identities:
+          type: array
+          items:
+            $ref: '#/components/schemas/LinkedIdentity'
     PasswordResetRequest:
       type: object
       additionalProperties: false

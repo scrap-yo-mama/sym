@@ -15,7 +15,7 @@ import { confirmTwoFactor, consumeTotpStep, loadTwoFactor, removeTwoFactor, repl
 import type { FastifyInstance } from 'fastify';
 import type { ServerContext } from '../context.js';
 import { AttemptLimiter } from '../rate-limit.js';
-import { decodeCursor, encodeCursor, iso, reauthenticate, UUID, verifySecondFactor } from './account-helpers.js';
+import { decodeCursor, encodeCursor, iso, reauthenticate, requireSecondFactor, twoFactorKeks, UUID } from './account-helpers.js';
 import { audit, notFound, sendError } from './guard.js';
 
 const passwordBody = {
@@ -23,6 +23,14 @@ const passwordBody = {
   required: ['current_password'],
   additionalProperties: false,
   properties: { current_password: { type: 'string', minLength: 1, maxLength: 1024 } },
+} as const;
+
+/** Ré-authentification ET second facteur (opérations qui changent les facteurs d'un compte à 2FA, 13 § 5, 7.5.1). */
+const passwordAndCodeBody = {
+  type: 'object',
+  required: ['current_password', 'code'],
+  additionalProperties: false,
+  properties: { current_password: { type: 'string', minLength: 1, maxLength: 1024 }, code: { type: 'string', minLength: 1, maxLength: 32 } },
 } as const;
 
 const pageQuery = {
@@ -150,7 +158,7 @@ export function meRoutes(app: FastifyInstance, ctx: ServerContext): void {
     async (request, reply) => {
       const actor = request.actor!;
       if (confirmFailures.blocked(actor.userId)) return sendError(reply, 429, 'too_many_attempts', 'trop de tentatives, réessayez plus tard');
-      const state = await loadTwoFactor(ctx.pool, ctx.secretsKek, actor.userId);
+      const state = await loadTwoFactor(ctx.pool, twoFactorKeks(ctx), actor.userId);
       if (state.status !== 'pending') return sendError(reply, 400, 'no_enrollment', 'aucun enrôlement en cours');
       const step = matchTotp(state.secret, request.body.code, { lastUsedStep: state.lastUsedStep });
       state.secret.fill(0);
@@ -170,11 +178,14 @@ export function meRoutes(app: FastifyInstance, ctx: ServerContext): void {
     },
   );
 
-  app.post<{ Body: { current_password: string } }>('/api/me/2fa/backup-codes', { schema: { body: passwordBody } }, async (request, reply) => {
+  // Régénération des codes de secours : mot de passe ET second facteur (une session complète et le mot de passe ne
+  // suffisent pas à poser ses propres codes et rendre un accès persistant).
+  app.post<{ Body: { current_password: string; code: string } }>('/api/me/2fa/backup-codes', { schema: { body: passwordAndCodeBody } }, async (request, reply) => {
     const actor = request.actor!;
     if (!(await reauthenticate(ctx, request, reply, actor, request.body.current_password, 'mfa.backup_codes'))) return reply;
     const { rowCount } = await ctx.pool.query('SELECT 1 FROM two_factor WHERE user_id = $1 AND confirmed_at IS NOT NULL', [actor.userId]);
     if (rowCount !== 1) return sendError(reply, 409, 'mfa_not_enabled', 'double authentification inactive');
+    if (!(await requireSecondFactor(ctx, request, reply, actor, request.body.code, 'mfa.backup_codes'))) return reply;
     const codes = generateBackupCodes();
     await replaceBackupCodes(ctx.pool, actor.userId, codes.map((c) => hashBackupCode(actor.userId, c)!));
     await audit(ctx, request, actor, { action: 'mfa.backup_codes_regenerated', targetType: 'user', targetId: actor.userId, outcome: 'success' });
@@ -183,16 +194,7 @@ export function meRoutes(app: FastifyInstance, ctx: ServerContext): void {
 
   app.delete<{ Body: { current_password: string; code: string } }>(
     '/api/me/2fa',
-    {
-      schema: {
-        body: {
-          type: 'object',
-          required: ['current_password', 'code'],
-          additionalProperties: false,
-          properties: { current_password: { type: 'string', minLength: 1, maxLength: 1024 }, code: { type: 'string', minLength: 1, maxLength: 32 } },
-        },
-      },
-    },
+    { schema: { body: passwordAndCodeBody } },
     async (request, reply) => {
       const actor = request.actor!;
       if (mfaRequiredFor(ctx.mfaEnforced, actor.role)) {
@@ -200,10 +202,7 @@ export function meRoutes(app: FastifyInstance, ctx: ServerContext): void {
         return sendError(reply, 403, 'mfa_enforced', 'la double authentification est exigée sur cette instance');
       }
       if (!(await reauthenticate(ctx, request, reply, actor, request.body.current_password, 'mfa.disable'))) return reply;
-      if (!(await verifySecondFactor(ctx, actor.userId, request.body.code))) {
-        await audit(ctx, request, actor, { action: 'mfa.disable', outcome: 'denied', meta: { reason: 'invalid_code' } });
-        return sendError(reply, 400, 'invalid_code', 'code invalide ou déjà utilisé');
-      }
+      if (!(await requireSecondFactor(ctx, request, reply, actor, request.body.code, 'mfa.disable'))) return reply;
       await removeTwoFactor(ctx.pool, actor.userId);
       await audit(ctx, request, actor, { action: 'mfa.disabled', targetType: 'user', targetId: actor.userId, outcome: 'success' });
       return reply.code(204).send();

@@ -7,9 +7,11 @@ import {
   hashBackupCode,
   hashOpaqueToken,
   isOpaqueTokenFormat,
+  kekFor,
   KNOWN_DEVICE_TTL_DAYS,
   matchTotp,
   verifyPassword,
+  type Kek,
 } from '@runtime/core';
 import { sendMail } from '@runtime/core/net';
 import { consumeBackupCode, consumeTotpStep, loadSmtpConfig, loadTwoFactor } from '@runtime/db';
@@ -83,13 +85,23 @@ export async function reauthenticate(ctx: ServerContext, request: FastifyRequest
 // ---------------------------------------------------------------------------------------------------------------
 
 /**
+ * KEK des graines TOTP : la courante et, si le trousseau a `MASTER_KEY_PREVIOUS`, celle de la version précédente
+ * (graine pas encore re-chiffrée par `rekey`). Une graine sous une autre version n'est jamais marquée illisible pour ça.
+ */
+export function twoFactorKeks(ctx: Pick<ServerContext, 'secretsKek' | 'keyring'>): Kek[] {
+  const current = ctx.secretsKek;
+  return ctx.keyring.previous && current.version > 1 ? [current, kekFor(ctx.keyring.previous, current.version - 1, 'secrets')] : [current];
+}
+
+/**
  * Vérifie un code TOTP (6 chiffres, pas strictement plus récent que le dernier accepté) ou un code de secours (usage
  * unique). Seule une 2FA confirmée compte. Graine illisible (MASTER_KEY perdue) : codes de secours seulement.
+ * Sans limite d'essais : les routes passent par `checkSecondFactor`.
  */
-export async function verifySecondFactor(ctx: ServerContext, userId: string, code: string): Promise<Exclude<MfaMethod, 'idp'> | null> {
+async function verifySecondFactor(ctx: ServerContext, userId: string, code: string): Promise<Exclude<MfaMethod, 'idp'> | null> {
   const trimmed = code.trim();
   if (/^\d{6}$/.test(trimmed)) {
-    const state = await loadTwoFactor(ctx.pool, ctx.secretsKek, userId);
+    const state = await loadTwoFactor(ctx.pool, twoFactorKeks(ctx), userId);
     if (state.status !== 'confirmed') return null;
     const step = matchTotp(state.secret, trimmed, { lastUsedStep: state.lastUsedStep });
     state.secret.fill(0);
@@ -101,6 +113,53 @@ export async function verifySecondFactor(ctx: ServerContext, userId: string, cod
   const { rowCount } = await ctx.pool.query('SELECT 1 FROM two_factor WHERE user_id = $1 AND confirmed_at IS NOT NULL', [userId]);
   if (rowCount !== 1) return null;
   return (await consumeBackupCode(ctx.pool, userId, hash)) ? 'backup_code' : null;
+}
+
+/** Échecs du second facteur tolérés par compte sur 15 min, TOUTES routes et IP confondues (connexion, lien de
+ * réinitialisation, retrait de la 2FA, codes de secours, liaison OIDC, transfert de propriété). */
+const MFA_MAX_FAILURES = 5;
+const mfaLimiter = new AttemptLimiter({ max: MFA_MAX_FAILURES, windowMs: 15 * 60 * 1000 });
+
+export type SecondFactorCheck = { ok: true; method: Exclude<MfaMethod, 'idp'> } | { ok: false; failures: number; blocked: boolean };
+
+/**
+ * Second facteur sous limite par compte (13 § 5, 6.1.1 ; 6.4.3 pour la réinitialisation) : un compte bloqué n'essaie
+ * plus aucun code jusqu'à la fin de la fenêtre ; `blocked` vaut true dès le 5e échec (l'appelant ferme ce qui doit l'être).
+ */
+export async function checkSecondFactor(ctx: ServerContext, userId: string, code: string): Promise<SecondFactorCheck> {
+  if (mfaLimiter.blocked(userId)) return { ok: false, failures: MFA_MAX_FAILURES, blocked: true };
+  const method = await verifySecondFactor(ctx, userId, code);
+  if (method) {
+    mfaLimiter.reset(userId);
+    return { ok: true, method };
+  }
+  const failures = mfaLimiter.fail(userId);
+  return { ok: false, failures, blocked: failures >= MFA_MAX_FAILURES };
+}
+
+/**
+ * Second facteur d'une opération sensible de l'acteur (retrait de la 2FA, codes de secours, liaison OIDC, transfert) :
+ * répond lui-même en cas d'échec (400 `invalid_code`, 429 au-delà de la limite, audit `denied`) et renvoie la méthode,
+ * ou null si l'appelant doit s'arrêter.
+ */
+export async function requireSecondFactor(
+  ctx: ServerContext,
+  request: FastifyRequest,
+  reply: FastifyReply,
+  actor: Actor,
+  code: string | undefined,
+  action: string,
+): Promise<Exclude<MfaMethod, 'idp'> | null> {
+  if (!code) {
+    await sendError(reply, 400, 'mfa_code_required', 'code de double authentification requis');
+    return null;
+  }
+  const check = await checkSecondFactor(ctx, actor.userId, code);
+  if (check.ok) return check.method;
+  await audit(ctx, request, actor, { action, targetType: 'user', targetId: actor.userId, outcome: 'denied', meta: { reason: 'invalid_code', failures: check.failures } });
+  if (check.blocked) await sendError(reply, 429, 'too_many_attempts', 'trop de tentatives, réessayez plus tard');
+  else await sendError(reply, 400, 'invalid_code', 'code invalide ou déjà utilisé');
+  return null;
 }
 
 // ---------------------------------------------------------------------------------------------------------------

@@ -6,6 +6,7 @@
 import { randomBytes } from 'node:crypto';
 import { openSecretBytes, rotate, sealSecret, SecretDecryptError, twoFactorAad, type Kek, type SealedValue } from '@runtime/core';
 import type pg from 'pg';
+import { appendAudit } from './audit.js';
 
 type Queryable = Pick<pg.ClientBase, 'query'>;
 
@@ -16,8 +17,12 @@ type Queryable = Pick<pg.ClientBase, 'query'>;
 export type TwoFactorState =
   | { status: 'none' }
   | { status: 'pending' | 'confirmed'; secret: Buffer; lastUsedStep: number | null }
-  /** Graine illisible (MASTER_KEY perdue ou ligne altérée) : codes de secours seulement, puis ré-enrôlement. */
-  | { status: 'unreadable'; confirmed: boolean };
+  /**
+   * Graine illisible (MASTER_KEY perdue ou ligne altérée) : codes de secours seulement, puis ré-enrôlement.
+   * `transient` : graine sous une version de clé que ce processus n'a pas (rotation en cours, processus pas encore
+   * redémarré) ; rien n'est marqué, la graine redevient lisible avec la bonne clé.
+   */
+  | { status: 'unreadable'; confirmed: boolean; transient?: true };
 
 type TwoFactorRow = {
   secret_ciphertext: Buffer;
@@ -44,11 +49,17 @@ export async function startTwoFactorEnrollment(db: Queryable, kek: Kek, userId: 
      WHERE two_factor.confirmed_at IS NULL OR two_factor.unreadable_since IS NOT NULL`,
     [userId, sealed.ciphertext, sealed.nonce, sealed.dekWrapped, sealed.alg, sealed.kekVersion],
   );
+  // La 2FA change d'état (ré-enrôlement) : un lien de réinitialisation émis avant ne vaut plus rien.
+  if (rowCount === 1) await deleteResetLinks(db, userId);
   return rowCount === 1;
 }
 
-/** État de la 2FA d'un utilisateur. Un échec de déchiffrement marque la ligne illisible (jamais en silence). */
-export async function loadTwoFactor(db: Queryable, kek: Kek, userId: string): Promise<TwoFactorState> {
+/**
+ * État de la 2FA d'un utilisateur. `keks` : la KEK courante, et la précédente si le trousseau l'a ; la graine est
+ * ouverte par la KEK de SA version. Un vrai échec de déchiffrement marque la ligne illisible (jamais en silence) ; une
+ * version qu'aucune KEK fournie ne porte (rotation en cours) refuse sans rien écrire.
+ */
+export async function loadTwoFactor(db: Queryable, keks: Kek | readonly Kek[], userId: string): Promise<TwoFactorState> {
   const { rows } = await db.query<TwoFactorRow>(
     `SELECT secret_ciphertext, nonce, dek_wrapped, alg, key_version, last_used_step, unreadable_since, confirmed_at
      FROM two_factor WHERE user_id = $1`,
@@ -57,10 +68,9 @@ export async function loadTwoFactor(db: Queryable, kek: Kek, userId: string): Pr
   const row = rows[0];
   if (!row) return { status: 'none' };
   if (row.unreadable_since) return { status: 'unreadable', confirmed: row.confirmed_at !== null };
-  if (row.key_version !== kek.version) {
-    await db.query('UPDATE two_factor SET unreadable_since = now() WHERE user_id = $1 AND unreadable_since IS NULL', [userId]);
-    return { status: 'unreadable', confirmed: row.confirmed_at !== null };
-  }
+  const ring: readonly Kek[] = 'key' in keks ? [keks] : keks;
+  const kek = ring.find((k) => k.version === row.key_version);
+  if (!kek) return { status: 'unreadable', confirmed: row.confirmed_at !== null, transient: true };
   try {
     const secret = openSecretBytes(sealedOf(row), kek, twoFactorAad(userId));
     return { status: row.confirmed_at ? 'confirmed' : 'pending', secret, lastUsedStep: row.last_used_step === null ? null : Number(row.last_used_step) };
@@ -85,8 +95,13 @@ export async function confirmTwoFactor(db: Queryable, userId: string): Promise<v
   await db.query('UPDATE users SET two_factor_enabled = true, updated_at = now() WHERE id = $1', [userId]);
 }
 
-/** Retire la 2FA (graine et codes de secours). */
+/**
+ * Retire la 2FA (graine et codes de secours) et, dans la même transaction de l'appelant, tout lien de
+ * réinitialisation en cours : un lien émis pendant que la 2FA protégeait le compte ne doit jamais servir sans elle
+ * (13 § 4 : « le lien ne suffit pas à prendre le compte », INV5).
+ */
 export async function removeTwoFactor(db: Queryable, userId: string): Promise<boolean> {
+  await deleteResetLinks(db, userId);
   const { rowCount } = await db.query('DELETE FROM two_factor WHERE user_id = $1', [userId]);
   await db.query('DELETE FROM backup_codes WHERE user_id = $1', [userId]);
   await db.query('UPDATE users SET two_factor_enabled = false, updated_at = now() WHERE id = $1', [userId]);
@@ -147,6 +162,142 @@ export async function rekeyTwoFactorBatch(db: Queryable, from: Kek, to: Kek, bat
 }
 
 // ---------------------------------------------------------------------------------------------------------------
+// Liens de réinitialisation du mot de passe (13 § 4, § 5, § 6) : empreinte seule en base, un lien actif par compte
+// ---------------------------------------------------------------------------------------------------------------
+
+/**
+ * Origine d'un lien : `email` (mot de passe oublié, avec SMTP), `admin` (lien copiable d'un admin, compte à 2FA
+ * seulement : le second facteur est TOUJOURS exigé à la consommation), `operator` (commande serveur
+ * `runtime user:reset-link` / `owner:reset-link`, auditée et signalée au titulaire).
+ */
+export type ResetLinkKind = 'email' | 'admin' | 'operator';
+
+const RESET_PREFIX: Record<ResetLinkKind, string> = { email: 'reset', admin: 'reset-admin', operator: 'reset-cli' };
+const RESET_KIND = new Map(Object.entries(RESET_PREFIX).map(([kind, prefix]) => [prefix, kind as ResetLinkKind]));
+const UUID_TEXT = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+const resetIdentifiers = (userId: string) => Object.values(RESET_PREFIX).map((p) => `${p}:${userId}`);
+
+/** Supprime tout lien de réinitialisation du compte, quelle que soit son origine ; renvoie le nombre supprimé. */
+export async function deleteResetLinks(db: Queryable, userId: string): Promise<number> {
+  const { rowCount } = await db.query('DELETE FROM verifications WHERE identifier = ANY($1::text[])', [resetIdentifiers(userId)]);
+  return rowCount ?? 0;
+}
+
+/** Enregistre l'empreinte d'un nouveau lien (les précédents du compte sont supprimés) ; renvoie son échéance. */
+export async function storeResetLink(db: Queryable, kind: ResetLinkKind, userId: string, tokenHash: string, ttlHours: number): Promise<Date> {
+  await deleteResetLinks(db, userId);
+  const { rows } = await db.query<{ expires_at: Date }>(
+    'INSERT INTO verifications (identifier, value, expires_at) VALUES ($1, $2, now() + make_interval(hours => $3)) RETURNING expires_at',
+    [`${RESET_PREFIX[kind]}:${userId}`, tokenHash, ttlHours],
+  );
+  return rows[0]!.expires_at;
+}
+
+/** Lien valide (non expiré, compte actif et non supprimé) correspondant à l'empreinte ; null sinon. */
+export async function findResetLink(db: Queryable, tokenHash: string): Promise<{ userId: string; kind: ResetLinkKind } | null> {
+  const { rows } = await db.query<{ identifier: string }>(
+    "SELECT identifier FROM verifications WHERE value = $1 AND expires_at > now() AND identifier ~ '^reset(-admin|-cli)?:'",
+    [tokenHash],
+  );
+  for (const { identifier } of rows) {
+    const cut = identifier.indexOf(':');
+    const kind = RESET_KIND.get(identifier.slice(0, cut));
+    const userId = identifier.slice(cut + 1);
+    if (!kind || !UUID_TEXT.test(userId)) continue;
+    const active = await db.query("SELECT 1 FROM users WHERE id = $1 AND status = 'active' AND deleted_at IS NULL", [userId]);
+    if (active.rowCount === 1) return { userId, kind };
+  }
+  return null;
+}
+
+/** Consomme le lien (usage unique, atomique) : true si c'est cet appel qui l'a supprimé. */
+export async function consumeResetLink(db: Queryable, kind: ResetLinkKind, userId: string, tokenHash: string): Promise<boolean> {
+  const { rowCount } = await db.query('DELETE FROM verifications WHERE identifier = $1 AND value = $2', [`${RESET_PREFIX[kind]}:${userId}`, tokenHash]);
+  return rowCount === 1;
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Signalements au titulaire d'un compte, montrés une fois à sa connexion suivante (13 § 4 et § 6)
+// ---------------------------------------------------------------------------------------------------------------
+
+export type AccountNotice = { code: string; at: string };
+/** Durée de conservation d'un signalement non encore montré. */
+const NOTICE_TTL_DAYS = 90;
+
+async function addAccountNotice(db: Queryable, userId: string, code: string): Promise<void> {
+  await db.query("INSERT INTO verifications (identifier, value, expires_at) VALUES ('notice:' || $1::text, $2, now() + make_interval(days => $3))", [
+    userId,
+    code,
+    NOTICE_TTL_DAYS,
+  ]);
+}
+
+/** Signalements en attente pour le compte, retirés à la lecture (montrés une fois). */
+export async function takeAccountNotices(db: Queryable, userId: string): Promise<AccountNotice[]> {
+  const { rows } = await db.query<{ value: string; created_at: Date; expires_at: Date }>(
+    "DELETE FROM verifications WHERE identifier = 'notice:' || $1::text RETURNING value, created_at, expires_at",
+    [userId],
+  );
+  const now = Date.now();
+  return rows
+    .filter((r) => r.expires_at.getTime() > now)
+    .sort((a, b) => a.created_at.getTime() - b.created_at.getTime())
+    .map((r) => ({ code: r.value, at: r.created_at.toISOString() }));
+}
+
+export type OperatorResetResult =
+  | { ok: true; userId: string; email: string; role: string; expiresAt: Date }
+  | { ok: false; reason: 'not_found' | 'inactive' | 'owner_account' };
+
+/**
+ * Lien de réinitialisation émis par la commande serveur (`runtime user:reset-link <email>`, `runtime owner:reset-link`) :
+ * pour un compte sans 2FA sur une instance sans SMTP (13 § 4, § 6). Empreinte seule en base, sessions du compte
+ * fermées, audit `user.reset_link` (acteur système, via cli) et signalement au titulaire à sa connexion suivante.
+ * Si le compte a une 2FA, son second facteur reste exigé à la consommation (6.4.3). Transaction propre.
+ */
+export async function issueOperatorResetLink(
+  client: pg.ClientBase,
+  target: { email: string } | { owner: true },
+  tokenHash: string,
+  ttlHours: number,
+): Promise<OperatorResetResult> {
+  await client.query('BEGIN');
+  try {
+    const { rows } = await client.query<{ id: string; email: string; role: string; status: string }>(
+      'owner' in target
+        ? "SELECT id, email, role, status FROM users WHERE role = 'owner' AND deleted_at IS NULL FOR UPDATE"
+        : 'SELECT id, email, role, status FROM users WHERE email = $1 AND deleted_at IS NULL FOR UPDATE',
+      'owner' in target ? [] : [target.email.trim().toLowerCase()],
+    );
+    const user = rows[0];
+    let refusal: Exclude<OperatorResetResult, { ok: true }>['reason'] | null = null;
+    if (!user) refusal = 'not_found';
+    else if (!('owner' in target) && user.role === 'owner') refusal = 'owner_account';
+    else if (user.status !== 'active') refusal = 'inactive';
+    if (refusal || !user) {
+      await client.query('ROLLBACK');
+      return { ok: false, reason: refusal ?? 'not_found' };
+    }
+    const expiresAt = await storeResetLink(client, 'operator', user.id, tokenHash, ttlHours);
+    await client.query('DELETE FROM auth_sessions WHERE user_id = $1', [user.id]);
+    await addAccountNotice(client, user.id, 'password_reset_by_operator');
+    await appendAudit(client, { actorUserId: null, actorVia: 'system', action: 'user.reset_link', targetType: 'user', targetId: user.id, outcome: 'success', meta: { via: 'cli' } });
+    await client.query('COMMIT');
+    return { ok: true, userId: user.id, email: user.email, role: user.role, expiresAt };
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => undefined);
+    throw error;
+  }
+}
+
+/** Identités OIDC liées au compte (13 § 7) : signalées à la réinitialisation et à la révocation complète. */
+export async function countOidcIdentities(db: Queryable, userId: string): Promise<number> {
+  const { rows } = await db.query<{ n: number }>("SELECT count(*)::int AS n FROM auth_accounts WHERE user_id = $1 AND provider_id LIKE 'oidc:%'", [userId]);
+  return rows[0]?.n ?? 0;
+}
+
+// ---------------------------------------------------------------------------------------------------------------
 // Révocations, désactivation, suppression (13 § 5 « Fin de session », 13 § 6)
 // ---------------------------------------------------------------------------------------------------------------
 
@@ -199,7 +350,7 @@ export async function deleteOrAnonymizeUser(client: pg.ClientBase, userId: strin
     'DELETE FROM backup_codes WHERE user_id = $1',
     'DELETE FROM api_keys WHERE user_id = $1',
     'DELETE FROM tunnels WHERE owner_id = $1',
-    "DELETE FROM verifications WHERE identifier = 'reset:' || $1::text",
+    "DELETE FROM verifications WHERE identifier IN ('reset:' || $1::text, 'reset-admin:' || $1::text, 'reset-cli:' || $1::text, 'notice:' || $1::text)",
   ]) {
     await client.query(sql, [userId]);
   }

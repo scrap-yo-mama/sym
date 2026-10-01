@@ -9,7 +9,11 @@ import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypt
 
 export const TOTP_PERIOD_SECONDS = 30;
 export const TOTP_DIGITS = 6;
-/** Pas tolérés autour du pas courant (dérive d'horloge du téléphone) : ±1, soit 90 s au plus. */
+/**
+ * Pas tolérés autour du pas courant (dérive d'horloge du téléphone) : ±1, soit 90 s au plus. Écart assumé avec la
+ * « validité 30 s » de 13 § 7 (pratique de RFC 6238 § 5.2) : chaque code reste à usage unique (anti-rejeu par le dernier
+ * pas accepté) et les essais sont limités par compte (5 échecs / 15 min, toutes routes confondues).
+ */
 export const TOTP_WINDOW = 1;
 const SECRET_BYTES = 20;
 

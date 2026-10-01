@@ -161,7 +161,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Redirige vers le fournisseur OIDC de l'instance (PKCE S256, state et nonce liés au navigateur) */
+        /** Redirige vers le fournisseur OIDC de l'instance (PKCE S256, state et nonce liés au navigateur) ; connexion ou acceptation d'invitation, jamais liaison */
         get: operations["startOidc"];
         put?: never;
         post?: never;
@@ -1000,7 +1000,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Lien de réinitialisation (jamais de mot de passe choisi par l'admin), compte avec 2FA seulement, audité */
+        /** Lien de réinitialisation copiable (jamais de mot de passe choisi par l'admin), sans SMTP et pour un compte avec 2FA seulement (second facteur exigé à la consommation), audité */
         post: operations["createResetLink"];
         delete?: never;
         options?: never;
@@ -1206,7 +1206,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Régénère les codes de secours (les anciens sont révoqués) */
+        /** Régénère les codes de secours (mot de passe ET second facteur ; les anciens sont révoqués) */
         post: operations["regenerateBackupCodes"];
         delete?: never;
         options?: never;
@@ -1224,8 +1224,59 @@ export interface paths {
         get?: never;
         put?: never;
         post?: never;
-        /** Retire la 2FA de l'appelant (mot de passe et code), refusé si MFA_ENFORCED le concerne */
+        /** Retire la 2FA de l'appelant (mot de passe et code, limité par compte), refusé si MFA_ENFORCED le concerne */
         delete: operations["disableTwoFactor"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/me/identities": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Identités OIDC liées au compte de l'appelant (émetteur, jamais le sub) */
+        get: operations["listMyIdentities"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/me/identities/oidc": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Lie une identité OIDC au compte après ré-authentification (mot de passe, second facteur si 2FA) ; renvoie l'URL d'autorisation et pose le cookie d'état */
+        post: operations["startOidcLink"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/me/identities/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Retire une identité OIDC liée (refusé si c'est le dernier moyen de connexion du compte) */
+        delete: operations["unlinkMyIdentity"];
         options?: never;
         head?: never;
         patch?: never;
@@ -1593,6 +1644,7 @@ export interface components {
             user: components["schemas"]["AuthUser"];
             /** @description Compte à 2FA (13 § 7) ; la session reste en attente du second facteur (`POST /api/auth/two-factor/verify`). */
             twoFactorRequired?: boolean;
+            notices?: components["schemas"]["AccountNotices"];
         } & {
             [key: string]: unknown;
         };
@@ -2548,6 +2600,39 @@ export interface components {
             /** @enum {string} */
             method: "totp" | "backup_code";
             backup_codes_remaining?: number;
+            notices?: components["schemas"]["AccountNotices"];
+        };
+        /** @description Signalements au titulaire, montrés une fois après une authentification complète (ex. `password_reset_by_operator` - lien émis par la commande serveur, 13 § 4). */
+        AccountNotices: {
+            code: string;
+            /** Format: date-time */
+            at: string;
+        }[];
+        /** @description Ré-authentification et second facteur (code TOTP ou code de secours), limité par compte. */
+        PasswordAndCode: {
+            current_password: string;
+            code: string;
+        };
+        /** @description Ré-authentification avant liaison ; `code` exigé si le compte a une 2FA. */
+        OidcLinkRequest: {
+            current_password: string;
+            code?: string;
+        };
+        OidcLinkStart: {
+            /** Format: uri */
+            authorization_url: string;
+        };
+        LinkedIdentity: {
+            /** Format: uuid */
+            id: string;
+            /** @description Fournisseur, sous la forme `oidc:<slug>`. */
+            provider: string;
+            issuer: string;
+            /** Format: date-time */
+            created_at: string | null;
+        };
+        LinkedIdentityList: {
+            identities: components["schemas"]["LinkedIdentity"][];
         };
         PasswordResetRequest: {
             email: string;
@@ -3041,8 +3126,8 @@ export interface operations {
     startOidc: {
         parameters: {
             query?: {
-                /** @description `login` (défaut) ou `link` : liaison depuis une session ouverte. */
-                intent?: "login" | "link";
+                /** @description `login` (seule valeur). La liaison à un compte ouvert passe par `POST /api/me/identities/oidc` (ré-authentification). */
+                intent?: "login";
                 /** @description Jeton d'invitation à accepter par l'IdP (adresse vérifiée égale à celle de l'invitation). */
                 invitation?: string;
             };
@@ -5096,7 +5181,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["PasswordConfirmation"];
+                "application/json": components["schemas"]["PasswordAndCode"];
             };
         };
         responses: {
@@ -5109,9 +5194,11 @@ export interface operations {
                     "application/json": components["schemas"]["BackupCodes"];
                 };
             };
+            400: components["responses"]["Error"];
             401: components["responses"]["Error"];
             403: components["responses"]["Error"];
             409: components["responses"]["Error"];
+            429: components["responses"]["Error"];
         };
     };
     disableTwoFactor: {
@@ -5137,6 +5224,83 @@ export interface operations {
             400: components["responses"]["Error"];
             401: components["responses"]["Error"];
             403: components["responses"]["Error"];
+            429: components["responses"]["Error"];
+        };
+    };
+    listMyIdentities: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Identités liées. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LinkedIdentityList"];
+                };
+            };
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+        };
+    };
+    startOidcLink: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OidcLinkRequest"];
+            };
+        };
+        responses: {
+            /** @description Ouvrir `authorization_url` dans le navigateur ; le retour (`/api/auth/oidc/callback`) lie l'identité. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OidcLinkStart"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+            429: components["responses"]["Error"];
+            502: components["responses"]["Error"];
+        };
+    };
+    unlinkMyIdentity: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Identité retirée. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            409: components["responses"]["Error"];
         };
     };
     listMyAuditEvents: {
