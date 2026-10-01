@@ -34,7 +34,10 @@ import { describe, test } from "vitest";
 // chaque saut de redirection suivi par Chromium, barre oblique finale, second hôte autorisé, WebSocket, robots.txt redirigé vers un
 // autre hôte) et apps/worker/src/browser/request-guard.security.test.ts (contrôle CDP : cadre hors processus, worker dédié) ;
 // le volet tunnel et extension (17 § 1 : 0 requête aussi en mode tunnel) est repris par 2.7 (test.todo ci-dessous) ;
-// assert_access_report_first : packages/db/src/investigation-events.integration.test.ts (migration 0015 ; repris par 2.1).
+// assert_access_report_first : packages/db/src/investigation-events.integration.test.ts (migration 0015) et, enquête réelle
+// (2.1), apps/worker/src/exec/investigation.integration.test.ts.
+// INV2 (2.1) : le test nommé du moins cher d'abord est dans apps/worker/src/exec/investigation.integration.test.ts (sans navigateur),
+// apps/worker/src/exec/investigation.security.test.ts (Chromium, capture XHR) et packages/core/src/investigation/investigation.unit.test.ts.
 // INV9 et exploitation (4.6) : assert_diagnostics_redacted (packages/db/src/ops/ops.integration.test.ts, apps/cli/src/cli.ops.integration.test.ts),
 // assert_backup_restore_roundtrip, assert_upgrade_n_minus_1, assert_rollback_restores_state (tests/operations.integration.test.ts).
 // INV9 et INV8 (1.10) : assert_no_telemetry (serveur + worker + run, 0 destination non locale), assert_otel_off_by_default,
@@ -52,7 +55,6 @@ import { describe, test } from "vitest";
 // classify.fixtures.unit.test.ts, guard.unit.test.ts, apps/worker/src/exec/classification-guard.integration.test.ts,
 // tests/browser/executors.security.test.ts (Chromium) et tests/no-circumvention.unit.test.ts (dépendances, imports) ; audit en 4.3.
 describe("invariants (à implémenter)", () => {
-  test.todo("assert_cheapest_first_logged"); // INV2, tâche(s) 2.1
   // ADR 0001, point faible connu (F-E5, pagination par bouton) : 2.4 ne compile qu'une trace à un enregistrement ; une liste
   // est refusée (`list_not_compilable`, épinglé par assert_e5_list_not_compiled) et reste rejouée par l'agent (E5 « mouvant »).
   test.todo("assert_e5_list_compiled — trace E6 réussie sur F-E5 compilée en E5 (clics « Suivant » répétés, extraction par enregistrement à chaque page) et rejouée sans LLM, sortie identique"); // ADR 0001, suivi de 2.4 (tâche de rattachement à créer dans 10-taches)

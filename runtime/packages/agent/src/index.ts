@@ -3,6 +3,7 @@
 // Tâche 0.6b : client `agent_step` du tunnel (`TunnelStepChannel`) et refus des moteurs tiers en tunnel.
 // Tâche 2.4 : Stagehand 3.7.3 en production (ADR 0001), enregistreur de cibles sémantiques, E4 (rôle `extract`) et
 // interpréteur E5 (`hybrid`).
+// Tâche 2.1 : rôle `investigate` (schéma de sortie et chemins des champs, à partir des seuls squelettes des gisements).
 export const PACKAGE_NAME = '@runtime/agent';
 
 export { HomeLoopEngine, HOME_LOOP_SYSTEM_PROMPT, homeLoopPromptVersion, frameSnapshot, type HomeLoopOptions, type HomeLoopObserver } from './home-loop.js';
@@ -23,3 +24,4 @@ export {
 export { installSemanticRecorder, type SemanticClick, type SemanticRecorder } from './semantic-recorder.js';
 export { EXTRACT_SYSTEM_PROMPT, extractMessages, extractPromptVersion, extractRecordsWithLlm, recordsSchema, sourceLabel, type LlmExtraction } from './agent-extract.js';
 export { extractLabelsFromPage, readPageView, runHybridSteps, type HybridFailure, type HybridHooks } from './hybrid-runner.js';
+export { INVESTIGATE_SYSTEM_PROMPT, investigateMessages, investigatePromptVersion, proposeInvestigation, type InvestigateArgs, type InvestigateResult } from './investigate.js';

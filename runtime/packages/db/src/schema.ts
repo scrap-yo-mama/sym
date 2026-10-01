@@ -7,6 +7,7 @@ import {
   FAILURE_CLASSES,
   INVESTIGATION_PHASES,
   NETWORKS,
+  RUN_KINDS,
   RUN_OUTCOMES,
   RUN_STATES,
   RUN_TRIGGERS,
@@ -374,6 +375,8 @@ export const apis = pgTable(
     repairLeaseUntil: tstz('repair_lease_until'),
     // 0010_scheduling_webhooks (2.5) : un warning au-delà de D n'alerte qu'une fois par épisode.
     warningAlertedAt: tstz('warning_alerted_at'),
+    // 0016_investigation (2.1) : état de l'enquête entre deux runs (demande, gisements, proposition, schéma validé).
+    investigation: jsonb('investigation'),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
@@ -452,6 +455,8 @@ export const runs = pgTable(
     scheduleId: uuid('schedule_id').references((): AnyPgColumn => schedules.id, { onDelete: 'set null' }),
     scheduledAt: tstz('scheduled_at'),
     scheduleJobId: uuid('schedule_job_id'),
+    // 0016_investigation (2.1) : exécution d'une stratégie ou enquête.
+    kind: text('kind', { enum: RUN_KINDS }).notNull().default('run'),
     createdAt: createdAt(),
     startedAt: tstz('started_at'),
     finishedAt: tstz('finished_at'),

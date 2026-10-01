@@ -8,6 +8,7 @@ import {
   INVESTIGATION_PHASES,
   LLM_FAILURE_CLASS_PATTERN,
   NETWORKS,
+  RUN_KINDS,
   RUN_OUTCOMES,
   RUN_STATES,
   RUN_TRIGGERS,
@@ -61,6 +62,7 @@ describe('énumérations TS = CHECK SQL', () => {
     ['runs', 'trigger', RUN_TRIGGERS],
     ['runs', 'state', RUN_STATES],
     ['runs', 'outcome', RUN_OUTCOMES],
+    ['runs', 'kind', RUN_KINDS],
     ['run_attempts', 'execution', EXECUTIONS],
     ['run_attempts', 'network', NETWORKS],
   ] as const)('%s.%s', async (table, column, values) => {
