@@ -2,9 +2,19 @@
 // Actions de la fiche (06 § 2) : Lancer (run, avec le choix de version pour Relancer), Ré-enquêter (manuel, transitions 17
 // et 18), Revenir à une version, Modifier la sortie (déclenche une ré-enquête, après confirmation). Chaque action garde
 // son état d'attente et son erreur en code stable ; la console ne décide jamais d'un droit (le serveur répond 403 ou 409).
+import type { components } from '@runtime/client';
 import { ref, toValue, type MaybeRefOrGetter } from 'vue';
 import { getApi } from '@/lib/api';
 import { toRequestError, unwrap, type ApiRequestError } from '@/lib/api-result';
+
+/**
+ * « Modifier la sortie » relance une enquête : la machine à états ne le prévoit que depuis `sain` (transition 19) ou
+ * `warning` (transition 20), 04 § 6. Une API `bloquee` n'a qu'une reprise, Ré-enquêter dans le panneau (transition 18,
+ * 06 § 2) ; une réparation garde son schéma (INV1) ; les autres statuts n'ont aucune transition « schéma modifié ».
+ */
+export function outputSchemaEditAllowed(status: components['schemas']['ApiStatus']): boolean {
+  return status === 'sain' || status === 'warning';
+}
 
 export function useApiActions(slug: MaybeRefOrGetter<string>) {
   const pending = ref<'launch' | 'reinvestigate' | 'revert' | 'schema' | null>(null);

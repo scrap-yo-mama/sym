@@ -383,6 +383,7 @@
     "input": "Schéma d'entrée",
     "output": "Schéma de sortie",
     "edit": "Modifier la sortie",
+    "editUnavailable": "La sortie se modifie seulement quand l'API est saine ou à surveiller, car la modification lance une ré-enquête.",
     "editLabel": "Schéma de sortie (JSON)",
     "invalid": "Le JSON saisi n'est pas un objet valide.",
     "review": "Vérifier la modification",

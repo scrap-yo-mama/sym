@@ -383,6 +383,7 @@
     "input": "Input schema",
     "output": "Output schema",
     "edit": "Edit the output",
+    "editUnavailable": "The output can only be changed when the API is Healthy or To watch, because the change starts a re-investigation.",
     "editLabel": "Output schema (JSON)",
     "invalid": "The JSON entered is not a valid object.",
     "review": "Review the change",

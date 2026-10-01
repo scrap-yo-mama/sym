@@ -5,6 +5,7 @@
 // squelettes vides pour ces onglets ; ici, chaque commande qui dépend d'une liste chargée est réellement rendue.
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import ApiDetailPage from '@/components/api/ApiDetailPage.vue';
+import ApiSchemasTab from '@/components/api/tabs/ApiSchemasTab.vue';
 import ApiStrategyTab from '@/components/api/tabs/ApiStrategyTab.vue';
 import type { components } from '@runtime/client';
 import { setApi } from '@/lib/api';
@@ -106,13 +107,49 @@ const blockedDetail = () =>
     requires: { session_domain: null, tunnel: false },
   });
 
-/** Une commande dont le texte commence par l'un des libellés interdits. */
-const startsWith = (labels: string[]) => new RegExp(`^(?:${labels.map((label) => label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})\\b`, 'i');
+const escape = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+/** Libellé exact, ou modèle i18n dont les variables ({a}, {b}…) sont des nombres. */
+const label = (text: string) => new RegExp(`^${escape(text).replace(/\\\{\w+\\\}/g, '\\d+')}$`);
+const exact = (...texts: string[]) => texts.map(label);
+
+/**
+ * Liste blanche des commandes d'une API bloquée, onglet par onglet : navigation, copie, export, consultation, Suspendre
+ * et Supprimer d'une planification, et Ré-enquêter (la seule reprise, 06 § 2, transition 18). Toute autre commande
+ * (Lancer, Relancer, retour de version, reprise de planification, Modifier la sortie, Modifier et ré-enquêter…) échoue.
+ * « Créer la planification » reste : une planification d'une API bloquée ne lance aucun run (gateRun → skipped_status,
+ * 08 § 5, `assert_schedule_skips_bloquee`), ce n'est donc pas une reprise.
+ */
+const ALLOWED_COMMON: RegExp[] = exact(fr.detail.backToCatalog, fr.actions.reinvestigate, fr.blockedPanel.seeAttempts, fr.blockedPanel.request.copy, ...API_TABS.map((tab) => fr.detail.tabs[tab]));
+const ALLOWED_BY_TAB: Record<(typeof API_TABS)[number], RegExp[]> = {
+  overview: exact(fr.ui.copy),
+  schemas: [],
+  strategy: exact(fr.strategy.seeInvestigation, fr.strategy.compareWith, fr.strategy.compareAction),
+  runs: exact(fr.runsTab.viewItems, fr.runsTab.exportJson, fr.runsTab.exportCsv),
+  status: exact(fr.statusTab.linkedRun, fr.statusTab.lastOccurrence),
+  schedules: exact(fr.schedules.pause, fr.schedules.delete, fr.schedules.submit),
+  access: exact(fr.accessTab.useOfficial),
+  investigations: [...exact(fr.replay.play, fr.replay.pause, fr.replay.restart, fr.replay.previousPhase, fr.replay.nextPhase, fr.replay.showAll, fr.replay.suspendFollow, fr.replay.resumeFollow), /^(?:0\.5|1|2|4)x$/],
+};
+/** Lien de consultation d'un run (date de l'historique) : un `<a>` vers `/runs/{id}`, jamais un bouton. */
+const RUN_LINK = /^\s*href="\/runs\/[0-9a-f-]{36}"/;
+
+function allowed(tab: (typeof API_TABS)[number], control: ReturnType<typeof controls>[number]): boolean {
+  if ([...ALLOWED_COMMON, ...ALLOWED_BY_TAB[tab]].some((pattern) => pattern.test(control.text))) return true;
+  return tab === 'runs' && control.tag === 'a' && RUN_LINK.test(control.attrs);
+}
+
+/** Reprises interdites : témoin lisible de la liste blanche, qui les refuse déjà. */
+const FORBIDDEN = [fr.actions.launch, fr.actions.relaunch, fr.strategy.revert, fr.schedules.resume, fr.schemas.edit, fr.schemas.confirm.yes];
 
 describe('fiche d’une API bloquée, listes chargées', () => {
-  test('assert_blocked_panel_no_tunnel_link : sur chaque onglet chargé, aucun Lancer, Relancer, retour de version ni reprise de planification ; Ré-enquêter seul', async () => {
-    const forbidden = startsWith([fr.actions.launch, fr.actions.relaunch, fr.strategy.revert, fr.schedules.resume]);
-    const loaded: Record<string, string> = { strategy: 'data-testid="versions-table"', runs: 'data-testid="runs-table"', status: 'data-testid="status-timeline"', schedules: 'data-testid="schedules-list"' };
+  test('assert_blocked_panel_no_tunnel_link : sur chaque onglet chargé, chaque commande est dans la liste blanche (navigation, copie, export, consultation, Suspendre, Supprimer) ; Ré-enquêter est la seule reprise', async () => {
+    const loaded: Record<string, string> = {
+      strategy: 'data-testid="versions-table"',
+      runs: 'data-testid="runs-table"',
+      status: 'data-testid="status-timeline"',
+      schedules: 'data-testid="schedules-list"',
+      schemas: 'id="schema-output"',
+    };
     for (const tab of API_TABS) {
       installLoadedApi(SLUG);
       const html = await mount(ApiDetailPage, { detail: blockedDetail(), slug: SLUG, tab, resuming: false });
@@ -121,11 +158,13 @@ describe('fiche d’une API bloquée, listes chargées', () => {
       if (loaded[tab]) expect(html, tab).toContain(loaded[tab]);
       for (const control of controls(html)) {
         expect(`${control.attrs} ${control.text}`, `${tab} : ${control.text}`).not.toMatch(TUNNEL_WORDING);
-        expect(control.text, `${tab} : ${control.text}`).not.toMatch(forbidden);
+        expect(FORBIDDEN, `${tab} : ${control.text}`).not.toContain(control.text);
+        expect(allowed(tab, control), `${tab} : commande hors liste blanche « ${control.text} »`).toBe(true);
       }
       expect(html, tab).not.toContain('data-testid="launch-form"');
       expect(html, tab).not.toContain('header-reinvestigate');
       expect(html, tab).not.toContain('id="revert-confirm"');
+      expect(html, tab).not.toContain('data-testid="edit-output"');
       // La seule reprise est Ré-enquêter, dans le panneau.
       const resumes = controls(html).filter((control) => control.tag === 'button' && control.text === fr.actions.reinvestigate);
       expect(resumes, tab).toHaveLength(1);
@@ -147,6 +186,22 @@ describe('fiche d’une API bloquée, listes chargées', () => {
     expect(await texts('runs')).toContain(fr.actions.relaunch);
     expect(await texts('strategy')).toContain(fr.strategy.revert);
     expect(await texts('schedules')).toContain(fr.schedules.resume);
+    expect(await texts('schemas')).toContain(fr.schemas.edit);
+  });
+});
+
+describe('« Modifier la sortie » (transitions 19 et 20)', () => {
+  test('assert_output_schema_edit_only_from_sain_or_warning : la modification qui relance une enquête n’est proposée que depuis sain ou warning ; jamais sur bloquee ni les autres statuts', async () => {
+    const statuses: Schemas['ApiStatus'][] = ['enquete', 'sain', 'warning', 'reparation', 'erreur', 'action_requise', 'bloquee'];
+    for (const status of statuses) {
+      const html = await mount(ApiSchemasTab, { detail: apiDetail({ slug: SLUG, status }), slug: SLUG });
+      const offered = status === 'sain' || status === 'warning';
+      expect(html, status).toContain('id="schema-output"');
+      expect(controls(html).filter((control) => control.text === fr.schemas.edit), status).toHaveLength(offered ? 1 : 0);
+      // Hors sain et warning, la raison est écrite, sans bouton.
+      if (offered) expect(html, status).not.toContain('data-testid="edit-output-unavailable"');
+      else expect(html, status).toContain('data-testid="edit-output-unavailable"');
+    }
   });
 });
 

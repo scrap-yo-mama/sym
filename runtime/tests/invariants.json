@@ -79,7 +79,7 @@
   { "test": "assert_stale_is_flag", "invariant": "06 § 4.3, 04 § 6", "tasks": ["3.4", "3.6"], "stage": "U1",
     "note": "3.4 : la pastille s'ajoute à sain ou warning, aucun statut ne s'ajoute ; 3.6 : même critère en Chromium" },
   { "test": "assert_blocked_panel_no_tunnel_link", "invariant": "INV6, A7", "tasks": ["3.4", "3.6"], "stage": "U1",
-    "note": "3.4 : panneau en fr et en, et fiche entière sur chacun des 8 onglets (apps/web/src/components/api/api-detail.unit.test.ts) ; fiche montée côté client, listes chargées (versions, runs, transitions, planifications) : ni Lancer, ni Relancer, ni retour de version, ni reprise de planification, Ré-enquêter seul (api-detail-mounted.unit.test.ts) ; 3.6 : même critère en Chromium" },
+    "note": "3.4 : panneau en fr et en, et fiche entière sur chacun des 8 onglets (apps/web/src/components/api/api-detail.unit.test.ts) ; fiche montée côté client, listes chargées (versions, runs, transitions, planifications, schémas) : chaque commande de chaque onglet est vérifiée contre une liste blanche (navigation, copie, export, consultation, Suspendre et Supprimer une planification, Créer une planification, Ré-enquêter), Ré-enquêter est la seule reprise (api-detail-mounted.unit.test.ts) ; 3.6 : même critère en Chromium" },
   { "test": "assert_no_robots_override_ui", "invariant": "INV11", "tasks": ["3.4", "3.6"], "stage": "U1",
     "note": "3.4 : onglet Accès en lecture seule + balayage du code de la console ; les réglages sont couverts par le même balayage dès leur fusion (3.5) ; 3.6 : même critère en Chromium" },
   { "test": "assert_reason_codes_stable", "invariant": "06 § 4.2", "tasks": ["3.4", "3.6"], "stage": "U1",
@@ -93,5 +93,7 @@
   { "test": "assert_action_verb_same_in_banner_and_catalog", "invariant": "06 § 2 (Action requise)", "tasks": ["3.4", "3.6"], "stage": "U1",
     "note": "3.4 : pour chaque cause, la colonne Statut du catalogue affiche le titre du bandeau de la fiche, fr et en (apps/web/src/components/catalog/catalog.unit.test.ts) ; 3.6 : même critère en Chromium" },
   { "test": "assert_revert_shows_preview", "invariant": "06 § 2 (Stratégie & versions)", "tasks": ["3.4", "3.6"], "stage": "U1",
-    "note": "3.4 : « Revenir à cette version » charge le diff de la version visée contre la courante et l'affiche avec la conséquence avant le bouton de confirmation (composable + rendu) ; proposé seulement depuis sain ou warning (transitions 7 et 8), jamais sur bloquee ni les autres statuts, versions chargées (api-detail-mounted.unit.test.ts) ; 3.6 : même critère en Chromium" }
+    "note": "3.4 : « Revenir à cette version » charge le diff de la version visée contre la courante et l'affiche avec la conséquence avant le bouton de confirmation (composable + rendu) ; proposé seulement depuis sain ou warning (transitions 7 et 8), jamais sur bloquee ni les autres statuts, versions chargées (api-detail-mounted.unit.test.ts) ; 3.6 : même critère en Chromium" },
+  { "test": "assert_output_schema_edit_only_from_sain_or_warning", "invariant": "06 § 2 (Schémas, panneau Bloquée), 04 § 6 (transitions 18 à 20)", "tasks": ["3.4"], "stage": "U1",
+    "note": "3.4 : « Modifier la sortie » (qui relance une enquête) n'est proposé que depuis sain ou warning ; sur bloquee et les autres statuts, la raison est écrite sans bouton (api-detail-mounted.unit.test.ts)" }
 ]
