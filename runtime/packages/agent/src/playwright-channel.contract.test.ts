@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Canal agent_step côté serveur sur un vrai Chromium (Playwright 1.63) et les fixtures du spike : stale_ref sans
 // exécution, verrou de domaines (tentatives comptées même bloquées), refus des écritures. Aucun LLM.
 import { existsSync } from 'node:fs';

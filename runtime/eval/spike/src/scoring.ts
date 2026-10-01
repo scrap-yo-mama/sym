@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Définitions et métriques du protocole (eval/spike-0.6a-decision.md §7, §8, §9) : fonctions pures, recalculables par
 // un tiers depuis l'annexe JSONL.
 import { createHash } from 'node:crypto';

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Garde-fous du processus du spike (protocole §13, §11) : environnement nettoyé et compteur réseau côté Node.
 // Le compteur écoute les canaux de diagnostic de Node (fetch/undici et http/https) : toute requête sortante du processus
 // (Stagehand, SDK Browserbase, client LLM) y passe, sans patch des modules.

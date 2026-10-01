@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Sites du spike 0.6a (eval/spike-0.6a-decision.md §5) : trois classes qui exigent l'agent (E4, E5, E6) et une fixture
 // d'injection de prompt. Données factices déterministes (graine fixe), aucune ressource externe, aucun défi, aucun
 // mécanisme de contournement. Les tâches (instruction, schéma, référence) sont dans ../agent-tasks.ts.

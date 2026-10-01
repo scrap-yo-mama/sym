@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Moteur B du spike 0.6a : Stagehand 3.7.3 `agent()` derrière `AgentEngine` (protocole §3). Paquet d'évaluation isolé
 // (§13) : jamais importé par packages/* ni apps/*. Tel que livré : prompt système de la bibliothèque non modifié.
 // Stagehand pilote Chromium par son propre client CDP (cdpUrl) : il n'est PAS compatible `agent_step` (07 §3).

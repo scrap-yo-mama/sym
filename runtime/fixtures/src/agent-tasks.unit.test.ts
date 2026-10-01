@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Tâches du spike 0.6a : les références versionnées sont exactement celles du générateur, les schémas couvrent les
 // références, et les noms suivent le protocole (eval/spike-0.6a-decision.md §5).
 import { describe, expect, it } from 'vitest';

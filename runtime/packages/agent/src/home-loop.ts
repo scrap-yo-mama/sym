@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Moteur A du spike 0.6a : boucle maison sur l'arbre d'accessibilité, derrière `AgentEngine` (02 P2, 03).
 // Une action par étape, choisie par le modèle dans une liste fermée (les cinq de `agent_step` + `done`), exécutée par le
 // seul canal `AgentStepChannel` : le moteur est compatible tunnel par construction (07 §3, preuve en 0.6b).

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Critère 3.3 du §9 (simplicité) : nombre de paquets distincts que le moteur ajoute à l'arbre de production
 // (nom@version, dépendances transitives comprises), lu par `pnpm list --prod`.
 import { execFileSync } from 'node:child_process';

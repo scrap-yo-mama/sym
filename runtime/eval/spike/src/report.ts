@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Agrégats (§8) et règle de décision (§9) recalculés depuis l'annexe JSONL, puis rendus en Markdown pour l'ADR.
 // Usage : node eval/spike/src/report.ts <runs.jsonl> <meta.json> [sortie.md]
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';

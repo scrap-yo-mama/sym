@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Bras B (Stagehand 3.7.3) sur le faux fournisseur : température transmise par middleware (§15), aucune requête vers
 // Browserbase ni ailleurs hors boucle locale (§13), aucun patchright installé (INV6). Aucun LLM réel.
 import { execFileSync } from 'node:child_process';

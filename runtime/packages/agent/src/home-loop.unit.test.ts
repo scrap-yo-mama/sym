@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Boucle maison (bras A du spike 0.6a) sur le faux fournisseur et un faux canal agent_step : aucun LLM, aucun navigateur.
 import type { AgentSnapshot, AgentStepAction, AgentStepChannel, AgentStepResult, AgentTask } from '@runtime/core';
 import { Secret } from '@runtime/core';

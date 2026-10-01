@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Tâches du spike 0.6a (eval/spike-0.6a-decision.md §5) : pour chaque fixture agent, l'instruction (identique pour les
 // deux moteurs), le schéma de sortie JSON Schema, la clé d'enregistrement et la RÉFÉRENCE, produite par le générateur
 // de la fixture (jamais par un LLM). Les références versionnées sont dans fixtures/references/ (`--write` les régénère).

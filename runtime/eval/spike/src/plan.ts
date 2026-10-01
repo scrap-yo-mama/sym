@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Plan d'essais du protocole (§6) : 90 runs, ordre mélangé par la graine 0x06a0, colonnes de l'annexe (§14).
 import { SHUFFLE_SEED, seededShuffle } from './scoring.ts';
 

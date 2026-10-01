@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Harnais du spike 0.6a (eval/spike-0.6a-decision.md) : 90 runs dans l'ordre mélangé, arrêts du §11, annexe JSONL (§14).
 //
 //   Répétition à blanc (faux fournisseur, aucun LLM réel) :

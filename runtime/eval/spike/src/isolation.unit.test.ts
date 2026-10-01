@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Isolement du paquet d'évaluation (protocole §13 ; revue 0.6a, point 4) : l'étape de build Docker (`COPY . .` puis
 // `pnpm install --frozen-lockfile`) ne doit jamais voir eval/, sinon Stagehand et le SDK Browserbase y sont installés.
 import { readFileSync } from 'node:fs';

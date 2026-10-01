@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Canal `agent_step` côté serveur (07 §3), sur une Page Playwright : cinq actions à gros grain, `snapshot_id`, refus
 // `stale_ref` sans exécution, verrou de domaines (route, redirections, WebSocket ; 08 §4, mesure 2) et refus des écritures
 // (08 §4, mesure 4). Le même contrat sera tenu par le tunnel (tâche 0.6b) : le moteur ne voit que `AgentStepChannel`.

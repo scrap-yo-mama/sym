@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Répétition à blanc (protocole §6, tâche 0.6a étape 3) : scénarios du faux fournisseur pour que les 90 runs s'exécutent
 // de bout en bout sans LLM réel, en passant par toutes les branches du harnais (réussite, faux succès, sortie hors schéma
 // refusée par le moteur, injection obéie). Les issues produites ici ne disent RIEN des moteurs.

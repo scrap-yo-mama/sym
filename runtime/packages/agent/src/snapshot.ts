@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Instantanés du canal `agent_step` (07 §3) : arbre d'accessibilité « ai » de Playwright (`[ref=eN]`), tronqué, avec un
 // `snapshot_id` lié à son contenu. Fonctions pures : testables sans navigateur.
 import { createHash } from 'node:crypto';

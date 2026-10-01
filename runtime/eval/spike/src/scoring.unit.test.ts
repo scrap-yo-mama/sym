@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Définitions du protocole 0.6a (§7, §8) et plan d'essais (§6) : fonctions pures, sans LLM ni navigateur.
 import { describe, expect, it } from 'vitest';
 import { agentReference, agentTasks } from '../../../fixtures/src/agent-tasks.ts';

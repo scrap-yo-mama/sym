@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Règle de décision §9 appliquée pas à pas, sur des annexes synthétiques (aucun run réel).
 import { describe, expect, it } from 'vitest';
 import { buildPlan, type RunRecord } from './plan.ts';

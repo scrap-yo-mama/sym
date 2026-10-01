@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Moteur agentique serveur (tâche 0.6a) : boucle maison derrière `AgentEngine`, canal `agent_step` Playwright, verrou de domaines.
 export const PACKAGE_NAME = '@runtime/agent';
 

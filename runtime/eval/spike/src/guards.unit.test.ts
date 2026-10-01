@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Garde-fous du bras B (revue 0.6a, point 3 ; exclusion X1) : Stagehand ne tourne qu'en local, sans API Browserbase,
 // sans session Browserbase ni résolution de captcha, dans un environnement sans clé Browserbase ni Brave.
 import { describe, expect, it } from 'vitest';

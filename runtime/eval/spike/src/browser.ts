@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Chromium commun aux deux bras (protocole §3 « même Chromium ») : le binaire de Playwright 1.63, lancé par le harnais
 // avec un port CDP, un profil jetable et un résolveur fermé (seuls les hôtes *.localhost vont vers 127.0.0.1, tout le
 // reste échoue : réseau limité, INV9). Le harnais s'y connecte par Playwright (connectOverCDP) pour poser le verrou de
