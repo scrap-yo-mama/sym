@@ -91,7 +91,7 @@ const ssr: SiteFactory = (env) => {
   return {
     id: 'ssr',
     lot: 'base',
-    description: 'Catalogue rendu côté serveur : 100 produits, 5 pages, liens rel=next',
+    description: 'Catalogue rendu côté serveur : 100 produits, 5 pages, liens rel=next ; /moved : page saine qui se déplace par meta refresh vers /',
     hosts: ['zz_test_ssr.localhost'],
     smoke: { path: '/', status: 200 },
     handle(req) {
@@ -100,6 +100,10 @@ const ssr: SiteFactory = (env) => {
         const p = products.find((x) => x.id === detail[1]);
         if (!p) return html(404, page('Introuvable', '<h1>Introuvable</h1>'));
         return html(200, page(p.title, `<h1 class="title">${esc(p.title)}</h1><p class="price">${formatEuro(p.price_cents)}</p>`));
+      }
+      // Page déplacée (site sain) : meta refresh vers l'accueil, comme une redirection de langue ou d'URL canonique.
+      if (req.path === '/moved') {
+        return html(200, page('Catalogue déplacé', '<h1>Catalogue déplacé</h1><p>Le catalogue a une nouvelle adresse.</p>', '<meta http-equiv="refresh" content="0; url=/">'));
       }
       if (req.path !== '/') return html(404, page('Introuvable', '<h1>Introuvable</h1>'));
       const pageNo = intParam(req, 'page', 1, 1, 1000);

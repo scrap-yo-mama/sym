@@ -10,11 +10,21 @@
 // fait pas charger des centaines de Mo au processus Node. Une redirection hors des domaines de l'API d'une requête DE LA
 // STRATÉGIE (refusée par le proxy d'egress, que `context.route` ne voit pas) est une faute de stratégie
 // (`domain_not_allowed`), jamais un réseau ; une sous-ressource tierce du site coupée ne change jamais la classe.
+// Garde de classification (1.7, 04 §5, INV6) : elle tourne d'abord, sur la réponse SERVIE (statut, en-têtes, corps brut
+// lu au niveau réseau ; compressé, lu seulement si sa taille décodée, vue par CDP, est bornée), avant toute attente du
+// rendu ; le DOM rendu n'est classé qu'ensuite. Seule la navigation du cadre principal demandée par l'exécuteur part :
+// une navigation lancée par la page (défi qui se résout seul en JavaScript puis recharge, défi muet sans aucun signal
+// dans son contenu, redirection en JavaScript, meta refresh), vers un domaine de l'API comme vers un hôte hors API
+// (éditeur de défi), est coupée sans connexion et arrête l'essai en `blocked_by_protection` (`self_navigation`).
+// Attendre ne franchit donc jamais un défi. Limite assumée (INV6) : une redirection JS ou un meta refresh d'un site SAIN
+// (langue, URL canonique) arrête aussi l'essai, sans réparation ; le détail `self_navigation` le dit, et la stratégie
+// doit viser l'URL finale.
 import {
+  boundedEvidence,
   classifyExchange,
-  classifyStatus,
   classifyTransportError,
   encodeRequestBody,
+  TransportRefusal,
   runDeclarative,
   type DeclarativeRunOptions,
   type DeclarativeRunResult,
@@ -24,8 +34,8 @@ import {
 } from '@runtime/core/exec';
 import { DslError } from '@runtime/core';
 import { DomainNotAllowedError, guardedGoto, type BrowserEgress, type SsrfGuard } from '@runtime/core/net';
-import type { Page, Response } from 'playwright-core';
-import { boundedContent, boundedRawBody, TOO_LARGE } from '../browser/bounded.js';
+import type { Page, Request, Response } from 'playwright-core';
+import { boundedContent, boundedDocumentBody, boundedRawBody, TOO_LARGE, trackDecodedSizes, type DecodedSizes } from '../browser/bounded.js';
 import type { BrowserPool } from '../browser/pool.js';
 import { hostAllowed, isMainNavigation, openRunContext, trackStrategyRequests, type RunContext, type StrategyRequests } from '../browser/run-context.js';
 
@@ -66,20 +76,111 @@ function refine(result: DeclarativeRunResult, egress: BrowserEgress, strategy: S
   return result;
 }
 
+/**
+ * Navigations du cadre principal (1.7) : seule celle que l'exécuteur demande part. Toute autre, lancée par la page
+ * elle-même, est coupée avant connexion et arrête l'essai (`TransportRefusal`, `blocked_by_protection`).
+ */
+type NavigationGuard = {
+  /** La prochaine navigation du cadre principal est celle de l'exécuteur (une seule). */
+  expect(): void;
+  /** Fin de la navigation demandée : plus aucune n'est attendue. */
+  settle(): void;
+  /** Vrai si la page a tenté une navigation non demandée. */
+  attempted(): boolean;
+  /** `fn`, interrompue dès qu'une navigation non demandée est tentée (refus avec la réponse servie, si connue). */
+  during<T>(fn: () => Promise<T>, served?: () => HttpExchange | undefined): Promise<T>;
+  /** Refus à lever quand une navigation non demandée a été tentée. */
+  refusal(served?: HttpExchange): TransportRefusal;
+  /** Tailles décodées des documents de la page (suivi CDP) ; absent sans session CDP (corps compressé alors non lu). */
+  readonly sizes?: DecodedSizes;
+};
+
+function navigationGuard(): NavigationGuard & { bind(page: Page, sizes?: DecodedSizes): void; admit(request: Request): boolean } {
+  let page: Page | undefined;
+  let sizes: DecodedSizes | undefined;
+  let expected = false;
+  let attempted = false;
+  let notify: () => void = () => undefined;
+  const attempt = new Promise<void>((resolve) => {
+    notify = resolve;
+  });
+  const refusal = (served?: HttpExchange): TransportRefusal =>
+    new TransportRefusal(
+      { failure_class: 'blocked_by_protection', retryable: false, detail: 'self_navigation', ...(served === undefined ? {} : { status: served.status }) },
+      served === undefined ? undefined : boundedEvidence(served),
+    );
+  return {
+    bind: (p, s) => {
+      page = p;
+      sizes = s;
+    },
+    get sizes() {
+      return sizes;
+    },
+    admit(request) {
+      if (page === undefined) return true;
+      let main = false;
+      try {
+        main = isMainNavigation(page)(request);
+      } catch {
+        // Requête sans cadre : jamais une navigation de la page du run.
+      }
+      if (!main) return true;
+      if (expected) {
+        expected = false;
+        return true;
+      }
+      attempted = true;
+      notify();
+      return false;
+    },
+    expect: () => {
+      expected = true;
+    },
+    settle: () => {
+      expected = false;
+    },
+    attempted: () => attempted,
+    refusal,
+    async during(fn, served) {
+      const work = fn();
+      work.catch(() => undefined);
+      return Promise.race([
+        work,
+        attempt.then((): never => {
+          throw refusal(served?.());
+        }),
+      ]);
+    },
+  };
+}
+
 /** Contexte de run neuf sur un Chromium du pool ; l'interruption du run (annulation, bail perdu) ferme le contexte. */
 async function withRunContext(
   options: BrowserExecutorOptions,
-  fn: (rc: RunContext, strategy: StrategyRequests) => Promise<DeclarativeRunResult>,
+  fn: (rc: RunContext, strategy: StrategyRequests, nav: NavigationGuard) => Promise<DeclarativeRunResult>,
 ): Promise<DeclarativeRunResult> {
   return options.pool.run(options.signal, async (browser) => {
-    const rc = await openRunContext(browser, { egressServer: options.egress.server, allowedHosts: options.spec.request.allowed_hosts });
+    const nav = navigationGuard();
+    const rc = await openRunContext(browser, {
+      egressServer: options.egress.server,
+      allowedHosts: options.spec.request.allowed_hosts,
+      admit: async (request) => nav.admit(request),
+      // Navigation lancée par la page vers un hôte hors API (redirection JS d'un défi vers son éditeur) : coupée par la
+      // politique de domaines sans passer par `admit`, elle compte comme toute navigation non demandée.
+      onViolation: (_host, request) => {
+        if (request !== undefined) nav.admit(request);
+      },
+    });
+    const cdp = await rc.context.newCDPSession(rc.page).catch(() => undefined);
+    nav.bind(rc.page, cdp === undefined ? undefined : await trackDecodedSizes(cdp).catch(() => undefined));
     const strategy = trackStrategyRequests(rc.context, options.spec.request.allowed_hosts);
     const onAbort = () => void rc.close();
     options.signal.addEventListener('abort', onAbort, { once: true });
     try {
       rc.page.setDefaultNavigationTimeout(options.navigationTimeoutMs ?? BROWSER_NAVIGATION_TIMEOUT_MS);
       rc.page.setDefaultTimeout(options.navigationTimeoutMs ?? BROWSER_NAVIGATION_TIMEOUT_MS);
-      const result = await fn(rc, strategy);
+      const result = await fn(rc, strategy, nav);
       options.signal.throwIfAborted();
       return refine(result, options.egress, strategy);
     } finally {
@@ -98,6 +199,27 @@ async function navigate(page: Page, url: string, options: BrowserExecutorOptions
   return { status: response.status(), headers, html: /html/i.test(headers['content-type'] ?? 'text/html'), response };
 }
 
+type Navigation = Awaited<ReturnType<typeof navigate>>;
+
+/** Navigation DEMANDÉE par l'exécuteur : la seule admise par la garde des navigations ; interrompue si la page en lance une autre. */
+async function requestedNavigation(page: Page, url: string, options: BrowserExecutorOptions, strategy: StrategyRequests, nav: NavigationGuard): Promise<Navigation> {
+  nav.expect();
+  try {
+    return await nav.during(() => strategy.during(isMainNavigation(page), () => navigate(page, url, options)));
+  } finally {
+    nav.settle();
+  }
+}
+
+/**
+ * Réponse SERVIE d'un document HTML (statut, en-têtes, corps brut lu au niveau réseau), à classer avant tout rendu.
+ * Corps vide si sa taille est inconnue ; au-delà du plafond, `response_too_large`.
+ */
+async function servedDocument(nav: Navigation, maxBytes: number, guardNav: NavigationGuard): Promise<HttpExchange> {
+  const raw = await guardNav.during(() => boundedDocumentBody(nav.response, maxBytes, undefined, guardNav.sizes));
+  return { status: nav.status, headers: nav.headers, body: raw === undefined ? '' : capped(raw), url: nav.response.url() };
+}
+
 /** Comparaison d'URL après normalisation (Chromium normalise l'URL d'une requête). */
 function sameUrl(expected: string): (url: string) => boolean {
   let normalized = expected;
@@ -109,32 +231,55 @@ function sameUrl(expected: string): (url: string) => boolean {
   return (url) => url === normalized || url === expected;
 }
 
-/** Échec de l'essai sans requête de stratégie (page d'accueil d'E2 refusée). */
-const failed = (failure: ExecFailure): DeclarativeRunResult => ({ ok: false, failure, pages: 0, requests: 1 });
+/** Échec de l'essai sans requête de stratégie (page d'accueil d'E2 refusée), avec la réponse servie en preuve. */
+const failed = (failure: ExecFailure, evidence?: HttpExchange): DeclarativeRunResult => ({
+  ok: false,
+  failure,
+  pages: 0,
+  requests: 1,
+  ...(evidence === undefined ? {} : { evidence: boundedEvidence(evidence) }),
+});
 
 /** E2 : `fetch` exécuté dans la page du site (cookies et contexte du site), par Chromium donc par le proxy d'egress. */
 export function runFetchInPageExecutor(options: BrowserExecutorOptions): Promise<DeclarativeRunResult> {
   const classify = options.classify ?? classifyExchange;
   const maxBytes = maxBytesOf(options);
   const pageUrl = `${new URL(options.spec.request.url).origin}/`;
-  return withRunContext(options, async ({ page }, strategy) => {
+  return withRunContext(options, async ({ page }, strategy, nav) => {
     // Ouverture du site : réservée à la cadence, classée avant toute requête de données (un refus arrête l'essai).
     if (options.pacer !== undefined) {
       const slot = await options.pacer.acquire(pageUrl);
       if (!slot.granted) return { ok: false, failure: { failure_class: 'rate_limited', retryable: true, detail: `pacing_${slot.reason}` }, pages: 0, requests: 0 };
     }
-    let landing: Awaited<ReturnType<typeof navigate>>;
+    let landing: Navigation;
+    let landingExchange: HttpExchange;
+    let refused: ExecFailure | null;
     try {
-      landing = await strategy.during(isMainNavigation(page), () => navigate(page, pageUrl, options));
+      landing = await requestedNavigation(page, pageUrl, options, strategy, nav);
+      // Garde de classification (1.7) avant toute requête de données : réponse servie (corps brut) d'abord, puis DOM
+      // rendu ; une navigation lancée par la page arrête l'essai.
+      const served = landing.html ? await servedDocument(landing, maxBytes, nav) : { status: landing.status, headers: landing.headers, body: '', url: landing.response.url() };
+      landingExchange = served;
+      refused = classify(served, { requestUrl: pageUrl });
+      if (refused === null && landing.html) {
+        landingExchange = { ...served, body: capped(await nav.during(() => boundedContent(page, maxBytes), () => served)), url: page.url() };
+        refused = classify(landingExchange, { requestUrl: pageUrl });
+      }
+      if (nav.attempted()) throw nav.refusal(served);
     } catch (error) {
       if (options.signal.aborted) throw error;
-      return failed(classifyTransportError(error));
+      const failure = classifyTransportError(error);
+      // Refus du transport (navigation lancée par la page) : rapporté à la cadence comme tout refus (disjoncteur).
+      if (error instanceof TransportRefusal) {
+        await options.pacer?.report(pageUrl, { status: error.exchange?.status ?? 0, retryAfter: null, failureClass: failure.failure_class });
+        return failed(failure, error.exchange);
+      }
+      return failed(failure);
     }
-    await options.pacer?.report(pageUrl, { status: landing.status, retryAfter: landing.headers['retry-after'] ?? null });
-    const landingExchange: HttpExchange = { status: landing.status, headers: landing.headers, body: landing.html ? capped(await boundedContent(page, maxBytes)) : '', url: page.url() };
-    const refused = classify(landingExchange);
+    // La classe est rapportée à la cadence (disjoncteur).
+    await options.pacer?.report(pageUrl, { status: landing.status, retryAfter: landing.headers['retry-after'] ?? null, failureClass: refused?.failure_class ?? null });
     // Une page d'accueil absente (404) n'empêche pas l'appel de l'API de même origine ; tout autre refus arrête.
-    if (refused !== null && refused.failure_class !== 'not_found') return failed(refused);
+    if (refused !== null && refused.failure_class !== 'not_found') return failed(refused, landingExchange);
 
     const transport: Transport = async (request) => {
       const { body, contentType } = encodeRequestBody(request);
@@ -144,7 +289,7 @@ export function runFetchInPageExecutor(options: BrowserExecutorOptions): Promise
       // Lecture bornée dans la page (flux coupé au-delà du plafond) ; seules des valeurs primitives bornées sont rendues :
       // une page qui surcharge `ArrayBuffer`, `TextDecoder` ou `JSON` fausse ses données, jamais la borne du transfert.
       const target = sameUrl(request.url);
-      const evaluation = strategy.during((r) => r.resourceType() === 'fetch' && target(r.url()), () => page.evaluate(
+      const evaluation = nav.during(() => strategy.during((r) => r.resourceType() === 'fetch' && target(r.url()), () => page.evaluate(
         async (a: { url: string; method: string; headers: Record<string, string>; body: string | null; maxBytes: number; maxMeta: number }) => {
           try {
             const r = await fetch(a.url, { method: a.method, headers: a.headers, body: a.body, credentials: 'include', redirect: 'follow', cache: 'no-store' });
@@ -187,7 +332,7 @@ export function runFetchInPageExecutor(options: BrowserExecutorOptions): Promise
           }
         },
         { url: request.url, method: request.method, headers, body: body ?? null, maxBytes, maxMeta: 64 * 1024 },
-      ));
+      )));
       let timer: NodeJS.Timeout | undefined;
       const timeoutMs = options.navigationTimeoutMs ?? BROWSER_NAVIGATION_TIMEOUT_MS;
       const out = await Promise.race([
@@ -221,18 +366,25 @@ export function runPlaywrightExecutor(options: BrowserExecutorOptions): Promise<
   const maxBytes = maxBytesOf(options);
   const renderSelector = options.spec.sources.find((s) => s.from === 'html')?.records;
   const renderWaitMs = options.renderWaitMs ?? BROWSER_RENDER_WAIT_MS;
-  return withRunContext(options, async ({ page }, strategy) => {
+  const classify = options.classify ?? classifyExchange;
+  return withRunContext(options, async ({ page }, strategy, guardNav) => {
     const transport: Transport = async (request) => {
       if (request.method !== 'GET' || request.body !== undefined) throw new DslError('unsupported', 'E3 déclaratif : requêtes GET seulement');
-      const nav = await strategy.during(isMainNavigation(page), () => navigate(page, request.url, options));
-      let body: string;
-      if (nav.html && classifyStatus(nav.status) === null) {
+      const nav = await requestedNavigation(page, request.url, options, strategy, guardNav);
+      // Document hors HTML (JSON, texte) : aucun script de page, le corps brut est la réponse.
+      if (!nav.html) return { status: nav.status, headers: nav.headers, body: capped(await boundedRawBody(page, nav.response, maxBytes)), url: page.url() };
+      // Garde de classification AVANT toute attente du rendu (04 §5, INV6) : statut, en-têtes et corps brut servi. Un
+      // refus est rendu tel quel à l'interpréteur, qui le classe et ne l'extrait pas.
+      const served = await servedDocument(nav, maxBytes, guardNav);
+      if (guardNav.attempted()) throw guardNav.refusal(served);
+      if (classify(served, { requestUrl: request.url }) !== null) return served;
+      // Attente du rendu : toute navigation du cadre principal lancée par la page (défi qui se résout seul) l'interrompt.
+      await guardNav.during(async () => {
         if (renderSelector !== undefined) await page.waitForSelector(renderSelector, { state: 'attached', timeout: renderWaitMs }).catch(() => undefined);
         else await page.waitForLoadState('networkidle', { timeout: renderWaitMs }).catch(() => undefined);
-        body = capped(await boundedContent(page, maxBytes));
-      } else {
-        body = capped(await boundedRawBody(page, nav.response, maxBytes));
-      }
+      }, () => served);
+      const body = capped(await guardNav.during(() => boundedContent(page, maxBytes), () => served));
+      if (guardNav.attempted()) throw guardNav.refusal(served);
       return { status: nav.status, headers: nav.headers, body, url: page.url() };
     };
     return runDeclarative({ ...options, transport });

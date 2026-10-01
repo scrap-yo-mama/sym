@@ -11,7 +11,7 @@ import { parseJsonBounded, resolveLimits, type DslLimits } from '../dsl/limits.j
 import { advancePagination, initialParam, resolveNextUrl, startPagination, type StopReason } from '../dsl/pagination.js';
 import type { DeclarativeSpec } from '../dsl/spec.js';
 import { renderRequest, type RenderedRequest, type TemplateContext } from '../dsl/template.js';
-import { classifyExchange, classifyTransportError } from './classify.js';
+import { classifyExchange, classifyTransportError, TransportRefusal, type ClassifyContext } from './classify.js';
 import { applyParamAt } from './params.js';
 import type { ExecFailure, HttpExchange, RequestPacer, Transport } from './types.js';
 
@@ -25,8 +25,8 @@ export type DeclarativeRunOptions = {
   readonly pacer?: RequestPacer;
   /** `domain_pacing.max_requests_per_run` : au-delà, la pagination s'arrête (sortie tronquée, run dégradé). */
   readonly maxRequests?: number;
-  /** Garde de classification avant extraction (1.7). Défaut : le statut HTTP seul. */
-  readonly classify?: (exchange: HttpExchange) => ExecFailure | null;
+  /** Garde de classification avant extraction (1.7). Défaut : `classifyExchange` (statut, en-têtes, défi, redirection). */
+  readonly classify?: (exchange: HttpExchange, context?: ClassifyContext) => ExecFailure | null;
   readonly limits?: Partial<DslLimits>;
 };
 
@@ -44,7 +44,29 @@ export type DeclarativeRunResult =
       /** Arrêt imposé par un plafond (requêtes par run, items) avant la fin naturelle de la pagination. */
       readonly truncated: boolean;
     }
-  | { readonly ok: false; readonly failure: ExecFailure; readonly pages: number; readonly requests: number };
+  | {
+      readonly ok: false;
+      readonly failure: ExecFailure;
+      readonly pages: number;
+      readonly requests: number;
+      /**
+       * Échange qui a échoué (refus classé, extraction impossible), corps borné à `EVIDENCE_MAX_CHARS` : preuve remise à
+       * la garde avant réparation (1.7, `invokeAgentGuarded`), jamais écrite (ni run, ni journal). Absent pour une
+       * erreur de transport.
+       */
+      readonly evidence?: HttpExchange;
+    };
+
+/**
+ * Borne du corps d'une preuve : la lecture de la détection (256 Kio) plus un caractère, pour qu'un très gros document
+ * reste « au-delà de la borne » (seul son titre est lu) une fois tronqué.
+ */
+export const EVIDENCE_MAX_CHARS = 256 * 1024 + 1;
+
+/** Preuve bornée d'un échange (corps tronqué). */
+export function boundedEvidence(exchange: HttpExchange): HttpExchange {
+  return exchange.body.length <= EVIDENCE_MAX_CHARS ? exchange : { ...exchange, body: exchange.body.slice(0, EVIDENCE_MAX_CHARS) };
+}
 
 class RunFailure extends Error {
   readonly failure: ExecFailure;
@@ -98,8 +120,12 @@ export async function runDeclarative(options: DeclarativeRunOptions): Promise<De
   const ctx: TemplateContext = { input, page: {}, steps: {} };
   let requests = 0;
   let pages = 0;
+  /** Dernier échange reçu (preuve d'un échec) ; remis à zéro avant chaque requête. */
+  let last: HttpExchange | undefined;
+  const failed = (failure: ExecFailure): DeclarativeRunResult => ({ ok: false, failure, pages, requests, ...(last === undefined ? {} : { evidence: boundedEvidence(last) }) });
 
   const send = async (request: RenderedRequest): Promise<HttpExchange> => {
+    last = undefined;
     if (options.maxRequests !== undefined && requests >= options.maxRequests) throw new RequestCapReached();
     signal.throwIfAborted();
     if (pacer !== undefined) {
@@ -110,13 +136,20 @@ export async function runDeclarative(options: DeclarativeRunOptions): Promise<De
     let exchange: HttpExchange;
     try {
       exchange = await transport(request, signal);
+      last = exchange;
     } catch (error) {
       if (signal.aborted) throw error;
+      // Refus décidé par le transport (navigation lancée par la page, 1.7) : compté pour le disjoncteur comme tout refus.
+      if (error instanceof TransportRefusal) {
+        last = error.exchange;
+        await pacer?.report(request.url, { status: error.failure.status ?? error.exchange?.status ?? 0, retryAfter: null, failureClass: error.failure.failure_class });
+      }
       throw new RunFailure(classifyTransportError(error));
     }
-    await pacer?.report(request.url, { status: exchange.status, retryAfter: exchange.headers['retry-after'] ?? null });
-    // Garde de classification AVANT extraction : une réponse refusée n'est jamais extraite (INV6).
-    const refused = classify(exchange);
+    // Garde de classification AVANT extraction : une réponse refusée n'est jamais extraite (INV6). La classe est rapportée à
+    // la cadence : un refus (403, défi en 200) compte pour le disjoncteur du domaine comme un 429 (04 §7).
+    const refused = classify(exchange, { requestUrl: request.url });
+    await pacer?.report(request.url, { status: exchange.status, retryAfter: exchange.headers['retry-after'] ?? null, failureClass: refused?.failure_class ?? null });
     if (refused !== null) throw new RunFailure(refused);
     return exchange;
   };
@@ -167,7 +200,7 @@ export async function runDeclarative(options: DeclarativeRunOptions): Promise<De
       if (!out.ok && !emptyPage) {
         const codes = out.attempts.flatMap((a) => a.problems.map((p) => p.code));
         const detail = codes.includes('schema_mismatch') ? 'schema_mismatch' : (codes[0] ?? 'no_records');
-        return { ok: false, failure: { failure_class: 'extraction', retryable: false, detail }, pages, requests };
+        return failed({ failure_class: 'extraction', retryable: false, detail });
       }
       const got = out.ok ? out.records : [];
       escalated ||= out.ok && out.escalated;
@@ -194,9 +227,9 @@ export async function runDeclarative(options: DeclarativeRunOptions): Promise<De
       }
     }
   } catch (error) {
-    if (error instanceof RunFailure) return { ok: false, failure: error.failure, pages, requests };
+    if (error instanceof RunFailure) return failed(error.failure);
     if (error instanceof RequestCapReached) return { ok: false, failure: { failure_class: 'code_error', retryable: false, detail: 'max_requests_per_run' }, pages, requests };
-    if (error instanceof DslError) return { ok: false, failure: classifyTransportError(error), pages, requests };
+    if (error instanceof DslError) return failed(classifyTransportError(error));
     throw error;
   }
 }

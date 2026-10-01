@@ -15,13 +15,17 @@
 //   la réponse. Les sous-ressources tierces du site (mesure d'audience, CDN) restent coupées (0 requête) sans verdict
 //   contre le script ; seule la validation d'un nouveau document dans le cadre principal désarme le guet.
 // - Refus d'accès (INV6) : chaque réponse rendue au script est d'abord classée (script-executor.ts) ; au premier refus,
-//   l'opération de page en cours échoue sans rien rendre (`access_refused`) et l'enfant est arrêté.
+//   l'opération de page en cours échoue sans rien rendre (`access_refused`) et l'enfant est arrêté. Navigations du cadre
+//   principal : une seule par `goto`, ou par le DISPATCH d'un `click` (posée une fois l'élément trouvé et actionnable,
+//   jamais pendant l'attente de son sélecteur) (`expectNavigation`). Toute autre arrête l'essai (`self_navigation`, même
+//   règle qu'en E2/E3 déclaratifs), y compris pendant un `evaluate` : rien ne distingue alors le code du script de celui
+//   de la page (défi muet qui recharge pendant que le script attend dans la page) ; le script navigue par `ctx.page.goto`.
 // - Actions d'écriture (08 §4 mesure 4, 07 §5) : sans `allow_write_actions`, un clic sur un contrôle d'envoi de
 //   formulaire est refusé (`write_action_blocked`, violation) ; les soumissions de formulaire (navigations hors GET)
 //   sont coupées au niveau du contexte de run (script-executor.ts).
 import type { SandboxBridges, SandboxViolation, SandboxViolationReason } from '@runtime/core';
 import { guardedGoto, type SsrfGuard } from '@runtime/core/net';
-import type { Page } from 'playwright-core';
+import type { ElementHandle, Page } from 'playwright-core';
 import { boundedContent, parseBounded, TOO_LARGE } from '../browser/bounded.js';
 import { isMainNavigation, type StrategyRequests } from '../browser/run-context.js';
 import { domainAllowed, normalizeDomain, SandboxBridgeError } from '../sandbox/bridges.js';
@@ -63,6 +67,21 @@ export type HostViolationWatch = {
   /** Navigation ou clic menés par l'hôte (une soumission coupée pendant eux vient du script). */
   beginHostOp(): void;
   endHostOp(): void;
+  /**
+   * Navigations du cadre principal (revue de 1.7, INV6) : l'hôte en attend UNE par opération de navigation (page de
+   * départ, `ctx.page.goto` : posée au début de l'opération ; clic du script : posée au dispatch du clic, l'élément trouvé
+   * et actionnable), retirée à la fin de l'opération.
+   */
+  expectNavigation(): void;
+  settleNavigation(): void;
+  /**
+   * Navigation du cadre principal émise (requête initiale) : vraie seulement si elle est demandée (l'attendue, consommée).
+   * Fausse sinon, même pendant un `ctx.page.evaluate` : la page a pu la lancer d'elle-même (rechargement d'un défi,
+   * redirection JS, meta refresh) pendant que le script attend ; elle arrête alors l'essai en `blocked_by_protection`.
+   */
+  claimNavigation(): boolean;
+  /** Un `ctx.page.evaluate` est en cours (le code du script s'exécute dans la page). */
+  evaluating(): boolean;
   /** Nouveau document validé dans le cadre principal : le code injecté a disparu avec l'ancien. */
   documentCommitted(): void;
   /** Le code du script peut être présent dans la page (à relever à l'émission de chaque requête). */
@@ -80,6 +99,7 @@ export function hostViolationWatch(): HostViolationWatch {
   let armed = false;
   let evaluating = 0;
   let hostOps = 0;
+  let navigationExpected = false;
   let imputed = 0;
   let last: SandboxViolation | undefined;
   const baseline = new Set<string>();
@@ -105,6 +125,18 @@ export function hostViolationWatch(): HostViolationWatch {
     endHostOp: () => {
       hostOps = Math.max(0, hostOps - 1);
     },
+    expectNavigation: () => {
+      navigationExpected = true;
+    },
+    settleNavigation: () => {
+      navigationExpected = false;
+    },
+    claimNavigation: () => {
+      if (!navigationExpected) return false;
+      navigationExpected = false;
+      return true;
+    },
+    evaluating: () => evaluating > 0,
     documentCommitted: () => {
       if (evaluating === 0) armed = false;
     },
@@ -273,20 +305,13 @@ export function createPageBridge(options: PageBridgeOptions): NonNullable<Sandbo
     return value as (string | null)[];
   };
   /** Vrai si le clic viserait un contrôle d'envoi d'un formulaire (bouton d'envoi, `input` submit ou image). */
-  const isSubmitControl = (selector: string, timeout: number): Promise<boolean> =>
-    page
-      .locator(selector)
-      .first()
-      .evaluate(
-        (el) => {
-          type Control = { tagName: string; type: string; form: unknown };
-          const c = (el as unknown as { closest(selector: string): Control | null }).closest('button, input[type="submit" i], input[type="image" i]');
-          if (c === null || c.form === null || c.form === undefined) return false;
-          return c.tagName !== 'BUTTON' || c.type === 'submit';
-        },
-        undefined,
-        { timeout },
-      );
+  const isSubmitControl = (element: ElementHandle): Promise<boolean> =>
+    element.evaluate((el) => {
+      type Control = { tagName: string; type: string; form: unknown };
+      const c = (el as unknown as { closest(selector: string): Control | null }).closest('button, input[type="submit" i], input[type="image" i]');
+      if (c === null || c.form === null || c.form === undefined) return false;
+      return c.tagName !== 'BUTTON' || c.type === 'submit';
+    });
 
   return async (raw) => {
     const { op, args } = parseRequest(raw);
@@ -295,6 +320,8 @@ export function createPageBridge(options: PageBridgeOptions): NonNullable<Sandbo
     const hostOp = op === 'goto' || op === 'click';
     if (isEvaluate) watch.beginEvaluate();
     if (hostOp) watch.beginHostOp();
+    // `goto` : sa navigation part aussitôt. Un clic attend d'abord son élément SANS navigation attendue (plus bas).
+    if (op === 'goto') watch.expectNavigation();
     // Hors `evaluate`, les requêtes coupées relèvent du guet (`watch`), pas du verdict de l'opération.
     const check = <T>(value: T): T => (isEvaluate ? settled(before, value) : value);
     const perform = async (): Promise<unknown> => {
@@ -331,12 +358,24 @@ export function createPageBridge(options: PageBridgeOptions): NonNullable<Sandbo
         case 'click': {
           const selector = text(args['selector'], 'sélecteur', MAX_SELECTOR);
           const timeout = waitMs(args['timeoutMs']);
-          if (!options.allowWriteActions && (await isSubmitControl(selector, timeout))) {
-            throw new SandboxBridgeError('write_action_blocked', true, 'submit');
+          // Attente de l'élément puis contrôles d'actionnabilité (essai, sans clic) SANS navigation attendue : une
+          // navigation lancée par la page pendant cette attente (défi muet qui recharge) est refusée (INV6).
+          const element = await page.waitForSelector(selector, { state: 'attached', timeout });
+          if (element === null) throw new SandboxBridgeError('page_failed', false, op);
+          try {
+            if (!options.allowWriteActions && (await isSubmitControl(element))) {
+              throw new SandboxBridgeError('write_action_blocked', true, 'submit');
+            }
+            await element.click({ timeout, trial: true });
+            // Navigation lancée par le dispatch du clic : la seule attendue, requête de la stratégie comme `ctx.page.goto`.
+            // L'élément vient de passer les contrôles ; un document remplacé entre-temps le détache et le clic échoue
+            // sans dispatch. Le délai couvre aussi l'attente de la navigation lancée (classement du document courant).
+            watch.expectNavigation();
+            const click = () => element.click({ timeout });
+            await (options.strategy === undefined ? click() : options.strategy.during(isMainNavigation(page), click));
+          } finally {
+            void element.dispose().catch(() => undefined);
           }
-          // Navigation lancée par un clic du script : requête de la stratégie, comme `ctx.page.goto`.
-          const click = () => page.click(selector, { timeout });
-          await (options.strategy === undefined ? click() : options.strategy.during(isMainNavigation(page), click));
           return check({ url: page.url() });
         }
         case 'evaluate': {
@@ -390,7 +429,10 @@ export function createPageBridge(options: PageBridgeOptions): NonNullable<Sandbo
       throw new SandboxBridgeError('page_failed', false, op);
     } finally {
       if (isEvaluate) watch.endEvaluate();
-      if (hostOp) watch.endHostOp();
+      if (hostOp) {
+        watch.settleNavigation();
+        watch.endHostOp();
+      }
     }
   };
 }

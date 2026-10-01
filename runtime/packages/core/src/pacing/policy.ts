@@ -78,11 +78,24 @@ export function parseRetryAfterMs(value: string | null | undefined, now: Date, m
   return Math.min(Math.max(delta, 0), maxMs);
 }
 
-export type PacingOutcomeKind = 'ok' | 'rate_limited' | 'server_error';
+/** `refused` (tâche 1.7) : refus d'accès (403, défi, protection) ; compte pour le disjoncteur comme un 429 (04 §7). */
+export type PacingOutcomeKind = 'ok' | 'rate_limited' | 'server_error' | 'refused';
 
 /** Verdict de cadence d'un code HTTP : 429 → `rate_limited`, 5xx → `server_error`, le reste n'est pas un refus. */
 export function outcomeKindOfStatus(status: number): PacingOutcomeKind {
   if (status === 429) return 'rate_limited';
   if (status >= 500 && status <= 599) return 'server_error';
   return 'ok';
+}
+
+/**
+ * Verdict de cadence d'une réponse CLASSÉE (tâche 1.7) : un refus d'accès (`forbidden`, `blocked_by_protection`, y compris
+ * un défi servi en 200) ouvre le disjoncteur comme un 429 (04 §7 : « ouvert après N refus ou 429 consécutifs »). Sans
+ * classe connue, un 403 est un refus. Un 401 (connexion requise) ou un 404 n'est pas un refus de cadence.
+ * Le disjoncteur suspend les runs du domaine ; il ne change jamais de réseau.
+ */
+export function outcomeKindOfResponse(status: number, failureClass?: string | null): PacingOutcomeKind {
+  if (failureClass === 'blocked_by_protection' || failureClass === 'forbidden') return 'refused';
+  if (failureClass === undefined && status === 403) return 'refused';
+  return outcomeKindOfStatus(status);
 }
