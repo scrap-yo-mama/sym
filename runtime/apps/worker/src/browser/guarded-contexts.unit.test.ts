@@ -52,6 +52,8 @@ const OPENERS: readonly { name: string; re: RegExp }[] = [
  * Exceptions admises (fichier → appels). Toute autre occurrence est un chemin de run non gardé.
  * - run-context.ts : la fabrique gardée elle-même (`newContext` du contexte de run, `newPage` de la page du run) et
  *   `request.newContext` (APIRequestContext : hors Chromium, proxy d'egress imposé, robots.txt par la session réseau) ;
+ * - user-agent-override.ts : contexte-sonde vierge (lecture des indices clients du moteur, une fois par navigateur) : sa seule
+ *   route sert l'URL de sonde (http://localhost/) et coupe tout le reste, aucune requête n'en sort ; ce n'est pas un contexte de run ;
  * - pool.ts : lancement du Chromium partagé derrière un proxy FERMÉ (aucun contexte, aucune page) ;
  * - agent-browser.ts : raccordement au Chromium dédié, dont l'unique contexte passe par `openRunContext` (vérifié plus bas) ;
  * - stagehand-engine.ts : Stagehand pilote le Chromium dédié et prend sa page du run (`pages()[0]`) ; à défaut il en
@@ -61,6 +63,7 @@ const OPENERS: readonly { name: string; re: RegExp }[] = [
  */
 const ALLOWED: Readonly<Record<string, Readonly<Record<string, number>>>> = {
   'apps/worker/src/browser/run-context.ts': { newContext: 2, newPage: 2 },
+  'apps/worker/src/browser/user-agent-override.ts': { newContext: 1 },
   'apps/worker/src/browser/pool.ts': { launchServer: 1, connect: 1 },
   'apps/worker/src/browser/agent-browser.ts': { connectOverCDP: 1 },
   'packages/agent/src/stagehand-engine.ts': { newPage: 1 },
