@@ -2,7 +2,7 @@
 Source : Contributor Covenant 3.0, texte officiel EN récupéré le 2026-10-01 sur
 https://www.contributor-covenant.org/version/3/0/code_of_conduct/code_of_conduct.md (CC BY-SA 4.0).
 Seuls modifiés : le moyen de signalement (emplacement prévu par le texte) et la note de l'échelle de sanctions
-(retirée, l'échelle est adoptée telle quelle). Adresse de signalement : à définir avant toute publication.
+(retirée, l'échelle est adoptée telle quelle). Adresse de signalement : scrapyomama@gmail.com.
 -->
 
 # Contributor Covenant 3.0 Code of Conduct
@@ -53,7 +53,7 @@ We agree to restrict the following behaviors in our community. Instances, threat
 
 Tensions can occur between community members even when they are trying their best to collaborate. Not every conflict represents a code of conduct violation, and this Code of Conduct reinforces encouraged behaviors and norms that can help avoid conflicts and minimize harm.
 
-When an incident does occur, it is important to report it promptly. To report a possible violation, use the private reporting channel described in [SECURITY.md](SECURITY.md) for anything touching security, or write to **[reporting address to be defined before any publication]**.
+When an incident does occur, it is important to report it promptly. To report a possible violation, use the private reporting channel described in [SECURITY.md](SECURITY.md) for anything touching security, or write to **scrapyomama@gmail.com**.
 
 Community Moderators take reports of violations seriously and will make every effort to respond in a timely manner. They will investigate all reports of code of conduct violations, reviewing messages, logs, and recordings, or interviewing witnesses and other participants. Community Moderators will keep investigation and enforcement actions as transparent as possible while prioritizing safety and confidentiality. In order to honor these values, enforcement actions are carried out in private with the involved parties, but communicating to the whole community may be part of a mutually agreed upon resolution.
 

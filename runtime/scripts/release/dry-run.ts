@@ -19,8 +19,8 @@ import { checkHistory as checkX6History } from '../check-x6.ts';
 import { attestBlob, cosignVersion, generateTestKey, negativeChecks, type Refusal, signBlob, userVerifyCommand, verifyBlob, verifyBlobAttestation } from './sign.ts';
 
 /** Dépôt et image de la release réelle (nom indicatif de la documentation ; rien n'y est publié). */
-export const REPOSITORY = 'mrsoyer/scrapyomama-runtime';
-export const IMAGE = 'ghcr.io/mrsoyer/scrapyomama-runtime';
+export const REPOSITORY = 'scrap-yo-mama/sym';
+export const IMAGE = 'ghcr.io/scrap-yo-mama/sym';
 
 export type Artifact = { name: string; sha256: string; bytes: number };
 export type DryRunReport = {

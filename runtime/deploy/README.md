@@ -1,6 +1,6 @@
 Dockerfile, entrypoint et modèles de déploiement (tâches 0.1, 4.x). Guide pas à pas : [docs/deploiement.md](../docs/deploiement.md).
 
-[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/mrsoyer/scrapyomama-runtime)
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/scrap-yo-mama/sym)
 
 Bouton à valider au GO (dépôt public requis ; aucun déploiement Render réel n'a encore été fait).
 

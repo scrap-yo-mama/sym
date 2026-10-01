@@ -20,7 +20,7 @@ const text = (path: string) => readFileSync(path === 'render.yaml' ? RENDER_YAML
 const yaml = <T>(path: string): T => parse(text(path)) as T;
 const version = (JSON.parse(readFileSync(join(runtimeDir, 'package.json'), 'utf8')) as { version: string }).version;
 
-const IMAGE_REPO = 'ghcr.io/mrsoyer/scrapyomama-runtime';
+const IMAGE_REPO = 'ghcr.io/scrap-yo-mama/sym';
 const PINNED = new RegExp(`^${IMAGE_REPO.replace(/[./]/g, '\\$&')}:\\d+\\.\\d+\\.\\d+(-beta\\.\\d+)?$`);
 const catalog = envVariableNames();
 /** Variables qui ne sont pas des variables de l'application : propres à l'hébergeur ou à compose. */
@@ -65,7 +65,7 @@ describe('assert_deploy_templates_static : image épinglée X.Y.Z dans chaque mo
 });
 
 describe('assert_deploy_templates_static : bouton « Deploy to Render » (14 § 12, à valider au GO)', () => {
-  const BADGE = '[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/mrsoyer/scrapyomama-runtime)';
+  const BADGE = '[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/scrap-yo-mama/sym)';
 
   test('render.yaml est à la racine du dépôt, en un seul exemplaire (Render ne lit le Blueprint du bouton qu’à la racine)', () => {
     expect(existsSync(RENDER_YAML)).toBe(true);

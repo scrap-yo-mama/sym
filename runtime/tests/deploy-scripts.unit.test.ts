@@ -70,7 +70,7 @@ describe('install.sh : génère le .env de docker-compose.prod.yml', () => {
     expect(env['TRUST_PROXY']).toBe('1');
     // La commande lancée dans l'image est celle de la spec (`runtime keygen`), sur l'image du fichier compose.
     const log = readFileSync(join(d, 'docker.log'), 'utf8');
-    expect(log).toMatch(/run --rm --pull missing ghcr\.io\/mrsoyer\/scrapyomama-runtime:\d+\.\d+\.\d+ runtime keygen/);
+    expect(log).toMatch(/run --rm --pull missing ghcr\.io\/scrap-yo-mama\/sym:\d+\.\d+\.\d+ runtime keygen/);
   });
 
   test('aucune valeur secrète n’est affichée ; les commandes à suivre le sont', async () => {
@@ -255,7 +255,7 @@ describe('check-image-public.sh : piège GHCR (paquet privé à la première pub
   test('paquet privé : pas de jeton anonyme → code 1 et la marche à suivre (« Change package visibility »)', async () => {
     const d = dir('private');
     curlStub(d, '', '401');
-    const res = await sh(join(d, 'check-image-public.sh'), ['ghcr.io/mrsoyer/scrapyomama-runtime:1.2.3'], { PATH: basePath(join(d, 'bin')) });
+    const res = await sh(join(d, 'check-image-public.sh'), ['ghcr.io/scrap-yo-mama/sym:1.2.3'], { PATH: basePath(join(d, 'bin')) });
     expect(res.status).toBe(1);
     expect(res.stderr).toMatch(/Change package visibility/);
   });
@@ -263,8 +263,8 @@ describe('check-image-public.sh : piège GHCR (paquet privé à la première pub
   test('étiquette absente ou paquet encore privé (manifeste en 401/404) → code 1 ; `latest` refusé (code 2)', async () => {
     const d = dir('missing');
     curlStub(d, 'anon-token', '404');
-    expect((await sh(join(d, 'check-image-public.sh'), ['ghcr.io/mrsoyer/scrapyomama-runtime:9.9.9'], { PATH: basePath(join(d, 'bin')) })).status).toBe(1);
-    expect((await sh(join(d, 'check-image-public.sh'), ['ghcr.io/mrsoyer/scrapyomama-runtime:latest'], { PATH: basePath(join(d, 'bin')) })).status).toBe(2);
+    expect((await sh(join(d, 'check-image-public.sh'), ['ghcr.io/scrap-yo-mama/sym:9.9.9'], { PATH: basePath(join(d, 'bin')) })).status).toBe(1);
+    expect((await sh(join(d, 'check-image-public.sh'), ['ghcr.io/scrap-yo-mama/sym:latest'], { PATH: basePath(join(d, 'bin')) })).status).toBe(2);
     expect((await sh(join(d, 'check-image-public.sh'), ['docker.io/library/nginx:1.0.0'], { PATH: basePath(join(d, 'bin')) })).status).toBe(2);
   });
 });
