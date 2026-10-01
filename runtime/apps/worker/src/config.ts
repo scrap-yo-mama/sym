@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Configuration de `worker` (14 § 2-4) : lue une fois au démarrage ; MASTER_KEY retirée de l'environnement.
 import { loadKeyring, type Keyring } from '@runtime/core';
 import { RUN_DEFAULTS } from '@runtime/db';

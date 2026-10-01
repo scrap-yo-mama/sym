@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Adaptateur pg-boss 12 de `JobQueue` (tâche 1.3, T2 R1). SEUL fichier qui importe pg-boss : aucun SQL brut sur le
 // schéma `pgboss` ailleurs. pg-boss crée et migre lui-même son schéma, sur la connexion de session
 // (DATABASE_URL_DIRECT, 14 § 4) ; son pool compte dans le budget de connexions (`max`, défaut 2).

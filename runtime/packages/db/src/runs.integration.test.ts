@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // File et cycle de vie des runs sur base réelle (tâche 1.3, INV4, T2 R2/R4/R5) : run et job dans la même transaction,
 // RLS côté web, jeton de clôture `job_id`, balayeur (reprise ou `failed`), annulation, `skipped_*`, coûts et jetons,
 // bail de réparation. Le processus worker (kill -9, SIGTERM, D-12) est testé dans apps/worker.

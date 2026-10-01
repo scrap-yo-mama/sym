@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Worker de bout en bout sur base réelle (tâche 1.3, INV4, D-12) : run tracé du web au worker (assert_run_traced),
 // clé différente → arrêt avant tout run (assert_worker_key_mismatch), `kill -9` d'un vrai processus en plein run →
 // run repris ou `failed`, jamais bloqué en `running`, SIGTERM → fin sous le délai ou remise en file.

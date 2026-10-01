@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Cycle de vie des runs (tâche 1.3, INV4 ; 03 § Services « Flux d'un run » ; 14 § 1 et § 9 ; T2 R2, R4, R5).
 //
 // Identités :

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Processus worker réel pour les tests d'intégration (kill -9, SIGTERM) : `main` de production, exécuteur de test.
 // EXECUTOR=hang : un essai journalisé, puis attente jusqu'à l'interruption. EXECUTOR=ok : un essai, succès.
 // Écrit « claimed <run_id> » sur stdout quand un run est pris : le test attend cet événement (pas de sleep).

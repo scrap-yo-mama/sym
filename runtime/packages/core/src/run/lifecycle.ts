@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Cycle de vie d'un run (04b § 1, 03 § Services « Flux d'un run », 14 § 1) : transitions permises, états terminaux,
 // politique de reprise après la perte d'un worker (T2 R4). Fonctions pures, sans I/O.
 import type { RunState } from '../model/enums.js';

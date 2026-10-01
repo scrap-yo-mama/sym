@@ -1,3 +1,4 @@
+-- SPDX-License-Identifier: AGPL-3.0-only
 -- 1.3 (INV4, T2 R2 et R4) : lien run ↔ job pg-boss et reprise après la perte d'un worker.
 -- `job_id` : job pg-boss courant du run, écrit dans la même transaction que le job. C'est aussi le jeton de clôture :
 --   le worker ne met à jour un run que si `job_id` est toujours le sien ; une remise en file change `job_id`, donc un

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Point d'entrée de `runtime worker` : configuration, démarrage (refus clair si la clé ou le schéma ne vont pas),
 // arrêt propre sur SIGTERM/SIGINT (14 § 1). Code de sortie : 0 arrêt propre, 1 échec d'arrêt, 2 refus de démarrer.
 import type { RunExecutor } from '@runtime/core';
