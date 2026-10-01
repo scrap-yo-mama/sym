@@ -287,13 +287,15 @@ async function handleInTransaction(client: pg.PoolClient, input: HandleScheduled
   const parsed = parseScheduleRules(row.rules);
   const rules = parsed.ok ? parsed.rules : (parseScheduleRules({}) as { ok: true; rules: ScheduleRules }).rules;
 
+  // Tunnel du propriétaire de la planification, qui sera celui du run (INV5 : l'instance ne route vers une extension que
+  // les runs de l'utilisateur du jeton) ; jamais celui du propriétaire de l'API, dont l'activité ne doit pas fuiter (INV12).
   const needsTunnel = rules.only_if_tunnel_online || row.api_requires?.tunnel === true;
   const tunnelOnline = needsTunnel
     ? ((
         await client.query(
           `SELECT 1 FROM tunnels WHERE owner_id = $1 AND revoked_at IS NULL AND expires_at > $2::timestamptz
              AND last_seen_at > $2::timestamptz - make_interval(secs => $3) LIMIT 1`,
-          [row.api_owner_id, now, TUNNEL_ONLINE_SECONDS],
+          [row.owner_id, now, TUNNEL_ONLINE_SECONDS],
         )
       ).rowCount ?? 0) > 0
     : false;

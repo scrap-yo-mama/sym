@@ -478,6 +478,37 @@ describe('règles', () => {
     expect(await fire(byRule, '2026-10-01T10:05:00Z')).toMatchObject({ state: 'skipped_tunnel_offline' });
   });
 
+  test('assert_schedule_tunnel_owner_bound : only_if_tunnel_online lit le tunnel du propriétaire de la planification (et du run), jamais celui du propriétaire de l\'API (INV5, INV12)', async () => {
+    await resetSchedules();
+    await pool.query("UPDATE tunnels SET revoked_at = '2026-10-01T00:00:00Z' WHERE revoked_at IS NULL");
+    // API d'instance de `owner`, planifiée par `member` avec only_if_tunnel_online.
+    const shared = await newApi();
+    await pool.query("UPDATE apis SET visibility = 'instance' WHERE id = $1", [shared]);
+    const theirs = await newSchedule(shared, { ownerId: member, rules: { only_if_tunnel_online: true }, overlap: 'allow' });
+    const tunnel = async (ownerId: string) =>
+      (
+        await pool.query<{ id: string }>(
+          `INSERT INTO tunnels (owner_id, device_id, token_hash, expires_at, last_seen_at)
+           VALUES ($1, 'zz_test_device', $2, '2026-12-31T00:00:00Z', '2026-10-01T09:59:30Z') RETURNING id`,
+          [ownerId, `zz_test_${randomUUID()}`],
+        )
+      ).rows[0]!.id;
+    const at = '2026-10-01T10:00:00Z';
+    // Extension du propriétaire de l'API connectée, celle du membre non : ignoré (aucun oracle sur l'activité d'un autre).
+    const ownerTunnel = await tunnel(owner);
+    expect(await fire(theirs, at)).toMatchObject({ outcome: 'skipped', state: 'skipped_tunnel_offline' });
+    // Extension du membre connectée, celle du propriétaire de l'API coupée : le run part, pour le membre.
+    await pool.query("UPDATE tunnels SET revoked_at = '2026-10-01T09:59:40Z' WHERE id = $1", [ownerTunnel]);
+    const memberTunnel = await tunnel(member);
+    expect((await fire(theirs, at)).outcome).toBe('run');
+    const runs = await pool.query<{ owner_id: string; state: string }>('SELECT owner_id, state FROM runs WHERE schedule_id = $1 ORDER BY created_at', [theirs]);
+    expect(runs.rows).toEqual([
+      { owner_id: member, state: 'skipped_tunnel_offline' },
+      { owner_id: member, state: 'queued' },
+    ]);
+    await pool.query("UPDATE tunnels SET revoked_at = '2026-10-01T10:00:00Z' WHERE id = $1", [memberTunnel]);
+  });
+
   test('INV5 / INV12 : un déclenchement n\'élargit jamais l\'accès (API devenue privée ou à session : rien ne part)', async () => {
     await resetSchedules();
     const publicApi = await newApi();

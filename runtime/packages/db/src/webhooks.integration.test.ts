@@ -706,7 +706,7 @@ describe('événements de run et de statut', () => {
 
   test('assert_schedule_diff_new : `dedup_key: url` + `diff: new`, 48 items connus puis 2 nouveaux : le dataset ne contient que ces 2, `new_items` = 2 part au webhook', async () => {
     const sub = await subscribe(['items.new', 'run.succeeded']);
-    const { runWith } = await watchedSchedule({ dedup_key: 'url', diff: 'new', alert_on: ['new_items'] });
+    const { runWith } = await watchedSchedule({ dedup_key: 'url', diff: 'new' });
     const known = listing(48);
 
     // 1er run : base de référence (48 items écrits, rien à signaler).
@@ -738,7 +738,7 @@ describe('événements de run et de statut', () => {
 
   test('`diff: all` : tout est écrit, les nouveautés comptées ; doublons de clé dans un même run écrits une fois ; item sans clé gardé', async () => {
     const sub = await subscribe(['items.new']);
-    const { runWith } = await watchedSchedule({ dedup_key: 'url', diff: 'all', alert_on: ['new_items'] });
+    const { runWith } = await watchedSchedule({ dedup_key: 'url', diff: 'all' });
     await runWith(listing(3));
     const again = await runWith([...listing(3), ...listing(1, 3), listing(1, 3)[0], { title: 'sans url' }]);
     expect(again.write).toMatchObject({ written: 5, newItems: 2, skipped: 1 });

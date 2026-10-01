@@ -2,7 +2,7 @@
 // Émission des événements et alertes (tâche 2.5, 08 § 5) : branchée sur la fin d'un run et sur une transition de statut,
 // dans la transaction de l'appelant (livraison et job écrits au même COMMIT que le fait qu'ils annoncent).
 // - `run.succeeded` / `run.failed` : aux cibles du propriétaire du RUN (INV12 : jamais celles d'un autre utilisateur) ;
-// - `items.new` : planification à `dedup_key` + `alert_on` contenant `new_items`, après une première exécution de référence ;
+// - `items.new` : planification à `dedup_key` (sans condition sur `alert_on`), après une première exécution de référence ;
 //   le nombre vient du dataset (`datasets.new_items`, clés jamais vues pour l'API : `appendRunItems`), jamais du total du run ;
 // - `api.status_changed` : aux cibles du propriétaire de l'API ; l'alerte d'instance par défaut (e-mail ou cible webhook)
 //   ne concerne que les transitions actionnables d'une API sans règle propre.
@@ -80,12 +80,13 @@ export async function notifyRunFinished(tx: Queryable, queue: JobQueue, runId: s
     return { events };
   }
 
-  // Nouveaux items : seulement si la planification le demande (`dedup_key` + `alert_on: new_items`), comptés à l'écriture
-  // du dataset contre les clés déjà vues pour l'API (`datasets.new_items`), et après une exécution de référence (la
-  // première établit la base : tout y est « nouveau », rien n'est à signaler).
+  // Nouveaux items : dès que la planification a une `dedup_key` (08 § 5 : `dedup_key` + `diff` suffisent ; `alert_on` ne
+  // règle que les alertes), comptés à l'écriture du dataset contre les clés déjà vues pour l'API (`datasets.new_items`), et
+  // après une exécution de référence (la première établit la base : tout y est « nouveau », rien n'est à signaler).
+  // `items.new` part alors aux seules cibles du propriétaire abonnées à cet événement.
   let newItems: number | undefined;
   const rules = run.schedule_id === null ? null : parseScheduleRules(run.schedule_rules);
-  if (rules?.ok && rules.rules.dedup_key !== null && rules.rules.alert_on?.includes('new_items')) {
+  if (rules?.ok && rules.rules.dedup_key !== null) {
     const baseline = await tx.query("SELECT 1 FROM runs WHERE schedule_id = $1 AND id <> $2 AND state = 'succeeded' LIMIT 1", [run.schedule_id, run.id]);
     newItems = (baseline.rowCount ?? 0) > 0 ? (run.dataset_new_items ?? 0) : 0;
   }
