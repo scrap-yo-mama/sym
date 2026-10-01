@@ -164,10 +164,22 @@ test('appairage et site connecté en tunnel : le service worker ouvre la WSS (un
 test('run E2 en tunnel : fetch dans un onglet du site, onglet caché, non déchargeable, groupé « Scrapyomama »', async () => {
   const apiId = await insertApi('zz_test_tunnel_e2', itemsSpec('/api/items', 3), 10);
   const runId = await startRun(apiId);
-  let tabs: Awaited<ReturnType<typeof automationTabs>> = [];
-  // L'onglet est créé puis groupé par le service worker : on attend le groupe, pas seulement l'onglet (course sinon).
-  await expect.poll(async () => (tabs = await automationTabs()).filter((t) => t.group !== null).length, { timeout: 30_000 }).toBeGreaterThan(0);
-  expect(tabs.find((t) => t.group !== null)).toMatchObject({ active: false, autoDiscardable: false, group: 'Scrapyomama' });
+  // Le service worker crée l'onglet (`active: false`), le rend non déchargeable, le range dans un groupe, puis TITRE ce
+  // groupe (chrome-api.ts : `tabs.group` puis `tabGroups.update`) : quatre appels successifs. On attend l'état final (groupe
+  // « Scrapyomama »), pas une étape intermédiaire (onglet sans groupe, puis groupe encore sans titre : course sinon), et
+  // chaque relevé intermédiaire doit déjà montrer un onglet caché.
+  const seen: Awaited<ReturnType<typeof automationTabs>> = [];
+  await expect
+    .poll(
+      async () => {
+        const tabs = await automationTabs();
+        seen.push(...tabs);
+        return tabs.find((t) => t.group === 'Scrapyomama');
+      },
+      { timeout: 30_000 },
+    )
+    .toMatchObject({ active: false, autoDiscardable: false, group: 'Scrapyomama' });
+  for (const t of seen) expect(t.active).toBe(false);
   const run = await waitRun(runId, 60_000);
   expect(run).toMatchObject({ state: 'succeeded', items: 30 });
   const attempts = await h.sql('SELECT execution, network, result_class FROM run_attempts WHERE run_id = $1', [runId]);

@@ -12,6 +12,7 @@ import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { StagehandEngine, recordsSchema } from '@runtime/agent';
 import { Secret, validateHybridSpec, type AgentFetchSpec, type AgentSpec, type HybridSpec } from '@runtime/core';
+import type { AccessCheck } from '@runtime/core/exec';
 import * as net from '@runtime/core/net';
 import { openBrowserEgress, openNetworkSession, startEgressProxy, type BrowserEgress, type EgressProxy, type SsrfGuard } from '@runtime/core/net';
 import { createLlmClient, type ModelPrice, type RedactConfig } from '@runtime/llm';
@@ -575,7 +576,7 @@ describe('injection de prompt (08 §4) : 0 requête vers le domaine piège', () 
     );
     expect(out.result).toMatchObject({ ok: false, failure: { failure_class: 'code_error', detail: 'agent_engine_error' } });
     expect(fake.requests).toBe(0);
-  }, 60_000);
+  }, 120_000); // lancement du Chromium dédié compris (CHROMIUM_LAUNCH_TIMEOUT_MS = 60 s), comme les autres essais E5/E6 du fichier
 });
 
 describe('plafond de coût de l’essai (04b « Schéma et coût », 08 §1) : reliquat, prix absent', () => {
@@ -875,6 +876,42 @@ describe('écritures sans allow_write_actions (08 §4 mesure 4) : E5 sur le pool
       localGuard,
     );
     expect(fake.calls.some((c) => textOf((c.body['messages'] as { content: unknown }[])[0]?.content).includes('finding elements'))).toBe(true);
+    expect(out.result.ok).toBe(true);
+    expect(local.posts - before).toBe(0);
+    expect(out.compiled).toBeUndefined();
+    expect(out.compileFailure).toBe('write_blocked');
+  }, 180_000);
+
+  test('assert_write_action_blocked — E6 : verdict de la garde rendu APRÈS la fin de l’agent (écriture encore suspendue) : comptée quand même, jamais compilée', async () => {
+    // Course constatée sous charge (fix-flaky) : l'agent rendait « done » avant que la garde n'ait tranché sur les écritures
+    // lancées par son dernier clic ; le compte lu valait 0 et le clic était compilé en E5. Ici, le contrôle robots.txt
+    // (consulté avant le verrou de domaines) retient 400 ms les requêtes /write et /beacon : la garde tranche après la fin.
+    const slowWrites: AccessCheck = async (u) => {
+      if (/^\/(write|beacon)$/.test(new URL(u).pathname)) await new Promise((r) => setTimeout(r, 400));
+      return { allowed: true, crawlDelayMs: null };
+    };
+    fake.setScenario(AGENT_MODEL, stagehandScript([scripted.toolCalls([{ name: 'act', arguments: { action: 'click the button "Envoyer"' } }])], { items: [{ id: 'zz_test_item_0001', title: 'Lampe zz_test' }] }));
+    const before = local.posts;
+    const out = await withEgress(
+      [LOCAL],
+      (egress) =>
+        runAgentExecutor({
+          access: slowWrites,
+          spec: { schema_version: 1, kind: 'agent', start_url: localUrl('/'), allowed_hosts: [LOCAL], instruction: 'Read the product sheet.', limits: { max_steps: 10, timeout_ms: 90_000 } },
+          outputSchema: LOCAL_ITEM,
+          signal,
+          guard: localGuard,
+          egress,
+          agentBrowser: (o) => launchAgentBrowser({ ...o, egressServer: egress.server }),
+          engineFor: engineFor(),
+          pool,
+          allowWriteActions: false,
+          maxCostUsd: 0.5,
+          taskId: 'zz_test_write_late',
+          version: 1,
+        }),
+      localGuard,
+    );
     expect(out.result.ok).toBe(true);
     expect(local.posts - before).toBe(0);
     expect(out.compiled).toBeUndefined();

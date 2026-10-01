@@ -38,7 +38,7 @@ import { buildUserAgent } from '@runtime/core/access';
 import { chromiumEgressLaunchOptions } from '@runtime/core/net';
 import { chromium, type Browser, type BrowserContext, type Page } from 'playwright-core';
 import { installedEngineIdentity } from './engine-identity.js';
-import { assertNotRoot, chromiumEnv, CHROMIUM_SILENT_ARGS, INV11_DISABLED_FEATURES } from './launch.js';
+import { assertNotRoot, chromiumEnv, CHROMIUM_LAUNCH_TIMEOUT_MS, CHROMIUM_SILENT_ARGS, INV11_DISABLED_FEATURES } from './launch.js';
 import type { RequestCheck } from './request-guard.js';
 import { openRunContext, type RunContext } from './run-context.js';
 
@@ -77,8 +77,59 @@ export type AgentBrowser = {
   readonly refused: () => { pacing: number; maxRequests: number };
   /** Requêtes et WebSocket coupés par le verrou de domaines du contexte de run (hôtes seulement). */
   readonly violations: () => number;
+  /**
+   * Attend que chaque écriture (méthode autre que GET, HEAD, OPTIONS) lancée par la page du run JUSQU'ICI ait son
+   * verdict (requête finie ou coupée : la garde a alors consigné sa coupure dans `guard.blocked`), au plus `timeoutMs` ;
+   * rend le nombre d'écritures encore sans verdict. À appeler avant de lire les écritures coupées (08 §4 mesure 4).
+   */
+  readonly settleWrites: (timeoutMs: number) => Promise<number>;
   close(): Promise<void>;
 };
+
+/** Méthodes de lecture (même verdict que `installDomainGuard`, playwright-channel.ts). */
+const READ_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
+
+/**
+ * Suivi des écritures lancées par la page, par sa propre session CDP (`Network`) : Blink émet `requestWillBeSent` au
+ * lancement de la requête, sur le fil de la page ; le verdict de la garde (route Playwright ou interception `Fetch`)
+ * arrive ensuite, au processus du navigateur puis à Node, d'autant plus tard que la machine est chargée. Une évaluation
+ * sur la même session sert de barrière : quand elle répond, le lancement de toute requête partie avant est déjà connu.
+ * Restent hors de portée les écritures des workers et des cadres hors processus (autres cibles CDP) : elles n'ont que
+ * le délai d'attente.
+ */
+async function trackPageWrites(context: BrowserContext, page: Page): Promise<(timeoutMs: number) => Promise<number>> {
+  const session = await context.newCDPSession(page);
+  const pending = new Set<string>();
+  const waiters = new Set<() => void>();
+  session.on('Network.requestWillBeSent', (event) => {
+    if (!READ_METHODS.has(event.request.method.toUpperCase())) pending.add(event.requestId);
+  });
+  const done = (event: { requestId: string }): void => {
+    if (!pending.delete(event.requestId)) return;
+    for (const waiter of [...waiters]) waiter();
+  };
+  session.on('Network.loadingFinished', done);
+  session.on('Network.loadingFailed', done);
+  await session.send('Network.enable');
+  return async (timeoutMs) => {
+    await session.send('Runtime.evaluate', { expression: '0' }).catch(() => undefined);
+    if (pending.size > 0) {
+      await new Promise<void>((resolve) => {
+        const finish = (): void => {
+          clearTimeout(timer);
+          waiters.delete(check);
+          resolve();
+        };
+        const check = (): void => {
+          if (pending.size === 0) finish();
+        };
+        const timer = setTimeout(finish, timeoutMs);
+        waiters.add(check);
+      });
+    }
+    return pending.size;
+  };
+}
 
 /**
  * Étape de fermeture bornée (jamais rejetée) : une fois Chromium tué, un appel CDP parti avant que Playwright ne constate
@@ -194,7 +245,7 @@ export async function launchAgentBrowser(options: AgentBrowserOptions): Promise<
     await rm(profile, { recursive: true, force: true }).catch(() => undefined);
   };
   try {
-    const [port, path] = (await waitForFile(join(profile, 'DevToolsActivePort'), options.launchTimeoutMs ?? 20_000, child)).trim().split('\n');
+    const [port, path] = (await waitForFile(join(profile, 'DevToolsActivePort'), options.launchTimeoutMs ?? CHROMIUM_LAUNCH_TIMEOUT_MS, child)).trim().split('\n');
     const cdpUrl = `ws://127.0.0.1:${Number(port)}${path ?? ''}`;
     browser = await chromium.connectOverCDP(cdpUrl);
     const context = browser.contexts()[0];
@@ -231,6 +282,7 @@ export async function launchAgentBrowser(options: AgentBrowserOptions): Promise<
     const run = rc;
     const page = run.page;
     const opened = browser;
+    const settleWrites = await trackPageWrites(context, page);
     return {
       cdpUrl,
       browser: opened,
@@ -240,6 +292,7 @@ export async function launchAgentBrowser(options: AgentBrowserOptions): Promise<
       recorder,
       refused: () => ({ ...refused }),
       violations: () => run.violations.length,
+      settleWrites,
       close: async () => {
         recorder.dispose();
         // Processus tué AVANT tout détachement CDP : une requête encore suspendue par une interception (contrôle robots de

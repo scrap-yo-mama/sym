@@ -347,6 +347,8 @@ const READ_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
 /** Classes qui arrêtent l'agent ou le script (INV6, 04 §3.3) ; un 404 ou un 5xx n'arrête pas : l'agent peut revenir. */
 const STOP_CLASSES: ReadonlySet<string> = new Set(['blocked_by_protection', 'forbidden', 'rate_limited', 'robots_disallowed', 'auth_required', 'payment_required', 'account_limit']);
 const MAX_CLASSIFIED_BODY = 5_000_000;
+/** Attente au plus du verdict de la garde sur les écritures lancées par la page avant la fin de l'agent. */
+const WRITE_VERDICT_TIMEOUT_MS = 5000;
 /** Attente au plus du corps d'un document à classer (un document qui ne finit pas n'est classé que sur statut et en-têtes). */
 const CLASSIFY_BODY_TIMEOUT_MS = 10_000;
 
@@ -801,8 +803,12 @@ async function runAgentInSlot(options: AgentOptions, lease: SlotLease): Promise<
     await watch.settled();
     // Une coupure n'est comptée que par la couche qui la fait (sans double compte, voir `dedicated` dans run-context.ts) :
     // route du contexte de run (requêtes initiales, WebSocket), interception du verrou (sauts de redirection), proxy d'egress.
+    // Écritures du dernier geste de l'agent : leur verdict arrive APRÈS la fin du run (course constatée sous charge, le
+    // clic d'écriture était alors compilé en E5). On l'attend ; une écriture encore suspendue au bout du délai compte
+    // comme coupée (sans `allow_write_actions`, la garde ne la laissera pas passer).
+    const unsettledWrites = options.allowWriteActions ? 0 : await ab.settleWrites(WRITE_VERDICT_TIMEOUT_MS);
     domainBlocked = ab.guard.blocked.filter((b) => b.reason === 'domain').length + ab.violations() + options.egress.domainBlockedCount();
-    writesBlocked = ab.guard.blocked.filter((b) => b.reason === 'write').length;
+    writesBlocked = ab.guard.blocked.filter((b) => b.reason === 'write').length + unsettledWrites;
   } finally {
     watch.dispose();
     await ab.close();
