@@ -1,0 +1,47 @@
+{
+  "app": {
+    "name": "Scrapyomama",
+    "skipToContent": "Aller au contenu",
+    "titleSuffix": "Scrapyomama"
+  },
+  "nav": {
+    "language": "Langue",
+    "theme": "Thème",
+    "themes": {
+      "system": "Système",
+      "light": "Clair",
+      "dark": "Sombre"
+    },
+    "signedInAs": "Connecté en tant que {name}",
+    "signOut": "Se déconnecter"
+  },
+  "auth": {
+    "login": {
+      "title": "Connexion",
+      "description": "Utilisez le compte de votre instance.",
+      "email": "Adresse e-mail",
+      "password": "Mot de passe",
+      "submit": "Se connecter",
+      "submitting": "Connexion…"
+    },
+    "errors": {
+      "invalid_credentials": "L’adresse e-mail ou le mot de passe est incorrect.",
+      "too_many_attempts": "Trop de tentatives. Réessayez dans quelques minutes.",
+      "not_initialized": "Cette instance n’est pas encore configurée. Terminez l’assistant de premier démarrage, puis connectez-vous.",
+      "network": "Le serveur est injoignable. Vérifiez votre connexion et réessayez.",
+      "session_expired": "Votre session est terminée. Connectez-vous à nouveau.",
+      "unknown": "La connexion a échoué. Réessayez."
+    }
+  },
+  "home": {
+    "title": "Votre console est prête",
+    "empty": "Rien à afficher pour l’instant. Vos API, vos runs et vos réglages apparaîtront ici."
+  },
+  "stream": {
+    "reconnecting": "Mise à jour en direct interrompue, reconnexion…"
+  },
+  "notFound": {
+    "title": "Page introuvable",
+    "back": "Retour à la console"
+  }
+}

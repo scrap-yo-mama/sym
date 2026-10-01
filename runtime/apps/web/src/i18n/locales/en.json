@@ -1,0 +1,47 @@
+{
+  "app": {
+    "name": "Scrapyomama",
+    "skipToContent": "Skip to content",
+    "titleSuffix": "Scrapyomama"
+  },
+  "nav": {
+    "language": "Language",
+    "theme": "Theme",
+    "themes": {
+      "system": "System",
+      "light": "Light",
+      "dark": "Dark"
+    },
+    "signedInAs": "Signed in as {name}",
+    "signOut": "Sign out"
+  },
+  "auth": {
+    "login": {
+      "title": "Sign in",
+      "description": "Use the account of your instance.",
+      "email": "Email address",
+      "password": "Password",
+      "submit": "Sign in",
+      "submitting": "Signing in…"
+    },
+    "errors": {
+      "invalid_credentials": "Email address or password is incorrect.",
+      "too_many_attempts": "Too many attempts. Try again in a few minutes.",
+      "not_initialized": "This instance is not set up yet. Finish the first-start wizard, then sign in.",
+      "network": "The server cannot be reached. Check your connection and try again.",
+      "session_expired": "Your session has ended. Sign in again.",
+      "unknown": "Sign-in failed. Try again."
+    }
+  },
+  "home": {
+    "title": "Your console is ready",
+    "empty": "Nothing to show yet. Your APIs, runs and settings will appear here."
+  },
+  "stream": {
+    "reconnecting": "Live updates interrupted, reconnecting…"
+  },
+  "notFound": {
+    "title": "Page not found",
+    "back": "Back to the console"
+  }
+}

@@ -1,5 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
+import vue from '@vitejs/plugin-vue';
+import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vitest/config';
+
+const webSrc = fileURLToPath(new URL('./apps/web/src', import.meta.url));
 
 // Trois projets (15 §2). Suffixes : *.unit.test.ts, *.prop.test.ts, *.integration.test.ts, *.contract.test.ts
 export default defineConfig({
@@ -14,6 +18,9 @@ export default defineConfig({
     },
     projects: [
       {
+        // Composants .vue de la console (tâche 3.3) : rendu côté serveur sous Node, sans navigateur ; alias `@` de apps/web.
+        plugins: [vue()],
+        resolve: { alias: { '@': webSrc } },
         test: {
           name: 'unit',
           include: [
@@ -28,6 +35,9 @@ export default defineConfig({
         },
       },
       {
+        // La console (3.3) a un test d'intégration (serveur réel + composables) : mêmes plugin et alias que `unit`.
+        plugins: [vue()],
+        resolve: { alias: { '@': webSrc } },
         test: {
           name: 'integration',
           // Un conteneur PostgreSQL (PG_VERSION, défaut 16) par exécution ; une base par fichier (tests/helpers/pg.ts).

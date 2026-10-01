@@ -37,6 +37,28 @@ catalog:
   domhandler: 6.0.1
   # File de jobs (tâche 1.3, T2 R1) : 12.x figée ; 12.34.1+ et 12.35.x < 7 jours au 2026-10-01 (minimumReleaseAge).
   pg-boss: 12.34.0
+  # Console (tâche 3.3, ADR 0002) : dernières versions publiées depuis plus de 7 jours au 2026-10-01 (minimumReleaseAge).
+  vue: 3.5.43
+  vite: 8.3.0
+  '@vitejs/plugin-vue': 6.0.9
+  vue-router: 5.3.1
+  vue-tsc: 3.3.11
+  vue-i18n: 11.4.12
+  tailwindcss: 4.3.3
+  '@tailwindcss/vite': 4.3.3
+  reka-ui: 2.10.5
+  class-variance-authority: 0.7.1
+  clsx: 2.1.1
+  tailwind-merge: 3.7.0
+  tw-animate-css: 1.4.0
+  # Même version que celle de reka-ui (une seule copie dans l'arbre) ; utilisée par les composants shadcn-vue copiés.
+  '@vueuse/core': 14.4.0
+  # Client API (tâche 3.3) : types générés par openapi-typescript depuis l'OpenAPI spécifiée, appels par openapi-fetch.
+  openapi-fetch: 0.17.0
+  openapi-typescript: 7.13.0
+  # Lint des composants .vue (tâche 3.3).
+  eslint-plugin-vue: 10.11.0
+  vue-eslint-parser: 10.4.1
   # Observabilité (tâche 1.10) : traces OTel opt-in (chargées à la demande seulement). Métriques Prometheus écrites à la
   # main (apps/server/src/metrics.ts) : prom-client 15 exige `@opentelemetry/api` (require statique), ce qui chargerait
   # l'API OTel dans tout `server` même OTel coupé (assert_otel_off_by_default).
@@ -49,8 +71,6 @@ catalog:
   '@opentelemetry/exporter-trace-otlp-proto': 0.222.0
   # Extension (tâche 2.6, 07 § 7) : WXT 0.21.4 épinglé, popup en Vue 3.5 (fonctions de rendu, sans SFC ni compilateur de gabarits : CSP MV3) ; vite 8.3.0 (8.3.1 < 7 jours au 2026-10-01).
   wxt: 0.21.4
-  vue: 3.5.43
-  vite: 8.3.0
   # Téléphones des sujets en E.164 (tâche 1.8, D-25) : MIT, sans dépendance ; 1.13.14 < 7 jours au 2026-10-01 (minimumReleaseAge).
   libphonenumber-js: 1.13.13
   # Bac à sable (tâche 1.5) : isolated-vm 7.0.1 corrige GHSA-864f-rcv7-6rh4 (<= 7.0.0) et porte les binaires Node 24 (ABI 137)
@@ -84,5 +104,7 @@ allowBuilds:
   ssh2: false
   # msw (tâche 0.4) : postinstall = copie du service worker navigateur, inutile côté Node.
   msw: false
+  # Console (tâche 3.3) : postinstall de vue-demi (choix Vue 2/3 pour @vueuse via reka-ui), inutile : Vue 3 est la version par défaut.
+  vue-demi: false
   # isolated-vm (tâche 1.5) : module natif ; node-gyp-build charge le binaire précompilé, sinon compile.
   isolated-vm: true
