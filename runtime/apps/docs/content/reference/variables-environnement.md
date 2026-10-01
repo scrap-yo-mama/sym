@@ -127,7 +127,10 @@ Ces variables coupent une surface de l'instance, pour réduire ce qu'elle expose
 | `DISABLE_REST` | `false` | — | coupe l'API REST | prévue |
 | `DISABLE_MCP` | `false` | — | coupe le serveur MCP | prévue |
 | `DISABLE_OPENAPI` | `false` | — | coupe la publication de l'OpenAPI | prévue |
-| `DISABLE_TUNNEL` | `false` | — | coupe la passerelle du tunnel | prévue |
+| `DISABLE_TUNNEL` | `false` | server | coupe la passerelle du tunnel : aucune route WSS, aucune commande envoyée à l'extension | lue |
+| `GATEWAY_INSTANCE` | hôte + pid + aléa | server | identifiant de cette instance pour la passerelle du tunnel (canal de notification PostgreSQL de ses commandes) ; à fixer si plusieurs instances partagent la base | lue |
+| `TUNNEL_EXTENSION_IDS` | — | server | identifiants (32 lettres a à p), séparés par des virgules, des extensions autorisées à ouvrir le tunnel : l'origine `chrome-extension://<id>` est vérifiée à l'ouverture. Tant que l'extension n'est pas publiée au Chrome Web Store, posez l'identifiant de votre extension empaquetée, sinon aucune extension n'est acceptée | lue |
+| `TUNNEL_ALLOW_ANY_EXTENSION` | `false` | server | `true` accepte toute extension (développement, extension décompressée) ; à ne pas poser en production | lue |
 
 ## Variables retirées volontairement
 
