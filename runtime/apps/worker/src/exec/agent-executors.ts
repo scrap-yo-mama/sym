@@ -181,7 +181,7 @@ export type AgentFetchOptions = {
   readonly modelId: string | null;
   readonly signal: AbortSignal;
   readonly session?: Pick<NetworkSession, 'fetch'>;
-  readonly browser?: { readonly pool: BrowserPool; readonly egress: BrowserEgress; readonly guard: SsrfGuard };
+  readonly browser?: { readonly pool: BrowserPool; readonly egress: BrowserEgress; readonly guard: SsrfGuard; readonly userAgent?: string };
   readonly pacer?: RequestPacer;
   readonly classify?: ClassifyFn;
   /** Plafond de coût de l'essai (proxy + LLM). */
@@ -200,7 +200,7 @@ async function fetchPage(options: AgentFetchOptions): Promise<HttpExchange> {
   const b = options.browser;
   if (b === undefined) throw new Error('navigateur absent');
   return b.pool.run(options.signal, async (browser) => {
-    const rc = await openRunContext(browser, { egressServer: b.egress.server, allowedHosts: options.spec.request.allowed_hosts });
+    const rc = await openRunContext(browser, { egressServer: b.egress.server, allowedHosts: options.spec.request.allowed_hosts, ...(b.userAgent === undefined ? {} : { userAgent: b.userAgent }) });
     const strategy = trackStrategyRequests(rc.context, options.spec.request.allowed_hosts);
     try {
       const response = await strategy.during(isMainNavigation(rc.page), () => guardedGoto(rc.page, url, b.guard, { waitUntil: 'load' as const, timeout: NAVIGATION_TIMEOUT_MS }));
@@ -276,6 +276,8 @@ export type HybridOptions = {
   readonly llm?: LlmClient | null;
   readonly llmModelId?: string | null;
   readonly allowWriteActions: boolean;
+  /** User-Agent du robot (identité du run) ; défaut : celui du moteur du navigateur. */
+  readonly userAgent?: string;
   readonly pacer?: RequestPacer;
   readonly maxRequests?: number;
   readonly maxCostUsd: number;
@@ -420,7 +422,7 @@ async function runHybridWithoutLlm(options: HybridOptions, onPage?: (page: Page)
   const spec = options.spec;
   const borrow = <T>(fn: (browser: Browser) => Promise<T>): Promise<T> => (lease !== undefined ? lease.run(fn) : pool!.run(options.signal, fn));
   return borrow(async (browser) => {
-    const rc = await openRunContext(browser, { egressServer: options.egress.server, allowedHosts: spec.allowed_hosts, admit: navigationAdmission(options) });
+    const rc = await openRunContext(browser, { egressServer: options.egress.server, allowedHosts: spec.allowed_hosts, admit: navigationAdmission(options), ...(options.userAgent === undefined ? {} : { userAgent: options.userAgent }) });
     const strategy = trackStrategyRequests(rc.context, spec.allowed_hosts);
     const stop = new AbortController();
     const watch = watchDocuments(rc.context, options.classify, () => stop.abort(), await decodedSizes(rc.context, rc.page));

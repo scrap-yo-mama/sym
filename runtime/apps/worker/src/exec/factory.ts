@@ -9,8 +9,8 @@
 import { DomainPacer, type SandboxEngine } from '@runtime/core';
 import { SsrfGuard, ssrfPolicyFromEnv, startEgressProxy, type EgressProxy } from '@runtime/core/net';
 import { STAGEHAND_VERSION, StagehandEngine } from '@runtime/agent';
-import { resolveInstanceContact, RobotsCache } from '@runtime/core/access';
-import { PgPacingStore, readInstanceContactSetting, readLlmSettings, secretStore } from '@runtime/db';
+import { resolveIdentifyInstance, resolveInstanceContact, RobotsCache } from '@runtime/core/access';
+import { PgPacingStore, readIdentifyInstanceSetting, readInstanceContactSetting, readLlmSettings, secretStore } from '@runtime/db';
 import { createLlmClient, llmConfigFromSettings, roleProblems, roleTarget, type LlmConfig } from '@runtime/llm';
 import { launchAgentBrowser } from '../browser/agent-browser.js';
 import { cgroupMemoryLimitBytes, cgroupMemoryWorkingSetBytes } from '../browser/cgroup.js';
@@ -118,11 +118,13 @@ export function productionExecutorFactory(env: Readonly<Record<string, string | 
     const tunnel = new TunnelJobClient({ pool, sessionUrl: config.databaseUrlDirect ?? config.databaseUrl, logger });
     await tunnel.start();
     // Module d'accès (1.11) : un cache de robots.txt pour le worker (24 h au plus), contact de l'instance relu à chaque run
-    // (réglage de l'assistant, puis INSTANCE_CONTACT), version annoncée dans le User-Agent.
+    // (réglage de l'assistant, puis INSTANCE_CONTACT), identification de l'instance relue aussi (réglage `identify_instance`,
+    // puis IDENTIFY_INSTANCE, désactivée par défaut), version annoncée dans le jeton du User-Agent.
     const robotsCache = new RobotsCache();
     const instanceContact = async (): Promise<string | null> => resolveInstanceContact(await readInstanceContactSetting(pool), env);
+    const identifyInstance = async (): Promise<boolean> => resolveIdentifyInstance(await readIdentifyInstanceSetting(pool), env);
     return {
-      executor: createStrategyExecutor({ pool, guard, pacer, browsers, secrets, logger, tunnel, script: { engine, loadScript: loadInlineScript }, agent, robotsCache, instanceContact, version: config.version }),
+      executor: createStrategyExecutor({ pool, guard, pacer, browsers, secrets, logger, tunnel, script: { engine, loadScript: loadInlineScript }, agent, robotsCache, instanceContact, identifyInstance, version: config.version }),
       browserContexts: () => pool_?.active() ?? 0,
       close: async () => {
         await tunnel.close();

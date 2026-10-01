@@ -142,8 +142,14 @@ export type NetworkSessionOptions = {
    * Absent seulement pour la session qui lit robots.txt elle-même.
    */
   readonly checkUrl?: (url: URL) => Promise<void>;
-  /** User-Agent du robot (`buildUserAgent`), imposé à chaque requête : une stratégie ne le remplace jamais (X2). */
+  /**
+   * User-Agent du robot (`buildUserAgent` : celui du moteur embarqué, plus le jeton si `identify_instance`), imposé à
+   * chaque requête : une stratégie ne le remplace jamais (X2). Avec lui, `Accept` et `Accept-Language` standard d'un
+   * navigateur quand la requête n'en pose pas.
+   */
   readonly userAgent?: string;
+  /** En-tête `From` (RFC 9110 §10.1.2) imposé à chaque requête : contact d'instance, si `identify_instance` est activé. */
+  readonly from?: string;
 };
 
 type FetchInit = Parameters<typeof guardedFetch>[1];
@@ -215,11 +221,23 @@ function proxyDispatcher(
   });
 }
 
-/** En-têtes de la requête avec le User-Agent du robot imposé (tout `user-agent` fourni est remplacé, X2). */
-function withUserAgent(init: FetchInit, userAgent: string | undefined): FetchInit {
-  if (userAgent === undefined) return init;
+/** `Accept` et `Accept-Language` que Chromium envoie à une navigation (17 §5) : seuls ces deux-là, rien de plus. */
+const BROWSER_ACCEPT = 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7';
+const BROWSER_ACCEPT_LANGUAGE = 'en-US,en;q=0.9';
+
+/**
+ * En-têtes de la requête avec l'identité du robot imposée : User-Agent (tout `user-agent` fourni est remplacé, X2),
+ * `From` s'il est posé, `Accept` et `Accept-Language` standard de navigateur SEULEMENT si la requête n'en pose pas.
+ */
+function withRobotHeaders(init: FetchInit, options: { userAgent?: string | undefined; from?: string | undefined }): FetchInit {
+  if (options.userAgent === undefined && options.from === undefined) return init;
   const headers = new Headers(init.headers as ConstructorParameters<typeof Headers>[0]);
-  headers.set('user-agent', userAgent);
+  if (options.userAgent !== undefined) {
+    headers.set('user-agent', options.userAgent);
+    if (!headers.has('accept')) headers.set('accept', BROWSER_ACCEPT);
+    if (!headers.has('accept-language')) headers.set('accept-language', BROWSER_ACCEPT_LANGUAGE);
+  }
+  if (options.from !== undefined) headers.set('from', options.from);
   return { ...init, headers };
 }
 
@@ -281,7 +299,7 @@ export function openNetworkSession(options: NetworkSessionOptions): NetworkSessi
     proxyId,
     dispatcher,
     fetch: (input, init = {}, opts = {}) =>
-      guardedFetch(input, withUserAgent(ceiling === undefined ? init : { ...init, signal: init.signal ? AbortSignal.any([init.signal, budget.signal]) : budget.signal }, options.userAgent) as Omit<RequestInit, 'dispatcher' | 'redirect'>, {
+      guardedFetch(input, withRobotHeaders(ceiling === undefined ? init : { ...init, signal: init.signal ? AbortSignal.any([init.signal, budget.signal]) : budget.signal }, options) as Omit<RequestInit, 'dispatcher' | 'redirect'>, {
         guard,
         dispatcher,
         ...(opts.followRedirects === false ? { followRedirects: false } : {}),
