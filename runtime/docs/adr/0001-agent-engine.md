@@ -2,6 +2,7 @@
 
 - Statut : **accepté** le 2026-10-01 par l'orchestrateur, sur délégation du commanditaire (« prends toutes les décisions », D-21 ; arbitrage autonome prévu par LAUNCH.md point 6). Décision conforme à la règle figée avant les runs ; qualifiée « fragile ». Conditions : `patchright-core` jamais installé, aucun appel Browserbase (test d'interception réseau), `BRAVE_API_KEY` neutralisée, Stagehand en local seulement (`env: 'LOCAL'`, `disableAPI: true`, aucune option de session Browserbase ni de résolution de captcha : `assertStagehandLocalOnly`, exclusion X1), verrou de domaines appliqué à chaque saut de redirection et aux WebSocket, E6 limité au serveur (porte 0.6b), point faible F-E5 (4/10) traité en 2.4.
 - Date : 2026-10-01
+- Note du 2026-10-01 (D-42) : le fournisseur LLM de test du projet passe à Anthropic en mode compatible OpenAI, `claude-opus-4-8`, en remplacement de DeepInfra (GLM-5.3) ; les chiffres du spike ci-dessous restent ceux mesurés sur GLM-5.3.
 - Protocole : `eval/spike-0.6a-decision.md`, commit `6b363d9`, SHA-256 `1a7aa449…7d3b` (vérifié par `assert_spike_decision_frozen`, non modifié)
 - Données : `eval/results/spike-0.6a-runs.jsonl` (annexe brute, une ligne par run, sortie normalisée comprise), `spike-0.6a-runs.meta.json` (en-tête), `spike-0.6a-runs.traces.jsonl` (types d'actions par run, sans contenu de page)
 - Harnais : `eval/spike/` (paquet d'évaluation isolé, seul endroit où Stagehand est installé), bras A : `packages/agent/`

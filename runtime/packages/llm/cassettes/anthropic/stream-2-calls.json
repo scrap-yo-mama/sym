@@ -1,0 +1,72 @@
+{
+  "version": 1,
+  "provider": "anthropic",
+  "case": "stream-2-calls",
+  "synthetic": false,
+  "entries": [
+    {
+      "key": "3d65b20c2c95",
+      "request": {
+        "method": "POST",
+        "path": "/v1/chat/completions",
+        "shape": {
+          "model": "claude-opus-4-8",
+          "stream": true,
+          "roles": [
+            "user"
+          ],
+          "tools": [
+            "get_weather"
+          ],
+          "tool_choice": null,
+          "response_format": null,
+          "max_tokens": 700,
+          "extra_params": []
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "text/event-stream",
+          "x-ratelimit-remaining-requests": "9999",
+          "x-ratelimit-requests": "10000",
+          "x-ratelimit-reset-requests": "0s"
+        },
+        "body": "data: {\"id\":\"msg_011CfbrKWx21UQi4xzpJYGgt\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\"}}],\"created\":1790872942,\"model\":\"claude-opus-4-8\",\"object\":\"chat.completion.chunk\"            }\n\ndata: {\"id\":\"msg_011CfbrKWx21UQi4xzpJYGgt\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"I'll check the weather in\"}}],\"created\":1790872942,\"model\":\"claude-opus-4-8\",\"object\":\"chat.completion.chunk\"         }\n\ndata: {\"id\":\"msg_011CfbrKWx21UQi4xzpJYGgt\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\" Lyon for you.\"}}],\"created\":1790872942,\"model\":\"claude-opus-4-8\",\"object\":\"chat.completion.chunk\"        }\n\ndata: {\"id\":\"msg_011CfbrKWx21UQi4xzpJYGgt\",\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"toolu_01Rb1C75TtZaQm6EXoEdbeoU\",\"type\":\"function\",\"function\":{\"name\":\"get_weather\",\"arguments\":\"\"}}]}}],\"created\":1790872942,\"model\":\"claude-opus-4-8\",\"object\":\"chat.completion.chunk\"          }\n\ndata: {\"id\":\"msg_011CfbrKWx21UQi4xzpJYGgt\",\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"type\":\"function\",\"function\":{\"arguments\":\"\"}}]}}],\"created\":1790872942,\"model\":\"claude-opus-4-8\",\"object\":\"chat.completion.chunk\"  }\n\ndata: {\"id\":\"msg_011CfbrKWx21UQi4xzpJYGgt\",\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"type\":\"function\",\"function\":{\"arguments\":\"{\\\"ci\"}}]}}],\"created\":1790872942,\"model\":\"claude-opus-4-8\",\"object\":\"chat.completion.chunk\"   }\n\ndata: {\"id\":\"msg_011CfbrKWx21UQi4xzpJYGgt\",\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"type\":\"function\",\"function\":{\"arguments\":\"ty\\\": \\\"\"}}]}}],\"created\":1790872942,\"model\":\"claude-opus-4-8\",\"object\":\"chat.completion.chunk\"      }\n\ndata: {\"id\":\"msg_011CfbrKWx21UQi4xzpJYGgt\",\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"type\":\"function\",\"function\":{\"arguments\":\"Lyon\\\"}\"}}]}}],\"created\":1790872942,\"model\":\"claude-opus-4-8\",\"object\":\"chat.completion.chunk\"  }\n\ndata: {\"id\":\"msg_011CfbrKWx21UQi4xzpJYGgt\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"tool_calls\"}],\"created\":1790872942,\"model\":\"claude-opus-4-8\",\"object\":\"chat.completion.chunk\",\"usage\":{\"completion_tokens\":67,\"prompt_tokens\":395,\"total_tokens\":462} }\n\ndata: [DONE]\n\n"
+      }
+    },
+    {
+      "key": "fc54e0be376f",
+      "request": {
+        "method": "POST",
+        "path": "/v1/chat/completions",
+        "shape": {
+          "model": "claude-opus-4-8",
+          "stream": true,
+          "roles": [
+            "user",
+            "assistant",
+            "tool"
+          ],
+          "tools": [
+            "get_weather"
+          ],
+          "tool_choice": null,
+          "response_format": null,
+          "max_tokens": 700,
+          "extra_params": []
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "text/event-stream",
+          "x-ratelimit-remaining-requests": "9999",
+          "x-ratelimit-requests": "10000",
+          "x-ratelimit-reset-requests": "0s"
+        },
+        "body": "data: {\"id\":\"msg_011CfbrKewjgWjB79JwqFieo\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\"}}],\"created\":1790872944,\"model\":\"claude-opus-4-8\",\"object\":\"chat.completion.chunk\"       }\n\ndata: {\"id\":\"msg_011CfbrKewjgWjB79JwqFieo\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"The\"}}],\"created\":1790872944,\"model\":\"claude-opus-4-8\",\"object\":\"chat.completion.chunk\" }\n\ndata: {\"id\":\"msg_011CfbrKewjgWjB79JwqFieo\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\" weather in Lyon is currently **15°C**. Let me know if you'd like more details or the forecast for another city!\"}}],\"created\":1790872944,\"model\":\"claude-opus-4-8\",\"object\":\"chat.completion.chunk\"     }\n\ndata: {\"id\":\"msg_011CfbrKewjgWjB79JwqFieo\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}],\"created\":1790872944,\"model\":\"claude-opus-4-8\",\"object\":\"chat.completion.chunk\",\"usage\":{\"completion_tokens\":39,\"prompt_tokens\":476,\"total_tokens\":515}          }\n\ndata: [DONE]\n\n"
+      }
+    }
+  ]
+}

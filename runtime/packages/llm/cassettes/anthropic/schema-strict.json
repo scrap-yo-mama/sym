@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "provider": "anthropic",
+  "case": "schema-strict",
+  "synthetic": false,
+  "entries": [
+    {
+      "key": "15d65a5d1577",
+      "request": {
+        "method": "POST",
+        "path": "/v1/chat/completions",
+        "shape": {
+          "model": "claude-opus-4-8",
+          "stream": false,
+          "roles": [
+            "user"
+          ],
+          "tools": [],
+          "tool_choice": null,
+          "response_format": {
+            "type": "json_schema",
+            "name": "city",
+            "strict": true,
+            "schema_sha": "cc0a2ebce64b"
+          },
+          "max_tokens": 900,
+          "extra_params": []
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json",
+          "x-ratelimit-remaining-requests": "9999",
+          "x-ratelimit-requests": "10000",
+          "x-ratelimit-reset-requests": "0s"
+        },
+        "body": "{\"id\":\"msg_011CfbrKQaYRtXi8EKcKEVEw\",\"choices\":[{\"finish_reason\":\"stop\",\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"{\\\"city\\\":\\\"Paris\\\",\\\"population_millions\\\":2.1,\\\"nickname\\\":null}\"}}],\"created\":1790872942,\"model\":\"claude-opus-4-8\",\"object\":\"chat.completion\",\"usage\":{\"completion_tokens\":26,\"prompt_tokens\":319,\"total_tokens\":345}}"
+      }
+    }
+  ]
+}

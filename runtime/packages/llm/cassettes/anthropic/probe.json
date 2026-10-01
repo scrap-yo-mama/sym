@@ -1,0 +1,104 @@
+{
+  "version": 1,
+  "provider": "anthropic",
+  "case": "probe",
+  "synthetic": false,
+  "entries": [
+    {
+      "key": "5200b94ef677",
+      "request": {
+        "method": "POST",
+        "path": "/v1/chat/completions",
+        "shape": {
+          "model": "claude-opus-4-8",
+          "stream": false,
+          "roles": [
+            "user"
+          ],
+          "tools": [
+            "ping"
+          ],
+          "tool_choice": "auto",
+          "response_format": null,
+          "max_tokens": 280,
+          "extra_params": []
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json",
+          "x-ratelimit-remaining-requests": "9999",
+          "x-ratelimit-requests": "10000",
+          "x-ratelimit-reset-requests": "0s"
+        },
+        "body": "{\"id\":\"msg_011CfbrKsbVbCFRWVP3aA4xR\",\"choices\":[{\"finish_reason\":\"tool_calls\",\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"I'll call the ping function with n=1.\",\"tool_calls\":[{\"id\":\"toolu_01NJp9yrfMTjVTCyPYm51yiq\",\"type\":\"function\",\"function\":{\"name\":\"ping\",\"arguments\":\"{\\\"n\\\": 1}\"}}]}}],\"created\":1790872949,\"model\":\"claude-opus-4-8\",\"object\":\"chat.completion\",\"usage\":{\"completion_tokens\":60,\"prompt_tokens\":386,\"total_tokens\":446}}"
+      }
+    },
+    {
+      "key": "2e39a3d053ee",
+      "request": {
+        "method": "POST",
+        "path": "/v1/chat/completions",
+        "shape": {
+          "model": "claude-opus-4-8",
+          "stream": false,
+          "roles": [
+            "user"
+          ],
+          "tools": [],
+          "tool_choice": null,
+          "response_format": {
+            "type": "json_schema",
+            "name": "probe",
+            "strict": true,
+            "schema_sha": "fd3337644674"
+          },
+          "max_tokens": 280,
+          "extra_params": []
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json",
+          "x-ratelimit-remaining-requests": "9999",
+          "x-ratelimit-requests": "10000",
+          "x-ratelimit-reset-requests": "0s"
+        },
+        "body": "{\"id\":\"msg_011CfbrL11ynZzL8P46uZGSn\",\"choices\":[{\"finish_reason\":\"stop\",\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"{\\\"n\\\": 2}\"}}],\"created\":1790872950,\"model\":\"claude-opus-4-8\",\"object\":\"chat.completion\",\"usage\":{\"completion_tokens\":8,\"prompt_tokens\":216,\"total_tokens\":224}}"
+      }
+    },
+    {
+      "key": "25bad5456cd9",
+      "request": {
+        "method": "POST",
+        "path": "/v1/chat/completions",
+        "shape": {
+          "model": "claude-opus-4-8",
+          "stream": false,
+          "roles": [
+            "user"
+          ],
+          "tools": [
+            "ping"
+          ],
+          "tool_choice": "ping",
+          "response_format": null,
+          "max_tokens": 280,
+          "extra_params": []
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json",
+          "x-ratelimit-remaining-requests": "9999",
+          "x-ratelimit-requests": "10000",
+          "x-ratelimit-reset-requests": "0s"
+        },
+        "body": "{\"id\":\"msg_011CfbrL5UcWuwmGz6SmGbqs\",\"choices\":[{\"finish_reason\":\"tool_calls\",\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"\",\"tool_calls\":[{\"id\":\"toolu_01F9hYdSN8ooRwnBa8mgqyKg\",\"type\":\"function\",\"function\":{\"name\":\"ping\",\"arguments\":\"{\\\"n\\\": 3}\"}}]}}],\"created\":1790872951,\"model\":\"claude-opus-4-8\",\"object\":\"chat.completion\",\"usage\":{\"completion_tokens\":32,\"prompt_tokens\":510,\"total_tokens\":542}}"
+      }
+    }
+  ]
+}

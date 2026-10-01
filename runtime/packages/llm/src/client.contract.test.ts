@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// Contrat du client LLM (08 §1 « Tests de contrat », 15 §4) : P0 = DeepInfra zai-org/GLM-5.3 et OpenRouter, en réponses
+// Contrat du client LLM (08 §1 « Tests de contrat », 15 §4) : P0 = DeepInfra zai-org/GLM-5.3, OpenRouter et, depuis D-42
+// (2026-10-01), Anthropic en mode compatible OpenAI (claude-opus-4-8, fournisseur LLM de test du projet), en réponses
 // ENREGISTRÉES (cassettes msw, replay strict). Les cas qu'on ne peut pas obtenir réellement (5xx, refus, 429, vide) sont
-// des cassettes écrites à la main, marquées `synthetic: true`. Réenregistrement : LLM_CASSETTE_MODE=record (voir CONTRIBUTING).
+// des cassettes écrites à la main, marquées `synthetic: true`. Réenregistrement : LLM_CASSETTE_MODE=record et LLM_CASSETTE_PROVIDER=<id>
+// (clés chargées depuis ~/.config/scrapyomama/test.env, jamais dans le dépôt). Le profil de capacités d'Anthropic vient de SA sonde
+// (cassette `probe`), pas du profil de complaisance des deux autres : la doc officielle dit que `strict` et `response_format` y sont ignorés.
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Secret } from '@runtime/core';
@@ -16,7 +19,7 @@ import type { ChatMessage, ToolDef } from './types.js';
 const CASSETTES = join(import.meta.dirname, '..', 'cassettes');
 const kit = createCassetteKit(CASSETTES);
 // Enregistrement : appels réels de modèles à raisonnement, donc lents ; rejeu : quasi instantané.
-vi.setConfig({ testTimeout: kit.mode === 'record' ? 180_000 : 10_000 });
+vi.setConfig({ testTimeout: kit.mode === 'record' ? 180_000 : 10_000, hookTimeout: kit.mode === 'record' ? 180_000 : 10_000 });
 beforeAll(() => kit.start());
 afterAll(() => kit.stop());
 afterEach(() => kit.finish());
@@ -35,6 +38,19 @@ const AGENT_PROFILE: CapabilityProfile = {
   probe_tokens: 0,
   notes: [],
 };
+
+type ProviderId = ProviderFixture['id'];
+const ALL_PROVIDERS: readonly ProviderId[] = ['deepinfra', 'openrouter', 'anthropic'];
+/** Enregistrement : un seul fournisseur à la fois (les clés des autres ne sont pas chargées). */
+const ONLY = process.env['LLM_CASSETTE_PROVIDER'];
+const PROVIDERS = kit.mode === 'record' && ONLY !== undefined ? ALL_PROVIDERS.filter((id) => id === ONLY) : ALL_PROVIDERS;
+/** Repli du test d'absence de repli : un autre fournisseur, toujours en forme de rejeu (jamais appelé). */
+const FALLBACK_OF: Record<ProviderId, ProviderId> = { deepinfra: 'openrouter', openrouter: 'deepinfra', anthropic: 'openrouter' };
+/** Fournisseurs dont le profil est celui de leur sonde réelle plutôt que AGENT_PROFILE (rempli par le `beforeAll` du bloc). */
+const PROBED_PROFILES = new Map<ProviderId, CapabilityProfile>();
+const PROBED: readonly ProviderId[] = ['anthropic'];
+/** Comportements annoncés par la documentation officielle du fournisseur, vérifiés contre la sonde enregistrée. */
+const DOCUMENTED: Partial<Record<ProviderId, { cache: boolean }>> = { anthropic: { cache: false } };
 
 // Prix de TEST (USD / million) : sert à vérifier l'arithmétique, pas à chiffrer le modèle réel.
 const TEST_PRICE = { in: 1, in_cached: 0.2, out: 4 };
@@ -55,7 +71,7 @@ function build(p: ProviderFixture, opts: { fallback?: ProviderFixture } = {}): {
     baseUrl: f.baseUrl,
     apiKey: f.apiKey,
     ...(f.extraBody ? { extraBody: f.extraBody } : {}),
-    models: [{ id: f.model, profile: AGENT_PROFILE, price: TEST_PRICE }],
+    models: [{ id: f.model, profile: PROBED_PROFILES.get(f.id) ?? AGENT_PROFILE, price: TEST_PRICE }],
   });
   const providers = [mk(p), ...(opts.fallback ? [mk(opts.fallback)] : [])];
   const client = createLlmClient(
@@ -73,9 +89,17 @@ function build(p: ProviderFixture, opts: { fallback?: ProviderFixture } = {}): {
 const user = (content: string): ChatMessage[] => [{ role: 'user', content }];
 const SYNTHETIC = { synthetic: true } as const;
 
-describe.each(['deepinfra', 'openrouter'] as const)('assert_llm_contract : %s', (id) => {
+describe.each(PROVIDERS)('assert_llm_contract : %s', (id) => {
   const p = providerFixture(id);
-  const other = providerFixture(id === 'deepinfra' ? 'openrouter' : 'deepinfra');
+  const other = providerFixture(FALLBACK_OF[id], {});
+
+  beforeAll(async () => {
+    if (!PROBED.includes(id)) return;
+    kit.use(id, 'probe');
+    const transport = new OpenAICompatTransport({ baseUrl: p.baseUrl, apiKey: p.apiKey, ...(p.extraBody ? { extraBody: p.extraBody } : {}) });
+    PROBED_PROFILES.set(id, await probeCapabilities(transport, p.model, () => new Date('2026-10-01T00:00:00Z')));
+    kit.finish();
+  });
 
   test('succès : appel d\'outils en 2 étapes, usage et coût', async () => {
     kit.use(id, 'tools-2-steps');
@@ -171,6 +195,12 @@ describe.each(['deepinfra', 'openrouter'] as const)('assert_llm_contract : %s', 
     expect(profile.probe_tokens).toBeGreaterThan(0);
     expect(profile.probe_tokens).toBeLessThan(2500); // 3 appels minuscules ; un nouvel essai au plus par appel tronqué par le raisonnement
     expect(profile.probed_at).toBe('2026-10-01T00:00:00.000Z');
+    // Cohérence du profil, valable pour tout fournisseur : le meilleur mode est l'un des modes vérifiés ; un outil nommé vérifié donne tool_forced.
+    expect(profile.structured_modes).toContain(profile.structured);
+    if (profile.tool_choice.includes('named')) expect(profile.structured_modes).toContain('tool_forced');
+    // Attendus documentés par fournisseur (données, pas de branche sur le nom) : Anthropic compatible OpenAI, pas de cache de prompt.
+    const documented = DOCUMENTED[id];
+    if (documented?.cache !== undefined) expect(profile.cache).toBe(documented.cache);
   });
 
   // Cas synthétiques : écrits à la main, jamais réenregistrés.
@@ -210,8 +240,8 @@ describe('cassettes : aucun secret (test canari)', () => {
   const listFiles = () => readdirSync(CASSETTES, { recursive: true, encoding: 'utf8' }).filter((f) => f.endsWith('.json'));
   const files = listFiles();
 
-  test('les cassettes existent : 2 fournisseurs x (6 réels + 4 synthétiques)', () => {
-    expect(listFiles()).toHaveLength(2 * 10);
+  test('les cassettes existent : 3 fournisseurs x (6 réels + 4 synthétiques)', () => {
+    expect(listFiles()).toHaveLength(ALL_PROVIDERS.length * 10);
   });
 
   test.each(files)('%s ne contient ni clé, ni Authorization, ni Bearer', (file) => {

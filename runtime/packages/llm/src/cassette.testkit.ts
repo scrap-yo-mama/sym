@@ -79,7 +79,7 @@ export function scrub(text: string, secrets: string[], strict = false): string {
 }
 
 export interface ProviderFixture {
-  id: 'deepinfra' | 'openrouter';
+  id: 'deepinfra' | 'openrouter' | 'anthropic';
   baseUrl: string;
   apiKey: Secret;
   model: string;
@@ -89,28 +89,37 @@ export interface ProviderFixture {
 const DEFAULT_BASE = {
   deepinfra: 'https://api.deepinfra.com/v1/openai',
   openrouter: 'https://openrouter.ai/api/v1',
+  anthropic: 'https://api.anthropic.com/v1',
 } as const;
 
-/** Modèles P0. OpenRouter : GLM 5.3 flash, appel d'outils et structured_outputs, ~0,15 $ / 0,50 $ le million (relevé 2026-10-01). */
-const P0_MODELS = { deepinfra: 'zai-org/GLM-5.3', openrouter: 'z-ai/glm-5.3-flash' } as const;
+/**
+ * Modèles P0. OpenRouter : GLM 5.3 flash, appel d'outils et structured_outputs, ~0,15 $ / 0,50 $ le million (relevé 2026-10-01).
+ * Anthropic (mode compatible OpenAI, D-42 : fournisseur LLM de test du projet) : `LLM_TEST_MODEL` en enregistrement seulement
+ * (la clé de correspondance contient le modèle : le rejeu ne dépend jamais de l'environnement). DeepInfra et OpenRouter ne
+ * servent plus qu'au REJEU de leurs cassettes existantes.
+ */
+const P0_MODELS = { deepinfra: 'zai-org/GLM-5.3', openrouter: 'z-ai/glm-5.3-flash', anthropic: 'claude-opus-4-8' } as const;
+
+const KEY_VAR = { deepinfra: 'DEEPINFRA_API_KEY', openrouter: 'OPENROUTER_API_KEY', anthropic: 'ANTHROPIC_API_KEY' } as const;
+const BASE_VAR = { deepinfra: 'DEEPINFRA_BASE_URL', openrouter: 'OPENROUTER_BASE_URL', anthropic: 'ANTHROPIC_BASE_URL' } as const;
 
 export function providerFixture(id: ProviderFixture['id'], env: NodeJS.ProcessEnv = process.env): ProviderFixture {
   const record = cassetteMode(env) === 'record';
-  const keyVar = id === 'deepinfra' ? 'DEEPINFRA_API_KEY' : 'OPENROUTER_API_KEY';
-  const baseVar = id === 'deepinfra' ? 'DEEPINFRA_BASE_URL' : 'OPENROUTER_BASE_URL';
+  const keyVar = KEY_VAR[id];
+  const baseVar = BASE_VAR[id];
   const key = record ? env[keyVar] : undefined;
   if (record && (key === undefined || key === '')) throw new Error(`record : ${keyVar} absente de l'environnement`);
   return {
     id,
     baseUrl: (record ? env[baseVar] : undefined) ?? DEFAULT_BASE[id],
     apiKey: new Secret(key ?? 'replay-placeholder-not-a-key'),
-    model: P0_MODELS[id],
+    model: (record && id === 'anthropic' ? env['LLM_TEST_MODEL'] : undefined) || P0_MODELS[id],
     ...(id === 'openrouter' ? { extraBody: { provider: { require_parameters: true } } } : {}),
   };
 }
 
 export function secretValuesFromEnv(env: NodeJS.ProcessEnv = process.env): string[] {
-  return ['DEEPINFRA_API_KEY', 'OPENROUTER_API_KEY'].map((k) => env[k]).filter((v): v is string => typeof v === 'string' && v !== '');
+  return (Object.values(KEY_VAR) as string[]).map((k) => env[k]).filter((v): v is string => typeof v === 'string' && v !== '');
 }
 
 interface Active {
