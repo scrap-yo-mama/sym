@@ -9,6 +9,8 @@ declare module 'vitest' {
   export interface ProvidedContext {
     pgAdminUrl: string;
     pgVersion: string;
+    /** Identifiant Docker du conteneur PostgreSQL (docker exec : pg_dump et pg_restore de la version testée, 4.6). */
+    pgContainerId: string;
   }
 }
 
@@ -18,6 +20,7 @@ export default async function setup(project: TestProject): Promise<() => Promise
   const container = await new PostgreSqlContainer(`postgres:${version}`).start();
   project.provide('pgAdminUrl', container.getConnectionUri());
   project.provide('pgVersion', version);
+  project.provide('pgContainerId', container.getId());
   return async () => {
     await container.stop();
   };

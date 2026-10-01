@@ -12,6 +12,7 @@ export * from './connection.js';
 export * from './health.js';
 export * from './extension.js';
 export * from './migrate.js';
+export * from './ops/index.js';
 export * from './pacing.js';
 export * from './partitions.js';
 export * from './rls.js';

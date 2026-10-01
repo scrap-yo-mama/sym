@@ -5,7 +5,7 @@
 import { randomBytes } from 'node:crypto';
 import { Writable } from 'node:stream';
 import { createKeyCheck, createLogger, generateMasterKey, MasterKey, secretValues } from '@runtime/core';
-import { beatWorker, KEY_CHECK_SETTING, loadMigrations, migrateDown, migrateUp } from '@runtime/db';
+import { beatWorker, expectedSchemaVersion, KEY_CHECK_SETTING, loadMigrations, migrateDown, migrateUp, schemaVersionRefusal } from '@runtime/db';
 import type { FastifyBaseLogger } from 'fastify';
 import { afterAll, afterEach, describe, expect, test } from 'vitest';
 import { createTestDatabase, withClient } from '../../../tests/helpers/pg.js';
@@ -139,7 +139,7 @@ describe('sondes', () => {
       await migrateUp({ connectionString: tdb.url });
       const newer = loadMigrations().at(-1)!.version + 1;
       await withClient(tdb.url, (c) => c.query("INSERT INTO schema_migrations (version, name, checksum) VALUES ($1, 'zz_test_future', 'x')", [newer]));
-      await expect(prepareServer(serverEnv(tdb.url, generateMasterKey(), token()))).rejects.toThrow(new RegExp(`version ${newer}.*plus récent`));
+      await expect(prepareServer(serverEnv(tdb.url, generateMasterKey(), token()))).rejects.toThrow(schemaVersionRefusal(newer, expectedSchemaVersion(), 'server')!);
     } finally {
       await tdb.drop();
     }

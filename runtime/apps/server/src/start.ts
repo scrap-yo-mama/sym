@@ -9,7 +9,7 @@
 // contre un retour d'image sans restauration). Une erreur fatale pendant l'initialisation différée (clé, amorçage) est
 // remise à `onFatal` (index.ts : message clair puis sortie 1).
 import { initTelemetry, kekFor, type Telemetry } from '@runtime/core';
-import { currentSchemaVersion, createDb, expectedSchemaVersion, holdSecretsLock, KeyCheckError, keyCheck } from '@runtime/db';
+import { currentSchemaVersion, createDb, expectedSchemaVersion, holdSecretsLock, KeyCheckError, keyCheck, schemaVersionRefusal } from '@runtime/db';
 import type { FastifyBaseLogger, FastifyInstance } from 'fastify';
 import pg from 'pg';
 import { buildServer } from './app.js';
@@ -37,11 +37,9 @@ const BOOTSTRAP_REQUIRED =
   'premier démarrage sans ADMIN_BOOTSTRAP_TOKEN : refusé. Posez ADMIN_BOOTSTRAP_TOKEN (ou _FILE, `openssl rand -base64 32`) ' +
   'pour ouvrir l’assistant /setup ; aucune route ne s’ouvre sans owner.';
 
+/** Schéma plus récent que le code : même texte que le `worker` (schemaVersionRefusal, 14 § 5-6). */
 const newerSchema = (version: number, expected: number) =>
-  new StartupError(
-    `schéma de base en version ${version}, plus récent que ce code (version ${expected} attendue) : refus de démarrer. ` +
-      'Déployez l’image correspondant au schéma, ou restaurez la sauvegarde prise avant la migration.',
-  );
+  new StartupError(schemaVersionRefusal(version, expected, 'server') ?? `schéma de base en version ${version} : refus de démarrer.`);
 
 /** Erreurs qui ne se corrigent pas en attendant : mauvaise clé, amorçage impossible, schéma trop récent. */
 const isFatal = (error: unknown) => error instanceof StartupError || error instanceof KeyCheckError;

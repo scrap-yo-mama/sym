@@ -24,6 +24,8 @@ import { describe, test } from "vitest";
 // (E2) ; le volet tunnel est repris par 2.7 avec assert_tunnel_single_user. assert_consent_before_capture,
 // assert_optional_hosts, assert_no_cookie_in_tunnel_mode : apps/extension/src/core/*.unit.test.ts et e2e/extension.e2e.ts.
 // INV6, X4 (1.4) : assert_no_ip_change_after_refusal est dans tests/network/network-modes.unit.test.ts (proxy de test local).
+// INV9 et exploitation (4.6) : assert_diagnostics_redacted (packages/db/src/ops/ops.integration.test.ts, apps/cli/src/cli.ops.integration.test.ts),
+// assert_backup_restore_roundtrip, assert_upgrade_n_minus_1, assert_rollback_restores_state (tests/operations.integration.test.ts).
 // INV9 et INV8 (1.10) : assert_no_telemetry (serveur + worker + run, 0 destination non locale), assert_otel_off_by_default,
 // assert_otel_optin_local_only, assert_no_traceparent_outbound et l'extension de assert_no_secret_in_logs à toutes les sorties
 // sont dans tests/observability.integration.test.ts (dont le contrôle des modules résolus par un vrai server + worker : ni
@@ -45,7 +47,6 @@ describe("invariants (à implémenter)", () => {
   test.todo("assert_erasure_complete — exécuteur réel : RunContext.excludeSubjects avant collecte et avant écriture, dedup_keys.key_hash = dedupKeyHash"); // RGPD, tâche(s) 1.6, 1.7
   test.todo("assert_pacing_key_is_domain"); // politesse, tâche(s) 1.9
   test.todo("assert_export_no_secret"); // INV5, INV8, tâche(s) 3.12
-  test.todo("assert_diagnostics_redacted"); // INV9, tâche(s) 4.6 (`runtime diagnostics`, 10-taches : 1.10 ne le porte pas)
   test.todo("assert_ui_strings_no_forbidden_words"); // INV6, tâche(s) 3.5
   test.todo("assert_access_report_first"); // étape 0, tâche(s) 1.11, 2.1
   test.todo("assert_a11y_axe_clean"); // 06 § 1, tâche(s) 3.9, 3.6 (passage ponctuel de 3.3 consigné dans l'ADR 0002)

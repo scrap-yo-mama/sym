@@ -476,8 +476,14 @@ async function assertDeferredColumnsEmpty(db: Queryable): Promise<void> {
  * Clé perdue, acceptée explicitement par l'administrateur : tous les secrets lisibles passent en `unreadable`
  * (conservés, « À ressaisir »), et `key_check` est réécrit pour la clé courante sous une nouvelle version.
  * Jamais appelé implicitement : aucune nouvelle clé n'est adoptée en silence.
+ * `inTransaction` (commande `runtime secrets accept-key-loss`, 4.6) : travail complémentaire exécuté dans la MÊME
+ * transaction, juste avant le COMMIT (colonnes chiffrées que la clé perdue rend inutilisables).
  */
-export async function acceptKeyLoss(client: pg.ClientBase, current: MasterKey): Promise<{ unreadable: number; version: number }> {
+export async function acceptKeyLoss(
+  client: pg.ClientBase,
+  current: MasterKey,
+  opts: { inTransaction?: (client: pg.ClientBase) => Promise<void> } = {},
+): Promise<{ unreadable: number; version: number }> {
   await client.query('BEGIN');
   try {
     const record = await readSetting<KeyCheckRecord>(client, KEY_CHECK_SETTING);
@@ -488,6 +494,7 @@ export async function acceptKeyLoss(client: pg.ClientBase, current: MasterKey): 
     );
     await writeSetting(client, KEY_CHECK_SETTING, createKeyCheck(current, version));
     await client.query('DELETE FROM settings WHERE key = $1', [REKEY_STATE_SETTING]);
+    await opts.inTransaction?.(client);
     await client.query('COMMIT');
     return { unreadable: rowCount ?? 0, version };
   } catch (error) {
