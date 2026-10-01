@@ -6,6 +6,7 @@
 // `blocked_by_protection` quel que soit le code (200 compris) ; les codes `detail` sont stables et ne contiennent
 // jamais une valeur de la cible.
 import { DslError } from '../dsl/errors.js';
+import { findAccessRefused } from '../net/access-refusal.js';
 import { findDomainNotAllowed } from '../net/domain-lock.js';
 import { findSsrfBlocked } from '../net/guard.js';
 import { NetworkConfigError } from '../net/modes/definitions.js';
@@ -128,6 +129,9 @@ function errorCodes(error: unknown): { codes: string[]; names: string[]; message
 /** Erreur levée par un transport → classe. Les messages d'origine ne sortent jamais (codes stables seulement). */
 export function classifyTransportError(error: unknown): ExecFailure {
   if (error instanceof TransportRefusal) return error.failure;
+  // Module d'accès (1.11) : robots.txt a refusé le saut AVANT toute connexion ; sa classe est gardée telle quelle.
+  const access = findAccessRefused(error);
+  if (access !== undefined) return fail(access.failureClass, access.retryable, access.detail);
   const ssrf = findSsrfBlocked(error);
   if (ssrf !== undefined) return fail('forbidden', false, 'ssrf_blocked');
   // Verrou de domaines (tâche 1.6) : une redirection ou une requête hors des domaines de l'API est une faute de stratégie.

@@ -36,6 +36,7 @@ contrôle de version sortant ni de rapport d’usage.
 |---|---|---|---|---|
 | `ADMIN_BOOTSTRAP_TOKEN` (`ADMIN_BOOTSTRAP_TOKEN_FILE`) secret | server, CLI | obligatoire tant qu’aucun owner n’existe | aucun | 32 caractères au moins. Jeton de l’assistant de premier démarrage ; ni stocké ni réaffiché. À retirer une fois le premier administrateur créé (`runtime doctor` le signale). |
 | `ADMIN_EMAIL` | server | facultative | aucun | Restreint l’adresse acceptée par l’assistant de premier démarrage. |
+| `INSTANCE_CONTACT` | worker | obligatoire avant la première enquête, si l’assistant de premier démarrage ne l’a pas saisi | aucun | Contact de l’opérateur de l’instance (URL http(s), `mailto:` ou adresse électronique), annoncé dans le User-Agent du robot : `Scrapyomama/<version> (+<contact>)`. Le réglage saisi à l’assistant l’emporte. |
 
 ## Exécution
 

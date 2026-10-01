@@ -85,6 +85,12 @@ const runOf = async (apiId: string) => {
   return (await withActor(pool, actorA, (tx) => readRun(tx, runId)))!;
 };
 
+/** Requêtes de contenu reçues par un hôte : hors `/robots.txt`, lu d'abord par le module d'accès (1.11). */
+const contentTotal = async (host: string): Promise<number> =>
+  Object.entries((await client.stats()).hosts[host]?.paths ?? {})
+    .filter(([path]) => path !== '/robots.txt')
+    .reduce((n, [, count]) => n + count, 0);
+
 /** `error_detail` (code stable) n'est pas dans le contrat `Run` : lu dans la table. */
 const detailOf = async (runId: string) => (await pool.query<{ error_detail: string | null }>('SELECT error_detail FROM runs WHERE id = $1', [runId])).rows[0]!.error_detail;
 
@@ -153,7 +159,7 @@ describe('assert_no_circumvention : garde de classification avant extraction et 
     expect(repair).not.toHaveBeenCalled();
     expect(await routeLog(run.id)).toEqual([{ failure_class: 'blocked_by_protection', next: 'stop', agent_invoked: false }]);
     // Une seule requête : aucun essai après la détection.
-    expect((await client.stats()).hosts[HOSTS.challenge200]?.total).toBe(1);
+    expect(await contentTotal(HOSTS.challenge200)).toBe(1);
     // La page de défi n'entre nulle part : ni dans le run, ni dans ses journaux.
     const dump = JSON.stringify([run, (await pool.query('SELECT event, data FROM run_logs WHERE run_id = $1', [run.id])).rows]);
     for (const text of ['Security check', 'verify you are human', 'zz_test_challenge_0001', 'not a robot']) expect(dump).not.toContain(text);
@@ -232,7 +238,7 @@ describe('assert_no_circumvention : garde par preuves avant réparation (défi n
     expect(await detailOf(run.id)).toBe('challenge_page');
     expect(run.attempts[0]).toMatchObject({ result: 'blocked_by_protection' });
     expect(await routeLog(run.id)).toEqual([{ failure_class: 'blocked_by_protection', next: 'stop', agent_invoked: false, reclassified_from: 'extraction' }]);
-    expect((await client.stats()).hosts[HOSTS.challenge200]?.total).toBe(1);
+    expect(await contentTotal(HOSTS.challenge200)).toBe(1);
     // Cadence : la classe corrigée est rapportée (refus) ; le disjoncteur la compte.
     const state = (await pool.query<{ consecutive_failures: number }>('SELECT consecutive_failures FROM domain_pacing_state WHERE domain = $1', [HOSTS.challenge200])).rows[0];
     expect(state).toMatchObject({ consecutive_failures: 1 });
@@ -258,14 +264,14 @@ describe('assert_circuit_opens_on_refusals : disjoncteur par domaine (04 §7)', 
     const state = (await pool.query<{ circuit_state: string; consecutive_failures: number }>('SELECT circuit_state, consecutive_failures FROM domain_pacing_state WHERE domain = $1', [HOSTS.signed403]))
       .rows[0]!;
     expect(state).toMatchObject({ circuit_state: 'open', consecutive_failures: 5 });
-    expect((await client.stats()).hosts[HOSTS.signed403]?.total).toBe(5);
+    expect(await contentTotal(HOSTS.signed403)).toBe(5);
     // Une autre API du même domaine est suspendue aussi (clé = domaine), sans requête ni changement de réseau.
     const other = await insertApi('zz_test_circuit_other', headingSpec(HOSTS.signed403, '/plain-forbidden'));
     const blocked = await runOf(other);
     expect(blocked).toMatchObject({ state: 'failed', failure_class: 'rate_limited', retryable: true });
     expect(await detailOf(blocked.id)).toBe('pacing_circuit_open');
     expect(blocked.attempts.map((a) => a.network)).toEqual(['direct']);
-    expect((await client.stats()).hosts[HOSTS.signed403]?.total).toBe(5);
+    expect(await contentTotal(HOSTS.signed403)).toBe(5);
     expect(repair).not.toHaveBeenCalled();
   });
 });

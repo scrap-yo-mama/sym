@@ -49,6 +49,8 @@ export type BrowserExecutorOptions = Omit<DeclarativeRunOptions, 'transport'> & 
   readonly guard: SsrfGuard;
   readonly navigationTimeoutMs?: number;
   readonly renderWaitMs?: number;
+  /** User-Agent du robot (1.11), ajouté à celui du navigateur. */
+  readonly userAgent?: string;
 };
 
 const maxBytesOf = (options: BrowserExecutorOptions): number => options.spec.limits?.max_response_bytes ?? 5_000_000;
@@ -162,10 +164,32 @@ async function withRunContext(
 ): Promise<DeclarativeRunResult> {
   return options.pool.run(options.signal, async (browser) => {
     const nav = navigationGuard();
+    /**
+     * Refus de robots.txt (1.11, INV11) d'une navigation du cadre principal (page d'accueil d'E2, page de la stratégie) :
+     * coupée sans connexion, elle donne sa classe à l'essai. Une sous-ressource refusée est seulement coupée.
+     */
+    let robotsRefusal: ExecFailure | undefined;
+    const access = options.access;
     const rc = await openRunContext(browser, {
       egressServer: options.egress.server,
       allowedHosts: options.spec.request.allowed_hosts,
-      admit: async (request) => nav.admit(request),
+      ...(options.userAgent === undefined ? {} : { userAgent: options.userAgent }),
+      admit: async (request) => {
+        if (access !== undefined) {
+          const decision = await access(request.url()).catch((): { allowed: false; failure: ExecFailure } => ({ allowed: false, failure: { failure_class: 'robots_unreachable', retryable: true, detail: 'robots_check_failed' } }));
+          if (!decision.allowed) {
+            let main = false;
+            try {
+              main = request.isNavigationRequest() && request.frame().parentFrame() === null;
+            } catch {
+              // Requête sans cadre : jamais la navigation de la page du run.
+            }
+            if (main) robotsRefusal ??= decision.failure;
+            return false;
+          }
+        }
+        return nav.admit(request);
+      },
       // Navigation lancée par la page vers un hôte hors API (redirection JS d'un défi vers son éditeur) : coupée par la
       // politique de domaines sans passer par `admit`, elle compte comme toute navigation non demandée.
       onViolation: (_host, request) => {
@@ -182,6 +206,7 @@ async function withRunContext(
       rc.page.setDefaultTimeout(options.navigationTimeoutMs ?? BROWSER_NAVIGATION_TIMEOUT_MS);
       const result = await fn(rc, strategy, nav);
       options.signal.throwIfAborted();
+      if (!result.ok && robotsRefusal !== undefined) return { ok: false, failure: robotsRefusal, pages: result.pages, requests: result.requests };
       return refine(result, options.egress, strategy);
     } finally {
       options.signal.removeEventListener('abort', onAbort);

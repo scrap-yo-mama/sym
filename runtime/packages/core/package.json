@@ -18,6 +18,10 @@
     "./exec": {
       "types": "./dist/exec/index.d.ts",
       "default": "./dist/exec/index.js"
+    },
+    "./access": {
+      "types": "./dist/access/index.d.ts",
+      "default": "./dist/access/index.js"
     }
   },
   "files": [

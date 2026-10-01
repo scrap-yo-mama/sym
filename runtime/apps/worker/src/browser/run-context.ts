@@ -9,6 +9,7 @@
 // stratégie ; les sous-ressources tierces du site coupées ne changent jamais la classe d'un échec.
 // Contrôle optionnel des requêtes autorisées (`admit`, E3 en script) : cadence par domaine (1.9), plafond
 // `max_requests_per_run`, actions d'écriture (`allow_write_actions`) ; un refus coupe la requête sans connexion.
+import { browserUserAgent } from '@runtime/core/access';
 import type { APIRequest, APIRequestContext, Browser, BrowserContext, Page, Request } from 'playwright-core';
 
 export type RunContextOptions = {
@@ -21,9 +22,29 @@ export type RunContextOptions = {
    * un WebSocket) : E3 en script tue alors l'enfant du bac à sable si la requête lui est imputable.
    */
   readonly onViolation?: (host: string, request?: Request) => void;
-  /** Requête d'un domaine autorisé : `false` la coupe (cadence refusée, plafond atteint, action d'écriture). */
+  /** Requête d'un domaine autorisé : `false` la coupe (cadence refusée, plafond atteint, robots.txt, action d'écriture). */
   readonly admit?: (request: Request) => Promise<boolean>;
+  /**
+   * User-Agent du robot (`buildUserAgent`, tâche 1.11) : ajouté APRÈS celui du navigateur, qui reste tel qu'il est
+   * (aucun masquage, X2, 17 §5).
+   */
+  readonly userAgent?: string;
 };
+
+/** User-Agent propre du navigateur (CDP `Browser.getVersion`) ; vide s'il est illisible. */
+async function ownUserAgent(browser: Browser): Promise<string> {
+  try {
+    const session = await browser.newBrowserCDPSession();
+    try {
+      const version = (await session.send('Browser.getVersion')) as { userAgent?: unknown };
+      return typeof version.userAgent === 'string' ? version.userAgent : '';
+    } finally {
+      await session.detach().catch(() => undefined);
+    }
+  } catch {
+    return '';
+  }
+}
 
 export type RunContext = {
   readonly context: BrowserContext;
@@ -58,7 +79,9 @@ export async function openRunContext(browser: Browser, options: RunContextOption
     if (violations.length < 100) violations.push(host);
     options.onViolation?.(host, request);
   };
+  const userAgent = options.userAgent === undefined ? undefined : browserUserAgent(await ownUserAgent(browser), options.userAgent);
   const context = await browser.newContext({
+    ...(userAgent === undefined ? {} : { userAgent }),
     proxy: { server: options.egressServer },
     serviceWorkers: 'block',
     acceptDownloads: false,

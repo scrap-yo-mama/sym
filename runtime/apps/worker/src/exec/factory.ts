@@ -8,7 +8,8 @@
 // refuse de démarrer si l'enfant pourrait lire l'environnement du worker (D-30).
 import { DomainPacer, type SandboxEngine } from '@runtime/core';
 import { SsrfGuard, ssrfPolicyFromEnv, startEgressProxy, type EgressProxy } from '@runtime/core/net';
-import { PgPacingStore, secretStore } from '@runtime/db';
+import { resolveInstanceContact, RobotsCache } from '@runtime/core/access';
+import { PgPacingStore, readInstanceContactSetting, secretStore } from '@runtime/db';
 import { cgroupMemoryLimitBytes, cgroupMemoryWorkingSetBytes } from '../browser/cgroup.js';
 import { BrowserPool, playwrightLauncher } from '../browser/pool.js';
 import { ProcessSandboxEngine, sandboxOptionsFromEnv, type IsolationProbe } from '../sandbox/index.js';
@@ -63,8 +64,12 @@ export function productionExecutorFactory(env: Readonly<Record<string, string | 
       logger.info({ browserConcurrency: config.browserConcurrency, source: config.browserConcurrencySource }, 'pool Chromium prêt (lancement à la demande)');
     }
     const pool_ = browsers;
+    // Module d'accès (1.11) : un cache de robots.txt pour le worker (24 h au plus), contact de l'instance relu à chaque run
+    // (réglage de l'assistant, puis INSTANCE_CONTACT), version annoncée dans le User-Agent.
+    const robotsCache = new RobotsCache();
+    const instanceContact = async (): Promise<string | null> => resolveInstanceContact(await readInstanceContactSetting(pool), env);
     return {
-      executor: createStrategyExecutor({ pool, guard, pacer, browsers, secrets, logger, script: { engine, loadScript: loadInlineScript } }),
+      executor: createStrategyExecutor({ pool, guard, pacer, browsers, secrets, logger, script: { engine, loadScript: loadInlineScript }, robotsCache, instanceContact, version: config.version }),
       browserContexts: () => pool_?.active() ?? 0,
       close: async () => {
         await pool_?.close();

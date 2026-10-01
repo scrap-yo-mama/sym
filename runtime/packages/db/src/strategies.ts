@@ -86,6 +86,15 @@ export async function readProxySettings(db: Queryable): Promise<unknown> {
   return rows[0]?.value ?? [];
 }
 
+/**
+ * Contact de l'instance saisi à l'assistant de premier démarrage (réglage `instance_contact`, 17 §5), lu par le worker
+ * pour le User-Agent du robot ; `undefined` s'il n'est pas posé (repli : `INSTANCE_CONTACT`).
+ */
+export async function readInstanceContactSetting(db: Queryable): Promise<unknown> {
+  const { rows } = await db.query<{ value: unknown }>("SELECT value FROM settings WHERE key = 'instance_contact'");
+  return rows[0]?.value;
+}
+
 const ITEMS_PER_INSERT = 500;
 
 /**
