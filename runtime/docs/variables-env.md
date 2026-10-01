@@ -29,6 +29,10 @@ contrôle de version sortant ni de rapport d’usage.
 | `PORT` | server | facultative | 3000 | Port d’écoute du `server`. Respecte la valeur injectée par la plateforme. |
 | `HOST` | server | facultative | 0.0.0.0 | Adresse d’écoute du `server`. |
 | `TRUST_PROXY` | server | facultative | 0 | Nombre de proxys devant l’instance (1 chez Render, Railway et Heroku), ou liste d’IP et CIDR. Jamais `true` sans proxy : un client choisirait son IP par `X-Forwarded-For`. |
+| `DISABLE_TUNNEL` | server | facultative | false | `true` : aucune route WSS ni passerelle du tunnel ; les runs en mode tunnel n’ont alors aucune extension à qui s’adresser. |
+| `GATEWAY_INSTANCE` | server | facultative | hôte + pid + aléa | Identifiant de cette instance pour la passerelle du tunnel (canal de notification PostgreSQL de ses commandes) ; à fixer si plusieurs instances partagent la base. |
+| `TUNNEL_EXTENSION_IDS` | server | facultative | aucun | Identifiants (32 lettres a à p), séparés par des virgules, des extensions autorisées à ouvrir le tunnel : l’origine `chrome-extension://<id>` est vérifiée à l’ouverture. Tant que l’extension n’est pas publiée au Chrome Web Store, posez celui de votre extension empaquetée, sinon aucune extension n’est acceptée. |
+| `TUNNEL_ALLOW_ANY_EXTENSION` | server | facultative | false | `true` accepte toute extension (développement, extension décompressée) ; à ne pas poser en production. |
 
 ## Accès
 
