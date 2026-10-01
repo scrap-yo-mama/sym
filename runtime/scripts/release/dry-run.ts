@@ -16,11 +16,15 @@ import { checkRepo as checkGates } from './gates.ts';
 import { planRelease, type ReleasePlan } from './plan.ts';
 import { catalogNames, checkSbomFile, generateLockfileSbom } from './sbom.ts';
 import { checkHistory as checkX6History } from '../check-x6.ts';
+import { identityOf, publicRepository, verifyBlock } from '../vitrine/lib/identity.ts';
+import { checksumResult, imageLabelProblems, verifySnippetProblems } from '../vitrine/lib/verify.ts';
+import { readRepoMetadata } from '../vitrine/lib/surface.ts';
+import { readReadme, verifyBlockProblems } from '../vitrine/lib/readme.ts';
 import { attestBlob, cosignVersion, generateTestKey, negativeChecks, type Refusal, signBlob, userVerifyCommand, verifyBlob, verifyBlobAttestation } from './sign.ts';
 
-/** Dépôt et image de la release réelle (nom indicatif de la documentation ; rien n'y est publié). */
-export const REPOSITORY = 'scrap-yo-mama/sym';
-export const IMAGE = 'ghcr.io/scrap-yo-mama/sym';
+/** Dépôt et image de la release réelle, lus dans l'identité publique (PUBLIC_REPOSITORY, 4.12) ; rien n'y est publié. */
+export const REPOSITORY = publicRepository();
+export const IMAGE = identityOf(REPOSITORY).image;
 
 export type Artifact = { name: string; sha256: string; bytes: number };
 export type DryRunReport = {
@@ -31,7 +35,9 @@ export type DryRunReport = {
   verified: string[];
   /** Contrôles négatifs : chacun doit être refusé, sur la vérification de signature (bundle valide d'un autre fichier). */
   refusals: Refusal[];
-  image?: { reference: string; id: string; user: string; uid: string };
+  image?: { reference: string; id: string; user: string; uid: string; labels: Record<string, string> };
+  /** `assert_verify_snippet_works` : sha256sum -c rejoué sur SHA256SUMS de la release à blanc ; identité du bloc « Verify » du README. */
+  verifySnippet: { checksum: string };
   verifyCommand: string;
 };
 
@@ -64,7 +70,8 @@ function buildLocalImage(runtimeDir: string, plan: ReleasePlan): NonNullable<Dry
     const user = sh('docker', ['image', 'inspect', '--format', '{{.Config.User}}', local], runtimeDir);
     // Par le point d'entrée de l'image (USER root, descente aussitôt sur pwuser) : uid sous lequel tourne une commande.
     const uid = sh('docker', ['run', '--rm', local, 'id', '-u'], runtimeDir);
-    return { reference: `${IMAGE}:${plan.version}`, id, user, uid };
+    const labels = JSON.parse(sh('docker', ['image', 'inspect', '--format', '{{json .Config.Labels}}', local], runtimeDir)) as Record<string, string>;
+    return { reference: `${IMAGE}:${plan.version}`, id, user, uid, labels };
   } finally {
     try {
       sh('docker', ['rmi', '--force', local], runtimeDir);
@@ -110,6 +117,11 @@ export function runDryRun(options: { runtimeDir: string; tag?: string; outDir?: 
     // 3. Image (optionnelle, locale) : son identifiant devient le sujet signé.
     const image = options.withImage ? buildLocalImage(runtimeDir, plan) : undefined;
     if (image && image.uid !== '1001') throw new Error(`l'image ne descend pas sur pwuser (uid ${image.uid}, USER ${image.user || 'vide'})`);
+    // assert_image_labels (4.12) : étiquettes OCI de l'image construite = identité publique.
+    if (image) {
+      const labelProblems = imageLabelProblems(image.labels, identityOf(REPOSITORY), readRepoMetadata().description);
+      if (labelProblems.length > 0) throw new Error(`étiquettes de l'image : ${labelProblems.join(' ; ')}`);
+    }
     if (image) writeFileSync(join(out, 'image.json'), `${JSON.stringify({ reference: image.reference, tags: plan.imageTags, digest: image.id }, null, 2)}\n`);
 
     // 4. Provenance : prédicat SLSA v1 minimal. La provenance dit qui a construit et d'où, pas que l'artefact est sain.
@@ -123,6 +135,14 @@ export function runDryRun(options: { runtimeDir: string; tag?: string; outDir?: 
     const subjects = [extensionZip, 'sbom-lockfile.cdx.json', 'sbom-production.cdx.json', ...(image ? ['image.json'] : [])];
     writeFileSync(join(out, 'SHA256SUMS'), `${subjects.map((n) => `${sha256(join(out, n))}  ${n}`).join('\n')}\n`);
     subjects.push('SHA256SUMS');
+    // assert_verify_snippet_works (4.12) : le bloc « Verify » du README cite l'identité de cette chaîne, et `sha256sum -c` réussit.
+    const identity = identityOf(REPOSITORY);
+    const snippet = [
+      ...verifySnippetProblems(verifyBlock(identity), identity),
+      ...(['en', 'fr'] as const).flatMap((lang) => verifyBlockProblems(readReadme(lang), identity).map((p) => `README ${lang} : ${p}`)),
+    ];
+    const sums = checksumResult(out);
+    if (snippet.length > 0 || !sums.ok) throw new Error(`bloc « Verify » : ${[...snippet, ...(sums.ok ? [] : [`sha256sum -c : ${sums.output}`])].join(' ; ')}`);
 
     // 6. Signature (clé de test jetable), attestations de SBOM et de provenance.
     const key = generateTestKey(keyDir);
@@ -152,6 +172,7 @@ export function runDryRun(options: { runtimeDir: string; tag?: string; outDir?: 
     const report: DryRunReport = {
       plan, cosign: cosignVersion() ?? 'inconnue', artifacts, verified, refusals,
       ...(image ? { image } : {}),
+      verifySnippet: { checksum: sums.output.split('\n').filter(Boolean).join(' ; ') },
       verifyCommand: userVerifyCommand(REPOSITORY, plan.tag, `${IMAGE}@sha256:<empreinte>`),
     };
     writeFileSync(join(out, 'release-report.json'), `${JSON.stringify(report, null, 2)}\n`);
@@ -172,6 +193,7 @@ if (import.meta.main) {
   console.log(`  tags d'image : ${report.plan.imageTags.join(', ')} (jamais latest)`);
   for (const a of report.artifacts) console.log(`  ${a.sha256.slice(0, 12)}  ${String(a.bytes).padStart(9)}  ${a.name}`);
   console.log(`  vérifiés : ${report.verified.length} (cosign verify-blob / verify-blob-attestation : OK)`);
+  console.log(`  bloc « Verify » du README : identité conforme ; sha256sum -c SHA256SUMS : ${report.verifySnippet.checksum.replace(/\s+/g, ' ').slice(0, 120)}`);
   for (const r of report.refusals) console.log(`  refus attendu : ${r.case} -> ${r.refused ? `refusé (${r.reason})` : 'ACCEPTÉ'}`);
   if (report.image) console.log(`  image locale : uid ${report.image.uid}, USER ${report.image.user}, id ${report.image.id.slice(0, 19)}… (rien de poussé)`);
   console.log(`  sorties : ${outDir}`);

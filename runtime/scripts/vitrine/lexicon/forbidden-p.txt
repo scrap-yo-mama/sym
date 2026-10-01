@@ -1,0 +1,51 @@
+# Liste P (promesses) : 0 occurrence sur toute surface de la vitrine (20 §2.2, 22b §1). Union fr + en.
+# Interim de la tâche 4.12 : le paquet commun `forbidden.<langue>.txt` de 3.19 / 3.20 la remplacera ; mêmes entrées reprises.
+# Une entrée par ligne ; `racine-` = préfixe de mot ; normalisation : casse, accents, traits d'union, espaces.
+indetectable
+indetectables
+undetectable
+undetected
+contourn-
+circumvent-
+bypass-
+debloqu-
+unblock-
+furtiv-
+stealth
+anti-detect
+invisible aux anti-bots
+invisible pour les anti-bots
+invisible to anti-bots
+passe-partout
+dejou-
+franchir une protection
+franchir un defi
+resoudre les captchas
+solve captchas
+comme un humain
+like a human
+human-like
+jamais bloque
+never blocked
+sans limite
+unlimited
+plus de 403
+no more blocks
+evade
+get around
+mode fantome
+ghost mode
+comme un fantome
+like a ghost
+passe a travers les murs
+sans laisser de trace
+leave no trace
+sous les radars
+under the radar
+ni vu ni connu
+incognito
+personne ne te verra
+unseen
+slip past
+sneak
+discretement

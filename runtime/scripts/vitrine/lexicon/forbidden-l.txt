@@ -1,0 +1,9 @@
+# Liste L (termes de limite) : 0 occurrence dans le README et sur la landing, qui n'ont plus de zone de limites (D-46).
+# Hors de ces deux surfaces, seulement dans une phrase égale mot pour mot à une entrée du registre. Union fr + en.
+captcha
+anti-bot
+empreinte
+fingerprint
+rotation
+residentiel
+residential

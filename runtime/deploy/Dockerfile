@@ -14,6 +14,14 @@ RUN pnpm install --frozen-lockfile && pnpm -r --filter '!@runtime/docs' build
 
 # --- Étape 2 : exécution (démarre en root, descend aussitôt sur pwuser : aucun processus ne reste root)
 FROM ${PLAYWRIGHT_IMAGE} AS runtime
+# Étiquettes OCI (tâche 4.12, 22 §3.4, assert_image_labels) : dérivées de l'identité publique du dépôt (PUBLIC_REPOSITORY, source
+# unique : .github/PUBLIC_REPOSITORY ; la release passe `--build-arg PUBLIC_REPOSITORY=${{ github.repository }}`). Le nom MCP est
+# io.github.<propriétaire>/<dépôt>. La description est celle de .github/repo-metadata.json (un test les compare).
+ARG PUBLIC_REPOSITORY=scrap-yo-mama/sym
+LABEL org.opencontainers.image.source="https://github.com/${PUBLIC_REPOSITORY}" \
+      org.opencontainers.image.description="Self-hosted, open-source web data over MCP: describe the data, approve the schema, get an API that repairs itself and stops when a site says no." \
+      org.opencontainers.image.licenses="AGPL-3.0-only" \
+      io.modelcontextprotocol.server.name="io.github.${PUBLIC_REPOSITORY}"
 ENV NODE_ENV=production
 # Version publiée par GET /api/health et /api/version (tâche 4.9) ; posée par la chaîne de release.
 ARG RUNTIME_VERSION=0.0.0

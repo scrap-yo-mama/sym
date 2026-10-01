@@ -66,6 +66,11 @@ jobs:
           echo "image=${repo,,}" >> "$GITHUB_OUTPUT"
           node scripts/release/plan.ts "$TAG" "$repo"
 
+      - name: Identité publique (PUBLIC_REPOSITORY doit égaler GITHUB_REPOSITORY sur le dépôt public ; 22 §3.1)
+        env:
+          PUBLIC_REPOSITORY: ${{ vars.PUBLIC_REPOSITORY }}
+        run: node scripts/vitrine/check.mjs identity
+
       - name: Archive de l'extension, SHA-256 et SBOM du lockfile (CycloneDX 1.7)
         env:
           VERSION: ${{ steps.plan.outputs.version }}
@@ -95,6 +100,7 @@ jobs:
           tags: ${{ steps.plan.outputs.tags }}
           build-args: |
             RUNTIME_VERSION=${{ steps.plan.outputs.version }}
+            PUBLIC_REPOSITORY=${{ github.repository }}
           provenance: mode=max
           sbom: false
 
