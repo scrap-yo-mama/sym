@@ -271,17 +271,26 @@ describe('enquête en tunnel (04 §4 : reconnaissance « en tunnel si la session
     expect(site.hits.some((h) => h.path === '/api/items' && h.via === 'tunnel')).toBe(true);
   });
 
-  test('session requise (politique « direct ») : l’étape 0 et la reconnaissance passent par l’extension, jamais par N1 sans la session', async () => {
+  test('assert_investigation_session_tunnel_only — session requise (politique « direct ») : étape 0, reconnaissance ET essais par l’extension, jamais par N1/N2 sans la session (04 §3.2)', async () => {
     fake.setScenario(MODEL, [scripted.json(PRODUCTS_PROPOSAL)]);
     const apiId = await insertApi('zz_test_fix_session', { requiresSession: true });
     const { runId } = await withActor(pool, actorA, (tx) => startInvestigation(tx, queue, { apiId, ownerId: A, trigger: 'rest', request: { url: site.url(TUN, '/'), description: 'liste', auto_validate: true } }));
-    await waitRun(runId);
+    const run = await waitRun(runId);
     const events = await eventsOf(runId);
     expect((events.find((e) => e.kind === 'reconnaissance.finished')!.payload as { mode: string }).mode).toBe('tunnel');
-    // Avant le premier essai, aucune requête du serveur : rapport d'accès et reconnaissance par l'extension seulement.
-    const reconHits = site.hits.slice(0, site.hits.findIndex((h) => h.path === '/api/items') + 1);
-    expect(reconHits.length).toBeGreaterThan(0);
-    expect(reconHits.every((h) => h.via === 'tunnel')).toBe(true);
+    // Le plan des essais ne contient que le tunnel : un réseau serveur n'a pas la session de l'utilisateur.
+    const testing = events.find((e) => e.kind === 'phase.started' && (e.payload as { phase?: string }).phase === 'testing');
+    const plan = (testing!.payload as { plan: { network: string }[] }).plan;
+    expect(plan.length).toBeGreaterThan(0);
+    expect(plan.every((p) => p.network === 'tunnel')).toBe(true);
+    const attempts = await attemptsOf(runId);
+    expect(attempts.length).toBeGreaterThan(0);
+    expect(attempts.every((a) => a.network === 'tunnel')).toBe(true);
+    expect(run).toMatchObject({ state: 'succeeded' });
+    expect(run.attempts[0]).toMatchObject({ execution: 'fetch', network: 'tunnel', result: 'ok' });
+    // Aucune requête du serveur, de l'étape 0 au dernier essai : tout passe par l'extension.
+    expect(site.hits.length).toBeGreaterThan(0);
+    expect(site.hits.filter((h) => h.via === 'http')).toEqual([]);
   });
 
   test('extension hors ligne dès l’étape 0 → action_requise (transition 3, tunnel_offline), phase close, aucun essai ni appel LLM', async () => {

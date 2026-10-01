@@ -566,8 +566,12 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
 
       // --- 3. Essais du moins cher au plus cher --------------------------------------------------------------------
       await save('testing');
-      const networks: PlanNetwork[] = rungs.map((r) => ({ mode: r.mode, perGbUsd: r.mode === 'direct' ? 0 : r.proxy.price.perGbUsd }));
-      if (tunnelChosen || sessionRequired) networks.push({ mode: 'tunnel', perGbUsd: 0 });
+      // Session requise (04 §3.2, C2) : seul le tunnel porte l'identité de l'utilisateur. Le serveur n'utilise aucun
+      // cookie de session en V1 : un essai N1/N2 partirait sans la session (401/403 → arrêt, puis tunnel élagué, X3)
+      // ou retiendrait une stratégie serveur sans session pour une API à session. Le plan se limite donc au tunnel.
+      const networks: PlanNetwork[] = sessionRequired
+        ? [{ mode: 'tunnel', perGbUsd: 0 }]
+        : [...rungs.map((r) => ({ mode: r.mode, perGbUsd: r.mode === 'direct' ? 0 : r.proxy.price.perGbUsd })), ...(tunnelChosen ? [{ mode: 'tunnel' as const, perGbUsd: 0 }] : [])];
       const plan = buildTrialPlan({
         strategies: built.strategies,
         networks,
