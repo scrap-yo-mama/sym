@@ -4,7 +4,7 @@ import { randomBytes } from 'node:crypto';
 import pg from 'pg';
 import { inject } from 'vitest';
 
-export type TestDatabase = { url: string; name: string; drop: () => Promise<void> };
+export type TestDatabase = { url: string; name: string; drop: () => Promise<void>; dropForce: () => Promise<void> };
 
 async function admin<T>(fn: (client: pg.Client) => Promise<T>): Promise<T> {
   const client = new pg.Client({ connectionString: inject('pgAdminUrl') });
@@ -16,16 +16,86 @@ async function admin<T>(fn: (client: pg.Client) => Promise<T>): Promise<T> {
   }
 }
 
+const DISCONNECT_DEADLINE_MS = 10_000;
+
+/**
+ * Supprime la base une fois ses sessions parties d'elles-mêmes. `pool.end()` et `client.end()` rendent la main dès que
+ * le message Terminate est parti, pas quand le backend a quitté : un `DROP DATABASE … WITH (FORCE)` lancé aussitôt tue
+ * alors des sessions inactives, dont le client reçoit 57P01 (admin_shutdown) et l'émet en 'error' sans écouteur
+ * (exception non gérée, après la fin des tests). On attend donc l'extinction des sessions, puis `DROP` sans FORCE :
+ * une session réellement fuitée (client jamais fermé) fait échouer le test avec sa liste, au lieu d'être tuée en silence.
+ */
+async function dropWhenIdle(name: string): Promise<void> {
+  await admin(async (c) => {
+    const deadline = Date.now() + DISCONNECT_DEADLINE_MS;
+    const sessions = () =>
+      c.query<{ pid: number; application_name: string; state: string | null }>(
+        'SELECT pid, application_name, state FROM pg_stat_activity WHERE datname = $1 AND pid <> pg_backend_pid()',
+        [name],
+      );
+    let { rows } = await sessions();
+    while (rows.length > 0 && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      ({ rows } = await sessions());
+    }
+    if (rows.length > 0) {
+      const list = rows.map((r) => `pid ${r.pid} (${r.application_name || 'sans nom'}, ${r.state ?? 'inconnu'})`).join(', ');
+      throw new Error(`base ${name} : ${rows.length} session(s) encore ouverte(s) à la suppression, connexion fuitée : ${list}`);
+    }
+    await c.query(`DROP DATABASE IF EXISTS ${name}`);
+  });
+}
+
+/**
+ * Coupe la base sous les pieds de ses sessions (`DROP DATABASE … WITH (FORCE)`) : pour les tests de panne de base, où un
+ * processus vivant garde volontairement ses connexions. Les autres tests utilisent `drop`, qui refuse de tuer une session fuitée.
+ */
+async function dropForced(name: string): Promise<void> {
+  await admin((c) => c.query(`DROP DATABASE IF EXISTS ${name} WITH (FORCE)`));
+}
+
 export async function createTestDatabase(prefix = 't'): Promise<TestDatabase> {
   const name = `${prefix}_${randomBytes(5).toString('hex')}`;
   await admin((c) => c.query(`CREATE DATABASE ${name}`));
   const url = new URL(inject('pgAdminUrl'));
   url.pathname = `/${name}`;
-  return {
-    url: url.toString(),
-    name,
-    drop: () => admin((c) => c.query(`DROP DATABASE IF EXISTS ${name} WITH (FORCE)`)).then(() => undefined),
-  };
+  return { url: url.toString(), name, drop: () => dropWhenIdle(name), dropForce: () => dropForced(name) };
+}
+
+const poolErrors = new WeakMap<pg.Pool, Error[]>();
+const poolClients = new WeakMap<pg.Pool, Set<pg.PoolClient>>();
+
+/**
+ * Pool de test : écouteur 'error' (sans lui, l'erreur d'un client inactif est une exception non gérée) qui retient les
+ * erreurs, relevées par `closeTestPool`. À fermer avec `closeTestPool`, avant `tdb.drop()`.
+ */
+export function createTestPool(url: string, max = 4): pg.Pool {
+  const pool = new pg.Pool({ connectionString: url, max });
+  const errors: Error[] = [];
+  const clients = new Set<pg.PoolClient>();
+  poolErrors.set(pool, errors);
+  poolClients.set(pool, clients);
+  pool.on('error', (err) => errors.push(err));
+  pool.on('connect', (client) => clients.add(client));
+  pool.on('remove', (client) => clients.delete(client));
+  return pool;
+}
+
+/**
+ * Ferme le pool ET attend la fin de chacune de ses connexions : `pool.end()` seul rend la main avant que les sockets
+ * soient fermés ('remove' est émis à la fin de `client.end()`). Échoue si le pool a émis une erreur.
+ */
+export async function closeTestPool(pool: pg.Pool): Promise<void> {
+  const clients = poolClients.get(pool) ?? new Set<pg.PoolClient>();
+  const allRemoved = new Promise<void>((resolve) => {
+    const check = () => clients.size === 0 && resolve();
+    pool.on('remove', check);
+    check();
+  });
+  await pool.end();
+  await allRemoved;
+  const errors = poolErrors.get(pool) ?? [];
+  if (errors.length > 0) throw new AggregateError(errors, `pool de test : ${errors.length} erreur(s) de connexion pendant sa vie`);
 }
 
 /** Exécute `fn` avec un client connecté à `url`, fermé ensuite. */

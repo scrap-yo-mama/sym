@@ -59,6 +59,31 @@ catalog:
   # Lint des composants .vue (tâche 3.3).
   eslint-plugin-vue: 10.11.0
   vue-eslint-parser: 10.4.1
+  # Observabilité (tâche 1.10) : traces OTel opt-in (chargées à la demande seulement). Métriques Prometheus écrites à la
+  # main (apps/server/src/metrics.ts) : prom-client 15 exige `@opentelemetry/api` (require statique), ce qui chargerait
+  # l'API OTel dans tout `server` même OTel coupé (assert_otel_off_by_default).
+  # 0.222.0 (31/08) : versions les plus récentes de plus de 7 jours au 2026-10-01 (minimumReleaseAge).
+  '@opentelemetry/api': 1.9.1
+  '@opentelemetry/context-async-hooks': 2.11.0
+  '@opentelemetry/resources': 2.11.0
+  '@opentelemetry/sdk-trace-base': 2.11.0
+  '@opentelemetry/exporter-trace-otlp-http': 0.222.0
+  '@opentelemetry/exporter-trace-otlp-proto': 0.222.0
+  # Extension (tâche 2.6, 07 § 7) : WXT 0.21.4 épinglé, popup en Vue 3.5 (fonctions de rendu, sans SFC ni compilateur de gabarits : CSP MV3) ; vite 8.3.0 (8.3.1 < 7 jours au 2026-10-01).
+  wxt: 0.21.4
+  # Téléphones des sujets en E.164 (tâche 1.8, D-25) : MIT, sans dépendance ; 1.13.14 < 7 jours au 2026-10-01 (minimumReleaseAge).
+  libphonenumber-js: 1.13.13
+
+# OTel coupé = aucun module de l'API ni du SDK résolu (14 § 10, assert_otel_off_by_default). Better Auth
+# (@better-auth/core) fait `import("@opentelemetry/api")` à chaque requête d'auth ; drizzle-orm et vitest déclarent le même
+# pair optionnel. pnpm 11 résout un pair optionnel dès qu'une version existe dans le graphe (ici via @runtime/core) : le
+# crochet `readPackage` de .pnpmfile.cjs retire ce pair de ces trois paquets, et `@opentelemetry/*` n'est pas hissé dans
+# node_modules/.pnpm/node_modules. L'import de Better Auth échoue alors et il reste en no-op ; seul @runtime/core résout
+# l'API et le SDK, dynamiquement, quand OTEL_ENABLED=true. Contrôlé sur un vrai server + worker
+# (tests/observability.integration.test.ts).
+hoistPattern:
+  - '*'
+  - '!@opentelemetry/*'
 
 # Durcissement supply chain (08b §5). Le durcissement complet est la tâche 0.8.
 minimumReleaseAge: 10080

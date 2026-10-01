@@ -19,7 +19,8 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/* \
  && corepack enable
 
-COPY package.json pnpm-workspace.yaml pnpm-lock.yaml ./
+# .pnpmfile.cjs : crochet readPackage (pair OTel retiré de Better Auth), exigé par le lockfile (pnpmfileChecksum).
+COPY package.json pnpm-workspace.yaml pnpm-lock.yaml .pnpmfile.cjs ./
 COPY packages/core/package.json packages/core/
 COPY packages/db/package.json packages/db/
 COPY packages/llm/package.json packages/llm/

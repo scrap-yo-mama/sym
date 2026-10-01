@@ -128,8 +128,12 @@ jobs:
         with:
           node-version-file: runtime/.node-version
       - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - name: Chromium de Playwright (extension en contexte persistant, nouveau mode headless)
+        run: pnpm exec playwright install --with-deps chromium
+      # E2 extension (tâche 2.6) : PostgreSQL 16 jetable (Testcontainers), sites de fixtures en boucle locale.
       - run: pnpm test:e2e
-      # À venir : Playwright interface et extension, shardé, rapport blob fusionné.
+      # À venir : Playwright interface (E1, 3.x), shardé, rapport blob fusionné.
 
   security:
     runs-on: ubuntu-24.04

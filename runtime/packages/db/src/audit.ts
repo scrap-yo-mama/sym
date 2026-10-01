@@ -8,7 +8,7 @@ type Queryable = Pick<pg.ClientBase, 'query'>;
 
 export type AuditEvent = {
   actorUserId: string | null;
-  actorVia: 'ui' | 'apikey' | 'mcp' | 'sso' | 'system';
+  actorVia: 'ui' | 'apikey' | 'mcp' | 'sso' | 'system' | 'extension';
   /** Référence non secrète de l'acteur (ex. préfixe de clé `sy_live_xxxx`). */
   actorRef?: string | null;
   action: string;

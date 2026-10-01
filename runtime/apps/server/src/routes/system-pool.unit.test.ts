@@ -25,6 +25,9 @@ const EXCEPTIONS: Record<string, string> = {
   'guard.ts|UPDATE api_keys SET last_used_at = now() WHERE id = $1': 'authentification',
   // Audit `denied` d'un accès à la clé d'autrui : existence seulement, la réponse reste 404 uniforme.
   'api-keys.ts|SELECT 1 FROM api_keys WHERE id = $1': 'audit denied',
+  // Même audit `denied` pour l'appareil ou le domaine connecté d'autrui (tâche 2.6) : existence seulement, 404 uniforme.
+  'extension.ts|SELECT 1 FROM tunnels WHERE id = $1': 'audit denied',
+  'extension.ts|SELECT 1 FROM site_sessions WHERE id = $1': 'audit denied',
 };
 
 test('assert_routes_use_rls : aucune requête système sur une table de contenu hors exceptions commentées', () => {

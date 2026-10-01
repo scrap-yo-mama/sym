@@ -2,6 +2,7 @@
 // Entités de 04b § 1 (Api, StrategyVersion, Run). Types seuls, sans I/O.
 import type {
   ApiStatus,
+  AttemptResult,
   Execution,
   FailureClass,
   InvestigationPhase,
@@ -99,7 +100,7 @@ export interface RunAttempt {
   execution: Execution;
   network: Network;
   est_cost_usd: number;
-  result: FailureClass | 'ok';
+  result: AttemptResult;
   cost_usd: number;
   ms: number;
   model_id: string | null;

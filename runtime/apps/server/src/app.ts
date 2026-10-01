@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Application Fastify : registre des routes obligatoire (INV12), garde unique, 404 uniforme.
-import { loggerRedaction } from '@runtime/core';
-import Fastify, { type FastifyInstance, type FastifyServerOptions } from 'fastify';
+import { createLogger, startDetachedSpan, type LogLevel } from '@runtime/core';
+import Fastify, { type FastifyBaseLogger, type FastifyInstance, type FastifyServerOptions } from 'fastify';
 import type { ServerContext } from './context.js';
 import { apiKeyRoutes } from './routes/api-keys.js';
 import { authRoutes } from './routes/auth.js';
+import { extensionRoutes } from './routes/extension.js';
 import { guard, notFound, sendError } from './routes/guard.js';
 import { meRoutes } from './routes/me.js';
 import { findRoute } from './routes/registry.js';
@@ -22,12 +23,15 @@ export class UnregisteredRouteError extends Error {
   override name = 'UnregisteredRouteError';
 }
 
-export function buildServer(ctx: ServerContext, options: { logger?: boolean; trustProxy?: boolean | number | string } = {}): FastifyInstance {
+export function buildServer(ctx: ServerContext, options: { logger?: boolean; loggerInstance?: FastifyBaseLogger; logLevel?: LogLevel; trustProxy?: boolean | number | string } = {}): FastifyInstance {
   const serverOptions: FastifyServerOptions = {
     // request.ip : seule source d’IP (limites, audit, auth_sessions.ip) ; voir TRUST_PROXY (config.ts).
     // Un nombre n = faire confiance aux n premiers sauts (sémantique proxy-addr), exprimé en fonction pour les types.
     trustProxy: typeof options.trustProxy === 'number' ? ((_addr: string, hop: number) => hop < (options.trustProxy as number)) : (options.trustProxy ?? false),
-    logger: options.logger ? { level: 'info', ...loggerRedaction() } : false,
+    // Journal pino partagé avec `worker` (masquage INV8, `run_id` par AsyncLocalStorage) ; coupé sans `logger`.
+    ...(options.loggerInstance || options.logger
+      ? { loggerInstance: options.loggerInstance ?? (createLogger({ name: 'server', level: options.logLevel ?? 'info' }) as FastifyBaseLogger) }
+      : { logger: false as const }),
     exposeHeadRoutes: false,
     bodyLimit: 64 * 1024,
     // additionalProperties: false refuse (400) au lieu de retirer en silence (08b § 4, cas 4).
@@ -47,6 +51,13 @@ export function buildServer(ctx: ServerContext, options: { logger?: boolean; tru
       registered.push(`${method} ${route.url}`);
     }
   });
+  // Span de requête (OTel opt-in, sinon rien) : route déclarée seulement, jamais l'URL ni la requête. Avant le garde.
+  app.addHook('onRequest', (request, reply, done) => {
+    const span = startDetachedSpan('http.request', { 'http.request.method': request.method, 'http.route': request.routeOptions.url ?? 'unmatched' });
+    if (!span) return done();
+    reply.raw.once('close', () => span.end());
+    span.run(done);
+  });
   app.addHook('onRequest', guard(ctx));
 
   app.setNotFoundHandler((_request, reply) => notFound(reply));
@@ -64,5 +75,6 @@ export function buildServer(ctx: ServerContext, options: { logger?: boolean; tru
   authRoutes(app, ctx);
   meRoutes(app, ctx);
   apiKeyRoutes(app, ctx);
+  extensionRoutes(app, ctx);
   return app;
 }

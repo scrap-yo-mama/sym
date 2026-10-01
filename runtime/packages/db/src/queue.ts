@@ -66,12 +66,14 @@ export class PgBossJobQueue implements JobQueue {
       expireInSeconds: definition.expireInSeconds,
       heartbeatSeconds: definition.heartbeatSeconds,
       retryLimit: definition.retryLimit,
+      ...(definition.deleteAfterSeconds !== undefined ? { deleteAfterSeconds: definition.deleteAfterSeconds } : {}),
     };
     // Idempotent ; une file existante garde sa politique, le reste est aligné sur la définition courante.
     await this.#boss.createQueue(definition.name, options);
     await this.#boss.updateQueue(definition.name, {
       expireInSeconds: options.expireInSeconds,
       retryLimit: options.retryLimit,
+      ...(options.deleteAfterSeconds !== undefined ? { deleteAfterSeconds: options.deleteAfterSeconds } : {}),
     });
   }
 
@@ -110,4 +112,15 @@ export class PgBossJobQueue implements JobQueue {
     const found = await this.#boss.findJobs(queue, { id: jobId, ...(options.tx ? { db: inTransaction(options.tx) } : {}) });
     return found[0]?.state ?? null;
   }
+}
+
+/**
+ * Effacement d'un sujet (1.8) : nombre de jobs pg-boss dont la charge correspond au motif (lecture seule). Les charges ne
+ * portent que des identifiants (`{ run_id }`) ; ce comptage le vérifie. 0 si le schéma pg-boss n'existe pas encore.
+ */
+export async function countQueuePayloadMatches(db: { query: QueryClient['query'] }, pattern: string): Promise<number> {
+  const exists = (await db.query("SELECT to_regclass('pgboss.job') IS NOT NULL AS ok")) as { rows: { ok: boolean }[] };
+  if (!exists.rows[0]?.ok) return 0;
+  const { rows } = (await db.query('SELECT count(*)::int AS n FROM pgboss.job WHERE data::text ~* $1', [pattern])) as { rows: { n: number }[] };
+  return rows[0]?.n ?? 0;
 }

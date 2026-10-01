@@ -10,7 +10,7 @@ import { createKey, createUser, PUBLIC_URL, runSetup, signIn, startTestServer, t
 import { buildServer, UnregisteredRouteError } from './app.js';
 import { ROUTES, type OwnedResource, type RouteSpec } from './routes/registry.js';
 
-type Party = { user: TestUser; cookie: string };
+type Party = { user: TestUser; cookie: string; /** Jeton d'extension (routes `auth: extension`, tâche 2.6). */ ext: string };
 
 let srv: TestServer;
 let owner: Party;
@@ -18,9 +18,45 @@ let admin: Party;
 let a: Party;
 let b: Party;
 
-/** Un cas par type de ressource : crée un objet appartenant à `party` et renvoie son identifiant. */
-const RESOURCE_CASES: Record<OwnedResource, (party: Party) => Promise<string>> = {
-  api_key: async (party) => (await createKey(srv, party.cookie, party.user, ['apis:read'])).id,
+/** Jeton d'un nouvel appareil de `party` (code d'appairage avec ré-authentification, puis échange). */
+async function pairDevice(party: Pick<Party, 'user' | 'cookie'>, deviceId: string): Promise<{ token: string; tunnelId: string }> {
+  const code = await srv.app.inject({ method: 'POST', url: '/api/extension/pairing-codes', headers: { cookie: party.cookie, origin: PUBLIC_URL }, payload: { currentPassword: party.user.password } });
+  const res = await srv.app.inject({ method: 'POST', url: '/api/extension/pair', payload: { code: code.json<{ code: string }>().code, deviceId } });
+  const token = res.json<{ token: string }>().token;
+  const tunnelId = await withClient(srv.db.url, async (c) => (await c.query<{ id: string }>('SELECT id FROM tunnels WHERE owner_id = $1 AND device_id = $2 AND revoked_at IS NULL', [party.user.id, deviceId])).rows[0]!.id);
+  return { token, tunnelId };
+}
+
+let seq = 0;
+/**
+ * Un cas par type de ressource : `create` crée un objet appartenant à `party` et renvoie son identifiant ; `intact`
+ * vérifie qu'il existe toujours, inchangé, pour son propriétaire.
+ */
+const RESOURCE_CASES: Record<OwnedResource, { create: (party: Party) => Promise<string>; intact: (party: Party, id: string) => Promise<boolean> }> = {
+  api_key: {
+    create: async (party) => (await createKey(srv, party.cookie, party.user, ['apis:read'])).id,
+    intact: async (party, id) => {
+      const list = await srv.app.inject({ method: 'GET', url: '/api/api-keys', headers: { cookie: party.cookie } });
+      return list.json<{ items: { id: string; revokedAt: string | null }[] }>().items.some((k) => k.id === id && k.revokedAt === null);
+    },
+  },
+  tunnel: {
+    create: async (party) => (await pairDevice(party, `zz_test_authz_dev_${(seq += 1)}`)).tunnelId,
+    intact: async (party, id) => {
+      const list = await srv.app.inject({ method: 'GET', url: '/api/extension/devices', headers: { cookie: party.cookie } });
+      return list.json<{ items: { id: string; revokedAt: string | null }[] }>().items.some((d) => d.id === id && d.revokedAt === null);
+    },
+  },
+  site_session: {
+    create: async (party) => {
+      const res = await srv.app.inject({ method: 'PUT', url: `/api/extension/sites/zz-test-authz-${(seq += 1)}.example`, headers: { authorization: `Bearer ${party.ext}` }, payload: { serverUseAllowed: false } });
+      return res.json<{ id: string }>().id;
+    },
+    intact: async (party, id) => {
+      const list = await srv.app.inject({ method: 'GET', url: '/api/sites', headers: { cookie: party.cookie } });
+      return list.json<{ items: { id: string }[] }>().items.some((s) => s.id === id);
+    },
+  },
 };
 
 /** Corps valide par route à corps (sert aux cas 1 et 4 de 08b § 4). */
@@ -29,6 +65,10 @@ const VALID_BODIES: Record<string, (party: Party) => Record<string, unknown>> = 
   'POST /api/auth/sign-in/email': (p) => ({ email: p.user.email, password: p.user.password }),
   'POST /api/auth/sign-out': () => ({}),
   'POST /api/api-keys': (p) => ({ label: 'zz_test', scopes: ['apis:read'], currentPassword: p.user.password }),
+  'POST /api/extension/pairing-codes': (p) => ({ currentPassword: p.user.password }),
+  'POST /api/extension/pair': () => ({ code: 'ZZZZZ-ZZZZZ', deviceId: 'zz_test_authz_body' }),
+  'PUT /api/extension/sites/:domain': () => ({ serverUseAllowed: false }),
+  'PUT /api/extension/sites/:domain/cookies': () => ({ cookies: [] }),
 };
 
 const ZERO_UUID = '00000000-0000-4000-8000-000000000000';
@@ -38,7 +78,7 @@ const hasBody = (r: RouteSpec) => r.method === 'POST' || r.method === 'PUT' || r
 async function call(route: RouteSpec, headers: Record<string, string>, id = ZERO_UUID, payload?: Record<string, unknown>) {
   return srv.app.inject({
     method: route.method,
-    url: route.url.replace(':id', id),
+    url: route.url.replace(':id', id).replace(':domain', 'zz-test-authz.example'),
     headers: route.method === 'GET' ? headers : { origin: PUBLIC_URL, ...headers },
     ...(hasBody(route) ? { payload: payload ?? {} } : {}),
   });
@@ -47,13 +87,14 @@ async function call(route: RouteSpec, headers: Record<string, string>, id = ZERO
 beforeAll(async () => {
   srv = await startTestServer('authz');
   const o = await runSetup(srv);
-  owner = { user: o, cookie: await signIn(srv, o) };
-  const ad = await createUser(srv, 'zz_test_admin@example.test', 'admin');
-  admin = { user: ad, cookie: await signIn(srv, ad) };
-  const ua = await createUser(srv, 'zz_test_user_a@example.test');
-  a = { user: ua, cookie: await signIn(srv, ua) };
-  const ub = await createUser(srv, 'zz_test_user_b@example.test');
-  b = { user: ub, cookie: await signIn(srv, ub) };
+  const party = async (user: TestUser): Promise<Party> => {
+    const cookie = await signIn(srv, user);
+    return { user, cookie, ext: (await pairDevice({ user, cookie }, `zz_test_authz_main_${user.id}`)).token };
+  };
+  owner = await party(o);
+  admin = await party(await createUser(srv, 'zz_test_admin@example.test', 'admin'));
+  a = await party(await createUser(srv, 'zz_test_user_a@example.test'));
+  b = await party(await createUser(srv, 'zz_test_user_b@example.test'));
 });
 afterAll(async () => {
   await srv.close();
@@ -71,7 +112,7 @@ describe('registre des routes', () => {
 
   test('chaque ressource du registre a son cas « B contre les objets de A », chaque route à corps un corps valide', () => {
     for (const route of ROUTES) {
-      if (route.resource) expect(RESOURCE_CASES[route.resource.type], keyOf(route)).toBeTypeOf('function');
+      if (route.resource) expect(RESOURCE_CASES[route.resource.type]?.create, keyOf(route)).toBeTypeOf('function');
       if (hasBody(route)) expect(VALID_BODIES[keyOf(route)], keyOf(route)).toBeTypeOf('function');
     }
   });
@@ -80,16 +121,16 @@ describe('registre des routes', () => {
 describe('assert_cross_user_denied (INV12) : B contre les objets de A, sur chaque route à ressource', () => {
   const resourceRoutes = ROUTES.filter((r) => r.resource);
   test.each(resourceRoutes.map((r) => [keyOf(r), r] as const))('%s', async (_name, route) => {
-    const idOfA = await RESOURCE_CASES[route.resource!.type](a);
+    const resource = RESOURCE_CASES[route.resource!.type];
+    const idOfA = await resource.create(a);
     if (route.resource!.kind === 'item') {
       const cross = await call(route, { cookie: b.cookie }, idOfA);
       const missing = await call(route, { cookie: b.cookie }, ZERO_UUID);
       expect(cross.statusCode).toBe(404);
       // Même réponse qu'un objet inexistant : aucun indice d'existence.
       expect({ status: cross.statusCode, body: cross.body }).toEqual({ status: missing.statusCode, body: missing.body });
-      // L'objet de A est intact et toujours visible par A seul.
-      const list = await srv.app.inject({ method: 'GET', url: '/api/api-keys', headers: { cookie: a.cookie } });
-      expect(list.json<{ items: { id: string; revokedAt: string | null }[] }>().items).toContainEqual(expect.objectContaining({ id: idOfA, revokedAt: null }));
+      // L'objet de A est intact et toujours visible par A.
+      expect(await resource.intact(a, idOfA)).toBe(true);
     } else {
       const res = await call(route, { cookie: b.cookie });
       expect(res.statusCode).toBe(200);
@@ -101,6 +142,7 @@ describe('assert_cross_user_denied (INV12) : B contre les objets de A, sur chaqu
       if (route.resource!.kind === 'item') expect(res.statusCode).toBe(404);
       else expect(res.body).not.toContain(idOfA);
     }
+    expect(await resource.intact(a, idOfA)).toBe(true);
   });
 });
 
@@ -179,7 +221,8 @@ describe('assert_authz_matrix (squelette, 08b § 4) : paramétré sur le registr
     'cas 4, corps avec owner_id, user_id, status ou server_use_allowed → rejeté : %s',
     async (_name, route) => {
       for (const extra of [{ owner_id: a.user.id }, { user_id: a.user.id }, { status: 'active' }, { server_use_allowed: true }]) {
-        const res = await call(route, { cookie: b.cookie }, ZERO_UUID, { ...VALID_BODIES[keyOf(route)]!(b), ...extra });
+        const headers: Record<string, string> = route.auth === 'extension' ? { authorization: `Bearer ${b.ext}` } : { cookie: b.cookie };
+        const res = await call(route, headers, ZERO_UUID, { ...VALID_BODIES[keyOf(route)]!(b), ...extra });
         // 400 (additionalProperties: false) ; 404 pour l'assistant, clos après l'owner.
         expect([400, 404], `${keyOf(route)} ${Object.keys(extra)[0]}`).toContain(res.statusCode);
       }
@@ -189,7 +232,7 @@ describe('assert_authz_matrix (squelette, 08b § 4) : paramétré sur le registr
   test('cas 5, aucune réponse ne contient de champ chiffré ou haché', async () => {
     await createKey(srv, a.cookie, a.user, ['apis:read']);
     for (const route of ROUTES.filter((r) => r.method === 'GET')) {
-      const res = await call(route, { cookie: a.cookie });
+      const res = await call(route, route.auth === 'extension' ? { authorization: `Bearer ${a.ext}` } : { cookie: a.cookie });
       expect(res.body, keyOf(route)).not.toMatch(/ciphertext|"nonce"|wrapped_dek|dek_wrapped|key_hash|keyHash|token_hash|tokenHash|password_hash|passwordHash|"token"/);
     }
   });

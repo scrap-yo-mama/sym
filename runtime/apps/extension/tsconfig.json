@@ -1,0 +1,7 @@
+{
+  "extends": "./.wxt/tsconfig.json",
+  "compilerOptions": {
+    "types": ["node"]
+  },
+  "include": ["src", "e2e", "wxt.config.ts", "playwright.config.ts", ".wxt/wxt.d.ts"]
+}

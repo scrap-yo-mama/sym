@@ -42,7 +42,13 @@ export type RunState = (typeof RUN_STATES)[number];
 export const RUN_OUTCOMES = ['clean', 'degraded', 'failed'] as const;
 export type RunOutcome = (typeof RUN_OUTCOMES)[number];
 
-/** Classes d'échec fermées (04b § 1). `schema_mismatch` est un code de journal, pas une classe. */
+/**
+ * Classes d'échec fermées (04b § 1, 04 §7) : LA seule énumération `FailureClass` du runtime. La machine à états
+ * (status/) l'importe ; les CHECK de `runs.failure_class` et `run_attempts.result_class` la reproduisent
+ * (db/src/enums.integration.test.ts). `schema_mismatch` est un code de journal, pas une classe. `challenge_in_tunnel`,
+ * `proxy_not_configured` et `tunnel_offline` sont des codes de raison de transition (`status_reason`, 04 §6), pas des
+ * classes : voir `ACTION_REASONS` dans status/types.ts.
+ */
 export const FAILURE_CLASSES = [
   'transient',
   'network',
@@ -69,3 +75,7 @@ export type FailureClass = (typeof FAILURE_CLASSES)[number] | LlmFailureClass;
 export function isFailureClass(value: unknown): value is FailureClass {
   return typeof value === 'string' && ((FAILURE_CLASSES as readonly string[]).includes(value) || LLM_FAILURE_CLASS_PATTERN.test(value));
 }
+
+/** Résultat d'un essai (`attempts[].result`, colonne `run_attempts.result_class`) : `ok` ou une classe d'échec. */
+export const ATTEMPT_RESULTS = ['ok', ...FAILURE_CLASSES] as const;
+export type AttemptResult = 'ok' | FailureClass;
