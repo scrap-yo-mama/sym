@@ -11,6 +11,7 @@ import type { Document } from 'domhandler';
 import { decodeEmbedded, type BlobKind, type BlobLocator } from '../dsl/blobs.js';
 import { elementAttribute, parseHtml, selectElements } from '../dsl/css.js';
 import { DEFAULT_DSL_LIMITS, type DslLimits } from '../dsl/limits.js';
+import { narrativeUrl } from './events.js';
 
 /** Un échange capturé pendant la reconnaissance (requête de données de la page, ou sonde statique). */
 export type CapturedExchange = {
@@ -25,9 +26,9 @@ export type CapturedExchange = {
   readonly bytes: number;
 };
 
-/** Ce que la passe de reconnaissance a vu. */
+/** Ce que la passe de reconnaissance a vu (`tunnel` : page et URL de données lues par l'extension, session requise). */
 export type ReconCapture = {
-  readonly mode: 'browser' | 'static';
+  readonly mode: 'browser' | 'static' | 'tunnel';
   readonly pageUrl: string;
   /** Document de la page : corps servi (blobs) et, en mode navigateur, DOM rendu. */
   readonly document: { readonly url: string; readonly status: number; readonly html: string; readonly renderedHtml: string | null; readonly bytes: number } | null;
@@ -62,10 +63,23 @@ export const MAX_CANDIDATES = 8;
 const MAX_ARRAYS_PER_SOURCE = 3;
 const MAX_SKELETON_ENTRIES = 60;
 const MAX_WALK_DEPTH = 8;
-const SAFE_KEY = /^[A-Za-z0-9_$@:.-]{1,64}$/;
+/** Clé montrable : nom de champ ordinaire (lettre, chiffre, `_`, `$`, `-`), jamais un e-mail, un `Type:id` ni du texte. */
+const SAFE_KEY = /^[A-Za-z_$][A-Za-z0-9_$-]{0,63}$/;
+/** Clé qui ressemble à une valeur : numéro (5 chiffres de suite ou plus), identifiant hexadécimal long. */
+const VALUE_LIKE_KEY = /[0-9]{5,}|[0-9a-f]{12,}/i;
+/** Nom de paramètre de requête montrable (comme dans le prompt du rôle `investigate`). */
+const SAFE_PARAM = /^[A-Za-z0-9_.-]{1,64}$/;
 const DOT_KEY = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
+
+/**
+ * Une clé du site peut-elle être montrée (prompt du rôle `investigate`, état de l'enquête) ? Non si elle ressemble à une
+ * valeur : e-mail, identifiant `Type:123` ou argument Apollo, numéro, condensé, texte libre (08 §4, 17 §6).
+ */
+export function isSafeKey(key: string): boolean {
+  return SAFE_KEY.test(key) && !VALUE_LIKE_KEY.test(key);
+}
 
 function jsonType(value: unknown): string {
   if (value === null) return 'null';
@@ -90,7 +104,7 @@ export function recordSkeleton(record: unknown): RecordSkeleton {
       for (const [key, child] of Object.entries(value)) {
         if (count >= MAX_SKELETON_ENTRIES) return;
         // Une clé hors du jeu sûr (texte libre, balises) n'est pas montrée : une clé de la page n'est pas une consigne.
-        if (!SAFE_KEY.test(key)) continue;
+        if (!isSafeKey(key)) continue;
         walk(child, `${path}${pathSegment(key)}`, depth + 1);
       }
       return;
@@ -105,7 +119,11 @@ export function recordSkeleton(record: unknown): RecordSkeleton {
 
 type FoundArray = { path: string; count: number; first: Record<string, unknown> };
 
-/** Tableaux d'objets d'un document JSON (enregistrements possibles), les plus longs d'abord. */
+/**
+ * Tableaux d'objets d'un document JSON (enregistrements possibles), les plus longs d'abord. Une clé non sûre
+ * (`isSafeKey`) n'entre jamais dans le chemin : son segment devient le joker `[*]` (RFC 9535), qui sélectionne toujours
+ * le tableau sans porter la clé du site (e-mail, identifiant, argument de requête Apollo).
+ */
 export function findRecordArrays(root: unknown, max = MAX_ARRAYS_PER_SOURCE): FoundArray[] {
   const found: FoundArray[] = [];
   let visited = 0;
@@ -120,10 +138,27 @@ export function findRecordArrays(root: unknown, max = MAX_ARRAYS_PER_SOURCE): Fo
       value.slice(0, 50).forEach((child, i) => walk(child, `${path}[${i}]`, depth + 1));
       return;
     }
-    if (isRecord(value)) for (const [key, child] of Object.entries(value)) walk(child, `${path}${pathSegment(key)}`, depth + 1);
+    if (isRecord(value)) for (const [key, child] of Object.entries(value)) walk(child, `${path}${isSafeKey(key) ? pathSegment(key) : '[*]'}`, depth + 1);
   };
   walk(root, '$', 0);
   return found.sort((a, b) => b.count - a.count).slice(0, max);
+}
+
+/**
+ * Portée de site d'une page : son hôte sans `www.`. Les domaines de l'API sont cet hôte et ses sous-domaines
+ * (04b §2 : page `www.exemple.test`, données sur `api.exemple.test`). Sans liste des suffixes publics (dépendance hors
+ * de la stack de 03), on ne remonte jamais plus haut : un voisin (`user2.github.io` pour `user1.github.io`, `api.x.test`
+ * pour `shop.x.test`) n'est jamais un domaine de l'API.
+ */
+export function siteScope(pageHost: string): string {
+  const host = pageHost.toLowerCase().replace(/\.+$/, '');
+  return host.startsWith('www.') && host.split('.').length > 2 ? host.slice(4) : host;
+}
+
+/** `host` est la portée de site ou l'un de ses sous-domaines. */
+export function withinSiteScope(host: string, scope: string): boolean {
+  const h = host.toLowerCase().replace(/\.+$/, '');
+  return h === scope || h.endsWith(`.${scope}`);
 }
 
 /** Noms de paramètre d'une valeur calculée côté client (signature, jeton anti-rejeu, défi). */
@@ -262,7 +297,7 @@ const SCRIPT_URL_PATTERNS: readonly RegExp[] = [
 
 /**
  * Mode sans navigateur (`DISABLE_BROWSER`) : URL de données que les scripts EN LIGNE de la page appellent en GET par
- * une chaîne littérale (`fetch("/api/…")`, `xhr.open("GET", …)`), même hôte que la page, sans gabarit (`${…}`). Aucun
+ * une chaîne littérale (`fetch("/api/…")`, `xhr.open("GET", …)`), domaines de l'API (`siteScope`), sans gabarit (`${…}`). Aucun
  * script n'est exécuté ; c'est un repli, la passe E3 du navigateur reste la reconnaissance de référence (04 §4).
  */
 export function discoverScriptEndpoints(html: string, pageUrl: string, max = 5, limits: DslLimits = DEFAULT_DSL_LIMITS): string[] {
@@ -274,6 +309,7 @@ export function discoverScriptEndpoints(html: string, pageUrl: string, max = 5, 
   } catch {
     return [];
   }
+  const scope = siteScope(page.hostname);
   const out: string[] = [];
   for (const script of selectElements('script:not([src])', doc, 50)) {
     if (elementAttribute(script, 'type') !== undefined && !/javascript|module/i.test(elementAttribute(script, 'type') ?? '')) continue;
@@ -288,12 +324,66 @@ export function discoverScriptEndpoints(html: string, pageUrl: string, max = 5, 
         } catch {
           continue;
         }
-        if ((url.protocol !== 'http:' && url.protocol !== 'https:') || url.hostname !== page.hostname || url.username !== '' || url.password !== '') continue;
+        if ((url.protocol !== 'http:' && url.protocol !== 'https:') || !withinSiteScope(url.hostname, scope) || url.username !== '' || url.password !== '') continue;
         url.hash = '';
         if (!out.includes(url.href)) out.push(url.href);
         if (out.length >= max) return out;
       }
     }
+  }
+  return out;
+}
+
+/**
+ * Gisement tel que l'état de l'enquête le garde (`apis.investigation`, hors rétention) : AUCUNE valeur du site. Requête
+ * réduite à l'origine, au chemin et aux NOMS de paramètres (requête et premier niveau du corps JSON) ; le reste (chemin
+ * des enregistrements, squelette) est déjà sans valeur. Les valeurs vivent dans la reconnaissance du run (récit couvert
+ * par la rétention) et sont relues par la reconnaissance du run suivant (`rematchCandidates`).
+ */
+export type StoredCandidate = Omit<DataCandidate, 'request'> & {
+  readonly request: { readonly method: 'GET' | 'POST'; readonly url: string; readonly query: readonly string[]; readonly body_keys?: readonly string[] };
+};
+
+const sortedUnique = (names: Iterable<string>): string[] => [...new Set(names)].sort();
+
+function queryNames(url: string): string[] {
+  try {
+    return sortedUnique([...new URL(url).searchParams.keys()].filter((k) => SAFE_PARAM.test(k)));
+  } catch {
+    return [];
+  }
+}
+
+export function storedCandidate(c: DataCandidate): StoredCandidate {
+  const body = c.request.body_json;
+  return {
+    ...c,
+    request: {
+      method: c.request.method,
+      url: narrativeUrl(c.request.url),
+      query: queryNames(c.request.url),
+      ...(body === undefined ? {} : { body_keys: isRecord(body) ? sortedUnique(Object.keys(body).filter(isSafeKey)) : [] }),
+    },
+  };
+}
+
+/** Clé sans valeur d'un gisement : nature, méthode, origine + chemin, noms de paramètres, blob, chemin des enregistrements. */
+export function candidateKey(c: DataCandidate | StoredCandidate): string {
+  const stored = 'query' in c.request ? (c as StoredCandidate) : storedCandidate(c as DataCandidate);
+  return JSON.stringify([stored.from, stored.request.method, stored.request.url, stored.request.query, stored.request.body_keys ?? null, stored.locator?.kind ?? null, stored.records]);
+}
+
+/**
+ * Gisements frais (reconnaissance du run en cours) retrouvés sous les identifiants stockés, dans l'ordre stocké ; un
+ * gisement stocké absent de la reconnaissance manque (la proposition qui le cite l'écarte : `unknown_candidate`).
+ */
+export function rematchCandidates(stored: readonly StoredCandidate[], fresh: readonly DataCandidate[]): DataCandidate[] {
+  const byKey = new Map<string, DataCandidate>();
+  for (const c of fresh) if (!byKey.has(candidateKey(c))) byKey.set(candidateKey(c), c);
+  const out: DataCandidate[] = [];
+  for (const s of stored) {
+    const match = byKey.get(candidateKey(s));
+    if (match !== undefined) out.push({ ...match, id: s.id });
   }
   return out;
 }

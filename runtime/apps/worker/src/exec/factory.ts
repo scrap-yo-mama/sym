@@ -132,6 +132,8 @@ export function productionExecutorFactory(env: Readonly<Record<string, string | 
       secrets,
       logger,
       strategy,
+      // Session requise ou tunnel seul (04 §4) : étape 0 et reconnaissance par l'extension du propriétaire.
+      tunnel,
       agentic: true,
       llm: {
         config: async () => {

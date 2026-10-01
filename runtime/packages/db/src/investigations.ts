@@ -2,10 +2,12 @@
 // État de l'enquête (tâche 2.1, 04 §4, migration 0016) : `apis.investigation` entre deux runs de nature
 // `investigation` (premier appel : étape 0, reconnaissance, schéma proposé ; après `validate_schema` : essais).
 // Données d'utilisateur : tout passe par `withActor` avec le propriétaire (RLS, INV12). L'état ne porte aucune valeur du
-// site (gisements = chemins, types, tailles) : l'échantillon vit dans `investigation_events`, l'exemple de sortie dans
-// `runs.input`, tous deux couverts par la rétention et l'effacement (17 §6).
+// site (gisements = origine, chemin et NOMS de paramètres, chemins d'enregistrements, types, tailles : `StoredCandidate`) :
+// l'échantillon vit dans `investigation_events`, l'exemple de sortie dans `runs.input`, tous deux couverts par la
+// rétention et l'effacement (17 §6) ; les valeurs des requêtes de données sont relues par la reconnaissance de chaque run.
+// L'état n'est jamais copié par un clone (`API_CLONE_EXCLUDED`). Une seule enquête à la fois par API.
 import { assertSchemaAcceptable, SchemaError, type Execution, type InvestigationPhase, type JobQueue, type Network, type RunTrigger } from '@runtime/core';
-import type { DataCandidate, InvestigationProposal } from '@runtime/core/investigation';
+import type { InvestigationProposal, StoredCandidate } from '@runtime/core/investigation';
 import { INVESTIGATION_DEFAULTS } from '@runtime/core/investigation';
 import type pg from 'pg';
 import { withActor } from './rls.js';
@@ -25,9 +27,9 @@ export type InvestigationRequest = {
 /** État persistant d'une enquête (`apis.investigation`). */
 export type InvestigationState = {
   readonly request: InvestigationRequest;
-  /** Gisements observés à la reconnaissance (aucune valeur). */
-  readonly candidates?: readonly DataCandidate[];
-  readonly page?: { readonly url: string; readonly host: string; readonly document_bytes: number; readonly total_bytes: number; readonly mode: 'browser' | 'static' };
+  /** Gisements observés à la reconnaissance (aucune valeur du site). */
+  readonly candidates?: readonly StoredCandidate[];
+  readonly page?: { readonly url: string; readonly host: string; readonly document_bytes: number; readonly total_bytes: number; readonly mode: 'browser' | 'static' | 'tunnel' };
   readonly proposal?: InvestigationProposal;
   readonly proposed_schema?: Record<string, unknown>;
   readonly validated_schema?: Record<string, unknown>;
@@ -39,7 +41,7 @@ export type InvestigationState = {
 };
 
 export class InvestigationStateError extends Error {
-  readonly code: 'invalid_request' | 'not_awaiting_validation' | 'invalid_schema' | 'api_not_found';
+  readonly code: 'invalid_request' | 'not_awaiting_validation' | 'invalid_schema' | 'api_not_found' | 'investigation_in_progress';
   constructor(code: InvestigationStateError['code'], message: string) {
     super(message);
     this.name = 'InvestigationStateError';
@@ -77,7 +79,9 @@ export function normalizeInvestigationRequest(input: {
 /**
  * Lance une enquête sur une API visible de l'acteur (côté web, transaction `withActor`) : état initial, phase
  * `access_check`, run de nature `investigation` et son job dans la MÊME transaction. `exampleOutput` va dans l'entrée
- * du run (rétention et effacement), jamais dans l'état de l'API.
+ * du run (rétention et effacement), jamais dans l'état de l'API. Une enquête dont un run est en file ou en cours refuse
+ * d'être relancée (`investigation_in_progress`, 409) : deux runs écraseraient l'état l'un de l'autre et remettraient le
+ * coût cumulé à 0 (contournement de `investigation_budget_usd`). L'API est verrouillée (`FOR UPDATE`) le temps du contrôle.
  */
 export async function startInvestigation(
   tx: Queryable,
@@ -91,6 +95,13 @@ export async function startInvestigation(
   },
 ): Promise<{ runId: string; jobId: string }> {
   const request = normalizeInvestigationRequest(input.request);
+  const locked = await tx.query('SELECT 1 FROM apis WHERE id = $1 AND owner_id = $2 FOR UPDATE', [input.apiId, input.ownerId]);
+  if (locked.rowCount !== 1) throw new InvestigationStateError('api_not_found', 'API introuvable pour ce propriétaire');
+  const active = await tx.query(
+    "SELECT 1 FROM runs WHERE api_id = $1 AND kind = 'investigation' AND state IN ('queued', 'running', 'waiting_tunnel') LIMIT 1",
+    [input.apiId],
+  );
+  if ((active.rowCount ?? 0) > 0) throw new InvestigationStateError('investigation_in_progress', 'une enquête est déjà en file ou en cours sur cette API');
   const state: InvestigationState = { request, spent_usd: 0, elapsed_ms: 0 };
   const { rowCount } = await tx.query("UPDATE apis SET investigation = $2::jsonb, investigation_phase = 'access_check', updated_at = now() WHERE id = $1 AND owner_id = $3", [
     input.apiId,

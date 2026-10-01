@@ -48,6 +48,8 @@ export type EgressProxyOptions = {
   onRequest?: (target: EgressTarget) => void;
   /** Verrou de domaines de l'essai : seuls ces hôtes (comparaison exacte) sont joignables ; les autres → 403. */
   allowHosts?: readonly string[];
+  /** Portées de site admises en plus d'`allowHosts` (domaine et sous-domaines), posées par le code seulement (`domainLock`). */
+  allowHostSuffixes?: readonly string[];
   /** Journal : demande refusée par le verrou de domaines (hôte normalisé). */
   onDomainBlocked?: (target: EgressTarget) => void;
   /** Admission d'une nouvelle connexion sortante (plafond de coût) : `false` → 403 `run_budget_exceeded`. */
@@ -145,7 +147,7 @@ function rawResponse(socket: Duplex, status: string, body: string): void {
 
 export async function startEgressProxy(options: EgressProxyOptions): Promise<EgressProxy> {
   const { guard, onBlocked, refuseAll, onRequest, onDomainBlocked, admit } = options;
-  const allowHost = options.allowHosts === undefined ? undefined : domainLock(options.allowHosts);
+  const allowHost = options.allowHosts === undefined ? undefined : domainLock(options.allowHosts, options.allowHostSuffixes);
   const chain = options.upstream;
   let requests = 0;
   const timeoutMs = options.connectTimeoutMs ?? 10_000;

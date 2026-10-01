@@ -10,10 +10,19 @@ export function normalizeHost(host: string): string {
   return host.trim().toLowerCase().replace(/^\[(.*)\]$/, '$1').replace(/\.$/, '');
 }
 
-/** Prédicat « hôte de l'API » pour une liste `allowed_hosts`. */
-export function domainLock(allowedHosts: readonly string[]): (host: string) => boolean {
+/**
+ * Prédicat « hôte de l'API » pour une liste `allowed_hosts` (comparaison exacte : une chaîne `*.x` ou `.x` n'y est
+ * qu'un nom qui ne correspond à rien). `suffixes` : portées de site admises EXPLICITEMENT par le code (reconnaissance de
+ * l'enquête, 04b §2 : `api.exemple.test` pour une page de `www.exemple.test`), le domaine et ses sous-domaines ; jamais
+ * tirées d'une stratégie.
+ */
+export function domainLock(allowedHosts: readonly string[], suffixes: readonly string[] = []): (host: string) => boolean {
   const allowed = new Set(allowedHosts.map(normalizeHost));
-  return (host) => allowed.has(normalizeHost(host));
+  const scopes = suffixes.map(normalizeHost).filter((s) => s.includes('.'));
+  return (host) => {
+    const h = normalizeHost(host);
+    return allowed.has(h) || scopes.some((s) => h === s || h.endsWith(`.${s}`));
+  };
 }
 
 /** Requête refusée par le verrou de domaines : le nom de l'hôte refusé est gardé pour le journal (jamais l'URL). */

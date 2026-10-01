@@ -281,7 +281,10 @@ describe('enquête (tâche 2.1)', () => {
     expect(await detailOf(run.id)).toBe('investigation_budget_usd');
     expect(await apiRow(apiId)).toMatchObject({ status: 'erreur', status_reason: 'investigation_budget_exhausted', current_strategy_version: null });
     expect(await attemptsOf(run.id)).toEqual([]);
-    expect(run.cost.llm_usd).toBeGreaterThan(0.001);
+    // Coût de l'appel borné AVANT l'envoi (max_tokens × prix) : l'appel qui dépasserait le budget n'est jamais envoyé,
+    // le coût imputé reste sous le plafond (04b « coût imputé ≤ plafond »).
+    expect(fake.requests).toBe(0);
+    expect(run.cost.llm_usd ?? 0).toBeLessThanOrEqual(0.001);
     const kinds = (await eventsOf(run.id)).map((e) => e.kind);
     expect(kinds).toContain('status.changed');
     expect(kinds.at(-1)).toBe('investigation.finished');
@@ -368,7 +371,8 @@ describe('enquête (tâche 2.1)', () => {
 
   test('contact d’instance absent (17 §5) : enquête refusée avant toute requête', async () => {
     const apiId = await insertApi('zz_test_inv_contact');
-    const runId = randomUUID();
+    // Run réel (sans job : jamais pris par le worker) : la fin d'enquête ferme le récit, rattaché à ce run.
+    const runId = (await pool.query<{ id: string }>("INSERT INTO runs (api_id, owner_id, api_owner_id, trigger, kind, state) VALUES ($1, $2, $2, 'rest', 'investigation', 'running') RETURNING id", [apiId, A])).rows[0]!.id;
     await pool.query("UPDATE apis SET investigation = $2 WHERE id = $1", [apiId, JSON.stringify({ request: { url: `${base(API_HOST)}/`, description: 'x', auto_validate: true, budget_usd: 1, timeout_s: 60 }, spent_usd: 0, elapsed_ms: 0 })]);
     const executor = createInvestigationExecutor({
       pool,
@@ -391,6 +395,9 @@ describe('enquête (tâche 2.1)', () => {
       writeItems: async () => ({ dataset_id: '', written: 0, new_items: null, dropped: 0, skipped: 0 }),
     });
     expect(result).toMatchObject({ state: 'failed', failure_class: 'code_error', error_detail: 'instance_contact_missing' });
+    // Fin de configuration : phase close et récit fermé (l'API ne reste pas en `enquete` / access_check sans suite).
+    expect((await apiRow(apiId)).investigation_phase).toBe('done');
+    expect((await eventsOf(runId)).map((e) => e.kind).at(-1)).toBe('investigation.finished');
     expect((await client.stats()).total).toBe(0);
   });
 });

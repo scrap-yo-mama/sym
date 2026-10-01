@@ -57,6 +57,8 @@ import { describe, test } from "vitest";
 describe("invariants (à implémenter)", () => {
   // ADR 0001, point faible connu (F-E5, pagination par bouton) : 2.4 ne compile qu'une trace à un enregistrement ; une liste
   // est refusée (`list_not_compilable`, épinglé par assert_e5_list_not_compiled) et reste rejouée par l'agent (E5 « mouvant »).
+  // 2.1 (vérification) : une trace E6 n'est jamais retenue sans compilation en E5 (retainedStrategy) ; le code de raison dédié vient avec 2.13.
+  test.todo("assert_investigation_not_compilable_reason — enquête dont seule une trace E6 non compilable est conforme, sans instructed_mode : erreur raison not_compilable (transition 2), ré-enquête : statut précédent raison not_compilable (21)"); // 2.13
   test.todo("assert_e5_list_compiled — trace E6 réussie sur F-E5 compilée en E5 (clics « Suivant » répétés, extraction par enregistrement à chaque page) et rejouée sans LLM, sortie identique"); // ADR 0001, suivi de 2.4 (tâche de rattachement à créer dans 10-taches)
   // INV11 (revue de 1.11, journal D-33) : 17 § 1 et le contrat IA de 1.11 exigent 0 requête sur un chemin interdit AUSSI en
   // tunnel et via l'extension. 2.7 (passerelle WSS) a été fusionnée avant 1.11, sans contrôle robots : la tâche de suivi 2.7b

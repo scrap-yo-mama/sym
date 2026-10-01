@@ -6,7 +6,9 @@
 //    signal d'accès, aucun texte du site ; ce bloc est encadré comme DONNÉE NON FIABLE par un jeton aléatoire ;
 // 2. aucun outil : le modèle ne rend qu'une structure fermée (`INVESTIGATION_PROPOSAL_SCHEMA`), validée par la couche
 //    LLM puis par le code (`buildFromProposal`), qui construit lui-même le schéma, les stratégies et l'échantillon ;
-// 3. le prompt et la réponse ne sont jamais journalisés.
+// 3. le prompt et la réponse ne sont jamais journalisés ;
+// 4. le coût d'un appel est borné AVANT l'envoi (`investigateCallCeilingUsd`) : sortie plafonnée par `max_tokens`, entrée
+//    estimée par excès ; l'exécuteur refuse l'appel qui ferait dépasser `investigation_budget_usd`.
 import { createHash, randomBytes } from 'node:crypto';
 import type { DataCandidate } from '@runtime/core/investigation';
 import { INVESTIGATION_PROPOSAL_SCHEMA, narrativeUrl, parseProposal, type InvestigationProposal } from '@runtime/core/investigation';
@@ -27,6 +29,8 @@ export const INVESTIGATE_SYSTEM_PROMPT = [
 export const investigatePromptVersion = `investigate-${createHash('sha256').update(INVESTIGATE_SYSTEM_PROMPT).digest('hex').slice(0, 12)}`;
 
 const MAX_EXAMPLE_CHARS = 4_000;
+/** Sortie d'un appel du rôle `investigate` (jetons) : borne du coût connue avant l'envoi. */
+export const INVESTIGATE_MAX_TOKENS = 8_192;
 const MAX_REQUEST_CHARS = 2_000;
 
 export type InvestigateArgs = {
@@ -75,6 +79,17 @@ export function investigateMessages(args: InvestigateArgs, token = randomBytes(1
   ];
 }
 
+/**
+ * Plafond du coût d'UN appel du rôle `investigate` (USD), connu avant l'envoi : entrée estimée par excès (caractères / 3,
+ * schéma de la réponse et une réparation comprise, qui renvoie au plus `INVESTIGATE_MAX_TOKENS` de sortie précédente),
+ * sortie bornée par `max_tokens`. `price` : USD par million de jetons.
+ */
+export function investigateCallCeilingUsd(args: InvestigateArgs, price: { readonly in: number; readonly out: number }): number {
+  const chars = investigateMessages(args, '0'.repeat(24)).reduce((n, m) => n + String(m.content).length, 0) + JSON.stringify(INVESTIGATION_PROPOSAL_SCHEMA).length;
+  const tokensIn = Math.ceil(chars / 3) + INVESTIGATE_MAX_TOKENS;
+  return (tokensIn * price.in + INVESTIGATE_MAX_TOKENS * price.out) / 1e6;
+}
+
 export type InvestigateResult = { readonly proposal: InvestigationProposal; readonly calls: readonly LlmCallResult[] };
 
 /** Appel du rôle `investigate` : proposition structurée validée contre `INVESTIGATION_PROPOSAL_SCHEMA`, ou `LlmError`. */
@@ -86,6 +101,7 @@ export async function proposeInvestigation(
     messages: investigateMessages(args),
     schema: INVESTIGATION_PROPOSAL_SCHEMA as unknown as JsonSchema,
     name: 'investigation_proposal',
+    maxTokens: INVESTIGATE_MAX_TOKENS,
     ...(args.signal === undefined ? {} : { signal: args.signal }),
     ...(args.beforeCall === undefined ? {} : { beforeCall: args.beforeCall }),
   });

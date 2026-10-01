@@ -76,3 +76,19 @@ export function buildTrialPlan(input: BuildPlanInput): PlanEntry[] {
   const order = [...input.strategies.map((s) => s.candidate.id), 'page'];
   return orderTrials(entries, order) as PlanEntry[];
 }
+
+/** Version retenue au terme de l'enquête, ou refus (`not_compilable`). */
+export type RetainedStrategy =
+  | { readonly ok: true; readonly execution: Execution; readonly network: Network; readonly spec: unknown; readonly estCostUsd: number | null }
+  | { readonly ok: false; readonly reason: 'not_compilable' };
+
+/**
+ * Stratégie gardée pour le couple conforme (04 §3.1) : E6 (`agent`) ne devient JAMAIS courant sans « agent instruit »
+ * (2.13) ; sa trace compilée en E5 (`hybrid`, rejouée sans LLM) est gardée, au coût mesuré de ses exécutions hors LLM.
+ * Sans compilation : `not_compilable` (transition 2 ; code de raison dédié avec 2.13). Les autres niveaux : tels quels.
+ */
+export function retainedStrategy(entry: Pick<PlanEntry, 'execution' | 'network' | 'spec' | 'est_cost_usd'>, compiled: unknown, measuredUsd: number | null): RetainedStrategy {
+  if (entry.execution !== 'agent') return { ok: true, execution: entry.execution, network: entry.network, spec: entry.spec, estCostUsd: entry.est_cost_usd };
+  if (compiled === undefined || compiled === null) return { ok: false, reason: 'not_compilable' };
+  return { ok: true, execution: 'hybrid', network: entry.network, spec: compiled, estCostUsd: measuredUsd };
+}

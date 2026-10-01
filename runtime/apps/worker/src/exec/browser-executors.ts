@@ -24,6 +24,7 @@ import {
   classifyExchange,
   classifyTransportError,
   encodeRequestBody,
+  failureRoute,
   TransportRefusal,
   runDeclarative,
   type DeclarativeRunOptions,
@@ -54,6 +55,8 @@ export type BrowserExecutorOptions = Omit<DeclarativeRunOptions, 'transport'> & 
   readonly userAgent?: string;
   /** Suivre aussi la taille décodée des requêtes de données (`fetch`, XHR) : reconnaissance de l'enquête (2.1). */
   readonly trackData?: boolean;
+  /** Portées de site admises en plus d'`allowed_hosts` (domaine et sous-domaines) : reconnaissance de l'enquête seulement. */
+  readonly allowedHostSuffixes?: readonly string[];
 };
 
 const maxBytesOf = (options: BrowserExecutorOptions): number => options.spec.limits?.max_response_bytes ?? 5_000_000;
@@ -191,6 +194,7 @@ async function withRunContext(
     const rc = await openRunContext(browser, {
       egressServer: options.egress.server,
       allowedHosts: options.spec.request.allowed_hosts,
+      ...(options.allowedHostSuffixes === undefined ? {} : { allowedHostSuffixes: options.allowedHostSuffixes }),
       ...(options.userAgent === undefined ? {} : { userAgent: options.userAgent }),
       // robots.txt à CHAQUE saut que Chromium suit (redirections que `admit` ne voit pas, cadres hors processus) : un saut
       // refusé du cadre principal ou d'un `fetch` de la stratégie arrête l'essai ; une sous-ressource est seulement coupée.
@@ -460,12 +464,20 @@ export type ReconnaissancePassOptions = Omit<BrowserExecutorOptions, 'spec' | 'i
   readonly allowedHosts: readonly string[];
 };
 
+/** Corps lu d'une réponse de données non JSON ou en erreur, pour la seule classification (défi, refus signé). */
+const RECON_MAX_CLASSIFY_BYTES = 256 * 1024;
+/** Suites qui arrêtent la passe : refus ou défi, connexion ou paiement requis, 429 (ralentir, jamais insister). */
+const STOPPING_ROUTES = new Set(['stop', 'action_required', 'slow_down']);
+
 /**
  * Reconnaissance de l'enquête (tâche 2.1, 04 §4) : UNE passe E3 sur la page, dans le même contexte gardé que les essais
  * (proxy d'egress de l'essai, SSRF, verrou de domaines, robots.txt à chaque saut et chaque sous-ressource, cadence pour
  * la page, navigations lancées par la page coupées). La réponse SERVIE est classée avant tout rendu (INV6) : un refus
  * ou un défi arrête la passe. Sinon, on attend le calme du réseau (borné) et on garde : les réponses JSON des requêtes
  * `fetch` / XHR vers un domaine de l'API (corps bornés, taille décodée vue par CDP), le document servi et le DOM rendu.
+ * CHAQUE réponse `fetch` / XHR d'un domaine de l'API est classée aussi (INV6, comme la reconnaissance statique) : un
+ * refus, un défi, une connexion requise ou un 429 sur un point de données arrête la passe ; un 404 ou un 5xx n'est
+ * qu'une voie vide.
  * Aucun clic, aucune saisie : la page n'est que regardée.
  */
 export async function runReconnaissancePass(options: ReconnaissancePassOptions): Promise<{ result: DeclarativeRunResult; capture: ReconCapture }> {
@@ -482,6 +494,8 @@ export async function runReconnaissancePass(options: ReconnaissancePassOptions):
   const renderWaitMs = options.renderWaitMs ?? BROWSER_RENDER_WAIT_MS;
   const exchanges: CapturedExchange[] = [];
   const seen: { document: ReconCapture['document']; received: number } = { document: null, received: 0 };
+  /** Premier refus vu sur une réponse de données de la page (défi, 403, connexion requise) : il arrête la passe. */
+  let dataRefusal: { failure: ExecFailure; exchange: HttpExchange } | null = null;
   const result = await withRunContext(base, async ({ page }, strategy, nav) => {
     const reads: Promise<void>[] = [];
     let captured = 0;
@@ -489,13 +503,21 @@ export async function runReconnaissancePass(options: ReconnaissancePassOptions):
       const request = response.request();
       const type = request.resourceType();
       if (type !== 'fetch' && type !== 'xhr') return;
-      if (!hostAllowed(response.url(), options.allowedHosts) || reads.length >= RECON_MAX_EXCHANGES) return;
+      if (!hostAllowed(response.url(), options.allowedHosts, options.allowedHostSuffixes) || reads.length >= RECON_MAX_EXCHANGES) return;
       const contentType = response.headers()['content-type'] ?? '';
-      if (!/json/i.test(contentType)) return;
+      const json = /json/i.test(contentType);
+      const ok = response.status() >= 200 && response.status() < 300;
       reads.push(
         (async () => {
-          const body = await boundedDocumentBody(response, RECON_MAX_BODY_BYTES, 10_000, nav.sizes);
-          if (typeof body !== 'string') return;
+          // Classification de chaque réponse de données (INV6) : corps lu s'il peut porter un défi (non JSON, ou erreur).
+          const body = await boundedDocumentBody(response, json && ok ? RECON_MAX_BODY_BYTES : RECON_MAX_CLASSIFY_BYTES, 10_000, nav.sizes);
+          const exchange: HttpExchange = { status: response.status(), headers: response.headers(), body: typeof body === 'string' ? body : '', url: response.url() };
+          const refused = classify(exchange, { requestUrl: request.url() });
+          if (refused !== null && STOPPING_ROUTES.has(failureRoute(refused.failure_class).next)) {
+            dataRefusal ??= { failure: refused, exchange };
+            return;
+          }
+          if (refused !== null || !json || typeof body !== 'string') return;
           const bytes = Buffer.byteLength(body);
           if (captured + bytes > RECON_MAX_CAPTURE_BYTES) return;
           captured += bytes;
@@ -540,6 +562,9 @@ export async function runReconnaissancePass(options: ReconnaissancePassOptions):
       // page (défi qui se résout seul, redirection) interrompt la passe.
       await nav.during(() => page.waitForLoadState('networkidle', { timeout: renderWaitMs }).catch(() => undefined), () => served);
       await nav.during(() => Promise.race([Promise.all(reads), new Promise((resolve) => setTimeout(resolve, renderWaitMs))]), () => served);
+      // Un refus sur un point de données de la page : la passe s'arrête, aucun gisement n'en sort (INV6).
+      const refusedData = dataRefusal as { failure: ExecFailure; exchange: HttpExchange } | null;
+      if (refusedData !== null) return failed(refusedData.failure, refusedData.exchange);
       const rendered = await nav.during(() => boundedContent(page, RECON_MAX_BODY_BYTES), () => served);
       if (nav.attempted()) throw nav.refusal(served);
       // Le DOM rendu est classé aussi (défi injecté par un script) : un refus arrête la passe.

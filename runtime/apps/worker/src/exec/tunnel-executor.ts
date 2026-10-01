@@ -157,8 +157,8 @@ function checkChallenge(session: TunnelSession, response: { status: number; head
   if (detectResponseChallenge(response)) session.challenged();
 }
 
-/** E1 / E2 en tunnel : `page_fetch` (fetch dans un onglet du site, cookies du navigateur de l'utilisateur). */
-function pageFetchTransport(session: TunnelSession, maxBytes: number): Transport {
+/** E1 / E2 en tunnel : `page_fetch` (fetch dans un onglet du site, cookies du navigateur de l'utilisateur) ; aussi l'étape 0 et la reconnaissance d'une enquête à session (2.1). */
+export function pageFetchTransport(session: TunnelSession, maxBytes: number): Transport {
   return async (request): Promise<HttpExchange> => {
     const { body, contentType } = encodeRequestBody(request);
     const headers: Record<string, string> = { ...request.headers };

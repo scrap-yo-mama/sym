@@ -140,3 +140,22 @@ export function firstCostInversion(estimates: readonly (number | null)[]): numbe
   }
   return -1;
 }
+
+/**
+ * Contrôle STRICT d'INV2 (04 §3.3, « la suite est strictement celle-ci ») : les couples essayés (`run_attempts`, dans
+ * l'ordre) suivent l'ordre du plan (coût, puis E, puis N, puis gisement) et tout couple du plan sauté avant le dernier
+ * essai a été élagué (`attempt.pruned`). Rend l'indice du premier essai fautif (hors plan, à rebours, ou précédé d'un
+ * couple ni essayé ni élagué), ou `-1`.
+ */
+export function attemptsFollowPlan(plan: readonly TrialPair[], attempts: readonly TrialPair[], pruned: readonly TrialPair[]): number {
+  const indexOf = (p: TrialPair) => plan.findIndex((q) => samePair(p, q));
+  const skipped = (p: TrialPair) => pruned.some((q) => samePair(p, q));
+  let cursor = -1;
+  for (const [i, attempt] of attempts.entries()) {
+    const at = indexOf(attempt);
+    if (at <= cursor) return i;
+    for (let j = cursor + 1; j < at; j += 1) if (!skipped(plan[j]!)) return i;
+    cursor = at;
+  }
+  return -1;
+}

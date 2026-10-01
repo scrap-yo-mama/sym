@@ -135,6 +135,11 @@ export type NetworkSessionOptions = {
   readonly connectTimeoutMs?: number;
   /** Verrou de domaines de l'essai (`allowed_hosts`) : chaque saut de redirection est contrôlé (tâche 1.6). */
   readonly allowedHosts?: readonly string[];
+  /**
+   * Portées de site admises en plus d'`allowedHosts` (le domaine et ses sous-domaines), posées par le code de la
+   * reconnaissance de l'enquête seulement (2.1, 04b §2), jamais tirées d'une stratégie ; sans `allowedHosts`, ignorées.
+   */
+  readonly allowedHostSuffixes?: readonly string[];
   /** Plafond `max_cost_usd` de l'API, contrôlé avant chaque requête (tâche 1.6). */
   readonly costCeiling?: CostCeiling;
   /**
@@ -237,7 +242,7 @@ export function openNetworkSession(options: NetworkSessionOptions): NetworkSessi
       : proxyDispatcher(rung.proxy, rung.params, options, meter);
   const proxyId = rung.mode === 'direct' ? null : rung.proxy.id;
   const price = rung.mode === 'direct' ? undefined : rung.proxy.price;
-  const allowHost = options.allowedHosts === undefined ? undefined : domainLock(options.allowedHosts);
+  const allowHost = options.allowedHosts === undefined ? undefined : domainLock(options.allowedHosts, options.allowedHostSuffixes);
   let exceeded = false;
   const ceiling = options.costCeiling;
   /** Abandonné au dépassement du plafond en cours de corps : chaque `fetch` de la session y est relié. */

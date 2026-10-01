@@ -5,20 +5,27 @@
 // 24 h, cache de robots.txt) : la base refuse tout essai sans rapport d'accès favorable antérieur (0015).
 // 0. Rapport d'accès (1.11) : robots.txt sans option (INV11), signaux, 402 ; contact d'instance exigé (17 §5). Refus →
 //    `bloquee` / `action_requise` / `erreur` (transitions 2, 3, 4), aucune autre requête.
-// 1. Reconnaissance : une passe E3 sur N1 (Chromium : trafic XHR / fetch capturé, document servi et rendu), ou, sans
-//    navigateur, la page et les URL de données que ses scripts en ligne appellent ; blobs embarqués cherchés avant de
-//    conclure « pas d'API ». Une signature calculée côté client rend la voie `unsupported`, sans tentative (INV6).
-// 2. Schéma de SORTIE d'abord (rôle `investigate`, squelettes seulement) : proposé avec un échantillon extrait par le
-//    code ; validé par l'appelant (`validate_schema`) ou, avec `auto_validate`, par l'agent, journalisé.
+// 1. Reconnaissance : une passe E3 sur N1 (Chromium : trafic XHR / fetch capturé et classé, document servi et rendu), ou,
+//    sans navigateur, la page et les URL de données que ses scripts en ligne appellent ; EN TUNNEL (page et URL de données
+//    lues par l'extension du propriétaire, `page_fetch`) quand la session est requise ou que la politique réseau n'admet
+//    que le tunnel (04 §4, 07). Blobs embarqués cherchés avant de conclure « pas d'API ». Une signature calculée côté
+//    client rend la voie `unsupported`, sans tentative (INV6). Domaines de l'API : la page et ses sous-domaines (ou ceux
+//    du domaine sans `www.`, 04b §2). Refaite à chaque run : l'état de l'API ne garde aucune valeur du site (17 §6).
+// 2. Schéma de SORTIE d'abord (rôle `investigate`, squelettes seulement, coût d'un appel borné AVANT l'envoi) : proposé
+//    avec un échantillon extrait par le code, passé par la liste d'exclusion des personnes effacées (17 §6) ; validé par
+//    l'appelant (`validate_schema`) ou, avec `auto_validate`, par l'agent, journalisé.
 // 3. Essais par coût estimé croissant (`buildTrialPlan`, `runTrials`), élagués par le classifieur, N = 3 exécutions
 //    conformes dont une en page 2 si la stratégie pagine ; chaque exécution passe par l'exécuteur de stratégie et TOUTES
 //    ses gardes (robots, SSRF, verrou de domaines, cadence, plafonds, classification avant extraction). Un couple = un
 //    essai journalisé (`run_attempts`, INV2, INV4) et un `attempt.finished` ; un élagage = un `attempt.pruned`.
-// 4. Fin : stratégie v1 (`created_by = investigation`), schéma de sortie validé et schéma d'entrée proposé posés sur
-//    l'API, résultat livré (dataset du run), statut `sain` (1) ; sinon `bloquee`, `action_requise` ou `erreur` (2, 21).
-// Plafonds : `investigation_budget_usd` et `investigation_timeout_s` (cumulés sur les runs de l'enquête), essais au plus.
-// Rien ne s'élargit : réseaux de la politique de l'API et proxys de l'admin seulement, jamais de tunnel ni de proxy après
-// un refus (X3, X4), jamais de valeur du site dans un prompt.
+// 4. Fin : stratégie v1 (`created_by = investigation` ; une trace E6 n'est gardée que compilée en E5, 04 §3.1), schéma de
+//    sortie validé et schéma d'entrée proposé posés sur l'API, résultat livré (dataset du run), statut `sain` (1) ; sinon
+//    `bloquee`, `action_requise` ou `erreur` (2, 3, 21). Toute fin ferme la phase et le récit.
+// Plafonds : `investigation_budget_usd` (coût imputé de tout le run d'enquête, cumulé sur ses runs ; chaque exécution
+// d'un couple sous le plus petit de `max_cost_usd` et du budget restant) et `investigation_timeout_s` (échéance de chaque
+// phase : étape 0, reconnaissance, appel LLM, essais), nombre d'essais. Rien ne s'élargit : réseaux de la politique de
+// l'API et proxys de l'admin seulement, jamais de tunnel ni de proxy après un refus (X3, X4), jamais de valeur du site
+// dans un prompt.
 import {
   type FailureClass,
   type InvestigationPhase,
@@ -34,11 +41,14 @@ import {
   buildUserAgent,
   InstanceContactError,
   requireInstanceContact,
+  ROBOTS_MAX_BYTES,
   RobotsCache,
   RobotsGate,
   sessionAccessProbe,
   sessionRobotsFetcher,
+  type AccessProbe,
   type AccessReport,
+  type RobotsFetcher,
 } from '@runtime/core/access';
 import { classifyExchange, classifyTransportError, domainRequestPacer, failureRoute, type ExecFailure, type HttpExchange, type RequestPacer } from '@runtime/core/exec';
 import {
@@ -49,7 +59,12 @@ import {
   INVESTIGATION_DEFAULTS,
   INVESTIGATION_EVENTS as EV,
   narrativeUrl,
+  rematchCandidates,
+  retainedStrategy,
   runTrials,
+  siteScope,
+  storedCandidate,
+  withinSiteScope,
   type CapturedExchange,
   type DataCandidate,
   type PairOutcome,
@@ -59,9 +74,11 @@ import {
   type TokenPrice,
   type TrialExecution,
   type TrialPair,
+  type TrialsOutcome,
 } from '@runtime/core/investigation';
 import {
   buildNetworkRungs,
+  checkSiteDomain,
   loadProxyCredentials,
   openBrowserEgress,
   openNetworkSession,
@@ -76,7 +93,7 @@ import {
   type SsrfGuard,
 } from '@runtime/core/net';
 import type { DomainPacer } from '@runtime/core';
-import { investigatePromptVersion, proposeInvestigation } from '@runtime/agent';
+import { investigateCallCeilingUsd, investigatePromptVersion, proposeInvestigation } from '@runtime/agent';
 import {
   appendInvestigationEvent,
   loadInvestigation,
@@ -93,8 +110,11 @@ import { LlmError, roleTarget, toFailureClass, type LlmClient, type LlmConfig } 
 import type pg from 'pg';
 import { pino, type Logger } from 'pino';
 import type { BrowserPool } from '../browser/pool.js';
+import type { TunnelPort } from '../tunnel/client.js';
 import { runReconnaissancePass } from './browser-executors.js';
 import type { StrategyRuntime, StrategyTrial } from './strategy-executor.js';
+import { pageFetchTransport, TunnelSession } from './tunnel-executor.js';
+import { hostWithinDomain } from '@runtime/core/tunnel';
 
 /** Couche LLM de l'enquête : configuration relue à chaque run (rôles `investigate`, `extract`, `agent`), client par run. */
 type InvestigationLlmPorts = {
@@ -112,6 +132,8 @@ export type InvestigationExecutorDeps = {
   readonly proxyResolver?: Resolver;
   /** Exécuteur de stratégie : chaque exécution d'un couple candidat passe par lui (mêmes gardes qu'un run). */
   readonly strategy: StrategyRuntime;
+  /** Client du tunnel (2.7) : étape 0 et reconnaissance d'une enquête à session ou en tunnel seul ; absent : `tunnel_offline`. */
+  readonly tunnel?: TunnelPort;
   readonly llm?: InvestigationLlmPorts;
   /** Exécuteurs agentiques E4-E6 branchés dans l'exécuteur de stratégie : leurs couples entrent alors dans le plan. */
   readonly agentic?: boolean;
@@ -134,7 +156,7 @@ const STATIC_MAX_BYTES = 5_000_000;
 const STATIC_MAX_ENDPOINTS = 3;
 
 /** Prix d'un rôle en USD par million de jetons ; `undefined` : rôle non configuré, `null` : prix inconnu. */
-function rolePrice(config: LlmConfig | null, role: 'extract' | 'agent'): TokenPrice | null | undefined {
+function rolePrice(config: LlmConfig | null, role: 'extract' | 'agent' | 'investigate'): TokenPrice | null | undefined {
   if (config === null) return undefined;
   const target = roleTarget(config, role);
   if (target === undefined) return undefined;
@@ -153,6 +175,24 @@ function proposedInputSchema(paginated: boolean): Record<string, unknown> {
   };
 }
 
+/** Transport de l'étape 0 et de la reconnaissance : réseau serveur (N1-N3) ou tunnel de l'extension (session requise). */
+type AccessPorts = {
+  readonly mode: 'server' | 'tunnel';
+  readonly robots: RobotsGate;
+  readonly probe: AccessProbe;
+  /** Sonde de la reconnaissance sans navigateur (corps bornés plus largement). */
+  readonly reconProbe: AccessProbe;
+  readonly pacer: RequestPacer | undefined;
+  /** Coût proxy de l'étape 0 et des sondes (0 en tunnel). */
+  readonly proxyUsd: () => number;
+  readonly tunnel: TunnelSession | null;
+  /** Session réseau serveur et ce qu'il faut pour ouvrir le proxy d'egress de la passe Chromium. */
+  readonly server: { readonly sessionBase: SessionBase; readonly ceiling: number } | null;
+  close(): Promise<void>;
+};
+
+type SessionBase = Omit<Parameters<typeof openNetworkSession>[0], 'allowedHosts' | 'allowedHostSuffixes' | 'costCeiling' | 'checkUrl'>;
+
 export function createInvestigationExecutor(deps: InvestigationExecutorDeps): RunExecutor {
   const now = deps.now ?? Date.now;
   const robotsCache = deps.robotsCache ?? new RobotsCache();
@@ -169,8 +209,14 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
     const request = state.request;
     const pageUrl = new URL(request.url).href;
     const host = new URL(pageUrl).hostname.toLowerCase();
+    // Domaines de l'API (04b §2) : la page et ses sous-domaines (ou ceux du domaine sans `www.`), jamais un voisin.
+    const scope = siteScope(host);
     const baseElapsed = state.elapsed_ms;
     const deadlineMs = started + Math.max(0, request.timeout_s * 1000 - baseElapsed);
+    // `investigation_timeout_s` borne CHAQUE phase (étape 0, reconnaissance, appel LLM, essais), pas seulement les essais.
+    const deadline = AbortSignal.timeout(Math.max(1, deadlineMs - now()));
+    const signal = AbortSignal.any([ctx.signal, deadline]);
+    const timedOut = () => !ctx.signal.aborted && (deadline.aborted || now() >= deadlineMs);
     let spent = state.spent_usd;
     const budgetView = () => ({ spent_usd: spent, max_usd: request.budget_usd, elapsed_s: Math.round((baseElapsed + now() - started) / 1000), timeout_s: request.timeout_s });
     const event = (kind: string, payload: Record<string, unknown> = {}) =>
@@ -185,13 +231,17 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
       if (step?.ok === true) await event(EV.statusChanged, { status: step.status, status_reason: step.reason });
       return step;
     };
-    /** Fin d'enquête en échec : statut visé par la classe (04 §6), phase close sauf échec passager, récit. */
+    /**
+     * Fin d'enquête en échec : statut visé par la classe (04 §6), phase close et récit fermé. Seul un échec passager
+     * (cadence, panne, LLM) laisse l'enquête ouverte ; un échec de configuration (réseau, contact, LLM absent) la mène à
+     * `erreur` (transition 2 : rien de conforme), d'où le bouton Ré-enquêter (16) la relance.
+     */
     const finishFailed = async (failure: ExecFailure, at: string): Promise<RunResult> => {
       const cls = failure.failure_class;
       let statusEvent: StatusEventInput | null;
       if (BLOCKING.has(cls) || ACTION.has(cls)) statusEvent = { type: 'run_failed', failureClass: cls, ...(failure.status === undefined ? {} : { httpStatus: failure.status }) };
       else if (cls === 'robots_unreachable') statusEvent = { type: 'investigation_failed', cause: 'robots_unreachable' };
-      else if (RETRYABLE.has(cls) || cls.startsWith('llm_') || (cls === 'code_error' && at === 'setup')) statusEvent = null;
+      else if (RETRYABLE.has(cls) || cls.startsWith('llm_')) statusEvent = null;
       else statusEvent = { type: 'investigation_failed', cause: 'budget_exhausted' };
       const closes = statusEvent !== null;
       if (closes) await save('done');
@@ -201,7 +251,16 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
       await event(EV.finished, { outcome: 'failed', failure_class: cls, detail: failure.detail, at, budget: budgetView() });
       return { state: 'failed', failure_class: cls, retryable: failure.retryable, error_detail: failure.detail };
     };
-
+    /**
+     * Arrêt sans classe d'échec (04 §6, transition 3) : proxy requis non configuré, extension hors ligne. Phase close, récit
+     * fermé ; le worker applique `run_stopped` (→ `action_requise`).
+     */
+    const finishStopped = async (reason: 'proxy_not_configured' | 'tunnel_offline', detail: string, at: string): Promise<RunResult> => {
+      await save('done');
+      await event(EV.actionRequired, { cause: reason, domain: host });
+      await event(EV.finished, { outcome: 'stopped', stop_reason: reason, detail, at, budget: budgetView() });
+      return { state: 'failed', failure_class: null, stop_reason: reason, retryable: false, error_detail: detail };
+    };
     /** Budget, durée ou nombre d'essais épuisés sans stratégie conforme : `erreur` (2) ou statut précédent (21). */
     const budgetExhausted = async (reason: string): Promise<RunResult> => {
       await save('done');
@@ -212,44 +271,28 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
 
     // --- réseau autorisé (politique de l'API, proxys de l'admin) et identité du robot ------------------------------
     let rungs: NetworkRung[];
+    let tunnelChosen: boolean;
     try {
       rungs = buildNetworkRungs(parseNetworkPolicy(target.api.networkPolicy), parseProxyDefinitions(await readProxySettings(deps.pool)));
+      tunnelChosen = policyAllowsTunnel(target.api.networkPolicy);
     } catch {
-      return { state: 'failed', failure_class: 'code_error', retryable: false, error_detail: 'network_config' };
+      return await finishFailed({ failure_class: 'code_error', retryable: false, detail: 'network_config' }, 'setup');
     }
-    const tunnelChosen = (() => {
-      try {
-        return policyAllowsTunnel(target.api.networkPolicy);
-      } catch {
-        return false;
-      }
-    })();
+    // 04 §4 : reconnaissance « en tunnel si la session est requise » ; aussi quand la politique n'admet que le tunnel.
+    const sessionRequired = target.api.requiresSession || target.api.requires.tunnel === true;
+    const tunnelMode = sessionRequired || (rungs.length === 0 && tunnelChosen);
     const first = rungs[0];
-    if (first === undefined) {
-      // Politique sans réseau serveur : un proxy requis manque (transition 3), ou une enquête par le seul tunnel, hors V1.
-      if (tunnelChosen) return { state: 'failed', failure_class: 'code_error', retryable: false, error_detail: 'investigation_tunnel_only_unsupported' };
-      // Run arrêté sans classe d'échec : le worker applique `run_stopped` (transition 3).
-      return { state: 'failed', failure_class: null, stop_reason: 'proxy_not_configured', retryable: false, error_detail: 'proxy_not_configured' };
-    }
-    let credentials: ProxyCredentials | undefined;
-    if (first.mode !== 'direct' && first.proxy.credentialsSecretId !== undefined) {
-      if (deps.secrets === undefined) return { state: 'failed', failure_class: 'code_error', retryable: false, error_detail: 'proxy_credentials_unavailable' };
-      try {
-        credentials = await loadProxyCredentials(deps.secrets, first.proxy);
-      } catch {
-        return { state: 'failed', failure_class: 'code_error', retryable: false, error_detail: 'proxy_credentials_unavailable' };
-      }
-    }
+    // Politique sans réseau serveur ni tunnel : un proxy requis manque (transition 3).
+    if (!tunnelMode && first === undefined) return await finishStopped('proxy_not_configured', 'proxy_not_configured', 'setup');
     let userAgent: string;
     try {
       // 17 §5 : le contact de l'instance est requis avant toute enquête.
       const contact = requireInstanceContact((await deps.instanceContact?.()) ?? null);
       userAgent = buildUserAgent({ version: deps.version ?? '0.0.0', contact });
     } catch (error) {
-      if (error instanceof InstanceContactError) return { state: 'failed', failure_class: 'code_error', retryable: false, error_detail: error.code };
+      if (error instanceof InstanceContactError) return await finishFailed({ failure_class: 'code_error', retryable: false, detail: error.code }, 'setup');
       throw error;
     }
-
     const pacerFor = (robots?: RobotsGate): RequestPacer | undefined =>
       deps.pacer === undefined
         ? undefined
@@ -258,76 +301,163 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
             ...(target.api.domainPacing.max_wait_ms === undefined ? {} : { maxWaitMs: target.api.domainPacing.max_wait_ms }),
             ...(robots === undefined ? {} : { crawlDelayMs: robots.crawlDelayMs }),
           });
-    // Étape 0 et reconnaissance sous le plus petit de `max_cost_usd` et du budget restant de l'enquête.
-    const stageCeiling = Math.max(0, Math.min(target.api.maxCostUsd, request.budget_usd - spent));
-    const sessionBase = {
-      rung: first,
-      guard: deps.guard,
-      ...(credentials === undefined ? {} : { credentials }),
-      ...(deps.proxyResolver === undefined ? {} : { proxyResolver: deps.proxyResolver }),
-      userAgent,
+
+    let ports: AccessPorts;
+    if (tunnelMode) {
+      if (deps.tunnel === undefined) return await finishStopped('tunnel_offline', 'tunnel_unavailable', 'setup');
+      const declared = target.api.requires.session_domain;
+      const verdict = checkSiteDomain(typeof declared === 'string' && declared !== '' ? declared : host);
+      if (!verdict.ok) return await finishFailed({ failure_class: 'code_error', retryable: false, detail: 'domain_not_allowed' }, 'setup');
+      const tunnel = new TunnelSession(
+        deps.tunnel,
+        { runId: ctx.runId, ownerId: ctx.ownerId, domain: verdict.domain, allowWriteActions: false, execution: 'fetch' },
+        signal,
+        ctx.waitingTunnel === undefined ? undefined : (waiting) => ctx.waitingTunnel!(waiting),
+      );
+      const robots = new RobotsGate({
+        fetch: tunnelRobotsFetcher(tunnel),
+        cache: robotsCache,
+        signal,
+        allowedHosts: [host],
+        allowedHostSuffixes: [scope],
+        ...(pacerFor() === undefined ? {} : { pacer: pacerFor()! }),
+      });
+      ports = {
+        mode: 'tunnel',
+        robots,
+        // Corps borné comme la reconnaissance : en tunnel, une page plus grosse que la borne serait refusée, pas tronquée.
+        probe: tunnelProbe(tunnel, STATIC_MAX_BYTES),
+        reconProbe: tunnelProbe(tunnel, STATIC_MAX_BYTES),
+        pacer: pacerFor(robots),
+        proxyUsd: () => 0,
+        tunnel,
+        server: null,
+        close: async () => undefined,
+      };
+    } else {
+      const rung = first!;
+      let credentials: ProxyCredentials | undefined;
+      if (rung.mode !== 'direct' && rung.proxy.credentialsSecretId !== undefined) {
+        // Identifiants du proxy requis illisibles : proxy requis non configuré (transition 3).
+        if (deps.secrets === undefined) return await finishStopped('proxy_not_configured', 'proxy_credentials_unavailable', 'setup');
+        try {
+          credentials = await loadProxyCredentials(deps.secrets, rung.proxy);
+        } catch {
+          return await finishStopped('proxy_not_configured', 'proxy_credentials_unavailable', 'setup');
+        }
+      }
+      // Étape 0 et reconnaissance sous le plus petit de `max_cost_usd` et du budget restant de l'enquête.
+      const ceiling = Math.max(0, Math.min(target.api.maxCostUsd, request.budget_usd - spent));
+      const sessionBase: SessionBase = {
+        rung,
+        guard: deps.guard,
+        ...(credentials === undefined ? {} : { credentials }),
+        ...(deps.proxyResolver === undefined ? {} : { proxyResolver: deps.proxyResolver }),
+        userAgent,
+      };
+      const robotsSession = openNetworkSession({ ...sessionBase, costCeiling: { maxUsd: ceiling } });
+      const robots = new RobotsGate({
+        fetch: sessionRobotsFetcher(robotsSession),
+        cache: robotsCache,
+        signal,
+        allowedHosts: [host],
+        allowedHostSuffixes: [scope],
+        ...(pacerFor() === undefined ? {} : { pacer: pacerFor()! }),
+      });
+      const session: NetworkSession = openNetworkSession({
+        ...sessionBase,
+        allowedHosts: [host],
+        allowedHostSuffixes: [scope],
+        checkUrl: robots.checkUrl,
+        costCeiling: { maxUsd: ceiling, otherUsd: () => robotsSession.usage().costUsd },
+      });
+      ports = {
+        mode: 'server',
+        robots,
+        probe: sessionAccessProbe(session),
+        reconProbe: sessionAccessProbe(session, STATIC_MAX_BYTES),
+        pacer: pacerFor(robots),
+        proxyUsd: () => robotsSession.usage().costUsd + session.usage().costUsd,
+        tunnel: null,
+        server: { sessionBase, ceiling },
+        close: async () => {
+          await session.close().catch(() => undefined);
+          await robotsSession.close().catch(() => undefined);
+        },
+      };
+    }
+    const { robots, pacer } = ports;
+    /** Arrêt du tunnel (extension hors ligne, défi, site non connecté) : il prime sur l'échec vu par l'étape. */
+    const tunnelOutcome = async (at: string): Promise<RunResult | null> => {
+      const t = ports.tunnel;
+      if (t === null) return null;
+      if (t.stop === 'tunnel_offline') return finishStopped('tunnel_offline', 'tunnel_offline', at);
+      if (t.stop === 'challenge_in_tunnel') return finishFailed({ failure_class: 'blocked_by_protection', retryable: false, detail: 'challenge_in_tunnel' }, at);
+      if (t.needsUser) return finishFailed({ failure_class: 'auth_required', retryable: false, detail: 'site_not_connected' }, at);
+      return null;
     };
-    const robotsSession = openNetworkSession({ ...sessionBase, costCeiling: { maxUsd: stageCeiling } });
-    const robots = new RobotsGate({ fetch: sessionRobotsFetcher(robotsSession), cache: robotsCache, signal: ctx.signal, allowedHosts: [host], ...(pacerFor() === undefined ? {} : { pacer: pacerFor()! }) });
-    const pacer = pacerFor(robots);
-    let session: NetworkSession | undefined;
-    const stageProxyUsd = () => robotsSession.usage().costUsd + (session?.usage().costUsd ?? 0);
 
     try {
-      await event(EV.started, { phase, url: narrativeUrl(pageUrl), domain: host, budget: budgetView() });
-      session = openNetworkSession({ ...sessionBase, allowedHosts: [host], checkUrl: robots.checkUrl, costCeiling: { maxUsd: stageCeiling, otherUsd: () => robotsSession.usage().costUsd } });
+      await event(EV.started, { phase, url: narrativeUrl(pageUrl), domain: host, network: ports.mode === 'tunnel' ? 'tunnel' : first?.mode, budget: budgetView() });
 
       // --- 0. Rapport d'accès -------------------------------------------------------------------------------------
-      const report: AccessReport = await buildAccessReport({ url: pageUrl, gate: robots, probe: sessionAccessProbe(session), ...(pacer === undefined ? {} : { pacer }), signal: ctx.signal, now });
+      const report: AccessReport = await buildAccessReport({ url: pageUrl, gate: robots, probe: ports.probe, ...(pacer === undefined ? {} : { pacer }), signal, now });
+      const stopped0 = await tunnelOutcome('access_check');
+      if (stopped0 !== null) return stopped0;
       await recordAccessReport(deps.pool, { runId: ctx.runId, ownerId: ctx.ownerId, payload: accessReportEventPayload(report) });
       if (!report.verdict.proceed) {
-        await charge(ctx, stageProxyUsd());
-        spent = round6(spent + stageProxyUsd());
+        await charge(ctx, ports.proxyUsd());
+        spent = round6(spent + ports.proxyUsd());
         return await finishFailed(report.verdict.failure, 'access_check');
       }
+      if (timedOut()) return await budgetExhausted('investigation_timeout_s');
 
-      // --- 1. Reconnaissance ----------------------------------------------------------------------------------------
-      let candidates: readonly DataCandidate[] | undefined = state.candidates;
-      let capture: ReconCapture | null = null;
-      if (state.validated_schema === undefined || candidates === undefined) {
+      // --- 1. Reconnaissance (à chaque run : l'état ne garde aucune valeur du site, 17 §6) ------------------------
+      // Premier run : gisements frais. Run des essais (schéma validé) : mêmes gisements, retrouvés sous leurs identifiants.
+      const firstRun = state.validated_schema === undefined;
+      if (firstRun) {
         await save('reconnaissance');
         await event(EV.phase, { phase: 'reconnaissance', budget: budgetView() });
-        const recon =
-          deps.browsers !== null
-            ? await browserRecon(deps, { url: pageUrl, host, signal: ctx.signal, robots, userAgent, sessionBase, ceiling: stageCeiling, otherUsd: stageProxyUsd, ...(pacer === undefined ? {} : { pacer }) })
-            : await staticRecon(session, { url: pageUrl, signal: ctx.signal, robots, ...(pacer === undefined ? {} : { pacer }) });
-        await charge(ctx, stageProxyUsd() + recon.proxyUsd);
-        spent = round6(spent + stageProxyUsd() + recon.proxyUsd);
-        capture = recon.capture;
-        candidates = recon.failure === null ? analyzeCapture(recon.capture, [host]) : [];
-        await event(EV.reconnaissance, {
-          mode: recon.capture.mode,
-          ...(recon.failure === null ? {} : { failure_class: recon.failure.failure_class, detail: recon.failure.detail }),
-          candidates: candidates.map((c) => ({
-            id: c.id,
-            from: c.from,
-            request: { method: c.request.method, url: narrativeUrl(c.request.url) },
-            ...(c.locator === undefined ? {} : { locator: c.locator.kind }),
-            records: c.records,
-            count: c.count,
-            bytes: c.bytes,
-            fields: Object.keys(c.skeleton).length,
-            ...(c.unsupported === undefined ? {} : { unsupported: c.unsupported }),
-          })),
-          document_bytes: recon.capture.document?.bytes ?? 0,
-          total_bytes: recon.capture.totalBytes,
-          budget: budgetView(),
-        });
-        if (recon.failure !== null) return await finishFailed(recon.failure, 'reconnaissance');
-        await save('reconnaissance', {
-          candidates,
-          page: { url: pageUrl, host, document_bytes: recon.capture.document?.bytes ?? 0, total_bytes: recon.capture.totalBytes, mode: recon.capture.mode },
-        });
-      } else {
-        await charge(ctx, stageProxyUsd());
-        spent = round6(spent + stageProxyUsd());
       }
+      const recon =
+        ports.mode === 'tunnel'
+          ? await staticRecon(ports.reconProbe, { url: pageUrl, allowHost: (h) => withinSiteScope(h, scope) && hostWithinDomain(h, ports.tunnel!.domain), signal, robots, mode: 'tunnel', ...(pacer === undefined ? {} : { pacer }) })
+          : deps.browsers !== null
+            ? await browserRecon(deps, { url: pageUrl, host, scope, signal, robots, userAgent, sessionBase: ports.server!.sessionBase, ceiling: ports.server!.ceiling, otherUsd: ports.proxyUsd, ...(pacer === undefined ? {} : { pacer }) })
+            : await staticRecon(ports.reconProbe, { url: pageUrl, allowHost: (h) => withinSiteScope(h, scope), signal, robots, mode: 'static', ...(pacer === undefined ? {} : { pacer }) });
+      await charge(ctx, ports.proxyUsd() + recon.proxyUsd);
+      spent = round6(spent + ports.proxyUsd() + recon.proxyUsd);
+      const stopped1 = await tunnelOutcome('reconnaissance');
+      if (stopped1 !== null) return stopped1;
+      const capture: ReconCapture = recon.capture;
+      const fresh = recon.failure === null ? analyzeCapture(capture, apiHostsOf(capture, host, scope)) : [];
+      const candidates: readonly DataCandidate[] = firstRun ? fresh : rematchCandidates(state.candidates ?? [], fresh);
+      await event(EV.reconnaissance, {
+        mode: capture.mode,
+        ...(recon.failure === null ? {} : { failure_class: recon.failure.failure_class, detail: recon.failure.detail }),
+        candidates: candidates.map((c) => ({
+          id: c.id,
+          from: c.from,
+          request: { method: c.request.method, url: narrativeUrl(c.request.url) },
+          ...(c.locator === undefined ? {} : { locator: c.locator.kind }),
+          records: c.records,
+          count: c.count,
+          bytes: c.bytes,
+          fields: Object.keys(c.skeleton).length,
+          ...(c.unsupported === undefined ? {} : { unsupported: c.unsupported }),
+        })),
+        document_bytes: capture.document?.bytes ?? 0,
+        total_bytes: capture.totalBytes,
+        budget: budgetView(),
+      });
+      if (recon.failure !== null) return await finishFailed(recon.failure, 'reconnaissance');
+      // État : gisements SANS valeur (origine, chemin, noms de paramètres) ; ceux du premier run gardent leurs identifiants.
+      await save(firstRun ? 'reconnaissance' : phase, {
+        candidates: firstRun ? fresh.map(storedCandidate) : (state.candidates ?? []),
+        page: { url: pageUrl, host, document_bytes: capture.document?.bytes ?? 0, total_bytes: capture.totalBytes, mode: capture.mode },
+      });
       if (spent >= request.budget_usd) return await budgetExhausted('investigation_budget_usd');
+      if (timedOut()) return await budgetExhausted('investigation_timeout_s');
 
       // --- 2. Schéma de sortie d'abord ------------------------------------------------------------------------------
       const config = deps.llm === undefined ? null : await deps.llm.config().catch(() => null);
@@ -349,30 +479,42 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
         } catch {
           return await finishFailed({ failure_class: 'code_error', retryable: false, detail: 'llm_not_configured' }, 'setup');
         }
+        const model = config.roles.investigate.model;
         const exampleOutput = (ctx.input as { example_output?: unknown } | null)?.example_output;
+        const args = {
+          description: request.description,
+          ...(exampleOutput === undefined ? {} : { exampleOutput }),
+          candidates,
+          accessFacts: accessFactsForPrompt(report),
+          ...(fixed === undefined ? {} : { fixedSchema: fixed }),
+        };
+        // Coût d'un appel borné AVANT l'envoi (sortie plafonnée, entrée estimée par excès) : jamais un appel qui
+        // ferait dépasser `investigation_budget_usd` ; prix inconnu → aucun appel (08 §1, jamais 0).
+        const price = rolePrice(config, 'investigate');
+        if (price === null || price === undefined) {
+          await ctx.log('warn', 'llm_price_missing', { model, role: 'investigate' });
+          return await finishFailed({ failure_class: 'run_budget_exceeded', retryable: false, detail: 'llm_price_missing' }, 'schema');
+        }
+        const callCeiling = investigateCallCeilingUsd(args, price);
         let llmFailure: ExecFailure | null = null;
         try {
           const out = await proposeInvestigation(client, {
-            description: request.description,
-            ...(exampleOutput === undefined ? {} : { exampleOutput }),
-            candidates,
-            accessFacts: accessFactsForPrompt(report),
-            ...(fixed === undefined ? {} : { fixedSchema: fixed }),
-            signal: ctx.signal,
+            ...args,
+            signal,
             beforeCall: () => {
-              if (spent + (client.meter.snapshot().cost_usd_known ?? 0) >= request.budget_usd) throw new BudgetGuardError();
+              if (spent + (client.meter.snapshot().cost_usd_known ?? 0) + callCeiling > request.budget_usd) throw new BudgetGuardError();
             },
           });
           proposal = out.proposal;
         } catch (error) {
           if (ctx.signal.aborted) throw error;
-          if (error instanceof BudgetGuardError) llmFailure = { failure_class: 'run_budget_exceeded', retryable: false, detail: 'investigation_budget_usd' };
+          if (timedOut()) llmFailure = { failure_class: 'run_budget_exceeded', retryable: false, detail: 'investigation_timeout_s' };
+          else if (error instanceof BudgetGuardError) llmFailure = { failure_class: 'run_budget_exceeded', retryable: false, detail: 'investigation_budget_usd' };
           else if (error instanceof LlmError) llmFailure = { failure_class: toFailureClass(error.class), retryable: false, detail: `llm_${error.class}` };
           else llmFailure = { failure_class: 'extraction', retryable: false, detail: 'proposal_unreadable' };
         }
         // Coût du rôle `investigate` (tentatives échouées comprises), imputé au run : inconnu si le prix manque.
         const usage = client.meter.snapshot();
-        const model = config.roles.investigate.model;
         await charge(ctx, 0, usage.cost_usd, { in: usage.tokens_in, cached: usage.tokens_cached, out: usage.tokens_out, reasoning: usage.tokens_reasoning, estimated: usage.usage_estimated });
         if (usage.cost_usd === null) {
           await ctx.log('warn', 'llm_price_missing', { model, role: 'investigate' });
@@ -380,23 +522,27 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
         }
         spent = round6(spent + usage.cost_usd);
         if (llmFailure !== null) {
-          if (llmFailure.failure_class === 'run_budget_exceeded') return await budgetExhausted('investigation_budget_usd');
+          if (llmFailure.failure_class === 'run_budget_exceeded') return await budgetExhausted(llmFailure.detail);
           return await finishFailed(llmFailure, 'schema');
         }
         await ctx.log('info', 'investigate_call', { model, prompt_version: investigatePromptVersion, llm_usd: usage.cost_usd, calls: usage.calls });
       }
-      const built = buildFromProposal(proposal!, candidates, capture, { ...(fixed === undefined ? {} : { fixedSchema: fixed }), agenticOnly });
+      const built = buildFromProposal(proposal!, candidates, fixed === undefined ? capture : null, { ...(fixed === undefined ? {} : { fixedSchema: fixed }), agenticOnly });
       if (!built.ok) {
         await event(EV.schemaProposed, { ok: false, reason: built.reason, rejected: built.rejected, budget: budgetView() });
         return await finishFailed({ failure_class: 'extraction', retryable: false, detail: built.reason }, 'schema');
       }
       if (fixed === undefined) {
-        // Échantillon : données de l'utilisateur, inscrites au registre de masquage du run (17 §6).
+        // Échantillon : données de l'utilisateur, inscrites au registre de masquage du run, puis passées par la liste
+        // d'exclusion des personnes effacées AVANT toute écriture (17 §6, assert_erasure_complete) : une personne effacée
+        // n'est jamais réécrite dans le récit ni montrée à l'appelant.
         for (const item of built.sample) ctx.personal.addFromItem(built.outputSchema, item);
+        const { kept: sample, dropped } = ctx.excludeSubjects(built.outputSchema, built.sample);
+        if (dropped > 0) await ctx.log('info', 'subjects_excluded', { dropped, at: 'schema_sample' });
         await event(EV.schemaProposed, {
           ok: true,
           output_schema: built.outputSchema,
-          sample: built.sample,
+          sample,
           sources: built.strategies.map((s) => s.candidate.id),
           rejected: built.rejected,
           llm: { prompt_version: investigatePromptVersion },
@@ -416,11 +562,12 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
       }
       const outputSchema = built.outputSchema;
       if (spent >= request.budget_usd) return await budgetExhausted('investigation_budget_usd');
+      if (timedOut()) return await budgetExhausted('investigation_timeout_s');
 
       // --- 3. Essais du moins cher au plus cher --------------------------------------------------------------------
       await save('testing');
       const networks: PlanNetwork[] = rungs.map((r) => ({ mode: r.mode, perGbUsd: r.mode === 'direct' ? 0 : r.proxy.price.perGbUsd }));
-      if (tunnelChosen || target.api.requires.tunnel === true || target.api.requiresSession) networks.push({ mode: 'tunnel', perGbUsd: 0 });
+      if (tunnelChosen || sessionRequired) networks.push({ mode: 'tunnel', perGbUsd: 0 });
       const plan = buildTrialPlan({
         strategies: built.strategies,
         networks,
@@ -439,99 +586,123 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
       });
       const entries = new Map<TrialPair, PlanEntry>(plan.map((p) => [p, p]));
       const lastRecords = new Map<TrialPair, Record<string, unknown>[]>();
+      /** Trace E6 compilée en E5 par la dernière exécution conforme du couple (04 §3.1). */
+      const compiledFor = new Map<TrialPair, unknown>();
       const spend = new Map<TrialPair, { proxy: number; llm: number | null; tokens: { in: number; cached: number; out: number; reasoning: number; estimated: boolean }; model: string | null; prompt: string | null; engine: string | null }>();
-      const outcome = await runTrials(
-        plan,
-        {
-          now,
-          execute: async (pair, index, limits) => {
-            const entry = entries.get(pair)!;
-            const trialTarget: RunTarget = {
-              api: { ...target.api, outputSchema, maxCostUsd: limits.ceilingUsd },
-              strategy: { version: 0, execution: entry.execution, network: entry.network, spec: entry.spec, scriptRef: null, estCostUsd: entry.est_cost_usd },
-            };
-            const timeout = AbortSignal.timeout(Math.max(1, limits.deadlineMs - now()));
-            const trialCtx: RunCtx = { ...ctx, signal: AbortSignal.any([ctx.signal, timeout]), input: entry.paginated ? { max_pages: 2 } : {} };
-            let trial: StrategyTrial;
-            try {
-              trial = await deps.strategy.trial(trialCtx, trialTarget, trialTarget.strategy!);
-            } catch (error) {
-              if (ctx.signal.aborted) throw error;
-              if (timeout.aborted) return execution(false, 'run_budget_exceeded', 'investigation_timeout_s', 0, null, 0, null);
-              logger.warn({ runId: ctx.runId, err: error instanceof Error ? error.name : 'error' }, 'enquête : essai en erreur');
-              return execution(false, 'code_error', 'trial_error', 0, 0, 0, null);
-            }
-            const acc = spend.get(pair) ?? { proxy: 0, llm: 0, tokens: { in: 0, cached: 0, out: 0, reasoning: 0, estimated: false }, model: null, prompt: null, engine: null };
-            acc.proxy = round6(acc.proxy + trial.proxyUsd);
-            acc.llm = acc.llm === null || trial.llmUsd === null ? null : round6(acc.llm + trial.llmUsd);
-            if (trial.llm !== null) {
-              const t = trial.llm.tokens;
-              acc.tokens = { in: acc.tokens.in + t.in, cached: acc.tokens.cached + t.cached, out: acc.tokens.out + t.out, reasoning: acc.tokens.reasoning + t.reasoning, estimated: acc.tokens.estimated || t.estimated };
-              acc.model = trial.llm.modelId ?? acc.model;
-              acc.prompt = trial.llm.promptVersion ?? acc.prompt;
-              acc.engine = trial.llm.engine ?? acc.engine;
-            }
-            spend.set(pair, acc);
-            const cost = trial.llmUsd === null ? null : round6(trial.proxyUsd + trial.llmUsd);
-            const r = trial.result;
-            const stop = trial.outcome.stop;
-            if (stop === 'challenge_in_tunnel') return execution(false, 'blocked_by_protection', 'challenge_in_tunnel', r.pages, cost, trial.ms, null);
-            if (stop === 'tunnel_offline') return execution(false, 'code_error', 'tunnel_offline', r.pages, cost, trial.ms, null);
-            if (trial.outcome.needsUser === true && !r.ok) return execution(false, 'auth_required', 'site_not_connected', r.pages, cost, trial.ms, null);
-            if (cost === null) return execution(false, 'run_budget_exceeded', 'llm_price_missing', r.pages, null, trial.ms, null);
-            if (cost > limits.ceilingUsd) return execution(false, 'run_budget_exceeded', 'max_cost_usd', r.pages, cost, trial.ms, null);
-            if (!r.ok) {
-              const f = trial.guardedFailure ?? r.failure;
-              return execution(false, f.failure_class, f.detail, r.pages, cost, trial.ms, null);
-            }
-            lastRecords.set(pair, r.records);
-            return { ...execution(true, null, null, r.pages, cost, trial.ms, r.stop), records: r.records.length };
+      const spentBeforeTrials = spent;
+      let trialsUsd = 0;
+      let outcome: TrialsOutcome;
+      try {
+        outcome = await runTrials(
+          plan,
+          {
+            now,
+            execute: async (pair, index, limits) => {
+              const entry = entries.get(pair)!;
+              const trialTarget: RunTarget = {
+                api: { ...target.api, outputSchema, maxCostUsd: limits.ceilingUsd },
+                strategy: { version: 0, execution: entry.execution, network: entry.network, spec: entry.spec, scriptRef: null, estCostUsd: entry.est_cost_usd },
+              };
+              const timeout = AbortSignal.timeout(Math.max(1, limits.deadlineMs - now()));
+              const trialCtx: RunCtx = { ...ctx, signal: AbortSignal.any([ctx.signal, timeout]), input: entry.paginated ? { max_pages: 2 } : {} };
+              let trial: StrategyTrial;
+              try {
+                trial = await deps.strategy.trial(trialCtx, trialTarget, trialTarget.strategy!);
+              } catch (error) {
+                if (ctx.signal.aborted) throw error;
+                if (timeout.aborted) return execution(false, 'run_budget_exceeded', 'investigation_timeout_s', 0, null, 0, null);
+                logger.warn({ runId: ctx.runId, err: error instanceof Error ? error.name : 'error' }, 'enquête : essai en erreur');
+                return execution(false, 'code_error', 'trial_error', 0, 0, 0, null);
+              }
+              const acc = spend.get(pair) ?? { proxy: 0, llm: 0, tokens: { in: 0, cached: 0, out: 0, reasoning: 0, estimated: false }, model: null, prompt: null, engine: null };
+              acc.proxy = round6(acc.proxy + trial.proxyUsd);
+              acc.llm = acc.llm === null || trial.llmUsd === null ? null : round6(acc.llm + trial.llmUsd);
+              if (trial.llm !== null) {
+                const t = trial.llm.tokens;
+                acc.tokens = { in: acc.tokens.in + t.in, cached: acc.tokens.cached + t.cached, out: acc.tokens.out + t.out, reasoning: acc.tokens.reasoning + t.reasoning, estimated: acc.tokens.estimated || t.estimated };
+                acc.model = trial.llm.modelId ?? acc.model;
+                acc.prompt = trial.llm.promptVersion ?? acc.prompt;
+                acc.engine = trial.llm.engine ?? acc.engine;
+              }
+              spend.set(pair, acc);
+              const cost = trial.llmUsd === null ? null : round6(trial.proxyUsd + trial.llmUsd);
+              trialsUsd = round6(trialsUsd + (cost ?? 0));
+              const r = trial.result;
+              const stop = trial.outcome.stop;
+              // Extension hors ligne (04 §6, transition 3) : arrêt SANS classe d'échec, aucun essai journalisé (comme un run).
+              if (stop === 'tunnel_offline') throw new TunnelOfflineStop();
+              if (stop === 'challenge_in_tunnel') return execution(false, 'blocked_by_protection', 'challenge_in_tunnel', r.pages, cost, trial.ms, null);
+              if (trial.outcome.needsUser === true && !r.ok) return execution(false, 'auth_required', 'site_not_connected', r.pages, cost, trial.ms, null);
+              if (cost === null) return execution(false, 'run_budget_exceeded', 'llm_price_missing', r.pages, null, trial.ms, null);
+              if (cost > limits.ceilingUsd) return execution(false, 'run_budget_exceeded', 'max_cost_usd', r.pages, cost, trial.ms, null);
+              if (!r.ok) {
+                const f = trial.guardedFailure ?? r.failure;
+                return execution(false, f.failure_class, f.detail, r.pages, cost, trial.ms, null);
+              }
+              // E6 réussi sans trace compilable en E5 : jamais retenu (04 §3.1, pas d'agent à chaque run sans `instructed_mode`).
+              if (entry.execution === 'agent') {
+                const compiled = trial.outcome.agent?.compiled;
+                if (compiled === undefined) return execution(false, 'extraction', 'not_compilable', r.pages, cost, trial.ms, null);
+                compiledFor.set(pair, compiled);
+              }
+              lastRecords.set(pair, r.records);
+              return { ...execution(true, null, null, r.pages, cost, trial.ms, r.stop), records: r.records.length };
+            },
+            finished: async (o: PairOutcome) => {
+              const acc = spend.get(o.pair);
+              await ctx.recordAttempt({
+                execution: o.pair.execution,
+                network: o.pair.network,
+                est_cost_usd: o.pair.est_cost_usd,
+                result: o.result,
+                ms: o.ms,
+                proxy_usd: acc?.proxy ?? 0,
+                ...(acc === undefined || (acc.model === null && acc.llm === 0)
+                  ? {}
+                  : { llm_usd: acc.llm, tokens: acc.tokens, model_id: acc.model, prompt_version: acc.prompt, engine: acc.engine }),
+              });
+              await event(EV.attemptFinished, {
+                attempt: { execution: o.pair.execution, network: o.pair.network, est_cost_usd: o.pair.est_cost_usd, result: o.result, cost_usd: o.cost_usd, ms: o.ms },
+                source: o.pair.source,
+                ...(o.detail === null ? {} : { why: { code: o.detail, params: {} } }),
+                executions: o.executions.map((e) => ({ ok: e.ok, records: e.records, pages: e.pages, stop: e.stop, cost_usd: e.cost_usd, ms: e.ms })),
+                budget: budgetView(),
+              });
+            },
+            pruned: async (pairs, by, cls) => {
+              await event(EV.attemptPruned, {
+                by: { execution: by.execution, network: by.network, source: by.source },
+                reason: cls,
+                pruned: pairs.map((p) => ({ execution: p.execution, network: p.network, source: p.source, est_cost_usd: p.est_cost_usd })),
+              });
+            },
           },
-          finished: async (o: PairOutcome) => {
-            const acc = spend.get(o.pair);
-            await ctx.recordAttempt({
-              execution: o.pair.execution,
-              network: o.pair.network,
-              est_cost_usd: o.pair.est_cost_usd,
-              result: o.result,
-              ms: o.ms,
-              proxy_usd: acc?.proxy ?? 0,
-              ...(acc === undefined || (acc.model === null && acc.llm === 0)
-                ? {}
-                : { llm_usd: acc.llm, tokens: acc.tokens, model_id: acc.model, prompt_version: acc.prompt, engine: acc.engine }),
-            });
-            await event(EV.attemptFinished, {
-              attempt: { execution: o.pair.execution, network: o.pair.network, est_cost_usd: o.pair.est_cost_usd, result: o.result, cost_usd: o.cost_usd, ms: o.ms },
-              source: o.pair.source,
-              ...(o.detail === null ? {} : { why: { code: o.detail, params: {} } }),
-              executions: o.executions.map((e) => ({ ok: e.ok, records: e.records, pages: e.pages, stop: e.stop, cost_usd: e.cost_usd, ms: e.ms })),
-              budget: budgetView(),
-            });
-          },
-          pruned: async (pairs, by, cls) => {
-            await event(EV.attemptPruned, {
-              by: { execution: by.execution, network: by.network, source: by.source },
-              reason: cls,
-              pruned: pairs.map((p) => ({ execution: p.execution, network: p.network, source: p.source, est_cost_usd: p.est_cost_usd })),
-            });
-          },
-        },
-        { maxUsd: request.budget_usd, spentUsd: spent, deadlineMs, maxAttempts: INVESTIGATION_DEFAULTS.maxAttempts, maxCostPerRunUsd: target.api.maxCostUsd },
-        { ...(deps.samples === undefined ? {} : { samples: deps.samples }), paginated: (p) => entries.get(p)?.paginated === true },
-      );
+          { maxUsd: request.budget_usd, spentUsd: spent, deadlineMs, maxAttempts: INVESTIGATION_DEFAULTS.maxAttempts, maxCostPerRunUsd: target.api.maxCostUsd },
+          { ...(deps.samples === undefined ? {} : { samples: deps.samples }), paginated: (p) => entries.get(p)?.paginated === true },
+        );
+      } catch (error) {
+        if (!(error instanceof TunnelOfflineStop)) throw error;
+        spent = round6(spentBeforeTrials + trialsUsd);
+        await ctx.log('warn', 'tunnel_offline', { network: 'tunnel' });
+        return await finishStopped('tunnel_offline', 'tunnel_offline', 'testing');
+      }
       spent = outcome.spentUsd;
 
       switch (outcome.kind) {
         case 'conformant': {
-          const entry = entries.get(outcome.outcome.pair)!;
-          const records = lastRecords.get(outcome.outcome.pair) ?? [];
+          const pair = outcome.outcome.pair;
+          const entry = entries.get(pair)!;
+          const records = lastRecords.get(pair) ?? [];
+          const runs = Math.max(1, outcome.outcome.executions.length);
+          const kept = retainedStrategy(entry, compiledFor.get(pair), round6((spend.get(pair)?.proxy ?? 0) / runs));
+          if (!kept.ok) return await finishFailed({ failure_class: 'extraction', retryable: false, detail: kept.reason }, 'testing');
           const saved = await saveInvestigationStrategy(deps.pool, {
             apiId: ctx.apiId,
             ownerId: ctx.ownerId,
-            execution: entry.execution,
-            network: entry.network,
-            spec: entry.spec,
-            estCostUsd: entry.est_cost_usd,
+            execution: kept.execution,
+            network: kept.network,
+            spec: kept.spec,
+            estCostUsd: kept.estCostUsd,
             outputSchema,
             inputSchema: proposedInputSchema(entry.paginated),
             state: { ...state, spent_usd: spent, elapsed_ms: baseElapsed + Math.max(0, now() - started) },
@@ -542,7 +713,7 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
           await applyStatus({ type: 'investigation_succeeded' });
           await event(EV.finished, {
             outcome: 'conformant',
-            strategy: { version: saved.version, execution: entry.execution, network: entry.network, source: entry.source, est_cost_usd: entry.est_cost_usd },
+            strategy: { version: saved.version, execution: kept.execution, network: kept.network, source: entry.source, est_cost_usd: kept.estCostUsd, ...(kept.execution !== entry.execution ? { compiled_from: entry.execution } : {}) },
             items: records.length,
             budget: budgetView(),
           });
@@ -556,13 +727,23 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
         case 'budget_exhausted':
           return await budgetExhausted(outcome.reason);
         case 'exhausted': {
-          const lastClass = outcome.tried.at(-1)?.result;
-          return await finishFailed({ failure_class: lastClass === undefined || lastClass === 'ok' ? 'extraction' : lastClass, retryable: false, detail: 'no_conformant_strategy' }, 'testing');
+          const last = outcome.tried.at(-1);
+          const lastClass = last?.result;
+          const detail = last?.detail === 'not_compilable' ? 'not_compilable' : 'no_conformant_strategy';
+          return await finishFailed({ failure_class: lastClass === undefined || lastClass === 'ok' ? 'extraction' : lastClass, retryable: false, detail }, 'testing');
         }
       }
+    } catch (error) {
+      // Échéance de l'enquête atteinte pendant une phase (étape 0, reconnaissance, appel LLM) : budget épuisé.
+      if (timedOut()) return await budgetExhausted('investigation_timeout_s');
+      // Extension hors ligne ou défi pendant l'étape 0 ou la reconnaissance (commande refusée localement après l'arrêt).
+      if (!ctx.signal.aborted) {
+        const stopped = await tunnelOutcome('tunnel');
+        if (stopped !== null) return stopped;
+      }
+      throw error;
     } finally {
-      await session?.close().catch(() => undefined);
-      await robotsSession.close().catch(() => undefined);
+      await ports.close();
     }
   };
 }
@@ -570,6 +751,11 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
 /** Garde du budget avant un appel du rôle `investigate` (levée par `beforeCall`, jamais réessayée). */
 class BudgetGuardError extends Error {
   override name = 'BudgetGuardError';
+}
+
+/** Extension hors ligne pendant un essai : arrêt des essais sans classe d'échec. */
+class TunnelOfflineStop extends Error {
+  override name = 'TunnelOfflineStop';
 }
 
 /** Exécution d'un couple (forme de `TrialExecution`). */
@@ -584,6 +770,35 @@ async function charge(ctx: RunCtx, proxyUsd: number, llmUsd: number | null = 0, 
   await ctx.chargeCost({ proxy_usd: round6(proxyUsd), llm_usd: llmUsd, ...(tokens === undefined ? {} : { tokens }) });
 }
 
+/** Domaines de l'API vus par la passe : la page, et les hôtes capturés qui sont dans sa portée de site (04b §2). */
+function apiHostsOf(capture: ReconCapture, host: string, scope: string): string[] {
+  const hosts = new Set<string>([host]);
+  for (const e of capture.exchanges) {
+    try {
+      const h = new URL(e.url).hostname.toLowerCase();
+      if (withinSiteScope(h, scope)) hosts.add(h);
+    } catch {
+      // URL illisible : jamais un domaine de l'API.
+    }
+  }
+  return [...hosts];
+}
+
+/** Lecture de robots.txt par l'extension (`page_fetch`, redirections suivies par le navigateur), corps borné. */
+function tunnelRobotsFetcher(session: TunnelSession): RobotsFetcher {
+  const transport = pageFetchTransport(session, ROBOTS_MAX_BYTES);
+  return async (url, signal) => {
+    const res = await transport({ method: 'GET', url, headers: { accept: 'text/plain, */*;q=0.1' } }, signal);
+    return { status: res.status, location: null, body: res.status >= 200 && res.status < 300 ? res.body : '', truncated: false };
+  };
+}
+
+/** Sonde par l'extension (`page_fetch` dans un onglet du site) : un défi détecté arrête le tunnel sur-le-champ. */
+function tunnelProbe(session: TunnelSession, maxBytes: number): AccessProbe {
+  const transport = pageFetchTransport(session, maxBytes);
+  return (url, signal) => transport({ method: 'GET', url, headers: {} }, signal);
+}
+
 type ReconOutcome = { readonly capture: ReconCapture; readonly failure: ExecFailure | null; readonly proxyUsd: number };
 
 /** Reconnaissance par Chromium : passe E3 sur le premier réseau autorisé, proxy d'egress propre à la passe. */
@@ -592,16 +807,23 @@ async function browserRecon(
   args: {
     url: string;
     host: string;
+    scope: string;
     signal: AbortSignal;
     robots: RobotsGate;
     userAgent: string;
-    sessionBase: Omit<Parameters<typeof openNetworkSession>[0], 'allowedHosts' | 'costCeiling' | 'checkUrl'>;
+    sessionBase: SessionBase;
     ceiling: number;
     otherUsd: () => number;
     pacer?: RequestPacer;
   },
 ): Promise<ReconOutcome> {
-  const egress = await openBrowserEgress({ ...args.sessionBase, allowedHosts: [args.host], checkUrl: args.robots.checkUrl, costCeiling: { maxUsd: args.ceiling, otherUsd: args.otherUsd } });
+  const egress = await openBrowserEgress({
+    ...args.sessionBase,
+    allowedHosts: [args.host],
+    allowedHostSuffixes: [args.scope],
+    checkUrl: args.robots.checkUrl,
+    costCeiling: { maxUsd: args.ceiling, otherUsd: args.otherUsd },
+  });
   try {
     const pass = await runReconnaissancePass({
       pool: deps.browsers!,
@@ -609,6 +831,7 @@ async function browserRecon(
       guard: deps.guard,
       url: args.url,
       allowedHosts: [args.host],
+      allowedHostSuffixes: [args.scope],
       signal: args.signal,
       access: args.robots.access,
       userAgent: args.userAgent,
@@ -621,13 +844,15 @@ async function browserRecon(
 }
 
 /**
- * Reconnaissance sans navigateur (`DISABLE_BROWSER`) : la page (corps borné, classée avant lecture), ses blobs, puis au
- * plus `STATIC_MAX_ENDPOINTS` URL de données appelées par ses scripts en ligne, chacune cadencée, contrôlée par
- * robots.txt (session) et classée ; un refus sur l'une arrête la reconnaissance (INV6).
+ * Reconnaissance sans navigateur (`DISABLE_BROWSER`) ou par l'extension (session requise) : la page (corps borné, classée
+ * avant lecture), ses blobs, puis au plus `STATIC_MAX_ENDPOINTS` URL de données appelées par ses scripts en ligne (domaines
+ * de l'API), chacune cadencée, contrôlée par robots.txt et classée ; un refus sur l'une arrête la reconnaissance (INV6).
  */
-async function staticRecon(session: NetworkSession, args: { url: string; signal: AbortSignal; robots: RobotsGate; pacer?: RequestPacer }): Promise<ReconOutcome> {
-  const probe = sessionAccessProbe(session, STATIC_MAX_BYTES);
-  const empty = (failure: ExecFailure | null): ReconOutcome => ({ capture: { mode: 'static', pageUrl: args.url, document: null, exchanges: [], totalBytes: 0 }, failure, proxyUsd: 0 });
+async function staticRecon(
+  probe: AccessProbe,
+  args: { url: string; allowHost: (host: string) => boolean; signal: AbortSignal; robots: RobotsGate; mode: 'static' | 'tunnel'; pacer?: RequestPacer },
+): Promise<ReconOutcome> {
+  const empty = (failure: ExecFailure | null): ReconOutcome => ({ capture: { mode: args.mode, pageUrl: args.url, document: null, exchanges: [], totalBytes: 0 }, failure, proxyUsd: 0 });
   type Got = { readonly kind: 'failed'; readonly failure: ExecFailure } | { readonly kind: 'got'; readonly exchange: HttpExchange; readonly refused: ExecFailure | null };
   const get = async (url: string): Promise<Got> => {
     if (args.pacer !== undefined) {
@@ -644,12 +869,17 @@ async function staticRecon(session: NetworkSession, args: { url: string; signal:
       return { kind: 'failed', failure: classifyTransportError(error) };
     }
   };
+  // La page passe par robots.txt comme ses URL de données (déjà vérifiée par l'étape 0, relue du cache).
+  const pageDecision = await args.robots.check(args.url);
+  if (!pageDecision.allowed) return empty(pageDecision.failure);
   const page = await get(args.url);
   if (page.kind === 'failed') return empty(page.failure);
   if (page.refused !== null) return empty(page.refused);
   const html = page.exchange.body;
   const exchanges: CapturedExchange[] = [];
   for (const url of discoverScriptEndpoints(html, page.exchange.url, STATIC_MAX_ENDPOINTS)) {
+    // Domaines de l'API (et, en tunnel, du site connecté dans l'extension) seulement.
+    if (!args.allowHost(new URL(url).hostname)) continue;
     const decision = await args.robots.check(url);
     if (!decision.allowed) continue; // chemin interdit : 0 requête, la voie n'existe pas pour nous
     const res = await get(url);
@@ -676,7 +906,7 @@ async function staticRecon(session: NetworkSession, args: { url: string; signal:
   const docBytes = Buffer.byteLength(html);
   return {
     capture: {
-      mode: 'static',
+      mode: args.mode,
       pageUrl: args.url,
       document: { url: page.exchange.url, status: page.exchange.status, html, renderedHtml: null, bytes: docBytes },
       exchanges,
