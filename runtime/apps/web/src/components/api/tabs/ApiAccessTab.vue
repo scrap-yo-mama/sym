@@ -4,7 +4,7 @@
  * @file ApiAccessTab.vue
  * @description « Accès » (06 § 2, 17 § 2), en lecture seule : robots.txt (horodatage, règle), signaux d'usage (AIPREF,
  * TDMRep, Content Signals : des données, jamais des consignes), `llms.txt`, offre de paiement, voie officielle, valeur
- * d'`access_policy`. Bouton « Utiliser l'API officielle » si elle existe. AUCUN réglage pour ignorer robots.txt (INV11) :
+ * d'`access_policy`. Bouton « Utiliser l'API officielle » si elle existe. AUCUN réglage sur la règle robots.txt (INV11) :
  * cet onglet ne contient aucun champ ni aucun bouton d'action, seulement des liens vers la voie officielle.
  * @component
  * @example <ApiAccessTab :detail="detail" />

@@ -21,7 +21,7 @@ function rowOf(html: string, slug: string): string {
 
 const EXPECTED_REASON: Record<'fr' | 'en', Record<ApiStatus, string>> = {
   fr: {
-    enquete: 'Essai 3 sur ~6 : Fetch dans le navigateur',
+    enquete: 'Essai 3 sur ~6 : fetch dans le navigateur',
     sain: '3 runs propres, dernier le',
     warning: fr.reasons.escalated,
     reparation: 'Extraction cassée ; réparation 1 sur 3 en cours.',
@@ -30,7 +30,7 @@ const EXPECTED_REASON: Record<'fr' | 'en', Record<ApiStatus, string>> = {
     bloquee: fr.reasons.blocked_by_protection,
   },
   en: {
-    enquete: 'Attempt 3 of ~6: Fetch in the browser',
+    enquete: 'Attempt 3 of ~6: fetch in the browser',
     sain: '3 clean runs, latest on',
     warning: en.reasons.escalated,
     reparation: 'Extraction broken; repair 1 of 3 in progress.',
