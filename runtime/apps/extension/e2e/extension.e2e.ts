@@ -9,11 +9,19 @@ import { expect, test, type Page } from '@playwright/test';
 import { kekFor, MasterKey } from '@runtime/core';
 import { siteCookiesForRun } from '@runtime/db';
 import pg from 'pg';
-import { EXTENSION_DIR, startHarness, type Harness, type User } from './harness.ts';
+import { EXTENSION_DIR, fakeInstance, startHarness, type Harness, type User } from './harness.ts';
 
 /** API Chrome du service worker, vue depuis `evaluate` (typage minimal). */
 type ChromeApi = {
   cookies: Record<string, (...args: unknown[]) => Promise<unknown>>;
+  alarms: { create(name: string, info: { when: number }): Promise<void> };
+  tabs: { query(q: object): Promise<{ id?: number; url?: string }[]> };
+  debugger: {
+    attach(target: { tabId: number }, version: string): Promise<void>;
+    detach(target: { tabId: number }): Promise<void>;
+    sendCommand(target: { tabId: number }, method: string, params?: object): Promise<{ root: { nodeName: string } }>;
+    getTargets(): Promise<{ tabId?: number; attached: boolean }[]>;
+  };
   permissions: { getAll(): Promise<{ origins?: string[] }>; contains(p: { origins: string[] }): Promise<boolean> };
   runtime: { getManifest(): Record<string, unknown> };
 };
@@ -223,4 +231,170 @@ test('révocation de l’appareil par un admin : jeton refusé, l’extension re
   const sw = await h.serviceWorker();
   expect((await sw.evaluate(() => (globalThis as unknown as SpyGlobal).chrome.permissions.getAll())).origins).not.toEqual(expect.arrayContaining(patterns(FORUM)));
   expect(consoleErrors).toEqual([]);
+});
+
+/** Déclenche la resynchronisation horaire maintenant (alarme du service worker, sans limite pour une extension décompressée). */
+async function triggerResync(): Promise<void> {
+  const sw = await h.serviceWorker();
+  await sw.evaluate(() => (globalThis as unknown as SpyGlobal).chrome.alarms.create('scrapyomama-cookie-resync', { when: Date.now() + 50 }));
+}
+
+async function hasHosts(origins: string[]): Promise<boolean> {
+  const sw = await h.serviceWorker();
+  return sw.evaluate((p) => (globalThis as unknown as SpyGlobal).chrome.permissions.contains({ origins: p }), origins);
+}
+
+/** Appairage d'Alice depuis le popup, puis connexion de SHOP en usage serveur (cookies capturés). */
+async function pairAliceAndConnectShop(): Promise<Page> {
+  const code = await h.console(alice.cookie, 'POST', '/api/extension/pairing-codes', { currentPassword: alice.password });
+  expect(code.status).toBe(201);
+  let page = await openPopup();
+  await page.locator('#pairing, #paired').first().waitFor();
+  if (await page.locator('#pairing').isVisible()) {
+    await page.fill('#instance-url', h.publicUrl);
+    await page.fill('#pairing-code', (code.data as { code: string }).code);
+    await page.fill('#device-label', 'zz_test_e2e_browser');
+    await h.grantHosts(['http://127.0.0.1/*']);
+    await page.click('#pair');
+    await expect(page.locator('#identity')).toHaveText(`Connected as ${alice.email}`);
+  }
+  await visit(SHOP);
+  page = await openPopup();
+  await expect(page.locator('#site-domain')).toHaveText(SHOP);
+  await page.click('#connect-site');
+  await page.check('#mode-server');
+  await h.grantHosts(patterns(SHOP));
+  await page.click('#consent-accept');
+  await expect(page.locator(`#sites li[data-domain="${SHOP}"]`)).toContainText('(server)');
+  return page;
+}
+
+test('« Disconnect » depuis la console : permission d’hôte retirée, 0 lecture de cookie au resync suivant', async () => {
+  await pairAliceAndConnectShop();
+  expect(await hasHosts(patterns(SHOP))).toBe(true);
+  const before = (await cookieReads()).length;
+  const sites = (await h.console(alice.cookie, 'GET', '/api/sites')).data as { items: { id: string; domain: string }[] };
+  const shop = sites.items.find((s) => s.domain === SHOP)!;
+  expect((await h.console(alice.cookie, 'DELETE', `/api/sites/${shop.id}`)).status).toBe(204);
+
+  await triggerResync();
+  await expect.poll(() => hasHosts(patterns(SHOP)), { timeout: 10_000 }).toBe(false);
+  expect((await cookieReads()).length).toBe(before);
+  expect(await h.sql<{ n: number }>('SELECT count(*)::int AS n FROM site_sessions WHERE domain = $1', [SHOP])).toEqual([{ n: 0 }]);
+  const page = await openPopup();
+  await expect(page.locator('#identity')).toHaveText(`Connected as ${alice.email}`);
+  await expect(page.locator(`#sites li[data-domain="${SHOP}"]`)).toHaveCount(0);
+});
+
+test('domaines connectés ailleurs : la liste de l’instance s’affiche dans l’extension, déconnectable d’ici', async () => {
+  const token = await (async () => {
+    const code = await h.console(alice.cookie, 'POST', '/api/extension/pairing-codes', { currentPassword: alice.password });
+    const res = await fetch(`${h.publicUrl}/api/extension/pair`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ code: (code.data as { code: string }).code, deviceId: 'zz_test_e2e_other_device' }),
+    });
+    return ((await res.json()) as { token: string }).token;
+  })();
+  const other = 'zz-test-elsewhere.example';
+  const put = await fetch(`${h.publicUrl}/api/extension/sites/${other}`, { method: 'PUT', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: JSON.stringify({ serverUseAllowed: false }) });
+  expect(put.status).toBe(201);
+  const page = await openPopup();
+  const item = page.locator(`#sites li[data-domain="${other}"]`);
+  await expect(item).toContainText('connected from another browser');
+  await item.locator('.disconnect').click();
+  await expect(item).toHaveCount(0);
+  expect(await h.sql<{ n: number }>('SELECT count(*)::int AS n FROM site_sessions WHERE domain = $1', [other])).toEqual([{ n: 0 }]);
+});
+
+test('ré-appairage vers une autre instance : consentements et permissions effacés, 0 lecture, 0 cookie envoyé à B', async () => {
+  await pairAliceAndConnectShop();
+  const before = (await cookieReads()).length;
+  // B prétend que SHOP est connecté chez elle en usage serveur.
+  const b = await fakeInstance([{ domain: SHOP, serverUseAllowed: true, hasServerCookies: false }]);
+  try {
+    // B partage l'hôte de A (127.0.0.1, autre port) : la permission d'hôte de l'instance reste accordée, celle des
+    // sites est retirée. (Chromium n'accorde pas `http://localhost/*` par developerPrivate ; le retrait de la
+    // permission de l'ancienne instance est couvert par les tests unitaires du noyau.)
+    const page = await openPopup();
+    const res = await page.evaluate(
+      (instanceUrl) => (globalThis as unknown as { chrome: { runtime: { sendMessage(m: unknown): Promise<{ ok: boolean }> } } }).chrome.runtime.sendMessage({ type: 'pair', instanceUrl, code: 'ZZZZZ-ZZZZZ', deviceLabel: null }),
+      b.origin,
+    );
+    expect(res, JSON.stringify(res)).toMatchObject({ ok: true });
+    await triggerResync();
+    await expect.poll(() => b.requests.filter((r) => r.method === 'GET' && r.path === '/api/extension/session').length, { timeout: 10_000 }).toBeGreaterThanOrEqual(2);
+    await page.waitForTimeout(500);
+    expect(b.requests.filter((r) => r.path.endsWith('/cookies'))).toEqual([]);
+    expect(JSON.stringify(b.requests)).not.toContain('zz_test_shop_session');
+    expect((await cookieReads()).length).toBe(before);
+    expect(await hasHosts(patterns(SHOP))).toBe(false);
+    expect(await hasHosts(['http://127.0.0.1/*'])).toBe(true);
+    const popup = await openPopup();
+    await expect(popup.locator('#identity')).toHaveText('Connected as zz_test_b@instance-b.test');
+    await expect(popup.locator(`#sites li[data-domain="${SHOP}"]`)).toContainText('connected from another browser');
+  } finally {
+    await b.close();
+  }
+});
+
+test('spike chrome.debugger (07 § 4) : attach sur un hôte optionnel accordé ; la session survit à l’arrêt du service worker', async () => {
+  await h.grantHosts(patterns(FORUM));
+  const forum = await h.context.newPage();
+  await forum.goto(`http://${FORUM}:${h.sitePort}/`);
+  const shop = await h.context.newPage();
+  await shop.goto(`http://${SHOP}:${h.sitePort}/`);
+  expect(await hasHosts(patterns(SHOP))).toBe(false);
+  const sw = await h.serviceWorker();
+  const first = await sw.evaluate(
+    async ([f, s]) => {
+      const c = (globalThis as unknown as SpyGlobal).chrome;
+      const tabs = await c.tabs.query({});
+      const tabF = tabs.find((t) => t.url?.includes(f!))!.id!;
+      const tabS = tabs.find((t) => t.url?.includes(s!))!.id!;
+      await c.debugger.attach({ tabId: tabF }, '1.3');
+      const doc = (await c.debugger.sendCommand({ tabId: tabF }, 'DOM.getDocument', { depth: 1 })).root.nodeName;
+      // Constat : attach ne dépend PAS de la permission d'hôte (SHOP n'est pas accordé). La garde de domaine
+      // (domaines connectés seulement, 07 § 5) doit donc précéder tout attach dans l'exécuteur de la tâche 2.7.
+      let withoutHost = 'refused';
+      try {
+        await c.debugger.attach({ tabId: tabS }, '1.3');
+        withoutHost = 'attached';
+        await c.debugger.detach({ tabId: tabS });
+      } catch {
+        /* refus : constat inverse, signalé par l'assertion */
+      }
+      (globalThis as unknown as { __zzBeforeStop?: boolean }).__zzBeforeStop = true;
+      return { tabF, doc, withoutHost };
+    },
+    [FORUM, SHOP],
+  );
+  expect(first.doc).toBe('#document');
+  expect(first.withoutHost).toBe('attached');
+
+  // Arrêt forcé du service worker (comme l'arrêt après 30 s d'inactivité), puis réveil par le popup.
+  const cdp = await h.context.newCDPSession(forum);
+  const { targetInfos } = (await cdp.send('Target.getTargets')) as { targetInfos: { targetId: string; type: string; url: string }[] };
+  const target = targetInfos.find((t) => t.type === 'service_worker' && t.url.startsWith(`chrome-extension://${h.extensionId}/`))!;
+  expect((await cdp.send('Target.closeTarget', { targetId: target.targetId })).success).toBe(true);
+  await openPopup();
+  // Le nouveau service worker (nouveau contexte JS, sans le marqueur) voit la même session, sans nouvel attach.
+  const survived = async () => {
+    for (const w of h.context.serviceWorkers().filter((x) => x.url().startsWith(`chrome-extension://${h.extensionId}/`))) {
+      const r = await Promise.race([
+        w.evaluate(async (tabF) => {
+          const g = globalThis as unknown as SpyGlobal & { __zzBeforeStop?: boolean };
+          if (g.__zzBeforeStop) return null;
+          const attached = (await g.chrome.debugger.getTargets()).some((t) => t.tabId === tabF && t.attached);
+          const doc = (await g.chrome.debugger.sendCommand({ tabId: tabF }, 'DOM.getDocument', { depth: 1 })).root.nodeName;
+          await g.chrome.debugger.detach({ tabId: tabF });
+          return { attached, doc };
+        }, first.tabF),
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), 1_000)),
+      ]).catch(() => null);
+      if (r) return r;
+    }
+    return null;
+  };
+  await expect.poll(survived, { timeout: 15_000 }).toEqual({ attached: true, doc: '#document' });
 });

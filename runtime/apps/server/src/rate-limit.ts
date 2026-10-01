@@ -52,4 +52,15 @@ export class AttemptLimiter {
   reset(key: string): void {
     this.#entries.delete(key);
   }
+
+  /**
+   * Annule UNE tentative comptée d'avance par `fail` (elle a réussi). Contrairement à `reset`, les échecs déjà
+   * comptés dans la fenêtre restent : un succès intercalé ne rouvre pas la limite.
+   */
+  cancel(key: string): void {
+    const entry = this.#current(key);
+    if (!entry) return;
+    entry.count -= 1;
+    if (entry.count <= 0) this.#entries.delete(key);
+  }
 }

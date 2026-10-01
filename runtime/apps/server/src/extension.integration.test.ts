@@ -360,3 +360,91 @@ describe('assert_identity_pinned (INV5) : un run n’utilise que les cookies du 
     expect(await withClient(srv.db.url, (c) => siteCookiesForRun(c, kek(), { runId: run, domain: 'zz-test-modes-exp.example' }))).toEqual({ ok: false, reason: 'cookie_expired' });
   });
 });
+
+describe('expiration des cookies : un cookie court ne fait pas expirer la session', () => {
+  test('cookie court (_gat, __cf_bm) + cookie de session : run servi avec la session après l’expiration du cookie court', async () => {
+    const u = await createUser(srv, 'zz_test_exp_short@example.test');
+    const t = (await pairUser(u, await signIn(srv, u), 'zz_test_dev_exp_short')).token;
+    const now = Math.floor(Date.now() / 1000);
+    const [withSession, withLong] = ['zz-test-exp-session.example', 'zz-test-exp-long.example'];
+    for (const d of [withSession, withLong]) expect((await extCall(t, 'PUT', `/api/extension/sites/${d}`, { serverUseAllowed: true })).statusCode).toBe(201);
+    const short = (d: string) => cookie('_gat', 'zz_test_short', d, { expirationDate: now + 2 });
+    expect((await extCall(t, 'PUT', `/api/extension/sites/${withSession}/cookies`, { cookies: [short(withSession), cookie('sid', 'zz_test_session_cookie', withSession)] })).statusCode).toBe(204);
+    expect((await extCall(t, 'PUT', `/api/extension/sites/${withLong}/cookies`, { cookies: [short(withLong), cookie('sid', 'zz_test_long_cookie', withLong, { expirationDate: now + 86_400 })] })).statusCode).toBe(204);
+    // expires_at = fin de la session entière : jamais (cookie de session) ou la plus tardive des dates.
+    const rows = await sql<{ domain: string; expires_at: Date | null }>('SELECT domain, expires_at FROM site_sessions WHERE owner_id = $1 ORDER BY domain', [u.id]);
+    expect(rows.find((r) => r.domain === withSession)!.expires_at).toBeNull();
+    expect(rows.find((r) => r.domain === withLong)!.expires_at!.getTime()).toBe((now + 86_400) * 1000);
+    await new Promise((resolve) => setTimeout(resolve, 2_500));
+    const run = await runFor(u.id);
+    for (const [d, value] of [[withSession, 'zz_test_session_cookie'], [withLong, 'zz_test_long_cookie']] as const) {
+      const got = await withClient(srv.db.url, (c) => siteCookiesForRun(c, kek(), { runId: run, domain: d }));
+      expect(got).toMatchObject({ ok: true, cookies: [{ name: 'sid', value }] });
+      expect(JSON.stringify(got)).not.toContain('zz_test_short');
+    }
+  });
+});
+
+describe('échange de code : limite par IP réellement tenue (10 échecs / 15 min)', () => {
+  const pairFrom = (ip: string, code: string, deviceId: string) =>
+    srv.app.inject({ method: 'POST', url: '/api/extension/pair', remoteAddress: ip, payload: { code, deviceId } });
+
+  test('un succès intercalé ne remet pas le compteur à zéro', async () => {
+    const u = await createUser(srv, 'zz_test_pair_limit@example.test');
+    const cookieU = await signIn(srv, u);
+    const ip = '203.0.113.71';
+    for (let n = 0; n < 9; n += 1) expect((await pairFrom(ip, 'ZZZZZ-ZZZZZ', 'zz_test_dev_limit_x')).statusCode).toBe(400);
+    expect((await pairFrom(ip, await pairingCode(cookieU, u.password), 'zz_test_dev_limit_1')).statusCode).toBe(201);
+    expect((await pairFrom(ip, 'ZZZZZ-ZZZZZ', 'zz_test_dev_limit_x')).statusCode).toBe(400);
+    // 10 échecs dans la fenêtre : même un code valide est refusé depuis cette IP.
+    const blocked = await pairFrom(ip, await pairingCode(cookieU, u.password), 'zz_test_dev_limit_2');
+    expect(blocked.statusCode).toBe(429);
+  });
+
+  test('rafale parallèle : au plus 10 échanges tentés, les autres refusés d’emblée', async () => {
+    const ip = '203.0.113.72';
+    const results = await Promise.all(Array.from({ length: 25 }, () => pairFrom(ip, 'ZZZZZ-ZZZZZ', 'zz_test_dev_burst')));
+    const codes = results.map((r) => r.statusCode);
+    expect(codes.filter((c) => c === 400).length).toBeLessThanOrEqual(10);
+    expect(codes.filter((c) => c === 429).length).toBeGreaterThanOrEqual(15);
+  });
+
+  test('codes actifs plafonnés par utilisateur', async () => {
+    const u = await createUser(srv, 'zz_test_pair_codes_cap@example.test');
+    const cookieU = await signIn(srv, u);
+    for (let n = 0; n < 5; n += 1) await pairingCode(cookieU, u.password);
+    const sixth = await srv.app.inject({ method: 'POST', url: '/api/extension/pairing-codes', headers: { cookie: cookieU, origin: PUBLIC_URL }, payload: { currentPassword: u.password } });
+    expect(sixth.statusCode).toBe(429);
+    expect(sixth.json()).toEqual({ error: { code: 'too_many_pairing_codes', message: expect.any(String) } });
+    // Un code utilisé ou expiré libère une place.
+    await sql("UPDATE extension_pairing_codes SET expires_at = now() - interval '1 second' WHERE id = (SELECT id FROM extension_pairing_codes WHERE owner_id = $1 LIMIT 1)", [u.id]);
+    await pairingCode(cookieU, u.password);
+  });
+});
+
+describe('désactivation d’un utilisateur : 0 cookie de lui en base, quelle que soit l’identité appelante', () => {
+  test('désactivation sous le rôle des requêtes (future route d’admin) : cookies effacés et jetons révoqués malgré la RLS', async () => {
+    const victim = await createUser(srv, 'zz_test_disable_rls@example.test');
+    const t = (await pairUser(victim, await signIn(srv, victim), 'zz_test_dev_disable_rls')).token;
+    const d = 'zz-test-disable-rls.example';
+    await extCall(t, 'PUT', `/api/extension/sites/${d}`, { serverUseAllowed: true });
+    expect((await extCall(t, 'PUT', `/api/extension/sites/${d}/cookies`, { cookies: [cookie('sid', 'zz_test_disable_rls', d)] })).statusCode).toBe(204);
+    await withClient(srv.db.url, async (c) => {
+      await c.query('BEGIN');
+      try {
+        // Simule une voie d'administration qui passerait par runtime_app (aucune n'existe en 2.6).
+        await c.query('GRANT SELECT, UPDATE (status) ON users TO runtime_app');
+        await c.query('SET LOCAL ROLE runtime_app');
+        await c.query("SELECT set_config('app.user_id', $1, true), set_config('app.role', 'admin', true)", [admin.id]);
+        await c.query("UPDATE users SET status = 'disabled' WHERE id = $1", [victim.id]);
+        await c.query('RESET ROLE');
+        expect((await c.query('SELECT 1 FROM site_sessions WHERE owner_id = $1 AND ciphertext IS NOT NULL', [victim.id])).rowCount).toBe(0);
+        expect((await c.query('SELECT 1 FROM tunnels WHERE owner_id = $1 AND revoked_at IS NULL', [victim.id])).rowCount).toBe(0);
+      } finally {
+        await c.query('ROLLBACK');
+      }
+    });
+    const fn = await sql<{ prosecdef: boolean; proconfig: string[] | null }>("SELECT prosecdef, proconfig FROM pg_proc WHERE proname = 'users_disabled_revoke_extension'");
+    expect(fn).toEqual([{ prosecdef: true, proconfig: ['search_path=public, pg_temp'] }]);
+  });
+});

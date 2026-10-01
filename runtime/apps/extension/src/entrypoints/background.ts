@@ -4,6 +4,7 @@
 // heures (alarme). La WSS du tunnel et son alarme de 30 s arrivent avec la tâche 2.7.
 import { browser } from 'wxt/browser';
 import { defineBackground } from 'wxt/utils/define-background';
+import { ensurePeriodicAlarm } from '../core/alarms.ts';
 import { ExtensionController, ExtensionError, type BrowserCookie } from '../core/controller.ts';
 import { parseRequest, type Request, type Response } from '../core/messages.ts';
 
@@ -66,7 +67,8 @@ export default defineBackground(() => {
   browser.runtime.onStartup.addListener(() => {
     void controller.resyncAll();
   });
-  browser.alarms.create(RESYNC_ALARM, { periodInMinutes: 60 });
+  // Créée une seule fois : la recréer à chaque réveil du service worker remettrait son délai à zéro.
+  void ensurePeriodicAlarm(browser.alarms, RESYNC_ALARM, 60);
   browser.alarms.onAlarm.addListener((alarm) => {
     if (alarm.name === RESYNC_ALARM) void controller.resyncAll();
   });

@@ -52,9 +52,11 @@ ALTER TABLE audit_events ADD CONSTRAINT audit_events_actor_via_check
   CHECK (actor_via IN ('ui', 'apikey', 'mcp', 'sso', 'system', 'extension'));
 
 -- Désactivation d'un utilisateur (07 § 2, 13 § 10) : ses cookies serveur sont effacés et ses jetons d'appareil révoqués,
--- quelle que soit la voie de désactivation (route d'admin, CLI, SQL) : « 0 cookie de lui en base ».
+-- quelle que soit la voie de désactivation (route d'admin, CLI, SQL) : « 0 cookie de lui en base ». SECURITY DEFINER :
+-- sous runtime_app (une future route d'admin sous withActor), la RLS owner_isolation filtrerait les lignes de l'autre
+-- utilisateur (effacement vide) et la lecture de ciphertext est refusée ; la fonction ne touche que les lignes de NEW.id.
 CREATE FUNCTION users_disabled_revoke_extension() RETURNS trigger
-LANGUAGE plpgsql
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp
 AS $$
 BEGIN
   UPDATE site_sessions
@@ -65,6 +67,7 @@ BEGIN
   RETURN NEW;
 END
 $$;
+REVOKE ALL ON FUNCTION users_disabled_revoke_extension() FROM PUBLIC;
 CREATE TRIGGER users_disabled_revoke_extension AFTER UPDATE OF status ON users
   FOR EACH ROW WHEN (NEW.status = 'disabled' AND OLD.status IS DISTINCT FROM 'disabled')
   EXECUTE FUNCTION users_disabled_revoke_extension();

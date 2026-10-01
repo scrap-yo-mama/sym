@@ -151,7 +151,9 @@ export function extensionRoutes(app: FastifyInstance, ctx: ServerContext): void 
   app.post<{ Body: { currentPassword: string } }>('/api/extension/pairing-codes', { schema: { body: pairingCodeSchema } }, async (request, reply) => {
     const actor = request.actor!;
     if (!(await reauthenticate(request, reply, actor, request.body.currentPassword, 'tunnel.pairing_code'))) return reply;
-    const { code, expiresAt } = await withActor(ctx.pool, actor, (db) => createPairingCode(db, actor.userId));
+    const created = await withActor(ctx.pool, actor, (db) => createPairingCode(db, actor.userId));
+    if (!created) return sendError(reply, 429, 'too_many_pairing_codes', 'trop de codes d’appairage actifs : utilisez-en un ou attendez son expiration (10 min)');
+    const { code, expiresAt } = created;
     await audit(ctx, request, actor, { action: 'tunnel.pairing_code_created', outcome: 'success', meta: { expiresAt: expiresAt.toISOString() } });
     // Seule apparition du code : il n'est stocké que sous forme d'empreinte.
     return reply.code(201).send({ code, expiresAt: expiresAt.toISOString() });
@@ -160,17 +162,19 @@ export function extensionRoutes(app: FastifyInstance, ctx: ServerContext): void 
   app.post<{ Body: { code: string; deviceId: string; deviceLabel?: string } }>('/api/extension/pair', { schema: { body: pairSchema } }, async (request, reply) => {
     const ip = request.ip;
     if (pairing.blocked(ip)) return sendError(reply, 429, 'too_many_attempts', 'trop de tentatives, réessayez plus tard');
+    // Tentative comptée AVANT l'échange (une rafale parallèle ne passe pas la limite), annulée d'une unité si elle
+    // réussit : un succès intercalé ne remet jamais le compteur à zéro.
+    pairing.fail(ip);
     const paired = await exchangePairingCode(ctx.pool, {
       code: request.body.code,
       deviceId: request.body.deviceId,
       deviceLabel: request.body.deviceLabel ?? null,
     });
     if (!paired) {
-      pairing.fail(ip);
       await audit(ctx, request, null, { action: 'tunnel.pair', outcome: 'denied', meta: { reason: 'invalid_code' } });
       return sendError(reply, 400, 'invalid_pairing_code', 'code d’appairage inconnu, expiré ou déjà utilisé');
     }
-    pairing.reset(ip);
+    pairing.cancel(ip);
     const actor = { userId: paired.ownerId, role: 'member' as const, via: 'extension' as const };
     await audit(ctx, request, actor, { action: 'tunnel.paired', targetType: 'tunnel', targetId: paired.tunnelId, outcome: 'success', meta: { deviceLabel: paired.deviceLabel } });
     // Seule apparition du jeton (stocké en empreinte) : l'extension le garde dans chrome.storage.local.
@@ -220,6 +224,11 @@ export function extensionRoutes(app: FastifyInstance, ctx: ServerContext): void 
     },
   );
 
+  // Écart consigné à 07 § 2 (« envoie les cookies par la WSS ») : la WSS n'existe qu'à partir de la tâche 2.7. Jusque-là,
+  // l'envoi passe par cette route HTTPS, authentifiée par le même jeton d'appareil (jamais une session de console),
+  // avec le même schéma strict et le même scellement (`storeSiteCookies`, seul point d'écriture). Remplacement prévu
+  // en 2.7 : un message WSS `cookies_sync` au même schéma appelle `storeSiteCookies`, et cette route est retirée
+  // (l'extension n'envoie alors plus aucun cookie hors de la WSS).
   app.put<{ Params: { domain: string }; Body: { cookies: SiteCookie[] } }>(
     '/api/extension/sites/:domain/cookies',
     { schema: { body: cookiesSchema }, bodyLimit: 1024 * 1024 },

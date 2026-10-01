@@ -71,3 +71,13 @@ export function siteDomainOf(tabUrl: string | undefined): string | null {
 export function originPatterns(domain: string): string[] {
   return [`https://${domain}/*`, `http://${domain}/*`];
 }
+
+/**
+ * Un cookie de domaine `cookieDomain` appartient-il à la session de `siteDomain` ? Même règle que
+ * `cookieMatchesDomain` de l'instance (packages/core/src/auth/extension.ts), qui refuse tout l'envoi sinon : l'hôte
+ * lui-même ou un de ses domaines parents (pas un sous-domaine, pas un suffixe sans point).
+ */
+export function cookieMatchesDomain(cookieDomain: string, siteDomain: string): boolean {
+  const d = cookieDomain.toLowerCase().replace(/^\./, '').replace(/\.+$/, '');
+  return d !== '' && (d === siteDomain || siteDomain.endsWith(`.${d}`)) && d.includes('.');
+}

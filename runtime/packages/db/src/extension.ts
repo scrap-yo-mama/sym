@@ -20,6 +20,7 @@ import {
   isRole,
   liveCookies,
   openSecret,
+  openSecretBytes,
   PAIRING_CODE_TTL_MINUTES,
   sealSecret,
   SecretDecryptError,
@@ -36,8 +37,20 @@ type Queryable = Pick<pg.ClientBase, 'query'>;
 // Appairage et jetons
 // ---------------------------------------------------------------------------------------------------------------------
 
-/** Code d'appairage (07 § 1) : le code n'existe en clair que dans la valeur de retour. */
-export async function createPairingCode(db: Queryable, ownerId: string): Promise<{ code: string; expiresAt: Date }> {
+/** Codes d'appairage actifs (ni utilisés ni expirés) par utilisateur : borne le nombre de codes devinables à la fois. */
+const MAX_ACTIVE_PAIRING_CODES = 5;
+
+/**
+ * Code d'appairage (07 § 1) : le code n'existe en clair que dans la valeur de retour. `null` si l'utilisateur a déjà
+ * `MAX_ACTIVE_PAIRING_CODES` codes actifs (verrou transactionnel par utilisateur : pas de dépassement en parallèle).
+ */
+export async function createPairingCode(db: Queryable, ownerId: string): Promise<{ code: string; expiresAt: Date } | null> {
+  await db.query("SELECT pg_advisory_xact_lock(hashtextextended('extension_pairing_codes:' || $1, 0))", [ownerId]);
+  const active = await db.query<{ n: number }>(
+    'SELECT count(*)::int AS n FROM extension_pairing_codes WHERE owner_id = $1 AND used_at IS NULL AND expires_at > now()',
+    [ownerId],
+  );
+  if ((active.rows[0]?.n ?? 0) >= MAX_ACTIVE_PAIRING_CODES) return null;
   const { code, hash } = generatePairingCode();
   const { rows } = await db.query<{ expires_at: Date }>(
     `INSERT INTO extension_pairing_codes (owner_id, code_hash, expires_at)
@@ -316,8 +329,11 @@ export async function storeSiteCookies(
     await db.query(`UPDATE site_sessions SET ${WIPE_SEALED}, updated_at = now() WHERE id = $1`, [site.id]);
     return 'stored';
   }
-  const expiries = cookies.map((c) => c.expirationDate).filter((e): e is number => e !== undefined);
-  const expiresAt = expiries.length > 0 ? new Date(Math.min(...expiries) * 1000) : null;
+  // Fin de la session entière : jamais si un cookie de session (sans date) est présent, sinon la plus tardive des
+  // dates. Un cookie court (_gat, __cf_bm) n'avance jamais l'expiration de toute la session ; chaque cookie expiré
+  // est écarté individuellement à la lecture (`liveCookies`).
+  const expiries = cookies.map((c) => c.expirationDate);
+  const expiresAt = expiries.every((e): e is number => e !== undefined) ? new Date(Math.max(...expiries) * 1000) : null;
   const sealed = sealSecret(JSON.stringify(cookies), kek, siteSessionAad({ ownerId: input.ownerId, domain: input.domain, keyVersion: kek.version }));
   await db.query(
     `UPDATE site_sessions SET ciphertext = $2, nonce = $3, dek_wrapped = $4, alg = $5, key_version = $6,
@@ -383,6 +399,7 @@ export async function siteCookiesForRun(db: Queryable, kek: Kek, input: { runId:
   if (!row) return { ok: false, reason: 'auth_required' };
   if (!row.server_use_allowed) return { ok: false, reason: 'tunnel_only' };
   if (!row.ciphertext || !row.nonce || !row.dek_wrapped || !row.alg || row.key_version === null) return { ok: false, reason: 'auth_required' };
+  // `expires_at` = expiration du dernier cookie : passée, plus aucun cookie n'est vivant (inutile de déchiffrer).
   if (row.expires_at !== null && row.expires_at.getTime() <= Date.now()) return { ok: false, reason: 'cookie_expired' };
   let cookies: SiteCookie[];
   try {
@@ -395,4 +412,54 @@ export async function siteCookiesForRun(db: Queryable, kek: Kek, input: { runId:
   const live = liveCookies(cookies, Date.now() / 1000);
   if (live.length === 0) return { ok: false, reason: 'cookie_expired' };
   return { ok: true, ownerId: run.owner_id, cookies: live };
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Rotation de clé (`runtime rekey`, INV8)
+// ---------------------------------------------------------------------------------------------------------------------
+
+/**
+ * Un lot de la rotation des cookies scellés (identité système, dans la transaction de `rekey`) : chaque ligne sous la
+ * version `from.version` est ouverte avec l'ancienne KEK `site_sessions` et l'AAD de cette version, puis rescellée
+ * (nouvelle DEK, nouveaux nonces) avec la nouvelle KEK et l'AAD de la nouvelle version. Une valeur que l'ancienne clé
+ * n'ouvre pas est effacée (les cookies seront resynchronisés par l'extension ; le run passe en `action_requise`
+ * d'ici là) : rien ne reste sous l'ancienne version. Renvoie le nombre de lignes lues (0 = rotation terminée).
+ */
+export async function rekeySiteSessionsBatch(
+  db: Queryable,
+  from: Kek,
+  to: Kek,
+  batchSize: number,
+): Promise<{ seen: number; rotated: number; wiped: number }> {
+  const { rows } = await db.query<{ id: string; owner_id: string; domain: string; ciphertext: Buffer; nonce: Buffer; dek_wrapped: Buffer; alg: string }>(
+    `SELECT id, owner_id, domain, ciphertext, nonce, dek_wrapped, alg FROM site_sessions
+     WHERE key_version = $1 ORDER BY id LIMIT $2 FOR UPDATE`,
+    [from.version, batchSize],
+  );
+  let rotated = 0;
+  let wiped = 0;
+  for (const row of rows) {
+    const sealed = { ciphertext: row.ciphertext, nonce: row.nonce, dekWrapped: row.dek_wrapped, alg: row.alg, kekVersion: from.version };
+    let plaintext: Buffer;
+    try {
+      plaintext = openSecretBytes(sealed, from, siteSessionAad({ ownerId: row.owner_id, domain: row.domain, keyVersion: from.version }));
+    } catch (error) {
+      if (!(error instanceof SecretDecryptError)) throw error;
+      await db.query(`UPDATE site_sessions SET ${WIPE_SEALED}, updated_at = now() WHERE id = $1`, [row.id]);
+      wiped += 1;
+      continue;
+    }
+    let next: ReturnType<typeof sealSecret>;
+    try {
+      next = sealSecret(plaintext, to, siteSessionAad({ ownerId: row.owner_id, domain: row.domain, keyVersion: to.version }));
+    } finally {
+      plaintext.fill(0);
+    }
+    await db.query(
+      'UPDATE site_sessions SET ciphertext = $2, nonce = $3, dek_wrapped = $4, alg = $5, key_version = $6, updated_at = now() WHERE id = $1',
+      [row.id, next.ciphertext, next.nonce, next.dekWrapped, next.alg, next.kekVersion],
+    );
+    rotated += 1;
+  }
+  return { seen: rows.length, rotated, wiped };
 }

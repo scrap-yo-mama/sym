@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Garde des domaines (07 § 5, INV10) : parité exacte avec la règle de l'instance (`checkSiteDomain`), pour que
 // l'extension et la passerelle refusent les mêmes cibles ; motifs d'hôte optionnels par domaine.
+import { cookieMatchesDomain as instanceCookieRule } from '@runtime/core';
 import { checkSiteDomain } from '@runtime/core/net';
 import { describe, expect, test } from 'vitest';
-import { checkHost, originPatterns, siteDomainOf } from './host-guard.ts';
+import { checkHost, cookieMatchesDomain, originPatterns, siteDomainOf } from './host-guard.ts';
 
 const VECTORS = [
   'zz-test-shop.example', 'Shop.Example.COM', 'shop.example.com.', 'https://shop.example.com/path?q=1', 'http://shop.example.com:8080/',
@@ -27,6 +28,16 @@ describe('garde des domaines de l’extension', () => {
     for (const url of [undefined, 'chrome://extensions', 'chrome-extension://abc/popup.html', 'file:///etc/passwd', 'http://localhost:3000/', 'http://192.168.0.1/']) {
       expect(siteDomainOf(url)).toBeNull();
     }
+  });
+
+  test('cookies capturés : même règle de domaine que l’instance (un cookie refusé ferait refuser tout l’envoi)', () => {
+    const cases: [string, string][] = [
+      ['shop.example.com', 'shop.example.com'], ['.shop.example.com', 'shop.example.com'], ['.example.com', 'shop.example.com'],
+      ['example.com', 'www.shop.example.com'], ['api.shop.example.com', 'shop.example.com'], ['.com', 'shop.example.com'],
+      ['evil.example', 'shop.example.com'], ['Shop.Example.COM.', 'shop.example.com'], ['', 'shop.example.com'], ['xample.com', 'shop.example.com'],
+    ];
+    for (const [cookie, site] of cases) expect(cookieMatchesDomain(cookie, site), `${cookie} / ${site}`).toBe(instanceCookieRule(cookie, site));
+    expect(cookieMatchesDomain('api.shop.example.com', 'shop.example.com')).toBe(false);
   });
 
   test('permissions optionnelles demandées pour le seul domaine connecté', () => {

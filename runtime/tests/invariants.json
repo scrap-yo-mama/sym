@@ -17,7 +17,7 @@
   { "test": "assert_encrypted_at_rest", "invariant": "INV8", "tasks": ["0.3a", "1.10"], "stage": "I1" },
   { "test": "assert_no_secret_in_logs", "invariant": "INV8", "tasks": ["0.3a", "1.10"], "stage": "I1" },
   { "test": "assert_aad_binding", "invariant": "INV8", "tasks": ["0.3a"], "stage": "U1, I1" },
-  { "test": "assert_rekey_complete", "invariant": "INV8", "tasks": ["0.3a"], "stage": "U1, I1" },
+  { "test": "assert_rekey_complete", "invariant": "INV8", "tasks": ["0.3a", "2.6"], "stage": "U1, I1" },
   { "test": "assert_key_loss_detected", "invariant": "INV8", "tasks": ["0.3a"], "stage": "I1" },
   { "test": "assert_no_telemetry", "invariant": "INV9", "tasks": ["1.10", "4.3"], "stage": "S" },
   { "test": "assert_otel_off_by_default", "invariant": "INV9", "tasks": ["1.10", "4.3"], "stage": "S" },

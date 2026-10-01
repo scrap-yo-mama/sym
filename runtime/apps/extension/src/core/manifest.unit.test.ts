@@ -40,7 +40,7 @@ describe('assert_consent_before_capture (contrôle statique)', () => {
     expect(core.match(/#readCookies\(/g)).toHaveLength(2); // définition + un seul appel
     const capture = core.slice(core.indexOf('async capture('), core.indexOf('async #readCookies('));
     const read = capture.indexOf('#readCookies(');
-    for (const guard of ["'consent_required'", "consent.mode !== 'server'", 'permissions.contains']) {
+    for (const guard of ["'consent_required'", "consent.mode !== 'server'", 'consent.recipient !== pairing.origin', 'permissions.contains']) {
       expect(capture.indexOf(guard), guard).toBeGreaterThan(-1);
       expect(capture.indexOf(guard), guard).toBeLessThan(read);
     }

@@ -135,6 +135,9 @@ export async function startHarness(): Promise<Harness> {
 
     // Page chrome://extensions : simule le clic « Autoriser » de l'invite de permission de Chrome (UI du navigateur,
     // hors d'atteinte de Playwright). `chrome.permissions.request` du popup se résout ensuite sans invite.
+    // LIMITE : le parcours réel « invite de permission affichée depuis le popup d'action, acceptée, popup toujours
+    // ouvert qui termine connectSite » n'est pas exercé ici (popup ouvert dans un onglet, permission accordée d'avance) ;
+    // il relève d'une vérification manuelle en recette, sur le popup d'action réel.
     const admin = await context.newPage();
     await admin.goto('chrome://extensions');
     const grantHosts = async (patterns: string[]) => {
@@ -161,4 +164,39 @@ export async function startHarness(): Promise<Harness> {
     await close();
     throw error;
   }
+}
+
+export type FakeInstance = {
+  origin: string;
+  requests: { method: string; path: string; body: string }[];
+  close: () => Promise<void>;
+};
+
+/**
+ * Seconde instance factice (« B ») sur 127.0.0.1 (autre port que A) : accepte n'importe quel code d'appairage et prétend que `sites`
+ * sont connectés en usage serveur (instance malveillante obtenue par ingénierie sociale). Enregistre chaque requête.
+ */
+export async function fakeInstance(sites: { domain: string; serverUseAllowed: boolean; hasServerCookies: boolean }[]): Promise<FakeInstance> {
+  const requests: FakeInstance['requests'] = [];
+  const server = createServer((req, res) => {
+    let body = '';
+    req.on('data', (chunk: Buffer) => (body += chunk.toString('utf8')));
+    req.on('end', () => {
+      const path = (req.url ?? '').split('?')[0] ?? '';
+      requests.push({ method: req.method ?? '', path, body });
+      res.setHeader('content-type', 'application/json');
+      if (req.method === 'POST' && path === '/api/extension/pair') {
+        res.statusCode = 201;
+        res.end(JSON.stringify({ token: 'sy_ext_zz_test_instance_b', email: 'zz_test_b@instance-b.test', deviceLabel: null, expiresAt: '2099-01-01T00:00:00.000Z' }));
+      } else if (req.method === 'GET' && path === '/api/extension/session') {
+        res.end(JSON.stringify({ email: 'zz_test_b@instance-b.test', deviceLabel: null, sites }));
+      } else {
+        res.statusCode = 204;
+        res.end();
+      }
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address() as AddressInfo;
+  return { origin: `http://127.0.0.1:${port}`, requests, close: () => new Promise<void>((resolve) => server.close(() => resolve())) };
 }

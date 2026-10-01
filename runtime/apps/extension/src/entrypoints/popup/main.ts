@@ -10,9 +10,18 @@ import { originPatterns, siteDomainOf } from '../../core/host-guard.ts';
 import { checkInstanceUrl, instancePattern } from '../../core/instance.ts';
 import type { Request, Response } from '../../core/messages.ts';
 
+class PopupError extends Error {
+  constructor(
+    readonly code: string,
+    message: string,
+  ) {
+    super(message);
+  }
+}
+
 async function send<T>(request: Request): Promise<T> {
   const res = (await browser.runtime.sendMessage(request)) as Response<T>;
-  if (!res.ok) throw new Error(res.message);
+  if (!res.ok) throw new PopupError(res.code, res.message);
   return res.data;
 }
 
@@ -30,6 +39,8 @@ const App = defineComponent({
   setup() {
     const state = reactive({
       loading: true,
+      // État inconnu (erreur inattendue) : ni écran d'appairage ni vue appairée, juste l'erreur et « Retry ».
+      failed: false,
       busy: false,
       error: '',
       status: { paired: false } as Status,
@@ -54,11 +65,16 @@ const App = defineComponent({
     }
 
     async function refresh() {
+      state.error = '';
+      state.failed = false;
       try {
+        // Instance injoignable ou en erreur : le service worker répond « appairé » avec `instanceError` ; l'écran
+        // d'appairage n'apparaît que si l'extension n'est pas (ou plus) appairée.
         state.status = await send<Status>({ type: 'status' });
       } catch (error) {
-        state.status = { paired: false };
         state.error = error instanceof Error ? error.message : String(error);
+        if (error instanceof PopupError && (error.code === 'unauthorized' || error.code === 'not_paired')) state.status = { paired: false };
+        else state.failed = true;
       }
       state.domain = await targetDomain();
       state.loading = false;
@@ -146,9 +162,11 @@ const App = defineComponent({
     }
 
     function pairedView(status: Extract<Status, { paired: true }>): VNode {
-      const connected = status.sites.some((s) => s.domain === state.domain);
+      // Connecté depuis CE navigateur (consentement local) ; un domaine connecté ailleurs peut être connecté ici aussi.
+      const connected = status.sites.some((s) => s.domain === state.domain && s.onThisBrowser);
       return h('div', { id: 'paired' }, [
         h('p', { id: 'identity' }, `Connected as ${status.email}`),
+        status.instanceError ? h('p', { id: 'instance-error', role: 'status' }, status.instanceError) : null,
         h('section', [
           h('h2', 'This site'),
           state.domain
@@ -168,7 +186,7 @@ const App = defineComponent({
                 { id: 'sites' },
                 status.sites.map((s) =>
                   h('li', { 'data-domain': s.domain }, [
-                    h('span', `${s.domain} (${s.mode === 'server' ? 'server' : 'tunnel'})`),
+                    h('span', `${s.domain} (${s.mode === 'server' ? 'server' : 'tunnel'})${s.onThisBrowser ? '' : ' — connected from another browser'}`),
                     h('button', { type: 'button', class: 'disconnect', disabled: state.busy, onClick: () => disconnect(s.domain) }, 'Disconnect'),
                   ]),
                 ),
@@ -182,7 +200,13 @@ const App = defineComponent({
       h('main', [
         h('h1', 'Scrapyomama'),
         state.error ? h('p', { id: 'error', role: 'alert' }, state.error) : null,
-        state.loading ? h('p', 'Loading…') : state.status.paired ? pairedView(state.status) : pairingView(),
+        state.loading
+          ? h('p', 'Loading…')
+          : state.failed
+            ? h('button', { id: 'retry', type: 'button', onClick: () => void refresh() }, 'Retry')
+            : state.status.paired
+              ? pairedView(state.status)
+              : pairingView(),
       ]);
   },
 });
