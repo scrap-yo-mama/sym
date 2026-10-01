@@ -89,10 +89,10 @@ const htmlDeclarative = (host: string, path: string, extraHosts: string[] = []) 
   sources: [{ id: 'dom', from: 'html', records: 'body' }],
   fields: { id: { attr: 'text', type: 'string', required: true } },
 });
-const script = (host: string, startPath: string, source: string) => ({
+const script = (host: string, startPath: string, source: string, extraHosts: string[] = []) => ({
   execution: 'playwright',
   scriptRef: 'inline',
-  spec: { kind: 'script', allowed_hosts: [host], start_url: `${base(host)}${startPath}`, source },
+  spec: { kind: 'script', allowed_hosts: [host, ...extraHosts], start_url: `${base(host)}${startPath}`, source },
 });
 
 /** Run échoué en robots_disallowed, sans agent, 0 requête sur /prive/, statut visé bloquee (transition 4). */
@@ -298,6 +298,83 @@ describe('assert_robots_respected : redirections suivies par Chromium (chaque sa
     expect((await paths(ROBOTS))['/page-sw']).toBe(1);
     expect(await forbiddenHits(ROBOTS)).toBe(0);
     expect((await paths(ROBOTS))['/depart']).toBeUndefined();
+  }, 120_000);
+
+  // Revue de 1.11 : `routeWebSocket` ne remplace `WebSocket` que dans les cadres, ni CDP Fetch ni le proxy d'egress (CONNECT)
+  // ne voient la poignée de main. Un WebSocket ouvert depuis un worker dédié partait donc sans contrôle robots.
+  test('WebSocket ouvert par les workers dédiés du site (blob, http, module) : 0 requête sur /prive/, upgrade compris, les workers tournent', async () => {
+    const source = `await ctx.page.waitForSelector('#wsw'); await ctx.page.evaluate("new Promise((r) => setTimeout(r, 1500))"); ctx.emit({ id: 'apres' });`;
+    const run = await runOf(await insertApi(script(ROBOTS, '/page-ws-worker', source)));
+    expect(run).toMatchObject({ state: 'succeeded', items: 1 });
+    expect(await forbiddenHits(ROBOTS)).toBe(0);
+    // Témoins : les workers http (classique et module) ont bien exécuté leur code (fetch permis reçu).
+    expect((await paths(ROBOTS))['/temoin-worker']).toBe(1);
+    expect((await paths(ROBOTS))['/temoin-worker-module']).toBe(1);
+  }, 120_000);
+
+  test('WebSocket ouvert par un Worker blob créé depuis evaluate (E3 en script), worker imbriqué, module et data: compris : refusés, 0 requête sur /prive/', async () => {
+    const ws = (path: string) => `try { new WebSocket(location.origin.replace(/^http/, 'ws') + '${path}'); } catch (e) {}`;
+    const nested = `new Worker(URL.createObjectURL(new Blob([${JSON.stringify(ws('/prive/wsworker-nested'))}])));`;
+    const page = `(() => {
+      const refused = [];
+      const attempts = [
+        () => new Worker(URL.createObjectURL(new Blob([${JSON.stringify(ws('/prive/wsworker'))}]))),
+        () => new Worker(URL.createObjectURL(new Blob([${JSON.stringify(nested)}]))),
+        () => new Worker(URL.createObjectURL(new Blob([${JSON.stringify(ws('/prive/wsworker-module'))}], { type: 'text/javascript' })), { type: 'module' }),
+        () => new Worker('data:text/javascript,' + encodeURIComponent("try { new WebSocket('ws://" + location.host + "/prive/wsworker-data'); } catch (e) {}")),
+      ];
+      for (const attempt of attempts) { try { attempt(); } catch (e) { refused.push(e.name); } }
+      return new Promise((r) => setTimeout(() => r(refused.join(',')), 1500));
+    })()`;
+    const source = `const refused = await ctx.page.evaluate(${JSON.stringify(page)}); ctx.emit({ id: String(refused) });`;
+    const run = await runOf(await insertApi(script(ROBOTS, '/', source)));
+    expect(run).toMatchObject({ state: 'succeeded', items: 1 });
+    const item = await withActor(pool, actorA, (tx) => tx.query<{ item: { id: string } }>('SELECT item FROM dataset_items WHERE dataset_id = $1', [run.dataset_id]));
+    expect(item.rows[0]!.item.id).toBe('SecurityError,SecurityError,SecurityError,SecurityError');
+    expect(await forbiddenHits(ROBOTS)).toBe(0);
+  }, 120_000);
+
+  test('WebSocket ouvert par les workers d\'un cadre hors processus (second hôte autorisé, cadre du site et cadre inséré par evaluate) : 0 requête sur /prive/, les workers http tournent', async () => {
+    const insert = `(() => { const f = document.createElement('iframe'); f.src = ${JSON.stringify(`${base(OTHER)}/cadre-ws-worker?evaluate`)}; document.body.append(f); return new Promise((r) => setTimeout(r, 1500)); })()`;
+    const source = `await ctx.page.waitForSelector('#cadre-ws'); await ctx.page.evaluate(${JSON.stringify(insert)}); ctx.emit({ id: 'apres' });`;
+    const run = await runOf(await insertApi(script(ROBOTS, '/page-cadre-ws', source, [OTHER])));
+    expect(run).toMatchObject({ state: 'succeeded', items: 1 });
+    expect(await forbiddenHits(ROBOTS)).toBe(0);
+    expect(await forbiddenHits(OTHER)).toBe(0);
+    // Témoin : le worker http du cadre (cadre du site, puis cadre inséré) a exécuté son code (fetch permis reçu).
+    expect((await paths(OTHER))['/temoin-cadre-worker']).toBe(2);
+  }, 120_000);
+
+  test('WebSocketStream ouvert depuis evaluate vers un chemin interdit : 0 requête (routeWebSocket ne le voit pas)', async () => {
+    const page = `(() => { try { const s = new WebSocketStream('ws://' + location.host + '/prive/wsstream'); s.opened.catch(() => 0); } catch (e) {} return new Promise((r) => setTimeout(r, 1000)); })()`;
+    const run = await runOf(await insertApi(script(ROBOTS, '/', `await ctx.page.evaluate(${JSON.stringify(page)}); ctx.emit({ id: 'apres' });`)));
+    expect(run).toMatchObject({ state: 'succeeded', items: 1 });
+    expect(await forbiddenHits(ROBOTS)).toBe(0);
+  }, 120_000);
+
+  // Revue de 1.11 : les requêtes de préchargement (speculation rules) partent du navigateur lui-même, hors de context.route
+  // et de l'interception CDP. Le HTML d'un site ordinaire en publie (WordPress) : E2 et E3 déclaratifs sont concernés.
+  test('règles de spéculation du site (prefetch, prerender, en-tête Speculation-Rules) en E3 déclaratif : 0 requête sur /prive/', async () => {
+    const run = await runOf(await insertApi({ execution: 'playwright', spec: htmlDeclarative(ROBOTS, '/page-spec') }));
+    expect(run).toMatchObject({ state: 'succeeded' });
+    expect((await paths(ROBOTS))['/lent']).toBe(1);
+    expect(await forbiddenHits(ROBOTS)).toBe(0);
+  }, 120_000);
+
+  test('règles de spéculation en E3 en script : celles du site et celles insérées par evaluate (document, racine fantôme fermée, document.write) : 0 requête sur /prive/', async () => {
+    const rules = (n: string) => JSON.stringify({ prefetch: [{ source: 'list', urls: [`/prive/${n}`], eagerness: 'immediate' }], prerender: [{ source: 'list', urls: [`/prive/${n}-pr`], eagerness: 'immediate' }] });
+    const page = `(() => {
+      const s = document.createElement('script'); s.type = 'speculationrules'; s.textContent = ${JSON.stringify(rules('spec-js'))}; document.head.append(s);
+      const t = document.createElement('script'); document.body.append(t); t.type = 'speculationrules'; t.textContent = ${JSON.stringify(rules('spec-type-apres'))};
+      const host = document.createElement('div'); document.body.append(host); const root = host.attachShadow({ mode: 'closed' });
+      const u = document.createElement('script'); u.type = 'speculationrules'; u.textContent = ${JSON.stringify(rules('spec-ombre'))}; root.append(u);
+      return new Promise((r) => setTimeout(r, 1500));
+    })()`;
+    const write = `(() => { try { document.open(); document.write('<div><template shadowroot'); document.write('MODE="closed"><script type="speculationrules">' + ${JSON.stringify(rules('spec-write'))} + '</' + 'script></template></div>'); document.close(); } catch (e) {} return new Promise((r) => setTimeout(r, 1500)); })()`;
+    const source = `await ctx.page.waitForSelector('#spec'); await ctx.page.evaluate(${JSON.stringify(page)}); await ctx.page.evaluate(${JSON.stringify(write)}); ctx.emit({ id: 'apres' });`;
+    const run = await runOf(await insertApi(script(ROBOTS, '/page-spec', source)));
+    expect(run).toMatchObject({ state: 'succeeded', items: 1 });
+    expect(await forbiddenHits(ROBOTS)).toBe(0);
   }, 120_000);
 
   test('WebSocket ouvert par le code du script (evaluate) vers un chemin interdit : 0 requête, robots_disallowed', async () => {

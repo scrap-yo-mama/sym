@@ -1,9 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Tâche 1.6 : BROWSER_CONCURRENCY du cgroup (14 §11), options de lancement figées (silencieux, proxy, non-root,
 // environnement réduit), pool recyclé (N runs, âge, mémoire), fermeture à délai dur, chien de garde. Sans Chromium.
+import { readFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
+import { dirname, join } from 'node:path';
 import type { Browser } from 'playwright-core';
 import { describe, expect, test, vi } from 'vitest';
 import { boundedDocumentBody, TOO_LARGE, type DecodedSizes } from './bounded.js';
+import { requestVerdict } from './request-guard.js';
 import {
   browserConcurrencyForMemory,
   BrowserConcurrencyError,
@@ -63,7 +67,7 @@ describe('BROWSER_CONCURRENCY déduit du cgroup', () => {
 });
 
 describe('lancement de Chromium (options figées)', () => {
-  test('proxy de lancement imposé, DNS local coupé, WebRTC restreint, liste silencieuse, pas de --disable-features', () => {
+  test('proxy de lancement imposé, DNS local coupé, WebRTC restreint, liste silencieuse', () => {
     const o = chromiumLaunchOptions('http://127.0.0.1:41234', { PATH: '/usr/bin' });
     expect(o.proxy).toEqual({ server: 'http://127.0.0.1:41234' });
     expect(o.host).toBe('127.0.0.1');
@@ -73,8 +77,6 @@ describe('lancement de Chromium (options figées)', () => {
     for (const arg of ['--disable-background-networking', '--disable-component-update', '--safebrowsing-disable-auto-update', '--metrics-recording-only', '--disable-dev-shm-usage', '--no-pings']) {
       expect(o.args).toContain(arg);
     }
-    // Un second --disable-features écraserait celui de Playwright (dernier gagnant côté Chromium).
-    expect(o.args.some((a) => a.startsWith('--disable-features'))).toBe(false);
     expect(o.args.some((a) => a === '--no-sandbox' || a.startsWith('--proxy-bypass-list'))).toBe(false);
     // Playwright ajoute --no-sandbox dès que chromiumSandbox n’est pas true : le bac à sable doit être demandé
     // explicitement (ligne de commande effective vérifiée sur un vrai Chromium : assert_chromium_sandboxed).
@@ -82,6 +84,25 @@ describe('lancement de Chromium (options figées)', () => {
     expect(Object.isFrozen(CHROMIUM_SILENT_ARGS)).toBe(true);
     expect(() => chromiumLaunchOptions('http://10.0.0.1:3128', {})).toThrow();
     expect(() => chromiumLaunchOptions('http://127.0.0.1:1', { PLAYWRIGHT_DISABLE_FORCED_CHROMIUM_PROXIED_LOOPBACK: '1' })).toThrow();
+  });
+
+  // Revue de 1.11 (INV11) : le prérendu, le préchargement qui le précède et WebSocketStream échappent à tout contrôle ; ils
+  // sont coupés au lancement. Un second --disable-features remplace celui de Playwright (dernier gagnant côté Chromium) :
+  // le nôtre, unique, reprend toute la liste de Playwright, lue dans le paquet installé (une montée de version qui la
+  // change fait échouer ce test).
+  test('--disable-features unique : liste de Playwright reprise, prérendu, préchargement de prérendu et WebSocketStream coupés', () => {
+    const o = chromiumLaunchOptions('http://127.0.0.1:41234', { PATH: '/usr/bin' });
+    const flags = o.args.filter((a) => a.startsWith('--disable-features='));
+    expect(flags).toHaveLength(1);
+    const ours = flags[0]!.slice('--disable-features='.length).split(',');
+    for (const feature of ['Prerender2', 'Prerender2FallbackPrefetchSpecRules', 'WebSocketStream']) expect(ours).toContain(feature);
+    const bundle = readFileSync(join(dirname(createRequire(import.meta.url).resolve('playwright-core')), 'lib', 'coreBundle.js'), 'utf8');
+    const list = /disabledFeatures = \[([\s\S]*?)\]\.filter\(Boolean\)/.exec(bundle);
+    expect(list).not.toBeNull();
+    const playwright = [...list![1]!.matchAll(/^\s*"([A-Za-z0-9]+)",?\s*$/gm)].map((m) => m[1]!);
+    expect(playwright.length).toBeGreaterThan(5);
+    for (const feature of playwright) expect(ours).toContain(feature);
+    expect(o.args.filter((a) => a.startsWith('--enable-features'))).toEqual([]);
   });
 
   test('environnement de Chromium réduit : ni MASTER_KEY, ni DATABASE_URL, ni clé LLM', () => {
@@ -262,5 +283,26 @@ describe('boundedDocumentBody : corps brut d’un document lu seulement si sa ta
     expect(await boundedDocumentBody(response({ 'content-type': 'text/html' }, 13, text), 1_000)).toBe('<html></html>');
     expect(await boundedDocumentBody(response({ 'content-type': 'text/html' }, 5_000, text), 1_000)).toBe(TOO_LARGE);
     expect(text).toHaveBeenCalledOnce();
+  });
+});
+
+// Revue de 1.11 (INV11) : verdict du contrôle CDP de chaque requête.
+describe('contrôle CDP : verdict d\'une requête', () => {
+  const hop = { redirect: false, rootUrl: 'http://zz-test.example/', resourceType: 'Document', mainFrame: true };
+  const inScope = () => true;
+
+  test('URL illisible présentée par CDP : coupée (échec fermé), sans appeler le contrôle', async () => {
+    const check = vi.fn(async () => true);
+    for (const url of ['', 'http://[', 'not a url']) expect(await requestVerdict(url, inScope, check, hop)).toBe(false);
+    expect(check).not.toHaveBeenCalled();
+  });
+
+  test('http(s) d\'un domaine de l\'API soumis au contrôle ; data:, blob: et hors domaines laissés au verrou de domaines', async () => {
+    const check = vi.fn(async (r: { url: string }) => !r.url.includes('/prive/'));
+    expect(await requestVerdict('https://zz-test.example/prive/x', inScope, check, hop)).toBe(false);
+    expect(await requestVerdict('https://zz-test.example/ok', inScope, check, hop)).toBe(true);
+    expect(await requestVerdict('data:text/plain,x', inScope, check, hop)).toBe(true);
+    expect(await requestVerdict('https://ailleurs.example/prive/x', () => false, check, hop)).toBe(true);
+    expect(await requestVerdict('https://zz-test.example/x', inScope, async () => Promise.reject(new Error('robots')), hop)).toBe(false);
   });
 });

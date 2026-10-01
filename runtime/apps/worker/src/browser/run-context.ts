@@ -15,8 +15,15 @@
 // autre page du contexte (fenêtre surgissante, fermée aussitôt) sont coupées : elles échapperaient à ce contrôle.
 // SharedWorker (revue de 1.11) : ses requêtes échappent à `context.route` ET au contrôle CDP de la page ; chacun est fermé
 // avant d'exécuter son code (`blockSharedWorkers`, session CDP du navigateur), dans tous les modes, contrôle robots ou non.
+// Workers dédiés (revue de 1.11) : `routeWebSocket` ne voit pas leurs WebSocket ; le contrôle CDP pose sur le script de
+// tout worker http(s) une CSP sans WebSocket (request-guard.ts), et la garde des documents (`installPageGuard`,
+// page-guard.ts) refuse les workers blob: et data: ; WebSocketStream, que `routeWebSocket` ne voit pas non plus, est coupé
+// au lancement (launch.ts).
+// Règles de spéculation (revue de 1.11) : leur préchargement part du navigateur, hors de toute interception ; la garde des
+// documents les retire, le contrôle CDP coupe celles de l'en-tête `Speculation-Rules`, le prérendu est coupé au lancement.
 import { browserUserAgent } from '@runtime/core/access';
 import type { APIRequest, APIRequestContext, Browser, BrowserContext, Page, Request } from 'playwright-core';
+import { installPageGuard } from './page-guard.js';
 import { blockSharedWorkers, installRequestGuard, type RequestCheck } from './request-guard.js';
 
 export type { BrowserRequestCheck } from './request-guard.js';
@@ -171,6 +178,8 @@ export async function openRunContext(browser: Browser, options: RunContextOption
       }
       ws.connectToServer();
     });
+    // Garde des documents (workers blob:/data:, règles de spéculation), avant la création de la page (avec le contrôle robots).
+    if (options.checkRequest !== undefined) await installPageGuard(context);
     const page = await context.newPage();
     runPage = page;
     // La session du contrôle n'est jamais détachée avant la fermeture du contexte : détachée, elle laisserait repartir

@@ -293,12 +293,15 @@ export function createStrategyExecutor(deps: StrategyExecutorDeps): RunExecutor 
     let otherUsd: { egress: () => number; session: () => number } = { egress: () => 0, session: () => 0 };
     // Lecture de robots.txt : session du même barreau, SANS contrôle robots (pas de récursion), même User-Agent. Sans
     // verrou de domaines : RFC 9309 suit les redirections de robots.txt quel que soit l'hôte (CDN, apex → www), sous la
-    // garde SSRF ; la garde ne lit que l'origine d'un domaine de l'API (`allowedHosts` du `RobotsGate`).
+    // garde SSRF ; la garde ne lit que l'origine d'un domaine de l'API (`allowedHosts` du `RobotsGate`). Plafond de coût
+    // partagé (revue de 1.11) : sur un barreau payant, sa lecture est coupée avant que l'essai ne dépasse `max_cost_usd`
+    // (robots.txt alors injoignable : refus, échec fermé).
     const robotsSession = openNetworkSession({
       rung,
       guard: deps.guard,
       ...(credentials === undefined ? {} : { credentials }),
       ...(deps.proxyResolver === undefined ? {} : { proxyResolver: deps.proxyResolver }),
+      costCeiling: { maxUsd: target.api.maxCostUsd, otherUsd: () => otherUsd.egress() + otherUsd.session() },
       userAgent,
     });
     const robotsPacer = pacerFor(target);

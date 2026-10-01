@@ -240,6 +240,8 @@ export function openNetworkSession(options: NetworkSessionOptions): NetworkSessi
   const allowHost = options.allowedHosts === undefined ? undefined : domainLock(options.allowedHosts);
   let exceeded = false;
   const ceiling = options.costCeiling;
+  /** Abandonné au dépassement du plafond en cours de corps : chaque `fetch` de la session y est relié. */
+  const budget = new AbortController();
   /** Prix au Go : budget d'octets restant contrôlé à chaque bloc de corps reçu (marge d'un bloc de lecture). */
   const overBytes = (): boolean =>
     ceiling !== undefined && price !== undefined && proxyCostUsd(price, meter.bytes + COST_BYTE_MARGIN, requests) + (ceiling.otherUsd?.() ?? 0) > ceiling.maxUsd;
@@ -254,7 +256,11 @@ export function openNetworkSession(options: NetworkSessionOptions): NetworkSessi
       onResponseData: (controller, chunk) => {
         if (exceeded || overBytes()) {
           exceeded = true;
-          controller.abort(new ProxyBudgetExceededError());
+          const error = new ProxyBudgetExceededError();
+          // Le signal d'abandon de la session coupe aussi le corps déjà rendu à l'appelant : l'abandon du contrôleur seul
+          // ne le fait pas quand il survient au premier bloc (le lecteur attendait alors son délai).
+          budget.abort(error);
+          controller.abort(error);
           return;
         }
         handler.onResponseData?.(controller, chunk);
@@ -275,7 +281,7 @@ export function openNetworkSession(options: NetworkSessionOptions): NetworkSessi
     proxyId,
     dispatcher,
     fetch: (input, init = {}, opts = {}) =>
-      guardedFetch(input, withUserAgent(init, options.userAgent) as Omit<RequestInit, 'dispatcher' | 'redirect'>, {
+      guardedFetch(input, withUserAgent(ceiling === undefined ? init : { ...init, signal: init.signal ? AbortSignal.any([init.signal, budget.signal]) : budget.signal }, options.userAgent) as Omit<RequestInit, 'dispatcher' | 'redirect'>, {
         guard,
         dispatcher,
         ...(opts.followRedirects === false ? { followRedirects: false } : {}),

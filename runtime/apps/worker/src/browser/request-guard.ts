@@ -10,6 +10,25 @@
 // Mode non aplati (`flatten: false`) : les messages d'une cible enfant passent par `Target.sendMessageToTarget` de la
 // session parente, seule voie qu'offre une `CDPSession` de Playwright. Un cadre hors processus dont l'interception ne
 // peut pas être posée reste suspendu (échec fermé) : il ne charge rien.
+//
+// WebSocket des workers dédiés (revue de 1.11, INV11) : la poignée de main d'un WebSocket ouvert depuis un worker (de la
+// page ou d'un cadre, hors processus ou non, imbriqué ou non) n'est vue ni par `routeWebSocket` (qui ne remplace
+// `WebSocket` que dans les cadres), ni par CDP Fetch (qui n'intercepte pas les WebSocket), ni par le proxy d'egress (un
+// CONNECT sans chemin). Voies écartées, constatées sur Chromium 153 : la suspension du worker au démarrage ne tient pas
+// (Playwright relance lui-même chaque worker qu'il joint, avant toute évaluation de notre part) ; `Network.setBlockedURLs`
+// ne coupe pas les WebSocket ; l'émulation réseau par règle ne couvre ni les workers imbriqués ni ceux d'un cadre du même
+// processus ; une CSP ajoutée à la réponse d'un DOCUMENT par `Fetch.continueResponse` n'est pas appliquée. Échec fermé :
+// - chaque réponse de script ou « autre » (dont le script principal d'un worker http(s), classique ou module) reçoit la
+//   CSP `connect-src http: https: blob: data:`, que Chromium applique au worker : sans ws: ni wss:, il n'ouvre aucun
+//   WebSocket (ni WebSocketStream), et ses workers blob: en héritent. Sans effet sur une ressource qui n'est ni un document
+//   ni un worker ; elle ne fait que s'ajouter à celles du site (intersection). Une réponse dont la CSP ne peut pas être
+//   posée est coupée ;
+// - un document ne crée aucun worker blob: ou data: (garde des documents, page-guard.ts) : le code d'un worker vient
+//   toujours d'une réponse http(s) qui passe ici.
+// Les WebSocket de la page et des cadres restent contrôlés par `routeWebSocket` (robots.txt compris).
+// Règles de spéculation (revue de 1.11) : une réponse `application/speculationrules+json` (règles chargées par l'en-tête
+// `Speculation-Rules`) est coupée ; le préchargement qu'elle déclencherait part du navigateur hors de toute interception
+// (voir page-guard.ts).
 import type { Browser, BrowserContext, CDPSession, Page } from 'playwright-core';
 
 /** Requête présentée au contrôle (un saut d'une chaîne de redirections, ou la requête initiale). */
@@ -107,7 +126,61 @@ function childChannels(parent: Channel): (sessionId: string) => Channel {
 }
 
 const AUTO_ATTACH = { autoAttach: true, waitForDebuggerOnStart: true, flatten: false } as const;
-const INTERCEPT_ALL = { patterns: [{ urlPattern: '*', requestStage: 'Request' }] } as const;
+/** CSP ajoutée à chaque script et ressource « autre » (script principal d'un worker) : aucun WebSocket. */
+const WORKER_CSP = 'connect-src http: https: blob: data:';
+/** Type MIME des règles de spéculation chargées par l'en-tête `Speculation-Rules` (seul type accepté par Chromium). */
+const SPECULATION_RULES_MIME = 'application/speculationrules+json';
+/** Chaque requête au stade Request ; scripts et ressources « autres » aussi au stade Response. */
+const INTERCEPT_ALL = {
+  patterns: [
+    { urlPattern: '*', requestStage: 'Request' },
+    ...['Script', 'Other'].map((resourceType) => ({ urlPattern: '*', resourceType, requestStage: 'Response' })),
+  ],
+};
+
+type HeaderEntry = { name: string; value: string };
+
+/**
+ * Script ou ressource « autre » interceptés à la réception : règles de spéculation coupées ; CSP `WORKER_CSP` ajoutée au
+ * reste. Échec fermé : une réponse dont la CSP ne peut pas être posée est coupée.
+ */
+async function onResponse(channel: Channel, params: Record<string, unknown>): Promise<void> {
+  const requestId = params['requestId'];
+  const fail = () => channel.send('Fetch.failRequest', { requestId, errorReason: 'BlockedByClient' }).catch(() => undefined);
+  if (typeof params['responseErrorReason'] === 'string') {
+    await channel.send('Fetch.failRequest', { requestId, errorReason: params['responseErrorReason'] }).catch(() => undefined);
+    return;
+  }
+  const headers = (Array.isArray(params['responseHeaders']) ? params['responseHeaders'] : []) as HeaderEntry[];
+  const mime = (h: HeaderEntry) => String(h.value).split(';')[0]!.trim().toLowerCase();
+  if (headers.some((h) => String(h.name).toLowerCase() === 'content-type' && mime(h) === SPECULATION_RULES_MIME)) {
+    await fail();
+    return;
+  }
+  const phrase = typeof params['responseStatusText'] === 'string' && params['responseStatusText'] !== '' ? { responsePhrase: params['responseStatusText'] } : {};
+  const responseHeaders = [...headers, { name: 'Content-Security-Policy', value: WORKER_CSP }];
+  const sent = await channel.send('Fetch.continueResponse', { requestId, responseCode: params['responseStatusCode'], ...phrase, responseHeaders }).then(
+    () => true,
+    () => false,
+  );
+  if (!sent) await fail();
+}
+
+/**
+ * Verdict d'une requête présentée par CDP : `check` pour toute requête http(s) d'un domaine de l'API ; hors http(s)
+ * (data:, blob:) ou hors des domaines (coupée par le verrou de domaines et le proxy d'egress), aucun robots.txt à lire.
+ * Échec fermé : une URL illisible est coupée, comme un contrôle qui échoue.
+ */
+export async function requestVerdict(url: string, inScope: (url: string) => boolean, check: RequestCheck, hop: Omit<BrowserRequestCheck, 'url'>): Promise<boolean> {
+  let protocol: string;
+  try {
+    protocol = new URL(url).protocol;
+  } catch {
+    return false;
+  }
+  if ((protocol !== 'http:' && protocol !== 'https:') || !inScope(url)) return true;
+  return check({ url, ...hop }).catch(() => false);
+}
 
 /**
  * Pose le contrôle de chaque requête sur `page` (et ses cibles enfants) AVANT toute navigation. La session vit jusqu'à
@@ -125,6 +198,10 @@ export async function installRequestGuard(context: BrowserContext, page: Page, i
   };
 
   const onPaused = (channel: Channel, mainFrameId: string | undefined) => async (params: Record<string, unknown>) => {
+    if (params['responseStatusCode'] !== undefined || params['responseErrorReason'] !== undefined) {
+      await onResponse(channel, params);
+      return;
+    }
     const requestId = params['requestId'];
     const request = params['request'] as { url?: unknown } | undefined;
     const url = typeof request?.url === 'string' ? request.url : '';
@@ -135,20 +212,9 @@ export async function installRequestGuard(context: BrowserContext, page: Page, i
     const redirect = typeof params['redirectedRequestId'] === 'string' || known !== undefined;
     const rootUrl = known ?? url;
     if (known === undefined && networkId !== undefined) remember(networkId, url);
-    let allowed = true;
-    let protocol = '';
-    try {
-      protocol = new URL(url).protocol;
-    } catch {
-      // URL illisible : laissée à Chromium (aucune connexion possible), au proxy d'egress et au verrou de domaines.
-    }
-    // Hors http(s) (data:, blob:) ou hors des domaines de l'API (coupé par le verrou de domaines et le proxy d'egress) :
-    // aucun robots.txt à lire ici.
-    if ((protocol === 'http:' || protocol === 'https:') && inScope(url)) {
-      const resourceType = typeof params['resourceType'] === 'string' ? params['resourceType'] : 'Other';
-      const mainFrame = mainFrameId !== undefined && params['frameId'] === mainFrameId && resourceType === 'Document';
-      allowed = await check({ url, redirect, rootUrl, resourceType, mainFrame }).catch(() => false);
-    }
+    const resourceType = typeof params['resourceType'] === 'string' ? params['resourceType'] : 'Other';
+    const mainFrame = mainFrameId !== undefined && params['frameId'] === mainFrameId && resourceType === 'Document';
+    const allowed = await requestVerdict(url, inScope, check, { redirect, rootUrl, resourceType, mainFrame });
     if (allowed) await channel.send('Fetch.continueRequest', { requestId }).catch(() => undefined);
     else await channel.send('Fetch.failRequest', { requestId, errorReason: 'BlockedByClient' }).catch(() => undefined);
   };

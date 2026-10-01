@@ -2,7 +2,7 @@
 // Accès (O8) : robots.txt (Disallow, 4xx, 5xx, redirection, gros fichier, Crawl-delay, Content-Signal) et réponse 402.
 // Chaque site sert un contenu JSON sur tout chemin hors robots.txt : le compteur de GET /__stats dit si un chemin a été visité.
 import { ControlError, type FxRequest, type FxResponse, type Site, type SiteFactory } from '../core.ts';
-import { html, json, page, redirect, text } from '../res.ts';
+import { html, json, page, redirect, sleep, text } from '../res.ts';
 
 const robotsText = (body: string, headers: Record<string, string> = {}): FxResponse => text(200, body, headers);
 
@@ -13,13 +13,23 @@ function base(id: string, description: string, smoke: Site['smoke']): Omit<Site,
   return { id, lot: 'o8', description, hosts: [`zz_test_${id}.localhost`], smoke, ownsRobots: true };
 }
 
+/** Code d'un worker qui ouvre un WebSocket vers `path` de son origine (ws pour http, wss pour https). */
+const wsFromWorker = (path: string): string => `try { new WebSocket(location.origin.replace(/^http/, 'ws') + '${path}'); } catch (e) {}`;
+
+/** Règles de spéculation immédiates : un prefetch et un prerender. */
+const speculationRules = (prefetch: string, prerender: string): string =>
+  JSON.stringify({ prefetch: [{ source: 'list', urls: [prefetch], eagerness: 'immediate' }], prerender: [{ source: 'list', urls: [prerender], eagerness: 'immediate' }] });
+
 /**
  * Redirections d'un chemin permis vers un chemin interdit (INV11 à chaque saut, Chromium compris) : `/depart` → 302
  * `/prive/x` ; `/prive` → 301 `/prive/` (barre oblique finale) ; `/vers-autre` → 302 vers `/prive/x` d'un second hôte
  * (`robots_redirect`, qui interdit /prive/) ; `/vers-injoignable` → 302 vers l'hôte `robots_5xx` (robots.txt en 503) ;
- * `/page-ws` : page qui ouvre un WebSocket vers `/prive/ws` ; `/page-cadre` : page avec un cadre d'un autre site
- * (`robots_redirect`) dont une image passe par `/depart` → 302 `/prive/x` ; `/page-sw` : page qui crée un SharedWorker
- * (`/sw.js`) dont le code demande `/prive/sw` directement et `/depart` (→ 302 `/prive/x`).
+ * `/page-ws` : page qui ouvre un WebSocket vers `/prive/ws` ; `/page-ws-worker` : workers dédiés (blob, http, module) qui en
+ * ouvrent un ; `/page-cadre-ws` : cadre du second hôte dont les workers en ouvrent un (`/cadre-ws-worker`) ; `/page-spec` :
+ * règles de spéculation (prefetch, prerender) vers `/prive/`, dans la page et par l'en-tête ;
+ * `/page-cadre` : page avec un cadre d'un autre site (`robots_redirect`) dont une image passe par `/depart` → 302
+ * `/prive/x` ; `/page-sw` : page qui crée un SharedWorker (`/sw.js`) dont le code demande `/prive/sw` directement et
+ * `/depart` (→ 302 `/prive/x`).
  */
 const robotsDisallow: SiteFactory = (env) => ({
   ...base('robots', 'robots.txt : Disallow: /prive/ avec Allow: /prive/ouvert (règle la plus longue) ; redirections d\'un chemin permis vers /prive/ (même hôte, barre oblique finale, second hôte) ; tout chemin visité est compté', { path: '/robots.txt', status: 200 }),
@@ -37,12 +47,41 @@ const robotsDisallow: SiteFactory = (env) => ({
         return redirect(302, env.urlFor('zz_test_robots_5xx.localhost', '/liste'));
       case '/page-cadre':
         return html(200, page('cadre', `<p id="cadre">cadre</p><iframe src="${env.urlFor('zz_test_robots_redirect.localhost', '/cadre')}"></iframe>`));
+      case '/page-cadre-ws':
+        // Cadre d'un autre site dont les workers (blob, http) ouvrent un WebSocket vers /prive/ (revue de 1.11).
+        return html(200, page('cadre-ws', `<p id="cadre-ws">cadre-ws</p><iframe src="${env.urlFor('zz_test_robots_redirect.localhost', '/cadre-ws-worker')}"></iframe>`));
       case '/page-sw':
         return html(200, page('sw', '<p id="sw">sw</p>', `<script>try { new SharedWorker('/sw.js'); } catch (e) {}</script>`));
       case '/sw.js':
         return { status: 200, headers: { 'content-type': 'text/javascript; charset=utf-8' }, body: "fetch('/prive/sw').catch(() => 0); fetch('/depart').catch(() => 0);" };
       case '/page-ws':
         return html(200, page('ws', '<p id="ws">ws</p>', `<script>try { new WebSocket('ws://' + location.host + '/prive/ws'); } catch (e) {}</script>`));
+      case '/page-ws-worker':
+        // Workers dédiés du site (blob, http classique, module) : chacun ouvre un WebSocket vers /prive/ (revue de 1.11).
+        return html(
+          200,
+          page(
+            'ws-worker',
+            '<p id="wsw">wsw</p>',
+            `<script>${[`new Worker(URL.createObjectURL(new Blob([${JSON.stringify(wsFromWorker('/prive/ws-worker-blob'))}], { type: 'text/javascript' })))`, "new Worker('/ws-worker.js')", "new Worker('/ws-worker-module.js', { type: 'module' })"].map((c) => `try { ${c}; } catch (e) {}`).join(' ')}</script>`,
+          ),
+        );
+      case '/ws-worker.js':
+        return { status: 200, headers: { 'content-type': 'text/javascript; charset=utf-8' }, body: `${wsFromWorker('/prive/ws-worker-http')} fetch('/temoin-worker').catch(() => 0);` };
+      case '/ws-worker-module.js':
+        return { status: 200, headers: { 'content-type': 'text/javascript; charset=utf-8' }, body: `${wsFromWorker('/prive/ws-worker-module')} fetch('/temoin-worker-module').catch(() => 0);` };
+      case '/page-spec':
+        // Règles de spéculation (revue de 1.11) : prefetch et prerender immédiats vers /prive/, dans la page et par l'en-tête
+        // Speculation-Rules ; l'image lente retarde l'événement load (le préchargement a le temps de partir).
+        return html(
+          200,
+          page('spec', '<p id="spec">spec</p><img src="/lent" alt="">', `<script type="speculationrules">${speculationRules('/prive/spec-prefetch', '/prive/spec-prerender')}</script>`),
+          { 'speculation-rules': '"/spec-rules.json"' },
+        );
+      case '/spec-rules.json':
+        return { status: 200, headers: { 'content-type': 'application/speculationrules+json' }, body: speculationRules('/prive/spec-header-prefetch', '/prive/spec-header-prerender') };
+      case '/lent':
+        return sleep(1500).then(() => text(200, 'lent'));
       default:
         return content(req);
     }
@@ -99,6 +138,18 @@ const robotsRedirect: SiteFactory = (env) => {
       if (req.path === '/robots-final.txt') return robotsText('User-agent: *\nDisallow: /prive/\n');
       // Cadre d'un autre site (`robots` → `/page-cadre`) : image redirigée vers un chemin interdit.
       if (req.path === '/cadre') return html(200, page('cadre', '<img src="/depart" alt="">'));
+      // Cadre dont les workers dédiés (blob, http) ouvrent un WebSocket vers /prive/ (revue de 1.11).
+      if (req.path === '/cadre-ws-worker')
+        return html(
+          200,
+          page(
+            'cadre-ws-worker',
+            '<p>cadre</p>',
+            `<script>${[`new Worker(URL.createObjectURL(new Blob([${JSON.stringify(wsFromWorker('/prive/cadre-ws-worker-blob'))}])))`, "new Worker('/cadre-ws-worker.js')"].map((c) => `try { ${c}; } catch (e) {}`).join(' ')}</script>`,
+          ),
+        );
+      if (req.path === '/cadre-ws-worker.js')
+        return { status: 200, headers: { 'content-type': 'text/javascript; charset=utf-8' }, body: `${wsFromWorker('/prive/cadre-ws-worker-http')} fetch('/temoin-cadre-worker').catch(() => 0);` };
       if (req.path === '/depart') return redirect(302, '/prive/x');
       return content(req);
     },

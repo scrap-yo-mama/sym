@@ -2,7 +2,11 @@
 // Lancement de Chromium 153 (Playwright 1.63) pour le worker (tâche 1.6 ; 03 ; 08 §3 ; 08b §1 ; 14 §11) :
 // - arguments et options de proxy FIGÉS dans le code (aucune entrée de stratégie, de prompt ou de membre) ;
 // - silencieux : trafic de fond coupé (mises à jour de composants, Safe Browsing, métriques, suggestions, rapports) ;
-//   les commutateurs par défaut de Playwright restent (dont son `--disable-features`, qu'un second exemplaire écraserait) ;
+//   les commutateurs par défaut de Playwright restent ; son `--disable-features` est remplacé par le nôtre (dernier gagnant
+//   côté Chromium), qui reprend toute sa liste (`PLAYWRIGHT_DISABLED_FEATURES`, vérifiée contre le paquet installé) ;
+// - INV11 (revue de 1.11) : prérendu (`Prerender2`), préchargement qui le précède (`Prerender2FallbackPrefetchSpecRules`)
+//   et `WebSocketStream` (que `routeWebSocket` ne voit pas) coupés ; le préchargement des règles de spéculation, sans
+//   commutateur dans Chromium 153, est retiré des documents (page-guard.ts) ;
 // - tout le trafic passe par un proxy d'egress local : au lancement, un proxy FERMÉ (rien ne sort hors d'un contexte de
 //   run) ; chaque contexte de run reçoit son propre proxy d'egress (`browser.newContext({ proxy })`) ;
 // - bac à sable de Chromium ACTIF (`chromiumSandbox: true`) : sans cette option, Playwright ajoute lui-même
@@ -38,6 +42,31 @@ export const CHROMIUM_SILENT_ARGS: readonly string[] = Object.freeze([
   '--password-store=basic',
   '--use-mock-keychain',
 ]);
+
+/** Liste `disabledFeatures` de Playwright 1.63 (chromiumSwitches), reprise telle quelle : notre --disable-features la remplace. */
+export const PLAYWRIGHT_DISABLED_FEATURES: readonly string[] = Object.freeze([
+  'AvoidUnnecessaryBeforeUnloadCheckSync',
+  'DestroyProfileOnBrowserClose',
+  'DialMediaRouteProvider',
+  'GlobalMediaControls',
+  'HttpsUpgrades',
+  'LensOverlay',
+  'MediaRouter',
+  'PaintHolding',
+  'ThirdPartyStoragePartitioning',
+  'BlockOriginHeaderModificationOnRedirect',
+  'Translate',
+  'AutoDeElevate',
+  'OptimizationHints',
+  'msForceBrowserSignIn',
+  'msEdgeUpdateLaunchServicesPreferredVersion',
+]);
+
+/**
+ * Fonctions coupées pour INV11 (revue de 1.11) : leurs requêtes partent du navigateur lui-même (prérendu) ou d'une API que
+ * `routeWebSocket` ne voit pas (WebSocketStream), hors du contrôle robots de chaque requête.
+ */
+export const INV11_DISABLED_FEATURES: readonly string[] = Object.freeze(['Prerender2', 'Prerender2FallbackPrefetchSpecRules', 'WebSocketStream']);
 
 /** Variables d'environnement transmises au processus Chromium : rien d'autre (secrets exclus par construction). */
 const CHROMIUM_ENV_ALLOWLIST: readonly string[] = Object.freeze([
@@ -105,7 +134,7 @@ export function chromiumLaunchOptions(
     chromiumSandbox: true,
     host: '127.0.0.1',
     proxy: egress.proxy,
-    args: Object.freeze([...egress.args, ...CHROMIUM_SILENT_ARGS]),
+    args: Object.freeze([...egress.args, ...CHROMIUM_SILENT_ARGS, `--disable-features=${[...PLAYWRIGHT_DISABLED_FEATURES, ...INV11_DISABLED_FEATURES].join(',')}`]),
     env: chromiumEnv(env),
     handleSIGINT: false,
     handleSIGTERM: false,

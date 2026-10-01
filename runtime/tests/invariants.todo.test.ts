@@ -54,10 +54,11 @@ import { describe, test } from "vitest";
 describe("invariants (à implémenter)", () => {
   test.todo("assert_cheapest_first_logged"); // INV2, tâche(s) 2.1
   test.todo("assert_tunnel_single_user"); // INV5, tâche(s) 2.6, 2.7
-  // INV11 (revue de 1.11) : 17 § 1 et le contrat IA de 1.11 exigent 0 requête sur un chemin interdit AUSSI en tunnel et via
-  // l'extension ; la passerelle WSS et ses commandes naissent en 2.7, qui doit contrôler robots.txt avant chaque commande de
-  // navigation ou de requête (sauts de redirection compris) et remplacer ce test.todo par le vrai test.
-  test.todo("assert_robots_respected — volet tunnel et extension : 0 requête sur un chemin interdit en mode tunnel, à chaque saut"); // INV11, tâche(s) 2.7
+  // INV11 (revue de 1.11, journal D-33) : 17 § 1 et le contrat IA de 1.11 exigent 0 requête sur un chemin interdit AUSSI en
+  // tunnel et via l'extension. 2.7 (passerelle WSS) a été fusionnée avant 1.11, sans contrôle robots : la tâche de suivi 2.7b
+  // contrôle robots.txt avant chaque commande de navigation ou de requête du tunnel (sauts de redirection compris) et
+  // remplace ce test.todo par le vrai test ; il ne se retire qu'avec lui.
+  test.todo("assert_robots_respected — volet tunnel et extension : 0 requête sur un chemin interdit en mode tunnel, à chaque saut"); // INV11, tâche(s) 2.7b (D-33)
   // 4.8 livrée partiellement (16 § 8, 17 § 11) : le quickstart rejoué s'arrête à la clé d'API ; D0 et la première API sont
   // décrits (mode pending) et gardés par assert_quickstart_pending_steps_declared, qui échoue à la livraison de leurs routes.
   test.todo("assert_quickstart_d0_first_api"); // 16 § 8, reprise : 3.1 (première API sur fixture), 3.2 (D0 en MCP), vérifié en 4.4
