@@ -47,6 +47,9 @@ describe("invariants (à implémenter)", () => {
   test.todo("assert_cheapest_first_logged"); // INV2, tâche(s) 2.1
   test.todo("assert_tunnel_single_user"); // INV5, tâche(s) 2.6, 2.7
   test.todo("assert_robots_respected"); // INV11, tâche(s) 1.11
+  // ADR 0001, point faible connu (F-E5, pagination par bouton) : 2.4 ne compile qu'une trace à un enregistrement ; une liste
+  // est refusée (`list_not_compilable`, épinglé par assert_e5_list_not_compiled) et reste rejouée par l'agent (E5 « mouvant »).
+  test.todo("assert_e5_list_compiled — trace E6 réussie sur F-E5 compilée en E5 (clics « Suivant » répétés, extraction par enregistrement à chaque page) et rejouée sans LLM, sortie identique"); // ADR 0001, suivi de 2.4 (tâche de rattachement à créer dans 10-taches)
   // 4.8 livrée partiellement (16 § 8, 17 § 11) : le quickstart rejoué s'arrête à la clé d'API ; D0 et la première API sont
   // décrits (mode pending) et gardés par assert_quickstart_pending_steps_declared, qui échoue à la livraison de leurs routes.
   test.todo("assert_quickstart_d0_first_api"); // 16 § 8, reprise : 3.1 (première API sur fixture), 3.2 (D0 en MCP), vérifié en 4.4

@@ -83,6 +83,10 @@ catalog:
   wxt: 0.21.4
   # Moteur agentique (tâche 0.6a) et exécuteurs E2-E3 (tâche 1.6) : Playwright 1.63 (Chromium 153), noyau sans navigateurs embarqués (image Playwright), même version que @playwright/test.
   playwright-core: 1.63.0
+  # Moteur agentique serveur retenu par l’ADR 0001 (Stagehand 3.7.3, mode dom, local seulement), intégré en production par la
+  # tâche 2.4 dans packages/agent ; zod 4.3.6 : schéma de sortie attendu par `agent().execute({ output })`.
+  "@browserbasehq/stagehand": 3.7.3
+  zod: 4.3.6
   # Téléphones des sujets en E.164 (tâche 1.8, D-25) : MIT, sans dépendance ; 1.13.14 < 7 jours au 2026-10-01 (minimumReleaseAge).
   libphonenumber-js: 1.13.13
   # Accessibilité (tâche 3.9, 06 § 1) : adaptateur Playwright d'axe-core (MPL-2.0, compatible AGPL), 4.13.0 publiée le 2026-08-11 ; il tire axe-core ~4.13.0 (4.13.0, 2026-08-05), figé par le lockfile. Plus de 7 jours.

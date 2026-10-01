@@ -12,15 +12,19 @@
       "default": "./dist/index.js"
     }
   },
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "tsc -b",
     "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
+    "@browserbasehq/stagehand": "catalog:",
     "@runtime/core": "workspace:*",
     "@runtime/llm": "workspace:*",
-    "playwright-core": "catalog:"
+    "playwright-core": "catalog:",
+    "zod": "catalog:"
   },
   "devDependencies": {
     "@types/node": "catalog:",

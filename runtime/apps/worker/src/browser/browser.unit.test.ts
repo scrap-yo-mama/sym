@@ -237,6 +237,96 @@ describe('BrowserPool', () => {
   });
 });
 
+describe('Chromium dédié (E5 agentique, E6) dans un slot du pool : un Chromium par slot (14 §11)', () => {
+  /** Chromium vivants : ceux du pool (ni fermés ni tués) et les dédiés ouverts. */
+  function census() {
+    const pooled = fakeLauncher();
+    let dedicatedAlive = 0;
+    let peak = 0;
+    const alive = () => pooled.launched.filter((f) => !f.closed && !f.killed).length + dedicatedAlive;
+    const launch = async (): Promise<LaunchedBrowser> => {
+      const l = await pooled.launch();
+      peak = Math.max(peak, alive());
+      return l;
+    };
+    const dedicated = async () => {
+      dedicatedAlive += 1;
+      peak = Math.max(peak, alive());
+      let open = true;
+      return {
+        close: async () => {
+          if (open) dedicatedAlive -= 1;
+          open = false;
+        },
+      };
+    };
+    return { launch, launched: pooled.launched, dedicated, alive, peak: () => peak };
+  }
+
+  test('assert_agent_browser_in_pool_slot — BROWSER_CONCURRENCY=1, deux essais simultanés : jamais plus d’un Chromium vivant ; le Chromium partagé du slot fermé avant le dédié ; rejeux sans redemander de slot', async () => {
+    const c = census();
+    const events: BrowserPoolEvent[] = [];
+    const pool = new BrowserPool({ size: 1, launch: c.launch, recycleAfterRuns: 100, onEvent: (e) => events.push(e) });
+    // Un run E2 a laissé un Chromium partagé vivant dans le slot.
+    await pool.run(signal, async () => undefined);
+    expect(c.alive()).toBe(1);
+    const trial = () =>
+      pool.hold(signal, async (lease) => {
+        const ab = await lease.dedicated(c.dedicated);
+        await new Promise((r) => setTimeout(r, 20));
+        // Le Chromium partagé du slot ne peut pas être prêté tant que le dédié est ouvert.
+        await expect(lease.run(async () => undefined)).rejects.toThrow();
+        await ab.close();
+        // Rejeux de compilation : le slot tenu, sans en redemander un (un pool à 1 slot serait sinon bloqué).
+        await lease.run(async () => undefined);
+        await lease.run(async () => undefined);
+        expect(pool.active()).toBe(1);
+        return 'ok';
+      });
+    await expect(Promise.all([trial(), trial()])).resolves.toEqual(['ok', 'ok']);
+    expect(c.peak()).toBe(1);
+    expect(c.launched[0]?.closed).toBe(true);
+    expect(events.some((e) => e.kind === 'recycle' && e.reason === 'dedicated')).toBe(true);
+    expect(pool.active()).toBe(0);
+    await pool.close();
+    expect(c.alive()).toBe(0);
+  });
+
+  test('Chromium dédié laissé ouvert : fermé à la libération du slot ; chien de garde : fermé au-delà du délai ; un seul dédié par slot ; arrêt du pool', async () => {
+    const c = census();
+    const events: BrowserPoolEvent[] = [];
+    const pool = new BrowserPool({ size: 1, launch: c.launch, runWatchdogMs: 20, onEvent: (e) => events.push(e) });
+    await pool.hold(signal, async (lease) => {
+      await lease.dedicated(c.dedicated);
+    });
+    expect(c.alive()).toBe(0);
+    await pool.hold(signal, async (lease) => {
+      await lease.dedicated(c.dedicated);
+      await new Promise((r) => setTimeout(r, 80));
+      expect(c.alive()).toBe(0);
+    });
+    expect(events.some((e) => e.kind === 'watchdog')).toBe(true);
+    await pool.hold(signal, async (lease) => {
+      const ab = await lease.dedicated(c.dedicated);
+      await expect(lease.dedicated(c.dedicated)).rejects.toThrow();
+      await ab.close();
+    });
+    expect(c.peak()).toBe(1);
+    // Arrêt du worker pendant un essai : le dédié est fermé.
+    let opened!: () => void;
+    const ready = new Promise<void>((r) => (opened = r));
+    const held = pool.hold(signal, async (lease) => {
+      await lease.dedicated(c.dedicated);
+      opened();
+      await new Promise((r) => setTimeout(r, 10));
+    });
+    await ready;
+    await pool.close();
+    expect(c.alive()).toBe(0);
+    await held;
+  });
+});
+
 describe('boundedDocumentBody : corps brut d’un document lu seulement si sa taille DÉCODÉE est connue et bornée', () => {
   type FakeResponse = Parameters<typeof boundedDocumentBody>[0];
   const response = (headers: Record<string, string>, transferred: number, text: () => Promise<string>): FakeResponse =>

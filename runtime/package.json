@@ -45,8 +45,10 @@
   "devDependencies": {
     "@eslint/js": "catalog:",
     "@playwright/test": "catalog:",
+    "@runtime/agent": "workspace:*",
     "@runtime/core": "workspace:*",
     "@runtime/db": "workspace:*",
+    "@runtime/llm": "workspace:*",
     "@testcontainers/postgresql": "catalog:",
     "@types/node": "catalog:",
     "@types/pg": "catalog:",

@@ -86,6 +86,41 @@ export async function readProxySettings(db: Queryable): Promise<unknown> {
   return rows[0]?.value ?? [];
 }
 
+/** Réglages LLM de l'instance (`settings.llm`, JSON brut ; clés référencées par identifiant de secret, 08 §7). */
+export async function readLlmSettings(db: Queryable): Promise<unknown> {
+  const { rows } = await db.query<{ value: unknown }>("SELECT value FROM settings WHERE key = 'llm'");
+  return rows[0]?.value ?? null;
+}
+
+/**
+ * Stratégie E5 compilée depuis une trace E6 réussie et vérifiée par rejeu sans LLM (tâche 2.4, 04 §3.1) : nouvelle
+ * version `hybrid` (`created_by = investigation`, parent = la version E6), retenue comme courante SEULEMENT si l'API est
+ * toujours sur cette version E6 (aucune réparation ni enquête concurrente ne l'a changée). Écrit comme le propriétaire.
+ */
+export async function saveCompiledStrategy(
+  pool: pg.Pool,
+  args: { apiId: string; ownerId: string; parentVersion: number; network: Network; spec: unknown; estCostUsd: number },
+): Promise<{ version: number; promoted: boolean }> {
+  return withActor(pool, { userId: args.ownerId, role: 'member' }, async (tx) => {
+    const locked = await tx.query<{ current_strategy_version: number | null; project_id: string }>('SELECT current_strategy_version, project_id FROM apis WHERE id = $1 AND owner_id = $2 FOR UPDATE', [
+      args.apiId,
+      args.ownerId,
+    ]);
+    const current = locked.rows[0];
+    if (current === undefined) throw new Error('API introuvable pour le propriétaire');
+    const next = await tx.query<{ v: number }>('SELECT COALESCE(MAX(version), 0) + 1 AS v FROM strategy_versions WHERE api_id = $1', [args.apiId]);
+    const version = next.rows[0]!.v;
+    await tx.query(
+      `INSERT INTO strategy_versions (api_id, version, owner_id, project_id, execution, network, spec, est_cost_usd, created_by, parent_version)
+       VALUES ($1, $2, $3, $4, 'hybrid', $5, $6, $7, 'investigation', $8)`,
+      [args.apiId, version, args.ownerId, current.project_id, args.network, JSON.stringify(args.spec), args.estCostUsd, args.parentVersion],
+    );
+    const promoted = current.current_strategy_version === args.parentVersion;
+    if (promoted) await tx.query('UPDATE apis SET current_strategy_version = $2 WHERE id = $1', [args.apiId, version]);
+    return { version, promoted };
+  });
+}
+
 const ITEMS_PER_INSERT = 500;
 
 /**

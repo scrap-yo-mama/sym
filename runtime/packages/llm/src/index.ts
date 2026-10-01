@@ -11,3 +11,4 @@ export * from './profile.js';
 export * from './schema.js';
 export * from './transport.js';
 export * from './client.js';
+export * from './settings.js';
