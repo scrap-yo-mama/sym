@@ -385,5 +385,37 @@ describe('assert_run_cost_capped : max_cost_usd tenu pendant le run (proxy d’e
         await session.close();
       }
     });
+
+    // Revue de 1.11 (lecture de robots.txt sous plafond) : coupé dès le PREMIER bloc, le corps restait ouvert et le lecteur
+    // attendait son délai (ici aucun : il attendait indéfiniment). Le signal d'abandon de la session le coupe aussitôt.
+    test('session réseau : corps coupé dès le premier bloc (budget presque épuisé) → erreur immédiate, coût ≤ plafond', async () => {
+      const session = openNetworkSession({
+        rung: { mode: 'dc_proxy', proxy: perGb(connectProxy.url), params: {} },
+        guard: fixtureGuard(bigPort, [BIG]),
+        credentials: creds,
+        costCeiling: { maxUsd: 0.0005 },
+      });
+      try {
+        const started = Date.now();
+        const read = (async () => {
+          const response = await session.fetch(`http://${BIG}:${bigPort}/big`);
+          const reader = (response.body as ReadableStream<Uint8Array>).getReader();
+          for (;;) if ((await reader.read()).done) return 'fini';
+        })();
+        const outcome = await Promise.race([
+          read.then(
+            (v) => v,
+            (e: unknown) => e,
+          ),
+          new Promise((resolve) => setTimeout(() => resolve('attente'), 3000)),
+        ]);
+        expect(outcome).toBeInstanceOf(ProxyBudgetExceededError);
+        expect(Date.now() - started).toBeLessThan(3000);
+        expect(session.budgetExceeded()).toBe(true);
+        expect(session.usage().costUsd).toBeLessThanOrEqual(0.0005);
+      } finally {
+        await session.close();
+      }
+    });
   });
 });

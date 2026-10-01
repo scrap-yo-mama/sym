@@ -31,3 +31,15 @@ export type RequestPacer = {
   /** `failureClass` : classe de la garde (1.7) ; un refus (403, défi en 200) compte pour le disjoncteur. */
   report(url: string, response: { readonly status: number; readonly retryAfter: string | null; readonly failureClass?: FailureClass | null }): Promise<void>;
 };
+
+/**
+ * Verdict du module d'accès (1.11) avant une requête : robots.txt permet le chemin (avec son `Crawl-delay`), ou la
+ * classe du refus (`robots_disallowed`, `robots_unreachable`, `rate_limited` si la lecture de robots.txt n'a pas eu
+ * de créneau). Aucun octet ne part vers un chemin refusé (INV11).
+ */
+export type AccessDecision =
+  | { readonly allowed: true; readonly crawlDelayMs: number | null }
+  | { readonly allowed: false; readonly failure: ExecFailure };
+
+/** Contrôle d'accès d'une URL (`RobotsGate.check`). */
+export type AccessCheck = (url: string) => Promise<AccessDecision>;

@@ -9,7 +9,24 @@
 // stratégie ; les sous-ressources tierces du site coupées ne changent jamais la classe d'un échec.
 // Contrôle optionnel des requêtes autorisées (`admit`, E3 en script) : cadence par domaine (1.9), plafond
 // `max_requests_per_run`, actions d'écriture (`allow_write_actions`) ; un refus coupe la requête sans connexion.
+// robots.txt (1.11, INV11) à CHAQUE saut (`checkRequest`) : `context.route` ne voit que la première URL d'une chaîne de
+// redirections ; chaque requête que Chromium s'apprête à envoyer, saut compris, passe par le contrôle CDP de
+// `request-guard.ts` (page du run et cadres hors processus) ; la poignée de main d'un WebSocket aussi. Les requêtes d'une
+// autre page du contexte (fenêtre surgissante, fermée aussitôt) sont coupées : elles échapperaient à ce contrôle.
+// SharedWorker (revue de 1.11) : ses requêtes échappent à `context.route` ET au contrôle CDP de la page ; chacun est fermé
+// avant d'exécuter son code (`blockSharedWorkers`, session CDP du navigateur), dans tous les modes, contrôle robots ou non.
+// Workers dédiés (revue de 1.11) : `routeWebSocket` ne voit pas leurs WebSocket ; le contrôle CDP pose sur le script de
+// tout worker http(s) une CSP sans WebSocket (request-guard.ts), et la garde des documents (`installPageGuard`,
+// page-guard.ts) refuse les workers blob: et data: ; WebSocketStream, que `routeWebSocket` ne voit pas non plus, est coupé
+// au lancement (launch.ts).
+// Règles de spéculation (revue de 1.11) : leur préchargement part du navigateur, hors de toute interception ; la garde des
+// documents les retire, le contrôle CDP coupe celles de l'en-tête `Speculation-Rules`, le prérendu est coupé au lancement.
+import { browserUserAgent } from '@runtime/core/access';
 import type { APIRequest, APIRequestContext, Browser, BrowserContext, Page, Request } from 'playwright-core';
+import { installPageGuard } from './page-guard.js';
+import { blockSharedWorkers, installRequestGuard, type RequestCheck } from './request-guard.js';
+
+export type { BrowserRequestCheck } from './request-guard.js';
 
 export type RunContextOptions = {
   /** `BrowserEgress.server` de l'essai (http://127.0.0.1:PORT). */
@@ -21,9 +38,34 @@ export type RunContextOptions = {
    * un WebSocket) : E3 en script tue alors l'enfant du bac à sable si la requête lui est imputable.
    */
   readonly onViolation?: (host: string, request?: Request) => void;
-  /** Requête d'un domaine autorisé : `false` la coupe (cadence refusée, plafond atteint, action d'écriture). */
+  /** Requête d'un domaine autorisé : `false` la coupe (cadence refusée, plafond atteint, robots.txt, action d'écriture). */
   readonly admit?: (request: Request) => Promise<boolean>;
+  /**
+   * Contrôle de CHAQUE requête http(s) d'un domaine de l'API que Chromium envoie, sauts de redirection compris, et de la
+   * poignée de main de chaque WebSocket (robots.txt, 1.11) : `false` la coupe avant toute connexion.
+   */
+  readonly checkRequest?: RequestCheck;
+  /**
+   * User-Agent du robot (`buildUserAgent`, tâche 1.11) : ajouté APRÈS celui du navigateur, qui reste tel qu'il est
+   * (aucun masquage, X2, 17 §5).
+   */
+  readonly userAgent?: string;
 };
+
+/** User-Agent propre du navigateur (CDP `Browser.getVersion`) ; vide s'il est illisible. */
+async function ownUserAgent(browser: Browser): Promise<string> {
+  try {
+    const session = await browser.newBrowserCDPSession();
+    try {
+      const version = (await session.send('Browser.getVersion')) as { userAgent?: unknown };
+      return typeof version.userAgent === 'string' ? version.userAgent : '';
+    } finally {
+      await session.detach().catch(() => undefined);
+    }
+  } catch {
+    return '';
+  }
+}
 
 export type RunContext = {
   readonly context: BrowserContext;
@@ -32,6 +74,19 @@ export type RunContext = {
   readonly violations: readonly string[];
   close(): Promise<void>;
 };
+
+/** URL http(s) de la poignée de main d'un WebSocket (ws → http, wss → https) ; `undefined` si illisible. */
+function websocketHandshakeUrl(url: string): string | undefined {
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol === 'ws:') parsed.protocol = 'http:';
+    else if (parsed.protocol === 'wss:') parsed.protocol = 'https:';
+    else if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return undefined;
+    return parsed.href;
+  } catch {
+    return undefined;
+  }
+}
 
 /** Nom d'hôte autorisé : égal à un domaine de l'API (comparaison exacte, minuscules, sans point final). */
 export function hostAllowed(url: string, allowedHosts: readonly string[]): boolean {
@@ -58,16 +113,43 @@ export async function openRunContext(browser: Browser, options: RunContextOption
     if (violations.length < 100) violations.push(host);
     options.onViolation?.(host, request);
   };
-  const context = await browser.newContext({
-    proxy: { server: options.egressServer },
-    serviceWorkers: 'block',
-    acceptDownloads: false,
-    ignoreHTTPSErrors: false,
-    bypassCSP: false,
-  });
+  const userAgent = options.userAgent === undefined ? undefined : browserUserAgent(await ownUserAgent(browser), options.userAgent);
+  // Posé avant le contexte : aucun SharedWorker de ce contexte ne peut naître avant lui (échec fermé s'il ne peut pas l'être).
+  const sharedWorkers = await blockSharedWorkers(browser);
+  let context: BrowserContext;
+  try {
+    context = await browser.newContext({
+      ...(userAgent === undefined ? {} : { userAgent }),
+      proxy: { server: options.egressServer },
+      serviceWorkers: 'block',
+      acceptDownloads: false,
+      ignoreHTTPSErrors: false,
+      bypassCSP: false,
+    });
+  } catch (error) {
+    await sharedWorkers.close();
+    throw error;
+  }
+  // Contexte fermé d'abord : détachée avant, la session laisserait repartir un SharedWorker resté suspendu.
+  const closeAll = async () => {
+    await context.close().catch(() => undefined);
+    await sharedWorkers.close();
+  };
+  /** Page du run, connue une fois créée : toute requête d'une autre page du contexte est coupée. */
+  let runPage: Page | undefined;
   try {
     await context.route('**/*', async (route) => {
       const url = route.request().url();
+      let foreign = false;
+      try {
+        foreign = runPage !== undefined && route.request().frame().page() !== runPage;
+      } catch {
+        // Requête sans cadre (service worker, bloqués) : traitée comme les autres.
+      }
+      if (foreign) {
+        await route.abort('blockedbyclient');
+        return;
+      }
       if (hostAllowed(url, options.allowedHosts)) {
         const admitted = options.admit === undefined ? true : await options.admit(route.request()).catch(() => false);
         if (admitted) await route.continue();
@@ -77,20 +159,38 @@ export async function openRunContext(browser: Browser, options: RunContextOption
         await route.abort('blockedbyclient');
       }
     });
-    await context.routeWebSocket(/.*/, (ws) => {
-      if (hostAllowed(ws.url(), options.allowedHosts)) ws.connectToServer();
-      else {
+    await context.routeWebSocket(/.*/, async (ws) => {
+      if (!hostAllowed(ws.url(), options.allowedHosts)) {
         note(ws.url());
-        void ws.close({ code: 1008, reason: 'domain_not_allowed' });
+        await ws.close({ code: 1008, reason: 'domain_not_allowed' });
+        return;
       }
+      // Poignée de main = GET http sur le chemin : robots.txt d'abord (1.11).
+      const handshake = websocketHandshakeUrl(ws.url());
+      const check = options.checkRequest;
+      if (check !== undefined) {
+        const allowed =
+          handshake !== undefined && (await check({ url: handshake, redirect: false, rootUrl: handshake, resourceType: 'WebSocket', mainFrame: false }).catch(() => false));
+        if (!allowed) {
+          await ws.close({ code: 1008, reason: 'robots_disallowed' });
+          return;
+        }
+      }
+      ws.connectToServer();
     });
+    // Garde des documents (workers blob:/data:, règles de spéculation), avant la création de la page (avec le contrôle robots).
+    if (options.checkRequest !== undefined) await installPageGuard(context);
     const page = await context.newPage();
+    runPage = page;
+    // La session du contrôle n'est jamais détachée avant la fermeture du contexte : détachée, elle laisserait repartir
+    // les requêtes encore suspendues.
+    if (options.checkRequest !== undefined) await installRequestGuard(context, page, (url) => hostAllowed(url, options.allowedHosts), options.checkRequest);
     context.on('page', (other) => {
       if (other !== page) void other.close().catch(() => undefined);
     });
-    return { context, page, violations, close: () => context.close().catch(() => undefined) };
+    return { context, page, violations, close: closeAll };
   } catch (error) {
-    await context.close().catch(() => undefined);
+    await closeAll();
     throw error;
   }
 }

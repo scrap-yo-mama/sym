@@ -27,6 +27,14 @@ import { describe, test } from "vitest";
 // (E2) ; le volet tunnel (2.7) : assert_tunnel_single_user et assert_gateway_instance_routing dans tests/tunnel/gateway.integration.test.ts. assert_consent_before_capture,
 // assert_optional_hosts, assert_no_cookie_in_tunnel_mode : apps/extension/src/core/*.unit.test.ts et e2e/extension.e2e.ts.
 // INV6, X4 (1.4) : assert_no_ip_change_after_refusal est dans tests/network/network-modes.unit.test.ts (proxy de test local).
+// INV11 et étape 0 (1.11) : assert_robots_respected est dans packages/core/src/access/access.fixtures.unit.test.ts (fixtures O8,
+// session réseau réelle : E1, URL saisie à la main, saut de redirection, 4xx/5xx/redirections/500 Kio/Crawl-delay/Content-Signal/402),
+// packages/db/src/investigation-events.integration.test.ts (statuts, contrainte robots = respect) et
+// apps/worker/src/exec/robots.security.test.ts (worker réel, Chromium : E1, E2, E3, script : page de départ, ctx.fetch, ctx.page.goto ;
+// chaque saut de redirection suivi par Chromium, barre oblique finale, second hôte autorisé, WebSocket, robots.txt redirigé vers un
+// autre hôte) et apps/worker/src/browser/request-guard.security.test.ts (contrôle CDP : cadre hors processus, worker dédié) ;
+// le volet tunnel et extension (17 § 1 : 0 requête aussi en mode tunnel) est repris par 2.7 (test.todo ci-dessous) ;
+// assert_access_report_first : packages/db/src/investigation-events.integration.test.ts (migration 0015 ; repris par 2.1).
 // INV9 et exploitation (4.6) : assert_diagnostics_redacted (packages/db/src/ops/ops.integration.test.ts, apps/cli/src/cli.ops.integration.test.ts),
 // assert_backup_restore_roundtrip, assert_upgrade_n_minus_1, assert_rollback_restores_state (tests/operations.integration.test.ts).
 // INV9 et INV8 (1.10) : assert_no_telemetry (serveur + worker + run, 0 destination non locale), assert_otel_off_by_default,
@@ -45,10 +53,14 @@ import { describe, test } from "vitest";
 // tests/browser/executors.security.test.ts (Chromium) et tests/no-circumvention.unit.test.ts (dépendances, imports) ; audit en 4.3.
 describe("invariants (à implémenter)", () => {
   test.todo("assert_cheapest_first_logged"); // INV2, tâche(s) 2.1
-  test.todo("assert_robots_respected"); // INV11, tâche(s) 1.11
   // ADR 0001, point faible connu (F-E5, pagination par bouton) : 2.4 ne compile qu'une trace à un enregistrement ; une liste
   // est refusée (`list_not_compilable`, épinglé par assert_e5_list_not_compiled) et reste rejouée par l'agent (E5 « mouvant »).
   test.todo("assert_e5_list_compiled — trace E6 réussie sur F-E5 compilée en E5 (clics « Suivant » répétés, extraction par enregistrement à chaque page) et rejouée sans LLM, sortie identique"); // ADR 0001, suivi de 2.4 (tâche de rattachement à créer dans 10-taches)
+  // INV11 (revue de 1.11, journal D-33) : 17 § 1 et le contrat IA de 1.11 exigent 0 requête sur un chemin interdit AUSSI en
+  // tunnel et via l'extension. 2.7 (passerelle WSS) a été fusionnée avant 1.11, sans contrôle robots : la tâche de suivi 2.7b
+  // contrôle robots.txt avant chaque commande de navigation ou de requête du tunnel (sauts de redirection compris) et
+  // remplace ce test.todo par le vrai test ; il ne se retire qu'avec lui.
+  test.todo("assert_robots_respected — volet tunnel et extension : 0 requête sur un chemin interdit en mode tunnel, à chaque saut"); // INV11, tâche(s) 2.7b (D-33)
   // 4.8 livrée partiellement (16 § 8, 17 § 11) : le quickstart rejoué s'arrête à la clé d'API ; D0 et la première API sont
   // décrits (mode pending) et gardés par assert_quickstart_pending_steps_declared, qui échoue à la livraison de leurs routes.
   test.todo("assert_quickstart_d0_first_api"); // 16 § 8, reprise : 3.1 (première API sur fixture), 3.2 (D0 en MCP), vérifié en 4.4
@@ -68,7 +80,6 @@ describe("invariants (à implémenter)", () => {
   test.todo("assert_erasure_complete — dedup_keys.key_hash = dedupKeyHash(clé des sujets, dedup_key) à l'écriture des clés"); // RGPD, tâche(s) 2.5
   test.todo("assert_pacing_key_is_domain"); // politesse, tâche(s) 1.9
   test.todo("assert_export_no_secret"); // INV5, INV8, tâche(s) 3.12
-  test.todo("assert_access_report_first"); // étape 0, tâche(s) 1.11, 2.1
   test.todo("assert_budget_and_stop_controls — Chromium (Playwright) : attempt.finished émis → [data-testid=attempt] visible en moins de 2 s"); // 06 § 4.3, tâche(s) 3.6 (3.5 : rendu SSR, sans navigateur)
   test.todo("assert_run_detail_error_open"); // 06 § 4.3 : écran Détail d'un run, confié à aucune tâche (ADR 0003 : 3.4 ou tâche nouvelle), E2E 3.6
   // 3.9 : assert_a11y_axe_clean, assert_keyboard_only_path, assert_live_regions_plan sont jugés en Chromium (apps/web/e2e/*.e2e.ts,

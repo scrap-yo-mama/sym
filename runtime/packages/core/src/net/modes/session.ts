@@ -5,7 +5,7 @@
 // contrôlée localement (schéma, port, résolution) à chaque connexion ; le proxy résout ensuite le nom lui-même,
 // risque résiduel documenté (08 §2). Identifiants lus dans le dépôt de secrets, jamais journalisés (INV8).
 import type { Socket } from 'node:net';
-import { buildConnector, Pool, ProxyAgent, Socks5ProxyAgent, type Dispatcher, type RequestInit, type Response } from 'undici';
+import { buildConnector, Headers, Pool, ProxyAgent, Socks5ProxyAgent, type Dispatcher, type RequestInit, type Response } from 'undici';
 import { Secret, secretValues } from '../../crypto/index.js';
 import { createGuardedConnector, createGuardedDispatcher, guardedFetch } from '../fetch.js';
 import { domainLock } from '../domain-lock.js';
@@ -137,6 +137,13 @@ export type NetworkSessionOptions = {
   readonly allowedHosts?: readonly string[];
   /** Plafond `max_cost_usd` de l'API, contrôlé avant chaque requête (tâche 1.6). */
   readonly costCeiling?: CostCeiling;
+  /**
+   * Module d'accès (tâche 1.11) : contrôle robots.txt de chaque saut avant connexion (`AccessRefusedError` pour refuser).
+   * Absent seulement pour la session qui lit robots.txt elle-même.
+   */
+  readonly checkUrl?: (url: URL) => Promise<void>;
+  /** User-Agent du robot (`buildUserAgent`), imposé à chaque requête : une stratégie ne le remplace jamais (X2). */
+  readonly userAgent?: string;
 };
 
 type FetchInit = Parameters<typeof guardedFetch>[1];
@@ -208,6 +215,14 @@ function proxyDispatcher(
   });
 }
 
+/** En-têtes de la requête avec le User-Agent du robot imposé (tout `user-agent` fourni est remplacé, X2). */
+function withUserAgent(init: FetchInit, userAgent: string | undefined): FetchInit {
+  if (userAgent === undefined) return init;
+  const headers = new Headers(init.headers as ConstructorParameters<typeof Headers>[0]);
+  headers.set('user-agent', userAgent);
+  return { ...init, headers };
+}
+
 /**
  * Ouvre la session réseau d'un essai. Aucune connexion n'est ouverte avant le premier fetch. À fermer en fin
  * d'essai (`close`), puis imputer `usage().costUsd` au run.
@@ -225,6 +240,8 @@ export function openNetworkSession(options: NetworkSessionOptions): NetworkSessi
   const allowHost = options.allowedHosts === undefined ? undefined : domainLock(options.allowedHosts);
   let exceeded = false;
   const ceiling = options.costCeiling;
+  /** Abandonné au dépassement du plafond en cours de corps : chaque `fetch` de la session y est relié. */
+  const budget = new AbortController();
   /** Prix au Go : budget d'octets restant contrôlé à chaque bloc de corps reçu (marge d'un bloc de lecture). */
   const overBytes = (): boolean =>
     ceiling !== undefined && price !== undefined && proxyCostUsd(price, meter.bytes + COST_BYTE_MARGIN, requests) + (ceiling.otherUsd?.() ?? 0) > ceiling.maxUsd;
@@ -239,7 +256,11 @@ export function openNetworkSession(options: NetworkSessionOptions): NetworkSessi
       onResponseData: (controller, chunk) => {
         if (exceeded || overBytes()) {
           exceeded = true;
-          controller.abort(new ProxyBudgetExceededError());
+          const error = new ProxyBudgetExceededError();
+          // Le signal d'abandon de la session coupe aussi le corps déjà rendu à l'appelant : l'abandon du contrôleur seul
+          // ne le fait pas quand il survient au premier bloc (le lecteur attendait alors son délai).
+          budget.abort(error);
+          controller.abort(error);
           return;
         }
         handler.onResponseData?.(controller, chunk);
@@ -260,12 +281,13 @@ export function openNetworkSession(options: NetworkSessionOptions): NetworkSessi
     proxyId,
     dispatcher,
     fetch: (input, init = {}, opts = {}) =>
-      guardedFetch(input, init as Omit<RequestInit, 'dispatcher' | 'redirect'>, {
+      guardedFetch(input, withUserAgent(ceiling === undefined ? init : { ...init, signal: init.signal ? AbortSignal.any([init.signal, budget.signal]) : budget.signal }, options.userAgent) as Omit<RequestInit, 'dispatcher' | 'redirect'>, {
         guard,
         dispatcher,
         ...(opts.followRedirects === false ? { followRedirects: false } : {}),
         ...(allowHost === undefined ? {} : { allowHost }),
         ...(options.costCeiling === undefined ? {} : { beforeRequest }),
+        ...(options.checkUrl === undefined ? {} : { checkUrl: options.checkUrl }),
       }),
     budgetExceeded: () => exceeded,
     usage: () => {

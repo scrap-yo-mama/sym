@@ -42,7 +42,7 @@ Pour l'instant, le TLS vers la base se règle par `sslmode` dans `DATABASE_URL` 
 | `PORT` | 3000 | server | port d'écoute ; respecte la valeur injectée par l'hébergeur | lue |
 | `HOST` | `0.0.0.0` | server | adresse d'écoute | lue |
 | `TRUST_PROXY` | `false` | server | nombre de sauts de proxy, ou liste d'adresses ou de plages CIDR. Jamais `true` sans proxy devant | lue |
-| `INSTANCE_CONTACT` | aucun | — | contact de l'opérateur, annoncé dans le User-Agent du robot | prévue |
+| `INSTANCE_CONTACT` | aucun | worker | contact de l'opérateur, annoncé dans le User-Agent du robot (`Scrapyomama/<version> (+<contact>)`) ; le réglage saisi à l'assistant de premier démarrage l'emporte | lue |
 | `MAX_WAIT_SECONDS` | 25 | — | plafond du paramètre `wait` (REST, MCP) | prévue |
 
 ## Premier démarrage et comptes

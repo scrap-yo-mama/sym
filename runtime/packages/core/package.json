@@ -22,6 +22,10 @@
     "./tunnel": {
       "types": "./dist/tunnel/index.d.ts",
       "default": "./dist/tunnel/index.js"
+    },
+    "./access": {
+      "types": "./dist/access/index.d.ts",
+      "default": "./dist/access/index.js"
     }
   },
   "files": [

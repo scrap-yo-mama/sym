@@ -9,6 +9,8 @@
 // (`onDomainBlocked`, E3 en script : guet du bac à sable). Plafond `max_cost_usd` (`costCeiling`) : nouveau tunnel
 // refusé quand le coût projeté dépasserait le plafond ; en cours de tunnel (prix au Go), le budget d'octets restant est
 // contrôlé à chaque bloc reçu (marge d'un bloc de lecture) et tout est coupé avant de le dépasser.
+// robots.txt (1.11) n'est PAS contrôlé ici (`checkUrl` des options est ignoré) : en https, ce proxy ne voit qu'un CONNECT,
+// sans chemin. Le worker le contrôle dans Chromium, à chaque saut de redirection (CDP Fetch, `browser/request-guard.ts`).
 import { startEgressProxy, type EgressTarget } from '../egress-proxy.js';
 import type { SsrfDenyDetail } from '../guard.js';
 import type { NetworkMode } from './definitions.js';

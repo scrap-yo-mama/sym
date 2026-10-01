@@ -12,6 +12,7 @@ export * from './audit.js';
 export * from './connection.js';
 export * from './datasets.js';
 export * from './health.js';
+export * from './investigation-events.js';
 export * from './extension.js';
 export * from './migrate.js';
 export * from './ops/index.js';

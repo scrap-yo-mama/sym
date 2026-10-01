@@ -11,17 +11,22 @@ export type DomainPacingSettings = {
   readonly minDelayMs?: number;
   /** `domain_pacing.max_wait_ms` de l'API. */
   readonly maxWaitMs?: number;
-  /** `Crawl-delay` de robots.txt (module d'accès, 1.11). */
-  readonly crawlDelayMs?: number | null;
+  /**
+   * `Crawl-delay` de robots.txt (module d'accès, 1.11) : valeur fixe, ou lecture par URL (`RobotsGate.crawlDelayMs`, lu
+   * au moment de chaque réservation : robots.txt est relu avant toute requête de contenu).
+   */
+  readonly crawlDelayMs?: number | null | ((url: string) => number | null);
 };
 
 export function domainRequestPacer(pacer: DomainPacer, settings: DomainPacingSettings = {}): RequestPacer {
   return {
     async acquire(url) {
+      const crawl = settings.crawlDelayMs;
+      const crawlDelayMs = typeof crawl === 'function' ? crawl(url) : crawl;
       const grant = await pacer.acquire(url, {
         ...(settings.minDelayMs === undefined ? {} : { minDelayMs: settings.minDelayMs }),
         ...(settings.maxWaitMs === undefined ? {} : { maxWaitMs: settings.maxWaitMs }),
-        ...(settings.crawlDelayMs === undefined ? {} : { crawlDelayMs: settings.crawlDelayMs }),
+        ...(crawlDelayMs === undefined ? {} : { crawlDelayMs }),
       });
       return grant.granted ? { granted: true } : { granted: false, reason: grant.reason, retryAt: grant.retryAt };
     },

@@ -20,11 +20,11 @@ Scrapyomama Runtime est un logiciel libre qu'on installe soi-même : **chaque in
 ## Comment le robot se comporte
 
 ::: info Disponibilité
-Cette version de développement ne livre pas encore tout ce qui suit. Sont **en préparation** : la lecture de `robots.txt` avant toute requête et le respect de `Crawl-delay`, le rapport d'accès (signaux d'usage, voies officielles) et le User-Agent avec le contact de l'instance (module d'accès, tâche 1.11), ainsi que l'arrêt devant un refus ou un défi de vérification (tâche 1.7). Sont livrés : la cadence par domaine qui ne fait que ralentir (tâche 1.9) et l'absence de changement d'adresse IP après un refus (tâche 1.4). Cette page décrit le comportement visé, que les tests de ces tâches vérifient.
+Cette version de développement ne livre pas encore tout ce qui suit. Est **en préparation** : l'affichage du rapport d'accès dans l'enquête et la console (tâches 2.1 et 3.1). Sont livrés : la lecture de `robots.txt` avant toute requête et à chaque redirection, le respect de `Crawl-delay`, la production du rapport d'accès (signaux d'usage, voies officielles) et le User-Agent avec le contact de l'instance (module d'accès, tâche 1.11), l'arrêt devant un refus ou un défi de vérification (tâche 1.7), la cadence par domaine qui ne fait que ralentir (tâche 1.9) et l'absence de changement d'adresse IP après un refus (tâche 1.4). Cette page décrit le comportement visé, que les tests de ces tâches vérifient.
 :::
 
-- Il lit **`/robots.txt` avant toute requête de contenu**, le respecte (RFC 9309) et ne propose aucune option pour l'ignorer. Un chemin interdit reçoit **zéro requête**.
-- Si `robots.txt` répond 4xx, il le traite comme l'absence de règle ; s'il répond 5xx ou ne répond pas, il **s'abstient** par précaution.
+- Il lit **`/robots.txt` avant toute requête de contenu**, le respecte (RFC 9309) et ne propose aucune option pour l'ignorer. Un chemin interdit reçoit **zéro requête**, y compris quand un chemin permis y redirige : chaque redirection est contrôlée avant d'être suivie.
+- Si `robots.txt` répond 4xx (429 compris), il le traite comme l'absence de règle ; s'il répond 5xx ou ne répond pas, il **s'abstient** par précaution. S'il redirige, même vers un autre domaine, le robot suit la redirection (cinq au plus).
 - Il **respecte `Crawl-delay`** comme plancher de cadence.
 - Sa cadence est fixée **par domaine** (1,5 seconde minimum entre deux requêtes par défaut) et ne fait que ralentir quand le site répond 429 ou `Retry-After`. Il ne change pas d'adresse IP après un refus.
 - Il s'arrête devant un refus (401, 403) ou un défi de vérification : il ne tente ni de le résoudre ni de le franchir. Voir [Hors périmètre](./hors-perimetre.md).
