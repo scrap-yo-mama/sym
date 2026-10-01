@@ -1197,6 +1197,195 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/extension/pairing-codes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Code d'appairage de l'extension, usage unique, 10 minutes (07 § 1) ; mot de passe actuel exigé */
+        post: operations["createExtensionPairingCode"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/extension/pair": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Échange d'un code d'appairage contre un jeton d'appareil (07 § 1) ; limité par IP */
+        post: operations["pairExtension"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/extension/session": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Appareil et domaines connectés du jeton (07 § 2) */
+        get: operations["getExtensionSession"];
+        put?: never;
+        post?: never;
+        /** Déconnexion de l'appareil, le jeton est révoqué (07 § 2) */
+        delete: operations["deleteExtensionSession"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/extension/sites/{domain}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Consentement par domaine et choix du mode (usage serveur ou tunnel) (07 § 2) */
+        put: operations["connectExtensionSite"];
+        post?: never;
+        /** Déconnexion d'un domaine (les cookies serveur sont supprimés) (07 § 2) */
+        delete: operations["disconnectExtensionSite"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/extension/sites/{domain}/cookies": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Cookies d'un domaine en usage serveur, écriture seule, scellés (07 § 2) ; remplacé par la WSS en 2.7 */
+        put: operations["putExtensionSiteCookies"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/extension/devices": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Appareils appairés de l'utilisateur (06 § 2, Paramètres) */
+        get: operations["listExtensionDevices"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/extension/devices/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Révocation d'un appareil de l'utilisateur (07 § 1) */
+        delete: operations["revokeExtensionDevice"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/sites": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Domaines connectés de l'utilisateur (06 § 2, Paramètres) */
+        get: operations["listConnectedSites"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/sites/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Déconnexion d'un domaine depuis la console */
+        delete: operations["disconnectConnectedSite"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/tunnels": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Appareils de l'instance, métadonnées seules (jamais un jeton) ; admin (13 § 4) */
+        get: operations["listAdminTunnels"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/tunnels/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Révocation d'un appareil par un admin (révocation seule, INV5) */
+        delete: operations["revokeAdminTunnel"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -2281,6 +2470,92 @@ export interface components {
             code: string;
             /** Format: date-time */
             expires_at: string;
+        };
+        ExtensionPairingCodeRequest: {
+            currentPassword: string;
+        };
+        ExtensionPairingCode: {
+            /** @description Code à usage unique, valable 10 minutes. */
+            code: string;
+            /** Format: date-time */
+            expiresAt: string;
+        };
+        ExtensionPairRequest: {
+            code: string;
+            deviceId: string;
+            deviceLabel?: string;
+        };
+        ExtensionPaired: {
+            /** @description Jeton d'appareil, jamais ré-affiché. */
+            token: string;
+            /** Format: date-time */
+            expiresAt: string;
+            email: string;
+            deviceLabel: string | null;
+        };
+        ConnectedSite: {
+            /** Format: uuid */
+            id: string;
+            domain: string;
+            /** @description Faux = mode tunnel (les cookies restent dans le navigateur). */
+            serverUseAllowed: boolean;
+            hasServerCookies: boolean;
+            /** Format: date-time */
+            consentedAt: string;
+            /** Format: date-time */
+            capturedAt: string | null;
+            /** Format: date-time */
+            expiresAt: string | null;
+        };
+        ConnectedSiteList: {
+            items: components["schemas"]["ConnectedSite"][];
+        };
+        ExtensionSession: {
+            email: string;
+            deviceLabel: string | null;
+            /** Format: date-time */
+            expiresAt: string | null;
+            sites: components["schemas"]["ConnectedSite"][];
+        };
+        ExtensionSiteConnect: {
+            serverUseAllowed: boolean;
+        };
+        ExtensionSiteCookies: {
+            cookies: {
+                name: string;
+                value: string;
+                domain: string;
+                path: string;
+                secure: boolean;
+                httpOnly: boolean;
+                /** @enum {string} */
+                sameSite?: "no_restriction" | "lax" | "strict" | "unspecified";
+                expirationDate?: number;
+            }[];
+        };
+        ExtensionDevice: {
+            /** Format: uuid */
+            id: string;
+            deviceLabel: string | null;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            lastSeenAt: string | null;
+            /** Format: date-time */
+            expiresAt: string;
+            /** Format: date-time */
+            revokedAt: string | null;
+        };
+        ExtensionDeviceList: {
+            items: components["schemas"]["ExtensionDevice"][];
+        };
+        AdminExtensionDevice: components["schemas"]["ExtensionDevice"] & {
+            /** Format: uuid */
+            ownerId: string;
+            ownerEmail: string;
+        };
+        AdminExtensionDeviceList: {
+            items: components["schemas"]["AdminExtensionDevice"][];
         };
         Version: {
             version: string;
@@ -4669,6 +4944,318 @@ export interface operations {
             401: components["responses"]["Error"];
             403: components["responses"]["Error"];
             429: components["responses"]["Error"];
+        };
+    };
+    createExtensionPairingCode: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ExtensionPairingCodeRequest"];
+            };
+        };
+        responses: {
+            /** @description Code créé (seule apparition). */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExtensionPairingCode"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            429: components["responses"]["Error"];
+        };
+    };
+    pairExtension: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ExtensionPairRequest"];
+            };
+        };
+        responses: {
+            /** @description Jeton d'appareil (seule apparition). */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExtensionPaired"];
+                };
+            };
+            400: components["responses"]["Error"];
+            429: components["responses"]["Error"];
+        };
+    };
+    getExtensionSession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Session de l'extension. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExtensionSession"];
+                };
+            };
+            401: components["responses"]["Error"];
+        };
+    };
+    deleteExtensionSession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Fait. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Error"];
+        };
+    };
+    connectExtensionSite: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                domain: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ExtensionSiteConnect"];
+            };
+        };
+        responses: {
+            /** @description Domaine déjà connecté, mode mis à jour. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConnectedSite"];
+                };
+            };
+            /** @description Domaine connecté. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConnectedSite"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+        };
+    };
+    disconnectExtensionSite: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                domain: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Fait. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+        };
+    };
+    putExtensionSiteCookies: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                domain: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ExtensionSiteCookies"];
+            };
+        };
+        responses: {
+            /** @description Fait. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+        };
+    };
+    listExtensionDevices: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Appareils. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExtensionDeviceList"];
+                };
+            };
+            401: components["responses"]["Error"];
+        };
+    };
+    revokeExtensionDevice: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Fait. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+        };
+    };
+    listConnectedSites: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Domaines. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConnectedSiteList"];
+                };
+            };
+            401: components["responses"]["Error"];
+        };
+    };
+    disconnectConnectedSite: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Fait. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+        };
+    };
+    listAdminTunnels: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Appareils. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminExtensionDeviceList"];
+                };
+            };
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+        };
+    };
+    revokeAdminTunnel: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Fait. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
         };
     };
 }

@@ -299,7 +299,6 @@ paths:
                 $ref: '#/components/schemas/Version'
   /metrics:
     get:
-      x-pending: '1.10'
       operationId: getMetrics
       tags: [system]
       summary: Métriques Prometheus (14 § 3), fermées sans METRICS_TOKEN
@@ -2080,7 +2079,9 @@ paths:
           $ref: '#/components/responses/Error'
   /api/tunnel/pairing-code:
     post:
-      x-pending: '2.6'
+      # Route nommée par 05 § 4.2 et 07 § 1. La tâche 2.6 a livré le même service sous POST /api/extension/pairing-codes
+      # (corps camelCase) : 3.1 tranche (alias de la route du CDC ou mise à jour du CDC) puis retire cette entrée.
+      x-pending: '3.1'
       operationId: createPairingCode
       tags: [tunnel]
       summary: Code d'appairage de l'extension, usage unique, 10 minutes (07 § 1) ; session récente exigée
@@ -2103,6 +2104,259 @@ paths:
           $ref: '#/components/responses/Error'
         '429':
           $ref: '#/components/responses/Error'
+  # ——— Extension Chrome, livrées par 2.6 (07 § 1-2 ; champs en camelCase comme les autres routes déjà livrées) ———
+  /api/extension/pairing-codes:
+    post:
+      operationId: createExtensionPairingCode
+      tags: [tunnel]
+      summary: Code d'appairage de l'extension, usage unique, 10 minutes (07 § 1) ; mot de passe actuel exigé
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ExtensionPairingCodeRequest'
+      responses:
+        '201':
+          description: Code créé (seule apparition).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExtensionPairingCode'
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '429':
+          $ref: '#/components/responses/Error'
+  /api/extension/pair:
+    post:
+      operationId: pairExtension
+      security: []
+      tags: [tunnel]
+      summary: Échange d'un code d'appairage contre un jeton d'appareil (07 § 1) ; limité par IP
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ExtensionPairRequest'
+      responses:
+        '201':
+          description: Jeton d'appareil (seule apparition).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExtensionPaired'
+        '400':
+          $ref: '#/components/responses/Error'
+        '429':
+          $ref: '#/components/responses/Error'
+  /api/extension/session:
+    get:
+      operationId: getExtensionSession
+      security:
+        - deviceToken: []
+      tags: [tunnel]
+      summary: Appareil et domaines connectés du jeton (07 § 2)
+      responses:
+        '200':
+          description: Session de l'extension.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExtensionSession'
+        '401':
+          $ref: '#/components/responses/Error'
+    delete:
+      operationId: deleteExtensionSession
+      security:
+        - deviceToken: []
+      tags: [tunnel]
+      summary: "Déconnexion de l'appareil, le jeton est révoqué (07 § 2)"
+      responses:
+        '204':
+          description: Fait.
+        '401':
+          $ref: '#/components/responses/Error'
+  /api/extension/sites/{domain}:
+    put:
+      operationId: connectExtensionSite
+      security:
+        - deviceToken: []
+      tags: [tunnel]
+      summary: Consentement par domaine et choix du mode (usage serveur ou tunnel) (07 § 2)
+      parameters:
+        - name: domain
+          in: path
+          required: true
+          schema:
+            type: string
+            maxLength: 253
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ExtensionSiteConnect'
+      responses:
+        '200':
+          description: Domaine déjà connecté, mode mis à jour.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConnectedSite'
+        '201':
+          description: Domaine connecté.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConnectedSite'
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+    delete:
+      operationId: disconnectExtensionSite
+      security:
+        - deviceToken: []
+      tags: [tunnel]
+      summary: Déconnexion d'un domaine (les cookies serveur sont supprimés) (07 § 2)
+      parameters:
+        - name: domain
+          in: path
+          required: true
+          schema:
+            type: string
+            maxLength: 253
+      responses:
+        '204':
+          description: Fait.
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+  /api/extension/sites/{domain}/cookies:
+    put:
+      operationId: putExtensionSiteCookies
+      security:
+        - deviceToken: []
+      tags: [tunnel]
+      summary: Cookies d'un domaine en usage serveur, écriture seule, scellés (07 § 2) ; remplacé par la WSS en 2.7
+      parameters:
+        - name: domain
+          in: path
+          required: true
+          schema:
+            type: string
+            maxLength: 253
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ExtensionSiteCookies'
+      responses:
+        '204':
+          description: Fait.
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+  /api/extension/devices:
+    get:
+      operationId: listExtensionDevices
+      tags: [tunnel]
+      summary: Appareils appairés de l'utilisateur (06 § 2, Paramètres)
+      responses:
+        '200':
+          description: Appareils.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExtensionDeviceList'
+        '401':
+          $ref: '#/components/responses/Error'
+  /api/extension/devices/{id}:
+    delete:
+      operationId: revokeExtensionDevice
+      tags: [tunnel]
+      summary: Révocation d'un appareil de l'utilisateur (07 § 1)
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      responses:
+        '204':
+          description: Fait.
+        '401':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+  /api/sites:
+    get:
+      operationId: listConnectedSites
+      tags: [tunnel]
+      summary: Domaines connectés de l'utilisateur (06 § 2, Paramètres)
+      responses:
+        '200':
+          description: Domaines.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConnectedSiteList'
+        '401':
+          $ref: '#/components/responses/Error'
+  /api/sites/{id}:
+    delete:
+      operationId: disconnectConnectedSite
+      tags: [tunnel]
+      summary: Déconnexion d'un domaine depuis la console
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      responses:
+        '204':
+          description: Fait.
+        '401':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+  /api/admin/tunnels:
+    get:
+      operationId: listAdminTunnels
+      tags: [tunnel]
+      summary: Appareils de l'instance, métadonnées seules (jamais un jeton) ; admin (13 § 4)
+      responses:
+        '200':
+          description: Appareils.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminExtensionDeviceList'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+  /api/admin/tunnels/{id}:
+    delete:
+      operationId: revokeAdminTunnel
+      tags: [tunnel]
+      summary: Révocation d'un appareil par un admin (révocation seule, INV5)
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      responses:
+        '204':
+          description: Fait.
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
 components:
   securitySchemes:
     sessionCookie:
@@ -2114,6 +2368,10 @@ components:
       type: http
       scheme: bearer
       description: Clé d'API `sy_live_…` à scopes (13 § 8) ; jamais de scope d'administration.
+    deviceToken:
+      type: http
+      scheme: bearer
+      description: Jeton d'appareil de l'extension (07 § 1), lié à (utilisateur, appareil) ; jamais accepté hors de /api/extension.
     metricsToken:
       type: http
       scheme: bearer
@@ -4414,6 +4672,229 @@ components:
         expires_at:
           type: string
           format: date-time
+    # ——— Extension livrée par 2.6 (camelCase comme le code livré) ———
+    ExtensionPairingCodeRequest:
+      type: object
+      additionalProperties: false
+      required: [currentPassword]
+      properties:
+        currentPassword:
+          type: string
+          minLength: 1
+          maxLength: 1024
+    ExtensionPairingCode:
+      type: object
+      additionalProperties: false
+      required: [code, expiresAt]
+      properties:
+        code:
+          description: Code à usage unique, valable 10 minutes.
+          type: string
+        expiresAt:
+          type: string
+          format: date-time
+    ExtensionPairRequest:
+      type: object
+      additionalProperties: false
+      required: [code, deviceId]
+      properties:
+        code:
+          type: string
+          minLength: 1
+          maxLength: 32
+        deviceId:
+          type: string
+          pattern: '^[A-Za-z0-9_-]{8,64}
+      type: object
+      additionalProperties: false
+      required: [version, schema_version]
+      properties:
+        version:
+          type: string
+        schema_version:
+          type: integer
+    ProtectedResourceMetadata:
+      description: RFC 9728.
+      type: object
+      additionalProperties: true
+      required: [resource]
+      properties:
+        resource:
+          type: string
+        authorization_servers:
+          type: array
+          items:
+            type: string
+        bearer_methods_supported:
+          type: array
+          items:
+            type: string
+        scopes_supported:
+          type: array
+          items:
+            $ref: '#/components/schemas/ApiKeyScope'
+
+        deviceLabel:
+          type: string
+          minLength: 1
+          maxLength: 100
+    ExtensionPaired:
+      type: object
+      additionalProperties: false
+      required: [token, expiresAt, email, deviceLabel]
+      properties:
+        token:
+          description: Jeton d'appareil, jamais ré-affiché.
+          type: string
+        expiresAt:
+          type: string
+          format: date-time
+        email:
+          type: string
+        deviceLabel:
+          type: [string, 'null']
+    ConnectedSite:
+      type: object
+      additionalProperties: false
+      required: [id, domain, serverUseAllowed, hasServerCookies, consentedAt, capturedAt, expiresAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        domain:
+          type: string
+        serverUseAllowed:
+          description: Faux = mode tunnel (les cookies restent dans le navigateur).
+          type: boolean
+        hasServerCookies:
+          type: boolean
+        consentedAt:
+          type: string
+          format: date-time
+        capturedAt:
+          type: [string, 'null']
+          format: date-time
+        expiresAt:
+          type: [string, 'null']
+          format: date-time
+    ConnectedSiteList:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/ConnectedSite'
+    ExtensionSession:
+      type: object
+      additionalProperties: false
+      required: [email, deviceLabel, expiresAt, sites]
+      properties:
+        email:
+          type: string
+        deviceLabel:
+          type: [string, 'null']
+        expiresAt:
+          type: [string, 'null']
+          format: date-time
+        sites:
+          type: array
+          items:
+            $ref: '#/components/schemas/ConnectedSite'
+    ExtensionSiteConnect:
+      type: object
+      additionalProperties: false
+      required: [serverUseAllowed]
+      properties:
+        serverUseAllowed:
+          type: boolean
+    ExtensionSiteCookies:
+      type: object
+      additionalProperties: false
+      required: [cookies]
+      properties:
+        cookies:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [name, value, domain, path, secure, httpOnly]
+            properties:
+              name:
+                type: string
+                minLength: 1
+              value:
+                type: string
+              domain:
+                type: string
+                minLength: 1
+                maxLength: 253
+              path:
+                type: string
+                minLength: 1
+                maxLength: 1024
+              secure:
+                type: boolean
+              httpOnly:
+                type: boolean
+              sameSite:
+                type: string
+                enum: [no_restriction, lax, strict, unspecified]
+              expirationDate:
+                type: number
+                minimum: 0
+    ExtensionDevice:
+      type: object
+      additionalProperties: false
+      required: [id, deviceLabel, createdAt, lastSeenAt, expiresAt, revokedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        deviceLabel:
+          type: [string, 'null']
+        createdAt:
+          type: string
+          format: date-time
+        lastSeenAt:
+          type: [string, 'null']
+          format: date-time
+        expiresAt:
+          type: string
+          format: date-time
+        revokedAt:
+          type: [string, 'null']
+          format: date-time
+    ExtensionDeviceList:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/ExtensionDevice'
+    AdminExtensionDevice:
+      allOf:
+        - $ref: '#/components/schemas/ExtensionDevice'
+        - type: object
+          required: [ownerId, ownerEmail]
+          properties:
+            ownerId:
+              type: string
+              format: uuid
+            ownerEmail:
+              type: string
+    AdminExtensionDeviceList:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/AdminExtensionDevice'
     # ——— Système ———
     Version:
       type: object
