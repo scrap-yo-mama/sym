@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Seuils de 04 §6 (plusieurs « à valider ») et prédicats purs des signaux de run dégradé.
 import type { DegradedSignal } from './types.js';
 

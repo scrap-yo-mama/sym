@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // INV3 sur base réelle : la transition et la ligne `status_events` sont écrites dans la même transaction.
 import { randomBytes, randomUUID } from 'node:crypto';
 import pg from 'pg';

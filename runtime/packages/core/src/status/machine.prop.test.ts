@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // assert_status_transitions, part 2 (15 §3) : test basé sur un modèle fast-check (commands, modelRun, replayPath).
 // Modèle de référence réécrit à part de la machine, horloge injectée, 10 commandes. Rejouer une séquence fautive :
 //   STATUS_MODEL_SEED=<graine> STATUS_MODEL_PATH=<chemin> pnpm vitest run --project unit packages/core/src/status/machine.prop

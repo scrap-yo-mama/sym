@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Dépôt du statut d'API (INV3) : applique une transition de la machine pure et écrit `status_events` dans la même
 // transaction que la mise à jour de `apis`. Un événement sans transition ne touche pas `status_events`.
 import {

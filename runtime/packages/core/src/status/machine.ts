@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Machine à états pure et déterministe : (état, événement, horloge injectée) -> (état, transitions). Aucune I/O.
 import { quietPeriodMs, resetsCleanStreak, STATUS_THRESHOLDS } from './thresholds.js';
 import {

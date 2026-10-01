@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Les 21 transitions de 04 §6 : table unique, source des noms de tests `transition_NN_*`.
 import type { Status, TransitionId } from './types.js';
 

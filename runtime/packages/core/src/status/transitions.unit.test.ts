@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // assert_status_transitions (INV3, tâche 1.2) : un test nommé par transition de 04 §6, plus règles transverses.
 import { describe, expect, test } from 'vitest';
 import {

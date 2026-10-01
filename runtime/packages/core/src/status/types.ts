@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Machine à états du statut d'API (INV3, 04 §6). Types propres au module : aucune dépendance à l'autre code du noyau.
 
 export const STATUSES = ['enquete', 'sain', 'warning', 'reparation', 'erreur', 'action_requise', 'bloquee'] as const;
