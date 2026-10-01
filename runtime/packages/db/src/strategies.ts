@@ -18,6 +18,8 @@ export type RunTarget = {
     readonly domainPacing: { min_delay_ms?: number; max_requests_per_run?: number; max_wait_ms?: number };
     readonly maxCostUsd: number;
     readonly allowWriteActions: boolean;
+    /** `apis.requires` (04b) : `session_domain` = domaine connecté par l'extension (mode tunnel, tâche 2.7). */
+    readonly requires: { readonly session_domain?: string | null; readonly tunnel?: boolean };
   };
   readonly strategy: {
     readonly version: number;
@@ -40,8 +42,9 @@ export async function loadRunTarget(pool: pg.Pool, args: { apiId: string; ownerI
       domain_pacing: RunTarget['api']['domainPacing'];
       max_cost_usd: string;
       allow_write_actions: boolean;
+      requires: RunTarget['api']['requires'] | null;
     }>(
-      `SELECT id, project_id, output_schema, network_policy, domain_pacing, max_cost_usd, allow_write_actions
+      `SELECT id, project_id, output_schema, network_policy, domain_pacing, max_cost_usd, allow_write_actions, requires
        FROM apis WHERE id = $1 AND owner_id = $2`,
       [args.apiId, args.ownerId],
     );
@@ -74,6 +77,7 @@ export async function loadRunTarget(pool: pg.Pool, args: { apiId: string; ownerI
         domainPacing: api.domain_pacing ?? {},
         maxCostUsd: Number(api.max_cost_usd),
         allowWriteActions: api.allow_write_actions,
+        requires: api.requires ?? {},
       },
       strategy,
     };

@@ -15,6 +15,7 @@ import { ProcessSandboxEngine, sandboxOptionsFromEnv, type IsolationProbe } from
 import type { ExecutorFactory } from '../worker.js';
 import { loadInlineScript } from './script-executor.js';
 import { createStrategyExecutor } from './strategy-executor.js';
+import { TunnelJobClient } from '../tunnel/client.js';
 
 class SandboxIsolationError extends Error {
   override name = 'SandboxIsolationError';
@@ -63,10 +64,14 @@ export function productionExecutorFactory(env: Readonly<Record<string, string | 
       logger.info({ browserConcurrency: config.browserConcurrency, source: config.browserConcurrencySource }, 'pool Chromium prêt (lancement à la demande)');
     }
     const pool_ = browsers;
+    // Mode tunnel (2.7) : commandes par `tunnel_jobs`, réponses réveillées par LISTEN sur la connexion de session.
+    const tunnel = new TunnelJobClient({ pool, sessionUrl: config.databaseUrlDirect ?? config.databaseUrl, logger });
+    await tunnel.start();
     return {
-      executor: createStrategyExecutor({ pool, guard, pacer, browsers, secrets, logger, script: { engine, loadScript: loadInlineScript } }),
+      executor: createStrategyExecutor({ pool, guard, pacer, browsers, secrets, logger, tunnel, script: { engine, loadScript: loadInlineScript } }),
       browserContexts: () => pool_?.active() ?? 0,
       close: async () => {
+        await tunnel.close();
         await pool_?.close();
         await launchProxy?.close();
       },

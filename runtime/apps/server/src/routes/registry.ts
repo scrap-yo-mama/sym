@@ -64,6 +64,9 @@ export const ROUTES: readonly RouteSpec[] = [
   { method: 'GET', url: '/api/sites', auth: 'session_or_key', scope: 'sites:read', permission: 'sites:connect', resource: { type: 'site_session', kind: 'collection' } },
   { method: 'DELETE', url: '/api/sites/:id', auth: 'session', permission: 'sites:connect', resource: { type: 'site_session', kind: 'item' } },
   { method: 'GET', url: '/api/admin/tunnels', auth: 'session', permission: 'tunnel:revoke_other' },
+  // Tunnel WSS (tâche 2.7, 07 § 6) : ouverture publique (Origin d'extension, aucun paramètre d'URL), puis jeton
+  // d'appareil dans le premier message ; l'utilisateur est celui du jeton (INV5), jamais un champ choisi par le client.
+  { method: 'GET', url: '/api/extension/tunnel', auth: 'public' },
   { method: 'DELETE', url: '/api/admin/tunnels/:id', auth: 'session', permission: 'tunnel:revoke_other' },
 ];
 

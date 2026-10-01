@@ -25,6 +25,8 @@ export type Harness = {
   masterKey: string;
   publicUrl: string;
   sitePort: number;
+  /** Requêtes reçues par les sites de fixtures (hôte + chemin + requête). */
+  siteHits: string[];
   context: BrowserContext;
   extensionId: string;
   serviceWorker: () => Promise<Worker>;
@@ -45,11 +47,43 @@ async function freePort(): Promise<number> {
   return port;
 }
 
-/** Sites de fixtures : `/login` pose des cookies de session propres à l'hôte (valeurs `zz_test_*`). */
-function fixtureSites(): Server {
+/** Défi simulé (07 § 5) : page de vérification générique, comme la fixture `challenge` de 0.5. */
+const CHALLENGE_PAGE =
+  '<!doctype html><html><head><title>Security check</title></head><body><main id="zz-test-challenge"><h1>Security check</h1><p>Please verify you are human to continue.</p><label><input type="checkbox" disabled> I am not a robot</label></main></body></html>';
+
+/**
+ * Sites de fixtures : `/login` pose des cookies de session propres à l'hôte (valeurs `zz_test_*`). Tunnel (tâche 2.7) :
+ * `/api/items?page=N&pages=P` liste JSON paginée (10 éléments par page, P pages) ; sous `/guarded/`, la page 2 et les
+ * suivantes affichent un défi (403) ; `/catalog` est un catalogue HTML de 10 articles. Chaque requête reçue est consignée
+ * (`hits` : hôte + chemin).
+ */
+function fixtureSites(hits: string[]): Server {
   return createServer((req, res) => {
     const host = (req.headers.host ?? '').split(':')[0] ?? '';
     const tag = host.replace(/^zz-test-/, '').replace(/\.example$/, '');
+    const url = new URL(req.url ?? '/', 'http://zz-test.invalid');
+    hits.push(`${host}${url.pathname}${url.search}`);
+    if (url.pathname.endsWith('/api/items')) {
+      const page = Number(url.searchParams.get('page') ?? '1');
+      const pages = Number(url.searchParams.get('pages') ?? '3');
+      if (url.pathname.startsWith('/guarded/') && page >= 2) {
+        res.statusCode = 403;
+        res.setHeader('content-type', 'text/html; charset=utf-8');
+        res.end(CHALLENGE_PAGE);
+        return;
+      }
+      const items = page <= pages ? Array.from({ length: 10 }, (_, i) => ({ id: `zz_test_${tag}_${page}_${i}`, name: `Item ${page}-${i}` })) : [];
+      res.setHeader('content-type', 'application/json');
+      res.end(JSON.stringify({ items, has_more: page < pages }));
+      return;
+    }
+    if (url.pathname === '/catalog') {
+      // Catalogue rendu côté serveur (E3 déclaratif en tunnel : navigation par le débogueur, lecture du DOM).
+      const items = Array.from({ length: 10 }, (_, i) => `<article class="item"><h2>Item ${i}</h2><span class="id">zz_test_${tag}_catalog_${i}</span></article>`).join('');
+      res.setHeader('content-type', 'text/html; charset=utf-8');
+      res.end(`<!doctype html><html><head><title>Catalog</title></head><body>${items}</body></html>`);
+      return;
+    }
     if (req.url === '/login') {
       res.setHeader('set-cookie', [`zz_test_sid=zz_test_${tag}_session; Path=/; HttpOnly; SameSite=Lax`, `zz_test_pref=${tag}; Path=/; Max-Age=86400`]);
     }
@@ -82,7 +116,8 @@ export async function startHarness(): Promise<Harness> {
     cleanups.push(() => started.close());
     await started.app.listen({ port, host: '127.0.0.1' });
 
-    const sites = fixtureSites();
+    const siteHits: string[] = [];
+    const sites = fixtureSites(siteHits);
     await new Promise<void>((resolve) => sites.listen(0, '127.0.0.1', resolve));
     cleanups.push(() => new Promise<void>((resolve) => sites.close(() => resolve())));
     const sitePort = (sites.address() as AddressInfo).port;
@@ -159,7 +194,7 @@ export async function startHarness(): Promise<Harness> {
       return page;
     };
 
-    return { dbUrl, masterKey, publicUrl, sitePort, context, extensionId, serviceWorker, owner, createMember, console: consoleCall, sql, grantHosts, popup, close };
+    return { dbUrl, masterKey, publicUrl, sitePort, siteHits, context, extensionId, serviceWorker, owner, createMember, console: consoleCall, sql, grantHosts, popup, close };
   } catch (error) {
     await close();
     throw error;

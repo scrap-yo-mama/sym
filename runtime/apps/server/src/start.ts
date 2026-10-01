@@ -17,6 +17,7 @@ import { createAuth } from './auth/better-auth.js';
 import { loadServerConfig, type ServerConfig } from './config.js';
 import { initializedProbe, type ServerContext } from './context.js';
 import { createMetricsRegistry } from './metrics.js';
+import { TunnelGateway } from './tunnel/gateway.js';
 
 class StartupError extends Error {
   override name = 'StartupError';
@@ -132,6 +133,16 @@ export async function prepareServer(env: NodeJS.ProcessEnv = process.env, option
       // Posée par finishInit (version de clé connue après keyCheck) ; jamais lue avant : tant que le démarrage n'est pas terminé, seules les sondes répondent.
       siteSessionKek: kekFor(config.keyring.current, 0, 'site_sessions'),
       isInitialized,
+      // Passerelle tunnel WSS (07 § 6) : LISTEN sur le canal de cette instance, démarrée avant l'écoute HTTP.
+      tunnel: config.tunnel.disabled
+        ? null
+        : new TunnelGateway({
+            pool,
+            sessionUrl: config.tunnel.sessionUrl,
+            instance: config.tunnel.instance,
+            extensionIds: config.tunnel.extensionIds,
+            logger: () => holder.app!.log,
+          }),
     };
     if (version === expected) {
       // Cas nominal : toute erreur d'initialisation empêche de démarrer (comportement inchangé).
@@ -143,8 +154,10 @@ export async function prepareServer(env: NodeJS.ProcessEnv = process.env, option
       ...(options.loggerInstance === undefined ? {} : { loggerInstance: options.loggerInstance }),
       logLevel: config.observability.logLevel,
       trustProxy: config.trustProxy,
+      tunnelExtensionIds: config.tunnel.extensionIds,
     });
     holder.app = app;
+    await ctx.tunnel?.start();
     if (state === 'waiting') {
       app.log.warn({ schema: version, expected }, 'schéma de base en retard : mode dégradé (seules les sondes répondent) jusqu’à `runtime migrate`');
       timer = setInterval(() => void tryFinish(), options.schemaPollMs ?? 5000);
@@ -155,6 +168,7 @@ export async function prepareServer(env: NodeJS.ProcessEnv = process.env, option
     lockClient.on('error', (error) => app.log.error({ err: error }, 'verrou des secrets : connexion perdue'));
     const close = async () => {
       if (timer) clearInterval(timer);
+      await ctx.tunnel?.close();
       await app.close();
       await pending?.catch(() => undefined);
       await releaseLock?.().catch(() => undefined);

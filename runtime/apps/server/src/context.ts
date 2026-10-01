@@ -4,6 +4,7 @@ import type { Kek, Keyring, Secret } from '@runtime/core';
 import type pg from 'pg';
 import type { Auth } from './auth/better-auth.js';
 import type { MetricsCollector } from './metrics.js';
+import type { TunnelGateway } from './tunnel/gateway.js';
 
 export type ServerContext = {
   /** Connexion de l'identité système (propriétaire des tables). Le contenu se lit via `withActor` seulement. */
@@ -32,6 +33,8 @@ export type ServerContext = {
   metrics: MetricsCollector;
   /** KEK des cookies de sites (libellé `site_sessions`, génération vérifiée par keyCheck) : scellement seul côté web. */
   siteSessionKek: Kek;
+  /** Passerelle tunnel WSS (null : `DISABLE_TUNNEL`, ou serveur de test sans passerelle). */
+  tunnel: TunnelGateway | null;
   /** Vrai dès qu'un owner existe (mis en cache : l'état ne revient jamais en arrière). */
   isInitialized: () => Promise<boolean>;
 };

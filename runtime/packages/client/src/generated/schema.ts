@@ -1266,6 +1266,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/extension/tunnel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * WebSocket du tunnel (07 § 6) : jeton d'appareil dans le premier message, jamais dans l'URL
+         * @description Ouverture refusée avec un paramètre d'URL (400) ou une Origin autre qu'une extension (403). Puis messages JSON (schéma strict, 1 Mio au plus par message, compression désactivée) : extension → instance hello, ping, result (découpé en morceaux seq/last) ; instance → extension welcome, pong, cmd (http_fetch, page_fetch, page_script, agent_step). Fermetures 4401 (jeton refusé ou révoqué), 4409 (connexion plus récente du même utilisateur), 4400 (protocole), 4429 (débit), 4408 (pas de hello).
+         */
+        get: operations["openExtensionTunnel"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/extension/sites/{domain}": {
         parameters: {
             query?: never;
@@ -5086,6 +5106,27 @@ export interface operations {
                 content?: never;
             };
             401: components["responses"]["Error"];
+        };
+    };
+    openExtensionTunnel: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Protocole changé (WebSocket). */
+            101: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            426: components["responses"]["Error"];
         };
     };
     connectExtensionSite: {

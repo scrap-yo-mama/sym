@@ -697,8 +697,13 @@ export const tunnels = pgTable(
     createdAt: createdAt(),
     // Migration 0008_extension_pairing (tâche 2.6).
     revokedBy: uuid('revoked_by').references(() => users.id, { onDelete: 'set null' }),
+    // Migration 0012_tunnel_gateway (tâche 2.7) : connexion WSS en cours.
+    connectedAt: tstz('connected_at'),
   },
-  (t) => [index('tunnels_owner_id_idx').on(t.ownerId)],
+  (t) => [
+    index('tunnels_owner_id_idx').on(t.ownerId),
+    uniqueIndex('tunnels_owner_connected').on(t.ownerId).where(sql`${t.gatewayInstance} IS NOT NULL`),
+  ],
 );
 
 /** Code d'appairage de l'extension (07 § 1) : usage unique, 10 min, empreinte seulement (migration 0008). */
@@ -733,6 +738,19 @@ export const tunnelJobs = pgTable(
     trace: jsonb('trace'),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
+    // Migration 0012_tunnel_gateway (tâche 2.7) : commande, routage, réponse.
+    cmd: text('cmd').notNull(),
+    domain: text('domain').notNull(),
+    execution: text('execution'),
+    timeoutMs: integer('timeout_ms').notNull().default(30000),
+    replayable: boolean('replayable').notNull().default(false),
+    allowWriteActions: boolean('allow_write_actions').notNull().default(false),
+    attempts: integer('attempts').notNull().default(0),
+    gatewayInstance: text('gateway_instance'),
+    dispatchedAt: tstz('dispatched_at'),
+    finishedAt: tstz('finished_at'),
+    result: jsonb('result'),
+    error: text('error'),
   },
   (t) => [index('tunnel_jobs_owner_id_idx').on(t.ownerId), index('tunnel_jobs_run_id_idx').on(t.runId)],
 );

@@ -24,7 +24,7 @@ import { describe, test } from "vitest";
 // kill -9 et SIGTERM compris) ; file, balayeur et bail : packages/db/src/runs.integration.test.ts.
 // INV5 (2.6) : assert_identity_pinned (volet cookies : un run n'ouvre que la session du propriétaire de l'API) est dans
 // apps/server/src/extension.integration.test.ts, packages/core/src/auth/extension.unit.test.ts (AAD) et apps/extension/e2e
-// (E2) ; le volet tunnel est repris par 2.7 avec assert_tunnel_single_user. assert_consent_before_capture,
+// (E2) ; le volet tunnel (2.7) : assert_tunnel_single_user et assert_gateway_instance_routing dans tests/tunnel/gateway.integration.test.ts. assert_consent_before_capture,
 // assert_optional_hosts, assert_no_cookie_in_tunnel_mode : apps/extension/src/core/*.unit.test.ts et e2e/extension.e2e.ts.
 // INV6, X4 (1.4) : assert_no_ip_change_after_refusal est dans tests/network/network-modes.unit.test.ts (proxy de test local).
 // INV9 et exploitation (4.6) : assert_diagnostics_redacted (packages/db/src/ops/ops.integration.test.ts, apps/cli/src/cli.ops.integration.test.ts),
@@ -42,7 +42,6 @@ import { describe, test } from "vitest";
 // de apps/server/src et de packages/*/src, dont MCP ; un module MCP né hors de ces dossiers fait échouer le test) ; assert_blocked_panel_no_tunnel_link dans apps/web/src/components/BlockedPanel.unit.test.ts.
 describe("invariants (à implémenter)", () => {
   test.todo("assert_cheapest_first_logged"); // INV2, tâche(s) 2.1
-  test.todo("assert_tunnel_single_user"); // INV5, tâche(s) 2.6, 2.7
   test.todo("assert_no_circumvention"); // INV6, tâche(s) 1.7, 4.3
   test.todo("assert_robots_respected"); // INV11, tâche(s) 1.11
   // RGPD (1.8) : assert_retention_purge, assert_erasure_complete et assert_no_personal_data_in_logs sont dans

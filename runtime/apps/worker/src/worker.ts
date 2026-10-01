@@ -34,6 +34,7 @@ import {
 } from '@runtime/core';
 import {
   appendRunItems,
+  applyStatusAndNotify,
   beatWorker,
   claimRun,
   createRunLogger,
@@ -53,6 +54,7 @@ import {
   runQueueDefinition,
   secretStore,
   runRetentionTick,
+  setRunWaitingTunnel,
   schemaVersionRefusal,
   sweepOrphans,
   withActor,
@@ -315,6 +317,8 @@ export async function startWorker(options: StartWorkerOptions): Promise<Worker> 
           personal,
           excludeSubjects: (outputSchema, items) => filterExcludedItems(subjects, excluded, outputSchema, items),
           writeItems,
+          // Mode tunnel : extension hors ligne → `waiting_tunnel`, de retour → `running` (07 § 6).
+          waitingTunnel: (waiting) => setRunWaitingTunnel(pool, runId, jobId, waiting),
         });
         // Le dataset du run est celui que le worker a écrit, jamais un autre nommé par l'exécuteur.
         if (result.state === 'succeeded' && dataset.written !== null) result = { ...result, dataset_id: dataset.written.dataset_id };
@@ -329,11 +333,23 @@ export async function startWorker(options: StartWorkerOptions): Promise<Worker> 
       // Bail perdu ou arrêt : le run a déjà été annulé, repris ou remis en file ; rien n'est écrit.
       if (entry.cause === 'lease_lost' || entry.cause === 'shutdown') return;
       const closed = await finishRunAndNotify(pool, q, { runId, jobId, result }, { personal, subjectKey: subjects });
-      if (result.state === 'failed') span.fail(result.failure_class);
+      if (result.state === 'failed') span.fail(result.failure_class ?? result.stop_reason);
+      // Run arrêté sans classe d'échec (défi en tunnel, extension hors ligne) : événement `run_stopped` de la machine à
+      // états (04 §6, transition 14 : la main revient à l'humain, `action_requise`). Les autres fins de run relèvent de
+      // l'enquête et de la réparation (2.1, 2.3).
+      if (closed && result.state === 'failed' && result.stop_reason !== undefined) {
+        const step = await applyStatusAndNotify(pool, q, { apiId: claim.apiId, runId, event: { type: 'run_stopped', reason: result.stop_reason }, clock: { now: () => new Date() } }).catch(
+          (error: unknown) => {
+            log.error({ runId, err: errorDetail(error) }, 'statut : run_stopped non appliqué');
+            return null;
+          },
+        );
+        if (step !== null) await runLog.log('info', 'status_event', { event: 'run_stopped', reason: result.stop_reason, applied: step.ok });
+      }
       span.setAttribute('run.state', result.state);
       await runLog.log(result.state === 'failed' ? 'warn' : 'info', 'run_finished', {
         state: result.state,
-        ...(result.state === 'failed' ? { failure_class: result.failure_class } : {}),
+        ...(result.state === 'failed' ? { failure_class: result.failure_class, ...(result.stop_reason === undefined ? {} : { stop_reason: result.stop_reason }) } : {}),
         closed,
       });
       log.info({ runId, state: result.state, closed }, 'run terminé');

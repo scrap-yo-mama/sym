@@ -38,7 +38,34 @@ export type ServerConfig = {
    * choisit son IP par X-Forwarded-For (limites contournées).
    */
   trustProxy: boolean | number | string;
+  /** Passerelle tunnel WSS (07 § 6, tâche 2.7). */
+  tunnel: TunnelConfig;
 };
+
+type TunnelConfig = {
+  /** `DISABLE_TUNNEL=true` : aucune route WSS, aucune passerelle (14 § 2). */
+  disabled: boolean;
+  /** `GATEWAY_INSTANCE` : identifiant de cette instance (canal NOTIFY `tunnel_cmd_<instance>`) ; défaut : hôte + pid + aléa. */
+  instance: string | null;
+  /**
+   * `TUNNEL_EXTENSION_IDS` : identifiants d'extension acceptés (en-tête Origin `chrome-extension://<id>`). Vide : toute
+   * origine `chrome-extension://` est acceptée, jamais une origine web ni une requête sans Origin.
+   */
+  extensionIds: string[];
+  /** Connexion de session pour LISTEN (`DATABASE_URL_DIRECT`, défaut `DATABASE_URL`). */
+  sessionUrl: string;
+};
+
+const EXTENSION_ID = /^[a-p]{32}$/;
+
+function loadTunnelConfig(env: NodeJS.ProcessEnv, databaseUrl: string): TunnelConfig {
+  const disabled = (env['DISABLE_TUNNEL'] ?? '').trim().toLowerCase() === 'true';
+  const instance = env['GATEWAY_INSTANCE']?.trim() || null;
+  if (instance !== null && !/^[A-Za-z0-9_.-]{1,40}$/.test(instance)) throw new ConfigError('GATEWAY_INSTANCE invalide : 1 à 40 caractères [A-Za-z0-9_.-].');
+  const extensionIds = (env['TUNNEL_EXTENSION_IDS'] ?? '').split(',').map((v) => v.trim()).filter((v) => v !== '');
+  for (const id of extensionIds) if (!EXTENSION_ID.test(id)) throw new ConfigError(`TUNNEL_EXTENSION_IDS : identifiant d'extension invalide (${id}).`);
+  return { disabled, instance, extensionIds, sessionUrl: env['DATABASE_URL_DIRECT'] || databaseUrl };
+}
 
 /** Version d'application publiable : SemVer ou étiquette courte (aucun espace, aucun chemin, aucun nom d'hôte). */
 const APP_VERSION = /^[0-9A-Za-z][0-9A-Za-z.+-]{0,63}$/;
@@ -120,5 +147,6 @@ export function loadServerConfig(env: NodeJS.ProcessEnv = process.env): ServerCo
     port: Number(env['PORT'] ?? 3000),
     host: env['HOST'] ?? '0.0.0.0',
     trustProxy: parseTrustProxy(env['TRUST_PROXY']),
+    tunnel: loadTunnelConfig(env, databaseUrl),
   };
 }

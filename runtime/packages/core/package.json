@@ -18,6 +18,10 @@
     "./exec": {
       "types": "./dist/exec/index.d.ts",
       "default": "./dist/exec/index.js"
+    },
+    "./tunnel": {
+      "types": "./dist/tunnel/index.d.ts",
+      "default": "./dist/tunnel/index.js"
     }
   },
   "files": [

@@ -72,7 +72,7 @@ export class ExtensionError extends Error {
   }
 }
 
-const KEYS = { pairing: 'pairing', consents: 'consents', deviceId: 'device_id' } as const;
+const KEYS = { pairing: 'pairing', consents: 'consents', deviceId: 'device_id', revoked: 'pairing_revoked' } as const;
 
 /** Domaine connecté, tel que l'instance le connaît (`GET /api/extension/session`). */
 type RemoteSite = { domain: string; serverUseAllowed: boolean; hasServerCookies: boolean; consentedAt?: string };
@@ -190,6 +190,27 @@ export class ExtensionController {
     return consents;
   }
 
+  /** Instance et jeton de l'appairage courant, pour la WSS du tunnel (07 § 6) ; `null` si non appairé. */
+  async tunnelPairing(): Promise<{ origin: string; token: string } | null> {
+    const pairing = await this.#pairing();
+    return pairing === null ? null : { origin: pairing.origin, token: pairing.token };
+  }
+
+  /** Domaines connectés dans CE navigateur (consentement donné ici) : seuls domaines où le tunnel agit (07 § 5). */
+  async connectedDomains(): Promise<Set<string>> {
+    return new Set(Object.keys(await this.#consents()));
+  }
+
+  /**
+   * Jeton refusé par la WSS (4401 : révoqué ou expiré) : l'appairage local est oublié, comme après un 401 HTTP, et le
+   * prochain `status()` le dit une fois (« pair again ») au lieu d'un écran d'appairage muet.
+   */
+  async forgetRevokedPairing(): Promise<void> {
+    if ((await this.#pairing()) === null) return;
+    await this.#forget();
+    await this.#deps.storage.set(KEYS.revoked, true);
+  }
+
   /**
    * Appairage (07 § 1). La permission d'hôte de l'instance est demandée par le popup, au clic. Un appairage existant
    * est d'abord oublié en entier : aucun consentement donné pour une instance ne vaut pour une autre.
@@ -202,6 +223,7 @@ export class ExtensionController {
     // Pas de révocation du jeton précédent ici : l'ancienne instance peut être injoignable (c'est souvent pourquoi on
     // se ré-appaire) ; l'utilisateur le révoque depuis sa console, et il expire sans usage au bout de 90 jours.
     await this.#forget(instancePattern(instance.origin));
+    await this.#deps.storage.remove(KEYS.revoked);
     const res = await this.#deps.fetch(`${instance.origin}/api/extension/pair`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -235,7 +257,13 @@ export class ExtensionController {
    */
   async status(): Promise<Status> {
     const pairing = await this.#pairing();
-    if (!pairing) return { paired: false };
+    if (!pairing) {
+      if ((await this.#deps.storage.get(KEYS.revoked)) === true) {
+        await this.#deps.storage.remove(KEYS.revoked);
+        throw new ExtensionError('unauthorized', 'Pairing revoked or expired: pair again.');
+      }
+      return { paired: false };
+    }
     let remote: RemoteSession;
     try {
       remote = await this.#remoteSession();
