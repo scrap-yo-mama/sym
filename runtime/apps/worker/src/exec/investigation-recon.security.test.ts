@@ -3,11 +3,14 @@
 // - CLASSE chaque réponse `fetch` / XHR d'un domaine de l'API (INV6, comme la reconnaissance statique) : un 403 signé
 //   par un éditeur de protection sur le point de données arrête l'enquête (`bloquee`), sans appel au LLM ni essai ;
 // - capture le trafic vers un sous-domaine du site (04b §2 : page `www.…`, données sur `api.…`), proposé et retenu
-//   (`allowed_hosts` = l'hôte des données), sans jamais contacter un tiers.
+//   (`allowed_hosts` = l'hôte des données), sans jamais contacter un tiers ;
+// - identité (D-33) : la passe Chromium porte le User-Agent RÉEL du moteur (override CDP de `run-context`), sans jeton
+//   d'instance ni `From` quand `identify_instance` est désactivé, comme l'étape 0 et les essais.
 // Sites de test locaux (mini-site.testkit.ts), PostgreSQL : un conteneur propre à ce fichier.
 import { randomUUID } from 'node:crypto';
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from '@testcontainers/postgresql';
 import { DomainPacer, generateMasterKey, MasterKey, Secret } from '@runtime/core';
+import { buildUserAgent } from '@runtime/core/access';
 import * as net from '@runtime/core/net';
 import { keyCheck, listInvestigationEvents, migrateUp, PgBossJobQueue, PgPacingStore, readRun, runQueueDefinition, startInvestigation, withActor } from '@runtime/db';
 import { createLlmClient, type LlmConfig } from '@runtime/llm';
@@ -16,6 +19,7 @@ import pg from 'pg';
 import { pino } from 'pino';
 import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from 'vitest';
 import { fixtureGuard } from '../../../../tests/helpers/fixture-net.ts';
+import { installedEngineIdentity } from '../browser/engine-identity.js';
 import { BrowserPool, playwrightLauncher } from '../browser/pool.js';
 import { loadWorkerConfig } from '../config.js';
 import { startMiniSite, type MiniResponse, type MiniSite } from '../testing/mini-site.testkit.js';
@@ -164,5 +168,13 @@ describe('reconnaissance E3 (Chromium) : réponses de données classées, sous-d
     const sv = (await pool.query<{ spec: { request: { allowed_hosts: string[] } } }>('SELECT spec FROM strategy_versions WHERE api_id = $1', [apiId])).rows[0]!;
     expect(sv.spec.request.allowed_hosts).toEqual([SIB_API]);
     expect(site.hits.filter((h) => h.host === EVIL)).toEqual([]);
+    // Toutes les requêtes reçues (robots.txt, étape 0, passe Chromium : page, script, XHR ; essais) : UA du moteur, sans From.
+    const engineUa = buildUserAgent({ engine: installedEngineIdentity() });
+    expect(engineUa).not.toMatch(/Scrapyomama|HeadlessChrome/);
+    expect(site.hits.some((h) => h.path === '/app.js')).toBe(true);
+    for (const h of site.hits) {
+      expect(h.userAgent, `${h.host}${h.path}`).toBe(engineUa);
+      expect(h.from, `${h.host}${h.path}`).toBeUndefined();
+    }
   }, 120_000);
 });

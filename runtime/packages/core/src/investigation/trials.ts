@@ -74,7 +74,7 @@ export type BudgetStop = 'investigation_budget_usd' | 'investigation_timeout_s' 
 
 export type TrialsOutcome =
   | { readonly kind: 'conformant'; readonly outcome: PairOutcome; readonly spentUsd: number; readonly tried: readonly PairOutcome[] }
-  /** Refus ou défi (INV6) : arrêt de toute escalade. */
+  /** Refus ou défi (INV6), 429 (ralentir), échec LLM sans repli : arrêt de toute escalade. */
   | { readonly kind: 'stopped'; readonly outcome: PairOutcome; readonly spentUsd: number; readonly tried: readonly PairOutcome[] }
   /** Connexion, paiement, limite de compte : la main revient à l'utilisateur. */
   | { readonly kind: 'action_required'; readonly outcome: PairOutcome; readonly spentUsd: number; readonly tried: readonly PairOutcome[] }

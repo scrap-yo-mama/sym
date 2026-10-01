@@ -54,6 +54,10 @@ beforeAll(async () => {
         return html(`<p id="sw">sw</p><script>try { new SharedWorker('/sw.js'); } catch (e) {}</script>`);
       case '/sw.js':
         return res.writeHead(200, { 'content-type': 'text/javascript' }).end("fetch('/prive/direct-sw').catch(() => 0); fetch('/swr').catch(() => 0);");
+      case '/sw-lent.js':
+        // Script servi tard : le worker ne peut pas démarrer avant que `blockSharedWorkers` l'ait fermé (Playwright le relance
+        // dès son attachement, la fermeture ne gagne que contre un aller-retour réseau).
+        return void setTimeout(() => res.writeHead(200, { 'content-type': 'text/javascript' }).end("fetch('/prive/direct-sw-lent').catch(() => 0);"), 600);
       case '/swr':
         return redirect('/prive/sw-redirect');
       case '/ws-workers':
@@ -131,9 +135,42 @@ test('chaque saut contrôlé : cadre hors processus, worker dédié, navigation 
 }, 120_000);
 
 // Revue de 1.11 : les requêtes d'un SharedWorker ne passent ni par `context.route` ni par l'interception CDP de la page
-// (cible `shared_worker` hors de l'attachement automatique de la page). Échec fermé : tout SharedWorker est fermé avant
-// d'exécuter son code (`blockSharedWorkers`, posé par `openRunContext` sur chaque contexte de run).
-test('SharedWorker (script du site, puis blob créé depuis evaluate) : 0 requête sur /prive/, fetch direct ou redirigé', async () => {
+// (cible `shared_worker` hors de l'attachement automatique de la page). Échec fermé, deux couches (`openRunContext` les pose
+// toutes deux sur chaque contexte de run) : la garde des documents refuse tout constructeur `SharedWorker` ; le blocage du
+// navigateur (`blockSharedWorkers`) ferme ceux qui naîtraient quand même. Playwright relance chaque cible jointe : seule la
+// garde des documents est sans course pour un worker blob: (script local), le blocage seul ne l'est que si le script se fait
+// attendre (premier test : script servi tard ; il ne peut pas démarrer avant d'être fermé).
+test('SharedWorker, garde des documents : script du site et blob créé depuis evaluate refusés (SecurityError), 0 requête sur /prive/ ou /swr', async () => {
+  const { context, page } = await runLikeContext();
+  const block = await blockSharedWorkers(browser);
+  try {
+    await page.goto(`http://${A}:${port}/sw-page`);
+    const refused = await page.evaluate((origin) => {
+      // Code exécuté dans la page (DOM) : le tsconfig du worker ne charge pas la lib DOM, d'où ce type local minimal.
+      const { SharedWorker: PageSharedWorker } = globalThis as unknown as { SharedWorker: new (url: string) => unknown };
+      const attempt = (url: string): string => {
+        try {
+          new PageSharedWorker(url);
+          return 'créé';
+        } catch (error) {
+          return (error as { name?: string }).name ?? 'erreur';
+        }
+      };
+      return [attempt('/sw.js'), attempt(URL.createObjectURL(new Blob([`fetch('${origin}/prive/blob').catch(() => 0); fetch('${origin}/swr?blob').catch(() => 0);`], { type: 'text/javascript' })))];
+    }, `http://${A}:${port}`);
+    expect(refused).toEqual(['SecurityError', 'SecurityError']);
+    // Témoin : une requête permise de la page arrive (le serveur répond), les SharedWorker n'ont rien envoyé.
+    await page.evaluate((origin) => fetch(`${origin}/temoin`).then(() => 0), `http://${A}:${port}`);
+    await page.waitForTimeout(1500);
+    expect(hits).toContain(`${A}/temoin`);
+    expect(hits.filter((h) => h.includes('/prive/') || h.includes('/swr') || h.endsWith('/sw.js'))).toEqual([]);
+  } finally {
+    await context.close();
+    await block.close();
+  }
+}, 120_000);
+
+test('SharedWorker, blocage du navigateur seul (sans garde des documents) : un worker dont le script se fait attendre est fermé avant son code', async () => {
   const context = await browser.newContext();
   const block = await blockSharedWorkers(browser);
   try {
@@ -146,20 +183,14 @@ test('SharedWorker (script du site, puis blob créé depuis evaluate) : 0 requê
       async (request) => !new URL(request.url).pathname.startsWith('/prive/'),
     );
     await page.goto(`http://${A}:${port}/sw-page`);
-    await page.evaluate((origin) => {
-      // Code exécuté dans la page (DOM) : le tsconfig du worker ne charge pas la lib DOM, d'où ce type local minimal.
+    await page.evaluate(() => {
       const { SharedWorker: PageSharedWorker } = globalThis as unknown as { SharedWorker: new (url: string) => unknown };
-      try {
-        new PageSharedWorker(URL.createObjectURL(new Blob([`fetch('${origin}/prive/blob').catch(() => 0); fetch('${origin}/swr?blob').catch(() => 0);`], { type: 'text/javascript' })));
-      } catch {
-        // SharedWorker refusé : rien ne part.
-      }
-    }, `http://${A}:${port}`);
-    // Témoin : une requête permise de la page arrive (le serveur répond), les SharedWorker n'ont rien envoyé.
+      new PageSharedWorker('/sw-lent.js');
+    });
     await page.evaluate((origin) => fetch(`${origin}/temoin`).then(() => 0), `http://${A}:${port}`);
-    await page.waitForTimeout(1500);
-    expect(hits).toContain(`${A}/temoin`);
-    expect(hits.filter((h) => h.includes('/prive/') || h.includes('/swr'))).toEqual([]);
+    await expect.poll(() => hits.includes(`${A}/sw-lent.js`), { timeout: 10_000 }).toBe(true);
+    await page.waitForTimeout(1500); // au-delà du délai du script (600 ms) : s'il était exécuté, sa requête serait partie
+    expect(hits.filter((h) => h.includes('/prive/'))).toEqual([]);
   } finally {
     await context.close();
     await block.close();

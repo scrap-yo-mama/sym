@@ -6,6 +6,9 @@
 // l'échantillon vit dans `investigation_events`, l'exemple de sortie dans `runs.input`, tous deux couverts par la
 // rétention et l'effacement (17 §6) ; les valeurs des requêtes de données sont relues par la reconnaissance de chaque run.
 // L'état n'est jamais copié par un clone (`API_CLONE_EXCLUDED`). Une seule enquête à la fois par API.
+// L'URL de la demande n'admet aucun paramètre secret (jeton, clé, session, signature). La colonne `investigation` reste
+// lisible des membres par `instance_read` (visibilité instance, sans session) : elle ne doit figurer dans AUCUNE projection
+// servie à un non-propriétaire (REST, MCP, console : 3.x), seulement dans celles du propriétaire.
 import { assertSchemaAcceptable, SchemaError, type Execution, type InvestigationPhase, type JobQueue, type Network, type RunTrigger } from '@runtime/core';
 import type { InvestigationProposal, StoredCandidate } from '@runtime/core/investigation';
 import { INVESTIGATION_DEFAULTS } from '@runtime/core/investigation';
@@ -41,7 +44,7 @@ export type InvestigationState = {
 };
 
 export class InvestigationStateError extends Error {
-  readonly code: 'invalid_request' | 'not_awaiting_validation' | 'invalid_schema' | 'api_not_found' | 'investigation_in_progress';
+  readonly code: 'invalid_request' | 'not_awaiting_validation' | 'invalid_schema' | 'api_not_found' | 'investigation_in_progress' | 'reinvestigation_required';
   constructor(code: InvestigationStateError['code'], message: string) {
     super(message);
     this.name = 'InvestigationStateError';
@@ -49,7 +52,14 @@ export class InvestigationStateError extends Error {
   }
 }
 
-/** Demande normalisée : URL http(s) sans identifiants, description non vide (≤ 2000), plafonds bornés. */
+/**
+ * Nom de paramètre qui porte un secret ou un jeton (`?token=`, `?api_key=`, `?session=`, signature) : refusé dans l'URL de
+ * la demande, que l'état de l'enquête garde (`apis.investigation`, hors rétention, lisible des membres en visibilité
+ * instance). La page d'une enquête est une page publique ou de la session de l'utilisateur, jamais une URL signée.
+ */
+const SECRET_PARAM = /(?:^|[-_.])(?:token|access[-_]?token|key|api[-_]?key|apikey|secret|session|sessionid|sid|sig|sign|signature|signed|hmac|auth|authorization|password|passwd|pwd|credentials?|jwt|bearer|otp)(?:$|[-_.])/i;
+
+/** Demande normalisée : URL http(s) sans identifiants ni paramètre secret, description non vide (≤ 2000), plafonds bornés. */
 export function normalizeInvestigationRequest(input: {
   url: string;
   description: string;
@@ -65,6 +75,9 @@ export function normalizeInvestigationRequest(input: {
   }
   if ((url.protocol !== 'http:' && url.protocol !== 'https:') || url.username !== '' || url.password !== '' || url.href.length > 2048) {
     throw new InvestigationStateError('invalid_request', 'URL http(s) sans identifiants attendue');
+  }
+  for (const name of url.searchParams.keys()) {
+    if (SECRET_PARAM.test(name)) throw new InvestigationStateError('invalid_request', 'paramètre secret dans l\'URL (jeton, clé, session, signature) : non admis');
   }
   const description = input.description.trim();
   if (description === '' || description.length > 2000) throw new InvestigationStateError('invalid_request', 'description de 1 à 2000 caractères attendue');
@@ -82,6 +95,12 @@ export function normalizeInvestigationRequest(input: {
  * du run (rétention et effacement), jamais dans l'état de l'API. Une enquête dont un run est en file ou en cours refuse
  * d'être relancée (`investigation_in_progress`, 409) : deux runs écraseraient l'état l'un de l'autre et remettraient le
  * coût cumulé à 0 (contournement de `investigation_budget_usd`). L'API est verrouillée (`FOR UPDATE`) le temps du contrôle.
+ * Seule une API en `enquete` est admise (`reinvestigation_required`, 409, sinon) : relancer une enquête sur une API
+ * `sain`, `warning`, `erreur` ou `bloquee` est une RÉ-ENQUÊTE (transitions 16 à 20, motif manuel seul pour `bloquee`),
+ * qui doit d'abord appliquer `reinvestigate` par la machine à états (`applyStatusAndNotify`, webhooks compris) : elle
+ * est exposée avec le bouton Ré-enquêter et `force_investigate` (3.1, 3.2), pas par 2.1. Sans ce garde-fou, une enquête
+ * réussie laisserait l'API dans son ancien statut (`investigation_succeeded` exige `enquete`) et la transition 21 ne
+ * pourrait jamais se déclencher.
  */
 export async function startInvestigation(
   tx: Queryable,
@@ -95,8 +114,11 @@ export async function startInvestigation(
   },
 ): Promise<{ runId: string; jobId: string }> {
   const request = normalizeInvestigationRequest(input.request);
-  const locked = await tx.query('SELECT 1 FROM apis WHERE id = $1 AND owner_id = $2 FOR UPDATE', [input.apiId, input.ownerId]);
+  const locked = await tx.query<{ status: string }>('SELECT status FROM apis WHERE id = $1 AND owner_id = $2 FOR UPDATE', [input.apiId, input.ownerId]);
   if (locked.rowCount !== 1) throw new InvestigationStateError('api_not_found', 'API introuvable pour ce propriétaire');
+  if (locked.rows[0]!.status !== 'enquete') {
+    throw new InvestigationStateError('reinvestigation_required', 'API hors du statut enquete : une ré-enquête (16-20) doit d\'abord la remettre en enquête');
+  }
   const active = await tx.query(
     "SELECT 1 FROM runs WHERE api_id = $1 AND kind = 'investigation' AND state IN ('queued', 'running', 'waiting_tunnel') LIMIT 1",
     [input.apiId],

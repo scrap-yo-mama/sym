@@ -124,10 +124,28 @@ let backlog = 0;
  */
 const MAX_BACKLOG = 64 * 1024 * 1024;
 
+/** Octets de journal (`ctx.log`) écrits par le script mais pas encore remis au système. */
+let logBacklog = 0;
+/**
+ * Au-delà, le script journalise plus vite que l'enfant ne vide sa file : sa boucle d'événements est affamée (QuickJS est
+ * synchrone, les rappels d'isolated-vm s'empilent) et aucun message, violation comprise, ne partirait plus avant le
+ * plafond de temps, voire avant la saturation du tas. Le plafond de l'hôte (`maxLogBytes`, 64 Kio par défaut) se franchit
+ * normalement bien avant ; ce plafond est un filet, bien au-dessus de tout journal admis.
+ */
+const MAX_LOG_BACKLOG = 4 * 1024 * 1024;
+/**
+ * Signal par lequel l'enfant s'arrête de lui-même sur dépassement de sortie (`SIGNAL_OUTPUT_LIMIT`, protocol.ts : le
+ * fichier d'enfant n'importe que des types). Pas `process.exit` : isolated-vm tient un fil d'isolat vivant, la sortie
+ * ordinaire finit en SIGSEGV/SIGABRT, indiscernable d'un plantage.
+ */
+const SIGNAL_OUTPUT_LIMIT = 'SIGUSR2';
 function post(message: ChildMessage, bytes = 0): void {
   backlog += bytes;
+  const isLog = message.t === 'log';
+  if (isLog) logBacklog += bytes;
   process.send?.(message, undefined, undefined, () => {
     backlog -= bytes;
+    if (isLog) logBacklog -= bytes;
   });
 }
 
@@ -187,6 +205,8 @@ async function main(): Promise<void> {
     const size = typeof b === 'string' ? Buffer.byteLength(b) : 0;
     if (kind === 'call' || kind === 'log' || kind === 'emit') {
       outBytes += size;
+      // File saturée : la violation ne partirait pas (boucle affamée), l'enfant s'arrête et l'hôte lit le code de sortie.
+      if (kind === 'log' && logBacklog + size > MAX_LOG_BACKLOG) process.kill(process.pid, SIGNAL_OUTPUT_LIMIT);
       if (outBytes > outBudget || backlog + size > MAX_BACKLOG) {
         overflow = true;
         post({ t: 'violation', reason: 'output_limit', detail: outBytes > outBudget ? 'ipc' : 'file IPC' });

@@ -49,7 +49,7 @@ export type RequestCheck = (request: BrowserRequestCheck) => Promise<boolean>;
 type Listener = (params: Record<string, unknown>) => void;
 
 /** Canal CDP : la session de la page (Playwright) ou une cible enfant jointe à travers sa session parente. */
-type Channel = {
+export type Channel = {
   send(method: string, params?: Record<string, unknown>): Promise<Record<string, unknown>>;
   on(event: string, listener: Listener): void;
 };
@@ -58,7 +58,7 @@ type Channel = {
 const MAX_ROOTS = 2000;
 
 /** Canal de la session Playwright. */
-function sessionChannel(session: CDPSession): Channel {
+export function sessionChannel(session: CDPSession): Channel {
   const raw = session as unknown as {
     send(method: string, params?: Record<string, unknown>): Promise<Record<string, unknown>>;
     on(event: string, listener: Listener): void;
@@ -67,7 +67,7 @@ function sessionChannel(session: CDPSession): Channel {
 }
 
 /** Cibles enfants d'un canal, en mode non aplati : réponses et événements arrivent par `Target.receivedMessageFromTarget`. */
-function childChannels(parent: Channel): (sessionId: string) => Channel {
+export function childChannels(parent: Channel): (sessionId: string) => Channel {
   const children = new Map<string, { dispatch(message: Record<string, unknown>): void; close(): void }>();
   parent.on('Target.receivedMessageFromTarget', (params) => {
     const child = children.get(String(params['sessionId']));
@@ -258,10 +258,12 @@ export type SharedWorkerBlock = { close(): Promise<void> };
 /**
  * Échec fermé sur les SharedWorker (revue de 1.11, INV11) : leurs requêtes ne passent ni par `context.route` ni par
  * l'interception CDP de la page (une cible `shared_worker` n'est pas jointe par l'attachement automatique de la page, et
- * `Fetch` de la page ne la couvre pas). Une session CDP au niveau du navigateur joint chaque SharedWorker dès sa création,
- * suspendu avant toute exécution de son code (`waitForDebuggerOnStart`), puis le ferme (`Target.closeTarget`). S'il ne
- * peut pas être fermé, il reste suspendu : il n'est jamais relancé, aucune requête ne part. Le script du worker lui-même
- * est chargé par la page (contrôlé par `context.route` et le contrôle CDP de la page) ; son code ne s'exécute jamais.
+ * `Fetch` de la page ne la couvre pas). Une session CDP au niveau du navigateur joint chaque SharedWorker dès sa création
+ * (`waitForDebuggerOnStart`), puis le ferme (`Target.closeTarget`). Filet, pas verrou : Playwright, joint à la même cible,
+ * la relance aussitôt (`Runtime.runIfWaitingForDebugger` de `CRSession.detach`), et la fermeture court contre le démarrage
+ * du worker. Le script d'un worker d'URL http(s) est chargé par la page (aller-retour réseau, contrôlé par `context.route`
+ * et le contrôle CDP) : la fermeture arrive avant son code. Un worker blob: n'a pas cet aller-retour : la garde des
+ * documents (`installPageGuard`) refuse tout constructeur `SharedWorker`, et c'est elle qui l'interdit.
  */
 export async function blockSharedWorkers(browser: Browser): Promise<SharedWorkerBlock> {
   const session = await browser.newBrowserCDPSession();

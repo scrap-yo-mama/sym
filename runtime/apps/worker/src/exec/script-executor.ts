@@ -130,7 +130,7 @@ export type ScriptExecutorOptions = {
    * principal, `ctx.fetch`, requête lancée par le script) arrête l'essai avec sa classe ; une sous-ressource est coupée.
    */
   readonly robots?: AccessCheck;
-  /** User-Agent du robot, ajouté à celui du navigateur. */
+  /** User-Agent du robot (1.11, `buildUserAgent`) : la chaîne du moteur, suivie du jeton si `identify_instance` est activé. */
   readonly userAgent?: string;
 };
 

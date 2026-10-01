@@ -13,22 +13,23 @@ export type MiniHandler = (req: MiniRequest) => MiniResponse | undefined | Promi
 export type MiniSite = {
   readonly port: number;
   /** Requêtes reçues (par le réseau ou par l'extension simulée), dans l'ordre. */
-  readonly hits: { readonly host: string; readonly path: string; readonly via: 'http' | 'tunnel' }[];
+  readonly hits: { readonly host: string; readonly path: string; readonly via: 'http' | 'tunnel'; readonly userAgent?: string; readonly from?: string }[];
   url(host: string, path?: string): string;
   /** Réponse du site à une requête (partagée par le serveur http et l'extension simulée). */
-  answer(url: string, method: string, body: string, via: 'http' | 'tunnel'): Promise<{ status: number; headers: Record<string, string>; body: string }>;
+  answer(url: string, method: string, body: string, via: 'http' | 'tunnel', headers?: { userAgent?: string; from?: string }): Promise<{ status: number; headers: Record<string, string>; body: string }>;
   reset(): void;
   close(): Promise<void>;
 };
 
 export async function startMiniSite(handler: MiniHandler): Promise<MiniSite> {
-  const hits: { host: string; path: string; via: 'http' | 'tunnel' }[] = [];
+  const hits: { host: string; path: string; via: 'http' | 'tunnel'; userAgent?: string; from?: string }[] = [];
   const counts = new Map<string, number>();
   let port = 0;
-  const answer = async (url: string, method: string, body: string, via: 'http' | 'tunnel') => {
+  const answer = async (url: string, method: string, body: string, via: 'http' | 'tunnel', headers: { userAgent?: string; from?: string } = {}) => {
     const u = new URL(url);
     const host = u.hostname.toLowerCase();
-    hits.push({ host, path: u.pathname, via });
+    // En-têtes d'identité reçus (requêtes http seulement) : User-Agent et `From`.
+    hits.push({ host, path: u.pathname, via, ...headers });
     const key = `${host}${u.pathname}`;
     const n = (counts.get(key) ?? 0) + 1;
     counts.set(key, n);
@@ -41,7 +42,8 @@ export async function startMiniSite(handler: MiniHandler): Promise<MiniSite> {
     req.on('data', (c: Buffer) => chunks.push(c));
     req.on('end', () => {
       const host = (req.headers.host ?? '').toLowerCase().replace(/:\d+$/, '');
-      answer(`http://${host}:${port}${req.url ?? '/'}`, req.method ?? 'GET', Buffer.concat(chunks).toString('utf8'), 'http')
+      const identity = { ...(req.headers['user-agent'] === undefined ? {} : { userAgent: req.headers['user-agent'] }), ...(typeof req.headers.from === 'string' ? { from: req.headers.from } : {}) };
+      answer(`http://${host}:${port}${req.url ?? '/'}`, req.method ?? 'GET', Buffer.concat(chunks).toString('utf8'), 'http', identity)
         .then((out) => {
           res.writeHead(out.status, out.headers);
           res.end(out.body);

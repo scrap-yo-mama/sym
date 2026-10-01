@@ -27,3 +27,15 @@ describe('normalizeInvestigationRequest', () => {
     expect(() => normalizeInvestigationRequest(input)).toThrow(expect.objectContaining({ code: 'invalid_request' }));
   });
 });
+
+describe('normalizeInvestigationRequest : aucun secret dans l’URL gardée par l’état (hors rétention, 17 §6)', () => {
+  test.each(['token', 'access_token', 'key', 'api_key', 'apikey', 'session', 'sessionid', 'sig', 'signature', 'X-Amz-Signature', 'auth', 'password'])('paramètre %s refusé', (name) => {
+    expect(() => normalizeInvestigationRequest({ url: `https://shop.test/list?${name}=zz_secret_value`, description: 'x' })).toThrow(
+      expect.objectContaining({ code: 'invalid_request' }),
+    );
+  });
+
+  test('paramètres ordinaires admis (page, q, category, sort)', () => {
+    expect(normalizeInvestigationRequest({ url: 'https://shop.test/list?page=2&q=velo&category=7&sort=price', description: 'x' }).url).toBe('https://shop.test/list?page=2&q=velo&category=7&sort=price');
+  });
+});

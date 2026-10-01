@@ -145,14 +145,64 @@ export function findRecordArrays(root: unknown, max = MAX_ARRAYS_PER_SOURCE): Fo
 }
 
 /**
+ * Suffixes publics à deux niveaux (et domaines d'hébergement partagé) les plus courants : `www.<suffixe>` n'y perd
+ * jamais son `www.` (la portée deviendrait le suffixe, donc tous les sites qu'il héberge). Liste volontairement courte,
+ * complétée par la règle générique `<co|com|gov|…>.<ccTLD>` : sans liste des suffixes publics (dépendance hors de la
+ * stack de 03), un hôte douteux garde sa portée exacte.
+ */
+const TWO_LEVEL_SUFFIXES = new Set([
+  'github.io', 'gitlab.io', 'netlify.app', 'vercel.app', 'pages.dev', 'workers.dev', 'web.app', 'firebaseapp.com',
+  'herokuapp.com', 'appspot.com', 'blogspot.com', 'azurewebsites.net', 'cloudfront.net', 'amazonaws.com',
+  'wordpress.com', 'myshopify.com', 'wixsite.com', 'squarespace.com', 'onrender.com', 'fly.dev', 'railway.app',
+]);
+/** Second niveau générique sous un ccTLD (`co.uk`, `gov.uk`, `com.au`, `ac.jp`, `gouv.fr`…). */
+const CC_SECOND_LEVEL = /^(?:co|com|gov|gouv|org|net|edu|ac|ltd|plc|nhs|police|mil|nic|sch|ne|or|go|gob|govt|nom|info|biz)\.[a-z]{2}$/;
+
+/** `host` est un suffixe public (ou un domaine d'hébergement partagé) connu à deux niveaux. */
+function isTwoLevelSuffix(host: string): boolean {
+  return TWO_LEVEL_SUFFIXES.has(host) || CC_SECOND_LEVEL.test(host);
+}
+
+/**
  * Portée de site d'une page : son hôte sans `www.`. Les domaines de l'API sont cet hôte et ses sous-domaines
- * (04b §2 : page `www.exemple.test`, données sur `api.exemple.test`). Sans liste des suffixes publics (dépendance hors
- * de la stack de 03), on ne remonte jamais plus haut : un voisin (`user2.github.io` pour `user1.github.io`, `api.x.test`
- * pour `shop.x.test`) n'est jamais un domaine de l'API.
+ * (04b §2 : page `www.exemple.test`, données sur `api.exemple.test`). `www.` n'est retiré que s'il reste au moins deux
+ * libellés qui ne forment pas un suffixe public connu (`www.gov.uk`, `www.com.au`, `www.github.io` gardent leur hôte
+ * exact). On ne remonte jamais plus haut : un voisin (`user2.github.io` pour `user1.github.io`, `api.x.test` pour
+ * `shop.x.test`) n'est jamais un domaine de l'API.
  */
 export function siteScope(pageHost: string): string {
   const host = pageHost.toLowerCase().replace(/\.+$/, '');
-  return host.startsWith('www.') && host.split('.').length > 2 ? host.slice(4) : host;
+  if (!host.startsWith('www.')) return host;
+  const rest = host.slice(4);
+  return rest.split('.').length >= 2 && !isTwoLevelSuffix(rest) ? rest : host;
+}
+
+/** Mots d'action d'un chemin (`/logout`, `/cart/clear`, `/unsubscribe`) : un GET qui change un état, jamais rejoué. */
+const ACTION_WORDS = new Set([
+  'logout', 'log-out', 'signout', 'sign-out', 'logoff', 'delete', 'remove', 'destroy', 'unsubscribe', 'optout',
+  'opt-out', 'cancel', 'clear', 'confirm', 'revoke', 'deactivate', 'disable', 'reset', 'purge',
+  'checkout', 'pay', 'buy', 'purchase', 'subscribe', 'follow', 'unfollow', 'like', 'vote',
+  'send', 'submit', 'approve', 'reject', 'archive',
+]);
+
+/**
+ * L'URL désigne une action (déconnexion, suppression, désabonnement…) plutôt qu'une lecture de données : un mot du
+ * chemin (découpé sur `/`, `-`, `_`, `.`, ou le segment entier) est un mot d'action. La reconnaissance en tunnel ne
+ * rejoue jamais une telle URL : elle partirait avec les cookies de session de l'utilisateur.
+ */
+export function isActionUrl(url: string): boolean {
+  let path: string;
+  try {
+    path = decodeURIComponent(new URL(url).pathname).toLowerCase();
+  } catch {
+    return true;
+  }
+  for (const segment of path.split('/')) {
+    if (segment === '') continue;
+    if (ACTION_WORDS.has(segment)) return true;
+    for (const word of segment.split(/[-_.]/)) if (ACTION_WORDS.has(word)) return true;
+  }
+  return false;
 }
 
 /** `host` est la portée de site ou l'un de ses sous-domaines. */

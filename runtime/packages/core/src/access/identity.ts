@@ -1,9 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// Identité du robot (tâche 1.11, 17 §5) : User-Agent honnête `Scrapyomama/<version> (+<contact>)`, jeton produit,
-// version et contact DE L'INSTANCE (celui de l'opérateur, jamais celui de l'éditeur du logiciel). Le contact est saisi à
-// l'assistant de premier démarrage (réglage `instance_contact`) ou fourni par `INSTANCE_CONTACT` ; il est requis avant
-// la première enquête (`requireInstanceContact`). Aucun masquage : le navigateur du worker garde son User-Agent et y
-// ajoute celui-ci (X2).
+// Identité du robot (tâche 1.11, 17 §5, décision du 2026-10-01) : par défaut, le User-Agent RÉEL du moteur embarqué (la
+// chaîne standard de la version et de la plateforme réelles de Chromium, sans le marqueur `HeadlessChrome`), identique
+// d'un run à l'autre pour une même image, aucune rotation, aucune falsification d'empreinte (X2). Une seule fonction
+// la construit (`buildUserAgent`) pour le client HTTP (E1) et pour TOUT contexte Chromium. L'identification de
+// l'instance est OPTIONNELLE (réglage `identify_instance`, désactivé par défaut) : activée, elle ajoute le jeton
+// `compatible; Scrapyomama/<version>; +<contact>` au User-Agent et, si le contact est une adresse électronique,
+// l'en-tête `From` (RFC 9110 §10.1.2). Version et contact sont ceux DE L'INSTANCE (celui de l'opérateur, jamais celui
+// de l'éditeur du logiciel) : saisi à l'assistant de premier démarrage (réglage `instance_contact`) ou fourni par
+// `INSTANCE_CONTACT`, requis avant la première enquête (`requireInstanceContact`).
 import { PRODUCT_TOKEN } from './robots.js';
 
 export class InstanceContactError extends Error {
@@ -64,17 +68,85 @@ export function requireInstanceContact(contact: string | null | undefined): stri
   return normalizeInstanceContact(contact);
 }
 
-const VERSION = /^[0-9A-Za-z.+-]{1,32}$/;
 
-/** User-Agent du robot : `Scrapyomama/<version> (+<contact>)`, ou `Scrapyomama/<version>` tant qu'aucun contact n'est posé. */
-export function buildUserAgent(options: { readonly version: string; readonly contact: string | null }): string {
-  const version = VERSION.test(options.version) ? options.version : '0.0.0';
-  const base = `${PRODUCT_TOKEN}/${version}`;
-  return options.contact === null ? base : `${base} (+${normalizeInstanceContact(options.contact)})`;
+const VERSION = /^[0-9A-Za-z.+-]{1,32}$/;
+const ENGINE_VERSION = /^(\d{1,4})\.\d{1,6}(?:\.\d{1,6}){0,2}$/;
+
+/** Moteur embarqué : version lue sur `browser.version()` (ou la version épinglée de Chromium) et plateforme réelle (`process.platform`). */
+export type EngineIdentity = { readonly version: string; readonly platform: string };
+
+export class EngineUserAgentError extends Error {
+  override name = 'EngineUserAgentError';
 }
 
-/** User-Agent du navigateur : le sien, tel qu'il est, suivi de celui du robot (aucun masquage, X2). */
-export function browserUserAgent(browserDefault: string, robotUserAgent: string): string {
-  const own = browserDefault.replace(/[^\x20-\x7e]/g, '').trim();
-  return own === '' ? robotUserAgent : `${own} ${robotUserAgent}`;
+/** Jeton de plateforme que Chromium annonce lui-même (chaîne unifiée de sa version, quelle que soit l'architecture). */
+function platformToken(platform: string): string {
+  switch (platform) {
+    case 'darwin':
+      return 'Macintosh; Intel Mac OS X 10_15_7';
+    case 'win32':
+      return 'Windows NT 10.0; Win64; x64';
+    case 'linux':
+      return 'X11; Linux x86_64';
+    default:
+      throw new EngineUserAgentError(`plateforme du moteur non prise en charge : ${platform}`);
+  }
+}
+
+/**
+ * User-Agent standard de Chromium pour sa version et sa plateforme réelles, SANS le marqueur `HeadlessChrome` :
+ * `Mozilla/5.0 (<plateforme>) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/<majeure>.0.0.0 Safari/537.36`. Jamais une
+ * autre version ni un autre navigateur ; la valeur ne dépend que du moteur (aucun aléa, aucune rotation).
+ */
+export function engineUserAgent(engine: EngineIdentity): string {
+  const major = ENGINE_VERSION.exec(engine.version.trim())?.[1];
+  if (major === undefined) throw new EngineUserAgentError(`version du moteur illisible : ${engine.version}`);
+  return `Mozilla/5.0 (${platformToken(engine.platform)}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${Number(major)}.0.0.0 Safari/537.36`;
+}
+
+/**
+ * LA fonction qui construit le User-Agent du robot, pour le client HTTP (E1, lecture de robots.txt) comme pour tout
+ * contexte Chromium. Sans `identify` (réglage `identify_instance` désactivé, le défaut) : la chaîne du moteur, telle
+ * quelle. Avec `identify` : la même suivie du jeton produit (format de Googlebot), avec le contact de l'instance s'il
+ * est posé : `... Safari/537.36 (compatible; Scrapyomama/<version>; +<contact>)`.
+ */
+export function buildUserAgent(options: {
+  readonly engine: EngineIdentity;
+  readonly identify?: { readonly version: string; readonly contact: string | null } | undefined;
+}): string {
+  const base = engineUserAgent(options.engine);
+  const identify = options.identify;
+  if (identify === undefined) return base;
+  const version = VERSION.test(identify.version) ? identify.version : '0.0.0';
+  const contact = identify.contact === null ? '' : `; +${normalizeInstanceContact(identify.contact)}`;
+  return `${base} (compatible; ${PRODUCT_TOKEN}/${version}${contact})`;
+}
+
+/**
+ * En-tête `From` (RFC 9110 §10.1.2 : une adresse électronique) quand l'identification est activée et que le contact en
+ * est une ; `null` sinon (un contact URL ne tient que dans le jeton du User-Agent).
+ */
+export function robotFrom(contact: string | null): string | null {
+  if (contact === null) return null;
+  const normalized = normalizeInstanceContact(contact);
+  return normalized.startsWith('mailto:') ? normalized.slice('mailto:'.length) : null;
+}
+
+/**
+ * Réglage `identify_instance` : l'identification de l'instance est désactivée par défaut. Réglage admin d'abord
+ * (booléen, ou `{ enabled }`), puis `IDENTIFY_INSTANCE` (`true` / `false`). Toute autre valeur : désactivée.
+ */
+export function resolveIdentifyInstance(setting: unknown, env: Readonly<Record<string, string | undefined>> = {}): boolean {
+  const read = (value: unknown): boolean | undefined => {
+    if (typeof value === 'boolean') return value;
+    if (typeof value === 'string') {
+      const text = value.trim().toLowerCase();
+      if (text === 'true') return true;
+      if (text === 'false') return false;
+      return undefined;
+    }
+    if (typeof value === 'object' && value !== null && 'enabled' in value) return read((value as { enabled?: unknown }).enabled);
+    return undefined;
+  };
+  return read(setting) ?? read(env['IDENTIFY_INSTANCE']) ?? false;
 }

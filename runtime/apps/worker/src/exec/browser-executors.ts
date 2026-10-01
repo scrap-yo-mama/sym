@@ -51,7 +51,7 @@ export type BrowserExecutorOptions = Omit<DeclarativeRunOptions, 'transport'> & 
   readonly guard: SsrfGuard;
   readonly navigationTimeoutMs?: number;
   readonly renderWaitMs?: number;
-  /** User-Agent du robot (1.11), ajouté à celui du navigateur. */
+  /** User-Agent du robot (1.11, `buildUserAgent`) : la chaîne du moteur, suivie du jeton si `identify_instance` est activé. */
   readonly userAgent?: string;
   /** Suivre aussi la taille décodée des requêtes de données (`fetch`, XHR) : reconnaissance de l'enquête (2.1). */
   readonly trackData?: boolean;

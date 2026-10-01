@@ -21,10 +21,12 @@
 // au lancement (launch.ts).
 // Règles de spéculation (revue de 1.11) : leur préchargement part du navigateur, hors de toute interception ; la garde des
 // documents les retire, le contrôle CDP coupe celles de l'en-tête `Speculation-Rules`, le prérendu est coupé au lancement.
-import { browserUserAgent } from '@runtime/core/access';
+import { buildUserAgent } from '@runtime/core/access';
 import type { APIRequest, APIRequestContext, Browser, BrowserContext, Page, Request } from 'playwright-core';
+import { browserEngineIdentity } from './engine-identity.js';
 import { installPageGuard } from './page-guard.js';
 import { blockSharedWorkers, installRequestGuard, type RequestCheck } from './request-guard.js';
+import { engineUserAgentMetadata, installUserAgentOverride, NO_MEDIA_EMULATION } from './user-agent-override.js';
 
 export type { BrowserRequestCheck } from './request-guard.js';
 
@@ -48,26 +50,13 @@ export type RunContextOptions = {
    */
   readonly checkRequest?: RequestCheck;
   /**
-   * User-Agent du robot (`buildUserAgent`, tâche 1.11) : ajouté APRÈS celui du navigateur, qui reste tel qu'il est
-   * (aucun masquage, X2, 17 §5).
+   * User-Agent du robot de ce run (`buildUserAgent`, tâche 1.11, 17 §5) : la chaîne du moteur, avec le jeton si
+   * `identify_instance` est activé ; sans elle, la chaîne exacte du moteur de `browser.version()`. Posée par
+   * `installUserAgentOverride` avec les indices clients RÉELS du moteur (jamais l'option `userAgent` de Playwright, qui
+   * en déduirait de faux de la chaîne). Jamais une autre version ni un autre navigateur, aucune rotation.
    */
   readonly userAgent?: string;
 };
-
-/** User-Agent propre du navigateur (CDP `Browser.getVersion`) ; vide s'il est illisible. */
-async function ownUserAgent(browser: Browser): Promise<string> {
-  try {
-    const session = await browser.newBrowserCDPSession();
-    try {
-      const version = (await session.send('Browser.getVersion')) as { userAgent?: unknown };
-      return typeof version.userAgent === 'string' ? version.userAgent : '';
-    } finally {
-      await session.detach().catch(() => undefined);
-    }
-  } catch {
-    return '';
-  }
-}
 
 export type RunContext = {
   readonly context: BrowserContext;
@@ -118,13 +107,15 @@ export async function openRunContext(browser: Browser, options: RunContextOption
     if (violations.length < 100) violations.push(host);
     options.onViolation?.(host, request);
   };
-  const userAgent = options.userAgent === undefined ? undefined : browserUserAgent(await ownUserAgent(browser), options.userAgent);
+  const userAgent = options.userAgent ?? buildUserAgent({ engine: browserEngineIdentity(browser) });
+  // Indices clients réels du moteur (contexte vierge, une fois par navigateur), avant le contexte du run.
+  const metadata = await engineUserAgentMetadata(browser);
   // Posé avant le contexte : aucun SharedWorker de ce contexte ne peut naître avant lui (échec fermé s'il ne peut pas l'être).
   const sharedWorkers = await blockSharedWorkers(browser);
   let context: BrowserContext;
   try {
     context = await browser.newContext({
-      ...(userAgent === undefined ? {} : { userAgent }),
+      ...NO_MEDIA_EMULATION,
       proxy: { server: options.egressServer },
       serviceWorkers: 'block',
       acceptDownloads: false,
@@ -145,11 +136,15 @@ export async function openRunContext(browser: Browser, options: RunContextOption
   try {
     await context.route('**/*', async (route) => {
       const url = route.request().url();
-      let foreign = false;
+      let foreign: boolean;
       try {
         foreign = runPage !== undefined && route.request().frame().page() !== runPage;
       } catch {
-        // Requête sans cadre (service worker, bloqués) : traitée comme les autres.
+        // Requête sans cadre. Navigation : celle d'une fenêtre ouverte par la page (`window.open`, lien `target=_blank`),
+        // émise avant que Playwright ne connaisse son cadre ; elle partirait avec le User-Agent par défaut du moteur
+        // (`HeadlessChrome`, sans la surcharge de la page du run), elle est coupée comme toute requête d'une autre page.
+        // Sinon (service worker, bloqués) : traitée comme les autres.
+        foreign = runPage !== undefined && route.request().isNavigationRequest();
       }
       if (foreign) {
         await route.abort('blockedbyclient');
@@ -187,6 +182,8 @@ export async function openRunContext(browser: Browser, options: RunContextOption
     if (options.checkRequest !== undefined) await installPageGuard(context);
     const page = await context.newPage();
     runPage = page;
+    // User-Agent du moteur et indices clients réels, avant toute navigation (la page est encore à about:blank).
+    await installUserAgentOverride(context, page, userAgent, metadata);
     // La session du contrôle n'est jamais détachée avant la fermeture du contexte : détachée, elle laisserait repartir
     // les requêtes encore suspendues.
     if (options.checkRequest !== undefined) await installRequestGuard(context, page, (url) => hostAllowed(url, options.allowedHosts, options.allowedHostSuffixes), options.checkRequest);

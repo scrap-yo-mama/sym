@@ -2,7 +2,7 @@
 // `access_policy` (17 §4), identité du robot (17 §5), signaux d'accès et offre 402 (17 §2) : sans I/O.
 import { describe, expect, it } from 'vitest';
 import { AccessPolicyError, DEFAULT_ACCESS_POLICY, parseAccessPolicy } from './policy.js';
-import { browserUserAgent, buildUserAgent, InstanceContactError, normalizeInstanceContact, requireInstanceContact, resolveInstanceContact } from './identity.js';
+import { buildUserAgent, EngineUserAgentError, InstanceContactError, normalizeInstanceContact, requireInstanceContact, resolveIdentifyInstance, resolveInstanceContact, robotFrom } from './identity.js';
 import { detectAccessSignals, parsePaymentOffer, sanitizeSignalValue } from './signals.js';
 
 describe('access_policy : robots n’a qu’une valeur (INV11), champs réservés refusés en V1', () => {
@@ -30,12 +30,48 @@ describe('access_policy : robots n’a qu’une valeur (INV11), champs réservé
   });
 });
 
-describe('identité du robot : User-Agent avec le contact de l’instance', () => {
-  it('format Scrapyomama/<version> (+<contact>)', () => {
-    expect(buildUserAgent({ version: '1.0.0', contact: 'https://ops.zz-test.example/robot' })).toBe('Scrapyomama/1.0.0 (+https://ops.zz-test.example/robot)');
-    expect(buildUserAgent({ version: '1.0.0', contact: 'ops@zz-test.example' })).toBe('Scrapyomama/1.0.0 (+mailto:ops@zz-test.example)');
-    expect(buildUserAgent({ version: '1.0.0', contact: null })).toBe('Scrapyomama/1.0.0');
-    expect(buildUserAgent({ version: 'v1\r\nX: y', contact: null })).toBe('Scrapyomama/0.0.0');
+describe('identité du robot : User-Agent réel du moteur, identification de l’instance en option', () => {
+  const LINUX = { version: '153.0.8010.12', platform: 'linux' };
+
+  it('par défaut : la chaîne standard de Chromium (version majeure, plateforme réelle), sans HeadlessChrome ni jeton', () => {
+    expect(buildUserAgent({ engine: LINUX })).toBe('Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36');
+    expect(buildUserAgent({ engine: { version: '153.0.8010.12', platform: 'darwin' } })).toBe('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36');
+    expect(buildUserAgent({ engine: { version: '153.0.8010.12', platform: 'win32' } })).toBe('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36');
+    // Une autre version du moteur change la chaîne (elle ne dépend que de lui) ; la même version donne toujours la même.
+    expect(buildUserAgent({ engine: { version: '154.0.1.2', platform: 'linux' } })).toContain('Chrome/154.0.0.0');
+    expect(buildUserAgent({ engine: LINUX })).toBe(buildUserAgent({ engine: { ...LINUX } }));
+    expect(buildUserAgent({ engine: LINUX })).not.toMatch(/Headless|Scrapyomama/);
+  });
+
+  it('moteur illisible ou plateforme inconnue : refus net, jamais une chaîne inventée', () => {
+    expect(() => buildUserAgent({ engine: { version: 'abc', platform: 'linux' } })).toThrow(EngineUserAgentError);
+    expect(() => buildUserAgent({ engine: { version: '153.0.0.0', platform: 'plan9' } })).toThrow(EngineUserAgentError);
+  });
+
+  it('identify_instance : le jeton compatible; Scrapyomama/<version>; +<contact> suit la chaîne du moteur', () => {
+    const base = buildUserAgent({ engine: LINUX });
+    expect(buildUserAgent({ engine: LINUX, identify: { version: '1.0.0', contact: 'https://ops.zz-test.example/robot' } })).toBe(`${base} (compatible; Scrapyomama/1.0.0; +https://ops.zz-test.example/robot)`);
+    expect(buildUserAgent({ engine: LINUX, identify: { version: '1.0.0', contact: 'ops@zz-test.example' } })).toBe(`${base} (compatible; Scrapyomama/1.0.0; +mailto:ops@zz-test.example)`);
+    expect(buildUserAgent({ engine: LINUX, identify: { version: '1.0.0', contact: null } })).toBe(`${base} (compatible; Scrapyomama/1.0.0)`);
+    expect(buildUserAgent({ engine: LINUX, identify: { version: 'v1\r\nX: y', contact: null } })).toBe(`${base} (compatible; Scrapyomama/0.0.0)`);
+  });
+
+  it('From (RFC 9110) : seulement une adresse électronique ; un contact URL ne tient que dans le jeton', () => {
+    expect(robotFrom('ops@zz-test.example')).toBe('ops@zz-test.example');
+    expect(robotFrom('mailto:ops@zz-test.example')).toBe('ops@zz-test.example');
+    expect(robotFrom('https://ops.zz-test.example/robot')).toBeNull();
+    expect(robotFrom(null)).toBeNull();
+  });
+
+  it('identify_instance désactivé par défaut ; réglage admin prioritaire sur IDENTIFY_INSTANCE ; valeur inconnue : désactivé', () => {
+    expect(resolveIdentifyInstance(undefined, {})).toBe(false);
+    expect(resolveIdentifyInstance(undefined, { IDENTIFY_INSTANCE: 'true' })).toBe(true);
+    expect(resolveIdentifyInstance(undefined, { IDENTIFY_INSTANCE: 'oui' })).toBe(false);
+    expect(resolveIdentifyInstance(true, {})).toBe(true);
+    expect(resolveIdentifyInstance({ enabled: true }, {})).toBe(true);
+    expect(resolveIdentifyInstance(false, { IDENTIFY_INSTANCE: 'true' })).toBe(false);
+    expect(resolveIdentifyInstance({ enabled: false }, { IDENTIFY_INSTANCE: 'true' })).toBe(false);
+    expect(resolveIdentifyInstance('n’importe quoi', {})).toBe(false);
   });
 
   it('contact invalide refusé (injection d’en-tête, identifiants, schéma)', () => {
@@ -51,9 +87,6 @@ describe('identité du robot : User-Agent avec le contact de l’instance', () =
     expect(resolveInstanceContact({ contact: 'https://zz-test.example/c' }, { INSTANCE_CONTACT: 'ops@zz-test.example' })).toBe('https://zz-test.example/c');
   });
 
-  it('navigateur : son User-Agent tel qu’il est, suivi de celui du robot (aucun masquage)', () => {
-    expect(browserUserAgent('Mozilla/5.0 HeadlessChrome/140.0', 'Scrapyomama/1.0.0 (+mailto:a@zz-test.example)')).toBe('Mozilla/5.0 HeadlessChrome/140.0 Scrapyomama/1.0.0 (+mailto:a@zz-test.example)');
-  });
 });
 
 describe('signaux d’accès et offre 402 : des données bornées, jamais des consignes', () => {

@@ -3,7 +3,8 @@
 // ou deux runs : premier appel (étape 0, reconnaissance, schéma proposé ; s'arrête en `awaiting_schema_validation` sauf
 // `auto_validate`), puis, après `validate_schema`, les essais. Chaque run refait l'étape 0 (relue au plus toutes les
 // 24 h, cache de robots.txt) : la base refuse tout essai sans rapport d'accès favorable antérieur (0015).
-// 0. Rapport d'accès (1.11) : robots.txt sans option (INV11), signaux, 402 ; contact d'instance exigé (17 §5). Refus →
+// 0. Rapport d'accès (1.11) : robots.txt sans option (INV11), signaux, 402 ; contact d'instance exigé (17 §5) ; identité
+//    des runs (D-33) : User-Agent réel du moteur, jeton d'instance et `From` seulement avec `identify_instance`. Refus →
 //    `bloquee` / `action_requise` / `erreur` (transitions 2, 3, 4), aucune autre requête.
 // 1. Reconnaissance : une passe E3 sur N1 (Chromium : trafic XHR / fetch capturé et classé, document servi et rendu), ou,
 //    sans navigateur, la page et les URL de données que ses scripts en ligne appellent ; EN TUNNEL (page et URL de données
@@ -38,7 +39,6 @@ import {
   accessFactsForPrompt,
   accessReportEventPayload,
   buildAccessReport,
-  buildUserAgent,
   InstanceContactError,
   requireInstanceContact,
   ROBOTS_MAX_BYTES,
@@ -58,6 +58,7 @@ import {
   discoverScriptEndpoints,
   INVESTIGATION_DEFAULTS,
   INVESTIGATION_EVENTS as EV,
+  isActionUrl,
   narrativeUrl,
   rematchCandidates,
   retainedStrategy,
@@ -112,6 +113,7 @@ import { pino, type Logger } from 'pino';
 import type { BrowserPool } from '../browser/pool.js';
 import type { TunnelPort } from '../tunnel/client.js';
 import { runReconnaissancePass } from './browser-executors.js';
+import { robotIdentity } from './robot-identity.js';
 import type { StrategyRuntime, StrategyTrial } from './strategy-executor.js';
 import { pageFetchTransport, TunnelSession } from './tunnel-executor.js';
 import { hostWithinDomain } from '@runtime/core/tunnel';
@@ -139,6 +141,8 @@ export type InvestigationExecutorDeps = {
   readonly agentic?: boolean;
   readonly robotsCache?: RobotsCache;
   readonly instanceContact?: () => Promise<string | null>;
+  /** Réglage `identify_instance` (désactivé par défaut) : jeton d'instance et `From`, comme les runs (D-33, 17 §5). */
+  readonly identifyInstance?: () => Promise<boolean>;
   readonly version?: string;
   readonly logger?: Logger;
   readonly now?: () => number;
@@ -149,8 +153,6 @@ export type InvestigationExecutorDeps = {
 const round6 = (v: number): number => Math.round(v * 1e6) / 1e6;
 const BLOCKING = new Set<FailureClass>(['blocked_by_protection', 'forbidden', 'robots_disallowed']);
 const ACTION = new Set<FailureClass>(['auth_required', 'payment_required', 'account_limit']);
-/** Échecs qui ne disent rien du site (créneau de cadence, panne passagère) : le run échoue, l'enquête reste ouverte. */
-const RETRYABLE = new Set<FailureClass>(['rate_limited', 'transient']);
 /** Corps d'une page lue par la reconnaissance statique. */
 const STATIC_MAX_BYTES = 5_000_000;
 const STATIC_MAX_ENDPOINTS = 3;
@@ -232,22 +234,22 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
       return step;
     };
     /**
-     * Fin d'enquête en échec : statut visé par la classe (04 §6), phase close et récit fermé. Seul un échec passager
-     * (cadence, panne, LLM) laisse l'enquête ouverte ; un échec de configuration (réseau, contact, LLM absent) la mène à
-     * `erreur` (transition 2 : rien de conforme), d'où le bouton Ré-enquêter (16) la relance.
+     * Fin d'enquête en échec : statut visé par la classe (04 §6), TOUJOURS phase close et récit fermé. Refus et défis →
+     * `bloquee` (4), connexion, paiement, limite de compte → `action_requise` (3), robots.txt injoignable → `erreur` (2) ;
+     * toute autre classe (essais épuisés sans conforme quelle que soit la classe du dernier, 429, 5xx persistants, LLM
+     * sans repli, configuration) → `investigation_failed` : `erreur` (2), ou le statut d'avant une ré-enquête (21). Aucun
+     * worker ne relance une enquête : la laisser ouverte la figerait en `enquete` sans run actif (INV3). La relance est
+     * une ré-enquête (16-20), hors de 2.1.
      */
     const finishFailed = async (failure: ExecFailure, at: string): Promise<RunResult> => {
       const cls = failure.failure_class;
-      let statusEvent: StatusEventInput | null;
+      let statusEvent: StatusEventInput;
       if (BLOCKING.has(cls) || ACTION.has(cls)) statusEvent = { type: 'run_failed', failureClass: cls, ...(failure.status === undefined ? {} : { httpStatus: failure.status }) };
       else if (cls === 'robots_unreachable') statusEvent = { type: 'investigation_failed', cause: 'robots_unreachable' };
-      else if (RETRYABLE.has(cls) || cls.startsWith('llm_')) statusEvent = null;
       else statusEvent = { type: 'investigation_failed', cause: 'budget_exhausted' };
-      const closes = statusEvent !== null;
-      if (closes) await save('done');
-      else await save(phase);
+      await save('done');
       if (ACTION.has(cls)) await event(EV.actionRequired, { cause: cls, domain: host });
-      if (statusEvent !== null) await applyStatus(statusEvent);
+      await applyStatus(statusEvent);
       await event(EV.finished, { outcome: 'failed', failure_class: cls, detail: failure.detail, at, budget: budgetView() });
       return { state: 'failed', failure_class: cls, retryable: failure.retryable, error_detail: failure.detail };
     };
@@ -285,10 +287,17 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
     // Politique sans réseau serveur ni tunnel : un proxy requis manque (transition 3).
     if (!tunnelMode && first === undefined) return await finishStopped('proxy_not_configured', 'proxy_not_configured', 'setup');
     let userAgent: string;
+    let from: string | null;
     try {
-      // 17 §5 : le contact de l'instance est requis avant toute enquête.
+      // 17 §5 : le contact de l'instance est requis avant toute enquête, que l'identification soit activée ou non.
       const contact = requireInstanceContact((await deps.instanceContact?.()) ?? null);
-      userAgent = buildUserAgent({ version: deps.version ?? '0.0.0', contact });
+      // Identité des runs (D-33) : User-Agent réel du moteur, jeton d'instance et `From` seulement avec `identify_instance`.
+      ({ userAgent, from } = await robotIdentity({
+        ...(deps.version === undefined ? {} : { version: deps.version }),
+        instanceContact: async () => contact,
+        ...(deps.identifyInstance === undefined ? {} : { identifyInstance: deps.identifyInstance }),
+        warn: () => undefined,
+      })());
     } catch (error) {
       if (error instanceof InstanceContactError) return await finishFailed({ failure_class: 'code_error', retryable: false, detail: error.code }, 'setup');
       throw error;
@@ -354,6 +363,7 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
         ...(credentials === undefined ? {} : { credentials }),
         ...(deps.proxyResolver === undefined ? {} : { proxyResolver: deps.proxyResolver }),
         userAgent,
+        ...(from === null ? {} : { from }),
       };
       const robotsSession = openNetworkSession({ ...sessionBase, costCeiling: { maxUsd: ceiling } });
       const robots = new RobotsGate({
@@ -851,6 +861,7 @@ async function browserRecon(
  * Reconnaissance sans navigateur (`DISABLE_BROWSER`) ou par l'extension (session requise) : la page (corps borné, classée
  * avant lecture), ses blobs, puis au plus `STATIC_MAX_ENDPOINTS` URL de données appelées par ses scripts en ligne (domaines
  * de l'API), chacune cadencée, contrôlée par robots.txt et classée ; un refus sur l'une arrête la reconnaissance (INV6).
+ * En tunnel, les URL d'action (`isActionUrl` : déconnexion, suppression, désabonnement…) ne sont jamais rejouées.
  */
 async function staticRecon(
   probe: AccessProbe,
@@ -884,6 +895,9 @@ async function staticRecon(
   for (const url of discoverScriptEndpoints(html, page.exchange.url, STATIC_MAX_ENDPOINTS)) {
     // Domaines de l'API (et, en tunnel, du site connecté dans l'extension) seulement.
     if (!args.allowHost(new URL(url).hostname)) continue;
+    // En tunnel, la requête part avec les cookies de session de l'utilisateur : une URL d'action trouvée dans un script
+    // (`/logout`, `/unsubscribe`, `/cart/clear`, souvent dans un gestionnaire de clic) n'est jamais rejouée.
+    if (args.mode === 'tunnel' && isActionUrl(url)) continue;
     const decision = await args.robots.check(url);
     if (!decision.allowed) continue; // chemin interdit : 0 requête, la voie n'existe pas pour nous
     const res = await get(url);

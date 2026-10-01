@@ -8,7 +8,8 @@
 //
 // Élagage (04 §3.3) : `network` → on saute les couples restants du même N ; `extraction` → ceux du même E (pour la même
 // source de données : un autre gisement est une autre stratégie) ; toute autre classe garde le réseau courant (échelle
-// de 1.4 : seule `network` change de N, un 429 ralentit sur la même IP) ; `blocked_by_protection`, `forbidden`,
+// de 1.4 : seule `network` change de N, X4) ; un 429 arrête les essais (ralentir, jamais monter en E ni en N) ;
+// `blocked_by_protection`, `forbidden`,
 // `robots_disallowed` → arrêt ; `auth_required`, `payment_required`, `account_limit` → `action_requise`. Aucun élagage
 // n'ajoute un couple : l'ensemble essayable est fixé par le code (politique réseau de l'API, proxys de l'admin), jamais
 // élargi (pas de tunnel ni de proxy résidentiel après un refus, X3, X4).
@@ -102,7 +103,7 @@ export function orderTrials(pairs: readonly TrialPair[], sourceOrder: readonly s
 export type PruneDecision =
   /** Couple suivant (après élagage éventuel). */
   | { readonly next: 'continue'; readonly pruned: readonly TrialPair[] }
-  /** Refus ou défi : arrêt de toute escalade (INV6), statut `bloquee`. */
+  /** Refus ou défi (INV6, statut `bloquee`), 429, échec LLM sans repli : arrêt de toute escalade ; le statut suit la classe. */
   | { readonly next: 'stop'; readonly pruned: readonly TrialPair[] }
   /** La main revient à l'utilisateur (connexion, paiement, limite de compte) : `action_requise`. */
   | { readonly next: 'action_required'; readonly pruned: readonly TrialPair[] };
@@ -119,9 +120,13 @@ export function pruneAfter(cls: FailureClass, failed: TrialPair, remaining: read
   if (route.next === 'stop' && cls !== 'run_budget_exceeded' && cls !== 'budget_exceeded') return { next: 'stop', pruned: rest };
   if (route.next === 'action_required') return { next: 'action_required', pruned: rest };
   if (route.next === 'abstain') return { next: 'stop', pruned: rest };
+  // 429 (04 §7 « ralentir », X4) : ni un autre réseau, ni un niveau plus cher qui solliciterait davantage le même site.
+  // Les essais s'arrêtent là, comme la passe de reconnaissance (l'enquête se termine sans stratégie conforme).
+  if (route.next === 'slow_down') return { next: 'stop', pruned: rest };
   if (cls === 'network') return { next: 'continue', pruned: rest.filter((p) => p.network === failed.network) };
-  // Toute autre classe garde le réseau courant (échelle de 1.4 : seule `network` fait changer de N ; un 429 ralentit
-  // sur la même IP, X4) : les couples d'un autre N sont élagués.
+  // Toute autre classe garde le réseau courant (échelle de 1.4 et X4 : seule `network` fait changer de N) : les couples
+  // d'un autre N sont élagués. Écart à la lettre de 04 §3.3 (qui n'élague que le même E après `extraction`), à consigner
+  // au journal des décisions et à transcrire dans `escalade-par-defaut.md` (2.10).
   return {
     next: 'continue',
     pruned: rest.filter((p) => p.network !== failed.network || (cls === 'extraction' && p.execution === failed.execution && p.source === failed.source)),

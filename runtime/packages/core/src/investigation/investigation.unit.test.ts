@@ -54,8 +54,8 @@ describe('ordre d’essai et élagage', () => {
       expect(pruneAfter(cls, a, rest)).toEqual({ next: 'stop', pruned: rest });
     }
     for (const cls of ['auth_required', 'payment_required', 'account_limit'] as const) expect(pruneAfter(cls, a, rest).next).toBe('action_required');
-    // 429 : ralentir sur la même IP, jamais un autre réseau (X4).
-    expect(pruneAfter('rate_limited', a, rest).pruned.every((p) => p.network !== 'direct')).toBe(true);
+    // 429 : ralentir, jamais un autre réseau (X4) ni un niveau plus cher : arrêt des essais.
+    expect(pruneAfter('rate_limited', a, rest)).toEqual({ next: 'stop', pruned: rest });
   });
 });
 

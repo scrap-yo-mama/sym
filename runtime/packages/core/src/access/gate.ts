@@ -16,7 +16,7 @@ import { findDomainNotAllowed } from '../net/domain-lock.js';
 import { findSsrfBlocked } from '../net/guard.js';
 import type { NetworkSession } from '../net/modes/session.js';
 import type { AccessDecision, ExecFailure, RequestPacer } from '../exec/types.js';
-import { matchRules, parseRobots, PRODUCT_TOKEN, robotsTarget, selectGroup, type RobotsFile, type SelectedGroup } from './robots.js';
+import { matchGroup, parseRobots, PRODUCT_TOKEN, robotsTarget, selectGroup, type RobotsFile, type SelectedGroup } from './robots.js';
 
 /** Taille lue d'un robots.txt : 500 Kio (RFC 9309 : au moins 500 Kio ; le reste est ignoré). */
 export const ROBOTS_MAX_BYTES = 500 * 1024;
@@ -195,7 +195,7 @@ export class RobotsGate {
     if (state.kind === 'unreachable') return { allowed: false, failure: unreachable(state.detail), state, rule: null };
     if (state.kind === 'absent') return { allowed: true, crawlDelayMs: null, state, rule: null };
     const group = this.#selected(state) as SelectedGroup;
-    const verdict = matchRules(group.rules, robotsTarget(parsed));
+    const verdict = matchGroup(group, robotsTarget(parsed));
     if (!verdict.allowed) return { allowed: false, failure: ROBOTS_DISALLOWED, state, rule: verdict.rule };
     return { allowed: true, crawlDelayMs: crawlDelayOf(group), state, rule: verdict.rule };
   };

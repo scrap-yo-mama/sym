@@ -22,8 +22,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { installDomainGuard, installSemanticRecorder, type DomainGuard, type SemanticRecorder } from '@runtime/agent';
 import type { RequestPacer } from '@runtime/core/exec';
+import { buildUserAgent } from '@runtime/core/access';
 import { chromiumEgressLaunchOptions } from '@runtime/core/net';
 import { chromium, type Browser, type BrowserContext, type Page } from 'playwright-core';
+import { installedEngineIdentity } from './engine-identity.js';
 import { assertNotRoot, chromiumEnv, CHROMIUM_SILENT_ARGS } from './launch.js';
 
 export type AgentBrowserOptions = {
@@ -38,6 +40,11 @@ export type AgentBrowserOptions = {
   /** Exécutable Chromium (défaut : celui de Playwright). */
   readonly executablePath?: string;
   readonly launchTimeoutMs?: number;
+  /**
+   * User-Agent du robot de l'essai (`buildUserAgent`, 1.11, 17 §5), posé au lancement par `--user-agent` : la chaîne
+   * du moteur, avec le jeton si `identify_instance` est activé. Défaut : la chaîne exacte du Chromium installé.
+   */
+  readonly userAgent?: string;
 };
 
 export type AgentBrowser = {
@@ -105,7 +112,7 @@ function agentPageGuardScript(allowedHosts: readonly string[]): string {
 }
 
 /** Arguments figés du Chromium agentique (aucune entrée de stratégie, de prompt ni de membre). */
-function agentChromiumArgs(egressServer: string, profileDir: string, env: Readonly<Record<string, string | undefined>> = process.env): string[] {
+function agentChromiumArgs(egressServer: string, profileDir: string, userAgent: string, env: Readonly<Record<string, string | undefined>> = process.env): string[] {
   const egress = chromiumEgressLaunchOptions(egressServer, env);
   return [
     ...egress.args,
@@ -114,6 +121,7 @@ function agentChromiumArgs(egressServer: string, profileDir: string, env: Readon
     '--proxy-bypass-list=<-loopback>',
     ...CHROMIUM_SILENT_ARGS,
     '--headless=new',
+    `--user-agent=${userAgent}`,
     '--remote-debugging-address=127.0.0.1',
     '--remote-debugging-port=0',
     `--user-data-dir=${profileDir}`,
@@ -126,7 +134,7 @@ export async function launchAgentBrowser(options: AgentBrowserOptions): Promise<
   assertNotRoot();
   const env = options.env ?? process.env;
   const profile = await mkdtemp(join(tmpdir(), 'zz_agent_chromium_'));
-  const child = spawn(options.executablePath ?? chromium.executablePath(), agentChromiumArgs(options.egressServer, profile, env), {
+  const child = spawn(options.executablePath ?? chromium.executablePath(), agentChromiumArgs(options.egressServer, profile, options.userAgent ?? buildUserAgent({ engine: installedEngineIdentity() }), env), {
     stdio: 'ignore',
     env: chromiumEnv(env),
   });

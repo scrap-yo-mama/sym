@@ -3,6 +3,9 @@
 // (forme, types, tailles) avant d'agir ; un message invalide tue l'enfant (`sandbox_violation`, raison `protocol`).
 import type { SandboxEngineId, SandboxLimits } from '@runtime/core';
 
+/** Signal par lequel l'enfant s'arrête de lui-même sur dépassement de sortie : l'hôte le lit comme `output_limit`. */
+export const SIGNAL_OUTPUT_LIMIT = 'SIGUSR2';
+
 export type RunMessage = {
   t: 'run';
   engine: SandboxEngineId;
