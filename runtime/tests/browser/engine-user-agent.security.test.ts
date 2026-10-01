@@ -6,11 +6,16 @@
 //   (jamais une constante), sans `HeadlessChrome`, identique d'un run à l'autre ; E1 envoie aussi `Accept` et
 //   `Accept-Language` d'un navigateur ;
 // - `identify_instance` activé : le jeton `compatible; Scrapyomama/<version>; +<contact>` et `From` (adresse électronique) ;
-// - aucun masquage : `navigator.webdriver` reste vrai dans la page, et les commandes CDP réellement envoyées (journal
-//   `pw:protocol` de Playwright) ne contiennent aucun override interdit : seul `Emulation.setUserAgentOverride` avec la
-//   chaîne exacte du moteur (ou vide) est admis, plus les appels propres à Playwright (fenêtre, focus, médias).
+// - aucun masquage : `navigator.webdriver` reste vrai dans la page ; les indices clients (`navigator.userAgentData`,
+//   `Sec-CH-UA-*`) d'un contexte de run, cadre principal ET cadre hors processus, sont ceux d'un contexte vierge du même
+//   navigateur (architecture, plateforme et sa version, marques, versions complètes : rien n'est déduit de la chaîne) ;
+// - les commandes CDP réellement envoyées (journal `pw:protocol` de Playwright) ne sortent pas de la liste fermée de
+//   17 §11 (`setDeviceMetricsOverride` avec `mobile: false`, `setFocusEmulationEnabled`, `setUserAgentOverride` avec
+//   la chaîne exacte du moteur et un `userAgentMetadata` égal, champ par champ, aux valeurs réelles du moteur), plus
+//   `setEmulatedMedia` sans valeur émulée ou avec les seules valeurs du moteur (D-39).
 // Le volet statique (liste noire, code source) est dans tests/no-fingerprint-spoofing.unit.test.ts.
 import { createServer, type IncomingHttpHeaders, type Server } from 'node:http';
+import { chromium, type Frame } from 'playwright-core';
 import { afterAll, beforeAll, describe, expect, test, vi } from 'vitest';
 
 // Journal des commandes CDP : le `debug` de Playwright lit DEBUG au chargement du paquet, avant tout import.
@@ -19,6 +24,7 @@ vi.hoisted(() => {
 });
 
 import { BrowserPool, playwrightLauncher } from '../../apps/worker/src/browser/pool.ts';
+import { chromiumLaunchOptions } from '../../apps/worker/src/browser/launch.ts';
 import { launchAgentBrowser } from '../../apps/worker/src/browser/agent-browser.ts';
 import { openRunContext } from '../../apps/worker/src/browser/run-context.ts';
 import { robotIdentity, type RobotIdentity } from '../../apps/worker/src/exec/robot-identity.ts';
@@ -27,6 +33,14 @@ import { openBrowserEgress, openNetworkSession, startEgressProxy, type BrowserEg
 import { fixtureGuard } from '../helpers/fixture-net.ts';
 
 const HOST = 'zz_test_ua.localhost';
+/** Second site (cadre hors processus : isolation des sites de Chromium). */
+const HOST2 = 'zz_test_ub.localhost';
+/** Médias jamais émulés : `Emulation.setEmulatedMedia` de Playwright ne porte alors aucune valeur (D-39). */
+const NO_MEDIA_EMULATION = { colorScheme: null, reducedMotion: null, forcedColors: null, contrast: null } as const;
+/** Indices clients à haute entropie demandés au moteur (tous ceux de Chromium 153). */
+const HIGH_ENTROPY = ['architecture', 'bitness', 'formFactors', 'fullVersionList', 'model', 'platformVersion', 'uaFullVersion', 'wow64'];
+/** En-têtes d'indices clients demandés par la fixture (`Accept-CH`) et comparés au contexte vierge. */
+const CH_HEADERS = ['sec-ch-ua', 'sec-ch-ua-mobile', 'sec-ch-ua-platform', 'sec-ch-ua-arch', 'sec-ch-ua-bitness', 'sec-ch-ua-model', 'sec-ch-ua-platform-version', 'sec-ch-ua-full-version-list', 'sec-ch-ua-wow64'];
 const signal = new AbortController().signal;
 
 type Seen = { path: string; headers: IncomingHttpHeaders };
@@ -38,7 +52,7 @@ let launchProxy: EgressProxy;
 let pool: BrowserPool;
 /** `browser.version()` du Chromium du pool (lu, jamais écrit en dur). */
 let browserVersion = '';
-const base = (path = '/'): string => `http://${HOST}:${port}${path}`;
+const base = (path = '/', host = HOST): string => `http://${host}:${port}${path}`;
 const uas = (path?: string): string[] => seen.filter((s) => path === undefined || s.path === path).map((s) => String(s.headers['user-agent'] ?? ''));
 
 // ------------------------------------------------------------------------------------------- journal CDP (pw:protocol)
@@ -88,11 +102,16 @@ beforeAll(async () => {
     seen.push({ path: (req.url ?? '/').split('?')[0] ?? '/', headers: req.headers });
     if (req.url === '/robots.txt') return void res.writeHead(200, { 'content-type': 'text/plain' }).end('User-agent: *\nDisallow:\n');
     if (req.url === '/api') return void res.writeHead(200, { 'content-type': 'application/json' }).end('{"items":[]}');
-    res.writeHead(200, { 'content-type': 'text/html' }).end('<!doctype html><html><body>ok<script>fetch("/sub").catch(() => {})</script></body></html>');
+    // Sauts de redirection : même origine, puis autre origine (autre hôte) ; `From` ne suit que le premier (17 §5).
+    if (req.url === '/hop-same') return void res.writeHead(302, { location: '/api' }).end();
+    if (req.url === '/hop-cross') return void res.writeHead(302, { location: base('/api', HOST2) }).end();
+    if (req.url === '/frame') return void res.writeHead(200, { 'content-type': 'text/html' }).end(`<!doctype html><html><body><iframe src="${base('/inner', HOST2)}"></iframe></body></html>`);
+    if (req.url === '/inner') return void res.writeHead(200, { 'content-type': 'text/html' }).end('<!doctype html><html><body>inner</body></html>');
+    res.writeHead(200, { 'content-type': 'text/html', 'accept-ch': CH_HEADERS.filter((h) => h !== 'sec-ch-ua' && h !== 'sec-ch-ua-mobile' && h !== 'sec-ch-ua-platform').join(', ') }).end('<!doctype html><html><body>ok<script>fetch("/sub").catch(() => {})</script></body></html>');
   });
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
   port = (server.address() as { port: number }).port;
-  guard = fixtureGuard(port, [HOST], net);
+  guard = fixtureGuard(port, [HOST, HOST2], net);
   launchProxy = await startEgressProxy({ guard, refuseAll: true });
   pool = new BrowserPool({ size: 1, launch: playwrightLauncher(launchProxy.url, process.env), recycleAfterRuns: 100 });
   browserVersion = await pool.run(signal, async (browser) => browser.version());
@@ -138,10 +157,73 @@ async function visitWithRunContext(userAgent: string | undefined): Promise<{ nav
   );
 }
 
+type Hints = Record<string, unknown>;
+/** Indices clients d'un cadre : marques, mobile, plateforme et toutes les valeurs à haute entropie. */
+function hintsOf(frame: Frame): Promise<Hints> {
+  return frame.evaluate(async (names) => {
+    const data = (navigator as unknown as { userAgentData?: { brands: unknown; mobile: unknown; platform: unknown; getHighEntropyValues(n: string[]): Promise<Record<string, unknown>> } }).userAgentData;
+    if (data === undefined) return { missing: true };
+    return { brands: data.brands, mobile: data.mobile, platform: data.platform, ...(await data.getHighEntropyValues(names)) };
+  }, HIGH_ENTROPY);
+}
+const chHeaders = (headers: IncomingHttpHeaders): Record<string, unknown> => Object.fromEntries(CH_HEADERS.map((h) => [h, headers[h]]));
+
+/** Valeurs réelles du moteur : contexte vierge (aucun User-Agent, aucune émulation de médias) du même navigateur. */
+let real: { hints: Hints; frameHints: Hints; media: Record<string, string>; sub: Record<string, unknown> } | undefined;
+async function realEngineHints(): Promise<NonNullable<typeof real>> {
+  if (real !== undefined) return real;
+  seen = [];
+  const out = await pool.run(signal, (browser) =>
+    withEgress(async (egress) => {
+      const context = await browser.newContext({ proxy: { server: egress.server }, serviceWorkers: 'block', ...NO_MEDIA_EMULATION });
+      try {
+        const page = await context.newPage();
+        await page.goto(base('/'), { waitUntil: 'load' });
+        await page.waitForResponse((r) => r.url().endsWith('/sub')).catch(() => undefined);
+        const hints = await hintsOf(page.mainFrame());
+        // Préférences de médias du moteur, sans émulation (valeurs que `setEmulatedMedia` aurait le droit de reprendre).
+        const media = await page.evaluate(() => {
+          const first = (feature: string, values: string[], fallback: string): string => values.find((v) => (globalThis as unknown as { matchMedia(query: string): { matches: boolean } }).matchMedia(`(${feature}: ${v})`).matches) ?? fallback;
+          return {
+            'prefers-color-scheme': first('prefers-color-scheme', ['dark', 'light'], ''),
+            'prefers-reduced-motion': first('prefers-reduced-motion', ['reduce', 'no-preference'], ''),
+            'forced-colors': first('forced-colors', ['active', 'none'], ''),
+            'prefers-contrast': first('prefers-contrast', ['more', 'less', 'custom', 'no-preference'], ''),
+          };
+        });
+        await page.goto(base('/frame'), { waitUntil: 'load' });
+        const inner = page.frames().find((f) => f.url().endsWith('/inner'));
+        if (inner === undefined) throw new Error('cadre /inner absent');
+        return { hints, frameHints: await hintsOf(inner), media };
+      } finally {
+        await context.close();
+      }
+    }),
+  );
+  const sub = seen.find((s) => s.path === '/sub');
+  if (sub === undefined) throw new Error('sous-ressource /sub absente');
+  real = { ...out, sub: chHeaders(sub.headers) };
+  return real;
+}
+/** `userAgentMetadata` CDP attendu : les valeurs réelles du moteur, champ par champ. */
+const expectedMetadata = (h: Hints): Record<string, unknown> => ({
+  brands: h['brands'],
+  fullVersionList: h['fullVersionList'],
+  fullVersion: h['uaFullVersion'],
+  platform: h['platform'],
+  platformVersion: h['platformVersion'],
+  architecture: h['architecture'],
+  model: h['model'],
+  mobile: h['mobile'],
+  bitness: h['bitness'],
+  wow64: h['wow64'],
+  ...(Array.isArray(h['formFactors']) ? { formFactors: h['formFactors'] } : {}),
+});
+
 describe('assert_user_agent_engine_real : le User-Agent est celui du moteur embarqué, sans HeadlessChrome', () => {
   test('la valeur attendue est celle du vrai moteur : un contexte sans aucun réglage annonce la même chaîne, à HeadlessChrome et à la version complète près', async () => {
     const raw = await pool.run(signal, async (browser) => {
-      const context = await browser.newContext();
+      const context = await browser.newContext(NO_MEDIA_EMULATION);
       try {
         const page = await context.newPage();
         return await page.evaluate(() => navigator.userAgent);
@@ -187,6 +269,34 @@ describe('assert_user_agent_engine_real : le User-Agent est celui du moteur emba
     expect(page.navigator).toBe(expectedUserAgent(browserVersion));
     expect(uas('/')).toEqual([expectedUserAgent(browserVersion)]);
     expect(uas('/sub')).toEqual([expectedUserAgent(browserVersion)]);
+  });
+
+  test('fenêtre ouverte par la page (window.open, lien target=_blank) : aucune requête ne part avec une autre chaîne que celle du moteur', async () => {
+    seen = [];
+    await pool.run(signal, (browser) =>
+      withEgress(async (egress) => {
+        const rc = await openRunContext(browser, { egressServer: egress.server, allowedHosts: [HOST] });
+        try {
+          await rc.page.goto(base('/'), { waitUntil: 'load' });
+          await rc.page.evaluate((url) => {
+            type Link = { href: string; target: string; click(): void };
+            const w = globalThis as unknown as { open(url: string): unknown; document: { createElement(tag: 'a'): Link; body: { append(node: Link): void } } };
+            w.open(url + '?w');
+            const a = w.document.createElement('a');
+            a.href = url + '?a';
+            a.target = '_blank';
+            w.document.body.append(a);
+            a.click();
+          }, base('/popup'));
+          await new Promise((resolve) => setTimeout(resolve, 1500));
+        } finally {
+          await rc.close();
+        }
+      }),
+    );
+    expect(uas('/').length).toBeGreaterThan(0);
+    expect(uas('/popup')).toEqual([]);
+    expect([...new Set(uas())]).toEqual([expectedUserAgent(browserVersion)]);
   });
 
   test('contexte ouvert sans User-Agent fourni (défaut de E4/E5) : la chaîne exacte du moteur, jamais HeadlessChrome', async () => {
@@ -245,6 +355,20 @@ describe('assert_user_agent_engine_real : le User-Agent est celui du moteur emba
     const e1 = seen.filter((s) => s.path === '/api');
     expect(e1.map((s) => s.headers['user-agent'])).toEqual([expected]);
     expect(e1.map((s) => s.headers['from'])).toEqual(['ops@zz-test.example']);
+    // Sauts (17 §5) : le jeton suit chaque saut ; `From` suit un saut de même origine, pas un saut vers une autre origine.
+    seen = [];
+    const hops = openNetworkSession({ rung: { mode: 'direct' }, guard, userAgent: identity.userAgent, ...(identity.from === null ? {} : { from: identity.from }) });
+    try {
+      await hops.fetch(base('/hop-same'));
+      await hops.fetch(base('/hop-cross'));
+    } finally {
+      await hops.close();
+    }
+    const landed = seen.filter((s) => s.path === '/api').map((s) => ({ host: String(s.headers['host']).split(':')[0], ua: s.headers['user-agent'], from: s.headers['from'] }));
+    expect(landed).toEqual([
+      { host: HOST, ua: expected, from: 'ops@zz-test.example' },
+      { host: HOST2, ua: expected, from: undefined },
+    ]);
     seen = [];
     const page = await visitWithRunContext(identity.userAgent);
     expect(page.navigator).toBe(expected);
@@ -274,7 +398,65 @@ describe('assert_no_fingerprint_spoofing : navigator.webdriver intact, aucun ove
     expect(agent).toBe(true);
   }, 60_000);
 
-  test('commandes CDP envoyées (journal pw:protocol, tous les scénarios ci-dessus) : aucun override interdit', () => {
+  test('indices clients réels : contexte de run (chaîne du moteur, puis avec le jeton) = contexte vierge, cadre principal et cadre d’un autre site, dans le processus ou hors processus', async () => {
+    const reference = await realEngineHints();
+    expect(reference.hints['missing']).toBeUndefined();
+    expect(reference.hints['platformVersion']).toEqual(expect.any(String));
+    const identified = (await identityOf({ identify: true })).userAgent;
+    // Isolation des sites forcée (`--site-per-process`) : le cadre de l'autre site a sa propre cible CDP. Sans elle
+    // (défaut du Chromium headless de Playwright), il partage le processus de la page.
+    const isolated = new BrowserPool({
+      size: 1,
+      recycleAfterRuns: 100,
+      launch: async () => {
+        const options = chromiumLaunchOptions(launchProxy.url, process.env);
+        const server = await chromium.launchServer({ ...options, args: [...options.args, '--site-per-process'], proxy: { ...options.proxy } });
+        const browser = await chromium.connect(server.wsEndpoint());
+        return { browser, close: async () => (await browser.close().catch(() => undefined), await server.close()), kill: () => server.kill() };
+      },
+    });
+    try {
+      for (const [lender, outOfProcess] of [[pool, false], [isolated, true]] as const) {
+        for (const userAgent of [undefined, identified]) {
+          seen = [];
+          const got = await lender.run(signal, (browser) =>
+            withEgress(async (egress) => {
+              const rc = await openRunContext(browser, { egressServer: egress.server, allowedHosts: [HOST, HOST2], ...(userAgent === undefined ? {} : { userAgent }) });
+              try {
+                await rc.page.goto(base('/'), { waitUntil: 'load' });
+                await rc.page.waitForResponse((r) => r.url().endsWith('/sub')).catch(() => undefined);
+                const hints = await hintsOf(rc.page.mainFrame());
+                await rc.page.goto(base('/frame'), { waitUntil: 'load' });
+                const inner = rc.page.frames().find((f) => f.url().endsWith('/inner'));
+                if (inner === undefined) throw new Error('cadre /inner absent');
+                // Le cadre d'un autre site est bien hors processus : il a sa propre cible CDP.
+                const oopif = await rc.context.newCDPSession(inner).then(
+                  async (s) => (await s.detach().catch(() => undefined), true),
+                  () => false,
+                );
+                return { hints, frameHints: await hintsOf(inner), frameUa: await inner.evaluate(() => navigator.userAgent), oopif };
+              } finally {
+                await rc.close();
+              }
+            }),
+          );
+          const ua = userAgent ?? expectedUserAgent(browserVersion);
+          expect(got.oopif).toBe(outOfProcess);
+          expect(got.hints).toEqual(reference.hints);
+          expect(got.frameHints).toEqual(reference.frameHints);
+          expect(got.frameUa).toBe(ua);
+          expect(uas('/inner')).toEqual([ua]);
+          const sub = seen.find((s) => s.path === '/sub');
+          expect(sub && chHeaders(sub.headers)).toEqual(reference.sub);
+          expect(sub?.headers['user-agent']).toBe(ua);
+        }
+      }
+    } finally {
+      await isolated.close();
+    }
+  }, 120_000);
+
+  test('commandes CDP envoyées (journal pw:protocol, tous les scénarios ci-dessus) : aucun override interdit', async () => {
     // Le journal doit exister : sans lui, le test serait creux.
     expect(sent.length).toBeGreaterThan(50);
     expect(sent.some((m) => m.method === 'Emulation.setUserAgentOverride')).toBe(true);
@@ -291,24 +473,40 @@ describe('assert_no_fingerprint_spoofing : navigator.webdriver intact, aucun ove
     ]) {
       expect(methods.has(forbidden), forbidden).toBe(false);
     }
-    // Domaine Emulation : seuls les appels propres à Playwright (fenêtre, focus, médias) et le User-Agent exact du moteur.
-    const TOLERATED = new Set(['Emulation.setFocusEmulationEnabled', 'Emulation.setDeviceMetricsOverride', 'Emulation.setEmulatedMedia', 'Emulation.setUserAgentOverride', 'Emulation.setDefaultBackgroundColorOverride']);
+    // Domaine Emulation : liste fermée de 17 §11, plus `setEmulatedMedia` sans valeur émulée (D-39). Tout autre appel échoue.
+    const TOLERATED = new Set(['Emulation.setFocusEmulationEnabled', 'Emulation.setDeviceMetricsOverride', 'Emulation.setUserAgentOverride', 'Emulation.setEmulatedMedia']);
     expect([...methods].filter((m) => m.startsWith('Emulation.') && !TOLERATED.has(m))).toEqual([]);
-    // User-Agent : vide (aucun override) ou la chaîne exacte du moteur, avec ou sans le jeton de l'instance ; ni langue
-    // ni indices clients inventés (`userAgentMetadata` ne porte ni marques ni versions complètes, seulement ce que
-    // Playwright déduit lui-même de la chaîne).
+    const metrics = sent.filter((m) => m.method === 'Emulation.setDeviceMetricsOverride');
+    expect(metrics.length).toBeGreaterThan(0);
+    for (const message of metrics) expect(message.params?.['mobile'], JSON.stringify(message.params)).toBe(false);
+    // Médias (D-39) : aucun type de média émulé ; chaque préférence vide (aucune émulation : contextes de run) ou égale à
+    // celle du moteur constatée sans émulation (contexte par défaut du Chromium agentique, où Playwright reprend ses
+    // défauts). Jamais une valeur que le moteur n'a pas.
+    const media = (await realEngineHints()).media;
+    expect(Object.values(media).every((v) => v !== '')).toBe(true);
+    for (const message of sent.filter((m) => m.method === 'Emulation.setEmulatedMedia')) {
+      expect(message.params?.['media'] ?? '', JSON.stringify(message.params)).toBe('');
+      for (const feature of (message.params?.['features'] ?? []) as { name?: unknown; value?: unknown }[]) {
+        expect(['', media[String(feature.name)]], JSON.stringify(message.params)).toContain(feature.value ?? '');
+      }
+    }
+    // User-Agent : vide (aucun override) ou la chaîne exacte du moteur, avec ou sans le jeton de l'instance ; ni langue,
+    // ni plateforme, ni indices clients autres que les valeurs RÉELLES du moteur, comparées champ par champ à celles d'un
+    // contexte vierge du même navigateur (architecture, plateforme et sa version, modèle, marques, versions complètes).
     const exact = expectedUserAgent(browserVersion);
-    for (const message of sent.filter((m) => m.method === 'Emulation.setUserAgentOverride')) {
+    const metadataReal = expectedMetadata((await realEngineHints()).hints);
+    const overrides = sent.filter((m) => m.method === 'Emulation.setUserAgentOverride');
+    expect(overrides.some((m) => String(m.params?.['userAgent'] ?? '') !== '')).toBe(true);
+    for (const message of overrides) {
       const params = message.params ?? {};
       const ua = String(params['userAgent']);
       expect(ua === '' || ua === exact || ua.startsWith(`${exact} (compatible; Scrapyomama/`), ua).toBe(true);
       expect(ua).not.toContain('HeadlessChrome');
       expect(params['acceptLanguage']).toBeUndefined();
+      expect(params['platform']).toBeUndefined();
       const metadata = params['userAgentMetadata'] as Record<string, unknown> | undefined;
-      if (metadata !== undefined) {
-        expect(Object.keys(metadata).sort()).toEqual(['architecture', 'mobile', 'model', 'platform', 'platformVersion']);
-        expect(metadata['mobile']).toBe(false);
-      }
+      if (ua === '') expect(metadata).toBeUndefined();
+      else expect(metadata, ua).toEqual(metadataReal);
     }
     // Aucun script injecté ne touche webdriver, le matériel ou les propriétés de navigator.
     for (const message of sent.filter((m) => m.method === 'Page.addScriptToEvaluateOnNewDocument')) {

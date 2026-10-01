@@ -49,7 +49,7 @@ export type RequestCheck = (request: BrowserRequestCheck) => Promise<boolean>;
 type Listener = (params: Record<string, unknown>) => void;
 
 /** Canal CDP : la session de la page (Playwright) ou une cible enfant jointe à travers sa session parente. */
-type Channel = {
+export type Channel = {
   send(method: string, params?: Record<string, unknown>): Promise<Record<string, unknown>>;
   on(event: string, listener: Listener): void;
 };
@@ -58,7 +58,7 @@ type Channel = {
 const MAX_ROOTS = 2000;
 
 /** Canal de la session Playwright. */
-function sessionChannel(session: CDPSession): Channel {
+export function sessionChannel(session: CDPSession): Channel {
   const raw = session as unknown as {
     send(method: string, params?: Record<string, unknown>): Promise<Record<string, unknown>>;
     on(event: string, listener: Listener): void;
@@ -67,7 +67,7 @@ function sessionChannel(session: CDPSession): Channel {
 }
 
 /** Cibles enfants d'un canal, en mode non aplati : réponses et événements arrivent par `Target.receivedMessageFromTarget`. */
-function childChannels(parent: Channel): (sessionId: string) => Channel {
+export function childChannels(parent: Channel): (sessionId: string) => Channel {
   const children = new Map<string, { dispatch(message: Record<string, unknown>): void; close(): void }>();
   parent.on('Target.receivedMessageFromTarget', (params) => {
     const child = children.get(String(params['sessionId']));

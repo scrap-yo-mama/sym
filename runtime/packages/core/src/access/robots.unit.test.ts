@@ -92,10 +92,24 @@ describe('robots.txt (RFC 9309) : analyse et correspondance', () => {
     expect(allows('User-agent: *\nDisallow: /\n', '/robots.txt')).toBe(true);
   });
 
-  it('Crawl-delay du groupe retenu (le plus grand) ; valeur illisible ignorée', () => {
+  it('Crawl-delay : le plus grand des groupes du jeton ET de `*` (le plus strict gagne) ; valeur illisible ignorée', () => {
     const file = parseRobots('User-agent: *\nCrawl-delay: 5\nAllow: /\nUser-agent: Scrapyomama\nCrawl-delay: abc\nCrawl-delay: 2.5\n');
-    expect(selectGroup(file).crawlDelaySeconds).toBe(2.5);
+    expect(selectGroup(file).crawlDelaySeconds).toBe(5);
     expect(selectGroup(file, 'other').crawlDelaySeconds).toBe(5);
+    // Crawl-delay dans le seul groupe `*` : plancher de cadence appliqué même si un groupe du jeton existe (17 §2, §5).
+    expect(selectGroup(parseRobots('User-agent: *\nCrawl-delay: 10\nAllow: /\n\nUser-agent: Scrapyomama\nDisallow: /prive\n')).crawlDelaySeconds).toBe(10);
+    expect(selectGroup(parseRobots('User-agent: *\nAllow: /\n\nUser-agent: Scrapyomama\nCrawl-delay: 3\n')).crawlDelaySeconds).toBe(3);
+  });
+
+  it('signaux d’accès des groupes du jeton ET de `*`, sans doublon quand un groupe porte les deux', () => {
+    const file = parseRobots('User-agent: *\nContent-Signal: ai-train=no\nDisallow: /a\n\nUser-agent: Scrapyomama\nContent-Signal: search=yes\nDisallow: /b\n');
+    expect(selectGroup(file).signals).toEqual([
+      { key: 'content-signal', value: 'search=yes' },
+      { key: 'content-signal', value: 'ai-train=no' },
+    ]);
+    const shared = parseRobots('User-agent: Scrapyomama\nUser-agent: *\nContent-Signal: ai-train=no\nCrawl-delay: 4\nDisallow: /x\n');
+    expect(selectGroup(shared).signals).toEqual([{ key: 'content-signal', value: 'ai-train=no' }]);
+    expect(selectGroup(shared).crawlDelaySeconds).toBe(4);
   });
 
   it('Sitemap et signaux (Content-Signal, Content-Usage) relevés comme données', () => {

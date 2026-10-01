@@ -26,6 +26,7 @@ import type { APIRequest, APIRequestContext, Browser, BrowserContext, Page, Requ
 import { browserEngineIdentity } from './engine-identity.js';
 import { installPageGuard } from './page-guard.js';
 import { blockSharedWorkers, installRequestGuard, type RequestCheck } from './request-guard.js';
+import { engineUserAgentMetadata, installUserAgentOverride, NO_MEDIA_EMULATION } from './user-agent-override.js';
 
 export type { BrowserRequestCheck } from './request-guard.js';
 
@@ -48,8 +49,9 @@ export type RunContextOptions = {
   readonly checkRequest?: RequestCheck;
   /**
    * User-Agent du robot de ce run (`buildUserAgent`, tâche 1.11, 17 §5) : la chaîne du moteur, avec le jeton si
-   * `identify_instance` est activé. Seule valeur posée sur le contexte (option `userAgent` de Playwright) ; sans elle,
-   * la chaîne exacte du moteur de `browser.version()`. Jamais une autre version ni un autre navigateur, aucune rotation.
+   * `identify_instance` est activé ; sans elle, la chaîne exacte du moteur de `browser.version()`. Posée par
+   * `installUserAgentOverride` avec les indices clients RÉELS du moteur (jamais l'option `userAgent` de Playwright, qui
+   * en déduirait de faux de la chaîne). Jamais une autre version ni un autre navigateur, aucune rotation.
    */
   readonly userAgent?: string;
 };
@@ -101,12 +103,14 @@ export async function openRunContext(browser: Browser, options: RunContextOption
     options.onViolation?.(host, request);
   };
   const userAgent = options.userAgent ?? buildUserAgent({ engine: browserEngineIdentity(browser) });
+  // Indices clients réels du moteur (contexte vierge, une fois par navigateur), avant le contexte du run.
+  const metadata = await engineUserAgentMetadata(browser);
   // Posé avant le contexte : aucun SharedWorker de ce contexte ne peut naître avant lui (échec fermé s'il ne peut pas l'être).
   const sharedWorkers = await blockSharedWorkers(browser);
   let context: BrowserContext;
   try {
     context = await browser.newContext({
-      userAgent,
+      ...NO_MEDIA_EMULATION,
       proxy: { server: options.egressServer },
       serviceWorkers: 'block',
       acceptDownloads: false,
@@ -127,11 +131,15 @@ export async function openRunContext(browser: Browser, options: RunContextOption
   try {
     await context.route('**/*', async (route) => {
       const url = route.request().url();
-      let foreign = false;
+      let foreign: boolean;
       try {
         foreign = runPage !== undefined && route.request().frame().page() !== runPage;
       } catch {
-        // Requête sans cadre (service worker, bloqués) : traitée comme les autres.
+        // Requête sans cadre. Navigation : celle d'une fenêtre ouverte par la page (`window.open`, lien `target=_blank`),
+        // émise avant que Playwright ne connaisse son cadre ; elle partirait avec le User-Agent par défaut du moteur
+        // (`HeadlessChrome`, sans la surcharge de la page du run), elle est coupée comme toute requête d'une autre page.
+        // Sinon (service worker, bloqués) : traitée comme les autres.
+        foreign = runPage !== undefined && route.request().isNavigationRequest();
       }
       if (foreign) {
         await route.abort('blockedbyclient');
@@ -169,6 +177,8 @@ export async function openRunContext(browser: Browser, options: RunContextOption
     if (options.checkRequest !== undefined) await installPageGuard(context);
     const page = await context.newPage();
     runPage = page;
+    // User-Agent du moteur et indices clients réels, avant toute navigation (la page est encore à about:blank).
+    await installUserAgentOverride(context, page, userAgent, metadata);
     // La session du contrôle n'est jamais détachée avant la fermeture du contexte : détachée, elle laisserait repartir
     // les requêtes encore suspendues.
     if (options.checkRequest !== undefined) await installRequestGuard(context, page, (url) => hostAllowed(url, options.allowedHosts), options.checkRequest);

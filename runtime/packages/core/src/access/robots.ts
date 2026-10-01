@@ -146,7 +146,7 @@ export type SelectedGroup = {
 
 /**
  * Groupes applicables au jeton produit (17 §2) : ceux du jeton ET ceux de `*` (`ruleSets`), pour la correspondance des
- * chemins. `Crawl-delay` et signaux d'accès restent lus dans le groupe du jeton, à défaut dans `*`.
+ * chemins ; `Crawl-delay` (le plus grand, plancher de cadence) et signaux d'accès sont lus dans ces mêmes groupes.
  */
 export function selectGroup(file: RobotsFile, token: string = PRODUCT_TOKEN): SelectedGroup {
   const wanted = token.toLowerCase();
@@ -154,14 +154,17 @@ export function selectGroup(file: RobotsFile, token: string = PRODUCT_TOKEN): Se
   const any = file.groups.filter((g) => g.agents.includes('*'));
   const retained = own.length > 0 ? own : any;
   if (retained.length === 0) return { matched: 'none', rules: [], ruleSets: [], crawlDelaySeconds: null, signals: [] };
+  // Groupes du jeton ET de `*`, chacun une fois (un groupe peut nommer les deux) : le plus strict gagne aussi pour la
+  // cadence (plancher `Crawl-delay` = le plus grand) et tous les signaux d'accès sont relevés.
+  const applicable = [...new Set([...own, ...any])];
   let delay: number | null = null;
-  for (const g of retained) if (g.crawlDelaySeconds !== null) delay = Math.max(delay ?? 0, g.crawlDelaySeconds);
+  for (const g of applicable) if (g.crawlDelaySeconds !== null) delay = Math.max(delay ?? 0, g.crawlDelaySeconds);
   return {
     matched: own.length > 0 ? 'token' : '*',
     rules: retained.flatMap((g) => g.rules),
     ruleSets: [own, any].filter((groups) => groups.length > 0).map((groups) => groups.flatMap((g) => g.rules)),
     crawlDelaySeconds: delay,
-    signals: retained.flatMap((g) => g.signals),
+    signals: applicable.flatMap((g) => g.signals),
   };
 }
 
