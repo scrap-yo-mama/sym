@@ -13,7 +13,7 @@
   { "test": "assert_tunnel_single_user", "invariant": "INV5", "tasks": ["2.6", "2.7"], "stage": "I1, E2" },
   { "test": "assert_revocation_local_first", "invariant": "INV5, 07 § 2", "tasks": ["2.6"], "stage": "U1, E2" },
   { "test": "assert_agent_step_stale_ref", "invariant": "07 § 3", "tasks": ["0.6b", "2.7"], "stage": "U1",
-    "note": "0.6b : ref périmé = erreur typée, jamais une action sur un autre élément, même avec un pilote qui ne vérifie rien (packages/core/src/agent/step-session.unit.test.ts, packages/agent/src/tunnel-channel.unit.test.ts, canal Playwright : playwright-channel.contract.test.ts) ; 2.7 : même critère avec le pilote CDP de l'extension" },
+    "note": "0.6b : ref périmé = erreur typée, jamais une action sur un autre élément, même avec un pilote qui ne vérifie rien ; un `[ref=…]` écrit dans le texte de la page ne désigne aucun élément, seul le ref propre de la ligne compte (packages/core/src/agent/step-session.unit.test.ts, packages/agent/src/tunnel-channel.unit.test.ts, canal Playwright : playwright-channel.contract.test.ts) ; 2.7 : même critère avec le pilote CDP de l'extension" },
   { "test": "assert_third_party_engine_not_via_tunnel", "invariant": "07 § 3, ADR 0001", "tasks": ["0.6b", "2.7"], "stage": "U1",
     "note": "0.6b : moteur tiers refusé avant tout run, le moteur retenu (Stagehand) compris : E6 limité au serveur (packages/agent/src/tunnel-channel.unit.test.ts, eval/spike/src/tunnel-refusal.unit.test.ts) ; 2.7 : même refus à la passerelle" },
   { "test": "assert_e6_not_in_tunnel_mode", "invariant": "07 § 3, ADR 0001", "tasks": ["0.6b", "2.4", "2.7"], "stage": "U1",

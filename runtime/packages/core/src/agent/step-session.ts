@@ -15,13 +15,6 @@ export function truncateTree(tree: string, maxChars: number): { text: string; tr
   return { text: `${tree.slice(0, cut > 0 ? cut : maxChars)}\n- [truncated]`, truncated: true };
 }
 
-/** Vrai si le `ref` figure dans l'arbre (sinon : référence inconnue, traitée comme périmée). */
-export function hasRef(tree: string, ref: string): boolean {
-  return /^[a-z0-9]+$/.test(ref) && tree.includes(`[ref=${ref}]`);
-}
-
-const REF_ITEM = /^([a-zA-Z]+)(?:\s+"((?:[^"\\]|\\.)*)")?[^\n]*?\[ref=([a-z0-9]+)\]/;
-
 /**
  * Clé d'un élément de liste YAML (`- clé` ou `- clé:`). Playwright cite entre guillemets simples toute clé qui le
  * demande (un nom qui contient « : », p. ex.), `''` valant `'` (`yamlEscapeKeyIfNeeded`, playwright-core 1.63).
@@ -44,16 +37,38 @@ function itemKey(line: string): string | undefined {
 }
 
 /**
+ * Clé d'élément telle que Playwright l'écrit (`createKey`, playwright-core 1.63) : rôle, nom entre guillemets
+ * facultatif, puis attributs entre crochets (`[level=1]`, `[ref=e5]`, `[cursor=pointer]`…), et rien d'autre avant
+ * la fin ou le « : » qui ouvre la valeur. Le texte de page qui suit ce « : » n'est jamais lu (08 §4).
+ */
+const ITEM_KEY = /^([a-zA-Z]+)(?: "((?:[^"\\]|\\.)*)")?((?: \[[a-z-]+(?:=[^\]\s]*)?\])*)(?::|$)/;
+
+/** Rôle, nom et ref PROPRE de l'élément d'une ligne ; un `[ref=…]` écrit dans un texte ou une valeur ne compte pas. */
+function itemOf(line: string): { role: string; name: string; ref: string } | undefined {
+  const key = itemKey(line);
+  const match = key === undefined ? null : ITEM_KEY.exec(key);
+  if (match === null) return undefined;
+  const ref = /\[ref=([a-z0-9]+)\]/.exec(match[3] ?? '')?.[1];
+  if (ref === undefined) return undefined;
+  return { role: match[1] ?? 'generic', name: (match[2] ?? '').replace(/\\(.)/g, '$1'), ref };
+}
+
+/** Vrai si un élément de l'arbre porte ce `ref` (sinon : référence inconnue, traitée comme périmée). */
+export function hasRef(tree: string, ref: string): boolean {
+  return semanticOf(tree, ref) !== undefined;
+}
+
+/**
  * Sélecteur sémantique (rôle + nom accessible) d'un `ref` dans un arbre : c'est lui que la trace consigne, jamais le
- * seul `ref` (04 §3.1, compilation E6 → E5). `undefined` si la ligne est illisible : l'exécuteur refuse alors d'agir.
+ * seul `ref` (04 §3.1, compilation E6 → E5). `undefined` si aucun élément ne porte ce `ref` en propre, ou si sa ligne
+ * est illisible : l'exécuteur refuse alors d'agir.
  */
 export function semanticOf(tree: string, ref: string): { role: string; name: string } | undefined {
+  if (!/^[a-z0-9]+$/.test(ref)) return undefined;
   for (const line of tree.split('\n')) {
     if (!line.includes(`[ref=${ref}]`)) continue;
-    const key = itemKey(line);
-    const match = key === undefined ? null : REF_ITEM.exec(key);
-    if (match?.[3] !== ref) continue;
-    return { role: match[1] ?? 'generic', name: (match[2] ?? '').replace(/\\(.)/g, '$1') };
+    const item = itemOf(line);
+    if (item?.ref === ref) return { role: item.role, name: item.name };
   }
   return undefined;
 }
