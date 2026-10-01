@@ -40,3 +40,57 @@ describe('CSP stricte', () => {
     }
   });
 });
+
+// Le build de la console ne dépend que de la console : ni test d'intégration, ni serveur, ni base dans son typage.
+// Le typecheck des tests (qui importent le serveur de test) a son propre tsconfig.
+describe('assert_console_build_independent_of_server', () => {
+  const readJson = (name: string): Record<string, unknown> => JSON.parse(readFileSync(join(webRoot, name), 'utf8')) as Record<string, unknown>;
+  const pkg = readJson('package.json') as { scripts: Record<string, string>; dependencies?: Record<string, string>; devDependencies?: Record<string, string> };
+
+  test('le build vérifie les types avec tsconfig.app.json, qui exclut les tests et ne sort pas de apps/web', () => {
+    expect(pkg.scripts.build).toMatch(/^vue-tsc --noEmit -p tsconfig\.app\.json && vite build$/);
+    const app = readJson('tsconfig.app.json') as { include: string[]; exclude?: string[] };
+    expect(app.exclude).toContain('src/**/*.test.ts');
+    for (const pattern of app.include) expect(pattern, pattern).not.toMatch(/\.\.|tests\//);
+  });
+
+  test('le typecheck couvre aussi les tests, par un tsconfig séparé', () => {
+    expect(pkg.scripts.typecheck).toMatch(/-p tsconfig\.app\.json/);
+    expect(pkg.scripts.typecheck).toMatch(/-p tsconfig\.test\.json/);
+    const tests = readJson('tsconfig.test.json') as { include: string[] };
+    expect(tests.include).toContain('src/**/*.test.ts');
+  });
+
+  test('aucune dépendance artificielle vers le serveur, la base ou les schémas (ordre de build de pnpm -r)', () => {
+    const declared = Object.keys({ ...pkg.dependencies, ...pkg.devDependencies });
+    expect(declared.filter((name) => ['@runtime/core', '@runtime/db', '@runtime/schemas'].includes(name))).toEqual([]);
+  });
+});
+
+// HTML valide et hiérarchie des titres lisible par un lecteur d'écran : un titre ne s'imbrique pas dans un titre.
+// `CardTitle` (shadcn-vue) rend un <h3> ; un <h1> posé dedans est invalide. Les tags axe WCAG ne le signalent pas.
+describe('assert_no_nested_headings', () => {
+  const headingOpen = /<h[1-6]\b/i;
+
+  test('aucune vue ni aucun composant ne pose un titre <h1>-<h6> dans <CardTitle>', () => {
+    for (const file of sources(join(webRoot, 'src'), /\.vue$/)) {
+      const source = readFileSync(file, 'utf8').replace(/<!--[\s\S]*?-->/g, '');
+      for (const match of source.matchAll(/<CardTitle\b[^>]*>([\s\S]*?)<\/CardTitle>/g)) {
+        expect(match[1] ?? '', file).not.toMatch(headingOpen);
+      }
+    }
+  });
+
+  test('aucun titre n’en contient un autre', () => {
+    for (const file of sources(join(webRoot, 'src'), /\.vue$/)) {
+      const source = readFileSync(file, 'utf8').replace(/<!--[\s\S]*?-->/g, '');
+      for (const match of source.matchAll(/<h([1-6])\b[^>]*>([\s\S]*?)<\/h\1>/gi)) expect(match[2] ?? '', file).not.toMatch(headingOpen);
+    }
+  });
+
+  test('la page de connexion a un <h1> dans l’en-tête de la carte, hors du <h3> de CardTitle', () => {
+    const login = readFileSync(join(webRoot, 'src/views/LoginView.vue'), 'utf8').replace(/<!--[\s\S]*?-->/g, '');
+    expect(login).toMatch(/<CardHeader>\s*<h1\b/);
+    expect(login).not.toMatch(/<CardTitle\b/);
+  });
+});

@@ -62,6 +62,11 @@
     "note": "3.3 : toute route livrée est spécifiée, le reste porte x-pending ; 3.6 : rejoué contre l'OpenAPI générée par le serveur, liste d'attente vide" },
   { "test": "assert_console_login_then_empty_authenticated_page", "invariant": "10 (critère de 3.3)", "tasks": ["3.3", "3.6"], "stage": "I1, E2E",
     "note": "3.3 : serveur réel, client généré, session et garde du routeur sans navigateur ; 3.6 : même parcours en Chromium" },
+  { "test": "assert_openapi_specified_auth_matches_registry", "invariant": "13 § 8", "tasks": ["3.3", "3.6"], "stage": "contract",
+    "note": "Le mode d'authentification de chaque route livrée (session, clé d'API, appareil) est celui du registre ; une route de session n'annonce jamais de clé d'API" },
+  { "test": "assert_i18n_fallback_english", "invariant": "06 § 4.2", "tasks": ["3.3"], "stage": "U1" },
+  { "test": "assert_no_nested_headings", "invariant": "06 § 1 (WCAG 2.2 AA)", "tasks": ["3.3", "3.9"], "stage": "U1" },
+  { "test": "assert_console_build_independent_of_server", "invariant": "ADR 0002", "tasks": ["3.3"], "stage": "U1" },
   { "test": "assert_a11y_axe_clean", "invariant": "06 § 1 (WCAG 2.2 AA, gate de recette)", "tasks": ["3.9", "3.6"], "stage": "E2E",
     "note": "Gate portée par 3.9 sur chaque écran (clair, sombre, en, fr). 3.3 : passage axe ponctuel consigné dans l'ADR 0002" }
 ]

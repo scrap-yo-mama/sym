@@ -71,10 +71,15 @@ describe('chargement paresseux', () => {
     expect(root.lang).toBe('fr');
   });
 
-  test('une clé absente d’une langue retombe sur l’anglais', async () => {
+  test('assert_i18n_fallback_english : une clé absente d’une langue retombe sur l’anglais', async () => {
     const i18n = createAppI18n();
     await setLocale(i18n.global, 'fr', document_stub());
-    i18n.global.mergeLocaleMessage('fr', { app: { name: undefined } } as never);
+    // Avant le retrait, la valeur française est servie ; après, c'est la valeur anglaise (repli), pas la clé brute.
+    expect(i18n.global.t('app.skipToContent')).toBe(fr.app.skipToContent);
+    i18n.global.mergeLocaleMessage('fr', { app: { skipToContent: undefined } } as never);
+    expect(i18n.global.t('app.skipToContent')).toBe(en.app.skipToContent);
+    expect(i18n.global.t('app.skipToContent')).not.toBe('app.skipToContent');
+    // Les autres clés restent en français.
     expect(i18n.global.t('auth.login.submit')).toBe(fr.auth.login.submit);
   });
 });

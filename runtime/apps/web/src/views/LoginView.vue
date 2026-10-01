@@ -5,7 +5,7 @@ import { useI18n } from 'vue-i18n';
 import { useRoute, useRouter } from 'vue-router';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardContent, CardDescription, CardHeader } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { signIn, useSession, type SignInFailure } from '@/composables/useSession';
@@ -49,9 +49,8 @@ async function submit(): Promise<void> {
   <section class="mx-auto flex max-w-md flex-col gap-6 py-10">
     <Card>
       <CardHeader>
-        <CardTitle>
-          <h1 data-route-heading tabindex="-1" class="text-2xl font-semibold tracking-tight">{{ t('auth.login.title') }}</h1>
-        </CardTitle>
+        <!-- Titre posé directement : CardTitle rend un h3, et un titre ne s'imbrique pas dans un titre -->
+        <h1 data-route-heading tabindex="-1" class="text-2xl leading-none font-semibold tracking-tight">{{ t('auth.login.title') }}</h1>
         <CardDescription>{{ t('auth.login.description') }}</CardDescription>
       </CardHeader>
       <CardContent>

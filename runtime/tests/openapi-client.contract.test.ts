@@ -53,10 +53,18 @@ describe('assert_openapi_client_in_sync', () => {
  * fixe (chemins à 2 espaces, méthodes à 4, champs d'opération à 6), recoupée avec la génération ci-dessous.
  */
 function specifiedOperations(yaml: string): Map<string, string | null> {
-  const out = new Map<string, string | null>();
+  return new Map([...parseOperations(yaml)].map(([op, parsed]) => [op, parsed.pending]));
+}
+
+type ParsedOperation = { pending: string | null; security: string[] | null };
+
+/** Schémas de sécurité posés sur une opération (`security: []` → liste vide ; absent → null, soit la sécurité par défaut). */
+function parseOperations(yaml: string): Map<string, ParsedOperation> {
+  const out = new Map<string, ParsedOperation>();
   let path: string | null = null;
   let current: string | null = null;
   let inPaths = false;
+  let inSecurity = false;
   for (const line of yaml.split('\n')) {
     if (/^\S/.test(line)) {
       inPaths = line === 'paths:';
@@ -74,11 +82,25 @@ function specifiedOperations(yaml: string): Map<string, string | null> {
     const methodMatch = /^ {4}(get|put|post|delete|patch):$/.exec(line);
     if (path && methodMatch) {
       current = `${(methodMatch[1] ?? '').toUpperCase()} ${path}`;
-      out.set(current, null);
+      out.set(current, { pending: null, security: null });
+      inSecurity = false;
       continue;
     }
+    const operation = current ? out.get(current) : undefined;
+    if (!operation) continue;
     const pendingMatch = /^ {6}x-pending: '(\d+\.\d+[a-z]?)'$/.exec(line);
-    if (current && pendingMatch) out.set(current, pendingMatch[1] ?? null);
+    if (pendingMatch) operation.pending = pendingMatch[1] ?? null;
+    if (line === '      security: []') {
+      operation.security = [];
+      inSecurity = false;
+    } else if (line === '      security:') {
+      operation.security = [];
+      inSecurity = true;
+    } else if (inSecurity) {
+      const scheme = /^ {8}- (\w+): \[\]$/.exec(line);
+      if (scheme) operation.security?.push(scheme[1] ?? '');
+      else inSecurity = false;
+    }
   }
   return out;
 }
@@ -187,6 +209,40 @@ describe('OpenAPI spécifiée et routes livrées', () => {
     const waiting = [...specified].filter(([op]) => !delivered.includes(op));
     expect(waiting.filter(([, task]) => task === null).map(([op]) => op)).toEqual([]);
     expect(waiting.length).toBeGreaterThan(0);
+  });
+
+  test('assert_openapi_specified_auth_matches_registry : le mode d’authentification spécifié est celui du registre', () => {
+    // Sécurité par défaut de la spec : session OU clé d'API. Une route réservée à la session ou à l'appareil ne doit
+    // jamais annoncer une clé d'API (13 § 8 : jamais de scope d'administration).
+    const parsed = parseOperations(yaml);
+    const expectedSchemes: Record<string, string[]> = {
+      session: ['sessionCookie'],
+      session_or_key: ['apiKey', 'sessionCookie'],
+      extension: ['deviceToken'],
+    };
+    const mismatches: string[] = [];
+    for (const route of ROUTES) {
+      const op = `${route.method} ${route.url.replace(/:(\w+)/g, '{$1}')}`;
+      const declared = parsed.get(op)?.security;
+      const actual = (declared ?? ['sessionCookie', 'apiKey']).slice().sort();
+      if (route.auth === 'public') {
+        // `security: []`, ou un jeton propre (`/metrics`) ; jamais une identité d'utilisateur.
+        if (actual.includes('sessionCookie') || actual.includes('apiKey')) mismatches.push(`${op} : public mais spécifiée avec ${actual.join('+')}`);
+      } else if (JSON.stringify(actual) !== JSON.stringify(expectedSchemes[route.auth])) {
+        mismatches.push(`${op} : registre ${route.auth}, spec ${actual.join('+') || '(aucune)'}`);
+      }
+    }
+    expect(mismatches).toEqual([]);
+  });
+
+  test('le contrôle du mode d’authentification détecte une route de session annoncée avec une clé d’API', () => {
+    const drifted = yaml.replace(
+      /( {2}\/api\/admin\/tunnels:\n {4}get:\n {6}operationId: listAdminTunnels\n) {6}security:\n {8}- sessionCookie: \[\]\n/,
+      '$1',
+    );
+    expect(drifted).not.toBe(yaml);
+    expect(parseOperations(drifted).get('GET /api/admin/tunnels')?.security).toBeNull();
+    expect(parseOperations(yaml).get('GET /api/admin/tunnels')?.security).toEqual(['sessionCookie']);
   });
 
   test('la console arrête le flux sur une 404 de /api/events tant que la route n’est pas livrée, jamais après', () => {

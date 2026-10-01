@@ -83,7 +83,9 @@ ajouté reçoit ces deux lignes à la main avant `pnpm spdx:add` (`tests/governa
    rejouée par 3.6. Passage ponctuel du 2026-10-01 sur les deux pages livrées : axe-core 4.13.0 (hors dépendances du
    dépôt), tags `wcag2a`, `wcag2aa`, `wcag21aa`, `wcag22aa`, Chromium, vrai serveur, build de production ; connexion et
    page vide, thèmes clair et sombre, `en` et `fr` : **0 violation** sur les 8 combinaisons. Seule erreur de console :
-   la 404 de `/api/events`, attendue tant que 3.1 n'a pas livré la route (voir le point 3).
+   la 404 de `/api/events`, attendue tant que 3.1 n'a pas livré la route (voir le point 3). Les tags axe ne signalent pas
+   un titre imbriqué dans un titre : un `<h1>` posé dans le `<h3>` de `CardTitle` (shadcn-vue) a été retiré de la page de
+   connexion, et `assert_no_nested_headings` le garde.
 8. **Mots interdits (06 § 4.1).** La garde des fichiers de langue reconnaît toutes les formes de « passer » (exceptions
    explicites : « mot de passe », « dépasser »). Le test complet, messages REST et MCP compris, est
    `assert_ui_strings_no_forbidden_words` (3.5).
@@ -97,8 +99,9 @@ les premiers badges de statut (3.4), pas avant.
 
 ## Conséquences
 
-- `apps/web` se construit avec `pnpm -r build` (`vue-tsc` puis `vite build`) et se vérifie avec `pnpm typecheck`
-  (`tsc` pour les paquets, `vue-tsc` pour la console).
+- `apps/web` se construit avec `pnpm -r build` (`vue-tsc -p tsconfig.app.json` puis `vite build`) sans dépendre du serveur
+  ni de la base : les tests de la console, dont l'intégration qui démarre le serveur, ont leur propre `tsconfig.test.json`,
+  vérifié par `pnpm typecheck` (`tsc` pour les paquets, `vue-tsc` pour la console, build des paquets requis).
 - Les écrans suivants ajoutent leurs textes aux deux fichiers de langue ; la parité est testée
   (`assert_i18n_key_parity`).
 - En production, `server` sert `apps/web/dist` (même origine, repli sur `index.html` pour les routes de la console, CSP et

@@ -16,7 +16,9 @@ info:
     identifier: MIT
 servers:
   - url: /
-# Par défaut : session d'interface (cookie) ou clé d'API (Bearer, scopes de 13 § 8). Les routes publiques posent `security: []`.
+# Par défaut : session d'interface (cookie) ou clé d'API (Bearer, scopes de 13 § 8). Les routes publiques posent `security: []` ;
+# les routes réservées à la session (registre `auth: 'session'`) posent `security: [{sessionCookie: []}]` : jamais une clé d'API
+# sur une route d'administration (13 § 8). Le test de dérive compare ce mode d'authentification au registre du serveur.
 security:
   - sessionCookie: []
   - apiKey: []
@@ -191,6 +193,8 @@ paths:
   /api/api-keys:
     get:
       operationId: listApiKeys
+      security:
+        - sessionCookie: []
       tags: [account]
       summary: Clés d'API de l'appelant (session d'interface seulement)
       responses:
@@ -213,6 +217,8 @@ paths:
           $ref: '#/components/responses/Error'
     post:
       operationId: createApiKey
+      security:
+        - sessionCookie: []
       tags: [account]
       summary: Crée une clé (ré-authentification par mot de passe) ; le secret n'apparaît qu'ici
       requestBody:
@@ -239,6 +245,8 @@ paths:
   /api/api-keys/{id}:
     delete:
       operationId: revokeApiKey
+      security:
+        - sessionCookie: []
       tags: [account]
       summary: Révoque une clé de l'appelant (404 pour la clé d'autrui)
       parameters:
@@ -2108,6 +2116,8 @@ paths:
   /api/extension/pairing-codes:
     post:
       operationId: createExtensionPairingCode
+      security:
+        - sessionCookie: []
       tags: [tunnel]
       summary: Code d'appairage de l'extension, usage unique, 10 minutes (07 § 1) ; mot de passe actuel exigé
       requestBody:
@@ -2272,6 +2282,8 @@ paths:
   /api/extension/devices:
     get:
       operationId: listExtensionDevices
+      security:
+        - sessionCookie: []
       tags: [tunnel]
       summary: Appareils appairés de l'utilisateur (06 § 2, Paramètres)
       responses:
@@ -2286,6 +2298,8 @@ paths:
   /api/extension/devices/{id}:
     delete:
       operationId: revokeExtensionDevice
+      security:
+        - sessionCookie: []
       tags: [tunnel]
       summary: Révocation d'un appareil de l'utilisateur (07 § 1)
       parameters:
@@ -2314,6 +2328,8 @@ paths:
   /api/sites/{id}:
     delete:
       operationId: disconnectConnectedSite
+      security:
+        - sessionCookie: []
       tags: [tunnel]
       summary: Déconnexion d'un domaine depuis la console
       parameters:
@@ -2328,6 +2344,8 @@ paths:
   /api/admin/tunnels:
     get:
       operationId: listAdminTunnels
+      security:
+        - sessionCookie: []
       tags: [tunnel]
       summary: Appareils de l'instance, métadonnées seules (jamais un jeton) ; admin (13 § 4)
       responses:
@@ -2344,6 +2362,8 @@ paths:
   /api/admin/tunnels/{id}:
     delete:
       operationId: revokeAdminTunnel
+      security:
+        - sessionCookie: []
       tags: [tunnel]
       summary: Révocation d'un appareil par un admin (révocation seule, INV5)
       parameters:

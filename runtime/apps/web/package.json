@@ -6,8 +6,8 @@
   "license": "AGPL-3.0-only",
   "scripts": {
     "dev": "vite",
-    "build": "vue-tsc --noEmit -p tsconfig.json && vite build",
-    "typecheck": "vue-tsc --noEmit -p tsconfig.json",
+    "build": "vue-tsc --noEmit -p tsconfig.app.json && vite build",
+    "typecheck": "vue-tsc --noEmit -p tsconfig.app.json && vue-tsc --noEmit -p tsconfig.test.json",
     "preview": "vite preview",
     "test": "vitest run --passWithNoTests"
   },
@@ -23,9 +23,6 @@
     "vue-router": "catalog:"
   },
   "devDependencies": {
-    "@runtime/core": "workspace:*",
-    "@runtime/db": "workspace:*",
-    "@runtime/schemas": "workspace:*",
     "@tailwindcss/vite": "catalog:",
     "@types/node": "catalog:",
     "@vitejs/plugin-vue": "catalog:",

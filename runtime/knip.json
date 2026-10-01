@@ -61,10 +61,7 @@
       ],
       "ignoreDependencies": [
         "tailwindcss",
-        "tw-animate-css",
-        "@runtime/core",
-        "@runtime/db",
-        "@runtime/schemas"
+        "tw-animate-css"
       ],
       "ignoreIssues": {
         "src/components/ui/**": [
