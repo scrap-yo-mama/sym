@@ -30,6 +30,11 @@ catalog:
   msw: 2.15.0
   # Garde SSRF (tâche 0.7) : fetch épinglé à undici (8.11.1 et 8.11.2 < 7 jours au 2026-09-30, minimumReleaseAge).
   undici: 8.11.0
+  # Bac à sable (tâche 1.5) : isolated-vm 7.0.1 corrige GHSA-864f-rcv7-6rh4 (<= 7.0.0) et porte les binaires Node 24 (ABI 137)
+  # et Node 26 (ABI 147) ; 6.2.0 (corrigée aussi) s'arrête à Node 24. Spike QuickJS : devDependencies, MIT.
+  isolated-vm: 7.0.1
+  quickjs-emscripten-core: 0.32.0
+  '@jitl/quickjs-wasmfile-release-sync': 0.32.0
 
 # Durcissement supply chain (08b §5). Le durcissement complet est la tâche 0.8.
 minimumReleaseAge: 10080
@@ -45,3 +50,5 @@ allowBuilds:
   ssh2: false
   # msw (tâche 0.4) : postinstall = copie du service worker navigateur, inutile côté Node.
   msw: false
+  # isolated-vm (tâche 1.5) : module natif ; node-gyp-build charge le binaire précompilé, sinon compile.
+  isolated-vm: true

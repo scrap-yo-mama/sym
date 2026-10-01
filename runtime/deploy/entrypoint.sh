@@ -8,11 +8,11 @@ CLI=/app/apps/cli/dist/index.js
 
 case "${RUNTIME_MODE:-all}" in
   server) exec node "$SERVER" ;;
-  worker) exec node "$WORKER" ;;
+  worker) exec node --no-node-snapshot "$WORKER" ;; # bac à sable isolated-vm (08 §3)
   migrate) exec node "$CLI" migrate ;; # pré-déploiement (14 § 5)
   all)
     node "$SERVER" & p1=$!
-    node "$WORKER" & p2=$!
+    node --no-node-snapshot "$WORKER" & p2=$!
     stopped=0
     trap 'stopped=1; kill -TERM "$p1" "$p2" 2>/dev/null' TERM INT
     wait -n "$p1" "$p2"

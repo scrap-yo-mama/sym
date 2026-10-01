@@ -40,7 +40,10 @@
     },
     "apps/worker": {
       "entry": [
-        "src/index.ts"
+        "src/index.ts",
+        "src/sandbox/child.ts",
+        "src/sandbox/quickjs-runner.ts",
+        "src/sandbox/index.ts"
       ]
     },
     "fixtures": {

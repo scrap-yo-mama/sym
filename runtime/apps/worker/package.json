@@ -10,11 +10,15 @@
   },
   "dependencies": {
     "@runtime/core": "workspace:*",
-    "pino": "catalog:"
+    "pino": "catalog:",
+    "isolated-vm": "catalog:"
   },
   "devDependencies": {
     "@types/node": "catalog:",
     "typescript": "catalog:",
-    "vitest": "catalog:"
+    "vitest": "catalog:",
+    "quickjs-emscripten-core": "catalog:",
+    "@jitl/quickjs-wasmfile-release-sync": "catalog:",
+    "fast-check": "catalog:"
   }
 }

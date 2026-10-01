@@ -13,6 +13,8 @@ import { describe, test } from "vitest";
 // INV10 (0.7) : assert_ssrf_guard et assert_webhook_ssrf_blocked (squelette repris par 2.5) sont dans
 // tests/security/ssrf-guard.security.test.ts (projet Vitest security, pnpm test:security).
 // INV6, X4 (1.4) : assert_no_ip_change_after_refusal est dans tests/network/network-modes.unit.test.ts (proxy de test local).
+// INV7 (1.5) : assert_sandbox est dans apps/worker/src/sandbox/sandbox.security.test.ts (projet Vitest security,
+// isolated-vm et adaptateur QuickJS) ; borne isolated-vm et fuzz des ponts : apps/worker/src/sandbox/sandbox.unit.test.ts.
 describe("invariants (à implémenter)", () => {
   test.todo("assert_output_schema_enforced"); // INV1, tâche(s) 1.1a, 2.3
   test.todo("assert_cheapest_first_logged"); // INV2, tâche(s) 2.1
@@ -21,7 +23,6 @@ describe("invariants (à implémenter)", () => {
   test.todo("assert_identity_pinned"); // INV5, tâche(s) 2.6, 2.7
   test.todo("assert_tunnel_single_user"); // INV5, tâche(s) 2.6, 2.7
   test.todo("assert_no_circumvention"); // INV6, tâche(s) 1.7, 4.3
-  test.todo("assert_sandbox"); // INV7, tâche(s) 1.5
   test.todo("assert_no_telemetry"); // INV9, tâche(s) 1.10, 4.3 (part auth de 0.3b : apps/server/src/telemetry.integration.test.ts)
   test.todo("assert_otel_off_by_default"); // INV9, tâche(s) 1.10, 4.3
   test.todo("assert_robots_respected"); // INV11, tâche(s) 1.11
