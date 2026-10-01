@@ -3,6 +3,7 @@
 // éphémère, et un relais local qui sert la console construite (apps/web/dist) et transmet `/api/*` au serveur : le navigateur voit une
 // seule origine, comme derrière le reverse proxy d'un déploiement, et `PUBLIC_URL` est cette origine (contrôle d'Origin, 13 § 5).
 // MASTER_KEY et jeton d'amorçage sont générés à l'exécution (aucun secret en dur) ; rien n'écrit hors du conteneur et du dossier système.
+// Chaque page de la console part avec sa CSP stricte (08b § 2, apps/web/e2e/csp.ts) : assert_no_csp_violation (tâche 3.15).
 import { randomBytes } from 'node:crypto';
 import { createReadStream, statSync } from 'node:fs';
 import { createServer, request as httpRequest, type Server, type ServerResponse } from 'node:http';
@@ -13,6 +14,7 @@ import { migrateUp } from '@runtime/db';
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from '@testcontainers/postgresql';
 import pg from 'pg';
 import { prepareServer } from '../../apps/server/dist/start.js';
+import { CONSOLE_CSP } from '../../apps/web/e2e/csp.ts';
 
 const CONSOLE_DIR = new URL('../../apps/web/dist', import.meta.url).pathname;
 
@@ -36,7 +38,7 @@ export type Instance = {
   close: () => Promise<void>;
 };
 
-/** Sert un fichier de la console ; un chemin inconnu rend `index.html` (routeur côté client). */
+/** Sert un fichier de la console avec sa CSP ; un chemin inconnu rend `index.html` (routeur côté client). */
 function serveConsole(path: string, res: ServerResponse): void {
   const safe = normalize(decodeURIComponent(path)).replace(/^(\.\.[/\\])+/, '');
   let file = join(CONSOLE_DIR, safe);
@@ -46,6 +48,7 @@ function serveConsole(path: string, res: ServerResponse): void {
     file = join(CONSOLE_DIR, 'index.html');
   }
   res.setHeader('content-type', MIME[extname(file)] ?? 'application/octet-stream');
+  res.setHeader('content-security-policy', CONSOLE_CSP);
   createReadStream(file).pipe(res);
 }
 

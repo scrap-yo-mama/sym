@@ -26,7 +26,7 @@ Les licences du dépôt (AGPL-3.0-only, MIT) donnent le droit de copier, modifie
 
 ## Contact
 
-Demandes d'autorisation : adresse à définir avant toute publication.
+Demandes d'autorisation : scrapyomama@gmail.com.
 
 ## Points à faire valider
 

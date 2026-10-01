@@ -2,7 +2,7 @@
 # Déployer une instance
 
 Une instance se compose de trois choses : une **base PostgreSQL**, un **server** (REST, MCP, passerelle) et un **worker**
-(enquêtes, navigateur). Les deux derniers sont la **même image**, `ghcr.io/mrsoyer/scrapyomama-runtime:X.Y.Z`, lancée avec
+(enquêtes, navigateur). Les deux derniers sont la **même image**, `ghcr.io/scrap-yo-mama/sym:X.Y.Z`, lancée avec
 `RUNTIME_MODE=server` ou `RUNTIME_MODE=worker`. Il n'y a pas de tag `latest` : tous les modèles épinglent une version.
 
 | Cible | Statut | Quand la choisir |
@@ -34,7 +34,7 @@ Toutes les variables sont dans [variables-env.md](variables-env.md) (générée 
 
 ## Render
 
-[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/mrsoyer/scrapyomama-runtime)
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/scrap-yo-mama/sym)
 
 Bouton **à valider au GO** : il ne fonctionne qu'une fois le dépôt public, et aucun déploiement réel n'a encore été fait
 (voir [statut de vérification](#statut-de-vérification)).
@@ -54,6 +54,10 @@ Bouton **à valider au GO** : il ne fonctionne qu'une fois le dépôt public, et
 
 Mettre à jour : sauvegardez la base (`pg_dump`), changez le tag de l'image dans **les deux** services, déployez
 (`autoDeployTrigger: 'off'` : rien ne se redéploie tout seul). Détail : [exploitation.md](exploitation.md).
+
+**Coût (relevé du 2026-10-01).** Le Blueprint réserve trois plans : web `0.5c-512mb`, worker `1c-2g`, base `0.5c-1g`
+avec 15 Go de disque. Le prix mensuel dépend de la [grille de Render](https://render.com/pricing) du jour, de la région et du
+disque : consultez-la avant de créer le Blueprint. Aucun montant n'est publié ici tant qu'aucun déploiement réel n'a été facturé.
 
 ## Docker Compose (VPS, Coolify, Dokploy)
 
@@ -100,7 +104,7 @@ Mettre à jour : `pg_dump`, changez `RUNTIME_IMAGE` (ou le tag du fichier), `doc
 saisit (plan Hobby requis) :
 
 1. Projet vide, puis ajoutez *PostgreSQL* (base Railway).
-2. Service `server` : *Docker Image* `ghcr.io/mrsoyer/scrapyomama-runtime:X.Y.Z`, variables du modèle, *Pre-deploy command*
+2. Service `server` : *Docker Image* `ghcr.io/scrap-yo-mama/sym:X.Y.Z`, variables du modèle, *Pre-deploy command*
    `runtime migrate`, *Healthcheck Path* `/api/ready`, domaine public généré.
 3. Service `worker` : la même image, **sans** domaine, `MASTER_KEY=${{server.MASTER_KEY}}` (jamais sa propre clé).
 4. `MASTER_KEY` : `${{secret(42, "<alphabet base64>")}}${{secret(1, "AEIMQUYcgkosw048")}}=`. Ne pas utiliser la forme
@@ -116,7 +120,7 @@ Performance, plusieurs centaines de dollars par mois). Le dossier `deploy/heroku
 ```bash
 cd deploy/heroku && git init && git add . && git commit -m "deploy"
 heroku create mon-instance --stack container
-heroku config:set MASTER_KEY="$(docker run --rm ghcr.io/mrsoyer/scrapyomama-runtime:X.Y.Z runtime keygen)" \
+heroku config:set MASTER_KEY="$(docker run --rm ghcr.io/scrap-yo-mama/sym:X.Y.Z runtime keygen)" \
   ADMIN_BOOTSTRAP_TOKEN="$(openssl rand -base64 32)" PUBLIC_URL=https://mon-instance.herokuapp.com
 git push heroku HEAD:main
 heroku ps:scale web=1 worker=1 && heroku ps:resize worker=performance-m

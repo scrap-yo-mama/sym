@@ -38,7 +38,7 @@ function resetFilters(): void {
 }
 
 const selectClass =
-  'h-9 rounded-md border border-input bg-background px-2 text-sm shadow-xs focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 outline-none';
+  'h-11 rounded-md border border-input bg-background px-2 text-sm focus-visible:border-ring outline-none';
 </script>
 
 <template>

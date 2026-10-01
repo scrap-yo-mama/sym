@@ -15,6 +15,7 @@ import { createAppRouter } from '@/router/index';
 import { ROLE_PERMISSIONS } from '@/testing/permissions';
 import { esc, installFakeServer, json, ME, signedIn, view } from '@/testing/console.testkit';
 import CloseOthersOffer from '@/components/account/CloseOthersOffer.vue';
+import PreferencesBar from '@/components/PreferencesBar.vue';
 import ApiRunsTab from '@/components/api/tabs/ApiRunsTab.vue';
 import { useApiRuns } from '@/composables/useApiRuns';
 import { apiDetail } from '@/testing/console-fixtures';
@@ -370,6 +371,22 @@ describe('Mon compte', () => {
     expect(html).toContain(esc(en.audit.action.auth_login));
     // Un seul bouton « Fermer » : celui de l'autre session.
     expect((html.match(new RegExp(`>${esc(en.account.sessions.close)}</button>`, 'g')) ?? []).length).toBe(1);
+  });
+
+  test('réglage Animations dans Mon compte (20 § 4.3) : Système ou Réduites, avec son libellé ; la barre du haut ne garde que la langue et le thème', async () => {
+    installFakeServer(routes());
+    await signedIn();
+    const html = await view(AccountView);
+    const select = html.match(/<select[^>]*id="pref-motion"[^>]*>[\s\S]*?<\/select>/)?.[0] ?? '';
+    expect(select).not.toBe('');
+    expect(select).toContain('value="system"');
+    expect(select).toContain('value="reduced"');
+    expect(select).toContain(esc(en.account.preferences.motions.reduced));
+    expect(html).toMatch(new RegExp(`<label[^>]*for="pref-motion"[^>]*>${esc(en.account.preferences.motion)}</label>`));
+    const bar = await view(PreferencesBar);
+    expect(bar).not.toContain('pref-motion');
+    expect(bar).toContain('id="pref-language"');
+    expect(bar).toContain('id="pref-theme"');
   });
 
   test('aucun secret ni code de secours dans le rendu initial', async () => {

@@ -96,20 +96,20 @@ function submit(): void {
   emit('submit', input, version.value === '' ? undefined : Number(version.value));
 }
 
-const selectClass = 'h-9 rounded-md border border-input bg-background px-2 text-sm shadow-xs focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 outline-none';
+const selectClass = 'h-11 rounded-md border border-input bg-background px-2 text-sm focus-visible:border-ring outline-none';
 </script>
 
 <template>
   <form id="launch" class="flex flex-col gap-4" :aria-label="versions ? t('launch.relaunchTitle') : t('launch.title')" data-testid="launch-form" @submit.prevent="submit">
     <h3 class="text-base font-semibold">{{ versions ? t('launch.relaunchTitle') : t('launch.title') }}</h3>
 
-    <p v-if="versions" class="rounded-md border border-amber-700 p-3 text-sm dark:border-amber-400" data-testid="side-effects-warning">{{ t('launch.sideEffects') }}</p>
+    <p v-if="versions" class="rounded-md border border-foreground bg-status-warning p-3 text-sm text-status-warning-foreground" data-testid="side-effects-warning">{{ t('launch.sideEffects') }}</p>
 
     <template v-if="!model.needsJsonEditor">
       <p v-if="model.fields.length === 0" class="text-sm text-muted-foreground">{{ t('launch.noInput') }}</p>
       <div v-for="field in model.fields" :key="field.name" class="flex flex-col gap-1">
         <label :for="`launch-${field.name}`" class="text-sm font-medium">
-          {{ field.name }}<span v-if="field.required" class="text-destructive"> *</span>
+          {{ field.name }}<span v-if="field.required" class="text-foreground"> *</span>
         </label>
         <p v-if="field.description" :id="`launch-${field.name}-help`" class="text-sm text-muted-foreground">{{ field.description }}</p>
         <input
@@ -149,8 +149,8 @@ const selectClass = 'h-9 rounded-md border border-input bg-background px-2 text-
     <div v-else class="flex flex-col gap-1">
       <label for="launch-json" class="text-sm font-medium">{{ t('launch.jsonLabel') }}</label>
       <p class="text-sm text-muted-foreground">{{ t('launch.jsonHint') }}</p>
-      <textarea id="launch-json" v-model="json" rows="8" spellcheck="false" class="rounded-md border border-input bg-transparent p-2 font-mono text-sm focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 outline-none" :aria-invalid="jsonError ? 'true' : 'false'" />
-      <p v-if="jsonError" role="alert" class="text-sm text-destructive">{{ t('launch.jsonInvalid') }}</p>
+      <textarea id="launch-json" v-model="json" rows="8" spellcheck="false" class="rounded-md border border-input bg-transparent p-2 font-mono text-sm focus-visible:border-ring outline-none" :aria-invalid="jsonError ? 'true' : 'false'" />
+      <p v-if="jsonError" role="alert" class="sym-error">{{ t('launch.jsonInvalid') }}</p>
     </div>
 
     <div v-if="versions && versions.length > 1" class="flex flex-col gap-1">
@@ -165,7 +165,7 @@ const selectClass = 'h-9 rounded-md border border-input bg-background px-2 text-
     <!-- Le coût estimé précède le bouton (06 § 4.3, assert_cost_estimate_before_run). -->
     <p class="text-sm" data-testid="cost-estimate">{{ estimateText }}</p>
 
-    <p v-if="errorText" role="alert" class="text-sm text-destructive" data-testid="launch-error">{{ errorText }}</p>
+    <p v-if="errorText" role="alert" class="sym-error" data-testid="launch-error">{{ errorText }}</p>
     <div>
       <!-- `aria-disabled` et non `disabled` : un bouton désactivé qui a le focus le perd (le focus tombe sur <body>, 2.4.3). -->
       <Button type="submit" :aria-disabled="pending ? 'true' : undefined" :class="pending && 'pointer-events-none opacity-50'" data-testid="launch-submit">{{ versions ? t('actions.relaunch') : t('actions.launch') }}</Button>

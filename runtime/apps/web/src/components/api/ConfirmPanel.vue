@@ -24,7 +24,7 @@ onBeforeUnmount(() => returnFocus(opener));
 </script>
 
 <template>
-  <section :aria-labelledby="`${id}-title`" class="flex flex-col gap-3 rounded-lg border-2 border-amber-700 p-4 dark:border-amber-400" data-testid="confirm-panel" @keydown.esc="$emit('cancel')">
+  <section :aria-labelledby="`${id}-title`" class="flex flex-col gap-3 rounded-lg border-2 border-foreground p-4" data-testid="confirm-panel" @keydown.esc="$emit('cancel')">
     <h4 :id="`${id}-title`" class="font-semibold">{{ title }}</h4>
     <p class="text-sm">{{ consequence }}</p>
     <slot />

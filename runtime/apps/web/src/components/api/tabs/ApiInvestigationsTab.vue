@@ -70,7 +70,7 @@ watch(selected, (runId) => (runId ? replay.open(runId, { live: entries.value.fin
     <template v-else>
       <div class="flex max-w-xl flex-col gap-1">
         <label for="investigation-run" class="text-sm font-medium">{{ t('investigations.choose') }}</label>
-        <select id="investigation-run" v-model="selected" class="h-9 rounded-md border border-input bg-background px-2 text-sm">
+        <select id="investigation-run" v-model="selected" class="h-11 rounded-md border border-input bg-background px-2 text-sm">
           <option v-for="entry in entries" :key="entry.runId" :value="entry.runId">{{ entry.label }}</option>
         </select>
       </div>

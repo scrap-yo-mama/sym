@@ -71,7 +71,7 @@ onServerPrefetch(() => settings.load());
           v-model="form.jitDomains"
           name="jitDomains"
           rows="3"
-          class="border-input bg-background text-foreground max-w-md rounded-md border px-3 py-2 text-sm outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-3"
+          class="border-input bg-background text-foreground max-w-md rounded-md border px-3 py-2 text-sm outline-none focus-visible:border-ring"
         ></textarea>
       </div>
 

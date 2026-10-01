@@ -9,7 +9,7 @@
 # 0 4 8). D'où 42 caractères libres, 1 caractère contraint, puis `=`.
 # Le worker NE génère PAS sa propre clé : il lit celle du serveur (`${{server.MASTER_KEY}}`), sinon les deux processus
 # chiffreraient avec des clés différentes.
-image: ghcr.io/mrsoyer/scrapyomama-runtime:0.0.0 # x-release-please-version
+image: ghcr.io/scrap-yo-mama/sym:0.0.0 # x-release-please-version
 services:
   - name: Postgres
     source: base PostgreSQL de Railway (version 16 ou plus)

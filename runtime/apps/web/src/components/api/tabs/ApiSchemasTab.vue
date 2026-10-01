@@ -86,11 +86,11 @@ const errorText = computed(() => {
             v-model="text"
             rows="12"
             spellcheck="false"
-            class="rounded-md border border-input bg-transparent p-2 font-mono text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+            class="rounded-md border border-input bg-transparent p-2 font-mono text-sm outline-none focus-visible:border-ring"
             :aria-invalid="invalid ? 'true' : 'false'"
             :aria-describedby="invalid ? 'schema-output-invalid' : undefined"
           />
-          <p v-if="invalid" id="schema-output-invalid" role="alert" class="text-sm text-destructive">{{ t('schemas.invalid') }}</p>
+          <p v-if="invalid" id="schema-output-invalid" role="alert" class="sym-error">{{ t('schemas.invalid') }}</p>
           <ConfirmPanel
             v-if="confirming"
             id="schema-confirm"
@@ -101,7 +101,7 @@ const errorText = computed(() => {
             @confirm="confirm"
             @cancel="confirming = false"
           />
-          <p v-if="errorText" role="alert" class="text-sm text-destructive">{{ errorText }}</p>
+          <p v-if="errorText" role="alert" class="sym-error">{{ errorText }}</p>
           <div v-if="!confirming" class="flex gap-3">
             <Button size="sm" @click="review">{{ t('schemas.review') }}</Button>
             <Button variant="outline" size="sm" @click="editing = false">{{ t('ui.cancel') }}</Button>

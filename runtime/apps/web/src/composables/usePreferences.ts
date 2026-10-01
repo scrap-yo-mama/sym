@@ -6,9 +6,12 @@
 import { ref, type Ref } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { LOCALE_STORAGE_KEY, normalizeLocale, setLocale, type Locale, type LocaleTarget } from '@/i18n';
+import { applyMotion, readStoredMotion, storeMotion, type Motion } from '@/lib/motion';
 import { applyTheme, isTheme, readStoredTheme, storeTheme, THEME_STORAGE_KEY, type Theme } from '@/lib/theme';
 
 export const theme: Ref<Theme> = ref(readStoredTheme());
+/** Réglage Animations (20 § 4.3) : mémorisé dans ce navigateur, `users.motion` étant « à valider » (20b § 5). */
+const motion: Ref<Motion> = ref(readStoredMotion());
 
 function hasStored(key: string): boolean {
   try {
@@ -36,7 +39,13 @@ export function usePreferences() {
     applyTheme(next);
   }
 
-  return { changeLocale, changeTheme, theme };
+  function changeMotion(next: Motion): void {
+    motion.value = next;
+    storeMotion(next);
+    applyMotion(next);
+  }
+
+  return { changeLocale, changeMotion, changeTheme, motion, theme };
 }
 
 /** Applique la préférence du compte reçue à la connexion, sauf si l'utilisateur a déjà fait un choix explicite ici. */

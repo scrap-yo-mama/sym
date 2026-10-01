@@ -30,7 +30,7 @@ function show(value: unknown): string {
 }
 
 const GLYPH: Record<DiffKind, string> = { same: ' ', changed: '~', removed: '−', added: '+' };
-const ROW_TONE: Record<DiffKind, string> = { same: '', changed: 'bg-amber-100 dark:bg-amber-950', removed: 'bg-red-100 dark:bg-red-950', added: 'bg-emerald-100 dark:bg-emerald-950' };
+const ROW_TONE: Record<DiffKind, string> = { same: '', changed: 'bg-diff-changed', removed: 'bg-diff-removed', added: 'bg-diff-added' };
 </script>
 
 <template>

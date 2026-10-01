@@ -222,7 +222,7 @@ function startTransfer(event: Event): void {
       <h2 class="text-lg font-semibold">{{ t('users.accounts.title') }}</h2>
       <p class="text-xs text-muted-foreground">{{ t('users.resetLink.note') }}</p>
       <p v-if="accounts.loading.value && !accounts.loaded.value" role="status" class="text-sm text-muted-foreground">{{ t('ui.loading') }}</p>
-      <p v-else-if="accounts.error.value" class="text-sm text-destructive" data-testid="accounts-error">{{ t('errors.generic') }}</p>
+      <p v-else-if="accounts.error.value" class="sym-error" data-testid="accounts-error">{{ t('errors.generic') }}</p>
       <p v-else-if="accounts.items.value.length === 0" class="text-sm text-muted-foreground">{{ t('users.accounts.empty') }}</p>
       <div v-else class="relative overflow-x-auto rounded-xl border">
         <table class="w-full text-left text-sm" data-testid="accounts-table">

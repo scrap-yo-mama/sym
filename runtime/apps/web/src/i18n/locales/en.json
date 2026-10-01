@@ -1298,8 +1298,14 @@
       }
     },
     "preferences": {
-      "title": "Language and theme",
-      "text": "Use the language and theme controls at the top of the page. They are saved with your account."
+      "title": "Language, theme and animations",
+      "text": "Use the language and theme controls at the top of the page. They are saved with your account.",
+      "motion": "Animations",
+      "motionHint": "Reduced turns off every non-essential movement. This choice is kept in this browser.",
+      "motions": {
+        "system": "System",
+        "reduced": "Reduced"
+      }
     },
     "password": {
       "title": "Password",

@@ -42,5 +42,5 @@ const failed = computed(() => props.outcome?.state === 'failed' || (props.outcom
 </script>
 
 <template>
-  <p role="status" class="text-sm" :class="failed ? 'text-destructive' : 'text-muted-foreground'" data-testid="test-outcome">{{ text }}</p>
+  <p role="status" class="text-sm" :class="failed ? 'sym-error' : 'text-muted-foreground'" data-testid="test-outcome">{{ text }}</p>
 </template>
