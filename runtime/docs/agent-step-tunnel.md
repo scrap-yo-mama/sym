@@ -23,6 +23,10 @@ Un `ref` n'est valable que si **les deux** conditions tiennent au moment de l'ac
 
 Sinon l'extension répond `stale_ref` avec **le nouvel instantané** et **n'exécute rien**. Un `ref` inconnu dans l'arbre courant est traité de la même façon. Comme la page peut changer entre la vérification et l'action, le pilote reçoit aussi le rôle et le nom de l'élément attendu et refuse (`stale_ref`) si le `ref` ne désigne plus cet élément : une action ne part jamais sur un autre élément que celui que le modèle a vu.
 
+La règle ne dépend pas du pilote : l'exécuteur refuse un `snapshot_id` ancien ou une page modifiée avant tout appel au pilote, même si celui-ci ne revérifie rien (testé avec un pilote « aveugle »). Si le rôle et le nom d'un `ref` ne se relisent pas dans l'arbre (ligne illisible), l'action est refusée en `stale_ref` : sans cible connue, ni la revérification ni le garde d'écriture ne sont possibles. Les clés que Playwright cite entre guillemets simples (un nom qui contient « : ») sont relues.
+
+**Garde d'écriture fermé par défaut.** Le pilote doit fournir `classify` ; à défaut, tout `click` et tout `type` est traité comme une écriture tant que `allow_write_actions` est faux. En tunnel, aucune interception réseau ne rattrape une écriture (domaine `Network` en lecture seule).
+
 ## Fil
 
 Commande (`cmd: "agent_step"`, enveloppe de 07 §8) : `args = { action, ref?, snapshot_id?, url?, text?, direction? }`. Champs par action :
@@ -36,6 +40,8 @@ Commande (`cmd: "agent_step"`, enveloppe de 07 §8) : `args = { action, ref?, sn
 | `read` | `snapshot_id` facultatif |
 
 Tout autre champ, toute autre action, tout `ref` ou identifiant hors forme est refusé par `method_not_allowed`, sans rien évaluer. Aucune chaîne venue du serveur n'est exécutée comme code.
+
+Côté serveur, `snapshot()` qui reçoit un refus conforme au contrat (défi, délai) lève `AgentStepRefusedError`, qui garde le code (`challenge_detected`, `timeout`…) ; la boucle maison le rend comme classe d'échec. `AgentStepProtocolError` est réservée aux réponses hors contrat.
 
 Réponse (corps réassemblé) : `{ ok, snapshot_id, error, snapshot: { snapshot_id, url, tree, truncated } | null }`. Un succès porte un instantané ; un `stale_ref` porte le nouvel instantané ; une réponse qui viole ce contrat est une erreur de protocole côté serveur, jamais un succès.
 
@@ -52,7 +58,7 @@ Réponse (corps réassemblé) : `{ ok, snapshot_id, error, snapshot: { snapshot_
 
 L'ADR 0001 retient **Stagehand 3.7.3** comme moteur agentique. Stagehand pilote Chromium par son propre client CDP : il n'est **pas** compatible `agent_step`, et 07 §3 interdit aux moteurs tiers de passer par le tunnel (`assert_third_party_engine_not_via_tunnel`).
 
-**Conséquence : avec le moteur retenu, E6 est limité au serveur.** Le garde existe (`assertTunnelEngine`, appelé par `runAgentInTunnel`) : une exécution d'un moteur tiers en tunnel est refusée avant tout run (`ThirdPartyEngineNotViaTunnelError`, code `third_party_engine_not_via_tunnel`) et aucune commande n'atteint l'extension. Son branchement dans l'ordonnancement (choix de la stratégie selon le mode réseau) relève des tâches 2.4 et 2.7. En tunnel, restent servis E1 à E5 (les scripts E5 sont compilés puis rejoués sans agent).
+**Conséquence : avec le moteur retenu, E6 est limité au serveur.** Le garde existe (`assertTunnelEngine`, appelé par `runAgentInTunnel`) : une exécution d'un moteur tiers en tunnel est refusée avant tout run (`ThirdPartyEngineNotViaTunnelError`, code `third_party_engine_not_via_tunnel`) et aucune commande n'atteint l'extension. La règle « E6 refusé en mode tunnel » est aussi un garde nommé côté stratégie : `assertExecutionOnNetwork(execution, network)` (`packages/core/src/agent/execution-network.ts`, `ExecutionNotOnNetworkError`, code `execution_server_only`), testé par `assert_e6_not_in_tunnel_mode`. Son branchement dans l'ordonnancement (choix de la stratégie selon le mode réseau) relève des tâches 2.4 et 2.7, qui l'appellent avant de retenir une stratégie. En tunnel, restent servis E1 à E5 (les scripts E5 sont compilés puis rejoués sans agent).
 
 Le client `agent_step` du paquet et la boucle maison (compatible par construction) existent et sont testés de bout en bout, mais la boucle maison n'est pas le moteur retenu. La réhabiliter pour servir E6 en tunnel exige un nouvel ADR et un nouveau spike (ADR 0001, section Conséquences), pas un ajustement de ce contrat.
 

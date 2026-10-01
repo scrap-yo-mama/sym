@@ -20,16 +20,38 @@ export function hasRef(tree: string, ref: string): boolean {
   return /^[a-z0-9]+$/.test(ref) && tree.includes(`[ref=${ref}]`);
 }
 
-const REF_LINE = /^\s*-\s+([a-zA-Z]+)(?:\s+"((?:[^"\\]|\\.)*)")?[^\n]*?\[ref=([a-z0-9]+)\]/;
+const REF_ITEM = /^([a-zA-Z]+)(?:\s+"((?:[^"\\]|\\.)*)")?[^\n]*?\[ref=([a-z0-9]+)\]/;
+
+/**
+ * Clé d'un élément de liste YAML (`- clé` ou `- clé:`). Playwright cite entre guillemets simples toute clé qui le
+ * demande (un nom qui contient « : », p. ex.), `''` valant `'` (`yamlEscapeKeyIfNeeded`, playwright-core 1.63).
+ */
+function itemKey(line: string): string | undefined {
+  const item = /^\s*-\s+(.*)$/.exec(line);
+  const body = item?.[1];
+  if (body === undefined) return undefined;
+  if (!body.startsWith("'")) return body;
+  let key = '';
+  for (let i = 1; i < body.length; i += 1) {
+    const ch = body[i];
+    if (ch !== "'") key += ch;
+    else if (body[i + 1] === "'") {
+      key += "'";
+      i += 1;
+    } else return key;
+  }
+  return undefined;
+}
 
 /**
  * Sélecteur sémantique (rôle + nom accessible) d'un `ref` dans un arbre : c'est lui que la trace consigne, jamais le
- * seul `ref` (04 §3.1, compilation E6 → E5).
+ * seul `ref` (04 §3.1, compilation E6 → E5). `undefined` si la ligne est illisible : l'exécuteur refuse alors d'agir.
  */
 export function semanticOf(tree: string, ref: string): { role: string; name: string } | undefined {
   for (const line of tree.split('\n')) {
     if (!line.includes(`[ref=${ref}]`)) continue;
-    const match = REF_LINE.exec(line);
+    const key = itemKey(line);
+    const match = key === undefined ? null : REF_ITEM.exec(key);
     if (match?.[3] !== ref) continue;
     return { role: match[1] ?? 'generic', name: (match[2] ?? '').replace(/\\(.)/g, '$1') };
   }
@@ -119,8 +141,12 @@ export interface StepExpectedTarget {
 export interface AgentStepDriver {
   observe(): Promise<StepObservation>;
   perform(action: AgentStepAction, expected?: StepExpectedTarget): Promise<{ ok: true } | { ok: false; error: 'stale_ref' | 'timeout' | 'domain_not_allowed' }>;
-  /** Un clic d'envoi, d'achat ou de suppression est une écriture (07 §5). Sans cette méthode, rien n'est classé écriture. */
-  classify?(action: AgentStepAction, target: StepExpectedTarget | undefined): 'read' | 'write';
+  /**
+   * Un clic d'envoi, d'achat ou de suppression est une écriture (07 §5). Obligatoire : en tunnel, aucune interception
+   * réseau ne rattrape une écriture (Network en lecture seule). Un pilote qui ne la fournit pas (appelant JavaScript)
+   * voit tout `click` et tout `type` traités comme des écritures tant que `allow_write_actions` est faux.
+   */
+  classify(action: AgentStepAction, target: StepExpectedTarget): 'read' | 'write';
   /** Vrai si la page affiche un défi ou une vérification anti-bot (07 §5, X3). */
   challengeDetected?(observation: StepObservation): boolean;
 }
@@ -168,6 +194,12 @@ export class AgentStepExecutor {
     return error === undefined ? { ok: true, snapshot } : { ok: false, error, snapshot };
   }
 
+  /** Garde d'écriture fermé par défaut : sans classifieur, toute action sur un élément est une écriture. */
+  #isWrite(action: AgentStepAction, target: StepExpectedTarget): boolean {
+    const classify = (this.#driver as Partial<AgentStepDriver>).classify;
+    return typeof classify !== 'function' || classify.call(this.#driver, action, target) !== 'read';
+  }
+
   async executeAction(action: AgentStepAction): Promise<AgentStepResult> {
     if (this.#challenged) return { ok: false, error: 'challenge_detected' };
     switch (action.kind) {
@@ -182,7 +214,9 @@ export class AgentStepExecutor {
         const verdict = this.#tracker.verify({ snapshotId: action.target.snapshotId, ref: action.target.ref }, observation);
         if (!verdict.ok) return { ok: false, error: 'stale_ref', snapshot: verdict.snapshot };
         const expected = this.#tracker.semanticTarget(action.target.snapshotId, action.target.ref);
-        if (!this.#options.allowWriteActions && this.#driver.classify?.(action, expected) === 'write') {
+        // Cible illisible (ni rôle ni nom) : impossible de la revérifier au moment d'agir ni de la classer, donc refus.
+        if (expected === undefined) return { ok: false, error: 'stale_ref', snapshot: this.#tracker.observe(observation) };
+        if (!this.#options.allowWriteActions && this.#isWrite(action, expected)) {
           return { ok: false, error: 'write_action_not_allowed', snapshot: this.#tracker.observe(observation) };
         }
         const done = await this.#driver.perform(action, expected);

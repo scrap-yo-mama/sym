@@ -9,6 +9,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { HomeLoopEngine } from './home-loop.js';
 import {
   AgentStepProtocolError,
+  AgentStepRefusedError,
   assertTunnelEngine,
   runAgentInTunnel,
   ThirdPartyEngineNotViaTunnelError,
@@ -35,8 +36,22 @@ class FakeTab implements AgentStepDriver {
     }
     return { ok: true };
   }
+  classify(): 'read' | 'write' {
+    return 'read';
+  }
   challengeDetected(): boolean {
     return this.challenge;
+  }
+}
+
+/** Onglet dont le pilote exécute tout sans vérifier `expected` : seule la règle snapshot_id + empreinte protège. */
+class BlindTab extends FakeTab {
+  override async perform(action: AgentStepAction): ReturnType<AgentStepDriver['perform']> {
+    if (action.kind === 'click' || action.kind === 'type') {
+      const name = this.items[Number(action.target.ref.slice(1)) - 1] ?? '?';
+      this.performed.push(`${action.kind}:${name}`);
+    }
+    return { ok: true };
   }
 }
 
@@ -77,6 +92,35 @@ describe('assert_agent_step_stale_ref : client du tunnel', () => {
     const fresh = stale.snapshot!;
     expect((await channel.execute({ kind: 'click', target: { snapshotId: fresh.snapshotId, ref: 'e2' } })).ok).toBe(true);
     expect(tab.performed).toEqual(['click:Archiver', 'click:Suivant']);
+  });
+
+  it('pilote CDP qui ne vérifie rien : un ancien snapshot_id donne quand même stale_ref, et aucune action ne part', async () => {
+    const tab = new BlindTab();
+    const { transport } = loopback(tab);
+    const channel = new TunnelStepChannel(transport);
+    const first = await channel.snapshot();
+    tab.items.shift();
+    for (const action of [
+      { kind: 'click', target: { snapshotId: first.snapshotId, ref: 'e1' } },
+      { kind: 'type', target: { snapshotId: first.snapshotId, ref: 'e2' }, text: 'x' },
+    ] as const) {
+      const stale = await channel.execute(action);
+      expect(stale).toMatchObject({ ok: false, error: 'stale_ref' });
+      expect(stale.snapshot?.snapshotId).not.toBe(first.snapshotId);
+    }
+    expect(tab.performed).toEqual([]);
+  });
+
+  it('snapshot() refusé par l\'extension (défi, délai) : erreur typée qui garde le code, pas une erreur de protocole', async () => {
+    const tab = new FakeTab();
+    tab.challenge = true;
+    const channel = new TunnelStepChannel(loopback(tab).transport);
+    const error = await channel.snapshot().then(() => null, (e: unknown) => e);
+    expect(error).toBeInstanceOf(AgentStepRefusedError);
+    expect(error).not.toBeInstanceOf(AgentStepProtocolError);
+    expect(error).toMatchObject({ code: 'agent_step_refused', error: 'challenge_detected', action: 'read' });
+    const late = new TunnelStepChannel({ send: async () => ({ ok: false, error: 'timeout', snapshot_id: null, snapshot: null }) });
+    await expect(late.snapshot()).rejects.toMatchObject({ error: 'timeout' });
   });
 
   it('une réponse hors contrat (stale_ref sans instantané, succès sans instantané, charabia) est une erreur de protocole, jamais un succès', async () => {
@@ -185,6 +229,19 @@ describe('assert_third_party_engine_not_via_tunnel', () => {
     expect(result.output).toEqual({ left: 2 });
     expect(tab.performed).toEqual(['click:Archiver']);
     expect(result.steps[0]).toMatchObject({ action: 'click', semanticTarget: { role: 'button', name: 'Archiver' }, executed: true });
+  });
+
+  it('la boucle maison face à un défi dès le premier instantané : échec classé challenge_detected, pas engine_error', async () => {
+    fake.reset();
+    const tab = new FakeTab();
+    tab.challenge = true;
+    const llm = new LlmClient(
+      { providers: [{ id: 'fake', baseUrl: fake.baseUrl, apiKey: new Secret('zz_test_key'), models: [{ id: MODEL, price: { in: 1, out: 2 }, profile }] }], roles: { agent: { provider: 'fake', model: MODEL } } },
+      { sleep: async () => undefined },
+    );
+    const result = await runAgentInTunnel(new HomeLoopEngine({ llm, version: 'zz_test' }), task, { transport: loopback(tab).transport, model: modelSettings });
+    expect(result).toMatchObject({ status: 'error', failureClass: 'challenge_detected', output: null });
+    expect(tab.performed).toEqual([]);
   });
 
   it('un moteur qui ne déclare pas agentStepCompatible est refusé même s\'il se dit « home_loop » (la capacité décide, pas le nom)', () => {

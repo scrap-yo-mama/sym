@@ -16,6 +16,7 @@ import {
   type AgentSnapshot,
   type AgentStepAction,
   type AgentStepChannel,
+  type AgentStepErrorCode,
   type AgentStepResult,
   type AgentStepWireArgs,
   type AgentTask,
@@ -34,6 +35,22 @@ export class AgentStepProtocolError extends Error {
     super(`réponse agent_step hors contrat pour l'action « ${action} »`);
     this.name = 'AgentStepProtocolError';
     this.action = action;
+  }
+}
+
+/**
+ * Refus typé de l'extension là où un instantané était attendu (`snapshot()`) : la réponse respecte le contrat, le code
+ * est gardé (`challenge_detected`, `timeout`…) pour que la boucle et l'état final (07 §5, `challenge_in_tunnel`) le voient.
+ */
+export class AgentStepRefusedError extends Error {
+  readonly code = 'agent_step_refused' as const;
+  readonly action: AgentStepAction['kind'];
+  readonly error: AgentStepErrorCode;
+  constructor(action: AgentStepAction['kind'], error: AgentStepErrorCode) {
+    super(`agent_step refusé par l'extension pour l'action « ${action} » : ${error}`);
+    this.name = 'AgentStepRefusedError';
+    this.action = action;
+    this.error = error;
   }
 }
 
@@ -83,7 +100,7 @@ export class TunnelStepChannel implements AgentStepChannel {
 
   async snapshot(): Promise<AgentSnapshot> {
     const result = await this.execute({ kind: 'read' });
-    if (!result.ok) throw new AgentStepProtocolError('read');
+    if (!result.ok) throw new AgentStepRefusedError('read', result.error);
     return result.snapshot;
   }
 

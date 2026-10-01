@@ -2,7 +2,7 @@
 // Suivi des instantanés et exécuteur `agent_step` (07 §3, tâche 0.6b), sans navigateur : un faux navigateur à références
 // renumérotées à chaque changement montre qu'un `ref` périmé ne vise jamais un autre élément.
 import { describe, expect, it } from 'vitest';
-import { AgentStepExecutor, StepSnapshotTracker, hasRef, semanticOf, truncateTree, type AgentStepDriver, type AgentStepResult, type StepObservation } from '../index.js';
+import { AgentStepExecutor, StepSnapshotTracker, hasRef, semanticOf, truncateTree, type AgentStepAction, type AgentStepDriver, type AgentStepResult, type StepExpectedTarget, type StepObservation } from '../index.js';
 
 /** Page factice : une liste d'éléments ; `ref` = rang courant (e1, e2…), donc renumérotés quand la liste change. */
 class FakePage implements AgentStepDriver {
@@ -49,7 +49,7 @@ class FakePage implements AgentStepDriver {
   }
 }
 
-const make = (page: FakePage, options: { allowWriteActions?: boolean } = {}): AgentStepExecutor =>
+const make = (page: AgentStepDriver, options: { allowWriteActions?: boolean } = {}): AgentStepExecutor =>
   new AgentStepExecutor({ driver: page, urlAllowed: (url) => new URL(url).hostname === 'monsite.com', allowWriteActions: options.allowWriteActions ?? false });
 
 const ok = (result: AgentStepResult) => {
@@ -214,5 +214,102 @@ describe('AgentStepExecutor : refus typés', () => {
     const stale = await exec.execute({ action: 'click', ref: 'e1', snapshot_id: 's404-000000' });
     expect(stale).toMatchObject({ ok: false, error: 'stale_ref' });
     expect(stale.snapshot?.tree).toContain('Archiver');
+  });
+});
+
+/**
+ * Pilote « aveugle » : il exécute tout ce qu'on lui demande, sans vérifier `expected`. La règle de fraîcheur
+ * (`snapshot_id` + empreinte) doit tenir seule, quel que soit le pilote CDP branché en 2.7.
+ */
+class BlindPage implements AgentStepDriver {
+  url = 'https://monsite.com/';
+  lines = ['- button "Archiver" [ref=e1]', '- button "Supprimer tout" [ref=e2]', '- button "Envoyer" [ref=e3]'];
+  performed: string[] = [];
+  classified: (StepExpectedTarget | undefined)[] = [];
+  async observe(): Promise<StepObservation> {
+    return { url: this.url, tree: this.lines.join('\n') };
+  }
+  async perform(action: AgentStepAction): ReturnType<AgentStepDriver['perform']> {
+    this.performed.push(action.kind === 'click' || action.kind === 'type' ? `${action.kind}:${action.target.ref}` : action.kind);
+    return { ok: true };
+  }
+  classify(_action: AgentStepAction, target: StepExpectedTarget | undefined): 'read' | 'write' {
+    this.classified.push(target);
+    return 'read';
+  }
+}
+
+describe('assert_agent_step_stale_ref : la règle tient sans l\'aide du pilote', () => {
+  it('click et type sur un ancien snapshot_id : stale_ref, nouvel instantané, rien n\'atteint un pilote qui ne vérifie rien', async () => {
+    const page = new BlindPage();
+    const exec = make(page);
+    const first = ok(await exec.executeAction({ kind: 'read' }));
+    page.lines.shift();
+    const click = await exec.executeAction({ kind: 'click', target: { snapshotId: first.snapshotId, ref: 'e1' } });
+    expect(click).toMatchObject({ ok: false, error: 'stale_ref' });
+    expect(click.snapshot?.snapshotId).not.toBe(first.snapshotId);
+    const type = await exec.executeAction({ kind: 'type', target: { snapshotId: first.snapshotId, ref: 'e2' }, text: 'x' });
+    expect(type).toMatchObject({ ok: false, error: 'stale_ref' });
+    expect(await exec.executeAction({ kind: 'click', target: { snapshotId: 's404-000000', ref: 'e1' } })).toMatchObject({ ok: false, error: 'stale_ref' });
+    expect(page.performed).toEqual([]);
+    // Le contrôle positif : l'instantané frais fait partir l'action, donc le refus vient bien de la règle.
+    const fresh = click.snapshot!;
+    ok(await exec.executeAction({ kind: 'click', target: { snapshotId: fresh.snapshotId, ref: 'e2' } }));
+    expect(page.performed).toEqual(['click:e2']);
+  });
+
+  it('ref présent mais ligne illisible (rôle ni nom) : stale_ref, rien d\'exécuté ni classé sans cible', async () => {
+    const page = new BlindPage();
+    page.lines = ['- 123 [ref=e1]'];
+    const exec = make(page);
+    const first = ok(await exec.executeAction({ kind: 'read' }));
+    expect(await exec.executeAction({ kind: 'click', target: { snapshotId: first.snapshotId, ref: 'e1' } })).toMatchObject({ ok: false, error: 'stale_ref' });
+    expect(await exec.executeAction({ kind: 'type', target: { snapshotId: first.snapshotId, ref: 'e1' }, text: 'x' })).toMatchObject({ ok: false, error: 'stale_ref' });
+    expect(page.performed).toEqual([]);
+    expect(page.classified).toEqual([]);
+  });
+});
+
+describe('semanticOf : clés YAML entre guillemets simples (format Playwright)', () => {
+  it('un nom avec « : » est cité par Playwright ; rôle et nom sont relus, `\'\'` compris', () => {
+    const tree = "- main:\n  - 'button \"Prix : 10 €\" [ref=e1]'\n  - 'link \"L''aide : FAQ\" [ref=e2] [cursor=pointer]':\n    - /url: /aide";
+    expect(semanticOf(tree, 'e1')).toEqual({ role: 'button', name: 'Prix : 10 €' });
+    expect(semanticOf(tree, 'e2')).toEqual({ role: 'link', name: "L'aide : FAQ" });
+  });
+
+  it('l\'exécuteur passe la cible relue au classifieur : un bouton d\'envoi cité reste une écriture', async () => {
+    const page = new FakePage();
+    page.items = [{ role: 'button', name: 'Envoyer : confirmer' }];
+    const quoted = new (class extends FakePage {
+      override async observe(): Promise<StepObservation> {
+        this.observed += 1;
+        return { url: this.url, tree: this.items.map((item, i) => `- '${item.role} "${item.name}" [ref=e${i + 1}]'`).join('\n') };
+      }
+      override classify(action: AgentStepAction, target: StepExpectedTarget | undefined): 'read' | 'write' {
+        return action.kind === 'click' && target?.name.startsWith('Envoyer') === true ? 'write' : 'read';
+      }
+    })();
+    quoted.items = page.items;
+    const exec = make(quoted);
+    const snap = ok(await exec.executeAction({ kind: 'read' }));
+    expect(await exec.executeAction({ kind: 'click', target: { snapshotId: snap.snapshotId, ref: 'e1' } })).toMatchObject({ ok: false, error: 'write_action_not_allowed' });
+    expect(quoted.performed).toEqual([]);
+  });
+});
+
+describe('garde d\'écriture : fermé par défaut', () => {
+  it('pilote sans classify et allow_write_actions faux : click et type sont des écritures, rien ne part ; autorisés, ils partent', async () => {
+    const blind = new BlindPage();
+    const driver = { observe: () => blind.observe(), perform: (a: AgentStepAction) => blind.perform(a) } as unknown as AgentStepDriver;
+    const strict = new AgentStepExecutor({ driver, urlAllowed: () => true, allowWriteActions: false });
+    const snap = ok(await strict.executeAction({ kind: 'read' }));
+    expect(await strict.executeAction({ kind: 'click', target: { snapshotId: snap.snapshotId, ref: 'e1' } })).toMatchObject({ ok: false, error: 'write_action_not_allowed' });
+    expect(await strict.executeAction({ kind: 'type', target: { snapshotId: snap.snapshotId, ref: 'e1' }, text: 'x' })).toMatchObject({ ok: false, error: 'write_action_not_allowed' });
+    ok(await strict.executeAction({ kind: 'scroll', snapshotId: snap.snapshotId, direction: 'down' }));
+    expect(blind.performed).toEqual(['scroll']);
+    const open = new AgentStepExecutor({ driver, urlAllowed: () => true, allowWriteActions: true });
+    const snap2 = ok(await open.executeAction({ kind: 'read' }));
+    ok(await open.executeAction({ kind: 'click', target: { snapshotId: snap2.snapshotId, ref: 'e1' } }));
+    expect(blind.performed).toEqual(['scroll', 'click:e1']);
   });
 });
