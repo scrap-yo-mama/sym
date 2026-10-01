@@ -258,10 +258,12 @@ export type SharedWorkerBlock = { close(): Promise<void> };
 /**
  * Échec fermé sur les SharedWorker (revue de 1.11, INV11) : leurs requêtes ne passent ni par `context.route` ni par
  * l'interception CDP de la page (une cible `shared_worker` n'est pas jointe par l'attachement automatique de la page, et
- * `Fetch` de la page ne la couvre pas). Une session CDP au niveau du navigateur joint chaque SharedWorker dès sa création,
- * suspendu avant toute exécution de son code (`waitForDebuggerOnStart`), puis le ferme (`Target.closeTarget`). S'il ne
- * peut pas être fermé, il reste suspendu : il n'est jamais relancé, aucune requête ne part. Le script du worker lui-même
- * est chargé par la page (contrôlé par `context.route` et le contrôle CDP de la page) ; son code ne s'exécute jamais.
+ * `Fetch` de la page ne la couvre pas). Une session CDP au niveau du navigateur joint chaque SharedWorker dès sa création
+ * (`waitForDebuggerOnStart`), puis le ferme (`Target.closeTarget`). Filet, pas verrou : Playwright, joint à la même cible,
+ * la relance aussitôt (`Runtime.runIfWaitingForDebugger` de `CRSession.detach`), et la fermeture court contre le démarrage
+ * du worker. Le script d'un worker d'URL http(s) est chargé par la page (aller-retour réseau, contrôlé par `context.route`
+ * et le contrôle CDP) : la fermeture arrive avant son code. Un worker blob: n'a pas cet aller-retour : la garde des
+ * documents (`installPageGuard`) refuse tout constructeur `SharedWorker`, et c'est elle qui l'interdit.
  */
 export async function blockSharedWorkers(browser: Browser): Promise<SharedWorkerBlock> {
   const session = await browser.newBrowserCDPSession();

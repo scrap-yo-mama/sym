@@ -8,6 +8,13 @@
 //    blob: ou data: créé par un document hériterait de la CSP du document, qui permet les WebSocket (contrôlés par
 //    `routeWebSocket` dans la page) : il est refusé (`SecurityError`), comme le ferait une CSP `worker-src http: https:`
 //    (Chromium n'applique pas une CSP ajoutée à la réponse d'un document par CDP). Les workers http(s) restent permis.
+// 1 bis. SharedWorker. Ses requêtes ne passent ni par `context.route` ni par l'interception CDP de la page. Le blocage au
+//    niveau du navigateur (`blockSharedWorkers`, request-guard.ts) ferme chaque SharedWorker dès son attachement, mais
+//    Playwright, attaché lui aussi à ces cibles, les relance aussitôt (`CRSession.detach` envoie
+//    `Runtime.runIfWaitingForDebugger`) : la fermeture court contre le démarrage du worker, et un worker blob: (script déjà
+//    local, aucun aller-retour réseau) la perd sous charge (constaté : `fetch` d'un chemin interdit parti d'un SharedWorker
+//    blob:, un run sur trois sous charge). Le constructeur est donc refusé (`SecurityError`) dans chaque document : aucun
+//    SharedWorker ne naît, aucune course. Le blocage du navigateur reste le filet des autres voies.
 // 2. Règles de spéculation (speculation rules). Le préchargement (prefetch) qu'elles déclenchent part du navigateur
 //    lui-même : ni `context.route`, ni l'interception CDP Fetch (de la page ou du navigateur), ni `Network.setBlockedURLs`,
 //    ni l'émulation réseau ne le voient, et Chromium 153 (headless shell) n'a ni commutateur, ni politique, ni réglage
@@ -75,6 +82,18 @@ const GUARD = String.raw`function () {
     });
     define(NativeWorker.prototype, 'constructor', { value: Wrapped, writable: true, configurable: true, enumerable: false });
     define(G, 'Worker', { value: Wrapped, writable: true, configurable: true, enumerable: false });
+  }
+
+  // 1 bis. SharedWorker refusé, quel que soit le schéma (voir en tête).
+  const NativeSharedWorker = G.SharedWorker;
+  if (typeof NativeSharedWorker === 'function') {
+    const WrappedShared = new Proxy(NativeSharedWorker, {
+      construct() {
+        throw new NativeDOMException('scrapyomama: SharedWorker refusé (robots.txt)', 'SecurityError');
+      },
+    });
+    define(NativeSharedWorker.prototype, 'constructor', { value: WrappedShared, writable: true, configurable: true, enumerable: false });
+    define(G, 'SharedWorker', { value: WrappedShared, writable: true, configurable: true, enumerable: false });
   }
 
   // 2. Règles de spéculation.

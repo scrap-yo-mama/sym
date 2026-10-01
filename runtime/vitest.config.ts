@@ -60,6 +60,9 @@ export default defineConfig({
           name: 'security',
           testTimeout: 60_000,
           hookTimeout: 120_000,
+          // Un fichier à la fois : ces tests ont des budgets de temps (latence d'arrêt de l'enfant du bac à sable, débit de
+          // sortie vers l'hôte, démarrages de Chromium) que la charge d'un autre fichier du même étage fait dépasser.
+          fileParallelism: false,
           include: [
             'packages/*/src/**/*.security.test.ts',
             'apps/*/src/**/*.security.test.ts',
