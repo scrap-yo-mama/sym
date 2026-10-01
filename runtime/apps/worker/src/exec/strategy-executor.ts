@@ -13,7 +13,15 @@
 //    jamais émises, que le registre du run ne connaît pas) n'est JAMAIS écrit : `run_logs` comme le journal du worker
 //    n'en reçoivent que des identifiants techniques (nombre de lignes, octets), 17 §6 « aucune donnée personnelle ».
 import {
+  assertExecutionOnNetwork,
+  ExecutionNotOnNetworkError,
+  type AgentFetchSpec,
+  type AgentSpec,
+  type HybridSpec,
+  validateAgentFetchSpec,
+  validateAgentSpec,
   validateDeclarativeSpec,
+  validateHybridSpec,
   validateOutput,
   type SandboxViolation,
   type DeclarativeSpec,
@@ -41,12 +49,28 @@ import {
   type SecretReader,
   type SsrfGuard,
 } from '@runtime/core/net';
-import { loadRunTarget, readProxySettings, saveRunDataset, type RunTarget } from '@runtime/db';
+import { loadRunTarget, readProxySettings, saveCompiledStrategy, saveRunDataset, type RunTarget } from '@runtime/db';
+import type { LlmClient, LlmConfig } from '@runtime/llm';
 import type pg from 'pg';
 import { pino, type Logger } from 'pino';
 import type { BrowserPool } from '../browser/pool.js';
 import { runFetchInPageExecutor, runPlaywrightExecutor } from './browser-executors.js';
 import { runScriptExecutor, type ScriptPort } from './script-executor.js';
+import type { AgentBrowser, AgentBrowserOptions } from '../browser/agent-browser.js';
+import { runAgentExecutor, runAgentFetchExecutor, runHybridExecutor, type AgentOutcome, type EngineFactory, type LlmSpend } from './agent-executors.js';
+
+/**
+ * Ports des exécuteurs agentiques E4-E6 (tâche 2.4). La configuration LLM est relue à chaque essai (`settings.llm`,
+ * clés dans le dépôt de secrets) ; un client neuf par essai porte le compteur de coût de cet essai.
+ */
+export type AgentPorts = {
+  readonly llmConfig: () => Promise<LlmConfig | null>;
+  readonly client: (config: LlmConfig) => LlmClient;
+  /** Moteur du rôle `agent` sur le Chromium dédié de l'essai (Stagehand en production). */
+  readonly engineFor: (config: LlmConfig) => EngineFactory;
+  /** Lancement du Chromium dédié (proxy d'egress de l'essai). */
+  readonly agentBrowser: (options: AgentBrowserOptions) => Promise<AgentBrowser>;
+};
 
 export type StrategyExecutorDeps = {
   readonly pool: pg.Pool;
@@ -62,6 +86,8 @@ export type StrategyExecutorDeps = {
   readonly proxyResolver?: Resolver;
   /** Bac à sable (1.5) pour les stratégies E3 en script. */
   readonly script?: ScriptPort;
+  /** Exécuteurs agentiques E4-E6 ; absents : ces stratégies échouent en `code_error` (`execution_unavailable`). */
+  readonly agent?: AgentPorts;
   /** Garde de classification avant extraction (1.7). */
   readonly classify?: (exchange: HttpExchange) => ExecFailure | null;
   /** Journal du worker (violations du bac à sable, détail admin). */
@@ -77,6 +103,8 @@ type Outcome = {
   scriptLog?: { readonly lines: number; readonly bytes: number };
   /** Tous les éléments émis par un script E3, essai réussi ou non (inscrits au registre de masquage du run). */
   scriptItems?: readonly unknown[];
+  /** Essai agentique (E4-E6) : coût LLM, compilation E6 → E5, refus du verrou de domaines. */
+  agent?: Omit<AgentOutcome, 'result'>;
 };
 
 /** Somme des usages réseau d'un essai (egress Chromium + session `ctx.fetch` du script). */
@@ -135,6 +163,28 @@ function scriptSpecOf(spec: unknown): { allowedHosts: string[]; startUrl: string
   }
   if (!hosts.includes(start.hostname)) return refuse('code_error', 'invalid_script_spec');
   return { allowedHosts: hosts, startUrl: start.href };
+}
+
+type AgenticSpec =
+  | { readonly kind: 'agent_fetch'; readonly spec: AgentFetchSpec; readonly hosts: readonly string[] }
+  | { readonly kind: 'hybrid'; readonly spec: HybridSpec; readonly hosts: readonly string[] }
+  | { readonly kind: 'agent'; readonly spec: AgentSpec; readonly hosts: readonly string[] };
+
+/** Spécification d'une stratégie E4-E6, validée (liste fermée, domaines de l'API) ; refus `invalid_agent_spec`. */
+function agenticSpecOf(execution: string, spec: unknown): AgenticSpec | undefined {
+  if (execution === 'agent_fetch') {
+    const c = validateAgentFetchSpec(spec);
+    return c.ok ? { kind: 'agent_fetch', spec: c.spec, hosts: c.spec.request.allowed_hosts } : refuse('code_error', 'invalid_agent_spec');
+  }
+  if (execution === 'hybrid') {
+    const c = validateHybridSpec(spec);
+    return c.ok ? { kind: 'hybrid', spec: c.spec, hosts: c.spec.allowed_hosts } : refuse('code_error', 'invalid_agent_spec');
+  }
+  if (execution === 'agent') {
+    const c = validateAgentSpec(spec);
+    return c.ok ? { kind: 'agent', spec: c.spec, hosts: c.spec.allowed_hosts } : refuse('code_error', 'invalid_agent_spec');
+  }
+  return undefined;
 }
 
 export function createStrategyExecutor(deps: StrategyExecutorDeps): RunExecutor {
@@ -208,6 +258,14 @@ export function createStrategyExecutor(deps: StrategyExecutorDeps): RunExecutor 
   };
 
   const execute = async (ctx: RunCtx, target: RunTarget, strategy: NonNullable<RunTarget['strategy']>): Promise<Outcome> => {
+    // E6 limité au serveur (0.6b, ADR 0001) : refusé en tunnel avant tout réseau.
+    try {
+      assertExecutionOnNetwork(strategy.execution, strategy.network);
+    } catch (error) {
+      if (error instanceof ExecutionNotOnNetworkError) return refuse('code_error', error.code);
+      throw error;
+    }
+    const agentic = agenticSpecOf(strategy.execution, strategy.spec);
     const { rung, credentials } = await rungFor(target, strategy.network);
     const script = strategy.execution === 'playwright' && strategy.scriptRef !== null ? scriptSpecOf(strategy.spec) : undefined;
     const spec = script === undefined && ['fetch', 'fetch_in_page', 'playwright'].includes(strategy.execution) ? specOf(target, strategy) : undefined;
@@ -218,7 +276,7 @@ export function createStrategyExecutor(deps: StrategyExecutorDeps): RunExecutor 
       guard: deps.guard,
       ...(credentials === undefined ? {} : { credentials }),
       ...(deps.proxyResolver === undefined ? {} : { proxyResolver: deps.proxyResolver }),
-      allowedHosts: script?.allowedHosts ?? spec?.request.allowed_hosts ?? [],
+      allowedHosts: script?.allowedHosts ?? spec?.request.allowed_hosts ?? agentic?.hosts ?? [],
       costCeiling: { maxUsd: target.api.maxCostUsd, otherUsd: () => (side === 'egress' ? otherUsd.session() : otherUsd.egress()) },
     });
     const pacer = pacerFor(target);
@@ -264,8 +322,93 @@ export function createStrategyExecutor(deps: StrategyExecutorDeps): RunExecutor 
           await egress.close().catch(() => undefined);
         }
       }
+      case 'agent_fetch':
+      case 'hybrid':
+      case 'agent': {
+        const ports = deps.agent;
+        if (ports === undefined || agentic === undefined) return refuse('code_error', 'execution_unavailable');
+        // Chromium requis pour E5 et E6, et pour E4 par le navigateur (`DISABLE_BROWSER`).
+        if (deps.browsers === null && !(agentic.kind === 'agent_fetch' && agentic.spec.via === 'fetch')) return refuse('code_error', 'browser_disabled');
+        let config: LlmConfig | null;
+        try {
+          config = await ports.llmConfig();
+        } catch {
+          config = null;
+        }
+        const egress = agentic.kind === 'agent_fetch' && agentic.spec.via === 'fetch' ? undefined : await openBrowserEgress(sessionOptions('egress'));
+        if (egress !== undefined) otherUsd = { ...otherUsd, egress: () => egress.usage().costUsd };
+        const session = agentic.kind === 'agent_fetch' && agentic.spec.via === 'fetch' ? openNetworkSession(sessionOptions('session')) : undefined;
+        if (session !== undefined) otherUsd = { ...otherUsd, session: () => session.usage().costUsd };
+        const agentBrowser = (o: Omit<AgentBrowserOptions, 'egressServer'>) => ports.agentBrowser({ ...o, egressServer: egress!.server });
+        // Client du seul rôle `extract` (un client par essai : compteur de coût de l'essai) ; configuration refusée → `llm_not_configured`.
+        const extractClient = (): LlmClient | null => {
+          const role = config?.roles.extract;
+          if (config === null || role === undefined) return null;
+          try {
+            return ports.client({ ...config, roles: { extract: role } });
+          } catch {
+            return refuse('code_error', 'llm_not_configured');
+          }
+        };
+        const maxRequests = target.api.domainPacing.max_requests_per_run;
+        const common = {
+          outputSchema: target.api.outputSchema,
+          signal: ctx.signal,
+          ...(pacer === undefined ? {} : { pacer }),
+          ...(maxRequests === undefined ? {} : { maxRequests }),
+          ...(deps.classify === undefined ? {} : { classify: deps.classify }),
+        };
+        try {
+          let out: AgentOutcome;
+          if (agentic.kind === 'agent_fetch') {
+            const llm = extractClient();
+            if (llm === null) return refuse('code_error', 'llm_not_configured');
+            out = await runAgentFetchExecutor({
+              ...common,
+              spec: agentic.spec,
+              llm,
+              modelId: config?.roles.extract?.model ?? null,
+              ...(session === undefined ? {} : { session }),
+              ...(egress === undefined || deps.browsers === null ? {} : { browser: { pool: deps.browsers, egress, guard: deps.guard } }),
+            });
+          } else if (agentic.kind === 'hybrid') {
+            out = await runHybridExecutor({
+              ...common,
+              spec: agentic.spec,
+              guard: deps.guard,
+              egress: egress!,
+              pool: deps.browsers,
+              agentBrowser,
+              ...(config === null ? {} : { engineFor: ports.engineFor(config), llm: extractClient(), llmModelId: config.roles.extract?.model ?? null }),
+              allowWriteActions: target.api.allowWriteActions,
+              maxCostUsd: target.api.maxCostUsd,
+            });
+          } else {
+            if (config === null || config.roles.agent === undefined) return refuse('code_error', 'llm_not_configured');
+            out = await runAgentExecutor({
+              ...common,
+              spec: agentic.spec,
+              guard: deps.guard,
+              egress: egress!,
+              agentBrowser,
+              engineFor: ports.engineFor(config),
+              pool: deps.browsers,
+              allowWriteActions: target.api.allowWriteActions,
+              maxCostUsd: target.api.maxCostUsd,
+              taskId: ctx.runId,
+              version: strategy.version,
+            });
+          }
+          const exceeded = (egress?.budgetExceeded() ?? false) || (session?.budgetExceeded() ?? false);
+          const usage = egress !== undefined && session !== undefined ? addUsage(egress.usage(), session.usage()) : (egress?.usage() ?? session?.usage() ?? null);
+          const { result, ...agent } = out;
+          return { result: budgetChecked(egress === undefined ? result : refineEgress(result, egress), exceeded), usage, agent };
+        } finally {
+          await session?.close().catch(() => undefined);
+          await egress?.close().catch(() => undefined);
+        }
+      }
       default:
-        // E4-E6 : moteur agentique (tâche 2.4).
         return refuse('code_error', 'execution_unavailable');
     }
   };
@@ -307,6 +450,10 @@ export function createStrategyExecutor(deps: StrategyExecutorDeps): RunExecutor 
       await ctx.log('info', 'sandbox_log', { lines: outcome.scriptLog.lines, bytes: outcome.scriptLog.bytes });
     }
     const proxyUsd = usage?.costUsd ?? 0;
+    const llm: LlmSpend | null = outcome.agent?.llm ?? null;
+    const llmUsd = llm?.usd ?? 0;
+    if (llm !== null && llm.usd === null) await ctx.log('warn', 'llm_price_missing', { model: llm.modelId });
+    if ((outcome.agent?.domainBlocked ?? 0) > 0) await ctx.log('warn', 'agent_domain_blocked', { count: outcome.agent?.domainBlocked });
     await ctx.recordAttempt({
       execution: strategy.execution,
       network: strategy.network,
@@ -314,13 +461,34 @@ export function createStrategyExecutor(deps: StrategyExecutorDeps): RunExecutor 
       result: result.ok ? 'ok' : result.failure.failure_class,
       ms: Math.max(0, Math.round(now() - started)),
       proxy_usd: proxyUsd,
+      ...(llm === null
+        ? {}
+        : {
+            llm_usd: llmUsd,
+            tokens: llm.tokens,
+            model_id: llm.modelId,
+            prompt_version: llm.promptVersion,
+            engine: llm.engine,
+          }),
     });
     const version = strategy.version;
-    if (proxyUsd > target.api.maxCostUsd) {
+    if (proxyUsd + llmUsd > target.api.maxCostUsd) {
       return { state: 'failed', failure_class: 'run_budget_exceeded', retryable: false, error_detail: 'max_cost_usd', strategy_version: version };
     }
     if (!result.ok) {
       return { state: 'failed', failure_class: result.failure.failure_class, retryable: result.failure.retryable, error_detail: result.failure.detail, strategy_version: version };
+    }
+    // Compilation E6 → E5 vérifiée (04 §3.1) : nouvelle version `hybrid`, signal de baisse de coût journalisé.
+    const compiled = outcome.agent?.compiled;
+    if (compiled !== undefined) {
+      try {
+        const saved = await saveCompiledStrategy(deps.pool, { apiId: ctx.apiId, ownerId: ctx.ownerId, parentVersion: version, network: strategy.network, spec: compiled, estCostUsd: proxyUsd });
+        await ctx.log('info', 'strategy_compiled', { from_version: version, to_version: saved.version, promoted: saved.promoted, llm_usd_saved: llmUsd });
+      } catch {
+        await ctx.log('warn', 'strategy_compile_not_saved', {});
+      }
+    } else if (outcome.agent?.compileFailure !== undefined) {
+      await ctx.log('info', 'strategy_compile_skipped', { reason: outcome.agent.compileFailure });
     }
     const saved = await saveRunDataset(deps.pool, { runId: ctx.runId, apiId: ctx.apiId, ownerId: ctx.ownerId, projectId: target.api.projectId, items: result.records });
     const reasons = [...(result.escalated ? ['escalated'] : []), ...(result.truncated ? ['pagination_short'] : [])];

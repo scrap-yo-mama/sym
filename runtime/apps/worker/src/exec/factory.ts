@@ -8,13 +8,37 @@
 // refuse de démarrer si l'enfant pourrait lire l'environnement du worker (D-30).
 import { DomainPacer, type SandboxEngine } from '@runtime/core';
 import { SsrfGuard, ssrfPolicyFromEnv, startEgressProxy, type EgressProxy } from '@runtime/core/net';
-import { PgPacingStore, secretStore } from '@runtime/db';
+import { STAGEHAND_VERSION, StagehandEngine } from '@runtime/agent';
+import { PgPacingStore, readLlmSettings, secretStore } from '@runtime/db';
+import { createLlmClient, llmConfigFromSettings, roleProblems, roleTarget, type LlmConfig } from '@runtime/llm';
+import { launchAgentBrowser } from '../browser/agent-browser.js';
 import { cgroupMemoryLimitBytes, cgroupMemoryWorkingSetBytes } from '../browser/cgroup.js';
 import { BrowserPool, playwrightLauncher } from '../browser/pool.js';
 import { ProcessSandboxEngine, sandboxOptionsFromEnv, type IsolationProbe } from '../sandbox/index.js';
 import type { ExecutorFactory } from '../worker.js';
 import { loadInlineScript } from './script-executor.js';
-import { createStrategyExecutor } from './strategy-executor.js';
+import type { EngineFactory } from './agent-executors.js';
+import { createStrategyExecutor, type AgentPorts } from './strategy-executor.js';
+
+/** Version du prompt du moteur : celui de Stagehand, non modifié (mesuré tel quel au spike 0.6a). */
+const STAGEHAND_PROMPT_VERSION = `stagehand-${STAGEHAND_VERSION}-dom`;
+
+/** Moteur du rôle `agent` (ADR 0001) : Stagehand 3.7.3 en local sur le Chromium dédié de l'essai. */
+export function stagehandEngineFor(config: LlmConfig, env: NodeJS.ProcessEnv = process.env): EngineFactory {
+  return ({ cdpUrl, recorder }) => {
+    const target = roleTarget(config, 'agent');
+    if (target === undefined) return null;
+    // Même règle que le client LLM (08 §1) : le rôle agent exige un profil sondé avec appel d'outils.
+    const profile = 'profile' in target.model ? target.model.profile : undefined;
+    if (roleProblems('agent', profile).length > 0) return null;
+    const price = 'price' in target.model ? target.model.price : undefined;
+    return {
+      engine: new StagehandEngine({ cdpUrl, baseURL: target.provider.baseUrl, apiKey: () => target.provider.apiKey.reveal(), price, recorder, env }),
+      modelId: target.model.id,
+      promptVersion: STAGEHAND_PROMPT_VERSION,
+    };
+  };
+}
 
 class SandboxIsolationError extends Error {
   override name = 'SandboxIsolationError';
@@ -63,8 +87,18 @@ export function productionExecutorFactory(env: Readonly<Record<string, string | 
       logger.info({ browserConcurrency: config.browserConcurrency, source: config.browserConcurrencySource }, 'pool Chromium prêt (lancement à la demande)');
     }
     const pool_ = browsers;
+    // E4-E6 (tâche 2.4) : réglages LLM relus à chaque essai, clés dans le dépôt de secrets (INV8).
+    const agent: AgentPorts = {
+      llmConfig: async () => {
+        const value = await readLlmSettings(pool);
+        return value === null ? null : llmConfigFromSettings(value, (id) => secrets.get(id), ['extract', 'agent']);
+      },
+      client: (config) => createLlmClient(config),
+      engineFor: (config) => stagehandEngineFor(config, env as NodeJS.ProcessEnv),
+      agentBrowser: (options) => launchAgentBrowser({ ...options, env }),
+    };
     return {
-      executor: createStrategyExecutor({ pool, guard, pacer, browsers, secrets, logger, script: { engine, loadScript: loadInlineScript } }),
+      executor: createStrategyExecutor({ pool, guard, pacer, browsers, secrets, logger, script: { engine, loadScript: loadInlineScript }, agent }),
       browserContexts: () => pool_?.active() ?? 0,
       close: async () => {
         await pool_?.close();

@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Bras B (Stagehand 3.7.3) sur le faux fournisseur : température transmise par middleware (§15), aucune requête vers
-// Browserbase ni ailleurs hors boucle locale (§13), aucun patchright installé (INV6). Aucun LLM réel.
+// Browserbase ni ailleurs hors boucle locale (§13), aucun patchright installé (INV6). Aucun LLM réel. Depuis la tâche 2.4,
+// Stagehand est aussi une dépendance de production de packages/agent (ADR 0001) : l'isolement vérifié ici est celui de
+// la version (catalogue) et des seuls paquets qui l'importent.
 import { execFileSync } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -22,14 +24,19 @@ describe('Stagehand 3.7.3 : installation (INV6, licences)', () => {
     const out = execFileSync('pnpm', ['why', 'patchright-core', '-r'], { cwd: runtimeDir, encoding: 'utf8' });
     expect(out.trim()).toBe('');
   });
-  it('version épinglée exacte, dans le seul paquet d\'évaluation', () => {
-    const pkg = JSON.parse(readFileSync(join(runtimeDir, 'eval/spike/package.json'), 'utf8')) as { dependencies: Record<string, string> };
-    expect(pkg.dependencies['@browserbasehq/stagehand']).toBe('3.7.3');
-    for (const dir of ['packages', 'apps']) {
+  it('version épinglée exacte (catalogue), dans le seul paquet du moteur (packages/agent, ADR 0001, tâche 2.4) et ce paquet d\'évaluation', () => {
+    expect(readFileSync(join(runtimeDir, 'pnpm-workspace.yaml'), 'utf8')).toMatch(/^ {2}"@browserbasehq\/stagehand": 3\.7\.3$/m);
+    const users: string[] = [];
+    for (const dir of ['packages', 'apps', 'eval']) {
       for (const name of readdirSync(join(runtimeDir, dir))) {
         const file = join(runtimeDir, dir, name, 'package.json');
-        if (existsSync(file)) expect(readFileSync(file, 'utf8'), file).not.toContain('browserbasehq');
+        if (existsSync(file) && readFileSync(file, 'utf8').includes('browserbasehq')) users.push(`${dir}/${name}`);
       }
+    }
+    expect(users.sort()).toEqual(['eval/spike', 'packages/agent']);
+    for (const user of users) {
+      const pkg = JSON.parse(readFileSync(join(runtimeDir, user, 'package.json'), 'utf8')) as { dependencies: Record<string, string> };
+      expect(pkg.dependencies['@browserbasehq/stagehand'], user).toBe('catalog:');
     }
   });
 });

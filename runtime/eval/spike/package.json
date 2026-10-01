@@ -4,19 +4,19 @@
   "version": "0.0.0",
   "type": "module",
   "license": "AGPL-3.0-only",
-  "description": "Paquet d'évaluation ISOLÉ du spike 0.6a (protocole §13) : Stagehand 3.7.3 n'entre jamais dans packages/* ni apps/*.",
+  "description": "Paquet d'évaluation ISOLÉ du spike 0.6a (protocole §13). Stagehand 3.7.3 est passé en production dans packages/agent (ADR 0001, tâche 2.4) ; ce paquet garde le harnais du spike.",
   "scripts": {
     "spike": "node src/run-spike.ts",
     "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
-    "@browserbasehq/stagehand": "3.7.3",
+    "@browserbasehq/stagehand": "catalog:",
     "@runtime/agent": "workspace:*",
     "@runtime/core": "workspace:*",
     "@runtime/llm": "workspace:*",
     "ajv": "catalog:",
     "playwright-core": "catalog:",
-    "zod": "4.3.6"
+    "zod": "catalog:"
   },
   "devDependencies": {
     "@types/node": "catalog:",

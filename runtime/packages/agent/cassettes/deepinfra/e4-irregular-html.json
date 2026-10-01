@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "provider": "deepinfra",
+  "case": "e4-irregular-html",
+  "synthetic": false,
+  "entries": [
+    {
+      "key": "cd01522ecc9d",
+      "request": {
+        "method": "POST",
+        "path": "/v1/openai/chat/completions",
+        "shape": {
+          "model": "zai-org/GLM-5.3",
+          "stream": false,
+          "roles": [
+            "system",
+            "user"
+          ],
+          "tools": [],
+          "tool_choice": null,
+          "response_format": {
+            "type": "json_object",
+            "name": null,
+            "strict": null,
+            "schema_sha": null
+          },
+          "max_tokens": null,
+          "extra_params": []
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": "{\"service_tier\":\"default\",\"id\":\"chatcmpl-RGL0e3lEkzJDcXZTFsOa649F\",\"object\":\"chat.completion\",\"created\":1790841183,\"model\":\"zai-org/GLM-5.3\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"{\\\"items\\\": [{\\\"id\\\": \\\"zz_test_product_0001\\\", \\\"title\\\": \\\"Cadre Solaire Zztest 0001\\\", \\\"price_eur\\\": 70.76, \\\"category\\\": \\\"jardin\\\"}, {\\\"id\\\": \\\"zz_test_product_0002\\\", \\\"title\\\": \\\"Cadre Léger Zztest 0002\\\", \\\"price_eur\\\": 15.8, \\\"category\\\": null}, {\\\"id\\\": \\\"zz_test_product_0003\\\", \\\"title\\\": \\\"Bac Pliable Zztest 0003\\\", \\\"price_eur\\\": 33.13, \\\"category\\\": \\\"atelier\\\"}, {\\\"id\\\": \\\"zz_test_product_0004\\\", \\\"title\\\": \\\"Lampe Pliable Zztest 0004\\\", \\\"price_eur\\\": 95.71, \\\"category\\\": \\\"maison\\\"}, {\\\"id\\\": \\\"zz_test_product_0005\\\", \\\"title\\\": \\\"Tiroir Pliable Zztest 0005\\\", \\\"price_eur\\\": 10.13, \\\"category\\\": null}, {\\\"id\\\": \\\"zz_test_product_0006\\\", \\\"title\\\": \\\"Bac Robuste Zztest 0006\\\", \\\"price_eur\\\": 63.79, \\\"category\\\": \\\"maison\\\"}, {\\\"id\\\": \\\"zz_test_product_0007\\\", \\\"title\\\": \\\"Tabouret Léger Zztest 0007\\\", \\\"price_eur\\\": 54.67, \\\"category\\\": \\\"atelier\\\"}, {\\\"id\\\": \\\"zz_test_product_0008\\\", \\\"title\\\": \\\"Bac Pliable Zztest 0008\\\", \\\"price_eur\\\": 42.5, \\\"category\\\": null}]}\",\"reasoning_content\":\"Let me parse the page text carefully.\\n\\nProducts:\\n\\n1. \\\"Cadre Solaire Zztest 0001\\\", Réf. zz_test_product_0001, 70,76 € → 70.76, Catégorie : jardin → category \\\"jardin\\\"\\n\\n2. \\\"| 15.80 EUR | zz_test_product_0002 | Cadre Léger Zztest 0002\\\" → id zz_test_product_0002, title \\\"Cadre Léger Zztest 0002\\\", price 15.80, category null.\\n\\n3. \\\"Le modèle « Bac Pliable Zztest 0003 » (code zz_test_product_0003) est proposé à 33,13 euros, rayon atelier.\\\" → id zz_test_product_0003, title \\\"Bac Pliable Zztest 0003\\\", price 33.13, category \\\"atelier\\\".\\n\\n4. \\\"Rayon maison Prix 95,71 € Nom Lampe Pliable Zztest 0004 Identifiant zz_test_product_0004\\\" → id zz_test_product_0004, title \\\"Lampe Pliable Zztest 0004\\\", price 95.71, category \\\"maison\\\".\\n\\n5. \\\"Tiroir Pliable Zztest 0005 Réf. zz_test_product_0005 10,13 €\\\" → id zz_test_product_0005, title \\\"Tiroir Pliable Zztest 0005\\\", price 10.13, category null.\\n\\n6. \\\"| 63.79 EUR | zz_test_product_0006 | Bac Robuste Zztest 0006 | rayon maison\\\" → id zz_test_product_0006, title \\\"Bac Robuste Zztest 0006\\\", price 63.79, category \\\"maison\\\".\\n\\n7. \\\"Le modèle « Tabouret Léger Zztest 0007 » (code zz_test_product_0007) est proposé à 54,67 euros, rayon atelier.\\\" → id zz_test_product_0007, title \\\"Tabouret Léger Zztest 0007\\\", price 54.67, category \\\"atelier\\\".\\n\\n8. \\\"Prix 42,50 € Nom Bac Pliable Zztest 0008 Identifiant zz_test_product_0008\\\" → id zz_test_product_0008, title \\\"Bac Pliable Zztest 0008\\\", price 42.50, category null.\\n\\nOutput JSON with items array.\",\"name\":null,\"tool_calls\":null},\"finish_reason\":\"stop\",\"logprobs\":null}],\"usage\":{\"prompt_tokens\":725,\"total_tokens\":1598,\"completion_tokens\":873,\"estimated_cost\":0.0025903124999999997,\"prompt_tokens_details\":{\"cached_tokens\":0,\"cache_write_tokens\":null},\"completion_tokens_details\":{\"reasoning_tokens\":523}}}"
+      }
+    }
+  ]
+}

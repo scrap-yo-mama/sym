@@ -9,8 +9,10 @@
     "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
+    "@runtime/agent": "workspace:*",
     "@runtime/core": "workspace:*",
     "@runtime/db": "workspace:*",
+    "@runtime/llm": "workspace:*",
     "isolated-vm": "catalog:",
     "pg": "catalog:",
     "pino": "catalog:",
