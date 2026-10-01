@@ -23,6 +23,10 @@ MIT License
   - better-auth : authentification de l'instance
   - Fastify, pino : serveur HTTP et journaux
   - node-postgres (pg), undici
+  - Vue, Vite, vue-router, vue-i18n, Reka UI, Tailwind CSS, openapi-typescript,
+    openapi-fetch : console web (apps/web)
+  - shadcn-vue (unovue) : composants copiés dans apps/web/src/components/ui
+    (Copyright (c) shadcn et contributeurs de shadcn-vue, licence MIT)
   - Stagehand (Browserbase), pg-boss : prévus par l'architecture, pas encore
     présents au moment de la rédaction de ce fichier
 

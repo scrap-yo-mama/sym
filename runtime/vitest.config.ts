@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
+import vue from '@vitejs/plugin-vue';
+import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vitest/config';
 
 // Trois projets (15 §2). Suffixes : *.unit.test.ts, *.prop.test.ts, *.integration.test.ts, *.contract.test.ts
@@ -14,6 +16,9 @@ export default defineConfig({
     },
     projects: [
       {
+        // Composants .vue de la console (tâche 3.3) : rendu côté serveur sous Node, sans navigateur ; alias `@` de apps/web.
+        plugins: [vue()],
+        resolve: { alias: { '@': fileURLToPath(new URL('./apps/web/src', import.meta.url)) } },
         test: {
           name: 'unit',
           include: [

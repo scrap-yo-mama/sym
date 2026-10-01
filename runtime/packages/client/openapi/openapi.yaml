@@ -1,0 +1,504 @@
+# SPDX-License-Identifier: MIT
+# OpenAPI 3.1 SPÉCIFIÉE de l'API REST (CDC 05 § 4.2, 13, 06 § 3), source du client généré (tâche 3.3).
+# Périmètre : les routes que la console utilise dès ses fondations (santé, assistant, connexion, identité, clés
+# d'API, flux SSE). Les autres routes de 05 § 4.2 (catalogue, runs, datasets…) s'ajoutent ici quand leur forme est
+# figée (3.1 livre l'OpenAPI générée par le serveur ; la tâche 3.6 rejoue assert_openapi_client_in_sync contre elle).
+# Les textes affichés ne viennent jamais de l'API : seulement des codes stables (06 § 1, « Accessibilité et langues »).
+openapi: 3.1.0
+info:
+  title: Scrapyomama Runtime API
+  version: 0.1.0
+  license:
+    name: MIT
+    identifier: MIT
+servers:
+  - url: /
+tags:
+  - name: system
+  - name: auth
+  - name: account
+  - name: events
+paths:
+  /api/health:
+    get:
+      operationId: getHealth
+      tags: [system]
+      summary: Santé du processus (joignable avant l'initialisation)
+      responses:
+        '200':
+          description: Le processus répond.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Health'
+  /api/ready:
+    get:
+      operationId: getReady
+      tags: [system]
+      summary: Disponibilité (version de schéma, base) et état d'initialisation
+      responses:
+        '200':
+          description: Prêt ; `initialized` vaut false tant que l'assistant n'a pas créé l'owner.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Ready'
+        '503':
+          description: Pas prêt.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NotReady'
+  /api/setup:
+    post:
+      operationId: postSetup
+      tags: [system]
+      summary: Assistant de premier démarrage (13 § 4), répond 404 pour toujours une fois l'owner créé
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SetupRequest'
+      responses:
+        '201':
+          description: Owner créé.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SetupResult'
+        '400':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+        '429':
+          $ref: '#/components/responses/Error'
+  /api/auth/sign-in/email:
+    post:
+      operationId: postSignIn
+      tags: [auth]
+      summary: Connexion par e-mail et mot de passe (cookie de session HttpOnly)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SignInRequest'
+      responses:
+        '200':
+          description: Connecté ; le jeton de session ne sort que dans le cookie.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SignInResult'
+        '401':
+          description: Identifiants invalides (réponse identique pour tout échec, 13 § 5).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthError'
+        '429':
+          description: Trop de tentatives (par IP ou par compte).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RateLimited'
+        '503':
+          $ref: '#/components/responses/Error'
+  /api/auth/sign-out:
+    post:
+      operationId: postSignOut
+      tags: [auth]
+      summary: Déconnexion
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties: {}
+      responses:
+        '200':
+          description: Session fermée.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                properties:
+                  success:
+                    type: boolean
+        '401':
+          $ref: '#/components/responses/Error'
+  /api/auth/get-session:
+    get:
+      operationId: getSession
+      tags: [auth]
+      summary: Session d'interface courante (null sans session)
+      responses:
+        '200':
+          description: Session ou null.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/SessionInfo'
+                  - type: 'null'
+        '503':
+          $ref: '#/components/responses/Error'
+  /api/me:
+    get:
+      operationId: getMe
+      tags: [account]
+      summary: Identité de l'appelant, relue en base
+      responses:
+        '200':
+          description: Identité.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Me'
+        '401':
+          $ref: '#/components/responses/Error'
+        '503':
+          $ref: '#/components/responses/Error'
+  /api/api-keys:
+    get:
+      operationId: listApiKeys
+      tags: [account]
+      summary: Clés d'API de l'appelant (session d'interface seulement)
+      responses:
+        '200':
+          description: Liste, sans aucun secret.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/ApiKey'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+    post:
+      operationId: createApiKey
+      tags: [account]
+      summary: Crée une clé (ré-authentification par mot de passe) ; le secret n'apparaît qu'ici
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ApiKeyCreate'
+      responses:
+        '201':
+          description: Clé créée.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiKeyCreated'
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '429':
+          $ref: '#/components/responses/Error'
+  /api/api-keys/{id}:
+    delete:
+      operationId: revokeApiKey
+      tags: [account]
+      summary: Révoque une clé de l'appelant (404 pour la clé d'autrui)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '204':
+          description: Révoquée.
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+  /api/events:
+    get:
+      operationId: streamEvents
+      tags: [events]
+      summary: Flux SSE multiplexé, un seul par onglet (06 § 3)
+      description: >-
+        Trames `id:`, `event:`, `data:` (JSON), commentaire `: ping` toutes les 15 à 20 s. Reprise par l'en-tête
+        `Last-Event-ID` sur des événements persistés : la console le renvoie à chaque reconnexion et ignore tout
+        événement dont l'identifiant a déjà été vu. Les noms d'événements sont définis avec le serveur (tâche 3.1).
+      parameters:
+        - name: Last-Event-ID
+          in: header
+          required: false
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Flux d'événements.
+          content:
+            text/event-stream:
+              schema:
+                type: string
+        '401':
+          $ref: '#/components/responses/Error'
+        '429':
+          $ref: '#/components/responses/Error'
+components:
+  responses:
+    Error:
+      description: "Erreur au format commun `{ error: { code, message } }` (le code est stable, jamais localisé)."
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiError'
+  schemas:
+    ApiError:
+      type: object
+      additionalProperties: false
+      required: [error]
+      properties:
+        error:
+          type: object
+          additionalProperties: false
+          required: [code, message]
+          properties:
+            code:
+              type: string
+            message:
+              type: string
+    AuthError:
+      description: Erreur de la bibliothèque d'authentification (format à plat, sans enveloppe `error`).
+      type: object
+      additionalProperties: true
+      required: [code, message]
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+    RateLimited:
+      description: 429 du serveur (`ApiError`) ou de la limite par IP de la bibliothèque (`AuthError`).
+      oneOf:
+        - $ref: '#/components/schemas/ApiError'
+        - $ref: '#/components/schemas/AuthError'
+    Health:
+      type: object
+      additionalProperties: false
+      required: [status]
+      properties:
+        status:
+          const: ok
+    Ready:
+      type: object
+      additionalProperties: false
+      required: [status, initialized]
+      properties:
+        status:
+          const: ready
+        initialized:
+          type: boolean
+    NotReady:
+      type: object
+      additionalProperties: false
+      required: [status, reason]
+      properties:
+        status:
+          const: not_ready
+        reason:
+          type: string
+          enum: [schema_version, database]
+    Role:
+      type: string
+      enum: [owner, admin, member]
+    Theme:
+      type: string
+      enum: [light, dark, system]
+    Locale:
+      type: string
+      enum: [en, fr]
+    ApiKeyScope:
+      type: string
+      enum: [apis:read, apis:run, apis:write, runs:read, datasets:read, schedules:write, sites:read]
+    SetupRequest:
+      type: object
+      additionalProperties: false
+      required: [token, email, password]
+      properties:
+        token:
+          type: string
+          minLength: 1
+          maxLength: 1024
+        email:
+          type: string
+          maxLength: 254
+        password:
+          type: string
+          minLength: 1
+          maxLength: 1024
+        displayName:
+          type: string
+          maxLength: 100
+    SetupResult:
+      type: object
+      additionalProperties: false
+      required: [userId, keyFingerprint, reminder]
+      properties:
+        userId:
+          type: string
+          format: uuid
+        keyFingerprint:
+          type: string
+        reminder:
+          type: string
+    SignInRequest:
+      type: object
+      additionalProperties: false
+      required: [email, password]
+      properties:
+        email:
+          type: string
+          maxLength: 254
+        password:
+          type: string
+          maxLength: 1024
+        rememberMe:
+          type: boolean
+    AuthUser:
+      type: object
+      additionalProperties: true
+      required: [id, email]
+      properties:
+        id:
+          type: string
+        email:
+          type: string
+        name:
+          type: string
+    SignInResult:
+      type: object
+      additionalProperties: true
+      required: [user]
+      properties:
+        redirect:
+          type: boolean
+        user:
+          $ref: '#/components/schemas/AuthUser'
+    SessionInfo:
+      type: object
+      additionalProperties: true
+      required: [user]
+      properties:
+        session:
+          type: object
+          additionalProperties: true
+        user:
+          $ref: '#/components/schemas/AuthUser'
+    Me:
+      type: object
+      additionalProperties: false
+      required: [id, email, displayName, role, locale, theme, via, scopes]
+      properties:
+        id:
+          type: string
+          format: uuid
+        email:
+          type: string
+        displayName:
+          type: string
+        role:
+          $ref: '#/components/schemas/Role'
+        locale:
+          type: string
+          description: Langue préférée (`users.locale`) ; la console n'affiche que `en` et `fr` et retombe sur `en` sinon.
+        theme:
+          $ref: '#/components/schemas/Theme'
+        via:
+          type: string
+          enum: [ui, apikey]
+        scopes:
+          description: Scopes de la clé d'API ; null pour une session d'interface.
+          oneOf:
+            - type: array
+              items:
+                $ref: '#/components/schemas/ApiKeyScope'
+            - type: 'null'
+    ApiKey:
+      type: object
+      required: [id, label, prefix, scopes, expiresAt, lastUsedAt, createdAt, revokedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        label:
+          type: string
+        prefix:
+          type: string
+        scopes:
+          type: array
+          items:
+            $ref: '#/components/schemas/ApiKeyScope'
+        expiresAt:
+          type: string
+          format: date-time
+        lastUsedAt:
+          oneOf:
+            - type: string
+              format: date-time
+            - type: 'null'
+        createdAt:
+          type: string
+          format: date-time
+        revokedAt:
+          oneOf:
+            - type: string
+              format: date-time
+            - type: 'null'
+    ApiKeyCreate:
+      type: object
+      additionalProperties: false
+      required: [label, scopes, currentPassword]
+      properties:
+        label:
+          type: string
+          minLength: 1
+          maxLength: 100
+        scopes:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items:
+            $ref: '#/components/schemas/ApiKeyScope'
+        expiresInDays:
+          type: integer
+          minimum: 1
+          maximum: 365
+        currentPassword:
+          type: string
+          minLength: 1
+          maxLength: 1024
+    ApiKeyCreated:
+      allOf:
+        - $ref: '#/components/schemas/ApiKey'
+        - type: object
+          required: [key]
+          properties:
+            key:
+              type: string
+              description: Secret en clair, renvoyé une seule fois.

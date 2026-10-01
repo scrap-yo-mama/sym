@@ -12,5 +12,8 @@
     "scripts/**/*.ts",
     "eval/**/*.ts",
     "vitest.config.ts"
+  ],
+  "exclude": [
+    "apps/web/**"
   ]
 }

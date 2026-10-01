@@ -51,6 +51,39 @@
       "project": [
         "src/**/*.ts"
       ]
+    },
+    "apps/web": {
+      "entry": [
+        "src/**/*.test.ts"
+      ],
+      "project": [
+        "src/**/*.{ts,vue}"
+      ],
+      "ignoreDependencies": [
+        "tailwindcss",
+        "tw-animate-css"
+      ],
+      "ignoreIssues": {
+        "src/components/ui/**": [
+          "exports",
+          "types",
+          "files"
+        ]
+      }
+    },
+    "packages/client": {
+      "entry": [
+        "src/**/*.test.ts"
+      ],
+      "project": [
+        "src/**/*.ts"
+      ],
+      "ignoreIssues": {
+        "src/generated/**": [
+          "exports",
+          "types"
+        ]
+      }
     }
   }
 }

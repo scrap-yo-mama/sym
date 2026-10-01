@@ -43,5 +43,8 @@
   { "test": "assert_api_key_scopes", "invariant": "13 § 8", "tasks": ["0.3b"], "stage": "U1, I1" },
   { "test": "assert_auth_baseline", "invariant": "13 § 5", "tasks": ["0.3b"], "stage": "U1, I1" },
   { "test": "assert_login_rate_limited", "invariant": "13 § 5", "tasks": ["0.3b"], "stage": "I1" },
-  { "test": "assert_routes_use_rls", "invariant": "INV12", "tasks": ["0.3b"], "stage": "U1" }
+  { "test": "assert_routes_use_rls", "invariant": "INV12", "tasks": ["0.3b"], "stage": "U1" },
+  { "test": "assert_openapi_client_in_sync", "invariant": "06 § 1", "tasks": ["3.3", "3.6"], "stage": "contract" },
+  { "test": "assert_sse_banner_and_resume_last_event_id", "invariant": "06 § 3", "tasks": ["3.3", "3.6"], "stage": "U1, E2E" },
+  { "test": "assert_i18n_key_parity", "invariant": "06 § 4.2", "tasks": ["3.3", "3.9"], "stage": "U1" }
 ]
