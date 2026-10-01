@@ -139,7 +139,7 @@ async function addHook(): Promise<void> {
           <div><Button type="button" variant="outline" size="sm" @click="webhooks.dismissSecret()">{{ t('settings.alerts.dismissSecret') }}</Button></div>
         </div>
         <p v-if="hooks.length === 0" class="text-sm text-muted-foreground" data-testid="webhooks-empty">{{ t('settings.alerts.webhooksEmpty') }}</p>
-        <div v-else class="overflow-x-auto rounded-xl border">
+        <div v-else class="relative overflow-x-auto rounded-xl border">
           <table class="w-full text-left text-sm">
             <caption class="sr-only">{{ t('settings.alerts.webhooks') }}</caption>
             <thead class="border-b bg-muted/50">

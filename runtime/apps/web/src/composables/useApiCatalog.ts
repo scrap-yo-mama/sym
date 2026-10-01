@@ -38,6 +38,8 @@ export function useApiCatalog(options: { pollMs?: number; searchDebounceMs?: num
   /** Curseur de chaque page visitée ; la page courante est la dernière (`null` : première page). */
   const cursors = ref<(string | null)[]>([null]);
   const lastChanges = ref<StatusChange[]>([]);
+  /** « Suspendre le suivi » (WCAG 2.2.2) : plus de relecture automatique ni d'annonce ; la reprise relit une fois. */
+  const suspended = ref(false);
   let rows: ApiSummary[] = [];
 
   const resource = useAsyncResource(async () => {
@@ -68,6 +70,10 @@ export function useApiCatalog(options: { pollMs?: number; searchDebounceMs?: num
   useLiveRefresh(() => resource.refetch({ silent: true }), {
     pollMs: options.pollMs ?? CATALOG_POLL_MS,
     events: ['status.changed', 'action.required'],
+    paused: () => suspended.value,
+  });
+  watch(suspended, (value) => {
+    if (!value) void resource.refetch({ silent: true });
   });
 
   const nextCursor = computed(() => resource.data.value?.next_cursor ?? null);
@@ -92,6 +98,7 @@ export function useApiCatalog(options: { pollMs?: number; searchDebounceMs?: num
 
   return {
     filters,
+    suspended,
     apis: computed(() => resource.data.value?.apis ?? []),
     loading: resource.loading,
     error: resource.error,

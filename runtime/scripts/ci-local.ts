@@ -23,8 +23,9 @@ const STEPS: Step[] = [
   { job: 'unit', name: 'tests unitaires + couverture', cmd: ['pnpm', 'test:coverage'] },
   // Étage S : garde SSRF sur fetch et Chromium (Playwright). Chromium : pnpm exec playwright install chromium.
   { job: 'security', name: 'sécurité (SSRF, Chromium)', cmd: ['pnpm', 'test:security'] },
-  // Étage E2 (tâche 2.6) : extension construite dans Chromium (contexte persistant) contre une instance réelle (PG 16).
-  { job: 'e2e', name: 'e2e extension (Playwright, Chromium)', cmd: ['pnpm', 'test:e2e'] },
+  // Étage E2 : extension construite dans Chromium contre une instance réelle (tâche 2.6, PG 16), puis gate d'accessibilité
+  // de la console (tâche 3.9) : axe, parcours au clavier seul, live regions, sur la console construite et servie en local.
+  { job: 'e2e', name: 'e2e extension et console (Playwright, Chromium)', cmd: ['pnpm', 'test:e2e'] },
   // Matrice PostgreSQL 16, 17, 18 jouée l'une après l'autre (Testcontainers, PG_VERSIONS surchargeable).
   { job: 'integration', name: 'integration (PG ' + (process.env.PG_VERSIONS ?? '16,17,18') + ')', cmd: ['pnpm', 'test:integration'] },
   { job: 'integration', name: 'contract', cmd: ['pnpm', 'vitest', 'run', '--project', 'contract'] },

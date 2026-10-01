@@ -153,7 +153,9 @@ jobs:
         run: pnpm exec playwright install --with-deps chromium
       # E2 extension (tâche 2.6) : PostgreSQL 16 jetable (Testcontainers), sites de fixtures en boucle locale.
       - run: pnpm test:e2e
-      # À venir : Playwright interface (E1, 3.x), shardé, rapport blob fusionné.
+      # Gate d'accessibilité de la console (tâche 3.9) : axe sur chaque écran (clair, sombre, en, fr), parcours au clavier seul, live
+      # regions, reflow à 320 px ; la console est construite et servie en local par le test (apps/web/e2e). À venir : la suite E2E
+      # complète de la console (3.6), shardée, rapport blob fusionné.
 
   security:
     # Bac à sable (tâche 1.5, D-24) : matrice Node 24 (.node-version, suite complète) et Node 26 (isolated-vm 7.0.1,

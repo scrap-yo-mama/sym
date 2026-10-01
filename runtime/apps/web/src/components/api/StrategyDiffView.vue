@@ -45,7 +45,7 @@ const ROW_TONE: Record<DiffKind, string> = { same: '', changed: 'bg-amber-100 da
     <div data-testid="diff-fields">
       <component :is="partTag" class="text-sm font-medium">{{ t('diff.fields') }}</component>
       <p v-if="diff.fields.length === 0" class="text-sm text-muted-foreground">{{ t('diff.noFields') }}</p>
-      <div v-else class="overflow-x-auto rounded-lg border">
+      <div v-else class="relative overflow-x-auto rounded-lg border">
         <table class="w-full text-left text-sm">
           <caption class="sr-only">{{ t('diff.fields') }}</caption>
           <thead class="bg-muted text-xs uppercase tracking-wide text-muted-foreground">
@@ -70,7 +70,7 @@ const ROW_TONE: Record<DiffKind, string> = { same: '', changed: 'bg-amber-100 da
 
     <div data-testid="diff-raw">
       <component :is="partTag" class="text-sm font-medium">{{ t('diff.raw') }}</component>
-      <div class="overflow-x-auto rounded-lg border">
+      <div class="relative overflow-x-auto rounded-lg border">
         <table class="w-full table-fixed border-collapse font-mono text-xs">
           <caption class="sr-only">{{ t('diff.rawCaption', { from: String(diff.from), to: String(diff.to) }) }}</caption>
           <thead class="bg-muted text-muted-foreground">

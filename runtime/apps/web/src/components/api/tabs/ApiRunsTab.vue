@@ -97,7 +97,7 @@ const canRelaunch = computed(() => props.detail.status !== 'bloquee' && !props.d
       <LoadingState v-if="runs.loading.value && runs.runs.value.length === 0" />
       <ErrorState v-else-if="runs.error.value" :error="runs.error.value" @retry="runs.refetch()" />
       <p v-else-if="runs.runs.value.length === 0" class="text-sm text-muted-foreground">{{ t('runsTab.empty') }}</p>
-      <div v-else class="overflow-x-auto rounded-lg border">
+      <div v-else class="relative overflow-x-auto rounded-lg border">
         <table class="w-full min-w-[56rem] text-left text-sm" data-testid="runs-table">
           <caption class="sr-only">{{ t('runsTab.history') }}</caption>
           <thead class="bg-muted text-xs uppercase tracking-wide text-muted-foreground">
@@ -158,7 +158,7 @@ const canRelaunch = computed(() => props.detail.status !== 'bloquee' && !props.d
       <LoadingState v-if="runs.itemsLoading.value && runs.items.value.length === 0" />
       <ErrorState v-else-if="runs.itemsError.value" :error="runs.itemsError.value" @retry="showItems({ dataset_id: openDataset } as RunSummary)" />
       <p v-else-if="runs.items.value.length === 0" class="text-sm text-muted-foreground">{{ t('runsTab.noItems') }}</p>
-      <div v-else class="overflow-x-auto rounded-lg border">
+      <div v-else class="relative overflow-x-auto rounded-lg border">
         <table class="w-full text-left text-sm" data-testid="items-table">
           <caption class="sr-only">{{ t('runsTab.items') }}</caption>
           <thead class="bg-muted text-xs uppercase tracking-wide text-muted-foreground">

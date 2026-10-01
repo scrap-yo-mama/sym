@@ -38,7 +38,9 @@ describe('assert_budget_and_stop_controls : compteur de budget, Pause et Arrête
     expect(html).toContain(en.investigation.controls.stop);
     expect(html).toContain(en.investigation.controls.stopHint);
     for (const heading of Object.values(en.investigation.columns)) expect(html).toContain(`>${heading}</h2>`);
-    expect(html).toMatch(/<ol[^>]*role="log"/);
+    // Le rôle log est sur un conteneur, la liste est dedans : sur le <ol>, il remplacerait son rôle de liste (axe listitem).
+    expect(html).toMatch(/<div[^>]*role="log"[^>]*>\s*<ol/);
+    expect(html).not.toMatch(/<ol[^>]*role="log"/);
     expect(html).toContain('Spend: $0.012 of $0.50');
     expect(html).toContain('Time: 14 s of 5 min 0 s');
     expect(html).toContain('Kept: ~$0.002; a full agent: ~$0.09 (estimate)');
@@ -69,6 +71,18 @@ describe('assert_budget_and_stop_controls : compteur de budget, Pause et Arrête
     expect(html).not.toContain('data-testid="investigation-pause"');
     expect(html).toContain('data-testid="investigation-stop"');
     expect(html).toMatch(/role="status"[^>]*data-testid="investigation-status">Paused\./);
+  });
+
+  test('assert_live_regions_plan : un changement d’étape est annoncé dans la région status (« Étape : Essais. »), en en et en fr', async () => {
+    for (const [locale, messages] of [['en', en], ['fr', fr]] as const) {
+      const state = running();
+      for (const phase of ['access_check', 'reconnaissance', 'awaiting_schema_validation', 'testing'] as const) {
+        state.phase = phase;
+        const html = await render(InvestigationBoard, props(state), { locale });
+        const announced = messages.investigation.phase.announce.replace('{phase}', messages.investigation.phase[phase]);
+        expect(html, `${locale} ${phase}`).toContain(`data-testid="investigation-status">${esc(announced)}<`);
+      }
+    }
   });
 
   test('enquête arrêtée ou terminée : boutons inactifs (aria-disabled), coût conservé annoncé', async () => {

@@ -13,6 +13,8 @@ export type LiveRefreshOptions = {
   events: readonly string[];
   /** Filtre fin sur la trame (par exemple « cette API seulement ») ; absent : toute trame du bon nom. */
   accepts?: (event: SseEvent) => boolean;
+  /** Vrai : le suivi est suspendu par l'utilisateur (WCAG 2.2.2), aucune relecture automatique ne part. */
+  paused?: () => boolean;
   /** Fusionne les relectures déclenchées dans cette fenêtre (défaut 250 ms). */
   debounceMs?: number;
 };
@@ -23,16 +25,21 @@ export function useLiveRefresh(refresh: () => void | Promise<void>, options: Liv
   let timer: ReturnType<typeof setInterval> | undefined;
   let stopListening: (() => void) | undefined;
 
+  // Une relecture lancée par une minuterie ou par le flux est sautée tant que le suivi est suspendu.
+  const refreshUnlessPaused = () => {
+    if (!options.paused?.()) void refresh();
+  };
+
   const schedule = () => {
     clearTimeout(pending);
-    pending = setTimeout(() => void refresh(), options.debounceMs ?? 250);
+    pending = setTimeout(refreshUnlessPaused, options.debounceMs ?? 250);
   };
 
   tryOnMounted(() => {
     stopListening = onStreamEvent((event) => {
       if (options.events.includes(event.event) && (options.accepts?.(event) ?? true)) schedule();
     });
-    if (options.pollMs && options.pollMs > 0) timer = setInterval(() => void refresh(), options.pollMs);
+    if (options.pollMs && options.pollMs > 0) timer = setInterval(refreshUnlessPaused, options.pollMs);
   });
 
   tryOnScopeDispose(() => {

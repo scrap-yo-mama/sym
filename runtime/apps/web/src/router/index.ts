@@ -28,6 +28,65 @@ export function focusRouteHeading(root: Pick<ParentNode, 'querySelector'> | unde
   root?.querySelector<HTMLElement>('h1[data-route-heading]')?.focus();
 }
 
+type HeadingRoot = Pick<Document, 'querySelector' | 'activeElement' | 'body'>;
+type HeadingDeps = {
+  /** Appelle `onChange` à chaque changement du DOM de la page ; renvoie l'arrêt de l'observation. */
+  observe: (onChange: () => void) => () => void;
+  /** Appelle `callback` après `ms` millisecondes ; renvoie l'annulation. */
+  schedule: (callback: () => void, ms: number) => () => void;
+};
+
+const browserHeadingDeps: HeadingDeps = {
+  observe: (onChange) => {
+    const observer = new MutationObserver(onChange);
+    observer.observe(document.getElementById('main') ?? document.body, { childList: true, subtree: true });
+    return () => observer.disconnect();
+  },
+  schedule: (callback, ms) => {
+    const timer = setTimeout(callback, ms);
+    return () => clearTimeout(timer);
+  },
+};
+
+/** Attente maximale du <h1> d'une page qui charge ses données avant de renoncer à lui donner le focus. */
+const HEADING_WAIT_MS = 5000;
+let cancelPendingHeading: (() => void) | undefined;
+
+/**
+ * Focus sur le <h1> de la route, même s'il n'existe pas encore : une page qui charge ses données (fiche d'une API) montre
+ * d'abord un squelette sans titre. Le <h1> prend le focus à son apparition, sauf si la personne a déjà mis le focus ailleurs
+ * (champ, bouton) ; l'attente s'arrête après 5 s et à la navigation suivante (06 § 1, WCAG 2.4.3).
+ */
+export function focusRouteHeadingWhenReady(root: HeadingRoot | undefined = typeof document === 'undefined' ? undefined : document, deps: HeadingDeps = browserHeadingDeps): void {
+  cancelPendingHeading?.();
+  cancelPendingHeading = undefined;
+  if (!root) return;
+  const heading = (): HTMLElement | null => root.querySelector<HTMLElement>('h1[data-route-heading]');
+  const present = heading();
+  if (present) {
+    present.focus();
+    return;
+  }
+  let waiting = true;
+  const stopObserving = deps.observe(() => {
+    const found = waiting ? heading() : null;
+    if (!found) return;
+    const active = root.activeElement;
+    if (!active || active === root.body || active.id === 'main') found.focus();
+    cancelPendingHeading?.();
+    cancelPendingHeading = undefined;
+  });
+  const cancelTimer = deps.schedule(() => {
+    stopObserving();
+    cancelPendingHeading = undefined;
+  }, HEADING_WAIT_MS);
+  cancelPendingHeading = () => {
+    waiting = false;
+    stopObserving();
+    cancelTimer();
+  };
+}
+
 export function createAppRouter(history: RouterHistory = createWebHistory()): Router {
   const router = createRouter({
     history,
@@ -68,7 +127,7 @@ export function createAppRouter(history: RouterHistory = createWebHistory()): Ro
 
   // Pas de déplacement du focus au premier affichage de la page : le lien d'évitement reste le premier arrêt de Tab.
   router.afterEach((_to, from, failure) => {
-    if (!failure && from !== START_LOCATION) void nextTick(() => focusRouteHeading());
+    if (!failure && from !== START_LOCATION) void nextTick(() => focusRouteHeadingWhenReady());
   });
   return router;
 }

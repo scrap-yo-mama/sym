@@ -24,7 +24,7 @@ const leaf = computed(() => (typeof props.value === 'string' ? JSON.stringify(pr
 
 <template>
   <details v-if="isContainer" :open="depth < 2" class="ml-0">
-    <summary class="cursor-pointer font-mono text-sm">
+    <summary class="min-h-6 cursor-pointer py-0.5 font-mono text-sm">
       <span v-if="name !== null" class="font-semibold">{{ name }}</span>
       <span class="text-muted-foreground"> {{ summary }}</span>
     </summary>

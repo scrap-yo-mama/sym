@@ -13,7 +13,7 @@
     "test": "vitest run",
     "test:fast": "vitest run --project unit --project contract",
     "test:integration": "node scripts/test-integration.ts",
-    "test:e2e": "pnpm --filter @runtime/extension test:e2e",
+    "test:e2e": "pnpm --filter @runtime/extension test:e2e && pnpm --filter @runtime/web test:e2e",
     "test:security": "vitest run --project security",
     "eval": "node scripts/not-implemented.ts eval 'tâche 2.8'",
     "fixtures": "node fixtures/src/main.ts",

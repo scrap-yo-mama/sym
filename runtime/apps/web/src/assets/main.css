@@ -2,7 +2,7 @@
 /*
  * Jetons de design (variables CSS, shadcn-vue + Tailwind v4, ADR 0002). Thèmes clair et sombre ; la classe `dark`
  * est posée sur <html> avant le premier rendu par /theme-init.js (06 § 1). Contrastes visés : 4,5:1 pour le texte,
- * 3:1 pour bordures de champs et anneau de focus (WCAG 1.4.3, 1.4.11) ; le test de jetons complet est en 3.9.
+ * 3:1 pour bordures de champs et anneau de focus (WCAG 1.4.3, 1.4.11) ; le test de jetons est apps/web/src/design-tokens.unit.test.ts (3.9).
  */
 @import "tailwindcss";
 @import "tw-animate-css";
@@ -91,6 +91,16 @@
   h1[tabindex="-1"]:focus {
     outline: none;
   }
+}
+
+/*
+ * Anneau de focus unique et opaque (WCAG 2.4.7 et 1.4.11 : --ring à 3:1 au moins sur chaque fond, vérifié par
+ * design-tokens.unit.test.ts). Règle SANS calque : elle l'emporte sur `outline-none` et sur les anneaux à 50 % des composants,
+ * trop pâles pour un bouton plein. Les cibles programmatiques (tabindex -1 : <main>, <h1>) n'ont pas d'anneau.
+ */
+:focus-visible:not([tabindex="-1"]) {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
 }
 
 /* prefers-reduced-motion coupe les animations non essentielles (06 § 1). */
