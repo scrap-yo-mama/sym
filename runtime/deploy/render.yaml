@@ -1,0 +1,92 @@
+# Blueprint Render (tâche 4.1, 14 § 12) : cible de référence. Trois ressources : le service web (server), le worker et une base
+# PostgreSQL privée. Les deux services tirent la MÊME image publique de GHCR, épinglée X.Y.Z (jamais `latest`).
+# Guide pas à pas : docs/deploiement.md.
+#
+# Créer l'instance :
+#   - bouton « Deploy to Render » : https://render.com/deploy?repo=<URL du dépôt public> (Render lit render.yaml à la RACINE du
+#     dépôt : si ce fichier n'y est pas, créez le Blueprint par « New > Blueprint » et indiquez ce chemin dans « Blueprint Path ») ;
+#   - Render demande UNE valeur : PUBLIC_URL, l'adresse publique de l'instance (https://….onrender.com ou votre domaine).
+#
+# Ce que le Blueprint fait pour vous :
+#   - MASTER_KEY : générée par Render (`generateValue`, 256 bits en base64 = exactement les 32 octets attendus), partagée par le
+#     web et le worker au moyen du groupe de variables. COPIEZ-LA hors de Render (Environment > groupe `scrapyomama-runtime-secrets`) :
+#     perdue, elle rend les secrets chiffrés illisibles.
+#   - ADMIN_BOOTSTRAP_TOKEN : généré par Render, lisible dans l'onglet Environment du web ; à retirer une fois le premier
+#     administrateur créé.
+#   - Migrations : `runtime migrate` en pré-déploiement du web (idempotent, sous verrou) ; le worker ne migre jamais.
+#   - Base privée (`ipAllowList: []`) : seule la connexion interne de Render y accède.
+#
+# Choix à connaître :
+#   - `autoDeployTrigger: 'off'` : un changement du dépôt ne redéploie jamais une instance déjà créée. Pour mettre à jour,
+#     sauvegardez, changez le tag de l'image dans les deux services (ou ce fichier), puis déployez (docs/exploitation.md).
+#   - Plans : web 0,5 CPU / 512 Mo (le serveur occupe une centaine de Mo au repos), worker 1 CPU / 2 Go (= 1 run navigateur ;
+#     `2c-4g` pour 2 runs, BROWSER_CONCURRENCY se déduit de la mémoire). Base 0,5 CPU / 1 Go, 15 Go de disque (10 Go minimum).
+#     Chiffres de dimensionnement à confirmer par la recette (tâche 4.4).
+#   - `TRUST_PROXY=1` : un seul saut, le proxy de Render. Sans lui, toutes les requêtes semblent venir du proxy.
+#   - Région : toutes les ressources dans la même région (connexion interne à la base). `frankfurt` ; changez-la partout ensemble.
+envVarGroups:
+  - name: scrapyomama-runtime-secrets
+    envVars:
+      - key: MASTER_KEY
+        generateValue: true
+
+services:
+  - type: web
+    name: scrapyomama-runtime
+    runtime: image
+    image:
+      url: ghcr.io/mrsoyer/scrapyomama-runtime:0.0.0 # x-release-please-version
+    region: frankfurt
+    plan: 0.5c-512mb
+    numInstances: 1
+    healthCheckPath: /api/ready
+    preDeployCommand: runtime migrate
+    maxShutdownDelaySeconds: 60
+    autoDeployTrigger: 'off'
+    envVars:
+      - fromGroup: scrapyomama-runtime-secrets
+      - key: RUNTIME_MODE
+        value: server
+      - key: DATABASE_URL
+        fromDatabase:
+          name: scrapyomama-runtime-db
+          property: connectionString
+      - key: PUBLIC_URL
+        sync: false
+      - key: ADMIN_BOOTSTRAP_TOKEN
+        generateValue: true
+      - key: TRUST_PROXY
+        value: '1'
+      - key: STORAGE_PLAN_GB
+        value: '15'
+
+  - type: worker
+    name: scrapyomama-runtime-worker
+    runtime: image
+    image:
+      url: ghcr.io/mrsoyer/scrapyomama-runtime:0.0.0 # x-release-please-version
+    region: frankfurt
+    plan: 1c-2g
+    numInstances: 1
+    maxShutdownDelaySeconds: 60
+    autoDeployTrigger: 'off'
+    envVars:
+      - fromGroup: scrapyomama-runtime-secrets
+      - key: RUNTIME_MODE
+        value: worker
+      - key: DATABASE_URL
+        fromDatabase:
+          name: scrapyomama-runtime-db
+          property: connectionString
+      - key: STORAGE_PLAN_GB
+        value: '15'
+
+databases:
+  - name: scrapyomama-runtime-db
+    databaseName: runtime
+    user: runtime
+    region: frankfurt
+    postgresMajorVersion: '16'
+    plan: 0.5c-1g
+    diskSizeGB: 15
+    ipAllowList: []

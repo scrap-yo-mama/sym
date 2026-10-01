@@ -5,6 +5,7 @@ import {
   loadKeyring,
   loadObservabilityConfig,
   scrubOtelEnvironment,
+  unknownReservedVariablesWarning,
   Secret,
   secretValues,
   type Keyring,
@@ -86,6 +87,9 @@ export function loadServerConfig(env: NodeJS.ProcessEnv = process.env): ServerCo
   const removed = TELEMETRY_VARIABLES.filter((name) => env[name] !== undefined || process.env[name] !== undefined);
   for (const target of new Set([env, process.env])) for (const name of TELEMETRY_VARIABLES) delete target[name];
   if (removed.length > 0) console.error(`Avertissement : ${removed.join(', ')} ignorée(s) : aucune télémétrie (INV9).`);
+
+  const unknownWarning = unknownReservedVariablesWarning(env);
+  if (unknownWarning) console.error(unknownWarning); // faute de frappe probable (14 § 2) : jamais fatale, jamais la valeur
 
   const databaseUrl = env['DATABASE_URL'];
   if (!databaseUrl) throw new ConfigError('DATABASE_URL manquante.');

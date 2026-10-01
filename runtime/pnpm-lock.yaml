@@ -180,6 +180,9 @@ catalogs:
     wxt:
       specifier: 0.21.4
       version: 0.21.4
+    yaml:
+      specifier: 2.9.1
+      version: 2.9.1
 
 pnpmfileChecksum: sha256-UC5ZIlI0cKVtNlwoBaBlMl4R9V0kCcS8e/DdWP/7cZE=
 
@@ -253,6 +256,9 @@ importers:
       vue-eslint-parser:
         specifier: 'catalog:'
         version: 10.4.1(eslint@10.11.0(jiti@2.7.0)(supports-color@10.2.2))(supports-color@10.2.2)
+      yaml:
+        specifier: 'catalog:'
+        version: 2.9.1
 
   apps/cli:
     dependencies:

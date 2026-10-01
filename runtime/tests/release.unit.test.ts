@@ -370,7 +370,8 @@ describe('release : version, canaux, tags (16 §3, 14 §6)', () => {
       expect(Object.keys(config['packages'] as object)).toEqual(['runtime']);
     }
     expect(stable['prerelease']).toBeUndefined();
-    const extra = ((stable['packages'] as Record<string, { 'extra-files': { path: string }[] }>)['runtime']?.['extra-files'] ?? []).map((f) => f.path.replace(/\/package.json$/, '')).sort();
+    // Les fichiers `generic` (modèles d'hébergement, tâche 4.1) portent l'image épinglée : vérifiés dans deploy-templates.unit.test.ts.
+    const extra = ((stable['packages'] as Record<string, { 'extra-files': { type: string; path: string }[] }>)['runtime']?.['extra-files'] ?? []).filter((f) => f.type === 'json').map((f) => f.path.replace(/\/package.json$/, '')).sort();
     const workspace = ['apps', 'packages'].flatMap((d) => readdirSync(join(runtimeDir, d)).map((n) => `${d}/${n}`)).concat('fixtures').sort();
     expect(extra).toEqual(workspace);
     // Seule exception : avant la première release (dépôt à 0.0.0), l'extension porte 0.1.0 (tâche 2.9 : Chrome refuse 0.0.0

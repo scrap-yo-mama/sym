@@ -1,0 +1,26 @@
+{
+  "name": "scrapyomama-runtime",
+  "description": "Runtime Scrapyomama : un « Apify agentique » open source, à auto-héberger. Heroku : best-effort, non garanti.",
+  "stack": "container",
+  "env": {
+    "MASTER_KEY": {
+      "description": "32 octets en base64 : `docker run --rm ghcr.io/mrsoyer/scrapyomama-runtime:0.0.0 runtime keygen` (ou `openssl rand -base64 32`). À sauvegarder hors de Heroku.",
+      "required": true
+    },
+    "ADMIN_BOOTSTRAP_TOKEN": {
+      "description": "Jeton de l'assistant de premier démarrage (32 caractères au moins). À retirer une fois le premier administrateur créé.",
+      "generator": "secret"
+    },
+    "PUBLIC_URL": {
+      "description": "URL publique de l'application, par exemple https://mon-app.herokuapp.com (sans chemin).",
+      "required": true
+    },
+    "TRUST_PROXY": { "value": "1" },
+    "PGSSLMODE": { "value": "no-verify" }
+  },
+  "addons": [{ "plan": "heroku-postgresql:essential-0", "as": "DATABASE" }],
+  "formation": {
+    "web": { "quantity": 1, "size": "standard-2x" },
+    "worker": { "quantity": 1, "size": "performance-m" }
+  }
+}

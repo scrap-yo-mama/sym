@@ -35,7 +35,9 @@
     "check:openapi-client": "node scripts/gen-openapi-client.ts --check",
     "package:extension": "node scripts/extension-package.ts",
     "release:dry-run": "node scripts/release/dry-run.ts",
-    "check:release": "node scripts/release/gates.ts"
+    "check:release": "node scripts/release/gates.ts",
+    "gen:env-docs": "node scripts/gen-env-docs.ts",
+    "check:env-docs": "node scripts/gen-env-docs.ts --check"
   },
   "devDependencies": {
     "@eslint/js": "catalog:",
@@ -53,12 +55,13 @@
     "knip": "catalog:",
     "openapi-typescript": "catalog:",
     "pg": "catalog:",
-    "standardwebhooks": "catalog:",
     "playwright-core": "catalog:",
+    "standardwebhooks": "catalog:",
     "typescript": "catalog:",
     "typescript-eslint": "catalog:",
     "vitest": "catalog:",
     "vue": "catalog:",
-    "vue-eslint-parser": "catalog:"
+    "vue-eslint-parser": "catalog:",
+    "yaml": "catalog:"
   }
 }

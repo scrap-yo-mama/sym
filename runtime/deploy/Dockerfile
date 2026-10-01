@@ -54,7 +54,11 @@ COPY --from=build /app/apps/server/dist apps/server/dist
 COPY --from=build /app/apps/worker/dist apps/worker/dist
 COPY --from=build /app/apps/cli/dist apps/cli/dist
 COPY deploy/entrypoint.sh /usr/local/bin/entrypoint.sh
-RUN chmod 0755 /usr/local/bin/entrypoint.sh
+# Commande `runtime` (CLI : migrate, keygen, doctor…) dans le PATH : champ « pré-déploiement » des hébergeurs,
+# `docker exec <conteneur> runtime doctor`, `docker run --rm <image> runtime keygen` (tâche 4.1).
+RUN chmod 0755 /usr/local/bin/entrypoint.sh \
+ && printf '#!/bin/sh\nexec node /app/apps/cli/dist/index.js "$@"\n' > /usr/local/bin/runtime \
+ && chmod 0755 /usr/local/bin/runtime
 
 # pwuser (uid 1001) existe déjà dans l'image Playwright.
 USER pwuser

@@ -4,6 +4,6 @@
 coverage
 blob-report
 test-results
-.env*
+**/.env*
 .git
 docs

@@ -1,0 +1,38 @@
+# Template Railway (tâche 4.1, 14 § 12) : BEST-EFFORT, non bloquant. Railway n'importe pas de fichier : ce document est la
+# description exacte, service par service, de ce qu'on saisit dans l'éditeur de modèles (Workspace > Templates > New Template)
+# ou, sans modèle, dans un projet vide (New > Docker Image). Pas de railway.json (déprécié, CDC 14 § 12). Guide : docs/deploiement.md.
+# Un test (tests/deploy-templates.unit.test.ts) vérifie que chaque variable existe au catalogue et que MASTER_KEY générée est
+# toujours valide ; la création réelle d'un projet Railway reste à faire par un humain (compte, plan Hobby requis).
+#
+# MASTER_KEY : 32 octets en base64 CANONIQUE (44 caractères). `secret(43, alphabet)` + `=` tel que le suggère la doc Railway est
+# refusé 3 fois sur 4 : le dernier caractère d'une valeur de 32 octets ne peut prendre que 16 valeurs (A E I M Q U Y c g k o s w
+# 0 4 8). D'où 42 caractères libres, 1 caractère contraint, puis `=`.
+# Le worker NE génère PAS sa propre clé : il lit celle du serveur (`${{server.MASTER_KEY}}`), sinon les deux processus
+# chiffreraient avec des clés différentes.
+image: ghcr.io/mrsoyer/scrapyomama-runtime:0.0.0 # x-release-please-version
+services:
+  - name: Postgres
+    source: base PostgreSQL de Railway (version 16 ou plus)
+    notes: >-
+      Le serveur lit DATABASE_URL (réseau privé, postgres.railway.internal). La base doit accepter CREATE ROLE (migration 0003) ;
+      sinon, exécuter une fois `runtime restore-prepare` avec un compte privilégié.
+  - name: server
+    source: image Docker (public)
+    preDeployCommand: runtime migrate
+    healthcheckPath: /api/ready
+    healthcheckTimeoutSeconds: 120
+    publicNetworking: domaine généré par Railway (ou le vôtre)
+    variables:
+      RUNTIME_MODE: server
+      DATABASE_URL: ${{Postgres.DATABASE_URL}}
+      MASTER_KEY: ${{secret(42, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789+/")}}${{secret(1, "AEIMQUYcgkosw048")}}=
+      ADMIN_BOOTSTRAP_TOKEN: ${{secret(43, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789+/")}}=
+      PUBLIC_URL: https://${{RAILWAY_PUBLIC_DOMAIN}}
+      TRUST_PROXY: "1"
+  - name: worker
+    source: image Docker (la même)
+    notes: Aucun domaine public, aucune sonde HTTP (le worker n'a pas de port).
+    variables:
+      RUNTIME_MODE: worker
+      DATABASE_URL: ${{Postgres.DATABASE_URL}}
+      MASTER_KEY: ${{server.MASTER_KEY}}
