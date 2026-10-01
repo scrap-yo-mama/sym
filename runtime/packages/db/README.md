@@ -1,6 +1,6 @@
 # @runtime/db
 
-Schéma PostgreSQL v3, migrations SQL versionnées et runner verrouillé (tâche 0.2, CDC [03 § Schéma](../../../cdc/scrapyomama-runtime/03-architecture.md#schéma-postgresql), [13 § 12](../../../cdc/scrapyomama-runtime/13-specs-utilisateurs-auth.md#12-tables), [14 § 4-5 et § 9](../../../cdc/scrapyomama-runtime/14-specs-exploitation.md)).
+Schéma PostgreSQL v3, migrations SQL versionnées et runner verrouillé (tâche 0.2, spécification interne non publiée : 03 § Schéma, 13 § 12, 14 § 4-5 et § 9).
 
 ## Contenu
 

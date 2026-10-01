@@ -8,45 +8,50 @@ English · [Français](https://github.com/scrap-yo-mama/sym/blob/main/.github/RE
 
 </div>
 
-You ask your AI, over MCP, for the data you want. SYM investigates the site the cheapest way first (plain fetch, then a real browser, then an agent only if it has to), shows you the schema it found, and waits for your OK. Then it compiles a replayable API that runs without any LLM and repairs itself when the site changes.
+SYM is a self-hosted data runtime, still being built. The goal for the first release: you'll ask your AI, over MCP, for the data you want. SYM will investigate the site the cheapest way first (plain fetch, then a real browser, then an agent only if it has to), show you the schema it found, and wait for your OK. Then it will compile a replayable API that runs without an LLM when the strategy allows it, and repair that API when the site changes.
 
-It is self-hosted and you bring your own model. Your instance, your keys, your data.
+You host it and bring your own model. Your instance, your keys, your data.
 
-> SYM 👻: you say what you need, I do the digging. You approve before anything gets built.
+> SYM 👻: you'll say what you need, I'll do the digging. You approve before anything gets built.
 
 > [!WARNING]
 > **Status: pre-release, work in progress. Not ready for production.**
-> There is no stable release yet, interfaces and database schema will change, and nothing here has been battle-tested. Look around, run it locally, tell us what breaks. Please do not build anything critical on it today.
+> There is no stable release yet, interfaces and database schema will change, and nothing here has been battle-tested. The core path (ask over MCP, investigate, approve, replay, repair) is not wired up yet: see what works today below. Look around, run it locally, tell us what breaks. Please do not build anything critical on it today.
 
-## How it works
+## What works today
+
+These building blocks are on `main` and covered by CI. The path that ties them together is not there yet.
+
+- **Executors E1 to E6.** HTTP fetch with declarative extraction, fetch inside a real browser page, sandboxed Playwright scripts, LLM-shaped extraction, script-plus-agent steps and a full agent. A successful agent run (E6) compiles into a replayable script-plus-agent strategy (E5).
+- **Guard rails.** A sandbox for strategy code, an SSRF guard on outgoing requests, per-domain pacing, and an access module that reads robots.txt and reports what a site allows.
+- **Accounts.** Users, invitations, two-factor authentication, API keys, OIDC single sign-on and an audit log.
+- **Console, extension and tunnel.** The web console (English and French), and a Chrome extension that pairs your browser and runs steps through your own session, with consent per domain.
+- **Operations.** The `runtime` command line (migrations, `doctor`, diagnostics, backup and restore, catalog export) and deployment templates for Docker Compose, Render, Railway and Heroku.
+
+**Not delivered yet.** The investigation (cheapest-first search, schema approval), pagination, repair, step-by-step resume, the REST API for APIs and runs, and the MCP server. Until they land, you cannot ask your AI for data through SYM.
+
+## How it will work
 
 1. **Ask.** Tell your AI what data you want from which site.
-2. **Investigate.** SYM looks for the cheapest route to that data and reports what it found.
-3. **Approve.** You review the proposed schema and say yes, or ask for changes.
-4. **Replay.** SYM compiles an API you can call on a schedule or on demand, no LLM involved.
-5. **Repair.** If the site drifts, SYM notices and repairs the API.
+2. **Investigate.** SYM will look for the cheapest route to that data and report what it found.
+3. **Approve.** You'll review the proposed schema and say yes, or ask for changes.
+4. **Replay.** SYM will compile an API you can call on a schedule or on demand, with no LLM when the strategy allows it.
+5. **Repair.** If the site drifts, SYM will notice and repair the API.
 
-## What SYM does
+## Planned for the first release
 
-- **Investigates cheapest-first.** Fetch, then browser, then agent. The expensive step only runs when the cheaper ones can't do the job.
-- **Shows you the schema and waits for your OK.** No surprise API appears behind your back.
-- **Compiles a replayable API.** Once approved, runs are deterministic and need no LLM, so they are fast, cheap and repeatable.
-- **Repairs itself.** When a site changes, SYM notices and repairs the API instead of silently returning garbage.
-- **Speaks MCP and REST.** Plug it into your AI, or call it like any other API.
-- **Stays yours.** Self-hosted, bring your own model, no telemetry sent to the maintainers.
-
-## What SYM can handle
-
-- **JS-heavy pages.** A real browser opens the page when a plain fetch is not enough.
-- **Sites behind an account.** The Chrome extension connects a site through your own browser session, so SYM works with the account you already have.
-- **Self-repair, step by step.** When a replay breaks, SYM proposes a bounded fix, checks it against the original schema, and escalates only if it has to.
-- **Tricky sites.** An agent drives the browser end to end, then its successful trace is compiled into an API that runs without an LLM whenever possible.
+- **Cheapest-first investigation.** Fetch, then browser, then agent. The expensive step will only run when the cheaper ones can't do the job.
+- **Schema approval.** SYM will show you the schema and wait for your OK. No surprise API will appear behind your back.
+- **Replayable APIs.** Once approved, runs will be deterministic and need no LLM when the strategy allows it: fast, cheap and repeatable.
+- **Bounded repair.** When a replay breaks, SYM will propose a bounded fix, check it against the approved schema and escalate only if it has to, instead of silently returning garbage.
+- **MCP and REST.** You'll plug it into your AI, or call it like any other API.
+- **Stays yours.** Self-hosted, bring your own model, no telemetry sent to the maintainers. This part is true today.
 
 ## What is in the repository
 
 Everything lives under [`runtime/`](https://github.com/scrap-yo-mama/sym/tree/main/runtime):
 
-- `apps/server` and `apps/worker`: the REST and MCP service, and the worker that investigates and runs.
+- `apps/server` and `apps/worker`: the HTTP server (accounts, extension, tunnel, health) and the worker that runs strategies. The REST API for APIs and the MCP endpoint will live in the server.
 - `apps/web`, `apps/extension`, `apps/cli`: the console, the Chrome extension and the command line.
 - `packages/client` and `packages/schemas`: the MIT-licensed client and shared schemas.
 
@@ -63,7 +68,7 @@ The documentation is currently in French.
 
 ### Deploy to Render
 
-A one-click Blueprint ([`render.yaml`](https://github.com/scrap-yo-mama/sym/blob/main/render.yaml)) sets up Postgres, a web service and a 2 GB worker (the browser needs the room). Expect roughly **38 USD per month**.
+A one-click Blueprint ([`render.yaml`](https://github.com/scrap-yo-mama/sym/blob/main/render.yaml)) sets up Postgres, a web service and a 2 GB worker (the browser needs the room). The monthly cost depends on the Render plans it reserves; see the [deployment guide](https://github.com/scrap-yo-mama/sym/blob/main/runtime/docs/deploiement.md#render).
 
 **Coming with the first release.** The Blueprint exists, but nobody has deployed it for real yet, so the button is not promised to work today.
 

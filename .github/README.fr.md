@@ -8,45 +8,50 @@
 
 </div>
 
-Tu demandes à ton IA, via MCP, les données que tu veux. SYM enquête sur le site en commençant par le moins cher (un simple fetch, puis un vrai navigateur, puis un agent seulement si c'est nécessaire), te montre le schéma trouvé et attend ton feu vert. Ensuite il compile une API rejouable qui tourne sans aucun LLM et se répare toute seule quand le site change.
+SYM est un runtime de données auto-hébergé, encore en construction. L'objectif de la première version : tu demanderas à ton IA, via MCP, les données que tu veux. SYM enquêtera sur le site en commençant par le moins cher (un simple fetch, puis un vrai navigateur, puis un agent seulement si c'est nécessaire), te montrera le schéma trouvé et attendra ton feu vert. Ensuite il compilera une API rejouable qui tourne sans LLM quand la stratégie le permet, et réparera cette API quand le site change.
 
-Il s'auto-héberge et tu apportes ton propre modèle. Ton instance, tes clés, tes données.
+Tu l'héberges et tu apportes ton propre modèle. Ton instance, tes clés, tes données.
 
-> SYM 👻 : tu dis ce qu'il te faut, je fais les fouilles. Tu valides avant que quoi que ce soit soit construit.
+> SYM 👻 : tu diras ce qu'il te faut, je ferai les fouilles. Tu valides avant que quoi que ce soit soit construit.
 
 > [!WARNING]
 > **Statut : pré-version, travail en cours. Pas prêt pour la production.**
-> Il n'y a pas encore de version stable, les interfaces et le schéma de base de données vont changer, et rien n'a été éprouvé en conditions réelles. Fouille, lance-le en local, dis-nous ce qui casse. Mais ne construis rien de critique dessus aujourd'hui.
+> Il n'y a pas encore de version stable, les interfaces et le schéma de base de données vont changer, et rien n'a été éprouvé en conditions réelles. Le parcours central (demande via MCP, enquête, validation, rejeu, réparation) n'est pas encore branché : voir ce qui marche aujourd'hui ci-dessous. Fouille, lance-le en local, dis-nous ce qui casse. Mais ne construis rien de critique dessus aujourd'hui.
 
-## Comment ça marche
+## Ce qui marche aujourd'hui
+
+Ces briques sont sur `main` et couvertes par la CI. Le parcours qui les relie n'existe pas encore.
+
+- **Exécuteurs E1 à E6.** Fetch HTTP avec extraction déclarative, fetch dans une vraie page de navigateur, scripts Playwright en bac à sable, extraction mise en forme par le LLM, étapes script + agent et agent complet. Un run d'agent réussi (E6) se compile en stratégie rejouable script + agent (E5).
+- **Garde-fous.** Un bac à sable pour le code des stratégies, une garde SSRF sur les requêtes sortantes, une cadence par domaine et un module d'accès qui lit robots.txt et rapporte ce qu'un site autorise.
+- **Comptes.** Utilisateurs, invitations, double authentification, clés d'API, authentification unique OIDC et journal d'audit.
+- **Console, extension et tunnel.** La console web (anglais et français), et une extension Chrome qui appaire ton navigateur et exécute des étapes dans ta propre session, avec un consentement par domaine.
+- **Exploitation.** La ligne de commande `runtime` (migrations, `doctor`, diagnostics, sauvegarde et restauration, export du catalogue) et les modèles de déploiement pour Docker Compose, Render, Railway et Heroku.
+
+**Pas encore livré.** L'enquête (recherche du moins cher au plus cher, validation du schéma), la pagination, la réparation, la reprise par étape, l'API REST des API et des runs, et le serveur MCP. Tant qu'ils ne sont pas là, tu ne peux pas demander des données à ton IA via SYM.
+
+## Comment ça marchera
 
 1. **Demande.** Dis à ton IA quelles données tu veux, et sur quel site.
-2. **Enquête.** SYM cherche le chemin le moins cher vers ces données et te dit ce qu'il a trouvé.
-3. **Validation.** Tu relis le schéma proposé et tu dis oui, ou tu demandes des changements.
-4. **Rejeu.** SYM compile une API que tu appelles à la demande ou selon un calendrier, sans LLM.
-5. **Réparation.** Si le site dérive, SYM s'en aperçoit et répare l'API.
+2. **Enquête.** SYM cherchera le chemin le moins cher vers ces données et te dira ce qu'il a trouvé.
+3. **Validation.** Tu reliras le schéma proposé et tu diras oui, ou tu demanderas des changements.
+4. **Rejeu.** SYM compilera une API que tu appelleras à la demande ou selon un calendrier, sans LLM quand la stratégie le permet.
+5. **Réparation.** Si le site dérive, SYM s'en apercevra et réparera l'API.
 
-## Ce que fait SYM
+## Prévu pour la première version
 
-- **Enquête du moins cher au plus cher.** Fetch, puis navigateur, puis agent. L'étape coûteuse ne tourne que si les moins chères ne suffisent pas.
-- **Te montre le schéma et attend ton feu vert.** Aucune API ne surgit dans ton dos.
-- **Compile une API rejouable.** Une fois validée, les exécutions sont déterministes et n'ont pas besoin de LLM : rapides, peu coûteuses, reproductibles.
-- **Se répare toute seule.** Quand un site change, SYM s'en aperçoit et répare l'API au lieu de renvoyer du bruit en silence.
-- **Parle MCP et REST.** Branche-le à ton IA, ou appelle-le comme n'importe quelle API.
-- **Reste à toi.** Auto-hébergé, ton propre modèle, aucune télémétrie envoyée aux mainteneurs.
-
-## Ce que SYM sait gérer
-
-- **Les pages riches en JS.** Un vrai navigateur ouvre la page quand un simple fetch ne suffit pas.
-- **Les sites avec compte.** L'extension Chrome connecte un site via ta propre session de navigateur : SYM travaille avec le compte que tu as déjà.
-- **L'auto-réparation, étape par étape.** Quand un rejeu casse, SYM propose un correctif borné, le vérifie contre le schéma d'origine et n'escalade que si nécessaire.
-- **Les sites retors.** Un agent pilote le navigateur de bout en bout, puis sa trace réussie est compilée en une API qui tourne sans LLM dès que c'est possible.
+- **Enquête du moins cher au plus cher.** Fetch, puis navigateur, puis agent. L'étape coûteuse ne tournera que si les moins chères ne suffisent pas.
+- **Validation du schéma.** SYM te montrera le schéma et attendra ton feu vert. Aucune API ne surgira dans ton dos.
+- **API rejouables.** Une fois validées, les exécutions seront déterministes et n'auront pas besoin de LLM quand la stratégie le permet : rapides, peu coûteuses, reproductibles.
+- **Réparation bornée.** Quand un rejeu casse, SYM proposera un correctif borné, le vérifiera contre le schéma validé et n'escaladera que si nécessaire, au lieu de renvoyer du bruit en silence.
+- **MCP et REST.** Tu le brancheras à ton IA, ou tu l'appelleras comme n'importe quelle API.
+- **Reste à toi.** Auto-hébergé, ton propre modèle, aucune télémétrie envoyée aux mainteneurs. Ce point est vrai dès aujourd'hui.
 
 ## Ce que contient le dépôt
 
 Tout est sous [`runtime/`](https://github.com/scrap-yo-mama/sym/tree/main/runtime) :
 
-- `apps/server` et `apps/worker` : le service REST et MCP, et le worker qui enquête et exécute.
+- `apps/server` et `apps/worker` : le serveur HTTP (comptes, extension, tunnel, santé) et le worker qui exécute les stratégies. L'API REST des API et le point d'accès MCP vivront dans le serveur.
 - `apps/web`, `apps/extension`, `apps/cli` : la console, l'extension Chrome et la ligne de commande.
 - `packages/client` et `packages/schemas` : le client et les schémas partagés, sous licence MIT.
 
@@ -61,7 +66,7 @@ La documentation est dans [`runtime/docs/`](https://github.com/scrap-yo-mama/sym
 
 ### Déployer sur Render
 
-Un Blueprint en un clic ([`render.yaml`](https://github.com/scrap-yo-mama/sym/blob/main/render.yaml)) installe Postgres, un service web et un worker de 2 Go (le navigateur a besoin de place). Compte environ **38 USD par mois**.
+Un Blueprint en un clic ([`render.yaml`](https://github.com/scrap-yo-mama/sym/blob/main/render.yaml)) installe Postgres, un service web et un worker de 2 Go (le navigateur a besoin de place). Le coût mensuel dépend des plans Render qu'il réserve : voir le [guide de déploiement](https://github.com/scrap-yo-mama/sym/blob/main/runtime/docs/deploiement.md#render).
 
 **Arrive avec la première version.** Le Blueprint existe, mais personne ne l'a encore déployé pour de vrai : le bouton n'est donc pas promis fonctionnel aujourd'hui.
 

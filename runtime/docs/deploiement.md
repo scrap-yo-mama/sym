@@ -55,6 +55,10 @@ Bouton **à valider au GO** : il ne fonctionne qu'une fois le dépôt public, et
 Mettre à jour : sauvegardez la base (`pg_dump`), changez le tag de l'image dans **les deux** services, déployez
 (`autoDeployTrigger: 'off'` : rien ne se redéploie tout seul). Détail : [exploitation.md](exploitation.md).
 
+**Coût (relevé du 2026-10-01).** Le Blueprint réserve trois plans : web `0.5c-512mb`, worker `1c-2g`, base `0.5c-1g`
+avec 15 Go de disque. Le prix mensuel dépend de la [grille de Render](https://render.com/pricing) du jour, de la région et du
+disque : consultez-la avant de créer le Blueprint. Aucun montant n'est publié ici tant qu'aucun déploiement réel n'a été facturé.
+
 ## Docker Compose (VPS, Coolify, Dokploy)
 
 Il faut Docker avec le plugin Compose v2 et 4 Go de mémoire au moins (worker 4 Go de plafond, serveur 512 Mo, base 1 Go).
