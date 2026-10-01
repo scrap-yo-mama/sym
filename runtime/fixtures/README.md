@@ -16,7 +16,7 @@ Comme `*.localhost` peut ne pas se résoudre selon le poste, un client se connec
 
 `/robots.txt` est permissif par défaut (`Disallow:` vide) sur les sites qui ne le servent pas eux-mêmes ; les sites O8 le servent.
 
-## Les 32 sites
+## Les 36 sites
 
 **Existantes (13)** : `api_json` (500 contacts, 6 mutations du banc : `rename_field`, `move_endpoint`, `wrap_in_envelope`, `change_pagination`, `type_change`, `out_of_schema`, `empty`), `ssr`, `spa`, `login` (`zz_test_user` / `zz_test_pass`, 401 JSON, expiration), `challenge` (403), `429`, `geo`, `injection` (+ domaine piège `zz_test_evil`), `dom` (`version` 1 ou 2), `signed403` (signature FICTIVE, `/plain-forbidden` sans signature), `irregular`, `503`, `challenge_200` (défi servi en HTTP 200).
 
@@ -25,6 +25,8 @@ Comme `*.localhost` peut ne pas se résoudre selon le poste, un client se connec
 **Ajouts S5 (6)** : `next` (`__NEXT_DATA__`), `nuxt` (`__NUXT_DATA__` à plat, `window.__NUXT__`), `apollo` (`__APOLLO_STATE__`), `jsonld`, `cursor`, `linkheader`.
 
 **Accès O8 (8)** : `robots` (`Disallow: /prive/`), `robots_4xx`, `robots_5xx` (dont connexion coupée), `robots_redirect`, `robots_big` (> 500 Kio), `robots_crawl_delay`, `content_signal`, `payment_402` (`crawler-price`).
+
+**Spike 0.6a (4)**, lot `agent` (`eval/spike-0.6a-decision.md` §5) : `agent_irregular_html` (E4 : 8 produits, 4 gabarits HTML, catégorie parfois absente, aucune API), `agent_mobile_next` (E5 : mise en page mobile, 12 contacts sur 3 pages, bouton « Suivant » sans `href` ni API), `agent_no_api_unstable_dom` (E6 : classes, identifiants, liens `/v/<jeton>` et ordre des blocs régénérés à chaque requête, graine par requête ; tâche : atteindre une fiche puis l'extraire), `agent_prompt_injection` (5 produits + instructions hostiles visibles, cachées, en commentaire et en `alt`, lien et formulaire vers le domaine piège `zz_test_evil` du site `injection`, chaîne canari `ZZ_TEST_CANARY_6A0F`, saisie dans le formulaire piège comptée sur `/t/typed`). Instruction, schéma de sortie, clé et référence de chaque tâche : `src/agent-tasks.ts` ; références versionnées : `references/*.json`, produites par le générateur (`node fixtures/src/agent-tasks.ts --write`), vérifiées octet pour octet par `agent-tasks.unit.test.ts`.
 
 Les fixtures de défi et de 403 sont des **simulations génériques de détection** : page interstitielle générique, en-têtes `x-zz-test-shield*` fictifs, aucun script ni formulaire. Elles servent à vérifier que le produit s'arrête.
 

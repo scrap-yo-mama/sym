@@ -1,5 +1,7 @@
 // Interface AgentEngine (02 P2, 03 « Moteur agentique ») : types seulement, aucune implémentation.
-// Squelette de la tâche 0.6a ; figée par l'ADR 0001 à l'issue du spike (eval/spike-0.6a-decision.md).
+// FIGÉE par l'ADR 0001 (runtime/docs/adr/0001-agent-engine.md) à l'issue du spike 0.6a : toute modification passe par
+// un nouvel ADR. Bras A (boucle maison) : packages/agent ; bras B (Stagehand 3.7.3) : eval/spike. Décision de l'ADR 0001 :
+// Stagehand 3.7.3 retenu par la règle du protocole (boucle maison écartée pour un faux succès), qualifiée « fragile ».
 // Le canal d'accès au navigateur reprend le contrat `agent_step` du tunnel (07 §3, tâche 0.6b) :
 // actions à gros grain, références liées à un `snapshot_id`, refus `stale_ref` sans exécution.
 
@@ -101,6 +103,8 @@ export interface AgentTraceStep {
   readonly semanticTarget?: { readonly role: string; readonly name: string };
   readonly url: string;
   readonly error?: AgentStepErrorCode;
+  /** Faux si le canal a refusé sans rien exécuter (`stale_ref`, domaine, écriture). */
+  readonly executed: boolean;
   readonly durationMs: number;
 }
 
@@ -115,6 +119,8 @@ export interface AgentRunResult {
   /** `null` si le prix du modèle est absent : jamais 0 (08 §1). */
   readonly costUsd: number | null;
   readonly durationMs: number;
+  /** Appels d'outil invalides (JSON, arguments, outil inconnu, sortie hors schéma refusée par le moteur) et `stale_ref`. */
+  readonly toolErrors: number;
   /** Classe d'erreur LLM ou du classifieur (08 §1, 04 §7) quand le statut n'est pas `done`. */
   readonly failureClass?: string;
 }

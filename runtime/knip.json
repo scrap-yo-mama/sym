@@ -43,9 +43,19 @@
         "src/index.ts"
       ]
     },
+    "eval/spike": {
+      "entry": [
+        "src/report.ts",
+        "src/**/*.test.ts"
+      ],
+      "project": [
+        "src/**/*.ts"
+      ]
+    },
     "fixtures": {
       "entry": [
-        "src/**/*.test.ts"
+        "src/**/*.test.ts",
+        "src/agent-tasks.ts"
       ],
       "project": [
         "src/**/*.ts"

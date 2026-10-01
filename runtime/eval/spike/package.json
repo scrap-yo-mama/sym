@@ -1,0 +1,26 @@
+{
+  "name": "@runtime/eval-spike",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "license": "AGPL-3.0-only",
+  "description": "Paquet d'évaluation ISOLÉ du spike 0.6a (protocole §13) : Stagehand 3.7.3 n'entre jamais dans packages/* ni apps/*.",
+  "scripts": {
+    "spike": "node src/run-spike.ts",
+    "test": "vitest run --passWithNoTests"
+  },
+  "dependencies": {
+    "@browserbasehq/stagehand": "3.7.3",
+    "@runtime/agent": "workspace:*",
+    "@runtime/core": "workspace:*",
+    "@runtime/llm": "workspace:*",
+    "ajv": "catalog:",
+    "playwright-core": "catalog:",
+    "zod": "4.3.6"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}

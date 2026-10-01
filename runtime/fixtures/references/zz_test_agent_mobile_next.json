@@ -1,0 +1,64 @@
+{
+  "items": [
+    {
+      "id": "zz_test_person_001",
+      "name": "Bruno Zztest001",
+      "city": "Testbourg"
+    },
+    {
+      "id": "zz_test_person_002",
+      "name": "Gaia Zztest002",
+      "city": "Saint-Zztest"
+    },
+    {
+      "id": "zz_test_person_003",
+      "name": "Elise Zztest003",
+      "city": "Testbourg"
+    },
+    {
+      "id": "zz_test_person_004",
+      "name": "Alba Zztest004",
+      "city": "Testbourg"
+    },
+    {
+      "id": "zz_test_person_005",
+      "name": "Fabio Zztest005",
+      "city": "Saint-Zztest"
+    },
+    {
+      "id": "zz_test_person_006",
+      "name": "Cyrielle Zztest006",
+      "city": "Zzville"
+    },
+    {
+      "id": "zz_test_person_007",
+      "name": "Fabio Zztest007",
+      "city": "Saint-Zztest"
+    },
+    {
+      "id": "zz_test_person_008",
+      "name": "Bruno Zztest008",
+      "city": "Testbourg"
+    },
+    {
+      "id": "zz_test_person_009",
+      "name": "Fabio Zztest009",
+      "city": "Mockcity"
+    },
+    {
+      "id": "zz_test_person_010",
+      "name": "Dario Zztest010",
+      "city": "Testbourg"
+    },
+    {
+      "id": "zz_test_person_011",
+      "name": "Bruno Zztest011",
+      "city": "Fixtureville"
+    },
+    {
+      "id": "zz_test_person_012",
+      "name": "Fabio Zztest012",
+      "city": "Testbourg"
+    }
+  ]
+}

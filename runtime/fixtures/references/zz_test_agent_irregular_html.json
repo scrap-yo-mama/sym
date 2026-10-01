@@ -1,0 +1,52 @@
+{
+  "items": [
+    {
+      "id": "zz_test_product_0001",
+      "title": "Cadre Solaire Zztest 0001",
+      "price_eur": 70.76,
+      "category": "jardin"
+    },
+    {
+      "id": "zz_test_product_0002",
+      "title": "Cadre Léger Zztest 0002",
+      "price_eur": 15.8,
+      "category": null
+    },
+    {
+      "id": "zz_test_product_0003",
+      "title": "Bac Pliable Zztest 0003",
+      "price_eur": 33.13,
+      "category": "atelier"
+    },
+    {
+      "id": "zz_test_product_0004",
+      "title": "Lampe Pliable Zztest 0004",
+      "price_eur": 95.71,
+      "category": "maison"
+    },
+    {
+      "id": "zz_test_product_0005",
+      "title": "Tiroir Pliable Zztest 0005",
+      "price_eur": 10.13,
+      "category": null
+    },
+    {
+      "id": "zz_test_product_0006",
+      "title": "Bac Robuste Zztest 0006",
+      "price_eur": 63.79,
+      "category": "maison"
+    },
+    {
+      "id": "zz_test_product_0007",
+      "title": "Tabouret Léger Zztest 0007",
+      "price_eur": 54.67,
+      "category": "atelier"
+    },
+    {
+      "id": "zz_test_product_0008",
+      "title": "Bac Pliable Zztest 0008",
+      "price_eur": 42.5,
+      "category": null
+    }
+  ]
+}
