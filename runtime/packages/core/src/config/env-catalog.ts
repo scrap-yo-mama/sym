@@ -45,6 +45,7 @@ export const ENV_CATALOG: readonly EnvVariable[] = [
 
   v({ name: 'ADMIN_BOOTSTRAP_TOKEN', group: 'Accès', roles: ['server', 'cli'], required: 'tant qu’aucun owner n’existe', default: null, secret: true, description: '32 caractères au moins. Jeton de l’assistant de premier démarrage ; ni stocké ni réaffiché. À retirer une fois le premier administrateur créé (`runtime doctor` le signale).' }),
   v({ name: 'ADMIN_EMAIL', group: 'Accès', roles: ['server'], required: false, default: null, description: 'Restreint l’adresse acceptée par l’assistant de premier démarrage.' }),
+  v({ name: 'MFA_ENFORCED', group: 'Accès', roles: ['server'], required: false, default: '`off`', description: '`off`, `admins` ou `all` : double authentification (TOTP) obligatoire pour les administrateurs ou pour tous les comptes ; une valeur inconnue refuse le démarrage. Les comptes concernés ne peuvent pas retirer leur 2FA.' }),
 
   v({ name: 'RUNTIME_VERSION', group: 'Image', roles: ['server', 'worker', 'cli'], required: false, default: '`0.0.0`', description: 'Version publiée par `/api/health` et `/api/version`. Posée à la construction de l’image par la chaîne de release : ne pas la changer.' }),
   v({ name: 'RUNTIME_MODE', group: 'Image', roles: ['image'], required: false, default: '`all`', description: '`server`, `worker`, `all` (les deux dans un processus) ou `migrate`. Lue par le point d’entrée de l’image.' }),

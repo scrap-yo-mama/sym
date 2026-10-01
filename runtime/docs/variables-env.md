@@ -36,6 +36,7 @@ contrôle de version sortant ni de rapport d’usage.
 |---|---|---|---|---|
 | `ADMIN_BOOTSTRAP_TOKEN` (`ADMIN_BOOTSTRAP_TOKEN_FILE`) secret | server, CLI | obligatoire tant qu’aucun owner n’existe | aucun | 32 caractères au moins. Jeton de l’assistant de premier démarrage ; ni stocké ni réaffiché. À retirer une fois le premier administrateur créé (`runtime doctor` le signale). |
 | `ADMIN_EMAIL` | server | facultative | aucun | Restreint l’adresse acceptée par l’assistant de premier démarrage. |
+| `MFA_ENFORCED` | server | facultative | `off` | `off`, `admins` ou `all` : double authentification (TOTP) obligatoire pour les administrateurs ou pour tous les comptes ; une valeur inconnue refuse le démarrage. Les comptes concernés ne peuvent pas retirer leur 2FA. |
 
 ## Exécution
 
