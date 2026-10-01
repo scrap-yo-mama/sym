@@ -9,8 +9,11 @@ export const MASTER_KEY_BYTES = 32;
 const BASE64_32 = /^[A-Za-z0-9+/]{42}[AEIMQUYcgkosw048]=$/;
 const HKDF_SALT = Buffer.from('scrapyomama-runtime/master-key/v1');
 
-/** Usages d'une KEK : un libellé HKDF par usage (08 § 3). */
-export type KekPurpose = 'secrets' | 'sessions';
+/**
+ * Usages d'une KEK : un libellé HKDF par usage (08 § 3). `sessions` sert déjà de secret de signature à la bibliothèque
+ * d'auth (0.3b) ; les cookies de sites (tâche 2.6) ont leur propre libellé, pour qu'aucune clé ne serve à deux algorithmes.
+ */
+export type KekPurpose = 'secrets' | 'sessions' | 'site_sessions';
 
 export class MasterKeyError extends Error {
   override name = 'MasterKeyError';

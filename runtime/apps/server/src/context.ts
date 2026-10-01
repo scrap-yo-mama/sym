@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Dépendances partagées par les routes.
-import type { Keyring, Secret } from '@runtime/core';
+import type { Kek, Keyring, Secret } from '@runtime/core';
 import type pg from 'pg';
 import type { Auth } from './auth/better-auth.js';
 import type { MetricsCollector } from './metrics.js';
@@ -28,6 +28,8 @@ export type ServerContext = {
   /** `METRICS_TOKEN` (null : `/metrics` fermé, 404). */
   metricsToken: Secret | null;
   metrics: MetricsCollector;
+  /** KEK des cookies de sites (libellé `site_sessions`, génération vérifiée par keyCheck) : scellement seul côté web. */
+  siteSessionKek: Kek;
   /** Vrai dès qu'un owner existe (mis en cache : l'état ne revient jamais en arrière). */
   isInitialized: () => Promise<boolean>;
 };

@@ -231,7 +231,7 @@ export const auditEvents = pgTable(
     id: bigint('id', { mode: 'number' }).primaryKey().generatedAlwaysAsIdentity(),
     at: tstz('at').notNull().defaultNow(),
     actorUserId: uuid('actor_user_id'),
-    actorVia: text('actor_via', { enum: ['ui', 'apikey', 'mcp', 'sso', 'system'] }).notNull(),
+    actorVia: text('actor_via', { enum: ['ui', 'apikey', 'mcp', 'sso', 'system', 'extension'] }).notNull(),
     actorRef: text('actor_ref'),
     action: text('action').notNull(),
     targetType: text('target_type'),
@@ -646,6 +646,12 @@ export const siteSessions = pgTable(
     capturedAt: tstz('captured_at'),
     expiresAt: tstz('expires_at'),
     createdAt: createdAt(),
+    // Migration 0008_extension_pairing (tâche 2.6) : enveloppe complète, consentement daté. Colonnes chiffrées en
+    // écriture seule pour runtime_app (aucun SELECT sur ciphertext, nonce, dek_wrapped, alg).
+    dekWrapped: bytea('dek_wrapped'),
+    alg: text('alg'),
+    consentedAt: tstz('consented_at').notNull().defaultNow(),
+    updatedAt: updatedAt(),
   },
   (t) => [
     unique('site_sessions_owner_domain_key').on(t.ownerId, t.domain),
@@ -670,8 +676,27 @@ export const tunnels = pgTable(
     revokedAt: tstz('revoked_at'),
     lastSeenAt: tstz('last_seen_at'),
     createdAt: createdAt(),
+    // Migration 0008_extension_pairing (tâche 2.6).
+    revokedBy: uuid('revoked_by').references(() => users.id, { onDelete: 'set null' }),
   },
   (t) => [index('tunnels_owner_id_idx').on(t.ownerId)],
+);
+
+/** Code d'appairage de l'extension (07 § 1) : usage unique, 10 min, empreinte seulement (migration 0008). */
+export const extensionPairingCodes = pgTable(
+  'extension_pairing_codes',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    ownerId: uuid('owner_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    codeHash: text('code_hash').notNull().unique(),
+    expiresAt: tstz('expires_at').notNull(),
+    usedAt: tstz('used_at'),
+    tunnelId: uuid('tunnel_id').references(() => tunnels.id, { onDelete: 'set null' }),
+    createdAt: createdAt(),
+  },
+  (t) => [index('extension_pairing_codes_owner_id_idx').on(t.ownerId)],
 );
 
 export const tunnelJobs = pgTable(

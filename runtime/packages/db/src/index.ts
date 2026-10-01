@@ -10,6 +10,7 @@ export * from './artifacts.js';
 export * from './audit.js';
 export * from './connection.js';
 export * from './health.js';
+export * from './extension.js';
 export * from './migrate.js';
 export * from './pacing.js';
 export * from './partitions.js';

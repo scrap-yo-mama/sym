@@ -8,7 +8,7 @@
 // redémarrage (`/api/ready` passe de 503 à 200, recette 1). Schéma PLUS RÉCENT que le code : refus de démarrer (garde
 // contre un retour d'image sans restauration). Une erreur fatale pendant l'initialisation différée (clé, amorçage) est
 // remise à `onFatal` (index.ts : message clair puis sortie 1).
-import { initTelemetry, type Telemetry } from '@runtime/core';
+import { initTelemetry, kekFor, type Telemetry } from '@runtime/core';
 import { currentSchemaVersion, createDb, expectedSchemaVersion, holdSecretsLock, KeyCheckError, keyCheck } from '@runtime/db';
 import type { FastifyBaseLogger, FastifyInstance } from 'fastify';
 import pg from 'pg';
@@ -80,6 +80,7 @@ export async function prepareServer(env: NodeJS.ProcessEnv = process.env, option
       const checked = await keyCheck(pool, config.keyring);
       if (!(await isInitialized()) && !config.bootstrapToken) throw new StartupError(BOOTSTRAP_REQUIRED);
       ctx.keyFingerprint = checked.fingerprint;
+      ctx.siteSessionKek = kekFor(config.keyring.current, checked.version, 'site_sessions');
     };
 
     let state: 'waiting' | 'ready' | 'failed' = 'waiting';
@@ -127,6 +128,8 @@ export async function prepareServer(env: NodeJS.ProcessEnv = process.env, option
       keyring: config.keyring,
       metricsToken: config.metricsToken,
       metrics: createMetricsRegistry(pool),
+      // Posée par finishInit (version de clé connue après keyCheck) ; jamais lue avant : tant que le démarrage n'est pas terminé, seules les sondes répondent.
+      siteSessionKek: kekFor(config.keyring.current, 0, 'site_sessions'),
       isInitialized,
     };
     if (version === expected) {

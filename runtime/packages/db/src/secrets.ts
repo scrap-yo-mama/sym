@@ -22,6 +22,7 @@ import {
 } from '@runtime/core';
 import type pg from 'pg';
 import { appendAudit } from './audit.js';
+import { rekeySiteSessionsBatch } from './extension.js';
 
 type Queryable = Pick<pg.ClientBase, 'query'>;
 
@@ -42,8 +43,7 @@ export const REKEY_LOCK_KEY = '8315178094305570146';
 export const ENCRYPTED_COLUMNS = [
   { table: 'secrets', column: 'ciphertext', coveredBy: 'rekey' },
   { table: 'settings', column: 'value', key: KEY_CHECK_SETTING, coveredBy: 'rekey' },
-  // Écrite par la capture de session de l'extension (2.6) : cette tâche doit la rendre rotable avant toute écriture.
-  { table: 'site_sessions', column: 'ciphertext', coveredBy: '2.6' },
+  { table: 'site_sessions', column: 'ciphertext', coveredBy: 'rekey' },
   { table: 'run_artifacts', column: 'ciphertext', coveredBy: 'rekey' },
   { table: 'two_factor', column: 'secret_ciphertext', coveredBy: '3.7' },
 ] as const;
@@ -269,7 +269,8 @@ export type RekeyResult = {
 };
 
 /**
- * `runtime rekey` : re-chiffre chaque secret de la version de `MASTER_KEY_PREVIOUS` vers `MASTER_KEY` (nouvelle DEK,
+ * `runtime rekey` : re-chiffre chaque secret, puis chaque cookie scellé de `site_sessions` (KEK `site_sessions`, AAD
+ * liée à la version de clé ; une valeur illisible y est effacée), de la version de `MASTER_KEY_PREVIOUS` vers `MASTER_KEY` (nouvelle DEK,
  * nouveaux nonces), par lots transactionnels, sous verrou consultatif. Reprenable : l'état est dans
  * `settings.rekey_state`, chaque lot est atomique, et une relance reprend les lignes restantes. À la fin, dans une
  * transaction : plus aucune ligne lisible sous l'ancienne version, `key_check` réécrit, `rekey_state` supprimé.
@@ -358,6 +359,25 @@ export async function rekey(
       }
       await opts.afterBatch?.(rotated);
     }
+    // Cookies scellés des sites connectés (07 § 2) : KEK `site_sessions`, AAD liée à la version de clé.
+    const fromSite = kekFor(previous, state.from, 'site_sessions');
+    const toSite = kekFor(current, state.to, 'site_sessions');
+    for (;;) {
+      await client.query('BEGIN');
+      let seen: number;
+      try {
+        const batch = await rekeySiteSessionsBatch(client, fromSite, toSite, batchSize);
+        await client.query('COMMIT');
+        seen = batch.seen;
+        rotated += batch.rotated;
+        unreadable += batch.wiped;
+      } catch (error) {
+        await client.query('ROLLBACK');
+        throw error;
+      }
+      if (seen === 0) break;
+      await opts.afterBatch?.(rotated);
+    }
     await client.query('BEGIN');
     try {
       const { rows } = await client.query<{ n: number }>(
@@ -367,6 +387,8 @@ export async function rekey(
       if ((rows[0]?.n ?? 0) > 0) throw new KeyCheckError(`${rows[0]?.n} secret(s) encore hors de la version ${state.to} : rotation non terminée.`);
       const leftover = await client.query<{ n: number }>("SELECT count(*)::int AS n FROM run_artifacts WHERE state = 'ok' AND key_version <> $1", [state.to]);
       if ((leftover.rows[0]?.n ?? 0) > 0) throw new KeyCheckError(`${leftover.rows[0]?.n} artefact(s) encore hors de la version ${state.to} : rotation non terminée.`);
+      const sites = await client.query<{ n: number }>('SELECT count(*)::int AS n FROM site_sessions WHERE key_version <> $1', [state.to]);
+      if ((sites.rows[0]?.n ?? 0) > 0) throw new KeyCheckError(`${sites.rows[0]?.n} session(s) de site encore hors de la version ${state.to} : rotation non terminée.`);
       await writeSetting(client, KEY_CHECK_SETTING, createKeyCheck(current, state.to));
       await client.query('DELETE FROM settings WHERE key = $1', [REKEY_STATE_SETTING]);
       await client.query('COMMIT');

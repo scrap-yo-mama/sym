@@ -2,8 +2,8 @@
 // Garde unique de toutes les routes (13 § 2-5, 13.1) : 503 avant l'owner, identité (clé d'API ou session), rôle et
 // statut relus en base à chaque requête (ASVS 8.3.2), scope de clé, permission de rôle, contrôle d'Origin sur les
 // mutations d'interface. Aucune route ne choisit l'identité : elle vient d'ici seulement (pas d'impersonation, INV5).
-import { can, hashApiKey, isApiKeyFormat, isRole, type ApiKeyScope, type Role } from '@runtime/core';
-import { appendAudit, withActor } from '@runtime/db';
+import { can, hashApiKey, isApiKeyFormat, isExtensionTokenFormat, isRole, type ApiKeyScope, type Role } from '@runtime/core';
+import { appendAudit, resolveExtensionToken, withActor } from '@runtime/db';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import type { ServerContext } from '../context.js';
 import { findRoute, type RouteSpec } from './registry.js';
@@ -12,12 +12,14 @@ export type Actor = {
   userId: string;
   role: Role;
   email: string;
-  via: 'ui' | 'apikey';
+  via: 'ui' | 'apikey' | 'extension';
   /** Scopes de la clé (null pour une session d'interface). */
   scopes: ApiKeyScope[] | null;
   apiKey?: { id: string; prefix: string };
   /** Session d’interface utilisée (pour la révoquer, ex. ré-authentification échouée en boucle). */
   sessionId?: string;
+  /** Appareil appairé (jeton d'extension, 07 § 1) : l'identité vient du jeton, jamais du corps de la requête. */
+  tunnelId?: string;
 };
 
 declare module 'fastify' {
@@ -92,6 +94,15 @@ async function resolveApiKey(ctx: ServerContext, request: FastifyRequest, key: s
   return { actor };
 }
 
+/** Jeton d'extension (07 § 1) : lié à (utilisateur, appareil), révocable, 90 jours renouvelés à l'usage. */
+async function resolveExtension(ctx: ServerContext, token: string): Promise<Resolution> {
+  if (!isExtensionTokenFormat(token)) return { status: 401 };
+  // Étape d'authentification (identité système), comme les clés d'API : lecture par l'empreinte du jeton.
+  const identity = await resolveExtensionToken(ctx.pool, token);
+  if (!identity) return { status: 401 };
+  return { actor: { userId: identity.userId, role: identity.role, email: identity.email, via: 'extension', scopes: null, tunnelId: identity.tunnelId } };
+}
+
 async function resolveSession(ctx: ServerContext, request: FastifyRequest, reply: FastifyReply): Promise<Resolution> {
   const { headers, response } = await ctx.auth.api.getSession({ headers: webHeaders(request), returnHeaders: true });
   // Renouvellement glissant de la session : le cookie mis à jour est renvoyé au navigateur.
@@ -153,7 +164,11 @@ export function guard(ctx: ServerContext) {
 
     const authorization = request.headers.authorization;
     let resolution: Resolution;
-    if (typeof authorization === 'string' && authorization.length > 0) {
+    if (spec.auth === 'extension') {
+      // Routes de l'extension : jeton d'appareil seulement (ni session d'interface, ni clé d'API).
+      const match = typeof authorization === 'string' ? /^Bearer (\S+)$/.exec(authorization) : null;
+      resolution = match?.[1] ? await resolveExtension(ctx, match[1]) : { status: 401 };
+    } else if (typeof authorization === 'string' && authorization.length > 0) {
       const match = /^Bearer (\S+)$/.exec(authorization);
       resolution = match?.[1] ? await resolveApiKey(ctx, request, match[1]) : { status: 401 };
     } else {
@@ -174,7 +189,7 @@ export function guard(ctx: ServerContext) {
     if (actor.via === 'apikey') {
       if (spec.auth === 'session') return denied('session_required');
       if (spec.scope && !actor.scopes?.includes(spec.scope)) return denied('scope_missing');
-    } else if (request.method !== 'GET') {
+    } else if (actor.via === 'ui' && request.method !== 'GET') {
       // Mutation d'interface : Origin identique à PUBLIC_URL (13 § 5).
       if (request.headers.origin !== ctx.publicUrl) return denied('origin_mismatch');
     }
