@@ -17,6 +17,7 @@ import type {
   AgentTraceStep,
 } from '@runtime/core';
 import { LlmError, validateOriginal, type ChatMessage, type LlmCallResult, type LlmClient, type ToolCall, type ToolDef } from '@runtime/llm';
+import { AgentStepRefusedError } from './tunnel-channel.js';
 
 export const HOME_LOOP_SYSTEM_PROMPT = [
   'You are a web data extraction agent. You operate a browser only through the tools provided, one tool call per turn.',
@@ -345,6 +346,8 @@ export class HomeLoopEngine implements AgentEngine {
         messages.push(...replies.filter((r) => r.role === 'tool'), ...replies.filter((r) => r.role !== 'tool'));
       }
     } catch (error) {
+      // Refus typé du canal à la lecture (défi, délai) : le code est la classe d'échec, pas une erreur de moteur.
+      if (error instanceof AgentStepRefusedError) return finish('error', null, error.error);
       if (error instanceof LlmError) return finish(signal.aborted ? 'timeout' : 'error', null, signal.aborted ? 'timeout' : error.failureClass);
       if (signal.aborted) return finish('timeout', null, 'timeout');
       return finish('error', null, 'engine_error');
