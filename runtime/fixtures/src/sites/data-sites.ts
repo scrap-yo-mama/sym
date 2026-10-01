@@ -2,7 +2,7 @@
 // Sites de données : API JSON, SSR, SPA, DOM, HTML irrégulier, volume, données personnelles, défilement, blobs, curseur, Link.
 import { ControlError, type FxRequest, type FxResponse, type SiteFactory } from '../core.ts';
 import { formatEuro, makeContacts, makePeople, makeProducts, slicePage, type Product } from '../data.ts';
-import { esc, html, intParam, json, page } from '../res.ts';
+import { esc, html, intParam, json, page, redirect } from '../res.ts';
 
 const notFound = (): FxResponse => json(404, { error: 'not_found' });
 
@@ -133,15 +133,19 @@ const spa: SiteFactory = (env) => {
       if (req.path === '/api/items.json') return json(200, { items: products, total: products.length });
       if (req.path === '/app.js') return { status: 200, headers: { 'content-type': 'text/javascript; charset=utf-8' }, body: appJs };
       // Page à ressources tierces (tâche 1.6) : image et balise de mesure d'audience vers un hôte hors du site
-      // (zz_test_evil, qui compte toute requête reçue), dont une sur minuterie et une au défilement, comme un site réel.
+      // (zz_test_evil, qui compte toute requête reçue), dont une sur minuterie et une au défilement, et une image du site
+      // qui redirige vers le tiers (saut vu par le seul proxy d'egress), comme un site réel. `?status=451|503` : même
+      // page servie avec ce statut (géo-restriction, indisponibilité), sous-ressources comprises.
+      if (req.path === '/tiers/pixel') return redirect(302, env.urlFor('zz_test_evil.localhost', '/collect?t=redirect'));
       if (req.path === '/tiers') {
         const pageNo = intParam(req, 'page', 1, 1, 10);
+        const status = req.query.get('status') === '451' ? 451 : req.query.get('status') === '503' ? 503 : 200;
         const tracker = env.urlFor('zz_test_evil.localhost', '/collect');
         const script = `setTimeout(()=>{navigator.sendBeacon("${tracker}?t=timer&p=${pageNo}","zz_test")},300);addEventListener("scroll",()=>{new Image().src="${tracker}?t=scroll"},{once:true});`;
         const rows = slicePage(products, pageNo, 10)
           .map((p) => `<div class="spa-item">${esc(p.title)} - ${(p.price_cents / 100).toFixed(2)} EUR</div>`)
           .join('');
-        return html(200, page(`Tiers ${pageNo}`, `<img alt="" src="${tracker}?t=pixel&p=${pageNo}">${rows}<script>${script}</script>`));
+        return html(status, page(`Tiers ${pageNo}`, `<img alt="" src="${tracker}?t=pixel&p=${pageNo}"><img alt="" src="/tiers/pixel?p=${pageNo}">${rows}<script>${script}</script>`));
       }
       if (req.path === '/' || req.path.startsWith('/items')) {
         const prelude = hostile ? `<script>${hostileJs}</script>` : '';

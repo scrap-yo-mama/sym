@@ -149,6 +149,45 @@ describe('RunExecutor de production, Chromium réel (E2, E3 en script)', () => {
     expect(runLogText).toContain('[PERSONAL]');
   }, 120_000);
 
+  test.each([
+    ['le script échoue après avoir émis', 'throw new Error("zz_test_echec");'],
+    ['sortie hors schéma', 'ctx.emit({ name: names[1], email: emails[1], zz_test_extra: true });'],
+  ])('assert_no_personal_data_in_logs (E3 en script, run en échec : %s) : ctx.log de données extraites masqué dans run_logs, rien dans le journal du worker', async (_name, failing) => {
+    const source = `
+      const names = await ctx.page.textAll('tr.person td.name');
+      const emails = await ctx.page.textAll('tr.person td.email');
+      ctx.log('premier contact', names[0], emails[0]);
+      ctx.emit({ name: names[0], email: emails[0] });
+      ${failing}`;
+    const apiId = await insertApi(
+      `zz_test_e3_log_${randomUUID().slice(0, 8)}`,
+      { execution: 'playwright', network: 'direct', scriptRef: 'inline', spec: { kind: 'script', allowed_hosts: [PERSONAL], start_url: `http://${PERSONAL}:${client.server.port}/`, source } },
+      SCHEMA_PERSON,
+    );
+    const run = await runOf(apiId);
+    expect(run).toMatchObject({ state: 'failed', items: 0, dataset_id: null });
+    const logs = await pool.query<{ data: unknown }>("SELECT data FROM run_logs WHERE run_id = $1 AND event = 'sandbox_log'", [run.id]);
+    expect(logs.rows).toHaveLength(1);
+    const runLogText = JSON.stringify(logs.rows);
+    for (const motif of ['zz_test_person_001', 'example.invalid', 'Zztest001']) {
+      expect(runLogText).not.toContain(motif);
+      expect(workerLog.join('\n')).not.toContain(motif);
+    }
+    expect(runLogText).toContain('[PERSONAL]');
+  }, 120_000);
+
+  test('assert_subresource_cut_not_strategy_fault (E3 en script) : page de départ en 451 dont le site charge des tiers coupés (pixel, redirection vers un tiers) → network geo_restriction, jamais domain_not_allowed', async () => {
+    const apiId = await insertApi(
+      'zz_test_e3_geo_tiers',
+      { execution: 'playwright', network: 'direct', scriptRef: 'inline', spec: { kind: 'script', allowed_hosts: [SPA], start_url: `http://${SPA}:${client.server.port}/tiers?status=451`, source: 'ctx.emit({})' } },
+      SCHEMA_PERSON,
+    );
+    const run = await runOf(apiId);
+    expect(run).toMatchObject({ state: 'failed', failure_class: 'network', items: 0 });
+    expect((await pool.query<{ error_detail: string }>('SELECT error_detail FROM runs WHERE id = $1', [run.id])).rows[0]!.error_detail).toBe('geo_restriction');
+    expect(run.attempts[0]).toMatchObject({ execution: 'playwright', result: 'network' });
+  }, 120_000);
+
   test('E2 fetch_in_page par le proxy BYO (dc_proxy) : 30 produits conformes, coût proxy imputé à l’essai', async () => {
     proxy.log.length = 0;
     const base = `http://${SPA}:${client.server.port}`;

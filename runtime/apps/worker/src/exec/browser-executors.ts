@@ -7,8 +7,9 @@
 // - E3 : navigation déterministe (GET), attente du rendu (sélecteur des enregistrements), DOM rendu extrait.
 // Toute navigation passe par `guardedGoto` ; la cadence (1.9) est réservée avant chaque requête de la stratégie.
 // `max_response_bytes` est tenu DANS la page, avant tout transfert au worker (browser/bounded.ts) : une page hostile ne
-// fait pas charger des centaines de Mo au processus Node. Une redirection hors des domaines de l'API (refusée par le
-// proxy d'egress, que `context.route` ne voit pas) est une faute de stratégie (`domain_not_allowed`), jamais un réseau.
+// fait pas charger des centaines de Mo au processus Node. Une redirection hors des domaines de l'API d'une requête DE LA
+// STRATÉGIE (refusée par le proxy d'egress, que `context.route` ne voit pas) est une faute de stratégie
+// (`domain_not_allowed`), jamais un réseau ; une sous-ressource tierce du site coupée ne change jamais la classe.
 import {
   classifyExchange,
   classifyStatus,
@@ -26,7 +27,7 @@ import { DomainNotAllowedError, guardedGoto, type BrowserEgress, type SsrfGuard 
 import type { Page, Response } from 'playwright-core';
 import { boundedContent, boundedRawBody, TOO_LARGE } from '../browser/bounded.js';
 import type { BrowserPool } from '../browser/pool.js';
-import { hostAllowed, openRunContext, type RunContext } from '../browser/run-context.js';
+import { hostAllowed, isMainNavigation, openRunContext, trackStrategyRequests, type RunContext, type StrategyRequests } from '../browser/run-context.js';
 
 const BROWSER_NAVIGATION_TIMEOUT_MS = 30_000;
 /** Attente du rendu d'une page (sélecteur des enregistrements) avant lecture du DOM. */
@@ -47,8 +48,8 @@ function capped(body: string | typeof TOO_LARGE): string {
   return body;
 }
 
-/** Affine un échec quand le proxy d'egress ou la politique de domaines ont refusé quelque chose. */
-function refine(result: DeclarativeRunResult, egress: BrowserEgress, rc: RunContext | undefined): DeclarativeRunResult {
+/** Affine un échec quand le proxy d'egress ou la politique de domaines ont refusé une requête DE LA STRATÉGIE. */
+function refine(result: DeclarativeRunResult, egress: BrowserEgress, strategy: StrategyRequests): DeclarativeRunResult {
   if (result.ok) return result;
   const { failure_class: cls } = result.failure;
   // Le proxy d'egress répond 403 `ssrf_blocked` (http) ou refuse le CONNECT (https, ws) : Chromium voit un 403 ou une
@@ -56,28 +57,31 @@ function refine(result: DeclarativeRunResult, egress: BrowserEgress, rc: RunCont
   if (egress.blocked.length > 0 && (cls === 'network' || cls === 'code_error' || cls === 'transient' || cls === 'forbidden')) {
     return { ...result, failure: { failure_class: 'forbidden', retryable: false, detail: 'ssrf_blocked' } };
   }
-  // Verrou de domaines au proxy d'egress (CONNECT refusé : Chromium voit ERR_TUNNEL_CONNECTION_FAILED, classé réseau).
-  if (egress.domainBlockedCount() > 0 && (cls === 'network' || cls === 'code_error' || cls === 'transient')) {
-    return { ...result, failure: { failure_class: 'code_error', retryable: false, detail: 'domain_not_allowed' } };
-  }
-  if (rc !== undefined && rc.violations.length > 0 && (cls === 'network' || cls === 'code_error')) {
+  // Verrou de domaines sur la requête de la stratégie elle-même (redirection hors API : CONNECT refusé, Chromium voit
+  // ERR_TUNNEL_CONNECTION_FAILED ; en http, 403 du proxy d'egress). Jamais sur les compteurs globaux : les sous-ressources
+  // tierces du site coupées (presque tous les sites réels) ne changent pas la classe d'un 451, d'un 503 ou d'un réseau.
+  if (strategy.cut() && (cls === 'network' || cls === 'code_error' || cls === 'transient' || cls === 'forbidden')) {
     return { ...result, failure: { failure_class: 'code_error', retryable: false, detail: 'domain_not_allowed' } };
   }
   return result;
 }
 
 /** Contexte de run neuf sur un Chromium du pool ; l'interruption du run (annulation, bail perdu) ferme le contexte. */
-async function withRunContext(options: BrowserExecutorOptions, fn: (rc: RunContext) => Promise<DeclarativeRunResult>): Promise<DeclarativeRunResult> {
+async function withRunContext(
+  options: BrowserExecutorOptions,
+  fn: (rc: RunContext, strategy: StrategyRequests) => Promise<DeclarativeRunResult>,
+): Promise<DeclarativeRunResult> {
   return options.pool.run(options.signal, async (browser) => {
     const rc = await openRunContext(browser, { egressServer: options.egress.server, allowedHosts: options.spec.request.allowed_hosts });
+    const strategy = trackStrategyRequests(rc.context, options.spec.request.allowed_hosts);
     const onAbort = () => void rc.close();
     options.signal.addEventListener('abort', onAbort, { once: true });
     try {
       rc.page.setDefaultNavigationTimeout(options.navigationTimeoutMs ?? BROWSER_NAVIGATION_TIMEOUT_MS);
       rc.page.setDefaultTimeout(options.navigationTimeoutMs ?? BROWSER_NAVIGATION_TIMEOUT_MS);
-      const result = await fn(rc);
+      const result = await fn(rc, strategy);
       options.signal.throwIfAborted();
-      return refine(result, options.egress, rc);
+      return refine(result, options.egress, strategy);
     } finally {
       options.signal.removeEventListener('abort', onAbort);
       await rc.close();
@@ -94,6 +98,17 @@ async function navigate(page: Page, url: string, options: BrowserExecutorOptions
   return { status: response.status(), headers, html: /html/i.test(headers['content-type'] ?? 'text/html'), response };
 }
 
+/** Comparaison d'URL après normalisation (Chromium normalise l'URL d'une requête). */
+function sameUrl(expected: string): (url: string) => boolean {
+  let normalized = expected;
+  try {
+    normalized = new URL(expected).href;
+  } catch {
+    // URL déjà refusée en amont (interpréteur) ; comparaison brute.
+  }
+  return (url) => url === normalized || url === expected;
+}
+
 /** Échec de l'essai sans requête de stratégie (page d'accueil d'E2 refusée). */
 const failed = (failure: ExecFailure): DeclarativeRunResult => ({ ok: false, failure, pages: 0, requests: 1 });
 
@@ -102,7 +117,7 @@ export function runFetchInPageExecutor(options: BrowserExecutorOptions): Promise
   const classify = options.classify ?? classifyExchange;
   const maxBytes = maxBytesOf(options);
   const pageUrl = `${new URL(options.spec.request.url).origin}/`;
-  return withRunContext(options, async ({ page }) => {
+  return withRunContext(options, async ({ page }, strategy) => {
     // Ouverture du site : réservée à la cadence, classée avant toute requête de données (un refus arrête l'essai).
     if (options.pacer !== undefined) {
       const slot = await options.pacer.acquire(pageUrl);
@@ -110,7 +125,7 @@ export function runFetchInPageExecutor(options: BrowserExecutorOptions): Promise
     }
     let landing: Awaited<ReturnType<typeof navigate>>;
     try {
-      landing = await navigate(page, pageUrl, options);
+      landing = await strategy.during(isMainNavigation(page), () => navigate(page, pageUrl, options));
     } catch (error) {
       if (options.signal.aborted) throw error;
       return failed(classifyTransportError(error));
@@ -128,7 +143,8 @@ export function runFetchInPageExecutor(options: BrowserExecutorOptions): Promise
       // Délai borné : une page hostile peut remplacer `fetch` par une promesse qui ne se résout jamais.
       // Lecture bornée dans la page (flux coupé au-delà du plafond) ; seules des valeurs primitives bornées sont rendues :
       // une page qui surcharge `ArrayBuffer`, `TextDecoder` ou `JSON` fausse ses données, jamais la borne du transfert.
-      const evaluation = page.evaluate(
+      const target = sameUrl(request.url);
+      const evaluation = strategy.during((r) => r.resourceType() === 'fetch' && target(r.url()), () => page.evaluate(
         async (a: { url: string; method: string; headers: Record<string, string>; body: string | null; maxBytes: number; maxMeta: number }) => {
           try {
             const r = await fetch(a.url, { method: a.method, headers: a.headers, body: a.body, credentials: 'include', redirect: 'follow', cache: 'no-store' });
@@ -171,7 +187,7 @@ export function runFetchInPageExecutor(options: BrowserExecutorOptions): Promise
           }
         },
         { url: request.url, method: request.method, headers, body: body ?? null, maxBytes, maxMeta: 64 * 1024 },
-      );
+      ));
       let timer: NodeJS.Timeout | undefined;
       const timeoutMs = options.navigationTimeoutMs ?? BROWSER_NAVIGATION_TIMEOUT_MS;
       const out = await Promise.race([
@@ -205,10 +221,10 @@ export function runPlaywrightExecutor(options: BrowserExecutorOptions): Promise<
   const maxBytes = maxBytesOf(options);
   const renderSelector = options.spec.sources.find((s) => s.from === 'html')?.records;
   const renderWaitMs = options.renderWaitMs ?? BROWSER_RENDER_WAIT_MS;
-  return withRunContext(options, async ({ page }) => {
+  return withRunContext(options, async ({ page }, strategy) => {
     const transport: Transport = async (request) => {
       if (request.method !== 'GET' || request.body !== undefined) throw new DslError('unsupported', 'E3 déclaratif : requêtes GET seulement');
-      const nav = await navigate(page, request.url, options);
+      const nav = await strategy.during(isMainNavigation(page), () => navigate(page, request.url, options));
       let body: string;
       if (nav.html && classifyStatus(nav.status) === null) {
         if (renderSelector !== undefined) await page.waitForSelector(renderSelector, { state: 'attached', timeout: renderWaitMs }).catch(() => undefined);

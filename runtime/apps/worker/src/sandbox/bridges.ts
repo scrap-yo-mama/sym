@@ -16,7 +16,7 @@ import { findSsrfBlocked, guardedFetch, normalizeHostname, type SsrfGuard } from
 /** Refus d'un pont. `code` est relayé au script ; `violation` : à journaliser comme `sandbox_violation`. */
 export class SandboxBridgeError extends Error {
   /** `rate_limited` : cadence du domaine refusée (1.9) ; `request_cap` : `max_requests_per_run` atteint. */
-  readonly code: SandboxViolationReason | 'fetch_failed' | 'page_failed' | 'page_unavailable' | 'rate_limited' | 'request_cap';
+  readonly code: SandboxViolationReason | 'fetch_failed' | 'page_failed' | 'page_unavailable' | 'rate_limited' | 'request_cap' | 'access_refused';
   readonly violation: boolean;
   readonly detail?: string;
   constructor(code: SandboxBridgeError['code'], violation: boolean, detail?: string) {
@@ -68,6 +68,11 @@ export type SandboxBridgeOptions = {
    * ne reçoit jamais ce texte, seulement sa taille (17 §6, « identifiants techniques uniquement »).
    */
   onLog?: (args: readonly string[]) => void;
+  /**
+   * Contrôle de la réponse finale de `ctx.fetch` (après redirections, corps lu et borné) AVANT sa remise au script :
+   * une erreur levée ici (`SandboxBridgeError`) est rendue au script à la place de la réponse.
+   */
+  inspect?: (response: SandboxFetchResponse) => Promise<void> | void;
 };
 
 export type SandboxBridgeHandle = {
@@ -282,6 +287,8 @@ export function createSandboxBridges(options: SandboxBridgeOptions): SandboxBrid
       const { body, truncated } = await readCapped(response, Math.min(maxResponseBytes, maxTotalResponseBytes - responseBytes));
       responseBytes += Buffer.byteLength(body);
       const out: SandboxFetchResponse = { status: response.status, url: finalUrl.href, headers, body, truncated };
+      // Garde de l'appelant (classement de la réponse, tâche 1.6, INV6) : un refus lève avant toute remise au script.
+      await options.inspect?.(out);
       return out;
     },
     log(raw) {

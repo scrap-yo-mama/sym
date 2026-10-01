@@ -61,54 +61,84 @@ describe('imputation des requêtes coupées (hostViolationWatch)', () => {
 
   test('avant le premier evaluate : requêtes du site ignorées ; pendant evaluate : violation à la première', () => {
     const { w, seen } = setup();
-    w.report('zz_test_analytics.example');
+    w.report('zz_test_analytics.example', 'domain_not_allowed', false);
     expect(seen).toEqual([]);
     w.beginEvaluate();
-    w.report('zz_test_internal.example');
+    expect(w.armed()).toBe(true);
+    w.report('zz_test_internal.example', 'domain_not_allowed', true);
     expect(seen).toEqual([{ reason: 'domain_not_allowed', detail: 'zz_test_internal.example' }]);
     expect(w.imputed()).toBe(1);
     expect(w.lastImputed()).toEqual({ reason: 'domain_not_allowed', detail: 'zz_test_internal.example' });
   });
 
-  test('ligne de base : un tiers du site (avant evaluate, ou pendant une navigation de l’hôte) n’est jamais imputé au script', () => {
+  test('ligne de base : un tiers du site (requête émise guet désarmé) n’est jamais imputé au script', () => {
     const { w, seen } = setup();
-    // Chargement de la page de départ : mesure d'audience et CDN du site.
+    // Chargement de la page de départ : mesure d'audience et CDN du site, émis guet désarmé.
     w.beginHostOp();
-    w.report('zz_test_cdn.example');
+    w.report('zz_test_cdn.example', 'domain_not_allowed', false);
     w.endHostOp();
-    w.report('ZZ_TEST_ANALYTICS.example.');
+    w.report('ZZ_TEST_ANALYTICS.example.', 'domain_not_allowed', false);
     w.beginEvaluate();
     w.endEvaluate();
-    // Après evaluate : minuterie de mesure d'audience, image chargée au défilement sur le même CDN.
-    w.report('zz_test_analytics.example');
-    w.report('zz_test_cdn.example');
-    // ctx.page.goto / click : sous-ressources tierces de la nouvelle page, nouveau document (guet désarmé).
+    // Après evaluate : minuterie de mesure d'audience, image chargée au défilement sur le même CDN (émises guet armé).
+    w.report('zz_test_analytics.example', 'domain_not_allowed', true);
+    w.report('zz_test_cdn.example', 'domain_not_allowed', true);
+    // Nouveau document validé : guet désarmé, sous-ressources tierces de la nouvelle page apprises.
     w.beginHostOp();
-    w.report('zz_test_other_cdn.example');
-    w.documentLoaded();
+    w.documentCommitted();
+    expect(w.armed()).toBe(false);
+    w.report('zz_test_other_cdn.example', 'domain_not_allowed', false);
     w.endHostOp();
-    w.report('zz_test_late_tag.example');
+    w.report('zz_test_late_tag.example', 'domain_not_allowed', false);
+    // Refus sans requête Chromium (proxy d'egress) guet désarmé : ignoré, jamais appris.
+    w.report('zz_test_unlearned.example');
     expect(seen).toEqual([]);
     expect(w.imputed()).toBe(0);
     // Le code du script entre à nouveau : un hôte inconnu du site est imputé, même après le retour d'evaluate.
     w.beginEvaluate();
     w.endEvaluate();
-    w.report('zz_test_internal.example');
-    expect(seen).toEqual([{ reason: 'domain_not_allowed', detail: 'zz_test_internal.example' }]);
+    w.report('zz_test_other_cdn.example', 'domain_not_allowed', true);
+    expect(seen).toEqual([]);
+    w.report('zz_test_unlearned.example');
+    expect(seen).toEqual([{ reason: 'domain_not_allowed', detail: 'zz_test_unlearned.example' }]);
+  });
+
+  test('assert_sandbox (blanchiment) : un hôte contacté par le code injecté pendant un clic ou une navigation de l’hôte n’entre jamais dans la ligne de base', () => {
+    const { w, seen } = setup();
+    w.beginEvaluate();
+    w.endEvaluate();
+    // Clic de l'hôte (sélecteur absent) : le code injecté contacte l'hôte d'exfiltration pendant l'attente.
+    w.beginHostOp();
+    w.report('zz_test_exfil.example', 'domain_not_allowed', true);
+    w.endHostOp();
+    expect(seen).toEqual([{ reason: 'domain_not_allowed', detail: 'zz_test_exfil.example' }]);
+    // Navigation de l'hôte : l'ancien document vit jusqu'à la validation du nouveau ; une requête émise avant, reçue
+    // après la validation, reste imputée (état relevé à l'émission).
+    w.beginHostOp();
+    w.documentCommitted();
+    w.endHostOp();
+    w.report('zz_test_exfil2.example', 'domain_not_allowed', true);
+    expect(seen).toHaveLength(2);
+    // Navigation dans le document (pushState) ou restauration du cache : jamais de documentCommitted, le guet reste armé.
+    w.beginEvaluate();
+    w.endEvaluate();
+    w.report('zz_test_exfil3.example');
+    expect(seen).toHaveLength(3);
   });
 
   test('assert_write_action_blocked (imputation) : un evaluate en vol pendant une navigation de l’hôte garde le verdict ; soumission coupée imputée dès qu’un code ou un clic du script est en jeu', () => {
     const { w, seen } = setup();
-    w.report('zz_test_site_form.example', 'write_action_blocked');
+    w.report('zz_test_site_form.example', 'write_action_blocked', false);
     expect(seen).toEqual([]);
     w.beginHostOp();
-    w.report('zz_test_site_form.example', 'write_action_blocked');
+    w.report('zz_test_site_form.example', 'write_action_blocked', false);
     w.endHostOp();
     w.beginEvaluate();
     w.beginHostOp();
-    w.report('zz_test_internal.example');
+    w.report('zz_test_internal.example', 'domain_not_allowed', true);
     w.endHostOp();
-    w.documentLoaded();
+    w.documentCommitted();
+    expect(w.armed()).toBe(true);
     w.endEvaluate();
     expect(seen).toEqual([
       { reason: 'write_action_blocked', detail: 'zz_test_site_form.example' },

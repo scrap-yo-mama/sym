@@ -9,8 +9,8 @@
 //    → `run_budget_exceeded` ; verrou de domaines de l'API (`allowed_hosts`) à chaque saut, au niveau réseau ;
 // 5. RGPD (D-28) : chaque item extrait inscrit au registre de masquage du run (`ctx.personal`), sujets effacés retirés
 //    (`ctx.excludeSubjects`) avant collecte et avant toute écriture du dataset ; journaux du run par `ctx.log`, y compris
-//    le `ctx.log(...)` d'un script E3 (texte libre, écrit APRÈS l'inscription des items au registre, donc masqué) : le
-//    journal du worker n'en reçoit que la taille (17 §6).
+//    le `ctx.log(...)` d'un script E3 (texte libre, écrit APRÈS l'inscription au registre de tous les éléments émis,
+//    même quand l'essai échoue, donc masqué) : le journal du worker n'en reçoit que la taille (17 §6).
 import {
   validateDeclarativeSpec,
   validateOutput,
@@ -68,7 +68,14 @@ export type StrategyExecutorDeps = {
   readonly now?: () => number;
 };
 
-type Outcome = { result: DeclarativeRunResult; usage: NetworkUsage | null; violations?: readonly SandboxViolation[]; scriptLogs?: readonly (readonly string[])[] };
+type Outcome = {
+  result: DeclarativeRunResult;
+  usage: NetworkUsage | null;
+  violations?: readonly SandboxViolation[];
+  scriptLogs?: readonly (readonly string[])[];
+  /** Tous les éléments émis par un script E3, essai réussi ou non (registre de masquage avant le journal). */
+  scriptItems?: readonly unknown[];
+};
 
 /** Somme des usages réseau d'un essai (egress Chromium + session `ctx.fetch` du script). */
 function addUsage(a: NetworkUsage, b: NetworkUsage): NetworkUsage {
@@ -76,16 +83,15 @@ function addUsage(a: NetworkUsage, b: NetworkUsage): NetworkUsage {
 }
 
 /**
- * Script E3 en échec après un refus au proxy d'egress : refus de la garde SSRF → `ssrf_blocked` ; refus du verrou de
- * domaines (redirection hors API, Chromium voit un tunnel refusé) → `domain_not_allowed`, faute de stratégie non
- * rejouable, jamais une erreur réseau.
+ * Script E3 en échec après un refus de la garde SSRF au proxy d'egress → `ssrf_blocked`. Le verrou de domaines n'est
+ * pas déduit ici des compteurs globaux du proxy (les sous-ressources tierces du site y passent aussi) : l'exécuteur
+ * qualifie lui-même `domain_not_allowed` sur les seules requêtes de la stratégie (script-executor.ts).
  */
 function refineEgress(result: DeclarativeRunResult, egress: BrowserEgress): DeclarativeRunResult {
   if (result.ok || result.failure.detail === 'sandbox_violation') return result;
-  if (egress.blocked.length > 0) return { ...result, failure: { failure_class: 'forbidden', retryable: false, detail: 'ssrf_blocked' } };
   const cls = result.failure.failure_class;
-  if (egress.domainBlockedCount() > 0 && (cls === 'network' || cls === 'transient' || cls === 'code_error')) {
-    return { ...result, failure: { failure_class: 'code_error', retryable: false, detail: 'domain_not_allowed' } };
+  if (egress.blocked.length > 0 && (cls === 'network' || cls === 'transient' || cls === 'code_error' || cls === 'forbidden')) {
+    return { ...result, failure: { failure_class: 'forbidden', retryable: false, detail: 'ssrf_blocked' } };
   }
   return result;
 }
@@ -195,7 +201,7 @@ export function createStrategyExecutor(deps: StrategyExecutorDeps): RunExecutor 
     if (result.ok && result.records.some((r) => !validateOutput(target.api.outputSchema, r).ok)) {
       result = { ok: false, failure: { failure_class: 'extraction', retryable: false, detail: 'schema_mismatch' }, pages: result.pages, requests: result.requests };
     }
-    return { result, usage: null, violations: run.violations, scriptLogs: run.logs };
+    return { result, usage: null, violations: run.violations, scriptLogs: run.logs, scriptItems: run.items };
   };
 
   const execute = async (ctx: RunCtx, target: RunTarget, strategy: NonNullable<RunTarget['strategy']>): Promise<Outcome> => {
@@ -290,7 +296,11 @@ export function createStrategyExecutor(deps: StrategyExecutorDeps): RunExecutor 
         result = { ...result, records: kept };
       }
     }
-    // Journal du script E3 : après l'inscription des items au registre du run, pour que `ctx.log` les masque.
+    // Journal du script E3 : après l'inscription au registre du run de TOUS les éléments émis, essai réussi ou non
+    // (schéma non conforme, violation, refus, plafond…), pour que `ctx.log` masque aussi les noms qu'il contient.
+    if ((outcome.scriptLogs ?? []).length > 0) {
+      for (const item of outcome.scriptItems ?? []) ctx.personal.addFromItem(target.api.outputSchema, item);
+    }
     for (const args of outcome.scriptLogs ?? []) await ctx.log('info', 'sandbox_log', { args });
     const proxyUsd = usage?.costUsd ?? 0;
     await ctx.recordAttempt({

@@ -8,11 +8,13 @@
 // - `ctx.page.evaluate` exécute le texte d'une fonction DANS LA PAGE (Chromium) : son trafic passe par le proxy
 //   d'egress de l'essai (garde SSRF, verrou de domaines) et par `context.route('**')`. Imputation des requêtes coupées
 //   par la politique de domaines (`hostViolationWatch`) : une fois le code du script entré dans le document (premier
-//   `evaluate`), une requête coupée vers un hôte que le site n'a pas lui-même contacté (ligne de base : hôtes coupés
-//   avant `evaluate`, ou pendant une navigation ou un clic menés par l'hôte) est une `sandbox_violation` : l'enfant est
-//   tué aussitôt (`watch` du moteur), même si la page avale l'erreur ou n'attend pas la réponse. Les sous-ressources
-//   tierces du site (mesure d'audience, CDN) restent coupées (0 requête) sans verdict contre le script ; un nouveau
-//   document chargé désarme le guet jusqu'au prochain `evaluate`.
+//   `evaluate`), une requête coupée vers un hôte que le site n'a pas lui-même contacté (ligne de base : hôtes des
+//   requêtes émises guet désarmé, jamais pendant un clic ou une navigation menés alors que le code injecté vit) est une
+//   `sandbox_violation` : l'enfant est tué aussitôt (`watch` du moteur), même si la page avale l'erreur ou n'attend pas
+//   la réponse. Les sous-ressources tierces du site (mesure d'audience, CDN) restent coupées (0 requête) sans verdict
+//   contre le script ; seule la validation d'un nouveau document dans le cadre principal désarme le guet.
+// - Refus d'accès (INV6) : chaque réponse rendue au script est d'abord classée (script-executor.ts) ; au premier refus,
+//   l'opération de page en cours échoue sans rien rendre (`access_refused`) et l'enfant est arrêté.
 // - Actions d'écriture (08 §4 mesure 4, 07 §5) : sans `allow_write_actions`, un clic sur un contrôle d'envoi de
 //   formulaire est refusé (`write_action_blocked`, violation) ; les soumissions de formulaire (navigations hors GET)
 //   sont coupées au niveau du contexte de run (script-executor.ts).
@@ -20,6 +22,7 @@ import type { SandboxBridges, SandboxViolation, SandboxViolationReason } from '@
 import { guardedGoto, type SsrfGuard } from '@runtime/core/net';
 import type { Page } from 'playwright-core';
 import { boundedContent, parseBounded, TOO_LARGE } from '../browser/bounded.js';
+import { isMainNavigation, type StrategyRequests } from '../browser/run-context.js';
 import { domainAllowed, normalizeDomain, SandboxBridgeError } from '../sandbox/bridges.js';
 
 /** Opérations `ctx.page.*` (liste fermée, figée par la tâche 1.6). */
@@ -40,18 +43,30 @@ type HostViolationReason = Extract<SandboxViolationReason, 'domain_not_allowed' 
  * Guet des requêtes coupées, branché sur le moteur (`SandboxRunOptions.watch`) : tue l'enfant à la première requête
  * imputable au script. Alimenté par `context.route` (politique de domaines, soumissions coupées) ET par le proxy
  * d'egress de l'essai (sauts de redirection, TURN/TCP de WebRTC, tout ce que `context.route` ne voit pas).
+ *
+ * Armement : le guet est armé dès que le code du script entre dans le document (`beginEvaluate`) et le reste jusqu'à la
+ * validation d'un NOUVEAU document dans le cadre principal (`documentCommitted`, hors navigation dans le document et
+ * hors restauration du cache de retour) : un clic ou une navigation menés par l'hôte ne désarment rien, le code injecté
+ * reste vivant tant que son document l'est.
+ * Ligne de base (tiers du site, jamais imputés) : apprise SEULEMENT des requêtes émises guet désarmé (`issuedArmed`
+ * faux, relevé à l'émission de la requête par Chromium). Une requête émise guet armé vers un hôte hors de la ligne de
+ * base est imputée. Un refus sans requête Chromium associée (proxy d'egress, WebSocket) n'apprend jamais : il est imputé
+ * si le guet est armé et l'hôte hors ligne de base, ignoré sinon.
  */
 export type HostViolationWatch = {
   readonly watch: (violate: (violation: SandboxViolation) => void) => void;
   /** Début et fin d'un `ctx.page.evaluate` : le code du script entre dans le document courant. */
   beginEvaluate(): void;
   endEvaluate(): void;
-  /** Navigation ou clic menés par l'hôte : les requêtes coupées pendant eux viennent du site (ligne de base). */
+  /** Navigation ou clic menés par l'hôte (une soumission coupée pendant eux vient du script). */
   beginHostOp(): void;
   endHostOp(): void;
-  /** Nouveau document dans la page du run : le code injecté a disparu avec l'ancien. */
-  documentLoaded(): void;
-  report(host: string, reason?: HostViolationReason): void;
+  /** Nouveau document validé dans le cadre principal : le code injecté a disparu avec l'ancien. */
+  documentCommitted(): void;
+  /** Le code du script peut être présent dans la page (à relever à l'émission de chaque requête). */
+  armed(): boolean;
+  /** Requête coupée ; `issuedArmed` : état du guet à l'émission de la requête (absent : refus sans requête Chromium). */
+  report(host: string, reason?: HostViolationReason, issuedArmed?: boolean): void;
   /** Requêtes imputées au script (compte, jamais plafonné). */
   imputed(): number;
   /** Dernière requête imputée (raison, hôte). */
@@ -88,22 +103,22 @@ export function hostViolationWatch(): HostViolationWatch {
     endHostOp: () => {
       hostOps = Math.max(0, hostOps - 1);
     },
-    documentLoaded: () => {
+    documentCommitted: () => {
       if (evaluating === 0) armed = false;
     },
-    report: (raw, reason = 'domain_not_allowed') => {
+    armed: () => armed,
+    report: (raw, reason = 'domain_not_allowed', issuedArmed) => {
       const host = raw.toLowerCase().replace(/\.$/, '');
-      const fromSite = evaluating === 0 && (!armed || hostOps > 0);
       if (reason === 'write_action_blocked') {
         // Une soumission coupée pendant un clic de l'hôte vient du clic demandé par le script.
-        if (armed || hostOps > 0) impute(host, reason);
+        if (issuedArmed === true || armed || hostOps > 0) impute(host, reason);
         return;
       }
-      if (fromSite) {
+      if (issuedArmed === false) {
         baseline.add(host);
         return;
       }
-      if (!baseline.has(host)) impute(host, reason);
+      if ((issuedArmed === true || armed) && !baseline.has(host)) impute(host, reason);
     },
     imputed: () => imputed,
     lastImputed: () => last,
@@ -125,7 +140,17 @@ export type PageBridgeOptions = {
   readonly watch: HostViolationWatch;
   /** `apis.allow_write_actions` : sans lui, clic sur un contrôle d'envoi de formulaire refusé. */
   readonly allowWriteActions: boolean;
+  /**
+   * Garde de classification de l'essai (INV6, script-executor.ts) : attend le classement des réponses reçues et lève
+   * `access_refused` (sans violation) au premier refus. Appelée avant et après chaque opération.
+   */
+  readonly accessGuard?: () => Promise<void>;
+  /** Requêtes de la stratégie (`ctx.page.goto` en est une). */
+  readonly strategy?: StrategyRequests;
 };
+
+/** Code rendu au script quand une réponse a été refusée par la garde de classification (l'enfant est arrêté). */
+export const ACCESS_REFUSED = 'access_refused';
 
 function bad(detail: string): never {
   throw new SandboxBridgeError('invalid_bridge_call', true, detail);
@@ -178,6 +203,7 @@ const tooLarge = (): never => {
 export function createPageBridge(options: PageBridgeOptions): NonNullable<SandboxBridges['page']> {
   const allowed = options.allowedHosts.map(normalizeDomain);
   const { page, watch, maxResponseBytes: max } = options;
+  const accessGuard = options.accessGuard ?? (() => Promise.resolve());
   const checkUrl = (raw: string): string => {
     let url: URL;
     try {
@@ -247,11 +273,13 @@ export function createPageBridge(options: PageBridgeOptions): NonNullable<Sandbo
     if (hostOp) watch.beginHostOp();
     // Hors `evaluate`, les requêtes coupées relèvent du guet (`watch`), pas du verdict de l'opération.
     const check = <T>(value: T): T => (isEvaluate ? settled(before, value) : value);
-    try {
+    const perform = async (): Promise<unknown> => {
       switch (op) {
         case 'goto': {
           const url = checkUrl(text(args['url'], 'url', MAX_URL));
-          const response = await guardedGoto(page, url, options.guard, { waitUntil: 'load' as const, timeout: options.timeoutMs });
+          const go = () => guardedGoto(page, url, options.guard, { waitUntil: 'load' as const, timeout: options.timeoutMs });
+          // Navigation demandée par le script : requête de la stratégie (une redirection hors API est sa faute).
+          const response = await (options.strategy === undefined ? go() : options.strategy.during(isMainNavigation(page), go));
           return check({ status: response?.status() ?? 0, url: page.url() });
         }
         case 'url':
@@ -316,7 +344,16 @@ export function createPageBridge(options: PageBridgeOptions): NonNullable<Sandbo
           return check({ value: value === TOO_LARGE ? tooLarge() : value });
         }
       }
+    };
+    try {
+      // Garde de classification (INV6) avant et après l'opération : une réponse refusée n'est jamais rendue au script.
+      await accessGuard();
+      const value = await perform();
+      await accessGuard();
+      return value;
     } catch (error) {
+      // Un refus d'accès prime sur l'échec de l'opération (page de défi qui fait échouer un sélecteur, par exemple).
+      if (!(error instanceof SandboxBridgeError && error.code === ACCESS_REFUSED)) await accessGuard();
       if (error instanceof SandboxBridgeError) {
         // Un `evaluate` en échec après une requête imputée : la violation prime sur l'erreur de l'opération.
         if (isEvaluate && !error.violation) check(undefined);

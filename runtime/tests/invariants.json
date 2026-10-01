@@ -61,6 +61,8 @@
   { "test": "assert_run_cost_capped", "invariant": "04b § 3", "tasks": ["1.6"], "stage": "U1" },
   { "test": "assert_script_paced", "invariant": "politesse, 17 § 5", "tasks": ["1.6"], "stage": "S" },
   { "test": "assert_write_action_blocked", "invariant": "08 § 4", "tasks": ["1.6"], "stage": "U1, S" },
+  { "test": "assert_script_refusal_stops", "invariant": "INV6, X3", "tasks": ["1.6"], "stage": "S" },
+  { "test": "assert_subresource_cut_not_strategy_fault", "invariant": "04 § 7", "tasks": ["1.6"], "stage": "S" },
   { "test": "assert_store_package_clean", "invariant": "07 § 7", "tasks": ["2.9"], "stage": "U1" },
   { "test": "assert_store_listing_complete", "invariant": "07 § 7", "tasks": ["2.9"], "stage": "U1" },
   { "test": "assert_store_permissions_justified", "invariant": "07 § 7", "tasks": ["2.9"], "stage": "U1" }

