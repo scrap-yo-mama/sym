@@ -165,6 +165,17 @@ export function parseProviderParams(input: unknown): ProviderParams {
   return Object.freeze(out);
 }
 
+/**
+ * Le mode `tunnel` (navigateur, IP et cookies de l'utilisateur) a-t-il été choisi dans `apis.network_policy.allow` ?
+ * 04 §3.2 : le tunnel sert quand l'utilisateur l'a choisi (ou quand l'API exige son identité, vérifié par l'appelant),
+ * jamais par défaut ni après un blocage (X3, INV6). Politique invalide : `NetworkConfigError`, comme `parseNetworkPolicy`.
+ */
+export function policyAllowsTunnel(input: unknown): boolean {
+  parseNetworkPolicy(input);
+  if (!isRecord(input) || !Array.isArray(input.allow)) return false;
+  return input.allow.includes('tunnel');
+}
+
 /** `apis.network_policy` (JSON, snake_case) → politique. Défaut : `direct` seul. */
 export function parseNetworkPolicy(input: unknown): NetworkPolicy {
   if (input === undefined || input === null) return DEFAULT_NETWORK_POLICY;

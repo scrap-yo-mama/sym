@@ -218,5 +218,14 @@ describe('garde d’écriture (write_action_blocked)', () => {
     expect(isWriteElement({ nodeName: 'BUTTON', attributes: ['type', 'button'] })).toBe(false);
     expect(isWriteElement({ nodeName: 'INPUT', attributes: ['type', 'text'] })).toBe(false);
     expect(isWriteElement({ nodeName: 'A', attributes: ['href', '/next'] })).toBe(false);
+    // Bouton sans type (ou au type invalide, qui vaut submit en HTML) : il n'envoie que le formulaire qui le possède.
+    // Contexte inconnu = dans un formulaire (fermé) ; hors de tout formulaire et sans attribut `form` : lecture.
+    expect(isWriteElement({ nodeName: 'BUTTON', attributes: [] }, { inForm: true })).toBe(true);
+    expect(isWriteElement({ nodeName: 'BUTTON', attributes: ['type', 'zz'] }, { inForm: true })).toBe(true);
+    expect(isWriteElement({ nodeName: 'BUTTON', attributes: ['class', 'more'] }, { inForm: false })).toBe(false);
+    expect(isWriteElement({ nodeName: 'BUTTON', attributes: ['type', 'zz'] }, { inForm: false })).toBe(false);
+    expect(isWriteElement({ nodeName: 'BUTTON', attributes: ['form', 'checkout'] }, { inForm: false })).toBe(true);
+    expect(isWriteElement({ nodeName: 'BUTTON', attributes: ['type', 'submit'] }, { inForm: false })).toBe(true);
+    expect(isWriteElement({ nodeName: 'BUTTON', attributes: ['type', 'reset'] }, { inForm: true })).toBe(false);
   });
 });

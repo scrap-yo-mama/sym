@@ -70,21 +70,37 @@ const attr = (node: DomNode, name: string): string | undefined => {
   return undefined;
 };
 
-const someDescendant = (node: DomNode, pred: (n: DomNode) => boolean, budget = { left: 10_000 }): boolean =>
-  (node.children ?? []).some((c) => (budget.left -= 1) > 0 && (pred(c) || someDescendant(c, pred, budget)));
-
 /**
- * L'activation de cet élément DOM envoie-t-elle un formulaire ? Bouton d'envoi (`isWriteElement`) ; `<label for>` :
- * son contrôle ne se résout qu'avec `DOM.getDocument`, qui invaliderait les `nodeId` du script, donc écriture
- * (fermé) ; `<label>` qui enveloppe un bouton d'envoi : écriture.
+ * L'activation de cet élément DOM envoie-t-elle un formulaire ? Bouton d'envoi (`isWriteElement`, `inForm` : un
+ * ancêtre `<form>` dans la chaîne lue) ; `<label for>` : son contrôle ne se résout qu'avec `DOM.getDocument`, qui
+ * invaliderait les `nodeId` du script, donc écriture (fermé) ; `<label>` qui enveloppe un bouton d'envoi : écriture
+ * (un `<form>` entre le label et le bouton compte aussi).
  */
-async function elementIsWrite(send: CdpSend, node: DomNode): Promise<boolean> {
-  if (isWriteElement(node)) return true;
+async function elementIsWrite(send: CdpSend, node: DomNode, inForm: boolean): Promise<boolean> {
+  if (isWriteElement(node, { inForm })) return true;
   if ((node.nodeName ?? '').toUpperCase() !== 'LABEL') return false;
   if ((attr(node, 'for') ?? '') !== '') return true;
   if (typeof node.backendNodeId !== 'number') return true;
   const deep = await describe(send, { backendNodeId: node.backendNodeId, depth: -1 });
-  return deep === null || someDescendant(deep, isWriteElement);
+  return deep === null || someWriteDescendant(deep, inForm);
+}
+
+const isForm = (node: DomNode): boolean => (node.nodeName ?? '').toUpperCase() === 'FORM';
+
+/**
+ * Au-dessus d'un nœud de la chaîne d'accessibilité, le contexte de formulaire est-il possible ? Un `<form>`, ou un
+ * élément `aria-owns` : il réordonne l'arbre d'accessibilité (vérifié dans Chromium, le `<form>` DOM disparaît alors
+ * de la chaîne), les vrais ancêtres DOM sont inconnus (fermé).
+ */
+const formContext = (node: DomNode): boolean => isForm(node) || attr(node, 'aria-owns') !== undefined;
+
+/** Un descendant de `node` est-il un bouton d'envoi ? `inForm` passe à vrai sous un `<form>`. Budget dépassé = oui. */
+function someWriteDescendant(node: DomNode, inForm: boolean, budget = { left: 10_000 }): boolean {
+  return (node.children ?? []).some((c) => {
+    if ((budget.left -= 1) <= 0) return true;
+    const below = inForm || isForm(c);
+    return isWriteElement(c, { inForm: below }) || someWriteDescendant(c, below, budget);
+  });
 }
 
 /** Chaîne nœud → racine dans un arbre d'accessibilité partiel ; `null` si elle n'atteint pas `RootWebArea` (fermé). */
@@ -111,17 +127,21 @@ function ancestorChain(nodes: readonly AxNode[], backendNodeId: number): AxNode[
 /**
  * Activer ce nœud (clic, focus puis touche) est-il une écriture (07 § 5) ? Le nœud ET tous ses ancêtres jusqu'à la
  * racine : un `<span>` ou une icône dans un bouton d'envoi l'active. Pour chacun, bouton d'envoi (DOM, quel que soit le
- * libellé) ou élément accessible au libellé d'écriture. Fermé : nœud, arbre ou ancêtre illisible = écriture.
+ * libellé) ou élément accessible au libellé d'écriture. Un `<button>` sans type n'est un bouton d'envoi que si un
+ * `<form>` (ou un élément `aria-owns`, contexte inconnu) figure au-dessus de lui dans la chaîne lue (Chromium y garde
+ * les nœuds ignorés, `<form>` sans nom compris) ou s'il porte un attribut `form`. Fermé : nœud, arbre ou ancêtre illisible = écriture.
  */
 export async function activationIsWrite(send: CdpSend, ref: { backendNodeId: number } | { nodeId: number }): Promise<boolean> {
   const node = await describe(send, { ...ref, depth: 0 });
   if (node === null) return true;
   const backendNodeId = typeof node.backendNodeId === 'number' ? node.backendNodeId : 'backendNodeId' in ref ? ref.backendNodeId : null;
-  if (backendNodeId === null || (await elementIsWrite(send, node))) return true;
+  if (backendNodeId === null) return true;
   const tree = (await send('Accessibility.getPartialAXTree', { backendNodeId, fetchRelatives: true }).catch(() => null)) as { nodes?: unknown } | null;
   if (!Array.isArray(tree?.nodes)) return true;
   const chain = ancestorChain(tree.nodes as AxNode[], backendNodeId);
   if (chain === null) return true;
+  // Chaîne DOM nœud → racine, lue en entier avant de juger : le contexte de formulaire d'un nœud est au-dessus de lui.
+  const doms: DomNode[] = [{ ...node, backendNodeId }];
   const seen = new Set<number>([backendNodeId]);
   for (const ax of chain) {
     if (isWriteTarget({ role: str(ax.role), name: str(ax.name) })) return true;
@@ -129,7 +149,11 @@ export async function activationIsWrite(send: CdpSend, ref: { backendNodeId: num
     if (typeof id !== 'number' || seen.has(id)) continue;
     seen.add(id);
     const ancestor = await describe(send, { backendNodeId: id, depth: 0 });
-    if (ancestor === null || (await elementIsWrite(send, { ...ancestor, backendNodeId: id }))) return true;
+    if (ancestor === null) return true;
+    doms.push({ ...ancestor, backendNodeId: id });
+  }
+  for (const [i, dom] of doms.entries()) {
+    if (await elementIsWrite(send, dom, doms.slice(i + 1).some(formContext))) return true;
   }
   return false;
 }

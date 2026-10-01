@@ -32,6 +32,7 @@ import {
   openBrowserEgress,
   openNetworkSession,
   parseNetworkPolicy,
+  policyAllowsTunnel,
   parseProxyDefinitions,
   type BrowserEgress,
   type NetworkRung,
@@ -223,6 +224,16 @@ export function createStrategyExecutor(deps: StrategyExecutorDeps): RunExecutor 
    * requête ; toute URL de la stratégie doit y rester (vérifié aussi par la passerelle et par l'extension).
    */
   const executeTunnel = async (ctx: RunCtx, target: RunTarget, strategy: NonNullable<RunTarget['strategy']>): Promise<Outcome> => {
+    // Pendant de `rungFor` (04 §3.2, X3, INV6) : le tunnel n'est servi que s'il est choisi dans la politique réseau de
+    // l'API ou si l'API exige l'identité de l'utilisateur (`requires.tunnel`, `requires_session`). Une version de
+    // stratégie `tunnel` venue d'une enquête, d'une réparation ou d'un import ne passe pas d'elle-même par son IP.
+    let chosen: boolean;
+    try {
+      chosen = policyAllowsTunnel(target.api.networkPolicy);
+    } catch {
+      return refuse('code_error', 'network_config');
+    }
+    if (!chosen && target.api.requires.tunnel !== true && !target.api.requiresSession) return refuse('code_error', 'network_not_allowed');
     try {
       assertExecutionOnNetwork(strategy.execution, 'tunnel');
     } catch (error) {

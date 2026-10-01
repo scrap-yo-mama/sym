@@ -59,11 +59,25 @@ function fixtureServer(): Server {
   });
 }
 
-async function insertApi(slug: string, strategy: { execution: string; network: string; spec: unknown }, status = 'sain'): Promise<string> {
+/** API en tunnel. Par défaut, le tunnel est choisi par l'utilisateur dans la politique réseau de l'API (04 §3.2). */
+async function insertApi(
+  slug: string,
+  strategy: { execution: string; network: string; spec: unknown },
+  opts: { status?: string; networkPolicy?: unknown; requires?: unknown; requiresSession?: boolean } = {},
+): Promise<string> {
   const id = (
     await pool.query<{ id: string }>(
-      `INSERT INTO apis (slug, owner_id, output_schema, domain_pacing, status) VALUES ($1, $2, $3, '{"min_delay_ms": 5, "max_requests_per_run": 50, "max_wait_ms": 60000}', $4) RETURNING id`,
-      [slug, user.id, JSON.stringify(SCHEMA_CONTACT), status],
+      `INSERT INTO apis (slug, owner_id, output_schema, domain_pacing, status, network_policy, requires, requires_session)
+       VALUES ($1, $2, $3, '{"min_delay_ms": 5, "max_requests_per_run": 50, "max_wait_ms": 60000}', $4, $5, $6, $7) RETURNING id`,
+      [
+        slug,
+        user.id,
+        JSON.stringify(SCHEMA_CONTACT),
+        opts.status ?? 'sain',
+        JSON.stringify(opts.networkPolicy ?? { allow: ['tunnel'] }),
+        JSON.stringify(opts.requires ?? {}),
+        opts.requiresSession ?? false,
+      ],
     )
   ).rows[0]!.id;
   await pool.query("INSERT INTO strategy_versions (api_id, version, owner_id, execution, network, spec, est_cost_usd, created_by) VALUES ($1, 1, $2, $3, $4, $5, 0, 'user')", [
@@ -183,6 +197,35 @@ describe('mode tunnel : stratégie déclarative par l’extension du propriétai
     });
     const events = await pool.query<{ to_status: string; reason: string }>('SELECT to_status, reason FROM status_events WHERE api_id = $1 ORDER BY id', [apiId]);
     expect(events.rows.at(-1)).toEqual({ to_status: 'action_requise', reason: 'challenge_in_tunnel' });
+  });
+
+  test('assert_tunnel_only_when_chosen : stratégie network=tunnel (enquête, réparation, import) sur une API dont la politique vaut {allow:[direct]} → refus network_not_allowed, 0 tunnel_jobs, 0 commande ; requires.tunnel ou requires_session → servie', async () => {
+    const spec = contactsSpecInput(`http://${SHOP}:${port}`, SHOP, 10);
+    const before = ext.received.length;
+    for (const [i, createdBy] of (['repair', 'import', 'investigation'] as const).entries()) {
+      const apiId = await insertApi(`zz_test_tunnel_not_chosen_${i}`, { execution: 'fetch', network: 'tunnel', spec }, { networkPolicy: { allow: ['direct'] } });
+      await pool.query('UPDATE strategy_versions SET created_by = $2 WHERE api_id = $1', [apiId, createdBy]);
+      const run = await finished(await startRun(apiId));
+      expect(run, createdBy).toMatchObject({ state: 'failed', failure_class: 'code_error', items: 0 });
+      expect(await detail(run.id)).toBe('network_not_allowed');
+      expect((await pool.query<{ n: number }>('SELECT count(*)::int AS n FROM tunnel_jobs WHERE run_id = $1', [run.id])).rows[0]!.n).toBe(0);
+    }
+    // Politique par défaut (direct seul, colonne non renseignée) : même refus.
+    const dflt = (await pool.query<{ id: string }>("INSERT INTO apis (slug, owner_id, output_schema) VALUES ('zz_test_tunnel_default_policy', $1, $2) RETURNING id", [user.id, JSON.stringify(SCHEMA_CONTACT)])).rows[0]!.id;
+    await pool.query("INSERT INTO strategy_versions (api_id, version, owner_id, execution, network, spec, est_cost_usd, created_by) VALUES ($1, 1, $2, 'fetch', 'tunnel', $3, 0, 'repair')", [dflt, user.id, JSON.stringify(spec)]);
+    await pool.query('UPDATE apis SET current_strategy_version = 1 WHERE id = $1', [dflt]);
+    const refused = await finished(await startRun(dflt));
+    expect(await detail(refused.id)).toBe('network_not_allowed');
+    expect(ext.received.length).toBe(before);
+    // L'API exige l'identité de l'utilisateur (C2) : le tunnel est servi sans figurer dans la politique.
+    for (const [slug, opts] of [
+      ['zz_test_tunnel_requires_tunnel', { networkPolicy: { allow: ['direct'] }, requires: { tunnel: true } }],
+      ['zz_test_tunnel_requires_session', { networkPolicy: { allow: ['direct'] }, requiresSession: true }],
+    ] as const) {
+      const run = await finished(await startRun(await insertApi(slug, { execution: 'fetch', network: 'tunnel', spec }, opts)));
+      expect(run, slug).toMatchObject({ state: 'succeeded', items: 30 });
+    }
+    expect(ext.received.length).toBe(before + 6);
   });
 
   test('assert_e6_not_in_tunnel_mode : E6 (agent) en tunnel refusé avant toute commande', async () => {

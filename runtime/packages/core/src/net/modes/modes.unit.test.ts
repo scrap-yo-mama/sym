@@ -8,6 +8,7 @@ import {
   parseProviderParams,
   parseProxyDefinition,
   parseProxyDefinitions,
+  policyAllowsTunnel,
   renderProxyUsername,
 } from './definitions.js';
 import { buildNetworkRungs, NetworkLadder, networkDecision } from './ladder.js';
@@ -73,6 +74,20 @@ describe('politique réseau et échelle', () => {
     expect(parseNetworkPolicy(undefined).allow).toEqual(['direct']);
     expect(parseNetworkPolicy({ allow: ['direct', 'tunnel'] }).allow).toEqual(['direct']);
     expect(() => parseNetworkPolicy({ allow: ['mobile_proxy'] })).toThrow();
+  });
+
+  test('assert_tunnel_only_when_chosen : le tunnel n’est permis que s’il figure dans network_policy.allow (défaut : direct seul)', () => {
+    expect(policyAllowsTunnel(undefined)).toBe(false);
+    expect(policyAllowsTunnel(null)).toBe(false);
+    expect(policyAllowsTunnel({})).toBe(false);
+    expect(policyAllowsTunnel({ allow: ['direct'] })).toBe(false);
+    expect(policyAllowsTunnel({ allow: ['direct', 'res_proxy'] })).toBe(false);
+    expect(policyAllowsTunnel({ allow: ['tunnel'] })).toBe(true);
+    expect(policyAllowsTunnel({ allow: ['direct', 'tunnel'] })).toBe(true);
+    // Politique invalide : refus de la configuration, jamais un tunnel par défaut.
+    expect(() => policyAllowsTunnel({ allow: 'tunnel' })).toThrow(NetworkConfigError);
+    expect(() => policyAllowsTunnel({ allow: ['tunnel', 'mobile_proxy'] })).toThrow(NetworkConfigError);
+    expect(() => policyAllowsTunnel('tunnel')).toThrow(NetworkConfigError);
   });
 
   test('N3 seulement sur opt-in explicite, même si un proxy résidentiel existe', () => {

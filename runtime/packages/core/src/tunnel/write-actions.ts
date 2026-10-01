@@ -50,16 +50,29 @@ export function isActivationKey(params: Readonly<Record<string, unknown>>): bool
   return typeof text === 'string' && /[\r\n ]/.test(text);
 }
 
+const attrOf = (attrs: readonly string[], name: string): string | undefined => {
+  for (let i = 0; i + 1 < attrs.length; i += 2) if (attrs[i]?.toLowerCase() === name) return attrs[i + 1];
+  return undefined;
+};
+
 /**
- * Élément DOM dont l'activation (clic, focus puis Entrée ou Espace) envoie un formulaire : `<button>` sans type ou
- * `type=submit`, `<input type=submit|image>`. Fermé : un bouton sans type, dans un formulaire, l'envoie.
+ * Élément DOM dont l'activation (clic, focus puis Entrée ou Espace) envoie un formulaire : `<button type=submit>`,
+ * `<input type=submit|image>`, et `<button>` sans type (ou au type invalide, qui vaut `submit` en HTML) quand il a un
+ * formulaire propriétaire : un ancêtre `<form>` (`ctx.inForm`) ou un attribut `form`. Hors de tout formulaire, ce
+ * bouton n'envoie rien (« Voir plus », onglets d'une SPA) : lecture. Fermé : contexte inconnu = dans un formulaire.
  */
-export function isWriteElement(node: { readonly nodeName?: string; readonly attributes?: readonly string[] }): boolean {
+export function isWriteElement(
+  node: { readonly nodeName?: string; readonly attributes?: readonly string[] },
+  ctx: { readonly inForm?: boolean } = {},
+): boolean {
   const attrs = node.attributes ?? [];
-  const at = attrs.findIndex((a, i) => i % 2 === 0 && a.toLowerCase() === 'type');
-  const type = at === -1 ? undefined : attrs[at + 1]?.toLowerCase();
+  const type = attrOf(attrs, 'type')?.toLowerCase();
   const name = (node.nodeName ?? '').toUpperCase();
-  if (name === 'BUTTON') return type === undefined || type === 'submit' || type === '';
+  if (name === 'BUTTON') {
+    if (type === 'button' || type === 'reset') return false;
+    if (type === 'submit') return true;
+    return ctx.inForm !== false || attrOf(attrs, 'form') !== undefined;
+  }
   if (name === 'INPUT') return type === 'submit' || type === 'image';
   return false;
 }

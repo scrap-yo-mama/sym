@@ -631,6 +631,58 @@ describe('correctifs de vérification 2 (2.7)', () => {
     expect(err(await ex.run(mouse(2, 2)))).toBe('write_action_blocked');
     expect(b.calls).not.toContain('cdp Input.dispatchMouseEvent');
   });
+
+  // SPA : <div><button>Voir plus</button></div> hors de tout formulaire (aucun formulaire propriétaire : n'envoie rien),
+  // à côté de <form><div><button>OK</button></div></form> (bouton sans type, imbriqué, dans un formulaire) et de
+  // <button form="pay">Go</button> (rattaché à un formulaire par son attribut `form`), et <div aria-owns><button>Owned</button></div>
+  // (`aria-owns` réordonne l'arbre d'accessibilité : le <form> DOM peut manquer à la chaîne, contexte inconnu).
+  const spaTree = (): AxNode[] => [
+    { nodeId: '1', role: { value: 'RootWebArea' }, name: { value: 'Shop' }, childIds: ['60', '70', '80', '90'], backendDOMNodeId: 1 },
+    { nodeId: '60', role: { value: 'generic' }, name: { value: '' }, childIds: ['61'], backendDOMNodeId: 60 },
+    { nodeId: '61', role: { value: 'button' }, name: { value: 'Voir plus' }, childIds: ['62'], backendDOMNodeId: 61 },
+    { nodeId: '62', role: { value: 'generic' }, name: { value: '' }, childIds: [], backendDOMNodeId: 62 },
+    { nodeId: '70', role: { value: 'form' }, name: { value: '' }, childIds: ['71'], backendDOMNodeId: 70 },
+    { nodeId: '71', role: { value: 'generic' }, name: { value: '' }, ignored: true, childIds: ['72'], backendDOMNodeId: 71 },
+    { nodeId: '72', role: { value: 'button' }, name: { value: 'OK' }, childIds: [], backendDOMNodeId: 72 },
+    { nodeId: '80', role: { value: 'button' }, name: { value: 'Go' }, childIds: [], backendDOMNodeId: 80 },
+    { nodeId: '90', role: { value: 'generic' }, name: { value: '' }, childIds: ['91'], backendDOMNodeId: 90 },
+    { nodeId: '91', role: { value: 'button' }, name: { value: 'Owned' }, childIds: [], backendDOMNodeId: 91 },
+  ];
+  const spaDom = (p: Record<string, unknown>): { nodeName: string; attributes: string[] } => {
+    const id = p['backendNodeId'] ?? p['nodeId'];
+    if (id === 60 || id === 71) return { nodeName: 'DIV', attributes: [] };
+    if (id === 61) return { nodeName: 'BUTTON', attributes: ['class', 'load-more'] };
+    if (id === 62) return { nodeName: 'SPAN', attributes: [] };
+    if (id === 70) return { nodeName: 'FORM', attributes: ['action', '/save'] };
+    if (id === 72) return { nodeName: 'BUTTON', attributes: [] };
+    if (id === 80) return { nodeName: 'BUTTON', attributes: ['form', 'pay'] };
+    if (id === 90) return { nodeName: 'DIV', attributes: ['aria-owns', 'own'] };
+    if (id === 91) return { nodeName: 'BUTTON', attributes: ['id', 'own'] };
+    return { nodeName: '#document', attributes: [] };
+  };
+
+  test('assert_write_action_blocked (lecture) : <button>Voir plus</button> sans type hors formulaire → clic permis (page_script et agent_step) ; dans un formulaire ou avec form= → bloqué', async () => {
+    const hit = (p: Record<string, unknown>) => (p['x'] === 1 ? 62 : p['x'] === 2 ? 72 : p['x'] === 3 ? 80 : p['x'] === 4 ? 91 : null);
+    const b = fakeBrowser({ ax: spaTree, describe: spaDom, hit });
+    const ex = executor(b.api);
+    expect((await ex.run(frame('page_script', { method: 'Page.navigate', params: { url: `https://${SHOP}/list` } }))).ok).toBe(true);
+    expect(err(await ex.run(mouse(2, 2)))).toBe('write_action_blocked'); // <form><div><button>OK</button></div></form>
+    expect(err(await ex.run(mouse(3, 3)))).toBe('write_action_blocked'); // <button form="pay">
+    expect(err(await ex.run(mouse(4, 4)))).toBe('write_action_blocked'); // sous un aria-owns : contexte inconnu
+    expect(err(await ex.run(frame('page_script', { method: 'DOM.focus', params: { backendNodeId: 72 } })))).toBe('write_action_blocked');
+    expect(b.calls).not.toContain('cdp Input.dispatchMouseEvent');
+    expect((await ex.run(mouse(1, 1))).ok).toBe(true); // <span> dans « Voir plus »
+    expect(b.calls).toContain('cdp Input.dispatchMouseEvent');
+    expect((await ex.run(frame('page_script', { method: 'DOM.focus', params: { backendNodeId: 61 } }))).ok).toBe(true);
+
+    const b2 = fakeBrowser({ ax: spaTree, describe: spaDom, hit: (_p, lastBox) => lastBox });
+    const ex2 = executor(b2.api);
+    const sid = (await ex2.run(frame('agent_step', { action: 'read' }))).snapshot_id!;
+    for (const ref of ['e72', 'e80', 'e91']) expect(err(await ex2.run(frame('agent_step', { action: 'click', ref, snapshot_id: sid }))), ref).toBe('write_action_blocked');
+    expect(b2.calls).not.toContain('cdp Input.dispatchMouseEvent');
+    expect((await ex2.run(frame('agent_step', { action: 'click', ref: 'e61', snapshot_id: sid }))).ok).toBe(true);
+    expect(b2.calls).toContain('cdp Input.dispatchMouseEvent');
+  });
 });
 
 describe('assert_agent_step_stale_ref : pilote CDP de l’extension', () => {
