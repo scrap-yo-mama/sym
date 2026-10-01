@@ -10,6 +10,7 @@ type Queryable = Pick<pg.ClientBase, 'query'>;
 /** Un worker sans battement depuis 45 s est mort (14 § 3, à valider par 4.4). */
 export const WORKER_DEAD_AFTER_SECONDS = 45;
 
+/** Contrôles de `/api/ready`. « pg-boss démarré » (14 § 3) arrive avec la file du server (tâche 3.1). */
 export type ReadinessChecks = { database: boolean; schema: boolean; key_check: boolean };
 export type Readiness = { ready: boolean; checks: ReadinessChecks };
 
@@ -49,8 +50,11 @@ export type WorkerStatus = {
   alive: boolean;
 };
 
-/** Battements des workers (`worker_heartbeats`), vivants ou non. Informatif : n'entre pas dans `/api/ready`. */
-export async function listWorkers(db: Queryable): Promise<WorkerStatus[]> {
+/**
+ * Battements des workers (`worker_heartbeats`), vivants ou non. Informatif : n'entre pas dans `/api/ready`.
+ * `deadAfterSeconds` : délai sans battement au-delà duquel un worker est mort (raccourci par les tests).
+ */
+export async function listWorkers(db: Queryable, deadAfterSeconds: number = WORKER_DEAD_AFTER_SECONDS): Promise<WorkerStatus[]> {
   const { rows } = await db.query<{
     worker_id: string;
     started_at: Date;
@@ -74,7 +78,7 @@ export async function listWorkers(db: Queryable): Promise<WorkerStatus[]> {
     browserContexts: r.browser_contexts,
     rssMb: r.rss_mb,
     draining: r.draining,
-    alive: r.age < WORKER_DEAD_AFTER_SECONDS,
+    alive: r.age < deadAfterSeconds,
   }));
 }
 

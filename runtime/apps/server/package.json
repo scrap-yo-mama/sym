@@ -15,8 +15,7 @@
     "better-auth": "catalog:",
     "drizzle-orm": "catalog:",
     "fastify": "catalog:",
-    "pg": "catalog:",
-    "prom-client": "catalog:"
+    "pg": "catalog:"
   },
   "devDependencies": {
     "@types/node": "catalog:",

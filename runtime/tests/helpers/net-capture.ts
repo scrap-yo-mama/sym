@@ -1,7 +1,7 @@
 // Intercepteur réseau global (INV9, 15 § 7) : enregistre chaque connexion sortante (sockets, fetch, undici, http) avec sa
 // destination hôte:port, et refuse toute destination non locale. Sert à prouver « 0 requête vers un collecteur sans opt-in »
 // et « 0 destination hors {cibles, LLM, SMTP, webhooks, OTLP configurés} ». Les tests d'un même fichier s'y abonnent en série.
-import { createServer, type IncomingHttpHeaders, type Server } from 'node:http';
+import { createServer, request as httpRequest, type IncomingHttpHeaders, type IncomingMessage, type Server } from 'node:http';
 import diagnostics from 'node:diagnostics_channel';
 import type { AddressInfo } from 'node:net';
 import net from 'node:net';
@@ -81,7 +81,8 @@ export async function startRecorder(respond: (req: RecordedRequest) => { status?
       const recorded = { method: req.method ?? '', url: req.url ?? '', headers: req.headers, body: Buffer.concat(chunks) };
       requests.push(recorded);
       const out = respond(recorded);
-      res.writeHead(out.status ?? 200, { 'content-type': out.type ?? 'text/plain' });
+      // `connection: close` : chaque appel ouvre sa propre connexion (les destinations de deux scénarios se comparent).
+      res.writeHead(out.status ?? 200, { 'content-type': out.type ?? 'text/plain', connection: 'close' });
       res.end(out.body ?? '');
     });
   });
@@ -97,4 +98,64 @@ export async function startRecorder(respond: (req: RecordedRequest) => { status?
         server.closeAllConnections();
       }),
   };
+}
+
+export type RecordedProxyRequest = { method: string; url: string; headers: IncomingHttpHeaders };
+
+/**
+ * Proxy HTTP de test (comme un proxy BYO d'admin) : forme absolue (`GET http://hôte/chemin`, relayée) et tunnel `CONNECT`.
+ * Enregistre la ligne de requête et les en-têtes reçus PAR LE PROXY : un `traceparent` envoyé au proxy y apparaîtrait.
+ */
+export async function startProxy(): Promise<{ port: number; url: string; requests: RecordedProxyRequest[]; close: () => Promise<void> }> {
+  const requests: RecordedProxyRequest[] = [];
+  const sockets = new Set<net.Socket>();
+  const server: Server = createServer((req, res) => {
+    requests.push({ method: req.method ?? '', url: req.url ?? '', headers: req.headers });
+    const target = new URL(req.url ?? '');
+    const headers = { ...req.headers };
+    delete headers['proxy-authorization'];
+    delete headers['proxy-connection'];
+    const upstream = httpRequest(
+      { host: target.hostname, port: target.port, method: req.method, path: `${target.pathname}${target.search}`, headers },
+      (up) => {
+        res.writeHead(up.statusCode ?? 502, up.headers);
+        up.pipe(res);
+      },
+    );
+    upstream.on('error', () => res.writeHead(502).end());
+    req.pipe(upstream);
+  });
+  server.on('connect', (req: IncomingMessage, client: net.Socket, head: Buffer) => {
+    requests.push({ method: req.method ?? '', url: req.url ?? '', headers: req.headers });
+    const [host, port] = (req.url ?? '').split(':');
+    const upstream = net.connect(Number(port), host, () => {
+      client.write('HTTP/1.1 200 Connection Established\r\n\r\n');
+      if (head.length > 0) upstream.write(head);
+      upstream.pipe(client);
+      client.pipe(upstream);
+    });
+    for (const s of [client, upstream]) {
+      sockets.add(s);
+      s.on('close', () => sockets.delete(s));
+      s.on('error', () => s.destroy());
+    }
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const port = (server.address() as AddressInfo).port;
+  return {
+    port,
+    url: `http://127.0.0.1:${port}`,
+    requests,
+    close: () =>
+      new Promise<void>((resolve) => {
+        for (const s of sockets) s.destroy();
+        server.close(() => resolve());
+        server.closeAllConnections();
+      }),
+  };
+}
+
+/** Destinations (`hôte:port`) distinctes des connexions relevées, sans le type de connexion. */
+export function destinations(capture: NetCapture): Set<string> {
+  return new Set(capture.connections.map((c) => c.slice(c.indexOf(' ') + 1)));
 }

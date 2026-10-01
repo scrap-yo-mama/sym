@@ -26,6 +26,8 @@ export type ServerConfig = {
   metricsToken: Secret | null;
   /** Journal, OTel (coupé par défaut), artefacts (niveau 0 par défaut) : 14 § 2. */
   observability: ObservabilityConfig;
+  /** `RUNTIME_VERSION` (défaut 0.0.0) : version de l'application, publiée par `/api/health` (aucune autre version). */
+  appVersion: string;
   port: number;
   host: string;
   /**
@@ -36,6 +38,9 @@ export type ServerConfig = {
    */
   trustProxy: boolean | number | string;
 };
+
+/** Version d'application publiable : SemVer ou étiquette courte (aucun espace, aucun chemin, aucun nom d'hôte). */
+const APP_VERSION = /^[0-9A-Za-z][0-9A-Za-z.+-]{0,63}$/;
 
 /** Longueur minimale du jeton d'amorçage (généré par la plateforme ou `install.sh`). */
 const BOOTSTRAP_TOKEN_MIN_LENGTH = 32;
@@ -97,6 +102,8 @@ export function loadServerConfig(env: NodeJS.ProcessEnv = process.env): ServerCo
     throw new ConfigError(`METRICS_TOKEN trop court (${BOOTSTRAP_TOKEN_MIN_LENGTH} caractères minimum) : générez-le avec \`openssl rand -base64 32\`.`);
   }
   if (metricsToken !== undefined) secretValues.add(metricsToken);
+  const appVersion = env['RUNTIME_VERSION'] || '0.0.0';
+  if (!APP_VERSION.test(appVersion)) throw new ConfigError('RUNTIME_VERSION invalide : version SemVer (ex. 1.4.2), 64 caractères au plus, sans espace ni « / ».');
   const observability = loadObservabilityConfig(env);
   scrubOtelEnvironment(env);
   const keyring = loadKeyring(env);
@@ -108,6 +115,7 @@ export function loadServerConfig(env: NodeJS.ProcessEnv = process.env): ServerCo
     adminEmail: env['ADMIN_EMAIL']?.trim().toLowerCase() || null,
     metricsToken: metricsToken === undefined ? null : new Secret(metricsToken),
     observability,
+    appVersion,
     port: Number(env['PORT'] ?? 3000),
     host: env['HOST'] ?? '0.0.0.0',
     trustProxy: parseTrustProxy(env['TRUST_PROXY']),

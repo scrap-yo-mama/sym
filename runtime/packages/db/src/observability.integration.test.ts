@@ -5,7 +5,7 @@ import { generateMasterKey, MasterKey, secretValues, SecretDecryptError, type Ke
 import pg from 'pg';
 import { afterAll, afterEach, beforeEach, describe, expect, test } from 'vitest';
 import { createTestDatabase, type TestDatabase } from '../../../tests/helpers/pg.js';
-import { readRunArtifact, writeRunArtifact, type ArtifactSettings } from './artifacts.js';
+import { ArtifactUnreadableError, readRunArtifact, writeRunArtifact, type ArtifactSettings } from './artifacts.js';
 import { checkReadiness, listWorkers, queueDepth, WORKER_DEAD_AFTER_SECONDS } from './health.js';
 import { expectedSchemaVersion, migrateDown, migrateUp } from './migrate.js';
 import { beatWorker } from './runs.js';
@@ -13,6 +13,8 @@ import { createRunLogger, RUN_LOG_LIMITS } from './run-logs.js';
 import { KEY_CHECK_SETTING, keyCheck, rekey } from './secrets.js';
 
 const newKey = () => MasterKey.parse(generateMasterKey());
+/** Run échoué, sans session serveur, hors tunnel, sans défi : les drapeaux d'exclusion sont obligatoires. */
+const FAILED_RUN = { failed: true, serverSession: false, tunnel: false, challenge: false };
 const canary = () => `zz_test_canary_${randomBytes(8).toString('hex')}`;
 
 let tdb: TestDatabase;
@@ -125,7 +127,7 @@ describe('run_artifacts', () => {
     let queries = 0;
     const spy = { query: (...a: Parameters<pg.Client['query']>) => (queries++, (client.query as (...x: unknown[]) => unknown)(...a)) } as unknown as pg.Client;
     for (const kind of ['screenshot', 'trace', 'har'] as const) {
-      const result = await writeRunArtifact(spy, keyring, checked, settings('none'), { runId, ownerId: owner, kind, content: 'x', run: { failed: true } });
+      const result = await writeRunArtifact(spy, keyring, checked, settings('none'), { runId, ownerId: owner, kind, content: 'x', run: FAILED_RUN });
       expect(result).toEqual({ stored: false, reason: 'level_none' });
     }
     expect(queries).toBe(0);
@@ -136,7 +138,7 @@ describe('run_artifacts', () => {
     const { keyring, checked } = await setup();
     const secret = canary();
     secretValues.add(secret);
-    const result = await writeRunArtifact(client, keyring, checked, settings('har_minimal'), { runId, ownerId: owner, kind: 'har', content: har(secret), run: { failed: true } });
+    const result = await writeRunArtifact(client, keyring, checked, settings('har_minimal'), { runId, ownerId: owner, kind: 'har', content: har(secret), run: FAILED_RUN });
     if (!result.stored) throw new Error(`refusé : ${result.reason}`);
     const row = (await client.query<{ ciphertext: Buffer; dek_wrapped: Buffer; alg: string; sensitivity: string; key_version: number; bytes: number }>('SELECT * FROM run_artifacts')).rows[0]!;
     expect(row).toMatchObject({ alg: 'aes-256-gcm', sensitivity: 'text_redacted', key_version: checked.version });
@@ -158,7 +160,7 @@ describe('run_artifacts', () => {
   test('capture d’écran : octets chiffrés tels quels, marqués image non masquée', async () => {
     const { keyring, checked } = await setup();
     const png = randomBytes(300);
-    const r = await writeRunArtifact(client, keyring, checked, settings('screenshot_on_failure'), { runId, ownerId: owner, kind: 'screenshot', content: png, run: { failed: true } });
+    const r = await writeRunArtifact(client, keyring, checked, settings('screenshot_on_failure'), { runId, ownerId: owner, kind: 'screenshot', content: png, run: FAILED_RUN });
     if (!r.stored) throw new Error(r.reason);
     expect((await readRunArtifact(client, keyring, checked, r.id))!.content.equals(png)).toBe(true);
     expect((await client.query<{ sensitivity: string }>('SELECT sensitivity FROM run_artifacts')).rows[0]?.sensitivity).toBe('image_unredacted');
@@ -167,7 +169,7 @@ describe('run_artifacts', () => {
   test('jamais sur un run à session serveur, en tunnel ou avec défi, ni hors échec, ni d’un type exclu par le niveau', async () => {
     const { keyring, checked } = await setup();
     const w = (run: object, kind: 'har' | 'trace' = 'har', level: ArtifactSettings['level'] = 'har_minimal') =>
-      writeRunArtifact(client, keyring, checked, settings(level), { runId, ownerId: owner, kind, content: '{}', run: { failed: true, ...run } });
+      writeRunArtifact(client, keyring, checked, settings(level), { runId, ownerId: owner, kind, content: '{}', run: { ...FAILED_RUN, ...run } });
     expect(await w({ serverSession: true })).toEqual({ stored: false, reason: 'server_session' });
     expect(await w({ tunnel: true })).toEqual({ stored: false, reason: 'tunnel' });
     expect(await w({ challenge: true })).toEqual({ stored: false, reason: 'challenge' });
@@ -179,7 +181,7 @@ describe('run_artifacts', () => {
   test('plafond par artefact et quota d’instance', async () => {
     const { keyring, checked } = await setup();
     const w = (content: string, s: Partial<ArtifactSettings>) =>
-      writeRunArtifact(client, keyring, checked, settings('har_minimal', s), { runId, ownerId: owner, kind: 'trace', content, run: { failed: true } });
+      writeRunArtifact(client, keyring, checked, settings('har_minimal', s), { runId, ownerId: owner, kind: 'trace', content, run: FAILED_RUN });
     expect(await w('x'.repeat(100), { maxBytes: 50 })).toEqual({ stored: false, reason: 'too_large' });
     expect((await w('x'.repeat(60), { quotaBytes: 100 })).stored).toBe(true);
     expect(await w('x'.repeat(60), { quotaBytes: 100 })).toEqual({ stored: false, reason: 'quota' });
@@ -187,7 +189,7 @@ describe('run_artifacts', () => {
 
   test('liés à leur run et à leur propriétaire (AAD) : une ligne déplacée ne s’ouvre plus', async () => {
     const { keyring, checked } = await setup();
-    const r = await writeRunArtifact(client, keyring, checked, settings('har_minimal'), { runId, ownerId: owner, kind: 'trace', content: 'contenu', run: { failed: true } });
+    const r = await writeRunArtifact(client, keyring, checked, settings('har_minimal'), { runId, ownerId: owner, kind: 'trace', content: 'contenu', run: FAILED_RUN });
     if (!r.stored) throw new Error(r.reason);
     await client.query("UPDATE run_artifacts SET kind = 'har' WHERE id = $1", [r.id]);
     await expect(readRunArtifact(client, keyring, checked, r.id)).rejects.toBeInstanceOf(SecretDecryptError);
@@ -199,7 +201,7 @@ describe('run_artifacts', () => {
     const checked1 = await keyCheck(client, first);
     const ids: string[] = [];
     for (let i = 0; i < 7; i++) {
-      const r = await writeRunArtifact(client, first, checked1, settings('har_minimal'), { runId, ownerId: owner, kind: 'trace', content: `trace-${i}`, run: { failed: true } });
+      const r = await writeRunArtifact(client, first, checked1, settings('har_minimal'), { runId, ownerId: owner, kind: 'trace', content: `trace-${i}`, run: FAILED_RUN });
       if (!r.stored) throw new Error(r.reason);
       ids.push(r.id);
     }
@@ -216,22 +218,43 @@ describe('run_artifacts', () => {
     expect(texts.sort()).toEqual(Array.from({ length: 7 }, (_, i) => `trace-${i}`).sort());
   });
 
-  test('rekey : un artefact que l’ancienne clé n’ouvre pas est supprimé (éphémère), la rotation aboutit', async () => {
+  test('rekey : un artefact que l’ancienne clé n’ouvre pas est MARQUÉ illisible (conservé, compté, audité), la rotation aboutit', async () => {
     const oldKey = newKey();
     const first = { current: oldKey };
     const checked1 = await keyCheck(client, first);
-    const r = await writeRunArtifact(client, first, checked1, settings('har_minimal'), { runId, ownerId: owner, kind: 'trace', content: 'a', run: { failed: true } });
-    if (!r.stored) throw new Error(r.reason);
-    await client.query("UPDATE run_artifacts SET dek_wrapped = '\\x'"); // ligne non ouvrable
-    await rekey(client, { current: newKey(), previous: oldKey });
-    expect(await count()).toBe(0);
+    const w = (content: string) => writeRunArtifact(client, first, checked1, settings('har_minimal'), { runId, ownerId: owner, kind: 'trace', content, run: FAILED_RUN });
+    const bad = await w('a');
+    const good = await w('b');
+    if (!bad.stored || !good.stored) throw new Error('refusé');
+    await client.query("UPDATE run_artifacts SET dek_wrapped = '\\x' WHERE id = $1", [bad.id]); // ligne altérée, non ouvrable
+    const newK = newKey();
+    const result = await rekey(client, { current: newK, previous: oldKey });
+    // Aucune perte sans trace : la ligne reste, marquée, et le résultat la compte.
+    expect(result).toMatchObject({ status: 'done', unreadableArtifacts: 1, rotatedArtifacts: 1 });
+    expect(await count()).toBe(2);
+    const rows = (await client.query<{ id: string; state: string; unreadable_since: Date | null; key_version: number }>('SELECT id, state, unreadable_since, key_version FROM run_artifacts')).rows;
+    expect(rows.find((r) => r.id === bad.id)).toMatchObject({ state: 'unreadable', key_version: 1 });
+    expect(rows.find((r) => r.id === bad.id)!.unreadable_since).toBeInstanceOf(Date);
+    expect(rows.find((r) => r.id === good.id)).toMatchObject({ state: 'ok', key_version: 2, unreadable_since: null });
+    // Trace dans l'audit (système, sans contenu) : l'identifiant de l'artefact et la raison.
+    const audit = (await client.query<{ action: string; actor_via: string; target_type: string; target_id: string; outcome: string }>(
+      "SELECT action, actor_via, target_type, target_id, outcome FROM audit_events WHERE action = 'artifact.unreadable'",
+    )).rows;
+    expect(audit).toEqual([{ action: 'artifact.unreadable', actor_via: 'system', target_type: 'run_artifact', target_id: bad.id, outcome: 'error' }]);
+    // Lecture : l'artefact marqué est signalé comme illisible, jamais présenté comme vide ; l'autre s'ouvre.
+    const keyring2 = { current: newK };
+    const checked2 = await keyCheck(client, keyring2);
+    await expect(readRunArtifact(client, keyring2, checked2, bad.id)).rejects.toBeInstanceOf(ArtifactUnreadableError);
+    expect((await readRunArtifact(client, keyring2, checked2, good.id))!.content.toString()).toBe('b');
+    // Une seconde rotation n'y retouche pas (et ne bloque pas sur lui).
+    expect(await rekey(client, { current: newKey(), previous: newK })).toMatchObject({ status: 'done', unreadableArtifacts: 0, rotatedArtifacts: 1 });
   });
 
   test('pas d’écriture pendant une rotation de clé', async () => {
     const { keyring, checked } = await setup();
     await client.query("UPDATE settings SET value = jsonb_set(value, '{version}', '99') WHERE key = $1", [KEY_CHECK_SETTING]);
     await expect(
-      writeRunArtifact(client, keyring, checked, settings('har_minimal'), { runId, ownerId: owner, kind: 'trace', content: 'a', run: { failed: true } }),
+      writeRunArtifact(client, keyring, checked, settings('har_minimal'), { runId, ownerId: owner, kind: 'trace', content: 'a', run: FAILED_RUN }),
     ).rejects.toThrow(/rotation de clé/);
   });
 });

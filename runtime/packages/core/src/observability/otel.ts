@@ -207,3 +207,8 @@ export function startDetachedSpan(
   const ctx = api.trace.setSpan(api.context.active(), span);
   return { run: (fn) => api.context.with(ctx, fn), end: () => span.end() };
 }
+
+/** En-têtes qu'écrirait le propagateur global (`[]` : aucun propagateur, donc ni traceparent, ni tracestate, ni baggage). */
+export function registeredPropagationFields(): string[] {
+  return active ? active.api.propagation.fields() : [];
+}

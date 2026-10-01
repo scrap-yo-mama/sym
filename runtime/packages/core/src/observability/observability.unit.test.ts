@@ -135,7 +135,7 @@ describe('journal pino', () => {
 });
 
 describe('politique des artefacts', () => {
-  const failed = { failed: true };
+  const failed = { failed: true, serverSession: false, tunnel: false, challenge: false };
   test('niveau 0 : jamais, quel que soit le run', () => {
     for (const kind of ['screenshot', 'trace', 'har'] as const) expect(artifactDenial('none', kind, failed)).toBe('level_none');
   });
@@ -145,12 +145,22 @@ describe('politique des artefacts', () => {
     expect(artifactDenial('trace_on_failure', 'trace', failed)).toBeNull();
     expect(artifactDenial('trace_on_failure', 'har', failed)).toBe('level_excludes_kind');
     expect(artifactDenial('har_minimal', 'har', failed)).toBeNull();
-    expect(artifactDenial('har_minimal', 'har', { failed: false })).toBe('run_not_failed');
+    expect(artifactDenial('har_minimal', 'har', { ...failed, failed: false })).toBe('run_not_failed');
   });
   test('jamais sur un run à session serveur, en tunnel ou ayant rencontré un défi', () => {
-    expect(artifactDenial('har_minimal', 'har', { failed: true, serverSession: true })).toBe('server_session');
-    expect(artifactDenial('har_minimal', 'har', { failed: true, tunnel: true })).toBe('tunnel');
-    expect(artifactDenial('har_minimal', 'har', { failed: true, challenge: true })).toBe('challenge');
+    expect(artifactDenial('har_minimal', 'har', { ...failed, serverSession: true })).toBe('server_session');
+    expect(artifactDenial('har_minimal', 'har', { ...failed, tunnel: true })).toBe('tunnel');
+    expect(artifactDenial('har_minimal', 'har', { ...failed, challenge: true })).toBe('challenge');
+  });
+  test('drapeaux d’exclusion absents ou indéterminés : refus (fermé par défaut, 14 § 10)', () => {
+    // Un appelant qui ne renseigne pas les drapeaux (JS, objet construit à la main) ne doit jamais obtenir d'artefact.
+    const loose = (run: object) => artifactDenial('har_minimal', 'har', run as Parameters<typeof artifactDenial>[2]);
+    expect(loose({ failed: true })).toBe('server_session');
+    expect(loose({ failed: true, serverSession: false })).toBe('tunnel');
+    expect(loose({ failed: true, serverSession: false, tunnel: false })).toBe('challenge');
+    expect(loose({ failed: true, serverSession: false, tunnel: false, challenge: undefined })).toBe('challenge');
+    expect(loose({ failed: true, serverSession: 'non', tunnel: false, challenge: false })).toBe('server_session');
+    expect(loose({ failed: true, serverSession: false, tunnel: false, challenge: false })).toBeNull();
   });
 });
 

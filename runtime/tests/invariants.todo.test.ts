@@ -18,8 +18,10 @@ import { describe, test } from "vitest";
 // kill -9 et SIGTERM compris) ; file, balayeur et bail : packages/db/src/runs.integration.test.ts.
 // INV9 et INV8 (1.10) : assert_no_telemetry (serveur + worker + run, 0 destination non locale), assert_otel_off_by_default,
 // assert_otel_optin_local_only, assert_no_traceparent_outbound et l'extension de assert_no_secret_in_logs à toutes les sorties
-// sont dans tests/observability.integration.test.ts ; assert_otel_off_by_default (aucun module @opentelemetry/* résolu) :
-// packages/core/src/observability/observability.unit.test.ts ; assert_metrics_closed : apps/server/src/observability.integration.test.ts.
+// sont dans tests/observability.integration.test.ts (dont le contrôle des modules résolus par un vrai server + worker : ni
+// l'API ni le SDK OTel, seule @opentelemetry/semantic-conventions, constantes importées par Better Auth, est tolérée) ;
+// @runtime/core seul : packages/core/src/observability/observability.unit.test.ts ; assert_metrics_closed :
+// apps/server/src/observability.integration.test.ts.
 // La capture de trafic complète (cibles, LLM, proxys, SMTP, webhooks réels) de assert_no_telemetry reste à 4.3.
 describe("invariants (à implémenter)", () => {
   test.todo("assert_cheapest_first_logged"); // INV2, tâche(s) 2.1

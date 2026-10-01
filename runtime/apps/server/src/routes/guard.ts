@@ -138,6 +138,12 @@ export function guard(ctx: ServerContext) {
     request.actor = null;
     if (!spec) return; // chemin inconnu : gestionnaire 404 uniforme
 
+    // Démarrage en mode dégradé (schéma en retard, 14 § 5) : seules les sondes répondent.
+    if (!spec.duringStartup && !(await ctx.startup.ready())) {
+      await sendError(reply, 503, 'not_ready', 'instance en cours de démarrage : schéma de base pas encore à jour (runtime migrate)');
+      return;
+    }
+
     if (!spec.beforeInit && !(await ctx.isInitialized())) {
       await sendError(reply, 503, 'not_initialized', 'instance non initialisée : terminez l’assistant de premier démarrage');
       return;

@@ -29,9 +29,20 @@ export type ArtifactInput = {
   kind: ArtifactKind;
   /** `screenshot` : octets de l'image (non masquables, marqués `image_unredacted`) ; `trace` et `har` : texte. */
   content: string | Buffer;
+  /** Issue du run et drapeaux d'exclusion OBLIGATOIRES (session serveur, tunnel, défi) : refus si l'un manque. */
   run: { failed: boolean } & ArtifactRunFlags;
   projectId?: string;
 };
+
+/** Artefact marqué illisible par `rekey` (ancienne clé perdue ou ligne altérée) : signalé, jamais présenté comme vide. */
+export class ArtifactUnreadableError extends Error {
+  override name = 'ArtifactUnreadableError';
+  readonly artifactId: string;
+  constructor(artifactId: string) {
+    super(`artefact ${artifactId} illisible (état unreadable, marqué par rekey)`);
+    this.artifactId = artifactId;
+  }
+}
 
 export type ArtifactResult = { stored: true; id: string; bytes: number } | { stored: false; reason: ArtifactDenial | 'too_large' | 'quota' };
 
@@ -82,7 +93,10 @@ export async function writeRunArtifact(
   return { stored: true, id, bytes: plaintext.length };
 }
 
-/** Ouvre un artefact (AAD recalculée depuis la ligne). `null` si absent ; `SecretDecryptError` si altéré ou autre clé. */
+/**
+ * Ouvre un artefact (AAD recalculée depuis la ligne). `null` si absent ; `ArtifactUnreadableError` s'il est marqué
+ * illisible ; `SecretDecryptError` si altéré ou autre clé.
+ */
 export async function readRunArtifact(
   db: Queryable,
   keyring: Keyring,
@@ -99,9 +113,11 @@ export async function readRunArtifact(
     dek_wrapped: Buffer;
     alg: string;
     key_version: number;
-  }>('SELECT id, run_id, owner_id, kind, ciphertext, nonce, dek_wrapped, alg, key_version FROM run_artifacts WHERE id = $1', [id]);
+    state: 'ok' | 'unreadable';
+  }>('SELECT id, run_id, owner_id, kind, ciphertext, nonce, dek_wrapped, alg, key_version, state FROM run_artifacts WHERE id = $1', [id]);
   const row = rows[0];
   if (!row) return null;
+  if (row.state === 'unreadable') throw new ArtifactUnreadableError(row.id);
   const aad = artifactAad({ id: row.id, runId: row.run_id, ownerId: row.owner_id, kind: row.kind });
   const content = openSecretBytes(
     { ciphertext: row.ciphertext, nonce: row.nonce, dekWrapped: row.dek_wrapped, alg: row.alg, kekVersion: row.key_version },

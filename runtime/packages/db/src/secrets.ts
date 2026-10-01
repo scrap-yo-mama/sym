@@ -20,6 +20,7 @@ import {
   type SealedValue,
 } from '@runtime/core';
 import type pg from 'pg';
+import { appendAudit } from './audit.js';
 
 type Queryable = Pick<pg.ClientBase, 'query'>;
 
@@ -40,7 +41,8 @@ export const REKEY_LOCK_KEY = '8315178094305570146';
 export const ENCRYPTED_COLUMNS = [
   { table: 'secrets', column: 'ciphertext', coveredBy: 'rekey' },
   { table: 'settings', column: 'value', key: KEY_CHECK_SETTING, coveredBy: 'rekey' },
-  { table: 'site_sessions', column: 'ciphertext', coveredBy: '1.10' },
+  // Écrite par la capture de session de l'extension (2.6) : cette tâche doit la rendre rotable avant toute écriture.
+  { table: 'site_sessions', column: 'ciphertext', coveredBy: '2.6' },
   { table: 'run_artifacts', column: 'ciphertext', coveredBy: 'rekey' },
   { table: 'two_factor', column: 'secret_ciphertext', coveredBy: '3.7' },
 ] as const;
@@ -253,7 +255,17 @@ export function secretStore(db: Queryable, keyring: Keyring, checked: KeyCheckRe
   };
 }
 
-export type RekeyResult = { status: 'done' | 'already_done'; from: number; to: number; rotated: number; unreadable: number };
+export type RekeyResult = {
+  status: 'done' | 'already_done';
+  from: number;
+  to: number;
+  /** Secrets re-chiffrés, et secrets passés en `unreadable`. */
+  rotated: number;
+  unreadable: number;
+  /** Artefacts de run re-chiffrés, et artefacts MARQUÉS illisibles (conservés, audités `artifact.unreadable`). */
+  rotatedArtifacts: number;
+  unreadableArtifacts: number;
+};
 
 /**
  * `runtime rekey` : re-chiffre chaque secret de la version de `MASTER_KEY_PREVIOUS` vers `MASTER_KEY` (nouvelle DEK,
@@ -284,7 +296,7 @@ export async function rekey(
     let state = await readSetting<RekeyState>(client, REKEY_STATE_SETTING);
     if (!record) throw new KeyCheckError('settings.key_check absent : démarrez d’abord l’instance avec l’ancienne clé.');
     if (!state && verifyKeyCheck(record, current)) {
-      return { status: 'already_done', from: record.version, to: record.version, rotated: 0, unreadable: 0 };
+      return { status: 'already_done', from: record.version, to: record.version, rotated: 0, unreadable: 0, rotatedArtifacts: 0, unreadableArtifacts: 0 };
     }
     if (!verifyKeyCheck(record, previous)) {
       throw new KeyCheckError(
@@ -304,6 +316,7 @@ export async function rekey(
     const to = kekFor(current, state.to);
     let rotated = 0;
     let unreadable = 0;
+    const artifacts = { rotated: 0, unreadable: 0 };
     for (;;) {
       await client.query('BEGIN');
       try {
@@ -333,9 +346,11 @@ export async function rekey(
           );
           rotated += 1;
         }
-        const artifacts = await rotateArtifacts(client, state.from, from, to, batchSize);
+        const batch = await rotateArtifacts(client, state.from, from, to, batchSize);
         await client.query('COMMIT');
-        if (rows.length === 0 && artifacts === 0) break;
+        artifacts.rotated += batch.rotated;
+        artifacts.unreadable += batch.unreadable;
+        if (rows.length === 0 && batch.rotated + batch.unreadable === 0) break;
       } catch (error) {
         await client.query('ROLLBACK');
         throw error;
@@ -349,7 +364,7 @@ export async function rekey(
         [state.to],
       );
       if ((rows[0]?.n ?? 0) > 0) throw new KeyCheckError(`${rows[0]?.n} secret(s) encore hors de la version ${state.to} : rotation non terminée.`);
-      const leftover = await client.query<{ n: number }>('SELECT count(*)::int AS n FROM run_artifacts WHERE key_version <> $1', [state.to]);
+      const leftover = await client.query<{ n: number }>("SELECT count(*)::int AS n FROM run_artifacts WHERE state = 'ok' AND key_version <> $1", [state.to]);
       if ((leftover.rows[0]?.n ?? 0) > 0) throw new KeyCheckError(`${leftover.rows[0]?.n} artefact(s) encore hors de la version ${state.to} : rotation non terminée.`);
       await writeSetting(client, KEY_CHECK_SETTING, createKeyCheck(current, state.to));
       await client.query('DELETE FROM settings WHERE key = $1', [REKEY_STATE_SETTING]);
@@ -358,17 +373,24 @@ export async function rekey(
       await client.query('ROLLBACK');
       throw error;
     }
-    return { status: 'done', from: state.from, to: state.to, rotated, unreadable };
+    return { status: 'done', from: state.from, to: state.to, rotated, unreadable, rotatedArtifacts: artifacts.rotated, unreadableArtifacts: artifacts.unreadable };
   } finally {
     await client.query('SELECT pg_advisory_unlock($1::bigint)', [REKEY_LOCK_KEY]);
   }
 }
 
 /**
- * Re-chiffre un lot d'artefacts de run (14 § 10) dans la transaction de `rekey`. Un artefact que l'ancienne clé
- * n'ouvre pas est supprimé (éphémère : rétention de 7 jours, rien à « ressaisir »). Renvoie le nombre de lignes traitées.
+ * Re-chiffre un lot d'artefacts de run (14 § 10) dans la transaction de `rekey`. Un artefact que l'ancienne clé n'ouvre
+ * pas (clé perdue, ligne altérée) est MARQUÉ `unreadable` et audité (`artifact.unreadable`, acteur système, sans contenu) :
+ * rien ne disparaît sans trace ; la rétention (7 jours) le purge ensuite. Il reste sous l'ancienne version de clé.
  */
-async function rotateArtifacts(client: pg.ClientBase, fromVersion: number, from: Kek, to: Kek, batchSize: number): Promise<number> {
+async function rotateArtifacts(
+  client: pg.ClientBase,
+  fromVersion: number,
+  from: Kek,
+  to: Kek,
+  batchSize: number,
+): Promise<{ rotated: number; unreadable: number }> {
   const { rows } = await client.query<{
     id: string;
     run_id: string;
@@ -381,9 +403,10 @@ async function rotateArtifacts(client: pg.ClientBase, fromVersion: number, from:
     key_version: number;
   }>(
     `SELECT id, run_id, owner_id, kind, ciphertext, nonce, alg, dek_wrapped, key_version FROM run_artifacts
-     WHERE key_version = $1 ORDER BY id LIMIT $2 FOR UPDATE`,
+     WHERE key_version = $1 AND state = 'ok' ORDER BY id LIMIT $2 FOR UPDATE`,
     [fromVersion, batchSize],
   );
+  const result = { rotated: 0, unreadable: 0 };
   for (const row of rows) {
     const aad = artifactAad({ id: row.id, runId: row.run_id, ownerId: row.owner_id, kind: row.kind });
     try {
@@ -396,12 +419,23 @@ async function rotateArtifacts(client: pg.ClientBase, fromVersion: number, from:
         next.alg,
         next.kekVersion,
       ]);
+      result.rotated += 1;
     } catch (error) {
       if (!(error instanceof SecretDecryptError)) throw error;
-      await client.query('DELETE FROM run_artifacts WHERE id = $1', [row.id]);
+      await client.query("UPDATE run_artifacts SET state = 'unreadable', unreadable_since = now() WHERE id = $1", [row.id]);
+      await appendAudit(client, {
+        actorUserId: null,
+        actorVia: 'system',
+        action: 'artifact.unreadable',
+        targetType: 'run_artifact',
+        targetId: row.id,
+        outcome: 'error',
+        meta: { reason: 'rekey_decrypt_failed', key_version: row.key_version },
+      });
+      result.unreadable += 1;
     }
   }
-  return rows.length;
+  return result;
 }
 
 /** Colonnes chiffrées pas encore couvertes par `rekey` : elles doivent être vides, sinon refus. */

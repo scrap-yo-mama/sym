@@ -4,7 +4,7 @@ export const PACKAGE_NAME = '@runtime/schemas';
 export const healthResponseSchema = {
   $schema: 'https://json-schema.org/draft/2020-12/schema',
   type: 'object',
-  properties: { status: { const: 'ok' } },
-  required: ['status'],
+  properties: { status: { const: 'ok' }, version: { type: 'string', maxLength: 64 } },
+  required: ['status', 'version'],
   additionalProperties: false,
 } as const;

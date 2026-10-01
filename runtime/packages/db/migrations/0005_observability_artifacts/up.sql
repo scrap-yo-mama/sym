@@ -6,3 +6,9 @@
 ALTER TABLE run_artifacts
   ADD COLUMN dek_wrapped bytea NOT NULL DEFAULT '\x',
   ADD COLUMN alg text NOT NULL DEFAULT 'aes-256-gcm';
+
+-- Perte de clé ou ligne altérée : `rekey` MARQUE l'artefact illisible (`state = 'unreadable'`, `unreadable_since`) au lieu
+-- de le supprimer : aucune donnée ne disparaît sans trace (audit `artifact.unreadable`) ; la rétention le purge ensuite.
+ALTER TABLE run_artifacts
+  ADD COLUMN state text NOT NULL DEFAULT 'ok' CHECK (state IN ('ok', 'unreadable')),
+  ADD COLUMN unreadable_since timestamptz;

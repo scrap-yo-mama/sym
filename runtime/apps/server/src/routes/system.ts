@@ -11,15 +11,21 @@ import { identify, notFound, sendError } from './guard.js';
 const sha256 = (value: string) => createHash('sha256').update(value).digest();
 
 export function systemRoutes(app: FastifyInstance, ctx: ServerContext): void {
-  // Vivacité : le processus répond. Aucun accès base, répond pendant une migration.
-  app.get('/api/health', { schema: { response: { 200: healthResponseSchema } } }, async () => ({ status: 'ok' as const }));
+  // Vivacité : le processus répond. Aucun accès base, répond pendant une migration et en mode dégradé. Seule la
+  // version de l'application est publiée (aucune version de dépendance ni nom d'hôte).
+  app.get('/api/health', { schema: { response: { 200: healthResponseSchema } } }, async () => ({ status: 'ok' as const, version: ctx.appVersion }));
 
-  // Disponibilité : base joignable, migrations appliquées, `key_check` valide. Les workers sont informatifs (pas dans le code).
+  // Disponibilité : base joignable, migrations appliquées, `key_check` valide, initialisation terminée. Les workers sont
+  // informatifs (pas dans le code). « pg-boss démarré » (14 § 3) : le server n'a pas encore de file dans son contexte ;
+  // ce contrôle est ajouté par la tâche qui y branche la file (3.1, création de runs par l'API REST).
   app.get<{ Querystring: { detail?: string } }>('/api/ready', async (request, reply) => {
+    const started = await ctx.startup.ready();
     const readiness = await checkReadiness(ctx.pool, ctx.keyring, ctx.expectedSchemaVersion);
-    const body: Record<string, unknown> = { status: readiness.ready ? 'ready' : 'not_ready', checks: readiness.checks };
-    if (readiness.ready) body['initialized'] = await ctx.isInitialized();
-    if (request.query.detail === '1') {
+    const ready = started && readiness.ready;
+    const body: Record<string, unknown> = { status: ready ? 'ready' : 'not_ready', checks: readiness.checks };
+    if (ready) body['initialized'] = await ctx.isInitialized();
+    // Pendant le démarrage, aucun détail : l'authentification n'est pas encore disponible.
+    if (request.query.detail === '1' && started) {
       // Détail réservé aux administrateurs : workers vivants, profondeur de file (aucun nom d'hôte, aucune version de dépendance).
       const actor = await identify(ctx, request, reply);
       if (!actor) {
@@ -39,7 +45,7 @@ export function systemRoutes(app: FastifyInstance, ctx: ServerContext): void {
         body['queue'] = await queueDepth(ctx.pool);
       }
     }
-    return reply.code(readiness.ready ? 200 : 503).send(body);
+    return reply.code(ready ? 200 : 503).send(body);
   });
 
   // `/metrics` : fermé par défaut. Sans METRICS_TOKEN : 404 (la route n'existe pas). Avec : jeton porteur exigé, 401 sinon.

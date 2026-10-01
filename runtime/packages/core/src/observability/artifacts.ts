@@ -5,12 +5,17 @@ import type { ArtifactLevel } from './config.js';
 
 export type ArtifactKind = 'screenshot' | 'trace' | 'har';
 
+/**
+ * Drapeaux d'exclusion, OBLIGATOIRES : l'appelant déclare explicitement chacun d'eux. Fermé par défaut : toute valeur
+ * autre que `false` (absente, `undefined`, inattendue) vaut « oui » et refuse l'artefact.
+ */
 export type ArtifactRunFlags = {
   /** Le run charge une session serveur (cookies d'un utilisateur). */
-  serverSession?: boolean;
-  tunnel?: boolean;
+  serverSession: boolean;
+  /** Le run passe par le tunnel (navigateur et session de l'utilisateur). */
+  tunnel: boolean;
   /** Le run a rencontré un défi (captcha, protection). */
-  challenge?: boolean;
+  challenge: boolean;
 };
 
 export type ArtifactDenial = 'level_none' | 'level_excludes_kind' | 'run_not_failed' | 'server_session' | 'tunnel' | 'challenge';
@@ -26,9 +31,9 @@ const KINDS_BY_LEVEL: Record<ArtifactLevel, readonly ArtifactKind[]> = {
 export function artifactDenial(level: ArtifactLevel, kind: ArtifactKind, run: { failed: boolean } & ArtifactRunFlags): ArtifactDenial | null {
   if (level === 'none') return 'level_none';
   if (!KINDS_BY_LEVEL[level].includes(kind)) return 'level_excludes_kind';
-  if (run.serverSession) return 'server_session';
-  if (run.tunnel) return 'tunnel';
-  if (run.challenge) return 'challenge';
-  if (!run.failed) return 'run_not_failed';
+  if (run.serverSession !== false) return 'server_session';
+  if (run.tunnel !== false) return 'tunnel';
+  if (run.challenge !== false) return 'challenge';
+  if (run.failed !== true) return 'run_not_failed';
   return null;
 }

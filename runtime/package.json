@@ -31,7 +31,6 @@
   },
   "devDependencies": {
     "@eslint/js": "catalog:",
-    "@opentelemetry/api": "catalog:",
     "@runtime/core": "workspace:*",
     "@runtime/db": "workspace:*",
     "@playwright/test": "catalog:",
