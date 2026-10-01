@@ -20,6 +20,9 @@ const STEPS: Step[] = [
   { job: 'quality', name: 'portes de release (workflows, image non root)', cmd: ['pnpm', 'check:release'] },
   // Tâche 4.9 : release à blanc (cosign avec une clé de test, SBOM CycloneDX, rien de publié ni de poussé).
   { job: 'quality', name: 'release à blanc', cmd: ['pnpm', 'release:dry-run'] },
+  // Tâche 4.8 : site de doc (VitePress, Pagefind, llms.txt) construit, 0 lien mort, puis tests de contenu (Usage responsable en 11
+  // sections, Hors périmètre, variables, commandes). Rien n'est publié.
+  { job: 'docs', name: 'site de doc : build, liens, llms.txt, contenu', cmd: ['pnpm', 'docs:test'] },
   { job: 'unit', name: 'tests unitaires + couverture', cmd: ['pnpm', 'test:coverage'] },
   // Étage S : garde SSRF sur fetch et Chromium (Playwright). Chromium : pnpm exec playwright install chromium.
   { job: 'security', name: 'sécurité (SSRF, Chromium)', cmd: ['pnpm', 'test:security'] },
@@ -29,6 +32,8 @@ const STEPS: Step[] = [
   // Matrice PostgreSQL 16, 17, 18 jouée l'une après l'autre (Testcontainers, PG_VERSIONS surchargeable).
   { job: 'integration', name: 'integration (PG ' + (process.env.PG_VERSIONS ?? '16,17,18') + ')', cmd: ['pnpm', 'test:integration'] },
   { job: 'integration', name: 'contract', cmd: ['pnpm', 'vitest', 'run', '--project', 'contract'] },
+  // Tâche 4.8 : le quickstart du site de doc rejoué sur une instance vierge (même script que le job `docs` de la CI).
+  { job: 'docs', name: 'quickstart rejoué sur une instance vierge', cmd: ['pnpm', 'docs:quickstart'] },
 ];
 
 const runtimeDir = new URL('..', import.meta.url).pathname;

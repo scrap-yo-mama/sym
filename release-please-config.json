@@ -18,6 +18,11 @@
         },
         {
           "type": "json",
+          "path": "apps/docs/package.json",
+          "jsonpath": "$.version"
+        },
+        {
+          "type": "json",
           "path": "apps/extension/package.json",
           "jsonpath": "$.version"
         },

@@ -1,0 +1,17 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "allowImportingTsExtensions": true,
+    "lib": [
+      "ES2024",
+      "DOM"
+    ],
+    "declaration": false
+  },
+  "include": [
+    "src",
+    "scripts",
+    "content/.vitepress"
+  ]
+}

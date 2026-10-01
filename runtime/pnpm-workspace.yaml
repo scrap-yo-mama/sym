@@ -90,6 +90,12 @@ catalog:
   quickjs-emscripten-core: 0.32.0
   '@jitl/quickjs-wasmfile-release-sync': 0.32.0
 
+  # Site de doc (tâche 4.8, 16 § 4) : VitePress 2.0.0-alpha.20 (la 1.6.4 tire vite 5.4.21, refusé par la politique de confiance pnpm no-downgrade ; la 2.x tire vite 8, comme la console), Pagefind 1.5.2 (MIT, index statique,
+  # binaire par plate-forme en optionalDependencies, sans script d'installation), yaml 2.9.1 (ISC, lecture de l'OpenAPI spécifiée ; publiée le 2026-09-11).
+  vitepress: 2.0.0-alpha.20
+  pagefind: 1.5.2
+  yaml: 2.9.1
+
 # OTel coupé = aucun module de l'API ni du SDK résolu (14 § 10, assert_otel_off_by_default). Better Auth
 # (@better-auth/core) fait `import("@opentelemetry/api")` à chaque requête d'auth ; drizzle-orm et vitest déclarent le même
 # pair optionnel. pnpm 11 résout un pair optionnel dès qu'une version existe dans le graphe (ici via @runtime/core) : le

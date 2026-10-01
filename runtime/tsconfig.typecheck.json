@@ -15,6 +15,7 @@
   ],
   "exclude": [
     "apps/web/**",
-    "apps/extension/**"
+    "apps/extension/**",
+    "apps/docs/**"
   ]
 }

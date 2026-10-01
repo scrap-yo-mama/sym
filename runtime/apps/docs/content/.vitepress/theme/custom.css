@@ -1,0 +1,24 @@
+/* SPDX-License-Identifier: AGPL-3.0-only */
+.llms-footer {
+  margin-top: 32px;
+  padding-top: 16px;
+  border-top: 1px solid var(--vp-c-divider);
+  font-size: 14px;
+  color: var(--vp-c-text-2);
+}
+
+.search-box {
+  margin-bottom: 16px;
+  --pagefind-ui-scale: 0.85;
+  --pagefind-ui-primary: var(--vp-c-brand-1);
+  --pagefind-ui-text: var(--vp-c-text-1);
+  --pagefind-ui-background: var(--vp-c-bg);
+  --pagefind-ui-border: var(--vp-c-divider);
+  --pagefind-ui-tag: var(--vp-c-bg-soft);
+  --pagefind-ui-font: var(--vp-font-family-base);
+}
+
+.vp-doc table {
+  display: table;
+  width: 100%;
+}
