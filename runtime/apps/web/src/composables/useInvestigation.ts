@@ -133,6 +133,8 @@ export function useInvestigation(options: InvestigationOptions = {}) {
       return false;
     }
     seedFromRun(state, result.data as Record<string, unknown>, now());
+    // La pause est relue du serveur (`paused_at` du Run) : elle survit au rechargement de la page.
+    paused.value = state.pausedAt !== null;
     return true;
   }
 
@@ -141,6 +143,7 @@ export function useInvestigation(options: InvestigationOptions = {}) {
     failure.value = null;
     Object.assign(state, emptyInvestigation());
     state.runId = runId;
+    paused.value = false;
     const loaded = await loadRun(runId);
     if (!loaded) return false;
     replay?.stop();

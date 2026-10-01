@@ -9,7 +9,10 @@
 //   investigation.started  { run_id, api_id?, api_slug?, domain?, budget?, access_report? }
 //   phase.started          { run_id, phase, plan?: [{ execution, network?, est_cost_usd? }], budget? }
 //   schema.proposed        { run_id, output_schema, sample?, input_schema?, budget? }
-//   attempt.finished       { run_id, attempt: RunAttempt (+ why?: { code, params }), budget? }
+//   attempt.finished       { run_id, attempt: RunAttempt (+ why?: { code, params }), exchange?, budget? }
+// `exchange` (carte requête/réponse de la colonne « Ce que voit l'agent », 06 § 2 ; ADR 0003, à confirmer par 3.1) :
+//   { request: { method, url }, response?: { status?, content_type?, bytes? } } — jamais d'en-tête ni de corps (INV8) ; la
+//   console ne garde de l'URL que l'origine et le chemin (ni requête ni fragment), et ignore une méthode ou un schéma inattendus.
 //   status.changed         { run_id?, api_id?, api_slug?, status, status_reason?, domain?, at?, strategy?, input_schema?, budget? }
 //   action.required        { run_id?, api_id?, api_slug?, cause, domain?, platform?, offer? }
 // `budget` : { spent_usd, max_usd, elapsed_s, timeout_s, retained_est_usd?, full_agent_est_usd? }. Toute charge est lue avec
@@ -78,6 +81,19 @@ export interface AttemptView {
   why: ReasonView | null;
   /** Raison d'échec en clair (code et paramètres). */
   error: ReasonView | null;
+  /** Carte requête/réponse de l'essai, quand le flux la donne (`exchange` de `attempt.finished`). */
+  exchange?: ExchangeView | null;
+}
+
+/** Résumé d'un échange HTTP d'un essai : jamais d'en-tête, de cookie ni de corps. */
+export interface ExchangeView {
+  method: string;
+  /** Origine et chemin seulement. */
+  url: string;
+  status: number | null;
+  /** Type de média sans paramètres (`text/html`). */
+  contentType: string | null;
+  bytes: number | null;
 }
 
 export interface PlanStep {
@@ -130,6 +146,8 @@ export interface InvestigationState {
   action: ActionView | null;
   /** Fin de l'enquête : `sain`, `warning`, `erreur`, `bloquee` ou arrêtée par l'utilisateur. */
   terminal: boolean;
+  /** Pause demandée par l'utilisateur, relue du Run (`paused_at`, extension de 05 § 4.2 à livrer par 3.1) ; null hors pause. */
+  pausedAt: string | null;
   /** Identifiants déjà vus : un événement rejoué (reprise, rejeu à la réouverture) n'est appliqué qu'une fois. */
   seen: string[];
 }
@@ -154,6 +172,7 @@ export function emptyInvestigation(): InvestigationState {
     blocked: null,
     action: null,
     terminal: false,
+    pausedAt: null,
     seen: [],
   };
 }
@@ -189,8 +208,36 @@ function budgetOf(value: unknown, nowMs: number): BudgetView | null {
   };
 }
 
+const METHODS = ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'] as const;
+
+/** Carte requête/réponse ; null si la méthode est inconnue ou si l'URL n'est pas http(s). */
+function exchangeOf(value: unknown): ExchangeView | null {
+  if (!isRecord(value) || !isRecord(value.request)) return null;
+  const method = oneOf(value.request.method, METHODS);
+  const raw = text(value.request.url);
+  if (!method || !raw) return null;
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    return null;
+  }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') return null;
+  const response = isRecord(value.response) ? value.response : {};
+  const status = num(response.status);
+  const bytes = num(response.bytes);
+  const type = text(response.content_type)?.split(';')[0]?.trim().toLowerCase() ?? null;
+  return {
+    method,
+    url: `${url.origin}${url.pathname}`,
+    status: status !== null && Number.isInteger(status) && status >= 100 && status <= 599 ? status : null,
+    contentType: type && /^[a-z0-9.+-]+\/[a-z0-9.+-]+$/.test(type) ? type : null,
+    bytes: bytes !== null && Number.isInteger(bytes) && bytes >= 0 ? bytes : null,
+  };
+}
+
 /** Un essai (forme `RunAttempt` de l'OpenAPI) ; null si l'exécution ou le réseau sont inconnus. */
-function attemptOf(value: unknown, why: unknown = null): AttemptView | null {
+function attemptOf(value: unknown, why: unknown = null, exchange: unknown = null): AttemptView | null {
   if (!isRecord(value)) return null;
   const execution = oneOf(value.execution, EXECUTIONS);
   const network = oneOf(value.network, NETWORKS);
@@ -208,6 +255,7 @@ function attemptOf(value: unknown, why: unknown = null): AttemptView | null {
     prunedReason: text(value.pruned_reason),
     why: reasonOf(why) ?? reasonOf(value.why),
     error: reasonOf(value.error),
+    exchange: exchangeOf(exchange),
   };
 }
 
@@ -298,7 +346,7 @@ export function ingestEvent(state: InvestigationState, event: SseEvent, nowMs: n
       break;
     }
     case 'attempt.finished': {
-      const attempt = attemptOf(data.attempt, data.why);
+      const attempt = attemptOf(data.attempt, data.why, data.exchange);
       if (attempt) {
         const at = state.attempts.findIndex((existing) => existing.index === attempt.index);
         if (at >= 0) state.attempts.splice(at, 1, attempt);
@@ -373,6 +421,7 @@ export function seedFromRun(state: InvestigationState, run: Json, nowMs: number)
   if (total !== null) state.budget = { ...(state.budget ?? { maxUsd: null, elapsedS: null, timeoutS: null, retainedEstUsd: null, fullAgentEstUsd: null }), spentUsd: total, receivedAtMs: nowMs };
   const runState = text(run.state);
   if (runState === 'succeeded' || runState === 'failed' || runState === 'cancelled') state.terminal = true;
+  state.pausedAt = state.terminal ? null : text(run.paused_at);
 }
 
 /**

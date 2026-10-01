@@ -41,6 +41,23 @@ describe('ingestEvent', () => {
     expect(Date.now() - start).toBeLessThan(2000);
   });
 
+  test('carte requête/réponse (06 § 2, colonne « Ce que voit l’agent ») : méthode, URL sans requête ni fragment, statut, type, taille', () => {
+    const state = following();
+    const exchange = { request: { method: 'GET', url: 'https://www.exemple.test/liste?token=zz_test_secret#haut' }, response: { status: 200, content_type: 'text/html; charset=utf-8', bytes: 18432 } };
+    ingestEvent(state, frame('1', 'attempt.finished', { run_id: RUN, attempt: attempt(0), exchange }), 0);
+    expect(state.attempts[0]?.exchange).toEqual({ method: 'GET', url: 'https://www.exemple.test/liste', status: 200, contentType: 'text/html', bytes: 18432 });
+    expect(JSON.stringify(state)).not.toContain('zz_test_secret');
+  });
+
+  test('carte requête/réponse : une charge douteuse est ignorée (schéma non http, méthode inconnue), l’essai reste rangé', () => {
+    const state = following();
+    ingestEvent(state, frame('1', 'attempt.finished', { run_id: RUN, attempt: attempt(0), exchange: { request: { method: 'GET', url: 'javascript:alert(1)' }, response: { status: 200 } } }), 0);
+    ingestEvent(state, frame('2', 'attempt.finished', { run_id: RUN, attempt: attempt(1), exchange: { request: { method: '<img src=x>', url: 'https://www.exemple.test/' }, response: { status: 200 } } }), 0);
+    ingestEvent(state, frame('3', 'attempt.finished', { run_id: RUN, attempt: attempt(2), exchange: { request: { method: 'GET', url: 'https://www.exemple.test/' }, response: { status: 'x', bytes: -1 } } }), 0);
+    ingestEvent(state, frame('4', 'attempt.finished', { run_id: RUN, attempt: attempt(3) }), 0);
+    expect(state.attempts.map((a) => a.exchange ?? null)).toEqual([null, null, { method: 'GET', url: 'https://www.exemple.test/', status: null, contentType: null, bytes: null }, null]);
+  });
+
   test('un événement d’un autre run, ou sans run ni API connus, est ignoré', () => {
     const state = following();
     expect(ingestEvent(state, frame('1', 'attempt.finished', { run_id: 'autre', attempt: attempt(0) }), 0)).toBe(false);

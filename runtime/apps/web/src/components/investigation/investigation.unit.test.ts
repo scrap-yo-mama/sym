@@ -104,6 +104,24 @@ describe('journal d’enquête', () => {
     expect(log).toContain('not run: Reason: cheaper_succeeded');
   });
 
+  test('colonne « Ce que voit l’agent » : carte requête/réponse du dernier essai quand le flux la donne', async () => {
+    const state = running();
+    state.attempts = [{ ...state.attempts[0]!, exchange: { method: 'GET', url: 'https://www.exemple.test/liste', status: 200, contentType: 'text/html', bytes: 18432 } }];
+    const html = await render(InvestigationBoard, props(state));
+    expect(html).toContain('data-testid="exchange-card"');
+    expect(html).toContain(en.investigation.seen.exchange.title);
+    expect(html).toContain('GET https://www.exemple.test/liste');
+    expect(html).toContain('HTTP 200 · text/html · 18,432 bytes');
+    const fr = await render(InvestigationBoard, props(state), { locale: 'fr' });
+    expect(fr).toMatch(/HTTP 200 · text\/html · 18\s432 octets/u);
+  });
+
+  test('colonne « Ce que voit l’agent » : sans carte dans le flux, pas de carte vide', async () => {
+    const html = await render(InvestigationBoard, props(running()));
+    expect(html).not.toContain('data-testid="exchange-card"');
+    expect(html).toContain(en.investigation.seen.lastTrial);
+  });
+
   test('rendu français du journal', async () => {
     const html = await render(InvestigationBoard, props(running()), { locale: 'fr' });
     expect(html).toContain('robots.txt lu : chemin autorisé');

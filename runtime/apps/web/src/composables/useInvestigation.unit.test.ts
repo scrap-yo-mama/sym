@@ -5,7 +5,8 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { setApi } from '@/lib/api';
 import { EventStreamClient } from '@/lib/sse';
-import { flush, installFakeServer, json, type RecordedCall } from '@/testing/console.testkit';
+import InvestigationBoard from '@/components/investigation/InvestigationBoard.vue';
+import { flush, installFakeServer, json, view, type RecordedCall } from '@/testing/console.testkit';
 import { startEventStream, stopEventStream } from './useEventStream';
 import { useInvestigation } from './useInvestigation';
 
@@ -213,6 +214,45 @@ describe('réouverture', () => {
     investigation.dispose();
   });
 
+  // Pause relue du Run (`paused_at`, extension de 05 § 4.2 à livrer par 3.1, ADR 0003) : la pause survit au rechargement.
+  const silentReplay = (runId: string) =>
+    new EventStreamClient({
+      url: `/api/runs/${runId}/events`,
+      fetch: async (_url, init) =>
+        new Response(new ReadableStream<Uint8Array>({ start: (c) => (init.signal as AbortSignal).addEventListener('abort', () => c.error(new DOMException('aborted', 'AbortError'))) }), {
+          status: 200,
+          headers: { 'content-type': 'text/event-stream' },
+        }),
+      sleep: async () => undefined,
+    });
+
+  test('un run en pause (paused_at) rouvre l’enquête en pause, chronomètre arrêté ; Reprendre la relance', async () => {
+    const investigation = useInvestigation({ replayFactory: silentReplay });
+    installFakeServer({
+      [`GET /api/runs/${RUN}`]: () => json(200, { ...runBody, paused_at: '2026-10-01T10:00:00Z' }),
+      [`POST /api/runs/${RUN}/resume`]: () => json(202, { run_id: RUN, state: 'running' }),
+    });
+    expect(await investigation.open(RUN)).toBe(true);
+    expect(investigation.paused.value).toBe(true);
+    await investigation.resume();
+    expect(investigation.paused.value).toBe(false);
+    investigation.dispose();
+  });
+
+  test('un run sans paused_at (ou paused_at null) rouvre l’enquête hors pause, même après une pause locale', async () => {
+    const investigation = useInvestigation({ replayFactory: silentReplay });
+    installFakeServer({
+      [`GET /api/runs/${RUN}`]: () => json(200, { ...runBody, paused_at: null }),
+      [`POST /api/runs/${RUN}/pause`]: () => json(202, { run_id: RUN, state: 'running' }),
+    });
+    expect(await investigation.open(RUN)).toBe(true);
+    await investigation.pause();
+    expect(investigation.paused.value).toBe(true);
+    expect(await investigation.open(RUN)).toBe(true);
+    expect(investigation.paused.value).toBe(false);
+    investigation.dispose();
+  });
+
   test('un run introuvable laisse une erreur lisible', async () => {
     const investigation = useInvestigation();
     installFakeServer({});
@@ -272,6 +312,42 @@ describe('assert_budget_and_stop_controls : un essai apparaît en moins de 2 s',
     expect(investigation.state.attempts).toHaveLength(1);
     expect(Date.now() - sentAt).toBeLessThan(2000);
     expect(investigation.state.budget?.spentUsd).toBe(0.002);
+    investigation.dispose();
+  });
+
+  test('trame SSE → ligne [data-testid=attempt] dans le rendu du tableau de l’enquête, en moins de 2 s', async () => {
+    // Bout à bout sans navigateur : vrai client SSE, vrai composable, vrai composant rendu. La mesure en Chromium
+    // (essai visible à l'écran) reste à 3.6 : test.todo de tests/invariants.todo.test.ts.
+    const encoder = new TextEncoder();
+    let controller!: ReadableStreamDefaultController<Uint8Array>;
+    startEventStream(
+      () => undefined,
+      () =>
+        new EventStreamClient({
+          url: '/api/events',
+          fetch: async () => new Response(new ReadableStream<Uint8Array>({ start: (c) => void (controller = c) }), { status: 200, headers: { 'content-type': 'text/event-stream' } }),
+        }),
+    );
+    const investigation = useInvestigation();
+    installFakeServer({
+      'POST /api/apis': () => json(202, { run_id: RUN, state: 'queued' }),
+      [`GET /api/runs/${RUN}`]: () => json(200, runBody),
+    });
+    await investigation.create(form);
+    for (let i = 0; i < 100 && !controller; i++) await flush();
+    const board = () =>
+      view(InvestigationBoard, { state: investigation.state, elapsedS: investigation.elapsedS.value, paused: false, cancelled: false, busy: null, failure: null });
+    expect(await board()).not.toContain('data-testid="attempt"');
+    const sentAt = Date.now();
+    controller.enqueue(encoder.encode(`id: 7\nevent: attempt.finished\ndata: ${JSON.stringify({ run_id: RUN, attempt })}\n\n`));
+    let html = '';
+    for (let i = 0; i < 200 && !html.includes('data-testid="attempt"'); i++) {
+      await flush();
+      html = await board();
+    }
+    expect(Date.now() - sentAt).toBeLessThan(2000);
+    expect(html.match(/data-testid="attempt"/g)).toHaveLength(1);
+    expect(html).toContain('Trial 1');
     investigation.dispose();
   });
 

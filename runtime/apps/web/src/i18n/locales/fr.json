@@ -112,7 +112,7 @@
     "auth_required": "{domaine} demande une connexion.",
     "cookie_expired": "La session de {domaine} a expiré.",
     "session_device_bound": "La session de {domaine} est liée à ton appareil et ne peut pas être copiée sur le serveur.",
-    "challenge_in_tunnel": "Une vérification est apparue dans ton navigateur. Le run est en pause.",
+    "challenge_in_tunnel": "Une vérification est apparue dans ton navigateur. Le run est arrêté ; réessaie plus tard.",
     "secret_unreadable": "Une clé enregistrée est illisible.",
     "account_limit": "La plateforme a signalé une limite sur ton compte. Aucune relance.",
     "session_owner_required": "Cette API utilise la session de son propriétaire.",
@@ -195,7 +195,14 @@
       "network": "Réseau",
       "result": "Résultat",
       "cost": "Coût",
-      "duration": "Durée"
+      "duration": "Durée",
+      "exchange": {
+        "title": "Requête et réponse",
+        "request": "Requête",
+        "response": "Réponse",
+        "status": "HTTP {status}",
+        "bytes": "{n} octets"
+      }
     },
     "budget": {
       "title": "Budget",
@@ -568,7 +575,7 @@
     "diagnostic": {
       "title": "Diagnostic",
       "intro": "Exporte sur cet ordinateur un fichier JSON avec les versions et l'état de l'instance. Rien n'est envoyé nulle part.",
-      "includes": "Le fichier contient : version de l'instance, version du schéma, état de disponibilité, langue de la console. Il ne contient jamais de clé, de cookie ni de contenu de run.",
+      "includes": "Le fichier contient : version de l'instance, version du schéma, version minimale de l'extension, version de la spécification MCP, état de disponibilité, langue de la console. Il ne contient jamais de clé, de cookie ni de contenu de run.",
       "export": "Exporter le diagnostic (JSON)",
       "exported": "Diagnostic exporté sur ton ordinateur."
     }

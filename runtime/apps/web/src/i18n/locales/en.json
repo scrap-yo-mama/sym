@@ -112,7 +112,7 @@
     "auth_required": "{domaine} asks for a sign-in.",
     "cookie_expired": "The session of {domaine} has expired.",
     "session_device_bound": "The session of {domaine} is tied to your device and cannot be copied to the server.",
-    "challenge_in_tunnel": "A verification appeared in your browser. The run is paused.",
+    "challenge_in_tunnel": "A verification appeared in your browser. The run is stopped; try again later.",
     "secret_unreadable": "A saved key is unreadable.",
     "account_limit": "The platform flagged a limit on your account. No retry.",
     "session_owner_required": "This API uses the session of its owner.",
@@ -195,7 +195,14 @@
       "network": "Network",
       "result": "Result",
       "cost": "Cost",
-      "duration": "Duration"
+      "duration": "Duration",
+      "exchange": {
+        "title": "Request and response",
+        "request": "Request",
+        "response": "Response",
+        "status": "HTTP {status}",
+        "bytes": "{n} bytes"
+      }
     },
     "budget": {
       "title": "Budget",
@@ -568,7 +575,7 @@
     "diagnostic": {
       "title": "Diagnostic",
       "intro": "Exports a JSON file on this computer with the versions and the state of the instance. Nothing is sent anywhere.",
-      "includes": "The file holds: instance version, schema version, readiness, console language. It never holds a key, a cookie or a run content.",
+      "includes": "The file holds: instance version, schema version, minimum extension version, MCP specification version, readiness, console language. It never holds a key, a cookie or a run content.",
       "export": "Export the diagnostic (JSON)",
       "exported": "Diagnostic exported to your computer."
     }

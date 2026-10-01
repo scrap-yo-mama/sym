@@ -1884,6 +1884,11 @@ export interface components {
             attempts: components["schemas"]["RunAttempt"][];
             tokens: components["schemas"]["Tokens"];
             trace_id?: string | null;
+            /**
+             * Format: date-time
+             * @description Date de la pause demandée par l'utilisateur (`POST /api/runs/{id}/pause`) ; null hors pause, remis à null par `resume`.
+             */
+            paused_at?: string | null;
             /** @description Entrée du run ; absente pour l'admin sur un run d'autrui. */
             input?: {
                 [key: string]: unknown;

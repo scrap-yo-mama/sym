@@ -3,7 +3,8 @@
 /**
  * @file InvestigationBoard.vue
  * @description Écran de suivi d'une enquête en direct, en trois colonnes (06 § 2) : ce que voit l'agent, ce que l'agent
- * fait, ce que l'agent a produit. Compteur de budget en direct, boutons Pause et « Arrêter l'enquête » (essais conservés),
+ * fait, ce que l'agent a produit. La première colonne montre le dernier essai (méthode, réseau, résultat, coût, durée), puis
+ * sa carte requête/réponse quand le flux la donne (`exchange` de `attempt.finished`). Compteur de budget en direct, boutons Pause et « Arrêter l'enquête » (essais conservés),
  * bandeaux « Action requise » et « Bloquée » (sans tunnel). Présentationnel : l'état vient de `useInvestigation`, chaque
  * bouton émet un événement et c'est le serveur qui décide (06 § 4.1).
  * @component
@@ -22,7 +23,7 @@ import { Button } from '@/components/ui/button';
 import type { Busy } from '@/composables/useInvestigation';
 import { useReason } from '@/composables/useReason';
 import { formatDuration, formatUsd } from '@/lib/format';
-import type { AttemptView, Execution, InvestigationState } from '@/lib/investigation';
+import type { AttemptView, ExchangeView, Execution, InvestigationState } from '@/lib/investigation';
 
 interface Props {
   state: Readonly<InvestigationState>;
@@ -69,6 +70,16 @@ watch(
 );
 const shownAttempts = computed(() => (suspended.value ? frozen.value : props.state.attempts));
 const lastAttempt = computed(() => shownAttempts.value.at(-1) ?? null);
+
+/** Ligne de réponse de la carte : « HTTP 200 · text/html · 18 432 octets » ; un champ absent est omis, jamais inventé. */
+function responseLine(exchange: ExchangeView): string {
+  const parts = [
+    exchange.status === null ? null : t('investigation.seen.exchange.status', { status: exchange.status }),
+    exchange.contentType,
+    exchange.bytes === null ? null : t('investigation.seen.exchange.bytes', { n: new Intl.NumberFormat(locale.value).format(exchange.bytes) }),
+  ].filter((part): part is string => part !== null);
+  return parts.length > 0 ? parts.join(' · ') : '—';
+}
 
 const statusLine = computed(() => {
   if (props.cancelled) return t('investigation.controls.stopped', { cost: formatUsd(props.state.budget?.spentUsd, locale.value) ?? t('common.unknown') });
@@ -166,6 +177,15 @@ function viewTrials(): void {
             <dd>{{ formatUsd(lastAttempt.costUsd ?? lastAttempt.estCostUsd, locale, lastAttempt.costUsd === null) ?? '—' }}</dd>
             <dt class="text-muted-foreground">{{ t('investigation.seen.duration') }}</dt>
             <dd>{{ formatDuration(lastAttempt.ms, locale) ?? '—' }}</dd>
+          </dl>
+        </div>
+        <div v-if="lastAttempt?.exchange" class="rounded-lg border p-3" data-testid="exchange-card">
+          <h3 class="mb-2 text-sm font-medium">{{ t('investigation.seen.exchange.title') }}</h3>
+          <dl class="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-sm">
+            <dt class="text-muted-foreground">{{ t('investigation.seen.exchange.request') }}</dt>
+            <dd class="break-all font-mono">{{ lastAttempt.exchange.method }} {{ lastAttempt.exchange.url }}</dd>
+            <dt class="text-muted-foreground">{{ t('investigation.seen.exchange.response') }}</dt>
+            <dd>{{ responseLine(lastAttempt.exchange) }}</dd>
           </dl>
         </div>
       </section>

@@ -3,8 +3,10 @@
 // (fichiers de langue `en` et `fr`, messages REST et MCP ; les libellés d'exécution E1 à E6 du badge sont exclus) ne contient
 // « contourner », « débloquer », « passer » (ni leurs équivalents anglais : bypass, unblock, circumvent) ni le nom d'un outil
 // ou d'un éditeur de protection. Le test lit les fichiers de langue en entier, extrait les messages de chaque route du
-// serveur (`sendError`, `message:`, `what_to_do:`) et tout fichier MCP (apps/server/src/mcp/), puis cherche les mots interdits.
-import { readdirSync, readFileSync } from 'node:fs';
+// serveur et des paquets partagés (apps/server/src et packages/*/src : `sendError`, `message:`, `what_to_do:`), dont tout
+// fichier MCP, puis cherche les mots interdits. Un module MCP né hors de ces dossiers (apps/worker, apps/cli…) fait échouer
+// le test de périmètre.
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { describe, expect, test } from 'vitest';
 
@@ -57,9 +59,21 @@ function messagesOf(source: string): string[] {
 
 const isSource = (file: string): boolean => /\.ts$/.test(file) && !/\.(test|testkit)\.ts$/.test(file) && !file.includes(`${join('src', 'testing')}`);
 
-/** Messages REST du serveur et messages MCP (apps/server/src, dont apps/server/src/mcp/), avec leur fichier. */
+/**
+ * Dossiers lus par le contrôle des messages : le serveur (REST, et MCP s'il naît dans apps/server/src/mcp/) et chaque
+ * packages/<nom>/src, où peuvent vivre la table des raisons partagée console, REST et MCP (06 § 4.1) et les messages MCP
+ * (tâches 3.2, 3.10). Un module MCP né ailleurs fait échouer le test de périmètre.
+ */
+function messageRoots(): string[] {
+  const packages = readdirSync(join(root, 'packages'), { withFileTypes: true })
+    .filter((entry) => entry.isDirectory() && existsSync(join(root, 'packages', entry.name, 'src')))
+    .map((entry) => `packages/${entry.name}/src`);
+  return ['apps/server/src', ...packages];
+}
+
+/** Messages REST du serveur, des paquets partagés et du MCP (dossiers de messageRoots()), avec leur fichier. */
 function serverMessages(): { where: string; text: string }[] {
-  const files = walk(join(root, 'apps/server/src'), isSource);
+  const files = messageRoots().flatMap((dir) => walk(join(root, dir), isSource));
   return files.flatMap((file) => messagesOf(readFileSync(file, 'utf8')).map((text) => ({ where: relative(root, file), text })));
 }
 
@@ -78,15 +92,36 @@ describe('assert_ui_strings_no_forbidden_words', () => {
     }
   });
 
-  test('messages REST (et MCP) du serveur : 0 mot interdit, 0 nom d’outil de protection', () => {
+  test('messages REST et MCP (serveur et packages/*/src) : 0 mot interdit, 0 nom d’outil de protection', () => {
     const messages = serverMessages();
     // Le contrôle n'est pas vide : les routes livrées ont des messages d'erreur.
     expect(messages.length).toBeGreaterThan(10);
     for (const { where, text } of messages) expect(forbiddenIn(text), `${where} : « ${text} »`).toEqual([]);
   });
 
-  test('tout fichier MCP (apps/server/src/mcp/) est couvert par le même contrôle dès qu’il existe', () => {
-    const mcpFiles = walk(join(root, 'apps/server/src'), (file) => isSource(file) && file.includes(`${join('src', 'mcp')}`));
+  test('périmètre : le serveur et chaque packages/*/src sont lus (table des raisons partagée console, REST et MCP, 06 § 4.1)', () => {
+    const packages = readdirSync(join(root, 'packages'), { withFileTypes: true })
+      .filter((entry) => entry.isDirectory() && existsSync(join(root, 'packages', entry.name, 'src')))
+      .map((entry) => `packages/${entry.name}/src`);
+    expect(packages.length).toBeGreaterThan(3);
+    expect(messageRoots()).toEqual(expect.arrayContaining(['apps/server/src', ...packages]));
+  });
+
+  test('tout module MCP (fichier ou dossier dont le nom contient « mcp », dans apps/*/src ou packages/*/src) est sous un dossier lu', () => {
+    const roots = messageRoots();
+    const sources = ['apps', 'packages'].flatMap((top) =>
+      readdirSync(join(root, top), { withFileTypes: true })
+        // apps/web : ses textes sont dans les fichiers de langue, lus en entier par le premier test.
+        .filter((entry) => entry.isDirectory() && existsSync(join(root, top, entry.name, 'src')) && !(top === 'apps' && entry.name === 'web'))
+        .flatMap((entry) => walk(join(root, top, entry.name, 'src'), isSource)),
+    );
+    const mcp = sources.map((file) => relative(root, file)).filter((file) => /mcp/i.test(file));
+    const outside = mcp.filter((file) => !roots.some((dir) => file.startsWith(`${dir}/`)));
+    expect(outside, 'module MCP hors du périmètre du contrôle : ajouter son dossier à messageRoots()').toEqual([]);
+  });
+
+  test('tout fichier MCP des dossiers lus est couvert par le même contrôle dès qu’il existe', () => {
+    const mcpFiles = messageRoots().flatMap((dir) => walk(join(root, dir), (file) => isSource(file) && /mcp/i.test(relative(root, file))));
     for (const file of mcpFiles) {
       for (const text of messagesOf(readFileSync(file, 'utf8'))) expect(forbiddenIn(text), `${relative(root, file)} : « ${text} »`).toEqual([]);
     }

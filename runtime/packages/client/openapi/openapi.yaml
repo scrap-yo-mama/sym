@@ -3446,6 +3446,12 @@ components:
               $ref: '#/components/schemas/Tokens'
             trace_id:
               type: [string, 'null']
+            paused_at:
+              # Extension de 05 § 4.2 (tâche 3.5, à livrer par 3.1 avec POST /api/runs/{id}/pause) : la console relit la pause
+              # à la réouverture d'une enquête, au lieu de la garder seulement en mémoire.
+              description: Date de la pause demandée par l'utilisateur (`POST /api/runs/{id}/pause`) ; null hors pause, remis à null par `resume`.
+              type: [string, 'null']
+              format: date-time
             input:
               description: Entrée du run ; absente pour l'admin sur un run d'autrui.
               type: object
@@ -4750,36 +4756,7 @@ components:
           maxLength: 32
         deviceId:
           type: string
-          pattern: '^[A-Za-z0-9_-]{8,64}
-      type: object
-      additionalProperties: false
-      required: [version, schema_version]
-      properties:
-        version:
-          type: string
-        schema_version:
-          type: integer
-    ProtectedResourceMetadata:
-      description: RFC 9728.
-      type: object
-      additionalProperties: true
-      required: [resource]
-      properties:
-        resource:
-          type: string
-        authorization_servers:
-          type: array
-          items:
-            type: string
-        bearer_methods_supported:
-          type: array
-          items:
-            type: string
-        scopes_supported:
-          type: array
-          items:
-            $ref: '#/components/schemas/ApiKeyScope'
-
+          pattern: '^[A-Za-z0-9_-]{8,64}$'
         deviceLabel:
           type: string
           minLength: 1

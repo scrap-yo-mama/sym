@@ -3,7 +3,7 @@
 /**
  * @file DiagnosticSettingsView.vue
  * @description Réglages > Diagnostic (06 § 2, INV9) : bouton d'export JSON local masqué ; aucun envoi. Le fichier ne
- * contient que la version de l'instance, la version du schéma, l'état de disponibilité et la langue de la console.
+ * contient que les versions de l'instance (serveur, schéma, extension minimale, spécification MCP), l'état de disponibilité et la langue de la console.
  * @page
  */
 import { ref } from 'vue';

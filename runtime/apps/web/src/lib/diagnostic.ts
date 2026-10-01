@@ -7,7 +7,8 @@ import type { ApiClient } from '@runtime/client';
 export interface Diagnostic {
   generated_at: string;
   console_locale: string;
-  instance: { version: string | null; schema_version: number | null };
+  /** Les quatre champs de `GET /api/version` (16 §3) : version de l'instance, du schéma, minimum de l'extension, spécification MCP. */
+  instance: { server: string | null; schema: number | null; min_extension: string | null; mcp_spec: string | null };
   readiness: { ok: boolean | null };
 }
 
@@ -18,9 +19,19 @@ export async function collectDiagnostic(api: ApiClient, locale: string, now: Dat
   return {
     generated_at: now.toISOString(),
     console_locale: locale,
-    instance: { version: versionData?.version ?? null, schema_version: versionData?.schema_version ?? null },
+    instance: {
+      server: text(versionData?.server),
+      schema: typeof versionData?.schema === 'number' ? versionData.schema : null,
+      min_extension: text(versionData?.min_extension),
+      mcp_spec: text(versionData?.mcp_spec),
+    },
     readiness: { ok: ready.status === 'fulfilled' ? ready.value.response.ok : null },
   };
+}
+
+/** Liste blanche typée : seule une chaîne passe ; toute autre forme (route plus ancienne, champ absent) donne null. */
+function text(value: unknown): string | null {
+  return typeof value === 'string' ? value : null;
 }
 
 /** Télécharge le diagnostic comme fichier local (Blob et lien, aucun envoi). */

@@ -40,3 +40,22 @@ describe('compilation des messages', () => {
     });
   }
 });
+
+describe('challenge_in_tunnel : un défi arrête le run (04 § 2, 06 § 2), jamais une pause à reprendre', () => {
+  // 06 § 4.2 dit « en pause » et « Reprendre » ; 04 (« un défi détecté arrête le run ») et 06 § 2 (« le run est arrêté »,
+  // « Réessayer plus tard (nouveau run) », « Aucune reprise automatique ») l'emportent : la console ne suggère aucune reprise.
+  const texts = (messages: Tree): string[] => [
+    (messages.reason as Tree).challenge_in_tunnel as string,
+    ...Object.values((messages.action as Tree).challenge_in_tunnel as Tree).map(String),
+  ];
+
+  test('fr : « arrêté », ni « pause » ni « reprendre »', () => {
+    for (const text of texts(fr as Tree)) expect(text).not.toMatch(/pause|repren|reprise/iu);
+    expect((fr.reason as Tree).challenge_in_tunnel).toMatch(/Le run est arrêté/u);
+  });
+
+  test('en : « stopped », ni « paused » ni « resume »', () => {
+    for (const text of texts(en as Tree)) expect(text).not.toMatch(/pause|resum/iu);
+    expect((en.reason as Tree).challenge_in_tunnel).toMatch(/The run is stopped/u);
+  });
+});

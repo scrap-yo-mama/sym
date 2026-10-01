@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Réglages BYO (06 § 2, 08 § 7, tâche 3.5). `assert_secret_masked` : la clé d'un fournisseur n'apparaît jamais en clair dans le DOM
 // rendu, n'est jamais relue, et le champ est vidé dès l'envoi. Les réponses réseau sont vérifiées côté serveur (08b) et en E2E (3.6).
+import type { components } from '@runtime/client';
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
 import TestOutcome from '@/components/settings/TestOutcome.vue';
 import { resetSession } from '@/composables/useSession';
@@ -309,20 +310,25 @@ describe('Réglages > Alertes', () => {
 });
 
 describe('Diagnostic local', () => {
+  // Forme réelle de `GET /api/version` (apps/server/src/routes/system.ts, 16 §3) : typée par le schéma généré, pour qu'un
+  // changement du contrat casse ce test au typage au lieu de le laisser passer sur une forme périmée.
+  const version: components['schemas']['Version'] = { server: '1.0.0', schema: 12, min_extension: '0.1.0', mcp_spec: '2026-07-28' };
+
   test('liste blanche : versions, disponibilité, langue de la console ; jamais de clé, de cookie ni d’identité', async () => {
-    const calls = installFakeServer({
-      'GET /api/version': () => json(200, { version: '1.0.0', schema_version: 12, db_password: 'zz_test_pw', token: 'zz_test_token' }),
-      'GET /api/ready': () => json(200, { status: 'ready', db: 'ok', secret: 'zz_test_secret' }),
-    });
-    void calls;
-    const api = buildApi({ baseUrl: 'http://console.test', fetch: async (request) => (new URL(request.url).pathname === '/api/version' ? json(200, { version: '1.0.0', schema_version: 12, db_password: 'zz_test_pw' }) : json(200, { status: 'ready', secret: 'zz_test_secret' })) });
+    const api = buildApi({ baseUrl: 'http://console.test', fetch: async (request) => (new URL(request.url).pathname === '/api/version' ? json(200, { ...version, db_password: 'zz_test_pw', token: 'zz_test_token' }) : json(200, { status: 'ready', db: 'ok', secret: 'zz_test_secret' })) });
     const diagnostic = await collectDiagnostic(api, 'fr', new Date('2026-10-01T10:00:00Z'));
-    expect(diagnostic).toEqual({ generated_at: '2026-10-01T10:00:00.000Z', console_locale: 'fr', instance: { version: '1.0.0', schema_version: 12 }, readiness: { ok: true } });
+    expect(diagnostic).toEqual({ generated_at: '2026-10-01T10:00:00.000Z', console_locale: 'fr', instance: { server: '1.0.0', schema: 12, min_extension: '0.1.0', mcp_spec: '2026-07-28' }, readiness: { ok: true } });
     expect(JSON.stringify(diagnostic)).not.toMatch(/zz_test|password|token|secret|cookie|email/i);
+  });
+
+  test('ancienne forme {version, schema_version} : aucun champ n’est inventé, tout reste à null', async () => {
+    const api = buildApi({ baseUrl: 'http://console.test', fetch: async (request) => (new URL(request.url).pathname === '/api/version' ? json(200, { version: '1.0.0', schema_version: 12 }) : json(200, { status: 'ready' })) });
+    const diagnostic = await collectDiagnostic(api, 'fr', new Date('2026-10-01T10:00:00Z'));
+    expect(diagnostic.instance).toEqual({ server: null, schema: null, min_extension: null, mcp_spec: null });
   });
 
   test('une route qui échoue laisse le champ à null : le diagnostic reste exportable', async () => {
     const api = buildApi({ baseUrl: 'http://console.test', fetch: async () => { throw new TypeError('fetch failed'); } });
-    expect(await collectDiagnostic(api, 'en', new Date('2026-10-01T10:00:00Z'))).toEqual({ generated_at: '2026-10-01T10:00:00.000Z', console_locale: 'en', instance: { version: null, schema_version: null }, readiness: { ok: null } });
+    expect(await collectDiagnostic(api, 'en', new Date('2026-10-01T10:00:00Z'))).toEqual({ generated_at: '2026-10-01T10:00:00.000Z', console_locale: 'en', instance: { server: null, schema: null, min_extension: null, mcp_spec: null }, readiness: { ok: null } });
   });
 });
