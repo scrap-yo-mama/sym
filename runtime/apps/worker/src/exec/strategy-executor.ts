@@ -79,6 +79,7 @@ import { runFetchInPageExecutor, runPlaywrightExecutor } from './browser-executo
 import { runScriptExecutor, type ScriptPort } from './script-executor.js';
 import type { AgentBrowser, AgentBrowserOptions } from '../browser/agent-browser.js';
 import { runAgentExecutor, runAgentFetchExecutor, runHybridExecutor, type AgentOutcome, type EngineFactory, type LlmSpend } from './agent-executors.js';
+import { AttemptCost } from './attempt-cost.js';
 
 /**
  * Ports des exécuteurs agentiques E4-E6 (tâche 2.4). La configuration LLM est relue à chaque essai (`settings.llm`,
@@ -311,15 +312,18 @@ export function createStrategyExecutor(deps: StrategyExecutorDeps): RunExecutor 
     const { rung, credentials } = await rungFor(target, strategy.network);
     const script = strategy.execution === 'playwright' && strategy.scriptRef !== null ? scriptSpecOf(strategy.spec) : undefined;
     const spec = script === undefined && ['fetch', 'fetch_in_page', 'playwright'].includes(strategy.execution) ? specOf(target, strategy) : undefined;
-    // Plafond de coût de l'essai, partagé entre l'egress Chromium et la session `ctx.fetch` d'un script.
+    // Plafond de coût de l'essai, partagé entre l'egress Chromium, la session `ctx.fetch` d'un script et le LLM d'un essai
+    // agentique (E4-E6) : un coût LLM inconnu (prix absent) laisse 0 au proxy.
     let otherUsd: { egress: () => number; session: () => number } = { egress: () => 0, session: () => 0 };
+    let llmSpent: () => number | null = () => 0;
+    const llmForCeiling = (): number => llmSpent() ?? target.api.maxCostUsd;
     const sessionOptions = (side: 'egress' | 'session'): NetworkSessionOptions => ({
       rung,
       guard: deps.guard,
       ...(credentials === undefined ? {} : { credentials }),
       ...(deps.proxyResolver === undefined ? {} : { proxyResolver: deps.proxyResolver }),
       allowedHosts: script?.allowedHosts ?? spec?.request.allowed_hosts ?? agentic?.hosts ?? [],
-      costCeiling: { maxUsd: target.api.maxCostUsd, otherUsd: () => (side === 'egress' ? otherUsd.session() : otherUsd.egress()) },
+      costCeiling: { maxUsd: target.api.maxCostUsd, otherUsd: () => (side === 'egress' ? otherUsd.session() : otherUsd.egress()) + llmForCeiling() },
     });
     const pacer = pacerFor(target);
     const common = {
@@ -377,10 +381,15 @@ export function createStrategyExecutor(deps: StrategyExecutorDeps): RunExecutor 
         } catch {
           config = null;
         }
+        // UN compteur de coût pour l'essai : proxy (egress, session) et LLM (rôle extract, moteur) sous `max_cost_usd`.
+        const cost = new AttemptCost(target.api.maxCostUsd);
+        llmSpent = () => cost.llmUsd();
         const egress = agentic.kind === 'agent_fetch' && agentic.spec.via === 'fetch' ? undefined : await openBrowserEgress(sessionOptions('egress'));
+        if (egress !== undefined) cost.addProxy(() => egress.usage().costUsd);
         if (egress !== undefined) otherUsd = { ...otherUsd, egress: () => egress.usage().costUsd };
         const session = agentic.kind === 'agent_fetch' && agentic.spec.via === 'fetch' ? openNetworkSession(sessionOptions('session')) : undefined;
         if (session !== undefined) otherUsd = { ...otherUsd, session: () => session.usage().costUsd };
+        if (session !== undefined) cost.addProxy(() => session.usage().costUsd);
         const agentBrowser = (o: Omit<AgentBrowserOptions, 'egressServer'>) => ports.agentBrowser({ ...o, egressServer: egress!.server });
         // Client du seul rôle `extract` (un client par essai : compteur de coût de l'essai) ; configuration refusée → `llm_not_configured`.
         const extractClient = (): LlmClient | null => {
@@ -396,6 +405,8 @@ export function createStrategyExecutor(deps: StrategyExecutorDeps): RunExecutor 
         const common = {
           outputSchema: target.api.outputSchema,
           signal: ctx.signal,
+          maxCostUsd: target.api.maxCostUsd,
+          cost,
           ...(pacer === undefined ? {} : { pacer }),
           ...(maxRequests === undefined ? {} : { maxRequests }),
           ...(deps.classify === undefined ? {} : { classify: deps.classify }),
@@ -423,7 +434,6 @@ export function createStrategyExecutor(deps: StrategyExecutorDeps): RunExecutor 
               agentBrowser,
               ...(config === null ? {} : { engineFor: ports.engineFor(config), llm: extractClient(), llmModelId: config.roles.extract?.model ?? null }),
               allowWriteActions: target.api.allowWriteActions,
-              maxCostUsd: target.api.maxCostUsd,
             });
           } else {
             if (config === null || config.roles.agent === undefined) return refuse('code_error', 'llm_not_configured');
@@ -436,7 +446,6 @@ export function createStrategyExecutor(deps: StrategyExecutorDeps): RunExecutor 
               engineFor: ports.engineFor(config),
               pool: deps.browsers,
               allowWriteActions: target.api.allowWriteActions,
-              maxCostUsd: target.api.maxCostUsd,
               taskId: ctx.runId,
               version: strategy.version,
             });
@@ -502,7 +511,8 @@ export function createStrategyExecutor(deps: StrategyExecutorDeps): RunExecutor 
     }
     const proxyUsd = usage?.costUsd ?? 0;
     const llm: LlmSpend | null = outcome.agent?.llm ?? null;
-    const llmUsd = llm?.usd ?? 0;
+    // Prix absent : coût LLM inconnu, écrit null (jamais 0, 08 §1 ; INV4), avec avertissement.
+    const llmUsd: number | null = llm === null ? 0 : llm.usd;
     if (llm !== null && llm.usd === null) await ctx.log('warn', 'llm_price_missing', { model: llm.modelId });
     if ((outcome.agent?.domainBlocked ?? 0) > 0) await ctx.log('warn', 'agent_domain_blocked', { count: outcome.agent?.domainBlocked });
     await ctx.recordAttempt({
@@ -523,6 +533,10 @@ export function createStrategyExecutor(deps: StrategyExecutorDeps): RunExecutor 
           }),
     });
     const version = strategy.version;
+    // Coût inconnu : le plafond n'a pas pu être tenu ; jamais un succès (04b « Schéma et coût »).
+    if (llmUsd === null) {
+      return { state: 'failed', failure_class: 'run_budget_exceeded', retryable: false, error_detail: 'llm_price_missing', strategy_version: version };
+    }
     if (proxyUsd + llmUsd > target.api.maxCostUsd) {
       return { state: 'failed', failure_class: 'run_budget_exceeded', retryable: false, error_detail: 'max_cost_usd', strategy_version: version };
     }

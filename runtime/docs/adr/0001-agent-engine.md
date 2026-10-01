@@ -124,7 +124,18 @@ Correctifs apportés après la revue du livrable ; aucun run n'a été rejoué, 
 - **Sortie forcée de Stagehand au plafond** : non conservée, consigné à l'écart 4.
 - **Mode local de Stagehand** : `assertStagehandLocalOnly` appelé avant chaque construction ; obligation pour 2.4.
 
+## Suivi de l'intégration (tâche 2.4)
+
+Ajouté après la vérification de 2.4 (2026-10-01) ; la décision, l'interface et l'annexe ne changent pas.
+
+- **Pagination par bouton (F-E5), point faible connu : report consigné.** La compilation E6 → E5 de 2.4 ne compile qu'une trace à **un** enregistrement : l'extraction sans LLM d'une stratégie `hybrid` lit une fiche par libellés (`extract.mode: labels`). Une trace à plusieurs enregistrements (liste, pagination par bouton « Suivant ») est refusée avec le motif stable `list_not_compilable`, journalisé (`strategy_compile_skipped`) ; la stratégie reste rejouée par l'agent, donc avec un LLM à chaque run. Le cas est épinglé par `assert_e5_list_not_compiled` (`tests/agent/agent-executors.security.test.ts`, F-E5 : 12 contacts, 2 clics, sortie conforme, aucune compilation).
+- **Conséquence pour l'affichage :** tant que la compilation des listes n'existe pas et que le banc 2.8 n'a pas confirmé F-E5, une API servie en E5/E6 sur une liste paginée par bouton est à présenter comme « mouvante », comme le prévoit le paragraphe « E5 et E6 » ci-dessus.
+- **Suivi :** la compilation des listes (clics répétés, extraction par enregistrement à chaque page, vérifiée par rejeu sur F-E5) est inscrite en `test.todo` (`assert_e5_list_compiled`, `tests/invariants.todo.test.ts`). Sa tâche de rattachement reste à créer dans 10-taches (voir « Points à valider »).
+- **Garde-fous ajoutés à la vérification** (sans changement d'interface : tout passe par les options du moteur de production, `StagehandEngineHooks`) : plafond `max_cost_usd` tenu pendant l'essai (reliquat par étape, coût null et arrêt si le prix manque), garde de classification attendue avant chaque appel au modèle (défi servi en 200), `llm.redact` et jetons d'URL appliqués dans le middleware de Stagehand, écritures refusées sur le pool et trace avec écriture coupée jamais compilée, service workers et saisie vers un formulaire hors domaines bloqués dans le Chromium dédié, compteur réseau de Node sur le moteur de production.
+
 ## Points à valider
+
+- **Rattacher la compilation des listes (F-E5)** à une tâche de 10-taches (suivi de 2.4, ou 2.8 si le banc doit d'abord confirmer), et décider de l'affichage « mouvant » d'E5 en attendant.
 
 - **Commanditaire :** accepter Stagehand 3.7.3 (111 paquets, SDK Browserbase installé mais inerte, trois dérogations de chaîne d'approvisionnement) alors que la boucle maison est 5 fois moins chère par réussite et seule compatible `agent_step`, mais écartée pour un faux succès. La règle est appliquée telle quelle ; la décision est qualifiée de « fragile ». Toute réhabilitation de la boucle maison (mémoire des pages vues corrigée) exige un nouvel ADR et un nouveau spike, pas un ajustement de celui-ci.
 - E6 limité au serveur pour le moteur retenu (porte 0.6b) et formulation de la tâche 2.4 pour F-E5 (4/10).

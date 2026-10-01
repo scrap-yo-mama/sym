@@ -10,6 +10,17 @@
 // - E5 `hybrid` : étapes déclaratives (aucun code généré), étapes `agent` déléguées au moteur, extraction par libellés
 //   ou déléguée au rôle `extract`. Sans étape ni extraction déléguée : aucun appel LLM, contexte du pool.
 // Toute sortie est validée contre `output_schema` (INV1). Coût LLM et jetons rendus pour l'essai (INV2, INV4).
+// Correctifs de vérification :
+// - plafond `max_cost_usd` tenu PENDANT l'essai (attempt-cost.ts) : un compteur partagé par le proxy et le LLM ; chaque
+//   run de moteur reçoit le reliquat, le client `extract` est contrôlé avant chaque envoi ; prix absent : coût null,
+//   jamais 0, et plafond intenable (`run_budget_exceeded`, `llm_price_missing`) ;
+// - garde de classification (1.7) sur les documents du cadre principal en E5 et E6 : corps borné TOUJOURS lu (défi servi
+//   en 200), et attendue avant chaque appel au modèle et avant toute extraction : l'agent ne reçoit jamais une page
+//   refusée (INV6) ;
+// - écritures (méthode autre que GET, HEAD, OPTIONS) refusées sur le pool sans `allow_write_actions`, navigation ou non
+//   (XHR, fetch, beacon) ; une trace E6 dont une écriture a été coupée n'est jamais compilée (08 §4 mesure 4) ;
+// - une trace E6 à plusieurs enregistrements (liste, pagination par bouton : F-E5) n'est pas compilée
+//   (`list_not_compilable`) : point faible connu de l'ADR 0001, E5 « mouvant » ; voir l'ADR (suivi de 2.4).
 import {
   compileAgentTrace,
   hybridUsesLlm,
@@ -23,15 +34,35 @@ import {
   type AgentSpec,
   type HybridSpec,
 } from '@runtime/core';
-import { extractRecordsWithLlm, extractLabelsFromPage, readPageView, recordsSchema, runHybridSteps, extractPromptVersion, type HybridFailure, type SemanticRecorder } from '@runtime/agent';
-import { classifyExchange, classifyTransportError, fetchTransport, type DeclarativeRunResult, type ExecFailure, type HttpExchange, type RequestPacer } from '@runtime/core/exec';
+import {
+  extractRecordsWithLlm,
+  extractLabelsFromPage,
+  readPageView,
+  recordsSchema,
+  runHybridSteps,
+  extractPromptVersion,
+  type HybridFailure,
+  type SemanticRecorder,
+  type StagehandEngineHooks,
+} from '@runtime/agent';
+import {
+  classifyExchange,
+  classifyTransportError,
+  fetchTransport,
+  type ClassifyContext,
+  type DeclarativeRunResult,
+  type ExecFailure,
+  type HttpExchange,
+  type RequestPacer,
+} from '@runtime/core/exec';
 import { DomainNotAllowedError, guardedGoto, type BrowserEgress, type NetworkSession, type SsrfGuard } from '@runtime/core/net';
 import { LlmError, toFailureClass, type LlmClient, type RunUsage } from '@runtime/llm';
 import type { BrowserContext, Page, Request, Response } from 'playwright-core';
-import { boundedContent, TOO_LARGE } from '../browser/bounded.js';
+import { boundedContent, boundedDocumentBody, TOO_LARGE, trackDecodedSizes, type DecodedSizes } from '../browser/bounded.js';
 import type { AgentBrowser, AgentBrowserOptions } from '../browser/agent-browser.js';
 import type { BrowserPool } from '../browser/pool.js';
 import { hostAllowed, isMainNavigation, openRunContext, trackStrategyRequests } from '../browser/run-context.js';
+import { AttemptBudgetExceededError, AttemptCost, type RunBudget } from './attempt-cost.js';
 
 /** Coût et traçabilité LLM d'un essai (`run_attempts`). `usd = null` si un prix manque (jamais 0, 08 §1). */
 export type LlmSpend = {
@@ -53,8 +84,14 @@ export type AgentOutcome = {
   readonly domainBlocked?: number;
 };
 
-/** Moteur d'un essai : construit sur le Chromium dédié (Stagehand par `cdpUrl`), ou `null` si le rôle `agent` manque. */
-export type EngineFactory = (args: { cdpUrl: string; recorder: SemanticRecorder }) => { engine: AgentEngine; modelId: string; promptVersion: string } | null;
+/** Garde de classification (1.7) : `classifyExchange` par défaut. */
+type ClassifyFn = (exchange: HttpExchange, context?: ClassifyContext) => ExecFailure | null;
+
+/**
+ * Moteur d'un essai : construit sur le Chromium dédié (Stagehand par `cdpUrl`), ou `null` si le rôle `agent` manque.
+ * `hooks` : plafond de coût partagé de l'essai et garde de classification, à passer au moteur (StagehandEngineOptions).
+ */
+export type EngineFactory = (args: { cdpUrl: string; recorder: SemanticRecorder; hooks: StagehandEngineHooks }) => { engine: AgentEngine; modelId: string; promptVersion: string } | null;
 
 const NAVIGATION_TIMEOUT_MS = 30_000;
 const fail = (failure: ExecFailure, requests = 0): DeclarativeRunResult => ({ ok: false, failure, pages: 0, requests });
@@ -98,8 +135,17 @@ function addSpend(a: LlmSpend | null, b: LlmSpend | null): LlmSpend | null {
   };
 }
 
-/** Erreur du client LLM → classe `llm_*` (08 §1) ; toute autre erreur → classe de transport. */
+/** Plafond de l'essai atteint, ou intenable (coût LLM inconnu : prix absent). */
+function budgetFailure(unpriced: boolean): ExecFailure {
+  return { failure_class: 'run_budget_exceeded', retryable: false, detail: unpriced ? 'llm_price_missing' : 'max_cost_usd' };
+}
+const budgetOf = (cost: AttemptCost): ExecFailure => budgetFailure(cost.llmUsd() === null);
+/** Erreur portant sa classe d'essai (levée dans une étape, lue par `stepError`). */
+const withFailure = (failure: ExecFailure): Error => Object.assign(new Error(failure.detail), { execFailure: failure });
+
+/** Erreur du client LLM → classe `llm_*` (08 §1) ; plafond de l'essai → `run_budget_exceeded` ; sinon, transport. */
 function llmFailure(error: unknown): ExecFailure {
+  if (error instanceof AttemptBudgetExceededError) return budgetFailure(error.unpriced);
   if (error instanceof LlmError) {
     const retryable = ['overloaded', 'timeout', 'rate_limited', 'empty_response', 'network'].includes(error.class);
     return { failure_class: toFailureClass(error.class), retryable, detail: `llm_${error.class}` };
@@ -134,7 +180,11 @@ export type AgentFetchOptions = {
   readonly session?: Pick<NetworkSession, 'fetch'>;
   readonly browser?: { readonly pool: BrowserPool; readonly egress: BrowserEgress; readonly guard: SsrfGuard };
   readonly pacer?: RequestPacer;
-  readonly classify?: (exchange: HttpExchange) => ExecFailure | null;
+  readonly classify?: ClassifyFn;
+  /** Plafond de coût de l'essai (proxy + LLM). */
+  readonly maxCostUsd: number;
+  /** Compteur partagé de l'essai (l'exécuteur de stratégie y branche le proxy) ; défaut : un compteur propre. */
+  readonly cost?: AttemptCost;
 };
 
 async function fetchPage(options: AgentFetchOptions): Promise<HttpExchange> {
@@ -179,10 +229,13 @@ export async function runAgentFetchExecutor(options: AgentFetchOptions): Promise
   }
   await options.pacer?.report(url, { status: exchange.status, retryAfter: exchange.headers['retry-after'] ?? null });
   // Garde de classification AVANT tout prompt (04 §7, 1.7) : un refus ou un défi n'atteint jamais le LLM.
-  const refused = (options.classify ?? classifyExchange)(exchange);
+  const refused = (options.classify ?? classifyExchange)(exchange, { requestUrl: url });
   if (refused !== null) return { result: fail(refused, 1), llm: null };
   const { text, truncated } = pageText(exchange, options.spec.limits.max_input_chars);
   if (text.trim() === '') return { result: fail({ failure_class: 'extraction', retryable: false, detail: 'empty_page' }, 1), llm: null };
+  const cost = options.cost ?? new AttemptCost(options.maxCostUsd);
+  cost.addLlm(() => options.llm.usage().cost_usd);
+  if (cost.exhausted()) return { result: fail(budgetOf(cost), 1), llm: null };
   const spend = () => spendFromUsage(options.llm.usage(), options.modelId, extractPromptVersion, null);
   try {
     const out = await extractRecordsWithLlm(options.llm, {
@@ -192,8 +245,13 @@ export async function runAgentFetchExecutor(options: AgentFetchOptions): Promise
       truncated,
       itemSchema: options.outputSchema,
       signal: AbortSignal.any([options.signal, AbortSignal.timeout(options.spec.limits.timeout_ms)]),
+      // Plafond tenu avant chaque envoi (premier appel, réparations, réessais).
+      beforeCall: () => cost.assertAvailable(),
     });
-    return { result: conform(out.records, options.outputSchema, 1), llm: spend() };
+    const llm = spend();
+    // Coût inconnu (prix absent) : jamais un succès dont le plafond n'a pas pu être tenu.
+    if (llm.usd === null) return { result: fail(budgetFailure(true), 1), llm };
+    return { result: conform(out.records, options.outputSchema, 1), llm };
   } catch (error) {
     if (options.signal.aborted) throw error;
     return { result: fail(llmFailure(error), 1), llm: spend() };
@@ -218,21 +276,40 @@ export type HybridOptions = {
   readonly pacer?: RequestPacer;
   readonly maxRequests?: number;
   readonly maxCostUsd: number;
-  /** Garde de classification (1.7) appliquée à chaque document du cadre principal ; défaut : le statut HTTP seul. */
-  readonly classify?: (exchange: HttpExchange) => ExecFailure | null;
+  /** Compteur partagé de l'essai (proxy + LLM) ; défaut : un compteur propre. */
+  readonly cost?: AttemptCost;
+  /** Garde de classification (1.7) appliquée à chaque document du cadre principal ; défaut : `classifyExchange`. */
+  readonly classify?: ClassifyFn;
 };
 
-const READ_METHODS = new Set(['GET', 'HEAD']);
+/** Méthodes de lecture (même verdict que `installDomainGuard`, playwright-channel.ts). */
+const READ_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
 /** Classes qui arrêtent l'agent ou le script (INV6, 04 §3.3) ; un 404 ou un 5xx n'arrête pas : l'agent peut revenir. */
 const STOP_CLASSES: ReadonlySet<string> = new Set(['blocked_by_protection', 'forbidden', 'rate_limited', 'robots_disallowed', 'auth_required', 'payment_required', 'account_limit']);
 const MAX_CLASSIFIED_BODY = 5_000_000;
+/** Attente au plus du corps d'un document à classer (un document qui ne finit pas n'est classé que sur statut et en-têtes). */
+const CLASSIFY_BODY_TIMEOUT_MS = 10_000;
+
+type DocumentWatch = {
+  /** Résout quand tous les documents vus jusqu'ici sont classés. */
+  settled(): Promise<void>;
+  /** Premier refus vu (classe d'arrêt), s'il y en a un. */
+  refusal(): ExecFailure | undefined;
+  /** Attend les classements en cours, puis lève (`execFailure`) si un document a été refusé. */
+  gate(): Promise<void>;
+  dispose(): void;
+};
 
 /**
- * Garde de classification sur les documents du cadre principal (INV6, 04 §7) : un refus (401, 403, 429, défi servi en
- * 200 vu par la garde de 1.7…) est signalé AUSSITÔT, et l'appelant arrête l'agent ou le script ; aucune étape ni aucun
- * appel au modèle ne suit. Les sauts de redirection (3xx) ne sont pas classés.
+ * Garde de classification sur les documents du cadre principal (INV6, 04 §7) : chaque document 2xx HTML est lu (corps
+ * borné, taille décodée vue par CDP si `sizes`) puis classé par `classify` (classifieur de 1.7 par défaut : défi servi
+ * en 200 compris). Un refus est signalé AUSSITÔT (`onRefused` : l'appelant arrête l'agent ou le script) ; `gate` est
+ * attendue avant chaque appel au modèle et avant toute extraction : aucun prompt ne part pendant qu'un document est en
+ * cours de classement, ni après un refus. Les sauts de redirection (3xx) ne sont pas classés.
  */
-function watchDocuments(context: BrowserContext, classify: ((exchange: HttpExchange) => ExecFailure | null) | undefined, onRefused: (failure: ExecFailure) => void): () => void {
+function watchDocuments(context: BrowserContext, classify: ClassifyFn | undefined, onRefused: (failure: ExecFailure) => void, sizes?: DecodedSizes): DocumentWatch {
+  const pending = new Set<Promise<void>>();
+  let first: ExecFailure | undefined;
   const handler = (response: Response) => {
     const request = response.request();
     let main: boolean;
@@ -244,27 +321,55 @@ function watchDocuments(context: BrowserContext, classify: ((exchange: HttpExcha
     }
     const status = response.status();
     if (!main || (status >= 300 && status < 400)) return;
-    void (async () => {
+    let origin: Request = request;
+    for (let r = request.redirectedFrom(); r !== null; r = r.redirectedFrom()) origin = r;
+    const work = (async () => {
       const headers = response.headers();
       let body = '';
-      if (classify !== undefined && status >= 200 && status < 300 && /html/i.test(headers['content-type'] ?? 'text/html')) {
-        const declared = Number(headers['content-length'] ?? NaN);
-        if (!(Number.isFinite(declared) && declared > MAX_CLASSIFIED_BODY)) body = (await response.text().catch(() => '')).slice(0, MAX_CLASSIFIED_BODY);
+      if (status >= 200 && status < 300 && /html/i.test(headers['content-type'] ?? 'text/html')) {
+        const raw = await boundedDocumentBody(response, MAX_CLASSIFIED_BODY, CLASSIFY_BODY_TIMEOUT_MS, sizes).catch(() => undefined);
+        body = typeof raw === 'string' ? raw : '';
       }
-      const refused = (classify ?? classifyExchange)({ status, headers, body, url: response.url() });
-      if (refused !== null && STOP_CLASSES.has(refused.failure_class)) onRefused(refused);
-    })();
+      const refused = (classify ?? classifyExchange)({ status, headers, body, url: response.url() }, { requestUrl: origin.url() });
+      if (refused !== null && STOP_CLASSES.has(refused.failure_class)) {
+        first ??= refused;
+        onRefused(refused);
+      }
+    })().catch(() => undefined);
+    pending.add(work);
+    void work.finally(() => pending.delete(work));
   };
   context.on('response', handler);
-  return () => context.off('response', handler);
+  const settled = async (): Promise<void> => {
+    while (pending.size > 0) await Promise.all([...pending]);
+  };
+  return {
+    settled,
+    refusal: () => first,
+    gate: async () => {
+      await settled();
+      if (first !== undefined) throw withFailure(first);
+    },
+    dispose: () => context.off('response', handler),
+  };
 }
 
-/** Admission des navigations d'un E5 sur le pool : écritures (08 §4 mesure 4), plafond de requêtes, cadence (1.9). */
+/** Taille décodée des documents de `page` (CDP), pour lire sans risque un corps compressé ; `undefined` si indisponible. */
+async function decodedSizes(context: BrowserContext, page: Page): Promise<DecodedSizes | undefined> {
+  const cdp = await context.newCDPSession(page).catch(() => undefined);
+  return cdp === undefined ? undefined : trackDecodedSizes(cdp).catch(() => undefined);
+}
+
+/**
+ * Admission des requêtes d'un E5 sur le pool : écritures refusées sans `allow_write_actions` pour TOUTE requête (XHR,
+ * fetch, beacon, formulaire : 08 §4 mesure 4, même verdict que `installDomainGuard`), puis, sur les navigations,
+ * plafond de requêtes et cadence (1.9).
+ */
 function navigationAdmission(options: Pick<HybridOptions, 'allowWriteActions' | 'pacer' | 'maxRequests'>): (request: Request) => Promise<boolean> {
   let documents = 0;
   return async (request) => {
-    if (!request.isNavigationRequest()) return true;
     if (!options.allowWriteActions && !READ_METHODS.has(request.method().toUpperCase())) return false;
+    if (!request.isNavigationRequest()) return true;
     if (request.redirectedFrom() !== null) return true;
     if (options.maxRequests !== undefined && documents >= options.maxRequests) return false;
     if (options.pacer !== undefined) {
@@ -278,14 +383,19 @@ function navigationAdmission(options: Pick<HybridOptions, 'allowWriteActions' | 
 
 const hybridFail = (f: HybridFailure): DeclarativeRunResult => fail({ failure_class: f.failure_class, retryable: false, detail: f.detail }, 1);
 
-/** Navigation gardée d'une étape E5 : schéma et garde SSRF, puis verrou de domaines sur l'URL finale. */
-function gotoFor(page: Page, guard: SsrfGuard, allowedHosts: readonly string[]): (url: string) => Promise<void> {
+/**
+ * Navigation gardée d'une étape E5 : schéma et garde SSRF, puis verrou de domaines sur l'URL finale, puis garde de
+ * classification sur le document servi (corps lu et classé par `watch`, classifieur de l'option ou de 1.7) ; un statut
+ * d'échec qui n'arrête pas l'agent (404, 5xx) arrête quand même une navigation demandée par le script.
+ */
+function gotoFor(page: Page, guard: SsrfGuard, allowedHosts: readonly string[], watch: DocumentWatch, classify: ClassifyFn | undefined): (url: string) => Promise<void> {
   return async (url) => {
     const response = await guardedGoto(page, url, guard, { waitUntil: 'load' as const, timeout: NAVIGATION_TIMEOUT_MS });
     if (response !== null && !hostAllowed(response.url(), allowedHosts)) throw new DomainNotAllowedError(new URL(response.url()).hostname);
+    await watch.gate();
     const status = response?.status() ?? 0;
-    const refused = classifyExchange({ status, headers: response?.headers() ?? {}, body: '', url });
-    if (refused !== null) throw Object.assign(new Error('navigation refusée'), { execFailure: refused });
+    const refused = (classify ?? classifyExchange)({ status, headers: response?.headers() ?? {}, body: '', url: response?.url() ?? url }, { requestUrl: url });
+    if (refused !== null) throw withFailure(refused);
   };
 }
 
@@ -306,13 +416,9 @@ async function runHybridWithoutLlm(options: HybridOptions, onPage?: (page: Page)
     const rc = await openRunContext(browser, { egressServer: options.egress.server, allowedHosts: spec.allowed_hosts, admit: navigationAdmission(options) });
     const strategy = trackStrategyRequests(rc.context, spec.allowed_hosts);
     const stop = new AbortController();
-    let refusal: ExecFailure | undefined;
-    const unwatch = watchDocuments(rc.context, options.classify, (f) => {
-      refusal ??= f;
-      stop.abort();
-    });
+    const watch = watchDocuments(rc.context, options.classify, () => stop.abort(), await decodedSizes(rc.context, rc.page));
     try {
-      const goto = gotoFor(rc.page, options.guard, spec.allowed_hosts);
+      const goto = gotoFor(rc.page, options.guard, spec.allowed_hosts, watch, options.classify);
       let failure: HybridFailure | null;
       try {
         failure = await strategy.during(isMainNavigation(rc.page), () =>
@@ -320,17 +426,22 @@ async function runHybridWithoutLlm(options: HybridOptions, onPage?: (page: Page)
         );
       } catch (error) {
         if (options.signal.aborted) throw error;
+        await watch.settled();
+        const refusal = watch.refusal();
         if (refusal !== undefined) return fail(refusal, 1);
         return fail(strategy.cut() ? { failure_class: 'code_error', retryable: false, detail: 'domain_not_allowed' } : stepError(error), 1);
       }
-      if (refusal !== undefined) return fail(refusal, 1);
+      // Garde avant toute lecture de la page (INV6) : tous les documents vus sont classés, aucun refus.
+      await watch.settled();
+      if (watch.refusal() !== undefined) return fail(watch.refusal()!, 1);
       if (failure !== null) return hybridFail(failure);
       if (onPage !== undefined) await onPage(rc.page);
       const extracted = await extractLabelsFromPage(rc.page, spec);
-      if (refusal !== undefined) return fail(refusal, 1);
+      await watch.settled();
+      if (watch.refusal() !== undefined) return fail(watch.refusal()!, 1);
       return extracted.ok ? conform(extracted.records, options.outputSchema, spec.steps.length + 1) : hybridFail(extracted.failure);
     } finally {
-      unwatch();
+      watch.dispose();
       await rc.close();
     }
   });
@@ -342,6 +453,11 @@ export async function runHybridExecutor(options: HybridOptions): Promise<AgentOu
   if (!hybridUsesLlm(spec)) return { result: await runHybridWithoutLlm(options), llm: null };
   if (options.agentBrowser === undefined) return { result: fail({ failure_class: 'code_error', retryable: false, detail: 'browser_disabled' }), llm: null };
   const needsEngine = spec.steps.some((s) => s.op === 'agent');
+  const cost = options.cost ?? new AttemptCost(options.maxCostUsd);
+  const extractLlm = options.llm ?? null;
+  if (extractLlm !== null) cost.addLlm(() => extractLlm.usage().cost_usd);
+  // Une seule échéance pour tout l'essai : étapes, étapes déléguées et extraction (timeout_ms, comme E4).
+  const deadline = AbortSignal.timeout(spec.limits.timeout_ms);
   const ab = await options.agentBrowser({
     allowedHosts: spec.allowed_hosts,
     allowWriteActions: options.allowWriteActions,
@@ -350,71 +466,97 @@ export async function runHybridExecutor(options: HybridOptions): Promise<AgentOu
   });
   let spend: LlmSpend | null = null;
   const stop = new AbortController();
-  let refusal: ExecFailure | undefined;
-  const unwatch = watchDocuments(ab.context, options.classify, (f) => {
-    refusal ??= f;
-    stop.abort();
-  });
+  const watch = watchDocuments(ab.context, options.classify, () => stop.abort(), await decodedSizes(ab.context, ab.page));
   const signal = AbortSignal.any([options.signal, stop.signal]);
+  /** Run de moteur en cours (étape `agent`) : reliquat et dépense de l'essai faite ailleurs. */
+  let current: RunBudget | undefined;
+  const hooks: StagehandEngineHooks = {
+    spentElsewhereUsd: () => current?.spentElsewhereUsd() ?? 0,
+    onCost: (usd) => current?.report(usd),
+    beforeModelCall: () => watch.gate(),
+  };
   try {
-    const made = needsEngine ? (options.engineFor?.({ cdpUrl: ab.cdpUrl, recorder: ab.recorder }) ?? null) : null;
+    const made = needsEngine ? (options.engineFor?.({ cdpUrl: ab.cdpUrl, recorder: ab.recorder, hooks }) ?? null) : null;
     if (needsEngine && made === null) return { result: fail({ failure_class: 'code_error', retryable: false, detail: 'llm_not_configured' }), llm: null };
-    const agentStep = async (instruction: string) => {
-      const run = await made!.engine.run(
-        {
-          taskId: 'hybrid_step',
-          instruction,
-          startUrl: '',
-          allowedDomains: spec.allowed_hosts,
-          outputSchema: { type: 'object' },
-          allowWriteActions: options.allowWriteActions,
-          limits: { maxSteps: 10, maxDurationMs: spec.limits.step_timeout_ms * 4, maxCostUsd: options.maxCostUsd },
-        },
-        { model: { modelId: made!.modelId, temperature: 0, promptVersion: made!.promptVersion }, signal },
-      );
+    const agentStep = async (instruction: string): Promise<{ ok: true } | { ok: false; failure: HybridFailure }> => {
+      await watch.gate();
+      // Chaque étape reçoit le RELIQUAT de l'essai, jamais le plafond entier ; plus rien : aucun appel.
+      if (cost.exhausted()) throw withFailure(budgetOf(cost));
+      const budget = cost.openRun();
+      current = budget;
+      let run: AgentRunResult;
+      try {
+        run = await made!.engine.run(
+          {
+            taskId: 'hybrid_step',
+            instruction,
+            startUrl: '',
+            allowedDomains: spec.allowed_hosts,
+            outputSchema: { type: 'object' },
+            allowWriteActions: options.allowWriteActions,
+            limits: { maxSteps: 10, maxDurationMs: spec.limits.step_timeout_ms * 4, maxCostUsd: budget.limitUsd },
+          },
+          { model: { modelId: made!.modelId, temperature: 0, promptVersion: made!.promptVersion }, signal: AbortSignal.any([signal, deadline]) },
+        );
+      } finally {
+        current = undefined;
+      }
+      budget.report(run.costUsd);
       spend = addSpend(spend, spendFromAgent(run, made!.modelId, made!.promptVersion, `${made!.engine.id}@${made!.engine.version}`));
-      return run.status === 'done' ? ({ ok: true } as const) : ({ ok: false, failure: { failure_class: 'extraction', detail: `agent_${run.status}` } } as const);
+      await watch.gate();
+      if (run.status === 'done') return { ok: true };
+      const failure = agentFailure(run, cost);
+      if (failure.failure_class === 'extraction') return { ok: false, failure: { failure_class: 'extraction', detail: failure.detail } };
+      throw withFailure(failure);
     };
     let failure: HybridFailure | null;
     try {
       failure = await runHybridSteps(ab.page, spec, {
-        goto: gotoFor(ab.page, options.guard, spec.allowed_hosts),
+        goto: gotoFor(ab.page, options.guard, spec.allowed_hosts, watch, options.classify),
         agentStep,
-        signal: AbortSignal.any([signal, AbortSignal.timeout(spec.limits.timeout_ms)]),
+        signal: AbortSignal.any([signal, deadline]),
       });
     } catch (error) {
       if (options.signal.aborted) throw error;
-      return { result: fail(refusal ?? stepError(error), 1), llm: spend };
+      await watch.settled();
+      return { result: fail(watch.refusal() ?? stepError(error), 1), llm: spend };
     }
     // Refus vu sur un document (INV6) : arrêt, aucune extraction, aucun appel au modèle de plus.
-    if (refusal !== undefined) return { result: fail(refusal, 1), llm: spend };
+    await watch.settled();
+    if (watch.refusal() !== undefined) return { result: fail(watch.refusal()!, 1), llm: spend };
     if (failure !== null) return { result: hybridFail(failure), llm: spend };
     if (spec.extract.mode === 'labels') {
       const extracted = await extractLabelsFromPage(ab.page, spec);
       return { result: extracted.ok ? conform(extracted.records, options.outputSchema, spec.steps.length + 1) : hybridFail(extracted.failure), llm: spend };
     }
-    if (options.llm === undefined || options.llm === null) return { result: fail({ failure_class: 'code_error', retryable: false, detail: 'llm_not_configured' }), llm: spend };
+    if (extractLlm === null) return { result: fail({ failure_class: 'code_error', retryable: false, detail: 'llm_not_configured' }), llm: spend };
+    // Reliquat contrôlé AVANT l'extraction déléguée : plus rien, aucun appel.
+    if (cost.exhausted()) return { result: fail(budgetOf(cost), 1), llm: spend };
     const view = await readPageView(ab.page, spec.limits.max_input_chars * 10);
     if (view === null) return { result: fail({ failure_class: 'extraction', retryable: false, detail: 'response_too_large' }, 1), llm: spend };
     const text = view.text.slice(0, spec.limits.max_input_chars);
+    const extractSpend = () => spendFromUsage(extractLlm.usage(), options.llmModelId ?? null, extractPromptVersion, null);
     try {
-      const out = await extractRecordsWithLlm(options.llm, {
+      const out = await extractRecordsWithLlm(extractLlm, {
         instruction: spec.extract.instruction,
         pageText: text,
         pageUrl: ab.page.url(),
         truncated: view.text.length > text.length,
         itemSchema: options.outputSchema,
-        signal: options.signal,
+        signal: AbortSignal.any([options.signal, deadline]),
+        beforeCall: () => cost.assertAvailable(),
       });
-      spend = addSpend(spend, spendFromUsage(options.llm.usage(), options.llmModelId ?? null, extractPromptVersion, null));
+      spend = addSpend(spend, extractSpend());
+      if (spend?.usd === null) return { result: fail(budgetFailure(true), 1), llm: spend };
       return { result: conform(out.records, options.outputSchema, spec.steps.length + 1), llm: spend };
     } catch (error) {
       if (options.signal.aborted) throw error;
-      spend = addSpend(spend, spendFromUsage(options.llm.usage(), options.llmModelId ?? null, extractPromptVersion, null));
+      spend = addSpend(spend, extractSpend());
+      if (deadline.aborted && !(error instanceof AttemptBudgetExceededError)) return { result: fail({ failure_class: 'transient', retryable: true, detail: 'extract_timeout' }, 1), llm: spend };
       return { result: fail(llmFailure(error), 1), llm: spend };
     }
   } finally {
-    unwatch();
+    watch.dispose();
     await ab.close();
   }
 }
@@ -434,18 +576,22 @@ export type AgentOptions = {
   readonly pacer?: RequestPacer;
   readonly maxRequests?: number;
   readonly maxCostUsd: number;
+  /** Compteur partagé de l'essai (proxy + LLM) ; défaut : un compteur propre. */
+  readonly cost?: AttemptCost;
   readonly taskId: string;
   /** Version E6 courante (origine de la stratégie compilée). */
   readonly version: number | null;
-  /** Garde de classification (1.7) sur chaque document du cadre principal ; défaut : le statut HTTP seul. */
-  readonly classify?: (exchange: HttpExchange) => ExecFailure | null;
+  /** Garde de classification (1.7) sur chaque document du cadre principal ; défaut : `classifyExchange`. */
+  readonly classify?: ClassifyFn;
 };
 
-function agentFailure(run: AgentRunResult): ExecFailure {
+function agentFailure(run: AgentRunResult, cost?: AttemptCost): ExecFailure {
   const cls = run.failureClass ?? '';
-  if (cls === 'run_budget_exceeded') return { failure_class: 'run_budget_exceeded', retryable: false, detail: 'max_cost_usd' };
+  if (cls === 'run_budget_exceeded') return budgetFailure(run.costUsd === null || (cost !== undefined && cost.llmUsd() === null));
   if (/^llm_[a-z0-9_]+$/.test(cls)) return { failure_class: cls as `llm_${string}`, retryable: false, detail: cls };
   if (cls === 'agent_toolset_not_closed') return { failure_class: 'code_error', retryable: false, detail: cls };
+  // Garde de l'appelant : la classe réelle est celle du document refusé (rendue par l'appelant) ; jamais une extraction.
+  if (cls === 'page_refused') return { failure_class: 'blocked_by_protection', retryable: false, detail: cls };
   if (run.status === 'timeout') return { failure_class: 'transient', retryable: true, detail: 'agent_timeout' };
   if (run.status === 'max_steps') return { failure_class: 'extraction', retryable: false, detail: 'agent_max_steps' };
   return { failure_class: 'extraction', retryable: false, detail: 'agent_no_output' };
@@ -454,11 +600,22 @@ function agentFailure(run: AgentRunResult): ExecFailure {
 /**
  * Compilation E6 → E5 vérifiée : étapes depuis la trace, puis rejeu 1 (contexte neuf, aucun LLM) pour induire
  * l'extraction par libellés sur la page atteinte, puis rejeu 2 (autre contexte neuf) de la stratégie complète, qui doit
- * rendre exactement l'enregistrement validé. Un seul enregistrement par run (fiche) ; sinon pas de compilation.
+ * rendre exactement l'enregistrement validé. Refusée :
+ * - si la garde a coupé une écriture pendant l'agent (`write_blocked`) : le clic qui l'a déclenchée, rejoué sur le pool,
+ *   deviendrait une écriture à chaque run (08 §4 mesure 4) ;
+ * - si la sortie compte plusieurs enregistrements (`list_not_compilable`) : l'extraction par libellés lit UNE fiche ; une
+ *   liste paginée par bouton (F-E5) reste rejouée par l'agent, point faible connu de l'ADR 0001 (E5 « mouvant »).
  */
-async function compileAndVerify(options: AgentOptions, run: AgentRunResult, records: readonly Record<string, unknown>[], engine: string): Promise<{ spec: HybridSpec } | { failure: string }> {
+async function compileAndVerify(
+  options: AgentOptions,
+  run: AgentRunResult,
+  records: readonly Record<string, unknown>[],
+  engine: string,
+  writesBlocked: number,
+): Promise<{ spec: HybridSpec } | { failure: string }> {
   if (options.pool === null) return { failure: 'browser_disabled' };
-  if (records.length !== 1) return { failure: 'not_single_record' };
+  if (writesBlocked > 0) return { failure: 'write_blocked' };
+  if (records.length !== 1) return { failure: 'list_not_compilable' };
   const steps = compileAgentTrace(run.steps, run.status, options.spec.allowed_hosts);
   if (!steps.ok) return { failure: steps.reason };
   const expected = records[0]!;
@@ -491,6 +648,7 @@ async function compileAndVerify(options: AgentOptions, run: AgentRunResult, reco
 
 /** E6 : l'agent pilote le Chromium dédié de bout en bout ; trace réussie compilée en E5 vérifiée. */
 export async function runAgentExecutor(options: AgentOptions): Promise<AgentOutcome> {
+  const cost = options.cost ?? new AttemptCost(options.maxCostUsd);
   const ab = await options.agentBrowser({
     allowedHosts: options.spec.allowed_hosts,
     allowWriteActions: options.allowWriteActions,
@@ -500,15 +658,18 @@ export async function runAgentExecutor(options: AgentOptions): Promise<AgentOutc
   let run: AgentRunResult;
   let made: ReturnType<EngineFactory>;
   let domainBlocked: number;
+  let writesBlocked: number;
   // Refus vu sur un document (401, 403, 429, défi…) : l'agent est arrêté aussitôt, sans autre action (INV6).
   const stop = new AbortController();
-  let refusal: ExecFailure | undefined;
-  const unwatch = watchDocuments(ab.context, options.classify, (f) => {
-    refusal ??= f;
-    stop.abort();
-  });
+  const watch = watchDocuments(ab.context, options.classify, () => stop.abort(), await decodedSizes(ab.context, ab.page));
+  // Le run reçoit le reliquat de l'essai ; la dépense faite ailleurs (proxy) est relue à chaque appel.
+  const budget = cost.openRun();
   try {
-    made = options.engineFor({ cdpUrl: ab.cdpUrl, recorder: ab.recorder });
+    made = options.engineFor({
+      cdpUrl: ab.cdpUrl,
+      recorder: ab.recorder,
+      hooks: { spentElsewhereUsd: () => budget.spentElsewhereUsd(), onCost: (usd) => budget.report(usd), beforeModelCall: () => watch.gate() },
+    });
     if (made === null) return { result: fail({ failure_class: 'code_error', retryable: false, detail: 'llm_not_configured' }), llm: null };
     const { engine, modelId, promptVersion } = made;
     const runTask = () => engine.run(
@@ -519,7 +680,7 @@ export async function runAgentExecutor(options: AgentOptions): Promise<AgentOutc
         allowedDomains: options.spec.allowed_hosts,
         outputSchema: recordsSchema(options.outputSchema) as unknown as Record<string, unknown>,
         allowWriteActions: options.allowWriteActions,
-        limits: { maxSteps: options.spec.limits.max_steps, maxDurationMs: options.spec.limits.timeout_ms, maxCostUsd: options.maxCostUsd },
+        limits: { maxSteps: options.spec.limits.max_steps, maxDurationMs: options.spec.limits.timeout_ms, maxCostUsd: budget.limitUsd },
       },
       { model: { modelId, temperature: 0, promptVersion }, signal: AbortSignal.any([options.signal, stop.signal]) },
     );
@@ -530,17 +691,23 @@ export async function runAgentExecutor(options: AgentOptions): Promise<AgentOutc
       // Construction refusée (mode non local, X1) ou erreur du moteur : jamais un succès, jamais un repli.
       return { result: fail({ failure_class: 'code_error', retryable: false, detail: 'agent_engine_error' }), llm: null };
     }
+    budget.report(run.costUsd);
+    await watch.settled();
     domainBlocked = ab.guard.blocked.filter((b) => b.reason === 'domain').length + options.egress.domainBlockedCount();
+    writesBlocked = ab.guard.blocked.filter((b) => b.reason === 'write').length;
   } finally {
-    unwatch();
+    watch.dispose();
     await ab.close();
   }
   const spend = spendFromAgent(run, made.modelId, made.promptVersion, `${made.engine.id}@${made.engine.version}`);
+  const refusal = watch.refusal();
   if (refusal !== undefined) return { result: fail(refusal, 1), llm: spend, domainBlocked };
-  if (run.status !== 'done') return { result: fail(agentFailure(run), 1), llm: spend, domainBlocked };
+  if (run.status !== 'done') return { result: fail(agentFailure(run, cost), 1), llm: spend, domainBlocked };
+  // Coût inconnu (prix absent) : plafond intenable, jamais un succès.
+  if (spend.usd === null) return { result: fail(budgetFailure(true), 1), llm: spend, domainBlocked };
   const items = (run.output as { items?: unknown } | null)?.items;
   const result = conform(Array.isArray(items) ? items : [], options.outputSchema, 1);
   if (!result.ok) return { result, llm: spend, domainBlocked };
-  const compiled = await compileAndVerify(options, run, result.records, `${made.engine.id}@${made.engine.version}`);
+  const compiled = await compileAndVerify(options, run, result.records, `${made.engine.id}@${made.engine.version}`, writesBlocked);
   return 'spec' in compiled ? { result, llm: spend, compiled: compiled.spec, domainBlocked } : { result, llm: spend, compileFailure: compiled.failure, domainBlocked };
 }

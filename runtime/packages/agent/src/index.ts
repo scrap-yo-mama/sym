@@ -9,7 +9,8 @@ export { HomeLoopEngine, HOME_LOOP_SYSTEM_PROMPT, homeLoopPromptVersion, frameSn
 export { AGENT_CONTEXT_OPTIONS, PlaywrightStepChannel, installDomainGuard, newAgentContext, type BlockedRequest, type DomainGuard, type DomainGuardOptions, type PlaywrightChannelOptions } from './playwright-channel.js';
 export { contentDigest, hasRef, hostAllowed, hostOf, semanticOf, truncateTree, DEFAULT_MAX_TREE_CHARS } from './snapshot.js';
 export { AgentStepProtocolError, AgentStepRefusedError, ThirdPartyEngineNotViaTunnelError, TunnelStepChannel, assertTunnelEngine, runAgentInTunnel, type AgentStepTransport, type AgentTunnelRunOptions } from './tunnel-channel.js';
-export { STAGEHAND_VERSION, StagehandEngine, jsonSchemaToZod, stagehandTrace, type StagehandEngineOptions, type StagehandLlmCall } from './stagehand-engine.js';
+export { STAGEHAND_VERSION, StagehandEngine, jsonSchemaToZod, stagehandTrace, type StagehandEngineHooks, type StagehandEngineOptions, type StagehandLlmCall } from './stagehand-engine.js';
+export { cleanUrlTokens, sanitizeModelPrompt, type PromptSanitizeOptions } from './stagehand-prompt.js';
 export {
   AgentToolsetNotClosedError,
   STAGEHAND_EXCLUDED_TOOLS,

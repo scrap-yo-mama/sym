@@ -397,7 +397,8 @@ export const runs = pgTable(
     outcome: text('outcome', { enum: RUN_OUTCOMES }),
     degradedReasons: text('degraded_reasons').array().notNull().default(sql`'{}'`),
     input: jsonb('input'),
-    costLlmUsd: usd('cost_llm_usd').notNull().default('0'),
+    // NULL : coût LLM inconnu (prix absent, 08 §1 ; migration 0012).
+    costLlmUsd: usd('cost_llm_usd').default('0'),
     costProxyUsd: usd('cost_proxy_usd').notNull().default('0'),
     tokensIn: bigint('tokens_in', { mode: 'number' }).notNull().default(0),
     tokensCached: bigint('tokens_cached', { mode: 'number' }).notNull().default(0),
@@ -440,7 +441,8 @@ export const runAttempts = pgTable(
     network: text('network', { enum: NETWORKS }).notNull(),
     resultClass: text('result_class').$type<AttemptResult>(), // CHECK : 0006_failure_class_unify
     estCostUsd: usd('est_cost_usd'),
-    costUsd: usd('cost_usd').notNull().default('0'),
+    // NULL : coût inconnu (prix absent, 08 §1 ; migration 0012).
+    costUsd: usd('cost_usd').default('0'),
     ms: integer('ms'),
     modelId: text('model_id'),
     promptVersion: text('prompt_version'),

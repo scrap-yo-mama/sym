@@ -176,7 +176,7 @@ type RunRow = {
   degraded_reasons: string[];
   failure_class: Run['failure_class'];
   retryable: boolean | null;
-  cost_llm_usd: string;
+  cost_llm_usd: string | null;
   cost_proxy_usd: string;
   tokens_in: string;
   tokens_cached: string;
@@ -193,7 +193,7 @@ type AttemptRow = {
   network: Run['attempts'][number]['network'];
   est_cost_usd: string | null;
   result_class: string | null;
-  cost_usd: string;
+  cost_usd: string | null;
   ms: number | null;
   model_id: string | null;
   prompt_version: string | null;
@@ -202,6 +202,8 @@ type AttemptRow = {
 
 /** Un montant `numeric(12,6)` en nombre, arrondi au micro-dollar. */
 const usd = (v: string | null): number => Math.round(Number(v ?? 0) * 1e6) / 1e6;
+/** Montant qui peut être inconnu (coût LLM sans prix, 08 §1) : null reste null, jamais 0. */
+const usdOrNull = (v: string | null): number | null => (v === null ? null : usd(v));
 
 /** Run au format du contrat (04b § 1), essais compris. Sous `withActor`, la RLS limite aux runs de l'acteur. */
 export async function readRun(db: Queryable, runId: string): Promise<Run | null> {
@@ -212,7 +214,7 @@ export async function readRun(db: Queryable, runId: string): Promise<Run | null>
     'SELECT execution, network, est_cost_usd, result_class, cost_usd, ms, model_id, prompt_version, engine FROM run_attempts WHERE run_id = $1 ORDER BY seq',
     [runId],
   );
-  const llm = usd(r.cost_llm_usd);
+  const llm = usdOrNull(r.cost_llm_usd);
   const proxy = usd(r.cost_proxy_usd);
   return {
     id: r.id,
@@ -230,13 +232,13 @@ export async function readRun(db: Queryable, runId: string): Promise<Run | null>
       network: a.network,
       est_cost_usd: usd(a.est_cost_usd),
       result: (a.result_class ?? 'ok') as Run['attempts'][number]['result'],
-      cost_usd: usd(a.cost_usd),
+      cost_usd: usdOrNull(a.cost_usd),
       ms: a.ms ?? 0,
       model_id: a.model_id,
       prompt_version: a.prompt_version,
       engine: a.engine,
     })),
-    cost: { llm_usd: llm, proxy_usd: proxy, total_usd: Math.round((llm + proxy) * 1e6) / 1e6 },
+    cost: { llm_usd: llm, proxy_usd: proxy, total_usd: llm === null ? null : Math.round((llm + proxy) * 1e6) / 1e6 },
     tokens: {
       in: Number(r.tokens_in),
       cached: Number(r.tokens_cached),
@@ -319,12 +321,13 @@ export async function setRunWaitingTunnel(db: Queryable, runId: string, jobId: s
 
 /**
  * Journalise un essai (INV2, INV4) et impute son coût et ses jetons au run, en une instruction : le coût du run est par
- * construction la somme de ses essais. Lève RunLeaseLostError si le run n'est plus à ce job.
+ * construction la somme de ses essais. Lève RunLeaseLostError si le run n'est plus à ce job. Un coût LLM inconnu
+ * (`llm_usd: null`, prix absent) rend l'essai et le run inconnus (NULL, jamais 0 ; 08 §1, INV4) : `NULL + x` reste NULL.
  */
 export async function recordAttempt(db: Queryable, runId: string, jobId: string, a: AttemptRecord): Promise<number> {
-  const llm = a.llm_usd ?? 0;
+  const llm = a.llm_usd === undefined ? 0 : a.llm_usd;
   const proxy = a.proxy_usd ?? 0;
-  if (llm < 0 || proxy < 0) throw new RangeError('coût négatif');
+  if ((llm !== null && llm < 0) || proxy < 0) throw new RangeError('coût négatif');
   const t = a.tokens ?? {};
   const { rows } = await db.query<{ seq: number }>(
     `WITH r AS (

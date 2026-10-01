@@ -6,7 +6,13 @@
 // - Chromium fourni par l'appelant (`cdpUrl`) : proxy d'egress de l'essai (verrou de domaines et garde SSRF à chaque
 //   saut), route Playwright en seconde couche ; Stagehand n'ouvre aucun navigateur et ne passe jamais par le tunnel
 //   (`agentStepCompatible: false`, E6 limité au serveur, 0.6b) ;
-// - plafonds d'étapes, de durée et de coût (`run_budget_exceeded`), température transmise par middleware ;
+// - plafonds d'étapes, de durée et de coût (`run_budget_exceeded`), température transmise par middleware ; le coût est
+//   contrôlé AVANT et après chaque appel, avec la dépense de l'essai faite ailleurs (proxy, autres appels) ; un appel non
+//   tarifé (prix absent) rend le plafond intenable : arrêt, coût null (jamais 0, 08 §1) ;
+// - prompts nettoyés dans le middleware, hors du LlmClient (stagehand-prompt.ts) : masquage `llm.redact` et jetons
+//   d'URL retirés, sur tout ce qui part au fournisseur (08 §1, 08 §4 mesure 5) ;
+// - garde de l'appelant attendue avant chaque appel (`beforeModelCall`) : classification des documents de la page en
+//   cours (défi servi en 200 compris) ; un refus arrête le run SANS appel (INV6) ;
 // - trace : une étape par outil d'action, avec la cible sémantique (rôle + nom accessible) des clics, lue par
 //   l'enregistreur (semantic-recorder.ts) : base de la compilation E6 → E5. Aucun contenu de page dans la trace.
 // Le contenu des pages reste une donnée non fiable : la consigne de l'utilisateur est la seule instruction ; Stagehand
@@ -16,10 +22,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Stagehand, type ModelConfiguration } from '@browserbasehq/stagehand';
 import type { AgentEngine, AgentRunContext, AgentRunResult, AgentRunStatus, AgentTask, AgentTraceStep } from '@runtime/core';
-import { computeUsage, type ModelPrice, type RawUsage } from '@runtime/llm';
+import { computeUsage, createRedactor, type ModelPrice, type RawUsage, type RedactConfig } from '@runtime/llm';
 import { z } from 'zod';
 import type { SemanticClick, SemanticRecorder } from './semantic-recorder.js';
 import { AgentToolsetNotClosedError, assertStagehandLocalOnly, STAGEHAND_EXCLUDED_TOOLS, toolsOutsideClosedList } from './stagehand-guards.js';
+import { sanitizeModelPrompt } from './stagehand-prompt.js';
 
 export const STAGEHAND_VERSION = '3.7.3';
 
@@ -32,7 +39,20 @@ export interface StagehandLlmCall {
   readonly toolNames: readonly string[];
 }
 
-export interface StagehandEngineOptions {
+/** Points d'accroche de l'exécuteur de l'essai (plafond de coût partagé, garde de classification). */
+export interface StagehandEngineHooks {
+  /**
+   * Dépense de l'essai faite hors de ce run depuis son début (proxy, autres appels LLM) ; null : inconnue. Le run s'arrête
+   * quand son coût plus cette dépense atteint `task.limits.maxCostUsd`.
+   */
+  readonly spentElsewhereUsd?: () => number | null;
+  /** Coût cumulé du run après chaque appel au modèle (null : non tarifé). */
+  readonly onCost?: (usd: number | null) => void;
+  /** Attendu avant chaque appel au modèle ; rejeter arrête le run sans appel (page refusée, INV6). */
+  readonly beforeModelCall?: () => Promise<void>;
+}
+
+export interface StagehandEngineOptions extends StagehandEngineHooks {
   /** Point CDP du Chromium dédié à l'essai (ouvert par l'appelant, derrière le proxy d'egress). */
   readonly cdpUrl: string;
   readonly baseURL: string;
@@ -44,6 +64,8 @@ export interface StagehandEngineOptions {
   readonly onLlmCall?: (call: StagehandLlmCall) => void;
   /** Environnement contrôlé par `assertStagehandLocalOnly` (défaut : celui du processus). */
   readonly env?: NodeJS.ProcessEnv;
+  /** `llm.redact` des réglages (même règle que le LlmClient : absent, aucun masquage). */
+  readonly redact?: RedactConfig;
 }
 
 /** JSON Schema (sous-ensemble) vers Zod : `execute({ output })` attend un objet Zod. Ajv revalide hors du moteur (INV1). */
@@ -170,7 +192,9 @@ export class StagehandEngine implements AgentEngine {
     const timer = setTimeout(() => controller.abort(new Error('timeout')), task.limits.maxDurationMs);
     const signal = context.signal === undefined ? controller.signal : AbortSignal.any([controller.signal, context.signal]);
     let costExceeded = false;
+    let pageRefused = false;
     let toolsetViolation: AgentToolsetNotClosedError | undefined;
+    const redactor = this.#opts.redact === undefined ? undefined : createRedactor(this.#opts.redact);
 
     const cost = (): { usd: number | null; usage: AgentRunResult['usage'] } => {
       let known = 0;
@@ -189,9 +213,33 @@ export class StagehandEngine implements AgentEngine {
       return { usd: unpriced ? null : known, usage: u };
     };
 
+    /** Plafond de coût : coût du run + dépense ailleurs ; inconnu (non tarifé) = intenable. Vrai si le run doit s'arrêter. */
+    const overBudget = (): boolean => {
+      const own = cost().usd;
+      const elsewhere = this.#opts.spentElsewhereUsd?.() ?? 0;
+      return own === null || elsewhere === null || own + elsewhere >= task.limits.maxCostUsd;
+    };
+    const stopForBudget = (): Error => {
+      costExceeded = true;
+      const error = new Error('run_budget_exceeded');
+      controller.abort(error);
+      return error;
+    };
+
     const middleware: Middleware = {
-      // Liste fermée (08 §4 mesure 3) contrôlée sur ce que Stagehand propose réellement au modèle, avant l'appel.
+      // Avant CHAQUE appel : garde de l'appelant (page refusée), plafond de coût, liste fermée d'outils (08 §4 mesure 3)
+      // contrôlée sur ce que Stagehand propose réellement au modèle, puis prompt nettoyé (masquage, jetons d'URL).
       transformParams: async ({ params }) => {
+        if (this.#opts.beforeModelCall !== undefined) {
+          try {
+            await this.#opts.beforeModelCall();
+          } catch (error) {
+            pageRefused = true;
+            controller.abort(error);
+            throw error;
+          }
+        }
+        if (overBudget()) throw stopForBudget();
         const names = (params.tools ?? []).map((t) => t.name);
         const outside = toolsOutsideClosedList(names);
         if (outside.length > 0) {
@@ -199,7 +247,8 @@ export class StagehandEngine implements AgentEngine {
           controller.abort(toolsetViolation);
           throw toolsetViolation;
         }
-        return { ...params, temperature };
+        const prompt = sanitizeModelPrompt(params.prompt, { ...(redactor === undefined ? {} : { redactor }), instruction: task.instruction });
+        return { ...params, prompt, temperature };
       },
       wrapGenerate: async ({ doGenerate, params }) => {
         const result = await doGenerate();
@@ -214,11 +263,8 @@ export class StagehandEngine implements AgentEngine {
         const call: StagehandLlmCall = { temperatureSent: params.temperature, usage: raw, toolNames };
         calls.push(call);
         this.#opts.onLlmCall?.(call);
-        const spent = cost().usd;
-        if (spent !== null && spent >= task.limits.maxCostUsd) {
-          costExceeded = true;
-          controller.abort(new Error('run_budget_exceeded'));
-        }
+        this.#opts.onCost?.(cost().usd);
+        if (overBudget()) stopForBudget();
         return result;
       },
     };
@@ -282,6 +328,9 @@ export class StagehandEngine implements AgentEngine {
       if (toolsetViolation !== undefined) {
         status = 'error';
         failureClass = 'agent_toolset_not_closed';
+      } else if (pageRefused) {
+        status = 'error';
+        failureClass = 'page_refused';
       } else if (costExceeded) {
         status = 'budget_exceeded';
         failureClass = 'run_budget_exceeded';
@@ -300,6 +349,9 @@ export class StagehandEngine implements AgentEngine {
       if (toolsetViolation !== undefined) {
         status = 'error';
         failureClass = 'agent_toolset_not_closed';
+      } else if (pageRefused) {
+        status = 'error';
+        failureClass = 'page_refused';
       } else if (costExceeded) {
         status = 'budget_exceeded';
         failureClass = 'run_budget_exceeded';

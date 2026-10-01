@@ -449,3 +449,28 @@ describe('assert_llm_redaction', () => {
     expect(JSON.stringify(fake.calls[0]?.body)).toContain('2026-10-01 12:30, prix 1234567.89, ref 12345678');
   });
 });
+
+describe('garde avant chaque appel (plafond de coût de l’essai, tâche 2.4)', () => {
+  const priced = { type: 'object', properties: { title: { type: 'string' }, price: { type: 'number' } }, required: ['title', 'price'], additionalProperties: false } as const;
+  test('beforeCall lève avant l’envoi : aucune requête de plus, ni réessai ni réparation ni repli, l’erreur remonte telle quelle', async () => {
+    const bad = scripted.json({ title: 'Livre', price: 'cher' });
+    fake.setScenario('extract', [bad, bad, bad]);
+    const { client } = setup({ fallbackRole: 'extract' });
+    let calls = 0;
+    const stop = new Error('zz_test_budget');
+    const beforeCall = () => {
+      calls += 1;
+      if (calls > 1) throw stop;
+    };
+    await expect(client.generateStructured('extract', { messages: user('x'), schema: priced, beforeCall })).rejects.toBe(stop);
+    // Une seule requête : la réparation suivante est refusée AVANT l’envoi.
+    expect(fake.requests).toBe(1);
+    expect(fallbackFake.requests).toBe(0);
+    expect(calls).toBe(2);
+
+    fake.reset();
+    fake.setScenario('extract', [scripted.error(503), scripted.text('ok')]);
+    await expect(client.chat('extract', { messages: user('x'), beforeCall: () => { throw stop; } })).rejects.toBe(stop);
+    expect(fake.requests).toBe(0);
+  });
+});

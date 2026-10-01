@@ -87,6 +87,11 @@ export interface ChatCall {
   signal?: AbortSignal;
   /** Sait tronquer l'entrée : autorise 1 essai après `context_length`. */
   shrinkInput?: (messages: ChatMessage[]) => ChatMessage[] | null;
+  /**
+   * Garde appelée avant CHAQUE envoi (premier essai, réessai, réparation, repli) : une exception l'empêche et remonte
+   * telle quelle, sans réessai ni repli (plafond de coût de l'essai, tâche 2.4).
+   */
+  beforeCall?: () => void;
 }
 
 export type StructuredLevel = 'S1' | 'S2' | 'S3' | 'S4';
@@ -101,6 +106,8 @@ export interface StructuredCall {
   maxRepairs?: number;
   maxTokens?: number;
   signal?: AbortSignal;
+  /** Voir `ChatCall.beforeCall`. */
+  beforeCall?: () => void;
 }
 
 export interface StructuredResult<T = unknown> {
@@ -191,7 +198,7 @@ export class LlmClient {
   }
 
   /** Appel brut d'un rôle : masquage, réessais par classe, repli restreint, comptage. */
-  async call(role: LlmRole, req: Omit<ChatRequest, 'model'>, options: Pick<ChatCall, 'signal' | 'shrinkInput'> = {}): Promise<LlmCallResult> {
+  async call(role: LlmRole, req: Omit<ChatRequest, 'model'>, options: Pick<ChatCall, 'signal' | 'shrinkInput' | 'beforeCall'> = {}): Promise<LlmCallResult> {
     const target = this.roleTarget(role);
     LlmClient.assertMessages(req.messages);
     const attempts: AttemptRecord[] = [];
@@ -215,7 +222,7 @@ export class LlmClient {
   async #withRetries(
     target: RoleTarget,
     req: Omit<ChatRequest, 'model'>,
-    options: Pick<ChatCall, 'signal' | 'shrinkInput'>,
+    options: Pick<ChatCall, 'signal' | 'shrinkInput' | 'beforeCall'>,
     attempts: AttemptRecord[],
   ): Promise<{ result: ChatResult; usage: CallUsage; provider: string; model: string }> {
     const { provider, model } = this.#resolve(target);
@@ -236,6 +243,8 @@ export class LlmClient {
           ...req.extraBody,
         },
       };
+      // Hors du try : une garde qui refuse n'est ni une erreur du fournisseur, ni réessayée.
+      options.beforeCall?.();
       const started = Date.now();
       const callOptions: CallOptions = options.signal === undefined ? {} : { signal: options.signal };
       try {
@@ -292,7 +301,11 @@ export class LlmClient {
         ...(call.maxTokens !== undefined ? { max_tokens: call.maxTokens } : {}),
         ...(call.temperature !== undefined ? { temperature: call.temperature } : {}),
       },
-      { ...(call.signal !== undefined ? { signal: call.signal } : {}), ...(call.shrinkInput !== undefined ? { shrinkInput: call.shrinkInput } : {}) },
+      {
+        ...(call.signal !== undefined ? { signal: call.signal } : {}),
+        ...(call.shrinkInput !== undefined ? { shrinkInput: call.shrinkInput } : {}),
+        ...(call.beforeCall !== undefined ? { beforeCall: call.beforeCall } : {}),
+      },
     );
   }
 
@@ -322,7 +335,10 @@ export class LlmClient {
       if (level === 'S3') req.response_format = { type: 'json_object' };
       if (call.maxTokens !== undefined) req.max_tokens = call.maxTokens;
 
-      const done = await this.call(role, req, call.signal === undefined ? {} : { signal: call.signal });
+      const done = await this.call(role, req, {
+        ...(call.signal === undefined ? {} : { signal: call.signal }),
+        ...(call.beforeCall === undefined ? {} : { beforeCall: call.beforeCall }),
+      });
       calls.push(done);
       const message = done.result.message;
 

@@ -101,7 +101,8 @@ export interface RunAttempt {
   network: Network;
   est_cost_usd: number;
   result: AttemptResult;
-  cost_usd: number;
+  /** null : coût LLM inconnu (prix absent, 08 §1), jamais 0. */
+  cost_usd: number | null;
   ms: number;
   model_id: string | null;
   prompt_version: string | null;
@@ -109,9 +110,10 @@ export interface RunAttempt {
 }
 
 export interface RunCost {
-  llm_usd: number;
+  /** null : un essai au moins a un coût LLM inconnu (prix absent, 08 §1), jamais 0. */
+  llm_usd: number | null;
   proxy_usd: number;
-  total_usd: number;
+  total_usd: number | null;
 }
 
 export interface RunTokens {

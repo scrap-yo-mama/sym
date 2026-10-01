@@ -23,9 +23,14 @@ import { createStrategyExecutor, type AgentPorts } from './strategy-executor.js'
 /** Version du prompt du moteur : celui de Stagehand, non modifié (mesuré tel quel au spike 0.6a). */
 const STAGEHAND_PROMPT_VERSION = `stagehand-${STAGEHAND_VERSION}-dom`;
 
-/** Moteur du rôle `agent` (ADR 0001) : Stagehand 3.7.3 en local sur le Chromium dédié de l'essai. */
+/**
+ * Moteur du rôle `agent` (ADR 0001) : Stagehand 3.7.3 en local sur le Chromium dédié de l'essai. Il appelle le
+ * fournisseur hors du LlmClient : `llm.redact` des réglages lui est donc passé (masquage dans son middleware, 08 §1),
+ * avec les points d'accroche de l'essai (plafond de coût partagé, garde de classification). Un modèle sans prix reste
+ * permis (08 §1 : coût null avec avertissement) ; le plafond étant alors intenable, le run s'arrête après le premier appel.
+ */
 export function stagehandEngineFor(config: LlmConfig, env: NodeJS.ProcessEnv = process.env): EngineFactory {
-  return ({ cdpUrl, recorder }) => {
+  return ({ cdpUrl, recorder, hooks }) => {
     const target = roleTarget(config, 'agent');
     if (target === undefined) return null;
     // Même règle que le client LLM (08 §1) : le rôle agent exige un profil sondé avec appel d'outils.
@@ -33,7 +38,16 @@ export function stagehandEngineFor(config: LlmConfig, env: NodeJS.ProcessEnv = p
     if (roleProblems('agent', profile).length > 0) return null;
     const price = 'price' in target.model ? target.model.price : undefined;
     return {
-      engine: new StagehandEngine({ cdpUrl, baseURL: target.provider.baseUrl, apiKey: () => target.provider.apiKey.reveal(), price, recorder, env }),
+      engine: new StagehandEngine({
+        cdpUrl,
+        baseURL: target.provider.baseUrl,
+        apiKey: () => target.provider.apiKey.reveal(),
+        price,
+        recorder,
+        env,
+        ...(config.redact === undefined ? {} : { redact: config.redact }),
+        ...hooks,
+      }),
       modelId: target.model.id,
       promptVersion: STAGEHAND_PROMPT_VERSION,
     };

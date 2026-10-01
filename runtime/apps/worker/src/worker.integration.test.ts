@@ -165,7 +165,7 @@ test('assert_run_traced : un run qui essaie 3 couples a sa version de stratégie
     expect(a).toEqual(expect.objectContaining({ execution: expect.any(String), network: expect.any(String), result: expect.any(String), cost_usd: expect.any(Number), ms: expect.any(Number) }));
   }
   expect(run.attempts.map((a) => a.result)).toEqual(['extraction', 'network', 'ok']);
-  const sum = run.attempts.reduce((s, a) => s + a.cost_usd, 0);
+  const sum = run.attempts.reduce((s, a) => s + (a.cost_usd ?? Number.NaN), 0);
   expect(run.cost.total_usd).toBeCloseTo(sum, 6);
   expect(run.cost).toEqual({ llm_usd: 0.0215, proxy_usd: 0.0002, total_usd: 0.0217 });
   expect(run.tokens).toEqual({ in: 900, cached: 100, out: 250, reasoning: 40, estimated: false });

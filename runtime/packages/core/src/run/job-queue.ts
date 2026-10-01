@@ -93,7 +93,8 @@ export type AttemptRecord = {
   result: FailureClass | 'ok';
   ms: number;
   /** Coût réel de l'essai, ventilé : la somme des essais fait le coût du run (INV4). */
-  llm_usd?: number;
+  /** null : coût inconnu (prix absent, 08 §1) ; le coût du run devient inconnu, jamais 0. */
+  llm_usd?: number | null;
   proxy_usd?: number;
   tokens?: { in?: number; cached?: number; out?: number; reasoning?: number; estimated?: boolean };
   model_id?: string | null;

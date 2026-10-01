@@ -7,7 +7,11 @@
 //   actif (jamais `--no-sandbox`), un profil jetable, un environnement réduit (ni MASTER_KEY, ni DATABASE_URL, ni clé) ;
 // - en seconde couche, `installDomainGuard` (route Playwright, interception CDP des redirections, WebSocket, écritures
 //   refusées sans `allow_write_actions`) et l'enregistreur de cibles sémantiques (compilation E6 → E5) ;
-// - la cadence par domaine (1.9) et `max_requests_per_run` sur les documents du cadre principal.
+// - la cadence par domaine (1.9) et `max_requests_per_run` sur les documents du cadre principal ;
+// - un script posé avant ceux de chaque page (`addInitScript`, même mécanisme que `serviceWorkers: 'block'` de Playwright,
+//   qui ne vaut que pour un contexte neuf) : service workers jamais enregistrés (leurs requêtes échappent en partie aux
+//   routes), et aucune saisie ne parvient à un champ d'un formulaire qui envoie HORS des domaines de l'API (formulaire
+//   piège d'une injection de prompt : la page ne voit ni la frappe ni la valeur, 08 §4 mesures 2 et 4).
 // Le port CDP n'écoute que sur 127.0.0.1, chemin imprévisible, pour la seule durée de l'essai ; le processus est tué à
 // la fermeture. Un seul contexte : la couche CDP de la garde vaut pour tout le navigateur.
 import { spawn, type ChildProcess } from 'node:child_process';
@@ -61,6 +65,43 @@ async function waitForFile(path: string, timeoutMs: number, child: ChildProcess)
   }
 }
 
+/**
+ * Script de page du Chromium agentique (monde principal, avant tout script de la page). Les écouteurs sont posés en
+ * capture sur `window` : ils passent avant ceux de la page (y compris les attributs `oninput`) et arrêtent l'événement.
+ */
+function agentPageGuardScript(allowedHosts: readonly string[]): string {
+  return `(() => {
+  const allowed = new Set(${JSON.stringify(allowedHosts.map((h) => h.toLowerCase()))});
+  try {
+    if (navigator.serviceWorker) {
+      const blocked = () => Promise.reject(new DOMException('service workers bloqués (agent)', 'SecurityError'));
+      Object.defineProperty(navigator.serviceWorker, 'register', { value: blocked, configurable: false, writable: false });
+    }
+  } catch (e) {}
+  const offsite = (target) => {
+    const form = target && typeof target === 'object' && 'form' in target ? target.form : null;
+    if (!form) return false;
+    try {
+      return !allowed.has(new URL(form.getAttribute('action') || location.href, location.href).hostname.toLowerCase());
+    } catch (e) {
+      return true;
+    }
+  };
+  const stop = (event) => {
+    const target = event.composedPath ? event.composedPath()[0] : event.target;
+    if (!offsite(target)) return;
+    event.stopImmediatePropagation();
+    if (event.cancelable) event.preventDefault();
+    if (event.type === 'input' || event.type === 'change') {
+      try { target.value = ''; } catch (e) {}
+    }
+  };
+  for (const type of ['beforeinput', 'input', 'change', 'keydown', 'keypress', 'keyup', 'paste', 'compositionend']) {
+    window.addEventListener(type, stop, true);
+  }
+})();`;
+}
+
 /** Arguments figés du Chromium agentique (aucune entrée de stratégie, de prompt ni de membre). */
 function agentChromiumArgs(egressServer: string, profileDir: string, env: Readonly<Record<string, string | undefined>> = process.env): string[] {
   const egress = chromiumEgressLaunchOptions(egressServer, env);
@@ -98,6 +139,8 @@ export async function launchAgentBrowser(options: AgentBrowserOptions): Promise<
     browser = await chromium.connectOverCDP(cdpUrl);
     const context = browser.contexts()[0];
     if (context === undefined) throw new Error('Chromium : aucun contexte par défaut');
+    // Avant toute page : service workers et saisies vers un formulaire hors domaines (voir agentPageGuardScript).
+    await context.addInitScript({ content: agentPageGuardScript(options.allowedHosts) });
     const guard = await installDomainGuard(context, { allowedHosts: options.allowedHosts, allowWriteActions: options.allowWriteActions });
     const recorder = await installSemanticRecorder(context);
     // Cadence (1.9) et plafond de requêtes sur les documents du cadre principal, AVANT la garde (route enregistrée après

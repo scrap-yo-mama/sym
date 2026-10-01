@@ -67,13 +67,23 @@ export type LlmExtraction = { readonly records: readonly unknown[]; readonly cal
 /** Extraction par le rôle `extract` : enregistrements conformes au schéma d'origine, ou `LlmError` (`schema_invalid`…). */
 export async function extractRecordsWithLlm(
   client: LlmClient,
-  args: { instruction: string; pageText: string; pageUrl: string; truncated: boolean; itemSchema: unknown; signal?: AbortSignal },
+  args: {
+    instruction: string;
+    pageText: string;
+    pageUrl: string;
+    truncated: boolean;
+    itemSchema: unknown;
+    signal?: AbortSignal;
+    /** Garde avant chaque envoi (plafond de coût de l'essai) : voir `ChatCall.beforeCall`. */
+    beforeCall?: () => void;
+  },
 ): Promise<LlmExtraction> {
   const result = await client.generateStructured<{ items: unknown[] }>('extract', {
     messages: extractMessages(args),
     schema: recordsSchema(args.itemSchema),
     name: 'records',
     ...(args.signal === undefined ? {} : { signal: args.signal }),
+    ...(args.beforeCall === undefined ? {} : { beforeCall: args.beforeCall }),
   });
   return { records: result.value.items, calls: result.calls };
 }

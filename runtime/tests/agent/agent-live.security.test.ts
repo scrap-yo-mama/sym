@@ -41,8 +41,8 @@ const itemSchema = (key: AgentFixtureKey): Record<string, unknown> => {
   const s = task(key).outputSchema as { properties: { items?: { items: Record<string, unknown> } } };
   return s.properties.items?.items ?? task(key).outputSchema;
 };
-const engineFor: EngineFactory = ({ cdpUrl, recorder }) => ({
-  engine: new StagehandEngine({ cdpUrl, baseURL: BASE, apiKey: () => KEY ?? '', price: PRICE, recorder }),
+const engineFor: EngineFactory = ({ cdpUrl, recorder, hooks }) => ({
+  engine: new StagehandEngine({ cdpUrl, baseURL: BASE, apiKey: () => KEY ?? '', price: PRICE, recorder, ...hooks }),
   modelId: MODEL,
   promptVersion: 'stagehand-3.7.3-dom',
 });
