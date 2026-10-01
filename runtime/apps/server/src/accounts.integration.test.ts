@@ -3,6 +3,8 @@
 // 2FA TOTP « maison » (graine scellée, anti-rejeu, codes de secours), MFA_ENFORCED, OIDC générique sur un faux
 // fournisseur local, désactivation, hiérarchie, réinitialisation, audit, réglages, D-15 (appareil reconnu).
 import { randomBytes } from 'node:crypto';
+import { createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { generateOpaqueToken } from '@runtime/core';
 import { issueOperatorResetLink, saveSmtpSettings } from '@runtime/db';
 import type { LightMyRequestResponse } from 'fastify';
@@ -191,7 +193,7 @@ describe('invitations (13 § 6)', () => {
   test('avec SMTP : lien envoyé par e-mail (garde SSRF operator-config), jamais rendu à l’admin', async () => {
     const smtp: FakeSmtp = await startFakeSmtp();
     try {
-      await saveSmtpSettings(srv.started.ctx.pool, srv.started.ctx.secrets!, { host: '127.0.0.1', port: smtp.port, security: 'none', from: 'runtime@scrapyomama.zz-test' });
+      await saveSmtpSettings(srv.started.ctx.pool, srv.started.ctx.secrets!, { host: '127.0.0.1', port: smtp.port, security: 'none', from: 'runtime@scrapyomama.zz-test' }, { userId: owner.id, role: 'owner' });
       const res = await invite('zz_test_inv_mail@example.test');
       expect(res.statusCode, res.body).toBe(201);
       expect(res.json()).toMatchObject({ emailed: true, link: null });
@@ -405,11 +407,19 @@ describe('assert_mfa_enforced (MFA_ENFORCED=all)', () => {
     const blockedLink = await enforced.app.inject({ method: 'POST', url: '/api/me/identities/oidc', headers: json(await signIn(enforced, user)), payload: { current_password: user.password } });
     expect(blockedLink.json<{ error: { code: string } }>().error.code).toBe('mfa_enrollment_required');
 
+    const idpAssertsSingle = (amr: string[]) => (idp.nextClaims = { sub: 'zz_test_enf_sub', email: user.email, email_verified: true, amr });
     idp.nextClaims = { sub: 'zz_test_enf_sub', email: user.email, email_verified: true, amr: ['pwd'] };
     const noMfa = await oidcLogin(enforced);
     expect(noMfa.location).toBe(`${PUBLIC_URL}/`);
     const res = await enforced.app.inject({ method: 'GET', url: '/api/api-keys', headers: { cookie: noMfa.cookie } });
     expect(res.json<{ error: { code: string } }>().error.code).toBe('mfa_enrollment_required');
+    // assert_oidc_amr_mfa_strict : une méthode seule (code à usage unique, clé logicielle) n'est pas un second facteur.
+    for (const amr of [['otp'], ['swk'], ['otp', 'swk']]) {
+      idpAssertsSingle(amr);
+      const single = await oidcLogin(enforced);
+      const blocked = await enforced.app.inject({ method: 'GET', url: '/api/api-keys', headers: { cookie: single.cookie } });
+      expect(blocked.json<{ error: { code: string } }>().error.code, amr.join(',')).toBe('mfa_enrollment_required');
+    }
 
     idp.nextClaims = { sub: 'zz_test_enf_sub', email: user.email, email_verified: true, amr: ['pwd', 'mfa'] };
     const withMfa = await oidcLogin(enforced);
@@ -493,12 +503,11 @@ describe('OIDC générique (13 § 7)', () => {
     const login = await oidcLogin(srv);
     expect(login.location).toBe(`${PUBLIC_URL}/`);
     const userId = (await srv.app.inject({ method: 'GET', url: '/api/me', headers: { cookie: login.cookie } })).json<{ id: string }>().id;
-    // Aucun mot de passe local : ce que le client envoie dans `currentPassword` ne compte pas, la connexion récente fait foi.
+    // Aucun mot de passe local : le champ `currentPassword` est facultatif (le contrat le dit), la connexion récente fait foi.
     expect(await sql(srv, "SELECT 1 FROM auth_accounts WHERE user_id = $1 AND provider_id = 'credential'", [userId])).toEqual([]);
     const createKeyAs = (cookie: string) =>
-      srv.app.inject({ method: 'POST', url: '/api/api-keys', headers: json(cookie), payload: { label: 'zz_test_oidc_key', scopes: ['apis:read'], currentPassword: 'n/a' } });
-    const createPairing = (cookie: string) =>
-      srv.app.inject({ method: 'POST', url: '/api/extension/pairing-codes', headers: json(cookie), payload: { currentPassword: 'n/a' } });
+      srv.app.inject({ method: 'POST', url: '/api/api-keys', headers: json(cookie), payload: { label: 'zz_test_oidc_key', scopes: ['apis:read'] } });
+    const createPairing = (cookie: string) => srv.app.inject({ method: 'POST', url: '/api/extension/pairing-codes', headers: json(cookie), payload: {} });
     const key = await createKeyAs(login.cookie);
     expect(key.statusCode, key.body).toBe(201);
     expect(key.json<{ key: string }>().key).toMatch(/^sy_/);
@@ -521,6 +530,16 @@ describe('OIDC générique (13 § 7)', () => {
     // Nouvelle connexion chez l'IdP : de nouveau autorisé.
     const again = await oidcLogin(srv);
     expect((await createKeyAs(again.cookie)).statusCode).toBe(201);
+    // Compte à mot de passe local : le champ absent est refusé (400 current_password_required), sans compter d'échec.
+    const local = await createUser(srv, 'zz_test_reauth_missing@example.test');
+    const localCookie = await signIn(srv, local);
+    for (let i = 0; i < 6; i++) {
+      for (const res of [await createKeyAs(localCookie), await createPairing(localCookie)]) {
+        expect(res.statusCode, res.body).toBe(400);
+        expect(res.json<{ error: { code: string } }>().error.code).toBe('current_password_required');
+      }
+    }
+    expect((await srv.app.inject({ method: 'POST', url: '/api/api-keys', headers: json(localCookie), payload: { label: 'zz_test_local_key', scopes: ['apis:read'], currentPassword: local.password } })).statusCode).toBe(201);
     await configureSso(srv, ownerCookie, { group_roles: [{ group: 'zz-ops', role: 'admin' }] });
   });
 
@@ -592,6 +611,53 @@ describe('OIDC générique (13 § 7)', () => {
     expect(noState.headers.location).toBe(`${PUBLIC_URL}/login?sso_error=state_invalid`);
   });
 
+  test('assert_oidc_endpoints_issuer_origin : un point d’entrée annoncé par la découverte hors de l’origine de l’issuer passe par la politique des cibles (ssrf_blocked) ; 0 requête vers la boucle locale', async () => {
+    // Récepteur témoin : autre port de 127.0.0.1 (un service interne que l'IdP voudrait faire viser).
+    const hits: string[] = [];
+    const canary = createServer((req, res) => {
+      hits.push(`${req.method} ${req.url}`);
+      res.writeHead(500);
+      res.end();
+    });
+    await new Promise<void>((resolve) => canary.listen(0, '127.0.0.1', resolve));
+    const canaryUrl = `http://127.0.0.1:${(canary.address() as AddressInfo).port}`;
+    const isolated = await startTestServer('oidcssrf', {}, { oidcAllowHttp: true });
+    try {
+      const o = await runSetup(isolated);
+      const oCookie = await signIn(isolated, o);
+      for (const field of ['token_endpoint', 'jwks_uri'] as const) {
+        // Un IdP neuf par cas : la découverte est mise en cache par issuer.
+        const evil = await startFakeIdp();
+        try {
+          evil.discoveryOverrides = { [field]: `${canaryUrl}/${field}` };
+          const put = await isolated.app.inject({
+            method: 'PUT',
+            url: '/api/settings/sso',
+            headers: json(oCookie),
+            payload: { enabled: true, slug: 'zz-test-evil', label: 'ZZ Evil', issuer_url: evil.issuer, client_id: evil.clientId, client_secret: evil.clientSecret },
+          });
+          expect(put.statusCode, put.body).toBe(200);
+          const user = await createUser(isolated, `zz_test_ssrf_${field}@example.test`);
+          await sql(isolated, 'INSERT INTO auth_accounts (user_id, provider_id, account_id) VALUES ($1, $2, $3)', [user.id, 'oidc:zz-test-evil', `${evil.issuer}|zz_test_ssrf_${field}`]);
+          evil.nextClaims = { sub: `zz_test_ssrf_${field}`, email: user.email, email_verified: true };
+          const start = await isolated.app.inject({ method: 'GET', url: '/api/auth/oidc/start', headers: { 'sec-fetch-site': 'same-origin' } });
+          expect(start.statusCode, start.body).toBe(302);
+          const atIdp = await fetch(String(start.headers.location), { redirect: 'manual' });
+          const callback = new URL(String(atIdp.headers.get('location')));
+          const res = await isolated.app.inject({ method: 'GET', url: `${callback.pathname}${callback.search}`, headers: { cookie: cookiesOf(start) } });
+          expect(res.headers.location, field).toBe(`${PUBLIC_URL}/login?sso_error=idp_response_invalid`);
+          expect(res.cookies.find((c) => c.name.endsWith('sy.session') && c.value !== ''), field).toBeUndefined();
+        } finally {
+          await evil.close();
+        }
+      }
+      expect(hits).toEqual([]);
+    } finally {
+      await isolated.close();
+      await new Promise<void>((resolve) => canary.close(() => resolve()));
+    }
+  });
+
   test('compte local à 2FA : la connexion OIDC sans amr exige le second facteur local', async () => {
     const user = await createUser(srv, 'zz_test_oidc_2fa@example.test');
     const local = await signIn(srv, user);
@@ -602,6 +668,16 @@ describe('OIDC générique (13 § 7)', () => {
     const res = await oidcLogin(srv);
     expect(res.location).toBe(`${PUBLIC_URL}/login?mfa=1`);
     expect((await srv.app.inject({ method: 'GET', url: '/api/me', headers: { cookie: res.cookie } })).json<{ error: { code: string } }>().error.code).toBe('mfa_required');
+    // assert_oidc_amr_mfa_strict : amr ['otp'] seul (connexion sans mot de passe par code) → second facteur local exigé ;
+    // amr ['pwd', 'otp'] (deux catégories) → session complète.
+    idp.nextClaims = { sub: 'zz_test_oidc_2fa_sub', email: user.email, email_verified: true, amr: ['otp'] };
+    const otpOnly = await oidcLogin(srv);
+    expect(otpOnly.location).toBe(`${PUBLIC_URL}/login?mfa=1`);
+    expect((await srv.app.inject({ method: 'GET', url: '/api/me', headers: { cookie: otpOnly.cookie } })).json<{ error: { code: string } }>().error.code).toBe('mfa_required');
+    idp.nextClaims = { sub: 'zz_test_oidc_2fa_sub', email: user.email, email_verified: true, amr: ['pwd', 'otp'] };
+    const twoFactors = await oidcLogin(srv);
+    expect(twoFactors.location).toBe(`${PUBLIC_URL}/`);
+    expect((await srv.app.inject({ method: 'GET', url: '/api/me', headers: { cookie: twoFactors.cookie } })).statusCode).toBe(200);
   });
 
   test('assert_oidc_link_reauth : liaison après ré-authentification (mot de passe, second facteur si 2FA), jamais par simple navigation ; identités listées, retirées, signalées à la révocation', async () => {
@@ -768,6 +844,39 @@ describe('hiérarchie (13 § 2)', () => {
       await isolated.close();
     }
   });
+
+  test('assert_owner_transfer_reauth_limited : mot de passe du transfert sous la limite commune de ré-authentification (5 échecs, partagés avec les clés d’API) → 429, session fermée', async () => {
+    const isolated = await startTestServer('ownerlim');
+    try {
+      const o = await runSetup(isolated);
+      const oCookie = await signIn(isolated, o);
+      const heir = await createUser(isolated, 'zz_test_heir_lim@example.test', 'admin');
+      const transfer = (cookie: string, password: string) =>
+        isolated.app.inject({ method: 'POST', url: '/api/owner/transfer', headers: json(cookie), payload: { to_user_id: heir.id, current_password: password, totp_code: '000000' } });
+      const keyWith = (cookie: string, password: string) =>
+        isolated.app.inject({ method: 'POST', url: '/api/api-keys', headers: json(cookie), payload: { label: 'zz_test_lim', scopes: ['apis:read'], currentPassword: password } });
+      // Compteur commun : 2 échecs sur la création de clé, puis le transfert.
+      for (let i = 0; i < 2; i++) expect((await keyWith(oCookie, 'zz_test_wrong_password')).json<{ error: { code: string } }>().error.code).toBe('reauth_failed');
+      for (let i = 0; i < 2; i++) {
+        const res = await transfer(oCookie, 'zz_test_wrong_password');
+        expect(res.statusCode, res.body).toBe(403);
+        expect(res.json<{ error: { code: string } }>().error.code).toBe('reauth_failed');
+      }
+      // 5e échec, sur le transfert : 429 et session fermée.
+      const fifth = await transfer(oCookie, 'zz_test_wrong_password');
+      expect(fifth.statusCode, fifth.body).toBe(429);
+      expect((await isolated.app.inject({ method: 'GET', url: '/api/me', headers: { cookie: oCookie } })).statusCode).toBe(401);
+      // Nouvelle session : le compte reste bloqué sur toutes les opérations sensibles, même avec le bon mot de passe.
+      const again = await signIn(isolated, o);
+      expect((await transfer(again, o.password)).statusCode).toBe(429);
+      expect((await keyWith(again, o.password)).statusCode).toBe(429);
+      const denied = (await auditOf(isolated, 'owner.transferred')).filter((e) => e.outcome === 'denied' && e.meta['reason'] === 'reauth_failed');
+      expect(denied).toHaveLength(3);
+      expect(await sql(isolated, "SELECT role FROM users WHERE id = $1", [o.id])).toEqual([{ role: 'owner' }]);
+    } finally {
+      await isolated.close();
+    }
+  });
 });
 
 describe('réinitialisation du mot de passe (13 § 4, 13 § 5)', () => {
@@ -869,7 +978,7 @@ describe('réinitialisation du mot de passe (13 § 4, 13 § 5)', () => {
   test('mot de passe oublié avec SMTP : même réponse que l’adresse existe ou non, e-mail seulement pour un compte actif', async () => {
     const smtp = await startFakeSmtp();
     try {
-      await saveSmtpSettings(srv.started.ctx.pool, srv.started.ctx.secrets!, { host: '127.0.0.1', port: smtp.port, security: 'none', from: 'runtime@scrapyomama.zz-test' });
+      await saveSmtpSettings(srv.started.ctx.pool, srv.started.ctx.secrets!, { host: '127.0.0.1', port: smtp.port, security: 'none', from: 'runtime@scrapyomama.zz-test' }, { userId: owner.id, role: 'owner' });
       const user = await createUser(srv, 'zz_test_forgot@example.test');
       // Avec SMTP, pas de lien copiable par l'admin (13 § 4, § 6) : le membre passe par « mot de passe oublié ».
       const copyable = await srv.app.inject({ method: 'POST', url: `/api/users/${user.id}/reset-link`, headers: json(adminCookie) });
@@ -885,6 +994,54 @@ describe('réinitialisation du mot de passe (13 § 4, 13 § 5)', () => {
       const newPassword = strongPassword();
       expect((await srv.app.inject({ method: 'POST', url: '/api/auth/password-reset/confirm', payload: { token: link, password: newPassword } })).statusCode).toBe(204);
       expect((await login(srv, { email: user.email, password: newPassword })).statusCode).toBe(200);
+    } finally {
+      await sql(srv, "DELETE FROM settings WHERE key = 'smtp'");
+      await smtp.close();
+    }
+  });
+
+  test('assert_smtp_admin_change_withholds_reset : relais SMTP changé par un admin → pendant 24 h, aucun lien par e-mail pour un compte sans 2FA (INV5), signalé au titulaire ; changé par l’owner ou 24 h plus tard : envoyé', async () => {
+    // Le relais de l'admin : il lirait tout lien qui y passe.
+    const smtp = await startFakeSmtp();
+    const waitFor = async (check: () => Promise<boolean>) => {
+      for (let i = 0; i < 100 && !(await check()); i += 1) await new Promise((r) => setTimeout(r, 20));
+    };
+    const request = (email: string) => srv.app.inject({ method: 'POST', url: '/api/auth/password-reset/request', remoteAddress: nextTestIp(), payload: { email } });
+    try {
+      await saveSmtpSettings(srv.started.ctx.pool, srv.started.ctx.secrets!, { host: '127.0.0.1', port: smtp.port, security: 'none', from: 'runtime@scrapyomama.zz-test' }, { userId: admin.id, role: 'admin' });
+      const plain = await createUser(srv, 'zz_test_smtp_hold@example.test');
+      const res = await request(plain.email);
+      expect(res.statusCode).toBe(202);
+      const withheld = async () => (await auditOf(srv, 'auth.password_reset_requested')).some((e) => e.target_id === plain.id && e.outcome === 'denied');
+      await waitFor(withheld);
+      expect(await withheld()).toBe(true);
+      expect((await auditOf(srv, 'auth.password_reset_requested')).find((e) => e.target_id === plain.id)?.meta).toMatchObject({ reason: 'smtp_changed_by_admin' });
+      expect(smtp.mails.filter((m) => m.to.includes(plain.email))).toEqual([]);
+      // Aucun lien en attente pour ce compte : rien à consommer.
+      expect(await sql(srv, "SELECT 1 FROM verifications WHERE identifier ~ '^reset(-admin|-cli)?:' AND identifier LIKE '%' || $1", [plain.id])).toEqual([]);
+      // Le titulaire en est averti à sa connexion suivante.
+      const next = await login(srv, plain);
+      expect(next.json<{ notices?: { code: string }[] }>().notices?.map((n) => n.code)).toContain('password_reset_withheld');
+
+      // Compte à 2FA : le lien seul ne suffit pas à prendre le compte, il part.
+      const guarded = await createUser(srv, 'zz_test_smtp_hold_2fa@example.test');
+      await enableTwoFactor(srv, await signIn(srv, guarded), guarded);
+      await request(guarded.email);
+      await waitFor(async () => smtp.mails.some((m) => m.to.includes(guarded.email)));
+      expect(smtp.mails.filter((m) => m.to.includes(guarded.email))).toHaveLength(1);
+
+      // 24 h après le changement de l'admin : envoyé.
+      await sql(srv, "UPDATE settings SET value = jsonb_set(value, '{changed_at}', to_jsonb((now() - interval '25 hours')::text)) WHERE key = 'smtp'");
+      await request(plain.email);
+      await waitFor(async () => smtp.mails.some((m) => m.to.includes(plain.email)));
+      expect(smtp.mails.filter((m) => m.to.includes(plain.email))).toHaveLength(1);
+
+      // Relais réglé par l'owner : envoyé tout de suite.
+      const other = await createUser(srv, 'zz_test_smtp_owner@example.test');
+      await saveSmtpSettings(srv.started.ctx.pool, srv.started.ctx.secrets!, { host: '127.0.0.1', port: smtp.port, security: 'none', from: 'runtime@scrapyomama.zz-test' }, { userId: owner.id, role: 'owner' });
+      await request(other.email);
+      await waitFor(async () => smtp.mails.some((m) => m.to.includes(other.email)));
+      expect(smtp.mails.filter((m) => m.to.includes(other.email))).toHaveLength(1);
     } finally {
       await sql(srv, "DELETE FROM settings WHERE key = 'smtp'");
       await smtp.close();

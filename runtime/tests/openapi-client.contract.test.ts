@@ -286,3 +286,42 @@ describe('OpenAPI spécifiée : YAML sain', () => {
     expect(text).toMatch(/ {4}Version:\n(?: {6}.*\n)*? {6}required: \[server, schema, min_extension, mcp_spec\]/);
   });
 });
+
+describe('OpenAPI spécifiée : ré-authentification des opérations sensibles (13 § 5, 7.5.1)', () => {
+  const lines = readFileSync(SPEC_URL, 'utf8').split('\n');
+  /** Bloc YAML qui commence à la ligne `head` (indentation comprise) et s'arrête à la ligne suivante de même retrait. */
+  function block(head: RegExp): string {
+    const start = lines.findIndex((l) => head.test(l));
+    expect(start, String(head)).toBeGreaterThan(0);
+    const indent = /^ */.exec(lines[start] ?? '')?.[0].length ?? 0;
+    const end = lines.findIndex((l, at) => at > start && l.trim() !== '' && (/^ */.exec(l)?.[0].length ?? 0) <= indent);
+    return lines.slice(start, end).join('\n');
+  }
+
+  test('assert_reauth_contract : mot de passe actuel facultatif pour un compte OIDC seul, 403 reauth_required et reauth_failed documentés', () => {
+    const schemas = ['ApiKeyCreate', 'ExtensionPairingCodeRequest', 'PasswordConfirmation', 'PasswordAndCode', 'TwoFactorDisable', 'OidcLinkRequest', 'OwnerTransferRequest'];
+    for (const name of schemas) {
+      const text = block(new RegExp(`^ {4}${name}:\\s*$`));
+      const required = /^ {6}required: \[(.*)\]$/m.exec(text)?.[1] ?? '';
+      expect(required, name).not.toMatch(/current_?[pP]assword/);
+      expect(text, name).toMatch(/\$ref: '#\/components\/schemas\/CurrentPassword'/);
+    }
+    const field = block(/^ {4}CurrentPassword:\s*$/);
+    expect(field).toContain('current_password_required');
+    expect(field).toContain('reauth_required');
+    const reauth = block(/^ {4}ReauthError:\s*$/);
+    for (const code of ['reauth_failed', 'reauth_required']) expect(reauth).toContain(code);
+    const operations = ['createApiKey', 'createExtensionPairingCode', 'enrollTwoFactor', 'regenerateBackupCodes', 'disableTwoFactor', 'startOidcLink', 'transferOwnership'];
+    for (const op of operations) {
+      // De `operationId` à la méthode ou au chemin suivant.
+      const at = lines.findIndex((l) => l === `      operationId: ${op}`);
+      expect(at, op).toBeGreaterThan(0);
+      const end = lines.findIndex((l, i) => i > at && /^ {0,4}\S/.test(l));
+      const body = lines.slice(at, end).join('\n');
+      expect(body, op).toMatch(/'403':\n {10}\$ref: '#\/components\/responses\/ReauthError'/);
+      expect(body, op).toMatch(/'429':/);
+      expect(body, op).toMatch(/'400':/);
+      expect(body, op).not.toMatch(/summary: .*ré-authentification par mot de passe/);
+    }
+  });
+});

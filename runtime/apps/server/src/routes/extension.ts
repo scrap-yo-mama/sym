@@ -38,7 +38,7 @@ const WINDOW_MS = 15 * 60 * 1000;
 
 const pairingCodeSchema = {
   type: 'object',
-  required: ['currentPassword'],
+  // `currentPassword` : exigé par `reauthenticate` si le compte a un mot de passe local (compte OIDC seul : ignoré).
   additionalProperties: false,
   properties: { currentPassword: { type: 'string', minLength: 1, maxLength: 1024 } },
 } as const;
@@ -122,7 +122,7 @@ export function extensionRoutes(app: FastifyInstance, ctx: ServerContext): void 
 
   // --- Console : appairage -------------------------------------------------------------------------------------------
 
-  app.post<{ Body: { currentPassword: string } }>('/api/extension/pairing-codes', { schema: { body: pairingCodeSchema } }, async (request, reply) => {
+  app.post<{ Body: { currentPassword?: string } }>('/api/extension/pairing-codes', { schema: { body: pairingCodeSchema } }, async (request, reply) => {
     const actor = request.actor!;
     // Opération sensible (13 § 5, ASVS 7.5.1) : mot de passe actuel, ou connexion de moins de 10 min pour un compte
     // OIDC sans mot de passe local ; 5 échecs → 429 et session fermée.

@@ -157,5 +157,15 @@
   { "test": "assert_oidc_jit_requires_domains", "invariant": "INV5, 13 § 7", "tasks": ["3.7"], "stage": "I1",
     "note": "3.7 (vérification) : création à la volée refusée sans liste de domaines (400 au réglage) ; réglage forcé en base → aucun compte créé au retour de l’IdP" },
   { "test": "assert_oidc_only_sensitive_reauth", "invariant": "13 § 5 (7.5.1), 13 § 7, 13 § 8", "tasks": ["3.7"], "stage": "I1",
-    "note": "3.7 (vérification) : compte OIDC sans mot de passe local, clé d’API et code d’appairage par une connexion de moins de 10 min ; au-delà 403 reauth_required, audité, session conservée" }
+    "note": "3.7 (vérification) : compte OIDC sans mot de passe local, clé d’API et code d’appairage par une connexion de moins de 10 min ; au-delà 403 reauth_required, audité, session conservée" },
+  { "test": "assert_owner_transfer_reauth_limited", "invariant": "13 § 5 (7.5.1), 13 § 2", "tasks": ["3.7"], "stage": "I1",
+    "note": "3.7 (revue) : le mot de passe du transfert de propriété passe par la ré-authentification commune ; 5 échecs toutes opérations sensibles confondues → 429, session fermée" },
+  { "test": "assert_reauth_contract", "invariant": "13 § 5 (7.5.1), 13 § 7", "tasks": ["3.7"], "stage": "contract",
+    "note": "3.7 (revue) : OpenAPI — mot de passe actuel facultatif pour un compte OIDC seul (400 current_password_required sinon), 403 reauth_failed / reauth_required documentés" },
+  { "test": "assert_oidc_endpoints_issuer_origin", "invariant": "INV10, 08b § 1", "tasks": ["3.7"], "stage": "U1, I1",
+    "note": "3.7 (revue) : operator-config réservé à l'origine de l'issuer réglé par l'owner ; token_endpoint, jwks_uri, userinfo_endpoint d'une autre origine suivent la politique des cibles" },
+  { "test": "assert_oidc_amr_mfa_strict", "invariant": "13 § 7 (ASVS 6.8.4), RFC 8176", "tasks": ["3.7"], "stage": "U1, I1",
+    "note": "3.7 (revue) : amr « mfa » ou deux catégories de facteurs distinctes ; otp, swk ou hwk seuls ne dispensent pas de la 2FA locale" },
+  { "test": "assert_smtp_admin_change_withholds_reset", "invariant": "INV5, 13 § 4, 13 § 2", "tasks": ["3.7", "3.1"], "stage": "I1",
+    "note": "3.7 (revue) : relais SMTP réglé par un admin → 24 h sans lien de réinitialisation par e-mail pour un compte sans 2FA, signalé au titulaire ; 3.1 (PUT /api/settings/smtp) passe l'acteur à saveSmtpSettings" }
 ]

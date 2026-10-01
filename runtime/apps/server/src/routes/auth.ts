@@ -23,12 +23,14 @@ import {
   RESET_LINK_TTL_HOURS,
 } from '@runtime/core';
 import {
+  addAccountNotice,
   consumeResetLink,
   countOidcIdentities,
   deleteResetLinks,
   findResetLink,
   hasConfirmedTwoFactor,
   revokeUserAccess,
+  smtpResetHoldActive,
   storeResetLink,
   takeAccountNotices,
 } from '@runtime/db';
@@ -240,6 +242,13 @@ export function authRoutes(app: FastifyInstance, ctx: ServerContext): void {
         const { rows } = await ctx.pool.query<{ id: string }>("SELECT id FROM users WHERE email = $1 AND status = 'active' AND deleted_at IS NULL", [email]);
         const user = rows[0];
         if (!user || !(await smtpConfigured(ctx))) return;
+        // Relais réglé par un admin depuis moins de 24 h : aucun lien pour un compte sans 2FA (le lien seul prendrait
+        // le compte, et l'admin peut lire ce qui passe par son relais : INV5). Signalé au titulaire à sa connexion.
+        if (!(await hasConfirmedTwoFactor(ctx.pool, user.id)) && (await smtpResetHoldActive(ctx.pool))) {
+          await addAccountNotice(ctx.pool, user.id, 'password_reset_withheld');
+          await audit(ctx, request, null, { action: 'auth.password_reset_requested', targetType: 'user', targetId: user.id, outcome: 'denied', meta: { reason: 'smtp_changed_by_admin' } });
+          return;
+        }
         const { token, hash } = generateOpaqueToken();
         await storeResetLink(ctx.pool, 'email', user.id, hash, RESET_LINK_TTL_HOURS);
         await audit(ctx, request, null, { action: 'auth.password_reset_requested', targetType: 'user', targetId: user.id, outcome: 'success' });

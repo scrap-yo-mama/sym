@@ -45,11 +45,20 @@ const FRESH_SESSION_MS = 10 * 60 * 1000;
 
 /**
  * Vérifie le mot de passe actuel de l'acteur avant une opération sensible (clé d'API, code d'appairage, 2FA, liaison
- * OIDC) ; compte OIDC sans mot de passe local : connexion de moins de 10 minutes, sinon 403 `reauth_required`.
+ * OIDC, transfert de propriété) ; compte OIDC sans mot de passe local : connexion de moins de 10 minutes, sinon 403
+ * `reauth_required` (le champ du mot de passe, facultatif dans les schémas, est alors ignoré). Compte à mot de passe
+ * local sans mot de passe fourni : 400 `current_password_required`, sans compter d'échec (rien n'a été deviné).
  * Répond lui-même en cas d'échec (403, ou 429 et session fermée après 5 échecs) et renvoie false ; true si l'appelant
  * peut continuer.
  */
-export async function reauthenticate(ctx: ServerContext, request: FastifyRequest, reply: FastifyReply, actor: Actor, password: string, action: string): Promise<boolean> {
+export async function reauthenticate(
+  ctx: ServerContext,
+  request: FastifyRequest,
+  reply: FastifyReply,
+  actor: Actor,
+  password: string | undefined,
+  action: string,
+): Promise<boolean> {
   if (reauthLimiter.blocked(actor.userId)) {
     await sendError(reply, 429, 'too_many_attempts', 'trop de tentatives, réessayez plus tard');
     return false;
@@ -66,6 +75,10 @@ export async function reauthenticate(ctx: ServerContext, request: FastifyRequest
     // Pas un échec de secret (rien à deviner) : ni compteur ni fermeture de session, mais le refus est audité.
     await audit(ctx, request, actor, { action, outcome: 'denied', meta: { reason: 'reauth_required' } });
     await sendError(reply, 403, 'reauth_required', 'reconnectez-vous pour confirmer cette opération');
+    return false;
+  }
+  if (password === undefined || password === '') {
+    await sendError(reply, 400, 'current_password_required', 'mot de passe actuel requis');
     return false;
   }
   if (await verifyPassword(stored, password)) {

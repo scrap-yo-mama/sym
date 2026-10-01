@@ -10,7 +10,6 @@ import {
   generateOpaqueToken,
   isRole,
   RESET_LINK_TTL_HOURS,
-  verifyPassword,
   type AccountAction,
   type Role,
 } from '@runtime/core';
@@ -28,7 +27,7 @@ import { Readable } from 'node:stream';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { PoolClient } from 'pg';
 import type { ServerContext } from '../context.js';
-import { checkSecondFactor, decodeCursor, encodeCursor, iso, smtpConfigured, UUID } from './account-helpers.js';
+import { checkSecondFactor, decodeCursor, encodeCursor, iso, reauthenticate, smtpConfigured, UUID } from './account-helpers.js';
 import { audit, notFound, sendError, type Actor } from './guard.js';
 import { AUDIT_COLUMNS, auditView } from './me.js';
 
@@ -225,13 +224,13 @@ export function userRoutes(app: FastifyInstance, ctx: ServerContext): void {
   });
 
   // Transfert de propriété (13 § 2) : owner seul, mot de passe ET second facteur ; l'ancien owner devient admin.
-  app.post<{ Body: { to_user_id: string; current_password: string; totp_code: string } }>(
+  app.post<{ Body: { to_user_id: string; current_password?: string; totp_code: string } }>(
     '/api/owner/transfer',
     {
       schema: {
         body: {
           type: 'object',
-          required: ['to_user_id', 'current_password', 'totp_code'],
+          required: ['to_user_id', 'totp_code'],
           additionalProperties: false,
           properties: {
             to_user_id: { type: 'string', format: 'uuid' },
@@ -247,12 +246,9 @@ export function userRoutes(app: FastifyInstance, ctx: ServerContext): void {
         await audit(ctx, request, actor, { action: 'owner.transferred', outcome: 'denied', meta: { reason } });
         return sendError(reply, status, code, message);
       };
-      const { rows } = await ctx.pool.query<{ password_hash: string | null }>(
-        "SELECT password_hash FROM auth_accounts WHERE user_id = $1 AND provider_id = 'credential'",
-        [actor.userId],
-      );
-      const stored = rows[0]?.password_hash;
-      if (!stored || !(await verifyPassword(stored, request.body.current_password))) return deny('reauth_failed', 403, 'reauth_failed', 'mot de passe actuel incorrect');
+      // Ré-authentification commune (13 § 5, 7.5.1) : 5 échecs toutes opérations sensibles confondues → 429 et session
+      // fermée ; refus audité `owner.transferred` / reason=reauth_failed par l'outil commun.
+      if (!(await reauthenticate(ctx, request, reply, actor, request.body.current_password, 'owner.transferred'))) return reply;
       if (!(await hasConfirmedTwoFactor(ctx.pool, actor.userId))) return deny('mfa_required', 403, 'mfa_required', 'activez la double authentification avant le transfert');
       const check = await checkSecondFactor(ctx, actor.userId, request.body.totp_code);
       if (!check.ok) return check.blocked ? deny('mfa_failures', 429, 'too_many_attempts', 'trop de tentatives, réessayez plus tard') : deny('invalid_code', 400, 'invalid_code', 'code invalide ou déjà utilisé');

@@ -225,7 +225,8 @@ export type AccountNotice = { code: string; at: string };
 /** Durée de conservation d'un signalement non encore montré. */
 const NOTICE_TTL_DAYS = 90;
 
-async function addAccountNotice(db: Queryable, userId: string, code: string): Promise<void> {
+/** Signalement au titulaire (`password_reset_by_operator`, `password_reset_withheld`...), montré une fois. */
+export async function addAccountNotice(db: Queryable, userId: string, code: string): Promise<void> {
   await db.query("INSERT INTO verifications (identifier, value, expires_at) VALUES ('notice:' || $1::text, $2, now() + make_interval(days => $3))", [
     userId,
     code,

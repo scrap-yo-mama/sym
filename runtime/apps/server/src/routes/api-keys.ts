@@ -20,7 +20,8 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const createSchema = {
   type: 'object',
-  required: ['label', 'scopes', 'currentPassword'],
+  // `currentPassword` : exigé par `reauthenticate` si le compte a un mot de passe local (compte OIDC seul : ignoré).
+  required: ['label', 'scopes'],
   additionalProperties: false,
   properties: {
     label: { type: 'string', minLength: 1, maxLength: 100 },
@@ -30,7 +31,7 @@ const createSchema = {
   },
 } as const;
 
-type CreateBody = { label: string; scopes: ApiKeyScope[]; expiresInDays?: number; currentPassword: string };
+type CreateBody = { label: string; scopes: ApiKeyScope[]; expiresInDays?: number; currentPassword?: string };
 
 type KeyRow = {
   id: string;

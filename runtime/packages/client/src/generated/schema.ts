@@ -215,7 +215,7 @@ export interface paths {
         /** Clés d'API de l'appelant (session d'interface seulement) */
         get: operations["listApiKeys"];
         put?: never;
-        /** Crée une clé (ré-authentification par mot de passe) ; le secret n'apparaît qu'ici */
+        /** Crée une clé (ré-authentification, voir `CurrentPassword`) ; le secret n'apparaît qu'ici */
         post: operations["createApiKey"];
         delete?: never;
         options?: never;
@@ -1172,7 +1172,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Commence l'enrôlement TOTP (ré-authentification par mot de passe) */
+        /** Commence l'enrôlement TOTP (ré-authentification, voir `CurrentPassword`) */
         post: operations["enrollTwoFactor"];
         delete?: never;
         options?: never;
@@ -1393,7 +1393,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Code d'appairage de l'extension, usage unique, 10 minutes (07 § 1) ; mot de passe actuel exigé */
+        /** Code d'appairage de l'extension, usage unique, 10 minutes (07 § 1) ; ré-authentification (voir `CurrentPassword`) */
         post: operations["createExtensionPairingCode"];
         delete?: never;
         options?: never;
@@ -1687,7 +1687,7 @@ export interface components {
             label: string;
             scopes: components["schemas"]["ApiKeyScope"][];
             expiresInDays?: number;
-            currentPassword: string;
+            currentPassword?: components["schemas"]["CurrentPassword"];
         };
         ApiKeyCreated: components["schemas"]["ApiKey"] & {
             /** @description Secret en clair, renvoyé une seule fois. */
@@ -2531,7 +2531,7 @@ export interface components {
         OwnerTransferRequest: {
             /** Format: uuid */
             to_user_id: string;
-            current_password: string;
+            current_password?: components["schemas"]["CurrentPassword"];
             totp_code: string;
         };
         Invitation: {
@@ -2588,9 +2588,11 @@ export interface components {
         AuthSessionList: {
             sessions: components["schemas"]["AuthSession"][];
         };
+        /** @description Mot de passe actuel (ré-authentification, 13 § 5, ASVS 7.5.1). Compte à mot de passe local : exigé (absent → 400 `current_password_required` ; faux → 403 `reauth_failed` ; 5 échecs sur 15 min, toutes opérations sensibles confondues → 429 `too_many_attempts` et session fermée). Compte sans mot de passe local (OIDC seul) : facultatif et ignoré, une connexion de moins de 10 minutes fait foi (sinon 403 `reauth_required` : se reconnecter chez le fournisseur d’identité, sans échec compté). */
+        CurrentPassword: string;
         /** @description Ré-authentification (session récente exigée). */
         PasswordConfirmation: {
-            current_password: string;
+            current_password?: components["schemas"]["CurrentPassword"];
         };
         SecondFactorCode: {
             /** @description Code TOTP (6 chiffres) ou code de secours. */
@@ -2603,7 +2605,7 @@ export interface components {
             backup_codes_remaining?: number;
             notices?: components["schemas"]["AccountNotices"];
         };
-        /** @description Signalements au titulaire, montrés une fois après une authentification complète (ex. `password_reset_by_operator` - lien émis par la commande serveur, 13 § 4). */
+        /** @description Signalements au titulaire, montrés une fois après une authentification complète (ex. `password_reset_by_operator` - lien émis par la commande serveur, 13 § 4 ; `password_reset_withheld` - lien par e-mail retenu, relais SMTP réglé par un admin depuis moins de 24 h et compte sans 2FA). */
         AccountNotices: {
             code: string;
             /** Format: date-time */
@@ -2611,12 +2613,12 @@ export interface components {
         }[];
         /** @description Ré-authentification et second facteur (code TOTP ou code de secours), limité par compte. */
         PasswordAndCode: {
-            current_password: string;
+            current_password?: components["schemas"]["CurrentPassword"];
             code: string;
         };
         /** @description Ré-authentification avant liaison ; `code` exigé si le compte a une 2FA. */
         OidcLinkRequest: {
-            current_password: string;
+            current_password?: components["schemas"]["CurrentPassword"];
             code?: string;
         };
         OidcLinkStart: {
@@ -2656,7 +2658,7 @@ export interface components {
             backup_codes: string[];
         };
         TwoFactorDisable: {
-            current_password: string;
+            current_password?: components["schemas"]["CurrentPassword"];
             /** @description Code TOTP ou code de secours. */
             code: string;
         };
@@ -2722,7 +2724,7 @@ export interface components {
             expires_at: string;
         };
         ExtensionPairingCodeRequest: {
-            currentPassword: string;
+            currentPassword?: components["schemas"]["CurrentPassword"];
         };
         ExtensionPairingCode: {
             /** @description Code à usage unique, valable 10 minutes. */
@@ -2830,6 +2832,15 @@ export interface components {
     responses: {
         /** @description Erreur au format commun `{ error: { code, message } }` (le code est stable, jamais localisé). */
         Error: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["ApiError"];
+            };
+        };
+        /** @description Ré-authentification refusée (13 § 5) : `reauth_failed` (mot de passe actuel incorrect) ; `reauth_required` (compte OIDC seul dont la connexion date de plus de 10 minutes : se reconnecter chez le fournisseur d’identité) ; ou autre refus de l’opération (`forbidden`, `mfa_required`, `mfa_enforced`...). */
+        ReauthError: {
             headers: {
                 [name: string]: unknown;
             };
@@ -3235,7 +3246,7 @@ export interface operations {
             };
             400: components["responses"]["Error"];
             401: components["responses"]["Error"];
-            403: components["responses"]["Error"];
+            403: components["responses"]["ReauthError"];
             429: components["responses"]["Error"];
         };
     };
@@ -4925,8 +4936,9 @@ export interface operations {
             };
             400: components["responses"]["Error"];
             401: components["responses"]["Error"];
-            403: components["responses"]["Error"];
+            403: components["responses"]["ReauthError"];
             404: components["responses"]["Error"];
+            429: components["responses"]["Error"];
         };
     };
     listInvitations: {
@@ -5140,8 +5152,9 @@ export interface operations {
                     "application/json": components["schemas"]["TwoFactorEnrollment"];
                 };
             };
+            400: components["responses"]["Error"];
             401: components["responses"]["Error"];
-            403: components["responses"]["Error"];
+            403: components["responses"]["ReauthError"];
             409: components["responses"]["Error"];
             429: components["responses"]["Error"];
         };
@@ -5197,7 +5210,7 @@ export interface operations {
             };
             400: components["responses"]["Error"];
             401: components["responses"]["Error"];
-            403: components["responses"]["Error"];
+            403: components["responses"]["ReauthError"];
             409: components["responses"]["Error"];
             429: components["responses"]["Error"];
         };
@@ -5224,7 +5237,7 @@ export interface operations {
             };
             400: components["responses"]["Error"];
             401: components["responses"]["Error"];
-            403: components["responses"]["Error"];
+            403: components["responses"]["ReauthError"];
             429: components["responses"]["Error"];
         };
     };
@@ -5274,7 +5287,7 @@ export interface operations {
             };
             400: components["responses"]["Error"];
             401: components["responses"]["Error"];
-            403: components["responses"]["Error"];
+            403: components["responses"]["ReauthError"];
             409: components["responses"]["Error"];
             429: components["responses"]["Error"];
             502: components["responses"]["Error"];
@@ -5491,7 +5504,7 @@ export interface operations {
             };
             400: components["responses"]["Error"];
             401: components["responses"]["Error"];
-            403: components["responses"]["Error"];
+            403: components["responses"]["ReauthError"];
             429: components["responses"]["Error"];
         };
     };

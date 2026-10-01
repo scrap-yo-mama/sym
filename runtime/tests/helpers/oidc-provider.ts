@@ -28,6 +28,8 @@ export type FakeIdp = {
   tamper: 'none' | 'aud' | 'iss' | 'nonce' | 'signature';
   /** Requêtes reçues (`MÉTHODE /chemin`). */
   requests: string[];
+  /** Points d'entrée annoncés par la découverte à la place des siens (IdP malveillant ou compromis). */
+  discoveryOverrides: Partial<Record<'token_endpoint' | 'jwks_uri' | 'userinfo_endpoint', string>>;
   close: () => Promise<void>;
 };
 
@@ -67,6 +69,7 @@ export async function startFakeIdp(): Promise<FakeIdp> {
     nextClaims: { sub: 'zz_test_sub' },
     tamper: 'none',
     requests: [],
+    discoveryOverrides: {},
     close: () => new Promise((resolve) => (holder.server ? holder.server.close(() => resolve()) : resolve())),
   };
 
@@ -85,6 +88,7 @@ export async function startFakeIdp(): Promise<FakeIdp> {
           id_token_signing_alg_values_supported: ['RS256'],
           code_challenge_methods_supported: ['S256'],
           token_endpoint_auth_methods_supported: ['client_secret_post'],
+          ...idp.discoveryOverrides,
         });
       }
       if (url.pathname === '/jwks') return json(res, 200, { keys: [jwk] });

@@ -18,9 +18,10 @@ import { AttemptLimiter } from '../rate-limit.js';
 import { decodeCursor, encodeCursor, iso, reauthenticate, requireSecondFactor, twoFactorKeks, UUID } from './account-helpers.js';
 import { audit, notFound, sendError } from './guard.js';
 
+// Mot de passe actuel facultatif dans le schéma : exigé par `reauthenticate` (400 `current_password_required`) quand le
+// compte en a un ; ignoré pour un compte OIDC seul (connexion de moins de 10 minutes, sinon 403 `reauth_required`).
 const passwordBody = {
   type: 'object',
-  required: ['current_password'],
   additionalProperties: false,
   properties: { current_password: { type: 'string', minLength: 1, maxLength: 1024 } },
 } as const;
@@ -28,7 +29,7 @@ const passwordBody = {
 /** Ré-authentification ET second facteur (opérations qui changent les facteurs d'un compte à 2FA, 13 § 5, 7.5.1). */
 const passwordAndCodeBody = {
   type: 'object',
-  required: ['current_password', 'code'],
+  required: ['code'],
   additionalProperties: false,
   properties: { current_password: { type: 'string', minLength: 1, maxLength: 1024 }, code: { type: 'string', minLength: 1, maxLength: 32 } },
 } as const;
@@ -136,7 +137,7 @@ export function meRoutes(app: FastifyInstance, ctx: ServerContext): void {
   });
 
   // --- 2FA TOTP (13 § 7) ------------------------------------------------------------------------------------
-  app.post<{ Body: { current_password: string } }>('/api/me/2fa/enroll', { schema: { body: passwordBody } }, async (request, reply) => {
+  app.post<{ Body: { current_password?: string } }>('/api/me/2fa/enroll', { schema: { body: passwordBody } }, async (request, reply) => {
     const actor = request.actor!;
     if (!(await reauthenticate(ctx, request, reply, actor, request.body.current_password, 'mfa.enroll'))) return reply;
     const secret = generateTotpSecret();
@@ -180,7 +181,7 @@ export function meRoutes(app: FastifyInstance, ctx: ServerContext): void {
 
   // Régénération des codes de secours : mot de passe ET second facteur (une session complète et le mot de passe ne
   // suffisent pas à poser ses propres codes et rendre un accès persistant).
-  app.post<{ Body: { current_password: string; code: string } }>('/api/me/2fa/backup-codes', { schema: { body: passwordAndCodeBody } }, async (request, reply) => {
+  app.post<{ Body: { current_password?: string; code: string } }>('/api/me/2fa/backup-codes', { schema: { body: passwordAndCodeBody } }, async (request, reply) => {
     const actor = request.actor!;
     if (!(await reauthenticate(ctx, request, reply, actor, request.body.current_password, 'mfa.backup_codes'))) return reply;
     const { rowCount } = await ctx.pool.query('SELECT 1 FROM two_factor WHERE user_id = $1 AND confirmed_at IS NOT NULL', [actor.userId]);
@@ -192,7 +193,7 @@ export function meRoutes(app: FastifyInstance, ctx: ServerContext): void {
     return { backup_codes: codes };
   });
 
-  app.delete<{ Body: { current_password: string; code: string } }>(
+  app.delete<{ Body: { current_password?: string; code: string } }>(
     '/api/me/2fa',
     { schema: { body: passwordAndCodeBody } },
     async (request, reply) => {

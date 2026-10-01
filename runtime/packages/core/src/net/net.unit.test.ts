@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Garde SSRF (tâche 0.7, INV10) : classification des adresses, politique, résolution unique, épinglage.
 import { readFileSync } from 'node:fs';
+import { createServer } from 'node:http';
+import type { AddressInfo, Socket } from 'node:net';
 import { describe, expect, test } from 'vitest';
 import type { buildConnector } from 'undici';
-import type { Socket } from 'node:net';
 import { assertNavigable, chromiumEgressLaunchOptions, guardedGoto } from './chromium.js';
 import { parseAuthority } from './egress-proxy.js';
-import { createGuardedConnector, sharedGuardedDispatcher } from './fetch.js';
+import { createGuardedConnector, createIssuerScopedFetch, createOperatorConfigDispatcher, sharedGuardedDispatcher } from './fetch.js';
 import {
   createSsrfPolicy,
   SsrfBlockedError,
@@ -310,5 +311,42 @@ describe('relecture sécurité 0.7', () => {
     );
     expect(error).toBeInstanceOf(SsrfBlockedError);
     expect(destroyed).toBe(true);
+  });
+});
+
+describe('fournisseur OIDC : operator-config limité à l’origine de l’issuer (08b § 1)', () => {
+  test('assert_oidc_endpoints_issuer_origin : l’issuer (boucle locale permise) passe ; un point d’entrée d’une autre origine suit la politique des cibles', async () => {
+    const hits: string[] = [];
+    const server = createServer((req, res) => {
+      hits.push(`${req.method} ${req.url}`);
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end('{}');
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const other = createServer((req, res) => {
+      hits.push(`other ${req.method} ${req.url}`);
+      res.end();
+    });
+    await new Promise<void>((resolve) => other.listen(0, '127.0.0.1', resolve));
+    const issuer = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    const otherOrigin = `http://127.0.0.1:${(other.address() as AddressInfo).port}`;
+    const guard = new SsrfGuard({ resolver: async (host) => (host === 'idp-cdn.zz-test' ? [{ address: '127.0.0.1', family: 4 }] : []) });
+    const operator = createOperatorConfigDispatcher(guard);
+    const idpFetch = createIssuerScopedFetch(issuer, guard, operator);
+    try {
+      expect((await idpFetch(`${issuer}/.well-known/openid-configuration`, {})).status).toBe(200);
+      // Même hôte, autre port : autre origine, refusée (POST de formulaire vers un service interne).
+      const blocked = await idpFetch(`${otherOrigin}/token`, { method: 'POST', body: 'code=zz' }).catch((e: unknown) => e);
+      expect(blocked).toBeInstanceOf(SsrfBlockedError);
+      expect((blocked as SsrfBlockedError).code).toBe('ssrf_blocked');
+      // Nom public qui résout vers la boucle locale : refusé aussi (pas d'operator-config hors de l'issuer).
+      const named = await idpFetch('https://idp-cdn.zz-test/jwks', {}).catch((e: unknown) => e);
+      expect(named).toBeInstanceOf(SsrfBlockedError);
+      expect(hits).toEqual(['GET /.well-known/openid-configuration']);
+    } finally {
+      await operator.close();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      await new Promise<void>((resolve) => other.close(() => resolve()));
+    }
   });
 });

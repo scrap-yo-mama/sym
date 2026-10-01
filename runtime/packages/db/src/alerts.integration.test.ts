@@ -40,6 +40,8 @@ const A = randomUUID();
 const ADMIN = randomUUID();
 const guard = new SsrfGuard({ policy: createSsrfPolicy({ allowedPrivateHosts: ['127.0.0.0/8'], allowedPorts: [80, 443] }) });
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+/** Réglage écrit hors console (commande serveur, tests) : sans effet sur la réinitialisation par e-mail (tâche 3.7). */
+const OPERATOR = { userId: null, role: 'operator' } as const;
 const NOW = new Date(Math.floor(Date.now() / 1000) * 1000);
 const DAY = 86_400_000;
 
@@ -80,7 +82,7 @@ afterEach(async () => {
 
 const ctx = (over: Partial<AlertContext> = {}): AlertContext => ({ pool, queue, store, guard, now: () => NOW, ...over });
 async function configure(over: { window?: number; to?: string[]; baseUrl?: string | null } = {}) {
-  await saveSmtpSettings(pool, store, { host: '127.0.0.1', port: smtp.port, security: 'none', from: 'alerts@scrapyomama.zz-test' });
+  await saveSmtpSettings(pool, store, { host: '127.0.0.1', port: smtp.port, security: 'none', from: 'alerts@scrapyomama.zz-test' }, OPERATOR);
   await saveAlertSettings(pool, { to: over.to ?? ['admin@example.zz-test'], window_seconds: over.window ?? 120, locale: 'en', base_url: over.baseUrl === undefined ? 'https://runtime.example' : over.baseUrl });
 }
 async function api(status: string, slug = `zz_test_${randomBytes(4).toString('hex')}`): Promise<string> {
@@ -112,7 +114,7 @@ const transition = (apiId: string, event: Parameters<typeof applyStatusTransitio
 describe('réglages', () => {
   test('mot de passe SMTP chiffré (secret d\'instance), jamais dans `settings` ni ailleurs en clair (INV8)', async () => {
     const canary = `zz_test_smtp_${randomBytes(8).toString('hex')}`;
-    await saveSmtpSettings(pool, store, { host: 'smtp.example.zz-test', port: 587, security: 'starttls', username: 'alerts', password: canary, from: 'alerts@scrapyomama.zz-test' });
+    await saveSmtpSettings(pool, store, { host: 'smtp.example.zz-test', port: 587, security: 'starttls', username: 'alerts', password: canary, from: 'alerts@scrapyomama.zz-test' }, OPERATOR);
     const hits = await pool.query<{ t: string }>(
       `SELECT 'settings' AS t FROM settings WHERE strpos(value::text, $1) > 0
        UNION ALL SELECT 'secrets' FROM secrets WHERE strpos(to_jsonb(secrets)::text, $1) > 0 OR position(convert_to($1, 'UTF8') in ciphertext) > 0`,
@@ -129,12 +131,12 @@ describe('réglages', () => {
 
   test('validation : hôte, port, sécurité, expéditeur, identifiants hors TLS, destinataires, fenêtre', async () => {
     const ok = { host: 'smtp.example.zz-test', port: 587, security: 'starttls' as const, from: 'a@b.zz-test' };
-    await expect(saveSmtpSettings(pool, store, { ...ok, host: 'bad host; DROP' })).rejects.toThrow('hôte');
-    await expect(saveSmtpSettings(pool, store, { ...ok, port: 70000 })).rejects.toThrow('port');
-    await expect(saveSmtpSettings(pool, store, { ...ok, security: 'ssl' as never })).rejects.toThrow('security');
-    await expect(saveSmtpSettings(pool, store, { ...ok, from: 'pas une adresse' })).rejects.toThrow('from');
-    await expect(saveSmtpSettings(pool, store, { ...ok, security: 'none', username: 'u', password: 'p' })).rejects.toThrow('sans TLS');
-    await expect(saveSmtpSettings(pool, store, { ...ok, username: 'u' })).rejects.toThrow('password');
+    await expect(saveSmtpSettings(pool, store, { ...ok, host: 'bad host; DROP' }, OPERATOR)).rejects.toThrow('hôte');
+    await expect(saveSmtpSettings(pool, store, { ...ok, port: 70000 }, OPERATOR)).rejects.toThrow('port');
+    await expect(saveSmtpSettings(pool, store, { ...ok, security: 'ssl' as never }, OPERATOR)).rejects.toThrow('security');
+    await expect(saveSmtpSettings(pool, store, { ...ok, from: 'pas une adresse' }, OPERATOR)).rejects.toThrow('from');
+    await expect(saveSmtpSettings(pool, store, { ...ok, security: 'none', username: 'u', password: 'p' }, OPERATOR)).rejects.toThrow('sans TLS');
+    await expect(saveSmtpSettings(pool, store, { ...ok, username: 'u' }, OPERATOR)).rejects.toThrow('password');
     await expect(saveAlertSettings(pool, { to: ['x\r\nBcc: y@z.zz-test'] })).rejects.toThrow('alerts.to');
     await expect(saveAlertSettings(pool, { to: ['a@b.zz-test'], window_seconds: -1 })).rejects.toThrow('window_seconds');
     expect(await loadSmtpConfig(pool, store)).toBeNull();
@@ -152,7 +154,7 @@ describe('réglages', () => {
     await configure();
     expect(await testSmtp(ctx(), 'refuse@example.zz-test')).toMatchObject({ ok: false, code: 'rejected' });
     // Relais réglé par l'admin (operator-config) : métadonnées cloud refusées, sans détail sensible.
-    await saveSmtpSettings(pool, store, { host: '169.254.169.254', port: smtp.port, security: 'none', from: 'alerts@scrapyomama.zz-test' });
+    await saveSmtpSettings(pool, store, { host: '169.254.169.254', port: smtp.port, security: 'none', from: 'alerts@scrapyomama.zz-test' }, OPERATOR);
     expect(await testSmtp(ctx({ guard: new SsrfGuard() }), 'admin@example.zz-test')).toEqual({ ok: false, code: 'ssrf_blocked', smtpCode: null });
   });
 });
@@ -317,7 +319,7 @@ describe('alertes actionnables', () => {
   test('sans SMTP ou sans destinataire : aucune alerte en file', async () => {
     const id = await api('reparation');
     expect((await transition(id, { type: 'repair_failed', cause: 'budget_exhausted' })).alerts).toBe(0);
-    await saveSmtpSettings(pool, store, { host: '127.0.0.1', port: smtp.port, security: 'none', from: 'alerts@scrapyomama.zz-test' });
+    await saveSmtpSettings(pool, store, { host: '127.0.0.1', port: smtp.port, security: 'none', from: 'alerts@scrapyomama.zz-test' }, OPERATOR);
     const id2 = await api('reparation');
     expect((await transition(id2, { type: 'repair_failed', cause: 'budget_exhausted' })).alerts).toBe(0);
   });
@@ -429,7 +431,7 @@ describe('échecs SMTP', () => {
     await configure();
     // Relais réglé par l'admin (operator-config, 08b § 1) : boucle locale permise même sous une garde stricte ; métadonnées cloud refusées.
     expect(await sendAlertEmail(ctx({ guard: new SsrfGuard() }), job(id))).toEqual({ sent: true, recipients: 1 });
-    await saveSmtpSettings(pool, store, { host: '169.254.169.254', port: smtp.port, security: 'none', from: 'alerts@scrapyomama.zz-test' });
+    await saveSmtpSettings(pool, store, { host: '169.254.169.254', port: smtp.port, security: 'none', from: 'alerts@scrapyomama.zz-test' }, OPERATOR);
     expect(await sendAlertEmail(ctx({ guard: new SsrfGuard() }), job(id))).toEqual({ sent: false, reason: 'ssrf_blocked' });
     await configure();
     // Relais coupé : l'erreur remonte, la file (retryLimit 3) rejoue.

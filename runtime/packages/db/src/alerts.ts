@@ -71,7 +71,23 @@ export type SmtpSettings = {
   helo: string | null;
   /** Dernier test réussi (« non testé » tant qu'il ne l'a pas été). */
   tested_at: string | null;
+  /**
+   * Auteur du dernier changement (tâche 3.7, INV5) : un relais réglé par un admin suspend 24 h les liens de
+   * réinitialisation par e-mail des comptes sans 2FA (`smtpResetHoldActive`). Absent : réglage d'avant 3.7.
+   */
+  changed_by_role?: SmtpChangedBy['role'];
+  changed_by?: string | null;
+  changed_at?: string;
 };
+
+/**
+ * Auteur d'un changement du relais SMTP : `owner` ou `admin` (route de réglage, tâche 3.1), `operator` (commande
+ * serveur, tests). Obligatoire : un relais choisi par un admin verrait passer les liens de réinitialisation (INV5).
+ */
+export type SmtpChangedBy = { userId: string | null; role: 'owner' | 'admin' | 'operator' };
+
+/** Durée pendant laquelle un relais SMTP réglé par un admin ne transporte aucun lien de réinitialisation d'un compte sans 2FA. */
+export const SMTP_ADMIN_CHANGE_HOLD_HOURS = 24;
 
 export type AlertSettings = {
   to: string[];
@@ -103,6 +119,7 @@ export async function saveSmtpSettings(
   db: Queryable,
   store: SecretStore,
   input: { host: string; port: number; security: SmtpSecurity; username?: string; password?: string; from: string; helo?: string },
+  changedBy: SmtpChangedBy,
 ): Promise<SmtpSettings> {
   if (!HOST.test(input.host)) throw new AlertConfigError('smtp.host : nom d\'hôte invalide');
   if (!Number.isInteger(input.port) || input.port < 1 || input.port > 65535) throw new AlertConfigError('smtp.port : 1 à 65535');
@@ -121,9 +138,26 @@ export async function saveSmtpSettings(
     from: input.from,
     helo: input.helo ?? null,
     tested_at: null,
+    changed_by_role: changedBy.role,
+    changed_by: changedBy.userId,
+    changed_at: new Date().toISOString(),
   };
   await writeSetting(db, SMTP_SETTING, settings);
   return settings;
+}
+
+/**
+ * Vrai si le relais SMTP a été réglé par un admin il y a moins de `SMTP_ADMIN_CHANGE_HOLD_HOURS` : un admin qui
+ * pointerait l'instance vers son propre relais ne lit pas le lien de réinitialisation d'un compte sans 2FA (INV5,
+ * « administrer n'est pas accéder » ; même règle que le lien copiable, réservé aux comptes à 2FA). L'owner, la
+ * commande serveur et un réglage d'avant 3.7 ne suspendent rien.
+ */
+export async function smtpResetHoldActive(db: Queryable, now: Date = new Date()): Promise<boolean> {
+  const s = await readSetting<SmtpSettings>(db, SMTP_SETTING);
+  if (!s || s.changed_by_role === undefined || s.changed_by_role === 'owner' || s.changed_by_role === 'operator') return false;
+  const at = Date.parse(s.changed_at ?? '');
+  // Date illisible : échec fermé (suspendu).
+  return !Number.isFinite(at) || now.getTime() - at < SMTP_ADMIN_CHANGE_HOLD_HOURS * 3_600_000;
 }
 
 export async function saveAlertSettings(db: Queryable, input: Partial<AlertSettings> & { to: readonly string[] }): Promise<AlertSettings> {

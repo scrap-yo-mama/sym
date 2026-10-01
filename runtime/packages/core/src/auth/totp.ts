@@ -155,9 +155,35 @@ export function mfaRequiredFor(policy: MfaEnforced, role: 'owner' | 'admin' | 'm
 }
 
 /**
- * `amr` d'un IdP OIDC attestant un second facteur (RFC 8176) : `mfa`, `otp`, `hwk`, `swk`. L'e-mail et le SMS ne
- * servent jamais de facteur (13 § 7) : `sms` seul ne suffit pas.
+ * Catégorie de facteur des méthodes `amr` de RFC 8176 retenues (13 § 7) : savoir, possession, inhérence. Absentes,
+ * donc jamais comptées : `sms`, `tel` (13 § 7 : ni SMS ni téléphone comme facteur), `mca`, `rba`, `geo`, `user`,
+ * `wia` (signaux de contexte, pas des facteurs).
+ */
+const AMR_FACTOR: Readonly<Record<string, 'knowledge' | 'possession' | 'inherence'>> = {
+  pwd: 'knowledge',
+  pin: 'knowledge',
+  kba: 'knowledge',
+  otp: 'possession',
+  hwk: 'possession',
+  swk: 'possession',
+  sc: 'possession',
+  pop: 'possession',
+  fpt: 'inherence',
+  face: 'inherence',
+  iris: 'inherence',
+  retina: 'inherence',
+  vbm: 'inherence',
+};
+
+/**
+ * `amr` d'un IdP OIDC attestant une authentification multifacteur (13 § 7, ASVS 6.8.4) : `mfa`, ou au moins deux
+ * méthodes de catégories distinctes (`pwd` + `otp`, `pin` + `hwk`...). Selon RFC 8176, `otp`, `swk` ou `hwk`
+ * décrivent une méthode, pas une authentification multifacteur : une connexion sans mot de passe par code ou par clé
+ * seule est un facteur unique et ne dispense pas de la 2FA locale. SMS et téléphone ne comptent jamais.
  */
 export function idpAssertsMfa(amr: unknown): boolean {
-  return Array.isArray(amr) && amr.some((v) => v === 'mfa' || v === 'otp' || v === 'hwk' || v === 'swk');
+  if (!Array.isArray(amr)) return false;
+  if (amr.includes('mfa')) return true;
+  const categories = new Set(amr.flatMap((v) => (typeof v === 'string' && Object.hasOwn(AMR_FACTOR, v) ? [AMR_FACTOR[v]] : [])));
+  return categories.size >= 2;
 }

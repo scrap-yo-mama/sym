@@ -326,7 +326,7 @@ paths:
       security:
         - sessionCookie: []
       tags: [account]
-      summary: Crée une clé (ré-authentification par mot de passe) ; le secret n'apparaît qu'ici
+      summary: Crée une clé (ré-authentification, voir `CurrentPassword`) ; le secret n'apparaît qu'ici
       requestBody:
         required: true
         content:
@@ -345,7 +345,7 @@ paths:
         '401':
           $ref: '#/components/responses/Error'
         '403':
-          $ref: '#/components/responses/Error'
+          $ref: '#/components/responses/ReauthError'
         '429':
           $ref: '#/components/responses/Error'
   /api/api-keys/{id}:
@@ -1861,8 +1861,10 @@ paths:
         '401':
           $ref: '#/components/responses/Error'
         '403':
-          $ref: '#/components/responses/Error'
+          $ref: '#/components/responses/ReauthError'
         '404':
+          $ref: '#/components/responses/Error'
+        '429':
           $ref: '#/components/responses/Error'
   /api/invitations:
     get:
@@ -2027,7 +2029,7 @@ paths:
       security:
         - sessionCookie: []
       tags: [account]
-      summary: Commence l'enrôlement TOTP (ré-authentification par mot de passe)
+      summary: Commence l'enrôlement TOTP (ré-authentification, voir `CurrentPassword`)
       requestBody:
         required: true
         content:
@@ -2044,10 +2046,12 @@ paths:
         '401':
           $ref: '#/components/responses/Error'
         '403':
-          $ref: '#/components/responses/Error'
+          $ref: '#/components/responses/ReauthError'
         '409':
           $ref: '#/components/responses/Error'
         '429':
+          $ref: '#/components/responses/Error'
+        '400':
           $ref: '#/components/responses/Error'
   /api/me/2fa/confirm:
     post:
@@ -2102,7 +2106,7 @@ paths:
         '401':
           $ref: '#/components/responses/Error'
         '403':
-          $ref: '#/components/responses/Error'
+          $ref: '#/components/responses/ReauthError'
         '409':
           $ref: '#/components/responses/Error'
   /api/me/2fa:
@@ -2128,7 +2132,7 @@ paths:
         '401':
           $ref: '#/components/responses/Error'
         '403':
-          $ref: '#/components/responses/Error'
+          $ref: '#/components/responses/ReauthError'
   /api/me/identities:
     get:
       operationId: listMyIdentities
@@ -2172,7 +2176,7 @@ paths:
         '401':
           $ref: '#/components/responses/Error'
         '403':
-          $ref: '#/components/responses/Error'
+          $ref: '#/components/responses/ReauthError'
         '409':
           $ref: '#/components/responses/Error'
         '429':
@@ -2377,7 +2381,7 @@ paths:
       security:
         - sessionCookie: []
       tags: [tunnel]
-      summary: Code d'appairage de l'extension, usage unique, 10 minutes (07 § 1) ; mot de passe actuel exigé
+      summary: Code d'appairage de l'extension, usage unique, 10 minutes (07 § 1) ; ré-authentification (voir `CurrentPassword`)
       requestBody:
         required: true
         content:
@@ -2396,7 +2400,7 @@ paths:
         '401':
           $ref: '#/components/responses/Error'
         '403':
-          $ref: '#/components/responses/Error'
+          $ref: '#/components/responses/ReauthError'
         '429':
           $ref: '#/components/responses/Error'
   /api/extension/pair:
@@ -2704,6 +2708,15 @@ components:
         application/json:
           schema:
             $ref: '#/components/schemas/ApiError'
+    ReauthError:
+      description: >-
+        Ré-authentification refusée (13 § 5) : `reauth_failed` (mot de passe actuel incorrect) ; `reauth_required`
+        (compte OIDC seul dont la connexion date de plus de 10 minutes : se reconnecter chez le fournisseur
+        d’identité) ; ou autre refus de l’opération (`forbidden`, `mfa_required`, `mfa_enforced`...).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiError'
     Accepted:
       description: Accepté ; run (ou enquête) à suivre par `GET /api/runs/{id}` ou le flux SSE (05 § 4.3).
       content:
@@ -2930,7 +2943,7 @@ components:
     ApiKeyCreate:
       type: object
       additionalProperties: false
-      required: [label, scopes, currentPassword]
+      required: [label, scopes]
       properties:
         label:
           type: string
@@ -2947,9 +2960,7 @@ components:
           minimum: 1
           maximum: 365
         currentPassword:
-          type: string
-          minLength: 1
-          maxLength: 1024
+          $ref: '#/components/schemas/CurrentPassword'
     ApiKeyCreated:
       allOf:
         - $ref: '#/components/schemas/ApiKey'
@@ -4683,15 +4694,13 @@ components:
     OwnerTransferRequest:
       type: object
       additionalProperties: false
-      required: [to_user_id, current_password, totp_code]
+      required: [to_user_id, totp_code]
       properties:
         to_user_id:
           type: string
           format: uuid
         current_password:
-          type: string
-          minLength: 1
-          maxLength: 1024
+          $ref: '#/components/schemas/CurrentPassword'
         totp_code:
           type: string
           pattern: '^\d{6}$'
@@ -4802,16 +4811,23 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/AuthSession'
+    CurrentPassword:
+      description: >-
+        Mot de passe actuel (ré-authentification, 13 § 5, ASVS 7.5.1). Compte à mot de passe local : exigé
+        (absent → 400 `current_password_required` ; faux → 403 `reauth_failed` ; 5 échecs sur 15 min, toutes
+        opérations sensibles confondues → 429 `too_many_attempts` et session fermée). Compte sans mot de passe local
+        (OIDC seul) : facultatif et ignoré, une connexion de moins de 10 minutes fait foi (sinon 403 `reauth_required` :
+        se reconnecter chez le fournisseur d’identité, sans échec compté).
+      type: string
+      minLength: 1
+      maxLength: 1024
     PasswordConfirmation:
       description: Ré-authentification (session récente exigée).
       type: object
       additionalProperties: false
-      required: [current_password]
       properties:
         current_password:
-          type: string
-          minLength: 1
-          maxLength: 1024
+          $ref: '#/components/schemas/CurrentPassword'
     SecondFactorCode:
       type: object
       additionalProperties: false
@@ -4838,7 +4854,7 @@ components:
         notices:
           $ref: '#/components/schemas/AccountNotices'
     AccountNotices:
-      description: Signalements au titulaire, montrés une fois après une authentification complète (ex. `password_reset_by_operator` - lien émis par la commande serveur, 13 § 4).
+      description: Signalements au titulaire, montrés une fois après une authentification complète (ex. `password_reset_by_operator` - lien émis par la commande serveur, 13 § 4 ; `password_reset_withheld` - lien par e-mail retenu, relais SMTP réglé par un admin depuis moins de 24 h et compte sans 2FA).
       type: array
       items:
         type: object
@@ -4854,12 +4870,10 @@ components:
       description: Ré-authentification et second facteur (code TOTP ou code de secours), limité par compte.
       type: object
       additionalProperties: false
-      required: [current_password, code]
+      required: [code]
       properties:
         current_password:
-          type: string
-          minLength: 1
-          maxLength: 1024
+          $ref: '#/components/schemas/CurrentPassword'
         code:
           type: string
           minLength: 1
@@ -4868,12 +4882,9 @@ components:
       description: Ré-authentification avant liaison ; `code` exigé si le compte a une 2FA.
       type: object
       additionalProperties: false
-      required: [current_password]
       properties:
         current_password:
-          type: string
-          minLength: 1
-          maxLength: 1024
+          $ref: '#/components/schemas/CurrentPassword'
         code:
           type: string
           minLength: 1
@@ -4969,12 +4980,10 @@ components:
     TwoFactorDisable:
       type: object
       additionalProperties: false
-      required: [current_password, code]
+      required: [code]
       properties:
         current_password:
-          type: string
-          minLength: 1
-          maxLength: 1024
+          $ref: '#/components/schemas/CurrentPassword'
         code:
           description: Code TOTP ou code de secours.
           type: string
@@ -5100,12 +5109,9 @@ components:
     ExtensionPairingCodeRequest:
       type: object
       additionalProperties: false
-      required: [currentPassword]
       properties:
         currentPassword:
-          type: string
-          minLength: 1
-          maxLength: 1024
+          $ref: '#/components/schemas/CurrentPassword'
     ExtensionPairingCode:
       type: object
       additionalProperties: false

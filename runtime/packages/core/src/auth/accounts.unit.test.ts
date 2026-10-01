@@ -102,9 +102,21 @@ describe('MFA_ENFORCED et amr', () => {
     expect(mfaRequiredFor('all', 'member')).toBe(true);
   });
 
-  test('amr : mfa/otp/hwk/swk oui ; sms, pwd, absence : non', () => {
+  test('assert_oidc_amr_mfa_strict : « mfa », ou deux catégories de facteurs distinctes (RFC 8176) ; une méthode seule (otp, swk, hwk), sms, pwd, absence : non', () => {
     expect(idpAssertsMfa(['pwd', 'mfa'])).toBe(true);
-    expect(idpAssertsMfa(['otp'])).toBe(true);
+    expect(idpAssertsMfa(['mfa'])).toBe(true);
+    expect(idpAssertsMfa(['pwd', 'otp'])).toBe(true);
+    expect(idpAssertsMfa(['hwk', 'pin'])).toBe(true);
+    expect(idpAssertsMfa(['swk', 'face'])).toBe(true);
+    // Une méthode n'est pas une authentification multifacteur : connexion sans mot de passe par code ou clé seule.
+    expect(idpAssertsMfa(['otp'])).toBe(false);
+    expect(idpAssertsMfa(['swk'])).toBe(false);
+    expect(idpAssertsMfa(['hwk'])).toBe(false);
+    // Deux méthodes de la même catégorie (possession) : un seul facteur.
+    expect(idpAssertsMfa(['otp', 'swk'])).toBe(false);
+    expect(idpAssertsMfa(['pwd', 'pin'])).toBe(false);
+    // SMS, téléphone, e-mail : jamais un facteur (13 § 7).
+    expect(idpAssertsMfa(['pwd', 'tel'])).toBe(false);
     expect(idpAssertsMfa(['pwd', 'sms'])).toBe(false);
     expect(idpAssertsMfa(undefined)).toBe(false);
     expect(idpAssertsMfa('mfa')).toBe(false);

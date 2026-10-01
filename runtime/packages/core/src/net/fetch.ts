@@ -187,3 +187,24 @@ export async function operatorConfigFetch(input: string | URL, init: Init, dispa
     throw findSsrfBlocked(error) ?? error;
   }
 }
+
+/**
+ * fetch d'un fournisseur OIDC (08b § 1). Seule l'origine de l'issuer, saisie par l'owner, relève de `operator-config`
+ * (IdP interne : privé et boucle locale permis). Les autres points d'entrée viennent du document de découverte, donc de
+ * l'IdP (`token_endpoint`, `jwks_uri`, `userinfo_endpoint`) : hors de cette origine, ils suivent la politique des cibles
+ * (`untrusted-target` : ports 80 et 443, privé seulement par `ALLOWED_PRIVATE_HOSTS`). Un IdP malveillant ou compromis
+ * ne fait donc pas poster le code, le vérificateur PKCE ni le secret du client vers un service interne. Aucune
+ * redirection suivie, dans un cas comme dans l'autre.
+ */
+export function createIssuerScopedFetch(
+  issuer: string | URL,
+  guard: SsrfGuard,
+  operatorDispatcher: Dispatcher,
+  targetDispatcher: Dispatcher = sharedGuardedDispatcher(guard),
+): (input: string | URL, init: Init) => Promise<Response> {
+  const origin = new URL(issuer).origin;
+  return (input, init) =>
+    new URL(input).origin === origin
+      ? operatorConfigFetch(input, init, operatorDispatcher)
+      : guardedFetch(input, init, { guard, dispatcher: targetDispatcher, followRedirects: false });
+}

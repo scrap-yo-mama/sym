@@ -4,13 +4,15 @@
 // OIDC : l'instance est client (relying party) avec `openid-client` 6.x (décision de 3.7, 13 § 14 : pas le plugin SSO
 // de la bibliothèque). Flux code + PKCE S256, `state` et `nonce` dans un cookie scellé lié au navigateur, `iss` = URL
 // de découverte, `aud` = client_id, signature vérifiée sur le JWKS (openid-client). Toute requête vers l'IdP passe par la
-// garde SSRF en politique `operator-config` (destination réglée par l'owner). Identité = (issuer, sub) — `tid:oid` pour
+// garde SSRF : `operator-config` pour l'origine de l'issuer réglé par l'owner, politique des cibles pour tout autre point
+// d'entrée annoncé par la découverte (assert_oidc_endpoints_issuer_origin). Identité = (issuer, sub) — `tid:oid` pour
 // Entra —, JAMAIS l'e-mail : aucune liaison par adresse (assert_oidc_no_email_linking). Liaison depuis une session
 // ouverte, par une action explicite APRÈS ré-authentification (mot de passe, ou connexion de moins de 10 min pour un
 // compte OIDC seul, et second facteur si une 2FA est active : 13 § 5, 7.5.1 ; assert_oidc_link_reauth), ou à
 // l'acceptation d'une invitation visant cette adresse. Le titulaire liste et retire ses identités liées. Création à la
 // volée en `member` (13 § 7) ; rôle depuis les groupes de l'IdP réévalué à chaque connexion suivante, `owner` jamais
-// attribuable. Une connexion OIDC ne dispense de la 2FA locale que si l'IdP atteste un second facteur (`amr`).
+// attribuable. Une connexion OIDC ne dispense de la 2FA locale que si l'IdP atteste une authentification multifacteur
+// (`amr` : `mfa`, ou deux catégories de facteurs distinctes ; une méthode seule comme `otp` ne suffit pas).
 import {
   emailDomainAllowed,
   GRANTABLE_SCOPES,
@@ -25,7 +27,7 @@ import {
   SecretDecryptError,
   type Role,
 } from '@runtime/core';
-import { createOperatorConfigDispatcher, operatorConfigFetch } from '@runtime/core/net';
+import { createIssuerScopedFetch, createOperatorConfigDispatcher } from '@runtime/core/net';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { hasConfirmedTwoFactor } from '@runtime/db';
 import * as oidc from 'openid-client';
@@ -170,8 +172,12 @@ function stateCookie(ctx: ServerContext, value: string, maxAgeSeconds: number): 
 
 export function ssoRoutes(app: FastifyInstance, ctx: ServerContext): void {
   const dispatcher = createOperatorConfigDispatcher(ctx.guard, ctx.extraCa ? { ca: ctx.extraCa } : {});
-  const customFetch: oidc.CustomFetch = async (url, options) =>
-    (await operatorConfigFetch(url, { method: options.method, headers: options.headers, body: options.body as never, signal: options.signal }, dispatcher)) as unknown as Response;
+  /** `operator-config` pour l'origine de l'issuer seulement ; tout autre point d'entrée de la découverte : politique des cibles. */
+  const customFetchFor = (issuer: URL): oidc.CustomFetch => {
+    const idpFetch = createIssuerScopedFetch(issuer, ctx.guard, dispatcher);
+    return async (url, options) =>
+      (await idpFetch(url, { method: options.method, headers: options.headers, body: options.body as never, signal: options.signal })) as unknown as Response;
+  };
   let discovered: { key: string; at: number; config: oidc.Configuration } | null = null;
 
   async function configuration(sso: SsoSettings): Promise<oidc.Configuration> {
@@ -181,7 +187,7 @@ export function ssoRoutes(app: FastifyInstance, ctx: ServerContext): void {
     const issuer = new URL(sso.issuer_url);
     if (issuer.protocol !== 'https:' && !ctx.oidcAllowHttp) throw new Error('issuer non https');
     const config = await oidc.discovery(issuer, sso.client_id, undefined, secret ? oidc.ClientSecretPost(secret) : oidc.None(), {
-      [oidc.customFetch]: customFetch,
+      [oidc.customFetch]: customFetchFor(issuer),
       timeout: 10,
       // Signature de l'ID Token vérifiée sur le JWKS de l'IdP (13 § 7), en plus de iss, aud et nonce.
       execute: [oidc.enableNonRepudiationChecks, ...(ctx.oidcAllowHttp && issuer.protocol === 'http:' ? [oidc.allowInsecureRequests] : [])],
@@ -322,13 +328,12 @@ export function ssoRoutes(app: FastifyInstance, ctx: ServerContext): void {
   // --- Identités OIDC liées au compte de l'appelant (13 § 7) -----------------------------------------------
   // Liaison : ré-authentification (mot de passe ; connexion de moins de 10 min pour un compte OIDC seul) et second
   // facteur si une 2FA est active, AVANT d'émettre l'état de liaison (7.5.1). Une session volée ne suffit pas.
-  app.post<{ Body: { current_password: string; code?: string } }>(
+  app.post<{ Body: { current_password?: string; code?: string } }>(
     '/api/me/identities/oidc',
     {
       schema: {
         body: {
           type: 'object',
-          required: ['current_password'],
           additionalProperties: false,
           properties: { current_password: { type: 'string', minLength: 1, maxLength: 1024 }, code: { type: 'string', minLength: 1, maxLength: 32 } },
         },
