@@ -14,6 +14,8 @@ Schéma PostgreSQL v3, migrations SQL versionnées et runner verrouillé (tâche
 | `src/run-logs.ts` | `appendRunLog` : masquage (`redact`) avant insertion dans `run_logs`. |
 | `src/rls.ts` | `withActor(pool, actor, fn)` : transaction sous le rôle `runtime_app` avec `app.user_id` / `app.role` (0.3b). |
 | `src/audit.ts` | `appendAudit` : ligne d’`audit_events` (ajout seul), `meta` masquée (`redact` + clés sensibles). |
+| `src/queue.ts` | `PgBossJobQueue` : **seul** adaptateur pg-boss 12 (`JobQueue` de `@runtime/core`). Aucun SQL brut sur `pgboss.*` ailleurs. |
+| `src/runs.ts` | Cycle de vie des runs (1.3) : `createRun` (run + job, même transaction), `cancelRun`, `recordSkippedRun`, `readRun` ; worker : `claimRun`, `heartbeatRun`, `recordAttempt`, `finishRun`, `requeueRun`, `sweepOrphans` ; bail de réparation ; `worker_heartbeats`. |
 | `src/partitions.ts` | Partitions mensuelles de `dataset_items` : création, liste, purge (`DETACH … CONCURRENTLY` puis `DROP`). |
 
 Secrets : `runtime keygen`, `runtime key-check`, `runtime rekey --confirm` (MASTER_KEY = nouvelle, MASTER_KEY_PREVIOUS = ancienne ; lots transactionnels, état dans `settings.rekey_state`, relance = reprise). Enveloppe : KEK = HKDF-SHA256(MASTER_KEY, libellé `kek:secrets`) ; DEK aléatoire par valeur ; AAD `secret|id|kind|owner_id|instance` recalculée à chaque lecture ; `kek_version` = génération de la clé maîtresse. Migration `0002_secret_state` : `secrets.state` (`ok` | `unreadable`), `unreadable_since`.
@@ -87,3 +89,15 @@ Branchement réel : `apps/server/src/auth/better-auth.ts` (Better Auth **1.7.5**
 - RLS activée sur les 18 tables à `owner_id` (dont `secrets` et `dataset_items`) et sur `api_keys` (`user_id`) ; politique `owner_isolation` (`owner_id = app_current_user_id()`, lecture et écriture) ; `instance_read` : API `instance` sans session (et ses versions de stratégie) lisible par un utilisateur authentifié.
 - **Sans `FORCE ROW LEVEL SECURITY`** (écart à 13 § 3) : le propriétaire des tables est l'identité système (`keyCheck`, `rekey`, vues d'administration, bibliothèque d'auth). Sur un hébergeur où il n'est pas superutilisateur, `FORCE` sans politique pour lui rendrait ces opérations silencieusement vides. Les requêtes d'utilisateur ne l'utilisent jamais : elles passent par `withActor` (`SET LOCAL ROLE runtime_app`).
 - Droits de `runtime_app` : contenu en CRUD (sous RLS), `api_keys` en SELECT/INSERT + UPDATE de `revoked_at`, `revoked_by`, `last_used_at`, `audit_events` en **INSERT seul** (`assert_audit_append_only`), vues `admin_run_metadata` / `admin_dataset_usage` (filtrées : toutes les lignes si `app.role` ∈ admin/owner, sinon les siennes). Aucun droit sur `users`, les tables d'auth, `settings`.
+
+## File de jobs et runs (tâche 1.3)
+
+pg-boss **12.34.0** (catalogue, `minimumReleaseAge` : 12.34.1+ trop récents au 2026-10-01), derrière `JobQueue` (`@runtime/core`, `run/`). pg-boss crée et migre son schéma `pgboss` sur la connexion de session ; son pool (`max`, défaut 2) compte dans le budget de 14 § 4.
+
+- **Même transaction** : `createRun(tx, queue, …)` insère le run `queued` puis le job (`send` avec l'option `db` de pg-boss) dans la transaction `withActor` de l'appelant. `runtime_app` n'a aucun droit sur `pgboss` : l'adaptateur passe `SET LOCAL ROLE NONE` le temps de l'appel pg-boss, puis rétablit `runtime_app` (même transaction, même COMMIT). La charge du job est `{ run_id }` seul.
+- **Jeton de clôture** (migration `0004_run_queue` : `runs.job_id`, `worker_id`, `requeue_count`) : chaque écriture du worker exige `job_id` = son job ; une remise en file change `job_id`.
+- **Battements** : `runs.heartbeat_at` toutes les 10 s (`RUN_HEARTBEAT_SECONDS`) ; le job pg-boss a `heartbeatSeconds: 30` et `expireInSeconds` = budget (`RUN_BUDGET_SECONDS`, 900) + 60 ; `worker_heartbeats` toutes les 15 s.
+- **Balayeur** (60 s, `SWEEP_INTERVAL_SECONDS`, dans chaque worker, `FOR UPDATE SKIP LOCKED`) : run `running`/`waiting_tunnel` sans battement depuis 30 s (`RUN_STALE_SECONDS`), ou `queued` dont le job n'est plus vivant → remis en file (nouveau job) si `requeue_count` < 1 (0 si `allow_write_actions`), sinon `failed` (`transient`, `worker_lost`). pg-boss ne rejoue jamais un run (`retryLimit: 0`).
+- **Arrêt** (SIGTERM) : plus de nouveau job, `draining`, fin des runs sous `SHUTDOWN_TIMEOUT_SECONDS` (30), sinon remise en file sans compter la perte (API qui écrit : `failed`, `worker_shutdown`).
+- **Identité** : côté web, `withActor` (RLS) ; côté worker, identité système (propriétaire des tables) limitée aux colonnes de pilotage des runs, du bail et de `worker_heartbeats`. Les données d'utilisateur écrites par un exécuteur passent par `withActor` avec `RunContext.ownerId`.
+- **Bail de réparation** : `apis.repair_lease_owner/until` (90 s, renouvelé), jamais de verrou de session.

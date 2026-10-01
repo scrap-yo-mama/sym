@@ -407,6 +407,10 @@ export const runs = pgTable(
     errorDetail: text('error_detail'),
     traceId: text('trace_id'),
     heartbeatAt: tstz('heartbeat_at'),
+    // 0004_run_queue (1.3) : job pg-boss courant (jeton de clôture), worker qui tient le run, remises en file.
+    jobId: uuid('job_id'),
+    workerId: text('worker_id'),
+    requeueCount: integer('requeue_count').notNull().default(0),
     createdAt: createdAt(),
     startedAt: tstz('started_at'),
     finishedAt: tstz('finished_at'),

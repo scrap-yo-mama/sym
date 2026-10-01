@@ -35,6 +35,8 @@ catalog:
   css-select: 7.0.0
   htmlparser2: 12.0.0
   domhandler: 6.0.1
+  # File de jobs (tâche 1.3, T2 R1) : 12.x figée ; 12.34.1+ et 12.35.x < 7 jours au 2026-10-01 (minimumReleaseAge).
+  pg-boss: 12.34.0
 
 # Durcissement supply chain (08b §5). Le durcissement complet est la tâche 0.8.
 minimumReleaseAge: 10080

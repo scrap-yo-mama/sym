@@ -1,23 +1,260 @@
 // SPDX-License-Identifier: AGPL-3.0-only
+// Service `worker` (tâche 1.3 ; 03 § Services ; 14 § 1, § 3, § 4) :
+// 1. schéma à jour, verrou partagé des secrets puis `keyCheck` AVANT toute file : une autre MASTER_KEY arrête le worker
+//    avant tout run (D-12, `assert_worker_key_mismatch`) ;
+// 2. pg-boss démarré (connexion de session), file `run` (retryLimit 0, expireInSeconds > budget) ;
+// 3. par job : prise du run (jeton `job_id`), `runs.heartbeat_at` toutes les RUN_HEARTBEAT_SECONDS, exécution,
+//    clôture ; perte du bail (annulation, reprise) → interruption ;
+// 4. `worker_heartbeats` toutes les 15 s ; balayeur des runs orphelins toutes les 60 s ;
+// 5. SIGTERM : `draining`, plus de nouveau job, fin des runs en cours sous SHUTDOWN_TIMEOUT_SECONDS, sinon remise en file.
+import { randomBytes } from 'node:crypto';
+import { hostname } from 'node:os';
+import {
+  loggerRedaction,
+  RUN_QUEUE,
+  RUN_SHUTDOWN_DETAIL,
+  secretValues,
+  type RunExecutor,
+  type RunJobData,
+  type RunResult,
+} from '@runtime/core';
+import {
+  beatWorker,
+  claimRun,
+  currentSchemaVersion,
+  expectedSchemaVersion,
+  finishRun,
+  heartbeatRun,
+  holdSecretsLock,
+  keyCheck,
+  PgBossJobQueue,
+  recordAttempt,
+  removeWorkerBeat,
+  requeueRun,
+  resolveConnections,
+  runQueueDefinition,
+  sweepOrphans,
+  type SweepResult,
+} from '@runtime/db';
+import pg from 'pg';
 import { pino, type Logger } from 'pino';
-import { loggerRedaction, PACKAGE_NAME as CORE } from '@runtime/core';
+import type { WorkerConfig } from './config.js';
+
+class WorkerStartupError extends Error {
+  override name = 'WorkerStartupError';
+}
+
+/**
+ * Exécuteur par défaut tant que les exécuteurs E1-E3 (tâche 1.6) ne sont pas branchés : le run est clos `failed`
+ * (`code_error`, `executor_unavailable`), jamais laissé `running`.
+ */
+export const unavailableExecutor: RunExecutor = async () => ({
+  state: 'failed',
+  failure_class: 'code_error',
+  retryable: false,
+  error_detail: 'executor_unavailable',
+});
 
 export interface Worker {
+  readonly workerId: string;
+  /** Runs en cours dans ce processus. */
+  inFlight(): number;
+  /** Un passage du balayeur (exposé pour les tests et `runtime doctor`). */
+  sweep(): Promise<SweepResult>;
+  /** Arrêt propre (idempotent). */
   stop(): Promise<void>;
 }
 
-export function startWorker(
-  options: { logger?: Logger; heartbeatMs?: number } = {},
-): Worker {
-  const log = options.logger ?? pino({ name: 'worker', ...loggerRedaction() }); // masquage INV8, couches 2 et 3
-  const heartbeatMs = options.heartbeatMs ?? 30_000;
-  log.info({ core: CORE }, 'worker démarré');
-  // Le minuteur garde le processus vivant jusqu'à stop().
-  const timer = setInterval(() => log.debug('worker en vie'), heartbeatMs);
-  return {
-    async stop() {
-      clearInterval(timer);
-      log.info('worker arrêté');
-    },
+export type StartWorkerOptions = {
+  config: WorkerConfig;
+  executor?: RunExecutor;
+  logger?: Logger;
+  workerId?: string;
+};
+
+type AbortCause = 'lease_lost' | 'expired' | 'shutdown';
+type Running = { runId: string; jobId: string; controller: AbortController; cause: AbortCause | null; done: Promise<void> };
+
+const errorDetail = (error: unknown): string =>
+  secretValues.redactText(error instanceof Error ? `${error.name}: ${error.message}` : String(error)).slice(0, 500);
+
+export async function startWorker(options: StartWorkerOptions): Promise<Worker> {
+  const { config } = options;
+  const log = options.logger ?? pino({ name: 'worker', ...loggerRedaction() }); // masquage INV8
+  const executor = options.executor ?? unavailableExecutor;
+  const workerId = options.workerId ?? `${hostname()}-${process.pid}-${randomBytes(3).toString('hex')}`;
+
+  const { sessionUrl } = await resolveConnections({
+    DATABASE_URL: config.databaseUrl,
+    ...(config.databaseUrlDirect ? { DATABASE_URL_DIRECT: config.databaseUrlDirect } : {}),
+  });
+  const pool = new pg.Pool({ connectionString: config.databaseUrl, max: config.dbPoolMax, application_name: 'runtime-worker' });
+  pool.on('error', (error) => log.error({ err: errorDetail(error) }, 'pool : connexion perdue'));
+  const lockClient = new pg.Client({ connectionString: sessionUrl, application_name: 'runtime-worker-lock' });
+  lockClient.on('error', (error) => log.error({ err: errorDetail(error) }, 'verrou des secrets : connexion perdue'));
+  let releaseLock: (() => Promise<void>) | undefined;
+  let queue: PgBossJobQueue | undefined;
+
+  const cleanup = async () => {
+    await queue?.stop({ timeoutMs: 1000 }).catch(() => undefined);
+    await releaseLock?.().catch(() => undefined);
+    await lockClient.end().catch(() => undefined);
+    await pool.end().catch(() => undefined);
   };
+
+  try {
+    const expected = expectedSchemaVersion();
+    const version = await currentSchemaVersion(pool);
+    if (version !== expected) {
+      throw new WorkerStartupError(`schéma de base en version ${version}, ${expected} attendue : lancez \`runtime migrate\` avant \`worker\`.`);
+    }
+    await lockClient.connect();
+    releaseLock = await holdSecretsLock(lockClient);
+    // D-12 : clé différente → KeyCheckError ici, avant pg-boss, avant toute prise de job.
+    const checked = await keyCheck(pool, config.keyring);
+    queue = new PgBossJobQueue({
+      connectionString: sessionUrl,
+      application_name: 'runtime-worker-queue',
+      onError: (error) => log.error({ err: errorDetail(error) }, 'file : erreur pg-boss'),
+    });
+    await queue.start();
+    await queue.createQueue(runQueueDefinition(config.runBudgetSeconds));
+    await beatWorker(pool, { workerId, version: config.version });
+    log.info({ workerId, key: checked.fingerprint, concurrency: config.concurrency }, 'worker démarré');
+  } catch (error) {
+    await cleanup();
+    throw error;
+  }
+  const q = queue;
+
+  let draining = false;
+  const running = new Map<string, Running>();
+
+  const beat = () =>
+    beatWorker(pool, {
+      workerId,
+      version: config.version,
+      draining,
+      rssMb: Math.round(process.memoryUsage().rss / 1048576),
+    }).catch((error: unknown) => log.warn({ err: errorDetail(error) }, 'worker_heartbeats : écriture impossible'));
+  const beatTimer = setInterval(() => void beat(), config.workerHeartbeatSeconds * 1000);
+
+  const sweep = async (): Promise<SweepResult> => {
+    const result = await sweepOrphans(pool, q, { staleSeconds: config.runStaleSeconds });
+    if (result.requeued.length + result.failed.length > 0) log.warn(result, 'balayeur : runs orphelins repris');
+    return result;
+  };
+  let sweeping = false;
+  const sweepTimer = setInterval(() => {
+    if (sweeping) return;
+    sweeping = true;
+    sweep()
+      .catch((error: unknown) => log.error({ err: errorDetail(error) }, 'balayeur : échec'))
+      .finally(() => (sweeping = false));
+  }, config.sweepIntervalSeconds * 1000);
+
+  const execute = async (runId: string, jobId: string, jobSignal: AbortSignal): Promise<void> => {
+    const claim = await claimRun(pool, { runId, jobId, workerId });
+    if (!claim) {
+      log.info({ runId, jobId }, 'job sans run à prendre (annulé ou repris) : ignoré');
+      return;
+    }
+    const controller = new AbortController();
+    let resolveDone!: () => void;
+    const entry: Running = { runId, jobId, controller, cause: null, done: new Promise((r) => (resolveDone = r)) };
+    const abort = (cause: AbortCause) => {
+      if (controller.signal.aborted) return;
+      entry.cause = cause;
+      controller.abort(new Error(cause));
+    };
+    running.set(runId, entry);
+    const onJobAbort = () => abort(draining ? 'shutdown' : 'expired');
+    jobSignal.addEventListener('abort', onJobAbort, { once: true });
+    const heartbeat = setInterval(() => {
+      heartbeatRun(pool, runId, jobId).then(
+        (ours) => {
+          if (!ours) abort('lease_lost');
+        },
+        (error: unknown) => log.warn({ runId, err: errorDetail(error) }, 'battement du run : écriture impossible'),
+      );
+    }, config.runHeartbeatSeconds * 1000);
+    try {
+      let result: RunResult;
+      try {
+        result = await executor({
+          runId,
+          apiId: claim.apiId,
+          ownerId: claim.ownerId,
+          strategyVersion: claim.strategyVersion,
+          input: claim.input,
+          signal: controller.signal,
+          recordAttempt: async (attempt) => {
+            await recordAttempt(pool, runId, jobId, attempt);
+          },
+        });
+      } catch (error) {
+        result = controller.signal.aborted
+          ? { state: 'failed', failure_class: 'transient', retryable: true, error_detail: entry.cause ?? 'aborted' }
+          : { state: 'failed', failure_class: 'code_error', retryable: false, error_detail: errorDetail(error) };
+      }
+      if (entry.cause === 'expired') {
+        result = { state: 'failed', failure_class: 'run_budget_exceeded', retryable: false, error_detail: 'job_expired' };
+      }
+      // Bail perdu ou arrêt : le run a déjà été annulé, repris ou remis en file ; rien n'est écrit.
+      if (entry.cause === 'lease_lost' || entry.cause === 'shutdown') return;
+      const closed = await finishRun(pool, runId, jobId, result);
+      log.info({ runId, state: result.state, closed }, 'run terminé');
+    } finally {
+      clearInterval(heartbeat);
+      jobSignal.removeEventListener('abort', onJobAbort);
+      running.delete(runId);
+      resolveDone();
+    }
+  };
+
+  await q.work<RunJobData>(RUN_QUEUE, { concurrency: config.concurrency, pollingIntervalSeconds: config.queuePollingSeconds }, async (job) => {
+    const runId = job.data?.run_id;
+    if (typeof runId !== 'string') {
+      log.error({ jobId: job.id }, 'job de run sans run_id : ignoré');
+      return;
+    }
+    await execute(runId, job.id, job.signal);
+  });
+
+  let stopping: Promise<void> | undefined;
+  const stop = () =>
+    (stopping ??= (async () => {
+      draining = true;
+      log.info({ inFlight: running.size }, 'arrêt : plus de nouveau job');
+      clearInterval(sweepTimer);
+      await q.offWork(RUN_QUEUE).catch((error: unknown) => log.warn({ err: errorDetail(error) }, 'arrêt : offWork'));
+      await beat();
+      const all = () => Promise.all([...running.values()].map((r) => r.done));
+      let timer: NodeJS.Timeout | undefined;
+      await Promise.race([all(), new Promise<void>((r) => (timer = setTimeout(r, config.shutdownTimeoutSeconds * 1000)))]);
+      clearTimeout(timer);
+      // Délai dépassé : remise en file (ou `failed` pour une API qui écrit), puis interruption.
+      for (const entry of [...running.values()]) {
+        const outcome = await requeueRun(pool, q, { runId: entry.runId, jobId: entry.jobId, detail: RUN_SHUTDOWN_DETAIL }).catch(
+          (error: unknown) => {
+            log.error({ runId: entry.runId, err: errorDetail(error) }, 'arrêt : remise en file impossible (le balayeur la fera)');
+            return null;
+          },
+        );
+        log.warn({ runId: entry.runId, outcome }, 'arrêt : run non fini');
+        entry.cause = 'shutdown';
+        entry.controller.abort(new Error('shutdown'));
+      }
+      await Promise.race([all(), new Promise<void>((r) => (timer = setTimeout(r, 2000)))]);
+      clearTimeout(timer);
+      clearInterval(beatTimer);
+      await q.stop({ timeoutMs: 2000 }).catch((error: unknown) => log.warn({ err: errorDetail(error) }, 'arrêt : pg-boss'));
+      await removeWorkerBeat(pool, workerId).catch(() => undefined);
+      await releaseLock?.().catch(() => undefined);
+      await lockClient.end().catch(() => undefined);
+      await pool.end().catch(() => undefined);
+      log.info('worker arrêté');
+    })());
+
+  return { workerId, inFlight: () => running.size, sweep, stop };
 }

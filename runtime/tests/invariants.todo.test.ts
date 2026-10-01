@@ -17,9 +17,10 @@ import { describe, test } from "vitest";
 // tests/security/ssrf-guard.security.test.ts (projet Vitest security, pnpm test:security).
 // INV3 (1.2) : assert_status_transitions est dans packages/core/src/status/transitions.unit.test.ts (21 tests transition_NN_*),
 // machine.prop.test.ts (modèle fast-check) et packages/db/src/status.integration.test.ts (status_events, même transaction).
+// INV4 et D-12 (1.3) : assert_run_traced et assert_worker_key_mismatch sont dans apps/worker/src/worker.integration.test.ts (worker réel,
+// kill -9 et SIGTERM compris) ; file, balayeur et bail : packages/db/src/runs.integration.test.ts.
 describe("invariants (à implémenter)", () => {
   test.todo("assert_cheapest_first_logged"); // INV2, tâche(s) 2.1
-  test.todo("assert_run_traced"); // INV4, tâche(s) 1.3
   test.todo("assert_identity_pinned"); // INV5, tâche(s) 2.6, 2.7
   test.todo("assert_tunnel_single_user"); // INV5, tâche(s) 2.6, 2.7
   test.todo("assert_no_circumvention"); // INV6, tâche(s) 1.7, 4.3

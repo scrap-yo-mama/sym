@@ -18,3 +18,4 @@ export * from './status/index.js';
 // (04 §7, jeu de classes différent) reste accessible sous `StatusFailureClass`.
 export type { FailureClass } from './model/index.js';
 export type { FailureClass as StatusFailureClass } from './status/index.js';
+export * from './run/index.js';
