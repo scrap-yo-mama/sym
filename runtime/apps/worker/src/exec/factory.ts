@@ -83,11 +83,26 @@ export function productionExecutorFactory(env: Readonly<Record<string, string | 
     const pacer = new DomainPacer(new PgPacingStore(pool));
     const secrets = secretStore(pool, config.keyring, checked);
     const production = env['NODE_ENV'] === 'production';
-    const engine: FactoryEngine = overrides.sandboxEngine?.({ production }) ?? new ProcessSandboxEngine({ ...sandboxOptionsFromEnv(env), production });
+    const sandbox = sandboxOptionsFromEnv(env);
+    const engine: FactoryEngine =
+      overrides.sandboxEngine?.({ production }) ??
+      new ProcessSandboxEngine({
+        ...sandbox,
+        production,
+        onSweepFailure: (message) => logger.error({ alert: 'sandbox_sweep_failed' }, message),
+      });
     if (production) {
       const probe = await engine.probeIsolation();
       if (probe.parentEnviron === 'readable') {
         throw new SandboxIsolationError("bac à sable : l'enfant lit l'environnement du worker (utilisateur dédié requis, D-30)");
+      }
+      // Sous no-new-privileges, /proc/<worker>/environ est refusé même à un enfant du MÊME uid (le worker détient des
+      // capacités permises) : la séparation se prouve par l'uid de l'enfant et par le fichier témoin du worker (revue 4.1b).
+      if (probe.uid === undefined || probe.uid === 0 || probe.uid === process.getuid?.() || (sandbox.uid !== undefined && probe.uid !== sandbox.uid)) {
+        throw new SandboxIsolationError(`bac à sable : l'enfant ne tourne pas sous l'uid dédié (uid ${String(probe.uid)}, attendu ${String(sandbox.uid)}, D-30)`);
+      }
+      if (probe.witness !== 'denied') {
+        throw new SandboxIsolationError("bac à sable : l'enfant lit les fichiers du worker (fichier témoin), utilisateur dédié requis (D-30)");
       }
       logger.info({ sandboxUid: probe.uid, noNewPrivs: probe.noNewPrivs }, 'bac à sable : isolation éprouvée');
     }

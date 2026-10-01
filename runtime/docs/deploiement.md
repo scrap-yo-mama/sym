@@ -98,7 +98,9 @@ docker compose -f docker-compose.prod.yml up -d
   profil seccomp par défaut de Docker, Chromium refuse de démarrer avec son bac à sable (« No usable sandbox! »). C'est le
   profil par défaut de Docker 28.0.4 plus la création d'espaces de noms utilisateur ; n'utilisez ni `seccomp=unconfined` ni
   `--no-sandbox`. Détails : [guide Docker Compose](../apps/docs/content/guides/docker-compose.md) ; risque résiduel :
-  [espaces de noms utilisateur](#risque-résiduel--espaces-de-noms-utilisateur).
+  [espaces de noms utilisateur](#risque-résiduel--espaces-de-noms-utilisateur). Sur un hôte à AppArmor, si Chromium refuse
+  encore de démarrer, la cause est le profil `docker-default` de l'hôte : ne passez pas Chromium en `--no-sandbox`,
+  signalez-le.
 - Coolify et Dokploy : importez `docker-compose.prod.yml` **et placez `deploy/seccomp-chromium.json` à côté** (même dossier
   que le fichier compose, sinon le worker ne peut pas être créé), définissez `MASTER_KEY`, `PUBLIC_URL`,
   `ADMIN_BOOTSTRAP_TOKEN`, `POSTGRES_PASSWORD` dans l'interface (mêmes valeurs que `install.sh` génère), laissez le proxy de
@@ -182,7 +184,7 @@ joignable et rappelle de terminer l'assistant ; tout autre 503 reste un échec.
 | Refus au démarrage « MASTER_KEY invalide » | Clé de 31 octets, phrase, espace ou saut de ligne | `runtime keygen` ; sur Railway, voir la forme de `secret()` ci-dessus |
 | « connexion de session requise » | Base derrière un pooler en mode transaction | Poser `DATABASE_URL_DIRECT` (connexion directe) |
 | Migration 0003 : `permission denied to create role` | L'utilisateur de la base n'a pas `CREATEROLE` | Créer le rôle une fois : `DATABASE_URL=<compte privilégié> runtime restore-prepare` |
-| Le worker refuse de démarrer (« bac à sable ») | `SETUID` ou `SETGID` retirées (`cap_drop`), uid imposé au conteneur (`user:`, `--user`), ou plateforme qui ne démarre pas l'image en root | Retirer l'option ; sur une plateforme qui l'impose, utiliser une machine Docker classique ([modèle de privilèges](#modèle-de-privilèges-de-limage)) |
+| Le worker refuse de démarrer (« bac à sable »), ou le conteneur s'arrête sur `setpriv: … failed` | `SETUID` ou `SETGID` retirées (`cap_drop`), uid imposé au conteneur (`user:`, `--user`), ou plateforme qui ne démarre pas l'image en root | Retirer l'option ; sur une plateforme qui l'impose, utiliser une machine Docker classique ([modèle de privilèges](#modèle-de-privilèges-de-limage)) |
 | Toutes les requêtes semblent venir de la même IP, limites partagées | `TRUST_PROXY` absent derrière un proxy | `TRUST_PROXY=1` (un saut), jamais `true` sans proxy |
 | Extension ou cookies refusés | `PUBLIC_URL` différente de l'adresse réelle, ou en HTTP | Corriger `PUBLIC_URL` (HTTPS), redémarrer |
 
@@ -207,13 +209,18 @@ Tous ces processus tournent sous `no-new-privileges`, même quand le conteneur e
 (`/ms-playwright`) et le reste de l'image ne sont modifiables que par root : un enfant évadé du bac à sable (uid 1500) ne
 peut pas remplacer le binaire que le worker lance ensuite sous `pwuser`. À la fin de chaque run, quand aucun autre run
 n'est actif, le worker tue tous les processus de l'uid dédié : un processus détaché par un enfant ne survit pas pour
-observer les runs suivants.
+observer les runs suivants. Limite : ce balayage n'a lieu que quand aucun autre run n'est actif ; pour qu'il ait lieu
+même sous des runs qui se chevauchent (`WORKER_CONCURRENCY` > 1), le worker suspend les nouveaux lancements après 25 runs
+ou 5 minutes sans balayage, jusqu'à ce que les runs en cours finissent. Chaque balayage est vérifié dans `/proc` (aucun
+processus de l'uid dédié ne doit subsister, balayeur compris) et repris jusqu'à trois fois ; en cas d'échec persistant,
+le worker refuse tout nouveau run et l'écrit au journal (`alert: sandbox_sweep_failed`).
 
 Conséquences pour l'hébergeur :
 
 - Ne retirez pas `SETUID` ni `SETGID` (`cap_drop`) et n'imposez pas d'uid (`user:`, `--user`, `runAsUser`) au worker ;
-  `no-new-privileges` est admis. Sous un uid imposé, le point d'entrée pose quand même `no-new-privileges` et le worker
-  refuse de démarrer en production (fermeture sûre : sans cela, un processus de `pwuser` pourrait repasser root par les
+  `no-new-privileges` est admis. Sans `SETUID` ou `SETGID`, root ne peut même pas descendre sur `pwuser` : le
+  conteneur s'arrête dès le point d'entrée (`setpriv: setresgid failed`), aucun rôle ne démarre. Sous un uid imposé, le
+  point d'entrée pose quand même `no-new-privileges` et le worker refuse de démarrer en production (fermeture sûre : sans cela, un processus de `pwuser` pourrait repasser root par les
   capacités de fichier). Kubernetes : `runAsNonRoot: true` refuse l'image (`USER root`) ; laissez-le à `false` pour ce
   conteneur. Un scanner d'image signale `USER root` : c'est attendu, la descente est vérifiée par `pnpm test:image`.
 - **`docker exec <conteneur> sh` sans `-u` ouvre un shell root** (il prend l'USER de l'image, root, avec les capacités du
@@ -234,6 +241,17 @@ Le worker détient `cap_setuid,cap_setgid` en permis. Un worker compromis **par 
 root, avec les capacités par défaut du conteneur, et compromet aussi le rôle server. Un worker compromis lit déjà
 `MASTER_KEY`, `DATABASE_URL` et les clés LLM : ce risque ajoute la **persistance** et la compromission du server au
 redémarrage.
+
+### Risque résiduel : boucle locale partagée avec l'uid dédié
+
+L'uid dédié sépare les fichiers et `/proc`, pas le réseau : l'enfant du bac à sable partage l'espace réseau du worker.
+Un enfant évadé **deux fois** (de l'isolat isolated-vm, puis du mode permission de Node, par du code natif) pourrait
+balayer `127.0.0.1`, trouver le port de débogage du Chromium agentique (`--remote-debugging-port=0`, sans
+authentification) et piloter l'essai d'un autre propriétaire (cookies, contenu des pages, actions hors de la garde de
+domaine), ou joindre les proxys d'egress locaux. La sonde « bac à sable : isolation éprouvée » ne couvre pas ce canal.
+Stagehand se connecte au Chromium agentique par une URL CDP (WebSocket) : `--remote-debugging-pipe` n'est pas utilisable
+tel quel. Pistes : espace de noms réseau dédié pour l'enfant (`unshare --net`, permis par le profil seccomp du compose),
+ou filtre seccomp de `socket()` posé par le lanceur. Risque consigné à côté de D-32.
 
 Comparaison avec la conception antérieure (USER pwuser, avant F-20261001-R01) : en Docker classique, sans
 `no-new-privileges`, n'importe quel processus de `pwuser` (worker ou Chromium compromis) faisait

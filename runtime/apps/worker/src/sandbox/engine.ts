@@ -6,7 +6,8 @@
 // si le worker les détient déjà), sous un Node que l'uid dédié peut exécuter (SANDBOX_NODE). Plafonds : temps mur, temps
 // CPU (RLIMIT_CPU), RSS du processus, octets reçus ; SIGKILL mesuré sur le processus. Toute violation tue l'enfant aussitôt.
 import { spawn, execFile } from 'node:child_process';
-import { readFile } from 'node:fs/promises';
+import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { existsSync, realpathSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -71,7 +72,16 @@ export type ProcessSandboxOptions = {
   permission?: boolean;
   /** Diagnostic (tests) : pid et variables vues par l’enfant. */
   onChildReady?: (info: { pid: number; envKeys: readonly string[] }) => void;
+  /** Vidange forcée (balayage de l'uid dédié) après ce nombre de runs ou ce délai sans balayage (défauts : 25 runs, 5 min). */
+  sweepEveryRuns?: number;
+  sweepEveryMs?: number;
+  /** Alerte : balayage de l'uid dédié en échec persistant, tous les runs suivants sont refusés. */
+  onSweepFailure?: (message: string) => void;
 };
+
+/** Vidange forcée par défaut : au plus 25 runs ou 5 minutes entre deux balayages de l'uid dédié. */
+const SWEEP_EVERY_RUNS = 25;
+const SWEEP_EVERY_MS = 5 * 60_000;
 
 /** Options d'utilisateur dédié lues dans l'environnement du worker (SANDBOX_UID, SANDBOX_GID, SANDBOX_LAUNCHER, SANDBOX_NODE). */
 export function sandboxOptionsFromEnv(env: Readonly<Record<string, string | undefined>>): Pick<ProcessSandboxOptions, 'uid' | 'gid' | 'launcher' | 'node'> {
@@ -184,11 +194,127 @@ export function sweepPlan(o: Pick<ProcessSandboxOptions, 'launcher' | 'uid' | 'g
   };
 }
 
+/**
+ * Processus encore vivants de l'uid dédié (uid réel, effectif ou sauvé), zombies exclus, lus dans `/proc` : après un
+ * balayage, il ne doit en rester aucun (un processus évadé peut stopper le balayeur entre son changement d'uid et son
+ * `kill -1`).
+ */
+export async function sandboxSurvivors(uid: number, procRoot = '/proc'): Promise<number[]> {
+  let entries: string[];
+  try {
+    entries = await readdir(procRoot);
+  } catch {
+    return [];
+  }
+  const found: number[] = [];
+  for (const entry of entries.filter((e) => /^\d+$/.test(e))) {
+    let status: string;
+    try {
+      status = await readFile(join(procRoot, entry, 'status'), 'utf8');
+    } catch {
+      continue; // processus disparu entre-temps
+    }
+    const state = /^State:\s*(\S)/m.exec(status)?.[1];
+    if (state === 'Z' || state === 'X') continue;
+    const uids = (/^Uid:\s*(.*)$/m.exec(status)?.[1] ?? '').trim().split(/\s+/).slice(0, 3).map(Number);
+    if (uids.includes(uid)) found.push(Number(entry));
+  }
+  return found;
+}
+
+/**
+ * Ordonnance les balayages de l'uid dédié (D-32, revue 4.1b). Un balayage a lieu quand aucun run n'est actif ; sous des
+ * runs qui se chevauchent sans fin (WORKER_CONCURRENCY > 1), il n'aurait jamais lieu : après `everyRuns` runs ou
+ * `everyMs` sans balayage, les nouveaux lancements sont suspendus jusqu'à la vidange (plus aucun run actif), puis le
+ * balayage joue. Chaque balayage est vérifié (`sweepOnce` rend `false` s'il reste un processus de l'uid dédié) et repris
+ * jusqu'à `maxAttempts` fois ; un échec persistant refuse tout run suivant (alerte par `onFailure`).
+ */
+export class SweepScheduler {
+  readonly #sweepOnce: () => Promise<boolean>;
+  readonly #everyRuns: number;
+  readonly #everyMs: number;
+  readonly #maxAttempts: number;
+  readonly #now: () => number;
+  readonly #onFailure: ((message: string) => void) | undefined;
+  #active = 0;
+  #runsSinceSweep = 0;
+  #lastSweepAt: number;
+  #sweeping: Promise<void> | undefined;
+  #drainWaiters: (() => void)[] = [];
+  #failure: Error | undefined;
+
+  constructor(o: { sweepOnce: () => Promise<boolean>; everyRuns: number; everyMs: number; maxAttempts?: number; now?: () => number; onFailure?: (message: string) => void }) {
+    this.#sweepOnce = o.sweepOnce;
+    this.#everyRuns = o.everyRuns;
+    this.#everyMs = o.everyMs;
+    this.#maxAttempts = o.maxAttempts ?? 3;
+    this.#now = o.now ?? Date.now;
+    this.#onFailure = o.onFailure;
+    this.#lastSweepAt = this.#now();
+  }
+
+  #drainDue(): boolean {
+    return this.#runsSinceSweep >= this.#everyRuns || this.#now() - this.#lastSweepAt >= this.#everyMs;
+  }
+
+  /** Avant le lancement d'un enfant : attend un balayage en cours, ou la vidange quand elle est due. */
+  async enter(): Promise<void> {
+    for (;;) {
+      if (this.#failure !== undefined) throw this.#failure;
+      if (this.#sweeping !== undefined) await this.#sweeping;
+      else if (this.#active > 0 && this.#drainDue()) await new Promise<void>((resolve) => this.#drainWaiters.push(resolve));
+      else break;
+    }
+    this.#active++;
+    this.#runsSinceSweep++;
+  }
+
+  /** Fin d'un run (ou d'une sonde) : le dernier actif déclenche le balayage. */
+  leave(): void {
+    if (--this.#active > 0) return;
+    const sweeping: Promise<void> = this.#sweepVerified().finally(() => {
+      if (this.#sweeping === sweeping) this.#sweeping = undefined;
+      for (const wake of this.#drainWaiters.splice(0)) wake();
+    });
+    this.#sweeping = sweeping;
+  }
+
+  async #sweepVerified(): Promise<void> {
+    for (let attempt = 0; attempt < this.#maxAttempts; attempt++) {
+      let clean: boolean;
+      try {
+        clean = await this.#sweepOnce();
+      } catch {
+        clean = false;
+      }
+      if (clean) {
+        this.#runsSinceSweep = 0;
+        this.#lastSweepAt = this.#now();
+        return;
+      }
+    }
+    const message = `bac à sable : balayage de l'uid dédié en échec (processus survivants après ${this.#maxAttempts} essais) ; runs refusés`;
+    this.#failure = new Error(message);
+    this.#onFailure?.(message);
+  }
+
+  /** Attend la fin du balayage en cours (arrêt du worker, tests). */
+  async idle(): Promise<void> {
+    while (this.#sweeping !== undefined) await this.#sweeping;
+  }
+}
+
 /** Résultat de `probeIsolation` : ce que voit un processus lancé comme l'enfant, hors mode permission de Node. */
 export type IsolationProbe = {
   uid: number | undefined;
   /** `/proc/<ppid>/environ` : `denied` (attendu), `readable` (trou), `absent` (pas de /proc). */
   parentEnviron: 'denied' | 'readable' | 'absent';
+  /**
+   * Fichier témoin 0600 du worker, dans un dossier 0700 : `denied` (attendu), `readable` (l'enfant a l'uid du worker).
+   * Discriminant même sous no-new-privileges, où `/proc/<worker>/environ` est refusé à un processus du même uid (le worker
+   * détient des capacités permises).
+   */
+  witness: 'denied' | 'readable' | 'absent';
   /** Linux : bit no_new_privs posé. */
   noNewPrivs: boolean | undefined;
 };
@@ -198,9 +324,12 @@ const fs = require('node:fs');
 let parentEnviron = 'absent';
 try { fs.readFileSync('/proc/' + process.ppid + '/environ'); parentEnviron = 'readable'; }
 catch (e) { parentEnviron = e && e.code === 'ENOENT' ? 'absent' : 'denied'; }
+let witness = 'absent';
+try { fs.readFileSync(process.argv[1]); witness = 'readable'; }
+catch (e) { witness = e && e.code === 'ENOENT' ? 'absent' : 'denied'; }
 let noNewPrivs;
 try { noNewPrivs = /^NoNewPrivs:\\s+1$/m.test(fs.readFileSync('/proc/self/status', 'utf8')); } catch (e) {}
-process.stdout.write(JSON.stringify({ uid: process.getuid ? process.getuid() : undefined, parentEnviron, noNewPrivs }));`;
+process.stdout.write(JSON.stringify({ uid: process.getuid ? process.getuid() : undefined, parentEnviron, witness, noNewPrivs }));`;
 
 /**
  * Chemins d'un paquet résolu depuis `from` : lien symbolique (tel que la résolution le lit), cible réelle, et dossier
@@ -277,10 +406,8 @@ export class ProcessSandboxEngine implements SandboxEngine {
   readonly #options: ProcessSandboxOptions;
   readonly #childFile: string;
   readonly #readPaths: string[];
-  /** Runs et sondes en cours (enfants vivants ou à lancer) ; à zéro, l'uid dédié est balayé. */
-  #active = 0;
-  /** Balayage en cours : aucun enfant n'est lancé avant sa fin. */
-  #sweeping: Promise<void> | undefined;
+  /** Balayages de l'uid dédié (D-32) : absent sans lanceur (même uid, ou worker root), rien à balayer. */
+  readonly #sweeps: SweepScheduler | undefined;
 
   constructor(options: ProcessSandboxOptions = {}) {
     this.id = options.engine ?? 'isolated-vm';
@@ -292,40 +419,61 @@ export class ProcessSandboxEngine implements SandboxEngine {
         "bac à sable : utilisateur dédié requis en production (SANDBOX_UID/SANDBOX_GID distincts de l'uid du worker, SANDBOX_LAUNCHER)",
       );
     }
+    // Le lanceur détient CAP_SETUID effectif (revue 4.1b) : uid 0, l'enfant serait root, propriétaire de /usr/bin/node,
+    // entrypoint.sh et /app ; groupe du worker, il exécuterait node-worker et sandbox-launch et lirait les fichiers du groupe.
+    if (options.uid === 0) throw new Error('bac à sable : SANDBOX_UID ne peut pas valoir 0 (root)');
+    if (options.gid === 0) throw new Error('bac à sable : SANDBOX_GID ne peut pas valoir 0 (root)');
+    if (options.gid !== undefined && (options.gid === process.getgid?.() || (process.getgroups?.() ?? []).includes(options.gid))) {
+      throw new Error(`bac à sable : SANDBOX_GID (${options.gid}) est un groupe du worker ; un groupe dédié est requis`);
+    }
     this.#options = options;
     const self = import.meta.url;
     this.#childFile = fileURLToPath(new URL(self.endsWith('.ts') ? './child.ts' : './child.js', self));
     this.#readPaths = childReadPaths(this.#childFile, this.id);
+    const plan = sweepPlan(options);
+    const uid = options.uid;
+    this.#sweeps =
+      plan === undefined || uid === undefined
+        ? undefined
+        : new SweepScheduler({
+            sweepOnce: () => this.#sweepOnce(plan, uid),
+            everyRuns: options.sweepEveryRuns ?? SWEEP_EVERY_RUNS,
+            everyMs: options.sweepEveryMs ?? SWEEP_EVERY_MS,
+            ...(options.onSweepFailure === undefined ? {} : { onFailure: options.onSweepFailure }),
+          });
   }
 
   /**
-   * Compte un run (ou une sonde) : il attend la fin d'un balayage en cours avant de lancer son enfant ; le dernier à finir
-   * balaie l'uid dédié (`sweepPlan`). Avec des runs concurrents (WORKER_CONCURRENCY), le balayage attend un instant creux.
+   * Compte un run (ou une sonde) : il attend la fin d'un balayage en cours (ou la vidange quand elle est due) avant de
+   * lancer son enfant ; le dernier à finir balaie l'uid dédié (`sweepPlan`), balayage vérifié (`SweepScheduler`).
    */
   async #track<T>(start: () => Promise<T>): Promise<T> {
-    this.#active++;
+    if (this.#sweeps === undefined) return start();
+    await this.#sweeps.enter();
     try {
-      while (this.#sweeping !== undefined) await this.#sweeping;
       return await start();
     } finally {
-      if (--this.#active === 0) this.#sweep();
+      this.#sweeps.leave();
     }
   }
 
-  #sweep(): void {
-    const plan = sweepPlan(this.#options);
-    if (plan === undefined) return;
-    const sweeping: Promise<void> = new Promise<void>((resolve) => {
+  /** Un balayage : `kill -1` sous l'uid dédié, puis aucun processus de cet uid ne doit subsister (Linux). */
+  async #sweepOnce(plan: { command: string; args: string[] }, uid: number): Promise<boolean> {
+    await new Promise<void>((resolve) => {
       execFile(plan.command, plan.args, { env: {}, timeout: 5000 }, () => resolve());
-    }).finally(() => {
-      if (this.#sweeping === sweeping) this.#sweeping = undefined;
     });
-    this.#sweeping = sweeping;
+    if (process.platform !== 'linux') return true;
+    // SIGKILL n'est pas instantané (sortie d'un appel système en cours) : quelques relectures avant de conclure.
+    for (let i = 0; i < 10; i++) {
+      if ((await sandboxSurvivors(uid)).length === 0) return true;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    return false;
   }
 
   /** Attend la fin du balayage en cours (arrêt du worker, tests). */
   async idle(): Promise<void> {
-    while (this.#sweeping !== undefined) await this.#sweeping;
+    await this.#sweeps?.idle();
   }
 
   #plan(nodeArgs: readonly string[], script: string | undefined, cpuSeconds: number): SpawnPlan {
@@ -342,21 +490,29 @@ export class ProcessSandboxEngine implements SandboxEngine {
     return this.#track(() => this.#probe());
   }
 
-  #probe(): Promise<IsolationProbe> {
-    const plan = this.#plan(['-e', PROBE_SCRIPT], undefined, 5);
-    return new Promise((resolve, reject) => {
-      execFile(plan.command, plan.args, { env: {}, uid: plan.uid, gid: plan.gid, timeout: 10_000, cwd: dirname(this.#childFile) }, (err, stdout) => {
-        if (err !== null) {
-          reject(new Error(`bac à sable : sonde d'isolation en échec (${err.message.slice(0, 200)})`));
-          return;
-        }
-        try {
-          resolve(JSON.parse(stdout) as IsolationProbe);
-        } catch {
-          reject(new Error("bac à sable : sonde d'isolation illisible"));
-        }
+  async #probe(): Promise<IsolationProbe> {
+    // Témoin : fichier 0600 du worker dans un dossier 0700 ; seul un processus du même uid (ou root) peut le lire.
+    const dir = await mkdtemp(join(tmpdir(), 'sandbox-probe-'));
+    try {
+      const witness = join(dir, 'witness');
+      await writeFile(witness, 'zz', { mode: 0o600 });
+      const plan = this.#plan(['-e', PROBE_SCRIPT, witness], undefined, 5);
+      return await new Promise<IsolationProbe>((resolve, reject) => {
+        execFile(plan.command, plan.args, { env: {}, uid: plan.uid, gid: plan.gid, timeout: 10_000, cwd: dirname(this.#childFile) }, (err, stdout) => {
+          if (err !== null) {
+            reject(new Error(`bac à sable : sonde d'isolation en échec (${err.message.slice(0, 200)})`));
+            return;
+          }
+          try {
+            resolve(JSON.parse(stdout) as IsolationProbe);
+          } catch {
+            reject(new Error("bac à sable : sonde d'isolation illisible"));
+          }
+        });
       });
-    });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   }
 
   run(code: string, bridges: SandboxBridges, limits: SandboxLimits, options: SandboxRunOptions = {}): Promise<SandboxResult> {
@@ -366,7 +522,15 @@ export class ProcessSandboxEngine implements SandboxEngine {
       bridges.violation(v);
       return Promise.resolve({ engine: this.id, outcome: 'violation', violations: [v], durationMs: 0, killed: false });
     }
-    return this.#track(() => this.#run(code, bridges, limits, options));
+    let started = false;
+    return this.#track(() => {
+      started = true;
+      return this.#run(code, bridges, limits, options);
+    }).catch((err: unknown) => {
+      if (started) throw err;
+      // Balayage de l'uid dédié en échec persistant (SweepScheduler) : aucun enfant n'est plus lancé.
+      return { engine: this.id, outcome: 'crashed' as const, error: err instanceof Error ? err.message : String(err), violations: [], durationMs: 0, killed: false };
+    });
   }
 
   #run(code: string, bridges: SandboxBridges, limits: SandboxLimits, options: SandboxRunOptions): Promise<SandboxResult> {

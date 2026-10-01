@@ -167,6 +167,36 @@ describe('render.yaml : conforme au schéma officiel de Render (rejeu manuel, RE
   });
 });
 
+describe('assert_compose_chromium_seccomp — profil seccomp de Chromium (deploy/seccomp-chromium.json) et compose de développement', () => {
+  type Rule = { names: string[]; action: string; args?: unknown[]; includes?: { caps?: string[] }; excludes?: { caps?: string[] }; errnoRet?: number };
+  const profile = JSON.parse(text('seccomp-chromium.json')) as { defaultAction: string; syscalls: Rule[] };
+  const unconditional = (r: Rule) => r.action === 'SCMP_ACT_ALLOW' && (r.args ?? []).length === 0 && (r.includes?.caps ?? []).length === 0;
+
+  test('profil par défaut de Docker plus la règle de Playwright (clone, setns, unshare) sans condition, rien d’autre de dangereux', () => {
+    expect(profile.defaultAction).toBe('SCMP_ACT_ERRNO');
+    const allowed = new Set(profile.syscalls.filter(unconditional).flatMap((r) => r.names));
+    // Règle exacte et empreinte du reste du profil : test « profil seccomp du worker » plus bas (fix-pnpm-pin, D-57).
+    for (const userns of ['clone', 'setns', 'unshare']) expect(allowed.has(userns), userns).toBe(true);
+    for (const forbidden of ['mount', 'umount2', 'pivot_root', 'bpf', 'kexec_load', 'init_module', 'finit_module', 'open_by_handle_at', 'perf_event_open', 'keyctl', 'add_key']) {
+      expect(allowed.has(forbidden), forbidden).toBe(false);
+    }
+    // clone3 : ENOSYS sans CAP_SYS_ADMIN (glibc se replie sur clone).
+    expect(profile.syscalls.find((r) => r.names.includes('clone3') && r.action === 'SCMP_ACT_ERRNO')?.errnoRet).toBe(38);
+  });
+
+  test('compose de développement : même sonde de santé descendue sur pwuser, même profil seccomp pour le worker (revue 4.1b)', () => {
+    const dev = parse(readFileSync(join(runtimeDir, 'docker-compose.yml'), 'utf8')) as { services: Record<string, { image?: string; healthcheck?: { test: string[] }; security_opt?: string[] }> };
+    const runtimeServices = Object.entries(dev.services).filter(([, svc]) => svc.image === 'runtime:dev');
+    expect(runtimeServices.map(([n]) => n).sort()).toEqual(['migrate', 'server', 'worker']);
+    for (const [name, svc] of runtimeServices) {
+      if (svc.healthcheck?.test[0] === 'CMD') expect(svc.healthcheck.test.slice(0, 8), name).toEqual(['CMD', '/usr/bin/setpriv', '--reuid=1001', '--regid=1001', '--init-groups', '--inh-caps=-all', '--no-new-privs', '--']);
+      expect(svc.healthcheck?.test[0] ?? 'CMD', name).not.toBe('CMD-SHELL');
+    }
+    expect(dev.services['server']!.healthcheck!.test[0]).toBe('CMD');
+    expect(dev.services['worker']!.security_opt).toEqual(['seccomp=./deploy/seccomp-chromium.json']);
+  });
+});
+
 describe('docker-compose.prod.yml : cible bloquante', () => {
   type Svc = { image?: string; environment?: Record<string, string>; depends_on?: Record<string, { condition: string }>; healthcheck?: { test: string[] }; mem_limit?: string; ports?: string[]; [k: string]: unknown };
   const doc = yaml<{ services: Record<string, Svc> }>('docker-compose.prod.yml');

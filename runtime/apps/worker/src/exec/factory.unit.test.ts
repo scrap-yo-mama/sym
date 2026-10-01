@@ -53,7 +53,7 @@ describe('productionExecutorFactory', () => {
       id: 'isolated-vm' as const,
       probeIsolation: () => {
         probed += 1;
-        return Promise.resolve({ uid: 1500, parentEnviron: 'readable' as const, noNewPrivs: true });
+        return Promise.resolve({ uid: 1500, parentEnviron: 'readable' as const, witness: 'denied' as const, noNewPrivs: true });
       },
       run: () => Promise.reject(new Error('jamais appelé')),
     };
@@ -62,8 +62,26 @@ describe('productionExecutorFactory', () => {
     ).rejects.toMatchObject({ name: 'SandboxIsolationError', message: expect.stringMatching(/lit l'environnement du worker/) });
     expect(probed).toBe(1);
     // Témoin : sonde saine → le worker démarre.
-    const sane = { ...engine, probeIsolation: () => Promise.resolve({ uid: 1500, parentEnviron: 'denied' as const, noNewPrivs: true }) };
+    const sane = { ...engine, probeIsolation: () => Promise.resolve({ uid: 1500, parentEnviron: 'denied' as const, witness: 'denied' as const, noNewPrivs: true }) };
     const handle = await productionExecutorFactory({ NODE_ENV: 'production' }, { sandboxEngine: () => sane })({ pool, config: loadWorkerConfig(env({ DISABLE_BROWSER: 'true' })), checked, logger });
+    await handle.close?.();
+    await pool.end();
+  });
+
+  test('assert_sandbox_probe_discriminating — production, sonde d’isolation : uid autre que SANDBOX_UID, root, uid du worker, ou témoin du worker lisible → refus de démarrer (revue 4.1b)', async () => {
+    // Sous no-new-privileges, /proc/<worker>/environ est refusé même à un enfant du MÊME uid : seul l’uid et le témoin
+    // prouvent la séparation.
+    const pool = new pg.Pool({ connectionString: 'postgres://zz_test@127.0.0.1:1/zz_test' });
+    const sane = { uid: 1500, parentEnviron: 'denied' as const, witness: 'denied' as const, noNewPrivs: true };
+    const start = (probe: object, extra: Record<string, string> = {}) =>
+      productionExecutorFactory(
+        { NODE_ENV: 'production', SANDBOX_UID: '1500', SANDBOX_GID: '1500', ...extra },
+        { sandboxEngine: () => ({ id: 'isolated-vm' as const, probeIsolation: () => Promise.resolve(probe as typeof sane), run: () => Promise.reject(new Error('jamais appelé')) }) },
+      )({ pool, config: loadWorkerConfig(env({ DISABLE_BROWSER: 'true' })), checked, logger });
+    for (const probe of [{ ...sane, uid: 1600 }, { ...sane, uid: 0 }, { ...sane, uid: process.getuid?.() ?? 1001 }, { ...sane, uid: undefined }, { ...sane, witness: 'readable' }, { ...sane, witness: 'absent' }]) {
+      await expect(start(probe), JSON.stringify(probe)).rejects.toMatchObject({ name: 'SandboxIsolationError' });
+    }
+    const handle = await start(sane);
     await handle.close?.();
     await pool.end();
   });

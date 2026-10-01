@@ -39,21 +39,28 @@ const ADMIN_BOOTSTRAP_TOKEN = randomBytes(32).toString('base64');
 const DATABASE_URL = `postgres://runtime:${PG_PASSWORD}@${pgName}:5432/runtime`;
 
 /**
- * Profil seccomp livré (deploy/seccomp-chromium.json, posé par docker-compose.prod.yml) : celui de Docker plus les espaces de
- * noms utilisateur du bac à sable de Chromium. Sous le profil par défaut, Chromium refuse de démarrer (« No usable sandbox! »).
- * Render : son seccomp réel reste à vérifier ; le cas simulé applique le même profil.
+ * Options de sécurité du worker dans deploy/docker-compose.prod.yml (profil seccomp de Chromium), chemins rendus absolus.
+ * Le profil seccomp par défaut de Docker refuse les espaces de noms utilisateur du bac à sable de Chromium (« No usable
+ * sandbox! », job image de la CI sur ubuntu-24.04, revue 4.1b) ; Docker Desktop, lui, n'applique aucun profil par défaut :
+ * le profil est donc toujours passé explicitement, comme le compose le fait.
  */
-const SECCOMP = ['--security-opt', `seccomp=${join(runtimeDir, 'deploy/seccomp-chromium.json')}`];
-/** Capacités du conteneur de Render (bounding 0x400cb) et no-new-privileges. */
-const RENDER = [
-  ...SECCOMP,
+function composeWorkerSecurityOpts(): string[] {
+  const compose = parse(readFileSync(join(runtimeDir, 'deploy/docker-compose.prod.yml'), 'utf8')) as { services: Record<string, { security_opt?: string[] }> };
+  return (compose.services['worker']?.security_opt ?? []).flatMap((opt) => ['--security-opt', opt.replace(/^seccomp=\.\//, `seccomp=${join(runtimeDir, 'deploy')}/`)]);
+}
+const WORKER_SECURITY = composeWorkerSecurityOpts();
+const RENDER_CAPS = ['CHOWN', 'DAC_OVERRIDE', 'FOWNER', 'SETGID', 'SETUID', 'SYS_CHROOT'];
+/** Capacités du conteneur de Render (bounding 0x400cb) et no-new-privileges ; profil seccomp de Render non relevé (celui du compose). */
+const renderFlags = (capabilities: readonly string[] = RENDER_CAPS) => [
   '--security-opt', 'no-new-privileges',
   '--cap-drop', 'ALL',
-  ...['CHOWN', 'DAC_OVERRIDE', 'FOWNER', 'SETGID', 'SETUID', 'SYS_CHROOT'].flatMap((c) => ['--cap-add', c]),
+  ...capabilities.flatMap((c) => ['--cap-add', c]),
+  ...WORKER_SECURITY,
 ];
+const RENDER = renderFlags();
 const PROFILES = [
-  { name: 'Render (no-new-privileges, capacités réduites)', flags: RENDER, nnp: true },
-  { name: 'Docker classique (capacités par défaut)', flags: SECCOMP, nnp: false },
+  { name: 'Render (no-new-privileges, capacités réduites)', flags: RENDER, nnp: true, short: 'render' },
+  { name: 'Docker classique (capacités par défaut)', flags: [...WORKER_SECURITY], nnp: false, short: 'classic' },
 ] as const;
 
 const NONE = '0000000000000000';
@@ -121,11 +128,14 @@ const workerCaps = { inh: NONE, prm: SETID, eff: NONE, amb: NONE };
 /** tini et le shell superviseur d'un démarrage worker/all : ensemble ambient, retiré au lancement de chaque rôle. */
 const ambientCaps = { inh: SETID, prm: SETID, eff: SETID, amb: SETID };
 
-/** Sonde de santé du server dans deploy/docker-compose.prod.yml (forme exec : ["CMD", …]). */
-function composeHealthcheck(): string[] {
-  const compose = parse(readFileSync(join(runtimeDir, 'deploy/docker-compose.prod.yml'), 'utf8')) as { services: Record<string, { healthcheck?: { test?: string[] } }> };
+/** Composes dont la sonde de santé du server est rejouée telle quelle (production, puis développement). */
+const COMPOSE_FILES = ['deploy/docker-compose.prod.yml', 'docker-compose.yml'] as const;
+
+/** Sonde de santé du server dans un fichier compose (forme exec : ["CMD", …]). */
+function composeHealthcheck(file: (typeof COMPOSE_FILES)[number]): string[] {
+  const compose = parse(readFileSync(join(runtimeDir, file), 'utf8')) as { services: Record<string, { healthcheck?: { test?: string[] } }> };
   const test_ = compose.services['server']?.healthcheck?.test ?? [];
-  if (test_[0] !== 'CMD') throw new Error(`sonde de santé du server : forme exec ["CMD", …] attendue (${JSON.stringify(test_)})`);
+  if (test_[0] !== 'CMD') throw new Error(`${file}, sonde de santé du server : forme exec ["CMD", …] attendue (${JSON.stringify(test_)})`);
   return test_.slice(1);
 }
 
@@ -174,22 +184,31 @@ const out = { worker: status('self'), execPath: process.execPath };
 const sh = spawnSync('/bin/sh', ['-c', 'cat /proc/$$/status'], { encoding: 'utf8' });
 const shField = (k) => (new RegExp('^' + k + ':\\s*(.*)$', 'm').exec(sh.stdout) || [])[1] || '';
 out.sh = { uid: Number(shField('Uid').split(/\s+/)[0]), inh: shField('CapInh'), prm: shField('CapPrm'), eff: shField('CapEff'), amb: shField('CapAmb') };
+// Diagnostic du bac à sable de Chromium : création d'un espace de noms utilisateur (EPERM : seccomp ; EACCES : AppArmor).
+const userns = spawnSync('/usr/bin/unshare', ['--user', '/bin/true'], { encoding: 'utf8' });
+out.userns = userns.status === 0 ? 'ok' : (userns.status + ' ' + userns.stderr.trim()).slice(0, 300);
+out.seccomp = (/^Seccomp:\s*(\d)/m.exec(readFileSync('/proc/self/status', 'utf8')) || [])[1];
 const { chromium } = await import('/app/apps/worker/node_modules/playwright-core/index.mjs');
-const browser = await chromium.launch({ headless: true, chromiumSandbox: true, args: ['--disable-dev-shm-usage'] });
-const page = await browser.newPage();
-await page.setContent('<p>ok</p>');
-out.page = await page.textContent('p');
-const myNs = readlinkSync('/proc/self/ns/user');
 out.chromium = [];
-for (const d of readdirSync('/proc').filter((x) => /^\d+$/.test(x))) {
-  try {
-    const st = status(d);
-    // Processus de Chromium dans l'espace de noms utilisateur du conteneur ; ceux de son propre bac à sable (espace de
-    // noms imbriqué) ont des capacités relatives à cet espace, sans effet hors de lui.
-    if (/chrom/.test(st.name) && readlinkSync('/proc/' + d + '/ns/user') === myNs) out.chromium.push(st);
-  } catch {}
+try {
+  const browser = await chromium.launch({ headless: true, chromiumSandbox: true, args: ['--disable-dev-shm-usage'] });
+  const page = await browser.newPage();
+  await page.setContent('<p>ok</p>');
+  out.page = await page.textContent('p');
+  const myNs = readlinkSync('/proc/self/ns/user');
+  for (const d of readdirSync('/proc').filter((x) => /^\d+$/.test(x))) {
+    try {
+      const st = status(d);
+      // Processus de Chromium dans l'espace de noms utilisateur du conteneur ; ceux de son propre bac à sable (espace de
+      // noms imbriqué) ont des capacités relatives à cet espace, sans effet hors de lui.
+      if (/chrom/.test(st.name) && readlinkSync('/proc/' + d + '/ns/user') === myNs) out.chromium.push(st);
+    } catch {}
+  }
+  await browser.close();
+} catch (e) {
+  // Chromium sans bac à sable utilisable : rapporté avec le diagnostic au lieu d'un arrêt de la sonde.
+  out.chromiumError = String(e && e.message || e).split('\n').filter((l) => /FATAL|sandbox|launch/i.test(l)).join(' | ').slice(0, 800);
 }
-await browser.close();
 const { spawnPlan, sandboxOptionsFromEnv, ProcessSandboxEngine } = await import('/app/apps/worker/dist/sandbox/engine.js');
 const options = sandboxOptionsFromEnv(process.env);
 const CHILD = "const fs=require('fs');const s=fs.readFileSync('/proc/self/status','utf8');const f=k=>(new RegExp('^'+k+':\\\\s*(.*)$','m').exec(s)||[])[1]||'';" +
@@ -220,11 +239,13 @@ type ProbeReport = {
   worker: Proc;
   execPath: string;
   sh: Pick<Proc, 'uid' | 'inh' | 'prm' | 'eff' | 'amb'>;
-  page: string;
+  page?: string;
+  userns: string;
+  seccomp?: string;
+  chromiumError?: string;
   chromium: Proc[];
   sandbox: { uid: number; inh: string; prm: string; eff: string; amb: string; nnp: number; pid1Environ: string; parentEnviron: string; keys: string[]; core: string; coredumpFilter: string; userns: number | null; error?: string };
-  probe: { uid: number; parentEnviron: string; noNewPrivs: boolean };
-  run: { outcome: string; value: unknown; error?: string };
+  probe: { uid: number; parentEnviron: string; witness: string; noNewPrivs: boolean };  run: { outcome: string; value: unknown; error?: string };
   stray: { uid: number; before: string; after: string };
   setuid0: string;
 };
@@ -272,6 +293,18 @@ describe('assert_sandbox_image_privileges — image sous les capacités de Rende
     expect(identity(r.stdout)).toMatchObject({ uid: PWUSER, nnp: 1 });
   });
 
+  test('seccomp : le profil par défaut de Docker refuse les espaces de noms utilisateur (bac à sable de Chromium), celui du compose les permet', () => {
+    // Cause de l'échec du job image sur ubuntu-24.04 (revue 4.1b) : Chromium s'arrêtait sur « No usable sandbox! ».
+    const unshare = (opts: readonly string[]) => docker(['run', '--rm', '-u', String(PWUSER), ...opts, '--entrypoint', '/usr/bin/unshare', image, '--user', '/bin/true']);
+    const builtin = unshare(['--security-opt', 'seccomp=builtin']);
+    expect(builtin.status).not.toBe(0);
+    expect(builtin.stderr).toMatch(/Operation not permitted/);
+    for (const profile of PROFILES) {
+      const r = unshare(profile.flags);
+      expect(r.status, `${profile.short} : ${r.stderr}`).toBe(0);
+    }
+  });
+
   test('rien de ce qu’exécute ou charge pwuser n’est modifiable par l’uid dédié (Chromium de /ms-playwright, /app, /usr)', () => {
     const r = docker(['run', '--rm', '-u', `${SANDBOX_UID}:${SANDBOX_UID}`, '--entrypoint', 'find', image, '/', '-xdev',
       '(', '-path', '/proc', '-o', '-path', '/tmp', '-o', '-path', '/var/tmp', '-o', '-path', '/run/lock', '-o', '-path', '/dev', ')', '-prune',
@@ -293,7 +326,7 @@ describe('assert_sandbox_image_privileges — image sous les capacités de Rende
       }, 240_000);
 
       test('(a) worker : sonde d’isolation verte, worker sous pwuser avec cap_setuid,cap_setgid hors ambient, aucun root', async () => {
-        const name = startContainer(`zz_test_img_worker_${profile.nnp ? 'render' : 'classic'}_${run}`, profile.flags, {
+        const name = startContainer(`zz_test_img_worker_${profile.short}_${run}`, profile.flags, {
           RUNTIME_MODE: 'worker',
           DATABASE_URL,
           MASTER_KEY,
@@ -324,7 +357,7 @@ describe('assert_sandbox_image_privileges — image sous les capacités de Rende
       }, 240_000);
 
       test('(b)(c) enfants du worker : sh et Chromium sans capacité ; bac à sable sous l’uid dédié, sans capacité, /proc/1/environ refusé', async () => {
-        const name = startContainer(`zz_test_img_probe_${profile.nnp ? 'render' : 'classic'}_${run}`, profile.flags, { RUNTIME_MODE: 'worker' }, [
+        const name = startContainer(`zz_test_img_probe_${profile.short}_${run}`, profile.flags, { RUNTIME_MODE: 'worker' }, [
           '-v', `${join(scratch, 'probe.mjs')}:/app/apps/worker/dist/index.js:ro`,
         ]);
         await until(`sonde terminée dans ${name}`, () => !running(name), 120_000).catch((error: unknown) => {
@@ -341,8 +374,9 @@ describe('assert_sandbox_image_privileges — image sous les capacités de Rende
         expect(report.execPath).toBe('/usr/local/libexec/node-worker');
         expect(report.worker.uid).toBe(PWUSER);
         expect(caps(report.worker)).toEqual(workerCaps);
-        // (b) enfants ordinaires.
+        // (b) enfants ordinaires. Bac à sable de Chromium : espaces de noms utilisateur permis par le profil seccomp du compose.
         expect(report.sh).toEqual({ uid: PWUSER, ...noCaps });
+        expect({ userns: report.userns, chromiumError: report.chromiumError }, `seccomp ${report.seccomp ?? '?'}`).toEqual({ userns: 'ok', chromiumError: undefined });
         expect(report.page).toBe('ok');
         expect(report.chromium.length).toBeGreaterThan(0);
         for (const c of report.chromium) expect({ uid: c.uid, ...caps(c) }, c.name).toEqual({ uid: PWUSER, ...noCaps });
@@ -354,7 +388,7 @@ describe('assert_sandbox_image_privileges — image sous les capacités de Rende
         // du bac à sable (uid 1500) crée un espace de noms utilisateur. Trace, pas une exigence : un filtre seccomp propre à
         // l'enfant (durcissement envisagé) ferait passer ce statut à non nul, et cette ligne serait à inverser.
         expect(report.sandbox.userns, 'unshare -U sous l’uid 1500').toBe(0);
-        expect(report.probe).toEqual({ uid: SANDBOX_UID, parentEnviron: 'denied', noNewPrivs: true });
+        expect(report.probe).toEqual({ uid: SANDBOX_UID, parentEnviron: 'denied', witness: 'denied', noNewPrivs: true });
         expect(report.run).toMatchObject({ outcome: 'ok', value: 42 });
         // Processus détaché sous l'uid dédié : vivant avant le run, balayé à sa fin.
         expect(report.stray).toMatchObject({ uid: SANDBOX_UID, before: 'alive' });
@@ -364,7 +398,7 @@ describe('assert_sandbox_image_privileges — image sous les capacités de Rende
       }, 180_000);
 
       test('(e) RUNTIME_MODE=all : server sans capacité, worker lancé comme en mode worker, aucun root', async () => {
-        const name = startContainer(`zz_test_img_all_${profile.nnp ? 'render' : 'classic'}_${run}`, profile.flags, {
+        const name = startContainer(`zz_test_img_all_${profile.short}_${run}`, profile.flags, {
           RUNTIME_MODE: 'all',
           DATABASE_URL,
           MASTER_KEY,
@@ -394,28 +428,33 @@ describe('assert_sandbox_image_privileges — image sous les capacités de Rende
         expect(docker(['inspect', '-f', '{{.State.ExitCode}}', name]).stdout.trim()).toBe('0');
       }, 240_000);
 
-      test('(g) RUNTIME_MODE=server : aucune capacité nulle part (PID 1 compris) ; sonde de santé du compose sous pwuser', async () => {
-        const name = startContainer(`zz_test_img_server_${profile.nnp ? 'render' : 'classic'}_${run}`, profile.flags, {
+      test('(g) RUNTIME_MODE=server : aucune capacité nulle part (PID 1 compris) ; sondes de santé des deux compose sous pwuser', async () => {
+        const name = startContainer(`zz_test_img_server_${profile.short}_${run}`, profile.flags, {
           RUNTIME_MODE: 'server',
           DATABASE_URL,
           MASTER_KEY,
           ADMIN_BOOTSTRAP_TOKEN,
           PUBLIC_URL: 'http://localhost:3000',
         });
-        // La sonde du compose, telle quelle, lancée comme Docker la lance (docker exec sans -u : USER de l'image, root).
-        const healthcheck = composeHealthcheck();
-        await until('sonde de santé du compose = 0', () => docker(['exec', name, ...healthcheck]).status === 0, 90_000);
+        // La sonde de chaque compose, telle quelle, lancée comme Docker la lance (docker exec sans -u : USER de l'image, root).
+        for (const file of COMPOSE_FILES) {
+          const healthcheck = composeHealthcheck(file);
+          await until(`sonde de santé de ${file} = 0`, () => docker(['exec', name, ...healthcheck]).status === 0, 90_000);
+        }
         const procs = processes(name);
         console.log(`${name} : ${JSON.stringify(procs.map((p) => ({ pid: p.pid, cmd: p.cmd.slice(0, 60), uid: p.uid, ...caps(p), nnp: p.nnp })))}`);
         expect(procs.length).toBeGreaterThanOrEqual(2);
         for (const p of procs) expect({ uid: p.uid, ...caps(p), nnp: p.nnp }, p.cmd).toEqual({ uid: PWUSER, ...noCaps, nnp: 1 });
-        // Identité de la commande de la sonde : son code JS remplacé par une lecture de /proc/self/status.
-        const at = healthcheck.indexOf('-e');
-        expect(at, JSON.stringify(healthcheck)).toBeGreaterThan(0);
-        const probe = [...healthcheck.slice(0, at + 1), "process.stdout.write(require('fs').readFileSync('/proc/self/status','utf8'))", ...healthcheck.slice(at + 2)];
-        const r = docker(['exec', name, ...probe]);
-        expect(r.status, r.stderr).toBe(0);
-        expect(identity(r.stdout)).toEqual({ uid: PWUSER, ...noCaps, nnp: 1 });
+        // Identité de la commande de chaque sonde : son code JS remplacé par une lecture de /proc/self/status.
+        for (const file of COMPOSE_FILES) {
+          const healthcheck = composeHealthcheck(file);
+          const at = healthcheck.indexOf('-e');
+          expect(at, JSON.stringify(healthcheck)).toBeGreaterThan(0);
+          const probe = [...healthcheck.slice(0, at + 1), "process.stdout.write(require('fs').readFileSync('/proc/self/status','utf8'))", ...healthcheck.slice(at + 2)];
+          const r = docker(['exec', name, ...probe]);
+          expect(r.status, `${file} : ${r.stderr}`).toBe(0);
+          expect(identity(r.stdout), file).toEqual({ uid: PWUSER, ...noCaps, nnp: 1 });
+        }
         dockerOk(['stop', '-t', '30', name], 60_000);
         expect(docker(['inspect', '-f', '{{.State.ExitCode}}', name]).stdout.trim()).toBe('0');
       }, 240_000);
@@ -424,14 +463,32 @@ describe('assert_sandbox_image_privileges — image sous les capacités de Rende
 
   // D-32 (tâche 4.1b) : démarré directement sous un uid imposé (`--user`, `runAsUser`), le point d'entrée pose
   // no-new-privileges ; node-worker et sandbox-launch perdent alors leurs capacités de fichier, le changement d'uid du bac à
-  // sable échoue et le worker de production REFUSE de démarrer (fermeture sûre), au lieu de servir sans isolation.
-  test('uid imposé (--user 1001), RUNTIME_MODE=worker : sonde d’isolation en échec, refus de démarrer (code 2), aucun root', async () => {
-    await until('PostgreSQL prêt', () => docker(['exec', pgName, 'pg_isready', '-U', 'runtime', '-d', 'runtime']).status === 0, 90_000);
-    const name = startContainer(`zz_test_img_imposed_uid_${run}`, ['-u', String(PWUSER)], { RUNTIME_MODE: 'worker', DATABASE_URL, MASTER_KEY });
-    await until(`worker arrêté dans ${name}`, () => !running(name), 120_000);
+  // sable échoue et le worker de production REFUSE de démarrer (fermeture sûre), au lieu de servir sans isolation. Autonome :
+  // migrations appliquées ici (startWorker vérifie le schéma AVANT la fabrique d'exécuteurs, donc avant la sonde).
+  for (const profile of PROFILES) {
+    test(`uid imposé (--user 1001), RUNTIME_MODE=worker, ${profile.short} : sonde d’isolation en échec, refus de démarrer (code 2)`, async () => {
+      await until('PostgreSQL prêt', () => docker(['exec', pgName, 'pg_isready', '-U', 'runtime', '-d', 'runtime']).status === 0, 90_000);
+      const migrated = docker(['run', '--rm', '--network', network, '-e', `DATABASE_URL=${DATABASE_URL}`, image, 'runtime migrate'], 180_000);
+      expect(migrated.status, migrated.stderr.slice(-2000)).toBe(0);
+      const name = startContainer(`zz_test_img_imposed_uid_${profile.short}_${run}`, [...profile.flags, '-u', String(PWUSER)], { RUNTIME_MODE: 'worker', DATABASE_URL, MASTER_KEY });
+      await until(`worker arrêté dans ${name}`, () => !running(name), 120_000);
+      const logs = logsOf(name);
+      expect(docker(['inspect', '-f', '{{.State.ExitCode}}', name]).stdout.trim(), logs.slice(-3000)).toBe('2');
+      expect(logs).toMatch(/Refus de démarrer le worker : bac à sable : sonde d'isolation en échec/);
+      expect(logs).not.toMatch(/isolation éprouvée/);
+    }, 240_000);
+  }
+
+  // CDC 14 (D-32) : SETUID/SETGID retirés au conteneur (cap_drop) : root ne peut même pas descendre sur pwuser. Le point
+  // d'entrée s'arrête sur l'échec de setpriv (exec, donc sans repli), avant tini et avant tout rôle : rien ne tourne, pas
+  // même en root, et le worker ne démarre pas (fermeture sûre).
+  test('SETUID et SETGID retirés (profil Render sans eux) : arrêt au point d’entrée, aucun rôle démarré, ni root ni worker', async () => {
+    const flags = renderFlags(RENDER_CAPS.filter((c) => c !== 'SETUID' && c !== 'SETGID'));
+    const name = startContainer(`zz_test_img_no_setid_${run}`, flags, { RUNTIME_MODE: 'worker', DATABASE_URL, MASTER_KEY });
+    await until(`conteneur arrêté : ${name}`, () => !running(name), 60_000);
     const logs = logsOf(name);
-    expect(docker(['inspect', '-f', '{{.State.ExitCode}}', name]).stdout.trim(), logs.slice(-3000)).toBe('2');
-    expect(logs).toMatch(/Refus de démarrer le worker : bac à sable : sonde d'isolation en échec/);
+    expect(docker(['inspect', '-f', '{{.State.ExitCode}}', name]).stdout.trim(), logs.slice(-3000)).not.toBe('0');
+    expect(logs).toMatch(/setpriv: .*(setresuid|setresgid|setgroups|initgroups).*(Operation not permitted|failed)/i);
     expect(logs).not.toMatch(/isolation éprouvée/);
-  }, 180_000);
+  }, 120_000);
 });

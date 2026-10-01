@@ -2,7 +2,7 @@
 // Bac à sable (INV7, tâche 1.5), niveau unitaire : borne d'isolated-vm, validation des ponts (dont fuzz), protocole IPC.
 // La suite hostile de bout en bout (`assert_sandbox`) est dans sandbox.security.test.ts (pnpm test:security).
 import { spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import fc from 'fast-check';
@@ -11,7 +11,7 @@ import { describe, expect, test } from 'vitest';
 import { SsrfGuard } from '@runtime/core/net';
 import { createSandboxBridges, domainAllowed, normalizeDomain, SandboxBridgeError, validateFetchRequest, type BridgeResponse } from './bridges.js';
 import type { SandboxBridges } from '@runtime/core';
-import { killPlan, ProcessSandboxEngine, sandboxOptionsFromEnv, spawnPlan, sweepPlan, unexpectedEnvKeys } from './engine.js';
+import { killPlan, ProcessSandboxEngine, sandboxOptionsFromEnv, sandboxSurvivors, spawnPlan, SweepScheduler, sweepPlan, unexpectedEnvKeys } from './engine.js';
 import { parseChildMessage } from './protocol.js';
 import { checkIsolatedVmVersion, installedIsolatedVmVersion } from './version.js';
 
@@ -252,6 +252,27 @@ describe('utilisateur dédié, lanceur et plafond CPU (08 §3)', () => {
     expect(() => sandboxOptionsFromEnv({ SANDBOX_UID: '1500' })).toThrow(/SANDBOX_GID/);
   });
 
+  test('assert_sandbox_probe_discriminating — uid ou gid 0, ou groupe du worker, refusés pour l’enfant (revue 4.1b) : le lanceur détient CAP_SETUID effectif', () => {
+    // SANDBOX_UID=0 : l'enfant tournerait root, propriétaire de /usr/bin/node, entrypoint.sh, /app. SANDBOX_GID d'un groupe
+    // du worker (pwuser) : l'enfant exécuterait node-worker et sandbox-launch et lirait les fichiers du groupe.
+    expect(() => new ProcessSandboxEngine({ production: false, uid: 0, gid: 1500 })).toThrow(/SANDBOX_UID.*0/);
+    expect(() => new ProcessSandboxEngine({ production: false, uid: 1500, gid: 0 })).toThrow(/SANDBOX_GID.*0/);
+    const ownGid = process.getgid?.() ?? 0;
+    if (ownGid !== 0) expect(() => new ProcessSandboxEngine({ production: false, uid: 1500, gid: ownGid })).toThrow(/SANDBOX_GID.*groupe du worker/);
+    for (const g of (process.getgroups?.() ?? []).filter((x) => x !== 0)) {
+      expect(() => new ProcessSandboxEngine({ production: false, uid: 1500, gid: g }), String(g)).toThrow(/SANDBOX_GID.*groupe du worker/);
+    }
+    expect(() => new ProcessSandboxEngine({ production: false, uid: 1500, gid: 1500 })).not.toThrow();
+  });
+
+  test('assert_sandbox_probe_discriminating — sonde d’isolation : fichier témoin 0600 du worker, lisible sous le même uid (la sonde le dit)', async () => {
+    // Sous no-new-privileges, /proc/<worker>/environ est refusé à tout processus sans capacité, même du MÊME uid : la sonde
+    // lit donc aussi un fichier témoin du worker, que seul un autre uid ne peut pas lire (revue 4.1b).
+    const probe = await new ProcessSandboxEngine({ production: false, node: process.execPath }).probeIsolation();
+    expect(probe.uid).toBe(process.getuid?.());
+    expect(probe.witness).toBe('readable');
+  });
+
   test('commande de lancement : lanceur setpriv EXÉCUTÉ PAR LE WORKER, puis RLIMIT_CPU et environnement vidé sous l’uid dédié', () => {
     const plain = spawnPlan({ node: '/n', nodeArgs: ['--x'], script: 'c.js', cpuSeconds: 7 });
     expect(plain.command).toBe('/bin/sh');
@@ -342,6 +363,87 @@ describe('utilisateur dédié, lanceur et plafond CPU (08 §3)', () => {
       expect(calls().slice(-2)).toEqual(['spawn', 'sweep']);
     } finally {
       rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('assert_sandbox_sweep_verified — balayage de l’uid dédié : vidange périodique et vérification (revue 4.1b, D-32)', () => {
+  const tick = () => new Promise((resolve) => setImmediate(resolve));
+
+  test('runs qui se chevauchent sans fin : après N runs, nouveaux lancements suspendus jusqu’à la vidange, puis balayage', async () => {
+    const events: string[] = [];
+    const scheduler = new SweepScheduler({ sweepOnce: () => { events.push('sweep'); return Promise.resolve(true); }, everyRuns: 2, everyMs: 3_600_000 });
+    await scheduler.enter(); events.push('a');
+    await scheduler.enter(); events.push('b');
+    // Deux runs depuis le dernier balayage : le troisième attend que a et b soient finis, puis le balayage.
+    let cEntered = false;
+    const c = scheduler.enter().then(() => { cEntered = true; events.push('c'); });
+    await tick();
+    expect(cEntered).toBe(false);
+    scheduler.leave(); // a
+    await tick();
+    expect(cEntered).toBe(false);
+    scheduler.leave(); // b : plus aucun run actif → balayage
+    await c;
+    expect(events).toEqual(['a', 'b', 'sweep', 'c']);
+    scheduler.leave();
+    await scheduler.idle();
+    expect(events).toEqual(['a', 'b', 'sweep', 'c', 'sweep']);
+  });
+
+  test('vidange aussi après T secondes sans balayage, même sous le seuil de runs', async () => {
+    let now = 0;
+    const events: string[] = [];
+    const scheduler = new SweepScheduler({ sweepOnce: () => { events.push('sweep'); return Promise.resolve(true); }, everyRuns: 1000, everyMs: 60_000, now: () => now });
+    await scheduler.enter();
+    now = 60_001;
+    let entered = false;
+    const next = scheduler.enter().then(() => { entered = true; });
+    await tick();
+    expect(entered).toBe(false);
+    scheduler.leave();
+    await next;
+    expect(events).toEqual(['sweep']);
+  });
+
+  test('survivant après le balayage (balayeur stoppé par un processus évadé) : nouveau balayage ; échec persistant → runs refusés, alerte', async () => {
+    const alerts: string[] = [];
+    let attempts = 0;
+    const flaky = new SweepScheduler({ sweepOnce: () => Promise.resolve(++attempts >= 2), everyRuns: 10, everyMs: 3_600_000, onFailure: (m) => alerts.push(m) });
+    await flaky.enter();
+    flaky.leave();
+    await flaky.idle();
+    expect(attempts).toBe(2);
+    await expect(flaky.enter()).resolves.toBeUndefined();
+    flaky.leave();
+    await flaky.idle();
+
+    const stuck = new SweepScheduler({ sweepOnce: () => Promise.resolve(false), everyRuns: 10, everyMs: 3_600_000, maxAttempts: 3, onFailure: (m) => alerts.push(m) });
+    await stuck.enter();
+    stuck.leave();
+    await stuck.idle();
+    expect(alerts).toHaveLength(1);
+    expect(alerts[0]).toMatch(/balayage de l'uid dédié en échec/);
+    await expect(stuck.enter()).rejects.toThrow(/balayage de l'uid dédié en échec/);
+  });
+
+  test('sandboxSurvivors : processus de l’uid dédié encore vivants (uid réel, effectif ou sauvé), zombies exclus', async () => {
+    const proc = mkdtempSync(join(tmpdir(), 'zz_test_proc-'));
+    const status = (pid: number, uid: string, state: string) => {
+      mkdirSync(join(proc, String(pid)));
+      writeFileSync(join(proc, String(pid), 'status'), `Name:\tx\nState:\t${state}\nPid:\t${pid}\nUid:\t${uid}\nGid:\t1500\t1500\t1500\t1500\n`);
+    };
+    try {
+      status(10, '1001\t1001\t1001\t1001', 'S (sleeping)'); // worker
+      status(11, '1500\t1500\t1500\t1500', 'T (stopped)'); // balayeur stoppé
+      status(12, '1500\t1500\t1500\t1500', 'Z (zombie)'); // déjà mort
+      status(13, '1001\t1500\t1500\t1500', 'R (running)'); // uid effectif 1500
+      status(14, '0\t0\t0\t0', 'S (sleeping)');
+      mkdirSync(join(proc, 'self'));
+      expect((await sandboxSurvivors(1500, proc)).sort()).toEqual([11, 13]);
+      expect(await sandboxSurvivors(1600, proc)).toEqual([]);
+    } finally {
+      rmSync(proc, { recursive: true, force: true });
     }
   });
 });
