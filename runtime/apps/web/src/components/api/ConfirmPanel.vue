@@ -8,15 +8,19 @@
  * @component
  * @example <ConfirmPanel id="revert" :title="title" :consequence="consequence" :confirm-label="label" @confirm="go" @cancel="close" />
  */
-import { onMounted, useTemplateRef } from 'vue';
+import { onBeforeUnmount, onMounted, useTemplateRef } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { Button } from '@/components/ui/button';
+import { captureOpener, returnFocus } from '@/lib/focus-return';
 
 defineProps<{ title: string; consequence: string; confirmLabel: string; pending?: boolean; id: string }>();
 defineEmits<{ confirm: []; cancel: [] }>();
 const { t } = useI18n();
 const cancelButton = useTemplateRef<{ $el: HTMLElement }>('cancelButton');
+// L'ouvreur est l'élément qui a le focus avant le montage (le bouton qui vient d'ouvrir le panneau) ; il le retrouve à la fermeture (2.4.3).
+const opener = captureOpener();
 onMounted(() => cancelButton.value?.$el.focus());
+onBeforeUnmount(() => returnFocus(opener));
 </script>
 
 <template>

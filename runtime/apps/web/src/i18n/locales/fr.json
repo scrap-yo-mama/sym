@@ -225,6 +225,7 @@
     },
     "phase": {
       "label": "Étapes de l'enquête",
+      "announce": "Étape : {phase}.",
       "access_check": "Vérification de l'accès",
       "reconnaissance": "Reconnaissance",
       "awaiting_schema_validation": "Schéma de sortie",
@@ -728,6 +729,11 @@
   },
   "catalog": {
     "title": "Catalogue",
+    "follow": {
+      "suspend": "Suspendre le suivi",
+      "resume": "Reprendre le suivi",
+      "suspended": "Suivi suspendu. La liste n’est plus rafraîchie ni annoncée."
+    },
     "newApi": "Nouvelle API",
     "caption": "Catalogue des API : nom, exécution, réseau, statut et raison, dernier run, coût moyen, taux de succès et accès",
     "columns": {

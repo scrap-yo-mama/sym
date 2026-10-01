@@ -5,7 +5,7 @@ import { createMemoryHistory } from 'vue-router';
 import en from '@/i18n/locales/en.json';
 import { resetSession } from '@/composables/useSession';
 import { buildApi, setApi } from '@/lib/api';
-import { createAppRouter, focusRouteHeading, safeRedirect } from './index';
+import { createAppRouter, focusRouteHeading, focusRouteHeadingWhenReady, safeRedirect } from './index';
 
 const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
 const ME = { id: '3f2b6c1e-0000-4000-8000-000000000001', email: 'a@x.test', displayName: 'Ada', role: 'member', locale: 'en', theme: 'system', via: 'ui', scopes: null };
@@ -123,5 +123,84 @@ describe('routes de la tâche 3.5', () => {
       expect(router.currentRoute.value.name, path).toBe(name);
     }
     expect(router.currentRoute.value.params).toEqual({});
+  });
+});
+
+// Le <h1> d'une page qui charge ses données n'existe pas encore au changement de route (fiche d'une API : squelette, puis fiche) :
+// le focus l'attend au lieu de rester sur <body> (06 § 1, WCAG 2.4.3).
+describe('focusRouteHeadingWhenReady', () => {
+  type Heading = { focus: () => void };
+  function harness(options: { heading?: Heading | null; activeIsBody?: boolean } = {}) {
+    const state = { heading: options.heading ?? null, activeIsBody: options.activeIsBody ?? true };
+    let onChange: (() => void) | undefined;
+    let timeout: (() => void) | undefined;
+    const log: string[] = [];
+    const body = { tagName: 'BODY' };
+    const root = {
+      querySelector: (() => state.heading) as ParentNode['querySelector'],
+      get activeElement() {
+        return state.activeIsBody ? body : { tagName: 'INPUT' };
+      },
+      body,
+    } as unknown as Parameters<typeof focusRouteHeadingWhenReady>[0];
+    const deps = {
+      observe: (callback: () => void) => {
+        onChange = callback;
+        log.push('observe');
+        return () => log.push('disconnect');
+      },
+      schedule: (callback: () => void) => {
+        timeout = callback;
+        return () => log.push('unschedule');
+      },
+    };
+    return { state, root, deps, log, appear: (heading: Heading) => { state.heading = heading; onChange?.(); }, expire: () => timeout?.() };
+  }
+
+  test('le <h1> est déjà là : focus tout de suite, rien n’est observé', () => {
+    let focused = 0;
+    const h = harness({ heading: { focus: () => (focused += 1) } });
+    focusRouteHeadingWhenReady(h.root, h.deps);
+    expect(focused).toBe(1);
+    expect(h.log).toEqual([]);
+  });
+
+  test('le <h1> arrive après le chargement des données : il prend le focus à son apparition, puis l’observation s’arrête', () => {
+    let focused = 0;
+    const h = harness();
+    focusRouteHeadingWhenReady(h.root, h.deps);
+    expect(h.log).toEqual(['observe']);
+    h.appear({ focus: () => (focused += 1) });
+    expect(focused).toBe(1);
+    expect(h.log).toEqual(['observe', 'disconnect', 'unschedule']);
+  });
+
+  test('la personne a déjà mis le focus ailleurs (champ, bouton) : le <h1> qui arrive ne le lui vole pas', () => {
+    let focused = 0;
+    const h = harness({ activeIsBody: false });
+    focusRouteHeadingWhenReady(h.root, h.deps);
+    h.appear({ focus: () => (focused += 1) });
+    expect(focused).toBe(0);
+    expect(h.log).toContain('disconnect');
+  });
+
+  test('aucun <h1> avant le délai : l’observation s’arrête sans focus', () => {
+    const h = harness();
+    focusRouteHeadingWhenReady(h.root, h.deps);
+    h.expire();
+    expect(h.log).toEqual(['observe', 'disconnect']);
+  });
+
+  test('une nouvelle navigation annule l’attente de la précédente', () => {
+    let first = 0;
+    let second = 0;
+    const a = harness();
+    focusRouteHeadingWhenReady(a.root, a.deps);
+    const b = harness({ heading: { focus: () => (second += 1) } });
+    focusRouteHeadingWhenReady(b.root, b.deps);
+    a.appear({ focus: () => (first += 1) });
+    expect(a.log).toContain('disconnect');
+    expect(first).toBe(0);
+    expect(second).toBe(1);
   });
 });

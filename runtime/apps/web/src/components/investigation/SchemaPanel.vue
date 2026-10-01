@@ -80,7 +80,7 @@ function validateEdited(): void {
             v-model="draft"
             rows="12"
             spellcheck="false"
-            class="w-full rounded-lg border bg-background p-2 font-mono text-xs"
+            class="w-full rounded-lg border border-input bg-background p-2 font-mono text-xs"
             :aria-invalid="draftError"
             :aria-describedby="draftError ? 'schema-edit-error' : undefined"
           />

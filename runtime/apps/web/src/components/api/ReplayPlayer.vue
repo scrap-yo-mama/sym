@@ -74,7 +74,7 @@ watch(
   <section class="flex flex-col gap-3" :aria-label="t('replay.title')" data-testid="replay-player">
     <h3 class="text-base font-semibold">{{ t('replay.title') }}</h3>
     <div class="flex flex-wrap items-center gap-2" role="group" :aria-label="t('replay.controls')">
-      <Button size="sm" :aria-pressed="player.playing.value" data-testid="replay-toggle" @click="player.playing.value ? player.pause() : play()">
+      <Button size="sm" data-testid="replay-toggle" @click="player.playing.value ? player.pause() : play()">
         {{ player.playing.value ? t('replay.pause') : t('replay.play') }}
       </Button>
       <Button variant="outline" size="sm" @click="restart()">{{ t('replay.restart') }}</Button>
@@ -84,7 +84,7 @@ watch(
       <div class="flex items-center gap-1" role="group" :aria-label="t('replay.speed')">
         <Button v-for="value in REPLAY_SPEEDS" :key="value" :variant="player.speed.value === value ? 'default' : 'outline'" size="sm" :aria-pressed="player.speed.value === value" @click="player.setSpeed(value)">{{ value }}x</Button>
       </div>
-      <Button variant="outline" size="sm" :aria-pressed="suspended" data-testid="suspend-follow" @click="suspended = !suspended">
+      <Button variant="outline" size="sm" data-testid="suspend-follow" @click="suspended = !suspended">
         {{ suspended ? t('replay.resumeFollow') : t('replay.suspendFollow') }}
       </Button>
     </div>
@@ -94,12 +94,15 @@ watch(
     </div>
     <p class="text-sm text-muted-foreground">{{ t('replay.position', { shown: String(player.shown.value), total: String(events.length) }) }}<template v-if="live"> · {{ t('replay.live') }}</template></p>
     <!-- Journal : une phrase par événement, sans déplacer le focus. En suivi suspendu, aucune annonce (aria-live="off"). -->
-    <ol ref="log" role="log" :aria-live="suspended ? 'off' : 'polite'" tabindex="0" class="max-h-96 overflow-y-auto rounded-lg border p-3 text-sm" :aria-label="t('replay.log')" data-testid="replay-log">
-      <li v-for="line in shownLines" :key="line.event.id ?? line.event.seq" class="flex gap-3 py-0.5">
-        <time v-if="line.event.at" :datetime="line.event.at" class="shrink-0 text-muted-foreground">{{ formatDateTime(line.event.at, locale) }}</time>
-        <span>{{ line.text }}</span>
-      </li>
-    </ol>
+    <!-- Le rôle log va sur un conteneur : sur le <ol>, il remplacerait le rôle de liste et les <li> n'auraient plus de parent de liste. -->
+    <div ref="log" role="log" :aria-live="suspended ? 'off' : 'polite'" tabindex="0" class="max-h-96 overflow-y-auto rounded-lg border p-3 text-sm" :aria-label="t('replay.log')" data-testid="replay-log">
+      <ol>
+        <li v-for="line in shownLines" :key="line.event.id ?? line.event.seq" class="flex gap-3 py-0.5">
+          <time v-if="line.event.at" :datetime="line.event.at" class="shrink-0 text-muted-foreground">{{ formatDateTime(line.event.at, locale) }}</time>
+          <span>{{ line.text }}</span>
+        </li>
+      </ol>
+    </div>
     <p v-if="query.trim() !== '' && shownLines.length === 0" class="text-sm text-muted-foreground">{{ t('replay.noMatch') }}</p>
     <p class="text-xs text-muted-foreground">{{ t('replay.retention') }}</p>
   </section>

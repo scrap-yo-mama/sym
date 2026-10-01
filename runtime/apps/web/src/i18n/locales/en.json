@@ -225,6 +225,7 @@
     },
     "phase": {
       "label": "Investigation steps",
+      "announce": "Step: {phase}.",
       "access_check": "Access check",
       "reconnaissance": "Reconnaissance",
       "awaiting_schema_validation": "Output schema",
@@ -728,6 +729,11 @@
   },
   "catalog": {
     "title": "Catalog",
+    "follow": {
+      "suspend": "Suspend live updates",
+      "resume": "Resume live updates",
+      "suspended": "Live updates suspended. The list is no longer refreshed or announced."
+    },
     "newApi": "New API",
     "caption": "API catalog: name, execution, network, status and reason, last run, average cost, success rate and access",
     "columns": {
