@@ -2,6 +2,7 @@
 // Configuration de `worker` (14 § 2-4) : lue une fois au démarrage ; MASTER_KEY retirée de l'environnement.
 import { loadKeyring, loadObservabilityConfig, scrubOtelEnvironment, type Keyring, type ObservabilityConfig } from '@runtime/core';
 import { RUN_DEFAULTS } from '@runtime/db';
+import { resolveBrowserConcurrency } from './browser/cgroup.js';
 
 export class WorkerConfigError extends Error {
   override name = 'WorkerConfigError';
@@ -25,6 +26,11 @@ export type WorkerConfig = {
   queuePollingSeconds: number;
   /** Journal, OTel (coupé par défaut) : 14 § 2. */
   observability: ObservabilityConfig;
+  /** Runs navigateur simultanés (`BROWSER_CONCURRENCY`, sinon déduit du cgroup, 14 §11). */
+  browserConcurrency: number;
+  browserConcurrencySource: 'env' | 'cgroup' | 'host';
+  /** `DISABLE_BROWSER` : aucun Chromium, E2 et E3 refusés (14 §2). */
+  disableBrowser: boolean;
 };
 
 function positive(env: NodeJS.ProcessEnv, name: string, fallback: number, min = 0.1): number {
@@ -48,6 +54,9 @@ export function loadWorkerConfig(env: NodeJS.ProcessEnv = process.env): WorkerCo
   }
   const observability = loadObservabilityConfig(env);
   scrubOtelEnvironment(env);
+  const browser = resolveBrowserConcurrency(env);
+  const disable = env['DISABLE_BROWSER'] ?? 'false';
+  if (!['true', 'false', '1', '0', ''].includes(disable)) throw new WorkerConfigError('DISABLE_BROWSER invalide : true ou false attendu.');
   const keyring = loadKeyring(env);
   return {
     databaseUrl,
@@ -64,5 +73,8 @@ export function loadWorkerConfig(env: NodeJS.ProcessEnv = process.env): WorkerCo
     workerHeartbeatSeconds: positive(env, 'WORKER_HEARTBEAT_SECONDS', 15),
     queuePollingSeconds: positive(env, 'QUEUE_POLLING_SECONDS', 2, 0.5),
     observability,
+    browserConcurrency: browser.value,
+    browserConcurrencySource: browser.source,
+    disableBrowser: disable === 'true' || disable === '1',
   };
 }

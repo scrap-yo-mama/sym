@@ -12,7 +12,8 @@
     "@runtime/core": "workspace:*",
     "@runtime/db": "workspace:*",
     "pg": "catalog:",
-    "pino": "catalog:"
+    "pino": "catalog:",
+    "playwright-core": "catalog:"
   },
   "devDependencies": {
     "@types/node": "catalog:",

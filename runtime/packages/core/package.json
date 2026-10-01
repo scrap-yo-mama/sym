@@ -14,6 +14,10 @@
     "./net": {
       "types": "./dist/net/index.d.ts",
       "default": "./dist/net/index.js"
+    },
+    "./exec": {
+      "types": "./dist/exec/index.d.ts",
+      "default": "./dist/exec/index.js"
     }
   },
   "files": [

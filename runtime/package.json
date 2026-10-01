@@ -33,9 +33,9 @@
   },
   "devDependencies": {
     "@eslint/js": "catalog:",
+    "@playwright/test": "catalog:",
     "@runtime/core": "workspace:*",
     "@runtime/db": "workspace:*",
-    "@playwright/test": "catalog:",
     "@testcontainers/postgresql": "catalog:",
     "@types/node": "catalog:",
     "@types/pg": "catalog:",
@@ -44,6 +44,7 @@
     "fastify": "catalog:",
     "knip": "catalog:",
     "pg": "catalog:",
+    "playwright-core": "catalog:",
     "typescript": "catalog:",
     "typescript-eslint": "catalog:",
     "vitest": "catalog:"

@@ -51,6 +51,8 @@ catalog:
   wxt: 0.21.4
   vue: 3.5.43
   vite: 8.3.0
+  # Exécuteurs E2-E3 (tâche 1.6) : Playwright 1.63 (Chromium 153), noyau sans navigateurs embarqués (image Playwright).
+  playwright-core: 1.63.0
 
 # OTel coupé = aucun module de l'API ni du SDK résolu (14 § 10, assert_otel_off_by_default). Better Auth
 # (@better-auth/core) fait `import("@opentelemetry/api")` à chaque requête d'auth ; drizzle-orm et vitest déclarent le même

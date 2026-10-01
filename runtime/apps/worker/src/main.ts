@@ -3,12 +3,15 @@
 // arrêt propre sur SIGTERM/SIGINT (14 § 1). Code de sortie : 0 arrêt propre, 1 échec d'arrêt, 2 refus de démarrer.
 import type { RunExecutor } from '@runtime/core';
 import { loadWorkerConfig } from './config.js';
+import { productionExecutorFactory } from './exec/factory.js';
 import { startWorker, type Worker } from './worker.js';
 
 export async function main(env: NodeJS.ProcessEnv = process.env, options: { executor?: RunExecutor } = {}): Promise<Worker | null> {
   let worker: Worker;
   try {
-    worker = await startWorker({ config: loadWorkerConfig(env), ...options });
+    // Sans exécuteur imposé (tests), E1-E3 de production (tâche 1.6).
+    const executor = options.executor === undefined ? { executorFactory: productionExecutorFactory(env) } : { executor: options.executor };
+    worker = await startWorker({ config: loadWorkerConfig(env), ...executor });
   } catch (error) {
     console.error(`Refus de démarrer le worker : ${error instanceof Error ? error.message : String(error)}`);
     process.exitCode = 2;

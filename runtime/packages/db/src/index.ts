@@ -20,6 +20,7 @@ export * from './secrets.js';
 export * from './status.js';
 export * from './queue.js';
 export * from './runs.js';
+export * from './strategies.js';
 export { schema };
 
 /** Extrait le nom de la base d'une URL PostgreSQL, sans exposer le mot de passe. */

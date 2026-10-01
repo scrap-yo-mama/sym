@@ -87,6 +87,9 @@ catalogs:
     pino:
       specifier: 10.3.1
       version: 10.3.1
+    playwright-core:
+      specifier: 1.63.0
+      version: 1.63.0
     typescript:
       specifier: 5.9.3
       version: 5.9.3
@@ -151,6 +154,9 @@ importers:
       pg:
         specifier: 'catalog:'
         version: 8.23.0
+      playwright-core:
+        specifier: 'catalog:'
+        version: 1.63.0
       typescript:
         specifier: 'catalog:'
         version: 5.9.3
@@ -277,6 +283,9 @@ importers:
       pino:
         specifier: 'catalog:'
         version: 10.3.1
+      playwright-core:
+        specifier: 'catalog:'
+        version: 1.63.0
     devDependencies:
       '@types/node':
         specifier: 'catalog:'

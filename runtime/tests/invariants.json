@@ -52,5 +52,8 @@
   { "test": "assert_api_key_scopes", "invariant": "13 § 8", "tasks": ["0.3b"], "stage": "U1, I1" },
   { "test": "assert_auth_baseline", "invariant": "13 § 5", "tasks": ["0.3b"], "stage": "U1, I1" },
   { "test": "assert_login_rate_limited", "invariant": "13 § 5", "tasks": ["0.3b"], "stage": "I1" },
-  { "test": "assert_routes_use_rls", "invariant": "INV12", "tasks": ["0.3b"], "stage": "U1" }
+  { "test": "assert_routes_use_rls", "invariant": "INV12", "tasks": ["0.3b"], "stage": "U1" },
+  { "test": "assert_executors_conform_fixtures", "invariant": "INV1", "tasks": ["1.6"], "stage": "U1, S" },
+  { "test": "assert_chromium_idle_silent", "invariant": "INV9, INV10", "tasks": ["1.6"], "stage": "S" },
+  { "test": "assert_browser_egress_chained", "invariant": "INV10", "tasks": ["1.6"], "stage": "U1, S" }
 ]
