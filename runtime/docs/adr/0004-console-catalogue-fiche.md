@@ -23,7 +23,10 @@ côté serveur : la console s'appuie sur le contrat (client généré) et ses te
 
 Les routes statiques sous `/apis/` (par exemple `/apis/new`, tâche 3.5) l'emportent sur le paramètre `:slug`. Les liens
 vers des écrans d'autres tâches sont des chemins : `/runs/:id` (détail d'un run), `/settings/models`, `/settings/proxies`,
-`/settings/extension` (réglages), `/responsible-use` (page « Usage responsable », tâche 4.8, ouverte dans un autre onglet).
+`/settings/extension` (réglages), `/responsible-use` (page « Usage responsable », 17 § 9, tâche 4.8, ouverte dans un autre
+onglet). Tant que le routeur de la console ne connaît pas `/responsible-use`, le lien « Pourquoi cet arrêt ? » du panneau
+Bloquée n'est pas affiché (il ouvrirait la page 404) ; il apparaît dès que la route existe. **À reprendre à la fusion de
+4.8** : si la page reste dans le site de doc (VitePress) sans route dans la console, le lien pointera vers l'URL du site.
 
 Composables (modèle `use{Entity}` : `data`, `loading`, `error`, `refetch`) : `useAsyncResource` (un seul appel utile à la
 fois, `silent` pour une relecture sans clignotement), `usePagedList` (curseur serveur, « Charger la suite »),
@@ -35,11 +38,18 @@ fois, `silent` pour une relecture sans clignotement), `usePagedList` (curseur se
 - Le statut est une icône de forme distincte + un libellé ; la raison est un paragraphe de texte sur sa propre ligne,
   sans info-bulle ni région repliée (`assert_reason_visible_without_hover`, `assert_status_not_color_only`).
 - `stale` est un drapeau : la pastille s'ajoute à `sain` et `warning` seulement (`assert_stale_is_flag`).
+- « Action requise » : la colonne Statut du catalogue affiche le titre de la tâche (`actionRequired.<cause>.title`, par
+  exemple « Connecte monsite.com »), le même verbe et les mêmes paramètres que le bandeau de la fiche
+  (`actionTitleParams`, `assert_action_verb_same_in_banner_and_catalog`). L'en-tête de la fiche garde la phrase de la
+  raison (« La session de … a expiré. »), le bandeau portant déjà le titre.
 - La raison est un code stable + paramètres (`ReasonMessage`), traduit par `reasons.<code>`. Un code inconnu ou absent
   retombe sur `statusDefault.<statut>`, jamais sur le code brut. Codes ajoutés à la table de 06 § 4.2 pour couvrir les
   exemples de raison de § 2 et les causes d'action requise sans code nommé : `investigating`, `healthy`, `repairing`,
   `repair_exhausted`, `proxy_not_configured`, `tunnel_offline`, `not_found` (`EXTRA_REASON_CODES`). La parité avec la table
-  du CDC est testée (`assert_reason_codes_stable`).
+  du CDC est testée (`assert_reason_codes_stable`) contre une liste figée et versionnée
+  (`apps/web/src/testing/spec-reason-codes.json`, ordre de la table) : le CDC n'est pas dans le dépôt (absent en CI et
+  dans un worktree). Quand le CDC est disponible (arbre principal, ou `SCRAPYOMAMA_CDC_DIR`), un second test vérifie que la
+  liste figée suit la table ; sinon ce test est marqué sauté, jamais vert sans rien vérifier.
 
 ### Contrat attendu du serveur (à confirmer par 3.1)
 
@@ -74,6 +84,18 @@ Ces points ne sont pas dans l'OpenAPI : la console les lit de façon tolérante 
 - **Client SSE** (`src/lib/sse.ts`) : option `stopOnEnd` (défaut `false`, comportement de 3.3 inchangé). Le replay d'une enquête
   terminée est une réponse finie : sans l'option, le client reconnecterait en boucle ; avec elle, une réponse qui se termine
   proprement arrête la lecture (une coupure réseau reconnecte toujours).
+- **Un second flux SSE pendant le replay** (écart avec « un seul flux SSE par onglet », 06 § 3). Le replay de l'onglet
+  Enquêtes lit `GET /api/runs/{id}/events` (la « vue filtrée du même flux » de 06 § 3) dans son propre client, en plus du
+  flux `GET /api/events` de l'onglet : l'OpenAPI ne définit aucun abonnement à une enquête sur `/api/events`, et seule la
+  vue filtrée rejoue depuis le début. Ce second flux n'existe que pendant une lecture (fermé en quittant l'onglet ou en
+  changeant d'enquête) et compte dans le plafond de flux par utilisateur que 3.1 posera. Une enquête terminée est lue
+  avec `stopOnEnd` (réponse finie, pas de reconnexion) ; une enquête en cours est suivie sans `stopOnEnd` (une fin propre,
+  au redémarrage du serveur, reconnecte avec `Last-Event-ID`) jusqu'à ce que la fiche la montre terminée, puis la fin de
+  réponse suivante arrête la lecture (`stopAtEnd`). **À reprendre avec 3.1** : si `/api/events` accepte un abonnement à
+  une enquête avec rejeu, le replay passera par le flux de l'onglet.
+- **Revenir à cette version** : le panneau de confirmation montre l'aperçu (diff à trois niveaux de la version courante
+  vers la version visée, `useRevertPreview`, distinct du comparateur) puis la conséquence ; si l'aperçu ne se charge pas,
+  la conséquence reste lisible et la confirmation possible.
 - Graphique des statuts sur 30 jours (« priorité basse », onglet Vue d'ensemble) : non livré.
 
 ### Textes

@@ -11,7 +11,7 @@
  */
 import { computed, ref } from 'vue';
 import { useI18n } from 'vue-i18n';
-import { RouterLink } from 'vue-router';
+import { RouterLink, useRouter } from 'vue-router';
 import { Button } from '@/components/ui/button';
 import type { ApiDetail } from '@/composables/useApiDetail';
 import { copyText } from '@/lib/clipboard';
@@ -59,6 +59,17 @@ const cost = computed(() => (typeof params.value.cost_usd === 'number' ? formatU
 const officialApi = computed(() => safeHref(props.detail.access_report?.official_api_url));
 const runId = computed(() => (typeof params.value.run_id === 'string' ? params.value.run_id : (props.detail.recent_runs?.[0]?.id ?? null)));
 
+/**
+ * « Pourquoi cet arrêt ? » mène à la page « Usage responsable » (17 § 9, tâche 4.8). Tant que la console n'a pas cette
+ * route, le lien n'est pas affiché : il ouvrirait la page 404 dans un nouvel onglet.
+ */
+const RESPONSIBLE_USE = '/responsible-use';
+const router = useRouter();
+const responsibleUse = computed(() => {
+  const resolved = router.resolve(RESPONSIBLE_USE);
+  return resolved.matched.length === 0 || resolved.name === 'not-found' ? null : RESPONSIBLE_USE;
+});
+
 const copied = ref<'idle' | 'done' | 'failed'>('idle');
 async function copyTemplate(): Promise<void> {
   copied.value = (await copyText(t('blockedPanel.request.template', { domain: domain.value }))) ? 'done' : 'failed';
@@ -100,7 +111,7 @@ async function copyTemplate(): Promise<void> {
         <RouterLink :to="`/runs/${runId}`">{{ t('blockedPanel.seeAttempts') }}</RouterLink>
       </Button>
       <Button variant="outline" data-testid="copy-request" @click="copyTemplate">{{ t('blockedPanel.request.copy') }}</Button>
-      <a href="/responsible-use" target="_blank" rel="noopener" class="text-sm underline underline-offset-4">{{ t('blockedPanel.whyStop') }}</a>
+      <a v-if="responsibleUse" :href="responsibleUse" target="_blank" rel="noopener" class="text-sm underline underline-offset-4">{{ t('blockedPanel.whyStop') }}</a>
     </div>
     <p role="status" class="text-sm text-muted-foreground">
       <template v-if="copied === 'done'">{{ t('ui.copied') }}</template>

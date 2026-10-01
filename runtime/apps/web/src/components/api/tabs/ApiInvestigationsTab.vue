@@ -23,18 +23,19 @@ const { t, locale } = useI18n();
 const versions = useStrategyVersions(() => props.slug);
 const replay = useInvestigationReplay();
 
-type Entry = { runId: string; label: string };
+/** `live` : l'enquête ou la réparation en cours (suivie en direct) ; les autres sont terminées. */
+type Entry = { runId: string; label: string; live: boolean };
 const entries = computed<Entry[]>(() => {
   const out: Entry[] = [];
   const seen = new Set<string>();
-  const push = (runId: string | null | undefined, label: string) => {
+  const push = (runId: string | null | undefined, label: string, live = false) => {
     if (runId && !seen.has(runId)) {
       seen.add(runId);
-      out.push({ runId, label });
+      out.push({ runId, label, live });
     }
   };
   const reasonRun = props.detail.status_reason?.params?.run_id;
-  if (props.detail.status === 'enquete' || props.detail.status === 'reparation') push(typeof reasonRun === 'string' ? reasonRun : null, t('investigations.inProgress'));
+  if (props.detail.status === 'enquete' || props.detail.status === 'reparation') push(typeof reasonRun === 'string' ? reasonRun : null, t('investigations.inProgress'), true);
   for (const item of versions.versions.value) {
     push(item.run_id, t('investigations.entry', { origin: t(`strategy.origins.${item.created_by}`), v: String(item.version), date: formatDateTime(item.created_at, locale.value) }));
   }
@@ -52,7 +53,14 @@ watch(
   },
   { immediate: true },
 );
-watch(selected, (runId) => (runId ? replay.open(runId) : replay.close()), { immediate: true });
+// L'enquête en cours se termine (la fiche est relue par le flux de l'onglet) : la lecture s'arrête à la fin de la réponse.
+watch(
+  () => entries.value.find((entry) => entry.runId === selected.value)?.live ?? false,
+  (live, wasLive) => {
+    if (wasLive && !live) replay.markFinished();
+  },
+);
+watch(selected, (runId) => (runId ? replay.open(runId, { live: entries.value.find((entry) => entry.runId === runId)?.live ?? false }) : replay.close()), { immediate: true });
 </script>
 
 <template>

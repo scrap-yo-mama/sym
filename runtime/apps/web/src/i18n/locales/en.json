@@ -425,7 +425,9 @@
     "revertConfirm": {
       "title": "Go back to v{v}?",
       "consequence": "The API goes to “To watch”, with the reason “manual revert to v{v}”. The next run uses this version.",
-      "yes": "Go back to v{v}"
+      "yes": "Go back to v{v}",
+      "preview": "Preview of the changes, from v{from} (current) to v{to}",
+      "previewUnavailable": "Preview of the changes unavailable for now."
     },
     "compare": "Compare two versions",
     "compareFrom": "Version",

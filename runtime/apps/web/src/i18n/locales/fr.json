@@ -425,7 +425,9 @@
     "revertConfirm": {
       "title": "Revenir à la v{v} ?",
       "consequence": "L'API devient « À surveiller », avec la raison « retour manuel à la v{v} ». La prochaine exécution utilise cette version.",
-      "yes": "Revenir à la v{v}"
+      "yes": "Revenir à la v{v}",
+      "preview": "Aperçu des changements, de la v{from} (courante) à la v{to}",
+      "previewUnavailable": "Aperçu des changements indisponible pour le moment."
     },
     "compare": "Comparer deux versions",
     "compareFrom": "Version",

@@ -13,11 +13,23 @@ import fr from './locales/fr.json';
 const locales = { en, fr } as const;
 const variables = (message: string): string[] => [...message.matchAll(/\{(\w+)\}/g)].map((match) => match[1] ?? '').sort();
 
-/** Codes de la première colonne de la table de 06 § 4.2 (CDC), lus dans le dépôt quand il est présent. */
-function cdcReasonCodes(): string[] | null {
-  const path = new URL('../../../../../cdc/scrapyomama-runtime/06-specs-interface.md', import.meta.url);
-  if (!existsSync(path)) return null;
-  const section = /### 4\.2 Codes de raison([\s\S]*?)### 4\.3/.exec(readFileSync(path, 'utf8'))?.[1] ?? '';
+/**
+ * Liste figée des codes de la table de 06 § 4.2, versionnée avec le code : le CDC n'est pas dans le dépôt (absent en CI
+ * et dans un worktree), la comparaison avec SPEC_REASON_CODES ne dépend donc jamais de sa présence.
+ */
+const SNAPSHOT = new URL('../testing/spec-reason-codes.json', import.meta.url);
+function snapshotCodes(): string[] {
+  expect(existsSync(SNAPSHOT), 'apps/web/src/testing/spec-reason-codes.json').toBe(true);
+  return (JSON.parse(readFileSync(SNAPSHOT, 'utf8')) as { codes: string[] }).codes;
+}
+
+/**
+ * Le CDC (06-specs-interface.md), quand il est disponible : à côté du dépôt (arbre principal) ou désigné par
+ * SCRAPYOMAMA_CDC_DIR. Sert seulement à vérifier que la liste figée suit le CDC ; son absence est un saut visible.
+ */
+const CDC_SPEC = new URL('06-specs-interface.md', process.env.SCRAPYOMAMA_CDC_DIR ? `file://${process.env.SCRAPYOMAMA_CDC_DIR.replace(/\/?$/, '/')}` : new URL('../../../../../cdc/scrapyomama-runtime/', import.meta.url));
+function cdcReasonCodes(): string[] {
+  const section = /### 4\.2 Codes de raison([\s\S]*?)### 4\.3/.exec(readFileSync(CDC_SPEC, 'utf8'))?.[1] ?? '';
   return [...section.matchAll(/^\| `([a-z_]+)`/gm)].map((match) => match[1] ?? '');
 }
 
@@ -40,13 +52,16 @@ describe('assert_reason_codes_stable', () => {
     expect(new Set(REASON_CODES).size).toBe(REASON_CODES.length);
   });
 
-  test('la liste du code est celle de la table du CDC (06 § 4.2), ni plus ni moins', () => {
-    const codes = cdcReasonCodes();
-    if (codes === null) return;
-    expect(codes.length).toBeGreaterThan(20);
+  test('la liste du code est celle de la table du CDC (06 § 4.2), ni plus ni moins, dans l’ordre de la table', () => {
+    const codes = snapshotCodes();
+    expect(codes).toHaveLength(27);
     // `not_found` est défini en 04 § 7 et listé avec les extras ; tous les autres codes de la table sont dans SPEC_REASON_CODES.
-    expect([...codes].sort()).toEqual([...SPEC_REASON_CODES].sort());
+    expect([...SPEC_REASON_CODES]).toEqual(codes);
     expect(EXTRA_REASON_CODES).toContain('not_found');
+  });
+
+  test.skipIf(!existsSync(CDC_SPEC))('la liste figée suit la table du CDC (06 § 4.2) quand le CDC est disponible', () => {
+    expect(cdcReasonCodes()).toEqual(snapshotCodes());
   });
 
   test('un code stable n’est jamais une phrase : lettres minuscules, chiffres et tirets bas', () => {

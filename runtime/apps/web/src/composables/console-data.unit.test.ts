@@ -10,7 +10,7 @@ import { CATALOG_POLL_MS, statusChanges, useApiCatalog } from '@/composables/use
 import { eventConcernsApi, useApiDetail } from '@/composables/useApiDetail';
 import { usePagedList } from '@/composables/usePagedList';
 import { useSchedules } from '@/composables/useSchedules';
-import { useStrategyVersions } from '@/composables/useStrategyVersions';
+import { useRevertPreview, useStrategyVersions } from '@/composables/useStrategyVersions';
 import { groupFailures } from '@/composables/useStatusEvents';
 import ActionRequiredBanner from '@/components/api/ActionRequiredBanner.vue';
 import fr from '@/i18n/locales/fr.json';
@@ -237,6 +237,29 @@ describe('listes et versions', () => {
     expect(versions.diff.value).toBeNull();
   });
 
+  test('assert_revert_shows_preview : revenir à une version charge le diff de la version visée contre la courante, sans toucher au comparateur', async () => {
+    const diff = { from: 2, to: 3, summary: { code: 'selector_changed', params: { field: 'price' } }, fields: [], raw: { before: {}, after: {} } };
+    const seen = installApi({ 'GET /api/apis/zz-books/versions/2/diff': () => json(200, diff) });
+    let current: number | null = 3;
+    const versions = inScope(() => useStrategyVersions('zz-books', { immediate: false }));
+    const preview = inScope(() => useRevertPreview('zz-books', () => current));
+    preview.start(2);
+    expect(preview.target.value).toBe(2);
+    await until(() => preview.diff.value !== null);
+    expect(seen).toEqual(['GET /api/apis/zz-books/versions/2/diff?against=3']);
+    expect(preview.diff.value?.summary.code).toBe('selector_changed');
+    // Le diff de l'aperçu est distinct de celui du comparateur de l'onglet.
+    expect(versions.diff.value).toBeNull();
+    preview.cancel();
+    expect(preview.target.value).toBeNull();
+    expect(preview.diff.value).toBeNull();
+    // Sans version courante, rien à comparer : l'aperçu montre la conséquence seule, aucune requête.
+    current = null;
+    preview.start(2);
+    expect(preview.diff.value).toBeNull();
+    expect(seen).toHaveLength(1);
+  });
+
   test('groupFailures : erreurs regroupées par classe, la plus fréquente d’abord, dernière occurrence retenue', () => {
     const run = (n: number, failure_class: string | null, created_at: string) => ({ id: UUID(n), failure_class, created_at }) as never;
     const groups = groupFailures([run(1, 'extraction', '2026-09-01T00:00:00Z'), run(2, null, '2026-09-02T00:00:00Z'), run(3, 'extraction', '2026-09-03T00:00:00Z'), run(4, 'forbidden', '2026-09-04T00:00:00Z')]);
@@ -279,6 +302,46 @@ describe('replay d’enquête', () => {
     expect(urls).toEqual(['/api/runs/run%2F1/events']);
     expect(replay.events.value.map((event) => [event.kind, event.seq])).toEqual([['investigation.started', 1], ['phase.started', 2]]);
     expect(replay.events.value[1]?.params).toEqual({ phase: 'access_check' });
+  });
+
+  test('une enquête en cours reste suivie : une fin propre de la réponse (redémarrage du serveur) reconnecte avec Last-Event-ID', async () => {
+    const calls: (string | null)[] = [];
+    const replay = inScope(() =>
+      useInvestigationReplay({
+        // Une vraie attente (macrotâche) : sans elle, la boucle de reconnexion ne rendrait jamais la main au test.
+        sleep: (ms, signal) => new Promise((resolve) => { const timer = setTimeout(resolve, 1); signal.addEventListener('abort', () => { clearTimeout(timer); resolve(); }, { once: true }); }),
+        fetch: async (_url, init) => {
+          calls.push(new Headers(init.headers).get('last-event-id'));
+          return finite();
+        },
+      }),
+    );
+    replay.open('en-cours', { live: true });
+    await until(() => calls.length >= 2);
+    replay.close();
+    // Reprise à la position lue, sans rejouer : les événements déjà reçus ne sont pas dupliqués.
+    expect(calls.slice(0, 2)).toEqual([null, '3']);
+    expect(replay.events.value.map((event) => event.seq)).toEqual([1, 2]);
+  });
+
+  test('une enquête suivie en direct qui se termine : la fin de la réponse suivante arrête la lecture, sans boucle de reconnexion', async () => {
+    let calls = 0;
+    const replay = inScope(() =>
+      useInvestigationReplay({
+        sleep: (_ms, signal) => new Promise((resolve) => { const timer = setTimeout(resolve, 1); signal.addEventListener('abort', () => { clearTimeout(timer); resolve(); }, { once: true }); }),
+        fetch: async () => {
+          calls += 1;
+          return finite();
+        },
+      }),
+    );
+    replay.open('en-cours', { live: true });
+    await until(() => calls >= 2);
+    replay.markFinished();
+    await until(() => replay.status.value === 'stopped');
+    const after = calls;
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(calls).toBe(after);
   });
 
   test('ouvrir un autre run repart de zéro ; fermer arrête la lecture', async () => {

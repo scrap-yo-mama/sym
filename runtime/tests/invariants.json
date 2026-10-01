@@ -89,5 +89,9 @@
   { "test": "assert_cost_estimate_before_run", "invariant": "06 § 4.3", "tasks": ["3.4", "3.6"], "stage": "U1",
     "note": "3.4 : coût estimé, préfixé de ~, avant le bouton Lancer ; « non estimé » sans historique ; 3.6 : même critère en Chromium" },
   { "test": "assert_diff_three_levels", "invariant": "06 § 4.3", "tasks": ["3.4", "3.6"], "stage": "U1",
-    "note": "3.4 : phrase, tableau des champs modifiés, diff brut côte à côte ; 3.6 : même critère en Chromium" }
+    "note": "3.4 : phrase, tableau des champs modifiés, diff brut côte à côte ; 3.6 : même critère en Chromium" },
+  { "test": "assert_action_verb_same_in_banner_and_catalog", "invariant": "06 § 2 (Action requise)", "tasks": ["3.4", "3.6"], "stage": "U1",
+    "note": "3.4 : pour chaque cause, la colonne Statut du catalogue affiche le titre du bandeau de la fiche, fr et en (apps/web/src/components/catalog/catalog.unit.test.ts) ; 3.6 : même critère en Chromium" },
+  { "test": "assert_revert_shows_preview", "invariant": "06 § 2 (Stratégie & versions)", "tasks": ["3.4", "3.6"], "stage": "U1",
+    "note": "3.4 : « Revenir à cette version » charge le diff de la version visée contre la courante et l'affiche avec la conséquence avant le bouton de confirmation (composable + rendu) ; 3.6 : même critère en Chromium" }
 ]

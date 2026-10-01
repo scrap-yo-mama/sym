@@ -2,12 +2,14 @@
 // Catalogue (06 § 2, critères de 06 § 4.3) : raison lisible sans survol ni focus, statut jamais porté par la couleur seule,
 // `stale` comme drapeau et non comme statut. Rendu côté serveur sous Node (aucun navigateur, aucun survol possible).
 import { describe, expect, test } from 'vitest';
+import ActionRequiredBanner from '@/components/api/ActionRequiredBanner.vue';
 import ApiCatalogTable from '@/components/catalog/ApiCatalogTable.vue';
 import StatusBadge from '@/components/catalog/StatusBadge.vue';
 import en from '@/i18n/locales/en.json';
 import fr from '@/i18n/locales/fr.json';
+import { ACTION_CAUSE_CODES } from '@/lib/action-required';
 import { API_STATUSES, showsStaleFlag, STATUS_ICON, type ApiStatus } from '@/lib/status';
-import { apiSummary, oneApiPerStatus, renderHtml, textOf } from '@/testing/console-fixtures';
+import { apiDetail, apiSummary, oneApiPerStatus, renderHtml, textOf, UUID } from '@/testing/console-fixtures';
 
 /** Fragment HTML de la ligne du catalogue d'une API. */
 function rowOf(html: string, slug: string): string {
@@ -24,7 +26,7 @@ const EXPECTED_REASON: Record<'fr' | 'en', Record<ApiStatus, string>> = {
     warning: fr.reasons.escalated,
     reparation: 'Extraction cassée ; réparation 1 sur 3 en cours.',
     erreur: 'Budget de réparation épuisé ; version v4 conservée.',
-    action_requise: 'La session de monsite.example a expiré.',
+    action_requise: 'Connecte monsite.example',
     bloquee: fr.reasons.blocked_by_protection,
   },
   en: {
@@ -33,10 +35,21 @@ const EXPECTED_REASON: Record<'fr' | 'en', Record<ApiStatus, string>> = {
     warning: en.reasons.escalated,
     reparation: 'Extraction broken; repair 1 of 3 in progress.',
     erreur: 'Repair budget exhausted; version v4 kept.',
-    action_requise: 'The session on monsite.example has expired.',
+    action_requise: 'Connect monsite.example',
     bloquee: en.reasons.blocked_by_protection,
   },
 };
+
+/**
+ * Classes qui masquent un texte ou ne le montrent qu'au survol ou au focus (une classe par jeton, préfixes de variante
+ * compris : `md:opacity-0`, `group-hover:opacity-100`). Le Playwright de 3.6 ne les verrait pas : un élément en
+ * `opacity: 0` est « visible » pour `toBeVisible`.
+ */
+const HIDING_CLASS = /(?:^|:)(?:invisible|opacity-0|h-0|max-h-0|truncate|line-clamp(?:-\w+)?|hidden|sr-only)$|hover:|group-hover|peer-|focus-within|focus:|focus-visible:/;
+
+function classTokens(attrs: string): string[] {
+  return (/\sclass="([^"]*)"/.exec(` ${attrs}`)?.[1] ?? '').split(/\s+/).filter(Boolean);
+}
 
 describe('catalogue : statut et raison', () => {
   for (const locale of ['fr', 'en'] as const) {
@@ -51,6 +64,11 @@ describe('catalogue : statut et raison', () => {
         expect(reasonCell, api.slug).not.toBeNull();
         expect(textOf(reasonCell?.[2] ?? ""), api.slug).toContain(EXPECTED_REASON[locale][api.status]);
         expect(reasonCell?.[1], api.slug).not.toMatch(/\stitle=|aria-hidden|(?:^|\s)hidden(?:\s|=|$)|sr-only|\bhidden\b(?!-)|display/i);
+        expect(reasonCell?.[1], api.slug).not.toMatch(/\sstyle=/);
+        for (const token of classTokens(reasonCell?.[1] ?? '')) expect(token, `${api.slug} : classe de la raison`).not.toMatch(HIDING_CLASS);
+        // La cellule Statut qui porte la raison ne la masque pas non plus.
+        const cell = row.slice(row.lastIndexOf('<td', row.indexOf('data-testid="status-reason"')));
+        for (const token of classTokens(/^<td([^>]*)>/.exec(cell)?.[1] ?? '')) expect(token, `${api.slug} : classe de la cellule`).not.toMatch(HIDING_CLASS);
         expect(row).not.toMatch(/<details|popover|tooltip|onmouseover|onfocus/i);
         expect(row).toContain(`data-icon="${STATUS_ICON[api.status]}"`);
         expect(textOf(row)).toContain(labels[api.status]);
@@ -77,6 +95,27 @@ describe('catalogue : statut et raison', () => {
     expect(textOf(html)).toContain(fr.statusDefault.sain);
     expect(textOf(html)).toContain(fr.statusDefault.erreur);
     expect(html).not.toContain('code_inconnu</p>');
+  });
+});
+
+describe('catalogue : action requise', () => {
+  test('assert_action_verb_same_in_banner_and_catalog : la colonne Statut porte le titre du bandeau de la fiche, pour chaque cause', async () => {
+    for (const locale of ['fr', 'en'] as const) {
+      for (const code of ACTION_CAUSE_CODES) {
+        const status_reason = { code, params: { domain: 'monsite.example', country: 'de', offer: '10 € par mois', platform: 'Exemple' } };
+        const catalog = await renderHtml(ApiCatalogTable, { apis: [apiSummary({ id: UUID(1), slug: 'zz-task', status: 'action_requise', status_reason })] }, locale);
+        const reason = textOf(/<p [^>]*data-testid="status-reason"[^>]*>([^<]*)<\/p>/.exec(catalog)?.[1] ?? '');
+        const banner = await renderHtml(ActionRequiredBanner, { detail: apiDetail({ status: 'action_requise', status_reason }), resuming: false }, locale);
+        const title = textOf(/<h2[^>]*>([\s\S]*?)<\/h2>/.exec(banner)?.[1] ?? '');
+        expect(title, `${locale} ${code}`).not.toBe('');
+        expect(reason, `${locale} ${code}`).toBe(title);
+      }
+    }
+  });
+
+  test('sans domaine dans la raison, la colonne Statut reprend le domaine de session de l’API, comme le bandeau', async () => {
+    const html = await renderHtml(ApiCatalogTable, { apis: [apiSummary({ status: 'action_requise', status_reason: { code: 'auth_required', params: {} }, requires: { session_domain: 'compte.example', tunnel: false } })] });
+    expect(textOf(html)).toContain(fr.actionRequired.connect.title.replace('{domain}', 'compte.example'));
   });
 });
 

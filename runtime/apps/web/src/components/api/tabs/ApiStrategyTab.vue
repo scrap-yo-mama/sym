@@ -12,17 +12,17 @@
 import { computed, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { RouterLink } from 'vue-router';
-import ConfirmPanel from '@/components/api/ConfirmPanel.vue';
 import ErrorState from '@/components/ErrorState.vue';
 import JsonTree from '@/components/api/JsonTree.vue';
 import LoadingState from '@/components/LoadingState.vue';
+import RevertConfirm from '@/components/api/RevertConfirm.vue';
 import StrategyDiffView from '@/components/api/StrategyDiffView.vue';
 import ExecutionBadge from '@/components/catalog/ExecutionBadge.vue';
 import NetworkBadge from '@/components/catalog/NetworkBadge.vue';
 import { Button } from '@/components/ui/button';
 import { useApiActions } from '@/composables/useApiActions';
 import type { ApiDetail } from '@/composables/useApiDetail';
-import { useStrategyVersions, type StrategyVersion } from '@/composables/useStrategyVersions';
+import { useRevertPreview, useStrategyVersions, type StrategyVersion } from '@/composables/useStrategyVersions';
 import { formatDateTime, formatUsd } from '@/lib/display-format';
 
 const props = defineProps<{ detail: ApiDetail; slug: string }>();
@@ -52,13 +52,15 @@ async function compareSelected(): Promise<void> {
   if (compareFrom.value && compareAgainst.value && compareFrom.value !== compareAgainst.value) await versions.loadDiff(Number(compareFrom.value), Number(compareAgainst.value));
 }
 
-const reverting = ref<number | null>(null);
+/** Retour à une version : aperçu (diff de la courante vers la visée) et conséquence avant confirmation. */
+const reverting = useRevertPreview(() => props.slug, () => props.detail.current_strategy_version);
 async function confirmRevert(): Promise<void> {
-  if (reverting.value === null) return;
-  const updated = await actions.revert(reverting.value);
+  const target = reverting.target.value;
+  if (target === null) return;
+  const updated = await actions.revert(target);
   if (updated) {
     emit('updated', updated);
-    reverting.value = null;
+    reverting.cancel();
     await versions.refetch();
   }
 }
@@ -121,7 +123,7 @@ const errorText = computed(() => {
                   <Button v-if="item.parent_version" variant="outline" size="xs" @click="compare(item.version, item.parent_version)">
                     {{ t('strategy.compareWith', { a: String(item.version), b: String(item.parent_version) }) }}
                   </Button>
-                  <Button v-if="!detail.metadata_only && item.version !== detail.current_strategy_version" variant="outline" size="xs" @click="reverting = item.version">
+                  <Button v-if="!detail.metadata_only && item.version !== detail.current_strategy_version" variant="outline" size="xs" @click="reverting.start(item.version)">
                     {{ t('strategy.revert') }}
                   </Button>
                 </div>
@@ -132,15 +134,17 @@ const errorText = computed(() => {
       </div>
       <div v-if="versions.hasMore()"><Button variant="outline" size="sm" :disabled="versions.loadingMore.value" @click="versions.loadMore()">{{ t('ui.loadMore') }}</Button></div>
 
-      <ConfirmPanel
-        v-if="reverting !== null"
-        id="revert-confirm"
-        :title="t('strategy.revertConfirm.title', { v: String(reverting) })"
-        :consequence="t('strategy.revertConfirm.consequence', { v: String(reverting) })"
-        :confirm-label="t('strategy.revertConfirm.yes', { v: String(reverting) })"
+      <RevertConfirm
+        v-if="reverting.target.value !== null"
+        :key="reverting.target.value"
+        :version="reverting.target.value"
+        :current="detail.current_strategy_version"
+        :diff="reverting.diff.value"
+        :diff-loading="reverting.diffLoading.value"
+        :diff-error="reverting.diffError.value"
         :pending="actions.pending.value === 'revert'"
         @confirm="confirmRevert"
-        @cancel="reverting = null"
+        @cancel="reverting.cancel()"
       />
       <p v-if="errorText" role="alert" class="text-sm text-destructive">{{ errorText }}</p>
     </section>

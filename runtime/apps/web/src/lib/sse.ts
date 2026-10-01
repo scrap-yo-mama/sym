@@ -160,6 +160,11 @@ export class EventStreamClient {
     void this.#run(controller);
   }
 
+  /** La prochaine fin propre de la réponse arrête le flux au lieu de reconnecter (`stopOnEnd` activé en cours de route). */
+  stopAtEnd(): void {
+    this.#options.stopOnEnd = true;
+  }
+
   /** Arrête le flux et oublie la position de reprise : un nouveau `start()` repart de zéro (autre session possible). */
   stop(): void {
     this.#controller?.abort();

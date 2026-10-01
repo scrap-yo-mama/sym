@@ -14,26 +14,15 @@ import { useI18n } from 'vue-i18n';
 import { RouterLink } from 'vue-router';
 import { Button } from '@/components/ui/button';
 import type { ApiDetail } from '@/composables/useApiDetail';
-import { actionCause } from '@/lib/action-required';
+import { actionCause, actionTitleParams } from '@/lib/action-required';
 
 const props = defineProps<{ detail: ApiDetail; resuming: boolean }>();
 const { t } = useI18n();
 
 const cause = computed(() => (props.detail.status === 'action_requise' ? actionCause(props.detail.status_reason?.code) : null));
 
-function text(key: unknown): string {
-  return typeof key === 'string' || typeof key === 'number' ? String(key) : '';
-}
-
-const named = computed(() => {
-  const params = props.detail.status_reason?.params ?? {};
-  return {
-    domain: text(params.domain) || props.detail.requires.session_domain || t('blockedPanel.thisSite'),
-    country: text(params.country).toUpperCase(),
-    offer: text(params.offer),
-    platform: text(params.platform),
-  };
-});
+/** Mêmes paramètres que la colonne Statut du catalogue (même titre, même verbe). */
+const named = computed(() => actionTitleParams(props.detail.status_reason?.params, props.detail.requires.session_domain, t('blockedPanel.thisSite')));
 
 /** Site de l'éditeur (cause « paiement ») : un lien sortant vers le domaine concerné, jamais un appel du serveur. */
 const siteUrl = computed(() => (/^[a-z0-9.-]+$/i.test(named.value.domain) && named.value.domain.includes('.') ? `https://${named.value.domain}` : null));

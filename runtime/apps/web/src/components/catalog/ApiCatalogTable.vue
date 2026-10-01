@@ -3,7 +3,7 @@
 /**
  * @file ApiCatalogTable.vue
  * @description Tableau du catalogue (06 § 2) : nom et description, badge d'exécution, badge réseau, statut et raison
- * (la « colonne warning »), dernier run, coût moyen (préfixe « ~ » s'il est estimé), taux de succès sur 30 jours, icône
+ * (la « colonne warning » ; pour une action requise, le titre de la tâche, même verbe que le bandeau de la fiche), dernier run, coût moyen (préfixe « ~ » s'il est estimé), taux de succès sur 30 jours, icône
  * « ordinateur requis » et pastille Accès. La raison est toujours visible en texte. Pagination et filtres : la vue.
  * @component
  * @example <ApiCatalogTable :apis="apis" />
@@ -59,7 +59,7 @@ const { t, locale } = useI18n();
           </td>
           <td class="px-3 py-3">
             <StatusBadge :status="api.status" :stale="api.stale" />
-            <StatusReason :status="api.status" :reason="api.status_reason" class="mt-1" />
+            <StatusReason :status="api.status" :reason="api.status_reason" :session-domain="api.requires.session_domain" task class="mt-1" />
           </td>
           <td class="px-3 py-3 whitespace-nowrap">{{ formatAgo(api.last_run_at, locale) }}</td>
           <td class="px-3 py-3 whitespace-nowrap">{{ formatUsd(api.avg_cost_usd, locale, api.avg_cost_estimated ?? false) }}</td>

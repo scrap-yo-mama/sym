@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Causes d'« Action requise » (06 § 2) : une tâche, pas une erreur. Titre, bouton principal et vérification en direct par
-// cause ; même verbe dans le bandeau de la fiche et dans la colonne Statut du catalogue. Aucune cause ne propose de
+// cause ; même verbe dans le bandeau de la fiche et dans la colonne Statut du catalogue : les deux affichent le titre
+// `actionRequired.<cause>.title` avec les mêmes paramètres (`actionTitleParams`). Aucune cause ne propose de
 // relancer en boucle : une vérification affichée dans le navigateur de l'utilisateur ne reçoit jamais de réponse
 // automatique (INV6), seule une nouvelle action de sa part relance une enquête (transition 17).
 
@@ -36,3 +37,19 @@ export function actionCause(code: string | null | undefined): ActionCause | null
 }
 
 export const ACTION_CAUSE_CODES: readonly string[] = CAUSES.map((cause) => cause.code);
+
+/** Paramètres du titre d'une cause : ceux de la raison, le domaine de session de l'API à défaut, sinon `fallbackDomain`. */
+export type ActionTitleParams = { domain: string; country: string; offer: string; platform: string };
+
+function text(value: unknown): string {
+  return typeof value === 'string' || typeof value === 'number' ? String(value) : '';
+}
+
+export function actionTitleParams(params: Readonly<Record<string, unknown>> | null | undefined, sessionDomain: string | null | undefined, fallbackDomain: string): ActionTitleParams {
+  return {
+    domain: text(params?.domain) || sessionDomain || fallbackDomain,
+    country: text(params?.country).toUpperCase(),
+    offer: text(params?.offer),
+    platform: text(params?.platform),
+  };
+}

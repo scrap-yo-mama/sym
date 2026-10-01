@@ -14,7 +14,10 @@ import type { StrategyDiff } from '@/composables/useStrategyVersions';
 import { sideBySide, type DiffKind } from '@/lib/line-diff';
 import { describeDiffSummary } from '@/lib/reasons';
 
-const props = defineProps<{ diff: StrategyDiff }>();
+/** `level` : niveau du titre du diff (3 dans l'onglet, 5 dans l'aperçu d'un retour de version) ; les parties sont au niveau suivant. */
+const props = withDefaults(defineProps<{ diff: StrategyDiff; level?: 3 | 5 }>(), { level: 3 });
+const titleTag = computed(() => `h${props.level}`);
+const partTag = computed(() => `h${props.level + 1}`);
 const { t, te, locale } = useI18n();
 
 const sentence = computed(() => describeDiffSummary((key, named) => t(key, named ?? {}), te, locale.value, props.diff.summary, props.diff.fields.length));
@@ -32,15 +35,15 @@ const ROW_TONE: Record<DiffKind, string> = { same: '', changed: 'bg-amber-100 da
 
 <template>
   <section class="flex flex-col gap-4" data-testid="strategy-diff" :aria-label="t('diff.title', { from: String(diff.from), to: String(diff.to) })">
-    <h3 class="text-base font-semibold">{{ t('diff.title', { from: String(diff.from), to: String(diff.to) }) }}</h3>
+    <component :is="titleTag" class="text-base font-semibold">{{ t('diff.title', { from: String(diff.from), to: String(diff.to) }) }}</component>
 
     <div data-testid="diff-summary">
-      <h4 class="text-sm font-medium">{{ t('diff.summary') }}</h4>
+      <component :is="partTag" class="text-sm font-medium">{{ t('diff.summary') }}</component>
       <p>{{ sentence }}</p>
     </div>
 
     <div data-testid="diff-fields">
-      <h4 class="text-sm font-medium">{{ t('diff.fields') }}</h4>
+      <component :is="partTag" class="text-sm font-medium">{{ t('diff.fields') }}</component>
       <p v-if="diff.fields.length === 0" class="text-sm text-muted-foreground">{{ t('diff.noFields') }}</p>
       <div v-else class="overflow-x-auto rounded-lg border">
         <table class="w-full text-left text-sm">
@@ -66,7 +69,7 @@ const ROW_TONE: Record<DiffKind, string> = { same: '', changed: 'bg-amber-100 da
     </div>
 
     <div data-testid="diff-raw">
-      <h4 class="text-sm font-medium">{{ t('diff.raw') }}</h4>
+      <component :is="partTag" class="text-sm font-medium">{{ t('diff.raw') }}</component>
       <div class="overflow-x-auto rounded-lg border">
         <table class="w-full table-fixed border-collapse font-mono text-xs">
           <caption class="sr-only">{{ t('diff.rawCaption', { from: String(diff.from), to: String(diff.to) }) }}</caption>

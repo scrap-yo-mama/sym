@@ -4,7 +4,7 @@
 import type { components } from '@runtime/client';
 import { createSSRApp, h, type Component } from 'vue';
 import { renderToString } from 'vue/server-renderer';
-import { createMemoryHistory } from 'vue-router';
+import { createMemoryHistory, type RouteRecordRaw } from 'vue-router';
 import { createAppI18n, setLocale, type Locale } from '@/i18n/index';
 import { buildApi, setApi } from '@/lib/api';
 import { createAppRouter } from '@/router/index';
@@ -85,11 +85,15 @@ export function installApi(routes: Record<string, Handler>): string[] {
   return seen;
 }
 
-/** Rend un composant en HTML (côté serveur) avec i18n chargée dans la langue demandée et le routeur de la console. */
-export async function renderHtml(component: Component, props: Record<string, unknown> = {}, locale: Locale = 'fr'): Promise<string> {
+/**
+ * Rend un composant en HTML (côté serveur) avec i18n chargée dans la langue demandée et le routeur de la console.
+ * `routes` : routes ajoutées au routeur (écrans d'autres tâches, pas encore fusionnés).
+ */
+export async function renderHtml(component: Component, props: Record<string, unknown> = {}, locale: Locale = 'fr', options: { routes?: RouteRecordRaw[] } = {}): Promise<string> {
   const i18n = createAppI18n();
   await setLocale(i18n.global, locale, { lang: '' } as HTMLElement);
   const router = createAppRouter(createMemoryHistory());
+  for (const route of options.routes ?? []) router.addRoute(route);
   const app = createSSRApp({ render: () => h(component, props) });
   app.use(i18n).use(router);
   return renderToString(app);
