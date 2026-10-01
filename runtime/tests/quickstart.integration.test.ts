@@ -170,11 +170,13 @@ async function waitHealthy(): Promise<void> {
     }
     try {
       const res = await fetch(`${base}/api/health`);
-      if (res.ok) return;
+      // Le worker démarre en parallèle du serveur : sous charge il peut ne pas avoir ouvert sa première connexion (la base)
+      // quand le serveur répond déjà ; son journal réseau n'existe alors pas encore et le test d'absence de sortie échouerait.
+      if (res.ok && children.every((child) => existsSync(child.netLog))) return;
     } catch {
       // pas encore à l'écoute
     }
-    if (Date.now() > deadline) throw new Error('le serveur ne répond pas sur /api/health');
+    if (Date.now() > deadline) throw new Error(`le serveur ne répond pas sur /api/health, ou un processus n'a ouvert aucune connexion (${children.filter((c) => !existsSync(c.netLog)).map((c) => c.name).join(', ') || 'aucun'})`);
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
 }
