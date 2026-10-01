@@ -4,7 +4,7 @@ import { randomBytes } from 'node:crypto';
 import pg from 'pg';
 import { inject } from 'vitest';
 
-export type TestDatabase = { url: string; name: string; drop: () => Promise<void> };
+export type TestDatabase = { url: string; name: string; drop: () => Promise<void>; dropForce: () => Promise<void> };
 
 async function admin<T>(fn: (client: pg.Client) => Promise<T>): Promise<T> {
   const client = new pg.Client({ connectionString: inject('pgAdminUrl') });
@@ -46,12 +46,20 @@ async function dropWhenIdle(name: string): Promise<void> {
   });
 }
 
+/**
+ * Coupe la base sous les pieds de ses sessions (`DROP DATABASE … WITH (FORCE)`) : pour les tests de panne de base, où un
+ * processus vivant garde volontairement ses connexions. Les autres tests utilisent `drop`, qui refuse de tuer une session fuitée.
+ */
+async function dropForced(name: string): Promise<void> {
+  await admin((c) => c.query(`DROP DATABASE IF EXISTS ${name} WITH (FORCE)`));
+}
+
 export async function createTestDatabase(prefix = 't'): Promise<TestDatabase> {
   const name = `${prefix}_${randomBytes(5).toString('hex')}`;
   await admin((c) => c.query(`CREATE DATABASE ${name}`));
   const url = new URL(inject('pgAdminUrl'));
   url.pathname = `/${name}`;
-  return { url: url.toString(), name, drop: () => dropWhenIdle(name) };
+  return { url: url.toString(), name, drop: () => dropWhenIdle(name), dropForce: () => dropForced(name) };
 }
 
 const poolErrors = new WeakMap<pg.Pool, Error[]>();

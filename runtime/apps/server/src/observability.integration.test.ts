@@ -158,7 +158,7 @@ describe('sondes', () => {
 
   test('base coupée : `/api/ready` = 503 (database false), `/api/health` = 200, aucun message d’erreur de la base dans la réponse', async () => {
     const srv = await server();
-    await srv.db.drop(); // DROP DATABASE … WITH (FORCE) : les connexions du pool sont coupées
+    await srv.db.dropForce(); // DROP DATABASE … WITH (FORCE) : les connexions du pool sont coupées (panne de base voulue)
     const ready = await get(srv, '/api/ready');
     expect(ready.statusCode).toBe(503);
     expect(ready.json()).toEqual({ status: 'not_ready', checks: { database: false, schema: false, key_check: false } });
