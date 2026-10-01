@@ -8,6 +8,7 @@ import { Stagehand, type ModelConfiguration } from '@browserbasehq/stagehand';
 import type { AgentEngine, AgentRunContext, AgentRunResult, AgentRunStatus, AgentTask, AgentTraceStep } from '@runtime/core';
 import { computeUsage, type ModelPrice, type RawUsage } from '@runtime/llm';
 import { z } from 'zod';
+import { assertStagehandLocalOnly } from './guards.ts';
 
 export const STAGEHAND_VERSION = '3.7.3';
 
@@ -141,7 +142,7 @@ export class StagehandEngine implements AgentEngine {
     };
 
     const cacheDir = await mkdtemp(join(tmpdir(), 'zz_test_spike_stagehand_cache_'));
-    const stagehand = new Stagehand({
+    const stagehandOptions: ConstructorParameters<typeof Stagehand>[0] = {
       env: 'LOCAL',
       model: {
         modelName: `openai/${context.model.modelId}`,
@@ -158,7 +159,10 @@ export class StagehandEngine implements AgentEngine {
       verbose: process.env["ZZ_SPIKE_DEBUG"] === "1" ? 2 : 0,
       logger: process.env["ZZ_SPIKE_DEBUG"] === "1" ? (line) => console.error(`[stagehand] ${line.category ?? ""}: ${String(line.message).slice(0, 300)}`) : () => undefined,
       cacheDir,
-    });
+    };
+    // Mode local seulement (§13, §15, X1) : refus avant toute construction si une option ou une variable ouvre Browserbase.
+    assertStagehandLocalOnly(stagehandOptions as unknown as Record<string, unknown>);
+    const stagehand = new Stagehand(stagehandOptions);
 
     let stepCount = 0;
     let doneInLoop = false;

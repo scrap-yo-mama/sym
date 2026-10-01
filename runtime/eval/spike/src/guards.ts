@@ -20,6 +20,29 @@ export function forbiddenEnvPresent(env: NodeJS.ProcessEnv = process.env): strin
   return FORBIDDEN_ENV.filter((name) => env[name] !== undefined);
 }
 
+/** Options de Stagehand qui ouvrent une session Browserbase ou la résolution de captcha (X1) : interdites. */
+const FORBIDDEN_STAGEHAND_OPTIONS = ['apiKey', 'projectId', 'browserbaseSessionCreateParams', 'browserbaseSessionID', 'keepAlive'] as const;
+
+/**
+ * Stagehand en local seulement (protocole §13, §15 ; exclusion X1) : `env: 'LOCAL'`, `disableAPI: true`, aucune option
+ * de session Browserbase, aucune résolution de captcha (`waitForCaptchaSolves` et toute option « captcha » ; le
+ * `CaptchaSolver` de Stagehand n'agit qu'en `BROWSERBASE`), environnement sans clé Browserbase ni Brave. Appelé avant
+ * chaque `new Stagehand(...)` ; la tâche 2.4 le reprend tel quel en production.
+ */
+export function assertStagehandLocalOnly(options: Readonly<Record<string, unknown>>, env: NodeJS.ProcessEnv = process.env): void {
+  const problems: string[] = [];
+  if (options['env'] !== 'LOCAL') problems.push(`env doit valoir LOCAL (reçu : ${String(options['env'])})`);
+  if (options['disableAPI'] !== true) problems.push('disableAPI doit valoir true');
+  for (const key of Object.keys(options)) {
+    if (options[key] === undefined) continue;
+    const forbidden = (FORBIDDEN_STAGEHAND_OPTIONS as readonly string[]).includes(key) || /browserbase/i.test(key) || (/captcha/i.test(key) && options[key] !== false);
+    if (forbidden) problems.push(`option ${key} interdite`);
+  }
+  const vars = forbiddenEnvPresent(env);
+  if (vars.length > 0) problems.push(`variables d'environnement interdites : ${vars.join(', ')}`);
+  if (problems.length > 0) throw new Error(`Stagehand hors du mode local : ${problems.join(' ; ')}`);
+}
+
 interface NetEvent {
   readonly host: string;
   readonly channel: 'undici' | 'http';

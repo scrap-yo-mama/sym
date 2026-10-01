@@ -1,8 +1,8 @@
 // Canal `agent_step` côté serveur (07 §3), sur une Page Playwright : cinq actions à gros grain, `snapshot_id`, refus
-// `stale_ref` sans exécution, verrou de domaines par `context.route('**')` (08 §4, mesure 2) et refus des écritures
+// `stale_ref` sans exécution, verrou de domaines (route, redirections, WebSocket ; 08 §4, mesure 2) et refus des écritures
 // (08 §4, mesure 4). Le même contrat sera tenu par le tunnel (tâche 0.6b) : le moteur ne voit que `AgentStepChannel`.
 import type { AgentSnapshot, AgentStepAction, AgentStepChannel, AgentStepErrorCode, AgentStepResult } from '@runtime/core';
-import type { BrowserContext, Page, Route } from 'playwright-core';
+import type { Browser, BrowserContext, BrowserContextOptions, CDPSession, Page, Route, WebSocketRoute } from 'playwright-core';
 import { contentDigest, DEFAULT_MAX_TREE_CHARS, hasRef, hostAllowed, hostOf, semanticOf, truncateTree } from './snapshot.js';
 
 export interface BlockedRequest {
@@ -29,39 +29,118 @@ export interface DomainGuardOptions {
 
 const READ_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
 
+/** Options de tout contexte agentique : service workers bloqués (leurs requêtes échappent en partie aux routes). */
+export const AGENT_CONTEXT_OPTIONS = { serviceWorkers: 'block' } as const satisfies BrowserContextOptions;
+
+interface FetchRequestPaused {
+  readonly requestId: string;
+  readonly request: { readonly url: string; readonly method: string };
+  readonly redirectedRequestId?: string;
+}
+
 /**
- * Verrou de domaines sur tout le contexte (navigations initiées par la page, sous-ressources, `window.open`, redirections :
- * chaque requête passe par la route). Hors liste : `blockedbyclient`. Écriture (méthode non idempotente) sans
- * `allowWriteActions` : refusée aussi.
+ * Verrou de domaines (08 §4, mesure 2), en trois couches :
+ * 1. `context.route('**')` : toute requête initiale du contexte (navigations, sous-ressources, `window.open`, requêtes
+ *    des service workers que Playwright voit). Hors liste : `blockedbyclient`. Écriture (méthode non idempotente) sans
+ *    `allowWriteActions` : refusée aussi.
+ * 2. Interception CDP `Fetch` au niveau du navigateur : Playwright n'appelle la route que pour la PREMIÈRE requête d'une
+ *    chaîne de redirections et laisse Chromium suivre les sauts suivants sans contrôle (un 302 d'un hôte autorisé vers un
+ *    hôte interdit passait). Chaque saut de redirection (`redirectedRequestId`), et toute requête qui n'aurait pas été
+ *    vue par la route, est vérifié ici avec la même règle, dans Chromium : le trafic ne quitte jamais le navigateur
+ *    (`route.fetch` le ferait partir de Node, hors du résolveur et du proxy de Chromium). Cette couche vaut pour tout le
+ *    navigateur : un contexte agentique exige un navigateur dédié (un seul contexte), vérifié ici.
+ * 3. `context.routeWebSocket('**')` : les WebSocket ne passent pas par la route ; hors liste, fermées et consignées.
+ * Les contextes agentiques se créent par `newAgentContext` (service workers bloqués). Défense en profondeur attendue :
+ * la même liste appliquée par le proxy d'egress (tâche 0.7).
  */
 export async function installDomainGuard(context: BrowserContext, options: DomainGuardOptions): Promise<DomainGuard> {
+  const browser = context.browser();
+  if (browser === null) throw new Error('verrou de domaines : contexte sans navigateur (contexte persistant non pris en charge)');
+  if (browser.contexts().length !== 1) {
+    throw new Error(`verrou de domaines : un contexte agentique exige un navigateur dédié (contextes ouverts : ${browser.contexts().length})`);
+  }
   const blocked: BlockedRequest[] = [];
   const seen = new Map<string, number>();
   const t0 = performance.now();
+  const count = (host: string | null): void => {
+    if (host !== null) seen.set(host, (seen.get(host) ?? 0) + 1);
+  };
+  /** Motif du refus d'une requête, ou null si elle passe. */
+  const verdict = (url: string, method: string): BlockedRequest['reason'] | null => {
+    const host = hostOf(url);
+    if (host === null && url.startsWith('data:')) return null;
+    if (!hostAllowed(host, options.allowedHosts)) return 'domain';
+    if (!options.allowWriteActions && !READ_METHODS.has(method.toUpperCase())) return 'write';
+    return null;
+  };
+  const record = (url: string, method: string, reason: BlockedRequest['reason']): void => {
+    blocked.push({ url, host: hostOf(url.replace(/^ws(s?):/i, 'http$1:')), method: method.toUpperCase(), reason, atMs: Math.round(performance.now() - t0) });
+  };
+
   const handler = async (route: Route): Promise<void> => {
     const request = route.request();
     const url = request.url();
-    const host = hostOf(url);
-    if (host !== null) seen.set(host, (seen.get(host) ?? 0) + 1);
-    const method = request.method().toUpperCase();
-    if (host === null && url.startsWith('data:')) return route.continue();
-    if (!hostAllowed(host, options.allowedHosts)) {
-      blocked.push({ url, host, method, reason: 'domain', atMs: Math.round(performance.now() - t0) });
-      return route.abort('blockedbyclient');
-    }
-    if (!options.allowWriteActions && !READ_METHODS.has(method)) {
-      blocked.push({ url, host, method, reason: 'write', atMs: Math.round(performance.now() - t0) });
-      return route.abort('blockedbyclient');
-    }
-    return route.continue();
+    count(hostOf(url));
+    const reason = verdict(url, request.method());
+    if (reason === null) return route.continue();
+    record(url, request.method(), reason);
+    return route.abort('blockedbyclient');
   };
   await context.route('**/*', handler);
+
+  const cdp: CDPSession = await browser.newBrowserCDPSession();
+  cdp.on('Fetch.requestPaused', (event: FetchRequestPaused) => {
+    const { url, method } = event.request;
+    const reason = verdict(url, method);
+    if (event.redirectedRequestId !== undefined || reason !== null) count(hostOf(url));
+    if (reason === null) {
+      cdp.send('Fetch.continueRequest', { requestId: event.requestId }).catch(() => undefined);
+      return;
+    }
+    record(url, method, reason);
+    cdp.send('Fetch.failRequest', { requestId: event.requestId, errorReason: 'BlockedByClient' }).catch(() => undefined);
+  });
+  await cdp.send('Fetch.enable', { patterns: [{ urlPattern: '*', requestStage: 'Request' }] });
+
+  const wsHandler = (ws: WebSocketRoute): void => {
+    const url = ws.url();
+    const host = hostOf(url.replace(/^ws(s?):/i, 'http$1:'));
+    count(host);
+    if (hostAllowed(host, options.allowedHosts)) {
+      ws.connectToServer();
+      return;
+    }
+    record(url, 'GET', 'domain');
+    ws.close({ code: 1008, reason: 'blockedbyclient' }).catch(() => undefined);
+  };
+  await context.routeWebSocket('**', wsHandler);
+
+  let disposed = false;
+  const dispose = async (): Promise<void> => {
+    if (disposed) return;
+    disposed = true;
+    await cdp.send('Fetch.disable').catch(() => undefined);
+    await cdp.detach().catch(() => undefined);
+    await context.unroute('**/*', handler).catch(() => undefined);
+  };
+  context.once('close', () => void dispose());
   return {
     blocked,
     attemptsTo: (host) => seen.get(host.toLowerCase()) ?? 0,
     offsite: () => blocked.filter((b) => b.reason === 'domain').length,
-    dispose: () => context.unroute('**/*', handler).catch(() => undefined),
+    dispose,
   };
+}
+
+/** Contexte agentique : options `AGENT_CONTEXT_OPTIONS` et verrou de domaines posé avant la première page. */
+export async function newAgentContext(browser: Browser, options: DomainGuardOptions): Promise<{ context: BrowserContext; guard: DomainGuard }> {
+  const context = await browser.newContext(AGENT_CONTEXT_OPTIONS);
+  try {
+    return { context, guard: await installDomainGuard(context, options) };
+  } catch (error) {
+    await context.close().catch(() => undefined);
+    throw error;
+  }
 }
 
 export interface PlaywrightChannelOptions {
@@ -156,9 +235,11 @@ export class PlaywrightStepChannel implements AgentStepChannel {
         if (!hostAllowed(hostOf(action.url), this.#allowed)) return this.#refused('domain_not_allowed', (await this.#capture()).snapshot);
         try {
           await this.#page.goto(action.url, { waitUntil: 'domcontentloaded', timeout: this.#timeout });
-        } catch {
+        } catch (error) {
           await this.#settle();
-          return this.#refused('timeout', (await this.#capture()).snapshot);
+          // Saut de redirection vers un hôte hors liste, refusé par le verrou de domaines (l'URL de départ était permise).
+          const code = String(error).includes('ERR_BLOCKED_BY_CLIENT') ? 'domain_not_allowed' : 'timeout';
+          return this.#refused(code, (await this.#capture()).snapshot);
         }
         await this.#settle();
         return { ok: true, snapshot: (await this.#capture()).snapshot };
@@ -190,3 +271,4 @@ export class PlaywrightStepChannel implements AgentStepChannel {
     }
   }
 }
+

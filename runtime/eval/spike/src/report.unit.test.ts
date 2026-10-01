@@ -86,3 +86,18 @@ describe('bras témoin (§10)', () => {
     expect(renderReport(annex(), { criteria })).toContain('Décision calculée : home_loop');
   });
 });
+
+describe('erreurs d\'outil (§8, revue 0.6a point 1)', () => {
+  const traces = annex().map((r) => ({ seq: r.seq, engine: r.engine, actions: ['click', 'done'], llm_calls: r.engine === 'home_loop' ? null : 4 }));
+  const row = (text: string, engine: string): string => text.split('\n').find((l) => l.startsWith(`| ${engine} |`)) ?? '';
+  it('Stagehand : « non mesuré », jamais un 0 présenté comme une mesure', () => {
+    const text = renderReport(annex(), { criteria });
+    expect(row(text, 'stagehand@3.7.3')).toMatch(/\| non mesuré \(Stagehand n'expose pas les appels invalides\)[^|]* \|$/);
+    expect(row(text, 'stagehand@3.7.3')).not.toMatch(/\| 0 \|$/);
+  });
+  it('dénominateur publié : nombre d\'appels LLM des runs S (traces), boucle maison et Stagehand', () => {
+    const text = renderReport(annex(), { criteria }, traces);
+    expect(row(text, 'home_loop')).toMatch(/\| 0 \/ 60 appels LLM \|$/);
+    expect(row(text, 'stagehand@3.7.3')).toMatch(/; 120 appels LLM \|$/);
+  });
+});

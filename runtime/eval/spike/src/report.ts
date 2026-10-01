@@ -1,6 +1,6 @@
 // Agrégats (§8) et règle de décision (§9) recalculés depuis l'annexe JSONL, puis rendus en Markdown pour l'ADR.
 // Usage : node eval/spike/src/report.ts <runs.jsonl> <meta.json> [sortie.md]
-import { readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { ANNEX_COLUMNS, E4, E5, E6, type EngineLabel, type RunRecord } from './plan.ts';
 import { median, percentile, wilson } from './scoring.ts';
 
@@ -23,6 +23,31 @@ export interface EngineAggregate {
 }
 
 const sum = (xs: number[]): number => xs.reduce((a, b) => a + b, 0);
+
+/** Ligne de `*.traces.jsonl` utile au rapport : types d'actions et nombre d'appels LLM (null pour la boucle maison). */
+export interface TraceRecord {
+  seq: number;
+  engine: string;
+  actions: string[];
+  llm_calls: number | null;
+}
+
+/**
+ * Appels LLM d'un run : `llm_calls` de la trace (Stagehand, middleware) ; pour la boucle maison, un appel par action
+ * tracée (`done` compris) tant qu'aucune erreur d'outil n'ajoute de tour sans action, sinon inconnu.
+ */
+function llmCalls(record: RunRecord, trace: TraceRecord | undefined): number | null {
+  if (trace === undefined) return null;
+  if (trace.llm_calls !== null) return trace.llm_calls;
+  return record.tool_errors === 0 ? trace.actions.length : null;
+}
+
+/** Colonne « Erreurs d'outil » (§8) : nombre / appels LLM ; Stagehand n'expose pas les appels d'outil invalides. */
+function toolErrorsCell(engine: EngineLabel, toolErrors: number, calls: number | null): string {
+  const denominator = calls === null ? '' : `${calls} appels LLM`;
+  if (engine.startsWith('stagehand')) return `non mesuré (Stagehand n'expose pas les appels invalides)${denominator === '' ? '' : ` ; ${denominator}`}`;
+  return denominator === '' ? String(toolErrors) : `${toolErrors} / ${denominator}`;
+}
 
 /** Lignes comptées : la dernière tentative non `void` de chaque seq. */
 export function countedRuns(records: RunRecord[]): RunRecord[] {
@@ -200,15 +225,21 @@ function readRecords(path: string): RunRecord[] {
     .map((l) => JSON.parse(l) as RunRecord);
 }
 
-export function renderReport(records: RunRecord[], meta: Record<string, unknown>): string {
+export function renderReport(records: RunRecord[], meta: Record<string, unknown>, traces: readonly TraceRecord[] = []): string {
   const a = aggregate(records, 'home_loop');
   const b = aggregate(records, 'stagehand@3.7.3');
   const t = witness(records);
   const counted = countedRuns(records);
   const criteria = meta['criteria'] as Parameters<typeof decide>[4];
   const decision = decide(a, b, 90, counted.length, criteria);
+  const traceBySeq = new Map(traces.map((tr) => [tr.seq, tr]));
+  const callsOf = (engine: EngineLabel): number | null => {
+    if (traces.length === 0) return null;
+    const values = counted.filter((r) => r.engine === engine && r.series.startsWith('S')).map((r) => llmCalls(r, traceBySeq.get(r.seq)));
+    return values.some((v) => v === null) ? null : sum(values as number[]);
+  };
   const engineRow = (e: EngineAggregate): string =>
-    `| ${e.engine} | ${e.successes}/${e.n} | ${pct(e.ci.point)} | ${pct(e.ci.low)} à ${pct(e.ci.high)} | ${e.falseSuccesses} | ${e.injectionFailures}/${e.injectionRuns} | ${e.injectionTaskSuccesses}/${e.injectionRuns} | ${usd(e.costTotal)} | ${usd(e.costPerSuccess)} | ${e.steps.median ?? ''} / ${e.steps.p95 ?? ''} | ${e.durationMs.median === null ? '' : (e.durationMs.median / 1000).toFixed(1)} / ${e.durationMs.p95 === null ? '' : (e.durationMs.p95 / 1000).toFixed(1)} s | ${e.tokens.in} / ${e.tokens.cached} / ${e.tokens.out} / ${e.tokens.reasoning} | ${e.toolErrors} |`;
+    `| ${e.engine} | ${e.successes}/${e.n} | ${pct(e.ci.point)} | ${pct(e.ci.low)} à ${pct(e.ci.high)} | ${e.falseSuccesses} | ${e.injectionFailures}/${e.injectionRuns} | ${e.injectionTaskSuccesses}/${e.injectionRuns} | ${usd(e.costTotal)} | ${usd(e.costPerSuccess)} | ${e.steps.median ?? ''} / ${e.steps.p95 ?? ''} | ${e.durationMs.median === null ? '' : (e.durationMs.median / 1000).toFixed(1)} / ${e.durationMs.p95 === null ? '' : (e.durationMs.p95 / 1000).toFixed(1)} s | ${e.tokens.in} / ${e.tokens.cached} / ${e.tokens.out} / ${e.tokens.reasoning} | ${toolErrorsCell(e.engine, e.toolErrors, callsOf(e.engine))} |`;
   const fixtureRows = [E4, E5, E6]
     .map((f) => `| ${f} | ${a.perFixture[f]?.successes ?? 0}/${a.perFixture[f]?.n ?? 0} (${a.perFixture[f]?.falseSuccesses ?? 0} FS) | ${b.perFixture[f]?.successes ?? 0}/${b.perFixture[f]?.n ?? 0} (${b.perFixture[f]?.falseSuccesses ?? 0} FS) |`)
     .join('\n');
@@ -258,7 +289,9 @@ if (import.meta.main) {
   }
   const records = readRecords(runsPath);
   const meta = JSON.parse(readFileSync(metaPath, 'utf8')) as Record<string, unknown>;
-  const text = `${renderReport(records, meta)}\n## Annexe brute\n\n${annexTable(records)}\n`;
+  const tracesPath = runsPath.replace(/\.jsonl$/, '.traces.jsonl');
+  const traces = existsSync(tracesPath) ? (readRecords(tracesPath) as unknown as TraceRecord[]) : [];
+  const text = `${renderReport(records, meta, traces)}\n## Annexe brute\n\n${annexTable(records)}\n`;
   if (outPath === undefined) console.log(text);
   else writeFileSync(outPath, text);
 }

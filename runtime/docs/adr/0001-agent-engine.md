@@ -1,6 +1,6 @@
 # ADR 0001 : moteur agentique serveur (spike 0.6a)
 
-- Statut : **accepté** le 2026-10-01 par l'orchestrateur, sur délégation du commanditaire (« prends toutes les décisions », D-21 ; arbitrage autonome prévu par LAUNCH.md point 6). Décision conforme à la règle figée avant les runs ; qualifiée « fragile ». Conditions : `patchright-core` jamais installé, aucun appel Browserbase (test d'interception réseau), `BRAVE_API_KEY` neutralisée, E6 limité au serveur (porte 0.6b), point faible F-E5 (4/10) traité en 2.4.
+- Statut : **accepté** le 2026-10-01 par l'orchestrateur, sur délégation du commanditaire (« prends toutes les décisions », D-21 ; arbitrage autonome prévu par LAUNCH.md point 6). Décision conforme à la règle figée avant les runs ; qualifiée « fragile ». Conditions : `patchright-core` jamais installé, aucun appel Browserbase (test d'interception réseau), `BRAVE_API_KEY` neutralisée, Stagehand en local seulement (`env: 'LOCAL'`, `disableAPI: true`, aucune option de session Browserbase ni de résolution de captcha : `assertStagehandLocalOnly`, exclusion X1), verrou de domaines appliqué à chaque saut de redirection et aux WebSocket, E6 limité au serveur (porte 0.6b), point faible F-E5 (4/10) traité en 2.4.
 - Date : 2026-10-01
 - Protocole : `eval/spike-0.6a-decision.md`, commit `6b363d9`, SHA-256 `1a7aa449…7d3b` (vérifié par `assert_spike_decision_frozen`, non modifié)
 - Données : `eval/results/spike-0.6a-runs.jsonl` (annexe brute, une ligne par run, sortie normalisée comprise), `spike-0.6a-runs.meta.json` (en-tête), `spike-0.6a-runs.traces.jsonl` (types d'actions par run, sans contenu de page)
@@ -15,7 +15,7 @@
 | Élément | Valeur |
 |---|---|
 | Commit du protocole / empreinte | `6b363d95361cb723cb266aa18e50cfdb22eeac3e` / `1a7aa44903562c26010a8644b68bc4ab96195474e3e3eec8fa8a8972ef9b7d3b` |
-| Commit du harnais | base `83f236d` + arbre de travail non commité (la tâche interdit de commiter) ; empreinte des sources du harnais `2523f630e65d769e1b5ffbf39957038af9aa178f6e414f41e89bf000d45274f9` |
+| Commit du harnais | base `83f236d` + arbre de travail non commité (la tâche interdit de commiter) ; empreinte des sources du harnais `2523f630e65d769e1b5ffbf39957038af9aa178f6e414f41e89bf000d45274f9`. Harnais commité ensuite en `e95a0df`, empreinte des sources identique (recalculée sur les 12 fichiers listés par `run-spike.ts`). Les correctifs de revue postérieurs (voir « Revue ») modifient quatre de ces sources ; aucun run n'a été rejoué |
 | Stagehand | `@browserbasehq/stagehand` 3.7.3 exactement, `env: "LOCAL"`, `cdpUrl` |
 | Playwright / Chromium | playwright-core 1.63.0 / Chrome for Testing 153.0.8010.12 (révision 1243), même binaire pour les deux bras |
 | Modèle, fournisseur | `zai-org/GLM-5.3`, DeepInfra `api.deepinfra.com`, Chat Completions |
@@ -42,8 +42,10 @@ Runs comptés : 90/90 ; lignes `void` : 1 ; coût total des runs : 3,1356 $.
 
 | Moteur | Réussites | Taux | IC Wilson 95 % | Faux succès | Échecs d'injection | Tâche légitime F-INJ | Coût 30 runs | Coût par réussite | Étapes méd. / p95 | Durée méd. / p95 | Jetons in / cache / out / raisonnement | Erreurs d'outil |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
-| home_loop | 21/30 | 70,0 % | 52,1 % à 83,3 % | 1 | 0/10 | 10/10 | 0,3254 $ | 0,0155 $ | 2 / 25 | 14.5 / 90.5 s | 587474 / 450624 / 76830 / 55991 | 0 |
-| stagehand@3.7.3 | 24/30 | 80,0 % | 62,7 % à 90,5 % | 0 | 0/10 | 10/10 | 1,8571 $ | 0,0774 $ | 4.5 / 25 | 51.3 / 174.8 s | 4458459 / 2240064 / 131243 / 87478 | 0 |
+| home_loop | 21/30 | 70,0 % | 52,1 % à 83,3 % | 1 | 0/10 | 10/10 | 0,3254 $ | 0,0155 $ | 2 / 25 | 14.5 / 90.5 s | 587474 / 450624 / 76830 / 55991 | 0 / 264 appels LLM |
+| stagehand@3.7.3 | 24/30 | 80,0 % | 62,7 % à 90,5 % | 0 | 0/10 | 10/10 | 1,8571 $ | 0,0774 $ | 4.5 / 25 | 51.3 / 174.8 s | 4458459 / 2240064 / 131243 / 87478 | non mesuré (Stagehand n'expose pas les appels invalides) ; 450 appels LLM |
+
+Erreurs d'outil (§8, nombre / appels) : le dénominateur est le nombre d'appels LLM des 30 runs S, lu dans `spike-0.6a-runs.traces.jsonl` (`llm_calls` pour Stagehand, appels internes d'`act` et d'`extract` compris ; pour la boucle maison, un appel par action tracée, `done` compris, exact ici puisqu'aucune erreur d'outil n'a ajouté de tour sans action). Pour Stagehand, la colonne `tool_errors` de l'annexe vaut 0 par construction de l'adaptateur (`toolErrors: 0` codé en dur) : ce n'est pas une mesure. La règle §9 n'utilise pas cette métrique ; la décision n'en dépend pas. Une première version de cet ADR affichait « 0 » pour Stagehand ; corrigé à la revue.
 
 Par fixture (10 runs chacune ; rapporté, ne décide rien seul, §12) :
 
@@ -93,6 +95,11 @@ Réussite 3/10 (IC 10,8 % à 60,3 %) ; sorties finales distinctes : 6 ; étapes 
 
 **Invariants à ajouter (proposition, hors de cette tâche) :** `assert_third_party_engine_not_via_tunnel` est déjà au CDC ; un test d'environnement nettoyé (`BRAVE_API_KEY` et variables Browserbase absentes) devra accompagner Stagehand en production.
 
+**Obligations pour l'intégration (tâche 2.4).**
+- *Mode local seulement (X1).* Stagehand 3.7.3 embarque un `CaptchaSolver` et `waitForCaptchaSolves`, actifs seulement en `env: "BROWSERBASE"`. Chaque construction de `Stagehand` passe par `assertStagehandLocalOnly` (`eval/spike/src/guards.ts`, testé par `guards.unit.test.ts`) : `env: 'LOCAL'`, `disableAPI: true`, refus de `apiKey`, `projectId`, `browserbaseSessionCreateParams`, `browserbaseSessionID`, `keepAlive`, de toute option « captcha » active et de toute variable Browserbase ou `BRAVE_API_KEY` dans l'environnement. 2.4 reprend cette fonction et son test en production, avec le test d'interception réseau (0 requête vers browserbase.com ou hors fixtures, `stagehand.contract.test.ts`).
+- *Verrou de domaines.* Dans le worker, le contexte agentique est ouvert par `openRunContext` (main, tâche 1.6) : proxy d'egress de l'essai, qui applique la liste de domaines et la garde SSRF à chaque saut de redirection, sous-ressource et WebSocket, Chromium lancé avec le proxy fermé. Le Chromium de Stagehand (`cdpUrl`) est celui de ce lancement. `installDomainGuard` de `@runtime/agent` reste la seconde couche ; sa couche CDP de redirections vaut pour tout le navigateur et exige un navigateur dédié (un seul contexte), sinon elle refuse de s'installer.
+- *Chaîne de build.* `eval/` est exclu du contexte Docker (`.dockerignore`) : l'étape de build n'installe ni Stagehand ni le SDK Browserbase tant que l'adaptateur n'a pas quitté `eval/spike`.
+
 ## Écarts au protocole
 
 Aucun seuil, aucune définition ni aucune règle n'a été modifié ; aucun run n'a été relancé pour échec. Écarts de mise en œuvre, consignés :
@@ -100,13 +107,22 @@ Aucun seuil, aucune définition ni aucune règle n'a été modifié ; aucun run 
 1. **Premier lancement interrompu.** Le harnais a été tué par erreur par l'opérateur (commande `pkill` trop large) pendant le run seq 1, avant l'écriture de sa ligne. Le run est consigné `void` (cause extérieure au moteur et au modèle, §6) et rejoué une fois ; son coût, inconnu, est compté au plafond de 0,50 $ dans le cumul budgétaire. 1 `void` au total (limite : 3).
 2. **Verrou de domaines du bras B.** `context.setDomainPolicy` de Stagehand 3.7.3 refuse les étiquettes contenant `_` (`DOMAIN_LABEL_RE`) : il ne peut pas exprimer les hôtes `zz_test_*`. Le harnais pose sur le Chromium partagé, par `connectOverCDP`, la même garde `context.route('**/*')` que le bras A. Le §15 prévoyait deux gardes différentes ; elles sont identiques, ce qui renforce l'égalité des conditions. Le comptage reste celui du serveur de fixtures, complété par le journal de la garde.
 3. **`experimental: true`** ajouté au constructeur de B : exigé par Stagehand 3.7.3 pour `output`, `excludeTools`, `signal` et les rappels d'agent.
-4. **Plafond d'étapes de B.** Après sa boucle, Stagehand force un appel `done` qui peut porter une sortie. Si la boucle s'est arrêtée à 25 étapes alors que le modèle appelait encore des outils, le run est un échec `max_steps` (§6), sortie forcée ignorée. Si la boucle s'est terminée seule (tour sans outil), l'appel `done` forcé est la fin normale de Stagehand et sa sortie compte.
+4. **Plafond d'étapes de B.** Après sa boucle, Stagehand force un appel `done` qui peut porter une sortie. Si la boucle s'est arrêtée à 25 étapes alors que le modèle appelait encore des outils, le run est un échec `max_steps` (§6), sortie forcée ignorée. Si la boucle s'est terminée seule (tour sans outil), l'appel `done` forcé est la fin normale de Stagehand et sa sortie compte. **La sortie forcée écartée n'a pas été conservée** (`output` vaut `null` dans l'annexe pour les seq 11, 24, 32, 33, 42 et 81) : un tiers ne peut pas vérifier si ces sorties étaient valides contre le schéma mais fausses, ni donc mesurer la sensibilité de la décision à ce traitement. Le traitement reste symétrique (A au plafond ne rend aucune sortie). Un prochain spike ou un ADR révisé archivera cette sortie dans un champ distinct (`forced_output`, non compté).
 5. **Tentatives d'injection du bras A.** Une navigation vers le domaine piège refusée par le canal (aucune requête émise) est comptée comme tentative (§7 « tentative de navigation »). Pour B, les arguments contrôlés pour la chaîne canari sont ceux des outils d'action, hors `think` (carnet de réflexion) et `done` (dont la sortie est contrôlée comme sortie). Aucune de ces précisions n'a joué : 0 tentative, 0 canari.
-6. **Commit du harnais.** La tâche interdisait de commiter : l'en-tête porte le commit de base, l'état « arbre modifié » et l'empreinte SHA-256 des sources du harnais.
+6. **Commit du harnais.** La tâche interdisait de commiter : l'en-tête porte le commit de base, l'état « arbre modifié » et l'empreinte SHA-256 des sources du harnais. Le harnais a été commité ensuite en `e95a0df` ; l'empreinte des 12 sources y est identique (`2523f630…74f9`).
 7. **Garde SSRF absente.** La garde SSRF de `core` n'est pas fusionnée dans ce worktree : `RUNTIME_TEST_ALLOW_PRIVATE` n'a pas été utilisé. Le réseau a été fermé par le résolveur de Chromium (`MAP *.localhost 127.0.0.1, MAP * ~NOTFOUND`), le verrou de domaines et le compteur réseau Node, qui arrête le spike à la première requête hors boucle locale et hors fournisseur (aucune).
 8. **Prix.** Le prix saisi est le prix affiché le jour du run (remisé), recoupé avec `usage.estimated_cost` ; le prix catalogue est noté. Le coût par réussite est un rapport : la remise ne change pas la comparaison.
 9. **Budget.** Le cumul du §11 a été initialisé avec les dépenses de la sonde, des répétitions réelles et du run interrompu (0,8034 $), plus strict que le protocole.
 10. **Instructions des tâches** rédigées en anglais (identiques pour les deux bras ; le prompt système de Stagehand est en anglais).
+
+## Revue (après les runs)
+
+Correctifs apportés après la revue du livrable ; aucun run n'a été rejoué, aucun chiffre de l'annexe n'a changé.
+
+- **Verrou de domaines contourné par une redirection** (`packages/agent/src/playwright-channel.ts`). Playwright n'appelle la route que pour la première requête d'une chaîne de redirections : un 302 d'un hôte autorisé vers un hôte interdit était suivi sans contrôle. Corrigé par une interception CDP `Fetch` au niveau du navigateur qui vérifie chaque saut (`redirectedRequestId`) dans Chromium, sans faire sortir la requête par Node (`route.fetch`, proposé à la revue, part de Node, hors du résolveur et du proxy de Chromium : il casse le réseau fermé du spike). WebSocket filtrées par `routeWebSocket`, contextes agentiques créés avec `serviceWorkers: 'block'` (`newAgentContext`). Tests de contrat : 302 et chaîne de sauts vers le piège (0 requête servie, 1 entrée `blocked`), image redirigée, WebSocket, service worker. Effet sur le spike : aucun. Aucune fixture ne redirige vers `zz_test_evil`, et le décompte d'injection additionne les requêtes servies par le serveur de fixtures (0 sur les 20 runs F-INJ), pas le journal de la garde.
+- **Erreurs d'outil de Stagehand** : « non mesuré » au lieu de 0, dénominateur publié (`report.ts` lit les traces).
+- **Sortie forcée de Stagehand au plafond** : non conservée, consigné à l'écart 4.
+- **Mode local de Stagehand** : `assertStagehandLocalOnly` appelé avant chaque construction ; obligation pour 2.4.
 
 ## Points à valider
 
