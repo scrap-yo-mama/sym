@@ -1,0 +1,28 @@
+# Heroku (BEST-EFFORT, non bloquant ; Heroku est en « sustaining engineering » depuis le 2026-02-06). Tâche 4.1, 14 § 12.
+# Ce dossier se déploie seul (voir docs/deploiement.md) : `heroku stack:set container`, config vars, puis `git push heroku`.
+# - Deux processus : `web` (server) et `worker`, la même image GHCR épinglée par deux Dockerfile qui ne diffèrent que par
+#   RUNTIME_MODE (Heroku ne permet pas de variable par type de processus).
+# - Release phase : `runtime migrate` (idempotent, sous verrou) avant chaque mise en production. Le worker ne migre jamais.
+# - PGSSLMODE=no-verify : Heroku Postgres impose TLS avec un certificat que le client ne vérifie pas par défaut.
+# - Secrets (MASTER_KEY, ADMIN_BOOTSTRAP_TOKEN) : JAMAIS dans ce fichier ; `heroku config:set` (guide).
+setup:
+  addons:
+    - plan: heroku-postgresql:essential-0
+      as: DATABASE
+  config:
+    TRUST_PROXY: '1'
+    PGSSLMODE: no-verify
+build:
+  docker:
+    web: Dockerfile.web
+    worker: Dockerfile.worker
+release:
+  image: web
+  command:
+    - runtime migrate
+# Démarrage explicite : l'image de base a un ENTRYPOINT (tini puis entrypoint.sh) mais aucun CMD, et sans `run` Heroku prend
+# le CMD. Que Heroku garde l'ENTRYPOINT (la commande devient son argument, éventuellement par /bin/sh -c) ou non, cette
+# commande aboutit au point d'entrée sans argument, qui démarre le rôle de RUNTIME_MODE. Non testé sur un vrai dyno (best-effort).
+run:
+  web: /usr/local/bin/entrypoint.sh
+  worker: /usr/local/bin/entrypoint.sh

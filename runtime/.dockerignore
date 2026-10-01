@@ -4,7 +4,7 @@
 coverage
 blob-report
 test-results
-.env*
+**/.env*
 .git
 docs
 # Paquet d'évaluation du spike 0.6a (Stagehand, SDK Browserbase) : jamais dans le contexte de build (§13).

@@ -38,7 +38,9 @@
     "check:release": "node scripts/release/gates.ts",
     "docs:build": "pnpm --filter @runtime/docs build",
     "docs:test": "vitest run --project unit --project contract apps/docs",
-    "docs:quickstart": "node scripts/docs-quickstart.ts"
+    "docs:quickstart": "node scripts/docs-quickstart.ts",
+    "gen:env-docs": "node scripts/gen-env-docs.ts",
+    "check:env-docs": "node scripts/gen-env-docs.ts --check"
   },
   "devDependencies": {
     "@eslint/js": "catalog:",
@@ -50,14 +52,15 @@
     "@types/pg": "catalog:",
     "@vitejs/plugin-vue": "catalog:",
     "@vitest/coverage-v8": "catalog:",
+    "ajv": "catalog:",
     "eslint": "catalog:",
     "eslint-plugin-vue": "catalog:",
     "fastify": "catalog:",
     "knip": "catalog:",
     "openapi-typescript": "catalog:",
     "pg": "catalog:",
-    "standardwebhooks": "catalog:",
     "playwright-core": "catalog:",
+    "standardwebhooks": "catalog:",
     "typescript": "catalog:",
     "typescript-eslint": "catalog:",
     "vitest": "catalog:",

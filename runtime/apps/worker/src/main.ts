@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Point d'entrée de `runtime worker` : configuration, démarrage (refus clair si la clé ou le schéma ne vont pas),
 // arrêt propre sur SIGTERM/SIGINT (14 § 1). Code de sortie : 0 arrêt propre, 1 échec d'arrêt, 2 refus de démarrer.
-import type { RunExecutor } from '@runtime/core';
+import { unknownReservedVariablesWarning, type RunExecutor } from '@runtime/core';
 import { loadWorkerConfig } from './config.js';
 import { productionExecutorFactory } from './exec/factory.js';
 import { assertSandboxSupported } from './sandbox/index.js';
@@ -9,6 +9,9 @@ import { startWorker, type Worker } from './worker.js';
 
 export async function main(env: NodeJS.ProcessEnv = process.env, options: { executor?: RunExecutor } = {}): Promise<Worker | null> {
   let worker: Worker;
+  // Faute de frappe probable (14 § 2) : signalée, jamais fatale, jamais la valeur. Avant tout le reste, pour qu'un refus ultérieur la laisse visible.
+  const unknownWarning = unknownReservedVariablesWarning(env);
+  if (unknownWarning) console.error(unknownWarning);
   try {
     // Test de démarrage (08 §3) : refus si isolated-vm est sous la borne GHSA-864f-rcv7-6rh4 ou sans binaire pour ce Node.
     assertSandboxSupported();

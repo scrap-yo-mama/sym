@@ -7,6 +7,14 @@ SERVER=/app/apps/server/dist/index.js
 WORKER=/app/apps/worker/dist/index.js
 CLI=/app/apps/cli/dist/index.js
 
+# Commande passée en argument (pré-déploiement des hébergeurs : `runtime migrate` ; `docker run IMAGE runtime keygen`) :
+# exécutée telle quelle, aucun rôle n'est démarré. Une chaîne unique (« runtime migrate ») passe par sh -c, comme le
+# fait un champ « commande » de plateforme ; plusieurs arguments sont exécutés sans passer par un shell.
+if [ "$#" -gt 0 ]; then
+  if [ "$#" -eq 1 ]; then exec sh -c "$1"; fi
+  exec "$@"
+fi
+
 case "${RUNTIME_MODE:-all}" in
   server) exec node "$SERVER" ;;
   worker) exec node --no-node-snapshot "$WORKER" ;; # bac à sable isolated-vm (08 §3)

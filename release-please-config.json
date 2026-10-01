@@ -75,6 +75,26 @@
           "type": "json",
           "path": "packages/schemas/package.json",
           "jsonpath": "$.version"
+        },
+        {
+          "type": "generic",
+          "path": "deploy/docker-compose.prod.yml"
+        },
+        {
+          "type": "generic",
+          "path": "deploy/heroku/Dockerfile.web"
+        },
+        {
+          "type": "generic",
+          "path": "deploy/heroku/Dockerfile.worker"
+        },
+        {
+          "type": "generic",
+          "path": "deploy/railway/template.yaml"
+        },
+        {
+          "type": "generic",
+          "path": "/render.yaml"
         }
       ]
     }
