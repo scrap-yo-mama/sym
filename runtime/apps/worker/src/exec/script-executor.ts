@@ -12,6 +12,13 @@
 // (`access_refused`), l'enfant est arrêté (sans violation), aucune requête ne part plus, les éléments émis sont ignorés
 // et l'essai échoue avec la classe du refus. Les requêtes du site lui-même émises sans code du script (session anonyme
 // sondée en 401 par la page d'accueil, par exemple) ne sont pas classées, comme dans l'E3 déclaratif.
+// Chaque document du cadre principal est classé d'abord sur son corps BRUT (lu au niveau réseau, avant que ses scripts
+// ne le transforment), avec l'URL demandée (racine de la chaîne de redirections) pour reconnaître une redirection vers
+// la connexion ; une requête de la page attend le verdict des réponses en cours de classement, et une nouvelle
+// navigation du cadre principal fait d'abord classer le document courant sur son DOM (il est encore là) : un défi qui
+// se résout seul en JavaScript puis recharge la page est ainsi refusé avant que le rechargement ne parte.
+// Cadence : chaque réponse classée est rapportée AVEC sa classe (`failureClass`) : un défi servi en 200 compte pour
+// le disjoncteur du domaine comme un 403, jamais comme un succès (04 §7).
 // Cadence par domaine (1.9, 17 §5) : comme les exécuteurs déclaratifs, chaque requête du script réserve un créneau
 // avant de partir et rend compte de son statut (429, `Retry-After`, 5xx allongent la cadence) : chaque saut de
 // `ctx.fetch`, et chaque requête de document, XHR ou fetch de la page (page de départ, `ctx.page.goto`, navigations d'un
@@ -34,8 +41,8 @@ import {
 } from '@runtime/core/exec';
 import { DomainNotAllowedError, guardedGoto, type BrowserEgress, type NetworkSession, type SsrfGuard } from '@runtime/core/net';
 import type { Logger } from 'pino';
-import type { Request, Response } from 'playwright-core';
-import { boundedContent, TOO_LARGE } from '../browser/bounded.js';
+import type { CDPSession, Request, Response } from 'playwright-core';
+import { boundedContent, boundedDocumentBody, TOO_LARGE } from '../browser/bounded.js';
 import type { BrowserPool } from '../browser/pool.js';
 import { chainRoot, hostAllowed, isMainNavigation, openRunContext, trackStrategyRequests } from '../browser/run-context.js';
 import { DEFAULT_SANDBOX_LIMITS } from '../sandbox/engine.js';
@@ -52,6 +59,13 @@ const PACED_TYPES = new Set(['document', 'xhr', 'fetch', 'eventsource']);
 /** Appels de données de la page classés quand le code du script est dans la page. */
 const DATA_TYPES = new Set(['xhr', 'fetch', 'eventsource']);
 const READ_METHODS = new Set(['GET', 'HEAD']);
+/** Durée de vie maximale du verdict de la garde sur un document du cadre principal (sécurité). */
+const DOCUMENT_VERDICT_WAIT_MS = 15_000;
+/** Attente, par une navigation du cadre principal dont le document courant passe le classement du DOM, du verdict sur son corps brut. */
+const PREVIOUS_VERDICT_WAIT_MS = 2_000;
+/** Lecture du DOM courant (CDP) avant une navigation du cadre principal. */
+const DOM_READ_TIMEOUT_MS = 3_000;
+const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 /** Corps d'un XHR / fetch de la page lu pour le classement : déclaré, non compressé, au plus 256 Kio. */
 const MAX_CLASSIFIED_BODY = 256 * 1024;
 /**
@@ -150,21 +164,62 @@ export function runScriptExecutor(options: ScriptExecutorOptions): Promise<Scrip
   /** Premier refus d'accès constaté (INV6) : l'essai s'arrête, plus aucune requête ne part. */
   let refusal: ExecFailure | undefined;
   const stopOnRefusal = new AbortController();
-  /** Classe une réponse ; vrai si c'est un refus (retenu, enfant arrêté). */
-  const examine = (exchange: HttpExchange): boolean => {
+  /** Retient un refus (premier seulement : enfant arrêté) ; vrai si l'essai est refusé. */
+  const retain = (failure: ExecFailure | null): boolean => {
     if (refusal !== undefined) return true;
-    const failure = classify(exchange);
     if (failure === null || PASS_THROUGH.has(failure.failure_class)) return false;
     refusal = failure;
     stopOnRefusal.abort();
     return true;
   };
-  /** Compte rendu à la cadence, sérialisé : une réservation attend le compte rendu précédent (un 429 ralentit la suivante). */
+  /** Résolue (`undefined`) au premier refus retenu. */
+  const onRefusal = (): Promise<undefined> =>
+    new Promise((resolve) => {
+      if (stopOnRefusal.signal.aborted) resolve(undefined);
+      else stopOnRefusal.signal.addEventListener('abort', () => resolve(undefined), { once: true });
+    });
+  /** Classe une réponse (avec l'URL demandée) : la classe, et si l'essai est refusé. */
+  const examine = (exchange: HttpExchange, context: ClassifyContext = {}): { refused: boolean; failure: ExecFailure | null } => {
+    const failure = classify(exchange, context);
+    return { refused: retain(failure), failure };
+  };
+  /**
+   * Compte rendu à la cadence, sérialisé : une réservation attend le compte rendu précédent (un 429 ralentit la
+   * suivante), et le verdict de la garde sur les réponses en cours de classement (même sans cadence). La classe est
+   * celle de la garde : un refus (403, défi en 200) compte pour le disjoncteur.
+   */
   let reporting: Promise<void> = Promise.resolve();
-  const report = (url: string, status: number, retryAfter: string | null): Promise<void> => {
-    if (pacer === undefined) return Promise.resolve();
-    reporting = reporting.then(() => pacer.report(url, { status, retryAfter })).catch(() => undefined);
+  const report = (url: string, status: number, retryAfter: string | null, failureClass: FailureClass | null | Promise<FailureClass | null> = null): Promise<void> => {
+    reporting = reporting
+      .then(async () => {
+        const cls = await failureClass;
+        await pacer?.report(url, { status, retryAfter, failureClass: cls });
+      })
+      .catch(() => undefined);
     return reporting;
+  };
+  /** Verdict de la garde attendu par la prochaine réservation, sans compte rendu (requête hors cadence). */
+  const awaitVerdict = (verdict: Promise<unknown>): void => {
+    reporting = reporting.then(() => verdict).then(
+      () => undefined,
+      () => undefined,
+    );
+  };
+  /** Réponses finales de `ctx.fetch` en attente de classement (`inspect`) : rapportées alors avec leur classe. */
+  const pendingFetchReports = new Map<string, { status: number; retryAfter: string | null }[]>();
+  const hrefOf = (url: string): string => {
+    try {
+      return new URL(url).href;
+    } catch {
+      return url;
+    }
+  };
+  /** Rapporte la réponse finale de `ctx.fetch` en attente pour `url`, avec la classe de la garde. */
+  const reportFetch = (url: string, failureClass: FailureClass | null): Promise<void> => {
+    const queue = pendingFetchReports.get(hrefOf(url));
+    const entry = queue?.shift();
+    if (queue !== undefined && queue.length === 0) pendingFetchReports.delete(hrefOf(url));
+    return entry === undefined ? Promise.resolve() : report(url, entry.status, entry.retryAfter, failureClass);
   };
   /** Une requête de plus : plafond du run, puis créneau de la cadence. `false` : refusée (sans connexion). */
   const reserve = async (url: string): Promise<'ok' | 'cap' | 'paced' | 'refused'> => {
@@ -175,8 +230,10 @@ export function runScriptExecutor(options: ScriptExecutorOptions): Promise<Scrip
       return 'cap';
     }
     requests += 1;
-    if (pacer === undefined) return 'ok';
+    // Verdicts en cours (document du cadre principal, appel de données) d'abord : un refus constaté coupe la requête.
     await reporting;
+    if (refusal !== undefined) return 'refused';
+    if (pacer === undefined) return 'ok';
     const slot = await pacer.acquire(url);
     if (slot.granted) return refusal === undefined ? 'ok' : 'refused';
     paceRefusal = slot.reason;
@@ -198,6 +255,41 @@ export function runScriptExecutor(options: ScriptExecutorOptions): Promise<Scrip
       const root = chainRoot(request);
       return issuedForWatch(issued.get(root), { redirectHop: root !== request, strategy: strategy.owns(root), mainNavigation: mainNavigations.has(root) });
     };
+    /**
+     * Verdict de la garde sur chaque document du cadre principal (requête initiale → fin du classement de sa réponse) ;
+     * la navigation suivante attend celui du document précédent (borné : jamais plus de `DOCUMENT_VERDICT_WAIT_MS`).
+     */
+    const documentVerdicts = new Map<Request, () => void>();
+    const previousDocumentVerdict = new WeakMap<Request, Promise<void>>();
+    let lastDocumentVerdict: Promise<void> = Promise.resolve();
+    /** Dernier document du cadre principal reçu (statut, en-têtes, URL demandée) : classé sur son DOM avant la navigation suivante. */
+    let currentDocument: { status: number; headers: Record<string, string>; url: string; requestUrl: string; root: Request } | undefined;
+    /** Documents du cadre principal dont le corps brut a été lu et classé (requête initiale). */
+    const rawClassified = new WeakSet<Request>();
+    const settleDocument = (request: Request): void => {
+      const root = chainRoot(request);
+      documentVerdicts.get(root)?.();
+      documentVerdicts.delete(root);
+    };
+    /** Session CDP de la page (posée après l'ouverture du contexte) : lecture du DOM pendant une navigation suspendue. */
+    const cdpRef: { session?: CDPSession } = {};
+    /**
+     * HTML sérialisé du document courant, borné DANS la page, lu par CDP : `page.evaluate` attendrait la fin de la
+     * navigation suspendue par `admit` (interblocage). `undefined` si illisible.
+     */
+    const currentDom = async (): Promise<string | undefined> => {
+      const session = cdpRef.session;
+      if (session === undefined) return undefined;
+      const expression = `(() => { try { const d = document; const s = (d.doctype ? new XMLSerializer().serializeToString(d.doctype) : '') + String(d.documentElement ? d.documentElement.outerHTML : ''); return typeof s === 'string' && s.length <= ${MAX_RESPONSE_BYTES} ? s : null; } catch { return null; } })()`;
+      let timer: NodeJS.Timeout | undefined;
+      const value = await Promise.race([
+        session.send('Runtime.evaluate', { expression, returnByValue: true }).then((r) => (r.result as { value?: unknown }).value),
+        new Promise<undefined>((resolve) => (timer = setTimeout(() => resolve(undefined), DOM_READ_TIMEOUT_MS))),
+      ])
+        .catch(() => undefined)
+        .finally(() => clearTimeout(timer));
+      return typeof value === 'string' && Buffer.byteLength(value) <= MAX_RESPONSE_BYTES ? value : undefined;
+    };
     const rc = await openRunContext(browser, {
       egressServer: options.egress.server,
       allowedHosts: options.allowedHosts,
@@ -209,6 +301,29 @@ export function runScriptExecutor(options: ScriptExecutorOptions): Promise<Scrip
           host.report(new URL(request.url()).hostname, 'write_action_blocked', issued.get(chainRoot(request)));
           return false;
         }
+        // Nouvelle navigation du cadre principal : le document courant est classé d'abord, sur son DOM tant qu'il est
+        // encore là (le corps brut d'un document que cette navigation interrompt n'est plus lisible), puis sur son corps
+        // brut (verdict de l'écouteur, attente bornée) : un défi qui se recharge lui-même est refusé avant que le
+        // rechargement ne parte.
+        const previous = previousDocumentVerdict.get(request);
+        if (previous !== undefined) {
+          const doc = currentDocument;
+          let classified = doc === undefined;
+          if (doc !== undefined && refusal === undefined) {
+            const html = await currentDom();
+            if (html !== undefined) {
+              examine({ status: doc.status, headers: doc.headers, body: html, url: doc.url }, { requestUrl: doc.requestUrl });
+              classified = true;
+            }
+          }
+          if (refusal === undefined) await Promise.race([previous, sleep(PREVIOUS_VERDICT_WAIT_MS)]);
+          // Document qui s'en va avant d'avoir pu être classé (ni DOM lisible ni corps brut lu) : la page s'est rechargée
+          // ou redirigée d'elle-même en cours de chargement, sans verdict possible ; refus prudent (INV6).
+          if (refusal === undefined && !classified && doc !== undefined && !rawClassified.has(doc.root)) {
+            retain({ failure_class: 'blocked_by_protection', retryable: false, detail: 'self_navigation', status: doc.status });
+          }
+        }
+        if (refusal !== undefined) return false;
         if (!PACED_TYPES.has(request.resourceType())) return true;
         if ((await reserve(request.url())) !== 'ok') return false;
         pacedRequests.add(request);
@@ -221,7 +336,20 @@ export function runScriptExecutor(options: ScriptExecutorOptions): Promise<Scrip
       if (root === request) {
         issued.set(request, host.armed());
         try {
-          if (isMainNavigation(rc.page)(request)) mainNavigations.add(request);
+          if (isMainNavigation(rc.page)(request)) {
+            mainNavigations.add(request);
+            let resolve: () => void = () => undefined;
+            const verdict = new Promise<void>((r) => {
+              resolve = r;
+            });
+            const timer = setTimeout(resolve, DOCUMENT_VERDICT_WAIT_MS);
+            previousDocumentVerdict.set(request, lastDocumentVerdict);
+            lastDocumentVerdict = verdict;
+            documentVerdicts.set(request, () => {
+              clearTimeout(timer);
+              resolve();
+            });
+          }
         } catch {
           // Requête sans cadre : jamais une navigation de la page du run.
         }
@@ -238,30 +366,58 @@ export function runScriptExecutor(options: ScriptExecutorOptions): Promise<Scrip
         host.report(target, 'domain_not_allowed', issuedState(request));
       }
     });
+    rc.context.on('requestfailed', settleDocument);
     // Garde de classification des réponses de la page (INV6) : tâches en cours, document à classer sur son contenu.
     const pending = new Set<Promise<void>>();
-    let documentToCheck: { status: number; headers: Record<string, string> } | undefined;
+    let documentToCheck: { status: number; headers: Record<string, string>; requestUrl: string } | undefined;
     rc.context.on('response', (response) => {
       const request = response.request();
-      if (pacedRequests.has(request)) void report(response.url(), response.status(), response.headers()['retry-after'] ?? null);
-      if (refusal !== undefined || !hostAllowed(response.url(), options.allowedHosts)) return;
+      const paced = pacedRequests.has(request);
+      const status = response.status();
+      const headers = response.headers();
+      const retryAfter = headers['retry-after'] ?? null;
       let mainDocument = false;
       try {
         mainDocument = isMainNavigation(rc.page)(request);
       } catch {
         // Requête sans cadre : jamais un document de la page du run.
       }
-      if (!mainDocument && !(DATA_TYPES.has(request.resourceType()) && issued.get(chainRoot(request)) === true)) return;
-      const status = response.status();
-      // Saut de redirection : la réponse suivante sera classée.
-      if (status >= 300 && status < 400 && response.headers()['location'] !== undefined) return;
-      const headers = response.headers();
-      const task = (async () => {
-        const body = mainDocument ? '' : await smallBody(response);
-        if (!examine({ status, headers, body, url: response.url() }) && mainDocument) documentToCheck = { status, headers };
-      })().catch(() => undefined);
-      pending.add(task);
-      void task.finally(() => pending.delete(task));
+      const classified =
+        refusal === undefined &&
+        hostAllowed(response.url(), options.allowedHosts) &&
+        (mainDocument || (DATA_TYPES.has(request.resourceType()) && issued.get(chainRoot(request)) === true)) &&
+        // Saut de redirection : la réponse suivante sera classée.
+        !(status >= 300 && status < 400 && headers['location'] !== undefined);
+      const hop = status >= 300 && status < 400 && headers['location'] !== undefined;
+      // Document courant soumis à la garde (hors domaines de l'API ou après un refus : aucun classement, comme avant).
+      if (mainDocument && !hop) currentDocument = classified ? { status, headers, url: response.url(), requestUrl: chainRoot(request).url(), root: chainRoot(request) } : undefined;
+      if (!classified) {
+        if (paced) void report(response.url(), status, retryAfter);
+        if (mainDocument && !hop) settleDocument(request);
+        return;
+      }
+      // URL demandée : racine de la chaîne de redirections (redirection vers la connexion, 04 §7).
+      const requestUrl = chainRoot(request).url();
+      const task = (async (): Promise<FailureClass | null> => {
+        // Document : corps BRUT servi, avant que ses scripts ne le transforment ; appel de données : petit corps.
+        let body: string;
+        if (mainDocument) {
+          // Lecture abandonnée dès qu'un refus est constaté (document interrompu par un rechargement refusé).
+          const raw = await Promise.race([boundedDocumentBody(response, MAX_RESPONSE_BYTES), onRefusal()]);
+          body = typeof raw === 'string' ? raw : '';
+          if (typeof raw === 'string') rawClassified.add(chainRoot(request));
+        } else body = await smallBody(response);
+        const { refused, failure } = examine({ status, headers, body, url: response.url() }, { requestUrl });
+        if (!refused && mainDocument) documentToCheck = { status, headers, requestUrl };
+        return failure?.failure_class ?? null;
+      })().catch(() => null);
+      // Compte rendu (avec la classe) chaîné dès maintenant : la requête suivante de la page attend ce verdict.
+      if (paced) void report(response.url(), status, retryAfter, task);
+      else awaitVerdict(task);
+      const done = task.then(() => undefined);
+      if (mainDocument) void done.finally(() => settleDocument(request));
+      pending.add(done);
+      void done.finally(() => pending.delete(done));
     });
     /** Avant et après chaque opération de page : classements en cours terminés, document courant classé sur son contenu. */
     const accessGuard = async (): Promise<void> => {
@@ -270,7 +426,7 @@ export function runScriptExecutor(options: ScriptExecutorOptions): Promise<Scrip
       if (refusal === undefined && doc !== undefined) {
         documentToCheck = undefined;
         const html = await boundedContent(rc.page, MAX_RESPONSE_BYTES).catch((): typeof TOO_LARGE => TOO_LARGE);
-        examine({ status: doc.status, headers: doc.headers, body: html === TOO_LARGE ? '' : html, url: rc.page.url() });
+        examine({ status: doc.status, headers: doc.headers, body: html === TOO_LARGE ? '' : html, url: rc.page.url() }, { requestUrl: doc.requestUrl });
       }
       if (refusal !== undefined) throw new SandboxBridgeError(ACCESS_REFUSED, false);
     };
@@ -278,6 +434,7 @@ export function runScriptExecutor(options: ScriptExecutorOptions): Promise<Scrip
     // retour) : le code injecté a disparu avec l'ancien, le guet est désarmé. Sans session CDP, le guet ne se désarme
     // jamais (plus prudent, jamais moins).
     const cdp = await rc.context.newCDPSession(rc.page).catch(() => undefined);
+    if (cdp !== undefined) cdpRef.session = cdp;
     if (cdp !== undefined) {
       cdp.on('Page.frameNavigated', (event) => {
         if (event.frame.parentId === undefined && event.type === 'Navigation') host.documentCommitted();
@@ -289,6 +446,9 @@ export function runScriptExecutor(options: ScriptExecutorOptions): Promise<Scrip
     const onAbort = () => void rc.close();
     options.signal.addEventListener('abort', onAbort, { once: true });
     const finish = (result: DeclarativeRunResult, rest: Omit<ScriptRunOutcome, 'result' | 'logs' | 'items'> = { violations: [], killed: false }): ScriptRunOutcome => {
+      // Réponses de `ctx.fetch` jamais classées (corps illisible) : rapportées sur leur seul statut.
+      for (const [url, queue] of pendingFetchReports) for (const entry of queue) void report(url, entry.status, entry.retryAfter);
+      pendingFetchReports.clear();
       let out = result;
       if (!out.ok && refusal === undefined && paceRefusal !== undefined) {
         out = { ...out, failure: { failure_class: 'rate_limited', retryable: true, detail: `pacing_${paceRefusal}` } };
@@ -318,8 +478,13 @@ export function runScriptExecutor(options: ScriptExecutorOptions): Promise<Scrip
         exchange = { status: landing?.status() ?? 0, headers: landing?.headers() ?? {}, body: html, url: rc.page.url() };
       } catch (error) {
         if (options.signal.aborted) throw error;
-        return finish(fail(classifyTransportError(error), 1, requests));
+        // Un refus constaté sur la réponse servie (défi qui recharge la page, coupé) prime sur l'erreur de navigation.
+        while (pending.size > 0) await Promise.allSettled([...pending]);
+        return finish(fail(refusal ?? classifyTransportError(error), 1, requests));
       }
+      // Réponse servie (corps brut, classée par l'écouteur) d'abord, puis DOM rendu.
+      while (pending.size > 0) await Promise.allSettled([...pending]);
+      if (refusal !== undefined) return finish(fail(refusal, 1, requests));
       const refused = classify(exchange, { requestUrl: options.startUrl });
       if (refused !== null) return finish(fail(refused, 1, requests));
       // Page de départ classée ici sur son contenu : la garde des opérations de page n'a pas à la relire.
@@ -348,14 +513,27 @@ export function runScriptExecutor(options: ScriptExecutorOptions): Promise<Scrip
             { method: request.method, headers: request.headers, ...(request.body === undefined ? {} : { body: request.body }), signal },
             { followRedirects: false },
           )) as unknown as BridgeResponse;
-          await report(request.url, response.status, response.headers.get('retry-after'));
+          const retryAfter = response.headers.get('retry-after');
+          if (response.status >= 300 && response.status < 400 && response.headers.get('location') !== null) {
+            // Saut de redirection : classé sur son statut et ses en-têtes (en-tête de défi), rapporté aussitôt.
+            const hop: Record<string, string> = {};
+            response.headers.forEach((value, name) => {
+              hop[name.toLowerCase()] = value;
+            });
+            await report(request.url, response.status, retryAfter, classify({ status: response.status, headers: hop, body: '', url: request.url })?.failure_class ?? null);
+          } else {
+            // Réponse finale : rapportée par `inspect`, une fois classée sur son corps.
+            const key = hrefOf(request.url);
+            pendingFetchReports.set(key, [...(pendingFetchReports.get(key) ?? []), { status: response.status, retryAfter }]);
+          }
           return response;
         },
-        // Réponse finale de `ctx.fetch` classée AVANT sa remise au script : un refus n'est jamais rendu.
-        inspect: (response) => {
-          if (examine({ status: response.status, headers: { ...response.headers }, body: response.body, url: response.url })) {
-            throw new SandboxBridgeError(ACCESS_REFUSED, false);
-          }
+        // Réponse finale de `ctx.fetch` classée AVANT sa remise au script (avec l'URL demandée) : un refus n'est jamais
+        // rendu ; la classe est rapportée à la cadence (disjoncteur).
+        inspect: async (response, { requestUrl }) => {
+          const { refused, failure } = examine({ status: response.status, headers: { ...response.headers }, body: response.body, url: response.url }, { requestUrl });
+          await reportFetch(response.url, failure?.failure_class ?? null);
+          if (refused) throw new SandboxBridgeError(ACCESS_REFUSED, false);
         },
       });
       items = handle.items;

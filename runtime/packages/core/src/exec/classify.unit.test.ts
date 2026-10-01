@@ -87,6 +87,59 @@ describe('assert_no_circumvention : garde de classification (U1)', () => {
     expect(classifyExchange(ex(200, html('Security checklist for your home', `${'<p>Contenu.</p>'.repeat(50)}`), HTML))).toBeNull();
   });
 
+  it('pas de faux positif sur un 2xx : un titre ou une phrase seuls ne suffisent pas sur une page de contenu', () => {
+    const prose = '<p>Voici un texte ordinaire du site, avec des conseils, des exemples et des liens vers les autres rubriques.</p>'.repeat(12);
+    // Titres d'interstitiels employés par des pages de contenu longues.
+    expect(classifyExchange(ex(200, html('Security check: 10 tips for your home', prose), HTML))).toBeNull();
+    expect(classifyExchange(ex(200, html('One more step to finish your order', `${prose}<form><input name="address"></form>`), HTML))).toBeNull();
+    expect(classifyExchange(ex(200, html('Just a moment with our founder', prose), HTML))).toBeNull();
+    // Courte FAQ ou article qui cite une phrase de vérification.
+    const faq = html(
+      'FAQ',
+      '<h1>Questions fréquentes</h1><p>Pourquoi Google affiche-t-il « unusual traffic from your computer network » ? Ce message apparaît quand votre réseau envoie beaucoup de requêtes automatiques ; redémarrez votre box ou contactez votre fournisseur.</p><p>Que veut dire la case « je ne suis pas un robot » sur certains formulaires ? Elle sert à filtrer les envois automatiques de spam.</p><p>Comment nous contacter ? Écrivez-nous depuis la page Contact, nous répondons sous 48 heures ouvrées.</p>',
+    );
+    expect(classifyExchange(ex(200, faq, HTML))).toBeNull();
+    const article = html('Actualités', `<article><h1>Les captchas en 2026</h1><p>La case « I am not a robot » reste répandue.</p>${prose}</article>`);
+    expect(classifyExchange(ex(200, article, HTML))).toBeNull();
+    // Le même titre sur un refus (403) reste un défi : seule une réponse 2xx exige un second signal.
+    expect(classifyExchange(ex(403, html('Just a moment...', prose), HTML))?.failure_class).toBe('blocked_by_protection');
+  });
+
+  it('un 2xx reste un défi avec un titre d’interstitiel sur une page quasi vide, ou deux signaux', () => {
+    expect(classifyExchange(ex(200, html('Just a moment...', '<p>Checking the site connection.</p>'), HTML))?.failure_class).toBe('blocked_by_protection');
+    expect(classifyExchange(ex(200, html('Bienvenue', '<div id="challenge-form"></div><p>Verify you are human.</p>'), HTML))?.failure_class).toBe('blocked_by_protection');
+  });
+
+  it('défi sur un autre 4xx (400, 404, 405, 406, 409, 418, 499) → blocked_by_protection, jamais extraction ni not_found', () => {
+    const page = html('Just a moment...', '<p>Verify you are human by completing the action below.</p>');
+    for (const status of [400, 402, 404, 405, 406, 409, 410, 418, 499]) {
+      expect(classifyExchange(ex(status, page, HTML)), String(status)).toMatchObject({ failure_class: 'blocked_by_protection', detail: 'challenge_page', status });
+    }
+    // Signature d'éditeur (en-tête seul, sans page de défi) : un « 403 signé » seulement (04 §7). Ailleurs, l'en-tête
+    // d'un éditeur accompagne aussi les réponses ordinaires du site protégé : le statut décide.
+    expect(classifyExchange(ex(404, '{}', { 'x-datadome': 'protected' }))?.failure_class).toBe('not_found');
+    expect(classifyExchange(ex(429, '{}', { 'x-datadome': 'protected', 'retry-after': '5' }))?.failure_class).toBe('rate_limited');
+    expect(classifyExchange(ex(503, '{}', { 'x-dd-b': '1' }))?.failure_class).toBe('transient');
+    expect(classifyExchange(ex(400, '{}', { 'x-datadome': 'protected' }))?.failure_class).toBe('extraction');
+    // 401 reste une connexion requise, même avec une page de défi.
+    expect(classifyExchange(ex(401, page, HTML))?.failure_class).toBe('auth_required');
+    // Un 404 ordinaire reste not_found, un 400 ordinaire reste extraction.
+    expect(classifyExchange(ex(404, html('Page introuvable', '<h1>404</h1>'), HTML))?.failure_class).toBe('not_found');
+    expect(classifyExchange(ex(400, '{"error":"bad_request"}', { 'content-type': 'application/json' }))?.failure_class).toBe('extraction');
+  });
+
+  it('AWS WAF (x-amzn-waf-action: challenge|captcha, tout statut, 202 compris ; conteneur challenge-container) → blocked_by_protection', () => {
+    // Échanges enregistrés (forme documentée de l'éditeur, valeurs zz_test) : la table des en-têtes a sa fixture ici.
+    const container = html('', '<div id="challenge-container"></div><script src="/zz_test_challenge.js"></script>');
+    expect(classifyExchange(ex(202, container, { ...HTML, 'x-amzn-waf-action': 'challenge' }))).toMatchObject({ failure_class: 'blocked_by_protection', detail: 'challenge_header', status: 202 });
+    expect(classifyExchange(ex(405, '<html></html>', { ...HTML, 'x-amzn-waf-action': 'captcha' }))).toMatchObject({ failure_class: 'blocked_by_protection', detail: 'challenge_header', status: 405 });
+    expect(classifyExchange(ex(200, '{}', { 'x-amzn-waf-action': 'Challenge' }))?.failure_class).toBe('blocked_by_protection');
+    // Sans l'en-tête : le conteneur de défi seul, sur une page quasi vide, suffit.
+    expect(classifyExchange(ex(202, container, HTML))).toMatchObject({ failure_class: 'blocked_by_protection', detail: 'challenge_page' });
+    // Valeur sans défi (journal de l'éditeur) : rien sur un 200.
+    expect(classifyExchange(ex(200, '{"items":[]}', { 'x-amzn-waf-action': 'allow' }))).toBeNull();
+  });
+
   it('un très gros corps n’est lu que par son titre (borne de lecture) : pas de faux positif dans le contenu', () => {
     const big = html('Catalogue', `${'<p>x</p>'.repeat(60_000)}<p>verify you are human</p>`);
     expect(big.length).toBeGreaterThan(300_000);

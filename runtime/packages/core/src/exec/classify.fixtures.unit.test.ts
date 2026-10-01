@@ -108,6 +108,21 @@ describe('assert_no_circumvention : chaque fixture d’échec donne la bonne cla
     });
   }
 
+  it('l’échange en échec remonte en preuve (corps borné) pour la garde avant réparation, refus comme extraction', async () => {
+    const refused = await runFetchExecutor(session, { spec: valid(headingSpec('zz_test_challenge_200.localhost'), NAME_SCHEMA), input: {}, outputSchema: NAME_SCHEMA, signal });
+    expect(refused).toMatchObject({ ok: false, failure: { failure_class: 'blocked_by_protection' }, evidence: { status: 200 } });
+    expect(!refused.ok && refused.evidence?.body).toContain('zz-test-challenge');
+    // Classifieur qui laisse tout passer (garde absente) : l'extraction échoue, la preuve reste la page servie.
+    const items = valid({ ...headingSpec('zz_test_challenge_200.localhost'), sources: [{ id: 'dom', from: 'html', records: 'li.item' }] }, NAME_SCHEMA);
+    const extraction = await runFetchExecutor(session, { spec: items, input: {}, outputSchema: NAME_SCHEMA, signal, classify: () => null });
+    expect(extraction).toMatchObject({ ok: false, failure: { failure_class: 'extraction' }, evidence: { status: 200, url: `${base('zz_test_challenge_200.localhost')}/` } });
+    // Borne : au plus 256 Kio + 1 caractère (au-delà, la détection ne lit que le titre).
+    await client.control({ op: 'site', site: 'api_json', mutation: 'empty' });
+    const host = 'zz_test_api_json.localhost';
+    const empty = await runFetchExecutor(session, { spec: valid(contactsSpecInput(base(host), host), SCHEMA_CONTACT), input: {}, outputSchema: SCHEMA_CONTACT, signal });
+    expect(!empty.ok && (empty.evidence?.body.length ?? 0)).toBeLessThanOrEqual(256 * 1024 + 1);
+  });
+
   it('casse de structure (DOM v2) et volume vide → extraction (réparable), pas un refus', async () => {
     await client.control({ op: 'site', site: 'dom', version: 2 });
     const dom = valid({

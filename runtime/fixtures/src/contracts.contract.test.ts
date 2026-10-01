@@ -109,6 +109,16 @@ const contracts: Record<string, Contract> = {
     expect(res.body).not.toContain('<script');
     await setSite('challenge_200', { with_header: true });
     expect((await fx.get(H('challenge_200'), '/liste')).headers['x-zz-test-shield']).toBe('challenge');
+    // Défi qui se résout seul (côté site) : script qui pose un cookie puis recharge ; avec le cookie, des titres h1.
+    await fx.reset();
+    await setSite('challenge_200', { resolve_after_ms: 300 });
+    const resolving = await fx.get(H('challenge_200'), '/');
+    expect(resolving.status).toBe(200);
+    expect(resolving.body).toContain('id="zz-test-challenge"');
+    expect(resolving.body).toContain('location.reload()');
+    const cleared = await fx.get(H('challenge_200'), '/', { cookie: 'zz_test_cleared=1' });
+    expect(cleared.body).not.toContain('zz-test-challenge');
+    expect(cleared.body.match(/<h1 class="product">/g)).toHaveLength(3);
   },
 
   async '429'() {

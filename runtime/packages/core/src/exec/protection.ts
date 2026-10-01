@@ -4,13 +4,17 @@
 // décide d'aucun changement de réseau. Une détection donne la classe `blocked_by_protection`, puis le statut `bloquee`.
 //
 // Trois sources de signal :
-// 1. en-tête de défi (quel que soit le statut, y compris 200) : `cf-mitigated: challenge` (cité par 04 §5) ;
-// 2. signature d'un éditeur de protection sur un refus (403) : en-têtes propres à un éditeur ;
-// 3. page de défi (interstitiel) reconnue par son contenu : titre, phrase de vérification sur une page courte,
-//    conteneur de widget de vérification sur une page courte.
-// Les tables sont « documentées par fixtures » (04 §5) : chaque ligne a sa fixture ou son test. L'éditeur `x-zz-test-*`
-// est la simulation générique et FICTIVE des fixtures (15 §8) ; aucun site réel n'envoie ces en-têtes.
-// Les faux positifs coûtent cher (une API saine passerait `bloquee`) : sur une réponse 200, seul un signal fort compte.
+// 1. en-tête de défi (quel que soit le statut, y compris 200 et 202) : `cf-mitigated: challenge` (cité par 04 §5),
+//    `x-amzn-waf-action: challenge|captcha` ;
+// 2. signature d'un éditeur de protection sur un refus 403 (« 403 signé », 04 §7) : en-têtes propres à un éditeur ;
+// 3. page de défi (interstitiel) reconnue par son contenu : titre, phrase de vérification, conteneur de widget de
+//    vérification. Sur un refus (≥ 400), un signal suffit (titre ; phrase ou widget sur une page courte). Sur une
+//    réponse 2xx (mode strict), il en faut deux, ou un seul sur une page quasi vide.
+// Les tables sont « documentées par fixtures » (04 §5) : chaque ligne a sa fixture ou son test (échange enregistré dans
+// classify.unit.test.ts pour les éditeurs réels). L'éditeur `x-zz-test-*` est la simulation générique et FICTIVE des
+// fixtures (15 §8) ; aucun site réel n'envoie ces en-têtes.
+// Les faux positifs coûtent cher (une API saine passerait `bloquee`) : sur une réponse 2xx, seul un signal fort compte
+// (deux signaux, ou un seul sur une page quasi vide : un interstitiel n'a presque pas de texte visible).
 
 export type ProtectionCode = 'challenge_header' | 'protection_signature' | 'challenge_page';
 export type ProtectionSignal = { readonly code: ProtectionCode; readonly source: string };
@@ -20,14 +24,17 @@ type HeaderRule = { readonly header: string; readonly value?: RegExp; readonly s
 /** En-têtes de DÉFI : un défi est servi, quel que soit le code HTTP. */
 const CHALLENGE_HEADERS: readonly HeaderRule[] = [
   { header: 'cf-mitigated', value: /^\s*challenge\b/i, source: 'cf-mitigated' },
+  // AWS WAF : actions Challenge (202) et CAPTCHA (405), corps `challenge-container`.
+  { header: 'x-amzn-waf-action', value: /^\s*(?:challenge|captcha)\b/i, source: 'x-amzn-waf-action' },
   { header: 'x-zz-test-shield', value: /^\s*challenge\b/i, source: 'zz-test-shield' },
 ];
 
-/** Signatures d'ÉDITEUR : n'ont de sens que sur un refus (403 « signé ») ; sur un 200, la page peut être servie normalement. */
+/** Signatures d'ÉDITEUR : n'ont de sens que sur un refus 403 ; ailleurs (2xx, 404, 429, 5xx), le site les envoie aussi. */
 const VENDOR_HEADERS: readonly HeaderRule[] = [
   { header: 'cf-mitigated', source: 'cf-mitigated' },
   { header: 'x-datadome', source: 'x-datadome' },
   { header: 'x-dd-b', source: 'x-dd-b' },
+  { header: 'x-amzn-waf-action', source: 'x-amzn-waf-action' },
   { header: 'x-zz-test-shield', source: 'zz-test-shield' },
   { header: 'x-zz-test-shield-sig', source: 'zz-test-shield-sig' },
 ];
@@ -56,6 +63,11 @@ const MAX_SCANNED_CHARS = 256 * 1024;
 const SHORT_PAGE_PHRASE = 4000;
 /** Idem pour un conteneur de widget seul (un formulaire de contact peut en porter un). */
 const SHORT_PAGE_WIDGET = 2000;
+/**
+ * Page quasi vide (texte visible) : en mode strict (réponse 2xx), un signal unique n'est retenu qu'en deçà. Un
+ * interstitiel tient en quelques lignes ; une page de contenu, une FAQ ou un article, jamais.
+ */
+const NEAR_EMPTY_PAGE = 400;
 
 /** Titres d'interstitiels de vérification (début du titre, en minuscules). */
 const CHALLENGE_TITLE =
@@ -90,7 +102,7 @@ const CHALLENGE_PHRASES: readonly string[] = [
 
 /** Conteneurs de widgets de vérification (attribut id, class ou name). */
 const CHALLENGE_MARKUP =
-  /\b(?:id|class|name)\s*=\s*["']?[^"'>]{0,200}?(?:challenge-form|challenge-platform|challenge-running|cf-challenge|px-captcha|captcha-container|captcha-delivery|g-recaptcha|h-captcha|cf-turnstile|zz-test-challenge)/i;
+  /\b(?:id|class|name)\s*=\s*["']?[^"'>]{0,200}?(?:challenge-form|challenge-platform|challenge-running|challenge-container|cf-challenge|px-captcha|captcha-container|captcha-delivery|g-recaptcha|h-captcha|cf-turnstile|zz-test-challenge)/i;
 
 const normalize = (text: string): string => text.replace(/[‘’ʼ]/g, "'").replace(/\s+/g, ' ').trim().toLowerCase();
 
@@ -130,15 +142,33 @@ const looksHtml = (body: string, headers: Readonly<Record<string, string>>): boo
   return body.trimStart().startsWith('<');
 };
 
+export type ChallengePageOptions = {
+  /**
+   * Mode strict, pour une réponse 2xx : deux signaux (titre, phrase, widget), ou un seul sur une page quasi vide. Sans
+   * lui (refus ≥ 400, preuve à montrer à un agent), un titre d'interstitiel suffit.
+   */
+  readonly strict?: boolean;
+};
+
 /** Page de défi (interstitiel) reconnue par son contenu HTML. `null` pour une page de contenu ou un corps non HTML. */
-export function detectChallengePage(body: string, headers: Readonly<Record<string, string>>): ProtectionSignal | null {
+export function detectChallengePage(body: string, headers: Readonly<Record<string, string>>, options: ChallengePageOptions = {}): ProtectionSignal | null {
   if (body === '' || !looksHtml(body, headers)) return null;
+  const strict = options.strict === true;
   const title = titleOf(body);
-  if (title !== undefined && CHALLENGE_TITLE.test(title)) return { code: 'challenge_page', source: 'title' };
+  const titled = title !== undefined && CHALLENGE_TITLE.test(title);
+  if (titled && !strict) return { code: 'challenge_page', source: 'title' };
+  // Au-delà de la borne de lecture, seul le titre est lu : un très gros document n'est jamais une page quasi vide.
   if (body.length > MAX_SCANNED_CHARS) return null;
   const text = visibleText(body);
   const phrase = hasPhrase(text);
   const markup = CHALLENGE_MARKUP.test(body);
+  if (strict) {
+    const signals = Number(titled) + Number(phrase) + Number(markup);
+    if (signals >= 2 || (signals === 1 && text.length <= NEAR_EMPTY_PAGE)) {
+      return { code: 'challenge_page', source: titled ? 'title' : phrase ? 'phrase' : 'widget' };
+    }
+    return null;
+  }
   if (phrase && (text.length <= SHORT_PAGE_PHRASE || markup)) return { code: 'challenge_page', source: 'phrase' };
   if (markup && text.length <= SHORT_PAGE_WIDGET) return { code: 'challenge_page', source: 'widget' };
   return null;

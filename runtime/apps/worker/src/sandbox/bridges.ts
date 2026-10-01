@@ -70,9 +70,10 @@ export type SandboxBridgeOptions = {
   onLog?: (args: readonly string[]) => void;
   /**
    * Contrôle de la réponse finale de `ctx.fetch` (après redirections, corps lu et borné) AVANT sa remise au script :
-   * une erreur levée ici (`SandboxBridgeError`) est rendue au script à la place de la réponse.
+   * une erreur levée ici (`SandboxBridgeError`) est rendue au script à la place de la réponse. `requestUrl` : URL
+   * demandée par le script (racine de la chaîne de redirections), pour reconnaître une redirection vers la connexion.
    */
-  inspect?: (response: SandboxFetchResponse) => Promise<void> | void;
+  inspect?: (response: SandboxFetchResponse, context: { readonly requestUrl: string }) => Promise<void> | void;
 };
 
 export type SandboxBridgeHandle = {
@@ -288,7 +289,7 @@ export function createSandboxBridges(options: SandboxBridgeOptions): SandboxBrid
       responseBytes += Buffer.byteLength(body);
       const out: SandboxFetchResponse = { status: response.status, url: finalUrl.href, headers, body, truncated };
       // Garde de l'appelant (classement de la réponse, tâche 1.6, INV6) : un refus lève avant toute remise au script.
-      await options.inspect?.(out);
+      await options.inspect?.(out, { requestUrl: request.url });
       return out;
     },
     log(raw) {

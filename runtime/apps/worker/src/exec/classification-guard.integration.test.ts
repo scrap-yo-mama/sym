@@ -2,14 +2,18 @@
 // assert_no_circumvention (INV6, tâche 1.7), étage I1 : run réel (file → worker → exécuteur E1 → base) contre les
 // fixtures de refus, avec le classifieur PAR DÉFAUT et un port de réparation espion branché derrière la garde.
 // - défi servi en 200 : `blocked_by_protection`, rien d'extrait (la stratégie sait pourtant lire la page), 1 requête,
-//   l'agent de réparation n'est jamais invoqué, aucun texte de la page dans le run ni dans `run_logs` ; statut :
+//   l'agent de réparation n'est jamais invoqué, aucun texte de la page dans le run ni dans `run_logs` ; statut (machine
+//   à états appliquée PAR LE TEST à la classe du run, le câblage run → statut dans le worker est différé à 2.3) :
 //   sain → reparation → bloquee (transitions 10 puis 15) sans réparation ;
+// - garde par preuves : un défi passé inaperçu du classifieur (extraction en échec) n'atteint jamais l'agent ; le run
+//   rend la classe corrigée (`blocked_by_protection`) et le port de réparation ne reçoit que des preuves passées par la garde ;
 // - 401 → auth_required (action_requise), 403 → forbidden (bloquee), 403 signé → blocked_by_protection ; jamais network ;
 // - une vraie casse (DOM v2) atteint, elle, la réparation (le port est bien branché) ;
 // - assert_circuit_opens_on_refusals : 5 refus consécutifs ouvrent le disjoncteur du domaine ; le run suivant est
 //   refusé sans requête (`pacing_circuit_open`), toujours en `direct` (aucun changement de proxy ni d'IP).
 import { randomUUID } from 'node:crypto';
 import { DomainPacer, generateMasterKey, MasterKey } from '@runtime/core';
+import { classifyExchange, type ClassifyContext, type ExecFailure, type HttpExchange } from '@runtime/core/exec';
 import * as net from '@runtime/core/net';
 import { applyStatusTransition, createRun, keyCheck, migrateUp, PgBossJobQueue, PgPacingStore, readRun, runQueueDefinition, withActor } from '@runtime/db';
 import pg from 'pg';
@@ -39,6 +43,11 @@ let queue: PgBossJobQueue;
 let client: Client;
 let worker: Worker;
 const repair = vi.fn<RepairPort>(async () => null);
+/**
+ * Classifieur de l'exécuteur : celui par défaut, ou (test de la garde par preuves) un classifieur qui laisse tout passer,
+ * pour qu'un défi non détecté avant extraction atteigne la porte de la réparation.
+ */
+let classifyOverride: ((exchange: HttpExchange, context?: ClassifyContext) => ExecFailure | null) | undefined;
 
 const base = (host: string) => `http://${host}:${client.server.port}`;
 /** Stratégie HTML qui SAIT extraire la page de défi (titre `h1`) : sans la garde, le run « réussirait ». */
@@ -82,7 +91,7 @@ const detailOf = async (runId: string) => (await pool.query<{ error_detail: stri
 const routeLog = async (runId: string) =>
   (await pool.query<{ data: Record<string, unknown> }>("SELECT data FROM run_logs WHERE run_id = $1 AND event = 'failure_route'", [runId])).rows.map((r) => r.data);
 
-/** Applique l'échec du run à la machine à états (le câblage run → statut naît avec la réparation, 2.3). */
+/** Applique l'échec du run à la machine à états. DIFFÉRÉ à 2.3 : aucun code de production ne relie encore un run échoué au statut (le câblage naît avec la réparation) ; ce test vérifie la machine à états sur la classe rendue par le run, pas le câblage. */
 async function applyFailure(apiId: string, runId: string, failureClass: string, httpStatus?: number) {
   return applyStatusTransition(pool, {
     apiId,
@@ -104,7 +113,14 @@ beforeAll(async () => {
   await queue.start();
   await queue.createQueue(runQueueDefinition());
   const guard = fixtureGuard(client.server.port, Object.values(HOSTS), net);
-  const executor = createStrategyExecutor({ pool, guard, pacer: new DomainPacer(new PgPacingStore(pool)), browsers: null, repair });
+  const executor = createStrategyExecutor({
+    pool,
+    guard,
+    pacer: new DomainPacer(new PgPacingStore(pool)),
+    browsers: null,
+    repair,
+    classify: (exchange, context) => (classifyOverride ?? classifyExchange)(exchange, context),
+  });
   worker = await startWorker({
     config: loadWorkerConfig({ DATABASE_URL: tdb.url, MASTER_KEY: masterKey, QUEUE_POLLING_SECONDS: '0.5', RUN_HEARTBEAT_SECONDS: '0.5', RUN_STALE_SECONDS: '5', BROWSER_CONCURRENCY: '1' }),
     executor,
@@ -123,6 +139,7 @@ afterAll(async () => {
 beforeEach(async () => {
   await client.reset();
   repair.mockClear();
+  classifyOverride = undefined;
 });
 
 describe('assert_no_circumvention : garde de classification avant extraction et réparation (I1)', () => {
@@ -180,7 +197,23 @@ describe('assert_no_circumvention : garde de classification avant extraction et 
     expect(run).toMatchObject({ state: 'failed', failure_class: 'extraction' });
     expect(repair).toHaveBeenCalledOnce();
     expect(repair.mock.calls[0]![0].failure).toMatchObject({ failure_class: 'extraction' });
+    // Le port reçoit l'échange en échec, déjà passé par la garde (corps borné), comme preuve.
+    const evidence = repair.mock.calls[0]![0].evidence;
+    expect(evidence).toHaveLength(1);
+    expect(evidence[0]).toMatchObject({ status: 200, url: `${base(HOSTS.dom)}/` });
     expect(await routeLog(run.id)).toEqual([{ failure_class: 'extraction', next: 'repair', agent_invoked: true }]);
+  });
+});
+
+describe('assert_no_circumvention : garde par preuves avant réparation (défi non détecté avant extraction)', () => {
+  test('défi passé inaperçu du classifieur → extraction en échec, mais la preuve est une page de défi : agent jamais invoqué, run et route en blocked_by_protection', async () => {
+    classifyOverride = () => null;
+    const spec = { ...headingSpec(HOSTS.challenge200), sources: [{ id: 'dom', from: 'html', records: 'li.item' }] };
+    const run = await runOf(await insertApi('zz_test_evidence', spec, 'sain'));
+    expect(repair).not.toHaveBeenCalled();
+    expect(run).toMatchObject({ state: 'failed', failure_class: 'blocked_by_protection', retryable: false, items: 0 });
+    expect(run.attempts[0]).toMatchObject({ result: 'blocked_by_protection' });
+    expect(await routeLog(run.id)).toEqual([{ failure_class: 'blocked_by_protection', next: 'stop', agent_invoked: false, reclassified_from: 'extraction' }]);
   });
 });
 

@@ -9,7 +9,7 @@ import { join, relative } from 'node:path';
 import { describe, expect, test } from 'vitest';
 import { FAILURE_CLASSES } from '../packages/core/src/model/enums.ts';
 import { failureRoute } from '../packages/core/src/exec/guard.ts';
-import { DENY_PATTERNS, findDenied } from '../scripts/check-blacklist.ts';
+import { DENY_PATTERNS, findDenied, lockfilePackageNames } from '../scripts/check-blacklist.ts';
 
 const root = new URL('..', import.meta.url).pathname;
 const SKIP = new Set(['node_modules', 'dist', '.output', '.wxt', 'coverage', 'test-results', 'blob-report']);
@@ -32,7 +32,12 @@ const packageOf = (spec: string): string => (spec.startsWith('@') ? spec.split('
 
 describe('assert_no_circumvention : aucune dépendance « stealth » ni captcha', () => {
   test('lockfile : aucune dépendance (directe ou transitive) de la liste de refus', () => {
-    expect(findDenied(readFileSync(join(root, 'pnpm-lock.yaml'), 'utf8'))).toEqual([]);
+    const lockfile = readFileSync(join(root, 'pnpm-lock.yaml'), 'utf8');
+    // Le parseur lit bien les noms (un changement de format du lockfile ne doit pas rendre ce test creux).
+    const names = lockfilePackageNames(lockfile);
+    expect(names.size).toBeGreaterThan(100);
+    expect(names.has('playwright-core') && names.has('vitest')).toBe(true);
+    expect(findDenied(lockfile)).toEqual([]);
   });
 
   test('manifestes : aucune dépendance déclarée de la liste de refus, ni de nom contenant stealth ou captcha', () => {

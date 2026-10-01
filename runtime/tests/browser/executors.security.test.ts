@@ -640,6 +640,49 @@ describe('E3 en script dans le bac à sable (1.5) : ctx.page.*, ctx.fetch, ctx.e
     expect((await client.stats()).hosts[SPA]?.paths['/items/zz_test_after'] ?? 0).toBe(0);
   }, 60_000);
 
+  test.each([
+    ['ctx.fetch', 'await ctx.fetch(input.challenge);'],
+    ['ctx.page.goto', 'await ctx.page.goto(input.challenge);\nawait ctx.page.content();'],
+  ])('assert_circuit_opens_on_refusals (E3 script) : un défi servi en 200 via %s est rapporté à la cadence avec sa classe (jamais « ok »)', async (_name, code) => {
+    const reports: { url: string; status: number; failureClass: string | null }[] = [];
+    const pacer: RequestPacer = {
+      acquire: async () => ({ granted: true }),
+      report: async (url, response) => void reports.push({ url, status: response.status, failureClass: response.failureClass ?? null }),
+    };
+    const out = await script(`${code}\nctx.emit({ title: 'jamais', price: 1 });`, {
+      allowedHosts: [SPA, CHALLENGE_200],
+      input: { challenge: `${base(CHALLENGE_200)}/` },
+      pacer,
+    });
+    expect(out.result).toMatchObject({ ok: false, failure: { failure_class: 'blocked_by_protection', detail: 'challenge_page' } });
+    const challenge = reports.filter((r) => r.url.startsWith(base(CHALLENGE_200)));
+    expect(challenge).toHaveLength(1);
+    expect(challenge[0]).toMatchObject({ status: 200, failureClass: 'blocked_by_protection' });
+  }, 60_000);
+
+  test.each([
+    ['ctx.fetch', 'await ctx.fetch(input.account);'],
+    ['ctx.page.goto', 'await ctx.page.goto(input.account);\nawait ctx.page.content();'],
+  ])('redirection vers /login suivie par %s → auth_required (login_redirect), jamais code_error ni extraction', async (_name, code) => {
+    const out = await script(`${code}\nctx.emit({ title: 'jamais', price: 1 });`, {
+      allowedHosts: [SPA, LOGIN],
+      input: { account: `${base(LOGIN)}/account` },
+    });
+    expect(out.result).toMatchObject({ ok: false, failure: { failure_class: 'auth_required', detail: 'login_redirect' } });
+    expect(out.items).toEqual([]);
+  }, 60_000);
+
+  test('page de départ : défi qui se résout seul (rechargement immédiat) → blocked_by_protection, la page « franchie » n’est jamais servie', async () => {
+    await client.control({ op: 'site', site: 'challenge_200', resolve_after_ms: 0 });
+    const out = await script("ctx.emit({ title: (await ctx.page.textAll('h1.product'))[0] ?? 'aucun', price: 1 });", {
+      allowedHosts: [CHALLENGE_200],
+      startUrl: `${base(CHALLENGE_200)}/`,
+    });
+    expect(out.result).toMatchObject({ ok: false, failure: { failure_class: 'blocked_by_protection' } });
+    expect(out.items).toEqual([]);
+    expect((await client.stats()).hosts[CHALLENGE_200]?.paths['/']).toBe(1);
+  }, 60_000);
+
   test('assert_script_paced (1.9) : chaque ctx.fetch et ctx.page.goto réservent un créneau (écart ≥ min_delay_ms) ; un 429 arrête l’essai (rate_limited) et son Retry-After allonge la cadence du run suivant', async () => {
     await client.control({ op: 'site', site: '429', retry_after: 1, limit: 100 });
     const inner = domainRequestPacer(new DomainPacer(memoryPacingStore()), { minDelayMs: 300, maxWaitMs: 20_000 });
@@ -789,6 +832,51 @@ describe('assert_no_circumvention (Chromium, tâche 1.7) : garde de classificati
     const out = await e3(heading(CHALLENGE_200));
     expect(out).toMatchObject({ ok: false, requests: 1, pages: 0, failure: { failure_class: 'blocked_by_protection', detail: 'challenge_page' } });
     expect((await client.stats()).hosts[CHALLENGE_200]?.paths['/']).toBe(1);
+  }, 60_000);
+
+  /** Stratégie qui vise la page de contenu servie APRÈS le défi (titres `h1.product`) : elle ne réussit que si le défi a été franchi. */
+  const products = (): DeclarativeSpec => {
+    const spec = heading(CHALLENGE_200);
+    return { ...spec, sources: [{ ...spec.sources[0]!, records: 'h1.product' }] } as DeclarativeSpec;
+  };
+
+  test.each([
+    ['après 300 ms', 300],
+    ['immédiatement', 0],
+  ])('E3 : défi servi en 200 qui se résout seul en JS (%s) → blocked_by_protection AVANT toute attente du rendu, 0 élément, la page « franchie » jamais servie', async (_name, delay) => {
+    await client.control({ op: 'site', site: 'challenge_200', resolve_after_ms: delay });
+    const out = await e3(products());
+    expect(out).toMatchObject({ ok: false, pages: 0, failure: { failure_class: 'blocked_by_protection' } });
+    expect((await client.stats()).hosts[CHALLENGE_200]?.paths['/']).toBe(1);
+  }, 60_000);
+
+  test('E3 : navigation du cadre principal lancée par la page pendant l’attente du rendu → refusée, blocked_by_protection (self_navigation) ; le classifieur fourni sert aussi avant le rendu', async () => {
+    await client.control({ op: 'site', site: 'challenge_200', resolve_after_ms: 300 });
+    // Classifieur qui ne lit que le statut : le corps brut passe, seule la garde de navigation peut arrêter l'essai.
+    const statusOnly = (exchange: HttpExchange): ExecFailure | null => (exchange.status >= 200 && exchange.status < 300 ? null : { failure_class: 'forbidden', retryable: false, detail: `http_${exchange.status}` });
+    const spec = products();
+    const out = await withEgress({ mode: 'direct' }, (egress) => runPlaywrightExecutor({ pool, egress, guard, spec, input: {}, signal, classify: statusOnly }), { allowedHosts: spec.request.allowed_hosts });
+    expect(out).toMatchObject({ ok: false, pages: 0, failure: { failure_class: 'blocked_by_protection', detail: 'self_navigation' } });
+    expect((await client.stats()).hosts[CHALLENGE_200]?.paths['/']).toBe(1);
+  }, 60_000);
+
+  test('E2 : page d’accueil en défi qui se résout seul (rechargement immédiat) → blocked_by_protection, aucune requête de données', async () => {
+    await client.control({ op: 'site', site: 'challenge_200', resolve_after_ms: 0 });
+    const spec = valid(
+      {
+        schema_version: 1,
+        kind: 'declarative',
+        request: { method: 'GET', url: `${base(CHALLENGE_200)}/api/items`, allowed_hosts: [CHALLENGE_200] },
+        sources: [{ id: 'api', from: 'response', records: '$.items[*]' }],
+        fields: { name: { path: '$.name', type: 'string', required: true } },
+      },
+      { type: 'object', required: ['name'], properties: { name: { type: 'string' } } },
+    );
+    const out = await e2(spec);
+    expect(out).toMatchObject({ ok: false, pages: 0, failure: { failure_class: 'blocked_by_protection' } });
+    const paths = (await client.stats()).hosts[CHALLENGE_200]?.paths ?? {};
+    expect(paths['/']).toBe(1);
+    expect(paths['/api/items'] ?? 0).toBe(0);
   }, 60_000);
 
   test('E3 : 403 signé → blocked_by_protection ; 403 nu → forbidden ; redirection vers /login → auth_required ; jamais network', async () => {

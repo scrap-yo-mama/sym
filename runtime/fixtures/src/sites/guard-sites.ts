@@ -95,19 +95,43 @@ const challenge: SiteFactory = () => ({
   handle: () => html(403, challengePage(), { 'x-zz-test-shield': 'challenge', 'cache-control': 'no-store' }),
 });
 
-const challenge200: SiteFactory = () => {
+/** Cookie posé par le défi qui se résout seul (mode `resolve_after_ms`). */
+const CLEARED_COOKIE = 'zz_test_cleared';
+
+/**
+ * Défi qui se résout SEUL en JavaScript (comportement simulé côté site, aucun mécanisme côté produit) : la même page
+ * générique, plus un script qui, après `delayMs`, pose un cookie puis recharge la page. Avec le cookie, le site sert la
+ * page de contenu (titres `h1`). Sert à vérifier qu'une simple attente du rendu ne franchit pas le défi (INV6).
+ */
+function selfResolvingChallengePage(delayMs: number): string {
+  const script = `<script>(function(){function go(){document.cookie='${CLEARED_COOKIE}=1; path=/';location.reload();}${delayMs === 0 ? 'go();' : `setTimeout(go, ${delayMs});`}})();</script>`;
+  return challengePage().replace('</body>', `${script}</body>`);
+}
+
+const challenge200: SiteFactory = (env) => {
   let withHeader = false;
+  let resolveAfterMs: number | null = null;
+  const products = makeProducts(env.seed, 'challenge_200', 3);
   return {
     id: 'challenge_200',
     lot: 'base',
-    description: 'Défi servi en HTTP 200 : même page générique, sans en-tête de protection par défaut (détection par le corps seul)',
+    description:
+      'Défi servi en HTTP 200 : même page générique, sans en-tête de protection par défaut (détection par le corps seul) ; resolve_after_ms : le défi se résout seul en JS (cookie + rechargement) et le site sert alors des titres h1',
     hosts: ['zz_test_challenge_200.localhost'],
     smoke: { path: '/', status: 200 },
-    handle: () => html(200, challengePage(), withHeader ? { 'x-zz-test-shield': 'challenge' } : {}),
+    handle(req) {
+      const headers: Record<string, string> = withHeader ? { 'x-zz-test-shield': 'challenge' } : {};
+      if (resolveAfterMs === null) return html(200, challengePage(), headers);
+      if (cookieOf(req, CLEARED_COOKIE) === '1') {
+        return html(200, page('Catalogue zz_test', products.map((p) => `<h1 class="product">${esc(p.title)}</h1>`).join('')));
+      }
+      return html(200, selfResolvingChallengePage(resolveAfterMs), headers);
+    },
     control(args) {
-      if (typeof args['with_header'] !== 'boolean') throw new ControlError('with_header attendu : booléen');
-      withHeader = args['with_header'];
-      return { with_header: withHeader };
+      if (typeof args['with_header'] === 'boolean') withHeader = args['with_header'];
+      else if (typeof args['resolve_after_ms'] === 'number' && args['resolve_after_ms'] >= 0) resolveAfterMs = Math.min(10_000, Math.floor(args['resolve_after_ms']));
+      else throw new ControlError('with_header (booléen) ou resolve_after_ms (nombre ≥ 0) attendu');
+      return { with_header: withHeader, resolve_after_ms: resolveAfterMs };
     },
   };
 };

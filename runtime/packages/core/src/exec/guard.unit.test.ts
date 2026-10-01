@@ -84,6 +84,21 @@ describe('assert_no_circumvention : agent jamais invoqué sur un refus (garde av
     expect(guardAgentInvocation(f('code_error'), ['heading "Security check" text "verify you are human"'])).toMatchObject({ failure_class: 'blocked_by_protection' });
   });
 
+  it('preuve AWS WAF (202 + x-amzn-waf-action: challenge) ou défi en 400 / 405 / 404 : reclassée blocked_by_protection, agent jamais invoqué', async () => {
+    const waf: HttpExchange = { status: 202, headers: { 'content-type': 'text/html', 'x-amzn-waf-action': 'challenge' }, body: '<div id="challenge-container"></div>', url: 'http://zz_test_x.localhost/' };
+    for (const failure of [f('extraction', 'no_records'), f('not_found', 'http_404'), f('code_error')]) {
+      const agent = vi.fn(async () => 'patch');
+      expect(await invokeAgentGuarded(failure, [waf], agent)).toMatchObject({ invoked: false, failure: { failure_class: 'blocked_by_protection', detail: 'challenge_header' } });
+      expect(agent).not.toHaveBeenCalled();
+    }
+    for (const status of [400, 404, 405]) {
+      const agent = vi.fn(async () => 'patch');
+      const out = await invokeAgentGuarded(f(status === 404 ? 'not_found' : 'extraction'), [{ ...CHALLENGE, status }], agent);
+      expect(out, String(status)).toMatchObject({ invoked: false, failure: { failure_class: 'blocked_by_protection', status } });
+      expect(agent).not.toHaveBeenCalled();
+    }
+  });
+
   it('chaque classe de refus bloque l’agent ; une extraction sur une page normale l’autorise', async () => {
     for (const cls of FAILURE_CLASSES.filter((c) => !['extraction', 'code_error', 'not_found'].includes(c))) {
       const agent = vi.fn(async () => 1);

@@ -14,7 +14,9 @@
 //    n'en reçoivent que des identifiants techniques (nombre de lignes, octets), 17 §6 « aucune donnée personnelle » ;
 // 6. garde de classification (1.7) : chaque réponse est classée AVANT extraction (classifieur par défaut des exécuteurs) ;
 //    un échec n'atteint la réparation (port `repair`, tâche 2.3) qu'à travers `invokeAgentGuarded` : jamais sur un refus,
-//    un défi, une connexion requise ou un 429 (INV6). La suite retenue est journalisée (`failure_route`).
+//    un défi, une connexion requise ou un 429 (INV6). L'échange en échec (corps borné) est la preuve de la garde : une
+//    « extraction » sur une page de défi est un refus, et le run rend alors la classe corrigée. La suite retenue est
+//    journalisée (`failure_route`, `reclassified_from` si la garde a corrigé la classe).
 import {
   validateDeclarativeSpec,
   validateOutput,
@@ -28,7 +30,9 @@ import {
 import {
   domainRequestPacer,
   failureRoute,
+  guardAgentInvocation,
   invokeAgentGuarded,
+  type AgentEvidence,
   runFetchExecutor,
   type ClassifyContext,
   type DeclarativeRunResult,
@@ -88,7 +92,16 @@ export type StrategyExecutorDeps = {
   readonly now?: () => number;
 };
 
-export type RepairPort = (request: { readonly ctx: RunCtx; readonly failure: ExecFailure; readonly strategyVersion: number }) => Promise<RunResult | null>;
+/**
+ * Port de réparation (2.3). `evidence` : preuves DÉJÀ passées par la garde (aucune n'est un refus ni une page de défi
+ * reconnue) ; le port doit encore passer chaque texte par `assertPromptSafe` avant de l'inclure dans un prompt (04b §6).
+ */
+export type RepairPort = (request: {
+  readonly ctx: RunCtx;
+  readonly failure: ExecFailure;
+  readonly strategyVersion: number;
+  readonly evidence: readonly AgentEvidence[];
+}) => Promise<RunResult | null>;
 
 type Outcome = {
   result: DeclarativeRunResult;
@@ -327,12 +340,16 @@ export function createStrategyExecutor(deps: StrategyExecutorDeps): RunExecutor 
     if (outcome.scriptLog !== undefined && outcome.scriptLog.lines > 0) {
       await ctx.log('info', 'sandbox_log', { lines: outcome.scriptLog.lines, bytes: outcome.scriptLog.bytes });
     }
+    // Garde par preuves (1.7) : un échec dont l'échange est un refus ou une page de défi prend la classe de la garde
+    // (essai, run et route), avant toute réparation.
+    const evidence: readonly AgentEvidence[] = result.ok || result.evidence === undefined ? [] : [result.evidence];
+    const guardedFailure = result.ok ? undefined : (guardAgentInvocation(result.failure, evidence) ?? result.failure);
     const proxyUsd = usage?.costUsd ?? 0;
     await ctx.recordAttempt({
       execution: strategy.execution,
       network: strategy.network,
       est_cost_usd: strategy.estCostUsd,
-      result: result.ok ? 'ok' : result.failure.failure_class,
+      result: guardedFailure === undefined ? 'ok' : guardedFailure.failure_class,
       ms: Math.max(0, Math.round(now() - started)),
       proxy_usd: proxyUsd,
     });
@@ -341,12 +358,19 @@ export function createStrategyExecutor(deps: StrategyExecutorDeps): RunExecutor 
       return { state: 'failed', failure_class: 'run_budget_exceeded', retryable: false, error_detail: 'max_cost_usd', strategy_version: version };
     }
     if (!result.ok) {
-      // Garde AVANT réparation (1.7) : l'agent n'est invoqué que pour `extraction`, `code_error` ou `not_found`.
-      const failure = result.failure;
+      const original = result.failure;
+      const failure = guardedFailure ?? original;
+      // Garde AVANT réparation (1.7) : l'agent n'est invoqué que pour `extraction`, `code_error` ou `not_found`, et
+      // seulement si aucune preuve n'est un refus ; il ne reçoit que des preuves passées par la garde.
       const repair = deps.repair;
-      const guarded = repair === undefined ? null : await invokeAgentGuarded(failure, [], (f) => repair({ ctx, failure: f, strategyVersion: version }));
-      const route = failureRoute(guarded !== null && !guarded.invoked ? guarded.failure.failure_class : failure.failure_class);
-      await ctx.log('info', 'failure_route', { failure_class: failure.failure_class, next: route.next, agent_invoked: guarded?.invoked ?? false });
+      const guarded = repair === undefined ? null : await invokeAgentGuarded(original, evidence, (f) => repair({ ctx, failure: f, strategyVersion: version, evidence }));
+      const route = failureRoute(failure.failure_class);
+      await ctx.log('info', 'failure_route', {
+        failure_class: failure.failure_class,
+        next: route.next,
+        agent_invoked: guarded?.invoked ?? false,
+        ...(failure.failure_class === original.failure_class ? {} : { reclassified_from: original.failure_class }),
+      });
       if (guarded !== null && guarded.invoked && guarded.value !== null) return guarded.value;
       return { state: 'failed', failure_class: failure.failure_class, retryable: failure.retryable, error_detail: failure.detail, strategy_version: version };
     }

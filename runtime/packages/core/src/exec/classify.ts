@@ -61,20 +61,24 @@ function redirectTarget(exchange: HttpExchange, context: ClassifyContext): ExecF
 
 /**
  * Garde de classification d'un échange (défaut de `runDeclarative` et des exécuteurs E1-E3) : `null` si la réponse
- * peut être extraite, sinon la classe d'échec. Ordre : en-tête de défi (tout statut), 401, refus signé ou page de défi
- * (403, 429, 5xx et 2xx), redirection vers la connexion ou de pays, puis le statut seul.
+ * peut être extraite, sinon la classe d'échec. Ordre : en-tête de défi (tout statut), 401, signature d'éditeur sur un
+ * 403, page de défi sur TOUT statut ≥ 400 (un défi servi en 400, 404 ou 405 n'est ni une `extraction` ni un
+ * `not_found`, qui ouvriraient la réparation), page de défi sur un 2xx (mode strict : signal fort seulement),
+ * redirection vers la connexion ou de pays, puis le statut seul.
  */
 export function classifyExchange(exchange: HttpExchange, context: ClassifyContext = {}): ExecFailure | null {
   const { status, headers } = exchange;
   const header = protectionSignal(headers);
   if (header !== null) return fail('blocked_by_protection', false, header.code, status);
   if (status === 401) return fail('auth_required', false, 'http_401', status);
-  if (status === 403) {
-    const signed = vendorSignature(headers) ?? detectChallengePage(exchange.body, headers);
-    return signed === null ? fail('forbidden', false, 'http_403', status) : fail('blocked_by_protection', false, signed.code, status);
+  if (status >= 400) {
+    // Signature d'éditeur (en-tête seul) : « 403 signé » seulement (04 §7) ; l'en-tête d'un éditeur accompagne aussi les
+    // réponses ordinaires (404, 429, 5xx) d'un site protégé. La page de défi, elle, compte sur tout refus.
+    const signed = (status === 403 ? vendorSignature(headers) : null) ?? detectChallengePage(exchange.body, headers);
+    if (signed !== null) return fail('blocked_by_protection', false, signed.code, status);
   }
-  if ((status >= 200 && status < 300) || status === 429 || (status >= 500 && status < 600)) {
-    const page = detectChallengePage(exchange.body, headers);
+  if (status >= 200 && status < 300) {
+    const page = detectChallengePage(exchange.body, headers, { strict: true });
     if (page !== null) return fail('blocked_by_protection', false, page.code, status);
   }
   if ((status >= 200 && status < 400)) {
@@ -82,6 +86,22 @@ export function classifyExchange(exchange: HttpExchange, context: ClassifyContex
     if (redirected !== null) return redirected;
   }
   return classifyStatus(status);
+}
+
+/**
+ * Refus constaté par le transport lui-même, avant que l'échange ne soit complet : par exemple une navigation du cadre
+ * principal lancée par la page pendant l'attente du rendu (défi qui se résout seul en JavaScript puis recharge la page,
+ * 04 §5, INV6). La classe est déjà décidée ; `exchange` est la réponse servie quand elle est connue (preuve, cadence).
+ */
+export class TransportRefusal extends Error {
+  readonly failure: ExecFailure;
+  readonly exchange: HttpExchange | undefined;
+  constructor(failure: ExecFailure, exchange?: HttpExchange) {
+    super(`refus du transport : ${failure.failure_class} (${failure.detail})`);
+    this.name = 'TransportRefusal';
+    this.failure = failure;
+    this.exchange = exchange;
+  }
 }
 
 const NETWORK_CODES = new Set(['ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN', 'EHOSTUNREACH', 'ENETUNREACH', 'UND_ERR_CONNECT_TIMEOUT']);
@@ -107,6 +127,7 @@ function errorCodes(error: unknown): { codes: string[]; names: string[]; message
 
 /** Erreur levée par un transport → classe. Les messages d'origine ne sortent jamais (codes stables seulement). */
 export function classifyTransportError(error: unknown): ExecFailure {
+  if (error instanceof TransportRefusal) return error.failure;
   const ssrf = findSsrfBlocked(error);
   if (ssrf !== undefined) return fail('forbidden', false, 'ssrf_blocked');
   // Verrou de domaines (tâche 1.6) : une redirection ou une requête hors des domaines de l'API est une faute de stratégie.

@@ -59,6 +59,43 @@ export async function boundedRawBody(page: Page, response: Response, maxBytes: n
   return bytesOk(body, maxBytes) ? body : TOO_LARGE;
 }
 
+/** Corps compressé de taille inconnue (sans `Content-Length`) lu au plus jusqu'à cette taille transférée. */
+const COMPRESSED_READ_MAX = 32 * 1024;
+
+/**
+ * Corps BRUT d'une réponse de document (HTML compris), tel que le serveur l'a servi, AVANT que les scripts de la page
+ * ne le transforment : c'est sur lui que tourne la garde de classification (1.7, 04 §5), avant toute attente du rendu.
+ * La taille est prise au niveau réseau (`Content-Length`, taille transférée de `Request.sizes()`), jamais à la page,
+ * qui pourrait la falsifier. `undefined` : taille inconnue (corps compressé volumineux sans longueur annoncée), le
+ * corps brut n'est pas lu ; `TOO_LARGE` : au-delà du plafond.
+ */
+export async function boundedDocumentBody(response: Response, maxBytes: number, timeoutMs = 10_000): Promise<string | typeof TOO_LARGE | undefined> {
+  const headers = response.headers();
+  const declared = Number(headers['content-length'] ?? NaN);
+  const encoding = (headers['content-encoding'] ?? 'identity').trim().toLowerCase();
+  const identity = encoding === '' || encoding === 'identity';
+  // Un document qui ne finit jamais de se charger n'est pas attendu au-delà du délai : corps brut non lu.
+  const transferred = await withTimeout(response.request().sizes().then((s) => s.responseBodySize), timeoutMs);
+  if ((Number.isFinite(declared) && declared > maxBytes) || (transferred !== undefined && transferred > maxBytes)) return TOO_LARGE;
+  // Corps compressé : la taille décodée n'est connue qu'après lecture ; seul un petit transfert est lu (un interstitiel
+  // est petit), ce qui borne aussi une bombe de compression.
+  const readable = identity ? Number.isFinite(declared) || transferred !== undefined : (transferred ?? (Number.isFinite(declared) ? declared : Infinity)) <= COMPRESSED_READ_MAX;
+  if (!readable) return undefined;
+  const body = await withTimeout(response.text(), timeoutMs);
+  if (body === undefined) return undefined;
+  return bytesOk(body, maxBytes) ? body : TOO_LARGE;
+}
+
+/** Valeur de la promesse, ou `undefined` si elle échoue ou dépasse le délai. */
+async function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T | undefined> {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([promise.catch(() => undefined), new Promise<undefined>((resolve) => (timer = setTimeout(() => resolve(undefined), ms)))]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /** Texte JSON reçu de la page : borne en octets revérifiée, analyse. */
 export function parseBounded(text: unknown, maxBytes: number): unknown {
   if (typeof text !== 'string' || !bytesOk(text, maxBytes)) return TOO_LARGE;
