@@ -391,7 +391,15 @@ describe('OTel opt-in explicite', () => {
       await get(`${target.url}/http-dans-le-span`);
     });
     await waitDone(runId);
-    await started.telemetry.forceFlush();
+    // Le span `run.execute` se termine APRÈS l'écriture de l'état `succeeded` (clôture des journaux, libération du job) :
+    // on exporte jusqu'à le voir partir, au lieu de supposer qu'il est déjà fini quand le run est vu terminé.
+    await vi.waitFor(
+      async () => {
+        await started.telemetry.forceFlush();
+        expect(exportedSpans(collector).some((s) => s.name === 'run.execute')).toBe(true);
+      },
+      { timeout: 10_000, interval: 100 },
+    );
 
     expect(target.requests.length).toBeGreaterThanOrEqual(5); // témoin : les appels sont bien arrivés (dont via le proxy)
     expect(llm.requests.length).toBeGreaterThanOrEqual(3);
