@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Fixtures Playwright Test de la console (tâche 3.9) : une console construite et servie par worker, et une page ouverte dans
 // la langue et le thème demandés (`uiLocale`, `uiTheme` en options de test), avec le relevé des erreurs de la console du navigateur.
-// Tâche 3.15 (assert_no_csp_violation) : la console est servie avec sa CSP stricte (harness.ts) ; chaque événement
-// `securitypolicyviolation` de la page est relevé, et le test échoue s'il y en a eu au moins un, quel que soit le test.
+// Tâche 3.15 (assert_no_csp_violation) : la console est servie avec sa CSP stricte (csp.ts, posée par harness.ts) ; chaque événement
+// `securitypolicyviolation` du contexte de la page est relevé (csp.ts), et le test échoue s'il y en a eu au moins un, quel que soit le test.
 import { test as base, expect, type Page } from '@playwright/test';
+import { watchCspViolations } from './csp.ts';
 import { anonymousRoutes, dataRoutes, signedInRoutes } from './fixtures.ts';
 import { startConsole, type ApiRoutes, type ConsoleApp } from './harness.ts';
 
@@ -32,7 +33,7 @@ export const test = base.extend<Fixtures & Options, WorkerFixtures>({
   ],
   consolePage: async ({ page, app, uiLocale, uiTheme }, use) => {
     const errors = watchConsole(page);
-    const cspViolations = await watchCsp(page);
+    const cspViolations = await watchCspViolations(page.context());
     await seedPreferences(page, uiLocale, uiTheme);
     await use({
       page,
@@ -61,18 +62,6 @@ async function seedPreferences(page: Page, locale: Locale, theme: Theme): Promis
     [locale, theme] as const,
   );
   await page.emulateMedia({ colorScheme: theme, reducedMotion: 'reduce' });
-}
-
-/** Violations de la CSP relevées dans la page (tous documents chargés, navigations comprises) : « directive : cible ». */
-async function watchCsp(page: Page): Promise<string[]> {
-  const violations: string[] = [];
-  await page.exposeFunction('__zzCspViolation', (report: string) => void violations.push(report));
-  await page.addInitScript(() => {
-    document.addEventListener('securitypolicyviolation', (event) => {
-      void (window as unknown as { __zzCspViolation: (report: string) => Promise<void> }).__zzCspViolation(`${event.violatedDirective} : ${event.blockedURI || event.sample || 'inline'}`);
-    });
-  });
-  return violations;
 }
 
 /** Erreurs de la console du navigateur et exceptions de la page (06 § 4.3 : aucune sur un parcours normal). */

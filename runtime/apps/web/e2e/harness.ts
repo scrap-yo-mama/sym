@@ -9,6 +9,7 @@ import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { extname, join, normalize } from 'node:path';
 import { build } from 'vite';
+import { CONSOLE_CSP } from './csp.ts';
 
 type ApiReply = { status?: number; body?: unknown };
 type ApiRequest = { method: string; path: string; params: Record<string, string>; query: URLSearchParams; body: unknown };
@@ -47,9 +48,6 @@ const MIME: Record<string, string> = {
 };
 
 const WEB_DIR = new URL('..', import.meta.url).pathname;
-
-/** CSP stricte de la console (08b § 2), posée sur chaque page servie : toute violation fait échouer le test (assert_no_csp_violation). */
-const CONSOLE_CSP = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'";
 
 function matchRoute(pattern: string, method: string, path: string): Record<string, string> | null {
   const [routeMethod, routePath] = pattern.split(' ') as [string, string];
@@ -99,6 +97,7 @@ export async function startConsole(): Promise<ConsoleApp> {
       file = join(outDir, 'index.html');
     }
     res.setHeader('content-type', MIME[extname(file)] ?? 'application/octet-stream');
+    // CSP stricte de la console (08b § 2) sur chaque page servie : toute violation fait échouer le test (assert_no_csp_violation).
     res.setHeader('content-security-policy', CONSOLE_CSP);
     res.end(readFileSync(file));
   };

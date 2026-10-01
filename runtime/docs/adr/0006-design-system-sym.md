@@ -76,8 +76,10 @@ ne garde que la langue et le thème), posé avant le premier rendu par `public/t
 
 ### CSP
 
-La CSP du CDC (08b § 2, `style-src 'self'`) est servie par le banc E2E de la console ; la fixture fait échouer tout test au premier
-`securitypolicyviolation` (`assert_no_csp_violation`). Le popup de l'extension n'a plus ni `<style>` ni style en ligne ; le harnais E2
+La CSP du CDC (08b § 2, `style-src 'self'`), définie une fois (`apps/web/e2e/csp.ts`), est servie par les deux bancs E2E de la console :
+le faux serveur d'API de `apps/web/e2e` et le relais de l'instance réelle de `tests/e2e` (parcours d'invitation de 3.8). Chaque contexte
+de navigateur relève ses `securitypolicyviolation` et tout test de la console échoue s'il en a laissé une (`assert_no_csp_violation`) ;
+chaque banc a un témoin qui prouve que le contrôle sait échouer. Le popup de l'extension n'a plus ni `<style>` ni style en ligne ; le harnais E2
 de l'extension relève les violations de chaque page du contexte, et chaque test de la suite de l'extension échoue s'il en a laissé une.
 
 ## Conséquences
