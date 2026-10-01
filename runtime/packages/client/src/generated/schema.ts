@@ -2558,8 +2558,14 @@ export interface components {
             items: components["schemas"]["AdminExtensionDevice"][];
         };
         Version: {
-            version: string;
-            schema_version: number;
+            /** @description Version de l'instance (SemVer, `RUNTIME_VERSION`). */
+            server: string;
+            /** @description Version attendue du schéma de base. */
+            schema: number;
+            /** @description Version minimale de l'extension acceptée à l'appairage. */
+            min_extension: string;
+            /** @description Version de la spécification MCP servie. */
+            mcp_spec: string;
         };
         /** @description RFC 9728. */
         ProtectedResourceMetadata: {

@@ -294,8 +294,8 @@ paths:
           $ref: '#/components/responses/Error'
   /api/version:
     get:
-      x-pending: '3.1'
       operationId: getVersion
+      security: []
       tags: [system]
       summary: Version de l'instance et du schéma (14 § 3), sans version de dépendance ni nom d'hôte
       responses:
@@ -4919,12 +4919,20 @@ components:
     Version:
       type: object
       additionalProperties: false
-      required: [version, schema_version]
+      required: [server, schema, min_extension, mcp_spec]
       properties:
-        version:
+        server:
           type: string
-        schema_version:
+          description: Version de l'instance (SemVer, `RUNTIME_VERSION`).
+        schema:
           type: integer
+          description: Version attendue du schéma de base.
+        min_extension:
+          type: string
+          description: Version minimale de l'extension acceptée à l'appairage.
+        mcp_spec:
+          type: string
+          description: Version de la spécification MCP servie.
     ProtectedResourceMetadata:
       description: RFC 9728.
       type: object
