@@ -8,7 +8,7 @@ import { buildApi, setApi } from '@/lib/api';
 import { createAppRouter, focusRouteHeading, focusRouteHeadingWhenReady, safeRedirect } from './index';
 
 const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
-const ME = { id: '3f2b6c1e-0000-4000-8000-000000000001', email: 'a@x.test', displayName: 'Ada', role: 'member', locale: 'en', theme: 'system', via: 'ui', scopes: null, permissions: [], mfaEnabled: false, mfaEnrollmentRequired: false };
+const ME = { id: '3f2b6c1e-0000-4000-8000-000000000001', email: 'a@x.test', displayName: 'Ada', role: 'member', locale: 'en', theme: 'system', via: 'ui', scopes: null, permissions: [], mfaEnabled: false, mfaRequired: false, mfaEnrollmentRequired: false };
 
 /** 200 : session ouverte ; 401 : anonyme (get-session répond 200 avec null) ; 503 : instance non initialisée. */
 function server(status: number) {

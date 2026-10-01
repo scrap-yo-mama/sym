@@ -2,7 +2,8 @@
 <script setup lang="ts">
 /**
  * @file AccountView.vue
- * @description Mon compte (06 § 2, 13 § 5 et § 7) : 2FA TOTP, sessions d'interface ouvertes (fermer une, ou toutes les autres),
+ * @description Mon compte (06 § 2, 13 § 5 et § 7) : mot de passe, 2FA TOTP, sessions d'interface ouvertes (fermer une, ou toutes les autres ;
+ * proposé après un changement de mot de passe ou de 2FA),
  * identités SSO liées, activité récente de son propre compte, langue et thème (barre du haut). Les clés d'API sont dans leur page, l'extension
  * et les appareils dans « Extension et sessions ». Chacun ne voit que son compte : aucune route ici ne renvoie une donnée d'autrui.
  * @page
@@ -10,6 +11,7 @@
 import { computed, onMounted, onServerPrefetch, ref } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { useRoute } from 'vue-router';
+import PasswordPanel from '@/components/account/PasswordPanel.vue';
 import TextField from '@/components/account/TextField.vue';
 import TwoFactorPanel from '@/components/account/TwoFactorPanel.vue';
 import { Alert, AlertDescription } from '@/components/ui/alert';
@@ -72,7 +74,9 @@ const actionLabel = (action: string): string => {
       <p class="text-sm text-muted-foreground">{{ t('account.preferences.text') }}</p>
     </section>
 
-    <TwoFactorPanel />
+    <PasswordPanel @sessions-closed="sessions.reload()" />
+
+    <TwoFactorPanel @sessions-closed="sessions.reload()" />
 
     <section class="flex flex-col gap-3 rounded-xl border p-4" aria-labelledby="sessions-heading" data-testid="sessions-panel">
       <h2 id="sessions-heading" class="text-lg font-semibold">{{ t('account.sessions.title') }}</h2>

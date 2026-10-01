@@ -1974,6 +1974,41 @@ paths:
           $ref: '#/components/responses/Error'
         '404':
           $ref: '#/components/responses/Error'
+  /api/me/password:
+    post:
+      operationId: changeMyPassword
+      security:
+        - sessionCookie: []
+      tags: [account]
+      summary: Change le mot de passe de l'appelant (mot de passe actuel exigé, voir `CurrentPassword`) ; la fermeture des autres sessions est proposée
+      description: >-
+        Nouveau mot de passe soumis à la politique (13 § 5 : 12 caractères au moins, liste locale des mots de passe compromis ;
+        400 `weak_password`). Les sessions restent ouvertes : la réponse donne le nombre des autres sessions, que la console
+        propose de fermer (`DELETE /api/me/sessions`, ASVS 7.4.3). Un lien de réinitialisation en cours est annulé. Audit
+        `auth.password_changed`, sans aucune valeur. Compte sans mot de passe local (OIDC seul) : 409 `no_local_password`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PasswordChange'
+      responses:
+        '200':
+          description: Mot de passe changé.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PasswordChanged'
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/ReauthError'
+        '409':
+          $ref: '#/components/responses/Error'
+        '429':
+          $ref: '#/components/responses/Error'
   /api/me/sessions:
     get:
       operationId: listMySessions
@@ -2924,7 +2959,7 @@ components:
     Me:
       type: object
       additionalProperties: false
-      required: [id, email, displayName, role, locale, theme, via, scopes, permissions, mfaEnabled, mfaEnrollmentRequired]
+      required: [id, email, displayName, role, locale, theme, via, scopes, permissions, mfaEnabled, mfaRequired, mfaEnrollmentRequired]
       properties:
         id:
           type: string
@@ -2959,6 +2994,11 @@ components:
             $ref: '#/components/schemas/Permission'
         mfaEnabled:
           description: 2FA TOTP confirmée et lisible sur le compte.
+          type: boolean
+        mfaRequired:
+          description: >-
+            MFA_ENFORCED concerne le rôle de l'appelant (13 § 7) : la 2FA ne peut pas être retirée (`DELETE /api/me/2fa` répond
+            403 `mfa_enforced`), la console ne le propose pas.
           type: boolean
         mfaEnrollmentRequired:
           description: >-
@@ -4922,6 +4962,27 @@ components:
           at:
             type: string
             format: date-time
+    PasswordChange:
+      description: Changement du mot de passe depuis Mon compte (ré-authentification par le mot de passe actuel).
+      type: object
+      additionalProperties: false
+      required: [new_password]
+      properties:
+        current_password:
+          $ref: '#/components/schemas/CurrentPassword'
+        new_password:
+          type: string
+          minLength: 1
+          maxLength: 1024
+    PasswordChanged:
+      type: object
+      additionalProperties: false
+      required: [other_sessions]
+      properties:
+        other_sessions:
+          description: Autres sessions d'interface ouvertes du compte, restées ouvertes ; la console propose de les fermer.
+          type: integer
+          minimum: 0
     PasswordAndCode:
       description: Ré-authentification et second facteur (code TOTP ou code de secours), limité par compte.
       type: object

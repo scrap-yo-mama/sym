@@ -5,7 +5,7 @@
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
 import { createMemoryHistory } from 'vue-router';
 import { acceptInvitation, confirmPasswordReset, postSetup, requestPasswordReset } from '@/composables/useAccountFlows';
-import { useTwoFactor } from '@/composables/useAccount';
+import { useCloseOtherSessions, usePasswordChange, useTwoFactor } from '@/composables/useAccount';
 import { useApiKeys, keyState } from '@/composables/useApiKeys';
 import { dayBound, useAudit } from '@/composables/useAudit';
 import { parseDomains, useSecuritySettings, useSsoSettings } from '@/composables/useInstanceSettings';
@@ -440,6 +440,60 @@ describe('2FA du compte', () => {
     await twoFactor.disable('', '222222');
     expect(calls.map((c) => c.body)).toContainEqual({ code: '111111', current_password: 'pw' });
     expect(calls.map((c) => c.body)).toContainEqual({ code: '222222' });
+  });
+});
+
+describe('assert_password_change_reauth : mot de passe du compte (06 § 2, 13 § 5)', () => {
+  test('changement : mot de passe actuel et nouveau partent une fois ; les autres sessions restent ouvertes et leur fermeture est proposée', async () => {
+    const calls = installFakeServer({ 'POST /api/me/password': () => json(200, { other_sessions: 2 }), 'DELETE /api/me/sessions': () => json(204, null) });
+    const password = usePasswordChange();
+    expect(await password.change('zz_old_password', 'zz_new_password_long', 'zz_new_password_long')).toBe(true);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({ method: 'POST', path: '/api/me/password', body: { current_password: 'zz_old_password', new_password: 'zz_new_password_long' } });
+    expect(password.done.value).toBe(true);
+    expect(password.otherSessions.value).toBe(2);
+    // La proposition : fermer les autres sessions, une requête, la courante reste.
+    const others = useCloseOtherSessions();
+    expect(await others.close()).toBe(true);
+    expect(calls.at(-1)).toMatchObject({ method: 'DELETE', path: '/api/me/sessions' });
+    expect(others.closed.value).toBe(true);
+  });
+
+  test('saisies différentes : aucune requête ; refus du serveur (mot de passe faux, faible, compte SSO seul, trop d’essais) : code stable', async () => {
+    const routes: Record<string, () => Response> = { 'POST /api/me/password': () => err(403, 'reauth_failed') };
+    const calls = installFakeServer(routes);
+    const password = usePasswordChange();
+    expect(await password.change('pw', 'zz_new_password_long', 'zz_new_password_lonG')).toBe(false);
+    expect(password.failure.value).toBe('account.password.mismatch');
+    expect(calls).toHaveLength(0);
+    for (const [status, code] of [[403, 'reauth_failed'], [400, 'weak_password'], [409, 'no_local_password'], [429, 'too_many_attempts'], [400, 'current_password_required']] as const) {
+      routes['POST /api/me/password'] = () => err(status, code);
+      expect(await password.change('pw', 'zz_new_password_long', 'zz_new_password_long')).toBe(false);
+      expect(password.failure.value).toBe(`errors.${code}`);
+      expect(password.done.value).toBe(false);
+    }
+  });
+
+  test('2FA activée, codes régénérés ou 2FA retirée : la fermeture des autres sessions est proposée (ASVS 7.4.3), pas au simple début d’enrôlement', async () => {
+    installFakeServer({
+      'POST /api/me/2fa/enroll': () => json(200, { otpauth_uri: 'otpauth://x', secret: 'ABC' }),
+      'POST /api/me/2fa/confirm': () => json(200, { backup_codes: ['a-1'] }),
+      'POST /api/me/2fa/backup-codes': () => json(200, { backup_codes: ['b-2'] }),
+      'DELETE /api/me/2fa': () => json(204, null),
+      ...full,
+    });
+    const twoFactor = useTwoFactor();
+    await twoFactor.start('pw');
+    expect(twoFactor.offerCloseOthers.value).toBe(false);
+    await twoFactor.confirm('123456');
+    expect(twoFactor.offerCloseOthers.value).toBe(true);
+    twoFactor.dismissCloseOthers();
+    expect(twoFactor.offerCloseOthers.value).toBe(false);
+    await twoFactor.regenerate('pw', '111111');
+    expect(twoFactor.offerCloseOthers.value).toBe(true);
+    twoFactor.dismissCloseOthers();
+    await twoFactor.disable('pw', '222222');
+    expect(twoFactor.offerCloseOthers.value).toBe(true);
   });
 });
 

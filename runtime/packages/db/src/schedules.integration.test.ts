@@ -321,7 +321,9 @@ describe('horloge simulée, deux workers : 0 doublon', () => {
     env = await freshEnv();
     const once = await envApiAndSchedule(env, { cron: '*/5 * * * *', onMissed: 'once' });
     const skip = await envApiAndSchedule(env, { cron: '*/5 * * * *', onMissed: 'skip' });
-    const clock = new TestClock('2026-10-01T10:01:10Z');
+    // Jour simulé APRÈS l'heure réelle d'installation (rattrapage borné par elle) : une date figée échouait passé 10:42 UTC ce jour-là.
+    const day = new Date(Date.now() + 24 * 3600 * 1000).toISOString().slice(0, 10);
+    const clock = new TestClock(`${day}T10:01:10Z`);
     const first = await startScheduler(env, clock, 'zz_test_before');
     for (const [sid, m] of [[once, 'once'], [skip, 'skip']] as const) {
       await mirrorSchedule(env.plain, { id: sid, cron: '*/5 * * * *', timezone: 'UTC', on_missed: m, enabled: true });
@@ -334,7 +336,7 @@ describe('horloge simulée, deux workers : 0 doublon', () => {
 
     // Redéploiement : le worker s'arrête, 42 minutes passent, un nouveau worker démarre.
     await first.stop({ timeoutMs: 1000 });
-    await clock.setTime('2026-10-01T10:42:30Z');
+    await clock.setTime(`${day}T10:42:30Z`);
     await startScheduler(env, clock, 'zz_test_after');
     await advance(clock, 30_000);
 

@@ -357,6 +357,8 @@ describe('MFA_ENFORCED=admins', () => {
       const [ownerMe, adminMe, memberMe] = [await meOf(o), await meOf(adminUser), await meOf(memberUser)];
       expect([ownerMe.mfaEnrollmentRequired, adminMe.mfaEnrollmentRequired, memberMe.mfaEnrollmentRequired]).toEqual([true, true, false]);
       expect([ownerMe.mfaEnabled, adminMe.mfaEnabled, memberMe.mfaEnabled]).toEqual([false, false, false]);
+      // mfaRequired : la console ne propose pas de retirer une 2FA que MFA_ENFORCED impose (vérification de 3.8).
+      expect([ownerMe.mfaRequired, adminMe.mfaRequired, memberMe.mfaRequired]).toEqual([true, true, false]);
     } finally {
       await s.close();
     }
@@ -406,7 +408,7 @@ describe('assert_mfa_enforced (MFA_ENFORCED=all)', () => {
     expect((await enforced.app.inject({ method: 'GET', url: '/api/me', headers: { cookie } })).statusCode).toBe(200);
     expect((await enforced.app.inject({ method: 'GET', url: '/api/me', headers: { cookie } })).json<Record<string, unknown>>()).toMatchObject({ mfaEnabled: false, mfaEnrollmentRequired: true });
     await enableTwoFactor(enforced, cookie, user);
-    expect((await enforced.app.inject({ method: 'GET', url: '/api/me', headers: { cookie } })).json<Record<string, unknown>>()).toMatchObject({ mfaEnabled: true, mfaEnrollmentRequired: false });
+    expect((await enforced.app.inject({ method: 'GET', url: '/api/me', headers: { cookie } })).json<Record<string, unknown>>()).toMatchObject({ mfaEnabled: true, mfaEnrollmentRequired: false, mfaRequired: true });
     expect((await enforced.app.inject({ method: 'GET', url: '/api/api-keys', headers: { cookie } })).statusCode).toBe(200);
     // Retirer sa 2FA est refusé quand MFA_ENFORCED le concerne.
     const removal = await enforced.app.inject({ method: 'DELETE', url: '/api/me/2fa', headers: json(cookie), payload: { current_password: user.password, code: '000000' } });

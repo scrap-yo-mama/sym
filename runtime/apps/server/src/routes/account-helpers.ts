@@ -317,6 +317,8 @@ export async function meView(
     scopes: who.scopes,
     permissions: permissionsOf(who.role),
     mfaEnabled,
+    // MFA_ENFORCED concerne le rôle : la console ne propose pas de retirer la 2FA (le serveur le refuse, 403 `mfa_enforced`).
+    mfaRequired: mfaRequiredFor(ctx.mfaEnforced, who.role),
     mfaEnrollmentRequired: who.via === 'ui' && mfaRequiredFor(ctx.mfaEnforced, who.role) && !mfaEnabled && who.mfaMethod !== 'idp',
   };
 }

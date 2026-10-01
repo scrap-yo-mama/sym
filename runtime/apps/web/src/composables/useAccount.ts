@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// Mon compte (06 § 2, 13 § 5 et § 7) : 2FA TOTP, sessions d'interface ouvertes, identités SSO liées, activité récente. Mot de
+// Mon compte (06 § 2, 13 § 5 et § 7) : mot de passe, 2FA TOTP, sessions d'interface ouvertes, identités SSO liées, activité
+// récente. Après un changement de mot de passe ou de 2FA, la fermeture des autres sessions est proposée (ASVS 7.4.3). Mot de
 // passe, code et graine partent dans la requête et ne sont jamais conservés ; les codes de secours et la graine ne vivent
 // que le temps de leur affichage (« une seule fois »). Les droits sont ceux du serveur : un refus devient un message.
 import type { components } from '@runtime/client';
@@ -25,6 +26,8 @@ export function useTwoFactor() {
   const busy = ref(false);
   const failure = ref<string | null>(null);
   const disabledDone = ref(false);
+  /** Un facteur vient de changer (2FA activée, codes régénérés, 2FA retirée) : proposer de fermer les autres sessions. */
+  const offerCloseOthers = ref(false);
 
   async function start(currentPassword: string): Promise<boolean> {
     busy.value = true;
@@ -53,6 +56,7 @@ export function useTwoFactor() {
     enrollment.value = null;
     backupCodes.value = result.data.backup_codes;
     phase.value = 'backup';
+    offerCloseOthers.value = true;
     await loadSession();
     return true;
   }
@@ -68,6 +72,7 @@ export function useTwoFactor() {
     }
     backupCodes.value = result.data.backup_codes;
     phase.value = 'backup';
+    offerCloseOthers.value = true;
     return true;
   }
 
@@ -81,6 +86,7 @@ export function useTwoFactor() {
       return false;
     }
     disabledDone.value = true;
+    offerCloseOthers.value = true;
     await loadSession();
     return true;
   }
@@ -98,7 +104,81 @@ export function useTwoFactor() {
     phase.value = 'idle';
   }
 
-  return { phase: readonly(phase), enrollment, backupCodes, busy: readonly(busy), failure: readonly(failure), disabledDone: readonly(disabledDone), start, confirm, regenerate, disable, cancel, acknowledgeBackup };
+  /** La proposition de fermer les autres sessions est traitée (fermées, ou « plus tard »). */
+  function dismissCloseOthers(): void {
+    offerCloseOthers.value = false;
+  }
+
+  return {
+    phase: readonly(phase),
+    enrollment,
+    backupCodes,
+    busy: readonly(busy),
+    failure: readonly(failure),
+    disabledDone: readonly(disabledDone),
+    offerCloseOthers: readonly(offerCloseOthers),
+    start,
+    confirm,
+    regenerate,
+    disable,
+    cancel,
+    acknowledgeBackup,
+    dismissCloseOthers,
+  };
+}
+
+/**
+ * Changement du mot de passe (06 § 2, 13 § 5) : mot de passe actuel (ré-authentification) et nouveau, répété. Les sessions restent
+ * ouvertes ; `otherSessions` dit combien d'autres le sont, pour proposer de les fermer (ASVS 7.4.3).
+ */
+export function usePasswordChange() {
+  const busy = ref(false);
+  const failure = ref<string | null>(null);
+  const done = ref(false);
+  const otherSessions = ref(0);
+
+  async function change(currentPassword: string, newPassword: string, repeated: string): Promise<boolean> {
+    failure.value = null;
+    done.value = false;
+    if (newPassword !== repeated) {
+      failure.value = 'account.password.mismatch';
+      return false;
+    }
+    busy.value = true;
+    const result = await call(() => getApi().POST('/api/me/password', { body: withPassword({ new_password: newPassword }, currentPassword) }));
+    busy.value = false;
+    if (!result.ok) {
+      failure.value = result.messageKey;
+      return false;
+    }
+    otherSessions.value = result.data.other_sessions;
+    done.value = true;
+    return true;
+  }
+
+  return { busy: readonly(busy), failure: readonly(failure), done: readonly(done), otherSessions: readonly(otherSessions), change };
+}
+
+/** Fermeture des autres sessions proposée après un changement de facteur (`DELETE /api/me/sessions`, la courante reste). */
+export function useCloseOtherSessions() {
+  const busy = ref(false);
+  const failure = ref<string | null>(null);
+  const closed = ref(false);
+
+  async function close(): Promise<boolean> {
+    busy.value = true;
+    failure.value = null;
+    const result = await call<undefined>(() => getApi().DELETE('/api/me/sessions'));
+    busy.value = false;
+    if (!result.ok) {
+      failure.value = result.messageKey;
+      return false;
+    }
+    closed.value = true;
+    return true;
+  }
+
+  return { busy: readonly(busy), failure: readonly(failure), closed: readonly(closed), close };
 }
 
 /** Sessions d'interface ouvertes de l'appelant : lister, fermer une, fermer toutes les autres (13 § 5, 7.5.2). */

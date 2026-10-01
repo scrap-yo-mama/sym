@@ -21,6 +21,7 @@ export const ME = (locale: 'en' | 'fr', theme: 'light' | 'dark', role: Schemas['
   scopes: null,
   permissions: ROLE_PERMISSIONS[role],
   mfaEnabled: false,
+  mfaRequired: false,
   mfaEnrollmentRequired: false,
 });
 

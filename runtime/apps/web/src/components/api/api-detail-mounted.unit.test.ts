@@ -8,10 +8,12 @@ import ApiDetailPage from '@/components/api/ApiDetailPage.vue';
 import ApiSchemasTab from '@/components/api/tabs/ApiSchemasTab.vue';
 import ApiStrategyTab from '@/components/api/tabs/ApiStrategyTab.vue';
 import type { components } from '@runtime/client';
+import { loadSession, resetSession } from '@/composables/useSession';
 import { setApi } from '@/lib/api';
 import { API_TABS } from '@/lib/api-tabs';
 import fr from '@/i18n/locales/fr.json';
 import { apiDetail, controls, installApi, json, TUNNEL_WORDING, UUID } from '@/testing/console-fixtures';
+import { ME } from '@/testing/console.testkit';
 import { mountHtml, type MountedHtml } from '@/testing/memory-mount';
 
 type Schemas = components['schemas'];
@@ -28,6 +30,7 @@ afterEach(() => {
   for (const page of mounted.splice(0)) page.unmount();
   vi.unstubAllGlobals();
   setApi(undefined);
+  resetSession();
 });
 
 async function mount(...args: Parameters<typeof mountHtml>): Promise<string> {
@@ -87,9 +90,14 @@ const schedule = (n: number, overrides: Partial<Schemas['Schedule']> = {}): Sche
   ...overrides,
 });
 
+/** Propriétaire des runs du serveur factice : la session ouverte est la sienne (seul son propre run offre items et relance). */
+const RUN_OWNER = UUID(2);
+
 /** Serveur factice d'une API : trois versions (courante v3), deux runs (dont un échec), une transition, deux planifications (dont une en pause). */
-function installLoadedApi(slug: string): string[] {
-  return installApi({
+async function installLoadedApi(slug: string): Promise<string[]> {
+  const seen = installApi({
+    'GET /api/auth/get-session': () => json(200, { session: { id: 's' }, user: { id: RUN_OWNER, email: 'zz@x.test' } }),
+    'GET /api/me': () => json(200, { ...ME, id: RUN_OWNER }),
     [`GET /api/apis/${slug}/versions`]: () => json(200, { versions: [version(3), version(2), version(1)], next_cursor: null }),
     [`GET /api/apis/${slug}/versions/3`]: () => json(200, { ...version(3), spec: { url: 'https://monsite.example/livres', items: '.book' }, script_ref: null }),
     'GET /api/runs': () => json(200, { runs: [run(1), run(2, { state: 'failed', outcome: 'failed', failure_class: 'blocked_by_protection', dataset_id: null, items: null })], next_cursor: null }),
@@ -97,6 +105,9 @@ function installLoadedApi(slug: string): string[] {
       json(200, { events: [{ id: UUID(500), at: '2026-09-30T10:00:00.000Z', from_status: 'sain', to_status: 'bloquee', transition: 15, reason: { code: 'blocked_by_protection', params: {} }, run_id: UUID(202) }], next_cursor: null }),
     [`GET /api/apis/${slug}/schedules`]: () => json(200, { schedules: [schedule(1), schedule(2, { enabled: false, paused_reason: 'skipped_status' })] }),
   });
+  resetSession();
+  await loadSession();
+  return seen;
 }
 
 const blockedDetail = () =>
@@ -151,7 +162,7 @@ describe('fiche d’une API bloquée, listes chargées', () => {
       schemas: 'id="schema-output"',
     };
     for (const tab of API_TABS) {
-      installLoadedApi(SLUG);
+      await installLoadedApi(SLUG);
       const html = await mount(ApiDetailPage, { detail: blockedDetail(), slug: SLUG, tab, resuming: false });
       expect(html, tab).toContain('data-testid="blocked-panel"');
       // L'onglet a bien lu ses listes : ses commandes sont rendues, pas un squelette vide.
@@ -170,7 +181,7 @@ describe('fiche d’une API bloquée, listes chargées', () => {
       expect(resumes, tab).toHaveLength(1);
     }
     // Les planifications restent visibles et peuvent être mises en pause ou supprimées ; seule la reprise disparaît.
-    installLoadedApi(SLUG);
+    await installLoadedApi(SLUG);
     const schedules = controls(await mount(ApiDetailPage, { detail: blockedDetail(), slug: SLUG, tab: 'schedules', resuming: false })).map((control) => control.text);
     expect(schedules).toContain(fr.schedules.pause);
     expect(schedules).toContain(fr.schedules.delete);
@@ -180,7 +191,7 @@ describe('fiche d’une API bloquée, listes chargées', () => {
   test('témoin : sur une API saine, les mêmes listes chargées donnent Relancer, le retour de version et la reprise de planification', async () => {
     const detail = apiDetail({ slug: SLUG });
     const texts = async (tab: string) => {
-      installLoadedApi(SLUG);
+      await installLoadedApi(SLUG);
       return controls(await mount(ApiDetailPage, { detail, slug: SLUG, tab, resuming: false })).map((control) => control.text);
     };
     expect(await texts('runs')).toContain(fr.actions.relaunch);
@@ -209,7 +220,7 @@ describe('« Revenir à cette version » (transitions 7 et 8)', () => {
   test('assert_revert_shows_preview : le retour n’est proposé que depuis sain ou warning ; jamais sur bloquee ni les autres statuts', async () => {
     const statuses: Schemas['ApiStatus'][] = ['enquete', 'sain', 'warning', 'reparation', 'erreur', 'action_requise', 'bloquee'];
     for (const status of statuses) {
-      installLoadedApi(SLUG);
+      await installLoadedApi(SLUG);
       const html = await mount(ApiStrategyTab, { detail: apiDetail({ slug: SLUG, status }), slug: SLUG });
       expect(html, status).toContain('data-testid="versions-table"');
       const reverts = controls(html).filter((control) => control.text === fr.strategy.revert);

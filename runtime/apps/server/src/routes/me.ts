@@ -6,12 +6,14 @@ import {
   generateBackupCodes,
   generateTotpSecret,
   hashBackupCode,
+  hashPassword,
   matchTotp,
   mfaRequiredFor,
   otpauthUri,
   base32Encode,
+  passwordPolicyViolation,
 } from '@runtime/core';
-import { confirmTwoFactor, consumeTotpStep, loadTwoFactor, removeTwoFactor, replaceBackupCodes, startTwoFactorEnrollment } from '@runtime/db';
+import { confirmTwoFactor, deleteResetLinks, consumeTotpStep, loadTwoFactor, removeTwoFactor, replaceBackupCodes, startTwoFactorEnrollment } from '@runtime/db';
 import type { FastifyInstance } from 'fastify';
 import type { ServerContext } from '../context.js';
 import { AttemptLimiter } from '../rate-limit.js';
@@ -123,6 +125,49 @@ export function meRoutes(app: FastifyInstance, ctx: ServerContext): void {
     await audit(ctx, request, actor, { action: 'auth.session_revoked', targetType: 'auth_session', targetId: id, outcome: 'success' });
     return reply.code(204).send();
   });
+
+  // --- Mot de passe (06 § 2, 13 § 5, 13 § 9) -----------------------------------------------------------------
+  // Mot de passe actuel exigé (ré-authentification commune : 5 échecs toutes opérations sensibles confondues → 429 et
+  // session fermée), nouveau mot de passe soumis à la politique. Les sessions restent ouvertes : la console PROPOSE de
+  // fermer les autres (ASVS 7.4.3) et reçoit leur nombre. Un lien de réinitialisation en cours est annulé (il remettrait
+  // un autre mot de passe). Compte OIDC seul (aucun mot de passe local) : 409 `no_local_password`.
+  app.post<{ Body: { current_password?: string; new_password: string } }>(
+    '/api/me/password',
+    {
+      schema: {
+        body: {
+          type: 'object',
+          required: ['new_password'],
+          additionalProperties: false,
+          properties: { current_password: { type: 'string', minLength: 1, maxLength: 1024 }, new_password: { type: 'string', minLength: 1, maxLength: 1024 } },
+        },
+      },
+    },
+    async (request, reply) => {
+      const actor = request.actor!;
+      const local = await ctx.pool.query("SELECT 1 FROM auth_accounts WHERE user_id = $1 AND provider_id = 'credential' AND password_hash IS NOT NULL", [actor.userId]);
+      if (local.rowCount !== 1) return sendError(reply, 409, 'no_local_password', 'ce compte se connecte sans mot de passe local');
+      if (!(await reauthenticate(ctx, request, reply, actor, request.body.current_password, 'auth.password_change'))) return reply;
+      const violation = passwordPolicyViolation(request.body.new_password);
+      if (violation) return sendError(reply, 400, 'weak_password', `mot de passe refusé (${violation})`);
+      const hash = await hashPassword(request.body.new_password);
+      await ctx.pool.query("UPDATE auth_accounts SET password_hash = $1, updated_at = now() WHERE user_id = $2 AND provider_id = 'credential'", [hash, actor.userId]);
+      const resetLinksRevoked = await deleteResetLinks(ctx.pool, actor.userId);
+      const { rows } = await ctx.pool.query<{ n: number }>(
+        'SELECT count(*)::int AS n FROM auth_sessions WHERE user_id = $1 AND id <> $2 AND expires_at > now() AND NOT mfa_pending',
+        [actor.userId, actor.sessionId],
+      );
+      const otherSessions = rows[0]?.n ?? 0;
+      await audit(ctx, request, actor, {
+        action: 'auth.password_changed',
+        targetType: 'user',
+        targetId: actor.userId,
+        outcome: 'success',
+        meta: { other_sessions: otherSessions, reset_links_revoked: resetLinksRevoked },
+      });
+      return { other_sessions: otherSessions };
+    },
+  );
 
   // --- 2FA TOTP (13 § 7) ------------------------------------------------------------------------------------
   app.post<{ Body: { current_password?: string } }>('/api/me/2fa/enroll', { schema: { body: passwordBody } }, async (request, reply) => {

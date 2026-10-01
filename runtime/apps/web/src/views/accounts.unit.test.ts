@@ -14,6 +14,10 @@ import { setApi } from '@/lib/api';
 import { createAppRouter } from '@/router/index';
 import { ROLE_PERMISSIONS } from '@/testing/permissions';
 import { esc, installFakeServer, json, ME, signedIn, view } from '@/testing/console.testkit';
+import CloseOthersOffer from '@/components/account/CloseOthersOffer.vue';
+import ApiRunsTab from '@/components/api/tabs/ApiRunsTab.vue';
+import { useApiRuns } from '@/composables/useApiRuns';
+import { apiDetail } from '@/testing/console-fixtures';
 import AuditView from './admin/AuditView.vue';
 import UsersView from './admin/UsersView.vue';
 import RunsView from './RunsView.vue';
@@ -115,6 +119,47 @@ describe('assert_admin_metadata_only : l’admin voit l’état, le coût et la 
     expect(html).not.toMatch(CONTENT_WORDS);
     expect(html).not.toMatch(/\/items|\/datasets|download|export|télécharg/i);
     expect(html).not.toMatch(IMPERSONATION);
+  });
+
+  test('Fiche API, onglet Runs : le run de B montre état, coût, durée ; ni items, ni export, ni relance ; même appelées, relance et items ne lisent pas son contenu', async () => {
+    const own = { ...bRun('r-own'), owner_id: ADMIN_A, dataset_id: 'd-own', strategy_version: 3 };
+    const routes = {
+      ...session('admin'),
+      'GET /api/runs': () => json(200, { runs: [{ ...bRun('r-b'), dataset_id: 'd-b', strategy_version: 3 }, own], next_cursor: null }),
+      // Serveur défaillant : il renverrait le contenu du run de B et les items de son dataset.
+      'GET /api/runs/r-b': () => json(200, { ...bRun('r-b'), metadata_only: false, attempts: [], tokens: { input: 0, output: 0 } }),
+      'GET /api/datasets/d-b/items': () => json(200, { items: [{ title: 'zz_test_CONTENU_ITEM' }], next_cursor: null }),
+      'GET /api/runs/r-own': () => json(200, { ...own, input: { max_pages: 2 }, metadata_only: false, attempts: [], tokens: { input: 0, output: 0 } }),
+      'GET /api/datasets/d-own/items': () => json(200, { items: [{ title: 'Mon livre', price: 3 }], next_cursor: null }),
+    };
+    const calls = installFakeServer(routes);
+    await signedIn();
+    const html = await view(ApiRunsTab, { detail: apiDetail({ slug: 'annonces-de-b', metadata_only: false }), slug: 'annonces-de-b' });
+    expect((html.match(/data-testid="runs-tab-row"/g) ?? []).length).toBe(2);
+    expect((html.match(/data-testid="run-other"/g) ?? []).length).toBe(1);
+    expect(html).toContain(esc(en.runs.other));
+    expect(html).toContain('0.0123 $'); // coût
+    expect(html).toContain('2 s'); // durée
+    expect(html).not.toMatch(CONTENT_WORDS);
+    // Une seule série d'actions de contenu : celles du run de l'admin lui-même.
+    expect((html.match(new RegExp(esc(en.runsTab.viewItems), 'g')) ?? []).length).toBe(1);
+    expect((html.match(new RegExp(esc(en.actions.relaunch), 'g')) ?? []).length).toBe(1);
+    expect(html).not.toContain('/api/datasets/d-b/');
+    expect(html).not.toMatch(IMPERSONATION);
+
+    // Les actions elles-mêmes : pour le run de B, aucune lecture de son entrée ni de ses items, rien en mémoire.
+    const runs = useApiRuns('annonces-de-b', { immediate: false });
+    await runs.refetch();
+    const [ofB, mine] = runs.runs.value;
+    const before = calls.length;
+    expect(await runs.relaunchInput(ofB!)).toBeNull();
+    expect(await runs.showItems(ofB!)).toBe(false);
+    expect(calls.slice(before).map((c) => c.path)).toEqual([]);
+    expect(JSON.stringify(runs.items.value)).not.toMatch(CONTENT_WORDS);
+    // Son propre run : la relance relit l'entrée, les items s'affichent.
+    expect(await runs.relaunchInput(mine!)).toEqual({ max_pages: 2 });
+    expect(await runs.showItems(mine!)).toBe(true);
+    expect(runs.items.value).toEqual([{ title: 'Mon livre', price: 3 }]);
   });
 
   test('Audit : l’admin lit des métadonnées (action, résultat, cible) ; aucun contrôle de contenu ni d’impersonation', async () => {
@@ -272,6 +317,47 @@ describe('Mon compte', () => {
     expect(on).toContain('data-testid="two-factor-regenerate"');
     expect(on).toContain('data-testid="two-factor-disable"');
     expect(on).not.toContain('data-testid="two-factor-start"');
+  });
+
+  test('assert_password_change_reauth : mot de passe (06 § 2), formulaire avec mot de passe actuel, nouveau et répétition ; aucune valeur pré-remplie', async () => {
+    installFakeServer(routes());
+    await signedIn();
+    const html = await view(AccountView);
+    expect(html).toContain('data-testid="password-panel"');
+    expect(html).toContain(esc(en.account.password.title));
+    for (const [name, autocomplete] of [['currentPassword', 'current-password'], ['newPassword', 'new-password'], ['repeatPassword', 'new-password']]) {
+      expect(html).toMatch(new RegExp(`<input[^>]*name="${name}"[^>]*>`));
+      expect(html.match(new RegExp(`<input[^>]*name="${name}"[^>]*>`))?.[0]).toContain(`autocomplete="${autocomplete}"`);
+      expect(html.match(new RegExp(`<input[^>]*name="${name}"[^>]*>`))?.[0]).toContain('type="password"');
+    }
+    expect(fr.account.password.title).toBeTruthy();
+  });
+
+  test('MFA_ENFORCED concerne le rôle : pas de formulaire de retrait de la 2FA, une explication à la place ; sinon le retrait reste offert', async () => {
+    installFakeServer(routes({ mfaEnabled: true, mfaRequired: true }));
+    await signedIn();
+    const enforced = await view(AccountView);
+    expect(enforced).toContain('data-testid="two-factor-regenerate"');
+    expect(enforced).not.toContain('data-testid="two-factor-disable"');
+    expect(enforced).toContain(esc(en.account.twoFactor.removalBlocked));
+    resetSession();
+    installFakeServer(routes({ mfaEnabled: true, mfaRequired: false }));
+    await signedIn();
+    const free = await view(AccountView);
+    expect(free).toContain('data-testid="two-factor-disable"');
+    expect(free).not.toContain(esc(en.account.twoFactor.removalBlocked));
+  });
+
+  test('proposition de fermer les autres sessions (après mot de passe ou 2FA) : un bouton et un « plus tard », en en et en fr', async () => {
+    installFakeServer(routes());
+    await signedIn();
+    for (const locale of ['en', 'fr'] as const) {
+      const html = await view(CloseOthersOffer, { count: 2 }, { locale });
+      const messages = locale === 'en' ? en : fr;
+      expect(html).toContain('data-testid="close-others-offer"');
+      expect(html).toContain(esc(messages.account.closeOthers.close));
+      expect(html).toContain(esc(messages.account.closeOthers.later));
+    }
   });
 
   test('sessions : la courante est marquée et ne se ferme pas ; une autre se ferme ; activité récente listée', async () => {

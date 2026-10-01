@@ -31,6 +31,7 @@ const KNOWN_CODES = new Set([
   'mfa_required',
   'mfa_enrollment_required',
   'weak_password',
+  'no_local_password',
   'invitation_invalid',
   'invalid_email',
   'email_domain_not_allowed',

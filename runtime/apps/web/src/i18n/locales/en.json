@@ -143,6 +143,7 @@
     "mfa_required": "This action needs two-factor authentication.",
     "mfa_enrollment_required": "Turn on two-factor authentication to continue.",
     "weak_password": "This password is not accepted. Use at least 12 characters and avoid common passwords.",
+    "no_local_password": "Your account signs in without a local password (SSO only): there is no password to change here.",
     "invitation_invalid": "This invitation link is not valid or has expired. Ask the admin who invited you for a new one.",
     "invalid_email": "This e-mail address is not valid.",
     "email_domain_not_allowed": "This instance does not accept this e-mail domain.",
@@ -1292,13 +1293,25 @@
       "unknown": "A notice was recorded on {date} ({code}).",
       "dismiss": "Dismiss",
       "codes": {
-        "password_reset_by_operator": "A reset link was issued for your account by the operator of the server on {date}. If this was not you or an admin you know, change your password and check your sessions.",
+        "password_reset_by_operator": "A reset link was issued for your account by the operator of the server on {date}. If this was not you or an admin you know, change your password below and close your other sessions.",
         "password_reset_withheld": "A reset link by e-mail was held back on {date}, because an admin changed the e-mail relay less than 24 hours earlier and your account has no second factor."
       }
     },
     "preferences": {
       "title": "Language and theme",
       "text": "Use the language and theme controls at the top of the page. They are saved with your account."
+    },
+    "password": {
+      "title": "Password",
+      "intro": "Changing it needs your current password. Your open sessions stay open: you can close the others afterwards.",
+      "current": "Current password",
+      "new": "New password",
+      "newHint": "At least 12 characters. Pasting is fine, and a long phrase works well.",
+      "repeat": "Repeat the new password",
+      "submit": "Change the password",
+      "submitting": "Changing…",
+      "done": "Your password was changed.",
+      "mismatch": "The two new passwords are different."
     },
     "twoFactor": {
       "title": "Two-factor authentication",
@@ -1329,7 +1342,8 @@
       "disableHelp": "Needs your password and a current code.",
       "disable": "Turn off",
       "currentCode": "Current code or backup code",
-      "disabledDone": "Two-factor authentication is off."
+      "disabledDone": "Two-factor authentication is off.",
+      "removalBlocked": "This instance requires two-factor authentication for your role: it cannot be removed. You can still regenerate your backup codes."
     },
     "sessions": {
       "title": "Open sessions",
@@ -1345,6 +1359,14 @@
       "closeOthers": "Close all other sessions",
       "none": "No other session.",
       "unknown": "unknown"
+    },
+    "closeOthers": {
+      "title": "Close your other sessions?",
+      "count": "You still have {n} other open session. | You still have {n} other open sessions.",
+      "text": "If you made this change because you are not sure who uses your account, close your other sessions. This one stays open.",
+      "close": "Close the other sessions",
+      "later": "Not now",
+      "closed": "Your other sessions are closed."
     },
     "identities": {
       "title": "Single sign-on",
@@ -1598,6 +1620,8 @@
       "auth_mfa_verified": "Second factor accepted",
       "auth_password_reset": "Password reset",
       "auth_password_reset_requested": "Password reset requested",
+      "auth_password_changed": "Password changed",
+      "auth_password_change": "Password change refused",
       "auth_session_revoked": "Session closed",
       "auth_sessions_revoked": "Sessions closed",
       "invitation_accepted": "Invitation accepted",

@@ -5,11 +5,12 @@
  * @description « Runs & datasets » (06 § 2) : historique paginé (déclencheur, état, résultat propre, dégradé ou échec,
  * raisons, durée, coût, items), rétention affichée, vue Table des items avec champs absents marqués, export JSON ou CSV
  * (flux du serveur, cellules neutralisées, 08b). Relancer ouvre le formulaire pré-rempli, avec le choix de la version et
- * un avertissement sur les effets de bord. Métadonnées seules pour l'admin sur un run avec session d'autrui.
+ * un avertissement sur les effets de bord. Métadonnées seules pour l'admin sur un run avec session d'autrui, et pour tout run d'un
+ * autre membre (état, coût, durée) : ni items, ni export, ni relance, son contenu n'est jamais lu (`assert_admin_metadata_only`).
  * @component
  * @example <ApiRunsTab :detail="detail" slug="zz-books" />
  */
-import { computed, ref } from 'vue';
+import { computed, onServerPrefetch, ref } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { RouterLink } from 'vue-router';
 import LaunchForm from '@/components/api/LaunchForm.vue';
@@ -19,8 +20,6 @@ import { Button } from '@/components/ui/button';
 import { useApiActions } from '@/composables/useApiActions';
 import { datasetExportUrl, useApiRuns, type RunSummary } from '@/composables/useApiRuns';
 import type { ApiDetail } from '@/composables/useApiDetail';
-import { getApi } from '@/lib/api';
-import { unwrap } from '@/lib/api-result';
 import { formatDate, formatDateTime, formatDuration, formatUsd } from '@/lib/display-format';
 import { describeFailureClass, describeReasonCode } from '@/lib/reasons';
 
@@ -28,6 +27,7 @@ const props = defineProps<{ detail: ApiDetail; slug: string }>();
 const { t, te, locale } = useI18n();
 const runs = useApiRuns(() => props.slug);
 const actions = useApiActions(() => props.slug);
+onServerPrefetch(() => runs.refetch());
 
 function reasons(run: RunSummary): string[] {
   const degraded = run.degraded_reasons.map((code) => describeReasonCode((key, named) => t(key, named ?? {}), te, code));
@@ -47,11 +47,12 @@ function cell(item: Record<string, unknown>, column: string): string | null {
   return typeof value === 'object' ? JSON.stringify(value) : String(value);
 }
 
-const openDataset = ref<string | null>(null);
+const openRun = ref<RunSummary | null>(null);
+const openDataset = computed(() => openRun.value?.dataset_id ?? null);
 async function showItems(run: RunSummary): Promise<void> {
-  if (!run.dataset_id) return;
-  openDataset.value = run.dataset_id;
-  await runs.loadItems(run.dataset_id);
+  if (!run.dataset_id || !runs.isOwn(run)) return;
+  openRun.value = run;
+  await runs.showItems(run);
 }
 
 const relaunch = ref<{ run: RunSummary; input: Record<string, unknown> | undefined } | null>(null);
@@ -62,8 +63,9 @@ async function startRelaunch(run: RunSummary): Promise<void> {
   relaunchError.value = false;
   relaunchedRun.value = null;
   try {
-    const detailed = unwrap(await getApi().GET('/api/runs/{id}', { params: { path: { id: run.id } } }));
-    relaunch.value = { run, input: detailed.input };
+    const input = await runs.relaunchInput(run);
+    if (input === null) return;
+    relaunch.value = { run, input };
   } catch {
     relaunchError.value = true;
   }
@@ -112,10 +114,11 @@ const canRelaunch = computed(() => props.detail.status !== 'bloquee' && !props.d
             </tr>
           </thead>
           <tbody>
-            <tr v-for="run in runs.runs.value" :key="run.id" class="border-t align-top">
+            <tr v-for="run in runs.runs.value" :key="run.id" class="border-t align-top" data-testid="runs-tab-row">
               <th scope="row" class="px-3 py-2 font-normal">
                 <RouterLink :to="`/runs/${run.id}`" class="underline underline-offset-4">{{ formatDateTime(run.created_at, locale) }}</RouterLink>
                 <p v-if="run.retention_until" class="text-xs text-muted-foreground">{{ t('runsTab.keptUntil', { date: formatDate(run.retention_until, locale) }) }}</p>
+                <span v-if="!runs.isOwn(run)" class="block text-xs text-muted-foreground" data-testid="run-other">{{ t('runs.other') }}</span>
               </th>
               <td class="px-3 py-2">{{ t(`runsTab.triggers.${run.trigger}`) }}</td>
               <td class="px-3 py-2">
@@ -129,12 +132,12 @@ const canRelaunch = computed(() => props.detail.status !== 'bloquee' && !props.d
               <td class="px-3 py-2">{{ run.items ?? '—' }}</td>
               <td class="px-3 py-2">
                 <div class="flex flex-wrap gap-2">
-                  <template v-if="run.dataset_id && !detail.metadata_only">
+                  <template v-if="run.dataset_id && !detail.metadata_only && runs.isOwn(run)">
                     <Button variant="outline" size="xs" @click="showItems(run)">{{ t('runsTab.viewItems') }}</Button>
                     <Button variant="outline" size="xs" as-child><a :href="datasetExportUrl(run.dataset_id, 'json')" download>{{ t('runsTab.exportJson') }}</a></Button>
                     <Button variant="outline" size="xs" as-child><a :href="datasetExportUrl(run.dataset_id, 'csv')" download>{{ t('runsTab.exportCsv') }}</a></Button>
                   </template>
-                  <Button v-if="canRelaunch" variant="outline" size="xs" @click="startRelaunch(run)">{{ t('actions.relaunch') }}</Button>
+                  <Button v-if="canRelaunch && runs.isOwn(run)" variant="outline" size="xs" @click="startRelaunch(run)">{{ t('actions.relaunch') }}</Button>
                 </div>
               </td>
             </tr>
@@ -156,7 +159,7 @@ const canRelaunch = computed(() => props.detail.status !== 'bloquee' && !props.d
     <section v-if="openDataset" aria-labelledby="runs-items" class="flex flex-col gap-3">
       <h2 id="runs-items" class="text-lg font-semibold">{{ t('runsTab.items') }}</h2>
       <LoadingState v-if="runs.itemsLoading.value && runs.items.value.length === 0" />
-      <ErrorState v-else-if="runs.itemsError.value" :error="runs.itemsError.value" @retry="showItems({ dataset_id: openDataset } as RunSummary)" />
+      <ErrorState v-else-if="runs.itemsError.value" :error="runs.itemsError.value" @retry="openRun && showItems(openRun)" />
       <p v-else-if="runs.items.value.length === 0" class="text-sm text-muted-foreground">{{ t('runsTab.noItems') }}</p>
       <div v-else class="relative overflow-x-auto rounded-lg border">
         <table class="w-full text-left text-sm" data-testid="items-table">

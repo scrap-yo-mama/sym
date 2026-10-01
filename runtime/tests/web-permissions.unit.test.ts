@@ -19,7 +19,7 @@ describe('assert_me_permissions_from_can : la console lit can(), elle ne le reco
 
   test('`Me` annonce les permissions, l’état de la 2FA et l’enrôlement exigé', () => {
     const { required, properties } = spec.components.schemas.Me;
-    for (const field of ['permissions', 'mfaEnabled', 'mfaEnrollmentRequired']) {
+    for (const field of ['permissions', 'mfaEnabled', 'mfaRequired', 'mfaEnrollmentRequired']) {
       expect(required, field).toContain(field);
       expect(properties, field).toHaveProperty(field);
     }

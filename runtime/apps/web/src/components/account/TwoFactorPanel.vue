@@ -3,8 +3,9 @@
 /**
  * @file TwoFactorPanel.vue
  * @description 2FA TOTP du compte (13 § 7) : activer (ré-authentification, graine affichée une fois, premier code, 10 codes de secours
- * affichés une fois), régénérer les codes de secours (mot de passe et code), retirer la 2FA (refusé quand MFA_ENFORCED concerne le
- * rôle). Sert à Mon compte et à l'enrôlement forcé. Mot de passe et codes partent dans la requête et sont effacés des champs ; la
+ * affichés une fois), régénérer les codes de secours (mot de passe et code), retirer la 2FA (non proposé quand MFA_ENFORCED concerne
+ * le rôle : une explication le remplace). Après chaque changement réussi, la fermeture des autres sessions est proposée en ligne
+ * (13 § 5, ASVS 7.4.3). Sert à Mon compte et à l'enrôlement forcé. Mot de passe et codes partent dans la requête et sont effacés des champs ; la
  * graine et les codes de secours quittent la mémoire quand on les range. Pas de code QR : la graine et l'adresse `otpauth` se saisissent.
  * @component
  * @example <TwoFactorPanel :forced="true" />
@@ -12,6 +13,7 @@
 import { computed, ref } from 'vue';
 import { useI18n } from 'vue-i18n';
 import TextField from '@/components/account/TextField.vue';
+import CloseOthersOffer from '@/components/account/CloseOthersOffer.vue';
 import SecretReveal from '@/components/account/SecretReveal.vue';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
@@ -20,13 +22,15 @@ import { useSession } from '@/composables/useSession';
 import { readFieldValue, takeFieldValue } from '@/lib/form-field';
 
 defineProps<{ forced?: boolean }>();
-const emit = defineEmits<{ backupStored: [] }>();
+const emit = defineEmits<{ backupStored: []; sessionsClosed: [] }>();
 const { t } = useI18n();
 const { me } = useSession();
 const twoFactor = useTwoFactor();
-const { phase, enrollment, backupCodes, busy, failure, disabledDone } = twoFactor;
+const { phase, enrollment, backupCodes, busy, failure, disabledDone, offerCloseOthers } = twoFactor;
 
 const enabled = computed(() => me.value?.mfaEnabled === true);
+/** MFA_ENFORCED concerne le rôle : le serveur refuserait le retrait (403 `mfa_enforced`), il n'est pas proposé. */
+const required = computed(() => me.value?.mfaRequired === true);
 const startPassword = ref('');
 const confirmCode = ref('');
 const regenPassword = ref('');
@@ -67,6 +71,7 @@ const disable = (event: Event): Promise<boolean> => {
 
     <Alert v-if="failure" variant="destructive" data-testid="two-factor-error"><AlertDescription>{{ t(failure) }}</AlertDescription></Alert>
     <p v-if="disabledDone" role="status" class="text-sm">{{ t('account.twoFactor.disabledDone') }}</p>
+    <CloseOthersOffer v-if="offerCloseOthers && phase !== 'backup'" @closed="emit('sessionsClosed')" @dismiss="twoFactor.dismissCloseOthers()" />
 
     <SecretReveal
       v-if="phase === 'backup'"
@@ -110,7 +115,8 @@ const disable = (event: Event): Promise<boolean> => {
         <TextField id="regen-code" v-model="regenCode" :label="t('account.twoFactor.currentCode')" name="code" class="max-w-xs" inputmode="numeric" autocomplete="one-time-code" required />
         <div><Button type="submit" variant="outline" class="aria-disabled:pointer-events-none aria-disabled:opacity-50" :aria-disabled="busy">{{ t('account.twoFactor.regenerate') }}</Button></div>
       </form>
-      <form class="flex flex-col gap-3 border-t pt-4" novalidate data-testid="two-factor-disable" @submit.prevent="disable">
+      <p v-if="required" class="border-t pt-4 text-sm" data-testid="two-factor-removal-blocked">{{ t('account.twoFactor.removalBlocked') }}</p>
+      <form v-else class="flex flex-col gap-3 border-t pt-4" novalidate data-testid="two-factor-disable" @submit.prevent="disable">
         <h3 class="font-medium">{{ t('account.twoFactor.disableTitle') }}</h3>
         <p class="text-sm text-muted-foreground">{{ t('account.twoFactor.disableHelp') }}</p>
         <TextField id="disable-password" v-model="disablePassword" :label="t('account.twoFactor.password')" :hint="t('account.twoFactor.passwordHint')" type="password" name="currentPassword" class="max-w-xs" autocomplete="current-password" />

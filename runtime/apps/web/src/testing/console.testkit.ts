@@ -53,6 +53,7 @@ export const ME = {
   scopes: null,
   permissions: ROLE_PERMISSIONS.owner,
   mfaEnabled: false,
+  mfaRequired: false,
   mfaEnrollmentRequired: false,
 };
 
