@@ -2,7 +2,7 @@
 // Niveau fetch de la garde SSRF (08b §1) : connecteur undici qui résout et contrôle à chaque connexion,
 // socket épinglé sur l'adresse validée (ferme le rebinding), redirections suivies à la main et recontrôlées.
 import { isIP } from 'node:net';
-import { Agent, buildConnector, fetch as undiciFetch, Headers, type RequestInit, type Response } from 'undici';
+import { Agent, buildConnector, fetch as undiciFetch, Headers, type Dispatcher, type RequestInit, type Response } from 'undici';
 import { findSsrfBlocked, SsrfBlockedError, type SsrfGuard } from './guard.js';
 import { stripAddress } from './ip.js';
 
@@ -68,7 +68,8 @@ export const MAX_REDIRECTS = 5;
 
 export type GuardedFetchOptions = {
   guard: SsrfGuard;
-  dispatcher?: Agent;
+  /** Dispatcher gardé (défaut : partagé par garde). Les modes proxy (`net/modes`) passent le leur. */
+  dispatcher?: Dispatcher;
   maxRedirects?: number;
   /** false : aucune redirection suivie, la réponse 3xx est rendue telle quelle (webhooks). */
   followRedirects?: boolean;

@@ -16,6 +16,7 @@
   { "test": "assert_key_loss_detected", "invariant": "INV8", "tasks": ["0.3a"], "stage": "I1" },
   { "test": "assert_no_telemetry", "invariant": "INV9", "tasks": ["1.10", "4.3"], "stage": "S" },
   { "test": "assert_otel_off_by_default", "invariant": "INV9", "tasks": ["1.10", "4.3"], "stage": "S" },
+  { "test": "assert_no_ip_change_after_refusal", "invariant": "INV6, X4", "tasks": ["1.4"], "stage": "U1" },
   { "test": "assert_ssrf_guard", "invariant": "INV10", "tasks": ["0.7"], "stage": "S" },
   { "test": "assert_webhook_ssrf_blocked", "invariant": "INV10", "tasks": ["0.7", "2.5"], "stage": "S" },
   { "test": "assert_robots_respected", "invariant": "INV11", "tasks": ["1.11"], "stage": "I1, S" },
