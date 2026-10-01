@@ -11,8 +11,15 @@
 #   donc `ipc: host` n'est pas nécessaire et n'est pas utilisé (il partagerait l'espace IPC de la machine avec un conteneur
 #   qui ouvre des sites tiers) ; `shm_size` garde une marge. Écart assumé à 14 § 12 (qui demande `init` et `ipc: host`),
 #   consigné dans docs/deploiement.md (statut de vérification).
-# - Ne PAS poser `security_opt: no-new-privileges` ni `cap_drop: [SETUID, SETGID]` sur le worker : le lanceur du bac à sable
-#   change d'utilisateur par des capacités de fichier (INV7) ; sans elles, le worker refuse de démarrer en production.
+# - `security_opt: no-new-privileges` est admis (régime de Render). Ne PAS poser `cap_drop: [SETUID, SETGID]` ni `user:` sur le
+#   worker : l'image démarre en root et descend aussitôt sur pwuser en gardant ces deux capacités pour le seul changement
+#   d'utilisateur du bac à sable (INV7) ; sans elles, le worker refuse de démarrer en production (docs/deploiement.md,
+#   « Modèle de privilèges de l'image »).
+# - Les commandes lancées par Docker dans le conteneur (sonde de santé, `docker exec` sans `-u`) prennent l'USER de l'image,
+#   root : la sonde du server descend donc elle-même sur pwuser sans capacité (setpriv), comme le point d'entrée.
+# - Recommandé (non posé par défaut, à éprouver sur votre hôte) : `read_only: true` sur server et worker, avec
+#   `tmpfs: [/tmp]` (profil de Chromium, fichiers temporaires). Un worker compromis qui atteindrait l'uid 0 (risque
+#   résiduel D-32) ne pourrait alors rien écrire qui survive à `restart: unless-stopped` (entrypoint.sh, /usr, /app).
 name: scrapyomama-runtime
 
 x-runtime: &runtime
@@ -76,7 +83,8 @@ services:
     mem_limit: 512m # = plan du web sur Render (0.5c-512mb) ; à confirmer par la recette (4.4)
     healthcheck:
       # /api/ready : base joignable, schéma à jour, empreinte de clé valide (200), sinon 503.
-      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/ready').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
+      # Lancée en root par Docker (USER de l'image) : descente sur pwuser, sans capacité ni nouveaux privilèges.
+      test: ["CMD", "/usr/bin/setpriv", "--reuid=1001", "--regid=1001", "--init-groups", "--inh-caps=-all", "--no-new-privs", "--", "node", "-e", "fetch('http://127.0.0.1:3000/api/ready').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
       interval: 10s
       timeout: 5s
       retries: 12

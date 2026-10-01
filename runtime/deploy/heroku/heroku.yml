@@ -20,7 +20,7 @@ release:
   image: web
   command:
     - runtime migrate
-# Démarrage explicite : l'image de base a un ENTRYPOINT (tini puis entrypoint.sh) mais aucun CMD, et sans `run` Heroku prend
+# Démarrage explicite : l'image de base a un ENTRYPOINT (entrypoint.sh, qui lance tini) mais aucun CMD, et sans `run` Heroku prend
 # le CMD. Que Heroku garde l'ENTRYPOINT (la commande devient son argument, éventuellement par /bin/sh -c) ou non, cette
 # commande aboutit au point d'entrée sans argument, qui démarre le rôle de RUNTIME_MODE. Non testé sur un vrai dyno (best-effort).
 run:

@@ -62,7 +62,8 @@ function buildLocalImage(runtimeDir: string, plan: ReleasePlan): NonNullable<Dry
     sh('docker', ['build', '--quiet', '-f', 'deploy/Dockerfile', '--build-arg', `RUNTIME_VERSION=${plan.version}`, '-t', local, '.'], runtimeDir);
     const id = sh('docker', ['image', 'inspect', '--format', '{{.Id}}', local], runtimeDir);
     const user = sh('docker', ['image', 'inspect', '--format', '{{.Config.User}}', local], runtimeDir);
-    const uid = sh('docker', ['run', '--rm', '--entrypoint', 'id', local, '-u'], runtimeDir);
+    // Par le point d'entrée de l'image (USER root, descente aussitôt sur pwuser) : uid sous lequel tourne une commande.
+    const uid = sh('docker', ['run', '--rm', local, 'id', '-u'], runtimeDir);
     return { reference: `${IMAGE}:${plan.version}`, id, user, uid };
   } finally {
     try {
@@ -108,7 +109,7 @@ export function runDryRun(options: { runtimeDir: string; tag?: string; outDir?: 
 
     // 3. Image (optionnelle, locale) : son identifiant devient le sujet signé.
     const image = options.withImage ? buildLocalImage(runtimeDir, plan) : undefined;
-    if (image && (image.uid === '0' || image.user === '')) throw new Error(`l'image tourne en root (uid ${image.uid})`);
+    if (image && image.uid !== '1001') throw new Error(`l'image ne descend pas sur pwuser (uid ${image.uid}, USER ${image.user || 'vide'})`);
     if (image) writeFileSync(join(out, 'image.json'), `${JSON.stringify({ reference: image.reference, tags: plan.imageTags, digest: image.id }, null, 2)}\n`);
 
     // 4. Provenance : prédicat SLSA v1 minimal. La provenance dit qui a construit et d'où, pas que l'artefact est sain.

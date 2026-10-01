@@ -11,7 +11,7 @@ import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import { checkMitPackages, classifyForMit, evaluateMitPackage, parseLicenseReport } from '../scripts/check-licenses.ts';
 import { checkHistory as checkX6History, checkRepo as checkX6Index } from '../scripts/check-x6.ts';
 import { checkSubject, isBreaking } from '../scripts/release/conventional.ts';
-import { checkFullHistoryJobs, checkImageNonRoot, checkReleaseWorkflow, checkRepo as checkGates, checkWorkflowSecurity } from '../scripts/release/gates.ts';
+import { checkCiImageJob, checkFullHistoryJobs, checkImageNonRoot, checkReleaseWorkflow, checkRepo as checkGates, checkWorkflowSecurity } from '../scripts/release/gates.ts';
 import { checkTagMatchesPackage, imageReferences, planRelease, ReleaseTagError } from '../scripts/release/plan.ts';
 import { checkChannelConfig, checkReleasePleaseConfigs, nextVersion, type ReleasePleaseConfig } from '../scripts/release/release-please.ts';
 import { catalogNames, checkSbomFile, generateLockfileSbom, validateImageSbom, validateSbom } from '../scripts/release/sbom.ts';
@@ -116,6 +116,76 @@ describe('release : portes (assert_release_gates)', () => {
     expect(checkImageNonRoot('d', 'FROM a AS b\nUSER pwuser\nFROM c AS r\nRUN true\n')).toHaveLength(1);
     expect(checkImageNonRoot('d', 'FROM c\nUSER 0\n')).toHaveLength(1);
     expect(checkImageNonRoot('d', 'FROM c\nUSER 1001:1001\n')).toEqual([]);
+  });
+
+  test('assert_image_nonroot : USER root admis seulement si deploy/entrypoint.sh descend sur un uid non root avant tout (F-20261001-R01)', () => {
+    const image = 'FROM c\nUSER root\nCOPY deploy/entrypoint.sh /usr/local/bin/entrypoint.sh\nENTRYPOINT ["/usr/local/bin/entrypoint.sh"]\n';
+    const drop = (body: string, before = '') =>
+      `#!/bin/bash\n# c\nset -uo pipefail\nA=/x\n${before}if [ "$EUID" = 0 ]; then\n${body}fi\nnode x\n`;
+    const good = drop('  caps=(--inh-caps=-all)\n  if [ "$#" -eq 0 ] && { [ "${M:-all}" = worker ] || [ "${M:-all}" = all ]; }; then\n    caps=(--inh-caps=-all,+setuid)\n  fi\n  exec /usr/bin/setpriv --reuid=1001 --regid=1001 --init-groups --no-new-privs "${caps[@]}" -- /usr/bin/tini -- "$0" "$@"\n');
+    expect(checkImageNonRoot('d', image, good)).toEqual([]);
+    // Le vrai point d'entrée passe la porte.
+    expect(checkImageNonRoot('d', image, readFileSync(join(runtimeDir, 'deploy/entrypoint.sh'), 'utf8'))).toEqual([]);
+    // Refus : point d'entrée absent ou autre, descente vers root, sans --no-new-privs, commande avant la descente.
+    expect(checkImageNonRoot('d', image)).toHaveLength(1);
+    expect(checkImageNonRoot('d', 'FROM c\nUSER root\nENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/entrypoint.sh"]\n', good)).toHaveLength(1);
+    expect(checkImageNonRoot('d', image, drop('  exec /usr/bin/setpriv --reuid=0 --regid=1001 --no-new-privs -- /usr/bin/tini -- "$0"\n'))).toHaveLength(1);
+    expect(checkImageNonRoot('d', image, drop('  exec /usr/bin/setpriv --reuid=1001 --regid=1001 -- /usr/bin/tini -- "$0"\n'))).toHaveLength(1);
+    expect(checkImageNonRoot('d', image, drop('  rm -rf /tmp/x\n  exec /usr/bin/setpriv --reuid=1001 --regid=1001 --no-new-privs -- /usr/bin/tini -- "$0"\n'))).toHaveLength(1);
+    expect(checkImageNonRoot('d', image, drop('  exec /usr/bin/setpriv --reuid=1001 --regid=1001 --no-new-privs -- /usr/bin/tini -- "$(id)"\n'))).toHaveLength(1);
+    expect(checkImageNonRoot('d', image, drop('  exec /usr/bin/setpriv --reuid=1001 --regid=1001 --no-new-privs -- /usr/bin/tini -- "$0"\n', 'B=$(id -u)\n'))).toHaveLength(1);
+    expect(checkImageNonRoot('d', image, drop('  exec /usr/bin/setpriv --reuid=1001 --regid=1001 --no-new-privs -- /usr/bin/tini -- "$0"\n', 'node evil\n'))).toHaveLength(1);
+  });
+
+  test('assert_image_nonroot : descentes qui restent root ou gardent tout, refusées (revue de F-20261001-R01)', () => {
+    const image = 'FROM c\nUSER root\nCOPY deploy/entrypoint.sh /usr/local/bin/entrypoint.sh\nENTRYPOINT ["/usr/local/bin/entrypoint.sh"]\n';
+    const drop = (body: string, before = '') => `#!/bin/bash\nset -uo pipefail\nA=/x\n${before}if [ "$EUID" = 0 ]; then\n${body}fi\nnode x\n`;
+    const tail = '-- /usr/bin/tini -- "$0" "$@"\n';
+    const line = (opts: string) => `  exec /usr/bin/setpriv ${opts} ${tail}`;
+    const good = drop(`  caps=(--inh-caps=-all --ambient-caps=-all)\n  if [ "$#" -eq 0 ]; then\n    caps=(--inh-caps=-all,+setuid,+setgid --ambient-caps=-all,+setuid,+setgid)\n  fi\n${line('--reuid=1001 --regid=1001 --init-groups --no-new-privs "${caps[@]}"')}`);
+    expect(checkImageNonRoot('d', image, good)).toEqual([]);
+    // (a) une seconde option d'identité l'emporte sur la première ; (b) --euid=0.
+    expect(checkImageNonRoot('d', image, drop(line('--reuid=1001 --regid=1001 --reuid=0 --no-new-privs')))).toHaveLength(1);
+    expect(checkImageNonRoot('d', image, drop(line('--reuid=1001 --regid=1001 --euid=0 --no-new-privs')))).toHaveLength(1);
+    for (const opt of ['--ruid=0', '--rgid=0', '--egid=0', '--regid=0', '--groups=0', '--keep-groups']) {
+      expect(checkImageNonRoot('d', image, drop(line(`--reuid=1001 --regid=1001 ${opt} --no-new-privs`))), opt).toHaveLength(1);
+    }
+    // (c) identité root passée par un tableau développé dans la ligne de descente.
+    expect(checkImageNonRoot('d', image, drop(`  caps=(--reuid=0 --regid=0)\n${line('--reuid=1001 --regid=1001 --no-new-privs "${caps[@]}"')}`))).toHaveLength(1);
+    // Tableau non défini dans le bloc (pourrait venir de l'environnement ou d'avant le bloc).
+    expect(checkImageNonRoot('d', image, drop(line('--reuid=1001 --regid=1001 --no-new-privs "${other[@]}"')))).toHaveLength(1);
+    // (d) PATH (ou IFS, BASH_ENV, ENV, LD_*) posé avant le bloc, setpriv résolu par PATH ; `set -a` qui exporterait tout.
+    for (const before of ['PATH=/tmp/evil\n', 'IFS=x\n', 'BASH_ENV=/tmp/e\n', 'ENV=/tmp/e\n', 'LD_PRELOAD=/tmp/e.so\n', 'LD_LIBRARY_PATH=/tmp\n', 'set -a\n', 'set -o allexport\n']) {
+      expect(checkImageNonRoot('d', image, drop(line('--reuid=1001 --regid=1001 --no-new-privs'), before)), before).toHaveLength(1);
+    }
+    expect(checkImageNonRoot('d', image, drop(`  exec setpriv --reuid=1001 --regid=1001 --no-new-privs ${tail}`))).toHaveLength(1);
+    // (e) capacités : seules -all et +setuid,+setgid ; ni --bounding-set ni --securebits.
+    expect(checkImageNonRoot('d', image, drop(line('--reuid=1001 --regid=1001 --inh-caps=+all --ambient-caps=+all --no-new-privs')))).toHaveLength(1);
+    expect(checkImageNonRoot('d', image, drop(`  caps=(--inh-caps=+all --ambient-caps=+all)\n${line('--reuid=1001 --regid=1001 --no-new-privs "${caps[@]}"')}`))).toHaveLength(1);
+    expect(checkImageNonRoot('d', image, drop(line('--reuid=1001 --regid=1001 --inh-caps=-all,+sys_admin --no-new-privs')))).toHaveLength(1);
+    expect(checkImageNonRoot('d', image, drop(line('--reuid=1001 --regid=1001 --bounding-set=+all --no-new-privs')))).toHaveLength(1);
+    expect(checkImageNonRoot('d', image, drop(line('--reuid=1001 --regid=1001 --securebits=+keep_caps --no-new-privs')))).toHaveLength(1);
+    // Tableau complété (+=) dans le bloc ; interpréteur autre que bash ($EUID n'existe qu'en bash : la descente sauterait).
+    expect(checkImageNonRoot('d', image, drop(`  caps=(--inh-caps=-all)\n  caps+=(--reuid=0)\n${line('--reuid=1001 --regid=1001 --no-new-privs "${caps[@]}"')}`))).toHaveLength(1);
+    expect(checkImageNonRoot('d', image, good.replace('#!/bin/bash', '#!/bin/sh'))).toHaveLength(1);
+    // Le Dockerfile doit copier CE point d'entrée à l'emplacement de l'ENTRYPOINT, dans le dernier stage.
+    expect(checkImageNonRoot('d', image.replace('COPY deploy/entrypoint.sh', 'COPY deploy/other.sh'), good)).toHaveLength(1);
+    expect(checkImageNonRoot('d', `FROM a\nCOPY deploy/entrypoint.sh /usr/local/bin/entrypoint.sh\n${image.replace(/^COPY .*\n/m, '')}`, good)).toHaveLength(1);
+    // Le vrai Dockerfile et le vrai point d'entrée passent.
+    expect(checkImageNonRoot('d', readFileSync(join(runtimeDir, 'deploy/Dockerfile'), 'utf8'), readFileSync(join(runtimeDir, 'deploy/entrypoint.sh'), 'utf8'))).toEqual([]);
+  });
+
+  test('assert_sandbox_image_privileges en CI : un job de ci.yml joue `pnpm test:image` à chaque PR, sans relance (revue de F-20261001-R01)', () => {
+    const ci = readFileSync(join(repoDir, '.github/workflows/ci.yml'), 'utf8');
+    expect(checkCiImageJob('ci.yml', ci)).toEqual([]);
+    const job = (body: string) => `name: ci\non:\n  pull_request:\njobs:\n  unit:\n    runs-on: ubuntu-24.04\n    steps:\n      - run: pnpm test\n${body}`;
+    const image = '  image:\n    runs-on: ubuntu-24.04\n    steps:\n      - run: pnpm test:image --retry=0 --reporter=default\n';
+    expect(checkCiImageJob('ci.yml', job(image))).toEqual([]);
+    expect(checkCiImageJob('ci.yml', job(''))).toHaveLength(1);
+    expect(checkCiImageJob('ci.yml', job(image.replace(' --retry=0', '')))).toHaveLength(1);
+    expect(checkCiImageJob('ci.yml', job(image.replace('    runs-on', "    if: github.event_name == 'schedule'\n    runs-on")))).toHaveLength(1);
+    // Un nom d'étape ou un commentaire ne compte pas : seul un script `run:`.
+    expect(checkCiImageJob('ci.yml', job('  image:\n    runs-on: ubuntu-24.04\n    steps:\n      - name: pnpm test:image --retry=0\n        run: echo non\n'))).toHaveLength(1);
   });
 
   test('assert_x6_history_clean : l\'historique git entier est audité (fichier supprimé, autre branche) ; clone superficiel refusé', () => {

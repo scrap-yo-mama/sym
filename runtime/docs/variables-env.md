@@ -6,6 +6,11 @@ sans ses blancs finaux, remplace la valeur ; les deux posées : démarrage refus
 Tout le reste (clés LLM, proxys, SMTP) se règle dans l’interface et reste chiffré en base. Aucune variable ne déclenche de
 contrôle de version sortant ni de rapport d’usage.
 
+Dans l’image, le worker tourne sous une copie de Node à capacités de fichier : le noyau le lance en mode d’exécution sécurisé
+(`AT_SECURE`). Il y ignore `NODE_OPTIONS`, `NODE_EXTRA_CA_CERTS`, `SSL_CERT_FILE`, `SSL_CERT_DIR` et `OPENSSL_CONF`, et glibc
+lui retire `TMPDIR`, `LD_LIBRARY_PATH` et `LOCPATH`, alors que le server les honore. Le worker avertit au démarrage si l’une
+des cinq premières est posée. Une autorité de certification privée pour PostgreSQL passe par `sslrootcert` dans `DATABASE_URL`.
+
 ## Base
 
 | Variable | Lue par | Statut | Défaut | Rôle |
@@ -115,3 +120,4 @@ contrôle de version sortant ni de rapport d’usage.
 | `SANDBOX_UID` | worker | facultative | `1500` | Utilisateur dédié du bac à sable (INV7). Posée par l’image : ne pas la changer. |
 | `SANDBOX_GID` | worker | facultative | `1500` | Groupe dédié du bac à sable. Posée par l’image : ne pas la changer. |
 | `SANDBOX_LAUNCHER` | worker | facultative | `/usr/local/libexec/sandbox-launch` | Lanceur à capacités minimales du bac à sable. Posée par l’image : ne pas la changer. |
+| `SANDBOX_NODE` | worker | facultative | `/usr/bin/node` | Node exécuté par l’enfant du bac à sable (le worker tourne sous une copie de Node à capacités de fichier, réservée à son groupe). Posée par l’image : ne pas la changer. |

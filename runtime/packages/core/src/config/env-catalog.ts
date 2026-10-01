@@ -57,6 +57,7 @@ export const ENV_CATALOG: readonly EnvVariable[] = [
   v({ name: 'SANDBOX_UID', group: 'Image', roles: ['worker'], required: false, default: '`1500`', description: 'Utilisateur dédié du bac à sable (INV7). Posée par l’image : ne pas la changer.' }),
   v({ name: 'SANDBOX_GID', group: 'Image', roles: ['worker'], required: false, default: '`1500`', description: 'Groupe dédié du bac à sable. Posée par l’image : ne pas la changer.' }),
   v({ name: 'SANDBOX_LAUNCHER', group: 'Image', roles: ['worker'], required: false, default: '`/usr/local/libexec/sandbox-launch`', description: 'Lanceur à capacités minimales du bac à sable. Posée par l’image : ne pas la changer.' }),
+  v({ name: 'SANDBOX_NODE', group: 'Image', roles: ['worker'], required: false, default: '`/usr/bin/node`', description: 'Node exécuté par l’enfant du bac à sable (le worker tourne sous une copie de Node à capacités de fichier, réservée à son groupe). Posée par l’image : ne pas la changer.' }),
 
   v({ name: 'WORKER_CONCURRENCY', group: 'Exécution', roles: ['worker', 'cli'], required: false, default: '5', description: 'Jobs sans navigateur en parallèle par worker (inférieur ou égal à `DB_POOL_MAX`).' }),
   v({ name: 'BROWSER_CONCURRENCY', group: 'Exécution', roles: ['worker'], required: false, default: 'déduit de la mémoire du conteneur', description: 'Runs navigateur simultanés par worker (1 à 32). Dimensionnement : 2 Go de mémoire pour 1 run navigateur, 4 Go pour 2.' }),
@@ -123,6 +124,11 @@ export function renderEnvReference(catalog: readonly EnvVariable[] = ENV_CATALOG
     'sans ses blancs finaux, remplace la valeur ; les deux posées : démarrage refusé), ce qui permet les secrets Docker.',
     'Tout le reste (clés LLM, proxys, SMTP) se règle dans l’interface et reste chiffré en base. Aucune variable ne déclenche de',
     'contrôle de version sortant ni de rapport d’usage.',
+    '',
+    'Dans l’image, le worker tourne sous une copie de Node à capacités de fichier : le noyau le lance en mode d’exécution sécurisé',
+    '(`AT_SECURE`). Il y ignore `NODE_OPTIONS`, `NODE_EXTRA_CA_CERTS`, `SSL_CERT_FILE`, `SSL_CERT_DIR` et `OPENSSL_CONF`, et glibc',
+    'lui retire `TMPDIR`, `LD_LIBRARY_PATH` et `LOCPATH`, alors que le server les honore. Le worker avertit au démarrage si l’une',
+    'des cinq premières est posée. Une autorité de certification privée pour PostgreSQL passe par `sslrootcert` dans `DATABASE_URL`.',
     '',
   ];
   for (const group of ENV_GROUPS) {

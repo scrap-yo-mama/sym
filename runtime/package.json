@@ -15,6 +15,7 @@
     "test:integration": "node scripts/test-integration.ts",
     "test:e2e": "pnpm --filter @runtime/extension test:e2e && pnpm --filter @runtime/web test:e2e",
     "test:security": "vitest run --project security",
+    "test:image": "vitest run --project image",
     "eval": "node scripts/not-implemented.ts eval 'tâche 2.8'",
     "fixtures": "node fixtures/src/main.ts",
     "zz:cleanup": "node scripts/not-implemented.ts zz:cleanup 'tâche 0.5'",

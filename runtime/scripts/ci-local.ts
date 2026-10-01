@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // CI locale (remplace GitHub Actions tant que la facturation est bloquée) : rejoue en séquence les étapes des jobs
-// quality, unit et integration de .github/workflows/ci.yml. S'arrête au premier échec (code ≠ 0).
+// quality, docs, unit, security, image, e2e et integration de .github/workflows/ci.yml. S'arrête au premier échec (code ≠ 0).
 import { spawnSync } from 'node:child_process';
 
 type Step = { job: string; name: string; cmd: string[]; cwd?: 'root' };
@@ -26,6 +26,9 @@ const STEPS: Step[] = [
   { job: 'unit', name: 'tests unitaires + couverture', cmd: ['pnpm', 'test:coverage'] },
   // Étage S : garde SSRF sur fetch et Chromium (Playwright). Chromium : pnpm exec playwright install chromium.
   { job: 'security', name: 'sécurité (SSRF, Chromium)', cmd: ['pnpm', 'test:security'] },
+  // F-20261001-R01 : image construite en local (rien de poussé), démarrée sous les capacités de Render (no-new-privileges)
+  // puis en Docker classique : bac à sable isolé, enfants sans capacité, aucun processus root, arrêt propre.
+  { job: 'image', name: 'image : privilèges du bac à sable (Render, Docker classique)', cmd: ['pnpm', 'test:image'] },
   // Étage E2 : extension construite dans Chromium contre une instance réelle (tâche 2.6, PG 16), puis gate d'accessibilité
   // de la console (tâche 3.9) : axe, parcours au clavier seul, live regions, sur la console construite et servie en local.
   { job: 'e2e', name: 'e2e extension et console (Playwright, Chromium)', cmd: ['pnpm', 'test:e2e'] },

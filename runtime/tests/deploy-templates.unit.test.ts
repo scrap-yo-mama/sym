@@ -191,6 +191,8 @@ describe('docker-compose.prod.yml : cible bloquante', () => {
   test('sondes : postgres (pg_isready) et server (/api/ready, 200 sinon échec) ; plafond mémoire sur chaque service', () => {
     expect(doc.services['postgres']!.healthcheck!.test.join(' ')).toMatch(/pg_isready/);
     expect(doc.services['server']!.healthcheck!.test.join(' ')).toMatch(/\/api\/ready/);
+    // Lancée en root par Docker (USER root de l'image) : la sonde descend sur pwuser sans capacité (revue de F-20261001-R01).
+    expect(doc.services['server']!.healthcheck!.test.slice(0, 8)).toEqual(['CMD', '/usr/bin/setpriv', '--reuid=1001', '--regid=1001', '--init-groups', '--inh-caps=-all', '--no-new-privs', '--']);
     for (const [name, svc] of Object.entries(doc.services)) expect(svc.mem_limit, name).toBeTruthy();
   });
 

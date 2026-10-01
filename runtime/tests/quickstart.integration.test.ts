@@ -129,7 +129,9 @@ function resolveCompose(cwd: string, shellEnv: string, overrides: Record<string,
 /** Commande lancée par l'image pour un RUNTIME_MODE (deploy/entrypoint.sh), traduite vers les fichiers du dépôt. */
 function entrypointCommand(mode: string): string[] {
   const script = readFileSync(join(runtimeDir, 'deploy/entrypoint.sh'), 'utf8');
-  const line = new RegExp(`^\\s*${mode}\\) exec node ([^;#]+?)\\s*;;`, 'm').exec(script);
+  // `role` lance le rôle sans capacité héritée ; le worker tourne sous la copie de Node à capacités de fichier de l'image
+  // (`$WORKER_NODE`), remplacée ici par le Node du dépôt.
+  const line = new RegExp(`^\\s*${mode}\\) role (?:node|"\\$WORKER_NODE") ([^;#]+?)\\s*;;`, 'm').exec(script);
   if (!line) throw new Error(`deploy/entrypoint.sh ne lance pas le mode ${mode}`);
   return (line[1] ?? '').split(/\s+/).map((token) => {
     const unquoted = token.replace(/^"(.*)"$/, '$1');
