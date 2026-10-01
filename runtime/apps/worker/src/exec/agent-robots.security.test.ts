@@ -4,9 +4,14 @@
 // `stagehandEngineFor`, Chromium dédié par `launchAgentBrowser`, faux fournisseur LLM) contre la fixture `zz_test_robots`
 // (`Disallow: /prive/`). La garde robots de Chromium (1.11 : contrôle CDP de chaque requête, sauts compris, WebSocket,
 // workers, SharedWorker, préchargement coupé) couvrait E1-E3 mais ni le navigateur d'E4 (`fetch_in_page`), ni le Chromium
-// dédié d'E6 piloté par Stagehand, ni les contextes de rejeu E5. Ici, dans chacun : navigation, redirection, fetch lancé
-// par la page, WebSocket et workers vers /prive/ → 0 requête (compteur `GET /__stats`) ; une navigation du cadre principal
-// refusée donne `robots_disallowed` à l'essai, une sous-ressource refusée est seulement coupée.
+// dédié d'E5 délégué et d'E6 piloté par Stagehand, ni les contextes E5 et les rejeux de compilation E6. Ici, dans chacun :
+// navigation, redirection, fetch lancé par la page, WebSocket et workers vers /prive/ → 0 requête (compteur
+// `GET /__stats`) ; une navigation du cadre principal refusée donne `robots_disallowed` à l'essai (`robots_unreachable`
+// si robots.txt de l'hôte d'arrivée répond 5xx), une sous-ressource refusée est seulement coupée. Revue de fix-inv11-agent :
+// cadre hors processus d'un second hôte (workers, WebSocket), règles de spéculation, robots.txt injoignable, SharedWorker
+// (F-20261001-07) et service worker enregistré par `ServiceWorkerContainer.prototype.register` puis commandé par
+// postMessage, avec Stagehand attaché comme en production (sa propre auto-attache CDP) ; E5 à étape déléguée ; rejeux de
+// vérification d'une compilation E6 → E5 réussie.
 // PostgreSQL : un conteneur propre à ce fichier (le job security n'a pas le globalSetup du projet integration).
 import { randomUUID } from 'node:crypto';
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from '@testcontainers/postgresql';
@@ -29,6 +34,10 @@ import { fixtureGuard } from '../../../../tests/helpers/fixture-net.ts';
 import { stagehandScript } from '../../../../tests/helpers/stagehand-script.ts';
 
 const ROBOTS = 'zz_test_robots.localhost';
+/** Second hôte autorisé dont robots.txt (derrière deux redirections) interdit /prive/ (cadres d'un autre site). */
+const OTHER = 'zz_test_robots_redirect.localhost';
+/** Hôte dont robots.txt répond 503 : interdiction totale (`robots_unreachable`). */
+const UNREACHABLE = 'zz_test_robots_5xx.localhost';
 const A = randomUUID();
 const actorA = { userId: A, role: 'member' as const };
 const ID_SCHEMA = { type: 'object', required: ['id'], properties: { id: { type: 'string' } } };
@@ -57,7 +66,7 @@ let browsers: BrowserPool;
 let launchProxy: net.EgressProxy;
 let fake: FakeProvider;
 
-const base = () => `http://${ROBOTS}:${client.server.port}`;
+const base = (host = ROBOTS) => `http://${host}:${client.server.port}`;
 
 async function insertApi(strategy: { execution: string; spec: unknown }): Promise<string> {
   const id = (
@@ -85,27 +94,39 @@ const runOf = async (apiId: string) => {
   return (await withActor(pool, actorA, (tx) => readRun(tx, runId)))!;
 };
 
-const paths = async () => (await client.stats()).hosts[ROBOTS]?.paths ?? {};
+const paths = async (host = ROBOTS) => (await client.stats()).hosts[host]?.paths ?? {};
 /** Requêtes reçues sous /prive/ (hors /prive/ouvert, permis) : doit rester à 0. */
-const forbiddenHits = async () =>
-  Object.entries(await paths())
+const forbiddenHits = async (host = ROBOTS) =>
+  Object.entries(await paths(host))
     .filter(([p]) => p.startsWith('/prive/') && !p.startsWith('/prive/ouvert'))
     .reduce((n, [, c]) => n + c, 0);
 
 /** E4 par le navigateur (`fetch_in_page`). */
-const e4 = (path: string) => ({
+const e4 = (path: string, extraHosts: string[] = []) => ({
   execution: 'agent_fetch',
-  spec: { schema_version: 1, kind: 'agent_fetch', via: 'fetch_in_page', request: { url: `${base()}${path}`, allowed_hosts: [ROBOTS] }, instruction: 'Liste les identifiants de la page.' },
+  spec: { schema_version: 1, kind: 'agent_fetch', via: 'fetch_in_page', request: { url: `${base()}${path}`, allowed_hosts: [ROBOTS, ...extraHosts] }, instruction: 'Liste les identifiants de la page.' },
 });
 /** E6 : l'agent part de `path`. */
-const e6 = (path: string) => ({
+const e6 = (path: string, extraHosts: string[] = []) => ({
   execution: 'agent',
-  spec: { schema_version: 1, kind: 'agent', start_url: `${base()}${path}`, allowed_hosts: [ROBOTS], instruction: 'Trouve l’identifiant de la fiche.', limits: { max_steps: 6 } },
+  spec: { schema_version: 1, kind: 'agent', start_url: `${base()}${path}`, allowed_hosts: [ROBOTS, ...extraHosts], instruction: 'Trouve l’identifiant de la fiche.', limits: { max_steps: 6 } },
 });
 /** E5 sans LLM (contexte du pool, même chemin que les rejeux de compilation E6). */
 const e5 = (path: string) => ({
   execution: 'hybrid',
   spec: { schema_version: 1, kind: 'hybrid', start_url: `${base()}${path}`, allowed_hosts: [ROBOTS], steps: [], extract: { mode: 'labels', fields: { id: { label: 'Identifiant', ops: [] } } } },
+});
+/** E5 à étape déléguée (`op: 'agent'`) : Chromium dédié piloté par Stagehand (`runHybridDelegated`). */
+const e5Agent = (path: string) => ({
+  execution: 'hybrid',
+  spec: {
+    schema_version: 1,
+    kind: 'hybrid',
+    start_url: `${base()}${path}`,
+    allowed_hosts: [ROBOTS],
+    steps: [{ op: 'agent', instruction: 'Ouvre la fiche.' }],
+    extract: { mode: 'labels', fields: { id: { label: 'Identifiant', ops: [] } } },
+  },
 });
 
 /** Agent scripté : `turns` tours d'outils, puis la sortie `{ items: [{ id }] }`. */
@@ -130,7 +151,7 @@ beforeAll(async () => {
   await queue.createQueue(runQueueDefinition());
   client = await startClient();
   fake = await createFakeProvider();
-  const guard = fixtureGuard(client.server.port, [ROBOTS], net);
+  const guard = fixtureGuard(client.server.port, [ROBOTS, OTHER, UNREACHABLE], net);
   launchProxy = await net.startEgressProxy({ guard, refuseAll: true });
   browsers = new BrowserPool({ size: 1, launch: playwrightLauncher(launchProxy.url, process.env), recycleAfterRuns: 100 });
   const llmConfig: LlmConfig = {
@@ -211,6 +232,44 @@ describe('assert_robots_respected — E4 par le navigateur (fetch_in_page) : cha
     expect((await paths())['/page-ws-worker']).toBe(1);
     expect(await forbiddenHits()).toBe(0);
   }, 120_000);
+
+  test('cadre hors processus d’un second hôte autorisé dont les workers ouvrent un WebSocket vers /prive/ : 0 requête', async () => {
+    await runOf(await insertApi(e4('/page-cadre-ws', [OTHER])));
+    expect((await paths())['/page-cadre-ws']).toBe(1);
+    expect((await paths(OTHER))['/cadre-ws-worker']).toBe(1);
+    expect(await forbiddenHits()).toBe(0);
+    expect(await forbiddenHits(OTHER)).toBe(0);
+  }, 120_000);
+
+  test('règles de spéculation (prefetch, prerender, en-tête Speculation-Rules) vers /prive/ : 0 requête', async () => {
+    await runOf(await insertApi(e4('/page-spec')));
+    expect((await paths())['/lent']).toBe(1);
+    expect(await forbiddenHits()).toBe(0);
+  }, 120_000);
+
+  test('redirection vers un second hôte autorisé dont robots.txt répond 503 : robots_unreachable, 0 requête de contenu, aucun appel LLM', async () => {
+    const run = await runOf(await insertApi(e4('/vers-injoignable', [UNREACHABLE])));
+    expect(run).toMatchObject({ state: 'failed', failure_class: 'robots_unreachable', retryable: true, items: 0, dataset_id: null });
+    expect(Object.keys(await paths(UNREACHABLE)).filter((p) => p !== '/robots.txt')).toEqual([]);
+    expect(fake.requests).toBe(0);
+  }, 120_000);
+
+  // F-20261001-07 : course entre la reprise d'un SharedWorker (Playwright s'en détache) et sa fermeture.
+  test('SharedWorker du site (fetch direct et redirigé vers /prive/) : 0 requête', async () => {
+    await runOf(await insertApi(e4('/page-sw')));
+    expect((await paths())['/page-sw']).toBe(1);
+    expect(await forbiddenHits()).toBe(0);
+    expect((await paths())['/depart']).toBeUndefined();
+  }, 120_000);
+
+  test('service worker enregistré par ServiceWorkerContainer.prototype.register puis commandé par postMessage : 0 requête, script jamais chargé', async () => {
+    await runOf(await insertApi(e4('/page-sw-register')));
+    expect((await paths())['/page-sw-register']).toBe(1);
+    expect((await paths())['/lent']).toBe(1);
+    expect(await forbiddenHits()).toBe(0);
+    expect((await paths())['/sw-register.js']).toBeUndefined();
+    expect((await paths())['/depart']).toBeUndefined();
+  }, 120_000);
 });
 
 describe('assert_robots_respected — E6 : Chromium dédié piloté par Stagehand', () => {
@@ -244,6 +303,56 @@ describe('assert_robots_respected — E6 : Chromium dédié piloté par Stagehan
     expect((await paths())['/page-ws-worker']).toBeGreaterThanOrEqual(1);
     expect(await forbiddenHits()).toBe(0);
   }, 180_000);
+
+  test('cadre hors processus d’un second hôte (workers, WebSocket) et règles de spéculation (outil goto) : 0 requête, les workers du cadre tournent', async () => {
+    // Attente sur la page du cadre (outil wait) : ses workers ont le temps de tourner (témoin) avant la navigation suivante.
+    agentScript([[{ name: 'goto', arguments: { url: `${base()}/page-cadre-ws` } }], [{ name: 'wait', arguments: { timeMs: 2000 } }], [{ name: 'goto', arguments: { url: `${base()}/page-spec` } }]]);
+    await runOf(await insertApi(e6('/page-fetch', [OTHER])));
+    expect((await paths())['/page-cadre-ws']).toBeGreaterThanOrEqual(1);
+    expect((await paths())['/page-spec']).toBeGreaterThanOrEqual(1);
+    expect(await forbiddenHits()).toBe(0);
+    expect(await forbiddenHits(OTHER)).toBe(0);
+    // Témoin : le worker http du cadre (hors processus, auto-attaché par Stagehand aussi) a exécuté son code.
+    expect((await paths(OTHER))['/temoin-cadre-worker']).toBeGreaterThanOrEqual(1);
+  }, 180_000);
+
+  test('l’agent navigue vers /vers-injoignable (→ 302 vers un hôte dont robots.txt répond 503) : robots_unreachable, 0 requête de contenu', async () => {
+    agentScript([[{ name: 'goto', arguments: { url: `${base()}/vers-injoignable` } }]]);
+    const run = await runOf(await insertApi(e6('/page-fetch', [UNREACHABLE])));
+    expect(run).toMatchObject({ state: 'failed', failure_class: 'robots_unreachable', retryable: true, items: 0, dataset_id: null });
+    expect((await paths())['/vers-injoignable']).toBeGreaterThanOrEqual(1);
+    expect(Object.keys(await paths(UNREACHABLE)).filter((p) => p !== '/robots.txt')).toEqual([]);
+  }, 180_000);
+
+  // Stagehand pose sa propre auto-attache CDP (waitForDebuggerOnStart, puis runIfWaitingForDebugger) : SharedWorker et
+  // service worker restent coupés avec lui attaché comme en production.
+  test('SharedWorker du site et service worker enregistré par le prototype puis commandé par postMessage (outil goto) : 0 requête', async () => {
+    agentScript([[{ name: 'goto', arguments: { url: `${base()}/page-sw` } }], [{ name: 'goto', arguments: { url: `${base()}/page-sw-register` } }]]);
+    await runOf(await insertApi(e6('/page-fetch')));
+    expect((await paths())['/page-sw']).toBeGreaterThanOrEqual(1);
+    expect((await paths())['/page-sw-register']).toBeGreaterThanOrEqual(1);
+    expect(await forbiddenHits()).toBe(0);
+    expect((await paths())['/sw-register.js']).toBeUndefined();
+  }, 180_000);
+
+  test('E6 réussi puis compilé en E5 : la page finale demande /prive/ (fetch direct et redirigé) pendant l’agent et les deux rejeux de vérification : 0 requête', async () => {
+    agentScript([]);
+    const run = await runOf(await insertApi(e6('/page-fetch')));
+    expect(run).toMatchObject({ state: 'succeeded', items: 1 });
+    const compiled = (await pool.query<{ data: Record<string, unknown> }>("SELECT data FROM run_logs WHERE run_id = $1 AND event = 'strategy_compiled'", [run.id])).rows;
+    expect(compiled).toEqual([expect.objectContaining({ data: expect.objectContaining({ promoted: true }) })]);
+    // L'agent, puis les deux rejeux de vérification (contextes du pool) : chacun a chargé la page et lancé ses fetch.
+    expect((await paths())['/page-fetch']).toBe(3);
+    expect(await forbiddenHits()).toBe(0);
+  }, 180_000);
+});
+
+describe('assert_robots_respected — E5 à étape déléguée (Chromium dédié piloté par Stagehand, runHybridDelegated)', () => {
+  test('l’étape agent navigue vers /prive/x (outil goto) : 0 requête, robots_disallowed', async () => {
+    agentScript([[{ name: 'goto', arguments: { url: `${base()}/prive/x` } }]]);
+    await expectRobotsDisallowed(await runOf(await insertApi(e5Agent('/page-fetch'))));
+    expect((await paths())['/page-fetch']).toBe(1);
+  }, 180_000);
 });
 
 describe('assert_robots_respected — E5 sans LLM (contexte du pool, chemin des rejeux de compilation E6)', () => {
@@ -259,5 +368,12 @@ describe('assert_robots_respected — E5 sans LLM (contexte du pool, chemin des 
     const run = await runOf(await insertApi(e5('/page-fetch')));
     expect(await forbiddenHits()).toBe(0);
     expect(run).toMatchObject({ state: 'succeeded', items: 1 });
+  }, 120_000);
+
+  test('service worker enregistré par le prototype puis commandé par postMessage : 0 requête, script jamais chargé, la page est extraite', async () => {
+    const run = await runOf(await insertApi(e5('/page-sw-register')));
+    expect(run).toMatchObject({ state: 'succeeded', items: 1 });
+    expect(await forbiddenHits()).toBe(0);
+    expect((await paths())['/sw-register.js']).toBeUndefined();
   }, 120_000);
 });

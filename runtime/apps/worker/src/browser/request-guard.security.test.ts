@@ -9,10 +9,12 @@ import { chromium, type Browser } from 'playwright-core';
 import { afterAll, beforeAll, expect, test } from 'vitest';
 import { installPageGuard } from './page-guard.js';
 import { INV11_DISABLED_FEATURES, PLAYWRIGHT_DISABLED_FEATURES } from './launch.js';
-import { blockSharedWorkers, installRequestGuard, type BrowserRequestCheck } from './request-guard.js';
+import { blockBackgroundWorkers, installRequestGuard, type BrowserRequestCheck } from './request-guard.js';
 
 const A = 'aaa.zz-test';
 const B = 'bbb.zz-test';
+/** Hôte en contexte sécurisé (`*.localhost`, résolu vers la boucle locale par Chromium) : service workers possibles. */
+const S = 'sw.localhost';
 let server: Server;
 let port = 0;
 let browser: Browser;
@@ -35,7 +37,7 @@ beforeAll(async () => {
     const html = (body: string) => res.writeHead(200, { 'content-type': 'text/html' }).end(body);
     const redirect = (to: string) => res.writeHead(302, { location: to }).end();
     const js = (body: string) => res.writeHead(200, { 'content-type': 'text/javascript' }).end(body);
-    switch (req.url) {
+    switch ((req.url ?? '').split('?')[0]) {
       case '/':
         return html(`<iframe src="http://${B}:${port}/cadre"></iframe><script>new Worker('/w.js');</script>`);
       case '/cadre':
@@ -51,11 +53,22 @@ beforeAll(async () => {
       case '/go':
         return redirect('/prive/go');
       case '/sw-page':
-        return html(`<p id="sw">sw</p><script>try { new SharedWorker('/sw.js'); } catch (e) {}</script>`);
+        // Plusieurs SharedWorker distincts (URL différentes) : la course entre leur reprise et leur fermeture se joue à chacun.
+        return html(`<p id="sw">sw</p><script>for (let i = 0; i < 6; i++) { try { new SharedWorker('/sw.js?n=' + i); } catch (e) {} }</script>`);
       case '/sw.js':
         return res.writeHead(200, { 'content-type': 'text/javascript' }).end("fetch('/prive/direct-sw').catch(() => 0); fetch('/swr').catch(() => 0);");
       case '/swr':
         return redirect('/prive/sw-redirect');
+      case '/sw-reg-page':
+        // Service worker enregistré par le prototype (la surcharge de l'instance par Playwright ne le voit pas), puis
+        // commandé par postMessage : chaque message lui fait demander un chemin interdit.
+        return html(
+          `<p id="swreg">swreg</p><script>(async () => { try { const reg = await ServiceWorkerContainer.prototype.register.call(navigator.serviceWorker, '/sw2.js'); window.__sw = 'ok'; const w = reg.installing || reg.waiting || reg.active; const send = () => { try { (reg.active || w).postMessage(location.origin + '/prive/sw-message'); } catch (e) {} }; setTimeout(send, 300); setTimeout(send, 1200); } catch (e) { window.__sw = String(e && e.name); } })();</script>`,
+        );
+      case '/sw2.js':
+        return js(
+          "fetch('/prive/sw-top').catch(() => 0); fetch('/swr').catch(() => 0); self.addEventListener('install', () => self.skipWaiting()); self.addEventListener('message', (e) => { fetch(String(e.data)).catch(() => 0); });",
+        );
       case '/ws-workers':
         return html(
           `<iframe src="http://${B}:${port}/ws-cadre"></iframe>${localFrames()}<script>${workers('workerws')}; new WebSocket('ws://' + location.host + '/ouvert-ws');</script>`,
@@ -132,10 +145,10 @@ test('chaque saut contrôlé : cadre hors processus, worker dédié, navigation 
 
 // Revue de 1.11 : les requêtes d'un SharedWorker ne passent ni par `context.route` ni par l'interception CDP de la page
 // (cible `shared_worker` hors de l'attachement automatique de la page). Échec fermé : tout SharedWorker est fermé avant
-// d'exécuter son code (`blockSharedWorkers`, posé par `openRunContext` sur chaque contexte de run).
+// d'exécuter son code (`blockBackgroundWorkers`, posé par `openRunContext` sur chaque contexte de run).
 test('SharedWorker (script du site, puis blob créé depuis evaluate) : 0 requête sur /prive/, fetch direct ou redirigé', async () => {
   const context = await browser.newContext();
-  const block = await blockSharedWorkers(browser);
+  const block = await blockBackgroundWorkers(browser);
   try {
     await context.route('**/*', (route) => route.continue());
     const page = await context.newPage();
@@ -149,10 +162,13 @@ test('SharedWorker (script du site, puis blob créé depuis evaluate) : 0 requê
     await page.evaluate((origin) => {
       // Code exécuté dans la page (DOM) : le tsconfig du worker ne charge pas la lib DOM, d'où ce type local minimal.
       const { SharedWorker: PageSharedWorker } = globalThis as unknown as { SharedWorker: new (url: string) => unknown };
-      try {
-        new PageSharedWorker(URL.createObjectURL(new Blob([`fetch('${origin}/prive/blob').catch(() => 0); fetch('${origin}/swr?blob').catch(() => 0);`], { type: 'text/javascript' })));
-      } catch {
-        // SharedWorker refusé : rien ne part.
+      // Plusieurs blobs distincts : la course entre la reprise et la fermeture se joue à chacun.
+      for (let i = 0; i < 6; i++) {
+        try {
+          new PageSharedWorker(URL.createObjectURL(new Blob([`fetch('${origin}/prive/blob${i}').catch(() => 0); fetch('${origin}/swr?blob${i}').catch(() => 0);`], { type: 'text/javascript' })));
+        } catch {
+          // SharedWorker refusé : rien ne part.
+        }
       }
     }, `http://${A}:${port}`);
     // Témoin : une requête permise de la page arrive (le serveur répond), les SharedWorker n'ont rien envoyé.
@@ -163,6 +179,68 @@ test('SharedWorker (script du site, puis blob créé depuis evaluate) : 0 requê
   } finally {
     await context.close();
     await block.close();
+  }
+}, 120_000);
+
+// Revue de fix-inv11-agent : `serviceWorkers: 'block'` de Playwright ne remplace que `register` de l'INSTANCE
+// `navigator.serviceWorker` ; `ServiceWorkerContainer.prototype.register.call(...)` enregistrait le worker. Ses requêtes
+// (script compris) ne passaient ni par `context.route`, ni par le contrôle CDP de la page, et la page pouvait lui commander
+// des requêtes par postMessage. Échec fermé au niveau CDP du navigateur, sans la garde des documents (couche seule) : dans
+// un contexte comme ceux du pool (`block`) et comme le contexte par défaut du Chromium dédié (`allow`).
+for (const serviceWorkers of ['block', 'allow'] as const) {
+  test(`ServiceWorker enregistré par le prototype puis commandé par postMessage (contexte serviceWorkers: ${serviceWorkers}, couche CDP seule) : 0 requête sur /prive/`, async () => {
+    const context = await browser.newContext({ serviceWorkers });
+    const block = await blockBackgroundWorkers(browser);
+    try {
+      await context.route('**/*', (route) => route.continue());
+      const page = await context.newPage();
+      await installRequestGuard(context, page, (url) => [A, B, S].includes(new URL(url).hostname), async (request) => !new URL(request.url).pathname.startsWith('/prive/'));
+      await page.goto(`http://${S}:${port}/sw-reg-page`);
+      await page.waitForTimeout(2500);
+      // Témoin : une requête permise de la page arrive ; ni le service worker ni son script n'ont rien obtenu.
+      await page.evaluate(`fetch('/temoin-sw').then(() => 0)`);
+      expect(hits).toContain(`${S}/temoin-sw`);
+      expect(hits.filter((h) => h.startsWith(S) && (h.includes('/prive/') || h.includes('/swr')))).toEqual([]);
+    } finally {
+      await context.close();
+      await block.close();
+    }
+  }, 120_000);
+}
+
+test('garde des documents : ServiceWorkerContainer.prototype.register refusé et figé (prototype, instance, cadre about:blank) ; SharedWorker blob: et data: refusés', async () => {
+  const context = await browser.newContext({ serviceWorkers: 'block' });
+  try {
+    await installPageGuard(context);
+    const page = await context.newPage();
+    await page.goto(`http://${S}:${port}/x`);
+    const out = await page.evaluate(`(async () => {
+      const proto = ServiceWorkerContainer.prototype;
+      const d = Object.getOwnPropertyDescriptor(proto, 'register');
+      const r = [String(d.configurable), String(d.writable)];
+      try { Object.defineProperty(proto, 'register', { value: () => 0 }); r.push('redéfini'); } catch (e) { r.push('figé'); }
+      const frame = document.createElement('iframe');
+      document.body.append(frame);
+      const calls = [
+        () => proto.register.call(navigator.serviceWorker, '/sw2.js'),
+        () => navigator.serviceWorker.register('/sw2.js'),
+        () => frame.contentWindow.ServiceWorkerContainer.prototype.register.call(frame.contentWindow.navigator.serviceWorker, '/sw2.js'),
+      ];
+      for (const call of calls) {
+        try { await call(); r.push('enregistré'); } catch (e) { r.push(e.name); }
+      }
+      // SharedWorker blob: et data: : leurs WebSocket échapperaient à tout contrôle (CSP du document, aucune interception).
+      const code = "try { new WebSocket('ws://" + location.host + "/prive/sharedws'); } catch (e) {}";
+      for (const url of [URL.createObjectURL(new Blob([code], { type: 'text/javascript' })), 'data:text/javascript,' + encodeURIComponent(code)]) {
+        try { new SharedWorker(url); r.push('créé'); } catch (e) { r.push(e.name); }
+      }
+      return r.join(',');
+    })()`);
+    expect(out).toBe('false,false,figé,SecurityError,SecurityError,SecurityError,SecurityError,SecurityError');
+    await page.waitForTimeout(500);
+    expect(hits.filter((h) => h.startsWith(S) && (h.includes('/prive/') || h.includes('/sw2.js')))).toEqual([]);
+  } finally {
+    await context.close();
   }
 }, 120_000);
 

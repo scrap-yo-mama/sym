@@ -13,8 +13,12 @@
 // redirections ; chaque requête que Chromium s'apprête à envoyer, saut compris, passe par le contrôle CDP de
 // `request-guard.ts` (page du run et cadres hors processus) ; la poignée de main d'un WebSocket aussi. Les requêtes d'une
 // autre page du contexte (fenêtre surgissante, fermée aussitôt) sont coupées : elles échapperaient à ce contrôle.
-// SharedWorker (revue de 1.11) : ses requêtes échappent à `context.route` ET au contrôle CDP de la page ; chacun est fermé
-// avant d'exécuter son code (`blockSharedWorkers`, session CDP du navigateur), dans tous les modes, contrôle robots ou non.
+// SharedWorker et service workers (revues de 1.11 et de fix-inv11-agent, F-20261001-07) : leurs requêtes échappent à
+// `context.route` ET au contrôle CDP de la page, et `serviceWorkers: 'block'` ne couvre pas
+// `ServiceWorkerContainer.prototype.register`. Une interception CDP au niveau du NAVIGATEUR, posée avant le contexte, coupe
+// toute requête de leurs cibles (script principal d'un service worker compris : il n'est jamais enregistré) et les ferme
+// (`blockBackgroundWorkers`, request-guard.ts) ; la garde des documents fige `register` (prototype et instance) et refuse
+// les SharedWorker blob: et data:. Dans tous les modes, contrôle robots ou non.
 // Workers dédiés (revue de 1.11) : `routeWebSocket` ne voit pas leurs WebSocket ; le contrôle CDP pose sur le script de
 // tout worker http(s) une CSP sans WebSocket (request-guard.ts), et la garde des documents (`installPageGuard`,
 // page-guard.ts) refuse les workers blob: et data: ; WebSocketStream, que `routeWebSocket` ne voit pas non plus, est coupé
@@ -29,7 +33,7 @@
 import { browserUserAgent } from '@runtime/core/access';
 import type { APIRequest, APIRequestContext, Browser, BrowserContext, Page, Request } from 'playwright-core';
 import { installPageGuard } from './page-guard.js';
-import { blockSharedWorkers, installRequestGuard, type RequestCheck } from './request-guard.js';
+import { blockBackgroundWorkers, installRequestGuard, type RequestCheck } from './request-guard.js';
 
 export type { BrowserRequestCheck } from './request-guard.js';
 
@@ -52,16 +56,24 @@ export type RunContextOptions = {
   readonly checkRequest: RequestCheck;
   /**
    * User-Agent du robot (`buildUserAgent`, tâche 1.11) : ajouté APRÈS celui du navigateur, qui reste tel qu'il est
-   * (aucun masquage, X2, 17 §5).
+   * (aucun masquage, X2, 17 §5). Refusé avec `dedicated` : le User-Agent d'un Chromium dédié relève de son lancement.
    */
   readonly userAgent?: string;
   /**
    * Chromium DÉDIÉ d'un essai agentique (agent-browser.ts : lancé pour l'essai seul, derrière le proxy d'egress de l'essai,
    * piloté aussi par Stagehand) : son unique contexte (contexte par défaut) est celui du run et sa page initiale la page
-   * du run ; proxy, profil et service workers relèvent du lancement. Même garde qu'un contexte neuf (routes, WebSocket,
-   * SharedWorker, garde des documents, contrôle CDP de chaque requête). Une requête admise ici retombe sur les routes
-   * posées avant (`route.fallback` : verrou de domaines et écritures de l'agent, cadence). Le contexte n'est pas fermé
-   * ici : le navigateur l'est par son propriétaire, AVANT `close()` (qui ne détache alors que le blocage des SharedWorker).
+   * du run ; proxy et profil relèvent du lancement. Même garde qu'un contexte neuf (routes, WebSocket, SharedWorker et
+   * service workers coupés au niveau du navigateur, garde des documents, contrôle CDP de chaque requête). Une requête
+   * admise ici retombe sur les routes posées avant (`route.fallback` : verrou de domaines et écritures de l'agent,
+   * cadence). Le contexte n'est pas fermé
+   * ici : le navigateur l'est par son propriétaire, AVANT `close()` (qui ne détache alors que le blocage des workers
+   * d'arrière-plan).
+   * Coupures hors domaines (comptage, `agent_domain_blocked`) : la route de ce module, posée en dernier, est consultée la
+   * première et COUPE elle-même une requête initiale ou un WebSocket hors domaines (`violations`) ; une requête coupée
+   * en route n'atteint jamais une interception CDP au niveau du navigateur (consultée après les routes, constaté sur
+   * Chromium 153), ni le proxy d'egress. Le verrou de l'agent (`installDomainGuard`) ne compte donc que ce qui passe la
+   * route : les sauts de redirection hors domaines, vus par son interception CDP du navigateur. Chaque coupure est comptée
+   * par une seule couche : `violations` + `guard.blocked` (motif `domain`) + proxy d'egress, sans double compte.
    */
   readonly dedicated?: boolean;
 };
@@ -129,10 +141,13 @@ export async function openRunContext(browser: Browser, options: RunContextOption
     if (violations.length < 100) violations.push(host);
     options.onViolation?.(host, request);
   };
-  const userAgent = options.userAgent === undefined ? undefined : browserUserAgent(await ownUserAgent(browser), options.userAgent);
   const dedicated = options.dedicated === true;
-  // Posé avant le contexte : aucun SharedWorker de ce contexte ne peut naître avant lui (échec fermé s'il ne peut pas l'être).
-  const sharedWorkers = await blockSharedWorkers(browser);
+  // Chromium dédié : son User-Agent relève du lancement (aucun contexte n'est créé ici) ; un userAgent serait ignoré.
+  if (dedicated && options.userAgent !== undefined) throw new Error('contexte de run dédié : userAgent refusé (il relève du lancement du Chromium dédié)');
+  const userAgent = options.userAgent === undefined ? undefined : browserUserAgent(await ownUserAgent(browser), options.userAgent);
+  // Posé avant le contexte : aucun worker d'arrière-plan de ce contexte ne peut naître avant lui (échec fermé s'il ne peut
+  // pas l'être).
+  const backgroundWorkers = await blockBackgroundWorkers(browser);
   let context: BrowserContext;
   try {
     if (dedicated) {
@@ -151,13 +166,13 @@ export async function openRunContext(browser: Browser, options: RunContextOption
       });
     }
   } catch (error) {
-    await sharedWorkers.close();
+    await backgroundWorkers.close();
     throw error;
   }
-  // Contexte fermé d'abord : détachée avant, la session laisserait repartir un SharedWorker resté suspendu.
+  // Contexte fermé d'abord : détachée avant, la session lèverait l'interception des workers d'arrière-plan encore vivants.
   const closeAll = async () => {
     if (!dedicated) await context.close().catch(() => undefined);
-    await sharedWorkers.close();
+    await backgroundWorkers.close();
   };
   /** Page du run, connue une fois créée : toute requête d'une autre page du contexte est coupée. */
   let runPage: Page | undefined;

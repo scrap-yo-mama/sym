@@ -8,15 +8,21 @@
 // - en seconde couche, `installDomainGuard` (route Playwright, interception CDP des redirections, WebSocket, écritures
 //   refusées sans `allow_write_actions`) et l'enregistreur de cibles sémantiques (compilation E6 → E5) ;
 // - la cadence par domaine (1.9) et `max_requests_per_run` sur les documents du cadre principal ;
-// - robots.txt (1.11, INV11 ; correctif fix-inv11-agent) : EXACTEMENT la garde des contextes de run d'E1-E3
+// - robots.txt (1.11, INV11 ; correctif fix-inv11-agent) : le même code de garde que les contextes de run d'E1-E3
 //   (`openRunContext` en mode `dedicated`, `checkRequest` exigé) — contrôle CDP de chaque requête de la page du run, sauts
-//   de redirection, cadres hors processus et workers compris, poignée de main de chaque WebSocket, SharedWorker fermés,
-//   garde des documents (workers blob:/data:, règles de spéculation), autres pages fermées — et les fonctions coupées au
-//   lancement pour INV11 (prérendu, préchargement qui le précède, WebSocketStream). Stagehand pilote cette même page :
-//   aucune de ses requêtes n'échappe au contrôle. Échec fermé : si la garde ne peut pas être posée, le lancement échoue ;
-// - un script posé avant ceux de chaque page (`addInitScript`, même mécanisme que `serviceWorkers: 'block'` de Playwright,
-//   qui ne vaut que pour un contexte neuf) : service workers jamais enregistrés (leurs requêtes échappent en partie aux
-//   routes), et aucune saisie ne parvient à un champ d'un formulaire qui envoie HORS des domaines de l'API (formulaire
+//   de redirection, cadres hors processus et workers compris, poignée de main de chaque WebSocket, SharedWorker et service
+//   workers coupés au niveau CDP du navigateur, garde des documents (workers blob:/data:, règles de spéculation, `register`
+//   figé), autres pages fermées — et les fonctions coupées au lancement pour INV11 (prérendu, préchargement qui le précède,
+//   WebSocketStream). Stagehand pilote cette même page avec sa propre auto-attache CDP (`waitForDebuggerOnStart`, puis
+//   `runIfWaitingForDebugger`) : un cadre hors processus reste retenu tant que CHAQUE client qui l'a suspendu ne l'a pas
+//   relancé, la garde comprise (interception posée avant sa reprise) ; les workers d'arrière-plan, qu'un seul client relance,
+//   sont coupés par l'interception du navigateur, sans dépendre d'aucune suspension.
+//   Vérifié avec Stagehand attaché, par cas (agent-robots.security.test.ts) : navigation, redirection, fetch de la page,
+//   WebSocket, workers dédiés, cadre hors processus d'un autre site, règles de spéculation, robots.txt injoignable,
+//   SharedWorker, service worker enregistré par le prototype. Échec fermé : si la garde ne peut pas être posée, le
+//   lancement échoue ;
+// - un script posé avant ceux de chaque page (`addInitScript`) : `register` des service workers figé (prototype et
+//   instance), et aucune saisie ne parvient à un champ d'un formulaire qui envoie HORS des domaines de l'API (formulaire
 //   piège d'une injection de prompt : la page ne voit ni la frappe ni la valeur, 08 §4 mesures 2 et 4).
 // Le port CDP n'écoute que sur 127.0.0.1, chemin imprévisible, pour la seule durée de l'essai ; le processus est tué à
 // la fermeture. Un seul contexte : la couche CDP de la garde vaut pour tout le navigateur.
@@ -67,6 +73,22 @@ export type AgentBrowser = {
   close(): Promise<void>;
 };
 
+/**
+ * Étape de fermeture bornée (jamais rejetée) : une fois Chromium tué, un appel CDP parti avant que Playwright ne constate
+ * la coupure de la connexion ne reçoit jamais de réponse (Playwright ne rejette pas les appels en cours d'une session
+ * CDP enfant quand la connexion tombe) ; la fermeture ne doit jamais tenir le slot du pool indéfiniment.
+ */
+function settle(step: Promise<unknown>, ms = 5000): Promise<void> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, ms);
+    timer.unref();
+    void step.then(
+      () => (clearTimeout(timer), resolve()),
+      () => (clearTimeout(timer), resolve()),
+    );
+  });
+}
+
 async function waitForFile(path: string, timeoutMs: number, child: ChildProcess): Promise<string> {
   const end = Date.now() + timeoutMs;
   for (;;) {
@@ -90,8 +112,13 @@ function agentPageGuardScript(allowedHosts: readonly string[]): string {
   return `(() => {
   const allowed = new Set(${JSON.stringify(allowedHosts.map((h) => h.toLowerCase()))});
   try {
+    // Prototype ET instance : une surcharge de la seule instance se contourne par
+    // ServiceWorkerContainer.prototype.register.call(navigator.serviceWorker, …) (revue de fix-inv11-agent).
+    const blocked = () => Promise.reject(new DOMException('service workers bloqués (agent)', 'SecurityError'));
+    if (typeof ServiceWorkerContainer === 'function') {
+      Object.defineProperty(ServiceWorkerContainer.prototype, 'register', { value: blocked, configurable: false, writable: false });
+    }
     if (navigator.serviceWorker) {
-      const blocked = () => Promise.reject(new DOMException('service workers bloqués (agent)', 'SecurityError'));
       Object.defineProperty(navigator.serviceWorker, 'register', { value: blocked, configurable: false, writable: false });
     }
   } catch (e) {}
@@ -149,8 +176,13 @@ export async function launchAgentBrowser(options: AgentBrowserOptions): Promise<
   });
   let browser: Browser | undefined;
   let rc: RunContext | undefined;
+  /** Processus tué et attendu : plus rien ne part, aucune requête suspendue par une interception ne peut repartir. */
   const kill = async () => {
-    child.kill('SIGKILL');
+    if (child.exitCode === null && child.signalCode === null) {
+      const exited = new Promise<void>((resolve) => child.once('exit', () => resolve()));
+      child.kill('SIGKILL');
+      await Promise.race([exited, new Promise((resolve) => setTimeout(resolve, 5000))]);
+    }
     await rm(profile, { recursive: true, force: true }).catch(() => undefined);
   };
   try {
@@ -202,17 +234,20 @@ export async function launchAgentBrowser(options: AgentBrowserOptions): Promise<
       violations: () => run.violations.length,
       close: async () => {
         recorder.dispose();
-        await guard.dispose().catch(() => undefined);
-        await opened.close().catch(() => undefined);
+        // Processus tué AVANT tout détachement CDP : une requête encore suspendue par une interception (contrôle robots de
+        // la page, verrou de domaines, workers d'arrière-plan) repartirait dès que sa session se détache (`Fetch.disable`,
+        // fermeture de la connexion de Playwright) — constaté : saut de redirection vers /prive/ envoyé à la fermeture.
         await kill();
-        // Après l'arrêt du processus : détaché avant, le blocage laisserait repartir un SharedWorker resté suspendu.
-        await run.close();
+        // Connexion constatée fermée d'abord (`close` attend la déconnexion) : tout appel CDP qui suit échoue aussitôt.
+        await settle(opened.close());
+        await settle(guard.dispose());
+        await settle(run.close());
       },
     };
   } catch (error) {
-    await browser?.close().catch(() => undefined);
     await kill();
-    await rc?.close();
+    if (browser !== undefined) await settle(browser.close());
+    if (rc !== undefined) await settle(rc.close());
     throw error;
   }
 }

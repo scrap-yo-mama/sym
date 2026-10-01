@@ -117,6 +117,15 @@ describe('assert_all_browser_contexts_guarded — aucun contexte Chromium de run
     expect(browser.contexts).not.toHaveBeenCalled();
   });
 
+  test('Chromium dédié : un userAgent passé à openRunContext est refusé avant toute ouverture (il relève du lancement)', async () => {
+    const browser = { newContext: vi.fn(), newBrowserCDPSession: vi.fn(), contexts: vi.fn(() => []) };
+    const options: RunContextOptions = { egressServer: 'http://127.0.0.1:1', allowedHosts: ['zz_test.localhost'], checkRequest: async () => true, dedicated: true, userAgent: 'zz-robot/1.0' };
+    await expect(openRunContext(browser as unknown as Browser, options)).rejects.toThrow(/userAgent/);
+    expect(browser.newContext).not.toHaveBeenCalled();
+    expect(browser.newBrowserCDPSession).not.toHaveBeenCalled();
+    expect(browser.contexts).not.toHaveBeenCalled();
+  });
+
   test('le Chromium dédié coupe au lancement les fonctions de 1.11 (prérendu, préchargement, WebSocketStream)', () => {
     const args = agentChromiumArgs('http://127.0.0.1:1', '/tmp/zz_test_profile', {});
     const disabled = args.filter((a) => a.startsWith('--disable-features='));

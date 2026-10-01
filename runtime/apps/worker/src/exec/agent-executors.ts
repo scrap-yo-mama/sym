@@ -797,6 +797,8 @@ async function runAgentInSlot(options: AgentOptions, lease: SlotLease): Promise<
     }
     budget.report(run.costUsd);
     await watch.settled();
+    // Une coupure n'est comptée que par la couche qui la fait (sans double compte, voir `dedicated` dans run-context.ts) :
+    // route du contexte de run (requêtes initiales, WebSocket), interception du verrou (sauts de redirection), proxy d'egress.
     domainBlocked = ab.guard.blocked.filter((b) => b.reason === 'domain').length + ab.violations() + options.egress.domainBlockedCount();
     writesBlocked = ab.guard.blocked.filter((b) => b.reason === 'write').length;
   } finally {
