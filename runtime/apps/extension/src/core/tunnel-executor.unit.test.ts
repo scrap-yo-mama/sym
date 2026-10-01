@@ -36,7 +36,18 @@ type FakeOpts = {
   onInput?: (method: string, params: Record<string, unknown>, navigate: (url: string) => void) => void;
   /** Réponse de `http_fetch` / `page_fetch` : redirection non suivie (`redirect: 'manual'`). */
   fetchRedirect?: boolean;
+  /** Hôtes accordés en plus de SHOP (permission d'hôte : `chrome.scripting` y lit la page). */
+  grantedHosts?: string[];
+  /**
+   * `DOM.getNodeForLocation` (coordonnées du DOCUMENT, comme Chrome) : nœud touché, `null` = aucun nœud. `lastBox` :
+   * dernier nœud mesuré par `DOM.getBoxModel`. Défaut : `lastBox`, sinon 7.
+   */
+  hit?: (params: Record<string, unknown>, lastBox: number | null) => number | null;
+  /** Défilement de la page (`Page.getLayoutMetrics`, `cssVisualViewport.pageX/pageY`). */
+  scroll?: { x: number; y: number };
 };
+
+const roleOf = (n: AxNode): string => (typeof n.role?.value === 'string' ? n.role.value : '');
 
 /** Navigateur simulé : chaque appel est consigné ; aucun réseau. Comme Chrome, `scripting` échoue hors permission d'hôte. */
 function fakeBrowser(opts: FakeOpts = {}) {
@@ -47,6 +58,7 @@ function fakeBrowser(opts: FakeOpts = {}) {
   let nextTab = 1;
   let attached = new Set<number>();
   const events = new Map<number, (method: string, params: unknown) => void>();
+  let lastBox: number | null = null;
   const page = (url: string): Page =>
     url.startsWith(FOREIGN)
       ? { title: 'Choose an account', html: FOREIGN_HTML, status: 200, headers: { 'content-type': 'text/html' } }
@@ -54,7 +66,7 @@ function fakeBrowser(opts: FakeOpts = {}) {
   const granted = (url: string): boolean => {
     try {
       const host = new URL(url).hostname;
-      return host === SHOP || host.endsWith(`.${SHOP}`);
+      return host === SHOP || host.endsWith(`.${SHOP}`) || (opts.grantedHosts ?? []).includes(host);
     } catch {
       return false;
     }
@@ -131,11 +143,30 @@ function fakeBrowser(opts: FakeOpts = {}) {
         if (method === 'Accessibility.getFullAXTree') return { nodes: opts.ax?.() ?? [] };
         if (method === 'Accessibility.getPartialAXTree') {
           const id = (params as { backendNodeId: number }).backendNodeId;
-          return { nodes: (opts.ax?.() ?? []).filter((n) => n.backendDOMNodeId === id) };
+          const tree = opts.ax?.() ?? [];
+          if ((params as { fetchRelatives?: boolean }).fetchRelatives !== true) return { nodes: tree.filter((n) => n.backendDOMNodeId === id) };
+          // Comme Chrome : le nœud visé, puis ses ancêtres jusqu'à la racine (`RootWebArea`).
+          const target = tree.find((n) => n.backendDOMNodeId === id) ?? { nodeId: `n${id}`, role: { value: 'generic' }, name: { value: '' }, backendDOMNodeId: id };
+          const chain: AxNode[] = [target];
+          for (let cur = target, parent = tree.find((n) => n.childIds?.includes(cur.nodeId)); parent !== undefined; cur = parent, parent = tree.find((n) => n.childIds?.includes(cur.nodeId))) chain.push(parent);
+          const top = chain[chain.length - 1]!;
+          if (roleOf(top) !== 'RootWebArea') chain.push({ nodeId: 'root', role: { value: 'RootWebArea' }, name: { value: '' }, backendDOMNodeId: 1, childIds: [top.nodeId] });
+          return { nodes: chain };
         }
-        if (method === 'DOM.getBoxModel') return { model: { content: [0, 0, 10, 0, 10, 10, 0, 10] } };
-        if (method === 'DOM.getNodeForLocation') return { backendNodeId: 7 };
-        if (method === 'DOM.describeNode') return { node: opts.describe?.(params ?? {}) ?? { nodeName: 'BUTTON', attributes: ['type', 'submit'] } };
+        if (method === 'DOM.getBoxModel') {
+          lastBox = (params as { backendNodeId?: number }).backendNodeId ?? null;
+          return { model: { content: [0, 0, 10, 0, 10, 10, 0, 10] } };
+        }
+        if (method === 'Page.getLayoutMetrics') return { cssVisualViewport: { pageX: opts.scroll?.x ?? 0, pageY: opts.scroll?.y ?? 0, offsetX: 0, offsetY: 0 } };
+        if (method === 'DOM.getNodeForLocation') {
+          const id = opts.hit === undefined ? (lastBox ?? 7) : opts.hit(params ?? {}, lastBox);
+          if (id === null) throw new Error('No node found at given location');
+          return { backendNodeId: id };
+        }
+        if (method === 'DOM.describeNode') {
+          const id = (params as { backendNodeId?: number; nodeId?: number }).backendNodeId ?? (params as { nodeId?: number }).nodeId;
+          return { node: { backendNodeId: id, ...(opts.describe?.(params ?? {}) ?? (id === 7 ? { nodeName: 'BUTTON', attributes: ['type', 'submit'] } : { nodeName: 'DIV', attributes: [] })) } };
+        }
         return {};
       },
       onEvent: (tabId, handler) => {
@@ -447,6 +478,158 @@ describe('correctifs de vérification (2.7)', () => {
     const ex = executor(b.api);
     expect(err(await ex.run(frame('http_fetch', { url: `https://${SHOP}/go` })))).toBe('fetch_failed');
     expect(err(await ex.run(frame('page_fetch', { url: `https://${SHOP}/go` })))).toBe('fetch_failed');
+  });
+});
+
+describe('correctifs de vérification 2 (2.7)', () => {
+  const CF_WAIT: Page = {
+    title: 'Just a moment...',
+    html: '<html><head><title>Just a moment...</title><script src="https://challenges.cloudflare.com/turnstile/v0/api.js"></script></head><body>Checking your browser</body></html>',
+    status: 200,
+    headers: { 'content-type': 'text/html' },
+  };
+  const pageFetches = (calls: string[]) => calls.filter((c) => c.startsWith('pageFetch')).length;
+
+  test('assert_challenge_in_tunnel_stops (page_fetch) : onglet du run passé sur un défi, ou rechargé sur un défi → challenge_in_tunnel, pageFetch jamais appelé', async () => {
+    const b = fakeBrowser({ pages: { '/wait': CF_WAIT } });
+    const ex = executor(b.api);
+    expect((await ex.run(frame('page_fetch', { url: `https://${SHOP}/api/data` }))).ok).toBe(true);
+    b.tabs.get(1)!.url = `https://${SHOP}/wait`; // la page de l'onglet affiche maintenant un défi Cloudflare
+    const n = pageFetches(b.calls);
+    expect(err(await ex.run(frame('page_fetch', { url: `https://${SHOP}/api/data?page=2` })))).toBe('challenge_in_tunnel');
+    expect(pageFetches(b.calls)).toBe(n);
+    const m = b.calls.length;
+    expect(err(await ex.run(frame('page_fetch', { url: `https://${SHOP}/api/data?page=3` })))).toBe('challenge_in_tunnel');
+    expect(b.calls.length).toBe(m);
+
+    // Onglet déchargé, rechargé sur un défi : inspecté APRÈS le rechargement, avant toute requête.
+    const d = fakeBrowser({ pages: { '/wait': CF_WAIT } });
+    const ex2 = executor(d.api);
+    expect((await ex2.run(frame('page_fetch', { url: `https://${SHOP}/api/data` }))).ok).toBe(true);
+    Object.assign(d.tabs.get(1)!, { discarded: true, url: `https://${SHOP}/wait` });
+    const k = pageFetches(d.calls);
+    expect(err(await ex2.run(frame('page_fetch', { url: `https://${SHOP}/api/data?page=2` })))).toBe('challenge_in_tunnel');
+    expect(d.calls).toContain('tabs.reload');
+    expect(pageFetches(d.calls)).toBe(k);
+  });
+
+  test('assert_ssrf_guard (page_fetch) : onglet du run emmené sur un autre domaine, même connecté → domain_not_allowed, rien n’y tourne', async () => {
+    const OTHER = 'other.example';
+    const b = fakeBrowser({ grantedHosts: [OTHER] });
+    const ex = executor(b.api, [SHOP, OTHER]);
+    expect((await ex.run(frame('page_fetch', { url: `https://${SHOP}/api/data` }))).ok).toBe(true);
+    b.tabs.get(1)!.url = `https://${OTHER}/login`;
+    const n = pageFetches(b.calls);
+    expect(err(await ex.run(frame('page_fetch', { url: `https://${SHOP}/api/data?page=2` })))).toBe('domain_not_allowed');
+    expect(pageFetches(b.calls)).toBe(n);
+    expect(b.calls).toContain('tabs.remove');
+    // Onglet gelé emmené ailleurs : même refus après le dégel.
+    const f = fakeBrowser({ grantedHosts: [OTHER] });
+    const ex2 = executor(f.api, [SHOP, OTHER]);
+    expect((await ex2.run(frame('page_fetch', { url: `https://${SHOP}/api/data` }))).ok).toBe(true);
+    Object.assign(f.tabs.get(1)!, { frozen: true, url: `https://${OTHER}/login` });
+    expect(err(await ex2.run(frame('page_fetch', { url: `https://${SHOP}/api/data?page=2` })))).toBe('domain_not_allowed');
+    expect(pageFetches(f.calls)).toBe(1);
+  });
+
+  // Page défilée de 1733 px : <form><button>OK</button></form> (bouton sans type = envoi), un <span> dedans, un lien
+  // à côté, et une couche `pointer-events:none` posée par-dessus toute la fenêtre.
+  const SCROLL = 1733;
+  const formTree = (): AxNode[] => [
+    { nodeId: '1', role: { value: 'RootWebArea' }, name: { value: 'Shop' }, childIds: ['8', '20', '50'], backendDOMNodeId: 1 },
+    { nodeId: '8', role: { value: 'form' }, name: { value: '' }, childIds: ['9', '12'], backendDOMNodeId: 8 },
+    { nodeId: '9', role: { value: 'button' }, name: { value: 'OK' }, childIds: ['2'], backendDOMNodeId: 9 },
+    { nodeId: '2', role: { value: 'generic' }, name: { value: '' }, childIds: [], backendDOMNodeId: 2 },
+    { nodeId: '12', role: { value: 'button' }, name: { value: 'Suivant' }, childIds: [], backendDOMNodeId: 12 },
+    { nodeId: '20', role: { value: 'link' }, name: { value: 'Page 2' }, childIds: [], backendDOMNodeId: 20 },
+    { nodeId: '50', role: { value: 'generic' }, name: { value: '' }, ignored: true, childIds: [], backendDOMNodeId: 50 },
+  ];
+  const formDom = (p: Record<string, unknown>): { nodeName: string; attributes: string[] } => {
+    const id = p['backendNodeId'] ?? p['nodeId'];
+    if (id === 9) return { nodeName: 'BUTTON', attributes: [] };
+    if (id === 12) return { nodeName: 'BUTTON', attributes: ['type', 'submit', 'class', 'next'] };
+    if (id === 2) return { nodeName: 'SPAN', attributes: [] };
+    if (id === 8) return { nodeName: 'FORM', attributes: ['action', '/save'] };
+    if (id === 20) return { nodeName: 'A', attributes: ['href', '/list?page=2'] };
+    if (id === 50) return { nodeName: 'DIV', attributes: ['style', 'position:fixed;inset:0;pointer-events:none'] };
+    return { nodeName: '#document', attributes: [] };
+  };
+  const mouse = (x: number, y: number) => frame('page_script', { method: 'Input.dispatchMouseEvent', params: { type: 'mousePressed', x, y, button: 'left', clickCount: 1 } });
+
+  test('assert_write_action_blocked (page_script) : clic sur le <span> d’un bouton d’envoi, sous une couche pointer-events:none, page défilée → bloqué', async () => {
+    // Comme Chrome : getNodeForLocation lit des coordonnées du DOCUMENT ; ignorePointerEventsNone touche la couche.
+    const hit = (p: Record<string, unknown>) => {
+      if (p['ignorePointerEventsNone'] === true) return 50;
+      if (p['y'] !== 5 + SCROLL) return null;
+      return p['x'] === 5 ? 2 : p['x'] === 300 ? 20 : p['x'] === 600 ? 12 : null;
+    };
+    const b = fakeBrowser({ ax: formTree, describe: formDom, hit, scroll: { x: 0, y: SCROLL } });
+    const ex = executor(b.api);
+    expect((await ex.run(frame('page_script', { method: 'Page.navigate', params: { url: `https://${SHOP}/form` } }))).ok).toBe(true);
+    expect(err(await ex.run(mouse(5, 5)))).toBe('write_action_blocked'); // <span> dans <button>OK</button>
+    expect(err(await ex.run(mouse(600, 5)))).toBe('write_action_blocked'); // <button type=submit>Suivant</button>
+    expect(err(await ex.run(mouse(5, 400)))).toBe('write_action_blocked'); // aucun nœud lisible : fermé
+    expect(b.calls).not.toContain('cdp Input.dispatchMouseEvent');
+    // Le lien (lecture) : le clic part, aux coordonnées converties en coordonnées du document.
+    expect((await ex.run(mouse(300, 5))).ok).toBe(true);
+    expect(b.calls).toContain('cdp Input.dispatchMouseEvent');
+  });
+
+  test('assert_write_action_blocked (agent_step) : bouton d’envoi au libellé neutre (« OK », « Suivant »), ou recouvrant le lien visé → write_action_blocked', async () => {
+    let cover: number | null = null;
+    const b = fakeBrowser({ ax: formTree, describe: formDom, hit: (_p, lastBox) => cover ?? lastBox });
+    const ex = executor(b.api);
+    const first = await ex.run(frame('agent_step', { action: 'read' }));
+    expect(first.ok).toBe(true);
+    const sid = first.snapshot_id!;
+    const pressed = () => b.calls.filter((c) => c === 'cdp Input.dispatchMouseEvent').length;
+    for (const ref of ['e9', 'e12']) {
+      const r = await ex.run(frame('agent_step', { action: 'click', ref, snapshot_id: sid }));
+      expect(err(r), ref).toBe('write_action_blocked');
+    }
+    expect(pressed()).toBe(0);
+    // Le bouton d'envoi recouvre le lien au point du clic : bloqué.
+    cover = 9;
+    expect(err(await ex.run(frame('agent_step', { action: 'click', ref: 'e20', snapshot_id: sid })))).toBe('write_action_blocked');
+    expect(pressed()).toBe(0);
+    cover = null;
+    expect((await ex.run(frame('agent_step', { action: 'click', ref: 'e20', snapshot_id: sid }))).ok).toBe(true);
+    expect(pressed()).toBeGreaterThan(0);
+    // allow_write_actions confirmé : le clic d'envoi part.
+    const b2 = fakeBrowser({ ax: formTree, describe: formDom });
+    const ex2 = executor(b2.api);
+    const s2 = (await ex2.run(frame('agent_step', { action: 'read' }, { allow_write_actions: true }))).snapshot_id!;
+    expect((await ex2.run(frame('agent_step', { action: 'click', ref: 'e9', snapshot_id: s2 }, { allow_write_actions: true }))).ok).toBe(true);
+    expect(b2.calls).toContain('cdp Input.dispatchMouseEvent');
+  });
+
+  test('assert_write_action_blocked (agent_step) : allow_write_actions retiré en cours de run → le garde s’applique aussitôt', async () => {
+    const b = fakeBrowser({ ax: formTree, describe: formDom });
+    const ex = executor(b.api);
+    const s1 = (await ex.run(frame('agent_step', { action: 'read' }, { allow_write_actions: true }))).snapshot_id!;
+    const r = await ex.run(frame('agent_step', { action: 'click', ref: 'e9', snapshot_id: s1 }));
+    expect(r.ok).toBe(false);
+    expect(b.calls).not.toContain('cdp Input.dispatchMouseEvent');
+  });
+
+  test('assert_write_action_blocked (page_script) : <label for> (contrôle non résolu) et <label> qui enveloppe un bouton d’envoi → bloqués', async () => {
+    const tree = (): AxNode[] => [
+      { nodeId: '1', role: { value: 'RootWebArea' }, name: { value: 'Shop' }, childIds: ['30', '31'], backendDOMNodeId: 1 },
+      { nodeId: '30', role: { value: 'LabelText' }, name: { value: 'Valider la commande' }, childIds: [], backendDOMNodeId: 30 },
+      { nodeId: '31', role: { value: 'LabelText' }, name: { value: 'Go' }, childIds: [], backendDOMNodeId: 31 },
+    ];
+    const dom = (p: Record<string, unknown>) => {
+      const id = p['backendNodeId'];
+      if (id === 30) return { nodeName: 'LABEL', attributes: ['for', 'pay'] };
+      if (id === 31) return p['depth'] === -1 ? { nodeName: 'LABEL', attributes: [], children: [{ nodeName: 'BUTTON', attributes: ['type', 'submit'] }] } : { nodeName: 'LABEL', attributes: [] };
+      return { nodeName: '#document', attributes: [] };
+    };
+    const b = fakeBrowser({ ax: tree, describe: dom as FakeOpts['describe'], hit: (p) => (p['x'] === 1 ? 30 : 31) });
+    const ex = executor(b.api);
+    expect((await ex.run(frame('page_script', { method: 'Page.navigate', params: { url: `https://${SHOP}/form` } }))).ok).toBe(true);
+    expect(err(await ex.run(mouse(1, 1)))).toBe('write_action_blocked');
+    expect(err(await ex.run(mouse(2, 2)))).toBe('write_action_blocked');
+    expect(b.calls).not.toContain('cdp Input.dispatchMouseEvent');
   });
 });
 

@@ -2,7 +2,7 @@
 // Suivi des instantanés et exécuteur `agent_step` (07 §3, tâche 0.6b), sans navigateur : un faux navigateur à références
 // renumérotées à chaque changement montre qu'un `ref` périmé ne vise jamais un autre élément.
 import { describe, expect, it } from 'vitest';
-import { AgentStepExecutor, StepSnapshotTracker, hasRef, semanticOf, truncateTree, type AgentStepAction, type AgentStepDriver, type AgentStepResult, type StepExpectedTarget, type StepObservation } from '../index.js';
+import { AgentStepExecutor, StepSnapshotTracker, agentStepResultToWire, hasRef, semanticOf, truncateTree, type AgentStepAction, type AgentStepDriver, type AgentStepResult, type StepExpectedTarget, type StepObservation } from '../index.js';
 
 /** Page factice : une liste d'éléments ; `ref` = rang courant (e1, e2…), donc renumérotés quand la liste change. */
 class FakePage implements AgentStepDriver {
@@ -311,6 +311,22 @@ describe('garde d\'écriture : fermé par défaut', () => {
     const snap2 = ok(await open.executeAction({ kind: 'read' }));
     ok(await open.executeAction({ kind: 'click', target: { snapshotId: snap2.snapshotId, ref: 'e1' } }));
     expect(blind.performed).toEqual(['scroll', 'click:e1']);
+  });
+
+  it('pilote qui reconnaît lui-même une écriture au moment d’agir (bouton d’envoi au libellé neutre) : write_action_not_allowed, instantané rendu, write_action_blocked sur le fil', async () => {
+    class GuardedPage extends BlindPage {
+      override async perform(action: AgentStepAction): ReturnType<AgentStepDriver['perform']> {
+        if (action.kind === 'click') return { ok: false, error: 'write_action_not_allowed' };
+        return super.perform(action);
+      }
+    }
+    const page = new GuardedPage();
+    const ex = new AgentStepExecutor({ driver: page, urlAllowed: () => true, allowWriteActions: false });
+    const snap = ok(await ex.executeAction({ kind: 'read' }));
+    const r = await ex.executeAction({ kind: 'click', target: { snapshotId: snap.snapshotId, ref: 'e1' } });
+    expect(r).toMatchObject({ ok: false, error: 'write_action_not_allowed', snapshot: { snapshotId: snap.snapshotId } });
+    expect(agentStepResultToWire(r)).toMatchObject({ ok: false, error: 'write_action_blocked' });
+    expect(page.performed).toEqual([]);
   });
 });
 

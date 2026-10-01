@@ -3,10 +3,13 @@
 // `Accessibility.getFullAXTree` (arbre rendu au format des instantanés, `[ref=e<backendNodeId>]`), actions par
 // `Input.*` et `DOM.*` de la liste blanche. Avant d'agir, la cible est revérifiée (rôle et nom) : une page qui a changé
 // donne `stale_ref`, jamais une action sur un autre élément. Aucune évaluation de code (`Runtime.*` absent).
-import { detectChallenge, isWriteTarget, type AgentStepAction, type AgentStepDriver, type StepExpectedTarget, type StepObservation } from '@runtime/core/tunnel';
+// Garde d'écriture (07 § 5) tenue ici aussi, pas seulement par le classement rôle + nom : avant un clic, l'élément visé
+// ET l'élément réellement touché au point du clic sont remontés jusqu'à la racine ; un bouton d'envoi parmi eux, quel
+// que soit son libellé, est une écriture (`write_action_not_allowed`, `write_action_blocked` sur le fil).
+import { detectChallenge, isWriteElement, isWriteTarget, type AgentStepAction, type AgentStepDriver, type StepExpectedTarget, type StepObservation } from '@runtime/core/tunnel';
 
 type AxValue = { value?: unknown };
-export type AxNode = { nodeId: string; ignored?: boolean; role?: AxValue; name?: AxValue; childIds?: string[]; backendDOMNodeId?: number };
+export type AxNode = { nodeId: string; ignored?: boolean; role?: AxValue; name?: AxValue; childIds?: string[]; parentId?: string; backendDOMNodeId?: number };
 
 /** Rôles de mise en forme sans intérêt pour le modèle : leurs enfants remontent d'un niveau. */
 const TRANSPARENT = new Set(['generic', 'none', 'GenericContainer', 'InlineTextBox', 'LineBreak', 'presentation', 'Ignored', 'IgnoredRole']);
@@ -48,12 +51,114 @@ export function renderAxTree(nodes: readonly AxNode[]): string {
   return lines.join('\n');
 }
 
+/** Envoi CDP (liste blanche appliquée par l'appelant). */
+export type CdpSend = (method: string, params?: Record<string, unknown>) => Promise<unknown>;
+
+type DomNode = { nodeName?: string; attributes?: string[]; backendNodeId?: number; children?: DomNode[] };
+
+/** Plus d'ancêtres que cela : page anormale, traitée comme une écriture (fermé). */
+const MAX_ANCESTORS = 256;
+
+const describe = async (send: CdpSend, params: Record<string, unknown>): Promise<DomNode | null> => {
+  const out = (await send('DOM.describeNode', params).catch(() => null)) as { node?: DomNode } | null;
+  return out?.node ?? null;
+};
+
+const attr = (node: DomNode, name: string): string | undefined => {
+  const attrs = node.attributes ?? [];
+  for (let i = 0; i + 1 < attrs.length; i += 2) if (attrs[i]?.toLowerCase() === name) return attrs[i + 1];
+  return undefined;
+};
+
+const someDescendant = (node: DomNode, pred: (n: DomNode) => boolean, budget = { left: 10_000 }): boolean =>
+  (node.children ?? []).some((c) => (budget.left -= 1) > 0 && (pred(c) || someDescendant(c, pred, budget)));
+
+/**
+ * L'activation de cet élément DOM envoie-t-elle un formulaire ? Bouton d'envoi (`isWriteElement`) ; `<label for>` :
+ * son contrôle ne se résout qu'avec `DOM.getDocument`, qui invaliderait les `nodeId` du script, donc écriture
+ * (fermé) ; `<label>` qui enveloppe un bouton d'envoi : écriture.
+ */
+async function elementIsWrite(send: CdpSend, node: DomNode): Promise<boolean> {
+  if (isWriteElement(node)) return true;
+  if ((node.nodeName ?? '').toUpperCase() !== 'LABEL') return false;
+  if ((attr(node, 'for') ?? '') !== '') return true;
+  if (typeof node.backendNodeId !== 'number') return true;
+  const deep = await describe(send, { backendNodeId: node.backendNodeId, depth: -1 });
+  return deep === null || someDescendant(deep, isWriteElement);
+}
+
+/** Chaîne nœud → racine dans un arbre d'accessibilité partiel ; `null` si elle n'atteint pas `RootWebArea` (fermé). */
+function ancestorChain(nodes: readonly AxNode[], backendNodeId: number): AxNode[] | null {
+  const byId = new Map(nodes.map((n) => [n.nodeId, n]));
+  const parentOf = new Map<string, string>();
+  for (const n of nodes) for (const c of n.childIds ?? []) if (!parentOf.has(c)) parentOf.set(c, n.nodeId);
+  let cur = nodes.find((n) => n.backendDOMNodeId === backendNodeId);
+  const chain: AxNode[] = [];
+  const seen = new Set<string>();
+  while (cur !== undefined) {
+    if (seen.has(cur.nodeId) || chain.length > MAX_ANCESTORS) return null;
+    seen.add(cur.nodeId);
+    chain.push(cur);
+    const parentId = typeof cur.parentId === 'string' ? cur.parentId : parentOf.get(cur.nodeId);
+    if (parentId === undefined) break;
+    cur = byId.get(parentId);
+    if (cur === undefined) return null; // parent annoncé mais absent : chaîne incomplète
+  }
+  const top = chain[chain.length - 1];
+  return top !== undefined && str(top.role) === 'RootWebArea' ? chain : null;
+}
+
+/**
+ * Activer ce nœud (clic, focus puis touche) est-il une écriture (07 § 5) ? Le nœud ET tous ses ancêtres jusqu'à la
+ * racine : un `<span>` ou une icône dans un bouton d'envoi l'active. Pour chacun, bouton d'envoi (DOM, quel que soit le
+ * libellé) ou élément accessible au libellé d'écriture. Fermé : nœud, arbre ou ancêtre illisible = écriture.
+ */
+export async function activationIsWrite(send: CdpSend, ref: { backendNodeId: number } | { nodeId: number }): Promise<boolean> {
+  const node = await describe(send, { ...ref, depth: 0 });
+  if (node === null) return true;
+  const backendNodeId = typeof node.backendNodeId === 'number' ? node.backendNodeId : 'backendNodeId' in ref ? ref.backendNodeId : null;
+  if (backendNodeId === null || (await elementIsWrite(send, node))) return true;
+  const tree = (await send('Accessibility.getPartialAXTree', { backendNodeId, fetchRelatives: true }).catch(() => null)) as { nodes?: unknown } | null;
+  if (!Array.isArray(tree?.nodes)) return true;
+  const chain = ancestorChain(tree.nodes as AxNode[], backendNodeId);
+  if (chain === null) return true;
+  const seen = new Set<number>([backendNodeId]);
+  for (const ax of chain) {
+    if (isWriteTarget({ role: str(ax.role), name: str(ax.name) })) return true;
+    const id = ax.backendDOMNodeId;
+    if (typeof id !== 'number' || seen.has(id)) continue;
+    seen.add(id);
+    const ancestor = await describe(send, { backendNodeId: id, depth: 0 });
+    if (ancestor === null || (await elementIsWrite(send, { ...ancestor, backendNodeId: id }))) return true;
+  }
+  return false;
+}
+
+/**
+ * Un clic aux coordonnées (x, y) de la FENÊTRE (`Input.dispatchMouseEvent`) active-t-il une écriture ? Le nœud
+ * réellement touché : `DOM.getNodeForLocation` attend des coordonnées du DOCUMENT (vérifié dans Chromium : page
+ * défilée, la même valeur ne touche rien), d'où le défilement lu par `Page.getLayoutMetrics` ; `pointer-events: none`
+ * respecté comme par le clic réel (jamais `ignorePointerEventsNone`, qui inspecterait une couche que le clic traverse).
+ * Fermé : défilement illisible ou aucun nœud = écriture.
+ */
+export async function clickIsWrite(send: CdpSend, x: number, y: number): Promise<boolean> {
+  const metrics = (await send('Page.getLayoutMetrics', {}).catch(() => null)) as { cssVisualViewport?: { pageX?: unknown; pageY?: unknown } } | null;
+  const pageX = metrics?.cssVisualViewport?.pageX;
+  const pageY = metrics?.cssVisualViewport?.pageY;
+  if (typeof pageX !== 'number' || typeof pageY !== 'number' || !Number.isFinite(pageX) || !Number.isFinite(pageY)) return true;
+  const hit = (await send('DOM.getNodeForLocation', { x: Math.round(x + pageX), y: Math.round(y + pageY) }).catch(() => null)) as { backendNodeId?: unknown } | null;
+  if (typeof hit?.backendNodeId !== 'number') return true;
+  return activationIsWrite(send, { backendNodeId: hit.backendNodeId });
+}
+
 export type CdpPort = {
   send(method: string, params?: Record<string, unknown>): Promise<unknown>;
   /** URL courante de l'onglet. */
   url(): Promise<string>;
   /** Attend la fin d'un chargement éventuel (navigation, clic qui navigue). */
   settle(): Promise<void>;
+  /** `allow_write_actions` de la commande en cours (lu à chaque action). */
+  allowWriteActions(): boolean;
 };
 
 const backendOf = (ref: string): number | null => {
@@ -87,7 +192,7 @@ export class CdpStepDriver implements AgentStepDriver {
     }
   }
 
-  async perform(action: AgentStepAction, expected?: StepExpectedTarget): Promise<{ ok: true } | { ok: false; error: 'stale_ref' | 'timeout' | 'domain_not_allowed' }> {
+  async perform(action: AgentStepAction, expected?: StepExpectedTarget): Promise<{ ok: true } | { ok: false; error: 'stale_ref' | 'timeout' | 'domain_not_allowed' | 'write_action_not_allowed' }> {
     switch (action.kind) {
       case 'navigate':
         await this.#port.send('Page.navigate', { url: action.url });
@@ -108,12 +213,18 @@ export class CdpStepDriver implements AgentStepDriver {
             await this.#port.send('Input.insertText', { text: action.text });
             return { ok: true };
           }
+          const send: CdpSend = (method, params) => this.#port.send(method, params);
+          const guarded = !this.#port.allowWriteActions();
+          // L'élément visé, remonté jusqu'à la racine : un bouton d'envoi au libellé neutre (« OK », « Suivant »).
+          if (guarded && (await activationIsWrite(send, { backendNodeId }))) return { ok: false, error: 'write_action_not_allowed' };
           await this.#port.send('DOM.scrollIntoViewIfNeeded', { backendNodeId });
           const box = (await this.#port.send('DOM.getBoxModel', { backendNodeId })) as { model?: { content?: number[] } } | null;
           const q = box?.model?.content;
           if (q === undefined || q.length < 8) return { ok: false, error: 'stale_ref' };
           const x = (q[0]! + q[2]! + q[4]! + q[6]!) / 4;
           const y = (q[1]! + q[3]! + q[5]! + q[7]!) / 4;
+          // Ce que le clic touchera vraiment à ce point (un bouton d'envoi peut recouvrir l'élément visé).
+          if (guarded && (await clickIsWrite(send, x, y))) return { ok: false, error: 'write_action_not_allowed' };
           await this.#port.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y });
           await this.#port.send('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', clickCount: 1 });
           await this.#port.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button: 'left', clickCount: 1 });
@@ -126,6 +237,7 @@ export class CdpStepDriver implements AgentStepDriver {
     }
   }
 
+  /** Premier filtre, sur le rôle et le nom de l'instantané ; `perform` inspecte ensuite le DOM avant tout clic. */
   classify(action: AgentStepAction, target: StepExpectedTarget): 'read' | 'write' {
     if (action.kind === 'type') return 'read';
     return isWriteTarget(target) ? 'write' : 'read';

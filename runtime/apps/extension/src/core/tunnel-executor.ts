@@ -6,9 +6,11 @@
 // - liste blanche CDP (`page_script`), paramètres permis seulement, aucune chaîne de code (`method_not_allowed`) ;
 // - garde d'écriture : clic d'envoi, focus d'un bouton d'envoi, touche Entrée ou Espace (quelle que soit sa forme),
 //   verbe HTTP d'écriture (PUT, PATCH, DELETE) refusés sans `allow_write_actions` ;
-// - onglet du débogueur : AVANT chaque commande `page_script` / `agent_step`, son URL courante (`tabs.get`, lisible sans
-//   permission d'hôte) doit rester dans le domaine connecté et hors adresses privées, et la page est inspectée (défi) ;
+// - onglet du run : AVANT chaque commande `page_fetch` / `page_script` / `agent_step`, son URL courante (`tabs.get`,
+//   lisible sans permission d'hôte) doit rester dans le domaine connecté et hors adresses privées, et la page est
+//   inspectée (défi) ;
 //   APRÈS une commande qui peut naviguer (`Page.navigate`, `Page.reload`, `Input.*`, action `agent_step`), même contrôle.
+//   Pour `page_fetch`, ce contrôle suit le rechargement d'un onglet déchargé ou le dégel d'un onglet gelé.
 //   Onglet passé sur un autre site (redirection serveur, JavaScript, redirection ouverte) : `domain_not_allowed`,
 //   débogueur détaché, onglet fermé, rien n'est rendu. Inspection impossible = refus (fermé), jamais « pas de défi » ;
 // - `fetch` sans redirection suivie (`redirect: 'manual'`) : une redirection est un échec (`fetch_failed`).
@@ -25,8 +27,6 @@ import {
   detectChallenge,
   detectResponseChallenge,
   isActivationKey,
-  isWriteElement,
-  isWriteTarget,
   parseFetchArgs,
   type CommandFrame,
   type FetchArgs,
@@ -36,7 +36,7 @@ import {
   type TunnelResult,
 } from '@runtime/core/tunnel';
 import type { BrowserApi, PageInspection } from './browser-api.ts';
-import { CdpStepDriver, renderAxTree, type AxNode } from './cdp-driver.ts';
+import { activationIsWrite, CdpStepDriver, clickIsWrite, renderAxTree, type AxNode, type CdpSend } from './cdp-driver.ts';
 import { checkHost, originPatterns } from './host-guard.ts';
 
 /** Inactivité au-delà de laquelle la session d'un run est close (débogueur détaché, onglet fermé). */
@@ -60,6 +60,8 @@ type RunSession = {
   tabId: number | null;
   attached: boolean;
   agent: AgentStepExecutor | null;
+  /** `allow_write_actions` avec lequel `agent` a été créé : un changement recrée l'exécuteur de pas. */
+  agentAllowWrite: boolean;
   allowWriteActions: boolean;
   idle: unknown;
   unsubscribe: (() => void) | null;
@@ -163,7 +165,7 @@ export class TunnelExecutor {
   #session(frame: CommandFrame, domain: string): RunSession {
     let session = this.#runs.get(frame.run_id);
     if (session === undefined || session.domain !== domain) {
-      session = { runId: frame.run_id, domain, tabId: null, attached: false, agent: null, allowWriteActions: frame.allow_write_actions, idle: null, unsubscribe: null, lastDocument: null, mainFrameId: null };
+      session = { runId: frame.run_id, domain, tabId: null, attached: false, agent: null, agentAllowWrite: false, allowWriteActions: frame.allow_write_actions, idle: null, unsubscribe: null, lastDocument: null, mainFrameId: null };
       this.#runs.set(frame.run_id, session);
     }
     session.allowWriteActions = frame.allow_write_actions;
@@ -253,7 +255,8 @@ export class TunnelExecutor {
 
   /**
    * Onglet d'automatisation du run, ouvert sur `origin` (`null` : page vide, la commande navigue ensuite), réveillé
-   * avant chaque commande (07 § 4).
+   * avant chaque commande (07 § 4). Ne contrôle PAS l'onglet : chaque commande appelle `#checkTab` ensuite (après le
+   * rechargement ou le dégel, et après l'attache du débogueur, qui permet le repli sur l'arbre d'accessibilité).
    */
   async #tab(session: RunSession, origin: string | null): Promise<number> {
     const { tabs } = this.#deps.browser;
@@ -279,8 +282,6 @@ export class TunnelExecutor {
     await tabs.keep(tab.id);
     await tabs.group(tab.id).catch(() => undefined);
     if (!(await tabs.waitComplete(tab.id, NAVIGATION_TIMEOUT_MS))) throw new CommandRefused('timeout');
-    // Page d'accueil du site : redirigée ailleurs, ou un défi, arrête tout avant la première requête de données.
-    if (origin !== null) await this.#checkTab(session, tab.id);
     return tab.id;
   }
 
@@ -336,6 +337,9 @@ export class TunnelExecutor {
   async #pageFetch(session: RunSession, args: FetchArgs): Promise<FetchResponse> {
     const url = new URL(args.url);
     const tabId = await this.#tab(session, url.origin);
+    // Avant chaque requête, onglet neuf, réveillé ou rechargé compris : dans le domaine connecté (la fonction tourne dans
+    // l'origine de la page), hors adresses privées, et sans défi (aucune commande sur un onglet de défi, 07 § 5).
+    await this.#checkTab(session, tabId);
     this.browserCalls += 1;
     const out = await this.#deps.browser.scripting.pageFetch(tabId, { url: args.url, method: args.method, headers: args.headers, body: args.body, maxBytes: args.max_bytes, maxMeta: MAX_META });
     if (out.kind === 'too_large') throw new CommandRefused('response_too_large');
@@ -382,25 +386,9 @@ export class TunnelExecutor {
     return tabId;
   }
 
-  /** Garde d'écriture d'un clic (07 § 5) : élément visé, ses ancêtres accessibles, bouton `type=submit`. */
-  async #clickIsWrite(tabId: number, x: number, y: number): Promise<boolean> {
-    const hit = (await this.#deps.browser.debugger.send(tabId, 'DOM.getNodeForLocation', { x, y, ignorePointerEventsNone: true }).catch(() => null)) as { backendNodeId?: number } | null;
-    if (typeof hit?.backendNodeId !== 'number') return false;
-    return this.#nodeIsWrite(tabId, { backendNodeId: hit.backendNodeId });
-  }
-
-  /**
-   * L'activation de ce nœud est-elle une écriture ? Bouton d'envoi (`isWriteElement` : sans type ou `type=submit`, dans un
-   * formulaire, il l'envoie) ou élément accessible au libellé d'écriture (lui ou ses ancêtres). Nœud illisible : écriture
-   * (fermé).
-   */
-  async #nodeIsWrite(tabId: number, ref: { backendNodeId: number } | { nodeId: number }): Promise<boolean> {
-    const send = this.#deps.browser.debugger.send;
-    const described = (await send(tabId, 'DOM.describeNode', { ...ref, depth: 0 }).catch(() => null)) as { node?: { nodeName?: string; attributes?: string[]; backendNodeId?: number } } | null;
-    if (described?.node === undefined) return true;
-    if (isWriteElement(described.node)) return true;
-    const tree = (await send(tabId, 'Accessibility.getPartialAXTree', { ...ref, fetchRelatives: true }).catch(() => null)) as { nodes?: AxNode[] } | null;
-    return (tree?.nodes ?? []).some((n) => typeof n.role?.value === 'string' && typeof n.name?.value === 'string' && isWriteTarget({ role: n.role.value, name: n.name.value }));
+  /** Envoi CDP sur l'onglet (liste blanche appliquée par `BrowserApi.debugger.send`). */
+  #send(tabId: number): CdpSend {
+    return (method, params) => this.#deps.browser.debugger.send(tabId, method, params);
   }
 
   /** Garde d'écriture de `page_script` (07 § 5, 08 § 4), fermée par défaut, appliquée par l'extension elle-même. */
@@ -410,10 +398,11 @@ export class TunnelExecutor {
     if (method === 'Input.dispatchKeyEvent' && isActivationKey(p)) throw new CommandRefused('write_action_blocked');
     if (method === 'DOM.focus') {
       const ref = typeof p['backendNodeId'] === 'number' ? { backendNodeId: p['backendNodeId'] } : typeof p['nodeId'] === 'number' ? { nodeId: p['nodeId'] } : null;
-      if (ref === null || (await this.#nodeIsWrite(tabId, ref))) throw new CommandRefused('write_action_blocked');
+      if (ref === null || (await activationIsWrite(this.#send(tabId), ref))) throw new CommandRefused('write_action_blocked');
     }
+    // Clic : le nœud réellement touché au point du clic ET ses ancêtres (un `<span>` dans un bouton d'envoi l'active).
     if (method === 'Input.dispatchMouseEvent' && p['type'] === 'mousePressed') {
-      if (typeof p['x'] !== 'number' || typeof p['y'] !== 'number' || (await this.#clickIsWrite(tabId, p['x'], p['y']))) throw new CommandRefused('write_action_blocked');
+      if (typeof p['x'] !== 'number' || typeof p['y'] !== 'number' || (await clickIsWrite(this.#send(tabId), p['x'], p['y']))) throw new CommandRefused('write_action_blocked');
     }
   }
 
@@ -458,7 +447,10 @@ export class TunnelExecutor {
     const tabId = await this.#attached(session, null);
     // Avant chaque pas : onglet dans le domaine, page sans défi (l'exécuteur de pas observe ensuite l'arbre).
     await this.#checkTab(session, tabId);
+    // `allow_write_actions` changé en cours de run : nouvel exécuteur (ses instantanés repartent, fermé par défaut).
+    if (session.agent !== null && session.agentAllowWrite !== session.allowWriteActions) session.agent = null;
     if (session.agent === null) {
+      session.agentAllowWrite = session.allowWriteActions;
       const driver = new CdpStepDriver({
         send: (method, params) => {
           this.browserCalls += 1;
@@ -466,6 +458,8 @@ export class TunnelExecutor {
         },
         url: async () => (await this.#deps.browser.tabs.get(tabId))?.url ?? '',
         settle: async () => void (await this.#deps.browser.tabs.waitComplete(tabId, SETTLE_TIMEOUT_MS)),
+        // Garde d'écriture du pilote : lue à chaque action, jamais figée à la création.
+        allowWriteActions: () => session.allowWriteActions,
       });
       session.agent = new AgentStepExecutor({
         driver,
