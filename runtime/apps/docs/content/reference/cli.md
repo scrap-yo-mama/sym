@@ -18,6 +18,8 @@ La CLI est livrée dans l'image. Dans un conteneur : `node /app/apps/cli/dist/in
 | `runtime doctor [--json]` | contrôles locaux ; code de sortie 0 (tout va bien), 1 (avertissement), 2 (erreur) |
 | `runtime diagnostics [--out FICHIER]` | fichier masqué produit en local, jamais envoyé |
 | `runtime export-catalog [--out FICHIER]` | API, schémas, stratégies et planifications en JSON, sans secret ni cookie |
+| `runtime user:reset-link <email>` | lien de réinitialisation du mot de passe d'un compte, sans SMTP et sans 2FA ; audité, affiché une seule fois et signalé au titulaire à sa connexion suivante |
+| `runtime owner:reset-link` | idem pour le compte owner |
 | `runtime backup declare [--at DATE_ISO]` | note qu'une sauvegarde `pg_dump` vient d'être faite (rappel de `doctor`) |
 | `runtime restore-prepare` | avant `pg_restore` sur une base vide : recrée le rôle `runtime_app` que le dump n'emporte pas |
 | `runtime secrets accept-key-loss --confirm` | `MASTER_KEY` perdue : les secrets sont conservés « À ressaisir » et le témoin de clé est réécrit |

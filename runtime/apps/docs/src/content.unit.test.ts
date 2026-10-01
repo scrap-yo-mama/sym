@@ -249,7 +249,7 @@ describe('assert_docs_env_in_sync : la référence des variables suit le code', 
 
 describe('assert_docs_commands_exist : les commandes citées existent', () => {
   const cli = readFileSync(join(runtimeDir, 'apps/cli/src/cli.ts'), 'utf8');
-  const commands = new Set([...cli.matchAll(/^\s+'\s+runtime ([a-z][a-z-]*)/gm)].map((m) => m[1] ?? ''));
+  const commands = new Set([...cli.matchAll(/^\s+'\s+runtime ([a-z][a-z:-]*)/gm)].map((m) => m[1] ?? ''));
 
   test('la CLI expose bien les commandes documentées', () => {
     for (const name of ['migrate', 'keygen', 'key-check', 'rekey', 'doctor', 'diagnostics', 'export-catalog', 'backup', 'restore-prepare', 'secrets']) {

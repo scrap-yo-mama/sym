@@ -51,7 +51,7 @@ Pour l'instant, le TLS vers la base se règle par `sslmode` dans `DATABASE_URL` 
 |---|---|---|---|---|
 | `ADMIN_BOOTSTRAP_TOKEN` | requis tant qu'aucun propriétaire n'existe | server | jeton de l'assistant de premier démarrage ; 32 caractères au moins ; ignoré ensuite | lue |
 | `ADMIN_EMAIL` | aucun | server | si posé, l'assistant n'accepte que cette adresse | lue |
-| `MFA_ENFORCED` | `off` | — | `off`, `admins` ou `all` : double authentification obligatoire | prévue |
+| `MFA_ENFORCED` | `off` | server | `off`, `admins` ou `all` : double authentification obligatoire | lue |
 
 ## Exécution
 
