@@ -4,6 +4,9 @@ import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vitest/config';
 
 const webSrc = fileURLToPath(new URL('./apps/web/src', import.meta.url));
+// Environnement « client » sans navigateur de la console (`// @vitest-environment vue-client`) : composants compilés avec
+// leur rendu client, montés en mémoire (apps/web/src/testing/memory-mount.ts). Vitest résout `vitest-environment-<nom>`.
+const vueClientEnvironment = fileURLToPath(new URL('./apps/web/src/testing/vue-client.environment.ts', import.meta.url));
 
 // Trois projets (15 §2). Suffixes : *.unit.test.ts, *.prop.test.ts, *.integration.test.ts, *.contract.test.ts
 export default defineConfig({
@@ -20,7 +23,7 @@ export default defineConfig({
       {
         // Composants .vue de la console (tâche 3.3) : rendu côté serveur sous Node, sans navigateur ; alias `@` de apps/web.
         plugins: [vue()],
-        resolve: { alias: { '@': webSrc } },
+        resolve: { alias: { '@': webSrc, 'vitest-environment-vue-client': vueClientEnvironment } },
         test: {
           name: 'unit',
           include: [

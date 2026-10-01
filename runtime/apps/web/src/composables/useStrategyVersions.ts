@@ -74,6 +74,15 @@ export function useStrategyVersions(slug: MaybeRefOrGetter<string>, options: { i
 }
 
 /**
+ * « Revenir à cette version » n'existe que depuis `sain` (transition 7) ou `warning` (transition 8) : ce sont les seuls
+ * retours de version de la machine à états (04 § 6). Une API `bloquee` n'a qu'une reprise, la ré-enquête manuelle
+ * (transition 18, 06 § 2) ; les autres statuts n'ont aucune transition de retour.
+ */
+export function revertAllowed(status: components['schemas']['ApiStatus']): boolean {
+  return status === 'sain' || status === 'warning';
+}
+
+/**
  * Aperçu de « Revenir à cette version » (06 § 2) : la version visée et son diff contre la version courante (ce qui
  * changera), avant toute confirmation. Sans version courante, l'aperçu se limite à la conséquence.
  */

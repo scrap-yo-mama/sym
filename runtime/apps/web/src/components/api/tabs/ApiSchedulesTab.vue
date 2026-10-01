@@ -4,9 +4,10 @@
  * @file ApiSchedulesTab.vue
  * @description « Planifications » (06 § 2, 08 § 5) : liste (phrase cron, fuseau, prochaines exécutions calculées par le
  * serveur, règles) et création (aide cron via `cronstrue`, fuseau, entrée JSON, `overlap`, reprise des exécutions
- * manquées, règles). La validation (fréquence minimale d'une minute) est celle du serveur.
+ * manquées, règles). La validation (fréquence minimale d'une minute) est celle du serveur. Sur une API `bloquee`, aucune
+ * planification ne se reprend : la seule reprise est Ré-enquêter (06 § 2, transition 18) ; suspendre et supprimer restent.
  * @component
- * @example <ApiSchedulesTab slug="zz-books" />
+ * @example <ApiSchedulesTab slug="zz-books" status="sain" />
  */
 import { computed, reactive, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
@@ -14,13 +15,17 @@ import ErrorState from '@/components/ErrorState.vue';
 import LoadingState from '@/components/LoadingState.vue';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import type { ApiDetail } from '@/composables/useApiDetail';
 import { useSchedules, type ScheduleWrite } from '@/composables/useSchedules';
 import { describeCron } from '@/lib/cron';
 import { formatDateTime } from '@/lib/display-format';
 
-const props = defineProps<{ slug: string }>();
+const props = defineProps<{ slug: string; status: ApiDetail['status'] }>();
 const { t, te, locale } = useI18n();
 const schedules = useSchedules(() => props.slug);
+
+/** Reprendre une planification suspendue : jamais sur une API bloquée (aucun bouton de relance, 06 § 2). */
+const canResume = computed(() => props.status !== 'bloquee');
 
 const browserZone = (() => {
   try {
@@ -107,7 +112,8 @@ const selectClass = 'h-9 rounded-md border border-input bg-background px-2 text-
             </ul>
           </div>
           <div class="flex gap-2">
-            <Button variant="outline" size="xs" :disabled="schedules.saving.value" @click="schedules.setEnabled(item.id, !item.enabled)">{{ item.enabled ? t('schedules.pause') : t('schedules.resume') }}</Button>
+            <Button v-if="item.enabled" variant="outline" size="xs" :disabled="schedules.saving.value" @click="schedules.setEnabled(item.id, false)">{{ t('schedules.pause') }}</Button>
+            <Button v-else-if="canResume" variant="outline" size="xs" :disabled="schedules.saving.value" @click="schedules.setEnabled(item.id, true)">{{ t('schedules.resume') }}</Button>
             <Button variant="outline" size="xs" :disabled="schedules.saving.value" @click="schedules.remove(item.id)">{{ t('schedules.delete') }}</Button>
           </div>
         </li>

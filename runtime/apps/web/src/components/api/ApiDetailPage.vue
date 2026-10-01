@@ -84,7 +84,7 @@ const { t } = useI18n();
   <ApiStrategyTab v-else-if="tab === 'strategy'" :detail="detail" :slug="slug" @updated="$emit('updated', $event)" />
   <ApiRunsTab v-else-if="tab === 'runs'" :detail="detail" :slug="slug" />
   <ApiStatusTab v-else-if="tab === 'status'" :slug="slug" />
-  <ApiSchedulesTab v-else-if="tab === 'schedules'" :slug="slug" />
+  <ApiSchedulesTab v-else-if="tab === 'schedules'" :slug="slug" :status="detail.status" />
   <ApiAccessTab v-else-if="tab === 'access'" :detail="detail" />
   <ApiInvestigationsTab v-else :detail="detail" :slug="slug" :initial-run="requestedRun" />
 </template>

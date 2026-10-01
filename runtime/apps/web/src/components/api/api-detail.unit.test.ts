@@ -14,7 +14,7 @@ import { setApi } from '@/lib/api';
 import { API_TABS } from '@/lib/api-tabs';
 import en from '@/i18n/locales/en.json';
 import fr from '@/i18n/locales/fr.json';
-import { apiDetail, renderHtml, textOf, UUID } from '@/testing/console-fixtures';
+import { apiDetail, controls, renderHtml, textOf, TUNNEL_WORDING, UUID, type Control } from '@/testing/console-fixtures';
 
 afterEach(() => setApi(undefined));
 
@@ -24,15 +24,6 @@ const blockedDetail = (overrides: Parameters<typeof apiDetail>[0] = {}) =>
     status_reason: { code: 'blocked_by_protection', params: { domain: 'monsite.example', at: '2026-09-30T10:00:00.000Z', attempt: 3, execution: 'fetch_in_page', network: 'direct', kind: 'challenge', cost_usd: 0.04, run_id: UUID(9) } },
     ...overrides,
   });
-
-/** Boutons et liens d'un fragment HTML : attributs et texte. */
-type Control = { tag: 'a' | 'button'; attrs: string; text: string };
-function controls(html: string): Control[] {
-  return [...html.matchAll(/<(a|button)\b([^>]*)>([\s\S]*?)<\/\1>/g)].map((match) => ({ tag: match[1] as 'a' | 'button', attrs: match[2] ?? '', text: textOf(match[3] ?? '') }));
-}
-
-/** Formulations du tunnel, neutres comprises (_exclusions A7) : jamais dans un bouton ou un lien d'une API bloquée. */
-const TUNNEL_WORDING = /tunnel|extension|proxy|settings|navigateur|browser|ma session|mon IP|my session|my IP|network=/i;
 
 /** Fragment HTML du panneau « Bloquée » d'une page. */
 function blockedPanelOf(html: string): string {
@@ -110,6 +101,8 @@ describe('panneau « Bloquée »', () => {
     expect(hostile).not.toContain('javascript:');
   });
 
+  // Rendu serveur : les onglets à listes (stratégie, runs, statut, planifications, enquêtes) n'y lisent rien. Leurs commandes
+  // chargées (Relancer, retour de version, reprise de planification) sont vérifiées dans api-detail-mounted.unit.test.ts.
   test('toute la fiche d’une API bloquée : aucun bouton Lancer ni Relancer, aucun lien vers le tunnel, sur chaque onglet', async () => {
     setApi(undefined);
     for (const tab of API_TABS) {

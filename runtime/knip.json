@@ -57,14 +57,16 @@
     },
     "apps/web": {
       "entry": [
-        "src/**/*.test.ts"
+        "src/**/*.test.ts",
+        "src/testing/*.environment.ts"
       ],
       "project": [
         "src/**/*.{ts,vue}"
       ],
       "ignoreDependencies": [
         "tailwindcss",
-        "tw-animate-css"
+        "tw-animate-css",
+        "vue-client"
       ],
       "ignoreIssues": {
         "src/components/ui/**": [

@@ -112,3 +112,12 @@ export function textOf(html: string): string {
     .replace(/\s+/g, ' ')
     .trim();
 }
+
+/** Boutons et liens d'un fragment HTML : attributs et texte. */
+export type Control = { tag: 'a' | 'button'; attrs: string; text: string };
+export function controls(html: string): Control[] {
+  return [...html.matchAll(/<(a|button)\b([^>]*)>([\s\S]*?)<\/\1>/g)].map((match) => ({ tag: match[1] as 'a' | 'button', attrs: match[2] ?? '', text: textOf(match[3] ?? '') }));
+}
+
+/** Formulations du tunnel, neutres comprises (_exclusions A7) : jamais dans un bouton ou un lien d'une API bloquée. */
+export const TUNNEL_WORDING = /tunnel|extension|proxy|settings|navigateur|browser|ma session|mon IP|my session|my IP|network=/i;

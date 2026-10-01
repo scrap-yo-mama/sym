@@ -4,7 +4,8 @@
  * @file ApiStrategyTab.vue
  * @description « Stratégie & versions » (06 § 2) : spécification déclarative ou script en lecture seule, liste des versions
  * (origine, date, coût, « validée sur N échantillons »), diff à trois niveaux entre deux versions, retour à une version avec
- * aperçu de la conséquence (l'API passe en `warning`, raison `reverted`, transitions 7 ou 8). Chaque version renvoie à
+ * aperçu de la conséquence (l'API passe en `warning`, raison `reverted`, transitions 7 ou 8), proposé seulement depuis
+ * `sain` ou `warning` (jamais sur une API `bloquee`, dont la seule reprise est Ré-enquêter). Chaque version renvoie à
  * l'enquête ou à la réparation qui l'a produite (onglet Enquêtes).
  * @component
  * @example <ApiStrategyTab :detail="detail" slug="zz-books" @updated="onUpdated" />
@@ -22,7 +23,7 @@ import NetworkBadge from '@/components/catalog/NetworkBadge.vue';
 import { Button } from '@/components/ui/button';
 import { useApiActions } from '@/composables/useApiActions';
 import type { ApiDetail } from '@/composables/useApiDetail';
-import { useRevertPreview, useStrategyVersions, type StrategyVersion } from '@/composables/useStrategyVersions';
+import { revertAllowed, useRevertPreview, useStrategyVersions, type StrategyVersion } from '@/composables/useStrategyVersions';
 import { formatDateTime, formatUsd } from '@/lib/display-format';
 
 const props = defineProps<{ detail: ApiDetail; slug: string }>();
@@ -51,6 +52,9 @@ async function compare(version: number, against: number): Promise<void> {
 async function compareSelected(): Promise<void> {
   if (compareFrom.value && compareAgainst.value && compareFrom.value !== compareAgainst.value) await versions.loadDiff(Number(compareFrom.value), Number(compareAgainst.value));
 }
+
+/** Retour à une version : seulement depuis sain ou warning (transitions 7 et 8), jamais sur une API bloquée (18). */
+const canRevert = computed(() => !props.detail.metadata_only && revertAllowed(props.detail.status));
 
 /** Retour à une version : aperçu (diff de la courante vers la visée) et conséquence avant confirmation. */
 const reverting = useRevertPreview(() => props.slug, () => props.detail.current_strategy_version);
@@ -123,7 +127,7 @@ const errorText = computed(() => {
                   <Button v-if="item.parent_version" variant="outline" size="xs" @click="compare(item.version, item.parent_version)">
                     {{ t('strategy.compareWith', { a: String(item.version), b: String(item.parent_version) }) }}
                   </Button>
-                  <Button v-if="!detail.metadata_only && item.version !== detail.current_strategy_version" variant="outline" size="xs" @click="reverting.start(item.version)">
+                  <Button v-if="canRevert && item.version !== detail.current_strategy_version" variant="outline" size="xs" @click="reverting.start(item.version)">
                     {{ t('strategy.revert') }}
                   </Button>
                 </div>
@@ -135,7 +139,7 @@ const errorText = computed(() => {
       <div v-if="versions.hasMore()"><Button variant="outline" size="sm" :disabled="versions.loadingMore.value" @click="versions.loadMore()">{{ t('ui.loadMore') }}</Button></div>
 
       <RevertConfirm
-        v-if="reverting.target.value !== null"
+        v-if="canRevert && reverting.target.value !== null"
         :key="reverting.target.value"
         :version="reverting.target.value"
         :current="detail.current_strategy_version"
