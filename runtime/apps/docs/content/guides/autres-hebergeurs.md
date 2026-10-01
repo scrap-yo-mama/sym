@@ -32,7 +32,7 @@ Fly.io, Northflank, un cluster Kubernetes, un PaaS maison : tout hébergeur qui 
 
 | Point | À contrôler |
 |---|---|
-| Image | `linux/amd64`, démarrage par `RUNTIME_MODE` ; ni uid imposé (`runAsUser`, `--user`) ni retrait des capacités `SETUID` et `SETGID` : l'image descend d'elle-même sur un utilisateur non-root, et sans elles le worker refuse de démarrer |
+| Image | `linux/amd64`, démarrage par `RUNTIME_MODE` ; ni uid imposé (`runAsUser`, `--user`) ni retrait des capacités `SETUID` et `SETGID` : l'image descend d'elle-même sur un utilisateur non-root, et sans elles le worker refuse de démarrer. Kubernetes : `runAsNonRoot: true` refuse l'image (`USER root`), laissez-le à `false` pour ce conteneur |
 | Base | PostgreSQL 15 ou plus ; si pooler en mode transaction, `DATABASE_URL_DIRECT` posée |
 | Mémoire du worker | 2 Go au moins ; Chromium a besoin de mémoire partagée suffisante |
 | Migration | exécutée avant `server` et `worker`, sous un verrou (deux lancements simultanés sont sans danger) |

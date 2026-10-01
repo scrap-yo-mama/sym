@@ -1,4 +1,4 @@
-# CI de runtime/ : 7 jobs (cdc/scrapyomama-runtime/15-strategie-tests.md §2), plus le job `docs` (tâche 4.8).
+# CI de runtime/ : 7 jobs (cdc/scrapyomama-runtime/15-strategie-tests.md §2), plus le job `docs` (tâche 4.8) et le job `image` (privilèges du bac à sable sur l'image construite, F-20261001-R01).
 # Aucun filtre de chemin : `quality` ne doit jamais être masqué.
 name: ci
 
@@ -244,6 +244,37 @@ jobs:
         if: matrix.node == ''
         continue-on-error: true
         run: pnpm audit --audit-level=critical
+
+  image:
+    # assert_sandbox_image_privileges (INV7, constat F-20261001-R01) : l'image construite (deploy/Dockerfile, rien n'est
+    # poussé) démarrée sous les capacités de Render (no-new-privileges) puis en Docker classique : descente root → pwuser,
+    # capacités de chaque processus, bac à sable sous l'uid dédié, sonde de santé du compose, arrêt propre. Seule preuve sur
+    # l'image du modèle de privilèges : la porte statique (assert_image_nonroot) ne fait que la compléter.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          package_json_file: runtime/package.json
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: runtime/.node-version
+      - run: pnpm install --frozen-lockfile
+      # La sonde lance Chromium AVEC son bac à sable (chromiumSandbox: true) dans le conteneur : espaces de noms
+      # utilisateur non privilégiés, restreints par AppArmor sur Ubuntu 24.04 (levée sur le runner de test seulement).
+      - name: Bac à sable de Chromium (espaces de noms utilisateur)
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      # Aucune relance : un échec instable doit rester visible (rapport junit archivé).
+      - run: pnpm test:image --retry=0 --reporter=default --reporter=junit --outputFile.junit=reports/image-junit.xml
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: failure()
+        with:
+          name: image-junit
+          path: runtime/reports/
+          if-no-files-found: ignore
+          retention-days: 14
 
   nightly:
     # Ne s'exécute jamais depuis ce workflow (aucun déclencheur cron ici) : voir nightly.yml.

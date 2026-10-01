@@ -152,6 +152,20 @@ export function killPlan(
   };
 }
 
+/**
+ * Balayage de fin de run : SIGKILL à TOUS les processus de l'uid dédié (`kill -1` lancé sous cet uid par le lanceur ; il
+ * n'atteint ni le worker, ni Chromium, ni tini). Tous les enfants partagent l'uid dédié et l'arrêt forcé ne vise que le pid
+ * suivi : un enfant évadé de l'isolat pourrait laisser un processus détaché qui observerait les runs suivants (/proc,
+ * ptrace selon Yama). Joué quand aucun autre run n'est actif ; `undefined` sans lanceur (même uid, ou worker root).
+ */
+export function sweepPlan(o: Pick<ProcessSandboxOptions, 'launcher' | 'uid' | 'gid'>): { command: string; args: string[] } | undefined {
+  if (o.launcher === undefined || o.uid === undefined || o.gid === undefined) return undefined;
+  return {
+    command: o.launcher,
+    args: [`--reuid=${o.uid}`, `--regid=${o.gid}`, '--clear-groups', '--no-new-privs', '--', '/bin/kill', '-KILL', '-1'],
+  };
+}
+
 /** Résultat de `probeIsolation` : ce que voit un processus lancé comme l'enfant, hors mode permission de Node. */
 export type IsolationProbe = {
   uid: number | undefined;
@@ -245,6 +259,10 @@ export class ProcessSandboxEngine implements SandboxEngine {
   readonly #options: ProcessSandboxOptions;
   readonly #childFile: string;
   readonly #readPaths: string[];
+  /** Runs et sondes en cours (enfants vivants ou à lancer) ; à zéro, l'uid dédié est balayé. */
+  #active = 0;
+  /** Balayage en cours : aucun enfant n'est lancé avant sa fin. */
+  #sweeping: Promise<void> | undefined;
 
   constructor(options: ProcessSandboxOptions = {}) {
     this.id = options.engine ?? 'isolated-vm';
@@ -262,6 +280,36 @@ export class ProcessSandboxEngine implements SandboxEngine {
     this.#readPaths = childReadPaths(this.#childFile, this.id);
   }
 
+  /**
+   * Compte un run (ou une sonde) : il attend la fin d'un balayage en cours avant de lancer son enfant ; le dernier à finir
+   * balaie l'uid dédié (`sweepPlan`). Avec des runs concurrents (WORKER_CONCURRENCY), le balayage attend un instant creux.
+   */
+  async #track<T>(start: () => Promise<T>): Promise<T> {
+    this.#active++;
+    try {
+      while (this.#sweeping !== undefined) await this.#sweeping;
+      return await start();
+    } finally {
+      if (--this.#active === 0) this.#sweep();
+    }
+  }
+
+  #sweep(): void {
+    const plan = sweepPlan(this.#options);
+    if (plan === undefined) return;
+    const sweeping: Promise<void> = new Promise<void>((resolve) => {
+      execFile(plan.command, plan.args, { env: {}, timeout: 5000 }, () => resolve());
+    }).finally(() => {
+      if (this.#sweeping === sweeping) this.#sweeping = undefined;
+    });
+    this.#sweeping = sweeping;
+  }
+
+  /** Attend la fin du balayage en cours (arrêt du worker, tests). */
+  async idle(): Promise<void> {
+    while (this.#sweeping !== undefined) await this.#sweeping;
+  }
+
   #plan(nodeArgs: readonly string[], script: string | undefined, cpuSeconds: number): SpawnPlan {
     const { launcher, uid, gid } = this.#options;
     return spawnPlan({ node: this.#options.node ?? process.execPath, nodeArgs, script, cpuSeconds, launcher, uid, gid });
@@ -273,6 +321,10 @@ export class ProcessSandboxEngine implements SandboxEngine {
    * refuser de servir si `parentEnviron` vaut `readable`.
    */
   probeIsolation(): Promise<IsolationProbe> {
+    return this.#track(() => this.#probe());
+  }
+
+  #probe(): Promise<IsolationProbe> {
     const plan = this.#plan(['-e', PROBE_SCRIPT], undefined, 5);
     return new Promise((resolve, reject) => {
       execFile(plan.command, plan.args, { env: {}, uid: plan.uid, gid: plan.gid, timeout: 10_000, cwd: dirname(this.#childFile) }, (err, stdout) => {
@@ -296,6 +348,10 @@ export class ProcessSandboxEngine implements SandboxEngine {
       bridges.violation(v);
       return Promise.resolve({ engine: this.id, outcome: 'violation', violations: [v], durationMs: 0, killed: false });
     }
+    return this.#track(() => this.#run(code, bridges, limits, options));
+  }
+
+  #run(code: string, bridges: SandboxBridges, limits: SandboxLimits, options: SandboxRunOptions): Promise<SandboxResult> {
     const timeoutMs = limits.timeoutMs;
     const memoryMb = limits.memoryMb;
     const processMemoryMb = limits.processMemoryMb ?? memoryMb * 3 + 192;

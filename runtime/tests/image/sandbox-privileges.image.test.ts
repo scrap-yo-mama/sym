@@ -9,16 +9,22 @@
 //   (d) idem sans no-new-privileges ;
 //   (e) RUNTIME_MODE=all : le server descend sans capacité, le worker est lancé comme en mode worker ;
 //   (f) `runtime migrate` (pré-déploiement, commande passée au point d'entrée) tourne en pwuser sans capacité ;
-// plus : aucun processus du conteneur ne reste root, et SIGTERM (docker stop) arrête proprement le worker (tini relaie le
-// signal ; sous Render, un PID 1 root sans CAP_KILL ne pourrait pas signaler un processus de pwuser).
+//   (g) RUNTIME_MODE=server : aucun processus, PID 1 compris, n'a de capacité ; la sonde de santé du compose, lancée en
+//       root par Docker (USER de l'image), descend sur pwuser sans capacité ;
+// plus : aucun processus du conteneur ne reste root, tous sous no-new-privileges, et SIGTERM (docker stop) arrête
+// proprement le worker (tini relaie le signal ; sous Render, un PID 1 root sans CAP_KILL ne pourrait pas signaler un
+// processus de pwuser). Revue de F-20261001-R01 : le worker n'a cap_setuid,cap_setgid qu'en PERMIS (un process.setuid(0)
+// échoue), un processus détaché par un enfant ne survit pas au balayage de fin de run, rien de ce qu'exécute pwuser n'est
+// modifiable par l'uid dédié, et un démarrage sous un uid imposé pose quand même no-new-privileges.
 // Lourd (construction de l'image, PostgreSQL, Chromium) : projet Vitest `image` (`pnpm test:image`), joué par `pnpm ci:local`.
 // RUNTIME_IMAGE_UNDER_TEST=<image locale> évite la construction (l'image n'est jamais poussée).
 import { spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
+import { parse } from 'yaml';
 
 const runtimeDir = new URL('../..', import.meta.url).pathname;
 const run = randomBytes(4).toString('hex');
@@ -103,7 +109,24 @@ function processes(container: string): Proc[] {
 
 const caps = (p: Pick<Proc, 'inh' | 'prm' | 'eff' | 'amb'>) => ({ inh: p.inh, prm: p.prm, eff: p.eff, amb: p.amb });
 const noCaps = { inh: NONE, prm: NONE, eff: NONE, amb: NONE };
-const workerCaps = { inh: NONE, prm: SETID, eff: SETID, amb: NONE };
+/** Worker : cap_setuid,cap_setgid PERMISES seulement (node-worker =p) ; sandbox-launch les rend effectives à son exec. */
+const workerCaps = { inh: NONE, prm: SETID, eff: NONE, amb: NONE };
+/** tini et le shell superviseur d'un démarrage worker/all : ensemble ambient, retiré au lancement de chaque rôle. */
+const ambientCaps = { inh: SETID, prm: SETID, eff: SETID, amb: SETID };
+
+/** Sonde de santé du server dans deploy/docker-compose.prod.yml (forme exec : ["CMD", …]). */
+function composeHealthcheck(): string[] {
+  const compose = parse(readFileSync(join(runtimeDir, 'deploy/docker-compose.prod.yml'), 'utf8')) as { services: Record<string, { healthcheck?: { test?: string[] } }> };
+  const test_ = compose.services['server']?.healthcheck?.test ?? [];
+  if (test_[0] !== 'CMD') throw new Error(`sonde de santé du server : forme exec ["CMD", …] attendue (${JSON.stringify(test_)})`);
+  return test_.slice(1);
+}
+
+/** Uid, capacités et no-new-privileges d'une sortie `grep … /proc/<pid>/status`. */
+function identity(stdout: string) {
+  const field = (k: string) => new RegExp(`^${k}:\\s*(.*)$`, 'm').exec(stdout)?.[1]?.trim();
+  return { uid: Number(field('Uid')?.split(/\s+/)[0]), inh: field('CapInh'), prm: field('CapPrm'), eff: field('CapEff'), amb: field('CapAmb'), nnp: Number(field('NoNewPrivs')) };
+}
 
 function startContainer(name: string, flags: readonly string[], env: Record<string, string>, extra: string[] = []): string {
   const envArgs = Object.entries(env).flatMap(([k, v]) => ['-e', `${k}=${v}`]);
@@ -170,9 +193,19 @@ const child = spawnSync(plan.command, plan.args, { env: {}, encoding: 'utf8', cw
 try { out.sandbox = JSON.parse(child.stdout); } catch { out.sandbox = { error: child.status + ' ' + child.stderr.slice(0, 500) }; }
 const engine = new ProcessSandboxEngine({ ...options, production: true });
 out.probe = await engine.probeIsolation();
+await engine.idle();
+// Enfant évadé simulé : un processus détaché sous l'uid dédié, hors de tout run suivi ; le balayage de fin de run le tue.
+const state = (pid) => { try { return /^State:\s*Z/m.test(readFileSync('/proc/' + pid + '/status', 'utf8')) ? 'zombie' : 'alive'; } catch { return 'gone'; } };
+const stray = spawnSync(options.launcher, ['--reuid=' + options.uid, '--regid=' + options.gid, '--clear-groups', '--no-new-privs', '--', '/bin/sh', '-c', 'sleep 600 >/dev/null 2>&1 & echo $!'], { env: {}, encoding: 'utf8' });
+const strayPid = Number(stray.stdout.trim());
+out.stray = { uid: Number((/^Uid:\s*(\d+)/m.exec(readFileSync('/proc/' + strayPid + '/status', 'utf8')) || [])[1]), before: state(strayPid) };
 const bridges = { fetch: async () => { throw new Error('non'); }, log() {}, emit() {}, violation() {} };
 const result = await engine.run('return 6 * 7;', bridges, { timeoutMs: 10000, memoryMb: 64 });
 out.run = { outcome: result.outcome, value: result.value, error: result.error };
+await engine.idle();
+out.stray.after = state(strayPid);
+// En dernier : le worker n'a pas CAP_SETUID en effectif (node-worker =p).
+try { process.setuid(0); out.setuid0 = 'uid ' + process.getuid(); } catch (e) { out.setuid0 = e.code || String(e); }
 console.log('ZZ_PROBE ' + JSON.stringify(out));
 `;
 
@@ -185,6 +218,8 @@ type ProbeReport = {
   sandbox: { uid: number; inh: string; prm: string; eff: string; amb: string; nnp: number; pid1Environ: string; parentEnviron: string; keys: string[]; error?: string };
   probe: { uid: number; parentEnviron: string; noNewPrivs: boolean };
   run: { outcome: string; value: unknown; error?: string };
+  stray: { uid: number; before: string; after: string };
+  setuid0: string;
 };
 
 beforeAll(() => {
@@ -224,6 +259,19 @@ describe('assert_sandbox_image_privileges — image sous les capacités de Rende
     expect({ inh: field('CapInh'), prm: field('CapPrm'), eff: field('CapEff'), amb: field('CapAmb') }).toEqual(noCaps);
   });
 
+  test('démarrage sous un uid imposé (--user 1001) : no-new-privileges posé quand même par le point d’entrée', () => {
+    const r = docker(['run', '--rm', '-u', String(PWUSER), image, "grep -E '^(Uid|NoNewPrivs):' /proc/self/status"]);
+    expect(r.status, r.stderr).toBe(0);
+    expect(identity(r.stdout)).toMatchObject({ uid: PWUSER, nnp: 1 });
+  });
+
+  test('rien de ce qu’exécute ou charge pwuser n’est modifiable par l’uid dédié (Chromium de /ms-playwright, /app, /usr)', () => {
+    const r = docker(['run', '--rm', '-u', `${SANDBOX_UID}:${SANDBOX_UID}`, '--entrypoint', 'find', image, '/', '-xdev',
+      '(', '-path', '/proc', '-o', '-path', '/tmp', '-o', '-path', '/var/tmp', '-o', '-path', '/run/lock', '-o', '-path', '/dev', ')', '-prune',
+      '-o', '-writable', '!', '-type', 'l', '-print']);
+    expect(r.stdout.trim().split('\n').filter(Boolean)).toEqual([]);
+  });
+
   for (const profile of PROFILES) {
     describe(profile.name, () => {
       test('(f) `runtime migrate` passé au point d’entrée : pwuser, aucune capacité, migrations appliquées', async () => {
@@ -242,8 +290,11 @@ describe('assert_sandbox_image_privileges — image sous les capacités de Rende
           RUNTIME_MODE: 'worker',
           DATABASE_URL,
           MASTER_KEY,
+          // Ignorée sous node-worker (AT_SECURE) : le worker doit le dire au démarrage.
+          NODE_EXTRA_CA_CERTS: '/zz-test/ca.pem',
         });
         await waitForLog(name, 'bac à sable : isolation éprouvée');
+        expect(logsOf(name)).toMatch(/NODE_EXTRA_CA_CERTS est ignorée par le worker/);
         const line = logsOf(name).split('\n').find((l) => l.includes('isolation éprouvée')) ?? '';
         expect(JSON.parse(line)).toMatchObject({ sandboxUid: SANDBOX_UID, noNewPrivs: true });
         const procs = processes(name);
@@ -254,8 +305,10 @@ describe('assert_sandbox_image_privileges — image sous les capacités de Rende
         expect(worker!.uid).toBe(PWUSER);
         expect(caps(worker!)).toEqual(workerCaps);
         expect(worker!.nnp).toBe(1);
-        // Seuls tini (PID 1) et le worker restent : aucun autre processus ne porte de capacité.
+        // tini (PID 1) : l'ensemble ambient du démarrage worker, rien de plus ; aucun autre processus ne porte de capacité.
+        expect(caps(procs.find((p) => p.pid === 1)!)).toEqual(ambientCaps);
         for (const p of procs.filter((x) => x !== worker && x.pid !== 1)) expect(caps(p), p.name).toEqual(noCaps);
+        for (const p of procs) expect(p.nnp, p.cmd).toBe(1);
 
         // Arrêt propre : tini (pwuser) relaie SIGTERM au worker, qui sort en 0.
         dockerOk(['stop', '-t', '30', name], 60_000);
@@ -286,6 +339,11 @@ describe('assert_sandbox_image_privileges — image sous les capacités de Rende
         expect(report.sandbox).toMatchObject({ uid: SANDBOX_UID, ...noCaps, nnp: 1, pid1Environ: 'EACCES', parentEnviron: 'EACCES', keys: [] });
         expect(report.probe).toEqual({ uid: SANDBOX_UID, parentEnviron: 'denied', noNewPrivs: true });
         expect(report.run).toMatchObject({ outcome: 'ok', value: 42 });
+        // Processus détaché sous l'uid dédié : vivant avant le run, balayé à sa fin.
+        expect(report.stray).toMatchObject({ uid: SANDBOX_UID, before: 'alive' });
+        expect(['gone', 'zombie']).toContain(report.stray.after);
+        // Worker compromis : process.setuid(0) refusé (capacités permises, pas effectives).
+        expect(report.setuid0).toBe('EPERM');
       }, 180_000);
 
       test('(e) RUNTIME_MODE=all : server sans capacité, worker lancé comme en mode worker, aucun root', async () => {
@@ -310,9 +368,37 @@ describe('assert_sandbox_image_privileges — image sous les capacités de Rende
         expect(caps(server!)).toEqual(noCaps);
         expect(server!.nnp).toBe(1);
         // L'ensemble ambient ne subsiste que dans tini et le shell superviseur, qui ne lancent les rôles que par `role`.
-        for (const p of procs.filter((x) => x !== worker && x.pid !== 1 && !x.cmd.startsWith('/bin/bash /usr/local/bin/entrypoint.sh'))) {
-          expect(caps(p), p.cmd).toEqual(noCaps);
-        }
+        const supervisors = procs.filter((x) => x.pid === 1 || x.cmd.startsWith('/bin/bash /usr/local/bin/entrypoint.sh'));
+        expect(supervisors.length, JSON.stringify(procs)).toBeGreaterThanOrEqual(2);
+        for (const p of supervisors) expect(caps(p), p.cmd).toEqual(ambientCaps);
+        for (const p of procs.filter((x) => x !== worker && !supervisors.includes(x))) expect(caps(p), p.cmd).toEqual(noCaps);
+        for (const p of procs) expect(p.nnp, p.cmd).toBe(1);
+        dockerOk(['stop', '-t', '30', name], 60_000);
+        expect(docker(['inspect', '-f', '{{.State.ExitCode}}', name]).stdout.trim()).toBe('0');
+      }, 240_000);
+
+      test('(g) RUNTIME_MODE=server : aucune capacité nulle part (PID 1 compris) ; sonde de santé du compose sous pwuser', async () => {
+        const name = startContainer(`zz_test_img_server_${profile.nnp ? 'render' : 'classic'}_${run}`, profile.flags, {
+          RUNTIME_MODE: 'server',
+          DATABASE_URL,
+          MASTER_KEY,
+          ADMIN_BOOTSTRAP_TOKEN,
+          PUBLIC_URL: 'http://localhost:3000',
+        });
+        // La sonde du compose, telle quelle, lancée comme Docker la lance (docker exec sans -u : USER de l'image, root).
+        const healthcheck = composeHealthcheck();
+        await until('sonde de santé du compose = 0', () => docker(['exec', name, ...healthcheck]).status === 0, 90_000);
+        const procs = processes(name);
+        console.log(`${name} : ${JSON.stringify(procs.map((p) => ({ pid: p.pid, cmd: p.cmd.slice(0, 60), uid: p.uid, ...caps(p), nnp: p.nnp })))}`);
+        expect(procs.length).toBeGreaterThanOrEqual(2);
+        for (const p of procs) expect({ uid: p.uid, ...caps(p), nnp: p.nnp }, p.cmd).toEqual({ uid: PWUSER, ...noCaps, nnp: 1 });
+        // Identité de la commande de la sonde : son code JS remplacé par une lecture de /proc/self/status.
+        const at = healthcheck.indexOf('-e');
+        expect(at, JSON.stringify(healthcheck)).toBeGreaterThan(0);
+        const probe = [...healthcheck.slice(0, at + 1), "process.stdout.write(require('fs').readFileSync('/proc/self/status','utf8'))", ...healthcheck.slice(at + 2)];
+        const r = docker(['exec', name, ...probe]);
+        expect(r.status, r.stderr).toBe(0);
+        expect(identity(r.stdout)).toEqual({ uid: PWUSER, ...noCaps, nnp: 1 });
         dockerOk(['stop', '-t', '30', name], 60_000);
         expect(docker(['inspect', '-f', '{{.State.ExitCode}}', name]).stdout.trim()).toBe('0');
       }, 240_000);

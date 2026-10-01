@@ -19,14 +19,23 @@ if [ "$EUID" = 0 ]; then
   if [ "$#" -eq 0 ] && { [ "${RUNTIME_MODE:-all}" = worker ] || [ "${RUNTIME_MODE:-all}" = all ]; }; then
     caps=(--inh-caps=-all,+setuid,+setgid --ambient-caps=-all,+setuid,+setgid)
   fi
-  exec setpriv --reuid=1001 --regid=1001 --init-groups --no-new-privs "${caps[@]}" -- /usr/bin/tini -- "$0" "$@"
+  # setpriv par chemin absolu : rien de l'environnement ne choisit ce qu'exécute root (porte assert_image_nonroot).
+  exec /usr/bin/setpriv --reuid=1001 --regid=1001 --init-groups --no-new-privs "${caps[@]}" -- /usr/bin/tini -- "$0" "$@"
 fi
-# Démarré directement sous un autre uid, sans init : tini en PID 1 (signaux, zombies de Chromium).
+# Démarré directement sous un uid imposé (`--user`, `runAsUser` : déconseillé, voir docs/deploiement.md) : no-new-privileges
+# est posé quand même. Sans lui, tout processus de pwuser, Chromium compris, pourrait exécuter node-worker ou sandbox-launch
+# (capacités de fichier) puis repasser root avec toutes les capacités du conteneur. Le worker refuse alors de démarrer en
+# production (sonde d'isolation en échec) : fermeture sûre. Linux seulement (hors image, ce script est testé sur macOS).
+if [ -r /proc/self/status ] && [ -x /usr/bin/setpriv ] && ! grep -q '^NoNewPrivs:[[:space:]]*1$' /proc/self/status; then
+  exec /usr/bin/setpriv --no-new-privs -- "$0" "$@"
+fi
+# Sans init : tini en PID 1 (signaux, zombies de Chromium).
 if [ "$$" = 1 ]; then exec /usr/bin/tini -- "$0" "$@"; fi
 
 # Lance un rôle sans capacité héritée : ni ambient ni héritables. Le worker retrouve cap_setuid,cap_setgid par les
-# capacités de fichier de node-worker (effectives, hors ambient : ses enfants ordinaires, Chromium compris, n'en ont aucune).
-role() { exec setpriv --inh-caps=-all --ambient-caps=-all -- "$@"; }
+# capacités de fichier de node-worker (permises seulement, hors ambient : ses enfants ordinaires, Chromium compris, n'en
+# ont aucune).
+role() { exec /usr/bin/setpriv --inh-caps=-all --ambient-caps=-all -- "$@"; }
 WORKER_NODE=node
 [ -x "$NODE_WORKER" ] && WORKER_NODE=$NODE_WORKER
 

@@ -74,22 +74,19 @@ function readsHistory(script: string): boolean {
   return projects.length === 0 || projects.includes('unit');
 }
 
-/** Tout job dont un script lit l'historique git (readsHistory) extrait tout l'historique : fetch-depth: 0 à chaque checkout. */
-export function checkFullHistoryJobs(label: string, yaml: string): string[] {
+/** Jobs d'un workflow : lignes du job et scripts (ligne `run:` et ses lignes de continuation, pas le nom d'une étape). */
+function workflowJobs(yaml: string): { name: string; lines: string[]; scripts: string[] }[] {
   const lines = yaml.split('\n').map(strip);
   const start = lines.findIndex((l) => /^jobs:\s*$/.test(l));
   if (start < 0) return [];
-  const jobs: { name: string; lines: string[] }[] = [];
+  const jobs: { name: string; lines: string[]; scripts: string[] }[] = [];
   for (const line of lines.slice(start + 1)) {
     if (/^\S/.test(line)) break;
     const job = /^ {2}([\w-]+):/.exec(line)?.[1];
-    if (job !== undefined) jobs.push({ name: job, lines: [] });
+    if (job !== undefined) jobs.push({ name: job, lines: [], scripts: [] });
     else jobs[jobs.length - 1]?.lines.push(line);
   }
-  const problems: string[] = [];
   for (const job of jobs) {
-    // Seuls les scripts comptent (ligne run: et ses lignes de continuation), pas le nom d'une étape.
-    const scripts: string[] = [];
     let inRun = false;
     let runIndent = 0;
     for (const line of job.lines) {
@@ -98,16 +95,36 @@ export function checkFullHistoryJobs(label: string, yaml: string): string[] {
       if (run) {
         inRun = true;
         runIndent = run[1]?.length ?? 0;
-        scripts.push(run[2] ?? '');
-      } else if (inRun && line.trim() !== '' && indent > runIndent) scripts.push(line);
+        job.scripts.push(run[2] ?? '');
+      } else if (inRun && line.trim() !== '' && indent > runIndent) job.scripts.push(line);
       else if (line.trim() !== '') inRun = false;
     }
-    if (!scripts.some(readsHistory)) continue;
+  }
+  return jobs;
+}
+
+/** Tout job dont un script lit l'historique git (readsHistory) extrait tout l'historique : fetch-depth: 0 à chaque checkout. */
+export function checkFullHistoryJobs(label: string, yaml: string): string[] {
+  const problems: string[] = [];
+  for (const job of workflowJobs(yaml)) {
+    if (!job.scripts.some(readsHistory)) continue;
     const checkouts = job.lines.filter((l) => /uses:\s*actions\/checkout@/.test(l)).length;
     const deep = job.lines.filter((l) => /^\s+fetch-depth:\s*0\s*$/.test(l)).length;
     if (checkouts > deep) problems.push(`${label} : job « ${job.name} » : il lit l'historique git (test unitaire X6, audit de l'historique ou release à blanc) mais actions/checkout n'a pas fetch-depth: 0 (clone superficiel : échec garanti)`);
   }
   return problems;
+}
+
+/**
+ * assert_sandbox_image_privileges en CI (revue de F-20261001-R01) : un job de ci.yml joue le test de l'image construite
+ * (`pnpm test:image`, seule preuve sur l'image du modèle de privilèges), à chaque PR (pas de condition `if:` au niveau du
+ * job) et sans relance (`--retry=0`) : une régression du point d'entrée ou du Dockerfile ne passe pas la CI de fusion.
+ */
+export function checkCiImageJob(label: string, yaml: string): string[] {
+  const runs = workflowJobs(yaml).filter((job) => job.scripts.some((l) => /\bpnpm\s+(?:run\s+)?test:image(?![\w:-])/.test(l)));
+  const ok = runs.filter((job) => !job.lines.some((l) => /^ {4}if:/.test(l)) && job.scripts.some((l) => /\btest:image\b.*--retry=0\b/.test(l)));
+  if (ok.length > 0) return [];
+  return [`${label} : aucun job ne joue \`pnpm test:image --retry=0\` à chaque PR (privilèges du bac à sable sur l'image construite, assert_sandbox_image_privileges)`];
 }
 
 /** Un workflow qui publie : étiquette seule, environnement, aucun cache, signature, SBOM, provenance. */
@@ -151,17 +168,34 @@ export function checkReleaseWorkflow(label: string, yaml: string): string[] {
   return problems;
 }
 
+/** Seules capacités admises dans la descente : tout retirer, puis au plus cap_setuid et cap_setgid (rôle worker). */
+const DROP_CAPS = /^--(?:inh|ambient)-caps=-all(?:,\+setuid)?(?:,\+setgid)?$/;
+/** Autres options admises après `--reuid=<n> --regid=<n>` (ni autre identité, ni --bounding-set, ni --securebits). */
+const DROP_FLAGS = new Set(['--init-groups', '--clear-groups', '--no-new-privs']);
+/** Variables qui détourneraient ce que le shell root exécute (résolution des commandes, découpage, fichiers lus, chargeur). */
+const DANGEROUS_ASSIGNMENT = /^(?:PATH|IFS|ENV|BASH_ENV|BASH_\w+|SHELLOPTS|BASHOPTS|PS4|LD_\w+)$/;
+
 /**
- * Descente de privilèges du point d'entrée (deploy/entrypoint.sh) : sa première instruction (hors `set` et affectations)
- * est le bloc `if [ "$EUID" = 0 ]; then … fi`, qui se termine par `exec setpriv --reuid=<non nul> --regid=<non nul> …
- * --no-new-privs …` et n'exécute rien d'autre. `undefined` si la descente est bien faite, sinon le problème.
+ * Descente de privilèges du point d'entrée (deploy/entrypoint.sh, interprété par bash : `$EUID` n'existe pas ailleurs) :
+ * sa première instruction (hors `set -eux`/`-o pipefail` et affectations littérales sans danger) est le bloc
+ * `if [ "$EUID" = 0 ]; then … fi`, qui se termine par `exec /usr/bin/setpriv --reuid=<non nul> --regid=<non nul> <options> --
+ * <commande>` et n'exécute rien d'autre. Options admises : `--init-groups`, `--clear-groups`, `--no-new-privs` (exigée),
+ * `--inh-caps`/`--ambient-caps` à `-all` suivi au plus de `+setuid,+setgid`, et `"${t[@]}"` pour un tableau défini dans le
+ * bloc dont chaque élément est une telle option de capacités. Toute autre option d'identité (`--reuid` répété, `--euid`,
+ * `--groups`, `--keep-groups`…), `--bounding-set`, `--securebits` : refus. `undefined` si la descente est bien faite.
  */
 function rootDropProblem(entrypoint: string): string | undefined {
   const OPEN = 'if [ "$EUID" = 0 ]; then';
+  if (!/^#!\/bin\/bash[ \t]*(\n|$)/.test(entrypoint)) return "interpréteur autre que #!/bin/bash ($EUID n'existe qu'en bash : la descente sauterait)";
   const lines = entrypoint.split('\n').map((l) => l.trim()).filter((l) => l !== '' && !l.startsWith('#'));
-  // Avant le bloc : options du shell et affectations littérales seulement (ni substitution de commande, ni commande).
-  const start = lines.findIndex((l) => !/^(set -[a-z]+( [a-z]+)?|[A-Za-z_]\w*=[^$`\s;&|]*)$/.test(l));
-  if (lines[start] !== OPEN) return `première instruction autre que la descente en root (${OPEN})`;
+  // Avant le bloc : options du shell (ni -a ni allexport, qui exporteraient les affectations) et affectations littérales.
+  const before = (l: string) => {
+    if (/^set -(?=[eux]|o pipefail)[eux]*(?:o pipefail)?$/.test(l)) return true;
+    const assignment = /^([A-Za-z_]\w*)=[^$`\s;&|()]*$/.exec(l);
+    return assignment !== null && !DANGEROUS_ASSIGNMENT.test(assignment[1] ?? '');
+  };
+  const start = lines.findIndex((l) => !before(l));
+  if (lines[start] !== OPEN) return `première instruction autre que la descente en root (${OPEN}) : ${lines[start] ?? 'aucune'}`;
   let depth = 0;
   let end = -1;
   for (let i = start; i < lines.length && end < 0; i++) {
@@ -170,20 +204,42 @@ function rootDropProblem(entrypoint: string): string | undefined {
   }
   if (end < 0) return 'bloc root non fermé';
   const body = lines.slice(start + 1, end);
-  const drop = /^exec setpriv --reuid=(\d+) --regid=(\d+) (?:[^;&|$`()]* )?--no-new-privs (?:[^;&|`()]* )?-- \S[^;&|`()]*$/.exec(body[body.length - 1] ?? '');
-  if (drop === null) return 'le bloc root doit finir par exec setpriv --reuid=… --regid=… --no-new-privs … -- …';
-  if (drop[1] === '0' || drop[2] === '0') return 'la descente vise root (uid ou gid 0)';
-  // Dans le bloc, avant la descente : affectations de tableaux littéraux et conditions sur des tests `[ … ]` seulement.
-  const other = body.slice(0, -1).find((l) => !/^([A-Za-z_]\w*=\([^$`;&|]*\)|if (?:\[ [^\]`()]* \]|&&|\|\||[{};]|\s)+then|fi)$/.test(l));
-  if (other !== undefined) return `instruction exécutée en root avant la descente : ${other}`;
+  // Dans le bloc, avant la descente : tableaux d'options de capacités et conditions sur des tests `[ … ]` seulement.
+  const arrays = new Set<string>();
+  for (const l of body.slice(0, -1)) {
+    const array = /^([A-Za-z_]\w*)=\(([^$`;&|()]*)\)$/.exec(l);
+    if (array !== null) {
+      const bad = (array[2] ?? '').trim().split(/\s+/).find((opt) => !DROP_CAPS.test(opt));
+      if (bad !== undefined) return `option refusée dans le tableau ${array[1] ?? ''} : ${bad} (capacités -all, puis au plus +setuid,+setgid)`;
+      arrays.add(array[1] ?? '');
+      continue;
+    }
+    if (/^(?:if (?:\[ [^\]`()]* \]|&&|\|\||[{};]|\s)+then|fi)$/.test(l)) continue;
+    return `instruction exécutée en root avant la descente : ${l}`;
+  }
+  const drop = /^exec \/usr\/bin\/setpriv ((?:\S+ )*?)-- (\S[^;&|`()]*)$/.exec(body[body.length - 1] ?? '');
+  if (drop === null) return 'le bloc root doit finir par exec /usr/bin/setpriv --reuid=… --regid=… --no-new-privs … -- … (chemin absolu)';
+  const [uid, gid, ...rest] = (drop[1] ?? '').trim().split(/\s+/);
+  const reuid = /^--reuid=(\d+)$/.exec(uid ?? '')?.[1];
+  const regid = /^--regid=(\d+)$/.exec(gid ?? '')?.[1];
+  if (reuid === undefined || regid === undefined) return 'la descente commence par --reuid=<uid> --regid=<gid>';
+  if (Number(reuid) === 0 || Number(regid) === 0) return 'la descente vise root (uid ou gid 0)';
+  for (const opt of rest) {
+    if (DROP_FLAGS.has(opt) || DROP_CAPS.test(opt)) continue;
+    const expanded = /^"\$\{([A-Za-z_]\w*)\[@\]\}"$/.exec(opt)?.[1];
+    if (expanded !== undefined && arrays.has(expanded)) continue;
+    return `option refusée dans la descente : ${opt} (une seule identité, capacités -all puis au plus +setuid,+setgid)`;
+  }
+  if (!rest.includes('--no-new-privs')) return 'la descente doit poser --no-new-privs';
   return undefined;
 }
 
 /**
  * Dernier stage du Dockerfile : aucun processus ne reste root. `USER` non root (nom autre que root, ou uid différent de
- * 0), ou `USER root` seulement si l'ENTRYPOINT est deploy/entrypoint.sh et que celui-ci descend sur un uid non root avant
- * toute autre chose (F-20261001-R01 : sous no-new-privileges, Render, le worker ne peut recevoir ses capacités de
- * changement d'uid que d'un démarrage en root). Le test d'image (tests/image) vérifie la même chose sur le conteneur.
+ * 0), ou `USER root` seulement si l'ENTRYPOINT est /usr/local/bin/entrypoint.sh, que ce stage y copie deploy/entrypoint.sh,
+ * et que celui-ci descend sur un uid non root avant toute autre chose (F-20261001-R01 et décision D-32 : sous
+ * no-new-privileges, Render, le worker ne peut recevoir ses capacités de changement d'uid que d'un démarrage en root). Le
+ * test d'image (tests/image, assert_sandbox_image_privileges) vérifie la même chose sur le conteneur.
  */
 export function checkImageNonRoot(label: string, dockerfile: string, entrypoint?: string): string[] {
   const stages = dockerfile.split(/^\s*FROM\s/m).slice(1);
@@ -193,6 +249,7 @@ export function checkImageNonRoot(label: string, dockerfile: string, entrypoint?
   if (user !== undefined && !/^(root|0)(:|$)/.test(user)) return [];
   const root = `${label} : l'image finale tourne en root`;
   if (!/^\s*ENTRYPOINT \["\/usr\/local\/bin\/entrypoint\.sh"(,|\])/m.test(last)) return [`${root} (USER non-root, ou ENTRYPOINT deploy/entrypoint.sh qui descend aussitôt, attendu)`];
+  if (!/^\s*COPY\s+deploy\/entrypoint\.sh\s+\/usr\/local\/bin\/entrypoint\.sh\s*$/m.test(last)) return [`${root} : le dernier stage ne copie pas deploy/entrypoint.sh vers /usr/local/bin/entrypoint.sh (point d'entrée vérifié ≠ point d'entrée exécuté)`];
   if (entrypoint === undefined) return [`${root} : point d'entrée non fourni, descente de privilèges invérifiable`];
   const problem = rootDropProblem(entrypoint);
   return problem === undefined ? [] : [`${root} : deploy/entrypoint.sh, ${problem}`];
@@ -209,7 +266,9 @@ export function checkRepo(root: string): string[] {
     const yaml = readFileSync(join(dir, name), 'utf8');
     problems.push(...(name === releaseFile ? checkReleaseWorkflow : checkWorkflowSecurity)(`.github/workflows/${name}`, yaml));
     problems.push(...checkFullHistoryJobs(`.github/workflows/${name}`, yaml));
+    if (name === 'ci.yml') problems.push(...checkCiImageJob(`.github/workflows/${name}`, yaml));
   }
+  if (!existsSync(join(dir, 'ci.yml'))) problems.push('.github/workflows/ci.yml : workflow de CI absent');
   problems.push(...checkReleasePleaseConfigs(repo));
   problems.push(...checkImageNonRoot('deploy/Dockerfile', readFileSync(join(root, 'deploy/Dockerfile'), 'utf8'), readFileSync(join(root, 'deploy/entrypoint.sh'), 'utf8')));
   return problems;

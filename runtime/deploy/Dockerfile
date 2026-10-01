@@ -28,12 +28,19 @@ WORKDIR /app
 #   tini, pour que tini (PID 1, pwuser) puisse relayer SIGTERM (un PID 1 root sans CAP_KILL ne le pourrait pas) ;
 # - pour le rôle worker seulement, cap_setuid,cap_setgid traversent tini et le shell du point d'entrée par l'ensemble
 #   ambient, retiré (setpriv --inh-caps=-all --ambient-caps=-all) au lancement de chaque rôle ;
-# - le worker tourne sous node-worker, copie de Node dotée de cap_setuid,cap_setgid (=ep) et exécutable par le groupe
-#   pwuser seulement : capacités effectives, ni ambient ni héritables ; ses enfants ordinaires (Chromium, sh) n'en ont
-#   donc aucune. Une copie (et non un lien) : les capacités de fichier sont portées par l'inode, /usr/bin/node reste nu ;
-# - sandbox-launch, un setpriv doté des mêmes capacités et réservé au groupe pwuser, est exécuté directement par le
-#   worker (jamais par un shell intermédiaire, qui les aurait perdues), avec --no-new-privs ; l'enfant exécute le Node
-#   ordinaire (SANDBOX_NODE), sans capacité.
+# - le worker tourne sous node-worker, copie de Node dotée de cap_setuid,cap_setgid PERMISES seulement (=p) et
+#   exécutable par le groupe pwuser seulement : ni effectives (un process.setuid(0) du worker échoue, EPERM), ni ambient,
+#   ni héritables ; ses enfants ordinaires (Chromium, sh) n'en ont donc aucune. Une copie (et non un lien) : les capacités
+#   de fichier sont portées par l'inode, /usr/bin/node reste nu ;
+# - sandbox-launch, un setpriv doté de cap_setuid,cap_setgid (=ep) et réservé au groupe pwuser, est exécuté directement par
+#   le worker (jamais par un shell intermédiaire, qui les aurait perdues), avec --no-new-privs ; sous no-new-privileges il
+#   garde ses capacités par l'intersection avec le permis du worker. L'enfant exécute le Node ordinaire (SANDBOX_NODE),
+#   sans capacité ;
+# - /ms-playwright (Chromium, que le worker exécute sous pwuser) : l'image de base le livre en 777 ; rendu non modifiable
+#   par un autre que root (go-w), sans quoi un enfant évadé du bac à sable (uid 1500) remplacerait le binaire de Chromium.
+#   Firefox et WebKit, inutilisés, sont retirés (aucune copie de leurs fichiers dans cette couche).
+# Risque résiduel (D-32, docs/deploiement.md) : un worker compromis par du code natif peut rendre ses capacités
+# effectives (capset) puis passer en uid 0 sans capacité ; il peut alors écrire les fichiers de root (0755).
 RUN apt-get update \
  && apt-get install -y --no-install-recommends tini libcap2-bin \
  && rm -rf /var/lib/apt/lists/* \
@@ -44,7 +51,9 @@ RUN apt-get update \
  && install -o root -g pwuser -m 0750 /usr/bin/setpriv /usr/local/libexec/sandbox-launch \
  && setcap cap_setuid,cap_setgid=ep /usr/local/libexec/sandbox-launch \
  && install -o root -g pwuser -m 0750 /usr/bin/node /usr/local/libexec/node-worker \
- && setcap cap_setuid,cap_setgid=ep /usr/local/libexec/node-worker
+ && setcap cap_setuid,cap_setgid=p /usr/local/libexec/node-worker \
+ && rm -rf /ms-playwright/firefox-* /ms-playwright/webkit-* \
+ && chmod -R go-w,a+rX /ms-playwright
 
 # .pnpmfile.cjs : crochet readPackage (pair OTel retiré de Better Auth), exigé par le lockfile (pnpmfileChecksum).
 COPY package.json pnpm-workspace.yaml pnpm-lock.yaml .pnpmfile.cjs ./
@@ -73,12 +82,13 @@ COPY deploy/entrypoint.sh /usr/local/bin/entrypoint.sh
 # Lancée en root (`docker exec`, shell de l'hébergeur : ils prennent l'USER de l'image, root), elle descend sur pwuser
 # sans capacité, comme le point d'entrée.
 RUN chmod 0755 /usr/local/bin/entrypoint.sh \
- && printf '#!/bin/sh\nif [ "$(id -u)" = 0 ]; then exec setpriv --reuid=1001 --regid=1001 --init-groups --inh-caps=-all --no-new-privs -- node /app/apps/cli/dist/index.js "$@"; fi\nexec node /app/apps/cli/dist/index.js "$@"\n' > /usr/local/bin/runtime \
+ && printf '#!/bin/sh\nif [ "$(id -u)" = 0 ]; then exec /usr/bin/setpriv --reuid=1001 --regid=1001 --init-groups --inh-caps=-all --no-new-privs -- node /app/apps/cli/dist/index.js "$@"; fi\nexec node /app/apps/cli/dist/index.js "$@"\n' > /usr/local/bin/runtime \
  && chmod 0755 /usr/local/bin/runtime
 
 # root au démarrage SEULEMENT : entrypoint.sh descend sur pwuser (uid 1001, déjà présent dans l'image Playwright) avant
 # toute autre chose ; sous no-new-privileges, c'est le seul moyen de donner au worker les capacités du changement d'uid.
-# Démarré directement sous un uid non root (--user), le point d'entrée garde le comportement antérieur.
+# Démarré directement sous un uid imposé (--user, runAsUser), le point d'entrée pose quand même no-new-privileges : le
+# worker refuse alors de démarrer en production (fermeture sûre). Kubernetes : runAsNonRoot: true refuse l'image (D-32).
 USER root
 ENV RUNTIME_MODE=all PORT=3000 HOST=0.0.0.0 \
     SANDBOX_UID=1500 SANDBOX_GID=1500 SANDBOX_LAUNCHER=/usr/local/libexec/sandbox-launch SANDBOX_NODE=/usr/bin/node

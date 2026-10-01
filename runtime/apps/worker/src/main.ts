@@ -5,6 +5,7 @@ import { unknownReservedVariablesWarning, type RunExecutor } from '@runtime/core
 import { loadWorkerConfig } from './config.js';
 import { productionExecutorFactory } from './exec/factory.js';
 import { assertSandboxSupported } from './sandbox/index.js';
+import { isSecureExec, secureExecIgnoredWarning } from './secure-exec.js';
 import { startWorker, type Worker } from './worker.js';
 
 export async function main(env: NodeJS.ProcessEnv = process.env, options: { executor?: RunExecutor } = {}): Promise<Worker | null> {
@@ -12,6 +13,9 @@ export async function main(env: NodeJS.ProcessEnv = process.env, options: { exec
   // Faute de frappe probable (14 § 2) : signalée, jamais fatale, jamais la valeur. Avant tout le reste, pour qu'un refus ultérieur la laisse visible.
   const unknownWarning = unknownReservedVariablesWarning(env);
   if (unknownWarning) console.error(unknownWarning);
+  // Sous node-worker (image), NODE_OPTIONS, NODE_EXTRA_CA_CERTS et les variables d'OpenSSL sont ignorées : signalé.
+  const secureWarning = secureExecIgnoredWarning(env, isSecureExec());
+  if (secureWarning) console.error(secureWarning);
   try {
     // Test de démarrage (08 §3) : refus si isolated-vm est sous la borne GHSA-864f-rcv7-6rh4 ou sans binaire pour ce Node.
     assertSandboxSupported();

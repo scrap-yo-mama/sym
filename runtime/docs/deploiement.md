@@ -176,24 +176,61 @@ joignable et rappelle de terminer l'assistant ; tout autre 503 reste un échec.
 ## Modèle de privilèges de l'image
 
 L'image démarre en **root** (`USER root`) et son point d'entrée (`deploy/entrypoint.sh`) descend **aussitôt** sur `pwuser`
-(uid 1001), sans nouveaux privilèges (`setpriv --no-new-privs`) : aucun processus du conteneur ne reste root, pas même
-tini (PID 1), qui partage ainsi l'uid des rôles et peut leur relayer `SIGTERM`. Ce démarrage en root est nécessaire :
-Render lance ses conteneurs sous `no-new-privileges`, régime où un programme ne garde de ses capacités de fichier que
-celles que son appelant détient déjà ; un conteneur démarré directement sous `pwuser` n'en détient aucune, et le bac à
-sable ne pourrait pas changer d'utilisateur (constat F-20261001-R01).
+(uid 1001), sans nouveaux privilèges (`/usr/bin/setpriv --no-new-privs`) : aucun processus de l'application ne reste
+root, pas même tini (PID 1), qui partage ainsi l'uid des rôles et peut leur relayer `SIGTERM`. Ce démarrage en root est
+nécessaire : Render lance ses conteneurs sous `no-new-privileges`, régime où un programme ne garde de ses capacités de
+fichier que celles que son appelant détient déjà ; un conteneur démarré directement sous `pwuser` n'en détient aucune, et
+le bac à sable ne pourrait pas changer d'utilisateur (constat F-20261001-R01, décision D-32).
 
 | Processus | Utilisateur | Capacités |
 |---|---|---|
-| `server`, `runtime migrate`, commande passée au conteneur, `runtime …` lancée en root par `docker exec` ou le shell de l'hébergeur | pwuser | aucune |
-| `worker` (`/usr/local/libexec/node-worker`, copie de Node réservée au groupe pwuser) | pwuser | `cap_setuid,cap_setgid` effectives, ni ambient ni héritables : ses enfants (Chromium, shells) n'en ont aucune |
-| Lanceur du bac à sable (`sandbox-launch`, exécuté directement par le worker) | pwuser puis `sandbox` | les mêmes, le temps de changer d'utilisateur |
+| `server`, `runtime migrate`, commande passée au conteneur, `runtime …` lancée en root par `docker exec` ou le shell de l'hébergeur, sonde de santé du compose | pwuser | aucune |
+| `worker` (`/usr/local/libexec/node-worker`, copie de Node réservée au groupe pwuser) | pwuser | `cap_setuid,cap_setgid` **permises** seulement : ni effectives (un `process.setuid(0)` du worker échoue), ni ambient, ni héritables ; ses enfants (Chromium, shells) n'en ont aucune |
+| Lanceur du bac à sable (`sandbox-launch`, exécuté directement par le worker) | pwuser puis `sandbox` | les mêmes, effectives, le temps de changer d'utilisateur |
 | Enfant du bac à sable (Node ordinaire, `SANDBOX_NODE`) | `sandbox` (1500) | aucune ; `/proc/1/environ` et l'environnement du worker lui sont refusés |
 | tini, et le shell du point d'entrée en `RUNTIME_MODE=all` | pwuser | `cap_setuid,cap_setgid` (ambient) quand le rôle worker démarre ; ils n'exécutent aucun code tiers et retirent ces capacités au lancement de chaque rôle |
 
-Conséquences pour l'hébergeur : ne retirez pas `SETUID` ni `SETGID` (`cap_drop`) et n'imposez pas d'uid (`user:`,
-`--user`, `runAsUser`) au worker ; `no-new-privileges` est admis. Le worker s'exécutant sous un binaire à capacités
-de fichier, Node y ignore `NODE_OPTIONS` et `NODE_EXTRA_CA_CERTS` (mode d'exécution sécurisé du noyau, `AT_SECURE`).
-Le test `pnpm test:image` vérifie ce tableau sur l'image construite, sous le régime de Render et en Docker classique.
+Tous ces processus tournent sous `no-new-privileges`, même quand le conteneur est démarré sous un uid imposé. Chromium
+(`/ms-playwright`) et le reste de l'image ne sont modifiables que par root : un enfant évadé du bac à sable (uid 1500) ne
+peut pas remplacer le binaire que le worker lance ensuite sous `pwuser`. À la fin de chaque run, quand aucun autre run
+n'est actif, le worker tue tous les processus de l'uid dédié : un processus détaché par un enfant ne survit pas pour
+observer les runs suivants.
+
+Conséquences pour l'hébergeur :
+
+- Ne retirez pas `SETUID` ni `SETGID` (`cap_drop`) et n'imposez pas d'uid (`user:`, `--user`, `runAsUser`) au worker ;
+  `no-new-privileges` est admis. Sous un uid imposé, le point d'entrée pose quand même `no-new-privileges` et le worker
+  refuse de démarrer en production (fermeture sûre : sans cela, un processus de `pwuser` pourrait repasser root par les
+  capacités de fichier). Kubernetes : `runAsNonRoot: true` refuse l'image (`USER root`) ; laissez-le à `false` pour ce
+  conteneur. Un scanner d'image signale `USER root` : c'est attendu, la descente est vérifiée par `pnpm test:image`.
+- **`docker exec <conteneur> sh` sans `-u` ouvre un shell root** (il prend l'USER de l'image, root, avec les capacités du
+  conteneur). Pour administrer : `docker exec -u pwuser …`, ou la commande `runtime …`, qui descend d'elle-même. Une sonde
+  de santé en forme commande (`CMD`) tourne aussi en root : celle du compose descend par `setpriv`, faites de même pour
+  les vôtres.
+- Le worker s'exécutant sous un binaire à capacités de fichier, Node y ignore `NODE_OPTIONS` et `NODE_EXTRA_CA_CERTS`,
+  OpenSSL `SSL_CERT_FILE`, `SSL_CERT_DIR` et `OPENSSL_CONF` (mode d'exécution sécurisé du noyau, `AT_SECURE`), alors que le
+  server les honore ; le worker l'écrit au démarrage. Voir [variables-env.md](variables-env.md).
+
+### Risque résiduel : worker compromis
+
+Le worker détient `cap_setuid,cap_setgid` en permis. Un worker compromis **par du code natif** (pas par un script du bac
+à sable, qui tourne sous l'uid 1500 sans capacité) peut les rendre effectives (`capset`), puis passer en **uid 0**. Sous
+`no-new-privileges` il n'a alors aucune capacité, mais, propriétaire des fichiers de root, il peut lire `/etc/shadow` et
+écrire `/usr/local/bin/entrypoint.sh`, `/usr/bin/node` (le Node des futurs enfants), `/app`. En Docker classique avec
+`restart: unless-stopped`, la couche inscriptible survit au redémarrage : le point d'entrée piégé s'exécute alors en vrai
+root, avec les capacités par défaut du conteneur, et compromet aussi le rôle server. Un worker compromis lit déjà
+`MASTER_KEY`, `DATABASE_URL` et les clés LLM : ce risque ajoute la **persistance** et la compromission du server au
+redémarrage.
+
+Comparaison avec la conception antérieure (USER pwuser, avant F-20261001-R01) : en Docker classique, sans
+`no-new-privileges`, n'importe quel processus de `pwuser` (worker ou Chromium compromis) faisait
+`sandbox-launch --reuid=0 -- sh` et obtenait root avec toutes les capacités par défaut. Le modèle actuel est donc plus
+étroit : Chromium et les autres enfants n'ont plus aucune capacité, un `process.setuid(0)` en JavaScript échoue, et l'uid 0
+atteint par du code natif n'a aucune capacité.
+
+Atténuation recommandée en compose : `read_only: true` sur `server` et `worker`, avec `tmpfs: [/tmp]` (profil de
+Chromium, fichiers temporaires) ; plus rien de ce qu'écrirait l'uid 0 ne survit au redémarrage. Non posé par défaut :
+à éprouver sur votre hôte (voir `docker-compose.prod.yml`).
 
 ## Statut de vérification
 
@@ -206,7 +243,7 @@ navigateur) est **à confirmer par la recette 4.4** : aucun n'a été mesuré.
 | Docker Compose | `/api/ready` = 200 sur une base vierge, assistant (`POST /api/setup` 201 puis 404), `runtime doctor`, bac à sable isolé, arrêt propre | Image construite en local, `install.sh` puis `up -d`, sur la machine de développement (Docker Desktop) | Réserve MCP et réserve console (ci-dessous) |
 | Render | `render.yaml` conforme aux invariants (tests statiques) et au schéma officiel de Render au 2026-10-01 (schéma `render.com/schema/render.yaml.json`, sha256 57aa0a1ff9c3, ajv 2020-12) ; bac à sable sous le régime du conteneur Render (`NoNewPrivs: 1`, capacités CHOWN, DAC_OVERRIDE, FOWNER, SETGID, SETUID, SYS_CHROOT relevées sur Render le 2026-10-01, constat F-20261001-R01) : worker, `RUNTIME_MODE=all`, `runtime migrate`, arrêt propre | Tests statiques ; le régime de Render est reproduit sur l'image construite (`pnpm test:image`, joué par `pnpm ci:local`) | Déploiement réel (GO) : bouton « Deploy to Render » (dépôt public), `CREATE ROLE` sur la base gérée, MCP |
 | Railway | Valeur générée de `MASTER_KEY` valide à chaque tirage, variables au catalogue | Tests statiques | Projet réel (compte, plan Hobby) |
-| Heroku | Syntaxe des Dockerfile, release phase `runtime migrate`, `run` explicite (web, worker) | Tests statiques ; le point d'entrée est exercé hors image | Déploiement réel ; démarrage des dynos et release phase avec l'ENTRYPOINT de l'image (entrypoint.sh, qui lance tini ; sans CMD) non observés sur Heroku ; `CREATE ROLE` sur Heroku Postgres ; uid du dyno (le bac à sable exige un démarrage en root, ou sous pwuser sans no-new-privileges) |
+| Heroku | Syntaxe des Dockerfile, release phase `runtime migrate`, `run` explicite (web, worker) | Tests statiques ; le point d'entrée est exercé hors image | Déploiement réel ; démarrage des dynos et release phase avec l'ENTRYPOINT de l'image (entrypoint.sh, qui lance tini ; sans CMD) non observés sur Heroku ; `CREATE ROLE` sur Heroku Postgres ; uid du dyno (le bac à sable exige un démarrage en root ; sous un uid imposé, le worker refuse de démarrer) |
 
 **Réserve MCP.** Le critère « MCP joignable » n'est pas atteint : le serveur MCP (tâche 3.2) n'est pas encore fusionné et
 `/mcp` répond 404. La dépendance de 4.1 envers 3.2 a été levée par la décision D-28 (vérification MCP déployée reportée

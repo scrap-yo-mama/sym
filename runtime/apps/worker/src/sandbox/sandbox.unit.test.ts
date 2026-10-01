@@ -1,13 +1,16 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Bac à sable (INV7, tâche 1.5), niveau unitaire : borne d'isolated-vm, validation des ponts (dont fuzz), protocole IPC.
 // La suite hostile de bout en bout (`assert_sandbox`) est dans sandbox.security.test.ts (pnpm test:security).
-import { readFileSync } from 'node:fs';
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import fc from 'fast-check';
 import { pino } from 'pino';
 import { describe, expect, test } from 'vitest';
 import { SsrfGuard } from '@runtime/core/net';
 import { createSandboxBridges, domainAllowed, normalizeDomain, SandboxBridgeError, validateFetchRequest, type BridgeResponse } from './bridges.js';
-import { killPlan, ProcessSandboxEngine, sandboxOptionsFromEnv, spawnPlan, unexpectedEnvKeys } from './engine.js';
+import type { SandboxBridges } from '@runtime/core';
+import { killPlan, ProcessSandboxEngine, sandboxOptionsFromEnv, spawnPlan, sweepPlan, unexpectedEnvKeys } from './engine.js';
 import { parseChildMessage } from './protocol.js';
 import { checkIsolatedVmVersion, installedIsolatedVmVersion } from './version.js';
 
@@ -281,6 +284,48 @@ describe('utilisateur dédié, lanceur et plafond CPU (08 §3)', () => {
     expect(killPlan({ uid: 1500, gid: 1501 }, 4242)).toBeUndefined();
     expect(killPlan({}, 4242)).toBeUndefined();
   });
+
+  test('balayage de fin de run : SIGKILL à tous les processus de l’uid dédié, envoyé par le lanceur sous cet uid', () => {
+    // kill(-1) sous l'uid dédié n'atteint que les processus de cet uid (ni le worker, ni Chromium, ni tini).
+    expect(sweepPlan({ launcher: '/l', uid: 1500, gid: 1501 })).toEqual({
+      command: '/l',
+      args: ['--reuid=1500', '--regid=1501', '--clear-groups', '--no-new-privs', '--', '/bin/kill', '-KILL', '-1'],
+    });
+    expect(sweepPlan({ uid: 1500, gid: 1501 })).toBeUndefined();
+    expect(sweepPlan({})).toBeUndefined();
+  });
+
+  test('balayage : seulement quand aucun autre run (ni sonde) n’est actif, et un run suivant attend sa fin (revue F-20261001-R01)', async () => {
+    // Faux lanceur : journalise chaque appel ; n'exécute JAMAIS /bin/kill (ici, kill -1 viserait tous nos processus).
+    const dir = mkdtempSync(join(tmpdir(), 'zz_test_sweep-'));
+    const log = join(dir, 'calls.log');
+    const launcher = join(dir, 'launch.sh');
+    writeFileSync(launcher, `#!/bin/sh\nwhile [ "$1" != -- ]; do shift; done; shift\nprintf '%s\\n' "$1 $3" >> '${log}'\ncase "$1" in /bin/kill) exit 0 ;; esac\nexec "$@"\n`);
+    chmodSync(launcher, 0o755);
+    // Lancements d'enfant (/bin/sh) et balayages (/bin/kill -1) ; les arrêts forcés par pid (killPlan) sont ignorés.
+    const calls = () =>
+      readFileSync(log, 'utf8').trim().split('\n').flatMap((c) => (c === '/bin/kill -1' ? ['sweep'] : c.startsWith('/bin/sh ') ? ['spawn'] : []));
+    const bridges = { fetch: () => Promise.reject(new Error('non')), log: () => undefined, emit: () => undefined, violation: () => undefined } as unknown as SandboxBridges;
+    try {
+      const engine = new ProcessSandboxEngine({ production: false, launcher, uid: 1500, gid: 1500 });
+      const limits = { timeoutMs: 5000, memoryMb: 64 };
+      expect(await engine.run('return 1;', bridges, limits)).toMatchObject({ outcome: 'ok', value: 1 });
+      await engine.idle();
+      expect(calls()).toEqual(['spawn', 'sweep']);
+      // Deux runs concurrents : un seul balayage, après le second.
+      const [a, b] = await Promise.all([engine.run('return 2;', bridges, limits), engine.run('return 3;', bridges, limits)]);
+      expect([a.value, b.value]).toEqual([2, 3]);
+      await engine.idle();
+      // Ordre : lancement, balayage, lancement, lancement, balayage (aucun lancement pendant un balayage).
+      expect(calls()).toEqual(['spawn', 'sweep', 'spawn', 'spawn', 'sweep']);
+      // La sonde d'isolation compte comme un run : balayage après elle aussi.
+      await engine.probeIsolation();
+      await engine.idle();
+      expect(calls().slice(-2)).toEqual(['spawn', 'sweep']);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('image (deploy/Dockerfile) : utilisateur dédié du bac à sable', () => {
@@ -296,7 +341,11 @@ describe('image (deploy/Dockerfile) : utilisateur dédié du bac à sable', () =
     // F-20261001-R01 : le worker tourne sous une COPIE de Node à capacités de fichier réservée à pwuser ; l'enfant exécute
     // le Node ordinaire (sans capacité de fichier, exécutable par l'uid dédié). Démarrage en root, descente par entrypoint.sh.
     expect(dockerfile).toContain('install -o root -g pwuser -m 0750 /usr/bin/node /usr/local/libexec/node-worker');
-    expect(dockerfile).toContain('setcap cap_setuid,cap_setgid=ep /usr/local/libexec/node-worker');
+    // Capacités PERMISES seulement (=p, revue de F-20261001-R01) : un process.setuid(0) du worker échoue (EPERM) ; sous
+    // no-new-privileges, sandbox-launch garde les siennes par l'intersection avec le permis du worker.
+    expect(dockerfile).toContain('setcap cap_setuid,cap_setgid=p /usr/local/libexec/node-worker');
+    // Rien de ce qu'exécute pwuser (Chromium de /ms-playwright) n'est modifiable par l'uid dédié.
+    expect(dockerfile).toMatch(/chmod -R go-w,a\+rX \/ms-playwright/);
     expect(options.node).toBe('/usr/bin/node');
     expect(dockerfile).toMatch(/^USER root$/m);
     expect(dockerfile).toMatch(/^ENTRYPOINT \["\/usr\/local\/bin\/entrypoint\.sh"\]$/m);

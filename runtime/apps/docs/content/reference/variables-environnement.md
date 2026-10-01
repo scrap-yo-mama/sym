@@ -82,6 +82,12 @@ Pour l'instant, le TLS vers la base se règle par `sslmode` dans `DATABASE_URL` 
 | `SANDBOX_LAUNCHER` | fixé dans l'image | worker | lanceur de changement d'utilisateur du bac à sable | lue |
 | `SANDBOX_NODE` | fixé dans l'image | worker | Node exécuté par l'enfant du bac à sable, sans capacité (le worker tourne sous une copie de Node réservée à son groupe) | lue |
 
+Le worker de l'image tourne sous une copie de Node dotée de capacités de fichier : le noyau le lance en mode d'exécution
+sécurisé (`AT_SECURE`). Il y ignore `NODE_OPTIONS`, `NODE_EXTRA_CA_CERTS`, `SSL_CERT_FILE`, `SSL_CERT_DIR` et `OPENSSL_CONF`,
+et glibc lui retire `TMPDIR`, `LD_LIBRARY_PATH` et `LOCPATH`, alors que le server les honore : une autorité de certification
+privée posée par `NODE_EXTRA_CA_CERTS` marche côté server et échoue côté worker. Le worker avertit au démarrage si l'une des
+cinq premières est posée. Pour PostgreSQL, passez la CA par `sslrootcert` dans `DATABASE_URL`.
+
 ## Rétention et stockage
 
 | Variable | Défaut | Lue par | Rôle | État |
