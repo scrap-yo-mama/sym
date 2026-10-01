@@ -31,6 +31,6 @@ const describedBy = computed(() => [props.hint ? `${props.id}-hint` : '', props.
       @update:model-value="(value: string | number) => emit('update:modelValue', String(value))"
     />
     <p v-if="hint" :id="`${id}-hint`" class="text-xs text-muted-foreground">{{ hint }}</p>
-    <p v-if="error" :id="`${id}-error`" class="text-sm text-destructive">{{ error }}</p>
+    <p v-if="error" :id="`${id}-error`" class="sym-error">{{ error }}</p>
   </div>
 </template>

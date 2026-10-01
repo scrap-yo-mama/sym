@@ -1,6 +1,7 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-only -->
 <script setup lang="ts">
 import { computed, watch, watchEffect } from 'vue';
+import { SymSignature } from '@runtime/ui';
 import { useI18n } from 'vue-i18n';
 import { RouterLink, RouterView, useRoute, useRouter } from 'vue-router';
 import AccountNotices from '@/components/account/AccountNotices.vue';
@@ -26,7 +27,7 @@ const roleBanner = computed(() => (me.value?.role === 'owner' || me.value?.role 
 
 /** Classe de l'entrée courante ; « Mon compte » vit sous /settings mais n'allume pas aussi « Réglages ». */
 function activeClass(to: string): string {
-  return to === '/settings' && route.path.startsWith('/settings/account') ? 'router-link-active' : 'bg-accent font-medium';
+  return to === '/settings' && route.path.startsWith('/settings/account') ? 'router-link-active' : 'bg-accent font-bold text-nav-foreground';
 }
 
 const displayName = computed(() => me.value?.displayName || me.value?.email || '');
@@ -85,19 +86,23 @@ function focusMain(): void {
     {{ t('app.skipToContent') }}
   </a>
   <ConnectionBanner :status="streamStatus" />
-  <header class="flex flex-wrap items-center justify-between gap-3 border-b px-4 py-3">
-    <p class="text-lg font-semibold tracking-tight">{{ t('app.name') }}</p>
+  <!-- Barre de navigation anthracite de la maquette (20 § 5) ; `sym-on-ink` donne à ses textes et contrôles les jetons du thème sombre. -->
+  <header class="sym-on-ink mx-3 mt-3 mb-2 flex flex-wrap items-center justify-between gap-3 rounded-lg bg-nav px-4 py-3 text-nav-foreground sm:mx-4 sm:px-6">
+    <div class="flex items-center gap-2.5">
+      <p class="font-display text-[22px] leading-none font-extrabold tracking-tight">{{ t('app.name') }}</p>
+      <SymSignature variant="badge" />
+    </div>
     <nav v-if="isAuthenticated && navEntries.length > 0" :aria-label="t('nav.main')">
       <ul class="flex flex-wrap items-center gap-1">
         <li v-for="entry in navEntries" :key="entry.to">
-          <RouterLink :to="entry.to" class="flex min-h-11 items-center rounded-md px-3 text-sm hover:bg-accent" :active-class="activeClass(entry.to)">{{ t(entry.label) }}</RouterLink>
+          <RouterLink :to="entry.to" class="flex min-h-11 items-center rounded-md px-3 text-sm text-nav-muted-foreground hover:bg-accent hover:text-nav-foreground" :active-class="activeClass(entry.to)">{{ t(entry.label) }}</RouterLink>
         </li>
       </ul>
     </nav>
     <div class="flex flex-wrap items-center gap-3">
       <PreferencesBar />
       <template v-if="isAuthenticated">
-        <span class="text-sm text-muted-foreground">{{ t('nav.signedInAs', { name: displayName }) }}</span>
+        <span class="text-sm text-nav-muted-foreground">{{ t('nav.signedInAs', { name: displayName }) }}</span>
         <Button variant="outline" size="sm" data-testid="sign-out" @click="signOut()">{{ t('nav.signOut') }}</Button>
       </template>
     </div>

@@ -1,60 +1,21 @@
 /* SPDX-License-Identifier: AGPL-3.0-only */
 /*
- * Jetons de design (variables CSS, shadcn-vue + Tailwind v4, ADR 0002). Thèmes clair et sombre ; la classe `dark`
- * est posée sur <html> avant le premier rendu par /theme-init.js (06 § 1). Contrastes visés : 4,5:1 pour le texte,
- * 3:1 pour bordures de champs et anneau de focus (WCAG 1.4.3, 1.4.11) ; le test de jetons est apps/web/src/design-tokens.unit.test.ts (3.9).
+ * Console : Tailwind v4 branché sur les jetons de la marque SYM (tâche 3.15, 20 § 1). La seule source de couleurs, de
+ * polices, de formes et de mouvement est `packages/ui` (theme.css, importé ci-dessous) ; ce fichier ne contient aucune
+ * couleur en dur (assert_no_hardcoded_colors) : il nomme les jetons pour Tailwind et pose les règles de base.
+ * La classe `dark` est posée sur <html> avant le premier rendu par /theme-init.js (06 § 1). Le test de jetons (contrastes,
+ * WCAG 1.4.3 et 1.4.11) est packages/ui/src/tokens.unit.test.ts et apps/web/src/design-tokens.unit.test.ts.
  */
 @import "tailwindcss";
 @import "tw-animate-css";
+@import "@runtime/ui/theme.css";
 
 @custom-variant dark (&:is(.dark *));
 
-:root {
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.145 0 0);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.145 0 0);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.145 0 0);
-  --primary: oklch(0.205 0 0);
-  --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.97 0 0);
-  --secondary-foreground: oklch(0.205 0 0);
-  --muted: oklch(0.97 0 0);
-  --muted-foreground: oklch(0.5 0 0);
-  --accent: oklch(0.97 0 0);
-  --accent-foreground: oklch(0.205 0 0);
-  --destructive: oklch(0.55 0.22 27);
-  --destructive-foreground: oklch(0.985 0 0);
-  --border: oklch(0.922 0 0);
-  --input: oklch(0.56 0 0);
-  --ring: oklch(0.45 0 0);
-  --radius: 0.625rem;
-}
-
-.dark {
-  --background: oklch(0.145 0 0);
-  --foreground: oklch(0.985 0 0);
-  --card: oklch(0.205 0 0);
-  --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.205 0 0);
-  --popover-foreground: oklch(0.985 0 0);
-  --primary: oklch(0.985 0 0);
-  --primary-foreground: oklch(0.205 0 0);
-  --secondary: oklch(0.269 0 0);
-  --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.269 0 0);
-  --muted-foreground: oklch(0.72 0 0);
-  --accent: oklch(0.269 0 0);
-  --accent-foreground: oklch(0.985 0 0);
-  --destructive: oklch(0.7 0.19 22);
-  --destructive-foreground: oklch(0.145 0 0);
-  --border: oklch(0.3 0 0);
-  --input: oklch(0.6 0 0);
-  --ring: oklch(0.8 0 0);
-}
-
 @theme inline {
+  --font-sans: var(--sym-font-sans);
+  --font-display: var(--sym-font-display);
+  --font-mono: var(--sym-font-mono);
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-card: var(--card);
@@ -74,10 +35,34 @@
   --color-border: var(--border);
   --color-input: var(--input);
   --color-ring: var(--ring);
-  --radius-sm: calc(var(--radius) * 0.6);
-  --radius-md: calc(var(--radius) * 0.8);
-  --radius-lg: var(--radius);
-  --radius-xl: calc(var(--radius) * 1.4);
+  --color-signature: var(--signature);
+  --color-signature-foreground: var(--signature-foreground);
+  --color-nav: var(--nav);
+  --color-nav-foreground: var(--nav-foreground);
+  --color-nav-muted-foreground: var(--nav-muted-foreground);
+  --color-status-border: var(--status-border);
+  --color-status-enquete: var(--status-enquete);
+  --color-status-enquete-foreground: var(--status-enquete-foreground);
+  --color-status-sain: var(--status-sain);
+  --color-status-sain-foreground: var(--status-sain-foreground);
+  --color-status-warning: var(--status-warning);
+  --color-status-warning-foreground: var(--status-warning-foreground);
+  --color-status-reparation: var(--status-reparation);
+  --color-status-reparation-foreground: var(--status-reparation-foreground);
+  --color-status-action-requise: var(--status-action-requise);
+  --color-status-action-requise-foreground: var(--status-action-requise-foreground);
+  --color-status-erreur: var(--status-erreur);
+  --color-status-erreur-foreground: var(--status-erreur-foreground);
+  --color-status-bloquee: var(--status-bloquee);
+  --color-status-bloquee-foreground: var(--status-bloquee-foreground);
+  --color-diff-added: var(--diff-added);
+  --color-diff-removed: var(--diff-removed);
+  --color-diff-changed: var(--diff-changed);
+  --radius-sm: 6px;
+  --radius-md: var(--sym-radius-control);
+  --radius-lg: 16px;
+  --radius-xl: var(--sym-radius-card);
+  --shadow-flat: 0 10px 0 var(--shadow-flat-color);
 }
 
 @layer base {
@@ -87,6 +72,13 @@
   body {
     @apply bg-background text-foreground antialiased;
   }
+  /* Titres en Bricolage Grotesque 800 (20 § 1.2) ; le texte courant reste en DM Sans. */
+  h1,
+  h2,
+  h3,
+  h4 {
+    @apply font-display font-extrabold tracking-tight;
+  }
   /* Le focus du <h1> de chaque route est programmatique (tabindex -1) : pas d'anneau parasite. */
   h1[tabindex="-1"]:focus {
     outline: none;
@@ -94,23 +86,9 @@
 }
 
 /*
- * Anneau de focus unique et opaque (WCAG 2.4.7 et 1.4.11 : --ring à 3:1 au moins sur chaque fond, vérifié par
- * design-tokens.unit.test.ts). Règle SANS calque : elle l'emporte sur `outline-none` et sur les anneaux à 50 % des composants,
- * trop pâles pour un bouton plein. Les cibles programmatiques (tabindex -1 : <main>, <h1>) n'ont pas d'anneau.
+ * Message d'erreur en ligne : l'orange est une SURFACE à texte anthracite, jamais un texte (20 § 1.3). Le sens est porté
+ * par le texte du message (role="alert") ; la surface orange en est le repère visuel.
  */
-:focus-visible:not([tabindex="-1"]) {
-  outline: 2px solid var(--ring);
-  outline-offset: 2px;
-}
-
-/* prefers-reduced-motion coupe les animations non essentielles (06 § 1). */
-@media (prefers-reduced-motion: reduce) {
-  *,
-  ::before,
-  ::after {
-    animation-duration: 0.01ms !important;
-    animation-iteration-count: 1 !important;
-    transition-duration: 0.01ms !important;
-    scroll-behavior: auto !important;
-  }
+@utility sym-error {
+  @apply w-fit max-w-full rounded-md bg-destructive px-2 py-1 text-sm font-medium text-destructive-foreground;
 }

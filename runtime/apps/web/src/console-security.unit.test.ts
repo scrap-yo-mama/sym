@@ -41,6 +41,27 @@ describe('CSP stricte', () => {
   });
 });
 
+// assert_no_csp_violation (tâche 3.15, 20b § 3.1) : le banc E2E sert la console avec sa CSP stricte (08b § 2) et fait échouer TOUT
+// test de la console dès le premier événement `securitypolicyviolation` ; ce garde-fou statique vérifie le câblage.
+describe('assert_no_csp_violation', () => {
+  const harness = readFileSync(join(webRoot, 'e2e/harness.ts'), 'utf8');
+  const fixture = readFileSync(join(webRoot, 'e2e/console.fixture.ts'), 'utf8');
+
+  test('le harnais pose la CSP de 08b § 2 sur chaque page servie, sans unsafe-inline ni source tierce', () => {
+    const csp = /CONSOLE_CSP = "([^"]+)"/.exec(harness)?.[1] ?? '';
+    for (const directive of ["default-src 'self'", "script-src 'self'", "style-src 'self'", "img-src 'self' data:", "connect-src 'self'", "frame-ancestors 'none'", "base-uri 'none'", "form-action 'self'", "object-src 'none'"]) {
+      expect(csp, directive).toContain(directive);
+    }
+    expect(csp).not.toMatch(/unsafe-inline|unsafe-eval|https?:/);
+    expect(harness).toContain("res.setHeader('content-security-policy', CONSOLE_CSP)");
+  });
+
+  test('la fixture relève chaque securitypolicyviolation et échoue le test s’il y en a une', () => {
+    expect(fixture).toContain("addEventListener('securitypolicyviolation'");
+    expect(fixture).toMatch(/expect\(cspViolations,.*\)\.toEqual\(\[\]\)/);
+  });
+});
+
 // Le build de la console ne dépend que de la console : ni test d'intégration, ni serveur, ni base dans son typage.
 // Le typecheck des tests (qui importent le serveur de test) a son propre tsconfig.
 describe('assert_console_build_independent_of_server', () => {

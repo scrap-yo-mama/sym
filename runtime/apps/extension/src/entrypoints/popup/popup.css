@@ -1,0 +1,133 @@
+/* SPDX-License-Identifier: AGPL-3.0-only */
+/*
+ * Popup de l'extension (tâche 3.15, 20 § 1) : jetons, polices et signature de packages/ui, aucune couleur en dur
+ * (assert_no_hardcoded_colors), aucun style en ligne ni dans le HTML (CSP MV3). Le panneau latéral complet est la tâche 3.18.
+ */
+@import '@runtime/ui/theme.css';
+
+:root {
+  color-scheme: light dark;
+  font: 14px/1.4 var(--sym-font-sans);
+}
+
+/* `font: inherit` : Chrome applique aux pages d'extension sa propre police système au body, qui masquerait celle de la charte. */
+body {
+  margin: 0;
+  min-width: 320px;
+  font: inherit;
+  background-color: var(--background);
+  color: var(--foreground);
+}
+
+main {
+  padding: 12px 16px;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 8px;
+}
+
+h1 {
+  margin: 0;
+  font: 800 18px/1.1 var(--sym-font-display);
+  letter-spacing: -0.02em;
+}
+
+h2 {
+  margin: 12px 0 4px;
+  font: 800 14px/1.2 var(--sym-font-display);
+}
+
+label {
+  display: block;
+  margin: 6px 0;
+}
+
+input:not([type='radio']) {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  min-height: 36px;
+  margin-top: 2px;
+  padding: 4px 10px;
+  border: 1px solid var(--input);
+  border-radius: var(--sym-radius-control);
+  background-color: var(--card);
+  color: var(--foreground);
+  font: inherit;
+}
+
+button {
+  min-height: 36px;
+  margin: 6px 6px 0 0;
+  padding: 4px 14px;
+  border: 1px solid var(--input);
+  border-radius: var(--sym-radius-control);
+  background-color: var(--card);
+  color: var(--card-foreground);
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+button:hover:not(:disabled) {
+  background-color: var(--accent);
+  color: var(--accent-foreground);
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+#pair,
+#consent-accept,
+#connect-site {
+  min-height: 44px;
+  border-color: transparent;
+  background-color: var(--primary);
+  color: var(--primary-foreground);
+}
+
+#pair:hover:not(:disabled),
+#consent-accept:hover:not(:disabled),
+#connect-site:hover:not(:disabled) {
+  background-color: var(--primary);
+  color: var(--primary-foreground);
+  text-decoration: underline;
+}
+
+/* Erreur : surface orange à texte anthracite, jamais un texte orange (20 § 1.3). */
+#error {
+  margin: 8px 0;
+  padding: 6px 10px;
+  border-radius: var(--sym-radius-control);
+  background-color: var(--destructive);
+  color: var(--destructive-foreground);
+  font-weight: 500;
+}
+
+#notice,
+#instance-error {
+  margin: 8px 0;
+  padding: 6px 10px;
+  border: 1px solid var(--foreground);
+  border-radius: var(--sym-radius-control);
+  background-color: var(--status-warning);
+  color: var(--status-warning-foreground);
+}
+
+ul {
+  padding-left: 16px;
+}
+
+dt {
+  font-weight: 700;
+}
+
+dd {
+  margin: 0 0 6px;
+}

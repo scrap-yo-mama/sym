@@ -16,6 +16,7 @@
   "exclude": [
     "apps/web/**",
     "apps/extension/**",
-    "apps/docs/**"
+    "apps/docs/**",
+    "packages/ui/**"
   ]
 }

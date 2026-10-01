@@ -150,7 +150,7 @@ const errorText = computed(() => {
         @confirm="confirmRevert"
         @cancel="reverting.cancel()"
       />
-      <p v-if="errorText" role="alert" class="text-sm text-destructive">{{ errorText }}</p>
+      <p v-if="errorText" role="alert" class="sym-error">{{ errorText }}</p>
     </section>
 
     <section v-if="versions.versions.value.length > 1" aria-labelledby="strategy-compare" class="flex flex-col gap-3">

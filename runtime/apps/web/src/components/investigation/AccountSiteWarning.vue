@@ -43,6 +43,6 @@ const { t } = useI18n();
       />
       {{ t('newApi.account.confirm') }}
     </label>
-    <p v-if="error" id="account-confirm-error" class="text-sm text-destructive" role="alert">{{ t('newApi.accountRequired') }}</p>
+    <p v-if="error" id="account-confirm-error" class="sym-error" role="alert">{{ t('newApi.accountRequired') }}</p>
   </div>
 </template>

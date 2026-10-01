@@ -11,6 +11,7 @@
     "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
+    "@runtime/ui": "workspace:*",
     "vue": "catalog:"
   },
   "devDependencies": {

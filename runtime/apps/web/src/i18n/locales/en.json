@@ -12,6 +12,11 @@
       "light": "Light",
       "dark": "Dark"
     },
+    "motion": "Animations",
+    "motions": {
+      "system": "System",
+      "reduced": "Reduced"
+    },
     "signedInAs": "Signed in as {name}",
     "signOut": "Sign out",
     "main": "Main navigation",

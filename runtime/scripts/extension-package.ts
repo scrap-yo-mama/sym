@@ -13,7 +13,7 @@ const DIST = join(EXT, 'dist');
 
 /** Permissions fixes de 07 § 4 : toute addition passe en revue (et met à jour la fiche du Store). */
 export const EXPECTED_PERMISSIONS = ['alarms', 'cookies', 'debugger', 'scripting', 'storage', 'tabGroups', 'tabs'] as const;
-const ALLOWED_FILE = /^(manifest\.json|background\.js|popup\.html|chunks\/[\w.-]+\.(js|css)|icons\/(16|32|48|128)\.png)$/;
+const ALLOWED_FILE = /^(manifest\.json|background\.js|popup\.html|chunks\/[\w.-]+\.(js|css)|assets\/[\w.-]+\.(css|woff2)|icons\/(16|32|48|128)\.png)$/;
 const FORBIDDEN_KEYS = ['content_scripts', 'externally_connectable', 'web_accessible_resources', 'update_url', 'key', 'oauth2'];
 
 type Manifest = Record<string, unknown> & { version?: string; permissions?: string[]; host_permissions?: string[]; optional_host_permissions?: string[]; icons?: Record<string, string> };
@@ -36,6 +36,10 @@ export function auditPackage(files: string[], read: (file: string) => string, pa
     const icon = manifest.icons?.[size];
     if (icon === undefined || !files.includes(icon)) problems.push(`icône ${size} déclarée mais absente du zip`);
   }
+  // Tâche 3.15 : feuille et polices du popup, servies par l'extension elle-même ; aucune ressource distante (polices comprises).
+  for (const f of files.filter((n) => /\.css$/.test(n))) {
+    if (/@import|url\(\s*["']?(https?:)?\/\//i.test(read(f))) problems.push(`ressource distante dans ${f}`);
+  }
   for (const f of files.filter((n) => /\.(js|html)$/.test(n))) {
     const text = read(f);
     if (/\beval\s*\(|new\s+Function\s*\(/.test(text)) problems.push(`évaluation dynamique dans ${f}`);
@@ -46,7 +50,7 @@ export function auditPackage(files: string[], read: (file: string) => string, pa
 }
 
 function selfTest(): void {
-  const good = ['manifest.json', 'background.js', 'popup.html', 'chunks/popup-abc.js', 'icons/16.png', 'icons/32.png', 'icons/48.png', 'icons/128.png'];
+  const good = ['manifest.json', 'background.js', 'popup.html', 'chunks/popup-abc.js', 'assets/popup-abc.css', 'assets/dm-sans-latin-400-normal-abc.woff2', 'icons/16.png', 'icons/32.png', 'icons/48.png', 'icons/128.png'];
   const manifest = {
     manifest_version: 3,
     version: '1.2.3',
@@ -63,6 +67,7 @@ function selfTest(): void {
     ['permission en trop', good, reader({ ...manifest, permissions: [...EXPECTED_PERMISSIONS, 'history'] }), /permissions inattendues/],
     ['content script', good, reader({ ...manifest, content_scripts: [] }), /content_scripts/],
     ['eval', good, reader(manifest, { 'background.js': 'eval("1")' }), /évaluation dynamique/],
+    ['police ou feuille distante', good, reader(manifest, { 'assets/popup-abc.css': '@import url(https://fonts.googleapis.com/css2?family=DM+Sans);' }), /ressource distante/],
     ['script distant', good, reader(manifest, { 'popup.html': '<script src="https://cdn.example/x.js"></script>' }), /script distant/],
     ['import distant', good, reader(manifest, { 'background.js': 'importScripts("https://cdn.example/x.js")' }), /import distant/],
     ['source map', [...good, 'background.js.map'], reader(manifest), /hors paquet/],

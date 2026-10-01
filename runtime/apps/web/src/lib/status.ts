@@ -22,15 +22,19 @@ export const STATUS_ICON: Record<ApiStatus, StatusIcon> = {
   bloquee: 'circle-slash',
 };
 
-/** Teinte du badge (classes Tailwind, clair et sombre) : une aide visuelle de plus, jamais la seule. */
+/**
+ * Teinte du badge (classes Tailwind sur les jetons de packages/ui, qui changent avec le thème) : surface pleine et texte de
+ * la famille du statut (20 § 1.2), bordure `status-border` ; une aide visuelle de plus, jamais la seule (forme d'icône,
+ * libellé et raison). L'orange (`erreur`) n'est qu'une surface à texte anthracite.
+ */
 export const STATUS_TONE: Record<ApiStatus, string> = {
-  enquete: 'border-sky-700 text-sky-800 dark:border-sky-400 dark:text-sky-300',
-  sain: 'border-emerald-700 text-emerald-800 dark:border-emerald-400 dark:text-emerald-300',
-  warning: 'border-amber-700 text-amber-800 dark:border-amber-400 dark:text-amber-300',
-  reparation: 'border-violet-700 text-violet-800 dark:border-violet-400 dark:text-violet-300',
-  erreur: 'border-red-700 text-red-800 dark:border-red-400 dark:text-red-300',
-  action_requise: 'border-orange-700 text-orange-800 dark:border-orange-400 dark:text-orange-300',
-  bloquee: 'border-zinc-700 text-zinc-800 dark:border-zinc-400 dark:text-zinc-300',
+  enquete: 'border-status-border bg-status-enquete text-status-enquete-foreground',
+  sain: 'border-status-border bg-status-sain text-status-sain-foreground',
+  warning: 'border-status-border bg-status-warning text-status-warning-foreground',
+  reparation: 'border-status-border bg-status-reparation text-status-reparation-foreground',
+  erreur: 'border-status-border bg-status-erreur text-status-erreur-foreground',
+  action_requise: 'border-status-border bg-status-action-requise text-status-action-requise-foreground',
+  bloquee: 'border-status-border bg-status-bloquee text-status-bloquee-foreground',
 };
 
 /**

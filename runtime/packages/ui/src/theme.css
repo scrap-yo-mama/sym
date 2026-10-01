@@ -1,0 +1,252 @@
+/*
+ * Jetons de la marque SYM : source unique de la console, du panneau de l'extension et du site de doc (20 § 1.2, 20b § 1).
+ * Trois couches : (1) palette de la maquette validée, `--sym-*` ; (2) jetons sémantiques, `--background`, `--primary`,
+ * `--status-*`…, que les composants consomment, en clair (`:root`) et en sombre (`.dark`) ; (3) formes, polices, mouvement.
+ * Règles de couleur (WCAG 2.2 AA, test de jetons packages/ui/src/tokens.unit.test.ts) : l'orange est une SURFACE dont le
+ * texte est anthracite, jamais un texte, jamais avec du blanc ; le bleu n'est jamais posé sur l'anthracite (en sombre :
+ * lilas). Aucune couleur n'est écrite ailleurs que dans ce fichier. Les commentaires de ce fichier ne contiennent pas
+ * d'accolade : le test de jetons lit les blocs par expression régulière.
+ */
+@import './fonts.css';
+
+:root {
+  /* Palette de la maquette (20 § 1.2). */
+  --sym-cream: #F3EEE6;
+  --sym-paper: #FBF8F3;
+  --sym-ink: #24252D;
+  --sym-muted: #4E4C47;
+  --sym-blue: #3A33F0;
+  --sym-lilac: #D8BDF7;
+  --sym-orange: #FF5A1F;
+  --sym-yellow: #FFC727;
+  --sym-aqua: #A8E3EA;
+  --sym-line: #E3DCD0;
+  --sym-todo: #8C877D;
+
+  /* Valeurs dérivées de la maquette : coche sur aqua, gris de navigation sur anthracite, lilas et sable clairs. */
+  --sym-aqua-ink: #0F4F57;
+  --sym-nav-muted: #C9C4BA;
+  --sym-lilac-soft: #EDE6FB;
+  --sym-sand: #EFE9DF;
+  --sym-input: #7A756B;
+
+  /* Valeurs dérivées du thème sombre (20 § 1.4, fixées en 3.15). */
+  --sym-ink-raised: #2F3039;
+  --sym-ink-high: #3A3B47;
+  --sym-ink-line: #4A4B58;
+  --sym-ink-todo: #9C978D;
+  --sym-lilac-deep: #4B3F72;
+
+  /* Teintes douces des lignes de comparaison (clair, puis sombre). */
+  --sym-diff-added-soft: #D5EEF1;
+  --sym-diff-removed-soft: #FFD9C9;
+  --sym-diff-changed-soft: #FFEDB8;
+  --sym-diff-added-deep: #1F4A50;
+  --sym-diff-removed-deep: #6B2E14;
+  --sym-diff-changed-deep: #5E4A0C;
+
+  /* Polices (fonts.css) : repli système, jamais une police distante. */
+  --sym-font-sans: 'DM Sans', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --sym-font-display: 'Bricolage Grotesque', 'DM Sans', ui-sans-serif, system-ui, sans-serif;
+  --sym-font-mono: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+
+  /* Formes : contrôles de 10 px, cartes de 16 à 24 px, pilules de 999 px ; ombres plates réservées aux cartes d'illustration. */
+  --radius: 10px;
+  --sym-radius-control: 10px;
+  --sym-radius-card: 20px;
+  --sym-radius-pill: 999px;
+  --sym-shadow-flat: 0 10px 0 var(--sym-ink);
+
+  /* Thème clair. */
+  --background: var(--sym-cream);
+  --foreground: var(--sym-ink);
+  --card: var(--sym-paper);
+  --card-foreground: var(--sym-ink);
+  --popover: var(--sym-paper);
+  --popover-foreground: var(--sym-ink);
+  --primary: var(--sym-blue);
+  --primary-foreground: var(--sym-paper);
+  --secondary: var(--sym-lilac-soft);
+  --secondary-foreground: var(--sym-ink);
+  --muted: var(--sym-sand);
+  --muted-foreground: var(--sym-muted);
+  --accent: var(--sym-lilac-soft);
+  --accent-foreground: var(--sym-ink);
+  --destructive: var(--sym-orange);
+  --destructive-foreground: var(--sym-ink);
+  --border: var(--sym-line);
+  --input: var(--sym-input);
+  --ring: var(--sym-blue);
+  --signature: var(--sym-yellow);
+  --signature-foreground: var(--sym-ink);
+  --nav: var(--sym-ink);
+  --nav-foreground: var(--sym-paper);
+  --nav-muted-foreground: var(--sym-nav-muted);
+  --shadow-flat-color: var(--sym-ink);
+
+  /* Statuts d'une API (06 § 2) : surface et texte ; la forme d'icône, le libellé et la raison portent le sens, jamais la couleur seule. */
+  --status-enquete: var(--sym-paper);
+  --status-enquete-foreground: var(--sym-ink);
+  --status-sain: var(--sym-aqua);
+  --status-sain-foreground: var(--sym-ink);
+  --status-warning: var(--sym-yellow);
+  --status-warning-foreground: var(--sym-ink);
+  --status-reparation: var(--sym-lilac);
+  --status-reparation-foreground: var(--sym-ink);
+  --status-action-requise: var(--sym-blue);
+  --status-action-requise-foreground: var(--sym-paper);
+  --status-erreur: var(--sym-orange);
+  --status-erreur-foreground: var(--sym-ink);
+  --status-bloquee: var(--sym-ink);
+  --status-bloquee-foreground: var(--sym-paper);
+  --status-border: var(--sym-ink);
+
+  /* Lignes de comparaison de stratégies. */
+  --diff-added: var(--sym-diff-added-soft);
+  --diff-removed: var(--sym-diff-removed-soft);
+  --diff-changed: var(--sym-diff-changed-soft);
+}
+
+/*
+ * Thème sombre : fond anthracite, texte papier, accents lilas. `.sym-on-ink` applique les mêmes valeurs à une zone
+ * anthracite d'un écran clair (barre de navigation) : ses textes et ses contrôles passent le même test de jetons.
+ */
+.dark,
+.sym-on-ink {
+  --background: var(--sym-ink);
+  --foreground: var(--sym-paper);
+  --card: var(--sym-ink-raised);
+  --card-foreground: var(--sym-paper);
+  --popover: var(--sym-ink-raised);
+  --popover-foreground: var(--sym-paper);
+  --primary: var(--sym-lilac);
+  --primary-foreground: var(--sym-ink);
+  --secondary: var(--sym-ink-high);
+  --secondary-foreground: var(--sym-paper);
+  --muted: var(--sym-ink-high);
+  --muted-foreground: var(--sym-nav-muted);
+  --accent: var(--sym-ink-high);
+  --accent-foreground: var(--sym-paper);
+  --destructive: var(--sym-orange);
+  --destructive-foreground: var(--sym-ink);
+  --border: var(--sym-ink-line);
+  --input: var(--sym-ink-todo);
+  --ring: var(--sym-lilac);
+  --signature: var(--sym-yellow);
+  --signature-foreground: var(--sym-ink);
+  --nav: var(--sym-ink-raised);
+  --nav-foreground: var(--sym-paper);
+  --nav-muted-foreground: var(--sym-nav-muted);
+  --shadow-flat-color: var(--sym-lilac);
+
+  --status-enquete: var(--sym-ink-raised);
+  --status-enquete-foreground: var(--sym-paper);
+  --status-sain: var(--sym-aqua);
+  --status-sain-foreground: var(--sym-ink);
+  --status-warning: var(--sym-yellow);
+  --status-warning-foreground: var(--sym-ink);
+  --status-reparation: var(--sym-lilac-deep);
+  --status-reparation-foreground: var(--sym-paper);
+  --status-action-requise: var(--sym-lilac);
+  --status-action-requise-foreground: var(--sym-ink);
+  --status-erreur: var(--sym-orange);
+  --status-erreur-foreground: var(--sym-ink);
+  --status-bloquee: var(--sym-ink);
+  --status-bloquee-foreground: var(--sym-paper);
+  --status-border: var(--sym-paper);
+
+  --diff-added: var(--sym-diff-added-deep);
+  --diff-removed: var(--sym-diff-removed-deep);
+  --diff-changed: var(--sym-diff-changed-deep);
+}
+
+/*
+ * Anneau de focus unique et opaque (WCAG 2.4.7 et 1.4.11 : `--ring` à 3:1 au moins sur chaque fond). Règle SANS calque :
+ * elle l'emporte sur `outline-none` des composants et sur les anneaux à 50 % de shadcn-vue, trop pâles. Les cibles
+ * programmatiques (tabindex -1 : main, h1) n'ont pas d'anneau.
+ */
+:focus-visible:not([tabindex="-1"]) {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+/*
+ * Signature SYM (20 § 2.3) : icône unique en `currentColor` à côté du texte « SYM », jamais un emoji dans le DOM.
+ * Variantes : `speaking` (SYM parle, suivie de deux-points) et `badge` (marque ou statut, sans deux-points).
+ */
+.sym-signature {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375em;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.sym-signature__icon {
+  width: 1.25em;
+  height: 1.25em;
+  flex: none;
+}
+
+.sym-signature[data-variant='badge'] {
+  background-color: var(--signature);
+  color: var(--signature-foreground);
+  border-radius: var(--sym-radius-pill);
+  padding: 0.25em 0.625em 0.25em 0.5em;
+  font-size: 0.75rem;
+}
+
+/*
+ * Mouvement (20 § 4.3) : une seule couche d'animations, en CSS ; chacune a un état final, qui est son état de repos.
+ * Coupée par `prefers-reduced-motion: reduce` et par le réglage Animations « Réduites » (attribut `data-motion` de html,
+ * posé avant le premier rendu par theme-init.js). Un changement d'état n'est jamais porté par l'animation seule.
+ */
+@keyframes sym-check-draw {
+  from {
+    stroke-dashoffset: 24;
+  }
+
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+@keyframes sym-fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.sym-check path {
+  stroke-dasharray: 24;
+  stroke-dashoffset: 0;
+  animation: sym-check-draw 0.45s ease-out both;
+}
+
+.sym-fade-in {
+  animation: sym-fade-in 0.3s ease-out both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  ::before,
+  ::after {
+    animation: none !important;
+    transition: none !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+:root[data-motion='reduced'] *,
+:root[data-motion='reduced'] ::before,
+:root[data-motion='reduced'] ::after {
+  animation: none !important;
+  transition: none !important;
+  scroll-behavior: auto !important;
+}

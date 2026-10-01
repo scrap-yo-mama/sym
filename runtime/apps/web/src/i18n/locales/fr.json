@@ -12,6 +12,11 @@
       "light": "Clair",
       "dark": "Sombre"
     },
+    "motion": "Animations",
+    "motions": {
+      "system": "Système",
+      "reduced": "Réduites"
+    },
     "signedInAs": "Connecté en tant que {name}",
     "signOut": "Se déconnecter",
     "main": "Navigation principale",

@@ -34,6 +34,19 @@ ISC License
   - isolated-vm : bac à sable du code généré (prévu par l'architecture, pas
     encore présent au moment de la rédaction de ce fichier)
 
+SIL Open Font License 1.1 (texte : packages/ui/fonts/OFL-*.txt ; polices servies par
+l'instance, sous-ensemble latin en woff2, jamais chargées depuis un tiers)
+  - Bricolage Grotesque 800 (Copyright 2022 The Bricolage Grotesque Project
+    Authors, https://github.com/ateliertriay/bricolage) : titres et chiffres
+  - DM Sans 400, 500, 700 (Copyright 2014 The DM Sans Project Authors,
+    https://github.com/googlefonts/dm-fonts) : texte et contrôles
+  - JetBrains Mono 400, 600 (Copyright 2020 The JetBrains Mono Project Authors,
+    https://github.com/JetBrains/JetBrainsMono) : code, commandes, récit
+  Les fichiers sont ceux des paquets @fontsource/bricolage-grotesque,
+  @fontsource/dm-sans et @fontsource/jetbrains-mono 5.3.0 (OFL-1.1), copiés tels
+  quels dans packages/ui/fonts (paquets non installés : aucune dépendance ajoutée).
+  Empreintes sha256 des fichiers : test packages/ui/src/fonts.unit.test.ts.
+
 Les autres dépendances transitives sont sous licences permissives (MIT, ISC,
 BSD-2-Clause, BSD-3-Clause, Apache-2.0, MPL-2.0, 0BSD, etc.) ; le contrôle
 automatique `pnpm check:licenses` refuse toute licence absente de la liste

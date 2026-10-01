@@ -19,11 +19,11 @@ const stale = computed(() => showsStaleFlag(props.status, props.stale));
 
 <template>
   <span class="inline-flex flex-wrap items-center gap-1.5">
-    <span class="inline-flex items-center gap-1.5 rounded-md border px-2 py-0.5 text-sm font-medium" :class="STATUS_TONE[status]" data-testid="status-badge" :data-status="status">
+    <span class="inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-sm font-bold" :class="STATUS_TONE[status]" data-testid="status-badge" :data-status="status">
       <StatusIcon :name="STATUS_ICON[status]" />
       <span>{{ t(`status.${status}`) }}</span>
     </span>
-    <span v-if="stale" class="inline-flex items-center rounded-md border border-dashed px-2 py-0.5 text-xs font-medium text-muted-foreground" data-testid="stale-flag">
+    <span v-if="stale" class="inline-flex items-center rounded-full border border-dashed px-2.5 py-0.5 text-xs font-medium text-muted-foreground" data-testid="stale-flag">
       {{ t('status.staleFlag') }}
     </span>
   </span>

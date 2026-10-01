@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Fixtures Playwright Test de la console (tâche 3.9) : une console construite et servie par worker, et une page ouverte dans
 // la langue et le thème demandés (`uiLocale`, `uiTheme` en options de test), avec le relevé des erreurs de la console du navigateur.
+// Tâche 3.15 (assert_no_csp_violation) : la console est servie avec sa CSP stricte (harness.ts) ; chaque événement
+// `securitypolicyviolation` de la page est relevé, et le test échoue s'il y en a eu au moins un, quel que soit le test.
 import { test as base, expect, type Page } from '@playwright/test';
 import { anonymousRoutes, dataRoutes, signedInRoutes } from './fixtures.ts';
 import { startConsole, type ApiRoutes, type ConsoleApp } from './harness.ts';
@@ -12,7 +14,7 @@ export type Theme = 'light' | 'dark';
 type Options = { uiLocale: Locale; uiTheme: Theme };
 type Fixtures = {
   /** Page ouverte sur la console ; `open` pose les routes de l'API (session ouverte, sauf `anonymous`) puis charge le chemin. */
-  consolePage: { page: Page; app: ConsoleApp; errors: string[]; open: (path: string, options?: { anonymous?: boolean; routes?: ApiRoutes | ((locale: Locale, theme: Theme) => ApiRoutes) }) => Promise<void> };
+  consolePage: { page: Page; app: ConsoleApp; errors: string[]; cspViolations: string[]; open: (path: string, options?: { anonymous?: boolean; routes?: ApiRoutes | ((locale: Locale, theme: Theme) => ApiRoutes) }) => Promise<void> };
 };
 type WorkerFixtures = { app: ConsoleApp };
 
@@ -30,17 +32,20 @@ export const test = base.extend<Fixtures & Options, WorkerFixtures>({
   ],
   consolePage: async ({ page, app, uiLocale, uiTheme }, use) => {
     const errors = watchConsole(page);
+    const cspViolations = await watchCsp(page);
     await seedPreferences(page, uiLocale, uiTheme);
     await use({
       page,
       app,
       errors,
+      cspViolations,
       open: async (path, options = {}) => {
         const own = typeof options.routes === 'function' ? options.routes(uiLocale, uiTheme) : options.routes;
         app.setRoutes(options.anonymous ? { ...anonymousRoutes, ...own } : { ...signedInRoutes(uiLocale, uiTheme), ...dataRoutes(), ...own });
         await page.goto(`${app.url}${path}`);
       },
     });
+    expect(cspViolations, 'violations de la CSP de la console (assert_no_csp_violation)').toEqual([]);
   },
 });
 
@@ -56,6 +61,18 @@ async function seedPreferences(page: Page, locale: Locale, theme: Theme): Promis
     [locale, theme] as const,
   );
   await page.emulateMedia({ colorScheme: theme, reducedMotion: 'reduce' });
+}
+
+/** Violations de la CSP relevées dans la page (tous documents chargés, navigations comprises) : « directive : cible ». */
+async function watchCsp(page: Page): Promise<string[]> {
+  const violations: string[] = [];
+  await page.exposeFunction('__zzCspViolation', (report: string) => void violations.push(report));
+  await page.addInitScript(() => {
+    document.addEventListener('securitypolicyviolation', (event) => {
+      void (window as unknown as { __zzCspViolation: (report: string) => Promise<void> }).__zzCspViolation(`${event.violatedDirective} : ${event.blockedURI || event.sample || 'inline'}`);
+    });
+  });
+  return violations;
 }
 
 /** Erreurs de la console du navigateur et exceptions de la page (06 § 4.3 : aucune sur un parcours normal). */

@@ -119,6 +119,69 @@ test('assert_optional_hosts : manifeste construit et chargé sans <all_urls>, au
   expect(granted.origins ?? []).toEqual([]);
 });
 
+test('charte SYM du popup : assert_sym_signature_rendering, assert_fonts_self_hosted, assert_no_csp_violation, en clair et en sombre', async () => {
+  const page = await h.context.newPage();
+  const violations: string[] = [];
+  const foreign: string[] = [];
+  const origin = `chrome-extension://${h.extensionId}`;
+  await page.exposeFunction('__zzCspViolation', (report: string) => void violations.push(report));
+  await page.addInitScript(() => {
+    document.addEventListener('securitypolicyviolation', (event) => {
+      void (window as unknown as { __zzCspViolation: (report: string) => Promise<void> }).__zzCspViolation(`${event.violatedDirective} : ${event.blockedURI || event.sample || 'inline'}`);
+    });
+  });
+  page.on('request', (request) => {
+    const url = request.url();
+    if (!url.startsWith('data:') && !url.startsWith('blob:') && !url.startsWith(origin)) foreign.push(url);
+  });
+  try {
+    for (const scheme of ['light', 'dark'] as const) {
+      await page.emulateMedia({ colorScheme: scheme });
+      await page.goto(`${origin}/popup.html`);
+      await expect(page.locator('h1')).toHaveText('Scrapyomama');
+      // Popup non appairé : le formulaire d'appairage (texte courant en DM Sans) est affiché avant de juger les polices chargées.
+      await expect(page.locator('#pairing')).toBeVisible();
+      expect(await page.evaluate(() => document.documentElement.classList.contains('dark'))).toBe(scheme === 'dark');
+      const audit = await page.evaluate(async () => {
+        await document.fonts.ready;
+        const problems: string[] = [];
+        const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+        for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+          const text = node.textContent ?? '';
+          if (text.includes('\u{1F47B}')) problems.push(`emoji dans un nœud texte : ${text.trim()}`);
+          if (/\bsym\b/.test(text)) problems.push(`« sym » en minuscules : ${text.trim()}`);
+        }
+        const signatures = [...document.querySelectorAll('[data-sym-signature]')];
+        for (const sig of signatures) {
+          const icons = sig.querySelectorAll('svg');
+          if (icons.length !== 1 || icons[0]?.getAttribute('aria-hidden') !== 'true') problems.push('icône : un svg aria-hidden attendu');
+          if (sig.querySelector('.sym-signature__text')?.textContent !== 'SYM') problems.push('texte « SYM » attendu à côté de l’icône');
+          if (sig.querySelector('span[aria-hidden="true"]')) problems.push('badge : pas de deux-points');
+          if (sig.closest('[role="alert"], [role="status"], [role="dialog"]')) problems.push('signature dans une zone interdite');
+        }
+        return {
+          problems,
+          signatures: signatures.length,
+          fonts: [...document.fonts].filter((face) => face.status === 'loaded').map((face) => `${face.family.replace(/["']/g, '')} ${face.weight}`),
+          heading: getComputedStyle(document.querySelector('h1') as Element).fontFamily,
+          body: getComputedStyle(document.body).fontFamily,
+          inlineStyles: document.querySelectorAll('style, [style]').length,
+        };
+      });
+      expect(audit.problems).toEqual([]);
+      expect(audit.signatures).toBe(1);
+      expect(audit.fonts).toEqual(expect.arrayContaining(['Bricolage Grotesque 800', 'DM Sans 400']));
+      expect(audit.heading).toMatch(/^"?Bricolage Grotesque"?,/);
+      expect(audit.body).toMatch(/^"?DM Sans"?,/);
+      expect(audit.inlineStyles).toBe(0);
+    }
+    expect(foreign, 'requêtes hors de l’extension (polices servies par l’extension elle-même)').toEqual([]);
+    expect(violations, 'violations de la CSP de l’extension').toEqual([]);
+  } finally {
+    await page.close();
+  }
+});
+
 test('appairage : URL de l’instance + code à usage unique → « Connected as », plusieurs appareils pour un compte', async () => {
   const code = await h.console(alice.cookie, 'POST', '/api/extension/pairing-codes', { currentPassword: alice.password });
   expect(code.status).toBe(201);

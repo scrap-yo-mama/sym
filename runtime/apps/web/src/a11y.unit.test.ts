@@ -191,13 +191,16 @@ describe('assert_live_regions_plan : rôles ARIA du plan de 06 § 3 (jugement : 
   });
 });
 
-describe('assert_contrast_tokens : le test de jetons existe et couvre les deux thèmes (apps/web/src/design-tokens.unit.test.ts)', () => {
-  test('les deux feuilles de jetons sont lues, avec 4,5:1 pour le texte et 3:1 pour bordures, anneau de focus et teintes de statut', () => {
-    const tokens = readFileSync(join(webSrc, 'design-tokens.unit.test.ts'), 'utf8');
+describe('assert_contrast_tokens : le test de jetons existe et couvre les deux thèmes (packages/ui/src/tokens.unit.test.ts, apps/web/src/design-tokens.unit.test.ts)', () => {
+  test('les jetons sont jugés en clair et en sombre, avec 4,5:1 pour le texte et 3:1 pour bordures, anneau de focus et teintes de statut', () => {
+    const tokens = readFileSync(join(webSrc, '../../../packages/ui/src/tokens.unit.test.ts'), 'utf8');
     expect(tokens).toContain('const TEXT = 4.5');
     expect(tokens).toContain('const NON_TEXT = 3');
     expect(tokens).toMatch(/\['light', 'dark'\]/);
-    expect(tokens).toContain('STATUS_TONE');
+    expect(tokens).toContain('status-border');
+    const web = readFileSync(join(webSrc, 'design-tokens.unit.test.ts'), 'utf8');
+    expect(web).toContain('STATUS_TONE');
+    expect(web).toMatch(/\['light', 'dark'\]/);
   });
 });
 

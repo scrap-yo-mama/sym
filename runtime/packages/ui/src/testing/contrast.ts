@@ -73,9 +73,39 @@ export function contrast(a: Rgb, b: Rgb): number {
 
 /** Variables CSS `--nom: valeur;` déclarées dans le bloc `selector { … }` d'une feuille de style. */
 export function cssVariables(css: string, selector: string): Record<string, string> {
-  const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const escaped = selector
+    .split(/\s+/)
+    .map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+    .join('\\s*');
   const block = new RegExp(`(?:^|\\n)${escaped}\\s*\\{([^}]*)\\}`).exec(css)?.[1] ?? '';
   return Object.fromEntries([...block.matchAll(/(--[\w-]+)\s*:\s*([^;]+);/g)].map((m) => [m[1] ?? '', (m[2] ?? '').trim()]));
 }
 
 export const readText = (url: URL): string => readFileSync(url, 'utf8');
+
+/** `#RRGGBB` ou `#RGB` → sRGB linéaire. */
+export function hexToLinear(text: string): Rgb {
+  const digits = /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.exec(text.trim())?.[1];
+  if (!digits) throw new Error(`couleur hexadécimale illisible : ${text}`);
+  const full = digits.length === 3 ? [...digits].map((c) => c + c).join('') : digits;
+  const channel = (offset: number): number => toLinear(parseInt(full.slice(offset, offset + 2), 16) / 255);
+  return { r: channel(0), g: channel(2), b: channel(4) };
+}
+
+/** Valeur d'un jeton : `#hex`, `oklch(…)` ou `var(--autre)` (résolu dans `variables`, jusqu'à 8 renvois). */
+export function resolveColor(variables: Record<string, string>, value: string, depth = 0): Rgb {
+  if (depth > 8) throw new Error(`renvoi de jeton trop profond : ${value}`);
+  const reference = /^var\(\s*(--[\w-]+)\s*\)$/.exec(value.trim())?.[1];
+  if (reference) {
+    const next = variables[reference];
+    if (next === undefined) throw new Error(`jeton absent : ${reference}`);
+    return resolveColor(variables, next, depth + 1);
+  }
+  return value.trim().startsWith('#') ? hexToLinear(value) : oklchToLinear(value);
+}
+
+/** Couleur de 8 bits « #rrggbb » d'une couleur linéaire (pour comparer deux jetons sans se soucier de la notation). */
+export function toHex(color: Rgb): string {
+  const part = (linear: number): string => Math.round(toGamma(linear) * 255).toString(16).padStart(2, '0');
+  return `#${part(color.r)}${part(color.g)}${part(color.b)}`.toUpperCase();
+}

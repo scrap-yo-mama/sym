@@ -57,7 +57,7 @@ const { t } = useI18n();
       <StatusReason :status="detail.status" :reason="detail.status_reason" />
     </div>
     <p v-if="reinvestigated" role="status" class="text-sm" data-testid="reinvestigation-started">{{ t('detail.reinvestigationStarted') }}</p>
-    <p v-if="actionFailed" role="alert" class="text-sm text-destructive">{{ t(conflict ? 'apiErrors.conflict' : 'apiErrors.generic') }}</p>
+    <p v-if="actionFailed" role="alert" class="sym-error">{{ t(conflict ? 'apiErrors.conflict' : 'apiErrors.generic') }}</p>
   </header>
 
   <BlockedPanel v-if="detail.status === 'bloquee'" :detail="detail" :pending="reinvestigating" @reinvestigate="$emit('reinvestigate')" />

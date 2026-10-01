@@ -83,7 +83,7 @@ const actionLabel = (action: string): string => {
       <p class="text-sm text-muted-foreground">{{ t('account.sessions.intro') }}</p>
       <Alert v-if="sessions.actionFailure.value" variant="destructive"><AlertDescription>{{ t(sessions.actionFailure.value) }}</AlertDescription></Alert>
       <p v-if="sessions.loading.value && !sessions.data.value" role="status" class="text-sm text-muted-foreground">{{ t('ui.loading') }}</p>
-      <p v-else-if="sessions.failure.value" class="text-sm text-destructive">{{ t(sessions.failure.value) }}</p>
+      <p v-else-if="sessions.failure.value" class="sym-error">{{ t(sessions.failure.value) }}</p>
       <div v-else-if="sessions.sessions.value.length > 0" class="relative overflow-x-auto rounded-xl border">
         <table class="w-full text-left text-sm">
           <caption class="sr-only">{{ t('account.sessions.caption') }}</caption>
