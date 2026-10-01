@@ -71,6 +71,17 @@ test.describe('assert_fonts_self_hosted', () => {
     expect(styles.body).toMatch(/^"?DM Sans"?,/);
     expect(styles.card).toBe('20px');
   });
+
+  test('la barre de navigation est l’anthracite de la maquette (#24252D) en clair, la surface relevée (#2F3039) en sombre', async ({ consolePage }) => {
+    const { page, app, open } = consolePage;
+    const barColor = (): Promise<string> => page.evaluate(() => getComputedStyle(document.querySelector('header.sym-on-ink') as Element).backgroundColor);
+    await open('/login', { anonymous: true });
+    await expect(page.locator('h1').first()).toBeVisible();
+    await app.settled();
+    expect(await barColor()).toBe('rgb(36, 37, 45)');
+    await page.evaluate(() => document.documentElement.classList.add('dark'));
+    expect(await barColor()).toBe('rgb(47, 48, 57)');
+  });
 });
 
 test.describe('assert_no_csp_violation', () => {
@@ -196,13 +207,18 @@ test.describe('assert_reduced_motion_respected', () => {
     expect(state).toMatchObject({ running: 0, fadeName: 'none', checkName: 'none', opacity: '1', dashOffset: '0px' });
   });
 
-  test('réglage Animations « Réduites » (système sans préférence) : même résultat, mémorisé et posé avant le premier rendu', async ({ consolePage }) => {
+  test('réglage Animations « Réduites » de Mon compte (système sans préférence) : même résultat, mémorisé et posé avant le premier rendu', async ({ consolePage }) => {
     const { page, app, open } = consolePage;
     await page.emulateMedia({ reducedMotion: 'no-preference' });
+    // 20 § 4.3 : le réglage vit dans Mon compte, pas dans la barre du haut.
     await open('/apis');
     await expect(page.locator('h1').first()).toBeVisible();
     await app.settled();
-    await expect(page.locator('#pref-motion')).toHaveValue('system');
+    await expect(page.locator('header #pref-motion')).toHaveCount(0);
+    await open('/settings/account');
+    await expect(page.locator('h1').first()).toBeVisible();
+    await app.settled();
+    await expect(page.getByLabel('Animations', { exact: true })).toHaveValue('system');
     await page.locator('#pref-motion').selectOption('reduced');
     expect(await page.evaluate(() => document.documentElement.getAttribute('data-motion'))).toBe('reduced');
     let state = await probeAt(page);

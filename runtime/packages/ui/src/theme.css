@@ -161,6 +161,14 @@
 }
 
 /*
+ * Barre anthracite d'un écran clair (`.sym-on-ink`) : elle garde l'anthracite de la maquette (#24252D, Main.dc.html) ; la
+ * surface relevée `--sym-ink-raised` ne sert qu'au thème sombre, où la barre doit se détacher d'un fond déjà anthracite.
+ */
+:root:not(.dark) .sym-on-ink {
+  --nav: var(--sym-ink);
+}
+
+/*
  * Anneau de focus unique et opaque (WCAG 2.4.7 et 1.4.11 : `--ring` à 3:1 au moins sur chaque fond). Règle SANS calque :
  * elle l'emporte sur `outline-none` des composants et sur les anneaux à 50 % de shadcn-vue, trop pâles. Les cibles
  * programmatiques (tabindex -1 : main, h1) n'ont pas d'anneau.

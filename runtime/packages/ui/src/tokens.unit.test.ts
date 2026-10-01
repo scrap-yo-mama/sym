@@ -135,6 +135,15 @@ describe('assert_brand_tokens_contrast : jetons sémantiques', () => {
     expect(toHex(color('dark', 'primary'))).toBe(toHex(color('light', 'sym-lilac')));
     expect(toHex(color('dark', 'ring'))).toBe(toHex(color('light', 'sym-lilac')));
   });
+
+  test('barre de navigation : anthracite de la maquette (#24252D, Main.dc.html) dans une zone `.sym-on-ink` d’un écran clair, surface relevée en sombre', () => {
+    const onInkLight = { ...ROOT, ...DARK, ...cssVariables(themeCss, ':root:not(.dark) .sym-on-ink') };
+    expect(toHex(resolveColor(onInkLight, 'var(--nav)'))).toBe('#24252D');
+    expect(toHex(color('dark', 'nav'))).toBe(toHex(color('light', 'sym-ink-raised')));
+    for (const name of ['nav-foreground', 'nav-muted-foreground', 'ring']) {
+      expect(contrast(resolveColor(onInkLight, `var(--${name})`), resolveColor(onInkLight, 'var(--nav)')), name).toBeGreaterThanOrEqual(name === 'ring' ? NON_TEXT : TEXT);
+    }
+  });
 });
 
 describe('assert_brand_tokens_contrast : règles de feuille', () => {
@@ -154,5 +163,28 @@ describe('assert_brand_tokens_contrast : règles de feuille', () => {
     expect(problems.some((p) => p.includes('.zz-b') && p.includes("jamais du texte"))).toBe(true);
     expect(problems.some((p) => p.includes('.zz-c') && p.includes('bleu'))).toBe(true);
     expect(problems.some((p) => p.includes('.zz-d'))).toBe(false);
+  });
+
+  test('le fond se lit aussi d’une règle ancêtre et du thème : bleu sous une barre anthracite, bleu dans `.sym-on-ink` ou `.dark`, blanc dans une surface orange', () => {
+    const bad = `
+      .zz-nav { background: var(--sym-ink); }
+      .zz-nav a { color: var(--sym-blue); }
+      .sym-on-ink .zz-link { color: var(--sym-blue); }
+      .dark .zz-dark-link { color: var(--sym-blue); }
+      .zz-alert, .zz-other { background-color: var(--destructive); }
+      .zz-alert > strong { color: #FFFFFF; }
+    `;
+    const problems = sheetViolations(bad, VARIABLES, 'zz');
+    expect(problems.some((p) => p.includes('.zz-nav a') && p.includes('bleu'))).toBe(true);
+    expect(problems.some((p) => p.includes('.sym-on-ink .zz-link') && p.includes('bleu'))).toBe(true);
+    expect(problems.some((p) => p.includes('.dark .zz-dark-link') && p.includes('bleu'))).toBe(true);
+    expect(problems.some((p) => p.includes('.zz-alert > strong') && p.includes('blanc'))).toBe(true);
+  });
+
+  test('une règle sans marque de thème est jugée en clair ET en sombre', () => {
+    // `--primary` est bleu en clair, lilas en sombre : sur un fond anthracite fixe, le bleu n'apparaît qu'en clair.
+    const problems = sheetViolations('.zz-bar { background: var(--sym-ink); color: var(--primary); }', VARIABLES, 'zz');
+    expect(problems.some((p) => p.includes('.zz-bar') && p.includes('bleu'))).toBe(true);
+    expect(sheetViolations('.zz-ok { background: var(--background); color: var(--primary); }', VARIABLES, 'zz')).toEqual([]);
   });
 });

@@ -11,9 +11,9 @@ export function isMotion(value: unknown): value is Motion {
   return typeof value === 'string' && (MOTIONS as readonly string[]).includes(value);
 }
 
-export function readStoredMotion(storage: Pick<Storage, 'getItem'> = localStorage): Motion {
+export function readStoredMotion(storage: Pick<Storage, 'getItem'> | undefined = globalThis.localStorage): Motion {
   try {
-    const value = storage.getItem(MOTION_STORAGE_KEY);
+    const value = storage?.getItem(MOTION_STORAGE_KEY);
     return isMotion(value) ? value : 'system';
   } catch {
     return 'system';
@@ -25,9 +25,9 @@ export function applyMotion(motion: Motion, root: HTMLElement = document.documen
   else root.removeAttribute('data-motion');
 }
 
-export function storeMotion(motion: Motion, storage: Pick<Storage, 'setItem'> = localStorage): void {
+export function storeMotion(motion: Motion, storage: Pick<Storage, 'setItem'> | undefined = globalThis.localStorage): void {
   try {
-    storage.setItem(MOTION_STORAGE_KEY, motion);
+    storage?.setItem(MOTION_STORAGE_KEY, motion);
   } catch {
     /* stockage indisponible : le choix vaut pour la session seulement */
   }

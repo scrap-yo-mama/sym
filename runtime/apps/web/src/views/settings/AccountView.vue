@@ -4,7 +4,7 @@
  * @file AccountView.vue
  * @description Mon compte (06 § 2, 13 § 5 et § 7) : mot de passe, 2FA TOTP, sessions d'interface ouvertes (fermer une, ou toutes les autres ;
  * proposé après un changement de mot de passe ou de 2FA),
- * identités SSO liées, activité récente de son propre compte, langue et thème (barre du haut). Les clés d'API sont dans leur page, l'extension
+ * identités SSO liées, activité récente de son propre compte, réglage Animations (20 § 4.3) ; langue et thème restent dans la barre du haut. Les clés d'API sont dans leur page, l'extension
  * et les appareils dans « Extension et sessions ». Chacun ne voit que son compte : aucune route ici ne renvoie une donnée d'autrui.
  * @page
  */
@@ -18,13 +18,22 @@ import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { useIdentities, useMyAudit, useMySessions } from '@/composables/useAccount';
 import { useSsoPublic } from '@/composables/useAccountFlows';
+import { usePreferences } from '@/composables/usePreferences';
 import { useSession } from '@/composables/useSession';
+import { selectClass } from '@/lib/classes';
 import { readFieldValue, takeFieldValue } from '@/lib/form-field';
 import { formatDateTime } from '@/lib/format';
+import { MOTIONS, isMotion } from '@/lib/motion';
 
 const { t, te, locale } = useI18n();
 const route = useRoute();
 const { me } = useSession();
+const { changeMotion, motion } = usePreferences();
+
+function onMotion(event: Event): void {
+  const value = (event.target as HTMLSelectElement).value;
+  if (isMotion(value)) changeMotion(value);
+}
 
 const sessions = useMySessions();
 const identities = useIdentities();
@@ -72,6 +81,13 @@ const actionLabel = (action: string): string => {
     <section class="flex flex-col gap-2 rounded-xl border p-4" aria-labelledby="preferences-heading">
       <h2 id="preferences-heading" class="text-lg font-semibold">{{ t('account.preferences.title') }}</h2>
       <p class="text-sm text-muted-foreground">{{ t('account.preferences.text') }}</p>
+      <div class="flex flex-col gap-1">
+        <label for="pref-motion" class="text-sm font-medium">{{ t('account.preferences.motion') }}</label>
+        <select id="pref-motion" class="max-w-xs" :class="selectClass" :value="motion" aria-describedby="pref-motion-hint" @change="onMotion">
+          <option v-for="name in MOTIONS" :key="name" :value="name">{{ t(`account.preferences.motions.${name}`) }}</option>
+        </select>
+        <p id="pref-motion-hint" class="text-sm text-muted-foreground">{{ t('account.preferences.motionHint') }}</p>
+      </div>
     </section>
 
     <PasswordPanel @sessions-closed="sessions.reload()" />

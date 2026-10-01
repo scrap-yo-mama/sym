@@ -4,8 +4,9 @@
 // jeton est nommé pour Tailwind, chaque statut emploie sa famille de jetons, aucune feuille ni classe ne pose du texte
 // blanc sur l'orange, de l'orange en texte ou du bleu sur anthracite, et l'anneau de focus est une règle sans calque.
 // axe juge le rendu réel (apps/web/e2e/a11y.e2e.ts) ; ce test garde les couleurs que le rendu de test ne montre pas.
+import { join } from 'node:path';
 import { describe, expect, test } from 'vitest';
-import { listFiles, readSource, sheetViolations } from '@runtime/ui/testing/color-rules';
+import { expandApply, inkZoneViolations, listFiles, readSource, sheetViolations } from '@runtime/ui/testing/color-rules';
 import { contrast, cssVariables, readText, resolveColor, toHex } from '@runtime/ui/testing/contrast';
 import { API_STATUSES, STATUS_TONE } from '@/lib/status';
 
@@ -20,12 +21,26 @@ const colorMap = Object.fromEntries([...mainCss.matchAll(/--color-([\w-]+):\s*va
 
 const sourceFiles = (): string[] => listFiles(new URL('.', import.meta.url).pathname, /\.(vue|ts)$/);
 
+const runtimeRoot = new URL('../../../', import.meta.url).pathname;
+/** Toutes les feuilles de style des interfaces : console, extension et packages/ui (hors builds, rapports et outils de test). */
+const styleSheets = (): string[] =>
+  ['apps/web', 'apps/extension', 'packages/ui'].flatMap((dir) =>
+    listFiles(join(runtimeRoot, dir), /\.css$/, /(^|\/)(node_modules|dist|\.wxt|\.output|testing|e2e|coverage|test-results|playwright-report|blob-report)(\/|$)/),
+  );
+
 describe('branchement de Tailwind sur les jetons de packages/ui', () => {
   test('chaque jeton sémantique de theme.css (sauf formes et ombres) a son nom de couleur, et chaque nom vise un jeton existant', () => {
     const named = new Set(Object.values(colorMap));
     for (const target of named) expect(ROOT[target], target).toBeDefined();
     const colorTokens = Object.keys(ROOT).filter((name) => !name.startsWith('--sym-') && !['--radius', '--shadow-flat-color'].includes(name));
     expect(colorTokens.filter((name) => !named.has(name))).toEqual([]);
+  });
+
+  test('une seule couche CSS d’animations, celle de packages/ui (20 § 4.3) : main.css n’importe aucune bibliothèque d’animations', () => {
+    const imports = [...mainCss.matchAll(/@import\s+["']([^"']+)["']/g)].map((m) => m[1]);
+    expect(imports).toEqual(['tailwindcss', '@runtime/ui/theme.css']);
+    const manifest = JSON.parse(readSource(join(runtimeRoot, 'apps/web/package.json'))) as { dependencies?: Record<string, string>; devDependencies?: Record<string, string> };
+    expect(Object.keys({ ...manifest.dependencies, ...manifest.devDependencies }).filter((name) => /animat/i.test(name))).toEqual([]);
   });
 
   test('la console ne redéfinit aucune couleur : main.css ne contient aucune valeur de couleur', () => {
@@ -76,8 +91,67 @@ describe('teintes de statut (lib/status.ts)', () => {
 });
 
 describe('règles de couleur appliquées aux feuilles et aux classes de la console', () => {
-  test('main.css respecte les règles de feuille', () => {
-    expect(sheetViolations(mainCss, VARIABLES, 'main.css')).toEqual([]);
+  test('chaque feuille de apps/web, apps/extension et packages/ui respecte les règles de feuille, classes des @apply comprises', () => {
+    const sheets = styleSheets();
+    const relative = sheets.map((file) => file.replace(runtimeRoot, ''));
+    expect(relative).toEqual(expect.arrayContaining(['apps/web/src/assets/main.css', 'apps/extension/src/entrypoints/popup/popup.css', 'packages/ui/src/theme.css', 'packages/ui/src/fonts.css']));
+    const problems = sheets.flatMap((file) => sheetViolations(expandApply(readSource(file), colorMap), VARIABLES, file.replace(runtimeRoot, '')));
+    expect(problems).toEqual([]);
+  });
+
+  test('les classes des @apply et des @utility sont lues : un @apply qui pose de l’orange en texte, du blanc sur l’orange ou du bleu sur anthracite est refusé', () => {
+    const bad = `
+      @utility zz-error { @apply rounded-md bg-destructive px-2 text-primary-foreground; }
+      .zz-text { @apply text-sm text-destructive; }
+      .dark .zz-link { @apply text-[var(--sym-blue)] underline; }
+      .zz-bar { @apply bg-status-bloquee; }
+      .zz-bar a { @apply text-ring; }
+    `;
+    const problems = sheetViolations(expandApply(bad, colorMap), VARIABLES, 'zz');
+    expect(problems.some((p) => p.includes('.zz-error') && p.includes('orange'))).toBe(true);
+    expect(problems.some((p) => p.includes('.zz-text') && p.includes('jamais du texte'))).toBe(true);
+    expect(problems.some((p) => p.includes('.dark .zz-link') && p.includes('bleu'))).toBe(true);
+    expect(problems.some((p) => p.includes('.zz-bar a') && p.includes('bleu'))).toBe(true);
+    expect(sheetViolations(expandApply('.zz-ok { @apply bg-destructive text-destructive-foreground; }', colorMap), VARIABLES, 'zz')).toEqual([]);
+  });
+
+  test('zones anthracite (bg-nav, bg-status-bloquee) : sans `sym-on-ink`, aucune classe bleue (primary, ring, action requise) sur l’élément ni dans ses descendants', () => {
+    expect(sourceFiles().flatMap((file) => inkZoneViolations(readSource(file), file.replace(runtimeRoot, '')))).toEqual([]);
+    const bad = [
+      '<header class="bg-nav text-nav-foreground"><a class="text-primary underline">x</a></header>',
+      '<div class="bg-status-bloquee text-status-bloquee-foreground"><p><span class="focus-visible:ring-primary">x</span></p></div>',
+      "const tone = 'bg-status-bloquee text-primary';",
+      '<nav class="bg-nav"><div><div></div><button class="border-ring">x</button></div></nav>',
+    ];
+    for (const source of bad) expect(inkZoneViolations(source, 'zz').length, source).toBeGreaterThan(0);
+    const good = [
+      '<header class="sym-on-ink bg-nav"><a class="text-primary">x</a></header>',
+      '<div class="bg-status-bloquee text-status-bloquee-foreground"></div><p class="text-primary">après la zone</p>',
+      "const tone = 'border-status-border bg-status-bloquee text-status-bloquee-foreground';",
+    ];
+    for (const source of good) expect(inkZoneViolations(source, 'zz'), source).toEqual([]);
+  });
+
+  test('l’orange est une surface seulement : aucune bordure, aucun anneau ni contour orange (2:1 sur crème), même à opacité réduite', () => {
+    const offenders: string[] = [];
+    for (const file of sourceFiles()) {
+      for (const match of readSource(file).matchAll(/(?<![\w-])(?:[a-z-]+:)*(?:border|ring|outline|decoration|divide|ring-offset)(?:-[trblxy])?-(?:destructive|status-erreur)(?:\/\d+)?(?![\w-])/g)) {
+        offenders.push(`${file.replace(runtimeRoot, '')} : ${match[0]}`);
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
+
+  test('champs de la refonte : aucun anneau shadcn à 50 % (ring-ring/50), et chaque champ bordé (border-input) a 44 px de haut (h-11), comme Input', () => {
+    const offenders: string[] = [];
+    for (const file of sourceFiles()) {
+      const source = readSource(file);
+      for (const match of source.matchAll(/(?<![\w-])(?:[a-z-]+:)*ring-ring\/\d+(?![\w-])/g)) offenders.push(`${file.replace(runtimeRoot, '')} : ${match[0]}`);
+      for (const match of source.matchAll(/["'`]([^"'`]*\bborder-input\b[^"'`]*)["'`]/g)) {
+        if (/(?<![\w:-])h-(?:[0-9]|10)(?![\w-])/.test(match[1] ?? '')) offenders.push(`${file.replace(runtimeRoot, '')} : « ${(match[1] ?? '').trim().slice(0, 60)} »`);
+      }
+    }
+    expect(offenders).toEqual([]);
   });
 
   test("aucune classe ne pose du texte blanc ou de l'orange en texte : text-white, text-destructive, text-status-erreur ne sont employés nulle part", () => {

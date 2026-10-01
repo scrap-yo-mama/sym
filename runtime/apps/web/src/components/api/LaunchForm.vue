@@ -96,7 +96,7 @@ function submit(): void {
   emit('submit', input, version.value === '' ? undefined : Number(version.value));
 }
 
-const selectClass = 'h-9 rounded-md border border-input bg-background px-2 text-sm shadow-xs focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 outline-none';
+const selectClass = 'h-11 rounded-md border border-input bg-background px-2 text-sm focus-visible:border-ring outline-none';
 </script>
 
 <template>
@@ -149,7 +149,7 @@ const selectClass = 'h-9 rounded-md border border-input bg-background px-2 text-
     <div v-else class="flex flex-col gap-1">
       <label for="launch-json" class="text-sm font-medium">{{ t('launch.jsonLabel') }}</label>
       <p class="text-sm text-muted-foreground">{{ t('launch.jsonHint') }}</p>
-      <textarea id="launch-json" v-model="json" rows="8" spellcheck="false" class="rounded-md border border-input bg-transparent p-2 font-mono text-sm focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 outline-none" :aria-invalid="jsonError ? 'true' : 'false'" />
+      <textarea id="launch-json" v-model="json" rows="8" spellcheck="false" class="rounded-md border border-input bg-transparent p-2 font-mono text-sm focus-visible:border-ring outline-none" :aria-invalid="jsonError ? 'true' : 'false'" />
       <p v-if="jsonError" role="alert" class="sym-error">{{ t('launch.jsonInvalid') }}</p>
     </div>
 

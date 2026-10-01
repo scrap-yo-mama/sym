@@ -46,7 +46,7 @@ onServerPrefetch(() => settings.load());
           v-model="form.domains"
           name="domains"
           rows="4"
-          class="border-input bg-background text-foreground max-w-md rounded-md border px-3 py-2 text-sm outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-3"
+          class="border-input bg-background text-foreground max-w-md rounded-md border px-3 py-2 text-sm outline-none focus-visible:border-ring"
           aria-describedby="security-domains-hint"
         ></textarea>
         <p id="security-domains-hint" class="text-xs text-muted-foreground">{{ t('instance.security.domainsHint') }}</p>

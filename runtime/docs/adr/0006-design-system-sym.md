@@ -38,6 +38,23 @@ les règles de base. Aucune couleur n'est écrite hors de `theme.css` (`assert_n
 - Valeurs dérivées fixées en 3.15 (« à valider » en 20b § 5, point 8) : cartes et surfaces du sombre `#2F3039` et `#3A3B47`, bordure
   décorative `#4A4B58`, bord de champ `#7A756B` (clair) et `#9C978D` (sombre, 3:1 sur chaque fond), lilas profond `#4B3F72`, teintes
   de comparaison de stratégies. Le test de jetons les juge comme les autres.
+- Barre de navigation : `.sym-on-ink` lui donne les jetons sombres, sauf `--nav`, qui reste l'anthracite de la maquette (`#24252D`)
+  dans un écran clair ; la surface relevée `#2F3039` ne sert qu'au thème sombre, où la barre doit se détacher d'un fond anthracite.
+- L'orange ne sert jamais de trait (bordure, anneau, contour : environ 2:1 sur crème) : l'état d'erreur de chargement porte une
+  bordure anthracite pleine, comme le panneau Bloquée. Les ombres de Tailwind (`shadow-xs` à `shadow-2xl`, un noir écrit en dur)
+  et l'anneau shadcn à 50 % sont retirés : ombres plates seulement, anneau de focus unique de `theme.css` ; les champs bordés ont
+  44 px de haut, comme `Input`.
+
+### Contrôle des règles de couleur et ses limites
+
+`sheetViolations` juge toutes les feuilles de `apps/web`, `apps/extension` et `packages/ui`, avec les classes des `@apply` et des
+`@utility` dépliées (`expandApply`). Un sélecteur sans marque de thème est jugé en clair et en sombre ; le fond d'un texte sans fond
+propre se lit sur la règle ancêtre la plus proche (`.nav` pour `.nav a`, même dans un autre bloc), à défaut sur `--background` du
+thème (anthracite dans `.dark` et `.sym-on-ink`). Côté gabarits, `inkZoneViolations` refuse toute classe bleue (`primary`, `ring`,
+`status-action-requise`) sur un élément `bg-nav` ou `bg-status-bloquee` sans `sym-on-ink` et sur ses descendants du même gabarit.
+Limites assumées : la cascade réelle (ordre, spécificité, héritage à travers les composants) n'est pas rejouée, et un descendant venu
+d'un autre composant (bouton par défaut) n'est pas vu ; `sym-on-ink` sur la zone est la seule parade sûre, et axe juge le rendu réel
+en clair et en sombre (`apps/web/e2e/a11y.e2e.ts`).
 
 ### Polices auto-hébergées
 
@@ -52,14 +69,16 @@ ressource distante dans une feuille.
 ### Mouvement
 
 Une seule couche d'animations (coche tracée, apparition), en CSS, chacune de 5 s au plus et sans boucle, dont l'état final est l'état
-de repos. Elle est coupée par `prefers-reduced-motion: reduce` et par le réglage **Animations** (Système, Réduites) du sélecteur de
-préférences, posé avant le premier rendu par `public/theme-init.js` (`data-motion` sur `<html>`). Le champ `users.motion` reste
+de repos ; `tw-animate-css` (ADR 0002), qu'aucun écran n'employait, est retiré avec son import. Elle est coupée par
+`prefers-reduced-motion: reduce` et par le réglage **Animations** (Système, Réduites) de **Mon compte** (20 § 4.3 ; la barre du haut
+ne garde que la langue et le thème), posé avant le premier rendu par `public/theme-init.js` (`data-motion` sur `<html>`). Le champ `users.motion` reste
 « à valider » (20b § 5, point 6), donc sans migration : le choix est mémorisé dans le navigateur (`runtime.motion`).
 
 ### CSP
 
 La CSP du CDC (08b § 2, `style-src 'self'`) est servie par le banc E2E de la console ; la fixture fait échouer tout test au premier
-`securitypolicyviolation` (`assert_no_csp_violation`). Le popup de l'extension n'a plus ni `<style>` ni style en ligne.
+`securitypolicyviolation` (`assert_no_csp_violation`). Le popup de l'extension n'a plus ni `<style>` ni style en ligne ; le harnais E2
+de l'extension relève les violations de chaque page du contexte, et chaque test de la suite de l'extension échoue s'il en a laissé une.
 
 ## Conséquences
 

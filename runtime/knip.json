@@ -76,7 +76,6 @@
       ],
       "ignoreDependencies": [
         "tailwindcss",
-        "tw-animate-css",
         "vue-client"
       ],
       "ignoreIssues": {

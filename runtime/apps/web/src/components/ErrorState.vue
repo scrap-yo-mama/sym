@@ -3,7 +3,8 @@
 /**
  * @file ErrorState.vue
  * @description Erreur de chargement : message traduit à partir du code stable du serveur (`apiErrors.<code>`), bouton de
- * nouvel essai. Annoncée une fois (`role="alert"`) sans retirer le focus (06 § 3).
+ * nouvel essai. Annoncée une fois (`role="alert"`) sans retirer le focus (06 § 3). Bordure anthracite pleine, comme le panneau Bloquée :
+ * l'orange n'est qu'une surface à texte anthracite, jamais un trait (2:1 sur crème, 20 § 1.3).
  * @component
  * @example <ErrorState :error="error" @retry="refetch" />
  */
@@ -25,7 +26,7 @@ const message = computed(() => {
 </script>
 
 <template>
-  <section role="alert" class="flex flex-col items-start gap-3 rounded-lg border border-destructive/60 p-4" data-testid="error-state">
+  <section role="alert" class="flex flex-col items-start gap-3 rounded-lg border-2 border-foreground bg-card p-4" data-testid="error-state">
     <p class="text-sm">{{ message }}</p>
     <Button variant="outline" size="sm" @click="$emit('retry')">{{ t('ui.retry') }}</Button>
   </section>

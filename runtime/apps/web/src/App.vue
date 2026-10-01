@@ -86,7 +86,7 @@ function focusMain(): void {
     {{ t('app.skipToContent') }}
   </a>
   <ConnectionBanner :status="streamStatus" />
-  <!-- Barre de navigation anthracite de la maquette (20 § 5) ; `sym-on-ink` donne à ses textes et contrôles les jetons du thème sombre. -->
+  <!-- Barre de navigation anthracite de la maquette (20 § 5) ; `sym-on-ink` donne à ses textes et contrôles les jetons du thème sombre, et à `bg-nav` l’anthracite de la maquette en clair (surface relevée en sombre). -->
   <header class="sym-on-ink mx-3 mt-3 mb-2 flex flex-wrap items-center justify-between gap-3 rounded-lg bg-nav px-4 py-3 text-nav-foreground sm:mx-4 sm:px-6">
     <div class="flex items-center gap-2.5">
       <p class="font-display text-[22px] leading-none font-extrabold tracking-tight">{{ t('app.name') }}</p>

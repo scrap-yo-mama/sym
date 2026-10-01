@@ -3,13 +3,15 @@
 // assert_optional_hosts, appairage multi-appareils, assert_consent_before_capture (0 lecture de cookie avant le clic,
 // même permission d'hôte accordée), assert_no_cookie_in_tunnel_mode, assert_identity_pinned, révocation d'un domaine
 // (0 cookie en base) et révocation de l'appareil par un admin.
+// Tâche 3.15 : assert_no_csp_violation sur TOUTE la suite (relevé du harnais, vérifié après chaque test) ;
+// assert_sym_signature_rendering sur le popup non appairé, appairé et avec un site connecté.
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { expect, test, type Page } from '@playwright/test';
 import { kekFor, MasterKey } from '@runtime/core';
 import { siteCookiesForRun } from '@runtime/db';
 import pg from 'pg';
-import { EXTENSION_DIR, fakeInstance, startHarness, type Harness, type User } from './harness.ts';
+import { auditSymSignature, EXTENSION_DIR, expectNoCspViolation, fakeInstance, startHarness, type Harness, type User } from './harness.ts';
 
 /** API Chrome du service worker, vue depuis `evaluate` (typage minimal). */
 type ChromeApi = {
@@ -58,6 +60,8 @@ test.beforeAll(async () => {
     }
   });
 });
+
+test.afterEach(() => expectNoCspViolation(h));
 
 test.afterAll(async () => {
   await h?.close();
@@ -119,17 +123,30 @@ test('assert_optional_hosts : manifeste construit et chargé sans <all_urls>, au
   expect(granted.origins ?? []).toEqual([]);
 });
 
+test('assert_no_csp_violation, témoin : une violation provoquée dans le popup est relevée par le harnais (le contrôle sait donc échouer), puis le relevé est vidé', async () => {
+  const page = await h.popup();
+  try {
+    await expect(page.locator('h1')).toHaveText('Scrapyomama');
+    expect(h.cspViolations).toEqual([]);
+    // Script en ligne : refusé par la CSP MV3 de l'extension (script-src 'self').
+    await page.evaluate(() => {
+      const script = document.createElement('script');
+      script.textContent = 'void 0';
+      document.body.append(script);
+    });
+    await expect.poll(() => h.cspViolations.length).toBeGreaterThan(0);
+    expect(h.cspViolations.join('\n')).toMatch(/popup\.html — script-src/);
+    expect(() => expectNoCspViolation(h)).toThrow(/assert_no_csp_violation/);
+    expect(h.cspViolations).toEqual([]);
+  } finally {
+    await page.close();
+  }
+});
+
 test('charte SYM du popup : assert_sym_signature_rendering, assert_fonts_self_hosted, assert_no_csp_violation, en clair et en sombre', async () => {
   const page = await h.context.newPage();
-  const violations: string[] = [];
   const foreign: string[] = [];
   const origin = `chrome-extension://${h.extensionId}`;
-  await page.exposeFunction('__zzCspViolation', (report: string) => void violations.push(report));
-  await page.addInitScript(() => {
-    document.addEventListener('securitypolicyviolation', (event) => {
-      void (window as unknown as { __zzCspViolation: (report: string) => Promise<void> }).__zzCspViolation(`${event.violatedDirective} : ${event.blockedURI || event.sample || 'inline'}`);
-    });
-  });
   page.on('request', (request) => {
     const url = request.url();
     if (!url.startsWith('data:') && !url.startsWith('blob:') && !url.startsWith(origin)) foreign.push(url);
@@ -142,41 +159,23 @@ test('charte SYM du popup : assert_sym_signature_rendering, assert_fonts_self_ho
       // Popup non appairé : le formulaire d'appairage (texte courant en DM Sans) est affiché avant de juger les polices chargées.
       await expect(page.locator('#pairing')).toBeVisible();
       expect(await page.evaluate(() => document.documentElement.classList.contains('dark'))).toBe(scheme === 'dark');
+      expect(await auditSymSignature(page)).toEqual({ problems: [], signatures: 1 });
       const audit = await page.evaluate(async () => {
         await document.fonts.ready;
-        const problems: string[] = [];
-        const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
-        for (let node = walker.nextNode(); node; node = walker.nextNode()) {
-          const text = node.textContent ?? '';
-          if (text.includes('\u{1F47B}')) problems.push(`emoji dans un nœud texte : ${text.trim()}`);
-          if (/\bsym\b/.test(text)) problems.push(`« sym » en minuscules : ${text.trim()}`);
-        }
-        const signatures = [...document.querySelectorAll('[data-sym-signature]')];
-        for (const sig of signatures) {
-          const icons = sig.querySelectorAll('svg');
-          if (icons.length !== 1 || icons[0]?.getAttribute('aria-hidden') !== 'true') problems.push('icône : un svg aria-hidden attendu');
-          if (sig.querySelector('.sym-signature__text')?.textContent !== 'SYM') problems.push('texte « SYM » attendu à côté de l’icône');
-          if (sig.querySelector('span[aria-hidden="true"]')) problems.push('badge : pas de deux-points');
-          if (sig.closest('[role="alert"], [role="status"], [role="dialog"]')) problems.push('signature dans une zone interdite');
-        }
         return {
-          problems,
-          signatures: signatures.length,
           fonts: [...document.fonts].filter((face) => face.status === 'loaded').map((face) => `${face.family.replace(/["']/g, '')} ${face.weight}`),
           heading: getComputedStyle(document.querySelector('h1') as Element).fontFamily,
           body: getComputedStyle(document.body).fontFamily,
           inlineStyles: document.querySelectorAll('style, [style]').length,
         };
       });
-      expect(audit.problems).toEqual([]);
-      expect(audit.signatures).toBe(1);
       expect(audit.fonts).toEqual(expect.arrayContaining(['Bricolage Grotesque 800', 'DM Sans 400']));
       expect(audit.heading).toMatch(/^"?Bricolage Grotesque"?,/);
       expect(audit.body).toMatch(/^"?DM Sans"?,/);
       expect(audit.inlineStyles).toBe(0);
     }
     expect(foreign, 'requêtes hors de l’extension (polices servies par l’extension elle-même)').toEqual([]);
-    expect(violations, 'violations de la CSP de l’extension').toEqual([]);
+    expect(h.cspViolations, 'violations de la CSP de l’extension').toEqual([]);
   } finally {
     await page.close();
   }
@@ -192,6 +191,8 @@ test('appairage : URL de l’instance + code à usage unique → « Connected as
   await h.grantHosts(['http://127.0.0.1/*']); // l'utilisateur accepte l'accès à SON instance
   await page.click('#pair');
   await expect(page.locator('#identity')).toHaveText(`Connected as ${alice.email}`);
+  // Popup appairé : la signature reste l'icône à côté de « SYM », une seule, hors des zones d'état.
+  expect(await auditSymSignature(page)).toEqual({ problems: [], signatures: 1 });
 
   // Un second appareil du même utilisateur (appairé par l'API) : les deux jetons restent actifs.
   const second = await h.console(alice.cookie, 'POST', '/api/extension/pairing-codes', { currentPassword: alice.password });
@@ -234,6 +235,8 @@ test('assert_consent_before_capture : aucune lecture de cookie avant le clic de 
 
   await page.click('#consent-accept');
   await expect(page.locator(`#sites li[data-domain="${SHOP}"]`)).toContainText('(server)');
+  // Popup avec un site connecté : même contrôle de la signature.
+  expect(await auditSymSignature(page)).toEqual({ problems: [], signatures: 1 });
   const reads = await cookieReads();
   expect(reads.length).toBeGreaterThan(0);
   expect(reads.every((r) => r.includes(SHOP))).toBe(true);

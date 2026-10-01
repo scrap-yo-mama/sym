@@ -86,7 +86,7 @@ const errorText = computed(() => {
             v-model="text"
             rows="12"
             spellcheck="false"
-            class="rounded-md border border-input bg-transparent p-2 font-mono text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+            class="rounded-md border border-input bg-transparent p-2 font-mono text-sm outline-none focus-visible:border-ring"
             :aria-invalid="invalid ? 'true' : 'false'"
             :aria-describedby="invalid ? 'schema-output-invalid' : undefined"
           />

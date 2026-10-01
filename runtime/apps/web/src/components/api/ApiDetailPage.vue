@@ -68,7 +68,7 @@ const { t } = useI18n();
       <li v-for="entry in API_TABS" :key="entry">
         <RouterLink
           :to="`/apis/${slug}/${entry}`"
-          class="inline-flex min-h-11 items-center rounded-t-md border-b-2 px-3 text-sm font-medium focus-visible:ring-3 focus-visible:ring-ring/50 outline-none"
+          class="inline-flex min-h-11 items-center rounded-t-md border-b-2 px-3 text-sm font-medium outline-none"
           :class="tab === entry ? 'border-primary' : 'border-transparent text-muted-foreground hover:text-foreground'"
           :aria-current="tab === entry ? 'page' : undefined"
           :data-tab="entry"

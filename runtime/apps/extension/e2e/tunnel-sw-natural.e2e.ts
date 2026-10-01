@@ -17,7 +17,7 @@ import { loadWorkerConfig } from '../../worker/dist/config.js';
 import { createStrategyExecutor } from '../../worker/dist/exec/strategy-executor.js';
 import { TunnelJobClient } from '../../worker/dist/tunnel/client.js';
 import { startWorker, type Worker } from '../../worker/dist/worker.js';
-import { startHarness, type Harness, type User } from './harness.ts';
+import { expectNoCspViolation, startHarness, type Harness, type User } from './harness.ts';
 
 const SHOP = 'zz-test-shop.example';
 const ENABLED = process.env['TUNNEL_SW_NATURAL'] === '1';
@@ -67,6 +67,9 @@ test.beforeAll(async () => {
     logger: silent,
   });
 });
+
+// assert_no_csp_violation (tâche 3.15) : relevé du harnais vérifié après chaque test.
+test.afterEach(() => expectNoCspViolation(h));
 
 test.afterAll(async () => {
   browserProcess?.kill('SIGKILL');

@@ -7,7 +7,6 @@
  * WCAG 1.4.3 et 1.4.11) est packages/ui/src/tokens.unit.test.ts et apps/web/src/design-tokens.unit.test.ts.
  */
 @import "tailwindcss";
-@import "tw-animate-css";
 @import "@runtime/ui/theme.css";
 
 @custom-variant dark (&:is(.dark *));

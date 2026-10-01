@@ -158,14 +158,14 @@ const errorText = computed(() => {
       <form class="flex flex-wrap items-end gap-3" @submit.prevent="compareSelected">
         <div class="flex flex-col gap-1">
           <label for="compare-from" class="text-sm font-medium">{{ t('strategy.compareFrom') }}</label>
-          <select id="compare-from" v-model="compareFrom" class="h-9 rounded-md border border-input bg-background px-2 text-sm">
+          <select id="compare-from" v-model="compareFrom" class="h-11 rounded-md border border-input bg-background px-2 text-sm">
             <option value="" disabled>{{ t('ui.choose') }}</option>
             <option v-for="item in versions.versions.value" :key="item.version" :value="String(item.version)">v{{ item.version }}</option>
           </select>
         </div>
         <div class="flex flex-col gap-1">
           <label for="compare-against" class="text-sm font-medium">{{ t('strategy.compareAgainst') }}</label>
-          <select id="compare-against" v-model="compareAgainst" class="h-9 rounded-md border border-input bg-background px-2 text-sm">
+          <select id="compare-against" v-model="compareAgainst" class="h-11 rounded-md border border-input bg-background px-2 text-sm">
             <option value="" disabled>{{ t('ui.choose') }}</option>
             <option v-for="item in versions.versions.value" :key="item.version" :value="String(item.version)">v{{ item.version }}</option>
           </select>

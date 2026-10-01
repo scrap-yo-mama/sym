@@ -37,6 +37,10 @@ describe('assert_no_hardcoded_colors', () => {
       ['hexadécimale', '.a { color: #3A33F0; }'],
       ['hexadécimale courte', '.a { background: #fff; }'],
       ['hexadécimale entre guillemets', "const c = '#FF5A1F';"],
+      ['hexadécimale courte entre guillemets', "const c = '#000';"],
+      ['hexadécimale de 4 chiffres entre guillemets', 'const c = "#fff8";'],
+      ['hexadécimale courte en attribut SVG', '<path fill="#fff"/>'],
+      ['hexadécimale courte en attribut SVG (stroke)', "<circle stroke='#0af' />"],
       ['rgb', '.a { color: rgb(0 0 0); }'],
       ['rgba', '.a { color: rgba(0,0,0,.5); }'],
       ['hsl', '.a { color: hsl(10 20% 30%); }'],
@@ -47,6 +51,11 @@ describe('assert_no_hardcoded_colors', () => {
       ['noir Tailwind', '<p class="bg-black/50">'],
       ['couleur nommée', '.a { color: red; }'],
       ['attribut SVG nommé', '<path fill="black" />'],
+      // Ombres de Tailwind : rgb noir écrit en dur dans Tailwind, contraires aux ombres plates de la charte (20 § 1.2).
+      ['ombre Tailwind xs', '<input class="h-11 shadow-xs">'],
+      ['ombre Tailwind sm en variante', '<p class="hover:shadow-sm">'],
+      ['ombre Tailwind md', "const c = 'shadow-md';"],
+      ['ombre Tailwind lg', '<div class="rounded-xl shadow-lg">'],
     ];
     for (const [label, source] of bad) expect(hardcodedColors(source, 'zz').length, label).toBeGreaterThan(0);
   });
@@ -56,10 +65,11 @@ describe('assert_no_hardcoded_colors', () => {
       '<a href="#main" class="bg-primary text-primary-foreground">',
       '.a { color: var(--foreground); background-color: var(--sym-orange); }',
       '.a { border-color: currentColor; background: transparent; }',
-      "locator('#identity'); const id = '#add';",
+      "locator('#identity'); const id = '#add-key';",
       '<svg fill="currentColor" aria-hidden="true" />',
       '.a { color: color-mix(in oklab, var(--card) 50%, transparent); }',
       '<p class="bg-status-sain text-status-sain-foreground border-status-border bg-muted/50">',
+      '<div class="rounded-xl shadow-flat">',
     ];
     for (const source of good) expect(hardcodedColors(source, 'zz'), source).toEqual([]);
   });
