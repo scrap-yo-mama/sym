@@ -4,7 +4,7 @@
 // Tout tourne en boucle locale, ports éphémères ; aucune adresse publique n'est jamais contactée.
 import { createHash } from 'node:crypto';
 import { createSocket } from 'node:dgram';
-import { createServer, type Server } from 'node:http';
+import { createServer, type IncomingHttpHeaders, type Server } from 'node:http';
 import type { AddressInfo, Socket } from 'node:net';
 import type { Duplex } from 'node:stream';
 import { createSsrfPolicy, SsrfGuard, type Resolver, type SsrfDenyDetail } from '../../packages/core/src/net/index.ts';
@@ -25,6 +25,8 @@ export type SsrfHarness = {
   wsOpens(): number;
   /** Corps des POST reçus par la fixture (webhooks). */
   fixturePosts: string[];
+  /** En-têtes des mêmes POST, dans le même ordre (signature Standard Webhooks). */
+  fixtureHeaders: IncomingHttpHeaders[];
   resolverCalls: Map<string, number>;
   /** Phase du résolveur pour `rebind.zz-test` : `validate` → adresse publique, `connect` → 127.0.0.1. */
   setRebindPhase(phase: 'validate' | 'connect'): void;
@@ -87,6 +89,7 @@ export async function startSsrfHarness(): Promise<SsrfHarness> {
   const udpPort = udp.address().port;
 
   const fixturePosts: string[] = [];
+  const fixtureHeaders: IncomingHttpHeaders[] = [];
   const fixture = createServer((req, res) => {
     const target = (path: string) => `http://${path}`;
     const routes: Record<string, string> = {
@@ -113,6 +116,7 @@ export async function startSsrfHarness(): Promise<SsrfHarness> {
       req.on('data', (chunk: Buffer) => (body += chunk.toString()));
       req.on('end', () => {
         fixturePosts.push(body);
+        fixtureHeaders.push(req.headers);
         const location = routes[url];
         if (location !== undefined) res.writeHead(307, { location }).end();
         else res.writeHead(204).end();
@@ -199,6 +203,7 @@ window.done = Promise.all([
     metaHits: () => hits,
     wsOpens: () => wsOpens,
     fixturePosts,
+    fixtureHeaders,
     resolverCalls,
     setRebindPhase: (phase) => {
       rebindPhase = phase;

@@ -6,9 +6,12 @@
 // 3. par job : prise du run (jeton `job_id`), `runs.heartbeat_at` toutes les RUN_HEARTBEAT_SECONDS, exécution,
 //    clôture ; perte du bail (annulation, reprise) → interruption ;
 // 4. `worker_heartbeats` toutes les 15 s ; balayeur des runs orphelins toutes les 60 s ;
-// 5. SIGTERM : `draining`, plus de nouveau job, fin des runs en cours sous SHUTDOWN_TIMEOUT_SECONDS, sinon remise en file ;
-// 6. RGPD (1.8, D-25) : clé des sujets chargée au démarrage ; par run, registre de masquage (`RunContext.personal`, vidé
-//    en fin de run, appliqué à `error_detail`) et liste d'exclusion (`RunContext.excludeSubjects`) ; passe de rétention
+// 5. planification, webhooks et alertes (tâche 2.5) : voir scheduling.ts ; la fin d'un run est annoncée dans la transaction
+//    qui la clôt (`finishRunAndNotify`) ;
+// 6. SIGTERM : `draining`, plus de nouveau job, fin des runs en cours sous SHUTDOWN_TIMEOUT_SECONDS, sinon remise en file ;
+// 7. RGPD (1.8, D-25) : clé des sujets chargée au démarrage ; par run, registre de masquage (`RunContext.personal`, vidé
+//    en fin de run, appliqué à `error_detail`) et liste d'exclusion (`RunContext.excludeSubjects`, appliquée aussi par
+//    `RunContext.writeItems`, qui écrit le dataset sous l'identité du propriétaire avec la dédup de la planification) ; passe de rétention
 //    planifiée toutes les RETENTION_TICK_SECONDS (marquage horaire, purge et `ensure_partitions` quotidiens, verrou
 //    consultatif : une seule instance à la fois), sur une connexion de session.
 import { randomBytes } from 'node:crypto';
@@ -23,18 +26,20 @@ import {
   secretValues,
   withRunContext,
   withSpan,
+  type DatasetWrite,
   type RunExecutor,
   type RunJobData,
   type RunResult,
   type SpanHandle,
 } from '@runtime/core';
 import {
+  appendRunItems,
   beatWorker,
   claimRun,
   createRunLogger,
   currentSchemaVersion,
   expectedSchemaVersion,
-  finishRun,
+  finishRunAndNotify,
   heartbeatRun,
   holdSecretsLock,
   keyCheck,
@@ -46,14 +51,18 @@ import {
   requeueRun,
   resolveConnections,
   runQueueDefinition,
+  secretStore,
   runRetentionTick,
   schemaVersionRefusal,
   sweepOrphans,
+  withActor,
   type SweepResult,
 } from '@runtime/db';
+import { SsrfGuard } from '@runtime/core/net';
 import pg from 'pg';
 import type { Logger } from 'pino';
 import type { WorkerConfig } from './config.js';
+import { startScheduling, type Scheduling } from './scheduling.js';
 
 class WorkerStartupError extends Error {
   override name = 'WorkerStartupError';
@@ -85,6 +94,15 @@ export type StartWorkerOptions = {
   executor?: RunExecutor;
   logger?: Logger;
   workerId?: string;
+  /** Réglages de la planification (tests : horloge simulée, passages du cron rapprochés). */
+  scheduling?: {
+    clock?: ConstructorParameters<typeof PgBossJobQueue>[0]['clock'];
+    now?: () => Date;
+    cronMonitorIntervalSeconds?: number;
+    cronWorkerIntervalSeconds?: number;
+    supervise?: boolean;
+    smtpCa?: string[];
+  };
 };
 
 type AbortCause = 'lease_lost' | 'expired' | 'shutdown';
@@ -111,12 +129,14 @@ export async function startWorker(options: StartWorkerOptions): Promise<Worker> 
   lockClient.on('error', (error) => log.error({ err: errorDetail(error) }, 'verrou des secrets : connexion perdue'));
   let releaseLock: (() => Promise<void>) | undefined;
   let queue: PgBossJobQueue | undefined;
+  let scheduling: Scheduling | undefined;
   let subjectKey: Buffer | undefined;
   // Passes de rétention : verrou consultatif de session et DETACH CONCURRENTLY exigent une connexion de session.
   const maintenancePool = new pg.Pool({ connectionString: sessionUrl, max: 1, application_name: 'runtime-worker-retention' });
   maintenancePool.on('error', (error) => log.error({ err: errorDetail(error) }, 'rétention : connexion perdue'));
 
   const cleanup = async () => {
+    await scheduling?.stop().catch(() => undefined);
     await queue?.stop({ timeoutMs: 1000 }).catch(() => undefined);
     await releaseLock?.().catch(() => undefined);
     await lockClient.end().catch(() => undefined);
@@ -139,10 +159,26 @@ export async function startWorker(options: StartWorkerOptions): Promise<Worker> 
       connectionString: sessionUrl,
       application_name: 'runtime-worker-queue',
       onError: (error) => log.error({ err: errorDetail(error) }, 'file : erreur pg-boss'),
+      schedule: true,
+      ...(options.scheduling?.clock ? { clock: options.scheduling.clock } : {}),
+      ...(options.scheduling?.cronMonitorIntervalSeconds ? { cronMonitorIntervalSeconds: options.scheduling.cronMonitorIntervalSeconds } : {}),
+      ...(options.scheduling?.cronWorkerIntervalSeconds ? { cronWorkerIntervalSeconds: options.scheduling.cronWorkerIntervalSeconds } : {}),
+      ...(options.scheduling?.supervise === undefined ? {} : { supervise: options.scheduling.supervise }),
     });
     await queue.start();
     await queue.createQueue(runQueueDefinition(config.runBudgetSeconds));
     await beatWorker(pool, { workerId, version: config.version });
+    scheduling = await startScheduling({
+      pool,
+      queue,
+      store: secretStore(pool, config.keyring, checked),
+      guard: new SsrfGuard({ policy: config.ssrfPolicy }),
+      log,
+      now: options.scheduling?.now ?? (() => new Date()),
+      warningCheckSeconds: config.warningCheckSeconds,
+      pollingIntervalSeconds: config.queuePollingSeconds,
+      ...(options.scheduling?.smtpCa ? { smtpCa: options.scheduling.smtpCa } : {}),
+    });
     log.info({ workerId, key: checked.fingerprint, concurrency: config.concurrency }, 'worker démarré');
   } catch (error) {
     await cleanup();
@@ -226,11 +262,27 @@ export async function startWorker(options: StartWorkerOptions): Promise<Worker> 
         (error: unknown) => log.warn({ runId, err: errorDetail(error) }, 'battement du run : écriture impossible'),
       );
     }, config.runHeartbeatSeconds * 1000);
+    // Bilan cumulé des écritures du dataset par l'exécuteur (`ctx.writeItems`), reporté dans le résultat du run.
+    const dataset: { written: DatasetWrite | null } = { written: null };
     try {
       let result: RunResult;
       try {
         // Liste d'exclusion des sujets effacés, chargée à la prise du run.
         const excluded = await loadSubjectExclusions(pool);
+        const writeItems = async (outputSchema: unknown, items: readonly unknown[]): Promise<DatasetWrite> => {
+          const { kept, dropped } = filterExcludedItems(subjects, excluded, outputSchema, items);
+          const r = await withActor(pool, { userId: claim.ownerId, role: 'member' }, (tx) => appendRunItems(tx, { runId, items: kept, hashKey: subjects }));
+          const before = dataset.written;
+          const next: DatasetWrite = {
+            dataset_id: r.datasetId,
+            written: (before?.written ?? 0) + r.written,
+            new_items: r.newItems === null ? (before?.new_items ?? null) : (before?.new_items ?? 0) + r.newItems,
+            dropped: (before?.dropped ?? 0) + dropped,
+            skipped: (before?.skipped ?? 0) + r.skipped,
+          };
+          dataset.written = next;
+          return next;
+        };
         result = await executor({
           runId,
           apiId: claim.apiId,
@@ -244,7 +296,10 @@ export async function startWorker(options: StartWorkerOptions): Promise<Worker> 
           log: runLog.log,
           personal,
           excludeSubjects: (outputSchema, items) => filterExcludedItems(subjects, excluded, outputSchema, items),
+          writeItems,
         });
+        // Le dataset du run est celui que le worker a écrit, jamais un autre nommé par l'exécuteur.
+        if (result.state === 'succeeded' && dataset.written !== null) result = { ...result, dataset_id: dataset.written.dataset_id };
       } catch (error) {
         result = controller.signal.aborted
           ? { state: 'failed', failure_class: 'transient', retryable: true, error_detail: entry.cause ?? 'aborted' }
@@ -255,7 +310,7 @@ export async function startWorker(options: StartWorkerOptions): Promise<Worker> 
       }
       // Bail perdu ou arrêt : le run a déjà été annulé, repris ou remis en file ; rien n'est écrit.
       if (entry.cause === 'lease_lost' || entry.cause === 'shutdown') return;
-      const closed = await finishRun(pool, runId, jobId, result, { personal });
+      const closed = await finishRunAndNotify(pool, q, { runId, jobId, result }, { personal, subjectKey: subjects });
       if (result.state === 'failed') span.fail(result.failure_class);
       span.setAttribute('run.state', result.state);
       await runLog.log(result.state === 'failed' ? 'warn' : 'info', 'run_finished', {
@@ -288,6 +343,7 @@ export async function startWorker(options: StartWorkerOptions): Promise<Worker> 
       draining = true;
       log.info({ inFlight: running.size }, 'arrêt : plus de nouveau job');
       clearInterval(sweepTimer);
+      await scheduling?.stop();
       clearInterval(retentionTimer);
       await q.offWork(RUN_QUEUE).catch((error: unknown) => log.warn({ err: errorDetail(error) }, 'arrêt : offWork'));
       await beat();

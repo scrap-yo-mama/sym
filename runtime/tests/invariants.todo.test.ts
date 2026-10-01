@@ -13,8 +13,11 @@ import { describe, test } from "vitest";
 // ressources de 3.1 / 2.6 : registre apps/server/src/routes/registry.ts.
 // INV1 (1.1a) : assert_output_schema_enforced est dans packages/core/src/schema/validator.unit.test.ts (validateOutput, `$ref` distant
 // refusé à 0 requête) ; le volet « sortie LLM » et « réparation » est repris par 2.3.
-// INV10 (0.7) : assert_ssrf_guard et assert_webhook_ssrf_blocked (squelette repris par 2.5) sont dans
-// tests/security/ssrf-guard.security.test.ts (projet Vitest security, pnpm test:security).
+// INV10 (0.7, 2.5) : assert_ssrf_guard et assert_webhook_ssrf_blocked (enregistrement, envoi brut, livraison signée de 2.5) sont dans
+// tests/security/ssrf-guard.security.test.ts (projet Vitest security, pnpm test:security) ; côté base : webhooks.integration.test.ts.
+// 2.5 (planification, webhooks, alertes) : assert_schedule_skips_bloquee, assert_schedule_single_source (packages/db/src/schedules.integration.test.ts,
+// apps/worker/src/scheduling.integration.test.ts), assert_webhook_signature (packages/core/src/webhook/webhook.unit.test.ts, webhooks.integration.test.ts),
+// assert_webhook_retry, assert_webhook_blocked_not_retryable (webhooks.integration.test.ts), assert_alert_actionable (alerts.integration.test.ts).
 // INV3 (1.2) : assert_status_transitions est dans packages/core/src/status/transitions.unit.test.ts (21 tests transition_NN_*),
 // machine.prop.test.ts (modèle fast-check) et packages/db/src/status.integration.test.ts (status_events, même transaction).
 // INV4 et D-12 (1.3) : assert_run_traced et assert_worker_key_mismatch sont dans apps/worker/src/worker.integration.test.ts (worker réel,

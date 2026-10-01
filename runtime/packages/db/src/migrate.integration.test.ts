@@ -58,7 +58,7 @@ describe(`migrations sur PostgreSQL ${inject('pgVersion')}`, () => {
     const db = await createTestDatabase('race');
     try {
       const results = await Promise.all([migrateUp({ connectionString: db.url }), migrateUp({ connectionString: db.url })]);
-      expect(results.flatMap((r) => r.applied).sort()).toEqual(migrations.map((m) => m.version));
+      expect(results.flatMap((r) => r.applied).sort((a, b) => a - b)).toEqual(migrations.map((m) => m.version));
     } finally {
       await db.drop();
     }

@@ -8,6 +8,7 @@ import {
   type Keyring,
   type ObservabilityConfig,
 } from '@runtime/core';
+import { ssrfPolicyFromEnv, type SsrfPolicy } from '@runtime/core/net';
 import { RUN_DEFAULTS, retentionPolicyFromEnv, type RetentionPolicy } from '@runtime/db';
 
 export class WorkerConfigError extends Error {
@@ -30,6 +31,10 @@ export type WorkerConfig = {
   sweepIntervalSeconds: number;
   workerHeartbeatSeconds: number;
   queuePollingSeconds: number;
+  /** Garde SSRF (INV10) : webhooks et relais SMTP ; `ALLOWED_PRIVATE_HOSTS`, `ALLOWED_EGRESS_PORTS`. */
+  ssrfPolicy: SsrfPolicy;
+  /** Période du contrôle des `warning` qui durent au-delà de D (s). */
+  warningCheckSeconds: number;
   /** Journal, OTel (coupé par défaut) : 14 § 2. */
   observability: ObservabilityConfig;
   /** Rétention (14 § 9) : durées lues une fois au démarrage (`RETENTION_*`, `RUN_LOG_RETENTION_DAYS`…). */
@@ -81,6 +86,8 @@ export function loadWorkerConfig(env: NodeJS.ProcessEnv = process.env): WorkerCo
     sweepIntervalSeconds: positive(env, 'SWEEP_INTERVAL_SECONDS', RUN_DEFAULTS.sweepIntervalSeconds),
     workerHeartbeatSeconds: positive(env, 'WORKER_HEARTBEAT_SECONDS', 15),
     queuePollingSeconds: positive(env, 'QUEUE_POLLING_SECONDS', 2, 0.5),
+    ssrfPolicy: ssrfPolicyFromEnv(env),
+    warningCheckSeconds: positive(env, 'WARNING_CHECK_SECONDS', 900, 1),
     observability,
     retention,
     retentionTickSeconds: positive(env, 'RETENTION_TICK_SECONDS', 300),

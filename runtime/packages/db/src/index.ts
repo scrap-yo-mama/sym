@@ -9,6 +9,7 @@ export const PACKAGE_NAME = '@runtime/db';
 export * from './artifacts.js';
 export * from './audit.js';
 export * from './connection.js';
+export * from './datasets.js';
 export * from './health.js';
 export * from './extension.js';
 export * from './migrate.js';
@@ -23,6 +24,10 @@ export * from './status.js';
 export * from './queue.js';
 export * from './retention/index.js';
 export * from './runs.js';
+export * from './schedules.js';
+export * from './webhooks.js';
+export * from './alerts.js';
+export * from './notify.js';
 export { schema };
 
 /** Extrait le nom de la base d'une URL PostgreSQL, sans exposer le mot de passe. */

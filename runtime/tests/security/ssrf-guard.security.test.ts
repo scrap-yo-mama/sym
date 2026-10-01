@@ -13,10 +13,12 @@ import {
   deliverWebhook,
   guardedFetch,
   guardedGoto,
+  sendWebhookAttempt,
   SsrfBlockedError,
   startEgressProxy,
   type EgressProxy,
 } from '../../packages/core/src/net/index.ts';
+import { generateWebhookSecret, verifyWebhook } from '../../packages/core/src/webhook/index.ts';
 import { startSsrfHarness, ssrfUrlVectors, ZZ_PUBLIC_ADDRESS, type SsrfHarness } from './ssrf-harness.ts';
 
 async function blockedReason(promise: Promise<unknown>): Promise<string> {
@@ -257,7 +259,8 @@ describe('assert_ssrf_guard', () => {
 });
 
 describe('assert_webhook_ssrf_blocked', () => {
-  // Squelette réutilisable pour la tâche 2.5 : enregistrement (assertWebhookUrlAllowed) puis envoi (deliverWebhook).
+  // Enregistrement (assertWebhookUrlAllowed), envoi brut (deliverWebhook) puis tentative de livraison signée de la tâche 2.5
+  // (sendWebhookAttempt : signature Standard Webhooks, délai, classement) : mêmes vecteurs, 0 requête interne.
   test('enregistrement refusé pour chaque vecteur ; cible autorisée acceptée', async () => {
     await expect(assertWebhookUrlAllowed(`http://fixture.zz-test:${h.fixturePort}/hook`, h.guard)).resolves.toBeInstanceOf(URL);
     for (const url of ssrfUrlVectors(h.metaPort)) {
@@ -284,6 +287,54 @@ describe('assert_webhook_ssrf_blocked', () => {
     await assertWebhookUrlAllowed(url, h.guard);
     h.setRebindPhase('connect');
     expect(await blockedReason(deliverWebhook(url, { zz_test: 3 }, { guard: h.guard }))).toBe('loopback');
+    expect(h.metaHits()).toBe(0);
+  });
+});
+
+describe('assert_webhook_ssrf_blocked : livraison signée (tâche 2.5)', () => {
+  const payload = { type: 'run.succeeded', timestamp: '2026-10-01T10:00:00.000Z', data: { api: 'zz_test_hook', items: 1 } };
+  const attempt = (url: string, guard = h.guard, secrets = [generateWebhookSecret()]) =>
+    sendWebhookAttempt({ url, messageId: 'evt_zz_test', dispatchId: 'zz_test_dispatch', payload, secrets, guard });
+
+  test('cible autorisée : livrée, signée (v1) et vérifiable ; en-têtes webhook-id et dispatch-id présents', async () => {
+    const secret = generateWebhookSecret();
+    const before = h.fixturePosts.length;
+    const sent = await attempt(`http://fixture.zz-test:${h.fixturePort}/hook`, h.guard, [secret]);
+    expect(sent).toMatchObject({ httpStatus: 204, error: null });
+    expect(h.fixturePosts.slice(before)).toEqual([JSON.stringify(payload)]);
+    const headers = h.fixtureHeaders.at(-1)!;
+    expect(headers['webhook-id']).toBe('evt_zz_test');
+    expect(headers['dispatch-id']).toBe('zz_test_dispatch');
+    expect(() => verifyWebhook({ headers, body: JSON.stringify(payload), secrets: [secret] })).not.toThrow();
+  });
+
+  test('chaque vecteur : ssrf_blocked, jamais de requête, détail réservé au journal admin', async () => {
+    for (const url of ssrfUrlVectors(h.metaPort)) {
+      const result = await attempt(url);
+      expect(result.error, url).toBe('ssrf_blocked');
+      expect(result.httpStatus, url).toBeNull();
+      expect(result.ssrf, url).toBeDefined();
+    }
+    expect(h.metaHits()).toBe(0);
+  });
+
+  test('redirection vers une IP privée : jamais suivie, rendue telle quelle, 0 requête interne', async () => {
+    for (const path of ['/redirect-meta', '/redirect-meta-name', '/redirect-ok']) {
+      const result = await attempt(`http://fixture.zz-test:${h.fixturePort}${path}`);
+      expect(result.error, path).toBeNull();
+      expect(result.httpStatus, path).toBe(307);
+    }
+    expect(h.metaHits()).toBe(0);
+  });
+
+  test('rebinding entre l\'enregistrement et l\'envoi : refus à la connexion', async () => {
+    const url = `http://rebind.zz-test:${h.metaPort}/hook`;
+    h.setRebindPhase('validate');
+    await assertWebhookUrlAllowed(url, h.guard);
+    h.setRebindPhase('connect');
+    const result = await attempt(url);
+    expect(result.error).toBe('ssrf_blocked');
+    expect(result.ssrf?.reason).toBe('loopback');
     expect(h.metaHits()).toBe(0);
   });
 });

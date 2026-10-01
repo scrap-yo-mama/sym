@@ -59,6 +59,9 @@ catalog:
   # Lint des composants .vue (tâche 3.3).
   eslint-plugin-vue: 10.11.0
   vue-eslint-parser: 10.4.1
+  # Webhooks (tâche 2.5) : bibliothèque de référence Standard Webhooks, devDependency d'oracle de test (08 § 7 : « la signature v1
+  # se vérifie avec la bibliothèque de référence »). MIT ; 1.1.1 publiée le 2026-08-28.
+  standardwebhooks: 1.1.1
   # Observabilité (tâche 1.10) : traces OTel opt-in (chargées à la demande seulement). Métriques Prometheus écrites à la
   # main (apps/server/src/metrics.ts) : prom-client 15 exige `@opentelemetry/api` (require statique), ce qui chargerait
   # l'API OTel dans tout `server` même OTel coupé (assert_otel_off_by_default).

@@ -3,6 +3,9 @@
   "exclude": [
     "catalog"
   ],
+  "ignoreBinaries": [
+    "openssl"
+  ],
   "workspaces": {
     ".": {
       "ignoreBinaries": [

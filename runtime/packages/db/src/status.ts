@@ -22,6 +22,11 @@ export type ApplyStatusInput = {
   event: StatusEventInput;
   clock: Clock;
   schedulePeriodMs?: number | null;
+  /**
+   * Appelé dans la transaction, après l'écriture de `apis` et de `status_events`, quand au moins une transition a eu lieu :
+   * les webhooks et alertes (`notifyStatusChange`, 2.5) sont écrits au même COMMIT que les transitions qu'ils annoncent.
+   */
+  afterTransition?: (client: pg.PoolClient, events: StatusEventRow[]) => Promise<void>;
 };
 
 export type ApplyStatusResult =
@@ -107,6 +112,7 @@ export async function applyStatusTransition(pool: pg.Pool, input: ApplyStatusInp
         [row.id, row.owner_id, row.project_id, e.from_status, e.to_status, e.reason, e.run_id, e.at],
       );
     }
+    if (events.length > 0) await input.afterTransition?.(client, events);
     return { ok: true, state: step.state, transitions: step.transitions, events };
   });
 }

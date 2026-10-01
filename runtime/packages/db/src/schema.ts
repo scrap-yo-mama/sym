@@ -17,10 +17,12 @@ import {
 } from '@runtime/core';
 import { sql } from 'drizzle-orm';
 import {
+  type AnyPgColumn,
   bigint,
   boolean,
   check,
   customType,
+  foreignKey,
   index,
   integer,
   jsonb,
@@ -283,7 +285,7 @@ export const secrets = pgTable(
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
-  (t) => [index('secrets_owner_id_idx').on(t.ownerId), index('secrets_kek_version_idx').on(t.kekVersion)],
+  (t) => [index('secrets_owner_id_idx').on(t.ownerId), index('secrets_kek_version_idx').on(t.kekVersion), unique('secrets_id_owner_key').on(t.id, t.ownerId)],
 );
 
 // --- Catalogue (04b § 1) -----------------------------------------------------
@@ -339,6 +341,8 @@ export const apis = pgTable(
     pinned: boolean('pinned').notNull().default(false),
     repairLeaseOwner: text('repair_lease_owner'),
     repairLeaseUntil: tstz('repair_lease_until'),
+    // 0010_scheduling_webhooks (2.5) : un warning au-delà de D n'alerte qu'une fois par épisode.
+    warningAlertedAt: tstz('warning_alerted_at'),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
@@ -412,6 +416,10 @@ export const runs = pgTable(
     jobId: uuid('job_id'),
     workerId: text('worker_id'),
     requeueCount: integer('requeue_count').notNull().default(0),
+    // 0010_scheduling_webhooks (2.5) : planification d'origine, instant du déclenchement, job d'origine (unique).
+    scheduleId: uuid('schedule_id').references((): AnyPgColumn => schedules.id, { onDelete: 'set null' }),
+    scheduledAt: tstz('scheduled_at'),
+    scheduleJobId: uuid('schedule_job_id'),
     createdAt: createdAt(),
     startedAt: tstz('started_at'),
     finishedAt: tstz('finished_at'),
@@ -534,6 +542,8 @@ export const datasets = pgTable(
     ownerId: ownerId(),
     projectId: projectId(),
     itemCount: integer('item_count').notNull().default(0),
+    /** 0011 (2.5) : items dont la clé de déduplication n'avait jamais été vue pour l'API (`diff`, `items.new`). */
+    newItems: integer('new_items').notNull().default(0),
     bytes: bigint('bytes', { mode: 'number' }).notNull().default(0),
     retentionDays: integer('retention_days'),
     pinned: boolean('pinned').notNull().default(false),
@@ -750,10 +760,19 @@ export const webhookSubscriptions = pgTable(
     secretId: uuid('secret_id').references(() => secrets.id, { onDelete: 'set null' }),
     status: text('status', { enum: ['active', 'disabled'] }).notNull().default('active'),
     disabledAt: tstz('disabled_at'),
+    // 0010_scheduling_webhooks (2.5) : rotation à deux secrets, désactivation après 5 jours d'échecs.
+    previousSecretId: uuid('previous_secret_id').references(() => secrets.id, { onDelete: 'set null' }),
+    previousSecretExpiresAt: tstz('previous_secret_expires_at'),
+    failingSince: tstz('failing_since'),
+    lastSuccessAt: tstz('last_success_at'),
+    testedAt: tstz('tested_at'),
+    // 0011 (2.5) : dernier échec (série « continue » = jamais plus de 24 h sans échec). Clés étrangères liées au
+    // propriétaire (secret_id, owner_id) → secrets (id, owner_id), `ON DELETE SET NULL (colonne)` : écrites en SQL seulement.
+    lastFailureAt: tstz('last_failure_at'),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
-  (t) => [index('webhook_subscriptions_owner_id_idx').on(t.ownerId)],
+  (t) => [index('webhook_subscriptions_owner_id_idx').on(t.ownerId), unique('webhook_subscriptions_id_owner_key').on(t.id, t.ownerId)],
 );
 
 export const webhookDeliveries = pgTable(
@@ -771,10 +790,19 @@ export const webhookDeliveries = pgTable(
     status: text('status', { enum: ['pending', 'succeeded', 'failed'] }).notNull().default('pending'),
     httpStatus: integer('http_status'),
     nextAttemptAt: tstz('next_attempt_at'),
+    // 0010_scheduling_webhooks (2.5) : journal de livraison et charge rejouable.
+    eventId: uuid('event_id').notNull().defaultRandom(),
+    payload: jsonb('payload').notNull().default({}),
+    durationMs: integer('duration_ms'),
+    responseExcerpt: text('response_excerpt'),
+    errorCode: text('error_code'),
+    finishedAt: tstz('finished_at'),
     createdAt: createdAt(),
   },
   (t) => [
     unique('webhook_deliveries_dispatch_attempt_key').on(t.dispatchId, t.attempt),
+    // 0011 : (subscription_id, owner_id) → webhook_subscriptions (id, owner_id), ON DELETE CASCADE.
+    foreignKey({ name: 'webhook_deliveries_subscription_owner_fkey', columns: [t.subscriptionId, t.ownerId], foreignColumns: [webhookSubscriptions.id, webhookSubscriptions.ownerId] }).onDelete('cascade'),
     index('webhook_deliveries_owner_id_idx').on(t.ownerId),
   ],
 );

@@ -189,8 +189,17 @@ export class SsrfGuard {
    * Renvoie l'adresse à épingler : le socket s'ouvre sur elle, jamais sur une nouvelle résolution.
    */
   async resolve(hostname: string, port: number): Promise<ResolvedAddress> {
+    this.checkPort(normalizeHostname(hostname), port);
+    return this.resolveAnyPort(hostname, port);
+  }
+
+  /**
+   * Comme `resolve`, sans la liste de ports. Noms, adresses résolues et exceptions `ALLOWED_PRIVATE_HOSTS` restent
+   * contrôlés à l'identique (métadonnées cloud refusées sans exception). Une destination réglée par l'admin (relais SMTP)
+   * passe par `resolveOperatorConfig`, pas par cette politique de cible de membre.
+   */
+  async resolveAnyPort(hostname: string, port: number): Promise<ResolvedAddress> {
     const host = normalizeHostname(hostname);
-    this.checkPort(host, port);
     const allowedByName = this.policy.allowedPrivateNames.has(host) || this.policy.testAllowPrivate;
     if (HARD_BLOCKED_NAMES.has(host) || (nameBlocked(host) && !allowedByName)) {
       throw new SsrfBlockedError({ reason: 'blocked_hostname', host, port });
@@ -210,6 +219,39 @@ export class SsrfGuard {
     for (const record of records) this.checkAddress(host, record.address, port);
     const first = records[0] as ResolvedAddress;
     return { address: stripAddress(first.address), family: first.family };
+  }
+
+  /**
+   * Politique `operator-config` (08b § 1) : destination saisie par l'admin lui-même (relais SMTP, réglage d'instance), jamais
+   * depuis une entrée de membre, de LLM ou d'API. Adresses privées et boucle locale permises SANS passer par
+   * `ALLOWED_PRIVATE_HOSTS` (qui ouvrirait aussi l'hôte aux cibles des membres) ; classes dures toujours refusées
+   * (métadonnées cloud, 0.0.0.0, multicast, diffusion). Ports libres. Résolution unique, adresse épinglée.
+   */
+  async resolveOperatorConfig(hostname: string, port: number): Promise<ResolvedAddress> {
+    const host = normalizeHostname(hostname);
+    if (HARD_BLOCKED_NAMES.has(host)) throw new SsrfBlockedError({ reason: 'blocked_hostname', host, port });
+    const family = isIP(host);
+    let records: readonly ResolvedAddress[];
+    if (family !== 0) {
+      records = [{ address: host, family: family === 6 ? 6 : 4 }];
+    } else {
+      try {
+        records = await this.#resolver(host);
+      } catch {
+        throw new SsrfBlockedError({ reason: 'unresolvable', host, port });
+      }
+    }
+    if (records.length === 0) throw new SsrfBlockedError({ reason: 'unresolvable', host, port });
+    for (const record of records) this.checkOperatorAddress(host, record.address, port);
+    const first = records[0] as ResolvedAddress;
+    return { address: stripAddress(first.address), family: first.family };
+  }
+
+  /** Décision `operator-config` sur une adresse (résolue ou `remoteAddress` du socket) : seules les classes dures refusent. */
+  checkOperatorAddress(hostname: string, address: string, port?: number): void {
+    const verdict = classifyAddress(address);
+    if (verdict.allowed || !HARD_BLOCK_REASONS.has(verdict.reason)) return;
+    throw new SsrfBlockedError({ reason: verdict.reason, host: normalizeHostname(hostname), address: verdict.address, port });
   }
 
   /**

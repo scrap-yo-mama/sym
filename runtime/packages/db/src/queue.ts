@@ -3,7 +3,7 @@
 // schéma `pgboss` ailleurs. pg-boss crée et migre lui-même son schéma, sur la connexion de session
 // (DATABASE_URL_DIRECT, 14 § 4) ; son pool compte dans le budget de connexions (`max`, défaut 2).
 import type { JobQueue, JobState, QueryClient, QueueDefinition, QueuedJob } from '@runtime/core';
-import { PgBoss, type Db as PgBossDb } from 'pg-boss';
+import { PgBoss, type Clock, type Db as PgBossDb } from 'pg-boss';
 import { APP_ROLE } from './rls.js';
 
 export type PgBossQueueOptions = {
@@ -15,6 +15,15 @@ export type PgBossQueueOptions = {
   supervise?: boolean;
   application_name?: string;
   onError?: (error: Error) => void;
+  /**
+   * Planification (08 § 5) : active la lecture du cron et l'envoi des occurrences dans la file cible. Un seul processus
+   * tient chaque passage (verrou en base) ; deux workers ne produisent jamais deux jobs pour la même occurrence.
+   */
+  schedule?: boolean;
+  /** Horloge injectable (tests : `TestClock` de pg-boss, qui pilote aussi l'heure côté Postgres). */
+  clock?: Clock;
+  cronMonitorIntervalSeconds?: number;
+  cronWorkerIntervalSeconds?: number;
 };
 
 /**
@@ -46,8 +55,11 @@ export class PgBossJobQueue implements JobQueue {
       max: options.max ?? 2,
       application_name: options.application_name ?? 'runtime-queue',
       supervise: options.supervise ?? true,
-      // Planification : tâche 2.5 (`schedules` source de vérité). Rien à planifier en 1.3.
-      schedule: false,
+      // Planification (2.5) : `schedules` est la source de vérité, pg-boss n'en est que le miroir (reconstruit au démarrage).
+      schedule: options.schedule ?? false,
+      ...(options.clock ? { clock: options.clock } : {}),
+      ...(options.cronMonitorIntervalSeconds ? { cronMonitorIntervalSeconds: options.cronMonitorIntervalSeconds } : {}),
+      ...(options.cronWorkerIntervalSeconds ? { cronWorkerIntervalSeconds: options.cronWorkerIntervalSeconds } : {}),
     });
     this.#boss.on('error', (error: Error) => options.onError?.(error));
   }
@@ -77,13 +89,46 @@ export class PgBossJobQueue implements JobQueue {
     });
   }
 
-  async enqueue<T extends object>(queue: string, data: T, options: { tx?: QueryClient; id?: string } = {}): Promise<string> {
+  async enqueue<T extends object>(
+    queue: string,
+    data: T,
+    options: { tx?: QueryClient; id?: string; startAfterSeconds?: number } = {},
+  ): Promise<string> {
     const id = await this.#boss.send(queue, data, {
       ...(options.id ? { id: options.id } : {}),
+      ...(options.startAfterSeconds ? { startAfter: options.startAfterSeconds } : {}),
       ...(options.tx ? { db: inTransaction(options.tx) } : {}),
     });
     if (!id) throw new Error(`file ${queue} : job refusé par pg-boss (doublon d'identifiant ou de clé singleton)`);
     return id;
+  }
+
+  async enqueueOnce<T extends object>(
+    queue: string,
+    data: T,
+    options: { singletonKey: string; startAfterSeconds?: number; tx?: QueryClient },
+  ): Promise<string | null> {
+    return this.#boss.send(queue, data, {
+      singletonKey: options.singletonKey,
+      ...(options.startAfterSeconds ? { startAfter: options.startAfterSeconds } : {}),
+      ...(options.tx ? { db: inTransaction(options.tx) } : {}),
+    });
+  }
+
+  async schedule(queue: string, key: string, cron: string, data: object, options: { timezone: string; missed: 'skip' | 'once' }): Promise<void> {
+    await this.#boss.schedule(queue, cron, data, { key, tz: options.timezone, missed: options.missed });
+  }
+
+  async unschedule(queue: string, key: string): Promise<void> {
+    await this.#boss.unschedule(queue, key);
+  }
+
+  async scheduledKeys(queue: string): Promise<string[]> {
+    return (await this.#boss.getSchedules(queue)).map((s) => s.key);
+  }
+
+  previewSchedule(cron: string, options: { timezone: string; count: number; from?: Date }): Date[] {
+    return this.#boss.previewSchedule(cron, { tz: options.timezone, count: options.count, ...(options.from ? { from: options.from } : {}) });
   }
 
   async work<T>(
@@ -93,9 +138,10 @@ export class PgBossJobQueue implements JobQueue {
   ): Promise<string> {
     return this.#boss.work<T>(
       queue,
-      { batchSize: 1, localConcurrency: options.concurrency, pollingIntervalSeconds: options.pollingIntervalSeconds ?? 2 },
+      // `includeMetadata` : `createdOn` (horloge de la file) donne l'instant d'émission d'une occurrence planifiée.
+      { batchSize: 1, localConcurrency: options.concurrency, pollingIntervalSeconds: options.pollingIntervalSeconds ?? 2, includeMetadata: true },
       async (jobs) => {
-        for (const job of jobs) await handler({ id: job.id, data: job.data, signal: job.signal });
+        for (const job of jobs) await handler({ id: job.id, data: job.data, signal: job.signal, createdOn: (job as { createdOn?: Date }).createdOn });
       },
     );
   }
