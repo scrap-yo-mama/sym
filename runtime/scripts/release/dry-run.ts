@@ -91,7 +91,12 @@ export function runDryRun(options: { runtimeDir: string; tag?: string; outDir?: 
     if (existsSync(dist)) for (const f of readdirSync(dist).filter((n) => n.endsWith('.zip'))) rmSync(join(dist, f));
     sh('pnpm', ['--filter', '@runtime/extension', 'exec', 'wxt', 'zip'], runtimeDir);
     const extensionZip = `scrapyomama-extension-${plan.version}.zip`;
-    copyFileSync(join(dist, findExtensionZip(readdirSync(dist), plan.version)), join(out, extensionZip));
+    // Avant la première release, l'extension porte déjà une version valide pour Chrome (0.1.0, tâche 2.9) alors que le
+    // dépôt est à 0.0.0 : release-please les aligne (extra-files). L'archive est donc cherchée sous la version PROPRE de
+    // l'extension ; le fichier de sortie, lui, porte la version de l'étiquette.
+    const extVersion = (JSON.parse(readFileSync(join(runtimeDir, 'apps/extension/package.json'), 'utf8')) as { version: string }).version;
+    if (extVersion !== plan.version) console.warn(`avertissement : apps/extension/package.json porte ${extVersion}, l'étiquette ${plan.version} : release-please aligne les deux à la release.`);
+    copyFileSync(join(dist, findExtensionZip(readdirSync(dist), extVersion)), join(out, extensionZip));
     writeFileSync(join(out, `${extensionZip}.sha256`), `${sha256(join(out, extensionZip))}  ${extensionZip}\n`);
 
     // 2. SBOM CycloneDX 1.7 : lockfile complet, et production seule (stand-in local du SBOM de l'image, que syft produit en release).
