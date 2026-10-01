@@ -16,9 +16,12 @@ Schéma PostgreSQL v3, migrations SQL versionnées et runner verrouillé (tâche
 | `src/audit.ts` | `appendAudit` : ligne d’`audit_events` (ajout seul), `meta` masquée (`redact` + clés sensibles). |
 | `src/queue.ts` | `PgBossJobQueue` : **seul** adaptateur pg-boss 12 (`JobQueue` de `@runtime/core`). Aucun SQL brut sur `pgboss.*` ailleurs. |
 | `src/runs.ts` | Cycle de vie des runs (1.3) : `createRun` (run + job, même transaction), `cancelRun`, `recordSkippedRun`, `readRun` ; worker : `claimRun`, `heartbeatRun`, `recordAttempt`, `finishRun`, `requeueRun`, `sweepOrphans` ; bail de réparation ; `worker_heartbeats`. |
+| `src/ops/` | Exploitation (4.6, 14 § 6-8) : `runDoctor` (lecture seule, locale ; code de sortie 0/1/2), `connectionBudget`, `buildDiagnostics` (fichier masqué, noms de réglages sans valeurs), `exportCatalog` (liste blanche de colonnes, sans secret), `declareBackup`, `acceptKeyLossLocked` (D-12), `ensureAppRole` (rôle de cluster `runtime_app`, à recréer avant un `pg_restore` sur un autre cluster), `schemaVersionRefusal` (code plus ancien que le schéma : retour d'image sans restauration refusé). Guide : [`docs/exploitation.md`](../../docs/exploitation.md). |
 | `src/partitions.ts` | Partitions mensuelles de `dataset_items` : création, liste, purge (`DETACH … CONCURRENTLY` puis `DROP`). |
 
 Secrets : `runtime keygen`, `runtime key-check`, `runtime rekey --confirm` (MASTER_KEY = nouvelle, MASTER_KEY_PREVIOUS = ancienne ; lots transactionnels, état dans `settings.rekey_state`, relance = reprise). Enveloppe : KEK = HKDF-SHA256(MASTER_KEY, libellé `kek:secrets`) ; DEK aléatoire par valeur ; AAD `secret|id|kind|owner_id|instance` recalculée à chaque lecture ; `kek_version` = génération de la clé maîtresse. Migration `0002_secret_state` : `secrets.state` (`ok` | `unreadable`), `unreadable_since`.
+
+Exploitation : `runtime doctor`, `diagnostics`, `export-catalog`, `backup declare`, `restore-prepare`, `secrets accept-key-loss --confirm` ([guide](../../docs/exploitation.md)).
 
 Commande : `runtime migrate` (applique), `runtime migrate down [--steps N | --all]` (tests et CI seulement). Dans l'image : `RUNTIME_MODE=migrate`.
 

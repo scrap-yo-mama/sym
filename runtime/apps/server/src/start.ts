@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Démarrage de `server` (14 § 7, 13 § 4) : configuration, schéma à jour, verrou partagé des secrets, `keyCheck`
 // AVANT d'écouter (MASTER_KEY différente → refus clair), puis jeton d'amorçage exigé tant qu'aucun owner n'existe.
-import { currentSchemaVersion, createDb, expectedSchemaVersion, holdSecretsLock, keyCheck } from '@runtime/db';
+import { currentSchemaVersion, createDb, expectedSchemaVersion, holdSecretsLock, keyCheck, schemaVersionRefusal } from '@runtime/db';
 import type { FastifyInstance } from 'fastify';
 import pg from 'pg';
 import { buildServer } from './app.js';
@@ -24,9 +24,8 @@ export async function prepareServer(env: NodeJS.ProcessEnv = process.env, option
   try {
     const expected = expectedSchemaVersion();
     const version = await currentSchemaVersion(pool);
-    if (version !== expected) {
-      throw new StartupError(`schéma de base en version ${version}, ${expected} attendue : lancez \`runtime migrate\` avant \`server\`.`);
-    }
+    const refusal = schemaVersionRefusal(version, expected, 'server');
+    if (refusal) throw new StartupError(refusal);
     await lockClient.connect();
     releaseLock = await holdSecretsLock(lockClient);
     const checked = await keyCheck(pool, config.keyring);

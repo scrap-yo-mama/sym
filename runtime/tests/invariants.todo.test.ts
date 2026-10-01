@@ -20,6 +20,8 @@ import { describe, test } from "vitest";
 // INV4 et D-12 (1.3) : assert_run_traced et assert_worker_key_mismatch sont dans apps/worker/src/worker.integration.test.ts (worker réel,
 // kill -9 et SIGTERM compris) ; file, balayeur et bail : packages/db/src/runs.integration.test.ts.
 // INV6, X4 (1.4) : assert_no_ip_change_after_refusal est dans tests/network/network-modes.unit.test.ts (proxy de test local).
+// INV9 et exploitation (4.6) : assert_diagnostics_redacted (packages/db/src/ops/ops.integration.test.ts, apps/cli/src/cli.ops.integration.test.ts),
+// assert_backup_restore_roundtrip, assert_upgrade_n_minus_1, assert_rollback_restores_state (tests/operations.integration.test.ts).
 describe("invariants (à implémenter)", () => {
   test.todo("assert_cheapest_first_logged"); // INV2, tâche(s) 2.1
   test.todo("assert_identity_pinned"); // INV5, tâche(s) 2.6, 2.7
@@ -34,7 +36,6 @@ describe("invariants (à implémenter)", () => {
   test.todo("assert_no_personal_data_in_logs"); // RGPD, tâche(s) 1.8, 1.10
   test.todo("assert_pacing_key_is_domain"); // politesse, tâche(s) 1.9
   test.todo("assert_export_no_secret"); // INV5, INV8, tâche(s) 3.12
-  test.todo("assert_diagnostics_redacted"); // INV9, tâche(s) 1.10
   test.todo("assert_ui_strings_no_forbidden_words"); // INV6, tâche(s) 3.5
   test.todo("assert_access_report_first"); // étape 0, tâche(s) 1.11, 2.1
 });

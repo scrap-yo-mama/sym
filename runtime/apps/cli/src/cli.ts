@@ -1,15 +1,26 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { generateMasterKey, loadKeyring, MasterKeyError } from '@runtime/core';
 import pg from 'pg';
 import {
+  acceptKeyLossLocked,
+  AppRoleError,
+  ensureAppRole,
+  BackupDeclarationError,
+  buildDiagnostics,
+  buildOfflineDiagnostics,
   DatabaseConfigError,
+  declareBackup,
+  exportCatalog,
+  formatDoctor,
+  inspectKeyLoss,
   KeyCheckError,
   keyCheck,
   rekey,
   migrateDown,
   migrateUp,
   resolveConnections,
+  runDoctor,
   type SessionProbe,
 } from '@runtime/db';
 
@@ -26,11 +37,20 @@ const USAGE = [
   '  runtime keygen                       affiche une MASTER_KEY neuve (32 octets base64), sans l’écrire',
   '  runtime key-check                    vérifie MASTER_KEY contre settings.key_check (crée le témoin sur base neuve)',
   '  runtime rekey --confirm [--batch-size N]   rotation : MASTER_KEY (nouvelle) + MASTER_KEY_PREVIOUS (ancienne) ; sauvegarde préalable exigée',
+  '  runtime doctor [--json]              contrôles locaux (base, schéma, clé, connexions, workers, disque, sauvegarde) ; sortie 0 / 1 (avertissement) / 2 (erreur)',
+  '  runtime diagnostics [--out FICHIER]  fichier masqué produit en local, jamais envoyé (à joindre soi-même à un ticket)',
+  '  runtime export-catalog [--out FICHIER]   API, schémas, stratégies et planifications en JSON, sans secret ni cookie',
+  '  runtime backup declare [--at DATE_ISO]   note qu’une sauvegarde pg_dump vient d’être faite (rappel de doctor)',
+  '  runtime restore-prepare              avant pg_restore sur une base vide : recrée le rôle de cluster `runtime_app` (RLS) que le dump n’emporte pas',
+  '  runtime secrets accept-key-loss --confirm   MASTER_KEY perdue : secrets conservés « À ressaisir », témoin de clé réécrit',
 ].join('\n');
 
-export type CliDeps = { env?: NodeJS.ProcessEnv; log?: (line: string) => void; probe?: SessionProbe };
+export type CliDeps = { env?: NodeJS.ProcessEnv; log?: (line: string) => void; probe?: SessionProbe; now?: () => Date };
 
-async function migrate(args: string[], deps: CliDeps): Promise<{ code: number; out: string }> {
+/** `stream: 'stdout'` : sortie de données (JSON de doctor) à lire même quand le code de sortie n'est pas 0. */
+type CliResult = { code: number; out: string; stream?: 'stdout' };
+
+async function migrate(args: string[], deps: CliDeps): Promise<CliResult> {
   const env = deps.env ?? process.env;
   const log = deps.log ?? ((line: string) => console.log(line));
   const [sub = 'up', ...rest] = args;
@@ -59,14 +79,123 @@ async function withSessionClient<T>(deps: CliDeps, fn: (client: pg.Client) => Pr
   }
 }
 
-async function keyCheckCmd(deps: CliDeps): Promise<{ code: number; out: string }> {
+function optionValue(args: string[], name: string): string | undefined {
+  const i = args.indexOf(name);
+  return i >= 0 ? args[i + 1] : undefined;
+}
+
+/** Écrit un fichier local en 0600, sans écraser un fichier existant. */
+function writeLocalFile(path: string, content: string): void {
+  writeFileSync(path, content, { flag: 'wx', mode: 0o600 });
+}
+
+async function doctorCmd(args: string[], deps: CliDeps): Promise<CliResult> {
+  const report = await runDoctor({ env: deps.env ?? process.env, ...(deps.probe ? { probe: deps.probe } : {}), ...(deps.now ? { now: deps.now } : {}) });
+  const out = args.includes('--json') ? JSON.stringify(report, null, 2) : formatDoctor(report);
+  return { code: report.exitCode, out, stream: 'stdout' };
+}
+
+async function diagnosticsCmd(args: string[], deps: CliDeps): Promise<CliResult> {
+  const env = deps.env ?? process.env;
+  const now = (deps.now ?? (() => new Date()))();
+  const doctor = await runDoctor({ env, ...(deps.probe ? { probe: deps.probe } : {}), now: () => now });
+  const input = { env, runtimeVersion: version(), doctor, now };
+  const diagnostics = await withSessionClient(deps, (client) => buildDiagnostics(client, input)).catch(() => buildOfflineDiagnostics(input));
+  const path = optionValue(args, '--out') ?? `runtime-diagnostics-${now.toISOString().replace(/[:.]/g, '-')}.json`;
+  try {
+    writeLocalFile(path, `${JSON.stringify(diagnostics, null, 2)}\n`);
+  } catch (error) {
+    return { code: 2, out: `Erreur : écriture de ${path} impossible (${(error as NodeJS.ErrnoException).code ?? 'erreur'}) ; le fichier n’est jamais écrasé.` };
+  }
+  return {
+    code: 0,
+    out:
+      `diagnostics : ${path} écrit (masqué, ${diagnostics.database_reachable ? 'base lue' : 'base injoignable : contrôles locaux seulement'}). ` +
+      'Rien n’est envoyé : joignez ce fichier vous-même à votre ticket.',
+  };
+}
+
+async function exportCatalogCmd(args: string[], deps: CliDeps): Promise<CliResult> {
+  if (args.includes('--with-secrets')) {
+    return {
+      code: 1,
+      out:
+        'export-catalog : --with-secrets n’existe pas en V1. Les secrets ne quittent jamais la base, même chiffrés : ' +
+        'ils se ressaisissent sur l’instance cible (décision de 4.6, 14 § 14).',
+    };
+  }
+  const catalog = await withSessionClient(deps, (client) => exportCatalog(client, (deps.now ?? (() => new Date()))()));
+  const json = `${JSON.stringify(catalog, null, 2)}\n`;
+  const path = optionValue(args, '--out');
+  if (!path) return { code: 0, out: json.trimEnd(), stream: 'stdout' };
+  try {
+    writeLocalFile(path, json);
+  } catch (error) {
+    return { code: 2, out: `Erreur : écriture de ${path} impossible (${(error as NodeJS.ErrnoException).code ?? 'erreur'}) ; le fichier n’est jamais écrasé.` };
+  }
+  return { code: 0, out: `export-catalog : ${catalog.apis.length} API, ${catalog.projects.length} projet(s) écrits dans ${path} (sans secret ni cookie).` };
+}
+
+async function backupCmd(args: string[], deps: CliDeps): Promise<CliResult> {
+  if (args[0] !== 'declare') return { code: 1, out: USAGE };
+  const raw = optionValue(args, '--at');
+  const now = (deps.now ?? (() => new Date()))();
+  const at = raw === undefined ? now : new Date(raw);
+  const { at: saved } = await withSessionClient(deps, (client) => declareBackup(client, at, now));
+  return { code: 0, out: `backup : sauvegarde déclarée au ${saved.toISOString()}. Gardez MASTER_KEY à part du dump (sans elle, les secrets sont illisibles).` };
+}
+
+async function restorePrepareCmd(deps: CliDeps): Promise<CliResult> {
+  const res = await withSessionClient(deps, (client) => ensureAppRole(client));
+  return {
+    code: res.member ? 0 : 2,
+    out: res.member
+      ? `restore-prepare : rôle runtime_app ${res.created ? 'créé' : 'déjà présent'}, accordé à l’utilisateur de la base. Lancez maintenant pg_restore sur cette base vide (docs/exploitation.md).`
+      : 'restore-prepare : le rôle runtime_app existe mais l’utilisateur de la base ne peut pas le prendre (droit CREATEROLE manquant ?).',
+  };
+}
+
+async function secretsCmd(args: string[], deps: CliDeps): Promise<CliResult> {
+  if (args[0] !== 'accept-key-loss') return { code: 1, out: USAGE };
+  const keyring = loadKeyring(deps.env ?? process.env);
+  const current = keyring.current;
+  const res = await withSessionClient(deps, async (client) => {
+    const state = await inspectKeyLoss(client, current);
+    if (state.status === 'no_loss') return { code: 1, out: `accept-key-loss : la clé courante (empreinte ${state.currentFingerprint}) ouvre le témoin de la base : aucune perte à accepter.` };
+    if (!args.includes('--confirm')) {
+      return {
+        code: 1,
+        out: [
+          `accept-key-loss : la clé courante (empreinte ${state.currentFingerprint}) ne correspond pas à la base (empreinte ${state.expectedFingerprint ?? 'absente'}).`,
+          'Si l’ancienne clé est définitivement perdue, relancez avec --confirm. Alors :',
+          `  - ${state.secretsReadable} secret(s) passent en « À ressaisir » (conservés, illisibles) ;`,
+          `  - ${state.siteSessions} session(s) de site sont vidées (cookies à recapturer), ${state.artifacts} artefact(s) de run supprimés ;`,
+          '  - le témoin de clé est réécrit pour la clé courante (la clé d’origine ne sera plus acceptée).',
+          'Arrêtez server et worker avant. Si vous avez encore l’ancienne clé, utilisez plutôt `runtime rekey`.',
+        ].join('\n'),
+      };
+    }
+    const done = await acceptKeyLossLocked(client, current);
+    return {
+      code: 0,
+      out:
+        `accept-key-loss : ${done.unreadable} secret(s) passés en « À ressaisir », ${done.siteSessionsCleared} session(s) de site vidées, ` +
+        `${done.artifactsDeleted} artefact(s) supprimés ; témoin de clé réécrit (empreinte ${done.fingerprint}, version ${done.version}).` +
+        (done.twoFactorUnreadable > 0 ? ` ${done.twoFactorUnreadable} secret(s) 2FA restent illisibles : à réinitialiser.` : '') +
+        ' Redémarrez server et worker, puis ressaisissez les secrets dans Réglages.',
+    };
+  });
+  return res;
+}
+
+async function keyCheckCmd(deps: CliDeps): Promise<CliResult> {
   const keyring = loadKeyring(deps.env ?? process.env);
   const res = await withSessionClient(deps, (client) => keyCheck(client, keyring));
   const what = res.status === 'initialized' ? 'témoin créé' : 'clé vérifiée';
   return { code: 0, out: `key-check : ${what} (empreinte ${res.fingerprint}, version ${res.version})` };
 }
 
-async function rekeyCmd(args: string[], deps: CliDeps): Promise<{ code: number; out: string }> {
+async function rekeyCmd(args: string[], deps: CliDeps): Promise<CliResult> {
   if (!args.includes('--confirm')) {
     return {
       code: 1,
@@ -91,7 +220,7 @@ async function rekeyCmd(args: string[], deps: CliDeps): Promise<{ code: number; 
   };
 }
 
-export async function run(argv: string[], deps: CliDeps = {}): Promise<{ code: number; out: string }> {
+export async function run(argv: string[], deps: CliDeps = {}): Promise<CliResult> {
   const [cmd, ...args] = argv;
   if (cmd === '--version' || cmd === '-v') return { code: 0, out: version() };
   if (cmd === 'keygen') return { code: 0, out: generateMasterKey() };
@@ -99,9 +228,15 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<{ code: n
     if (cmd === 'migrate') return await migrate(args, deps);
     if (cmd === 'key-check') return await keyCheckCmd(deps);
     if (cmd === 'rekey') return await rekeyCmd(args, deps);
+    if (cmd === 'doctor') return await doctorCmd(args, deps);
+    if (cmd === 'diagnostics') return await diagnosticsCmd(args, deps);
+    if (cmd === 'export-catalog') return await exportCatalogCmd(args, deps);
+    if (cmd === 'backup') return await backupCmd(args, deps);
+    if (cmd === 'secrets') return await secretsCmd(args, deps);
+    if (cmd === 'restore-prepare') return await restorePrepareCmd(deps);
   } catch (error) {
     const refusal = error instanceof DatabaseConfigError || error instanceof MasterKeyError || error instanceof KeyCheckError;
-    const prefix = refusal ? 'Refus de démarrer' : 'Erreur';
+    const prefix = error instanceof BackupDeclarationError || error instanceof AppRoleError ? 'Refus' : refusal ? 'Refus de démarrer' : 'Erreur';
     return { code: 2, out: `${prefix} : ${(error as Error).message}` };
   }
   return { code: 1, out: USAGE };

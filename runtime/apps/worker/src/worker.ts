@@ -33,6 +33,7 @@ import {
   requeueRun,
   resolveConnections,
   runQueueDefinition,
+  schemaVersionRefusal,
   sweepOrphans,
   type SweepResult,
 } from '@runtime/db';
@@ -105,9 +106,8 @@ export async function startWorker(options: StartWorkerOptions): Promise<Worker> 
   try {
     const expected = expectedSchemaVersion();
     const version = await currentSchemaVersion(pool);
-    if (version !== expected) {
-      throw new WorkerStartupError(`schéma de base en version ${version}, ${expected} attendue : lancez \`runtime migrate\` avant \`worker\`.`);
-    }
+    const refusal = schemaVersionRefusal(version, expected, 'worker');
+    if (refusal) throw new WorkerStartupError(refusal);
     await lockClient.connect();
     releaseLock = await holdSecretsLock(lockClient);
     // D-12 : clé différente → KeyCheckError ici, avant pg-boss, avant toute prise de job.
