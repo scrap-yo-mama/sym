@@ -23,3 +23,16 @@ test('mémoire plafonnée : les entrées les plus anciennes sont évincées', ()
   expect(limiter.blocked('k1')).toBe(false);
   expect(limiter.blocked('k5')).toBe(true);
 });
+
+test('tentative comptée avant l’opération, annulée d’une seule unité en cas de succès (jamais remise à zéro)', () => {
+  const limiter = new AttemptLimiter({ max: 3, windowMs: 1000, now: () => 0 });
+  limiter.fail('ip');
+  limiter.fail('ip');
+  limiter.fail('ip'); // tentative en cours, comptée d'avance
+  limiter.cancel('ip'); // elle a réussi : annulée, les deux échecs restent
+  expect(limiter.blocked('ip')).toBe(false);
+  limiter.fail('ip');
+  expect(limiter.blocked('ip')).toBe(true);
+  limiter.cancel('absent');
+  expect(limiter.size).toBe(1);
+});

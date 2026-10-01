@@ -6,8 +6,11 @@ import * as schema from './schema.js';
 
 export const PACKAGE_NAME = '@runtime/db';
 
+export * from './artifacts.js';
 export * from './audit.js';
 export * from './connection.js';
+export * from './health.js';
+export * from './extension.js';
 export * from './migrate.js';
 export * from './ops/index.js';
 export * from './pacing.js';
@@ -15,8 +18,10 @@ export * from './partitions.js';
 export * from './rls.js';
 export * from './run-logs.js';
 export * from './secrets.js';
+export * from './subject-key.js';
 export * from './status.js';
 export * from './queue.js';
+export * from './retention/index.js';
 export * from './runs.js';
 export { schema };
 

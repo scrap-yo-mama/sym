@@ -216,6 +216,8 @@ async function rekeyCmd(args: string[], deps: CliDeps): Promise<CliResult> {
     out:
       `rekey : terminé, version ${res.from} → ${res.to}, ${res.rotated} secret(s) re-chiffré(s)` +
       (res.unreadable > 0 ? `, ${res.unreadable} illisible(s) (état unreadable)` : '') +
+      (res.rotatedArtifacts + res.unreadableArtifacts > 0 ? `, ${res.rotatedArtifacts} artefact(s) re-chiffré(s)` : '') +
+      (res.unreadableArtifacts > 0 ? `, ${res.unreadableArtifacts} artefact(s) illisible(s) marqué(s) (audit artifact.unreadable)` : '') +
       '. MASTER_KEY_PREVIOUS peut être retirée.',
   };
 }

@@ -5,8 +5,10 @@ import { randomBytes } from 'node:crypto';
 import {
   createKeyCheck,
   generateMasterKey,
+  kekFor,
   loggerRedaction,
   MasterKey,
+  PersonalValueRegistry,
   secretValues,
   type Keyring,
 } from '@runtime/core';
@@ -14,6 +16,7 @@ import pg from 'pg';
 import { pino } from 'pino';
 import { afterAll, afterEach, beforeEach, describe, expect, inject, test } from 'vitest';
 import { createTestDatabase, type TestDatabase } from '../../../tests/helpers/pg.js';
+import { connectSite, siteCookiesForRun, storeSiteCookies } from './extension.js';
 import { migrateUp } from './migrate.js';
 import { appendRunLog } from './run-logs.js';
 import {
@@ -103,7 +106,7 @@ describe(`secrets sur PostgreSQL ${inject('pgVersion')}`, () => {
     // Un usage réel du secret, journalisé dans run_logs, ne doit pas non plus le poser en base.
     const runId = await newRun(owner);
     const used = await store.get(ids[0]!);
-    await appendRunLog(client, { runId, seq: 1, ownerId: owner, level: 'info', event: 'llm_call', data: { key: used.reveal() } });
+    await appendRunLog(client, { runId, seq: 1, ownerId: owner, level: 'info', event: 'llm_call', data: { key: used.reveal() } }, new PersonalValueRegistry());
 
     for (const v of values) {
       expect(await occurrencesInDatabase(v)).toEqual([]);
@@ -219,7 +222,7 @@ describe(`secrets sur PostgreSQL ${inject('pgVersion')}`, () => {
     await expect(rekey(client, { current: newKey(), previous: oldKey })).rejects.toThrow(/rotation déjà commencée/);
 
     // Reprise : les 15 restantes.
-    expect(await rekey(client, keyring, { batchSize: 10 })).toEqual({ status: 'done', from: 1, to: 2, rotated: 15, unreadable: 0 });
+    expect(await rekey(client, keyring, { batchSize: 10 })).toEqual({ status: 'done', from: 1, to: 2, rotated: 15, unreadable: 0, rotatedArtifacts: 0, unreadableArtifacts: 0 });
     const { rows } = await client.query<{ n: number }>("SELECT count(*)::int AS n FROM secrets WHERE kek_version <> 2 OR state <> 'ok'");
     expect(rows[0]?.n).toBe(0);
     expect((await client.query('SELECT 1 FROM settings WHERE key = $1', [REKEY_STATE_SETTING])).rowCount).toBe(0);
@@ -241,15 +244,69 @@ describe(`secrets sur PostgreSQL ${inject('pgVersion')}`, () => {
     const listed = ENCRYPTED_COLUMNS.filter((c) => c.column !== 'value').map((c) => `${c.table}.${c.column}`).sort();
     expect(rows.map((r) => r.col)).toEqual(listed);
 
-    // Une colonne différée (site_sessions, tâche 1.10) non vide : rekey refuse au lieu de l'oublier.
+    // Une colonne différée (two_factor, tâche 3.7) non vide : rekey refuse au lieu de l'oublier.
     const oldKey = newKey();
     await keyCheck(client, { current: oldKey });
     const owner = await newUser();
     await client.query(
-      "INSERT INTO site_sessions (owner_id, domain, server_use_allowed, ciphertext, nonce, key_version) VALUES ($1, 'example.test', true, '\\x00', '\\x00', 1)",
+      "INSERT INTO two_factor (user_id, secret_ciphertext) VALUES ($1, 'x')",
       [owner],
     );
-    await expect(rekey(client, { current: newKey(), previous: oldKey })).rejects.toThrow(/site_sessions\.ciphertext.*tâche 1\.10/);
+    await expect(rekey(client, { current: newKey(), previous: oldKey })).rejects.toThrow(/two_factor\.secret_ciphertext.*tâche 3\.7/);
+    expect(ENCRYPTED_COLUMNS.find((c) => c.table === 'site_sessions')?.coveredBy).toBe('rekey');
+    expect(ENCRYPTED_COLUMNS.find((c) => c.table === 'run_artifacts')?.coveredBy).toBe('rekey');
+  });
+
+  test('assert_rekey_complete : site_sessions re-scellées (KEK site_sessions, AAD liée à la nouvelle version), reprenable', async () => {
+    const oldKey = newKey();
+    const newK = newKey();
+    await keyCheck(client, { current: oldKey });
+    const oldKek = kekFor(oldKey, 1, 'site_sessions');
+    const owners = [await newUser(), await newUser()];
+    const values = new Map<string, string>();
+    for (const [n, ownerId] of owners.entries()) {
+      const domain = `zz-test-rekey-${n}.example`;
+      const value = canary();
+      values.set(ownerId, value);
+      await connectSite(client, { ownerId, domain, serverUseAllowed: true });
+      await storeSiteCookies(client, oldKek, { ownerId, domain, cookies: [{ name: 'sid', value, domain, path: '/', secure: true, httpOnly: true }] });
+    }
+    // Une ligne que l'ancienne clé n'ouvre pas (valeur altérée) : effacée (cookies à resynchroniser), jamais gardée.
+    const broken = await newUser();
+    await connectSite(client, { ownerId: broken, domain: 'zz-test-rekey-broken.example', serverUseAllowed: true });
+    await client.query(
+      "UPDATE site_sessions SET ciphertext = '\\x00', nonce = '\\x00', dek_wrapped = '\\x00', alg = 'aes-256-gcm', key_version = 1 WHERE owner_id = $1",
+      [broken],
+    );
+    const keyring = { current: newK, previous: oldKey };
+    const crash = new Error('coupure simulée');
+    await expect(
+      rekey(client, keyring, {
+        batchSize: 1,
+        afterBatch: () => {
+          throw crash;
+        },
+      }),
+    ).rejects.toBe(crash);
+    // Un lot validé (une ligne traitée), deux restent sous l'ancienne version.
+    expect((await client.query('SELECT 1 FROM site_sessions WHERE key_version = 1')).rowCount).toBe(2);
+    const resumed = await rekey(client, keyring, { batchSize: 1 });
+    expect(resumed).toMatchObject({ status: 'done', from: 1, to: 2 });
+    expect(resumed.rotated + resumed.unreadable).toBe(2);
+    const { rows } = await client.query<{ v: number | null; n: number }>('SELECT key_version AS v, count(*)::int AS n FROM site_sessions GROUP BY 1 ORDER BY 1');
+    expect(rows).toEqual([{ v: 2, n: 2 }, { v: null, n: 1 }]);
+    // Valeurs intactes sous la nouvelle clé ; l'ancienne n'ouvre plus rien.
+    for (const [n, ownerId] of owners.entries()) {
+      const domain = `zz-test-rekey-${n}.example`;
+      const api = await client.query<{ id: string }>('INSERT INTO apis (slug, owner_id) VALUES ($1, $2) RETURNING id', [`zz_test_rekey_${n}`, ownerId]);
+      const runId = (
+        await client.query<{ id: string }>("INSERT INTO runs (api_id, owner_id, api_owner_id, trigger) VALUES ($1, $2, $2, 'rest') RETURNING id", [api.rows[0]!.id, ownerId])
+      ).rows[0]!.id;
+      const fresh = await siteCookiesForRun(client, kekFor(newK, 2, 'site_sessions'), { runId, domain });
+      expect(fresh).toMatchObject({ ok: true, ownerId, cookies: [{ name: 'sid', value: values.get(ownerId) }] });
+      expect(await siteCookiesForRun(client, kekFor(oldKey, 2, 'site_sessions'), { runId, domain })).toEqual({ ok: false, reason: 'auth_required' });
+    }
+    expect(await occurrencesInDatabase(values.get(owners[0]!)!)).toEqual([]);
   });
 
   test('assert_no_secret_in_logs (I1) : pino et run_logs après usage d’un secret canari → 0 occurrence', async () => {
@@ -270,8 +327,8 @@ describe(`secrets sur PostgreSQL ${inject('pgVersion')}`, () => {
     logger.error(new Error(`refus du proxy ${proxyUrl}`));
 
     const data = { value: secret.reveal(), url: proxyUrl, nested: [{ detail: `x ${secret.reveal()} y` }] };
-    await appendRunLog(client, { runId, seq: 1, ownerId: owner, level: 'info', event: `proxy ${secret.reveal()}`, data });
-    await appendRunLog(client, { runId, seq: 2, ownerId: owner, level: 'error', event: 'échec', data: { err: String(new Error(secret.reveal())) } });
+    await appendRunLog(client, { runId, seq: 1, ownerId: owner, level: 'info', event: `proxy ${secret.reveal()}`, data }, new PersonalValueRegistry());
+    await appendRunLog(client, { runId, seq: 2, ownerId: owner, level: 'error', event: 'échec', data: { err: String(new Error(secret.reveal())) } }, new PersonalValueRegistry());
 
     const logged = lines.join('\n');
     const { rows } = await client.query<{ t: string }>('SELECT event || coalesce(data::text, \'\') AS t FROM run_logs ORDER BY seq');
@@ -370,7 +427,7 @@ describe(`relecture 0.3a sur PostgreSQL ${inject('pgVersion')}`, () => {
     logger.info({ headers: { Authorization: basic } }, 'basic');
     logger.info({ body: form }, `form ${form}`);
     logger.info({ proxy: `http://user:${encodeURIComponent(s)}@p.example/?sig=${encodeURIComponent(s)}&q=${encodeURIComponent(s)}` }, 'url');
-    await appendRunLog(client, { runId, seq: 1, ownerId: owner, level: 'info', event: 'x', data: { basic, form } });
+    await appendRunLog(client, { runId, seq: 1, ownerId: owner, level: 'info', event: 'x', data: { basic, form } }, new PersonalValueRegistry());
     const { rows } = await client.query<{ t: string }>('SELECT data::text AS t FROM run_logs');
     const all = lines.join('\n') + rows.map((r) => r.t).join('\n');
     const b64 = Buffer.from(`user:${s}`).toString('base64');

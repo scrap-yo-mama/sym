@@ -53,9 +53,10 @@ beforeAll(async () => {
     await c.query("INSERT INTO dataset_items (dataset_id, seq, owner_id, item, size_bytes) VALUES ($1, 1, $2, '{\"x\": 1}', 8)", [ds, A]);
     await c.query("INSERT INTO dedup_keys (api_id, key_hash, owner_id) VALUES ($1, 'zz_test', $2)", [api, A]);
     await c.query("INSERT INTO schedules (api_id, owner_id, cron) VALUES ($1, $2, '0 * * * *')", [api, A]);
-    await c.query("INSERT INTO site_sessions (owner_id, domain, server_use_allowed, ciphertext, nonce, key_version) VALUES ($1, 'zz-test.example', true, '\\x00', '\\x00', 1)", [A]);
+    await c.query("INSERT INTO site_sessions (owner_id, domain, server_use_allowed, ciphertext, nonce, dek_wrapped, alg, key_version) VALUES ($1, 'zz-test.example', true, '\\x00', '\\x00', '\\x00', 'aes-256-gcm', 1)", [A]);
     const tunnel = (await c.query<{ id: string }>("INSERT INTO tunnels (owner_id, device_id, token_hash, expires_at) VALUES ($1, 'zz_test', 'zz_test_hash', now() + interval '1 day') RETURNING id", [A])).rows[0]!.id;
     await c.query('INSERT INTO tunnel_jobs (run_id, tunnel_id, owner_id) VALUES ($1, $2, $3)', [run, tunnel, A]);
+    await c.query("INSERT INTO extension_pairing_codes (owner_id, code_hash, expires_at) VALUES ($1, 'zz_test_code_hash', now() + interval '5 minutes')", [A]);
     const sub = (await c.query<{ id: string }>("INSERT INTO webhook_subscriptions (owner_id, url) VALUES ($1, 'https://zz-test.example/hook') RETURNING id", [A])).rows[0]!.id;
     await c.query('INSERT INTO webhook_deliveries (subscription_id, owner_id, event, dispatch_id) VALUES ($1, $2, $3, $4)', [sub, A, 'zz_test', randomUUID()]);
     await c.query(
