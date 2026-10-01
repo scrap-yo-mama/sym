@@ -13,7 +13,12 @@
       "dark": "Sombre"
     },
     "signedInAs": "Connecté en tant que {name}",
-    "signOut": "Se déconnecter"
+    "signOut": "Se déconnecter",
+    "main": "Navigation principale",
+    "home": "Accueil",
+    "newApi": "Nouvelle API",
+    "runs": "Tous les runs",
+    "settings": "Réglages"
   },
   "auth": {
     "login": {
@@ -43,5 +48,529 @@
   "notFound": {
     "title": "Page introuvable",
     "back": "Retour à la console"
+  },
+  "errors": {
+    "generic": "Une erreur est survenue. Réessaie.",
+    "network": "Le serveur est injoignable. Vérifie ta connexion et réessaie.",
+    "server": "Le serveur a rencontré un problème. Réessaie dans un instant.",
+    "unauthorized": "Ta session est terminée. Reconnecte-toi.",
+    "forbidden": "Tu n'as pas le droit de faire cela. Demande à un admin de ton instance.",
+    "not_found": "Cet élément n'existe plus.",
+    "conflict": "Cette action n'est pas possible dans l'état actuel.",
+    "rate_limited": "Trop de requêtes. Réessaie dans un instant.",
+    "queue_full": "La file est pleine. Réessaie dans un instant.",
+    "invalid_input": "Certaines valeurs ne sont pas valides. Vérifie le formulaire et réessaie.",
+    "account_site_ack_required": "Ce site demande un compte. Confirme l'avertissement pour continuer."
+  },
+  "common": {
+    "loading": "Chargement…",
+    "retry": "Réessayer",
+    "save": "Enregistrer",
+    "saving": "Enregistrement…",
+    "saved": "Enregistré.",
+    "add": "Ajouter",
+    "remove": "Retirer",
+    "yes": "Oui",
+    "no": "Non",
+    "unknown": "n/d"
+  },
+  "execution": {
+    "fetch": "fetch seul",
+    "fetch_in_page": "fetch dans le navigateur",
+    "playwright": "Playwright seul",
+    "agent_fetch": "agentique + fetch",
+    "hybrid": "script + agent",
+    "agent": "full agentique"
+  },
+  "network": {
+    "direct": "direct",
+    "dc_proxy": "proxy serveur",
+    "res_proxy": "résidentiel",
+    "tunnel": "tunnel"
+  },
+  "reason": {
+    "unknown": "Raison : {code}",
+    "retried": "Il a fallu réessayer {n} fois.",
+    "escalated": "Une méthode plus chère que d'habitude a été nécessaire.",
+    "repaired": "La stratégie a été réparée (v{a} vers v{b}).",
+    "optional_fields_missing": "{p} % des items n'ont pas le champ {champ}.",
+    "volume_anomaly": "{n} items au lieu de ~{m} habituellement.",
+    "pagination_short": "{n} pages lues sur {m} demandées, sans fin de liste.",
+    "slow": "Run {x} fois plus long que la médiane.",
+    "cost_anomaly": "Run {x} fois plus cher que la médiane.",
+    "stale": "Dernier run propre il y a {n} jours.",
+    "unavailable": "Le site ne répond pas. Ce n'est pas une casse.",
+    "reverted": "Retour manuel à la v{a} par {prenom}, le {date}.",
+    "reinvestigation_failed": "La ré-enquête n'a rien trouvé de conforme ; ancienne version gardée.",
+    "rate_limited": "Le site demande de ralentir (429). Cadence réduite de {a} à {b} requêtes par minute, adresse inchangée.",
+    "geo_restriction": "Contenu indisponible depuis ce pays ; essai avec le proxy du pays autorisé par l'API.",
+    "blocked_by_protection": "Le site refuse l'accès automatisé. Scrapyomama s'arrête.",
+    "forbidden": "Le site refuse l'accès à cette adresse. L'adresse IP ne change pas.",
+    "robots_disallowed": "Le site demande aux robots de ne pas visiter cette page.",
+    "robots_unreachable": "robots.txt est injoignable : par prudence, rien n'est collecté.",
+    "payment_required": "Le site demande un paiement : {offre}.",
+    "auth_required": "{domaine} demande une connexion.",
+    "cookie_expired": "La session de {domaine} a expiré.",
+    "session_device_bound": "La session de {domaine} est liée à ton appareil et ne peut pas être copiée sur le serveur.",
+    "challenge_in_tunnel": "Une vérification est apparue dans ton navigateur. Le run est en pause.",
+    "secret_unreadable": "Une clé enregistrée est illisible.",
+    "account_limit": "La plateforme a signalé une limite sur ton compte. Aucune relance.",
+    "session_owner_required": "Cette API utilise la session de son propriétaire.",
+    "llm_refused": "Le modèle a refusé la demande ; aucun repli automatique."
+  },
+  "reasonShort": {
+    "retried": "Réessayé",
+    "escalated": "Méthode plus chère",
+    "repaired": "Réparé",
+    "optional_fields_missing": "Champs facultatifs absents",
+    "volume_anomaly": "Volume inhabituel",
+    "pagination_short": "Pagination interrompue",
+    "slow": "Lent",
+    "cost_anomaly": "Coût inhabituel"
+  },
+  "failure": {
+    "transient": "Problème temporaire",
+    "network": "Erreur réseau",
+    "rate_limited": "Le site demande de ralentir",
+    "forbidden": "Accès refusé",
+    "blocked_by_protection": "Accès automatisé refusé",
+    "robots_disallowed": "Interdit par robots.txt",
+    "robots_unreachable": "robots.txt injoignable",
+    "payment_required": "Paiement requis",
+    "auth_required": "Connexion requise",
+    "account_limit": "Limite de compte",
+    "not_found": "Introuvable",
+    "extraction": "Extraction en échec",
+    "code_error": "Erreur de script",
+    "run_budget_exceeded": "Budget du run épuisé",
+    "budget_exceeded": "Budget épuisé",
+    "llm": "Erreur du modèle",
+    "ok": "Réussi"
+  },
+  "newApi": {
+    "title": "Nouvelle API",
+    "intro": "Décris ce que tu veux. Scrapyomama enquête sur le site, propose un schéma de sortie, puis essaie d'abord les méthodes les moins chères.",
+    "description": "Que doit renvoyer cette API ?",
+    "descriptionHint": "Par exemple : le titre, le prix et le lien de chaque annonce.",
+    "url": "Adresse de la page (URL)",
+    "urlInvalid": "Saisis une adresse complète qui commence par http:// ou https://.",
+    "example": "Exemple de sortie (facultatif, JSON)",
+    "exampleInvalid": "L'exemple n'est pas du JSON valide (un objet ou un tableau).",
+    "network": {
+      "legend": "Politique réseau",
+      "direct": "Connexion directe depuis le serveur",
+      "dcProxy": "Proxy serveur défini par ton admin",
+      "resProxy": "Proxy résidentiel, facturé au Go. Réservé aux motifs réseau (pays, erreurs de connexion). Il n'est pas utilisé après un refus.",
+      "country": "Pays du proxy résidentiel (2 lettres)",
+      "tunnel": "Exécuter depuis mon navigateur (ma session, mon IP) ; un défi me rendra la main",
+      "atLeastOne": "Choisis au moins un mode réseau."
+    },
+    "account": {
+      "declare": "Ce site demande un compte",
+      "title": "Ce site demande un compte",
+      "warning": "Ce site demande un compte. Tes conditions d'utilisation de la plateforme peuvent interdire l'extraction automatisée et les données peuvent concerner des personnes (RGPD). Tu es responsable de l'usage.",
+      "ownSession": "Seule ta propre session est utilisée, jamais celle d'une autre personne.",
+      "confirm": "J'ai compris et je suis responsable de cet usage"
+    },
+    "providerNotice": "{provider} recevra des extraits de trafic nettoyés.",
+    "providerNoticeGeneric": "Le fournisseur de modèle configuré recevra des extraits de trafic nettoyés.",
+    "submit": "Lancer l'enquête",
+    "submitting": "Lancement…",
+    "countryInvalid": "Saisis un code pays de 2 lettres, par exemple fr.",
+    "descriptionRequired": "Décris ce que l'API doit renvoyer.",
+    "accountRequired": "Confirme l'avertissement ci-dessus pour continuer."
+  },
+  "investigation": {
+    "title": "Enquête sur {domain}",
+    "titleUnknown": "Enquête",
+    "columns": {
+      "seen": "Ce que voit l'agent",
+      "doing": "Ce que l'agent fait",
+      "produced": "Ce que l'agent a produit"
+    },
+    "seen": {
+      "empty": "Rien de vu pour l'instant. La vérification de l'accès vient d'abord.",
+      "lastTrial": "Dernier essai",
+      "execution": "Méthode",
+      "network": "Réseau",
+      "result": "Résultat",
+      "cost": "Coût",
+      "duration": "Durée"
+    },
+    "budget": {
+      "title": "Budget",
+      "moneyLine": "Dépense : {spent} sur {max}",
+      "timeLine": "Temps : {elapsed} sur {timeout}",
+      "estimate": "Retenu : {retained} ; un agent complet : {full} (estimation)",
+      "estimateUnknown": "Estimation pas encore disponible"
+    },
+    "controls": {
+      "pause": "Pause",
+      "resume": "Reprendre",
+      "stop": "Arrêter l'enquête",
+      "stopHint": "Les essais déjà faits sont conservés.",
+      "paused": "En pause. Rien de nouveau n'est essayé tant que tu ne reprends pas.",
+      "stopped": "Enquête arrêtée. Les essais et le coût engagé sont conservés : {cost}.",
+      "suspendFollow": "Suspendre le suivi",
+      "resumeFollow": "Reprendre le suivi",
+      "followSuspended": "Suivi suspendu. Les nouveaux essais ne sont ni affichés ni annoncés."
+    },
+    "phase": {
+      "label": "Étapes de l'enquête",
+      "access_check": "Vérification de l'accès",
+      "reconnaissance": "Reconnaissance",
+      "awaiting_schema_validation": "Schéma de sortie",
+      "testing": "Essais",
+      "state": {
+        "done": "terminée",
+        "current": "en cours",
+        "upcoming": "à venir"
+      }
+    },
+    "log": {
+      "title": "Essais",
+      "empty": "Aucun essai pour l'instant.",
+      "robotsAllowed": "robots.txt lu : chemin autorisé",
+      "robotsDisallowed": "robots.txt lu : chemin interdit",
+      "robotsAbsent": "robots.txt introuvable : aucune règle ne s'applique",
+      "robotsUnreachable": "robots.txt injoignable : par prudence, rien n'est collecté",
+      "signal": "Signal d'usage {kind} : {value}",
+      "llmsTxt": "llms.txt trouvé",
+      "officialApi": "Voie officielle trouvée : {url}",
+      "trial": "Essai {n} : {execution}, {network}",
+      "running": "en cours",
+      "ok": "réussi",
+      "failed": "en échec ({reason})",
+      "pruned": "non lancé : {reason}",
+      "prunedNoReason": "non lancé",
+      "why": "Pourquoi : {reason}"
+    },
+    "plan": {
+      "title": "Plan d'essais",
+      "hint": "Du moins cher au plus cher. Tu peux retirer des méthodes avant le début des essais, jamais en ajouter.",
+      "estimate": "estimé {cost}",
+      "atLeastOne": "Au moins une méthode doit rester cochée."
+    },
+    "schema": {
+      "title": "Schéma de sortie",
+      "sample": "Échantillon",
+      "sampleEmpty": "Pas encore d'échantillon.",
+      "validate": "Valider",
+      "validating": "Validation…",
+      "edit": "Modifier",
+      "editLabel": "Schéma de sortie (JSON)",
+      "editInvalid": "Ce n'est pas un objet JSON valide.",
+      "applyEdit": "Valider avec mes modifications",
+      "cancelEdit": "Annuler la modification",
+      "waiting": "Vérifie le schéma proposé, puis valide-le ou modifie-le.",
+      "input": "Schéma d'entrée",
+      "strategy": "Stratégie retenue : {execution}, {network}, version {version}",
+      "tunnelNote": "Ne marche que si ton ordinateur est allumé.",
+      "empty": "Le schéma apparaîtra ici une fois la reconnaissance terminée."
+    },
+    "result": {
+      "sain": "L'enquête a réussi. Ton API est prête.",
+      "warning": "L'enquête s'est terminée avec un avertissement. La stratégie marche mais demande de l'attention.",
+      "erreur": "L'enquête s'est terminée en erreur. La liste des essais montre pourquoi.",
+      "bloquee": "L'enquête s'est arrêtée : le site refuse l'accès automatisé."
+    },
+    "resuming": "Reprise de l'enquête…"
+  },
+  "blocked": {
+    "title": "Bloquée : {domain} refuse l'accès automatisé",
+    "unknownDomain": "ce site",
+    "what": {
+      "heading": "Ce qui est arrivé",
+      "protection": "Le {date}, essai {n} (« {execution} », {network}), {domain} a répondu par une page de vérification. Aucun autre essai n'a été lancé. Coût de l'enquête : {cost}.",
+      "forbidden": "Le {date}, essai {n} (« {execution} », {network}), {domain} a répondu par un refus d'accès. Aucun autre essai n'a été lancé. Coût de l'enquête : {cost}.",
+      "robots": "{domain} demande aux robots de ne pas visiter cette page. Aucune requête n'a été envoyée sur ce chemin. Coût de l'enquête : {cost}.",
+      "generic": "{domain} a refusé l'accès. Aucun autre essai n'a été lancé. Coût de l'enquête : {cost}."
+    },
+    "why": {
+      "heading": "Pourquoi on s'arrête",
+      "protection": "C'est la décision du site. Scrapyomama n'y répond pas à la place d'une personne et ne change pas d'adresse IP après un refus.",
+      "forbidden": "Le site refuse l'accès à cette adresse. L'adresse IP ne change pas après un refus. Vérifie tes droits d'accès ou contacte l'éditeur.",
+      "robots": "Ce site demande aux robots de ne pas visiter cette page. Scrapyomama respecte cette règle."
+    },
+    "todo": {
+      "heading": "Ce que tu peux faire",
+      "official": "Chercher une API officielle, un export ou un partenariat.",
+      "other": "Utiliser une autre source.",
+      "contact": "Écrire à l'éditeur du site.",
+      "later": "Ré-enquêter plus tard, si le site a changé."
+    },
+    "officialApi": "Utiliser l'API officielle",
+    "copyTemplate": "Copier un modèle de demande d'accès",
+    "copied": "Modèle copié.",
+    "template": "Bonjour,\n\nJe souhaite utiliser les données publiées sur {domain}. Existe-t-il une API officielle, un export ou un partenariat que je peux utiliser ?\n\nMerci,",
+    "reinvestigate": "Ré-enquêter",
+    "viewTrials": "Voir les essais",
+    "whyLink": "Pourquoi cet arrêt ?",
+    "cost": {
+      "unknown": "non disponible"
+    }
+  },
+  "action": {
+    "auth_required": {
+      "title": "Connecte {domain}",
+      "body": "Le site demande une connexion. Connecte-le avec l'extension ; la session apparaît ici dès qu'elle est connectée.",
+      "button": "Ouvrir les réglages de l'extension"
+    },
+    "cookie_expired": {
+      "title": "Connecte {domain}",
+      "body": "La session a expiré. Connecte à nouveau le site avec l'extension.",
+      "button": "Ouvrir les réglages de l'extension"
+    },
+    "session_device_bound": {
+      "title": "La session de {domain} ne peut pas être copiée sur le serveur",
+      "body": "Cette session est liée à ton appareil. Choisis l'exécution depuis ton navigateur.",
+      "button": "Ouvrir les réglages de l'extension"
+    },
+    "proxy_required": {
+      "title": "Ajoute un proxy",
+      "body": "Cette API a besoin d'un proxy pour le pays demandé. Demande à un admin d'en ajouter un, puis teste-le.",
+      "button": "Ouvrir les réglages des proxys"
+    },
+    "tunnel_offline": {
+      "title": "Ton ordinateur n'est pas connecté",
+      "body": "Cette API s'exécute depuis ton navigateur. Ouvre l'extension et vérifie son état.",
+      "button": "Ouvrir les réglages de l'extension"
+    },
+    "challenge_in_tunnel": {
+      "title": "{domain} affiche une vérification dans ton navigateur ; le run est arrêté",
+      "body": "Le run est arrêté : {domain} affiche une vérification dans ton navigateur. Rien n'a été envoyé sur cette page et rien n'y sera envoyé. Tu peux relancer un run plus tard ; Scrapyomama ne répond jamais à une vérification.",
+      "button": "Ré-enquêter"
+    },
+    "secret_unreadable": {
+      "title": "Une clé enregistrée est illisible",
+      "body": "Ressaisis la clé dans les réglages, puis teste-la.",
+      "button": "Ouvrir les réglages des modèles"
+    },
+    "payment_required": {
+      "title": "{domain} demande un paiement : {offer}",
+      "body": "Seul l'éditeur du site peut donner l'accès. Rien n'est relancé automatiquement."
+    },
+    "account_limit": {
+      "title": "{platform} a signalé une limite sur ton compte",
+      "body": "{platform} a signalé une limite ou une restriction. Le run est arrêté, aucune relance n'est prévue. Consulte les messages de la plateforme. Seule la plateforme décide d'une restriction. Rappel : l'extraction automatisée peut être interdite par ses conditions, même avec un seul compte ; tu en restes responsable."
+    },
+    "resuming": "Reprise de l'enquête…"
+  },
+  "runs": {
+    "title": "Tous les runs",
+    "intro": "Les runs de tes API, du plus récent au plus ancien. Tu vois l'état, le coût et la durée, jamais le contenu du run d'un autre membre.",
+    "caption": "Runs, du plus récent au plus ancien",
+    "filters": {
+      "legend": "Filtres",
+      "api": "API (slug)",
+      "state": "État",
+      "trigger": "Déclencheur",
+      "since": "Du",
+      "until": "Au",
+      "all": "Tous",
+      "apply": "Appliquer les filtres",
+      "reset": "Réinitialiser",
+      "refresh": "Actualiser"
+    },
+    "columns": {
+      "api": "API",
+      "trigger": "Déclencheur",
+      "state": "État",
+      "outcome": "Résultat",
+      "reasons": "Raisons",
+      "duration": "Durée",
+      "cost": "Coût",
+      "items": "Items",
+      "started": "Démarré"
+    },
+    "empty": {
+      "title": "Aucun run pour l'instant",
+      "text": "Crée une API, lance-la, et ses runs seront listés ici.",
+      "button": "Nouvelle API"
+    },
+    "emptyFiltered": {
+      "title": "Aucun run ne correspond à ces filtres",
+      "text": "Élargis la période ou retire un filtre."
+    },
+    "loading": "Chargement des runs…",
+    "other": "Run d'un autre membre : état, coût et durée seulement",
+    "page": "Page {n}",
+    "previous": "Page précédente",
+    "next": "Page suivante",
+    "notStarted": "pas démarré",
+    "retained": "conservé jusqu'au {date}",
+    "state": {
+      "queued": "En file",
+      "running": "En cours",
+      "waiting_tunnel": "En attente de ton ordinateur",
+      "succeeded": "Réussi",
+      "failed": "En échec",
+      "cancelled": "Annulé",
+      "skipped_tunnel_offline": "Ignoré : ordinateur hors ligne",
+      "skipped_window": "Ignoré : hors de la plage autorisée",
+      "skipped_quota": "Ignoré : quota atteint",
+      "skipped_status": "Ignoré : statut de l'API",
+      "skipped_overlap": "Ignoré : run précédent encore en cours"
+    },
+    "outcome": {
+      "clean": "Propre",
+      "degraded": "Dégradé",
+      "failed": "En échec"
+    },
+    "trigger": {
+      "mcp": "MCP",
+      "rest": "REST",
+      "schedule": "Planification",
+      "ui": "Console",
+      "canary": "Canari"
+    }
+  },
+  "settings": {
+    "title": "Réglages",
+    "nav": {
+      "label": "Sections des réglages",
+      "models": "Modèles IA",
+      "proxies": "Proxys",
+      "extension": "Extension et sessions",
+      "alerts": "Alertes",
+      "diagnostic": "Diagnostic"
+    },
+    "adminOnly": "Seul un admin de ton instance peut lire ou modifier ces réglages.",
+    "test": "Tester",
+    "testing": "Test en cours…",
+    "notTested": "Non testé",
+    "testedAt": "Testé le {date}",
+    "testOk": "Test réussi",
+    "testFailed": "Test en échec",
+    "secret": {
+      "set": "Un secret est enregistré. Laisse ce champ vide pour le garder.",
+      "unset": "Aucun secret enregistré.",
+      "unreadable": "Le secret enregistré est illisible. Ressaisis-le."
+    },
+    "models": {
+      "title": "Modèles IA",
+      "intro": "Apporte ton propre fournisseur de modèles. Les clés sont en écriture seule : une fois enregistrées, elles ne sont plus jamais affichées.",
+      "providers": "Fournisseurs",
+      "noProvider": "Aucun fournisseur pour l'instant. Ajoute-en un pour lancer des enquêtes.",
+      "provider": "Fournisseur {n}",
+      "id": "Identifiant",
+      "preset": "Préréglage",
+      "baseUrl": "URL de base",
+      "apiKey": "Clé d'API",
+      "addProvider": "Ajouter un fournisseur",
+      "removeProvider": "Retirer ce fournisseur",
+      "roles": "Modèle par rôle",
+      "rolesIntro": "Aucun repli automatique : si un modèle refuse ou échoue, le run le dit.",
+      "roleProvider": "Fournisseur",
+      "roleModel": "Modèle",
+      "roleNone": "Aucun",
+      "role": {
+        "investigate": "Enquête",
+        "repair": "Réparation",
+        "extract": "Extraction",
+        "agent": "Agent"
+      },
+      "presets": {
+        "zai": "Z.ai",
+        "openrouter": "OpenRouter",
+        "vllm": "vLLM",
+        "ollama": "Ollama",
+        "deepseek": "DeepSeek",
+        "qwen": "Qwen",
+        "openai": "OpenAI",
+        "custom": "Personnalisé"
+      }
+    },
+    "proxies": {
+      "title": "Proxys",
+      "intro": "Définis par un admin de l'instance. Une API ne référence un proxy que par son identifiant.",
+      "residential": "Proxy résidentiel, facturé au Go. Réservé aux motifs réseau (pays, erreurs de connexion). Il n'est pas utilisé après un refus.",
+      "empty": "Aucun proxy pour l'instant.",
+      "label": "Libellé",
+      "type": "Type",
+      "typeDc": "Serveur",
+      "typeRes": "Résidentiel",
+      "url": "Adresse (schéma, hôte, port)",
+      "username": "Identifiant",
+      "password": "Mot de passe",
+      "credentials": "Identifiants",
+      "credentialsSet": "enregistrés",
+      "credentialsNone": "aucun",
+      "add": "Ajouter un proxy",
+      "exit": "IP de sortie {ip}, pays {country}",
+      "remove": "Retirer"
+    },
+    "extension": {
+      "title": "Extension et sessions",
+      "intro": "Appaire l'extension du navigateur, vois tes appareils et les sites connectés, et révoque l'accès à tout moment.",
+      "pairing": "Code d'appairage",
+      "pairingHelp": "Le code est valable 10 minutes et sert une seule fois. Saisis-le dans l'extension.",
+      "currentPassword": "Mot de passe actuel",
+      "createCode": "Créer un code d'appairage",
+      "code": "Code : {code}",
+      "codeExpires": "Valable jusqu'au {date}. Il n'est affiché que maintenant.",
+      "dismissCode": "Masquer le code",
+      "devices": "Appareils",
+      "devicesEmpty": "Aucun appareil appairé.",
+      "device": "Appareil",
+      "deviceUnnamed": "Appareil sans nom",
+      "lastSeen": "Vu pour la dernière fois",
+      "expires": "Expire",
+      "active": "actif",
+      "revoked": "révoqué",
+      "revoke": "Révoquer",
+      "sites": "Sites connectés",
+      "sitesEmpty": "Aucun site connecté.",
+      "domain": "Domaine",
+      "mode": "Mode",
+      "modeServer": "Session utilisable par le serveur",
+      "modeBrowser": "Reste dans ton navigateur",
+      "captured": "Capturé",
+      "disconnect": "Déconnecter",
+      "never": "jamais"
+    },
+    "alerts": {
+      "title": "Alertes",
+      "intro": "Email et webhooks, chacun avec son test. Un canal reste « non testé » tant que tu ne l'as pas testé.",
+      "smtp": "Email (SMTP)",
+      "smtpEmpty": "Pas encore configuré.",
+      "host": "Serveur",
+      "port": "Port",
+      "security": "Sécurité",
+      "securityTls": "TLS",
+      "securityStarttls": "STARTTLS",
+      "securityNone": "Aucune",
+      "from": "Adresse d'expédition",
+      "username": "Identifiant",
+      "password": "Mot de passe",
+      "testTo": "Envoyer un email de test à",
+      "webhooks": "Webhooks",
+      "webhooksEmpty": "Aucun webhook pour l'instant.",
+      "url": "Adresse",
+      "events": "Événements",
+      "apiSlug": "API (facultatif, vide pour toute l'instance)",
+      "event": {
+        "run_succeeded": "Run réussi",
+        "run_failed": "Run en échec",
+        "api_status_changed": "Statut de l'API modifié",
+        "items_new": "Nouveaux items"
+      },
+      "status": {
+        "active": "actif",
+        "disabled": "désactivé"
+      },
+      "add": "Ajouter un webhook",
+      "secretTitle": "Secret de signature",
+      "secretText": "Copie ce secret maintenant : il n'est affiché qu'une seule fois.",
+      "dismissSecret": "Je l'ai copié",
+      "remove": "Retirer"
+    },
+    "diagnostic": {
+      "title": "Diagnostic",
+      "intro": "Exporte sur cet ordinateur un fichier JSON avec les versions et l'état de l'instance. Rien n'est envoyé nulle part.",
+      "includes": "Le fichier contient : version de l'instance, version du schéma, état de disponibilité, langue de la console. Il ne contient jamais de clé, de cookie ni de contenu de run.",
+      "export": "Exporter le diagnostic (JSON)",
+      "exported": "Diagnostic exporté sur ton ordinateur."
+    }
   }
 }

@@ -572,6 +572,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/runs/{id}/pause": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Met en pause une enquête ou un run en cours (action de l'utilisateur) ; essais et coûts engagés conservés, reprise par `resume` */
+        post: operations["pauseRun"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/runs/{id}/resume": {
         parameters: {
             query?: never;
@@ -1752,6 +1769,8 @@ export interface components {
             output_schema?: {
                 [key: string]: unknown;
             };
+            /** @description Plan d'essais restreint avant exécution (06 § 2, tâche 3.5), dans les bornes de la politique réseau ; jamais d'ajout. */
+            exclude_executions?: components["schemas"]["Execution"][];
             wait_seconds?: number;
         };
         InvestigateRequest: {
@@ -3695,6 +3714,24 @@ export interface operations {
                     "application/json": components["schemas"]["RunCancelled"];
                 };
             };
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+        };
+    };
+    pauseRun: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            202: components["responses"]["Accepted"];
             401: components["responses"]["Error"];
             403: components["responses"]["Error"];
             404: components["responses"]["Error"];

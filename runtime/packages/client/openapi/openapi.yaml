@@ -989,6 +989,26 @@ paths:
           $ref: '#/components/responses/Error'
         '409':
           $ref: '#/components/responses/Error'
+  /api/runs/{id}/pause:
+    post:
+      # Extension de 05 § 4.2 (tâche 3.5) : 06 § 2 offre « Pause » et « Arrêter » sur une enquête ; 05 ne nomme que cancel et resume.
+      x-pending: '3.1'
+      operationId: pauseRun
+      tags: [runs]
+      summary: Met en pause une enquête ou un run en cours (action de l'utilisateur) ; essais et coûts engagés conservés, reprise par `resume`
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      responses:
+        '202':
+          $ref: '#/components/responses/Accepted'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
   /api/runs/{id}/resume:
     post:
       x-pending: '3.1'
@@ -3190,6 +3210,12 @@ components:
         output_schema:
           type: object
           additionalProperties: true
+        exclude_executions:
+          description: Plan d'essais restreint avant exécution (06 § 2, tâche 3.5), dans les bornes de la politique réseau ; jamais d'ajout.
+          type: array
+          uniqueItems: true
+          items:
+            $ref: '#/components/schemas/Execution'
         wait_seconds:
           type: integer
           minimum: 0

@@ -2,7 +2,7 @@
 <script setup lang="ts">
 import { computed, watch, watchEffect } from 'vue';
 import { useI18n } from 'vue-i18n';
-import { RouterView, useRoute, useRouter } from 'vue-router';
+import { RouterLink, RouterView, useRoute, useRouter } from 'vue-router';
 import ConnectionBanner from '@/components/ConnectionBanner.vue';
 import PreferencesBar from '@/components/PreferencesBar.vue';
 import { Button } from '@/components/ui/button';
@@ -16,6 +16,14 @@ const route = useRoute();
 const router = useRouter();
 const { isAuthenticated, me } = useSession();
 const { streamStatus } = useEventStream();
+
+/** Entrées de la navigation principale (06 § 1). Le catalogue et les comptes s'y ajoutent avec 3.4 et 3.8. */
+const NAV = [
+  { to: '/', label: 'nav.home' },
+  { to: '/apis/new', label: 'nav.newApi' },
+  { to: '/runs', label: 'nav.runs' },
+  { to: '/settings', label: 'nav.settings' },
+] as const;
 
 const displayName = computed(() => me.value?.displayName || me.value?.email || '');
 
@@ -67,6 +75,13 @@ function focusMain(): void {
   <ConnectionBanner :status="streamStatus" />
   <header class="flex flex-wrap items-center justify-between gap-3 border-b px-4 py-3">
     <p class="text-lg font-semibold tracking-tight">{{ t('app.name') }}</p>
+    <nav v-if="isAuthenticated" :aria-label="t('nav.main')">
+      <ul class="flex flex-wrap items-center gap-1">
+        <li v-for="entry in NAV" :key="entry.to">
+          <RouterLink :to="entry.to" class="flex min-h-11 items-center rounded-md px-3 text-sm hover:bg-accent" active-class="bg-accent font-medium">{{ t(entry.label) }}</RouterLink>
+        </li>
+      </ul>
+    </nav>
     <div class="flex flex-wrap items-center gap-3">
       <PreferencesBar />
       <template v-if="isAuthenticated">
