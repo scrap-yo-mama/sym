@@ -21,7 +21,7 @@ Les modèles prêts à l'emploi (`render.yaml`, `docker-compose.prod.yml`, modè
 
 ## Ce que tout hébergeur doit fournir
 
-1. **Une image** exécutée en non-root, en `linux/amd64`. Le mode se choisit par `RUNTIME_MODE` : `server` (REST, console, passerelle du tunnel), `worker` (enquête, exécuteurs, navigateur), `all` (les deux dans un conteneur, pour un petit budget ou un premier essai), `migrate` (applique les migrations puis s'arrête). Sans valeur, le mode est `all`.
+1. **Une image** en `linux/amd64`, démarrée sans uid imposé : elle démarre en root et descend aussitôt sur un utilisateur non-root, aucun processus ne reste root (le worker garde seulement les deux capacités qui font changer d'utilisateur le bac à sable ; `no-new-privileges` est admis). Le mode se choisit par `RUNTIME_MODE` : `server` (REST, console, passerelle du tunnel), `worker` (enquête, exécuteurs, navigateur), `all` (les deux dans un conteneur, pour un petit budget ou un premier essai), `migrate` (applique les migrations puis s'arrête). Sans valeur, le mode est `all`.
 2. **PostgreSQL 15 ou plus** (16 recommandé, la CI couvre 16, 17 et 18), avec au moins 10 Go. Une version inférieure à 15 est refusée avec un message qui nomme la version trouvée.
 3. **De la mémoire pour le navigateur du worker** : Chromium est dans l'image. Comptez 2 Go au minimum pour un worker (une exécution navigateur à la fois), 4 Go pour deux. Le nombre d'exécutions navigateur simultanées se déduit de la limite mémoire du conteneur ; `BROWSER_CONCURRENCY` la fixe à la main.
 4. **Un proxy inverse qui fait le TLS** : l'instance n'embarque pas de TLS. Derrière un proxy, réglez `TRUST_PROXY` (voir plus bas).

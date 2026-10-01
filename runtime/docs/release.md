@@ -60,8 +60,8 @@ Une image non signée, ou signée par une autre identité, est refusée par `cos
 
 ```sh
 pnpm release:dry-run                 # extension, SBOM, provenance, signature avec une clé de test jetable, vérification, refus
-pnpm release:dry-run --with-image    # construit aussi l'image EN LOCAL (docker build, aucun push) et contrôle l'uid non root
-pnpm check:release                   # portes : workflows épinglés, release par étiquette, environnement, sans cache, image non root
+pnpm release:dry-run --with-image    # construit aussi l'image EN LOCAL (docker build, aucun push) et contrôle qu'une commande y tourne sous pwuser (1001), après la descente du point d'entrée
+pnpm check:release                   # portes : workflows épinglés, release par étiquette, environnement, sans cache, image non root (USER non root, ou démarrage root avec descente immédiate par entrypoint.sh)
 ```
 
 La clé de test est créée dans un dossier temporaire et supprimée ensuite. Rien ne part vers GHCR ni vers aucun registre ; cosign n'utilise aucun journal de transparence en mode à blanc. Les portes comprennent l'audit X6 de l'historique git. Les contrôles négatifs présentent chaque artefact refusé avec un bundle **valide** (celui de l'archive signée) : le refus vient de la vérification de signature, jamais d'un fichier manquant.

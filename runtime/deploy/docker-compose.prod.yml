@@ -11,8 +11,10 @@
 #   donc `ipc: host` n'est pas nécessaire et n'est pas utilisé (il partagerait l'espace IPC de la machine avec un conteneur
 #   qui ouvre des sites tiers) ; `shm_size` garde une marge. Écart assumé à 14 § 12 (qui demande `init` et `ipc: host`),
 #   consigné dans docs/deploiement.md (statut de vérification).
-# - Ne PAS poser `security_opt: no-new-privileges` ni `cap_drop: [SETUID, SETGID]` sur le worker : le lanceur du bac à sable
-#   change d'utilisateur par des capacités de fichier (INV7) ; sans elles, le worker refuse de démarrer en production.
+# - `security_opt: no-new-privileges` est admis (régime de Render). Ne PAS poser `cap_drop: [SETUID, SETGID]` ni `user:` sur le
+#   worker : l'image démarre en root et descend aussitôt sur pwuser en gardant ces deux capacités pour le seul changement
+#   d'utilisateur du bac à sable (INV7) ; sans elles, le worker refuse de démarrer en production (docs/deploiement.md,
+#   « Modèle de privilèges de l'image »).
 name: scrapyomama-runtime
 
 x-runtime: &runtime

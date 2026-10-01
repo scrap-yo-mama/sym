@@ -85,8 +85,10 @@ docker compose -f docker-compose.prod.yml up -d
 - Les services : `postgres` (volume `pgdata`), `migrate` (applique les migrations puis s'arrête), `server`, `worker`. `server`
   et `worker` attendent que `migrate` ait réussi. Journaux : `docker compose -f docker-compose.prod.yml logs -f server`.
 - **Pas de `ipc: host`** : Chromium reçoit `--disable-dev-shm-usage`, donc l'espace IPC de la machine n'est pas partagé avec un
-  conteneur qui ouvre des sites tiers. **Pas de `no-new-privileges` ni de `cap_drop`** sur le worker : le lanceur du bac à
-  sable change d'utilisateur par des capacités de fichier ; sans elles, le worker refuse de démarrer en production.
+  conteneur qui ouvre des sites tiers. `no-new-privileges` est **admis** (c'est le régime de Render, voir
+  [Modèle de privilèges](#modèle-de-privilèges-de-limage)) ; **pas de `cap_drop` de `SETUID` ou `SETGID` ni de `user:`** sur
+  le worker : sans démarrage en root avec ces deux capacités, le bac à sable ne peut pas changer d'utilisateur et le worker
+  refuse de démarrer en production.
 - Coolify et Dokploy : importez `docker-compose.prod.yml`, définissez `MASTER_KEY`, `PUBLIC_URL`, `ADMIN_BOOTSTRAP_TOKEN`,
   `POSTGRES_PASSWORD` dans l'interface (mêmes valeurs que `install.sh` génère), laissez le proxy de la plateforme faire le TLS.
 
@@ -167,9 +169,31 @@ joignable et rappelle de terminer l'assistant ; tout autre 503 reste un échec.
 | Refus au démarrage « MASTER_KEY invalide » | Clé de 31 octets, phrase, espace ou saut de ligne | `runtime keygen` ; sur Railway, voir la forme de `secret()` ci-dessus |
 | « connexion de session requise » | Base derrière un pooler en mode transaction | Poser `DATABASE_URL_DIRECT` (connexion directe) |
 | Migration 0003 : `permission denied to create role` | L'utilisateur de la base n'a pas `CREATEROLE` | Créer le rôle une fois : `DATABASE_URL=<compte privilégié> runtime restore-prepare` |
-| Le worker refuse de démarrer (« bac à sable ») | Option qui retire les capacités de fichier (`no-new-privileges`, `cap_drop`) ou plateforme qui les interdit | Retirer l'option ; sur une plateforme qui les interdit, utiliser une machine Docker classique |
+| Le worker refuse de démarrer (« bac à sable ») | `SETUID` ou `SETGID` retirées (`cap_drop`), uid imposé au conteneur (`user:`, `--user`), ou plateforme qui ne démarre pas l'image en root | Retirer l'option ; sur une plateforme qui l'impose, utiliser une machine Docker classique ([modèle de privilèges](#modèle-de-privilèges-de-limage)) |
 | Toutes les requêtes semblent venir de la même IP, limites partagées | `TRUST_PROXY` absent derrière un proxy | `TRUST_PROXY=1` (un saut), jamais `true` sans proxy |
 | Extension ou cookies refusés | `PUBLIC_URL` différente de l'adresse réelle, ou en HTTP | Corriger `PUBLIC_URL` (HTTPS), redémarrer |
+
+## Modèle de privilèges de l'image
+
+L'image démarre en **root** (`USER root`) et son point d'entrée (`deploy/entrypoint.sh`) descend **aussitôt** sur `pwuser`
+(uid 1001), sans nouveaux privilèges (`setpriv --no-new-privs`) : aucun processus du conteneur ne reste root, pas même
+tini (PID 1), qui partage ainsi l'uid des rôles et peut leur relayer `SIGTERM`. Ce démarrage en root est nécessaire :
+Render lance ses conteneurs sous `no-new-privileges`, régime où un programme ne garde de ses capacités de fichier que
+celles que son appelant détient déjà ; un conteneur démarré directement sous `pwuser` n'en détient aucune, et le bac à
+sable ne pourrait pas changer d'utilisateur (constat F-20261001-R01).
+
+| Processus | Utilisateur | Capacités |
+|---|---|---|
+| `server`, `runtime migrate`, commande passée au conteneur, `runtime …` lancée en root par `docker exec` ou le shell de l'hébergeur | pwuser | aucune |
+| `worker` (`/usr/local/libexec/node-worker`, copie de Node réservée au groupe pwuser) | pwuser | `cap_setuid,cap_setgid` effectives, ni ambient ni héritables : ses enfants (Chromium, shells) n'en ont aucune |
+| Lanceur du bac à sable (`sandbox-launch`, exécuté directement par le worker) | pwuser puis `sandbox` | les mêmes, le temps de changer d'utilisateur |
+| Enfant du bac à sable (Node ordinaire, `SANDBOX_NODE`) | `sandbox` (1500) | aucune ; `/proc/1/environ` et l'environnement du worker lui sont refusés |
+| tini, et le shell du point d'entrée en `RUNTIME_MODE=all` | pwuser | `cap_setuid,cap_setgid` (ambient) quand le rôle worker démarre ; ils n'exécutent aucun code tiers et retirent ces capacités au lancement de chaque rôle |
+
+Conséquences pour l'hébergeur : ne retirez pas `SETUID` ni `SETGID` (`cap_drop`) et n'imposez pas d'uid (`user:`,
+`--user`, `runAsUser`) au worker ; `no-new-privileges` est admis. Le worker s'exécutant sous un binaire à capacités
+de fichier, Node y ignore `NODE_OPTIONS` et `NODE_EXTRA_CA_CERTS` (mode d'exécution sécurisé du noyau, `AT_SECURE`).
+Le test `pnpm test:image` vérifie ce tableau sur l'image construite, sous le régime de Render et en Docker classique.
 
 ## Statut de vérification
 
@@ -180,9 +204,9 @@ navigateur) est **à confirmer par la recette 4.4** : aucun n'a été mesuré.
 | Cible | Vérifié | Comment | Reste |
 |---|---|---|---|
 | Docker Compose | `/api/ready` = 200 sur une base vierge, assistant (`POST /api/setup` 201 puis 404), `runtime doctor`, bac à sable isolé, arrêt propre | Image construite en local, `install.sh` puis `up -d`, sur la machine de développement (Docker Desktop) | Réserve MCP et réserve console (ci-dessous) |
-| Render | `render.yaml` conforme aux invariants (tests statiques) et au schéma officiel de Render au 2026-10-01 (schéma `render.com/schema/render.yaml.json`, sha256 57aa0a1ff9c3, ajv 2020-12) | Pas de déploiement : aucun service Render n'a été créé (`render login` non fait) | Déploiement réel (GO) : bouton « Deploy to Render » (dépôt public), `CREATE ROLE` sur la base gérée, bac à sable sous le runtime d'image de Render, MCP |
+| Render | `render.yaml` conforme aux invariants (tests statiques) et au schéma officiel de Render au 2026-10-01 (schéma `render.com/schema/render.yaml.json`, sha256 57aa0a1ff9c3, ajv 2020-12) ; bac à sable sous le régime du conteneur Render (`NoNewPrivs: 1`, capacités CHOWN, DAC_OVERRIDE, FOWNER, SETGID, SETUID, SYS_CHROOT relevées sur Render le 2026-10-01, constat F-20261001-R01) : worker, `RUNTIME_MODE=all`, `runtime migrate`, arrêt propre | Tests statiques ; le régime de Render est reproduit sur l'image construite (`pnpm test:image`, joué par `pnpm ci:local`) | Déploiement réel (GO) : bouton « Deploy to Render » (dépôt public), `CREATE ROLE` sur la base gérée, MCP |
 | Railway | Valeur générée de `MASTER_KEY` valide à chaque tirage, variables au catalogue | Tests statiques | Projet réel (compte, plan Hobby) |
-| Heroku | Syntaxe des Dockerfile, release phase `runtime migrate`, `run` explicite (web, worker) | Tests statiques ; le point d'entrée est exercé hors image | Déploiement réel ; démarrage des dynos et release phase avec l'ENTRYPOINT de l'image (tini, sans CMD) non observés sur Heroku ; `CREATE ROLE` sur Heroku Postgres et capacités de fichier du dyno |
+| Heroku | Syntaxe des Dockerfile, release phase `runtime migrate`, `run` explicite (web, worker) | Tests statiques ; le point d'entrée est exercé hors image | Déploiement réel ; démarrage des dynos et release phase avec l'ENTRYPOINT de l'image (entrypoint.sh, qui lance tini ; sans CMD) non observés sur Heroku ; `CREATE ROLE` sur Heroku Postgres ; uid du dyno (le bac à sable exige un démarrage en root, ou sous pwuser sans no-new-privileges) |
 
 **Réserve MCP.** Le critère « MCP joignable » n'est pas atteint : le serveur MCP (tâche 3.2) n'est pas encore fusionné et
 `/mcp` répond 404. La dépendance de 4.1 envers 3.2 a été levée par la décision D-28 (vérification MCP déployée reportée
@@ -196,7 +220,7 @@ le service de la console par le server dans l'image n'est attribué à aucune li
 (3.8 ou 4.2) avant la recette.
 
 **Écarts au CDC assumés.** 14 § 12 demande `init` et `ipc: host` dans le compose ; aucun des deux n'est posé. `init` :
-l'image lance déjà tini (ENTRYPOINT), un second init est redondant. `ipc: host` : Chromium reçoit
+l'image lance déjà tini (par son point d'entrée), un second init est redondant. `ipc: host` : Chromium reçoit
 `--disable-dev-shm-usage` (et `shm_size` garde une marge), donc partager l'espace IPC de la machine avec un conteneur qui
 ouvre des sites tiers n'apporte rien et affaiblit l'isolation. Le CDC est à mettre à jour en ce sens.
 

@@ -14,6 +14,8 @@ Bouton à valider au GO (dépôt public requis ; aucun déploiement Render réel
 | `railway/template.yaml` | Description du modèle Railway (best-effort) |
 | `heroku/` | `heroku.yml`, deux Dockerfile minces, `app.json` (best-effort) |
 
+Privilèges (constat F-20261001-R01, détail dans [docs/deploiement.md](../docs/deploiement.md#modèle-de-privilèges-de-limage)) : l'image démarre en root et `entrypoint.sh` descend aussitôt sur `pwuser` (1001) par `setpriv --no-new-privs`, avant tini ; aucun processus ne reste root. Le worker tourne sous `/usr/local/libexec/node-worker`, copie de Node dotée de `cap_setuid,cap_setgid` (effectives, hors ambient : Chromium et les autres enfants n'en ont aucune) et réservée au groupe `pwuser` ; il exécute lui-même `sandbox-launch`, qui fait passer l'enfant du bac à sable sous `sandbox` (1500), sans capacité, avec le Node ordinaire (`SANDBOX_NODE`). Fonctionne sous `no-new-privileges` (Render) comme en Docker classique : `pnpm test:image` le vérifie sur l'image construite. À ne pas faire : `cap_drop` de `SETUID`/`SETGID`, uid imposé (`user:`, `--user`).
+
 L'image est épinglée `X.Y.Z` dans chaque modèle (jamais `latest`) : release-please met ces fichiers à jour à chaque release (marqueurs `x-release-please-*`, `extra-files` génériques).
 
 `TRUST_PROXY` (serveur) : défaut `false`, l'IP d'un client est celle de la connexion TCP. Derrière le proxy d'un hébergeur (Render, Railway, Heroku), poser `TRUST_PROXY=1` (un saut) ou la liste des IP/CIDR du proxy : sinon toutes les requêtes semblent venir du proxy et partagent les limites par IP. Ne jamais poser `true` sans proxy devant : un client choisirait son IP par `X-Forwarded-For`.
