@@ -9,12 +9,9 @@
 //    `routeWebSocket` dans la page) : il est refusé (`SecurityError`), comme le ferait une CSP `worker-src http: https:`
 //    (Chromium n'applique pas une CSP ajoutée à la réponse d'un document par CDP). Les workers http(s) restent permis.
 // 1 bis. SharedWorker. Ses requêtes ne passent ni par `context.route` ni par l'interception CDP de la page. Le blocage au
-//    niveau du navigateur (`blockSharedWorkers`, request-guard.ts) ferme chaque SharedWorker dès son attachement, mais
-//    Playwright, attaché lui aussi à ces cibles, les relance aussitôt (`CRSession.detach` envoie
-//    `Runtime.runIfWaitingForDebugger`) : la fermeture court contre le démarrage du worker, et un worker blob: (script déjà
-//    local, aucun aller-retour réseau) la perd sous charge (constaté : `fetch` d'un chemin interdit parti d'un SharedWorker
-//    blob:, un run sur trois sous charge). Le constructeur est donc refusé (`SecurityError`) dans chaque document : aucun
-//    SharedWorker ne naît, aucune course. Le blocage du navigateur reste le filet des autres voies.
+//    niveau du navigateur (`blockBackgroundWorkers`, request-guard.ts : interception `Fetch` du navigateur, sans course avec
+//    la reprise de Playwright) coupe toute requête d'un SharedWorker ou d'un service worker. Le constructeur est en plus
+//    refusé (`SecurityError`) dans chaque document : aucun SharedWorker ne naît. Deux couches, la seconde étant le filet.
 // 2. Règles de spéculation (speculation rules). Le préchargement (prefetch) qu'elles déclenchent part du navigateur
 //    lui-même : ni `context.route`, ni l'interception CDP Fetch (de la page ou du navigateur), ni `Network.setBlockedURLs`,
 //    ni l'émulation réseau ne le voient, et Chromium 153 (headless shell) n'a ni commutateur, ni politique, ni réglage
@@ -28,6 +25,11 @@
 //    Hors de portée (risque résiduel, journal D-33) : une racine fantôme déclarative FERMÉE dans un HTML que le parseur lit
 //    pour le cadre principal (HTML servi par le site, document blob: ou javascript: vers lequel un script navigue, nœud
 //    d'un autre document adopté avec sa racine) ; seule une interception TLS au proxy d'egress couvrirait ce cas.
+//
+// 3. Service workers (revue de fix-inv11-agent) : `ServiceWorkerContainer.prototype.register` et celui de l'instance sont
+//    figés sur un refus (`SecurityError`) ; la coupure qui fait foi est celle du CDP au niveau du navigateur
+//    (`blockBackgroundWorkers`, request-guard.ts), qui coupe aussi le script principal d'un service worker.
+// Un SharedWorker blob: ou data: est refusé comme un worker dédié (point 1) : ses WebSocket échapperaient à tout contrôle.
 //
 // Les fonctions natives sont capturées avant tout code de la page, et la garde n'emprunte aucun mécanisme remplaçable par
 // la page (itérateurs de tableau, accesseurs des prototypes, setters d'Object.prototype). Aucun masquage (X2) : des
@@ -64,14 +66,16 @@ const GUARD = String.raw`function () {
   };
   const mentionsShadowRoot = (text) => apply(indexOf, lower(text), ['shadowrootmode']) !== -1;
 
-  // 1. Workers blob: et data: refusés ; l'URL est résolue une seule fois et passée par valeur (aucune double lecture).
-  const NativeWorker = G.Worker;
-  if (typeof NativeWorker === 'function') {
-    const NativeURL = G.URL;
-    const href = getter(NativeURL.prototype, 'href');
-    const protocol = getter(NativeURL.prototype, 'protocol');
-    const baseURI = getter(G.Node.prototype, 'baseURI');
-    const doc0 = G.document;
+  // 1. Workers (dédiés et SharedWorker) blob: et data: refusés ; l'URL est résolue une seule fois et passée par valeur
+  //    (aucune double lecture).
+  const NativeURL = G.URL;
+  const href = getter(NativeURL.prototype, 'href');
+  const protocol = getter(NativeURL.prototype, 'protocol');
+  const baseURI = getter(G.Node.prototype, 'baseURI');
+  const doc0 = G.document;
+  const guardWorker = (name) => {
+    const NativeWorker = G[name];
+    if (typeof NativeWorker !== 'function') return;
     const Wrapped = new Proxy(NativeWorker, {
       construct(target, args, newTarget) {
         const resolved = construct(NativeURL, [Str(args[0]), apply(baseURI, doc0, [])]);
@@ -81,8 +85,10 @@ const GUARD = String.raw`function () {
       },
     });
     define(NativeWorker.prototype, 'constructor', { value: Wrapped, writable: true, configurable: true, enumerable: false });
-    define(G, 'Worker', { value: Wrapped, writable: true, configurable: true, enumerable: false });
-  }
+    define(G, name, { value: Wrapped, writable: true, configurable: true, enumerable: false });
+  };
+  guardWorker('Worker');
+  guardWorker('SharedWorker');
 
   // 1 bis. SharedWorker refusé, quel que soit le schéma (voir en tête).
   const NativeSharedWorker = G.SharedWorker;
@@ -233,6 +239,29 @@ const GUARD = String.raw`function () {
       configurable: true,
       enumerable: false,
     });
+  }
+
+  // 3. Service workers jamais enregistrés (revue de fix-inv11-agent) : register figé (non configurable, non modifiable)
+  //    sur le PROTOTYPE et sur l'instance, avant tout code de la page ; serviceWorkers: 'block' de Playwright ne
+  //    remplace que celui de l'instance. Couche JS en complément de la coupure CDP au niveau du navigateur (request-guard.ts).
+  const Container = G.ServiceWorkerContainer;
+  if (typeof Container === 'function') {
+    const NativePromise = G.Promise;
+    const reject = NativePromise.reject;
+    const register = function register() {
+      return apply(reject, NativePromise, [new NativeDOMException('scrapyomama: service worker refusé (robots.txt)', 'SecurityError')]);
+    };
+    try {
+      define(Container.prototype, 'register', { value: register, writable: false, configurable: false, enumerable: true });
+    } catch (e) {
+      // Déjà figé (script de page du Chromium agentique, posé avant) : refus déjà en place.
+    }
+    try {
+      const container = G.navigator && G.navigator.serviceWorker;
+      if (container) define(container, 'register', { value: register, writable: false, configurable: false, enumerable: false });
+    } catch (e) {
+      // Idem.
+    }
   }
 }`;
 

@@ -29,6 +29,9 @@
 // Règles de spéculation (revue de 1.11) : une réponse `application/speculationrules+json` (règles chargées par l'en-tête
 // `Speculation-Rules`) est coupée ; le préchargement qu'elle déclencherait part du navigateur hors de toute interception
 // (voir page-guard.ts).
+// SharedWorker et service workers (revue de fix-inv11-agent, F-20261001-07) : hors de l'attachement automatique de la page,
+// ils sont coupés par une interception `Fetch` au niveau du navigateur (`blockBackgroundWorkers`, ci-dessous), qui ne
+// dépend d'aucune suspension de cible (Playwright et Stagehand relancent eux-mêmes les workers qu'ils joignent).
 import type { Browser, BrowserContext, CDPSession, Page } from 'playwright-core';
 
 /** Requête présentée au contrôle (un saut d'une chaîne de redirections, ou la requête initiale). */
@@ -252,32 +255,83 @@ export async function installRequestGuard(context: BrowserContext, page: Page, i
   }
 }
 
-/** Poignée du blocage des SharedWorker : à fermer APRÈS le contexte du run (fermée avant, un worker suspendu repartirait). */
-export type SharedWorkerBlock = { close(): Promise<void> };
+/** Poignée du blocage des workers d'arrière-plan : à fermer APRÈS le contexte du run (fermée avant, l'interception tomberait). */
+export type BackgroundWorkerBlock = { close(): Promise<void> };
+
+/** Workers d'arrière-plan : cibles propres, hors de la page, jamais admises à émettre une requête. */
+const BACKGROUND_WORKERS = [{ type: 'shared_worker' }, { type: 'service_worker' }] as const;
+/** Cibles dont les requêtes passent par le contrôle de la page du run (page, cadres hors processus, workers dédiés). */
+const PAGE_TARGETS: ReadonlySet<string> = new Set(['page', 'iframe', 'worker', 'tab']);
+/** Verdicts mémorisés (identifiant de cadre ou de cible → requêtes admises), bornés. */
+const MAX_ORIGINS = 2000;
 
 /**
- * Échec fermé sur les SharedWorker (revue de 1.11, INV11) : leurs requêtes ne passent ni par `context.route` ni par
- * l'interception CDP de la page (une cible `shared_worker` n'est pas jointe par l'attachement automatique de la page, et
- * `Fetch` de la page ne la couvre pas). Une session CDP au niveau du navigateur joint chaque SharedWorker dès sa création
- * (`waitForDebuggerOnStart`), puis le ferme (`Target.closeTarget`). Filet, pas verrou : Playwright, joint à la même cible,
- * la relance aussitôt (`Runtime.runIfWaitingForDebugger` de `CRSession.detach`), et la fermeture court contre le démarrage
- * du worker. Le script d'un worker d'URL http(s) est chargé par la page (aller-retour réseau, contrôlé par `context.route`
- * et le contrôle CDP) : la fermeture arrive avant son code. Un worker blob: n'a pas cet aller-retour : la garde des
- * documents (`installPageGuard`) refuse tout constructeur `SharedWorker`, et c'est elle qui l'interdit.
+ * Échec fermé sur les SharedWorker et les service workers (revue de 1.11 et de fix-inv11-agent, INV11 ; F-20261001-07).
+ * Leurs requêtes ne passent ni par `context.route` (Playwright ne route pas celles d'un service worker d'un contexte
+ * `serviceWorkers: 'block'`, ni jamais celles d'un SharedWorker), ni par le contrôle CDP de la page (cibles hors de son
+ * attachement automatique). Les suspendre au démarrage ne tient pas : Playwright relance lui-même chaque service worker
+ * (`Runtime.runIfWaitingForDebugger`) et se détache aussitôt d'un SharedWorker, ce qui le relance aussi (constaté sur
+ * Chromium 153 : un SharedWorker fermé par `Target.closeTarget` avait parfois déjà envoyé une requête, ≈ 1 run sur 5).
+ * `serviceWorkers: 'block'` ne remplace que `register` de l'INSTANCE `navigator.serviceWorker` :
+ * `ServiceWorkerContainer.prototype.register.call(...)` enregistrait le worker.
+ * Couche CDP, sans course : une interception `Fetch` au niveau du NAVIGATEUR, posée avant le contexte du run, voit chaque
+ * requête de chaque cible, celle d'un worker d'arrière-plan portant l'identifiant de sa cible (`frameId`). Toute requête
+ * d'un SharedWorker ou d'un service worker est coupée (`BlockedByClient`), script principal du service worker compris :
+ * son enregistrement échoue, il ne s'exécute jamais. Les autres requêtes (page, cadres, workers dédiés), déjà passées par
+ * `context.route` et le contrôle CDP de la page (consultés avant cette interception), continuent. Une requête sans
+ * origine (`frameId` absent) est coupée ; un identifiant inconnu est résolu une fois (`Target.getTargetInfo`) : cible
+ * d'une page → admise, autre cible → coupée, aucune cible → cadre du même processus, admis. Les cibles des workers
+ * d'arrière-plan sont connues avant leur première requête (découverte et attachement automatique au niveau du
+ * navigateur) et fermées aussitôt (`Target.closeTarget`) ; jamais relancées par cette session.
+ * WebSocket (que `Fetch` ne voit pas) : le script http(s) d'un SharedWorker reçoit la CSP sans WebSocket du contrôle de la
+ * page ; un SharedWorker blob: ou data: est refusé par la garde des documents (page-guard.ts), comme un worker dédié.
  */
-export async function blockSharedWorkers(browser: Browser): Promise<SharedWorkerBlock> {
+export async function blockBackgroundWorkers(browser: Browser): Promise<BackgroundWorkerBlock> {
   const session = await browser.newBrowserCDPSession();
   const raw = sessionChannel(session);
-  raw.on('Target.attachedToTarget', (params) => {
+  const verdicts = new Map<string, Promise<boolean>>();
+  const remember = (id: string, verdict: Promise<boolean>): Promise<boolean> => {
+    if (verdicts.size >= MAX_ORIGINS && !verdicts.has(id)) {
+      const oldest = verdicts.keys().next();
+      if (oldest.done !== true) verdicts.delete(oldest.value);
+    }
+    verdicts.set(id, verdict);
+    return verdict;
+  };
+  const onTarget = (params: Record<string, unknown>) => {
     const info = (params['targetInfo'] ?? {}) as { type?: unknown; targetId?: unknown };
-    if (info.type !== 'shared_worker' || typeof info.targetId !== 'string') return; // Filtre : rien d'autre n'est joint.
+    if (typeof info.targetId !== 'string' || !BACKGROUND_WORKERS.some((w) => w.type === info.type)) return; // Filtre : rien d'autre.
+    remember(info.targetId, Promise.resolve(false));
     void raw.send('Target.closeTarget', { targetId: info.targetId }).catch(() => undefined);
+  };
+  raw.on('Target.targetCreated', onTarget);
+  raw.on('Target.attachedToTarget', onTarget);
+  const admitted = (origin: unknown): Promise<boolean> => {
+    if (typeof origin !== 'string' || origin === '') return Promise.resolve(false);
+    return (
+      verdicts.get(origin) ??
+      remember(
+        origin,
+        raw.send('Target.getTargetInfo', { targetId: origin }).then(
+          (result) => PAGE_TARGETS.has(String(((result['targetInfo'] ?? {}) as { type?: unknown }).type)),
+          () => true,
+        ),
+      )
+    );
+  };
+  raw.on('Fetch.requestPaused', (params) => {
+    const requestId = params['requestId'];
+    void admitted(params['frameId']).then((ok) =>
+      (ok ? raw.send('Fetch.continueRequest', { requestId }) : raw.send('Fetch.failRequest', { requestId, errorReason: 'BlockedByClient' })).catch(() => undefined),
+    );
   });
   try {
-    await raw.send('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: true, flatten: true, filter: [{ type: 'shared_worker' }] });
+    await raw.send('Target.setDiscoverTargets', { discover: true, filter: [...BACKGROUND_WORKERS] });
+    await raw.send('Fetch.enable', { patterns: [{ urlPattern: '*', requestStage: 'Request' }] });
+    await raw.send('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: true, flatten: true, filter: [...BACKGROUND_WORKERS] });
   } catch (error) {
     await session.detach().catch(() => undefined);
-    throw new Error(`blocage des SharedWorker indisponible : ${error instanceof Error ? error.message : String(error)}`, { cause: error });
+    throw new Error(`blocage des workers d'arrière-plan indisponible : ${error instanceof Error ? error.message : String(error)}`, { cause: error });
   }
   return { close: () => session.detach().catch(() => undefined) };
 }

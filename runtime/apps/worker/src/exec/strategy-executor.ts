@@ -530,7 +530,7 @@ export function createStrategyExecutor(deps: StrategyExecutorDeps): RunExecutor 
               await session.close().catch(() => undefined);
             }
           }
-          const base = { ...common, pool: deps.browsers, egress, guard: deps.guard, spec: spec!, userAgent };
+          const base = { ...common, access: robots.access, pool: deps.browsers, egress, guard: deps.guard, spec: spec!, userAgent };
           const result = strategy.execution === 'fetch_in_page' ? await runFetchInPageExecutor(base) : await runPlaywrightExecutor(base);
           return { result: budgetChecked(result, egress.budgetExceeded()), usage: egress.usage() };
         } finally {
@@ -576,6 +576,8 @@ export function createStrategyExecutor(deps: StrategyExecutorDeps): RunExecutor 
           signal: ctx.signal,
           maxCostUsd: target.api.maxCostUsd,
           cost,
+          // robots.txt (1.11, INV11) : chaque requête de chaque Chromium de l'essai agentique (pool et Chromium dédié).
+          access: robots.access,
           ...(pacer === undefined ? {} : { pacer }),
           ...(maxRequests === undefined ? {} : { maxRequests }),
           ...(deps.classify === undefined ? {} : { classify: deps.classify }),

@@ -24,12 +24,15 @@ const speculationRules = (prefetch: string, prerender: string): string =>
  * Redirections d'un chemin permis vers un chemin interdit (INV11 à chaque saut, Chromium compris) : `/depart` → 302
  * `/prive/x` ; `/prive` → 301 `/prive/` (barre oblique finale) ; `/vers-autre` → 302 vers `/prive/x` d'un second hôte
  * (`robots_redirect`, qui interdit /prive/) ; `/vers-injoignable` → 302 vers l'hôte `robots_5xx` (robots.txt en 503) ;
+ * `/page-fetch` : page dont le script demande au chargement `/prive/page-fetch` et `/depart` (→ 302 `/prive/x`) ;
  * `/page-ws` : page qui ouvre un WebSocket vers `/prive/ws` ; `/page-ws-worker` : workers dédiés (blob, http, module) qui en
  * ouvrent un ; `/page-cadre-ws` : cadre du second hôte dont les workers en ouvrent un (`/cadre-ws-worker`) ; `/page-spec` :
  * règles de spéculation (prefetch, prerender) vers `/prive/`, dans la page et par l'en-tête ;
  * `/page-cadre` : page avec un cadre d'un autre site (`robots_redirect`) dont une image passe par `/depart` → 302
  * `/prive/x` ; `/page-sw` : page qui crée un SharedWorker (`/sw.js`) dont le code demande `/prive/sw` directement et
- * `/depart` (→ 302 `/prive/x`).
+ * `/depart` (→ 302 `/prive/x`) ; `/page-sw-register` : page (contexte sécurisé, `*.localhost`) qui enregistre un service
+ * worker (`/sw-register.js`) par `ServiceWorkerContainer.prototype.register`, puis lui commande par postMessage une
+ * requête vers `/prive/sw-message` ; le worker demande aussi `/prive/sw-top` et `/depart` à son démarrage.
  */
 const robotsDisallow: SiteFactory = (env) => ({
   ...base('robots', 'robots.txt : Disallow: /prive/ avec Allow: /prive/ouvert (règle la plus longue) ; redirections d\'un chemin permis vers /prive/ (même hôte, barre oblique finale, second hôte) ; tout chemin visité est compté', { path: '/robots.txt', status: 200 }),
@@ -54,6 +57,29 @@ const robotsDisallow: SiteFactory = (env) => ({
         return html(200, page('sw', '<p id="sw">sw</p>', `<script>try { new SharedWorker('/sw.js'); } catch (e) {}</script>`));
       case '/sw.js':
         return { status: 200, headers: { 'content-type': 'text/javascript; charset=utf-8' }, body: "fetch('/prive/sw').catch(() => 0); fetch('/depart').catch(() => 0);" };
+      case '/page-sw-register':
+        // Service worker enregistré par le PROTOTYPE (la surcharge de l'instance ne le voit pas) puis commandé par
+        // postMessage (revue de fix-inv11-agent, INV11) ; l'image lente retarde l'événement load (E4 attend load).
+        return html(
+          200,
+          page(
+            'sw-register',
+            '<p id="swreg">Identifiant : zz_test_item_1</p><img src="/lent" alt="">',
+            "<script>(async () => { try { const reg = await ServiceWorkerContainer.prototype.register.call(navigator.serviceWorker, '/sw-register.js'); const w = reg.installing || reg.waiting || reg.active; const send = () => { try { (reg.active || w).postMessage(location.origin + '/prive/sw-message'); } catch (e) {} }; setTimeout(send, 300); setTimeout(send, 1000); } catch (e) {} })();</script>",
+          ),
+        );
+      case '/sw-register.js':
+        return {
+          status: 200,
+          headers: { 'content-type': 'text/javascript; charset=utf-8' },
+          body: "fetch('/prive/sw-top').catch(() => 0); fetch('/depart').catch(() => 0); self.addEventListener('install', () => self.skipWaiting()); self.addEventListener('message', (e) => { fetch(String(e.data)).catch(() => 0); });",
+        };
+      case '/page-fetch':
+        // Requêtes de données lancées par la page (sous-ressources) vers /prive/, directe et redirigée (exécuteurs agentiques, INV11).
+        return html(
+          200,
+          page('fetch', '<h1>zz_test_page_fetch</h1><p id="fetch">Identifiant : zz_test_item_1</p>', "<script>fetch('/prive/page-fetch').catch(() => 0); fetch('/depart').catch(() => 0);</script>"),
+        );
       case '/page-ws':
         return html(200, page('ws', '<p id="ws">ws</p>', `<script>try { new WebSocket('ws://' + location.host + '/prive/ws'); } catch (e) {}</script>`));
       case '/page-ws-worker':

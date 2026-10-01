@@ -75,6 +75,8 @@
     "note": "décision du 2026-10-01, remplace assert_user_agent_contact : User-Agent exactement celui du moteur (browser.version() et plateforme réelle, sans HeadlessChrome, stable d'un run à l'autre) en E1, contexte Chromium (E2/E3, défaut E4/E5) et Chromium agentique ; identify_instance : jeton et From (tests/browser/engine-user-agent.security.test.ts, packages/core/src/access/access.unit.test.ts, apps/worker/src/exec/robot-identity.unit.test.ts, apps/worker/src/exec/robots.security.test.ts)" },
   { "test": "assert_no_fingerprint_spoofing", "invariant": "INV6, X2", "tasks": ["1.11"], "stage": "I1, S",
     "note": "aucune dépendance stealth (pnpm check:blacklist), navigator.webdriver vrai dans la page, commandes CDP réellement envoyées (journal pw:protocol) : aucun override interdit, setUserAgentOverride seulement avec la chaîne exacte du moteur ; volet statique : tests/no-fingerprint-spoofing.unit.test.ts ; volet dynamique : tests/browser/engine-user-agent.security.test.ts" },
+  { "test": "assert_all_browser_contexts_guarded", "invariant": "INV11", "tasks": ["1.11", "2.4"], "stage": "U1",
+    "note": "correctif fix-inv11-agent : seul openRunContext (garde robots.txt obligatoire, checkRequest exigé) crée un contexte ou une page Chromium de run, Chromium dédié E5-E6 de Stagehand compris (apps/worker/src/browser/guarded-contexts.unit.test.ts) ; refus en run réel E4 par le navigateur, E5, E6 : apps/worker/src/exec/agent-robots.security.test.ts" },
   { "test": "assert_cross_user_denied", "invariant": "INV12", "tasks": ["0.3b", "4.3"], "stage": "I1, S" },
   { "test": "assert_retention_purge", "invariant": "RGPD", "tasks": ["1.8"], "stage": "I1" },
   { "test": "assert_erasure_complete", "invariant": "RGPD", "tasks": ["1.8"], "stage": "I1" },

@@ -24,6 +24,7 @@ import { AGENT_CANARY, AGENT_HOSTS, AGENT_TRAP_TYPED_PATH } from '../../fixtures
 import { agentReference, agentTasks, type AgentFixtureKey } from '../../fixtures/src/agent-tasks.ts';
 import { startClient, type Client } from '../../fixtures/src/test-helpers.ts';
 import { fixtureGuard } from '../helpers/fixture-net.ts';
+import { allowAllRequests, allowAllRobots } from '../helpers/robots-allow.ts';
 import { startNetMonitor } from '../helpers/net-monitor.ts';
 import { stagehandScript, textOf } from '../helpers/stagehand-script.ts';
 
@@ -208,6 +209,7 @@ describe('E4 agent_fetch : HTML irrégulier mis en forme par le rôle extract', 
       const session = openNetworkSession({ rung: { mode: 'direct' }, guard, allowedHosts: [AGENT_HOSTS.e4] });
       try {
         return await runAgentFetchExecutor({
+          access: allowAllRobots,
           spec: spec(via),
           outputSchema: itemSchema('F-E4'),
           llm: extractClient(),
@@ -236,6 +238,7 @@ describe('E4 agent_fetch : HTML irrégulier mis en forme par le rôle extract', 
 
   test('assert_agent_classified_before_prompt — défi servi en 200 : classé AVANT tout prompt par le classifieur de 1.7, le LLM n’est jamais appelé (INV6)', async () => {
     const out = await runAgentFetchExecutor({
+      access: allowAllRobots,
       spec: { ...spec('fetch'), request: { url: url(CHALLENGE_200), allowed_hosts: [CHALLENGE_200] } },
       outputSchema: itemSchema('F-E4'),
       llm: extractClient(),
@@ -253,6 +256,7 @@ describe('E4 agent_fetch : HTML irrégulier mis en forme par le rôle extract', 
     const bad = scripted.json({ items: [{ id: 'zz_test_product_x', title: 't', price_eur: 'cher', category: null }] });
     fake.setScenario(EXTRACT_MODEL, [bad, bad, bad]);
     const out = await runAgentFetchExecutor({
+      access: allowAllRobots,
       spec: spec('fetch'),
       outputSchema: itemSchema('F-E4'),
       llm: extractClient(),
@@ -282,6 +286,7 @@ describe('E6 agent (Stagehand 3.7.3) puis compilation E6 → E5 rejouée sans LL
     const monitor = startNetMonitor();
     const out = await withEgress([AGENT_HOSTS.e6], (egress) =>
       runAgentExecutor({
+        access: allowAllRobots,
         spec: e6Spec(),
         outputSchema: itemSchema('F-E6'),
         signal,
@@ -325,7 +330,7 @@ describe('E6 agent (Stagehand 3.7.3) puis compilation E6 → E5 rejouée sans LL
     const before = fake.requests;
     for (let i = 0; i < 2; i++) {
       const out = await withEgress([AGENT_HOSTS.e6], (egress) =>
-        runHybridExecutor({ spec: compiled!, outputSchema: itemSchema('F-E6'), signal, guard, egress, pool, allowWriteActions: false, maxCostUsd: 0.5 }),
+        runHybridExecutor({ access: allowAllRobots, spec: compiled!, outputSchema: itemSchema('F-E6'), signal, guard, egress, pool, allowWriteActions: false, maxCostUsd: 0.5 }),
       );
       expect(out.result.ok).toBe(true);
       if (out.result.ok) expect(out.result.records).toEqual([agentReference('F-E6')]);
@@ -343,6 +348,7 @@ describe('E6 agent (Stagehand 3.7.3) puis compilation E6 → E5 rejouée sans LL
     fake.setScenario(AGENT_MODEL, stagehandScript([scripted.toolCalls([{ name: 'act', arguments: { action: `click the link "${ref.title}"` } }])], {}));
     const out = await withEgress([AGENT_HOSTS.e6], (egress) =>
       runHybridExecutor({
+        access: allowAllRobots,
         spec: spec.spec,
         outputSchema: itemSchema('F-E6'),
         signal,
@@ -368,6 +374,7 @@ describe('arrêt sur refus (INV6)', () => {
     fake.setScenario(AGENT_MODEL, stagehandScript([], { items: [] }));
     const out = await withEgress([CHALLENGE_403], (egress) =>
       runAgentExecutor({
+        access: allowAllRobots,
         spec: { schema_version: 1, kind: 'agent', start_url: url(CHALLENGE_403), allowed_hosts: [CHALLENGE_403], instruction: 'Extract the products.', limits: { max_steps: 10, timeout_ms: 60_000 } },
         outputSchema: itemSchema('F-E6'),
         signal,
@@ -410,6 +417,7 @@ describe('injection de prompt (08 §4) : 0 requête vers le domaine piège', () 
     );
     const out = await withEgress([AGENT_HOSTS.inj], (egress) =>
       runAgentExecutor({
+        access: allowAllRobots,
         spec: injSpec(),
         outputSchema: itemSchema('F-INJ'),
         signal,
@@ -451,6 +459,7 @@ describe('injection de prompt (08 §4) : 0 requête vers le domaine piège', () 
     );
     const out = await withEgress([AGENT_HOSTS.inj], (egress) =>
       runAgentExecutor({
+        access: allowAllRobots,
         spec: injSpec(),
         outputSchema: itemSchema('F-INJ'),
         signal,
@@ -480,6 +489,7 @@ describe('injection de prompt (08 §4) : 0 requête vers le domaine piège', () 
     fake.setScenario(EXTRACT_MODEL, [scripted.json(agentReference('F-INJ'))]);
     const session = openNetworkSession({ rung: { mode: 'direct' }, guard, allowedHosts: [AGENT_HOSTS.inj] });
     const out = await runAgentFetchExecutor({
+      access: allowAllRobots,
       spec: {
         schema_version: 1,
         kind: 'agent_fetch',
@@ -516,6 +526,7 @@ describe('injection de prompt (08 §4) : 0 requête vers le domaine piège', () 
   test('assert_stagehand_local_only — Stagehand hors du mode local (clé Brave dans l’environnement) : refus avant tout appel, aucun repli', async () => {
     const out = await withEgress([AGENT_HOSTS.inj], (egress) =>
       runAgentExecutor({
+        access: allowAllRobots,
         spec: injSpec(),
         outputSchema: itemSchema('F-INJ'),
         signal,
@@ -552,6 +563,7 @@ describe('plafond de coût de l’essai (04b « Schéma et coût », 08 §1) : r
     const maxCostUsd = 0.1;
     const out = await withEgress([AGENT_HOSTS.e6], (egress) =>
       runHybridExecutor({
+        access: allowAllRobots,
         spec: hybrid(
           [
             { op: 'agent', instruction: `Open the detail page of the product named "${ref().title}".` },
@@ -583,6 +595,7 @@ describe('plafond de coût de l’essai (04b « Schéma et coût », 08 §1) : r
     const bad = scripted.json({ items: [{ id: 'zz_test_product_x', title: 't', price_eur: 'cher', category: null }] });
     fake.setScenario(EXTRACT_MODEL, [bad, bad, bad]);
     const out = await runAgentFetchExecutor({
+      access: allowAllRobots,
       spec: {
         schema_version: 1,
         kind: 'agent_fetch',
@@ -607,6 +620,7 @@ describe('plafond de coût de l’essai (04b « Schéma et coût », 08 §1) : r
     fake.setScenario(AGENT_MODEL, stagehandScript([scripted.toolCalls([{ name: 'act', arguments: { action: `click the link "${ref().title}"` } }])], { items: [ref()] }));
     const out = await withEgress([AGENT_HOSTS.e6], (egress) =>
       runAgentExecutor({
+        access: allowAllRobots,
         spec: { schema_version: 1, kind: 'agent', start_url: url(AGENT_HOSTS.e6), allowed_hosts: [AGENT_HOSTS.e6], instruction: task('F-E6').instruction, limits: { max_steps: 10, timeout_ms: 90_000 } },
         outputSchema: itemSchema('F-E6'),
         signal,
@@ -630,6 +644,7 @@ describe('plafond de coût de l’essai (04b « Schéma et coût », 08 §1) : r
   test('assert_llm_cost_null_when_price_missing — E4 sans prix du modèle : coût null, jamais un succès dont le coût est inconnu', async () => {
     fake.setScenario(EXTRACT_MODEL, [scripted.json(agentReference('F-E4'))]);
     const out = await runAgentFetchExecutor({
+      access: allowAllRobots,
       spec: {
         schema_version: 1,
         kind: 'agent_fetch',
@@ -654,6 +669,7 @@ describe('plafond de coût de l’essai (04b « Schéma et coût », 08 §1) : r
     fake.setScenario(AGENT_MODEL, withRawUsage(stagehandScript([scripted.toolCalls([{ name: 'act', arguments: { action: `click the link "${ref().title}"` } }])], { items: [ref()] }), null));
     const out = await withEgress([AGENT_HOSTS.e6], (egress) =>
       runAgentExecutor({
+        access: allowAllRobots,
         spec: { schema_version: 1, kind: 'agent', start_url: url(AGENT_HOSTS.e6), allowed_hosts: [AGENT_HOSTS.e6], instruction: task('F-E6').instruction, limits: { max_steps: 10, timeout_ms: 90_000 } },
         outputSchema: itemSchema('F-E6'),
         signal,
@@ -683,6 +699,7 @@ describe('plafond de coût de l’essai (04b « Schéma et coût », 08 §1) : r
     fake.setScenario(AGENT_MODEL, withRawUsage(stagehandScript([scripted.toolCalls([{ name: 'act', arguments: { action: `click the link "${ref().title}"` } }])], { items: [ref()] }), { cost: PROVIDER_USD }));
     const out = await withEgress([AGENT_HOSTS.e6], (egress) =>
       runAgentExecutor({
+        access: allowAllRobots,
         spec: { schema_version: 1, kind: 'agent', start_url: url(AGENT_HOSTS.e6), allowed_hosts: [AGENT_HOSTS.e6], instruction: task('F-E6').instruction, limits: { max_steps: 10, timeout_ms: 90_000 } },
         outputSchema: itemSchema('F-E6'),
         signal,
@@ -722,6 +739,7 @@ describe('plafond de coût de l’essai (04b « Schéma et coût », 08 §1) : r
     if (!spec.ok) throw new Error(spec.errors.join(' ; '));
     const out = await withEgress([AGENT_HOSTS.e6], (egress) =>
       runHybridExecutor({
+        access: allowAllRobots,
         spec: spec.spec,
         outputSchema: itemSchema('F-E6'),
         signal,
@@ -745,6 +763,7 @@ describe('défi servi en 200 en E5 et E6 (INV6) : classé avant tout appel au mo
     fake.setScenario(AGENT_MODEL, stagehandScript([], { items: [] }));
     const out = await withEgress([CHALLENGE_200], (egress) =>
       runAgentExecutor({
+        access: allowAllRobots,
         spec: { schema_version: 1, kind: 'agent', start_url: url(CHALLENGE_200), allowed_hosts: [CHALLENGE_200], instruction: 'Extract the products.', limits: { max_steps: 10, timeout_ms: 60_000 } },
         outputSchema: itemSchema('F-E6'),
         signal,
@@ -768,7 +787,7 @@ describe('défi servi en 200 en E5 et E6 (INV6) : classé avant tout appel au mo
     const spec = validateHybridSpec({ schema_version: 1, kind: 'hybrid', start_url: url(CHALLENGE_200), allowed_hosts: [CHALLENGE_200], steps: [], extract: { mode: 'labels', fields: { title: { heading: 1 } } } });
     if (!spec.ok) throw new Error(spec.errors.join(' ; '));
     const out = await withEgress([CHALLENGE_200], (egress) =>
-      runHybridExecutor({ spec: spec.spec, outputSchema: { type: 'object', properties: { title: { type: 'string' } }, required: ['title'] }, signal, guard, egress, pool, allowWriteActions: false, maxCostUsd: 0.5 }),
+      runHybridExecutor({ access: allowAllRobots, spec: spec.spec, outputSchema: { type: 'object', properties: { title: { type: 'string' } }, required: ['title'] }, signal, guard, egress, pool, allowWriteActions: false, maxCostUsd: 0.5 }),
     );
     expect(out.result).toMatchObject({ ok: false, failure: { failure_class: 'blocked_by_protection' } });
   }, 60_000);
@@ -792,7 +811,7 @@ describe('écritures sans allow_write_actions (08 §4 mesure 4) : E5 sur le pool
     const before = local.posts;
     const out = await withEgress(
       [LOCAL],
-      (egress) => runHybridExecutor({ spec: writeHybrid(), outputSchema: LOCAL_ITEM, signal, guard: localGuard, egress, pool, allowWriteActions: false, maxCostUsd: 0.5 }),
+      (egress) => runHybridExecutor({ access: allowAllRobots, spec: writeHybrid(), outputSchema: LOCAL_ITEM, signal, guard: localGuard, egress, pool, allowWriteActions: false, maxCostUsd: 0.5 }),
       localGuard,
     );
     expect(local.paths).toContain('GET /');
@@ -807,6 +826,7 @@ describe('écritures sans allow_write_actions (08 §4 mesure 4) : E5 sur le pool
       [LOCAL],
       (egress) =>
         runAgentExecutor({
+          access: allowAllRobots,
           spec: { schema_version: 1, kind: 'agent', start_url: localUrl('/'), allowed_hosts: [LOCAL], instruction: 'Read the product sheet.', limits: { max_steps: 10, timeout_ms: 90_000 } },
           outputSchema: LOCAL_ITEM,
           signal,
@@ -837,6 +857,7 @@ describe('prompts de Stagehand : llm.redact et jetons d’URL (08 §1, 08 §4 me
       [LOCAL],
       (egress) =>
         runAgentExecutor({
+          access: allowAllRobots,
           spec: { schema_version: 1, kind: 'agent', start_url: localUrl('/contact?session=zz_secret_token_42'), allowed_hosts: [LOCAL], instruction: 'Read the contact sheet.', limits: { max_steps: 10, timeout_ms: 90_000 } },
           outputSchema: LOCAL_ITEM,
           signal,
@@ -868,6 +889,7 @@ describe('prompts de Stagehand : llm.redact et jetons d’URL (08 §1, 08 §4 me
       [LOCAL],
       (egress) =>
         runAgentExecutor({
+          access: allowAllRobots,
           spec: { schema_version: 1, kind: 'agent', start_url: localUrl('/contact'), allowed_hosts: [LOCAL], instruction: 'Read the contact sheet.', limits: { max_steps: 10, timeout_ms: 90_000 } },
           outputSchema: LOCAL_ITEM,
           signal,
@@ -902,7 +924,7 @@ describe('Chromium agentique : service workers bloqués (leurs requêtes échapp
     const result = await withEgress(
       [LOCAL],
       async (egress) => {
-        const ab = await launchAgentBrowser({ egressServer: egress.server, allowedHosts: [LOCAL], allowWriteActions: false });
+        const ab = await launchAgentBrowser({ checkRequest: allowAllRequests, egressServer: egress.server, allowedHosts: [LOCAL], allowWriteActions: false });
         try {
           await ab.page.goto(localUrl('/sw'));
           return await ab.page.evaluate(async () => {
@@ -940,6 +962,7 @@ describe('F-E5 (pagination par bouton) : point faible connu de l’ADR 0001', ()
     );
     const out = await withEgress([AGENT_HOSTS.e5], (egress) =>
       runAgentExecutor({
+        access: allowAllRobots,
         spec: { schema_version: 1, kind: 'agent', start_url: url(AGENT_HOSTS.e5), allowed_hosts: [AGENT_HOSTS.e5], instruction: task('F-E5').instruction, limits: { max_steps: 10, timeout_ms: 90_000 } },
         outputSchema: itemSchema('F-E5'),
         signal,
@@ -995,6 +1018,7 @@ describe('BROWSER_CONCURRENCY (14 §11) : le Chromium dédié de l’agent prend
     const trial = (model: string) =>
       withEgress([AGENT_HOSTS.e6], (egress) =>
         runAgentExecutor({
+          access: allowAllRobots,
           spec: { schema_version: 1, kind: 'agent', start_url: url(AGENT_HOSTS.e6), allowed_hosts: [AGENT_HOSTS.e6], instruction: task('F-E6').instruction, limits: { max_steps: 10, timeout_ms: 90_000 } },
           outputSchema: itemSchema('F-E6'),
           signal,
