@@ -16,6 +16,7 @@ import {
 } from '@runtime/core';
 import { sql } from 'drizzle-orm';
 import {
+  type AnyPgColumn,
   bigint,
   boolean,
   check,
@@ -338,6 +339,8 @@ export const apis = pgTable(
     pinned: boolean('pinned').notNull().default(false),
     repairLeaseOwner: text('repair_lease_owner'),
     repairLeaseUntil: tstz('repair_lease_until'),
+    // 0006_scheduling_webhooks (2.5) : un warning au-delà de D n'alerte qu'une fois par épisode.
+    warningAlertedAt: tstz('warning_alerted_at'),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
@@ -411,6 +414,10 @@ export const runs = pgTable(
     jobId: uuid('job_id'),
     workerId: text('worker_id'),
     requeueCount: integer('requeue_count').notNull().default(0),
+    // 0006_scheduling_webhooks (2.5) : planification d'origine, instant du déclenchement, job d'origine (unique).
+    scheduleId: uuid('schedule_id').references((): AnyPgColumn => schedules.id, { onDelete: 'set null' }),
+    scheduledAt: tstz('scheduled_at'),
+    scheduleJobId: uuid('schedule_job_id'),
     createdAt: createdAt(),
     startedAt: tstz('started_at'),
     finishedAt: tstz('finished_at'),
@@ -710,6 +717,12 @@ export const webhookSubscriptions = pgTable(
     secretId: uuid('secret_id').references(() => secrets.id, { onDelete: 'set null' }),
     status: text('status', { enum: ['active', 'disabled'] }).notNull().default('active'),
     disabledAt: tstz('disabled_at'),
+    // 0006_scheduling_webhooks (2.5) : rotation à deux secrets, désactivation après 5 jours d'échecs.
+    previousSecretId: uuid('previous_secret_id').references(() => secrets.id, { onDelete: 'set null' }),
+    previousSecretExpiresAt: tstz('previous_secret_expires_at'),
+    failingSince: tstz('failing_since'),
+    lastSuccessAt: tstz('last_success_at'),
+    testedAt: tstz('tested_at'),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
@@ -731,6 +744,13 @@ export const webhookDeliveries = pgTable(
     status: text('status', { enum: ['pending', 'succeeded', 'failed'] }).notNull().default('pending'),
     httpStatus: integer('http_status'),
     nextAttemptAt: tstz('next_attempt_at'),
+    // 0006_scheduling_webhooks (2.5) : journal de livraison et charge rejouable.
+    eventId: uuid('event_id').notNull().defaultRandom(),
+    payload: jsonb('payload').notNull().default({}),
+    durationMs: integer('duration_ms'),
+    responseExcerpt: text('response_excerpt'),
+    errorCode: text('error_code'),
+    finishedAt: tstz('finished_at'),
     createdAt: createdAt(),
   },
   (t) => [

@@ -20,7 +20,8 @@ export type QueueDefinition = {
   heartbeatSeconds: number;
   /** 0 pour `run` : la reprise est décidée par le balayeur (fenêtre `job_id`), pas par pg-boss. */
   retryLimit: number;
-  policy?: 'standard' | 'exclusive' | 'singleton';
+  /** `short` : un seul job en attente par clé d'unicité (alertes regroupées). */
+  policy?: 'standard' | 'exclusive' | 'singleton' | 'short';
 };
 
 export type QueuedJob<T> = { id: string; data: T; signal: AbortSignal };
@@ -36,7 +37,31 @@ export interface JobQueue {
    * Met un job en file. Avec `tx`, l'insertion se fait dans la transaction de l'appelant (run et job : même COMMIT).
    * Renvoie l'identifiant du job.
    */
-  enqueue<T extends object>(queue: string, data: T, options?: { tx?: QueryClient; id?: string }): Promise<string>;
+  enqueue<T extends object>(
+    queue: string,
+    data: T,
+    options?: { tx?: QueryClient; id?: string; /** Le job ne devient disponible qu'après ce délai (s). */ startAfterSeconds?: number },
+  ): Promise<string>;
+  /**
+   * Comme `enqueue` avec une clé d'unicité : tant qu'un job de la même clé attend dans la file (politique `short`), le
+   * doublon est écarté sans erreur et `null` est rendu (regroupement des alertes sur une fenêtre).
+   */
+  enqueueOnce<T extends object>(
+    queue: string,
+    data: T,
+    options: { singletonKey: string; startAfterSeconds?: number; tx?: QueryClient },
+  ): Promise<string | null>;
+  /**
+   * Miroir d'une planification (08 § 5) : `schedules` reste la source de vérité, la file n'en garde qu'une copie
+   * reconstruite au démarrage. `key` = `schedules.id` (sans clé, une planification écrase la précédente).
+   * `missed: 'once'` rattrape une occurrence manquée pendant un déploiement.
+   */
+  schedule(queue: string, key: string, cron: string, data: object, options: { timezone: string; missed: 'skip' | 'once' }): Promise<void>;
+  unschedule(queue: string, key: string): Promise<void>;
+  /** Clés (`schedules.id`) des planifications que la file porte pour cette file. */
+  scheduledKeys(queue: string): Promise<string[]>;
+  /** Prochaines occurrences d'une expression, calculées sans toucher la base (aide à la saisie, contrôle de fréquence). */
+  previewSchedule(cron: string, options: { timezone: string; count: number; from?: Date }): Date[];
   /** Consomme la file : `concurrency` jobs à la fois, un par appel de `handler`. Renvoie l'identifiant de l'abonnement. */
   work<T>(queue: string, options: { concurrency: number; pollingIntervalSeconds?: number }, handler: (job: QueuedJob<T>) => Promise<void>): Promise<string>;
   /** Cesse de prendre des jobs (les jobs en cours continuent). */

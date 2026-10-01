@@ -6,7 +6,9 @@
 // 3. par job : prise du run (jeton `job_id`), `runs.heartbeat_at` toutes les RUN_HEARTBEAT_SECONDS, exécution,
 //    clôture ; perte du bail (annulation, reprise) → interruption ;
 // 4. `worker_heartbeats` toutes les 15 s ; balayeur des runs orphelins toutes les 60 s ;
-// 5. SIGTERM : `draining`, plus de nouveau job, fin des runs en cours sous SHUTDOWN_TIMEOUT_SECONDS, sinon remise en file.
+// 5. planification, webhooks et alertes (tâche 2.5) : voir scheduling.ts ; la fin d'un run est annoncée dans la transaction
+//    qui la clôt (`finishRunAndNotify`) ;
+// 6. SIGTERM : `draining`, plus de nouveau job, fin des runs en cours sous SHUTDOWN_TIMEOUT_SECONDS, sinon remise en file.
 import { randomBytes } from 'node:crypto';
 import { hostname } from 'node:os';
 import {
@@ -23,7 +25,7 @@ import {
   claimRun,
   currentSchemaVersion,
   expectedSchemaVersion,
-  finishRun,
+  finishRunAndNotify,
   heartbeatRun,
   holdSecretsLock,
   keyCheck,
@@ -33,12 +35,15 @@ import {
   requeueRun,
   resolveConnections,
   runQueueDefinition,
+  secretStore,
   sweepOrphans,
   type SweepResult,
 } from '@runtime/db';
+import { SsrfGuard } from '@runtime/core/net';
 import pg from 'pg';
 import { pino, type Logger } from 'pino';
 import type { WorkerConfig } from './config.js';
+import { startScheduling, type Scheduling } from './scheduling.js';
 
 class WorkerStartupError extends Error {
   override name = 'WorkerStartupError';
@@ -70,6 +75,15 @@ export type StartWorkerOptions = {
   executor?: RunExecutor;
   logger?: Logger;
   workerId?: string;
+  /** Réglages de la planification (tests : horloge simulée, passages du cron rapprochés). */
+  scheduling?: {
+    clock?: ConstructorParameters<typeof PgBossJobQueue>[0]['clock'];
+    now?: () => Date;
+    cronMonitorIntervalSeconds?: number;
+    cronWorkerIntervalSeconds?: number;
+    supervise?: boolean;
+    smtpCa?: string[];
+  };
 };
 
 type AbortCause = 'lease_lost' | 'expired' | 'shutdown';
@@ -94,8 +108,10 @@ export async function startWorker(options: StartWorkerOptions): Promise<Worker> 
   lockClient.on('error', (error) => log.error({ err: errorDetail(error) }, 'verrou des secrets : connexion perdue'));
   let releaseLock: (() => Promise<void>) | undefined;
   let queue: PgBossJobQueue | undefined;
+  let scheduling: Scheduling | undefined;
 
   const cleanup = async () => {
+    await scheduling?.stop().catch(() => undefined);
     await queue?.stop({ timeoutMs: 1000 }).catch(() => undefined);
     await releaseLock?.().catch(() => undefined);
     await lockClient.end().catch(() => undefined);
@@ -116,10 +132,26 @@ export async function startWorker(options: StartWorkerOptions): Promise<Worker> 
       connectionString: sessionUrl,
       application_name: 'runtime-worker-queue',
       onError: (error) => log.error({ err: errorDetail(error) }, 'file : erreur pg-boss'),
+      schedule: true,
+      ...(options.scheduling?.clock ? { clock: options.scheduling.clock } : {}),
+      ...(options.scheduling?.cronMonitorIntervalSeconds ? { cronMonitorIntervalSeconds: options.scheduling.cronMonitorIntervalSeconds } : {}),
+      ...(options.scheduling?.cronWorkerIntervalSeconds ? { cronWorkerIntervalSeconds: options.scheduling.cronWorkerIntervalSeconds } : {}),
+      ...(options.scheduling?.supervise === undefined ? {} : { supervise: options.scheduling.supervise }),
     });
     await queue.start();
     await queue.createQueue(runQueueDefinition(config.runBudgetSeconds));
     await beatWorker(pool, { workerId, version: config.version });
+    scheduling = await startScheduling({
+      pool,
+      queue,
+      store: secretStore(pool, config.keyring, checked),
+      guard: new SsrfGuard({ policy: config.ssrfPolicy }),
+      log,
+      now: options.scheduling?.now ?? (() => new Date()),
+      warningCheckSeconds: config.warningCheckSeconds,
+      pollingIntervalSeconds: config.queuePollingSeconds,
+      ...(options.scheduling?.smtpCa ? { smtpCa: options.scheduling.smtpCa } : {}),
+    });
     log.info({ workerId, key: checked.fingerprint, concurrency: config.concurrency }, 'worker démarré');
   } catch (error) {
     await cleanup();
@@ -202,7 +234,7 @@ export async function startWorker(options: StartWorkerOptions): Promise<Worker> 
       }
       // Bail perdu ou arrêt : le run a déjà été annulé, repris ou remis en file ; rien n'est écrit.
       if (entry.cause === 'lease_lost' || entry.cause === 'shutdown') return;
-      const closed = await finishRun(pool, runId, jobId, result);
+      const closed = await finishRunAndNotify(pool, q, { runId, jobId, result });
       log.info({ runId, state: result.state, closed }, 'run terminé');
     } finally {
       clearInterval(heartbeat);
@@ -227,6 +259,7 @@ export async function startWorker(options: StartWorkerOptions): Promise<Worker> 
       draining = true;
       log.info({ inFlight: running.size }, 'arrêt : plus de nouveau job');
       clearInterval(sweepTimer);
+      await scheduling?.stop();
       await q.offWork(RUN_QUEUE).catch((error: unknown) => log.warn({ err: errorDetail(error) }, 'arrêt : offWork'));
       await beat();
       const all = () => Promise.all([...running.values()].map((r) => r.done));

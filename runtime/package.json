@@ -44,6 +44,7 @@
     "fastify": "catalog:",
     "knip": "catalog:",
     "pg": "catalog:",
+    "standardwebhooks": "catalog:",
     "typescript": "catalog:",
     "typescript-eslint": "catalog:",
     "vitest": "catalog:"

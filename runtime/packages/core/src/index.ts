@@ -20,3 +20,6 @@ export type { FailureClass } from './model/index.js';
 export type { FailureClass as StatusFailureClass } from './status/index.js';
 export * from './run/index.js';
 export * from './pacing/index.js';
+export * from './schedule/index.js';
+export * from './webhook/index.js';
+export * from './alerts/index.js';

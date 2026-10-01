@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Configuration de `worker` (14 § 2-4) : lue une fois au démarrage ; MASTER_KEY retirée de l'environnement.
 import { loadKeyring, type Keyring } from '@runtime/core';
+import { ssrfPolicyFromEnv, type SsrfPolicy } from '@runtime/core/net';
 import { RUN_DEFAULTS } from '@runtime/db';
 
 export class WorkerConfigError extends Error {
@@ -23,6 +24,10 @@ export type WorkerConfig = {
   sweepIntervalSeconds: number;
   workerHeartbeatSeconds: number;
   queuePollingSeconds: number;
+  /** Garde SSRF (INV10) : webhooks et relais SMTP ; `ALLOWED_PRIVATE_HOSTS`, `ALLOWED_EGRESS_PORTS`. */
+  ssrfPolicy: SsrfPolicy;
+  /** Période du contrôle des `warning` qui durent au-delà de D (s). */
+  warningCheckSeconds: number;
 };
 
 function positive(env: NodeJS.ProcessEnv, name: string, fallback: number, min = 0.1): number {
@@ -59,5 +64,7 @@ export function loadWorkerConfig(env: NodeJS.ProcessEnv = process.env): WorkerCo
     sweepIntervalSeconds: positive(env, 'SWEEP_INTERVAL_SECONDS', RUN_DEFAULTS.sweepIntervalSeconds),
     workerHeartbeatSeconds: positive(env, 'WORKER_HEARTBEAT_SECONDS', 15),
     queuePollingSeconds: positive(env, 'QUEUE_POLLING_SECONDS', 2, 0.5),
+    ssrfPolicy: ssrfPolicyFromEnv(env),
+    warningCheckSeconds: positive(env, 'WARNING_CHECK_SECONDS', 900, 1),
   };
 }

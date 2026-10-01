@@ -17,6 +17,7 @@
   "devDependencies": {
     "@types/node": "catalog:",
     "@types/pg": "catalog:",
+    "pg-boss": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:"
   }

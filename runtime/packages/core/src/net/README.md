@@ -4,7 +4,8 @@ Spécification : CDC `08b-specs-securite-applicative.md` §1. Tests : `net.unit.
 
 ## Règles pour le code appelant
 
-- **fetch serveur, `ctx.fetch`, webhooks** : utiliser uniquement `guardedFetch` (ou `deliverWebhook`, qui ne suit aucune redirection). Ne jamais appeler le `fetch` global ni un `Agent` undici non gardé.
+- **fetch serveur, `ctx.fetch`, webhooks** : utiliser uniquement `guardedFetch` (ou `deliverWebhook`, qui ne suit aucune redirection ; `sendWebhookAttempt` y ajoute la signature Standard Webhooks, le délai de 15 s et le classement du résultat). Ne jamais appeler le `fetch` global ni un `Agent` undici non gardé.
+- **SMTP** : `sendMail` (`smtp.ts`) résout le relais par `guard.resolveAnyPort` (port libre : réglage de l'admin, pas une cible de membre ; noms, adresses et dérogations contrôlés à l'identique), ouvre le socket sur l'adresse validée et recontrôle `remoteAddress`. STARTTLS exigé (pas de repli en clair), identifiants jamais envoyés hors TLS.
 - **Chromium** : lancer avec `chromiumEgressLaunchOptions(proxy.url)` (proxy d'egress local, DNS de Chromium coupé, pas de contournement de la boucle locale) et naviguer uniquement avec `guardedGoto(page, url, guard)` (http(s) seulement).
 - **`playwright.request.newContext()` / `APIRequestContext`** : ce client HTTP de Playwright ne passe pas par le navigateur. Il doit recevoir explicitement le même proxy (`request.newContext({ proxy: { server: proxy.url } })`) ; à câbler en tâche 1.6. `browser.newContext()` hérite du proxy de lancement.
 - **Dérogations** : `ALLOWED_PRIVATE_HOSTS` (noms exacts ou CIDR d'au plus /8 en IPv4 et /16 en IPv6), vide par défaut. Les métadonnées cloud, `0.0.0.0`, le multicast et la diffusion ne sont jamais dérogeables.

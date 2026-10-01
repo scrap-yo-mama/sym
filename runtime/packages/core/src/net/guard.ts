@@ -189,8 +189,17 @@ export class SsrfGuard {
    * Renvoie l'adresse à épingler : le socket s'ouvre sur elle, jamais sur une nouvelle résolution.
    */
   async resolve(hostname: string, port: number): Promise<ResolvedAddress> {
+    this.checkPort(normalizeHostname(hostname), port);
+    return this.resolveAnyPort(hostname, port);
+  }
+
+  /**
+   * Comme `resolve`, sans la liste de ports : pour une destination que l'admin a configurée lui-même (relais SMTP, 587 ou
+   * 465), pas pour une cible saisie par un membre. Noms, adresses résolues et exceptions `ALLOWED_PRIVATE_HOSTS` restent
+   * contrôlés à l'identique (métadonnées cloud refusées sans exception).
+   */
+  async resolveAnyPort(hostname: string, port: number): Promise<ResolvedAddress> {
     const host = normalizeHostname(hostname);
-    this.checkPort(host, port);
     const allowedByName = this.policy.allowedPrivateNames.has(host) || this.policy.testAllowPrivate;
     if (HARD_BLOCKED_NAMES.has(host) || (nameBlocked(host) && !allowedByName)) {
       throw new SsrfBlockedError({ reason: 'blocked_hostname', host, port });

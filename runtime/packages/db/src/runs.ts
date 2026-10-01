@@ -63,12 +63,16 @@ const ACTIVE = ACTIVE_RUN_STATES as readonly string[];
 // Côté web (sous withActor)
 // ---------------------------------------------------------------------------------------------------------------
 
+/** Origine planifiée d'un run (2.5) : planification, instant du déclenchement, job `scheduled-run` (unique : un rejeu ne crée rien). */
+export type ScheduleOrigin = { scheduleId: string; scheduledAt: Date; scheduleJobId: string | null };
+
 export type CreateRunInput = {
   apiId: string;
   ownerId: string;
   trigger: RunTrigger;
   input?: unknown;
   traceId?: string | null;
+  schedule?: ScheduleOrigin;
 };
 
 /**
@@ -82,9 +86,21 @@ export async function createRun(tx: Queryable, queue: JobQueue, input: CreateRun
   const runId = randomUUID();
   const jobId = randomUUID();
   await tx.query(
-    `INSERT INTO runs (id, api_id, owner_id, api_owner_id, trigger, input, trace_id, job_id, state, heartbeat_at)
-     VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, 'queued', now())`,
-    [runId, input.apiId, input.ownerId, apiOwner, input.trigger, input.input === undefined ? null : JSON.stringify(input.input), input.traceId ?? null, jobId],
+    `INSERT INTO runs (id, api_id, owner_id, api_owner_id, trigger, input, trace_id, job_id, state, heartbeat_at, schedule_id, scheduled_at, schedule_job_id)
+     VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, 'queued', now(), $9, $10, $11)`,
+    [
+      runId,
+      input.apiId,
+      input.ownerId,
+      apiOwner,
+      input.trigger,
+      input.input === undefined ? null : JSON.stringify(input.input),
+      input.traceId ?? null,
+      jobId,
+      input.schedule?.scheduleId ?? null,
+      input.schedule?.scheduledAt ?? null,
+      input.schedule?.scheduleJobId ?? null,
+    ],
   );
   await queue.enqueue(RUN_QUEUE, { run_id: runId }, { tx: tx as QueryClient, id: jobId });
   return { runId, jobId };
@@ -96,10 +112,20 @@ export async function recordSkippedRun(
   input: Omit<CreateRunInput, 'input'> & { state: SkippedRunState; reason?: string },
 ): Promise<string> {
   const { rows } = await tx.query<{ id: string }>(
-    `INSERT INTO runs (api_id, owner_id, api_owner_id, trigger, state, error_detail, trace_id, finished_at, duration_ms)
-     SELECT a.id, $2, a.owner_id, $3, $4, $5, $6, now(), 0 FROM apis a WHERE a.id = $1
+    `INSERT INTO runs (api_id, owner_id, api_owner_id, trigger, state, error_detail, trace_id, finished_at, duration_ms, schedule_id, scheduled_at, schedule_job_id)
+     SELECT a.id, $2, a.owner_id, $3, $4, $5, $6, now(), 0, $7, $8, $9 FROM apis a WHERE a.id = $1
      RETURNING id`,
-    [input.apiId, input.ownerId, input.trigger, input.state, input.reason ?? null, input.traceId ?? null],
+    [
+      input.apiId,
+      input.ownerId,
+      input.trigger,
+      input.state,
+      input.reason ?? null,
+      input.traceId ?? null,
+      input.schedule?.scheduleId ?? null,
+      input.schedule?.scheduledAt ?? null,
+      input.schedule?.scheduleJobId ?? null,
+    ],
   );
   const id = rows[0]?.id;
   if (!id) throw new RunNotFoundError(`API ${input.apiId} introuvable`);
