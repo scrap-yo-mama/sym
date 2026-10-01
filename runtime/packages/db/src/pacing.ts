@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Cadence par domaine distribuée (tâche 1.9, 04 § 7, 17, O6 § 06) : magasin PostgreSQL de `domain_pacing_state`.
 //
 // - Clé = domaine seul : ni owner_id, ni project_id, ni proxy, ni IP (assert_pacing_key_is_domain).

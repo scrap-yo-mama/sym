@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Règles pures de la cadence (04 § 7, 17 § cadence, O6 § 06). Aucune I/O.
 
 export type PacingPolicy = {

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Cadence par domaine (1.9), partie pure : clé = domaine, délai effectif, gigue, Retry-After, orchestration du worker.
 import { describe, expect, test } from 'vitest';
 import {

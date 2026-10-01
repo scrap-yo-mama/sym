@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Cadence par domaine distribuée sur base réelle (tâche 1.9, matrice PG) : réservation atomique entre deux pools,
 // Retry-After, disjoncteur, budget de retries. Horloge injectée ou créneaux lus, jamais de sleep.
 import { DomainPacer, type PacingClock, type PacingStore } from '@runtime/core';

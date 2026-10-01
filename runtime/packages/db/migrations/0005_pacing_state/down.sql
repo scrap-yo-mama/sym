@@ -1,3 +1,4 @@
+-- SPDX-License-Identifier: AGPL-3.0-only
 ALTER TABLE domain_pacing_state
   DROP COLUMN IF EXISTS window_retries,
   DROP COLUMN IF EXISTS window_requests,

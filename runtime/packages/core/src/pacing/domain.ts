@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Clé de cadence : le domaine enregistrable de la cible, rien d'autre (assert_pacing_key_is_domain, 17 § cadence).
 // Ni l'URL, ni l'API, ni l'utilisateur, ni le proxy, ni l'IP de sortie, ni le jeton de tunnel n'y entrent.
 //

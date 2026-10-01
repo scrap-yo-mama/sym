@@ -1,3 +1,4 @@
+-- SPDX-License-Identifier: AGPL-3.0-only
 -- 0005_pacing_state : cadence par domaine distribuée (tâche 1.9, 04 §7, 17 cadence, O6 § 06).
 -- La clé reste le domaine seul (assert_pacing_key_is_domain). Colonnes ajoutées à domain_pacing_state :
 --   min_delay_ms         dernier délai effectif appliqué (information, métriques) ;

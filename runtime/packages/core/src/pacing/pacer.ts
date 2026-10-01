@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Orchestration côté worker : réserver un créneau, attendre son heure (horloge injectée), rapporter le résultat.
 // La cadence ne connaît ni proxy, ni IP, ni utilisateur, ni API : elle ne prend que la cible (clé = domaine).
 // Un 429 ralentit et peut ouvrir le disjoncteur ; il ne change JAMAIS de réseau (X4, INV6) : ce module n'a d'ailleurs
