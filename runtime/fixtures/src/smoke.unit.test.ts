@@ -10,12 +10,14 @@ interface SiteInfo {
   smoke: { path: string; status: number };
 }
 
-// Inventaire attendu (15 §8) : 12 existantes + défi en 200, 5 ajouts Q1, 6 ajouts S5, 8 accès O8 = 32 sites.
+// Inventaire attendu (15 §8) : 12 existantes + défi en 200, 5 ajouts Q1, 6 ajouts S5, 8 accès O8, 4 du spike 0.6a = 36 sites.
 const EXPECTED: Record<string, string[]> = {
   base: ['api_json', 'ssr', 'spa', 'login', 'challenge', '429', 'geo', 'injection', 'dom', 'signed403', 'irregular', '503', 'challenge_200'],
   q1: ['ssrf', 'slow', 'volume', 'personal', 'scroll'],
   s5: ['next', 'nuxt', 'apollo', 'jsonld', 'cursor', 'linkheader'],
   o8: ['robots', 'robots_4xx', 'robots_5xx', 'robots_redirect', 'robots_big', 'robots_crawl_delay', 'content_signal', 'payment_402'],
+  // Spike 0.6a (eval/spike-0.6a-decision.md §5) : E4, E5, E6 et injection.
+  agent: ['agent_irregular_html', 'agent_mobile_next', 'agent_no_api_unstable_dom', 'agent_prompt_injection'],
 };
 
 let fx: Client;
@@ -32,11 +34,11 @@ beforeEach(async () => {
 });
 
 describe('fixtures : inventaire', () => {
-  it('sert exactement les 32 sites attendus, par lot', () => {
+  it('sert exactement les 36 sites attendus, par lot', () => {
     for (const [lot, ids] of Object.entries(EXPECTED)) {
       expect(sites.filter((s) => s.lot === lot).map((s) => s.id).sort(), lot).toEqual([...ids].sort());
     }
-    expect(sites).toHaveLength(32);
+    expect(sites).toHaveLength(36);
   });
 });
 

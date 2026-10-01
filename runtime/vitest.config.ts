@@ -75,6 +75,8 @@ export default defineConfig({
             'apps/*/src/**/*.contract.test.ts',
             'fixtures/src/**/*.contract.test.ts',
             'tests/**/*.contract.test.ts',
+            // Spike 0.6a : contrats du bras B (faux fournisseur, Chromium local), jamais un LLM réel.
+            'eval/**/*.contract.test.ts',
           ],
         },
       },

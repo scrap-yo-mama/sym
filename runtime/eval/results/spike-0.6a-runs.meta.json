@@ -1,0 +1,46 @@
+{
+  "protocol_file": "eval/spike-0.6a-decision.md",
+  "protocol_commit": "6b363d95361cb723cb266aa18e50cfdb22eeac3e",
+  "protocol_sha256": "1a7aa44903562c26010a8644b68bc4ab96195474e3e3eec8fa8a8972ef9b7d3b",
+  "harness_commit": "83f236d4fc9021d641e9824ef9990392fa41c38d",
+  "harness_worktree_dirty": true,
+  "harness_sources_sha256": "2523f630e65d769e1b5ffbf39957038af9aa178f6e414f41e89bf000d45274f9",
+  "stagehand_version": "3.7.3",
+  "playwright_core_version": "1.63.0",
+  "chromium_version": "153.0.8010.12",
+  "model_id": "zai-org/GLM-5.3",
+  "provider": "DeepInfra (api.deepinfra.com), Chat Completions",
+  "temperature": 0,
+  "price_usd_per_million": {
+    "in": 0.563,
+    "out": 2.5,
+    "in_cached": 0.125
+  },
+  "price_date": "2026-10-01",
+  "price_source": "https://deepinfra.com/zai-org/GLM-5.3 (prix affiché : 0,563 $ in, 0,125 $ in caché, 2,50 $ out par million, remise temporaire de 37,5 % sur le prix catalogue 0,90/0,20/4,00 ; api.deepinfra.com/models/zai-org/GLM-5.3 champ pricing ; recoupé avec usage.estimated_cost)",
+  "shuffle_seed": "0x06a0",
+  "limits": {
+    "maxSteps": 25,
+    "maxDurationMs": 300000,
+    "maxCostUsd": 0.5
+  },
+  "budget_usd": 10,
+  "prior_spend_usd": 0.8034,
+  "started_at": "2026-09-30T23:39:37.217Z",
+  "finished_at": "2026-10-01T00:50:36.990Z",
+  "stop_reason": null,
+  "late_stagehand_cost_usd": 0.0008239769999999202,
+  "total_billed_usd": 3.1364652330000005,
+  "node_version": "v24.21.0",
+  "ssrf_guard": "absente de ce worktree (garde SSRF de core non fusionnée) : RUNTIME_TEST_ALLOW_PRIVATE non utilisé ; réseau fermé par le résolveur de Chromium, le verrou de domaines et le compteur réseau Node",
+  "criteria": {
+    "agentStepCompatible": {
+      "home_loop": true,
+      "stagehand@3.7.3": false
+    },
+    "lockfilePackages": {
+      "home_loop": 1,
+      "stagehand@3.7.3": 111
+    }
+  }
+}

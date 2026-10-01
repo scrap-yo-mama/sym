@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import type { Clock } from './clock.ts';
 
-type Lot = 'base' | 'q1' | 's5' | 'o8';
+type Lot = 'base' | 'q1' | 's5' | 'o8' | 'agent';
 
 export interface FxRequest {
   method: string;

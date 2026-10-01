@@ -3,7 +3,7 @@
 // téléphones dans la plage de fiction 01 99 00 xx xx, noms « Zztest ».
 import { EPOCH_MS } from './clock.ts';
 
-function hashSeed(text: string): number {
+export function hashSeed(text: string): number {
   let h = 0x811c9dc5;
   for (let i = 0; i < text.length; i++) {
     h ^= text.charCodeAt(i);
@@ -12,7 +12,7 @@ function hashSeed(text: string): number {
   return h >>> 0;
 }
 
-function mulberry32(seed: number): () => number {
+export function mulberry32(seed: number): () => number {
   let a = seed >>> 0;
   return () => {
     a = (a + 0x6d2b79f5) >>> 0;

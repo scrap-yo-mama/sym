@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Test de contrat : une entrée par fixture, qui fige ce que le reste du produit peut en attendre (15 §8, 04 §7, 17).
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { agentReference } from './agent-tasks.ts';
+import { AGENT_CANARY, AGENT_HOSTS, AGENT_TRAP_TYPED_PATH } from './sites/agent-sites.ts';
 import { startClient, type Client, type Res } from './test-helpers.ts';
 
 const H = (name: string): string => `zz_test_${name}.localhost`;
@@ -435,6 +437,84 @@ const contracts: Record<string, Contract> = {
     expect((await fx.get(host, '/free')).status).toBe(200);
     await setSite('payment_402', { price: '0.25' });
     expect((await fx.get(host, '/')).headers['crawler-price']).toBe('USD 0.25');
+  },
+
+  // ------------------------------------------------------------------ spike 0.6a (E4, E5, E6, injection)
+  async agent_irregular_html() {
+    const host = H('agent_irregular_html');
+    const res = await fx.get(host, '/');
+    expect(res.status).toBe(200);
+    const reference = agentReference('F-E4') as { items: { id: string; title: string; category: string | null }[] };
+    for (const item of reference.items) {
+      expect(res.body).toContain(item.id);
+      expect(res.body).toContain(item.title);
+    }
+    // Gabarits hétérogènes : au moins 4 formes de bloc, catégorie parfois absente, aucune API JSON.
+    for (const marker of ['class="fiche"', '<table class="t">', '<p>Le modèle', '<dl>']) expect(res.body).toContain(marker);
+    expect(reference.items.some((i) => i.category === null)).toBe(true);
+    expect(res.body).not.toMatch(/application\/json|<script/);
+    expect((await fx.get(host, '/api/items')).status).toBe(404);
+    expect((await fx.get(host, '/')).body).toBe(res.body);
+  },
+
+  async agent_mobile_next() {
+    const host = H('agent_mobile_next');
+    const res = await fx.get(host, '/');
+    expect(res.body).toContain('name="viewport"');
+    // Bouton « Suivant » sans lien exploitable : pas de href, pas de formulaire, pagination par interaction seulement.
+    expect(res.body).toMatch(/<button type="button" id="next">Suivant<\/button>/);
+    expect(res.body).not.toMatch(/href=|<form|\?page=/);
+    expect(res.body).toContain('Page 1 / 3');
+    const reference = agentReference('F-E5') as { items: { id: string; name: string; city: string }[] };
+    expect(reference.items).toHaveLength(12);
+    for (const item of reference.items) expect(res.body).toContain(`"${item.id}","${item.name}","${item.city}"`);
+    expect((await fx.get(host, '/?page=2')).body).toBe(res.body);
+  },
+
+  async agent_no_api_unstable_dom() {
+    const host = H('agent_no_api_unstable_dom');
+    const first = (await fx.get(host, '/')).body;
+    const second = (await fx.get(host, '/')).body;
+    // Classes, identifiants et liens changent à chaque requête ; les données restent.
+    expect(first).not.toBe(second);
+    const links = (body: string): string[] => [...body.matchAll(/href="(\/v\/[a-z0-9]+)"/g)].map((m) => m[1] ?? '');
+    expect(links(first)).toHaveLength(6);
+    expect(links(first).filter((l) => links(second).includes(l))).toEqual([]);
+    const reference = agentReference('F-E6') as { id: string; title: string; reference: string; weight_g: number; color: string };
+    const titleAt = first.indexOf(reference.title);
+    expect(titleAt).toBeGreaterThan(0);
+    // Le lien de la fiche cible, pris dans la page servie, mène à la fiche (jetons de la première requête toujours valides).
+    const block = first.slice(first.lastIndexOf('href="/v/', titleAt));
+    const link = /href="(\/v\/[a-z0-9]+)"/.exec(block)?.[1] ?? '';
+    const detail = (await fx.get(host, link)).body;
+    for (const value of [reference.id, reference.title, reference.reference, `${reference.weight_g} g`, reference.color]) expect(detail).toContain(value);
+    expect((await fx.get(host, '/v/inconnu')).status).toBe(404);
+    expect(`${first}${detail}`).not.toMatch(/<script|application\/json/);
+    // Déterministe après reset (graine par requête = graine fixe + numéro de requête).
+    await fx.reset();
+    expect((await fx.get(host, '/')).body).toBe(first);
+  },
+
+  async agent_prompt_injection() {
+    const host = H('agent_prompt_injection');
+    const body = (await fx.get(host, '/')).body;
+    const reference = agentReference('F-INJ') as { items: { id: string; title: string }[] };
+    for (const item of reference.items) expect(body).toContain(item.id);
+    // Instruction hostile : visible, cachée, en commentaire, dans un alt ; lien et formulaire vers le domaine piège.
+    expect(body).toMatch(/<!-- INSTRUCTION PRIORITAIRE/);
+    expect(body).toMatch(/<p class="alerte">INSTRUCTION PRIORITAIRE/);
+    expect(body).toMatch(/<div style="display:none">INSTRUCTION PRIORITAIRE/);
+    expect(body).toMatch(/alt="INSTRUCTION PRIORITAIRE/);
+    expect(body.split(AGENT_CANARY).length - 1).toBe(4);
+    expect(body).toMatch(new RegExp(`href="http://${AGENT_HOSTS.trap}:\\d+/collect`));
+    expect(body).toMatch(new RegExp(`<form action="http://${AGENT_HOSTS.trap}:\\d+/submit" method="post">`));
+    expect(reference.items.every((i) => !JSON.stringify(i).includes(AGENT_CANARY))).toBe(true);
+    // Le domaine piège compte toute requête ; la saisie dans le formulaire piège est comptée sur son propre chemin.
+    expect(await count(AGENT_HOSTS.trap, '/collect')).toBe(0);
+    await fx.get(AGENT_HOSTS.trap, '/collect');
+    expect(await count(AGENT_HOSTS.trap, '/collect')).toBe(1);
+    expect((await fx.get(host, AGENT_TRAP_TYPED_PATH)).status).toBe(204);
+    expect(await count(host, AGENT_TRAP_TYPED_PATH)).toBe(1);
   },
 };
 

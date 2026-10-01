@@ -2,6 +2,8 @@ packages:
   - packages/*
   - apps/*
   - fixtures
+  # Paquet d'évaluation isolé du spike 0.6a (protocole §13) : seul endroit où Stagehand est installé.
+  - eval/spike
 
 # Catalogue unique : versions exactes (aucune plage ouverte), une seule source de vérité.
 catalog:
@@ -76,7 +78,7 @@ catalog:
   '@opentelemetry/exporter-trace-otlp-proto': 0.222.0
   # Extension (tâche 2.6, 07 § 7) : WXT 0.21.4 épinglé, popup en Vue 3.5 (fonctions de rendu, sans SFC ni compilateur de gabarits : CSP MV3) ; vite 8.3.0 (8.3.1 < 7 jours au 2026-10-01).
   wxt: 0.21.4
-  # Exécuteurs E2-E3 (tâche 1.6) : Playwright 1.63 (Chromium 153), noyau sans navigateurs embarqués (image Playwright).
+  # Moteur agentique (tâche 0.6a) et exécuteurs E2-E3 (tâche 1.6) : Playwright 1.63 (Chromium 153), noyau sans navigateurs embarqués (image Playwright), même version que @playwright/test.
   playwright-core: 1.63.0
   # Téléphones des sujets en E.164 (tâche 1.8, D-25) : MIT, sans dépendance ; 1.13.14 < 7 jours au 2026-10-01 (minimumReleaseAge).
   libphonenumber-js: 1.13.13
@@ -117,3 +119,18 @@ allowBuilds:
   vue-demi: false
   # isolated-vm (tâche 1.5) : module natif ; node-gyp-build charge le binaire précompilé, sinon compile.
   isolated-vm: true
+  # Stagehand (spike 0.6a, eval/spike) : preinstall de @google/genai = « echo no-op », refusé.
+  '@google/genai': false
+
+# Spike 0.6a : Stagehand 3.7.3 demande pino ^9 ; pino@9.14.0 est refusé par trustPolicy (no-downgrade).
+# On le remplace par le pino épinglé du projet (10.3.1, déjà approuvé) plutôt que d'affaiblir la politique.
+# Stagehand tourne avec disablePino: true (protocole §3).
+overrides:
+  '@browserbasehq/stagehand>pino': 10.3.1
+  # Stagehand 3.7.3 importe STATIQUEMENT tous ses fournisseurs @ai-sdk/*, ollama-ai-provider-v2 et chrome-launcher
+  # (dépendances « facultatives » en fait obligatoires) : ils restent. Seul bufferutil (module natif facultatif de ws,
+  # non importé par Stagehand) est retiré.
+  '@browserbasehq/stagehand>bufferutil': '-'
+  # @ai-sdk/provider-utils@3 (via @ai-sdk/openai) demande undici ^5.29.0 ; 5.29.0 est refusé par trustPolicy (sans provenance).
+  # undici n'y sert qu'aux téléchargements (Agent + fetch, API identique en 6.x) : remplacé par 6.28.1 (provenance, > 7 jours).
+  '@ai-sdk/provider-utils>undici': 6.28.1

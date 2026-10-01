@@ -53,8 +53,9 @@
         "src/sandbox/index.ts"
       ]
     },
-    "fixtures": {
+    "eval/spike": {
       "entry": [
+        "src/report.ts",
         "src/**/*.test.ts"
       ],
       "project": [
@@ -109,6 +110,15 @@
         "src/**/*.ts",
         "e2e/**/*.ts",
         "*.ts"
+      ]
+    },
+    "fixtures": {
+      "entry": [
+        "src/**/*.test.ts",
+        "src/agent-tasks.ts"
+      ],
+      "project": [
+        "src/**/*.ts"
       ]
     }
   }
