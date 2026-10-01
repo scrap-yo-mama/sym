@@ -1401,7 +1401,7 @@ paths:
       x-pending: '3.1'
       operationId: testLlmProvider
       tags: [settings]
-      summary: Sonde de 3 appels minuscules d'un couple fournisseur × modèle (08 § 1) ; extension de 05 § 4.2
+      summary: Sonde de 5 appels minuscules d'un couple fournisseur × modèle (08 § 1) ; extension de 05 § 4.2
       requestBody:
         required: true
         content:

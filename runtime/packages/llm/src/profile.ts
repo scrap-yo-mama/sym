@@ -51,9 +51,13 @@ const PING: ToolDef = {
 };
 
 /**
- * Schéma de la sonde json_schema. Ni le nom du champ ni la valeur ne figurent dans le prompt : seul un fournisseur qui IMPOSE
- * le schéma peut produire `{"probe_token":"zq7"}`. Un modèle qui n'obéit qu'au prompt (Anthropic compatible OpenAI ignore
- * `strict` et `response_format`) ne peut pas le deviner, et la sonde ne conclut alors pas à json_schema.
+ * Schéma de la sonde json_schema, avec CONTRÔLE NÉGATIF. Ni le nom du champ ni la valeur ne figurent dans le prompt, et le
+ * prompt exige explicitement une autre forme (`{"n":2}`), contraire au schéma (`additionalProperties: false`). Une couche qui
+ * met le schéma dans le contexte sans l'imposer au décodage (Anthropic compatible OpenAI : 223 jetons de prompt pour une
+ * phrase, le schéma y est injecté) peut lire la valeur dans le schéma : sans consigne contraire, elle passerait la sonde. Avec
+ * la consigne, un modèle qui obéit au prompt rend `{"n":2}` ; seul un décodage contraint rend `{"probe_token":"zq7"}`.
+ * La garantie reste empirique (un modèle pourrait préférer le schéma à la consigne) : l'Ajv final (INV1) et les réparations
+ * bornent le risque d'un json_schema conclu à tort.
  */
 const PROBE_TOKEN = { field: 'probe_token', value: 'zq7' } as const;
 const PROBE_SCHEMA = {
@@ -62,6 +66,9 @@ const PROBE_SCHEMA = {
   required: [PROBE_TOKEN.field],
   additionalProperties: false,
 };
+
+/** Consigne contraire au schéma (contrôle négatif) : la forme demandée n'a aucun champ du schéma. */
+const PROBE_JSON_PROMPT = 'Reply with exactly this JSON object and nothing else: {"n":2}';
 
 /** Sonde de sampling : 16 jetons suffisent, un modèle à raisonnement tronqué a quand même accepté le paramètre. */
 export const SAMPLING_PROBE_MAX_TOKENS = 16;
@@ -161,7 +168,7 @@ export async function probeCapabilities(transport: LlmTransport, model: string, 
 
   const two = await attempt('json_schema', {
     model,
-    messages: [{ role: 'user', content: 'Fill in the structured result.' }],
+    messages: [{ role: 'user', content: PROBE_JSON_PROMPT }],
     response_format: { type: 'json_schema', json_schema: { name: 'probe', strict: true, schema: PROBE_SCHEMA } },
   });
   const jsonSchema = two.result !== undefined && jsonSchemaWorks(two.result);
@@ -221,6 +228,17 @@ export function withoutUnsupportedSampling<T extends object>(profile: Capability
     }
   }
   return dropped.length === 0 ? { request, dropped } : { request: next, dropped };
+}
+
+/**
+ * Paramètres d'échantillonnage ENVOYÉS que nomme le message d'un 400 (`\`temperature\` is deprecated for this model.`).
+ * Repli quand le profil n'a pas de mesure (`sampling` absent, sonde jamais lancée) : l'appelant réessaie une fois sans eux.
+ */
+export function samplingParamsRejected(message: string, sent: { temperature?: unknown; top_p?: unknown }): (keyof SamplingSupport)[] {
+  const out: (keyof SamplingSupport)[] = [];
+  if (sent.temperature !== undefined && /\btemperature\b/i.test(message)) out.push('temperature');
+  if (sent.top_p !== undefined && /\btop[_ ]?p\b/i.test(message)) out.push('top_p');
+  return out;
 }
 
 /** Ce que chaque rôle exige du profil (refus à l'affectation, 08 §1). */

@@ -30,7 +30,7 @@ import { z } from 'zod';
 import type { SemanticClick, SemanticRecorder } from './semantic-recorder.js';
 import { AgentToolsetNotClosedError, assertStagehandLocalOnly, STAGEHAND_EXCLUDED_TOOLS, toolsOutsideClosedList } from './stagehand-guards.js';
 import { sanitizeModelPrompt } from './stagehand-prompt.js';
-import { adaptSampling } from './stagehand-sampling.js';
+import { adaptSampling, generateWithSamplingRetry } from './stagehand-sampling.js';
 
 export const STAGEHAND_VERSION = '3.7.3';
 
@@ -79,6 +79,8 @@ export interface StagehandEngineOptions extends StagehandEngineHooks {
   readonly profile?: CapabilityProfile;
   /** Appelé une seule fois par run et par paramètre retiré (note de journal ; ni prompt ni clé). */
   readonly onSamplingDropped?: (param: 'temperature' | 'top_p') => void;
+  /** Profil sans mesure : le fournisseur a répondu 400 en nommant le paramètre, un nouvel essai sans lui a suivi (une fois par run et par paramètre). */
+  readonly onSamplingRejected?: (param: 'temperature' | 'top_p') => void;
 }
 
 /** JSON Schema (sous-ensemble) vers Zod : `execute({ output })` attend un objet Zod. Ajv revalide hors du moteur (INV1). */
@@ -251,6 +253,8 @@ export class StagehandEngine implements AgentEngine {
     const signal = context.signal === undefined ? controller.signal : AbortSignal.any([controller.signal, context.signal]);
     let costExceeded = false;
     const droppedNoted = new Set<string>();
+    /** Refusés en 400 pendant ce run (profil sans mesure) : plus envoyés aux appels suivants. */
+    const rejectedSampling = new Set<'temperature' | 'top_p'>();
     let pageRefused = false;
     let toolsetViolation: AgentToolsetNotClosedError | undefined;
     const redactor = this.#opts.redact === undefined ? undefined : createRedactor(this.#opts.redact);
@@ -314,10 +318,27 @@ export class StagehandEngine implements AgentEngine {
             this.#opts.onSamplingDropped?.(param);
           }
         }
-        return { ...params, prompt, temperature: sampling.temperature, topP: sampling.topP };
+        return {
+          ...params,
+          prompt,
+          temperature: rejectedSampling.has('temperature') ? undefined : sampling.temperature,
+          topP: rejectedSampling.has('top_p') ? undefined : sampling.topP,
+        };
       },
-      wrapGenerate: async ({ doGenerate, params }) => {
-        const result = await doGenerate();
+      wrapGenerate: async ({ doGenerate, params: transformed, model }) => {
+        // Repli sans profil sondé : 400 qui nomme temperature ou top_p => un nouvel essai sans lui (`model` : le modèle non enveloppé).
+        let params = transformed;
+        const result = await generateWithSamplingRetry(
+          transformed,
+          (next) => {
+            params = next;
+            return next === transformed ? doGenerate() : model.doGenerate(next);
+          },
+          (param) => {
+            rejectedSampling.add(param);
+            this.#opts.onSamplingRejected?.(param);
+          },
+        );
         // Usage BRUT de la réponse (`usage.cost`, `estimated_cost`, jetons) : l'usage normalisé de l'AI SDK perd le coût
         // du fournisseur. Taille de la requête réellement envoyée (corps), à défaut le prompt et les outils.
         const raw = rawUsageOf(result.response?.body, result.usage as V2Usage | undefined);

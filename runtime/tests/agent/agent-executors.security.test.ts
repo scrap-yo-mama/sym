@@ -84,7 +84,7 @@ const extractClient = (price: ModelPrice | null = CHEAP) =>
 
 /** Moteur du rôle `agent` : Stagehand 3.7.3 en local, sur le faux fournisseur, environnement sans clé Browserbase/Brave. */
 const engineFor =
-  (o: { env?: NodeJS.ProcessEnv; price?: ModelPrice | null; redact?: RedactConfig; model?: string } = {}): EngineFactory =>
+  (o: { env?: NodeJS.ProcessEnv; price?: ModelPrice | null; redact?: RedactConfig; model?: string; onSamplingRejected?: (param: 'temperature' | 'top_p') => void } = {}): EngineFactory =>
   ({ cdpUrl, recorder, hooks }) => ({
     engine: new StagehandEngine({
       cdpUrl,
@@ -94,6 +94,7 @@ const engineFor =
       recorder,
       env: o.env ?? {},
       ...(o.redact === undefined ? {} : { redact: o.redact }),
+      ...(o.onSamplingRejected === undefined ? {} : { onSamplingRejected: o.onSamplingRejected }),
       ...hooks,
     }),
     modelId: o.model ?? AGENT_MODEL,
@@ -359,6 +360,36 @@ describe('E6 agent (Stagehand 3.7.3) puis compilation E6 → E5 rejouée sans LL
     if (out.result.ok) expect(out.result.records).toEqual([ref]);
     expect(out.llm?.engine).toBe('stagehand@3.7.3');
     expect(fake.requests).toBeGreaterThan(0);
+  }, 180_000);
+});
+
+describe('E6 sans profil sondé (production avant la route de sonde) : 400 qui nomme temperature (claude-opus-4-8 compatible OpenAI)', () => {
+  test('le moteur réessaie sans temperature, le signale une fois et ne l’envoie plus pendant le run', async () => {
+    const ref = agentReference('F-E6') as { title: string };
+    const deprecated = scripted.error(400, { error: { message: '`temperature` is deprecated for this model.', type: 'invalid_request_error' } });
+    fake.setScenario(AGENT_MODEL, [deprecated, ...stagehandScript([scripted.toolCalls([{ name: 'act', arguments: { action: `click the link "${ref.title}"` } }])], { items: [ref] })]);
+    const rejected: string[] = [];
+    const out = await withEgress([AGENT_HOSTS.e6], (egress) =>
+      runAgentExecutor({
+        spec: { schema_version: 1, kind: 'agent', start_url: url(AGENT_HOSTS.e6), allowed_hosts: [AGENT_HOSTS.e6], instruction: task('F-E6').instruction, limits: { max_steps: 10, timeout_ms: 90_000 } },
+        outputSchema: itemSchema('F-E6'),
+        signal,
+        guard,
+        egress,
+        agentBrowser: (o) => launchAgentBrowser({ ...o, egressServer: egress.server }),
+        engineFor: engineFor({ onSamplingRejected: (param) => void rejected.push(param) }),
+        pool,
+        allowWriteActions: false,
+        maxCostUsd: 0.5,
+        taskId: 'zz_test_e6_sampling',
+        version: 1,
+      }),
+    );
+    expect(out.result.ok).toBe(true);
+    expect(rejected).toEqual(['temperature']);
+    expect(fake.calls[0]!.body['temperature']).toBe(0);
+    expect(fake.calls.length).toBeGreaterThan(2);
+    for (const call of fake.calls.slice(1)) expect(call.body).not.toHaveProperty('temperature');
   }, 180_000);
 });
 

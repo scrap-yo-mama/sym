@@ -823,7 +823,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Sonde de 3 appels minuscules d'un couple fournisseur × modèle (08 § 1) ; extension de 05 § 4.2 */
+        /** Sonde de 5 appels minuscules d'un couple fournisseur × modèle (08 § 1) ; extension de 05 § 4.2 */
         post: operations["testLlmProvider"];
         delete?: never;
         options?: never;

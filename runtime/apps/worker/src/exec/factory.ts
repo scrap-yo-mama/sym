@@ -11,7 +11,7 @@ import { SsrfGuard, ssrfPolicyFromEnv, startEgressProxy, type EgressProxy } from
 import { STAGEHAND_VERSION, StagehandEngine } from '@runtime/agent';
 import { resolveInstanceContact, RobotsCache } from '@runtime/core/access';
 import { PgPacingStore, readInstanceContactSetting, readLlmSettings, secretStore } from '@runtime/db';
-import { createLlmClient, llmConfigFromSettings, roleProblems, roleTarget, type LlmConfig } from '@runtime/llm';
+import { createLlmClient, llmConfigFromSettings, roleProblems, roleTarget, type LlmConfig, type LlmNote } from '@runtime/llm';
 import { launchAgentBrowser } from '../browser/agent-browser.js';
 import { cgroupMemoryLimitBytes, cgroupMemoryWorkingSetBytes } from '../browser/cgroup.js';
 import { BrowserPool, playwrightLauncher } from '../browser/pool.js';
@@ -31,7 +31,7 @@ const STAGEHAND_PROMPT_VERSION = `stagehand-${STAGEHAND_VERSION}-dom`;
  * avec les points d'accroche de l'essai (plafond de coût partagé, garde de classification). Un modèle sans prix reste
  * permis (08 §1 : coût null avec avertissement) ; le plafond étant alors intenable, le run s'arrête après le premier appel.
  */
-export function stagehandEngineFor(config: LlmConfig, env: NodeJS.ProcessEnv = process.env, onNote?: (note: { event: 'llm_sampling_param_dropped'; provider: string; model: string; param: 'temperature' | 'top_p' }) => void): EngineFactory {
+export function stagehandEngineFor(config: LlmConfig, env: NodeJS.ProcessEnv = process.env, onNote?: (note: LlmNote) => void): EngineFactory {
   return ({ cdpUrl, recorder, hooks }) => {
     const target = roleTarget(config, 'agent');
     if (target === undefined) return null;
@@ -50,6 +50,8 @@ export function stagehandEngineFor(config: LlmConfig, env: NodeJS.ProcessEnv = p
         // Profil sondé : un paramètre d'échantillonnage refusé par le modèle (claude-opus-4-8) n'est jamais envoyé.
         ...(profile === undefined ? {} : { profile }),
         ...(onNote === undefined ? {} : { onSamplingDropped: (param) => onNote({ event: 'llm_sampling_param_dropped', provider: target.provider.id, model: target.model.id, param }) }),
+        // Profil sans mesure (route de sonde pas encore livrée) : un 400 qui nomme le paramètre => nouvel essai sans lui, noté.
+        ...(onNote === undefined ? {} : { onSamplingRejected: (param) => onNote({ event: 'llm_sampling_param_rejected', provider: target.provider.id, model: target.model.id, param }) }),
         ...(config.redact === undefined ? {} : { redact: config.redact }),
         ...hooks,
       }),

@@ -13,7 +13,7 @@ afterEach(() => fake.close());
 
 const transport = () => new OpenAICompatTransport({ baseUrl: fake.baseUrl, apiKey: new Secret('k-0000-0000') });
 const ping = (n: number) => scripted.toolCalls([{ name: 'ping', arguments: { n } }], { prompt_tokens: 50, completion_tokens: 10, cached_tokens: 0 });
-/** Sortie d'un modèle dont le schéma est réellement imposé : le jeton ne figure nulle part dans le prompt. */
+/** Sortie d'un modèle dont le schéma est réellement imposé : le jeton ne figure pas dans le prompt, qui exige même une autre forme. */
 const enforced = () => scripted.json({ probe_token: 'zq7' });
 const SAMPLING_OK = [scripted.text('ok'), scripted.text('ok')];
 const bad = (param: string) => scripted.error(400, { error: { message: `\`${param}\` is deprecated for this model.` } });
@@ -79,6 +79,27 @@ describe('sonde : le json_schema n\'est conclu que s\'il est réellement imposé
     const prompt = call.messages.map((m) => m.content).join(' ');
     expect(prompt).not.toContain(field);
     expect(prompt).not.toContain(expected);
+  });
+
+  test('contrôle négatif : le prompt exige une AUTRE forme ({"n":2}), contraire au schéma', async () => {
+    // Une couche qui injecte le schéma en texte (cassette anthropic : 223 jetons de prompt contre 11) sans l'imposer au décodage
+    // suit le prompt explicite et rend {"n":2}. Seul un décodage contraint rend le jeton du schéma malgré la consigne.
+    fake.setScenario('m', [ping(1), enforced(), ping(3), ...SAMPLING_OK]);
+    await probe();
+    const call = fake.calls[1]?.body as { messages: { content: string }[]; response_format: { json_schema: { schema: { required: string[]; additionalProperties: boolean } } } };
+    const prompt = call.messages.map((m) => m.content).join(' ');
+    expect(prompt).toContain('{"n":2}');
+    const asked = JSON.parse(prompt.slice(prompt.indexOf('{'), prompt.lastIndexOf('}') + 1)) as Record<string, unknown>;
+    const { required, additionalProperties } = call.response_format.json_schema.schema;
+    expect(required.some((f) => f in asked)).toBe(false);
+    expect(additionalProperties).toBe(false);
+  });
+
+  test('couche qui met le schéma dans le contexte mais suit la consigne du prompt : {"n":2} => pas de json_schema', async () => {
+    fake.setScenario('m', [ping(1), scripted.json({ n: 2 }), ping(3), ...SAMPLING_OK]);
+    const p = await probe();
+    expect(p.structured_modes).toEqual(['tool_forced', 'json_object']);
+    expect(p.notes.join(' ')).toContain('non imposé');
   });
 
   test('fournisseur qui ignore response_format (réponse en prose ou à côté du schéma) : pas de json_schema, tool_forced retenu', async () => {

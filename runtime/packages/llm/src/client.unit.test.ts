@@ -521,6 +521,47 @@ describe('échantillonnage non supporté (D-42 : claude-opus-4-8 compatible Open
   });
 });
 
+describe('repli sans profil sondé : 400 qui nomme temperature ou top_p (production avant la route de sonde)', () => {
+  const deprecated = (param: string) => scripted.error(400, { error: { message: `\`${param}\` is deprecated for this model.`, type: 'invalid_request_error' } });
+
+  test('un nouvel essai sans le paramètre nommé, noté llm_sampling_param_rejected, retenu pour les appels suivants', async () => {
+    fake.setScenario('agent', [deprecated('temperature'), scripted.text('ok'), scripted.text('encore')]);
+    const notes: unknown[] = [];
+    const { client } = setupWithNotes({}, notes);
+    const out = await client.chat('agent', { messages: user('x'), temperature: 0, maxTokens: 50 });
+    expect(out.result.message.content).toBe('ok');
+    expect(fake.calls).toHaveLength(2);
+    expect(fake.calls[0]?.body).toMatchObject({ temperature: 0 });
+    expect(fake.calls[1]?.body).not.toHaveProperty('temperature');
+    expect(fake.calls[1]?.body['max_tokens']).toBe(50);
+    expect(out.attempts.map((a) => a.failure_class)).toEqual(['llm_bad_request', null]);
+    await client.chat('agent', { messages: user('y'), temperature: 0 });
+    expect(fake.calls).toHaveLength(3);
+    expect(fake.calls[2]?.body).not.toHaveProperty('temperature');
+    expect(notes).toEqual([{ event: 'llm_sampling_param_rejected', provider: 'primary', model: 'agent', param: 'temperature' }]);
+  });
+
+  test('temperature puis top_p refusés l’un après l’autre : un essai par paramètre, pas plus', async () => {
+    fake.setScenario('agent', [deprecated('temperature'), deprecated('top_p'), scripted.text('ok')]);
+    const notes: unknown[] = [];
+    const { client } = setupWithNotes({}, notes);
+    await client.chat('agent', { messages: user('x'), temperature: 0, topP: 0.9 });
+    expect(fake.calls).toHaveLength(3);
+    expect(fake.calls[2]?.body).not.toHaveProperty('temperature');
+    expect(fake.calls[2]?.body).not.toHaveProperty('top_p');
+    expect(notes).toHaveLength(2);
+  });
+
+  test('400 qui ne nomme aucun paramètre envoyé : pas de nouvel essai', async () => {
+    fake.setScenario('agent', [deprecated('temperature'), scripted.text('jamais')]);
+    const { client } = setupWithNotes({}, []);
+    await expect(client.chat('agent', { messages: user('x'), topP: 0.9 })).rejects.toMatchObject({ class: 'bad_request' });
+    fake.setScenario('extract', [scripted.error(400, { error: { message: 'unsupported parameter' } }), scripted.text('jamais')]);
+    await expect(client.chat('extract', { messages: user('x'), temperature: 0 })).rejects.toMatchObject({ class: 'bad_request' });
+    expect(fake.calls).toHaveLength(2);
+  });
+});
+
 function setupWithNotes(models: Partial<Record<LlmRole, ModelConfig>>, notes: unknown[], fallbackRole?: LlmRole, backupModels: Partial<Record<LlmRole, ModelConfig>> = {}) {
   const roles: LlmConfig['roles'] = {};
   const primaryModels: ModelConfig[] = [];

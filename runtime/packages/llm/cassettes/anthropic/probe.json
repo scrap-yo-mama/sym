@@ -32,7 +32,7 @@
           "x-ratelimit-requests": "10000",
           "x-ratelimit-reset-requests": "0s"
         },
-        "body": "{\"id\":\"msg_011CfbvpujW8n6teYFtzQ4Qn\",\"choices\":[{\"finish_reason\":\"tool_calls\",\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"I'll call the ping function with n=1.\",\"tool_calls\":[{\"id\":\"toolu_01JzAZ3JS5eZ6MRNFH93cMnn\",\"type\":\"function\",\"function\":{\"name\":\"ping\",\"arguments\":\"{\\\"n\\\": 1}\"}}]}}],\"created\":1790876490,\"model\":\"claude-opus-4-8\",\"object\":\"chat.completion\",\"usage\":{\"completion_tokens\":60,\"prompt_tokens\":386,\"total_tokens\":446}}"
+        "body": "{\"id\":\"msg_011CfbzefNFJZtzXTFKrPLq2\",\"choices\":[{\"finish_reason\":\"tool_calls\",\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"I'll call the ping function with n=1.\",\"tool_calls\":[{\"id\":\"toolu_01QNdjGedKR9jwQVHXS1jDdQ\",\"type\":\"function\",\"function\":{\"name\":\"ping\",\"arguments\":\"{\\\"n\\\": 1}\"}}]}}],\"created\":1790879498,\"model\":\"claude-opus-4-8\",\"object\":\"chat.completion\",\"usage\":{\"completion_tokens\":60,\"prompt_tokens\":386,\"total_tokens\":446}}"
       }
     },
     {
@@ -66,7 +66,7 @@
           "x-ratelimit-requests": "10000",
           "x-ratelimit-reset-requests": "0s"
         },
-        "body": "{\"id\":\"msg_011Cfbvq3PNwqqDNHDb1XAxJ\",\"choices\":[{\"finish_reason\":\"stop\",\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"{\\\"probe_token\\\":\\\"zq7\\\"}\"}}],\"created\":1790876491,\"model\":\"claude-opus-4-8\",\"object\":\"chat.completion\",\"usage\":{\"completion_tokens\":14,\"prompt_tokens\":223,\"total_tokens\":237}}"
+        "body": "{\"id\":\"msg_011CfbzenNvdkXJQtX3xobdY\",\"choices\":[{\"finish_reason\":\"stop\",\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"{\\\"probe_token\\\":\\\"zq7\\\"}\"}}],\"created\":1790879499,\"model\":\"claude-opus-4-8\",\"object\":\"chat.completion\",\"usage\":{\"completion_tokens\":14,\"prompt_tokens\":238,\"total_tokens\":252}}"
       }
     },
     {
@@ -97,7 +97,7 @@
           "x-ratelimit-requests": "10000",
           "x-ratelimit-reset-requests": "0s"
         },
-        "body": "{\"id\":\"msg_011Cfbvq8VDHyEgx6YxP36y4\",\"choices\":[{\"finish_reason\":\"tool_calls\",\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"\",\"tool_calls\":[{\"id\":\"toolu_019MuMFTucb2fgqou1eP7WNG\",\"type\":\"function\",\"function\":{\"name\":\"ping\",\"arguments\":\"{\\\"n\\\": 3}\"}}]}}],\"created\":1790876492,\"model\":\"claude-opus-4-8\",\"object\":\"chat.completion\",\"usage\":{\"completion_tokens\":32,\"prompt_tokens\":510,\"total_tokens\":542}}"
+        "body": "{\"id\":\"msg_011CfbzetWWzVCARPjHTXq37\",\"choices\":[{\"finish_reason\":\"tool_calls\",\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"\",\"tool_calls\":[{\"id\":\"toolu_012BCVtNYNKMUV4iYwEm216s\",\"type\":\"function\",\"function\":{\"name\":\"ping\",\"arguments\":\"{\\\"n\\\": 3}\"}}]}}],\"created\":1790879501,\"model\":\"claude-opus-4-8\",\"object\":\"chat.completion\",\"usage\":{\"completion_tokens\":32,\"prompt_tokens\":510,\"total_tokens\":542}}"
       }
     },
     {

@@ -52,11 +52,12 @@ const PROBED: readonly ProviderId[] = ['anthropic'];
 /** Comportements annoncés par la documentation officielle du fournisseur, vérifiés contre la sonde enregistrée. */
 const DOCUMENTED: Partial<Record<ProviderId, { cache?: boolean; structured?: CapabilityProfile['structured']; sampling?: CapabilityProfile['sampling'] }>> = {
   // Anthropic compatible OpenAI, mesuré le 2026-10-01 sur claude-opus-4-8 : pas de cache de prompt ; `response_format` json_schema RÉELLEMENT imposé
-  // (sonde au schéma sans indice dans le prompt, contre-vérifiée à la main : la doc officielle, qui le dit ignoré, est en retard) ; `temperature` et `top_p` refusés (400).
+  // (sonde au schéma sans indice, avec contrôle négatif : le prompt exige {"n":2} et la réponse reste {"probe_token":"zq7"}, donc décodage contraint ;
+  // la doc officielle, qui le dit ignoré, est en retard) ; `temperature` et `top_p` refusés (400).
   anthropic: { cache: false, structured: 'json_schema', sampling: { temperature: false, top_p: false } },
   openrouter: { sampling: { temperature: true, top_p: true } },
 };
-/** Fournisseurs dont la cassette `probe` rejoue la sonde COURANTE (schéma sans indice, 2 appels de sampling). La cassette DeepInfra date du spike (GLM-5.3, clé retirée par D-42) : conservée comme mesure, non rejouée. */
+/** Fournisseurs dont la cassette `probe` rejoue la sonde COURANTE (schéma sans indice et contrôle négatif, 2 appels de sampling), réenregistrée le 2026-10-01. La cassette DeepInfra date du spike (GLM-5.3, clé retirée par D-42) : conservée comme mesure, non rejouée. */
 const PROBE_REPLAYABLE: readonly ProviderId[] = ['anthropic', 'openrouter'];
 /** Fournisseurs avec une cassette `sampling` : temperature et top_p demandés au client, envoyés seulement si le profil les accepte. */
 const SAMPLING_CASE: readonly ProviderId[] = ['anthropic', 'openrouter'];
