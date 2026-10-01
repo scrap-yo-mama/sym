@@ -84,8 +84,8 @@ export interface ChildRunner {
   run(code: string): Promise<string>;
   /** Règle un appel de pont en attente (réponse du parent). */
   settle(id: number, ok: boolean, payload: string): void;
-  /** Vrai si l'erreur vient du plafond mémoire, `timeout` si du plafond de temps. */
-  classify(error: unknown): 'memory' | 'timeout' | 'script_error';
+  /** `memory` : plafond mémoire ; `timeout` : plafond de temps ; `import` : `import()` refusé par le moteur. */
+  classify(error: unknown): 'memory' | 'timeout' | 'import' | 'script_error';
 }
 export type GuestCode = { bootstrap: string; wrap: (code: string) => string };
 export type RunnerFactory = (msg: RunMessage, send: GuestSend, guest: GuestCode) => Promise<ChildRunner>;
@@ -94,8 +94,20 @@ const MAX_ERROR = 1000;
 /** Erreurs d'allocation (isolat saturé, ArrayBuffer ou chaîne refusés) : classées « mémoire ». */
 const MEMORY_ERROR = /memory limit|allocation failed|out of memory|string too long|invalid string length/i;
 
-function post(message: ChildMessage): void {
-  process.send?.(message);
+/** Octets (UTF-8) écrits par le script mais pas encore remis au système (file IPC, dans le tas de l'enfant). */
+let backlog = 0;
+/**
+ * Au-delà, le script produit plus vite que l'hôte ne consomme : violation plutôt qu'un tas saturé (abort). Supérieur au
+ * plafond cumulé des éléments (50 Mio) : une sortie légitime tient toujours dans la file, même émise d'un trait. Le tas
+ * de l'enfant (--max-old-space-size, engine.ts) est dimensionné en conséquence.
+ */
+const MAX_BACKLOG = 64 * 1024 * 1024;
+
+function post(message: ChildMessage, bytes = 0): void {
+  backlog += bytes;
+  process.send?.(message, undefined, undefined, () => {
+    backlog -= bytes;
+  });
 }
 
 async function ivmRunner(msg: RunMessage, send: GuestSend, guest: GuestCode): Promise<ChildRunner> {
@@ -127,6 +139,9 @@ async function ivmRunner(msg: RunMessage, send: GuestSend, guest: GuestCode): Pr
       const message = error instanceof Error ? error.message : String(error);
       if (isolate.isDisposed || MEMORY_ERROR.test(message)) return 'memory';
       if (/timed out/i.test(message)) return 'timeout';
+      // isolated-vm n'expose pas de crochet d'import dynamique : v8 rejette `import()` par « Not supported ». Un import
+      // en clair est refusé avant le lancement (engine.ts) ; celui-ci couvre un import masqué (eval) non rattrapé.
+      if (message === 'Not supported') return 'import';
       return 'script_error';
     },
   };
@@ -140,13 +155,29 @@ async function main(): Promise<void> {
   rss.unref();
 
   let runner: ChildRunner | undefined;
+  // Budget d'octets sortants, aussi tenu ici (le parent tient le sien) : quand le script ne rend jamais la main (QuickJS
+  // est synchrone) ou produit plus vite que l'hôte ne lit, les messages s'accumulent dans la file IPC de l'enfant ; au-delà
+  // du budget ou de la file maximale, ils sont abandonnés et la violation signalée.
+  let outBudget = Number.POSITIVE_INFINITY;
+  let outBytes = 0;
+  let overflow = false;
   const send: GuestSend = (kind, id, a, b) => {
+    if (overflow) return;
+    const size = typeof b === 'string' ? Buffer.byteLength(b) : 0;
+    if (kind === 'call' || kind === 'log' || kind === 'emit') {
+      outBytes += size;
+      if (outBytes > outBudget || backlog + size > MAX_BACKLOG) {
+        overflow = true;
+        post({ t: 'violation', reason: 'output_limit', detail: outBytes > outBudget ? 'ipc' : 'file IPC' });
+        return;
+      }
+    }
     if (kind === 'call' && typeof id === 'number' && a === 'fetch' && typeof b === 'string') {
-      post({ t: 'call', id, bridge: 'fetch', payload: b });
-    } else if (kind === 'log' && typeof b === 'string') post({ t: 'log', payload: b });
-    else if (kind === 'emit' && typeof b === 'string') post({ t: 'emit', payload: b });
-    else if (kind === 'violation' && a === 'forbidden_global' && typeof b === 'string') {
-      post({ t: 'violation', reason: 'forbidden_global', detail: b.slice(0, 64) });
+      post({ t: 'call', id, bridge: 'fetch', payload: b }, size);
+    } else if (kind === 'log' && typeof b === 'string') post({ t: 'log', payload: b }, size);
+    else if (kind === 'emit' && typeof b === 'string') post({ t: 'emit', payload: b }, size);
+    else if (kind === 'violation' && (a === 'forbidden_global' || a === 'forbidden_import') && typeof b === 'string') {
+      post({ t: 'violation', reason: a, detail: b.slice(0, 64) });
     } else post({ t: 'violation', reason: 'invalid_bridge_call', detail: 'send' });
   };
 
@@ -157,6 +188,7 @@ async function main(): Promise<void> {
     }
     if (raw.t !== 'run' || runner !== undefined) return;
     const msg = raw;
+    outBudget = msg.limits.maxIpcBytes;
     void (async () => {
       let factory: RunnerFactory = ivmRunner;
       if (msg.engine === 'quickjs') {
@@ -171,9 +203,13 @@ async function main(): Promise<void> {
         const value = await current.run(msg.code);
         post({ t: 'done', outcome: 'ok', value });
       } catch (error) {
-        const outcome = current === undefined ? 'script_error' : current.classify(error);
         const message = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
-        post({ t: 'done', outcome, error: message.slice(0, MAX_ERROR) });
+        // Moteur qui ne démarre pas : ce n'est pas une erreur du script (le parent le journalise child_crashed).
+        const kind = current === undefined ? 'engine_error' : current.classify(error);
+        if (kind === 'import') {
+          post({ t: 'violation', reason: 'forbidden_import', detail: 'import()' });
+          post({ t: 'done', outcome: 'script_error', error: message.slice(0, MAX_ERROR) });
+        } else post({ t: 'done', outcome: kind, error: message.slice(0, MAX_ERROR) });
       }
     })();
   });

@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Ponts du bac à sable, côté hôte (08 §3) : chaque pont reçoit une chaîne JSON non fiable venue de l'isolat, valide
 // schéma, taille et domaine, puis agit. `ctx.fetch` passe par la garde SSRF (INV10) et reste dans les domaines de l'API.
-// Toute violation est journalisée `sandbox_violation` (puits unique : `violation`).
+// Toute violation est journalisée `sandbox_violation` (puits unique : `violation`, 32 au plus par run) et tue l'enfant
+// (engine.ts). Budgets côté hôte, par run : octets d'éléments retenus, octets de réponses lus, octets de journal.
 import type { Logger } from 'pino';
 import type {
   SandboxBridges,
@@ -14,7 +15,7 @@ import { findSsrfBlocked, guardedFetch, normalizeHostname, type SsrfGuard } from
 
 /** Refus d'un pont. `code` est relayé au script ; `violation` : à journaliser comme `sandbox_violation`. */
 export class SandboxBridgeError extends Error {
-  readonly code: SandboxViolationReason | 'fetch_failed' | 'log_limit';
+  readonly code: SandboxViolationReason | 'fetch_failed';
   readonly violation: boolean;
   readonly detail?: string;
   constructor(code: SandboxBridgeError['code'], violation: boolean, detail?: string) {
@@ -54,6 +55,11 @@ export type SandboxBridgeOptions = {
   fetchTimeoutMs?: number;
   maxItems?: number;
   maxItemBytes?: number;
+  /** Plafond cumulé des éléments retenus par le parent, en octets JSON (défaut 50 Mio). */
+  maxTotalItemBytes?: number;
+  /** Plafond cumulé des corps de réponse lus par `ctx.fetch` sur le run, en octets (défaut 50 Mio). */
+  maxTotalResponseBytes?: number;
+  /** Plafond du journal du script ; au-delà, violation `output_limit` (défaut 64 Kio). */
   maxLogBytes?: number;
 };
 
@@ -78,6 +84,8 @@ const TOKEN = /^[!#$%&'*+.^_`|~0-9A-Za-z-]{1,256}$/;
 const MAX_URL = 8192;
 const MAX_HEADERS = 50;
 const MAX_HEADER_VALUE = 8192;
+/** Violations retenues et journalisées par run (l'enfant est tué à la première ; borne contre l'inondation). */
+const MAX_VIOLATIONS = 32;
 
 /** Normalise une entrée de la liste des domaines (IDN → punycode, minuscules, sans point final). */
 export function normalizeDomain(entry: string): string {
@@ -216,6 +224,8 @@ export function createSandboxBridges(options: SandboxBridgeOptions): SandboxBrid
   const fetchTimeoutMs = options.fetchTimeoutMs ?? 30_000;
   const maxItems = options.maxItems ?? 10_000;
   const maxItemBytes = options.maxItemBytes ?? 1024 * 1024;
+  const maxTotalItemBytes = options.maxTotalItemBytes ?? 50 * 1024 * 1024;
+  const maxTotalResponseBytes = options.maxTotalResponseBytes ?? 50 * 1024 * 1024;
   const maxLogBytes = options.maxLogBytes ?? 64 * 1024;
   const log = options.logger;
   const abort = new AbortController();
@@ -231,10 +241,13 @@ export function createSandboxBridges(options: SandboxBridgeOptions): SandboxBrid
   const violations: SandboxViolation[] = [];
   let requests = 0;
   let logBytes = 0;
+  let itemBytes = 0;
+  let responseBytes = 0;
 
   const bridges: SandboxBridges = {
     async fetch(raw) {
       if (++requests > maxRequests) throw new SandboxBridgeError('bridge_quota', true, 'fetch');
+      if (responseBytes >= maxTotalResponseBytes) throw new SandboxBridgeError('bridge_quota', true, 'response_bytes');
       const request = validateFetchRequest(raw, { allowedDomains, allowedMethods, maxRequestBodyBytes });
       const signal = AbortSignal.any([abort.signal, AbortSignal.timeout(fetchTimeoutMs)]);
       let current = request;
@@ -257,7 +270,9 @@ export function createSandboxBridges(options: SandboxBridgeOptions): SandboxBrid
       response.headers.forEach((value, name) => {
         if (!DROPPED_RESPONSE_HEADERS.has(name)) headers[name] = value;
       });
-      const { body, truncated } = await readCapped(response, maxResponseBytes);
+      // Budget hôte : un corps n'est lu que dans la limite de ce qui reste au run (coupé, `truncated`).
+      const { body, truncated } = await readCapped(response, Math.min(maxResponseBytes, maxTotalResponseBytes - responseBytes));
+      responseBytes += Buffer.byteLength(body);
       const out: SandboxFetchResponse = { status: response.status, url: finalUrl.href, headers, body, truncated };
       return out;
     },
@@ -265,18 +280,23 @@ export function createSandboxBridges(options: SandboxBridgeOptions): SandboxBrid
       const args = parseJson(raw, 'log');
       if (!Array.isArray(args) || !args.every((a) => typeof a === 'string')) bad('log : tableau de chaînes attendu');
       const size = Buffer.byteLength(raw as string);
-      if (logBytes + size > maxLogBytes) throw new SandboxBridgeError('log_limit', false);
+      if (logBytes + size > maxLogBytes) throw new SandboxBridgeError('output_limit', true, 'log');
       logBytes += size;
       log.info({ event: 'sandbox_log', args }, 'sandbox_log');
     },
     emit(raw) {
       if (typeof raw !== 'string') bad('emit : chaîne JSON attendue');
-      if (Buffer.byteLength(raw) > maxItemBytes) throw new SandboxBridgeError('output_limit', true, 'emit');
+      const size = Buffer.byteLength(raw);
+      if (size > maxItemBytes) throw new SandboxBridgeError('output_limit', true, 'emit');
       const item = parseJson(raw, 'emit');
       if (items.length >= maxItems) throw new SandboxBridgeError('output_limit', true, 'emit');
+      // Plafond cumulé : sans lui, maxItems × maxItemBytes (10 Go) pourrait s'accumuler dans le worker.
+      if (itemBytes + size > maxTotalItemBytes) throw new SandboxBridgeError('output_limit', true, 'emit_total');
+      itemBytes += size;
       items.push(item);
     },
     violation(v) {
+      if (violations.length >= MAX_VIOLATIONS) return;
       violations.push(v);
       log.warn({ event: 'sandbox_violation', reason: v.reason, detail: v.detail }, 'sandbox_violation');
     },

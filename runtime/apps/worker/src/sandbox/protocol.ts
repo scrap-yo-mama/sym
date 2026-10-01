@@ -8,25 +8,32 @@ export type RunMessage = {
   engine: SandboxEngineId;
   code: string;
   inputJson: string;
-  limits: Required<Pick<SandboxLimits, 'timeoutMs' | 'memoryMb'>>;
+  limits: Required<Pick<SandboxLimits, 'timeoutMs' | 'memoryMb' | 'maxIpcBytes'>>;
 };
 type ReplyMessage = { t: 'reply'; id: number; ok: boolean; payload: string };
 export type ParentMessage = RunMessage | ReplyMessage;
 
-type ChildOutcome = 'ok' | 'script_error' | 'timeout' | 'memory';
+/** `engine_error` : le moteur d'isolat n'a pas pu démarrer dans l'enfant (pas une erreur du script). */
+type ChildOutcome = 'ok' | 'script_error' | 'timeout' | 'memory' | 'engine_error';
+/** Violations que l'enfant peut signaler lui-même (pièges de l'amorce, chargeur de modules). */
+type ChildViolationReason = 'forbidden_global' | 'forbidden_import' | 'invalid_bridge_call' | 'output_limit';
+const CHILD_VIOLATIONS = new Set<string>(['forbidden_global', 'forbidden_import', 'invalid_bridge_call', 'output_limit']);
 export type ChildMessage =
   | { t: 'ready'; envKeys: string[]; node: string }
   | { t: 'rss'; mb: number }
   | { t: 'call'; id: number; bridge: 'fetch'; payload: string }
   | { t: 'log'; payload: string }
   | { t: 'emit'; payload: string }
-  | { t: 'violation'; reason: 'forbidden_global' | 'invalid_bridge_call'; detail: string }
+  | { t: 'violation'; reason: ChildViolationReason; detail: string }
   | { t: 'done'; outcome: ChildOutcome; value?: string; error?: string };
 
-/** Plafond d'une chaîne reçue de l'enfant (le résultat a son propre plafond, vérifié ensuite). */
+/**
+ * Plafond d'une chaîne reçue de l'enfant (le résultat a son propre plafond, vérifié ensuite). Le canal IPC de Node lit
+ * un message entier avant cette validation : sa taille reste bornée par le plafond RSS de l'enfant (README § Limites).
+ */
 const MAX_CHILD_STRING = 8 * 1024 * 1024;
 
-const OUTCOMES = new Set<string>(['ok', 'script_error', 'timeout', 'memory']);
+const OUTCOMES = new Set<string>(['ok', 'script_error', 'timeout', 'memory', 'engine_error']);
 const str = (v: unknown, max = MAX_CHILD_STRING): v is string => typeof v === 'string' && v.length <= max;
 const int = (v: unknown): v is number => typeof v === 'number' && Number.isSafeInteger(v) && v >= 0;
 
@@ -48,8 +55,8 @@ export function parseChildMessage(raw: unknown): ChildMessage | undefined {
     case 'emit':
       return str(m.payload) ? { t: 'emit', payload: m.payload } : undefined;
     case 'violation':
-      return (m.reason === 'forbidden_global' || m.reason === 'invalid_bridge_call') && str(m.detail, 64)
-        ? { t: 'violation', reason: m.reason, detail: m.detail }
+      return typeof m.reason === 'string' && CHILD_VIOLATIONS.has(m.reason) && str(m.detail, 64)
+        ? { t: 'violation', reason: m.reason as ChildViolationReason, detail: m.detail }
         : undefined;
     case 'done':
       if (typeof m.outcome !== 'string' || !OUTCOMES.has(m.outcome)) return undefined;

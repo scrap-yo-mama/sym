@@ -15,6 +15,13 @@ export interface SandboxLimits {
   readonly processMemoryMb?: number;
   /** Taille maximale du résultat sérialisé en JSON, en octets. */
   readonly maxResultBytes?: number;
+  /**
+   * Budget d'octets reçus de l'enfant sur tout le run (journal, éléments, requêtes, résultat), en octets ; au-delà,
+   * violation `output_limit` et enfant tué. Défaut : 128 Mio.
+   */
+  readonly maxIpcBytes?: number;
+  /** Plafond de temps CPU du processus enfant (RLIMIT_CPU), en secondes. Défaut : 2 × `timeoutMs` + 5 s. */
+  readonly cpuLimitSeconds?: number;
 }
 
 /** Requête `ctx.fetch` telle que validée par l'hôte (schéma, taille, domaine). */
@@ -42,6 +49,7 @@ export type SandboxViolationReason =
   | 'method_not_allowed'
   | 'forbidden_header'
   | 'forbidden_global'
+  | 'forbidden_import'
   | 'invalid_bridge_call'
   | 'bridge_quota'
   | 'time_limit'

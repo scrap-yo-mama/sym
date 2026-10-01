@@ -21,6 +21,11 @@ export const quickjsRunner: RunnerFactory = async (msg, send, guest) => {
   runtime.setMemoryLimit(msg.limits.memoryMb * 1024 * 1024);
   runtime.setMaxStackSize(1024 * 1024);
   runtime.setInterruptHandler(shouldInterruptAfterDeadline(Date.now() + msg.limits.timeoutMs));
+  // Tout import (`import()`, même masqué par eval ou rattrapé) passe par ce chargeur : violation, aucun module chargé.
+  runtime.setModuleLoader((name) => {
+    send('violation', 0, 'forbidden_import', String(name).slice(0, 64));
+    return { error: new Error('import interdit dans le bac à sable') };
+  });
   const vm = runtime.newContext();
   const pump = () => {
     const jobs = runtime.executePendingJobs();

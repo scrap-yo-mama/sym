@@ -12,8 +12,8 @@ import { pino } from 'pino';
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import type { SandboxEngineId, SandboxLimits, SandboxResult } from '@runtime/core';
 import { createSsrfPolicy, SsrfGuard } from '@runtime/core/net';
-import { createSandboxBridges } from './bridges.js';
-import { ProcessSandboxEngine, unexpectedEnvKeys } from './engine.js';
+import { createSandboxBridges, type SandboxBridgeOptions } from './bridges.js';
+import { ProcessSandboxEngine, sandboxOptionsFromEnv, unexpectedEnvKeys, type ProcessSandboxOptions } from './engine.js';
 
 const KILL_BUDGET_MS = 2000;
 const CANARY = 'zz_test_canary_master_key_sandbox';
@@ -83,13 +83,18 @@ function alive(pid: number): boolean {
   }
 }
 
-async function run(engineId: SandboxEngineId, code: string, limits: Partial<SandboxLimits> = {}): Promise<Run> {
+type RunExtra = { bridge?: Partial<SandboxBridgeOptions>; engine?: Partial<ProcessSandboxOptions> };
+
+async function run(engineId: SandboxEngineId, code: string, limits: Partial<SandboxLimits> = {}, extra: RunExtra = {}): Promise<Run> {
   const logs: Record<string, unknown>[] = [];
   const logger = pino({ level: 'info' }, { write: (s: string) => void logs.push(JSON.parse(s) as Record<string, unknown>) });
   let pid: number | undefined;
   let envKeys: readonly string[] | undefined;
   let environ: string | undefined;
   const engine = new ProcessSandboxEngine({
+    // Job CI Linux avec utilisateur dédié : SANDBOX_UID, SANDBOX_GID, SANDBOX_LAUNCHER (README § Utilisateur dédié).
+    ...sandboxOptionsFromEnv(process.env),
+    ...extra.engine,
     engine: engineId,
     onChildReady: (info) => {
       pid = info.pid;
@@ -98,7 +103,7 @@ async function run(engineId: SandboxEngineId, code: string, limits: Partial<Sand
       if (existsSync(`/proc/${info.pid}/environ`)) environ = readFileSync(`/proc/${info.pid}/environ`, 'utf8');
     },
   });
-  const { bridges, items } = createSandboxBridges({ allowedDomains: ['api.zz-test'], guard, logger });
+  const { bridges, items } = createSandboxBridges({ allowedDomains: ['api.zz-test'], guard, logger, ...extra.bridge });
   const result = await engine.run(code, bridges, { timeoutMs: 1000, memoryMb: 64, ...limits }, { input: { secret: 'zz_test_input' } });
   return { ...result, logs, items, pid, envKeys, environ };
 }
@@ -131,15 +136,30 @@ describe.each(ENGINES)('assert_sandbox — %s', (engineId) => {
     expect(r.violations).toEqual([]);
   });
 
+  test.each([
+    [10_000, 1000],
+    [2000, 10_000],
+  ])('contrôle : une rafale légitime (%i éléments de %i caractères, d’un trait, 20 et 40 Mo) passe sans violation', async (n, k) => {
+    const r = await run(engineId, `
+      const row = { id: 0, text: 'é'.repeat(${k}) };
+      for (let i = 0; i < ${n}; i++) ctx.emit({ ...row, id: i });
+      return 'fini';`, { timeoutMs: 20_000 });
+    expect(r.outcome, JSON.stringify(r.violations)).toBe('ok');
+    expect(r.items).toHaveLength(n);
+  });
+
   test('1. disque : require/process/import échouent, aucun fichier écrit', async () => {
     const file = join(tmpdir(), `zz_test_sandbox_${engineId}_${process.pid}`);
     const r1 = await run(engineId, `require('fs').writeFileSync(${JSON.stringify(file)}, 'x'); return 1;`);
     const r2 = await run(engineId, `process.binding('fs'); return 1;`);
     const r3 = await run(engineId, `const fs = await import('node:fs'); fs.writeFileSync(${JSON.stringify(file)}, 'x'); return 1;`);
-    for (const r of [r1, r2, r3]) expect(r.outcome).not.toBe('ok');
+    const r4 = await run(engineId, `const fs = await eval('imp' + 'ort("node:fs")'); fs.writeFileSync(${JSON.stringify(file)}, 'x'); return 1;`);
+    for (const r of [r1, r2, r3, r4]) expect(r.outcome).toBe('violation');
     expect(existsSync(file)).toBe(false);
     expect(violationLogged(r1, 'forbidden_global')).toBe(true);
     expect(violationLogged(r2, 'forbidden_global')).toBe(true);
+    expect(violationLogged(r3, 'forbidden_import')).toBe(true);
+    expect(violationLogged(r4, 'forbidden_import')).toBe(true);
   });
 
   test('2. fetch hors domaine (direct, redirection, IP, userinfo) : refusé, 0 requête vers le domaine piège', async () => {
@@ -210,6 +230,72 @@ describe.each(ENGINES)('assert_sandbox — %s', (engineId) => {
     expect(violationLogged(r, 'memory_limit')).toBe(true);
   });
 
+  test('7. sortie vers l’hôte : emit de 1 Mo en boucle cadencée → output_limit, enfant tué, RSS du parent bornée', async () => {
+    const rss: number[] = [process.memoryUsage().rss];
+    const sampler = setInterval(() => rss.push(process.memoryUsage().rss), 20);
+    const r = await run(engineId, `
+      const s = 'x'.repeat(1e6);
+      for (;;) { ctx.emit(s); const t = Date.now(); while (Date.now() - t < 2) {} }`, { timeoutMs: 4000 });
+    clearInterval(sampler);
+    rss.push(process.memoryUsage().rss);
+    const growthMb = (Math.max(...rss) - (rss[0] as number)) / 1048576;
+    expect(r.outcome, JSON.stringify({ ...r, logs: undefined, items: r.items.length })).not.toBe('ok');
+    if (engineId === 'isolated-vm') {
+      expect(r.outcome).toBe('violation');
+      expect(violationLogged(r, 'output_limit')).toBe(true);
+      expect(r.durationMs).toBeLessThan(3000);
+    } else {
+      // QuickJS tourne sur le fil principal de l'enfant : tant que le script ne rend pas la main, rien ne part vers le
+      // parent (file IPC de l'enfant, bornée par le budget sortant) ; l'échéance murale le tue.
+      expect(['violation', 'timeout']).toContain(r.outcome);
+    }
+    expectKilledFast(r, 4000);
+    // Plafond cumulé par défaut : 50 Mio d'éléments retenus (52 éléments de 1 000 002 octets).
+    expect(r.items.length).toBeLessThanOrEqual(53);
+    expect(growthMb).toBeLessThan(256);
+  });
+
+  test('8. boucle de violations rattrapées : enfant tué à la première, journal borné', async () => {
+    const r = await run(engineId, `for (;;) { try { process; } catch (e) {} }`, { timeoutMs: 3000 });
+    expect(r.outcome).toBe('violation');
+    expectKilledFast(r, 3000);
+    expect(r.durationMs).toBeLessThan(2000);
+    expect(r.violations.length).toBeLessThanOrEqual(32);
+    expect(r.logs.filter((l) => l.event === 'sandbox_violation').length).toBeLessThanOrEqual(32);
+  });
+
+  test('9. violation de pont rattrapée puis boucle : enfant tué sans attendre l’échéance', async () => {
+    const r = await run(engineId, `try { await ctx.fetch('http://evil.zz-test:${evil.port}/x'); } catch (e) {} for (;;) {}`, { timeoutMs: 3000 });
+    expect(r.outcome).toBe('violation');
+    expect(violationLogged(r, 'domain_not_allowed')).toBe(true);
+    expectKilledFast(r, 3000);
+    expect(r.durationMs).toBeLessThan(2000);
+  });
+
+  test('10. journal inondé : au-delà du plafond, violation et enfant tué', async () => {
+    const r = await run(engineId, `for (;;) ctx.log('x'.repeat(1000));`, { timeoutMs: 3000 });
+    expect(r.outcome).toBe('violation');
+    expect(violationLogged(r, 'output_limit')).toBe(true);
+    expect(r.logs.filter((l) => l.event === 'sandbox_log').length).toBeLessThan(80);
+    expectKilledFast(r, 3000);
+    expect(r.durationMs).toBeLessThan(2000);
+  });
+
+  test('11. budget IPC du run : au-delà, output_limit et enfant tué', async () => {
+    const r = await run(engineId, `const s = 'y'.repeat(100000); for (let i = 0; i < 200; i++) ctx.emit(s); return 1;`, { timeoutMs: 3000, maxIpcBytes: 2 * 1024 * 1024 }, { bridge: { maxTotalItemBytes: 1e9 } });
+    expect(r.outcome).toBe('violation');
+    expect(r.violations).toContainEqual({ reason: 'output_limit', detail: 'ipc' });
+    expect(r.items.length).toBeLessThanOrEqual(21);
+  });
+
+  test('12. plafond CPU du processus (RLIMIT_CPU) : boucle tuée par le système avant l’échéance murale', async () => {
+    const r = await run(engineId, 'while (true) {}', { timeoutMs: 15_000, cpuLimitSeconds: 1 });
+    expect(r.outcome).toBe('timeout');
+    expect(r.violations).toContainEqual({ reason: 'time_limit', detail: 'cpu' });
+    expect(r.durationMs).toBeLessThan(6000);
+    if (r.pid !== undefined) expect(alive(r.pid)).toBe(false);
+  });
+
   test('environnement de l’enfant : ni MASTER_KEY ni DATABASE_URL, lecture refusée', async () => {
     const r = await run(engineId, `return process.env.MASTER_KEY;`);
     expect(r.outcome).toBe('violation');
@@ -241,6 +327,35 @@ describe.each(ENGINES)('assert_sandbox — %s', (engineId) => {
     expect(r.outcome).not.toBe('crashed');
     expect(r.outcome).not.toBe('timeout');
   });
+});
+
+describe('assert_sandbox — démarrage et utilisateur de l’enfant', () => {
+  test('démarrage trop long : crashed, et sandbox_violation (child_crashed) journalisé', async () => {
+    const r = await run('isolated-vm', 'return 1;', {}, { engine: { startupTimeoutMs: 1 } });
+    expect(r.outcome).toBe('crashed');
+    expect(violationLogged(r, 'child_crashed')).toBe(true);
+    if (r.pid !== undefined) expect(alive(r.pid)).toBe(false);
+  });
+
+  // « Lecture de l'environnement du parent » (08 §7) au niveau du système : la sonde passe par le même lanceur que
+  // l'enfant (uid, rlimit, environnement vide) mais SANS --permission, pour éprouver la frontière de l'OS seule.
+  const dedicated = sandboxOptionsFromEnv(process.env);
+  test('sonde : sans utilisateur dédié, la sonde voit l’environnement du parent sous Linux (le trou existe)', async () => {
+    const probe = await new ProcessSandboxEngine({ ...dedicated, uid: undefined, gid: undefined, launcher: undefined }).probeIsolation();
+    expect(probe.uid).toBe(process.getuid?.());
+    expect(probe.parentEnviron).toBe(process.platform === 'linux' ? 'readable' : 'absent');
+  });
+
+  test.skipIf(process.platform !== 'linux' || dedicated.uid === undefined)(
+    'Linux, utilisateur dédié : l’enfant ne tourne pas sous l’uid du worker et /proc/<ppid>/environ lui est illisible',
+    async () => {
+      const probe = await new ProcessSandboxEngine(dedicated).probeIsolation();
+      expect(probe.uid).toBe(dedicated.uid);
+      expect(probe.uid).not.toBe(process.getuid?.());
+      expect(probe.parentEnviron).toBe('denied');
+      expect(probe.noNewPrivs).toBe(true);
+    },
+  );
 });
 
 describe('assert_sandbox — mesure RSS (15 §7)', () => {

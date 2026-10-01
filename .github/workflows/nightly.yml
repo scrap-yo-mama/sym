@@ -26,28 +26,4 @@ jobs:
         with:
           node-version-file: runtime/.node-version
       - run: pnpm install --frozen-lockfile
-      - run: 'echo "nightly : pas encore implémenté (k6, tests instables, N2, Node 26)"'
-
-  # Bac à sable (tâche 1.5, 08 §3) : matrice Node 24 / 26 × isolated-vm 7.0.1 (binaires ABI 137 et 147). Le job `security`
-  # de ci.yml couvre Node 24 à chaque PR ; ici Node 26 (passage prévu le 2026-10-28, à valider). engines limite
-  # l'installation à Node 24 : engine-strict est levé pour ce seul job.
-  sandbox-node-matrix:
-    runs-on: ubuntu-24.04
-    strategy:
-      fail-fast: false
-      matrix:
-        node: ["24", "26"]
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
-        with:
-          package_json_file: runtime/package.json
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: ${{ matrix.node }}
-      - run: pnpm install --frozen-lockfile --config.engine-strict=false
-      - run: pnpm build
-      - name: assert_sandbox et borne isolated-vm sur Node ${{ matrix.node }}
-        run: pnpm vitest run --project unit --project security apps/worker/src/sandbox
+      - run: 'echo "nightly : pas encore implémenté (k6, tests instables, N2) ; Node 26 du bac à sable : job security de ci.yml"'
