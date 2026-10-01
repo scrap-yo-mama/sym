@@ -308,9 +308,11 @@ test('battement d’un worker tué (kill -9) : expire après le délai de mort (
   const { child, workerId } = await childWorker(runId);
   const status = async () => (await listWorkers(pool, deadAfter)).find((w) => w.workerId === workerId);
   expect(await status()).toMatchObject({ alive: true });
+  // killedAt pris AVANT le kill : l'âge du battement court dès la mort du processus, pas dès que `exited` rend la main
+  // (sous charge, l'attente de sortie peut durer plusieurs secondes et fausse la borne basse).
+  const killedAt = Date.now();
   child.kill('SIGKILL');
   expect((await exited(child)).signal).toBe('SIGKILL');
-  const killedAt = Date.now();
   // La ligne reste (aucun arrêt propre) mais n'est plus vivante une fois le délai écoulé.
   await vi.waitFor(async () => expect(await status()).toMatchObject({ alive: false }), { timeout: 10_000, interval: 100 });
   expect(Date.now() - killedAt).toBeGreaterThanOrEqual((deadAfter - 0.6) * 1000);

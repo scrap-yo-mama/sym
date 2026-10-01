@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Garde de session du routeur : connexion obligatoire, page publique fermée aux sessions ouvertes, redirection interne seule.
-import { afterEach, beforeEach, describe, expect, test } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, test } from 'vitest';
 import { createMemoryHistory } from 'vue-router';
 import en from '@runtime/i18n/locales/en.json';
 import { resetSession } from '@/composables/useSession';
@@ -26,6 +26,11 @@ function server(status: number) {
   );
 }
 
+// Préchauffe les vues chargées à la demande : la première navigation transformait LoginView à froid (compilation SFC) et dépassait
+// les 5 s du test sous charge (CI parallèles + couverture). Le hook a son propre délai large (60 s).
+beforeAll(async () => {
+  await Promise.all([import('@/views/LoginView.vue'), import('@/views/HomeView.vue')]);
+}, 60_000);
 beforeEach(() => resetSession());
 afterEach(() => setApi(undefined));
 
