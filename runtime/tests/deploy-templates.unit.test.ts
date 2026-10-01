@@ -3,6 +3,8 @@
 // docker-compose.prod.yml, modèle Railway, heroku.yml. Les mêmes invariants valent pour tous : image épinglée X.Y.Z, aucun
 // secret littéral, MASTER_KEY partagée entre server et worker, variables toutes présentes au catalogue.
 import { ENV_CATALOG, envVariableNames, MasterKey } from '@runtime/core';
+import { Ajv2020 } from 'ajv/dist/2020.js';
+import { spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -10,8 +12,11 @@ import { describe, expect, test } from 'vitest';
 import { parse } from 'yaml';
 
 const runtimeDir = new URL('..', import.meta.url).pathname;
+const repoDir = join(runtimeDir, '..');
 const deployDir = join(runtimeDir, 'deploy');
-const text = (path: string) => readFileSync(join(deployDir, path), 'utf8');
+/** Render ne lit le Blueprint (et son bouton « Deploy to Render ») qu'à la RACINE du dépôt : source unique, hors de deploy/. */
+const RENDER_YAML = join(repoDir, 'render.yaml');
+const text = (path: string) => readFileSync(path === 'render.yaml' ? RENDER_YAML : join(deployDir, path), 'utf8');
 const yaml = <T>(path: string): T => parse(text(path)) as T;
 const version = (JSON.parse(readFileSync(join(runtimeDir, 'package.json'), 'utf8')) as { version: string }).version;
 
@@ -49,13 +54,27 @@ describe('assert_deploy_templates_static : image épinglée X.Y.Z dans chaque mo
   });
 
   test('les fichiers à épingler sont déclarés dans les deux configurations release-please', () => {
-    const repoDir = join(runtimeDir, '..');
     for (const name of ['release-please-config.json', 'release-please-config.beta.json']) {
       const config = JSON.parse(readFileSync(join(repoDir, name), 'utf8')) as { packages: { runtime: { 'extra-files': { type: string; path: string }[] } } };
       const generic = config.packages.runtime['extra-files'].filter((f) => f.type === 'generic').map((f) => f.path).sort();
-      expect(generic, name).toEqual(['deploy/docker-compose.prod.yml', 'deploy/heroku/Dockerfile.web', 'deploy/heroku/Dockerfile.worker', 'deploy/railway/template.yaml', 'deploy/render.yaml']);
-      for (const path of generic) expect(existsSync(join(runtimeDir, path)), path).toBe(true);
+      // Chemin en « / » : relatif à la racine du dépôt et non au paquet runtime (release-please 17.6.0, Strategy.addPath).
+      expect(generic, name).toEqual(['/render.yaml', 'deploy/docker-compose.prod.yml', 'deploy/heroku/Dockerfile.web', 'deploy/heroku/Dockerfile.worker', 'deploy/railway/template.yaml']);
+      for (const path of generic) expect(existsSync(path.startsWith('/') ? join(repoDir, path) : join(runtimeDir, path)), path).toBe(true);
     }
+  });
+});
+
+describe('assert_deploy_templates_static : bouton « Deploy to Render » (14 § 12, à valider au GO)', () => {
+  const BADGE = '[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/mrsoyer/scrapyomama-runtime)';
+
+  test('render.yaml est à la racine du dépôt, en un seul exemplaire (Render ne lit le Blueprint du bouton qu’à la racine)', () => {
+    expect(existsSync(RENDER_YAML)).toBe(true);
+    expect(existsSync(join(deployDir, 'render.yaml')), 'copie divergente possible : une seule source').toBe(false);
+  });
+
+  test('le badge pointe sur le dépôt (paramètre repo explicite) ; présent dans le guide et dans deploy/README.md', () => {
+    expect(readFileSync(join(runtimeDir, 'docs/deploiement.md'), 'utf8')).toContain(BADGE);
+    expect(readFileSync(join(deployDir, 'README.md'), 'utf8')).toContain(BADGE);
   });
 });
 
@@ -96,6 +115,13 @@ describe('render.yaml : cible de référence (bloquante)', () => {
     expect(Number(worker.plan.match(/-(\d+)g$/)?.[1])).toBeGreaterThanOrEqual(2);
   });
 
+  test('dimensionnement du web aligné : mémoire du plan Render = plafond du server dans le compose (à confirmer par 4.4)', () => {
+    const mb = Number(web.plan.match(/-(\d+)mb$/)?.[1]);
+    const compose = yaml<{ services: Record<string, { mem_limit?: string }> }>('docker-compose.prod.yml').services['server']!.mem_limit;
+    expect(mb).toBeGreaterThan(0);
+    expect(compose).toBe(`${mb}m`);
+  });
+
   test('MASTER_KEY générée UNE fois (groupe) et partagée : deux `generateValue` séparés donneraient deux clés différentes', () => {
     const group = doc.envVarGroups.find((g) => g.name === 'scrapyomama-runtime-secrets')!;
     expect(group.envVars).toEqual([{ key: 'MASTER_KEY', generateValue: true }]);
@@ -126,6 +152,18 @@ describe('render.yaml : cible de référence (bloquante)', () => {
         if (e.value !== undefined) expect(literal.has(e.key!), `${e.key} littéral`).toBe(true);
       }
     }
+  });
+});
+
+// Schéma officiel des Blueprints (https://render.com/schema/render.yaml.json) : il n'est PAS versionné ici (aucune licence
+// publiée par Render). Rejeu : télécharger le schéma puis RENDER_SCHEMA=<fichier> (commande dans docs/deploiement.md).
+describe('render.yaml : conforme au schéma officiel de Render (rejeu manuel, RENDER_SCHEMA)', () => {
+  const schemaPath = process.env['RENDER_SCHEMA'];
+  test.skipIf(!schemaPath)('render.yaml valide contre le schéma téléchargé (ajv, JSON Schema 2020-12)', () => {
+    const validate = new Ajv2020({ strict: false, allErrors: true, validateFormats: false }).compile(JSON.parse(readFileSync(schemaPath!, 'utf8')) as object);
+    const ok = validate(parse(text('render.yaml')));
+    expect(validate.errors ?? null, JSON.stringify(validate.errors)).toBeNull();
+    expect(ok).toBe(true);
   });
 });
 
@@ -230,7 +268,7 @@ describe('modèle Railway (best-effort) : description du modèle à saisir', () 
 });
 
 describe('Heroku (best-effort) : heroku.yml, deux Dockerfile, app.json', () => {
-  const manifest = yaml<{ setup: { addons: { plan: string; as: string }[]; config: Record<string, string> }; build: { docker: Record<string, string> }; release: { image: string; command: string[] } }>('heroku/heroku.yml');
+  const manifest = yaml<{ setup: { addons: { plan: string; as: string }[]; config: Record<string, string> }; build: { docker: Record<string, string> }; release: { image: string; command: string[] }; run?: Record<string, string> }>('heroku/heroku.yml');
   const appJson = JSON.parse(text('heroku/app.json')) as { stack: string; env: Record<string, { value?: string; generator?: string; required?: boolean }>; addons: { plan: string }[]; formation: Record<string, { size: string }> };
 
   test('web et worker construits depuis des Dockerfile voisins ; release phase = `runtime migrate` sur l’image web', () => {
@@ -238,6 +276,23 @@ describe('Heroku (best-effort) : heroku.yml, deux Dockerfile, app.json', () => {
     for (const file of Object.values(manifest.build.docker)) expect(existsSync(join(deployDir, 'heroku', file)), file).toBe(true);
     expect(manifest.release).toEqual({ image: 'web', command: ['runtime migrate'] });
     expect(manifest.setup.addons).toEqual([{ plan: 'heroku-postgresql:essential-0', as: 'DATABASE' }]);
+  });
+
+  test('run explicite : web et worker démarrent le point d’entrée de l’image (l’image de base n’a pas de CMD)', () => {
+    const entrypoint = readFileSync(join(deployDir, 'Dockerfile'), 'utf8').match(/^ENTRYPOINT \[.*"([^"]+entrypoint\.sh)"\]$/m)?.[1];
+    expect(entrypoint).toBe('/usr/local/bin/entrypoint.sh');
+    expect(manifest.run).toEqual({ web: entrypoint, worker: entrypoint });
+  });
+
+  test('ce run fonctionne que Heroku garde l’ENTRYPOINT (argument unique, ou passé par /bin/sh -c) ou non : on arrive au choix du rôle', () => {
+    // Hors image, le chemin du point d'entrée est celui du dépôt ; RUNTIME_MODE invalide prouve que le choix du rôle est atteint.
+    const script = join(deployDir, 'entrypoint.sh');
+    const env = { PATH: process.env['PATH'] ?? '', RUNTIME_MODE: 'zz_test_mode' };
+    for (const args of [[script, script], [script, '/bin/sh', '-c', script], [script]]) {
+      const res = spawnSync('bash', args, { encoding: 'utf8', env, timeout: 20_000 });
+      expect(res.status, args.join(' ')).toBe(64);
+      expect(res.stderr).toMatch(/RUNTIME_MODE invalide/);
+    }
   });
 
   test('chaque Dockerfile : FROM épinglé SANS commentaire sur la ligne, mode correct (un `#` en fin de ligne FROM casserait le build)', () => {
@@ -264,7 +319,7 @@ describe('aucun secret dans les modèles', () => {
   const files = (dir: string): string[] => readdirSync(dir, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? files(join(dir, e.name)) : [join(dir, e.name)]));
 
   test('ni clé maîtresse canonique, ni jeton d’API, ni clé privée dans deploy/', () => {
-    for (const file of files(deployDir)) {
+    for (const file of [...files(deployDir), RENDER_YAML]) {
       const content = readFileSync(file, 'utf8');
       expect(content, file).not.toMatch(/(?<![A-Za-z0-9+/])[A-Za-z0-9+/]{42}[AEIMQUYcgkosw048]=(?![A-Za-z0-9+/=])/);
       expect(content, file).not.toMatch(/sk-[A-Za-z0-9]{20,}|BEGIN [A-Z ]*PRIVATE KEY|ghp_[A-Za-z0-9]{20,}/);

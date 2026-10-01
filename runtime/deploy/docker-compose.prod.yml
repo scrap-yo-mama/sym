@@ -9,7 +9,8 @@
 # - Pas de `init: true` : l'image embarque déjà tini (ENTRYPOINT), qui relaie les signaux et récolte les zombies de Chromium ;
 #   un second init ferait avertir tini à chaque démarrage. Chromium reçoit --disable-dev-shm-usage (l'application le pose),
 #   donc `ipc: host` n'est pas nécessaire et n'est pas utilisé (il partagerait l'espace IPC de la machine avec un conteneur
-#   qui ouvre des sites tiers) ; `shm_size` garde une marge.
+#   qui ouvre des sites tiers) ; `shm_size` garde une marge. Écart assumé à 14 § 12 (qui demande `init` et `ipc: host`),
+#   consigné dans docs/deploiement.md (statut de vérification).
 # - Ne PAS poser `security_opt: no-new-privileges` ni `cap_drop: [SETUID, SETGID]` sur le worker : le lanceur du bac à sable
 #   change d'utilisateur par des capacités de fichier (INV7) ; sans elles, le worker refuse de démarrer en production.
 name: scrapyomama-runtime
@@ -72,7 +73,7 @@ services:
         condition: service_healthy
       migrate:
         condition: service_completed_successfully
-    mem_limit: 768m
+    mem_limit: 512m # = plan du web sur Render (0.5c-512mb) ; à confirmer par la recette (4.4)
     healthcheck:
       # /api/ready : base joignable, schéma à jour, empreinte de clé valide (200), sinon 503.
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/ready').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]

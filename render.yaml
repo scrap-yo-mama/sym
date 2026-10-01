@@ -1,10 +1,13 @@
 # Blueprint Render (tâche 4.1, 14 § 12) : cible de référence. Trois ressources : le service web (server), le worker et une base
 # PostgreSQL privée. Les deux services tirent la MÊME image publique de GHCR, épinglée X.Y.Z (jamais `latest`).
-# Guide pas à pas : docs/deploiement.md.
+# Guide pas à pas : runtime/docs/deploiement.md.
+#
+# Ce fichier est à la RACINE du dépôt parce que Render n'y cherche le Blueprint que là (bouton « Deploy to Render » compris).
+# Source unique : runtime/deploy/ n'en garde aucune copie ; release-please met l'épingle à jour (extra-files « /render.yaml »).
 #
 # Créer l'instance :
-#   - bouton « Deploy to Render » : https://render.com/deploy?repo=<URL du dépôt public> (Render lit render.yaml à la RACINE du
-#     dépôt : si ce fichier n'y est pas, créez le Blueprint par « New > Blueprint » et indiquez ce chemin dans « Blueprint Path ») ;
+#   - bouton « Deploy to Render » : https://render.com/deploy?repo=https://github.com/mrsoyer/scrapyomama-runtime
+#     (à valider au GO : le dépôt doit être public, aucun déploiement réel n'a encore été fait), ou « New > Blueprint » ;
 #   - Render demande UNE valeur : PUBLIC_URL, l'adresse publique de l'instance (https://….onrender.com ou votre domaine).
 #
 # Ce que le Blueprint fait pour vous :
@@ -19,9 +22,9 @@
 # Choix à connaître :
 #   - `autoDeployTrigger: 'off'` : un changement du dépôt ne redéploie jamais une instance déjà créée. Pour mettre à jour,
 #     sauvegardez, changez le tag de l'image dans les deux services (ou ce fichier), puis déployez (docs/exploitation.md).
-#   - Plans : web 0,5 CPU / 512 Mo (le serveur occupe une centaine de Mo au repos), worker 1 CPU / 2 Go (= 1 run navigateur ;
-#     `2c-4g` pour 2 runs, BROWSER_CONCURRENCY se déduit de la mémoire). Base 0,5 CPU / 1 Go, 15 Go de disque (10 Go minimum).
-#     Chiffres de dimensionnement à confirmer par la recette (tâche 4.4).
+#   - Plans : web 0,5 CPU / 512 Mo (= le plafond du server dans docker-compose.prod.yml ; aucun chiffre mesuré),
+#     worker 1 CPU / 2 Go (= 1 run navigateur ; `2c-4g` pour 2 runs, BROWSER_CONCURRENCY se déduit de la mémoire).
+#     Base 0,5 CPU / 1 Go, 15 Go de disque (10 Go minimum). Dimensionnement à confirmer par la recette (tâche 4.4).
 #   - `TRUST_PROXY=1` : un seul saut, le proxy de Render. Sans lui, toutes les requêtes semblent venir du proxy.
 #   - Région : toutes les ressources dans la même région (connexion interne à la base). `frankfurt` ; changez-la partout ensemble.
 envVarGroups:

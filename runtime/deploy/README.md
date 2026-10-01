@@ -1,11 +1,15 @@
 Dockerfile, entrypoint et modèles de déploiement (tâches 0.1, 4.x). Guide pas à pas : [docs/deploiement.md](../docs/deploiement.md).
 
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/mrsoyer/scrapyomama-runtime)
+
+Bouton à valider au GO (dépôt public requis ; aucun déploiement Render réel n'a encore été fait).
+
 | Fichier | Rôle |
 |---|---|
 | `Dockerfile`, `entrypoint.sh` | Image unique (`RUNTIME_MODE=server\|worker\|all\|migrate`) ; une commande passée en argument est exécutée telle quelle (pré-déploiement `runtime migrate` des hébergeurs) ; la commande `runtime` est dans le PATH |
-| `render.yaml` | Blueprint Render (cible de référence) : web, worker, base privée, `MASTER_KEY` générée et partagée |
+| [`../../render.yaml`](../../render.yaml) | Blueprint Render (cible de référence) : web, worker, base privée, `MASTER_KEY` générée et partagée. À la **racine** du dépôt, seul endroit où Render le lit (bouton compris) |
 | `docker-compose.prod.yml`, `install.sh` | Machine Docker (VPS, Coolify, Dokploy) : `install.sh` écrit le `.env` (clé, jeton, mot de passe), le fichier compose démarre postgres, migrate, server, worker |
-| `verify.sh` | Contrôle d'une instance déployée, quelle que soit la cible : `/api/health`, `/api/ready`, `/api/version`, `/mcp` |
+| `verify.sh` | Contrôle d'une instance déployée, quelle que soit la cible : `/api/health`, `/api/ready`, `/api/version`, `/mcp` (exigé ; `--allow-missing-mcp` pour une version sans serveur MCP) |
 | `check-image-public.sh` | Piège GHCR : l'image est-elle tirable sans identifiant ? |
 | `railway/template.yaml` | Description du modèle Railway (best-effort) |
 | `heroku/` | `heroku.yml`, deux Dockerfile minces, `app.json` (best-effort) |

@@ -3,18 +3,28 @@
 # Vérifie une instance déployée (tâche 4.1) : même contrôle sur Render, compose, Railway ou Heroku. Lecture seule, sans
 # identifiant : /api/health, /api/ready (attend jusqu'à WAIT secondes, 120 par défaut), /api/version, point d'entrée MCP.
 #
-#   ./verify.sh https://runtime.example.org [--require-mcp]
+#   ./verify.sh https://runtime.example.org [--allow-missing-mcp]
 #
 # Code de sortie : 0 tout est bon ; 1 /api/ready n'est jamais passé à 200 ou une sonde est fausse ; 2 usage.
-# Sans --require-mcp, un point d'entrée MCP absent (404) est signalé sans faire échouer le script (version sans serveur MCP).
+# Le point d'entrée MCP est EXIGÉ (critère « MCP joignable » de la tâche 4.1) : un /mcp à 404 fait échouer le script.
+# --allow-missing-mcp : seulement pour une version antérieure au serveur MCP (tâche 3.2) ; le 404 est alors signalé sans échec.
+# --require-mcp : ancienne option, acceptée et sans effet (c'est le comportement par défaut).
 set -eu
 
+usage() { echo "usage : verify.sh URL [--allow-missing-mcp]   ex. verify.sh https://runtime.example.org" >&2; exit 2; }
 base="${1:-}"
-require_mcp=0
-[ "${2:-}" = "--require-mcp" ] && require_mcp=1
+require_mcp=1
+[ "$#" -gt 0 ] && shift
+for option in "$@"; do
+  case "$option" in
+    --allow-missing-mcp) require_mcp=0 ;;
+    --require-mcp) require_mcp=1 ;;
+    *) echo "verify.sh : option inconnue « $option »" >&2; usage ;;
+  esac
+done
 case "$base" in
   http://?*|https://?*) ;;
-  *) echo "usage : verify.sh URL [--require-mcp]   ex. verify.sh https://runtime.example.org" >&2; exit 2 ;;
+  *) usage ;;
 esac
 base="${base%/}"
 wait_seconds="${WAIT:-120}"
@@ -59,7 +69,11 @@ code=$(status "$base/mcp")
 case "$code" in
   200|400|401|403|405|406) ok "/mcp joignable (HTTP $code sans identifiant)" ;;
   404)
-    if [ "$require_mcp" = 1 ]; then ko "/mcp = 404 : cette version ne sert pas le MCP"; else echo "  info  /mcp = 404 : cette version ne sert pas encore le MCP (vérification reportée)"; fi ;;
+    if [ "$require_mcp" = 1 ]; then
+      ko "/mcp = 404 : cette version ne sert pas le MCP (--allow-missing-mcp pour une version antérieure au serveur MCP)"
+    else
+      echo "  info  /mcp = 404 : cette version ne sert pas le MCP (toléré par --allow-missing-mcp)"
+    fi ;;
   *) ko "/mcp = $code" ;;
 esac
 

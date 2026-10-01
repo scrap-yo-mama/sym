@@ -83,6 +83,10 @@ describe('install.sh : génère le .env de docker-compose.prod.yml', () => {
     }
     expect(res.stdout).toMatch(/docker compose -f .*docker-compose\.prod\.yml.* up -d/);
     expect(res.stdout).toMatch(/Sauvegardez MASTER_KEY/);
+    // L'image ne sert pas encore la console ni la vue /setup (3.8) : l'assistant est l'appel POST /api/setup du guide.
+    expect(res.stdout).not.toMatch(/Ouvrez .*assistant/);
+    expect(res.stdout).toMatch(/POST .*\/api\/setup/);
+    expect(res.stdout).toMatch(/docs\/deploiement\.md/);
     expect(env['PUBLIC_URL']).toBe('http://localhost:3000');
     expect(env['TRUST_PROXY']).toBe('0');
   });
@@ -181,13 +185,30 @@ describe('verify.sh : sondes d’une instance déployée', () => {
     expect(res.stdout).toMatch(/runtime doctor/);
   });
 
-  test('MCP : 404 toléré (version sans serveur MCP) sauf avec --require-mcp ; 5xx toujours un échec', async () => {
+  test('MCP exigé par défaut (critère « MCP joignable », 10-taches 4.1) : un /mcp à 404 fait échouer, même sans option', async () => {
     reset();
     behaviour.mcp = 404;
-    expect((await verify()).status).toBe(0);
-    expect((await verify(['--require-mcp'])).status).toBe(1);
+    const res = await verify();
+    expect(res.status).toBe(1);
+    expect(res.stdout).toMatch(/ECHEC \/mcp = 404/);
+    expect(res.stdout).not.toMatch(/Instance saine/);
+    expect((await verify(['--require-mcp'])).status).toBe(1); // option historique, acceptée sans effet
+  });
+
+  test('--allow-missing-mcp (versions sans serveur MCP, avant 3.2) : 404 signalé sans échouer ; 5xx reste un échec', async () => {
+    reset();
+    behaviour.mcp = 404;
+    const res = await verify(['--allow-missing-mcp']);
+    expect(res.status, res.stdout).toBe(0);
+    expect(res.stdout).toMatch(/info {2}\/mcp = 404/);
     behaviour.mcp = 502;
+    expect((await verify(['--allow-missing-mcp'])).status).toBe(1);
     expect((await verify()).status).toBe(1);
+  });
+
+  test('option inconnue → code 2 (pas de faute de frappe qui désactive un contrôle en silence)', async () => {
+    reset();
+    expect((await verify(['--allow-missing-mpc'])).status).toBe(2);
   });
 
   test('usage : URL absente ou invalide → code 2', async () => {

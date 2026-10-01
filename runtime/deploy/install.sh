@@ -61,7 +61,9 @@ cat <<EOF
      grep '^MASTER_KEY=' "$env_file"
 2. Démarrez :
      docker compose -f "$here/docker-compose.prod.yml" up -d
-3. Ouvrez $public_url : l'assistant de premier démarrage demande le jeton d'amorçage :
+3. Créez le premier administrateur. L'assistant de premier démarrage est l'appel POST $public_url/api/setup
+   (cette version ne sert pas encore de page dans le navigateur) ; commande curl complète : docs/deploiement.md,
+   section « Premier démarrage ». Il demande le jeton d'amorçage :
      grep '^ADMIN_BOOTSTRAP_TOKEN=' "$env_file"
    Une fois le premier administrateur créé, retirez ADMIN_BOOTSTRAP_TOKEN du .env (runtime doctor le signale).
 4. Vérifiez : $here/verify.sh $public_url

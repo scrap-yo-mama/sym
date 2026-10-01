@@ -84,7 +84,7 @@
         },
         {
           "type": "generic",
-          "path": "deploy/render.yaml"
+          "path": "/render.yaml"
         }
       ]
     }

@@ -34,9 +34,13 @@ Toutes les variables sont dans [variables-env.md](variables-env.md) (générée 
 
 ## Render
 
-1. Créez le Blueprint : bouton **Deploy to Render** (`https://render.com/deploy?repo=<URL du dépôt public>`), ou
-   *New > Blueprint*. Render lit `render.yaml` à la **racine** du dépôt ; s'il est ailleurs (ici `deploy/render.yaml`),
-   indiquez-le dans *Blueprint Path*.
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/mrsoyer/scrapyomama-runtime)
+
+Bouton **à valider au GO** : il ne fonctionne qu'une fois le dépôt public, et aucun déploiement réel n'a encore été fait
+(voir [statut de vérification](#statut-de-vérification)).
+
+1. Créez le Blueprint : le bouton ci-dessus, ou *New > Blueprint* sur ce dépôt. Render lit `render.yaml` à la **racine**
+   du dépôt, là où il se trouve (source unique ; `deploy/` n'en garde pas de copie).
 2. Render demande **une seule valeur**, `PUBLIC_URL`. L'adresse `.onrender.com` n'est connue qu'après la création, et Render
    ajoute un suffixe si le nom est pris : saisissez `https://scrapyomama-runtime.onrender.com`, puis, au premier déploiement,
    comparez avec l'adresse réelle du service web et corrigez `PUBLIC_URL` (onglet *Environment*) si elle diffère.
@@ -52,7 +56,7 @@ Mettre à jour : sauvegardez la base (`pg_dump`), changez le tag de l'image dans
 
 ## Docker Compose (VPS, Coolify, Dokploy)
 
-Il faut Docker avec le plugin Compose v2 et 4 Go de mémoire au moins (worker 4 Go de plafond, serveur 768 Mo, base 1 Go).
+Il faut Docker avec le plugin Compose v2 et 4 Go de mémoire au moins (worker 4 Go de plafond, serveur 512 Mo, base 1 Go).
 
 ```bash
 cd deploy
@@ -114,7 +118,8 @@ git push heroku HEAD:main
 heroku ps:scale web=1 worker=1 && heroku ps:resize worker=performance-m
 ```
 
-`heroku.yml` construit deux images minces (`Dockerfile.web`, `Dockerfile.worker`) qui reprennent l'image GHCR, lance
+`heroku.yml` construit deux images minces (`Dockerfile.web`, `Dockerfile.worker`) qui reprennent l'image GHCR, démarre
+les deux processus par une section `run` explicite (l'image a un ENTRYPOINT mais pas de CMD), lance
 `runtime migrate` en release phase et pose `PGSSLMODE=no-verify` (Heroku Postgres impose TLS avec un certificat que le client
 ne vérifie pas). `essential-0` n'offre que 20 connexions : le budget de connexions est à la limite, aucune place pour un second
 `server`. Le bouton « Deploy to Heroku » (`app.json`) n'est pas garanti.
@@ -136,16 +141,17 @@ IP bloquent l'assistant pendant 15 minutes (derrière un proxy, vérifiez `TRUST
 ## Vérifier une instance
 
 ```bash
-deploy/verify.sh https://runtime.example.org            # health, ready (attend jusqu'à 120 s), version, MCP
-deploy/verify.sh https://runtime.example.org --require-mcp
+deploy/verify.sh https://runtime.example.org                       # health, ready (attend jusqu'à 120 s), version, MCP exigé
+deploy/verify.sh https://runtime.example.org --allow-missing-mcp   # version antérieure au serveur MCP seulement
 ```
 
 `/api/ready` = 200 signifie : base joignable, schéma à jour, empreinte de clé valide. 503 liste les contrôles en échec.
 Le diagnostic complet se lance dans le conteneur (Render : *Shell* du web ; compose : `docker compose exec server runtime doctor`) :
 code de sortie 0 tout va bien, 1 avertissement, 2 erreur. `runtime doctor` ne contacte que la base.
 
-Le point d'entrée MCP est `PUBLIC_URL/mcp` (clé d'API en `Authorization: Bearer`). `verify.sh` le signale sans échouer
-tant que la version déployée ne le sert pas ; `--require-mcp` en fait une condition.
+Le point d'entrée MCP est `PUBLIC_URL/mcp` (clé d'API en `Authorization: Bearer`). `verify.sh` l'**exige** : un `/mcp` à
+404 fait échouer la vérification. `--allow-missing-mcp` tolère ce 404, seulement pour une version qui ne sert pas encore
+le MCP (antérieure à la tâche 3.2).
 
 ## Dépannage
 
@@ -163,11 +169,36 @@ tant que la version déployée ne le sert pas ; `--require-mcp` en fait une cond
 
 ## Statut de vérification
 
-Rempli pour la tâche 4.1 ; la recette 27 (installation à froid par un tiers) reste à jouer.
+Tâche 4.1 **livrée avec réserves** (au 2026-10-01). La recette 27 (installation à froid par un tiers) reste à jouer, et le
+dimensionnement de tous les chiffres ci-dessus (server 512 Mo sur Render comme dans le compose, worker 2 Go par run
+navigateur) est **à confirmer par la recette 4.4** : aucun n'a été mesuré.
 
 | Cible | Vérifié | Comment | Reste |
 |---|---|---|---|
-| Docker Compose | `/api/ready` = 200 sur une base vierge, assistant (`POST /api/setup` 201 puis 404), `runtime doctor`, bac à sable isolé, arrêt propre | Image construite en local, `install.sh` puis `up -d`, sur la machine de développement (Docker Desktop) | MCP : `/mcp` n'est pas encore servi (404) |
-| Render | `render.yaml` conforme au schéma officiel et aux invariants (tests statiques) | Pas de déploiement : aucun service Render n'a été créé | Déploiement réel (GO) : bouton, `CREATE ROLE` sur la base gérée, sandbox sous le runtime d'image de Render |
+| Docker Compose | `/api/ready` = 200 sur une base vierge, assistant (`POST /api/setup` 201 puis 404), `runtime doctor`, bac à sable isolé, arrêt propre | Image construite en local, `install.sh` puis `up -d`, sur la machine de développement (Docker Desktop) | Réserve MCP et réserve console (ci-dessous) |
+| Render | `render.yaml` conforme aux invariants (tests statiques) et au schéma officiel de Render au 2026-10-01 (schéma `render.com/schema/render.yaml.json`, sha256 57aa0a1ff9c3, ajv 2020-12) | Pas de déploiement : aucun service Render n'a été créé (`render login` non fait) | Déploiement réel (GO) : bouton « Deploy to Render » (dépôt public), `CREATE ROLE` sur la base gérée, bac à sable sous le runtime d'image de Render, MCP |
 | Railway | Valeur générée de `MASTER_KEY` valide à chaque tirage, variables au catalogue | Tests statiques | Projet réel (compte, plan Hobby) |
-| Heroku | Syntaxe des Dockerfile, release phase `runtime migrate` | Tests statiques | Déploiement réel ; `CREATE ROLE` sur Heroku Postgres et capacités de fichier du dyno : points à consigner |
+| Heroku | Syntaxe des Dockerfile, release phase `runtime migrate`, `run` explicite (web, worker) | Tests statiques ; le point d'entrée est exercé hors image | Déploiement réel ; démarrage des dynos et release phase avec l'ENTRYPOINT de l'image (tini, sans CMD) non observés sur Heroku ; `CREATE ROLE` sur Heroku Postgres et capacités de fichier du dyno |
+
+**Réserve MCP.** Le critère « MCP joignable » n'est pas atteint : le serveur MCP (tâche 3.2) n'est pas encore fusionné et
+`/mcp` répond 404. La dépendance de 4.1 envers 3.2 a été levée par la décision D-28 (vérification MCP déployée reportée
+en recette). À la fusion de 3.2, rejouer sur le compose `deploy/verify.sh <URL>` **sans option** : il exige `/mcp` et
+échoue sur un 404.
+
+**Réserve console.** Le critère « l'assistant s'affiche » (14 § 13) n'est pas atteint : l'image ne contient pas la console
+(`apps/web/dist` n'est pas copié) et le server ne la sert pas (`@fastify/static`, prévu par 03, n'est pas câblé). Seul
+l'appel `POST /api/setup` est vérifié. La vue `/setup` relève de la tâche 3.8 (UI comptes, assistant de premier démarrage) ;
+le service de la console par le server dans l'image n'est attribué à aucune ligne de 10-taches et doit être rattaché
+(3.8 ou 4.2) avant la recette.
+
+**Écarts au CDC assumés.** 14 § 12 demande `init` et `ipc: host` dans le compose ; aucun des deux n'est posé. `init` :
+l'image lance déjà tini (ENTRYPOINT), un second init est redondant. `ipc: host` : Chromium reçoit
+`--disable-dev-shm-usage` (et `shm_size` garde une marge), donc partager l'espace IPC de la machine avec un conteneur qui
+ouvre des sites tiers n'apporte rien et affaiblit l'isolation. Le CDC est à mettre à jour en ce sens.
+
+**Rejouer la conformité au schéma Render.** Le schéma n'est pas versionné dans le dépôt (Render ne publie pas de licence) :
+
+```bash
+curl -sSo /tmp/render.schema.json https://render.com/schema/render.yaml.json
+RENDER_SCHEMA=/tmp/render.schema.json pnpm vitest run tests/deploy-templates.unit.test.ts
+```

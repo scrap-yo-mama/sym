@@ -49,6 +49,7 @@
     "@types/pg": "catalog:",
     "@vitejs/plugin-vue": "catalog:",
     "@vitest/coverage-v8": "catalog:",
+    "ajv": "catalog:",
     "eslint": "catalog:",
     "eslint-plugin-vue": "catalog:",
     "fastify": "catalog:",
