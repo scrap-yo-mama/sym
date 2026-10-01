@@ -17,7 +17,9 @@ declare module 'vitest' {
 export default async function setup(project: TestProject): Promise<() => Promise<void>> {
   const version = process.env.PG_VERSION ?? '16';
   if (!/^\d+$/.test(version)) throw new Error(`PG_VERSION invalide : ${version} (attendu : 16, 17 ou 18)`);
-  const container = await new PostgreSqlContainer(`postgres:${version}`).start();
+  // 40 fichiers en parallèle, chacun avec ses pools, serveurs, workers et, depuis 2.7, une connexion LISTEN par passerelle
+  // tunnel et par client de tunnel du worker : le défaut (100) s'épuisait (« too many clients already », PG 18).
+  const container = await new PostgreSqlContainer(`postgres:${version}`).withCommand(['postgres', '-c', 'max_connections=400']).start();
   project.provide('pgAdminUrl', container.getConnectionUri());
   project.provide('pgVersion', version);
   project.provide('pgContainerId', container.getId());
