@@ -15,9 +15,10 @@ import { describe, test } from "vitest";
 // refusé à 0 requête) ; le volet « sortie LLM » et « réparation » est repris par 2.3.
 // INV10 (0.7) : assert_ssrf_guard et assert_webhook_ssrf_blocked (squelette repris par 2.5) sont dans
 // tests/security/ssrf-guard.security.test.ts (projet Vitest security, pnpm test:security).
+// INV3 (1.2) : assert_status_transitions est dans packages/core/src/status/transitions.unit.test.ts (21 tests transition_NN_*),
+// machine.prop.test.ts (modèle fast-check) et packages/db/src/status.integration.test.ts (status_events, même transaction).
 describe("invariants (à implémenter)", () => {
   test.todo("assert_cheapest_first_logged"); // INV2, tâche(s) 2.1
-  test.todo("assert_status_transitions"); // INV3, tâche(s) 1.2
   test.todo("assert_run_traced"); // INV4, tâche(s) 1.3
   test.todo("assert_identity_pinned"); // INV5, tâche(s) 2.6, 2.7
   test.todo("assert_tunnel_single_user"); // INV5, tâche(s) 2.6, 2.7
