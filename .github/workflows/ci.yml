@@ -188,6 +188,10 @@ jobs:
     # pour Node 26 seulement.
     name: security (Node ${{ matrix.label }})
     runs-on: ubuntu-24.04
+    env:
+      # Node 26 : engines (>=24 <25) bloque aussi pnpm build et pnpm vitest, pas seulement l installation.
+      npm_config_engine_strict: ${{ matrix.node == '26' && 'false' || 'true' }}
+      pnpm_config_engine_strict: ${{ matrix.node == '26' && 'false' || 'true' }}
     strategy:
       fail-fast: false
       matrix:
