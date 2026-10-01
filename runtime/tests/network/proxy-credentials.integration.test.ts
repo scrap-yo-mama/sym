@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Tâche 1.4 sur base réelle : les identifiants d'un proxy BYO viennent du dépôt de secrets (0.3a), chiffrés au repos,
 // et arrivent au proxy de test avec les paramètres fournisseur ; aucun ne ressort en clair dans la base ni l'usage.
 import { randomBytes } from 'node:crypto';

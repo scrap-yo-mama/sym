@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Session réseau d'un essai : `direct` (N1), `dc_proxy` (N2) ou `res_proxy` (N3), toujours derrière la garde SSRF
 // (INV10, 08b §1). Le proxy BYO est une destination contrôlée : sa connexion passe par une garde dédiée (résolution
 // unique, adresse épinglée), qui ne déroge au privé que sur `allow_private_address` (admin). La cible reste

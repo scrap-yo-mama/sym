@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Proxys BYO (08 §2) et politique réseau d'une API (04 §3.2, 04b §1). Définitions saisies par l'admin seul :
 // une API ne fait que choisir un proxy existant par son `id` ; une stratégie, un prompt ou un membre ne fournit
 // jamais d'URL ni d'argument de proxy. Aucune I/O ici.

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Tâche 1.4 (critère du tableau 10) : avec un proxy de test local (CONNECT, IP de sortie annoncée par mode,
 // paramètres journalisés), l'IP de sortie vue par la fixture dépend du mode et les paramètres fournisseur sont
 // présents ; 401, 403 et 429 → aucun changement de proxy (assert_no_ip_change_after_refusal, X4, INV6).

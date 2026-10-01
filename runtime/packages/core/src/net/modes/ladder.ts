@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Échelle réseau N1 → N2 → N3 (04 §3.2) et politique d'escalade (04 §7, 08 §2, _exclusions X4, INV6).
 // La seule classe qui fait monter l'axe réseau est `network` (géo-restriction, erreur de connexion). Un 401, un 403,
 // un 429, un défi ou `robots_disallowed` ne change JAMAIS de proxy ni d'IP : arrêt, `action_requise` ou

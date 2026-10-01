@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Proxy de test local (tâche 1.4) : HTTP CONNECT qui annonce une « IP de sortie » propre à chaque instance et
 // journalise les paramètres fournisseur reçus (nom d'utilisateur Basic). La fixture `/ip` lit l'IP de sortie
 // annoncée via le registre partagé (port local du socket sortant du proxy → IP annoncée) ; sans entrée, c'est

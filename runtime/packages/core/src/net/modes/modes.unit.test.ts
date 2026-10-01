@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Tâche 1.4 : définitions de proxys (admin), politique réseau, gabarits fournisseur, décisions d'escalade.
 // Le banc avec proxy de test local est dans tests/network/network-modes.unit.test.ts.
 import { describe, expect, test } from 'vitest';
