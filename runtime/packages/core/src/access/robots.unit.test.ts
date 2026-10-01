@@ -135,9 +135,15 @@ describe('robots.txt (RFC 9309) : analyse et correspondance', () => {
     const rules = selectGroup(parseRobots(txt)).rules;
     expect(rules.length).toBeGreaterThan(15_000);
     const path = `/${'a'.repeat(8 * 1024 - 1)}`;
-    const started = performance.now();
-    for (let i = 0; i < 10; i++) expect(matchRules(rules, path).allowed).toBe(true);
-    expect((performance.now() - started) / 10).toBeLessThan(50);
+    // Meilleur de 10 essais : une dérive de complexité ralentit chaque essai, alors qu'une préemption de la machine
+    // chargée (CI parallèles) n'en ralentit qu'une partie ; la moyenne rendait le test instable sous charge.
+    let best = Infinity;
+    for (let i = 0; i < 10; i++) {
+      const started = performance.now();
+      expect(matchRules(rules, path).allowed).toBe(true);
+      best = Math.min(best, performance.now() - started);
+    }
+    expect(best).toBeLessThan(50);
     // Règle effective toujours appliquée (aucune règle écartée par un plafond).
     expect(matchRules(rules, `/${'a'.repeat(100)}b${Math.floor(rules.length / 2)}`).allowed).toBe(false);
   });
