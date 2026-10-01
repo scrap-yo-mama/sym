@@ -11,11 +11,12 @@ import { inspectPage, pageFetchInPage } from '../core/in-page.ts';
 const GROUP_TITLE = 'Scrapyomama';
 const GROUP_KEY = 'tunnel_group_id';
 
-type ChromeTab = { id?: number; url?: string; status?: string; discarded?: boolean; frozen?: boolean; autoDiscardable?: boolean; active?: boolean; groupId?: number };
+type ChromeTab = { id?: number; url?: string; pendingUrl?: string; status?: string; discarded?: boolean; frozen?: boolean; autoDiscardable?: boolean; active?: boolean; groupId?: number };
 
 const info = (tab: ChromeTab): TabInfo => ({
   id: tab.id ?? -1,
   ...(tab.url === undefined ? {} : { url: tab.url }),
+  ...(tab.pendingUrl === undefined ? {} : { pendingUrl: tab.pendingUrl }),
   ...(tab.status === undefined ? {} : { status: tab.status }),
   ...(tab.discarded === undefined ? {} : { discarded: tab.discarded }),
   ...(tab.frozen === undefined ? {} : { frozen: tab.frozen }),
@@ -118,10 +119,16 @@ export function chromeBrowserApi(): BrowserApi {
     },
     permissions: { contains: (origins) => browser.permissions.contains({ origins }) },
     fetch: async (url, init) => {
-      // `http_fetch` (07 § 3) : depuis le service worker, cookies du navigateur, aucun en-tête d'identité posé.
-      const res = await fetch(url, { ...init, credentials: 'include', redirect: 'follow', cache: 'no-store' });
+      // `http_fetch` (07 § 3) : depuis le service worker, cookies du navigateur, aucun en-tête d'identité posé. Aucune
+      // redirection suivie (INV10 : le saut vers une IP privée ou un autre domaine n'est jamais émis).
+      const res = await fetch(url, { ...init, credentials: 'include', redirect: 'manual', cache: 'no-store' });
+      if (res.type === 'opaqueredirect' || (res.status >= 300 && res.status < 400)) {
+        await res.body?.cancel().catch(() => undefined);
+        return { status: 0, url, redirected: true, headers: [], text: async () => '' };
+      }
       return {
         status: res.status,
+        redirected: false,
         url: res.url,
         headers: [...res.headers.entries()],
         text: async (max) => {

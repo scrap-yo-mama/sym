@@ -4,7 +4,14 @@
 // - domaine CONNECTÉ dans ce navigateur (consentement + permission d'hôte), URL dans ce domaine, et garde des adresses
 //   privées (INV10 : IP privées, `localhost`, `*.local`, métadonnées cloud), même pour un domaine connecté ;
 // - liste blanche CDP (`page_script`), paramètres permis seulement, aucune chaîne de code (`method_not_allowed`) ;
-// - garde d'écriture : clic d'envoi, touche Entrée ou méthode HTTP d'écriture refusés sans `allow_write_actions`.
+// - garde d'écriture : clic d'envoi, focus d'un bouton d'envoi, touche Entrée ou Espace (quelle que soit sa forme),
+//   verbe HTTP d'écriture (PUT, PATCH, DELETE) refusés sans `allow_write_actions` ;
+// - onglet du débogueur : AVANT chaque commande `page_script` / `agent_step`, son URL courante (`tabs.get`, lisible sans
+//   permission d'hôte) doit rester dans le domaine connecté et hors adresses privées, et la page est inspectée (défi) ;
+//   APRÈS une commande qui peut naviguer (`Page.navigate`, `Page.reload`, `Input.*`, action `agent_step`), même contrôle.
+//   Onglet passé sur un autre site (redirection serveur, JavaScript, redirection ouverte) : `domain_not_allowed`,
+//   débogueur détaché, onglet fermé, rien n'est rendu. Inspection impossible = refus (fermé), jamais « pas de défi » ;
+// - `fetch` sans redirection suivie (`redirect: 'manual'`) : une redirection est un échec (`fetch_failed`).
 // Défi détecté (page, réponse, arbre d'accessibilité) : l'onglet et le run sont VERROUILLÉS, plus aucune commande n'est
 // exécutée (`challenge_in_tunnel`) ; le débogueur est détaché et l'onglet laissé à l'utilisateur, qui navigue
 // normalement. Aucune prise de contrôle, aucun contournement (X3).
@@ -16,7 +23,9 @@ import {
   checkCdpCommand,
   commandUrl,
   detectChallenge,
-  isSubmitKey,
+  detectResponseChallenge,
+  isActivationKey,
+  isWriteElement,
   isWriteTarget,
   parseFetchArgs,
   type CommandFrame,
@@ -27,7 +36,7 @@ import {
   type TunnelResult,
 } from '@runtime/core/tunnel';
 import type { BrowserApi, PageInspection } from './browser-api.ts';
-import { CdpStepDriver, type AxNode } from './cdp-driver.ts';
+import { CdpStepDriver, renderAxTree, type AxNode } from './cdp-driver.ts';
 import { checkHost, originPatterns } from './host-guard.ts';
 
 /** Inactivité au-delà de laquelle la session d'un run est close (débogueur détaché, onglet fermé). */
@@ -56,6 +65,8 @@ type RunSession = {
   unsubscribe: (() => void) | null;
   /** Réponse du document principal (statut, en-têtes) capturée par les événements `Network` (lecture seule). */
   lastDocument: { status: number; headers: Record<string, string>; url: string } | null;
+  /** Cadre principal de l'onglet (`Page.getFrameTree`) : les documents des iframes (autres sites) sont ignorés. */
+  mainFrameId: string | null;
 };
 
 class CommandRefused extends Error {
@@ -115,6 +126,8 @@ export class TunnelExecutor {
         case 'agent_step': {
           const wire = await this.#agentStep(session, frame.args);
           if (wire.error === 'challenge_in_tunnel') await this.#lock(session);
+          // L'action a pu mener sur un autre site : rien de ce qu'elle a observé n'est rendu.
+          if (session.tabId !== null) await this.#checkTab(session, session.tabId, { inspect: false });
           return wire.ok ? ok(started, this.#now(), wire, wire.snapshot_id) : fail(started, this.#now(), wire.error ?? 'fetch_failed', wire, wire.snapshot_id);
         }
       }
@@ -150,7 +163,7 @@ export class TunnelExecutor {
   #session(frame: CommandFrame, domain: string): RunSession {
     let session = this.#runs.get(frame.run_id);
     if (session === undefined || session.domain !== domain) {
-      session = { runId: frame.run_id, domain, tabId: null, attached: false, agent: null, allowWriteActions: frame.allow_write_actions, idle: null, unsubscribe: null, lastDocument: null };
+      session = { runId: frame.run_id, domain, tabId: null, attached: false, agent: null, allowWriteActions: frame.allow_write_actions, idle: null, unsubscribe: null, lastDocument: null, mainFrameId: null };
       this.#runs.set(frame.run_id, session);
     }
     session.allowWriteActions = frame.allow_write_actions;
@@ -192,6 +205,53 @@ export class TunnelExecutor {
   }
 
   /**
+   * Onglet passé hors du domaine connecté (ou sur une adresse privée) : débogueur détaché, onglet fermé (il porte la
+   * session de l'utilisateur sur un autre site), session de pas oubliée ; la commande est refusée sans rien rendre.
+   */
+  async #evict(session: RunSession): Promise<never> {
+    const tabId = session.tabId;
+    session.unsubscribe?.();
+    session.unsubscribe = null;
+    session.agent = null;
+    session.lastDocument = null;
+    session.mainFrameId = null;
+    session.tabId = null;
+    if (tabId !== null) {
+      if (session.attached) await this.#deps.browser.debugger.detach(tabId).catch(() => undefined);
+      if (!this.#lockedTabs.has(tabId)) await this.#deps.browser.tabs.remove(tabId).catch(() => undefined);
+    }
+    session.attached = false;
+    throw new CommandRefused('domain_not_allowed');
+  }
+
+  /** URL d'onglet dans le domaine connecté et hors adresses privées ; `about:blank` (onglet neuf, vide) toléré. */
+  #tabUrlAllowed(raw: string | undefined, domain: string): boolean {
+    if (raw === undefined || raw === '') return false;
+    if (raw === 'about:blank') return true;
+    const url = commandUrl(raw, domain);
+    return url !== null && checkHost(url.hostname).ok;
+  }
+
+  /**
+   * Contrôle de l'onglet du run avant et après chaque commande (07 § 5, INV10, X3) : URL courante ET URL en cours de
+   * chargement lues par `tabs.get` (aucune permission d'hôte requise, donc fiable même sur un autre site), puis
+   * inspection de la page (défi). Fermé : onglet introuvable ou URL illisible = refus.
+   */
+  async #checkTab(session: RunSession, tabId: number, opts: { inspect: boolean } = { inspect: true }): Promise<void> {
+    const tab = await this.#deps.browser.tabs.get(tabId);
+    if (tab === null) {
+      session.tabId = null;
+      session.attached = false;
+      throw new CommandRefused('tab_unavailable');
+    }
+    if (!this.#tabUrlAllowed(tab.url, session.domain) || (tab.pendingUrl !== undefined && tab.pendingUrl !== '' && !this.#tabUrlAllowed(tab.pendingUrl, session.domain))) {
+      await this.#evict(session);
+    }
+    if (session.lastDocument !== null && session.lastDocument.url !== '' && !this.#tabUrlAllowed(session.lastDocument.url, session.domain)) await this.#evict(session);
+    if (opts.inspect && tab.url !== 'about:blank') await this.#inspectForChallenge(session, tabId);
+  }
+
+  /**
    * Onglet d'automatisation du run, ouvert sur `origin` (`null` : page vide, la commande navigue ensuite), réveillé
    * avant chaque commande (07 § 4).
    */
@@ -219,8 +279,8 @@ export class TunnelExecutor {
     await tabs.keep(tab.id);
     await tabs.group(tab.id).catch(() => undefined);
     if (!(await tabs.waitComplete(tab.id, NAVIGATION_TIMEOUT_MS))) throw new CommandRefused('timeout');
-    // Page d'accueil du site : un défi ici arrête tout avant la première requête de données.
-    if (origin !== null) await this.#inspectForChallenge(session, tab.id);
+    // Page d'accueil du site : redirigée ailleurs, ou un défi, arrête tout avant la première requête de données.
+    if (origin !== null) await this.#checkTab(session, tab.id);
     return tab.id;
   }
 
@@ -233,10 +293,29 @@ export class TunnelExecutor {
     if (!wasAttached) await dbg.detach(tabId).catch(() => undefined);
   }
 
-  async #inspectForChallenge(session: RunSession, tabId: number): Promise<PageInspection | null> {
+  /**
+   * Inspection de la page (défi) par la fonction empaquetée ; si `chrome.scripting` échoue (page d'erreur, onglet sur un
+   * autre site), repli sur l'arbre d'accessibilité quand le débogueur est attaché. Rien de lisible : refus
+   * (`tab_unavailable`), jamais « pas de défi ».
+   */
+  async #inspectForChallenge(session: RunSession, tabId: number): Promise<PageInspection> {
     const page = await this.#deps.browser.scripting.inspect(tabId).catch(() => null);
-    if (page !== null) await this.#challenged(session, { url: page.url, title: page.title, text: page.text });
-    return page;
+    if (page !== null) {
+      if (!this.#tabUrlAllowed(page.url, session.domain)) await this.#evict(session);
+      await this.#challenged(session, { url: page.url, title: page.title, text: page.text });
+      return page;
+    }
+    if (session.attached) {
+      const tree = (await this.#deps.browser.debugger.send(tabId, 'Accessibility.getFullAXTree', {}).catch(() => null)) as { nodes?: AxNode[] } | null;
+      if (tree !== null && Array.isArray(tree.nodes)) {
+        const text = renderAxTree(tree.nodes);
+        const title = /^- RootWebArea "((?:[^"\\]|\\.)*)"/.exec(text)?.[1] ?? '';
+        const url = (await this.#deps.browser.tabs.get(tabId))?.url ?? '';
+        await this.#challenged(session, { url, title, text });
+        return { url, title, text };
+      }
+    }
+    throw new CommandRefused('tab_unavailable');
   }
 
   // --- http_fetch / page_fetch --------------------------------------------------------------------------------------
@@ -244,12 +323,13 @@ export class TunnelExecutor {
   async #httpFetch(session: RunSession, args: FetchArgs): Promise<FetchResponse> {
     this.browserCalls += 1;
     const res = await this.#deps.browser.fetch(args.url, { method: args.method, headers: args.headers, ...(args.body === null ? {} : { body: args.body }) });
-    // Redirection hors du domaine connecté ou vers une adresse privée : rien n'est rendu.
+    // Redirection : jamais suivie (le saut suivant n'a pas été émis), rien n'est rendu.
+    if (res.redirected) throw new CommandRefused('fetch_failed');
     this.#url(res.url || args.url, session.domain);
     const body = await res.text(args.max_bytes);
     if (body === null) throw new CommandRefused('response_too_large');
     const headers = Object.fromEntries(res.headers.map(([k, v]) => [k.toLowerCase(), v]));
-    await this.#challenged(session, { status: res.status, headers, url: res.url, text: body });
+    if (detectResponseChallenge({ status: res.status, headers, body, url: res.url })) await this.#lock(session);
     return { status: res.status, headers, body, url: res.url || args.url };
   }
 
@@ -259,7 +339,7 @@ export class TunnelExecutor {
     this.browserCalls += 1;
     const out = await this.#deps.browser.scripting.pageFetch(tabId, { url: args.url, method: args.method, headers: args.headers, body: args.body, maxBytes: args.max_bytes, maxMeta: MAX_META });
     if (out.kind === 'too_large') throw new CommandRefused('response_too_large');
-    if (out.kind === 'error') throw new CommandRefused('fetch_failed');
+    if (out.kind === 'error' || out.kind === 'redirect') throw new CommandRefused('fetch_failed');
     this.#url(out.url || args.url, session.domain);
     let headers: Record<string, string> = {};
     try {
@@ -270,8 +350,8 @@ export class TunnelExecutor {
     } catch {
       headers = {};
     }
-    const html = /html/i.test(headers['content-type'] ?? '');
-    await this.#challenged(session, { status: out.status, headers, url: out.url, ...(html ? { text: out.body } : {}) });
+    // Corps lu s'il est HTML ou si la réponse est une erreur, même en JSON (XHR DataDome : 403 + captcha-delivery.com).
+    if (detectResponseChallenge({ status: out.status, headers, body: out.body, url: out.url })) await this.#lock(session);
     return { status: out.status, headers, body: out.body, url: out.url || args.url };
   }
 
@@ -286,14 +366,17 @@ export class TunnelExecutor {
       session.unsubscribe = this.#deps.browser.debugger.onEvent(tabId, (method, params) => {
         // Lecture seule : statut et en-têtes du document principal (réponse de navigation).
         if (method !== 'Network.responseReceived') return;
-        const p = params as { type?: string; response?: { status?: number; headers?: Record<string, unknown>; url?: string } } | null;
+        const p = params as { type?: string; frameId?: string; response?: { status?: number; headers?: Record<string, unknown>; url?: string } } | null;
         if (p?.type !== 'Document' || typeof p.response?.status !== 'number') return;
+        if (session.mainFrameId !== null && p.frameId !== undefined && p.frameId !== session.mainFrameId) return; // iframe
         const headers: Record<string, string> = {};
         for (const [k, v] of Object.entries(p.response.headers ?? {})) if (typeof v === 'string') headers[k.toLowerCase()] = v;
         session.lastDocument = { status: p.response.status, headers, url: typeof p.response.url === 'string' ? p.response.url : '' };
       });
       await this.#deps.browser.debugger.send(tabId, 'Network.enable', {});
       await this.#deps.browser.debugger.send(tabId, 'Page.enable', {});
+      const tree = (await this.#deps.browser.debugger.send(tabId, 'Page.getFrameTree', {}).catch(() => null)) as { frameTree?: { frame?: { id?: unknown } } } | null;
+      session.mainFrameId = typeof tree?.frameTree?.frame?.id === 'string' ? tree.frameTree.frame.id : null;
       await this.#deps.browser.debugger.send(tabId, 'Page.setWebLifecycleState', { state: 'active' }).catch(() => undefined);
     }
     return tabId;
@@ -301,19 +384,37 @@ export class TunnelExecutor {
 
   /** Garde d'écriture d'un clic (07 § 5) : élément visé, ses ancêtres accessibles, bouton `type=submit`. */
   async #clickIsWrite(tabId: number, x: number, y: number): Promise<boolean> {
-    const send = this.#deps.browser.debugger.send;
-    const hit = (await send(tabId, 'DOM.getNodeForLocation', { x, y, ignorePointerEventsNone: true }).catch(() => null)) as { backendNodeId?: number } | null;
+    const hit = (await this.#deps.browser.debugger.send(tabId, 'DOM.getNodeForLocation', { x, y, ignorePointerEventsNone: true }).catch(() => null)) as { backendNodeId?: number } | null;
     if (typeof hit?.backendNodeId !== 'number') return false;
-    const described = (await send(tabId, 'DOM.describeNode', { backendNodeId: hit.backendNodeId, depth: 0 }).catch(() => null)) as { node?: { nodeName?: string; attributes?: string[] } } | null;
-    const attrs = described?.node?.attributes ?? [];
-    const type = attrs[attrs.indexOf('type') + 1];
-    const name = described?.node?.nodeName ?? '';
-    if ((name === 'BUTTON' && (type === undefined || attrs.indexOf('type') === -1 || type === 'submit')) || (name === 'INPUT' && (type === 'submit' || type === 'image'))) {
-      // Un bouton sans type, dans un formulaire, envoie le formulaire : écriture par défaut (fermé).
-      return true;
-    }
-    const tree = (await send(tabId, 'Accessibility.getPartialAXTree', { backendNodeId: hit.backendNodeId, fetchRelatives: true }).catch(() => null)) as { nodes?: AxNode[] } | null;
+    return this.#nodeIsWrite(tabId, { backendNodeId: hit.backendNodeId });
+  }
+
+  /**
+   * L'activation de ce nœud est-elle une écriture ? Bouton d'envoi (`isWriteElement` : sans type ou `type=submit`, dans un
+   * formulaire, il l'envoie) ou élément accessible au libellé d'écriture (lui ou ses ancêtres). Nœud illisible : écriture
+   * (fermé).
+   */
+  async #nodeIsWrite(tabId: number, ref: { backendNodeId: number } | { nodeId: number }): Promise<boolean> {
+    const send = this.#deps.browser.debugger.send;
+    const described = (await send(tabId, 'DOM.describeNode', { ...ref, depth: 0 }).catch(() => null)) as { node?: { nodeName?: string; attributes?: string[]; backendNodeId?: number } } | null;
+    if (described?.node === undefined) return true;
+    if (isWriteElement(described.node)) return true;
+    const tree = (await send(tabId, 'Accessibility.getPartialAXTree', { ...ref, fetchRelatives: true }).catch(() => null)) as { nodes?: AxNode[] } | null;
     return (tree?.nodes ?? []).some((n) => typeof n.role?.value === 'string' && typeof n.name?.value === 'string' && isWriteTarget({ role: n.role.value, name: n.name.value }));
+  }
+
+  /** Garde d'écriture de `page_script` (07 § 5, 08 § 4), fermée par défaut, appliquée par l'extension elle-même. */
+  async #guardWrite(tabId: number, method: string, p: Record<string, unknown>): Promise<void> {
+    // Entrée (soumission implicite) ou Espace (bouton focalisé), sous toutes leurs formes : refusées. Le texte se saisit
+    // par `Input.insertText`, qui n'active rien.
+    if (method === 'Input.dispatchKeyEvent' && isActivationKey(p)) throw new CommandRefused('write_action_blocked');
+    if (method === 'DOM.focus') {
+      const ref = typeof p['backendNodeId'] === 'number' ? { backendNodeId: p['backendNodeId'] } : typeof p['nodeId'] === 'number' ? { nodeId: p['nodeId'] } : null;
+      if (ref === null || (await this.#nodeIsWrite(tabId, ref))) throw new CommandRefused('write_action_blocked');
+    }
+    if (method === 'Input.dispatchMouseEvent' && p['type'] === 'mousePressed') {
+      if (typeof p['x'] !== 'number' || typeof p['y'] !== 'number' || (await this.#clickIsWrite(tabId, p['x'], p['y']))) throw new CommandRefused('write_action_blocked');
+    }
   }
 
   async #pageScript(session: RunSession, rawArgs: unknown): Promise<unknown> {
@@ -326,29 +427,37 @@ export class TunnelExecutor {
     if (method === 'Page.navigate') {
       const url = this.#url(p['url'], session.domain);
       const tabId = await this.#attached(session, url.origin);
+      // Avant : l'onglet est toujours sur le domaine et sans défi (aucune commande sur un onglet de défi).
+      await this.#checkTab(session, tabId);
       session.lastDocument = null;
       this.browserCalls += 1;
       const nav = (await this.#deps.browser.debugger.send(tabId, 'Page.navigate', { url: url.href })) as { frameId?: string; loaderId?: string; errorText?: string } | null;
       await this.#deps.browser.tabs.waitComplete(tabId, NAVIGATION_TIMEOUT_MS);
-      const page = await this.#inspectForChallenge(session, tabId);
+      // Après : URL finale (redirections serveur comprises) dans le domaine, document principal compris, puis défi.
+      await this.#checkTab(session, tabId);
       const doc = session.lastDocument as RunSession['lastDocument'];
-      if (page !== null) this.#url(page.url, session.domain);
       await this.#challenged(session, { ...(doc === null ? {} : { status: doc.status, headers: doc.headers }) });
-      return { frameId: nav?.frameId ?? null, loaderId: nav?.loaderId ?? null, errorText: nav?.errorText ?? null, status: doc?.status ?? 0, headers: doc?.headers ?? {}, url: page?.url ?? doc?.url ?? url.href };
+      const finalUrl = (await this.#deps.browser.tabs.get(tabId))?.url ?? url.href;
+      return { frameId: nav?.frameId ?? null, loaderId: nav?.loaderId ?? null, errorText: nav?.errorText ?? null, status: doc?.status ?? 0, headers: doc?.headers ?? {}, url: finalUrl };
     }
     const tabId = await this.#attached(session, null);
-    if (!session.allowWriteActions) {
-      if (method === 'Input.dispatchKeyEvent' && isSubmitKey(p['key'], p['code'])) throw new CommandRefused('write_action_blocked');
-      if (method === 'Input.dispatchMouseEvent' && p['type'] === 'mousePressed' && typeof p['x'] === 'number' && typeof p['y'] === 'number' && (await this.#clickIsWrite(tabId, p['x'], p['y']))) {
-        throw new CommandRefused('write_action_blocked');
-      }
-    }
+    // Avant chaque commande : onglet dans le domaine, page sans défi.
+    await this.#checkTab(session, tabId);
+    if (!session.allowWriteActions) await this.#guardWrite(tabId, method as string, p);
     this.browserCalls += 1;
-    return this.#deps.browser.debugger.send(tabId, method as string, p);
+    const result = await this.#deps.browser.debugger.send(tabId, method as string, p);
+    // Après : une commande qui peut naviguer (clic, touche, rechargement) est suivie d'une attente de chargement et d'une
+    // inspection complète ; une lecture, d'un contrôle d'URL (navigation survenue pendant la lecture : rien n'est rendu).
+    const mayNavigate = (method as string).startsWith('Input.') || method === 'Page.reload';
+    if (mayNavigate) await this.#deps.browser.tabs.waitComplete(tabId, SETTLE_TIMEOUT_MS);
+    await this.#checkTab(session, tabId, { inspect: mayNavigate });
+    return result;
   }
 
   async #agentStep(session: RunSession, rawArgs: unknown): Promise<AgentStepWireResult> {
     const tabId = await this.#attached(session, null);
+    // Avant chaque pas : onglet dans le domaine, page sans défi (l'exécuteur de pas observe ensuite l'arbre).
+    await this.#checkTab(session, tabId);
     if (session.agent === null) {
       const driver = new CdpStepDriver({
         send: (method, params) => {

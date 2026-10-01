@@ -1,0 +1,7 @@
+{
+  "_comment": "Fixture fictive (tâche 2.7, correctif 3) : réponse XHR d'un site protégé par DataDome quand le défi est déclenché. Forme publique documentée (403, en-tête x-datadome, corps JSON qui pointe vers geo.captcha-delivery.com) ; valeurs zz_test, aucune donnée réelle.",
+  "status": 403,
+  "headers": { "content-type": "application/json; charset=utf-8", "x-datadome": "protected", "x-dd-b": "1", "cache-control": "no-store" },
+  "body": "{\"url\":\"https://geo.captcha-delivery.com/captcha/?initialCid=zz_test_cid&hash=zz_test_hash&cid=zz_test_cookie&t=fe&referer=https%3A%2F%2Fzz-test-shop.example%2Fapi%2Fsearch&s=0\"}",
+  "url": "https://zz-test-shop.example/api/search"
+}

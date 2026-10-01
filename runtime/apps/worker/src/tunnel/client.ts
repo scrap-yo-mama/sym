@@ -138,6 +138,13 @@ export class TunnelJobClient implements TunnelPort {
     if (!connected) await setWaiting(true);
     const started = Date.now();
     let dispatchedAt: number | null = null;
+    let keepWaiting = false;
+    /** Extension hors ligne : le run RESTE en `waiting_tunnel` jusqu'à sa fin (`skipped_tunnel_offline`, 04 §6). */
+    const offline = async (): Promise<TunnelOutcome> => {
+      await setWaiting(true);
+      keepWaiting = true;
+      return { kind: 'error', error: 'tunnel_offline' };
+    };
     try {
       for (;;) {
         if (options.signal.aborted) {
@@ -154,7 +161,7 @@ export class TunnelJobClient implements TunnelPort {
           const error = isTunnelError(job.error) || job.error === 'protocol_violation' ? job.error : 'fetch_failed';
           return result === null ? { kind: 'error', error } : { kind: 'error', error, result };
         }
-        if (job.state === 'expired' || job.state === 'cancelled') return { kind: 'error', error: job.dispatched ? 'timeout' : 'tunnel_offline' };
+        if (job.state === 'expired' || job.state === 'cancelled') return job.dispatched ? { kind: 'error', error: 'timeout' } : await offline();
         if (job.dispatched) {
           dispatchedAt ??= Date.now();
           await setWaiting(false);
@@ -170,14 +177,14 @@ export class TunnelJobClient implements TunnelPort {
           if (!connected || Date.now() - started > WAITING_AFTER_MS) await setWaiting(true);
           if (Date.now() - started > offlineGraceMs) {
             const was = await abandonTunnelJob(pool, jobId, 'expired');
-            if (was !== null) return { kind: 'error', error: was.wasDispatched ? 'timeout' : 'tunnel_offline' };
+            if (was !== null) return was.wasDispatched ? { kind: 'error', error: 'timeout' } : await offline();
             continue;
           }
         }
         await this.#wait(jobId, pollMs, options.signal);
       }
     } finally {
-      await setWaiting(false).catch(() => undefined);
+      if (!keepWaiting) await setWaiting(false).catch(() => undefined);
     }
   }
 }

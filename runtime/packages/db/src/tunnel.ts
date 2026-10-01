@@ -160,7 +160,12 @@ export type DispatchOutcome =
   /** Le job n'est pas (ou plus) en attente, ou vise une autre connexion : rien à faire. */
   | { kind: 'skip' }
   /** INV5 : le run n'appartient pas à l'utilisateur de cette connexion. Le job est mis en échec, rien n'est émis. */
-  | { kind: 'denied'; jobId: string; runOwnerId: string | null; jobOwnerId: string };
+  | { kind: 'denied'; jobId: string; runOwnerId: string | null; jobOwnerId: string }
+  /**
+   * 07 §5 (refus « côté extension ET côté instance ») : le domaine du job n'est pas un site connecté (`site_sessions`)
+   * par le propriétaire du run. Le job est mis en échec (`domain_not_allowed`), rien n'est émis.
+   */
+  | { kind: 'refused'; jobId: string; error: 'domain_not_allowed' };
 
 /**
  * Prend un job en attente pour la connexion (`tunnelId`, `ownerId`) de cette instance. Refus INV5 avant toute émission :
@@ -208,6 +213,16 @@ export async function claimTunnelJob(pool: pg.Pool, input: { jobId: string; tunn
       await tx.query("UPDATE tunnel_jobs SET state = 'cancelled', finished_at = now(), updated_at = now() WHERE job_id = $1", [job.job_id]);
       await tx.query('SELECT pg_notify($1, $2)', [TUNNEL_DONE_CHANNEL, job.job_id]);
       return { kind: 'skip' };
+    }
+    // Domaine connecté par le propriétaire (« Connecter ce site ») : sinon refus à l'instance, avant toute émission.
+    const site = await tx.query('SELECT 1 FROM site_sessions WHERE owner_id = $1 AND domain = $2', [job.owner_id, job.domain]);
+    if ((site.rowCount ?? 0) === 0) {
+      await tx.query(
+        "UPDATE tunnel_jobs SET state = 'failed', error = 'domain_not_allowed', finished_at = now(), updated_at = now() WHERE job_id = $1",
+        [job.job_id],
+      );
+      await tx.query('SELECT pg_notify($1, $2)', [TUNNEL_DONE_CHANNEL, job.job_id]);
+      return { kind: 'refused', jobId: job.job_id, error: 'domain_not_allowed' };
     }
     const updated = await tx.query<{ attempts: number }>(
       `UPDATE tunnel_jobs SET state = 'dispatched', tunnel_id = $2, gateway_instance = $3, dispatched_at = now(), attempts = attempts + 1,
@@ -257,17 +272,26 @@ export async function tunnelJobRoute(db: Queryable, jobId: string): Promise<{ ow
 }
 
 /** Parmi `tunnelIds`, ceux qui ne sont plus utilisables (révoqués, expirés, compte inactif, ligne détachée ailleurs). */
-export async function invalidTunnels(db: Queryable, connections: readonly { tunnelId: string; epoch: number }[], instance: string): Promise<string[]> {
+/**
+ * Connexions ouvertes sur cette instance qui ne sont plus valides, avec la raison : `unauthorized` (appareil révoqué,
+ * supprimé ou expiré, compte inactif : l'extension oublie son appairage, 4401) ou `replaced` (appareil valide mais ligne
+ * détachée ou rattachée ailleurs, par exemple un NOTIFY `k:` perdu : l'extension garde son appairage, 4409).
+ */
+export async function invalidTunnels(
+  db: Queryable,
+  connections: readonly { tunnelId: string; epoch: number }[],
+  instance: string,
+): Promise<{ tunnelId: string; reason: 'unauthorized' | 'replaced' }[]> {
   if (connections.length === 0) return [];
-  const { rows } = await db.query<{ id: string }>(
-    `SELECT c.id FROM unnest($1::uuid[], $2::bigint[]) AS c(id, epoch)
-     WHERE NOT EXISTS (
-       SELECT 1 FROM tunnels t JOIN users u ON u.id = t.owner_id
-       WHERE t.id = c.id AND t.revoked_at IS NULL AND t.expires_at > now() AND u.status = 'active'
-         AND t.gateway_instance = $3 AND t.conn_epoch = c.epoch)`,
+  const { rows } = await db.query<{ id: string; authorized: boolean }>(
+    `SELECT c.id, coalesce(t.revoked_at IS NULL AND t.expires_at > now() AND u.status = 'active', false) AS authorized
+     FROM unnest($1::uuid[], $2::bigint[]) AS c(id, epoch)
+     LEFT JOIN tunnels t ON t.id = c.id LEFT JOIN users u ON u.id = t.owner_id
+     WHERE NOT coalesce(t.revoked_at IS NULL AND t.expires_at > now() AND u.status = 'active'
+       AND t.gateway_instance = $3 AND t.conn_epoch = c.epoch, false)`,
     [connections.map((c) => c.tunnelId), connections.map((c) => c.epoch), instance],
   );
-  return rows.map((r) => r.id);
+  return rows.map((r) => ({ tunnelId: r.id, reason: r.authorized ? 'replaced' : 'unauthorized' }));
 }
 
 /**

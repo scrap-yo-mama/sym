@@ -28,6 +28,9 @@ export type Harness = {
   /** Requêtes reçues par les sites de fixtures (hôte + chemin + requête). */
   siteHits: string[];
   context: BrowserContext;
+  /** Profil Chromium (persistant) et arguments de lancement : relance HORS Playwright (aucun CDP attaché). */
+  profile: string;
+  chromiumArgs: readonly string[];
   extensionId: string;
   serviceWorker: () => Promise<Worker>;
   owner: User;
@@ -108,11 +111,29 @@ export async function startHarness(): Promise<Harness> {
     const dbUrl = container.getConnectionUri();
     await migrateUp({ connectionString: dbUrl });
 
+    // Chromium d'abord : l'identifiant de l'extension décompressée est connu avant de démarrer l'instance, qui n'accepte
+    // que lui à l'ouverture de la WSS du tunnel (TUNNEL_EXTENSION_IDS, origine fermée par défaut).
+    const profile = mkdtempSync(join(tmpdir(), 'zz-test-ext-'));
+    cleanups.push(async () => rmSync(profile, { recursive: true, force: true }));
+    const chromiumArgs = [
+      `--disable-extensions-except=${EXTENSION_DIR}`,
+      `--load-extension=${EXTENSION_DIR}`,
+      `--host-resolver-rules=${SITES.map((s) => `MAP ${s} 127.0.0.1`).join(', ')}`,
+    ];
+    const context = await chromium.launchPersistentContext(profile, {
+      channel: 'chromium', // nouveau mode headless : extensions prises en charge (07 § 7)
+      headless: true,
+      args: chromiumArgs,
+    });
+    cleanups.push(() => context.close()); // filet si le démarrage de l'instance échoue (fermer deux fois est sans effet)
+    const serviceWorker = async () => context.serviceWorkers().find((w) => w.url().startsWith('chrome-extension://')) ?? context.waitForEvent('serviceworker');
+    const extensionId = new URL((await serviceWorker()).url()).host;
+
     const port = await freePort();
     const publicUrl = `http://127.0.0.1:${port}`;
     const masterKey = generateMasterKey();
     const bootstrapToken = randomBytes(32).toString('base64url');
-    const started = await prepareServer({ DATABASE_URL: dbUrl, MASTER_KEY: masterKey, PUBLIC_URL: publicUrl, ADMIN_BOOTSTRAP_TOKEN: bootstrapToken });
+    const started = await prepareServer({ DATABASE_URL: dbUrl, MASTER_KEY: masterKey, PUBLIC_URL: publicUrl, ADMIN_BOOTSTRAP_TOKEN: bootstrapToken, TUNNEL_EXTENSION_IDS: extensionId });
     cleanups.push(() => started.close());
     await started.app.listen({ port, host: '127.0.0.1' });
 
@@ -125,6 +146,9 @@ export async function startHarness(): Promise<Harness> {
     const pool = new pg.Pool({ connectionString: dbUrl, max: 2 });
     cleanups.push(() => pool.end());
     const sql = async <T extends Record<string, unknown>>(text: string, params: unknown[] = []) => (await pool.query<T>(text, params)).rows;
+    // Navigateur fermé EN PREMIER (nettoyage en ordre inverse), comme avant : ses connexions (WSS du tunnel, keep-alive
+    // vers les sites) retiendraient sinon la fermeture de l'instance et des sites de fixtures.
+    cleanups.push(() => context.close());
 
     const signIn = async (email: string, password: string): Promise<string> => {
       const res = await postJson(`${publicUrl}/api/auth/sign-in/email`, { origin: publicUrl }, { email, password });
@@ -153,20 +177,6 @@ export async function startHarness(): Promise<Harness> {
       return { status: res.status, data: res.status === 204 ? null : await res.json().catch(() => null) };
     };
 
-    const profile = mkdtempSync(join(tmpdir(), 'zz-test-ext-'));
-    cleanups.push(async () => rmSync(profile, { recursive: true, force: true }));
-    const context = await chromium.launchPersistentContext(profile, {
-      channel: 'chromium', // nouveau mode headless : extensions prises en charge (07 § 7)
-      headless: true,
-      args: [
-        `--disable-extensions-except=${EXTENSION_DIR}`,
-        `--load-extension=${EXTENSION_DIR}`,
-        `--host-resolver-rules=${SITES.map((s) => `MAP ${s} 127.0.0.1`).join(', ')}`,
-      ],
-    });
-    cleanups.push(() => context.close());
-    const serviceWorker = async () => context.serviceWorkers().find((w) => w.url().startsWith('chrome-extension://')) ?? context.waitForEvent('serviceworker');
-    const extensionId = new URL((await serviceWorker()).url()).host;
 
     // Page chrome://extensions : simule le clic « Autoriser » de l'invite de permission de Chrome (UI du navigateur,
     // hors d'atteinte de Playwright). `chrome.permissions.request` du popup se résout ensuite sans invite.
@@ -194,7 +204,7 @@ export async function startHarness(): Promise<Harness> {
       return page;
     };
 
-    return { dbUrl, masterKey, publicUrl, sitePort, siteHits, context, extensionId, serviceWorker, owner, createMember, console: consoleCall, sql, grantHosts, popup, close };
+    return { dbUrl, masterKey, publicUrl, sitePort, siteHits, context, profile, chromiumArgs, extensionId, serviceWorker, owner, createMember, console: consoleCall, sql, grantHosts, popup, close };
   } catch (error) {
     await close();
     throw error;

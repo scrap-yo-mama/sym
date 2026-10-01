@@ -3,7 +3,7 @@
 // `tunnel_jobs` + NOTIFY → passerelle (serveur en écoute) → WSS → exécuteur RÉEL de l'extension (navigateur simulé sous
 // Node, fixtures locales) → réponse → dataset. Défi en tunnel → 0 commande après la détection, run arrêté
 // `challenge_in_tunnel`, API en `action_requise` (assert_challenge_in_tunnel_stops). E6 refusé (assert_e6_not_in_tunnel_mode).
-// Extension hors ligne → `waiting_tunnel` puis `tunnel_offline`.
+// Extension hors ligne → `waiting_tunnel` puis `skipped_tunnel_offline` (04 §6, 05), sans essai ni classe d'échec.
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { randomUUID } from 'node:crypto';
@@ -83,7 +83,7 @@ async function startRun(apiId: string): Promise<string> {
 }
 
 async function finished(runId: string) {
-  await vi.waitFor(async () => expect(['succeeded', 'failed']).toContain((await pool.query<{ state: string }>('SELECT state FROM runs WHERE id = $1', [runId])).rows[0]!.state), {
+  await vi.waitFor(async () => expect(['succeeded', 'failed', 'skipped_tunnel_offline']).toContain((await pool.query<{ state: string }>('SELECT state FROM runs WHERE id = $1', [runId])).rows[0]!.state), {
     timeout: 60_000,
     interval: 100,
   });
@@ -123,6 +123,8 @@ beforeAll(async () => {
   // Extension de l'utilisateur : jeton d'appareil, WSS, exécuteur réel avec le domaine connecté dans « son » navigateur.
   const { token, hash } = generateExtensionToken();
   await pool.query(`INSERT INTO tunnels (owner_id, device_id, token_hash, expires_at) VALUES ($1, $2, $3, now() + interval '90 days')`, [user.id, `zz_test_${randomUUID().slice(0, 8)}`, hash]);
+  // Site connecté en mode tunnel (« Connecter ce site ») : l'instance refuse tout domaine non connecté (07 § 5).
+  await pool.query('INSERT INTO site_sessions (owner_id, domain) VALUES ($1, $2)', [user.id, SHOP]);
   const browser = nodeBrowserApi(port);
   browserCalls = browser.calls;
   const executorExt = new TunnelExecutor({ browser: browser.api, connectedDomains: async () => new Set([SHOP]) });
@@ -192,15 +194,29 @@ describe('mode tunnel : stratégie déclarative par l’extension du propriétai
     expect(ext.received.length).toBe(before);
   });
 
-  test('extension hors ligne : run en waiting_tunnel, puis arrêté `tunnel_offline` (sans classe d’échec)', async () => {
+  test('correctif 2 : extension hors ligne → waiting_tunnel, puis skipped_tunnel_offline (jamais repassé en running, aucun essai network)', async () => {
     await ext.close();
     await vi.waitFor(async () => expect((await pool.query('SELECT count(*)::int AS n FROM tunnels WHERE owner_id = $1 AND gateway_instance IS NOT NULL', [user.id])).rows[0]).toEqual({ n: 0 }));
     const apiId = await insertApi('zz_test_tunnel_offline', { execution: 'fetch', network: 'tunnel', spec: contactsSpecInput(`http://${SHOP}:${port}`, SHOP, 10) });
     const runId = await startRun(apiId);
     await vi.waitFor(async () => expect((await pool.query('SELECT state FROM runs WHERE id = $1', [runId])).rows[0]).toEqual({ state: 'waiting_tunnel' }), { timeout: 10_000 });
+    // Échantillonnage de l'état jusqu'à la fin : jamais de retour à `running` après `waiting_tunnel`.
+    const states = new Set<string>();
+    await vi.waitFor(
+      async () => {
+        const state = (await pool.query<{ state: string }>('SELECT state FROM runs WHERE id = $1', [runId])).rows[0]!.state;
+        states.add(state);
+        expect(state).toBe('skipped_tunnel_offline');
+      },
+      { timeout: 30_000, interval: 50 },
+    );
+    expect(states.has('running')).toBe(false);
     const run = await finished(runId);
-    expect(run).toMatchObject({ state: 'failed', failure_class: null });
+    expect(run).toMatchObject({ state: 'skipped_tunnel_offline', failure_class: null, items: 0 });
     expect(await detail(runId)).toBe('tunnel_offline');
-    expect(run.attempts).toEqual([expect.objectContaining({ network: 'tunnel', result: 'network' })]);
+    expect(run.attempts).toEqual([]);
+    // Le statut de l'API ne change pas (04 §6).
+    expect((await pool.query('SELECT status FROM apis WHERE id = $1', [apiId])).rows[0]).toEqual({ status: 'sain' });
+    expect((await pool.query<{ n: number }>("SELECT count(*)::int AS n FROM run_attempts WHERE run_id = $1 AND result_class = 'network'", [runId])).rows[0]!.n).toBe(0);
   });
 });

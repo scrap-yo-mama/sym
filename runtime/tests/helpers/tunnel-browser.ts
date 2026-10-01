@@ -36,6 +36,7 @@ export function nodeBrowserApi(port: number): { api: BrowserApi; calls: string[]
       pageFetch: async (_tabId, request) => {
         calls.push(`pageFetch ${request.method} ${request.url}`);
         const res = await get(request.url, request);
+        if (res.status >= 300 && res.status < 400) return { kind: 'redirect' };
         if (Buffer.byteLength(res.body) > request.maxBytes) return { kind: 'too_large' };
         return { kind: 'ok', status: res.status, headers: JSON.stringify(Object.fromEntries(res.headers)), body: res.body, url: request.url };
       },
@@ -59,7 +60,9 @@ export function nodeBrowserApi(port: number): { api: BrowserApi; calls: string[]
     fetch: async (url, init) => {
       calls.push(`fetch ${init.method} ${url}`);
       const res = await get(url, init);
-      return { status: res.status, url, headers: res.headers, text: async (max) => (Buffer.byteLength(res.body) > max ? null : res.body) };
+      // `redirect: 'manual'`, comme l'extension : une redirection n'est jamais suivie.
+      if (res.status >= 300 && res.status < 400) return { status: 0, url, redirected: true, headers: [], text: async () => '' };
+      return { status: res.status, url, redirected: false, headers: res.headers, text: async (max) => (Buffer.byteLength(res.body) > max ? null : res.body) };
     },
   };
   return { api, calls };

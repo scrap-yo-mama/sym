@@ -358,14 +358,20 @@ export function createStrategyExecutor(deps: StrategyExecutorDeps): RunExecutor 
       await ctx.log('info', 'sandbox_log', { lines: outcome.scriptLog.lines, bytes: outcome.scriptLog.bytes });
     }
     const proxyUsd = usage?.costUsd ?? 0;
-    // Arrêt en tunnel : l'essai est journalisé avec sa cause de fait (défi = protection, hors ligne = réseau), le run
-    // s'arrête SANS classe d'échec (04 §6) : `challenge_in_tunnel` → action_requise, la main revient à l'humain.
+    // Extension hors ligne (04 §6, 05) : le run, resté en `waiting_tunnel`, se termine `skipped_tunnel_offline`. Aucun
+    // essai (aucune commande n'a abouti, ce n'est pas un échec réseau), aucune classe d'échec, statut de l'API inchangé.
     const stop = outcome.stop;
+    if (stop === 'tunnel_offline') {
+      await ctx.log('warn', 'tunnel_offline', { network: 'tunnel' });
+      return { state: 'skipped_tunnel_offline', stop_reason: 'tunnel_offline', error_detail: 'tunnel_offline', strategy_version: strategy.version };
+    }
+    // Défi en tunnel : l'essai est journalisé avec sa cause de fait (protection), le run s'arrête SANS classe d'échec
+    // (04 §6) : `challenge_in_tunnel` → action_requise, la main revient à l'humain.
     await ctx.recordAttempt({
       execution: strategy.execution,
       network: strategy.network,
       est_cost_usd: strategy.estCostUsd,
-      result: stop === 'challenge_in_tunnel' ? 'blocked_by_protection' : stop === 'tunnel_offline' ? 'network' : result.ok ? 'ok' : result.failure.failure_class,
+      result: stop === 'challenge_in_tunnel' ? 'blocked_by_protection' : result.ok ? 'ok' : result.failure.failure_class,
       ms: Math.max(0, Math.round(now() - started)),
       proxy_usd: proxyUsd,
     });

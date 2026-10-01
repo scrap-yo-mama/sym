@@ -5,8 +5,9 @@ import { randomBytes } from 'node:crypto';
 import { generateMasterKey, hashPassword } from '@runtime/core';
 import { migrateUp } from '@runtime/db';
 import type { FastifyInstance, LightMyRequestResponse } from 'fastify';
-import { prepareServer, type Started } from '../../apps/server/src/start.js';
+import { prepareServer, type PrepareOptions, type Started } from '../../apps/server/src/start.js';
 import { createTestDatabase, withClient, type TestDatabase } from './pg.js';
+import { SIM_EXTENSION_ID } from './tunnel-sim.js';
 
 export const PUBLIC_URL = 'http://localhost:3000';
 
@@ -28,18 +29,20 @@ export function serverEnv(url: string, masterKey: string, bootstrapToken: string
     DATABASE_URL: url,
     MASTER_KEY: masterKey,
     PUBLIC_URL,
+    // Extension simulée du tunnel (tests/helpers/tunnel-sim.ts) : origine acceptée par la passerelle (fermée par défaut).
+    TUNNEL_EXTENSION_IDS: SIM_EXTENSION_ID,
     ...(bootstrapToken ? { ADMIN_BOOTSTRAP_TOKEN: bootstrapToken } : {}),
     ...extra,
   };
 }
 
 /** Base migrée + serveur prêt (sans écoute : `inject`). L'owner n'existe pas encore. */
-export async function startTestServer(prefix = 'srv', extra: NodeJS.ProcessEnv = {}): Promise<TestServer> {
+export async function startTestServer(prefix = 'srv', extra: NodeJS.ProcessEnv = {}, options: PrepareOptions = {}): Promise<TestServer> {
   const db = await createTestDatabase(prefix);
   await migrateUp({ connectionString: db.url });
   const masterKey = generateMasterKey();
   const bootstrapToken = randomBytes(32).toString('base64url');
-  const started = await prepareServer(serverEnv(db.url, masterKey, bootstrapToken, extra));
+  const started = await prepareServer(serverEnv(db.url, masterKey, bootstrapToken, extra), options);
   return {
     db,
     app: started.app,

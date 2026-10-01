@@ -375,6 +375,17 @@ export async function finishRun(
   result: RunResult,
   opts: { personal?: PersonalValueRegistry } = {},
 ): Promise<boolean> {
+  // Tunnel hors ligne (04 §6) : le run ne quitte `waiting_tunnel` que pour `skipped_tunnel_offline`, sans issue ni classe.
+  if (result.state === 'skipped_tunnel_offline') {
+    const { rowCount } = await db.query(
+      `UPDATE runs SET state = 'skipped_tunnel_offline', outcome = NULL, failure_class = NULL, retryable = NULL, error_detail = $3,
+         strategy_version = coalesce($4, strategy_version), finished_at = now(), heartbeat_at = now(),
+         duration_ms = (extract(epoch FROM now() - coalesce(started_at, created_at)) * 1000)::int
+       WHERE id = $1 AND job_id = $2 AND state = 'waiting_tunnel'`,
+      [runId, jobId, boundErrorDetail(result.error_detail ?? result.stop_reason, opts.personal), result.strategy_version ?? null],
+    );
+    return rowCount === 1;
+  }
   const failed = result.state === 'failed';
   const { rowCount } = await db.query(
     `UPDATE runs SET state = $3, outcome = $4, degraded_reasons = $5, failure_class = $6, retryable = $7, error_detail = $8,

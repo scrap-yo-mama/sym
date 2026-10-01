@@ -48,23 +48,38 @@ type TunnelConfig = {
   /** `GATEWAY_INSTANCE` : identifiant de cette instance (canal NOTIFY `tunnel_cmd_<instance>`) ; défaut : hôte + pid + aléa. */
   instance: string | null;
   /**
-   * `TUNNEL_EXTENSION_IDS` : identifiants d'extension acceptés (en-tête Origin `chrome-extension://<id>`). Vide : toute
-   * origine `chrome-extension://` est acceptée, jamais une origine web ni une requête sans Origin.
+   * Origines acceptées à l'ouverture de la WSS (en-tête Origin `chrome-extension://<id>`), jamais une origine web ni une
+   * requête sans Origin. `TUNNEL_EXTENSION_IDS` : identifiants acceptés (défaut : ceux de l'extension publiée,
+   * `PUBLISHED_EXTENSION_IDS`). `TUNNEL_ALLOW_ANY_EXTENSION=true` : toute extension (mode développement explicite,
+   * extension décompressée) ; sinon une autre extension installée, même munie d'un jeton volé, est refusée.
    */
-  extensionIds: string[];
+  extensionOrigins: ExtensionOriginPolicy;
   /** Connexion de session pour LISTEN (`DATABASE_URL_DIRECT`, défaut `DATABASE_URL`). */
   sessionUrl: string;
 };
 
 const EXTENSION_ID = /^[a-p]{32}$/;
 
+/** Politique d'origine de la WSS du tunnel (07 § 6, 08b § 2). */
+export type ExtensionOriginPolicy = { readonly ids: readonly string[]; readonly allowAny: boolean };
+
+/**
+ * Identifiants de l'extension publiée sur le Chrome Web Store, acceptés par défaut. Vide tant que l'extension n'est pas
+ * publiée (tâche 2.9, soumission au Store : étape humaine) ; d'ici là, `TUNNEL_EXTENSION_IDS` (extension empaquetée par
+ * l'admin) ou `TUNNEL_ALLOW_ANY_EXTENSION=true` (développement) doivent être posées, sinon aucune extension n'est acceptée.
+ */
+export const PUBLISHED_EXTENSION_IDS: readonly string[] = Object.freeze([]);
+
 function loadTunnelConfig(env: NodeJS.ProcessEnv, databaseUrl: string): TunnelConfig {
   const disabled = (env['DISABLE_TUNNEL'] ?? '').trim().toLowerCase() === 'true';
   const instance = env['GATEWAY_INSTANCE']?.trim() || null;
   if (instance !== null && !/^[A-Za-z0-9_.-]{1,40}$/.test(instance)) throw new ConfigError('GATEWAY_INSTANCE invalide : 1 à 40 caractères [A-Za-z0-9_.-].');
-  const extensionIds = (env['TUNNEL_EXTENSION_IDS'] ?? '').split(',').map((v) => v.trim()).filter((v) => v !== '');
-  for (const id of extensionIds) if (!EXTENSION_ID.test(id)) throw new ConfigError(`TUNNEL_EXTENSION_IDS : identifiant d'extension invalide (${id}).`);
-  return { disabled, instance, extensionIds, sessionUrl: env['DATABASE_URL_DIRECT'] || databaseUrl };
+  const listed = (env['TUNNEL_EXTENSION_IDS'] ?? '').split(',').map((v) => v.trim()).filter((v) => v !== '');
+  for (const id of listed) if (!EXTENSION_ID.test(id)) throw new ConfigError(`TUNNEL_EXTENSION_IDS : identifiant d'extension invalide (${id}).`);
+  const anyRaw = (env['TUNNEL_ALLOW_ANY_EXTENSION'] ?? '').trim().toLowerCase();
+  if (!['', 'true', 'false'].includes(anyRaw)) throw new ConfigError('TUNNEL_ALLOW_ANY_EXTENSION invalide : true ou false (développement seulement).');
+  const extensionOrigins: ExtensionOriginPolicy = { ids: listed.length > 0 ? listed : [...PUBLISHED_EXTENSION_IDS], allowAny: anyRaw === 'true' };
+  return { disabled, instance, extensionOrigins, sessionUrl: env['DATABASE_URL_DIRECT'] || databaseUrl };
 }
 
 /** Version d'application publiable : SemVer ou étiquette courte (aucun espace, aucun chemin, aucun nom d'hôte). */

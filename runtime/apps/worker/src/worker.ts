@@ -334,6 +334,7 @@ export async function startWorker(options: StartWorkerOptions): Promise<Worker> 
       if (entry.cause === 'lease_lost' || entry.cause === 'shutdown') return;
       const closed = await finishRunAndNotify(pool, q, { runId, jobId, result }, { personal, subjectKey: subjects });
       if (result.state === 'failed') span.fail(result.failure_class ?? result.stop_reason);
+      if (result.state === 'skipped_tunnel_offline') span.fail(result.stop_reason);
       // Run arrêté sans classe d'échec (défi en tunnel, extension hors ligne) : événement `run_stopped` de la machine à
       // états (04 §6, transition 14 : la main revient à l'humain, `action_requise`). Les autres fins de run relèvent de
       // l'enquête et de la réparation (2.1, 2.3).
@@ -347,9 +348,10 @@ export async function startWorker(options: StartWorkerOptions): Promise<Worker> 
         if (step !== null) await runLog.log('info', 'status_event', { event: 'run_stopped', reason: result.stop_reason, applied: step.ok });
       }
       span.setAttribute('run.state', result.state);
-      await runLog.log(result.state === 'failed' ? 'warn' : 'info', 'run_finished', {
+      await runLog.log(result.state === 'succeeded' ? 'info' : 'warn', 'run_finished', {
         state: result.state,
         ...(result.state === 'failed' ? { failure_class: result.failure_class, ...(result.stop_reason === undefined ? {} : { stop_reason: result.stop_reason }) } : {}),
+        ...(result.state === 'skipped_tunnel_offline' ? { stop_reason: result.stop_reason } : {}),
         closed,
       });
       log.info({ runId, state: result.state, closed }, 'run terminé');

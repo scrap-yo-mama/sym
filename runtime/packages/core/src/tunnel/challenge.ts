@@ -19,6 +19,12 @@ export type ChallengeProbe = {
  */
 const CHALLENGE_HEADERS: readonly (readonly [string, RegExp])[] = [['cf-mitigated', /challenge/i]];
 
+/**
+ * En-têtes d'un éditeur présents sur toutes les réponses d'un site protégé : un défi seulement avec un refus (403).
+ * DataDome répond 403 avec `x-datadome` quand il exige une vérification (page HTML ou JSON pour les appels XHR).
+ */
+const CHALLENGE_ON_403_HEADERS: readonly string[] = ['x-datadome'];
+
 /** Marqueurs de défi dans le document : widgets de vérification, pages interstitielles connues. */
 const BODY_MARKERS: readonly RegExp[] = [
   /challenges\.cloudflare\.com/i,
@@ -58,6 +64,7 @@ export function detectChallenge(probe: ChallengeProbe): boolean {
     const value = probe.headers?.[name];
     if (value !== undefined && pattern.test(value)) return true;
   }
+  if (probe.status === 403 && CHALLENGE_ON_403_HEADERS.some((name) => probe.headers?.[name] !== undefined)) return true;
   if (probe.title !== undefined && TITLES.some((t) => t.test(probe.title!))) return true;
   const text = probe.text?.slice(0, TEXT_LIMIT);
   if (text !== undefined && text.length > 0) {
@@ -71,4 +78,26 @@ export function detectChallenge(probe: ChallengeProbe): boolean {
 export function htmlTitle(html: string): string | undefined {
   const match = /<title[^>]*>([^<]{0,500})<\/title>/i.exec(html.slice(0, TEXT_LIMIT));
   return match?.[1]?.trim();
+}
+
+/** Statuts d'erreur dont le corps est toujours lu, quel que soit son type : un défi peut y être rendu en JSON (XHR). */
+const READ_BODY_MIN_STATUS = 400;
+
+/**
+ * Défi dans une réponse HTTP (`page_fetch`, `http_fetch`, document rendu) : en-têtes, titre d'un document HTML, et
+ * corps lu s'il est HTML OU si la réponse est une erreur (≥ 400), même en JSON (XHR DataDome : 403 + lien
+ * `captcha-delivery.com`). Partagé par l'extension et le worker (défense en profondeur).
+ */
+export function detectResponseChallenge(response: { readonly status: number; readonly headers: Readonly<Record<string, string>>; readonly body: string; readonly url?: string }): boolean {
+  const contentType = response.headers['content-type'] ?? '';
+  const html = /html/i.test(contentType) || /^\s*</.test(response.body.slice(0, 1024));
+  const title = html ? htmlTitle(response.body) : undefined;
+  const readBody = html || response.status >= READ_BODY_MIN_STATUS;
+  return detectChallenge({
+    status: response.status,
+    headers: response.headers,
+    ...(response.url === undefined ? {} : { url: response.url }),
+    ...(title === undefined ? {} : { title }),
+    ...(readBody ? { text: response.body } : {}),
+  });
 }

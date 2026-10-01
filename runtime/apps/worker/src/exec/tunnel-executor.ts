@@ -22,7 +22,7 @@ import {
 } from '@runtime/core/exec';
 import { DslError, type DeclarativeSpec } from '@runtime/core';
 import { DomainNotAllowedError } from '@runtime/core/net';
-import { detectChallenge, FETCH_DEFAULT_MAX_BYTES, htmlTitle, parseFetchResponse, type FetchResponse, type TunnelCommand, type TunnelResult } from '@runtime/core/tunnel';
+import { commandUrl, detectResponseChallenge, FETCH_DEFAULT_MAX_BYTES, parseFetchResponse, type FetchResponse, type TunnelCommand, type TunnelResult } from '@runtime/core/tunnel';
 import type { TunnelOutcome, TunnelPort } from '../tunnel/client.js';
 
 /** Délai d'une commande du tunnel (07 §8). */
@@ -149,13 +149,12 @@ function fetchBody(result: TunnelResult, maxBytes: number): FetchResponse {
   return response;
 }
 
-/** Contrôle de défi sur une réponse (défense en profondeur : l'extension l'a déjà fait). */
+/**
+ * Contrôle de défi sur une réponse (défense en profondeur : l'extension l'a déjà fait). Corps lu s'il est HTML ou si la
+ * réponse est une erreur, même en JSON (XHR DataDome : 403 + captcha-delivery.com).
+ */
 function checkChallenge(session: TunnelSession, response: { status: number; headers: Readonly<Record<string, string>>; body: string; url: string }): void {
-  const html = /html/i.test(response.headers['content-type'] ?? '') || /^\s*</.test(response.body);
-  const title = html ? htmlTitle(response.body) : undefined;
-  if (detectChallenge({ status: response.status, headers: response.headers, url: response.url, ...(title === undefined ? {} : { title }), ...(html ? { text: response.body } : {}) })) {
-    session.challenged();
-  }
+  if (detectResponseChallenge(response)) session.challenged();
 }
 
 /** E1 / E2 en tunnel : `page_fetch` (fetch dans un onglet du site, cookies du navigateur de l'utilisateur). */
@@ -197,6 +196,8 @@ function pageScriptTransport(session: TunnelSession, spec: DeclarativeSpec, maxB
       for (const [k, v] of Object.entries(nav['headers'] as Record<string, unknown>)) if (typeof v === 'string') headers[k.toLowerCase()] = v;
     }
     const finalUrl = typeof nav?.['url'] === 'string' ? nav['url'] : request.url;
+    // Défense en profondeur (l'extension refuse déjà) : une navigation redirigée hors du domaine connecté n'est jamais lue.
+    if (commandUrl(finalUrl, session.domain) === null) throw new DomainNotAllowedError(safeHost(finalUrl));
     const doc = await cdp(session, 'DOM.getDocument', { depth: 0 }, request.url);
     const root = (doc?.['root'] as { nodeId?: unknown } | undefined)?.nodeId;
     if (typeof root !== 'number') throw new DslError('unsupported', 'tunnel : document illisible');

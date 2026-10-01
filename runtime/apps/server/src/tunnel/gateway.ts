@@ -23,6 +23,7 @@ import {
   parseTunnelResult,
   ResultAssembler,
   TUNNEL_HELLO_TIMEOUT_MS,
+  TUNNEL_IDLE_TIMEOUT_MS,
   TUNNEL_MAX_PAYLOAD,
   TUNNEL_PING_MS,
   WS_CLOSE,
@@ -48,6 +49,7 @@ import type { Role } from '@runtime/core';
 import type { FastifyBaseLogger } from 'fastify';
 import pg from 'pg';
 import type { WebSocket } from 'ws';
+import type { ExtensionOriginPolicy } from '../config.js';
 import { AttemptLimiter } from '../rate-limit.js';
 
 /** Échecs de `hello` par IP sur 15 min avant refus (4429). */
@@ -67,12 +69,12 @@ export type GatewayOptions = {
   instance?: string | null;
   /** Journal (celui de l'application Fastify, créée après la passerelle). */
   logger: () => FastifyBaseLogger;
-  /** Identifiants d'extension acceptés (vide : toute origine `chrome-extension://`). */
-  extensionIds: readonly string[];
   /** Période du sondage de secours (ms). */
   pollMs?: number;
   /** Période de revalidation des jetons des connexions ouvertes (ms). */
   revalidateMs?: number;
+  /** Connexion muette au-delà de ce délai : fermée (4408) et détachée (défaut : 3 pings, `TUNNEL_IDLE_TIMEOUT_MS`). */
+  idleMs?: number;
 };
 
 type Inflight = { attempt: number; assembler: ResultAssembler; timer: NodeJS.Timeout; cmd: DispatchedJob['cmd'] };
@@ -89,15 +91,21 @@ type Connection = {
   inflight: Map<string, Inflight>;
   windowStart: number;
   messages: number;
+  /** Dernier message reçu (ping compris) : délai d'inactivité. */
+  lastSeen: number;
   helloTimer?: NodeJS.Timeout;
 };
 
-/** Origine d'une ouverture de WSS : seule une extension (liste d'identifiants si configurée) est acceptée. */
-export function tunnelOriginAllowed(origin: string | undefined, extensionIds: readonly string[]): boolean {
+/**
+ * Origine d'une ouverture de WSS : une extension de la liste (celle publiée par défaut), ou toute extension en mode
+ * développement explicite (`allowAny`). Jamais une origine web ni une requête sans Origin. Liste vide hors
+ * développement : aucune.
+ */
+export function tunnelOriginAllowed(origin: string | undefined, policy: ExtensionOriginPolicy): boolean {
   if (typeof origin !== 'string') return false;
   const match = /^chrome-extension:\/\/([a-p]{32})$/.exec(origin);
   if (match === null) return false;
-  return extensionIds.length === 0 || extensionIds.includes(match[1]!);
+  return policy.allowAny || policy.ids.includes(match[1]!);
 }
 
 /** Domaine d'une commande et URL éventuelle : la garde des sites (INV10) s'applique avant toute émission. */
@@ -164,6 +172,7 @@ export class TunnelGateway {
   #listener: pg.Client | null = null;
   #pollTimer: NodeJS.Timeout | undefined;
   #revalidateTimer: NodeJS.Timeout | undefined;
+  #idleTimer: NodeJS.Timeout | undefined;
   #closing = false;
   #reconnectTimer: NodeJS.Timeout | undefined;
   /** Commandes émises (tests, métriques). */
@@ -191,6 +200,25 @@ export class TunnelGateway {
     this.#pollTimer.unref();
     this.#revalidateTimer = setInterval(() => void this.#revalidate(), this.#options.revalidateMs ?? 60_000);
     this.#revalidateTimer.unref();
+    // Connexion à moitié ouverte (veille, coupure sans FIN) : sans fermeture, elle resterait « connectée » en base et les
+    // commandes y expireraient en `timeout` au lieu de passer en `waiting_tunnel`.
+    const idleMs = this.#options.idleMs ?? TUNNEL_IDLE_TIMEOUT_MS;
+    this.#idleTimer = setInterval(() => this.#closeIdle(idleMs), Math.max(100, Math.floor(idleMs / 4)));
+    this.#idleTimer.unref();
+  }
+
+  /** Ferme (4408) les connexions ouvertes sans aucun message depuis `idleMs` ; la ligne `tunnels` est détachée. */
+  #closeIdle(idleMs: number): void {
+    const now = Date.now();
+    for (const conn of new Set(this.#byTunnel.values())) {
+      if (conn.phase === 'open' && now - conn.lastSeen > idleMs) {
+        this.log.info({ tunnel: conn.tunnelId, idleMs }, 'passerelle : connexion muette fermée');
+        this.#close(conn, WS_CLOSE.idleTimeout, 'idle timeout');
+        // Pair injoignable : la poignée de fermeture n'aboutira pas, la socket est coupée peu après (sans attendre les 30 s
+        // de `ws`), le temps qu'un pair encore vivant reçoive le code.
+        setTimeout(() => conn.socket.terminate(), 2000).unref();
+      }
+    }
   }
 
   async #listen(): Promise<void> {
@@ -217,6 +245,7 @@ export class TunnelGateway {
     this.#closing = true;
     clearInterval(this.#pollTimer);
     clearInterval(this.#revalidateTimer);
+    clearInterval(this.#idleTimer);
     clearTimeout(this.#reconnectTimer);
     const conns = [...new Set([...this.#byTunnel.values()])];
     for (const conn of conns) this.#close(conn, 1001, 'instance going away');
@@ -230,11 +259,12 @@ export class TunnelGateway {
 
   /** Nouvelle WSS (Origin et absence de paramètres d'URL déjà vérifiées à l'ouverture). */
   accept(socket: WebSocket, ip: string): void {
-    const conn: Connection = { socket, ip, phase: 'hello', tunnelId: '', ownerId: '', email: '', role: 'member', epoch: 0, inflight: new Map(), windowStart: Date.now(), messages: 0 };
+    const conn: Connection = { socket, ip, phase: 'hello', tunnelId: '', ownerId: '', email: '', role: 'member', epoch: 0, inflight: new Map(), windowStart: Date.now(), messages: 0, lastSeen: Date.now() };
     conn.helloTimer = setTimeout(() => this.#close(conn, WS_CLOSE.helloTimeout, 'hello expected'), TUNNEL_HELLO_TIMEOUT_MS);
     // Gestionnaires attachés tout de suite : aucun message perdu pendant les attentes asynchrones.
     let queue = Promise.resolve();
     socket.on('message', (data, isBinary) => {
+      conn.lastSeen = Date.now();
       queue = queue.then(() => this.#onMessage(conn, data as Buffer, isBinary)).catch((error: unknown) => {
         this.log.error({ err: (error as Error).message }, 'passerelle : erreur de traitement');
         this.#close(conn, 1011, 'internal error');
@@ -398,13 +428,27 @@ export class TunnelGateway {
     }
   }
 
-  /** Jetons revalidés : un appareil expiré, un compte désactivé ou une ligne détachée ailleurs ferme la WSS (4401). */
+  /**
+   * Jetons revalidés : appareil révoqué, supprimé ou expiré, compte désactivé → 4401 (l'extension oublie son appairage) ;
+   * appareil valide dont la ligne est détachée ou rattachée ailleurs (NOTIFY `k:` perdu) → 4409 (remplacée : elle garde
+   * son appairage).
+   */
   async #revalidate(): Promise<void> {
     const conns = [...this.#byTunnel.values()];
     if (conns.length === 0) return;
     try {
-      const invalid = new Set(await invalidTunnels(this.#options.pool, conns.map((c) => ({ tunnelId: c.tunnelId, epoch: c.epoch })), this.instance));
-      for (const conn of conns) if (invalid.has(conn.tunnelId)) this.#close(conn, WS_CLOSE.unauthorized, 'unauthorized');
+      const invalid = new Map((await invalidTunnels(this.#options.pool, conns.map((c) => ({ tunnelId: c.tunnelId, epoch: c.epoch })), this.instance)).map((r) => [r.tunnelId, r.reason]));
+      for (const conn of conns) {
+        const reason = invalid.get(conn.tunnelId);
+        if (reason === 'unauthorized') this.#close(conn, WS_CLOSE.unauthorized, 'unauthorized');
+        else if (reason === 'replaced') {
+          // La ligne n'est plus à cette connexion : elle ne la détache pas.
+          if (this.#byTunnel.get(conn.tunnelId) === conn) this.#byTunnel.delete(conn.tunnelId);
+          if (this.#byOwner.get(conn.ownerId) === conn) this.#byOwner.delete(conn.ownerId);
+          conn.tunnelId = '';
+          this.#close(conn, WS_CLOSE.replaced, 'replaced by a newer connection');
+        }
+      }
     } catch (error) {
       this.log.warn({ err: (error as Error).message }, 'passerelle : revalidation impossible');
     }
@@ -415,6 +459,10 @@ export class TunnelGateway {
     if (conn.socket.bufferedAmount > SEND_BUFFER_HIGH) return; // contre-pression : le sondage reprendra
     const outcome = await claimTunnelJob(this.#options.pool, { jobId, tunnelId: conn.tunnelId, ownerId: conn.ownerId, instance: this.instance });
     if (outcome.kind === 'skip') return;
+    if (outcome.kind === 'refused') {
+      this.log.warn({ jobId, tunnel: conn.tunnelId }, 'passerelle : domaine non connecté par le propriétaire du run, commande refusée');
+      return;
+    }
     if (outcome.kind === 'denied') {
       this.routeDenied += 1;
       this.log.warn({ jobId, tunnel: conn.tunnelId }, 'passerelle : run d’un autre utilisateur refusé (INV5)');

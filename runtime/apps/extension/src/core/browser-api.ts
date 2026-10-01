@@ -4,7 +4,10 @@
 
 export type TabInfo = {
   id: number;
+  /** URL courante (permission `tabs`, sans permission d'hôte : lisible même sur un autre site). */
   url?: string;
+  /** URL en cours de chargement (navigation pas encore validée). */
+  pendingUrl?: string;
   status?: string;
   discarded?: boolean;
   /** Chrome 132+ : onglet gelé (rien ne s'y exécute). */
@@ -16,7 +19,8 @@ export type TabInfo = {
 
 /** Requête exécutée par la fonction empaquetée `pageFetchInPage` (aucun code venu du serveur). */
 export type InPageRequest = { url: string; method: string; headers: Record<string, string>; body: string | null; maxBytes: number; maxMeta: number };
-export type InPageResult = { kind: 'ok'; status: number; headers: string; body: string; url: string } | { kind: 'too_large' } | { kind: 'error' };
+/** `redirect` : la réponse est une redirection, NON suivie (`redirect: 'manual'`, INV10 : aucun saut vérifié après coup). */
+export type InPageResult = { kind: 'ok'; status: number; headers: string; body: string; url: string } | { kind: 'too_large' } | { kind: 'redirect' } | { kind: 'error' };
 /** Lecture bornée d'une page (détection de défi) par la fonction empaquetée `inspectPage`. */
 export type PageInspection = { title: string; url: string; text: string };
 
@@ -47,6 +51,9 @@ export interface BrowserApi {
     onEvent(tabId: number, handler: (method: string, params: unknown) => void): () => void;
   };
   readonly permissions: { contains(origins: string[]): Promise<boolean> };
-  /** `fetch` du service worker (`http_fetch`) : IP de l'utilisateur, cookies du navigateur, rien de posé à la main. */
-  fetch(url: string, init: { method: string; headers: Record<string, string>; body?: string }): Promise<{ status: number; url: string; headers: [string, string][]; text(max: number): Promise<string | null> }>;
+  /**
+   * `fetch` du service worker (`http_fetch`) : IP de l'utilisateur, cookies du navigateur, rien de posé à la main.
+   * Redirections jamais suivies (`redirect: 'manual'`) : `redirected: true`, sans statut ni corps lisibles.
+   */
+  fetch(url: string, init: { method: string; headers: Record<string, string>; body?: string }): Promise<{ status: number; url: string; redirected: boolean; headers: [string, string][]; text(max: number): Promise<string | null> }>;
 }

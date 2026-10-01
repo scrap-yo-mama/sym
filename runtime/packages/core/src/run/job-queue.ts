@@ -134,6 +134,16 @@ export type RunResult =
       error_detail?: string | null;
       items?: number;
       strategy_version?: number | null;
+    }
+  | {
+      /**
+       * Tunnel requis et extension hors ligne pendant le run (04 §6, 05) : `waiting_tunnel` → `skipped_tunnel_offline`.
+       * Aucune classe d'échec, aucun essai journalisé (aucune commande n'a abouti), le statut de l'API ne change pas.
+       */
+      state: 'skipped_tunnel_offline';
+      stop_reason: 'tunnel_offline';
+      error_detail?: string | null;
+      strategy_version?: number | null;
     };
 
 export type RunContext = {

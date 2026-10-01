@@ -36,15 +36,20 @@ describe('garde de la passerelle', () => {
     expect(guardCommand({ ...base, execution: 'hybrid', cmd: 'agent_step', args: { action: 'read' } })).toEqual({ ok: true });
   });
 
-  test('écriture sans allow_write_actions : write_action_blocked', () => {
-    expect(guardCommand({ ...base, cmd: 'page_fetch', args: { url: `https://${SHOP}/order`, method: 'POST', body: '{}' } })).toMatchObject({ error: 'write_action_blocked' });
+  test('écriture sans allow_write_actions (PUT, PATCH, DELETE) : write_action_blocked ; POST déclaratif accepté (correctif 1)', () => {
+    expect(guardCommand({ ...base, cmd: 'page_fetch', args: { url: `https://${SHOP}/order`, method: 'DELETE' } })).toMatchObject({ error: 'write_action_blocked' });
+    expect(guardCommand({ ...base, cmd: 'page_fetch', args: { url: `https://${SHOP}/order`, method: 'PUT', body: '{}' } })).toMatchObject({ error: 'write_action_blocked' });
+    expect(guardCommand({ ...base, cmd: 'page_fetch', args: { url: `https://${SHOP}/api/search`, method: 'POST', body: '{"q":"x"}' } })).toEqual({ ok: true });
   });
 
-  test('assert_ws_origin_checked : seule une origine d’extension (liste si configurée)', () => {
+  test('assert_ws_origin_checked : seule une origine d’extension de la liste ; toute extension en mode développement explicite (correctif 17)', () => {
     const id = 'abcdefghijklmnopabcdefghijklmnop';
-    expect(tunnelOriginAllowed(`chrome-extension://${id}`, [])).toBe(true);
-    expect(tunnelOriginAllowed(`chrome-extension://${id}`, ['ponmlkjihgfedcbaponmlkjihgfedcba'])).toBe(false);
-    expect(tunnelOriginAllowed('https://evil.example', [])).toBe(false);
-    expect(tunnelOriginAllowed(undefined, [])).toBe(false);
+    expect(tunnelOriginAllowed(`chrome-extension://${id}`, { ids: [id], allowAny: false })).toBe(true);
+    expect(tunnelOriginAllowed(`chrome-extension://${id}`, { ids: ['ponmlkjihgfedcbaponmlkjihgfedcba'], allowAny: false })).toBe(false);
+    // Liste vide hors mode développement : aucune extension (une autre extension installée ne passe pas).
+    expect(tunnelOriginAllowed(`chrome-extension://${id}`, { ids: [], allowAny: false })).toBe(false);
+    expect(tunnelOriginAllowed(`chrome-extension://${id}`, { ids: [], allowAny: true })).toBe(true);
+    expect(tunnelOriginAllowed('https://evil.example', { ids: [], allowAny: true })).toBe(false);
+    expect(tunnelOriginAllowed(undefined, { ids: [], allowAny: true })).toBe(false);
   });
 });

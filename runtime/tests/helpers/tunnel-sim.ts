@@ -5,7 +5,9 @@
 import { chunkResult, type CommandFrame, type TunnelResult } from '@runtime/core/tunnel';
 import WebSocket from 'ws';
 
-const SIM_ORIGIN = 'chrome-extension://abcdefghijklmnopabcdefghijklmnop';
+/** Identifiant de l'extension simulée (à mettre dans `TUNNEL_EXTENSION_IDS` du serveur de test). */
+export const SIM_EXTENSION_ID = 'abcdefghijklmnopabcdefghijklmnop';
+const SIM_ORIGIN = `chrome-extension://${SIM_EXTENSION_ID}`;
 
 export type SimHandler = (frame: CommandFrame) => Promise<TunnelResult | null> | TunnelResult | null;
 
@@ -24,11 +26,28 @@ export class SimExtension {
   welcome: Promise<boolean>;
   #handler: SimHandler;
 
-  constructor(baseUrl: string, token: string | null, opts: { origin?: string | null; handler?: SimHandler; path?: string } = {}) {
+  #ping: NodeJS.Timeout | undefined;
+
+  /** `pingMs` : ping applicatif comme l'extension (défaut 20 s, 07 § 4) ; 0 = aucun (connexion muette). */
+  constructor(baseUrl: string, token: string | null, opts: { origin?: string | null; handler?: SimHandler; path?: string; pingMs?: number } = {}) {
     this.#handler = opts.handler ?? (() => okFetch('{"items":[]}'));
     const url = `${baseUrl.replace(/^http/, 'ws')}${opts.path ?? '/api/extension/tunnel'}`;
     this.socket = new WebSocket(url, opts.origin === null ? {} : { origin: opts.origin ?? SIM_ORIGIN });
-    this.closed = new Promise((resolve) => this.socket.on('close', (code) => resolve(code)));
+    this.closed = new Promise((resolve) =>
+      this.socket.on('close', (code) => {
+        clearInterval(this.#ping);
+        resolve(code);
+      }),
+    );
+    const pingMs = opts.pingMs ?? 20_000;
+    if (pingMs > 0) {
+      this.socket.on('open', () => {
+        this.#ping = setInterval(() => {
+          if (this.socket.readyState === WebSocket.OPEN) this.socket.send(JSON.stringify({ type: 'ping' }));
+        }, pingMs);
+        this.#ping.unref();
+      });
+    }
     this.welcome = new Promise((resolve, reject) => {
       this.socket.on('unexpected-response', (_req, res) => reject(new Error(`HTTP ${res.statusCode}`)));
       this.socket.on('error', (error) => reject(error));

@@ -2,6 +2,7 @@
 // Tunnel WSS, noyau pur (tâche 2.7, 07 § 3, § 5, § 6, § 8) : schéma strict des messages, découpage ≤ 1 Mio et
 // réassemblage (assert_ws_chunking_maxpayload), liste blanche CDP et refus du code distant (assert_cdp_allowlist,
 // assert_no_remote_logic), détection de défi (07 § 5), garde d'écriture (write_action_blocked).
+import { readFileSync } from 'node:fs';
 import { describe, expect, test } from 'vitest';
 import {
   CDP_ALLOWLIST,
@@ -10,8 +11,12 @@ import {
   chunkResult,
   commandUrl,
   detectChallenge,
+  detectResponseChallenge,
   htmlTitle,
+  isActivationKey,
+  isReplayableFetch,
   isSubmitKey,
+  isWriteElement,
   isWriteTarget,
   parseExtensionFrame,
   parseFetchArgs,
@@ -124,12 +129,23 @@ describe('arguments de fetch : domaine, écriture, en-têtes d’identité', () 
   });
 
   test('écriture sans allow_write_actions, en-têtes Cookie/Origin/User-Agent : refus', () => {
-    expect(parseFetchArgs({ url: 'https://monsite.com/x', method: 'POST', body: '{}' }, 'monsite.com', false)).toMatchObject({ ok: false, error: 'write_action_blocked' });
-    expect(parseFetchArgs({ url: 'https://monsite.com/x', method: 'POST', body: '{}' }, 'monsite.com', true)).toMatchObject({ ok: true });
+    for (const method of ['PUT', 'PATCH', 'DELETE']) {
+      expect(parseFetchArgs({ url: 'https://monsite.com/x', method, body: '{}' }, 'monsite.com', false), method).toMatchObject({ ok: false, error: 'write_action_blocked' });
+      expect(parseFetchArgs({ url: 'https://monsite.com/x', method, body: '{}' }, 'monsite.com', true), method).toMatchObject({ ok: true });
+    }
     for (const name of ['Cookie', 'origin', 'User-Agent', 'Referer', 'sec-ch-ua']) {
       expect(parseFetchArgs({ url: 'https://monsite.com/x', headers: { [name]: 'v' } }, 'monsite.com', false)).toMatchObject({ ok: false });
     }
     expect(parseFetchArgs({ url: 'https://evil.example/x' }, 'monsite.com', false)).toMatchObject({ ok: false, error: 'domain_not_allowed' });
+  });
+
+  test('correctif 1 : POST déclaratif (recherche, GraphQL, 04b l.66) accepté sans allow_write_actions, jamais rejoué', () => {
+    const search = parseFetchArgs({ url: 'https://api.monsite.com/search', method: 'POST', headers: { 'content-type': 'application/json' }, body: '{"q":"x","offset":0}' }, 'monsite.com', false);
+    expect(search).toMatchObject({ ok: true, args: { method: 'POST' } });
+    expect(isReplayableFetch({ method: 'POST' })).toBe(false);
+    expect(isReplayableFetch({ method: 'OPTIONS' })).toBe(false);
+    expect(isReplayableFetch({ method: 'GET' })).toBe(true);
+    expect(isReplayableFetch({ method: 'HEAD' })).toBe(true);
   });
 });
 
@@ -150,6 +166,17 @@ describe('défi dans le tunnel (07 § 5)', () => {
     expect(detectChallenge({ status: 403, title: 'Forbidden', text: '<h1>403 Forbidden</h1>' })).toBe(false);
     expect(detectChallenge({ status: 200, headers: { 'x-datadome': 'protected' }, text: '<p>ok</p>' })).toBe(false);
   });
+
+  test('correctif 3 : défi rendu en JSON (XHR DataDome, 403 + captcha-delivery.com) détecté ; JSON ordinaire non', () => {
+    const fixture = JSON.parse(readFileSync(new URL('./fixtures/zz_test_datadome_xhr_403.json', import.meta.url), 'utf8')) as { status: number; headers: Record<string, string>; body: string; url: string };
+    expect(detectResponseChallenge(fixture)).toBe(true);
+    // Corps seul (en-tête retiré par un intermédiaire) ou en-tête seul sur un 403 : toujours un défi.
+    expect(detectResponseChallenge({ ...fixture, headers: { 'content-type': 'application/json' } })).toBe(true);
+    expect(detectResponseChallenge({ ...fixture, body: '{}' })).toBe(true);
+    expect(detectResponseChallenge({ status: 429, headers: { 'content-type': 'application/json' }, body: '{"captcha":"https://www.google.com/recaptcha/api.js"}', url: fixture.url })).toBe(true);
+    expect(detectResponseChallenge({ status: 200, headers: { 'content-type': 'application/json', 'x-datadome': 'protected' }, body: '{"ads":[]}', url: fixture.url })).toBe(false);
+    expect(detectResponseChallenge({ status: 403, headers: { 'content-type': 'application/json' }, body: '{"error":"forbidden"}', url: fixture.url })).toBe(false);
+  });
 });
 
 describe('garde d’écriture (write_action_blocked)', () => {
@@ -164,5 +191,32 @@ describe('garde d’écriture (write_action_blocked)', () => {
     expect(isWriteTarget({ role: 'button', name: 'Go', submit: true })).toBe(true);
     expect(isSubmitKey('Enter')).toBe(true);
     expect(isSubmitKey('a', 'KeyA')).toBe(false);
+  });
+
+  test('correctifs 7 et 13 : touches qui activent un bouton ou envoient un formulaire (Entrée, Espace, \\r, \\n, 13, 32)', () => {
+    for (const p of [
+      { type: 'keyDown', key: 'Enter' },
+      { type: 'keyDown', code: 'NumpadEnter' },
+      { type: 'char', text: '\r' },
+      { type: 'char', text: '\n' },
+      { type: 'keyDown', windowsVirtualKeyCode: 13, text: '\r' },
+      { type: 'rawKeyDown', windowsVirtualKeyCode: 13 },
+      { type: 'keyDown', key: ' ', code: 'Space' },
+      { type: 'keyUp', key: ' ' },
+      { type: 'char', text: ' ' },
+      { type: 'keyDown', windowsVirtualKeyCode: 32 },
+      { type: 'keyDown', key: 'Spacebar' },
+    ]) {
+      expect(isActivationKey(p), JSON.stringify(p)).toBe(true);
+    }
+    for (const p of [{ type: 'keyDown', key: 'a', code: 'KeyA', text: 'a' }, { type: 'keyDown', key: 'ArrowDown', code: 'ArrowDown' }, { type: 'keyDown', key: 'Tab', code: 'Tab' }]) {
+      expect(isActivationKey(p), JSON.stringify(p)).toBe(false);
+    }
+    expect(isWriteElement({ nodeName: 'BUTTON', attributes: [] })).toBe(true);
+    expect(isWriteElement({ nodeName: 'BUTTON', attributes: ['type', 'submit'] })).toBe(true);
+    expect(isWriteElement({ nodeName: 'INPUT', attributes: ['type', 'image'] })).toBe(true);
+    expect(isWriteElement({ nodeName: 'BUTTON', attributes: ['type', 'button'] })).toBe(false);
+    expect(isWriteElement({ nodeName: 'INPUT', attributes: ['type', 'text'] })).toBe(false);
+    expect(isWriteElement({ nodeName: 'A', attributes: ['href', '/next'] })).toBe(false);
   });
 });

@@ -31,3 +31,35 @@ export function isWriteTarget(target: { readonly role: string; readonly name: st
 export function isSubmitKey(key: unknown, code?: unknown): boolean {
   return key === 'Enter' || code === 'Enter' || code === 'NumpadEnter' || key === '\r';
 }
+
+const ACTIVATION_KEYS = new Set(['Enter', ' ', 'Spacebar', 'Space', '\r', '\n']);
+const ACTIVATION_CODES = new Set(['Enter', 'NumpadEnter', 'Space']);
+const ACTIVATION_KEY_CODES = new Set([13, 32]);
+
+/**
+ * `Input.dispatchKeyEvent` qui peut envoyer un formulaire ou activer l'élément focalisé (07 §5, 08 §4) : Entrée
+ * (soumission implicite) ou Espace (bouton focalisé), quelle que soit la façon de les décrire (`key`, `code`, `text`,
+ * `windowsVirtualKeyCode`). Fermé par défaut : sans `allow_write_actions`, l'extension les refuse toutes ; le texte se
+ * saisit par `Input.insertText`, qui n'active rien.
+ */
+export function isActivationKey(params: Readonly<Record<string, unknown>>): boolean {
+  const { key, code, text, windowsVirtualKeyCode: vk } = params;
+  if (typeof key === 'string' && ACTIVATION_KEYS.has(key)) return true;
+  if (typeof code === 'string' && ACTIVATION_CODES.has(code)) return true;
+  if (typeof vk === 'number' && ACTIVATION_KEY_CODES.has(vk)) return true;
+  return typeof text === 'string' && /[\r\n ]/.test(text);
+}
+
+/**
+ * Élément DOM dont l'activation (clic, focus puis Entrée ou Espace) envoie un formulaire : `<button>` sans type ou
+ * `type=submit`, `<input type=submit|image>`. Fermé : un bouton sans type, dans un formulaire, l'envoie.
+ */
+export function isWriteElement(node: { readonly nodeName?: string; readonly attributes?: readonly string[] }): boolean {
+  const attrs = node.attributes ?? [];
+  const at = attrs.findIndex((a, i) => i % 2 === 0 && a.toLowerCase() === 'type');
+  const type = at === -1 ? undefined : attrs[at + 1]?.toLowerCase();
+  const name = (node.nodeName ?? '').toUpperCase();
+  if (name === 'BUTTON') return type === undefined || type === 'submit' || type === '';
+  if (name === 'INPUT') return type === 'submit' || type === 'image';
+  return false;
+}

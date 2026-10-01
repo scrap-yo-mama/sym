@@ -2,8 +2,11 @@
 // Passerelle tunnel WSS sur base réelle et serveurs en écoute (tâche 2.7, 07 § 5-6 et § 8) : jeton hors URL, Origin,
 // révocation et expiration (4401), une WSS par utilisateur (4409), routage INV5 (assert_tunnel_single_user), découpage
 // (assert_ws_chunking_maxpayload), garde SSRF à la passerelle (assert_ssrf_guard), rejeu après coupure, hors ligne, et
-// routage par instance (assert_gateway_instance_routing : deux passerelles, 200 extensions simulées, aucune perte).
+// routage par instance (assert_gateway_instance_routing : deux passerelles, 200 extensions simulées, aucune perte, NOTIFY
+// sur le seul canal de l'instance qui tient la connexion, sondage de secours coupé). Correctifs de vérification :
+// connexion muette fermée (5), revalidation 4409/4401 (10), keepAliveTimeout ≥ 90 s (11), domaine non connecté (15).
 import { randomUUID } from 'node:crypto';
+import pgModule from 'pg';
 import { createLogger, generateExtensionToken } from '@runtime/core';
 import { enqueueTunnelJob, readTunnelJob, type TunnelJobInput } from '@runtime/db';
 import type pg from 'pg';
@@ -34,8 +37,10 @@ async function listen(started: Started): Promise<string> {
   return `http://127.0.0.1:${addr.port}`;
 }
 
-/** Appareil appairé directement en base (même empreinte que l'échange de code) : jeton en clair pour le test. */
+/** Appareil appairé directement en base (même empreinte que l'échange de code) : jeton en clair pour le test. Le site de
+ * test est connecté (`site_sessions`, mode tunnel) pour cet utilisateur, comme après « Connecter ce site ». */
 async function device(userId: string, label = 'zz_test_device'): Promise<{ token: string; tunnelId: string }> {
+  await pool.query('INSERT INTO site_sessions (owner_id, domain) VALUES ($1, $2) ON CONFLICT (owner_id, domain) DO NOTHING', [userId, SHOP]);
   const { token, hash } = generateExtensionToken();
   const { rows } = await pool.query<{ id: string }>(
     `INSERT INTO tunnels (owner_id, device_id, device_label, token_hash, expires_at) VALUES ($1, $2, $3, $4, now() + interval '90 days') RETURNING id`,
@@ -282,7 +287,8 @@ describe('commandes', () => {
     const c = new TunnelJobClient({ pool, sessionUrl: srv.db.url, logger: silent, offlineGraceMs: 800, pollMs: 100 });
     const out = await c.send(job(runA, a.id), { signal: AbortSignal.timeout(30_000), onWaiting: async (w) => void waits.push(w) });
     expect(out).toMatchObject({ kind: 'error', error: 'tunnel_offline' });
-    expect(waits).toEqual([true, false]);
+    // Le run reste en `waiting_tunnel` jusqu'à sa fin (`skipped_tunnel_offline`) : jamais rebasculé en `running`.
+    expect(waits).toEqual([true]);
     // Rattrapage : une commande en attente part dès que l'extension se connecte.
     const pending = send(job(runA, a.id));
     await new Promise((r) => setTimeout(r, 300));
@@ -294,10 +300,75 @@ describe('commandes', () => {
   });
 });
 
+describe('correctifs de vérification : passerelle', () => {
+  test('correctif 11 : keepAliveTimeout du serveur HTTP ≥ 90 s (07 § 6)', () => {
+    expect(srv.started.app.server.keepAliveTimeout).toBeGreaterThanOrEqual(90_000);
+  });
+
+  test('correctif 15 : domaine non connecté par le propriétaire du run → domain_not_allowed à l’instance, rien n’est émis', async () => {
+    const devB = await device(b.id);
+    const sB = sim(devB.token);
+    expect(await sB.welcome).toBe(true);
+    const runB = await runOf(b.id);
+    const out = await client.send(job(runB, b.id, { domain: 'zz-test-forum.example', args: { url: 'https://zz-test-forum.example/api/data' } }), { signal: AbortSignal.timeout(30_000) });
+    expect(out).toMatchObject({ kind: 'error', error: 'domain_not_allowed' });
+    expect(sB.received).toEqual([]);
+    // Le domaine connecté, lui, passe.
+    expect(await client.send(job(runB, b.id), { signal: AbortSignal.timeout(30_000) })).toMatchObject({ kind: 'result' });
+    expect(sB.received).toHaveLength(1);
+    await sB.close();
+  });
+
+  test('correctifs 5 et 10 : connexion muette fermée (4408) et détachée ; appareil remplacé sans NOTIFY → 4409, révoqué ou expiré → 4401', async () => {
+    const live = await prepareServer(serverEnv(srv.db.url, srv.masterKey, null, { GATEWAY_INSTANCE: 'zz_test_gw_live' }), { tunnel: { idleMs: 1500, revalidateMs: 300 } });
+    const baseLive = await listen(live);
+    try {
+      // 5. Connexion à moitié ouverte (aucun ping) : fermée après le délai d'inactivité, la ligne n'est plus « connectée ».
+      const mute = await device(a.id, 'zz_test_mute');
+      const sMute = sim(mute.token, { pingMs: 0 }, baseLive);
+      expect(await sMute.welcome).toBe(true);
+      expect(await sMute.closed).toBe(4408);
+      await vi.waitFor(async () => expect((await pool.query('SELECT gateway_instance FROM tunnels WHERE id = $1', [mute.tunnelId])).rows[0]).toEqual({ gateway_instance: null }));
+      // Une connexion qui pinge reste ouverte bien au-delà du délai.
+      const alive = await device(a.id, 'zz_test_alive');
+      const sAlive = sim(alive.token, { pingMs: 300 }, baseLive);
+      expect(await sAlive.welcome).toBe(true);
+      await new Promise((r) => setTimeout(r, 3000));
+      expect(sAlive.socket.readyState).toBe(1); // WebSocket.OPEN
+
+      // 10. Ligne détachée par un appairage ailleurs dont le NOTIFY `k:` s'est perdu : 4409 (l'extension garde son appairage).
+      await pool.query('UPDATE tunnels SET gateway_instance = NULL, connected_at = NULL WHERE id = $1', [alive.tunnelId]);
+      expect(await sAlive.closed).toBe(4409);
+      // Appareil expiré : 4401.
+      const old = await device(a.id, 'zz_test_old');
+      const sOld = sim(old.token, { pingMs: 300 }, baseLive);
+      expect(await sOld.welcome).toBe(true);
+      await pool.query("UPDATE tunnels SET expires_at = now() - interval '1 day' WHERE id = $1", [old.tunnelId]);
+      expect(await sOld.closed).toBe(4401);
+    } finally {
+      await live.close();
+    }
+  }, 60_000);
+});
+
 describe('assert_gateway_instance_routing : deux instances, 200 extensions simulées', () => {
-  test('seule l’instance qui tient la connexion reçoit la commande ; aucune commande perdue', async () => {
-    const second = await prepareServer(serverEnv(srv.db.url, srv.masterKey, null, { GATEWAY_INSTANCE: 'zz_test_gw_b' }));
+  test('seule l’instance qui tient la connexion reçoit la commande, par SON canal ; aucune commande perdue', async () => {
+    // Deux instances dédiées, sondage de secours coupé (1 h) : seul le NOTIFY `tunnel_cmd_<instance>` peut acheminer une
+    // commande. Un NOTIFY sur un canal commun, sur le mauvais canal ou absent ferait échouer le test (délai, ou canal).
+    const NO_POLL = { tunnel: { pollMs: 3_600_000 } };
+    const first = await prepareServer(serverEnv(srv.db.url, srv.masterKey, null, { GATEWAY_INSTANCE: 'zz_test_gw_c' }), NO_POLL);
+    const second = await prepareServer(serverEnv(srv.db.url, srv.masterKey, null, { GATEWAY_INSTANCE: 'zz_test_gw_d' }), NO_POLL);
+    const baseA = await listen(first);
     const baseB = await listen(second);
+    // Écoute des deux canaux : chaque `j:<job>` doit arriver sur le canal de l'instance qui tient la connexion, et lui seul.
+    const spy = new pgModule.Client({ connectionString: srv.db.url });
+    const heard = new Map<string, string[]>();
+    spy.on('notification', (msg) => {
+      if (msg.payload?.startsWith('j:')) heard.set(msg.payload.slice(2), [...(heard.get(msg.payload.slice(2)) ?? []), msg.channel]);
+    });
+    await spy.connect();
+    await spy.query('LISTEN tunnel_cmd_zz_test_gw_c');
+    await spy.query('LISTEN tunnel_cmd_zz_test_gw_d');
     try {
       const users: string[] = [];
       for (let i = 0; i < 200; i += 1) {
@@ -306,8 +377,8 @@ describe('assert_gateway_instance_routing : deux instances, 200 extensions simul
       const extensions = await Promise.all(
         users.map(async (userId, i) => {
           const { token } = await device(userId);
-          const s = sim(token, { handler: (f) => okFetch(JSON.stringify({ to: userId, job: f.job_id })) }, i % 2 === 0 ? base : baseB);
-          return { userId, s, instance: i % 2 === 0 ? 'zz_test_gw_a' : 'zz_test_gw_b' };
+          const s = sim(token, { handler: (f) => okFetch(JSON.stringify({ to: userId, job: f.job_id })) }, i % 2 === 0 ? baseA : baseB);
+          return { userId, s, instance: i % 2 === 0 ? 'zz_test_gw_c' : 'zz_test_gw_d' };
         }),
       );
       expect((await Promise.all(extensions.map((e) => e.s.welcome))).every(Boolean)).toBe(true);
@@ -315,7 +386,7 @@ describe('assert_gateway_instance_routing : deux instances, 200 extensions simul
       expect(where.rows).toHaveLength(200);
       for (const e of extensions) expect(where.rows.find((r) => r.owner_id === e.userId)?.gateway_instance).toBe(e.instance);
 
-      const beforeA = srv.started.ctx.tunnel!.dispatched;
+      const beforeA = first.ctx.tunnel!.dispatched;
       const beforeB = second.ctx.tunnel!.dispatched;
       const PER_USER = 3;
       const outcomes = await Promise.all(
@@ -333,13 +404,19 @@ describe('assert_gateway_instance_routing : deux instances, 200 extensions simul
         }
       });
       for (const e of extensions) expect(e.s.received).toHaveLength(PER_USER);
-      // Chaque instance n'a émis que les commandes des connexions qu'elle tient.
-      expect(srv.started.ctx.tunnel!.dispatched - beforeA).toBe(100 * PER_USER);
+      // Chaque commande a été notifiée sur le canal de l'instance qui tient la connexion de son propriétaire, et sur
+      // aucun autre ; l'instance l'a émise sans sondage.
+      for (const e of extensions) {
+        for (const frame of e.s.received) expect(heard.get(frame.job_id), frame.job_id).toEqual([`tunnel_cmd_${e.instance}`]);
+      }
+      expect(first.ctx.tunnel!.dispatched - beforeA).toBe(100 * PER_USER);
       expect(second.ctx.tunnel!.dispatched - beforeB).toBe(100 * PER_USER);
       const lost = await pool.query<{ n: number }>("SELECT count(*)::int AS n FROM tunnel_jobs t JOIN tunnels u ON u.owner_id = t.owner_id WHERE u.owner_id = ANY($1::uuid[]) AND t.state <> 'done'", [users]);
       expect(lost.rows[0]!.n).toBe(0);
       await Promise.all(extensions.map((e) => e.s.close()));
     } finally {
+      await spy.end().catch(() => undefined);
+      await first.close();
       await second.close();
     }
   }, 120_000);

@@ -7,7 +7,7 @@
 //   découpée en morceaux numérotés `seq` / `last`, chacun ≤ 1 Mio) ;
 // - instance → extension : `welcome`, `pong`, `cmd` (jeu fermé de quatre commandes).
 // Codes de fermeture applicatifs : 4401 jeton refusé ou révoqué, 4409 remplacée par une connexion plus récente du même
-// utilisateur, 4400 violation de protocole, 4429 débit dépassé, 4408 aucun `hello` à temps.
+// utilisateur, 4400 violation de protocole, 4429 débit dépassé, 4408 aucun `hello` à temps ou connexion muette.
 
 export const TUNNEL_PATH = '/api/extension/tunnel';
 /** `maxPayload` de la passerelle (07 §6) : 1 Mio. Aucun message ne le dépasse, réponses découpées comprises. */
@@ -16,6 +16,11 @@ export const TUNNEL_MAX_PAYLOAD = 1024 * 1024;
 export const TUNNEL_PING_MS = 20_000;
 /** Alarme `chrome.alarms` de reconnexion (07 §4, Chrome 120+ : 30 s minimum). */
 export const TUNNEL_ALARM_PERIOD_MINUTES = 0.5;
+/**
+ * Connexion muette (aucun message, ping compris) au-delà de ce délai : fermée par la passerelle (4408) et détachée de sa
+ * ligne `tunnels`. Trois pings manqués : portable en veille, coupure réseau sans FIN (connexion à moitié ouverte).
+ */
+export const TUNNEL_IDLE_TIMEOUT_MS = 3 * TUNNEL_PING_MS;
 /** Délai pour recevoir `hello` après l'ouverture. */
 export const TUNNEL_HELLO_TIMEOUT_MS = 10_000;
 /** Délai par défaut d'une commande (07 §8). */
@@ -28,6 +33,7 @@ export const WS_CLOSE = Object.freeze({
   protocol: 4400,
   unauthorized: 4401,
   helloTimeout: 4408,
+  idleTimeout: 4408,
   replaced: 4409,
   rateLimited: 4429,
 } as const);
@@ -196,7 +202,15 @@ export function parseFetchResponse(body: unknown, maxBytes: number): FetchRespon
 // ---------------------------------------------------------------------------------------------------------------------
 
 export const FETCH_METHODS = Object.freeze(['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'] as const);
-const READ_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
+/**
+ * Verbes d'écriture d'une requête : bloqués sans `allow_write_actions` (fermé par défaut). POST n'en fait pas partie :
+ * c'est le verbe des requêtes déclaratives E1/E2 (recherche, GraphQL ; contrat type de 04b, `allow_write_actions: false`),
+ * déjà accepté sur le chemin serveur ; le DSL n'émet que GET et POST. La garde d'écriture du CDC (07 §5, 08 §4) vise les
+ * clics d'envoi, tenue par `page_script` / `agent_step`. Un POST n'est jamais rejoué après une coupure.
+ */
+const WRITE_METHODS = new Set(['PUT', 'PATCH', 'DELETE']);
+/** Lectures pures, rejouables sans risque après une coupure. */
+const REPLAYABLE_METHODS = new Set(['GET', 'HEAD']);
 /**
  * En-têtes qu'une commande ne pose jamais : le navigateur attache lui-même cookies, origine et agent (07 §3) ; aucune
  * falsification d'identité ([_exclusions] X2) ; ni hôte ni connexion.
@@ -245,7 +259,7 @@ export function parseFetchArgs(raw: unknown, domain: string, allowWriteActions: 
   if (typeof raw['url'] !== 'string') return refuse('method_not_allowed', 'url manquante');
   const url = commandUrl(raw['url'], domain);
   if (url === null) return refuse('domain_not_allowed', 'url hors du domaine connecté');
-  if (!allowWriteActions && !READ_METHODS.has(method)) return refuse('write_action_blocked', 'écriture sans allow_write_actions');
+  if (!allowWriteActions && WRITE_METHODS.has(method)) return refuse('write_action_blocked', 'écriture sans allow_write_actions');
   const headers: Record<string, string> = {};
   if (raw['headers'] !== undefined) {
     if (!isRecord(raw['headers']) || Object.keys(raw['headers']).length > 50) return refuse('method_not_allowed', 'en-têtes invalides');
@@ -266,5 +280,5 @@ export function parseFetchArgs(raw: unknown, domain: string, allowWriteActions: 
 
 /** Une commande peut-elle être rejouée sans risque après une coupure (lecture pure) ? */
 export function isReplayableFetch(args: Pick<FetchArgs, 'method'>): boolean {
-  return READ_METHODS.has(args.method);
+  return REPLAYABLE_METHODS.has(args.method);
 }
