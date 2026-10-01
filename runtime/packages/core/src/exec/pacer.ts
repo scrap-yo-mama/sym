@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Branchement de la cadence par domaine (1.9) sur l'interpréteur : la clé reste le domaine de la cible, jamais le
-// barreau réseau, le proxy ni le compte (`assert_pacing_key_is_domain`). Un 429 ralentit, il ne change pas de réseau.
+// barreau réseau, le proxy ni le compte (`assert_pacing_key_is_domain`). Un 429 ralentit, il ne change pas de réseau ; un refus
+// (403, défi) compte pour le disjoncteur du domaine comme un 429 (1.7, 04 §7).
 import type { DomainPacer } from '../pacing/pacer.js';
-import { outcomeKindOfStatus } from '../pacing/policy.js';
+import { outcomeKindOfResponse } from '../pacing/policy.js';
 import type { RequestPacer } from './types.js';
 
 export type DomainPacingSettings = {
@@ -25,7 +26,7 @@ export function domainRequestPacer(pacer: DomainPacer, settings: DomainPacingSet
       return grant.granted ? { granted: true } : { granted: false, reason: grant.reason, retryAt: grant.retryAt };
     },
     async report(url, response) {
-      await pacer.report(url, { kind: outcomeKindOfStatus(response.status), retryAfter: response.retryAfter });
+      await pacer.report(url, { kind: outcomeKindOfResponse(response.status, response.failureClass), retryAfter: response.retryAfter });
     },
   };
 }

@@ -23,7 +23,15 @@
 // de masquage du run, que l'essai réussisse ou non ; le texte du journal n'est jamais écrit (ni `run_logs` ni journal du
 // worker : seuls le nombre de lignes et les octets le sont, 17 §6).
 import type { FailureClass, SandboxEngine, SandboxLimits, SandboxViolation } from '@runtime/core';
-import { classifyExchange, classifyTransportError, type DeclarativeRunResult, type ExecFailure, type HttpExchange, type RequestPacer } from '@runtime/core/exec';
+import {
+  classifyExchange,
+  classifyTransportError,
+  type ClassifyContext,
+  type DeclarativeRunResult,
+  type ExecFailure,
+  type HttpExchange,
+  type RequestPacer,
+} from '@runtime/core/exec';
 import { DomainNotAllowedError, guardedGoto, type BrowserEgress, type NetworkSession, type SsrfGuard } from '@runtime/core/net';
 import type { Logger } from 'pino';
 import type { Request, Response } from 'playwright-core';
@@ -91,8 +99,8 @@ export type ScriptExecutorOptions = {
   readonly maxRequests?: number;
   /** `apis.allow_write_actions` (défaut : faux). */
   readonly allowWriteActions?: boolean;
-  /** Garde de classification (1.7) ; défaut : statut seul (`classifyExchange`). */
-  readonly classify?: (exchange: HttpExchange) => ExecFailure | null;
+  /** Garde de classification (1.7) ; défaut : `classifyExchange` (statut, en-têtes de protection, défi servi en 200, redirection). */
+  readonly classify?: (exchange: HttpExchange, context?: ClassifyContext) => ExecFailure | null;
   readonly navigationTimeoutMs?: number;
 };
 
@@ -312,7 +320,7 @@ export function runScriptExecutor(options: ScriptExecutorOptions): Promise<Scrip
         if (options.signal.aborted) throw error;
         return finish(fail(classifyTransportError(error), 1, requests));
       }
-      const refused = classify(exchange);
+      const refused = classify(exchange, { requestUrl: options.startUrl });
       if (refused !== null) return finish(fail(refused, 1, requests));
       // Page de départ classée ici sur son contenu : la garde des opérations de page n'a pas à la relire.
       while (pending.size > 0) await Promise.allSettled([...pending]);

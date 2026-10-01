@@ -23,7 +23,7 @@ type Logger = Parameters<typeof runScriptExecutor>[0]['logger'];
 import { startClient, type Client } from '../../fixtures/src/test-helpers.ts';
 // Paquets construits, comme le worker : mêmes classes (erreurs de garde, DslError) des deux côtés.
 import { DomainPacer, Secret, validateDeclarativeSpec, validateOutput, type DeclarativeSpec } from '@runtime/core';
-import { classifyExchange, domainRequestPacer, runFetchExecutor, type DeclarativeRunResult, type ExecFailure, type HttpExchange, type RequestPacer } from '@runtime/core/exec';
+import { domainRequestPacer, runFetchExecutor, type DeclarativeRunResult, type ExecFailure, type HttpExchange, type RequestPacer } from '@runtime/core/exec';
 import * as net from '@runtime/core/net';
 import {
   openBrowserEgress,
@@ -600,9 +600,7 @@ describe('E3 en script dans le bac à sable (1.5) : ctx.page.*, ctx.fetch, ctx.e
     expect((await client.stats()).hosts[INTERNAL]?.total ?? 0).toBe(0);
   }, 60_000);
 
-  /** Garde de contenu de 1.7 simulée : la page de défi générique des fixtures, servie en 200, est reconnue. */
-  const challengeAware = (exchange: HttpExchange): ExecFailure | null =>
-    exchange.body.includes('zz-test-challenge') ? { failure_class: 'blocked_by_protection', retryable: false, detail: 'challenge' } : classifyExchange(exchange);
+  // Garde de classification de 1.7 PAR DÉFAUT (classifyExchange) : la page de défi générique, servie en 200, est reconnue par son contenu.
   test.each([
     ['ctx.page.goto en 403', 'await ctx.page.goto(input.forbidden);', { failure_class: 'forbidden', detail: 'http_403' }],
     ['ctx.fetch en 403', 'await ctx.fetch(input.forbidden);', { failure_class: 'forbidden', detail: 'http_403' }],
@@ -610,13 +608,13 @@ describe('E3 en script dans le bac à sable (1.5) : ctx.page.*, ctx.fetch, ctx.e
     [
       'ctx.page.goto vers un défi servi en 200',
       "await ctx.page.goto(input.challenge);\nawait ctx.page.click('#zz-test-challenge input');",
-      { failure_class: 'blocked_by_protection', detail: 'challenge' },
+      { failure_class: 'blocked_by_protection', detail: 'challenge_page' },
     ],
     [
       'clic qui mène à un défi servi en 200',
       "await ctx.page.evaluate((u) => { const a = document.createElement('a'); a.id = 'zz_test_go'; a.href = u; a.textContent = 'suite'; document.body.appendChild(a); return 1; }, input.challenge);\n" +
         "await ctx.page.click('#zz_test_go');\nconst html = await ctx.page.content();\nctx.emit({ title: html.slice(0, 50), price: 1 });\nawait ctx.page.click('#zz-test-challenge input');",
-      { failure_class: 'blocked_by_protection', detail: 'challenge' },
+      { failure_class: 'blocked_by_protection', detail: 'challenge_page' },
     ],
   ])('assert_script_refusal_stops (INV6) : page 1 conforme, puis %s → échec avec la classe du refus, rien rendu au script, 0 requête après le refus, 0 élément', async (_name, refusal, expected) => {
     const out = await script(
@@ -626,7 +624,6 @@ describe('E3 en script dans le bac à sable (1.5) : ctx.page.*, ctx.fetch, ctx.e
         "\nctx.emit({ title: 'après le refus', price: 1 });\nawait ctx.fetch(input.after);\nawait ctx.page.goto(input.after);",
       {
         allowedHosts: [SPA, SIGNED403, CHALLENGE_200, LOGIN],
-        classify: challengeAware,
         input: {
           forbidden: `${base(SIGNED403)}/plain-forbidden`,
           login: `${base(LOGIN)}/api/orders`,
@@ -771,3 +768,54 @@ test('recyclage réel : un Chromium neuf après N runs, l’ancien fermé', asyn
     await recycled.close();
   }
 }, 60_000);
+
+describe('assert_no_circumvention (Chromium, tâche 1.7) : garde de classification PAR DÉFAUT avant extraction, E2 et E3', () => {
+  /** Stratégie qui SAIT extraire la page de défi (titre `h1`) : sans la garde, l'essai « réussirait ». */
+  const heading = (host: string, path = '/'): DeclarativeSpec =>
+    valid(
+      {
+        schema_version: 1,
+        kind: 'declarative',
+        request: { method: 'GET', url: `${base(host)}${path}`, allowed_hosts: [host] },
+        sources: [{ id: 'dom', from: 'html', records: 'h1' }],
+        fields: { name: { attr: 'text', type: 'string', required: true } },
+      },
+      { type: 'object', required: ['name'], properties: { name: { type: 'string' } } },
+    );
+  const e3 = (spec: DeclarativeSpec) => withEgress({ mode: 'direct' }, (egress) => runPlaywrightExecutor({ pool, egress, guard, spec, input: {}, signal }), { allowedHosts: spec.request.allowed_hosts });
+  const e2 = (spec: DeclarativeSpec) => withEgress({ mode: 'direct' }, (egress) => runFetchInPageExecutor({ pool, egress, guard, spec, input: {}, signal }), { allowedHosts: spec.request.allowed_hosts });
+
+  test('E3 : défi servi en 200 (DOM rendu) → blocked_by_protection, rien d’extrait, aucune requête de plus', async () => {
+    const out = await e3(heading(CHALLENGE_200));
+    expect(out).toMatchObject({ ok: false, requests: 1, pages: 0, failure: { failure_class: 'blocked_by_protection', detail: 'challenge_page' } });
+    expect((await client.stats()).hosts[CHALLENGE_200]?.paths['/']).toBe(1);
+  }, 60_000);
+
+  test('E3 : 403 signé → blocked_by_protection ; 403 nu → forbidden ; redirection vers /login → auth_required ; jamais network', async () => {
+    const cases: [DeclarativeSpec, string, string][] = [
+      [heading(SIGNED403), 'blocked_by_protection', 'protection_signature'],
+      [heading(SIGNED403, '/plain-forbidden'), 'forbidden', 'http_403'],
+      [heading(LOGIN, '/account'), 'auth_required', 'login_redirect'],
+    ];
+    for (const [spec, cls, detail] of cases) {
+      const out = await e3(spec);
+      expect(out, cls).toMatchObject({ ok: false, pages: 0, failure: { failure_class: cls, detail } });
+    }
+  }, 90_000);
+
+  test('E2 : page d’accueil en défi servi en 200 → blocked_by_protection avant toute requête de données', async () => {
+    const spec = valid(
+      {
+        schema_version: 1,
+        kind: 'declarative',
+        request: { method: 'GET', url: `${base(CHALLENGE_200)}/api/items`, allowed_hosts: [CHALLENGE_200] },
+        sources: [{ id: 'api', from: 'response', records: '$.items[*]' }],
+        fields: { name: { path: '$.name', type: 'string', required: true } },
+      },
+      { type: 'object', required: ['name'], properties: { name: { type: 'string' } } },
+    );
+    const out = await e2(spec);
+    expect(out).toMatchObject({ ok: false, pages: 0, failure: { failure_class: 'blocked_by_protection', detail: 'challenge_page' } });
+    expect((await client.stats()).hosts[CHALLENGE_200]?.paths['/api/items'] ?? 0).toBe(0);
+  }, 60_000);
+});

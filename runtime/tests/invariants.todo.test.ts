@@ -40,10 +40,12 @@ import { describe, test } from "vitest";
 // isolated-vm et adaptateur QuickJS) ; borne isolated-vm et fuzz des ponts : apps/worker/src/sandbox/sandbox.unit.test.ts.
 // INV6 (3.5) : assert_ui_strings_no_forbidden_words est dans tests/ui-strings.unit.test.ts (fichiers de langue en et fr, messages
 // de apps/server/src et de packages/*/src, dont MCP ; un module MCP né hors de ces dossiers fait échouer le test) ; assert_blocked_panel_no_tunnel_link dans apps/web/src/components/BlockedPanel.unit.test.ts.
+// INV6 (1.7) : assert_no_circumvention et assert_circuit_opens_on_refusals sont dans packages/core/src/exec/classify.unit.test.ts,
+// classify.fixtures.unit.test.ts, guard.unit.test.ts, apps/worker/src/exec/classification-guard.integration.test.ts,
+// tests/browser/executors.security.test.ts (Chromium) et tests/no-circumvention.unit.test.ts (dépendances, imports) ; audit en 4.3.
 describe("invariants (à implémenter)", () => {
   test.todo("assert_cheapest_first_logged"); // INV2, tâche(s) 2.1
   test.todo("assert_tunnel_single_user"); // INV5, tâche(s) 2.6, 2.7
-  test.todo("assert_no_circumvention"); // INV6, tâche(s) 1.7, 4.3
   test.todo("assert_robots_respected"); // INV11, tâche(s) 1.11
   // RGPD (1.8) : assert_retention_purge, assert_erasure_complete et assert_no_personal_data_in_logs sont dans
   // packages/db/src/retention/retention.integration.test.ts ; câblage worker (RunContext.personal, RunContext.excludeSubjects,

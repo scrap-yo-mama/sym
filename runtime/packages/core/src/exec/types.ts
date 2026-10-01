@@ -28,5 +28,6 @@ export type ExecFailure = {
 /** Cadence (1.9) vue par l'interpréteur : une réservation avant chaque requête, un compte rendu après. */
 export type RequestPacer = {
   acquire(url: string): Promise<{ readonly granted: true } | { readonly granted: false; readonly reason: string; readonly retryAt: Date }>;
-  report(url: string, response: { readonly status: number; readonly retryAfter: string | null }): Promise<void>;
+  /** `failureClass` : classe de la garde (1.7) ; un refus (403, défi en 200) compte pour le disjoncteur. */
+  report(url: string, response: { readonly status: number; readonly retryAfter: string | null; readonly failureClass?: FailureClass | null }): Promise<void>;
 };

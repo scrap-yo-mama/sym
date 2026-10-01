@@ -98,10 +98,10 @@ describe('assert_executors_conform_fixtures : E1 sur fixtures (session réseau N
     if (out.ok) expect(out.records).toHaveLength(10);
   });
 
-  it('refus classés avant extraction : 401 → auth_required, 403 → forbidden, 429 → rate_limited, 503 → transient', async () => {
+  it('refus classés avant extraction : 401 → auth_required, défi 403 → blocked_by_protection, 429 → rate_limited, 503 → transient', async () => {
     const cases: [string, string, string, string][] = [
       ['zz_test_login.localhost', '/api/orders', 'auth_required', '$.items[*]'],
-      ['zz_test_challenge.localhost', '/', 'forbidden', '$.items[*]'],
+      ['zz_test_challenge.localhost', '/', 'blocked_by_protection', '$.items[*]'],
       ['zz_test_429.localhost', '/always', 'rate_limited', '$.items[*]'],
       ['zz_test_503.localhost', '/', 'transient', '$.items[*]'],
     ];

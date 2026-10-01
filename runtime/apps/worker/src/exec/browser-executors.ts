@@ -12,7 +12,6 @@
 // (`domain_not_allowed`), jamais un réseau ; une sous-ressource tierce du site coupée ne change jamais la classe.
 import {
   classifyExchange,
-  classifyStatus,
   classifyTransportError,
   encodeRequestBody,
   runDeclarative,
@@ -130,9 +129,10 @@ export function runFetchInPageExecutor(options: BrowserExecutorOptions): Promise
       if (options.signal.aborted) throw error;
       return failed(classifyTransportError(error));
     }
-    await options.pacer?.report(pageUrl, { status: landing.status, retryAfter: landing.headers['retry-after'] ?? null });
     const landingExchange: HttpExchange = { status: landing.status, headers: landing.headers, body: landing.html ? capped(await boundedContent(page, maxBytes)) : '', url: page.url() };
-    const refused = classify(landingExchange);
+    // Garde de classification (1.7) avant toute requête de données ; la classe est rapportée à la cadence (disjoncteur).
+    const refused = classify(landingExchange, { requestUrl: pageUrl });
+    await options.pacer?.report(pageUrl, { status: landing.status, retryAfter: landing.headers['retry-after'] ?? null, failureClass: refused?.failure_class ?? null });
     // Une page d'accueil absente (404) n'empêche pas l'appel de l'API de même origine ; tout autre refus arrête.
     if (refused !== null && refused.failure_class !== 'not_found') return failed(refused);
 
@@ -226,7 +226,8 @@ export function runPlaywrightExecutor(options: BrowserExecutorOptions): Promise<
       if (request.method !== 'GET' || request.body !== undefined) throw new DslError('unsupported', 'E3 déclaratif : requêtes GET seulement');
       const nav = await strategy.during(isMainNavigation(page), () => navigate(page, request.url, options));
       let body: string;
-      if (nav.html && classifyStatus(nav.status) === null) {
+      // Refus visible dès les en-têtes (statut, en-tête de défi, redirection vers la connexion) : aucune attente du rendu, le corps brut suffit à la garde.
+      if (nav.html && classifyExchange({ status: nav.status, headers: nav.headers, body: '', url: page.url() }, { requestUrl: request.url }) === null) {
         if (renderSelector !== undefined) await page.waitForSelector(renderSelector, { state: 'attached', timeout: renderWaitMs }).catch(() => undefined);
         else await page.waitForLoadState('networkidle', { timeout: renderWaitMs }).catch(() => undefined);
         body = capped(await boundedContent(page, maxBytes));

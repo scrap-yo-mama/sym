@@ -11,7 +11,7 @@ import { parseJsonBounded, resolveLimits, type DslLimits } from '../dsl/limits.j
 import { advancePagination, initialParam, resolveNextUrl, startPagination, type StopReason } from '../dsl/pagination.js';
 import type { DeclarativeSpec } from '../dsl/spec.js';
 import { renderRequest, type RenderedRequest, type TemplateContext } from '../dsl/template.js';
-import { classifyExchange, classifyTransportError } from './classify.js';
+import { classifyExchange, classifyTransportError, type ClassifyContext } from './classify.js';
 import { applyParamAt } from './params.js';
 import type { ExecFailure, HttpExchange, RequestPacer, Transport } from './types.js';
 
@@ -25,8 +25,8 @@ export type DeclarativeRunOptions = {
   readonly pacer?: RequestPacer;
   /** `domain_pacing.max_requests_per_run` : au-delà, la pagination s'arrête (sortie tronquée, run dégradé). */
   readonly maxRequests?: number;
-  /** Garde de classification avant extraction (1.7). Défaut : le statut HTTP seul. */
-  readonly classify?: (exchange: HttpExchange) => ExecFailure | null;
+  /** Garde de classification avant extraction (1.7). Défaut : `classifyExchange` (statut, en-têtes, défi, redirection). */
+  readonly classify?: (exchange: HttpExchange, context?: ClassifyContext) => ExecFailure | null;
   readonly limits?: Partial<DslLimits>;
 };
 
@@ -114,9 +114,10 @@ export async function runDeclarative(options: DeclarativeRunOptions): Promise<De
       if (signal.aborted) throw error;
       throw new RunFailure(classifyTransportError(error));
     }
-    await pacer?.report(request.url, { status: exchange.status, retryAfter: exchange.headers['retry-after'] ?? null });
-    // Garde de classification AVANT extraction : une réponse refusée n'est jamais extraite (INV6).
-    const refused = classify(exchange);
+    // Garde de classification AVANT extraction : une réponse refusée n'est jamais extraite (INV6). La classe est rapportée à
+    // la cadence : un refus (403, défi en 200) compte pour le disjoncteur du domaine comme un 429 (04 §7).
+    const refused = classify(exchange, { requestUrl: request.url });
+    await pacer?.report(request.url, { status: exchange.status, retryAfter: exchange.headers['retry-after'] ?? null, failureClass: refused?.failure_class ?? null });
     if (refused !== null) throw new RunFailure(refused);
     return exchange;
   };
