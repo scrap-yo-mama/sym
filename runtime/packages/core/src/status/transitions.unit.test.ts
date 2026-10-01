@@ -53,8 +53,12 @@ describe('assert_status_transitions', () => {
   });
 
   test('transition_03_enquete_to_action_requise', () => {
-    for (const cls of ['auth_required', 'payment_required', 'account_limit', 'proxy_not_configured', 'tunnel_offline'] as const) {
+    for (const cls of ['auth_required', 'payment_required', 'account_limit'] as const) {
       expect(run(st('enquete'), { type: 'run_failed', failureClass: cls }).path).toEqual([[3, 'enquete', 'action_requise', cls]]);
+    }
+    // Proxy requis non configuré, tunnel hors ligne : codes de raison, pas des failure_class.
+    for (const reason of ['proxy_not_configured', 'tunnel_offline'] as const) {
+      expect(run(st('enquete'), { type: 'run_stopped', reason }).path).toEqual([[3, 'enquete', 'action_requise', reason]]);
     }
   });
 
@@ -132,9 +136,13 @@ describe('assert_status_transitions', () => {
   });
 
   test('transition_14_reparation_to_action_requise', () => {
-    for (const cls of ['auth_required', 'payment_required', 'account_limit', 'challenge_in_tunnel'] as const) {
+    for (const cls of ['auth_required', 'payment_required', 'account_limit'] as const) {
       expect(run(st('reparation'), { type: 'run_failed', failureClass: cls }).path).toEqual([[14, 'reparation', 'action_requise', cls]]);
     }
+    // Défi en tunnel : code de raison, pas une failure_class.
+    expect(run(st('reparation'), { type: 'run_stopped', reason: 'challenge_in_tunnel' }).path).toEqual([
+      [14, 'reparation', 'action_requise', 'challenge_in_tunnel'],
+    ]);
   });
 
   test('transition_15_reparation_to_bloquee', () => {
@@ -228,7 +236,7 @@ describe('assert_status_transitions', () => {
       [11, 'warning', 'reparation', 'auth_required'],
       [14, 'reparation', 'action_requise', 'auth_required'],
     ]);
-    expect(run(st('sain'), { type: 'run_failed', failureClass: 'challenge_in_tunnel' }).path.map((p) => p[0])).toEqual([10, 14]);
+    expect(run(st('sain'), { type: 'run_stopped', reason: 'challenge_in_tunnel' }).path.map((p) => p[0])).toEqual([10, 14]);
   });
 
   test('un 401, un 403 ou un 429 ne produit jamais la classe network', () => {
@@ -239,9 +247,16 @@ describe('assert_status_transitions', () => {
     expect(applyStatusEvent(st('sain'), { type: 'run_failed', failureClass: 'network', httpStatus: 451 }, ctx).ok).toBe(true);
   });
 
-  test('aucun effet sur le statut : rate_limited, llm_*, tunnel déconnecté, run propre en sain', () => {
-    for (const failureClass of ['rate_limited', 'llm_refused', 'tunnel_offline'] as const) {
-      const step = applyStatusEvent(st('sain'), { type: 'run_failed', failureClass }, ctx);
+  test('aucun effet sur le statut : rate_limited, llm_*, budgets de run, tunnel déconnecté, run propre en sain', () => {
+    const events: StatusEventInput[] = [
+      ...(['rate_limited', 'llm_refused', 'run_budget_exceeded', 'budget_exceeded'] as const).map(
+        (failureClass) => ({ type: 'run_failed', failureClass }) as const,
+      ),
+      { type: 'run_stopped', reason: 'tunnel_offline' },
+      { type: 'run_stopped', reason: 'proxy_not_configured' },
+    ];
+    for (const event of events) {
+      const step = applyStatusEvent(st('sain'), event, ctx);
       expect(step).toMatchObject({ ok: true, transitions: [] });
       expect(step.state.status).toBe('sain');
     }
