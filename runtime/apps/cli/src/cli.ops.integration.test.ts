@@ -5,7 +5,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { generateMasterKey, loadKeyring, MasterKey, secretValues } from '@runtime/core';
-import { holdSecretsLock, keyCheck, secretStore, SecretUnreadableError } from '@runtime/db';
+import { ENCRYPTED_COLUMNS, holdSecretsLock, keyCheck, KEY_LOSS_TREATMENT, secretStore, SecretUnreadableError } from '@runtime/db';
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, inject, test } from 'vitest';
 import { canary, seedInstance, type SeededInstance } from '../../../tests/helpers/ops-seed.js';
@@ -94,7 +94,21 @@ describe(`doctor, diagnostics, export-catalog, backup (PostgreSQL ${inject('pgVe
     const res = await run(['diagnostics', '--out', out], { env: { DATABASE_URL: 'postgres://u:p@127.0.0.1:1/x', MASTER_KEY: key } });
     expect(res.code).toBe(0);
     expect(res.out).toMatch(/base injoignable/);
-    expect(JSON.parse(readFileSync(out, 'utf8'))).toMatchObject({ database_reachable: false, counters: null });
+    expect(JSON.parse(readFileSync(out, 'utf8'))).toMatchObject({ database_reachable: false, database_read_error: null, counters: null });
+  });
+
+  test('diagnostics base joignable mais illisible (schéma absent ou en retard) : jamais « injoignable », un code stable dit pourquoi', async () => {
+    const empty = await createTestDatabase('cliops_empty');
+    try {
+      const out = join(dir, 'diag-unreadable.json');
+      const res = await run(['diagnostics', '--out', out], { env: { DATABASE_URL: empty.url, MASTER_KEY: key } });
+      expect(res.code).toBe(0);
+      expect(res.out).toMatch(/base joignable, lecture impossible \(schema_mismatch\)/);
+      expect(res.out).not.toMatch(/injoignable/);
+      expect(JSON.parse(readFileSync(out, 'utf8'))).toMatchObject({ database_reachable: true, database_read_error: 'schema_mismatch', counters: null, settings_names: [] });
+    } finally {
+      await empty.drop();
+    }
   });
 
   test('export-catalog : JSON sur stdout ou fichier, sans secret ; --with-secrets refusé en V1', async () => {
@@ -132,6 +146,8 @@ describe('runtime secrets accept-key-loss --confirm (D-12)', () => {
       await c.query("INSERT INTO run_artifacts (run_id, owner_id, kind, bytes, sensitivity, ciphertext, nonce, key_version) VALUES ($1, $2, 'screenshot', 4, 'low', $3, $4, 1)", [
         seeded.runIds[0], seeded.ownerId, Buffer.from('abcd'), Buffer.from('nonce-nonce'),
       ]);
+      // Colonne chiffrée différée à 3.7 : jamais effacée par la commande, seulement signalée.
+      await c.query("INSERT INTO two_factor (user_id, secret_ciphertext) VALUES ($1, 'zz_test_scelle')", [seeded.ownerId]);
     });
   });
   afterAll(async () => {
@@ -144,6 +160,33 @@ describe('runtime secrets accept-key-loss --confirm (D-12)', () => {
       sessions: (await c.query('SELECT count(*)::int AS n FROM site_sessions WHERE ciphertext IS NOT NULL')).rows[0].n as number,
       artifacts: (await c.query('SELECT count(*)::int AS n FROM run_artifacts')).rows[0].n as number,
     }));
+
+  /** Le registre ENCRYPTED_COLUMNS fait foi : chaque colonne est dans l'état que promet son traitement (aucune ne reste scellée sous la clé perdue sans être déclarée). */
+  const expectEveryEncryptedColumnTreated = () =>
+    withClient(db.url, async (c) => {
+      const n = async (sql: string) => (await c.query<{ n: number }>(sql)).rows[0]!.n;
+      for (const col of ENCRYPTED_COLUMNS) {
+        const name = `${col.table}.${col.column}`;
+        const treatment = KEY_LOSS_TREATMENT[name as keyof typeof KEY_LOSS_TREATMENT];
+        switch (treatment.action) {
+          case 'unreadable':
+            expect(await n(`SELECT count(*)::int AS n FROM ${col.table} WHERE state <> 'unreadable'`), name).toBe(0);
+            break;
+          case 'cleared':
+            expect(await n(`SELECT count(*)::int AS n FROM ${col.table} WHERE ${col.column} IS NOT NULL`), name).toBe(0);
+            break;
+          case 'deleted':
+            expect(await n(`SELECT count(*)::int AS n FROM ${col.table}`), name).toBe(0);
+            break;
+          case 'rewritten':
+            expect(await n("SELECT (value->>'version')::int AS n FROM settings WHERE key = 'key_check'"), name).toBe(2);
+            break;
+          case 'deferred':
+            expect(await n(`SELECT count(*)::int AS n FROM ${col.table} WHERE ${col.column} IS NOT NULL`), name).toBeGreaterThan(0);
+            break;
+        }
+      }
+    });
 
   test('la bonne clé : « aucune perte à accepter », même avec --confirm', async () => {
     const res = await run(['secrets', 'accept-key-loss', '--confirm'], { env: { ...base(), MASTER_KEY: original } });
@@ -183,6 +226,8 @@ describe('runtime secrets accept-key-loss --confirm (D-12)', () => {
     expect(res.out).toMatch(/3 secret\(s\) passés en « À ressaisir », 1 session\(s\) de site vidées, 1 artefact\(s\) supprimés ; témoin de clé réécrit \(empreinte [0-9a-f-]+, version 2\)/);
     expect(res.out).not.toContain(lost);
     expect(await counts()).toEqual({ unreadable: 3, sessions: 0, artifacts: 0 });
+    expect(res.out).toMatch(/1 secret\(s\) 2FA restent illisibles : à réinitialiser/);
+    await expectEveryEncryptedColumnTreated();
     // La nouvelle clé démarre ; les secrets sont listés « À ressaisir » et refusent de s'ouvrir.
     const keyring = { current: MasterKey.parse(lost) };
     const client = new pg.Client({ connectionString: db.url });

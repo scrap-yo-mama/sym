@@ -7,6 +7,8 @@ import type pg from 'pg';
 import type { DoctorReport } from './doctor.js';
 import { currentSchemaVersion, expectedSchemaVersion } from '../migrate.js';
 
+export type DiagnosticsReadError = 'schema_mismatch' | 'read_failed';
+
 export type Diagnostics = {
   format: 'runtime-diagnostics';
   format_version: 1;
@@ -14,6 +16,12 @@ export type Diagnostics = {
   versions: { runtime: string; node: string; postgres: string; schema: { current: number | null; expected: number } };
   /** Faux : la base ne répond pas, seuls les contrôles locaux de `doctor` sont dans le fichier. */
   database_reachable: boolean;
+  /**
+   * Base joignable mais lecture en échec : code STABLE de la cause (jamais le message du serveur, qui peut citer une valeur).
+   * `schema_mismatch` : table ou colonne absente (schéma en retard ou en avance sur ce code) ; `read_failed` : autre échec.
+   * Nul quand la lecture a réussi ou que la base est injoignable.
+   */
+  database_read_error: DiagnosticsReadError | null;
   /** Clés de `settings` seulement : leurs valeurs (empreintes, état de rotation, dates) n'en sortent pas. */
   settings_names: string[];
   /** Variables du catalogue (14 § 2) posées dans l'environnement, par leur NOM. */
@@ -30,7 +38,8 @@ export type Diagnostics = {
   doctor: { exit_code: number; checks: { id: string; status: string; code: string }[] };
 };
 
-/** Variables du catalogue dont la présence éclaire un diagnostic. Liste fermée : une variable hors liste n'apparaît pas. */
+/** Variables du catalogue dont la présence éclaire un diagnostic. Liste fermée : une variable hors liste n'apparaît pas.
+ * `DATABASE_SSL` y figure (14 § 2) mais le code de V1 ne la lit pas : sa gestion est reportée à 4.1. */
 export const DIAGNOSTIC_ENV_NAMES = [
   'DATABASE_URL', 'DATABASE_URL_DIRECT', 'DB_POOL_MAX', 'DATABASE_SSL', 'MASTER_KEY', 'MASTER_KEY_FILE', 'MASTER_KEY_PREVIOUS',
   'PUBLIC_URL', 'INSTANCE_CONTACT', 'PORT', 'TRUST_PROXY', 'MAX_WAIT_SECONDS', 'BROWSER_CONCURRENCY', 'WORKER_CONCURRENCY',
@@ -45,7 +54,7 @@ const toRecord = (rows: { k: string; n: number }[]): Record<string, number> => O
 
 export async function buildDiagnostics(
   db: Q,
-  input: { env: NodeJS.ProcessEnv; runtimeVersion: string; doctor: DoctorReport; now?: Date },
+  input: DiagnosticsInput,
 ): Promise<Diagnostics> {
   const { rows: ver } = await db.query<{ v: string }>("SELECT current_setting('server_version') AS v");
   const { rows: names } = await db.query<{ key: string }>('SELECT key FROM settings ORDER BY key');
@@ -68,6 +77,7 @@ export async function buildDiagnostics(
     format: 'runtime-diagnostics',
     format_version: 1,
     database_reachable: true,
+    database_read_error: null,
     generated_at: (input.now ?? new Date()).toISOString(),
     versions: { runtime: input.runtimeVersion, node: process.versions.node, postgres: ver[0]?.v ?? 'inconnue', schema },
     settings_names: names.map((r) => r.key),
@@ -87,12 +97,37 @@ export async function buildDiagnostics(
   return redact(diagnostics);
 }
 
+type DiagnosticsInput = { env: NodeJS.ProcessEnv; runtimeVersion: string; doctor: DoctorReport; now?: Date };
+
+/** Erreur de CONNEXION (refus, coupure, délai, hôte inconnu) : seule celle-ci fait dire « injoignable ». */
+export function isConnectionError(error: unknown): boolean {
+  const code = String((error as { code?: unknown } | null)?.code ?? '');
+  if (/^(08|57P0|53300|ECONN|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|EPIPE|EHOSTUNREACH|ENETUNREACH)/.test(code)) return true;
+  return code === '' && /connection (terminated|timeout)|connect |Client has encountered a connection error/i.test(String((error as Error | null)?.message ?? ''));
+}
+
+/** Code stable d'un échec de lecture sur une base joignable. 42P01 : table absente ; 42703 : colonne absente. */
+export function diagnosticsReadErrorCode(error: unknown): DiagnosticsReadError {
+  const code = String((error as { code?: unknown } | null)?.code ?? '');
+  return code === '42P01' || code === '42703' ? 'schema_mismatch' : 'read_failed';
+}
+
 /** Base injoignable : le fichier ne porte que ce que l'on sait sans elle (versions locales, noms de variables, `doctor`). */
-export function buildOfflineDiagnostics(input: { env: NodeJS.ProcessEnv; runtimeVersion: string; doctor: DoctorReport; now?: Date }): Diagnostics {
+export function buildOfflineDiagnostics(input: DiagnosticsInput): Diagnostics {
+  return localDiagnostics(input, false, null);
+}
+
+/** Base joignable mais une lecture a échoué (schéma en retard ou en avance, droit manquant) : jamais présentée comme injoignable. */
+export function buildUnreadableDiagnostics(input: DiagnosticsInput, error: unknown): Diagnostics {
+  return localDiagnostics(input, true, diagnosticsReadErrorCode(error));
+}
+
+function localDiagnostics(input: DiagnosticsInput, reachable: boolean, readError: DiagnosticsReadError | null): Diagnostics {
   return redact({
     format: 'runtime-diagnostics',
     format_version: 1,
-    database_reachable: false,
+    database_reachable: reachable,
+    database_read_error: readError,
     generated_at: (input.now ?? new Date()).toISOString(),
     versions: { runtime: input.runtimeVersion, node: process.versions.node, postgres: 'inconnue', schema: { current: null, expected: expectedSchemaVersion() } },
     settings_names: [],

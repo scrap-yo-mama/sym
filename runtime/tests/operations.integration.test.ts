@@ -56,6 +56,18 @@ async function secretsReadable(url: string, masterKey: string, expected: Map<str
   });
 }
 
+/** Épinglage d'un dataset après montée : la migration 0009 donne une raison et 90 jours aux épinglages antérieurs. */
+async function expectPinnedExemption(url: string, pinned: SeededInstance['pinned']): Promise<void> {
+  const row = await withClient(url, async (c) => (await c.query<{ pinned: boolean; pinned_reason: string | null; pinned_until: Date | null }>(
+    'SELECT pinned, pinned_reason, pinned_until FROM datasets WHERE id = $1', [pinned.datasetId])).rows[0]);
+  expect(row?.pinned).toBe(true);
+  expect(row?.pinned_reason).toBe(pinned.backfilledByMigration ? 'épinglé avant 0009' : pinned.reason);
+  const days = ((row?.pinned_until?.getTime() ?? 0) - Date.now()) / 86_400_000;
+  if (pinned.backfilledByMigration) expect(days).toBeGreaterThan(89.9);
+  expect(days).toBeGreaterThan(29.9);
+  expect(days).toBeLessThan(90.1);
+}
+
 const apiState = (url: string) =>
   withClient(url, async (c) =>
     (await c.query('SELECT id, slug, status, status_reason, current_strategy_version, clean_streak FROM apis ORDER BY id')).rows,
@@ -80,12 +92,6 @@ describe(`sauvegarde et restauration sur un autre cluster (PostgreSQL ${inject('
     await other.stop();
   });
 
-  const serverEnvUrl = (name: string): string => {
-    const url = new URL(other.getConnectionUri());
-    url.pathname = `/${name}`;
-    return url.toString();
-  };
-
   const newDatabaseOnOtherCluster = async (name: string): Promise<string> => {
     const admin = new pg.Client({ connectionString: other.getConnectionUri() });
     await admin.connect();
@@ -99,9 +105,17 @@ describe(`sauvegarde et restauration sur un autre cluster (PostgreSQL ${inject('
     return url.toString();
   };
 
+  // Restauration « naïve » (sans `restore-prepare`) : créée au premier besoin, une seule fois, pour que chaque test qui
+  // s'en sert soit indépendant de l'ordre et de `-t`.
+  let naive: Promise<{ url: string; restored: ReturnType<typeof restoreDatabase> }> | undefined;
+  const naiveRestore = () =>
+    (naive ??= (async () => {
+      const url = await newDatabaseOnOtherCluster('restore_naive');
+      return { url, restored: restoreDatabase(other.getId(), 'restore_naive', dump) };
+    })());
+
   test('piège documenté : pg_restore seul sur un cluster neuf perd le rôle `runtime_app` ; doctor le signale (app_role_missing)', async () => {
-    const url = await newDatabaseOnOtherCluster('restore_naive');
-    const restored = restoreDatabase(other.getId(), 'restore_naive', dump);
+    const { url, restored } = await naiveRestore();
     expect(restored.status).not.toBe(0);
     expect(restored.stderr).toMatch(/runtime_app/);
     const doctor = JSON.parse((await run(['doctor', '--json'], { env: serverEnv(url, key) })).out) as { exitCode: number; checks: { id: string; code: string; message: string }[] };
@@ -159,8 +173,8 @@ describe(`sauvegarde et restauration sur un autre cluster (PostgreSQL ${inject('
   });
 
   test('base restaurée sans `restore-prepare`, rôle recréé après coup : doctor signale les droits manquants (app_role_no_grants)', async () => {
-    const url = serverEnvUrl('restore_naive');
-    expect((await run(['restore-prepare'], { env: { DATABASE_URL: url }, log })).out).toMatch(/rôle runtime_app déjà présent/);
+    const { url } = await naiveRestore();
+    expect((await run(['restore-prepare'], { env: { DATABASE_URL: url }, log })).out).toMatch(/rôle runtime_app (créé|déjà présent)/);
     const doctor = JSON.parse((await run(['doctor', '--json'], { env: serverEnv(url, key) })).out) as { checks: { id: string; code: string; message: string }[] };
     const role = doctor.checks.find((c) => c.id === 'app_role');
     expect(role).toMatchObject({ code: 'app_role_no_grants' });
@@ -221,6 +235,8 @@ describe(`mise à jour N-1 → N et retour arrière (PostgreSQL ${inject('pgVers
     expect(counts.ids).toEqual([...seeded.runIds].sort());
     expect(await withClient(db.url, dataN1)).toEqual(before.data);
     await secretsReadable(db.url, key, seeded.secrets);
+    // Chemin de données de la migration (UPDATE ... WHERE pinned) : l'épinglage reçoit sa raison et son échéance.
+    await expectPinnedExemption(db.url, seeded.pinned);
     const doctor = JSON.parse((await run(['doctor', '--json'], { env: serverEnv(db.url, key) })).out) as { checks: { id: string; status: string; code: string }[] };
     expect(doctor.checks.filter((c) => c.status === 'error')).toEqual([]);
     expect(doctor.checks.find((c) => c.id === 'schema')?.code).toBe('schema_ok');
@@ -228,7 +244,7 @@ describe(`mise à jour N-1 → N et retour arrière (PostgreSQL ${inject('pgVers
 
   test('assert_rollback_restores_state : image N-1 sur schéma N refusée ; image N-1 + restauration = état d\'avant', async () => {
     // 1. L'image précédente seule ne démarre pas : pas de migration descendante en production.
-    await expect(readyStatus(db.url, key, N - 1)).rejects.toThrow(/plus récent que ce code.*restaurez la sauvegarde/);
+    await expect(readyStatus(db.url, key, N - 1)).rejects.toThrow(/plus ancienne que la base.*restaurez la sauvegarde/);
     const down = await run(['migrate', 'down'], { env: { DATABASE_URL: db.url, NODE_ENV: 'production' }, log });
     expect(down.code).toBe(2);
     expect(down.out).toMatch(/refusé en production.*image précédente \+ restauration/);
@@ -251,5 +267,6 @@ describe(`mise à jour N-1 → N et retour arrière (PostgreSQL ${inject('pgVers
     expect((await run(['migrate'], { env: { DATABASE_URL: restored.url }, log })).code).toBe(0);
     expect(await readyStatus(restored.url, key)).toMatchObject({ ready: 200 });
     expect(await withClient(restored.url, dataN1)).toEqual(before.data);
+    await expectPinnedExemption(restored.url, seeded.pinned);
   });
 });

@@ -3,6 +3,8 @@
 // (pas même `key_check` sur une base neuve). Chaque contrôle porte un `code` stable ; seul `message` est un texte libre
 // destiné au terminal (le fichier de `runtime diagnostics` n'embarque que `id`, `status` et `code`).
 // Code de sortie : 0 tout va bien, 1 avertissement, 2 erreur.
+// Limite connue : la compatibilité code / base se réduit à l'écart de version de schéma ; le rapport de compatibilité
+// avant une montée majeure (14 § 6) est reporté à 4.9 (docs/exploitation.md, « Décisions et limites de 4.6 »).
 import { loadKeyring, MasterKeyError, verifyKeyCheck, type KeyCheckRecord } from '@runtime/core';
 import pg from 'pg';
 import { readBackupDeclaration } from './backup.js';

@@ -9,11 +9,14 @@ import {
   BackupDeclarationError,
   buildDiagnostics,
   buildOfflineDiagnostics,
+  buildUnreadableDiagnostics,
+  type Diagnostics,
   DatabaseConfigError,
   declareBackup,
   exportCatalog,
   formatDoctor,
   inspectKeyLoss,
+  isConnectionError,
   KeyCheckError,
   keyCheck,
   rekey,
@@ -68,10 +71,16 @@ async function migrate(args: string[], deps: CliDeps): Promise<CliResult> {
   return { code: 0, out: `migrate down : ${reverted.length} migration(s) annulée(s)` };
 }
 
-async function withSessionClient<T>(deps: CliDeps, fn: (client: pg.Client) => Promise<T>): Promise<T> {
+/** Ouvre la connexion de session. Toute erreur ici est une erreur de configuration ou de connexion. */
+async function openSessionClient(deps: CliDeps): Promise<pg.Client> {
   const { sessionUrl } = await resolveConnections(deps.env ?? process.env, deps.probe);
   const client = new pg.Client({ connectionString: sessionUrl });
   await client.connect();
+  return client;
+}
+
+async function withSessionClient<T>(deps: CliDeps, fn: (client: pg.Client) => Promise<T>): Promise<T> {
+  const client = await openSessionClient(deps);
   try {
     return await fn(client);
   } finally {
@@ -95,12 +104,31 @@ async function doctorCmd(args: string[], deps: CliDeps): Promise<CliResult> {
   return { code: report.exitCode, out, stream: 'stdout' };
 }
 
+function describeRead(d: Diagnostics): string {
+  if (!d.database_reachable) return 'base injoignable : contrôles locaux seulement';
+  return d.database_read_error ? `base joignable, lecture impossible (${d.database_read_error}) : contrôles locaux seulement` : 'base lue';
+}
+
 async function diagnosticsCmd(args: string[], deps: CliDeps): Promise<CliResult> {
   const env = deps.env ?? process.env;
   const now = (deps.now ?? (() => new Date()))();
   const doctor = await runDoctor({ env, ...(deps.probe ? { probe: deps.probe } : {}), now: () => now });
   const input = { env, runtimeVersion: version(), doctor, now };
-  const diagnostics = await withSessionClient(deps, (client) => buildDiagnostics(client, input)).catch(() => buildOfflineDiagnostics(input));
+  // Hors ligne seulement si la base ne se joint pas (ou se coupe). Une lecture en échec sur une base joignable (schéma en
+  // retard ou en avance) ne doit pas être présentée comme « injoignable » : le fichier garde `database_reachable: true`.
+  const client = await openSessionClient(deps).catch(() => null);
+  let diagnostics: Diagnostics;
+  if (!client) {
+    diagnostics = buildOfflineDiagnostics(input);
+  } else {
+    try {
+      diagnostics = await buildDiagnostics(client, input);
+    } catch (error) {
+      diagnostics = isConnectionError(error) ? buildOfflineDiagnostics(input) : buildUnreadableDiagnostics(input, error);
+    } finally {
+      await client.end().catch(() => undefined);
+    }
+  }
   const path = optionValue(args, '--out') ?? `runtime-diagnostics-${now.toISOString().replace(/[:.]/g, '-')}.json`;
   try {
     writeLocalFile(path, `${JSON.stringify(diagnostics, null, 2)}\n`);
@@ -110,7 +138,7 @@ async function diagnosticsCmd(args: string[], deps: CliDeps): Promise<CliResult>
   return {
     code: 0,
     out:
-      `diagnostics : ${path} écrit (masqué, ${diagnostics.database_reachable ? 'base lue' : 'base injoignable : contrôles locaux seulement'}). ` +
+      `diagnostics : ${path} écrit (masqué, ${describeRead(diagnostics)}). ` +
       'Rien n’est envoyé : joignez ce fichier vous-même à votre ticket.',
   };
 }
@@ -121,7 +149,7 @@ async function exportCatalogCmd(args: string[], deps: CliDeps): Promise<CliResul
       code: 1,
       out:
         'export-catalog : --with-secrets n’existe pas en V1. Les secrets ne quittent jamais la base, même chiffrés : ' +
-        'ils se ressaisissent sur l’instance cible (décision de 4.6, 14 § 14).',
+        'ils se ressaisissent sur l’instance cible (décision de 4.6 : docs/exploitation.md, « Décisions et limites de 4.6 »).',
     };
   }
   const catalog = await withSessionClient(deps, (client) => exportCatalog(client, (deps.now ?? (() => new Date()))()));

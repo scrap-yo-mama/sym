@@ -11,6 +11,8 @@ export type SeededInstance = {
   memberId: string;
   apiIds: { healthy: string[]; other: string[] };
   runIds: string[];
+  /** Dataset épinglé : sur un schéma d'avant 0009, `pinned_reason` et `pinned_until` n'existent pas et la montée les remplit. */
+  pinned: { datasetId: string; backfilledByMigration: boolean; reason: string };
   /** Valeur en clair de chaque secret, par identifiant (pour prouver le déchiffrement après coup). */
   secrets: Map<string, string>;
 };
@@ -85,7 +87,20 @@ export async function seedInstance(url: string, keyring: Keyring): Promise<Seede
         [dataset.rows[0]!.id, seq, runIds[0], ownerId, JSON.stringify({ n: seq })],
       );
     }
-    return { ownerId, memberId, apiIds, runIds, secrets };
+    // Dataset épinglé (aucun item) : exerce le chemin de données de la migration d'épinglage (UPDATE ... WHERE pinned).
+    const reasonColumns = await client.query("SELECT 1 FROM information_schema.columns WHERE table_name = 'datasets' AND column_name = 'pinned_reason'");
+    const backfilledByMigration = reasonColumns.rowCount === 0;
+    const reason = 'zz_test raison d\'épinglage';
+    const pinnedDataset = backfilledByMigration
+      ? await client.query<{ id: string }>(
+          'INSERT INTO datasets (api_id, owner_id, run_id, pinned) VALUES ($1, $2, $3, true) RETURNING id',
+          [firstApi, ownerId, runIds[1]],
+        )
+      : await client.query<{ id: string }>(
+          "INSERT INTO datasets (api_id, owner_id, run_id, pinned, pinned_reason, pinned_until) VALUES ($1, $2, $3, true, $4, now() + interval '30 days') RETURNING id",
+          [firstApi, ownerId, runIds[1], reason],
+        );
+    return { ownerId, memberId, apiIds, runIds, secrets, pinned: { datasetId: pinnedDataset.rows[0]!.id, backfilledByMigration, reason } };
   } finally {
     await client.end();
   }

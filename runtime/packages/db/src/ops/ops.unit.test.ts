@@ -2,6 +2,9 @@
 import { expect, test } from 'vitest';
 import { BackupDeclarationError, declareBackup } from './backup.js';
 import { connectionBudget } from './budget.js';
+import { diagnosticsReadErrorCode, isConnectionError } from './diagnostics.js';
+import { ENCRYPTED_COLUMNS } from '../secrets.js';
+import { KEY_LOSS_TREATMENT } from './key-loss.js';
 import { doctorExitCode, formatDoctor, type DoctorCheck } from './doctor.js';
 import { schemaCompatibility, schemaVersionRefusal } from './schema-version.js';
 
@@ -54,4 +57,36 @@ test('sauvegarde déclarée : date illisible ou future refusée, sans écrire', 
   expect(calls).toHaveLength(0);
   await declareBackup(db as never, new Date('2026-10-01T07:00:00Z'), now);
   expect(calls).toHaveLength(1);
+});
+
+test('accept-key-loss : toute colonne chiffrée du registre est traitée, ou déclarée explicitement différée (comme rekey)', () => {
+  const columns = ENCRYPTED_COLUMNS.map((c) => `${c.table}.${c.column}`).sort();
+  // Ni oubli (une colonne chiffrée ajoutée au registre resterait scellée sous la clé perdue), ni entrée orpheline.
+  expect(Object.keys(KEY_LOSS_TREATMENT).sort()).toEqual(columns);
+  for (const [column, treatment] of Object.entries(KEY_LOSS_TREATMENT)) {
+    if (treatment.action === 'deferred') {
+      // Un report nomme la tâche qui en hérite et ce que l'administrateur doit faire en attendant.
+      expect(treatment.task, column).toMatch(/^\d+\.\d+$/);
+      expect(treatment.until.length, column).toBeGreaterThan(10);
+    }
+  }
+  // Le report ne vaut que pour une colonne que `rekey` reporte lui-même : les autres sont traitées.
+  for (const c of ENCRYPTED_COLUMNS) {
+    const treatment = KEY_LOSS_TREATMENT[`${c.table}.${c.column}` as keyof typeof KEY_LOSS_TREATMENT];
+    if (c.coveredBy === 'rekey') expect(treatment.action, `${c.table}.${c.column}`).not.toBe('deferred');
+  }
+});
+
+test('diagnostics : seule une erreur de connexion fait dire « injoignable » ; une table absente est un code stable', () => {
+  const pgError = (code: string) => Object.assign(new Error('relation "runs" does not exist'), { code });
+  expect(isConnectionError(Object.assign(new Error('connect ECONNREFUSED'), { code: 'ECONNREFUSED' }))).toBe(true);
+  expect(isConnectionError(pgError('57P01'))).toBe(true); // arrêt administrateur
+  expect(isConnectionError(pgError('08006'))).toBe(true);
+  expect(isConnectionError(new Error('Connection terminated unexpectedly'))).toBe(true);
+  expect(isConnectionError(pgError('42P01'))).toBe(false);
+  expect(isConnectionError(pgError('42501'))).toBe(false);
+  expect(diagnosticsReadErrorCode(pgError('42P01'))).toBe('schema_mismatch');
+  expect(diagnosticsReadErrorCode(pgError('42703'))).toBe('schema_mismatch');
+  expect(diagnosticsReadErrorCode(pgError('42501'))).toBe('read_failed');
+  expect(diagnosticsReadErrorCode(new Error('x'))).toBe('read_failed');
 });
