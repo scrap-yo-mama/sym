@@ -26,7 +26,7 @@ Avant de marquer une tâche faite : `pnpm test:fast`, puis `pnpm -r build && pnp
 
 ## Signer : DCO et CLA
 
-> Brouillon, à valider par un avocat avant toute publication. Rien de ce qui suit n'est actif tant que le dépôt est privé.
+> Brouillon, à valider par un avocat avant toute publication. Le dépôt est public, mais rien de ce qui suit n'est actif avant la première release : les contributions externes ne sont pas encore ouvertes et le bot CLA reste désactivé.
 
 - **DCO (toutes les contributions)** : chaque commit porte `Signed-off-by: Prénom Nom <adresse>` (`git commit -s`). Texte : [DCO.md](DCO.md) (Developer Certificate of Origin 1.1).
 - **CLA (cœur AGPL uniquement)** : licence, pas cession, signée via CLA Assistant. Texte **provisoire** dans [CLA.md](CLA.md), non relu par un avocat ; le bot est **non activé** (`.github/workflows/cla.yml`, déclenchement manuel seul). Pas de CLA sur les paquets MIT : DCO seul.

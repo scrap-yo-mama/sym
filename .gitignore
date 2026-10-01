@@ -20,3 +20,11 @@ playwright-report/
 # Divers
 .DS_Store
 .vscode/
+
+# Garde-fous contre un `git add` accidentel (fichiers locaux, jamais publiés)
+/.playwright-mcp/
+/.claude/
+/bin/
+/*.pdf
+/home.png
+/Frame *.png

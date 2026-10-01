@@ -4,10 +4,7 @@
 
 ## Signaler une vulnérabilité
 
-**Jamais par une issue ou une discussion publique.** Deux canaux privés :
-
-1. **GitHub, signalement privé de vulnérabilité** (onglet « Security », « Report a vulnerability ») : canal à privilégier, il ouvre un avis de sécurité (GHSA) visible de vous et des mainteneurs seulement.
-2. **E-mail** : adresse de sécurité à définir avant toute publication.
+**Jamais par une issue ou une discussion publique.** Un seul canal, privé : le **signalement privé de vulnérabilité de GitHub** ([ouvrir un signalement](https://github.com/scrap-yo-mama/sym/security/advisories/new), ou onglet « Security », « Report a vulnerability »). Il ouvre un avis de sécurité (GHSA) visible de vous et des mainteneurs seulement.
 
 Merci de joindre : la version concernée, les étapes de reproduction, l'impact estimé, et toute preuve utile (journaux masqués : pas de secret, de cookie ni d'URL cible réelle).
 
