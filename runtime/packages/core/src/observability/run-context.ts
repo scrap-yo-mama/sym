@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // `run_id` porté par AsyncLocalStorage (14 § 10) : le journal pino l'ajoute à chaque ligne sans que l'appelant le passe.
 import { AsyncLocalStorage } from 'node:async_hooks';
 

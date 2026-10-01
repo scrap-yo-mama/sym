@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // OpenTelemetry opt-in (14 § 10, INV9) : COUPÉ par défaut. Aucun module `@opentelemetry/*` n'est importé tant que
 // `OTEL_ENABLED=true` : tous les imports du SDK sont dynamiques, dans `initTelemetry`, après la décision de l'admin.
 //

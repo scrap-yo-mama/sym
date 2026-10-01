@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Observabilité (tâche 1.10) : configuration, journal pino, contexte de run, traces OTel opt-in.
 export * from './artifacts.js';
 export * from './config.js';

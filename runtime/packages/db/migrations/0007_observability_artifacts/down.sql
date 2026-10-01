@@ -1,2 +1,3 @@
+-- SPDX-License-Identifier: AGPL-3.0-only
 ALTER TABLE run_artifacts DROP COLUMN IF EXISTS unreadable_since, DROP COLUMN IF EXISTS state;
 ALTER TABLE run_artifacts DROP COLUMN IF EXISTS alg, DROP COLUMN IF EXISTS dek_wrapped;

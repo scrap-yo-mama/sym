@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // `/metrics` (14 § 3) : texte Prometheus (format d'exposition 0.0.4), préfixe `scrapyomama_`, étiquettes bornées (jamais
 // run_id, api_id, domaine, URL ni message d'erreur). Le `server` calcule les mesures partagées DEPUIS LA BASE à chaque
 // scrape ; le worker n'a pas de port : ses mesures passent par `worker_heartbeats`. Les métriques restent locales (INV9) :

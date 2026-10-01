@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Observabilité (tâche 1.10, INV8, INV9) : configuration sans destination implicite, OTel coupé par défaut (aucun module
 // `@opentelemetry/*` résolu), journal masqué avec `run_id`, politique des artefacts, spans masqués et sans contenu LLM.
 import { spawnSync } from 'node:child_process';

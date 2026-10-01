@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // INV9 et INV8 de bout en bout (tâche 1.10) : `server` + `worker` réels sur base réelle, un run exécuté, un intercepteur
 // réseau global et un collecteur OTLP de test.
 // - assert_otel_off_by_default / assert_no_telemetry : sans OTEL_ENABLED (même avec un endpoint posé), 0 requête vers le

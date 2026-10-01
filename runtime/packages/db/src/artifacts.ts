@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Artefacts de run (INV8, 14 § 10) : niveau 0 par défaut (aucune ligne), sinon texte masqué par `redactArtifactText`
 // puis chiffré AES-256-GCM (DEK/KEK, AAD liée au run et au propriétaire). `rekey` les couvre (secrets.ts).
 import { randomUUID } from 'node:crypto';

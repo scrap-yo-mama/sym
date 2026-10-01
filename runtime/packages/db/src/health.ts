@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Sondes (14 § 3) : disponibilité (`/api/ready`) et battements des workers. Booléens seulement : aucune version de
 // dépendance, aucun nom d'hôte, aucun message d'erreur dans ce qui sort (la réponse est publique).
 import { verifyKeyCheck, type KeyCheckRecord, type Keyring } from '@runtime/core';

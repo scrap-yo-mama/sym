@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Journal pino 10 (14 § 10) : JSON, masquage en 3 couches (INV8) partagé par stdout, run_logs, spans et artefacts,
 // `run_id` ajouté par AsyncLocalStorage. Un seul constructeur pour `server` et `worker`.
 import { pino, type DestinationStream, type Logger } from 'pino';

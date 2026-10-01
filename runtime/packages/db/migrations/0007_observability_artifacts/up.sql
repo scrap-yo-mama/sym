@@ -1,3 +1,4 @@
+-- SPDX-License-Identifier: AGPL-3.0-only
 -- 1.10 (INV8, 14 § 10) : `run_artifacts` reçoit l'enveloppe DEK/KEK complète de `secrets` (la DEK de chaque artefact
 -- est enveloppée par la KEK : sans `dek_wrapped`, une ligne ne peut être ni ouverte ni rotée par `rekey`).
 -- `alg` : identifiant du format de chiffrement (un nouveau format = une nouvelle valeur).

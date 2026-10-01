@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Politique des artefacts de run (14 § 2 et § 10) : niveau 0 (`none`) par défaut = aucun artefact, jamais.
 // Les niveaux supérieurs n'ajoutent que des captures d'un run ÉCHOUÉ, et jamais sur un run qui charge une session
 // serveur, passe par le tunnel ou a rencontré un défi (une capture y contiendrait la session ou la page d'un tiers).

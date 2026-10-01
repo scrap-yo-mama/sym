@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Observabilité sur base réelle (tâche 1.10, INV8, 14 § 3 et § 10) : `run_logs` (masquage avant insertion, niveaux,
 // plafonds), `run_artifacts` (niveau 0 = aucune ligne ; sinon chiffrés, masqués, couverts par rekey), sondes et battements.
 import { randomBytes } from 'node:crypto';

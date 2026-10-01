@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Variables d'observabilité (14 § 2) : lues une fois, validées, sans valeur implicite vers l'extérieur (INV9).
 import { secretValues, Secret } from '../crypto/redact.js';
 

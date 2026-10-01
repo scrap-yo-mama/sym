@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Intercepteur réseau global (INV9, 15 § 7) : enregistre chaque connexion sortante (sockets, fetch, undici, http) avec sa
 // destination hôte:port, et refuse toute destination non locale. Sert à prouver « 0 requête vers un collecteur sans opt-in »
 // et « 0 destination hors {cibles, LLM, SMTP, webhooks, OTLP configurés} ». Les tests d'un même fichier s'y abonnent en série.

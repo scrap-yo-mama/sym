@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Sondes, métriques et journal du `server` (tâche 1.10, 14 § 3) sur base réelle : `/api/health` (vivant, sans base),
 // `/api/ready` (503 tant que les migrations manquent, `key_check` en échec ou base coupée), `/metrics` FERMÉ par défaut
 // (assert_metrics_closed), détail réservé aux administrateurs, journal de requêtes masqué.
