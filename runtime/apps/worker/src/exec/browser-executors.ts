@@ -26,6 +26,7 @@ import {
   encodeRequestBody,
   TransportRefusal,
   runDeclarative,
+  type AccessCheck,
   type DeclarativeRunOptions,
   type DeclarativeRunResult,
   type ExecFailure,
@@ -43,7 +44,9 @@ const BROWSER_NAVIGATION_TIMEOUT_MS = 30_000;
 /** Attente du rendu d'une page (sélecteur des enregistrements) avant lecture du DOM. */
 const BROWSER_RENDER_WAIT_MS = 10_000;
 
-export type BrowserExecutorOptions = Omit<DeclarativeRunOptions, 'transport'> & {
+export type BrowserExecutorOptions = Omit<DeclarativeRunOptions, 'transport' | 'access'> & {
+  /** robots.txt (1.11, INV11) : obligatoire, chaque requête du contexte Chromium du run est contrôlée. */
+  readonly access: AccessCheck;
   readonly pool: BrowserPool;
   readonly egress: BrowserEgress;
   readonly guard: SsrfGuard;
@@ -184,36 +187,30 @@ async function withRunContext(
       }
     };
     const robotsVerdict = (url: string) =>
-      (access as NonNullable<typeof access>)(url).catch((): { allowed: false; failure: ExecFailure } => ({ allowed: false, failure: { failure_class: 'robots_unreachable', retryable: true, detail: 'robots_check_failed' } }));
+      access(url).catch((): { allowed: false; failure: ExecFailure } => ({ allowed: false, failure: { failure_class: 'robots_unreachable', retryable: true, detail: 'robots_check_failed' } }));
     const rc = await openRunContext(browser, {
       egressServer: options.egress.server,
       allowedHosts: options.spec.request.allowed_hosts,
       ...(options.userAgent === undefined ? {} : { userAgent: options.userAgent }),
       // robots.txt à CHAQUE saut que Chromium suit (redirections que `admit` ne voit pas, cadres hors processus) : un saut
       // refusé du cadre principal ou d'un `fetch` de la stratégie arrête l'essai ; une sous-ressource est seulement coupée.
-      ...(access === undefined
-        ? {}
-        : {
-            checkRequest: async (hop: BrowserRequestCheck) => {
-              const decision = await robotsVerdict(hop.url);
-              if (decision.allowed) return true;
-              if (hop.mainFrame || (FETCH_TYPES.has(hop.resourceType) && strategyFetches.has(hop.rootUrl))) robotsRefusal ??= decision.failure;
-              return false;
-            },
-          }),
+      checkRequest: async (hop: BrowserRequestCheck) => {
+        const decision = await robotsVerdict(hop.url);
+        if (decision.allowed) return true;
+        if (hop.mainFrame || (FETCH_TYPES.has(hop.resourceType) && strategyFetches.has(hop.rootUrl))) robotsRefusal ??= decision.failure;
+        return false;
+      },
       admit: async (request) => {
-        if (access !== undefined) {
-          const decision = await robotsVerdict(request.url());
-          if (!decision.allowed) {
-            let main = false;
-            try {
-              main = request.isNavigationRequest() && request.frame().parentFrame() === null;
-            } catch {
-              // Requête sans cadre : jamais la navigation de la page du run.
-            }
-            if (main) robotsRefusal ??= decision.failure;
-            return false;
+        const decision = await robotsVerdict(request.url());
+        if (!decision.allowed) {
+          let main = false;
+          try {
+            main = request.isNavigationRequest() && request.frame().parentFrame() === null;
+          } catch {
+            // Requête sans cadre : jamais la navigation de la page du run.
           }
+          if (main) robotsRefusal ??= decision.failure;
+          return false;
         }
         return nav.admit(request);
       },

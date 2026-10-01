@@ -8,6 +8,12 @@
 // - en seconde couche, `installDomainGuard` (route Playwright, interception CDP des redirections, WebSocket, écritures
 //   refusées sans `allow_write_actions`) et l'enregistreur de cibles sémantiques (compilation E6 → E5) ;
 // - la cadence par domaine (1.9) et `max_requests_per_run` sur les documents du cadre principal ;
+// - robots.txt (1.11, INV11 ; correctif fix-inv11-agent) : EXACTEMENT la garde des contextes de run d'E1-E3
+//   (`openRunContext` en mode `dedicated`, `checkRequest` exigé) — contrôle CDP de chaque requête de la page du run, sauts
+//   de redirection, cadres hors processus et workers compris, poignée de main de chaque WebSocket, SharedWorker fermés,
+//   garde des documents (workers blob:/data:, règles de spéculation), autres pages fermées — et les fonctions coupées au
+//   lancement pour INV11 (prérendu, préchargement qui le précède, WebSocketStream). Stagehand pilote cette même page :
+//   aucune de ses requêtes n'échappe au contrôle. Échec fermé : si la garde ne peut pas être posée, le lancement échoue ;
 // - un script posé avant ceux de chaque page (`addInitScript`, même mécanisme que `serviceWorkers: 'block'` de Playwright,
 //   qui ne vaut que pour un contexte neuf) : service workers jamais enregistrés (leurs requêtes échappent en partie aux
 //   routes), et aucune saisie ne parvient à un champ d'un formulaire qui envoie HORS des domaines de l'API (formulaire
@@ -24,7 +30,9 @@ import { installDomainGuard, installSemanticRecorder, type DomainGuard, type Sem
 import type { RequestPacer } from '@runtime/core/exec';
 import { chromiumEgressLaunchOptions } from '@runtime/core/net';
 import { chromium, type Browser, type BrowserContext, type Page } from 'playwright-core';
-import { assertNotRoot, chromiumEnv, CHROMIUM_SILENT_ARGS } from './launch.js';
+import { assertNotRoot, chromiumEnv, CHROMIUM_SILENT_ARGS, INV11_DISABLED_FEATURES } from './launch.js';
+import type { RequestCheck } from './request-guard.js';
+import { openRunContext, type RunContext } from './run-context.js';
 
 export type AgentBrowserOptions = {
   /** `BrowserEgress.server` de l'essai (http://127.0.0.1:PORT). */
@@ -34,6 +42,11 @@ export type AgentBrowserOptions = {
   readonly pacer?: RequestPacer;
   /** Plafond de documents du cadre principal (`domain_pacing.max_requests_per_run`). */
   readonly maxRequests?: number;
+  /**
+   * Contrôle robots.txt de CHAQUE requête http(s) d'un domaine de l'API et de chaque poignée de main WebSocket (1.11,
+   * INV11) : obligatoire, aucun Chromium agentique sans lui.
+   */
+  readonly checkRequest: RequestCheck;
   readonly env?: Readonly<Record<string, string | undefined>>;
   /** Exécutable Chromium (défaut : celui de Playwright). */
   readonly executablePath?: string;
@@ -49,6 +62,8 @@ export type AgentBrowser = {
   readonly recorder: SemanticRecorder;
   /** Documents refusés par la cadence ou le plafond de requêtes. */
   readonly refused: () => { pacing: number; maxRequests: number };
+  /** Requêtes et WebSocket coupés par le verrou de domaines du contexte de run (hôtes seulement). */
+  readonly violations: () => number;
   close(): Promise<void>;
 };
 
@@ -105,7 +120,7 @@ function agentPageGuardScript(allowedHosts: readonly string[]): string {
 }
 
 /** Arguments figés du Chromium agentique (aucune entrée de stratégie, de prompt ni de membre). */
-function agentChromiumArgs(egressServer: string, profileDir: string, env: Readonly<Record<string, string | undefined>> = process.env): string[] {
+export function agentChromiumArgs(egressServer: string, profileDir: string, env: Readonly<Record<string, string | undefined>> = process.env): string[] {
   const egress = chromiumEgressLaunchOptions(egressServer, env);
   return [
     ...egress.args,
@@ -113,6 +128,8 @@ function agentChromiumArgs(egressServer: string, profileDir: string, env: Readon
     // Sans cette règle, Chromium contournerait le proxy pour la boucle locale.
     '--proxy-bypass-list=<-loopback>',
     ...CHROMIUM_SILENT_ARGS,
+    // INV11 (revue de 1.11) : mêmes fonctions coupées que le Chromium du pool (launch.ts).
+    `--disable-features=${INV11_DISABLED_FEATURES.join(',')}`,
     '--headless=new',
     '--remote-debugging-address=127.0.0.1',
     '--remote-debugging-port=0',
@@ -131,6 +148,7 @@ export async function launchAgentBrowser(options: AgentBrowserOptions): Promise<
     env: chromiumEnv(env),
   });
   let browser: Browser | undefined;
+  let rc: RunContext | undefined;
   const kill = async () => {
     child.kill('SIGKILL');
     await rm(profile, { recursive: true, force: true }).catch(() => undefined);
@@ -167,7 +185,11 @@ export async function launchAgentBrowser(options: AgentBrowserOptions): Promise<
       }
       return route.fallback();
     });
-    const page = context.pages()[0] ?? (await context.newPage());
+    // Garde robots.txt des contextes de run (posée en dernier : sa route est consultée avant les autres, une requête
+    // admise retombe sur la cadence puis sur le verrou de domaines). Elle désigne la page du run.
+    rc = await openRunContext(browser, { dedicated: true, egressServer: options.egressServer, allowedHosts: options.allowedHosts, checkRequest: options.checkRequest });
+    const run = rc;
+    const page = run.page;
     const opened = browser;
     return {
       cdpUrl,
@@ -177,16 +199,20 @@ export async function launchAgentBrowser(options: AgentBrowserOptions): Promise<
       guard,
       recorder,
       refused: () => ({ ...refused }),
+      violations: () => run.violations.length,
       close: async () => {
         recorder.dispose();
         await guard.dispose().catch(() => undefined);
         await opened.close().catch(() => undefined);
         await kill();
+        // Après l'arrêt du processus : détaché avant, le blocage laisserait repartir un SharedWorker resté suspendu.
+        await run.close();
       },
     };
   } catch (error) {
     await browser?.close().catch(() => undefined);
     await kill();
+    await rc?.close();
     throw error;
   }
 }

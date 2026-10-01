@@ -21,6 +21,11 @@
 // au lancement (launch.ts).
 // Règles de spéculation (revue de 1.11) : leur préchargement part du navigateur, hors de toute interception ; la garde des
 // documents les retire, le contrôle CDP coupe celles de l'en-tête `Speculation-Rules`, le prérendu est coupé au lancement.
+// Garde OBLIGATOIRE (correctif fix-inv11-agent) : `checkRequest` est exigé par le type et toute la garde ci-dessus est posée
+// sans condition, pour TOUT contexte Chromium d'un run — E1-E3 et E4 par le navigateur et les rejeux E5 (pool), comme le
+// Chromium dédié des essais agentiques E5-E6 piloté par Stagehand (`dedicated`, agent-browser.ts). Ce module est le seul à
+// créer un contexte ou une page de run (`newContext`, `newPage`) : `assert_all_browser_contexts_guarded`
+// (browser/guarded-contexts.unit.test.ts) échoue sur tout autre appel du code du worker et du paquet agent.
 import { browserUserAgent } from '@runtime/core/access';
 import type { APIRequest, APIRequestContext, Browser, BrowserContext, Page, Request } from 'playwright-core';
 import { installPageGuard } from './page-guard.js';
@@ -44,12 +49,21 @@ export type RunContextOptions = {
    * Contrôle de CHAQUE requête http(s) d'un domaine de l'API que Chromium envoie, sauts de redirection compris, et de la
    * poignée de main de chaque WebSocket (robots.txt, 1.11) : `false` la coupe avant toute connexion.
    */
-  readonly checkRequest?: RequestCheck;
+  readonly checkRequest: RequestCheck;
   /**
    * User-Agent du robot (`buildUserAgent`, tâche 1.11) : ajouté APRÈS celui du navigateur, qui reste tel qu'il est
    * (aucun masquage, X2, 17 §5).
    */
   readonly userAgent?: string;
+  /**
+   * Chromium DÉDIÉ d'un essai agentique (agent-browser.ts : lancé pour l'essai seul, derrière le proxy d'egress de l'essai,
+   * piloté aussi par Stagehand) : son unique contexte (contexte par défaut) est celui du run et sa page initiale la page
+   * du run ; proxy, profil et service workers relèvent du lancement. Même garde qu'un contexte neuf (routes, WebSocket,
+   * SharedWorker, garde des documents, contrôle CDP de chaque requête). Une requête admise ici retombe sur les routes
+   * posées avant (`route.fallback` : verrou de domaines et écritures de l'agent, cadence). Le contexte n'est pas fermé
+   * ici : le navigateur l'est par son propriétaire, AVANT `close()` (qui ne détache alors que le blocage des SharedWorker).
+   */
+  readonly dedicated?: boolean;
 };
 
 /** User-Agent propre du navigateur (CDP `Browser.getVersion`) ; vide s'il est illisible. */
@@ -102,6 +116,8 @@ export function hostAllowed(url: string, allowedHosts: readonly string[]): boole
 }
 
 export async function openRunContext(browser: Browser, options: RunContextOptions): Promise<RunContext> {
+  // Échec fermé : sans contrôle de chaque requête, aucun contexte de run (appel non typé compris), rien n'est ouvert.
+  if (typeof options.checkRequest !== 'function') throw new Error('contexte de run sans contrôle robots.txt (INV11) : refusé');
   const violations: string[] = [];
   const note = (url: string, request?: Request) => {
     let host = '?';
@@ -114,25 +130,33 @@ export async function openRunContext(browser: Browser, options: RunContextOption
     options.onViolation?.(host, request);
   };
   const userAgent = options.userAgent === undefined ? undefined : browserUserAgent(await ownUserAgent(browser), options.userAgent);
+  const dedicated = options.dedicated === true;
   // Posé avant le contexte : aucun SharedWorker de ce contexte ne peut naître avant lui (échec fermé s'il ne peut pas l'être).
   const sharedWorkers = await blockSharedWorkers(browser);
   let context: BrowserContext;
   try {
-    context = await browser.newContext({
-      ...(userAgent === undefined ? {} : { userAgent }),
-      proxy: { server: options.egressServer },
-      serviceWorkers: 'block',
-      acceptDownloads: false,
-      ignoreHTTPSErrors: false,
-      bypassCSP: false,
-    });
+    if (dedicated) {
+      // Chromium dédié : un seul contexte, le sien (la garde CDP du navigateur et celle-ci valent pour tout le navigateur).
+      const contexts = browser.contexts();
+      if (contexts.length !== 1) throw new Error(`contexte de run dédié : un seul contexte attendu (ouverts : ${contexts.length})`);
+      context = contexts[0]!;
+    } else {
+      context = await browser.newContext({
+        ...(userAgent === undefined ? {} : { userAgent }),
+        proxy: { server: options.egressServer },
+        serviceWorkers: 'block',
+        acceptDownloads: false,
+        ignoreHTTPSErrors: false,
+        bypassCSP: false,
+      });
+    }
   } catch (error) {
     await sharedWorkers.close();
     throw error;
   }
   // Contexte fermé d'abord : détachée avant, la session laisserait repartir un SharedWorker resté suspendu.
   const closeAll = async () => {
-    await context.close().catch(() => undefined);
+    if (!dedicated) await context.close().catch(() => undefined);
     await sharedWorkers.close();
   };
   /** Page du run, connue une fois créée : toute requête d'une autre page du contexte est coupée. */
@@ -152,7 +176,8 @@ export async function openRunContext(browser: Browser, options: RunContextOption
       }
       if (hostAllowed(url, options.allowedHosts)) {
         const admitted = options.admit === undefined ? true : await options.admit(route.request()).catch(() => false);
-        if (admitted) await route.continue();
+        // Retombée sur les routes posées avant celle-ci (aucune sur un contexte neuf : la requête part).
+        if (admitted) await route.fallback();
         else await route.abort('blockedbyclient');
       } else {
         note(url, route.request());
@@ -167,27 +192,26 @@ export async function openRunContext(browser: Browser, options: RunContextOption
       }
       // Poignée de main = GET http sur le chemin : robots.txt d'abord (1.11).
       const handshake = websocketHandshakeUrl(ws.url());
-      const check = options.checkRequest;
-      if (check !== undefined) {
-        const allowed =
-          handshake !== undefined && (await check({ url: handshake, redirect: false, rootUrl: handshake, resourceType: 'WebSocket', mainFrame: false }).catch(() => false));
-        if (!allowed) {
-          await ws.close({ code: 1008, reason: 'robots_disallowed' });
-          return;
-        }
+      const allowed =
+        handshake !== undefined && (await options.checkRequest({ url: handshake, redirect: false, rootUrl: handshake, resourceType: 'WebSocket', mainFrame: false }).catch(() => false));
+      if (!allowed) {
+        await ws.close({ code: 1008, reason: 'robots_disallowed' });
+        return;
       }
       ws.connectToServer();
     });
-    // Garde des documents (workers blob:/data:, règles de spéculation), avant la création de la page (avec le contrôle robots).
-    if (options.checkRequest !== undefined) await installPageGuard(context);
-    const page = await context.newPage();
+    // Garde des documents (workers blob:/data:, règles de spéculation), avant la création de la page.
+    await installPageGuard(context);
+    // Chromium dédié : sa page initiale (about:blank, rien chargé) devient la page du run ; toute autre est fermée.
+    const page = dedicated ? (context.pages()[0] ?? (await context.newPage())) : await context.newPage();
     runPage = page;
     // La session du contrôle n'est jamais détachée avant la fermeture du contexte : détachée, elle laisserait repartir
     // les requêtes encore suspendues.
-    if (options.checkRequest !== undefined) await installRequestGuard(context, page, (url) => hostAllowed(url, options.allowedHosts), options.checkRequest);
+    await installRequestGuard(context, page, (url) => hostAllowed(url, options.allowedHosts), options.checkRequest);
     context.on('page', (other) => {
       if (other !== page) void other.close().catch(() => undefined);
     });
+    for (const other of context.pages()) if (other !== page) await other.close().catch(() => undefined);
     return { context, page, violations, close: closeAll };
   } catch (error) {
     await closeAll();
