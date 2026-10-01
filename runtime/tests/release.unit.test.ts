@@ -11,7 +11,7 @@ import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import { checkMitPackages, classifyForMit, evaluateMitPackage, parseLicenseReport } from '../scripts/check-licenses.ts';
 import { checkHistory as checkX6History, checkRepo as checkX6Index } from '../scripts/check-x6.ts';
 import { checkSubject, isBreaking } from '../scripts/release/conventional.ts';
-import { checkImageNonRoot, checkReleaseWorkflow, checkRepo as checkGates, checkWorkflowSecurity } from '../scripts/release/gates.ts';
+import { checkFullHistoryJobs, checkImageNonRoot, checkReleaseWorkflow, checkRepo as checkGates, checkWorkflowSecurity } from '../scripts/release/gates.ts';
 import { checkTagMatchesPackage, imageReferences, planRelease, ReleaseTagError } from '../scripts/release/plan.ts';
 import { checkChannelConfig, checkReleasePleaseConfigs, nextVersion, type ReleasePleaseConfig } from '../scripts/release/release-please.ts';
 import { catalogNames, checkSbomFile, generateLockfileSbom, validateImageSbom, validateSbom } from '../scripts/release/sbom.ts';
@@ -155,6 +155,27 @@ describe('release : portes (assert_release_gates)', () => {
       rmSync(dir, { recursive: true, force: true });
     }
   }, 60_000);
+
+  test('assert_ci_full_history : tout job qui lance le test unitaire X6, l\'audit de l\'historique ou la release à blanc extrait tout l\'historique (fetch-depth: 0)', () => {
+    const checkout = (deep: boolean) => `      - uses: actions/checkout@${SHA} # v1\n        with:\n          persist-credentials: false\n${deep ? '          fetch-depth: 0\n' : ''}`;
+    const wf = (...jobs: [string, boolean, string][]) => `on:\n  pull_request:\npermissions:\n  contents: read\njobs:\n${jobs.map(([name, deep, run]) => `  ${name}:\n    runs-on: ubuntu-24.04\n    steps:\n${checkout(deep)}      - run: pnpm install --frozen-lockfile\n${run}`).join('')}`;
+    // Clone superficiel (actions/checkout par défaut) : le test unitaire de l'historique réel échouerait.
+    for (const run of ['      - run: pnpm test:coverage\n', '      - run: pnpm test\n', '      - run: pnpm test:fast\n', '      - run: pnpm vitest run --project unit\n', '      - run: pnpm exec vitest run\n',
+      '      - run: pnpm check:x6-history\n', '      - name: x\n        working-directory: .\n        run: node runtime/scripts/check-x6.ts --history\n', '      - run: pnpm release:dry-run\n', '      - run: |\n          pnpm build\n          pnpm test:coverage\n']) {
+      expect(checkFullHistoryJobs('w', wf(['unit', false, run])), run).toHaveLength(1);
+      expect(checkFullHistoryJobs('w', wf(['unit', true, run])), run).toEqual([]);
+    }
+    // Jobs qui ne touchent pas l'historique : profondeur par défaut acceptée.
+    for (const run of ['      - run: pnpm test:integration\n', '      - run: pnpm vitest run --project contract\n', '      - run: pnpm test:security\n', '      - run: pnpm test:e2e\n', '      - run: node runtime/scripts/check-x6.ts\n']) {
+      expect(checkFullHistoryJobs('w', wf(['other', false, run])), run).toEqual([]);
+    }
+    // Le job fautif est nommé, même si un autre job extrait tout l'historique.
+    const mixed = checkFullHistoryJobs('w', wf(['quality', true, '      - run: pnpm check:x6-history\n'], ['unit', false, '      - run: pnpm test:coverage\n']));
+    expect(mixed).toHaveLength(1);
+    expect(mixed[0]).toContain('unit');
+    // Le nom d'une étape ne compte pas : seul le script lancé compte.
+    expect(checkFullHistoryJobs('w', wf(['doc', false, '      - name: pnpm test:coverage\n        run: echo ok\n']))).toEqual([]);
+  });
 
   test('assert_release_gates : dépôt réel (workflows, release.yml, Dockerfile)', () => {
     expect(checkGates(runtimeDir)).toEqual([]);

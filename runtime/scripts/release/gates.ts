@@ -6,6 +6,7 @@
 //   - workflow de release : déclenché par étiquette seulement, environnement à relecteurs, aucun cache, permissions
 //     d'écriture au niveau du job, signature + SBOM + provenance présents ;
 //   - configurations release-please : chaque version calculée tombe dans son canal (stable, ou beta X.Y.Z-beta.N) ;
+//   - tout job qui lit l'historique git (test unitaire X6, audit X6, release à blanc) : fetch-depth: 0 (assert_ci_full_history) ;
 //   - image : conteneur non root (assert_image_nonroot).
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -56,6 +57,55 @@ export function checkWorkflowSecurity(label: string, yaml: string): string[] {
     } else if (inRun && line.trim() !== '' && indent > runIndent) {
       if (UNTRUSTED.test(line)) problems.push(`${label} : donnée de tiers interpolée dans un script : ${line.trim()}`);
     } else if (line.trim() !== '') inRun = false;
+  }
+  return problems;
+}
+
+/**
+ * Un script qui lit l'historique git entier : le test unitaire X6 sur le dépôt réel (pnpm test, test:coverage, test:fast,
+ * vitest sur le projet unit), l'audit X6 de l'historique, la release à blanc. Sur un clone superficiel (actions/checkout
+ * par défaut, profondeur 1), checkHistory refuse exprès : le job échouerait sur chaque PR.
+ */
+function readsHistory(script: string): boolean {
+  if (/\bpnpm\s+(?:run\s+)?(?:test|test:coverage|test:fast|check:x6-history|release:dry-run)(?![\w:-])/.test(script)) return true;
+  if (/check-x6\.ts\s+--history\b|release\/dry-run\.ts\b/.test(script)) return true;
+  if (!/\bvitest\s+run\b/.test(script)) return false;
+  const projects = [...script.matchAll(/--project[=\s]+(\S+)/g)].map((m) => m[1]);
+  return projects.length === 0 || projects.includes('unit');
+}
+
+/** Tout job dont un script lit l'historique git (readsHistory) extrait tout l'historique : fetch-depth: 0 à chaque checkout. */
+export function checkFullHistoryJobs(label: string, yaml: string): string[] {
+  const lines = yaml.split('\n').map(strip);
+  const start = lines.findIndex((l) => /^jobs:\s*$/.test(l));
+  if (start < 0) return [];
+  const jobs: { name: string; lines: string[] }[] = [];
+  for (const line of lines.slice(start + 1)) {
+    if (/^\S/.test(line)) break;
+    const job = /^ {2}([\w-]+):/.exec(line)?.[1];
+    if (job !== undefined) jobs.push({ name: job, lines: [] });
+    else jobs[jobs.length - 1]?.lines.push(line);
+  }
+  const problems: string[] = [];
+  for (const job of jobs) {
+    // Seuls les scripts comptent (ligne run: et ses lignes de continuation), pas le nom d'une étape.
+    const scripts: string[] = [];
+    let inRun = false;
+    let runIndent = 0;
+    for (const line of job.lines) {
+      const indent = /^(\s*)/.exec(line)?.[1]?.length ?? 0;
+      const run = /^(\s*(?:-\s+)?)run:\s*(.*)$/.exec(line);
+      if (run) {
+        inRun = true;
+        runIndent = run[1]?.length ?? 0;
+        scripts.push(run[2] ?? '');
+      } else if (inRun && line.trim() !== '' && indent > runIndent) scripts.push(line);
+      else if (line.trim() !== '') inRun = false;
+    }
+    if (!scripts.some(readsHistory)) continue;
+    const checkouts = job.lines.filter((l) => /uses:\s*actions\/checkout@/.test(l)).length;
+    const deep = job.lines.filter((l) => /^\s+fetch-depth:\s*0\s*$/.test(l)).length;
+    if (checkouts > deep) problems.push(`${label} : job « ${job.name} » : il lit l'historique git (test unitaire X6, audit de l'historique ou release à blanc) mais actions/checkout n'a pas fetch-depth: 0 (clone superficiel : échec garanti)`);
   }
   return problems;
 }
@@ -121,6 +171,7 @@ export function checkRepo(root: string): string[] {
   for (const name of readdirSync(dir).filter((f) => /\.ya?ml$/.test(f)).sort()) {
     const yaml = readFileSync(join(dir, name), 'utf8');
     problems.push(...(name === releaseFile ? checkReleaseWorkflow : checkWorkflowSecurity)(`.github/workflows/${name}`, yaml));
+    problems.push(...checkFullHistoryJobs(`.github/workflows/${name}`, yaml));
   }
   problems.push(...checkReleasePleaseConfigs(repo));
   problems.push(...checkImageNonRoot('deploy/Dockerfile', readFileSync(join(root, 'deploy/Dockerfile'), 'utf8')));
@@ -133,5 +184,5 @@ if (import.meta.main) {
     console.error(`assert_release_gates :\n${problems.map((p) => `  - ${p}`).join('\n')}`);
     process.exit(1);
   }
-  console.log('assert_release_gates : workflows épinglés, release par étiquette, environnement, sans cache, historique complet audité (X6), outils épinglés, signature + SBOM 1.7 + provenance, canaux release-please, image non root.');
+  console.log('assert_release_gates : workflows épinglés, release par étiquette, environnement, sans cache, historique complet audité (X6) et extrait par chaque job qui le lit, outils épinglés, signature + SBOM 1.7 + provenance, canaux release-please, image non root.');
 }
