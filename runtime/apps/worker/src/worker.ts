@@ -6,12 +6,18 @@
 // 3. par job : prise du run (jeton `job_id`), `runs.heartbeat_at` toutes les RUN_HEARTBEAT_SECONDS, exécution,
 //    clôture ; perte du bail (annulation, reprise) → interruption ;
 // 4. `worker_heartbeats` toutes les 15 s ; balayeur des runs orphelins toutes les 60 s ;
-// 5. SIGTERM : `draining`, plus de nouveau job, fin des runs en cours sous SHUTDOWN_TIMEOUT_SECONDS, sinon remise en file.
+// 5. SIGTERM : `draining`, plus de nouveau job, fin des runs en cours sous SHUTDOWN_TIMEOUT_SECONDS, sinon remise en file ;
+// 6. RGPD (1.8, D-25) : clé des sujets chargée au démarrage ; par run, registre de masquage (`RunContext.personal`, vidé
+//    en fin de run, appliqué à `error_detail`) et liste d'exclusion (`RunContext.excludeSubjects`) ; passe de rétention
+//    planifiée toutes les RETENTION_TICK_SECONDS (marquage horaire, purge et `ensure_partitions` quotidiens, verrou
+//    consultatif : une seule instance à la fois), sur une connexion de session.
 import { randomBytes } from 'node:crypto';
 import { hostname } from 'node:os';
 import {
   createLogger,
+  filterExcludedItems,
   initTelemetry,
+  PersonalValueRegistry,
   RUN_QUEUE,
   RUN_SHUTDOWN_DETAIL,
   secretValues,
@@ -32,12 +38,15 @@ import {
   heartbeatRun,
   holdSecretsLock,
   keyCheck,
+  loadSubjectExclusions,
+  loadSubjectKey,
   PgBossJobQueue,
   recordAttempt,
   removeWorkerBeat,
   requeueRun,
   resolveConnections,
   runQueueDefinition,
+  runRetentionTick,
   sweepOrphans,
   type SweepResult,
 } from '@runtime/db';
@@ -101,11 +110,16 @@ export async function startWorker(options: StartWorkerOptions): Promise<Worker> 
   lockClient.on('error', (error) => log.error({ err: errorDetail(error) }, 'verrou des secrets : connexion perdue'));
   let releaseLock: (() => Promise<void>) | undefined;
   let queue: PgBossJobQueue | undefined;
+  let subjectKey: Buffer | undefined;
+  // Passes de rétention : verrou consultatif de session et DETACH CONCURRENTLY exigent une connexion de session.
+  const maintenancePool = new pg.Pool({ connectionString: sessionUrl, max: 1, application_name: 'runtime-worker-retention' });
+  maintenancePool.on('error', (error) => log.error({ err: errorDetail(error) }, 'rétention : connexion perdue'));
 
   const cleanup = async () => {
     await queue?.stop({ timeoutMs: 1000 }).catch(() => undefined);
     await releaseLock?.().catch(() => undefined);
     await lockClient.end().catch(() => undefined);
+    await maintenancePool.end().catch(() => undefined);
     await pool.end().catch(() => undefined);
     await telemetry.shutdown().catch(() => undefined);
   };
@@ -120,6 +134,7 @@ export async function startWorker(options: StartWorkerOptions): Promise<Worker> 
     releaseLock = await holdSecretsLock(lockClient);
     // D-12 : clé différente → KeyCheckError ici, avant pg-boss, avant toute prise de job.
     const checked = await keyCheck(pool, config.keyring);
+    subjectKey = await loadSubjectKey(pool, config.keyring, checked);
     queue = new PgBossJobQueue({
       connectionString: sessionUrl,
       application_name: 'runtime-worker-queue',
@@ -134,6 +149,7 @@ export async function startWorker(options: StartWorkerOptions): Promise<Worker> 
     throw error;
   }
   const q = queue;
+  const subjects = subjectKey!;
 
   let draining = false;
   const running = new Map<string, Running>();
@@ -161,6 +177,17 @@ export async function startWorker(options: StartWorkerOptions): Promise<Worker> 
       .finally(() => (sweeping = false));
   }, config.sweepIntervalSeconds * 1000);
 
+  let retentionRunning: Promise<void> | undefined;
+  const retentionTimer = setInterval(() => {
+    if (retentionRunning) return;
+    retentionRunning = runRetentionTick(maintenancePool, new Date(), config.retention)
+      .then((r) => {
+        if (r.daily) log.info({ report: r.report }, 'rétention : passe quotidienne');
+      })
+      .catch((error: unknown) => log.error({ err: errorDetail(error) }, 'rétention : échec de la passe'))
+      .finally(() => (retentionRunning = undefined));
+  }, config.retentionTickSeconds * 1000);
+
   const execute = (runId: string, jobId: string, jobSignal: AbortSignal, trace: string | undefined): Promise<void> =>
     withRunContext(runId, () =>
       withSpan('run.execute', { attributes: { run_id: runId }, parentTraceparent: trace ?? null }, (span) => executeRun(runId, jobId, jobSignal, span)),
@@ -172,9 +199,11 @@ export async function startWorker(options: StartWorkerOptions): Promise<Worker> 
       log.info({ runId, jobId }, 'job sans run à prendre (annulé ou repris) : ignoré');
       return;
     }
+    // Registre de masquage de ce run (vidé en fin de run).
+    const personal = new PersonalValueRegistry();
     const runLog = await createRunLogger(
       pool,
-      { runId, ownerId: claim.ownerId },
+      { runId, ownerId: claim.ownerId, personal },
       { minLevel: config.observability.logLevel, onError: (error) => log.warn({ err: errorDetail(error) }, 'run_logs : écriture impossible') },
     );
     await runLog.log('info', 'run_claimed', { worker: workerId, job: jobId });
@@ -200,6 +229,8 @@ export async function startWorker(options: StartWorkerOptions): Promise<Worker> 
     try {
       let result: RunResult;
       try {
+        // Liste d'exclusion des sujets effacés, chargée à la prise du run.
+        const excluded = await loadSubjectExclusions(pool);
         result = await executor({
           runId,
           apiId: claim.apiId,
@@ -211,6 +242,8 @@ export async function startWorker(options: StartWorkerOptions): Promise<Worker> 
             await recordAttempt(pool, runId, jobId, attempt);
           },
           log: runLog.log,
+          personal,
+          excludeSubjects: (outputSchema, items) => filterExcludedItems(subjects, excluded, outputSchema, items),
         });
       } catch (error) {
         result = controller.signal.aborted
@@ -222,7 +255,7 @@ export async function startWorker(options: StartWorkerOptions): Promise<Worker> 
       }
       // Bail perdu ou arrêt : le run a déjà été annulé, repris ou remis en file ; rien n'est écrit.
       if (entry.cause === 'lease_lost' || entry.cause === 'shutdown') return;
-      const closed = await finishRun(pool, runId, jobId, result);
+      const closed = await finishRun(pool, runId, jobId, result, { personal });
       if (result.state === 'failed') span.fail(result.failure_class);
       span.setAttribute('run.state', result.state);
       await runLog.log(result.state === 'failed' ? 'warn' : 'info', 'run_finished', {
@@ -235,6 +268,7 @@ export async function startWorker(options: StartWorkerOptions): Promise<Worker> 
       clearInterval(heartbeat);
       jobSignal.removeEventListener('abort', onJobAbort);
       running.delete(runId);
+      personal.clear();
       resolveDone();
     }
   };
@@ -254,6 +288,7 @@ export async function startWorker(options: StartWorkerOptions): Promise<Worker> 
       draining = true;
       log.info({ inFlight: running.size }, 'arrêt : plus de nouveau job');
       clearInterval(sweepTimer);
+      clearInterval(retentionTimer);
       await q.offWork(RUN_QUEUE).catch((error: unknown) => log.warn({ err: errorDetail(error) }, 'arrêt : offWork'));
       await beat();
       const all = () => Promise.all([...running.values()].map((r) => r.done));
@@ -276,6 +311,8 @@ export async function startWorker(options: StartWorkerOptions): Promise<Worker> 
       clearTimeout(timer);
       clearInterval(beatTimer);
       await q.stop({ timeoutMs: 2000 }).catch((error: unknown) => log.warn({ err: errorDetail(error) }, 'arrêt : pg-boss'));
+      await retentionRunning;
+      await maintenancePool.end().catch(() => undefined);
       await removeWorkerBeat(pool, workerId).catch(() => undefined);
       await releaseLock?.().catch(() => undefined);
       await lockClient.end().catch(() => undefined);

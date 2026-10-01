@@ -35,6 +35,7 @@
     "domhandler": "catalog:",
     "htmlparser2": "catalog:",
     "json-p3": "catalog:",
+    "libphonenumber-js": "catalog:",
     "pino": "catalog:",
     "undici": "catalog:"
   },

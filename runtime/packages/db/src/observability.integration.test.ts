@@ -2,7 +2,7 @@
 // Observabilité sur base réelle (tâche 1.10, INV8, 14 § 3 et § 10) : `run_logs` (masquage avant insertion, niveaux,
 // plafonds), `run_artifacts` (niveau 0 = aucune ligne ; sinon chiffrés, masqués, couverts par rekey), sondes et battements.
 import { randomBytes } from 'node:crypto';
-import { generateMasterKey, MasterKey, secretValues, SecretDecryptError, type Keyring } from '@runtime/core';
+import { generateMasterKey, MasterKey, PersonalValueRegistry, secretValues, SecretDecryptError, type Keyring } from '@runtime/core';
 import pg from 'pg';
 import { afterAll, afterEach, beforeEach, describe, expect, test } from 'vitest';
 import { createTestDatabase, type TestDatabase } from '../../../tests/helpers/pg.js';
@@ -48,7 +48,7 @@ describe('run_logs', () => {
   test('masqué avant l’insertion : valeurs connues, Secret, URL ; aucune occurrence dans la table', async () => {
     const secret = canary();
     secretValues.add(secret);
-    const log = await createRunLogger(client, { runId, ownerId: owner });
+    const log = await createRunLogger(client, { runId, ownerId: owner, personal: new PersonalValueRegistry() });
     await log.log('info', `appel avec ${secret}`, { header: `Bearer ${secret}`, nested: { proxy: `http://user:${secret}@proxy.example.test:8080` } });
     const rows = await logs();
     expect(JSON.stringify(rows)).not.toContain(secret);
@@ -56,20 +56,20 @@ describe('run_logs', () => {
   });
 
   test('niveau minimal : en dessous, rien n’est écrit ; la numérotation reprend après l’existant', async () => {
-    const log = await createRunLogger(client, { runId, ownerId: owner }, { minLevel: 'warn' });
+    const log = await createRunLogger(client, { runId, ownerId: owner, personal: new PersonalValueRegistry() }, { minLevel: 'warn' });
     await log.log('debug', 'ignoré');
     await log.log('info', 'ignoré');
     await log.log('warn', 'gardé');
     await log.log('error', 'gardé aussi');
     expect((await logs()).map((r) => [r.seq, r.event])).toEqual([[1, 'gardé'], [2, 'gardé aussi']]);
     // Reprise après perte d'un worker : nouvelle instance, suite de la séquence.
-    const again = await createRunLogger(client, { runId, ownerId: owner });
+    const again = await createRunLogger(client, { runId, ownerId: owner, personal: new PersonalValueRegistry() });
     await again.log('info', 'reprise');
     expect((await logs()).at(-1)).toMatchObject({ seq: 3, event: 'reprise' });
   });
 
   test('plafond d’une entrée : `data` trop gros remplacé par un marqueur JSON valide', async () => {
-    const log = await createRunLogger(client, { runId, ownerId: owner }, { limits: { maxDataBytes: 200 } });
+    const log = await createRunLogger(client, { runId, ownerId: owner, personal: new PersonalValueRegistry() }, { limits: { maxDataBytes: 200 } });
     await log.log('info', 'gros', { blob: 'x'.repeat(5000) });
     await log.log('info', 'petit', { ok: true });
     const rows = await logs();
@@ -78,7 +78,7 @@ describe('run_logs', () => {
   });
 
   test('plafond d’entrées par run : une seule entrée `logs_truncated`, le reste est écarté et compté, rien ne lève', async () => {
-    const log = await createRunLogger(client, { runId, ownerId: owner }, { limits: { maxEntries: 5 } });
+    const log = await createRunLogger(client, { runId, ownerId: owner, personal: new PersonalValueRegistry() }, { limits: { maxEntries: 5 } });
     for (let i = 0; i < 12; i++) await log.log('info', `e${i}`);
     const rows = await logs();
     expect(rows).toHaveLength(5);
@@ -90,7 +90,7 @@ describe('run_logs', () => {
 
   test('une écriture impossible est comptée, jamais levée (le journal ne fait pas échouer le run)', async () => {
     const errors: unknown[] = [];
-    const log = await createRunLogger(client, { runId, ownerId: owner }, { onError: (e) => errors.push(e) });
+    const log = await createRunLogger(client, { runId, ownerId: owner, personal: new PersonalValueRegistry() }, { onError: (e) => errors.push(e) });
     await client.query('DROP TABLE run_logs');
     await expect(log.log('info', 'x')).resolves.toBeUndefined();
     expect(errors).toHaveLength(1);

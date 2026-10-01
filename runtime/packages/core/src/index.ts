@@ -17,3 +17,4 @@ export * from './status/index.js';
 export * from './run/index.js';
 export * from './pacing/index.js';
 export * from './observability/index.js';
+export * from './privacy/index.js';

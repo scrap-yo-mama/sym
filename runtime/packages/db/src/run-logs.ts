@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// Écriture de `run_logs` (INV4, INV8, 14 § 10) : le filtre de masquage s'applique avant l'insertion, jamais après ;
-// le niveau minimal et les plafonds (taille d'une entrée, nombre d'entrées par run) bornent la table.
-import { redact, secretValues, type SecretValueRegistry } from '@runtime/core';
+// Écriture de `run_logs` (INV4, INV8, RGPD, 14 § 10) : les filtres de masquage (secrets, puis données personnelles : e-mails,
+// téléphones, valeurs `x-personal` du registre du run) s'appliquent avant l'insertion, jamais après. Le registre du run
+// (`RunContext.personal`) est un paramètre obligatoire : aucun appel ne peut l'oublier. Le niveau minimal et les plafonds
+// (taille d'une entrée, nombre d'entrées par run) bornent la table.
+import { maskPersonal, maskPersonalText, secretValues, type PersonalValueRegistry, type SecretValueRegistry } from '@runtime/core';
 import type pg from 'pg';
 
 export type RunLogLevel = 'trace' | 'debug' | 'info' | 'warn' | 'error' | 'fatal';
@@ -16,10 +18,10 @@ export type RunLogLimits = { maxDataBytes: number; maxEntries: number };
 
 type Queryable = Pick<pg.ClientBase, 'query'>;
 
-/** JSON masqué de `data`, ou un marqueur `{ truncated, bytes }` si l'entrée dépasse le plafond (jamais une coupe en plein JSON). */
-function boundedData(data: unknown, registry: SecretValueRegistry, maxBytes: number): string | null {
+/** JSON masqué (secrets, puis données personnelles) de `data`, ou un marqueur `{ truncated, bytes }` si l'entrée dépasse le plafond (jamais une coupe en plein JSON). */
+function boundedData(data: unknown, registry: SecretValueRegistry, personal: PersonalValueRegistry, maxBytes: number): string | null {
   if (data === undefined) return null;
-  const json = JSON.stringify(redact(data, registry));
+  const json = JSON.stringify(maskPersonal(data, personal, registry));
   if (json === undefined) return null;
   const bytes = Buffer.byteLength(json);
   return bytes <= maxBytes ? json : JSON.stringify({ truncated: true, bytes });
@@ -28,6 +30,7 @@ function boundedData(data: unknown, registry: SecretValueRegistry, maxBytes: num
 export async function appendRunLog(
   db: Queryable,
   entry: RunLogEntry,
+  personal: PersonalValueRegistry,
   registry: SecretValueRegistry = secretValues,
   limits: Pick<RunLogLimits, 'maxDataBytes'> = RUN_LOG_LIMITS,
 ): Promise<void> {
@@ -36,8 +39,8 @@ export async function appendRunLog(
     entry.seq,
     entry.ownerId,
     entry.level,
-    registry.redactText(entry.event).slice(0, RUN_LOG_LIMITS.maxEventChars),
-    boundedData(entry.data, registry, limits.maxDataBytes),
+    maskPersonalText(registry.redactText(entry.event), personal).slice(0, RUN_LOG_LIMITS.maxEventChars),
+    boundedData(entry.data, registry, personal, limits.maxDataBytes),
   ]);
 }
 
@@ -54,9 +57,10 @@ export type RunLogger = {
  */
 export async function createRunLogger(
   db: Queryable,
-  run: { runId: string; ownerId: string },
+  run: { runId: string; ownerId: string; personal: PersonalValueRegistry },
   options: { minLevel?: RunLogLevel; limits?: Partial<RunLogLimits>; registry?: SecretValueRegistry; onError?: (error: unknown) => void } = {},
 ): Promise<RunLogger> {
+  const { personal, ...ids } = run;
   const limits: RunLogLimits = { ...RUN_LOG_LIMITS, ...options.limits };
   const min = RANK[options.minLevel ?? 'info'];
   const { rows } = await db.query<{ seq: number }>('SELECT coalesce(max(seq), 0)::int AS seq FROM run_logs WHERE run_id = $1', [run.runId]);
@@ -64,7 +68,7 @@ export async function createRunLogger(
   let dropped = 0;
   let chain: Promise<void> = Promise.resolve();
   const write = (level: RunLogLevel, event: string, data: unknown) =>
-    appendRunLog(db, { ...run, seq, level, event, data }, options.registry, limits).catch((error: unknown) => {
+    appendRunLog(db, { ...ids, seq, level, event, data }, personal, options.registry, limits).catch((error: unknown) => {
       dropped += 1;
       options.onError?.(error);
     });

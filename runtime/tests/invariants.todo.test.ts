@@ -37,9 +37,11 @@ describe("invariants (à implémenter)", () => {
   test.todo("assert_no_circumvention"); // INV6, tâche(s) 1.7, 4.3
   test.todo("assert_sandbox"); // INV7, tâche(s) 1.5
   test.todo("assert_robots_respected"); // INV11, tâche(s) 1.11
-  test.todo("assert_retention_purge"); // RGPD, tâche(s) 1.8
-  test.todo("assert_erasure_complete"); // RGPD, tâche(s) 1.8
-  test.todo("assert_no_personal_data_in_logs"); // RGPD, tâche(s) 1.8, 1.10
+  // RGPD (1.8) : assert_retention_purge, assert_erasure_complete et assert_no_personal_data_in_logs sont dans
+  // packages/db/src/retention/retention.integration.test.ts ; câblage worker (RunContext.personal, RunContext.excludeSubjects,
+  // rekey) dans apps/worker/src/worker.integration.test.ts. Reste le câblage par l'exécuteur réel (revue de 1.8) :
+  test.todo("assert_no_personal_data_in_logs — exécuteur réel : items extraits inscrits à RunContext.personal, journaux par appendRunLog(…, ctx.personal)"); // RGPD, tâche(s) 1.6, 1.7, 1.10
+  test.todo("assert_erasure_complete — exécuteur réel : RunContext.excludeSubjects avant collecte et avant écriture, dedup_keys.key_hash = dedupKeyHash"); // RGPD, tâche(s) 1.6, 1.7
   test.todo("assert_pacing_key_is_domain"); // politesse, tâche(s) 1.9
   test.todo("assert_export_no_secret"); // INV5, INV8, tâche(s) 3.12
   test.todo("assert_diagnostics_redacted"); // INV9, tâche(s) 4.6 (`runtime diagnostics`, 10-taches : 1.10 ne le porte pas)

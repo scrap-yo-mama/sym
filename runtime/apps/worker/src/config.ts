@@ -1,7 +1,14 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Configuration de `worker` (14 § 2-4) : lue une fois au démarrage ; MASTER_KEY retirée de l'environnement.
-import { loadKeyring, loadObservabilityConfig, scrubOtelEnvironment, type Keyring, type ObservabilityConfig } from '@runtime/core';
-import { RUN_DEFAULTS } from '@runtime/db';
+import {
+  loadKeyring,
+  loadObservabilityConfig,
+  scrubOtelEnvironment,
+  subjectPhoneRegion,
+  type Keyring,
+  type ObservabilityConfig,
+} from '@runtime/core';
+import { RUN_DEFAULTS, retentionPolicyFromEnv, type RetentionPolicy } from '@runtime/db';
 
 export class WorkerConfigError extends Error {
   override name = 'WorkerConfigError';
@@ -25,6 +32,10 @@ export type WorkerConfig = {
   queuePollingSeconds: number;
   /** Journal, OTel (coupé par défaut) : 14 § 2. */
   observability: ObservabilityConfig;
+  /** Rétention (14 § 9) : durées lues une fois au démarrage (`RETENTION_*`, `RUN_LOG_RETENTION_DAYS`…). */
+  retention: RetentionPolicy;
+  /** Période de la passe de rétention planifiée (marquage horaire, purge quotidienne ; défaut 300 s). */
+  retentionTickSeconds: number;
 };
 
 function positive(env: NodeJS.ProcessEnv, name: string, fallback: number, min = 0.1): number {
@@ -48,6 +59,13 @@ export function loadWorkerConfig(env: NodeJS.ProcessEnv = process.env): WorkerCo
   }
   const observability = loadObservabilityConfig(env);
   scrubOtelEnvironment(env);
+  let retention: RetentionPolicy;
+  try {
+    retention = retentionPolicyFromEnv(env);
+    subjectPhoneRegion(env); // PHONE_DEFAULT_REGION : téléphones des sujets en E.164 (D-25), validée au démarrage
+  } catch (error) {
+    throw new WorkerConfigError((error as Error).message);
+  }
   const keyring = loadKeyring(env);
   return {
     databaseUrl,
@@ -64,5 +82,7 @@ export function loadWorkerConfig(env: NodeJS.ProcessEnv = process.env): WorkerCo
     workerHeartbeatSeconds: positive(env, 'WORKER_HEARTBEAT_SECONDS', 15),
     queuePollingSeconds: positive(env, 'QUEUE_POLLING_SECONDS', 2, 0.5),
     observability,
+    retention,
+    retentionTickSeconds: positive(env, 'RETENTION_TICK_SECONDS', 300),
   };
 }
