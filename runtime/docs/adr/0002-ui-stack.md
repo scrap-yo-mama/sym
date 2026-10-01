@@ -28,7 +28,10 @@ au 2026-10-01, `minimumReleaseAge`).
 
 Les composants shadcn-vue (MIT) sont ajoutés par `npx shadcn-vue@latest add <composant>` depuis `apps/web` (fichier
 `components.json`), puis relus. Une mise à jour du composant est un diff de revue, pas une montée de version. Les
-attributions sont dans `NOTICE`.
+attributions sont dans `NOTICE`. Le code copié garde sa licence : `apps/web/src/components/ui/**` et
+`src/lib/utils.ts` portent `SPDX-License-Identifier: MIT` et, en ligne 2, le copyright de shadcn-vue (en commentaire
+`<!-- -->` pour un `.vue`). `scripts/spdx-headers.ts` couvre les `.vue` et attend MIT sous ces chemins ; un composant
+ajouté reçoit ces deux lignes à la main avant `pnpm spdx:add` (`tests/governance.unit.test.ts`).
 
 ### Ce que le spike a vérifié
 
@@ -48,15 +51,42 @@ attributions sont dans `NOTICE`.
    identifiant, ne fait avancer la reprise que sur une trame complète, réarme un délai de silence (le serveur envoie un
    ping toutes les 15 à 20 s) et réinitialise tout à l'arrêt (un autre compte ne reçoit pas la position du précédent). Une
    réponse 404 (serveur sans flux) l'arrête sans bandeau ni boucle.
+   **Dette, à solder par 3.1** : ce cas 404 ne vaut que tant que le serveur n'enregistre pas `GET /api/events`. Après,
+   une 404 trahit un déploiement cassé (routage, reverse proxy) et la console perdrait en silence toute mise à jour en
+   direct. `STOP_ON_NOT_FOUND_DEFAULT` (`src/lib/sse.ts`) doit alors passer à `false` : la 404 devient une coupure
+   (bandeau, reconnexion). Un test de contrat l'impose dès que la route apparaît dans le registre du serveur.
 4. **Client généré.** Les types sont produits par `scripts/gen-openapi-client.ts` depuis
-   `packages/client/openapi/openapi.yaml` (OpenAPI 3.1 spécifiée à partir de 05 § 4.2 et 13) et committés
-   (`packages/client/src/generated/schema.ts`). `assert_openapi_client_in_sync` échoue si le fichier committé diffère de la
-   génération, et un second test échoue si une route enregistrée par le serveur manque à l'OpenAPI spécifiée. La tâche 3.6
-   rejoue le premier contre l'OpenAPI livrée par 3.1.
+   `packages/client/openapi/openapi.yaml` et committés (`packages/client/src/generated/schema.ts`).
+   `assert_openapi_client_in_sync` échoue si le fichier committé diffère de la génération. L'OpenAPI spécifiée décrit
+   **toutes** les routes de 05 § 4.2 et 13 § 13.1 (`assert_openapi_specified_covers_cdc`), pour que 3.4, 3.5 et 3.8 aient
+   leurs types sans attendre 3.1. Le lien avec le serveur est une **inclusion** et non une égalité
+   (`assert_openapi_specified_vs_delivered_drift`) : toute route enregistrée par le serveur (registre INV12) doit être
+   spécifiée ; une route spécifiée et pas encore livrée porte `x-pending: '<tâche>'` (3.1, 3.7, 3.12, 2.6 ou 1.10), et
+   la tâche qui la livre retire la marque. La tâche 3.6 rejoue ce contrôle contre l'OpenAPI générée par le serveur
+   (15 § 6) et exige une liste d'attente vide.
+   Écarts assumés, à confirmer par 3.1 : (a) quelques opérations servent un écran de 06 que 05 § 4.2 ne détaille pas
+   (« extension de 05 § 4.2 » : liste des runs, journal d'un run, versions de stratégie, diff, retour à une version,
+   transitions de statut, boutons **Tester** des réglages) ; (b) les champs des nouvelles routes sont en snake_case comme
+   les contrats de 04b et 05, alors que les routes livrées par 0.3b (`/api/me`, `/api/api-keys`, `/api/setup`) sont en
+   camelCase : 3.1 tranche pour l'ensemble (renommage des routes 0.3b ou adaptation des nouvelles).
 5. **Session.** La sonde d'identité est `GET /api/auth/get-session` (200 avec `null` sans session), puis `GET /api/me`
    seulement si une session existe : un visiteur anonyme ne produit aucune erreur 401 dans la console du navigateur
    (critère « 0 erreur de console » de 06 § 4.3). Le jeton de session ne vit que dans le cookie `HttpOnly` ; l'état de la
    console ne contient ni jeton ni mot de passe.
+
+6. **Connexion puis page vide authentifiée.** Le critère de la ligne 3.3 est rejouable :
+   `src/console-session.integration.test.ts` (`assert_console_login_then_empty_authenticated_page`) démarre le vrai
+   serveur sur une base migrée et fait passer le client généré, `useSession` et la garde du routeur par `app.inject`
+   (cookie tenu comme par un navigateur) : refus du mauvais mot de passe, connexion, `GET /api/me`, page vide, reprise
+   de session par le seul cookie, déconnexion. Le même parcours en Chromium revient à la suite E2E (3.6).
+7. **Accessibilité (06 § 1).** La gate WCAG 2.2 AA est portée par 3.9 (`assert_a11y_axe_clean`, chaque écran) et
+   rejouée par 3.6. Passage ponctuel du 2026-10-01 sur les deux pages livrées : axe-core 4.13.0 (hors dépendances du
+   dépôt), tags `wcag2a`, `wcag2aa`, `wcag21aa`, `wcag22aa`, Chromium, vrai serveur, build de production ; connexion et
+   page vide, thèmes clair et sombre, `en` et `fr` : **0 violation** sur les 8 combinaisons. Seule erreur de console :
+   la 404 de `/api/events`, attendue tant que 3.1 n'a pas livré la route (voir le point 3).
+8. **Mots interdits (06 § 4.1).** La garde des fichiers de langue reconnaît toutes les formes de « passer » (exceptions
+   explicites : « mot de passe », « dépasser »). Le test complet, messages REST et MCP compris, est
+   `assert_ui_strings_no_forbidden_words` (3.5).
 
 ## Alternatives écartées
 

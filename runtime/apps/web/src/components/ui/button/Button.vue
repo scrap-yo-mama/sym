@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: MIT -->
+<!-- Copyright (c) shadcn et contributeurs de shadcn-vue (https://github.com/unovue/shadcn-vue), licence MIT -->
 <script setup lang="ts">
 import type { PrimitiveProps } from "reka-ui"
 import type { HTMLAttributes } from "vue"

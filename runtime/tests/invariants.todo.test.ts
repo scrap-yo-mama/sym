@@ -37,4 +37,5 @@ describe("invariants (à implémenter)", () => {
   test.todo("assert_diagnostics_redacted"); // INV9, tâche(s) 1.10
   test.todo("assert_ui_strings_no_forbidden_words"); // INV6, tâche(s) 3.5
   test.todo("assert_access_report_first"); // étape 0, tâche(s) 1.11, 2.1
+  test.todo("assert_a11y_axe_clean"); // 06 § 1, tâche(s) 3.9, 3.6 (passage ponctuel de 3.3 consigné dans l'ADR 0002)
 });

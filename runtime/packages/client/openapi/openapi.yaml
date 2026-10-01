@@ -1,8 +1,11 @@
 # SPDX-License-Identifier: MIT
-# OpenAPI 3.1 SPÉCIFIÉE de l'API REST (CDC 05 § 4.2, 13, 06 § 3), source du client généré (tâche 3.3).
-# Périmètre : les routes que la console utilise dès ses fondations (santé, assistant, connexion, identité, clés
-# d'API, flux SSE). Les autres routes de 05 § 4.2 (catalogue, runs, datasets…) s'ajoutent ici quand leur forme est
-# figée (3.1 livre l'OpenAPI générée par le serveur ; la tâche 3.6 rejoue assert_openapi_client_in_sync contre elle).
+# OpenAPI 3.1 SPÉCIFIÉE de l'API REST (CDC 05 § 2 et § 4.2, 13 § 13.1, 06), source du client généré (tâche 3.3).
+# Elle décrit TOUTES les routes du CDC, pour que la console (3.4, 3.5, 3.8) avance sans attendre le serveur (3.1).
+# Liste d'attente : une opération pas encore livrée par le serveur porte `x-pending: '<tâche>'` ; la tâche qui la livre
+# retire la marque (tests/openapi-client.contract.test.ts, assert_openapi_specified_vs_delivered_drift). La tâche 3.6
+# rejoue le contrôle contre l'OpenAPI générée par le serveur (15 § 6) et exige une liste d'attente vide.
+# Les opérations marquées « extension de 05 § 4.2 » servent un écran de 06 que 05 ne détaille pas ; 3.1 les confirme.
+# Champs : snake_case comme les contrats de 04b et 05 (les routes déjà livrées par 0.3b, en camelCase, restent telles quelles).
 # Les textes affichés ne viennent jamais de l'API : seulement des codes stables (06 § 1, « Accessibilité et langues »).
 openapi: 3.1.0
 info:
@@ -13,15 +16,30 @@ info:
     identifier: MIT
 servers:
   - url: /
+# Par défaut : session d'interface (cookie) ou clé d'API (Bearer, scopes de 13 § 8). Les routes publiques posent `security: []`.
+security:
+  - sessionCookie: []
+  - apiKey: []
 tags:
   - name: system
   - name: auth
   - name: account
   - name: events
+  - name: apis
+  - name: runs
+  - name: datasets
+  - name: schedules
+  - name: webhooks
+  - name: settings
+  - name: users
+  - name: audit
+  - name: subjects
+  - name: tunnel
 paths:
   /api/health:
     get:
       operationId: getHealth
+      security: []
       tags: [system]
       summary: Santé du processus (joignable avant l'initialisation)
       responses:
@@ -34,6 +52,7 @@ paths:
   /api/ready:
     get:
       operationId: getReady
+      security: []
       tags: [system]
       summary: Disponibilité (version de schéma, base) et état d'initialisation
       responses:
@@ -52,6 +71,7 @@ paths:
   /api/setup:
     post:
       operationId: postSetup
+      security: []
       tags: [system]
       summary: Assistant de premier démarrage (13 § 4), répond 404 pour toujours une fois l'owner créé
       requestBody:
@@ -78,6 +98,7 @@ paths:
   /api/auth/sign-in/email:
     post:
       operationId: postSignIn
+      security: []
       tags: [auth]
       summary: Connexion par e-mail et mot de passe (cookie de session HttpOnly)
       requestBody:
@@ -110,6 +131,7 @@ paths:
   /api/auth/sign-out:
     post:
       operationId: postSignOut
+      security: []
       tags: [auth]
       summary: Déconnexion
       requestBody:
@@ -136,6 +158,7 @@ paths:
   /api/auth/get-session:
     get:
       operationId: getSession
+      security: []
       tags: [auth]
       summary: Session d'interface courante (null sans session)
       responses:
@@ -236,6 +259,7 @@ paths:
           $ref: '#/components/responses/Error'
   /api/events:
     get:
+      x-pending: '3.1'
       operationId: streamEvents
       tags: [events]
       summary: Flux SSE multiplexé, un seul par onglet (06 § 3)
@@ -260,10 +284,1902 @@ paths:
           $ref: '#/components/responses/Error'
         '429':
           $ref: '#/components/responses/Error'
+  /api/version:
+    get:
+      x-pending: '3.1'
+      operationId: getVersion
+      tags: [system]
+      summary: Version de l'instance et du schéma (14 § 3), sans version de dépendance ni nom d'hôte
+      responses:
+        '200':
+          description: Version.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Version'
+  /metrics:
+    get:
+      x-pending: '1.10'
+      operationId: getMetrics
+      tags: [system]
+      summary: Métriques Prometheus (14 § 3), fermées sans METRICS_TOKEN
+      security:
+        - metricsToken: []
+      responses:
+        '200':
+          description: Texte d'exposition Prometheus (préfixe `scrapyomama_`, étiquettes bornées).
+          content:
+            text/plain:
+              schema:
+                type: string
+        '401':
+          description: Jeton faux.
+        '404':
+          description: METRICS_TOKEN absent (route fermée).
+  /.well-known/oauth-protected-resource:
+    get:
+      x-pending: '3.7'
+      operationId: getProtectedResourceMetadata
+      security: []
+      tags: [system]
+      summary: Métadonnées de ressource protégée (RFC 9728, 13 § 11)
+      responses:
+        '200':
+          description: Métadonnées.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProtectedResourceMetadata'
+  /api/openapi.json:
+    get:
+      x-pending: '3.1'
+      operationId: getOpenApi
+      tags: [system]
+      summary: OpenAPI 3.1 livrée par le serveur (05 § 2) ; comparée à ce fichier par le test de dérive (15 § 6, tâche 3.6)
+      responses:
+        '200':
+          description: Document OpenAPI 3.1.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/sso:
+    get:
+      x-pending: '3.7'
+      operationId: getSsoInfo
+      security: []
+      tags: [auth]
+      summary: Connexion SSO proposée sur la page de connexion (public, sans secret)
+      responses:
+        '200':
+          description: État public du SSO.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SsoPublic'
+  /api/apis:
+    get:
+      x-pending: '3.1'
+      operationId: listApis
+      tags: [apis]
+      summary: Catalogue (= list_apis), pagination serveur, filtres par statut, exécution et réseau, recherche (06 § 2)
+      parameters:
+        - name: status
+          in: query
+          schema:
+            $ref: '#/components/schemas/ApiStatus'
+        - name: execution
+          in: query
+          schema:
+            $ref: '#/components/schemas/Execution'
+        - name: network
+          in: query
+          schema:
+            $ref: '#/components/schemas/Network'
+        - name: q
+          in: query
+          schema:
+            type: string
+            maxLength: 200
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Page du catalogue.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiList'
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+    post:
+      x-pending: '3.1'
+      operationId: createApi
+      tags: [apis]
+      summary: Crée une API (= create_api) ; lance l'enquête, rapport d'accès en étape 0 (17 § 2)
+      parameters:
+        - $ref: '#/components/parameters/Wait'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ApiCreate'
+      responses:
+        '201':
+          description: API créée ; schéma proposé à valider, ou résultat de run si `auto_validate`.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/ApiCreated'
+                  - $ref: '#/components/schemas/RunResult'
+        '202':
+          $ref: '#/components/responses/Accepted'
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+        '429':
+          $ref: '#/components/responses/QueueFull'
+  /api/apis/import:
+    post:
+      x-pending: '3.12'
+      operationId: importApi
+      tags: [apis]
+      summary: Importe une API exportée ; repasse toujours par l'enquête (16 § 6)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ApiExport'
+      responses:
+        '201':
+          description: API importée, enquête lancée.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiCreated'
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+  /api/apis/{id}/validate-schema:
+    post:
+      x-pending: '3.1'
+      operationId: validateSchema
+      tags: [apis]
+      summary: Valide (ou corrige) le schéma de sortie proposé (= validate_schema)
+      parameters:
+        - $ref: '#/components/parameters/Id'
+        - $ref: '#/components/parameters/Wait'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ValidateSchemaRequest'
+      responses:
+        '200':
+          description: Enquête terminée.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RunResult'
+        '202':
+          $ref: '#/components/responses/Accepted'
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+  /api/apis/{slug}:
+    get:
+      x-pending: '3.1'
+      operationId: getApi
+      tags: [apis]
+      summary: Fiche d'une API (= get_api) ; métadonnées seules pour l'admin sur une API avec session d'autrui
+      parameters:
+        - $ref: '#/components/parameters/Slug'
+        - name: response_format
+          in: query
+          schema:
+            type: string
+            enum: [concise, detailed]
+      responses:
+        '200':
+          description: Fiche.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiDetail'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+    patch:
+      x-pending: '3.1'
+      operationId: updateApi
+      tags: [apis]
+      summary: Modifie description, politiques, schémas (→ ré-enquête), exposition MCP ; aucun réglage robots.txt (INV11)
+      parameters:
+        - $ref: '#/components/parameters/Slug'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ApiPatch'
+      responses:
+        '200':
+          description: Fiche à jour.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiDetail'
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+    delete:
+      x-pending: '3.1'
+      operationId: deleteApi
+      tags: [apis]
+      summary: Supprime une API
+      parameters:
+        - $ref: '#/components/parameters/Slug'
+      responses:
+        '204':
+          description: Supprimée.
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+  /api/apis/{slug}/runs:
+    post:
+      x-pending: '3.1'
+      operationId: runApi
+      tags: [runs]
+      summary: Lance un run (= run_api) ; synchrone jusqu'à `wait` secondes, sinon run à suivre (05 § 4.3)
+      parameters:
+        - $ref: '#/components/parameters/Slug'
+        - $ref: '#/components/parameters/Wait'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RunRequest'
+      responses:
+        '200':
+          description: Run terminé (y compris dégradé, ou en échec de budget).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RunResult'
+        '202':
+          $ref: '#/components/responses/Accepted'
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+        '429':
+          $ref: '#/components/responses/QueueFull'
+  /api/apis/{slug}/investigate:
+    post:
+      x-pending: '3.1'
+      operationId: reinvestigateApi
+      tags: [apis]
+      summary: Ré-enquête manuelle (transitions 17 et 18) ; seule reprise offerte à une API `bloquee`
+      parameters:
+        - $ref: '#/components/parameters/Slug'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InvestigateRequest'
+      responses:
+        '202':
+          $ref: '#/components/responses/Accepted'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+        '429':
+          $ref: '#/components/responses/QueueFull'
+  /api/apis/{slug}/export:
+    get:
+      x-pending: '3.12'
+      operationId: exportApi
+      tags: [apis]
+      summary: Export JSON d'une API, sans secret ni session (assert_export_no_secret)
+      parameters:
+        - $ref: '#/components/parameters/Slug'
+      responses:
+        '200':
+          description: Export.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiExport'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+  /api/apis/{slug}/openapi.json:
+    get:
+      x-pending: '3.12'
+      operationId: getApiOpenApi
+      tags: [apis]
+      summary: OpenAPI propre à une API, avec sa section webhooks (05 § 2)
+      parameters:
+        - $ref: '#/components/parameters/Slug'
+      responses:
+        '200':
+          description: Document OpenAPI 3.1.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '401':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+  /api/apis/{slug}/versions:
+    get:
+      x-pending: '3.1'
+      operationId: listStrategyVersions
+      tags: [apis]
+      summary: Versions de stratégie (onglet « Stratégie & versions », 06 § 2) ; extension de 05 § 4.2
+      parameters:
+        - $ref: '#/components/parameters/Slug'
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Versions, de la plus récente à la plus ancienne.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StrategyVersionList'
+        '401':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+  /api/apis/{slug}/versions/{version}:
+    get:
+      x-pending: '3.1'
+      operationId: getStrategyVersion
+      tags: [apis]
+      summary: Une version de stratégie, spécification déclarative ou référence de script (lecture seule)
+      parameters:
+        - $ref: '#/components/parameters/Slug'
+        - $ref: '#/components/parameters/Version'
+      responses:
+        '200':
+          description: Version.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StrategyVersion'
+        '401':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+  /api/apis/{slug}/versions/{version}/diff:
+    get:
+      x-pending: '3.1'
+      operationId: diffStrategyVersions
+      tags: [apis]
+      summary: Diff à trois niveaux (phrase en code stable, champs modifiés, brut) entre deux versions (06 § 2)
+      parameters:
+        - $ref: '#/components/parameters/Slug'
+        - $ref: '#/components/parameters/Version'
+        - name: against
+          in: query
+          required: true
+          schema:
+            type: integer
+            minimum: 1
+      responses:
+        '200':
+          description: Diff.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StrategyDiff'
+        '401':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+  /api/apis/{slug}/versions/{version}/revert:
+    post:
+      x-pending: '3.1'
+      operationId: revertStrategyVersion
+      tags: [apis]
+      summary: Revient à cette version (l'API bascule en `warning`, raison `reverted`, transitions 7 ou 8)
+      parameters:
+        - $ref: '#/components/parameters/Slug'
+        - $ref: '#/components/parameters/Version'
+      responses:
+        '200':
+          description: Fiche à jour.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiDetail'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+  /api/apis/{slug}/status-events:
+    get:
+      x-pending: '3.1'
+      operationId: listStatusEvents
+      tags: [apis]
+      summary: Chronologie des transitions de statut (onglet « Bugs & statut », 06 § 2) ; extension de 05 § 4.2
+      parameters:
+        - $ref: '#/components/parameters/Slug'
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Transitions, de la plus récente à la plus ancienne.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatusEventList'
+        '401':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+  /api/apis/{slug}/schedules:
+    get:
+      x-pending: '3.1'
+      operationId: listSchedules
+      tags: [schedules]
+      summary: Planifications d'une API (08 § 5)
+      parameters:
+        - $ref: '#/components/parameters/Slug'
+      responses:
+        '200':
+          description: Planifications.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScheduleList'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+    post:
+      x-pending: '3.1'
+      operationId: createSchedule
+      tags: [schedules]
+      summary: Crée une planification (fréquence minimale 1 minute)
+      parameters:
+        - $ref: '#/components/parameters/Slug'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ScheduleWrite'
+      responses:
+        '201':
+          description: Planification créée.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Schedule'
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+  /api/apis/{slug}/schedules/{id}:
+    get:
+      x-pending: '3.1'
+      operationId: getSchedule
+      tags: [schedules]
+      summary: Une planification, avec ses prochaines exécutions calculées côté serveur
+      parameters:
+        - $ref: '#/components/parameters/Slug'
+        - $ref: '#/components/parameters/Id'
+      responses:
+        '200':
+          description: Planification.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Schedule'
+        '401':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+    patch:
+      x-pending: '3.1'
+      operationId: updateSchedule
+      tags: [schedules]
+      summary: Modifie une planification (dont la suspension)
+      parameters:
+        - $ref: '#/components/parameters/Slug'
+        - $ref: '#/components/parameters/Id'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SchedulePatch'
+      responses:
+        '200':
+          description: Planification à jour.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Schedule'
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+    delete:
+      x-pending: '3.1'
+      operationId: deleteSchedule
+      tags: [schedules]
+      summary: Supprime une planification
+      parameters:
+        - $ref: '#/components/parameters/Slug'
+        - $ref: '#/components/parameters/Id'
+      responses:
+        '204':
+          description: Supprimée.
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+  /api/runs:
+    get:
+      x-pending: '3.1'
+      operationId: listRuns
+      tags: [runs]
+      summary: « Tous les runs » et historique d'une API, filtrables, pagination serveur (06 § 2) ; extension de 05 § 4.2
+      parameters:
+        - name: api
+          in: query
+          description: Slug de l'API.
+          schema:
+            type: string
+        - name: state
+          in: query
+          schema:
+            $ref: '#/components/schemas/RunState'
+        - name: trigger
+          in: query
+          schema:
+            $ref: '#/components/schemas/RunTrigger'
+        - name: since
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: until
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Runs (métadonnées seulement, jamais d'items).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RunList'
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+  /api/runs/{id}:
+    get:
+      x-pending: '3.1'
+      operationId: getRun
+      tags: [runs]
+      summary: Un run (= get_run) ; l'admin n'obtient que les métadonnées d'un run avec session d'autrui
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      responses:
+        '200':
+          description: Run, avec sa cascade d'essais.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Run'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+  /api/runs/{id}/cancel:
+    post:
+      x-pending: '3.1'
+      operationId: cancelRun
+      tags: [runs]
+      summary: Arrête un run ou une enquête (= cancel_run), essais et coûts engagés conservés
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      responses:
+        '200':
+          description: Run annulé.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RunCancelled'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+  /api/runs/{id}/resume:
+    post:
+      x-pending: '3.1'
+      operationId: resumeRun
+      tags: [runs]
+      summary: Reprend un run en pause (action de l'utilisateur ; jamais en réponse à une vérification)
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      responses:
+        '202':
+          $ref: '#/components/responses/Accepted'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+  /api/runs/{id}/events:
+    get:
+      x-pending: '3.1'
+      operationId: streamRunEvents
+      tags: [events]
+      summary: Vue filtrée du flux SSE pour un run ou une enquête, rejouée depuis `investigation_events`
+      parameters:
+        - $ref: '#/components/parameters/Id'
+        - name: Last-Event-ID
+          in: header
+          required: false
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Flux d'événements (mêmes trames que `/api/events`).
+          content:
+            text/event-stream:
+              schema:
+                type: string
+        '401':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+  /api/runs/{id}/logs:
+    get:
+      x-pending: '3.1'
+      operationId: listRunLogs
+      tags: [runs]
+      summary: Journal d'un run (`run_logs`, vue Technique de 06 § 2) ; extension de 05 § 4.2
+      parameters:
+        - $ref: '#/components/parameters/Id'
+        - name: after
+          in: query
+          schema:
+            type: integer
+            minimum: 0
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Lignes du journal, en ordre croissant.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RunLogList'
+        '401':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+  /api/datasets/{id}/items:
+    get:
+      x-pending: '3.1'
+      operationId: getDatasetItems
+      tags: [datasets]
+      summary: Items d'un dataset, exportés en flux (JSON, NDJSON, CSV à cellules neutralisées), curseur `after`
+      parameters:
+        - $ref: '#/components/parameters/Id'
+        - name: format
+          in: query
+          schema:
+            type: string
+            enum: [json, ndjson, csv]
+            default: json
+        - name: after
+          in: query
+          schema:
+            type: string
+        - $ref: '#/components/parameters/Limit'
+        - name: fields
+          in: query
+          description: Champs à garder, séparés par des virgules.
+          schema:
+            type: string
+        - name: omit
+          in: query
+          description: Champs à retirer, séparés par des virgules.
+          schema:
+            type: string
+        - name: since
+          in: query
+          schema:
+            type: string
+            format: date-time
+      responses:
+        '200':
+          description: Items.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DatasetItems'
+            application/x-ndjson:
+              schema:
+                type: string
+            text/csv:
+              schema:
+                type: string
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+  /api/webhook-subscriptions:
+    get:
+      x-pending: '3.1'
+      operationId: listWebhookSubscriptions
+      tags: [webhooks]
+      summary: Abonnements webhook (Standard Webhooks, 08 § 5)
+      responses:
+        '200':
+          description: Abonnements.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebhookSubscriptionList'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+    post:
+      x-pending: '3.1'
+      operationId: createWebhookSubscription
+      tags: [webhooks]
+      summary: Crée un abonnement ; l'URL est contrôlée par la garde SSRF, le secret `whsec_` n'apparaît qu'ici
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WebhookSubscriptionWrite'
+      responses:
+        '201':
+          description: Abonnement créé.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebhookSubscriptionCreated'
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+  /api/webhook-subscriptions/{id}:
+    get:
+      x-pending: '3.1'
+      operationId: getWebhookSubscription
+      tags: [webhooks]
+      summary: Un abonnement, avec le journal de ses dernières livraisons
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      responses:
+        '200':
+          description: Abonnement.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebhookSubscription'
+        '401':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+    patch:
+      x-pending: '3.1'
+      operationId: updateWebhookSubscription
+      tags: [webhooks]
+      summary: Modifie un abonnement (URL, événements, réactivation, rotation du secret)
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WebhookSubscriptionPatch'
+      responses:
+        '200':
+          description: Abonnement à jour ; `secret` présent seulement après une rotation.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebhookSubscriptionCreated'
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+    delete:
+      x-pending: '3.1'
+      operationId: deleteWebhookSubscription
+      tags: [webhooks]
+      summary: Supprime un abonnement
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      responses:
+        '204':
+          description: Supprimé.
+        '401':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+  /api/webhook-subscriptions/{id}/test:
+    post:
+      x-pending: '3.1'
+      operationId: testWebhookSubscription
+      tags: [webhooks]
+      summary: Bouton **Tester** (06 § 2, Alertes) ; extension de 05 § 4.2
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      responses:
+        '200':
+          description: Résultat du test.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TestResult'
+        '401':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+  /api/settings/llm:
+    get:
+      x-pending: '3.1'
+      operationId: getLlmSettings
+      tags: [settings]
+      summary: Réglages des modèles IA (08 § 7) ; les clés ne sont jamais relues (INV8)
+      responses:
+        '200':
+          description: Réglages, secrets masqués.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LlmSettings'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+    put:
+      x-pending: '3.1'
+      operationId: putLlmSettings
+      tags: [settings]
+      summary: Remplace les réglages (admin) ; un secret absent est conservé, un secret fourni est remplacé
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LlmSettingsWrite'
+      responses:
+        '200':
+          description: Réglages à jour, secrets masqués.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LlmSettings'
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+  /api/settings/llm/test:
+    post:
+      x-pending: '3.1'
+      operationId: testLlmProvider
+      tags: [settings]
+      summary: Sonde de 3 appels minuscules d'un couple fournisseur × modèle (08 § 1) ; extension de 05 § 4.2
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LlmProbeRequest'
+      responses:
+        '200':
+          description: Profil de capacités relevé, ou échec lisible.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LlmProbeResult'
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+  /api/settings/proxies:
+    get:
+      x-pending: '3.1'
+      operationId: listProxies
+      tags: [settings]
+      summary: Proxys définis par l'admin (08 § 2) ; une API ne référence qu'un identifiant
+      responses:
+        '200':
+          description: Proxys, identifiants masqués.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProxyList'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+    post:
+      x-pending: '3.1'
+      operationId: createProxy
+      tags: [settings]
+      summary: Ajoute un proxy (admin)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProxyWrite'
+      responses:
+        '201':
+          description: Proxy créé.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Proxy'
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+  /api/settings/proxies/{id}:
+    get:
+      x-pending: '3.1'
+      operationId: getProxy
+      tags: [settings]
+      summary: Un proxy, identifiants masqués
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      responses:
+        '200':
+          description: Proxy.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Proxy'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+    patch:
+      x-pending: '3.1'
+      operationId: updateProxy
+      tags: [settings]
+      summary: Modifie un proxy (admin) ; un identifiant absent est conservé
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProxyPatch'
+      responses:
+        '200':
+          description: Proxy à jour.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Proxy'
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+    delete:
+      x-pending: '3.1'
+      operationId: deleteProxy
+      tags: [settings]
+      summary: Supprime un proxy (admin)
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      responses:
+        '204':
+          description: Supprimé.
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+  /api/settings/proxies/{id}/test:
+    post:
+      x-pending: '3.1'
+      operationId: testProxy
+      tags: [settings]
+      summary: Bouton **Tester** d'un proxy (IP et pays de sortie, 06 § 2) ; extension de 05 § 4.2
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      responses:
+        '200':
+          description: Résultat du test.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProxyTestResult'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+  /api/settings/smtp:
+    get:
+      x-pending: '3.1'
+      operationId: getSmtpSettings
+      tags: [settings]
+      summary: Réglages SMTP (alertes, invitations) ; mot de passe jamais relu
+      responses:
+        '200':
+          description: Réglages, ou null si non configuré.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/SmtpSettings'
+                  - type: 'null'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+    put:
+      x-pending: '3.1'
+      operationId: putSmtpSettings
+      tags: [settings]
+      summary: Remplace les réglages SMTP (admin) ; un secret absent est conservé
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SmtpSettingsWrite'
+      responses:
+        '200':
+          description: Réglages à jour.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SmtpSettings'
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+  /api/settings/smtp/test:
+    post:
+      x-pending: '3.1'
+      operationId: testSmtp
+      tags: [settings]
+      summary: Bouton **Tester** du SMTP (06 § 2, Alertes) ; extension de 05 § 4.2
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [to]
+              properties:
+                to:
+                  type: string
+                  maxLength: 254
+      responses:
+        '200':
+          description: Résultat du test.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TestResult'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+  /api/settings/security:
+    get:
+      x-pending: '3.7'
+      operationId: getSecuritySettings
+      tags: [settings]
+      summary: 'Réglages de sécurité (owner) : durées de session, domaines, plafond de clés'
+      responses:
+        '200':
+          description: Réglages.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SecuritySettings'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+    put:
+      x-pending: '3.7'
+      operationId: putSecuritySettings
+      tags: [settings]
+      summary: Remplace les réglages de sécurité (owner)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SecuritySettings'
+      responses:
+        '200':
+          description: Réglages à jour.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SecuritySettings'
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+  /api/settings/sso:
+    get:
+      x-pending: '3.7'
+      operationId: getSsoSettings
+      tags: [settings]
+      summary: Réglages OIDC (owner) ; `client_secret` jamais relu
+      responses:
+        '200':
+          description: Réglages, ou null si non configuré.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/SsoSettings'
+                  - type: 'null'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+    put:
+      x-pending: '3.7'
+      operationId: putSsoSettings
+      tags: [settings]
+      summary: Remplace les réglages OIDC (owner) ; `client_secret` en écriture seule
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SsoSettingsWrite'
+      responses:
+        '200':
+          description: Réglages à jour.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SsoSettings'
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+  /api/users:
+    get:
+      x-pending: '3.7'
+      operationId: listUsers
+      tags: [users]
+      summary: Utilisateurs de l'instance (admin)
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Utilisateurs.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserList'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+  /api/users/{id}:
+    patch:
+      x-pending: '3.7'
+      operationId: updateUser
+      tags: [users]
+      summary: Change le rôle (owner seulement) ou le statut d'un compte ; personne ne change son propre rôle
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UserPatch'
+      responses:
+        '200':
+          description: Compte à jour.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+    delete:
+      x-pending: '3.7'
+      operationId: deleteUser
+      tags: [users]
+      summary: Supprime un compte désactivé (jamais l'owner)
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      responses:
+        '204':
+          description: Supprimé.
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+  /api/users/{id}/reset-link:
+    post:
+      x-pending: '3.7'
+      operationId: createResetLink
+      tags: [users]
+      summary: Lien de réinitialisation (jamais de mot de passe choisi par l'admin), compte avec 2FA seulement, audité
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      responses:
+        '201':
+          description: Lien affiché une fois.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OneTimeLink'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+  /api/owner/transfer:
+    post:
+      x-pending: '3.7'
+      operationId: transferOwnership
+      tags: [users]
+      summary: Transfert de propriété (owner, mot de passe + 2FA)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OwnerTransferRequest'
+      responses:
+        '204':
+          description: Propriété transférée.
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+  /api/invitations:
+    get:
+      x-pending: '3.7'
+      operationId: listInvitations
+      tags: [users]
+      summary: Invitations en cours (admin)
+      responses:
+        '200':
+          description: Invitations.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InvitationList'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+    post:
+      x-pending: '3.7'
+      operationId: createInvitation
+      tags: [users]
+      summary: Invite une adresse exacte avec un rôle (48 h, usage unique) ; lien copiable seulement sans SMTP
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InvitationCreate'
+      responses:
+        '201':
+          description: Invitation créée.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InvitationCreated'
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+  /api/invitations/accept:
+    post:
+      x-pending: '3.7'
+      operationId: acceptInvitation
+      security: []
+      tags: [users]
+      summary: Accepte une invitation (public) ; réponse identique pour un jeton inconnu, expiré ou consommé
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InvitationAccept'
+      responses:
+        '200':
+          description: Compte activé ; session d'interface ouverte (cookie).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Me'
+        '400':
+          $ref: '#/components/responses/Error'
+        '429':
+          $ref: '#/components/responses/Error'
+  /api/invitations/{id}:
+    delete:
+      x-pending: '3.7'
+      operationId: revokeInvitation
+      tags: [users]
+      summary: Révoque une invitation
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      responses:
+        '204':
+          description: Révoquée.
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+  /api/invitations/{id}/resend:
+    post:
+      x-pending: '3.7'
+      operationId: resendInvitation
+      tags: [users]
+      summary: Renvoie une invitation (nouveau jeton, nouvelle échéance)
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      responses:
+        '200':
+          description: Invitation renvoyée.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InvitationCreated'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+  /api/me/sessions:
+    get:
+      x-pending: '3.7'
+      operationId: listMySessions
+      tags: [account]
+      summary: Sessions d'interface ouvertes de l'appelant
+      responses:
+        '200':
+          description: Sessions.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthSessionList'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+    delete:
+      x-pending: '3.7'
+      operationId: revokeMyOtherSessions
+      tags: [account]
+      summary: Ferme toutes les autres sessions de l'appelant
+      responses:
+        '204':
+          description: Sessions fermées.
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+  /api/me/sessions/{id}:
+    delete:
+      x-pending: '3.7'
+      operationId: revokeMySession
+      tags: [account]
+      summary: Ferme une session de l'appelant (404 pour celle d'autrui)
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      responses:
+        '204':
+          description: Session fermée.
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+  /api/me/2fa/enroll:
+    post:
+      x-pending: '3.7'
+      operationId: enrollTwoFactor
+      tags: [account]
+      summary: Commence l'enrôlement TOTP (ré-authentification par mot de passe)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PasswordConfirmation'
+      responses:
+        '200':
+          description: Graine à saisir dans l'application d'authentification (affichée une fois).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TwoFactorEnrollment'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+        '429':
+          $ref: '#/components/responses/Error'
+  /api/me/2fa/confirm:
+    post:
+      x-pending: '3.7'
+      operationId: confirmTwoFactor
+      tags: [account]
+      summary: Confirme la 2FA par un premier code ; renvoie les 10 codes de secours (affichés une fois)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TotpCode'
+      responses:
+        '200':
+          description: 2FA active.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BackupCodes'
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '429':
+          $ref: '#/components/responses/Error'
+  /api/me/2fa/backup-codes:
+    post:
+      x-pending: '3.7'
+      operationId: regenerateBackupCodes
+      tags: [account]
+      summary: Régénère les codes de secours (les anciens sont révoqués)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PasswordConfirmation'
+      responses:
+        '200':
+          description: Nouveaux codes (affichés une fois).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BackupCodes'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+  /api/me/2fa:
+    delete:
+      x-pending: '3.7'
+      operationId: disableTwoFactor
+      tags: [account]
+      summary: Retire la 2FA de l'appelant (mot de passe et code), refusé si MFA_ENFORCED le concerne
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TwoFactorDisable'
+      responses:
+        '204':
+          description: 2FA retirée.
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+  /api/me/audit:
+    get:
+      x-pending: '3.7'
+      operationId: listMyAuditEvents
+      tags: [audit]
+      summary: Événements d'audit de l'appelant (tous les rôles)
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Événements.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuditEventList'
+        '401':
+          $ref: '#/components/responses/Error'
+  /api/audit:
+    get:
+      x-pending: '3.7'
+      operationId: listAuditEvents
+      tags: [audit]
+      summary: Journal d'audit de l'instance (admin), métadonnées seulement
+      parameters:
+        - name: action
+          in: query
+          schema:
+            type: string
+        - name: actor
+          in: query
+          schema:
+            type: string
+            format: uuid
+        - name: outcome
+          in: query
+          schema:
+            $ref: '#/components/schemas/AuditOutcome'
+        - name: since
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: until
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Événements.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuditEventList'
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+  /api/audit/export:
+    get:
+      x-pending: '3.7'
+      operationId: exportAuditEvents
+      tags: [audit]
+      summary: Export NDJSON du journal d'audit (owner)
+      parameters:
+        - name: since
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: until
+          in: query
+          schema:
+            type: string
+            format: date-time
+      responses:
+        '200':
+          description: Une ligne JSON par événement (`AuditEvent`).
+          content:
+            application/x-ndjson:
+              schema:
+                type: string
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+  /api/subjects/erase:
+    post:
+      x-pending: '3.1'
+      operationId: eraseSubject
+      tags: [subjects]
+      summary: Effacement d'une personne (RGPD, 17 § 6), aperçu `dry_run` d'abord ; admin, audité
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SubjectEraseRequest'
+      responses:
+        '200':
+          description: Comptes par table (aperçu ou effacement réalisé).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SubjectEraseResult'
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+  /api/subjects/export:
+    post:
+      x-pending: '3.1'
+      operationId: exportSubject
+      tags: [subjects]
+      summary: Export des données d'une personne (droit d'accès, 17 § 6) ; admin, audité
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SubjectRequest'
+      responses:
+        '200':
+          description: Données de la personne.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SubjectExport'
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+  /api/tunnel/pairing-code:
+    post:
+      x-pending: '2.6'
+      operationId: createPairingCode
+      tags: [tunnel]
+      summary: Code d'appairage de l'extension, usage unique, 10 minutes (07 § 1) ; session récente exigée
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PasswordConfirmation'
+      responses:
+        '201':
+          description: Code créé.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PairingCode'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '429':
+          $ref: '#/components/responses/Error'
 components:
+  securitySchemes:
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: __Host-sy.session
+      description: Session d'interface (13 § 5) ; `sy.session` sans le préfixe `__Host-` quand PUBLIC_URL est en http (développement).
+    apiKey:
+      type: http
+      scheme: bearer
+      description: Clé d'API `sy_live_…` à scopes (13 § 8) ; jamais de scope d'administration.
+    metricsToken:
+      type: http
+      scheme: bearer
+      description: METRICS_TOKEN (14 § 3), distinct des clés d'API.
+  parameters:
+    Id:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    Slug:
+      name: slug
+      in: path
+      required: true
+      schema:
+        type: string
+        pattern: '^[a-z0-9][a-z0-9-]{0,62}$'
+    Version:
+      name: version
+      in: path
+      required: true
+      schema:
+        type: integer
+        minimum: 1
+    Cursor:
+      name: cursor
+      in: query
+      description: Curseur opaque renvoyé par la page précédente (`next_cursor`).
+      schema:
+        type: string
+    Limit:
+      name: limit
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 200
+    Wait:
+      name: wait
+      in: query
+      description: Attente synchrone maximale en secondes (05 § 2) ; au-delà, 202 et run à suivre.
+      schema:
+        type: integer
+        minimum: 0
+        maximum: 25
   responses:
     Error:
       description: "Erreur au format commun `{ error: { code, message } }` (le code est stable, jamais localisé)."
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiError'
+    Accepted:
+      description: Accepté ; run (ou enquête) à suivre par `GET /api/runs/{id}` ou le flux SSE (05 § 4.3).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/RunAccepted'
+    QueueFull:
+      description: File pleine (`queue_full`), au-delà de `max_concurrent_runs` ; réessayer après `Retry-After`.
+      headers:
+        Retry-After:
+          schema:
+            type: integer
       content:
         application/json:
           schema:
@@ -502,3 +2418,2029 @@ components:
             key:
               type: string
               description: Secret en clair, renvoyé une seule fois.
+    # ——— Énumérations fermées de 04b § 1 (miroir de packages/core/src/model/enums.ts) ———
+    ApiStatus:
+      type: string
+      enum: [enquete, sain, warning, reparation, erreur, action_requise, bloquee]
+    InvestigationPhase:
+      type: string
+      enum: [access_check, reconnaissance, awaiting_schema_validation, testing, done]
+    Visibility:
+      type: string
+      enum: [private, instance]
+    Execution:
+      description: Niveaux E1 à E6, du moins cher au plus cher (04 § 3.1).
+      type: string
+      enum: [fetch, fetch_in_page, playwright, agent_fetch, hybrid, agent]
+    Network:
+      type: string
+      enum: [direct, dc_proxy, res_proxy, tunnel]
+    StrategyCreator:
+      type: string
+      enum: [investigation, repair, user, revert, import]
+    RunTrigger:
+      type: string
+      enum: [mcp, rest, schedule, ui, canary]
+    RunState:
+      type: string
+      enum: [queued, running, waiting_tunnel, succeeded, failed, cancelled, skipped_tunnel_offline, skipped_window, skipped_quota, skipped_status, skipped_overlap]
+    RunOutcome:
+      type: string
+      enum: [clean, degraded, failed]
+    FailureClass:
+      description: Classe d'échec fermée (04b § 1), ou famille `llm_*` (08 § 1). Code stable, jamais localisé.
+      type: string
+      pattern: '^(transient|network|rate_limited|forbidden|blocked_by_protection|robots_disallowed|robots_unreachable|payment_required|auth_required|account_limit|not_found|extraction|code_error|run_budget_exceeded|budget_exceeded|llm_[a-z0-9_]+)$'
+    ReasonCode:
+      description: >-
+        Code de raison stable (06 § 4.2 : `retried`, `escalated`, `repaired`, `stale`, `reverted`, `cookie_expired`…),
+        traduit par la console ; jamais une phrase.
+      type: string
+      pattern: '^[a-z][a-z0-9_]*$'
+    ReasonMessage:
+      description: Phrase générée côté serveur, transmise en code et paramètres (traduite par la console, 06 § 4.1).
+      type: object
+      additionalProperties: false
+      required: [code, params]
+      properties:
+        code:
+          $ref: '#/components/schemas/ReasonCode'
+        params:
+          type: object
+          additionalProperties:
+            type: [string, number]
+    EventName:
+      description: >-
+        Noms d'événements du flux SSE (06 § 3). Toute trame porte `id:` (reprise par `Last-Event-ID`), `event:` et
+        `data:` (JSON). Un nom ajouté par le serveur (3.1) s'ajoute ici.
+      type: string
+      enum: [investigation.started, phase.started, schema.proposed, attempt.finished, status.changed, action.required]
+    # ——— Objets communs ———
+    Cost:
+      description: Coût en dollars ; `null` quand le prix est inconnu (jamais 0 par défaut, 08 § 1).
+      type: object
+      additionalProperties: false
+      required: [llm_usd, proxy_usd, total_usd]
+      properties:
+        llm_usd:
+          type: [number, 'null']
+        proxy_usd:
+          type: [number, 'null']
+        compute_usd:
+          type: [number, 'null']
+        total_usd:
+          type: [number, 'null']
+        estimated:
+          type: boolean
+    Tokens:
+      type: object
+      additionalProperties: false
+      required: [in, cached, out, reasoning, estimated]
+      properties:
+        in:
+          type: integer
+        cached:
+          type: integer
+        out:
+          type: integer
+        reasoning:
+          type: integer
+        estimated:
+          type: boolean
+    Requires:
+      type: object
+      additionalProperties: false
+      required: [session_domain, tunnel]
+      properties:
+        session_domain:
+          type: [string, 'null']
+        tunnel:
+          type: boolean
+    NetworkPolicy:
+      description: >-
+        Modes réseau autorisés pour l'API ; `res_proxy` est un opt-in explicite par API. Une API ne référence un proxy que
+        par son identifiant (08 § 2). Jamais de montée réseau après un refus (X4).
+      type: object
+      additionalProperties: false
+      required: [allow]
+      properties:
+        allow:
+          type: array
+          uniqueItems: true
+          items:
+            $ref: '#/components/schemas/Network'
+        proxy_ids:
+          type: array
+          items:
+            type: string
+            format: uuid
+        res_proxy_params:
+          type: object
+          additionalProperties: false
+          properties:
+            country:
+              type: string
+              pattern: '^[a-z]{2}$'
+    AccessPolicy:
+      description: '`robots` n''a qu''une valeur (INV11) : aucun réglage ne l''ignore.'
+      type: object
+      additionalProperties: false
+      required: [robots]
+      properties:
+        robots:
+          const: respect
+        report_id:
+          type: [string, 'null']
+          format: uuid
+        user_agent_contact:
+          type: string
+    DomainPacing:
+      type: object
+      additionalProperties: false
+      properties:
+        min_delay_ms:
+          type: integer
+          minimum: 0
+        max_requests_per_run:
+          type: integer
+          minimum: 1
+        max_wait_ms:
+          type: integer
+          minimum: 0
+    AccessReport:
+      description: Rapport d'accès, étape 0 de l'enquête (17 § 2) ; onglet « Accès » en lecture seule.
+      type: object
+      additionalProperties: false
+      required: [id, checked_at, robots, signal]
+      properties:
+        id:
+          type: string
+          format: uuid
+        checked_at:
+          type: string
+          format: date-time
+        signal:
+          description: Pastille Accès du catalogue (vert, orange, rouge).
+          type: string
+          enum: [allowed, review, disallowed]
+        robots:
+          type: object
+          additionalProperties: false
+          required: [status]
+          properties:
+            status:
+              type: string
+              enum: [allowed, disallowed, absent, unreachable]
+            fetched_at:
+              type: [string, 'null']
+              format: date-time
+            rule:
+              type: [string, 'null']
+        usage_signals:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [kind, value]
+            properties:
+              kind:
+                type: string
+              value:
+                type: string
+        llms_txt:
+          type: boolean
+        payment_offer:
+          type: [string, 'null']
+        official_api_url:
+          type: [string, 'null']
+    NextAction:
+      type: object
+      additionalProperties: false
+      required: [tool, args]
+      properties:
+        tool:
+          type: string
+        args:
+          type: object
+          additionalProperties: true
+    # ——— API (catalogue, fiche) ———
+    ApiSummary:
+      description: Ligne du catalogue (= élément de list_apis, plus les colonnes de 06 § 2).
+      type: object
+      required: [id, slug, description, status, status_reason, stale, execution, network, requires, avg_cost_usd, visibility]
+      properties:
+        id:
+          type: string
+          format: uuid
+        slug:
+          type: string
+        description:
+          type: string
+        status:
+          $ref: '#/components/schemas/ApiStatus'
+        status_reason:
+          oneOf:
+            - $ref: '#/components/schemas/ReasonMessage'
+            - type: 'null'
+        stale:
+          type: boolean
+        execution:
+          oneOf:
+            - $ref: '#/components/schemas/Execution'
+            - type: 'null'
+        network:
+          oneOf:
+            - $ref: '#/components/schemas/Network'
+            - type: 'null'
+        requires:
+          $ref: '#/components/schemas/Requires'
+        avg_cost_usd:
+          type: [number, 'null']
+        avg_cost_estimated:
+          type: boolean
+        last_run_at:
+          type: [string, 'null']
+          format: date-time
+        success_rate_30d:
+          type: [number, 'null']
+          minimum: 0
+          maximum: 1
+        access_signal:
+          type: [string, 'null']
+          enum: [allowed, review, disallowed, null]
+        visibility:
+          $ref: '#/components/schemas/Visibility'
+        owner_id:
+          type: string
+          format: uuid
+        pinned:
+          type: boolean
+        mcp_exposed:
+          type: boolean
+    ApiList:
+      type: object
+      additionalProperties: false
+      required: [apis, next_cursor]
+      properties:
+        apis:
+          type: array
+          items:
+            $ref: '#/components/schemas/ApiSummary'
+        next_cursor:
+          type: [string, 'null']
+    ApiDetail:
+      description: >-
+        Fiche (= get_api, entité Api de 04b § 1). Pour l'admin face à une API avec session d'autrui, `metadata_only`
+        vaut true et les schémas, l'échantillon et la stratégie sont absents (13 § 2, INV12).
+      allOf:
+        - $ref: '#/components/schemas/ApiSummary'
+        - type: object
+          required: [investigation_phase, current_strategy_version, metadata_only]
+          properties:
+            metadata_only:
+              type: boolean
+            project_id:
+              type: string
+              format: uuid
+            investigation_phase:
+              oneOf:
+                - $ref: '#/components/schemas/InvestigationPhase'
+                - type: 'null'
+            input_schema:
+              type: object
+              additionalProperties: true
+            output_schema:
+              type: object
+              additionalProperties: true
+            views:
+              type: object
+              additionalProperties: false
+              properties:
+                columns:
+                  type: array
+                  items:
+                    type: string
+            clean_streak:
+              type: integer
+            last_signal_at:
+              type: [string, 'null']
+              format: date-time
+            current_strategy_version:
+              type: [integer, 'null']
+            current_strategy:
+              oneOf:
+                - $ref: '#/components/schemas/StrategyVersionSummary'
+                - type: 'null'
+            network_policy:
+              $ref: '#/components/schemas/NetworkPolicy'
+            access_policy:
+              $ref: '#/components/schemas/AccessPolicy'
+            access_report:
+              oneOf:
+                - $ref: '#/components/schemas/AccessReport'
+                - type: 'null'
+            purpose:
+              type: [string, 'null']
+            legal_basis:
+              type: [string, 'null']
+            contains_personal_data:
+              type: boolean
+            allow_write_actions:
+              type: boolean
+            max_cost_usd:
+              type: [number, 'null']
+            budget_daily_usd:
+              type: [number, 'null']
+            domain_pacing:
+              $ref: '#/components/schemas/DomainPacing'
+            cost_estimate:
+              description: Coût estimé avant lancement (« ~0,002 $, médiane de 10 runs » ou « non estimé »).
+              type: object
+              additionalProperties: false
+              required: [median_usd, sample_size]
+              properties:
+                median_usd:
+                  type: [number, 'null']
+                sample_size:
+                  type: integer
+            session_owner:
+              description: Propriétaire de la session utilisée, quand ce n'est pas l'appelant (message de 06 § 2).
+              oneOf:
+                - type: object
+                  additionalProperties: false
+                  required: [id, display_name]
+                  properties:
+                    id:
+                      type: string
+                      format: uuid
+                    display_name:
+                      type: string
+                - type: 'null'
+            recent_runs:
+              type: array
+              items:
+                $ref: '#/components/schemas/RunSummary'
+            retention_days:
+              type: [integer, 'null']
+            created_at:
+              type: string
+              format: date-time
+    ApiCreate:
+      description: Entrée de create_api (05 § 4.1).
+      type: object
+      additionalProperties: false
+      required: [description, url]
+      properties:
+        description:
+          type: string
+          minLength: 1
+          maxLength: 2000
+        url:
+          type: string
+          format: uri
+          maxLength: 2048
+        example_output:
+          description: Exemple de sortie facultatif (objet ou tableau JSON).
+        auto_validate:
+          type: boolean
+        network_policy:
+          $ref: '#/components/schemas/NetworkPolicy'
+        wait_seconds:
+          type: integer
+          minimum: 0
+          maximum: 25
+        visibility:
+          $ref: '#/components/schemas/Visibility'
+        account_site_acknowledged:
+          description: Avertissement A11 confirmé (site à compte, 06 § 2).
+          type: boolean
+    ApiCreated:
+      type: object
+      additionalProperties: false
+      required: [api_id, slug, investigation_phase, proposed_output_schema, sample, access_report]
+      properties:
+        api_id:
+          type: string
+          format: uuid
+        slug:
+          type: string
+        investigation_phase:
+          oneOf:
+            - $ref: '#/components/schemas/InvestigationPhase'
+            - type: 'null'
+        proposed_output_schema:
+          type: [object, 'null']
+          additionalProperties: true
+        sample:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        access_report:
+          oneOf:
+            - $ref: '#/components/schemas/AccessReport'
+            - type: 'null'
+        run_id:
+          type: [string, 'null']
+          format: uuid
+    ApiPatch:
+      description: >-
+        Champs modifiables. Changer `output_schema` ou `input_schema` déclenche une ré-enquête. `access_policy` n'est pas
+        modifiable (INV11) ; une API avec session reste `private`.
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        description:
+          type: string
+          minLength: 1
+          maxLength: 2000
+        input_schema:
+          type: object
+          additionalProperties: true
+        output_schema:
+          type: object
+          additionalProperties: true
+        views:
+          type: object
+          additionalProperties: false
+          properties:
+            columns:
+              type: array
+              items:
+                type: string
+        network_policy:
+          $ref: '#/components/schemas/NetworkPolicy'
+        mcp_exposed:
+          type: boolean
+        pinned:
+          type: boolean
+        visibility:
+          $ref: '#/components/schemas/Visibility'
+        purpose:
+          type: [string, 'null']
+          maxLength: 2000
+        legal_basis:
+          type: [string, 'null']
+          maxLength: 2000
+        contains_personal_data:
+          type: boolean
+        max_cost_usd:
+          type: [number, 'null']
+          minimum: 0
+        budget_daily_usd:
+          type: [number, 'null']
+          minimum: 0
+        retention_days:
+          type: [integer, 'null']
+          minimum: 1
+    ApiExport:
+      description: Export portable d'une API (16 § 6), sans secret, session ni cookie ; format figé par la tâche 3.12.
+      type: object
+      additionalProperties: true
+      required: [format_version, api]
+      properties:
+        format_version:
+          type: integer
+        api:
+          type: object
+          additionalProperties: true
+    ValidateSchemaRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        output_schema:
+          type: object
+          additionalProperties: true
+        wait_seconds:
+          type: integer
+          minimum: 0
+          maximum: 25
+    InvestigateRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        note:
+          type: string
+          maxLength: 2000
+        exclude_executions:
+          description: Plan d'essais restreint avant exécution (06 § 2), dans les bornes de la politique réseau.
+          type: array
+          uniqueItems: true
+          items:
+            $ref: '#/components/schemas/Execution'
+    # ——— Runs ———
+    RunRequest:
+      description: Entrée de run_api (05 § 4.1), validée contre `input_schema` (400 `invalid_input`, aucun run créé).
+      type: object
+      additionalProperties: false
+      required: [input]
+      properties:
+        input:
+          type: object
+          additionalProperties: true
+        force_investigate:
+          type: boolean
+        strategy_version:
+          description: Relance avec une version précise (courante ou d'origine, 06 § 2).
+          type: integer
+          minimum: 1
+    RunAccepted:
+      type: object
+      additionalProperties: false
+      required: [run_id, state]
+      properties:
+        run_id:
+          type: string
+          format: uuid
+        state:
+          $ref: '#/components/schemas/RunState'
+        poll_after_seconds:
+          type: [integer, 'null']
+    RunResult:
+      description: Enveloppe commune des sorties d'exécution (05 § 4.1), identique en MCP et en REST.
+      type: object
+      additionalProperties: false
+      required: [run_id, state, status, items, total, dataset_id, truncated, next_cursor, degraded_reasons, message, next_action, poll_after_seconds, timeline, cost, console_url]
+      properties:
+        run_id:
+          type: string
+          format: uuid
+        state:
+          $ref: '#/components/schemas/RunState'
+        status:
+          $ref: '#/components/schemas/ApiStatus'
+        items:
+          type: array
+          maxItems: 20
+          items:
+            type: object
+            additionalProperties: true
+        total:
+          type: [integer, 'null']
+        dataset_id:
+          type: [string, 'null']
+          format: uuid
+        truncated:
+          type: boolean
+        next_cursor:
+          type: [string, 'null']
+        degraded_reasons:
+          type: array
+          items:
+            $ref: '#/components/schemas/ReasonCode'
+        message:
+          type: string
+        next_action:
+          oneOf:
+            - $ref: '#/components/schemas/NextAction'
+            - type: 'null'
+        poll_after_seconds:
+          type: [integer, 'null']
+        timeline:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        cost:
+          $ref: '#/components/schemas/Cost'
+        console_url:
+          type: string
+    RunCancelled:
+      type: object
+      additionalProperties: false
+      required: [run_id, state, cost]
+      properties:
+        run_id:
+          type: string
+          format: uuid
+        state:
+          const: cancelled
+        cost:
+          $ref: '#/components/schemas/Cost'
+    RunSummary:
+      description: 'Métadonnées d''un run (état, coût, durée, nombre d''items) : seule vue de l''admin sur les runs d''autrui.'
+      type: object
+      required: [id, api_id, api_slug, owner_id, trigger, state, outcome, degraded_reasons, failure_class, created_at, started_at, finished_at, duration_ms, cost, items]
+      properties:
+        id:
+          type: string
+          format: uuid
+        api_id:
+          type: string
+          format: uuid
+        api_slug:
+          type: string
+        owner_id:
+          type: string
+          format: uuid
+        strategy_version:
+          type: [integer, 'null']
+        trigger:
+          $ref: '#/components/schemas/RunTrigger'
+        state:
+          $ref: '#/components/schemas/RunState'
+        outcome:
+          oneOf:
+            - $ref: '#/components/schemas/RunOutcome'
+            - type: 'null'
+        degraded_reasons:
+          type: array
+          items:
+            $ref: '#/components/schemas/ReasonCode'
+        failure_class:
+          oneOf:
+            - $ref: '#/components/schemas/FailureClass'
+            - type: 'null'
+        retryable:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+        started_at:
+          type: [string, 'null']
+          format: date-time
+        finished_at:
+          type: [string, 'null']
+          format: date-time
+        duration_ms:
+          type: [integer, 'null']
+        cost:
+          $ref: '#/components/schemas/Cost'
+        items:
+          type: [integer, 'null']
+        dataset_id:
+          type: [string, 'null']
+          format: uuid
+        retention_until:
+          type: [string, 'null']
+          format: date-time
+    RunList:
+      type: object
+      additionalProperties: false
+      required: [runs, next_cursor]
+      properties:
+        runs:
+          type: array
+          items:
+            $ref: '#/components/schemas/RunSummary'
+        next_cursor:
+          type: [string, 'null']
+    RunAttempt:
+      description: Un essai de la cascade (exécution × réseau × résultat × coût) ; un essai élagué n'a pas été lancé (INV2).
+      type: object
+      additionalProperties: false
+      required: [index, execution, network, state, est_cost_usd, result, cost_usd, ms]
+      properties:
+        index:
+          type: integer
+        execution:
+          $ref: '#/components/schemas/Execution'
+        network:
+          $ref: '#/components/schemas/Network'
+        state:
+          type: string
+          enum: [running, done, pruned]
+        pruned_reason:
+          type: [string, 'null']
+        est_cost_usd:
+          type: [number, 'null']
+        result:
+          description: '`ok`, ou la classe d''échec de l''essai.'
+          type: [string, 'null']
+        cost_usd:
+          type: [number, 'null']
+        ms:
+          type: [integer, 'null']
+        model_id:
+          type: [string, 'null']
+        prompt_version:
+          type: [string, 'null']
+        engine:
+          type: [string, 'null']
+        tokens:
+          $ref: '#/components/schemas/Tokens'
+        error:
+          description: Onglet Erreur (Où, Quoi, Pourquoi, Que faire) en codes stables ; absent pour l'admin sur un run d'autrui.
+          oneOf:
+            - $ref: '#/components/schemas/ReasonMessage'
+            - type: 'null'
+    Run:
+      description: Détail d'un run (entité Run de 04b § 1) ; `metadata_only` pour l'admin face au run avec session d'autrui.
+      allOf:
+        - $ref: '#/components/schemas/RunSummary'
+        - type: object
+          required: [metadata_only, attempts, tokens]
+          properties:
+            metadata_only:
+              type: boolean
+            attempts:
+              type: array
+              items:
+                $ref: '#/components/schemas/RunAttempt'
+            tokens:
+              $ref: '#/components/schemas/Tokens'
+            trace_id:
+              type: [string, 'null']
+            input:
+              description: Entrée du run ; absente pour l'admin sur un run d'autrui.
+              type: object
+              additionalProperties: true
+    RunLogLine:
+      type: object
+      additionalProperties: false
+      required: [seq, at, level, code]
+      properties:
+        seq:
+          type: integer
+        at:
+          type: string
+          format: date-time
+        level:
+          type: string
+          enum: [debug, info, warn, error]
+        code:
+          type: string
+        attempt:
+          type: [integer, 'null']
+        data:
+          type: object
+          additionalProperties: true
+    RunLogList:
+      type: object
+      additionalProperties: false
+      required: [lines, next_after]
+      properties:
+        lines:
+          type: array
+          items:
+            $ref: '#/components/schemas/RunLogLine'
+        next_after:
+          type: [integer, 'null']
+    DatasetItems:
+      type: object
+      additionalProperties: false
+      required: [items, next_cursor]
+      properties:
+        items:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        next_cursor:
+          type: [string, 'null']
+    # ——— Stratégies et statut ———
+    StrategyVersionSummary:
+      type: object
+      required: [version, execution, network, est_cost_usd, created_by, parent_version, created_at]
+      properties:
+        version:
+          type: integer
+        execution:
+          $ref: '#/components/schemas/Execution'
+        network:
+          $ref: '#/components/schemas/Network'
+        est_cost_usd:
+          type: [number, 'null']
+        created_by:
+          $ref: '#/components/schemas/StrategyCreator'
+        parent_version:
+          type: [integer, 'null']
+        created_at:
+          type: string
+          format: date-time
+        validated_samples:
+          type: [integer, 'null']
+        run_id:
+          description: Enquête ou réparation qui a produit la version.
+          type: [string, 'null']
+          format: uuid
+    StrategyVersion:
+      allOf:
+        - $ref: '#/components/schemas/StrategyVersionSummary'
+        - type: object
+          required: [spec, script_ref]
+          properties:
+            spec:
+              description: Stratégie déclarative (04b § 2), ou null si la version est un script.
+              type: [object, 'null']
+              additionalProperties: true
+            script_ref:
+              type: [string, 'null']
+            patch:
+              description: Patch RFC 6902 (version produite par une réparation).
+              type: [array, 'null']
+              items:
+                type: object
+                additionalProperties: true
+    StrategyVersionList:
+      type: object
+      additionalProperties: false
+      required: [versions, next_cursor]
+      properties:
+        versions:
+          type: array
+          items:
+            $ref: '#/components/schemas/StrategyVersionSummary'
+        next_cursor:
+          type: [string, 'null']
+    StrategyDiff:
+      description: Diff à trois niveaux (06 § 2) ; la phrase est un code de raison avec ses paramètres.
+      type: object
+      additionalProperties: false
+      required: [from, to, summary, fields, raw]
+      properties:
+        from:
+          type: integer
+        to:
+          type: integer
+        summary:
+          $ref: '#/components/schemas/ReasonMessage'
+        fields:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [path, change]
+            properties:
+              path:
+                type: string
+              change:
+                type: string
+                enum: [added, removed, changed]
+              before: {}
+              after: {}
+        raw:
+          type: object
+          additionalProperties: false
+          required: [before, after]
+          properties:
+            before:
+              type: [object, 'null']
+              additionalProperties: true
+            after:
+              type: [object, 'null']
+              additionalProperties: true
+    StatusEvent:
+      type: object
+      additionalProperties: false
+      required: [id, at, from_status, to_status, reason, run_id]
+      properties:
+        id:
+          type: string
+        at:
+          type: string
+          format: date-time
+        from_status:
+          oneOf:
+            - $ref: '#/components/schemas/ApiStatus'
+            - type: 'null'
+        to_status:
+          $ref: '#/components/schemas/ApiStatus'
+        transition:
+          type: [integer, 'null']
+        reason:
+          oneOf:
+            - $ref: '#/components/schemas/ReasonMessage'
+            - type: 'null'
+        failure_class:
+          oneOf:
+            - $ref: '#/components/schemas/FailureClass'
+            - type: 'null'
+        run_id:
+          type: [string, 'null']
+          format: uuid
+    StatusEventList:
+      type: object
+      additionalProperties: false
+      required: [events, next_cursor]
+      properties:
+        events:
+          type: array
+          items:
+            $ref: '#/components/schemas/StatusEvent'
+        next_cursor:
+          type: [string, 'null']
+    # ——— Planifications (08 § 5) ———
+    ScheduleRules:
+      type: object
+      additionalProperties: false
+      properties:
+        only_if_tunnel_online:
+          type: boolean
+        window:
+          type: [object, 'null']
+          additionalProperties: false
+          required: [start, end]
+          properties:
+            start:
+              type: string
+              pattern: '^\d{2}:\d{2}$'
+            end:
+              type: string
+              pattern: '^\d{2}:\d{2}$'
+            days:
+              type: array
+              items:
+                type: integer
+                minimum: 0
+                maximum: 6
+        max_runs_per_day:
+          type: [integer, 'null']
+          minimum: 1
+        skip_if_status_in:
+          description: Défaut `[erreur, action_requise, bloquee]` (on ne sollicite pas un site qui a refusé).
+          type: array
+          items:
+            $ref: '#/components/schemas/ApiStatus'
+        dedup_key:
+          type: [string, 'null']
+        diff:
+          type: [string, 'null']
+          enum: [new, changed, removed, all, null]
+        alert_on:
+          type: array
+          uniqueItems: true
+          items:
+            type: string
+            enum: [new_items, status_change, error]
+    ScheduleWrite:
+      type: object
+      additionalProperties: false
+      required: [cron, timezone, input]
+      properties:
+        cron:
+          type: string
+          maxLength: 100
+        timezone:
+          type: string
+          maxLength: 64
+        input:
+          description: Entrée du run ; variables datées `{{today}}`, `{{yesterday}}`.
+          type: object
+          additionalProperties: true
+        overlap:
+          type: string
+          enum: [skip, queue, allow]
+          default: skip
+        missed:
+          type: string
+          enum: [once, skip]
+          default: once
+        rules:
+          $ref: '#/components/schemas/ScheduleRules'
+        enabled:
+          type: boolean
+    SchedulePatch:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        cron:
+          type: string
+          maxLength: 100
+        timezone:
+          type: string
+          maxLength: 64
+        input:
+          type: object
+          additionalProperties: true
+        overlap:
+          type: string
+          enum: [skip, queue, allow]
+        missed:
+          type: string
+          enum: [once, skip]
+        rules:
+          $ref: '#/components/schemas/ScheduleRules'
+        enabled:
+          type: boolean
+    Schedule:
+      type: object
+      additionalProperties: false
+      required: [id, api_slug, cron, timezone, input, overlap, missed, rules, enabled, next_runs, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        api_slug:
+          type: string
+        cron:
+          type: string
+        timezone:
+          type: string
+        input:
+          type: object
+          additionalProperties: true
+        overlap:
+          type: string
+          enum: [skip, queue, allow]
+        missed:
+          type: string
+          enum: [once, skip]
+        rules:
+          $ref: '#/components/schemas/ScheduleRules'
+        enabled:
+          type: boolean
+        paused_reason:
+          type: [string, 'null']
+        next_runs:
+          description: Prochaines exécutions calculées côté serveur (06 § 1, aucun composant cron dans la console).
+          type: array
+          items:
+            type: string
+            format: date-time
+        created_at:
+          type: string
+          format: date-time
+    ScheduleList:
+      type: object
+      additionalProperties: false
+      required: [schedules]
+      properties:
+        schedules:
+          type: array
+          items:
+            $ref: '#/components/schemas/Schedule'
+    # ——— Webhooks (Standard Webhooks, 08 § 5) ———
+    WebhookEvent:
+      type: string
+      enum: [run.succeeded, run.failed, api.status_changed, items.new]
+    WebhookDelivery:
+      type: object
+      additionalProperties: false
+      required: [id, at, event, attempt, status_code, duration_ms]
+      properties:
+        id:
+          type: string
+        at:
+          type: string
+          format: date-time
+        event:
+          $ref: '#/components/schemas/WebhookEvent'
+        attempt:
+          type: integer
+        status_code:
+          type: [integer, 'null']
+        duration_ms:
+          type: [integer, 'null']
+        excerpt:
+          type: [string, 'null']
+    WebhookSubscription:
+      type: object
+      required: [id, url, events, api_slug, status, tested_at, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        url:
+          type: string
+        events:
+          type: array
+          items:
+            $ref: '#/components/schemas/WebhookEvent'
+        api_slug:
+          description: API concernée, ou null pour l'alerte d'instance par défaut.
+          type: [string, 'null']
+        status:
+          type: string
+          enum: [active, disabled]
+        tested_at:
+          type: [string, 'null']
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
+        deliveries:
+          type: array
+          items:
+            $ref: '#/components/schemas/WebhookDelivery'
+    WebhookSubscriptionWrite:
+      type: object
+      additionalProperties: false
+      required: [url, events]
+      properties:
+        url:
+          type: string
+          format: uri
+          maxLength: 2048
+        events:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items:
+            $ref: '#/components/schemas/WebhookEvent'
+        api_slug:
+          type: [string, 'null']
+    WebhookSubscriptionPatch:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        url:
+          type: string
+          format: uri
+          maxLength: 2048
+        events:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items:
+            $ref: '#/components/schemas/WebhookEvent'
+        status:
+          type: string
+          enum: [active, disabled]
+        rotate_secret:
+          description: Nouveau secret ; l'ancien reste accepté pendant la rotation.
+          type: boolean
+    WebhookSubscriptionCreated:
+      allOf:
+        - $ref: '#/components/schemas/WebhookSubscription'
+        - type: object
+          properties:
+            secret:
+              description: Secret `whsec_…`, renvoyé une seule fois (création ou rotation).
+              type: string
+    WebhookSubscriptionList:
+      type: object
+      additionalProperties: false
+      required: [subscriptions]
+      properties:
+        subscriptions:
+          type: array
+          items:
+            $ref: '#/components/schemas/WebhookSubscription'
+    TestResult:
+      type: object
+      required: [ok, tested_at]
+      properties:
+        ok:
+          type: boolean
+        tested_at:
+          type: string
+          format: date-time
+        error:
+          description: Échec lisible, en code stable.
+          oneOf:
+            - $ref: '#/components/schemas/ReasonMessage'
+            - type: 'null'
+    # ——— Réglages (08 § 7, 13) : les secrets sont en écriture seule, jamais relus (INV8) ———
+    LlmPreset:
+      type: string
+      enum: [zai, openrouter, vllm, ollama, deepseek, qwen, openai, custom]
+    LlmProfile:
+      type: object
+      additionalProperties: false
+      properties:
+        tools:
+          type: boolean
+        tool_choice:
+          type: array
+          items:
+            type: string
+        structured:
+          type: string
+          enum: [json_schema, tool_forced, json_object, none]
+        stream_tools:
+          type: boolean
+        stream_usage:
+          type: boolean
+        cache:
+          type: boolean
+        reasoning_field:
+          type: [string, 'null']
+    LlmPrice:
+      type: object
+      additionalProperties: false
+      properties:
+        in:
+          type: number
+        in_cached:
+          type: number
+        in_cache_write:
+          type: number
+        out:
+          type: number
+        windows:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        as_of:
+          type: string
+    LlmModel:
+      type: object
+      additionalProperties: false
+      properties:
+        profile:
+          oneOf:
+            - $ref: '#/components/schemas/LlmProfile'
+            - type: 'null'
+        price:
+          oneOf:
+            - $ref: '#/components/schemas/LlmPrice'
+            - type: 'null'
+        extra_body:
+          type: object
+          additionalProperties: true
+    LlmRole:
+      type: object
+      additionalProperties: false
+      required: [provider, model]
+      properties:
+        provider:
+          type: string
+        model:
+          type: string
+        fallback:
+          type: [object, 'null']
+          additionalProperties: false
+          required: [provider, model]
+          properties:
+            provider:
+              type: string
+            model:
+              type: string
+        provider_routing:
+          type: object
+          additionalProperties: true
+    LlmRoles:
+      type: object
+      additionalProperties: false
+      properties:
+        investigate:
+          $ref: '#/components/schemas/LlmRole'
+        repair:
+          $ref: '#/components/schemas/LlmRole'
+        extract:
+          $ref: '#/components/schemas/LlmRole'
+        agent:
+          $ref: '#/components/schemas/LlmRole'
+    LlmProviderBase:
+      type: object
+      required: [id, preset, base_url]
+      properties:
+        id:
+          type: string
+          pattern: '^[a-z0-9][a-z0-9_-]{0,31}$'
+        preset:
+          $ref: '#/components/schemas/LlmPreset'
+        base_url:
+          type: string
+          maxLength: 2048
+        timeout_ms:
+          type: integer
+          minimum: 1000
+        max_retries:
+          type: integer
+          minimum: 0
+          maximum: 3
+        models:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/LlmModel'
+    LlmProvider:
+      allOf:
+        - $ref: '#/components/schemas/LlmProviderBase'
+        - type: object
+          required: [api_key_set, headers_set]
+          properties:
+            api_key_set:
+              type: boolean
+            headers_set:
+              type: boolean
+            api_key_unreadable:
+              description: Secret illisible (`secret_unreadable`, 06 § 4.2) ; à ressaisir.
+              type: boolean
+    LlmProviderWrite:
+      allOf:
+        - $ref: '#/components/schemas/LlmProviderBase'
+        - type: object
+          properties:
+            api_key:
+              description: Écriture seule ; absent = clé conservée.
+              type: string
+              writeOnly: true
+              maxLength: 4096
+            headers:
+              description: En-têtes personnalisés, chiffrés comme la clé ; écriture seule.
+              type: object
+              writeOnly: true
+              additionalProperties:
+                type: string
+    LlmSettingsCommon:
+      type: object
+      properties:
+        roles:
+          $ref: '#/components/schemas/LlmRoles'
+        redact:
+          type: object
+          additionalProperties: false
+          properties:
+            enabled:
+              type: boolean
+            patterns:
+              type: array
+              items:
+                type: string
+        log_prompts:
+          type: object
+          additionalProperties: false
+          properties:
+            enabled:
+              type: boolean
+            retention_days:
+              type: integer
+              minimum: 1
+    LlmSettings:
+      allOf:
+        - $ref: '#/components/schemas/LlmSettingsCommon'
+        - type: object
+          required: [providers]
+          properties:
+            providers:
+              type: array
+              items:
+                $ref: '#/components/schemas/LlmProvider'
+    LlmSettingsWrite:
+      allOf:
+        - $ref: '#/components/schemas/LlmSettingsCommon'
+        - type: object
+          required: [providers]
+          properties:
+            providers:
+              type: array
+              items:
+                $ref: '#/components/schemas/LlmProviderWrite'
+    LlmProbeRequest:
+      type: object
+      additionalProperties: false
+      required: [provider, model]
+      properties:
+        provider:
+          type: string
+        model:
+          type: string
+    LlmProbeResult:
+      allOf:
+        - $ref: '#/components/schemas/TestResult'
+        - type: object
+          properties:
+            profile:
+              oneOf:
+                - $ref: '#/components/schemas/LlmProfile'
+                - type: 'null'
+    ProxyType:
+      description: '`dc` : serveur ; `res` : résidentiel, opt-in par API (08 § 2).'
+      type: string
+      enum: [dc, res]
+    ProxyPrice:
+      type: object
+      additionalProperties: false
+      properties:
+        per_gb_usd:
+          type: [number, 'null']
+        per_request_usd:
+          type: [number, 'null']
+    Proxy:
+      type: object
+      additionalProperties: false
+      required: [id, label, type, url, username_set, password_set, params, price, tested_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        label:
+          type: string
+        type:
+          $ref: '#/components/schemas/ProxyType'
+        url:
+          description: Schéma, hôte et port, sans identifiants.
+          type: string
+        username_set:
+          type: boolean
+        password_set:
+          type: boolean
+        params:
+          type: object
+          additionalProperties:
+            type: string
+        username_template:
+          type: [string, 'null']
+        price:
+          $ref: '#/components/schemas/ProxyPrice'
+        tested_at:
+          type: [string, 'null']
+          format: date-time
+    ProxyWrite:
+      type: object
+      additionalProperties: false
+      required: [label, type, url]
+      properties:
+        label:
+          type: string
+          minLength: 1
+          maxLength: 100
+        type:
+          $ref: '#/components/schemas/ProxyType'
+        url:
+          type: string
+          maxLength: 2048
+        username:
+          type: string
+          writeOnly: true
+          maxLength: 1024
+        password:
+          type: string
+          writeOnly: true
+          maxLength: 1024
+        params:
+          type: object
+          additionalProperties:
+            type: string
+        username_template:
+          type: [string, 'null']
+          maxLength: 512
+        price:
+          $ref: '#/components/schemas/ProxyPrice'
+    ProxyPatch:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        label:
+          type: string
+          minLength: 1
+          maxLength: 100
+        url:
+          type: string
+          maxLength: 2048
+        username:
+          type: string
+          writeOnly: true
+          maxLength: 1024
+        password:
+          type: string
+          writeOnly: true
+          maxLength: 1024
+        params:
+          type: object
+          additionalProperties:
+            type: string
+        username_template:
+          type: [string, 'null']
+          maxLength: 512
+        price:
+          $ref: '#/components/schemas/ProxyPrice'
+    ProxyList:
+      type: object
+      additionalProperties: false
+      required: [proxies]
+      properties:
+        proxies:
+          type: array
+          items:
+            $ref: '#/components/schemas/Proxy'
+    ProxyTestResult:
+      allOf:
+        - $ref: '#/components/schemas/TestResult'
+        - type: object
+          properties:
+            exit_ip:
+              type: [string, 'null']
+            exit_country:
+              type: [string, 'null']
+    SmtpSettings:
+      type: object
+      additionalProperties: false
+      required: [host, port, security, from, username_set, password_set, tested_at]
+      properties:
+        host:
+          type: string
+        port:
+          type: integer
+        security:
+          type: string
+          enum: [tls, starttls, none]
+        from:
+          type: string
+        username_set:
+          type: boolean
+        password_set:
+          type: boolean
+        tested_at:
+          type: [string, 'null']
+          format: date-time
+    SmtpSettingsWrite:
+      type: object
+      additionalProperties: false
+      required: [host, port, security, from]
+      properties:
+        host:
+          type: string
+          maxLength: 255
+        port:
+          type: integer
+          minimum: 1
+          maximum: 65535
+        security:
+          type: string
+          enum: [tls, starttls, none]
+        from:
+          type: string
+          maxLength: 254
+        username:
+          type: string
+          writeOnly: true
+          maxLength: 1024
+        password:
+          type: string
+          writeOnly: true
+          maxLength: 1024
+    SecuritySettings:
+      type: object
+      additionalProperties: false
+      required: [session_idle_minutes, session_absolute_hours, allowed_email_domains, api_key_max_lifetime_days]
+      properties:
+        session_idle_minutes:
+          type: integer
+          minimum: 5
+        session_absolute_hours:
+          type: integer
+          minimum: 1
+        allowed_email_domains:
+          type: array
+          items:
+            type: string
+        api_key_max_lifetime_days:
+          type: integer
+          minimum: 1
+          maximum: 365
+        audit_retention_months:
+          type: integer
+          minimum: 1
+    SsoCommon:
+      type: object
+      properties:
+        enabled:
+          type: boolean
+        slug:
+          type: string
+          pattern: '^[a-z0-9][a-z0-9-]{0,31}$'
+        label:
+          type: string
+          maxLength: 100
+        issuer_url:
+          type: string
+          maxLength: 2048
+        client_id:
+          type: string
+          maxLength: 512
+        sso_required:
+          type: boolean
+        jit_provisioning:
+          type: object
+          additionalProperties: false
+          properties:
+            enabled:
+              type: boolean
+            domains:
+              type: array
+              items:
+                type: string
+        group_roles:
+          description: Correspondance groupe d'IdP → rôle ; `owner` n'est jamais attribuable.
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [group, role]
+            properties:
+              group:
+                type: string
+              role:
+                type: string
+                enum: [member, admin]
+    SsoSettings:
+      allOf:
+        - $ref: '#/components/schemas/SsoCommon'
+        - type: object
+          required: [enabled, slug, issuer_url, client_id, client_secret_set]
+          properties:
+            client_secret_set:
+              type: boolean
+    SsoSettingsWrite:
+      allOf:
+        - $ref: '#/components/schemas/SsoCommon'
+        - type: object
+          required: [enabled, slug, issuer_url, client_id]
+          properties:
+            client_secret:
+              description: Écriture seule ; absent = secret conservé.
+              type: string
+              writeOnly: true
+              maxLength: 4096
+    SsoPublic:
+      type: object
+      additionalProperties: false
+      required: [enabled, sso_required, providers]
+      properties:
+        enabled:
+          type: boolean
+        sso_required:
+          type: boolean
+        providers:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [slug, label]
+            properties:
+              slug:
+                type: string
+              label:
+                type: string
+    # ——— Comptes (13) ———
+    UserStatus:
+      type: string
+      enum: [invited, active, disabled]
+    User:
+      type: object
+      additionalProperties: false
+      required: [id, email, display_name, role, status, mfa_enabled, created_at, last_login_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        email:
+          type: string
+        display_name:
+          type: string
+        role:
+          $ref: '#/components/schemas/Role'
+        status:
+          $ref: '#/components/schemas/UserStatus'
+        mfa_enabled:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+        last_login_at:
+          type: [string, 'null']
+          format: date-time
+        disabled_at:
+          type: [string, 'null']
+          format: date-time
+    UserList:
+      type: object
+      additionalProperties: false
+      required: [users, next_cursor]
+      properties:
+        users:
+          type: array
+          items:
+            $ref: '#/components/schemas/User'
+        next_cursor:
+          type: [string, 'null']
+    UserPatch:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        role:
+          type: string
+          enum: [member, admin]
+        status:
+          type: string
+          enum: [active, disabled]
+    OneTimeLink:
+      type: object
+      additionalProperties: false
+      required: [link, expires_at]
+      properties:
+        link:
+          type: string
+        expires_at:
+          type: string
+          format: date-time
+    OwnerTransferRequest:
+      type: object
+      additionalProperties: false
+      required: [to_user_id, current_password, totp_code]
+      properties:
+        to_user_id:
+          type: string
+          format: uuid
+        current_password:
+          type: string
+          minLength: 1
+          maxLength: 1024
+        totp_code:
+          type: string
+          pattern: '^\d{6}$'
+    Invitation:
+      type: object
+      required: [id, email, role, invited_by, expires_at, created_at, accepted_at, revoked_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        email:
+          type: string
+        role:
+          type: string
+          enum: [member, admin]
+        invited_by:
+          type: string
+          format: uuid
+        expires_at:
+          type: string
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
+        accepted_at:
+          type: [string, 'null']
+          format: date-time
+        revoked_at:
+          type: [string, 'null']
+          format: date-time
+    InvitationList:
+      type: object
+      additionalProperties: false
+      required: [invitations]
+      properties:
+        invitations:
+          type: array
+          items:
+            $ref: '#/components/schemas/Invitation'
+    InvitationCreate:
+      type: object
+      additionalProperties: false
+      required: [email, role]
+      properties:
+        email:
+          type: string
+          maxLength: 254
+        role:
+          description: '`admin` seulement si l''invitant est l''owner.'
+          type: string
+          enum: [member, admin]
+    InvitationCreated:
+      allOf:
+        - $ref: '#/components/schemas/Invitation'
+        - type: object
+          required: [emailed, link]
+          properties:
+            emailed:
+              type: boolean
+            link:
+              description: Lien copiable, affiché une fois, seulement sans SMTP ; null si envoyé par e-mail.
+              type: [string, 'null']
+    InvitationAccept:
+      type: object
+      additionalProperties: false
+      required: [token, password]
+      properties:
+        token:
+          type: string
+          minLength: 1
+          maxLength: 1024
+        password:
+          type: string
+          minLength: 1
+          maxLength: 1024
+        display_name:
+          type: string
+          maxLength: 100
+    AuthSession:
+      type: object
+      additionalProperties: false
+      required: [id, created_at, last_seen_at, expires_at, current]
+      properties:
+        id:
+          type: string
+          format: uuid
+        created_at:
+          type: string
+          format: date-time
+        last_seen_at:
+          type: [string, 'null']
+          format: date-time
+        expires_at:
+          type: string
+          format: date-time
+        ip:
+          type: [string, 'null']
+        user_agent:
+          type: [string, 'null']
+        current:
+          type: boolean
+    AuthSessionList:
+      type: object
+      additionalProperties: false
+      required: [sessions]
+      properties:
+        sessions:
+          type: array
+          items:
+            $ref: '#/components/schemas/AuthSession'
+    PasswordConfirmation:
+      description: Ré-authentification (session récente exigée).
+      type: object
+      additionalProperties: false
+      required: [current_password]
+      properties:
+        current_password:
+          type: string
+          minLength: 1
+          maxLength: 1024
+    TotpCode:
+      type: object
+      additionalProperties: false
+      required: [code]
+      properties:
+        code:
+          type: string
+          pattern: '^\d{6}$'
+    TwoFactorEnrollment:
+      type: object
+      additionalProperties: false
+      required: [otpauth_uri, secret]
+      properties:
+        otpauth_uri:
+          type: string
+        secret:
+          description: Graine base32, affichée une seule fois pendant l'enrôlement.
+          type: string
+    BackupCodes:
+      type: object
+      additionalProperties: false
+      required: [backup_codes]
+      properties:
+        backup_codes:
+          type: array
+          minItems: 10
+          maxItems: 10
+          items:
+            type: string
+    TwoFactorDisable:
+      type: object
+      additionalProperties: false
+      required: [current_password, code]
+      properties:
+        current_password:
+          type: string
+          minLength: 1
+          maxLength: 1024
+        code:
+          description: Code TOTP ou code de secours.
+          type: string
+          maxLength: 32
+    AuditOutcome:
+      type: string
+      enum: [success, denied, error]
+    AuditEvent:
+      description: Événement d'audit ; `meta` ne contient ni secret, ni cookie, ni contenu, ni argument d'outil.
+      type: object
+      additionalProperties: false
+      required: [id, at, actor_user_id, actor_via, action, target_type, target_id, outcome, meta]
+      properties:
+        id:
+          type: string
+        at:
+          type: string
+          format: date-time
+        actor_user_id:
+          type: [string, 'null']
+          format: uuid
+        actor_via:
+          type: string
+          enum: [ui, apikey, mcp, sso, system]
+        actor_ref:
+          type: [string, 'null']
+        action:
+          type: string
+        target_type:
+          type: [string, 'null']
+        target_id:
+          type: [string, 'null']
+        outcome:
+          $ref: '#/components/schemas/AuditOutcome'
+        ip:
+          type: [string, 'null']
+        user_agent:
+          type: [string, 'null']
+        meta:
+          type: object
+          additionalProperties: true
+    AuditEventList:
+      type: object
+      additionalProperties: false
+      required: [events, next_cursor]
+      properties:
+        events:
+          type: array
+          items:
+            $ref: '#/components/schemas/AuditEvent'
+        next_cursor:
+          type: [string, 'null']
+    # ——— RGPD (17 § 6) et tunnel (07 § 1) ———
+    SubjectRequest:
+      type: object
+      required: [identifier]
+      properties:
+        identifier:
+          description: Identifiant de la personne (e-mail, téléphone, identifiant de plateforme).
+          type: string
+          minLength: 1
+          maxLength: 512
+        kind:
+          type: string
+          enum: [email, phone, other]
+    SubjectEraseRequest:
+      allOf:
+        - $ref: '#/components/schemas/SubjectRequest'
+        - type: object
+          required: [dry_run]
+          properties:
+            dry_run:
+              type: boolean
+    SubjectEraseResult:
+      type: object
+      additionalProperties: false
+      required: [dry_run, counts, excluded]
+      properties:
+        dry_run:
+          type: boolean
+        counts:
+          description: Occurrences par table (aperçu) ou supprimées.
+          type: object
+          additionalProperties:
+            type: integer
+        excluded:
+          description: Ajoutée à la liste d'exclusion hachée (faux en aperçu).
+          type: boolean
+    SubjectExport:
+      type: object
+      additionalProperties: false
+      required: [identifier, occurrences]
+      properties:
+        identifier:
+          type: string
+        occurrences:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [dataset_id, api_slug, item]
+            properties:
+              dataset_id:
+                type: string
+                format: uuid
+              api_slug:
+                type: string
+              item:
+                type: object
+                additionalProperties: true
+    PairingCode:
+      type: object
+      additionalProperties: false
+      required: [code, expires_at]
+      properties:
+        code:
+          description: Code à usage unique, valable 10 minutes.
+          type: string
+        expires_at:
+          type: string
+          format: date-time
+    # ——— Système ———
+    Version:
+      type: object
+      additionalProperties: false
+      required: [version, schema_version]
+      properties:
+        version:
+          type: string
+        schema_version:
+          type: integer
+    ProtectedResourceMetadata:
+      description: RFC 9728.
+      type: object
+      additionalProperties: true
+      required: [resource]
+      properties:
+        resource:
+          type: string
+        authorization_servers:
+          type: array
+          items:
+            type: string
+        bearer_methods_supported:
+          type: array
+          items:
+            type: string
+        scopes_supported:
+          type: array
+          items:
+            $ref: '#/components/schemas/ApiKeyScope'

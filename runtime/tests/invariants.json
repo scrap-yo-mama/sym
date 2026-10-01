@@ -45,6 +45,14 @@
   { "test": "assert_login_rate_limited", "invariant": "13 § 5", "tasks": ["0.3b"], "stage": "I1" },
   { "test": "assert_routes_use_rls", "invariant": "INV12", "tasks": ["0.3b"], "stage": "U1" },
   { "test": "assert_openapi_client_in_sync", "invariant": "06 § 1", "tasks": ["3.3", "3.6"], "stage": "contract" },
-  { "test": "assert_sse_banner_and_resume_last_event_id", "invariant": "06 § 3", "tasks": ["3.3", "3.6"], "stage": "U1, E2E" },
-  { "test": "assert_i18n_key_parity", "invariant": "06 § 4.2", "tasks": ["3.3", "3.9"], "stage": "U1" }
+  { "test": "assert_sse_banner_and_resume_last_event_id", "invariant": "06 § 3", "tasks": ["3.3", "3.6"], "stage": "U1, E2E",
+    "note": "3.6 : contrôle navigateur du vol de focus (document.activeElement inchangé pendant l'affichage et la disparition du bandeau) ; 3.3 ne vérifie que le rendu SSR" },
+  { "test": "assert_i18n_key_parity", "invariant": "06 § 4.2", "tasks": ["3.3", "3.9"], "stage": "U1" },
+  { "test": "assert_openapi_specified_covers_cdc", "invariant": "05 § 4.2, 13 § 13.1", "tasks": ["3.3"], "stage": "contract" },
+  { "test": "assert_openapi_specified_vs_delivered_drift", "invariant": "15 § 6", "tasks": ["3.3", "3.6"], "stage": "contract",
+    "note": "3.3 : toute route livrée est spécifiée, le reste porte x-pending ; 3.6 : rejoué contre l'OpenAPI générée par le serveur, liste d'attente vide" },
+  { "test": "assert_console_login_then_empty_authenticated_page", "invariant": "10 (critère de 3.3)", "tasks": ["3.3", "3.6"], "stage": "I1, E2E",
+    "note": "3.3 : serveur réel, client généré, session et garde du routeur sans navigateur ; 3.6 : même parcours en Chromium" },
+  { "test": "assert_a11y_axe_clean", "invariant": "06 § 1 (WCAG 2.2 AA, gate de recette)", "tasks": ["3.9", "3.6"], "stage": "E2E",
+    "note": "Gate portée par 3.9 sur chaque écran (clair, sombre, en, fr). 3.3 : passage axe ponctuel consigné dans l'ADR 0002" }
 ]

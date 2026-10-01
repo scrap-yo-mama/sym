@@ -7,7 +7,7 @@ import { createI18n } from 'vue-i18n';
 import { describe, expect, test } from 'vitest';
 import ConnectionBanner from '@/components/ConnectionBanner.vue';
 import en from '@/i18n/locales/en.json';
-import { defaultBackoff, EventStreamClient, SseParser, type SseEvent, type StreamStatus } from './sse';
+import { defaultBackoff, EventStreamClient, SseParser, STOP_ON_NOT_FOUND_DEFAULT, type SseEvent, type StreamStatus } from './sse';
 
 const frame = (id: string, data: string, event = 'run.updated') => `id: ${id}\nevent: ${event}\ndata: ${data}\n\n`;
 
@@ -141,6 +141,32 @@ describe('EventStreamClient', () => {
     expect(statuses).toEqual(['connecting', 'stopped']);
   });
 
+  test('une fois /api/events livré (3.1), une 404 est une coupure : bandeau et reconnexion, pas un arrêt silencieux', async () => {
+    let calls = 0;
+    const statuses: StreamStatus[] = [];
+    const client = new EventStreamClient({
+      url: '/api/events',
+      stopOnNotFound: false,
+      sleep: async () => undefined,
+      fetch: async (_url, init) => {
+        calls += 1;
+        if (calls === 1) return sseResponse([], { status: 404 });
+        return sseResponse([frame('1', '"a"')], { hold: init.signal as AbortSignal });
+      },
+    });
+    client.onStatus((status) => statuses.push(status));
+    client.start();
+    await until(() => client.status === 'live');
+    expect(calls).toBe(2);
+    expect(statuses).toEqual(['connecting', 'reconnecting', 'live']);
+    client.stop();
+  });
+
+  test('par défaut, la 404 n’arrête le flux que tant que le serveur n’enregistre pas GET /api/events', () => {
+    // Lien avec le registre des routes : voir tests/openapi-client.contract.test.ts (STOP_ON_NOT_FOUND_DEFAULT).
+    expect(typeof STOP_ON_NOT_FOUND_DEFAULT).toBe('boolean');
+  });
+
   test('un refus 503 déclenche une reconnexion avec attente croissante, puis la reprise', async () => {
     const waits: number[] = [];
     let calls = 0;
@@ -215,4 +241,8 @@ describe('ConnectionBanner', () => {
     expect(html).toContain(en.stream.reconnecting);
     expect(html).not.toMatch(/tabindex|autofocus|role="alert"/);
   });
+
+  // Ce rendu SSR ne prouve pas l'absence de vol de focus. Le contrôle navigateur est porté par la tâche 3.6
+  // (tests/invariants.json, `assert_sse_banner_and_resume_last_event_id`).
+  test.todo('3.6 : en navigateur, document.activeElement est inchangé pendant l’affichage puis la disparition du bandeau');
 });

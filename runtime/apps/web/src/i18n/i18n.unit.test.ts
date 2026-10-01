@@ -32,11 +32,31 @@ describe('fichiers de langue', () => {
     }
   });
 
-  test('aucun texte n’emploie un mot interdit par _exclusions (contourner, débloquer, passer, bypass, unblock, circumvent)', () => {
-    const forbidden = /(contourn|débloqu|\bpasser\b|bypass|unblock|circumvent)/i;
-    for (const [key, message] of [...english, ...french]) expect(message, key).not.toMatch(forbidden);
+  // Garde légère des fondations ; le test complet (messages REST et MCP compris, noms d'outils de protection) est
+  // `assert_ui_strings_no_forbidden_words`, livré par la tâche 3.5.
+  test('aucun texte n’emploie un mot interdit par 06 § 4.1 (contourner, débloquer, passer, bypass, unblock, circumvent)', () => {
+    for (const [key, message] of [...english, ...french]) expect(forbiddenWords(message), key).toEqual([]);
+  });
+
+  test('la garde reconnaît toutes les formes de « passer », sans viser « mot de passe » ni « dépasser »', () => {
+    for (const text of ['Passez outre', 'on passe outre la page', 'nous passons', 'passé outre', 'ils passent', 'il passait', 'passer', 'Contourne', 'débloquez', 'Bypassing', 'unblocked', 'circumvents']) {
+      expect(forbiddenWords(text), text).not.toEqual([]);
+    }
+    for (const text of ['Mot de passe', 'mots de passe oubliés', 'Password', 'budget dépassé', 'Le délai est dépassé', 'passport', 'compass']) {
+      expect(forbiddenWords(text), text).toEqual([]);
+    }
   });
 });
+
+/**
+ * Mots interdits trouvés dans `text` (06 § 4.1). Exceptions explicites : « mot(s) de passe » (champ de connexion) ;
+ * « dépasser » et l'anglais « password », « passport », « compass » ne sont pas des formes de « passer ».
+ */
+function forbiddenWords(text: string): string[] {
+  const cleaned = text.replace(/\bmots? de passe\b/giu, ' ');
+  const pattern = /contourn\p{L}*|débloqu\p{L}*|(?<!\p{L})pass(?:e|es|er|ez|ons|ent|é|ée|és|ées|ait|aient|ant|era|erai|erons|erez|eront)(?!\p{L})|bypass\p{L}*|unblock\p{L}*|circumvent\p{L}*/giu;
+  return [...cleaned.matchAll(pattern)].map((match) => match[0]);
+}
 
 describe('chargement paresseux', () => {
   test('seule la langue active et la langue de repli sont chargées', async () => {

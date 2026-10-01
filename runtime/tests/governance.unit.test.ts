@@ -3,7 +3,7 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, test } from 'vitest';
-import { addHeader, commentPrefix, expectedLicense, findSpdx, listSources, MIT_PACKAGES, missingHeaders } from '../scripts/spdx-headers.ts';
+import { addHeader, commentPrefix, expectedLicense, findSpdx, isVendored, listSources, MIT_PACKAGES, missingHeaders, VENDORED_COPYRIGHT } from '../scripts/spdx-headers.ts';
 
 const runtimeDir = new URL('..', import.meta.url).pathname;
 const repoRoot = join(runtimeDir, '..');
@@ -164,6 +164,11 @@ describe('en-têtes SPDX (4.7)', () => {
     expect(commentPrefix('scripts/hooks/pre-commit')).toBe('#');
     expect(commentPrefix('README.md')).toBeUndefined();
     expect(commentPrefix('package.json')).toBeUndefined();
+    // Composants Vue (3.3) : commentaire HTML en tête du SFC.
+    expect(commentPrefix('apps/web/src/App.vue')).toBe('<!--');
+    expect(findSpdx('<!-- SPDX-License-Identifier: MIT -->\n<script setup lang="ts">')).toBe('MIT');
+    expect(addHeader('<template />\n', '<!--', 'AGPL-3.0-only')).toBe('<!-- SPDX-License-Identifier: AGPL-3.0-only -->\n<template />\n');
+    expect(findSpdx(addHeader('<template />\n', '<!--', 'MIT'))).toBe('MIT');
   });
 
   test('licence attendue par paquet', () => {
@@ -172,6 +177,17 @@ describe('en-têtes SPDX (4.7)', () => {
     expect(expectedLicense(runtimeDir, 'packages/core/src/index.ts')).toBe('AGPL-3.0-only');
     expect(expectedLicense(runtimeDir, 'apps/server/src/index.ts')).toBe('AGPL-3.0-only');
     expect(expectedLicense(runtimeDir, 'scripts/ci-local.ts')).toBe('AGPL-3.0-only');
+    // Code copié de shadcn-vue (MIT) dans la console AGPL : il garde sa licence d'origine et son copyright (NOTICE).
+    expect(expectedLicense(runtimeDir, 'apps/web/src/components/ui/button/index.ts')).toBe('MIT');
+    expect(expectedLicense(runtimeDir, 'apps/web/src/components/ui/button/Button.vue')).toBe('MIT');
+    expect(expectedLicense(runtimeDir, 'apps/web/src/lib/utils.ts')).toBe('MIT');
+    expect(expectedLicense(runtimeDir, 'apps/web/src/components/ConnectionBanner.vue')).toBe('AGPL-3.0-only');
+  });
+
+  test('le code copié de shadcn-vue porte le copyright de ses auteurs en ligne 2', () => {
+    const vendored = listSources(runtimeDir).filter((file) => isVendored(file));
+    expect(vendored.length).toBeGreaterThan(10);
+    expect(vendored.filter((file) => !(rt(file).split('\n')[1] ?? '').includes(VENDORED_COPYRIGHT))).toEqual([]);
   });
 
   test('chaque source du dépôt porte un en-tête, cohérent avec la licence de son paquet (pnpm spdx:add pour corriger)', () => {
