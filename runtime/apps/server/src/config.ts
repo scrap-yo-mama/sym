@@ -1,6 +1,14 @@
 // Configuration de `server` (14 § 3) : lue une fois au démarrage, variables sensibles retirées de l'environnement.
 import { readFileSync } from 'node:fs';
-import { loadKeyring, Secret, secretValues, type Keyring } from '@runtime/core';
+import {
+  loadKeyring,
+  loadObservabilityConfig,
+  scrubOtelEnvironment,
+  Secret,
+  secretValues,
+  type Keyring,
+  type ObservabilityConfig,
+} from '@runtime/core';
 
 export class ConfigError extends Error {
   override name = 'ConfigError';
@@ -14,6 +22,10 @@ export type ServerConfig = {
   bootstrapToken: Secret | null;
   /** Si posé, l'assistant n'accepte que cette adresse. */
   adminEmail: string | null;
+  /** `METRICS_TOKEN` : sans jeton, `/metrics` répond 404 (fermé par défaut, 14 § 3). Jamais journalisé. */
+  metricsToken: Secret | null;
+  /** Journal, OTel (coupé par défaut), artefacts (niveau 0 par défaut) : 14 § 2. */
+  observability: ObservabilityConfig;
   port: number;
   host: string;
   /**
@@ -80,6 +92,13 @@ export function loadServerConfig(env: NodeJS.ProcessEnv = process.env): ServerCo
     throw new ConfigError(`ADMIN_BOOTSTRAP_TOKEN trop court (${BOOTSTRAP_TOKEN_MIN_LENGTH} caractères minimum) : générez-le avec \`openssl rand -base64 32\`.`);
   }
   if (token !== undefined) secretValues.add(token); // masquage par valeur si jamais il atteignait un journal
+  const metricsToken = readSecretVariable(env, 'METRICS_TOKEN');
+  if (metricsToken !== undefined && metricsToken.length < BOOTSTRAP_TOKEN_MIN_LENGTH) {
+    throw new ConfigError(`METRICS_TOKEN trop court (${BOOTSTRAP_TOKEN_MIN_LENGTH} caractères minimum) : générez-le avec \`openssl rand -base64 32\`.`);
+  }
+  if (metricsToken !== undefined) secretValues.add(metricsToken);
+  const observability = loadObservabilityConfig(env);
+  scrubOtelEnvironment(env);
   const keyring = loadKeyring(env);
   return {
     databaseUrl,
@@ -87,6 +106,8 @@ export function loadServerConfig(env: NodeJS.ProcessEnv = process.env): ServerCo
     keyring,
     bootstrapToken: token === undefined ? null : new Secret(token),
     adminEmail: env['ADMIN_EMAIL']?.trim().toLowerCase() || null,
+    metricsToken: metricsToken === undefined ? null : new Secret(metricsToken),
+    observability,
     port: Number(env['PORT'] ?? 3000),
     host: env['HOST'] ?? '0.0.0.0',
     trustProxy: parseTrustProxy(env['TRUST_PROXY']),

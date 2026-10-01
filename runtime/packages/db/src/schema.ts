@@ -476,6 +476,8 @@ export const runArtifacts = pgTable(
     ciphertext: bytea('ciphertext').notNull(),
     nonce: bytea('nonce').notNull(),
     keyVersion: integer('key_version').notNull(),
+    dekWrapped: bytea('dek_wrapped').notNull().default(sql`'\\x'`),
+    alg: text('alg').notNull().default('aes-256-gcm'),
     createdAt: createdAt(),
   },
   (t) => [index('run_artifacts_owner_id_idx').on(t.ownerId), index('run_artifacts_run_id_idx').on(t.runId)],

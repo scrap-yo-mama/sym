@@ -1,24 +1,31 @@
 // Démarrage de `server` (14 § 7, 13 § 4) : configuration, schéma à jour, verrou partagé des secrets, `keyCheck`
 // AVANT d'écouter (MASTER_KEY différente → refus clair), puis jeton d'amorçage exigé tant qu'aucun owner n'existe.
+import { initTelemetry, type Telemetry } from '@runtime/core';
 import { currentSchemaVersion, createDb, expectedSchemaVersion, holdSecretsLock, keyCheck } from '@runtime/db';
-import type { FastifyInstance } from 'fastify';
+import type { FastifyBaseLogger, FastifyInstance } from 'fastify';
 import pg from 'pg';
 import { buildServer } from './app.js';
 import { createAuth } from './auth/better-auth.js';
 import { loadServerConfig, type ServerConfig } from './config.js';
 import { initializedProbe, type ServerContext } from './context.js';
+import { createMetricsRegistry } from './metrics.js';
 
 class StartupError extends Error {
   override name = 'StartupError';
 }
 
-export type Started = { app: FastifyInstance; ctx: ServerContext; config: ServerConfig; close: () => Promise<void> };
+export type Started = { app: FastifyInstance; ctx: ServerContext; config: ServerConfig; telemetry: Telemetry; close: () => Promise<void> };
 
 /** Prépare le serveur sans écouter (les tests l'utilisent avec `inject`). Toute erreur arrête tout. */
-export async function prepareServer(env: NodeJS.ProcessEnv = process.env, options: { logger?: boolean } = {}): Promise<Started> {
+export async function prepareServer(env: NodeJS.ProcessEnv = process.env, options: { logger?: boolean; loggerInstance?: FastifyBaseLogger } = {}): Promise<Started> {
   const config = loadServerConfig(env);
+  // OTel : coupé par défaut (aucun module chargé) ; actif seulement si `OTEL_ENABLED=true` avec un endpoint explicite.
+  const telemetry = await initTelemetry(config.observability.otel);
   const { db, pool } = createDb(config.databaseUrl, 10);
   const lockClient = new pg.Client({ connectionString: config.databaseUrl, application_name: 'runtime-server-lock' });
+  // Avant que le journal existe : une erreur de connexion pendant le démarrage est levée par les appels en cours.
+  pool.on('error', () => undefined);
+  lockClient.on('error', () => undefined);
   let releaseLock: (() => Promise<void>) | undefined;
   try {
     const expected = expectedSchemaVersion();
@@ -51,20 +58,28 @@ export async function prepareServer(env: NodeJS.ProcessEnv = process.env, option
       adminEmail: config.adminEmail,
       keyFingerprint: checked.fingerprint,
       expectedSchemaVersion: expected,
+      keyring: config.keyring,
+      metricsToken: config.metricsToken,
+      metrics: createMetricsRegistry(pool),
       isInitialized,
     };
-    const app = buildServer(ctx, { ...options, trustProxy: config.trustProxy });
+    const app = buildServer(ctx, { ...options, logLevel: config.observability.logLevel, trustProxy: config.trustProxy });
+    // Une base coupée ne doit pas tuer le processus : `/api/ready` répond 503 pendant ce temps, `/api/health` reste 200.
+    pool.on('error', (error) => app.log.error({ err: error }, 'pool : connexion perdue'));
+    lockClient.on('error', (error) => app.log.error({ err: error }, 'verrou des secrets : connexion perdue'));
     const close = async () => {
       await app.close();
       await releaseLock?.().catch(() => undefined);
       await lockClient.end().catch(() => undefined);
       await pool.end();
+      await telemetry.shutdown();
     };
-    return { app, ctx, config, close };
+    return { app, ctx, config, telemetry, close };
   } catch (error) {
     await releaseLock?.().catch(() => undefined);
     await lockClient.end().catch(() => undefined);
     await pool.end().catch(() => undefined);
+    await telemetry.shutdown().catch(() => undefined);
     throw error;
   }
 }

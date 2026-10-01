@@ -1,5 +1,5 @@
 // Configuration de `worker` (14 § 2-4) : lue une fois au démarrage ; MASTER_KEY retirée de l'environnement.
-import { loadKeyring, type Keyring } from '@runtime/core';
+import { loadKeyring, loadObservabilityConfig, scrubOtelEnvironment, type Keyring, type ObservabilityConfig } from '@runtime/core';
 import { RUN_DEFAULTS } from '@runtime/db';
 
 export class WorkerConfigError extends Error {
@@ -22,6 +22,8 @@ export type WorkerConfig = {
   sweepIntervalSeconds: number;
   workerHeartbeatSeconds: number;
   queuePollingSeconds: number;
+  /** Journal, OTel (coupé par défaut) : 14 § 2. */
+  observability: ObservabilityConfig;
 };
 
 function positive(env: NodeJS.ProcessEnv, name: string, fallback: number, min = 0.1): number {
@@ -43,6 +45,8 @@ export function loadWorkerConfig(env: NodeJS.ProcessEnv = process.env): WorkerCo
   if (runStaleSeconds < 2 * runHeartbeatSeconds) {
     throw new WorkerConfigError('RUN_STALE_SECONDS doit valoir au moins 2 × RUN_HEARTBEAT_SECONDS.');
   }
+  const observability = loadObservabilityConfig(env);
+  scrubOtelEnvironment(env);
   const keyring = loadKeyring(env);
   return {
     databaseUrl,
@@ -58,5 +62,6 @@ export function loadWorkerConfig(env: NodeJS.ProcessEnv = process.env): WorkerCo
     sweepIntervalSeconds: positive(env, 'SWEEP_INTERVAL_SECONDS', RUN_DEFAULTS.sweepIntervalSeconds),
     workerHeartbeatSeconds: positive(env, 'WORKER_HEARTBEAT_SECONDS', 15),
     queuePollingSeconds: positive(env, 'QUEUE_POLLING_SECONDS', 2, 0.5),
+    observability,
   };
 }

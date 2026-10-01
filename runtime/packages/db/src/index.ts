@@ -5,8 +5,10 @@ import * as schema from './schema.js';
 
 export const PACKAGE_NAME = '@runtime/db';
 
+export * from './artifacts.js';
 export * from './audit.js';
 export * from './connection.js';
+export * from './health.js';
 export * from './migrate.js';
 export * from './partitions.js';
 export * from './rls.js';

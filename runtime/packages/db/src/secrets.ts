@@ -2,6 +2,7 @@
 // rotation `rekey` reprenable. Aucune fonction ne renvoie une valeur en clair hors d'un `Secret`.
 import { randomUUID } from 'node:crypto';
 import {
+  artifactAad,
   createKeyCheck,
   kekFor,
   openSecret,
@@ -12,6 +13,7 @@ import {
   secretAad,
   secretValues,
   verifyKeyCheck,
+  type Kek,
   type KeyCheckRecord,
   type Keyring,
   type MasterKey,
@@ -39,7 +41,7 @@ export const ENCRYPTED_COLUMNS = [
   { table: 'secrets', column: 'ciphertext', coveredBy: 'rekey' },
   { table: 'settings', column: 'value', key: KEY_CHECK_SETTING, coveredBy: 'rekey' },
   { table: 'site_sessions', column: 'ciphertext', coveredBy: '1.10' },
-  { table: 'run_artifacts', column: 'ciphertext', coveredBy: '1.10' },
+  { table: 'run_artifacts', column: 'ciphertext', coveredBy: 'rekey' },
   { table: 'two_factor', column: 'secret_ciphertext', coveredBy: '3.7' },
 ] as const;
 
@@ -331,8 +333,9 @@ export async function rekey(
           );
           rotated += 1;
         }
+        const artifacts = await rotateArtifacts(client, state.from, from, to, batchSize);
         await client.query('COMMIT');
-        if (rows.length === 0) break;
+        if (rows.length === 0 && artifacts === 0) break;
       } catch (error) {
         await client.query('ROLLBACK');
         throw error;
@@ -346,6 +349,8 @@ export async function rekey(
         [state.to],
       );
       if ((rows[0]?.n ?? 0) > 0) throw new KeyCheckError(`${rows[0]?.n} secret(s) encore hors de la version ${state.to} : rotation non terminée.`);
+      const leftover = await client.query<{ n: number }>('SELECT count(*)::int AS n FROM run_artifacts WHERE key_version <> $1', [state.to]);
+      if ((leftover.rows[0]?.n ?? 0) > 0) throw new KeyCheckError(`${leftover.rows[0]?.n} artefact(s) encore hors de la version ${state.to} : rotation non terminée.`);
       await writeSetting(client, KEY_CHECK_SETTING, createKeyCheck(current, state.to));
       await client.query('DELETE FROM settings WHERE key = $1', [REKEY_STATE_SETTING]);
       await client.query('COMMIT');
@@ -357,6 +362,46 @@ export async function rekey(
   } finally {
     await client.query('SELECT pg_advisory_unlock($1::bigint)', [REKEY_LOCK_KEY]);
   }
+}
+
+/**
+ * Re-chiffre un lot d'artefacts de run (14 § 10) dans la transaction de `rekey`. Un artefact que l'ancienne clé
+ * n'ouvre pas est supprimé (éphémère : rétention de 7 jours, rien à « ressaisir »). Renvoie le nombre de lignes traitées.
+ */
+async function rotateArtifacts(client: pg.ClientBase, fromVersion: number, from: Kek, to: Kek, batchSize: number): Promise<number> {
+  const { rows } = await client.query<{
+    id: string;
+    run_id: string;
+    owner_id: string;
+    kind: string;
+    ciphertext: Buffer;
+    nonce: Buffer;
+    alg: string;
+    dek_wrapped: Buffer;
+    key_version: number;
+  }>(
+    `SELECT id, run_id, owner_id, kind, ciphertext, nonce, alg, dek_wrapped, key_version FROM run_artifacts
+     WHERE key_version = $1 ORDER BY id LIMIT $2 FOR UPDATE`,
+    [fromVersion, batchSize],
+  );
+  for (const row of rows) {
+    const aad = artifactAad({ id: row.id, runId: row.run_id, ownerId: row.owner_id, kind: row.kind });
+    try {
+      const next = rotate({ ciphertext: row.ciphertext, nonce: row.nonce, alg: row.alg, dekWrapped: row.dek_wrapped, kekVersion: row.key_version }, from, to, aad);
+      await client.query('UPDATE run_artifacts SET ciphertext = $2, nonce = $3, dek_wrapped = $4, alg = $5, key_version = $6 WHERE id = $1', [
+        row.id,
+        next.ciphertext,
+        next.nonce,
+        next.dekWrapped,
+        next.alg,
+        next.kekVersion,
+      ]);
+    } catch (error) {
+      if (!(error instanceof SecretDecryptError)) throw error;
+      await client.query('DELETE FROM run_artifacts WHERE id = $1', [row.id]);
+    }
+  }
+  return rows.length;
 }
 
 /** Colonnes chiffrées pas encore couvertes par `rekey` : elles doivent être vides, sinon refus. */

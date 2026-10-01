@@ -12,3 +12,4 @@ export type * from './agent/engine.js';
 export * from './model/index.js';
 export * from './schema/index.js';
 export * from './run/index.js';
+export * from './observability/index.js';

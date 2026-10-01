@@ -9,17 +9,22 @@
 import { randomBytes } from 'node:crypto';
 import { hostname } from 'node:os';
 import {
-  loggerRedaction,
+  createLogger,
+  initTelemetry,
   RUN_QUEUE,
   RUN_SHUTDOWN_DETAIL,
   secretValues,
+  withRunContext,
+  withSpan,
   type RunExecutor,
   type RunJobData,
   type RunResult,
+  type SpanHandle,
 } from '@runtime/core';
 import {
   beatWorker,
   claimRun,
+  createRunLogger,
   currentSchemaVersion,
   expectedSchemaVersion,
   finishRun,
@@ -36,7 +41,7 @@ import {
   type SweepResult,
 } from '@runtime/db';
 import pg from 'pg';
-import { pino, type Logger } from 'pino';
+import type { Logger } from 'pino';
 import type { WorkerConfig } from './config.js';
 
 class WorkerStartupError extends Error {
@@ -79,7 +84,9 @@ const errorDetail = (error: unknown): string =>
 
 export async function startWorker(options: StartWorkerOptions): Promise<Worker> {
   const { config } = options;
-  const log = options.logger ?? pino({ name: 'worker', ...loggerRedaction() }); // masquage INV8
+  const log = options.logger ?? createLogger({ name: 'worker', level: config.observability.logLevel }); // masquage INV8, run_id par AsyncLocalStorage
+  // OTel : coupé par défaut (aucun module chargé) ; actif seulement si `OTEL_ENABLED=true` avec un endpoint explicite.
+  const telemetry = await initTelemetry(config.observability.otel);
   const executor = options.executor ?? unavailableExecutor;
   const workerId = options.workerId ?? `${hostname()}-${process.pid}-${randomBytes(3).toString('hex')}`;
 
@@ -99,6 +106,7 @@ export async function startWorker(options: StartWorkerOptions): Promise<Worker> 
     await releaseLock?.().catch(() => undefined);
     await lockClient.end().catch(() => undefined);
     await pool.end().catch(() => undefined);
+    await telemetry.shutdown().catch(() => undefined);
   };
 
   try {
@@ -152,12 +160,23 @@ export async function startWorker(options: StartWorkerOptions): Promise<Worker> 
       .finally(() => (sweeping = false));
   }, config.sweepIntervalSeconds * 1000);
 
-  const execute = async (runId: string, jobId: string, jobSignal: AbortSignal): Promise<void> => {
+  const execute = (runId: string, jobId: string, jobSignal: AbortSignal, trace: string | undefined): Promise<void> =>
+    withRunContext(runId, () =>
+      withSpan('run.execute', { attributes: { run_id: runId }, parentTraceparent: trace ?? null }, (span) => executeRun(runId, jobId, jobSignal, span)),
+    );
+
+  const executeRun = async (runId: string, jobId: string, jobSignal: AbortSignal, span: SpanHandle): Promise<void> => {
     const claim = await claimRun(pool, { runId, jobId, workerId });
     if (!claim) {
       log.info({ runId, jobId }, 'job sans run à prendre (annulé ou repris) : ignoré');
       return;
     }
+    const runLog = await createRunLogger(
+      pool,
+      { runId, ownerId: claim.ownerId },
+      { minLevel: config.observability.logLevel, onError: (error) => log.warn({ err: errorDetail(error) }, 'run_logs : écriture impossible') },
+    );
+    await runLog.log('info', 'run_claimed', { worker: workerId, job: jobId });
     const controller = new AbortController();
     let resolveDone!: () => void;
     const entry: Running = { runId, jobId, controller, cause: null, done: new Promise((r) => (resolveDone = r)) };
@@ -190,6 +209,7 @@ export async function startWorker(options: StartWorkerOptions): Promise<Worker> 
           recordAttempt: async (attempt) => {
             await recordAttempt(pool, runId, jobId, attempt);
           },
+          log: runLog.log,
         });
       } catch (error) {
         result = controller.signal.aborted
@@ -202,6 +222,13 @@ export async function startWorker(options: StartWorkerOptions): Promise<Worker> 
       // Bail perdu ou arrêt : le run a déjà été annulé, repris ou remis en file ; rien n'est écrit.
       if (entry.cause === 'lease_lost' || entry.cause === 'shutdown') return;
       const closed = await finishRun(pool, runId, jobId, result);
+      if (result.state === 'failed') span.fail(result.failure_class);
+      span.setAttribute('run.state', result.state);
+      await runLog.log(result.state === 'failed' ? 'warn' : 'info', 'run_finished', {
+        state: result.state,
+        ...(result.state === 'failed' ? { failure_class: result.failure_class } : {}),
+        closed,
+      });
       log.info({ runId, state: result.state, closed }, 'run terminé');
     } finally {
       clearInterval(heartbeat);
@@ -217,7 +244,7 @@ export async function startWorker(options: StartWorkerOptions): Promise<Worker> 
       log.error({ jobId: job.id }, 'job de run sans run_id : ignoré');
       return;
     }
-    await execute(runId, job.id, job.signal);
+    await execute(runId, job.id, job.signal, typeof job.data._trace === 'string' ? job.data._trace : undefined);
   });
 
   let stopping: Promise<void> | undefined;
@@ -252,6 +279,7 @@ export async function startWorker(options: StartWorkerOptions): Promise<Worker> 
       await releaseLock?.().catch(() => undefined);
       await lockClient.end().catch(() => undefined);
       await pool.end().catch(() => undefined);
+      await telemetry.shutdown().catch(() => undefined);
       log.info('worker arrêté');
     })());
 

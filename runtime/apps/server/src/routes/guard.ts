@@ -174,3 +174,20 @@ export function guard(ctx: ServerContext) {
     if (spec.permission && !can(actor.role, spec.permission)) return denied('role');
   };
 }
+
+/**
+ * Identité d'une requête sur une route publique qui offre un complément réservé aux administrateurs
+ * (`/api/ready?detail=1`) : même résolution que le garde (clé d'API ou session), sans audit ni contrôle d'Origin
+ * (lecture seule). `null` : non authentifié.
+ */
+export async function identify(ctx: ServerContext, request: FastifyRequest, reply: FastifyReply): Promise<Actor | null> {
+  const authorization = request.headers.authorization;
+  let resolution: Resolution;
+  if (typeof authorization === 'string' && authorization.length > 0) {
+    const match = /^Bearer (\S+)$/.exec(authorization);
+    resolution = match?.[1] ? await resolveApiKey(ctx, request, match[1]) : { status: 401 };
+  } else {
+    resolution = await resolveSession(ctx, request, reply);
+  }
+  return 'status' in resolution ? null : resolution.actor;
+}

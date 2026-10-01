@@ -1,6 +1,7 @@
 // Dépendances partagées par les routes.
-import type { Secret } from '@runtime/core';
+import type { Keyring, Secret } from '@runtime/core';
 import type pg from 'pg';
+import type { Registry } from 'prom-client';
 import type { Auth } from './auth/better-auth.js';
 
 export type ServerContext = {
@@ -14,6 +15,11 @@ export type ServerContext = {
   /** Empreinte de MASTER_KEY, affichée une fois par l'assistant (13 § 4). */
   keyFingerprint: string;
   expectedSchemaVersion: number;
+  /** Clés de ce processus : `/api/ready` vérifie `key_check` sans rien écrire. */
+  keyring: Keyring;
+  /** `METRICS_TOKEN` (null : `/metrics` fermé, 404). */
+  metricsToken: Secret | null;
+  metrics: Registry;
   /** Vrai dès qu'un owner existe (mis en cache : l'état ne revient jamais en arrière). */
   isInitialized: () => Promise<boolean>;
 };

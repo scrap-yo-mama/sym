@@ -44,6 +44,11 @@ export function secretAad(row: { id: string; kind: string; ownerId: string | nul
   return aadString(['secret', row.id, row.kind, row.ownerId ?? 'instance']);
 }
 
+/** AAD d'une ligne de `run_artifacts` : `artifact|id|run_id|owner_id|kind` (l'artefact est lié à son run et à son propriétaire). */
+export function artifactAad(row: { id: string; runId: string; ownerId: string; kind: string }): string {
+  return aadString(['artifact', row.id, row.runId, row.ownerId, row.kind]);
+}
+
 function gcmEncrypt(key: Buffer, plaintext: Buffer, aad: Buffer): { nonce: Buffer; data: Buffer } {
   const nonce = randomBytes(NONCE_BYTES);
   const cipher = createCipheriv('aes-256-gcm', key, nonce, { authTagLength: TAG_BYTES });
