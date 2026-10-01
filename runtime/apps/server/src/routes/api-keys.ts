@@ -12,6 +12,7 @@ import {
 } from '@runtime/core';
 import { withActor } from '@runtime/db';
 import type { FastifyInstance } from 'fastify';
+import { readSecuritySettings } from '../auth/security-settings.js';
 import type { ServerContext } from '../context.js';
 import { AttemptLimiter } from '../rate-limit.js';
 import { audit, notFound, sendError } from './guard.js';
@@ -93,7 +94,12 @@ export function apiKeyRoutes(app: FastifyInstance, ctx: ServerContext): void {
       return sendError(reply, 403, 'reauth_failed', 'mot de passe actuel incorrect');
     }
     reauth.reset(actor.userId);
-    const days = request.body.expiresInDays ?? API_KEY_DEFAULT_LIFETIME_DAYS;
+    // Plafond réglé par l'owner (13 § 8, `api_key_max_lifetime_days`) : jamais au-delà, la durée par défaut s'y plie.
+    const cap = (await readSecuritySettings(ctx.pool)).api_key_max_lifetime_days;
+    if (request.body.expiresInDays !== undefined && request.body.expiresInDays > cap) {
+      return sendError(reply, 400, 'lifetime_too_long', `durée maximale : ${cap} jours`);
+    }
+    const days = Math.min(request.body.expiresInDays ?? API_KEY_DEFAULT_LIFETIME_DAYS, cap);
     const { key, prefix, hash } = generateApiKey();
     const row = await withActor(ctx.pool, actor, async (db) =>
       (await db.query<KeyRow>(

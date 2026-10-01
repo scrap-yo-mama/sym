@@ -7,10 +7,13 @@ import { apiKeyRoutes } from './routes/api-keys.js';
 import { authRoutes } from './routes/auth.js';
 import { extensionRoutes } from './routes/extension.js';
 import { guard, notFound, sendError } from './routes/guard.js';
+import { invitationRoutes } from './routes/invitations.js';
 import { meRoutes } from './routes/me.js';
 import { findRoute } from './routes/registry.js';
 import { setupRoutes } from './routes/setup.js';
+import { ssoRoutes } from './routes/sso.js';
 import { systemRoutes } from './routes/system.js';
+import { userRoutes } from './routes/users.js';
 
 declare module 'fastify' {
   interface FastifyInstance {
@@ -76,5 +79,9 @@ export function buildServer(ctx: ServerContext, options: { logger?: boolean; log
   meRoutes(app, ctx);
   apiKeyRoutes(app, ctx);
   extensionRoutes(app, ctx);
+  // Comptes avancés (tâche 3.7).
+  userRoutes(app, ctx);
+  invitationRoutes(app, ctx);
+  ssoRoutes(app, ctx);
   return app;
 }

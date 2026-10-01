@@ -4,3 +4,5 @@ export * from './api-keys.js';
 export * from './password.js';
 export * from './roles.js';
 export * from './extension.js';
+export * from './totp.js';
+export * from './accounts.js';

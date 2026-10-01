@@ -138,5 +138,12 @@
   { "test": "assert_revert_shows_preview", "invariant": "06 § 2 (Stratégie & versions)", "tasks": ["3.4", "3.6"], "stage": "U1",
     "note": "3.4 : « Revenir à cette version » charge le diff de la version visée contre la courante et l'affiche avec la conséquence avant le bouton de confirmation (composable + rendu) ; proposé seulement depuis sain ou warning (transitions 7 et 8), jamais sur bloquee ni les autres statuts, versions chargées (api-detail-mounted.unit.test.ts) ; 3.6 : même critère en Chromium" },
   { "test": "assert_output_schema_edit_only_from_sain_or_warning", "invariant": "06 § 2 (Schémas, panneau Bloquée), 04 § 6 (transitions 18 à 20)", "tasks": ["3.4"], "stage": "U1",
-    "note": "3.4 : « Modifier la sortie » (qui relance une enquête) n'est proposé que depuis sain ou warning ; sur bloquee et les autres statuts, la raison est écrite sans bouton (api-detail-mounted.unit.test.ts)" }
+    "note": "3.4 : « Modifier la sortie » (qui relance une enquête) n'est proposé que depuis sain ou warning ; sur bloquee et les autres statuts, la raison est écrite sans bouton (api-detail-mounted.unit.test.ts)" },
+  { "test": "assert_invitation_single_use", "invariant": "13 § 6", "tasks": ["3.7"], "stage": "I1" },
+  { "test": "assert_mfa_enforced", "invariant": "13 § 7", "tasks": ["3.7"], "stage": "I1" },
+  { "test": "assert_totp_replay_refused", "invariant": "13 § 7", "tasks": ["3.7"], "stage": "U1, I1" },
+  { "test": "assert_oidc_no_email_linking", "invariant": "INV5, 13 § 7", "tasks": ["3.7"], "stage": "I1" },
+  { "test": "assert_clone_no_session", "invariant": "INV5, X5", "tasks": ["3.7"], "stage": "I1" },
+  { "test": "assert_deactivation_revokes_all", "invariant": "INV5, 13 § 6", "tasks": ["3.7"], "stage": "I1" },
+  { "test": "assert_login_lock_recognized_device", "invariant": "13 § 5, D-15", "tasks": ["3.7"], "stage": "I1" }
 ]

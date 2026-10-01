@@ -174,6 +174,112 @@ paths:
                   - type: 'null'
         '503':
           $ref: '#/components/responses/Error'
+  /api/auth/two-factor/verify:
+    post:
+      operationId: verifyTwoFactor
+      security:
+        - sessionCookie: []
+      tags: [auth]
+      summary: Second facteur d'une session en attente (code TOTP ou code de secours) ; remplace la session (nouveau jeton, 13 § 7)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SecondFactorCode'
+      responses:
+        '200':
+          description: Session complète (cookie), appareil reconnu.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SecondFactorResult'
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '429':
+          $ref: '#/components/responses/Error'
+  /api/auth/password-reset/request:
+    post:
+      operationId: requestPasswordReset
+      security: []
+      tags: [auth]
+      summary: Mot de passe oublié (avec SMTP) ; réponse identique que le compte existe ou non (13 § 4)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PasswordResetRequest'
+      responses:
+        '202':
+          description: Demande prise en compte (un e-mail part si le compte existe et si SMTP est configuré).
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [status]
+                properties:
+                  status:
+                    type: string
+                    enum: [accepted]
+        '400':
+          $ref: '#/components/responses/Error'
+        '429':
+          $ref: '#/components/responses/Error'
+  /api/auth/password-reset/confirm:
+    post:
+      operationId: resetPassword
+      security: []
+      tags: [auth]
+      summary: Nouveau mot de passe par lien à usage unique ; second facteur exigé si le compte en a un ; révoque sessions, clés, jetons et cookies
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PasswordReset'
+      responses:
+        '204':
+          description: Mot de passe changé ; tous les accès du compte révoqués.
+        '400':
+          $ref: '#/components/responses/Error'
+        '429':
+          $ref: '#/components/responses/Error'
+  /api/auth/oidc/start:
+    get:
+      operationId: startOidc
+      security: []
+      tags: [auth]
+      summary: Redirige vers le fournisseur OIDC de l'instance (PKCE S256, state et nonce liés au navigateur)
+      parameters:
+        - name: intent
+          in: query
+          description: '`login` (défaut) ou `link` : liaison depuis une session ouverte.'
+          schema:
+            type: string
+            enum: [login, link]
+        - name: invitation
+          in: query
+          description: Jeton d'invitation à accepter par l'IdP (adresse vérifiée égale à celle de l'invitation).
+          schema:
+            type: string
+      responses:
+        '302':
+          description: Redirection vers l'IdP, ou vers `/login?sso_error=<code>`.
+  /api/auth/oidc/callback:
+    get:
+      operationId: oidcCallback
+      security: []
+      tags: [auth]
+      summary: Retour du fournisseur OIDC ; identité = (issuer, sub), jamais l'e-mail
+      responses:
+        '302':
+          description: Vers la console (session ouverte), `/login?mfa=1` (second facteur attendu) ou `/login?sso_error=<code>`.
   /api/me:
     get:
       operationId: getMe
@@ -325,7 +431,6 @@ paths:
           description: METRICS_TOKEN absent (route fermée).
   /.well-known/oauth-protected-resource:
     get:
-      x-pending: '3.7'
       operationId: getProtectedResourceMetadata
       security: []
       tags: [system]
@@ -353,7 +458,6 @@ paths:
                 additionalProperties: true
   /api/sso:
     get:
-      x-pending: '3.7'
       operationId: getSsoInfo
       security: []
       tags: [auth]
@@ -1520,8 +1624,9 @@ paths:
           $ref: '#/components/responses/Error'
   /api/settings/security:
     get:
-      x-pending: '3.7'
       operationId: getSecuritySettings
+      security:
+        - sessionCookie: []
       tags: [settings]
       summary: 'Réglages de sécurité (owner) : durées de session, domaines, plafond de clés'
       responses:
@@ -1536,8 +1641,9 @@ paths:
         '403':
           $ref: '#/components/responses/Error'
     put:
-      x-pending: '3.7'
       operationId: putSecuritySettings
+      security:
+        - sessionCookie: []
       tags: [settings]
       summary: Remplace les réglages de sécurité (owner)
       requestBody:
@@ -1561,8 +1667,9 @@ paths:
           $ref: '#/components/responses/Error'
   /api/settings/sso:
     get:
-      x-pending: '3.7'
       operationId: getSsoSettings
+      security:
+        - sessionCookie: []
       tags: [settings]
       summary: Réglages OIDC (owner) ; `client_secret` jamais relu
       responses:
@@ -1579,8 +1686,9 @@ paths:
         '403':
           $ref: '#/components/responses/Error'
     put:
-      x-pending: '3.7'
       operationId: putSsoSettings
+      security:
+        - sessionCookie: []
       tags: [settings]
       summary: Remplace les réglages OIDC (owner) ; `client_secret` en écriture seule
       requestBody:
@@ -1604,8 +1712,9 @@ paths:
           $ref: '#/components/responses/Error'
   /api/users:
     get:
-      x-pending: '3.7'
       operationId: listUsers
+      security:
+        - sessionCookie: []
       tags: [users]
       summary: Utilisateurs de l'instance (admin)
       parameters:
@@ -1624,8 +1733,9 @@ paths:
           $ref: '#/components/responses/Error'
   /api/users/{id}:
     patch:
-      x-pending: '3.7'
       operationId: updateUser
+      security:
+        - sessionCookie: []
       tags: [users]
       summary: Change le rôle (owner seulement) ou le statut d'un compte ; personne ne change son propre rôle
       parameters:
@@ -1652,8 +1762,9 @@ paths:
         '404':
           $ref: '#/components/responses/Error'
     delete:
-      x-pending: '3.7'
       operationId: deleteUser
+      security:
+        - sessionCookie: []
       tags: [users]
       summary: Supprime un compte désactivé (jamais l'owner)
       parameters:
@@ -1671,8 +1782,9 @@ paths:
           $ref: '#/components/responses/Error'
   /api/users/{id}/reset-link:
     post:
-      x-pending: '3.7'
       operationId: createResetLink
+      security:
+        - sessionCookie: []
       tags: [users]
       summary: Lien de réinitialisation (jamais de mot de passe choisi par l'admin), compte avec 2FA seulement, audité
       parameters:
@@ -1692,10 +1804,47 @@ paths:
           $ref: '#/components/responses/Error'
         '409':
           $ref: '#/components/responses/Error'
+  /api/users/{id}/revoke-access:
+    post:
+      operationId: revokeUserAccess
+      security:
+        - sessionCookie: []
+      tags: [users]
+      summary: Ferme les sessions et révoque clés d'API et jetons de tunnel d'un compte (révocation seule, jamais d'accès au contenu)
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      responses:
+        '204':
+          description: Accès révoqués.
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+  /api/users/{id}/2fa:
+    delete:
+      operationId: resetUserTwoFactor
+      security:
+        - sessionCookie: []
+      tags: [users]
+      summary: Réinitialise la 2FA d'un membre (owner pour un admin) ; ré-enrôlement exigé, sessions fermées, audité
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      responses:
+        '204':
+          description: 2FA retirée.
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
   /api/owner/transfer:
     post:
-      x-pending: '3.7'
       operationId: transferOwnership
+      security:
+        - sessionCookie: []
       tags: [users]
       summary: Transfert de propriété (owner, mot de passe + 2FA)
       requestBody:
@@ -1717,8 +1866,9 @@ paths:
           $ref: '#/components/responses/Error'
   /api/invitations:
     get:
-      x-pending: '3.7'
       operationId: listInvitations
+      security:
+        - sessionCookie: []
       tags: [users]
       summary: Invitations en cours (admin)
       responses:
@@ -1733,8 +1883,9 @@ paths:
         '403':
           $ref: '#/components/responses/Error'
     post:
-      x-pending: '3.7'
       operationId: createInvitation
+      security:
+        - sessionCookie: []
       tags: [users]
       summary: Invite une adresse exacte avec un rôle (48 h, usage unique) ; lien copiable seulement sans SMTP
       requestBody:
@@ -1760,7 +1911,6 @@ paths:
           $ref: '#/components/responses/Error'
   /api/invitations/accept:
     post:
-      x-pending: '3.7'
       operationId: acceptInvitation
       security: []
       tags: [users]
@@ -1784,8 +1934,9 @@ paths:
           $ref: '#/components/responses/Error'
   /api/invitations/{id}:
     delete:
-      x-pending: '3.7'
       operationId: revokeInvitation
+      security:
+        - sessionCookie: []
       tags: [users]
       summary: Révoque une invitation
       parameters:
@@ -1801,8 +1952,9 @@ paths:
           $ref: '#/components/responses/Error'
   /api/invitations/{id}/resend:
     post:
-      x-pending: '3.7'
       operationId: resendInvitation
+      security:
+        - sessionCookie: []
       tags: [users]
       summary: Renvoie une invitation (nouveau jeton, nouvelle échéance)
       parameters:
@@ -1822,8 +1974,9 @@ paths:
           $ref: '#/components/responses/Error'
   /api/me/sessions:
     get:
-      x-pending: '3.7'
       operationId: listMySessions
+      security:
+        - sessionCookie: []
       tags: [account]
       summary: Sessions d'interface ouvertes de l'appelant
       responses:
@@ -1838,8 +1991,9 @@ paths:
         '403':
           $ref: '#/components/responses/Error'
     delete:
-      x-pending: '3.7'
       operationId: revokeMyOtherSessions
+      security:
+        - sessionCookie: []
       tags: [account]
       summary: Ferme toutes les autres sessions de l'appelant
       responses:
@@ -1851,8 +2005,9 @@ paths:
           $ref: '#/components/responses/Error'
   /api/me/sessions/{id}:
     delete:
-      x-pending: '3.7'
       operationId: revokeMySession
+      security:
+        - sessionCookie: []
       tags: [account]
       summary: Ferme une session de l'appelant (404 pour celle d'autrui)
       parameters:
@@ -1868,8 +2023,9 @@ paths:
           $ref: '#/components/responses/Error'
   /api/me/2fa/enroll:
     post:
-      x-pending: '3.7'
       operationId: enrollTwoFactor
+      security:
+        - sessionCookie: []
       tags: [account]
       summary: Commence l'enrôlement TOTP (ré-authentification par mot de passe)
       requestBody:
@@ -1895,8 +2051,9 @@ paths:
           $ref: '#/components/responses/Error'
   /api/me/2fa/confirm:
     post:
-      x-pending: '3.7'
       operationId: confirmTwoFactor
+      security:
+        - sessionCookie: []
       tags: [account]
       summary: Confirme la 2FA par un premier code ; renvoie les 10 codes de secours (affichés une fois)
       requestBody:
@@ -1920,8 +2077,9 @@ paths:
           $ref: '#/components/responses/Error'
   /api/me/2fa/backup-codes:
     post:
-      x-pending: '3.7'
       operationId: regenerateBackupCodes
+      security:
+        - sessionCookie: []
       tags: [account]
       summary: Régénère les codes de secours (les anciens sont révoqués)
       requestBody:
@@ -1945,8 +2103,9 @@ paths:
           $ref: '#/components/responses/Error'
   /api/me/2fa:
     delete:
-      x-pending: '3.7'
       operationId: disableTwoFactor
+      security:
+        - sessionCookie: []
       tags: [account]
       summary: Retire la 2FA de l'appelant (mot de passe et code), refusé si MFA_ENFORCED le concerne
       requestBody:
@@ -1966,8 +2125,9 @@ paths:
           $ref: '#/components/responses/Error'
   /api/me/audit:
     get:
-      x-pending: '3.7'
       operationId: listMyAuditEvents
+      security:
+        - sessionCookie: []
       tags: [audit]
       summary: Événements d'audit de l'appelant (tous les rôles)
       parameters:
@@ -1984,8 +2144,9 @@ paths:
           $ref: '#/components/responses/Error'
   /api/audit:
     get:
-      x-pending: '3.7'
       operationId: listAuditEvents
+      security:
+        - sessionCookie: []
       tags: [audit]
       summary: Journal d'audit de l'instance (admin), métadonnées seulement
       parameters:
@@ -2029,8 +2190,9 @@ paths:
           $ref: '#/components/responses/Error'
   /api/audit/export:
     get:
-      x-pending: '3.7'
       operationId: exportAuditEvents
+      security:
+        - sessionCookie: []
       tags: [audit]
       summary: Export NDJSON du journal d'audit (owner)
       parameters:
@@ -2614,6 +2776,9 @@ components:
           type: boolean
         user:
           $ref: '#/components/schemas/AuthUser'
+        twoFactorRequired:
+          description: Compte à 2FA (13 § 7) ; la session reste en attente du second facteur (`POST /api/auth/two-factor/verify`).
+          type: boolean
     SessionInfo:
       type: object
       additionalProperties: true
@@ -4275,9 +4440,11 @@ components:
         session_idle_minutes:
           type: integer
           minimum: 5
+          maximum: 720
         session_absolute_hours:
           type: integer
           minimum: 1
+          maximum: 720
         allowed_email_domains:
           type: array
           items:
@@ -4289,6 +4456,7 @@ components:
         audit_retention_months:
           type: integer
           minimum: 1
+          maximum: 120
     SsoCommon:
       type: object
       properties:
@@ -4565,6 +4733,55 @@ components:
           type: string
           minLength: 1
           maxLength: 1024
+    SecondFactorCode:
+      type: object
+      additionalProperties: false
+      required: [code]
+      properties:
+        code:
+          description: Code TOTP (6 chiffres) ou code de secours.
+          type: string
+          minLength: 1
+          maxLength: 32
+    SecondFactorResult:
+      type: object
+      additionalProperties: false
+      required: [ok, method]
+      properties:
+        ok:
+          type: boolean
+        method:
+          type: string
+          enum: [totp, backup_code]
+        backup_codes_remaining:
+          type: integer
+          minimum: 0
+    PasswordResetRequest:
+      type: object
+      additionalProperties: false
+      required: [email]
+      properties:
+        email:
+          type: string
+          minLength: 3
+          maxLength: 254
+    PasswordReset:
+      type: object
+      additionalProperties: false
+      required: [token, password]
+      properties:
+        token:
+          type: string
+          minLength: 1
+          maxLength: 128
+        password:
+          type: string
+          minLength: 1
+          maxLength: 1024
+        code:
+          description: Code TOTP ou code de secours, exigé si le compte a une 2FA.
+          type: string
+          maxLength: 32
     TotpCode:
       type: object
       additionalProperties: false

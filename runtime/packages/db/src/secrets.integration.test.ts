@@ -5,6 +5,7 @@ import { randomBytes } from 'node:crypto';
 import {
   createKeyCheck,
   generateMasterKey,
+  generateTotpSecret,
   kekFor,
   loggerRedaction,
   MasterKey,
@@ -16,6 +17,7 @@ import pg from 'pg';
 import { pino } from 'pino';
 import { afterAll, afterEach, beforeEach, describe, expect, inject, test } from 'vitest';
 import { createTestDatabase, type TestDatabase } from '../../../tests/helpers/pg.js';
+import { confirmTwoFactor, loadTwoFactor, startTwoFactorEnrollment } from './accounts.js';
 import { connectSite, siteCookiesForRun, storeSiteCookies } from './extension.js';
 import { migrateUp } from './migrate.js';
 import { appendRunLog } from './run-logs.js';
@@ -244,17 +246,39 @@ describe(`secrets sur PostgreSQL ${inject('pgVersion')}`, () => {
     const listed = ENCRYPTED_COLUMNS.filter((c) => c.column !== 'value').map((c) => `${c.table}.${c.column}`).sort();
     expect(rows.map((r) => r.col)).toEqual(listed);
 
-    // Une colonne différée (two_factor, tâche 3.7) non vide : rekey refuse au lieu de l'oublier.
-    const oldKey = newKey();
-    await keyCheck(client, { current: oldKey });
-    const owner = await newUser();
-    await client.query(
-      "INSERT INTO two_factor (user_id, secret_ciphertext) VALUES ($1, 'x')",
-      [owner],
-    );
-    await expect(rekey(client, { current: newKey(), previous: oldKey })).rejects.toThrow(/two_factor\.secret_ciphertext.*tâche 3\.7/);
+    // Plus aucune colonne différée : la graine 2FA (tâche 3.7) est couverte par rekey (test suivant).
+    expect(ENCRYPTED_COLUMNS.filter((c) => c.coveredBy !== 'rekey')).toEqual([]);
     expect(ENCRYPTED_COLUMNS.find((c) => c.table === 'site_sessions')?.coveredBy).toBe('rekey');
     expect(ENCRYPTED_COLUMNS.find((c) => c.table === 'run_artifacts')?.coveredBy).toBe('rekey');
+  });
+
+  test('assert_rekey_complete : graines 2FA re-scellées (même AAD), graine illisible marquée et non effacée', async () => {
+    const oldKey = newKey();
+    const newK = newKey();
+    await keyCheck(client, { current: oldKey });
+    const users = [await newUser(), await newUser()];
+    const secrets = users.map(() => generateTotpSecret());
+    for (const [i, userId] of users.entries()) {
+      expect(await startTwoFactorEnrollment(client, kekFor(oldKey, 1), userId, secrets[i]!)).toBe(true);
+      await confirmTwoFactor(client, userId);
+    }
+    // Une graine altérée : l'ancienne clé ne l'ouvre pas, elle est marquée illisible (codes de secours), pas effacée.
+    const broken = await newUser();
+    await startTwoFactorEnrollment(client, kekFor(oldKey, 1), broken, generateTotpSecret());
+    await client.query("UPDATE two_factor SET secret_ciphertext = '\\x00' WHERE user_id = $1", [broken]);
+    const result = await rekey(client, { current: newK, previous: oldKey }, { batchSize: 1 });
+    expect(result).toMatchObject({ status: 'done', from: 1, to: 2, rotated: 2, unreadable: 1 });
+    for (const [i, userId] of users.entries()) {
+      const state = await loadTwoFactor(client, kekFor(newK, 2), userId);
+      expect(state.status).toBe('confirmed');
+      expect(state.status === 'confirmed' && state.secret.equals(secrets[i]!)).toBe(true);
+    }
+    const flagged = await client.query<{ n: number }>('SELECT count(*)::int AS n FROM two_factor WHERE unreadable_since IS NOT NULL AND user_id = $1', [broken]);
+    expect(flagged.rows[0]?.n).toBe(1);
+    // L'AAD lie la graine à son utilisateur : déplacée vers un autre compte, elle ne s'ouvre plus.
+    const other = await newUser();
+    await client.query('UPDATE two_factor SET user_id = $2 WHERE user_id = $1', [users[0], other]);
+    expect((await loadTwoFactor(client, kekFor(newK, 2), other)).status).toBe('unreadable');
   });
 
   test('assert_rekey_complete : site_sessions re-scellées (KEK site_sessions, AAD liée à la nouvelle version), reprenable', async () => {

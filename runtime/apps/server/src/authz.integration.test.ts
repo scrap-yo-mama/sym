@@ -47,6 +47,30 @@ const RESOURCE_CASES: Record<OwnedResource, { create: (party: Party) => Promise<
       return list.json<{ items: { id: string; revokedAt: string | null }[] }>().items.some((d) => d.id === id && d.revokedAt === null);
     },
   },
+  auth_session: {
+    // Une nouvelle connexion de la partie : sa session la plus récente.
+    create: async (party) => {
+      await signIn(srv, party.user);
+      return withClient(srv.db.url, async (c) => (await c.query<{ id: string }>('SELECT id FROM auth_sessions WHERE user_id = $1 ORDER BY created_at DESC LIMIT 1', [party.user.id])).rows[0]!.id);
+    },
+    intact: async (party, id) => {
+      const list = await srv.app.inject({ method: 'GET', url: '/api/me/sessions', headers: { cookie: party.cookie } });
+      return list.json<{ sessions: { id: string }[] }>().sessions.some((s) => s.id === id);
+    },
+  },
+  audit_event: {
+    // Un événement de la partie (échec de connexion sur son compte), reconnaissable à un agent utilisateur unique
+    // (l'identifiant numérique serait ambigu).
+    create: async (party) => {
+      const marker = `zz_test_ua_${(seq += 1)}_${party.user.id.slice(0, 8)}`;
+      await srv.app.inject({ method: 'POST', url: '/api/auth/sign-in/email', headers: { origin: PUBLIC_URL, 'user-agent': marker }, payload: { email: party.user.email, password: 'zz_test_wrong_password' } });
+      return marker;
+    },
+    intact: async (party, marker) => {
+      const list = await srv.app.inject({ method: 'GET', url: '/api/me/audit?limit=200', headers: { cookie: party.cookie } });
+      return list.body.includes(marker);
+    },
+  },
   site_session: {
     create: async (party) => {
       const res = await srv.app.inject({ method: 'PUT', url: `/api/extension/sites/zz-test-authz-${(seq += 1)}.example`, headers: { authorization: `Bearer ${party.ext}` }, payload: { serverUseAllowed: false } });
@@ -69,6 +93,22 @@ const VALID_BODIES: Record<string, (party: Party) => Record<string, unknown>> = 
   'POST /api/extension/pair': () => ({ code: 'ZZZZZ-ZZZZZ', deviceId: 'zz_test_authz_body' }),
   'PUT /api/extension/sites/:domain': () => ({ serverUseAllowed: false }),
   'PUT /api/extension/sites/:domain/cookies': () => ({ cookies: [] }),
+  // Comptes avancés (3.7).
+  'POST /api/auth/two-factor/verify': () => ({ code: '123456' }),
+  'POST /api/auth/password-reset/request': () => ({ email: 'zz_test_nobody@example.test' }),
+  'POST /api/auth/password-reset/confirm': () => ({ token: 'zz_test_not_a_token', password: 'zz_test_long_password_1' }),
+  'POST /api/me/2fa/enroll': (p) => ({ current_password: p.user.password }),
+  'POST /api/me/2fa/confirm': () => ({ code: '123456' }),
+  'POST /api/me/2fa/backup-codes': (p) => ({ current_password: p.user.password }),
+  'PATCH /api/users/:id': () => ({ role: 'member' }),
+  'POST /api/users/:id/reset-link': () => ({}),
+  'POST /api/users/:id/revoke-access': () => ({}),
+  'POST /api/owner/transfer': (p) => ({ to_user_id: ZERO_UUID, current_password: p.user.password, totp_code: '123456' }),
+  'POST /api/invitations': () => ({ email: 'zz_test_authz_invite@example.test', role: 'member' }),
+  'POST /api/invitations/:id/resend': () => ({}),
+  'POST /api/invitations/accept': () => ({ token: 'zz_test_not_a_token', password: 'zz_test_long_password_1' }),
+  'PUT /api/settings/security': () => ({ session_idle_minutes: 720, session_absolute_hours: 168, allowed_email_domains: [], api_key_max_lifetime_days: 365 }),
+  'PUT /api/settings/sso': () => ({ enabled: false, slug: 'zz-test', issuer_url: 'https://idp.example.test/', client_id: 'zz_test_client' }),
 };
 
 const ZERO_UUID = '00000000-0000-4000-8000-000000000000';
@@ -147,9 +187,21 @@ describe('assert_cross_user_denied (INV12) : B contre les objets de A, sur chaqu
 });
 
 describe('assert_no_impersonation (INV5)', () => {
-  test('aucun plugin de la bibliothèque d’auth, aucune fonction « se faire passer pour »', () => {
+  test('aucun plugin de la bibliothèque d’auth, aucune fonction « se faire passer pour »', async () => {
     const auth = srv.started.ctx.auth;
-    expect(auth.options.plugins ?? []).toEqual([]);
+    // Seule notre extension `runtime-session` (3.7) : points d'entrée SERVEUR SEULEMENT, sans chemin HTTP.
+    const plugins = auth.options.plugins ?? [];
+    expect(plugins.map((p) => p.id)).toEqual(['runtime-session']);
+    for (const plugin of plugins) {
+      for (const endpoint of Object.values(plugin.endpoints ?? {}) as { path?: string; options: { metadata?: { SERVER_ONLY?: boolean } } }[]) {
+        expect(endpoint.options.metadata?.SERVER_ONLY).toBe(true);
+        expect(endpoint.path).toBeUndefined();
+      }
+    }
+    for (const path of ['/api/auth/issue-session', '/api/auth/issueSession']) {
+      const res = await auth.handler(new Request(`${PUBLIC_URL}${path}`, { method: 'POST', headers: { 'content-type': 'application/json', origin: PUBLIC_URL }, body: JSON.stringify({ userId: a.user.id }) }));
+      expect(res.status, path).toBe(404);
+    }
     expect(Object.keys(auth.api).filter((k) => /imperson|admin|setRole|banUser|listUsers/i.test(k))).toEqual([]);
     expect(ROUTES.filter((r) => /imperson|act-?as|sudo|switch-user|\/users\/:id\/session/i.test(r.url))).toEqual([]);
   });
@@ -210,19 +262,24 @@ describe('assert_authz_matrix (squelette, 08b § 4) : paramétré sur le registr
     },
   );
 
-  test('cas 3, membre sur une route d’admin → 403 (aucune route d’admin avant 3.7 : la liste se remplira)', async () => {
+  test('cas 3, membre sur une route d’admin → 403', async () => {
     const adminRoutes = protectedRoutes.filter((r) => r.permission && !can('member', r.permission));
+    expect(adminRoutes.length).toBeGreaterThan(15);
     for (const route of adminRoutes) {
       expect((await call(route, { cookie: b.cookie }, ZERO_UUID, VALID_BODIES[keyOf(route)]?.(b))).statusCode, keyOf(route)).toBe(403);
     }
   });
 
-  test.each(ROUTES.filter(hasBody).map((r) => [keyOf(r), r] as const))(
+  // Les routes `mfa: 'pending'` ne sont joignables que par une session en attente du second facteur : leur corps est
+  // contrôlé par accounts.integration.test.ts (« le second facteur refuse un corps étranger »).
+  test.each(ROUTES.filter((r) => hasBody(r) && r.mfa !== 'pending').map((r) => [keyOf(r), r] as const))(
     'cas 4, corps avec owner_id, user_id, status ou server_use_allowed → rejeté : %s',
     async (_name, route) => {
+      // Route d'administration : l'owner (un membre serait refusé avant la lecture du corps).
+      const party = route.permission && !can('member', route.permission) ? owner : b;
       for (const extra of [{ owner_id: a.user.id }, { user_id: a.user.id }, { status: 'active' }, { server_use_allowed: true }]) {
-        const headers: Record<string, string> = route.auth === 'extension' ? { authorization: `Bearer ${b.ext}` } : { cookie: b.cookie };
-        const res = await call(route, headers, ZERO_UUID, { ...VALID_BODIES[keyOf(route)]!(b), ...extra });
+        const headers: Record<string, string> = route.auth === 'extension' ? { authorization: `Bearer ${party.ext}` } : { cookie: party.cookie };
+        const res = await call(route, headers, ZERO_UUID, { ...VALID_BODIES[keyOf(route)]!(party), ...extra });
         // 400 (additionalProperties: false) ; 404 pour l'assistant, clos après l'owner.
         expect([400, 404], `${keyOf(route)} ${Object.keys(extra)[0]}`).toContain(res.statusCode);
       }

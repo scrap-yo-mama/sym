@@ -103,6 +103,91 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/auth/two-factor/verify": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Second facteur d'une session en attente (code TOTP ou code de secours) ; remplace la session (nouveau jeton, 13 § 7) */
+        post: operations["verifyTwoFactor"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/auth/password-reset/request": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Mot de passe oublié (avec SMTP) ; réponse identique que le compte existe ou non (13 § 4) */
+        post: operations["requestPasswordReset"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/auth/password-reset/confirm": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Nouveau mot de passe par lien à usage unique ; second facteur exigé si le compte en a un ; révoque sessions, clés, jetons et cookies */
+        post: operations["resetPassword"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/auth/oidc/start": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Redirige vers le fournisseur OIDC de l'instance (PKCE S256, state et nonce liés au navigateur) */
+        get: operations["startOidc"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/auth/oidc/callback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Retour du fournisseur OIDC ; identité = (issuer, sub), jamais l'e-mail */
+        get: operations["oidcCallback"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/me": {
         parameters: {
             query?: never;
@@ -923,6 +1008,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/users/{id}/revoke-access": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Ferme les sessions et révoque clés d'API et jetons de tunnel d'un compte (révocation seule, jamais d'accès au contenu) */
+        post: operations["revokeUserAccess"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/users/{id}/2fa": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Réinitialise la 2FA d'un membre (owner pour un admin) ; ré-enrôlement exigé, sessions fermées, audité */
+        delete: operations["resetUserTwoFactor"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/owner/transfer": {
         parameters: {
             query?: never;
@@ -1472,6 +1591,8 @@ export interface components {
         SignInResult: {
             redirect?: boolean;
             user: components["schemas"]["AuthUser"];
+            /** @description Compte à 2FA (13 § 7) ; la session reste en attente du second facteur (`POST /api/auth/two-factor/verify`). */
+            twoFactorRequired?: boolean;
         } & {
             [key: string]: unknown;
         };
@@ -2418,6 +2539,25 @@ export interface components {
         PasswordConfirmation: {
             current_password: string;
         };
+        SecondFactorCode: {
+            /** @description Code TOTP (6 chiffres) ou code de secours. */
+            code: string;
+        };
+        SecondFactorResult: {
+            ok: boolean;
+            /** @enum {string} */
+            method: "totp" | "backup_code";
+            backup_codes_remaining?: number;
+        };
+        PasswordResetRequest: {
+            email: string;
+        };
+        PasswordReset: {
+            token: string;
+            password: string;
+            /** @description Code TOTP ou code de secours, exigé si le compte a une 2FA. */
+            code?: string;
+        };
         TotpCode: {
             code: string;
         };
@@ -2815,6 +2955,128 @@ export interface operations {
                 };
             };
             503: components["responses"]["Error"];
+        };
+    };
+    verifyTwoFactor: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SecondFactorCode"];
+            };
+        };
+        responses: {
+            /** @description Session complète (cookie), appareil reconnu. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SecondFactorResult"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            429: components["responses"]["Error"];
+        };
+    };
+    requestPasswordReset: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PasswordResetRequest"];
+            };
+        };
+        responses: {
+            /** @description Demande prise en compte (un e-mail part si le compte existe et si SMTP est configuré). */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @enum {string} */
+                        status: "accepted";
+                    };
+                };
+            };
+            400: components["responses"]["Error"];
+            429: components["responses"]["Error"];
+        };
+    };
+    resetPassword: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PasswordReset"];
+            };
+        };
+        responses: {
+            /** @description Mot de passe changé ; tous les accès du compte révoqués. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["Error"];
+            429: components["responses"]["Error"];
+        };
+    };
+    startOidc: {
+        parameters: {
+            query?: {
+                /** @description `login` (défaut) ou `link` : liaison depuis une session ouverte. */
+                intent?: "login" | "link";
+                /** @description Jeton d'invitation à accepter par l'IdP (adresse vérifiée égale à celle de l'invitation). */
+                invitation?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Redirection vers l'IdP, ou vers `/login?sso_error=<code>`. */
+            302: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    oidcCallback: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Vers la console (session ouverte), `/login?mfa=1` (second facteur attendu) ou `/login?sso_error=<code>`. */
+            302: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
         };
     };
     getMe: {
@@ -4507,6 +4769,52 @@ export interface operations {
             403: components["responses"]["Error"];
             404: components["responses"]["Error"];
             409: components["responses"]["Error"];
+        };
+    };
+    revokeUserAccess: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Accès révoqués. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+        };
+    };
+    resetUserTwoFactor: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 2FA retirée. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
         };
     };
     transferOwnership: {

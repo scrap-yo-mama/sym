@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Serveur de test (tâche 0.3b) : base migrée jetable, MASTER_KEY et jeton d'amorçage générés à l'exécution (aucun
-// secret en dur), owner créé par l'assistant, membres créés en base (les invitations arrivent en 3.7).
+// secret en dur), owner créé par l'assistant, membres créés en base (le parcours d'invitation est testé en 3.7).
 import { randomBytes } from 'node:crypto';
-import { generateMasterKey, hashPassword } from '@runtime/core';
+import { base32Decode, generateMasterKey, hashPassword, totpCode, totpStep } from '@runtime/core';
 import { migrateUp } from '@runtime/db';
 import type { FastifyInstance, LightMyRequestResponse } from 'fastify';
-import { prepareServer, type Started } from '../../apps/server/src/start.js';
+import { prepareServer, type PrepareOptions, type Started } from '../../apps/server/src/start.js';
 import { createTestDatabase, withClient, type TestDatabase } from './pg.js';
 
 export const PUBLIC_URL = 'http://localhost:3000';
@@ -34,12 +34,12 @@ export function serverEnv(url: string, masterKey: string, bootstrapToken: string
 }
 
 /** Base migrée + serveur prêt (sans écoute : `inject`). L'owner n'existe pas encore. */
-export async function startTestServer(prefix = 'srv', extra: NodeJS.ProcessEnv = {}): Promise<TestServer> {
+export async function startTestServer(prefix = 'srv', extra: NodeJS.ProcessEnv = {}, options: PrepareOptions = {}): Promise<TestServer> {
   const db = await createTestDatabase(prefix);
   await migrateUp({ connectionString: db.url });
   const masterKey = generateMasterKey();
   const bootstrapToken = randomBytes(32).toString('base64url');
-  const started = await prepareServer(serverEnv(db.url, masterKey, bootstrapToken, extra));
+  const started = await prepareServer(serverEnv(db.url, masterKey, bootstrapToken, extra), options);
   return {
     db,
     app: started.app,
@@ -83,10 +83,21 @@ export function sessionCookie(res: LightMyRequestResponse): string {
   return `${cookie.name}=${cookie.value}`;
 }
 
+let ipSeq = 0;
+/**
+ * Adresse distincte à chaque appel (100.64.0.0/10) : la limite par IP de la bibliothèque (10 connexions par minute)
+ * ne doit pas fausser les tests qui ouvrent beaucoup de sessions ; les tests de débit choisissent leurs adresses.
+ */
+export function nextTestIp(): string {
+  ipSeq += 1;
+  return `100.${64 + ((ipSeq >> 16) & 63)}.${(ipSeq >> 8) & 255}.${ipSeq & 255}`;
+}
+
 export async function signIn(srv: TestServer, user: Pick<TestUser, 'email' | 'password'>): Promise<string> {
   const res = await srv.app.inject({
     method: 'POST',
     url: '/api/auth/sign-in/email',
+    remoteAddress: nextTestIp(),
     headers: { origin: PUBLIC_URL },
     payload: { email: user.email, password: user.password },
   });
@@ -108,4 +119,22 @@ export async function createKey(
   });
   if (res.statusCode !== 201) throw new Error(`création de clé : ${res.statusCode} ${res.body}`);
   return res.json();
+}
+
+/** Code TOTP courant d'une graine base32 (`offset` pas de 30 s : -1 = précédent, +1 = suivant). */
+export function totpFor(secret: string, offset = 0): string {
+  return totpCode(base32Decode(secret), totpStep() + offset);
+}
+
+/**
+ * Active la 2FA d'un compte connecté (enrôlement + confirmation) : renvoie la graine base32 et les codes de secours.
+ * Le code de confirmation consomme le pas courant (anti-rejeu) : le code suivant utilisable est celui du pas +1.
+ */
+export async function enableTwoFactor(srv: TestServer, cookie: string, user: Pick<TestUser, 'password'>): Promise<{ secret: string; backupCodes: string[] }> {
+  const enroll = await srv.app.inject({ method: 'POST', url: '/api/me/2fa/enroll', headers: { cookie, origin: PUBLIC_URL }, payload: { current_password: user.password } });
+  if (enroll.statusCode !== 200) throw new Error(`enrôlement : ${enroll.statusCode} ${enroll.body}`);
+  const { secret } = enroll.json<{ secret: string }>();
+  const confirm = await srv.app.inject({ method: 'POST', url: '/api/me/2fa/confirm', headers: { cookie, origin: PUBLIC_URL }, payload: { code: totpFor(secret) } });
+  if (confirm.statusCode !== 200) throw new Error(`confirmation : ${confirm.statusCode} ${confirm.body}`);
+  return { secret, backupCodes: confirm.json<{ backup_codes: string[] }>().backup_codes };
 }

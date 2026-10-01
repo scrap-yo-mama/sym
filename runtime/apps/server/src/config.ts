@@ -4,12 +4,15 @@ import { readFileSync } from 'node:fs';
 import {
   loadKeyring,
   loadObservabilityConfig,
+  parseMfaEnforced,
   scrubOtelEnvironment,
   Secret,
   secretValues,
   type Keyring,
+  type MfaEnforced,
   type ObservabilityConfig,
 } from '@runtime/core';
+import { ssrfPolicyFromEnv, type SsrfPolicy } from '@runtime/core/net';
 
 export class ConfigError extends Error {
   override name = 'ConfigError';
@@ -38,6 +41,10 @@ export type ServerConfig = {
    * choisit son IP par X-Forwarded-For (limites contournées).
    */
   trustProxy: boolean | number | string;
+  /** `MFA_ENFORCED` (13 § 7) : `off` (défaut), `admins`, `all`. */
+  mfaEnforced: MfaEnforced;
+  /** Garde SSRF (INV10) : relais SMTP et fournisseur OIDC en politique `operator-config` ; `ALLOWED_PRIVATE_HOSTS`. */
+  ssrfPolicy: SsrfPolicy;
 };
 
 /** Version d'application publiable : SemVer ou étiquette courte (aucun espace, aucun chemin, aucun nom d'hôte). */
@@ -108,6 +115,18 @@ export function loadServerConfig(env: NodeJS.ProcessEnv = process.env): ServerCo
   const observability = loadObservabilityConfig(env);
   scrubOtelEnvironment(env);
   const keyring = loadKeyring(env);
+  let mfaEnforced: MfaEnforced;
+  try {
+    mfaEnforced = parseMfaEnforced(env['MFA_ENFORCED']);
+  } catch (error) {
+    throw new ConfigError((error as Error).message);
+  }
+  let ssrfPolicy: SsrfPolicy;
+  try {
+    ssrfPolicy = ssrfPolicyFromEnv(env);
+  } catch (error) {
+    throw new ConfigError((error as Error).message);
+  }
   return {
     databaseUrl,
     publicUrl: new URL(publicUrl).origin,
@@ -120,5 +139,7 @@ export function loadServerConfig(env: NodeJS.ProcessEnv = process.env): ServerCo
     port: Number(env['PORT'] ?? 3000),
     host: env['HOST'] ?? '0.0.0.0',
     trustProxy: parseTrustProxy(env['TRUST_PROXY']),
+    mfaEnforced,
+    ssrfPolicy,
   };
 }

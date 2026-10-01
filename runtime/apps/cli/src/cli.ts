@@ -209,7 +209,9 @@ async function secretsCmd(args: string[], deps: CliDeps): Promise<CliResult> {
       out:
         `accept-key-loss : ${done.unreadable} secret(s) passés en « À ressaisir », ${done.siteSessionsCleared} session(s) de site vidées, ` +
         `${done.artifactsDeleted} artefact(s) supprimés ; témoin de clé réécrit (empreinte ${done.fingerprint}, version ${done.version}).` +
-        (done.twoFactorUnreadable > 0 ? ` ${done.twoFactorUnreadable} secret(s) 2FA restent illisibles : à réinitialiser.` : '') +
+        (done.twoFactorUnreadable > 0
+          ? ` ${done.twoFactorUnreadable} graine(s) 2FA marquée(s) illisible(s) : connexion par code de secours puis ré-enrôlement (sans code, un admin réinitialise la 2FA).`
+          : '') +
         ' Redémarrez server et worker, puis ressaisissez les secrets dans Réglages.',
     };
   });

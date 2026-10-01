@@ -6,6 +6,7 @@ import * as schema from './schema.js';
 
 export const PACKAGE_NAME = '@runtime/db';
 
+export * from './accounts.js';
 export * from './artifacts.js';
 export * from './audit.js';
 export * from './connection.js';

@@ -2,6 +2,12 @@ Dockerfile, entrypoint et modèles de déploiement (tâches 0.1, 4.x).
 
 `TRUST_PROXY` (serveur) : défaut `false`, l'IP d'un client est celle de la connexion TCP. Derrière le proxy d'un hébergeur (Render, Railway, Heroku), poser `TRUST_PROXY=1` (un saut) ou la liste des IP/CIDR du proxy : sinon toutes les requêtes semblent venir du proxy et partagent les limites par IP. Ne jamais poser `true` sans proxy devant : un client choisirait son IP par `X-Forwarded-For`.
 
+Comptes (tâche 3.7, 13 § 5-7) :
+
+- `MFA_ENFORCED` (serveur) : `off` (défaut), `admins` (owner et admins) ou `all`. Un compte concerné sans 2FA ne joint que son identité et l'enrôlement TOTP tant qu'il ne s'est pas enrôlé ; une connexion OIDC ne l'en dispense que si l'IdP atteste un second facteur (`amr`).
+- SMTP (Réglages, relais de l'admin) : invitations et liens de réinitialisation par e-mail ; sans SMTP, l'admin copie le lien d'invitation, et un lien de réinitialisation n'est délivré que pour un compte à 2FA. Relais et fournisseur OIDC passent par la garde SSRF en politique `operator-config` (adresses privées permises, métadonnées cloud refusées).
+- OIDC générique (Réglages, owner) : un fournisseur, `issuer_url` en https, rappel `PUBLIC_URL/api/auth/oidc/callback` à déclarer chez l'IdP ; secret du client chiffré, jamais relu. Identité = (issuer, sub), jamais l'adresse e-mail.
+
 Observabilité (tâche 1.10, 14 § 3 et § 10) :
 
 - `GET /api/health` : vivacité, sans accès base, `{status, version}` (`RUNTIME_VERSION`, défaut `0.0.0` : seule version publiée). `GET /api/ready` : 200, ou 503 avec les contrôles en échec (`database`, `schema`, `key_check`) ; chemin de contrôle des plateformes. `?detail=1` (administrateur connecté) ajoute workers vivants et profondeur de file.

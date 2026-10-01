@@ -62,7 +62,7 @@ session: { modelName: 'auth_sessions', fields: { token: 'tokenHash', updatedAt: 
            additionalFields: { absoluteExpiresAt } },            // durée absolue, posée par databaseHooks
 account: { modelName: 'auth_accounts', fields: { password: 'passwordHash' } },
 verification: { modelName: 'verifications' },
-// plugins : aucun en 0.3b (twoFactor écarté, voir « Décisions 0.3b »)
+// plugins : aucun de la bibliothèque ; `runtime-session` (3.7) = notre point d'entrée serveur seulement (voir « Décisions 3.7 »)
 ```
 
 | Modèle Better Auth | Table | Champs attendus → colonnes |
@@ -71,20 +71,27 @@ verification: { modelName: 'verifications' },
 | `session` | `auth_sessions` | id, token → `token_hash` (unique), expiresAt, createdAt, updatedAt → `last_seen_at`, ipAddress → `ip`, userAgent, userId |
 | `account` | `auth_accounts` | id, accountId, providerId, userId, accessToken, refreshToken, idToken, accessTokenExpiresAt, refreshTokenExpiresAt, scope, password → `password_hash`, createdAt, updatedAt |
 | `verification` | `verifications` | id, identifier, value, expiresAt, createdAt, updatedAt |
-| `twoFactor` (plugin) | `two_factor` | id, secret → `secret_ciphertext`, backupCodes → `backup_codes`, userId (unique), verified, failedVerificationCount, lockedUntil |
 
-Colonnes propres au produit, ignorées par Better Auth : `users.role/status/locale/theme/email_verified_at/disabled_at/last_login_at`, `auth_sessions.revoked_at`, `two_factor.nonce/key_version/confirmed_at`, table `backup_codes`. Le plugin `apiKey` n'est **pas** utilisé : `api_keys` est notre table (format `sy_live_`, SHA-256, scopes contrôlés en base). Le stockage `rateLimit` en base n'est pas prévu (mémoire par défaut).
+Champs additionnels de session déclarés à la bibliothèque (3.7) : `absoluteExpiresAt`, `mfaPending` → `mfa_pending`, `mfaMethod` → `mfa_method`. Colonnes propres au produit, ignorées par Better Auth : `users.role/status/locale/theme/email_verified_at/disabled_at/last_login_at/deleted_at`, `auth_sessions.revoked_at`, tables `two_factor`, `backup_codes`, `auth_known_devices`, `invitations`. Le plugin `apiKey` n'est **pas** utilisé : `api_keys` est notre table (format `sy_live_`, SHA-256, scopes contrôlés en base). Le stockage `rateLimit` en base n'est pas prévu (mémoire par défaut).
 
 ## Décisions 0.3b (auth noyau)
 
 Branchement réel : `apps/server/src/auth/better-auth.ts` (Better Auth **1.7.5**, entrée `better-auth/minimal`, sans Kysely).
 
 - **Jeton de session haché** : surcouche de l'adaptateur Drizzle (`apps/server/src/auth/hashed-session-adapter.ts`). Pour le modèle `session`, `token` est remplacé par son SHA-256 à l'écriture et dans chaque clause `where` (y compris `in` et dans les transactions de la bibliothèque) ; le jeton reçu est rendu à l'appelant. La base ne contient que `auth_sessions.token_hash` (test : aucun jeton en clair dans aucune table).
-- **2FA non activée en 0.3b** : le plugin `twoFactor` chiffre la graine TOTP avec le secret de la bibliothèque (pas `MASTER_KEY` + AAD) et garde les codes de secours dans une chaîne chiffrée réversible (`storeBackupCodes`), pas hachés. Solution retenue pour 3.7 : **TOTP maison** sur nos primitives — graine CSPRNG scellée par `sealSecret` (KEK `secrets`, AAD `two_factor|user_id|key_version`) dans `two_factor.secret_ciphertext`/`nonce`/`key_version`, vérification RFC 6238 (`node:crypto` HMAC-SHA1, fenêtre ±1, anti-rejeu par dernier pas accepté), 10 codes de secours hachés (SHA-256 d'un aléa de 64 bits minimum) dans `backup_codes`, colonne `two_factor.backup_codes` inutilisée. `ENCRYPTED_COLUMNS` marque `two_factor.secret_ciphertext` pour 3.7.
+- **2FA non activée en 0.3b** (livrée en 3.7, voir plus bas) : le plugin `twoFactor` chiffre la graine TOTP avec le secret de la bibliothèque (pas `MASTER_KEY` + AAD) et garde les codes de secours dans une chaîne chiffrée réversible (`storeBackupCodes`), pas hachés. Solution retenue pour 3.7 : **TOTP maison** sur nos primitives — graine CSPRNG scellée par `sealSecret` (KEK `secrets`, AAD `two_factor|user_id|key_version`) dans `two_factor.secret_ciphertext`/`nonce`/`key_version`, vérification RFC 6238 (`node:crypto` HMAC-SHA1, fenêtre ±1, anti-rejeu par dernier pas accepté), 10 codes de secours hachés (SHA-256 d'un aléa de 64 bits minimum) dans `backup_codes`, colonne `two_factor.backup_codes` inutilisée. `ENCRYPTED_COLUMNS` marquait `two_factor.secret_ciphertext` pour 3.7.
 - **Télémétrie** (`@better-auth/telemetry` 1.7.5, lu) : aucun envoi sans `BETTER_AUTH_TELEMETRY_ENDPOINT` (vide par défaut) ; la variable `BETTER_AUTH_TELEMETRY` l'emporte sur l'option. Donc `telemetry: { enabled: false }` **et** retrait des variables `BETTER_AUTH_TELEMETRY*` de l'environnement au démarrage. Test : intercepteur global (fetch, undici, http, sockets), 0 requête sortante (démarrage, assistant, connexion, session).
 - **Aucun plugin** (ni `admin`, ni impersonation, ni SSO) ; seules trois routes de la bibliothèque sont exposées : `POST /api/auth/sign-in/email`, `POST /api/auth/sign-out`, `GET /api/auth/get-session` ; tout autre chemin répond 404. `verifications.value` reste en clair tant qu'aucun flux ne l'utilise (réinitialisation par e-mail : 3.7, à hacher alors comme la session).
 - **Secret de la bibliothèque** : HKDF de `MASTER_KEY`, libellé `kek:sessions` (une rotation de clé ferme toutes les sessions).
 - **Mots de passe** : `crypto.argon2` (argon2id, m = 19 456, t = 2, p = 1), fonctions `hash`/`verify` passées à la bibliothèque ; politique 12-128 caractères + liste locale (`@runtime/core`, `auth/`).
+
+## Décisions 3.7 (comptes avancés, migration 0012)
+
+- **2FA TOTP maison** (`@runtime/core` `auth/totp.ts`, `src/accounts.ts`) : graine de 160 bits scellée par `sealSecret` (KEK `secrets`, AAD `two_factor|user_id`, 13 § 7) avec enveloppe complète (`secret_ciphertext`, `nonce`, `dek_wrapped`, `alg`, `key_version`, CHECK `two_factor_sealed_complete`) ; RFC 6238 (HMAC-SHA1, 6 chiffres, 30 s, fenêtre ±1) ; anti-rejeu atomique par `last_used_step` ; 10 codes de secours de 80 bits, SHA-256 lié à l'utilisateur, usage unique atomique. `rekey` re-scelle les graines ; une graine illisible (clé perdue, ligne altérée) est **marquée** `unreadable_since` (jamais effacée) : codes de secours puis ré-enrôlement, ou réinitialisation par un admin. `accept-key-loss` les marque (`flagged`).
+- **Session en attente du second facteur** : un compte à 2FA confirmée reçoit une session `mfa_pending` (10 min), qui n'ouvre que `POST /api/auth/two-factor/verify` ; le second facteur la remplace par une session complète (nouveau jeton) via `runtime-session`, notre point d'entrée **serveur seulement** (`createAuthEndpoint.serverOnly`, aucun chemin HTTP). `MFA_ENFORCED` (`off`/`admins`/`all`) : enrôlement forcé avant toute autre route (marque `mfa` du registre des routes) ; une connexion OIDC ne l'évite que si l'IdP atteste un second facteur (`amr` : mfa, otp, hwk, swk).
+- **Jetons à usage unique** : invitation (`invitations.token_hash`, 48 h, CHECK `invitations_ttl` sur `sent_at`), réinitialisation (`verifications`, identifiant `reset:<user_id>`, valeur = SHA-256 du jeton, 24 h), appareil reconnu (`auth_known_devices.token_hash`, 180 jours, D-15). Aucun jeton en clair en base.
+- **Comptes** : désactivation = révocations (sessions, clés, tunnels, codes d'appairage, cookies serveur, appareils) puis statut, planifications suspendues ; suppression d'un compte désactivé = identité effacée, ligne supprimée sans contenu, sinon anonymisée (`deleted_at`). Clone d'API (`cloneApi`) : jamais de `site_sessions`, API à session en `action_requise` ; transfert (`transferApisWithoutSession`) : APIs sans session seulement.
+- **Rétention de l'audit** : `settings.security.audit_retention_months` (owner) appliqué par la passe quotidienne de rétention.
 
 ## RLS (migration 0003)
 

@@ -289,7 +289,10 @@ export async function runRetentionTick(
       const result: RetentionTickResult = { skipped: false, hourly, daily };
       if (daily) {
         await ensureDatasetItemsPartitions(client, now);
-        result.report = await runRetention(client, now, policy, opts);
+        // Rétention de l'audit réglée par l'owner (13 § 9, `settings.security.audit_retention_months`, tâche 3.7).
+        const months = (await client.query<{ m: number | null }>("SELECT (value ->> 'audit_retention_months')::int AS m FROM settings WHERE key = 'security'")).rows[0]?.m;
+        const effective = months && months > 0 ? { ...policy, auditDays: Math.round((months * 365) / 12) } : policy;
+        result.report = await runRetention(client, now, effective, opts);
         state.daily_at = now.toISOString();
         state.hourly_at = now.toISOString();
       } else if (hourly) {
