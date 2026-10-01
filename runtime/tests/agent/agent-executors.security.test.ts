@@ -18,7 +18,7 @@ import { createLlmClient, type ModelPrice, type RedactConfig } from '@runtime/ll
 import { createFakeProvider, scripted, type FakeProvider, type FakeRequestContext, type ScriptedResponse, type ScriptedStep } from '@runtime/llm/testing';
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'vitest';
 import { launchAgentBrowser } from '../../apps/worker/src/browser/agent-browser.ts';
-import { BrowserPool, playwrightLauncher } from '../../apps/worker/src/browser/pool.ts';
+import { BrowserPool, playwrightLauncher, type BrowserLauncher } from '../../apps/worker/src/browser/pool.ts';
 import { runAgentExecutor, runAgentFetchExecutor, runHybridExecutor, type EngineFactory } from '../../apps/worker/src/exec/agent-executors.ts';
 import { AGENT_CANARY, AGENT_HOSTS, AGENT_TRAP_TYPED_PATH } from '../../fixtures/src/sites/agent-sites.ts';
 import { agentReference, agentTasks, type AgentFixtureKey } from '../../fixtures/src/agent-tasks.ts';
@@ -84,7 +84,7 @@ const extractClient = (price: ModelPrice | null = CHEAP) =>
 
 /** Moteur du rôle `agent` : Stagehand 3.7.3 en local, sur le faux fournisseur, environnement sans clé Browserbase/Brave. */
 const engineFor =
-  (o: { env?: NodeJS.ProcessEnv; price?: ModelPrice | null; redact?: RedactConfig } = {}): EngineFactory =>
+  (o: { env?: NodeJS.ProcessEnv; price?: ModelPrice | null; redact?: RedactConfig; model?: string } = {}): EngineFactory =>
   ({ cdpUrl, recorder, hooks }) => ({
     engine: new StagehandEngine({
       cdpUrl,
@@ -96,7 +96,7 @@ const engineFor =
       ...(o.redact === undefined ? {} : { redact: o.redact }),
       ...hooks,
     }),
-    modelId: AGENT_MODEL,
+    modelId: o.model ?? AGENT_MODEL,
     promptVersion: 'stagehand-3.7.3-dom',
   });
 
@@ -844,7 +844,7 @@ describe('prompts de Stagehand : llm.redact et jetons d’URL (08 §1, 08 §4 me
           egress,
           agentBrowser: (o) => launchAgentBrowser({ ...o, egressServer: egress.server }),
           engineFor: engineFor({ redact: {} }),
-          pool: null,
+          pool,
           allowWriteActions: false,
           maxCostUsd: 0.5,
           taskId: 'zz_test_redact',
@@ -875,7 +875,7 @@ describe('prompts de Stagehand : llm.redact et jetons d’URL (08 §1, 08 §4 me
           egress,
           agentBrowser: (o) => launchAgentBrowser({ ...o, egressServer: egress.server }),
           engineFor: engineFor({ redact: {} }),
-          pool: null,
+          pool,
           allowWriteActions: false,
           maxCostUsd: 0.5,
           taskId: 'zz_test_redact_screenshot',
@@ -959,6 +959,81 @@ describe('F-E5 (pagination par bouton) : point faible connu de l’ADR 0001', ()
     expect(out.compiled).toBeUndefined();
     expect(out.compileFailure).toBe('list_not_compilable');
   }, 180_000);
+});
+
+describe('BROWSER_CONCURRENCY (14 §11) : le Chromium dédié de l’agent prend un slot du pool', () => {
+  test('assert_agent_browser_in_pool_slot — BROWSER_CONCURRENCY=1, deux essais E6 simultanés (compilation et rejeux compris) : jamais plus d’un Chromium à la fois', async () => {
+    let alive = 0;
+    let peak = 0;
+    const up = () => {
+      alive += 1;
+      peak = Math.max(peak, alive);
+    };
+    const down = () => void (alive -= 1);
+    // Chromium du pool comptés du lancement à la fermeture (ou à l'arrêt forcé).
+    const pooledLaunch = playwrightLauncher(launchProxy.url, process.env);
+    const counted: BrowserLauncher = async () => {
+      up();
+      let open = true;
+      const closeOnce = () => {
+        if (open) down();
+        open = false;
+      };
+      try {
+        const l = await pooledLaunch();
+        return { browser: l.browser, close: () => l.close().finally(closeOnce), kill: () => l.kill().finally(closeOnce) };
+      } catch (error) {
+        closeOnce();
+        throw error;
+      }
+    };
+    const single = new BrowserPool({ size: 1, launch: counted, recycleAfterRuns: 100 });
+    const ref = agentReference('F-E6') as { title: string };
+    // Un modèle scripté par essai : les deux boucles d'agent tournent sans se mêler.
+    const models = [AGENT_MODEL, `${AGENT_MODEL}-2`];
+    for (const model of models) fake.setScenario(model, stagehandScript([scripted.toolCalls([{ name: 'act', arguments: { action: `click the link "${ref.title}"` } }])], { items: [ref] }));
+    const trial = (model: string) =>
+      withEgress([AGENT_HOSTS.e6], (egress) =>
+        runAgentExecutor({
+          spec: { schema_version: 1, kind: 'agent', start_url: url(AGENT_HOSTS.e6), allowed_hosts: [AGENT_HOSTS.e6], instruction: task('F-E6').instruction, limits: { max_steps: 10, timeout_ms: 90_000 } },
+          outputSchema: itemSchema('F-E6'),
+          signal,
+          guard,
+          egress,
+          // Chromium dédié compté de son lancement (processus créé) à sa fermeture (processus tué).
+          agentBrowser: async (o) => {
+            up();
+            try {
+              const ab = await launchAgentBrowser({ ...o, egressServer: egress.server });
+              return { ...ab, close: () => ab.close().finally(down) };
+            } catch (error) {
+              down();
+              throw error;
+            }
+          },
+          engineFor: engineFor({ model }),
+          pool: single,
+          allowWriteActions: false,
+          maxCostUsd: 0.5,
+          taskId: `zz_test_slot_${model}`,
+          version: 1,
+        }),
+      );
+    try {
+      const outs = await Promise.all(models.map(trial));
+      for (const out of outs) {
+        expect(out.result.ok).toBe(true);
+        if (out.result.ok) expect(out.result.records).toEqual([ref]);
+        // Rejeux de vérification faits dans le slot tenu (aucun interblocage sur un pool à 1 slot).
+        expect(out.compileFailure).toBeUndefined();
+        expect(out.compiled).toBeDefined();
+      }
+    } finally {
+      await single.close();
+    }
+    expect(peak).toBe(1);
+    expect(alive).toBe(0);
+  }, 300_000);
 });
 
 describe('schéma de la tâche d’agent', () => {

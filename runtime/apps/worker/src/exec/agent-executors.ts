@@ -20,7 +20,10 @@
 // - écritures (méthode autre que GET, HEAD, OPTIONS) refusées sur le pool sans `allow_write_actions`, navigation ou non
 //   (XHR, fetch, beacon) ; une trace E6 dont une écriture a été coupée n'est jamais compilée (08 §4 mesure 4) ;
 // - une trace E6 à plusieurs enregistrements (liste, pagination par bouton : F-E5) n'est pas compilée
-//   (`list_not_compilable`) : point faible connu de l'ADR 0001, E5 « mouvant » ; voir l'ADR (suivi de 2.4).
+//   (`list_not_compilable`) : point faible connu de l'ADR 0001, E5 « mouvant » ; voir l'ADR (suivi de 2.4) ;
+// - le Chromium dédié (E5 à étapes déléguées, E6) est lancé DANS un slot du pool (`BrowserPool.hold`), tenu jusqu'à la
+//   fin de l'essai, rejeux de compilation compris (sans redemander de slot) : `BROWSER_CONCURRENCY` borne aussi les
+//   essais agentiques, un Chromium par slot (14 §11) ; sans pool (`DISABLE_BROWSER`) : `browser_disabled`.
 import {
   compileAgentTrace,
   hybridUsesLlm,
@@ -57,10 +60,10 @@ import {
 } from '@runtime/core/exec';
 import { DomainNotAllowedError, guardedGoto, type BrowserEgress, type NetworkSession, type SsrfGuard } from '@runtime/core/net';
 import { LlmError, toFailureClass, type LlmClient, type RunUsage } from '@runtime/llm';
-import type { BrowserContext, Page, Request, Response } from 'playwright-core';
+import type { Browser, BrowserContext, Page, Request, Response } from 'playwright-core';
 import { boundedContent, boundedDocumentBody, TOO_LARGE, trackDecodedSizes, type DecodedSizes } from '../browser/bounded.js';
 import type { AgentBrowser, AgentBrowserOptions } from '../browser/agent-browser.js';
-import type { BrowserPool } from '../browser/pool.js';
+import type { BrowserPool, SlotLease } from '../browser/pool.js';
 import { hostAllowed, isMainNavigation, openRunContext, trackStrategyRequests } from '../browser/run-context.js';
 import { AttemptBudgetExceededError, AttemptCost, type RunBudget } from './attempt-cost.js';
 
@@ -265,7 +268,7 @@ export type HybridOptions = {
   readonly signal: AbortSignal;
   readonly guard: SsrfGuard;
   readonly egress: BrowserEgress;
-  /** Pool du worker : E5 sans délégation (aucun LLM). */
+  /** Pool du worker : E5 sans délégation (aucun LLM) et slot du Chromium dédié (E5 avec délégation). */
   readonly pool: BrowserPool | null;
   /** Chromium dédié (E5 avec étapes `agent`) et moteur ; client du rôle `extract` (extraction déléguée). */
   readonly agentBrowser?: (options: Omit<AgentBrowserOptions, 'egressServer'>) => Promise<AgentBrowser>;
@@ -407,12 +410,16 @@ function stepError(error: unknown): ExecFailure {
   return classifyTransportError(error);
 }
 
-/** E5 sans délégation : contexte neuf du pool, étapes, extraction par libellés. Aucun appel LLM possible ici. */
-async function runHybridWithoutLlm(options: HybridOptions, onPage?: (page: Page) => Promise<void>): Promise<DeclarativeRunResult> {
+/**
+ * E5 sans délégation : contexte neuf du pool, étapes, extraction par libellés. Aucun appel LLM possible ici. `lease` :
+ * slot déjà tenu par l'essai (rejeux de compilation E6), emprunté sans en redemander un.
+ */
+async function runHybridWithoutLlm(options: HybridOptions, onPage?: (page: Page) => Promise<void>, lease?: SlotLease): Promise<DeclarativeRunResult> {
   const pool = options.pool;
-  if (pool === null) return fail({ failure_class: 'code_error', retryable: false, detail: 'browser_disabled' });
+  if (pool === null && lease === undefined) return fail({ failure_class: 'code_error', retryable: false, detail: 'browser_disabled' });
   const spec = options.spec;
-  return pool.run(options.signal, async (browser) => {
+  const borrow = <T>(fn: (browser: Browser) => Promise<T>): Promise<T> => (lease !== undefined ? lease.run(fn) : pool!.run(options.signal, fn));
+  return borrow(async (browser) => {
     const rc = await openRunContext(browser, { egressServer: options.egress.server, allowedHosts: spec.allowed_hosts, admit: navigationAdmission(options) });
     const strategy = trackStrategyRequests(rc.context, spec.allowed_hosts);
     const stop = new AbortController();
@@ -451,19 +458,28 @@ async function runHybridWithoutLlm(options: HybridOptions, onPage?: (page: Page)
 export async function runHybridExecutor(options: HybridOptions): Promise<AgentOutcome> {
   const spec = options.spec;
   if (!hybridUsesLlm(spec)) return { result: await runHybridWithoutLlm(options), llm: null };
-  if (options.agentBrowser === undefined) return { result: fail({ failure_class: 'code_error', retryable: false, detail: 'browser_disabled' }), llm: null };
+  const agentBrowser = options.agentBrowser;
+  if (agentBrowser === undefined || options.pool === null) return { result: fail({ failure_class: 'code_error', retryable: false, detail: 'browser_disabled' }), llm: null };
+  // Chromium dédié dans un slot du pool (BROWSER_CONCURRENCY), tenu jusqu'à la fin de l'essai.
+  return options.pool.hold(options.signal, (lease) => runHybridDelegated(options, agentBrowser, lease));
+}
+
+async function runHybridDelegated(options: HybridOptions, agentBrowser: NonNullable<HybridOptions['agentBrowser']>, lease: SlotLease): Promise<AgentOutcome> {
+  const spec = options.spec;
   const needsEngine = spec.steps.some((s) => s.op === 'agent');
   const cost = options.cost ?? new AttemptCost(options.maxCostUsd);
   const extractLlm = options.llm ?? null;
   if (extractLlm !== null) cost.addLlm(() => extractLlm.usage().cost_usd);
   // Une seule échéance pour tout l'essai : étapes, étapes déléguées et extraction (timeout_ms, comme E4).
   const deadline = AbortSignal.timeout(spec.limits.timeout_ms);
-  const ab = await options.agentBrowser({
-    allowedHosts: spec.allowed_hosts,
-    allowWriteActions: options.allowWriteActions,
-    ...(options.pacer === undefined ? {} : { pacer: options.pacer }),
-    ...(options.maxRequests === undefined ? {} : { maxRequests: options.maxRequests }),
-  });
+  const ab = await lease.dedicated(() =>
+    agentBrowser({
+      allowedHosts: spec.allowed_hosts,
+      allowWriteActions: options.allowWriteActions,
+      ...(options.pacer === undefined ? {} : { pacer: options.pacer }),
+      ...(options.maxRequests === undefined ? {} : { maxRequests: options.maxRequests }),
+    }),
+  );
   let spend: LlmSpend | null = null;
   const stop = new AbortController();
   const watch = watchDocuments(ab.context, options.classify, () => stop.abort(), await decodedSizes(ab.context, ab.page));
@@ -570,7 +586,10 @@ export type AgentOptions = {
   readonly egress: BrowserEgress;
   readonly agentBrowser: (options: Omit<AgentBrowserOptions, 'egressServer'>) => Promise<AgentBrowser>;
   readonly engineFor: EngineFactory;
-  /** Pool du worker : rejeux de vérification de la compilation (sans LLM). `null` : pas de compilation. */
+  /**
+   * Pool du worker : slot du Chromium dédié, tenu jusqu'à la fin de l'essai, puis rejeux de vérification de la
+   * compilation (sans LLM) dans ce même slot. `null` (`DISABLE_BROWSER`) : `browser_disabled`, aucun Chromium.
+   */
   readonly pool: BrowserPool | null;
   readonly allowWriteActions: boolean;
   readonly pacer?: RequestPacer;
@@ -608,12 +627,12 @@ function agentFailure(run: AgentRunResult, cost?: AttemptCost): ExecFailure {
  */
 async function compileAndVerify(
   options: AgentOptions,
+  lease: SlotLease,
   run: AgentRunResult,
   records: readonly Record<string, unknown>[],
   engine: string,
   writesBlocked: number,
 ): Promise<{ spec: HybridSpec } | { failure: string }> {
-  if (options.pool === null) return { failure: 'browser_disabled' };
   if (writesBlocked > 0) return { failure: 'write_blocked' };
   if (records.length !== 1) return { failure: 'list_not_compilable' };
   const steps = compileAgentTrace(run.steps, run.status, options.spec.allowed_hosts);
@@ -630,31 +649,41 @@ async function compileAndVerify(
     compiled_from: { execution: 'agent', version: options.version, engine },
   });
   if (!draft.ok) return { failure: 'invalid_compiled_spec' };
-  const base: HybridOptions = { ...options, spec: draft.spec, pool: options.pool };
+  const base: HybridOptions = { ...options, spec: draft.spec };
   let fields: ReturnType<typeof induceLabelExtraction> = null;
   const first = await runHybridWithoutLlm(base, async (page) => {
     const view = await readPageView(page, draft.spec.limits.max_input_chars * 10);
     if (view !== null) fields = induceLabelExtraction(view, expected);
-  }).catch(() => null);
+  }, lease).catch(() => null);
   if (first === null) return { failure: 'replay_error' };
   if (fields === null) return { failure: 'extraction_not_inducible' };
   const final = validateHybridSpec({ ...draft.spec, extract: { mode: 'labels', fields } });
   if (!final.ok) return { failure: 'invalid_compiled_spec' };
-  const replay = await runHybridWithoutLlm({ ...base, spec: final.spec }).catch(() => null);
+  const replay = await runHybridWithoutLlm({ ...base, spec: final.spec }, undefined, lease).catch(() => null);
   if (replay === null || !replay.ok) return { failure: 'replay_failed' };
   if (replay.records.length !== 1 || JSON.stringify(replay.records[0]) !== JSON.stringify(expected)) return { failure: 'replay_mismatch' };
   return { spec: final.spec };
 }
 
-/** E6 : l'agent pilote le Chromium dédié de bout en bout ; trace réussie compilée en E5 vérifiée. */
+/**
+ * E6 : l'agent pilote le Chromium dédié de bout en bout ; trace réussie compilée en E5 vérifiée. Un slot du pool est
+ * tenu pour tout l'essai : le Chromium dédié y tourne, puis il est fermé avant les rejeux, faits dans le même slot.
+ */
 export async function runAgentExecutor(options: AgentOptions): Promise<AgentOutcome> {
+  if (options.pool === null) return { result: fail({ failure_class: 'code_error', retryable: false, detail: 'browser_disabled' }), llm: null };
+  return options.pool.hold(options.signal, (lease) => runAgentInSlot(options, lease));
+}
+
+async function runAgentInSlot(options: AgentOptions, lease: SlotLease): Promise<AgentOutcome> {
   const cost = options.cost ?? new AttemptCost(options.maxCostUsd);
-  const ab = await options.agentBrowser({
-    allowedHosts: options.spec.allowed_hosts,
-    allowWriteActions: options.allowWriteActions,
-    ...(options.pacer === undefined ? {} : { pacer: options.pacer }),
-    ...(options.maxRequests === undefined ? {} : { maxRequests: options.maxRequests }),
-  });
+  const ab = await lease.dedicated(() =>
+    options.agentBrowser({
+      allowedHosts: options.spec.allowed_hosts,
+      allowWriteActions: options.allowWriteActions,
+      ...(options.pacer === undefined ? {} : { pacer: options.pacer }),
+      ...(options.maxRequests === undefined ? {} : { maxRequests: options.maxRequests }),
+    }),
+  );
   let run: AgentRunResult;
   let made: ReturnType<EngineFactory>;
   let domainBlocked: number;
@@ -708,6 +737,6 @@ export async function runAgentExecutor(options: AgentOptions): Promise<AgentOutc
   const items = (run.output as { items?: unknown } | null)?.items;
   const result = conform(Array.isArray(items) ? items : [], options.outputSchema, 1);
   if (!result.ok) return { result, llm: spend, domainBlocked };
-  const compiled = await compileAndVerify(options, run, result.records, `${made.engine.id}@${made.engine.version}`, writesBlocked);
+  const compiled = await compileAndVerify(options, lease, run, result.records, `${made.engine.id}@${made.engine.version}`, writesBlocked);
   return 'spec' in compiled ? { result, llm: spend, compiled: compiled.spec, domainBlocked } : { result, llm: spend, compileFailure: compiled.failure, domainBlocked };
 }

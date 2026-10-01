@@ -109,6 +109,7 @@ export function productionExecutorFactory(env: Readonly<Record<string, string | 
       },
       client: (config) => createLlmClient(config),
       engineFor: (config) => stagehandEngineFor(config, env as NodeJS.ProcessEnv),
+      // Lancé par les exécuteurs E5 et E6 DANS un slot du pool (BrowserPool.hold) : BROWSER_CONCURRENCY le borne (14 §11).
       agentBrowser: (options) => launchAgentBrowser({ ...options, env }),
     };
     return {
