@@ -31,11 +31,12 @@ import { describe, test } from "vitest";
 // @runtime/core seul : packages/core/src/observability/observability.unit.test.ts ; assert_metrics_closed :
 // apps/server/src/observability.integration.test.ts.
 // La capture de trafic complète (cibles, LLM, proxys, SMTP, webhooks réels) de assert_no_telemetry reste à 4.3.
+// INV7 (1.5) : assert_sandbox est dans apps/worker/src/sandbox/sandbox.security.test.ts (projet Vitest security,
+// isolated-vm et adaptateur QuickJS) ; borne isolated-vm et fuzz des ponts : apps/worker/src/sandbox/sandbox.unit.test.ts.
 describe("invariants (à implémenter)", () => {
   test.todo("assert_cheapest_first_logged"); // INV2, tâche(s) 2.1
   test.todo("assert_tunnel_single_user"); // INV5, tâche(s) 2.6, 2.7
   test.todo("assert_no_circumvention"); // INV6, tâche(s) 1.7, 4.3
-  test.todo("assert_sandbox"); // INV7, tâche(s) 1.5
   test.todo("assert_robots_respected"); // INV11, tâche(s) 1.11
   // RGPD (1.8) : assert_retention_purge, assert_erasure_complete et assert_no_personal_data_in_logs sont dans
   // packages/db/src/retention/retention.integration.test.ts ; câblage worker (RunContext.personal, RunContext.excludeSubjects,

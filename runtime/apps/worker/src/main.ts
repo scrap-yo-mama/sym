@@ -3,11 +3,14 @@
 // arrêt propre sur SIGTERM/SIGINT (14 § 1). Code de sortie : 0 arrêt propre, 1 échec d'arrêt, 2 refus de démarrer.
 import type { RunExecutor } from '@runtime/core';
 import { loadWorkerConfig } from './config.js';
+import { assertSandboxSupported } from './sandbox/index.js';
 import { startWorker, type Worker } from './worker.js';
 
 export async function main(env: NodeJS.ProcessEnv = process.env, options: { executor?: RunExecutor } = {}): Promise<Worker | null> {
   let worker: Worker;
   try {
+    // Test de démarrage (08 §3) : refus si isolated-vm est sous la borne GHSA-864f-rcv7-6rh4 ou sans binaire pour ce Node.
+    assertSandboxSupported();
     worker = await startWorker({ config: loadWorkerConfig(env), ...options });
   } catch (error) {
     console.error(`Refus de démarrer le worker : ${error instanceof Error ? error.message : String(error)}`);

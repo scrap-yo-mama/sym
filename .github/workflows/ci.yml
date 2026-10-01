@@ -136,7 +136,19 @@ jobs:
       # À venir : Playwright interface (E1, 3.x), shardé, rapport blob fusionné.
 
   security:
+    # Bac à sable (tâche 1.5, D-24) : matrice Node 24 (.node-version, suite complète) et Node 26 (isolated-vm 7.0.1,
+    # ABI 147 ; suite du bac à sable seule), à chaque PR. engines limite l'installation à Node 24 : engine-strict levé
+    # pour Node 26 seulement.
+    name: security (Node ${{ matrix.label }})
     runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: "24"
+            node: ""
+          - label: "26"
+            node: "26"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -146,13 +158,40 @@ jobs:
           package_json_file: runtime/package.json
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
+          # Vide : .node-version (Node 24).
+          node-version: ${{ matrix.node }}
           node-version-file: runtime/.node-version
-      - run: pnpm install --frozen-lockfile
+      - run: pnpm install --frozen-lockfile ${{ matrix.node == '26' && '--config.engine-strict=false' || '' }}
       - run: pnpm build
+      - name: Utilisateur dédié du bac à sable, comme deploy/Dockerfile (uid 1500, lanceur setpriv à capacités)
+        run: |
+          sudo apt-get install -y --no-install-recommends libcap2-bin
+          sudo groupadd --system --gid 1500 sandbox
+          sudo useradd --system --uid 1500 --gid 1500 --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin sandbox
+          sudo install -d -m 0755 /usr/local/libexec
+          sudo install -o root -g "$(id -gn)" -m 0750 /usr/bin/setpriv /usr/local/libexec/sandbox-launch
+          sudo setcap cap_setuid,cap_setgid=ep /usr/local/libexec/sandbox-launch
+          # L'enfant lit son script et les paquets du moteur dans l'espace de travail : traversée des dossiers parents.
+          d="$GITHUB_WORKSPACE"; while [ "$d" != / ]; do sudo chmod o+x "$d"; d="$(dirname "$d")"; done
+          { echo SANDBOX_UID=1500; echo SANDBOX_GID=1500; echo SANDBOX_LAUNCHER=/usr/local/libexec/sandbox-launch; } >> "$GITHUB_ENV"
       - name: Chromium de Playwright (garde SSRF via le proxy d'egress, INV10)
+        if: matrix.node == ''
         run: pnpm exec playwright install --with-deps chromium
-      - run: pnpm test:security
+      # Aucune relance : un échec instable doit rester visible (rapport junit archivé).
+      - if: matrix.node == ''
+        run: pnpm test:security --retry=0 --reporter=default --reporter=junit --outputFile.junit=reports/security-junit.xml
+      - name: assert_sandbox et borne isolated-vm sur Node 26
+        if: matrix.node == '26'
+        run: pnpm vitest run --project unit --project security --retry=0 --reporter=default --reporter=junit --outputFile.junit=reports/security-junit.xml apps/worker/src/sandbox
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: failure()
+        with:
+          name: security-junit-node${{ matrix.label }}
+          path: runtime/reports/
+          if-no-files-found: ignore
+          retention-days: 14
       - name: pnpm audit (avertissement au début, bloquant plus tard)
+        if: matrix.node == ''
         continue-on-error: true
         run: pnpm audit --audit-level=critical
 
