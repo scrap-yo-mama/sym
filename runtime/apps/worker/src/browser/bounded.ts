@@ -17,6 +17,54 @@ type PageGlobals = {
   performance: { getEntriesByType(type: string): { decodedBodySize: number }[] };
 };
 
+/** Défilement et comptage vus depuis le worker (`infinite_scroll`) ; chaque fonction ne rend qu'un nombre ou rien. */
+type ScrollGlobals = {
+  scrollTo(x: number, y: number): void;
+  document: { documentElement: { scrollHeight: number }; querySelectorAll(selector: string): { length: number } };
+};
+
+/** Nombre d'éléments qui correspondent au sélecteur dans la page ; sélecteur refusé ou page hostile : 0. */
+export async function countMatching(page: Page, selector: string): Promise<number> {
+  const n = await page
+    .evaluate((sel: string) => {
+      try {
+        const count: unknown = (globalThis as unknown as ScrollGlobals).document.querySelectorAll(sel).length;
+        return typeof count === 'number' ? count : 0;
+      } catch {
+        return 0;
+      }
+    }, selector)
+    .catch(() => 0);
+  return typeof n === 'number' && Number.isFinite(n) ? n : 0;
+}
+
+/**
+ * Fait défiler la page jusqu'en bas (événements `scroll`, observateurs d'intersection du site) puis attend, au plus
+ * `timeoutMs`, qu'il y ait plus de `before` éléments pour `selector`. Rend vrai si de nouveaux éléments sont apparus.
+ */
+export async function scrollForMore(page: Page, selector: string, before: number, timeoutMs: number): Promise<boolean> {
+  await page
+    .evaluate(() => {
+      const g = globalThis as unknown as ScrollGlobals;
+      g.scrollTo(0, g.document.documentElement.scrollHeight);
+    })
+    .catch(() => undefined);
+  return page
+    .waitForFunction(
+      ({ sel, count }: { sel: string; count: number }) => {
+        try {
+          return (globalThis as unknown as ScrollGlobals).document.querySelectorAll(sel).length > count;
+        } catch {
+          return false;
+        }
+      },
+      { sel: selector, count: before },
+      { timeout: timeoutMs },
+    )
+    .then(() => true)
+    .catch(() => false);
+}
+
 const bytesOk = (value: string, maxBytes: number): boolean => Buffer.byteLength(value) <= maxBytes;
 
 /** HTML sérialisé du document (doctype + `documentElement`), comme `page.content()`, borné dans la page. */

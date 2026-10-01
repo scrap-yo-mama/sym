@@ -32,19 +32,22 @@ import {
   type DeclarativeRunResult,
   type ExecFailure,
   type HttpExchange,
+  type ScrollTransport,
   type Transport,
 } from '@runtime/core/exec';
 import { DslError } from '@runtime/core';
 import type { CapturedExchange, ReconCapture } from '@runtime/core/investigation';
 import { DomainNotAllowedError, guardedGoto, type BrowserEgress, type SsrfGuard } from '@runtime/core/net';
 import type { Page, Request, Response } from 'playwright-core';
-import { boundedContent, boundedDocumentBody, boundedRawBody, TOO_LARGE, trackDecodedSizes, type DecodedSizes } from '../browser/bounded.js';
+import { boundedContent, boundedDocumentBody, boundedRawBody, countMatching, scrollForMore, TOO_LARGE, trackDecodedSizes, type DecodedSizes } from '../browser/bounded.js';
 import type { BrowserPool } from '../browser/pool.js';
 import { hostAllowed, isMainNavigation, openRunContext, trackStrategyRequests, type BrowserRequestCheck, type RunContext, type StrategyRequests } from '../browser/run-context.js';
 
 const BROWSER_NAVIGATION_TIMEOUT_MS = 30_000;
 /** Attente du rendu d'une page (sélecteur des enregistrements) avant lecture du DOM. */
 const BROWSER_RENDER_WAIT_MS = 10_000;
+/** Attente de nouveaux éléments après un défilement (`infinite_scroll`) : au-delà, la fin du flux est constatée. */
+const BROWSER_SCROLL_WAIT_MS = 5_000;
 
 export type BrowserExecutorOptions = Omit<DeclarativeRunOptions, 'transport' | 'access'> & {
   /** robots.txt (1.11, INV11) : obligatoire, chaque requête du contexte Chromium du run est contrôlée. */
@@ -54,6 +57,8 @@ export type BrowserExecutorOptions = Omit<DeclarativeRunOptions, 'transport' | '
   readonly guard: SsrfGuard;
   readonly navigationTimeoutMs?: number;
   readonly renderWaitMs?: number;
+  /** Attente de nouveaux éléments après un défilement (défaut 5 s, plafonnée par `renderWaitMs`). */
+  readonly scrollWaitMs?: number;
   /** User-Agent du robot (1.11, `buildUserAgent`) : la chaîne du moteur, suivie du jeton si `identify_instance` est activé. */
   readonly userAgent?: string;
   /** Suivre aussi la taille décodée des requêtes de données (`fetch`, XHR) : reconnaissance de l'enquête (2.1). */
@@ -424,10 +429,14 @@ export function runPlaywrightExecutor(options: BrowserExecutorOptions): Promise<
   const renderSelector = options.spec.sources.find((s) => s.from === 'html')?.records;
   const renderWaitMs = options.renderWaitMs ?? BROWSER_RENDER_WAIT_MS;
   const classify = options.classify ?? classifyExchange;
+  const scrollWaitMs = Math.min(options.scrollWaitMs ?? BROWSER_SCROLL_WAIT_MS, renderWaitMs);
   return withRunContext(options, async ({ page }, strategy, guardNav) => {
+    /** Réponse servie de la dernière navigation : statut et en-têtes d'un document que les défilements prolongent. */
+    let loaded: { status: number; headers: Record<string, string> } | undefined;
     const transport: Transport = async (request) => {
       if (request.method !== 'GET' || request.body !== undefined) throw new DslError('unsupported', 'E3 déclaratif : requêtes GET seulement');
       const nav = await requestedNavigation(page, request.url, options, strategy, guardNav);
+      loaded = { status: nav.status, headers: nav.headers };
       // Document hors HTML (JSON, texte) : aucun script de page, le corps brut est la réponse.
       if (!nav.html) return { status: nav.status, headers: nav.headers, body: capped(await boundedRawBody(page, nav.response, maxBytes)), url: page.url() };
       // Garde de classification AVANT toute attente du rendu (04 §5, INV6) : statut, en-têtes et corps brut servi. Un
@@ -444,7 +453,28 @@ export function runPlaywrightExecutor(options: BrowserExecutorOptions): Promise<
       if (guardNav.attempted()) throw guardNav.refusal(served);
       return { status: nav.status, headers: nav.headers, body, url: page.url() };
     };
-    return runDeclarative({ ...options, transport });
+    /**
+     * `infinite_scroll` : fait défiler la page chargée jusqu'en bas (événements `scroll` et observateurs d'intersection
+     * du site), attend de nouveaux éléments (sélecteur des enregistrements, bornée) puis le calme du réseau, et rend le
+     * DOM à jour. Aucune navigation n'est demandée : une navigation lancée par la page interrompt, comme au chargement.
+     * Le défilement est une requête pour la cadence, le contrôle d'accès et la garde de classification (declarative.ts).
+     */
+    const scroll: ScrollTransport | undefined =
+      renderSelector === undefined
+        ? undefined
+        : async () => {
+            if (loaded === undefined) throw new DslError('unsupported', 'défilement avant tout chargement');
+            const served = { status: loaded.status, headers: loaded.headers, body: '', url: page.url() };
+            await guardNav.during(async () => {
+              const before = await countMatching(page, renderSelector);
+              await scrollForMore(page, renderSelector, before, scrollWaitMs);
+              await page.waitForLoadState('networkidle', { timeout: scrollWaitMs }).catch(() => undefined);
+            }, () => served);
+            const body = capped(await guardNav.during(() => boundedContent(page, maxBytes), () => served));
+            if (guardNav.attempted()) throw guardNav.refusal(served);
+            return { status: loaded.status, headers: loaded.headers, body, url: page.url() };
+          };
+    return runDeclarative({ ...options, transport, ...(scroll === undefined ? {} : { scroll }) });
   });
 }
 
