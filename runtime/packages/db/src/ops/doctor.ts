@@ -9,6 +9,7 @@ import { readBackupDeclaration } from './backup.js';
 import { connectionBudget } from './budget.js';
 import { schemaCompatibility } from './schema-version.js';
 import { DatabaseConfigError, resolveConnections, type SessionProbe } from '../connection.js';
+import { WORKER_DEAD_AFTER_SECONDS } from '../health.js';
 import { MIN_SERVER_VERSION_NUM, currentSchemaVersion, expectedSchemaVersion } from '../migrate.js';
 import { KEY_CHECK_SETTING, REKEY_STATE_SETTING } from '../secrets.js';
 
@@ -34,8 +35,6 @@ export type DoctorCheckId = (typeof DOCTOR_CHECK_IDS)[number];
 export type DoctorCheck = { id: DoctorCheckId; status: CheckStatus; code: string; message: string };
 export type DoctorReport = { checks: DoctorCheck[]; exitCode: 0 | 1 | 2 };
 
-/** Un worker est mort après 45 s sans battement (14 § 3, seuil à valider). */
-export const WORKER_DEAD_AFTER_SECONDS = 45;
 /** Sauvegarde déclarée plus vieille que cela : avertissement (choix de conception, à valider en 4.4). */
 export const BACKUP_MAX_AGE_DAYS = 7;
 export const STORAGE_WARN_RATIO = 0.8;

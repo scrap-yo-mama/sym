@@ -150,17 +150,33 @@ export async function schemaSnapshot(client: pg.Client): Promise<Record<string, 
  * Empreinte des données de toutes les tables du schéma public (hors schema_migrations). created_at et updated_at
  * sont exclus : une ligne de référence recréée par une migration (projet « default ») reçoit un nouvel horodatage.
  */
-export async function dataSnapshot(client: pg.Client): Promise<Record<string, string>> {
+export async function dataSnapshot(client: pg.Client, projection?: Record<string, string[]>): Promise<Record<string, string>> {
   const { rows } = await client.query<{ t: string }>(`
     SELECT c.relname AS t FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
     WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p') AND NOT c.relispartition AND c.relname <> 'schema_migrations'
     ORDER BY 1`);
   const out: Record<string, string> = {};
   for (const { t } of rows) {
+    let source = `to_jsonb(r)`;
+    if (projection) {
+      const columns = projection[t];
+      if (!columns) continue; // table créée après la référence : hors périmètre
+      source = `jsonb_build_object(${columns.map((c) => `'${c}', to_jsonb(r.${'"' + c + '"'})`).join(', ')})`;
+    }
     const res = await client.query<{ h: string | null }>(
-      `SELECT md5(string_agg(x::text, '|' ORDER BY x::text)) AS h FROM (SELECT to_jsonb(r) - 'created_at' - 'updated_at' AS x FROM ${t} r) s`,
+      `SELECT md5(string_agg(x::text, '|' ORDER BY x::text)) AS h FROM (SELECT ${source} - 'created_at' - 'updated_at' AS x FROM ${t} r) s`,
     );
     out[t] = res.rows[0]?.h ?? 'vide';
   }
+  return out;
+}
+
+/** Colonnes par table du schéma public : sert de projection à `dataSnapshot` pour comparer un schéma N aux données de N-1. */
+export async function columnsSnapshot(client: pg.Client): Promise<Record<string, string[]>> {
+  const { rows } = await client.query<{ t: string; c: string }>(`
+    SELECT table_name AS t, column_name AS c FROM information_schema.columns
+    WHERE table_schema = 'public' AND table_name <> 'schema_migrations' ORDER BY table_name, ordinal_position`);
+  const out: Record<string, string[]> = {};
+  for (const { t, c } of rows) (out[t] ??= []).push(c);
   return out;
 }

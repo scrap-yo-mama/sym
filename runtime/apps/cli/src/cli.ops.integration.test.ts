@@ -126,8 +126,8 @@ describe('runtime secrets accept-key-loss --confirm (D-12)', () => {
     const seeded = await seedInstance(db.url, loadKeyring({ ...base(), MASTER_KEY: original }));
     secretId = [...seeded.secrets.keys()][0]!;
     await withClient(db.url, async (c) => {
-      await c.query("INSERT INTO site_sessions (owner_id, domain, server_use_allowed, ciphertext, nonce, key_version, captured_at) VALUES ($1, 'example.test', true, $2, $3, 1, now())", [
-        seeded.ownerId, Buffer.from('cookie-chiffré'), Buffer.from('nonce-nonce'),
+      await c.query("INSERT INTO site_sessions (owner_id, domain, server_use_allowed, ciphertext, nonce, dek_wrapped, alg, key_version, captured_at) VALUES ($1, 'example.test', true, $2, $3, $4, 'aes-256-gcm', 1, now())", [
+        seeded.ownerId, Buffer.from('cookie-chiffré'), Buffer.from('nonce-nonce'), Buffer.from('dek-enveloppée'),
       ]);
       await c.query("INSERT INTO run_artifacts (run_id, owner_id, kind, bytes, sensitivity, ciphertext, nonce, key_version) VALUES ($1, $2, 'screenshot', 4, 'low', $3, $4, 1)", [
         seeded.runIds[0], seeded.ownerId, Buffer.from('abcd'), Buffer.from('nonce-nonce'),
@@ -179,7 +179,7 @@ describe('runtime secrets accept-key-loss --confirm (D-12)', () => {
 
   test('--confirm : secrets conservés « À ressaisir », sessions et artefacts vidés, témoin réécrit, ancienne clé refusée', async () => {
     const res = await run(['secrets', 'accept-key-loss', '--confirm'], { env: { ...base(), MASTER_KEY: lost } });
-    expect(res.code).toBe(0);
+    expect(res.code, res.out).toBe(0);
     expect(res.out).toMatch(/3 secret\(s\) passés en « À ressaisir », 1 session\(s\) de site vidées, 1 artefact\(s\) supprimés ; témoin de clé réécrit \(empreinte [0-9a-f-]+, version 2\)/);
     expect(res.out).not.toContain(lost);
     expect(await counts()).toEqual({ unreadable: 3, sessions: 0, artifacts: 0 });

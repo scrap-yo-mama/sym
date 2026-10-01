@@ -15,7 +15,7 @@ import { run } from '../apps/cli/src/cli.js';
 import { prepareServer } from '../apps/server/src/start.js';
 import { dumpDatabase, restoreDatabase } from './helpers/docker-pg.js';
 import { seedInstance, type SeededInstance } from './helpers/ops-seed.js';
-import { createTestDatabase, dataSnapshot, schemaSnapshot, withClient, type TestDatabase } from './helpers/pg.js';
+import { columnsSnapshot, createTestDatabase, dataSnapshot, schemaSnapshot, withClient, type TestDatabase } from './helpers/pg.js';
 
 const override = vi.hoisted(() => ({ expected: undefined as number | undefined }));
 vi.mock('@runtime/db', async (importOriginal) => {
@@ -175,6 +175,9 @@ describe(`mise à jour N-1 → N et retour arrière (PostgreSQL ${inject('pgVers
   let seeded: SeededInstance;
   let preMigrationDump: Buffer;
   let before: { data: Record<string, string>; apis: unknown[] };
+  // Une migration peut remplir une colonne qu'elle ajoute (0009 : épinglage) : « 0 perte » se juge sur les colonnes de N-1.
+  let projection: Record<string, string[]>;
+  const dataN1 = (c: pg.Client) => dataSnapshot(c, projection);
   const cleanup: TestDatabase[] = [];
 
   beforeAll(async () => {
@@ -185,7 +188,8 @@ describe(`mise à jour N-1 → N et retour arrière (PostgreSQL ${inject('pgVers
     // Instance N-1 : schéma sans la dernière migration, API saines, 10 runs, 3 secrets.
     await migrateUp({ connectionString: db.url, migrations: migrations.slice(0, -1) });
     seeded = await seedInstance(db.url, loadKeyring({ DATABASE_URL: db.url, MASTER_KEY: key }));
-    before = { data: await withClient(db.url, dataSnapshot), apis: await apiState(db.url) };
+    projection = await withClient(reference.url, columnsSnapshot);
+    before = { data: await withClient(db.url, dataN1), apis: await apiState(db.url) };
     // Point 2 de la procédure (14 § 6) : sauvegarde juste avant la migration.
     preMigrationDump = dumpDatabase(containerId, db.name);
   }, 180_000);
@@ -199,8 +203,9 @@ describe(`mise à jour N-1 → N et retour arrière (PostgreSQL ${inject('pgVers
   });
 
   test('assert_upgrade_n_minus_1 : `runtime migrate` puis /api/ready = 200, API saines inchangées, 0 perte, secrets lisibles', async () => {
-    // Le code N refuse la base N-1 tant qu'on n'a pas migré : message qui nomme la commande.
-    await expect(readyStatus(db.url, key)).rejects.toThrow(/lancez `runtime migrate` avant `server`/);
+    // Le code N sur la base N-1 démarre en mode dégradé (14 § 5) : /api/health 200, /api/ready 503 (schéma en retard), aucune
+    // route d'API tant que `runtime migrate` n'est pas passé.
+    expect(await readyStatus(db.url, key)).toMatchObject({ ready: 503, health: 200, body: { status: 'not_ready', checks: { database: true, schema: false } } });
     expect(await run(['migrate'], { env: { DATABASE_URL: db.url }, log })).toEqual({ code: 0, out: 'migrate : 1 migration(s) appliquée(s)' });
     expect(await withClient(db.url, (c) => currentSchemaVersion(c))).toBe(N);
 
@@ -214,7 +219,7 @@ describe(`mise à jour N-1 → N et retour arrière (PostgreSQL ${inject('pgVers
     }));
     expect(counts.runs).toBe(10);
     expect(counts.ids).toEqual([...seeded.runIds].sort());
-    expect(await withClient(db.url, dataSnapshot)).toEqual(before.data);
+    expect(await withClient(db.url, dataN1)).toEqual(before.data);
     await secretsReadable(db.url, key, seeded.secrets);
     const doctor = JSON.parse((await run(['doctor', '--json'], { env: serverEnv(db.url, key) })).out) as { checks: { id: string; status: string; code: string }[] };
     expect(doctor.checks.filter((c) => c.status === 'error')).toEqual([]);
@@ -223,7 +228,7 @@ describe(`mise à jour N-1 → N et retour arrière (PostgreSQL ${inject('pgVers
 
   test('assert_rollback_restores_state : image N-1 sur schéma N refusée ; image N-1 + restauration = état d\'avant', async () => {
     // 1. L'image précédente seule ne démarre pas : pas de migration descendante en production.
-    await expect(readyStatus(db.url, key, N - 1)).rejects.toThrow(/l'image est plus ancienne que la base.*restaurez la sauvegarde/);
+    await expect(readyStatus(db.url, key, N - 1)).rejects.toThrow(/plus récent que ce code.*restaurez la sauvegarde/);
     const down = await run(['migrate', 'down'], { env: { DATABASE_URL: db.url, NODE_ENV: 'production' }, log });
     expect(down.code).toBe(2);
     expect(down.out).toMatch(/refusé en production.*image précédente \+ restauration/);
@@ -237,7 +242,7 @@ describe(`mise à jour N-1 → N et retour arrière (PostgreSQL ${inject('pgVers
     expect(result, result.stderr).toMatchObject({ status: 0 });
     expect(await withClient(restored.url, (c) => currentSchemaVersion(c))).toBe(N - 1);
     expect(await readyStatus(restored.url, key, N - 1)).toMatchObject({ ready: 200, health: 200 });
-    expect(await withClient(restored.url, dataSnapshot)).toEqual(before.data);
+    expect(await withClient(restored.url, dataN1)).toEqual(before.data);
     expect(await apiState(restored.url)).toEqual(before.apis);
     expect(await withClient(restored.url, schemaSnapshot)).toEqual(await withClient(reference.url, schemaSnapshot));
     await secretsReadable(restored.url, key, seeded.secrets);
@@ -245,6 +250,6 @@ describe(`mise à jour N-1 → N et retour arrière (PostgreSQL ${inject('pgVers
     // 3. Correction vers l'avant : la base restaurée remonte en N sans perte.
     expect((await run(['migrate'], { env: { DATABASE_URL: restored.url }, log })).code).toBe(0);
     expect(await readyStatus(restored.url, key)).toMatchObject({ ready: 200 });
-    expect(await withClient(restored.url, dataSnapshot)).toEqual(before.data);
+    expect(await withClient(restored.url, dataN1)).toEqual(before.data);
   });
 });

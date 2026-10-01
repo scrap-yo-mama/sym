@@ -66,7 +66,7 @@ export async function acceptKeyLossLocked(client: pg.ClientBase, current: Master
     const { unreadable, version } = await acceptKeyLoss(client, current, {
       inTransaction: async (c) => {
         const sessions = await c.query(
-          'UPDATE site_sessions SET ciphertext = NULL, nonce = NULL, key_version = NULL, captured_at = NULL WHERE ciphertext IS NOT NULL',
+          'UPDATE site_sessions SET ciphertext = NULL, nonce = NULL, dek_wrapped = NULL, alg = NULL, key_version = NULL, captured_at = NULL WHERE ciphertext IS NOT NULL',
         );
         siteSessionsCleared = sessions.rowCount ?? 0;
         artifactsDeleted = (await c.query('DELETE FROM run_artifacts')).rowCount ?? 0;

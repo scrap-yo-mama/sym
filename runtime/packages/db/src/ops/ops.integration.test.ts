@@ -215,8 +215,8 @@ describe('runtime export-catalog', () => {
     // Appâts : session de site chiffrée, artefact chiffré, secret, secret_id d'un webhook : rien de cela ne sort.
     const cookieCanary = canary('cookie');
     await client.query(
-      `INSERT INTO site_sessions (owner_id, domain, server_use_allowed, ciphertext, nonce, key_version) VALUES ($1, 'example.test', true, $2, $3, 1)`,
-      [seeded.ownerId, Buffer.from(cookieCanary), Buffer.from('nonce-nonce')],
+      `INSERT INTO site_sessions (owner_id, domain, server_use_allowed, ciphertext, nonce, dek_wrapped, alg, key_version) VALUES ($1, 'example.test', true, $2, $3, $4, 'aes-256-gcm', 1)`,
+      [seeded.ownerId, Buffer.from(cookieCanary), Buffer.from('nonce-nonce'), Buffer.from('dek-enveloppée')],
     );
     secretValues.clear();
     const catalog = await exportCatalog(client, new Date('2026-10-01T08:00:00Z'));
