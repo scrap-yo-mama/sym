@@ -1,0 +1,34 @@
+{
+  "name": "@runtime/ui",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "license": "AGPL-3.0-only",
+  "description": "Design system SYM : jetons, polices auto-hébergées, thèmes clair et sombre, icône SYM (tâche 3.15). Paquet de sources : consommé tel quel par Vite, sans étape de build.",
+  "exports": {
+    ".": "./src/index.ts",
+    "./theme.css": "./src/theme.css",
+    "./sym-ghost": "./src/sym-ghost.ts",
+    "./icons/sym-ghost.svg": "./icons/sym-ghost.svg",
+    "./testing/contrast": "./src/testing/contrast.ts",
+    "./testing/color-rules": "./src/testing/color-rules.ts"
+  },
+  "files": [
+    "src",
+    "fonts",
+    "icons"
+  ],
+  "scripts": {
+    "typecheck": "vue-tsc --noEmit -p tsconfig.json",
+    "test": "vitest run --passWithNoTests"
+  },
+  "dependencies": {
+    "vue": "catalog:"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:",
+    "vue-tsc": "catalog:"
+  }
+}

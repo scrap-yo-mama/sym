@@ -31,11 +31,11 @@ const siteUrl = computed(() => (/^[a-z0-9.-]+$/i.test(named.value.domain) && nam
 <template>
   <!-- Région `status` toujours présente : la reprise est annoncée poliment, sans voler le focus. -->
   <div role="status" aria-live="polite">
-    <p v-if="resuming" class="rounded-lg border border-sky-700 p-3 font-medium text-sky-900 dark:border-sky-400 dark:text-sky-200" data-testid="action-resuming">
+    <p v-if="resuming" class="rounded-lg border border-primary p-3 font-medium" data-testid="action-resuming">
       {{ t('actionRequired.resuming') }}
     </p>
   </div>
-  <section v-if="cause && !resuming" role="alert" class="flex flex-col gap-3 rounded-lg border-2 border-orange-700 p-4 dark:border-orange-400" data-testid="action-banner" :data-cause="cause.cause">
+  <section v-if="cause && !resuming" role="alert" class="flex flex-col gap-3 rounded-lg border-2 border-primary p-4" data-testid="action-banner" :data-cause="cause.cause">
     <h2 class="text-lg font-semibold">{{ t(`actionRequired.${cause.cause}.title`, named) }}</h2>
     <p v-if="cause.cause === 'challenge' || cause.cause === 'accountLimit' || cause.cause === 'payment'" class="text-sm">{{ t(`actionRequired.${cause.cause}.text`, named) }}</p>
     <div class="flex flex-wrap items-center gap-3">

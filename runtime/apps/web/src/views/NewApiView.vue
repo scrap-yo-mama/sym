@@ -76,7 +76,7 @@ async function reinvestigate(): Promise<void> {
   }
 }
 
-const inputError = 'text-sm text-destructive';
+const inputError = 'sym-error';
 </script>
 
 <template>

@@ -4,9 +4,13 @@
 //   invitation d'un membre (lien copiable montré une fois) → acceptation → écrans d'admin absents pour le membre → lien rejoué = même
 //   réponse qu'un lien inconnu → clé d'API vue une fois → invitation d'un admin (2FA forcée) → audit lisible et exporté sans secret.
 // Une instance (MFA_ENFORCED=admins), des contextes de navigateur distincts par personne. Aucun site réel.
+// assert_no_csp_violation (tâche 3.15, 20b § 3.1) : le relais sert la console avec sa CSP stricte (08b § 2, apps/web/e2e/csp.ts) ;
+// chaque contexte relève ses événements `securitypolicyviolation` et chaque test échoue s'il en a laissé un (afterEach) ; un témoin
+// prouve que le contrôle sait échouer.
 import { readFileSync } from 'node:fs';
 import { base32Decode, totpCode, totpStep } from '@runtime/core';
 import { test, expect, type Browser, type BrowserContext, type Page } from '@playwright/test';
+import { CONSOLE_CSP, watchCspViolations } from '../../apps/web/e2e/csp.ts';
 import { startInstance, type Instance } from './instance.ts';
 
 const EN = JSON.parse(readFileSync(new URL('../../apps/web/src/i18n/locales/en.json', import.meta.url), 'utf8')) as Record<string, unknown>;
@@ -27,10 +31,15 @@ type Person = { context: BrowserContext; page: Page; errors: string[] };
 /** Origine de l'instance, posée au démarrage : les pages s'ouvrent par chemin relatif. */
 let baseURL = '';
 
-/** Une personne devant la console : contexte isolé (cookies à elle), anglais, erreurs de console relevées. */
+/** Violations de la CSP de la console relevées dans tous les contextes ouverts, depuis la fin du test précédent. */
+const cspViolations: string[] = [];
+test.afterEach(() => expect(cspViolations.splice(0), 'violations de la CSP de la console (assert_no_csp_violation)').toEqual([]));
+
+/** Une personne devant la console : contexte isolé (cookies à elle), anglais, erreurs de console et violations de CSP relevées. */
 async function person(browser: Browser, grantClipboard = false): Promise<Person> {
   const context = await browser.newContext({ locale: 'en-US', baseURL });
   if (grantClipboard) await context.grantPermissions(['clipboard-read', 'clipboard-write']);
+  await watchCspViolations(context, cspViolations);
   const page = await context.newPage();
   const errors: string[] = [];
   page.on('console', (message) => {
@@ -422,6 +431,41 @@ test.describe.serial('assert_invitation_journey : du premier démarrage à l’a
       expect(unexpected(again.errors)).toEqual([]);
     } finally {
       await again.context.close();
+    }
+  });
+});
+
+test.describe('assert_no_csp_violation (instance réelle)', () => {
+  let instance: Instance;
+  test.beforeAll(async () => {
+    instance = await startInstance();
+    baseURL = instance.url;
+  });
+  test.afterAll(async () => {
+    await instance?.close();
+  });
+
+  test('témoin : le relais sert la CSP de la console et une violation est bien relevée (le contrôle sait donc échouer), puis le relevé est vidé', async ({ browser }) => {
+    const visitor = await person(browser);
+    try {
+      const { page } = visitor;
+      const served = page.waitForResponse((response) => new URL(response.url()).pathname === '/setup');
+      await page.goto('/setup');
+      expect((await served).headers()['content-security-policy']).toBe(CONSOLE_CSP);
+      await expect(page.locator('h1')).toHaveText(t('setup.title'));
+      expect(cspViolations).toEqual([]);
+      // Un script en ligne est refusé par `script-src 'self'` : le relevé doit l'avoir vu.
+      await page.evaluate(() => {
+        const scope = globalThis as unknown as { document: { createElement: (tag: string) => { textContent: string }; head: { append: (node: unknown) => void } } };
+        const script = scope.document.createElement('script');
+        script.textContent = 'void 0;';
+        scope.document.head.append(script);
+      });
+      await expect.poll(() => cspViolations.length).toBeGreaterThan(0);
+      expect(cspViolations[0]).toContain('script-src');
+      cspViolations.length = 0;
+    } finally {
+      await visitor.context.close();
     }
   });
 });

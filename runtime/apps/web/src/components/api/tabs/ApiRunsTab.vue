@@ -145,7 +145,7 @@ const canRelaunch = computed(() => props.detail.status !== 'bloquee' && !props.d
         </table>
       </div>
       <div v-if="runs.hasMore()"><Button variant="outline" size="sm" :disabled="runs.loadingMore.value" @click="runs.loadMore()">{{ t('ui.loadMore') }}</Button></div>
-      <p v-if="relaunchError" role="alert" class="text-sm text-destructive">{{ t('runsTab.relaunchUnavailable') }}</p>
+      <p v-if="relaunchError" role="alert" class="sym-error">{{ t('runsTab.relaunchUnavailable') }}</p>
       <p v-if="relaunchedRun" role="status" class="text-sm">
         {{ t('launch.started') }} <RouterLink :to="`/runs/${relaunchedRun}`" class="underline underline-offset-4">{{ t('launch.followRun') }}</RouterLink>
       </p>

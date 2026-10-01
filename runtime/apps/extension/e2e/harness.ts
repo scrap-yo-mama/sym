@@ -2,6 +2,9 @@
 // Harnais E2 de l'extension : PostgreSQL jetable (Testcontainers), instance réelle en écoute sur un port éphémère,
 // sites de fixtures `zz-test-*.example` servis en boucle locale (résolus par --host-resolver-rules, aucun site réel),
 // Chromium en contexte persistant avec l'extension construite (dist/chrome-mv3).
+// assert_no_csp_violation (tâche 3.15, E2) : chaque page du contexte (popup, pages de l'extension, sites de fixtures) relève
+// ses événements `securitypolicyviolation` dans `cspViolations` ; chaque fichier de la suite échoue un test qui en a laissé
+// un (`expectNoCspViolation` en afterEach). Les pages internes du navigateur (chrome://) ne sont pas les nôtres : écartées.
 import { randomBytes } from 'node:crypto';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
@@ -39,8 +42,45 @@ export type Harness = {
   sql: <T extends Record<string, unknown>>(text: string, params?: unknown[]) => Promise<T[]>;
   grantHosts: (patterns: string[]) => Promise<void>;
   popup: () => Promise<Page>;
+  /** Violations de CSP relevées depuis le dernier `expectNoCspViolation` (« URL de la page — directive : ressource »). */
+  cspViolations: string[];
   close: () => Promise<void>;
 };
+
+/** À appeler en afterEach : le test échoue s'il a laissé au moins une violation de CSP ; le relevé repart à vide. */
+export function expectNoCspViolation(h: Harness | undefined): void {
+  const violations = h?.cspViolations.splice(0) ?? [];
+  if (violations.length > 0) throw new Error(`violations de la CSP (assert_no_csp_violation) :\n${violations.join('\n')}`);
+}
+
+/**
+ * assert_sym_signature_rendering sur la page ouverte (tâche 3.15) : aucun nœud texte ne contient l'emoji ni « sym » en
+ * minuscules ; chaque signature est l'icône en aria-hidden à côté du texte « SYM », sans deux-points (badge), jamais dans
+ * un statut, une alerte ou une boîte de dialogue. Renvoie les problèmes et le nombre de signatures.
+ */
+export async function auditSymSignature(page: Page): Promise<{ problems: string[]; signatures: number }> {
+  return page.evaluate(() => {
+    const problems: string[] = [];
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      const text = node.textContent ?? '';
+      if (text.includes('\u{1F47B}')) problems.push(`emoji dans un nœud texte : ${text.trim()}`);
+      if (/\bsym\b/.test(text)) problems.push(`« sym » en minuscules : ${text.trim()}`);
+    }
+    for (const element of document.querySelectorAll('*')) {
+      for (const attribute of element.attributes) if (attribute.value.includes('\u{1F47B}')) problems.push(`emoji dans l'attribut ${attribute.name}`);
+    }
+    const signatures = [...document.querySelectorAll('[data-sym-signature]')];
+    for (const sig of signatures) {
+      const icons = sig.querySelectorAll('svg');
+      if (icons.length !== 1 || icons[0]?.getAttribute('aria-hidden') !== 'true') problems.push('icône : un svg aria-hidden attendu');
+      if (sig.querySelector('.sym-signature__text')?.textContent !== 'SYM') problems.push('texte « SYM » attendu à côté de l’icône');
+      if (sig.querySelector('span[aria-hidden="true"]')) problems.push('badge : pas de deux-points');
+      if (sig.closest('[role="alert"], [role="status"], [role="dialog"]')) problems.push('signature dans une zone interdite');
+    }
+    return { problems, signatures: signatures.length };
+  });
+}
 
 async function freePort(): Promise<number> {
   const srv = createServer();
@@ -126,6 +166,17 @@ export async function startHarness(): Promise<Harness> {
       args: chromiumArgs,
     });
     cleanups.push(() => context.close()); // filet si le démarrage de l'instance échoue (fermer deux fois est sans effet)
+    const cspViolations: string[] = [];
+    await context.exposeBinding('__zzCspViolation', ({ frame }, report: string) => {
+      const url = frame.url();
+      if (!url.startsWith('chrome://')) cspViolations.push(`${url} — ${report}`);
+    });
+    await context.addInitScript(() => {
+      document.addEventListener('securitypolicyviolation', (event) => {
+        const report = `${event.violatedDirective} : ${event.blockedURI || event.sample || 'inline'}`;
+        void (window as unknown as { __zzCspViolation?: (report: string) => Promise<void> }).__zzCspViolation?.(report);
+      });
+    });
     const serviceWorker = async () => context.serviceWorkers().find((w) => w.url().startsWith('chrome-extension://')) ?? context.waitForEvent('serviceworker');
     const extensionId = new URL((await serviceWorker()).url()).host;
 
@@ -204,7 +255,7 @@ export async function startHarness(): Promise<Harness> {
       return page;
     };
 
-    return { dbUrl, masterKey, publicUrl, sitePort, siteHits, context, profile, chromiumArgs, extensionId, serviceWorker, owner, createMember, console: consoleCall, sql, grantHosts, popup, close };
+    return { dbUrl, masterKey, publicUrl, sitePort, siteHits, context, profile, chromiumArgs, extensionId, serviceWorker, owner, createMember, console: consoleCall, sql, grantHosts, popup, cspViolations, close };
   } catch (error) {
     await close();
     throw error;

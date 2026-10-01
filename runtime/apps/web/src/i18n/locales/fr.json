@@ -1298,8 +1298,14 @@
       }
     },
     "preferences": {
-      "title": "Langue et thème",
-      "text": "Utilise les commandes de langue et de thème en haut de la page. Elles sont enregistrées avec ton compte."
+      "title": "Langue, thème et animations",
+      "text": "Utilise les commandes de langue et de thème en haut de la page. Elles sont enregistrées avec ton compte.",
+      "motion": "Animations",
+      "motionHint": "Réduites coupe tout mouvement non essentiel. Ce choix est gardé dans ce navigateur.",
+      "motions": {
+        "system": "Système",
+        "reduced": "Réduites"
+      }
     },
     "password": {
       "title": "Mot de passe",

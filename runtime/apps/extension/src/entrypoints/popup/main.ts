@@ -3,12 +3,29 @@
 // « Connected as », consentement par domaine AVANT toute lecture de cookie, liste des domaines et déconnexion.
 // Les permissions d'hôte sont demandées ici, au clic de l'utilisateur (`chrome.permissions.request` exige un geste).
 // Aucune lecture de cookie dans ce contexte : elle n'a lieu que dans le service worker, après consentement.
+import { SYM_GHOST_PATH, SYM_GHOST_VIEWBOX } from '@runtime/ui/sym-ghost';
 import { createApp, defineComponent, h, reactive, type VNode } from 'vue';
 import { browser } from 'wxt/browser';
 import type { SiteMode, SiteState, Status } from '../../core/controller.ts';
 import { originPatterns, siteDomainOf } from '../../core/host-guard.ts';
 import { checkInstanceUrl, instancePattern } from '../../core/instance.ts';
 import type { Request, Response } from '../../core/messages.ts';
+
+// Thème de la charte (packages/ui) : la classe `dark` suit le thème du système ; le popup se rend en JavaScript, donc avant son premier contenu.
+const darkQuery = matchMedia('(prefers-color-scheme: dark)');
+const applyScheme = () => document.documentElement.classList.toggle('dark', darkQuery.matches);
+applyScheme();
+darkQuery.addEventListener('change', applyScheme);
+
+/** Signature SYM en badge (20 § 2.3) : l'icône unique de packages/ui, décorative, à côté du texte « SYM ». */
+function symBadge(): VNode {
+  return h('span', { class: 'sym-signature', 'data-sym-signature': '', 'data-variant': 'badge' }, [
+    h('svg', { class: 'sym-signature__icon', xmlns: 'http://www.w3.org/2000/svg', viewBox: SYM_GHOST_VIEWBOX, fill: 'currentColor', 'aria-hidden': 'true', focusable: 'false' }, [
+      h('path', { 'fill-rule': 'evenodd', d: SYM_GHOST_PATH }),
+    ]),
+    h('span', { class: 'sym-signature__text' }, 'SYM'),
+  ]);
+}
 
 class PopupError extends Error {
   constructor(
@@ -203,7 +220,7 @@ const App = defineComponent({
 
     return () =>
       h('main', [
-        h('h1', 'Scrapyomama'),
+        h('header', { class: 'brand' }, [h('h1', 'Scrapyomama'), symBadge()]),
         state.error ? h('p', { id: 'error', role: 'alert' }, state.error) : null,
         state.notice ? h('p', { id: 'notice', role: 'status' }, state.notice) : null,
         state.loading

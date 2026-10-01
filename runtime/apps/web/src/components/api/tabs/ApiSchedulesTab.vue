@@ -90,7 +90,7 @@ const saveError = computed(() => {
   return error.code && te(`apiErrors.${error.code}`) ? t(`apiErrors.${error.code}`) : t('apiErrors.generic');
 });
 
-const selectClass = 'h-9 rounded-md border border-input bg-background px-2 text-sm shadow-xs focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 outline-none';
+const selectClass = 'h-11 rounded-md border border-input bg-background px-2 text-sm focus-visible:border-ring outline-none';
 </script>
 
 <template>
@@ -139,8 +139,8 @@ const selectClass = 'h-9 rounded-md border border-input bg-background px-2 text-
         <div class="flex flex-col gap-1">
           <label for="schedule-input" class="text-sm font-medium">{{ t('schedules.input') }}</label>
           <p class="text-sm text-muted-foreground">{{ t('schedules.inputHint') }}</p>
-          <textarea id="schedule-input" v-model="form.input" rows="4" spellcheck="false" class="rounded-md border border-input bg-transparent p-2 font-mono text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50" :aria-invalid="inputInvalid ? 'true' : 'false'" />
-          <p v-if="inputInvalid" role="alert" class="text-sm text-destructive">{{ t('schedules.inputInvalid') }}</p>
+          <textarea id="schedule-input" v-model="form.input" rows="4" spellcheck="false" class="rounded-md border border-input bg-transparent p-2 font-mono text-sm outline-none focus-visible:border-ring" :aria-invalid="inputInvalid ? 'true' : 'false'" />
+          <p v-if="inputInvalid" role="alert" class="sym-error">{{ t('schedules.inputInvalid') }}</p>
         </div>
         <div class="flex flex-wrap gap-4">
           <div class="flex flex-col gap-1">
@@ -171,7 +171,7 @@ const selectClass = 'h-9 rounded-md border border-input bg-background px-2 text-
           </div>
           <p class="text-sm text-muted-foreground">{{ t('schedules.skipHint') }}</p>
         </fieldset>
-        <p v-if="saveError" role="alert" class="text-sm text-destructive">{{ saveError }}</p>
+        <p v-if="saveError" role="alert" class="sym-error">{{ saveError }}</p>
         <div><Button type="submit" :disabled="schedules.saving.value || cronStatus !== 'ok'">{{ t('schedules.submit') }}</Button></div>
       </form>
     </section>

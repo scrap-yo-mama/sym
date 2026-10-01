@@ -114,7 +114,7 @@ async function confirmRevoke(): Promise<void> {
         @cancel="toRevoke = null"
       />
       <p v-if="keys.loading.value && !keys.data.value" role="status" class="text-sm text-muted-foreground">{{ t('ui.loading') }}</p>
-      <p v-else-if="keys.failure.value" class="text-sm text-destructive">{{ t(keys.failure.value) }}</p>
+      <p v-else-if="keys.failure.value" class="sym-error">{{ t(keys.failure.value) }}</p>
       <p v-else-if="keys.keys.value.length === 0" class="text-sm text-muted-foreground" data-testid="keys-empty">{{ t('keys.empty') }}</p>
       <div v-else class="relative overflow-x-auto rounded-xl border">
         <table class="w-full text-left text-sm" data-testid="keys-table">

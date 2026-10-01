@@ -41,6 +41,48 @@ describe('CSP stricte', () => {
   });
 });
 
+// assert_no_csp_violation (tâche 3.15, 20b § 3.1) : les deux bancs E2E de la console (faux serveur d'API de apps/web/e2e, instance
+// réelle de tests/e2e) la servent avec sa CSP stricte (08b § 2) et font échouer TOUT test de la console dès le premier événement
+// `securitypolicyviolation` ; ce garde-fou statique vérifie le câblage, le témoin E2E de chaque banc prouve que le contrôle sait échouer.
+describe('assert_no_csp_violation', () => {
+  const read = (path: string): string => readFileSync(join(webRoot, path), 'utf8');
+  const shared = read('e2e/csp.ts');
+  const harness = read('e2e/harness.ts');
+  const fixture = read('e2e/console.fixture.ts');
+  const instance = read('../../tests/e2e/instance.ts');
+  const journey = read('../../tests/e2e/invitation.e2e.ts');
+
+  test('la CSP de 08b § 2 est définie une seule fois, sans unsafe-inline ni source tierce', () => {
+    const csp = /export const CONSOLE_CSP =\s*"([^"]+)"/.exec(shared)?.[1] ?? '';
+    for (const directive of ["default-src 'self'", "script-src 'self'", "style-src 'self'", "img-src 'self' data:", "connect-src 'self'", "frame-ancestors 'none'", "base-uri 'none'", "form-action 'self'", "object-src 'none'"]) {
+      expect(csp, directive).toContain(directive);
+    }
+    expect(csp).not.toMatch(/unsafe-inline|unsafe-eval|https?:/);
+    for (const file of [harness, instance]) expect(file).not.toMatch(/default-src/);
+  });
+
+  test('chaque banc pose cette CSP sur chaque page servie de la console', () => {
+    expect(harness).toMatch(/import \{[^}]*\bCONSOLE_CSP\b[^}]*\} from '\.\/csp\.ts'/);
+    expect(harness).toContain("res.setHeader('content-security-policy', CONSOLE_CSP)");
+    expect(instance).toMatch(/import \{[^}]*\bCONSOLE_CSP\b[^}]*\} from '\.\.\/\.\.\/apps\/web\/e2e\/csp\.ts'/);
+    expect(instance).toContain("res.setHeader('content-security-policy', CONSOLE_CSP)");
+  });
+
+  test('le relevé partagé écoute securitypolicyviolation sur chaque page du contexte', () => {
+    expect(shared).toContain("addEventListener('securitypolicyviolation'");
+    expect(shared).toMatch(/context\.exposeBinding\(/);
+    expect(shared).toMatch(/context\.addInitScript\(/);
+  });
+
+  test('la fixture et le parcours sur instance réelle s’en servent et échouent un test qui a laissé une violation', () => {
+    expect(fixture).toMatch(/watchCspViolations\(/);
+    expect(fixture).toMatch(/expect\(cspViolations,.*\)\.toEqual\(\[\]\)/);
+    expect(journey).toMatch(/import \{[^}]*\bwatchCspViolations\b[^}]*\} from '\.\.\/\.\.\/apps\/web\/e2e\/csp\.ts'/);
+    expect(journey).toMatch(/watchCspViolations\(context, cspViolations\)/);
+    expect(journey).toMatch(/test\.afterEach\([^)]*\)\s*=>\s*\{?\s*expect\(cspViolations\.splice\(0\),.*\)\.toEqual\(\[\]\)/);
+  });
+});
+
 // Le build de la console ne dépend que de la console : ni test d'intégration, ni serveur, ni base dans son typage.
 // Le typecheck des tests (qui importent le serveur de test) a son propre tsconfig.
 describe('assert_console_build_independent_of_server', () => {

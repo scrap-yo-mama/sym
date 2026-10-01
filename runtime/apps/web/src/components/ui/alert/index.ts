@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) shadcn et contributeurs de shadcn-vue (https://github.com/unovue/shadcn-vue), licence MIT
+// Modifié (tâche 3.15, charte SYM) : l'alerte d'erreur est une surface orange à texte anthracite (jamais de l'orange en texte, 20 § 1.3).
 import type { VariantProps } from "class-variance-authority"
 import { cva } from "class-variance-authority"
 
@@ -14,7 +15,7 @@ export const alertVariants = cva(
       variant: {
         default: "bg-card text-card-foreground",
         destructive:
-          "text-destructive bg-card [&>svg]:text-current *:data-[slot=alert-description]:text-destructive/90",
+          "border-transparent bg-destructive text-destructive-foreground [&>svg]:text-current *:data-[slot=alert-description]:text-destructive-foreground",
       },
     },
     defaultVariants: {

@@ -15,9 +15,9 @@ export function resolveDark(theme: Theme, systemPrefersDark: boolean): boolean {
   return theme === 'dark' || (theme === 'system' && systemPrefersDark);
 }
 
-export function readStoredTheme(storage: Pick<Storage, 'getItem'> = localStorage): Theme {
+export function readStoredTheme(storage: Pick<Storage, 'getItem'> | undefined = globalThis.localStorage): Theme {
   try {
-    const value = storage.getItem(THEME_STORAGE_KEY);
+    const value = storage?.getItem(THEME_STORAGE_KEY);
     return isTheme(value) ? value : 'system';
   } catch {
     return 'system';
@@ -28,9 +28,9 @@ export function applyTheme(theme: Theme, root: HTMLElement = document.documentEl
   root.classList.toggle('dark', resolveDark(theme, systemPrefersDark));
 }
 
-export function storeTheme(theme: Theme, storage: Pick<Storage, 'setItem'> = localStorage): void {
+export function storeTheme(theme: Theme, storage: Pick<Storage, 'setItem'> | undefined = globalThis.localStorage): void {
   try {
-    storage.setItem(THEME_STORAGE_KEY, theme);
+    storage?.setItem(THEME_STORAGE_KEY, theme);
   } catch {
     /* stockage indisponible : le choix vaut pour la session seulement */
   }

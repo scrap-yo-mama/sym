@@ -1,0 +1,53 @@
+/*
+ * Polices servies par l'instance (20 § 1.2, u5 R4) : sous-ensemble latin en woff2, aucune requête vers un tiers (CSP
+ * `default-src 'self'`, INV9). Sources et licences (SIL OFL 1.1) : NOTICE et fonts/OFL-*.txt. `font-display: swap` : le
+ * texte s'affiche tout de suite dans la police de repli. Un navigateur ne télécharge une police déclarée que lorsqu'un
+ * texte l'emploie : JetBrains Mono ne part que sur les écrans qui affichent du code, sans chargement conditionnel à écrire.
+ */
+@font-face {
+  font-family: 'Bricolage Grotesque';
+  font-style: normal;
+  font-weight: 800;
+  font-display: swap;
+  src: url('../fonts/bricolage-grotesque-latin-800-normal.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'DM Sans';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('../fonts/dm-sans-latin-400-normal.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'DM Sans';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url('../fonts/dm-sans-latin-500-normal.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'DM Sans';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url('../fonts/dm-sans-latin-700-normal.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('../fonts/jetbrains-mono-latin-400-normal.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url('../fonts/jetbrains-mono-latin-600-normal.woff2') format('woff2');
+}

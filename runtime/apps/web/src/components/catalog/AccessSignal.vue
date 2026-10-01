@@ -19,15 +19,15 @@ const { t } = useI18n();
 
 const ICON: Record<'allowed' | 'review' | 'disallowed', IconName> = { allowed: 'check-circle', review: 'triangle', disallowed: 'circle-slash' };
 const TONE: Record<'allowed' | 'review' | 'disallowed', string> = {
-  allowed: 'text-emerald-800 dark:text-emerald-300',
-  review: 'text-amber-800 dark:text-amber-300',
-  disallowed: 'text-red-800 dark:text-red-300',
+  allowed: 'bg-status-sain text-status-sain-foreground',
+  review: 'bg-status-warning text-status-warning-foreground',
+  disallowed: 'bg-status-bloquee text-status-bloquee-foreground',
 };
 const known = computed(() => (props.signal === 'allowed' || props.signal === 'review' || props.signal === 'disallowed' ? props.signal : null));
 </script>
 
 <template>
-  <span v-if="known" class="inline-flex items-center gap-1.5 text-sm" :class="TONE[known]" data-testid="access-signal" :data-signal="known">
+  <span v-if="known" class="inline-flex items-center gap-1.5 rounded-full border border-status-border px-2.5 py-0.5 text-sm font-medium" :class="TONE[known]" data-testid="access-signal" :data-signal="known">
     <StatusIcon :name="ICON[known]" />
     <span>{{ t(`access.signal.${known}`) }}</span>
   </span>

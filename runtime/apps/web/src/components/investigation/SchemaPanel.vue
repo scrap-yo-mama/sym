@@ -84,7 +84,7 @@ function validateEdited(): void {
             :aria-invalid="draftError"
             :aria-describedby="draftError ? 'schema-edit-error' : undefined"
           />
-          <p v-if="draftError" id="schema-edit-error" class="text-sm text-destructive" role="alert">{{ t('investigation.schema.editInvalid') }}</p>
+          <p v-if="draftError" id="schema-edit-error" class="sym-error" role="alert">{{ t('investigation.schema.editInvalid') }}</p>
         </div>
       </div>
 

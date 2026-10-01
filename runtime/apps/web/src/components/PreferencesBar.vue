@@ -12,7 +12,7 @@ const { changeLocale, changeTheme, theme } = usePreferences();
 const LOCALE_NAMES: Record<(typeof LOCALES)[number], string> = { en: 'English', fr: 'Français' };
 
 const selectClass =
-  'border-input bg-background text-foreground h-9 rounded-md border px-2 text-sm focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-3 outline-none';
+  'border-input bg-background text-foreground h-11 rounded-md border px-2 text-sm focus-visible:border-ring outline-none';
 
 function onLocale(event: Event): void {
   const value = (event.target as HTMLSelectElement).value;
@@ -26,7 +26,7 @@ function onTheme(event: Event): void {
 </script>
 
 <template>
-  <div class="flex items-center gap-3">
+  <div class="flex flex-wrap items-center gap-3">
     <div class="flex items-center gap-2">
       <label for="pref-language" class="sr-only">{{ t('nav.language') }}</label>
       <select id="pref-language" :class="selectClass" :value="locale" @change="onLocale">

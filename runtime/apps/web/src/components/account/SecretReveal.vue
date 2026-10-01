@@ -34,7 +34,7 @@ async function copy(): Promise<void> {
       <Button type="button" variant="outline" size="sm" @click="copy()">{{ copyLabel ?? t('ui.copy') }}</Button>
       <Button type="button" size="sm" @click="$emit('dismiss')">{{ dismissLabel }}</Button>
       <span v-if="copied === 'ok'" class="text-sm" data-testid="copy-result">{{ t('ui.copied') }}</span>
-      <span v-else-if="copied === 'failed'" class="text-sm text-destructive" data-testid="copy-result">{{ t('ui.copyFailed') }}</span>
+      <span v-else-if="copied === 'failed'" class="sym-error" data-testid="copy-result">{{ t('ui.copyFailed') }}</span>
     </div>
   </section>
 </template>
