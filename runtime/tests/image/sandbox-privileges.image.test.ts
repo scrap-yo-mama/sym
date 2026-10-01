@@ -421,4 +421,17 @@ describe('assert_sandbox_image_privileges — image sous les capacités de Rende
       }, 240_000);
     });
   }
+
+  // D-32 (tâche 4.1b) : démarré directement sous un uid imposé (`--user`, `runAsUser`), le point d'entrée pose
+  // no-new-privileges ; node-worker et sandbox-launch perdent alors leurs capacités de fichier, le changement d'uid du bac à
+  // sable échoue et le worker de production REFUSE de démarrer (fermeture sûre), au lieu de servir sans isolation.
+  test('uid imposé (--user 1001), RUNTIME_MODE=worker : sonde d’isolation en échec, refus de démarrer (code 2), aucun root', async () => {
+    await until('PostgreSQL prêt', () => docker(['exec', pgName, 'pg_isready', '-U', 'runtime', '-d', 'runtime']).status === 0, 90_000);
+    const name = startContainer(`zz_test_img_imposed_uid_${run}`, ['-u', String(PWUSER)], { RUNTIME_MODE: 'worker', DATABASE_URL, MASTER_KEY });
+    await until(`worker arrêté dans ${name}`, () => !running(name), 120_000);
+    const logs = logsOf(name);
+    expect(docker(['inspect', '-f', '{{.State.ExitCode}}', name]).stdout.trim(), logs.slice(-3000)).toBe('2');
+    expect(logs).toMatch(/Refus de démarrer le worker : bac à sable : sonde d'isolation en échec/);
+    expect(logs).not.toMatch(/isolation éprouvée/);
+  }, 180_000);
 });
