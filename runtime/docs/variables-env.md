@@ -111,3 +111,4 @@ contrôle de version sortant ni de rapport d’usage.
 | `SANDBOX_UID` | worker | facultative | `1500` | Utilisateur dédié du bac à sable (INV7). Posée par l’image : ne pas la changer. |
 | `SANDBOX_GID` | worker | facultative | `1500` | Groupe dédié du bac à sable. Posée par l’image : ne pas la changer. |
 | `SANDBOX_LAUNCHER` | worker | facultative | `/usr/local/libexec/sandbox-launch` | Lanceur à capacités minimales du bac à sable. Posée par l’image : ne pas la changer. |
+| `SANDBOX_NODE` | worker | facultative | `/usr/bin/node` | Node exécuté par l’enfant du bac à sable (le worker tourne sous une copie de Node à capacités de fichier, réservée à son groupe). Posée par l’image : ne pas la changer. |

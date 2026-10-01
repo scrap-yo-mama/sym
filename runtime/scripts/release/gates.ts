@@ -151,14 +151,51 @@ export function checkReleaseWorkflow(label: string, yaml: string): string[] {
   return problems;
 }
 
-/** Dernier stage du Dockerfile : `USER` non root (nom autre que root, ou uid différent de 0). */
-export function checkImageNonRoot(label: string, dockerfile: string): string[] {
+/**
+ * Descente de privilèges du point d'entrée (deploy/entrypoint.sh) : sa première instruction (hors `set` et affectations)
+ * est le bloc `if [ "$EUID" = 0 ]; then … fi`, qui se termine par `exec setpriv --reuid=<non nul> --regid=<non nul> …
+ * --no-new-privs …` et n'exécute rien d'autre. `undefined` si la descente est bien faite, sinon le problème.
+ */
+function rootDropProblem(entrypoint: string): string | undefined {
+  const OPEN = 'if [ "$EUID" = 0 ]; then';
+  const lines = entrypoint.split('\n').map((l) => l.trim()).filter((l) => l !== '' && !l.startsWith('#'));
+  // Avant le bloc : options du shell et affectations littérales seulement (ni substitution de commande, ni commande).
+  const start = lines.findIndex((l) => !/^(set -[a-z]+( [a-z]+)?|[A-Za-z_]\w*=[^$`\s;&|]*)$/.test(l));
+  if (lines[start] !== OPEN) return `première instruction autre que la descente en root (${OPEN})`;
+  let depth = 0;
+  let end = -1;
+  for (let i = start; i < lines.length && end < 0; i++) {
+    if (/^if\s/.test(lines[i] ?? '')) depth++;
+    if (lines[i] === 'fi' && --depth === 0) end = i;
+  }
+  if (end < 0) return 'bloc root non fermé';
+  const body = lines.slice(start + 1, end);
+  const drop = /^exec setpriv --reuid=(\d+) --regid=(\d+) (?:[^;&|$`()]* )?--no-new-privs (?:[^;&|`()]* )?-- \S[^;&|`()]*$/.exec(body[body.length - 1] ?? '');
+  if (drop === null) return 'le bloc root doit finir par exec setpriv --reuid=… --regid=… --no-new-privs … -- …';
+  if (drop[1] === '0' || drop[2] === '0') return 'la descente vise root (uid ou gid 0)';
+  // Dans le bloc, avant la descente : affectations de tableaux littéraux et conditions sur des tests `[ … ]` seulement.
+  const other = body.slice(0, -1).find((l) => !/^([A-Za-z_]\w*=\([^$`;&|]*\)|if (?:\[ [^\]`()]* \]|&&|\|\||[{};]|\s)+then|fi)$/.test(l));
+  if (other !== undefined) return `instruction exécutée en root avant la descente : ${other}`;
+  return undefined;
+}
+
+/**
+ * Dernier stage du Dockerfile : aucun processus ne reste root. `USER` non root (nom autre que root, ou uid différent de
+ * 0), ou `USER root` seulement si l'ENTRYPOINT est deploy/entrypoint.sh et que celui-ci descend sur un uid non root avant
+ * toute autre chose (F-20261001-R01 : sous no-new-privileges, Render, le worker ne peut recevoir ses capacités de
+ * changement d'uid que d'un démarrage en root). Le test d'image (tests/image) vérifie la même chose sur le conteneur.
+ */
+export function checkImageNonRoot(label: string, dockerfile: string, entrypoint?: string): string[] {
   const stages = dockerfile.split(/^\s*FROM\s/m).slice(1);
   const last = stages[stages.length - 1] ?? '';
   const users = [...last.matchAll(/^\s*USER\s+(\S+)/gm)].map((m) => m[1] ?? '');
   const user = users[users.length - 1];
-  if (user === undefined || /^(root|0)(:|$)/.test(user)) return [`${label} : l'image finale tourne en root (USER non-root attendu)`];
-  return [];
+  if (user !== undefined && !/^(root|0)(:|$)/.test(user)) return [];
+  const root = `${label} : l'image finale tourne en root`;
+  if (!/^\s*ENTRYPOINT \["\/usr\/local\/bin\/entrypoint\.sh"(,|\])/m.test(last)) return [`${root} (USER non-root, ou ENTRYPOINT deploy/entrypoint.sh qui descend aussitôt, attendu)`];
+  if (entrypoint === undefined) return [`${root} : point d'entrée non fourni, descente de privilèges invérifiable`];
+  const problem = rootDropProblem(entrypoint);
+  return problem === undefined ? [] : [`${root} : deploy/entrypoint.sh, ${problem}`];
 }
 
 /** Garde réelle : tous les workflows, le workflow de release s'il existe, le Dockerfile. */
@@ -174,7 +211,7 @@ export function checkRepo(root: string): string[] {
     problems.push(...checkFullHistoryJobs(`.github/workflows/${name}`, yaml));
   }
   problems.push(...checkReleasePleaseConfigs(repo));
-  problems.push(...checkImageNonRoot('deploy/Dockerfile', readFileSync(join(root, 'deploy/Dockerfile'), 'utf8')));
+  problems.push(...checkImageNonRoot('deploy/Dockerfile', readFileSync(join(root, 'deploy/Dockerfile'), 'utf8'), readFileSync(join(root, 'deploy/entrypoint.sh'), 'utf8')));
   return problems;
 }
 

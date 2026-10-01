@@ -2,8 +2,9 @@
 // `SandboxEngine` par processus enfant (INV7, 08 §3) : un enfant dédié par run, environnement VIDE (`env: {}` puis
 // vérification), `--no-node-snapshot`, mode permission de Node en ceinture, isolat dans l'enfant, ponts relayés par IPC
 // et appliqués ici. Utilisateur dédié (uid distinct du worker, obligatoire en production) via un lanceur setpriv sans
-// nouveaux privilèges. Plafonds : temps mur, temps CPU (RLIMIT_CPU), RSS du processus, octets reçus ; SIGKILL mesuré sur
-// le processus. Toute violation tue l'enfant aussitôt.
+// nouveaux privilèges, exécuté directement par le worker (sous no-new-privileges, ses capacités de fichier ne valent que
+// si le worker les détient déjà), sous un Node que l'uid dédié peut exécuter (SANDBOX_NODE). Plafonds : temps mur, temps
+// CPU (RLIMIT_CPU), RSS du processus, octets reçus ; SIGKILL mesuré sur le processus. Toute violation tue l'enfant aussitôt.
 import { spawn, execFile } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 import { existsSync, realpathSync } from 'node:fs';
@@ -53,9 +54,17 @@ export type ProcessSandboxOptions = {
   gid?: number;
   /**
    * Lanceur qui change d'utilisateur pour l'enfant : un `setpriv` (util-linux) doté des seules capacités
-   * `cap_setuid,cap_setgid` et exécutable par le groupe du worker (deploy/Dockerfile). Appelé avec `--no-new-privs`.
+   * `cap_setuid,cap_setgid` et exécutable par le groupe du worker (deploy/Dockerfile). Appelé avec `--no-new-privs`,
+   * directement par le worker : sous no-new-privileges (Render), un exec ne garde de ses capacités de fichier que celles
+   * que l'appelant détient déjà, et un shell intermédiaire n'en détiendrait aucune.
    */
   launcher?: string;
+  /**
+   * Node exécuté par l'enfant (défaut `process.execPath`). Dans l'image, le worker tourne sous une copie de Node dotée de
+   * capacités de fichier et réservée au groupe pwuser (`/usr/local/libexec/node-worker`), que l'uid dédié ne peut pas
+   * exécuter : l'enfant prend le Node ordinaire (`SANDBOX_NODE=/usr/bin/node`), sans capacité.
+   */
+  node?: string;
   /** Production : refuse de démarrer si l'enfant tournerait sous l'uid du worker (défaut : NODE_ENV=production). */
   production?: boolean;
   /** Mode permission de Node sur l'enfant (défaut vrai). */
@@ -64,8 +73,8 @@ export type ProcessSandboxOptions = {
   onChildReady?: (info: { pid: number; envKeys: readonly string[] }) => void;
 };
 
-/** Options d'utilisateur dédié lues dans l'environnement du worker (SANDBOX_UID, SANDBOX_GID, SANDBOX_LAUNCHER). */
-export function sandboxOptionsFromEnv(env: Readonly<Record<string, string | undefined>>): Pick<ProcessSandboxOptions, 'uid' | 'gid' | 'launcher'> {
+/** Options d'utilisateur dédié lues dans l'environnement du worker (SANDBOX_UID, SANDBOX_GID, SANDBOX_LAUNCHER, SANDBOX_NODE). */
+export function sandboxOptionsFromEnv(env: Readonly<Record<string, string | undefined>>): Pick<ProcessSandboxOptions, 'uid' | 'gid' | 'launcher' | 'node'> {
   const id = (name: string): number | undefined => {
     const raw = env[name];
     if (raw === undefined || raw === '') return undefined;
@@ -75,8 +84,15 @@ export function sandboxOptionsFromEnv(env: Readonly<Record<string, string | unde
   const uid = id('SANDBOX_UID');
   const gid = id('SANDBOX_GID');
   if ((uid === undefined) !== (gid === undefined)) throw new Error('bac à sable : SANDBOX_UID et SANDBOX_GID vont ensemble');
-  const launcher = env.SANDBOX_LAUNCHER === undefined || env.SANDBOX_LAUNCHER === '' ? undefined : env.SANDBOX_LAUNCHER;
-  return { ...(uid !== undefined ? { uid } : {}), ...(gid !== undefined ? { gid } : {}), ...(launcher !== undefined ? { launcher } : {}) };
+  const path = (name: string): string | undefined => (env[name] === undefined || env[name] === '' ? undefined : env[name]);
+  const launcher = path('SANDBOX_LAUNCHER');
+  const node = path('SANDBOX_NODE');
+  return {
+    ...(uid !== undefined ? { uid } : {}),
+    ...(gid !== undefined ? { gid } : {}),
+    ...(launcher !== undefined ? { launcher } : {}),
+    ...(node !== undefined ? { node } : {}),
+  };
 }
 
 /**
@@ -92,9 +108,11 @@ const LAUNCH_SCRIPT =
 export type SpawnPlan = { command: string; args: string[]; uid?: number; gid?: number };
 
 /**
- * `/bin/sh` pose RLIMIT_CPU (souple N puis dur N + 1, dans cet ordre : SIGXCPU d’abord, SIGKILL ensuite), puis `env -i` rend un
- * environnement vide (le shell en ajoute), puis le lanceur change d'utilisateur sans nouveaux privilèges, puis Node.
- * Chaque étape fait `exec` : le pid suivi par le parent reste celui de l'enfant.
+ * Le lanceur change d'utilisateur sans nouveaux privilèges (premier exec, fait par le worker lui-même : sous
+ * no-new-privileges, il n'obtient cap_setuid,cap_setgid que si l'appelant les détient), puis `/bin/sh`, sous l'uid dédié,
+ * pose RLIMIT_CPU (souple N puis dur N + 1, dans cet ordre : SIGXCPU d’abord, SIGKILL ensuite), puis `env -i` rend un
+ * environnement vide (le shell en ajoute), puis Node. Chaque étape fait `exec` : le pid suivi par le parent reste celui de
+ * l'enfant.
  */
 export function spawnPlan(p: {
   node: string;
@@ -107,15 +125,12 @@ export function spawnPlan(p: {
   gid?: number;
 }): SpawnPlan {
   const node = [p.node, ...p.nodeArgs, ...(p.script === undefined ? [] : [p.script])];
-  const switched =
-    p.launcher !== undefined && p.uid !== undefined && p.gid !== undefined
-      ? [p.launcher, `--reuid=${p.uid}`, `--regid=${p.gid}`, '--clear-groups', '--no-new-privs', '--', ...node]
-      : node;
   const cpu = String(Math.max(1, Math.ceil(p.cpuSeconds)));
-  const plan: SpawnPlan = {
-    command: '/bin/sh',
-    args: ['-c', LAUNCH_SCRIPT, cpu, ...switched],
-  };
+  const shell = ['/bin/sh', '-c', LAUNCH_SCRIPT, cpu, ...node];
+  if (p.launcher !== undefined && p.uid !== undefined && p.gid !== undefined) {
+    return { command: p.launcher, args: [`--reuid=${p.uid}`, `--regid=${p.gid}`, '--clear-groups', '--no-new-privs', '--', ...shell] };
+  }
+  const plan: SpawnPlan = { command: '/bin/sh', args: shell.slice(1) };
   if (p.launcher === undefined && p.uid !== undefined) return { ...plan, uid: p.uid, gid: p.gid };
   return plan;
 }
@@ -249,7 +264,7 @@ export class ProcessSandboxEngine implements SandboxEngine {
 
   #plan(nodeArgs: readonly string[], script: string | undefined, cpuSeconds: number): SpawnPlan {
     const { launcher, uid, gid } = this.#options;
-    return spawnPlan({ node: process.execPath, nodeArgs, script, cpuSeconds, launcher, uid, gid });
+    return spawnPlan({ node: this.#options.node ?? process.execPath, nodeArgs, script, cpuSeconds, launcher, uid, gid });
   }
 
   /**

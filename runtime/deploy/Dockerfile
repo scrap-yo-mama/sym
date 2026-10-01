@@ -12,7 +12,7 @@ COPY . .
 # lien mort de la doc, sans rien apporter à l'exécution (tâche 4.8).
 RUN pnpm install --frozen-lockfile && pnpm -r --filter '!@runtime/docs' build
 
-# --- Étape 2 : exécution, non-root
+# --- Étape 2 : exécution (démarre en root, descend aussitôt sur pwuser : aucun processus ne reste root)
 FROM ${PLAYWRIGHT_IMAGE} AS runtime
 ENV NODE_ENV=production
 # Version publiée par GET /api/health et /api/version (tâche 4.9) ; posée par la chaîne de release.
@@ -21,9 +21,19 @@ ENV RUNTIME_VERSION=${RUNTIME_VERSION}
 WORKDIR /app
 # Bac à sable (08 §3, INV7) : l'enfant tourne sous un utilisateur DÉDIÉ (sandbox, 1500), distinct de pwuser qui porte
 # MASTER_KEY, DATABASE_URL et les clés LLM : il ne peut lire ni /proc/<pid du worker>/environ ni le fichier de clé
-# (MASTER_KEY_FILE monté en 0400 pour pwuser). Le changement d'uid passe par un setpriv (util-linux) doté des SEULES
-# capacités cap_setuid,cap_setgid, exécutable par le groupe pwuser uniquement ; il est appelé avec --no-new-privs et
-# l'enfant (Node, sans capacités de fichier) n'en garde aucune. Le worker refuse de démarrer en production sans cela.
+# (MASTER_KEY_FILE monté en 0400 pour pwuser). Le worker refuse de démarrer en production sans cela.
+# Modèle de privilèges (F-20261001-R01 : Render lance ses conteneurs sous no-new-privileges, sans SETPCAP ni SETFCAP ni
+# KILL ; un exec n'y garde de capacités de fichier que celles que l'appelant détient déjà) :
+# - le conteneur démarre en root ; entrypoint.sh descend aussitôt sur pwuser (setpriv --reuid=1001 --no-new-privs) AVANT
+#   tini, pour que tini (PID 1, pwuser) puisse relayer SIGTERM (un PID 1 root sans CAP_KILL ne le pourrait pas) ;
+# - pour le rôle worker seulement, cap_setuid,cap_setgid traversent tini et le shell du point d'entrée par l'ensemble
+#   ambient, retiré (setpriv --inh-caps=-all --ambient-caps=-all) au lancement de chaque rôle ;
+# - le worker tourne sous node-worker, copie de Node dotée de cap_setuid,cap_setgid (=ep) et exécutable par le groupe
+#   pwuser seulement : capacités effectives, ni ambient ni héritables ; ses enfants ordinaires (Chromium, sh) n'en ont
+#   donc aucune. Une copie (et non un lien) : les capacités de fichier sont portées par l'inode, /usr/bin/node reste nu ;
+# - sandbox-launch, un setpriv doté des mêmes capacités et réservé au groupe pwuser, est exécuté directement par le
+#   worker (jamais par un shell intermédiaire, qui les aurait perdues), avec --no-new-privs ; l'enfant exécute le Node
+#   ordinaire (SANDBOX_NODE), sans capacité.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends tini libcap2-bin \
  && rm -rf /var/lib/apt/lists/* \
@@ -32,7 +42,9 @@ RUN apt-get update \
  && useradd --system --uid 1500 --gid 1500 --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin sandbox \
  && install -d -m 0755 /usr/local/libexec \
  && install -o root -g pwuser -m 0750 /usr/bin/setpriv /usr/local/libexec/sandbox-launch \
- && setcap cap_setuid,cap_setgid=ep /usr/local/libexec/sandbox-launch
+ && setcap cap_setuid,cap_setgid=ep /usr/local/libexec/sandbox-launch \
+ && install -o root -g pwuser -m 0750 /usr/bin/node /usr/local/libexec/node-worker \
+ && setcap cap_setuid,cap_setgid=ep /usr/local/libexec/node-worker
 
 # .pnpmfile.cjs : crochet readPackage (pair OTel retiré de Better Auth), exigé par le lockfile (pnpmfileChecksum).
 COPY package.json pnpm-workspace.yaml pnpm-lock.yaml .pnpmfile.cjs ./
@@ -58,14 +70,18 @@ COPY --from=build /app/apps/cli/dist apps/cli/dist
 COPY deploy/entrypoint.sh /usr/local/bin/entrypoint.sh
 # Commande `runtime` (CLI : migrate, keygen, doctor…) dans le PATH : champ « pré-déploiement » des hébergeurs,
 # `docker exec <conteneur> runtime doctor`, `docker run --rm <image> runtime keygen` (tâche 4.1).
+# Lancée en root (`docker exec`, shell de l'hébergeur : ils prennent l'USER de l'image, root), elle descend sur pwuser
+# sans capacité, comme le point d'entrée.
 RUN chmod 0755 /usr/local/bin/entrypoint.sh \
- && printf '#!/bin/sh\nexec node /app/apps/cli/dist/index.js "$@"\n' > /usr/local/bin/runtime \
+ && printf '#!/bin/sh\nif [ "$(id -u)" = 0 ]; then exec setpriv --reuid=1001 --regid=1001 --init-groups --inh-caps=-all --no-new-privs -- node /app/apps/cli/dist/index.js "$@"; fi\nexec node /app/apps/cli/dist/index.js "$@"\n' > /usr/local/bin/runtime \
  && chmod 0755 /usr/local/bin/runtime
 
-# pwuser (uid 1001) existe déjà dans l'image Playwright.
-USER pwuser
+# root au démarrage SEULEMENT : entrypoint.sh descend sur pwuser (uid 1001, déjà présent dans l'image Playwright) avant
+# toute autre chose ; sous no-new-privileges, c'est le seul moyen de donner au worker les capacités du changement d'uid.
+# Démarré directement sous un uid non root (--user), le point d'entrée garde le comportement antérieur.
+USER root
 ENV RUNTIME_MODE=all PORT=3000 HOST=0.0.0.0 \
-    SANDBOX_UID=1500 SANDBOX_GID=1500 SANDBOX_LAUNCHER=/usr/local/libexec/sandbox-launch
+    SANDBOX_UID=1500 SANDBOX_GID=1500 SANDBOX_LAUNCHER=/usr/local/libexec/sandbox-launch SANDBOX_NODE=/usr/bin/node
 EXPOSE 3000
-# tini (PID 1) relaie les signaux et récolte les zombies Chromium ; sans lui : docker run --init.
-ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/entrypoint.sh"]
+# entrypoint.sh lance tini (PID 1, sous pwuser) qui relaie les signaux et récolte les zombies Chromium.
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]

@@ -118,6 +118,25 @@ describe('release : portes (assert_release_gates)', () => {
     expect(checkImageNonRoot('d', 'FROM c\nUSER 1001:1001\n')).toEqual([]);
   });
 
+  test('assert_image_nonroot : USER root admis seulement si deploy/entrypoint.sh descend sur un uid non root avant tout (F-20261001-R01)', () => {
+    const image = 'FROM c\nUSER root\nENTRYPOINT ["/usr/local/bin/entrypoint.sh"]\n';
+    const drop = (body: string, before = '') =>
+      `#!/bin/bash\n# c\nset -uo pipefail\nA=/x\n${before}if [ "$EUID" = 0 ]; then\n${body}fi\nnode x\n`;
+    const good = drop('  caps=(--inh-caps=-all)\n  if [ "$#" -eq 0 ] && { [ "${M:-all}" = worker ] || [ "${M:-all}" = all ]; }; then\n    caps=(--inh-caps=-all,+setuid)\n  fi\n  exec setpriv --reuid=1001 --regid=1001 --init-groups --no-new-privs "${caps[@]}" -- /usr/bin/tini -- "$0" "$@"\n');
+    expect(checkImageNonRoot('d', image, good)).toEqual([]);
+    // Le vrai point d'entrée passe la porte.
+    expect(checkImageNonRoot('d', image, readFileSync(join(runtimeDir, 'deploy/entrypoint.sh'), 'utf8'))).toEqual([]);
+    // Refus : point d'entrée absent ou autre, descente vers root, sans --no-new-privs, commande avant la descente.
+    expect(checkImageNonRoot('d', image)).toHaveLength(1);
+    expect(checkImageNonRoot('d', 'FROM c\nUSER root\nENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/entrypoint.sh"]\n', good)).toHaveLength(1);
+    expect(checkImageNonRoot('d', image, drop('  exec setpriv --reuid=0 --regid=1001 --no-new-privs -- /usr/bin/tini -- "$0"\n'))).toHaveLength(1);
+    expect(checkImageNonRoot('d', image, drop('  exec setpriv --reuid=1001 --regid=1001 -- /usr/bin/tini -- "$0"\n'))).toHaveLength(1);
+    expect(checkImageNonRoot('d', image, drop('  rm -rf /tmp/x\n  exec setpriv --reuid=1001 --regid=1001 --no-new-privs -- /usr/bin/tini -- "$0"\n'))).toHaveLength(1);
+    expect(checkImageNonRoot('d', image, drop('  exec setpriv --reuid=1001 --regid=1001 --no-new-privs -- /usr/bin/tini -- "$(id)"\n'))).toHaveLength(1);
+    expect(checkImageNonRoot('d', image, drop('  exec setpriv --reuid=1001 --regid=1001 --no-new-privs -- /usr/bin/tini -- "$0"\n', 'B=$(id -u)\n'))).toHaveLength(1);
+    expect(checkImageNonRoot('d', image, drop('  exec setpriv --reuid=1001 --regid=1001 --no-new-privs -- /usr/bin/tini -- "$0"\n', 'node evil\n'))).toHaveLength(1);
+  });
+
   test('assert_x6_history_clean : l\'historique git entier est audité (fichier supprimé, autre branche) ; clone superficiel refusé', () => {
     const dir = mkdtempSync(join(tmpdir(), 'zz_test_x6_history-'));
     const repo = join(dir, 'repo');

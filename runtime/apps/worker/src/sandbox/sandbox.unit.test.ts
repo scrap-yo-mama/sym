@@ -241,22 +241,35 @@ describe('utilisateur dédié, lanceur et plafond CPU (08 §3)', () => {
       gid: 1500,
       launcher: '/usr/local/libexec/sandbox-launch',
     });
+    // SANDBOX_NODE : Node de l'enfant, distinct de la copie à capacités de fichier sous laquelle tourne le worker.
+    expect(sandboxOptionsFromEnv({ SANDBOX_NODE: '/usr/bin/node' })).toEqual({ node: '/usr/bin/node' });
+    expect(sandboxOptionsFromEnv({ SANDBOX_NODE: '' })).toEqual({});
     expect(() => sandboxOptionsFromEnv({ SANDBOX_UID: 'abc' })).toThrow(/SANDBOX_UID/);
     expect(() => sandboxOptionsFromEnv({ SANDBOX_UID: '1500' })).toThrow(/SANDBOX_GID/);
   });
 
-  test('commande de lancement : RLIMIT_CPU, environnement vidé, lanceur setpriv sans nouveaux privilèges', () => {
+  test('commande de lancement : lanceur setpriv EXÉCUTÉ PAR LE WORKER, puis RLIMIT_CPU et environnement vidé sous l’uid dédié', () => {
     const plain = spawnPlan({ node: '/n', nodeArgs: ['--x'], script: 'c.js', cpuSeconds: 7 });
     expect(plain.command).toBe('/bin/sh');
     expect(plain.args.slice(2)).toEqual(['7', '/n', '--x', 'c.js']);
     expect(plain.args[1]).toMatch(/ulimit -S -t "\$0" && ulimit -H -t .* && exec \/usr\/bin\/env -i /);
     const launched = spawnPlan({ node: '/n', nodeArgs: [], script: 'c.js', cpuSeconds: 3, launcher: '/l', uid: 1500, gid: 1501 });
-    expect(launched.args.slice(2)).toEqual([
-      '3', '/l', '--reuid=1500', '--regid=1501', '--clear-groups', '--no-new-privs', '--', '/n', 'c.js',
+    // Sous no-new-privileges (Render), le lanceur n'obtient ses capacités de fichier que si son appelant les détient : il
+    // doit donc être exécuté par le worker lui-même, jamais par un shell intermédiaire (F-20261001-R01).
+    expect(launched.command).toBe('/l');
+    expect(launched.args).toEqual([
+      '--reuid=1500', '--regid=1501', '--clear-groups', '--no-new-privs', '--', '/bin/sh', '-c', plain.args[1], '3', '/n', 'c.js',
     ]);
     expect(launched.uid).toBeUndefined();
     const root = spawnPlan({ node: '/n', nodeArgs: [], script: 'c.js', cpuSeconds: 3, uid: 1500, gid: 1501 });
     expect(root).toMatchObject({ uid: 1500, gid: 1501 });
+  });
+
+  test('Node de l’enfant : option `node` (SANDBOX_NODE) prise à la place de process.execPath', async () => {
+    // Sans lanceur ni uid : seul le Node change. Un Node introuvable fait échouer la sonde, le Node courant la réussit.
+    await expect(new ProcessSandboxEngine({ production: false, node: '/zz-test/absent/node' }).probeIsolation()).rejects.toThrow(/sonde d'isolation en échec/);
+    const probe = await new ProcessSandboxEngine({ production: false, node: process.execPath }).probeIsolation();
+    expect(probe.uid).toBe(process.getuid?.());
   });
 
   test('arrêt forcé sous un autre uid : SIGKILL envoyé par le lanceur, sous l’uid de l’enfant', () => {
@@ -280,6 +293,12 @@ describe('image (deploy/Dockerfile) : utilisateur dédié du bac à sable', () =
     expect(dockerfile).toMatch(new RegExp(`useradd --system --uid ${options.uid} --gid ${options.gid} .*--shell /usr/sbin/nologin sandbox`));
     expect(dockerfile).toContain(`install -o root -g pwuser -m 0750 /usr/bin/setpriv ${options.launcher}`);
     expect(dockerfile).toContain(`setcap cap_setuid,cap_setgid=ep ${options.launcher}`);
-    expect(dockerfile).toMatch(/^USER pwuser$/m);
+    // F-20261001-R01 : le worker tourne sous une COPIE de Node à capacités de fichier réservée à pwuser ; l'enfant exécute
+    // le Node ordinaire (sans capacité de fichier, exécutable par l'uid dédié). Démarrage en root, descente par entrypoint.sh.
+    expect(dockerfile).toContain('install -o root -g pwuser -m 0750 /usr/bin/node /usr/local/libexec/node-worker');
+    expect(dockerfile).toContain('setcap cap_setuid,cap_setgid=ep /usr/local/libexec/node-worker');
+    expect(options.node).toBe('/usr/bin/node');
+    expect(dockerfile).toMatch(/^USER root$/m);
+    expect(dockerfile).toMatch(/^ENTRYPOINT \["\/usr\/local\/bin\/entrypoint\.sh"\]$/m);
   });
 });

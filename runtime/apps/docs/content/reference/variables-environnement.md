@@ -80,6 +80,7 @@ Pour l'instant, le TLS vers la base se règle par `sslmode` dans `DATABASE_URL` 
 | `ALLOWED_EGRESS_PORTS` | `80,443` | worker | ports de sortie autorisés pour les webhooks et le courrier | lue |
 | `SANDBOX_UID` / `SANDBOX_GID` | 1500 dans l'image | worker | utilisateur dédié du bac à sable ; vont ensemble ; le worker refuse de démarrer en production si l'enfant tournerait sous son propre utilisateur | lue |
 | `SANDBOX_LAUNCHER` | fixé dans l'image | worker | lanceur de changement d'utilisateur du bac à sable | lue |
+| `SANDBOX_NODE` | fixé dans l'image | worker | Node exécuté par l'enfant du bac à sable, sans capacité (le worker tourne sous une copie de Node réservée à son groupe) | lue |
 
 ## Rétention et stockage
 

@@ -69,6 +69,16 @@ export default defineConfig({
       },
       {
         test: {
+          // Image construite (deploy/Dockerfile) démarrée sous Docker : privilèges du bac à sable sous les capacités de
+          // Render et en Docker classique (tests/image). Lourd : `pnpm test:image`, joué par `pnpm ci:local`.
+          name: 'image',
+          testTimeout: 240_000,
+          hookTimeout: 900_000,
+          include: ['tests/**/*.image.test.ts'],
+        },
+      },
+      {
+        test: {
           name: 'contract',
           include: [
             'packages/*/src/**/*.contract.test.ts',
