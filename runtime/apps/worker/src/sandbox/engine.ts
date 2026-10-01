@@ -21,7 +21,7 @@ import type {
   SandboxViolation,
 } from '@runtime/core';
 import { SandboxBridgeError } from './bridges.js';
-import { parseChildMessage, type ChildMessage, type ParentMessage } from './protocol.js';
+import { SIGNAL_OUTPUT_LIMIT, parseChildMessage, type ChildMessage, type ParentMessage } from './protocol.js';
 
 type DoneMessage = Extract<ChildMessage, { t: 'done' }>;
 import { assertSandboxSupported } from './version.js';
@@ -580,6 +580,13 @@ export class ProcessSandboxEngine implements SandboxEngine {
           outcome = 'timeout';
           killed = true;
           report({ reason: 'time_limit', detail: 'cpu' });
+        }
+        if (outcome === undefined && child.signalCode === SIGNAL_OUTPUT_LIMIT) {
+          // Arrêt voulu de l'enfant (file de journal saturée, boucle affamée) : même verdict qu'un dépassement vu de l'hôte.
+          outcome = 'violation';
+          killed = true;
+          killRequestedAt = exitedAt;
+          report({ reason: 'output_limit', detail: 'file IPC' });
         }
         if (outcome === undefined) {
           // Sortie spontanée de l'enfant (plantage, abort sur erreur catastrophique de l'isolat).
