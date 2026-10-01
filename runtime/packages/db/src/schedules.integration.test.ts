@@ -99,6 +99,18 @@ const runsOf = async (scheduleId: string): Promise<RunRow[]> =>
 const complete = (runId: string) => pool.query("UPDATE runs SET state = 'succeeded', finished_at = now() WHERE id = $1", [runId]);
 const minuteOf = (d: Date) => d.toISOString().slice(0, 16);
 
+/**
+ * Départ de l'horloge simulée : la prochaine borne de 5 minutes, au moins 10 minutes après l'heure RÉELLE. Le miroir
+ * pg-boss date ses lignes (`created_on`) et son premier passage du cron à l'heure réelle de Postgres : un départ simulé
+ * antérieur à l'heure réelle rendrait ces dates postérieures aux occurrences à rattraper (`missed: once` ne trouverait
+ * rien). Un départ fixe ne tenait donc que jusqu'à son propre instant. Multiple de 5 minutes : les occurrences attendues
+ * (toutes les 5 minutes, ou chaque minute) tombent à des écarts fixes du départ, à toute heure de la journée.
+ */
+const simStart = (): number => Math.ceil((Date.now() + 10 * 60_000) / 300_000) * 300_000;
+const iso = (ms: number): string => new Date(ms).toISOString();
+const isoMinute = (ms: number): string => iso(ms).slice(0, 16);
+const isoDay = (ms: number): string => iso(ms).slice(0, 10);
+
 /** Fait avancer l'horloge simulée par pas, en laissant les E/S se terminer entre deux pas. */
 async function advance(clock: TestClock, totalMs: number, stepMs = 2000): Promise<void> {
   for (let elapsed = 0; elapsed < totalMs; elapsed += stepMs) {
@@ -288,31 +300,33 @@ describe('horloge simulée, deux workers : 0 doublon', () => {
     env = await freshEnv();
     const id = await envApiAndSchedule(env, { cron: '* * * * *' });
     await env.pool.query("UPDATE schedules SET input = '{\"since\": \"{{yesterday}}\", \"until\": \"{{today}}\"}'::jsonb WHERE id = $1", [id]);
-    const clock = new TestClock('2026-10-01T10:00:20Z');
+    const t0 = simStart();
+    const clock = new TestClock(t0 + 20_000);
     await startScheduler(env, clock, 'zz_test_w1');
     await startScheduler(env, clock, 'zz_test_w2');
     await mirrorSchedule(env.plain, { id, cron: '* * * * *', timezone: 'UTC', on_missed: 'skip', enabled: true });
 
-    await advance(clock, 2 * 60_000 + 40_000); // jusqu'à 10:03:00 (exclu) : occurrences 10:00, 10:01, 10:02
+    await advance(clock, 2 * 60_000 + 40_000); // jusqu'à t0 + 3:00 (exclu) : occurrences t0, t0 + 1 min, t0 + 2 min
     const runs = await runsIn(env, id);
-    expect(runs.map((r) => minuteOf(r.scheduled_at))).toEqual(['2026-10-01T10:00', '2026-10-01T10:01', '2026-10-01T10:02']);
+    expect(runs.map((r) => minuteOf(r.scheduled_at))).toEqual([0, 1, 2].map((m) => isoMinute(t0 + m * 60_000)));
     expect(new Set(runs.map((r) => r.schedule_job_id)).size).toBe(3);
     expect(runs.every((r) => r.trigger === 'schedule' && r.state === 'queued' && r.job_id !== null)).toBe(true);
     // Variables datées résolues à l'instant du déclenchement, dans le fuseau de la planification.
-    expect(runs[0]!.input).toEqual({ since: '2026-09-30', until: '2026-10-01' });
+    expect(runs[0]!.input).toEqual({ since: isoDay(t0 - 86_400_000), until: isoDay(t0) });
   }, 60_000);
 
   test('assert_schedule_single_source : deux workers, une planification à la minute, 10 minutes : une occurrence par minute', async () => {
     env = await freshEnv();
     const id = await envApiAndSchedule(env, { cron: '* * * * *' });
-    const clock = new TestClock('2026-10-01T10:00:20Z');
+    const t0 = simStart();
+    const clock = new TestClock(t0 + 20_000);
     await startScheduler(env, clock, 'zz_test_w1');
     await startScheduler(env, clock, 'zz_test_w2');
     await mirrorSchedule(env.plain, { id, cron: '* * * * *', timezone: 'UTC', on_missed: 'skip', enabled: true });
 
-    await advance(clock, 10 * 60_000 + 30_000); // 10:00:20 → 10:10:50
+    await advance(clock, 10 * 60_000 + 30_000); // t0 + 0:20 → t0 + 10:50
     const minutes = (await runsIn(env, id)).map((r) => minuteOf(r.scheduled_at));
-    const expected = Array.from({ length: 11 }, (_, i) => `2026-10-01T10:${String(i).padStart(2, '0')}`);
+    const expected = Array.from({ length: 11 }, (_, i) => isoMinute(t0 + i * 60_000));
     expect(minutes).toEqual(expected);
     expect(new Set(minutes).size).toBe(minutes.length);
   }, 120_000);
@@ -321,12 +335,13 @@ describe('horloge simulée, deux workers : 0 doublon', () => {
     env = await freshEnv();
     const once = await envApiAndSchedule(env, { cron: '*/5 * * * *', onMissed: 'once' });
     const skip = await envApiAndSchedule(env, { cron: '*/5 * * * *', onMissed: 'skip' });
-    const clock = new TestClock('2026-10-01T10:01:10Z');
+    const t0 = simStart();
+    const clock = new TestClock(t0 + 70_000);
     const first = await startScheduler(env, clock, 'zz_test_before');
     for (const [sid, m] of [[once, 'once'], [skip, 'skip']] as const) {
       await mirrorSchedule(env.plain, { id: sid, cron: '*/5 * * * *', timezone: 'UTC', on_missed: m, enabled: true });
     }
-    await advance(clock, 40_000); // quelques passages du cron, aucune occurrence due (10:00 est à 70 s, la prochaine est 10:05)
+    await advance(clock, 40_000); // quelques passages du cron, aucune occurrence due (t0 est à 70 s, la prochaine est t0 + 5 min)
     // Le premier passage d'une base neuve rattrape l'écart depuis l'installation (heure réelle) : on compte donc des écarts.
     const before = (await runsIn(env, once)).length;
     expect(before).toBeLessThanOrEqual(1);
@@ -334,7 +349,7 @@ describe('horloge simulée, deux workers : 0 doublon', () => {
 
     // Redéploiement : le worker s'arrête, 42 minutes passent, un nouveau worker démarre.
     await first.stop({ timeoutMs: 1000 });
-    await clock.setTime('2026-10-01T10:42:30Z');
+    await clock.setTime(t0 + 42 * 60_000 + 30_000);
     await startScheduler(env, clock, 'zz_test_after');
     await advance(clock, 30_000);
 
