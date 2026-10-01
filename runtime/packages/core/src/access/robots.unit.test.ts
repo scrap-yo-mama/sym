@@ -119,6 +119,29 @@ describe('robots.txt (RFC 9309) : analyse et correspondance', () => {
     expect(matchRules(rules, `/${'a'.repeat(100)}b${Math.floor(rules.length / 2)}`).allowed).toBe(false);
   });
 
+  // Revue de 1.11 : un plafond global de 20 000 règles écartait sans bruit le groupe `*` placé après 20 000 règles d'autres
+  // robots (fichier légitime de 349 Kio, sous la borne des 500 Kio) : le chemin interdit était requêté.
+  it('aucune règle écartée : 20 000 règles d’un autre robot puis le groupe `*`, dans les 500 Kio', () => {
+    let txt = 'User-agent: Googlebot\n';
+    for (let i = 0; i < 20_000; i++) txt += `Disallow: /x${i}\n`;
+    txt += 'User-agent: *\nDisallow: /prive/\n';
+    expect(Buffer.byteLength(txt)).toBeLessThan(500 * 1024);
+    expect(robotsAllows(parseRobots(txt), new URL('https://zz-test.example/prive/a'))).toEqual({ allowed: false, rule: 'Disallow: /prive/' });
+  });
+
+  it('500 Kio de règles les plus courtes possibles : la dernière règle du groupe retenu s’applique', () => {
+    let txt = 'User-agent: *\n';
+    const line = 'allow:a\n';
+    while (txt.length + line.length < 500 * 1024 - 32) txt += line;
+    txt += 'Disallow: /prive/\n';
+    const rules = selectGroup(parseRobots(txt)).rules;
+    expect(rules.length).toBeGreaterThan(60_000);
+    expect(allows(txt, '/prive/a')).toBe(false);
+    const started = performance.now();
+    for (let i = 0; i < 10; i++) matchRules(rules, `/${'a'.repeat(8 * 1024 - 1)}`);
+    expect((performance.now() - started) / 10).toBeLessThan(50);
+  });
+
   it('chemin et requête au-delà de 8 Kio : refus par précaution (s\'il existe des règles)', () => {
     const long = `/${'x'.repeat(MAX_ROBOTS_TARGET)}`;
     expect(matchRules([{ allow: false, pattern: '/prive/' }], long)).toEqual({ allowed: false, rule: null });

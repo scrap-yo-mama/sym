@@ -288,6 +288,18 @@ describe('assert_robots_respected : redirections suivies par Chromium (chaque sa
     expect(run).toMatchObject({ state: 'succeeded', items: 1 });
   }, 120_000);
 
+  // Revue de 1.11 : les requêtes d'un SharedWorker échappaient à `context.route` et au contrôle CDP de la page. Le JS du
+  // site (`/page-sw` → `/sw.js`) et le code du script (blob créé depuis `evaluate`) en créent un : aucun ne s'exécute.
+  test('SharedWorker du site et SharedWorker blob créé depuis evaluate : 0 requête sur /prive/ (direct ou redirigé)', async () => {
+    const blob = `new SharedWorker(URL.createObjectURL(new Blob([\\"fetch(location.origin + '/prive/blob').catch(() => 0); fetch(location.origin + '/depart').catch(() => 0);\\"], { type: 'text/javascript' })))`;
+    const source = `await ctx.page.waitForSelector('#sw'); await ctx.page.evaluate("(() => { try { ${blob}; } catch (e) {} return new Promise((r) => setTimeout(r, 1500)); })()"); ctx.emit({ id: 'apres' });`;
+    const run = await runOf(await insertApi(script(ROBOTS, '/page-sw', source)));
+    expect(run).toMatchObject({ state: 'succeeded', items: 1 });
+    expect((await paths(ROBOTS))['/page-sw']).toBe(1);
+    expect(await forbiddenHits(ROBOTS)).toBe(0);
+    expect((await paths(ROBOTS))['/depart']).toBeUndefined();
+  }, 120_000);
+
   test('WebSocket ouvert par le code du script (evaluate) vers un chemin interdit : 0 requête, robots_disallowed', async () => {
     const source = `await ctx.page.evaluate("new Promise((r) => { const w = new WebSocket('ws://' + location.host + '/prive/ws'); w.onclose = (e) => r(e.code); w.onopen = () => r(-1); setTimeout(() => r(0), 3000); })"); ctx.emit({ id: 'apres' });`;
     const apiId = await insertApi(script(ROBOTS, '/', source));

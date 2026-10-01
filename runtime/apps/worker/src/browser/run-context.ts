@@ -13,9 +13,11 @@
 // redirections ; chaque requête que Chromium s'apprête à envoyer, saut compris, passe par le contrôle CDP de
 // `request-guard.ts` (page du run et cadres hors processus) ; la poignée de main d'un WebSocket aussi. Les requêtes d'une
 // autre page du contexte (fenêtre surgissante, fermée aussitôt) sont coupées : elles échapperaient à ce contrôle.
+// SharedWorker (revue de 1.11) : ses requêtes échappent à `context.route` ET au contrôle CDP de la page ; chacun est fermé
+// avant d'exécuter son code (`blockSharedWorkers`, session CDP du navigateur), dans tous les modes, contrôle robots ou non.
 import { browserUserAgent } from '@runtime/core/access';
 import type { APIRequest, APIRequestContext, Browser, BrowserContext, Page, Request } from 'playwright-core';
-import { installRequestGuard, type RequestCheck } from './request-guard.js';
+import { blockSharedWorkers, installRequestGuard, type RequestCheck } from './request-guard.js';
 
 export type { BrowserRequestCheck } from './request-guard.js';
 
@@ -105,14 +107,27 @@ export async function openRunContext(browser: Browser, options: RunContextOption
     options.onViolation?.(host, request);
   };
   const userAgent = options.userAgent === undefined ? undefined : browserUserAgent(await ownUserAgent(browser), options.userAgent);
-  const context = await browser.newContext({
-    ...(userAgent === undefined ? {} : { userAgent }),
-    proxy: { server: options.egressServer },
-    serviceWorkers: 'block',
-    acceptDownloads: false,
-    ignoreHTTPSErrors: false,
-    bypassCSP: false,
-  });
+  // Posé avant le contexte : aucun SharedWorker de ce contexte ne peut naître avant lui (échec fermé s'il ne peut pas l'être).
+  const sharedWorkers = await blockSharedWorkers(browser);
+  let context: BrowserContext;
+  try {
+    context = await browser.newContext({
+      ...(userAgent === undefined ? {} : { userAgent }),
+      proxy: { server: options.egressServer },
+      serviceWorkers: 'block',
+      acceptDownloads: false,
+      ignoreHTTPSErrors: false,
+      bypassCSP: false,
+    });
+  } catch (error) {
+    await sharedWorkers.close();
+    throw error;
+  }
+  // Contexte fermé d'abord : détachée avant, la session laisserait repartir un SharedWorker resté suspendu.
+  const closeAll = async () => {
+    await context.close().catch(() => undefined);
+    await sharedWorkers.close();
+  };
   /** Page du run, connue une fois créée : toute requête d'une autre page du contexte est coupée. */
   let runPage: Page | undefined;
   try {
@@ -164,9 +179,9 @@ export async function openRunContext(browser: Browser, options: RunContextOption
     context.on('page', (other) => {
       if (other !== page) void other.close().catch(() => undefined);
     });
-    return { context, page, violations, close: () => context.close().catch(() => undefined) };
+    return { context, page, violations, close: closeAll };
   } catch (error) {
-    await context.close().catch(() => undefined);
+    await closeAll();
     throw error;
   }
 }

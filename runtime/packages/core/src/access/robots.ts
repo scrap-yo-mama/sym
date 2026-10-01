@@ -13,7 +13,8 @@
 // Coût borné (contrôle de chaque sous-ressource d'une page, sur un fichier hostile de 500 Kio) : chaque motif est
 // normalisé et découpé UNE fois ; la correspondance n'est qu'une suite de `startsWith` / `indexOf` (préfixe littéral
 // d'abord, segments ensuite, au plus à gauche) ; un chemin avec requête de plus de 8 Kio est refusé par précaution
-// quand des règles existent. Aucune règle n'est écartée (l'écarter pourrait permettre un chemin interdit).
+// quand des règles existent. Aucune règle n'est écartée (l'écarter pourrait permettre un chemin interdit) : aucun plafond
+// par nombre de règles, la seule borne est celle de la lecture (500 Kio, soit au plus 64 000 règles de 8 octets).
 
 /** Jeton produit annoncé dans le User-Agent et cherché dans les groupes `user-agent` (17 §5). */
 export const PRODUCT_TOKEN = 'Scrapyomama';
@@ -43,9 +44,8 @@ export type RobotsFile = {
 /** Longueur maximale du chemin et de la requête comparés (8 Kio) : au-delà, refus par précaution s'il existe des règles. */
 export const MAX_ROBOTS_TARGET = 8 * 1024;
 
-/** Bornes d'analyse : une ligne, une règle, le nombre de règles (défense contre un fichier hostile). */
+/** Bornes d'analyse : une ligne, les sitemaps et les signaux (défense contre un fichier hostile). Aucune sur les règles. */
 const MAX_LINE = 4096;
-const MAX_RULES = 20_000;
 const MAX_SITEMAPS = 50;
 const MAX_SIGNALS = 20;
 const MAX_SIGNAL_VALUE = 512;
@@ -73,7 +73,6 @@ export function parseRobots(text: string): RobotsFile {
   const globalSignals: RobotsSignalLine[] = [];
   let current: MutableGroup | null = null;
   let collectingAgents = false;
-  let rules = 0;
   const body = text.startsWith('﻿') ? text.slice(1) : text;
   for (const rawLine of body.split(/\r\n|\r|\n/)) {
     const line = rawLine.length > MAX_LINE ? rawLine.slice(0, MAX_LINE) : rawLine;
@@ -99,11 +98,10 @@ export function parseRobots(text: string): RobotsFile {
         if (current === null) break;
         collectingAgents = false;
         // Valeur vide : aucune règle (`Disallow:` vide = rien d'interdit).
-        if (value === '' || rules >= MAX_RULES) break;
+        if (value === '') break;
         const rule: RobotsRule = { allow: key === 'allow', pattern: value };
         compiled(rule);
         current.rules.push(rule);
-        rules += 1;
         break;
       }
       case 'crawl-delay': {

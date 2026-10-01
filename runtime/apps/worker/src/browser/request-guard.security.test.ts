@@ -7,7 +7,7 @@ import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { chromium, type Browser } from 'playwright-core';
 import { afterAll, beforeAll, expect, test } from 'vitest';
-import { installRequestGuard, type BrowserRequestCheck } from './request-guard.js';
+import { blockSharedWorkers, installRequestGuard, type BrowserRequestCheck } from './request-guard.js';
 
 const A = 'aaa.zz-test';
 const B = 'bbb.zz-test';
@@ -37,6 +37,12 @@ beforeAll(async () => {
         return redirect('/prive/wapi');
       case '/go':
         return redirect('/prive/go');
+      case '/sw-page':
+        return html(`<p id="sw">sw</p><script>try { new SharedWorker('/sw.js'); } catch (e) {}</script>`);
+      case '/sw.js':
+        return res.writeHead(200, { 'content-type': 'text/javascript' }).end("fetch('/prive/direct-sw').catch(() => 0); fetch('/swr').catch(() => 0);");
+      case '/swr':
+        return redirect('/prive/sw-redirect');
       default:
         return res.writeHead(200, { 'content-type': 'text/plain' }).end('ok');
     }
@@ -88,5 +94,41 @@ test('chaque saut contrôlé : cadre hors processus, worker dédié, navigation 
     );
   } finally {
     await context.close();
+  }
+}, 120_000);
+
+// Revue de 1.11 : les requêtes d'un SharedWorker ne passent ni par `context.route` ni par l'interception CDP de la page
+// (cible `shared_worker` hors de l'attachement automatique de la page). Échec fermé : tout SharedWorker est fermé avant
+// d'exécuter son code (`blockSharedWorkers`, posé par `openRunContext` sur chaque contexte de run).
+test('SharedWorker (script du site, puis blob créé depuis evaluate) : 0 requête sur /prive/, fetch direct ou redirigé', async () => {
+  const context = await browser.newContext();
+  const block = await blockSharedWorkers(browser);
+  try {
+    await context.route('**/*', (route) => route.continue());
+    const page = await context.newPage();
+    await installRequestGuard(
+      context,
+      page,
+      (url) => [A, B].includes(new URL(url).hostname),
+      async (request) => !new URL(request.url).pathname.startsWith('/prive/'),
+    );
+    await page.goto(`http://${A}:${port}/sw-page`);
+    await page.evaluate((origin) => {
+      // Code exécuté dans la page (DOM) : le tsconfig du worker ne charge pas la lib DOM, d'où ce type local minimal.
+      const { SharedWorker: PageSharedWorker } = globalThis as unknown as { SharedWorker: new (url: string) => unknown };
+      try {
+        new PageSharedWorker(URL.createObjectURL(new Blob([`fetch('${origin}/prive/blob').catch(() => 0); fetch('${origin}/swr?blob').catch(() => 0);`], { type: 'text/javascript' })));
+      } catch {
+        // SharedWorker refusé : rien ne part.
+      }
+    }, `http://${A}:${port}`);
+    // Témoin : une requête permise de la page arrive (le serveur répond), les SharedWorker n'ont rien envoyé.
+    await page.evaluate((origin) => fetch(`${origin}/temoin`).then(() => 0), `http://${A}:${port}`);
+    await page.waitForTimeout(1500);
+    expect(hits).toContain(`${A}/temoin`);
+    expect(hits.filter((h) => h.includes('/prive/') || h.includes('/swr'))).toEqual([]);
+  } finally {
+    await context.close();
+    await block.close();
   }
 }, 120_000);

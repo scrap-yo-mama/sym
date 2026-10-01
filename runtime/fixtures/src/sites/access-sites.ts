@@ -18,7 +18,8 @@ function base(id: string, description: string, smoke: Site['smoke']): Omit<Site,
  * `/prive/x` ; `/prive` → 301 `/prive/` (barre oblique finale) ; `/vers-autre` → 302 vers `/prive/x` d'un second hôte
  * (`robots_redirect`, qui interdit /prive/) ; `/vers-injoignable` → 302 vers l'hôte `robots_5xx` (robots.txt en 503) ;
  * `/page-ws` : page qui ouvre un WebSocket vers `/prive/ws` ; `/page-cadre` : page avec un cadre d'un autre site
- * (`robots_redirect`) dont une image passe par `/depart` → 302 `/prive/x`.
+ * (`robots_redirect`) dont une image passe par `/depart` → 302 `/prive/x` ; `/page-sw` : page qui crée un SharedWorker
+ * (`/sw.js`) dont le code demande `/prive/sw` directement et `/depart` (→ 302 `/prive/x`).
  */
 const robotsDisallow: SiteFactory = (env) => ({
   ...base('robots', 'robots.txt : Disallow: /prive/ avec Allow: /prive/ouvert (règle la plus longue) ; redirections d\'un chemin permis vers /prive/ (même hôte, barre oblique finale, second hôte) ; tout chemin visité est compté', { path: '/robots.txt', status: 200 }),
@@ -36,6 +37,10 @@ const robotsDisallow: SiteFactory = (env) => ({
         return redirect(302, env.urlFor('zz_test_robots_5xx.localhost', '/liste'));
       case '/page-cadre':
         return html(200, page('cadre', `<p id="cadre">cadre</p><iframe src="${env.urlFor('zz_test_robots_redirect.localhost', '/cadre')}"></iframe>`));
+      case '/page-sw':
+        return html(200, page('sw', '<p id="sw">sw</p>', `<script>try { new SharedWorker('/sw.js'); } catch (e) {}</script>`));
+      case '/sw.js':
+        return { status: 200, headers: { 'content-type': 'text/javascript; charset=utf-8' }, body: "fetch('/prive/sw').catch(() => 0); fetch('/depart').catch(() => 0);" };
       case '/page-ws':
         return html(200, page('ws', '<p id="ws">ws</p>', `<script>try { new WebSocket('ws://' + location.host + '/prive/ws'); } catch (e) {}</script>`));
       default:

@@ -10,7 +10,7 @@
 // Mode non aplati (`flatten: false`) : les messages d'une cible enfant passent par `Target.sendMessageToTarget` de la
 // session parente, seule voie qu'offre une `CDPSession` de Playwright. Un cadre hors processus dont l'interception ne
 // peut pas être posée reste suspendu (échec fermé) : il ne charge rien.
-import type { BrowserContext, CDPSession, Page } from 'playwright-core';
+import type { Browser, BrowserContext, CDPSession, Page } from 'playwright-core';
 
 /** Requête présentée au contrôle (un saut d'une chaîne de redirections, ou la requête initiale). */
 export type BrowserRequestCheck = {
@@ -184,4 +184,32 @@ export async function installRequestGuard(context: BrowserContext, page: Page, i
     await session.detach().catch(() => undefined);
     throw error;
   }
+}
+
+/** Poignée du blocage des SharedWorker : à fermer APRÈS le contexte du run (fermée avant, un worker suspendu repartirait). */
+export type SharedWorkerBlock = { close(): Promise<void> };
+
+/**
+ * Échec fermé sur les SharedWorker (revue de 1.11, INV11) : leurs requêtes ne passent ni par `context.route` ni par
+ * l'interception CDP de la page (une cible `shared_worker` n'est pas jointe par l'attachement automatique de la page, et
+ * `Fetch` de la page ne la couvre pas). Une session CDP au niveau du navigateur joint chaque SharedWorker dès sa création,
+ * suspendu avant toute exécution de son code (`waitForDebuggerOnStart`), puis le ferme (`Target.closeTarget`). S'il ne
+ * peut pas être fermé, il reste suspendu : il n'est jamais relancé, aucune requête ne part. Le script du worker lui-même
+ * est chargé par la page (contrôlé par `context.route` et le contrôle CDP de la page) ; son code ne s'exécute jamais.
+ */
+export async function blockSharedWorkers(browser: Browser): Promise<SharedWorkerBlock> {
+  const session = await browser.newBrowserCDPSession();
+  const raw = sessionChannel(session);
+  raw.on('Target.attachedToTarget', (params) => {
+    const info = (params['targetInfo'] ?? {}) as { type?: unknown; targetId?: unknown };
+    if (info.type !== 'shared_worker' || typeof info.targetId !== 'string') return; // Filtre : rien d'autre n'est joint.
+    void raw.send('Target.closeTarget', { targetId: info.targetId }).catch(() => undefined);
+  });
+  try {
+    await raw.send('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: true, flatten: true, filter: [{ type: 'shared_worker' }] });
+  } catch (error) {
+    await session.detach().catch(() => undefined);
+    throw new Error(`blocage des SharedWorker indisponible : ${error instanceof Error ? error.message : String(error)}`, { cause: error });
+  }
+  return { close: () => session.detach().catch(() => undefined) };
 }
