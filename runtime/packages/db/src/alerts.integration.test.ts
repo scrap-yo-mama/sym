@@ -151,7 +151,9 @@ describe('réglages', () => {
     smtp = await startFakeSmtp({ rejectRcpt: ['refuse@example.zz-test'] });
     await configure();
     expect(await testSmtp(ctx(), 'refuse@example.zz-test')).toMatchObject({ ok: false, code: 'rejected' });
-    expect(await testSmtp(ctx({ guard: new SsrfGuard() }), 'admin@example.zz-test')).toMatchObject({ ok: false, code: 'ssrf_blocked' });
+    // Relais réglé par l'admin (operator-config) : métadonnées cloud refusées, sans détail sensible.
+    await saveSmtpSettings(pool, store, { host: '169.254.169.254', port: smtp.port, security: 'none', from: 'alerts@scrapyomama.zz-test' });
+    expect(await testSmtp(ctx({ guard: new SsrfGuard() }), 'admin@example.zz-test')).toEqual({ ok: false, code: 'ssrf_blocked', smtpCode: null });
   });
 });
 
@@ -165,7 +167,9 @@ describe('alertes actionnables', () => {
     expect(alerts).toBe(1);
 
     const sent = await sendAlertEmail(ctx(), { api_id: id, cause: 'status_erreur', since: NOW.toISOString() });
-    expect(sent).toEqual({ sent: true, to: ['admin@example.zz-test'] });
+    // Le résultat est journalisé par le worker : un compteur, jamais les adresses des destinataires (données personnelles).
+    expect(sent).toEqual({ sent: true, recipients: 1 });
+    expect(JSON.stringify(sent)).not.toContain('@');
     expect(smtp.mails).toHaveLength(1);
     const mail = smtp.mails[0]!;
     expect(mail.to).toEqual(['admin@example.zz-test']);
@@ -181,6 +185,28 @@ describe('alertes actionnables', () => {
     const degraded = await transition(healthy, { type: 'run_succeeded', signals: ['escalated'] });
     expect(degraded.result.ok && degraded.result.state.status).toBe('warning');
     expect(degraded.alerts).toBe(0);
+  });
+
+  test('le run cité est celui de la transition (ou du job), pas le dernier run de l\'API lancé pendant la fenêtre', async () => {
+    await configure();
+    const id = await api('reparation', 'zz_test_run_cite');
+    const cause = await failedRun(id, 'extraction');
+    expect((await transition(id, { type: 'repair_failed', cause: 'budget_exhausted' }, NOW, cause)).alerts).toBe(1);
+    // Le job mis en file porte le run de la transition.
+    const queued = (await pool.query<{ data: AlertJob }>("SELECT data FROM pgboss.job WHERE name = $1 AND data->>'api_id' = $2", [ALERT_QUEUE, id])).rows;
+    expect(queued.map((j) => j.data.run_id)).toEqual([cause]);
+    // Pendant la fenêtre, un autre run de l'API démarre puis échoue autrement : il ne remplace pas le run de la transition.
+    const later = await failedRun(id, 'transient');
+    await pool.query("UPDATE runs SET created_at = now() + interval '1 minute' WHERE id = $1", [later]);
+    await sendAlertEmail(ctx(), { api_id: id, cause: 'status_erreur', since: NOW.toISOString() });
+    const text = smtp.mails.at(-1)!.text;
+    expect(text).toContain(`Run : ${cause}`);
+    expect(text).toContain('Failure class : extraction');
+    expect(text).not.toContain(later);
+    // Échec de run planifié : le run porté par le job, même si un autre run est plus récent.
+    await sendAlertEmail(ctx(), { api_id: id, cause: 'run_failed', since: NOW.toISOString(), run_id: cause });
+    expect(smtp.mails.at(-1)!.text).toContain(`Run : ${cause}`);
+    expect(smtp.mails.at(-1)!.text).not.toContain(later);
   });
 
   test('bloquee et action_requise alertent aussi ; l\'e-mail reste factuel et ne propose aucun changement de réseau', async () => {
@@ -401,7 +427,11 @@ describe('échecs SMTP', () => {
   test('échecs définitifs (SSRF, destinataires refusés en 5xx) : pas de relance ; échec transitoire (relais coupé) : relancé par la file', async () => {
     const id = await erroredApi();
     await configure();
+    // Relais réglé par l'admin (operator-config, 08b § 1) : boucle locale permise même sous une garde stricte ; métadonnées cloud refusées.
+    expect(await sendAlertEmail(ctx({ guard: new SsrfGuard() }), job(id))).toEqual({ sent: true, recipients: 1 });
+    await saveSmtpSettings(pool, store, { host: '169.254.169.254', port: smtp.port, security: 'none', from: 'alerts@scrapyomama.zz-test' });
     expect(await sendAlertEmail(ctx({ guard: new SsrfGuard() }), job(id))).toEqual({ sent: false, reason: 'ssrf_blocked' });
+    await configure();
     // Relais coupé : l'erreur remonte, la file (retryLimit 3) rejoue.
     await smtp.close();
     await expect(sendAlertEmail(ctx(), job(id))).rejects.toMatchObject({ code: 'connect' });

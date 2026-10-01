@@ -32,7 +32,13 @@ export type QueueDefinition = {
   deleteAfterSeconds?: number;
 };
 
-export type QueuedJob<T> = { id: string; data: T; signal: AbortSignal };
+export type QueuedJob<T> = {
+  id: string;
+  data: T;
+  signal: AbortSignal;
+  /** Création du job (horloge de la file) : pour une occurrence planifiée, l'instant où le cron l'a émise. */
+  createdOn?: Date;
+};
 
 export type JobState = 'created' | 'retry' | 'active' | 'completed' | 'cancelled' | 'failed';
 
@@ -139,6 +145,25 @@ export type RunContext = {
    * l'instance : à appliquer aux items **avant collecte et avant écriture** du dataset (tâches 1.6/1.7).
    */
   excludeSubjects<T>(outputSchema: unknown, items: readonly T[]): { kept: T[]; dropped: number };
+  /**
+   * Écrit des items dans le dataset du run (créé au premier appel, complété aux suivants) : liste d'exclusion appliquée,
+   * puis `dedup_key` / `diff` de la planification d'origine (08 § 5) contre les clés déjà vues pour l'API. Avec
+   * `diff: new`, seuls les items nouveaux sont écrits. Le worker reporte le dataset écrit dans le résultat du run.
+   */
+  writeItems(outputSchema: unknown, items: readonly unknown[]): Promise<DatasetWrite>;
+};
+
+/** Bilan cumulé des écritures du run dans son dataset. */
+export type DatasetWrite = {
+  dataset_id: string;
+  /** Items écrits dans le dataset. */
+  written: number;
+  /** Items dont la clé de déduplication n'avait jamais été vue pour l'API (`null` : pas de `dedup_key`). */
+  new_items: number | null;
+  /** Items retirés par la liste d'exclusion des sujets effacés. */
+  dropped: number;
+  /** Items écartés : déjà vus (`diff: new`) ou doublons de clé dans le même run. */
+  skipped: number;
 };
 
 export type RunExecutor = (ctx: RunContext) => Promise<RunResult>;

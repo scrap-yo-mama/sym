@@ -226,6 +226,11 @@ export type HandleScheduledRunInput = {
   now: () => Date;
   jobId: string;
   data: ScheduledRunJobData;
+  /**
+   * Création du job par le cron (`createdOn` de pg-boss, horloge de la file) : sert à retrouver l'occurrence quand le job
+   * est traité en retard (file chargée, rattrapage `missed: once` après un déploiement). Défaut : `now()`.
+   */
+  occurredAt?: Date;
 };
 
 /**
@@ -275,6 +280,9 @@ async function handleInTransaction(client: pg.PoolClient, input: HandleScheduled
     return { outcome: 'ignored', reason: 'api_not_accessible' };
   }
 
+  // Occurrence servie par ce job : `scheduled_at`, variables datées, quota du jour et fenêtre la prennent pour référence.
+  const occurrence = await occurrenceOf(client, queue, row, data, input.occurredAt ?? now);
+
   // Règles relues en base. Une ligne écrite hors du service et invalide retombe sur le défaut (bloquee toujours sautée).
   const parsed = parseScheduleRules(row.rules);
   const rules = parsed.ok ? parsed.rules : (parseScheduleRules({}) as { ok: true; rules: ScheduleRules }).rules;
@@ -299,7 +307,7 @@ async function handleInTransaction(client: pg.PoolClient, input: HandleScheduled
                WHERE schedule_id = $1 AND state NOT LIKE 'skipped\\_%'
                  AND scheduled_at >= (date_trunc('day', $2::timestamptz AT TIME ZONE $3) AT TIME ZONE $3)
                  AND scheduled_at < ((date_trunc('day', $2::timestamptz AT TIME ZONE $3) + interval '1 day') AT TIME ZONE $3)`,
-              [row.id, now, row.timezone],
+              [row.id, occurrence, row.timezone],
             )
           ).rows[0]?.n ?? 0,
         );
@@ -307,7 +315,8 @@ async function handleInTransaction(client: pg.PoolClient, input: HandleScheduled
     ((await client.query("SELECT 1 FROM runs WHERE schedule_id = $1 AND state IN ('queued', 'running', 'waiting_tunnel') LIMIT 1", [row.id])).rowCount ?? 0) > 0;
 
   const decision = evaluateScheduleRules(rules, {
-    now,
+    // Fenêtre et quota jugés sur l'occurrence, pas sur l'heure du traitement.
+    now: occurrence,
     timezone: row.timezone,
     enabled: row.schedule_enabled,
     overlap: row.overlap,
@@ -318,7 +327,7 @@ async function handleInTransaction(client: pg.PoolClient, input: HandleScheduled
     activeRun,
   });
 
-  const origin: ScheduleOrigin = { scheduleId: row.id, scheduledAt: now, scheduleJobId: jobId };
+  const origin: ScheduleOrigin = { scheduleId: row.id, scheduledAt: occurrence, scheduleJobId: jobId };
   switch (decision.action) {
     case 'ignore':
       return { outcome: 'ignored', reason: 'disabled' };
@@ -332,7 +341,7 @@ async function handleInTransaction(client: pg.PoolClient, input: HandleScheduled
         rank <= MAX_DEFERRALS
           ? await queue.enqueueOnce(
               SCHEDULED_RUN_DEFERRED_QUEUE,
-              { schedule_id: row.id, deferred: rank } satisfies ScheduledRunJobData,
+              { schedule_id: row.id, deferred: rank, occurrence_at: occurrence.toISOString() } satisfies ScheduledRunJobData,
               { singletonKey: row.id, startAfterSeconds: DEFER_SECONDS, tx: client as QueryClient },
             )
           : null;
@@ -347,12 +356,58 @@ async function handleInTransaction(client: pg.PoolClient, input: HandleScheduled
         apiId: row.api_id,
         ownerId: row.owner_id,
         trigger: 'schedule',
-        input: resolveScheduleInput(row.input, now, row.timezone),
+        input: resolveScheduleInput(row.input, occurrence, row.timezone),
         schedule: origin,
       });
       return { outcome: 'run', runId };
     }
   }
+}
+
+/**
+ * Occurrence d'un déclenchement. Un report porte la sienne (`occurrence_at`). Sinon : la dernière occurrence du cron au plus
+ * tard à la création du job ; si un autre run de la planification l'a déjà prise, celle d'avant (le rattrapage
+ * `missed: once` et l'occurrence courante sont émis dans le même passage du cron, à la même heure de création). Sans
+ * occurrence calculable (cron illisible) : l'heure de référence.
+ */
+async function occurrenceOf(client: Queryable, queue: Pick<JobQueue, 'previewSchedule'>, row: Pick<ScheduleRow, 'id' | 'cron' | 'timezone'>, data: ScheduledRunJobData, ref: Date): Promise<Date> {
+  if (typeof data.occurrence_at === 'string') {
+    const carried = new Date(data.occurrence_at);
+    if (!Number.isNaN(carried.getTime())) return carried;
+  }
+  let recent: Date[];
+  try {
+    recent = latestOccurrences(queue, row.cron, row.timezone, ref, 2);
+  } catch {
+    return ref;
+  }
+  const latest = recent.at(-1);
+  if (latest === undefined) return ref;
+  const { rows } = await client.query<{ at: Date }>('SELECT scheduled_at AS at FROM runs WHERE schedule_id = $1 AND scheduled_at = ANY($2::timestamptz[])', [row.id, recent]);
+  const taken = new Set(rows.map((r) => r.at.getTime()));
+  for (const candidate of [...recent].reverse()) if (!taken.has(candidate.getTime())) return candidate;
+  return latest;
+}
+
+/** Les `count` dernières occurrences d'un cron au plus tard à `ref` (fenêtre élargie par doublement, au plus ~400 j). */
+function latestOccurrences(queue: Pick<JobQueue, 'previewSchedule'>, cron: string, timezone: string, ref: Date, count: number): Date[] {
+  const refMs = ref.getTime();
+  const BATCH = 50;
+  let found: Date[] = [];
+  for (let span = 2 * 60_000; span <= 400 * 86_400_000; span *= 2) {
+    found = [];
+    let from = new Date(refMs - span);
+    for (;;) {
+      const batch = queue.previewSchedule(cron, { timezone, count: BATCH, from });
+      const within = batch.filter((d) => d.getTime() <= refMs);
+      found.push(...within);
+      const lastOf = batch.at(-1);
+      if (within.length < batch.length || batch.length < BATCH || lastOf === undefined || lastOf.getTime() <= from.getTime()) break;
+      from = lastOf;
+    }
+    if (found.length >= count) return found.slice(-count);
+  }
+  return found.slice(-count);
 }
 
 /** Durée D d'un `warning` pour cette API, d'après ses planifications actives : max(7 j, 3 × période). */

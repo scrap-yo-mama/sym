@@ -3,7 +3,9 @@
 // - files `scheduled-run` (alimentée par le cron de pg-boss), `scheduled-run-deferred` (`overlap: queue`), `webhook-delivery`
 //   et `alert-email` ; chaque job est traité par la fonction de `@runtime/db` correspondante ;
 // - miroir pg-boss reconstruit depuis `schedules` au démarrage (source de vérité : la table) ;
-// - contrôle des `warning` qui durent au-delà de D, périodique, atomique entre workers.
+// - contrôle des `warning` qui durent au-delà de D, périodique, atomique entre workers ; au même pas, retrait des secrets
+//   webhook précédents dont la grâce est passée ;
+// - journal : aucune adresse e-mail de destinataire (un compteur), aucun secret.
 // Aucune règle n'est copiée dans les jobs : le gestionnaire relit la base.
 import {
   SCHEDULED_RUN_QUEUE,
@@ -16,6 +18,7 @@ import {
   checkLongWarnings,
   deliverWebhookAttempt,
   handleScheduledRun,
+  purgeExpiredWebhookSecrets,
   reconcileSchedules,
   scheduledRunDeferredQueueDefinition,
   scheduledRunQueueDefinition,
@@ -64,13 +67,14 @@ export async function startScheduling(options: SchedulingOptions): Promise<Sched
   for (const bad of reconciled.invalid) log.warn(bad, 'planification illisible : ignorée');
 
   const polling = { pollingIntervalSeconds: options.pollingIntervalSeconds };
-  const onTrigger = async (job: { id: string; data: ScheduledRunJobData }) => {
+  const onTrigger = async (job: { id: string; data: ScheduledRunJobData; createdOn?: Date }) => {
     const data = job.data;
     if (typeof data?.schedule_id !== 'string') {
       log.error({ jobId: job.id }, 'déclenchement sans schedule_id : ignoré');
       return;
     }
-    const outcome = await handleScheduledRun({ pool, queue, now, jobId: job.id, data });
+    // `createdOn` : instant d'émission de l'occurrence par le cron (un job traité en retard garde son jour et son heure).
+    const outcome = await handleScheduledRun({ pool, queue, now, jobId: job.id, data, ...(job.createdOn ? { occurredAt: job.createdOn } : {}) });
     log.info({ scheduleId: data.schedule_id, ...outcome }, 'planification : déclenchement traité');
   };
   await queue.work<ScheduledRunJobData>(SCHEDULED_RUN_QUEUE, { concurrency: 2, ...polling }, onTrigger);
@@ -92,10 +96,16 @@ export async function startScheduling(options: SchedulingOptions): Promise<Sched
   const alertContext = { pool, queue, store, guard, now, ...(options.smtpCa ? { smtpCa: options.smtpCa } : {}) };
   await queue.work<AlertJob>(ALERT_QUEUE, { concurrency: 1, ...polling }, async (job) => {
     const result = await sendAlertEmail(alertContext, job.data);
+    // Jamais les adresses des destinataires (données personnelles) : `recipients` est un compteur.
     log.info({ apiId: job.data.api_id, cause: job.data.cause, ...result }, 'alerte : traitée');
   });
 
-  const checkWarnings = () => checkLongWarnings({ pool, queue, now });
+  const checkWarnings = async () => {
+    const alerted = await checkLongWarnings({ pool, queue, now });
+    const purged = await purgeExpiredWebhookSecrets(pool, now());
+    if (purged > 0) log.info({ purged }, 'webhook : secrets précédents expirés supprimés');
+    return alerted;
+  };
   let checking = false;
   const timer = setInterval(() => {
     if (checking) return;

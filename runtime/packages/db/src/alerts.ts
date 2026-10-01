@@ -7,8 +7,13 @@
 //   au départ du job, l'e-mail résume les transitions de la fenêtre.
 // - L'alerte d'instance par défaut s'applique à toute API sans règle propre (pas de cible webhook du propriétaire abonnée à
 //   `api.status_changed`). Une planification dont `alert_on` ne contient pas `status_change` n'alerte pas.
-// - Le relais SMTP passe par la garde SSRF (`sendMail`). Échec définitif (auth, SSRF, adresse) : pas de relance ; échec
-//   transitoire (délai, connexion, 4xx) : pg-boss relance.
+// - Le relais SMTP passe par la garde SSRF en politique `operator-config` (08b § 1 : réglé par l'admin, privé permis,
+//   métadonnées cloud refusées ; `sendMail`). Échec définitif (auth, SSRF, adresse) : pas de relance ; échec transitoire
+//   (délai, connexion, 4xx) : pg-boss relance.
+// - L'e-mail cite le run de la transition (`status_events.run_id`) ou celui porté par le job, jamais « le dernier run » de
+//   l'API (un run lancé pendant la fenêtre de regroupement ne le remplace pas).
+// - « Marquer comme attendu » (08 § 5, 04 § 6 : exclure un run de la base de calcul) n'est pas livré ici : la base de calcul
+//   des signaux de run dégradé (`volume_anomaly`…) n'existe pas encore ; reporté à la tâche qui la calcule (voir README).
 import {
   alertCauseForTransition,
   alertGroupKey,
@@ -36,7 +41,14 @@ export function alertQueueDefinition(): QueueDefinition {
   return { name: ALERT_QUEUE, expireInSeconds: 120, heartbeatSeconds: 30, retryLimit: 3, policy: 'short' };
 }
 
-export type AlertJob = { api_id: string; cause: AlertCause; /** Début de la fenêtre (ISO). */ since: string };
+export type AlertJob = {
+  api_id: string;
+  cause: AlertCause;
+  /** Début de la fenêtre (ISO). */
+  since: string;
+  /** Run de l'événement qui a ouvert la fenêtre (transition ou échec de run planifié). */
+  run_id?: string | null;
+};
 
 export const SMTP_SETTING = 'smtp';
 export const ALERTS_SETTING = 'alerts';
@@ -219,7 +231,7 @@ export async function queueAlert(tx: Queryable, queue: JobQueue, input: QueueAle
     if (alertOn !== 'unscheduled' && alertOn !== null && !alertOn.includes('status_change')) return false;
     if (await hasOwnStatusRule(tx, input.api.owner_id)) return false;
   }
-  const job: AlertJob = { api_id: input.api.id, cause: input.cause, since: input.since.toISOString() };
+  const job: AlertJob = { api_id: input.api.id, cause: input.cause, since: input.since.toISOString(), run_id: input.runId ?? null };
   const id = await queue.enqueueOnce(ALERT_QUEUE, job, {
     singletonKey: alertGroupKey(input.api.id, input.cause),
     startAfterSeconds: settings.window_seconds,
@@ -245,7 +257,8 @@ export async function queueStatusAlerts(tx: Queryable, queue: JobQueue, input: {
 // Envoi
 // ---------------------------------------------------------------------------------------------------------------
 
-export type AlertSendResult = { sent: true; to: string[] } | { sent: false; reason: string };
+/** Résultat journalisé par le worker : un compteur de destinataires, jamais leurs adresses (données personnelles). */
+export type AlertSendResult = { sent: true; recipients: number } | { sent: false; reason: string };
 
 /** Échecs que rejouer ne corrige pas : l'admin doit agir (réglages). */
 const FINAL_SMTP_FAILURES = new Set(['ssrf_blocked', 'auth', 'insecure_auth', 'invalid_message', 'tls']);
@@ -264,24 +277,34 @@ export async function sendAlertEmail(ctx: AlertContext, job: AlertJob): Promise<
 
   const transitions: AlertDigest['transitions'] = [];
   let warningSince: string | null = null;
+  let runId: string | null = job.run_id ?? null;
   if (job.cause.startsWith('status_')) {
     const to = job.cause.slice('status_'.length);
-    const { rows } = await ctx.pool.query<{ from_status: ApiStatus | null; to_status: ApiStatus; reason: string | null; at: Date }>(
-      'SELECT from_status, to_status, reason, at FROM status_events WHERE api_id = $1 AND to_status = $2 AND at >= $3 ORDER BY id',
+    const { rows } = await ctx.pool.query<{ from_status: ApiStatus | null; to_status: ApiStatus; reason: string | null; at: Date; run_id: string | null }>(
+      'SELECT from_status, to_status, reason, at, run_id FROM status_events WHERE api_id = $1 AND to_status = $2 AND at >= $3 ORDER BY id',
       [job.api_id, to, job.since],
     );
     // Statut déjà quitté avant l'envoi (retour à sain pendant la fenêtre) : l'alerte n'a plus d'objet.
     if (rows.length === 0 || api.status !== to) return { sent: false, reason: 'resolved_before_send' };
     for (const r of rows) transitions.push({ from: r.from_status, to: r.to_status, reason: r.reason, at: r.at.toISOString() });
+    // Le run de la dernière transition de la fenêtre qui en nomme un (sinon celui du job).
+    runId = [...rows].reverse().find((r) => r.run_id !== null)?.run_id ?? runId;
   } else if (job.cause === 'warning_stale') {
     if (api.status !== 'warning') return { sent: false, reason: 'resolved_before_send' };
     warningSince = job.since;
   }
-  const { rows: runRows } = await ctx.pool.query<{ id: string; failure_class: string | null }>(
-    `SELECT id, failure_class FROM runs WHERE api_id = $1 AND state NOT LIKE 'skipped\\_%' ORDER BY created_at DESC LIMIT 1`,
-    [job.api_id],
-  );
-  const run = runRows[0];
+  if (runId === null && job.cause === 'warning_stale') {
+    // Un warning qui dure n'a pas de run déclencheur : le dernier run exécuté de l'API, pour le contexte.
+    const { rows } = await ctx.pool.query<{ id: string }>(
+      "SELECT id FROM runs WHERE api_id = $1 AND state NOT LIKE 'skipped\\_%' ORDER BY created_at DESC LIMIT 1",
+      [job.api_id],
+    );
+    runId = rows[0]?.id ?? null;
+  }
+  const run =
+    runId === null
+      ? undefined
+      : (await ctx.pool.query<{ id: string; failure_class: string | null }>('SELECT id, failure_class FROM runs WHERE id = $1 AND api_id = $2', [runId, job.api_id])).rows[0];
   const digest: AlertDigest = {
     api: api.slug,
     api_id: job.api_id,
@@ -302,7 +325,7 @@ export async function sendAlertEmail(ctx: AlertContext, job: AlertJob): Promise<
     if (error instanceof SmtpError && error.code === 'rejected' && error.smtpCode !== null && error.smtpCode >= 500) return { sent: false, reason: 'rejected' };
     throw error;
   }
-  return { sent: true, to: settings.to };
+  return { sent: true, recipients: settings.to.length };
 }
 
 // ---------------------------------------------------------------------------------------------------------------

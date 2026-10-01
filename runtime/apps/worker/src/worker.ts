@@ -10,7 +10,8 @@
 //    qui la clôt (`finishRunAndNotify`) ;
 // 6. SIGTERM : `draining`, plus de nouveau job, fin des runs en cours sous SHUTDOWN_TIMEOUT_SECONDS, sinon remise en file ;
 // 7. RGPD (1.8, D-25) : clé des sujets chargée au démarrage ; par run, registre de masquage (`RunContext.personal`, vidé
-//    en fin de run, appliqué à `error_detail`) et liste d'exclusion (`RunContext.excludeSubjects`) ; passe de rétention
+//    en fin de run, appliqué à `error_detail`) et liste d'exclusion (`RunContext.excludeSubjects`, appliquée aussi par
+//    `RunContext.writeItems`, qui écrit le dataset sous l'identité du propriétaire avec la dédup de la planification) ; passe de rétention
 //    planifiée toutes les RETENTION_TICK_SECONDS (marquage horaire, purge et `ensure_partitions` quotidiens, verrou
 //    consultatif : une seule instance à la fois), sur une connexion de session.
 import { randomBytes } from 'node:crypto';
@@ -25,12 +26,14 @@ import {
   secretValues,
   withRunContext,
   withSpan,
+  type DatasetWrite,
   type RunExecutor,
   type RunJobData,
   type RunResult,
   type SpanHandle,
 } from '@runtime/core';
 import {
+  appendRunItems,
   beatWorker,
   claimRun,
   createRunLogger,
@@ -51,6 +54,7 @@ import {
   secretStore,
   runRetentionTick,
   sweepOrphans,
+  withActor,
   type SweepResult,
 } from '@runtime/db';
 import { SsrfGuard } from '@runtime/core/net';
@@ -258,11 +262,27 @@ export async function startWorker(options: StartWorkerOptions): Promise<Worker> 
         (error: unknown) => log.warn({ runId, err: errorDetail(error) }, 'battement du run : écriture impossible'),
       );
     }, config.runHeartbeatSeconds * 1000);
+    // Bilan cumulé des écritures du dataset par l'exécuteur (`ctx.writeItems`), reporté dans le résultat du run.
+    const dataset: { written: DatasetWrite | null } = { written: null };
     try {
       let result: RunResult;
       try {
         // Liste d'exclusion des sujets effacés, chargée à la prise du run.
         const excluded = await loadSubjectExclusions(pool);
+        const writeItems = async (outputSchema: unknown, items: readonly unknown[]): Promise<DatasetWrite> => {
+          const { kept, dropped } = filterExcludedItems(subjects, excluded, outputSchema, items);
+          const r = await withActor(pool, { userId: claim.ownerId, role: 'member' }, (tx) => appendRunItems(tx, { runId, items: kept, hashKey: subjects }));
+          const before = dataset.written;
+          const next: DatasetWrite = {
+            dataset_id: r.datasetId,
+            written: (before?.written ?? 0) + r.written,
+            new_items: r.newItems === null ? (before?.new_items ?? null) : (before?.new_items ?? 0) + r.newItems,
+            dropped: (before?.dropped ?? 0) + dropped,
+            skipped: (before?.skipped ?? 0) + r.skipped,
+          };
+          dataset.written = next;
+          return next;
+        };
         result = await executor({
           runId,
           apiId: claim.apiId,
@@ -276,7 +296,10 @@ export async function startWorker(options: StartWorkerOptions): Promise<Worker> 
           log: runLog.log,
           personal,
           excludeSubjects: (outputSchema, items) => filterExcludedItems(subjects, excluded, outputSchema, items),
+          writeItems,
         });
+        // Le dataset du run est celui que le worker a écrit, jamais un autre nommé par l'exécuteur.
+        if (result.state === 'succeeded' && dataset.written !== null) result = { ...result, dataset_id: dataset.written.dataset_id };
       } catch (error) {
         result = controller.signal.aborted
           ? { state: 'failed', failure_class: 'transient', retryable: true, error_detail: entry.cause ?? 'aborted' }

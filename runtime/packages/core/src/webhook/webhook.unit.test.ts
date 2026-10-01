@@ -157,6 +157,14 @@ describe('charges utiles (INV5 : minces, jamais d\'item)', () => {
     expect(p.data).toEqual({ ...api, run_id: 'r2', status: 'warning', failure_class: 'unavailable', retryable: true });
   });
 
+  test('run.failed d\'une classe bloquante : retryable false quoi que rapporte l\'exécuteur (X3, X4)', () => {
+    for (const cls of ['blocked_by_protection', 'forbidden', 'robots_disallowed'] as const) {
+      expect(runFailedPayload(NOW, { ...api, run_id: 'r5', status: 'bloquee', failure_class: cls, retryable: true }).data['retryable'], cls).toBe(false);
+      expect(runFailedPayload(NOW, { ...api, run_id: 'r5', status: 'bloquee', failure_class: cls, retryable: null }).data['retryable'], cls).toBe(false);
+    }
+    expect(runFailedPayload(NOW, { ...api, run_id: 'r6', status: 'sain', failure_class: 'transient', retryable: true }).data['retryable']).toBe(true);
+  });
+
   test('api.status_changed vers bloquee : retryable false ; ailleurs true', () => {
     const blocked = statusChangedPayload(NOW, { ...api, from: 'sain', to: 'bloquee', reason: 'blocked_by_protection', run_id: 'r3' });
     expect(blocked.type).toBe('api.status_changed');

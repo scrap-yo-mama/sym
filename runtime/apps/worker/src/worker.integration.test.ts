@@ -198,6 +198,33 @@ test('assert_worker_key_mismatch : un worker avec une autre MASTER_KEY s’arrê
   await queue.cancel(RUN_QUEUE, jobId);
 });
 
+test('ctx.writeItems : dataset du run écrit sous la dédup de sa planification (`diff: new`), cumulé, rapporté dans le run', async () => {
+  const schedule = (
+    await pool.query<{ id: string }>("INSERT INTO schedules (api_id, owner_id, cron, rules) VALUES ($1, $2, '0 * * * *', $3::jsonb) RETURNING id", [
+      readApi,
+      A,
+      JSON.stringify({ dedup_key: 'url', diff: 'new' }),
+    ])
+  ).rows[0]!.id;
+  const item = (k: string) => ({ url: `https://zz-test.example/${k}`, title: k });
+  const writes: unknown[] = [];
+  const executor: RunExecutor = async (ctx) => {
+    writes.push(await ctx.writeItems(null, [item('a'), item('b')]));
+    writes.push(await ctx.writeItems(null, [item('b'), item('c')]));
+    return { state: 'succeeded', outcome: 'clean', items: 3 };
+  };
+  await inProcessWorker(executor);
+  const origin = { scheduleId: schedule, scheduledAt: new Date(), scheduleJobId: randomUUID() };
+  const { runId } = await withActor(pool, actorA, (tx) => createRun(tx, queue, { apiId: readApi, ownerId: A, trigger: 'schedule', schedule: origin }));
+  await waitState(runId, ['succeeded']);
+  const first = writes[0] as { dataset_id: string };
+  expect(first).toEqual({ dataset_id: expect.any(String), written: 2, new_items: 2, dropped: 0, skipped: 0 });
+  expect(writes[1]).toEqual({ dataset_id: first.dataset_id, written: 3, new_items: 3, dropped: 0, skipped: 1 });
+  const row = (await pool.query<{ dataset_id: string; owner_id: string }>('SELECT r.dataset_id, d.owner_id FROM runs r JOIN datasets d ON d.id = r.dataset_id WHERE r.id = $1', [runId])).rows[0];
+  expect(row).toEqual({ dataset_id: first.dataset_id, owner_id: A });
+  expect((await pool.query('SELECT count(*)::int AS n FROM dataset_items WHERE dataset_id = $1', [first.dataset_id])).rows[0].n).toBe(3);
+});
+
 describe('kill -9 en plein run (vrai processus)', () => {
   test('API en lecture : run repris par un autre worker puis `succeeded`, jamais bloqué en `running`', async () => {
     const { runId, jobId } = await create();

@@ -79,13 +79,18 @@ async function newSchedule(
   return rows[0]!.id;
 }
 
-const fire = (scheduleId: string, at: string, over: { deferred?: number; jobId?: string } = {}) =>
+const fire = (scheduleId: string, at: string, over: { deferred?: number; jobId?: string; occurredAt?: string; occurrenceAt?: string } = {}) =>
   handleScheduledRun({
     pool,
     queue: plain,
     now: () => new Date(at),
     jobId: over.jobId ?? randomUUID(),
-    data: { schedule_id: scheduleId, ...(over.deferred ? { deferred: over.deferred } : {}) } satisfies ScheduledRunJobData,
+    ...(over.occurredAt ? { occurredAt: new Date(over.occurredAt) } : {}),
+    data: {
+      schedule_id: scheduleId,
+      ...(over.deferred ? { deferred: over.deferred } : {}),
+      ...(over.occurrenceAt ? { occurrence_at: over.occurrenceAt } : {}),
+    } satisfies ScheduledRunJobData,
   });
 
 type RunRow = { id: string; state: string; trigger: string; scheduled_at: Date; schedule_job_id: string | null; input: unknown; error_detail: string | null; job_id: string | null };
@@ -509,6 +514,46 @@ describe('règles', () => {
     const outcomes = await Promise.all([fire(id, '2026-10-01T10:00:00Z'), fire(id, '2026-10-01T10:00:00Z'), fire(id, '2026-10-01T10:00:00Z')]);
     expect(outcomes.filter((o) => o.outcome === 'run')).toHaveLength(1);
     expect(outcomes.filter((o) => o.outcome === 'skipped')).toHaveLength(2);
+  });
+
+  test('occurrence traitée en retard : `scheduled_at`, `{{today}}` et le quota suivent l\'occurrence, pas l\'heure du traitement', async () => {
+    await resetSchedules();
+    const id = await newSchedule(await newApi(), { cron: '59 23 * * *', overlap: 'allow', rules: { max_runs_per_day: 1 }, input: { day: '{{today}}', prev: '{{yesterday}}' } });
+    // Occurrence du 09/03 à 23:59, émise par le cron à 23:59:00.4, traitée à 00:00:30 le 10/03 (file en retard).
+    const late = (await fire(id, '2026-03-10T00:00:30Z', { occurredAt: '2026-03-09T23:59:00.400Z' })) as { outcome: string; runId: string };
+    expect(late.outcome).toBe('run');
+    const [run] = await runsOf(id);
+    expect(run!.scheduled_at).toEqual(new Date('2026-03-09T23:59:00Z'));
+    expect(run!.input).toEqual({ day: '2026-03-09', prev: '2026-03-08' });
+    // Le run du 09/03 compte pour le 09/03 : l'occurrence du 10/03 a encore son quota.
+    expect((await fire(id, '2026-03-10T23:59:02Z', { occurredAt: '2026-03-10T23:59:00.300Z' })).outcome).toBe('run');
+    expect((await runsOf(id)).map((r) => (r.input as { day: string }).day)).toEqual(['2026-03-09', '2026-03-10']);
+  });
+
+  test('missed: once : rattrapage et occurrence courante émis ensemble : chacun son occurrence, le rattrapage garde son jour', async () => {
+    await resetSchedules();
+    const id = await newSchedule(await newApi(), { cron: '0 9 * * *', overlap: 'allow', onMissed: 'once', input: { day: '{{today}}' } });
+    // Redéploiement le 12/03 à 09:00 : le cron émet l'occurrence manquée du 11/03 et celle du 12/03 dans le même passage.
+    await fire(id, '2026-03-12T09:00:05Z', { occurredAt: '2026-03-12T09:00:01Z' });
+    await fire(id, '2026-03-12T09:00:06Z', { occurredAt: '2026-03-12T09:00:01Z' });
+    const runs = await runsOf(id);
+    expect(runs.map((r) => r.scheduled_at.toISOString())).toEqual(['2026-03-11T09:00:00.000Z', '2026-03-12T09:00:00.000Z']);
+    expect(runs.map((r) => (r.input as { day: string }).day)).toEqual(['2026-03-11', '2026-03-12']);
+  });
+
+  test('report (overlap: queue) : le job remis à plus tard porte son occurrence, le run garde l\'heure d\'origine', async () => {
+    await resetSchedules();
+    const id = await newSchedule(await newApi(), { overlap: 'queue', input: { day: '{{today}}' } });
+    const first = (await fire(id, '2026-03-09T23:58:00Z')) as { runId: string };
+    expect(await fire(id, '2026-03-09T23:59:00Z', { occurredAt: '2026-03-09T23:59:00.100Z' })).toEqual({ outcome: 'deferred', deferred: 1 });
+    const deferred = (await pool.query<{ data: ScheduledRunJobData }>("SELECT data FROM pgboss.job WHERE name = 'scheduled-run-deferred' AND data->>'schedule_id' = $1", [id])).rows;
+    expect(deferred.map((j) => j.data.occurrence_at)).toEqual(['2026-03-09T23:59:00.000Z']);
+    await complete(first.runId);
+    // Le report aboutit après minuit : le run garde l'occurrence du 09/03.
+    expect((await fire(id, '2026-03-10T00:00:30Z', { deferred: 1, occurrenceAt: '2026-03-09T23:59:00.000Z' })).outcome).toBe('run');
+    const last = (await runsOf(id)).at(-1)!;
+    expect(last.scheduled_at).toEqual(new Date('2026-03-09T23:59:00Z'));
+    expect(last.input).toEqual({ day: '2026-03-09' });
   });
 
   test('le run planifié appartient au propriétaire de la planification et porte son origine', async () => {

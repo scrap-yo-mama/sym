@@ -102,12 +102,29 @@ describe('sendMail', () => {
     expect(Date.now() - started).toBeLessThan(3000);
   });
 
-  test('garde SSRF : relais sur boucle locale refusé sans exception, 0 connexion', async () => {
+  test('assert_smtp_operator_config : relais de l\'admin sur boucle locale ou réseau privé permis sans ALLOWED_PRIVATE_HOSTS (08b § 1)', async () => {
     const server = await relay();
-    const error = await sendMail(config(server), mail, { guard: strictGuard }).catch((e: unknown) => e);
-    expect(error).toBeInstanceOf(SsrfBlockedError);
-    expect((error as SsrfBlockedError).code).toBe('ssrf_blocked');
-    expect(server.connections()).toBe(0);
+    // Garde stricte (aucune dérogation) : le relais est une configuration d'opérateur, pas une cible de membre.
+    const receipt = await sendMail(config(server), mail, { guard: strictGuard });
+    expect(receipt.accepted).toEqual(['admin@example.zz-test']);
+    // La garde des cibles de membres, elle, reste fermée pour la même adresse : aucune dérogation n'a été ouverte.
+    await expect(strictGuard.resolve('127.0.0.1', 443)).rejects.toBeInstanceOf(SsrfBlockedError);
+  });
+
+  test('operator-config : métadonnées cloud, 0.0.0.0, multicast et diffusion toujours refusés, 0 connexion', async () => {
+    for (const host of ['169.254.169.254', '0.0.0.0', '224.0.0.1', '255.255.255.255', 'metadata.google.internal']) {
+      const error = await sendMail({ host, port: 25, security: 'none', from: 'a@b.zz-test', timeoutMs: 1000 }, mail, { guard: strictGuard }).catch((e: unknown) => e);
+      expect(error, host).toBeInstanceOf(SsrfBlockedError);
+      expect((error as SsrfBlockedError).code).toBe('ssrf_blocked');
+    }
+  });
+
+  test('operator-config : un nom qui résout vers les métadonnées est refusé ; l\'adresse résolue est épinglée', async () => {
+    const resolving = (address: string) => new SsrfGuard({ resolver: async () => [{ address, family: 4 }] });
+    await expect(resolving('169.254.169.254').resolveOperatorConfig('smtp.example.zz-test', 587)).rejects.toBeInstanceOf(SsrfBlockedError);
+    expect(await resolving('10.1.2.3').resolveOperatorConfig('smtp.internal.zz-test', 587)).toEqual({ address: '10.1.2.3', family: 4 });
+    expect(() => strictGuard.checkOperatorAddress('smtp.internal.zz-test', '169.254.169.254')).toThrow(SsrfBlockedError);
+    expect(() => strictGuard.checkOperatorAddress('smtp.internal.zz-test', '192.168.1.10')).not.toThrow();
   });
 
   test('garde SSRF : métadonnées cloud refusées même si le réseau privé est autorisé', async () => {

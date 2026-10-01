@@ -138,9 +138,10 @@ export class PgBossJobQueue implements JobQueue {
   ): Promise<string> {
     return this.#boss.work<T>(
       queue,
-      { batchSize: 1, localConcurrency: options.concurrency, pollingIntervalSeconds: options.pollingIntervalSeconds ?? 2 },
+      // `includeMetadata` : `createdOn` (horloge de la file) donne l'instant d'émission d'une occurrence planifiée.
+      { batchSize: 1, localConcurrency: options.concurrency, pollingIntervalSeconds: options.pollingIntervalSeconds ?? 2, includeMetadata: true },
       async (jobs) => {
-        for (const job of jobs) await handler({ id: job.id, data: job.data, signal: job.signal });
+        for (const job of jobs) await handler({ id: job.id, data: job.data, signal: job.signal, createdOn: (job as { createdOn?: Date }).createdOn });
       },
     );
   }

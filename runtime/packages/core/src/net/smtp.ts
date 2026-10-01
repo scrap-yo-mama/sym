@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Client SMTP minimal pour les alertes (08 § 5) : un message texte, un relais configuré par l'admin.
-// - Garde SSRF (INV10) : le nom du relais est résolu une fois par la garde, le socket s'ouvre sur l'adresse validée
-//   (jamais sur une nouvelle résolution), `servername` = nom pour SNI et certificat, `remoteAddress` recontrôlée.
-//   Les ports ne sont pas restreints (réglage de l'admin, pas une cible de membre) : `resolveAnyPort`.
+// - Garde SSRF (INV10), politique `operator-config` de 08b § 1 : le relais est réglé par l'admin, pas par un membre.
+//   Adresses privées et boucle locale permises sans `ALLOWED_PRIVATE_HOSTS` (qui ouvrirait aussi l'hôte aux webhooks et à
+//   `ctx.fetch` des membres) ; métadonnées cloud, 0.0.0.0, multicast et diffusion toujours refusés ; ports libres. Le nom
+//   est résolu une fois, le socket s'ouvre sur l'adresse validée (jamais sur une nouvelle résolution), `servername` = nom
+//   pour SNI et certificat, `remoteAddress` recontrôlée.
 // - Sécurité : `tls` (implicite, 465), `starttls` (587, exigé : pas de repli en clair) ou `none` ; l'authentification
 //   n'est jamais envoyée hors TLS ; mot de passe porté par `Secret`, jamais journalisé ; aucune expression régulière
 //   sur le flux du serveur (lignes bornées, réponse bornée, délai global) ; en-têtes assainis contre l'injection de CRLF.
@@ -291,13 +293,13 @@ export async function sendMail(config: SmtpConfig, mail: MailMessage, options: {
   const deadline = Date.now() + (config.timeoutMs ?? DEFAULT_TIMEOUT_MS);
   let pinned;
   try {
-    pinned = await options.guard.resolveAnyPort(config.host, config.port);
+    pinned = await options.guard.resolveOperatorConfig(config.host, config.port);
   } catch (error) {
     throw findSsrfBlocked(error) ?? error;
   }
   const socket = await open(config, pinned.address, pinned.family, deadline);
   try {
-    options.guard.checkAddress(config.host, stripAddress(socket.remoteAddress ?? ''), config.port);
+    options.guard.checkOperatorAddress(config.host, stripAddress(socket.remoteAddress ?? ''), config.port);
   } catch (blocked) {
     socket.destroy();
     throw blocked instanceof SsrfBlockedError ? blocked : new SmtpError('ssrf_blocked', 'ssrf_blocked');

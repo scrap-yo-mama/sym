@@ -12,10 +12,12 @@ import { TestClock } from 'pg-boss';
 import { Webhook } from 'standardwebhooks';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from 'vitest';
 import { createTestDatabase, type TestDatabase } from '../../../tests/helpers/pg.js';
+import { appendRunItems } from './datasets.js';
 import { migrateUp } from './migrate.js';
 import { applyStatusAndNotify, finishRunAndNotify, notifyRunFinished, notifyStatusChange, toStatusTransitions } from './notify.js';
 import { PgBossJobQueue } from './queue.js';
 import { runQueueDefinition } from './runs.js';
+import { withActor } from './rls.js';
 import { keyCheck, secretStore } from './secrets.js';
 import { applyStatusTransition } from './status.js';
 import {
@@ -24,6 +26,7 @@ import {
   emitWebhookEvent,
   enableWebhookSubscription,
   listDeliveries,
+  purgeExpiredWebhookSecrets,
   redeliverWebhook,
   rotateWebhookSecret,
   testWebhookSubscription,
@@ -315,7 +318,8 @@ describe('livraison', () => {
   test('cible désactivée après 5 jours d\'échecs continus ; plus aucune livraison jusqu\'à sa réactivation', async () => {
     const sub = await subscribe(['run.succeeded']);
     behavior = () => ({ status: 500 });
-    await pool.query("UPDATE webhook_subscriptions SET failing_since = $2 WHERE id = $1", [sub.id, new Date(NOW.getTime() - 5 * 86_400_000 - 1000)]);
+    // Série continue : en échec depuis plus de 5 jours, dernier échec il y a 2 h.
+    await pool.query("UPDATE webhook_subscriptions SET failing_since = $2, last_failure_at = $3 WHERE id = $1", [sub.id, new Date(NOW.getTime() - 5 * 86_400_000 - 1000), at(-7200)]);
     const { deliveries } = await emitRunSucceeded();
     const result = await deliverWebhookAttempt(ctx({ now: () => NOW }), { dispatch_id: deliveries[0]!, attempt: 1 });
     expect(result.outcome).toBe('failed');
@@ -324,20 +328,61 @@ describe('livraison', () => {
     expect(row.disabled_at).toEqual(NOW);
     expect((await deliveriesOf(sub.id)).map((r) => r.attempt)).toEqual([1]); // pas de relance
     expect((await emitRunSucceeded()).deliveries).toHaveLength(0);
-    await enableWebhookSubscription(pool, sub.id);
+    await enableWebhookSubscription(pool, { subscriptionId: sub.id, ownerId: A });
     expect((await emitRunSucceeded()).deliveries).toHaveLength(1);
   });
 
   test('moins de 5 jours : la cible reste active, la série d\'échecs est mémorisée', async () => {
     const sub = await subscribe(['run.succeeded']);
     behavior = () => ({ status: 500 });
-    await pool.query("UPDATE webhook_subscriptions SET failing_since = $2 WHERE id = $1", [sub.id, new Date(NOW.getTime() - 4 * 86_400_000)]);
+    await pool.query("UPDATE webhook_subscriptions SET failing_since = $2, last_failure_at = $3 WHERE id = $1", [sub.id, new Date(NOW.getTime() - 4 * 86_400_000), at(-7200)]);
     const { deliveries } = await emitRunSucceeded();
     await deliverWebhookAttempt(ctx({ now: () => NOW }), { dispatch_id: deliveries[0]!, attempt: 1 });
     const row = (await pool.query('SELECT status, failing_since FROM webhook_subscriptions WHERE id = $1', [sub.id])).rows[0];
     expect(row.status).toBe('active');
     expect(row.failing_since).toEqual(new Date(NOW.getTime() - 4 * 86_400_000));
   });
+
+  test('un échec isolé il y a 6 jours puis un nouvel échec : nouvelle série, la cible reste active (pas « 5 jours d\'échecs continus »)', async () => {
+    const sub = await subscribe(['run.succeeded']);
+    behavior = () => ({ status: 500 });
+    // Un événement en échec il y a 6 jours, barème épuisé 2 h 35 plus tard ; rien depuis.
+    await pool.query('UPDATE webhook_subscriptions SET failing_since = $2, last_failure_at = $3 WHERE id = $1', [sub.id, at(-6 * 86_400), at(-6 * 86_400 + 9_305)]);
+    const { deliveries } = await emitRunSucceeded();
+    expect((await deliverWebhookAttempt(ctx({ now: () => NOW }), { dispatch_id: deliveries[0]!, attempt: 1 })).outcome).toBe('retry');
+    const row = (await pool.query('SELECT status, failing_since, last_failure_at FROM webhook_subscriptions WHERE id = $1', [sub.id])).rows[0];
+    expect(row).toEqual({ status: 'active', failing_since: NOW, last_failure_at: NOW });
+  });
+
+  test('livraison interrompue (worker arrêté entre l\'envoi et l\'écriture du journal) : pg-boss rejoue une fois, la ligne ne reste pas `pending`', async () => {
+    expect(webhookDeliveryQueueDefinition().retryLimit).toBe(1);
+    const q = new PgBossJobQueue({ connectionString: tdb.url, max: 2, supervise: false });
+    await q.start();
+    await q.createQueue(webhookDeliveryQueueDefinition());
+    try {
+      const sub = await subscribe(['run.succeeded']);
+      const { deliveries } = await emitWebhookEvent(pool, q, {
+        event: 'run.succeeded',
+        payload: { type: 'run.succeeded', timestamp: NOW.toISOString(), data: { api_id: apiId, run_id: randomUUID(), items: 1 } },
+        ownerIds: [A],
+        now: NOW,
+      });
+      let calls = 0;
+      await q.work<WebhookDeliveryJob>(WEBHOOK_DELIVERY_QUEUE, { concurrency: 1, pollingIntervalSeconds: 0.5 }, async (job) => {
+        // Les jobs laissés par les autres tests passent aussi par ce worker : on ne compte que celui de ce test.
+        if (job.data.dispatch_id !== deliveries[0]) return;
+        calls += 1;
+        if (calls === 1) throw new Error('zz_test : arrêt du worker avant la mise à jour du journal');
+        await deliverWebhookAttempt(ctx({ queue: q }), job.data);
+      });
+      const deadline = Date.now() + 20_000;
+      while (Date.now() < deadline && (await deliveriesOf(sub.id))[0]?.status === 'pending') await new Promise((r) => setTimeout(r, 200));
+      expect(calls).toBe(2);
+      expect((await deliveriesOf(sub.id)).map((r) => [r.dispatch_id, r.status])).toEqual([[deliveries[0], 'succeeded']]);
+    } finally {
+      await q.stop({ timeoutMs: 1000 }).catch(() => undefined);
+    }
+  }, 30_000);
 
   test('assert_webhook_ssrf_blocked (livraison) : rebinding après l\'enregistrement → ssrf_blocked, jamais rejoué, 0 requête reçue', async () => {
     let phase: 'validate' | 'connect' = 'validate';
@@ -395,26 +440,26 @@ describe('livraison', () => {
     const sub = await subscribe(['run.succeeded']);
     const { eventId, deliveries } = await emitRunSucceeded();
     await deliverWebhookAttempt(ctx({ now: () => at(0) }), { dispatch_id: deliveries[0]!, attempt: 1 });
-    const attempt = await redeliverWebhook(pool, queue, deliveries[0]!, at(60));
+    const attempt = await redeliverWebhook(pool, queue, { dispatchId: deliveries[0]!, ownerId: A }, at(60));
     expect(attempt).toBe(2);
     await deliverWebhookAttempt(ctx({ now: () => at(60) }), { dispatch_id: deliveries[0]!, attempt });
     expect(received.map((r) => r.headers['webhook-id'])).toEqual([`evt_${eventId}`, `evt_${eventId}`]);
     expect(received[1]!.headers['webhook-timestamp']).toBe(String(at(60).getTime() / 1000));
     expect(referenceSigns(sub.secret, received[1]!)).toBe(true);
-    expect((await listDeliveries(pool, sub.id)).map((r) => r.attempt)).toEqual([2, 1]);
+    expect((await listDeliveries(pool, { subscriptionId: sub.id, ownerId: A })).map((r) => r.attempt)).toEqual([2, 1]);
   });
 
   test('« Tester » : charge signée `webhook.test`, journalisée, `tested_at` renseigné ; en échec, pas de `tested_at`', async () => {
     const sub = await subscribe(['run.succeeded']);
     expect((await pool.query('SELECT tested_at FROM webhook_subscriptions WHERE id = $1', [sub.id])).rows[0].tested_at).toBeNull();
-    expect(await testWebhookSubscription(ctx(), sub.id)).toEqual({ httpStatus: 200, errorCode: null });
+    expect(await testWebhookSubscription(ctx(), { subscriptionId: sub.id, ownerId: A })).toEqual({ httpStatus: 200, errorCode: null });
     expect(JSON.parse(received[0]!.body).type).toBe('webhook.test');
     expect(() => new Webhook(sub.secret).verify(received[0]!.body, headersOf(received[0]!))).not.toThrow();
     expect((await pool.query('SELECT tested_at FROM webhook_subscriptions WHERE id = $1', [sub.id])).rows[0].tested_at).not.toBeNull();
 
     const failing = await subscribe(['run.succeeded']);
     behavior = () => ({ status: 410 });
-    expect(await testWebhookSubscription(ctx(), failing.id)).toEqual({ httpStatus: 410, errorCode: 'http_410' });
+    expect(await testWebhookSubscription(ctx(), { subscriptionId: failing.id, ownerId: A })).toEqual({ httpStatus: 410, errorCode: 'http_410' });
     expect((await pool.query('SELECT tested_at FROM webhook_subscriptions WHERE id = $1', [failing.id])).rows[0].tested_at).toBeNull();
   });
 
@@ -431,7 +476,7 @@ describe('livraison', () => {
 describe('rotation, filtrage, isolation', () => {
   test('rotation : deux secrets valides en parallèle pendant la grâce, puis un seul', async () => {
     const sub = await subscribe(['run.succeeded']);
-    const rotated = await rotateWebhookSecret(pool, store, { subscriptionId: sub.id, graceHours: 24, now: NOW });
+    const rotated = await rotateWebhookSecret(pool, store, { subscriptionId: sub.id, ownerId: A, graceHours: 24, now: NOW });
     expect(rotated.secret).not.toBe(sub.secret);
     const stored = await secretsIn(sub.id);
     expect(stored.current).toBe(rotated.secret);
@@ -469,6 +514,75 @@ describe('rotation, filtrage, isolation', () => {
     await emitRunSucceeded(A);
     expect(await deliveriesOf(mine.id)).toHaveLength(1);
     expect(await deliveriesOf(theirs.id)).toHaveLength(0);
+  });
+
+  test('assert_webhook_owner_bound : un membre ne peut lier ni la cible ni le secret d\'un autre (clés étrangères liées au propriétaire)', async () => {
+    const theirs = await subscribe(['run.succeeded'], A);
+    const mine = await subscribe(['run.succeeded'], B);
+    const theirSecret = (await pool.query<{ secret_id: string }>('SELECT secret_id FROM webhook_subscriptions WHERE id = $1', [theirs.id])).rows[0]!.secret_id;
+    const asB = <T,>(fn: (tx: pg.PoolClient) => Promise<T>) => withActor(pool, { userId: B, role: 'member' }, fn);
+    // Livraison forgée vers la cible d'un autre (contrôle de clé étrangère hors RLS) : refusée par la base.
+    await expect(
+      asB((tx) =>
+        tx.query("INSERT INTO webhook_deliveries (subscription_id, owner_id, event, dispatch_id, attempt, status, event_id, payload) VALUES ($1, $2, 'run.succeeded', $3, 1, 'pending', $4, '{}')", [
+          theirs.id,
+          B,
+          randomUUID(),
+          randomUUID(),
+        ]),
+      ),
+    ).rejects.toThrow(/foreign key/);
+    // Secret d'un autre (UUID connu) posé sur sa propre cible, courant ou précédent : refusé.
+    await expect(asB((tx) => tx.query('UPDATE webhook_subscriptions SET secret_id = $2 WHERE id = $1', [mine.id, theirSecret]))).rejects.toThrow(/foreign key/);
+    await expect(asB((tx) => tx.query('UPDATE webhook_subscriptions SET previous_secret_id = $2 WHERE id = $1', [mine.id, theirSecret]))).rejects.toThrow(/foreign key/);
+    // Livraison réorientée vers la cible d'un autre : refusée.
+    const { deliveries } = await emitRunSucceeded(B);
+    await expect(asB((tx) => tx.query('UPDATE webhook_deliveries SET subscription_id = $2 WHERE dispatch_id = $1', [deliveries[0], theirs.id]))).rejects.toThrow(/foreign key/);
+    expect(received).toHaveLength(0);
+  });
+
+  test('livraison : un secret d\'une autre nature (pas `webhook_secret`) ne signe jamais, 0 requête', async () => {
+    const sub = await subscribe(['run.succeeded']);
+    const other = await store.put({ ownerId: A, kind: 'proxy_password', label: 'zz_test proxy', value: 'zz_test_pas_un_secret_webhook' });
+    await pool.query('UPDATE webhook_subscriptions SET secret_id = $2 WHERE id = $1', [sub.id, other]);
+    const { deliveries } = await emitRunSucceeded();
+    expect(await deliverWebhookAttempt(ctx({ now: () => NOW }), { dispatch_id: deliveries[0]!, attempt: 1 })).toEqual({ outcome: 'failed', errorCode: 'secret_missing' });
+    await expect(testWebhookSubscription(ctx(), { subscriptionId: sub.id, ownerId: A })).rejects.toThrow('secret');
+    expect(received).toHaveLength(0);
+  });
+
+  test('IDOR : tester, faire tourner, réactiver, lire le journal ou renvoyer exigent le propriétaire de la cible', async () => {
+    const sub = await subscribe(['run.succeeded'], A);
+    const { deliveries } = await emitRunSucceeded(A);
+    await expect(testWebhookSubscription(ctx(), { subscriptionId: sub.id, ownerId: B })).rejects.toThrow('introuvable');
+    await expect(rotateWebhookSecret(pool, store, { subscriptionId: sub.id, ownerId: B })).rejects.toThrow('introuvable');
+    await expect(enableWebhookSubscription(pool, { subscriptionId: sub.id, ownerId: B })).rejects.toThrow('introuvable');
+    expect(await listDeliveries(pool, { subscriptionId: sub.id, ownerId: B })).toEqual([]);
+    await expect(redeliverWebhook(pool, queue, { dispatchId: deliveries[0]!, ownerId: B })).rejects.toThrow('introuvable');
+    expect(received).toHaveLength(0);
+    expect(await deliveriesOf(sub.id)).toHaveLength(1);
+    expect((await secretsIn(sub.id)).current).toBe(sub.secret);
+  });
+
+  test('rotation : l\'ancien « ancien » secret est supprimé au remplacement ; la grâce passée, la maintenance retire le précédent', async () => {
+    const sub = await subscribe(['run.succeeded']);
+    const idsOf = async () => (await pool.query<{ secret_id: string; previous_secret_id: string | null }>('SELECT secret_id, previous_secret_id FROM webhook_subscriptions WHERE id = $1', [sub.id])).rows[0]!;
+    const exists = async (id: string) => ((await pool.query('SELECT 1 FROM secrets WHERE id = $1', [id])).rowCount ?? 0) > 0;
+    const original = (await idsOf()).secret_id;
+    await rotateWebhookSecret(pool, store, { subscriptionId: sub.id, ownerId: A, graceHours: 24, now: NOW });
+    const second = (await idsOf()).secret_id;
+    expect((await idsOf()).previous_secret_id).toBe(original);
+    const third = await rotateWebhookSecret(pool, store, { subscriptionId: sub.id, ownerId: A, graceHours: 24, now: at(3600) });
+    expect(await idsOf()).toEqual({ secret_id: expect.any(String), previous_secret_id: second });
+    expect(await exists(original)).toBe(false);
+
+    expect(await purgeExpiredWebhookSecrets(pool, at(3600))).toBe(0);
+    expect(await purgeExpiredWebhookSecrets(pool, at(3600 + 24 * 3600 + 1))).toBe(1);
+    const after = await idsOf();
+    expect(after.previous_secret_id).toBeNull();
+    expect(await exists(second)).toBe(false);
+    expect((await secretsIn(sub.id)).current).toBe(third.secret);
+    expect((await pool.query('SELECT previous_secret_expires_at FROM webhook_subscriptions WHERE id = $1', [sub.id])).rows[0].previous_secret_expires_at).toBeNull();
   });
 });
 
@@ -543,6 +657,12 @@ describe('événements de run et de statut', () => {
     expect(rows[0]!.payload.data).toMatchObject({ run_id: ok.runId, items: 12, outcome: 'clean', api_id: apiId });
     expect(rows[1]!.payload.data).toMatchObject({ run_id: bad.runId, failure_class: 'transient', retryable: true });
     for (const r of rows) expect(JSON.stringify(r.payload)).not.toMatch(/"item"|error_detail|cookie|authorization/i);
+
+    // Classe bloquante rapportée « réessayable » par l'exécuteur : le webhook dit retryable: false (X3, X4).
+    const refused = await newRun({ state: 'running' });
+    await finishRunAndNotify(pool, queue, { runId: refused.runId, jobId: refused.jobId, result: { state: 'failed', failure_class: 'forbidden', retryable: true }, now: () => NOW });
+    const last = (await pool.query<{ payload: { data: Record<string, unknown> } }>('SELECT payload FROM webhook_deliveries WHERE subscription_id = $1 ORDER BY id DESC LIMIT 1', [sub.id])).rows[0]!;
+    expect(last.payload.data).toMatchObject({ run_id: refused.runId, failure_class: 'forbidden', retryable: false });
   });
 
   test('bail perdu (job_id changé) : le run n\'est pas clos et rien n\'est annoncé', async () => {
@@ -554,41 +674,90 @@ describe('événements de run et de statut', () => {
     expect((await pool.query('SELECT state FROM runs WHERE id = $1', [run.runId])).rows[0].state).toBe('running');
   });
 
-  test('items.new : seulement avec `diff: new` + `alert_on: new_items` et après une exécution de référence', async () => {
-    const sub = await subscribe(['items.new', 'run.succeeded']);
+  /** Planification de surveillance et runs réels : chaque run écrit son dataset par `appendRunItems` (dédup contre l'API). */
+  async function watchedSchedule(rules: Record<string, unknown>) {
     const watched = await api('sain');
-    const { rows } = await pool.query<{ id: string }>(
-      `INSERT INTO schedules (api_id, owner_id, cron, rules) VALUES ($1, $2, '* * * * *', $3::jsonb) RETURNING id`,
-      [watched, A, JSON.stringify({ dedup_key: 'url', diff: 'new', alert_on: ['new_items'] })],
-    );
+    const { rows } = await pool.query<{ id: string }>(`INSERT INTO schedules (api_id, owner_id, cron, rules) VALUES ($1, $2, '* * * * *', $3::jsonb) RETURNING id`, [
+      watched,
+      A,
+      JSON.stringify(rules),
+    ]);
     const scheduleId = rows[0]!.id;
-    const insertRun = async (items: number) => {
+    const hashKey = randomBytes(32);
+    /** Un run planifié qui renvoie `items` : écriture du dataset sous l'identité du propriétaire (RLS), fin et annonce. */
+    const runWith = async (items: readonly unknown[]) => {
       const jobId = randomUUID();
       const r = await pool.query<{ id: string }>(
-        `INSERT INTO runs (api_id, owner_id, api_owner_id, trigger, state, job_id, schedule_id, items, started_at) VALUES ($1, $2, $2, 'schedule', 'running', $3, $4, $5, now()) RETURNING id`,
-        [watched, A, jobId, scheduleId, items],
+        `INSERT INTO runs (api_id, owner_id, api_owner_id, trigger, state, job_id, schedule_id, started_at) VALUES ($1, $2, $2, 'schedule', 'running', $3, $4, now()) RETURNING id`,
+        [watched, A, jobId, scheduleId],
       );
-      return { runId: r.rows[0]!.id, jobId };
+      const runId = r.rows[0]!.id;
+      const write = await withActor(pool, { userId: A, role: 'member' }, (tx) => appendRunItems(tx, { runId, items, hashKey }));
+      await finishRunAndNotify(pool, queue, { runId, jobId, result: { state: 'succeeded', outcome: 'clean', items: write.written, dataset_id: write.datasetId }, now: () => NOW });
+      return { runId, write };
     };
-    const events = async () => (await pool.query<{ event: string; payload: { data: Record<string, unknown> } }>('SELECT event, payload FROM webhook_deliveries WHERE subscription_id = $1 ORDER BY id', [sub.id])).rows;
-    const before = (await events()).length;
+    return { watched, scheduleId, runWith, hashKey };
+  }
+  const listing = (n: number, from = 0) => Array.from({ length: n }, (_, i) => ({ url: `https://zz-test.example/annonce/${from + i}`, title: `annonce ${from + i}` }));
+  const urlsOf = async (datasetId: string) =>
+    (await pool.query<{ url: string; dedup_key: string | null }>("SELECT item->>'url' AS url, dedup_key FROM dataset_items WHERE dataset_id = $1 ORDER BY seq", [datasetId])).rows;
+  const eventsOf = async (subscriptionId: string) =>
+    (await pool.query<{ event: string; payload: { data: Record<string, unknown> } }>('SELECT event, payload FROM webhook_deliveries WHERE subscription_id = $1 ORDER BY id', [subscriptionId])).rows;
 
-    // 1er run : base de référence (tout est « nouveau », rien à signaler).
-    const first = await insertRun(40);
-    await finishRunAndNotify(pool, queue, { runId: first.runId, jobId: first.jobId, result: { state: 'succeeded', outcome: 'clean', items: 40 }, now: () => NOW });
-    expect((await events()).slice(before).map((e) => e.event)).toEqual(['run.succeeded']);
-    // 2e run sans nouveauté : rien.
-    const second = await insertRun(0);
-    await finishRunAndNotify(pool, queue, { runId: second.runId, jobId: second.jobId, result: { state: 'succeeded', outcome: 'clean', items: 0 }, now: () => NOW });
-    expect((await events()).slice(before).map((e) => e.event)).toEqual(['run.succeeded', 'run.succeeded']);
-    // 3e run, 2 nouveautés : une alerte items.new.
-    const third = await insertRun(2);
-    await finishRunAndNotify(pool, queue, { runId: third.runId, jobId: third.jobId, result: { state: 'succeeded', outcome: 'clean', items: 2 }, now: () => NOW });
-    const after = (await events()).slice(before);
-    expect(after.map((e) => e.event)).toEqual(['run.succeeded', 'run.succeeded', 'run.succeeded', 'items.new']);
-    expect(after.at(-1)!.payload.data).toMatchObject({ run_id: third.runId, new_items: 2, items: 2 });
-    expect(after[0]!.payload.data['new_items']).toBe(0);
-    expect(after[2]!.payload.data['new_items']).toBe(2);
+  test('assert_schedule_diff_new : `dedup_key: url` + `diff: new`, 48 items connus puis 2 nouveaux : le dataset ne contient que ces 2, `new_items` = 2 part au webhook', async () => {
+    const sub = await subscribe(['items.new', 'run.succeeded']);
+    const { runWith } = await watchedSchedule({ dedup_key: 'url', diff: 'new', alert_on: ['new_items'] });
+    const known = listing(48);
+
+    // 1er run : base de référence (48 items écrits, rien à signaler).
+    const first = await runWith(known);
+    expect(first.write).toMatchObject({ written: 48, newItems: 48 });
+    // 2e run, mêmes 48 items : rien de nouveau, dataset vide, pas d'items.new.
+    const second = await runWith(known);
+    expect(second.write).toMatchObject({ written: 0, newItems: 0, skipped: 48 });
+    expect(await urlsOf(second.write.datasetId)).toEqual([]);
+    // 3e run, les 48 + 2 nouveautés : le dataset contient exactement ces 2 items.
+    const third = await runWith([...known, ...listing(2, 48)]);
+    expect(third.write).toMatchObject({ written: 2, newItems: 2, skipped: 48 });
+    expect(await urlsOf(third.write.datasetId)).toEqual([
+      { url: 'https://zz-test.example/annonce/48', dedup_key: 'https://zz-test.example/annonce/48' },
+      { url: 'https://zz-test.example/annonce/49', dedup_key: 'https://zz-test.example/annonce/49' },
+    ]);
+    const ds = (await pool.query<{ item_count: number; new_items: number; owner_id: string; run_id: string }>('SELECT item_count, new_items, owner_id, run_id FROM datasets WHERE id = $1', [third.write.datasetId])).rows[0];
+    expect(ds).toEqual({ item_count: 2, new_items: 2, owner_id: A, run_id: third.runId });
+
+    const events = await eventsOf(sub.id);
+    expect(events.map((e) => e.event)).toEqual(['run.succeeded', 'run.succeeded', 'run.succeeded', 'items.new']);
+    expect(events[0]!.payload.data['new_items']).toBe(0); // base de référence
+    expect(events[1]!.payload.data['new_items']).toBe(0);
+    expect(events[2]!.payload.data['new_items']).toBe(2);
+    expect(events[3]!.payload.data).toMatchObject({ run_id: third.runId, new_items: 2, items: 2 });
+    // Clés gardées en empreinte HMAC seulement (17 § 6) : aucune URL en clair dans dedup_keys.
+    expect((await pool.query("SELECT count(*)::int AS n FROM dedup_keys WHERE key_hash LIKE '%zz-test%'")).rows[0].n).toBe(0);
+  });
+
+  test('`diff: all` : tout est écrit, les nouveautés comptées ; doublons de clé dans un même run écrits une fois ; item sans clé gardé', async () => {
+    const sub = await subscribe(['items.new']);
+    const { runWith } = await watchedSchedule({ dedup_key: 'url', diff: 'all', alert_on: ['new_items'] });
+    await runWith(listing(3));
+    const again = await runWith([...listing(3), ...listing(1, 3), listing(1, 3)[0], { title: 'sans url' }]);
+    expect(again.write).toMatchObject({ written: 5, newItems: 2, skipped: 1 });
+    expect((await urlsOf(again.write.datasetId)).map((r) => r.url)).toEqual([...listing(4).map((i) => i.url), null]);
+    const events = await eventsOf(sub.id);
+    expect(events.map((e) => e.event)).toEqual(['items.new']);
+    expect(events[0]!.payload.data).toMatchObject({ new_items: 2, items: 5 });
+  });
+
+  test('appels successifs dans un même run : un seul dataset complété, bilan cumulé', async () => {
+    const { runWith, hashKey } = await watchedSchedule({ dedup_key: 'url', diff: 'new' });
+    const { runId, write } = await runWith(listing(2));
+    const more = await withActor(pool, { userId: A, role: 'member' }, (tx) => appendRunItems(tx, { runId, items: [...listing(2), ...listing(3, 2)], hashKey }));
+    expect(more.datasetId).toBe(write.datasetId);
+    // Bilan de l'appel : les 2 déjà écrits par ce run sont des doublons, les 3 autres sont nouveaux.
+    expect(more).toMatchObject({ written: 3, newItems: 3, skipped: 2 });
+    expect((await pool.query('SELECT count(*)::int AS n FROM datasets WHERE run_id = $1', [runId])).rows[0].n).toBe(1);
+    expect((await pool.query('SELECT item_count, new_items FROM datasets WHERE id = $1', [write.datasetId])).rows[0]).toEqual({ item_count: 5, new_items: 5 });
+    expect((await urlsOf(write.datasetId)).map((r) => r.url)).toEqual(listing(5).map((i) => i.url));
   });
 
   test('notifyRunFinished : sans effet pour un run non terminé', async () => {

@@ -53,6 +53,9 @@ describe('parseScheduleRules', () => {
     [{ skip_if_status_in: ['nimporte'] }, 'skip_if_status_in'],
     [{ diff: 'new' }, 'dedup_key'],
     [{ diff: 'tout', dedup_key: 'url' }, 'diff'],
+    // `changed` et `removed` ne sont pas appliqués en V1 : refusés à l'enregistrement plutôt qu'acceptés sans effet.
+    [{ diff: 'changed', dedup_key: 'url' }, 'pas encore pris en charge'],
+    [{ diff: 'removed', dedup_key: 'url' }, 'pas encore pris en charge'],
     [{ dedup_key: 'url; DROP' }, 'dedup_key'],
     [{ alert_on: ['sms'] }, 'alert_on'],
     ['texte', 'objet attendu'],

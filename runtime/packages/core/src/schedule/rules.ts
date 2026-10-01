@@ -11,8 +11,15 @@ export type ScheduleOverlap = (typeof SCHEDULE_OVERLAPS)[number];
 export const SCHEDULE_MISSED = ['skip', 'once'] as const;
 export type ScheduleMissed = (typeof SCHEDULE_MISSED)[number];
 
-export const DIFF_MODES = ['new', 'changed', 'removed', 'all'] as const;
+/**
+ * Modes appliqués en V1 : `new` (seuls les items dont la clé n'a jamais été vue sont écrits) et `all` (tout est écrit,
+ * les nouveautés sont comptées). `changed` et `removed` (08 § 5) demandent l'empreinte du contenu et la valeur des clés
+ * disparues, que `dedup_keys` ne garde pas (seule l'empreinte HMAC de la clé y est, 17 § 6) : refusés à l'enregistrement
+ * plutôt qu'acceptés sans effet.
+ */
+export const DIFF_MODES = ['new', 'all'] as const;
 export type DiffMode = (typeof DIFF_MODES)[number];
+const DIFF_MODES_NOT_YET = ['changed', 'removed'] as const;
 
 export const ALERT_ON = ['new_items', 'status_change', 'error'] as const;
 export type AlertOn = (typeof ALERT_ON)[number];
@@ -103,6 +110,7 @@ export function parseScheduleRules(raw: unknown): RulesParse {
   if (input['diff'] !== undefined && input['diff'] !== null) {
     const d = input['diff'];
     if (typeof d === 'string' && (DIFF_MODES as readonly string[]).includes(d)) diff = d as DiffMode;
+    else if (typeof d === 'string' && (DIFF_MODES_NOT_YET as readonly string[]).includes(d)) errors.push(`rules.diff « ${d} » : pas encore pris en charge (V1 : ${DIFF_MODES.join(' | ')})`);
     else errors.push(`rules.diff : ${DIFF_MODES.join(' | ')} attendu`);
   }
   if (diff !== null && diff !== 'all' && dedupKey === null) errors.push(`rules.diff « ${diff} » exige rules.dedup_key`);

@@ -22,6 +22,7 @@ import {
   boolean,
   check,
   customType,
+  foreignKey,
   index,
   integer,
   jsonb,
@@ -284,7 +285,7 @@ export const secrets = pgTable(
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
-  (t) => [index('secrets_owner_id_idx').on(t.ownerId), index('secrets_kek_version_idx').on(t.kekVersion)],
+  (t) => [index('secrets_owner_id_idx').on(t.ownerId), index('secrets_kek_version_idx').on(t.kekVersion), unique('secrets_id_owner_key').on(t.id, t.ownerId)],
 );
 
 // --- Catalogue (04b § 1) -----------------------------------------------------
@@ -541,6 +542,8 @@ export const datasets = pgTable(
     ownerId: ownerId(),
     projectId: projectId(),
     itemCount: integer('item_count').notNull().default(0),
+    /** 0011 (2.5) : items dont la clé de déduplication n'avait jamais été vue pour l'API (`diff`, `items.new`). */
+    newItems: integer('new_items').notNull().default(0),
     bytes: bigint('bytes', { mode: 'number' }).notNull().default(0),
     retentionDays: integer('retention_days'),
     pinned: boolean('pinned').notNull().default(false),
@@ -763,10 +766,13 @@ export const webhookSubscriptions = pgTable(
     failingSince: tstz('failing_since'),
     lastSuccessAt: tstz('last_success_at'),
     testedAt: tstz('tested_at'),
+    // 0011 (2.5) : dernier échec (série « continue » = jamais plus de 24 h sans échec). Clés étrangères liées au
+    // propriétaire (secret_id, owner_id) → secrets (id, owner_id), `ON DELETE SET NULL (colonne)` : écrites en SQL seulement.
+    lastFailureAt: tstz('last_failure_at'),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
-  (t) => [index('webhook_subscriptions_owner_id_idx').on(t.ownerId)],
+  (t) => [index('webhook_subscriptions_owner_id_idx').on(t.ownerId), unique('webhook_subscriptions_id_owner_key').on(t.id, t.ownerId)],
 );
 
 export const webhookDeliveries = pgTable(
@@ -795,6 +801,8 @@ export const webhookDeliveries = pgTable(
   },
   (t) => [
     unique('webhook_deliveries_dispatch_attempt_key').on(t.dispatchId, t.attempt),
+    // 0011 : (subscription_id, owner_id) → webhook_subscriptions (id, owner_id), ON DELETE CASCADE.
+    foreignKey({ name: 'webhook_deliveries_subscription_owner_fkey', columns: [t.subscriptionId, t.ownerId], foreignColumns: [webhookSubscriptions.id, webhookSubscriptions.ownerId] }).onDelete('cascade'),
     index('webhook_deliveries_owner_id_idx').on(t.ownerId),
   ],
 );
