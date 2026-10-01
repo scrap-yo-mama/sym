@@ -93,6 +93,14 @@ catalog:
   isolated-vm: 7.0.1
   quickjs-emscripten-core: 0.32.0
   '@jitl/quickjs-wasmfile-release-sync': 0.32.0
+  # Déploiements (tâche 4.1) : lecture de render.yaml, heroku.yml et docker-compose.prod.yml par les tests statiques (ISC ;
+  # déjà dans le lockfile en dépendance transitive de vite, 2.9.1 publiée le 2026-09-11, plus de 7 jours).
+  yaml: 2.9.1
+
+  # Site de doc (tâche 4.8, 16 § 4) : VitePress 2.0.0-alpha.20 (la 1.6.4 tire vite 5.4.21, refusé par la politique de confiance pnpm no-downgrade ; la 2.x tire vite 8, comme la console), Pagefind 1.5.2 (MIT, index statique,
+  # binaire par plate-forme en optionalDependencies, sans script d'installation) ; yaml (déclaré plus haut, tâche 4.1) sert aussi à lire l'OpenAPI spécifiée.
+  vitepress: 2.0.0-alpha.20
+  pagefind: 1.5.2
 
 # OTel coupé = aucun module de l'API ni du SDK résolu (14 § 10, assert_otel_off_by_default). Better Auth
 # (@better-auth/core) fait `import("@opentelemetry/api")` à chaque requête d'auth ; drizzle-orm et vitest déclarent le même

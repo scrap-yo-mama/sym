@@ -146,3 +146,12 @@ jobs:
           if [ "$CHANNEL" = beta ]; then flags+=(--prerelease); fi
           gh release view "$TAG" > /dev/null 2>&1 || gh release create "$TAG" --verify-tag --generate-notes "${flags[@]}"
           gh release upload "$TAG" release-out/* --clobber
+
+      # Piège GHCR (tâche 4.1, 14 § 12) : un paquet est PRIVÉ à sa première publication. Render, Railway, Heroku et les machines
+      # Docker des utilisateurs ne pourraient pas tirer l'image. Dernière étape, après la release : un échec ici ne retire
+      # rien, il dit de rendre le paquet public (réglages du paquet, une seule fois) puis de relancer le script.
+      - name: Image publique (tirage anonyme du manifeste)
+        env:
+          IMAGE: ${{ steps.plan.outputs.image }}
+          VERSION: ${{ steps.plan.outputs.version }}
+        run: sh deploy/check-image-public.sh "${IMAGE}:${VERSION}"

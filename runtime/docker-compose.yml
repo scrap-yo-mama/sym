@@ -1,7 +1,8 @@
 # Dev local : postgres 16 + server + worker. Démarrer : docker compose up --build
 # Port hôte du serveur : SERVER_PORT (défaut 3100). Identifiants de dev uniquement, aucun secret.
 # Le serveur exige (0.3b) : MASTER_KEY (`runtime keygen`) et, tant qu’aucun owner n’existe, ADMIN_BOOTSTRAP_TOKEN
-# (`openssl rand -base64 32`), passés par l’environnement du shell : MASTER_KEY=… ADMIN_BOOTSTRAP_TOKEN=… docker compose up.
+# (`openssl rand -base64 32`), lus dans le fichier .env de ce dossier (ignoré par git ; voir le tutoriel « Démarrage rapide »)
+# ou dans l’environnement du shell, qui l’emporte : MASTER_KEY=… ADMIN_BOOTSTRAP_TOKEN=… docker compose up.
 services:
   postgres:
     image: postgres:16@sha256:1a6ab3f5345eb6dbe04a1349529caabdb0ab09293a09590fad07b2246bfa4b54

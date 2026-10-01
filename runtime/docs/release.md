@@ -76,5 +76,5 @@ Ces réglages ne se font pas depuis le code :
 
 1. Secret `RELEASE_PLEASE_TOKEN` (jeton fin : contents et pull-requests en écriture). Sans lui, l'étiquette créée par release-please ne déclenche pas `release.yml`.
 2. Environnement `release` : relecteurs obligatoires, étiquettes `v*` seules autorisées.
-3. Étiquettes `v*` et branches `main` et `beta` protégées ; paquet GHCR lié au dépôt, visibilité publique au moment de la première release.
+3. Étiquettes `v*` et branches `main` et `beta` protégées ; paquet GHCR lié au dépôt, visibilité publique au moment de la première release (un paquet est **privé** à sa première publication : la dernière étape de `release.yml`, `deploy/check-image-public.sh`, tire le manifeste sans identifiant et échoue tant que le paquet n'est pas public, car aucun hébergeur ne pourrait alors tirer l'image).
 4. Branche `beta` créée à partir de `main` (canal beta).

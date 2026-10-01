@@ -2,6 +2,7 @@
 // Serveur de fixtures : un processus Fastify, hôtes virtuels (en-tête Host), commandes de test sur /__*.
 import { createHash, timingSafeEqual } from 'node:crypto';
 import type { AddressInfo } from 'node:net';
+import { Readable } from 'node:stream';
 import Fastify, { type FastifyReply, type FastifyRequest } from 'fastify';
 import { createClock } from './clock.ts';
 import { ControlError, type Env, type FxRequest, type FxResponse, type Site } from './core.ts';
@@ -155,6 +156,20 @@ export async function startFixtureServer(options: FixtureServerOptions = {}): Pr
   const send = (reply: FastifyReply, res: FxResponse): FastifyReply => {
     reply.code(res.status);
     for (const [name, value] of Object.entries(res.headers ?? {})) reply.header(name, value);
+    if (res.bytes !== undefined) return reply.send(Buffer.from(res.bytes));
+    if (res.tail !== undefined) {
+      const { body, delayMs } = res.tail;
+      const head = res.body ?? '';
+      return reply.send(
+        Readable.from(
+          (async function* () {
+            yield head;
+            await new Promise((resolve) => setTimeout(resolve, delayMs));
+            yield body;
+          })(),
+        ),
+      );
+    }
     return reply.send(res.body ?? '');
   };
 

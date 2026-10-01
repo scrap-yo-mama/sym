@@ -61,6 +61,10 @@
     "rate_limited": "Too many requests. Try again in a moment.",
     "queue_full": "The queue is full. Try again shortly.",
     "invalid_input": "Some values are not valid. Check the form and try again.",
+    "invalid_request": "The request is incomplete or invalid. Check the form and try again.",
+    "reauth_failed": "Current password is incorrect.",
+    "too_many_attempts": "Too many attempts. Try again in a few minutes.",
+    "too_many_pairing_codes": "Too many active pairing codes. Use one, or wait for it to expire (10 minutes).",
     "account_site_ack_required": "This site asks for an account. Confirm the notice to continue."
   },
   "common": {
@@ -515,6 +519,7 @@
       "pairing": "Pairing code",
       "pairingHelp": "The code is valid for 10 minutes and works once. Enter it in the extension.",
       "currentPassword": "Current password",
+      "passwordRequired": "Enter your current password.",
       "createCode": "Create a pairing code",
       "code": "Code: {code}",
       "codeExpires": "Valid until {date}. It is shown only now.",

@@ -1,4 +1,20 @@
-Dockerfile, entrypoint et modèles de déploiement (tâches 0.1, 4.x).
+Dockerfile, entrypoint et modèles de déploiement (tâches 0.1, 4.x). Guide pas à pas : [docs/deploiement.md](../docs/deploiement.md).
+
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/mrsoyer/scrapyomama-runtime)
+
+Bouton à valider au GO (dépôt public requis ; aucun déploiement Render réel n'a encore été fait).
+
+| Fichier | Rôle |
+|---|---|
+| `Dockerfile`, `entrypoint.sh` | Image unique (`RUNTIME_MODE=server\|worker\|all\|migrate`) ; une commande passée en argument est exécutée telle quelle (pré-déploiement `runtime migrate` des hébergeurs) ; la commande `runtime` est dans le PATH |
+| [`../../render.yaml`](../../render.yaml) | Blueprint Render (cible de référence) : web, worker, base privée, `MASTER_KEY` générée et partagée. À la **racine** du dépôt, seul endroit où Render le lit (bouton compris) |
+| `docker-compose.prod.yml`, `install.sh` | Machine Docker (VPS, Coolify, Dokploy) : `install.sh` écrit le `.env` (clé, jeton, mot de passe), le fichier compose démarre postgres, migrate, server, worker |
+| `verify.sh` | Contrôle d'une instance déployée, quelle que soit la cible : `/api/health`, `/api/ready`, `/api/version`, `/mcp` (exigé ; 503 `not_initialized` avant le premier démarrage compté joignable ; `--allow-missing-mcp` pour une version sans serveur MCP) |
+| `check-image-public.sh` | Piège GHCR : l'image est-elle tirable sans identifiant ? |
+| `railway/template.yaml` | Description du modèle Railway (best-effort) |
+| `heroku/` | `heroku.yml`, deux Dockerfile minces, `app.json` (best-effort) |
+
+L'image est épinglée `X.Y.Z` dans chaque modèle (jamais `latest`) : release-please met ces fichiers à jour à chaque release (marqueurs `x-release-please-*`, `extra-files` génériques).
 
 `TRUST_PROXY` (serveur) : défaut `false`, l'IP d'un client est celle de la connexion TCP. Derrière le proxy d'un hébergeur (Render, Railway, Heroku), poser `TRUST_PROXY=1` (un saut) ou la liste des IP/CIDR du proxy : sinon toutes les requêtes semblent venir du proxy et partagent les limites par IP. Ne jamais poser `true` sans proxy devant : un client choisirait son IP par `X-Forwarded-For`.
 

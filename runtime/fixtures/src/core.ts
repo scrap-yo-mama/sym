@@ -18,6 +18,10 @@ export interface FxResponse {
   status: number;
   headers?: Record<string, string | string[]>;
   body?: string;
+  /** Corps binaire (prioritaire sur `body`) : corps déjà compressé (`content-encoding`), par exemple. */
+  bytes?: Uint8Array;
+  /** Fin du corps envoyée après `delayMs` (corps lent : en-têtes et début servis d'abord). */
+  tail?: { body: string; delayMs: number };
   /** Coupe la connexion sans réponse (erreur réseau simulée). */
   destroy?: boolean;
 }

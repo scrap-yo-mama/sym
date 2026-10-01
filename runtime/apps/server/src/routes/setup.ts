@@ -5,6 +5,7 @@ import { createHash, timingSafeEqual } from 'node:crypto';
 import { hashPassword, passwordPolicyViolation } from '@runtime/core';
 import type { FastifyInstance } from 'fastify';
 import type { ServerContext } from '../context.js';
+import { localeFromAcceptLanguage } from '../locale.js';
 import { AttemptLimiter } from '../rate-limit.js';
 import { audit, notFound, sendError } from './guard.js';
 
@@ -57,9 +58,9 @@ export function setupRoutes(app: FastifyInstance, ctx: ServerContext): void {
     try {
       await client.query('BEGIN');
       const { rows } = await client.query<{ id: string }>(
-        `INSERT INTO users (email, display_name, role, status, email_verified, email_verified_at)
-         VALUES ($1, $2, 'owner', 'active', true, now()) RETURNING id`,
-        [email, request.body.displayName ?? ''],
+        `INSERT INTO users (email, display_name, role, status, email_verified, email_verified_at, locale)
+         VALUES ($1, $2, 'owner', 'active', true, now(), $3) RETURNING id`,
+        [email, request.body.displayName ?? '', localeFromAcceptLanguage(request.headers['accept-language'])],
       );
       userId = rows[0]!.id;
       await client.query(

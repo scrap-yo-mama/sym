@@ -111,6 +111,44 @@ const contracts: Record<string, Contract> = {
     expect(res.body).not.toContain('<script');
     await setSite('challenge_200', { with_header: true });
     expect((await fx.get(H('challenge_200'), '/liste')).headers['x-zz-test-shield']).toBe('challenge');
+    // Défi qui se résout seul (côté site) : script qui pose un cookie puis recharge ; avec le cookie, des titres h1.
+    await fx.reset();
+    await setSite('challenge_200', { resolve_after_ms: 300 });
+    const resolving = await fx.get(H('challenge_200'), '/');
+    expect(resolving.status).toBe(200);
+    expect(resolving.body).toContain('id="zz-test-challenge"');
+    expect(resolving.body).toContain('location.reload()');
+    const cleared = await fx.get(H('challenge_200'), '/', { cookie: 'zz_test_cleared=1' });
+    expect(cleared.body).not.toContain('zz-test-challenge');
+    expect(cleared.body.match(/<h1 class="product">/g)).toHaveLength(3);
+    // Variantes muettes (revue de 1.7) : rien à reconnaître dans le contenu, seul le script agit.
+    await fx.reset();
+    await setSite('challenge_200', { variant: 'silent' });
+    const silent = await fx.get(H('challenge_200'), '/');
+    expect(silent.body).not.toMatch(/<title|verify|robot|challenge/i);
+    expect(silent.body).toContain('location.reload()');
+    expect((await fx.get(H('challenge_200'), '/', { cookie: 'zz_test_cleared=1' })).body.match(/<h1 class="product">/g)).toHaveLength(3);
+    await setSite('challenge_200', { variant: 'offsite' });
+    expect((await fx.get(H('challenge_200'), '/')).body).toContain('zz_test_evil.localhost');
+    await setSite('challenge_200', { resolve_after_ms: 1000 });
+    expect((await fx.get(H('challenge_200'), '/')).body).toMatch(/setTimeout\(function\(\)\{location\.href="[^"]*zz_test_evil\.localhost[^"]*";\}, 1000\)/);
+    // Interstitiel au titre exact, un seul signal, sans script (revue de 1.7).
+    await setSite('challenge_200', { variant: 'interruption' });
+    const interruption = await fx.get(H('challenge_200'), '/');
+    expect(interruption.status).toBe(200);
+    expect(interruption.body).toContain('<title>Pardon Our Interruption</title>');
+    expect(interruption.body).not.toMatch(/<script|verify|robot|challenge/i);
+    await setSite('challenge_200', { variant: 'slow_header' });
+    const started = Date.now();
+    const slow = await fx.get(H('challenge_200'), '/');
+    expect(Date.now() - started).toBeGreaterThanOrEqual(3_900);
+    expect(slow.headers['x-zz-test-shield']).toBe('challenge');
+    expect(slow.body).toMatch(/location\.reload\(\);<\/script>.*<\/body><\/html>$/s);
+    await setSite('challenge_200', { variant: 'gzip_rewrite' });
+    const gz = await fx.get(H('challenge_200'), '/');
+    expect(gz.headers['content-encoding']).toBe('gzip');
+    // SSR : page saine déplacée par meta refresh.
+    expect((await fx.get(H('ssr'), '/moved')).body).toContain('<meta http-equiv="refresh" content="0; url=/">');
   },
 
   async '429'() {

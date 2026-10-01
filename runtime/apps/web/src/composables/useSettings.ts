@@ -3,7 +3,7 @@
 // écriture seule : la console ne les relit jamais (le serveur ne les renvoie pas, INV8) et vide le champ dès l'envoi. Les droits
 // sont ceux du serveur : un 403 devient un message, jamais une décision locale (06 § 4.1).
 import type { components } from '@runtime/client';
-import { reactive, ref } from 'vue';
+import { computed, nextTick, reactive, ref } from 'vue';
 import { call, type CallResult } from '@/lib/api-call';
 import { getApi } from '@/lib/api';
 import { useResource, useTester } from '@/composables/useResource';
@@ -234,6 +234,11 @@ export function useWebhooks() {
 }
 
 
+/** Clé i18n du message affiché quand le mot de passe actuel n'est pas saisi. */
+const PASSWORD_REQUIRED = 'settings.extension.passwordRequired';
+/** Messages qui portent sur le champ « mot de passe actuel » : le champ est alors marqué invalide (WCAG 3.3.1). */
+const PASSWORD_FAILURES = new Set([PASSWORD_REQUIRED, 'errors.reauth_failed', 'errors.invalid_request']);
+
 /** Extension et sessions : code d'appairage (mot de passe exigé), appareils, domaines connectés, révocation. */
 export function useExtensionSettings() {
   const devices = useResource<Schemas['ExtensionDeviceList']>(() => call(() => getApi().GET('/api/extension/devices')));
@@ -242,9 +247,22 @@ export function useExtensionSettings() {
   const pairing = ref<{ code: string; expiresAt: string } | null>(null);
   const pairingBusy = ref(false);
 
+  const passwordInvalid = computed(() => failure.value !== null && PASSWORD_FAILURES.has(failure.value));
+
   async function createPairingCode(currentPassword: string): Promise<boolean> {
-    pairingBusy.value = true;
+    const hadFailure = failure.value !== null;
     failure.value = null;
+    // Champ vide : le serveur répondrait 400 (schéma) ; on le dit ici, sans requête (F-20261001-UX01). Seule la chaîne vide
+    // est refusée : un mot de passe peut contenir des espaces, et un mot de passe fait d'espaces part au serveur, qui le
+    // juge (403 `reauth_failed` s'il est faux).
+    if (currentPassword === '') {
+      // Un rendu sans message avant de le remettre : un role="alert" laissé en place n'est pas réannoncé par un lecteur
+      // d'écran au second envoi à vide (le focus, lui, ne bouge pas : 06 § 3).
+      if (hadFailure) await nextTick();
+      failure.value = PASSWORD_REQUIRED;
+      return false;
+    }
+    pairingBusy.value = true;
     const result: CallResult<Schemas['ExtensionPairingCode']> = await call(() =>
       getApi().POST('/api/extension/pairing-codes', { body: { currentPassword } }),
     );
@@ -279,5 +297,5 @@ export function useExtensionSettings() {
     return true;
   }
 
-  return { devices, sites, failure, pairing, pairingBusy, createPairingCode, revokeDevice, disconnectSite, dismissPairing: () => (pairing.value = null) };
+  return { devices, sites, failure, passwordInvalid, pairing, pairingBusy, createPairingCode, revokeDevice, disconnectSite, dismissPairing: () => (pairing.value = null) };
 }

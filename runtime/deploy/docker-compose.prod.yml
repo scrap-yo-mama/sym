@@ -1,0 +1,103 @@
+# Production sur une machine Docker (VPS, Coolify, Dokploy) : PostgreSQL, migration, server, worker (tâche 4.1, 14 § 12).
+# Démarrer : ./install.sh   (génère .env : MASTER_KEY par `runtime keygen`, jeton d'amorçage, mot de passe de la base),
+#            puis docker compose -f docker-compose.prod.yml up -d
+# Guide pas à pas : docs/deploiement.md. Référence des variables : docs/variables-env.md.
+#
+# - L'image est épinglée X.Y.Z (jamais `latest`). Pour une mise à jour : sauvegarder (pg_dump), changer RUNTIME_IMAGE, relancer.
+# - Le port n'est publié que sur 127.0.0.1 : il n'y a pas de TLS intégré. Placez un proxy inverse (Caddy, Nginx) devant,
+#   avec TRUST_PROXY=1 et PUBLIC_URL en https (voir le guide). BIND_ADDRESS=0.0.0.0 expose le port en clair : à éviter.
+# - Pas de `init: true` : l'image embarque déjà tini (ENTRYPOINT), qui relaie les signaux et récolte les zombies de Chromium ;
+#   un second init ferait avertir tini à chaque démarrage. Chromium reçoit --disable-dev-shm-usage (l'application le pose),
+#   donc `ipc: host` n'est pas nécessaire et n'est pas utilisé (il partagerait l'espace IPC de la machine avec un conteneur
+#   qui ouvre des sites tiers) ; `shm_size` garde une marge. Écart assumé à 14 § 12 (qui demande `init` et `ipc: host`),
+#   consigné dans docs/deploiement.md (statut de vérification).
+# - Ne PAS poser `security_opt: no-new-privileges` ni `cap_drop: [SETUID, SETGID]` sur le worker : le lanceur du bac à sable
+#   change d'utilisateur par des capacités de fichier (INV7) ; sans elles, le worker refuse de démarrer en production.
+name: scrapyomama-runtime
+
+x-runtime: &runtime
+  image: ${RUNTIME_IMAGE:-ghcr.io/mrsoyer/scrapyomama-runtime:0.0.0} # x-release-please-version
+  pull_policy: missing
+  restart: unless-stopped
+  stop_grace_period: 45s
+  logging:
+    driver: json-file
+    options:
+      max-size: 10m
+      max-file: '5'
+
+services:
+  postgres:
+    image: postgres:16@sha256:1a6ab3f5345eb6dbe04a1349529caabdb0ab09293a09590fad07b2246bfa4b54
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: runtime
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?POSTGRES_PASSWORD manquante, lancez ./install.sh}"
+      POSTGRES_DB: runtime
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    mem_limit: 1g
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U runtime -d runtime"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+
+  # Pré-déploiement : applique les migrations puis sort (idempotent, sous verrou). server et worker attendent sa réussite.
+  migrate:
+    <<: *runtime
+    restart: 'no'
+    environment:
+      RUNTIME_MODE: migrate
+      DATABASE_URL: postgres://runtime:${POSTGRES_PASSWORD}@postgres:5432/runtime
+    depends_on:
+      postgres:
+        condition: service_healthy
+    mem_limit: 512m
+
+  server:
+    <<: *runtime
+    environment:
+      RUNTIME_MODE: server
+      DATABASE_URL: postgres://runtime:${POSTGRES_PASSWORD}@postgres:5432/runtime
+      MASTER_KEY: "${MASTER_KEY:?MASTER_KEY manquante, lancez ./install.sh (ou runtime keygen)}"
+      PUBLIC_URL: "${PUBLIC_URL:?PUBLIC_URL manquante (URL publique de l'instance, https://…)}"
+      ADMIN_BOOTSTRAP_TOKEN: ${ADMIN_BOOTSTRAP_TOKEN:-}
+      TRUST_PROXY: ${TRUST_PROXY:-0}
+      STORAGE_PLAN_GB: ${STORAGE_PLAN_GB:-}
+    ports:
+      - "${BIND_ADDRESS:-127.0.0.1}:${SERVER_PORT:-3000}:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    mem_limit: 512m # = plan du web sur Render (0.5c-512mb) ; à confirmer par la recette (4.4)
+    healthcheck:
+      # /api/ready : base joignable, schéma à jour, empreinte de clé valide (200), sinon 503.
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/ready').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  # Le worker n'a pas de port : sa santé est le battement `worker_heartbeats` (`runtime doctor`, /api/ready?detail=1).
+  worker:
+    <<: *runtime
+    environment:
+      RUNTIME_MODE: worker
+      DATABASE_URL: postgres://runtime:${POSTGRES_PASSWORD}@postgres:5432/runtime
+      MASTER_KEY: "${MASTER_KEY:?MASTER_KEY manquante, lancez ./install.sh (ou runtime keygen)}"
+      STORAGE_PLAN_GB: ${STORAGE_PLAN_GB:-}
+      # Valeurs par défaut : 2 Go pour 1 run navigateur, 4 Go pour 2 (BROWSER_CONCURRENCY déduit de la mémoire du conteneur).
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    mem_limit: ${WORKER_MEM_LIMIT:-4g}
+    shm_size: 512m
+
+volumes:
+  pgdata:

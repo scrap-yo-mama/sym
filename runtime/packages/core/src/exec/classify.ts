@@ -1,20 +1,23 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// Classement minimal d'un échange ou d'une erreur de transport en classe d'échec (04 §7). C'est le socle des exécuteurs
-// (tâche 1.6) : le classifieur complet et la garde de classification AVANT extraction (défi servi en 200, en-têtes et
-// signatures de protection) sont la tâche 1.7, qui se branche par l'option `classify` de `runDeclarative`.
-// Règles tenues dès ici : un 401, un 403 ou un 429 n'est jamais `network` (aucune escalade réseau, X4, INV6).
+// Classifieur d'échec (tâche 1.7, 04 §7) et garde de classification AVANT extraction (04 §5, INV6) : chaque réponse est
+// classée sur son code HTTP, ses en-têtes de protection, son contenu (page de défi servie en 200) et sa redirection
+// (connexion, pays) avant que l'interpréteur n'y touche. Un refus détecté n'est jamais extrait ni réparé.
+// Règles tenues : un 401, un 403 ou un 429 n'est jamais `network` (aucune escalade réseau, X4) ; un défi donne
+// `blocked_by_protection` quel que soit le code (200 compris) ; les codes `detail` sont stables et ne contiennent
+// jamais une valeur de la cible.
 import { DslError } from '../dsl/errors.js';
 import { findDomainNotAllowed } from '../net/domain-lock.js';
 import { findSsrfBlocked } from '../net/guard.js';
 import { NetworkConfigError } from '../net/modes/definitions.js';
 import { ProxyBudgetExceededError } from '../net/modes/session.js';
 import { UpstreamProxyError } from '../net/modes/upstream.js';
+import { detectChallengePage, protectionSignal, vendorSignature } from './protection.js';
 import type { ExecFailure, HttpExchange } from './types.js';
 
 const fail = (failure_class: ExecFailure['failure_class'], retryable: boolean, detail: string, status?: number): ExecFailure =>
   status === undefined ? { failure_class, retryable, detail } : { failure_class, retryable, detail, status };
 
-/** Statut HTTP → classe ; `null` pour une réponse 2xx (le contenu est ensuite extrait). */
+/** Statut HTTP seul → classe ; `null` pour une réponse 2xx. Socle de `classifyExchange`, qui ajoute les en-têtes et le contenu. */
 export function classifyStatus(status: number): ExecFailure | null {
   if (status >= 200 && status < 300) return null;
   if (status === 401) return fail('auth_required', false, 'http_401', status);
@@ -29,9 +32,76 @@ export function classifyStatus(status: number): ExecFailure | null {
   return fail('extraction', false, `http_${status}`, status);
 }
 
-/** Classement par défaut d'un échange : le statut seul (1.7 ajoute la garde de contenu). */
-export function classifyExchange(exchange: HttpExchange): ExecFailure | null {
-  return classifyStatus(exchange.status);
+/** Contexte facultatif du classement : l'URL demandée, pour reconnaître une redirection (connexion, pays). */
+export type ClassifyContext = { readonly requestUrl?: string };
+
+/** Chemins de connexion usuels (redirection d'une page protégée par session, cookie absent ou expiré). */
+const LOGIN_PATH = /(?:^|\/)(?:log-?in|sign-?in|sign_in|signin|connexion|se-connecter|identification|authenticate|session\/new|sessions\/new|auth\/login|oauth\/authorize)(?:\/|\.[a-z]{2,5}\/?)?$/i;
+/** Pages de géo-restriction usuelles (redirection de pays, 04 §7). */
+const GEO_PATH = /(?:unavailable|not[-_]?available|restricted|blocked)[-_](?:in[-_])?(?:your[-_])?(?:country|region|location)|geo[-_]?(?:block|restrict)|country[-_]?(?:block|restrict)/i;
+
+function pathOf(url: string, base?: string): string | undefined {
+  try {
+    return new URL(url, base).pathname;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Redirection (suivie ou non) vers une page de connexion ou de géo-restriction ; `null` sinon. */
+function redirectTarget(exchange: HttpExchange, context: ClassifyContext): ExecFailure | null {
+  const requested = context.requestUrl === undefined ? undefined : pathOf(context.requestUrl);
+  const location = exchange.status >= 300 && exchange.status < 400 ? exchange.headers['location'] : undefined;
+  const target = location !== undefined ? pathOf(location, exchange.url) : requested === undefined ? undefined : pathOf(exchange.url);
+  if (target === undefined || target === requested) return null;
+  if (LOGIN_PATH.test(target) && !(requested !== undefined && LOGIN_PATH.test(requested))) return fail('auth_required', false, 'login_redirect', exchange.status);
+  if (GEO_PATH.test(target)) return fail('network', false, 'geo_redirect', exchange.status);
+  return null;
+}
+
+/**
+ * Garde de classification d'un échange (défaut de `runDeclarative` et des exécuteurs E1-E3) : `null` si la réponse
+ * peut être extraite, sinon la classe d'échec. Ordre : en-tête de défi (tout statut), 401, signature d'éditeur sur un
+ * 403, page de défi sur TOUT statut ≥ 400 (un défi servi en 400, 404 ou 405 n'est ni une `extraction` ni un
+ * `not_found`, qui ouvriraient la réparation), page de défi sur un 2xx (mode strict : signal fort seulement),
+ * redirection vers la connexion ou de pays, puis le statut seul.
+ */
+export function classifyExchange(exchange: HttpExchange, context: ClassifyContext = {}): ExecFailure | null {
+  const { status, headers } = exchange;
+  const header = protectionSignal(headers);
+  if (header !== null) return fail('blocked_by_protection', false, header.code, status);
+  if (status === 401) return fail('auth_required', false, 'http_401', status);
+  if (status >= 400) {
+    // Signature d'éditeur (en-tête seul) : « 403 signé » seulement (04 §7) ; l'en-tête d'un éditeur accompagne aussi les
+    // réponses ordinaires (404, 429, 5xx) d'un site protégé. La page de défi, elle, compte sur tout refus.
+    const signed = (status === 403 ? vendorSignature(headers) : null) ?? detectChallengePage(exchange.body, headers);
+    if (signed !== null) return fail('blocked_by_protection', false, signed.code, status);
+  }
+  if (status >= 200 && status < 300) {
+    const page = detectChallengePage(exchange.body, headers, { strict: true });
+    if (page !== null) return fail('blocked_by_protection', false, page.code, status);
+  }
+  if ((status >= 200 && status < 400)) {
+    const redirected = redirectTarget(exchange, context);
+    if (redirected !== null) return redirected;
+  }
+  return classifyStatus(status);
+}
+
+/**
+ * Refus constaté par le transport lui-même, avant que l'échange ne soit complet : par exemple une navigation du cadre
+ * principal lancée par la page pendant l'attente du rendu (défi qui se résout seul en JavaScript puis recharge la page,
+ * 04 §5, INV6). La classe est déjà décidée ; `exchange` est la réponse servie quand elle est connue (preuve, cadence).
+ */
+export class TransportRefusal extends Error {
+  readonly failure: ExecFailure;
+  readonly exchange: HttpExchange | undefined;
+  constructor(failure: ExecFailure, exchange?: HttpExchange) {
+    super(`refus du transport : ${failure.failure_class} (${failure.detail})`);
+    this.name = 'TransportRefusal';
+    this.failure = failure;
+    this.exchange = exchange;
+  }
 }
 
 const NETWORK_CODES = new Set(['ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN', 'EHOSTUNREACH', 'ENETUNREACH', 'UND_ERR_CONNECT_TIMEOUT']);
@@ -57,6 +127,7 @@ function errorCodes(error: unknown): { codes: string[]; names: string[]; message
 
 /** Erreur levée par un transport → classe. Les messages d'origine ne sortent jamais (codes stables seulement). */
 export function classifyTransportError(error: unknown): ExecFailure {
+  if (error instanceof TransportRefusal) return error.failure;
   const ssrf = findSsrfBlocked(error);
   if (ssrf !== undefined) return fail('forbidden', false, 'ssrf_blocked');
   // Verrou de domaines (tâche 1.6) : une redirection ou une requête hors des domaines de l'API est une faute de stratégie.

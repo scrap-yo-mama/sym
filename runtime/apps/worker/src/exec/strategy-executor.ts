@@ -11,7 +11,15 @@
 //    (`ctx.excludeSubjects`) avant collecte et avant toute écriture du dataset ; journaux du run par `ctx.log`. Le
 //    `ctx.log(...)` d'un script E3 (texte libre d'un code généré, non fiable, qui peut contenir des données lues mais
 //    jamais émises, que le registre du run ne connaît pas) n'est JAMAIS écrit : `run_logs` comme le journal du worker
-//    n'en reçoivent que des identifiants techniques (nombre de lignes, octets), 17 §6 « aucune donnée personnelle ».
+//    n'en reçoivent que des identifiants techniques (nombre de lignes, octets), 17 §6 « aucune donnée personnelle » ;
+// 6. garde de classification (1.7) : chaque réponse est classée AVANT extraction (classifieur par défaut des exécuteurs) ;
+//    un échec n'atteint la réparation (port `repair`, tâche 2.3) qu'à travers `invokeAgentGuarded` : jamais sur un refus,
+//    un défi, une connexion requise ou un 429 (INV6). L'échange en échec (corps borné) est la preuve de la garde : une
+//    « extraction » sur une page de défi est un refus, et le run rend alors la classe corrigée. La suite retenue est
+//    journalisée (`failure_route`, `reclassified_from` si la garde a corrigé la classe). L'agent ne reçoit jamais la
+//    page : seulement les preuves que la garde laisse passer, MINIMISÉES (squelette HTML ou JSON, valeurs retirées,
+//    masquage par le registre du run ; 04 §5, 17 §6). Câblage run échoué → statut (`sain → reparation → bloquee`,
+//    transitions 10 et 15) : tâche 2.3, avec la réparation ; en 1.7 le run rend la classe, la machine à états l'applique.
 import {
   assertExecutionOnNetwork,
   ExecutionNotOnNetworkError,
@@ -30,7 +38,20 @@ import {
   type RunExecutor,
   type RunResult,
 } from '@runtime/core';
-import { domainRequestPacer, runFetchExecutor, type DeclarativeRunResult, type ExecFailure, type HttpExchange, type RequestPacer } from '@runtime/core/exec';
+import {
+  domainRequestPacer,
+  failureRoute,
+  guardAgentInvocation,
+  invokeAgentGuarded,
+  minimizeEvidence,
+  type AgentEvidence,
+  runFetchExecutor,
+  type ClassifyContext,
+  type DeclarativeRunResult,
+  type ExecFailure,
+  type HttpExchange,
+  type RequestPacer,
+} from '@runtime/core/exec';
 import type { DomainPacer } from '@runtime/core';
 import {
   buildNetworkRungs,
@@ -88,12 +109,33 @@ export type StrategyExecutorDeps = {
   readonly script?: ScriptPort;
   /** Exécuteurs agentiques E4-E6 ; absents : ces stratégies échouent en `code_error` (`execution_unavailable`). */
   readonly agent?: AgentPorts;
-  /** Garde de classification avant extraction (1.7). */
-  readonly classify?: (exchange: HttpExchange) => ExecFailure | null;
+  /** Garde de classification avant extraction (1.7) ; défaut : `classifyExchange` de chaque exécuteur. */
+  readonly classify?: (exchange: HttpExchange, context?: ClassifyContext) => ExecFailure | null;
+  /**
+   * Réparation dans le même run (tâche 2.3). Appelée SEULEMENT à travers la garde de classification : jamais pour un
+   * refus, un défi, une connexion requise, un 429 ou un échec réseau (04 §5, INV6). Rend le résultat du run réparé, ou
+   * `null` (échec d'origine conservé).
+   */
+  readonly repair?: RepairPort;
   /** Journal du worker (violations du bac à sable, détail admin). */
   readonly logger?: Logger;
   readonly now?: () => number;
 };
+
+/**
+ * Port de réparation (2.3). `evidence` : preuves DÉJÀ passées par la garde (aucune n'est un refus ni une page de défi,
+ * un signal faible en 2xx est retiré) puis MINIMISÉES par `minimizeEvidence` avec le registre du run (`ctx.personal`) :
+ * squelette HTML (balises, id, class), squelette JSON (clés, types), texte libre masqué ; jamais le corps de la page,
+ * ses valeurs, ses cookies ni sa requête (04 §5 « journaux masqués, diff de forme », 17 §6, RGPD). Les sujets effacés
+ * (`ctx.excludeSubjects`) ne sont connus que par empreinte : d'où « aucune valeur de la page ». Le port doit encore
+ * passer chaque texte par `assertPromptSafe` avant de l'inclure dans un prompt (04b §6).
+ */
+export type RepairPort = (request: {
+  readonly ctx: RunCtx;
+  readonly failure: ExecFailure;
+  readonly strategyVersion: number;
+  readonly evidence: readonly AgentEvidence[];
+}) => Promise<RunResult | null>;
 
 type Outcome = {
   result: DeclarativeRunResult;
@@ -449,6 +491,15 @@ export function createStrategyExecutor(deps: StrategyExecutorDeps): RunExecutor 
     if (outcome.scriptLog !== undefined && outcome.scriptLog.lines > 0) {
       await ctx.log('info', 'sandbox_log', { lines: outcome.scriptLog.lines, bytes: outcome.scriptLog.bytes });
     }
+    // Garde par preuves (1.7) : un échec dont l'échange est un refus ou une page de défi prend la classe de la garde
+    // (essai, run et route), avant toute réparation.
+    const evidence: readonly AgentEvidence[] = result.ok || result.evidence === undefined ? [] : [result.evidence];
+    const guardedFailure = result.ok ? undefined : (guardAgentInvocation(result.failure, evidence) ?? result.failure);
+    // Classe corrigée par la garde (une « extraction » sur une page de défi est un refus) : rapportée à la cadence, pour
+    // que le disjoncteur du domaine compte ce refus (la réponse a été rapportée à sa réception, avant l'extraction).
+    if (!result.ok && guardedFailure !== undefined && guardedFailure.failure_class !== result.failure.failure_class && result.evidence !== undefined) {
+      await pacerFor(target)?.report(result.evidence.url, { status: result.evidence.status, retryAfter: null, failureClass: guardedFailure.failure_class });
+    }
     const proxyUsd = usage?.costUsd ?? 0;
     const llm: LlmSpend | null = outcome.agent?.llm ?? null;
     const llmUsd = llm?.usd ?? 0;
@@ -458,7 +509,7 @@ export function createStrategyExecutor(deps: StrategyExecutorDeps): RunExecutor 
       execution: strategy.execution,
       network: strategy.network,
       est_cost_usd: strategy.estCostUsd,
-      result: result.ok ? 'ok' : result.failure.failure_class,
+      result: guardedFailure === undefined ? 'ok' : guardedFailure.failure_class,
       ms: Math.max(0, Math.round(now() - started)),
       proxy_usd: proxyUsd,
       ...(llm === null
@@ -476,7 +527,26 @@ export function createStrategyExecutor(deps: StrategyExecutorDeps): RunExecutor 
       return { state: 'failed', failure_class: 'run_budget_exceeded', retryable: false, error_detail: 'max_cost_usd', strategy_version: version };
     }
     if (!result.ok) {
-      return { state: 'failed', failure_class: result.failure.failure_class, retryable: result.failure.retryable, error_detail: result.failure.detail, strategy_version: version };
+      const original = result.failure;
+      const failure = guardedFailure ?? original;
+      // Garde AVANT réparation (1.7) : l'agent n'est invoqué que pour `extraction`, `code_error` ou `not_found`, et
+      // seulement si aucune preuve n'est un refus ; il ne reçoit que des preuves passées par la garde.
+      const repair = deps.repair;
+      const guarded =
+        repair === undefined
+          ? null
+          : await invokeAgentGuarded(original, evidence, (f, shown) =>
+              repair({ ctx, failure: f, strategyVersion: version, evidence: shown.map((item) => minimizeEvidence(item, ctx.personal)) }),
+            );
+      const route = failureRoute(failure.failure_class);
+      await ctx.log('info', 'failure_route', {
+        failure_class: failure.failure_class,
+        next: route.next,
+        agent_invoked: guarded?.invoked ?? false,
+        ...(failure.failure_class === original.failure_class ? {} : { reclassified_from: original.failure_class }),
+      });
+      if (guarded !== null && guarded.invoked && guarded.value !== null) return guarded.value;
+      return { state: 'failed', failure_class: failure.failure_class, retryable: failure.retryable, error_detail: failure.detail, strategy_version: version };
     }
     // Compilation E6 → E5 vérifiée (04 §3.1) : nouvelle version `hybrid`, signal de baisse de coût journalisé.
     const compiled = outcome.agent?.compiled;

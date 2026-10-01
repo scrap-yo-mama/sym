@@ -8,7 +8,9 @@ FROM ${PLAYWRIGHT_IMAGE} AS build
 WORKDIR /app
 RUN corepack enable
 COPY . .
-RUN pnpm install --frozen-lockfile && pnpm -r build
+# Le site de doc (@runtime/docs) n'entre pas dans l'image : le construire ici ferait échouer l'image et la release sur un
+# lien mort de la doc, sans rien apporter à l'exécution (tâche 4.8).
+RUN pnpm install --frozen-lockfile && pnpm -r --filter '!@runtime/docs' build
 
 # --- Étape 2 : exécution, non-root
 FROM ${PLAYWRIGHT_IMAGE} AS runtime
@@ -54,7 +56,11 @@ COPY --from=build /app/apps/server/dist apps/server/dist
 COPY --from=build /app/apps/worker/dist apps/worker/dist
 COPY --from=build /app/apps/cli/dist apps/cli/dist
 COPY deploy/entrypoint.sh /usr/local/bin/entrypoint.sh
-RUN chmod 0755 /usr/local/bin/entrypoint.sh
+# Commande `runtime` (CLI : migrate, keygen, doctor…) dans le PATH : champ « pré-déploiement » des hébergeurs,
+# `docker exec <conteneur> runtime doctor`, `docker run --rm <image> runtime keygen` (tâche 4.1).
+RUN chmod 0755 /usr/local/bin/entrypoint.sh \
+ && printf '#!/bin/sh\nexec node /app/apps/cli/dist/index.js "$@"\n' > /usr/local/bin/runtime \
+ && chmod 0755 /usr/local/bin/runtime
 
 # pwuser (uid 1001) existe déjà dans l'image Playwright.
 USER pwuser

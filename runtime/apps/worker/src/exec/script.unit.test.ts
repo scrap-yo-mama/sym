@@ -169,3 +169,51 @@ describe('imputation des requêtes coupées (hostViolationWatch)', () => {
     ]);
   });
 });
+
+// Revue de 1.7 (INV6, X3) : seule la navigation demandée par l'hôte (`ctx.page.goto`, dispatch d'un clic du script) est
+// acceptée. Une navigation du cadre principal qui chevauche un `ctx.page.evaluate` ou l'attente du sélecteur d'un clic
+// peut venir de la page elle-même (défi muet qui pose son cookie puis recharge) : attendre ne franchit jamais un défi.
+describe('assert_no_circumvention (navigations du cadre principal en E3 script)', () => {
+  test('pendant un evaluate, sans navigation attendue : refusée ; seule la navigation attendue est acceptée, une fois', () => {
+    const w = hostViolationWatch();
+    w.beginEvaluate();
+    expect(w.claimNavigation()).toBe(false);
+    w.expectNavigation();
+    expect(w.claimNavigation()).toBe(true);
+    expect(w.claimNavigation()).toBe(false);
+    w.endEvaluate();
+    expect(w.claimNavigation()).toBe(false);
+  });
+
+  test('clic : navigation lancée par la page pendant l’attente du sélecteur → refusée ; seule celle du dispatch du clic est acceptée', async () => {
+    const w = hostViolationWatch();
+    const claims: [string, boolean][] = [];
+    /** La page se recharge d'elle-même pendant une attente (défi muet). */
+    const reload = () => void claims.push(['attente', w.claimNavigation()]);
+    /** Le clic part : sa navigation est émise. */
+    const dispatch = () => void claims.push(['clic', w.claimNavigation()]);
+    const handle = {
+      evaluate: async () => false,
+      click: async (o: { trial?: boolean }) => (o.trial === true ? reload() : dispatch()),
+      dispose: async () => undefined,
+    };
+    const page = {
+      url: () => 'https://zz_test_api.example/',
+      locator: () => ({ first: () => ({ evaluate: async () => false }) }),
+      waitForSelector: async () => {
+        reload();
+        return handle;
+      },
+      // Attente de l'élément et clic en un seul appel.
+      click: async () => {
+        reload();
+        dispatch();
+      },
+    };
+    const bridge = createPageBridge({ page: page as never, guard, allowedHosts: ['zz_test_api.example'], maxResponseBytes: 1000, maxItems: 5, timeoutMs: 1000, watch: w, allowWriteActions: false });
+    await bridge(JSON.stringify({ op: 'click', args: { selector: 'a.next', timeoutMs: 3000 } }));
+    expect(claims.filter(([k]) => k === 'attente').every(([, ok]) => !ok)).toBe(true);
+    expect(claims.filter(([k]) => k === 'clic')).toEqual([['clic', true]]);
+    expect(w.claimNavigation()).toBe(false);
+  });
+});

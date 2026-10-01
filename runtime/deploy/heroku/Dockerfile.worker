@@ -1,0 +1,5 @@
+# Heroku (best-effort, tâche 4.1) : processus worker (Chromium, bac à sable). Gamme Performance exigée (mémoire).
+# x-release-please-start-version
+FROM ghcr.io/mrsoyer/scrapyomama-runtime:0.0.0
+# x-release-please-end
+ENV RUNTIME_MODE=worker

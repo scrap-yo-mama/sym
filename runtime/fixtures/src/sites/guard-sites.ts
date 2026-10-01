@@ -3,6 +3,7 @@
 // Les défis et signatures sont des SIMULATIONS GÉNÉRIQUES (aucun produit réel imité, aucun mécanisme de résolution) :
 // elles servent à vérifier que le produit s'arrête.
 import { createHash } from 'node:crypto';
+import { gzipSync } from 'node:zlib';
 import { ControlError, type FxResponse, type SiteFactory } from '../core.ts';
 import { formatEuro, makePeople, makeProducts, pad } from '../data.ts';
 import { cookieOf, esc, headerOf, html, intParam, json, page, redirect, sleep, text } from '../res.ts';
@@ -95,19 +96,97 @@ const challenge: SiteFactory = () => ({
   handle: () => html(403, challengePage(), { 'x-zz-test-shield': 'challenge', 'cache-control': 'no-store' }),
 });
 
-const challenge200: SiteFactory = () => {
+/** Cookie posé par le défi qui se résout seul (mode `resolve_after_ms`). */
+const CLEARED_COOKIE = 'zz_test_cleared';
+
+/**
+ * Défi qui se résout SEUL en JavaScript (comportement simulé côté site, aucun mécanisme côté produit) : la même page
+ * générique, plus un script qui, après `delayMs`, pose un cookie puis recharge la page. Avec le cookie, le site sert la
+ * page de contenu (titres `h1`). Sert à vérifier qu'une simple attente du rendu ne franchit pas le défi (INV6).
+ */
+function selfResolvingChallengePage(delayMs: number): string {
+  const script = `<script>(function(){function go(){document.cookie='${CLEARED_COOKIE}=1; path=/';location.reload();}${delayMs === 0 ? 'go();' : `setTimeout(go, ${delayMs});`}})();</script>`;
+  return challengePage().replace('</body>', `${script}</body>`);
+}
+
+/** Page sans titre, sans phrase ni conteneur de widget : seul son script agit (rien à reconnaître dans le contenu). */
+function blankScriptPage(script: string): string {
+  return `<!doctype html>\n<html><head><meta charset="utf-8"></head><body><script>${script}</script></body></html>`;
+}
+
+/**
+ * Variantes du défi servi en 200 (simulations côté site, aucun mécanisme côté produit) :
+ * - `silent` : défi JS « silencieux » (type interstitiel sans texte) : aucun titre, aucune phrase, aucun widget, un script
+ *   qui pose le cookie de passage puis recharge (aussitôt, ou après `resolve_after_ms`) ; avec le cookie, la page de contenu ;
+ * - `offsite` : même page muette, dont le script envoie le cadre principal vers un hôte d'éditeur hors des domaines de l'API ;
+ * - `slow_header` : en-tête de défi, puis corps LENT (fin servie après 4 s) dont le début réécrit aussitôt le document
+ *   (« Verification successful ») et recharge avec le cookie ;
+ * - `gzip_rewrite` : page de défi générique compressée (gzip) dont le script remplace aussitôt le
+ *   document par un titre de contenu : seul le corps brut décodé la reconnaît ;
+ * - `interruption` : interstitiel générique au titre exact « Pardon Our Interruption », sans script, sans phrase de
+ *   vérification ni widget, avec environ 450 caractères d'explication : un seul signal au-dessus de la page quasi vide du
+ *   mode strict (passe la garde avant extraction), refusé par la garde avant réparation (revue de 1.7).
+ */
+type Challenge200Variant = 'silent' | 'offsite' | 'slow_header' | 'gzip_rewrite' | 'interruption';
+const CHALLENGE_200_VARIANTS = new Set<string>(['silent', 'offsite', 'slow_header', 'gzip_rewrite', 'interruption']);
+
+/** Interstitiel « Pardon Our Interruption » (variante `interruption`) : générique, aucun éditeur nommé. */
+function interruptionPage(): string {
+  return page(
+    'Pardon Our Interruption',
+    '<main><h1>Pardon Our Interruption</h1><p>As you were browsing something about your browser made us think you were a bot. There are a few reasons this might happen, such as a super-human speed of browsing or a browser extension that blocks some content.</p><p>To regain access, please make sure that cookies and JavaScript are enabled before reloading the page, then wait a few seconds before trying again.</p><p>If you keep seeing this page, contact the site owner and quote the reference below.</p><p>Reference zz_test_interruption_0001.</p></main>',
+  );
+}
+
+const challenge200: SiteFactory = (env) => {
   let withHeader = false;
+  let resolveAfterMs: number | null = null;
+  let variant: Challenge200Variant | null = null;
+  const products = makeProducts(env.seed, 'challenge_200', 3);
   return {
     id: 'challenge_200',
     lot: 'base',
-    description: 'Défi servi en HTTP 200 : même page générique, sans en-tête de protection par défaut (détection par le corps seul)',
+    description:
+      'Défi servi en HTTP 200 : même page générique, sans en-tête de protection par défaut (détection par le corps seul) ; resolve_after_ms : le défi se résout seul en JS (cookie + rechargement) et le site sert alors des titres h1 ; variant : silent (défi muet qui recharge), offsite (défi muet vers un hôte hors API, après resolve_after_ms si posé), slow_header (en-tête de défi, corps lent qui se réécrit et recharge), gzip_rewrite (défi compressé qui se réécrit), interruption (interstitiel au titre exact, un seul signal, ~450 caractères)',
     hosts: ['zz_test_challenge_200.localhost'],
     smoke: { path: '/', status: 200 },
-    handle: () => html(200, challengePage(), withHeader ? { 'x-zz-test-shield': 'challenge' } : {}),
+    handle(req) {
+      const headers: Record<string, string> = withHeader ? { 'x-zz-test-shield': 'challenge' } : {};
+      const content = () => html(200, page('Catalogue zz_test', products.map((p) => `<h1 class="product">${esc(p.title)}</h1>`).join('')));
+      const clear = `document.cookie='${CLEARED_COOKIE}=1; path=/';`;
+      if (variant !== null && req.path === '/') {
+        if (cookieOf(req, CLEARED_COOKIE) === '1') return content();
+        switch (variant) {
+          case 'silent':
+            return html(200, blankScriptPage(resolveAfterMs === null || resolveAfterMs === 0 ? `${clear}location.reload();` : `setTimeout(function(){${clear}location.reload();}, ${resolveAfterMs});`), headers);
+          case 'offsite': {
+            const go = `location.href=${JSON.stringify(env.urlFor('zz_test_evil.localhost', '/zz_test_verify'))};`;
+            return html(200, blankScriptPage(resolveAfterMs === null || resolveAfterMs === 0 ? go : `setTimeout(function(){${go}}, ${resolveAfterMs});`), headers);
+          }
+          case 'interruption':
+            return html(200, interruptionPage(), headers);
+          case 'slow_header':
+            return {
+              ...html(200, blankScriptPage(`document.body.textContent='Verification successful, redirecting';${clear}location.reload();`).replace('</body></html>', ''), { 'x-zz-test-shield': 'challenge' }),
+              tail: { body: `<p>${'.'.repeat(64)}</p></body></html>`, delayMs: 4_000 },
+            };
+          case 'gzip_rewrite': {
+            const rewrite = `<script>document.documentElement.innerHTML='<head><title>Catalogue</title></head><body><h1 class="product">Bienvenue</h1></body>';</script>`;
+            const body = challengePage().replace('</body>', `${rewrite}</body>`);
+            return { status: 200, headers: { 'content-type': 'text/html; charset=utf-8', 'content-encoding': 'gzip', ...headers }, bytes: gzipSync(body) };
+          }
+        }
+      }
+      if (resolveAfterMs === null) return html(200, challengePage(), headers);
+      if (cookieOf(req, CLEARED_COOKIE) === '1') return content();
+      return html(200, selfResolvingChallengePage(resolveAfterMs), headers);
+    },
     control(args) {
-      if (typeof args['with_header'] !== 'boolean') throw new ControlError('with_header attendu : booléen');
-      withHeader = args['with_header'];
-      return { with_header: withHeader };
+      if (typeof args['with_header'] === 'boolean') withHeader = args['with_header'];
+      else if (typeof args['resolve_after_ms'] === 'number' && args['resolve_after_ms'] >= 0) resolveAfterMs = Math.min(10_000, Math.floor(args['resolve_after_ms']));
+      else if (typeof args['variant'] === 'string' && CHALLENGE_200_VARIANTS.has(args['variant'])) variant = args['variant'] as Challenge200Variant;
+      else throw new ControlError('with_header (booléen), resolve_after_ms (nombre ≥ 0) ou variant (silent, offsite, slow_header, gzip_rewrite, interruption) attendu');
+      return { with_header: withHeader, resolve_after_ms: resolveAfterMs, variant };
     },
   };
 };
