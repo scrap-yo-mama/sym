@@ -68,5 +68,8 @@
   { "test": "assert_no_nested_headings", "invariant": "06 § 1 (WCAG 2.2 AA)", "tasks": ["3.3", "3.9"], "stage": "U1" },
   { "test": "assert_console_build_independent_of_server", "invariant": "ADR 0002", "tasks": ["3.3"], "stage": "U1" },
   { "test": "assert_a11y_axe_clean", "invariant": "06 § 1 (WCAG 2.2 AA, gate de recette)", "tasks": ["3.9", "3.6"], "stage": "E2E",
-    "note": "Gate portée par 3.9 sur chaque écran (clair, sombre, en, fr). 3.3 : passage axe ponctuel consigné dans l'ADR 0002" }
+    "note": "Gate portée par 3.9 sur chaque écran (clair, sombre, en, fr). 3.3 : passage axe ponctuel consigné dans l'ADR 0002" },
+  { "test": "assert_store_package_clean", "invariant": "07 § 7", "tasks": ["2.9"], "stage": "U1" },
+  { "test": "assert_store_listing_complete", "invariant": "07 § 7", "tasks": ["2.9"], "stage": "U1" },
+  { "test": "assert_store_permissions_justified", "invariant": "07 § 7", "tasks": ["2.9"], "stage": "U1" }
 ]

@@ -41,7 +41,10 @@
     "apps/worker": {
       "entry": [
         "src/index.ts",
-        "src/testing/*.testkit.ts"
+        "src/testing/*.testkit.ts",
+        "src/sandbox/child.ts",
+        "src/sandbox/quickjs-runner.ts",
+        "src/sandbox/index.ts"
       ]
     },
     "fixtures": {

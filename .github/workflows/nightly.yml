@@ -26,4 +26,4 @@ jobs:
         with:
           node-version-file: runtime/.node-version
       - run: pnpm install --frozen-lockfile
-      - run: 'echo "nightly : pas encore implémenté (k6, tests instables, N2, Node 26)"'
+      - run: 'echo "nightly : pas encore implémenté (k6, tests instables, N2) ; Node 26 du bac à sable : job security de ci.yml"'

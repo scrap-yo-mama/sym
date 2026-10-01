@@ -31,7 +31,8 @@
     "hooks:install": "git config core.hooksPath runtime/scripts/hooks",
     "ci:local": "node scripts/ci-local.ts",
     "gen:openapi": "node scripts/gen-openapi-client.ts",
-    "check:openapi-client": "node scripts/gen-openapi-client.ts --check"
+    "check:openapi-client": "node scripts/gen-openapi-client.ts --check",
+    "package:extension": "node scripts/extension-package.ts"
   },
   "devDependencies": {
     "@eslint/js": "catalog:",

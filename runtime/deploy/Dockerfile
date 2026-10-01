@@ -14,10 +14,20 @@ RUN pnpm install --frozen-lockfile && pnpm -r build
 FROM ${PLAYWRIGHT_IMAGE} AS runtime
 ENV NODE_ENV=production
 WORKDIR /app
+# Bac à sable (08 §3, INV7) : l'enfant tourne sous un utilisateur DÉDIÉ (sandbox, 1500), distinct de pwuser qui porte
+# MASTER_KEY, DATABASE_URL et les clés LLM : il ne peut lire ni /proc/<pid du worker>/environ ni le fichier de clé
+# (MASTER_KEY_FILE monté en 0400 pour pwuser). Le changement d'uid passe par un setpriv (util-linux) doté des SEULES
+# capacités cap_setuid,cap_setgid, exécutable par le groupe pwuser uniquement ; il est appelé avec --no-new-privs et
+# l'enfant (Node, sans capacités de fichier) n'en garde aucune. Le worker refuse de démarrer en production sans cela.
 RUN apt-get update \
- && apt-get install -y --no-install-recommends tini \
+ && apt-get install -y --no-install-recommends tini libcap2-bin \
  && rm -rf /var/lib/apt/lists/* \
- && corepack enable
+ && corepack enable \
+ && groupadd --system --gid 1500 sandbox \
+ && useradd --system --uid 1500 --gid 1500 --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin sandbox \
+ && install -d -m 0755 /usr/local/libexec \
+ && install -o root -g pwuser -m 0750 /usr/bin/setpriv /usr/local/libexec/sandbox-launch \
+ && setcap cap_setuid,cap_setgid=ep /usr/local/libexec/sandbox-launch
 
 # .pnpmfile.cjs : crochet readPackage (pair OTel retiré de Better Auth), exigé par le lockfile (pnpmfileChecksum).
 COPY package.json pnpm-workspace.yaml pnpm-lock.yaml .pnpmfile.cjs ./
@@ -45,7 +55,8 @@ RUN chmod 0755 /usr/local/bin/entrypoint.sh
 
 # pwuser (uid 1001) existe déjà dans l'image Playwright.
 USER pwuser
-ENV RUNTIME_MODE=all PORT=3000 HOST=0.0.0.0
+ENV RUNTIME_MODE=all PORT=3000 HOST=0.0.0.0 \
+    SANDBOX_UID=1500 SANDBOX_GID=1500 SANDBOX_LAUNCHER=/usr/local/libexec/sandbox-launch
 EXPOSE 3000
 # tini (PID 1) relaie les signaux et récolte les zombies Chromium ; sans lui : docker run --init.
 ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/entrypoint.sh"]
