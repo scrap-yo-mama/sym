@@ -115,6 +115,19 @@ describe('ponts log, emit, violation', () => {
     expect(logged.some((l) => l.event === 'sandbox_violation' && l.reason === 'forbidden_global')).toBe(true);
   });
 
+  test('assert_no_personal_data_in_logs (ctx.log du script) : le texte va au journal du run (onLog), jamais au journal du worker', () => {
+    const lines: string[] = [];
+    const logger = pino({ level: 'trace' }, { write: (s: string) => void lines.push(s) });
+    const runLog: (readonly string[])[] = [];
+    const { bridges } = createSandboxBridges({ allowedDomains: ['api.zz-test'], guard: new SsrfGuard(), logger, onLog: (args) => void runLog.push(args) });
+    bridges.log(JSON.stringify(['contact', 'zz_test_jeanne@exemple.invalid', 'Zztest Jeanne', '+33 6 00 00 00 01']));
+    expect(runLog).toEqual([['contact', 'zz_test_jeanne@exemple.invalid', 'Zztest Jeanne', '+33 6 00 00 00 01']]);
+    const out = lines.join('');
+    for (const motif of ['zz_test_jeanne', 'exemple.invalid', 'Zztest', '00 00 01', 'contact']) expect(out).not.toContain(motif);
+    // Seule la taille (identifiant technique) reste au journal du worker.
+    expect(lines.map((l) => JSON.parse(l) as { event?: string; count?: number })).toEqual([expect.objectContaining({ event: 'sandbox_log', count: 4 })]);
+  });
+
   test('dépassement du journal : violation (tue l’enfant), plus une simple erreur', () => {
     const { bridges } = createSandboxBridges({ allowedDomains: ['api.zz-test'], guard: new SsrfGuard(), logger: pino({ level: 'silent' }), maxLogBytes: 10 });
     try {

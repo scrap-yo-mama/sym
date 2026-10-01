@@ -15,7 +15,8 @@ import { findSsrfBlocked, guardedFetch, normalizeHostname, type SsrfGuard } from
 
 /** Refus d'un pont. `code` est relayé au script ; `violation` : à journaliser comme `sandbox_violation`. */
 export class SandboxBridgeError extends Error {
-  readonly code: SandboxViolationReason | 'fetch_failed' | 'page_failed' | 'page_unavailable';
+  /** `rate_limited` : cadence du domaine refusée (1.9) ; `request_cap` : `max_requests_per_run` atteint. */
+  readonly code: SandboxViolationReason | 'fetch_failed' | 'page_failed' | 'page_unavailable' | 'rate_limited' | 'request_cap';
   readonly violation: boolean;
   readonly detail?: string;
   constructor(code: SandboxBridgeError['code'], violation: boolean, detail?: string) {
@@ -61,6 +62,12 @@ export type SandboxBridgeOptions = {
   maxTotalResponseBytes?: number;
   /** Plafond du journal du script ; au-delà, violation `output_limit` (défaut 64 Kio). */
   maxLogBytes?: number;
+  /**
+   * Destination des lignes de `ctx.log` (texte libre du script, qui peut contenir des données extraites) : le journal
+   * du run (`ctx.log`, masqué par le registre du run, rétention et effacement de `run_logs`). Le journal du worker
+   * ne reçoit jamais ce texte, seulement sa taille (17 §6, « identifiants techniques uniquement »).
+   */
+  onLog?: (args: readonly string[]) => void;
 };
 
 export type SandboxBridgeHandle = {
@@ -256,6 +263,7 @@ export function createSandboxBridges(options: SandboxBridgeOptions): SandboxBrid
         try {
           response = await transport(current, signal);
         } catch (error) {
+          if (error instanceof SandboxBridgeError) throw error;
           const blocked = findSsrfBlocked(error);
           if (blocked !== undefined) throw new SandboxBridgeError('ssrf_blocked', true, blocked.detail.reason);
           throw new SandboxBridgeError('fetch_failed', false);
@@ -282,7 +290,8 @@ export function createSandboxBridges(options: SandboxBridgeOptions): SandboxBrid
       const size = Buffer.byteLength(raw as string);
       if (logBytes + size > maxLogBytes) throw new SandboxBridgeError('output_limit', true, 'log');
       logBytes += size;
-      log.info({ event: 'sandbox_log', args }, 'sandbox_log');
+      options.onLog?.(args as string[]);
+      log.info({ event: 'sandbox_log', count: (args as string[]).length, bytes: size }, 'sandbox_log');
     },
     emit(raw) {
       if (typeof raw !== 'string') bad('emit : chaîne JSON attendue');

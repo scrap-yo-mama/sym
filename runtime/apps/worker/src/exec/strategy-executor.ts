@@ -8,7 +8,9 @@
 //    écrite en dataset comme le propriétaire ; `max_cost_usd` tenu PENDANT l'essai (requête ou tunnel refusé au-delà)
 //    → `run_budget_exceeded` ; verrou de domaines de l'API (`allowed_hosts`) à chaque saut, au niveau réseau ;
 // 5. RGPD (D-28) : chaque item extrait inscrit au registre de masquage du run (`ctx.personal`), sujets effacés retirés
-//    (`ctx.excludeSubjects`) avant collecte et avant toute écriture du dataset ; journaux du run par `ctx.log`.
+//    (`ctx.excludeSubjects`) avant collecte et avant toute écriture du dataset ; journaux du run par `ctx.log`, y compris
+//    le `ctx.log(...)` d'un script E3 (texte libre, écrit APRÈS l'inscription des items au registre, donc masqué) : le
+//    journal du worker n'en reçoit que la taille (17 §6).
 import {
   validateDeclarativeSpec,
   validateOutput,
@@ -66,17 +68,26 @@ export type StrategyExecutorDeps = {
   readonly now?: () => number;
 };
 
-type Outcome = { result: DeclarativeRunResult; usage: NetworkUsage | null; violations?: readonly SandboxViolation[] };
+type Outcome = { result: DeclarativeRunResult; usage: NetworkUsage | null; violations?: readonly SandboxViolation[]; scriptLogs?: readonly (readonly string[])[] };
 
 /** Somme des usages réseau d'un essai (egress Chromium + session `ctx.fetch` du script). */
 function addUsage(a: NetworkUsage, b: NetworkUsage): NetworkUsage {
   return { ...a, bytes: a.bytes + b.bytes, requests: a.requests + b.requests, costUsd: Math.round((a.costUsd + b.costUsd) * 1e6) / 1e6 };
 }
 
-/** Script E3 en échec après un refus de la garde SSRF au proxy d'egress : la cause journalisée est la garde. */
+/**
+ * Script E3 en échec après un refus au proxy d'egress : refus de la garde SSRF → `ssrf_blocked` ; refus du verrou de
+ * domaines (redirection hors API, Chromium voit un tunnel refusé) → `domain_not_allowed`, faute de stratégie non
+ * rejouable, jamais une erreur réseau.
+ */
 function refineEgress(result: DeclarativeRunResult, egress: BrowserEgress): DeclarativeRunResult {
-  if (result.ok || egress.blocked.length === 0 || result.failure.detail === 'sandbox_violation') return result;
-  return { ...result, failure: { failure_class: 'forbidden', retryable: false, detail: 'ssrf_blocked' } };
+  if (result.ok || result.failure.detail === 'sandbox_violation') return result;
+  if (egress.blocked.length > 0) return { ...result, failure: { failure_class: 'forbidden', retryable: false, detail: 'ssrf_blocked' } };
+  const cls = result.failure.failure_class;
+  if (egress.domainBlockedCount() > 0 && (cls === 'network' || cls === 'transient' || cls === 'code_error')) {
+    return { ...result, failure: { failure_class: 'code_error', retryable: false, detail: 'domain_not_allowed' } };
+  }
+  return result;
 }
 
 const BUDGET: ExecFailure = { failure_class: 'run_budget_exceeded', retryable: false, detail: 'max_cost_usd' };
@@ -176,13 +187,15 @@ export function createStrategyExecutor(deps: StrategyExecutorDeps): RunExecutor 
       logger: logger.child({ runId: ctx.runId }),
       ...(port.limits === undefined ? {} : { limits: port.limits }),
       ...(base.pacer === undefined ? {} : { pacer: base.pacer }),
+      ...(target.api.domainPacing.max_requests_per_run === undefined ? {} : { maxRequests: target.api.domainPacing.max_requests_per_run }),
+      allowWriteActions: target.api.allowWriteActions,
       ...(deps.classify === undefined ? {} : { classify: deps.classify }),
     });
     let result = run.result;
     if (result.ok && result.records.some((r) => !validateOutput(target.api.outputSchema, r).ok)) {
       result = { ok: false, failure: { failure_class: 'extraction', retryable: false, detail: 'schema_mismatch' }, pages: result.pages, requests: result.requests };
     }
-    return { result, usage: null, violations: run.violations };
+    return { result, usage: null, violations: run.violations, scriptLogs: run.logs };
   };
 
   const execute = async (ctx: RunCtx, target: RunTarget, strategy: NonNullable<RunTarget['strategy']>): Promise<Outcome> => {
@@ -277,6 +290,8 @@ export function createStrategyExecutor(deps: StrategyExecutorDeps): RunExecutor 
         result = { ...result, records: kept };
       }
     }
+    // Journal du script E3 : après l'inscription des items au registre du run, pour que `ctx.log` les masque.
+    for (const args of outcome.scriptLogs ?? []) await ctx.log('info', 'sandbox_log', { args });
     const proxyUsd = usage?.costUsd ?? 0;
     await ctx.recordAttempt({
       execution: strategy.execution,

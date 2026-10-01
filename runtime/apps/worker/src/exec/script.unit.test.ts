@@ -16,7 +16,8 @@ describe('ctx.page : pont de l’hôte', () => {
     maxResponseBytes: 1000,
     maxItems: 5,
     timeoutMs: 1000,
-    blockedHosts: () => [],
+    watch: hostViolationWatch(),
+    allowWriteActions: false,
   });
 
   test('liste fermée figée', () => {
@@ -51,14 +52,67 @@ describe('ctx.page : pont de l’hôte', () => {
 });
 
 describe('imputation des requêtes coupées (hostViolationWatch)', () => {
-  test('avant le premier evaluate : requêtes du site ignorées ; après : violation à la première', () => {
+  const setup = () => {
     const seen: SandboxViolation[] = [];
     const w = hostViolationWatch();
     w.watch((v) => seen.push(v));
+    return { w, seen };
+  };
+
+  test('avant le premier evaluate : requêtes du site ignorées ; pendant evaluate : violation à la première', () => {
+    const { w, seen } = setup();
     w.report('zz_test_analytics.example');
     expect(seen).toEqual([]);
-    w.arm();
+    w.beginEvaluate();
     w.report('zz_test_internal.example');
     expect(seen).toEqual([{ reason: 'domain_not_allowed', detail: 'zz_test_internal.example' }]);
+    expect(w.imputed()).toBe(1);
+    expect(w.lastImputed()).toEqual({ reason: 'domain_not_allowed', detail: 'zz_test_internal.example' });
+  });
+
+  test('ligne de base : un tiers du site (avant evaluate, ou pendant une navigation de l’hôte) n’est jamais imputé au script', () => {
+    const { w, seen } = setup();
+    // Chargement de la page de départ : mesure d'audience et CDN du site.
+    w.beginHostOp();
+    w.report('zz_test_cdn.example');
+    w.endHostOp();
+    w.report('ZZ_TEST_ANALYTICS.example.');
+    w.beginEvaluate();
+    w.endEvaluate();
+    // Après evaluate : minuterie de mesure d'audience, image chargée au défilement sur le même CDN.
+    w.report('zz_test_analytics.example');
+    w.report('zz_test_cdn.example');
+    // ctx.page.goto / click : sous-ressources tierces de la nouvelle page, nouveau document (guet désarmé).
+    w.beginHostOp();
+    w.report('zz_test_other_cdn.example');
+    w.documentLoaded();
+    w.endHostOp();
+    w.report('zz_test_late_tag.example');
+    expect(seen).toEqual([]);
+    expect(w.imputed()).toBe(0);
+    // Le code du script entre à nouveau : un hôte inconnu du site est imputé, même après le retour d'evaluate.
+    w.beginEvaluate();
+    w.endEvaluate();
+    w.report('zz_test_internal.example');
+    expect(seen).toEqual([{ reason: 'domain_not_allowed', detail: 'zz_test_internal.example' }]);
+  });
+
+  test('assert_write_action_blocked (imputation) : un evaluate en vol pendant une navigation de l’hôte garde le verdict ; soumission coupée imputée dès qu’un code ou un clic du script est en jeu', () => {
+    const { w, seen } = setup();
+    w.report('zz_test_site_form.example', 'write_action_blocked');
+    expect(seen).toEqual([]);
+    w.beginHostOp();
+    w.report('zz_test_site_form.example', 'write_action_blocked');
+    w.endHostOp();
+    w.beginEvaluate();
+    w.beginHostOp();
+    w.report('zz_test_internal.example');
+    w.endHostOp();
+    w.documentLoaded();
+    w.endEvaluate();
+    expect(seen).toEqual([
+      { reason: 'write_action_blocked', detail: 'zz_test_site_form.example' },
+      { reason: 'domain_not_allowed', detail: 'zz_test_internal.example' },
+    ]);
   });
 });

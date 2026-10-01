@@ -46,6 +46,28 @@ describe('productionExecutorFactory', () => {
     await pool.end();
   });
 
+  test('production, sonde d’isolation « environnement du worker lisible » → refus de démarrer (D-30), moteur jamais servi', async () => {
+    const pool = new pg.Pool({ connectionString: 'postgres://zz_test@127.0.0.1:1/zz_test' });
+    let probed = 0;
+    const engine = {
+      id: 'isolated-vm' as const,
+      probeIsolation: () => {
+        probed += 1;
+        return Promise.resolve({ uid: 1500, parentEnviron: 'readable' as const, noNewPrivs: true });
+      },
+      run: () => Promise.reject(new Error('jamais appelé')),
+    };
+    await expect(
+      productionExecutorFactory({ NODE_ENV: 'production' }, { sandboxEngine: () => engine })({ pool, config: loadWorkerConfig(env({ DISABLE_BROWSER: 'true' })), checked, logger }),
+    ).rejects.toMatchObject({ name: 'SandboxIsolationError', message: expect.stringMatching(/lit l'environnement du worker/) });
+    expect(probed).toBe(1);
+    // Témoin : sonde saine → le worker démarre.
+    const sane = { ...engine, probeIsolation: () => Promise.resolve({ uid: 1500, parentEnviron: 'denied' as const, noNewPrivs: true }) };
+    const handle = await productionExecutorFactory({ NODE_ENV: 'production' }, { sandboxEngine: () => sane })({ pool, config: loadWorkerConfig(env({ DISABLE_BROWSER: 'true' })), checked, logger });
+    await handle.close?.();
+    await pool.end();
+  });
+
   test('DISABLE_BROWSER invalide → configuration refusée', () => {
     expect(() => loadWorkerConfig(env({ DISABLE_BROWSER: 'peut-être' }))).toThrow(/DISABLE_BROWSER/);
   });

@@ -42,7 +42,9 @@ describe("invariants (à implémenter)", () => {
   // packages/db/src/retention/retention.integration.test.ts ; câblage worker (RunContext.personal, RunContext.excludeSubjects,
   // rekey) dans apps/worker/src/worker.integration.test.ts. Câblage par l'exécuteur réel (D-28, tâche 1.6) : items extraits
   // inscrits à RunContext.personal et sujets effacés exclus avant écriture du dataset, journaux par ctx.log (appendRunLog
-  // avec le registre du run) : apps/worker/src/exec/strategy-executor.integration.test.ts (« RGPD (D-28) »). Reste la
+  // avec le registre du run) : apps/worker/src/exec/strategy-executor.integration.test.ts (« RGPD (D-28) ») ; `ctx.log` d'un script E3
+// (run_logs masqué, jamais le journal du worker) : apps/worker/src/sandbox/sandbox.unit.test.ts, tests/browser/executors.security.test.ts
+// et apps/worker/src/exec/strategy-executor.security.test.ts (Chromium réel, base réelle). Reste la
   // déduplication, qui naît avec `dedup_key` / `diff` des planifications (08 §5, tâche 2.5) :
   test.todo("assert_erasure_complete — dedup_keys.key_hash = dedupKeyHash(clé des sujets, dedup_key) à l'écriture des clés"); // RGPD, tâche(s) 2.5
   test.todo("assert_pacing_key_is_domain"); // politesse, tâche(s) 1.9

@@ -79,6 +79,13 @@ export class ProxyBudgetExceededError extends Error {
   }
 }
 
+/**
+ * Marge du contrôle par octets du plafond de coût (prix au Go) : au plus deux lectures de socket (64 Kio chacune) entre
+ * deux contrôles. Le transfert est coupé dès que le coût, marge comprise, dépasserait le plafond : le coût imputé reste
+ * sous lui.
+ */
+export const COST_BYTE_MARGIN = 128 * 1024;
+
 /** Plafond de coût proxy d'un essai. `otherUsd` : coût déjà engagé ailleurs dans le même essai (egress Chromium). */
 export type CostCeiling = { readonly maxUsd: number; readonly otherUsd?: () => number };
 
@@ -213,15 +220,35 @@ export function openNetworkSession(options: NetworkSessionOptions): NetworkSessi
     rung.mode === 'direct'
       ? createGuardedDispatcher(guard, options.connectTimeoutMs)
       : proxyDispatcher(rung.proxy, rung.params, options, meter);
-  // Une requête = un envoi par le dispatcher (chaque saut de redirection compte).
-  const dispatcher = base.compose((dispatch) => (opts, handler) => {
-    requests += 1;
-    return dispatch(opts, handler);
-  });
   const proxyId = rung.mode === 'direct' ? null : rung.proxy.id;
   const price = rung.mode === 'direct' ? undefined : rung.proxy.price;
   const allowHost = options.allowedHosts === undefined ? undefined : domainLock(options.allowedHosts);
   let exceeded = false;
+  const ceiling = options.costCeiling;
+  /** Prix au Go : budget d'octets restant contrôlé à chaque bloc de corps reçu (marge d'un bloc de lecture). */
+  const overBytes = (): boolean =>
+    ceiling !== undefined && price !== undefined && proxyCostUsd(price, meter.bytes + COST_BYTE_MARGIN, requests) + (ceiling.otherUsd?.() ?? 0) > ceiling.maxUsd;
+  // Une requête = un envoi par le dispatcher (chaque saut de redirection compte).
+  const dispatcher = base.compose((dispatch) => (opts, handler) => {
+    requests += 1;
+    if (ceiling === undefined || price === undefined || handler.onResponseData === undefined) return dispatch(opts, handler);
+    const guarded: Dispatcher.DispatchHandler = {
+      onRequestStart: (controller, context) => handler.onRequestStart?.(controller, context),
+      onRequestUpgrade: (controller, status, headers, socket) => handler.onRequestUpgrade?.(controller, status, headers, socket),
+      onResponseStart: (controller, status, headers, message) => handler.onResponseStart?.(controller, status, headers, message),
+      onResponseData: (controller, chunk) => {
+        if (exceeded || overBytes()) {
+          exceeded = true;
+          controller.abort(new ProxyBudgetExceededError());
+          return;
+        }
+        handler.onResponseData?.(controller, chunk);
+      },
+      onResponseEnd: (controller, trailers) => handler.onResponseEnd?.(controller, trailers),
+      onResponseError: (controller, error) => handler.onResponseError?.(controller, error),
+    };
+    return dispatch(opts, guarded);
+  });
   const beforeRequest = () => {
     if (exceeded || wouldExceed(options.costCeiling, price, meter.bytes, requests)) {
       exceeded = true;

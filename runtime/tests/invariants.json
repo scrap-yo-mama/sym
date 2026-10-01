@@ -32,7 +32,7 @@
   { "test": "assert_cross_user_denied", "invariant": "INV12", "tasks": ["0.3b", "4.3"], "stage": "I1, S" },
   { "test": "assert_retention_purge", "invariant": "RGPD", "tasks": ["1.8"], "stage": "I1" },
   { "test": "assert_erasure_complete", "invariant": "RGPD", "tasks": ["1.8"], "stage": "I1" },
-  { "test": "assert_no_personal_data_in_logs", "invariant": "RGPD", "tasks": ["1.8", "1.10"], "stage": "I1" },
+  { "test": "assert_no_personal_data_in_logs", "invariant": "RGPD", "tasks": ["1.8", "1.10", "1.6"], "stage": "U1, I1, S" },
   { "test": "assert_llm_redaction", "invariant": "RGPD", "tasks": ["0.4"], "stage": "I1" },
   { "test": "assert_llm_contract", "invariant": "contrat LLM", "tasks": ["0.4"], "stage": "I1" },
   { "test": "assert_llm_no_fallback", "invariant": "contrat LLM", "tasks": ["0.4"], "stage": "I1" },
@@ -59,6 +59,8 @@
   { "test": "assert_browser_egress_chained", "invariant": "INV10", "tasks": ["1.6"], "stage": "U1, S" },
   { "test": "assert_domain_lock_redirects", "invariant": "INV10, 08 § 4", "tasks": ["1.6"], "stage": "U1, S" },
   { "test": "assert_run_cost_capped", "invariant": "04b § 3", "tasks": ["1.6"], "stage": "U1" },
+  { "test": "assert_script_paced", "invariant": "politesse, 17 § 5", "tasks": ["1.6"], "stage": "S" },
+  { "test": "assert_write_action_blocked", "invariant": "08 § 4", "tasks": ["1.6"], "stage": "U1, S" },
   { "test": "assert_store_package_clean", "invariant": "07 § 7", "tasks": ["2.9"], "stage": "U1" },
   { "test": "assert_store_listing_complete", "invariant": "07 § 7", "tasks": ["2.9"], "stage": "U1" },
   { "test": "assert_store_permissions_justified", "invariant": "07 § 7", "tasks": ["2.9"], "stage": "U1" }

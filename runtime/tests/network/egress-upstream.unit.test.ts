@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Tâche 1.6 : proxy d'egress de Chromium chaîné au proxy BYO de 1.4 (CONNECT et SOCKS5), cible contrôlée par la garde
 // AVANT le tunnel, connexion au proxy sous sa propre garde, coût proxy compté ; proxy de lancement fermé.
-import { request } from 'node:http';
-import type { Socket } from 'node:net';
+import { createServer, request, type Server } from 'node:http';
+import type { AddressInfo, Socket } from 'node:net';
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'vitest';
 import { startClient, type Client } from '../../fixtures/src/test-helpers.ts';
 import { Secret } from '../../packages/core/src/crypto/index.ts';
@@ -212,6 +212,11 @@ describe('assert_domain_lock_redirects : politique de domaines de l’API dans l
     const egress = await openBrowserEgress({ rung: { mode: 'direct' }, guard: fixtureGuard(client.server.port, [SSRF, INTERNAL]), allowedHosts: [SSRF] });
     try {
       const port = Number(new URL(egress.server).port);
+      const seen: string[] = [];
+      const unsubscribe = egress.onDomainBlocked((t) => {
+        seen.push(t.host);
+        unsubscribe();
+      });
       // Le saut de redirection que Chromium suivrait : la première réponse (302) passe, la suivante est refusée.
       const hop1 = await viaEgress(port, `http://${SSRF}:${client.server.port}/to-internal`);
       expect(hop1.status).toBe(302);
@@ -219,6 +224,9 @@ describe('assert_domain_lock_redirects : politique de domaines de l’API dans l
       expect(await connectVia(port, `${INTERNAL}:${client.server.port}`)).toBe('403 domain_not_allowed');
       expect(await connectVia(port, `${INTERNAL.toUpperCase()}.:${client.server.port}`)).toBe('403 domain_not_allowed');
       expect(egress.domainBlocked.map((d) => d.host)).toEqual([INTERNAL, INTERNAL, INTERNAL]);
+      // Abonnement (E3 en script : refus du verrou relié au guet du bac à sable) et compte non plafonné.
+      expect(seen).toEqual([INTERNAL]);
+      expect(egress.domainBlockedCount()).toBe(3);
       expect((await client.stats()).hosts[INTERNAL]?.total ?? 0).toBe(0);
     } finally {
       await egress.close();
@@ -289,5 +297,93 @@ describe('assert_run_cost_capped : max_cost_usd tenu pendant le run (proxy d’e
     } finally {
       await session.close();
     }
+  });
+
+  // Prix au Go (5 $/Go) et plafond de 0,002 $ : 400 ko de budget ; le corps fait 8 Mo. Le transfert est coupé au niveau
+  // des octets (budget restant), pas après coup : le coût imputé reste sous le plafond.
+  describe('prix au Go : gros corps coupé au niveau des octets, coût imputé ≤ plafond', () => {
+    const BIG = 'zz_test_big.localhost';
+    const BODY_BYTES = 8 * 1024 * 1024;
+    let big: Server;
+    let bigPort: number;
+    const perGb = (url: string) =>
+      parseProxyDefinition({ id: 'zz_test_dc', type: 'dc', url, credentials_secret_id: 'zz_test_secret', allow_private_address: true, price: { per_gb_usd: 5, per_request_usd: 0 } });
+    beforeAll(async () => {
+      const chunk = Buffer.alloc(64 * 1024, 120);
+      big = createServer((_req, res) => {
+        res.writeHead(200, { 'content-type': 'application/octet-stream', 'content-length': String(BODY_BYTES) });
+        let sent = 0;
+        const pump = () => {
+          while (sent < BODY_BYTES) {
+            sent += chunk.length;
+            if (!res.write(chunk)) return void res.once('drain', pump);
+          }
+          res.end();
+        };
+        res.on('error', () => undefined);
+        pump();
+      });
+      await new Promise<void>((resolve) => big.listen(0, '127.0.0.1', () => resolve()));
+      bigPort = (big.address() as AddressInfo).port;
+    });
+    afterAll(async () => {
+      big.closeAllConnections();
+      await new Promise<void>((resolve) => big.close(() => resolve()));
+    });
+
+    test('proxy d’egress (tunnel CONNECT ouvert) : coupé en cours de transfert, budgetExceeded, coût ≤ plafond', async () => {
+      const egress = await openBrowserEgress({
+        rung: { mode: 'dc_proxy', proxy: perGb(connectProxy.url), params: {} },
+        guard: fixtureGuard(bigPort, [BIG]),
+        credentials: creds,
+        costCeiling: { maxUsd: 0.002 },
+        // Contrôle périodique ralenti : seul le contrôle par octets peut couper à temps.
+        costWatchMs: 60_000,
+      });
+      try {
+        const port = Number(new URL(egress.server).port);
+        const received = await new Promise<number>((resolve) => {
+          const req = request({ host: '127.0.0.1', port, method: 'CONNECT', path: `${BIG}:${bigPort}`, agent: false });
+          req.on('connect', (_res, socket: Socket) => {
+            let bytes = 0;
+            socket.on('data', (c: Buffer) => (bytes += c.length));
+            socket.on('close', () => resolve(bytes));
+            socket.on('error', () => undefined);
+            socket.write(`GET /big HTTP/1.1\r\nHost: ${BIG}:${bigPort}\r\nConnection: close\r\n\r\n`);
+          });
+          req.on('error', () => resolve(-1));
+          req.end();
+        });
+        expect(received).toBeGreaterThan(0);
+        expect(received).toBeLessThan(BODY_BYTES);
+        expect(egress.budgetExceeded()).toBe(true);
+        expect(egress.usage().costUsd).toBeLessThanOrEqual(0.002);
+      } finally {
+        await egress.close();
+      }
+    });
+
+    test('session réseau : corps coupé pendant la lecture (ProxyBudgetExceededError), coût ≤ plafond', async () => {
+      const session = openNetworkSession({
+        rung: { mode: 'dc_proxy', proxy: perGb(connectProxy.url), params: {} },
+        guard: fixtureGuard(bigPort, [BIG]),
+        credentials: creds,
+        costCeiling: { maxUsd: 0.002 },
+      });
+      try {
+        const error = await session
+          .fetch(`http://${BIG}:${bigPort}/big`)
+          .then((res) => res.arrayBuffer())
+          .then(
+            () => undefined,
+            (e: unknown) => e,
+          );
+        expect(error).toBeDefined();
+        expect(session.budgetExceeded()).toBe(true);
+        expect(session.usage().costUsd).toBeLessThanOrEqual(0.002);
+      } finally {
+        await session.close();
+      }
+    });
   });
 });

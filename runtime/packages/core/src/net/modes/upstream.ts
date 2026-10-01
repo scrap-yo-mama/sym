@@ -33,6 +33,11 @@ export type UpstreamDialerOptions = {
   /** Résolveur de la garde du proxy (tests). */
   readonly proxyResolver?: Resolver;
   readonly connectTimeoutMs?: number;
+  /**
+   * Appelé à chaque bloc reçu d'un tunnel ouvert (octets déjà comptés dans `usage`) : le plafond de coût d'un essai
+   * (prix au Go) est contrôlé au niveau des octets, pas seulement à l'ouverture d'un tunnel.
+   */
+  readonly onTraffic?: () => void;
 };
 
 export type UpstreamUsage = { readonly bytes: number; readonly tunnels: number };
@@ -258,6 +263,7 @@ export function createUpstreamDialer(options: UpstreamDialerOptions): UpstreamDi
         throw error;
       }
       tunnels += 1;
+      if (options.onTraffic !== undefined) stream.on('data', options.onTraffic);
       return stream;
     },
     usage() {

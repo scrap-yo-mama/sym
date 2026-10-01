@@ -6,6 +6,9 @@
 //   site), corps borné ;
 // - E3 : navigation déterministe (GET), attente du rendu (sélecteur des enregistrements), DOM rendu extrait.
 // Toute navigation passe par `guardedGoto` ; la cadence (1.9) est réservée avant chaque requête de la stratégie.
+// `max_response_bytes` est tenu DANS la page, avant tout transfert au worker (browser/bounded.ts) : une page hostile ne
+// fait pas charger des centaines de Mo au processus Node. Une redirection hors des domaines de l'API (refusée par le
+// proxy d'egress, que `context.route` ne voit pas) est une faute de stratégie (`domain_not_allowed`), jamais un réseau.
 import {
   classifyExchange,
   classifyStatus,
@@ -19,10 +22,11 @@ import {
   type Transport,
 } from '@runtime/core/exec';
 import { DslError } from '@runtime/core';
-import { guardedGoto, type BrowserEgress, type SsrfGuard } from '@runtime/core/net';
-import type { Page } from 'playwright-core';
+import { DomainNotAllowedError, guardedGoto, type BrowserEgress, type SsrfGuard } from '@runtime/core/net';
+import type { Page, Response } from 'playwright-core';
+import { boundedContent, boundedRawBody, TOO_LARGE } from '../browser/bounded.js';
 import type { BrowserPool } from '../browser/pool.js';
-import { openRunContext, type RunContext } from '../browser/run-context.js';
+import { hostAllowed, openRunContext, type RunContext } from '../browser/run-context.js';
 
 const BROWSER_NAVIGATION_TIMEOUT_MS = 30_000;
 /** Attente du rendu d'une page (sélecteur des enregistrements) avant lecture du DOM. */
@@ -38,8 +42,8 @@ export type BrowserExecutorOptions = Omit<DeclarativeRunOptions, 'transport'> & 
 
 const maxBytesOf = (options: BrowserExecutorOptions): number => options.spec.limits?.max_response_bytes ?? 5_000_000;
 
-function capped(body: string, max: number): string {
-  if (Buffer.byteLength(body) > max) throw new DslError('response_too_large', 'réponse au-delà de max_response_bytes');
+function capped(body: string | typeof TOO_LARGE): string {
+  if (body === TOO_LARGE) throw new DslError('response_too_large', 'réponse au-delà de max_response_bytes');
   return body;
 }
 
@@ -51,6 +55,10 @@ function refine(result: DeclarativeRunResult, egress: BrowserEgress, rc: RunCont
   // erreur réseau. Dans les deux cas, la cause journalisée est la garde.
   if (egress.blocked.length > 0 && (cls === 'network' || cls === 'code_error' || cls === 'transient' || cls === 'forbidden')) {
     return { ...result, failure: { failure_class: 'forbidden', retryable: false, detail: 'ssrf_blocked' } };
+  }
+  // Verrou de domaines au proxy d'egress (CONNECT refusé : Chromium voit ERR_TUNNEL_CONNECTION_FAILED, classé réseau).
+  if (egress.domainBlockedCount() > 0 && (cls === 'network' || cls === 'code_error' || cls === 'transient')) {
+    return { ...result, failure: { failure_class: 'code_error', retryable: false, detail: 'domain_not_allowed' } };
   }
   if (rc !== undefined && rc.violations.length > 0 && (cls === 'network' || cls === 'code_error')) {
     return { ...result, failure: { failure_class: 'code_error', retryable: false, detail: 'domain_not_allowed' } };
@@ -77,11 +85,13 @@ async function withRunContext(options: BrowserExecutorOptions, fn: (rc: RunConte
   });
 }
 
-async function navigate(page: Page, url: string, options: BrowserExecutorOptions): Promise<{ status: number; headers: Record<string, string>; html: boolean; raw: () => Promise<string> }> {
+async function navigate(page: Page, url: string, options: BrowserExecutorOptions): Promise<{ status: number; headers: Record<string, string>; html: boolean; response: Response }> {
   const response = await guardedGoto(page, url, options.guard, { waitUntil: 'load' as const, timeout: options.navigationTimeoutMs ?? BROWSER_NAVIGATION_TIMEOUT_MS });
   if (response === null) throw new DslError('unsupported', 'navigation sans réponse HTTP');
+  // Dernier saut hors des domaines de l'API : la réponse est le refus du proxy d'egress, pas celle du site.
+  if (!hostAllowed(response.url(), options.spec.request.allowed_hosts)) throw new DomainNotAllowedError(new URL(response.url()).hostname);
   const headers = response.headers();
-  return { status: response.status(), headers, html: /html/i.test(headers['content-type'] ?? 'text/html'), raw: () => response.text() };
+  return { status: response.status(), headers, html: /html/i.test(headers['content-type'] ?? 'text/html'), response };
 }
 
 /** Échec de l'essai sans requête de stratégie (page d'accueil d'E2 refusée). */
@@ -106,7 +116,7 @@ export function runFetchInPageExecutor(options: BrowserExecutorOptions): Promise
       return failed(classifyTransportError(error));
     }
     await options.pacer?.report(pageUrl, { status: landing.status, retryAfter: landing.headers['retry-after'] ?? null });
-    const landingExchange: HttpExchange = { status: landing.status, headers: landing.headers, body: landing.html ? capped(await page.content(), maxBytes) : '', url: page.url() };
+    const landingExchange: HttpExchange = { status: landing.status, headers: landing.headers, body: landing.html ? capped(await boundedContent(page, maxBytes)) : '', url: page.url() };
     const refused = classify(landingExchange);
     // Une page d'accueil absente (404) n'empêche pas l'appel de l'API de même origine ; tout autre refus arrête.
     if (refused !== null && refused.failure_class !== 'not_found') return failed(refused);
@@ -116,22 +126,51 @@ export function runFetchInPageExecutor(options: BrowserExecutorOptions): Promise
       const headers: Record<string, string> = { ...request.headers };
       if (contentType !== undefined && !Object.keys(headers).some((h) => h.toLowerCase() === 'content-type')) headers['content-type'] = contentType;
       // Délai borné : une page hostile peut remplacer `fetch` par une promesse qui ne se résout jamais.
+      // Lecture bornée dans la page (flux coupé au-delà du plafond) ; seules des valeurs primitives bornées sont rendues :
+      // une page qui surcharge `ArrayBuffer`, `TextDecoder` ou `JSON` fausse ses données, jamais la borne du transfert.
       const evaluation = page.evaluate(
-        async (a: { url: string; method: string; headers: Record<string, string>; body: string | null; maxBytes: number }) => {
+        async (a: { url: string; method: string; headers: Record<string, string>; body: string | null; maxBytes: number; maxMeta: number }) => {
           try {
             const r = await fetch(a.url, { method: a.method, headers: a.headers, body: a.body, credentials: 'include', redirect: 'follow', cache: 'no-store' });
-            const buffer = await r.arrayBuffer();
-            if (buffer.byteLength > a.maxBytes) return { kind: 'too_large' as const };
+            const parts: Uint8Array[] = [];
+            let size = 0;
+            const reader = r.body === null ? null : r.body.getReader();
+            if (reader !== null) {
+              for (;;) {
+                const chunk = await reader.read();
+                if (chunk.done) break;
+                size += chunk.value.byteLength;
+                if (size > a.maxBytes) {
+                  await reader.cancel().catch(() => undefined);
+                  return { kind: 'too_large' as const };
+                }
+                parts.push(chunk.value);
+              }
+            }
+            const buffer = new Uint8Array(size);
+            let offset = 0;
+            for (const part of parts) {
+              buffer.set(part, offset);
+              offset += part.byteLength;
+            }
             const h: Record<string, string> = {};
             r.headers.forEach((value, name) => {
               h[name.toLowerCase()] = value;
             });
-            return { kind: 'ok' as const, status: r.status, headers: h, body: new TextDecoder().decode(buffer), url: r.url };
+            const text: unknown = new TextDecoder().decode(buffer);
+            const meta: unknown = JSON.stringify(h);
+            const url: unknown = r.url;
+            const status: unknown = r.status;
+            if (typeof text !== 'string' || text.length > a.maxBytes) return { kind: 'too_large' as const };
+            if (typeof meta !== 'string' || meta.length > a.maxMeta || typeof url !== 'string' || url.length > 8192 || typeof status !== 'number') {
+              return { kind: 'error' as const };
+            }
+            return { kind: 'ok' as const, status, headers: meta, body: text, url };
           } catch {
             return { kind: 'error' as const };
           }
         },
-        { url: request.url, method: request.method, headers, body: body ?? null, maxBytes },
+        { url: request.url, method: request.method, headers, body: body ?? null, maxBytes, maxMeta: 64 * 1024 },
       );
       let timer: NodeJS.Timeout | undefined;
       const timeoutMs = options.navigationTimeoutMs ?? BROWSER_NAVIGATION_TIMEOUT_MS;
@@ -143,7 +182,19 @@ export function runFetchInPageExecutor(options: BrowserExecutorOptions): Promise
       ]).finally(() => clearTimeout(timer));
       if (out.kind === 'too_large') throw new DslError('response_too_large', 'réponse au-delà de max_response_bytes');
       if (out.kind === 'error') throw Object.assign(new Error('fetch dans la page : échec'), { code: 'IN_PAGE_FETCH_FAILED' });
-      return { status: out.status, headers: out.headers, body: out.body, url: out.url === '' ? request.url : out.url };
+      // Revérifié côté hôte : octets UTF-8 du corps, en-têtes en chaînes.
+      if (Buffer.byteLength(out.body) > maxBytes) throw new DslError('response_too_large', 'réponse au-delà de max_response_bytes');
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(out.headers);
+      } catch {
+        parsed = null;
+      }
+      const responseHeaders: Record<string, string> = {};
+      if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
+        for (const [name, value] of Object.entries(parsed)) if (typeof value === 'string') responseHeaders[name] = value;
+      }
+      return { status: out.status, headers: responseHeaders, body: out.body, url: out.url === '' ? request.url : out.url };
     };
     return runDeclarative({ ...options, transport });
   });
@@ -162,9 +213,9 @@ export function runPlaywrightExecutor(options: BrowserExecutorOptions): Promise<
       if (nav.html && classifyStatus(nav.status) === null) {
         if (renderSelector !== undefined) await page.waitForSelector(renderSelector, { state: 'attached', timeout: renderWaitMs }).catch(() => undefined);
         else await page.waitForLoadState('networkidle', { timeout: renderWaitMs }).catch(() => undefined);
-        body = capped(await page.content(), maxBytes);
+        body = capped(await boundedContent(page, maxBytes));
       } else {
-        body = capped(await nav.raw(), maxBytes);
+        body = capped(await boundedRawBody(page, nav.response, maxBytes));
       }
       return { status: nav.status, headers: nav.headers, body, url: page.url() };
     };

@@ -2,9 +2,12 @@
 // Contexte Chromium d'un run (tâche 1.6 ; 08 §3-4 ; 08b §1) : contexte NEUF par run, jamais partagé entre propriétaires,
 // sans profil persistant. Première couche : le proxy d'egress de l'essai (`proxy` du contexte, garde SSRF, barreau
 // réseau). Seconde couche : `context.route('**')` et `routeWebSocket` (politique de domaines de l'API, violation
-// journalisée), `serviceWorkers: 'block'`, aucun téléchargement. Un `APIRequestContext` ne passe PAS par Chromium : il
+// journalisée), `serviceWorkers: 'block'`, aucun téléchargement, aucune fenêtre surgissante (fermée aussitôt : un code
+// injecté n'y survit pas à une navigation de la page du run). Un `APIRequestContext` ne passe PAS par Chromium : il
 // reçoit toujours le proxy d'egress (`newEgressRequestContext`), jamais une connexion directe.
-import type { APIRequest, APIRequestContext, Browser, BrowserContext, Page } from 'playwright-core';
+// Contrôle optionnel des requêtes autorisées (`admit`, E3 en script) : cadence par domaine (1.9), plafond
+// `max_requests_per_run`, actions d'écriture (`allow_write_actions`) ; un refus coupe la requête sans connexion.
+import type { APIRequest, APIRequestContext, Browser, BrowserContext, Page, Request } from 'playwright-core';
 
 export type RunContextOptions = {
   /** `BrowserEgress.server` de l'essai (http://127.0.0.1:PORT). */
@@ -13,6 +16,8 @@ export type RunContextOptions = {
   readonly allowedHosts: readonly string[];
   /** Requête coupée par la politique de domaines (hôte seulement) : E3 en script tue alors l'enfant du bac à sable. */
   readonly onViolation?: (host: string) => void;
+  /** Requête d'un domaine autorisé : `false` la coupe (cadence refusée, plafond atteint, action d'écriture). */
+  readonly admit?: (request: Request) => Promise<boolean>;
 };
 
 export type RunContext = {
@@ -58,8 +63,11 @@ export async function openRunContext(browser: Browser, options: RunContextOption
   try {
     await context.route('**/*', async (route) => {
       const url = route.request().url();
-      if (hostAllowed(url, options.allowedHosts)) await route.continue();
-      else {
+      if (hostAllowed(url, options.allowedHosts)) {
+        const admitted = options.admit === undefined ? true : await options.admit(route.request()).catch(() => false);
+        if (admitted) await route.continue();
+        else await route.abort('blockedbyclient');
+      } else {
         note(url);
         await route.abort('blockedbyclient');
       }
@@ -72,6 +80,9 @@ export async function openRunContext(browser: Browser, options: RunContextOption
       }
     });
     const page = await context.newPage();
+    context.on('page', (other) => {
+      if (other !== page) void other.close().catch(() => undefined);
+    });
     return { context, page, violations, close: () => context.close().catch(() => undefined) };
   } catch (error) {
     await context.close().catch(() => undefined);

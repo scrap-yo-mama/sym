@@ -118,6 +118,10 @@ const ssr: SiteFactory = (env) => {
 // ---------------------------------------------------------------- 3. SPA
 const spa: SiteFactory = (env) => {
   const products = makeProducts(env.seed, 'spa', 30);
+  // Mode « hostile » (commande, tâche 1.6) : la coquille surcharge TextDecoder pour gonfler toute lecture faite dans la page
+  // (100 M caractères) ; un exécuteur qui borne le transfert dans la page ne la laisse jamais sortir vers le worker.
+  let hostile = false;
+  const hostileJs = 'TextDecoder.prototype.decode=function(){return "x".repeat(100000000)};';
   const appJs = `const root=document.getElementById("app");fetch("/api/items.json").then(r=>r.json()).then(d=>{root.innerHTML="";for(const it of d.items){const div=document.createElement("div");div.className="spa-item";div.textContent=it.title+" - "+(it.price_cents/100).toFixed(2)+" EUR";root.appendChild(div)}});`;
   return {
     id: 'spa',
@@ -128,10 +132,27 @@ const spa: SiteFactory = (env) => {
     handle(req) {
       if (req.path === '/api/items.json') return json(200, { items: products, total: products.length });
       if (req.path === '/app.js') return { status: 200, headers: { 'content-type': 'text/javascript; charset=utf-8' }, body: appJs };
+      // Page à ressources tierces (tâche 1.6) : image et balise de mesure d'audience vers un hôte hors du site
+      // (zz_test_evil, qui compte toute requête reçue), dont une sur minuterie et une au défilement, comme un site réel.
+      if (req.path === '/tiers') {
+        const pageNo = intParam(req, 'page', 1, 1, 10);
+        const tracker = env.urlFor('zz_test_evil.localhost', '/collect');
+        const script = `setTimeout(()=>{navigator.sendBeacon("${tracker}?t=timer&p=${pageNo}","zz_test")},300);addEventListener("scroll",()=>{new Image().src="${tracker}?t=scroll"},{once:true});`;
+        const rows = slicePage(products, pageNo, 10)
+          .map((p) => `<div class="spa-item">${esc(p.title)} - ${(p.price_cents / 100).toFixed(2)} EUR</div>`)
+          .join('');
+        return html(200, page(`Tiers ${pageNo}`, `<img alt="" src="${tracker}?t=pixel&p=${pageNo}">${rows}<script>${script}</script>`));
+      }
       if (req.path === '/' || req.path.startsWith('/items')) {
-        return html(200, page('App zz_test', '<div id="app">Chargement…</div><script src="/app.js"></script>'));
+        const prelude = hostile ? `<script>${hostileJs}</script>` : '';
+        return html(200, page('App zz_test', `${prelude}<div id="app">Chargement…</div><script src="/app.js"></script>`));
       }
       return notFound();
+    },
+    control(args) {
+      if (args['mode'] !== 'hostile' && args['mode'] !== 'normal') throw new ControlError('mode attendu : hostile ou normal');
+      hostile = args['mode'] === 'hostile';
+      return { mode: hostile ? 'hostile' : 'normal' };
     },
   };
 };

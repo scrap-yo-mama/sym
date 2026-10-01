@@ -55,6 +55,8 @@ export type SandboxViolationReason =
   | 'time_limit'
   | 'memory_limit'
   | 'output_limit'
+  /** Action d'écriture (envoi de formulaire) sans `allow_write_actions` (08 §4 mesure 4, tâche 1.6). */
+  | 'write_action_blocked'
   | 'env_not_empty'
   | 'protocol'
   | 'child_crashed';
