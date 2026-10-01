@@ -2,8 +2,9 @@
 // Tâche 1.6 de bout en bout, étage S (Chromium réel) sur base réelle : run mis en file → worker (1.3) → `RunExecutor`
 // de production (`createStrategyExecutor`) avec un vrai pool Chromium et le bac à sable de 1.5. Exercé ici, et nulle part
 // ailleurs : `scriptSpecOf`, `loadInlineScript`, l'egress de l'essai et son coût (barreau dc_proxy chaîné au proxy BYO),
-// `addUsage`, la validation `output_schema` des sorties navigateur, le RGPD (registre du run, `ctx.log` du script écrit
-// dans `run_logs` et masqué, jamais dans le journal du worker), le dataset écrit comme le propriétaire, l'essai tracé.
+// `addUsage`, la validation `output_schema` des sorties navigateur, le RGPD (registre du run, texte de `ctx.log` du script
+// jamais écrit : `run_logs` n'en reçoit que lignes et octets, rien au journal du worker), le dataset écrit comme le
+// propriétaire, l'essai tracé.
 // PostgreSQL : un conteneur propre à ce fichier (le job security n'a pas le globalSetup du projet integration).
 import { randomUUID } from 'node:crypto';
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from '@testcontainers/postgresql';
@@ -119,7 +120,7 @@ afterAll(async () => {
 }, 120_000);
 
 describe('RunExecutor de production, Chromium réel (E2, E3 en script)', () => {
-  test('E3 en script (inline, bac à sable) sur l’annuaire factice : dataset conforme, essai tracé, ctx.log dans run_logs masqué, rien dans le journal du worker', async () => {
+  test('E3 en script (inline, bac à sable) sur l’annuaire factice : dataset conforme, essai tracé, ctx.log réduit à lignes et octets dans run_logs, rien dans le journal du worker', async () => {
     const source = `
       const names = await ctx.page.textAll('tr.person td.name');
       const emails = await ctx.page.textAll('tr.person td.email');
@@ -136,23 +137,50 @@ describe('RunExecutor de production, Chromium réel (E2, E3 en script)', () => {
     const items = await withActor(pool, actorA, (tx) => tx.query<{ item: unknown }>('SELECT item FROM dataset_items WHERE dataset_id = $1 ORDER BY seq', [run.dataset_id]));
     expect(items.rows).toHaveLength(10);
     for (const r of items.rows) expect(validateOutput(SCHEMA_PERSON, r.item)).toEqual({ ok: true });
-    // Journal du script : écrit dans run_logs (masqué par le registre du run et les motifs), jamais en clair.
-    const logs = await pool.query<{ data: { args: string[] } }>("SELECT data FROM run_logs WHERE run_id = $1 AND event = 'sandbox_log'", [run.id]);
+    // Journal du script : run_logs n'en reçoit que des identifiants techniques (lignes, octets), jamais le texte (17 §6).
+    const logs = await pool.query<{ data: unknown }>("SELECT data FROM run_logs WHERE run_id = $1 AND event = 'sandbox_log'", [run.id]);
     expect(logs.rows).toHaveLength(1);
-    expect(logs.rows[0]!.data.args[0]).toBe('premier contact');
+    expect(logs.rows[0]!.data).toEqual({ lines: 1, bytes: expect.any(Number) });
     const runLogText = JSON.stringify(logs.rows);
     const workerText = workerLog.join('\n');
-    for (const motif of ['zz_test_person_001', 'example.invalid', 'Zztest001']) {
+    for (const motif of ['premier contact', 'zz_test_person_001', 'example.invalid', 'Zztest001']) {
       expect(runLogText).not.toContain(motif);
       expect(workerText).not.toContain(motif);
     }
-    expect(runLogText).toContain('[PERSONAL]');
+  }, 120_000);
+
+  test('assert_no_personal_data_in_logs (E3 en script) : ctx.log d’un nom NON émis, d’un nom réécrit et du HTML de l’annuaire → absents de run_logs et du journal du worker', async () => {
+    // Données lues mais jamais émises (registre du run vide pour elles) : seul l'abandon du texte les tient hors de run_logs.
+    const source = `
+      const names = await ctx.page.textAll('tr.person td.name');
+      const html = await ctx.page.content();
+      ctx.log('autres', names.slice(1).join(','));
+      ctx.log(names[2].split(' ').reverse().join(' ').toUpperCase());
+      ctx.log(html);
+      ctx.emit({ name: names[0], email: 'zz_test_emis@example.invalid' });`;
+    const apiId = await insertApi(
+      'zz_test_e3_log_unemitted',
+      { execution: 'playwright', network: 'direct', scriptRef: 'inline', spec: { kind: 'script', allowed_hosts: [PERSONAL], start_url: `http://${PERSONAL}:${client.server.port}/`, source } },
+      SCHEMA_PERSON,
+    );
+    const run = await runOf(apiId);
+    expect(run).toMatchObject({ state: 'succeeded', items: 1 });
+    const all = await pool.query<{ event: string; data: unknown }>('SELECT event, data FROM run_logs WHERE run_id = $1', [run.id]);
+    const sandboxLogs = all.rows.filter((r) => r.event === 'sandbox_log');
+    expect(sandboxLogs).toHaveLength(1);
+    expect(sandboxLogs[0]!.data).toEqual({ lines: 3, bytes: expect.any(Number) });
+    const runLogText = JSON.stringify(all.rows);
+    const workerText = workerLog.join('\n');
+    for (const motif of ['autres', 'Zztest', 'ZZTEST', 'zz_test_person_', 'example.invalid', 'rue du', '+33 1 99', '<html', '<tr']) {
+      expect(runLogText).not.toContain(motif);
+      expect(workerText).not.toContain(motif);
+    }
   }, 120_000);
 
   test.each([
     ['le script échoue après avoir émis', 'throw new Error("zz_test_echec");'],
     ['sortie hors schéma', 'ctx.emit({ name: names[1], email: emails[1], zz_test_extra: true });'],
-  ])('assert_no_personal_data_in_logs (E3 en script, run en échec : %s) : ctx.log de données extraites masqué dans run_logs, rien dans le journal du worker', async (_name, failing) => {
+  ])('assert_no_personal_data_in_logs (E3 en script, run en échec : %s) : ctx.log de données extraites jamais écrit dans run_logs (identifiants techniques seulement), rien dans le journal du worker', async (_name, failing) => {
     const source = `
       const names = await ctx.page.textAll('tr.person td.name');
       const emails = await ctx.page.textAll('tr.person td.email');
@@ -168,12 +196,12 @@ describe('RunExecutor de production, Chromium réel (E2, E3 en script)', () => {
     expect(run).toMatchObject({ state: 'failed', items: 0, dataset_id: null });
     const logs = await pool.query<{ data: unknown }>("SELECT data FROM run_logs WHERE run_id = $1 AND event = 'sandbox_log'", [run.id]);
     expect(logs.rows).toHaveLength(1);
+    expect(logs.rows[0]!.data).toEqual({ lines: 1, bytes: expect.any(Number) });
     const runLogText = JSON.stringify(logs.rows);
-    for (const motif of ['zz_test_person_001', 'example.invalid', 'Zztest001']) {
+    for (const motif of ['premier contact', 'zz_test_person_001', 'example.invalid', 'Zztest001']) {
       expect(runLogText).not.toContain(motif);
       expect(workerLog.join('\n')).not.toContain(motif);
     }
-    expect(runLogText).toContain('[PERSONAL]');
   }, 120_000);
 
   test('assert_subresource_cut_not_strategy_fault (E3 en script) : page de départ en 451 dont le site charge des tiers coupés (pixel, redirection vers un tiers) → network geo_restriction, jamais domain_not_allowed', async () => {

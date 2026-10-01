@@ -19,8 +19,9 @@
 // `domain_pacing.max_requests_per_run` ; au-delà, refus sans violation et sortie tronquée.
 // Actions d'écriture (08 §4 mesure 4) : sans `allow_write_actions`, toute soumission (navigation hors GET/HEAD) est
 // coupée au niveau du contexte de run et imputée au script ; le clic sur un contrôle d'envoi est refusé par le pont.
-// Journal du script (`ctx.log`) et éléments émis : rendus à l'appelant, qui inscrit les éléments au registre de masquage
-// du run puis écrit le journal dans celui du run (masqué, 17 §6), que l'essai réussisse ou non.
+// Journal du script (`ctx.log`) et éléments émis : rendus à l'appelant, en mémoire. Les éléments sont inscrits au registre
+// de masquage du run, que l'essai réussisse ou non ; le texte du journal n'est jamais écrit (ni `run_logs` ni journal du
+// worker : seuls le nombre de lignes et les octets le sont, 17 §6).
 import type { FailureClass, SandboxEngine, SandboxLimits, SandboxViolation } from '@runtime/core';
 import { classifyExchange, classifyTransportError, type DeclarativeRunResult, type ExecFailure, type HttpExchange, type RequestPacer } from '@runtime/core/exec';
 import { DomainNotAllowedError, guardedGoto, type BrowserEgress, type NetworkSession, type SsrfGuard } from '@runtime/core/net';
@@ -31,7 +32,7 @@ import type { BrowserPool } from '../browser/pool.js';
 import { chainRoot, hostAllowed, isMainNavigation, openRunContext, trackStrategyRequests } from '../browser/run-context.js';
 import { DEFAULT_SANDBOX_LIMITS } from '../sandbox/engine.js';
 import { createSandboxBridges, SandboxBridgeError, type BridgeResponse } from '../sandbox/bridges.js';
-import { ACCESS_REFUSED, createPageBridge, hostViolationWatch } from './script.js';
+import { ACCESS_REFUSED, createPageBridge, hostViolationWatch, issuedForWatch } from './script.js';
 
 const NAVIGATION_TIMEOUT_MS = 30_000;
 const MAX_RESPONSE_BYTES = 5_000_000;
@@ -101,11 +102,14 @@ export type ScriptRunOutcome = {
   readonly violations: readonly SandboxViolation[];
   readonly killed: boolean;
   readonly killLatencyMs?: number;
-  /** Lignes de `ctx.log` du script (texte libre non fiable) : à écrire dans le journal du run, jamais ailleurs. */
+  /**
+   * Lignes de `ctx.log` du script (texte libre non fiable, données lues comprises) : en mémoire pour l'essai seulement
+   * (réparation), JAMAIS écrites en base ni au journal du worker ; `run_logs` n'en reçoit que le compte et la taille.
+   */
   readonly logs: readonly (readonly string[])[];
   /**
    * Tous les éléments émis par le script, y compris quand l'essai échoue (jamais écrits alors) : l'appelant les inscrit
-   * au registre de masquage du run AVANT d'écrire `logs` (D-28, 17 §6).
+   * au registre de masquage du run (D-28, 17 §6).
    */
   readonly items: readonly unknown[];
 };
@@ -176,10 +180,20 @@ export function runScriptExecutor(options: ScriptExecutorOptions): Promise<Scrip
     const host = hostViolationWatch();
     /** État du guet à l'émission de chaque requête Chromium (le code du script pouvait-il l'avoir lancée ?). */
     const issued = new WeakMap<Request, boolean>();
+    /** Requêtes initiales qui sont une navigation du cadre principal (relevé à l'émission). */
+    const mainNavigations = new WeakSet<Request>();
+    /**
+     * État d'émission transmis au guet : jamais appris d'un saut de redirection, d'une requête de la stratégie
+     * (`ctx.page.goto`, clic du script) ni d'une navigation du cadre principal (`issuedForWatch`, D-29).
+     */
+    const issuedState = (request: Request): boolean | undefined => {
+      const root = chainRoot(request);
+      return issuedForWatch(issued.get(root), { redirectHop: root !== request, strategy: strategy.owns(root), mainNavigation: mainNavigations.has(root) });
+    };
     const rc = await openRunContext(browser, {
       egressServer: options.egress.server,
       allowedHosts: options.allowedHosts,
-      onViolation: (h, request) => host.report(h, 'domain_not_allowed', request === undefined ? undefined : issued.get(chainRoot(request))),
+      onViolation: (h, request) => host.report(h, 'domain_not_allowed', request === undefined ? undefined : issuedState(request)),
       admit: async (request) => {
         if (refusal !== undefined) return false;
         // Soumission (navigation hors GET/HEAD) sans `allow_write_actions` : coupée, imputée au script.
@@ -196,9 +210,16 @@ export function runScriptExecutor(options: ScriptExecutorOptions): Promise<Scrip
     const strategy = trackStrategyRequests(rc.context, options.allowedHosts);
     rc.context.on('request', (request) => {
       const root = chainRoot(request);
-      if (root === request) issued.set(request, host.armed());
-      // Saut de redirection hors des domaines de l'API (que `context.route` ne voit pas) : imputé selon la requête
-      // initiale ; le proxy d'egress le refuse de toute façon.
+      if (root === request) {
+        issued.set(request, host.armed());
+        try {
+          if (isMainNavigation(rc.page)(request)) mainNavigations.add(request);
+        } catch {
+          // Requête sans cadre : jamais une navigation de la page du run.
+        }
+      }
+      // Saut de redirection hors des domaines de l'API (que `context.route` ne voit pas) : imputé selon l'état de la
+      // requête initiale, jamais appris dans la ligne de base ; le proxy d'egress le refuse de toute façon.
       else if (!hostAllowed(request.url(), options.allowedHosts)) {
         let target = '?';
         try {
@@ -206,7 +227,7 @@ export function runScriptExecutor(options: ScriptExecutorOptions): Promise<Scrip
         } catch {
           // URL illisible : « ? ».
         }
-        host.report(target, 'domain_not_allowed', issued.get(root));
+        host.report(target, 'domain_not_allowed', issuedState(request));
       }
     });
     // Garde de classification des réponses de la page (INV6) : tâches en cours, document à classer sur son contenu.

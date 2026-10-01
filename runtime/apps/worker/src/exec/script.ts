@@ -9,7 +9,8 @@
 //   d'egress de l'essai (garde SSRF, verrou de domaines) et par `context.route('**')`. Imputation des requêtes coupées
 //   par la politique de domaines (`hostViolationWatch`) : une fois le code du script entré dans le document (premier
 //   `evaluate`), une requête coupée vers un hôte que le site n'a pas lui-même contacté (ligne de base : hôtes des
-//   requêtes émises guet désarmé, jamais pendant un clic ou une navigation menés alors que le code injecté vit) est une
+//   requêtes émises guet désarmé, jamais pendant un clic ou une navigation menés alors que le code injecté vit, jamais un
+//   saut de redirection, une requête de la stratégie ni une navigation du cadre principal) est une
 //   `sandbox_violation` : l'enfant est tué aussitôt (`watch` du moteur), même si la page avale l'erreur ou n'attend pas
 //   la réponse. Les sous-ressources tierces du site (mesure d'audience, CDN) restent coupées (0 requête) sans verdict
 //   contre le script ; seule la validation d'un nouveau document dans le cadre principal désarme le guet.
@@ -49,7 +50,8 @@ type HostViolationReason = Extract<SandboxViolationReason, 'domain_not_allowed' 
  * hors restauration du cache de retour) : un clic ou une navigation menés par l'hôte ne désarment rien, le code injecté
  * reste vivant tant que son document l'est.
  * Ligne de base (tiers du site, jamais imputés) : apprise SEULEMENT des requêtes émises guet désarmé (`issuedArmed`
- * faux, relevé à l'émission de la requête par Chromium). Une requête émise guet armé vers un hôte hors de la ligne de
+ * faux, relevé à l'émission de la requête par Chromium), et jamais d'un saut de redirection, d'une requête de la
+ * stratégie ni d'une navigation du cadre principal (`issuedForWatch`). Une requête émise guet armé vers un hôte hors de la ligne de
  * base est imputée. Un refus sans requête Chromium associée (proxy d'egress, WebSocket) n'apprend jamais : il est imputé
  * si le guet est armé et l'hôte hors ligne de base, ignoré sinon.
  */
@@ -123,6 +125,28 @@ export function hostViolationWatch(): HostViolationWatch {
     imputed: () => imputed,
     lastImputed: () => last,
   };
+}
+
+/** Origine d'une requête Chromium, relevée par l'exécuteur à son émission. */
+export type IssuedOrigin = {
+  /** Saut de redirection (la requête initiale de la chaîne en est une autre). */
+  readonly redirectHop: boolean;
+  /** Requête de la stratégie (`StrategyRequests.owns` : `ctx.page.goto`, navigation d'un clic du script). */
+  readonly strategy: boolean;
+  /** Navigation du cadre principal de la page du run. */
+  readonly mainNavigation: boolean;
+};
+
+/**
+ * État d'émission transmis à `HostViolationWatch.report`. Seule une sous-ressource du site émise guet désarmé (`false`)
+ * peut entrer dans la ligne de base : un saut de redirection, une requête de la stratégie ou une navigation du cadre
+ * principal émis guet désarmé n'apprennent jamais (`undefined` : imputés si le guet est armé et l'hôte hors ligne de
+ * base, ignorés sinon). Sans cela, `ctx.page.goto` vers une redirection ouverte avant tout `evaluate` blanchirait l'hôte
+ * du saut, puis un `evaluate` pourrait y exfiltrer sans verdict (D-29).
+ */
+export function issuedForWatch(issuedArmed: boolean | undefined, origin: IssuedOrigin): boolean | undefined {
+  if (issuedArmed === false && (origin.redirectHop || origin.strategy || origin.mainNavigation)) return undefined;
+  return issuedArmed;
 }
 
 export type PageBridgeOptions = {
@@ -310,7 +334,9 @@ export function createPageBridge(options: PageBridgeOptions): NonNullable<Sandbo
           if (!options.allowWriteActions && (await isSubmitControl(selector, timeout))) {
             throw new SandboxBridgeError('write_action_blocked', true, 'submit');
           }
-          await page.click(selector, { timeout });
+          // Navigation lancée par un clic du script : requête de la stratégie, comme `ctx.page.goto`.
+          const click = () => page.click(selector, { timeout });
+          await (options.strategy === undefined ? click() : options.strategy.during(isMainNavigation(page), click));
           return check({ url: page.url() });
         }
         case 'evaluate': {

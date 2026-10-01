@@ -8,9 +8,10 @@
 //    écrite en dataset comme le propriétaire ; `max_cost_usd` tenu PENDANT l'essai (requête ou tunnel refusé au-delà)
 //    → `run_budget_exceeded` ; verrou de domaines de l'API (`allowed_hosts`) à chaque saut, au niveau réseau ;
 // 5. RGPD (D-28) : chaque item extrait inscrit au registre de masquage du run (`ctx.personal`), sujets effacés retirés
-//    (`ctx.excludeSubjects`) avant collecte et avant toute écriture du dataset ; journaux du run par `ctx.log`, y compris
-//    le `ctx.log(...)` d'un script E3 (texte libre, écrit APRÈS l'inscription au registre de tous les éléments émis,
-//    même quand l'essai échoue, donc masqué) : le journal du worker n'en reçoit que la taille (17 §6).
+//    (`ctx.excludeSubjects`) avant collecte et avant toute écriture du dataset ; journaux du run par `ctx.log`. Le
+//    `ctx.log(...)` d'un script E3 (texte libre d'un code généré, non fiable, qui peut contenir des données lues mais
+//    jamais émises, que le registre du run ne connaît pas) n'est JAMAIS écrit : `run_logs` comme le journal du worker
+//    n'en reçoivent que des identifiants techniques (nombre de lignes, octets), 17 §6 « aucune donnée personnelle ».
 import {
   validateDeclarativeSpec,
   validateOutput,
@@ -72,8 +73,9 @@ type Outcome = {
   result: DeclarativeRunResult;
   usage: NetworkUsage | null;
   violations?: readonly SandboxViolation[];
-  scriptLogs?: readonly (readonly string[])[];
-  /** Tous les éléments émis par un script E3, essai réussi ou non (registre de masquage avant le journal). */
+  /** Journal du script E3 : nombre de lignes et octets seulement (le texte n'est jamais écrit, 17 §6). */
+  scriptLog?: { readonly lines: number; readonly bytes: number };
+  /** Tous les éléments émis par un script E3, essai réussi ou non (inscrits au registre de masquage du run). */
   scriptItems?: readonly unknown[];
 };
 
@@ -201,7 +203,8 @@ export function createStrategyExecutor(deps: StrategyExecutorDeps): RunExecutor 
     if (result.ok && result.records.some((r) => !validateOutput(target.api.outputSchema, r).ok)) {
       result = { ok: false, failure: { failure_class: 'extraction', retryable: false, detail: 'schema_mismatch' }, pages: result.pages, requests: result.requests };
     }
-    return { result, usage: null, violations: run.violations, scriptLogs: run.logs, scriptItems: run.items };
+    const bytes = run.logs.reduce((sum, args) => sum + Buffer.byteLength(JSON.stringify(args)), 0);
+    return { result, usage: null, violations: run.violations, scriptLog: { lines: run.logs.length, bytes }, scriptItems: run.items };
   };
 
   const execute = async (ctx: RunCtx, target: RunTarget, strategy: NonNullable<RunTarget['strategy']>): Promise<Outcome> => {
@@ -296,12 +299,13 @@ export function createStrategyExecutor(deps: StrategyExecutorDeps): RunExecutor 
         result = { ...result, records: kept };
       }
     }
-    // Journal du script E3 : après l'inscription au registre du run de TOUS les éléments émis, essai réussi ou non
-    // (schéma non conforme, violation, refus, plafond…), pour que `ctx.log` masque aussi les noms qu'il contient.
-    if ((outcome.scriptLogs ?? []).length > 0) {
-      for (const item of outcome.scriptItems ?? []) ctx.personal.addFromItem(target.api.outputSchema, item);
+    // Éléments émis par un script E3, essai réussi ou non (schéma non conforme, violation, refus, plafond…) : inscrits au
+    // registre du run, qui masque aussi `error_detail` et toute écriture ultérieure de `run_logs`.
+    for (const item of outcome.scriptItems ?? []) ctx.personal.addFromItem(target.api.outputSchema, item);
+    // Journal du script E3 : identifiants techniques seulement, jamais son texte (17 §6).
+    if (outcome.scriptLog !== undefined && outcome.scriptLog.lines > 0) {
+      await ctx.log('info', 'sandbox_log', { lines: outcome.scriptLog.lines, bytes: outcome.scriptLog.bytes });
     }
-    for (const args of outcome.scriptLogs ?? []) await ctx.log('info', 'sandbox_log', { args });
     const proxyUsd = usage?.costUsd ?? 0;
     await ctx.recordAttempt({
       execution: strategy.execution,

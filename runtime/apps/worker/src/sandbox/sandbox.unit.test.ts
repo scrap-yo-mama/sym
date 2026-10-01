@@ -115,7 +115,7 @@ describe('ponts log, emit, violation', () => {
     expect(logged.some((l) => l.event === 'sandbox_violation' && l.reason === 'forbidden_global')).toBe(true);
   });
 
-  test('assert_no_personal_data_in_logs (ctx.log du script) : le texte va au journal du run (onLog), jamais au journal du worker', () => {
+  test('assert_no_personal_data_in_logs (ctx.log du script) : le texte reste en mémoire (onLog), jamais au journal du worker', () => {
     const lines: string[] = [];
     const logger = pino({ level: 'trace' }, { write: (s: string) => void lines.push(s) });
     const runLog: (readonly string[])[] = [];

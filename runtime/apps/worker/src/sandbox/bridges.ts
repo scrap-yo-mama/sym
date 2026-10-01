@@ -63,9 +63,9 @@ export type SandboxBridgeOptions = {
   /** Plafond du journal du script ; au-delà, violation `output_limit` (défaut 64 Kio). */
   maxLogBytes?: number;
   /**
-   * Destination des lignes de `ctx.log` (texte libre du script, qui peut contenir des données extraites) : le journal
-   * du run (`ctx.log`, masqué par le registre du run, rétention et effacement de `run_logs`). Le journal du worker
-   * ne reçoit jamais ce texte, seulement sa taille (17 §6, « identifiants techniques uniquement »).
+   * Destination des lignes de `ctx.log` (texte libre du script, qui peut contenir des données extraites) : la mémoire
+   * de l'essai seulement. Ni le journal du worker ni `run_logs` ne reçoivent jamais ce texte, seulement le nombre de
+   * lignes et la taille (17 §6, « identifiants techniques uniquement »).
    */
   onLog?: (args: readonly string[]) => void;
   /**

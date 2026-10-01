@@ -123,6 +123,8 @@ export type StrategyRequests = {
   during<T>(match: (request: Request) => boolean, fn: () => Promise<T>): Promise<T>;
   /** Vrai si une requête de la stratégie, ou l'un de ses sauts, visait un hôte hors des domaines de l'API. */
   cut(): boolean;
+  /** Vrai si la chaîne de `request` part d'une requête de la stratégie (à lire après l'écouteur `request` de ce suivi). */
+  owns(request: Request): boolean;
 };
 
 export function trackStrategyRequests(context: BrowserContext, allowedHosts: readonly string[]): StrategyRequests {
@@ -157,6 +159,7 @@ export function trackStrategyRequests(context: BrowserContext, allowedHosts: rea
       }
     },
     cut: () => cut,
+    owns: (request) => roots.has(chainRoot(request)),
   };
 }
 

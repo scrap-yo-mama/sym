@@ -4,7 +4,7 @@
 import type { SandboxViolation } from '@runtime/core';
 import { SsrfGuard, createSsrfPolicy } from '@runtime/core/net';
 import { describe, expect, test } from 'vitest';
-import { createPageBridge, hostViolationWatch, PAGE_OPERATIONS } from './script.js';
+import { createPageBridge, hostViolationWatch, issuedForWatch, PAGE_OPERATIONS } from './script.js';
 
 const guard = new SsrfGuard({ policy: createSsrfPolicy({}) });
 
@@ -124,6 +124,29 @@ describe('imputation des requêtes coupées (hostViolationWatch)', () => {
     w.endEvaluate();
     w.report('zz_test_exfil3.example');
     expect(seen).toHaveLength(3);
+  });
+
+  test('assert_sandbox (blanchiment) : un saut de redirection, une requête de la stratégie (ctx.page.goto, clic) ou une navigation du cadre principal émis guet désarmé n’entrent jamais dans la ligne de base', () => {
+    const { w, seen } = setup();
+    const none = { redirectHop: false, strategy: false, mainNavigation: false };
+    // Avant tout evaluate : ctx.page.goto vers une redirection ouverte (saut hors API), navigation d'un clic du script.
+    w.report('zz_test_hop.example', 'domain_not_allowed', issuedForWatch(false, { redirectHop: true, strategy: true, mainNavigation: true }));
+    w.report('zz_test_strategy.example', 'domain_not_allowed', issuedForWatch(false, { ...none, strategy: true }));
+    w.report('zz_test_nav.example', 'domain_not_allowed', issuedForWatch(false, { ...none, mainNavigation: true }));
+    w.report('zz_test_site_hop.example', 'domain_not_allowed', issuedForWatch(false, { ...none, redirectHop: true }));
+    // Témoin : sous-ressource tierce du site, émise guet désarmé, apprise.
+    w.report('zz_test_cdn.example', 'domain_not_allowed', issuedForWatch(false, none));
+    expect(seen).toEqual([]);
+    // Le code du script entre dans la page puis exfiltre vers chacun : seul le tiers du site reste hors verdict.
+    w.beginEvaluate();
+    w.endEvaluate();
+    for (const h of ['zz_test_hop.example', 'zz_test_strategy.example', 'zz_test_nav.example', 'zz_test_site_hop.example', 'zz_test_cdn.example']) {
+      w.report(h, 'domain_not_allowed', issuedForWatch(true, none));
+    }
+    expect(seen.map((v) => v.detail)).toEqual(['zz_test_hop.example', 'zz_test_strategy.example', 'zz_test_nav.example', 'zz_test_site_hop.example']);
+    // Émis guet armé ou sans état relevé : inchangé.
+    expect(issuedForWatch(true, { redirectHop: true, strategy: true, mainNavigation: true })).toBe(true);
+    expect(issuedForWatch(undefined, none)).toBeUndefined();
   });
 
   test('assert_write_action_blocked (imputation) : un evaluate en vol pendant une navigation de l’hôte garde le verdict ; soumission coupée imputée dès qu’un code ou un clic du script est en jeu', () => {
