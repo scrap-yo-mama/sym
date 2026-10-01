@@ -1,14 +1,17 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Machine à états pure et déterministe : (état, événement, horloge injectée) -> (état, transitions). Aucune I/O.
+import type { FailureClass } from '../model/enums.js';
 import { quietPeriodMs, resetsCleanStreak, STATUS_THRESHOLDS } from './thresholds.js';
 import {
   BACKOFF_CLASSES,
   BLOCKING_CLASSES,
   INVESTIGATION_ACTION_CLASSES,
+  INVESTIGATION_ACTION_REASONS,
   REPAIR_ACTION_CLASSES,
+  REPAIR_ACTION_REASONS,
+  type ActionReason,
   type ApiStatusState,
   type DegradedSignal,
-  type FailureClass,
   type MachineContext,
   type Status,
   type StatusEventInput,
@@ -77,6 +80,9 @@ export function applyStatusEvent(state: ApiStatusState, event: StatusEventInput,
     case 'run_failed':
       return onRunFailed(state, event.failureClass, event.httpStatus, ctx, now);
 
+    case 'run_stopped':
+      return onRunFailed(state, event.reason, undefined, ctx, now);
+
     case 'run_succeeded':
       return onRunSucceeded(state, event.signals, ctx, now);
 
@@ -128,9 +134,10 @@ function signalPatch(now: number, resetStreak: boolean): Partial<ApiStatusState>
   return resetStreak ? { cleanStreak: 0, lastSignalAt: now } : { lastSignalAt: now };
 }
 
+/** `cls` : classe d'échec (`run_failed`) ou code de raison sans classe (`run_stopped`) ; il devient la raison journalisée. */
 function onRunFailed(
   state: ApiStatusState,
-  cls: FailureClass,
+  cls: FailureClass | ActionReason,
   httpStatus: number | undefined,
   ctx: MachineContext,
   now: number,
@@ -141,10 +148,11 @@ function onRunFailed(
   }
   const { status } = state;
   const blocking = includes(BLOCKING_CLASSES, cls);
-  const repairAction = includes(REPAIR_ACTION_CLASSES, cls);
+  const repairAction = includes(REPAIR_ACTION_CLASSES, cls) || includes(REPAIR_ACTION_REASONS, cls);
+  const investigationAction = includes(INVESTIGATION_ACTION_CLASSES, cls) || includes(INVESTIGATION_ACTION_REASONS, cls);
 
   if (status === 'enquete') {
-    if (includes(INVESTIGATION_ACTION_CLASSES, cls)) return apply(state, ctx, [{ id: 3, to: 'action_requise', reason: cls, patch: { previousStatus: null } }]);
+    if (investigationAction) return apply(state, ctx, [{ id: 3, to: 'action_requise', reason: cls, patch: { previousStatus: null } }]);
     if (blocking) return apply(state, ctx, [{ id: 4, to: 'bloquee', reason: cls, patch: { previousStatus: null } }]);
     return reject(state, 'class_not_applicable');
   }
@@ -165,8 +173,8 @@ function onRunFailed(
     if (repairAction) return apply(state, ctx, [into, { id: 14, to: 'action_requise', reason: cls }]);
     return apply(state, ctx, [into]);
   }
-  // rate_limited (ralentir, disjoncteur), llm_*, tunnel_offline, proxy_not_configured, robots_unreachable (abstention) :
-  // aucune transition dans les 21.
+  // rate_limited (ralentir, disjoncteur), llm_*, robots_unreachable (abstention), run_budget_exceeded, budget_exceeded,
+  // et les raisons tunnel_offline, proxy_not_configured hors enquête : aucune transition dans les 21.
   return unchanged(state);
 }
 

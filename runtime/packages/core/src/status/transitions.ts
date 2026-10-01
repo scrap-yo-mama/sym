@@ -1,6 +1,14 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Les 21 transitions de 04 §6 : table unique, source des noms de tests `transition_NN_*`.
-import type { Status, TransitionId } from './types.js';
+import {
+  BLOCKING_CLASSES as BLOCKING,
+  INVESTIGATION_ACTION_CLASSES,
+  INVESTIGATION_ACTION_REASONS,
+  REPAIR_ACTION_CLASSES,
+  REPAIR_ACTION_REASONS,
+  type Status,
+  type TransitionId,
+} from './types.js';
 
 export type TransitionDef = {
   id: TransitionId;
@@ -8,19 +16,17 @@ export type TransitionDef = {
   to: Status;
   /** Suffixe stable du test nommé `transition_NN_<slug>`. */
   slug: string;
-  /** Codes de raison stables que cette transition peut porter. */
+  /** Codes de raison stables que cette transition peut porter : classes d'échec (`FailureClass`) ou codes propres à la machine. */
   reasons: readonly string[];
 };
 
 const SIGNALS = [
   'retried', 'escalated', 'repaired', 'optional_fields_missing', 'volume_anomaly', 'pagination_short', 'slow', 'cost_anomaly',
 ] as const;
-const BLOCKING = ['blocked_by_protection', 'forbidden', 'robots_disallowed'] as const;
 const REINVESTIGATION = ['reinvestigate_manual', 'output_schema_changed', 'force_investigate'] as const;
-/** Classes d'un échec non transitoire de rejeu (10, 11) : y compris les refus, qui repartent aussitôt en 14 ou 15. */
+/** Échec non transitoire de rejeu (10, 11) : y compris les refus, qui repartent aussitôt en 14 ou 15. */
 const REPLAY_FAILURES = [
-  'extraction', 'code_error', 'network', 'not_found',
-  'auth_required', 'payment_required', 'account_limit', 'challenge_in_tunnel', ...BLOCKING,
+  'extraction', 'code_error', 'network', 'not_found', ...REPAIR_ACTION_CLASSES, ...REPAIR_ACTION_REASONS, ...BLOCKING,
 ] as const;
 
 export const TRANSITIONS: readonly TransitionDef[] = [
@@ -28,7 +34,7 @@ export const TRANSITIONS: readonly TransitionDef[] = [
   { id: 2, from: 'enquete', to: 'erreur', slug: 'enquete_to_erreur', reasons: ['investigation_budget_exhausted', 'robots_unreachable'] },
   {
     id: 3, from: 'enquete', to: 'action_requise', slug: 'enquete_to_action_requise',
-    reasons: ['auth_required', 'payment_required', 'account_limit', 'proxy_not_configured', 'tunnel_offline'],
+    reasons: [...INVESTIGATION_ACTION_CLASSES, ...INVESTIGATION_ACTION_REASONS],
   },
   { id: 4, from: 'enquete', to: 'bloquee', slug: 'enquete_to_bloquee', reasons: BLOCKING },
   { id: 5, from: 'sain', to: 'warning', slug: 'sain_to_warning_degraded', reasons: SIGNALS },
@@ -42,7 +48,7 @@ export const TRANSITIONS: readonly TransitionDef[] = [
   { id: 13, from: 'reparation', to: 'erreur', slug: 'reparation_to_erreur', reasons: ['repair_budget_exhausted', 'repair_repeated_patch'] },
   {
     id: 14, from: 'reparation', to: 'action_requise', slug: 'reparation_to_action_requise',
-    reasons: ['auth_required', 'payment_required', 'account_limit', 'challenge_in_tunnel'],
+    reasons: [...REPAIR_ACTION_CLASSES, ...REPAIR_ACTION_REASONS],
   },
   { id: 15, from: 'reparation', to: 'bloquee', slug: 'reparation_to_bloquee', reasons: BLOCKING },
   { id: 16, from: 'erreur', to: 'enquete', slug: 'erreur_to_enquete', reasons: ['backoff', 'reinvestigate_manual', 'force_investigate'] },

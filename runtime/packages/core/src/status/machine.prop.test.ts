@@ -4,6 +4,7 @@
 //   STATUS_MODEL_SEED=<graine> STATUS_MODEL_PATH=<chemin> pnpm vitest run --project unit packages/core/src/status/machine.prop
 import fc from 'fast-check';
 import { describe, test } from 'vitest';
+import type { FailureClass } from '../model/enums.js';
 import {
   applyStatusEvent,
   gateRun,
@@ -12,8 +13,8 @@ import {
   TRANSITIONS,
   withStale,
   type ApiStatusState,
+  type ActionReason,
   type DegradedSignal,
-  type FailureClass,
   type ReinvestigationTrigger,
   type Status,
   type StatusEventInput,
@@ -49,9 +50,11 @@ function modelStep(m: ModelState, ev: StatusEventInput, now: number): Expected {
       if (m.status !== 'enquete') return same;
       if (ev.cause === 'budget_exhausted' && m.prev !== null) return go([21], m.prev, 'reinvestigation_failed', { prev: null });
       return go([2], 'erreur', ev.cause === 'robots_unreachable' ? 'robots_unreachable' : 'investigation_budget_exhausted', { prev: null });
-    case 'run_failed': {
-      const c: string = ev.failureClass;
-      if (c === 'network' && [401, 403, 429].includes(ev.httpStatus ?? 0)) return same;
+    case 'run_failed':
+    case 'run_stopped': {
+      // Classe d'échec ou code de raison sans classe : même aiguillage, la valeur devient la raison journalisée.
+      const c: string = ev.type === 'run_failed' ? ev.failureClass : ev.reason;
+      if (ev.type === 'run_failed' && c === 'network' && [401, 403, 429].includes(ev.httpStatus ?? 0)) return same;
       if (m.status === 'enquete') {
         if (ACTION_INVESTIGATION.has(c)) return go([3], 'action_requise', c, { prev: null });
         if (BLOCK.has(c)) return go([4], 'bloquee', c, { prev: null });
@@ -203,11 +206,21 @@ const signalsArb = fc.subarray<DegradedSignal>(
 );
 const failureArb = fc.constantFrom<FailureClass>(
   'transient', 'extraction', 'code_error', 'network', 'auth_required', 'forbidden', 'blocked_by_protection', 'robots_disallowed',
-  'payment_required', 'account_limit', 'challenge_in_tunnel', 'proxy_not_configured', 'tunnel_offline', 'rate_limited', 'not_found',
-  'robots_unreachable', 'llm_refused',
+  'payment_required', 'account_limit', 'rate_limited', 'not_found', 'robots_unreachable', 'run_budget_exceeded', 'budget_exceeded',
+  'llm_refused',
 );
+const reasonArb = fc.constantFrom<ActionReason>('challenge_in_tunnel', 'proxy_not_configured', 'tunnel_offline');
 const httpArb = fc.constantFrom<number | undefined>(undefined, undefined, 401, 403, 429, 451, 500);
 const triggerArb = fc.constantFrom<'schedule' | 'on_demand'>('schedule', 'on_demand');
+/** Run en échec : avec une classe (`run_failed`) ou arrêté pour une raison sans classe (`run_stopped`). */
+/** Pondéré comme le tirage unique d'avant la séparation classes / raisons (16 classes, 3 raisons). */
+const failedRunArb = fc.oneof(
+  {
+    weight: 16,
+    arbitrary: fc.tuple(failureArb, httpArb).map(([c, h]): StatusEventInput => ({ type: 'run_failed', failureClass: c, ...(h === undefined ? {} : { httpStatus: h }) })),
+  },
+  { weight: 3, arbitrary: reasonArb.map((reason): StatusEventInput => ({ type: 'run_stopped', reason })) },
+);
 
 type Cmd = fc.Command<Model, Real>;
 const cmd = (label: string, run: (m: Model, r: Real) => void): Cmd => ({
@@ -221,9 +234,7 @@ const cmd = (label: string, run: (m: Model, r: Real) => void): Cmd => ({
 const commandArbs = [
   triggerArb.map((t) => cmd(`CleanRun(${t})`, (m, r) => drivenRun(m, r, { type: 'run_succeeded', signals: [] }, t))),
   fc.tuple(signalsArb, triggerArb).map(([s, t]) => cmd(`DegradedRun(${s.join('+')},${t})`, (m, r) => drivenRun(m, r, { type: 'run_succeeded', signals: s }, t))),
-  fc.tuple(failureArb, httpArb, triggerArb).map(([c, h, t]) =>
-    cmd(`FailedRun(${c},${String(h)},${t})`, (m, r) => drivenRun(m, r, { type: 'run_failed', failureClass: c, ...(h === undefined ? {} : { httpStatus: h }) }, t)),
-  ),
+  fc.tuple(failedRunArb, triggerArb).map(([e, t]) => cmd(`FailedRun(${JSON.stringify(e)},${t})`, (m, r) => drivenRun(m, r, e, t))),
   triggerArb.map((t) => cmd(`VersionRollback(${t})`, (m, r) => drivenRun(m, r, { type: 'version_rollback' }, t))),
   fc.constantFrom<StatusEventInput>({ type: 'repair_succeeded' }, { type: 'repair_failed', cause: 'budget_exhausted' }, { type: 'repair_failed', cause: 'repeated_patch' })
     .map((e) => cmd(`RepairResult(${JSON.stringify(e)})`, (m, r) => drive(m, r, e))),

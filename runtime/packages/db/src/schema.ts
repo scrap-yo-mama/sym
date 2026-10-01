@@ -12,6 +12,7 @@ import {
   RUN_TRIGGERS,
   STRATEGY_CREATORS,
   VISIBILITIES,
+  type AttemptResult,
   type FailureClass,
 } from '@runtime/core';
 import { sql } from 'drizzle-orm';
@@ -429,7 +430,7 @@ export const runAttempts = pgTable(
     projectId: projectId(),
     execution: text('execution', { enum: EXECUTIONS }).notNull(),
     network: text('network', { enum: NETWORKS }).notNull(),
-    resultClass: text('result_class'),
+    resultClass: text('result_class').$type<AttemptResult>(), // CHECK : 0006_failure_class_unify
     estCostUsd: usd('est_cost_usd'),
     costUsd: usd('cost_usd').notNull().default('0'),
     ms: integer('ms'),
