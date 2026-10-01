@@ -130,7 +130,7 @@ describe('assert_a11y_axe_clean : la gate axe couvre tous les écrans, thèmes e
     expect(tabs).toEqual([...API_TABS]);
     // Les états qui ne sont pas l'écran nominal : vide, erreur, sans résultat, coupure du flux, enquête en direct, confirmation.
     const ids = SCREENS.map((screen: { id: string }) => screen.id);
-    for (const id of ['catalog-empty', 'catalog-error', 'catalog-no-match', 'catalog-stream-down', 'new-api-investigating', 'api-sain-revert-confirm', 'login-error']) expect(ids).toContain(id);
+    for (const id of ['catalog-empty', 'catalog-error', 'catalog-no-match', 'catalog-stream-down', 'new-api-investigating', 'api-sain-revert-confirm', 'login-error', 'api-sain-launch-started', 'api-sain-runs-relaunch', 'api-sain-runs-items', 'api-sain-strategy-compare', 'api-sain-replay']) expect(ids).toContain(id);
   });
 
   test('axe tourne avec les quatre jeux de balises de 06 § 1, en clair et en sombre, en en et en fr, et refuse toute violation', () => {
@@ -198,5 +198,62 @@ describe('assert_contrast_tokens : le test de jetons existe et couvre les deux t
     expect(tokens).toContain('const NON_TEXT = 3');
     expect(tokens).toMatch(/\['light', 'dark'\]/);
     expect(tokens).toContain('STATUS_TONE');
+  });
+});
+
+// --- Bordure des contrôles de formulaire (WCAG 1.4.11, 3:1) : `--border` (1,26:1 en clair) est décoratif, `--input` fait 3:1 ---
+
+/** Balises ouvrantes `<tag …>` d'un gabarit, en sautant les `>` des valeurs entre guillemets (`@change="(e) => …"`). */
+function openingTags(template: string, tags: string[]): string[] {
+  const found: string[] = [];
+  for (const start of template.matchAll(new RegExp(`<(${tags.join('|')})(?=[\\s/>])`, 'g'))) {
+    let quote = '';
+    for (let at = (start.index ?? 0) + start[0].length; at < template.length; at += 1) {
+      const char = template[at] ?? '';
+      if (quote) quote = char === quote ? '' : quote;
+      else if (char === '"' || char === "'") quote = char;
+      else if (char === '>') {
+        found.push(template.slice(start.index, at + 1));
+        break;
+      }
+    }
+  }
+  return found;
+}
+
+/** Classes d'une balise : `class="…"` et chaque constante `const xxxClass = '…'` du fichier que `:class="xxxClass"` désigne. */
+function classesOf(tag: string, script: string): string {
+  const literal = /\sclass="([^"]*)"/.exec(tag)?.[1] ?? '';
+  const bound = /\s:class="([A-Za-z_]\w*)"/.exec(tag)?.[1];
+  const constant = bound ? new RegExp(`const ${bound}\\s*=\\s*('[^']*'|"[^"]*"|\`[^\`]*\`)`).exec(script)?.[1] ?? '' : '';
+  return `${literal} ${constant}`;
+}
+
+/** Contrôles de saisie dessinés avec une bordure sans `border-input` : champs, listes et zones de texte natifs (cases et boutons radio : widgets du navigateur, sans bordure de la console). */
+function controlsWithoutInputBorder(file: string): string[] {
+  const text = readFileSync(file, 'utf8');
+  // Les constantes de classes partagées (lib/classes.ts) sont importées : on les lit aussi.
+  const script = `${text.slice(0, text.indexOf('<template>'))}\n${readFileSync(join(webSrc, 'lib/classes.ts'), 'utf8')}`;
+  return openingTags(templateOf(file), ['input', 'select', 'textarea'])
+    .filter((tag) => !/\stype="(checkbox|radio|hidden)"/.test(tag))
+    .filter((tag) => !/\bborder-input\b/.test(classesOf(tag, script)))
+    .map((tag) => `${rel(file)} : ${tag.replace(/\s+/g, ' ').slice(0, 90)}`);
+}
+
+describe('assert_contrast_tokens : bordure des contrôles de formulaire', () => {
+  test('la détection voit un champ sans border-input et laisse passer les autres (classe littérale ou constante, `>` dans un gestionnaire)', () => {
+    const tags = openingTags('<div><select id="a" @change="(e) => go(e)" :class="selectClass"><textarea class="border border-input"/><input type="checkbox"></div>', ['input', 'select', 'textarea']);
+    expect(tags.map((tag) => /^<\w+/.exec(tag)?.[0])).toEqual(['<select', '<textarea', '<input']);
+    expect(tags[0]).toContain('=> go(e)');
+    expect(classesOf(tags[0] ?? '', "const selectClass = 'h-9 border border-input'")).toContain('border-input');
+    expect(classesOf(tags[1] ?? '', '')).toContain('border-input');
+    expect(classesOf('<select class="border">', "const selectClass = 'border-input'")).not.toContain('border-input');
+  });
+
+  test('tout <input>, <select> et <textarea> à bordure porte border-input (3:1) : le jeton --border est décoratif et ne dessine jamais un contrôle', () => {
+    const offenders = vueFiles.filter((file) => !rel(file).startsWith('components/ui/')).flatMap(controlsWithoutInputBorder);
+    expect(offenders).toEqual([]);
+    // Le composant partagé <Input> porte la bordure de ses champs.
+    expect(readFileSync(join(webSrc, 'components/ui/input/Input.vue'), 'utf8')).toMatch(/\bborder-input\b/);
   });
 });

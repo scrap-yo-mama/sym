@@ -89,7 +89,7 @@ const run = (n: number, overrides: Partial<Schemas['RunSummary']> = {}): Schemas
   ...overrides,
 });
 
-const runsOf = (slug: string): Schemas['RunSummary'][] => [
+export const runsOf = (slug: string): Schemas['RunSummary'][] => [
   run(1, { api_slug: slug }),
   run(2, { api_slug: slug, state: 'failed', outcome: 'failed', failure_class: 'blocked_by_protection', items: 0, dataset_id: null, trigger: 'schedule' }),
   run(3, { api_slug: slug, outcome: 'degraded', degraded_reasons: ['retried'], trigger: 'mcp' }),

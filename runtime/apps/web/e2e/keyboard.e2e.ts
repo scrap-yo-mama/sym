@@ -5,7 +5,7 @@
 import type { Page } from '@playwright/test';
 import { test, expect } from './console.fixture.ts';
 import { text } from './fixtures.ts';
-import { focused, type Stop } from './keys.ts';
+import { focused, startTabFromTop, type Stop } from './keys.ts';
 import { RUN_ID, SCREENS } from './screens.ts';
 
 /**
@@ -60,6 +60,10 @@ test.describe('assert_keyboard_only_path : chaque écran', () => {
       await open(screen.path, { anonymous: screen.anonymous, routes: screen.routes });
       await expect(page.locator('h1').first()).toBeVisible();
       await app.settled();
+      // L'écran est mis dans l'état jugé (enquête en cours, erreur de connexion, aucun résultat, flux coupé, confirmation…) : c'est de
+      // la mise en place, pas le parcours. Le parcours au clavier commence ensuite, du haut de la page.
+      await screen.prepare?.(page, app);
+      await startTabFromTop(page);
 
       const expected = await markTabbables(page);
       const { stops, marks } = await tabAround(page);
@@ -143,30 +147,48 @@ test.describe('assert_keyboard_only_path : du catalogue à un run', () => {
         await expect(page).toHaveURL(/\/apis\/zz-sain$/);
         await expect.poll(() => page.evaluate(() => document.activeElement?.tagName)).toBe('H1');
 
-        // 5. Lancer : le champ requis se remplit au clavier, Entrée envoie ; la réponse annonce le run (région `status`).
+        // 5. Lancer : le champ requis se remplit au clavier, Tab atteint le bouton Lancer, Entrée sur le bouton envoie ; la réponse
+        //    annonce le run (région `status`).
         const fields = await page.evaluate(() => [...document.querySelectorAll('#launch input, #launch select, #launch button')].map((el) => el.id || el.getAttribute('data-testid')));
         expect(fields).toContain('launch-max_pages');
         for (let step = 0; step < 80 && (await focused(page)).id !== 'launch-max_pages'; step += 1) await page.keyboard.press('Tab');
         expect((await focused(page)).id).toBe('launch-max_pages');
         await page.keyboard.type('2');
+        const launchLabel = text(locale, 'actions.launch');
+        let submit = await focused(page);
+        for (let step = 0; step < 10 && !(submit.tag === 'button' && submit.name === launchLabel); step += 1) {
+          await page.keyboard.press('Tab');
+          submit = await focused(page);
+        }
+        expect(submit, 'Tab atteint le bouton Lancer').toMatchObject({ tag: 'button', name: launchLabel });
+        expect(launched, 'rien n’est lancé avant Entrée sur le bouton').toHaveLength(0);
         await page.keyboard.press('Enter');
         await expect(page.getByTestId('launch-started')).toBeVisible();
         expect(launched).toHaveLength(1);
         expect(launched[0]).toMatchObject({ input: { max_pages: 2 } });
-        // La page ne vole pas le focus : il reste dans le formulaire.
+        // La page ne vole pas le focus : il reste sur le bouton, dans le formulaire.
         expect(await page.evaluate(() => document.activeElement?.closest('#launch') !== null)).toBe(true);
 
-        // 6. Retour au catalogue puis « Nouvelle API » : bouton de l'en-tête de page, atteint par Tab, ouvert par Entrée.
-        await page.goBack();
+        // 6. Retour au catalogue par la navigation (Maj+Tab jusqu'au lien « Catalogue », puis Entrée) ; « Nouvelle API » : bouton de
+        //    l'en-tête de la page, atteint par Tab, ouvert par Entrée. Aucune action du navigateur (pas de retour arrière).
+        const catalogLabel = text(locale, 'nav.catalog');
+        let nav = await focused(page);
+        for (let step = 0; step < 80 && !(nav.tag === 'a' && nav.href === '/apis' && nav.name === catalogLabel); step += 1) {
+          await page.keyboard.press('Shift+Tab');
+          nav = await focused(page);
+        }
+        expect(nav, 'Maj+Tab atteint le lien Catalogue de la navigation').toMatchObject({ tag: 'a', href: '/apis', name: catalogLabel });
+        await page.keyboard.press('Enter');
+        await expect(page).toHaveURL(/\/apis$/);
         await expect(page.getByTestId('catalog-row').first()).toBeVisible();
-        let link: Stop | undefined;
-        await page.keyboard.press('Tab');
-        for (let step = 0; step < 60 && link?.href !== '/apis/new'; step += 1) {
+        await expect.poll(() => page.evaluate(() => document.activeElement?.tagName)).toBe('H1');
+        let link = await focused(page);
+        for (let step = 0; step < 60 && !(link.tag === 'a' && link.href === '/apis/new'); step += 1) {
           await page.keyboard.press('Tab');
           link = await focused(page);
-          if (link.href === '/apis/new' && link.tag === 'a') break;
         }
-        expect(link?.href).toBe('/apis/new');
+        expect(link).toMatchObject({ tag: 'a', href: '/apis/new' });
+        expect(await page.evaluate(() => document.activeElement?.closest('main') !== null), 'le bouton de l’en-tête de page, pas le lien de la navigation').toBe(true);
         await page.keyboard.press('Enter');
         await expect(page).toHaveURL(/\/apis\/new$/);
         await expect.poll(() => page.evaluate(() => document.activeElement?.tagName)).toBe('H1');

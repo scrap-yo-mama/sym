@@ -2,7 +2,7 @@
 // Écrans et états de la console couverts par la gate d'accessibilité (06 § 4.3) : chacun est rendu en clair et en sombre, en
 // `en` et en `fr`. Un écran ajouté par une tâche suivante (comptes, audit, personnes : 3.8) s'ajoute ici avec sa donnée.
 import type { Page } from '@playwright/test';
-import { catalog, UUID } from './fixtures.ts';
+import { catalog, runsOf, UUID } from './fixtures.ts';
 import type { ApiRoutes, ConsoleApp } from './harness.ts';
 
 export type Screen = {
@@ -57,6 +57,20 @@ async function startInvestigation(page: Page, app: ConsoleApp): Promise<void> {
   await page.getByTestId('investigation-board').locator('[role="log"] li').nth(1).waitFor();
 }
 
+/** Run de la version 2 de la stratégie (rejoué par le replay de l'onglet Enquêtes : `run_id` de `version(2)`, voir fixtures.ts). */
+const REPLAYED_RUN = UUID(102);
+
+/** Événements d'enquête rejoués (`investigation_events`) : de quoi remplir le journal du replay avec chaque sorte de phrase. */
+const replayFrames = [
+  { event: 'investigation_started', data: { seq: 1, at: '2026-09-21T10:00:00.000Z', payload: {} } },
+  { event: 'phase.started', data: { seq: 2, at: '2026-09-21T10:00:01.000Z', payload: { phase: 'access_check' } } },
+  { event: 'access_report', data: { seq: 3, at: '2026-09-21T10:00:02.000Z', payload: { robots: 'allowed' } } },
+  { event: 'phase.started', data: { seq: 4, at: '2026-09-21T10:00:03.000Z', payload: { phase: 'testing' } } },
+  { event: 'attempt.finished', data: { seq: 5, at: '2026-09-21T10:00:05.000Z', payload: { n: 1, execution: 'fetch', network: 'direct', result: 'extraction' } } },
+  { event: 'schema.proposed', data: { seq: 6, at: '2026-09-21T10:00:06.000Z', payload: {} } },
+  { event: 'status.changed', data: { seq: 7, at: '2026-09-21T10:00:07.000Z', payload: { to: 'sain' } } },
+];
+
 export const SCREENS: Screen[] = [
   { id: 'login', path: '/login', anonymous: true },
   {
@@ -107,6 +121,56 @@ export const SCREENS: Screen[] = [
   { id: 'api-enquete-investigations', path: '/apis/zz-enquete/investigations' },
   { id: 'api-sain-schedules', path: '/apis/zz-sain/schedules' },
   { id: 'api-sain-runs', path: '/apis/zz-sain/runs' },
+  // États affichés après une action : lancement, relance (avec le choix de la version), items d'un run, comparaison de versions, replay.
+  {
+    id: 'api-sain-launch-started',
+    path: '/apis/zz-sain',
+    routes: { 'POST /api/apis/:slug/runs': { status: 202, body: { run_id: RUN_ID, state: 'queued' } } },
+    prepare: async (page) => {
+      await page.locator('#launch-max_pages').fill('2');
+      await page.getByTestId('launch-submit').click();
+      await page.getByTestId('launch-started').waitFor();
+    },
+  },
+  {
+    id: 'api-sain-runs-relaunch',
+    path: '/apis/zz-sain/runs',
+    // Le premier run a été produit par la version 2 alors que la 3 est la courante : le formulaire montre son choix de version.
+    routes: { 'GET /api/runs': (request) => ({ body: { runs: runsOf(request.query.get('api') ?? 'zz-sain').map((entry, index) => (index === 0 ? { ...entry, strategy_version: 2 } : entry)), next_cursor: null } }) },
+    prepare: async (page) => {
+      await page.getByTestId('runs-table').locator('tbody tr').first().getByRole('button').nth(1).click();
+      await page.locator('#runs-relaunch').waitFor({ state: 'attached' });
+      await page.locator('#launch-version').waitFor();
+    },
+  },
+  {
+    id: 'api-sain-runs-items',
+    path: '/apis/zz-sain/runs',
+    prepare: async (page) => {
+      await page.getByTestId('runs-table').locator('tbody tr').first().getByRole('button').nth(0).click();
+      await page.getByTestId('items-table').waitFor();
+    },
+  },
+  {
+    id: 'api-sain-strategy-compare',
+    path: '/apis/zz-sain/strategy',
+    prepare: async (page) => {
+      await page.locator('#compare-from').selectOption('3');
+      await page.locator('#compare-against').selectOption('2');
+      await page.locator('section[aria-labelledby="strategy-compare"] form button[type="submit"]').click();
+      await page.getByTestId('strategy-diff').waitFor();
+    },
+  },
+  {
+    id: 'api-sain-replay',
+    path: '/apis/zz-sain/investigations',
+    // Le replay s'ouvre au montage sur la version courante ; on le rouvre sur la version 2 après avoir posé ses événements.
+    prepare: async (page, app) => {
+      app.setRunEvents(REPLAYED_RUN, replayFrames);
+      await page.locator('#investigation-run').selectOption(REPLAYED_RUN);
+      await page.getByTestId('replay-log').locator('li').nth(replayFrames.length - 1).waitFor();
+    },
+  },
   {
     id: 'api-sain-revert-confirm',
     path: '/apis/zz-sain/strategy',

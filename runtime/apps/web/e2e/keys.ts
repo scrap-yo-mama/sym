@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// Lecture de l'élément qui a le focus, pour les tests au clavier (keyboard.e2e.ts, live-regions.e2e.ts). Rien ici n'agit sur la
-// page : ces fonctions ne font que lire.
+// Lecture de l'élément qui a le focus, pour les tests au clavier (keyboard.e2e.ts, live-regions.e2e.ts). Ces fonctions ne font que
+// lire, sauf `startTabFromTop`, mise en place (jamais une étape du parcours) qui remet le point de départ de Tab en haut de page.
 import type { Page } from '@playwright/test';
 
 export type Stop = { tag: string; name: string; id: string; href: string; ring: boolean; outline: string; inViewport: boolean };
@@ -60,3 +60,17 @@ export const activeElement = (page: Page): Promise<string> =>
     const el = document.activeElement;
     return el ? `${el.tagName}#${el.id}.${el.getAttribute('data-testid') ?? ''}` : 'none';
   });
+
+/**
+ * Remet le point de départ de Tab au début du document après une mise en place faite à la souris (clic, saisie) : un nœud temporaire
+ * y reçoit le focus puis est retiré, et le premier Tab atteint le lien d'évitement. Ce n'est pas le parcours : il ne touche à rien.
+ */
+export async function startTabFromTop(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    const anchor = document.createElement('span');
+    anchor.tabIndex = -1;
+    document.body.prepend(anchor);
+    anchor.focus();
+    anchor.remove();
+  });
+}

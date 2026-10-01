@@ -79,11 +79,15 @@ for (const locale of ['en', 'fr'] as const) {
       const before = await activeElement(page);
       const items = log.locator('li[data-testid="attempt"]');
       await expect(items).toHaveCount(0);
+      // Avant tout événement, la région dit l'étape de la réponse du POST (« Vérification de l'accès ») : pas encore « Essais ».
+      const phaseText = (phase: string): string => text(locale, 'investigation.phase.announce').replace('{phase}', text(locale, `investigation.phase.${phase}`));
+      await expect(status).toHaveText(phaseText('access_check'));
       app.pushEvent('phase.started', { run_id: RUN, api_id: API, api_slug: 'zz-nouvelle', phase: 'testing', plan: [{ execution: 'fetch', network: 'direct', est_cost_usd: 0.001 }] }, '10');
       app.pushEvent('attempt.finished', { run_id: RUN, api_id: API, api_slug: 'zz-nouvelle', attempt: { index: 0, execution: 'fetch', network: 'direct', state: 'done', est_cost_usd: 0.001, result: 'extraction', cost_usd: 0.001, ms: 240 } }, '11');
       await expect(items).toHaveCount(1);
       expect(await activeElement(page)).toBe(before);
-      await expect(status).not.toHaveText('');
+      // Le passage à l'étape « Essais » est annoncé dans la même région, avec le texte exact.
+      await expect(status).toHaveText(phaseText('testing'));
       await expect(page.locator('[role="alert"]')).toHaveCount(0);
 
       // Suspendre le suivi (2.2.2) : plus d'annonce (aria-live=off), l'affichage se fige.
@@ -115,6 +119,32 @@ for (const locale of ['en', 'fr'] as const) {
       app.pushEvent('action.required', { api_slug: 'zz-books', cause: 'cookie_expired', domain: 'monsite.example' }, '20');
       app.pushEvent('status.changed', { api_slug: 'zz-books', slug: 'zz-books', status: 'action_requise' }, '21');
       await expect(page.locator('section[role="alert"]')).toHaveCount(1);
+      expect(await activeElement(page)).toBe(before);
+
+      // « Une seule fois » dans la durée : des événements identiques (rejeu de `status.changed`, `action.required` répété) relisent la
+      // fiche mais ne recréent pas l'alerte (même nœud) et ne la réécrivent pas (aucune mutation : un lecteur d'écran n'a rien à relire).
+      const alert = page.locator('section[role="alert"]');
+      const node = await alert.elementHandle();
+      expect(node).not.toBeNull();
+      const textBefore = await alert.textContent();
+      await node?.evaluate((element) => {
+        const target = element as HTMLElement & { __mutations?: number };
+        target.__mutations = 0;
+        new MutationObserver((records) => void (target.__mutations = (target.__mutations ?? 0) + records.length)).observe(target, { subtree: true, childList: true, characterData: true, attributes: true });
+      });
+      const reads = (): number => app.requests.filter((entry) => entry === 'GET /api/apis/zz-books').length;
+      const readsBefore = reads();
+      app.pushEvent('status.changed', { api_slug: 'zz-books', slug: 'zz-books', status: 'action_requise' }, '22');
+      app.pushEvent('action.required', { api_slug: 'zz-books', cause: 'cookie_expired', domain: 'monsite.example' }, '23');
+      await expect.poll(reads, { message: 'la fiche est relue après les événements rejoués' }).toBeGreaterThan(readsBefore);
+      await app.settled();
+      await page.waitForTimeout(300);
+      await expect(alert).toHaveCount(1);
+      const same = await page.evaluate(([kept, current]) => kept === current, [node, await alert.elementHandle()] as const);
+      expect(same, 'le nœud section[role=alert] est conservé').toBe(true);
+      expect(await node?.evaluate((element) => element.isConnected)).toBe(true);
+      expect(await node?.evaluate((element) => (element as HTMLElement & { __mutations?: number }).__mutations), 'l’alerte n’est pas réécrite').toBe(0);
+      expect(await alert.textContent()).toBe(textBefore);
       expect(await activeElement(page)).toBe(before);
     });
 

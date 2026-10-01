@@ -22,9 +22,9 @@ que le rendu. La suite E2E complète sur une instance réelle reste la tâche 3.
 
 | Fichier | Critère |
 |---|---|
-| `a11y.e2e.ts` | `assert_a11y_axe_clean` : chaque écran et état (32), en clair et en sombre, en `en` et en `fr`, 0 violation et 0 erreur de console ; reflow à 320 px (WCAG 1.4.10) |
-| `keyboard.e2e.ts` | `assert_keyboard_only_path` : du premier Tab à Lancer et à Nouvelle API sans souris ; chaque écran se parcourt avec Tab sans piège, anneau de focus visible à chaque arrêt ; focus rendu à l'ouvreur d'une confirmation |
-| `live-regions.e2e.ts` | `assert_live_regions_plan` : une annonce par le bon rôle ARIA, jamais de déplacement du focus |
+| `a11y.e2e.ts` | `assert_a11y_axe_clean` : chaque écran et état (37, dont les états affichés après une action : lancement, relance, items, comparaison, replay), en clair et en sombre, en `en` et en `fr`, 0 violation et 0 erreur de console ; reflow à 320 px (WCAG 1.4.10) |
+| `keyboard.e2e.ts` | `assert_keyboard_only_path` : du premier Tab à Lancer (bouton atteint par Tab) et à Nouvelle API, retour au catalogue par le lien de la navigation, sans souris ni retour arrière du navigateur ; chaque écran, dans chacun de ses états préparés (`prepare`), se parcourt avec Tab sans piège, anneau de focus visible à chaque arrêt ; focus rendu à l'ouvreur d'une confirmation |
+| `live-regions.e2e.ts` | `assert_live_regions_plan` : une annonce par le bon rôle ARIA, jamais de déplacement du focus ; l'étape annoncée change au texte exact (avant et après `phase.started`) ; l'alerte d'action requise garde son nœud et n'est pas réécrite quand les mêmes événements sont rejoués |
 
 Axe tourne avec les tags `wcag2a`, `wcag2aa`, `wcag21a`, `wcag21aa`, `wcag22aa` (le CDC liste les quatre derniers ;
 `wcag21a` s'y ajoute, la gate est plus stricte). Toute violation est refusée, pas seulement les sérieuses et critiques. Les
@@ -39,6 +39,12 @@ erreur de console : les écrans qui la montrent portent `expectsNetworkError`, e
 `src/design-tokens.unit.test.ts` convertit les jetons OKLCH de `main.css` (clair et sombre) et les teintes de statut de Tailwind
 en sRGB et vérifie 4,5:1 pour le texte (dont survols et fonds translucides) et 3:1 pour bordures de champ, anneau de focus
 et badges. Le calcul a son propre oracle (noir/blanc, gris 50 %, `sky-800`).
+
+**`--border` est décoratif.** Il fait 1,26:1 en clair et 1,46:1 en sombre sur `background` : il dessine des séparateurs, des
+cartes et des tableaux, jamais le contour d'un contrôle. Tout `<input>`, `<select>` et `<textarea>` à bordure porte
+`border-input` (3:1), et le bouton à contour s'identifie par son texte. Une garde statique (`src/a11y.unit.test.ts`) le fait
+respecter : un champ sans `border-input` fait échouer le test (elle a trouvé la zone de saisie du schéma de l'enquête, qui
+utilisait `border` seul). Cases à cocher et boutons radio, widgets natifs du navigateur, en sont exclus.
 
 ### Correctifs livrés avec la gate
 
