@@ -149,6 +149,7 @@ export type RunContext = {
    * Écrit des items dans le dataset du run (créé au premier appel, complété aux suivants) : liste d'exclusion appliquée,
    * puis `dedup_key` / `diff` de la planification d'origine (08 § 5) contre les clés déjà vues pour l'API. Avec
    * `diff: new`, seuls les items nouveaux sont écrits. Le worker reporte le dataset écrit dans le résultat du run.
+   * Les clés ne sont marquées comme vues qu'au succès du run : un run en échec après écriture n'en marque aucune.
    */
   writeItems(outputSchema: unknown, items: readonly unknown[]): Promise<DatasetWrite>;
 };

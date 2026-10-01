@@ -3,7 +3,8 @@
 // dans la transaction de l'appelant (livraison et job écrits au même COMMIT que le fait qu'ils annoncent).
 // - `run.succeeded` / `run.failed` : aux cibles du propriétaire du RUN (INV12 : jamais celles d'un autre utilisateur) ;
 // - `items.new` : planification à `dedup_key` (sans condition sur `alert_on`), après une première exécution de référence ;
-//   le nombre vient du dataset (`datasets.new_items`, clés jamais vues pour l'API : `appendRunItems`), jamais du total du run ;
+//   le nombre vient du dataset (`datasets.new_items`, clés jamais vues pour l'API : `appendRunItems`, rendu définitif à la
+//   clôture par `commitRunDedupKeys` qui inscrit les clés du run réussi), jamais du total du run ;
 // - `api.status_changed` : aux cibles du propriétaire de l'API ; l'alerte d'instance par défaut (e-mail ou cible webhook)
 //   ne concerne que les transitions actionnables d'une API sans règle propre.
 // Charges minces (INV5) : identifiants, compteurs, URL du dataset ; jamais d'item. Aucune relance de run n'en découle.
@@ -22,6 +23,7 @@ import {
 } from '@runtime/core';
 import type pg from 'pg';
 import { loadAlertSettings, queueAlert, queueStatusAlerts, type StatusTransition } from './alerts.js';
+import { commitRunDedupKeys } from './datasets.js';
 import { finishRun } from './runs.js';
 import { applyStatusTransition, type ApplyStatusInput, type ApplyStatusResult } from './status.js';
 import { emitWebhookEvent } from './webhooks.js';
@@ -112,18 +114,23 @@ export async function notifyRunFinished(tx: Queryable, queue: JobQueue, runId: s
 /**
  * Clôt le run et annonce sa fin dans la MÊME transaction : un crash entre les deux ne laisse ni run clos sans événement,
  * ni événement sans run clos. `false` : le run n'était plus à ce job (rien n'est écrit, rien n'est annoncé).
+ * Un run réussi inscrit au même COMMIT les clés de déduplication de son dataset (`commitRunDedupKeys`, `subjectKey` : clé
+ * des sujets) : un run en échec n'en inscrit aucune, ses nouveautés restent nouvelles pour le run suivant.
  */
 export async function finishRunAndNotify(
   pool: pg.Pool,
   queue: JobQueue,
   input: { runId: string; jobId: string; result: RunResult; now?: () => Date },
-  opts: { personal?: PersonalValueRegistry } = {},
+  opts: { personal?: PersonalValueRegistry; subjectKey?: Buffer } = {},
 ): Promise<boolean> {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    const closed = await finishRun(client, input.runId, input.jobId, input.result, opts);
-    if (closed) await notifyRunFinished(client, queue, input.runId, input.now ? { now: input.now } : {});
+    const closed = await finishRun(client, input.runId, input.jobId, input.result, opts.personal ? { personal: opts.personal } : {});
+    if (closed) {
+      if (input.result.state === 'succeeded') await commitRunDedupKeys(client, input.runId, opts.subjectKey);
+      await notifyRunFinished(client, queue, input.runId, input.now ? { now: input.now } : {});
+    }
     await client.query('COMMIT');
     return closed;
   } catch (error) {

@@ -5,7 +5,7 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import { createServer, type IncomingHttpHeaders, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { generateMasterKey, MasterKey, secretValues, verifyWebhook, type Keyring } from '@runtime/core';
+import { generateMasterKey, MasterKey, secretValues, verifyWebhook, type Keyring, type RunResult } from '@runtime/core';
 import { createSsrfPolicy, SsrfBlockedError, SsrfGuard, type Resolver } from '@runtime/core/net';
 import pg from 'pg';
 import { TestClock } from 'pg-boss';
@@ -685,18 +685,36 @@ describe('événements de run et de statut', () => {
     const scheduleId = rows[0]!.id;
     const hashKey = randomBytes(32);
     /** Un run planifié qui renvoie `items` : écriture du dataset sous l'identité du propriétaire (RLS), fin et annonce. */
-    const runWith = async (items: readonly unknown[]) => {
+    const start = async () => {
       const jobId = randomUUID();
       const r = await pool.query<{ id: string }>(
         `INSERT INTO runs (api_id, owner_id, api_owner_id, trigger, state, job_id, schedule_id, started_at) VALUES ($1, $2, $2, 'schedule', 'running', $3, $4, now()) RETURNING id`,
         [watched, A, jobId, scheduleId],
       );
-      const runId = r.rows[0]!.id;
-      const write = await withActor(pool, { userId: A, role: 'member' }, (tx) => appendRunItems(tx, { runId, items, hashKey }));
-      await finishRunAndNotify(pool, queue, { runId, jobId, result: { state: 'succeeded', outcome: 'clean', items: write.written, dataset_id: write.datasetId }, now: () => NOW });
-      return { runId, write };
+      return { runId: r.rows[0]!.id, jobId };
     };
-    return { watched, scheduleId, runWith, hashKey };
+    const write = (runId: string, items: readonly unknown[]) => withActor(pool, { userId: A, role: 'member' }, (tx) => appendRunItems(tx, { runId, items, hashKey }));
+    const finish = (runId: string, jobId: string, result: RunResult) => finishRunAndNotify(pool, queue, { runId, jobId, result, now: () => NOW }, { subjectKey: hashKey });
+    /** Run ouvert : dataset écrit, clôture (succès) laissée à l'appelant. */
+    const runOpen = async (items: readonly unknown[]) => {
+      const { runId, jobId } = await start();
+      const w = await write(runId, items);
+      return { runId, write: w, finish: () => finish(runId, jobId, { state: 'succeeded', outcome: 'clean', items: w.written, dataset_id: w.datasetId }) };
+    };
+    const runWith = async (items: readonly unknown[]) => {
+      const open = await runOpen(items);
+      await open.finish();
+      return { runId: open.runId, write: open.write };
+    };
+    /** Run qui écrit plusieurs pages (un appel chacune) puis se clôt sur `result`. */
+    const runPartial = async (pages: readonly (readonly unknown[])[], result: RunResult) => {
+      const { runId, jobId } = await start();
+      const writes = [];
+      for (const page of pages) writes.push(await write(runId, page));
+      await finish(runId, jobId, result);
+      return { runId, writes };
+    };
+    return { watched, scheduleId, runWith, runOpen, runPartial, hashKey };
   }
   const listing = (n: number, from = 0) => Array.from({ length: n }, (_, i) => ({ url: `https://zz-test.example/annonce/${from + i}`, title: `annonce ${from + i}` }));
   const urlsOf = async (datasetId: string) =>
@@ -734,6 +752,53 @@ describe('événements de run et de statut', () => {
     expect(events[3]!.payload.data).toMatchObject({ run_id: third.runId, new_items: 2, items: 2 });
     // Clés gardées en empreinte HMAC seulement (17 § 6) : aucune URL en clair dans dedup_keys.
     expect((await pool.query("SELECT count(*)::int AS n FROM dedup_keys WHERE key_hash LIKE '%zz-test%'")).rows[0].n).toBe(0);
+  });
+
+  test('assert_schedule_failed_run_keeps_new_items : un run qui écrit 2 pages puis échoue ne marque aucune clé comme vue ; le run réussi suivant (`diff: new`) livre et annonce ces nouveautés', async () => {
+    const sub = await subscribe(['items.new']);
+    const { runWith, runPartial } = await watchedSchedule({ dedup_key: 'url', diff: 'new' });
+    const known = listing(48);
+    await runWith(known); // base de référence
+
+    // Run planifié : page 1 puis page 2 écrites (chacune au COMMIT de son appel), puis échec (extraction, budget, worker perdu).
+    const failed = await runPartial([[...known.slice(0, 24), ...listing(1, 48)], [...known.slice(24), ...listing(1, 49)]], {
+      state: 'failed',
+      failure_class: 'transient',
+      retryable: true,
+    });
+    expect(failed.writes.map((w) => w.newItems)).toEqual([1, 1]);
+    expect((await pool.query('SELECT dataset_id FROM runs WHERE id = $1', [failed.runId])).rows[0].dataset_id).toBeNull();
+
+    // Run suivant, même annonce : les 2 nouveautés sont toujours nouvelles, écrites et annoncées.
+    const next = await runWith([...known, ...listing(2, 48)]);
+    expect(next.write).toMatchObject({ written: 2, newItems: 2, skipped: 48 });
+    expect((await urlsOf(next.write.datasetId)).map((r) => r.url)).toEqual(listing(2, 48).map((i) => i.url));
+    expect((await pool.query('SELECT new_items FROM datasets WHERE id = $1', [next.write.datasetId])).rows[0].new_items).toBe(2);
+    const events = await eventsOf(sub.id);
+    expect(events.map((e) => e.event)).toEqual(['items.new']);
+    expect(events[0]!.payload.data).toMatchObject({ run_id: next.runId, new_items: 2, items: 2 });
+
+    // Et une fois ce run réussi, elles sont vues : le run d'après n'a plus rien de nouveau.
+    const after = await runWith([...known, ...listing(2, 48)]);
+    expect(after.write).toMatchObject({ written: 0, newItems: 0, skipped: 50 });
+    expect((await eventsOf(sub.id)).map((e) => e.event)).toEqual(['items.new']);
+  });
+
+  test('deux runs concurrents voient la même nouveauté : elle n’est comptée et annoncée qu’une fois (par le premier qui réussit)', async () => {
+    const sub = await subscribe(['items.new']);
+    const { runWith, runOpen } = await watchedSchedule({ dedup_key: 'url', diff: 'all' });
+    await runWith(listing(3)); // base de référence
+    const a = await runOpen([...listing(3), ...listing(1, 3)]);
+    const b = await runOpen([...listing(3), ...listing(1, 3)]);
+    expect(a.write.newItems).toBe(1);
+    expect(b.write.newItems).toBe(1);
+    await a.finish();
+    await b.finish();
+    expect((await pool.query('SELECT new_items FROM datasets WHERE id = $1', [a.write.datasetId])).rows[0].new_items).toBe(1);
+    expect((await pool.query('SELECT new_items FROM datasets WHERE id = $1', [b.write.datasetId])).rows[0].new_items).toBe(0);
+    const events = await eventsOf(sub.id);
+    expect(events.map((e) => e.event)).toEqual(['items.new']);
+    expect(events[0]!.payload.data).toMatchObject({ run_id: a.runId, new_items: 1 });
   });
 
   test('`diff: all` : tout est écrit, les nouveautés comptées ; doublons de clé dans un même run écrits une fois ; item sans clé gardé', async () => {

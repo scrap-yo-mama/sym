@@ -225,6 +225,42 @@ test('ctx.writeItems : dataset du run écrit sous la dédup de sa planification 
   expect((await pool.query('SELECT count(*)::int AS n FROM dataset_items WHERE dataset_id = $1', [first.dataset_id])).rows[0].n).toBe(3);
 });
 
+test('ctx.writeItems puis échec : aucune clé marquée vue, le run planifié suivant (`diff: new`) écrit et compte ces nouveautés', async () => {
+  const schedule = (
+    await pool.query<{ id: string }>("INSERT INTO schedules (api_id, owner_id, cron, rules) VALUES ($1, $2, '0 * * * *', $3::jsonb) RETURNING id", [
+      readApi,
+      A,
+      JSON.stringify({ dedup_key: 'url', diff: 'new' }),
+    ])
+  ).rows[0]!.id;
+  const item = (k: string) => ({ url: `https://zz-test.example/echec/${k}`, title: k });
+  const keysOf = async () => (await pool.query<{ n: number }>('SELECT count(*)::int AS n FROM dedup_keys WHERE api_id = $1', [readApi])).rows[0]!.n;
+  const keysBefore = await keysOf();
+  let fail = true;
+  const writes: unknown[] = [];
+  await inProcessWorker(async (ctx) => {
+    writes.push(await ctx.writeItems(null, [item('p1')]));
+    writes.push(await ctx.writeItems(null, [item('p2')]));
+    if (fail) throw new Error('extraction cassée après la page 2');
+    return { state: 'succeeded', outcome: 'clean', items: 2 };
+  });
+  const run = async () => {
+    const origin = { scheduleId: schedule, scheduledAt: new Date(), scheduleJobId: randomUUID() };
+    return (await withActor(pool, actorA, (tx) => createRun(tx, queue, { apiId: readApi, ownerId: A, trigger: 'schedule', schedule: origin }))).runId;
+  };
+  const failed = await run();
+  await waitState(failed, ['failed']);
+  expect(await keysOf()).toBe(keysBefore);
+
+  fail = false;
+  const ok = await run();
+  await waitState(ok, ['succeeded']);
+  expect(writes[3]).toEqual({ dataset_id: expect.any(String), written: 2, new_items: 2, dropped: 0, skipped: 0 });
+  const ds = (await pool.query<{ new_items: number; item_count: number }>('SELECT d.new_items, d.item_count FROM runs r JOIN datasets d ON d.id = r.dataset_id WHERE r.id = $1', [ok])).rows[0];
+  expect(ds).toEqual({ new_items: 2, item_count: 2 });
+  expect(await keysOf()).toBe(keysBefore + 2);
+});
+
 describe('kill -9 en plein run (vrai processus)', () => {
   test('API en lecture : run repris par un autre worker puis `succeeded`, jamais bloqué en `running`', async () => {
     const { runId, jobId } = await create();

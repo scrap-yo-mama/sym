@@ -310,7 +310,7 @@ export async function startWorker(options: StartWorkerOptions): Promise<Worker> 
       }
       // Bail perdu ou arrêt : le run a déjà été annulé, repris ou remis en file ; rien n'est écrit.
       if (entry.cause === 'lease_lost' || entry.cause === 'shutdown') return;
-      const closed = await finishRunAndNotify(pool, q, { runId, jobId, result }, { personal });
+      const closed = await finishRunAndNotify(pool, q, { runId, jobId, result }, { personal, subjectKey: subjects });
       if (result.state === 'failed') span.fail(result.failure_class);
       span.setAttribute('run.state', result.state);
       await runLog.log(result.state === 'failed' ? 'warn' : 'info', 'run_finished', {
