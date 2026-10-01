@@ -320,7 +320,11 @@ describe('assert_sandbox_image_privileges — image sous les capacités de Rende
         const name = startContainer(`zz_test_img_probe_${profile.nnp ? 'render' : 'classic'}_${run}`, profile.flags, { RUNTIME_MODE: 'worker' }, [
           '-v', `${join(scratch, 'probe.mjs')}:/app/apps/worker/dist/index.js:ro`,
         ]);
-        await until(`sonde terminée dans ${name}`, () => /ZZ_PROBE |Error/.test(logsOf(name)) && !running(name), 120_000);
+        await until(`sonde terminée dans ${name}`, () => /ZZ_PROBE |Error/.test(logsOf(name)) && !running(name), 120_000).catch((error: unknown) => {
+          // Sonde bloquée : ses journaux et les processus du conteneur disent où.
+          const procs = running(name) ? JSON.stringify(processes(name).map((p) => ({ pid: p.pid, ppid: p.ppid, uid: p.uid, cmd: p.cmd.slice(0, 120) }))) : 'arrêté';
+          throw new Error(`${String(error)}\n${logsOf(name).slice(-3000)}\nprocessus : ${procs}`);
+        });
         const logs = logsOf(name);
         const line = logs.split('\n').find((l) => l.startsWith('ZZ_PROBE '));
         expect(line, logs.slice(-3000)).toBeDefined();
