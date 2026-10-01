@@ -3,7 +3,14 @@ import { prepareServer } from './start.js';
 
 let started: Awaited<ReturnType<typeof prepareServer>>;
 try {
-  started = await prepareServer(process.env, { logger: true });
+  started = await prepareServer(process.env, {
+    logger: true,
+    // Initialisation différée (schéma migré après le démarrage) impossible : même sortie qu'un refus immédiat.
+    onFatal: (error) => {
+      console.error(`Démarrage refusé : ${error.message}`);
+      process.exit(1);
+    },
+  });
 } catch (error) {
   // Message clair, sans pile ni valeur sensible (MASTER_KEY, jeton) : les erreurs de démarrage ne contiennent que des noms.
   console.error(`Démarrage refusé : ${(error as Error).message}`);

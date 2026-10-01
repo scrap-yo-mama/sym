@@ -12,6 +12,7 @@ import {
   RUN_TRIGGERS,
   STRATEGY_CREATORS,
   VISIBILITIES,
+  type AttemptResult,
   type FailureClass,
 } from '@runtime/core';
 import { sql } from 'drizzle-orm';
@@ -231,7 +232,7 @@ export const auditEvents = pgTable(
     id: bigint('id', { mode: 'number' }).primaryKey().generatedAlwaysAsIdentity(),
     at: tstz('at').notNull().defaultNow(),
     actorUserId: uuid('actor_user_id'),
-    actorVia: text('actor_via', { enum: ['ui', 'apikey', 'mcp', 'sso', 'system'] }).notNull(),
+    actorVia: text('actor_via', { enum: ['ui', 'apikey', 'mcp', 'sso', 'system', 'extension'] }).notNull(),
     actorRef: text('actor_ref'),
     action: text('action').notNull(),
     targetType: text('target_type'),
@@ -339,7 +340,7 @@ export const apis = pgTable(
     pinned: boolean('pinned').notNull().default(false),
     repairLeaseOwner: text('repair_lease_owner'),
     repairLeaseUntil: tstz('repair_lease_until'),
-    // 0006_scheduling_webhooks (2.5) : un warning au-delà de D n'alerte qu'une fois par épisode.
+    // 0010_scheduling_webhooks (2.5) : un warning au-delà de D n'alerte qu'une fois par épisode.
     warningAlertedAt: tstz('warning_alerted_at'),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
@@ -414,7 +415,7 @@ export const runs = pgTable(
     jobId: uuid('job_id'),
     workerId: text('worker_id'),
     requeueCount: integer('requeue_count').notNull().default(0),
-    // 0006_scheduling_webhooks (2.5) : planification d'origine, instant du déclenchement, job d'origine (unique).
+    // 0010_scheduling_webhooks (2.5) : planification d'origine, instant du déclenchement, job d'origine (unique).
     scheduleId: uuid('schedule_id').references((): AnyPgColumn => schedules.id, { onDelete: 'set null' }),
     scheduledAt: tstz('scheduled_at'),
     scheduleJobId: uuid('schedule_job_id'),
@@ -436,7 +437,7 @@ export const runAttempts = pgTable(
     projectId: projectId(),
     execution: text('execution', { enum: EXECUTIONS }).notNull(),
     network: text('network', { enum: NETWORKS }).notNull(),
-    resultClass: text('result_class'),
+    resultClass: text('result_class').$type<AttemptResult>(), // CHECK : 0006_failure_class_unify
     estCostUsd: usd('est_cost_usd'),
     costUsd: usd('cost_usd').notNull().default('0'),
     ms: integer('ms'),
@@ -484,6 +485,11 @@ export const runArtifacts = pgTable(
     ciphertext: bytea('ciphertext').notNull(),
     nonce: bytea('nonce').notNull(),
     keyVersion: integer('key_version').notNull(),
+    dekWrapped: bytea('dek_wrapped').notNull().default(sql`'\\x'`),
+    alg: text('alg').notNull().default('aes-256-gcm'),
+    // 0005 : 'unreadable' = non ouvrable par l'ancienne clé pendant `rekey` (marqué et audité, jamais supprimé en silence).
+    state: text('state', { enum: ['ok', 'unreadable'] }).notNull().default('ok'),
+    unreadableSince: tstz('unreadable_since'),
     createdAt: createdAt(),
   },
   (t) => [index('run_artifacts_owner_id_idx').on(t.ownerId), index('run_artifacts_run_id_idx').on(t.runId)],
@@ -538,11 +544,20 @@ export const datasets = pgTable(
     bytes: bigint('bytes', { mode: 'number' }).notNull().default(0),
     retentionDays: integer('retention_days'),
     pinned: boolean('pinned').notNull().default(false),
+    /** Exemption datée et motivée (0009, 17 § 6) : obligatoires quand `pinned`. */
+    pinnedReason: text('pinned_reason'),
+    pinnedUntil: tstz('pinned_until'),
     expiresAt: tstz('expires_at'),
     deletedAt: tstz('deleted_at'),
     createdAt: createdAt(),
   },
-  (t) => [index('datasets_owner_id_idx').on(t.ownerId)],
+  (t) => [
+    index('datasets_owner_id_idx').on(t.ownerId),
+    check(
+      'datasets_pinned_exemption_check',
+      sql`NOT ${t.pinned} OR (${t.pinnedReason} IS NOT NULL AND btrim(${t.pinnedReason}) <> '' AND ${t.pinnedUntil} IS NOT NULL)`,
+    ),
+  ],
 );
 
 /** Table partitionnée par mois sur created_at (partitions créées par ensure_dataset_items_partitions). */
@@ -647,6 +662,12 @@ export const siteSessions = pgTable(
     capturedAt: tstz('captured_at'),
     expiresAt: tstz('expires_at'),
     createdAt: createdAt(),
+    // Migration 0008_extension_pairing (tâche 2.6) : enveloppe complète, consentement daté. Colonnes chiffrées en
+    // écriture seule pour runtime_app (aucun SELECT sur ciphertext, nonce, dek_wrapped, alg).
+    dekWrapped: bytea('dek_wrapped'),
+    alg: text('alg'),
+    consentedAt: tstz('consented_at').notNull().defaultNow(),
+    updatedAt: updatedAt(),
   },
   (t) => [
     unique('site_sessions_owner_domain_key').on(t.ownerId, t.domain),
@@ -671,8 +692,27 @@ export const tunnels = pgTable(
     revokedAt: tstz('revoked_at'),
     lastSeenAt: tstz('last_seen_at'),
     createdAt: createdAt(),
+    // Migration 0008_extension_pairing (tâche 2.6).
+    revokedBy: uuid('revoked_by').references(() => users.id, { onDelete: 'set null' }),
   },
   (t) => [index('tunnels_owner_id_idx').on(t.ownerId)],
+);
+
+/** Code d'appairage de l'extension (07 § 1) : usage unique, 10 min, empreinte seulement (migration 0008). */
+export const extensionPairingCodes = pgTable(
+  'extension_pairing_codes',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    ownerId: uuid('owner_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    codeHash: text('code_hash').notNull().unique(),
+    expiresAt: tstz('expires_at').notNull(),
+    usedAt: tstz('used_at'),
+    tunnelId: uuid('tunnel_id').references(() => tunnels.id, { onDelete: 'set null' }),
+    createdAt: createdAt(),
+  },
+  (t) => [index('extension_pairing_codes_owner_id_idx').on(t.ownerId)],
 );
 
 export const tunnelJobs = pgTable(
@@ -717,7 +757,7 @@ export const webhookSubscriptions = pgTable(
     secretId: uuid('secret_id').references(() => secrets.id, { onDelete: 'set null' }),
     status: text('status', { enum: ['active', 'disabled'] }).notNull().default('active'),
     disabledAt: tstz('disabled_at'),
-    // 0006_scheduling_webhooks (2.5) : rotation à deux secrets, désactivation après 5 jours d'échecs.
+    // 0010_scheduling_webhooks (2.5) : rotation à deux secrets, désactivation après 5 jours d'échecs.
     previousSecretId: uuid('previous_secret_id').references(() => secrets.id, { onDelete: 'set null' }),
     previousSecretExpiresAt: tstz('previous_secret_expires_at'),
     failingSince: tstz('failing_since'),
@@ -744,7 +784,7 @@ export const webhookDeliveries = pgTable(
     status: text('status', { enum: ['pending', 'succeeded', 'failed'] }).notNull().default('pending'),
     httpStatus: integer('http_status'),
     nextAttemptAt: tstz('next_attempt_at'),
-    // 0006_scheduling_webhooks (2.5) : journal de livraison et charge rejouable.
+    // 0010_scheduling_webhooks (2.5) : journal de livraison et charge rejouable.
     eventId: uuid('event_id').notNull().defaultRandom(),
     payload: jsonb('payload').notNull().default({}),
     durationMs: integer('duration_ms'),

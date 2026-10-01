@@ -16,6 +16,7 @@ import {
   type ApiStatus,
   type FailureClass,
   type JobQueue,
+  type PersonalValueRegistry,
   type RunResult,
 } from '@runtime/core';
 import type pg from 'pg';
@@ -106,11 +107,16 @@ export async function notifyRunFinished(tx: Queryable, queue: JobQueue, runId: s
  * Clôt le run et annonce sa fin dans la MÊME transaction : un crash entre les deux ne laisse ni run clos sans événement,
  * ni événement sans run clos. `false` : le run n'était plus à ce job (rien n'est écrit, rien n'est annoncé).
  */
-export async function finishRunAndNotify(pool: pg.Pool, queue: JobQueue, input: { runId: string; jobId: string; result: RunResult; now?: () => Date }): Promise<boolean> {
+export async function finishRunAndNotify(
+  pool: pg.Pool,
+  queue: JobQueue,
+  input: { runId: string; jobId: string; result: RunResult; now?: () => Date },
+  opts: { personal?: PersonalValueRegistry } = {},
+): Promise<boolean> {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    const closed = await finishRun(client, input.runId, input.jobId, input.result);
+    const closed = await finishRun(client, input.runId, input.jobId, input.result, opts);
     if (closed) await notifyRunFinished(client, queue, input.runId, input.now ? { now: input.now } : {});
     await client.query('COMMIT');
     return closed;

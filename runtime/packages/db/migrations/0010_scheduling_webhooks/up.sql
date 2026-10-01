@@ -1,5 +1,5 @@
 -- SPDX-License-Identifier: AGPL-3.0-only
--- 0006_scheduling_webhooks : planification, webhooks sortants signés, alertes (tâche 2.5, 08 § 5, 03 § Schéma).
+-- 0010_scheduling_webhooks : planification, webhooks sortants signés, alertes (tâche 2.5, 08 § 5, 03 § Schéma).
 --   schedules               CHECK sur `overlap` (skip|queue|allow) et `on_missed` (skip|once) ;
 --   runs                    schedule_id (planification d'origine), scheduled_at (instant du déclenchement, sert à
 --                           `max_runs_per_day` sur le jour du fuseau), schedule_job_id (job `scheduled-run` d'origine :

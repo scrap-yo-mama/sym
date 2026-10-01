@@ -102,7 +102,7 @@ pg-boss **12.34.0** (catalogue, `minimumReleaseAge` : 12.34.1+ trop récents au 
 - **Identité** : côté web, `withActor` (RLS) ; côté worker, identité système (propriétaire des tables) limitée aux colonnes de pilotage des runs, du bail et de `worker_heartbeats`. Les données d'utilisateur écrites par un exécuteur passent par `withActor` avec `RunContext.ownerId`.
 - **Bail de réparation** : `apis.repair_lease_owner/until` (90 s, renouvelé), jamais de verrou de session.
 
-## Planification, webhooks et alertes (tâche 2.5, migration `0006_scheduling_webhooks`)
+## Planification, webhooks et alertes (tâche 2.5, migration `0010_scheduling_webhooks`)
 
 Spécification : CDC `08-specs-byo-securite.md` § 5 et § 7, `docs/runtime-v2/t2-file-jobs/04-cron-multi-planification.md`, `o7-extensibilite/03-webhooks.md`. Tests : `schedules.integration.test.ts`, `webhooks.integration.test.ts`, `alerts.integration.test.ts`, `apps/worker/src/scheduling.integration.test.ts`, `tests/security/ssrf-guard.security.test.ts` (étage S).
 

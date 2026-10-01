@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// Machine à états du statut d'API (INV3, 04 §6). Types propres au module : aucune dépendance à l'autre code du noyau.
+// Machine à états du statut d'API (INV3, 04 §6). Seule dépendance au reste du noyau : l'énumération `FailureClass` du modèle.
+import type { FailureClass } from '../model/enums.js';
 
 export const STATUSES = ['enquete', 'sain', 'warning', 'reparation', 'erreur', 'action_requise', 'bloquee'] as const;
 export type Status = (typeof STATUSES)[number];
@@ -22,40 +23,32 @@ export const DEGRADED_SIGNALS = [
 ] as const;
 export type DegradedSignal = (typeof DEGRADED_SIGNALS)[number];
 
-/** Classes d'échec qui pilotent le statut (04 §7). Les `llm_*` ne changent jamais le statut à elles seules. */
-export type FailureClass =
-  | 'transient'
-  | 'network'
-  | 'rate_limited'
-  | 'forbidden'
-  | 'blocked_by_protection'
-  | 'robots_disallowed'
-  | 'robots_unreachable'
-  | 'payment_required'
-  | 'auth_required'
-  | 'account_limit'
-  | 'challenge_in_tunnel'
-  | 'proxy_not_configured'
-  | 'tunnel_offline'
-  | 'not_found'
-  | 'extraction'
-  | 'code_error'
-  | `llm_${string}`;
+/*
+ * Classes d'échec : l'énumération unique `FailureClass` du modèle (04b § 1, 04 §7), importée telle quelle.
+ * Les `llm_*`, `rate_limited`, `robots_unreachable` (pendant un run), `run_budget_exceeded` et `budget_exceeded` ne
+ * changent jamais le statut à elles seules : l'épuisement d'un budget d'enquête ou de réparation passe par
+ * `investigation_failed` (2, 21) ou `repair_failed` (13).
+ */
 
 /** Refus qui mènent à `bloquee` (transitions 4 et 15). */
-export const BLOCKING_CLASSES = ['blocked_by_protection', 'forbidden', 'robots_disallowed'] as const;
-/** Refus qui mènent à `action_requise` pendant l'enquête (transition 3). */
-export const INVESTIGATION_ACTION_CLASSES = [
-  'auth_required',
-  'payment_required',
-  'account_limit',
-  'proxy_not_configured',
-  'tunnel_offline',
-] as const;
-/** Refus qui mènent à `action_requise` pendant une réparation (transition 14). */
-export const REPAIR_ACTION_CLASSES = ['auth_required', 'payment_required', 'account_limit', 'challenge_in_tunnel'] as const;
+export const BLOCKING_CLASSES = ['blocked_by_protection', 'forbidden', 'robots_disallowed'] as const satisfies readonly FailureClass[];
+/** Classes qui mènent à `action_requise` pendant l'enquête (transition 3). */
+export const INVESTIGATION_ACTION_CLASSES = ['auth_required', 'payment_required', 'account_limit'] as const satisfies readonly FailureClass[];
+/** Classes qui mènent à `action_requise` pendant une réparation (transition 14). */
+export const REPAIR_ACTION_CLASSES = ['auth_required', 'payment_required', 'account_limit'] as const satisfies readonly FailureClass[];
+
+/**
+ * Codes de raison de transition (`status_reason`, 04 §6) qui ne sont PAS des `failure_class` (04b § 1 : liste fermée) :
+ * proxy requis non configuré et tunnel hors ligne (transition 3), défi en tunnel (transition 14, 04 §3.2 « raison
+ * `challenge_in_tunnel` », 07). Un run arrêté pour l'une de ces raisons l'est sans classe d'échec : événement `run_stopped`.
+ */
+export const INVESTIGATION_ACTION_REASONS = ['proxy_not_configured', 'tunnel_offline'] as const;
+export const REPAIR_ACTION_REASONS = ['challenge_in_tunnel'] as const;
+export const ACTION_REASONS = [...INVESTIGATION_ACTION_REASONS, ...REPAIR_ACTION_REASONS] as const;
+export type ActionReason = (typeof ACTION_REASONS)[number];
+
 /** Classes pour lesquelles le backoff automatique de `erreur` est permis (transition 16). */
-export const BACKOFF_CLASSES = ['extraction', 'code_error', 'network', 'robots_unreachable'] as const;
+export const BACKOFF_CLASSES = ['extraction', 'code_error', 'network', 'robots_unreachable'] as const satisfies readonly FailureClass[];
 
 export type ReinvestigationTrigger = 'manual' | 'schema_changed' | 'force_investigate';
 
@@ -77,6 +70,8 @@ export type StatusEventInput =
   | { type: 'investigation_failed'; cause: 'budget_exhausted' | 'robots_unreachable' }
   /** Échec d'un run ou d'une étape : refus (3, 4, 14, 15), indisponibilité (6, 8), échec non transitoire (10, 11). */
   | { type: 'run_failed'; failureClass: FailureClass; httpStatus?: number }
+  /** Run arrêté sans classe d'échec : proxy non configuré ou tunnel hors ligne (3), défi en tunnel (10/11 puis 14, ou 14). */
+  | { type: 'run_stopped'; reason: ActionReason }
   /** Run réussi : propre ou dégradé (5, 8, 9). */
   | { type: 'run_succeeded'; signals: readonly DegradedSignal[] }
   /** Retour à une version antérieure de la stratégie (7, 8). */

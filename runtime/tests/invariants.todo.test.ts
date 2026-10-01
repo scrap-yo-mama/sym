@@ -22,22 +22,32 @@ import { describe, test } from "vitest";
 // machine.prop.test.ts (modèle fast-check) et packages/db/src/status.integration.test.ts (status_events, même transaction).
 // INV4 et D-12 (1.3) : assert_run_traced et assert_worker_key_mismatch sont dans apps/worker/src/worker.integration.test.ts (worker réel,
 // kill -9 et SIGTERM compris) ; file, balayeur et bail : packages/db/src/runs.integration.test.ts.
+// INV5 (2.6) : assert_identity_pinned (volet cookies : un run n'ouvre que la session du propriétaire de l'API) est dans
+// apps/server/src/extension.integration.test.ts, packages/core/src/auth/extension.unit.test.ts (AAD) et apps/extension/e2e
+// (E2) ; le volet tunnel est repris par 2.7 avec assert_tunnel_single_user. assert_consent_before_capture,
+// assert_optional_hosts, assert_no_cookie_in_tunnel_mode : apps/extension/src/core/*.unit.test.ts et e2e/extension.e2e.ts.
 // INV6, X4 (1.4) : assert_no_ip_change_after_refusal est dans tests/network/network-modes.unit.test.ts (proxy de test local).
+// INV9 et INV8 (1.10) : assert_no_telemetry (serveur + worker + run, 0 destination non locale), assert_otel_off_by_default,
+// assert_otel_optin_local_only, assert_no_traceparent_outbound et l'extension de assert_no_secret_in_logs à toutes les sorties
+// sont dans tests/observability.integration.test.ts (dont le contrôle des modules résolus par un vrai server + worker : ni
+// l'API ni le SDK OTel, seule @opentelemetry/semantic-conventions, constantes importées par Better Auth, est tolérée) ;
+// @runtime/core seul : packages/core/src/observability/observability.unit.test.ts ; assert_metrics_closed :
+// apps/server/src/observability.integration.test.ts.
+// La capture de trafic complète (cibles, LLM, proxys, SMTP, webhooks réels) de assert_no_telemetry reste à 4.3.
 describe("invariants (à implémenter)", () => {
   test.todo("assert_cheapest_first_logged"); // INV2, tâche(s) 2.1
-  test.todo("assert_identity_pinned"); // INV5, tâche(s) 2.6, 2.7
   test.todo("assert_tunnel_single_user"); // INV5, tâche(s) 2.6, 2.7
   test.todo("assert_no_circumvention"); // INV6, tâche(s) 1.7, 4.3
   test.todo("assert_sandbox"); // INV7, tâche(s) 1.5
-  test.todo("assert_no_telemetry"); // INV9, tâche(s) 1.10, 4.3 (part auth de 0.3b : apps/server/src/telemetry.integration.test.ts)
-  test.todo("assert_otel_off_by_default"); // INV9, tâche(s) 1.10, 4.3
   test.todo("assert_robots_respected"); // INV11, tâche(s) 1.11
-  test.todo("assert_retention_purge"); // RGPD, tâche(s) 1.8
-  test.todo("assert_erasure_complete"); // RGPD, tâche(s) 1.8
-  test.todo("assert_no_personal_data_in_logs"); // RGPD, tâche(s) 1.8, 1.10
+  // RGPD (1.8) : assert_retention_purge, assert_erasure_complete et assert_no_personal_data_in_logs sont dans
+  // packages/db/src/retention/retention.integration.test.ts ; câblage worker (RunContext.personal, RunContext.excludeSubjects,
+  // rekey) dans apps/worker/src/worker.integration.test.ts. Reste le câblage par l'exécuteur réel (revue de 1.8) :
+  test.todo("assert_no_personal_data_in_logs — exécuteur réel : items extraits inscrits à RunContext.personal, journaux par appendRunLog(…, ctx.personal)"); // RGPD, tâche(s) 1.6, 1.7, 1.10
+  test.todo("assert_erasure_complete — exécuteur réel : RunContext.excludeSubjects avant collecte et avant écriture, dedup_keys.key_hash = dedupKeyHash"); // RGPD, tâche(s) 1.6, 1.7
   test.todo("assert_pacing_key_is_domain"); // politesse, tâche(s) 1.9
   test.todo("assert_export_no_secret"); // INV5, INV8, tâche(s) 3.12
-  test.todo("assert_diagnostics_redacted"); // INV9, tâche(s) 1.10
+  test.todo("assert_diagnostics_redacted"); // INV9, tâche(s) 4.6 (`runtime diagnostics`, 10-taches : 1.10 ne le porte pas)
   test.todo("assert_ui_strings_no_forbidden_words"); // INV6, tâche(s) 3.5
   test.todo("assert_access_report_first"); // étape 0, tâche(s) 1.11, 2.1
 });

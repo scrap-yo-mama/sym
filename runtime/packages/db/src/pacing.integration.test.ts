@@ -3,16 +3,16 @@
 // Retry-After, disjoncteur, budget de retries. Horloge injectée ou créneaux lus, jamais de sleep.
 import { DomainPacer, type PacingClock, type PacingStore } from '@runtime/core';
 import { buildNetworkRungs, NetworkLadder, parseNetworkPolicy, parseProxyDefinitions } from '@runtime/core/net';
-import pg from 'pg';
+import type pg from 'pg';
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
-import { createTestDatabase, type TestDatabase } from '../../../tests/helpers/pg.js';
+import { closeTestPool, createTestDatabase, createTestPool, type TestDatabase } from '../../../tests/helpers/pg.js';
 import { migrateUp } from './migrate.js';
 import { PgPacingStore } from './pacing.js';
 
 let tdb: TestDatabase;
 const pools: pg.Pool[] = [];
 const pool = (max = 4) => {
-  const p = new pg.Pool({ connectionString: tdb.url, max });
+  const p = createTestPool(tdb.url, max); // écouteur 'error' posé : voir tests/helpers/pg.ts
   pools.push(p);
   return p;
 };
@@ -22,8 +22,12 @@ beforeEach(async () => {
   await migrateUp({ connectionString: tdb.url });
 });
 afterEach(async () => {
-  await Promise.all(pools.splice(0).map((p) => p.end()));
-  await tdb.drop();
+  // Ordre : fermer chaque pool jusqu'à la fin de ses connexions, puis supprimer la base.
+  try {
+    await Promise.all(pools.splice(0).map(closeTestPool));
+  } finally {
+    await tdb.drop();
+  }
 });
 
 /** Horloge manuelle : `sleep` enregistre l'attente et rend la main tout de suite. */

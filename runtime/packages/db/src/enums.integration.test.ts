@@ -2,6 +2,7 @@
 // Les énumérations TS de @runtime/core et les CHECK SQL de la base migrée sont identiques (04b § 1).
 import {
   API_STATUSES,
+  ATTEMPT_RESULTS,
   EXECUTIONS,
   FAILURE_CLASSES,
   INVESTIGATION_PHASES,
@@ -71,6 +72,16 @@ describe('énumérations TS = CHECK SQL', () => {
     const { rows } = await client.query<{ def: string }>(
       `SELECT pg_get_constraintdef(k.oid) AS def FROM pg_constraint k JOIN pg_class c ON c.oid = k.conrelid
         WHERE c.relname = 'runs' AND k.contype = 'c' AND pg_get_constraintdef(k.oid) LIKE '%failure_class%'`,
+    );
+    const sqlPattern = /~ '([^']+)'::text/.exec((rows[0] as { def: string }).def)?.[1];
+    expect(sqlPattern).toBe(LLM_FAILURE_CLASS_PATTERN.source);
+  });
+
+  test('run_attempts.result_class : ok + même liste fermée, même motif llm_*', async () => {
+    expect(sorted(await checkValues('run_attempts', 'result_class'))).toEqual(sorted(ATTEMPT_RESULTS));
+    const { rows } = await client.query<{ def: string }>(
+      `SELECT pg_get_constraintdef(k.oid) AS def FROM pg_constraint k JOIN pg_class c ON c.oid = k.conrelid
+        WHERE c.relname = 'run_attempts' AND k.contype = 'c' AND pg_get_constraintdef(k.oid) LIKE '%result_class%'`,
     );
     const sqlPattern = /~ '([^']+)'::text/.exec((rows[0] as { def: string }).def)?.[1];
     expect(sqlPattern).toBe(LLM_FAILURE_CLASS_PATTERN.source);

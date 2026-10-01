@@ -67,10 +67,16 @@ describe('démarrage (13 § 4, 14 § 7)', () => {
     }
   });
 
-  test('schéma pas à jour : refus de démarrer', async () => {
+  test('schéma pas à jour : démarrage en mode dégradé (14 § 5), aucune route hors sondes, `/api/ready` = 503', async () => {
     const db = await createTestDatabase('noschema');
     try {
-      await expect(prepareServer(serverEnv(db.url, generateMasterKey(), 'zz_test_' + 'y'.repeat(40)))).rejects.toThrow(/runtime migrate/);
+      const started = await prepareServer(serverEnv(db.url, generateMasterKey(), 'zz_test_' + 'y'.repeat(40)), { schemaPollMs: 60_000 });
+      try {
+        expect((await started.app.inject({ method: 'GET', url: '/api/ready' })).statusCode).toBe(503);
+        expect((await started.app.inject({ method: 'GET', url: '/api/auth/get-session' })).statusCode).toBe(503);
+      } finally {
+        await started.close();
+      }
     } finally {
       await db.drop();
     }

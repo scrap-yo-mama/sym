@@ -2,12 +2,18 @@
 // Interface de file (T2 R1) : le code métier ne voit que `JobQueue`. L'adaptateur pg-boss 12 (`@runtime/db`) est le
 // seul endroit où pg-boss est importé et le seul à toucher le schéma `pgboss` (SQL brut interdit ailleurs).
 import type { Execution, FailureClass, Network, RunOutcome } from '../model/enums.js';
+import type { LogLevel } from '../observability/config.js';
+import type { PersonalValueRegistry } from '../privacy/mask.js';
 
 /** Files de la V1 (T2 R4). `run` seule est branchée en 1.3 ; `repair`, `scheduled-run`, `maintenance` : 2.x et 1.8. */
 export const RUN_QUEUE = 'run';
 
-/** Charge d'un job de run : l'identifiant seul (T2 R2). Le run en base fait foi. */
-export type RunJobData = { run_id: string };
+/** Charge d'un job de run : l'identifiant seul (T2 R2) et, si OTel est activé, le contexte de trace. Le run en base fait foi. */
+export type RunJobData = {
+  run_id: string;
+  /** Contexte W3C (`traceparent`) du span qui a mis le job en file ; présent seulement si OTel est activé (14 § 10). */
+  _trace?: string;
+};
 
 /** Connexion d'une transaction ouverte par l'appelant : le job est écrit dans cette transaction (même COMMIT). */
 export type QueryClient = { query: (text: string, values?: unknown[]) => Promise<{ rows: unknown[] }> };
@@ -22,6 +28,8 @@ export type QueueDefinition = {
   retryLimit: number;
   /** `short` : un seul job en attente par clé d'unicité (alertes regroupées). */
   policy?: 'standard' | 'exclusive' | 'singleton' | 'short';
+  /** Rétention native des jobs terminés (14 § 9, phase 3) : supprimés par la maintenance de la file après ce délai. */
+  deleteAfterSeconds?: number;
 };
 
 export type QueuedJob<T> = { id: string; data: T; signal: AbortSignal };
@@ -116,6 +124,21 @@ export type RunContext = {
   /** Levé à l'annulation, à la perte du bail (`job_id` changé), à l'expiration du job et à l'arrêt du worker. */
   signal: AbortSignal;
   recordAttempt(attempt: AttemptRecord): Promise<void>;
+  /**
+   * Journal du run (`run_logs`) : masqué avant l'écriture (INV8), filtré par `LOG_LEVEL`, plafonné (14 § 10). Ne lève jamais :
+   * un journal qui ne s'écrit pas ne fait pas échouer l'exécution.
+   */
+  log(level: LogLevel, event: string, data?: unknown): Promise<void>;
+  /**
+   * Registre de masquage de **ce** run (17 § 6) : l'exécuteur y inscrit les valeurs `x-personal` des items extraits
+   * (`addFromItem`) ; le worker l'applique à `error_detail` (et `appendRunLog` l'exige), puis le vide en fin de run.
+   */
+  personal: PersonalValueRegistry;
+  /**
+   * Liste d'exclusion des sujets effacés (17 § 6, `erase_subject`), chargée à la prise du run avec la clé des sujets de
+   * l'instance : à appliquer aux items **avant collecte et avant écriture** du dataset (tâches 1.6/1.7).
+   */
+  excludeSubjects<T>(outputSchema: unknown, items: readonly T[]): { kept: T[]; dropped: number };
 };
 
 export type RunExecutor = (ctx: RunContext) => Promise<RunResult>;
