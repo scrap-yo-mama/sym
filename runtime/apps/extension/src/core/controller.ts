@@ -47,6 +47,8 @@ export type Deps = {
   cookies: { getAll(details: { url: string } | { domain: string }): Promise<BrowserCookie[]> };
   fetch: (url: string, init: { method: string; headers: Record<string, string>; body?: string }) => Promise<{ status: number; json(): Promise<unknown> }>;
   randomId: () => string;
+  /** Version de l'extension (manifeste), envoyée à l'appairage : l'instance refuse sous `min_extension`. */
+  version: string;
 };
 
 export class ExtensionError extends Error {
@@ -62,6 +64,7 @@ export class ExtensionError extends Error {
       | 'permission_required'
       | 'site_disconnected'
       | 'unauthorized'
+      | 'extension_outdated'
       | 'instance_error',
     message: string,
   ) {
@@ -202,14 +205,28 @@ export class ExtensionController {
     const res = await this.#deps.fetch(`${instance.origin}/api/extension/pair`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ code: input.code, deviceId: await this.#deviceId(), ...(input.deviceLabel ? { deviceLabel: input.deviceLabel } : {}) }),
+      body: JSON.stringify({ code: input.code, deviceId: await this.#deviceId(), extensionVersion: this.#deps.version, ...(input.deviceLabel ? { deviceLabel: input.deviceLabel } : {}) }),
     });
+    if (res.status === 426) throw new ExtensionError('extension_outdated', await this.#outdatedMessage(instance.origin));
     if (res.status === 400 || res.status === 429) throw new ExtensionError('invalid_pairing_code', 'Unknown, expired or already used pairing code.');
     if (res.status !== 201) throw new ExtensionError('instance_error', `Instance error (HTTP ${res.status}).`);
     const data = (await res.json()) as { token: string; email: string; deviceLabel: string | null; expiresAt: string };
     const pairing: Pairing = { origin: instance.origin, token: data.token, email: data.email, deviceLabel: data.deviceLabel, expiresAt: data.expiresAt };
     await this.#deps.storage.set(KEYS.pairing, pairing);
     return pairing;
+  }
+
+  /** Message de refus d'une extension trop ancienne : nomme la version requise (`min_extension` de GET /api/version). */
+  async #outdatedMessage(origin: string): Promise<string> {
+    const own = this.#deps.version;
+    try {
+      const res = await this.#deps.fetch(`${origin}/api/version`, { method: 'GET', headers: {} });
+      const min = res.status === 200 ? ((await res.json()) as { min_extension?: unknown }).min_extension : undefined;
+      if (typeof min === 'string') return `This extension (${own}) is too old for this instance: version ${min} or newer is required. Please update the extension.`;
+    } catch {
+      // instance injoignable pour cette seconde requête : message sans version
+    }
+    return `This extension (${own}) is too old for this instance. Please update the extension.`;
   }
 
   /**

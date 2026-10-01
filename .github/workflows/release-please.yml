@@ -1,0 +1,29 @@
+# Version unique pour le monorepo (16 §3) : release-please ouvre la PR de release à partir des commits conventionnels,
+# puis crée l'étiquette `vX.Y.Z` (stable, branche main) ou `vX.Y.Z-beta.N` (beta, branche beta) à la fusion de cette PR.
+# SemVer 0.y.z avant la 1.0 : un changement cassant monte la MINOR (bump-minor-pre-major).
+#
+# RELEASE_PLEASE_TOKEN (secret du dépôt, jeton fin à contents + pull-requests en écriture) est OBLIGATOIRE : une
+# étiquette créée avec le jeton par défaut ne déclenche aucun autre workflow, donc pas release.yml. Tant que ce secret
+# n'existe pas, la création de l'étiquette échoue, et rien n'est publié. À créer par le propriétaire du dépôt (tâche 4.9).
+name: release-please
+
+on:
+  push:
+    branches: [main, beta]
+
+permissions:
+  contents: read
+
+jobs:
+  release-please:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
+        with:
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN }}
+          target-branch: ${{ github.ref_name }}
+          config-file: ${{ github.ref_name == 'beta' && 'release-please-config.beta.json' || 'release-please-config.json' }}
+          manifest-file: .release-please-manifest.json

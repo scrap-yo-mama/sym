@@ -6,7 +6,7 @@
 //   consentement par domaine, cookies en usage serveur (écriture seule, scellés), déconnexion d'un domaine.
 // L'utilisateur est toujours celui du jeton ou de la session (garde) : aucun corps ne choisit un propriétaire (INV5).
 import { checkSiteDomain } from '@runtime/core/net';
-import { SITE_COOKIE_LIMITS, verifyPassword, type SiteCookie } from '@runtime/core';
+import { extensionTooOld, SITE_COOKIE_LIMITS, verifyPassword, type SiteCookie } from '@runtime/core';
 import {
   adminRevokeDevice,
   connectSite,
@@ -52,6 +52,8 @@ const pairSchema = {
     code: { type: 'string', minLength: 1, maxLength: 32 },
     deviceId: { type: 'string', pattern: '^[A-Za-z0-9_-]{8,64}$' },
     deviceLabel: { type: 'string', minLength: 1, maxLength: 100 },
+    // Version de l'extension (manifeste) : refus sous `min_extension` (GET /api/version), avant d'échanger le code.
+    extensionVersion: { type: 'string', minLength: 1, maxLength: 64 },
   },
 } as const;
 
@@ -159,7 +161,12 @@ export function extensionRoutes(app: FastifyInstance, ctx: ServerContext): void 
     return reply.code(201).send({ code, expiresAt: expiresAt.toISOString() });
   });
 
-  app.post<{ Body: { code: string; deviceId: string; deviceLabel?: string } }>('/api/extension/pair', { schema: { body: pairSchema } }, async (request, reply) => {
+  app.post<{ Body: { code: string; deviceId: string; deviceLabel?: string; extensionVersion?: string } }>('/api/extension/pair', { schema: { body: pairSchema } }, async (request, reply) => {
+    const { extensionVersion } = request.body;
+    // Avant tout échange : une extension trop ancienne n'use ni le code d'appairage ni une tentative.
+    if (extensionVersion !== undefined && extensionTooOld(extensionVersion, ctx.minExtension)) {
+      return sendError(reply, 426, 'extension_outdated', `cette version de l’extension (${extensionVersion}) est trop ancienne : la version ${ctx.minExtension} ou plus récente est requise`);
+    }
     const ip = request.ip;
     if (pairing.blocked(ip)) return sendError(reply, 429, 'too_many_attempts', 'trop de tentatives, réessayez plus tard');
     // Tentative comptée AVANT l'échange (une rafale parallèle ne passe pas la limite), annulée d'une unité si elle

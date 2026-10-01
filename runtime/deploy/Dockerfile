@@ -13,6 +13,9 @@ RUN pnpm install --frozen-lockfile && pnpm -r build
 # --- Étape 2 : exécution, non-root
 FROM ${PLAYWRIGHT_IMAGE} AS runtime
 ENV NODE_ENV=production
+# Version publiée par GET /api/health et /api/version (tâche 4.9) ; posée par la chaîne de release.
+ARG RUNTIME_VERSION=0.0.0
+ENV RUNTIME_VERSION=${RUNTIME_VERSION}
 WORKDIR /app
 RUN apt-get update \
  && apt-get install -y --no-install-recommends tini \

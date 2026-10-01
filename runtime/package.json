@@ -29,7 +29,9 @@
     "spdx:add": "node scripts/spdx-headers.ts",
     "check:blacklist": "node scripts/check-blacklist.ts",
     "hooks:install": "git config core.hooksPath runtime/scripts/hooks",
-    "ci:local": "node scripts/ci-local.ts"
+    "ci:local": "node scripts/ci-local.ts",
+    "release:dry-run": "node scripts/release/dry-run.ts",
+    "check:release": "node scripts/release/gates.ts"
   },
   "devDependencies": {
     "@eslint/js": "catalog:",

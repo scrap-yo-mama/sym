@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Sondes et métriques (14 § 3), joignables avant l'initialisation (13 § 4).
 import { createHash, timingSafeEqual } from 'node:crypto';
-import { can } from '@runtime/core';
+import { can, MCP_SPEC_VERSION } from '@runtime/core';
 import { checkReadiness, listWorkers, queueDepth } from '@runtime/db';
 import { healthResponseSchema } from '@runtime/schemas';
 import type { FastifyInstance } from 'fastify';
@@ -15,6 +15,10 @@ export function systemRoutes(app: FastifyInstance, ctx: ServerContext): void {
   // Vivacité : le processus répond. Aucun accès base, répond pendant une migration et en mode dégradé. Seule la
   // version de l'application est publiée (aucune version de dépendance ni nom d'hôte).
   app.get('/api/health', { schema: { response: { 200: healthResponseSchema } } }, async () => ({ status: 'ok' as const, version: ctx.appVersion }));
+
+  // Versions (16 §3) : servie localement, aucune requête vers un serveur distant (INV9). Quatre champs, aucune version de
+  // dépendance. `min_extension` : l'appairage d'une extension plus ancienne est refusé (routes/extension.ts).
+  app.get('/api/version', async () => ({ server: ctx.appVersion, schema: ctx.expectedSchemaVersion, min_extension: ctx.minExtension, mcp_spec: MCP_SPEC_VERSION }));
 
   // Disponibilité : base joignable, migrations appliquées, `key_check` valide, initialisation terminée. Les workers sont
   // informatifs (pas dans le code). « pg-boss démarré » (14 § 3) : le server n'a pas encore de file dans son contexte ;

@@ -17,6 +17,8 @@ export type ServerContext = {
   keyFingerprint: string;
   /** Version de l'application (`RUNTIME_VERSION`), seule version publiée par `/api/health`. */
   appVersion: string;
+  /** Version minimale de l'extension acceptée à l'appairage (`min_extension` de `GET /api/version`, 16 §3). */
+  minExtension: string;
   /**
    * Démarrage (14 § 5) : `ready()` vaut true dès que le schéma est à la version attendue et que l'initialisation
    * (keyCheck, contrôle d'amorçage) est faite. Tant que false, seules `/api/health` et `/api/ready` répondent.

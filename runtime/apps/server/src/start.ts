@@ -8,7 +8,7 @@
 // redémarrage (`/api/ready` passe de 503 à 200, recette 1). Schéma PLUS RÉCENT que le code : refus de démarrer (garde
 // contre un retour d'image sans restauration). Une erreur fatale pendant l'initialisation différée (clé, amorçage) est
 // remise à `onFatal` (index.ts : message clair puis sortie 1).
-import { initTelemetry, kekFor, type Telemetry } from '@runtime/core';
+import { initTelemetry, kekFor, MIN_EXTENSION_VERSION, type Telemetry } from '@runtime/core';
 import { currentSchemaVersion, createDb, expectedSchemaVersion, holdSecretsLock, KeyCheckError, keyCheck } from '@runtime/db';
 import type { FastifyBaseLogger, FastifyInstance } from 'fastify';
 import pg from 'pg';
@@ -29,6 +29,8 @@ export type PrepareOptions = {
   loggerInstance?: FastifyBaseLogger;
   /** Période de relecture de la version du schéma en mode dégradé (défaut 5 s). Les sondes la relisent aussi. */
   schemaPollMs?: number;
+  /** Version minimale d'extension (défaut : `MIN_EXTENSION_VERSION` de @runtime/core). Les tests la relèvent. */
+  minExtension?: string;
   /** Erreur fatale pendant l'initialisation différée (défaut : journalisée ; index.ts arrête le processus). */
   onFatal?: (error: Error) => void;
 };
@@ -123,6 +125,7 @@ export async function prepareServer(env: NodeJS.ProcessEnv = process.env, option
       adminEmail: config.adminEmail,
       keyFingerprint: '',
       appVersion: config.appVersion,
+      minExtension: options.minExtension ?? MIN_EXTENSION_VERSION,
       startup: { ready: tryFinish },
       expectedSchemaVersion: expected,
       keyring: config.keyring,

@@ -5,6 +5,9 @@
   ],
   "workspaces": {
     ".": {
+      "ignoreBinaries": [
+        "cosign"
+      ],
       "entry": [
         "scripts/*.ts",
         "tests/**/*.test.ts",

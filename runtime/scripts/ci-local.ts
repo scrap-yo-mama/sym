@@ -16,6 +16,9 @@ const STEPS: Step[] = [
   { job: 'quality', name: 'deps épinglées', cmd: ['pnpm', 'check:deps-pinned'] },
   { job: 'quality', name: 'liste noire INV6', cmd: ['pnpm', 'check:blacklist'] },
   { job: 'quality', name: 'licences', cmd: ['pnpm', 'check:licenses'] },
+  { job: 'quality', name: 'portes de release (workflows, image non root)', cmd: ['pnpm', 'check:release'] },
+  // Tâche 4.9 : release à blanc (cosign avec une clé de test, SBOM CycloneDX, rien de publié ni de poussé).
+  { job: 'quality', name: 'release à blanc', cmd: ['pnpm', 'release:dry-run'] },
   { job: 'unit', name: 'tests unitaires + couverture', cmd: ['pnpm', 'test:coverage'] },
   // Étage S : garde SSRF sur fetch et Chromium (Playwright). Chromium : pnpm exec playwright install chromium.
   { job: 'security', name: 'sécurité (SSRF, Chromium)', cmd: ['pnpm', 'test:security'] },
