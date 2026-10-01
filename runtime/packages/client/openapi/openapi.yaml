@@ -2880,10 +2880,51 @@ components:
           additionalProperties: true
         user:
           $ref: '#/components/schemas/AuthUser'
+    Permission:
+      description: Permission de la matrice des rôles (13 § 2), nom de `packages/core/src/auth/roles.ts`.
+      type: string
+      enum:
+        - 'account:update'
+        - 'account:mfa'
+        - 'account:sessions'
+        - 'apikeys:manage'
+        - 'users:invite'
+        - 'users:list'
+        - 'users:deactivate'
+        - 'users:delete'
+        - 'users:set_role'
+        - 'owner:transfer'
+        - 'users:revoke_sessions'
+        - 'apis:create'
+        - 'apis:update'
+        - 'apis:delete'
+        - 'schedules:manage'
+        - 'apis:read'
+        - 'apis:set_visibility'
+        - 'apis:run'
+        - 'runs:read'
+        - 'datasets:read'
+        - 'runs:stats'
+        - 'sites:connect'
+        - 'sites:server_use'
+        - 'tunnel:pair'
+        - 'sites:read_cookies'
+        - 'tunnel:route_other'
+        - 'apikeys:read_other'
+        - 'tunnel:revoke_other'
+        - 'apikeys:revoke_other'
+        - 'settings:llm:write'
+        - 'settings:proxies:write'
+        - 'settings:smtp:write'
+        - 'settings:security:write'
+        - 'settings:sso:write'
+        - 'audit:read'
+        - 'audit:export'
+        - 'audit:purge'
     Me:
       type: object
       additionalProperties: false
-      required: [id, email, displayName, role, locale, theme, via, scopes]
+      required: [id, email, displayName, role, locale, theme, via, scopes, permissions, mfaEnabled, mfaEnrollmentRequired]
       properties:
         id:
           type: string
@@ -2909,6 +2950,21 @@ components:
               items:
                 $ref: '#/components/schemas/ApiKeyScope'
             - type: 'null'
+        permissions:
+          description: >-
+            Permissions que `can(role, …)` (13 § 2) accorde au rôle de l'appelant. La console pilote ses écrans et ses routes
+            par cette liste, sans recopier la matrice ; le serveur reste seul juge à chaque requête.
+          type: array
+          items:
+            $ref: '#/components/schemas/Permission'
+        mfaEnabled:
+          description: 2FA TOTP confirmée et lisible sur le compte.
+          type: boolean
+        mfaEnrollmentRequired:
+          description: >-
+            MFA_ENFORCED concerne le rôle et la 2FA n'est pas en place (ni `amr` de l'IdP) : toute route sauf l'enrôlement répond
+            403 `mfa_enrollment_required` (13 § 7).
+          type: boolean
     ApiKey:
       type: object
       required: [id, label, prefix, scopes, expiresAt, lastUsedAt, createdAt, revokedAt]

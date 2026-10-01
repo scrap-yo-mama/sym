@@ -1656,6 +1656,11 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
+        /**
+         * @description Permission de la matrice des rôles (13 § 2), nom de `packages/core/src/auth/roles.ts`.
+         * @enum {string}
+         */
+        Permission: "account:update" | "account:mfa" | "account:sessions" | "apikeys:manage" | "users:invite" | "users:list" | "users:deactivate" | "users:delete" | "users:set_role" | "owner:transfer" | "users:revoke_sessions" | "apis:create" | "apis:update" | "apis:delete" | "schedules:manage" | "apis:read" | "apis:set_visibility" | "apis:run" | "runs:read" | "datasets:read" | "runs:stats" | "sites:connect" | "sites:server_use" | "tunnel:pair" | "sites:read_cookies" | "tunnel:route_other" | "apikeys:read_other" | "tunnel:revoke_other" | "apikeys:revoke_other" | "settings:llm:write" | "settings:proxies:write" | "settings:smtp:write" | "settings:security:write" | "settings:sso:write" | "audit:read" | "audit:export" | "audit:purge";
         Me: {
             /** Format: uuid */
             id: string;
@@ -1669,6 +1674,12 @@ export interface components {
             via: "ui" | "apikey";
             /** @description Scopes de la clé d'API ; null pour une session d'interface. */
             scopes: components["schemas"]["ApiKeyScope"][] | null;
+            /** @description Permissions que `can(role, …)` (13 § 2) accorde au rôle de l'appelant. La console pilote ses écrans et ses routes par cette liste, sans recopier la matrice ; le serveur reste seul juge à chaque requête. */
+            permissions: components["schemas"]["Permission"][];
+            /** @description 2FA TOTP confirmée et lisible sur le compte. */
+            mfaEnabled: boolean;
+            /** @description MFA_ENFORCED concerne le rôle et la 2FA n'est pas en place (ni `amr` de l'IdP) : toute route sauf l'enrôlement répond 403 `mfa_enrollment_required` (13 § 7). */
+            mfaEnrollmentRequired: boolean;
         };
         ApiKey: {
             /** Format: uuid */

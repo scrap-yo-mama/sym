@@ -3,6 +3,7 @@
 // e-mails de compte (SMTP de l'instance, garde SSRF `operator-config`), curseurs de pagination, en-têtes transmis à la
 // bibliothèque d'auth (IP résolue par Fastify seulement).
 import {
+  can,
   generateOpaqueToken,
   hashBackupCode,
   hashOpaqueToken,
@@ -10,8 +11,12 @@ import {
   kekFor,
   KNOWN_DEVICE_TTL_DAYS,
   matchTotp,
+  mfaRequiredFor,
+  PERMISSIONS,
   verifyPassword,
   type Kek,
+  type Permission,
+  type Role,
 } from '@runtime/core';
 import { sendMail } from '@runtime/core/net';
 import { consumeBackupCode, consumeTotpStep, loadSmtpConfig, loadTwoFactor } from '@runtime/db';
@@ -270,3 +275,48 @@ export function decodeCursor(cursor: string | undefined, size: number): string[]
 export const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export const iso = (d: Date | null | undefined): string | null => (d ? d.toISOString() : null);
+
+// ---------------------------------------------------------------------------------------------------------------
+// Identité renvoyée à la console (`Me`)
+// ---------------------------------------------------------------------------------------------------------------
+
+/**
+ * Permissions que `can()` accorde au rôle : la console pilote ses écrans et ses routes par cette liste (06 § 4.1, 13.2 de la
+ * tâche 3.8) au lieu de recopier la matrice des rôles. Elle ne dit que si le rôle peut tenter l'action ; le serveur reste
+ * seul juge (rôle relu en base à chaque requête, 13 § 2).
+ */
+function permissionsOf(role: Role): Permission[] {
+  return (Object.keys(PERMISSIONS) as Permission[]).filter((permission) => can(role, permission));
+}
+
+/**
+ * Corps de `GET /api/me` et de `POST /api/invitations/accept` : identité, préférences, droits, état de la 2FA. `mfaEnrollmentRequired`
+ * est vrai quand MFA_ENFORCED concerne le rôle, que la 2FA n'est pas confirmée et qu'aucun `amr` de l'IdP n'en tient lieu : la console
+ * montre alors l'enrôlement seul (13 § 7), le garde refusant déjà toute autre route.
+ */
+export async function meView(
+  ctx: Pick<ServerContext, 'pool' | 'mfaEnforced'>,
+  who: { userId: string; email: string; role: Role; via: 'ui' | 'apikey' | 'extension'; scopes: string[] | null; mfaMethod?: MfaMethod | null },
+) {
+  const { rows } = await ctx.pool.query<{ display_name: string; locale: string; theme: string; mfa_enabled: boolean }>(
+    `SELECT u.display_name, u.locale, u.theme,
+            EXISTS (SELECT 1 FROM two_factor t WHERE t.user_id = u.id AND t.confirmed_at IS NOT NULL AND t.unreadable_since IS NULL) AS mfa_enabled
+     FROM users u WHERE u.id = $1`,
+    [who.userId],
+  );
+  const row = rows[0];
+  const mfaEnabled = row?.mfa_enabled === true;
+  return {
+    id: who.userId,
+    email: who.email,
+    displayName: row?.display_name ?? '',
+    role: who.role,
+    locale: row?.locale ?? 'en',
+    theme: row?.theme ?? 'system',
+    via: who.via,
+    scopes: who.scopes,
+    permissions: permissionsOf(who.role),
+    mfaEnabled,
+    mfaEnrollmentRequired: who.via === 'ui' && mfaRequiredFor(ctx.mfaEnforced, who.role) && !mfaEnabled && who.mfaMethod !== 'idp',
+  };
+}

@@ -19,7 +19,14 @@
     "newApi": "New API",
     "runs": "All runs",
     "settings": "Settings",
-    "catalog": "Catalog"
+    "catalog": "Catalog",
+    "users": "Users",
+    "audit": "Audit",
+    "account": "My account",
+    "roleBanner": {
+      "owner": "You are the owner of this instance.",
+      "admin": "You are an admin of this instance."
+    }
   },
   "auth": {
     "login": {
@@ -28,7 +35,10 @@
       "email": "Email address",
       "password": "Password",
       "submit": "Sign in",
-      "submitting": "Signing in…"
+      "submitting": "Signing in…",
+      "forgot": "Forgot your password?",
+      "sso": "Sign in with {provider}",
+      "ssoSeparator": "or"
     },
     "errors": {
       "invalid_credentials": "Email address or password is incorrect.",
@@ -36,7 +46,63 @@
       "not_initialized": "This instance is not set up yet. Finish the first-start wizard, then sign in.",
       "network": "The server cannot be reached. Check your connection and try again.",
       "session_expired": "Your session has ended. Sign in again.",
-      "unknown": "Sign-in failed. Try again."
+      "unknown": "Sign-in failed. Try again.",
+      "invalid_code": "This code is not valid or was already used.",
+      "sso": "Sign-in with SSO did not complete ({code})."
+    },
+    "secondFactor": {
+      "title": "Second factor",
+      "description": "Enter the 6-digit code from your authenticator app, or one of your backup codes.",
+      "code": "Code",
+      "submit": "Verify",
+      "submitting": "Verifying…",
+      "cancel": "Use another account"
+    },
+    "forgot": {
+      "title": "Reset your password",
+      "description": "Enter the address of your account. If the instance can send e-mail, a link is sent to you.",
+      "email": "Email address",
+      "submit": "Send the link",
+      "submitting": "Sending…",
+      "done": "If an account exists for this address and the instance can send e-mail, a link is on its way. Without e-mail on the instance, ask an admin.",
+      "back": "Back to sign-in"
+    },
+    "reset": {
+      "title": "Choose a new password",
+      "description": "The link works once. Signing in again is needed afterwards, and every open session and API key of the account is closed.",
+      "password": "New password",
+      "passwordHint": "At least 12 characters. Pasting is fine, and a long phrase works well.",
+      "code": "Second-factor code",
+      "codeHint": "Needed when the account has two-factor authentication: a 6-digit code or a backup code.",
+      "submit": "Change the password",
+      "submitting": "Changing…",
+      "done": "Your password was changed. Sign in with the new one.",
+      "toLogin": "Go to sign-in",
+      "errors": {
+        "reset_link_invalid": "This reset link is not valid or has expired. Ask for a new one.",
+        "weak_password": "This password is not accepted. Use at least 12 characters and avoid common passwords.",
+        "mfa_code_required": "Enter a valid code from your authenticator app or a backup code."
+      }
+    },
+    "invite": {
+      "title": "Join the instance",
+      "description": "You were invited. Choose a name and a password to create your account.",
+      "displayName": "Your name",
+      "displayNameHint": "Optional. Shown to the admins of the instance.",
+      "password": "Password",
+      "passwordHint": "At least 12 characters. Pasting is fine, and a long phrase works well.",
+      "confirm": "Repeat the password",
+      "mismatch": "The two passwords are different.",
+      "submit": "Create my account",
+      "submitting": "Creating…",
+      "sso": "Accept with {provider}",
+      "signedIn": "You are signed in as {name}. Creating this account signs you in as the invited person instead.",
+      "errors": {
+        "invitation_invalid": "This invitation link is not valid or has expired. Ask the admin who invited you for a new one.",
+        "weak_password": "This password is not accepted. Use at least 12 characters and avoid common passwords.",
+        "sso_required": "This instance asks you to accept the invitation with SSO. Use the SSO button.",
+        "too_many_attempts": "Too many attempts. Try again in a few minutes."
+      }
     }
   },
   "home": {
@@ -65,7 +131,35 @@
     "reauth_failed": "Current password is incorrect.",
     "too_many_attempts": "Too many attempts. Try again in a few minutes.",
     "too_many_pairing_codes": "Too many active pairing codes. Use one, or wait for it to expire (10 minutes).",
-    "account_site_ack_required": "This site asks for an account. Confirm the notice to continue."
+    "account_site_ack_required": "This site asks for an account. Confirm the notice to continue.",
+    "reauth_required": "Sign in again to confirm this action, then try again.",
+    "current_password_required": "Enter your current password.",
+    "mfa_code_required": "Enter the code from your authenticator app.",
+    "invalid_code": "This code is not valid or was already used.",
+    "mfa_enforced": "This instance requires two-factor authentication for your role. It cannot be turned off.",
+    "mfa_already_enabled": "Two-factor authentication is already on.",
+    "mfa_not_enabled": "Two-factor authentication is not on for this account.",
+    "no_enrollment": "No setup is in progress. Start the setup again.",
+    "mfa_required": "This action needs two-factor authentication.",
+    "mfa_enrollment_required": "Turn on two-factor authentication to continue.",
+    "weak_password": "This password is not accepted. Use at least 12 characters and avoid common passwords.",
+    "invitation_invalid": "This invitation link is not valid or has expired. Ask the admin who invited you for a new one.",
+    "invalid_email": "This e-mail address is not valid.",
+    "email_domain_not_allowed": "This instance does not accept this e-mail domain.",
+    "user_exists": "An account already exists for this address.",
+    "invitation_pending": "An invitation is already pending for this address. Resend or revoke it.",
+    "user_not_disabled": "Disable the account first, then delete it.",
+    "user_not_active": "This account is not active.",
+    "smtp_configured": "E-mail is set up on this instance: the person uses \"Forgot your password?\" instead of a link from an admin.",
+    "sso_required": "This instance asks you to sign in with SSO. Use the SSO button.",
+    "sso_disabled": "SSO is not enabled on this instance.",
+    "last_login_method": "This is your only way to sign in. Add another one first.",
+    "invalid_settings": "These settings are not valid. Check the form and try again.",
+    "lifetime_too_long": "This lifetime is longer than the instance allows. Choose a shorter one.",
+    "reset_link_invalid": "This reset link is not valid or has expired.",
+    "idp_unreachable": "The identity provider cannot be reached. Try again later.",
+    "invalid_status": "This status change is not possible.",
+    "invalid_cursor": "The list position is no longer valid. Reload the list."
   },
   "common": {
     "loading": "Loading…",
@@ -446,7 +540,11 @@
       "proxies": "Proxies",
       "extension": "Extension & sessions",
       "alerts": "Alerts",
-      "diagnostic": "Diagnostic"
+      "diagnostic": "Diagnostic",
+      "keys": "API keys",
+      "account": "My account",
+      "security": "Security",
+      "sso": "SSO"
     },
     "adminOnly": "Only an admin of your instance can read or change these settings.",
     "test": "Test",
@@ -1148,6 +1246,428 @@
       "status_changed": "Status: {to}.",
       "action_required": "Action required.",
       "unknown": "Event {kind}."
+    }
+  },
+  "setup": {
+    "title": "Set up your instance",
+    "intro": "Create the owner account. This wizard works once: when the owner exists, this page disappears.",
+    "token": "Bootstrap token",
+    "tokenHint": "The value of ADMIN_BOOTSTRAP_TOKEN from the deployment. It is never shown again.",
+    "email": "Email address",
+    "displayName": "Your name",
+    "displayNameHint": "Optional.",
+    "password": "Password",
+    "passwordHint": "At least 12 characters. Pasting is fine, and a long phrase works well.",
+    "submit": "Create the owner account",
+    "submitting": "Creating…",
+    "signInFailed": "The owner account was created, but signing in failed. Sign in from the sign-in page.",
+    "errors": {
+      "forbidden": "The token or the address is not accepted.",
+      "weak_password": "This password is not accepted. Use at least 12 characters and avoid common passwords.",
+      "too_many_attempts": "Too many attempts. Try again in a few minutes."
+    },
+    "done": {
+      "title": "Owner account created",
+      "fingerprint": "Key fingerprint",
+      "onlyOnce": "The fingerprint is shown only now. Note it, so that you can check later that the same key is in use.",
+      "reminder": "Back up MASTER_KEY outside this platform. Without it, the encrypted secrets can never be read again.",
+      "acknowledge": "I saved MASTER_KEY outside this platform",
+      "continue": "Continue"
+    },
+    "next": {
+      "title": "Connect what the instance needs",
+      "intro": "Each page has a Test button. Do them in this order, or later.",
+      "models": "AI models: the provider and the key used to investigate sites.",
+      "proxies": "Proxies: only if some sites need a network route.",
+      "alerts": "Alerts: e-mail (SMTP) and webhooks.",
+      "open": "Open",
+      "later": "Go to the console"
+    }
+  },
+  "account": {
+    "title": "My account",
+    "intro": "Your sign-in, your second factor, your sessions and your activity.",
+    "notice": {
+      "title": "About your account",
+      "unknown": "A notice was recorded on {date} ({code}).",
+      "dismiss": "Dismiss",
+      "codes": {
+        "password_reset_by_operator": "A reset link was issued for your account by the operator of the server on {date}. If this was not you or an admin you know, change your password and check your sessions.",
+        "password_reset_withheld": "A reset link by e-mail was held back on {date}, because an admin changed the e-mail relay less than 24 hours earlier and your account has no second factor."
+      }
+    },
+    "preferences": {
+      "title": "Language and theme",
+      "text": "Use the language and theme controls at the top of the page. They are saved with your account."
+    },
+    "twoFactor": {
+      "title": "Two-factor authentication",
+      "intro": "A 6-digit code from an authenticator app is asked after your password. E-mail and SMS are not used.",
+      "on": "Two-factor authentication is on.",
+      "off": "Two-factor authentication is off.",
+      "enforced": "This instance requires two-factor authentication for your role.",
+      "enrollTitle": "Turn it on",
+      "password": "Current password",
+      "passwordHint": "Leave it empty if you sign in only with SSO and your last sign-in is recent.",
+      "start": "Start the setup",
+      "seedTitle": "Add this key to your authenticator app",
+      "seedHelp": "Choose manual entry in the app and type the key. It is shown only now.",
+      "seed": "Key",
+      "uri": "Setup address",
+      "code": "First 6-digit code",
+      "confirm": "Turn on",
+      "confirming": "Checking…",
+      "cancel": "Cancel the setup",
+      "backupTitle": "Backup codes",
+      "backupHelp": "Each code works once. Store them somewhere safe. They are shown only now.",
+      "backupCopy": "Copy the codes",
+      "backupDone": "I stored the codes",
+      "regenerateTitle": "New backup codes",
+      "regenerateHelp": "Needs your password and a current code. The old codes stop working.",
+      "regenerate": "Make new codes",
+      "disableTitle": "Turn it off",
+      "disableHelp": "Needs your password and a current code.",
+      "disable": "Turn off",
+      "currentCode": "Current code or backup code",
+      "disabledDone": "Two-factor authentication is off."
+    },
+    "sessions": {
+      "title": "Open sessions",
+      "intro": "The places where you are signed in. Close the ones you do not recognize.",
+      "caption": "Your open sessions",
+      "started": "Started",
+      "lastSeen": "Last seen",
+      "expires": "Expires",
+      "device": "Browser",
+      "address": "Address",
+      "current": "This session",
+      "close": "Close",
+      "closeOthers": "Close all other sessions",
+      "none": "No other session.",
+      "unknown": "unknown"
+    },
+    "identities": {
+      "title": "Single sign-on",
+      "intro": "Identities linked to your account. Linking asks for your password again.",
+      "none": "No linked identity.",
+      "caption": "Linked identities",
+      "provider": "Provider",
+      "issuer": "Issuer",
+      "linked": "Linked",
+      "link": "Link {provider}",
+      "unlink": "Unlink",
+      "password": "Current password",
+      "code": "Second-factor code",
+      "justLinked": "The identity was linked."
+    },
+    "activity": {
+      "title": "My recent activity",
+      "caption": "Your recent account events",
+      "empty": "No event yet."
+    }
+  },
+  "twoFactorSetup": {
+    "title": "Turn on two-factor authentication",
+    "intro": "This instance requires it for your role. Finish this step to use the console.",
+    "signOut": "Sign out instead",
+    "continue": "Open the console"
+  },
+  "keys": {
+    "title": "API keys",
+    "intro": "Keys identify you to the REST API and to MCP. Each one has scopes and an expiry date. The secret appears once, when the key is created.",
+    "createTitle": "Create a key",
+    "label": "Label",
+    "labelHint": "For example the name of the tool that uses it.",
+    "scopes": "Scopes",
+    "scopesHint": "A key can only do what its scopes allow, on your own data.",
+    "scope": {
+      "apis:read": "Read APIs",
+      "apis:run": "Run APIs",
+      "apis:write": "Create and change APIs",
+      "runs:read": "Read runs",
+      "datasets:read": "Read datasets",
+      "schedules:write": "Manage schedules",
+      "sites:read": "Read the state of connected sites (never cookies)"
+    },
+    "expiresIn": "Expires in (days)",
+    "expiresHint": "90 days by default. The instance sets a maximum.",
+    "password": "Current password",
+    "passwordHint": "Leave it empty if you sign in only with SSO and your last sign-in is recent.",
+    "submit": "Create the key",
+    "submitting": "Creating…",
+    "scopesRequired": "Choose at least one scope.",
+    "labelRequired": "Enter a label.",
+    "created": {
+      "title": "Copy this key now",
+      "text": "It will not be shown again. Store it in a secret manager.",
+      "key": "Key",
+      "dismiss": "I copied the key"
+    },
+    "list": "Your keys",
+    "caption": "Your API keys",
+    "empty": "No key yet.",
+    "columns": {
+      "label": "Label",
+      "prefix": "Prefix",
+      "scopes": "Scopes",
+      "expires": "Expires",
+      "lastUsed": "Last used",
+      "status": "State"
+    },
+    "status": {
+      "active": "active",
+      "revoked": "revoked",
+      "expired": "expired"
+    },
+    "neverUsed": "never",
+    "revoke": "Revoke",
+    "revokeTitle": "Revoke this key?",
+    "revokeConsequence": "Tools that use \"{label}\" lose access right away. This cannot be undone."
+  },
+  "users": {
+    "title": "Users",
+    "intro": "Invite people, set roles, disable accounts. You see accounts and metadata only: never the content of someone else's runs, datasets or cookies.",
+    "invite": {
+      "title": "Invite someone",
+      "email": "Email address",
+      "emailHint": "The link works only for this exact address, once, for 48 hours.",
+      "role": "Role",
+      "submit": "Create the invitation",
+      "submitting": "Creating…",
+      "emailed": "An e-mail with the link was sent to {email}.",
+      "link": "Link for {email}",
+      "linkHelp": "No e-mail is set up, so copy this link and send it to the person yourself. It is shown only now.",
+      "copy": "Copy the link",
+      "dismiss": "I copied the link"
+    },
+    "roles": {
+      "owner": "Owner",
+      "admin": "Admin",
+      "member": "Member"
+    },
+    "statuses": {
+      "invited": "Invited",
+      "active": "Active",
+      "disabled": "Disabled"
+    },
+    "invitations": {
+      "title": "Invitations",
+      "caption": "Invitations",
+      "empty": "No invitation.",
+      "email": "Email address",
+      "role": "Role",
+      "expires": "Expires",
+      "state": "State",
+      "pending": "pending",
+      "accepted": "accepted",
+      "revoked": "revoked",
+      "expired": "expired",
+      "resend": "Resend",
+      "revoke": "Revoke",
+      "revokeTitle": "Revoke this invitation?",
+      "revokeConsequence": "The link sent to {email} stops working."
+    },
+    "accounts": {
+      "title": "Accounts",
+      "caption": "Accounts of the instance",
+      "empty": "No account.",
+      "name": "Account",
+      "role": "Role",
+      "status": "Status",
+      "mfa": "2FA",
+      "mfaOn": "on",
+      "mfaOff": "off",
+      "lastLogin": "Last sign-in",
+      "never": "never",
+      "actions": "Actions",
+      "you": "you",
+      "ownerNoActions": "The owner cannot be changed here.",
+      "loadMore": "Load more accounts"
+    },
+    "action": {
+      "makeAdmin": "Make admin",
+      "makeMember": "Make member",
+      "disable": "Disable",
+      "enable": "Enable again",
+      "delete": "Delete",
+      "revokeAccess": "Close sessions and revoke keys",
+      "resetTwoFactor": "Reset 2FA",
+      "resetLink": "Reset link",
+      "for": "{action}: {name}"
+    },
+    "confirm": {
+      "disable": "Disable {name}?",
+      "disableConsequence": "Sessions are closed, keys and tunnel tokens are revoked, server-side cookies are deleted and schedules are paused. Runs and datasets stay with the person.",
+      "delete": "Delete {name}?",
+      "deleteConsequence": "Datasets, runs, APIs and site sessions of this account are deleted or made anonymous. The audit log keeps the identifier, not the data. This cannot be undone.",
+      "revokeAccess": "Revoke access of {name}?",
+      "revokeAccessConsequence": "All sessions are closed and all API keys and tunnel tokens are revoked. The account stays active. You do not see or use any of them.",
+      "resetTwoFactor": "Reset the 2FA of {name}?",
+      "resetTwoFactorConsequence": "The sessions are closed and the person must set up two-factor authentication again. The action is logged.",
+      "resetLink": "Create a reset link for {name}?",
+      "resetLinkConsequence": "All sessions of the account are closed. The link needs the person's second factor. You never choose a password for someone.",
+      "role": "Change the role of {name} to {role}?",
+      "roleConsequence": "The new role applies at the next request of the person."
+    },
+    "resetLink": {
+      "title": "Reset link for {name}",
+      "help": "Send this link to the person. It works once and asks for their second factor. It is shown only now.",
+      "expires": "Valid until {date}.",
+      "note": "A copyable link exists only when e-mail is not set up and the account has two-factor authentication. Otherwise, use the server command (see the guide)."
+    },
+    "done": {
+      "role": "The role was changed.",
+      "disabled": "The account was disabled.",
+      "enabled": "The account was enabled.",
+      "deleted": "The account was deleted.",
+      "revoked": "Access was revoked.",
+      "twoFactorReset": "Two-factor authentication was reset.",
+      "invitationRevoked": "The invitation was revoked.",
+      "invitationResent": "The invitation was sent again."
+    },
+    "transfer": {
+      "title": "Transfer ownership",
+      "intro": "The new owner gets every owner right and you become an admin. Needs your password and a 6-digit code.",
+      "to": "New owner",
+      "choose": "Choose an account",
+      "password": "Current password",
+      "code": "6-digit code",
+      "submit": "Transfer ownership",
+      "confirmTitle": "Transfer ownership to {name}?",
+      "confirmConsequence": "This changes who controls the instance.",
+      "done": "Ownership was transferred."
+    }
+  },
+  "audit": {
+    "title": "Audit",
+    "intro": "Administration actions and sign-in events. It holds metadata only: no secret, no cookie, no dataset content, no tool arguments.",
+    "filters": {
+      "legend": "Audit filters",
+      "action": "Action",
+      "actionHint": "Exact action code, for example user.deactivated.",
+      "actor": "Account",
+      "outcome": "Outcome",
+      "since": "From",
+      "until": "To",
+      "all": "All",
+      "apply": "Apply",
+      "reset": "Reset filters"
+    },
+    "caption": "Audit events",
+    "columns": {
+      "at": "When",
+      "actor": "Who",
+      "via": "Through",
+      "action": "Action",
+      "target": "Target",
+      "outcome": "Outcome",
+      "address": "Address",
+      "details": "Details"
+    },
+    "outcomes": {
+      "success": "Success",
+      "denied": "Denied",
+      "error": "Error"
+    },
+    "via": {
+      "ui": "Console",
+      "apikey": "API key",
+      "mcp": "MCP",
+      "sso": "SSO",
+      "system": "System"
+    },
+    "system": "system",
+    "unknownActor": "unknown",
+    "empty": "No event matches.",
+    "loadMore": "Load more",
+    "noDetails": "none",
+    "export": "Export (NDJSON)",
+    "exporting": "Exporting…",
+    "exportFailed": "The export did not complete.",
+    "action": {
+      "access_denied": "Access denied",
+      "apikey_created": "API key created",
+      "apikey_first_use": "API key used for the first time",
+      "apikey_revoked": "API key revoked",
+      "audit_exported": "Audit exported",
+      "auth_login": "Signed in",
+      "auth_login_failed": "Sign-in failed",
+      "auth_login_rate_limit_waived": "Sign-in limit waived for a known device",
+      "auth_logout": "Signed out",
+      "auth_mfa_failed": "Second factor refused",
+      "auth_mfa_verified": "Second factor accepted",
+      "auth_password_reset": "Password reset",
+      "auth_password_reset_requested": "Password reset requested",
+      "auth_session_revoked": "Session closed",
+      "auth_sessions_revoked": "Sessions closed",
+      "invitation_accepted": "Invitation accepted",
+      "invitation_created": "Invitation created",
+      "invitation_resent": "Invitation sent again",
+      "invitation_revoked": "Invitation revoked",
+      "mfa_backup_codes_regenerated": "Backup codes regenerated",
+      "mfa_disable": "2FA removal refused",
+      "mfa_disabled": "2FA turned off",
+      "mfa_enabled": "2FA turned on",
+      "mfa_enroll_failed": "2FA setup code refused",
+      "mfa_enroll_started": "2FA setup started",
+      "mfa_reset": "2FA reset by an admin",
+      "owner_transferred": "Ownership transferred",
+      "settings_security_updated": "Security settings changed",
+      "settings_sso_updated": "SSO settings changed",
+      "setup_attempt": "Setup attempt",
+      "setup_owner_created": "Owner account created",
+      "site_cookies_synced": "Site cookies synced",
+      "site_disconnected": "Site disconnected",
+      "sso_link_started": "SSO link started",
+      "sso_linked": "SSO identity linked",
+      "sso_unlinked": "SSO identity unlinked",
+      "tunnel_paired": "Extension paired",
+      "tunnel_pairing_code_created": "Pairing code created",
+      "tunnel_revoked": "Extension revoked",
+      "user_access_revoked": "Access revoked",
+      "user_deactivated": "Account disabled",
+      "user_deleted": "Account deleted",
+      "user_provisioned": "Account created by SSO",
+      "user_reactivated": "Account enabled again",
+      "user_reset_link": "Reset link issued",
+      "user_role_changed": "Role changed"
+    }
+  },
+  "instance": {
+    "security": {
+      "title": "Instance security",
+      "intro": "Session lengths, allowed e-mail domains and limits. Only the owner can change them.",
+      "idle": "Idle time before a session ends (minutes)",
+      "absolute": "Longest session (hours)",
+      "domains": "Allowed e-mail domains",
+      "domainsHint": "One per line. Empty means every domain.",
+      "keyMax": "Longest API key lifetime (days)",
+      "retention": "Audit retention (months)",
+      "save": "Save"
+    },
+    "sso": {
+      "title": "Single sign-on (OIDC)",
+      "intro": "One identity provider (Keycloak, Authentik, Google, Entra). Accounts are matched by issuer and subject, never by e-mail.",
+      "enabled": "Enable SSO",
+      "label": "Button label",
+      "slug": "Identifier",
+      "slugHint": "Lowercase letters, digits and hyphens.",
+      "issuer": "Issuer URL",
+      "clientId": "Client ID",
+      "clientSecret": "Client secret",
+      "required": "Require SSO",
+      "requiredHint": "Local passwords stop working, except the owner's emergency local sign-in.",
+      "jit": "Create accounts on first sign-in",
+      "jitHint": "Off by default. Needs at least one allowed domain. New accounts are members.",
+      "jitDomains": "Domains for new accounts",
+      "groups": "Roles from provider groups",
+      "groupsHint": "Default is member. The owner role is never given.",
+      "group": "Group",
+      "role": "Role",
+      "addGroup": "Add a group",
+      "removeGroup": "Remove group {group}",
+      "save": "Save",
+      "notConfigured": "SSO is not configured yet."
     }
   }
 }

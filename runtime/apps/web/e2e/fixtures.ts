@@ -3,21 +3,25 @@
 // serveur de harness.ts. Tout y est fictif (`zz-`, domaines `.example`) ; aucune donnée réelle.
 import { readFileSync } from 'node:fs';
 import type { components } from '@runtime/client';
+import { ROLE_PERMISSIONS } from '../src/testing/permissions.ts';
 import type { ApiRoutes } from './harness.ts';
 
 type Schemas = components['schemas'];
 
 export const UUID = (n: number): string => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 
-const ME = (locale: 'en' | 'fr', theme: 'light' | 'dark'): Schemas['Me'] => ({
+export const ME = (locale: 'en' | 'fr', theme: 'light' | 'dark', role: Schemas['Role'] = 'owner'): Schemas['Me'] => ({
   id: UUID(900),
   email: 'ada@zz-test.example',
   displayName: 'Ada',
-  role: 'owner',
+  role,
   locale,
   theme,
   via: 'ui',
   scopes: null,
+  permissions: ROLE_PERMISSIONS[role],
+  mfaEnabled: false,
+  mfaEnrollmentRequired: false,
 });
 
 const STATUSES: Schemas['ApiStatus'][] = ['enquete', 'sain', 'warning', 'reparation', 'erreur', 'action_requise', 'bloquee'];
@@ -152,11 +156,78 @@ export function signedInRoutes(locale: 'en' | 'fr', theme: 'light' | 'dark'): Ap
     'GET /api/auth/get-session': { body: { session: { id: 's' }, user: { id: me.id, email: me.email } } },
     'GET /api/me': { body: me },
     'GET /api/version': { body: { version: '0.0.0', commit: 'zz', schema_version: 1, build_date: '2026-10-01' } },
+    'GET /api/sso': { body: { enabled: true, sso_required: false, providers: [{ slug: 'zz-idp', label: 'ZZ IdP' }] } satisfies Schemas['SsoPublic'] },
+  };
+}
+
+const iso = (day: number, hour = 9): string => `2026-09-${String(day).padStart(2, '0')}T${String(hour).padStart(2, '0')}:00:00.000Z`;
+
+/** Comptes de l'instance : l'owner connecté (`UUID(900)`), un admin, des membres (un désactivé, un sans 2FA). */
+const users = (): Schemas['User'][] => [
+  { id: UUID(900), email: 'ada@zz-test.example', display_name: 'Ada', role: 'owner', status: 'active', mfa_enabled: true, created_at: iso(1), last_login_at: iso(29), disabled_at: null },
+  { id: UUID(901), email: 'bob@zz-test.example', display_name: 'Bob', role: 'admin', status: 'active', mfa_enabled: true, created_at: iso(2), last_login_at: iso(28), disabled_at: null },
+  { id: UUID(902), email: 'cleo@zz-test.example', display_name: 'Cléo', role: 'member', status: 'active', mfa_enabled: true, created_at: iso(3), last_login_at: iso(27), disabled_at: null },
+  { id: UUID(903), email: 'dan@zz-test.example', display_name: '', role: 'member', status: 'active', mfa_enabled: false, created_at: iso(4), last_login_at: null, disabled_at: null },
+  { id: UUID(904), email: 'eve@zz-test.example', display_name: 'Eve', role: 'member', status: 'disabled', mfa_enabled: false, created_at: iso(5), last_login_at: iso(10), disabled_at: iso(20) },
+];
+
+/** Invitations : une en attente, une acceptée. */
+const invitations = (): Schemas['Invitation'][] => [
+  { id: UUID(910), email: 'fay@zz-test.example', role: 'member', invited_by: UUID(900), expires_at: '2099-10-01T09:00:00.000Z', created_at: iso(29), accepted_at: null, revoked_at: null },
+  { id: UUID(911), email: 'gus@zz-test.example', role: 'admin', invited_by: UUID(900), expires_at: iso(25), created_at: iso(23), accepted_at: iso(24), revoked_at: null },
+];
+
+/** Événements d'audit : métadonnées seulement (jamais de secret, de cookie ni de contenu). */
+const auditEvents = (): Schemas['AuditEvent'][] => [
+  { id: '3', at: iso(29, 10), actor_user_id: UUID(900), actor_via: 'ui', actor_ref: null, action: 'invitation.created', target_type: 'invitation', target_id: UUID(910), outcome: 'success', ip: '203.0.113.7', user_agent: 'zz-test', meta: { role: 'member', emailed: false } },
+  { id: '2', at: iso(28, 8), actor_user_id: null, actor_via: 'ui', actor_ref: null, action: 'auth.login_failed', target_type: null, target_id: null, outcome: 'denied', ip: '203.0.113.9', user_agent: 'zz-test', meta: {} },
+  { id: '1', at: iso(27, 7), actor_user_id: UUID(901), actor_via: 'apikey', actor_ref: 'sy_live_ab12', action: 'access.denied', target_type: null, target_id: null, outcome: 'denied', ip: null, user_agent: null, meta: { route: 'GET /api/users', reason: 'role' } },
+];
+
+/** Routes des comptes : utilisateurs, invitations, audit, clés, sessions, réglages d'instance. */
+function accountRoutes(): ApiRoutes {
+  return {
+    'GET /api/users': { body: { users: users(), next_cursor: null } satisfies Schemas['UserList'] },
+    'GET /api/invitations': { body: { invitations: invitations() } satisfies Schemas['InvitationList'] },
+    'GET /api/audit': { body: { events: auditEvents(), next_cursor: null } satisfies Schemas['AuditEventList'] },
+    'GET /api/me/audit': { body: { events: auditEvents().slice(0, 2), next_cursor: null } satisfies Schemas['AuditEventList'] },
+    'GET /api/me/sessions': {
+      body: {
+        sessions: [
+          { id: UUID(920), created_at: iso(29, 8), last_seen_at: iso(29, 9), expires_at: '2026-10-06T08:00:00.000Z', ip: '203.0.113.7', user_agent: 'Mozilla/5.0 zz-test', current: true },
+          { id: UUID(921), created_at: iso(25, 8), last_seen_at: iso(26, 9), expires_at: '2026-10-02T08:00:00.000Z', ip: '198.51.100.4', user_agent: 'Firefox zz-test', current: false },
+        ],
+      } satisfies Schemas['AuthSessionList'],
+    },
+    'GET /api/me/identities': { body: { identities: [{ id: UUID(930), provider: 'oidc:zz-idp', issuer: 'https://idp.zz-test.example', created_at: iso(20) }] } satisfies Schemas['LinkedIdentityList'] },
+    'GET /api/api-keys': {
+      body: {
+        items: [
+          { id: UUID(940), label: 'Outil MCP', prefix: 'sy_live_ab12cd', scopes: ['apis:read', 'apis:run'], expiresAt: '2099-01-01T00:00:00.000Z', lastUsedAt: iso(29), createdAt: iso(10), revokedAt: null },
+          { id: UUID(941), label: 'Ancienne clé', prefix: 'sy_live_ef34gh', scopes: ['runs:read'], expiresAt: iso(15), lastUsedAt: null, createdAt: iso(1), revokedAt: iso(12) },
+        ],
+      },
+    },
+    'GET /api/settings/security': { body: { session_idle_minutes: 720, session_absolute_hours: 168, allowed_email_domains: ['zz-test.example'], api_key_max_lifetime_days: 365, audit_retention_months: 12 } satisfies Schemas['SecuritySettings'] },
+    'GET /api/settings/sso': {
+      body: {
+        enabled: true,
+        slug: 'zz-idp',
+        label: 'ZZ IdP',
+        issuer_url: 'https://idp.zz-test.example',
+        client_id: 'zz-client',
+        client_secret_set: true,
+        sso_required: false,
+        jit_provisioning: { enabled: false, domains: [] },
+        group_roles: [{ group: 'zz-admins', role: 'admin' }],
+      } satisfies Schemas['SsoSettings'],
+    },
   };
 }
 
 export const anonymousRoutes: ApiRoutes = {
   'GET /api/auth/get-session': { body: null },
+  'GET /api/sso': { body: { enabled: false, sso_required: false, providers: [] } satisfies Schemas['SsoPublic'] },
   'POST /api/auth/sign-in/email': { status: 401, body: { code: 'INVALID_EMAIL_OR_PASSWORD', message: 'zz' } },
 };
 
@@ -164,6 +235,7 @@ export const anonymousRoutes: ApiRoutes = {
 export function dataRoutes(): ApiRoutes {
   const apis = catalog();
   return {
+    ...accountRoutes(),
     'GET /api/apis': { body: { apis, next_cursor: 'zz-next' } satisfies Schemas['ApiList'] },
     'GET /api/apis/:slug': (request) => {
       const found = apis.find((api) => api.slug === request.params.slug);

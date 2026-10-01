@@ -5,7 +5,7 @@
 import { randomBytes } from 'node:crypto';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { generateOpaqueToken } from '@runtime/core';
+import { can, generateOpaqueToken, PERMISSIONS, STRUCTURALLY_DENIED, type Permission } from '@runtime/core';
 import { issueOperatorResetLink, saveSmtpSettings } from '@runtime/db';
 import type { LightMyRequestResponse } from 'fastify';
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
@@ -352,9 +352,31 @@ describe('MFA_ENFORCED=admins', () => {
         expect(res.json<{ error: { code: string } }>().error.code, u.role).toBe('mfa_enrollment_required');
       }
       expect((await s.app.inject({ method: 'GET', url: '/api/api-keys', headers: { cookie: await signIn(s, memberUser) } })).statusCode).toBe(200);
+      // assert_me_permissions_from_can (3.8) : la console lit dans `GET /api/me` ce que `can()` accorde et si l'enrôlement est exigé.
+      const meOf = async (u: TestUser) => (await s.app.inject({ method: 'GET', url: '/api/me', headers: { cookie: await signIn(s, u) } })).json<Record<string, unknown>>();
+      const [ownerMe, adminMe, memberMe] = [await meOf(o), await meOf(adminUser), await meOf(memberUser)];
+      expect([ownerMe.mfaEnrollmentRequired, adminMe.mfaEnrollmentRequired, memberMe.mfaEnrollmentRequired]).toEqual([true, true, false]);
+      expect([ownerMe.mfaEnabled, adminMe.mfaEnabled, memberMe.mfaEnabled]).toEqual([false, false, false]);
     } finally {
       await s.close();
     }
+  });
+});
+
+describe('assert_me_permissions_from_can : GET /api/me porte les permissions du rôle (3.8)', () => {
+  test('chaque rôle reçoit exactement les permissions de can() ; un membre n’a ni users:list, ni audit:read, ni réglages d’instance', async () => {
+    const memberUser = await createUser(srv, 'zz_test_me_member@example.test');
+    const cookies = { owner: ownerCookie, admin: adminCookie, member: await signIn(srv, memberUser) };
+    for (const role of ['owner', 'admin', 'member'] as const) {
+      const me = (await srv.app.inject({ method: 'GET', url: '/api/me', headers: { cookie: cookies[role] } })).json<{ role: string; permissions: string[] }>();
+      expect(me.role).toBe(role);
+      expect(me.permissions, role).toEqual((Object.keys(PERMISSIONS) as Permission[]).filter((permission) => can(role, permission)));
+    }
+    const member = (await srv.app.inject({ method: 'GET', url: '/api/me', headers: { cookie: cookies.member } })).json<{ permissions: string[] }>();
+    for (const denied of ['users:list', 'users:invite', 'audit:read', 'settings:security:write', 'settings:sso:write', 'owner:transfer']) expect(member.permissions).not.toContain(denied);
+    // Une permission que même l'owner n'a pas (INV5) n'est jamais annoncée.
+    const ownerMe = (await srv.app.inject({ method: 'GET', url: '/api/me', headers: { cookie: ownerCookie } })).json<{ permissions: string[] }>();
+    for (const structural of STRUCTURALLY_DENIED) expect(ownerMe.permissions).not.toContain(structural);
   });
 });
 
@@ -382,7 +404,9 @@ describe('assert_mfa_enforced (MFA_ENFORCED=all)', () => {
     }
     // L'identité et l'enrôlement restent joignables.
     expect((await enforced.app.inject({ method: 'GET', url: '/api/me', headers: { cookie } })).statusCode).toBe(200);
+    expect((await enforced.app.inject({ method: 'GET', url: '/api/me', headers: { cookie } })).json<Record<string, unknown>>()).toMatchObject({ mfaEnabled: false, mfaEnrollmentRequired: true });
     await enableTwoFactor(enforced, cookie, user);
+    expect((await enforced.app.inject({ method: 'GET', url: '/api/me', headers: { cookie } })).json<Record<string, unknown>>()).toMatchObject({ mfaEnabled: true, mfaEnrollmentRequired: false });
     expect((await enforced.app.inject({ method: 'GET', url: '/api/api-keys', headers: { cookie } })).statusCode).toBe(200);
     // Retirer sa 2FA est refusé quand MFA_ENFORCED le concerne.
     const removal = await enforced.app.inject({ method: 'DELETE', url: '/api/me/2fa', headers: json(cookie), payload: { current_password: user.password, code: '000000' } });
@@ -394,6 +418,8 @@ describe('assert_mfa_enforced (MFA_ENFORCED=all)', () => {
     const link = created.json<{ link: string }>().link;
     const res = await enforced.app.inject({ method: 'POST', url: '/api/invitations/accept', payload: { token: link.slice(link.lastIndexOf('/') + 1), password: strongPassword() } });
     expect(res.statusCode, res.body).toBe(200);
+    // La réponse d'acceptation dit déjà à la console que l'enrôlement est exigé (elle l'affiche avant toute autre page).
+    expect(res.json<{ mfaEnrollmentRequired: boolean; mfaEnabled: boolean; role: string; permissions: string[] }>()).toMatchObject({ mfaEnrollmentRequired: true, mfaEnabled: false, role: 'member' });
     const blocked = await enforced.app.inject({ method: 'GET', url: '/api/api-keys', headers: { cookie: sessionCookie(res) } });
     expect(blocked.json<{ error: { code: string } }>().error.code).toBe('mfa_enrollment_required');
   });

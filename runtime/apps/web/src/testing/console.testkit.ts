@@ -9,6 +9,7 @@ import en from '@/i18n/locales/en.json';
 import fr from '@/i18n/locales/fr.json';
 import { buildApi, setApi } from '@/lib/api';
 import { ensureSession, resetSession } from '@/composables/useSession';
+import { ROLE_PERMISSIONS } from '@/testing/permissions';
 
 export const json = (status: number, body: unknown): Response =>
   new Response(status === 204 ? null : JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
@@ -30,7 +31,7 @@ export function installFakeServer(routes: Record<string, Handler>): RecordedCall
       baseUrl: 'http://console.test',
       fetch: async (request) => {
         const url = new URL(request.url);
-        const text = request.method === 'GET' || request.method === 'DELETE' ? '' : await request.text();
+        const text = request.method === 'GET' ? '' : await request.text();
         const call: RecordedCall = { method: request.method, path: url.pathname, search: url.search, body: text ? (JSON.parse(text) as unknown) : null };
         calls.push(call);
         const handler = routes[`${request.method} ${url.pathname}`];
@@ -41,7 +42,19 @@ export function installFakeServer(routes: Record<string, Handler>): RecordedCall
   return calls;
 }
 
-export const ME = { id: '3f2b6c1e-0000-4000-8000-000000000001', email: 'ada@x.test', displayName: 'Ada', role: 'owner', locale: 'en', theme: 'system', via: 'ui', scopes: null };
+export const ME = {
+  id: '3f2b6c1e-0000-4000-8000-000000000001',
+  email: 'ada@x.test',
+  displayName: 'Ada',
+  role: 'owner',
+  locale: 'en',
+  theme: 'system',
+  via: 'ui',
+  scopes: null,
+  permissions: ROLE_PERMISSIONS.owner,
+  mfaEnabled: false,
+  mfaEnrollmentRequired: false,
+};
 
 /** Routes d'identité : une session ouverte pour `ME`. */
 export const sessionRoutes: Record<string, Handler> = {

@@ -19,7 +19,14 @@
     "newApi": "Nouvelle API",
     "runs": "Tous les runs",
     "settings": "Réglages",
-    "catalog": "Catalogue"
+    "catalog": "Catalogue",
+    "users": "Utilisateurs",
+    "audit": "Audit",
+    "account": "Mon compte",
+    "roleBanner": {
+      "owner": "Tu es le propriétaire de cette instance.",
+      "admin": "Tu es admin de cette instance."
+    }
   },
   "auth": {
     "login": {
@@ -28,7 +35,10 @@
       "email": "Adresse e-mail",
       "password": "Mot de passe",
       "submit": "Se connecter",
-      "submitting": "Connexion…"
+      "submitting": "Connexion…",
+      "forgot": "Mot de passe oublié ?",
+      "sso": "Se connecter avec {provider}",
+      "ssoSeparator": "ou"
     },
     "errors": {
       "invalid_credentials": "L’adresse e-mail ou le mot de passe est incorrect.",
@@ -36,7 +46,63 @@
       "not_initialized": "Cette instance n’est pas encore configurée. Terminez l’assistant de premier démarrage, puis connectez-vous.",
       "network": "Le serveur est injoignable. Vérifiez votre connexion et réessayez.",
       "session_expired": "Votre session est terminée. Connectez-vous à nouveau.",
-      "unknown": "La connexion a échoué. Réessayez."
+      "unknown": "La connexion a échoué. Réessayez.",
+      "invalid_code": "Ce code n'est pas valide ou a déjà servi.",
+      "sso": "La connexion par SSO n'a pas abouti ({code})."
+    },
+    "secondFactor": {
+      "title": "Second facteur",
+      "description": "Saisis le code à 6 chiffres de ton application d'authentification, ou l'un de tes codes de secours.",
+      "code": "Code",
+      "submit": "Vérifier",
+      "submitting": "Vérification…",
+      "cancel": "Utiliser un autre compte"
+    },
+    "forgot": {
+      "title": "Réinitialiser ton mot de passe",
+      "description": "Saisis l'adresse de ton compte. Si l'instance peut envoyer des e-mails, un lien t'est envoyé.",
+      "email": "Adresse e-mail",
+      "submit": "Envoyer le lien",
+      "submitting": "Envoi…",
+      "done": "Si un compte existe pour cette adresse et que l'instance peut envoyer des e-mails, un lien est en route. Sans e-mail sur l'instance, demande à un admin.",
+      "back": "Retour à la connexion"
+    },
+    "reset": {
+      "title": "Choisis un nouveau mot de passe",
+      "description": "Le lien ne sert qu'une fois. Une reconnexion sera nécessaire ensuite, et toutes les sessions et clés d'API du compte sont fermées.",
+      "password": "Nouveau mot de passe",
+      "passwordHint": "Au moins 12 caractères. Le collage est accepté, et une longue phrase convient très bien.",
+      "code": "Code du second facteur",
+      "codeHint": "Nécessaire quand le compte a la double authentification : un code à 6 chiffres ou un code de secours.",
+      "submit": "Changer le mot de passe",
+      "submitting": "Changement…",
+      "done": "Ton mot de passe a été changé. Connecte-toi avec le nouveau.",
+      "toLogin": "Aller à la connexion",
+      "errors": {
+        "reset_link_invalid": "Ce lien de réinitialisation n'est pas valide ou a expiré. Demande-en un nouveau.",
+        "weak_password": "Ce mot de passe n'est pas accepté. Utilise au moins 12 caractères et évite les mots de passe courants.",
+        "mfa_code_required": "Saisis un code valide de ton application d'authentification ou un code de secours."
+      }
+    },
+    "invite": {
+      "title": "Rejoindre l'instance",
+      "description": "Tu as été invité. Choisis un nom et un mot de passe pour créer ton compte.",
+      "displayName": "Ton nom",
+      "displayNameHint": "Facultatif. Affiché aux admins de l'instance.",
+      "password": "Mot de passe",
+      "passwordHint": "Au moins 12 caractères. Le collage est accepté, et une longue phrase convient très bien.",
+      "confirm": "Répète le mot de passe",
+      "mismatch": "Les deux mots de passe sont différents.",
+      "submit": "Créer mon compte",
+      "submitting": "Création…",
+      "sso": "Accepter avec {provider}",
+      "signedIn": "Tu es connecté en tant que {name}. Créer ce compte te connecte à la place en tant que la personne invitée.",
+      "errors": {
+        "invitation_invalid": "Ce lien d'invitation n'est pas valide ou a expiré. Demande un nouveau lien à l'admin qui t'a invité.",
+        "weak_password": "Ce mot de passe n'est pas accepté. Utilise au moins 12 caractères et évite les mots de passe courants.",
+        "sso_required": "Cette instance te demande d'accepter l'invitation par SSO. Utilise le bouton SSO.",
+        "too_many_attempts": "Trop de tentatives. Réessaie dans quelques minutes."
+      }
     }
   },
   "home": {
@@ -65,7 +131,35 @@
     "reauth_failed": "Mot de passe actuel incorrect.",
     "too_many_attempts": "Trop de tentatives. Réessaie dans quelques minutes.",
     "too_many_pairing_codes": "Trop de codes d'appairage actifs. Utilises-en un ou attends son expiration (10 minutes).",
-    "account_site_ack_required": "Ce site demande un compte. Confirme l'avertissement pour continuer."
+    "account_site_ack_required": "Ce site demande un compte. Confirme l'avertissement pour continuer.",
+    "reauth_required": "Reconnecte-toi pour confirmer cette action, puis réessaie.",
+    "current_password_required": "Saisis ton mot de passe actuel.",
+    "mfa_code_required": "Saisis le code de ton application d'authentification.",
+    "invalid_code": "Ce code n'est pas valide ou a déjà servi.",
+    "mfa_enforced": "Cette instance exige la double authentification pour ton rôle. Elle ne peut pas être désactivée.",
+    "mfa_already_enabled": "La double authentification est déjà active.",
+    "mfa_not_enabled": "La double authentification n'est pas active sur ce compte.",
+    "no_enrollment": "Aucune activation n'est en cours. Recommence l'activation.",
+    "mfa_required": "Cette action exige la double authentification.",
+    "mfa_enrollment_required": "Active la double authentification pour continuer.",
+    "weak_password": "Ce mot de passe n'est pas accepté. Utilise au moins 12 caractères et évite les mots de passe courants.",
+    "invitation_invalid": "Ce lien d'invitation n'est pas valide ou a expiré. Demande un nouveau lien à l'admin qui t'a invité.",
+    "invalid_email": "Cette adresse e-mail n'est pas valide.",
+    "email_domain_not_allowed": "Cette instance n'accepte pas ce domaine d'e-mail.",
+    "user_exists": "Un compte existe déjà pour cette adresse.",
+    "invitation_pending": "Une invitation est déjà en attente pour cette adresse. Renvoie-la ou révoque-la.",
+    "user_not_disabled": "Désactive d'abord le compte, puis supprime-le.",
+    "user_not_active": "Ce compte n'est pas actif.",
+    "smtp_configured": "L'e-mail est configuré sur cette instance : la personne utilise « Mot de passe oublié » au lieu d'un lien donné par un admin.",
+    "sso_required": "Cette instance te demande de te connecter par SSO. Utilise le bouton SSO.",
+    "sso_disabled": "Le SSO n'est pas activé sur cette instance.",
+    "last_login_method": "C'est ta seule façon de te connecter. Ajoutes-en une autre d'abord.",
+    "invalid_settings": "Ces réglages ne sont pas valides. Vérifie le formulaire et réessaie.",
+    "lifetime_too_long": "Cette durée dépasse ce que l'instance autorise. Choisis une durée plus courte.",
+    "reset_link_invalid": "Ce lien de réinitialisation n'est pas valide ou a expiré.",
+    "idp_unreachable": "Le fournisseur d'identité est injoignable. Réessaie plus tard.",
+    "invalid_status": "Ce changement de statut n'est pas possible.",
+    "invalid_cursor": "La position dans la liste n'est plus valide. Recharge la liste."
   },
   "common": {
     "loading": "Chargement…",
@@ -446,7 +540,11 @@
       "proxies": "Proxys",
       "extension": "Extension et sessions",
       "alerts": "Alertes",
-      "diagnostic": "Diagnostic"
+      "diagnostic": "Diagnostic",
+      "keys": "Clés d'API",
+      "account": "Mon compte",
+      "security": "Sécurité",
+      "sso": "SSO"
     },
     "adminOnly": "Seul un admin de ton instance peut lire ou modifier ces réglages.",
     "test": "Tester",
@@ -1148,6 +1246,428 @@
       "status_changed": "Statut : {to}.",
       "action_required": "Action requise.",
       "unknown": "Événement {kind}."
+    }
+  },
+  "setup": {
+    "title": "Configurer ton instance",
+    "intro": "Crée le compte propriétaire. Cet assistant ne sert qu'une fois : dès que le propriétaire existe, cette page disparaît.",
+    "token": "Jeton de démarrage",
+    "tokenHint": "La valeur de ADMIN_BOOTSTRAP_TOKEN du déploiement. Elle n'est jamais réaffichée.",
+    "email": "Adresse e-mail",
+    "displayName": "Ton nom",
+    "displayNameHint": "Facultatif.",
+    "password": "Mot de passe",
+    "passwordHint": "Au moins 12 caractères. Le collage est accepté, et une longue phrase convient très bien.",
+    "submit": "Créer le compte propriétaire",
+    "submitting": "Création…",
+    "signInFailed": "Le compte propriétaire est créé, mais la connexion a échoué. Connecte-toi depuis la page de connexion.",
+    "errors": {
+      "forbidden": "Le jeton ou l'adresse n'est pas accepté.",
+      "weak_password": "Ce mot de passe n'est pas accepté. Utilise au moins 12 caractères et évite les mots de passe courants.",
+      "too_many_attempts": "Trop de tentatives. Réessaie dans quelques minutes."
+    },
+    "done": {
+      "title": "Compte propriétaire créé",
+      "fingerprint": "Empreinte de la clé",
+      "onlyOnce": "L'empreinte n'est affichée qu'ici et maintenant. Note-la, pour vérifier plus tard que la même clé est utilisée.",
+      "reminder": "Sauvegarde MASTER_KEY hors de cette plateforme. Sans elle, les secrets chiffrés ne pourront plus jamais être lus.",
+      "acknowledge": "J'ai sauvegardé MASTER_KEY hors de cette plateforme",
+      "continue": "Continuer"
+    },
+    "next": {
+      "title": "Connecte ce dont l'instance a besoin",
+      "intro": "Chaque page a un bouton Tester. Fais-les dans cet ordre, ou plus tard.",
+      "models": "Modèles IA : le fournisseur et la clé qui servent à enquêter sur les sites.",
+      "proxies": "Proxys : seulement si certains sites demandent une route réseau.",
+      "alerts": "Alertes : e-mail (SMTP) et webhooks.",
+      "open": "Ouvrir",
+      "later": "Aller à la console"
+    }
+  },
+  "account": {
+    "title": "Mon compte",
+    "intro": "Ta connexion, ton second facteur, tes sessions et ton activité.",
+    "notice": {
+      "title": "À propos de ton compte",
+      "unknown": "Un avis a été enregistré le {date} ({code}).",
+      "dismiss": "Fermer",
+      "codes": {
+        "password_reset_by_operator": "Un lien de réinitialisation a été émis pour ton compte par l'opérateur du serveur le {date}. Si ce n'était pas toi ni un admin que tu connais, change ton mot de passe et vérifie tes sessions.",
+        "password_reset_withheld": "Un lien de réinitialisation par e-mail a été retenu le {date}, car un admin a changé le relais d'e-mail il y a moins de 24 heures et ton compte n'a pas de second facteur."
+      }
+    },
+    "preferences": {
+      "title": "Langue et thème",
+      "text": "Utilise les commandes de langue et de thème en haut de la page. Elles sont enregistrées avec ton compte."
+    },
+    "twoFactor": {
+      "title": "Double authentification",
+      "intro": "Un code à 6 chiffres d'une application d'authentification est demandé après ton mot de passe. L'e-mail et le SMS ne sont pas utilisés.",
+      "on": "La double authentification est active.",
+      "off": "La double authentification est désactivée.",
+      "enforced": "Cette instance exige la double authentification pour ton rôle.",
+      "enrollTitle": "L'activer",
+      "password": "Mot de passe actuel",
+      "passwordHint": "Laisse vide si tu te connectes uniquement par SSO et que ta dernière connexion est récente.",
+      "start": "Commencer l'activation",
+      "seedTitle": "Ajoute cette clé à ton application d'authentification",
+      "seedHelp": "Choisis la saisie manuelle dans l'application et tape la clé. Elle n'est affichée qu'ici et maintenant.",
+      "seed": "Clé",
+      "uri": "Adresse d'activation",
+      "code": "Premier code à 6 chiffres",
+      "confirm": "Activer",
+      "confirming": "Vérification…",
+      "cancel": "Annuler l'activation",
+      "backupTitle": "Codes de secours",
+      "backupHelp": "Chaque code ne sert qu'une fois. Garde-les en lieu sûr. Ils ne sont affichés qu'ici et maintenant.",
+      "backupCopy": "Copier les codes",
+      "backupDone": "J'ai rangé les codes",
+      "regenerateTitle": "Nouveaux codes de secours",
+      "regenerateHelp": "Demande ton mot de passe et un code actuel. Les anciens codes cessent de fonctionner.",
+      "regenerate": "Générer de nouveaux codes",
+      "disableTitle": "La désactiver",
+      "disableHelp": "Demande ton mot de passe et un code actuel.",
+      "disable": "Désactiver",
+      "currentCode": "Code actuel ou code de secours",
+      "disabledDone": "La double authentification est désactivée."
+    },
+    "sessions": {
+      "title": "Sessions ouvertes",
+      "intro": "Les endroits où tu es connecté. Ferme ceux que tu ne reconnais pas.",
+      "caption": "Tes sessions ouvertes",
+      "started": "Début",
+      "lastSeen": "Dernière activité",
+      "expires": "Expire",
+      "device": "Navigateur",
+      "address": "Adresse",
+      "current": "Cette session",
+      "close": "Fermer",
+      "closeOthers": "Fermer toutes les autres sessions",
+      "none": "Aucune autre session.",
+      "unknown": "inconnu"
+    },
+    "identities": {
+      "title": "Authentification unique",
+      "intro": "Les identités liées à ton compte. La liaison redemande ton mot de passe.",
+      "none": "Aucune identité liée.",
+      "caption": "Identités liées",
+      "provider": "Fournisseur",
+      "issuer": "Émetteur",
+      "linked": "Liée",
+      "link": "Lier {provider}",
+      "unlink": "Délier",
+      "password": "Mot de passe actuel",
+      "code": "Code du second facteur",
+      "justLinked": "L'identité a été liée."
+    },
+    "activity": {
+      "title": "Mon activité récente",
+      "caption": "Les derniers événements de ton compte",
+      "empty": "Aucun événement pour l'instant."
+    }
+  },
+  "twoFactorSetup": {
+    "title": "Activer la double authentification",
+    "intro": "Cette instance l'exige pour ton rôle. Termine cette étape pour utiliser la console.",
+    "signOut": "Me déconnecter à la place",
+    "continue": "Ouvrir la console"
+  },
+  "keys": {
+    "title": "Clés d'API",
+    "intro": "Les clés t'identifient auprès de l'API REST et de MCP. Chacune a des portées et une date d'expiration. Le secret n'apparaît qu'une fois, à la création de la clé.",
+    "createTitle": "Créer une clé",
+    "label": "Libellé",
+    "labelHint": "Par exemple le nom de l'outil qui l'utilise.",
+    "scopes": "Portées",
+    "scopesHint": "Une clé ne peut faire que ce que ses portées permettent, sur tes propres données.",
+    "scope": {
+      "apis:read": "Lire les API",
+      "apis:run": "Lancer les API",
+      "apis:write": "Créer et modifier les API",
+      "runs:read": "Lire les runs",
+      "datasets:read": "Lire les datasets",
+      "schedules:write": "Gérer les planifications",
+      "sites:read": "Lire l'état des sites connectés (jamais les cookies)"
+    },
+    "expiresIn": "Expire dans (jours)",
+    "expiresHint": "90 jours par défaut. L'instance fixe un maximum.",
+    "password": "Mot de passe actuel",
+    "passwordHint": "Laisse vide si tu te connectes uniquement par SSO et que ta dernière connexion est récente.",
+    "submit": "Créer la clé",
+    "submitting": "Création…",
+    "scopesRequired": "Choisis au moins une portée.",
+    "labelRequired": "Saisis un libellé.",
+    "created": {
+      "title": "Copie cette clé maintenant",
+      "text": "Elle ne sera plus affichée. Range-la dans un gestionnaire de secrets.",
+      "key": "Clé",
+      "dismiss": "J'ai copié la clé"
+    },
+    "list": "Tes clés",
+    "caption": "Tes clés d'API",
+    "empty": "Aucune clé pour l'instant.",
+    "columns": {
+      "label": "Libellé",
+      "prefix": "Préfixe",
+      "scopes": "Portées",
+      "expires": "Expire",
+      "lastUsed": "Dernier usage",
+      "status": "État"
+    },
+    "status": {
+      "active": "active",
+      "revoked": "révoquée",
+      "expired": "expirée"
+    },
+    "neverUsed": "jamais",
+    "revoke": "Révoquer",
+    "revokeTitle": "Révoquer cette clé ?",
+    "revokeConsequence": "Les outils qui utilisent « {label} » perdent l'accès tout de suite. Impossible d'annuler."
+  },
+  "users": {
+    "title": "Utilisateurs",
+    "intro": "Invite des personnes, fixe les rôles, désactive des comptes. Tu vois les comptes et des métadonnées seulement : jamais le contenu des runs, des datasets ou des cookies d'un autre.",
+    "invite": {
+      "title": "Inviter quelqu'un",
+      "email": "Adresse e-mail",
+      "emailHint": "Le lien ne marche que pour cette adresse exacte, une fois, pendant 48 heures.",
+      "role": "Rôle",
+      "submit": "Créer l'invitation",
+      "submitting": "Création…",
+      "emailed": "Un e-mail avec le lien a été envoyé à {email}.",
+      "link": "Lien pour {email}",
+      "linkHelp": "Aucun e-mail n'est configuré : copie ce lien et envoie-le toi-même à la personne. Il n'est affiché qu'ici et maintenant.",
+      "copy": "Copier le lien",
+      "dismiss": "J'ai copié le lien"
+    },
+    "roles": {
+      "owner": "Propriétaire",
+      "admin": "Admin",
+      "member": "Membre"
+    },
+    "statuses": {
+      "invited": "Invité",
+      "active": "Actif",
+      "disabled": "Désactivé"
+    },
+    "invitations": {
+      "title": "Invitations",
+      "caption": "Invitations",
+      "empty": "Aucune invitation.",
+      "email": "Adresse e-mail",
+      "role": "Rôle",
+      "expires": "Expire",
+      "state": "État",
+      "pending": "en attente",
+      "accepted": "acceptée",
+      "revoked": "révoquée",
+      "expired": "expirée",
+      "resend": "Renvoyer",
+      "revoke": "Révoquer",
+      "revokeTitle": "Révoquer cette invitation ?",
+      "revokeConsequence": "Le lien envoyé à {email} cesse de fonctionner."
+    },
+    "accounts": {
+      "title": "Comptes",
+      "caption": "Comptes de l'instance",
+      "empty": "Aucun compte.",
+      "name": "Compte",
+      "role": "Rôle",
+      "status": "Statut",
+      "mfa": "2FA",
+      "mfaOn": "active",
+      "mfaOff": "inactive",
+      "lastLogin": "Dernière connexion",
+      "never": "jamais",
+      "actions": "Actions",
+      "you": "toi",
+      "ownerNoActions": "Le propriétaire ne se modifie pas ici.",
+      "loadMore": "Charger plus de comptes"
+    },
+    "action": {
+      "makeAdmin": "Promouvoir admin",
+      "makeMember": "Rétrograder en membre",
+      "disable": "Désactiver",
+      "enable": "Réactiver",
+      "delete": "Supprimer",
+      "revokeAccess": "Fermer les sessions et révoquer les clés",
+      "resetTwoFactor": "Réinitialiser la 2FA",
+      "resetLink": "Lien de réinitialisation",
+      "for": "{action} : {name}"
+    },
+    "confirm": {
+      "disable": "Désactiver {name} ?",
+      "disableConsequence": "Les sessions sont fermées, les clés et jetons de tunnel sont révoqués, les cookies côté serveur sont supprimés et les planifications sont suspendues. Les runs et datasets restent à la personne.",
+      "delete": "Supprimer {name} ?",
+      "deleteConsequence": "Les datasets, runs, API et sessions de sites de ce compte sont supprimés ou anonymisés. Le journal d'audit garde l'identifiant, pas les données. Impossible d'annuler.",
+      "revokeAccess": "Révoquer les accès de {name} ?",
+      "revokeAccessConsequence": "Toutes les sessions sont fermées, toutes les clés d'API et tous les jetons de tunnel sont révoqués. Le compte reste actif. Tu ne vois ni n'utilises rien de tout cela.",
+      "resetTwoFactor": "Réinitialiser la 2FA de {name} ?",
+      "resetTwoFactorConsequence": "Les sessions sont fermées et la personne doit configurer à nouveau la double authentification. L'action est journalisée.",
+      "resetLink": "Créer un lien de réinitialisation pour {name} ?",
+      "resetLinkConsequence": "Toutes les sessions du compte sont fermées. Le lien demande le second facteur de la personne. Tu ne choisis jamais le mot de passe de quelqu'un.",
+      "role": "Changer le rôle de {name} en {role} ?",
+      "roleConsequence": "Le nouveau rôle s'applique à la prochaine requête de la personne."
+    },
+    "resetLink": {
+      "title": "Lien de réinitialisation pour {name}",
+      "help": "Envoie ce lien à la personne. Il ne sert qu'une fois et demande son second facteur. Il n'est affiché qu'ici et maintenant.",
+      "expires": "Valable jusqu'au {date}.",
+      "note": "Un lien copiable n'existe que si l'e-mail n'est pas configuré et que le compte a la double authentification. Sinon, utilise la commande serveur (voir le guide)."
+    },
+    "done": {
+      "role": "Le rôle a été changé.",
+      "disabled": "Le compte a été désactivé.",
+      "enabled": "Le compte a été réactivé.",
+      "deleted": "Le compte a été supprimé.",
+      "revoked": "Les accès ont été révoqués.",
+      "twoFactorReset": "La double authentification a été réinitialisée.",
+      "invitationRevoked": "L'invitation a été révoquée.",
+      "invitationResent": "L'invitation a été renvoyée."
+    },
+    "transfer": {
+      "title": "Transférer la propriété",
+      "intro": "Le nouveau propriétaire reçoit tous les droits du propriétaire et tu deviens admin. Demande ton mot de passe et un code à 6 chiffres.",
+      "to": "Nouveau propriétaire",
+      "choose": "Choisis un compte",
+      "password": "Mot de passe actuel",
+      "code": "Code à 6 chiffres",
+      "submit": "Transférer la propriété",
+      "confirmTitle": "Transférer la propriété à {name} ?",
+      "confirmConsequence": "Cela change qui contrôle l'instance.",
+      "done": "La propriété a été transférée."
+    }
+  },
+  "audit": {
+    "title": "Audit",
+    "intro": "Actions d'administration et événements de connexion. Il ne contient que des métadonnées : aucun secret, aucun cookie, aucun contenu de dataset, aucun argument d'outil.",
+    "filters": {
+      "legend": "Filtres de l'audit",
+      "action": "Action",
+      "actionHint": "Code exact de l'action, par exemple user.deactivated.",
+      "actor": "Compte",
+      "outcome": "Résultat",
+      "since": "Du",
+      "until": "Au",
+      "all": "Tous",
+      "apply": "Appliquer",
+      "reset": "Réinitialiser les filtres"
+    },
+    "caption": "Événements d'audit",
+    "columns": {
+      "at": "Quand",
+      "actor": "Qui",
+      "via": "Par",
+      "action": "Action",
+      "target": "Cible",
+      "outcome": "Résultat",
+      "address": "Adresse",
+      "details": "Détails"
+    },
+    "outcomes": {
+      "success": "Succès",
+      "denied": "Refusé",
+      "error": "Erreur"
+    },
+    "via": {
+      "ui": "Console",
+      "apikey": "Clé d'API",
+      "mcp": "MCP",
+      "sso": "SSO",
+      "system": "Système"
+    },
+    "system": "système",
+    "unknownActor": "inconnu",
+    "empty": "Aucun événement ne correspond.",
+    "loadMore": "Charger la suite",
+    "noDetails": "aucun",
+    "export": "Exporter (NDJSON)",
+    "exporting": "Export en cours…",
+    "exportFailed": "L'export n'a pas abouti.",
+    "action": {
+      "access_denied": "Accès refusé",
+      "apikey_created": "Clé d'API créée",
+      "apikey_first_use": "Clé d'API utilisée pour la première fois",
+      "apikey_revoked": "Clé d'API révoquée",
+      "audit_exported": "Audit exporté",
+      "auth_login": "Connexion",
+      "auth_login_failed": "Échec de connexion",
+      "auth_login_rate_limit_waived": "Limite de connexion levée pour un appareil connu",
+      "auth_logout": "Déconnexion",
+      "auth_mfa_failed": "Second facteur refusé",
+      "auth_mfa_verified": "Second facteur accepté",
+      "auth_password_reset": "Mot de passe réinitialisé",
+      "auth_password_reset_requested": "Réinitialisation du mot de passe demandée",
+      "auth_session_revoked": "Session fermée",
+      "auth_sessions_revoked": "Sessions fermées",
+      "invitation_accepted": "Invitation acceptée",
+      "invitation_created": "Invitation créée",
+      "invitation_resent": "Invitation renvoyée",
+      "invitation_revoked": "Invitation révoquée",
+      "mfa_backup_codes_regenerated": "Codes de secours régénérés",
+      "mfa_disable": "Retrait de la 2FA refusé",
+      "mfa_disabled": "2FA désactivée",
+      "mfa_enabled": "2FA activée",
+      "mfa_enroll_failed": "Code d'activation de la 2FA refusé",
+      "mfa_enroll_started": "Activation de la 2FA commencée",
+      "mfa_reset": "2FA réinitialisée par un admin",
+      "owner_transferred": "Propriété transférée",
+      "settings_security_updated": "Réglages de sécurité modifiés",
+      "settings_sso_updated": "Réglages SSO modifiés",
+      "setup_attempt": "Tentative de configuration",
+      "setup_owner_created": "Compte propriétaire créé",
+      "site_cookies_synced": "Cookies de site synchronisés",
+      "site_disconnected": "Site déconnecté",
+      "sso_link_started": "Liaison SSO commencée",
+      "sso_linked": "Identité SSO liée",
+      "sso_unlinked": "Identité SSO déliée",
+      "tunnel_paired": "Extension appairée",
+      "tunnel_pairing_code_created": "Code d'appairage créé",
+      "tunnel_revoked": "Extension révoquée",
+      "user_access_revoked": "Accès révoqués",
+      "user_deactivated": "Compte désactivé",
+      "user_deleted": "Compte supprimé",
+      "user_provisioned": "Compte créé par SSO",
+      "user_reactivated": "Compte réactivé",
+      "user_reset_link": "Lien de réinitialisation émis",
+      "user_role_changed": "Rôle changé"
+    }
+  },
+  "instance": {
+    "security": {
+      "title": "Sécurité de l'instance",
+      "intro": "Durées de session, domaines d'e-mail autorisés et plafonds. Seul le propriétaire peut les changer.",
+      "idle": "Inactivité avant la fin d'une session (minutes)",
+      "absolute": "Durée maximale d'une session (heures)",
+      "domains": "Domaines d'e-mail autorisés",
+      "domainsHint": "Un par ligne. Vide : tous les domaines.",
+      "keyMax": "Durée de vie maximale d'une clé d'API (jours)",
+      "retention": "Conservation de l'audit (mois)",
+      "save": "Enregistrer"
+    },
+    "sso": {
+      "title": "Authentification unique (OIDC)",
+      "intro": "Un fournisseur d'identité (Keycloak, Authentik, Google, Entra). Les comptes sont reconnus par émetteur et sujet, jamais par e-mail.",
+      "enabled": "Activer le SSO",
+      "label": "Libellé du bouton",
+      "slug": "Identifiant",
+      "slugHint": "Lettres minuscules, chiffres et tirets.",
+      "issuer": "URL de l'émetteur",
+      "clientId": "Identifiant client",
+      "clientSecret": "Secret du client",
+      "required": "Exiger le SSO",
+      "requiredHint": "Les mots de passe locaux cessent de fonctionner, sauf la connexion locale de secours du propriétaire.",
+      "jit": "Créer les comptes à la première connexion",
+      "jitHint": "Désactivé par défaut. Demande au moins un domaine autorisé. Les nouveaux comptes sont membres.",
+      "jitDomains": "Domaines des nouveaux comptes",
+      "groups": "Rôles selon les groupes du fournisseur",
+      "groupsHint": "Par défaut : membre. Le rôle propriétaire n'est jamais attribué.",
+      "group": "Groupe",
+      "role": "Rôle",
+      "addGroup": "Ajouter un groupe",
+      "removeGroup": "Retirer le groupe {group}",
+      "save": "Enregistrer",
+      "notConfigured": "Le SSO n'est pas encore configuré."
     }
   }
 }

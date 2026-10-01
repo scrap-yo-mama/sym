@@ -15,7 +15,7 @@ import { confirmTwoFactor, consumeTotpStep, loadTwoFactor, removeTwoFactor, repl
 import type { FastifyInstance } from 'fastify';
 import type { ServerContext } from '../context.js';
 import { AttemptLimiter } from '../rate-limit.js';
-import { decodeCursor, encodeCursor, iso, reauthenticate, requireSecondFactor, twoFactorKeks, UUID } from './account-helpers.js';
+import { decodeCursor, encodeCursor, iso, meView, reauthenticate, requireSecondFactor, twoFactorKeks, UUID } from './account-helpers.js';
 import { audit, notFound, sendError } from './guard.js';
 
 // Mot de passe actuel facultatif dans le schéma : exigé par `reauthenticate` (400 `current_password_required`) quand le
@@ -78,20 +78,8 @@ export function meRoutes(app: FastifyInstance, ctx: ServerContext): void {
 
   app.get('/api/me', async (request) => {
     const actor = request.actor!;
-    const { rows } = await ctx.pool.query<{ display_name: string; locale: string; theme: string }>(
-      'SELECT display_name, locale, theme FROM users WHERE id = $1',
-      [actor.userId],
-    );
-    return {
-      id: actor.userId,
-      email: actor.email,
-      displayName: rows[0]?.display_name ?? '',
-      role: actor.role,
-      locale: rows[0]?.locale ?? 'en',
-      theme: rows[0]?.theme ?? 'system',
-      via: actor.via,
-      scopes: actor.scopes,
-    };
+    // `via` : « ui » ou « apikey » (le jeton d'extension n'atteint pas cette route).
+    return meView(ctx, { ...actor, via: actor.via === 'extension' ? 'ui' : actor.via });
   });
 
   // --- Sessions d'interface (13 § 5 : chacun liste et ferme les siennes, 7.5.2) -------------------------------

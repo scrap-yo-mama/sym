@@ -12,7 +12,7 @@ export type Theme = 'light' | 'dark';
 type Options = { uiLocale: Locale; uiTheme: Theme };
 type Fixtures = {
   /** Page ouverte sur la console ; `open` pose les routes de l'API (session ouverte, sauf `anonymous`) puis charge le chemin. */
-  consolePage: { page: Page; app: ConsoleApp; errors: string[]; open: (path: string, options?: { anonymous?: boolean; routes?: ApiRoutes }) => Promise<void> };
+  consolePage: { page: Page; app: ConsoleApp; errors: string[]; open: (path: string, options?: { anonymous?: boolean; routes?: ApiRoutes | ((locale: Locale, theme: Theme) => ApiRoutes) }) => Promise<void> };
 };
 type WorkerFixtures = { app: ConsoleApp };
 
@@ -36,7 +36,8 @@ export const test = base.extend<Fixtures & Options, WorkerFixtures>({
       app,
       errors,
       open: async (path, options = {}) => {
-        app.setRoutes(options.anonymous ? anonymousRoutes : { ...signedInRoutes(uiLocale, uiTheme), ...dataRoutes(), ...options.routes });
+        const own = typeof options.routes === 'function' ? options.routes(uiLocale, uiTheme) : options.routes;
+        app.setRoutes(options.anonymous ? { ...anonymousRoutes, ...own } : { ...signedInRoutes(uiLocale, uiTheme), ...dataRoutes(), ...own });
         await page.goto(`${app.url}${path}`);
       },
     });

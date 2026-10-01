@@ -6,25 +6,40 @@
  * sous-pages. Les secrets ne s'affichent jamais : masque et remplacement seul (INV8).
  * @page
  */
+import { computed } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { RouterLink, RouterView } from 'vue-router';
+import { useSession, type Permission } from '@/composables/useSession';
 
 const { t } = useI18n();
-const SECTIONS = ['models', 'proxies', 'extension', 'alerts', 'diagnostic'] as const;
+const { can } = useSession();
+/** Sections des réglages (06 § 1, figure 1). Sécurité et SSO n'apparaissent que si `can()` l'autorise (owner, 13 § 2). */
+const SECTIONS: readonly { id: string; permission?: Permission }[] = [
+  { id: 'models' },
+  { id: 'proxies' },
+  { id: 'extension' },
+  { id: 'keys' },
+  { id: 'alerts' },
+  { id: 'diagnostic' },
+  { id: 'account' },
+  { id: 'security', permission: 'settings:security:write' },
+  { id: 'sso', permission: 'settings:sso:write' },
+];
+const sections = computed(() => SECTIONS.filter((section) => !section.permission || can(section.permission)));
 </script>
 
 <template>
   <div class="mx-auto flex max-w-5xl flex-col gap-6 py-8 md:flex-row">
     <nav :aria-label="t('settings.nav.label')" class="md:w-56 md:shrink-0">
       <ul class="flex flex-wrap gap-1 md:flex-col">
-        <li v-for="section in SECTIONS" :key="section">
+        <li v-for="section in sections" :key="section.id">
           <RouterLink
-            :to="`/settings/${section}`"
+            :to="`/settings/${section.id}`"
             class="flex min-h-11 items-center rounded-md px-3 text-sm hover:bg-accent"
             active-class="bg-accent font-medium"
             aria-current-value="page"
           >
-            {{ t(`settings.nav.${section}`) }}
+            {{ t(`settings.nav.${section.id}`) }}
           </RouterLink>
         </li>
       </ul>
