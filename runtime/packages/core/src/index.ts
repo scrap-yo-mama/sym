@@ -14,3 +14,7 @@ export * from './model/index.js';
 export * from './schema/index.js';
 export * from './dsl/index.js';
 export * from './status/index.js';
+// Deux modules déclarent `FailureClass` : la racine exporte celui du modèle (04b § 1) ; celui de la machine à états
+// (04 §7, jeu de classes différent) reste accessible sous `StatusFailureClass`.
+export type { FailureClass } from './model/index.js';
+export type { FailureClass as StatusFailureClass } from './status/index.js';
