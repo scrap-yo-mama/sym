@@ -2,7 +2,9 @@
 // Langue du premier compte (06 § 1 : langues `en` et `fr`, `users.locale` ; U2 06-i18n : à défaut de préférence, la langue
 // du navigateur). L'assistant de premier démarrage lit `Accept-Language` pour que l'owner ne tombe pas sur `en` par défaut
 // alors que son navigateur est en français : une valeur `users.locale` posée par défaut l'emporterait sur le navigateur
-// à chaque connexion.
+// à chaque connexion. Limite connue : seul l'owner en profite ; un compte créé plus tard (invitation) reçoit le `en` par
+// défaut de la colonne. La tâche d'invitation des membres appliquera cette fonction à l'acceptation, ou rendra `locale`
+// nullable par migration.
 
 const SUPPORTED = ['en', 'fr'] as const;
 export type UserLocale = (typeof SUPPORTED)[number];

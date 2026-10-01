@@ -3,6 +3,7 @@
 // rendu, n'est jamais relue, et le champ est vidé dès l'envoi. Les réponses réseau sont vérifiées côté serveur (08b) et en E2E (3.6).
 import type { components } from '@runtime/client';
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
+import { nextTick, watch } from 'vue';
 import TestOutcome from '@/components/settings/TestOutcome.vue';
 import { resetSession } from '@/composables/useSession';
 import { useExtensionSettings, useLlmSettings, useProxies, useSmtp, useWebhooks } from '@/composables/useSettings';
@@ -239,6 +240,34 @@ describe('Réglages > Extension et sessions', () => {
     expect(extension.pairing.value).toBeNull();
     expect(calls).toHaveLength(0);
     expect(extension.pairingBusy.value).toBe(false);
+  });
+
+  test('code d’appairage : un second envoi à vide retire puis remet le message (role="alert" réannoncé), le champ est marqué invalide', async () => {
+    installFakeServer({ 'POST /api/extension/pairing-codes': () => json(403, { error: { code: 'reauth_failed', message: 'x' } }) });
+    const extension = useExtensionSettings();
+    const seen: (string | null)[] = [];
+    // Observateur au rythme du rendu (flush « pre ») : il voit ce que voit le DOM, pas les écritures d'un même tick.
+    watch(extension.failure, (value) => seen.push(value));
+    expect(await extension.createPairingCode('')).toBe(false);
+    await nextTick();
+    expect(await extension.createPairingCode('')).toBe(false);
+    await nextTick();
+    expect(seen).toEqual(['settings.extension.passwordRequired', null, 'settings.extension.passwordRequired']);
+    expect(extension.passwordInvalid.value).toBe(true);
+    expect(await extension.createPairingCode('mauvais')).toBe(false);
+    expect(extension.passwordInvalid.value).toBe(true);
+    extension.dismissPairing();
+    expect(await extension.revokeDevice('zz')).toBe(false);
+    expect(extension.passwordInvalid.value).toBe(false);
+  });
+
+  test('code d’appairage : un mot de passe fait d’espaces part au serveur tel quel (un mot de passe peut contenir des espaces)', async () => {
+    const calls = installFakeServer({ 'POST /api/extension/pairing-codes': () => json(403, { error: { code: 'reauth_failed', message: 'x' } }) });
+    const extension = useExtensionSettings();
+    expect(await extension.createPairingCode('   ')).toBe(false);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.body).toEqual({ currentPassword: '   ' });
+    expect(extension.failure.value).toBe('errors.reauth_failed');
   });
 
   test('code d’appairage : une validation du serveur (invalid_request) s’affiche comme une saisie à corriger, pas comme une erreur générique', async () => {

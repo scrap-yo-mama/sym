@@ -2,7 +2,8 @@
 // Lecture de la valeur réelle d'un champ au submit (F-20261001-UX01) : l'autoremplissage du navigateur remplit le champ
 // sans déclencher `input`, la `ref` Vue reste donc vide. Aucun DOM simulé : le formulaire est un double minimal.
 import { describe, expect, test } from 'vitest';
-import { readFieldValue } from './form-field';
+import { ref } from 'vue';
+import { readFieldValue, takeFieldValue } from './form-field';
 
 const form = (fields: Record<string, unknown>) => ({ elements: { namedItem: (name: string) => fields[name] ?? null } }) as unknown as HTMLFormElement;
 
@@ -20,5 +21,28 @@ describe('readFieldValue', () => {
     expect(readFieldValue(undefined, 'password', 'ref')).toBe('ref');
     expect(readFieldValue(form({}), 'password', 'ref')).toBe('ref');
     expect(readFieldValue(form({ password: { checked: true } }), 'password', 'ref')).toBe('ref');
+  });
+});
+
+describe('takeFieldValue', () => {
+  test('renvoie la valeur du DOM (autoremplissage) puis vide le champ et la ref', () => {
+    const field = { value: 'rempli-par-chrome' };
+    const model = ref('');
+    expect(takeFieldValue(form({ currentPassword: field }), 'currentPassword', model)).toBe('rempli-par-chrome');
+    expect(field.value).toBe('');
+    expect(model.value).toBe('');
+  });
+
+  test('champ vide dans le DOM, ref périmée : rien n’est envoyé, et la ref ne garde pas l’ancien secret', () => {
+    const field = { value: '' };
+    const model = ref('ancien-secret');
+    expect(takeFieldValue(form({ currentPassword: field }), 'currentPassword', model)).toBe('');
+    expect(model.value).toBe('');
+  });
+
+  test('sans formulaire : la valeur de la ref, qui est vidée', () => {
+    const model = ref('ref');
+    expect(takeFieldValue(null, 'currentPassword', model)).toBe('ref');
+    expect(model.value).toBe('');
   });
 });

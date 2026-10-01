@@ -14,12 +14,12 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { useExtensionSettings } from '@/composables/useSettings';
-import { readFieldValue } from '@/lib/form-field';
+import { takeFieldValue } from '@/lib/form-field';
 import { formatDateTime } from '@/lib/format';
 
 const { t, locale } = useI18n();
 const extension = useExtensionSettings();
-const { devices, sites, failure, pairing, pairingBusy } = extension;
+const { devices, sites, failure, passwordInvalid, pairing, pairingBusy } = extension;
 
 onMounted(() => {
   void extension.devices.reload();
@@ -34,18 +34,12 @@ const date = (iso: string | null): string => formatDateTime(iso, locale.value) ?
 
 /**
  * Le champ est lu dans le DOM, pas seulement dans la ref : l'autoremplissage du navigateur le remplit sans événement
- * `input` (F-20261001-UX01). Champ vide : message local, aucune requête
- * (le focus ne bouge pas : seuls les quatre endroits de 06 § 3 le déplacent d'eux-mêmes).
+ * `input` (F-20261001-UX01). Le mot de passe ne reste ni dans le champ ni en mémoire après l'envoi. Champ vide : message
+ * local, aucune requête (le focus ne bouge pas : seuls les quatre endroits de 06 § 3 le déplacent d'eux-mêmes).
  */
 async function createCode(event: Event): Promise<void> {
   const form = event.currentTarget instanceof HTMLFormElement ? event.currentTarget : null;
-  const field = form?.querySelector<HTMLInputElement>('#pairing-password') ?? null;
-  const value = readFieldValue(form, 'currentPassword', password.value);
-  if (value !== '') {
-    password.value = ''; // le mot de passe ne reste pas dans le champ après l'envoi
-    if (field) field.value = '';
-  }
-  await extension.createPairingCode(value);
+  await extension.createPairingCode(takeFieldValue(form, 'currentPassword', password));
 }
 </script>
 
@@ -56,14 +50,24 @@ async function createCode(event: Event): Promise<void> {
       <p class="text-sm text-muted-foreground">{{ t('settings.extension.intro') }}</p>
     </header>
 
-    <Alert v-if="failure" variant="destructive" data-testid="extension-failure"><AlertDescription>{{ t(failure) }}</AlertDescription></Alert>
+    <Alert v-if="failure" id="extension-failure" variant="destructive" data-testid="extension-failure"><AlertDescription>{{ t(failure) }}</AlertDescription></Alert>
 
     <form class="flex flex-col gap-3 rounded-xl border p-4" novalidate data-testid="pairing-form" @submit.prevent="createCode">
       <h2 class="text-lg font-semibold">{{ t('settings.extension.pairing') }}</h2>
       <p class="text-sm text-muted-foreground">{{ t('settings.extension.pairingHelp') }}</p>
       <div class="flex flex-col gap-1">
         <Label for="pairing-password">{{ t('settings.extension.currentPassword') }}</Label>
-        <Input id="pairing-password" type="password" name="currentPassword" class="max-w-xs" autocomplete="current-password" :model-value="password" @update:model-value="(value: string | number) => (password = String(value))" />
+        <Input
+          id="pairing-password"
+          type="password"
+          name="currentPassword"
+          class="max-w-xs"
+          autocomplete="current-password"
+          :aria-invalid="passwordInvalid || undefined"
+          :aria-describedby="passwordInvalid ? 'extension-failure' : undefined"
+          :model-value="password"
+          @update:model-value="(value: string | number) => (password = String(value))"
+        />
       </div>
       <div>
         <Button type="submit" class="aria-disabled:pointer-events-none aria-disabled:opacity-50" :aria-disabled="pairingBusy">{{ t('settings.extension.createCode') }}</Button>
