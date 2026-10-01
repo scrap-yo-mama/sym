@@ -373,7 +373,12 @@ describe('release : version, canaux, tags (16 §3, 14 §6)', () => {
     const extra = ((stable['packages'] as Record<string, { 'extra-files': { path: string }[] }>)['runtime']?.['extra-files'] ?? []).map((f) => f.path.replace(/\/package.json$/, '')).sort();
     const workspace = ['apps', 'packages'].flatMap((d) => readdirSync(join(runtimeDir, d)).map((n) => `${d}/${n}`)).concat('fixtures').sort();
     expect(extra).toEqual(workspace);
-    for (const dir of workspace) expect(read(join(runtimeDir, dir, 'package.json'))['version'], dir).toBe(root.version);
+    // Seule exception : avant la première release (dépôt à 0.0.0), l'extension porte 0.1.0 (tâche 2.9 : Chrome refuse 0.0.0
+    // dans le manifeste, le paquet du Store est audité en test). release-please l'aligne (extra-files) dès la première release.
+    for (const dir of workspace) {
+      const expected = dir === 'apps/extension' && root.version === '0.0.0' ? '0.1.0' : root.version;
+      expect(read(join(runtimeDir, dir, 'package.json'))['version'], dir).toBe(expected);
+    }
     // La beta lit la même liste de fichiers que la stable.
     expect((beta['packages'] as object)).toEqual(stable['packages']);
   });
