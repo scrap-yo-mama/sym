@@ -8,7 +8,10 @@
 //   (`agentStepCompatible: false`, E6 limité au serveur, 0.6b) ;
 // - plafonds d'étapes, de durée et de coût (`run_budget_exceeded`), température transmise par middleware ; le coût est
 //   contrôlé AVANT et après chaque appel, avec la dépense de l'essai faite ailleurs (proxy, autres appels) ; un appel non
-//   tarifé (prix absent) rend le plafond intenable : arrêt, coût null (jamais 0, 08 §1) ;
+//   tarifé (prix absent) rend le plafond intenable : arrêt, coût null (jamais 0, 08 §1). Le coût se lit dans l'usage BRUT
+//   de la réponse, avec les règles du LlmClient (`computeUsage`) : `usage.cost` (OpenRouter) fait foi, puis le prix
+//   configuré, puis `usage.estimated_cost` (DeepInfra) ; jetons absents : estimés d'après la taille de la requête envoyée
+//   et de la réponse (jamais 0, signalés `usageEstimated`) ;
 // - prompts nettoyés dans le middleware, hors du LlmClient (stagehand-prompt.ts) : masquage `llm.redact` et jetons
 //   d'URL retirés, sur tout ce qui part au fournisseur (08 §1, 08 §4 mesure 5) ;
 // - garde de l'appelant attendue avant chaque appel (`beforeModelCall`) : classification des documents de la page en
@@ -32,10 +35,15 @@ export const STAGEHAND_VERSION = '3.7.3';
 
 type Middleware = NonNullable<Extract<ModelConfiguration, { modelName: unknown }>['middleware']>;
 
-/** Un appel LLM vu par le middleware : usage (coût) et noms d'outils appelés (jamais leurs arguments ni le prompt). */
+/**
+ * Un appel LLM vu par le middleware : usage brut du fournisseur (coût), tailles de la requête et de la réponse (estimation
+ * des jetons quand l'usage manque) et noms d'outils appelés (jamais leurs arguments ni le prompt).
+ */
 export interface StagehandLlmCall {
   readonly temperatureSent: number | undefined;
-  readonly usage: RawUsage;
+  readonly usage: RawUsage | null;
+  readonly requestChars: number;
+  readonly responseChars: number;
   readonly toolNames: readonly string[];
 }
 
@@ -111,6 +119,51 @@ interface V2Usage {
   outputTokens?: number;
   reasoningTokens?: number;
   cachedInputTokens?: number;
+}
+
+const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
+
+const jsonLength = (v: unknown): number => {
+  try {
+    return typeof v === 'string' ? v.length : (JSON.stringify(v) ?? '').length;
+  } catch {
+    return 0;
+  }
+};
+
+/**
+ * Usage brut d'une réponse de l'AI SDK : l'objet `usage` du corps renvoyé par le fournisseur (`cost`, `estimated_cost`,
+ * jetons et détails), complété par les jetons que l'AI SDK a lus s'ils manquent au corps. Null : aucun usage.
+ */
+function rawUsageOf(responseBody: unknown, sdkUsage: V2Usage | undefined): RawUsage | null {
+  const body = isRecord(responseBody) && isRecord(responseBody['usage']) ? (responseBody['usage'] as RawUsage) : null;
+  const u = sdkUsage ?? {};
+  const fromSdk: RawUsage = {
+    ...(u.inputTokens !== undefined ? { prompt_tokens: u.inputTokens } : {}),
+    ...(u.outputTokens !== undefined ? { completion_tokens: u.outputTokens } : {}),
+    ...(u.cachedInputTokens !== undefined ? { prompt_tokens_details: { cached_tokens: u.cachedInputTokens } } : {}),
+    ...(u.reasoningTokens !== undefined ? { completion_tokens_details: { reasoning_tokens: u.reasoningTokens } } : {}),
+  };
+  if (body === null) return Object.keys(fromSdk).length === 0 ? null : fromSdk;
+  return {
+    ...fromSdk,
+    ...body,
+    ...(typeof body.prompt_tokens === 'number' || fromSdk.prompt_tokens === undefined ? {} : { prompt_tokens: fromSdk.prompt_tokens }),
+    ...(typeof body.completion_tokens === 'number' || fromSdk.completion_tokens === undefined ? {} : { completion_tokens: fromSdk.completion_tokens }),
+    ...(isRecord(body.prompt_tokens_details) || fromSdk.prompt_tokens_details === undefined ? {} : { prompt_tokens_details: fromSdk.prompt_tokens_details }),
+    ...(isRecord(body.completion_tokens_details) || fromSdk.completion_tokens_details === undefined ? {} : { completion_tokens_details: fromSdk.completion_tokens_details }),
+  };
+}
+
+/** Caractères de la réponse du modèle (texte et appels d'outils) : base de l'estimation des jetons de sortie. */
+function responseCharsOf(content: readonly unknown[]): number {
+  let total = 0;
+  for (const part of content) {
+    if (!isRecord(part)) continue;
+    if (typeof part['text'] === 'string') total += part['text'].length;
+    if (part['type'] === 'tool-call') total += jsonLength(part['input']) + jsonLength(part['toolName']);
+  }
+  return total;
 }
 
 /** Action d'agent telle que la rend Stagehand 3.7.3 (`AgentResult.actions`). */
@@ -201,7 +254,7 @@ export class StagehandEngine implements AgentEngine {
       let unpriced = false;
       const u = { tokensIn: 0, tokensCached: 0, tokensOut: 0, tokensReasoning: 0, usageEstimated: false };
       for (const call of calls) {
-        const c = computeUsage({ raw: call.usage, price: this.#opts.price, requestChars: 0, responseChars: 0 });
+        const c = computeUsage({ raw: call.usage, price: this.#opts.price, requestChars: call.requestChars, responseChars: call.responseChars });
         u.tokensIn += c.tokens_in;
         u.tokensCached += c.tokens_cached;
         u.tokensOut += c.tokens_out;
@@ -252,15 +305,13 @@ export class StagehandEngine implements AgentEngine {
       },
       wrapGenerate: async ({ doGenerate, params }) => {
         const result = await doGenerate();
-        const usage = result.usage as V2Usage;
-        const raw: RawUsage = {
-          ...(usage.inputTokens !== undefined ? { prompt_tokens: usage.inputTokens } : {}),
-          ...(usage.outputTokens !== undefined ? { completion_tokens: usage.outputTokens } : {}),
-          prompt_tokens_details: { cached_tokens: usage.cachedInputTokens ?? 0 },
-          completion_tokens_details: { reasoning_tokens: usage.reasoningTokens ?? 0 },
-        };
+        // Usage BRUT de la réponse (`usage.cost`, `estimated_cost`, jetons) : l'usage normalisé de l'AI SDK perd le coût
+        // du fournisseur. Taille de la requête réellement envoyée (corps), à défaut le prompt et les outils.
+        const raw = rawUsageOf(result.response?.body, result.usage as V2Usage | undefined);
+        const sent = result.request?.body;
+        const requestChars = sent !== undefined ? jsonLength(sent) : jsonLength({ prompt: params.prompt, tools: params.tools });
         const toolNames = result.content.filter((part) => part.type === 'tool-call').map((part) => (part as { toolName: string }).toolName);
-        const call: StagehandLlmCall = { temperatureSent: params.temperature, usage: raw, toolNames };
+        const call: StagehandLlmCall = { temperatureSent: params.temperature, usage: raw, requestChars, responseChars: responseCharsOf(result.content), toolNames };
         calls.push(call);
         this.#opts.onLlmCall?.(call);
         this.#opts.onCost?.(cost().usd);

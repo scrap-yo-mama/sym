@@ -187,6 +187,13 @@ const refuse = (failure_class: FailureClass, detail: string, retryable = false):
   throw new TargetError({ failure_class, retryable, detail });
 };
 
+/** Entrée de run non vide : toute valeur autre que absente, `null` ou un objet sans clé. */
+function hasInput(input: unknown): boolean {
+  if (input === undefined || input === null) return false;
+  if (typeof input === 'object' && !Array.isArray(input)) return Object.keys(input).length > 0;
+  return true;
+}
+
 function specOf(target: RunTarget, strategy: NonNullable<RunTarget['strategy']>): DeclarativeSpec {
   const check = validateDeclarativeSpec(strategy.spec, { outputSchema: target.api.outputSchema });
   if (!check.ok) return refuse('code_error', 'invalid_strategy_spec');
@@ -309,6 +316,10 @@ export function createStrategyExecutor(deps: StrategyExecutorDeps): RunExecutor 
       throw error;
     }
     const agentic = agenticSpecOf(strategy.execution, strategy.spec);
+    // Entrée non prise en charge par E4-E6 (ADR 0001, « Suivi de l'intégration ») : leurs spécifications n'ont aucun
+    // gabarit d'entrée et une trace E6 compilée fige les choix de l'agent. Servir l'essai rendrait la même sortie quelle
+    // que soit l'entrée (conforme au schéma, mais fausse) : refus avant tout réseau et tout appel au modèle.
+    if (agentic !== undefined && hasInput(ctx.input)) return refuse('code_error', 'input_unsupported');
     const { rung, credentials } = await rungFor(target, strategy.network);
     const script = strategy.execution === 'playwright' && strategy.scriptRef !== null ? scriptSpecOf(strategy.spec) : undefined;
     const spec = script === undefined && ['fetch', 'fetch_in_page', 'playwright'].includes(strategy.execution) ? specOf(target, strategy) : undefined;

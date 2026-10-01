@@ -49,9 +49,19 @@ describe('sanitizeModelPrompt — prompts de Stagehand', () => {
     expect((sanitized[0] as { content: string }).content).toContain(`<goal>${INSTRUCTION}</goal>`);
     // Sans masquage configuré, les données ne sont pas réécrites (même règle que le LlmClient).
     expect(out).toContain('zz_test_jane@example.invalid');
-    // Pièces non textuelles et identifiants d'outils intacts.
-    expect(out).toContain('"data":"AAAA"');
+    // Identifiants d'outils intacts.
     expect(out).toContain('"toolCallId":"c1"');
+  });
+
+  it('assert_llm_redaction — image (capture d’écran) jamais transmise : non masquable, remplacée par un texte neutre, avec ou sans llm.redact', () => {
+    for (const options of [{ instruction: INSTRUCTION }, { redactor: createRedactor({}), instruction: INSTRUCTION }]) {
+      const out = JSON.stringify(sanitizeModelPrompt(prompt(), options));
+      expect(out).not.toContain('"data":"AAAA"');
+      expect(out).not.toMatch(/image\/png/);
+      expect(out).toContain('"toolCallId":"c4"');
+    }
+    const file = sanitizeModelPrompt([{ role: 'user', content: [{ type: 'file', data: 'AAAA', mediaType: 'image/jpeg' }] }], {});
+    expect(JSON.stringify(file)).not.toContain('AAAA');
   });
 
   it('nettoyage d’URL : requête et fragment retirés, identifiants aussi', () => {

@@ -9,7 +9,7 @@ import { createFakeProvider, scripted, type FakeProvider } from '@runtime/llm/te
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { extractMessages, extractPromptVersion, extractRecordsWithLlm, recordsSchema, sourceLabel } from './agent-extract.js';
 import { stagehandTrace } from './stagehand-engine.js';
-import { assertStagehandLocalOnly, forbiddenEnvPresent, STAGEHAND_TOOL_ACTIONS, StagehandNotLocalError, toolsOutsideClosedList } from './stagehand-guards.js';
+import { assertStagehandLocalOnly, forbiddenEnvPresent, STAGEHAND_EXCLUDED_TOOLS, STAGEHAND_TOOL_ACTIONS, StagehandNotLocalError, toolsOutsideClosedList } from './stagehand-guards.js';
 
 describe('assert_stagehand_local_only — Stagehand en local seulement (X1, ADR 0001)', () => {
   const local = { env: 'LOCAL', disableAPI: true, experimental: true };
@@ -31,8 +31,12 @@ describe('assert_stagehand_local_only — Stagehand en local seulement (X1, ADR 
 describe('assert_agent_toolset_closed', () => {
   it('chaque outil de Stagehand correspond à une action de la liste fermée ; recherche, shell ou installation refusés', () => {
     for (const action of Object.values(STAGEHAND_TOOL_ACTIONS)) expect(AGENT_TOOLS).toContain(action);
-    expect(toolsOutsideClosedList(['act', 'ariaTree', 'extract', 'fillForm', 'goto', 'keys', 'navback', 'screenshot', 'scroll', 'think', 'wait', 'done'])).toEqual([]);
+    expect(toolsOutsideClosedList(['act', 'ariaTree', 'extract', 'fillForm', 'goto', 'keys', 'navback', 'scroll', 'think', 'wait', 'done'])).toEqual([]);
     expect(toolsOutsideClosedList(['act', 'search', 'shell', 'install_package', 'approve_all'])).toEqual(['search', 'shell', 'install_package', 'approve_all']);
+  });
+  it('assert_llm_redaction — capture d’écran jamais proposée au modèle (mode dom) : une image ne peut pas être masquée par llm.redact (08 §1)', () => {
+    expect(STAGEHAND_EXCLUDED_TOOLS).toContain('screenshot');
+    expect(toolsOutsideClosedList(['ariaTree', 'screenshot'])).toEqual(['screenshot']);
   });
 });
 

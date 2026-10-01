@@ -52,8 +52,8 @@ export function assertStagehandLocalOnly(options: Readonly<Record<string, unknow
 
 /**
  * Outils de Stagehand 3.7.3 (mode `dom`) et l'action de la liste fermée qu'ils réalisent. `think` n'agit pas sur la
- * page (carnet de raisonnement) : il est rangé avec l'instantané. `search` (Browserbase / Brave) n'y figure pas et est
- * exclu à chaque run ; tout outil absent de cette table arrête le run.
+ * page (carnet de raisonnement) : il est rangé avec l'instantané. `search` (Browserbase / Brave) et `screenshot` n'y
+ * figurent pas et sont exclus à chaque run ; tout outil absent de cette table arrête le run.
  */
 export const STAGEHAND_TOOL_ACTIONS: Readonly<Record<string, AgentToolName>> = Object.freeze({
   act: 'click',
@@ -64,14 +64,17 @@ export const STAGEHAND_TOOL_ACTIONS: Readonly<Record<string, AgentToolName>> = O
   scroll: 'scroll',
   wait: 'wait',
   ariaTree: 'snapshot',
-  screenshot: 'snapshot',
   think: 'snapshot',
   extract: 'extract',
   done: 'finish',
 });
 
-/** Outils de Stagehand jamais proposés au modèle. */
-export const STAGEHAND_EXCLUDED_TOOLS: readonly string[] = Object.freeze(['search']);
+/**
+ * Outils de Stagehand jamais proposés au modèle. `screenshot` : une capture d'écran part en image, que `llm.redact` ne
+ * peut pas masquer (08 §1 : masquage AVANT l'envoi) ; en mode `dom`, l'arbre ARIA suffit (ADR 0001). Une page qui
+ * affiche des e-mails, ou une injection qui demande « take a screenshot », ne peut donc pas faire partir la page en clair.
+ */
+export const STAGEHAND_EXCLUDED_TOOLS: readonly string[] = Object.freeze(['search', 'screenshot']);
 
 export class AgentToolsetNotClosedError extends Error {
   override name = 'AgentToolsetNotClosedError';

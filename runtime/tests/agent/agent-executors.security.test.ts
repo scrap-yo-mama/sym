@@ -15,7 +15,7 @@ import { Secret, validateHybridSpec, type AgentFetchSpec, type AgentSpec, type H
 import * as net from '@runtime/core/net';
 import { openBrowserEgress, openNetworkSession, startEgressProxy, type BrowserEgress, type EgressProxy, type SsrfGuard } from '@runtime/core/net';
 import { createLlmClient, type ModelPrice, type RedactConfig } from '@runtime/llm';
-import { createFakeProvider, scripted, type FakeProvider } from '@runtime/llm/testing';
+import { createFakeProvider, scripted, type FakeProvider, type FakeRequestContext, type ScriptedResponse, type ScriptedStep } from '@runtime/llm/testing';
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'vitest';
 import { launchAgentBrowser } from '../../apps/worker/src/browser/agent-browser.ts';
 import { BrowserPool, playwrightLauncher } from '../../apps/worker/src/browser/pool.ts';
@@ -99,6 +99,27 @@ const engineFor =
     modelId: AGENT_MODEL,
     promptVersion: 'stagehand-3.7.3-dom',
   });
+
+/**
+ * Réponses du faux fournisseur avec l'usage brut choisi : `null`, aucun usage (fournisseur qui n'en renvoie pas) ;
+ * `{ cost }` seul (OpenRouter : `usage.cost` fait foi, 08 §1). Même corps que le faux, usage mis à part.
+ */
+function withRawUsage(steps: ScriptedStep[], usage: Record<string, unknown> | null): ScriptedStep[] {
+  return steps.map((step) => (ctx: FakeRequestContext): ScriptedResponse => {
+    const res = typeof step === 'function' ? step(ctx) : step;
+    if (res.kind !== 'completion') return res;
+    const message: Record<string, unknown> = { role: 'assistant', content: res.content ?? null };
+    if (res.toolCalls !== undefined) {
+      message['tool_calls'] = res.toolCalls.map((c, i) => ({
+        id: c.id ?? `call_${ctx.step}_${i}`,
+        type: 'function',
+        function: { name: c.name, arguments: typeof c.arguments === 'string' ? c.arguments : JSON.stringify(c.arguments) },
+      }));
+    }
+    const body = { id: `zz-raw-${ctx.step}`, object: 'chat.completion', model: AGENT_MODEL, choices: [{ index: 0, message, finish_reason: res.finishReason ?? 'stop' }] };
+    return scripted.raw('application/json', JSON.stringify(usage === null ? body : { ...body, usage }));
+  });
+}
 
 /**
  * Pages du serveur local : / (fiche + bouton « Envoyer » qui écrit en XHR POST), /contact (e-mail, téléphone, lien à
@@ -629,6 +650,63 @@ describe('plafond de coût de l’essai (04b « Schéma et coût », 08 §1) : r
     expect(fake.requests).toBe(1);
   });
 
+  test('assert_stagehand_cost_from_raw_usage — E6, fournisseur sans usage : jetons estimés d’après la taille du prompt et de la réponse, coût jamais 0, arrêt au plafond max_cost_usd', async () => {
+    fake.setScenario(AGENT_MODEL, withRawUsage(stagehandScript([scripted.toolCalls([{ name: 'act', arguments: { action: `click the link "${ref().title}"` } }])], { items: [ref()] }), null));
+    const out = await withEgress([AGENT_HOSTS.e6], (egress) =>
+      runAgentExecutor({
+        spec: { schema_version: 1, kind: 'agent', start_url: url(AGENT_HOSTS.e6), allowed_hosts: [AGENT_HOSTS.e6], instruction: task('F-E6').instruction, limits: { max_steps: 10, timeout_ms: 90_000 } },
+        outputSchema: itemSchema('F-E6'),
+        signal,
+        guard,
+        egress,
+        agentBrowser: (o) => launchAgentBrowser({ ...o, egressServer: egress.server }),
+        // Prix « cher » : le premier prompt de Stagehand (plusieurs milliers de caractères) dépasse à lui seul 0,50 $.
+        engineFor: engineFor({ price: DEAR }),
+        pool,
+        allowWriteActions: false,
+        maxCostUsd: 0.5,
+        taskId: 'zz_test_no_usage',
+        version: 1,
+      }),
+    );
+    expect(out.result).toMatchObject({ ok: false, failure: { failure_class: 'run_budget_exceeded', detail: 'max_cost_usd' } });
+    expect(out.llm?.usd).not.toBeNull();
+    expect(out.llm!.usd!).toBeGreaterThan(0.5);
+    expect(out.llm?.tokens.estimated).toBe(true);
+    expect(out.llm!.tokens.in).toBeGreaterThan(0);
+    expect(fake.byRole[AGENT_MODEL]).toBe(1);
+    expect(out.compiled).toBeUndefined();
+  }, 120_000);
+
+  test('assert_stagehand_cost_from_raw_usage — E6, usage.cost seul (OpenRouter) et modèle sans prix configuré : coût du fournisseur retenu (08 §1), jamais llm_price_missing', async () => {
+    const PROVIDER_USD = 0.001;
+    fake.setScenario(AGENT_MODEL, withRawUsage(stagehandScript([scripted.toolCalls([{ name: 'act', arguments: { action: `click the link "${ref().title}"` } }])], { items: [ref()] }), { cost: PROVIDER_USD }));
+    const out = await withEgress([AGENT_HOSTS.e6], (egress) =>
+      runAgentExecutor({
+        spec: { schema_version: 1, kind: 'agent', start_url: url(AGENT_HOSTS.e6), allowed_hosts: [AGENT_HOSTS.e6], instruction: task('F-E6').instruction, limits: { max_steps: 10, timeout_ms: 90_000 } },
+        outputSchema: itemSchema('F-E6'),
+        signal,
+        guard,
+        egress,
+        agentBrowser: (o) => launchAgentBrowser({ ...o, egressServer: egress.server }),
+        engineFor: engineFor({ price: null }),
+        pool,
+        allowWriteActions: false,
+        maxCostUsd: 0.5,
+        taskId: 'zz_test_provider_cost',
+        version: 1,
+      }),
+    );
+    expect(out.result.ok).toBe(true);
+    if (out.result.ok) expect(out.result.records).toEqual([ref()]);
+    const calls = fake.byRole[AGENT_MODEL] ?? 0;
+    expect(calls).toBeGreaterThan(1);
+    expect(out.llm?.usd).not.toBeNull();
+    expect(out.llm!.usd!).toBeCloseTo(calls * PROVIDER_USD, 9);
+    // Jetons absents de l'usage : estimés, et signalés comme tels.
+    expect(out.llm?.tokens.estimated).toBe(true);
+  }, 180_000);
+
   test('E5 : l’extraction déléguée est bornée par timeout_ms (comme E4), pas seulement par le run', async () => {
     fake.setScenario(EXTRACT_MODEL, [{ kind: 'completion', content: JSON.stringify({ items: [agentReference('F-E6')] }), delayMs: 25_000 }]);
     const t0 = Date.now();
@@ -781,6 +859,40 @@ describe('prompts de Stagehand : llm.redact et jetons d’URL (08 §1, 08 §4 me
       expect(body).not.toContain('zz_test_jane@example.invalid');
       expect(body).not.toMatch(/23 45 67 89/);
       expect(body).not.toContain('zz_secret_token_42');
+    }
+  }, 180_000);
+
+  test('assert_llm_redaction — E6 avec llm.redact : le modèle (ou une injection) demande une capture d’écran ; l’outil n’est jamais proposé et aucune image n’arrive au fournisseur', async () => {
+    fake.setScenario(AGENT_MODEL, stagehandScript([scripted.toolCalls([{ name: 'screenshot', arguments: {} }])], { items: [{ id: 'zz_test_item_0002', title: 'Contact zz_test' }] }));
+    await withEgress(
+      [LOCAL],
+      (egress) =>
+        runAgentExecutor({
+          spec: { schema_version: 1, kind: 'agent', start_url: localUrl('/contact'), allowed_hosts: [LOCAL], instruction: 'Read the contact sheet.', limits: { max_steps: 10, timeout_ms: 90_000 } },
+          outputSchema: LOCAL_ITEM,
+          signal,
+          guard: localGuard,
+          egress,
+          agentBrowser: (o) => launchAgentBrowser({ ...o, egressServer: egress.server }),
+          engineFor: engineFor({ redact: {} }),
+          pool: null,
+          allowWriteActions: false,
+          maxCostUsd: 0.5,
+          taskId: 'zz_test_redact_screenshot',
+          version: 1,
+        }),
+      localGuard,
+    );
+    expect(fake.calls.length).toBeGreaterThan(0);
+    for (const call of fake.calls) {
+      const tools = ((call.body['tools'] ?? []) as { function: { name: string } }[]).map((t) => t.function.name);
+      expect(tools).not.toContain('screenshot');
+      const body = JSON.stringify(call.body);
+      expect(body).not.toMatch(/image\/(png|jpeg|webp)/);
+      expect(body).not.toContain('image_url');
+      // Signature base64 d'un PNG.
+      expect(body).not.toContain('iVBORw0KGgo');
+      expect(body).not.toContain('zz_test_jane@example.invalid');
     }
   }, 180_000);
 });

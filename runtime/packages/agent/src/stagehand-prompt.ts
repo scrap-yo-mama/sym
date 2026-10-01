@@ -8,7 +8,9 @@
 // - le retrait des jetons d'URL (identifiants, requête, fragment), toujours : une URL de page n'entre dans un prompt que
 //   par son origine et son chemin, comme la source d'E4 (`sourceLabel`). La consigne de l'API (écrite par l'utilisateur)
 //   n'est pas réécrite.
-// Les pièces non textuelles (captures d'écran) ne sont pas modifiables ici ; les identifiants d'outils restent intacts.
+// Une image (capture d'écran, pièce `media` ou `file` en `image/*`) ne peut pas être masquée : elle n'est JAMAIS
+// transmise, remplacée par un texte neutre (seconde couche : l'outil `screenshot` est déjà exclu, stagehand-guards.ts).
+// Les identifiants d'outils restent intacts.
 import type { Redactor } from '@runtime/llm';
 
 const URL_RE = /\bhttps?:\/\/[^\s"'<>\\`]+/gi;
@@ -36,6 +38,9 @@ export type PromptSanitizeOptions = {
   readonly instruction?: string;
 };
 
+/** Texte qui remplace une image retirée du prompt. */
+const IMAGE_OMITTED = '[image omise : non masquable]';
+
 /** Clés jamais réécrites : structure du prompt, identifiants d'outils, données binaires. */
 const OPAQUE_KEYS = new Set(['type', 'role', 'toolCallId', 'toolName', 'mediaType', 'data', 'providerOptions', 'providerMetadata', 'id']);
 
@@ -59,11 +64,20 @@ function sanitizeValue(value: unknown, options: PromptSanitizeOptions): unknown 
   if (Array.isArray(value)) return value.map((v) => sanitizeValue(v, options));
   if (value !== null && typeof value === 'object') {
     if (value instanceof Uint8Array || value instanceof URL) return value;
+    if (isImagePart(value)) return { type: 'text', text: IMAGE_OMITTED };
     const out: Record<string, unknown> = {};
     for (const [key, v] of Object.entries(value)) out[key] = OPAQUE_KEYS.has(key) ? v : sanitizeValue(v, options);
     return out;
   }
   return value;
+}
+
+/** Pièce d'image de l'AI SDK : `{ type: 'media' | 'file' | 'image', mediaType: 'image/…', data }` (ou `image`). */
+function isImagePart(value: object): boolean {
+  const part = value as { type?: unknown; mediaType?: unknown; mimeType?: unknown };
+  if (part.type === 'image') return true;
+  const media = typeof part.mediaType === 'string' ? part.mediaType : typeof part.mimeType === 'string' ? part.mimeType : '';
+  return (part.type === 'media' || part.type === 'file') && /^image\//i.test(media);
 }
 
 /** Prompt de l'AI SDK (LanguageModelV2Prompt) nettoyé ; l'entrée n'est pas modifiée. */

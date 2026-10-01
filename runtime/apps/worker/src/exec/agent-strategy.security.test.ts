@@ -80,8 +80,8 @@ async function insertApi(slug: string, strategy: { execution: string; network: s
   return id;
 }
 
-const runOf = async (apiId: string) => {
-  const { runId } = await withActor(pool, actorA, (tx) => createRun(tx, queue, { apiId, ownerId: A, trigger: 'rest' }));
+const runOf = async (apiId: string, input?: Record<string, unknown>) => {
+  const { runId } = await withActor(pool, actorA, (tx) => createRun(tx, queue, { apiId, ownerId: A, trigger: 'rest', ...(input === undefined ? {} : { input }) }));
   await vi.waitFor(async () => expect(['succeeded', 'failed']).toContain((await pool.query<{ state: string }>('SELECT state FROM runs WHERE id = $1', [runId])).rows[0]!.state), {
     timeout: 120_000,
     interval: 200,
@@ -249,4 +249,28 @@ describe('exécuteurs agentiques branchés sur le worker (base réelle, Chromium
     const row = await pool.query<{ error_detail: string }>('SELECT error_detail FROM runs WHERE api_id = $1', [apiId]);
     expect(row.rows[0]?.error_detail).toBe('execution_server_only');
   }, 60_000);
+
+  test('assert_agentic_input_unsupported — E4 et E6 avec une entrée non vide : refusés avant tout réseau (code_error input_unsupported), 0 appel LLM, 0 requête au site ; jamais une sortie identique quelle que soit l’entrée', async () => {
+    const e4 = await insertApi(
+      'zz_test_e4_input',
+      { execution: 'agent_fetch', network: 'direct', spec: { schema_version: 1, kind: 'agent_fetch', request: { url: url(AGENT_HOSTS.e4), allowed_hosts: [AGENT_HOSTS.e4] }, instruction: task('F-E4').instruction } },
+      itemSchema('F-E4'),
+    );
+    const e6 = await insertApi(
+      'zz_test_e6_input',
+      { execution: 'agent', network: 'direct', spec: { schema_version: 1, kind: 'agent', start_url: url(AGENT_HOSTS.e6), allowed_hosts: [AGENT_HOSTS.e6], instruction: task('F-E6').instruction } },
+      itemSchema('F-E6'),
+    );
+    await client.reset();
+    for (const apiId of [e4, e6]) {
+      const { run } = await runOf(apiId, { category: 'zz_test_lampes' });
+      expect(run).toMatchObject({ state: 'failed', failure_class: 'code_error' });
+      const row = await pool.query<{ error_detail: string }>('SELECT error_detail FROM runs WHERE api_id = $1', [apiId]);
+      expect(row.rows[0]?.error_detail).toBe('input_unsupported');
+    }
+    expect(fake.requests).toBe(0);
+    const stats = await client.stats();
+    expect(stats.hosts[AGENT_HOSTS.e4]?.total ?? 0).toBe(0);
+    expect(stats.hosts[AGENT_HOSTS.e6]?.total ?? 0).toBe(0);
+  }, 120_000);
 });
