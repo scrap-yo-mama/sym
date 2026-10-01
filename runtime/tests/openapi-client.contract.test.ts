@@ -250,3 +250,39 @@ describe('OpenAPI spécifiée et routes livrées', () => {
     expect(STOP_ON_NOT_FOUND_DEFAULT).toBe(!delivered.includes('GET /api/events'));
   });
 });
+
+describe('OpenAPI spécifiée : YAML sain', () => {
+  // Un analyseur tolérant (openapi-typescript) accepte une apostrophe non fermée ou un schéma en double et garde la dernière
+  // définition : la faute passe alors inaperçue (motif de `deviceId` perdu, ancien schéma `Version` resté dans le fichier).
+  const spec = readFileSync(SPEC_URL, 'utf8').split('\n');
+
+  test('aucune chaîne entre apostrophes ouverte sans être fermée sur sa ligne', () => {
+    const unclosed = spec
+      .map((line, at) => ({ line, at: at + 1 }))
+      .filter(({ line }) => {
+        // Valeur qui commence par une apostrophe (`clé: '…'`, `- '…'`, `[a, '…']`) : elle doit se fermer sur la même ligne.
+        const value = /^\s*(?:- )?(?:[\w$./{}-]+:\s*)?(['[].*)$/.exec(line)?.[1];
+        return value !== undefined && value.includes("'") && (value.replace(/''/g, '').match(/'/g) ?? []).length % 2 === 1;
+      });
+    expect(unclosed).toEqual([]);
+  });
+
+  test('chaque schéma de components.schemas est défini une seule fois', () => {
+    const start = spec.indexOf('  schemas:');
+    expect(start).toBeGreaterThan(0);
+    const names: string[] = [];
+    for (const line of spec.slice(start + 1)) {
+      if (/^\S/.test(line) || /^ {2}\S/.test(line)) break;
+      const match = /^ {4}([A-Za-z0-9_]+):\s*$/.exec(line);
+      if (match) names.push(match[1] ?? '');
+    }
+    expect(names.length).toBeGreaterThan(50);
+    expect(names.filter((name, at) => names.indexOf(name) !== at)).toEqual([]);
+  });
+
+  test('le schéma Version est celui que sert GET /api/version (16 § 3) : server, schema, min_extension, mcp_spec', () => {
+    const text = spec.join('\n');
+    expect(text).not.toContain('required: [version, schema_version]');
+    expect(text).toMatch(/ {4}Version:\n(?: {6}.*\n)*? {6}required: \[server, schema, min_extension, mcp_spec\]/);
+  });
+});

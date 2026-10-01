@@ -33,6 +33,23 @@ export function createAppRouter(history: RouterHistory = createWebHistory()): Ro
     routes: [
       { path: '/login', name: 'login', component: () => import('@/views/LoginView.vue'), meta: { public: true, titleKey: 'auth.login.title' } },
       { path: '/', name: 'home', component: () => import('@/views/HomeView.vue'), meta: { titleKey: 'home.title' } },
+      // Nouvelle API (3.5) : `/apis/new` est le formulaire, `/apis/new/:runId` rouvre une enquête (journal rejoué).
+      { path: '/apis/new', name: 'new-api', component: () => import('@/views/NewApiView.vue'), meta: { titleKey: 'newApi.title' } },
+      { path: '/apis/new/:runId', name: 'new-api-run', component: () => import('@/views/NewApiView.vue'), meta: { titleKey: 'investigation.titleUnknown' } },
+      { path: '/runs', name: 'runs', component: () => import('@/views/RunsView.vue'), meta: { titleKey: 'runs.title' } },
+      {
+        path: '/settings',
+        component: () => import('@/views/settings/SettingsView.vue'),
+        meta: { titleKey: 'settings.title' },
+        children: [
+          { path: '', redirect: { name: 'settings-models' }, meta: { titleKey: 'settings.title' } },
+          { path: 'models', name: 'settings-models', component: () => import('@/views/settings/ModelsSettingsView.vue'), meta: { titleKey: 'settings.models.title' } },
+          { path: 'proxies', name: 'settings-proxies', component: () => import('@/views/settings/ProxiesSettingsView.vue'), meta: { titleKey: 'settings.proxies.title' } },
+          { path: 'extension', name: 'settings-extension', component: () => import('@/views/settings/ExtensionSettingsView.vue'), meta: { titleKey: 'settings.extension.title' } },
+          { path: 'alerts', name: 'settings-alerts', component: () => import('@/views/settings/AlertsSettingsView.vue'), meta: { titleKey: 'settings.alerts.title' } },
+          { path: 'diagnostic', name: 'settings-diagnostic', component: () => import('@/views/settings/DiagnosticSettingsView.vue'), meta: { titleKey: 'settings.diagnostic.title' } },
+        ],
+      },
       { path: '/:pathMatch(.*)*', name: 'not-found', component: () => import('@/views/NotFoundView.vue'), meta: { titleKey: 'notFound.title' } },
     ],
   });

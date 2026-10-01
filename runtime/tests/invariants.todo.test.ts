@@ -38,6 +38,8 @@ import { describe, test } from "vitest";
 // La capture de trafic complète (cibles, LLM, proxys, SMTP, webhooks réels) de assert_no_telemetry reste à 4.3.
 // INV7 (1.5) : assert_sandbox est dans apps/worker/src/sandbox/sandbox.security.test.ts (projet Vitest security,
 // isolated-vm et adaptateur QuickJS) ; borne isolated-vm et fuzz des ponts : apps/worker/src/sandbox/sandbox.unit.test.ts.
+// INV6 (3.5) : assert_ui_strings_no_forbidden_words est dans tests/ui-strings.unit.test.ts (fichiers de langue en et fr, messages
+// de apps/server/src et de packages/*/src, dont MCP ; un module MCP né hors de ces dossiers fait échouer le test) ; assert_blocked_panel_no_tunnel_link dans apps/web/src/components/BlockedPanel.unit.test.ts.
 describe("invariants (à implémenter)", () => {
   test.todo("assert_cheapest_first_logged"); // INV2, tâche(s) 2.1
   test.todo("assert_tunnel_single_user"); // INV5, tâche(s) 2.6, 2.7
@@ -50,7 +52,8 @@ describe("invariants (à implémenter)", () => {
   test.todo("assert_erasure_complete — exécuteur réel : RunContext.excludeSubjects avant collecte et avant écriture, dedup_keys.key_hash = dedupKeyHash"); // RGPD, tâche(s) 1.6, 1.7
   test.todo("assert_pacing_key_is_domain"); // politesse, tâche(s) 1.9
   test.todo("assert_export_no_secret"); // INV5, INV8, tâche(s) 3.12
-  test.todo("assert_ui_strings_no_forbidden_words"); // INV6, tâche(s) 3.5
   test.todo("assert_access_report_first"); // étape 0, tâche(s) 1.11, 2.1
+  test.todo("assert_budget_and_stop_controls — Chromium (Playwright) : attempt.finished émis → [data-testid=attempt] visible en moins de 2 s"); // 06 § 4.3, tâche(s) 3.6 (3.5 : rendu SSR, sans navigateur)
+  test.todo("assert_run_detail_error_open"); // 06 § 4.3 : écran Détail d'un run, confié à aucune tâche (ADR 0003 : 3.4 ou tâche nouvelle), E2E 3.6
   test.todo("assert_a11y_axe_clean"); // 06 § 1, tâche(s) 3.9, 3.6 (passage ponctuel de 3.3 consigné dans l'ADR 0002)
 });

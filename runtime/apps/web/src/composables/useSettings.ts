@@ -1,0 +1,283 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Réglages BYO (06 § 2, 08 § 7) : modèles IA, proxys, alertes (SMTP, webhooks), extension et sessions. Les secrets sont en
+// écriture seule : la console ne les relit jamais (le serveur ne les renvoie pas, INV8) et vide le champ dès l'envoi. Les droits
+// sont ceux du serveur : un 403 devient un message, jamais une décision locale (06 § 4.1).
+import type { components } from '@runtime/client';
+import { reactive, ref } from 'vue';
+import { call, type CallResult } from '@/lib/api-call';
+import { getApi } from '@/lib/api';
+import { useResource, useTester } from '@/composables/useResource';
+
+type Schemas = components['schemas'];
+export type LlmSettings = Schemas['LlmSettings'];
+export type LlmRoleName = 'investigate' | 'repair' | 'extract' | 'agent';
+export const LLM_ROLES: readonly LlmRoleName[] = ['investigate', 'repair', 'extract', 'agent'];
+export type LlmPreset = Schemas['LlmPreset'];
+export const LLM_PRESETS: readonly LlmPreset[] = ['zai', 'openrouter', 'vllm', 'ollama', 'deepseek', 'qwen', 'openai', 'custom'];
+
+/** Fournisseur en cours d'édition ; `newApiKey` est le seul endroit où une clé vit, et seulement le temps de la saisie. */
+export interface ProviderDraft {
+  id: string;
+  preset: LlmPreset;
+  base_url: string;
+  timeout_ms?: number;
+  max_retries?: number;
+  models?: Schemas['LlmProviderBase']['models'];
+  apiKeySet: boolean;
+  apiKeyUnreadable: boolean;
+  newApiKey: string;
+}
+
+export function useLlmSettings() {
+  const resource = useResource<LlmSettings>(() => call(() => getApi().GET('/api/settings/llm')));
+  const providers = ref<ProviderDraft[]>([]);
+  const roles = reactive<Partial<Record<LlmRoleName, { provider: string; model: string }>>>({});
+  const saving = ref(false);
+  const saveFailure = ref<string | null>(null);
+  const saved = ref(false);
+  const tester = useTester();
+  let loaded: LlmSettings | null = null;
+
+  function adopt(settings: LlmSettings): void {
+    loaded = settings;
+    providers.value = settings.providers.map((provider) => ({
+      id: provider.id,
+      preset: provider.preset,
+      base_url: provider.base_url,
+      timeout_ms: provider.timeout_ms,
+      max_retries: provider.max_retries,
+      models: provider.models,
+      apiKeySet: provider.api_key_set,
+      apiKeyUnreadable: provider.api_key_unreadable === true,
+      newApiKey: '',
+    }));
+    for (const name of LLM_ROLES) {
+      const role = settings.roles?.[name];
+      if (role) roles[name] = { provider: role.provider, model: role.model };
+      else delete roles[name];
+    }
+  }
+
+  async function load(): Promise<void> {
+    if (await resource.reload()) adopt(resource.data.value as LlmSettings);
+  }
+
+  function addProvider(): void {
+    providers.value = [...providers.value, { id: '', preset: 'custom', base_url: '', apiKeySet: false, apiKeyUnreadable: false, newApiKey: '' }];
+  }
+
+  function removeProvider(index: number): void {
+    providers.value = providers.value.filter((_, at) => at !== index);
+  }
+
+  /** Corps du PUT : une clé n'est envoyée que si elle vient d'être saisie, sinon l'ancienne est conservée côté serveur. */
+  function payload(): Schemas['LlmSettingsWrite'] {
+    const body: Schemas['LlmSettingsWrite'] = {
+      providers: providers.value.map((provider) => {
+        const entry: Schemas['LlmProviderWrite'] = { id: provider.id.trim(), preset: provider.preset, base_url: provider.base_url.trim() };
+        if (provider.timeout_ms !== undefined) entry.timeout_ms = provider.timeout_ms;
+        if (provider.max_retries !== undefined) entry.max_retries = provider.max_retries;
+        if (provider.models) entry.models = provider.models;
+        if (provider.newApiKey !== '') entry.api_key = provider.newApiKey;
+        return entry;
+      }),
+    };
+    const nextRoles: Schemas['LlmRoles'] = {};
+    for (const name of LLM_ROLES) {
+      const choice = roles[name];
+      if (choice && choice.provider && choice.model.trim()) nextRoles[name] = { ...loaded?.roles?.[name], provider: choice.provider, model: choice.model.trim() };
+    }
+    body.roles = nextRoles;
+    if (loaded?.redact) body.redact = loaded.redact;
+    if (loaded?.log_prompts) body.log_prompts = loaded.log_prompts;
+    return body;
+  }
+
+  async function save(): Promise<boolean> {
+    saving.value = true;
+    saveFailure.value = null;
+    saved.value = false;
+    const body = payload();
+    for (const provider of providers.value) provider.newApiKey = ''; // le champ est vidé dès l'envoi : la clé ne reste pas en mémoire d'écran
+    const result = await call(() => getApi().PUT('/api/settings/llm', { body }));
+    saving.value = false;
+    if (!result.ok) {
+      saveFailure.value = result.messageKey;
+      return false;
+    }
+    resource.data.value = result.data;
+    adopt(result.data);
+    saved.value = true;
+    return true;
+  }
+
+  function test(role: LlmRoleName): Promise<void> {
+    const choice = roles[role];
+    if (!choice) return Promise.resolve();
+    return tester.run(role, () => call(() => getApi().POST('/api/settings/llm/test', { body: { provider: choice.provider, model: choice.model } })));
+  }
+
+  return { ...resource, providers, roles, saving, saveFailure, saved, outcomes: tester.outcomes, load, addProvider, removeProvider, save, test };
+}
+
+export type ProxyWrite = Schemas['ProxyWrite'];
+
+export function useProxies() {
+  const resource = useResource<Schemas['ProxyList']>(() => call(() => getApi().GET('/api/settings/proxies')));
+  const tester = useTester();
+  const failure = ref<string | null>(null);
+  const busy = ref(false);
+
+  async function create(body: ProxyWrite): Promise<boolean> {
+    busy.value = true;
+    failure.value = null;
+    const result = await call(() => getApi().POST('/api/settings/proxies', { body }));
+    busy.value = false;
+    if (!result.ok) {
+      failure.value = result.messageKey;
+      return false;
+    }
+    await resource.reload();
+    return true;
+  }
+
+  async function remove(id: string): Promise<boolean> {
+    failure.value = null;
+    const result = await call<undefined>(() => getApi().DELETE('/api/settings/proxies/{id}', { params: { path: { id } } }));
+    if (!result.ok) {
+      failure.value = result.messageKey;
+      return false;
+    }
+    await resource.reload();
+    return true;
+  }
+
+  function test(id: string): Promise<void> {
+    return tester.run(id, () => call(() => getApi().POST('/api/settings/proxies/{id}/test', { params: { path: { id } } })), ['exit_ip', 'exit_country']);
+  }
+
+  return { ...resource, failureAction: failure, busy, outcomes: tester.outcomes, create, remove, test };
+}
+
+export type SmtpSettings = Schemas['SmtpSettings'];
+
+export function useSmtp() {
+  const resource = useResource<SmtpSettings | null>(() => call(() => getApi().GET('/api/settings/smtp')));
+  const tester = useTester();
+  const saving = ref(false);
+  const saveFailure = ref<string | null>(null);
+  const saved = ref(false);
+
+  async function save(body: Schemas['SmtpSettingsWrite']): Promise<boolean> {
+    saving.value = true;
+    saveFailure.value = null;
+    saved.value = false;
+    const result = await call(() => getApi().PUT('/api/settings/smtp', { body }));
+    saving.value = false;
+    if (!result.ok) {
+      saveFailure.value = result.messageKey;
+      return false;
+    }
+    resource.data.value = result.data;
+    saved.value = true;
+    return true;
+  }
+
+  function test(to: string): Promise<void> {
+    return tester.run('smtp', () => call(() => getApi().POST('/api/settings/smtp/test', { body: { to } })));
+  }
+
+  return { ...resource, saving, saveFailure, saved, outcomes: tester.outcomes, save, test };
+}
+
+export type WebhookEvent = Schemas['WebhookEvent'];
+export const WEBHOOK_EVENTS: readonly WebhookEvent[] = ['run.succeeded', 'run.failed', 'api.status_changed', 'items.new'];
+
+export function useWebhooks() {
+  const resource = useResource<Schemas['WebhookSubscriptionList']>(() => call(() => getApi().GET('/api/webhook-subscriptions')));
+  const tester = useTester();
+  const failure = ref<string | null>(null);
+  const busy = ref(false);
+  /** Secret `whsec_…` : renvoyé une seule fois, à la création ; effacé dès que l'utilisateur l'a lu. */
+  const createdSecret = ref<string | null>(null);
+
+  async function create(body: Schemas['WebhookSubscriptionWrite']): Promise<boolean> {
+    busy.value = true;
+    failure.value = null;
+    const result = await call(() => getApi().POST('/api/webhook-subscriptions', { body }));
+    busy.value = false;
+    if (!result.ok) {
+      failure.value = result.messageKey;
+      return false;
+    }
+    createdSecret.value = result.data.secret ?? null;
+    await resource.reload();
+    return true;
+  }
+
+  async function remove(id: string): Promise<boolean> {
+    failure.value = null;
+    const result = await call<undefined>(() => getApi().DELETE('/api/webhook-subscriptions/{id}', { params: { path: { id } } }));
+    if (!result.ok) {
+      failure.value = result.messageKey;
+      return false;
+    }
+    await resource.reload();
+    return true;
+  }
+
+  function test(id: string): Promise<void> {
+    return tester.run(id, () => call(() => getApi().POST('/api/webhook-subscriptions/{id}/test', { params: { path: { id } } })));
+  }
+
+  return { ...resource, failureAction: failure, busy, createdSecret, outcomes: tester.outcomes, create, remove, test, dismissSecret: () => (createdSecret.value = null) };
+}
+
+
+/** Extension et sessions : code d'appairage (mot de passe exigé), appareils, domaines connectés, révocation. */
+export function useExtensionSettings() {
+  const devices = useResource<Schemas['ExtensionDeviceList']>(() => call(() => getApi().GET('/api/extension/devices')));
+  const sites = useResource<Schemas['ConnectedSiteList']>(() => call(() => getApi().GET('/api/sites')));
+  const failure = ref<string | null>(null);
+  const pairing = ref<{ code: string; expiresAt: string } | null>(null);
+  const pairingBusy = ref(false);
+
+  async function createPairingCode(currentPassword: string): Promise<boolean> {
+    pairingBusy.value = true;
+    failure.value = null;
+    const result: CallResult<Schemas['ExtensionPairingCode']> = await call(() =>
+      getApi().POST('/api/extension/pairing-codes', { body: { currentPassword } }),
+    );
+    pairingBusy.value = false;
+    if (!result.ok) {
+      failure.value = result.messageKey;
+      return false;
+    }
+    pairing.value = { code: result.data.code, expiresAt: result.data.expiresAt };
+    return true;
+  }
+
+  async function revokeDevice(id: string): Promise<boolean> {
+    failure.value = null;
+    const result = await call<undefined>(() => getApi().DELETE('/api/extension/devices/{id}', { params: { path: { id } } }));
+    if (!result.ok) {
+      failure.value = result.messageKey;
+      return false;
+    }
+    await devices.reload();
+    return true;
+  }
+
+  async function disconnectSite(id: string): Promise<boolean> {
+    failure.value = null;
+    const result = await call<undefined>(() => getApi().DELETE('/api/sites/{id}', { params: { path: { id } } }));
+    if (!result.ok) {
+      failure.value = result.messageKey;
+      return false;
+    }
+    await sites.reload();
+    return true;
+  }
+
+  return { devices, sites, failure, pairing, pairingBusy, createPairingCode, revokeDevice, disconnectSite, dismissPairing: () => (pairing.value = null) };
+}

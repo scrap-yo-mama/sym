@@ -89,3 +89,39 @@ describe('garde de session', () => {
     for (const route of router.getRoutes()) expect(typeof lookup(route.meta.titleKey), String(route.name)).toBe('string');
   });
 });
+
+// Écrans de la tâche 3.5 : Nouvelle API, Tous les runs, Réglages BYO. Tous exigent une session ouverte.
+describe('routes de la tâche 3.5', () => {
+  const PAGES = ['/apis/new', '/apis/new/6f1c8a52-0000-4000-8000-000000000010', '/runs', '/settings/models', '/settings/proxies', '/settings/extension', '/settings/alerts', '/settings/diagnostic'];
+
+  test('sans session, chaque page mène à la connexion en gardant la destination', async () => {
+    for (const path of PAGES) {
+      resetSession();
+      server(401);
+      const router = createAppRouter(createMemoryHistory());
+      await router.push(path);
+      expect(router.currentRoute.value.name, path).toBe('login');
+      expect(router.currentRoute.value.query.redirect, path).toBe(path);
+    }
+  });
+
+  test('avec session, chaque page s’ouvre ; /settings mène aux modèles IA ; /apis/new ne se confond pas avec une fiche', async () => {
+    server(200);
+    const router = createAppRouter(createMemoryHistory());
+    const expected: Record<string, string> = {
+      '/apis/new': 'new-api',
+      '/apis/new/6f1c8a52-0000-4000-8000-000000000010': 'new-api-run',
+      '/runs': 'runs',
+      '/settings': 'settings-models',
+      '/settings/proxies': 'settings-proxies',
+      '/settings/extension': 'settings-extension',
+      '/settings/alerts': 'settings-alerts',
+      '/settings/diagnostic': 'settings-diagnostic',
+    };
+    for (const [path, name] of Object.entries(expected)) {
+      await router.push(path);
+      expect(router.currentRoute.value.name, path).toBe(name);
+    }
+    expect(router.currentRoute.value.params).toEqual({});
+  });
+});

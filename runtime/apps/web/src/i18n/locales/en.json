@@ -13,7 +13,12 @@
       "dark": "Dark"
     },
     "signedInAs": "Signed in as {name}",
-    "signOut": "Sign out"
+    "signOut": "Sign out",
+    "main": "Main navigation",
+    "home": "Home",
+    "newApi": "New API",
+    "runs": "All runs",
+    "settings": "Settings"
   },
   "auth": {
     "login": {
@@ -43,5 +48,536 @@
   "notFound": {
     "title": "Page not found",
     "back": "Back to the console"
+  },
+  "errors": {
+    "generic": "Something went wrong. Try again.",
+    "network": "The server cannot be reached. Check your connection and try again.",
+    "server": "The server hit a problem. Try again in a moment.",
+    "unauthorized": "Your session has ended. Sign in again.",
+    "forbidden": "You are not allowed to do this. Ask an admin of your instance.",
+    "not_found": "This item no longer exists.",
+    "conflict": "This action is not possible in the current state.",
+    "rate_limited": "Too many requests. Try again in a moment.",
+    "queue_full": "The queue is full. Try again shortly.",
+    "invalid_input": "Some values are not valid. Check the form and try again.",
+    "account_site_ack_required": "This site asks for an account. Confirm the notice to continue."
+  },
+  "common": {
+    "loading": "Loading…",
+    "retry": "Try again",
+    "save": "Save",
+    "saving": "Saving…",
+    "saved": "Saved.",
+    "add": "Add",
+    "remove": "Remove",
+    "yes": "Yes",
+    "no": "No",
+    "unknown": "n/a"
+  },
+  "execution": {
+    "fetch": "fetch only",
+    "fetch_in_page": "fetch in the browser",
+    "playwright": "Playwright only",
+    "agent_fetch": "agent + fetch",
+    "hybrid": "script + agent",
+    "agent": "full agent"
+  },
+  "network": {
+    "direct": "direct",
+    "dc_proxy": "server proxy",
+    "res_proxy": "residential",
+    "tunnel": "tunnel"
+  },
+  "reason": {
+    "unknown": "Reason: {code}",
+    "retried": "It took {n} retries.",
+    "escalated": "A more expensive method than usual was needed.",
+    "repaired": "The strategy was repaired (v{a} to v{b}).",
+    "optional_fields_missing": "{p} % of items lack the field {champ}.",
+    "volume_anomaly": "{n} items instead of about {m} usually.",
+    "pagination_short": "{n} pages read out of {m} requested, without an end of list.",
+    "slow": "Run {x} times longer than the median.",
+    "cost_anomaly": "Run {x} times more expensive than the median.",
+    "stale": "Last clean run {n} days ago.",
+    "unavailable": "The site does not answer. This is not a breakage.",
+    "reverted": "Manual return to v{a} by {prenom}, on {date}.",
+    "reinvestigation_failed": "The new investigation found nothing valid; the old version is kept.",
+    "rate_limited": "The site asks to slow down (429). Rate reduced from {a} to {b} requests per minute, address unchanged.",
+    "geo_restriction": "Content unavailable from this country; trying the proxy of the country allowed by the API.",
+    "blocked_by_protection": "The site refuses automated access. Scrapyomama stops.",
+    "forbidden": "The site refuses access to this address. The IP address does not change.",
+    "robots_disallowed": "The site asks robots not to visit this page.",
+    "robots_unreachable": "robots.txt cannot be reached: to be safe, nothing is collected.",
+    "payment_required": "The site asks for a payment: {offre}.",
+    "auth_required": "{domaine} asks for a sign-in.",
+    "cookie_expired": "The session of {domaine} has expired.",
+    "session_device_bound": "The session of {domaine} is tied to your device and cannot be copied to the server.",
+    "challenge_in_tunnel": "A verification appeared in your browser. The run is stopped; try again later.",
+    "secret_unreadable": "A saved key is unreadable.",
+    "account_limit": "The platform flagged a limit on your account. No retry.",
+    "session_owner_required": "This API uses the session of its owner.",
+    "llm_refused": "The model refused the request; no automatic fallback."
+  },
+  "reasonShort": {
+    "retried": "Retried",
+    "escalated": "Costlier method",
+    "repaired": "Repaired",
+    "optional_fields_missing": "Optional fields missing",
+    "volume_anomaly": "Unusual volume",
+    "pagination_short": "Pagination cut short",
+    "slow": "Slow",
+    "cost_anomaly": "Unusual cost"
+  },
+  "failure": {
+    "transient": "Temporary problem",
+    "network": "Network error",
+    "rate_limited": "Site asked to slow down",
+    "forbidden": "Access refused",
+    "blocked_by_protection": "Automated access refused",
+    "robots_disallowed": "Disallowed by robots.txt",
+    "robots_unreachable": "robots.txt unreachable",
+    "payment_required": "Payment required",
+    "auth_required": "Sign-in required",
+    "account_limit": "Account limit",
+    "not_found": "Not found",
+    "extraction": "Extraction failed",
+    "code_error": "Script error",
+    "run_budget_exceeded": "Run budget exceeded",
+    "budget_exceeded": "Budget exceeded",
+    "llm": "Model error",
+    "ok": "Succeeded"
+  },
+  "newApi": {
+    "title": "New API",
+    "intro": "Describe what you want. Scrapyomama investigates the site, proposes an output schema, then tries the cheapest methods first.",
+    "description": "What should this API return?",
+    "descriptionHint": "For example: the title, price and link of each listing.",
+    "url": "Page address (URL)",
+    "urlInvalid": "Enter a full address starting with http:// or https://.",
+    "example": "Example output (optional, JSON)",
+    "exampleInvalid": "The example is not valid JSON (an object or an array).",
+    "network": {
+      "legend": "Network policy",
+      "direct": "Direct connection from the server",
+      "dcProxy": "Server proxy defined by your admin",
+      "resProxy": "Residential proxy, billed per GB. Reserved for network reasons (country, connection errors). It is not used after a refusal.",
+      "country": "Country of the residential proxy (2 letters)",
+      "tunnel": "Run from my browser (my session, my IP); a verification will hand control back to me",
+      "atLeastOne": "Choose at least one network mode."
+    },
+    "account": {
+      "declare": "This site asks for an account",
+      "title": "This site asks for an account",
+      "warning": "This site asks for an account. Your terms of use of the platform may forbid automated extraction, and the data may concern people (GDPR). You are responsible for this use.",
+      "ownSession": "Only your own session is used, never another person's.",
+      "confirm": "I understand and I am responsible for this use"
+    },
+    "providerNotice": "{provider} will receive cleaned traffic excerpts.",
+    "providerNoticeGeneric": "The configured model provider will receive cleaned traffic excerpts.",
+    "submit": "Start the investigation",
+    "submitting": "Starting…",
+    "countryInvalid": "Enter a country code of 2 letters, for example fr.",
+    "descriptionRequired": "Describe what the API should return.",
+    "accountRequired": "Confirm the notice above to continue."
+  },
+  "investigation": {
+    "title": "Investigation of {domain}",
+    "titleUnknown": "Investigation",
+    "columns": {
+      "seen": "What the agent sees",
+      "doing": "What the agent does",
+      "produced": "What the agent produced"
+    },
+    "seen": {
+      "empty": "Nothing seen yet. The access check comes first.",
+      "lastTrial": "Last trial",
+      "execution": "Method",
+      "network": "Network",
+      "result": "Result",
+      "cost": "Cost",
+      "duration": "Duration",
+      "exchange": {
+        "title": "Request and response",
+        "request": "Request",
+        "response": "Response",
+        "status": "HTTP {status}",
+        "bytes": "{n} bytes"
+      }
+    },
+    "budget": {
+      "title": "Budget",
+      "moneyLine": "Spend: {spent} of {max}",
+      "timeLine": "Time: {elapsed} of {timeout}",
+      "estimate": "Kept: {retained}; a full agent: {full} (estimate)",
+      "estimateUnknown": "Estimate not available yet"
+    },
+    "controls": {
+      "pause": "Pause",
+      "resume": "Resume",
+      "stop": "Stop the investigation",
+      "stopHint": "Trials already made are kept.",
+      "paused": "Paused. Nothing new is tried until you resume.",
+      "stopped": "Investigation stopped. Trials and cost so far are kept: {cost}.",
+      "suspendFollow": "Suspend live updates",
+      "resumeFollow": "Resume live updates",
+      "followSuspended": "Live updates suspended. New trials are not shown or announced."
+    },
+    "phase": {
+      "label": "Investigation steps",
+      "access_check": "Access check",
+      "reconnaissance": "Reconnaissance",
+      "awaiting_schema_validation": "Output schema",
+      "testing": "Trials",
+      "state": {
+        "done": "done",
+        "current": "in progress",
+        "upcoming": "upcoming"
+      }
+    },
+    "log": {
+      "title": "Trials",
+      "empty": "No trial yet.",
+      "robotsAllowed": "robots.txt read: path allowed",
+      "robotsDisallowed": "robots.txt read: path disallowed",
+      "robotsAbsent": "robots.txt not found: no rule applies",
+      "robotsUnreachable": "robots.txt unreachable: to be safe, nothing is collected",
+      "signal": "Usage signal {kind}: {value}",
+      "llmsTxt": "llms.txt found",
+      "officialApi": "Official route found: {url}",
+      "trial": "Trial {n}: {execution}, {network}",
+      "running": "running",
+      "ok": "succeeded",
+      "failed": "failed ({reason})",
+      "pruned": "not run: {reason}",
+      "prunedNoReason": "not run",
+      "why": "Why: {reason}"
+    },
+    "plan": {
+      "title": "Trial plan",
+      "hint": "Cheapest first. You can remove methods before the trials start, never add any.",
+      "estimate": "estimated {cost}",
+      "atLeastOne": "At least one method must stay selected."
+    },
+    "schema": {
+      "title": "Output schema",
+      "sample": "Sample",
+      "sampleEmpty": "No sample yet.",
+      "validate": "Validate",
+      "validating": "Validating…",
+      "edit": "Edit",
+      "editLabel": "Output schema (JSON)",
+      "editInvalid": "This is not a valid JSON object.",
+      "applyEdit": "Validate with my changes",
+      "cancelEdit": "Cancel the edit",
+      "waiting": "Check the proposed schema, then validate it or edit it.",
+      "input": "Input schema",
+      "strategy": "Chosen strategy: {execution}, {network}, version {version}",
+      "tunnelNote": "Works only while your computer is on.",
+      "empty": "The schema will appear here once the reconnaissance is done."
+    },
+    "result": {
+      "sain": "The investigation succeeded. Your API is ready.",
+      "warning": "The investigation ended with a warning. The strategy works but needs attention.",
+      "erreur": "The investigation ended in error. The trial list shows why.",
+      "bloquee": "The investigation stopped: the site refuses automated access."
+    },
+    "resuming": "Resuming the investigation…"
+  },
+  "blocked": {
+    "title": "Blocked: {domain} refuses automated access",
+    "unknownDomain": "this site",
+    "what": {
+      "heading": "What happened",
+      "protection": "On {date}, trial {n} (“{execution}”, {network}), {domain} answered with a verification page. No other trial was started. Investigation cost: {cost}.",
+      "forbidden": "On {date}, trial {n} (“{execution}”, {network}), {domain} answered with an access refusal. No other trial was started. Investigation cost: {cost}.",
+      "robots": "{domain} asks robots not to visit this page. No request was sent to this path. Investigation cost: {cost}.",
+      "generic": "{domain} refused access. No other trial was started. Investigation cost: {cost}."
+    },
+    "why": {
+      "heading": "Why we stop",
+      "protection": "This is the decision of the site. Scrapyomama does not answer in place of a person and does not change IP address after a refusal.",
+      "forbidden": "The site refuses access to this address. The IP address does not change after a refusal. Check your access rights or contact the publisher.",
+      "robots": "This site asks robots not to visit this page. Scrapyomama respects this rule."
+    },
+    "todo": {
+      "heading": "What you can do",
+      "official": "Look for an official API, an export or a partnership.",
+      "other": "Use another source.",
+      "contact": "Write to the publisher of the site.",
+      "later": "Investigate again later, if the site has changed."
+    },
+    "officialApi": "Use the official API",
+    "copyTemplate": "Copy an access request template",
+    "copied": "Template copied.",
+    "template": "Hello,\n\nI would like to use the data published on {domain}. Is there an official API, an export or a partnership I can use?\n\nThank you,",
+    "reinvestigate": "Investigate again",
+    "viewTrials": "See the trials",
+    "whyLink": "Why this stop?",
+    "cost": {
+      "unknown": "not available"
+    }
+  },
+  "action": {
+    "auth_required": {
+      "title": "Connect {domain}",
+      "body": "The site asks for a sign-in. Connect it with the extension; the session shows up here as soon as it is connected.",
+      "button": "Open the extension settings"
+    },
+    "cookie_expired": {
+      "title": "Connect {domain}",
+      "body": "The session has expired. Connect the site again with the extension.",
+      "button": "Open the extension settings"
+    },
+    "session_device_bound": {
+      "title": "The session of {domain} cannot be copied to the server",
+      "body": "This session is tied to your device. Choose to run from your browser.",
+      "button": "Open the extension settings"
+    },
+    "proxy_required": {
+      "title": "Add a proxy",
+      "body": "This API needs a proxy for the requested country. Ask an admin to add one, then test it.",
+      "button": "Open the proxy settings"
+    },
+    "tunnel_offline": {
+      "title": "Your computer is not connected",
+      "body": "This API runs from your browser. Open the extension and check its state.",
+      "button": "Open the extension settings"
+    },
+    "challenge_in_tunnel": {
+      "title": "{domain} shows a verification in your browser; the run is stopped",
+      "body": "The run is stopped: {domain} shows a verification in your browser. Nothing was sent on this page and nothing will be. You can start a new run later; Scrapyomama never answers a verification.",
+      "button": "Investigate again"
+    },
+    "secret_unreadable": {
+      "title": "A saved key is unreadable",
+      "body": "Enter the key again in the settings, then test it.",
+      "button": "Open the model settings"
+    },
+    "payment_required": {
+      "title": "{domain} asks for a payment: {offer}",
+      "body": "Only the publisher of the site can give access. Nothing is retried automatically."
+    },
+    "account_limit": {
+      "title": "{platform} flagged a limit on your account",
+      "body": "{platform} flagged a limit or a restriction. The run is stopped and no retry is planned. Read the messages of the platform. Only the platform decides on a restriction. Reminder: automated extraction may be forbidden by its terms, even with a single account; you remain responsible."
+    },
+    "resuming": "Resuming the investigation…"
+  },
+  "runs": {
+    "title": "All runs",
+    "intro": "Runs of your APIs, newest first. You see state, cost and duration, never the content of another member's run.",
+    "caption": "Runs, newest first",
+    "filters": {
+      "legend": "Filters",
+      "api": "API (slug)",
+      "state": "State",
+      "trigger": "Trigger",
+      "since": "From",
+      "until": "To",
+      "all": "All",
+      "apply": "Apply the filters",
+      "reset": "Reset",
+      "refresh": "Refresh"
+    },
+    "columns": {
+      "api": "API",
+      "trigger": "Trigger",
+      "state": "State",
+      "outcome": "Result",
+      "reasons": "Reasons",
+      "duration": "Duration",
+      "cost": "Cost",
+      "items": "Items",
+      "started": "Started"
+    },
+    "empty": {
+      "title": "No run yet",
+      "text": "Create an API, run it, and its runs will be listed here.",
+      "button": "New API"
+    },
+    "emptyFiltered": {
+      "title": "No run matches these filters",
+      "text": "Widen the period or clear a filter."
+    },
+    "loading": "Loading the runs…",
+    "other": "Another member's run: state, cost and duration only",
+    "page": "Page {n}",
+    "previous": "Previous page",
+    "next": "Next page",
+    "notStarted": "not started",
+    "retained": "kept until {date}",
+    "state": {
+      "queued": "Queued",
+      "running": "Running",
+      "waiting_tunnel": "Waiting for your computer",
+      "succeeded": "Succeeded",
+      "failed": "Failed",
+      "cancelled": "Cancelled",
+      "skipped_tunnel_offline": "Skipped: computer offline",
+      "skipped_window": "Skipped: outside the allowed window",
+      "skipped_quota": "Skipped: quota reached",
+      "skipped_status": "Skipped: API status",
+      "skipped_overlap": "Skipped: previous run still going"
+    },
+    "outcome": {
+      "clean": "Clean",
+      "degraded": "Degraded",
+      "failed": "Failed"
+    },
+    "trigger": {
+      "mcp": "MCP",
+      "rest": "REST",
+      "schedule": "Schedule",
+      "ui": "Console",
+      "canary": "Canary"
+    }
+  },
+  "settings": {
+    "title": "Settings",
+    "nav": {
+      "label": "Settings sections",
+      "models": "AI models",
+      "proxies": "Proxies",
+      "extension": "Extension & sessions",
+      "alerts": "Alerts",
+      "diagnostic": "Diagnostic"
+    },
+    "adminOnly": "Only an admin of your instance can read or change these settings.",
+    "test": "Test",
+    "testing": "Testing…",
+    "notTested": "Not tested",
+    "testedAt": "Tested on {date}",
+    "testOk": "Test passed",
+    "testFailed": "Test failed",
+    "secret": {
+      "set": "A secret is saved. Leave this field empty to keep it.",
+      "unset": "No secret saved.",
+      "unreadable": "The saved secret is unreadable. Enter it again."
+    },
+    "models": {
+      "title": "AI models",
+      "intro": "Bring your own model provider. Keys are write-only: once saved, they are never shown again.",
+      "providers": "Providers",
+      "noProvider": "No provider yet. Add one to start investigating.",
+      "provider": "Provider {n}",
+      "id": "Identifier",
+      "preset": "Preset",
+      "baseUrl": "Base URL",
+      "apiKey": "API key",
+      "addProvider": "Add a provider",
+      "removeProvider": "Remove this provider",
+      "roles": "Model per role",
+      "rolesIntro": "No automatic fallback: if a model refuses or fails, the run says so.",
+      "roleProvider": "Provider",
+      "roleModel": "Model",
+      "roleNone": "None",
+      "role": {
+        "investigate": "Investigation",
+        "repair": "Repair",
+        "extract": "Extraction",
+        "agent": "Agent"
+      },
+      "presets": {
+        "zai": "Z.ai",
+        "openrouter": "OpenRouter",
+        "vllm": "vLLM",
+        "ollama": "Ollama",
+        "deepseek": "DeepSeek",
+        "qwen": "Qwen",
+        "openai": "OpenAI",
+        "custom": "Custom"
+      }
+    },
+    "proxies": {
+      "title": "Proxies",
+      "intro": "Defined by an admin of the instance. An API only references a proxy by its identifier.",
+      "residential": "Residential proxy, billed per GB. Reserved for network reasons (country, connection errors). It is not used after a refusal.",
+      "empty": "No proxy yet.",
+      "label": "Label",
+      "type": "Type",
+      "typeDc": "Server",
+      "typeRes": "Residential",
+      "url": "Address (scheme, host, port)",
+      "username": "Username",
+      "password": "Password",
+      "credentials": "Credentials",
+      "credentialsSet": "saved",
+      "credentialsNone": "none",
+      "add": "Add a proxy",
+      "exit": "Exit IP {ip}, country {country}",
+      "remove": "Remove"
+    },
+    "extension": {
+      "title": "Extension & sessions",
+      "intro": "Pair the browser extension, see your devices and the sites you connected, and revoke access at any time.",
+      "pairing": "Pairing code",
+      "pairingHelp": "The code is valid for 10 minutes and works once. Enter it in the extension.",
+      "currentPassword": "Current password",
+      "createCode": "Create a pairing code",
+      "code": "Code: {code}",
+      "codeExpires": "Valid until {date}. It is shown only now.",
+      "dismissCode": "Hide the code",
+      "devices": "Devices",
+      "devicesEmpty": "No paired device.",
+      "device": "Device",
+      "deviceUnnamed": "Unnamed device",
+      "lastSeen": "Last seen",
+      "expires": "Expires",
+      "active": "active",
+      "revoked": "revoked",
+      "revoke": "Revoke",
+      "sites": "Connected sites",
+      "sitesEmpty": "No connected site.",
+      "domain": "Domain",
+      "mode": "Mode",
+      "modeServer": "Session usable by the server",
+      "modeBrowser": "Stays in your browser",
+      "captured": "Captured",
+      "disconnect": "Disconnect",
+      "never": "never"
+    },
+    "alerts": {
+      "title": "Alerts",
+      "intro": "Email and webhooks, each with a test. A channel stays “not tested” until you test it.",
+      "smtp": "Email (SMTP)",
+      "smtpEmpty": "Not configured yet.",
+      "host": "Server",
+      "port": "Port",
+      "security": "Security",
+      "securityTls": "TLS",
+      "securityStarttls": "STARTTLS",
+      "securityNone": "None",
+      "from": "Sender address",
+      "username": "Username",
+      "password": "Password",
+      "testTo": "Send a test email to",
+      "webhooks": "Webhooks",
+      "webhooksEmpty": "No webhook yet.",
+      "url": "Address",
+      "events": "Events",
+      "apiSlug": "API (optional, empty for the whole instance)",
+      "event": {
+        "run_succeeded": "Run succeeded",
+        "run_failed": "Run failed",
+        "api_status_changed": "API status changed",
+        "items_new": "New items"
+      },
+      "status": {
+        "active": "active",
+        "disabled": "disabled"
+      },
+      "add": "Add a webhook",
+      "secretTitle": "Signing secret",
+      "secretText": "Copy this secret now: it is shown only once.",
+      "dismissSecret": "I copied it",
+      "remove": "Remove"
+    },
+    "diagnostic": {
+      "title": "Diagnostic",
+      "intro": "Exports a JSON file on this computer with the versions and the state of the instance. Nothing is sent anywhere.",
+      "includes": "The file holds: instance version, schema version, minimum extension version, MCP specification version, readiness, console language. It never holds a key, a cookie or a run content.",
+      "export": "Export the diagnostic (JSON)",
+      "exported": "Diagnostic exported to your computer."
+    }
   }
 }
