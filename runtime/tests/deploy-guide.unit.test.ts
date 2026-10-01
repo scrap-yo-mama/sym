@@ -41,6 +41,21 @@ describe('assert_deploy_guide_reserves : statut de vérification honnête (4.1)'
     expect(status).toMatch(/4\.4/);
   });
 
+  test('ordre premier démarrage puis vérification (Render, compose) : avant l’assistant, une route MCP répond 503 not_initialized', () => {
+    const section = (heading: string) => {
+      const start = guide.indexOf(heading);
+      return guide.slice(start, guide.indexOf('\n## ', start + heading.length));
+    };
+    const render = section('## Render');
+    expect(render.indexOf('(#premier-démarrage)')).toBeGreaterThan(-1);
+    expect(render.indexOf('(#premier-démarrage)')).toBeLessThan(render.indexOf('(#vérifier-une-instance)'));
+    const compose = section('## Docker Compose');
+    const block = compose.slice(compose.indexOf('```bash'), compose.indexOf('```', compose.indexOf('```bash') + 7));
+    expect(block.indexOf('/api/setup')).toBeGreaterThan(-1);
+    expect(block.indexOf('/api/setup')).toBeLessThan(block.indexOf('verify.sh'));
+    expect(section('## Vérifier une instance')).toMatch(/not_initialized/);
+  });
+
   test('Heroku : démarrage des dynos (ENTRYPOINT sans CMD, `run` explicite) consigné dans « Reste »', () => {
     expect(status).toMatch(/\| Heroku \|.*ENTRYPOINT/);
   });

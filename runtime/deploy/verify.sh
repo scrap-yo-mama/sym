@@ -7,6 +7,7 @@
 #
 # Code de sortie : 0 tout est bon ; 1 /api/ready n'est jamais passé à 200 ou une sonde est fausse ; 2 usage.
 # Le point d'entrée MCP est EXIGÉ (critère « MCP joignable » de la tâche 4.1) : un /mcp à 404 fait échouer le script.
+# Avant le premier démarrage, /mcp répond 503 not_initialized : compté joignable (la route existe), avec un rappel.
 # --allow-missing-mcp : seulement pour une version antérieure au serveur MCP (tâche 3.2) ; le 404 est alors signalé sans échec.
 # --require-mcp : ancienne option, acceptée et sans effet (c'est le comportement par défaut).
 set -eu
@@ -65,9 +66,17 @@ case "$version" in
 esac
 
 # MCP (HTTP) : sans identifiant, le serveur répond 401 (ou 405/406 à un GET) ; seul un 404 ou une erreur 5xx est anormal.
-code=$(status "$base/mcp")
+# Exception : avant le premier démarrage, le garde répond 503 not_initialized à toute route connue (hors sondes et
+# assistant) ; un chemin inconnu répondrait 404. Ce 503-là prouve que /mcp est servi : joignable, instance non initialisée.
+mcp_body=$(curl -sS -m 10 -w "\n%{http_code}" "$base/mcp" 2>/dev/null || true)
+code=$(printf "%s\n" "$mcp_body" | tail -n 1)
 case "$code" in
   200|400|401|403|405|406) ok "/mcp joignable (HTTP $code sans identifiant)" ;;
+  503)
+    case "$mcp_body" in
+      *'"not_initialized"'*) ok "/mcp joignable (HTTP 503 not_initialized : terminez le premier démarrage, POST /api/setup)" ;;
+      *) ko "/mcp = 503" ;;
+    esac ;;
   404)
     if [ "$require_mcp" = 1 ]; then
       ko "/mcp = 404 : cette version ne sert pas le MCP (--allow-missing-mcp pour une version antérieure au serveur MCP)"

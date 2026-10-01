@@ -49,7 +49,8 @@ Bouton **à valider au GO** : il ne fonctionne qu'une fois le dépôt public, et
    `/api/ready` = 200.
 4. **Copiez `MASTER_KEY`** : *Environment Groups > scrapyomama-runtime-secrets*. Lisez aussi `ADMIN_BOOTSTRAP_TOKEN`
    (onglet *Environment* du web).
-5. [Vérifiez](#vérifier-une-instance) puis [créez le premier administrateur](#premier-démarrage).
+5. [Créez le premier administrateur](#premier-démarrage), puis [vérifiez](#vérifier-une-instance). Dans cet ordre : avant
+   l'assistant, toute route autre que les sondes répond 503 `not_initialized`.
 
 Mettre à jour : sauvegardez la base (`pg_dump`), changez le tag de l'image dans **les deux** services, déployez
 (`autoDeployTrigger: 'off'` : rien ne se redéploie tout seul). Détail : [exploitation.md](exploitation.md).
@@ -62,6 +63,7 @@ Il faut Docker avec le plugin Compose v2 et 4 Go de mémoire au moins (worker 4 
 cd deploy
 ./install.sh https://runtime.example.org   # écrit .env (0600) : MASTER_KEY, jeton d'amorçage, mot de passe de la base
 docker compose -f docker-compose.prod.yml up -d
+# premier administrateur (section « Premier démarrage ») : POST https://runtime.example.org/api/setup
 ./verify.sh https://runtime.example.org
 ```
 
@@ -151,7 +153,9 @@ code de sortie 0 tout va bien, 1 avertissement, 2 erreur. `runtime doctor` ne co
 
 Le point d'entrée MCP est `PUBLIC_URL/mcp` (clé d'API en `Authorization: Bearer`). `verify.sh` l'**exige** : un `/mcp` à
 404 fait échouer la vérification. `--allow-missing-mcp` tolère ce 404, seulement pour une version qui ne sert pas encore
-le MCP (antérieure à la tâche 3.2).
+le MCP (antérieure à la tâche 3.2). Lancé avant le [premier démarrage](#premier-démarrage), `verify.sh` voit `/mcp`
+répondre 503 `not_initialized` (le garde bloque toute route connue tant qu'aucun administrateur n’existe) : il le compte
+joignable et rappelle de terminer l'assistant ; tout autre 503 reste un échec.
 
 ## Dépannage
 

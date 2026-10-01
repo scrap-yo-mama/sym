@@ -134,7 +134,7 @@ describe('install.sh : génère le .env de docker-compose.prod.yml', () => {
 describe('verify.sh : sondes d’une instance déployée', () => {
   let server: Server;
   let base = '';
-  const behaviour = { readyFailures: 0, ready: 200, mcp: 401, version: '{"server":"0.0.0","schema":11,"min_extension":"0.1.0","mcp_spec":"2025-11-25"}' };
+  const behaviour = { readyFailures: 0, ready: 200, mcp: 401, mcpBody: '{}', version: '{"server":"0.0.0","schema":11,"min_extension":"0.1.0","mcp_spec":"2025-11-25"}' };
   beforeAll(async () => {
     server = createServer((req, res) => {
       const reply = (code: number, body = '{}') => {
@@ -150,7 +150,7 @@ describe('verify.sh : sondes d’une instance déployée', () => {
         return reply(behaviour.ready);
       }
       if (req.url === '/api/version') return reply(200, behaviour.version);
-      if (req.url === '/mcp') return reply(behaviour.mcp);
+      if (req.url === '/mcp') return reply(behaviour.mcp, behaviour.mcpBody);
       return reply(404);
     });
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -158,7 +158,7 @@ describe('verify.sh : sondes d’une instance déployée', () => {
   });
   afterAll(() => new Promise<void>((resolve) => server.close(() => resolve())));
   const verify = (args: string[] = [], env: Record<string, string> = {}) => sh(join(deployDir, 'verify.sh'), [base, ...args], { PATH: '/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin', ...env });
-  const reset = () => Object.assign(behaviour, { readyFailures: 0, ready: 200, mcp: 401 });
+  const reset = () => Object.assign(behaviour, { readyFailures: 0, ready: 200, mcp: 401, mcpBody: '{}' });
 
   test('instance saine : health, ready, version et MCP joignable → code 0', async () => {
     reset();
@@ -204,6 +204,21 @@ describe('verify.sh : sondes d’une instance déployée', () => {
     behaviour.mcp = 502;
     expect((await verify(['--allow-missing-mcp'])).status).toBe(1);
     expect((await verify()).status).toBe(1);
+  });
+
+  test('avant le premier démarrage : /mcp en 503 not_initialized (garde, route connue) = joignable, signalé sans échec', async () => {
+    reset();
+    behaviour.mcp = 503;
+    behaviour.mcpBody = '{"error":{"code":"not_initialized","message":"instance non initialisée"}}';
+    const res = await verify();
+    expect(res.status).toBe(0);
+    expect(res.stdout).toMatch(/\/mcp joignable \(HTTP 503 not_initialized/);
+    expect(res.stdout).toMatch(/premier démarrage/);
+    behaviour.mcpBody = '{"error":{"code":"not_ready","message":"schéma en retard"}}'; // autre 503 : reste un échec
+    expect((await verify()).status).toBe(1);
+    behaviour.mcpBody = 'upstream unavailable'; // 503 d’un proxy, sans le code du garde : échec
+    expect((await verify()).status).toBe(1);
+    reset();
   });
 
   test('option inconnue → code 2 (pas de faute de frappe qui désactive un contrôle en silence)', async () => {
