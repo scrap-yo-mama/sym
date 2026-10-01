@@ -4,8 +4,10 @@ name: ci
 
 on:
   push:
-    branches: [main]
+    # ci/** : branches candidates de fusion poussées par l orchestrateur (D-55), testées ici plutôt que sur la machine locale.
+    branches: [main, "ci/**"]
   pull_request:
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
