@@ -171,3 +171,37 @@ describe('détecteurs de protection', () => {
     expect(challengeInText('list "Produits"\nlistitem "Produit 1 - 12,00 €"')).toBe(false);
   });
 });
+
+describe('détection en temps linéaire (disponibilité du worker) : un corps hostile ≤ 256 Kio ne bloque pas la boucle', () => {
+  /** Meilleur de trois mesures (ms) : la borne vise le coût de l'algorithme, pas une pause du ramasse-miettes. */
+  const bestOf = (fn: () => unknown): number => {
+    let best = Infinity;
+    for (let i = 0; i < 3; i++) {
+      const t = performance.now();
+      fn();
+      best = Math.min(best, performance.now() - t);
+    }
+    return best;
+  };
+  it.each([
+    ['commentaires non fermés', '<!--'.repeat(65_000)],
+    ['scripts non fermés', '<script>'.repeat(32_000)],
+    ['styles non fermés', '<style>'.repeat(37_000)],
+    ['chevrons sans fermeture', '<'.repeat(262_000)],
+    ['attributs class sans valeur fermée', '<a class='.repeat(29_000)],
+    ['attributs nus répétés', 'class='.repeat(43_000)],
+  ])('%s : detectChallengePage (strict et non strict) et challengeInText en moins de 50 ms', (_name, body) => {
+    expect(body.length).toBeLessThanOrEqual(262_144);
+    expect(bestOf(() => detectChallengePage(body, HTML, { strict: true }))).toBeLessThan(50);
+    expect(bestOf(() => detectChallengePage(body, HTML))).toBeLessThan(50);
+    expect(bestOf(() => challengeInText(body))).toBeLessThan(50);
+  });
+
+  it('le balayage linéaire garde la détection : script, style et commentaire retirés du texte visible, fermeture absente coupée', () => {
+    const hidden = html('Accueil', '<p>Bienvenue</p><script>var t = "verify you are human";</script><style>.x{}</style><!-- verify you are human -->');
+    expect(detectChallengePage(hidden, HTML)).toBeNull();
+    expect(detectChallengePage(html('Accueil', '<p>Please verify you are human.</p><SCRIPT type="x">a</SCRIPT >'), HTML)).toMatchObject({ source: 'phrase' });
+    expect(detectChallengePage(html('Accueil', '<p>Bienvenue</p><script>verify you are human'), HTML)).toBeNull();
+    expect(detectChallengePage(html('Accueil', '<p>Please verify you are human.</p><!-- reste'), HTML)).toMatchObject({ source: 'phrase' });
+  });
+});

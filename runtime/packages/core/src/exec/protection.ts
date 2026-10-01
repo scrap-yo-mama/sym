@@ -100,9 +100,12 @@ const CHALLENGE_PHRASES: readonly string[] = [
   "vérifier que vous n'êtes pas un robot",
 ];
 
-/** Conteneurs de widgets de vérification (attribut id, class ou name). */
+/**
+ * Conteneurs de widgets de vérification (attribut id, class ou name). La valeur lue s'arrête au premier guillemet,
+ * chevron ou `=` : la recherche depuis un attribut s'arrête à l'attribut suivant, et le coût reste linéaire.
+ */
 const CHALLENGE_MARKUP =
-  /\b(?:id|class|name)\s*=\s*["']?[^"'>]{0,200}?(?:challenge-form|challenge-platform|challenge-running|challenge-container|cf-challenge|px-captcha|captcha-container|captcha-delivery|g-recaptcha|h-captcha|cf-turnstile|zz-test-challenge)/i;
+  /\b(?:id|class|name)\s*=\s*["']?[^"'<>=]{0,200}?(?:challenge-form|challenge-platform|challenge-running|challenge-container|cf-challenge|px-captcha|captcha-container|captcha-delivery|g-recaptcha|h-captcha|cf-turnstile|zz-test-challenge)/i;
 
 const normalize = (text: string): string => text.replace(/[‘’ʼ]/g, "'").replace(/\s+/g, ' ').trim().toLowerCase();
 
@@ -121,17 +124,88 @@ function decodeEntities(text: string): string {
     .replace(/&gt;/g, '>');
 }
 
-/** Texte visible approché : scripts, styles et balises retirés (le contenu de `<noscript>` reste visible). */
+/** Ouverture de `<script` ou `<style` (nom de balise complet), lue à la position courante. */
+const RAW_TEXT_OPEN = /(script|style)(?![\p{L}\p{N}_:-])/iuy;
+/** Plus longue balise retirée comme telle ; au-delà, le `<` reste du texte (comme une balise mal formée). */
+const MAX_TAG_CHARS = 2000;
+
+/**
+ * Balisage retiré en un seul balayage (temps linéaire, revue de 1.7) : commentaires, éléments `<script>` et `<style>`
+ * (contenu compris) et balises remplacés par une espace. Une fermeture absente (commentaire, script ou style non fermé)
+ * coupe le reste du document : rien après elle n'est du texte visible. Aucune expression à retour arrière : un corps
+ * hostile de 256 Kio (`<!--` ou `<script>` répétés) ne bloque pas la boucle d'événements du worker.
+ */
+function stripMarkup(html: string): string {
+  const out: string[] = [];
+  let i = 0;
+  /** Prochain `>` (mis en cache : la position lue ne fait qu'avancer, chaque caractère est parcouru une fois). */
+  let gt = -2;
+  const nextGt = (from: number): number => {
+    if (gt !== -1 && gt < from) gt = html.indexOf('>', from);
+    return gt;
+  };
+  while (i < html.length) {
+    const lt = html.indexOf('<', i);
+    if (lt === -1) {
+      out.push(html.slice(i));
+      break;
+    }
+    out.push(html.slice(i, lt));
+    if (html.startsWith('!--', lt + 1)) {
+      const end = html.indexOf('-->', lt + 4);
+      if (end === -1) break;
+      out.push(' ');
+      i = end + 3;
+      continue;
+    }
+    RAW_TEXT_OPEN.lastIndex = lt + 1;
+    const raw = RAW_TEXT_OPEN.exec(html);
+    if (raw !== null) {
+      const open = nextGt(lt + 1);
+      if (open === -1) break;
+      const close = endOfClosingTag(html, `</${(raw[1] ?? '').toLowerCase()}`, open + 1);
+      if (close === -1) break;
+      out.push(' ');
+      i = close;
+      continue;
+    }
+    const end = nextGt(lt + 1);
+    if (end === -1) {
+      out.push(html.slice(lt));
+      break;
+    }
+    if (end - lt - 1 > MAX_TAG_CHARS) {
+      out.push('<');
+      i = lt + 1;
+      continue;
+    }
+    out.push(' ');
+    i = end + 1;
+  }
+  return out.join('');
+}
+
+/**
+ * Fin de la balise fermante `closing` (`</script` ou `</style`, insensible à la casse, puis espaces et `>`) à partir de
+ * `from` : position après le `>`, ou -1. Balayage vers l'avant seulement.
+ */
+export function endOfClosingTag(html: string, closing: string, from: number): number {
+  let at = from;
+  for (;;) {
+    const lt = html.indexOf('</', at);
+    if (lt === -1) return -1;
+    if (html.slice(lt, lt + closing.length).toLowerCase() === closing) {
+      let j = lt + closing.length;
+      while (j < html.length && /\s/.test(html.charAt(j))) j++;
+      if (html.charAt(j) === '>') return j + 1;
+    }
+    at = lt + 2;
+  }
+}
+
+/** Texte visible approché : scripts, styles, commentaires et balises retirés (le contenu de `<noscript>` reste visible). */
 function visibleText(html: string): string {
-  return normalize(
-    decodeEntities(
-      html
-        .replace(/<script\b[^>]*>[\s\S]*?<\/script\s*>/gi, ' ')
-        .replace(/<style\b[^>]*>[\s\S]*?<\/style\s*>/gi, ' ')
-        .replace(/<!--[\s\S]*?-->/g, ' ')
-        .replace(/<[^>]{0,2000}>/g, ' '),
-    ),
-  );
+  return normalize(decodeEntities(stripMarkup(html)));
 }
 
 const hasPhrase = (text: string): boolean => CHALLENGE_PHRASES.some((p) => text.includes(p));

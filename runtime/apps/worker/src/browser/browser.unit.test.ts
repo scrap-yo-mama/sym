@@ -2,7 +2,8 @@
 // Tâche 1.6 : BROWSER_CONCURRENCY du cgroup (14 §11), options de lancement figées (silencieux, proxy, non-root,
 // environnement réduit), pool recyclé (N runs, âge, mémoire), fermeture à délai dur, chien de garde. Sans Chromium.
 import type { Browser } from 'playwright-core';
-import { describe, expect, test } from 'vitest';
+import { describe, expect, test, vi } from 'vitest';
+import { boundedDocumentBody, TOO_LARGE, type DecodedSizes } from './bounded.js';
 import {
   browserConcurrencyForMemory,
   BrowserConcurrencyError,
@@ -233,5 +234,33 @@ describe('BrowserPool', () => {
     await expect(b).resolves.toBe('b');
     expect(pool.active()).toBe(0);
     await pool.close();
+  });
+});
+
+describe('boundedDocumentBody : corps brut d’un document lu seulement si sa taille DÉCODÉE est connue et bornée', () => {
+  type FakeResponse = Parameters<typeof boundedDocumentBody>[0];
+  const response = (headers: Record<string, string>, transferred: number, text: () => Promise<string>): FakeResponse =>
+    ({ headers: () => headers, url: () => 'http://zz_test_x.localhost/', request: () => ({ sizes: async () => ({ responseBodySize: transferred }) }), text }) as unknown as FakeResponse;
+  const sizes = (decoded: number | undefined): DecodedSizes => ({ decodedBodySize: async () => decoded });
+
+  test('bombe de compression (32 Kio transférés, des dizaines de Mo décodés) : jamais rapatriée dans Node', async () => {
+    const text = vi.fn(async () => 'x'.repeat(10));
+    const gzip = { 'content-type': 'text/html', 'content-encoding': 'gzip' };
+    // Taille décodée inconnue (pas de suivi CDP) : corps brut non lu.
+    expect(await boundedDocumentBody(response(gzip, 30 * 1024, text), 5_000_000)).toBeUndefined();
+    // Taille décodée connue et au-delà du plafond : refus, sans lecture.
+    expect(await boundedDocumentBody(response(gzip, 30 * 1024, text), 5_000_000, 1_000, sizes(48_000_000))).toBe(TOO_LARGE);
+    expect(await boundedDocumentBody(response(gzip, 30 * 1024, text), 5_000_000, 1_000, sizes(undefined))).toBeUndefined();
+    expect(text).not.toHaveBeenCalled();
+    // Taille décodée connue et bornée : lu (même au-delà de 32 Kio transférés).
+    expect(await boundedDocumentBody(response(gzip, 200 * 1024, text), 5_000_000, 1_000, sizes(900_000))).toBe('x'.repeat(10));
+    expect(text).toHaveBeenCalledOnce();
+  });
+
+  test('corps non compressé : taille réseau (Content-Length, octets transférés) suffit', async () => {
+    const text = vi.fn(async () => '<html></html>');
+    expect(await boundedDocumentBody(response({ 'content-type': 'text/html' }, 13, text), 1_000)).toBe('<html></html>');
+    expect(await boundedDocumentBody(response({ 'content-type': 'text/html' }, 5_000, text), 1_000)).toBe(TOO_LARGE);
+    expect(text).toHaveBeenCalledOnce();
   });
 });

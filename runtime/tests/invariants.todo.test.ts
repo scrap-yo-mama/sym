@@ -47,6 +47,8 @@ describe("invariants (à implémenter)", () => {
   test.todo("assert_cheapest_first_logged"); // INV2, tâche(s) 2.1
   test.todo("assert_tunnel_single_user"); // INV5, tâche(s) 2.6, 2.7
   test.todo("assert_robots_respected"); // INV11, tâche(s) 1.11
+  // INV6 (revue de 1.7) : le run échoué rend sa classe, mais aucun code de production ne la porte encore au statut de l'API.
+  test.todo("assert_no_circumvention — câblage run échoué → statut dans le worker : sain → reparation → bloquee (transitions 10 et 15), jamais de réparation sur un refus ni un défi servi en 200"); // INV6, tâche(s) 2.3
   // RGPD (1.8) : assert_retention_purge, assert_erasure_complete et assert_no_personal_data_in_logs sont dans
   // packages/db/src/retention/retention.integration.test.ts ; câblage worker (RunContext.personal, RunContext.excludeSubjects,
   // rekey) dans apps/worker/src/worker.integration.test.ts. Câblage par l'exécuteur réel (D-28, tâche 1.6) : items extraits

@@ -5,6 +5,7 @@ export * from './types.js';
 export * from './classify.js';
 export * from './protection.js';
 export * from './guard.js';
+export * from './evidence.js';
 export * from './params.js';
 export * from './declarative.js';
 export * from './fetch.js';

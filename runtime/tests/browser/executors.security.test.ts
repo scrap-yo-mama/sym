@@ -512,8 +512,21 @@ describe('E3 en script dans le bac à sable (1.5) : ctx.page.*, ctx.fetch, ctx.e
     expect((await client.stats()).hosts[EVIL]?.total ?? 0).toBe(0);
   }, 60_000);
 
+  // Revue de 1.7 : une navigation du cadre principal lancée HORS d'une opération (même par le code injecté, après la fin
+  // de son evaluate) est coupée à l'émission, avant toute connexion : la redirection n'est même pas demandée au site.
+  test('assert_sandbox (ctx.page, D-29) : navigation différée du code injecté (après son evaluate) vers une redirection hors API → coupée à l’émission (self_navigation), 0 requête au site comme au domaine hors API, enfant arrêté', async () => {
+    const out = await script(`await ctx.page.evaluate((u) => { setTimeout(() => { location.href = u; }, 300); return 1; }, input.redirect); await new Promise(() => {});\nctx.emit({ title: 'jamais', price: 1 });`, {
+      allowedHosts: [SPA, SSRF],
+      input: { redirect: `${base(SSRF)}/to-internal` },
+    });
+    expect(out.result).toMatchObject({ ok: false, failure: { failure_class: 'blocked_by_protection', detail: 'self_navigation' } });
+    expect(out.killed).toBe(true);
+    expect(out.items).toEqual([]);
+    expect((await client.stats()).hosts[SSRF]?.total ?? 0).toBe(0);
+    expect((await client.stats()).hosts[INTERNAL]?.total ?? 0).toBe(0);
+  }, 60_000);
+
   test.each([
-    ['redirection différée (saut vu par le seul proxy d’egress)', `await ctx.page.evaluate((u) => { setTimeout(() => { location.href = u; }, 300); return 1; }, input.redirect); await new Promise(() => {});`],
     ['fetch différé qui suit une redirection', `await ctx.page.evaluate((u) => { setTimeout(() => { fetch(u, { mode: 'no-cors' }).catch(() => {}); }, 300); return 1; }, input.redirect); await new Promise(() => {});`],
   ])('assert_sandbox (ctx.page, D-29) : %s vers un domaine hors API → sandbox_violation, 0 requête, enfant tué en < 2 s', async (_name, body) => {
     const out = await script(`${body}\nctx.emit({ title: 'jamais', price: 1 });`, {
@@ -681,6 +694,54 @@ describe('E3 en script dans le bac à sable (1.5) : ctx.page.*, ctx.fetch, ctx.e
     expect(out.result).toMatchObject({ ok: false, failure: { failure_class: 'blocked_by_protection' } });
     expect(out.items).toEqual([]);
     expect((await client.stats()).hosts[CHALLENGE_200]?.paths['/']).toBe(1);
+  }, 60_000);
+
+  // Revue de 1.7 : même règle structurelle qu'en E2/E3 déclaratifs. Seule la navigation du cadre principal demandée par
+  // l'hôte (page de départ, ctx.page.goto, clic du script : une par opération) ou lancée pendant un ctx.page.evaluate
+  // part ; toute autre (rechargement d'un défi muet, redirection JS ou meta refresh, vers l'API ou hors API) arrête l'essai.
+  const firstProduct = "ctx.emit({ title: (await ctx.page.textAll('h1.product'))[0] ?? 'aucun', price: 1 });";
+  /** Le script attend le contenu « franchi » : sans la garde, il le lirait après le rechargement. */
+  const waitProduct = "await ctx.page.waitForSelector('h1.product', { timeout: 3000 }).catch(() => null);\n";
+  test.each([
+    ['page de départ, rechargement immédiat', 'start', 0],
+    ['page de départ, rechargement après 300 ms', 'start', 300],
+    ['ctx.page.goto, rechargement immédiat', 'goto', 0],
+    ['ctx.page.goto, rechargement après 300 ms', 'goto', 300],
+  ])('assert_no_circumvention (E3 script) : défi JS silencieux servi en 200 (ni titre, ni phrase, ni widget ; cookie puis rechargement), %s → blocked_by_protection (self_navigation), 0 élément, la page « franchie » jamais servie', async (_name, how, delay) => {
+    await client.control({ op: 'site', site: 'challenge_200', variant: 'silent' });
+    await client.control({ op: 'site', site: 'challenge_200', resolve_after_ms: delay });
+    const out =
+      how === 'start'
+        ? await script(`${waitProduct}${firstProduct}`, { allowedHosts: [CHALLENGE_200], startUrl: `${base(CHALLENGE_200)}/` })
+        : await script(`await ctx.page.goto(input.challenge);\n${waitProduct}${firstProduct}`, { allowedHosts: [SPA, CHALLENGE_200], input: { challenge: `${base(CHALLENGE_200)}/` } });
+    expect(out.result).toMatchObject({ ok: false, failure: { failure_class: 'blocked_by_protection', detail: 'self_navigation' } });
+    expect(out.items).toEqual([]);
+    expect(out.violations).toEqual([]);
+    expect((await client.stats()).hosts[CHALLENGE_200]?.paths['/']).toBe(1);
+  }, 60_000);
+
+  test('assert_no_circumvention (E3 script) : la page envoie le cadre principal vers un hôte hors API (éditeur de défi) → blocked_by_protection (self_navigation), 0 requête vers cet hôte', async () => {
+    await client.control({ op: 'site', site: 'challenge_200', variant: 'offsite' });
+    const out = await script(`${waitProduct}${firstProduct}`, { allowedHosts: [CHALLENGE_200], startUrl: `${base(CHALLENGE_200)}/` });
+    expect(out.result).toMatchObject({ ok: false, failure: { failure_class: 'blocked_by_protection', detail: 'self_navigation' } });
+    expect(out.items).toEqual([]);
+    expect((await client.stats()).hosts[EVIL]?.total ?? 0).toBe(0);
+  }, 60_000);
+
+  test('assert_no_circumvention (E3 script) : en-tête de défi, corps lent qui réécrit le document puis recharge pendant ctx.page.goto → refus d’en-tête retenu dès la réponse (challenge_header), rechargement jamais parti', async () => {
+    await client.control({ op: 'site', site: 'challenge_200', variant: 'slow_header' });
+    const out = await script(`await ctx.page.goto(input.challenge);\n${firstProduct}`, { allowedHosts: [SPA, CHALLENGE_200], input: { challenge: `${base(CHALLENGE_200)}/` } });
+    expect(out.result).toMatchObject({ ok: false, failure: { failure_class: 'blocked_by_protection', detail: 'challenge_header' } });
+    expect(out.items).toEqual([]);
+    expect((await client.stats()).hosts[CHALLENGE_200]?.paths['/']).toBe(1);
+  }, 60_000);
+
+  test('limite assumée (INV6, revue de 1.7) : page SAINE déplacée par meta refresh (E3 script) → blocked_by_protection (self_navigation), la cible du refresh jamais demandée', async () => {
+    const out = await script(firstProduct, { allowedHosts: [SSR], startUrl: `${base(SSR)}/moved` });
+    expect(out.result).toMatchObject({ ok: false, failure: { failure_class: 'blocked_by_protection', detail: 'self_navigation' } });
+    const paths = (await client.stats()).hosts[SSR]?.paths ?? {};
+    expect(paths['/moved']).toBe(1);
+    expect(paths['/'] ?? 0).toBe(0);
   }, 60_000);
 
   test('assert_script_paced (1.9) : chaque ctx.fetch et ctx.page.goto réservent un créneau (écart ≥ min_delay_ms) ; un 429 arrête l’essai (rate_limited) et son Retry-After allonge la cadence du run suivant', async () => {
@@ -858,6 +919,44 @@ describe('assert_no_circumvention (Chromium, tâche 1.7) : garde de classificati
     const out = await withEgress({ mode: 'direct' }, (egress) => runPlaywrightExecutor({ pool, egress, guard, spec, input: {}, signal, classify: statusOnly }), { allowedHosts: spec.request.allowed_hosts });
     expect(out).toMatchObject({ ok: false, pages: 0, failure: { failure_class: 'blocked_by_protection', detail: 'self_navigation' } });
     expect((await client.stats()).hosts[CHALLENGE_200]?.paths['/']).toBe(1);
+  }, 60_000);
+
+  test('E3 : défi JS silencieux servi en 200 (ni titre, ni phrase, ni widget ; cookie puis rechargement) → blocked_by_protection (self_navigation), 0 élément, la page « franchie » jamais servie', async () => {
+    await client.control({ op: 'site', site: 'challenge_200', variant: 'silent' });
+    const out = await e3(products());
+    expect(out).toMatchObject({ ok: false, pages: 0, failure: { failure_class: 'blocked_by_protection', detail: 'self_navigation' } });
+    expect((await client.stats()).hosts[CHALLENGE_200]?.paths['/']).toBe(1);
+  }, 60_000);
+
+  test('E3 : navigation lancée par la page vers un hôte hors API (éditeur de défi) → blocked_by_protection (self_navigation), 0 requête vers cet hôte, jamais extraction ni code_error', async () => {
+    await client.control({ op: 'site', site: 'challenge_200', variant: 'offsite' });
+    const out = await e3(products());
+    expect(out).toMatchObject({ ok: false, pages: 0, failure: { failure_class: 'blocked_by_protection', detail: 'self_navigation' } });
+    expect((await client.stats()).hosts[EVIL]?.total ?? 0).toBe(0);
+  }, 60_000);
+
+  test('E3 : défi compressé (gzip) qui réécrit aussitôt son document → reconnu sur son corps brut DÉCODÉ (taille décodée connue par CDP avant lecture) : blocked_by_protection (challenge_page)', async () => {
+    await client.control({ op: 'site', site: 'challenge_200', variant: 'gzip_rewrite' });
+    const out = await e3(products());
+    expect(out).toMatchObject({ ok: false, pages: 0, failure: { failure_class: 'blocked_by_protection', detail: 'challenge_page' } });
+  }, 60_000);
+
+  test('limite assumée (INV6, revue de 1.7) : page SAINE déplacée par meta refresh (redirection de langue, URL canonique) → blocked_by_protection (self_navigation) en E3, la cible du refresh jamais demandée', async () => {
+    const spec = valid(
+      {
+        schema_version: 1,
+        kind: 'declarative',
+        request: { method: 'GET', url: `${base(SSR)}/moved`, allowed_hosts: [SSR] },
+        sources: [{ id: 'dom', from: 'html', records: 'article.product' }],
+        fields: { name: { css: 'h2.title', attr: 'text', type: 'string', required: true } },
+      },
+      { type: 'object', required: ['name'], properties: { name: { type: 'string' } } },
+    );
+    const out = await e3(spec);
+    expect(out).toMatchObject({ ok: false, pages: 0, failure: { failure_class: 'blocked_by_protection', detail: 'self_navigation' } });
+    const paths = (await client.stats()).hosts[SSR]?.paths ?? {};
+    expect(paths['/moved']).toBe(1);
+    expect(paths['/'] ?? 0).toBe(0);
   }, 60_000);
 
   test('E2 : page d’accueil en défi qui se résout seul (rechargement immédiat) → blocked_by_protection, aucune requête de données', async () => {

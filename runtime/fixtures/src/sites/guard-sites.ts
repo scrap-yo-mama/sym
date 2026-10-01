@@ -3,6 +3,7 @@
 // Les défis et signatures sont des SIMULATIONS GÉNÉRIQUES (aucun produit réel imité, aucun mécanisme de résolution) :
 // elles servent à vérifier que le produit s'arrête.
 import { createHash } from 'node:crypto';
+import { gzipSync } from 'node:zlib';
 import { ControlError, type FxResponse, type SiteFactory } from '../core.ts';
 import { formatEuro, makePeople, makeProducts, pad } from '../data.ts';
 import { cookieOf, esc, headerOf, html, intParam, json, page, redirect, sleep, text } from '../res.ts';
@@ -108,30 +109,69 @@ function selfResolvingChallengePage(delayMs: number): string {
   return challengePage().replace('</body>', `${script}</body>`);
 }
 
+/** Page sans titre, sans phrase ni conteneur de widget : seul son script agit (rien à reconnaître dans le contenu). */
+function blankScriptPage(script: string): string {
+  return `<!doctype html>\n<html><head><meta charset="utf-8"></head><body><script>${script}</script></body></html>`;
+}
+
+/**
+ * Variantes du défi servi en 200 (simulations côté site, aucun mécanisme côté produit) :
+ * - `silent` : défi JS « silencieux » (type interstitiel sans texte) : aucun titre, aucune phrase, aucun widget, un script
+ *   qui pose le cookie de passage puis recharge (aussitôt, ou après `resolve_after_ms`) ; avec le cookie, la page de contenu ;
+ * - `offsite` : même page muette, dont le script envoie le cadre principal vers un hôte d'éditeur hors des domaines de l'API ;
+ * - `slow_header` : en-tête de défi, puis corps LENT (fin servie après 4 s) dont le début réécrit aussitôt le document
+ *   (« Verification successful ») et recharge avec le cookie ;
+ * - `gzip_rewrite` : page de défi générique compressée (gzip) dont le script remplace aussitôt le
+ *   document par un titre de contenu : seul le corps brut décodé la reconnaît.
+ */
+type Challenge200Variant = 'silent' | 'offsite' | 'slow_header' | 'gzip_rewrite';
+const CHALLENGE_200_VARIANTS = new Set<string>(['silent', 'offsite', 'slow_header', 'gzip_rewrite']);
+
 const challenge200: SiteFactory = (env) => {
   let withHeader = false;
   let resolveAfterMs: number | null = null;
+  let variant: Challenge200Variant | null = null;
   const products = makeProducts(env.seed, 'challenge_200', 3);
   return {
     id: 'challenge_200',
     lot: 'base',
     description:
-      'Défi servi en HTTP 200 : même page générique, sans en-tête de protection par défaut (détection par le corps seul) ; resolve_after_ms : le défi se résout seul en JS (cookie + rechargement) et le site sert alors des titres h1',
+      'Défi servi en HTTP 200 : même page générique, sans en-tête de protection par défaut (détection par le corps seul) ; resolve_after_ms : le défi se résout seul en JS (cookie + rechargement) et le site sert alors des titres h1 ; variant : silent (défi muet qui recharge), offsite (défi muet vers un hôte hors API), slow_header (en-tête de défi, corps lent qui se réécrit et recharge), gzip_rewrite (défi compressé qui se réécrit)',
     hosts: ['zz_test_challenge_200.localhost'],
     smoke: { path: '/', status: 200 },
     handle(req) {
       const headers: Record<string, string> = withHeader ? { 'x-zz-test-shield': 'challenge' } : {};
-      if (resolveAfterMs === null) return html(200, challengePage(), headers);
-      if (cookieOf(req, CLEARED_COOKIE) === '1') {
-        return html(200, page('Catalogue zz_test', products.map((p) => `<h1 class="product">${esc(p.title)}</h1>`).join('')));
+      const content = () => html(200, page('Catalogue zz_test', products.map((p) => `<h1 class="product">${esc(p.title)}</h1>`).join('')));
+      const clear = `document.cookie='${CLEARED_COOKIE}=1; path=/';`;
+      if (variant !== null && req.path === '/') {
+        if (cookieOf(req, CLEARED_COOKIE) === '1') return content();
+        switch (variant) {
+          case 'silent':
+            return html(200, blankScriptPage(resolveAfterMs === null || resolveAfterMs === 0 ? `${clear}location.reload();` : `setTimeout(function(){${clear}location.reload();}, ${resolveAfterMs});`), headers);
+          case 'offsite':
+            return html(200, blankScriptPage(`location.href=${JSON.stringify(env.urlFor('zz_test_evil.localhost', '/zz_test_verify'))};`), headers);
+          case 'slow_header':
+            return {
+              ...html(200, blankScriptPage(`document.body.textContent='Verification successful, redirecting';${clear}location.reload();`).replace('</body></html>', ''), { 'x-zz-test-shield': 'challenge' }),
+              tail: { body: `<p>${'.'.repeat(64)}</p></body></html>`, delayMs: 4_000 },
+            };
+          case 'gzip_rewrite': {
+            const rewrite = `<script>document.documentElement.innerHTML='<head><title>Catalogue</title></head><body><h1 class="product">Bienvenue</h1></body>';</script>`;
+            const body = challengePage().replace('</body>', `${rewrite}</body>`);
+            return { status: 200, headers: { 'content-type': 'text/html; charset=utf-8', 'content-encoding': 'gzip', ...headers }, bytes: gzipSync(body) };
+          }
+        }
       }
+      if (resolveAfterMs === null) return html(200, challengePage(), headers);
+      if (cookieOf(req, CLEARED_COOKIE) === '1') return content();
       return html(200, selfResolvingChallengePage(resolveAfterMs), headers);
     },
     control(args) {
       if (typeof args['with_header'] === 'boolean') withHeader = args['with_header'];
       else if (typeof args['resolve_after_ms'] === 'number' && args['resolve_after_ms'] >= 0) resolveAfterMs = Math.min(10_000, Math.floor(args['resolve_after_ms']));
-      else throw new ControlError('with_header (booléen) ou resolve_after_ms (nombre ≥ 0) attendu');
-      return { with_header: withHeader, resolve_after_ms: resolveAfterMs };
+      else if (typeof args['variant'] === 'string' && CHALLENGE_200_VARIANTS.has(args['variant'])) variant = args['variant'] as Challenge200Variant;
+      else throw new ControlError('with_header (booléen), resolve_after_ms (nombre ≥ 0) ou variant (silent, offsite, slow_header, gzip_rewrite) attendu');
+      return { with_header: withHeader, resolve_after_ms: resolveAfterMs, variant };
     },
   };
 };

@@ -201,6 +201,11 @@ describe('assert_no_circumvention : garde de classification avant extraction et 
     const evidence = repair.mock.calls[0]![0].evidence;
     expect(evidence).toHaveLength(1);
     expect(evidence[0]).toMatchObject({ status: 200, url: `${base(HOSTS.dom)}/` });
+    // Preuve minimisée (04 §5, 17 §6) : la forme de la page (squelette, classes), jamais ses valeurs (titres, prix).
+    const shown = evidence[0] as HttpExchange;
+    expect(shown.body).toContain('<h3 class="card__name">');
+    for (const value of ['Zztest', '€', 'data-cents', 'Liste v2']) expect(shown.body, value).not.toContain(value);
+    expect(Object.keys(shown.headers)).toEqual(['content-type']);
     expect(await routeLog(run.id)).toEqual([{ failure_class: 'extraction', next: 'repair', agent_invoked: true }]);
   });
 });

@@ -12,11 +12,16 @@
 // (`access_refused`), l'enfant est arrêté (sans violation), aucune requête ne part plus, les éléments émis sont ignorés
 // et l'essai échoue avec la classe du refus. Les requêtes du site lui-même émises sans code du script (session anonyme
 // sondée en 401 par la page d'accueil, par exemple) ne sont pas classées, comme dans l'E3 déclaratif.
-// Chaque document du cadre principal est classé d'abord sur son corps BRUT (lu au niveau réseau, avant que ses scripts
-// ne le transforment), avec l'URL demandée (racine de la chaîne de redirections) pour reconnaître une redirection vers
-// la connexion ; une requête de la page attend le verdict des réponses en cours de classement, et une nouvelle
-// navigation du cadre principal fait d'abord classer le document courant sur son DOM (il est encore là) : un défi qui
-// se résout seul en JavaScript puis recharge la page est ainsi refusé avant que le rechargement ne parte.
+// Chaque document du cadre principal est classé d'abord sur son statut et ses en-têtes DÈS la réponse (un en-tête de
+// défi ou un 401 est retenu aussitôt, sans attendre le corps), puis sur son corps BRUT (lu au niveau réseau, avant que
+// ses scripts ne le transforment ; corps compressé lu seulement si sa taille décodée, vue par CDP, est bornée), avec
+// l'URL demandée (racine de la chaîne de redirections) pour reconnaître une redirection vers la connexion.
+// Navigations du cadre principal (même règle qu'en E2/E3 déclaratifs) : seule celle que l'hôte demande part (une par
+// page de départ, `ctx.page.goto` ou clic du script), ou celle lancée pendant un `ctx.page.evaluate` ; toute autre,
+// lancée par la page elle-même (défi muet qui pose un cookie puis recharge, redirection JS, meta refresh, vers l'API ou
+// hors API), est coupée sans connexion et arrête l'essai en `blocked_by_protection` (`self_navigation`). Attendre ne
+// franchit jamais un défi, même indétectable par son contenu. Une navigation demandée fait d'abord classer le document
+// courant sur son DOM (il est encore là), puis attend le verdict sur son corps brut.
 // Cadence : chaque réponse classée est rapportée AVEC sa classe (`failureClass`) : un défi servi en 200 compte pour
 // le disjoncteur du domaine comme un 403, jamais comme un succès (04 §7).
 // Cadence par domaine (1.9, 17 §5) : comme les exécuteurs déclaratifs, chaque requête du script réserve un créneau
@@ -42,7 +47,7 @@ import {
 import { DomainNotAllowedError, guardedGoto, type BrowserEgress, type NetworkSession, type SsrfGuard } from '@runtime/core/net';
 import type { Logger } from 'pino';
 import type { CDPSession, Request, Response } from 'playwright-core';
-import { boundedContent, boundedDocumentBody, TOO_LARGE } from '../browser/bounded.js';
+import { boundedContent, boundedDocumentBody, TOO_LARGE, trackDecodedSizes, type DecodedSizes } from '../browser/bounded.js';
 import type { BrowserPool } from '../browser/pool.js';
 import { chainRoot, hostAllowed, isMainNavigation, openRunContext, trackStrategyRequests } from '../browser/run-context.js';
 import { DEFAULT_SANDBOX_LIMITS } from '../sandbox/engine.js';
@@ -271,8 +276,25 @@ export function runScriptExecutor(options: ScriptExecutorOptions): Promise<Scrip
       documentVerdicts.get(root)?.();
       documentVerdicts.delete(root);
     };
-    /** Session CDP de la page (posée après l'ouverture du contexte) : lecture du DOM pendant une navigation suspendue. */
-    const cdpRef: { session?: CDPSession } = {};
+    /**
+     * Session CDP de la page (posée après l'ouverture du contexte) : lecture du DOM pendant une navigation suspendue,
+     * tailles décodées des documents (lecture bornée d'un corps compressé).
+     */
+    const cdpRef: { session?: CDPSession; sizes?: DecodedSizes } = {};
+    /** Navigation du cadre principal (requête initiale) de la page du run. */
+    const mainRoot = (request: Request): boolean => {
+      try {
+        return request.redirectedFrom() === null && isMainNavigation(rc.page)(request);
+      } catch {
+        return false;
+      }
+    };
+    /** Navigation lancée par la page elle-même (ni demandée par l'hôte, ni pendant un `evaluate`) : refus (INV6). */
+    const selfNavigation = (request: Request): boolean => {
+      if (!mainRoot(request) || host.claimNavigation()) return false;
+      retain({ failure_class: 'blocked_by_protection', retryable: false, detail: 'self_navigation', ...(currentDocument === undefined ? {} : { status: currentDocument.status }) });
+      return true;
+    };
     /**
      * HTML sérialisé du document courant, borné DANS la page, lu par CDP : `page.evaluate` attendrait la fin de la
      * navigation suspendue par `admit` (interblocage). `undefined` si illisible.
@@ -293,7 +315,12 @@ export function runScriptExecutor(options: ScriptExecutorOptions): Promise<Scrip
     const rc = await openRunContext(browser, {
       egressServer: options.egress.server,
       allowedHosts: options.allowedHosts,
-      onViolation: (h, request) => host.report(h, 'domain_not_allowed', request === undefined ? undefined : issuedState(request)),
+      onViolation: (h, request) => {
+        // Navigation lancée par la page vers un hôte hors API (éditeur de défi) : coupée ici sans passer par `admit`,
+        // c'est un refus comme toute navigation non demandée.
+        if (request !== undefined && refusal === undefined) selfNavigation(request);
+        host.report(h, 'domain_not_allowed', request === undefined ? undefined : issuedState(request));
+      },
       admit: async (request) => {
         if (refusal !== undefined) return false;
         // Soumission (navigation hors GET/HEAD) sans `allow_write_actions` : coupée, imputée au script.
@@ -301,7 +328,10 @@ export function runScriptExecutor(options: ScriptExecutorOptions): Promise<Scrip
           host.report(new URL(request.url()).hostname, 'write_action_blocked', issued.get(chainRoot(request)));
           return false;
         }
-        // Nouvelle navigation du cadre principal : le document courant est classé d'abord, sur son DOM tant qu'il est
+        // Navigation du cadre principal ni demandée ni lancée par le code du script : refusée (décidé à l'émission,
+        // avant toute attente).
+        if (selfNavigation(request)) return false;
+        // Nouvelle navigation DEMANDÉE du cadre principal : le document courant est classé d'abord, sur son DOM tant qu'il est
         // encore là (le corps brut d'un document que cette navigation interrompt n'est plus lisible), puis sur son corps
         // brut (verdict de l'écouteur, attente bornée) : un défi qui se recharge lui-même est refusé avant que le
         // rechargement ne parte.
@@ -398,12 +428,16 @@ export function runScriptExecutor(options: ScriptExecutorOptions): Promise<Scrip
       }
       // URL demandée : racine de la chaîne de redirections (redirection vers la connexion, 04 §7).
       const requestUrl = chainRoot(request).url();
+      // Statut et en-têtes seuls, DÈS la réponse : un en-tête de défi ou un 401 ne dépend pas du corps (qui peut tarder,
+      // pendant que le script du défi réécrit le document et relance la page) ; retenu aussitôt.
+      const early = classify({ status, headers, body: '', url: response.url() }, { requestUrl });
+      if (early !== null && (early.failure_class === 'blocked_by_protection' || early.failure_class === 'auth_required')) retain(early);
       const task = (async (): Promise<FailureClass | null> => {
         // Document : corps BRUT servi, avant que ses scripts ne le transforment ; appel de données : petit corps.
         let body: string;
         if (mainDocument) {
           // Lecture abandonnée dès qu'un refus est constaté (document interrompu par un rechargement refusé).
-          const raw = await Promise.race([boundedDocumentBody(response, MAX_RESPONSE_BYTES), onRefusal()]);
+          const raw = await Promise.race([boundedDocumentBody(response, MAX_RESPONSE_BYTES, undefined, cdpRef.sizes), onRefusal()]);
           body = typeof raw === 'string' ? raw : '';
           if (typeof raw === 'string') rawClassified.add(chainRoot(request));
         } else body = await smallBody(response);
@@ -436,6 +470,8 @@ export function runScriptExecutor(options: ScriptExecutorOptions): Promise<Scrip
     const cdp = await rc.context.newCDPSession(rc.page).catch(() => undefined);
     if (cdp !== undefined) cdpRef.session = cdp;
     if (cdp !== undefined) {
+      const sizes = await trackDecodedSizes(cdp).catch(() => undefined);
+      if (sizes !== undefined) cdpRef.sizes = sizes;
       cdp.on('Page.frameNavigated', (event) => {
         if (event.frame.parentId === undefined && event.type === 'Navigation') host.documentCommitted();
       });
@@ -468,9 +504,13 @@ export function runScriptExecutor(options: ScriptExecutorOptions): Promise<Scrip
       let exchange: HttpExchange;
       try {
         host.beginHostOp();
+        host.expectNavigation();
         const landing = await strategy
           .during(isMainNavigation(rc.page), () => guardedGoto(rc.page, options.startUrl, options.guard, { waitUntil: 'load' as const, timeout: timeoutMs }))
-          .finally(() => host.endHostOp());
+          .finally(() => {
+            host.settleNavigation();
+            host.endHostOp();
+          });
         // Redirection hors des domaines de l'API : refusée par le proxy d'egress ; faute de stratégie, jamais un réseau.
         if (landing !== null && !hostAllowed(landing.url(), options.allowedHosts)) throw new DomainNotAllowedError(new URL(landing.url()).hostname);
         const html = await boundedContent(rc.page, MAX_RESPONSE_BYTES);

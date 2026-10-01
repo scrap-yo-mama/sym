@@ -110,6 +110,27 @@ describe('assert_no_circumvention : agent jamais invoqué sur un refus (garde av
     expect(agent).toHaveBeenCalledOnce();
   });
 
+  it('2xx : signal faible (titre seul, phrase dans un JSON, widget sur une page courte) → extraction gardée, agent invoqué, preuve retirée de ce qu’il reçoit', async () => {
+    const html = (title: string, body: string) => `<!doctype html><html><head><title>${title}</title></head><body>${body}</body></html>`;
+    const weak: HttpExchange[] = [
+      // Article dont le titre commence comme un interstitiel : un seul signal sur une page de contenu.
+      { ...NORMAL, headers: { 'content-type': 'text/html' }, body: html('Security check: 10 tips to secure your shop', `<article>${'<p>Conseil pratique pour votre boutique.</p>'.repeat(40)}</article>`) },
+      // API JSON (< 4000 caractères) qui cite la phrase : jamais une recherche de phrase sur du JSON en 2xx.
+      { ...NORMAL, body: JSON.stringify({ items: [], faq: "Why do I see I'm not a robot on checkout?" }) },
+      // Page courte avec un formulaire de contact protégé par un widget.
+      { ...NORMAL, headers: { 'content-type': 'text/html' }, body: html('Contact', `<p>${'Écrivez-nous, nous répondons sous 48 heures. '.repeat(12)}</p><form><div class="g-recaptcha" data-sitekey="zz_test"></div><button>Envoyer</button></form>`) },
+    ];
+    for (const page of weak) {
+      const agent = vi.fn(async (_failure: ExecFailure, _evidence: readonly unknown[]) => 'patch');
+      expect(guardAgentInvocation(f('extraction', 'no_records'), [page]), page.body.slice(0, 60)).toBeNull();
+      expect(await invokeAgentGuarded(f('extraction', 'no_records'), [page, NORMAL], agent)).toEqual({ invoked: true, value: 'patch' });
+      // L'agent reçoit les autres preuves, jamais celle qui porte un signal de défi (aucune page de défi dans un prompt).
+      expect(agent.mock.calls[0]?.[1]).toEqual([NORMAL]);
+    }
+    // Signal fort en 2xx (titre + phrase) : toujours reclassé.
+    expect(guardAgentInvocation(f('extraction'), [CHALLENGE])).toMatchObject({ failure_class: 'blocked_by_protection' });
+  });
+
   it('assertPromptSafe : une page de défi n’entre dans aucun prompt', () => {
     expect(() => assertPromptSafe(CHALLENGE.body)).toThrow(ClassificationGuardError);
     try {

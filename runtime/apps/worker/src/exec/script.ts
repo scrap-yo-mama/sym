@@ -15,7 +15,9 @@
 //   la réponse. Les sous-ressources tierces du site (mesure d'audience, CDN) restent coupées (0 requête) sans verdict
 //   contre le script ; seule la validation d'un nouveau document dans le cadre principal désarme le guet.
 // - Refus d'accès (INV6) : chaque réponse rendue au script est d'abord classée (script-executor.ts) ; au premier refus,
-//   l'opération de page en cours échoue sans rien rendre (`access_refused`) et l'enfant est arrêté.
+//   l'opération de page en cours échoue sans rien rendre (`access_refused`) et l'enfant est arrêté. Navigations du cadre
+//   principal : une seule par `goto` ou `click` (`expectNavigation`), et celles lancées pendant un `evaluate` ; toute
+//   autre, lancée par la page elle-même, arrête l'essai (`self_navigation`, même règle qu'en E2/E3 déclaratifs).
 // - Actions d'écriture (08 §4 mesure 4, 07 §5) : sans `allow_write_actions`, un clic sur un contrôle d'envoi de
 //   formulaire est refusé (`write_action_blocked`, violation) ; les soumissions de formulaire (navigations hors GET)
 //   sont coupées au niveau du contexte de run (script-executor.ts).
@@ -63,6 +65,18 @@ export type HostViolationWatch = {
   /** Navigation ou clic menés par l'hôte (une soumission coupée pendant eux vient du script). */
   beginHostOp(): void;
   endHostOp(): void;
+  /**
+   * Navigations du cadre principal (revue de 1.7, INV6) : l'hôte en attend UNE par opération de navigation (page de
+   * départ, `ctx.page.goto`, clic du script), posée au début de l'opération et retirée à sa fin.
+   */
+  expectNavigation(): void;
+  settleNavigation(): void;
+  /**
+   * Navigation du cadre principal émise (requête initiale) : vraie si elle est demandée (l'attendue, consommée) ou lancée
+   * pendant un `ctx.page.evaluate` (code du script) ; fausse si la page l'a lancée d'elle-même (rechargement d'un défi,
+   * redirection JS, meta refresh), qui arrête alors l'essai en `blocked_by_protection`.
+   */
+  claimNavigation(): boolean;
   /** Nouveau document validé dans le cadre principal : le code injecté a disparu avec l'ancien. */
   documentCommitted(): void;
   /** Le code du script peut être présent dans la page (à relever à l'émission de chaque requête). */
@@ -80,6 +94,7 @@ export function hostViolationWatch(): HostViolationWatch {
   let armed = false;
   let evaluating = 0;
   let hostOps = 0;
+  let navigationExpected = false;
   let imputed = 0;
   let last: SandboxViolation | undefined;
   const baseline = new Set<string>();
@@ -104,6 +119,19 @@ export function hostViolationWatch(): HostViolationWatch {
     },
     endHostOp: () => {
       hostOps = Math.max(0, hostOps - 1);
+    },
+    expectNavigation: () => {
+      navigationExpected = true;
+    },
+    settleNavigation: () => {
+      navigationExpected = false;
+    },
+    claimNavigation: () => {
+      if (navigationExpected) {
+        navigationExpected = false;
+        return true;
+      }
+      return evaluating > 0;
     },
     documentCommitted: () => {
       if (evaluating === 0) armed = false;
@@ -294,7 +322,10 @@ export function createPageBridge(options: PageBridgeOptions): NonNullable<Sandbo
     const isEvaluate = op === 'evaluate';
     const hostOp = op === 'goto' || op === 'click';
     if (isEvaluate) watch.beginEvaluate();
-    if (hostOp) watch.beginHostOp();
+    if (hostOp) {
+      watch.beginHostOp();
+      watch.expectNavigation();
+    }
     // Hors `evaluate`, les requêtes coupées relèvent du guet (`watch`), pas du verdict de l'opération.
     const check = <T>(value: T): T => (isEvaluate ? settled(before, value) : value);
     const perform = async (): Promise<unknown> => {
@@ -390,7 +421,10 @@ export function createPageBridge(options: PageBridgeOptions): NonNullable<Sandbo
       throw new SandboxBridgeError('page_failed', false, op);
     } finally {
       if (isEvaluate) watch.endEvaluate();
-      if (hostOp) watch.endHostOp();
+      if (hostOp) {
+        watch.settleNavigation();
+        watch.endHostOp();
+      }
     }
   };
 }

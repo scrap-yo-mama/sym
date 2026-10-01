@@ -16,7 +16,10 @@
 //    un échec n'atteint la réparation (port `repair`, tâche 2.3) qu'à travers `invokeAgentGuarded` : jamais sur un refus,
 //    un défi, une connexion requise ou un 429 (INV6). L'échange en échec (corps borné) est la preuve de la garde : une
 //    « extraction » sur une page de défi est un refus, et le run rend alors la classe corrigée. La suite retenue est
-//    journalisée (`failure_route`, `reclassified_from` si la garde a corrigé la classe).
+//    journalisée (`failure_route`, `reclassified_from` si la garde a corrigé la classe). L'agent ne reçoit jamais la
+//    page : seulement les preuves que la garde laisse passer, MINIMISÉES (squelette HTML ou JSON, valeurs retirées,
+//    masquage par le registre du run ; 04 §5, 17 §6). Câblage run échoué → statut (`sain → reparation → bloquee`,
+//    transitions 10 et 15) : tâche 2.3, avec la réparation ; en 1.7 le run rend la classe, la machine à états l'applique.
 import {
   validateDeclarativeSpec,
   validateOutput,
@@ -32,6 +35,7 @@ import {
   failureRoute,
   guardAgentInvocation,
   invokeAgentGuarded,
+  minimizeEvidence,
   type AgentEvidence,
   runFetchExecutor,
   type ClassifyContext,
@@ -93,8 +97,12 @@ export type StrategyExecutorDeps = {
 };
 
 /**
- * Port de réparation (2.3). `evidence` : preuves DÉJÀ passées par la garde (aucune n'est un refus ni une page de défi
- * reconnue) ; le port doit encore passer chaque texte par `assertPromptSafe` avant de l'inclure dans un prompt (04b §6).
+ * Port de réparation (2.3). `evidence` : preuves DÉJÀ passées par la garde (aucune n'est un refus ni une page de défi,
+ * un signal faible en 2xx est retiré) puis MINIMISÉES par `minimizeEvidence` avec le registre du run (`ctx.personal`) :
+ * squelette HTML (balises, id, class), squelette JSON (clés, types), texte libre masqué ; jamais le corps de la page,
+ * ses valeurs, ses cookies ni sa requête (04 §5 « journaux masqués, diff de forme », 17 §6, RGPD). Les sujets effacés
+ * (`ctx.excludeSubjects`) ne sont connus que par empreinte : d'où « aucune valeur de la page ». Le port doit encore
+ * passer chaque texte par `assertPromptSafe` avant de l'inclure dans un prompt (04b §6).
  */
 export type RepairPort = (request: {
   readonly ctx: RunCtx;
@@ -363,7 +371,12 @@ export function createStrategyExecutor(deps: StrategyExecutorDeps): RunExecutor 
       // Garde AVANT réparation (1.7) : l'agent n'est invoqué que pour `extraction`, `code_error` ou `not_found`, et
       // seulement si aucune preuve n'est un refus ; il ne reçoit que des preuves passées par la garde.
       const repair = deps.repair;
-      const guarded = repair === undefined ? null : await invokeAgentGuarded(original, evidence, (f) => repair({ ctx, failure: f, strategyVersion: version, evidence }));
+      const guarded =
+        repair === undefined
+          ? null
+          : await invokeAgentGuarded(original, evidence, (f, shown) =>
+              repair({ ctx, failure: f, strategyVersion: version, evidence: shown.map((item) => minimizeEvidence(item, ctx.personal)) }),
+            );
       const route = failureRoute(failure.failure_class);
       await ctx.log('info', 'failure_route', {
         failure_class: failure.failure_class,

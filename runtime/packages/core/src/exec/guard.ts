@@ -6,7 +6,9 @@
 // - `auth_required`, `payment_required`, `account_limit` : la main revient à l'utilisateur (`action_requise`).
 // - Seules `extraction`, `code_error` et `not_found` (réparation limitée à retrouver l'URL) ouvrent l'agent, et
 //   seulement si aucune preuve transmise n'est une page de défi ou un refus : sinon la classe est corrigée en
-//   `blocked_by_protection` et l'agent n'est pas appelé. Aucune page de défi n'entre dans un prompt (`assertPromptSafe`).
+//   `blocked_by_protection` et l'agent n'est pas appelé. Sur une réponse 2xx, seul un signal fort reclasse ; un signal
+//   faible garde la classe et retire la preuve de ce que l'agent reçoit. Aucune page de défi n'entre dans un prompt
+//   (`assertPromptSafe`).
 import type { FailureClass } from '../model/enums.js';
 import { networkDecision, type NetworkDecision } from '../net/modes/ladder.js';
 import { classifyExchange } from './classify.js';
@@ -96,12 +98,36 @@ export type AgentEvidence = HttpExchange | string;
 
 const CHALLENGE_TEXT: ExecFailure = { failure_class: 'blocked_by_protection', retryable: false, detail: 'challenge_page' };
 
-/** Classe d'une preuve : refus, défi, ou `null` si elle peut être montrée à un agent. */
-function evidenceRefusal(evidence: AgentEvidence): ExecFailure | null {
-  if (typeof evidence === 'string') return challengeInText(evidence) ? CHALLENGE_TEXT : null;
+/**
+ * Verdict sur une preuve : un refus (classe qui interdit l'agent), `withhold` (signal de défi faible sur une réponse 2xx :
+ * l'échec garde sa classe, mais la preuve n'est pas montrée à l'agent), ou `show`.
+ * Sur une réponse 2xx, seul un signal FORT reclasse (mode strict de `classifyExchange`) : sinon une API saine dont la
+ * page cite « I'm not a robot » ou porte un formulaire de contact protégé passerait `bloquee` sans réparation.
+ */
+function evidenceVerdict(evidence: AgentEvidence): ExecFailure | 'withhold' | 'show' {
+  if (typeof evidence === 'string') return challengeInText(evidence) ? CHALLENGE_TEXT : 'show';
   const failure = classifyExchange(evidence);
   if (failure !== null && !failureRoute(failure.failure_class).agent) return failure;
-  return challengeInText(evidence.body) ? { ...CHALLENGE_TEXT, status: evidence.status } : null;
+  if (!challengeInText(evidence.body)) return 'show';
+  return evidence.status >= 200 && evidence.status < 300 ? 'withhold' : { ...CHALLENGE_TEXT, status: evidence.status };
+}
+
+/** Garde sur les preuves : la classe qui interdit l'agent, ou les preuves qu'il peut recevoir (signaux faibles retirés). */
+export type EvidenceScreen = { readonly refusal: ExecFailure } | { readonly refusal: null; readonly evidence: readonly AgentEvidence[] };
+
+/**
+ * Garde avant tout appel d'agent après un échec, avec les preuves que l'agent peut recevoir : refus d'origine, refus
+ * corrigé d'après une preuve (une « extraction » sur une page de défi est un refus), ou preuves filtrées.
+ */
+export function screenAgentEvidence(failure: ExecFailure, evidence: readonly AgentEvidence[] = []): EvidenceScreen {
+  if (!failureRoute(failure.failure_class).agent) return { refusal: failure };
+  const shown: AgentEvidence[] = [];
+  for (const item of evidence) {
+    const verdict = evidenceVerdict(item);
+    if (verdict === 'show') shown.push(item);
+    else if (verdict !== 'withhold') return { refusal: verdict };
+  }
+  return { refusal: null, evidence: shown };
 }
 
 /**
@@ -109,23 +135,21 @@ function evidenceRefusal(evidence: AgentEvidence): ExecFailure | null {
  * (d'origine, ou corrigée d'après les preuves : une « extraction » sur une page de défi est un refus).
  */
 export function guardAgentInvocation(failure: ExecFailure, evidence: readonly AgentEvidence[] = []): ExecFailure | null {
-  if (!failureRoute(failure.failure_class).agent) return failure;
-  for (const item of evidence) {
-    const refusal = evidenceRefusal(item);
-    if (refusal !== null) return refusal;
-  }
-  return null;
+  return screenAgentEvidence(failure, evidence).refusal;
 }
 
-/** Invoque l'agent seulement si la garde le permet ; sinon rend la classe retenue, sans appel. */
+/**
+ * Invoque l'agent seulement si la garde le permet, avec les SEULES preuves qu'elle laisse passer ; sinon rend la classe
+ * retenue, sans appel.
+ */
 export async function invokeAgentGuarded<T>(
   failure: ExecFailure,
   evidence: readonly AgentEvidence[],
-  invoke: (failure: ExecFailure) => Promise<T>,
+  invoke: (failure: ExecFailure, evidence: readonly AgentEvidence[]) => Promise<T>,
 ): Promise<{ readonly invoked: true; readonly value: T } | { readonly invoked: false; readonly failure: ExecFailure }> {
-  const refused = guardAgentInvocation(failure, evidence);
-  if (refused !== null) return { invoked: false, failure: refused };
-  return { invoked: true, value: await invoke(failure) };
+  const screen = screenAgentEvidence(failure, evidence);
+  if (screen.refusal !== null) return { invoked: false, failure: screen.refusal };
+  return { invoked: true, value: await invoke(failure, screen.evidence) };
 }
 
 /** Garde des prompts : lève `ClassificationGuardError` si le texte est une page de défi (il n'entre dans aucun prompt). */

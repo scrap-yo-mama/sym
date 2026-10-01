@@ -11,10 +11,14 @@
 // STRATÉGIE (refusée par le proxy d'egress, que `context.route` ne voit pas) est une faute de stratégie
 // (`domain_not_allowed`), jamais un réseau ; une sous-ressource tierce du site coupée ne change jamais la classe.
 // Garde de classification (1.7, 04 §5, INV6) : elle tourne d'abord, sur la réponse SERVIE (statut, en-têtes, corps brut
-// lu au niveau réseau), avant toute attente du rendu ; le DOM rendu n'est classé qu'ensuite. Seule la navigation du
-// cadre principal demandée par l'exécuteur part : une navigation lancée par la page (défi qui se résout seul en
-// JavaScript puis recharge, redirection en JavaScript, meta refresh) est coupée sans connexion et arrête l'essai en
-// `blocked_by_protection` (`self_navigation`). Attendre ne franchit donc jamais un défi.
+// lu au niveau réseau ; compressé, lu seulement si sa taille décodée, vue par CDP, est bornée), avant toute attente du
+// rendu ; le DOM rendu n'est classé qu'ensuite. Seule la navigation du cadre principal demandée par l'exécuteur part :
+// une navigation lancée par la page (défi qui se résout seul en JavaScript puis recharge, défi muet sans aucun signal
+// dans son contenu, redirection en JavaScript, meta refresh), vers un domaine de l'API comme vers un hôte hors API
+// (éditeur de défi), est coupée sans connexion et arrête l'essai en `blocked_by_protection` (`self_navigation`).
+// Attendre ne franchit donc jamais un défi. Limite assumée (INV6) : une redirection JS ou un meta refresh d'un site SAIN
+// (langue, URL canonique) arrête aussi l'essai, sans réparation ; le détail `self_navigation` le dit, et la stratégie
+// doit viser l'URL finale.
 import {
   boundedEvidence,
   classifyExchange,
@@ -31,7 +35,7 @@ import {
 import { DslError } from '@runtime/core';
 import { DomainNotAllowedError, guardedGoto, type BrowserEgress, type SsrfGuard } from '@runtime/core/net';
 import type { Page, Request, Response } from 'playwright-core';
-import { boundedContent, boundedDocumentBody, boundedRawBody, TOO_LARGE } from '../browser/bounded.js';
+import { boundedContent, boundedDocumentBody, boundedRawBody, TOO_LARGE, trackDecodedSizes, type DecodedSizes } from '../browser/bounded.js';
 import type { BrowserPool } from '../browser/pool.js';
 import { hostAllowed, isMainNavigation, openRunContext, trackStrategyRequests, type RunContext, type StrategyRequests } from '../browser/run-context.js';
 
@@ -87,10 +91,13 @@ type NavigationGuard = {
   during<T>(fn: () => Promise<T>, served?: () => HttpExchange | undefined): Promise<T>;
   /** Refus à lever quand une navigation non demandée a été tentée. */
   refusal(served?: HttpExchange): TransportRefusal;
+  /** Tailles décodées des documents de la page (suivi CDP) ; absent sans session CDP (corps compressé alors non lu). */
+  readonly sizes?: DecodedSizes;
 };
 
-function navigationGuard(): NavigationGuard & { bind(page: Page): void; admit(request: Request): boolean } {
+function navigationGuard(): NavigationGuard & { bind(page: Page, sizes?: DecodedSizes): void; admit(request: Request): boolean } {
   let page: Page | undefined;
+  let sizes: DecodedSizes | undefined;
   let expected = false;
   let attempted = false;
   let notify: () => void = () => undefined;
@@ -103,8 +110,12 @@ function navigationGuard(): NavigationGuard & { bind(page: Page): void; admit(re
       served === undefined ? undefined : boundedEvidence(served),
     );
   return {
-    bind: (p) => {
+    bind: (p, s) => {
       page = p;
+      sizes = s;
+    },
+    get sizes() {
+      return sizes;
     },
     admit(request) {
       if (page === undefined) return true;
@@ -155,8 +166,14 @@ async function withRunContext(
       egressServer: options.egress.server,
       allowedHosts: options.spec.request.allowed_hosts,
       admit: async (request) => nav.admit(request),
+      // Navigation lancée par la page vers un hôte hors API (redirection JS d'un défi vers son éditeur) : coupée par la
+      // politique de domaines sans passer par `admit`, elle compte comme toute navigation non demandée.
+      onViolation: (_host, request) => {
+        if (request !== undefined) nav.admit(request);
+      },
     });
-    nav.bind(rc.page);
+    const cdp = await rc.context.newCDPSession(rc.page).catch(() => undefined);
+    nav.bind(rc.page, cdp === undefined ? undefined : await trackDecodedSizes(cdp).catch(() => undefined));
     const strategy = trackStrategyRequests(rc.context, options.spec.request.allowed_hosts);
     const onAbort = () => void rc.close();
     options.signal.addEventListener('abort', onAbort, { once: true });
@@ -199,7 +216,7 @@ async function requestedNavigation(page: Page, url: string, options: BrowserExec
  * Corps vide si sa taille est inconnue ; au-delà du plafond, `response_too_large`.
  */
 async function servedDocument(nav: Navigation, maxBytes: number, guardNav: NavigationGuard): Promise<HttpExchange> {
-  const raw = await guardNav.during(() => boundedDocumentBody(nav.response, maxBytes));
+  const raw = await guardNav.during(() => boundedDocumentBody(nav.response, maxBytes, undefined, guardNav.sizes));
   return { status: nav.status, headers: nav.headers, body: raw === undefined ? '' : capped(raw), url: nav.response.url() };
 }
 
