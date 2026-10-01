@@ -1,12 +1,25 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Appel d'API sans exception : une réponse d'erreur ou une coupure réseau deviennent un résultat typé, avec la clé i18n du
 // message à afficher. Le serveur renvoie des codes stables (`{ error: { code } }`), jamais des phrases : la console les
-// traduit (06 § 4.1). Un code inconnu retombe sur le message du statut HTTP.
+// traduit (06 § 4.1). Un code inconnu retombe sur le message du statut HTTP. `invalid_input` : entrée d'un run hors
+// `input_schema` (05 § 4.2) ; `invalid_request` : validation du schéma d'une requête de l'API de la console (corps ou paramètres).
 
 export type CallResult<T> = { ok: true; data: T; status: number } | { ok: false; status: number; code: string | null; messageKey: string };
 
-/** Codes d'erreur ayant leur propre message (`errors.<code>`). */
-const KNOWN_CODES = new Set(['invalid_input', 'queue_full', 'account_site_ack_required', 'not_found', 'conflict', 'rate_limited', 'forbidden']);
+/** Codes d'erreur ayant leur propre message (`errors.<code>`) ; un 403 `reauth_failed` n'est pas un défaut de droit. */
+const KNOWN_CODES = new Set([
+  'invalid_input',
+  'invalid_request',
+  'queue_full',
+  'account_site_ack_required',
+  'not_found',
+  'conflict',
+  'rate_limited',
+  'forbidden',
+  'reauth_failed',
+  'too_many_attempts',
+  'too_many_pairing_codes',
+]);
 
 /** Code stable d'une erreur `{ error: { code } }`, sinon null. */
 export function errorCodeOf(body: unknown): string | null {

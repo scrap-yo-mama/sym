@@ -234,6 +234,9 @@ export function useWebhooks() {
 }
 
 
+/** Clé i18n du message affiché quand le mot de passe actuel n'est pas saisi. */
+const PASSWORD_REQUIRED = 'settings.extension.passwordRequired';
+
 /** Extension et sessions : code d'appairage (mot de passe exigé), appareils, domaines connectés, révocation. */
 export function useExtensionSettings() {
   const devices = useResource<Schemas['ExtensionDeviceList']>(() => call(() => getApi().GET('/api/extension/devices')));
@@ -243,8 +246,13 @@ export function useExtensionSettings() {
   const pairingBusy = ref(false);
 
   async function createPairingCode(currentPassword: string): Promise<boolean> {
-    pairingBusy.value = true;
     failure.value = null;
+    // Champ vide : le serveur répondrait 400 (schéma) ; on le dit ici, sans requête (F-20261001-UX01).
+    if (currentPassword === '') {
+      failure.value = PASSWORD_REQUIRED;
+      return false;
+    }
+    pairingBusy.value = true;
     const result: CallResult<Schemas['ExtensionPairingCode']> = await call(() =>
       getApi().POST('/api/extension/pairing-codes', { body: { currentPassword } }),
     );

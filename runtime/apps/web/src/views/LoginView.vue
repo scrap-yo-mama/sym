@@ -9,6 +9,7 @@ import { Card, CardContent, CardDescription, CardHeader } from '@/components/ui/
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { signIn, useSession, type SignInFailure } from '@/composables/useSession';
+import { readFieldValue } from '@/lib/form-field';
 import { safeRedirect } from '@/router';
 
 const { t } = useI18n();
@@ -30,11 +31,13 @@ const errorKey = computed<string | null>(() => {
   return null;
 });
 
-async function submit(): Promise<void> {
+async function submit(event: Event): Promise<void> {
   if (submitting.value) return;
   submitting.value = true;
   failure.value = null;
-  const result = await signIn(email.value.trim(), password.value);
+  // Valeurs lues dans le DOM : l'autoremplissage du navigateur ne déclenche pas toujours `input` (F-20261001-UX01).
+  const form = event.currentTarget instanceof HTMLFormElement ? event.currentTarget : null;
+  const result = await signIn(readFieldValue(form, 'email', email.value).trim(), readFieldValue(form, 'password', password.value));
   submitting.value = false;
   if (result.ok) {
     password.value = '';

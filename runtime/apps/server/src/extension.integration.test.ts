@@ -104,7 +104,12 @@ describe('appairage (07 § 1)', () => {
     const cookieU = await signIn(srv, user);
     const wrong = await srv.app.inject({ method: 'POST', url: '/api/extension/pairing-codes', headers: { cookie: cookieU, origin: PUBLIC_URL }, payload: { currentPassword: 'zz_test_wrong_password' } });
     expect(wrong.statusCode).toBe(403);
+    expect(wrong.json()).toEqual({ error: { code: 'reauth_failed', message: expect.any(String) } });
     expect(wrong.body).not.toMatch(/"code":"[0-9A-Z]{5}-/);
+    // Champ vide (F-20261001-UX01) : validation de schéma, code stable `invalid_request` que la console traduit ; aucun code créé.
+    const empty = await srv.app.inject({ method: 'POST', url: '/api/extension/pairing-codes', headers: { cookie: cookieU, origin: PUBLIC_URL }, payload: { currentPassword: '' } });
+    expect(empty.statusCode).toBe(400);
+    expect(empty.json()).toEqual({ error: { code: 'invalid_request', message: expect.any(String) } });
     const none = await srv.app.inject({ method: 'POST', url: '/api/extension/pairing-codes', payload: { currentPassword: user.password } });
     expect(none.statusCode).toBe(401);
   });

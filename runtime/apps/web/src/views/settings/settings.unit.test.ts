@@ -222,13 +222,30 @@ describe('Réglages > Extension et sessions', () => {
     });
     const extension = useExtensionSettings();
     expect(await extension.createPairingCode('mauvais')).toBe(false);
-    expect(extension.failure.value).toBe('errors.forbidden');
+    expect(extension.failure.value).toBe('errors.reauth_failed');
     expect(extension.pairing.value).toBeNull();
     expect(await extension.createPairingCode('bon')).toBe(true);
     expect(extension.pairing.value).toEqual({ code: 'ABCD-1234', expiresAt: '2026-10-01T10:10:00Z' });
     extension.dismissPairing();
     expect(extension.pairing.value).toBeNull();
     expect(calls).toHaveLength(2);
+  });
+
+  test('code d’appairage : un mot de passe vide est refusé en local, sans aucune requête (F-20261001-UX01)', async () => {
+    const calls = installFakeServer({ 'POST /api/extension/pairing-codes': () => json(400, { error: { code: 'invalid_request', message: 'x' } }) });
+    const extension = useExtensionSettings();
+    expect(await extension.createPairingCode('')).toBe(false);
+    expect(extension.failure.value).toBe('settings.extension.passwordRequired');
+    expect(extension.pairing.value).toBeNull();
+    expect(calls).toHaveLength(0);
+    expect(extension.pairingBusy.value).toBe(false);
+  });
+
+  test('code d’appairage : une validation du serveur (invalid_request) s’affiche comme une saisie à corriger, pas comme une erreur générique', async () => {
+    installFakeServer({ 'POST /api/extension/pairing-codes': () => json(400, { error: { code: 'invalid_request', message: 'x' } }) });
+    const extension = useExtensionSettings();
+    expect(await extension.createPairingCode('x')).toBe(false);
+    expect(extension.failure.value).toBe('errors.invalid_request');
   });
 
   test('révoquer un appareil et déconnecter un domaine relisent les listes', async () => {

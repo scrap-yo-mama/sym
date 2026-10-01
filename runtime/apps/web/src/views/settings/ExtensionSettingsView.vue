@@ -14,6 +14,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { useExtensionSettings } from '@/composables/useSettings';
+import { readFieldValue } from '@/lib/form-field';
 import { formatDateTime } from '@/lib/format';
 
 const { t, locale } = useI18n();
@@ -31,9 +32,19 @@ onServerPrefetch(async () => {
 const password = ref('');
 const date = (iso: string | null): string => formatDateTime(iso, locale.value) ?? t('settings.extension.never');
 
-async function createCode(): Promise<void> {
-  const value = password.value;
-  password.value = ''; // le mot de passe ne reste pas dans le champ après l'envoi
+/**
+ * Le champ est lu dans le DOM, pas seulement dans la ref : l'autoremplissage du navigateur le remplit sans événement
+ * `input` (F-20261001-UX01). Champ vide : message local, aucune requête
+ * (le focus ne bouge pas : seuls les quatre endroits de 06 § 3 le déplacent d'eux-mêmes).
+ */
+async function createCode(event: Event): Promise<void> {
+  const form = event.currentTarget instanceof HTMLFormElement ? event.currentTarget : null;
+  const field = form?.querySelector<HTMLInputElement>('#pairing-password') ?? null;
+  const value = readFieldValue(form, 'currentPassword', password.value);
+  if (value !== '') {
+    password.value = ''; // le mot de passe ne reste pas dans le champ après l'envoi
+    if (field) field.value = '';
+  }
   await extension.createPairingCode(value);
 }
 </script>
@@ -52,7 +63,7 @@ async function createCode(): Promise<void> {
       <p class="text-sm text-muted-foreground">{{ t('settings.extension.pairingHelp') }}</p>
       <div class="flex flex-col gap-1">
         <Label for="pairing-password">{{ t('settings.extension.currentPassword') }}</Label>
-        <Input id="pairing-password" type="password" class="max-w-xs" autocomplete="current-password" :model-value="password" @update:model-value="(value: string | number) => (password = String(value))" />
+        <Input id="pairing-password" type="password" name="currentPassword" class="max-w-xs" autocomplete="current-password" :model-value="password" @update:model-value="(value: string | number) => (password = String(value))" />
       </div>
       <div>
         <Button type="submit" class="aria-disabled:pointer-events-none aria-disabled:opacity-50" :aria-disabled="pairingBusy">{{ t('settings.extension.createCode') }}</Button>

@@ -120,6 +120,7 @@ describe('assistant de premier démarrage', () => {
     const res = await srv.app.inject({
       method: 'POST',
       url: '/api/setup',
+      headers: { 'accept-language': 'fr-FR,fr;q=0.9,en;q=0.8' },
       payload: { token: srv.bootstrapToken, email: 'zz_test_owner@example.test', password: 'zz_test_long_password_ok' },
     });
     expect(res.statusCode).toBe(201);
@@ -128,6 +129,10 @@ describe('assistant de premier démarrage', () => {
     expect(body.reminder).toMatch(/MASTER_KEY/);
     expect(res.body).not.toContain(srv.bootstrapToken);
     expect(await auditRows(srv, 'setup.owner_created')).toEqual([expect.objectContaining({ actor_user_id: body.userId, outcome: 'success' })]);
+    // Langue du navigateur de l'assistant retenue pour l'owner (F-20261001-UX01) : sans elle, `users.locale` vaudrait `en` et
+    // écraserait la langue du navigateur à la connexion.
+    const owner = await withClient(srv.db.url, async (c) => (await c.query<{ locale: string }>("SELECT locale FROM users WHERE role = 'owner'")).rows);
+    expect(owner).toEqual([{ locale: 'fr' }]);
 
     const again = await srv.app.inject({
       method: 'POST',
