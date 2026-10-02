@@ -51,6 +51,7 @@ Contrat : `runtime/packages/contracts` (`@sym/contracts`, MIT, sous-chemin `brow
 - REST (2.2) : `auth = new ApiKeyAuthenticator(pgApiKeyStore(pool))` remplit `GatewayDeps.auth` (`authenticate`) ; ou `authorizeRequest(auth, request.headers, scope)` → 401 `unauthorized` / 403 `forbidden` + `requiredScope`.
 - Jetons (2.2, 2.3) : `tokens = new ConnectTokens(keyring)` (`loadKeyring`) remplit `GatewayDeps.tokens` (`issue`, 300 s, 1 h au plus). Upgrade WSS et `json/version` (2.3) : `authorizeConnection({auth, tokens, session}, {sessionId, protocol, headers, query})` en `preValidation`, avant tout octet vers le nœud ; `session(id)` lit `tenant_id` et `state`.
 - Admin d'instance : `resolveBootstrapToken`, `setupFirstAdmin(store, token, form)` ; la table de l'admin et `/setup` arrivent avec la console (3.5).
+- Quotas et file (tâche 2.4) : admission en base `packages/db/src/admission.ts` (file = sessions `pending` sans nœud, verrou consultatif, nœud au plus faible taux d'occupation, poids en unités de `capacity.ts`), côté passerelle `apps/gateway/src/admission/` (`Retry-After`) ; tests `apps/gateway/src/api/quotas.integration.test.ts`.
 
 ## Versions et dépendances
 

@@ -5,7 +5,7 @@
 //   - tokens : `ConnectTokens` de la tâche 2.1 (jetons HMAC liés à une session et à un protocole, `loadKeyring`) ;
 //   - SessionLauncher : démarrage, libération et prolongation sur le nœud propriétaire. Mode `all` : le superviseur de
 //     sessions du nœud dans le même processus (tâche 1.2) ; modes séparés : `POST /internal/sessions` du nœud (04b § 8),
-//     choix du nœud et file (tâche 2.4).
+//     choix du nœud et file (tâche 2.4 : la passerelle place la session sur un nœud avant de la lancer).
 import type { ApiKeyAuthenticator, ApiScope, ConnectTokens, Principal } from '@sym-browser/core';
 import type pg from 'pg';
 import type { CreateSessionRequest, SessionType } from '@sym/contracts/browser';
@@ -14,8 +14,11 @@ import type { CreateSessionRequest, SessionType } from '@sym/contracts/browser';
 export type Scope = ApiScope;
 export type { Principal };
 
-type LaunchRequest = {
+export type LaunchRequest = {
   sessionId: string;
+  /** Nœud choisi par l'admission (tâche 2.4) et son URL privée. */
+  nodeId: string;
+  nodeUrl: string;
   tenantId: string;
   type: SessionType;
   region: string | null;
@@ -42,8 +45,12 @@ export type GatewayDeps = {
   launcher: SessionLauncher;
   /** URL publique de la passerelle (`https://hôte`) : base des `connectUrls` (`wss://hôte/v1/sessions/{id}/…`). */
   publicUrl: string;
-  /** Attente maximale d'un démarrage (`QUEUE_TIMEOUT_MS`, défaut 30 000). */
+  /** Attente maximale d'un démarrage, file comprise (`QUEUE_TIMEOUT_MS`, défaut 30 000). */
   queueTimeoutMs?: number;
+  /** Bornes de la file (`QUEUE_MAX`, `QUEUE_MAX_PER_TENANT` ; défauts 50 et 10). */
+  queue?: { queueMax?: number; queueMaxPerTenant?: number };
+  /** Période de service de la file tant qu'une demande attend (défaut 250 ms). */
+  queuePollMs?: number;
   /** Défauts de l'instance (04 § 3). */
   defaults?: { timeoutSeconds?: number; idleTimeoutSeconds?: number };
   /** Plateforme servie (`GET /v1/version`), défaut `process.platform`. */

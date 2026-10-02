@@ -3,3 +3,4 @@
 // Dépendances : clés et jetons de la tâche 2.1 (ApiKeyAuthenticator, ConnectTokens), SessionLauncher : voir GatewayDeps.
 export { createGatewayApi } from './app.js';
 export type { GatewayDeps, Scope, SessionLauncher } from './types.js';
+export type { GatewayDeps, LaunchRequest, Principal, Scope, SessionLauncher } from './types.js';

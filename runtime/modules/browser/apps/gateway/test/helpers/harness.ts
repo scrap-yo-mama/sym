@@ -5,6 +5,8 @@
 //     sur `pgApiKeyStore` ;
 //   - jetons de connexion `ConnectTokens` sous une MASTER_KEY jetable ;
 // et une seule doublure : SessionLauncher, nœud simulé qui écrit `running` comme le superviseur du nœud (tâche 1.2).
+// Quotas (tâche 2.4) : sessions simultanées des clients A et B à 1 000 sauf demande, file et nœuds réglables ; le nœud
+// simulé écrit `running` sur le nœud choisi par l'admission.
 // Chaque réponse est validée contre l'OpenAPI publiée (statut déclaré, corps conforme au schéma) : « 0 écart schéma/réponse ».
 import { randomBytes } from 'node:crypto';
 import { ApiKeyAuthenticator, ConnectTokens, generateMasterKey, MasterKey, newApiKey } from '@sym-browser/core';
@@ -14,7 +16,7 @@ import { Ajv2020, type ValidateFunction } from 'ajv/dist/2020.js';
 import type { FastifyInstance, InjectOptions } from 'fastify';
 import pg from 'pg';
 import { inject } from 'vitest';
-import { createGatewayApi, type GatewayDeps, type Scope, type SessionLauncher } from '../../src/api/index.js';
+import { createGatewayApi, type GatewayDeps, type LaunchRequest, type Scope, type SessionLauncher } from '../../src/api/index.js';
 
 const PUBLIC_URL = 'https://b.example.com';
 
@@ -26,7 +28,7 @@ export type Harness = {
   tenantA: string;
   tenantB: string;
   keys: Record<'a' | 'aRead' | 'b', string>;
-  launcher: { mode: LauncherMode; launched: string[]; released: string[] };
+  launcher: { mode: LauncherMode; launched: string[]; released: string[]; nodes: Map<string, string>; requests: Map<string, LaunchRequest> };
   call: (options: { method: InjectOptions['method']; url: string; key?: keyof Harness['keys'] | null; body?: unknown; headers?: Record<string, string> }) => Promise<Reply>;
   close: () => Promise<void>;
 };
@@ -77,10 +79,16 @@ function responseChecker(): (method: string, url: string, status: number, body: 
   };
 }
 
+export type HarnessNode = { id: string; region: string; slotsTotal: number };
+
 export type HarnessOptions = {
   queueTimeoutMs?: number;
   maxSessionSeconds?: number;
-  /** URL privée du nœud enregistré (relais WSS, tâche 2.3) ; défaut : nœud fictif injoignable. */
+  maxConcurrentSessions?: number;
+  queue?: GatewayDeps['queue'];
+  /** Nœuds enregistrés (tâche 2.4) ; défaut : un nœud `node-a` à Francfort. */
+  nodes?: HarnessNode[];
+  /** URL privée du premier nœud enregistré (relais WSS, tâche 2.3) ; défaut : nœud fictif injoignable. */
   nodeUrl?: string;
   /** Jetons de connexion réels (HMAC) au lieu des jetons de test numérotés. */
   tokens?: GatewayDeps['tokens'];
@@ -97,8 +105,8 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
   const pool = new pg.Pool({ connectionString: url.toString(), max: 8 });
 
   const one = async (sql: string, params: unknown[] = []): Promise<string> => (await pool.query<{ id: string }>(sql, params)).rows[0]?.id ?? '';
-  const tenantA = await one('INSERT INTO tenants (name, max_session_seconds) VALUES ($1, $2) RETURNING id', ['a', options.maxSessionSeconds ?? 3600]);
-  const tenantB = await one("INSERT INTO tenants (name) VALUES ('b') RETURNING id");
+  const tenantA = await one('INSERT INTO tenants (name, max_session_seconds, max_concurrent_sessions) VALUES ($1, $2, $3) RETURNING id', ['a', options.maxSessionSeconds ?? 3600, options.maxConcurrentSessions ?? 1000]);
+  const tenantB = await one("INSERT INTO tenants (name, max_concurrent_sessions) VALUES ('b', 1000) RETURNING id");
   /** Clé réelle (argon2id) : la valeur en clair n'existe que dans ce banc, jamais en base. */
   const apiKey = async (tenantId: string, scopes: Scope[]): Promise<string> => {
     const created = await newApiKey({ scopes });
@@ -111,26 +119,31 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
     b: await apiKey(tenantB, ['sessions:write', 'sessions:read']),
   };
 
-  await recordHeartbeat(pool, {
-    nodeId: 'node-a',
-    url: options.nodeUrl ?? 'http://node-a.internal:3000',
-    region: 'frankfurt',
-    playwrightVersion: '1.63.0',
-    chromiumVersion: '153.0.8010.12',
-    appVersion: '0.0.0',
-    slotsTotal: 64,
-    slotsFree: 64,
-    rssBytes: null,
-    limitBytes: null,
-  });
+  for (const [index, n] of (options.nodes ?? [{ id: 'node-a', region: 'frankfurt', slotsTotal: 4096 }]).entries()) {
+    await recordHeartbeat(pool, {
+      nodeId: n.id,
+      url: index === 0 && options.nodeUrl !== undefined ? options.nodeUrl : `http://${n.id}.internal:3000`,
+      region: n.region,
+      playwrightVersion: '1.63.0',
+      chromiumVersion: '153.0.8010.12',
+      appVersion: '0.0.0',
+      slotsTotal: n.slotsTotal,
+      slotsFree: n.slotsTotal,
+      rssBytes: null,
+      limitBytes: null,
+    });
+  }
 
-  const state = { mode: 'ok' as LauncherMode, launched: [] as string[], released: [] as string[] };
+  const state = { mode: 'ok' as LauncherMode, launched: [] as string[], released: [] as string[], nodes: new Map<string, string>(), requests: new Map<string, LaunchRequest>() };
   const launcher: SessionLauncher = {
-    async launch({ sessionId }) {
+    async launch(request) {
+      const { sessionId } = request;
       state.launched.push(sessionId);
+      state.nodes.set(sessionId, request.nodeId);
+      state.requests.set(sessionId, request);
       if (state.mode === 'fail') return { ok: false, code: 'launch_failed' };
       if (state.mode === 'hang') return new Promise(() => undefined);
-      const outcome = await transitionSession(pool, { sessionId, to: 'running', reason: null, nodeId: 'node-a' });
+      const outcome = await transitionSession(pool, { sessionId, to: 'running', reason: null, nodeId: request.nodeId });
       return outcome.ok ? { ok: true } : { ok: false, code: 'launch_failed' };
     },
     async release(sessionId) {
@@ -153,6 +166,8 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
     launcher,
     publicUrl: PUBLIC_URL,
     queueTimeoutMs: options.queueTimeoutMs ?? 2_000,
+    ...(options.queue === undefined ? {} : { queue: options.queue }),
+    queuePollMs: 25,
   };
   const app = await createGatewayApi(deps);
   await app.ready();

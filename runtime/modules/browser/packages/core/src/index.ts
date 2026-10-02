@@ -5,6 +5,8 @@ export * from './crypto/index.js';
 // configuration et modes (0.4).
 // configuration et modes (0.4), authentification : clés d'API, scopes, jetons de connexion, premier démarrage (2.1).
 export * from './auth/index.js';
+// Noyau de SYM Browser (cdc/sym-browser 03 § 9) : chiffrement (tâche 0.3), configuration et modes (0.4), journaux masqués,
+// constantes de capacité mesurées (0.6).
 // Tâche 0.4 : catalogue d'environnement, chargement validé, hôte de service (`/healthz`, `/readyz`, drainage).
 export * from './crypto/index.js';
 // configuration, modes et hôte de service (0.4), stockage des objets (3.0).
