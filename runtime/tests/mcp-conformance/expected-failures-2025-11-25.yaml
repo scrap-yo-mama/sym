@@ -50,7 +50,8 @@ server:
   - server-stateless:sep-2575-http-server-no-independent-requests-on-stream
   - server-stateless:sep-2575-server-no-log-without-loglevel
   # [démo] la suite change la liste d'outils par un outil de démonstration ; SYM la change par sa base (épinglage,
-  # création d'API) et publie list_changed à la relecture de l'empreinte (10 s), testé par mcp.integration.test.ts.
+  # création d'API) et publie list_changed à l'utilisateur concerné à la relecture de son empreinte (10 s) ; livraison sur
+  # le flux prouvée par mcp.integration.test.ts avec le client officiel abonné (subscriptions/listen, ère 2026-07-28).
   - server-stateless:sep-2575-server-sends-tools-list-changed-on-subscription
   # Sans état (05 § 1) : aucune session 2025, donc pas de flux multiples par session (avertissement SHOULD).
   - server-sse-multiple-streams

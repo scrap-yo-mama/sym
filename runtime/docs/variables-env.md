@@ -41,7 +41,7 @@ des cinq premières est posée. Une autorité de certification privée pour Post
 | `DISABLE_MCP` | server | facultative | false | `true` : aucune route `/mcp` (serveur MCP coupé) ; l’API REST et la console restent servies. |
 | `MCP_TOOL_EXPOSURE` | server | facultative | pinned | Outils par API du serveur MCP : `generic` (aucun, tout passe par `run_api` et `list_apis`), `pinned` (les API épinglées pour le MCP, 20 au plus) ou `all` (toutes, 20 au plus ; au-delà de 30 API, `pinned` est conseillé). |
 | `MCP_ALLOWED_HOSTS` | server | facultative | l’hôte de `PUBLIC_URL` | Noms d’hôte supplémentaires (sans port), séparés par des virgules, admis dans l’en-tête `Host` d’une requête MCP (réseau interne, autre nom de l’instance) ; tout autre hôte reçoit 403. |
-| `MCP_ALLOWED_ORIGINS` | server | facultative | l’hôte de `PUBLIC_URL` | Noms d’hôte supplémentaires (sans schéma ni port), séparés par des virgules, admis dans l’en-tête `Origin` d’une requête MCP ; une origine présente et non admise reçoit 403, une requête sans `Origin` (client MCP hors navigateur) est acceptée. |
+| `MCP_ALLOWED_ORIGINS` | server | facultative | l’origine de `PUBLIC_URL` | Origines supplémentaires admises dans l’en-tête `Origin` d’une requête MCP, séparées par des virgules : origine complète (`https://hote:port`, comparée en entier : schéma, hôte et port, comme celle de `PUBLIC_URL`) ou, plus lâche, nom d’hôte seul (tout schéma et tout port de cet hôte) ; une origine présente et non admise reçoit 403, une requête sans `Origin` (client MCP hors navigateur) est acceptée. |
 
 ## Accès
 

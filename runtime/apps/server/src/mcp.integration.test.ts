@@ -3,7 +3,9 @@
 // (@modelcontextprotocol/client v2, ères 2025 et 2026-07-28) : critères de 05 § 4.4 (exposition generic/pinned/all,
 // enveloppe RunResult, 20 items puis get_items sans doublon, run warning en succès, API bloquée en erreur texte sans
 // structuredContent, entrée invalide sans run, Origin et Host, 401 avec WWW-Authenticate vers la PRM RFC 9728, 403
-// insufficient_scope, B contre A), volets MCP des tests de 2.14 (assert_tool_definitions_budget, assert_brief_report_no_echo
+// insufficient_scope, B contre A, métadonnées seules pour l'admin), 08b § 3 (outils par API de l'appelant seulement, liste
+// réduite aux scopes de la clé), signal list_changed livré au client abonné (subscriptions/listen : par utilisateur,
+// plafonné, revalidé), erreurs hors outil (outil inconnu, exception interne), volets MCP des tests de 2.14 (assert_tool_definitions_budget, assert_brief_report_no_echo
 // sur les erreurs). Le worker est simulé en base (run terminé, dataset écrit) : ces tests portent sur le contrat MCP.
 import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
@@ -96,8 +98,34 @@ function completeNextRun(apiId: string, items: Record<string, unknown>[], degrad
   })();
 }
 
+const ACTIVE_STATES = ['queued', 'running', 'waiting_tunnel'];
+
+/**
+ * Enveloppe terminale d'une exécution : attend le worker simulé, puis, si l'attente synchrone (MAX_WAIT_SECONDS = 3) a rendu
+ * la main avant lui (machine chargée, D-66), relit le run par get_run. Les assertions portent alors sur l'état final.
+ */
+async function settle(client: Client, result: ToolResult, done: Promise<string>): Promise<ToolResult> {
+  await done;
+  const env = result.structuredContent as { run_id?: string; state?: string } | undefined;
+  if (result.isError === true || env?.run_id === undefined || !ACTIVE_STATES.includes(String(env.state))) return result;
+  return call(client, 'get_run', { run_id: env.run_id });
+}
+
+/** Attend qu'une condition devienne vraie (sondage court), sinon échoue au bout de `ms`. */
+async function until(check: () => boolean, ms = 5_000, what = 'condition'): Promise<void> {
+  const deadline = Date.now() + ms;
+  while (!check()) {
+    if (Date.now() > deadline) throw new Error(`délai dépassé : ${what}`);
+    await new Promise((r) => setTimeout(r, 20));
+  }
+}
+
 const setExposure = async (apiIds: string[], exposed: boolean) =>
   withClient(srv.db.url, async (c) => void (await c.query('UPDATE apis SET mcp_exposed = $2 WHERE id = ANY($1::uuid[])', [apiIds, exposed])));
+
+/** Mode pinned : seule cette API de son propriétaire est épinglée (l'outil api_<slug> existe quel que soit le reste du catalogue). */
+const exposeOnly = async (party: Party, apiId: string) =>
+  withClient(srv.db.url, async (c) => void (await c.query('UPDATE apis SET mcp_exposed = (id = $1) WHERE owner_id = $2', [apiId, party.user.id])));
 
 /** Fixe les API visibles de l'acteur à exactement `n` (les autres de l'acteur sont supprimées). */
 async function resetCatalog(owner: Party): Promise<void> {
@@ -115,7 +143,8 @@ beforeAll(async () => {
   srv = await startTestServer(
     'mcp',
     { MAX_WAIT_SECONDS: '3', MAX_CONCURRENT_RUNS: '1000', MAX_ACTIVE_RUNS_PER_USER: '1000', MAX_RUNS_PER_KEY_PER_MINUTE: '1000', MCP_ALLOWED_HOSTS: '127.0.0.1' },
-    { rest: { pollMs: 40 } },
+    // Flux subscriptions/listen : clé relue toutes les 100 ms, 2 flux par clé et 3 par utilisateur (défauts de production : 30 s, 4, 8).
+    { rest: { pollMs: 40 }, mcp: { listenRevalidateMs: 100, maxListenPerKey: 2, maxListenPerUser: 3 } },
   );
   const o = await runSetup(srv);
   const party = async (user: TestUser): Promise<Party> => {
@@ -164,6 +193,18 @@ describe('accès au serveur MCP (05 § 3, 13 § 11) : clé d’API, PRM RFC 9728
     expect((await rpc({ origin: 'https://evil.example' })).statusCode).toBe(403);
     expect((await rpc(auth)).statusCode).toBe(200);
     expect((await rpc({ ...auth, origin: PUBLIC_URL })).statusCode).toBe(200);
+  });
+
+  test('Origin comparée en entier (schéma, hôte, port) à celle de PUBLIC_URL : même hôte sur un autre port ou en https → 403', async () => {
+    const auth = { authorization: `Bearer ${a.key}` };
+    const own = new URL(PUBLIC_URL);
+    expect((await rpc({ ...auth, origin: `${own.protocol}//${own.hostname}:4999` })).statusCode).toBe(403);
+    expect((await rpc({ ...auth, origin: `https://${own.host}` })).statusCode).toBe(403);
+    expect((await rpc({ ...auth, origin: `${own.protocol}//${own.hostname}` })).statusCode).toBe(own.port === '' ? 200 : 403);
+    expect((await rpc({ ...auth, origin: own.origin })).statusCode).toBe(200);
+    // Le refus ne recopie pas l'origine reçue.
+    const refused = await rpc({ ...auth, origin: 'http://localhost:4999' });
+    expect(refused.body).not.toContain('4999');
   });
 
   test('en-tête Host contrôlé : un hôte inconnu reçoit 403, aucune autre route n’est touchée', async () => {
@@ -223,7 +264,7 @@ describe('exposition des outils (05 § 1.1, § 4.4) : generic, pinned, all ; too
     mode('pinned');
     const apis: { id: string; slug: string }[] = [];
     for (let i = 0; i < 25; i += 1) apis.push(await seedApi(srv.db.url, a.user.id, { slug: `zz-test-pin-${String(i).padStart(2, '0')}` }));
-    // Épinglée pour le MCP = `mcp_exposed` (vrai par défaut en base, 0001) : 5 épinglées, 20 retirées.
+    // Épinglée pour le MCP = `mcp_exposed` (posé à faux à la création par REST et MCP) : 5 épinglées, 20 non épinglées.
     await setExposure(apis.slice(0, 5).map((x) => x.id), true);
     await setExposure(apis.slice(5).map((x) => x.id), false);
     // Une API épinglée d'autrui, privée : jamais dans la liste de A.
@@ -316,24 +357,140 @@ describe('exposition des outils (05 § 1.1, § 4.4) : generic, pinned, all ; too
     expect(modern.tools.map((t) => t.name).sort()).toEqual(legacy.tools.map((t) => t.name).sort());
   });
 
-  test('liste changée : le serveur publie notifications/tools/list_changed quand l’exposition change (subscriptions/listen)', async () => {
-    const notifier = srv.started.ctx.mcp!;
-    const published: number[] = [];
-    const off = notifier.onToolsChanged(() => published.push(Date.now()));
+  test('08b § 3 : une API instance d’un autre membre, même épinglée, n’est jamais un outil de A ; 20 API partagées de B ne retirent aucun outil de A', async () => {
+    await resetCatalog(a);
+    await resetCatalog(b);
+    const own: string[] = [];
+    for (let i = 0; i < 3; i += 1) own.push((await seedApi(srv.db.url, a.user.id, { slug: `zz-test-own-${i}` })).id);
+    await setExposure(own, true);
+    // Slugs de B placés avant ceux de A dans l'ordre alphabétique, partagés et épinglés (effet « ombre »).
+    const shared: string[] = [];
+    for (let i = 0; i < 20; i += 1) shared.push((await seedApi(srv.db.url, b.user.id, { slug: `zz-test-aaa-${String(i).padStart(2, '0')}`, visibility: 'instance' })).id);
+    await setExposure(shared, true);
     try {
-      await notifier.checkToolsChanged();
-      published.length = 0;
-      const api = await seedApi(srv.db.url, a.user.id, { slug: 'zz-test-list-changed' });
-      await notifier.checkToolsChanged();
-      await setExposure([api.id], true);
-      await notifier.checkToolsChanged();
-      expect(published.length).toBeGreaterThanOrEqual(1);
-      const n = published.length;
-      await notifier.checkToolsChanged();
-      expect(published.length).toBe(n);
+      for (const value of ['pinned', 'all'] as const) {
+        mode(value);
+        const { tools } = await (await connect(a.key)).listTools();
+        expect(tools.filter((t) => t.name.startsWith('api_')).map((t) => t.name).sort(), value).toEqual(['api_zz_test_own_0', 'api_zz_test_own_1', 'api_zz_test_own_2']);
+      }
+      // Les API partagées restent joignables par list_apis et run_api.
+      const listed = await call(await connect(a.key), 'list_apis', { q: 'zz-test-aaa-00' });
+      expect((listed.structuredContent as { apis: { slug: string }[] }).apis.map((x) => x.slug)).toEqual(['zz-test-aaa-00']);
     } finally {
-      off();
+      mode('pinned');
+      await resetCatalog(b);
     }
+  });
+
+  test('08b § 3 : tools/list ne montre que les outils que la clé peut appeler ; l’appel d’un outil masqué reste 403 insufficient_scope', async () => {
+    mode('pinned');
+    const api = await seedApi(srv.db.url, a.user.id, { slug: 'zz-test-scoped' });
+    await exposeOnly(a, api.id);
+    const names = async (scopes: string[]) => (await (await connect((await createKey(srv, a.cookie, a.user, scopes)).key)).listTools()).tools.map((t) => t.name).sort();
+    expect(await names(['apis:read'])).toEqual(['get_api', 'list_apis', 'report_problem']);
+    expect(await names(['apis:read', 'runs:read', 'datasets:read'])).toEqual(['get_api', 'get_items', 'get_run', 'list_apis', 'report_problem']);
+    expect(await names(['apis:run'])).toEqual(['api_zz_test_scoped', 'cancel_run', 'run_api']);
+    expect(await names(['apis:write'])).toEqual(['create_api', 'validate_schema']);
+    const readOnly = await createKey(srv, a.cookie, a.user, ['apis:read']);
+    const res = await rpc({ authorization: `Bearer ${readOnly.key}` }, { jsonrpc: '2.0', id: 9, method: 'tools/call', params: { name: 'api_zz_test_scoped', arguments: { page: 1 } } });
+    expect(res.statusCode).toBe(403);
+    expect(res.headers['www-authenticate']).toContain('scope="apis:run"');
+    expect(await count('SELECT count(*) FROM runs WHERE api_id = $1', [api.id])).toBe(0);
+  });
+});
+
+describe('liste d’outils changée (05 § 1.1) : subscriptions/listen, ère 2026-07-28', () => {
+  type Listener = { client: Client; received: number; sub: Awaited<ReturnType<Client['listen']>> };
+  const open: Listener[] = [];
+
+  /** Client moderne abonné aux changements de la liste d'outils ; compte les notifications reçues sur le flux. */
+  async function listen(key: string): Promise<Listener> {
+    const client = await connect(key, { era: 'modern' });
+    const listener = { client, received: 0 } as Listener;
+    client.setNotificationHandler('notifications/tools/list_changed', () => {
+      listener.received += 1;
+    });
+    listener.sub = await client.listen({ toolsListChanged: true });
+    open.push(listener);
+    return listener;
+  }
+
+  afterAll(async () => {
+    for (const { sub } of open) await sub.close().catch(() => undefined);
+  });
+
+  test('un client abonné reçoit notifications/tools/list_changed quand SA liste change, une seule fois par changement', async () => {
+    const runtime = srv.started.ctx.mcp!;
+    runtime.exposure = 'pinned';
+    const l = await listen(a.key);
+    expect(l.sub.honoredFilter).toMatchObject({ toolsListChanged: true });
+    await runtime.checkToolsChanged();
+    const api = await seedApi(srv.db.url, a.user.id, { slug: 'zz-test-list-changed' });
+    await runtime.checkToolsChanged();
+    await until(() => l.received === 1, 5_000, 'notification après la création');
+    await runtime.checkToolsChanged();
+    await setExposure([api.id], false);
+    await runtime.checkToolsChanged();
+    await until(() => l.received === 2, 5_000, 'notification après le désépinglage');
+    await new Promise((r) => setTimeout(r, 200));
+    expect(l.received).toBe(2);
+    await l.sub.close();
+  });
+
+  test('empreinte par utilisateur : un changement d’une API de B ne réveille pas A (aucun signal entre utilisateurs)', async () => {
+    const runtime = srv.started.ctx.mcp!;
+    const la = await listen(a.key);
+    const lb = await listen(b.key);
+    await runtime.checkToolsChanged();
+    const ofB = await seedApi(srv.db.url, b.user.id, { slug: 'zz-test-fp-b', visibility: 'instance' });
+    await runtime.checkToolsChanged();
+    await until(() => lb.received === 1, 5_000, 'notification de B');
+    const ofA = await seedApi(srv.db.url, a.user.id, { slug: 'zz-test-fp-a' });
+    await runtime.checkToolsChanged();
+    await until(() => la.received === 1, 5_000, 'notification de A');
+    await new Promise((r) => setTimeout(r, 200));
+    expect(la.received).toBe(1);
+    expect(lb.received).toBe(1);
+    await setExposure([ofA.id, ofB.id], false);
+    await la.sub.close();
+    await lb.sub.close();
+  });
+
+  test('flux ouvert avec une clé ensuite révoquée : fermé par la revalidation périodique', async () => {
+    const key = await createKey(srv, a.cookie, a.user, ['apis:read', 'apis:run']);
+    const l = await listen(key.key);
+    let ended: string | null = null;
+    void l.sub.closed.then((how) => {
+      ended = how;
+    });
+    await new Promise((r) => setTimeout(r, 300));
+    expect(ended).toBeNull();
+    await srv.app.inject({ method: 'DELETE', url: `/api/api-keys/${key.id}`, headers: { cookie: a.cookie, origin: PUBLIC_URL } });
+    await until(() => ended !== null, 5_000, 'fermeture du flux');
+  });
+
+  test('plafond de flux par clé et par utilisateur : une clé ne prend pas tous les abonnements ; les autres utilisateurs écoutent toujours', async () => {
+    // Utilisateur neuf : aucun flux des tests précédents (fermés côté client, rendus côté serveur à la fin de la connexion).
+    const c = await createUser(srv, 'zz_test_mcp_c@example.test');
+    const cookie = await signIn(srv, c);
+    const first = await createKey(srv, cookie, c, ['apis:read']);
+    const second = await createKey(srv, cookie, c, ['apis:read']);
+    const held = [await listen(first.key), await listen(first.key)];
+    await expect(listen(first.key)).rejects.toThrow();
+    held.push(await listen(second.key));
+    await expect(listen(second.key)).rejects.toThrow();
+    // B n'est pas privé du signal.
+    const other = await listen(b.key);
+    // Un flux fermé rend sa place.
+    await held[0]!.sub.close();
+    let reopened: Listener | null = null;
+    const deadline = Date.now() + 5_000;
+    while (reopened === null) {
+      reopened = await listen(first.key).catch(() => null);
+      if (reopened === null && Date.now() > deadline) throw new Error('place non rendue');
+      if (reopened === null) await new Promise((r) => setTimeout(r, 50));
+    }
+    for (const l of [...held.slice(1), other, reopened]) await l.sub.close();
   });
 });
 
@@ -343,8 +500,7 @@ describe('enveloppe RunResult (05 § 4.1, § 4.3, § 4.4)', () => {
     const items = Array.from({ length: 500 }, (_, i) => ({ title: `zz_test item ${i}`, price: i }));
     const client = await connect(a.key);
     const done = completeNextRun(api.id, items);
-    const result = await call(client, 'run_api', { slug: api.slug, input: { page: 1 }, wait_seconds: 3 });
-    await done;
+    const result = await settle(client, await call(client, 'run_api', { slug: api.slug, input: { page: 1 }, wait_seconds: 3 }), done);
     expect(result.isError ?? false).toBe(false);
     const env = result.structuredContent as { items: { title: string }[]; truncated: boolean; next_cursor: string; total: number; state: string; dataset_id: string; status: string; next_action: { tool: string } };
     expect(env).toMatchObject({ state: 'succeeded', status: 'sain', total: 500, truncated: true });
@@ -376,8 +532,7 @@ describe('enveloppe RunResult (05 § 4.1, § 4.3, § 4.4)', () => {
     const api = await seedApi(srv.db.url, a.user.id, { status: 'warning' });
     const client = await connect(a.key);
     const done = completeNextRun(api.id, [{ title: 'zz_test w' }], ['volume_anomaly']);
-    const result = await call(client, 'run_api', { slug: api.slug, input: {}, wait_seconds: 3 });
-    await done;
+    const result = await settle(client, await call(client, 'run_api', { slug: api.slug, input: {}, wait_seconds: 3 }), done);
     expect(result.isError ?? false).toBe(false);
     expect(result.structuredContent).toMatchObject({ status: 'warning', state: 'succeeded', degraded_reasons: ['volume_anomaly'], items: [{ title: 'zz_test w' }] });
     expect(String((result.structuredContent as { message: string }).message)).toMatch(/warning|Mention it/i);
@@ -412,7 +567,9 @@ describe('enveloppe RunResult (05 § 4.1, § 4.3, § 4.4)', () => {
     expect(err).toMatchObject({ code: 'invalid_input', retryable: true });
     // Arguments hors du schéma de l'outil : même forme d'erreur.
     expect(toolError(await call(client, 'run_api', { slug: api.slug, input: {}, zz_extra: 1 })).code).toBe('invalid_input');
-    expect(toolError(await call(client, `api_${api.slug.replaceAll('-', '_')}`, { page: 'x' })).code).toMatch(/invalid_input|not_found/);
+    // Outil api_<slug> d'une API épinglée explicitement : l'outil existe, l'entrée est refusée par le schéma de l'API.
+    await exposeOnly(a, api.id);
+    expect(toolError(await call(await connect(a.key), `api_${api.slug.replaceAll('-', '_')}`, { page: 'x' })).code).toBe('invalid_input');
     expect(await count('SELECT count(*) FROM runs WHERE api_id = $1', [api.id])).toBe(before);
   });
 
@@ -431,11 +588,10 @@ describe('enveloppe RunResult (05 § 4.1, § 4.3, § 4.4)', () => {
 
   test('outil api_<slug> : même effet que run_api sur cette API', async () => {
     const api = await seedApi(srv.db.url, a.user.id, { slug: 'zz-test-per-api' });
-    await setExposure([api.id], true);
+    await exposeOnly(a, api.id);
     const client = await connect(a.key);
     const done = completeNextRun(api.id, [{ title: 'zz_test per api' }]);
-    const result = await call(client, 'api_zz_test_per_api', { page: 2 });
-    await done;
+    const result = await settle(client, await call(client, 'api_zz_test_per_api', { page: 2 }), done);
     expect(result.structuredContent).toMatchObject({ state: 'succeeded', items: [{ title: 'zz_test per api' }] });
     expect(await count("SELECT count(*) FROM runs WHERE api_id = $1 AND input = '{\"page\": 2}'::jsonb AND trigger = 'mcp'", [api.id])).toBe(1);
   });
@@ -481,6 +637,40 @@ describe('enveloppe RunResult (05 § 4.1, § 4.3, § 4.4)', () => {
   });
 });
 
+describe('erreurs hors des outils (05 § 4.3) : outil inconnu, exception interne', () => {
+  test('outil inconnu ou disparu entre deux listes (api_<slug> retiré) : erreur de protocole -32602 (spécification MCP) dont data porte not_found et list_apis', async () => {
+    for (const era of ['legacy', 'modern'] as const) {
+      const client = await connect(a.key, { era });
+      for (const name of ['api_zz_test_gone_away', 'zz_test_unknown_tool']) {
+        const error = await client.callTool({ name, arguments: { page: 1 } }).then(
+          () => null,
+          (e: unknown) => e as { code?: number; message?: string; data?: Record<string, unknown> },
+        );
+        expect(error, `${era} ${name}`).not.toBeNull();
+        expect(error?.code, `${era} ${name}`).toBe(-32602);
+        expect(error?.data, `${era} ${name}`).toMatchObject({ code: 'not_found', retryable: false, next_action: { tool: 'list_apis', args: {} } });
+        expect(String(error?.data?.['what_to_do']), name).toMatch(/list_apis/);
+        expect(`${error?.message ?? ''} ${JSON.stringify(error?.data)}`, name).not.toContain(name);
+      }
+    }
+  });
+
+  test('exception dans un outil (base qui refuse la requête) : internal au format 05 § 4.3, aucun message interne (table, rôle, détail)', async () => {
+    const api = await seedApi(srv.db.url, a.user.id);
+    const { datasetId } = await seedRun(srv.db.url, { apiId: api.id, ownerId: a.user.id, items: [{ title: 'zz_test x' }] });
+    const client = await connect(a.key);
+    await withClient(srv.db.url, (c) => c.query('REVOKE SELECT ON datasets FROM runtime_app'));
+    try {
+      const result = await call(client, 'get_items', { dataset_id: datasetId });
+      expect(toolError(result)).toMatchObject({ code: 'internal', retryable: true, next_action: null });
+      expect(JSON.stringify(result)).not.toMatch(/permission|datasets|runtime_app|denied/i);
+    } finally {
+      await withClient(srv.db.url, (c) => c.query('GRANT SELECT ON datasets TO runtime_app'));
+    }
+    expect((await call(client, 'get_items', { dataset_id: datasetId })).isError ?? false).toBe(false);
+  });
+});
+
 describe('assert_cross_user_denied (INV12) : chaque outil MCP, B contre les objets de A, comme un objet inexistant', () => {
   test('B reçoit not_found sur les API, runs et datasets privés de A ; rien n’est modifié', async () => {
     const api = await seedApi(srv.db.url, a.user.id);
@@ -505,12 +695,18 @@ describe('assert_cross_user_denied (INV12) : chaque outil MCP, B contre les obje
       expect(cross, tool).toEqual(none);
       expect(cross.code, tool).toBe('not_found');
     }
-    // Admin et owner : pas d'impersonation ; le run d'autrui n'est pas lisible par MCP (ni items, ni dataset).
+    // assert_no_impersonation (05 § 4.4, INV5) : l'admin et l'owner lisent par MCP les métadonnées du run d'autrui (état,
+    // coût, nombre d'items), comme GET /api/runs/{id}, jamais ses items ni son dataset ; lecture auditée run.metadata_read.
     for (const party of [admin, owner]) {
       const other = await connect(party.key);
-      expect(toolError(await call(other, 'get_run', { run_id: runId })).code).toBe('not_found');
+      const meta = await call(other, 'get_run', { run_id: runId });
+      expect(meta.isError ?? false).toBe(false);
+      expect(meta.structuredContent).toMatchObject({ run_id: runId, metadata_only: true, state: 'succeeded', items: [], total: 1, dataset_id: null, truncated: false, next_cursor: null, next_action: null });
+      expect(JSON.stringify(meta)).not.toContain('zz_test secret of A');
       expect(toolError(await call(other, 'get_items', { dataset_id: datasetId })).code).toBe('not_found');
+      expect(toolError(await call(other, 'get_items', { run_id: runId })).code).toBe('not_found');
     }
+    expect(await count("SELECT count(*) FROM audit_events WHERE action = 'run.metadata_read' AND actor_via = 'mcp' AND target_id = $1", [runId])).toBe(2);
     expect(await count("SELECT count(*) FROM runs WHERE id = $1 AND state = 'running'", [active.runId])).toBe(1);
     expect(await count('SELECT count(*) FROM runs WHERE api_id = $1', [api.id])).toBe(2);
     expect(await count("SELECT count(*) FROM audit_events WHERE action = 'api.problem_reported' AND target_id = $1", [api.id])).toBe(0);
@@ -538,6 +734,29 @@ describe('create_api et dossier d’enquête (05 § 4.1, 19c § 9) : volets MCP 
     expect(await count("SELECT count(*) FROM runs WHERE id = $1 AND kind = 'investigation' AND trigger = 'mcp'", [view.run_id])).toBe(1);
     expect(await count("SELECT count(*) FROM audit_events WHERE action = 'api.created' AND actor_via = 'mcp' AND target_id = $1", [view.api_id])).toBe(1);
     expect(result.content[0]!.text).toContain(view.slug);
+  });
+
+  test('05 § 1.1 : une API créée par MCP ou par REST n’est pas épinglée (mcp_exposed faux) ; son propriétaire l’épingle explicitement', async () => {
+    const client = await connect(a.key);
+    const created = await call(client, 'create_api', { description: 'zz_test épinglage', url: 'https://zz-test-pin-mcp.example/', wait_seconds: 0 });
+    const viaMcp = (created.structuredContent as { api_id: string; slug: string });
+    const viaRest = await srv.app.inject({
+      method: 'POST',
+      url: '/api/apis?wait=0',
+      headers: { authorization: `Bearer ${a.key}`, 'content-type': 'application/json' },
+      payload: JSON.stringify({ description: 'zz_test épinglage rest', url: 'https://zz-test-pin-rest.example/' }),
+    });
+    expect(viaRest.statusCode, viaRest.body).toBe(201);
+    const restId = viaRest.json<{ api_id: string }>().api_id;
+    expect(await count('SELECT count(*) FROM apis WHERE id = ANY($1::uuid[]) AND NOT mcp_exposed', [[viaMcp.api_id, restId]])).toBe(2);
+    const pinned = await srv.app.inject({
+      method: 'PATCH',
+      url: `/api/apis/${viaMcp.slug}`,
+      headers: { authorization: `Bearer ${a.key}`, 'content-type': 'application/json' },
+      payload: JSON.stringify({ mcp_exposed: true }),
+    });
+    expect(pinned.statusCode, pinned.body).toBe(200);
+    expect(await count('SELECT count(*) FROM apis WHERE id = $1 AND mcp_exposed', [viaMcp.api_id])).toBe(1);
   });
 
   test('assert_brief_schema_closed et assert_brief_size_cap_actionable (MCP) : clé inconnue → invalid_brief nommant le champ, 16 Ko → brief_too_large, aucune API', async () => {
@@ -572,8 +791,8 @@ describe('create_api et dossier d’enquête (05 § 4.1, 19c § 9) : volets MCP 
     expect(await count('SELECT count(*) FROM apis WHERE owner_id = $1', [a.user.id])).toBe(before);
   });
 
-  test.todo('assert_brief_report_no_echo (MCP, content et structuredContent) : récit et brief_report[] d’un create_api avec dossier valide ne recopient aucun texte du dossier — service de 2.14 non fusionné (un dossier valide répond brief_unavailable, rien créé), joué à sa fusion puis en 4.2');
-  test.todo('assert_brief_secret_rejected (MCP) : secret_in_brief sur un dossier à cookie, en-tête Authorization ou ?access_token= — détection livrée par 2.14, jouée à sa fusion');
+  test.todo('assert_brief_report_no_echo (MCP, content et structuredContent) : récit et brief_report[] d’un create_api avec dossier valide ne recopient aucun texte du dossier — service de 2.14 non fusionné (D-83 : un dossier valide répond brief_unavailable, rien créé) ; 2.14 remplace le bouchon checkBrief et le joue, puis rejoué en 4.2');
+  test.todo('assert_brief_secret_rejected (MCP) : secret_in_brief sur un dossier à cookie, en-tête Authorization ou ?access_token= — détection livrée par 2.14 (D-83), jouée par 2.14 puis en 4.2');
 
   test('assert_tool_definitions_budget : pour chaque combinaison de toolsets, brief < 500 jetons estimés et définitions sous le budget', async () => {
     srv.started.ctx.mcp!.exposure = 'generic';

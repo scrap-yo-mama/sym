@@ -66,9 +66,38 @@ function hostnameList(env: NodeJS.ProcessEnv, name: string): string[] {
 }
 
 /**
+ * `MCP_ALLOWED_ORIGINS` : origines complètes (`https://hote[:port]`, comparées en entier : schéma, hôte et port) et, plus
+ * lâches, noms d'hôte seuls (tout schéma, tout port de cet hôte). Ni chemin, ni identifiants, ni autre schéma que http(s).
+ */
+function originList(env: NodeJS.ProcessEnv): { origins: string[]; hosts: string[] } {
+  const origins: string[] = [];
+  const hosts: string[] = [];
+  const invalid = (value: string) =>
+    new ConfigError(`MCP_ALLOWED_ORIGINS : entrée invalide (${value}) ; attendu : origines complètes (https://hote:port) ou noms d'hôte, séparés par des virgules.`);
+  for (const raw of (env['MCP_ALLOWED_ORIGINS'] ?? '').split(',').map((v) => v.trim()).filter((v) => v !== '')) {
+    if (!raw.includes('://')) {
+      const host = raw.toLowerCase();
+      if (!HOSTNAME.test(host)) throw invalid(raw);
+      hosts.push(host);
+      continue;
+    }
+    let url: URL;
+    try {
+      url = new URL(raw);
+    } catch {
+      throw invalid(raw);
+    }
+    if (!['http:', 'https:'].includes(url.protocol) || url.username !== '' || url.password !== '' || url.search !== '' || url.hash !== '' || !/^[a-z]+:\/\/[^/]+\/?$/i.test(raw)) throw invalid(raw);
+    origins.push(url.origin);
+  }
+  return { origins, hosts };
+}
+
+/**
  * Serveur MCP : `DISABLE_MCP`, `MCP_TOOL_EXPOSURE` (generic, pinned par défaut, all), hôtes (`Host`) et origines (`Origin`)
- * admis : ceux de PUBLIC_URL, plus `MCP_ALLOWED_HOSTS` et `MCP_ALLOWED_ORIGINS` (05 § 3 : Origin refusée si présente et
- * non admise, Host contrôlé).
+ * admis (05 § 3 : Origin refusée si présente et non admise, Host contrôlé) : l'en-tête Host contre le nom d'hôte de
+ * PUBLIC_URL et `MCP_ALLOWED_HOSTS` ; l'en-tête Origin contre l'origine EXACTE de PUBLIC_URL (schéma, hôte, port) et les
+ * entrées de `MCP_ALLOWED_ORIGINS`.
  */
 function loadMcpConfig(env: NodeJS.ProcessEnv, publicUrl: string): McpConfig {
   const disabledRaw = (env['DISABLE_MCP'] ?? '').trim().toLowerCase();
@@ -76,11 +105,13 @@ function loadMcpConfig(env: NodeJS.ProcessEnv, publicUrl: string): McpConfig {
   const exposure = (env['MCP_TOOL_EXPOSURE'] ?? '').trim() || 'pinned';
   if (!(TOOL_EXPOSURES as readonly string[]).includes(exposure)) throw new ConfigError(`MCP_TOOL_EXPOSURE invalide : ${TOOL_EXPOSURES.join(', ')}.`);
   const own = new URL(publicUrl).hostname.toLowerCase();
+  const origins = originList(env);
   return {
     disabled: disabledRaw === 'true',
     exposure: exposure as ToolExposure,
     allowedHosts: [...new Set([own, ...hostnameList(env, 'MCP_ALLOWED_HOSTS')])],
-    allowedOrigins: [...new Set([own, ...hostnameList(env, 'MCP_ALLOWED_ORIGINS')])],
+    allowedOrigins: [...new Set([new URL(publicUrl).origin, ...origins.origins])],
+    allowedOriginHosts: [...new Set(origins.hosts)],
   };
 }
 

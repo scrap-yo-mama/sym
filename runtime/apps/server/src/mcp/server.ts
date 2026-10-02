@@ -7,17 +7,23 @@
 // objet inexistant répondent la même erreur `not_found`.
 //
 // Erreurs (05 § 4.3) : bloc texte JSON `{ code, message, what_to_do, retryable, next_action }`, `isError: true`, SANS
-// `structuredContent`. Succès : `structuredContent` et le même contenu en texte (le texte seul suffit à un client qui
-// n'affiche pas `structuredContent`).
+// `structuredContent`, y compris pour une exception levée dans un outil (`internal`, message interne jamais servi, erreur
+// journalisée côté serveur). Un outil inconnu ou disparu entre deux listes reste une erreur de protocole `-32602`
+// (spécification MCP), dont `data` porte `not_found` et la prochaine action `list_apis`. Succès : `structuredContent` et
+// le même contenu en texte (le texte seul suffit à un client qui n'affiche pas `structuredContent`).
+//
+// Exposition (08b § 3) : `tools/list` ne montre que les outils dont la clé a le scope (un outil masqué reste enregistré :
+// l'appeler répond 403 `insufficient_scope` avec le défi de scope, 05 § 4.4) ; les outils par API ne viennent que des API
+// de l'appelant (jamais une API partagée d'un autre membre, joignable par `list_apis` et `run_api`).
 import { randomUUID } from 'node:crypto';
 import { can, compileSchema, formatIssues, validateOutput, type Permission } from '@runtime/core';
 import { withActor } from '@runtime/db';
-import { fromJsonSchema, McpServer, requireScopes, type CallToolResult, type jsonSchemaValidator } from '@modelcontextprotocol/server';
+import { fromJsonSchema, McpServer, ProtocolError, ProtocolErrorCode, requireScopes, type CallToolResult, type jsonSchemaValidator, type ListToolsResult } from '@modelcontextprotocol/server';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import type { ServerContext } from '../context.js';
 import { readApiById, readApiBySlug } from '../rest/apis.js';
 import { datasetItems } from '../rest/export.js';
-import { buildRunResult, decodeItemsCursor, itemsCursor, readRunRow } from '../rest/runs.js';
+import { buildRunResult, decodeItemsCursor, itemsCursor, readRunRow, runMetadataForAdmin } from '../rest/runs.js';
 import { waitSecondsOf } from '../rest/shared.js';
 import { UUID } from '../routes/account-helpers.js';
 import { audit, MCP_CHANNEL_HEADER, type Actor } from '../routes/guard.js';
@@ -75,6 +81,7 @@ const GUIDES: Record<string, ErrorGuide> = {
   invalid_brief: { what_to_do: 'Remove or fix the named brief field (closed schema), or call create_api again without brief.', retryable: true },
   brief_too_large: { what_to_do: `Keep the highest-confidence hints and drop notes; resend under ${Math.floor(BRIEF_MAX_BYTES / 1000)} KB.`, retryable: true },
   brief_unavailable: { what_to_do: 'Call create_api again without brief: this instance does not read investigation briefs yet, and nothing was created.', retryable: true },
+  internal: { what_to_do: 'The instance hit an internal error: call again in a moment; if it persists, tell the user to check the instance logs.', retryable: true },
 };
 
 const DEFAULT_GUIDE: ErrorGuide = { what_to_do: 'Read the message; if it persists, report_problem with what you tried.', retryable: false };
@@ -87,6 +94,26 @@ function toolError(code: string, message: string, nextAction: Json | null = null
 }
 
 const notFoundError = () => toolError('not_found', 'ressource introuvable', { tool: 'list_apis', args: {} });
+
+/**
+ * Outil inconnu, ou outil par API disparu entre deux listes : erreur de PROTOCOLE `-32602` (spécification MCP, « Unknown
+ * tools » ; la suite de conformité l'exige), mais dont `data` porte la conduite de 05 § 4.3 (`not_found`, `what_to_do`,
+ * prochaine action `list_apis`) au lieu du texte libre du SDK ; le nom reçu n'est pas recopié.
+ */
+function unknownToolError(): ProtocolError {
+  return new ProtocolError(ProtocolErrorCode.InvalidParams, 'Unknown tool: call list_apis (or reconnect to refresh the tool list), then run_api with the API slug.', {
+    code: 'not_found',
+    what_to_do: 'The tool is unknown or was removed since the last tool list: call list_apis, then run_api with the slug.',
+    retryable: false,
+    next_action: { tool: 'list_apis', args: {} },
+  });
+}
+
+/** Exception dans un outil : erreur `internal` sans le message interne (base, réseau…), journalisée côté serveur. */
+function internalError(caller: McpCaller, tool: string, error: unknown): CallToolResult {
+  caller.request.log.error({ err: error, tool }, 'mcp : erreur interne d’un outil');
+  return toolError('internal', 'erreur interne de l’instance');
+}
 
 /** Succès : faits structurés, et les mêmes en texte (phrase puis JSON). */
 function success(summary: string, structured: Json): CallToolResult {
@@ -174,7 +201,8 @@ function checkBrief(brief: unknown): CallToolResult | null {
     const field = `brief${(first?.instancePath ?? '') + extra}`.replace(/\//g, '.').replace(/[^a-zA-Z0-9_.]/g, '');
     return toolError('invalid_brief', `champ ${field} refusé (schéma fermé du dossier d'enquête)`);
   }
-  // Service du dossier d'enquête (tâche 2.14) pas encore livré : un dossier valide n'est ni lu ni conservé.
+  // Service du dossier d'enquête (tâche 2.14) pas encore livré (D-83) : un dossier valide n'est ni lu ni conservé. 2.14
+  // remplace ce bouchon par l'appel à son service et joue les deux test.todo du bloc create_api de mcp.integration.test.ts.
   return toolError('brief_unavailable', 'dossier d’enquête non pris en charge par cette instance : rien n’a été créé');
 }
 
@@ -231,8 +259,33 @@ function handlers(ctx: ServerContext): Record<GenericToolName, Handler> {
 
     async get_run(args, caller) {
       if (!allowed(caller, 'runs:read')) return toolError('forbidden', 'action non autorisée');
-      const envelope = await runResultOf(ctx, caller.actor, String(args['run_id']));
-      return envelope === null ? notFoundError() : runResultAnswer(envelope);
+      const runId = String(args['run_id']);
+      const envelope = await runResultOf(ctx, caller.actor, runId);
+      if (envelope !== null) return runResultAnswer(envelope);
+      // assert_no_impersonation (05 § 4.4, INV5) : l'admin et l'owner lisent les métadonnées du run d'autrui (état, coût,
+      // nombre d'items), comme GET /api/runs/{id} ; jamais ses items, son entrée ni son dataset. Lecture auditée.
+      const metadata = UUID.test(runId) ? await runMetadataForAdmin(ctx, caller.actor, runId) : null;
+      if (metadata === null) return notFoundError();
+      await audit(ctx, caller.request, { ...caller.actor, channel: 'mcp' }, { action: 'run.metadata_read', targetType: 'run', targetId: metadata.id, outcome: 'success' });
+      const status = (await ctx.pool.query<{ status: string }>('SELECT status FROM apis WHERE id = $1', [metadata.api_id])).rows[0]?.status ?? 'erreur';
+      return runResultAnswer({
+        run_id: metadata.id,
+        state: metadata.state,
+        status,
+        items: [],
+        total: metadata.items,
+        dataset_id: null,
+        truncated: false,
+        next_cursor: null,
+        degraded_reasons: [],
+        message: 'Metadata only: this run belongs to another user, so its items and input are not shown.',
+        next_action: null,
+        poll_after_seconds: null,
+        timeline: [],
+        cost: metadata.cost,
+        console_url: `${ctx.publicUrl}/runs/${metadata.id}`,
+        metadata_only: true,
+      });
     },
 
     async get_items(args, caller) {
@@ -338,14 +391,18 @@ function handlers(ctx: ServerContext): Record<GenericToolName, Handler> {
 /** Validation d'entrée laissée au serveur (erreur `invalid_input` de 05 § 4.3, et non le texte libre du SDK). */
 const acceptAll: jsonSchemaValidator = { getValidator: () => (input: unknown) => ({ valid: true, data: input as never, errorMessage: undefined }) };
 
-/** Outils par API (05 § 1.1) visibles par l'acteur, selon le mode d'exposition ; 20 au plus. */
+/**
+ * Outils par API (05 § 1.1) de l'acteur, selon le mode d'exposition ; 20 au plus. SES API seulement (08b § 3) : une API
+ * partagée par un autre membre n'est jamais un outil `api_<slug>` (ni description ni schéma d'autrui dans la liste, aucune
+ * place prise aux outils de l'appelant) ; elle reste joignable par `list_apis` et `run_api`.
+ */
 async function apiTools(ctx: ServerContext, actor: Actor): Promise<{ name: string; slug: string; inputSchema: Json }[]> {
   const mode = ctx.mcp?.exposure ?? 'generic';
   if (mode === 'generic' || !can(actor.role, 'apis:run')) return [];
   const rows = await withActor(ctx.pool, actor, async (db) =>
     (
       await db.query<{ slug: string; input_schema: Json }>(
-        `SELECT slug, input_schema FROM apis WHERE current_strategy_version IS NOT NULL ${mode === 'pinned' ? 'AND mcp_exposed' : ''}
+        `SELECT slug, input_schema FROM apis WHERE owner_id = app_current_user_id() AND current_strategy_version IS NOT NULL ${mode === 'pinned' ? 'AND mcp_exposed' : ''}
          ORDER BY mcp_exposed DESC, pinned DESC, slug LIMIT $1`,
         [MAX_API_TOOLS * 2],
       )
@@ -365,12 +422,48 @@ async function apiTools(ctx: ServerContext, actor: Actor): Promise<{ name: strin
   return out;
 }
 
+/** Gestionnaire de requête bas niveau du SDK (accès protégé, lu une fois à la construction du serveur). */
+type RawHandler = (request: unknown, context: unknown) => Promise<unknown>;
+
+/**
+ * Habille les gestionnaires `tools/list` et `tools/call` du SDK : la liste ne garde que les outils dont la clé a le scope
+ * (08b § 3) ; un appel à un outil inconnu (ou retiré depuis la liste du client) reste l'erreur `-32602` du protocole, mais
+ * porte en `data` la conduite de 05 § 4.3 au lieu du texte libre du SDK (qui recopie le nom reçu). Tout le reste (validation, défi de scope, projection du résultat) reste au SDK.
+ */
+function shapeToolHandlers(server: McpServer, scopes: Map<string, string>, granted: ReadonlySet<string>): void {
+  const low = server.server as unknown as { _getRequestHandler(method: string): RawHandler | undefined };
+  const list = low._getRequestHandler('tools/list');
+  const callTool = low._getRequestHandler('tools/call');
+  if (list === undefined || callTool === undefined) throw new Error('SDK MCP : gestionnaires tools/list et tools/call absents');
+  server.server.removeRequestHandler('tools/list');
+  server.server.removeRequestHandler('tools/call');
+  server.server.setRequestHandler('tools/list', async (request, context) => {
+    const result = (await list(request, context)) as ListToolsResult;
+    return { ...result, tools: result.tools.filter((tool) => granted.has(scopes.get(tool.name) ?? '')) };
+  });
+  server.server.setRequestHandler('tools/call', async (request, context) => {
+    if (!scopes.has(request.params.name)) throw unknownToolError();
+    return (await callTool(request, context)) as CallToolResult;
+  });
+}
+
 /** Serveur MCP d'une requête : outils des toolsets demandés, outils par API de l'acteur. */
 export async function buildMcpServer(ctx: ServerContext, caller: McpCaller, version: string): Promise<McpServer> {
   const server = new McpServer({ name: 'sym', version }, { instructions: MCP_INSTRUCTIONS, capabilities: { tools: { listChanged: true } } });
   const all = handlers(ctx);
+  /** Outils enregistrés et scope exigé par chacun. */
+  const scopes = new Map<string, string>();
+  /** Corps d'outil gardé : toute exception devient une erreur `internal` au format 05 § 4.3. */
+  const guarded = (name: string, body: (input: Json) => Promise<CallToolResult>) => async (args: unknown) => {
+    try {
+      return await body((args ?? {}) as Json);
+    } catch (error) {
+      return internalError(caller, name, error);
+    }
+  };
   for (const tool of GENERIC_TOOLS) {
     if (!caller.toolsets.has(tool.toolset)) continue;
+    scopes.set(tool.name, tool.scope);
     server.registerTool(
       tool.name,
       {
@@ -380,8 +473,7 @@ export async function buildMcpServer(ctx: ServerContext, caller: McpCaller, vers
         annotations: tool.annotations,
         scopeChallenge: requireScopes(tool.scope),
       },
-      async (args: unknown) => {
-        const input = (args ?? {}) as Json;
+      guarded(tool.name, async (input) => {
         // Dossier d'enquête contrôlé AVANT le reste (19c § 9.3) : invalid_brief nomme le champ, brief_too_large sans troncature.
         if (tool.name === 'create_api' && input['brief'] !== undefined) {
           const refused = checkBrief(input['brief']);
@@ -390,11 +482,12 @@ export async function buildMcpServer(ctx: ServerContext, caller: McpCaller, vers
         const checked = validateOutput(tool.inputSchema, input);
         if (!checked.ok) return toolError('invalid_input', `arguments hors du schéma de ${tool.name} : ${formatIssues(checked.errors).replace(/\n/g, ' ; ')}`);
         return all[tool.name](input, caller);
-      },
+      }),
     );
   }
   if (caller.toolsets.has('run')) {
     for (const api of await apiTools(ctx, caller.actor)) {
+      scopes.set(api.name, 'apis:run');
       server.registerTool(
         api.name,
         {
@@ -404,13 +497,13 @@ export async function buildMcpServer(ctx: ServerContext, caller: McpCaller, vers
           annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
           scopeChallenge: requireScopes('apis:run'),
         },
-        async (args: unknown) => {
-          const input = (args ?? {}) as Json;
+        guarded(api.name, async (input) => {
           const answer = await rest(ctx, caller, 'POST', `/api/apis/${encodeURIComponent(api.slug)}/runs${query({ wait: waitSecondsOf(ctx, ctx.rest.maxWaitSeconds) })}`, { input });
           return executionAnswer(ctx, caller, answer, runNextAction(api.slug));
-        },
+        }),
       );
     }
   }
+  shapeToolHandlers(server, scopes, new Set(caller.actor.scopes ?? []));
   return server;
 }

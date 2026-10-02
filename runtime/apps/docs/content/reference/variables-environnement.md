@@ -129,7 +129,7 @@ cinq premières est posée. Pour PostgreSQL, passez la CA par `sslrootcert` dans
 |---|---|---|---|---|
 | `MCP_TOOL_EXPOSURE` | `pinned` | server | outils exposés par API : `generic` (aucun), `pinned` (les API épinglées pour le MCP, 20 au plus) ou `all` (20 au plus) ; voir [Serveur MCP](./mcp.md) | lue |
 | `MCP_ALLOWED_HOSTS` | l'hôte de `PUBLIC_URL` | server | noms d'hôte supplémentaires (sans port) admis dans l'en-tête `Host` d'une requête MCP ; tout autre hôte reçoit 403 | lue |
-| `MCP_ALLOWED_ORIGINS` | l'hôte de `PUBLIC_URL` | server | noms d'hôte supplémentaires admis dans l'en-tête `Origin` ; une origine présente et non admise reçoit 403, une requête sans `Origin` est acceptée | lue |
+| `MCP_ALLOWED_ORIGINS` | l'origine de `PUBLIC_URL` | server | origines supplémentaires admises dans l'en-tête `Origin` : origine complète (`https://hote:port`, comparée en entier comme celle de `PUBLIC_URL`) ou nom d'hôte seul (tout schéma et tout port de cet hôte) ; une origine présente et non admise reçoit 403, une requête sans `Origin` est acceptée | lue |
 
 ## Interrupteurs de surfaces
 

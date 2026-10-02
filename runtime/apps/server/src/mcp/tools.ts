@@ -56,7 +56,8 @@ const WAIT = { type: 'integer', minimum: 0, maximum: 25, description: 'Seconds t
 
 /**
  * Enveloppe `RunResult` (05 § 4.1) : sortie de toute exécution et `outputSchema` des outils `api_<slug>`. Items conformes
- * au `output_schema` de l'API (20 au plus) ; `rejected` : agrégats des items écartés (D-49, branché par 2.3).
+ * au `output_schema` de l'API (20 au plus) ; `rejected` : agrégats des items écartés (D-49, branché par 2.3) ;
+ * `metadata_only` : run d'autrui lu par l'admin ou l'owner (`get_run`, assert_no_impersonation), sans items ni dataset.
  */
 export const RUN_RESULT_SCHEMA: JsonSchema = {
   type: 'object',
@@ -78,6 +79,7 @@ export const RUN_RESULT_SCHEMA: JsonSchema = {
     timeline: { type: 'array' },
     cost: { type: 'object' },
     console_url: { type: 'string' },
+    metadata_only: { type: 'boolean' },
   },
 };
 
