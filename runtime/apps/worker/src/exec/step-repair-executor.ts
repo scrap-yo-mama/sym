@@ -14,6 +14,7 @@ import {
   checkAgainstHealthy,
   ruleOfTwoHolds,
   healthyProfile,
+  patchKey,
   primaryTarget,
   repairSteps,
   RepairLedger,
@@ -109,7 +110,8 @@ export async function repairStepsUnderLease(deps: StepRepairDeps, request: Reque
         stepFailure: info?.failure === null || info?.failure === undefined ? null : { index: info.failure.index, failure: check.failure ?? info.failure.failure },
         observedWriteAt: info?.observedWriteAt ?? null,
         schema: stable,
-        freshness: true,
+        // V4 : aucun document du run servi depuis un cache ancien ou un service worker.
+        freshness: info?.stale !== true,
         costUsd: check.costUsd,
       };
     },
@@ -146,9 +148,14 @@ export async function repairStepsUnderLease(deps: StepRepairDeps, request: Reque
         },
       );
       ledger.spend(check.costUsd);
-      if (check.refusal !== null) throw new RefusedDuringAgent(check.refusal);
       const out = outcome as StepAgentOutcome | null;
-      ledger.spend(out?.costUsd ?? 0);
+      // Prix inconnu (null) : le budget de réparation est épuisé, jamais compté 0 (INV4).
+      if (out !== null) {
+        ledger.spend(out.costUsd);
+        pendingAgent.push({ stepId: req.step.id, level: req.level, usd: out.costUsd, tin: out.tokensIn, tout: out.tokensOut });
+        if (out.refused.length > 0) await ctx.log('info', 'step_agent_refused', { step_id: req.step.id, level: req.level, codes: [...new Set(out.refused)] });
+      }
+      if (check.refusal !== null) throw new RefusedDuringAgent(check.refusal);
       if (out === null) return { patch: null, costUsd: 0, tokensIn: 0, tokensOut: 0, stop: 'error' };
       const spent = { costUsd: out.costUsd, tokensIn: out.tokensIn, tokensOut: out.tokensOut };
       if (out.status !== 'done' || out.target === null) return { patch: null, ...spent, stop: out.status === 'done' ? 'invalid' : out.status };
@@ -160,8 +167,13 @@ export async function repairStepsUnderLease(deps: StepRepairDeps, request: Reque
         // Segment : les clics de l'agent avant sa cible deviennent des étapes insérées (bornées par le noyau).
         const done = out.target;
         const clicks = out.actions.filter((a) => a.tool === 'click' && a.target !== undefined && !(a.target.role === done.role && a.target.name === done.name)).slice(0, 3);
-        for (const [k, a] of clicks.entries()) {
-          patch.push({ op: 'add', path: `/steps/${at}`, value: { id: `${req.step.id}_r${k + 1}`.slice(0, 40), op: 'click', target: { role: a.target!.role, name: a.target!.name, alternates: [] } } });
+        const ids = new Set(req.spec.steps.map((st) => st.id));
+        for (const a of clicks) {
+          let n = ids.size + 1;
+          let id = `r${n}`;
+          while (ids.has(id)) id = `r${++n}`;
+          ids.add(id);
+          patch.push({ op: 'add', path: `/steps/${at}`, value: { id, op: 'click', target: { role: a.target!.role, name: a.target!.name, alternates: [] } } });
           at += 1;
         }
       }
@@ -170,13 +182,22 @@ export async function repairStepsUnderLease(deps: StepRepairDeps, request: Reque
     };
   }
 
+  /** Appels de l'agent pas encore journalisés : écrits même si la reprise s'arrête sur une exception (INV4). */
+  const pendingAgent: { stepId: string; level: 2 | 3; usd: number | null; tin: number; tout: number }[] = [];
+  const recordPendingAgent = async (): Promise<void> => {
+    for (const a of pendingAgent.splice(0)) {
+      await ctx.recordAttempt({ execution: 'hybrid', network: strategy.network, est_cost_usd: null, result: 'extraction', ms: 0, llm_usd: a.usd, tokens: { in: a.tin, out: a.tout }, step: { id: a.stepId, level: a.level, outcome: 'failed' } });
+    }
+  };
   let outcome;
   try {
     outcome = await repairSteps({ spec, source: source.steps, failure: step, context: { session, tunnel: strategy.network === 'tunnel', runInputs: Object.keys(runInputs) }, ports });
   } catch (error) {
+    await recordPendingAgent().catch(() => undefined);
     if (error instanceof RefusedDuringAgent) return { kind: 'refused', failure: error.failure };
     throw error;
   }
+  pendingAgent.length = 0; // journalisés ci-dessous, avec leur issue
   // Journal par étape : une ligne par niveau tenté (coût LLM de l'agent ; les rejeux sont des essais à part).
   for (const entry of outcome.journal) {
     await ctx.recordAttempt({
@@ -203,12 +224,20 @@ export async function repairStepsUnderLease(deps: StepRepairDeps, request: Reque
     case 'step_cascade':
       return { kind: 'failed', cause: 'step_cascade', detail: 'step_cascade' };
     case 'failed':
-      // Échelle épuisée : la seule issue restante serait un agent à chaque run, jamais sans `instructed_mode` (13).
-      return { kind: 'failed', cause: 'not_compilable', detail: 'not_compilable' };
+      // Échelle épuisée ; l'escalade de 04 §3.3 depuis E5 ne mène qu'à E6 (agent à chaque run), jamais sans
+      // `instructed_mode` : la reprise s'arrête (13), stratégie précédente gardée.
+      await ctx.log('info', 'step_repair_escalation', { next: 'none', reason: 'agent_each_run_requires_instructed_mode' });
+      return { kind: 'failed', cause: 'budget_exhausted', detail: 'repair_budget_exhausted' };
     case 'repaired': {
       const check = checks.get(outcome.spec);
       if (check === undefined) return { kind: 'failed', cause: 'budget_exhausted', detail: 'repair_check_missing' };
       if (!(await holds())) throw new StepLeaseLost();
+      // Un correctif non validé déjà proposé pour cette version (run précédent) : arrêt (13), jamais une boucle de
+      // réparations non validées d'un run à l'autre (19 §4, « un correctif proposé deux fois reste un arrêt »).
+      if (!outcome.validated && (await request.repairedBefore?.(outcome.patch)) === true) {
+        await ctx.log('warn', 'repair_repeated_patch', { patch_key: patchKey(outcome.patch) });
+        return { kind: 'failed', cause: 'repeated_patch', detail: 'repair_repeated_patch' };
+      }
       const saved = await request.commitSteps!({ spec: outcome.spec, patch: outcome.patch, validated: outcome.validated });
       return {
         kind: 'repaired',

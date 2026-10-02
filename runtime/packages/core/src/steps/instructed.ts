@@ -50,7 +50,8 @@ export type InstructedActivation = { ok: true } | { ok: false; reason: 'compilab
 
 /** Le mode s'active-t-il ? Jamais sans confirmation humaine des étapes EXACTES, ni sur une API compilable. */
 export function canActivateInstructedMode(args: { compilable: Compilable; steps: readonly InstructedStep[] | null; confirmation: InstructedConfirmation | null }): InstructedActivation {
-  if (args.compilable === 'yes') return { ok: false, reason: 'compilable' };
+  // API non compilable seulement (`no` : une trace E6 a été essayée et n'a pas pu l'être).
+  if (args.compilable !== 'no') return { ok: false, reason: 'compilable' };
   if (args.steps === null || args.steps.length === 0) return { ok: false, reason: 'no_instructed_steps' };
   const c = args.confirmation;
   if (c === null || c.by === null || c.at === null || c.sha256 !== instructedStepsSha256(args.steps)) return { ok: false, reason: 'instructed_steps_unconfirmed' };

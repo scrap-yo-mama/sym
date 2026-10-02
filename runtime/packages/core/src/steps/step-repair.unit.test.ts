@@ -170,6 +170,23 @@ describe('reprise par étape', () => {
     expect(out.kind).toBe('write_step_broken');
   });
 
+  test('assert_side_effect_computed_by_code : écriture observée au rejeu d’une étape navigation → write_step_broken, 0 agent, 0 rejeu', async () => {
+    const spec = sixSteps();
+    const { ports: p, agentCalls, replays } = ports({ agent: () => ({ patch: [] }) });
+    const out = await repairSteps({ spec, source: source(spec), failure: { index: 2, failure: { failure_class: 'code_error', retryable: false, detail: 'write_step_broken' } }, context: { session: false, tunnel: false, runInputs: [] }, ports: p });
+    expect(out).toMatchObject({ kind: 'write_step_broken', stepId: 's3' });
+    expect(agentCalls).toHaveLength(0);
+    expect(replays).toHaveLength(0);
+  });
+
+  test('étape sans cible (extraction) : ni alternate ni agent, échec sans appel', async () => {
+    const spec = sixSteps();
+    const { ports: p, agentCalls } = ports({ agent: () => ({ patch: [] }) });
+    const out = await repairSteps({ spec, source: source(spec), failure: { index: 5, failure: extraction('field_not_found') }, context: { session: false, tunnel: false, runInputs: [] }, ports: p });
+    expect(out.kind).toBe('failed');
+    expect(agentCalls).toHaveLength(0);
+  });
+
   test('assert_write_step_never_auto_repaired : étape side_effect write cassée → write_step_broken, 0 appel d’agent, 0 rejeu', async () => {
     const spec = sixSteps({ s3: { target: { role: 'button', name: 'Publier', alternates: [{ role: 'button', name: 'Envoyer' }] } } });
     expect(spec.steps[2]!.side_effect).toBe('write');

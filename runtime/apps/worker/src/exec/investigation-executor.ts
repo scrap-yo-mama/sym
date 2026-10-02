@@ -625,7 +625,7 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
               const entry = entries.get(pair)!;
               const trialTarget: RunTarget = {
                 api: { ...target.api, outputSchema, maxCostUsd: limits.ceilingUsd },
-                strategy: { version: 0, execution: entry.execution, network: entry.network, spec: entry.spec, scriptRef: null, estCostUsd: entry.est_cost_usd, compilable: 'unknown', sourceSteps: null, instructedSteps: null },
+                strategy: { version: 0, execution: entry.execution, network: entry.network, spec: entry.spec, scriptRef: null, estCostUsd: entry.est_cost_usd, compilable: 'unknown', sourceSteps: null, instructedSteps: null, instructedConfirmation: null },
               };
               const timeout = AbortSignal.timeout(Math.max(1, limits.deadlineMs - now()));
               const trialCtx: RunCtx = { ...ctx, signal: AbortSignal.any([ctx.signal, timeout]), input: trialInput(entry.paginated, purpose) };

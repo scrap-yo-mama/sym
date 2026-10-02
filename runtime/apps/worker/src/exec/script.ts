@@ -228,7 +228,8 @@ function parseRequest(raw: unknown, allowStep = false): { op: PageOperation | 's
   }
   if (typeof value !== 'object' || value === null || Array.isArray(value)) bad('page : objet attendu');
   const { op, args } = value as { op?: unknown; args?: unknown };
-  if (typeof op !== 'string' || !((PAGE_OPERATIONS as readonly string[]).includes(op) || (allowStep && op === 'step'))) bad('page : opération');
+  // Stratégie `steps` : seule l'opération `step` ; script E3 : la liste fermée de 1.6, jamais `step`.
+  if (typeof op !== 'string' || (allowStep ? op !== 'step' : !(PAGE_OPERATIONS as readonly string[]).includes(op))) bad('page : opération');
   if (typeof args !== 'object' || args === null || Array.isArray(args)) bad('page : arguments');
   return { op: op as PageOperation | 'step', args: args as Record<string, unknown> };
 }

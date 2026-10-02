@@ -40,7 +40,7 @@ BEGIN
   IF NEW.instructed_mode AND NOT EXISTS (
     SELECT 1 FROM strategy_versions s
      WHERE s.api_id = NEW.id AND s.version = NEW.current_strategy_version
-       AND s.compilable <> 'yes'
+       AND s.compilable = 'no'
        AND s.instructed_steps IS NOT NULL AND jsonb_array_length(s.instructed_steps) > 0
        AND s.instructed_steps_sha256 IS NOT NULL
        AND s.instructed_steps_confirmed ->> 'by' IS NOT NULL
@@ -62,7 +62,7 @@ CREATE FUNCTION strategy_versions_instructed_reset() RETURNS trigger
 LANGUAGE plpgsql
 AS $$
 BEGIN
-  IF NEW.instructed_steps_sha256 IS DISTINCT FROM OLD.instructed_steps_sha256 THEN
+  IF NEW.instructed_steps IS DISTINCT FROM OLD.instructed_steps OR NEW.instructed_steps_sha256 IS DISTINCT FROM OLD.instructed_steps_sha256 THEN
     NEW.instructed_steps_confirmed := NULL;
     UPDATE apis SET instructed_mode = false WHERE id = NEW.api_id AND current_strategy_version = NEW.version AND instructed_mode;
   END IF;

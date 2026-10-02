@@ -38,7 +38,7 @@ export class StepCascade {
   register(stepId: string): 'continue' | 'step_cascade' {
     this.#broken.add(stepId);
     if (this.#broken.size > this.#max) return 'step_cascade';
-    if (this.#broken.size / this.#total >= this.#maxShare && this.#broken.size > 1) return 'step_cascade';
+    if (this.#broken.size / this.#total > this.#maxShare && this.#broken.size > 1) return 'step_cascade';
     return 'continue';
   }
 }

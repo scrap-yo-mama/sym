@@ -383,6 +383,8 @@ export function runScriptExecutor(options: ScriptExecutorOptions): Promise<Scrip
           if (mainRoot(request) || issued.get(chainRoot(request)) === true) retain(decision.failure);
           return false;
         }
+        // Stratégie `steps` (2.13) : écriture coupée hors d'une étape `write` autorisée, et notée comme l'effet de l'étape.
+        if (options.steps?.host.blockWrite(request.method(), request.resourceType()) === true) return false;
         // Soumission (navigation hors GET/HEAD) sans `allow_write_actions` : coupée, imputée au script.
         if (!allowWriteActions && request.isNavigationRequest() && !READ_METHODS.has(request.method())) {
           options.steps?.host.noteBlockedWrite();
@@ -423,8 +425,6 @@ export function runScriptExecutor(options: ScriptExecutorOptions): Promise<Scrip
     });
     const strategy = trackStrategyRequests(rc.context, options.allowedHosts);
     rc.context.on('request', (request) => {
-      // Effet observé d'une étape `steps` : toute requête hors GET/HEAD/OPTIONS du site pendant l'étape (19 §4).
-      if (hostAllowed(request.url(), options.allowedHosts)) options.steps?.host.noteRequest(request.method());
       const root = chainRoot(request);
       if (root === request) {
         issued.set(request, host.armed());
@@ -485,6 +485,7 @@ export function runScriptExecutor(options: ScriptExecutorOptions): Promise<Scrip
         !(status >= 300 && status < 400 && headers['location'] !== undefined);
       const hop = status >= 300 && status < 400 && headers['location'] !== undefined;
       // Document courant soumis à la garde (hors domaines de l'API ou après un refus : aucun classement, comme avant).
+      if (mainDocument && !hop) options.steps?.host.noteDocument(headers, response.fromServiceWorker());
       if (mainDocument && !hop) currentDocument = classified ? { status, headers, url: response.url(), requestUrl: chainRoot(request).url(), root: chainRoot(request) } : undefined;
       if (!classified) {
         if (paced) void report(response.url(), status, retryAfter);
@@ -613,6 +614,8 @@ export function runScriptExecutor(options: ScriptExecutorOptions): Promise<Scrip
         // `ctx.fetch` : un saut à la fois (le pont contrôle le domaine de chaque redirection), par la session de l'essai,
         // chaque saut réservé à la cadence et compté dans le plafond du run.
         fetch: async (request, signal) => {
+          // Stratégie `steps` : l'interpréteur n'a que `ctx.steps` ; tout autre pont est une violation.
+          if (options.steps !== undefined) throw new SandboxBridgeError('invalid_bridge_call', true, 'steps : ctx.fetch');
           // robots.txt avant tout (chaque saut) : un chemin interdit ne reçoit aucune requête, l'essai s'arrête.
           const decision = await robotsDecision(request.url);
           if (!decision.allowed) {
@@ -688,8 +691,10 @@ export function runScriptExecutor(options: ScriptExecutorOptions): Promise<Scrip
         while (pending.size > 0) await Promise.allSettled([...pending]);
         if (refusal !== undefined) return finish(fail(refusal, 1, requests), base);
       }
-      const records = handle.items.filter((i): i is Record<string, unknown> => typeof i === 'object' && i !== null && !Array.isArray(i));
-      if (records.length !== handle.items.length) return finish(fail({ failure_class: 'extraction', retryable: false, detail: 'schema_mismatch' }, 1, requests), base);
+      // Stratégie `steps` : seuls les enregistrements extraits par l'hôte comptent (ce que l'isolat émet n'est pas lu).
+      const emitted = options.steps === undefined ? handle.items : options.steps.host.records;
+      const records = emitted.filter((i): i is Record<string, unknown> => typeof i === 'object' && i !== null && !Array.isArray(i));
+      if (records.length !== emitted.length) return finish(fail({ failure_class: 'extraction', retryable: false, detail: 'schema_mismatch' }, 1, requests), base);
       return finish(
         { ok: true, records, pages: 1, requests, escalated: false, stop: capReached ? 'max_requests_per_run' : 'no_pagination', truncated: capReached },
         base,

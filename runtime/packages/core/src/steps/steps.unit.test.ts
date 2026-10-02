@@ -187,6 +187,25 @@ describe('assert_step_patch_bounded', () => {
     if (!retarget.ok) expect(retarget.rejections.map((r) => r.code)).toContain('retargeted_step_write');
   });
 
+  test('insertion puis reciblage dans le même patch : indices pris après application (RFC 6902), contrôle par identifiant', () => {
+    // Reciblage de l'étape décalée par l'insertion vers un bouton d'envoi : refusé.
+    const submit = validateStepPatch(spec, [{ op: 'add', path: '/steps/1', value: { id: 'x7', op: 'scroll', direction: 'down' } }, { op: 'replace', path: '/steps/3/target', value: { role: 'button', name: 'Envoyer la commande', alternates: [] } }], { runInputs: ['q'] });
+    expect(submit.ok).toBe(false);
+    if (!submit.ok) expect(submit.rejections.map((r) => r.code)).toContain('retargeted_step_write');
+    // Reciblage d'une étape write décalée : refusé.
+    const write = stepsSpec({ steps: [{ id: 'w0', op: 'scroll', direction: 'down' }, { id: 'w1', op: 'click', target: { role: 'button', name: 'Publier', alternates: [] } }] });
+    const shifted = validateStepPatch(write, [{ op: 'add', path: '/steps/0', value: { id: 'x8', op: 'scroll', direction: 'up' } }, { op: 'replace', path: '/steps/2/target', value: { role: 'link', name: 'Publier', alternates: [] } }], { runInputs: [] });
+    expect(shifted.ok).toBe(false);
+    if (!shifted.ok) expect(shifted.rejections.map((r) => r.code)).toContain('write_step_not_repairable');
+    // Une étape write non touchée garde son side_effect (jamais abaissé).
+    const kept = validateStepPatch(write, [{ op: 'add', path: '/steps/0', value: { id: 'x9', op: 'scroll', direction: 'up' } }], { runInputs: [] });
+    expect(kept.ok && kept.spec.steps.find((s) => s.id === 'w1')!.side_effect).toBe('write');
+    expect(kept.ok && kept.touched).toEqual([0]);
+    // Insertion d'une saisie : `form` déclaré ignoré (inconnu) → write.
+    const typed = validateStepPatch(spec, [{ op: 'add', path: '/steps/2', value: { id: 'x10', op: 'type', target: { role: 'searchbox', name: 'Recherche', alternates: [] }, value: { input: 'q' }, form: false } }], { runInputs: ['q'] });
+    expect(typed.ok).toBe(false);
+  });
+
   test('insertion bornée (navigation, défilement) acceptée, side_effect posé par le code ; aller vers un hôte hors API refusé', () => {
     const ok = validateStepPatch(spec, [{ op: 'add', path: '/steps/2', value: { id: 'x4', op: 'click', target: { role: 'button', name: 'Fermer le bandeau', alternates: [] }, side_effect: 'none' } }], { runInputs: ['q'] });
     // « Fermer » n'est pas une pagination reconnue : bouton → write → rejeté, quoi qu'en dise le LLM.

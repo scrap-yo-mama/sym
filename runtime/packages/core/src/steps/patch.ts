@@ -52,83 +52,81 @@ export function validateStepPatch(spec: StepsSpec, patch: unknown, options: { ru
   const rejections: StepPatchRejection[] = [];
   if (!Array.isArray(patch) || patch.length === 0) return { ok: false, rejections: [{ code: 'invalid_patch', index: null, message: 'patch : tableau non vide attendu' }] };
   if (patch.length > MAX_OPERATIONS) return { ok: false, rejections: [{ code: 'too_many_operations', index: null, message: `patch : ${MAX_OPERATIONS} opérations au plus` }] };
-  const routes: Route[] = [];
   for (const [i, op] of (patch as unknown[]).entries()) {
     if (!isRecord(op) || Object.keys(op).some((k) => !['op', 'path', 'value'].includes(k))) {
       rejections.push({ code: 'invalid_patch', index: i, message: `opération ${i} : { op, path, value } attendu` });
       continue;
     }
-    const r = route(op);
-    if (r === null) {
+    if (route(op) === null) {
       rejections.push({ code: 'forbidden_path', index: i, message: `opération ${i} : chemin hors de /steps/i/target et de l’insertion d’une étape` });
       continue;
     }
-    routes.push(r);
   }
   if (rejections.length > 0) return { ok: false, rejections };
 
-  // Étapes `write` du compilé : jamais reciblées (19 §4 « Étapes à effet »).
-  for (const [i, r] of routes.entries()) {
-    if (r.kind === 'target' && spec.steps[r.step]?.side_effect === 'write') {
-      rejections.push({ code: 'write_step_not_repairable', index: i, message: `étape ${r.step} : side_effect write, jamais réparée seule` });
-    }
-  }
-  // Étapes insérées : validées seules, puis bornées.
-  for (const [i, r] of routes.entries()) {
-    if (r.kind !== 'insert') continue;
-    const value = (patch as Record<string, unknown>[])[i]!['value'];
-    const checked = validateStepDef(value, spec.allowed_hosts);
-    if (!checked.ok) {
-      rejections.push({ code: 'patched_spec_invalid', index: i, message: checked.errors.join(' ; ') });
-      continue;
-    }
-    const step = checked.step;
-    if (step.op === 'type' && !options.runInputs.includes(step.value?.input ?? '')) {
-      rejections.push({ code: 'type_not_run_input', index: i, message: `étape insérée : « ${step.value?.input ?? ''} » n’est pas une entrée du run` });
-    }
-    if (step.op === 'select' && step.form !== false) rejections.push({ code: 'select_in_form', index: i, message: 'étape insérée : select dans un formulaire' });
-    // `side_effect` recalculé SANS l'avis du patch : un effet déclaré est ignoré.
-    const computed = computeSideEffect(step);
-    if (computed === 'write' && !rejections.some((x) => x.index === i)) {
-      rejections.push({ code: 'inserted_step_write', index: i, message: 'étape insérée : side_effect write (envoi, saisie dans un formulaire, clic qui soumet)' });
-    }
-  }
-  if (rejections.length > 0) return { ok: false, rejections };
-
+  // Application dans l'ordre RFC 6902 (sur une copie), puis contrôle par IDENTIFIANT d'étape : les indices bougent au fil
+  // des insertions, l'identifiant non. Une étape nouvelle est une insertion ; une étape connue ne peut changer que de cible.
   let patched: unknown;
   try {
     patched = jsonpatch.apply(patch as jsonpatch.OpObject[], structuredClone(spec) as never);
   } catch {
     return { ok: false, rejections: [{ code: 'patched_spec_invalid', index: null, message: 'patch inapplicable' }] };
   }
-  // `side_effect` des étapes reciblées et insérées : recalculé à partir de la seule forme (jamais repris du patch).
-  const raw = patched as { steps?: Record<string, unknown>[] };
-  const changed = new Set<number>();
-  let offset = 0;
-  for (const r of routes) {
-    if (r.kind === 'insert') {
-      changed.add(r.step);
-      offset += 1;
-    } else changed.add(r.step + offset);
-  }
-  for (const i of changed) {
-    const s = raw.steps?.[i];
-    if (isRecord(s)) {
-      const target = isRecord(s['target']) ? (s['target'] as { role?: string; name?: string; text?: string }) : undefined;
-      s['side_effect'] = computeSideEffect({ op: String(s['op']), target, ...(typeof s['form'] === 'boolean' ? { form: s['form'] } : {}) });
+  const raw = patched as { steps?: unknown };
+  if (!Array.isArray(raw.steps)) return { ok: false, rejections: [{ code: 'patched_spec_invalid', index: null, message: 'steps : liste attendue' }] };
+  const before = new Map(spec.steps.map((s) => [s.id, s]));
+  const seen = new Set<string>();
+  const touched: number[] = [];
+  const steps = raw.steps as unknown[];
+  const sameExceptTarget = (a: Record<string, unknown>, b: Record<string, unknown>): boolean => {
+    const strip = ({ target: _t, side_effect: _s, ...rest }: Record<string, unknown>) => rest;
+    return JSON.stringify(strip(a)) === JSON.stringify(strip(b));
+  };
+  for (const [i, s] of steps.entries()) {
+    if (!isRecord(s) || typeof s['id'] !== 'string') return { ok: false, rejections: [{ code: 'patched_spec_invalid', index: i, message: `étape ${i} : identifiant attendu` }] };
+    const id = s['id'];
+    if (seen.has(id)) return { ok: false, rejections: [{ code: 'patched_spec_invalid', index: i, message: `étape ${i} : identifiant en double` }] };
+    seen.add(id);
+    const old = before.get(id);
+    if (old === undefined) {
+      // Insertion : validée seule, `side_effect` et `form` déclarés ignorés (calculés par le code ; `form` inconnu).
+      const { side_effect: _declared, form: _form, ...shape } = s;
+      const checked = validateStepDef(shape, spec.allowed_hosts);
+      if (!checked.ok) return { ok: false, rejections: [{ code: 'patched_spec_invalid', index: i, message: checked.errors.join(' ; ') }] };
+      const step = checked.step;
+      if (step.op === 'type' && !options.runInputs.includes(step.value?.input ?? '')) {
+        return { ok: false, rejections: [{ code: 'type_not_run_input', index: i, message: `étape insérée : « ${step.value?.input ?? ''} » n’est pas une entrée du run` }] };
+      }
+      if (step.op === 'select') return { ok: false, rejections: [{ code: 'select_in_form', index: i, message: 'étape insérée : select (formulaire possible)' }] };
+      if (computeSideEffect(step) === 'write') {
+        return { ok: false, rejections: [{ code: 'inserted_step_write', index: i, message: 'étape insérée : side_effect write (envoi, saisie dans un formulaire, clic qui soumet)' }] };
+      }
+      steps[i] = { ...shape, side_effect: computeSideEffect(step) };
+      touched.push(i);
+      continue;
     }
+    const oldRaw = old as unknown as Record<string, unknown>;
+    if (!sameExceptTarget(s, oldRaw)) return { ok: false, rejections: [{ code: 'forbidden_path', index: i, message: `étape ${id} : seule sa cible peut changer` }] };
+    if (JSON.stringify(s['target']) === JSON.stringify(oldRaw['target'])) {
+      // Étape inchangée : son `side_effect` est gardé tel quel (jamais abaissé par un recalcul).
+      steps[i] = { ...s, side_effect: old.side_effect };
+      continue;
+    }
+    // Reciblage : jamais une étape `write` ; la nouvelle cible ne doit pas donner un effet `write` (forme d'origine).
+    if (old.side_effect === 'write') return { ok: false, rejections: [{ code: 'write_step_not_repairable', index: i, message: `étape ${id} : side_effect write, jamais réparée seule` }] };
+    const target = isRecord(s['target']) ? (s['target'] as { role?: string; name?: string; text?: string }) : undefined;
+    const computed = computeSideEffect({ op: old.op, target, ...(old.form === undefined ? {} : { form: old.form }) });
+    if (computed === 'write') return { ok: false, rejections: [{ code: 'retargeted_step_write', index: i, message: `étape ${id} : la cible proposée donnerait un side_effect write` }] };
+    steps[i] = { ...s, side_effect: computed };
+    touched.push(i);
   }
+  // Aucune étape retirée.
+  if (spec.steps.some((s) => !seen.has(s.id))) return { ok: false, rejections: [{ code: 'forbidden_path', index: null, message: 'étape retirée' }] };
   const checked = validateStepsSpec(patched);
   if (!checked.ok) return { ok: false, rejections: [{ code: 'patched_spec_invalid', index: null, message: checked.errors.join(' ; ') }] };
-  for (const i of changed) {
-    const s = checked.spec.steps[i];
-    if (s !== undefined && s.side_effect === 'write') {
-      return { ok: false, rejections: [{ code: 'retargeted_step_write', index: null, message: `étape ${i} : la cible proposée donnerait un side_effect write` }] };
-    }
+  // Rien d'autre n'a bougé : mêmes domaines, même page de départ, mêmes plafonds.
+  if (JSON.stringify(checked.spec.allowed_hosts) !== JSON.stringify(spec.allowed_hosts) || checked.spec.start_url !== spec.start_url || JSON.stringify(checked.spec.limits) !== JSON.stringify(spec.limits)) {
+    return { ok: false, rejections: [{ code: 'forbidden_path', index: null, message: 'domaines, page de départ ou plafonds modifiés' }] };
   }
-  // Rien d'autre n'a bougé : mêmes domaines, même page de départ, mêmes opérations hors des étapes touchées.
-  if (JSON.stringify(checked.spec.allowed_hosts) !== JSON.stringify(spec.allowed_hosts) || checked.spec.start_url !== spec.start_url) {
-    return { ok: false, rejections: [{ code: 'forbidden_path', index: null, message: 'domaines ou page de départ modifiés' }] };
-  }
-  return { ok: true, spec: checked.spec, operations: patch as JsonPatchOperation[], touched: [...changed].sort((a, b) => a - b) };
+  return { ok: true, spec: checked.spec, operations: patch as JsonPatchOperation[], touched };
 }

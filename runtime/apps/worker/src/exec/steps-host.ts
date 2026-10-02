@@ -15,7 +15,7 @@
 //   (`StepAgentPage`) dont chaque action passe par les mêmes contrôles ; la page n'est jamais donnée au modèle.
 import { createHash } from 'node:crypto';
 import type { ExecFailure } from '@runtime/core/exec';
-import { extractByLabels, type StepDef, type StepFailure, type StepPost, type StepSource, type StepsSpec, type StepTarget } from '@runtime/core';
+import { computeSideEffect, extractByLabels, isPaginationName, type StepDef, type StepFailure, type StepPost, type StepSource, type StepsSpec, type StepTarget } from '@runtime/core';
 import type { StepAgentObservation, StepAgentPage } from '@runtime/agent';
 import type { Locator, Page } from 'playwright-core';
 import { readPageView } from '@runtime/agent';
@@ -40,9 +40,15 @@ export type StepsTrialInfo = {
   readonly paused: number | null;
   /** Étapes passées (post comprise). */
   readonly passed: number;
+  /** Porte V4 : un document du run servi depuis un cache ancien (en-tête `age`, service worker). */
+  readonly stale: boolean;
 };
 
 const READ_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
+/** Requêtes dont une écriture compte comme l'effet d'une étape (une balise de mesure est coupée sans compter). */
+const EFFECT_TYPES = new Set(['document', 'xhr', 'fetch', 'eventsource', 'websocket']);
+/** Au-delà (secondes), une réponse servie par un cache est périmée (porte V4, à valider). */
+const STALE_AGE_SECONDS = 3600;
 const MAX_ELEMENTS = 300;
 const MAX_TEXT = 20_000;
 const MAX_INPUT = 2_000;
@@ -134,8 +140,16 @@ export class StepsHost {
   #observedWriteAt: number | null = null;
   #paused: number | null = null;
   #passed = 0;
+  #executed = false;
+  #agentPhase = false;
+  #stale = false;
+  readonly #allowWrite: boolean;
+  readonly #pages = new Set<string>();
+  /** Enregistrements extraits par l'hôte (les seuls retenus : ce que l'isolat émet n'est pas lu). */
+  readonly records: Record<string, unknown>[] = [];
 
-  constructor(options: { spec: StepsSpec; source: readonly StepSource[]; runInput: unknown; stopBefore?: number | null }) {
+  constructor(options: { spec: StepsSpec; source: readonly StepSource[]; runInput: unknown; stopBefore?: number | null; allowWriteActions?: boolean }) {
+    this.#allowWrite = options.allowWriteActions === true;
     this.#spec = options.spec;
     this.#post = new Map(options.source.map((s) => [s.id, s.post]));
     this.#inputs = typeof options.runInput === 'object' && options.runInput !== null && !Array.isArray(options.runInput) ? (options.runInput as Record<string, unknown>) : {};
@@ -143,7 +157,7 @@ export class StepsHost {
   }
 
   get info(): StepsTrialInfo {
-    return { failure: this.#failure, observedWriteAt: this.#observedWriteAt, paused: this.#paused, passed: this.#passed };
+    return { failure: this.#failure, observedWriteAt: this.#observedWriteAt, paused: this.#paused, passed: this.#passed, stale: this.#stale };
   }
 
   /** Entrée de l'isolat : plan d'étapes (opérations seulement) et arrêt éventuel avant une étape. */
@@ -151,9 +165,25 @@ export class StepsHost {
     return { steps: this.#spec.steps.map((s) => ({ op: s.op })), stop_before: this.#stopBefore };
   }
 
-  /** Requête vue par le contexte du run (hôte) : une écriture pendant une étape qui n'en attend pas est notée. */
-  noteRequest(method: string): void {
-    if (this.#active !== null && !READ_METHODS.has(method.toUpperCase())) this.#writes += 1;
+  /**
+   * Requête vue par le contexte du run, AVANT son départ : `true` = coupée. Toute requête hors GET/HEAD/OPTIONS est
+   * coupée, sauf pendant une étape `write` d'une API qui autorise l'écriture ; pendant une étape (ou la phase de
+   * l'agent), une écriture de document ou de données est notée comme l'effet observé de l'étape.
+   */
+  blockWrite(method: string, resourceType: string): boolean {
+    if (READ_METHODS.has(method.toUpperCase())) return false;
+    const step = this.#active === null ? undefined : this.#spec.steps[this.#active];
+    if (step !== undefined && step.side_effect === 'write' && this.#allowWrite && !this.#agentPhase) return false;
+    if ((this.#active !== null || this.#agentPhase) && EFFECT_TYPES.has(resourceType)) {
+      this.#writes += 1;
+      this.#flagWrite();
+    }
+    return true;
+  }
+  /** Document du cadre principal reçu : servi depuis un cache ancien ou un service worker → porte V4 en échec. */
+  noteDocument(headers: Record<string, string>, fromServiceWorker: boolean): void {
+    const age = Number(headers['age'] ?? '0');
+    if (fromServiceWorker || (Number.isFinite(age) && age > STALE_AGE_SECONDS)) this.#stale = true;
   }
   /** Soumission coupée sans `allow_write_actions` pendant l'étape active. */
   noteBlockedWrite(): void {
@@ -162,7 +192,7 @@ export class StepsHost {
   }
 
   #flagWrite(): void {
-    const i = this.#active;
+    const i = this.#active ?? (this.#agentPhase ? this.#paused : null);
     if (i === null || this.#writes === 0) return;
     if (this.#spec.steps[i]?.side_effect === 'write') return;
     if (this.#observedWriteAt === null) this.#observedWriteAt = i;
@@ -196,14 +226,23 @@ export class StepsHost {
       if (index !== this.#expected || this.#active !== null || index === this.#stopBefore) throw new SandboxBridgeError('invalid_bridge_call', true, 'steps : ordre');
       this.#active = index;
       this.#writes = 0;
+      this.#executed = false;
       const obs = await observePage(tools.page);
       this.#before = { url: obs.url, digest: digestOf(obs) };
       return {};
     }
     if (this.#active !== index) throw new SandboxBridgeError('invalid_bridge_call', true, 'steps : étape inactive');
-    if (action === 'end') return this.#end(step, index, tools);
+    if (action === 'end') {
+      if (!this.#executed) throw new SandboxBridgeError('invalid_bridge_call', true, 'steps : étape sautée');
+      return this.#end(step, index, tools);
+    }
     // L'action doit être l'opération de l'étape, dans la copie de l'hôte : l'isolat ne choisit rien d'autre.
     if (action !== step.op) throw new SandboxBridgeError('invalid_bridge_call', true, 'steps : opération');
+    // Une seule exécution par étape : l'isolat ne rejoue ni ne saute une action.
+    if (this.#executed) throw new SandboxBridgeError('invalid_bridge_call', true, 'steps : exécution répétée');
+    this.#executed = true;
+    // Étape d'écriture sur une API qui ne l'autorise pas (08 §4 mesure 4) : refusée avant toute action.
+    if (step.side_effect === 'write' && !this.#allowWrite) return this.#fail(index, stepFailed('code_error', 'write_action_blocked'));
     return this.#exec(step, index, tools);
   }
 
@@ -216,6 +255,15 @@ export class StepsHost {
       const n = await loc.count();
       if (n === 0) return this.#fail(index, stepFailed('extraction', 'target_not_found'));
       if (n > 1) return this.#fail(index, stepFailed('extraction', 'target_ambiguous'));
+      return loc;
+    };
+    /** `type` et `select` : un champ dans un formulaire est une écriture possible (19 §4), sauf étape `write`. */
+    const outOfForm = async (loc: Locator): Promise<Locator> => {
+      const inForm = await loc.evaluate((el) => (el as unknown as { closest(s: string): unknown }).closest('form') !== null).catch(() => true);
+      if (inForm && step.side_effect !== 'write') {
+        if (this.#observedWriteAt === null) this.#observedWriteAt = index;
+        return this.#fail(index, stepFailed('code_error', 'write_step_broken'));
+      }
       return loc;
     };
     const input = (): string => {
@@ -237,12 +285,12 @@ export class StepsHost {
       }
       case 'type': {
         const value = input();
-        await (await target()).fill(value, { timeout });
+        await (await outOfForm(await target())).fill(value, { timeout });
         return {};
       }
       case 'select': {
         const value = input();
-        await (await target()).selectOption(value, { timeout });
+        await (await outOfForm(await target())).selectOption(value, { timeout });
         return {};
       }
       case 'scroll':
@@ -263,6 +311,7 @@ export class StepsHost {
         if (view === null) return this.#fail(index, stepFailed('extraction', 'response_too_large'));
         const out = extractByLabels(view, step.fields ?? {});
         if (!out.ok) return this.#fail(index, stepFailed('extraction', `field_${out.reason}`));
+        this.records.push(out.record);
         return { record: out.record };
       }
     }
@@ -297,8 +346,15 @@ export class StepsHost {
       if (!ok) return this.#fail(index, stepFailed('extraction', 'post_failed'));
     }
     // Faux succès sans LLM : un clic ou une sélection qui ne change rien.
-    if ((step.op === 'click' || step.op === 'select') && after.url === before.url && digestOf(after) === before.digest) {
+    const digest = digestOf(after);
+    if ((step.op === 'click' || step.op === 'select') && after.url === before.url && digest === before.digest) {
       return this.#fail(index, stepFailed('extraction', 'no_effect'));
+    }
+    // Pagination qui revient sur une page déjà vue dans ce run.
+    const t = step.target;
+    if (step.op === 'click' && t !== undefined && 'name' in t && isPaginationName(t.name)) {
+      if (this.#pages.has(digest)) return this.#fail(index, stepFailed('extraction', 'pagination_stalled'));
+      this.#pages.add(before.digest);
     }
     this.#active = null;
     this.#before = null;
@@ -310,6 +366,8 @@ export class StepsHost {
   /** Vue de l'agent d'étape sur la page arrêtée avant l'étape cassée : actions contrôlées, mêmes gardes. */
   agentPage(tools: StepPageTools, runInputs: Readonly<Record<string, string>>): StepAgentPage {
     const page = tools.page;
+    // Phase de l'agent : toute écriture est coupée et notée ; un clic dont l'effet calculé est `write` est refusé.
+    this.#agentPhase = true;
     const guarded = async (fn: () => Promise<void>): Promise<{ ok: true } | { ok: false; error: string }> => {
       try {
         await fn();
@@ -327,7 +385,12 @@ export class StepsHost {
     };
     return {
       observe: () => observePage(page),
-      click: (t) => guarded(async () => tools.click(await single(t))),
+      click: (t) =>
+        guarded(async () => {
+          if (computeSideEffect({ op: 'click', target: t }) === 'write') throw new SandboxBridgeError('page_failed', false, 'write_target');
+          await tools.click(await single(t));
+          if (this.#writes > 0) throw new SandboxBridgeError('page_failed', false, 'write_observed');
+        }),
       // La valeur saisie est une entrée du run (contrôlée par l'agent d'étape) ; le champ ne doit pas être dans un formulaire.
       type: (t, text) =>
         guarded(async () => {

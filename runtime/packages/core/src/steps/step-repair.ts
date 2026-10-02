@@ -183,7 +183,8 @@ export async function repairSteps(args: {
     if (step === undefined) return { kind: 'failed', journal };
     const route = stepRepairRoute({ failureClass: pending.failure.failure_class, sideEffect: step.side_effect, session: args.context.session, tunnel: args.context.tunnel });
     if (route.kind === 'classifier') return { kind: 'classified', failure: pending.failure, journal };
-    if (route.kind === 'write_step_broken') {
+    // Effet d'écriture OBSERVÉ au rejeu (requête non GET, soumission) : l'effet de l'étape a changé, jamais réparée seule.
+    if (route.kind === 'write_step_broken' || pending.failure.detail === 'write_step_broken') {
       journal.push({ step_id: step.id, step_level: null, step_outcome: 'failed', cost_usd: 0, llm_usd: 0, tokens_in: 0, tokens_out: 0, detail: 'write_step_broken' });
       return { kind: 'write_step_broken', stepId: step.id, journal };
     }
@@ -206,8 +207,10 @@ export async function repairSteps(args: {
       }
     }
     // Niveaux 2 et 3 : agent borné (étape, puis segment une fois). Jamais avec session ni en tunnel.
+    // Agent seulement pour une étape à cible (clic, saisie, sélection, attente) : il ne propose qu'une cible.
+    const targeted = step.target !== undefined && (step.op === 'click' || step.op === 'type' || step.op === 'select' || step.op === 'wait_for');
     for (const level of [2, 3] as const) {
-      if (outcome !== null || !route.levels.includes(level) || args.ports.agent === undefined) continue;
+      if (outcome !== null || !targeted || !route.levels.includes(level) || args.ports.agent === undefined) continue;
       const src = sourceOf(step.id);
       const res = await args.ports.agent({
         level,
@@ -230,8 +233,8 @@ export async function repairSteps(args: {
         journal.push({ step_id: step.id, step_level: level, step_outcome: 'failed', cost_usd: res.costUsd, llm_usd: res.costUsd, tokens_in: res.tokensIn, tokens_out: res.tokensOut, detail: checked.rejections[0]?.code ?? 'invalid_patch' });
         continue;
       }
-      // Index de l'étape réparée après d'éventuelles insertions devant elle.
-      const shifted = index + res.patch.filter((op) => op.op === 'add' && /^\/steps\/\d+$/.test(op.path) && Number(op.path.split('/')[2]) <= index).length;
+      // Index de l'étape réparée après d'éventuelles insertions : retrouvée par son identifiant.
+      const shifted = checked.spec.steps.findIndex((s) => s.id === step.id);
       const out = await attempt(checked.spec, res.patch, shifted, checked.touched, level, spent);
       if (out.kind !== 'rejected') outcome = out;
     }

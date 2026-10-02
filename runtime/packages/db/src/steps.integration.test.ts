@@ -99,6 +99,12 @@ describe('assert_instructed_mode_explicit (base)', () => {
     await pool.query('UPDATE strategy_versions SET instructed_steps = $2::jsonb, instructed_steps_sha256 = $3 WHERE api_id = $1 AND version = 1', [api, JSON.stringify(changed), instructedStepsSha256(changed)]);
     expect((await readInstructedState(pool, { apiId: api, ownerId: A }))?.instructed_mode).toBe(false);
     expect(await setInstructedMode(pool, { apiId: api, ownerId: A, enabled: false })).toEqual({ ok: true });
+    // Étapes changées SANS changer l'empreinte (écriture directe) : la confirmation tombe aussi.
+    await confirmInstructedSteps(pool, { apiId: api, ownerId: A, userId: A, version: 1, sha256: instructedStepsSha256(changed) });
+    expect(await setInstructedMode(pool, { apiId: api, ownerId: A, enabled: true })).toEqual({ ok: true });
+    await pool.query("UPDATE strategy_versions SET instructed_steps = '[{\"id\":\"i9\",\"intent\":\"Autre\",\"post\":[]}]'::jsonb WHERE api_id = $1 AND version = 1", [api]);
+    const after = await readInstructedState(pool, { apiId: api, ownerId: A });
+    expect(after).toMatchObject({ instructed_mode: false, confirmed_by: null });
   });
 
   test('API compilable : le mode ne s’active pas ; B ne touche pas l’API de A', async () => {

@@ -173,3 +173,14 @@ export async function countSucceededRuns(pool: pg.Pool, args: { apiId: string; o
     return rows[0]?.n ?? 0;
   });
 }
+
+/** Un correctif identique (patch) a-t-il déjà été archivé non validé pour cette version parente ? */
+export async function archivedRepairExists(pool: pg.Pool, args: { apiId: string; ownerId: string; parentVersion: number; patch: unknown[] }): Promise<boolean> {
+  return withActor(pool, { userId: args.ownerId, role: 'member' }, async (tx) => {
+    const { rowCount } = await tx.query(
+      "SELECT 1 FROM strategy_versions WHERE api_id = $1 AND parent_version = $2 AND archive_reason = 'repair_not_validated' AND patch = $3::jsonb",
+      [args.apiId, args.parentVersion, JSON.stringify(args.patch)],
+    );
+    return (rowCount ?? 0) > 0;
+  });
+}

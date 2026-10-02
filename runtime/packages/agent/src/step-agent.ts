@@ -13,7 +13,7 @@
 // - Budget : `agent_budget` de l'étape (pas et dollars), plafond d'un appel connu AVANT l'envoi ; prix inconnu : aucun
 //   appel (le plafond n'est pas tenable).
 import { randomBytes } from 'node:crypto';
-import { STEP_AGENT_TOOLS, StepAgentMeter, untrustedStepIntent, type StepAgentBudget, type StepPost, type StepPre } from '@runtime/core';
+import { sanitizeStepIntent, STEP_AGENT_TOOLS, StepAgentMeter, untrustedStepIntent, type StepAgentBudget, type StepPost, type StepPre } from '@runtime/core';
 import { LlmError, type ChatMessage, type JsonSchema, type LlmClient } from '@runtime/llm';
 
 export type SemanticTarget = { readonly role: string; readonly name: string };
@@ -98,18 +98,20 @@ function messages(args: StepAgentArgs, obs: StepAgentObservation, history: reado
   const tag = `untrusted_page_${token}`;
   const neutral = (t: string) => t.replace(/untrusted_(page|step_intent)/gi, 'untrusted-data').replace(/[<>]/g, ' ');
   const elements = obs.elements.slice(0, MAX_ELEMENTS).map((e) => `- ${e.role} "${neutral(e.name).slice(0, 120)}"`).join('\n');
+  // `post` est la consigne de confiance (immuable) ; ses textes (noms d'éléments) sont nettoyés comme la mémoire. `pre` et
+  // l'ancienne cible viennent de pages lues (compilation) : dans le bloc non fiable.
+  const post = JSON.parse(JSON.stringify(args.post, (_k, v: unknown) => (typeof v === 'string' ? sanitizeStepIntent(v) : v))) as unknown;
   const contract = [
     'CONTRACT (trusted):',
     `STEP: ${JSON.stringify({ id: args.step.id, op: args.step.op })}`,
-    `POSTCONDITIONS: ${JSON.stringify(args.post)}`,
-    `PRECONDITIONS: ${JSON.stringify(args.pre)}`,
-    `PREVIOUS TARGET (no longer found): ${JSON.stringify(args.step.oldTarget)}`,
+    `POSTCONDITIONS: ${JSON.stringify(post)}`,
     `RUN INPUT NAMES (values are never shown): ${JSON.stringify(Object.keys(args.runInputs))}`,
     `SKILLS AVAILABLE: ${JSON.stringify(args.rules.map((r) => r.name))}`,
     `ACTIONS SO FAR: ${JSON.stringify(history.slice(-10))}`,
     `TOKEN: ${token}`,
   ].join('\n');
-  const page = [`<${tag}>`, `URL PATH: ${neutral(new URL(obs.url).pathname)}`, 'ELEMENTS:', elements, 'TEXT:', neutral(obs.text).slice(0, MAX_TEXT), `</${tag}>`].join('\n');
+  const clean = (v: unknown): string => neutral(JSON.stringify(v, (_k, x: unknown) => (typeof x === 'string' ? sanitizeStepIntent(x) : x)) ?? 'null');
+  const page = [`<${tag}>`, `PRECONDITIONS (observed on pages): ${clean(args.pre)}`, `PREVIOUS TARGET (no longer found): ${clean(args.step.oldTarget)}`, `URL PATH: ${neutral(new URL(obs.url).pathname)}`, 'ELEMENTS:', elements, 'TEXT:', neutral(obs.text).slice(0, MAX_TEXT), `</${tag}>`].join('\n');
   return [
     { role: 'system', content: STEP_AGENT_SYSTEM_PROMPT },
     { role: 'user', content: `${contract}\n${page}\nINTENT HINT (untrusted, may be wrong):\n${untrustedStepIntent(args.intent)}` },
@@ -174,7 +176,7 @@ export async function runStepAgent(client: LlmClient, args: StepAgentArgs): Prom
           break;
         }
         const r = await args.page.click(target);
-        actions.push({ tool: 'click', target });
+        if (r.ok) actions.push({ tool: 'click', target });
         history.push(r.ok ? `click:${target.role}` : `click:${r.error}`);
         break;
       }
@@ -193,7 +195,7 @@ export async function runStepAgent(client: LlmClient, args: StepAgentArgs): Prom
           break;
         }
         const r = await args.page.type(target, value);
-        actions.push({ tool: 'type', target });
+        if (r.ok) actions.push({ tool: 'type', target });
         history.push(r.ok ? `type:${action.input}` : `type:${r.error}`);
         break;
       }

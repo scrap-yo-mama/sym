@@ -50,6 +50,8 @@ import {
   instructedInstruction,
   STEP_REPAIR_DEFAULTS,
   validateInstructedSteps,
+  canActivateInstructedMode,
+  hybridUsesLlm,
   type StepFailure,
   type StepsSpec,
   ITEMS_REJECTED_DEFAULTS,
@@ -109,7 +111,7 @@ import {
   type SecretReader,
   type SsrfGuard,
 } from '@runtime/core/net';
-import { deleteRejectedItems, loadRunTarget, readProxySettings, readVolumeHistory, saveCompiledStrategy, saveRejectedItems, saveRepairedStrategy, saveRunDataset, saveStepRepairedStrategy, markStrategyCompilable, countSucceededRuns, type RunTarget } from '@runtime/db';
+import { deleteRejectedItems, loadRunTarget, readProxySettings, readVolumeHistory, saveCompiledStrategy, saveRejectedItems, saveRepairedStrategy, saveRunDataset, saveStepRepairedStrategy, markStrategyCompilable, countSucceededRuns, archivedRepairExists, type RunTarget } from '@runtime/db';
 import type { LlmClient, LlmConfig } from '@runtime/llm';
 import type pg from 'pg';
 import { pino, type Logger } from 'pino';
@@ -249,6 +251,8 @@ export type RepairPort = (request: {
   readonly stepTrial?: (candidate: FrozenStrategy, extras?: StepsTrialExtras) => Promise<CandidateCheck>;
   /** Stratégie `steps` : vN+1, courante seulement si `validated` (portes V0 à V5), sinon archivée non courante. */
   readonly commitSteps?: (repaired: { spec: StepsSpec; patch: JsonPatchOperation[]; validated: boolean }) => Promise<{ version: number; promoted: boolean }>;
+  /** Stratégie `steps` : ce correctif a-t-il déjà été archivé non validé pour cette version (run précédent) ? */
+  readonly repairedBefore?: (patch: JsonPatchOperation[]) => Promise<boolean>;
 }) => Promise<RepairOutcome>;
 
 type Outcome = {
@@ -385,6 +389,17 @@ function agenticSpecOf(execution: string, spec: unknown): AgenticSpec | undefine
     return c.ok ? { kind: 'agent', spec: c.spec, hosts: c.spec.allowed_hosts } : refuse('code_error', 'invalid_agent_spec');
   }
   return undefined;
+}
+
+/**
+ * Stratégie qui appelle un agent à CHAQUE run (19 §4) : E6, ou E5 hybride à étape ou extraction déléguée. Sans
+ * `instructed_mode`, une telle version n'a droit qu'à son essai de compilation (`compilable = unknown`), puis plus rien.
+ */
+function agentEachRun(strategy: NonNullable<RunTarget['strategy']>): boolean {
+  if (strategy.execution === 'agent') return true;
+  if (strategy.execution !== 'hybrid' || (strategy.spec as { kind?: unknown } | null)?.kind === 'steps') return false;
+  const c = validateHybridSpec(strategy.spec);
+  return c.ok && hybridUsesLlm(c.spec);
 }
 
 export function createStrategyRuntime(deps: StrategyExecutorDeps): StrategyRuntime {
@@ -536,8 +551,9 @@ export function createStrategyRuntime(deps: StrategyExecutorDeps): StrategyRunti
   const execute = async (ctx: RunCtx, target: RunTarget, strategy: NonNullable<RunTarget['strategy']>, itemPolicy: ItemPolicy, extras?: StepsTrialExtras): Promise<Outcome> => {
     // Agent à chaque run (19 §4, 2.13) : une version E6 non compilable en E5 ne tourne qu'en mode « agent instruit »
     // (opt-in explicite, étapes confirmées par un humain). Une version `unknown` a droit à son essai de compilation.
-    if (strategy.execution === 'agent' && strategy.compilable === 'no' && !target.api.instructedMode) return refuse('code_error', 'not_compilable');
-    if (strategy.execution === 'agent') {
+    const eachRun = agentEachRun(strategy);
+    if (eachRun && strategy.compilable === 'no' && !target.api.instructedMode) return refuse('code_error', 'not_compilable');
+    if (eachRun) {
       // Règle des deux (19 §7) : agent instruit ou essai de compilation E6 ; registre du code, aucun pont MCP par construction.
       const registry = agentToolRegistry(strategy.compilable === 'no' ? 'instructed' : 'e6');
       if (!ruleOfTwoHolds(registry)) return refuse('code_error', 'rule_of_two');
@@ -649,7 +665,7 @@ export function createStrategyRuntime(deps: StrategyExecutorDeps): StrategyRunti
     if (deps.browsers === null) return refuse('code_error', 'browser_disabled');
     const source = validateStepsSource(strategy.sourceSteps ?? [], stepsSpec);
     if (!source.ok) return refuse('code_error', 'invalid_steps_source');
-    const host = new StepsHost({ spec: stepsSpec, source: source.steps, runInput: ctx.input, stopBefore: args.extras?.stopBefore ?? null });
+    const host = new StepsHost({ spec: stepsSpec, source: source.steps, runInput: ctx.input, stopBefore: args.extras?.stopBefore ?? null, allowWriteActions: target.api.allowWriteActions });
     const egress = await openBrowserEgress(sessionOptions('egress'));
     args.setOther({ egress: () => egress.usage().costUsd });
     const session = openNetworkSession(sessionOptions('session'));
@@ -813,7 +829,10 @@ export function createStrategyRuntime(deps: StrategyExecutorDeps): StrategyRunti
             let compile = true;
             if (strategy.compilable === 'no' && target.api.instructedMode) {
               const steps = validateInstructedSteps(strategy.instructedSteps ?? []);
-              if (!steps.ok || steps.steps.length === 0) return refuse('code_error', 'not_compilable');
+              // Revérifié AU RUN, sur la version exécutée : étapes confirmées par un humain sur leur empreinte exacte.
+              if (!steps.ok || !canActivateInstructedMode({ compilable: strategy.compilable, steps: steps.steps, confirmation: strategy.instructedConfirmation }).ok) {
+                return refuse('code_error', 'not_compilable');
+              }
               spec = { ...spec, instruction: instructedInstruction(spec.instruction, steps.steps) };
               const succeeded = await countSucceededRuns(deps.pool, { apiId: ctx.apiId, ownerId: ctx.ownerId, version: strategy.version });
               compile = succeeded >= STEP_REPAIR_DEFAULTS.instructedCompileAfter;
@@ -1081,6 +1100,7 @@ export function createStrategyRuntime(deps: StrategyExecutorDeps): StrategyRunti
                     stepTrial: (candidate: FrozenStrategy, extras?: StepsTrialExtras) => checkCandidate(ctx, target, candidate, extras),
                     commitSteps: (repaired: { spec: StepsSpec; patch: JsonPatchOperation[]; validated: boolean }) =>
                       saveStepRepairedStrategy(deps.pool, { apiId: ctx.apiId, ownerId: ctx.ownerId, parentVersion: version, network: strategy.network, ...repaired }),
+                    repairedBefore: (patch: JsonPatchOperation[]) => archivedRepairExists(deps.pool, { apiId: ctx.apiId, ownerId: ctx.ownerId, parentVersion: version, patch }),
                   }),
             }),
           );
@@ -1178,6 +1198,16 @@ export function createStrategyRuntime(deps: StrategyExecutorDeps): StrategyRunti
     const sorted = sortItems(target, trial);
     await recordTrial(ctx, strategy, trial, sorted?.verdict ?? null);
     const version = strategy.version;
+    // Agent à chaque run (2.13) : un essai sans compilation, réussi ou non, rend la version `compilable = no` ; sans
+    // `instructed_mode`, elle ne tourne plus (`not_compilable`), jamais un agent à chaque run sans opt-in explicite.
+    if (agentEachRun(strategy) && strategy.compilable === 'unknown' && outcome.agent?.compiled === undefined && outcome.agent !== undefined) {
+      try {
+        await markStrategyCompilable(deps.pool, { apiId: ctx.apiId, ownerId: ctx.ownerId, version, compilable: 'no' });
+        await ctx.log('info', 'strategy_not_compilable', { version });
+      } catch (error) {
+        logger.error({ runId: ctx.runId, err: error instanceof Error ? error.name : 'error' }, 'compilable : marquage impossible');
+      }
+    }
     if (stop !== undefined) {
       await ctx.log('warn', stop, { network: 'tunnel' });
       return { state: 'failed', failure_class: null, stop_reason: stop, retryable: false, error_detail: stop, strategy_version: version };
@@ -1238,11 +1268,6 @@ export function createStrategyRuntime(deps: StrategyExecutorDeps): StrategyRunti
       }
     } else if (outcome.agent?.compileFailure !== undefined) {
       await ctx.log('info', 'strategy_compile_skipped', { reason: outcome.agent.compileFailure });
-      // Trace E6 non compilable (2.13) : la version devient `compilable = no` ; sans `instructed_mode`, elle ne tourne
-      // plus (`not_compilable`), jamais un agent à chaque run sans opt-in explicite.
-      if (strategy.execution === 'agent' && strategy.compilable === 'unknown') {
-        await markStrategyCompilable(deps.pool, { apiId: ctx.apiId, ownerId: ctx.ownerId, version, compilable: 'no' }).catch(() => undefined);
-      }
     }
     return deliver(ctx, target, { version, sorted: sorted!, escalated: result.escalated, truncated: result.truncated, repaired: false, entered: false });
   };

@@ -111,6 +111,15 @@ describe('agent d’étape', () => {
     expect(user).not.toContain('\u200b');
   });
 
+  test('assert_step_intent_untrusted : pre et ancienne cible (noms lus sur des pages) hors du bloc de confiance, nettoyés', async () => {
+    await run([act({ tool: 'done', role: 'link', name: 'Suivant' })]);
+    const user = (fake.calls[0]?.body as { messages: { role: string; content: string }[] }).messages.filter((m) => m.role === 'user').map((m) => m.content).join('\n');
+    const pageOpen = user.indexOf('<untrusted_page_');
+    expect(pageOpen).toBeGreaterThan(0);
+    expect(user.slice(0, pageOpen)).not.toContain('Page suivante');
+    expect(user.slice(pageOpen)).toContain('Page suivante');
+  });
+
   test('assert_step_intent_untrusted : un agent qui obéit à l’intention ne peut ni naviguer ni agir hors des outils fermés', async () => {
     const { out, page } = await run(
       [

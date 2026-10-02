@@ -37,6 +37,7 @@ export type RunTarget = {
     readonly sourceSteps: unknown;
     /** Étapes instruites (agent instruit) : brutes, avec l'empreinte et la confirmation humaine (non fiables sinon). */
     readonly instructedSteps: unknown;
+    readonly instructedConfirmation: { readonly by: string | null; readonly at: string | null; readonly sha256: string } | null;
   } | null;
 };
 
@@ -63,8 +64,8 @@ export async function loadRunTarget(pool: pg.Pool, args: { apiId: string; ownerI
     if (api === undefined) return null;
     let strategy: RunTarget['strategy'] = null;
     if (args.version !== null) {
-      const sv = await tx.query<{ version: number; execution: Execution; network: Network; spec: unknown; script_ref: string | null; est_cost_usd: string | null; compilable: StrategyCompilable; source_steps: unknown; instructed_steps: unknown }>(
-        'SELECT version, execution, network, spec, script_ref, est_cost_usd, compilable, source_steps, instructed_steps FROM strategy_versions WHERE api_id = $1 AND version = $2',
+      const sv = await tx.query<{ version: number; execution: Execution; network: Network; spec: unknown; script_ref: string | null; est_cost_usd: string | null; compilable: StrategyCompilable; source_steps: unknown; instructed_steps: unknown; instructed_steps_confirmed: { by?: string | null; at?: string | null; sha256?: string } | null }>(
+        'SELECT version, execution, network, spec, script_ref, est_cost_usd, compilable, source_steps, instructed_steps, instructed_steps_confirmed FROM strategy_versions WHERE api_id = $1 AND version = $2',
         [args.apiId, args.version],
       );
       const s = sv.rows[0];
@@ -79,6 +80,8 @@ export async function loadRunTarget(pool: pg.Pool, args: { apiId: string; ownerI
           compilable: s.compilable,
           sourceSteps: s.source_steps,
           instructedSteps: s.instructed_steps,
+          instructedConfirmation:
+            s.instructed_steps_confirmed === null ? null : { by: s.instructed_steps_confirmed.by ?? null, at: s.instructed_steps_confirmed.at ?? null, sha256: s.instructed_steps_confirmed.sha256 ?? '' },
         };
       }
     }
