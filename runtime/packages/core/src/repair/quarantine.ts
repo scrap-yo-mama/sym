@@ -73,17 +73,22 @@ function issuePointer(instancePath: string, keyword: string, params: Record<stri
  * le schéma est inacceptable (jamais de requête réseau).
  */
 export function itemIssues(outputSchema: unknown, item: unknown): { keyword: string; instance_path: string }[] {
-  const validate = compileSchema(outputSchema);
+  return issuesOf(compileSchema(outputSchema), item);
+}
+
+function issuesOf(validate: ReturnType<typeof compileSchema>, item: unknown): { keyword: string; instance_path: string }[] {
   if (validate(item)) return [];
   return (validate.errors ?? []).slice(0, MAX_ISSUES_PER_ITEM).map((e) => ({ keyword: e.keyword, instance_path: issuePointer(e.instancePath, e.keyword, e.params as Record<string, unknown>) }));
 }
 
 /** Partage les items : conformes (livrables) et rejetés (quarantaine). L'ordre des conformes est conservé. */
 export function partitionItems<T>(outputSchema: unknown, items: readonly T[]): ItemPartition<T> {
+  // Schéma compilé une fois pour le lot (pas une sérialisation de clé de cache par item).
+  const validate = compileSchema(outputSchema);
   const conform: T[] = [];
   const rejected: RejectedItem[] = [];
   for (const item of items) {
-    const issues = itemIssues(outputSchema, item);
+    const issues = issuesOf(validate, item);
     if (issues.length === 0) conform.push(item);
     else rejected.push({ item, issues });
   }

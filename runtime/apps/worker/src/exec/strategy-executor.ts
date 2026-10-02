@@ -44,7 +44,6 @@ import {
   ITEMS_REJECTED_DEFAULTS,
   partitionItems,
   quarantineSummary,
-  rejectionReasons,
   rejectionVerdict,
   volumeAnomaly,
   type DegradedSignal,
@@ -825,17 +824,21 @@ export function createStrategyRuntime(deps: StrategyExecutorDeps): StrategyRunti
 
   /** Runs en cours dont la quarantaine est déjà écrite (casse puis réparation : la quarantaine est remplacée ou retirée). */
   const quarantined = new Set<string>();
-  /** Quarantaine du run (D-49) : agrégats sans valeur et échantillon nettoyé, écrits comme l'appelant du run. */
-  const quarantine = async (ctx: RunCtx, target: RunTarget, partition: ItemPartition<Record<string, unknown>>, verdict: RejectionVerdict): Promise<void> => {
+  /**
+   * Quarantaine du run (D-49) : agrégats sans valeur et échantillon nettoyé, écrits comme l'appelant du run. Rend les raisons
+   * MASQUÉES (motifs, registre du run) : les seules qui entrent dans le prompt de réparation (un nom de clé vient du site).
+   */
+  const quarantine = async (ctx: RunCtx, target: RunTarget, partition: ItemPartition<Record<string, unknown>>, verdict: RejectionVerdict): Promise<readonly RejectionReason[]> => {
     // Sortie (réparée) sans rejet : une quarantaine de diagnostic écrite à la casse ne décrit plus le run livré.
     if (partition.rejected.length === 0) {
       if (quarantined.delete(ctx.runId)) await deleteRejectedItems(deps.pool, { runId: ctx.runId, ownerId: ctx.ownerId });
-      return;
+      return [];
     }
     quarantined.add(ctx.runId);
     const summary = quarantineSummary(target.api.outputSchema, partition.rejected, ctx.personal);
     await saveRejectedItems(deps.pool, { runId: ctx.runId, apiId: ctx.apiId, ownerId: ctx.ownerId, projectId: target.api.projectId, summary });
     await ctx.log('info', 'items_rejected', { count: summary.total_rejected, delivered: partition.conform.length, verdict, by_reason: summary.by_reason.slice(0, 10) });
+    return summary.by_reason;
   };
 
   /** Une candidate de réparation rejouée avec toutes les gardes, journalisée comme un essai. */
@@ -1051,10 +1054,10 @@ export function createStrategyRuntime(deps: StrategyExecutorDeps): StrategyRunti
     // Casse par les items non conformes (D-49) : 0 item conforme, ou au-delà du seuil (part ET nombre). Rien n'est livré ;
     // la quarantaine est écrite pour le diagnostic, puis réparation dans le même run (classe `extraction`, INV1).
     if (sorted !== null && sorted.verdict === 'break') {
-      await quarantine(ctx, target, sorted.partition, sorted.verdict);
+      const reasons = await quarantine(ctx, target, sorted.partition, sorted.verdict);
       const failure: ExecFailure = { failure_class: 'extraction', retryable: false, detail: sorted.partition.conform.length === 0 ? 'schema_mismatch' : 'items_rejected' };
       await ctx.log('warn', 'schema_mismatch', { conform: sorted.partition.conform.length, rejected: sorted.partition.rejected.length });
-      return onFailure(ctx, target, strategy, { original: failure, failure, evidence: [], reasons: rejectionReasons(sorted.partition.rejected), rejected: sorted.partition.rejected.length });
+      return onFailure(ctx, target, strategy, { original: failure, failure, evidence: [], reasons, rejected: sorted.partition.rejected.length });
     }
     // Compilation E6 → E5 vérifiée (04 §3.1) : nouvelle version `hybrid`, signal de baisse de coût journalisé.
     const compiled = outcome.agent?.compiled;

@@ -190,6 +190,14 @@ describe('items non conformes écartés (D-49)', () => {
     expect(run).toMatchObject({ state: 'failed', failure_class: 'extraction', items: 0, dataset_id: null });
     expect(run.attempts[0]).toMatchObject({ result: 'extraction' });
     expect(fake.requests).toBe(1);
+    // Raisons de rejet (sans valeur, masquées) données au rôle `repair` DANS le bloc non fiable : un pointeur porte un nom
+    // de clé qui peut venir du site.
+    const user = String((fake.calls[0]!.body as { messages: { role: string; content: unknown }[] }).messages.find((m) => m.role === 'user')?.content);
+    const open = user.search(/<untrusted_evidence_[0-9a-f]+>/);
+    expect(open).toBeGreaterThan(0);
+    expect(user.slice(0, open)).not.toContain('REJECTION REASONS');
+    expect(user.slice(open)).toContain('REJECTION REASONS: [{"keyword":"type","instance_path":"/score","count":150}]');
+    expect(user).not.toContain('N/A');
     // Aucun dataset ne contient un item non conforme (aucun dataset du tout pour ce run) ; quarantaine écrite (diagnostic).
     expect((await pool.query('SELECT 1 FROM datasets WHERE run_id = $1', [run.id])).rowCount).toBe(0);
     expect((await pool.query<{ total_rejected: number }>('SELECT total_rejected FROM run_rejected_items WHERE run_id = $1', [run.id])).rows[0]!.total_rejected).toBe(150);
@@ -338,5 +346,24 @@ describe('bail de réparation (04 §5)', () => {
     const waited = [...(await logEvents(a.id)), ...(await logEvents(b.id))].filter((e) => e.event === 'repair_lease_waited');
     expect(waited).toEqual([expect.objectContaining({ data: expect.objectContaining({ from_version: 1, current_version: 2 }) as unknown })]);
     expect((await pool.query<{ owner: string | null }>('SELECT repair_lease_owner AS owner FROM apis WHERE id = $1', [apiId])).rows[0]!.owner).toBeNull();
+  });
+
+  test('bail perdu pendant la réparation (pris par un autre) : aucune vN+1 enregistrée hors bail, stratégie précédente conservée', async () => {
+    const apiId = await healthyContacts('zz_test_lease_lost');
+    await site('api_json', { mutation: 'rename_field' });
+    const ops = [{ op: 'replace', path: '/fields/name/path', value: '$.full_name' }];
+    fake.setScenario(MODEL, [{ ...proposal(ops), delayMs: 1_500 } as ScriptedStep]);
+    const { runId } = await withActor(pool, actorA, (tx) => createRun(tx, queue, { apiId, ownerId: A, trigger: 'rest' }));
+    // Le run prend le bail, puis un autre détenteur le lui prend pendant que la proposition tarde.
+    await vi.waitFor(async () => expect((await pool.query<{ owner: string | null }>('SELECT repair_lease_owner AS owner FROM apis WHERE id = $1', [apiId])).rows[0]!.owner).toBe(`run:${runId}`), { timeout: 30_000, interval: 50 });
+    await pool.query("UPDATE apis SET repair_lease_owner = 'zz_test_thief', repair_lease_until = now() + interval '2 seconds' WHERE id = $1", [apiId]);
+    await vi.waitFor(async () => expect(['succeeded', 'failed']).toContain((await pool.query<{ state: string }>('SELECT state FROM runs WHERE id = $1', [runId])).rows[0]!.state), { timeout: 45_000, interval: 100 });
+    const run = (await withActor(pool, actorA, (tx) => readRun(tx, runId)))!;
+    expect(run).toMatchObject({ state: 'failed', strategy_version: 1 });
+    expect(await versions(apiId)).toHaveLength(1);
+    expect(await apiRow(apiId)).toMatchObject({ current_strategy_version: 1 });
+    expect((await logEvents(runId)).map((e) => e.event)).toContain('repair_lease_lost');
+    // Le bail de l'autre détenteur n'est jamais libéré par ce run.
+    expect((await pool.query<{ owner: string | null }>('SELECT repair_lease_owner AS owner FROM apis WHERE id = $1', [apiId])).rows[0]!.owner).toBe('zz_test_thief');
   });
 });

@@ -3,6 +3,8 @@
 // de classification (`invokeAgentGuarded`) : jamais après un refus, un défi, une connexion requise ou un 429 (INV6).
 // 1. Bail de réparation en table (`apis.repair_lease_*`) : une seule réparation à la fois par API ; vN+1 est enregistrée
 //    (`commit`) AVANT la libération du bail ; un run concurrent attend (dans la limite de `leaseWaitMs`), puis rejoue vN+1.
+//    Le bail est vérifié (et prolongé) avant chaque proposition et avant l'enregistrement : perdu, la réparation s'arrête
+//    là, sans vN+1 (`repair_lease_lost`), et le run attend comme s'il l'avait trouvé tenu.
 // 2. Rôle `repair` (`proposeRepair`) : patch JSON BORNÉ (RFC 6902) sur `sources`, `fields`, `pagination` ; validé par
 //    `validateRepairPatch` (jamais `request.allowed_hosts`, `request.session` ni `output_schema` : `output_schema` n'est
 //    JAMAIS modifié par une réparation), puis rejoué avec TOUTES les gardes du run (essai journalisé, INV2, INV4).
@@ -69,12 +71,6 @@ class RepairBudgetGuard extends Error {
   override name = 'RepairBudgetGuard';
 }
 
-/** vN+1 enregistrée pendant que le bail est encore tenu (appelé depuis `repairUnderLease`, avant la libération). */
-async function committed(request: Parameters<RepairPort>[0], strategy: RepairedStrategy, check: CandidateCheck): Promise<RepairOutcome> {
-  const saved = await request.commit(strategy);
-  return { kind: 'repaired', strategy, check, saved };
-}
-
 export function createRepairPort(deps: RepairEngineDeps): RepairPort {
   const logger = deps.logger ?? pino({ enabled: false });
   const leaseTtl = deps.leaseTtlSeconds ?? 90;
@@ -109,19 +105,40 @@ export function createRepairPort(deps: RepairEngineDeps): RepairPort {
     // 1. Bail : une seule réparation à la fois par API.
     const leaseOwner = `run:${ctx.runId}`;
     if (!(await acquireRepairLease(deps.pool, ctx.apiId, leaseOwner, leaseTtl))) return waitForOtherRepair(ctx, strategy.version);
+    // Bail perdu (expiré puis pris par un autre) : plus aucune proposition ni vN+1 ; le run fait comme s'il avait trouvé le
+    // bail tenu (attente, puis vN+1 de l'autre réparation, ou échec).
+    let lost = false;
+    const holds = async (): Promise<boolean> => {
+      if (!lost && !(await renewRepairLease(deps.pool, ctx.apiId, leaseOwner, leaseTtl))) lost = true;
+      return !lost;
+    };
     const renew = setInterval(() => {
-      renewRepairLease(deps.pool, ctx.apiId, leaseOwner, leaseTtl).catch((error: unknown) => logger.warn({ runId: ctx.runId, err: error instanceof Error ? error.name : 'error' }, 'bail de réparation : renouvellement impossible'));
+      renewRepairLease(deps.pool, ctx.apiId, leaseOwner, leaseTtl)
+        .then((held) => {
+          if (!held) lost = true;
+        })
+        .catch((error: unknown) => logger.warn({ runId: ctx.runId, err: error instanceof Error ? error.name : 'error' }, 'bail de réparation : renouvellement impossible'));
     }, Math.max(1_000, (leaseTtl * 1000) / 3));
     try {
-      return await repairUnderLease(ctx, request, spec);
+      return await repairUnderLease(ctx, request, spec, holds);
     } finally {
       clearInterval(renew);
       await releaseRepairLease(deps.pool, ctx.apiId, leaseOwner).catch(() => undefined);
     }
   };
 
-  async function repairUnderLease(ctx: RunCtx, request: Parameters<RepairPort>[0], spec: DeclarativeSpec): Promise<RepairOutcome> {
+  async function repairUnderLease(ctx: RunCtx, request: Parameters<RepairPort>[0], spec: DeclarativeSpec, holds: () => Promise<boolean>): Promise<RepairOutcome> {
     const { target, strategy, failure } = request;
+    const leaseLost = async (): Promise<RepairOutcome> => {
+      await ctx.log('warn', 'repair_lease_lost', { from_version: strategy.version });
+      return waitForOtherRepair(ctx, strategy.version);
+    };
+    /** vN+1 enregistrée SOUS le bail (vérifié et prolongé juste avant), avant sa libération. */
+    const committed = async (repaired: RepairedStrategy, check: CandidateCheck): Promise<RepairOutcome> => {
+      if (!(await holds())) return leaseLost();
+      const saved = await request.commit(repaired);
+      return { kind: 'repaired', strategy: repaired, check, saved };
+    };
     const ledger = new RepairLedger({ ...(deps.maxAttempts === undefined ? {} : { maxAttempts: deps.maxAttempts }), ...(deps.budgetUsd === undefined ? {} : { budgetUsd: deps.budgetUsd }) });
     // Référence : items livrés des derniers runs réussis (chemins et types seulement entrent dans le prompt).
     const healthy: HealthyProfile = healthyProfile(await readHealthyItems(deps.pool, { apiId: ctx.apiId, ownerId: ctx.ownerId, excludeRunId: ctx.runId }));
@@ -161,6 +178,7 @@ export function createRepairPort(deps: RepairEngineDeps): RepairPort {
       const client = deps.llm.client({ ...config, roles: { repair: config.roles.repair! } });
       const model = config.roles.repair?.model ?? null;
       for (;;) {
+        if (!(await holds())) return leaseLost();
         const args = { spec, outputSchema: target.api.outputSchema, failure, evidence, healthy, reasons: request.reasons, refused };
         const ceiling = repairCallCeilingUsd(args, price);
         if (!ledger.canPropose(ceiling)) break;
@@ -222,7 +240,7 @@ export function createRepairPort(deps: RepairEngineDeps): RepairPort {
         if (check.refusal !== null) return { kind: 'refused', failure: check.refusal };
         const verdict = await judge(check);
         await ctx.log('info', 'repair_candidate', { patch_key: key, verdict, conform: check.partition.conform.length, rejected: check.partition.rejected.length });
-        if (verdict === 'ok') return committed(request, { execution: strategy.execution, network: strategy.network, spec: valid.spec, patch, estCostUsd: strategy.estCostUsd }, check);
+        if (verdict === 'ok') return committed({ execution: strategy.execution, network: strategy.network, spec: valid.spec, patch, estCostUsd: strategy.estCostUsd }, check);
         refused.push(verdict);
       }
     }
@@ -230,12 +248,13 @@ export function createRepairPort(deps: RepairEngineDeps): RepairPort {
     // 3. Escalade (04 §3.3) : exécutions déclaratives plus chères sur le même réseau, stratégie d'origine.
     for (const execution of escalationExecutions(strategy.execution, { browser: deps.browser })) {
       if (ledger.remainingUsd <= 0) break;
+      if (!(await holds())) return leaseLost();
       const check = await request.trial({ ...strategy, execution, estCostUsd: null }, 'repair_escalation');
       ledger.spend(check.costUsd);
       if (check.refusal !== null) return { kind: 'refused', failure: check.refusal };
       const verdict = await judge(check);
       await ctx.log('info', 'repair_escalation', { execution, network: strategy.network, verdict });
-      if (verdict === 'ok') return committed(request, { execution, network: strategy.network, spec, patch: null, estCostUsd: null }, check);
+      if (verdict === 'ok') return committed({ execution, network: strategy.network, spec, patch: null, estCostUsd: null }, check);
     }
     const cause: RepairStopCause = ledger.finish();
     await ctx.log('warn', 'repair_failed', { cause, attempts: ledger.attempts, spent_usd: ledger.spentUsd, refused: [...new Set(refused)].slice(0, 10) });
