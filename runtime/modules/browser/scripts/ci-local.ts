@@ -37,10 +37,11 @@ const steps: Step[] = [
   },
 ];
 
-// Pool du nœud sur de vrais Chromium 153 (tâche 1.1 : pool_no_orphans, kill_on_close_timeout) : utilisateur non root,
+// Nœud sur de vrais Chromium 153 (1.1 : pool_no_orphans, kill_on_close_timeout ; 1.3 : shared_context_options,
+// assert_session_isolation) : utilisateur non root,
 // espaces de noms utilisateur autorisés (bac à sable) et Chromium de Playwright 1.63 installé (`playwright install chromium`).
 const skipChromium = process.argv.includes('--skip-chromium');
-if (!skipChromium) steps.push({ name: 'tests sur Chromium réels (pool du nœud)', cmd: ['pnpm', '--filter', '@sym-browser/node', 'test:chromium'] });
+if (!skipChromium) steps.push({ name: 'tests sur Chromium réels (pool et sessions shared du nœud)', cmd: ['pnpm', '--filter', '@sym-browser/node', 'test:chromium'] });
 
 if (!process.argv.includes('--skip-image')) {
   steps.push(
