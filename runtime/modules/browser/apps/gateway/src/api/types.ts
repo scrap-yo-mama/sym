@@ -6,6 +6,7 @@
 //   - SessionLauncher : démarrage, libération et prolongation sur le nœud propriétaire. Mode `all` : le superviseur de
 //     sessions du nœud dans le même processus (tâche 1.2) ; modes séparés : `POST /internal/sessions` du nœud (04b § 8),
 //     choix du nœud et file (tâche 2.4).
+import type { ConnectTokens } from '@sym-browser/core';
 import type pg from 'pg';
 import type { CreateSessionRequest, SessionType } from '@sym/contracts/browser';
 
@@ -15,7 +16,7 @@ export type Scope = 'sessions:write' | 'sessions:read' | 'profiles:write' | 'adm
 /** Identité d'une clé d'API valide. */
 export type Principal = { tenantId: string; apiKeyId: string; scopes: readonly Scope[] };
 
-interface Authenticator {
+export interface Authenticator {
   /** Secret reçu en `Authorization: Bearer` ; `null` si la clé est inconnue, révoquée ou expirée. */
   authenticate(secret: string): Promise<Principal | null>;
 }
@@ -48,7 +49,8 @@ export interface SessionLauncher {
 export type GatewayDeps = {
   db: pg.Pool;
   auth: Authenticator;
-  tokens: ConnectTokenIssuer;
+  /** Émission (`connectUrls`) ; `verify` est exigé quand le relais WSS est actif. */
+  tokens: ConnectTokenIssuer & Partial<Pick<ConnectTokens, 'verify'>>;
   launcher: SessionLauncher;
   /** URL publique de la passerelle (`https://hôte`) : base des `connectUrls` (`wss://hôte/v1/sessions/{id}/…`). */
   publicUrl: string;
@@ -58,6 +60,8 @@ export type GatewayDeps = {
   defaults?: { timeoutSeconds?: number; idleTimeoutSeconds?: number };
   /** Plateforme servie (`GET /v1/version`), défaut `process.platform`. */
   platform?: string;
+  /** Relais WSS `/playwright` et `/cdp` (tâche 2.3) ; absent : routes non servies. */
+  relay?: { nodeToken: string; pingIntervalMs?: number; cdpMaxMessageBytes?: number };
   /** Erreur interne (500) : journal masqué de la passerelle. */
   onError?: (error: unknown) => void;
 };

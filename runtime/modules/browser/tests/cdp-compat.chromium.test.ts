@@ -229,7 +229,7 @@ describe('assert_cdp_client_compat (BINV8) sur vrai Chromium, au travers des deu
     const page = stagehand.context.pages()[0] ?? (await stagehand.context.newPage());
     await page.goto(siteUrl('/'));
     expect(await page.title()).toBe('SYM Browser fixtures');
-    expect(await page.evaluate(() => document.querySelectorAll('li').length)).toBe(7);
+    expect(await page.evaluate('document.querySelectorAll("li").length')).toBe(7);
     await stagehand.close();
     // Stagehand peut terminer par Browser.close : le relais en fait une libération (04f § 4), jamais un plantage.
     expect(lease.signal.aborted && released === 0).toBe(false);

@@ -165,6 +165,9 @@ describe('session_default_dedicated (F2) et version_gate (A7)', () => {
     expect(node.connections.length).toBe(before);
     const pw = await attempt(`/v1/sessions/${shared}/playwright?token=${token(shared, 'playwright')}`, PLAYWRIGHT_UA);
     expect(pw.status).toBe(101);
+    // La connexion vers le nœud s'ouvre après l'upgrade du client : attendue avant de fermer (mesures suivantes).
+    await until(() => node.connections.length === before + 1);
+    expect(node.connections.at(-1)?.path).toBe(`/internal/sessions/${shared}/playwright`);
     if ('ws' in pw) pw.ws.close();
   });
 
