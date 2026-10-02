@@ -8,7 +8,7 @@
 //   version_gate (A7) : client Playwright 1.62 → 428 playwright_version_mismatch ; 1.63 → relayé.
 //   disconnect_not_release (A8) : la fermeture de la WebSocket laisse la session running ; la même URL se rouvre.
 // Sécurité : aucun processus lancé ici (faux nœud en WebSocket local).
-import { request as httpRequest } from 'node:http';
+import { createServer, request as httpRequest } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { ConnectTokens, generateMasterKey, MasterKey } from '@sym-browser/core';
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
@@ -17,20 +17,46 @@ import { createHarness, type Harness } from '../../test/helpers/harness.js';
 
 const NODE_TOKEN = 'nodetoken-'.repeat(4);
 
-type FakeNode = { url: string; connections: { path: string; authorization: string | undefined }[]; received: string[]; closedWith: number[]; close: () => Promise<void> };
+type FakeNode = {
+  url: string;
+  connections: { path: string; authorization: string | undefined }[];
+  /** Requêtes HTTP reçues (découverte json/version, tâche 2.8). */
+  requests: { path: string; authorization: string | undefined }[];
+  received: string[];
+  closedWith: number[];
+  close: () => Promise<void>;
+};
 
-/** Faux nœud : vérifie le jeton de nœud, journalise chemin, messages et code de fermeture ; répond « echo:<message> ». */
+/** Ce que le nœud rend pour `json/version` : les champs de Chromium, SANS point WebSocket (la passerelle pose le sien). */
+const NODE_VERSION = { Browser: 'Chrome/153.0.8010.12', 'Protocol-Version': '1.3', 'User-Agent': 'Mozilla/5.0 HeadlessChrome/153.0.8010.12', 'V8-Version': '15.3', 'WebKit-Version': '537.36' };
+
+/**
+ * Faux nœud : vérifie le jeton de nœud, journalise chemin, messages et code de fermeture ; répond « echo:<message> ». En HTTP,
+ * sert `/internal/sessions/{id}/cdp/json/version` avec un `webSocketDebuggerUrl` LOCAL piégé, que la passerelle doit écarter.
+ */
 async function fakeNode(): Promise<FakeNode> {
-  const wss = new WebSocketServer({ host: '127.0.0.1', port: 0, verifyClient: (info: { req: { headers: Record<string, unknown> } }) => info.req.headers.authorization === `Bearer ${NODE_TOKEN}` });
-  await new Promise<void>((resolve) => wss.once('listening', () => resolve()));
+  const authorized = (headers: Record<string, unknown>): boolean => headers.authorization === `Bearer ${NODE_TOKEN}`;
+  const server = createServer((req, res) => {
+    node.requests.push({ path: req.url ?? '', authorization: req.headers.authorization });
+    if (!authorized(req.headers)) return void res.writeHead(401).end();
+    if (/^\/internal\/sessions\/[^/]+\/cdp\/json\/version$/.test(req.url ?? '')) {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      return void res.end(JSON.stringify({ ...NODE_VERSION, webSocketDebuggerUrl: 'ws://127.0.0.1:9222/devtools/browser/piege' }));
+    }
+    res.writeHead(404).end();
+  });
+  const wss = new WebSocketServer({ server, verifyClient: (info: { req: { headers: Record<string, unknown> } }) => authorized(info.req.headers) });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
   const node: FakeNode = {
-    url: `http://127.0.0.1:${(wss.address() as AddressInfo).port}`,
+    url: `http://127.0.0.1:${(server.address() as AddressInfo).port}`,
     connections: [],
+    requests: [],
     received: [],
     closedWith: [],
     close: () => new Promise<void>((resolve) => {
       for (const client of wss.clients) client.terminate();
-      wss.close(() => resolve());
+      wss.close(() => server.close(() => resolve()));
+      server.closeAllConnections();
     }),
   };
   wss.on('connection', (socket, req) => {
@@ -212,13 +238,16 @@ describe('relais : fermeture, ping, plafond, reconnexion', () => {
     alive.ws.close();
   });
 
-  test('message CDP au-delà de SYMB_CDP_MAX_MESSAGE_BYTES : fermeture 1009, rien relayé', async () => {
+  test('message CDP au-delà de SYMB_CDP_MAX_MESSAGE_BYTES : fermeture 1008 (04f § 4), rien relayé ; au plafond : relayé', async () => {
     const res = await attempt(`/v1/sessions/${dedicated}/cdp?token=${token(dedicated, 'cdp')}`);
     if (!('ws' in res)) throw new Error('connexion attendue');
+    await until(() => node.connections.some((c) => c.path.endsWith(`/${dedicated}/cdp`)));
     const before = node.received.length;
-    res.ws.send('x'.repeat(8192));
-    expect((await res.closed).code).toBe(1009);
-    expect(node.received.length).toBe(before);
+    res.ws.send('y'.repeat(4096));
+    await until(() => node.received.length === before + 1);
+    res.ws.send('x'.repeat(4097));
+    expect((await res.closed).code).toBe(1008);
+    expect(node.received.length).toBe(before + 1);
   });
 
   test('disconnect_not_release (A8) : la fermeture laisse la session running ; la même URL se rouvre ; GET rend un jeton neuf valable', async () => {
@@ -261,5 +290,40 @@ describe('relais : fermeture, ping, plafond, reconnexion', () => {
       req.end();
     });
     expect([400, 404, 426]).toContain(status);
+  });
+});
+
+describe('découverte json/version (F5, tâche 2.8)', () => {
+  const discover = async (path: string, headers: Record<string, string> = {}) => {
+    const res = await fetch(`${base.replace('ws', 'http')}${path}`, { headers });
+    return { status: res.status, body: (await res.json()) as Record<string, unknown> & { error?: { code: string } } };
+  };
+
+  test('jeton en query ou en Bearer : champs de Chromium, webSocketDebuggerUrl vers la passerelle avec un jeton NEUF de la même session', async () => {
+    for (const headers of [{}, { authorization: `Bearer ${token(dedicated, 'cdp')}` }]) {
+      const given = token(dedicated, 'cdp');
+      const path = Object.keys(headers).length > 0 ? `/v1/sessions/${dedicated}/cdp/json/version` : `/v1/sessions/${dedicated}/cdp/json/version?token=${given}`;
+      const res = await discover(path, headers);
+      expect(res.status).toBe(200);
+      const { webSocketDebuggerUrl, ...fields } = res.body;
+      expect(fields).toEqual(NODE_VERSION);
+      const ws = new URL(String(webSocketDebuggerUrl));
+      expect(`${ws.protocol}//${ws.host}${ws.pathname}`).toBe(`wss://b.example.com/v1/sessions/${dedicated}/cdp`);
+      const fresh = ws.searchParams.get('token') ?? '';
+      expect(fresh).not.toBe(given);
+      expect(tokens.verify(fresh, { sessionId: dedicated, protocol: 'cdp' }).ok).toBe(true);
+      expect(String(webSocketDebuggerUrl)).not.toContain('piege');
+    }
+    expect(node.requests.at(-1)).toEqual({ path: `/internal/sessions/${dedicated}/cdp/json/version`, authorization: `Bearer ${NODE_TOKEN}` });
+  });
+
+  test('sans jeton, jeton d’une autre session : 401 ; session shared : 409 protocol_not_served ; 0 requête vers le nœud', async () => {
+    const before = node.requests.length;
+    expect((await discover(`/v1/sessions/${dedicated}/cdp/json/version`)).status).toBe(401);
+    expect((await discover(`/v1/sessions/${dedicated}/cdp/json/version?token=${token(shared, 'cdp')}`)).status).toBe(401);
+    const sharedRes = await discover(`/v1/sessions/${shared}/cdp/json/version?token=${token(shared, 'cdp')}`);
+    expect(sharedRes.status).toBe(409);
+    expect(sharedRes.body.error?.code).toBe('protocol_not_served');
+    expect(node.requests.length).toBe(before);
   });
 });

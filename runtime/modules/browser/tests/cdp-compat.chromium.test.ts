@@ -10,7 +10,7 @@
 // Prérequis : utilisateur non root (bac à sable de Chromium), `playwright install chromium`. Sécurité : Chromium est arrêté
 // par le pool (groupe de processus enregistré à son lancement), jamais par un signal à un autre pid.
 import { randomBytes } from 'node:crypto';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { access, mkdtemp, readdir, rm } from 'node:fs/promises';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -24,7 +24,7 @@ import { ConnectTokens, generateMasterKey, MasterKey } from '../packages/core/sr
 import { ApiProblem } from '../apps/gateway/src/api/errors.ts';
 import { registerRelay } from '../apps/gateway/src/relay/index.ts';
 import { dedicatedLauncher, sessionDir } from '../apps/node/src/dedicated/index.ts';
-import { createEgressGuard, startSessionEgress, type EgressTarget, type SessionEgress } from '../apps/node/src/egress/index.ts';
+import { createEgressGuard, startSessionEgress, type EgressEvent, type EgressTarget, type SessionEgress } from '../apps/node/src/egress/index.ts';
 import { BrowserPool, OwnedProcessGroups, PROVISIONAL_CAPACITY, type PoolLease } from '../apps/node/src/pool/index.ts';
 import { createNodeRelay } from '../apps/node/src/relay/index.ts';
 import { startCountingRelay, startSink, type CountingRelay, type Sink } from '../apps/node/src/testing/egress-fixtures.ts';
@@ -39,6 +39,7 @@ let siteA: CountingRelay;
 let trap: Sink;
 let egress: SessionEgress;
 const egressRequests: EgressTarget[] = [];
+const egressEvents: EgressEvent[] = [];
 let dataDir: string;
 let pool: BrowserPool;
 let lease: PoolLease;
@@ -56,6 +57,8 @@ beforeAll(async () => {
     {
       guard: createEgressGuard({ privateHosts: ['site-a.test'], resolver: async (host) => (host === 'site-a.test' ? [{ address: '127.0.0.1', family: 4 as const }] : Promise.reject(new Error('ENOTFOUND'))) }),
       onRequest: (target) => egressRequests.push(target),
+      onEvent: (event) => egressEvents.push(event),
+      blockedWindowMs: 50,
     },
   );
   dataDir = await mkdtemp(join(tmpdir(), 'zz_symb_compat_'));
@@ -85,7 +88,9 @@ beforeAll(async () => {
           : undefined,
     },
   });
-  nodeServer = createServer((_req, res) => res.writeHead(404).end());
+  nodeServer = createServer((req, res) => {
+    if (!nodeRelay.handleRequest(req, res)) res.writeHead(404).end();
+  });
   nodeServer.on('upgrade', (req, socket, head) => {
     if (!nodeRelay.handleUpgrade(req, socket, head)) socket.destroy();
   });
@@ -96,6 +101,8 @@ beforeAll(async () => {
   gateway = Fastify({ logger: false });
   await registerRelay(gateway, {
     nodeToken: NODE_TOKEN,
+    // Découverte (F5) : point WebSocket de la passerelle, à jeton neuf.
+    cdpWebSocketUrl: (sessionId) => `${gatewayBase}/v1/sessions/${sessionId}/cdp?token=${tokens.issue({ sessionId, protocol: 'cdp', ttlSeconds: 300 })}`,
     resolver: {
       // Jeton de connexion de la tâche 2.1 : en-tête Bearer prioritaire, sinon query `token` (même règle qu'authorizeConnection).
       async authorize({ sessionId, protocol, headers, query }) {
@@ -215,6 +222,57 @@ describe('assert_cdp_client_compat (BINV8) sur vrai Chromium, au travers des deu
     expect(egressRequests.length).toBeGreaterThan(before);
     expect(trap.tcpConnections()).toBe(0);
     await cdp.send('Target.disposeBrowserContext', { browserContextId });
+    await cdp.close();
+  });
+
+  test('F5 : GET …/cdp/json/version (jeton en query) rend un webSocketDebuggerUrl de la passerelle ; un client s’y connecte', async () => {
+    const http = gatewayBase.replace(/^ws/, 'http');
+    const discovered = (await (await fetch(`${http}/v1/sessions/${SESSION}/cdp/json/version?token=${tokens.issue({ sessionId: SESSION, protocol: 'cdp', ttlSeconds: 300 })}`)).json()) as Record<string, string>;
+    expect(discovered['Browser']).toMatch(/^(Headless)?Chrome\/153\./);
+    expect(discovered['Protocol-Version']).toBe('1.3');
+    const debuggerUrl = discovered['webSocketDebuggerUrl'] ?? '';
+    expect(debuggerUrl.startsWith(`${gatewayBase}/v1/sessions/${SESSION}/cdp?token=symt_`)).toBe(true);
+    expect(JSON.stringify(discovered)).not.toMatch(/devtools\/browser|127\.0\.0\.1:(?!${new URL(gatewayBase).port})/);
+    const cdp = await rawCdp(debuggerUrl);
+    expect(((await cdp.send('Browser.getVersion')) as { product: string }).product).toMatch(/Chrome\/153\./);
+    await cdp.close();
+    expect(alive()).toBe(true);
+  });
+
+  test('F6 : contexte au proxy d’un tiers → hôte hors politique refusé par l’egress (egress.blocked), 0 connexion vers le tiers', async () => {
+    const cdp = await rawCdp(cdpUrl());
+    const { browserContextId } = (await cdp.send('Target.createBrowserContext', { proxyServer: `http://127.0.0.1:${trap.tcpPort}` })) as { browserContextId: string };
+    const blockedBefore = egressEvents.filter((e) => e.type === 'egress.blocked').length;
+    const { targetId } = (await cdp.send('Target.createTarget', { url: `http://site-b.test:${siteA.port}/`, browserContextId })) as { targetId: string };
+    const deadline = Date.now() + 10_000;
+    while (egressEvents.filter((e) => e.type === 'egress.blocked').length === blockedBefore && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 50));
+    const blocked = egressEvents.filter((e) => e.type === 'egress.blocked').slice(blockedBefore);
+    expect(blocked.length).toBeGreaterThan(0);
+    expect(JSON.stringify(blocked)).toContain('site-b.test');
+    expect(trap.tcpConnections()).toBe(0);
+    await cdp.send('Target.closeTarget', { targetId });
+    await cdp.send('Target.disposeBrowserContext', { browserContextId });
+    await cdp.close();
+  });
+
+  test('F6 : téléchargement demandé vers /tmp → écrit dans sessions/{id}/downloads, rien dans /tmp', async () => {
+    const evil = join(tmpdir(), `zz_symb_evil_${randomBytes(4).toString('hex')}`);
+    const downloads = sessionDir(dataDir, SESSION).downloads;
+    const cdp = await rawCdp(cdpUrl());
+    await cdp.send('Browser.setDownloadBehavior', { behavior: 'allow', downloadPath: evil, eventsEnabled: true });
+    const { targetId } = (await cdp.send('Target.createTarget', { url: 'about:blank' })) as { targetId: string };
+    const { sessionId } = (await cdp.send('Target.attachToTarget', { targetId, flatten: true })) as { sessionId: string };
+    await cdp.send('Runtime.evaluate', { expression: `(() => { const a = document.createElement('a'); a.href = '${siteUrl('/download/sample.bin')}'; a.download = 'sample.bin'; document.body.appendChild(a); a.click(); })()` }, sessionId);
+    const deadline = Date.now() + 15_000;
+    let files: string[] = [];
+    while (Date.now() < deadline) {
+      files = (await readdir(downloads).catch(() => [])).filter((f) => !f.endsWith('.crdownload'));
+      if (files.length > 0) break;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    expect(files.length).toBeGreaterThan(0);
+    await expect(access(evil)).rejects.toThrow();
+    await cdp.send('Target.closeTarget', { targetId });
     await cdp.close();
   });
 
