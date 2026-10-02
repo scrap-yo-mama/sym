@@ -66,3 +66,11 @@ test('migrations : numérotées sans trou, up et down présents', () => {
     expect(m.down.trim().length).toBeGreaterThan(0);
   }
 });
+
+test('migrations : noms uniques ; i18n (3.20) numérotée après run_rejected_items (2.3, fusionnée avant)', () => {
+  const migrations = loadMigrations();
+  expect(new Set(migrations.map((m) => m.name)).size).toBe(migrations.length);
+  const byName = new Map(migrations.map((m) => [m.name, m.version]));
+  expect(byName.get('run_rejected_items')).toBe(18);
+  expect(byName.get('i18n')).toBe(19);
+});

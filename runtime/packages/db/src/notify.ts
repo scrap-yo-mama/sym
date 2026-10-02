@@ -40,6 +40,7 @@ type RunFacts = {
   failure_class: FailureClass | null;
   retryable: boolean | null;
   items: number;
+  items_rejected: number;
   dataset_id: string | null;
   schedule_id: string | null;
   slug: string;
@@ -54,7 +55,7 @@ type RunFacts = {
 export async function notifyRunFinished(tx: Queryable, queue: JobQueue, runId: string, ctx: Ctx = {}): Promise<{ events: string[] }> {
   const now = (ctx.now ?? (() => new Date()))();
   const { rows } = await tx.query<RunFacts>(
-    `SELECT r.id, r.api_id, r.owner_id, r.state, r.outcome, r.failure_class, r.retryable, r.items, r.dataset_id, r.schedule_id,
+    `SELECT r.id, r.api_id, r.owner_id, r.state, r.outcome, r.failure_class, r.retryable, r.items, r.items_rejected, r.dataset_id, r.schedule_id,
             a.slug, a.status AS api_status, a.owner_id AS api_owner_id, s.rules AS schedule_rules, d.new_items AS dataset_new_items
      FROM runs r JOIN apis a ON a.id = r.api_id LEFT JOIN schedules s ON s.id = r.schedule_id
        LEFT JOIN datasets d ON d.id = r.dataset_id
@@ -94,7 +95,7 @@ export async function notifyRunFinished(tx: Queryable, queue: JobQueue, runId: s
   }
   await emitWebhookEvent(tx, queue, {
     event: 'run.succeeded',
-    payload: runSucceededPayload(now, { ...base, outcome: run.outcome ?? 'clean', items: run.items, ...(newItems === undefined ? {} : { new_items: newItems }), dataset_id: run.dataset_id, base_url: baseUrl }),
+    payload: runSucceededPayload(now, { ...base, outcome: run.outcome ?? 'clean', items: run.items, items_rejected: run.items_rejected, ...(newItems === undefined ? {} : { new_items: newItems }), dataset_id: run.dataset_id, base_url: baseUrl }),
     ownerIds: [run.owner_id],
     now,
   });

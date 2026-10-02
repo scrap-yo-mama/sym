@@ -166,7 +166,8 @@ describe('assert_openapi_served_valid : /api/openapi.json', () => {
     expect(doc.openapi).toBe('3.1.0');
     expect(res.raw.body).not.toContain('x-pending');
     const served = contract.operations();
-    const registered = ROUTES.map((r) => `${r.method} ${r.url.replace(/:(\w+)/g, '{$1}')}`).sort();
+    // Le protocole MCP (JSON-RPC, 3.2) n'est pas une route REST : hors de l'OpenAPI.
+    const registered = ROUTES.filter((r) => !r.mcp).map((r) => `${r.method} ${r.url.replace(/:(\w+)/g, '{$1}')}`).sort();
     expect(served).toEqual(registered);
     const ids = Object.values(doc.paths).flatMap((item) => Object.values(item).map((op) => op.operationId)).filter(Boolean);
     expect(new Set(ids).size).toBe(ids.length);
@@ -1037,7 +1038,9 @@ describe('assert_export_streaming : export des datasets en flux (05 § 4.4)', ()
       // Avance bornée : quelques lots (tampons du flux Node et du client HTTP), plus ce que les tampons TCP du noyau
       // peuvent contenir. La borne doit rester loin des 101 lots, sinon le test ne prouve rien (tampons à régler).
       const lots = Math.ceil(total / 1000);
-      const bound = EXPORT_MAX_READ_AHEAD_BATCHES + Math.ceil(kernelTcpBufferBytes() / (bytes / lots));
+      // Plafonnée sous la moitié des lots : sur un noyau aux tampons TCP très larges (exécuteurs Linux : borne brute 90 sur 100),
+      // la borne brute ne prouverait rien ; l'avance réelle (7 lots) reste très en dessous.
+      const bound = Math.min(EXPORT_MAX_READ_AHEAD_BATCHES + Math.ceil(kernelTcpBufferBytes() / (bytes / lots)), Math.floor(lots / 2) - 1);
       console.info(`assert_export_streaming : ${readAhead} lots lus d'avance (borne ${bound} sur ${lots})`);
       expect(bound).toBeLessThan(lots / 2);
       expect(readAhead).toBeLessThanOrEqual(bound);
@@ -1625,12 +1628,34 @@ describe('droits des personnes (17 § 6) et appairage (07 § 1)', () => {
   });
 });
 
+// Portabilité (tâche 3.12) : contrat de l'export, de l'aperçu d'import et de l'OpenAPI par API. Les cas détaillés
+// (assert_export_no_secret, import par l'enquête, modèles) sont dans portability.integration.test.ts.
+describe('portabilité (3.12) : export, aperçu d’import, OpenAPI par API au contrat', () => {
+  test('GET export → POST import (aperçu, rien d’écrit) → GET openapi.json', async () => {
+    const seeded = await seedApi(srv.db.url, a.user.id);
+    await withClient(srv.db.url, (c) =>
+      c.query('UPDATE apis SET investigation = $2::jsonb, input_schema = $3::jsonb WHERE id = $1', [
+        seeded.id,
+        JSON.stringify({ request: { url: 'https://zz-test-port.example/liste', description: 'zz_test liste', auto_validate: false, budget_usd: 1, timeout_s: 600 }, spent_usd: 0, elapsed_ms: 0 }),
+        JSON.stringify({ type: 'object', additionalProperties: false, properties: {} }),
+      ]),
+    );
+    const exported = await api(a, 'GET', `/api/apis/${seeded.slug}/export`, '/api/apis/{slug}/export');
+    expect(exported.status).toBe(200);
+    const apis = await count('SELECT count(*) FROM apis');
+    const preview = await api(a, 'POST', '/api/apis/import', '/api/apis/import', exported.body);
+    expect(preview).toMatchObject({ status: 200, body: { preview: true, ignored_fields: [] } });
+    expect(await count('SELECT count(*) FROM apis')).toBe(apis);
+    expect((await api(a, 'GET', `/api/apis/${seeded.slug}/openapi.json`, '/api/apis/{slug}/openapi.json')).status).toBe(200);
+  });
+});
+
 describe('assert_rest_endpoints_contract : chaque endpoint livré par 3.1 a des réponses contrôlées au contrat', () => {
   test('couverture', () => {
     // Routes livrées par 3.1 : le bloc du registre qui commence à GET /api/openapi.json (aucune liste à tenir à la main).
     const first = ROUTES.findIndex((r) => r.method === 'GET' && r.url === '/api/openapi.json');
     expect(first).toBeGreaterThan(0);
-    const delivered31 = ROUTES.slice(first).map((r) => `${r.method} ${r.url.replace(/:(\w+)/g, '{$1}')}`);
+    const delivered31 = ROUTES.slice(first).filter((r) => !r.mcp).map((r) => `${r.method} ${r.url.replace(/:(\w+)/g, '{$1}')}`);
     expect(delivered31).toEqual(expect.arrayContaining(['GET /api/events', 'GET /api/runs/{id}/events', 'POST /api/me/responsible-use']));
     const covered = [...contract.covered].map((c) => c.split(' ').slice(0, 2).join(' '));
     const successes = [...contract.covered].filter((c) => /\s2\d\d$/.test(c)).map((c) => c.split(' ').slice(0, 2).join(' '));
@@ -1639,7 +1664,7 @@ describe('assert_rest_endpoints_contract : chaque endpoint livré par 3.1 a des 
   });
 
   test('chaque route que la garde peut refuser (session seule, scope, permission) déclare 403 dans l’OpenAPI servie', () => {
-    const missing = ROUTES.filter((r) => r.auth !== 'public' && !r.library && (r.auth === 'session' || r.auth === 'extension' || r.scope !== undefined || r.permission !== undefined))
+    const missing = ROUTES.filter((r) => r.auth !== 'public' && !r.library && !r.mcp && (r.auth === 'session' || r.auth === 'extension' || r.scope !== undefined || r.permission !== undefined))
       .map((r) => `${r.method} ${r.url.replace(/:(\w+)/g, '{$1}')}`)
       .filter((op) => {
         const [method, path] = op.split(' ');

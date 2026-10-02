@@ -53,6 +53,7 @@
   "devDependencies": {
     "@eslint/js": "catalog:",
     "@intlify/eslint-plugin-vue-i18n": "catalog:",
+    "@modelcontextprotocol/conformance": "catalog:",
     "@playwright/test": "catalog:",
     "@redocly/openapi-core": "catalog:",
     "@runtime/agent": "workspace:*",
@@ -66,8 +67,8 @@
     "@types/ws": "catalog:",
     "@vitejs/plugin-vue": "catalog:",
     "@vitest/coverage-v8": "catalog:",
-    "dependency-cruiser": "catalog:",
     "ajv": "catalog:",
+    "dependency-cruiser": "catalog:",
     "eslint": "catalog:",
     "eslint-plugin-vue": "catalog:",
     "fastify": "catalog:",

@@ -1,5 +1,5 @@
 -- SPDX-License-Identifier: AGPL-3.0-only
--- Retour de 0018_i18n. Les langues autres que en et fr sont ramenées à `en` avant de restaurer la liste fermée.
+-- Retour de 0019_i18n. Les langues autres que en et fr sont ramenées à `en` avant de restaurer la liste fermée.
 DROP TRIGGER runs_set_locale ON runs;
 DROP FUNCTION runs_set_locale();
 ALTER TABLE runs DROP COLUMN locale;

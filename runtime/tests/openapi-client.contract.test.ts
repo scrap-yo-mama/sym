@@ -18,11 +18,12 @@ function operationsOf(generated: string): string[] {
   const out: string[] = [];
   let path: string | null = null;
   for (const line of generated.split('\n')) {
+    // Fin des chemins : la section `webhooks` (OpenAPI 3.1, tâche 3.12) n'a pas de route du serveur.
+    if (/^export (?:type|interface) webhooks\b/.test(line)) break;
     const pathMatch = /^ {4}"(\/[^"]+)": \{$/.exec(line);
     if (pathMatch) path = pathMatch[1] ?? null;
     const opMatch = /^ {8}(get|put|post|delete|patch): operations\[/.exec(line);
     if (path && opMatch) out.push(`${(opMatch[1] ?? '').toUpperCase()} ${path}`);
-    if (line === 'export type webhooks = Record<string, never>;') path = null;
   }
   return out.sort();
 }
@@ -195,7 +196,8 @@ const CDC_REST_ROUTES = [
 describe('OpenAPI spécifiée et routes livrées', () => {
   const yaml = readFileSync(SPEC_URL, 'utf8');
   const specified = specifiedOperations(yaml);
-  const delivered = ROUTES.map((route) => `${route.method} ${route.url.replace(/:(\w+)/g, '{$1}')}`).sort();
+  // Le protocole MCP (JSON-RPC, 3.2) n'est pas une route REST : hors de l'OpenAPI spécifiée.
+  const delivered = ROUTES.filter((route) => !route.mcp).map((route) => `${route.method} ${route.url.replace(/:(\w+)/g, '{$1}')}`).sort();
 
   test('la lecture du YAML trouve exactement les opérations du client généré', () => {
     expect([...specified.keys()].sort()).toEqual(operationsOf(readFileSync(GENERATED_URL, 'utf8')));
@@ -213,7 +215,10 @@ describe('OpenAPI spécifiée et routes livrées', () => {
     // la tâche 3.6 rejoue ce contrôle contre l'OpenAPI générée par le serveur (15 § 6) et exige une liste vide.
     const waiting = [...specified].filter(([op]) => !delivered.includes(op));
     expect(waiting.filter(([, task]) => task === null).map(([op]) => op)).toEqual([]);
-    expect(waiting.length).toBeGreaterThan(0);
+    // La liste d'attente est vide depuis 3.12 (export, import, OpenAPI par API) : le lecteur de la marque reste éprouvé
+    // sur un extrait, pour qu'une route spécifiée avant sa livraison soit encore reconnue.
+    const sample = ['paths:', '  /api/zz-test:', '    get:', "      x-pending: '9.9'", '      operationId: zzTest', 'components:'].join('\n');
+    expect(specifiedOperations(sample)).toEqual(new Map([['GET /api/zz-test', '9.9']]));
   });
 
   test('assert_openapi_specified_auth_matches_registry : le mode d’authentification spécifié est celui du registre', () => {
@@ -226,7 +231,7 @@ describe('OpenAPI spécifiée et routes livrées', () => {
       extension: ['deviceToken'],
     };
     const mismatches: string[] = [];
-    for (const route of ROUTES) {
+    for (const route of ROUTES.filter((r) => !r.mcp)) {
       const op = `${route.method} ${route.url.replace(/:(\w+)/g, '{$1}')}`;
       const declared = parsed.get(op)?.security;
       const actual = (declared ?? ['sessionCookie', 'apiKey']).slice().sort();
@@ -251,7 +256,7 @@ describe('OpenAPI spécifiée et routes livrées', () => {
   });
 
   test('assert_openapi_served_vs_specified : le document servi garde exactement les opérations livrées, sans x-pending', () => {
-    const served = deliveredOpenApi(ROUTES.map((r) => `${r.method} ${r.url}`)) as { paths: Record<string, Record<string, unknown>> };
+    const served = deliveredOpenApi(ROUTES.filter((r) => !r.mcp).map((r) => `${r.method} ${r.url}`)) as { paths: Record<string, Record<string, unknown>> };
     const ops = Object.entries(served.paths).flatMap(([path, item]) => Object.keys(item).filter((k) => ['get', 'put', 'post', 'delete', 'patch'].includes(k)).map((m) => `${m.toUpperCase()} ${path}`));
     expect(ops.sort()).toEqual(delivered);
     expect(JSON.stringify(served)).not.toContain('x-pending');

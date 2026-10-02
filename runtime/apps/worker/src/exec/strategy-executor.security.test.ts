@@ -181,7 +181,9 @@ describe('RunExecutor de production, Chromium réel (E2, E3 en script)', () => {
 
   test.each([
     ['le script échoue après avoir émis', 'throw new Error("zz_test_echec");'],
-    ['sortie hors schéma', 'ctx.emit({ name: names[1], email: emails[1], zz_test_extra: true });'],
+    // D-49 (2.3) : un item hors schéma parmi d'autres est écarté et le reste livré ; le run n'échoue qu'au-delà du seuil de
+    // casse (plus de 20 % ET au moins 5 items non conformes).
+    ['sortie hors schéma au-delà du seuil de casse', 'for (let i = 1; i < 7; i += 1) ctx.emit({ name: names[i], email: emails[i], zz_test_extra: true });'],
   ])('assert_no_personal_data_in_logs (E3 en script, run en échec : %s) : ctx.log de données extraites jamais écrit dans run_logs (identifiants techniques seulement), rien dans le journal du worker', async (_name, failing) => {
     const source = `
       const names = await ctx.page.textAll('tr.person td.name');

@@ -46,6 +46,7 @@ const sections = computed(() => SECTIONS.filter((section) => !section.permission
       </ul>
     </nav>
     <div class="min-w-0 flex-1">
+      <p class="sym-kicker mb-3" data-testid="page-kicker">{{ t('brand.kicker.settings') }}</p>
       <RouterView />
     </div>
   </div>

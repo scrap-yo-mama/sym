@@ -1,0 +1,147 @@
+{
+  "api": {
+    "alert_targets": [],
+    "budget_daily_usd": 5,
+    "contains_personal_data": false,
+    "description": "Livres de la première page du catalogue de démonstration books.toscrape.com : titre, prix, disponibilité, note",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {},
+      "type": "object"
+    },
+    "legal_basis": null,
+    "max_cost_usd": 0.5,
+    "network_policy": {
+      "allow": [
+        "direct"
+      ]
+    },
+    "output_columns": [
+      "title",
+      "price",
+      "availability",
+      "rating"
+    ],
+    "output_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "availability": {
+          "description": "Disponibilité affichée",
+          "type": "string"
+        },
+        "price": {
+          "description": "Prix affiché (livres sterling)",
+          "type": "number"
+        },
+        "rating": {
+          "description": "Note en toutes lettres (One à Five)",
+          "type": "string"
+        },
+        "title": {
+          "description": "Titre du livre",
+          "type": "string"
+        }
+      },
+      "required": [
+        "title",
+        "price"
+      ],
+      "type": "object"
+    },
+    "purpose": "Modèle de démonstration : site conçu pour l’apprentissage de l’extraction de données",
+    "slug": "livres-demo",
+    "source_url": "https://books.toscrape.com/",
+    "views": {}
+  },
+  "exported_at": "2026-10-02T00:00:00.000Z",
+  "fixtures": {
+    "items": [
+      {
+        "availability": "In stock",
+        "price": 12.5,
+        "rating": "Three",
+        "title": "Zz : livre synthétique"
+      },
+      {
+        "price": 40,
+        "title": "Zz : autre livre synthétique"
+      }
+    ]
+  },
+  "format": "scrapyomama.api",
+  "format_version": "1.0",
+  "history": [],
+  "integrity": {
+    "sha256": "20455745df8736204f96874d6e209eeeb0b6d6723fbf931b6f0d9b24fa0c83be"
+  },
+  "min_runtime_version": "0.0.0",
+  "schedules": [],
+  "strategy": {
+    "est_cost_usd": null,
+    "execution": "fetch",
+    "network": "direct",
+    "spec": {
+      "fields": {
+        "availability": {
+          "css": "p.availability",
+          "ops": [
+            "collapse_spaces"
+          ],
+          "type": "string"
+        },
+        "price": {
+          "css": "p.price_color",
+          "ops": [
+            {
+              "op": "regex_extract",
+              "pattern": "[0-9]+[.][0-9]+"
+            },
+            "to_number"
+          ],
+          "required": true,
+          "type": "number"
+        },
+        "rating": {
+          "attr": "class",
+          "css": "p.star-rating",
+          "ops": [
+            {
+              "op": "regex_extract",
+              "pattern": "One|Two|Three|Four|Five"
+            }
+          ],
+          "type": "string"
+        },
+        "title": {
+          "attr": "title",
+          "css": "h3 a",
+          "ops": [
+            "collapse_spaces"
+          ],
+          "required": true,
+          "type": "string"
+        }
+      },
+      "kind": "declarative",
+      "limits": {
+        "max_response_bytes": 5000000,
+        "timeout_ms": 15000
+      },
+      "request": {
+        "allowed_hosts": [
+          "books.toscrape.com"
+        ],
+        "method": "GET",
+        "url": "https://books.toscrape.com/catalogue/page-1.html"
+      },
+      "schema_version": 1,
+      "sources": [
+        {
+          "from": "html",
+          "id": "dom",
+          "records": "article.product_pod"
+        }
+      ]
+    }
+  }
+}

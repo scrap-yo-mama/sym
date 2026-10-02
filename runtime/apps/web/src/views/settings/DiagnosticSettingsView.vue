@@ -28,7 +28,7 @@ async function exportDiagnostic(): Promise<void> {
 <template>
   <section class="flex flex-col gap-4" aria-labelledby="diagnostic-heading">
     <header class="flex flex-col gap-1">
-      <h1 id="diagnostic-heading" data-route-heading tabindex="-1" class="text-2xl font-semibold tracking-tight">{{ t('settings.diagnostic.title') }}</h1>
+      <h1 id="diagnostic-heading" data-route-heading tabindex="-1" class="sym-title">{{ t('settings.diagnostic.title') }}</h1>
       <p class="text-sm text-muted-foreground">{{ t('settings.diagnostic.intro') }}</p>
       <p class="text-sm text-muted-foreground">{{ t('settings.diagnostic.includes') }}</p>
     </header>

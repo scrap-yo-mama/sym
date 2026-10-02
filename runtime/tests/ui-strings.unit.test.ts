@@ -3,12 +3,14 @@
 // (fichiers de langue `en` et `fr`, messages REST et MCP ; les libellés d'exécution E1 à E6 du badge sont exclus) ne contient
 // « contourner », « débloquer », « passer » (ni leurs équivalents anglais : bypass, unblock, circumvent) ni le nom d'un outil
 // ou d'un éditeur de protection. Le test lit les fichiers de langue en entier, extrait les messages de chaque route du
-// serveur et des paquets partagés (apps/server/src et packages/*/src : `sendError`, `message:`, `what_to_do:`), dont tout
-// fichier MCP, puis cherche les mots interdits. Un module MCP né hors de ces dossiers (apps/worker, apps/cli…) fait échouer
-// le test de périmètre.
+// serveur et des paquets partagés (apps/server/src et packages/*/src : `sendError`, `message:`, `what_to_do:`,
+// `instructions:`, et `toolError(code, message)` des outils MCP, 3.2), dont tout fichier MCP, puis cherche les mots interdits ;
+// les textes servis au modèle (MCP_INSTRUCTIONS, descriptions et schémas des outils, construits par concaténation) sont lus
+// directement. Un module MCP né hors de ces dossiers (apps/worker, apps/cli…) fait échouer le test de périmètre.
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { describe, expect, test } from 'vitest';
+import { apiToolDescription, BRIEF_SCHEMA, GENERIC_TOOLS, MCP_INSTRUCTIONS } from '../apps/server/src/mcp/tools.js';
 
 const root = new URL('..', import.meta.url).pathname;
 
@@ -48,6 +50,8 @@ const MESSAGE_PATTERNS = [
   new RegExp(String.raw`sendError\(\s*[^,()]+,\s*[^,()]+,\s*[^,()]+,\s*${LITERAL}`, 'g'),
   // message: '…', what_to_do: '…', instructions: '…'
   new RegExp(String.raw`\b(?:message|what_to_do|instructions)\s*:\s*${LITERAL}`, 'g'),
+  // toolError('code', 'message', …) : erreurs des outils MCP (05 § 4.3)
+  new RegExp(String.raw`\btoolError\(\s*[^,()]+,\s*${LITERAL}`, 'g'),
 ];
 
 /** Messages (texte littéral) d'un fichier source du serveur ou du MCP. */
@@ -120,6 +124,17 @@ describe('assert_ui_strings_no_forbidden_words', () => {
     expect(outside, 'module MCP hors du périmètre du contrôle : ajouter son dossier à messageRoots()').toEqual([]);
   });
 
+  test('textes MCP servis au modèle (instructions, descriptions et schémas des outils, description d’un outil par API) : 0 mot interdit', () => {
+    const texts: [string, string][] = [
+      ['MCP_INSTRUCTIONS', MCP_INSTRUCTIONS],
+      ['apiToolDescription', apiToolDescription('zz-test')],
+      ['BRIEF_SCHEMA', JSON.stringify(BRIEF_SCHEMA)],
+      ...GENERIC_TOOLS.map((tool): [string, string] => [tool.name, JSON.stringify({ description: tool.description, inputSchema: tool.inputSchema, outputSchema: tool.outputSchema })]),
+    ];
+    expect(texts.length).toBeGreaterThan(10);
+    for (const [where, text] of texts) expect(forbiddenIn(text), where).toEqual([]);
+  });
+
   test('tout fichier MCP des dossiers lus est couvert par le même contrôle dès qu’il existe', () => {
     const mcpFiles = messageRoots().flatMap((dir) => walk(join(root, dir), (file) => isSource(file) && /mcp/i.test(relative(root, file))));
     for (const file of mcpFiles) {
@@ -153,5 +168,10 @@ describe('le détecteur de mots interdits', () => {
   test('l’extraction des messages du serveur lit sendError, message: et what_to_do:', () => {
     const source = "sendError(reply, 403, 'forbidden', 'action non autorisée');\nconst a = { message: \"deux\", what_to_do: `trois` };";
     expect(messagesOf(source)).toEqual(['action non autorisée', 'deux', 'trois']);
+  });
+
+  test('l’extraction lit aussi les messages des erreurs d’outil MCP (toolError(code, message…))', () => {
+    const source = "return toolError('invalid_input', 'quatre');\nreturn toolError(code, `cinq ${x}`, { tool: 'list_apis' });";
+    expect(messagesOf(source)).toEqual(['quatre', 'cinq ${x}']);
   });
 });

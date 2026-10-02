@@ -127,7 +127,7 @@ Vous avez maintenant une instance saine, un propriétaire et une clé. Les deux 
 
 ## 8. Connecter votre IA et essayer D0
 
-<!-- quickstart {"id":"d0","mode":"pending","pending":"serveur MCP (3.2), enquête (2.1), mode démo (3.10)"} -->
+<!-- quickstart {"id":"d0","mode":"pending","pending":"mode démo et prompt first_steps (3.10)"} -->
 ```bash
 claude mcp add --transport http scrapyomama http://localhost:3100/mcp \
   --header "Authorization: Bearer $SCRAPYOMAMA_KEY"
@@ -159,7 +159,7 @@ Pour un vrai site, remplacez l'URL par celle d'une page publique que vous avez l
 :::
 
 ::: details État de l'étape 8 dans cette version
-L'étape 8 décrit le parcours visé. Elle dépend du serveur MCP, qui n'est pas encore livré dans cette version de développement : la CI vérifie que la route `/mcp` n'est pas encore enregistrée et échoue dès qu'elle l'est, pour forcer à rejouer cette étape aussi. L'étape 9 (API REST) est rejouée à chaque construction. Voir la [référence REST](../reference/rest.md) pour l'état exact de chaque route.
+L'étape 8 décrit le parcours visé. Le serveur MCP (`/mcp`) est livré, mais le mode démo de D0 (rejouable sans clé de modèle) et son prompt ne le sont pas encore dans cette version de développement : la CI vérifie qu'aucun prompt MCP n'est encore enregistré et échoue dès qu'il l'est, pour forcer à rejouer cette étape aussi. L'étape 9 (API REST) est rejouée à chaque construction. Voir la [référence REST](../reference/rest.md) pour l'état exact de chaque route.
 :::
 
 ## Ce que le tutoriel a prouvé

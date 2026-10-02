@@ -5,7 +5,7 @@
 // l'interpréteur de 1.1b fait toute l'extraction ; une réponse refusée (classe d'échec) n'est jamais extraite.
 import { selectElements, elementAttribute, parseHtml } from '../dsl/css.js';
 import { DslError } from '../dsl/errors.js';
-import { extractRecords } from '../dsl/extract.js';
+import { extractRecords, type ItemPolicy } from '../dsl/extract.js';
 import { queryValues } from '../dsl/jsonpath.js';
 import { parseJsonBounded, resolveLimits, type DslLimits } from '../dsl/limits.js';
 import { advancePagination, initialParam, resolveNextUrl, ScrollTracker, startPagination, type StopReason } from '../dsl/pagination.js';
@@ -20,6 +20,8 @@ export type DeclarativeRunOptions = {
   readonly input: unknown;
   /** `output_schema` d'un enregistrement : chaque page est validée (INV1). */
   readonly outputSchema?: unknown;
+  /** Politique des items non conformes (D-49) : `strict` (défaut, enquête) ou `quarantine` (runs). */
+  readonly itemPolicy?: ItemPolicy;
   readonly transport: Transport;
   readonly signal: AbortSignal;
   readonly pacer?: RequestPacer;
@@ -54,6 +56,12 @@ export type DeclarativeRunResult =
       readonly stop: DeclarativeStop;
       /** Arrêt imposé par un plafond (requêtes par run, items) avant la fin naturelle de la pagination. */
       readonly truncated: boolean;
+      /**
+       * Échange d'une page dont des enregistrements ont été écartés (sinon la dernière page), corps borné : preuve remise à
+       * la garde quand la casse vient du seuil des items non conformes (D-49), pour le squelette du rôle `repair` (04 §5
+       * étape 1). Jamais écrite (ni run, ni journal).
+       */
+      readonly evidence?: HttpExchange;
     }
   | {
       readonly ok: false;
@@ -198,6 +206,13 @@ export async function runDeclarative(options: DeclarativeRunOptions): Promise<De
     let scrolling = false;
     const scrollSeen = new ScrollTracker();
     const scrollVia: Transport | undefined = options.scroll === undefined ? undefined : (_request, sig) => options.scroll!(sig);
+    /** Preuve d'une sortie réussie : première page aux enregistrements écartés, sinon la dernière page lue. */
+    let rejectedPage: HttpExchange | undefined;
+    let lastPage: HttpExchange | undefined;
+    const done = (stop: DeclarativeStop, truncated: boolean): DeclarativeRunResult => {
+      const proof = rejectedPage ?? lastPage;
+      return { ok: true, records, pages, requests, escalated, stop, truncated, ...(proof === undefined ? {} : { evidence: boundedEvidence(proof) }) };
+    };
 
     for (;;) {
       ctx.page = { number: state.pages + 1, offset: state.received, ...(param === undefined ? {} : { value: param.value }), ...(state.cursor === null ? {} : { cursor: state.cursor }) };
@@ -209,11 +224,12 @@ export async function runDeclarative(options: DeclarativeRunOptions): Promise<De
       try {
         exchange = await (scrolling && scrollVia !== undefined ? send(request, scrollVia) : send(request));
       } catch (error) {
-        if (error instanceof RequestCapReached && pages > 0) return { ok: true, records, pages, requests, escalated, stop: 'max_requests_per_run', truncated: true };
+        if (error instanceof RequestCapReached && pages > 0) return done('max_requests_per_run', true);
         throw error;
       }
       pages += 1;
-      const out = extractRecords(spec, { body: exchange.body }, { ...(options.outputSchema === undefined ? {} : { outputSchema: options.outputSchema }), limits });
+      lastPage = exchange;
+      const out = extractRecords(spec, { body: exchange.body }, { ...(options.outputSchema === undefined ? {} : { outputSchema: options.outputSchema }), ...(options.itemPolicy === undefined ? {} : { itemPolicy: options.itemPolicy }), limits });
       // Après la première page, une page vide marque la fin (`records_empty`), pas une casse.
       const emptyPage = !out.ok && pages > 1 && out.attempts.every((a) => a.records === 0 && a.problems.every((p) => p.code === 'no_records' || p.code === 'too_few_records'));
       if (!out.ok && !emptyPage) {
@@ -224,14 +240,15 @@ export async function runDeclarative(options: DeclarativeRunOptions): Promise<De
       // Le DOM d'un flux à défilement est cumulatif : seuls les enregistrements jamais vus sont de cette « page ».
       const got = out.ok ? (pagination?.type === 'infinite_scroll' ? scrollSeen.fresh(out.records) : out.records) : [];
       escalated ||= out.ok && out.escalated;
+      if (rejectedPage === undefined && out.ok && out.attempts[out.source_index]?.problems.some((p) => p.record !== null) === true) rejectedPage = exchange;
       for (const r of got) records.push(r);
       if (records.length >= limits.maxItems) {
         records.length = limits.maxItems;
-        return { ok: true, records, pages, requests, escalated, stop: 'max_items', truncated: true };
+        return done('max_items', true);
       }
       // Défilement expiré sans rien apporter, réseau encore occupé : ce n'est pas la fin du flux (site lent), la sortie est
       // tronquée et le signal `pagination_short` levé ; `scroll_timeout` ne compte pas parmi les fins naturelles (enquête).
-      if (scrolling && exchange.scrollTimedOut === true && got.length === 0) return { ok: true, records, pages, requests, escalated, stop: 'scroll_timeout', truncated: true };
+      if (scrolling && exchange.scrollTimedOut === true && got.length === 0) return done('scroll_timeout', true);
       const document = tryParseJson(exchange.body, limits);
       const linkHeader = exchange.headers['link'] ?? (pagination?.type === 'next_link' && document === undefined ? htmlNextLink(exchange.body, limits) : undefined);
       const decision = advancePagination(
@@ -241,11 +258,11 @@ export async function runDeclarative(options: DeclarativeRunOptions): Promise<De
         { limits },
         maxPagesInput,
       );
-      if (decision.done) return { ok: true, records, pages, requests, escalated, stop: decision.reason, truncated: false };
+      if (decision.done) return done(decision.reason, false);
       if (decision.scroll === true) {
         // Pas de page à faire défiler (E1, E2) : la liste n'est pas lue au-delà de la première page (sortie tronquée : signal
         // `pagination_short`, 04 §6).
-        if (scrollVia === undefined) return { ok: true, records, pages, requests, escalated, stop: 'unsupported', truncated: true };
+        if (scrollVia === undefined) return done('unsupported', true);
         scrolling = true;
         nextUrl = undefined;
         continue;

@@ -32,6 +32,7 @@ import {
   type SkippedRunState,
 } from '@runtime/core';
 import type pg from 'pg';
+import { readRejectedAggregates } from './rejected.js';
 import { assertStorageAvailable, defaultStorageOptions, type StorageOptions } from './retention/storage.js';
 
 type Queryable = Pick<pg.ClientBase, 'query'>;
@@ -223,6 +224,7 @@ type RunRow = {
   tokens_reasoning: string;
   usage_estimated: boolean;
   items: number;
+  items_rejected: number;
   dataset_id: string | null;
   trace_id: string | null;
 };
@@ -286,6 +288,8 @@ export async function readRun(db: Queryable, runId: string): Promise<Run | null>
       estimated: r.usage_estimated,
     },
     items: r.items,
+    items_rejected: r.items_rejected ?? 0,
+    rejected: await readRejectedAggregates(db, r.id),
     dataset_id: r.dataset_id,
     trace_id: r.trace_id,
   };
@@ -305,7 +309,7 @@ export type RunClaim = {
   allowWriteActions: boolean;
   /** `runs.kind` (0016) : le worker y choisit l'exécuteur (stratégie ou enquête). */
   kind: RunKind;
-  /** `runs.locale` (0018) : langue du demandeur au lancement ; prose du LLM seulement, jamais une requête vers un site (21 § 6). */
+  /** `runs.locale` (0019) : langue du demandeur au lancement ; prose du LLM seulement, jamais une requête vers un site (21 § 6). */
   locale: string;
 };
 
@@ -474,7 +478,7 @@ export async function finishRun(
   const failed = result.state === 'failed';
   const { rowCount } = await db.query(
     `UPDATE runs SET state = $3, outcome = $4, degraded_reasons = $5, failure_class = $6, retryable = $7, error_detail = $8,
-       items = $9, dataset_id = $10, strategy_version = coalesce($11, strategy_version), finished_at = now(),
+       items = $9, dataset_id = $10, strategy_version = coalesce($11, strategy_version), items_rejected = $13, finished_at = now(),
        heartbeat_at = now(), duration_ms = (extract(epoch FROM now() - coalesce(started_at, created_at)) * 1000)::int
      WHERE id = $1 AND job_id = $2 AND state = ANY($12::text[])`,
     [
@@ -491,6 +495,7 @@ export async function finishRun(
       failed ? null : (result.dataset_id ?? null),
       result.strategy_version ?? null,
       ['running', 'waiting_tunnel'],
+      result.items_rejected ?? 0,
     ],
   );
   return rowCount === 1;

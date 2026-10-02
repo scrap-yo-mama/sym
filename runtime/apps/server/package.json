@@ -9,7 +9,10 @@
     "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
+    "@fastify/static": "catalog:",
     "@fastify/websocket": "catalog:",
+    "@modelcontextprotocol/fastify": "catalog:",
+    "@modelcontextprotocol/server": "catalog:",
     "@runtime/core": "workspace:*",
     "@runtime/db": "workspace:*",
     "@runtime/i18n": "workspace:*",
@@ -23,6 +26,7 @@
     "ws": "catalog:"
   },
   "devDependencies": {
+    "@modelcontextprotocol/client": "catalog:",
     "@types/node": "catalog:",
     "@types/pg": "catalog:",
     "@types/ws": "catalog:",

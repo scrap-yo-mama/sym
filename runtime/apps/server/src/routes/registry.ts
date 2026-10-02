@@ -13,7 +13,9 @@ type RouteAuth =
   /** Session d'interface ou clé d'API (avec `scope` si la route en exige un). */
   | 'session_or_key'
   /** Jeton d'un appareil appairé (extension, 07 § 1) seulement ; l'utilisateur est celui du jeton. */
-  | 'extension';
+  | 'extension'
+  /** Clé d'API seulement (serveur MCP, 05 § 3) : ni session d'interface, ni jeton d'appareil ; scope vérifié par outil. */
+  | 'key';
 
 /**
  * Ressources appartenant à un utilisateur exposées par les routes (s'étend avec chaque tâche). API REST (3.1) : `api` (par
@@ -58,6 +60,8 @@ export type RouteSpec = {
   mfa?: 'pending' | 'enroll';
   /** Flux sans fin (SSE, 06 § 3) : les harnais qui lisent une réponse entière ne l'appellent pas sans le couper. */
   stream?: true;
+  /** Protocole MCP (JSON-RPC, 05 § 1), hors de l'OpenAPI REST : ses outils sont contrôlés par apps/server/src/mcp.integration.test.ts. */
+  mcp?: true;
 };
 
 export const ROUTES: readonly RouteSpec[] = [
@@ -102,6 +106,12 @@ export const ROUTES: readonly RouteSpec[] = [
   { method: 'GET', url: '/api/auth/oidc/callback', auth: 'public' },
   { method: 'GET', url: '/api/sso', auth: 'public' },
   { method: 'GET', url: '/.well-known/oauth-protected-resource', auth: 'public' },
+  // Serveur MCP (tâche 3.2, 05 § 1 et § 3) : Streamable HTTP sans état, clé d'API seulement ; chaque outil exige son scope
+  // (403 insufficient_scope) et filtre par propriétaire comme la route REST qu'il appelle (INV12). GET et DELETE : 405.
+  { method: 'POST', url: '/mcp', auth: 'key', mcp: true },
+  { method: 'GET', url: '/mcp', auth: 'key', mcp: true },
+  { method: 'DELETE', url: '/mcp', auth: 'key', mcp: true },
+  { method: 'GET', url: '/.well-known/oauth-protected-resource/mcp', auth: 'public', mcp: true },
   // Compte de l'appelant : sessions, 2FA, audit.
   { method: 'POST', url: '/api/me/password', auth: 'session', permission: 'account:update' },
   { method: 'GET', url: '/api/me/sessions', auth: 'session', permission: 'account:sessions', resource: { type: 'auth_session', kind: 'collection' } },
@@ -154,6 +164,10 @@ export const ROUTES: readonly RouteSpec[] = [
   { method: 'GET', url: '/api/apis/:slug/versions/:version/diff', auth: 'session_or_key', scope: 'apis:read', permission: 'apis:read', resource: { type: 'api', kind: 'item' } },
   { method: 'POST', url: '/api/apis/:slug/versions/:version/revert', auth: 'session_or_key', scope: 'apis:write', permission: 'apis:update', resource: { type: 'api', kind: 'item' } },
   { method: 'GET', url: '/api/apis/:slug/status-events', auth: 'session_or_key', scope: 'apis:read', permission: 'apis:read', resource: { type: 'api', kind: 'item' } },
+  // Portabilité (tâche 3.12, 16 § 6) : export (propriétaire seulement), import (repasse par l'enquête), OpenAPI par API.
+  { method: 'GET', url: '/api/apis/:slug/export', auth: 'session_or_key', scope: 'apis:read', permission: 'apis:read', resource: { type: 'api', kind: 'item' } },
+  { method: 'POST', url: '/api/apis/import', auth: 'session_or_key', scope: 'apis:write', permission: 'apis:create' },
+  { method: 'GET', url: '/api/apis/:slug/openapi.json', auth: 'session_or_key', scope: 'apis:read', permission: 'apis:read', resource: { type: 'api', kind: 'item' } },
   { method: 'GET', url: '/api/apis/:slug/schedules', auth: 'session_or_key', scope: 'apis:read', permission: 'schedules:manage', resource: { type: 'api', kind: 'item' } },
   { method: 'POST', url: '/api/apis/:slug/schedules', auth: 'session_or_key', scope: 'schedules:write', permission: 'schedules:manage', resource: { type: 'api', kind: 'item' } },
   { method: 'GET', url: '/api/apis/:slug/schedules/:id', auth: 'session_or_key', scope: 'apis:read', permission: 'schedules:manage', resource: { type: 'schedule', kind: 'item' } },

@@ -569,10 +569,21 @@ paths:
           $ref: '#/components/responses/QueueFull'
   /api/apis/import:
     post:
-      x-pending: '3.12'
       operationId: importApi
       tags: [apis]
-      summary: Importe une API exportée ; repasse toujours par l'enquête (16 § 6)
+      summary: Importe une API exportée (16 § 6) ; aperçu sans écriture, puis confirm=true ; repasse toujours par l'enquête
+      description: >-
+        Sans `confirm=true` : aperçu (200), rien n'est écrit. Avec `confirm=true` : nouvelle API privée en `enquete`,
+        enquête en file au stade `access_check` (rapport d'accès, robots.txt) puis `testing` de la stratégie importée
+        (`created_by: import`) ; planifications recréées désactivées, cibles d'alerte à configurer. Les champs inconnus
+        sont ignorés (`ignored_fields`) ; un `$ref` distant (400 `remote_ref`), une empreinte fausse (400
+        `integrity_mismatch`) ou une version de format d'une autre majeure (400 `unsupported_format`) sont refusés.
+      parameters:
+        - name: confirm
+          in: query
+          required: false
+          schema:
+            type: boolean
       requestBody:
         required: true
         content:
@@ -580,6 +591,16 @@ paths:
             schema:
               $ref: '#/components/schemas/ApiExport'
       responses:
+        '200':
+          description: Aperçu de l'import (aucune écriture).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiImportPreview'
+        '429':
+          $ref: '#/components/responses/QueueFull'
+        '507':
+          $ref: '#/components/responses/Error'
         '201':
           description: API importée, enquête lancée.
           content:
@@ -781,15 +802,14 @@ paths:
           $ref: '#/components/responses/QueueFull'
   /api/apis/{slug}/export:
     get:
-      x-pending: '3.12'
       operationId: exportApi
       tags: [apis]
-      summary: Export JSON d'une API, sans secret ni session (assert_export_no_secret)
+      summary: Export JSON d'une API, sans secret ni session (16 § 6, assert_export_no_secret) ; propriétaire seulement
       parameters:
         - $ref: '#/components/parameters/Slug'
       responses:
         '200':
-          description: Export.
+          description: Export, servi en fichier `<slug>.api.json` (clés triées).
           content:
             application/json:
               schema:
@@ -800,23 +820,26 @@ paths:
           $ref: '#/components/responses/Error'
         '404':
           $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
   /api/apis/{slug}/openapi.json:
     get:
-      x-pending: '3.12'
       operationId: getApiOpenApi
       tags: [apis]
-      summary: OpenAPI propre à une API, avec sa section webhooks (05 § 2)
+      summary: OpenAPI propre à une API (05 § 2, 16 § 6) - schémas d'entrée et de sortie, section webhooks
       parameters:
         - $ref: '#/components/parameters/Slug'
       responses:
         '200':
-          description: Document OpenAPI 3.1.
+          description: Document OpenAPI 3.1 réduit à cette API, pour générer des types (openapi-typescript).
           content:
             application/json:
               schema:
                 type: object
                 additionalProperties: true
         '401':
+          $ref: '#/components/responses/Error'
+        '403':
           $ref: '#/components/responses/Error'
         '404':
           $ref: '#/components/responses/Error'
@@ -2928,6 +2951,81 @@ paths:
           $ref: '#/components/responses/Error'
         '404':
           $ref: '#/components/responses/Error'
+# Webhooks sortants (08 § 5, 16 § 6) : charges minces signées (Standard Webhooks, tâche 2.5). Le serveur les ENVOIE vers les
+# cibles configurées par l'utilisateur ; ce ne sont pas des routes du serveur.
+webhooks:
+  run.succeeded:
+    post:
+      operationId: webhookRunSucceeded
+      summary: Run réussi (ou dégradé)
+      parameters:
+        - $ref: '#/components/parameters/WebhookId'
+        - $ref: '#/components/parameters/WebhookTimestamp'
+        - $ref: '#/components/parameters/WebhookSignature'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WebhookRunSucceeded'
+            example:
+              type: run.succeeded
+              timestamp: '2026-10-02T10:00:00.000Z'
+              data: { api: books-demo-a1b2c3, api_id: 00000000-0000-0000-0000-000000000001, run_id: 00000000-0000-0000-0000-000000000002, status: sain, outcome: clean, items: 20 }
+      responses:
+        '2XX':
+          description: Reçu (2xx en 15 s, sinon nouvelle tentative au barème).
+  run.failed:
+    post:
+      operationId: webhookRunFailed
+      summary: Run en échec
+      parameters:
+        - $ref: '#/components/parameters/WebhookId'
+        - $ref: '#/components/parameters/WebhookTimestamp'
+        - $ref: '#/components/parameters/WebhookSignature'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WebhookRunFailed'
+      responses:
+        '2XX':
+          description: Reçu.
+  api.status_changed:
+    post:
+      operationId: webhookApiStatusChanged
+      summary: Changement de statut d'une API
+      parameters:
+        - $ref: '#/components/parameters/WebhookId'
+        - $ref: '#/components/parameters/WebhookTimestamp'
+        - $ref: '#/components/parameters/WebhookSignature'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WebhookApiStatusChanged'
+      responses:
+        '2XX':
+          description: Reçu.
+  items.new:
+    post:
+      operationId: webhookItemsNew
+      summary: Nouveaux items (planification avec diff)
+      parameters:
+        - $ref: '#/components/parameters/WebhookId'
+        - $ref: '#/components/parameters/WebhookTimestamp'
+        - $ref: '#/components/parameters/WebhookSignature'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WebhookItemsNew'
+      responses:
+        '2XX':
+          description: Reçu.
 components:
   securitySchemes:
     sessionCookie:
@@ -2950,6 +3048,27 @@ components:
       scheme: bearer
       description: METRICS_TOKEN (14 § 3), distinct des clés d'API.
   parameters:
+    WebhookId:
+      name: webhook-id
+      in: header
+      required: true
+      description: Identifiant de l'envoi (Standard Webhooks), stable d'une tentative à l'autre.
+      schema:
+        type: string
+    WebhookTimestamp:
+      name: webhook-timestamp
+      in: header
+      required: true
+      description: Horodatage Unix (secondes) de l'envoi.
+      schema:
+        type: string
+    WebhookSignature:
+      name: webhook-signature
+      in: header
+      required: true
+      description: Signature HMAC-SHA256 `v1,<base64>` de `id.timestamp.corps` (secret de la cible).
+      schema:
+        type: string
     Id:
       name: id
       in: path
@@ -3871,16 +3990,360 @@ components:
           type: [number, 'null']
           minimum: 0
     ApiExport:
-      description: Export portable d'une API (16 § 6), sans secret, session ni cookie ; format figé par la tâche 3.12.
+      description: >-
+        Export portable d'une API (16 § 6, tâche 3.12), format `scrapyomama.api` 1.0, clés triées. AUCUN champ pour une
+        session, un cookie, une clé LLM, un identifiant de proxy, un secret ou une URL de webhook, ni pour une donnée de
+        run (cibles d'alerte en référence `$ALERT_WEBHOOK_1`). Stratégie déclarative seulement (E1-E3, hors tunnel).
+        `integrity.sha256` : empreinte du JSON canonique (clés triées) de l'enveloppe sans `integrity`. À l'import, les
+        champs inconnus sont ignorés (contrôle complet : `parseApiExport` du cœur).
       type: object
-      additionalProperties: true
-      required: [format_version, api]
+      additionalProperties: false
+      required: [format, format_version, min_runtime_version, exported_at, api, strategy, schedules, integrity]
       properties:
+        format:
+          const: scrapyomama.api
         format_version:
-          type: integer
+          type: string
+          pattern: '^[0-9]{1,3}\.[0-9]{1,3}$'
+        min_runtime_version:
+          type: string
+        exported_at:
+          type: string
+          format: date-time
         api:
+          $ref: '#/components/schemas/ApiExportApi'
+        strategy:
+          oneOf:
+            - $ref: '#/components/schemas/ApiExportStrategy'
+            - type: 'null'
+        history:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [version, execution, network, created_by, created_at]
+            properties:
+              version:
+                type: integer
+                minimum: 1
+              execution:
+                type: string
+              network:
+                type: string
+              created_by:
+                type: string
+              created_at:
+                type: string
+        schedules:
+          type: array
+          maxItems: 50
+          items:
+            $ref: '#/components/schemas/ApiExportSchedule'
+        fixtures:
+          description: Enregistrements synthétiques conformes au schéma de sortie (modèles de `templates/` seulement).
+          type: object
+          additionalProperties: false
+          required: [items]
+          properties:
+            items:
+              type: array
+              maxItems: 50
+              items:
+                type: object
+                additionalProperties: true
+        integrity:
+          type: object
+          additionalProperties: false
+          required: [sha256]
+          properties:
+            sha256:
+              type: string
+              pattern: '^[a-f0-9]{64}$'
+    ApiExportApi:
+      type: object
+      additionalProperties: false
+      required: [description, source_url, input_schema, output_schema]
+      properties:
+        slug:
+          type: string
+        description:
+          type: string
+          minLength: 1
+          maxLength: 2000
+        source_url:
+          description: Page de la demande d'enquête, rejouée à l'import (rapport d'accès, robots.txt).
+          type: string
+          maxLength: 2048
+        input_schema:
           type: object
           additionalProperties: true
+        output_schema:
+          type: object
+          additionalProperties: true
+        output_columns:
+          type: array
+          items:
+            type: string
+        views:
+          type: object
+          additionalProperties: false
+          properties:
+            columns:
+              type: array
+              items:
+                type: string
+        purpose:
+          type: [string, 'null']
+        legal_basis:
+          type: [string, 'null']
+        contains_personal_data:
+          type: boolean
+        max_cost_usd:
+          type: number
+          minimum: 0
+        budget_daily_usd:
+          type: number
+          minimum: 0
+        network_policy:
+          description: Niveaux réseau exportables seulement (jamais le tunnel ni un identifiant de proxy).
+          type: object
+          additionalProperties: false
+          required: [allow]
+          properties:
+            allow:
+              type: array
+              items:
+                $ref: '#/components/schemas/Network'
+        alert_targets:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [ref, events]
+            properties:
+              ref:
+                type: string
+                pattern: '^\$ALERT_WEBHOOK_[1-9][0-9]?$'
+              events:
+                type: array
+                items:
+                  $ref: '#/components/schemas/WebhookEventName'
+    ApiExportStrategy:
+      type: object
+      additionalProperties: false
+      required: [execution, network, spec]
+      properties:
+        execution:
+          type: string
+          enum: [fetch, fetch_in_page, playwright]
+        network:
+          type: string
+          enum: [direct, dc_proxy, res_proxy]
+        spec:
+          description: Stratégie déclarative (04b § 2), sans session ni secret.
+          type: object
+          additionalProperties: true
+        est_cost_usd:
+          type: [number, 'null']
+    ApiExportSchedule:
+      type: object
+      additionalProperties: false
+      required: [cron, timezone, input, rules, overlap, missed, enabled]
+      properties:
+        cron:
+          type: string
+        timezone:
+          type: string
+        input:
+          type: object
+          additionalProperties: true
+        rules:
+          type: object
+          additionalProperties: true
+        overlap:
+          type: string
+          enum: [skip, queue, allow]
+        missed:
+          type: string
+          enum: [once, skip]
+        enabled:
+          type: boolean
+    ApiImportPreview:
+      description: Aperçu d'un import (aucune écriture) ; confirmer par `POST /api/apis/import?confirm=true`.
+      type: object
+      additionalProperties: false
+      required: [preview, description, source_url, output_fields, personal_fields, network_allow, strategy, schedules, alert_targets, ignored_fields, requires_ack]
+      properties:
+        preview:
+          const: true
+        description:
+          type: string
+        source_url:
+          type: string
+        output_fields:
+          type: array
+          items:
+            type: string
+        personal_fields:
+          description: Le schéma de sortie porte un champ `x-personal` (ou l'API se déclare à données personnelles).
+          type: boolean
+        network_allow:
+          description: Niveaux réseau que l'API importée pourra utiliser (politique du fichier, contrôlée, jamais le tunnel ; un proxy résidentiel se voit avant la confirmation).
+          type: array
+          items:
+            $ref: '#/components/schemas/Network'
+        strategy:
+          oneOf:
+            - type: object
+              additionalProperties: false
+              required: [execution, network]
+              properties:
+                execution:
+                  $ref: '#/components/schemas/Execution'
+                network:
+                  $ref: '#/components/schemas/Network'
+            - type: 'null'
+        schedules:
+          description: Planifications recréées DÉSACTIVÉES.
+          type: integer
+        alert_targets:
+          description: Références de cibles d'alerte à configurer (aucune n'est créée).
+          type: array
+          items:
+            type: string
+        ignored_fields:
+          description: Chemins des champs inconnus ignorés (`$.api.x`) et des niveaux réseau écartés (`$.api.network_policy.allow[1]`, un `tunnel` n'étant jamais importé).
+          type: array
+          items:
+            type: string
+        requires_ack:
+          description: La case « j'ai lu » (17 § 11) doit être cochée avant la confirmation.
+          type: boolean
+    WebhookEventName:
+      type: string
+      enum: [run.succeeded, run.failed, api.status_changed, items.new]
+    WebhookRunSucceeded:
+      description: Charge de `run.succeeded` (08 § 5) ; jamais d'item, seulement des identifiants et des compteurs.
+      type: object
+      required: [type, timestamp, data]
+      properties:
+        type:
+          const: run.succeeded
+        timestamp:
+          type: string
+          format: date-time
+        data:
+          type: object
+          required: [api, api_id, run_id, status, outcome, items]
+          properties:
+            api:
+              type: string
+            api_id:
+              type: string
+              format: uuid
+            run_id:
+              type: string
+              format: uuid
+            status:
+              $ref: '#/components/schemas/ApiStatus'
+            outcome:
+              type: string
+            items:
+              type: integer
+            new_items:
+              type: integer
+            dataset_url:
+              type: string
+    WebhookRunFailed:
+      description: Charge de `run.failed` ; une classe bloquante n'est jamais `retryable`.
+      type: object
+      required: [type, timestamp, data]
+      properties:
+        type:
+          const: run.failed
+        timestamp:
+          type: string
+          format: date-time
+        data:
+          type: object
+          required: [api, api_id, run_id, status, failure_class, retryable]
+          properties:
+            api:
+              type: string
+            api_id:
+              type: string
+              format: uuid
+            run_id:
+              type: string
+              format: uuid
+            status:
+              $ref: '#/components/schemas/ApiStatus'
+            failure_class:
+              oneOf:
+                - $ref: '#/components/schemas/FailureClass'
+                - type: 'null'
+            retryable:
+              type: [boolean, 'null']
+    WebhookApiStatusChanged:
+      description: Charge de `api.status_changed` ; vers `bloquee`, `retryable` vaut false.
+      type: object
+      required: [type, timestamp, data]
+      properties:
+        type:
+          const: api.status_changed
+        timestamp:
+          type: string
+          format: date-time
+        data:
+          type: object
+          required: [api, api_id, from, to, reason, retryable]
+          properties:
+            api:
+              type: string
+            api_id:
+              type: string
+              format: uuid
+            from:
+              oneOf:
+                - $ref: '#/components/schemas/ApiStatus'
+                - type: 'null'
+            to:
+              $ref: '#/components/schemas/ApiStatus'
+            reason:
+              type: [string, 'null']
+            run_id:
+              type: string
+              format: uuid
+            retryable:
+              type: boolean
+    WebhookItemsNew:
+      description: Charge de `items.new`.
+      type: object
+      required: [type, timestamp, data]
+      properties:
+        type:
+          const: items.new
+        timestamp:
+          type: string
+          format: date-time
+        data:
+          type: object
+          required: [api, api_id, run_id, new_items, items]
+          properties:
+            api:
+              type: string
+            api_id:
+              type: string
+              format: uuid
+            run_id:
+              type: string
+              format: uuid
+            new_items:
+              type: integer
+            items:
+              type: integer
+            dataset_url:
+              type: string
     ValidateSchemaRequest:
       type: object
       additionalProperties: false

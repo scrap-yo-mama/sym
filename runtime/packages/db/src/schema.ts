@@ -82,7 +82,7 @@ export const users = pgTable(
     image: text('image'),
     role: text('role', { enum: ['owner', 'admin', 'member'] }).notNull().default('member'),
     status: text('status', { enum: ['invited', 'active', 'disabled'] }).notNull().default('invited'),
-    // Migration 0018_i18n : le registre des langues (`@runtime/i18n`) valide ; la CHECK n'impose que la forme.
+    // Migration 0019_i18n : le registre des langues (`@runtime/i18n`) valide ; la CHECK n'impose que la forme.
     locale: text('locale').notNull().default('en'),
     theme: text('theme', { enum: ['light', 'dark', 'system'] }).notNull().default('system'),
     twoFactorEnabled: boolean('two_factor_enabled').notNull().default(false),
@@ -92,9 +92,9 @@ export const users = pgTable(
     lastLoginAt: tstz('last_login_at'),
     // Migration 0012_accounts_advanced (tâche 3.7) : compte supprimé et anonymisé.
     deletedAt: tstz('deleted_at'),
-    // Migration 0018_i18n : fuseau IANA (indice de localisation : donnée personnelle, 17 § 6), nullable.
+    // Migration 0019_i18n : fuseau IANA (indice de localisation : donnée personnelle, 17 § 6), nullable.
     timezone: text('timezone'),
-    // Migration 0018_i18n : fuseau déjà initialisé (toute écriture, même null) ; la console ne le pose qu'à la première connexion.
+    // Migration 0019_i18n : fuseau déjà initialisé (toute écriture, même null) ; la console ne le pose qu'à la première connexion.
     timezoneInitialized: boolean('timezone_initialized').notNull().default(false),
   },
   (t) => [uniqueIndex('users_single_owner').on(t.role).where(sql`role = 'owner'`)],
@@ -190,7 +190,7 @@ export const invitations = pgTable(
     createdAt: createdAt(),
     // Migration 0012_accounts_advanced : échéance ≤ dernier envoi + 48 h (CHECK invitations_ttl).
     sentAt: tstz('sent_at').notNull().defaultNow(),
-    // Migration 0018_i18n : langue choisie par l'invitant, copiée dans users.locale à l'acceptation.
+    // Migration 0019_i18n : langue choisie par l'invitant, copiée dans users.locale à l'acceptation.
     locale: text('locale').notNull().default('en'),
   },
   (t) => [index('invitations_email_idx').on(t.email)],
@@ -470,8 +470,10 @@ export const runs = pgTable(
     kind: text('kind', { enum: RUN_KINDS }).notNull().default('run'),
     // 0017_rest_api (3.1) : pause demandée par l'utilisateur (run `queued` sans job), reprise par `resume`.
     pausedAt: tstz('paused_at'),
-    // Migration 0018_i18n : langue du demandeur au lancement (déclencheur `runs_set_locale`) ; prose du LLM seulement.
+    // Migration 0019_i18n : langue du demandeur au lancement (déclencheur `runs_set_locale`) ; prose du LLM seulement.
     locale: text('locale').notNull(),
+    // 0018_run_rejected_items (2.3, D-49) : items extraits non conformes, jamais livrés.
+    itemsRejected: integer('items_rejected').notNull().default(0),
     createdAt: createdAt(),
     startedAt: tstz('started_at'),
     finishedAt: tstz('finished_at'),
@@ -563,6 +565,30 @@ export const investigationEvents = pgTable(
     at: tstz('at').notNull().defaultNow(),
   },
   (t) => [primaryKey({ columns: [t.runId, t.seq] }), index('investigation_events_owner_id_idx').on(t.ownerId)],
+);
+
+// 0018_run_rejected_items (2.3, D-49) : quarantaine d'un run (agrégats sans valeur, échantillon nettoyé de 5 items au plus).
+export const runRejectedItems = pgTable(
+  'run_rejected_items',
+  {
+    runId: uuid('run_id')
+      .primaryKey()
+      .references(() => runs.id, { onDelete: 'cascade' }),
+    apiId: uuid('api_id')
+      .notNull()
+      .references(() => apis.id, { onDelete: 'cascade' }),
+    ownerId: ownerId(),
+    projectId: projectId(),
+    totalRejected: integer('total_rejected').notNull(),
+    byReason: jsonb('by_reason').notNull().default([]),
+    sample: jsonb('sample').notNull().default([]),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    index('run_rejected_items_owner_id_idx').on(t.ownerId),
+    index('run_rejected_items_api_id_idx').on(t.apiId),
+    index('run_rejected_items_created_at_idx').on(t.createdAt),
+  ],
 );
 
 export const statusEvents = pgTable(

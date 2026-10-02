@@ -83,7 +83,7 @@ const datasetUrl = (baseUrl: string | null | undefined, datasetId: string | null
 
 export function runSucceededPayload(
   at: Date,
-  input: RunRef & { items: number; new_items?: number; outcome: string; dataset_id?: string | null; base_url?: string | null },
+  input: RunRef & { items: number; items_rejected?: number; new_items?: number; outcome: string; dataset_id?: string | null; base_url?: string | null },
 ): WebhookPayload {
   return assertNoSentenceFields({
     type: 'run.succeeded',
@@ -95,6 +95,8 @@ export function runSucceededPayload(
       status: input.status,
       outcome: input.outcome,
       items: input.items,
+      // Items extraits non conformes, écartés et jamais livrés (D-49, 04 §5) : un compteur, jamais une valeur.
+      items_rejected: input.items_rejected ?? 0,
       ...(input.new_items === undefined ? {} : { new_items: input.new_items }),
       ...datasetUrl(input.base_url, input.dataset_id),
     },

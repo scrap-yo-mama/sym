@@ -74,6 +74,8 @@ Pour l'instant, le TLS vers la base se règle par `sslmode` dans `DATABASE_URL` 
 | `WORKER_HEARTBEAT_SECONDS` | 15 | worker | battement du worker | lue |
 | `QUEUE_POLLING_SECONDS` | 2 | worker | période d'interrogation de la file (0,5 au minimum) | lue |
 | `WARNING_CHECK_SECONDS` | 900 | worker | contrôle des API « À surveiller » qui durent | lue |
+| `ITEMS_REJECTED_MAX_SHARE` | 0.2 | worker | part d’items non conformes au-delà de laquelle un run casse (avec `ITEMS_REJECTED_MIN_COUNT`) ; en dessous, les items non conformes sont écartés et le reste est livré (à valider) | lue |
+| `ITEMS_REJECTED_MIN_COUNT` | 5 | worker | nombre minimal d’items non conformes pour qu’un run casse (à valider) | lue |
 | `AUTO_MIGRATE` | `false` dans les modèles | — | migrer au démarrage du serveur | prévue |
 
 ## Sécurité réseau et bac à sable
@@ -128,7 +130,9 @@ cinq premières est posée. Pour PostgreSQL, passez la CA par `sslrootcert` dans
 
 | Variable | Défaut | Lue par | Rôle | État |
 |---|---|---|---|---|
-| `MCP_TOOL_EXPOSURE` | `pinned` | — | outils exposés par API : `generic` (aucun), `pinned` (les API épinglées, 20 au plus) ou `all` (20 au plus) ; voir [Serveur MCP](./mcp.md) | prévue |
+| `MCP_TOOL_EXPOSURE` | `pinned` | server | outils exposés par API : `generic` (aucun), `pinned` (les API épinglées pour le MCP, 20 au plus) ou `all` (20 au plus) ; voir [Serveur MCP](./mcp.md) | lue |
+| `MCP_ALLOWED_HOSTS` | l'hôte de `PUBLIC_URL` | server | noms d'hôte supplémentaires (sans port) admis dans l'en-tête `Host` d'une requête MCP ; tout autre hôte reçoit 403 | lue |
+| `MCP_ALLOWED_ORIGINS` | l'origine de `PUBLIC_URL` | server | origines supplémentaires admises dans l'en-tête `Origin` : origine complète (`https://hote:port`, comparée en entier comme celle de `PUBLIC_URL`) ou nom d'hôte seul (tout schéma et tout port de cet hôte) ; une origine présente et non admise reçoit 403, une requête sans `Origin` est acceptée | lue |
 
 ## Interrupteurs de surfaces
 
@@ -137,7 +141,7 @@ Ces variables coupent une surface de l'instance, pour réduire ce qu'elle expose
 | Variable | Défaut | Lue par | Rôle | État |
 |---|---|---|---|---|
 | `DISABLE_REST` | `false` | — | coupe l'API REST | prévue |
-| `DISABLE_MCP` | `false` | — | coupe le serveur MCP | prévue |
+| `DISABLE_MCP` | `false` | server | coupe le serveur MCP : aucune route `/mcp` | lue |
 | `DISABLE_OPENAPI` | `false` | — | coupe la publication de l'OpenAPI | prévue |
 | `DISABLE_TUNNEL` | `false` | server | coupe la passerelle du tunnel : aucune route WSS, aucune commande envoyée à l'extension | lue |
 | `GATEWAY_INSTANCE` | hôte + pid + aléa | server | identifiant de cette instance pour la passerelle du tunnel (canal de notification PostgreSQL de ses commandes) ; à fixer si plusieurs instances partagent la base | lue |

@@ -16,14 +16,30 @@ const MUTATIONS = [
   'type_change',
   'out_of_schema',
   'empty',
+  // D-49 (2.3) : items écartés. Un seul item hors schéma (score en texte, e-mail factice sous une clé inconnue), puis 30 %
+  // des items hors schéma (au-delà du seuil de casse : 20 % et 5 items). Seuil décidé sur le run, pas page par page : un
+  // 501e contact au score en texte (seul sur la dernière page à 50 par page), puis les contacts 51 à 100 au score en texte
+  // (la page 2 entière à 50 par page, 10 % du run).
+  'one_item_bad_type',
+  'bad_items_30pct',
+  'trailing_bad_item',
+  'bad_page_2',
 ] as const;
 type Mutation = (typeof MUTATIONS)[number];
 
 const apiJson: SiteFactory = (env) => {
   const contacts = makeContacts(env.seed, 'api_json', 500);
   let mutation: Mutation = 'none';
+  /** `trailing_bad_item` : contact de plus, après les 500, au score en texte. */
+  const trailing = { ...contacts[0]!, id: 'zz_test_contact_0501', name: 'Zztest Trailing', email: 'zz_test_contact_0501@example.invalid' };
 
   const shape = (c: (typeof contacts)[number]): Record<string, unknown> => {
+    const index = contacts.indexOf(c);
+    if (mutation === 'one_item_bad_type' && index === 3) {
+      return { id: c.id, name: c.name, email: c.email, city: c.city, score: 'N/A', extra: { contact_email: 'zz_test_leak_0003@example.invalid' } };
+    }
+    if (mutation === 'bad_items_30pct' && index % 10 < 3) return { id: c.id, name: c.name, email: c.email, city: c.city, score: 'N/A' };
+    if ((mutation === 'trailing_bad_item' && c === trailing) || (mutation === 'bad_page_2' && index >= 50 && index < 100)) return { id: c.id, name: c.name, email: c.email, city: c.city, score: 'N/A' };
     switch (mutation) {
       case 'rename_field':
         return { id: c.id, full_name: c.name, email: c.email, city: c.city, score: c.score };
@@ -37,8 +53,8 @@ const apiJson: SiteFactory = (env) => {
   };
 
   const list = (req: FxRequest): FxResponse => {
-    const total = mutation === 'empty' ? 0 : contacts.length;
-    const source = mutation === 'empty' ? [] : contacts;
+    const source = mutation === 'empty' ? [] : mutation === 'trailing_bad_item' ? [...contacts, trailing] : contacts;
+    const total = source.length;
     if (mutation === 'change_pagination') {
       const offset = intParam(req, 'offset', 0, 0, 10_000);
       const limit = intParam(req, 'limit', 20, 1, 100);

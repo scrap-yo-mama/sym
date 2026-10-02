@@ -15,9 +15,9 @@
     "signedInAs": "Connecté en tant que {name}",
     "signOut": "Se déconnecter",
     "main": "Navigation principale",
-    "home": "Accueil",
+    "home": "Démarrage",
     "newApi": "Nouvelle API",
-    "runs": "Tous les runs",
+    "runs": "Runs",
     "settings": "Réglages",
     "catalog": "Catalogue",
     "users": "Utilisateurs",
@@ -28,10 +28,31 @@
       "admin": "Tu es admin de cette instance."
     }
   },
+  "brand": {
+    "kicker": {
+      "login": "Ton instance",
+      "setup": "Premier démarrage",
+      "setupNext": "Prochaines étapes",
+      "runs": "Runs",
+      "audit": "Admin",
+      "users": "Admin",
+      "settings": "Réglages",
+      "api": "API"
+    },
+    "pills": {
+      "fetch": "Fetch",
+      "browser": "Navigateur",
+      "agent": "Agent"
+    },
+    "bubble": {
+      "onIt": "OK, je m'en occupe.",
+      "done": "C'est fait."
+    }
+  },
   "auth": {
     "login": {
       "title": "Connexion",
-      "description": "Utilisez le compte de votre instance.",
+      "description": "Utilise le compte de ton instance.",
       "email": "Adresse e-mail",
       "password": "Mot de passe",
       "submit": "Se connecter",
@@ -42,11 +63,11 @@
     },
     "errors": {
       "invalid_credentials": "L’adresse e-mail ou le mot de passe est incorrect.",
-      "too_many_attempts": "Trop de tentatives. Réessayez dans quelques minutes.",
-      "not_initialized": "Cette instance n’est pas encore configurée. Terminez l’assistant de premier démarrage, puis connectez-vous.",
-      "network": "Le serveur est injoignable. Vérifiez votre connexion et réessayez.",
-      "session_expired": "Votre session est terminée. Connectez-vous à nouveau.",
-      "unknown": "La connexion a échoué. Réessayez.",
+      "too_many_attempts": "Trop de tentatives. Réessaie dans quelques minutes.",
+      "not_initialized": "Cette instance n’est pas encore configurée. Termine l’assistant de premier démarrage, puis connecte-toi.",
+      "network": "Le serveur est injoignable. Vérifie ta connexion et réessaie.",
+      "session_expired": "Ta session est terminée. Connecte-toi à nouveau.",
+      "unknown": "La connexion a échoué. Réessaie.",
       "invalid_code": "Ce code n'est pas valide ou a déjà servi.",
       "sso": "La connexion par SSO n'a pas abouti ({code})."
     },
@@ -106,8 +127,8 @@
     }
   },
   "home": {
-    "title": "Votre console est prête",
-    "empty": "Rien à afficher pour l’instant. Vos API, vos runs et vos réglages apparaîtront ici."
+    "title": "Ta console est prête",
+    "empty": "Rien à afficher pour l’instant. Tes API, tes runs et tes réglages apparaîtront ici."
   },
   "stream": {
     "reconnecting": "Mise à jour en direct interrompue, reconnexion…"

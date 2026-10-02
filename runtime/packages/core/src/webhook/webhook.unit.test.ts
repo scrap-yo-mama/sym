@@ -147,13 +147,18 @@ describe('charges utiles (INV5 : minces, jamais d\'item)', () => {
   const api = { api: 'zz_test_annonces', api_id: '00000000-0000-0000-0000-0000000000a1' };
 
   test('run.succeeded : compteurs et URL du dataset, aucun item', () => {
-    const p = runSucceededPayload(NOW, { ...api, run_id: 'r1', status: 'sain', outcome: 'clean', items: 48, new_items: 5, dataset_id: 'ds1', base_url: 'https://runtime.example/' });
+    const p = runSucceededPayload(NOW, { ...api, run_id: 'r1', status: 'sain', outcome: 'clean', items: 48, items_rejected: 1, new_items: 5, dataset_id: 'ds1', base_url: 'https://runtime.example/' });
     expect(p).toEqual({
       type: 'run.succeeded',
       timestamp: '2026-10-01T10:00:00.000Z',
-      data: { ...api, run_id: 'r1', status: 'sain', outcome: 'clean', items: 48, new_items: 5, dataset_url: 'https://runtime.example/api/datasets/ds1/items' },
+      data: { ...api, run_id: 'r1', status: 'sain', outcome: 'clean', items: 48, items_rejected: 1, new_items: 5, dataset_url: 'https://runtime.example/api/datasets/ds1/items' },
     });
     expect(Object.keys(p.data)).not.toContain('item');
+  });
+
+  test('run.succeeded : compteur items_rejected (D-49), 0 par défaut, jamais un item écarté', () => {
+    const p = runSucceededPayload(NOW, { ...api, run_id: 'r1', status: 'warning', outcome: 'degraded', items: 47 });
+    expect(p.data['items_rejected']).toBe(0);
   });
 
   test('run.failed : classe et retryable, jamais le détail d\'erreur', () => {

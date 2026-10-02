@@ -42,7 +42,7 @@ onServerPrefetch(() => settings.load());
 <template>
   <section class="flex flex-col gap-6" aria-labelledby="identity-heading">
     <header class="flex flex-col gap-1">
-      <h1 id="identity-heading" data-route-heading tabindex="-1" class="text-2xl font-semibold tracking-tight">{{ t('instance.identity.title') }}</h1>
+      <h1 id="identity-heading" data-route-heading tabindex="-1" class="sym-title">{{ t('instance.identity.title') }}</h1>
       <p class="text-sm text-muted-foreground">{{ t('instance.identity.intro') }}</p>
     </header>
 
