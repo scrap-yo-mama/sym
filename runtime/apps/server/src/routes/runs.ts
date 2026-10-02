@@ -5,12 +5,12 @@
 // Droits : runs de l'acteur seulement (RLS, 404 uniforme) ; l'admin et l'owner lisent les MÉTADONNÉES du run d'autrui
 // (05 § 4.4, `assert_no_impersonation`), jamais son entrée, ses essais, ses items ni son journal.
 import { RUN_STATES, RUN_TRIGGERS } from '@runtime/core';
-import { cancelRun, pauseRun, resumeRun, withActor } from '@runtime/db';
+import { applyStatusAndNotify, cancelRun, pauseRun, resumeRun, withActor } from '@runtime/db';
 import type { FastifyInstance } from 'fastify';
 import type { ServerContext } from '../context.js';
 import { readApiBySlug } from '../rest/apis.js';
 import { listRunRows, readRunRow, runDetail, runMetadataForAdmin, runSummary } from '../rest/runs.js';
-import { rejectIfQueueFull, usd, usdOrNull } from '../rest/shared.js';
+import { rejectIfKeyRateLimited, reserveRunSlot, RunSlotError, sendRunSlotError, usd, usdOrNull } from '../rest/shared.js';
 import { decodeCursor, encodeCursor, UUID } from './account-helpers.js';
 import { audit, notFound, sendError } from './guard.js';
 
@@ -100,6 +100,22 @@ export function runRoutes(app: FastifyInstance, ctx: ServerContext): void {
     });
     if (out === null) return notFound(reply);
     if (!out.cancelled) return sendError(reply, 409, 'run_not_active', 'ce run est déjà terminé');
+    if (out.run.kind === 'investigation') {
+      // Enquête annulée (en file, en pause ou tenue par un worker, qui perd alors son bail sans rien écrire) : l'API ne
+      // reste pas en `enquete` sans enquête. Fin sans stratégie conforme, par la machine (INV3) : transition 21 (statut
+      // d'avant une ré-enquête, ancienne version gardée) ou 2 (`erreur`, d'où « Ré-enquêter » repart, 16) ; phase close
+      // au même COMMIT. Le catalogue fermé des raisons (04 § 6, 06) n'a pas de raison « annulée » : celle de la fin de
+      // budget est gardée (l'utilisateur a arrêté la dépense).
+      await applyStatusAndNotify(ctx.pool, queue, {
+        apiId: out.run.api_id,
+        runId: out.run.id,
+        event: { type: 'investigation_failed', cause: 'budget_exhausted' },
+        clock: { now: () => new Date() },
+        beforeWrite: async (db) => {
+          await db.query("UPDATE apis SET investigation_phase = 'done', updated_at = now() WHERE id = $1 AND investigation_phase IS DISTINCT FROM 'done'", [out.run.api_id]);
+        },
+      });
+    }
     await audit(ctx, request, actor, { action: 'run.cancelled', targetType: 'run', targetId: request.params.id, outcome: 'success' });
     const llm = usdOrNull(out.run.cost_llm_usd);
     const proxy = usd(out.run.cost_proxy_usd);
@@ -126,9 +142,19 @@ export function runRoutes(app: FastifyInstance, ctx: ServerContext): void {
     const exists = await withActor(ctx.pool, actor, (db) => readRunRow(db, request.params.id));
     if (exists === null) return notFound(reply);
     if (exists.paused_at === null) return sendError(reply, 409, 'run_not_paused', 'ce run n’est pas en pause');
-    if (await rejectIfQueueFull(ctx, reply)) return reply;
+    if (await rejectIfKeyRateLimited(ctx, reply, actor)) return reply;
     const queue = await ctx.jobs();
-    const resumed = await withActor(ctx.pool, actor, (tx) => resumeRun(tx, queue, request.params.id));
+    // Le run repris redevient actif : plafonds utilisateur et instance vérifiés dans la même transaction (atomique).
+    let resumed: boolean;
+    try {
+      resumed = await withActor(ctx.pool, actor, async (tx) => {
+        await reserveRunSlot(tx, ctx);
+        return resumeRun(tx, queue, request.params.id);
+      });
+    } catch (error) {
+      if (error instanceof RunSlotError) return sendRunSlotError(reply, error);
+      throw error;
+    }
     if (!resumed) return sendError(reply, 409, 'run_not_paused', 'ce run n’est pas en pause');
     await audit(ctx, request, actor, { action: 'run.resumed', targetType: 'run', targetId: request.params.id, outcome: 'success' });
     return reply.code(202).send({ run_id: request.params.id, state: 'queued', poll_after_seconds: 5 });

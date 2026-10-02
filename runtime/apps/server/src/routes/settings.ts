@@ -3,6 +3,8 @@
 // boutons « Tester ». Session d'interface seulement, permission `settings:*:write` (admin et owner, 13 § 2) ; jamais une
 // clé d'API (13 § 8). Les secrets sont en ÉCRITURE SEULE (INV8) : chiffrés dans `secrets` avant toute écriture, jamais
 // relus ni renvoyés ; un secret absent d'une écriture est conservé, un secret fourni le remplace (l'ancien est supprimé).
+// Un secret est LIÉ À SA DESTINATION : si la `base_url` (LLM), l'URL du proxy ou l'hôte et le port SMTP changent, il est
+// exigé dans la même requête (400 `api_key_required`, `credentials_required`, `password_required`), jamais réutilisé.
 // Tout test sort par la garde SSRF en politique `operator-config` (08b § 1) et ne contacte que la cible réglée (INV9).
 import { randomUUID } from 'node:crypto';
 import { connect } from 'node:net';
@@ -118,6 +120,13 @@ function plainUrl(raw: string, schemes = ['http:', 'https:']): URL | null {
   }
 }
 
+/** Même destination : URL normalisée identique (schéma, hôte, port, chemin ; barre finale ignorée). */
+function sameDestination(a: string, b: string): boolean {
+  const x = plainUrl(a);
+  const y = plainUrl(b);
+  return x !== null && y !== null && x.href.replace(/\/+$/, '') === y.href.replace(/\/+$/, '');
+}
+
 async function llmView(ctx: ServerContext) {
   const stored = (await readSetting<StoredLlm>(ctx, 'llm')) ?? { providers: [] };
   const bad = await unreadable(ctx, stored.providers.flatMap((p) => [p.api_key_secret_id, p.headers_secret_id ?? null].filter((v): v is string => typeof v === 'string' && UUID.test(v))));
@@ -212,8 +221,17 @@ export function settingsRoutes(app: FastifyInstance, ctx: ServerContext): void {
     }
     const previous = (await readSetting<StoredLlm>(ctx, 'llm')) ?? { providers: [] };
     const before = new Map(previous.providers.map((p) => [p.id, p]));
-    const missingKey = body.providers.find((p) => p.api_key === undefined && !before.get(p.id)?.api_key_secret_id);
-    if (missingKey) return sendError(reply, 400, 'api_key_required', `fournisseur ${missingKey.id} : clé d'API requise`);
+    // Un secret est lié à sa destination : une clé gardée ne part jamais vers une autre `base_url` que celle pour laquelle
+    // elle a été saisie (INV8 : un admin ne la ferait pas sortir par « Tester » vers un serveur à lui). Destination
+    // changée → la clé est exigée dans la même requête ; les en-têtes secrets d'avant sont abandonnés (à ressaisir).
+    const moved = (p: LlmWrite['providers'][number]) => {
+      const old = before.get(p.id);
+      return old !== undefined && !sameDestination(old.base_url, p.base_url);
+    };
+    const missingKey = body.providers.find((p) => p.api_key === undefined && (!before.get(p.id)?.api_key_secret_id || moved(p)));
+    if (missingKey) {
+      return sendError(reply, 400, 'api_key_required', moved(missingKey) ? `fournisseur ${missingKey.id} : base_url changée, ressaisissez la clé d'API` : `fournisseur ${missingKey.id} : clé d'API requise`);
+    }
     const providers: StoredProvider[] = [];
     const dropped: (string | undefined)[] = [];
     for (const p of body.providers) {
@@ -224,6 +242,10 @@ export function settingsRoutes(app: FastifyInstance, ctx: ServerContext): void {
         dropped.push(old?.api_key_secret_id);
       }
       let headersId = old?.headers_secret_id;
+      if (p.headers === undefined && moved(p) && headersId !== undefined) {
+        headersId = undefined;
+        dropped.push(old?.headers_secret_id);
+      }
       if (p.headers !== undefined) {
         headersId = Object.keys(p.headers).length === 0 ? undefined : await secrets.put({ ownerId: null, kind: 'llm_headers', label: `llm ${p.id} headers`, value: JSON.stringify(p.headers) });
         dropped.push(old?.headers_secret_id);
@@ -309,6 +331,11 @@ export function settingsRoutes(app: FastifyInstance, ctx: ServerContext): void {
     const url = plainUrl(body.url, ['http:', 'https:', 'socks5:']);
     if (url === null || (url.pathname !== '' && url.pathname !== '/') || url.search !== '') return { sent: await sendError(reply, 400, 'invalid_proxy', 'url : http, https ou socks5, hôte et port seulement, sans identifiants') };
     const id = current?.id ?? randomUUID();
+    // Identifiants liés à leur proxy (INV8) : une URL changée (schéma, hôte ou port) sans identifiants ressaisis est
+    // refusée, jamais servie avec les identifiants de l'ancien proxy.
+    if (current?.credentials_secret_id !== undefined && body.username === undefined && body.password === undefined && `${url.protocol}//${url.host}` !== current.url) {
+      return { sent: await sendError(reply, 400, 'credentials_required', 'url changée : ressaisissez username et password de ce proxy') };
+    }
     let credentialsId = current?.credentials_secret_id;
     let usernameSet = current?.username_set === true;
     let passwordSet = current?.password_set === true;
@@ -465,7 +492,7 @@ export function settingsRoutes(app: FastifyInstance, ctx: ServerContext): void {
         await audit(ctx, request, actor, { action: 'settings.smtp.updated', targetType: 'settings', targetId: 'smtp', outcome: 'success', meta: { host: saved.host } });
         return smtpView(saved);
       } catch (error) {
-        if (error instanceof AlertConfigError) return sendError(reply, 400, 'invalid_smtp', error.message);
+        if (error instanceof AlertConfigError) return sendError(reply, 400, error.code, error.message);
         throw error;
       }
     },

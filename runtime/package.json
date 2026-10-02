@@ -46,6 +46,7 @@
   "devDependencies": {
     "@eslint/js": "catalog:",
     "@playwright/test": "catalog:",
+    "@redocly/openapi-core": "catalog:",
     "@runtime/agent": "workspace:*",
     "@runtime/core": "workspace:*",
     "@runtime/db": "workspace:*",

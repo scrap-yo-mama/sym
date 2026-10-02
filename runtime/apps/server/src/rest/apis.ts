@@ -287,7 +287,11 @@ export async function checkNetworkPolicy(ctx: ServerContext, input: unknown): Pr
   return input as Record<string, unknown>;
 }
 
-/** Slug lisible tiré de la description (ASCII, tirets), unique dans le projet ; jamais celui d'une autre API. */
+/**
+ * Slug lisible tiré de la description (ASCII, tirets) et TOUJOURS suffixé d'un aléa (`base-xxxxxx`), unique ; jamais celui
+ * d'une autre API. Le suffixe systématique ne laisse aucun indice (13 § 3) : la réponse a la même forme que la base soit
+ * libre ou prise par une API invisible pour l'acteur. L'URL est validée par l'appelant (400 `invalid_request`).
+ */
 export async function freeSlug(ctx: ServerContext, description: string, url: string): Promise<string> {
   const words = description
     .normalize('NFKD')
@@ -299,11 +303,11 @@ export async function freeSlug(ctx: ServerContext, description: string, url: str
     .filter((w) => w.length > 2)
     .slice(0, 4);
   let base = words.join('-').slice(0, 40).replace(/-+$/, '');
-  if (base === '') base = new URL(url).hostname.replace(/^www\./, '').split('.')[0]?.replace(/[^a-z0-9-]/g, '') ?? '';
+  if (base === '') base = (URL.parse(url)?.hostname ?? '').replace(/^www\./, '').split('.')[0]?.replace(/[^a-z0-9-]/g, '') ?? '';
   if (!/^[a-z0-9]/.test(base)) base = `api-${base}`.replace(/-+$/, '');
   // Identité système : un slug pris par une API invisible de l'acteur est évité sans révéler qu'elle existe.
   for (let attempt = 0; attempt < 20; attempt++) {
-    const candidate = attempt === 0 ? base : `${base.slice(0, 50)}-${randomBytes(3).toString('hex')}`;
+    const candidate = `${base.slice(0, 50).replace(/-+$/, '')}-${randomBytes(3).toString('hex')}`;
     const { rowCount } = await ctx.pool.query('SELECT 1 FROM apis WHERE slug = $1', [candidate]);
     if (!rowCount) return candidate;
   }

@@ -408,7 +408,10 @@ export interface paths {
         get: operations["getApi"];
         put?: never;
         post?: never;
-        /** Supprime une API */
+        /**
+         * Supprime une API
+         * @description Supprime l'API, ses versions et les runs, datasets et planifications de son propriétaire. `409 runs_active` tant qu'un run est actif ; `409 api_in_use_by_others` si un autre membre a un run, un dataset ou une planification sur cette API `instance` (ses données ne partent jamais avec l'API d'autrui, INV12).
+         */
         delete: operations["deleteApi"];
         options?: never;
         head?: never;
@@ -544,7 +547,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Revient à cette version (l'API bascule en `warning`, raison `reverted`, transitions 7 ou 8) */
+        /**
+         * Revient à cette version (l'API bascule en `warning`, raison `reverted`, transitions 7 ou 8)
+         * @description Seule une version qui a été courante se rétablit (400 `version_not_revertable`) ; version courante et transition sont écrites dans la même transaction (INV3).
+         */
         post: operations["revertStrategyVersion"];
         delete?: never;
         options?: never;
@@ -805,7 +811,10 @@ export interface paths {
         };
         /** Réglages des modèles IA (08 § 7) ; les clés ne sont jamais relues (INV8) */
         get: operations["getLlmSettings"];
-        /** Remplace les réglages (admin) ; un secret absent est conservé, un secret fourni est remplacé */
+        /**
+         * Remplace les réglages (admin) ; un secret absent est conservé, un secret fourni est remplacé
+         * @description Un secret est lié à sa destination (INV8) ; si la `base_url` d'un fournisseur change, sa clé est exigée dans la même requête (400 `api_key_required`) et ses en-têtes secrets d'avant sont abandonnés.
+         */
         put: operations["putLlmSettings"];
         post?: never;
         delete?: never;
@@ -864,7 +873,10 @@ export interface paths {
         delete: operations["deleteProxy"];
         options?: never;
         head?: never;
-        /** Modifie un proxy (admin) ; un identifiant absent est conservé */
+        /**
+         * Modifie un proxy (admin) ; un identifiant absent est conservé
+         * @description Identifiants liés au proxy (INV8) ; une `url` d'un autre schéma, hôte ou port sans `username` et `password` ressaisis est refusée (400 `credentials_required`).
+         */
         patch: operations["updateProxy"];
         trace?: never;
     };
@@ -894,7 +906,10 @@ export interface paths {
         };
         /** Réglages SMTP (alertes, invitations) ; mot de passe jamais relu */
         get: operations["getSmtpSettings"];
-        /** Remplace les réglages SMTP (admin) ; un secret absent est conservé */
+        /**
+         * Remplace les réglages SMTP (admin) ; un secret absent est conservé
+         * @description Le mot de passe n'est conservé que pour le même relais (hôte et port) et le même identifiant (INV8) ; sinon 400 `password_required`.
+         */
         put: operations["putSmtpSettings"];
         post?: never;
         delete?: never;
@@ -2033,7 +2048,7 @@ export interface components {
                 [key: string]: unknown;
             };
             force_investigate?: boolean;
-            /** @description Relance avec une version précise (courante ou d'origine, 06 § 2). */
+            /** @description Relance avec une version précise (06 § 2) : une version qui a été courante (la courante, l'origine), sinon `400 invalid_strategy_version` ; réservé au propriétaire de l'API (`403 forbidden` pour un membre). */
             strategy_version?: number;
         };
         RunAccepted: {
@@ -2982,7 +2997,7 @@ export interface components {
                 "application/json": components["schemas"]["RunAccepted"];
             };
         };
-        /** @description File pleine (`queue_full`), au-delà de `max_concurrent_runs` ; réessayer après `Retry-After`. */
+        /** @description File pleine (08b § 3) ; `queue_full` au-delà de `MAX_CONCURRENT_RUNS` runs actifs sur l'instance, `user_queue_full` au-delà de `MAX_ACTIVE_RUNS_PER_USER` pour l'appelant, `key_rate_limited` au-delà de `MAX_RUNS_PER_KEY_PER_MINUTE` créations par clé d'API ; réessayer après `Retry-After`. */
         QueueFull: {
             headers: {
                 "Retry-After"?: number;
@@ -3664,6 +3679,7 @@ export interface operations {
             403: components["responses"]["Error"];
             404: components["responses"]["Error"];
             409: components["responses"]["Error"];
+            429: components["responses"]["QueueFull"];
         };
     };
     getApi: {
@@ -3962,6 +3978,7 @@ export interface operations {
                     "application/json": components["schemas"]["ApiDetail"];
                 };
             };
+            400: components["responses"]["Error"];
             401: components["responses"]["Error"];
             403: components["responses"]["Error"];
             404: components["responses"]["Error"];
@@ -4249,6 +4266,7 @@ export interface operations {
             403: components["responses"]["Error"];
             404: components["responses"]["Error"];
             409: components["responses"]["Error"];
+            429: components["responses"]["QueueFull"];
         };
     };
     streamRunEvents: {
@@ -4308,9 +4326,12 @@ export interface operations {
     getDatasetItems: {
         parameters: {
             query?: {
+                /** @description CSV à cellules neutralisées (08b § 2) ; colonnes = propriétés du schéma de sortie dans leur ordre déclaré (ou `fields`). Un champ d'item hors des propriétés du schéma n'a pas de colonne CSV ; il reste dans JSON et NDJSON, ou se nomme par `fields`. */
                 format?: "json" | "ndjson" | "csv";
-                /** @description Curseur opaque du dernier item servi (`next_cursor`, ou en-tête `X-Next-Cursor`). */
+                /** @description Curseur opaque du dernier item servi (`next_cursor`, ou en-tête `X-Next-Cursor`), ou `seq` en clair du dernier item reçu (rang dans le dataset, 0 pour le premier). */
                 after?: string;
+                /** @description Reprise d'un export coupé en cours de route : nombre d'items déjà reçus EN ENTIER (lignes NDJSON complètes, lignes CSV hors en-tête), avec les mêmes filtres ; l'export reprend à l'item suivant, sans doublon ni perte. */
+                offset?: number;
                 /** @description Nombre maximal d'items ; absent, l'export va jusqu'au bout du dataset, en flux. */
                 limit?: number;
                 /** @description Champs à garder, séparés par des virgules. */

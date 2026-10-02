@@ -7,11 +7,12 @@
 // Le worker est simulé en base (run terminé, dataset écrit) : ces tests portent sur le contrat HTTP, pas sur l'exécution.
 import { createServer, type Server } from 'node:http';
 import { createServer as createTcpServer, type AddressInfo } from 'node:net';
-import { sweepOrphans } from '@runtime/db';
+import { createConfig, lintFromString } from '@redocly/openapi-core';
+import { saveInvestigationStrategy, sweepOrphans, type InvestigationState } from '@runtime/db';
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import { OpenApiContract } from '../../../tests/helpers/openapi-contract.js';
 import { withClient } from '../../../tests/helpers/pg.js';
-import { seedApi, seedRun } from '../../../tests/helpers/rest-seed.js';
+import { seedApi, seedRun, seedSchedule } from '../../../tests/helpers/rest-seed.js';
 import { createUser, PUBLIC_URL, runSetup, signIn, startTestServer, type TestServer, type TestUser } from '../../../tests/helpers/server.js';
 import { SseParser, type SseEvent } from '../../web/src/lib/sse.js';
 import { ROUTES } from './routes/registry.js';
@@ -76,9 +77,9 @@ async function latestRun(apiId: string, timeoutMs = 5000): Promise<string> {
 const count = async (sql: string, params: unknown[] = []) => withClient(srv.db.url, async (c) => Number(Object.values((await c.query<Record<string, string>>(sql, params)).rows[0]!)[0]));
 
 /** Flux SSE lu par HTTP réel : trames analysées par le client de la console, commentaires comptés. */
-async function openStream(path: string, party: Party, lastEventId?: string) {
+async function openStream(path: string, party: Party | null, lastEventId?: string, extra: Record<string, string> = {}) {
   const controller = new AbortController();
-  const res = await fetch(`${base}${path}`, { headers: { cookie: party.cookie, ...(lastEventId ? { 'last-event-id': lastEventId } : {}) }, signal: controller.signal });
+  const res = await fetch(`${base}${path}`, { headers: { ...(party ? { cookie: party.cookie } : {}), ...(lastEventId ? { 'last-event-id': lastEventId } : {}), ...extra }, signal: controller.signal });
   const frames: SseEvent[] = [];
   let raw = '';
   let ended = false;
@@ -132,7 +133,7 @@ beforeAll(async () => {
   await new Promise<void>((resolve) => hook.listen(0, '127.0.0.1', resolve));
   hookPort = (hook.address() as AddressInfo).port;
   // Cibles locales des tests (webhook) : drapeau réservé aux tests (NODE_ENV=test) et port de la cible seulement.
-  srv = await startTestServer('rest', { RUNTIME_TEST_ALLOW_PRIVATE: '1', NODE_ENV: 'test', ALLOWED_EGRESS_PORTS: String(hookPort), MAX_CONCURRENT_RUNS: '1000' }, { rest: { pollMs: 40, pingMs: 300, maxStreamsPerUser: 3 } });
+  srv = await startTestServer('rest', { RUNTIME_TEST_ALLOW_PRIVATE: '1', NODE_ENV: 'test', ALLOWED_EGRESS_PORTS: String(hookPort), MAX_CONCURRENT_RUNS: '1000', MAX_ACTIVE_RUNS_PER_USER: '1000' }, { rest: { pollMs: 40, pingMs: 300, maxStreamsPerUser: 3, revalidateMs: 100 } });
   const o = await runSetup(srv);
   const party = async (user: TestUser): Promise<Party> => ({ user, cookie: await signIn(srv, user) });
   owner = await party(o);
@@ -168,6 +169,16 @@ describe('assert_openapi_served_valid : /api/openapi.json', () => {
     expect(refs.length).toBeGreaterThan(100);
     const components = (res.body as { components: Record<string, Record<string, unknown>> }).components;
     expect(refs.filter((m) => !components[m[1]!]?.[m[2]!]).map((m) => m[0])).toEqual([]);
+    // Validation STRUCTURELLE du document servi contre la spécification OpenAPI 3.1 (règle `struct` de Redocly : champs
+    // requis, types et formes de chaque objet), en plus des contrôles ci-dessus.
+    const config = await createConfig({ rules: { struct: 'error' } });
+    const problems = await lintFromString({ source: res.raw.body, absoluteRef: 'openapi.json', config });
+    expect(problems.filter((p) => p.ruleId === 'struct').map((p) => `${p.location[0]?.pointer ?? ''} ${p.message}`)).toEqual([]);
+    // Le contrôle mord : un document servi amputé d'un champ requis (info.title) est refusé.
+    const broken = JSON.parse(res.raw.body) as { info: Record<string, unknown> };
+    delete broken.info['title'];
+    const refused = await lintFromString({ source: JSON.stringify(broken), absoluteRef: 'openapi.json', config });
+    expect(refused.some((p) => p.ruleId === 'struct')).toBe(true);
   });
 });
 
@@ -239,6 +250,50 @@ describe('catalogue (05 § 4.2) : création, liste, fiche, modification, suppres
     expect(await count('SELECT count(*) FROM datasets WHERE id = $1', [done.datasetId])).toBe(0);
   });
 
+  test('assert_instance_api_delete_keeps_others_data : DELETE d’une API `instance` utilisée par un autre membre : 409 api_in_use_by_others, données de B intactes (INV12)', async () => {
+    const shared = await seedApi(srv.db.url, a.user.id, { visibility: 'instance' });
+    const mine = await seedRun(srv.db.url, { apiId: shared.id, ownerId: a.user.id, items: [{ title: 'zz_a' }] });
+    // B lance l'API de A (lisible par lui) et la planifie : son run, son dataset (épinglé) et sa planification.
+    const ofB = await seedRun(srv.db.url, { apiId: shared.id, ownerId: b.user.id, items: [{ title: 'zz_b' }] });
+    await withClient(srv.db.url, (c) => c.query("UPDATE datasets SET pinned = true, pinned_reason = 'zz_test', pinned_until = now() + interval '1 day' WHERE id = $1", [ofB.datasetId]));
+    const refused = await api(a, 'DELETE', `/api/apis/${shared.slug}`, '/api/apis/{slug}');
+    expect(refused.status).toBe(409);
+    expect(refused.body).toMatchObject({ error: { code: 'api_in_use_by_others' } });
+    expect(await count('SELECT count(*) FROM datasets WHERE id = ANY($1::uuid[])', [[ofB.datasetId, mine.datasetId]])).toBe(2);
+    expect(await count('SELECT count(*) FROM dataset_items WHERE dataset_id = $1', [ofB.datasetId])).toBe(1);
+    expect((await api(b, 'GET', `/api/runs/${ofB.runId}`, '/api/runs/{id}')).status).toBe(200);
+    expect((await api(a, 'GET', `/api/apis/${shared.slug}`, '/api/apis/{slug}')).status).toBe(200);
+    // Une planification de B sur l'API de A suffit aussi à refuser.
+    await withClient(srv.db.url, async (c) => {
+      await c.query('DELETE FROM datasets WHERE id = $1', [ofB.datasetId]);
+      await c.query('DELETE FROM runs WHERE id = $1', [ofB.runId]);
+    });
+    const schedule = await seedSchedule(srv.db.url, shared.id, b.user.id);
+    expect((await api(a, 'DELETE', `/api/apis/${shared.slug}`, '/api/apis/{slug}')).body).toMatchObject({ error: { code: 'api_in_use_by_others' } });
+    expect(await count('SELECT count(*) FROM schedules WHERE id = $1', [schedule])).toBe(1);
+    // Plus rien d'autrui : la suppression passe et n'emporte que les données de A.
+    await withClient(srv.db.url, (c) => c.query('DELETE FROM schedules WHERE id = $1', [schedule]));
+    expect((await api(a, 'DELETE', `/api/apis/${shared.slug}`, '/api/apis/{slug}')).status).toBe(204);
+    expect(await count('SELECT count(*) FROM datasets WHERE id = $1', [mine.datasetId])).toBe(0);
+  });
+
+  test('assert_slug_no_existence_hint : slug : jamais d’indice qu’une API invisible porte un slug (13 § 3) ; URL illisible → 400 invalid_request, jamais 500', async () => {
+    // Une API PRIVÉE de B porte le slug que la description de A donnerait.
+    await seedApi(srv.db.url, b.user.id, { slug: 'oracle-probe-target' });
+    const taken = await api(a, 'POST', '/api/apis', '/api/apis', { description: 'oracle probe target', url: 'https://zz-test-slug.example/' });
+    const free = await api(a, 'POST', '/api/apis', '/api/apis', { description: 'oracle probe unused', url: 'https://zz-test-slug.example/' });
+    expect(taken.status).toBe(201);
+    expect(free.status).toBe(201);
+    // Même forme, que la base soit prise par une API invisible ou libre : rien ne distingue les deux cas.
+    expect(taken.body['slug']).toMatch(/^oracle-probe-target-[0-9a-f]{6}$/);
+    expect(free.body['slug']).toMatch(/^oracle-probe-unused-[0-9a-f]{6}$/);
+    const bad = await api(a, 'POST', '/api/apis', '/api/apis', { description: 'zz', url: 'zz-pas-une-url' });
+    expect(bad.status).toBe(400);
+    expect(bad.body).toMatchObject({ error: { code: 'invalid_request' } });
+  });
+
+  test.todo('assert_brief_optional (REST) : `POST /api/apis` accepte `brief` (05 § 4.2, 19c) ; branché sur le service de 2.14 quand elle sera fusionnée (aujourd’hui `brief` → 400, schéma fermé)');
+
   test('admin et owner : métadonnées seules d’une API à session d’autrui ; un membre reçoit 404', async () => {
     const session = await seedApi(srv.db.url, a.user.id, { requiresSession: true });
     for (const party of [admin, owner]) {
@@ -282,6 +337,76 @@ describe('assert_responsible_use_ack : 17 § 11, case « j’ai lu » et API à 
   });
 });
 
+describe('validation du schéma : case « j’ai lu » non contournable, ordre déclaré des colonnes', () => {
+  /** API créée par `party`, worker simulé : schéma proposé, phase d'attente de validation, run d'enquête terminé. */
+  const awaitingValidation = async (party: Party, proposed: Record<string, unknown>) => {
+    const created = await api(party, 'POST', '/api/apis', '/api/apis', { description: 'zz_test validation du schéma', url: 'https://zz-test-schema.example/' });
+    const apiId = created.body['api_id'] as string;
+    await withClient(srv.db.url, async (c) => {
+      await c.query(
+        "UPDATE apis SET investigation_phase = 'awaiting_schema_validation', investigation = investigation || jsonb_build_object('proposed_schema', $2::jsonb, 'proposed_columns', $3::jsonb) WHERE id = $1",
+        [apiId, JSON.stringify(proposed), JSON.stringify(Object.keys((proposed['properties'] ?? {}) as object))],
+      );
+      await c.query("UPDATE runs SET state = 'succeeded', outcome = 'clean', finished_at = now() WHERE id = $1", [created.body['run_id']]);
+    });
+    return { apiId, slug: created.body['slug'] as string };
+  };
+
+  test('17 § 11 : renvoyer le schéma proposé SANS ses marques `x-personal` ne contourne pas la case', async () => {
+    const c: Party = await (async () => {
+      const user = await createUser(srv, 'zz_test_rest_c@example.test');
+      return { user, cookie: await signIn(srv, user) };
+    })();
+    const proposed = { type: 'object', properties: { name: { type: 'string', 'x-personal': 'identifier' }, city: { type: 'string' } } };
+    const { apiId } = await awaitingValidation(c, proposed);
+    const stripped = { type: 'object', properties: { name: { type: 'string' }, city: { type: 'string' } } };
+    const res = await api(c, 'POST', `/api/apis/${apiId}/validate-schema`, '/api/apis/{id}/validate-schema', { output_schema: stripped });
+    expect(res.status).toBe(403);
+    expect(res.body).toMatchObject({ error: { code: 'responsible_use_ack_required' } });
+    expect(await count("SELECT count(*) FROM apis WHERE id = $1 AND investigation_phase = 'awaiting_schema_validation'", [apiId])).toBe(1);
+    // Case cochée : la correction passe.
+    await api(c, 'POST', '/api/me/responsible-use', '/api/me/responsible-use', { version: '2026-10-01' });
+    // `x-personal` fourni par l'appelant ignoré (05 § 4.1) : la marque qu'il pose sur `city` ne compte pas.
+    const forged = { type: 'object', properties: { name: { type: 'string' }, city: { type: 'string', 'x-personal': 'identifier' } } };
+    expect((await api(c, 'POST', `/api/apis/${apiId}/validate-schema`, '/api/apis/{id}/validate-schema', { output_schema: forged })).status).toBe(202);
+    // Les marques DÉTECTÉES sont réappliquées côté serveur au schéma validé : le masquage RGPD en aval tient.
+    const state = await withClient(srv.db.url, async (cl) => (await cl.query<{ investigation: InvestigationState }>('SELECT investigation FROM apis WHERE id = $1', [apiId])).rows[0]!.investigation);
+    expect(state.validated_schema).toEqual({ type: 'object', properties: { name: { type: 'string', 'x-personal': 'identifier' }, city: { type: 'string' } } });
+  });
+
+  test('assert_csv_declared_column_order : colonnes dans l’ordre DÉCLARÉ du schéma validé (corrigé par l’appelant), jamais dans l’ordre de jsonb', async () => {
+    const proposed = { type: 'object', properties: { title: { type: 'string' }, price: { type: 'number' } } };
+    const { apiId } = await awaitingValidation(a, proposed);
+    // Schéma corrigé dont l'ordre déclaré n'est PAS celui de jsonb (clés courtes d'abord, puis ordre binaire).
+    const corrected = { type: 'object', properties: { zeta_title: { type: 'string' }, price: { type: 'number' }, a_note: { type: 'string' } } };
+    expect((await api(a, 'POST', `/api/apis/${apiId}/validate-schema`, '/api/apis/{id}/validate-schema', { output_schema: corrected })).status).toBe(202);
+    const state = await withClient(srv.db.url, async (c) => (await c.query<{ investigation: InvestigationState }>('SELECT investigation FROM apis WHERE id = $1', [apiId])).rows[0]!.investigation);
+    expect(state.validated_columns).toEqual(['zeta_title', 'price', 'a_note']);
+    // Worker simulé : fin d'enquête conforme, comme l'exécuteur (ordre des colonnes validé transmis avec le schéma).
+    await saveInvestigationStrategy(srv.started.ctx.pool, {
+      apiId,
+      ownerId: a.user.id,
+      execution: 'fetch',
+      network: 'direct',
+      spec: { kind: 'declarative' },
+      estCostUsd: 0,
+      outputSchema: state.validated_schema,
+      ...(state.validated_columns === undefined ? {} : { outputColumns: state.validated_columns }),
+      inputSchema: {},
+      state,
+    });
+    const run = await seedRun(srv.db.url, { apiId, ownerId: a.user.id, items: [{ a_note: '=n', price: 2, zeta_title: 't', extra: 'hors schéma' }] });
+    const res = await srv.app.inject({ method: 'GET', url: `/api/datasets/${run.datasetId}/items?format=csv`, headers: { cookie: a.cookie } });
+    expect(res.statusCode).toBe(200);
+    const lines = res.body.split('\r\n');
+    expect(lines[0]).toBe('zeta_title,price,a_note');
+    expect(lines[1]).toBe("t,2,'=n");
+    // Un champ hors des propriétés du schéma n'a pas de colonne CSV (documenté) ; `fields` le nomme, JSON et NDJSON le gardent.
+    const named = await srv.app.inject({ method: 'GET', url: `/api/datasets/${run.datasetId}/items?format=csv&fields=zeta_title,extra`, headers: { cookie: a.cookie } });
+    expect(named.body.split('\r\n').slice(0, 2)).toEqual(['zeta_title,extra', 't,hors schéma']);
+  });
+});
+
 describe('assert_rest_error_codes : runs et codes de 05 § 4.3', () => {
   test('entrée hors input_schema → 400 invalid_input, AUCUN run créé', async () => {
     const api1 = await seedApi(srv.db.url, a.user.id);
@@ -302,7 +427,8 @@ describe('assert_rest_error_codes : runs et codes de 05 § 4.3', () => {
     // `bloquee` : le texte n'offre aucune alternative de contournement (05 § 4.3).
     const blocked = await seedApi(srv.db.url, a.user.id, { status: 'bloquee' });
     const text = JSON.stringify((await api(a, 'POST', `/api/apis/${blocked.slug}/runs`, '/api/apis/{slug}/runs', { input: {} })).body);
-    expect(text).not.toMatch(/proxy|tunnel|contourn|bypass|stealth|captcha/i);
+    // Mots interdits par _exclusions.md compris (« débloquer », « passer » une protection).
+    expect(text).not.toMatch(/proxy|tunnel|contourn|bypass|stealth|captcha|d[ée]bloqu|passer|unblock/i);
   });
 
   test('run plus long que wait → 202 et run à suivre ; terminé dans l’attente → 200 RunResult (20 items, curseur, suite sans doublon)', async () => {
@@ -366,6 +492,105 @@ describe('assert_rest_error_codes : runs et codes de 05 § 4.3', () => {
     }
   });
 
+  test('assert_run_limits_per_user_and_key : limites par utilisateur et par clé (08b § 3) : 429 user_queue_full et key_rate_limited, les autres ne sont pas touchés', async () => {
+    const fresh = async (email: string): Promise<Party> => {
+      const user = await createUser(srv, email);
+      return { user, cookie: await signIn(srv, user) };
+    };
+    const c = await fresh('zz_test_rest_limit_c@example.test');
+    const d = await fresh('zz_test_rest_limit_d@example.test');
+    const limits = srv.started.ctx.rest;
+    const savedUser = limits.maxActiveRunsPerUser;
+    const savedKey = limits.maxRunsPerKeyPerMinute;
+    try {
+      // Par utilisateur : C a déjà un run actif, D aucun ; plafond 1.
+      limits.maxActiveRunsPerUser = 1;
+      const apiC = await seedApi(srv.db.url, c.user.id);
+      const apiD = await seedApi(srv.db.url, d.user.id);
+      await seedRun(srv.db.url, { apiId: apiC.id, ownerId: c.user.id, state: 'queued' });
+      const full = await api(c, 'POST', `/api/apis/${apiC.slug}/runs`, '/api/apis/{slug}/runs', { input: {} });
+      expect(full.status).toBe(429);
+      expect(full.body).toMatchObject({ error: { code: 'user_queue_full' } });
+      expect(full.raw.headers['retry-after']).toBe('30');
+      expect(await count("SELECT count(*) FROM runs WHERE api_id = $1 AND trigger = 'ui'", [apiC.id])).toBe(0);
+      // Un run en pause ne compte pas.
+      await withClient(srv.db.url, (cl) => cl.query("UPDATE runs SET paused_at = now(), job_id = NULL WHERE api_id = $1 AND state = 'queued'", [apiC.id]));
+      expect((await api(c, 'POST', `/api/apis/${apiC.slug}/runs`, '/api/apis/{slug}/runs', { input: {} })).status).toBe(202);
+      expect((await api(d, 'POST', `/api/apis/${apiD.slug}/runs`, '/api/apis/{slug}/runs', { input: {} })).status).toBe(202);
+      // Par clé : 2 créations par minute au plus, puis 429 avec Retry-After ; la session du même utilisateur n'est pas touchée.
+      limits.maxActiveRunsPerUser = 1000;
+      limits.maxRunsPerKeyPerMinute = 2;
+      const created = await srv.app.inject({ method: 'POST', url: '/api/api-keys', headers: { cookie: d.cookie, origin: PUBLIC_URL }, payload: { label: 'zz limit', scopes: ['apis:read', 'apis:run'], currentPassword: d.user.password } });
+      const key = created.json<{ key: string }>().key;
+      const viaKey = async () => {
+        const res = await srv.app.inject({ method: 'POST', url: `/api/apis/${apiD.slug}/runs`, headers: { authorization: `Bearer ${key}` }, payload: { input: {} } });
+        expect(contract.check('POST', '/api/apis/{slug}/runs', res.statusCode, res.json())).toEqual([]);
+        return res;
+      };
+      expect((await viaKey()).statusCode).toBe(202);
+      expect((await viaKey()).statusCode).toBe(202);
+      const limited = await viaKey();
+      expect(limited.statusCode).toBe(429);
+      expect(limited.json()).toMatchObject({ error: { code: 'key_rate_limited' } });
+      expect(Number(limited.headers['retry-after'])).toBeGreaterThan(0);
+      expect((await api(d, 'POST', `/api/apis/${apiD.slug}/runs`, '/api/apis/{slug}/runs', { input: {} })).status).toBe(202);
+      // Compteur par clé PARTAGÉ en PostgreSQL (08b § 3) : plusieurs instances du serveur, ou un redémarrage, voient le même.
+      const keyId = await withClient(srv.db.url, async (cl) => (await cl.query<{ id: string }>("SELECT id FROM api_keys WHERE user_id = $1 AND label = 'zz limit'", [d.user.id])).rows[0]!.id);
+      expect(await count('SELECT coalesce(sum(hits), 0) FROM run_creation_counters WHERE bucket = $1', [`key:${keyId}`])).toBe(3);
+      // Création ATOMIQUE sous le plafond utilisateur : six demandes simultanées pour une place libre, une seule passe.
+      limits.maxRunsPerKeyPerMinute = 1000;
+      limits.maxActiveRunsPerUser = 1;
+      const e = await fresh('zz_test_rest_limit_e@example.test');
+      const apiE = await seedApi(srv.db.url, e.user.id);
+      const burst = await Promise.all(
+        Array.from({ length: 6 }, () => srv.app.inject({ method: 'POST', url: `/api/apis/${apiE.slug}/runs`, headers: { cookie: e.cookie, origin: PUBLIC_URL }, payload: { input: {} } })),
+      );
+      expect(burst.map((r) => r.statusCode).sort()).toEqual([202, 429, 429, 429, 429, 429]);
+      expect(await count('SELECT count(*) FROM runs WHERE api_id = $1', [apiE.id])).toBe(1);
+    } finally {
+      limits.maxActiveRunsPerUser = savedUser;
+      limits.maxRunsPerKeyPerMinute = savedKey;
+    }
+  });
+
+  test('tunnel requis et hors ligne → 202 et run à suivre : waiting_tunnel, puis skipped_tunnel_offline sur get_run (05 § 4.3)', async () => {
+    const tunnelled = await seedApi(srv.db.url, a.user.id);
+    await withClient(srv.db.url, (c) => c.query(`UPDATE apis SET network_policy = '{"allow": ["tunnel"]}', requires = jsonb_build_object('tunnel', true) WHERE id = $1`, [tunnelled.id]));
+    const pending = api(a, 'POST', `/api/apis/${tunnelled.slug}/runs?wait=2`, '/api/apis/{slug}/runs', { input: {} });
+    // Worker simulé : extension hors ligne, le run attend le tunnel (07 § 6).
+    let runId = '';
+    for (let i = 0; i < 200 && runId === ''; i++) {
+      runId = (await withClient(srv.db.url, async (c) => (await c.query<{ id: string }>("UPDATE runs SET state = 'waiting_tunnel' WHERE api_id = $1 AND state = 'queued' RETURNING id", [tunnelled.id])).rows[0]?.id)) ?? '';
+      if (runId === '') await new Promise((r) => setTimeout(r, 25));
+    }
+    const accepted = await pending;
+    expect(accepted.status).toBe(202);
+    expect(accepted.body).toMatchObject({ run_id: runId, state: 'waiting_tunnel', poll_after_seconds: 5 });
+    // L'attente du tunnel expire : run sauté, sans classe d'échec.
+    await withClient(srv.db.url, (c) => c.query("UPDATE runs SET state = 'skipped_tunnel_offline', finished_at = now() WHERE id = $1", [runId]));
+    const run = await api(a, 'GET', `/api/runs/${runId}`, '/api/runs/{id}');
+    expect(run.status).toBe(200);
+    expect(run.body).toMatchObject({ state: 'skipped_tunnel_offline' });
+  });
+
+  test('assert_strategy_version_choice_bounded : strategy_version : courante ou ayant été courante seulement (400 invalid_strategy_version), réservé au propriétaire', async () => {
+    const api1 = await seedApi(srv.db.url, a.user.id, { visibility: 'instance' });
+    // v2 : vN+1 de réparation jamais validée (jamais courante).
+    await withClient(srv.db.url, (c) => c.query("INSERT INTO strategy_versions (api_id, version, owner_id, execution, network, spec, created_by, parent_version) VALUES ($1, 2, $2, 'agent', 'direct', '{}', 'repair', 1)", [api1.id, a.user.id]));
+    const never = await api(a, 'POST', `/api/apis/${api1.slug}/runs`, '/api/apis/{slug}/runs', { input: {}, strategy_version: 2 });
+    expect(never.status).toBe(400);
+    expect(never.body).toMatchObject({ error: { code: 'invalid_strategy_version' } });
+    expect(await count('SELECT count(*) FROM runs WHERE api_id = $1', [api1.id])).toBe(0);
+    // Un membre sur l'API `instance` d'autrui ne choisit pas la version.
+    const other = await api(b, 'POST', `/api/apis/${api1.slug}/runs`, '/api/apis/{slug}/runs', { input: {}, strategy_version: 1 });
+    expect(other.status).toBe(403);
+    expect(await count('SELECT count(*) FROM runs WHERE api_id = $1', [api1.id])).toBe(0);
+    // La version courante (et une version qui l'a été) passe.
+    const ok = await api(a, 'POST', `/api/apis/${api1.slug}/runs`, '/api/apis/{slug}/runs', { input: {}, strategy_version: 1 });
+    expect(ok.status).toBe(202);
+    expect(await count('SELECT count(*) FROM runs WHERE api_id = $1 AND strategy_version = 1', [api1.id])).toBe(1);
+  });
+
   test('accès croisé → 404 identique à une ressource inexistante (run, dataset, API)', async () => {
     const api1 = await seedApi(srv.db.url, a.user.id);
     const run = await seedRun(srv.db.url, { apiId: api1.id, ownerId: a.user.id, items: [{ title: 'zz_test_secret_item' }] });
@@ -398,6 +623,45 @@ describe('assert_run_cancel_pause_resume : annulation, pause, reprise (05 § 4.4
     expect(res.body).toMatchObject({ run_id: runId, state: 'cancelled', cost: { proxy_usd: 0.0042 } });
     expect(await count("SELECT count(*) FROM pgboss.job j JOIN runs r ON r.job_id = j.id WHERE r.id = $1 AND j.state = 'cancelled'", [runId])).toBe(1);
     expect((await api(a, 'POST', `/api/runs/${runId}/cancel`, '/api/runs/{id}/cancel')).body).toMatchObject({ error: { code: 'run_not_active' } });
+  });
+
+  test('cancel d’une enquête sans worker (en file ou en pause) : l’API quitte `enquete` par la machine (transition 2), phase close', async () => {
+    for (const paused of [false, true]) {
+      const created = await api(a, 'POST', '/api/apis', '/api/apis', { description: `zz_test enquête annulée ${paused ? 'en pause' : 'en file'}`, url: 'https://zz-test-cancel.example/' });
+      const runId = created.body['run_id'] as string;
+      if (paused) expect((await api(a, 'POST', `/api/runs/${runId}/pause`, '/api/runs/{id}/pause')).status).toBe(202);
+      const res = await api(a, 'POST', `/api/runs/${runId}/cancel`, '/api/runs/{id}/cancel');
+      expect(res.body).toMatchObject({ run_id: runId, state: 'cancelled' });
+      const detail = await api(a, 'GET', `/api/apis/${created.body['slug']}`, '/api/apis/{slug}');
+      expect(detail.body).toMatchObject({ status: 'erreur', investigation_phase: 'done' });
+      const events = await withClient(srv.db.url, async (c) => (await c.query<{ from_status: string; to_status: string; reason: string; run_id: string }>('SELECT from_status, to_status, reason, run_id FROM status_events WHERE api_id = $1 ORDER BY id', [created.body['api_id']])).rows);
+      expect(events.at(-1)).toMatchObject({ from_status: 'enquete', to_status: 'erreur', reason: 'investigation_budget_exhausted', run_id: runId });
+      // « Ré-enquêter » repart de là (transition 16).
+      expect((await api(a, 'POST', `/api/apis/${created.body['slug']}/investigate`, '/api/apis/{slug}/investigate', {})).status).toBe(202);
+    }
+  });
+
+  test('assert_cancel_reinvestigation_restores_status : cancel d’une RÉ-enquête d’une API saine : retour au statut d’avant (transition 21), stratégie gardée, run accepté ensuite (INV3)', async () => {
+    const created = await api(a, 'POST', '/api/apis', '/api/apis', { description: 'zz_test reenquete annulee', url: 'https://zz-test-recancel.example/' });
+    const apiId = created.body['api_id'] as string;
+    const slug = created.body['slug'] as string;
+    // Worker simulé : première enquête conforme (stratégie v1), API saine.
+    await withClient(srv.db.url, (c) => c.query("UPDATE runs SET state = 'succeeded', outcome = 'clean', finished_at = now() WHERE id = $1", [created.body['run_id']]));
+    const state = await withClient(srv.db.url, async (c) => (await c.query<{ investigation: InvestigationState }>('SELECT investigation FROM apis WHERE id = $1', [apiId])).rows[0]!.investigation);
+    await saveInvestigationStrategy(srv.started.ctx.pool, { apiId, ownerId: a.user.id, execution: 'fetch', network: 'direct', spec: { kind: 'declarative' }, estCostUsd: 0, outputSchema: { type: 'object', properties: { title: { type: 'string' } } }, inputSchema: {}, state });
+    await withClient(srv.db.url, (c) => c.query("UPDATE apis SET status = 'sain' WHERE id = $1", [apiId]));
+    // Ré-enquête manuelle (transition 19), puis annulation de son run avant qu'un worker ne le prenne.
+    const re = await api(a, 'POST', `/api/apis/${slug}/investigate`, '/api/apis/{slug}/investigate', {});
+    expect(re.status).toBe(202);
+    const runId = await withClient(srv.db.url, async (c) => (await c.query<{ id: string }>("SELECT id FROM runs WHERE api_id = $1 AND kind = 'investigation' AND state = 'queued'", [apiId])).rows[0]!.id);
+    expect((await api(a, 'POST', `/api/runs/${runId}/cancel`, '/api/runs/{id}/cancel')).body).toMatchObject({ run_id: runId, state: 'cancelled' });
+    const detail = await api(a, 'GET', `/api/apis/${slug}`, '/api/apis/{slug}');
+    expect(detail.body).toMatchObject({ status: 'sain', investigation_phase: 'done' });
+    expect(await count('SELECT current_strategy_version FROM apis WHERE id = $1', [apiId])).toBe(1);
+    const last = await withClient(srv.db.url, async (c) => (await c.query<{ from_status: string; to_status: string; reason: string }>('SELECT from_status, to_status, reason FROM status_events WHERE api_id = $1 ORDER BY id DESC LIMIT 1', [apiId])).rows[0]);
+    expect(last).toMatchObject({ from_status: 'enquete', to_status: 'sain', reason: 'reinvestigation_failed' });
+    // L'API se lance de nouveau : plus de 409 investigation_in_progress fantôme.
+    expect((await api(a, 'POST', `/api/apis/${slug}/runs`, '/api/apis/{slug}/runs', { input: {} })).status).toBe(202);
   });
 
   test('pause : run en file sans job, ignoré du balayeur ; resume : nouveau job ; essais gardés ; API qui écrit → 409', async () => {
@@ -475,10 +739,30 @@ describe('ré-enquête, versions et chronologie (05 § 4.2, 06 § 2, INV3)', () 
     expect(reverted.body).toMatchObject({ status: 'warning', current_strategy_version: 3, current_strategy: { created_by: 'revert', execution: 'fetch', parent_version: 2 } });
     const events = await api(a, 'GET', `/api/apis/${api1.slug}/status-events`, '/api/apis/{slug}/status-events');
     expect(events.body['events'][0]).toMatchObject({ from_status: 'sain', to_status: 'warning', reason: { code: 'version_rollback' } });
+    // assert_version_revert_bounded : version jamais courante (vN+1 de réparation non validée, brouillon) → 400
+    // version_not_revertable, rien ne change.
+    await withClient(srv.db.url, (c) => c.query("INSERT INTO strategy_versions (api_id, version, owner_id, execution, network, spec, created_by, parent_version) VALUES ($1, 4, $2, 'agent', 'direct', '{}', 'repair', 3)", [api1.id, a.user.id]));
+    const notRevertable = await api(a, 'POST', `/api/apis/${api1.slug}/versions/4/revert`, '/api/apis/{slug}/versions/{version}/revert');
+    expect(notRevertable.status).toBe(400);
+    expect(notRevertable.body).toMatchObject({ error: { code: 'version_not_revertable' } });
+    expect(await count('SELECT count(*) FROM strategy_versions WHERE api_id = $1', [api1.id])).toBe(4);
+    expect(await count('SELECT current_strategy_version FROM apis WHERE id = $1', [api1.id])).toBe(3);
+    expect((await api(a, 'POST', `/api/apis/${api1.slug}/versions/3/revert`, '/api/apis/{slug}/versions/{version}/revert')).body).toMatchObject({ error: { code: 'already_current' } });
+    expect(await count('SELECT count(*) FROM strategy_versions WHERE api_id = $1', [api1.id])).toBe(4);
+    // Transition refusée par la machine (statut erreur) : ni nouvelle version ni changement de la version courante (INV3).
     const failed = await seedApi(srv.db.url, a.user.id, { status: 'erreur' });
+    await withClient(srv.db.url, async (c) => {
+      await c.query("INSERT INTO strategy_versions (api_id, version, owner_id, execution, network, spec, created_by, parent_version) VALUES ($1, 2, $2, 'playwright', 'direct', '{}', 'repair', 1)", [failed.id, a.user.id]);
+      await c.query('UPDATE apis SET current_strategy_version = 2 WHERE id = $1', [failed.id]);
+    });
     expect((await api(a, 'POST', `/api/apis/${failed.slug}/versions/1/revert`, '/api/apis/{slug}/versions/{version}/revert')).body).toMatchObject({ error: { code: 'status_not_runnable' } });
+    expect(await count('SELECT count(*) FROM strategy_versions WHERE api_id = $1', [failed.id])).toBe(2);
+    expect(await count('SELECT current_strategy_version FROM apis WHERE id = $1', [failed.id])).toBe(2);
   });
 });
+
+/** Lots de 1 000 items lus d'avance par le serveur pour un client qui ne lit plus (contre-pression). */
+const EXPORT_MAX_READ_AHEAD_BATCHES = 5;
 
 describe('assert_export_streaming : export des datasets en flux (05 § 4.4)', () => {
   test('100 000 items en NDJSON : mémoire bornée (lecture au rythme du client), reprise par `after` sans doublon', async () => {
@@ -522,10 +806,22 @@ describe('assert_export_streaming : export des datasets en flux (05 § 4.4)', ()
       const reader = res.body!.getReader();
       const first = await reader.read();
       expect(first.done).toBe(false);
-      // Client lent : le serveur ne lit pas le dataset d'avance (contre-pression), il attend que le client consomme.
-      await new Promise((r) => setTimeout(r, 1500));
-      const readAhead = batches;
-      expect(readAhead).toBeLessThan(50);
+      // Client lent : il ne lit plus rien. Le serveur cesse de lire le dataset dès que les tampons du flux sont pleins
+      // (contre-pression) : on attend que le compteur de lots se STABILISE (aucune durée fixe : un serveur sans
+      // contre-pression lirait les 101 lots, même lentement sur une machine chargée), puis on borne l'avance à quelques lots
+      // (~460 Ko chacun : tampons du flux Node, du socket et du client HTTP), loin des 101 lots (~45 Mo) du dataset.
+      let readAhead = batches;
+      let stableSince = Date.now();
+      const deadline = Date.now() + 30_000;
+      while (Date.now() - stableSince < 1500 && Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 50));
+        if (batches !== readAhead) {
+          readAhead = batches;
+          stableSince = Date.now();
+        }
+      }
+      console.info(`assert_export_streaming : ${readAhead} lots lus d'avance`);
+      expect(readAhead).toBeLessThanOrEqual(EXPORT_MAX_READ_AHEAD_BATCHES);
       let text = new TextDecoder().decode(first.value);
       let lines = 0;
       const decoder = new TextDecoder();
@@ -565,6 +861,49 @@ describe('assert_export_streaming : export des datasets en flux (05 § 4.4)', ()
     expect(json.body['items'][0]).not.toHaveProperty('pad');
     expect((await api(a, 'GET', `/api/datasets/${ds}/items?after=zz`, '/api/datasets/{id}/items')).body).toMatchObject({ error: { code: 'invalid_cursor' } });
   }, 120_000);
+
+  test('assert_export_resume_after_cut : export interrompu repris par `offset` (lignes complètes reçues) ou `after=<seq>` ; `since` ; `fields` en JSON et NDJSON, `omit` en CSV', async () => {
+    const api1 = await seedApi(srv.db.url, a.user.id);
+    const items = Array.from({ length: 10 }, (_, i) => ({ title: `zz_${i}`, price: i, note: 'n' }));
+    const run = await seedRun(srv.db.url, { apiId: api1.id, ownerId: a.user.id, items });
+    const ds = run.datasetId!;
+    // Quatre items écrits avant la date de coupure, six après (dates proches : `dataset_items` est partitionnée par date).
+    const cutoff = await withClient(srv.db.url, async (c) => {
+      await c.query("UPDATE dataset_items SET created_at = CASE WHEN seq < 4 THEN now() - interval '2 minutes' ELSE now() END WHERE dataset_id = $1", [ds]);
+      return (await c.query<{ t: string }>("SELECT to_char((now() - interval '1 minute') AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"') AS t")).rows[0]!.t;
+    });
+    const later = new Date(Date.parse(cutoff) + 3_600_000).toISOString();
+    const get = async (query: string) => {
+      const res = await fetch(`${base}/api/datasets/${ds}/items?${query}`, { headers: { cookie: a.cookie } });
+      expect(res.status, query).toBe(200);
+      return res.text();
+    };
+    const prices = (text: string) => text.trim().split('\n').filter((l) => l !== '').map((l) => (JSON.parse(l) as { price: number }).price);
+    // Coupure délibérée au milieu d'une ligne : le client garde ses lignes COMPLÈTES et reprend par `offset`.
+    const full = await get('format=ndjson');
+    const cut = full.slice(0, full.indexOf('\n', full.indexOf('\n', full.indexOf('\n') + 1) + 1) + 7);
+    const received = cut.slice(0, cut.lastIndexOf('\n') + 1);
+    const kept = prices(received);
+    expect(kept).toEqual([0, 1, 2]);
+    const resumed = prices(await get(`format=ndjson&offset=${kept.length}`));
+    expect([...kept, ...resumed]).toEqual(items.map((x) => x.price));
+    // Même reprise en CSV (en-tête exclu du compte) et par `after=<seq>` (seq du dernier item reçu, 0 pour le premier).
+    const csvRest = (await get('format=csv&offset=8')).split('\r\n');
+    expect(csvRest.slice(0, 3)).toEqual(['title,price,note', 'zz_8,8,n', 'zz_9,9,n']);
+    expect(prices(await get('format=ndjson&after=6'))).toEqual([7, 8, 9]);
+    // `since` : seuls les items écrits à partir de la date ; avec `offset`, le compte porte sur la sélection.
+    expect(prices(await get(`format=ndjson&since=${cutoff}`))).toEqual([4, 5, 6, 7, 8, 9]);
+    expect(prices(await get(`format=ndjson&since=${cutoff}&offset=2`))).toEqual([6, 7, 8, 9]);
+    const sinceJson = await api(a, 'GET', `/api/datasets/${ds}/items?since=${cutoff}&limit=100`, '/api/datasets/{id}/items');
+    expect(sinceJson.body['items'].map((x: { price: number }) => x.price)).toEqual([4, 5, 6, 7, 8, 9]);
+    expect((await api(a, 'GET', `/api/datasets/${ds}/items?since=${later}`, '/api/datasets/{id}/items')).body['items']).toEqual([]);
+    // `fields` en JSON et en NDJSON ; `omit` en CSV.
+    expect((await api(a, 'GET', `/api/datasets/${ds}/items?fields=title,price&limit=1`, '/api/datasets/{id}/items')).body['items']).toEqual([{ title: 'zz_0', price: 0 }]);
+    expect((await get('format=ndjson&fields=title&limit=2')).trim().split('\n').map((l) => JSON.parse(l))).toEqual([{ title: 'zz_0' }, { title: 'zz_1' }]);
+    expect((await get('format=csv&omit=price&limit=1')).split('\r\n').slice(0, 2)).toEqual(['title,note', 'zz_0,n']);
+    // `offset` illisible → 400.
+    expect((await api(a, 'GET', `/api/datasets/${ds}/items?offset=-1`, '/api/datasets/{id}/items')).status).toBe(400);
+  });
 });
 
 describe('assert_csv_formula_neutralized : CSV à cellules neutralisées (08b § 2)', () => {
@@ -586,15 +925,34 @@ describe('assert_csv_formula_neutralized : CSV à cellules neutralisées (08b §
     expect(res.headers['content-disposition']).toMatch(/attachment/);
     expect(res.headers['x-content-type-options']).toBe('nosniff');
     const lines = res.body.split('\r\n');
-    // Colonnes dans l'ordre des propriétés du schéma tel que PostgreSQL le rend (jsonb : clés courtes d'abord, puis
-    // ordre binaire) : déterministe d'un export à l'autre ; l'ordre de déclaration n'est pas conservé par jsonb.
-    expect(lines[0]).toBe('note,price,title');
-    expect(lines[1]).toBe("'@x,-5,'=cmd|'/C calc'!A0");
-    expect(lines[2]).toBe("'\tTAB,3.5,'+1");
-    expect(lines[3]).toBe('"\'\rCR",,\'-2+3');
-    expect(lines[4]).toBe(',0,"ok, ""quoted"""');
+    // Colonnes dans l'ordre DÉCLARÉ du schéma de sortie (title, price, note : 05 § 2, T3), jamais dans l'ordre de jsonb.
+    expect(lines[0]).toBe('title,price,note');
+    expect(lines[1]).toBe("'=cmd|'/C calc'!A0,-5,'@x");
+    expect(lines[2]).toBe("'+1,3.5,'\tTAB");
+    expect(lines[3]).toBe("'-2+3,,\"'\rCR\"");
+    expect(lines[4]).toBe('"ok, ""quoted""",0,');
     const fields = await srv.app.inject({ method: 'GET', url: `/api/datasets/${run.datasetId}/items?format=csv&fields=note,title`, headers: { cookie: a.cookie } });
     expect(fields.body.split('\r\n')[0]).toBe('note,title');
+  });
+
+  test('séparateur `;` (Excel en locale fr ou de) : un déclencheur après un séparateur interne est neutralisé, en colonne non initiale et dans les noms de colonnes', async () => {
+    const api1 = await seedApi(srv.db.url, a.user.id);
+    // Nom de propriété hostile (repris des clés d'un item à l'enquête) : il devient un nom de colonne.
+    const schema = { type: 'object', properties: { title: { type: 'string' }, note: { type: 'string' }, 'k;=1+1': { type: 'string' } } };
+    await withClient(srv.db.url, (c) => c.query('UPDATE apis SET output_schema = $2::jsonb, output_columns = $3::text[] WHERE id = $1', [api1.id, JSON.stringify(schema), ['title', 'note', 'k;=1+1']]));
+    const run = await seedRun(srv.db.url, {
+      apiId: api1.id,
+      ownerId: a.user.id,
+      items: [{ title: 'ok', note: "x;=cmd|' /C calc'!A0;", 'k;=1+1': 'v' }],
+    });
+    const res = await srv.app.inject({ method: 'GET', url: `/api/datasets/${run.datasetId}/items?format=csv`, headers: { cookie: a.cookie } });
+    expect(res.statusCode).toBe(200);
+    const lines = res.body.split('\r\n');
+    expect(lines[0]).toBe("title,note,k;'=1+1");
+    expect(lines[1]).toBe("ok,x;'=cmd|' /C calc'!A0;,v");
+    // Découpé comme Excel en locale française (sur `;`, guillemets ignorés au milieu d'un champ) : aucune cellule ne commence
+    // par un déclencheur.
+    for (const line of lines) expect(line.split(/[;,]/).filter((cell) => /^\s*[=+\-@]/.test(cell))).toEqual([]);
   });
 });
 
@@ -669,6 +1027,74 @@ describe('assert_sse_multiplexed_resume : flux SSE (06 § 3)', () => {
     expect(contract.check('GET', '/api/events', 429, await res.json())).toEqual([]);
     for (const s of streams) await s.close();
   });
+
+  test('assert_sse_commit_order : une clôture de run validée APRÈS une plus récente n’est jamais sautée, reprise comprise', async () => {
+    const api1 = await seedApi(srv.db.url, a.user.id);
+    const slow = await seedRun(srv.db.url, { apiId: api1.id, ownerId: a.user.id, state: 'running' });
+    const quick = await seedRun(srv.db.url, { apiId: api1.id, ownerId: a.user.id, state: 'running' });
+    const s = await openStream('/api/events', a);
+    try {
+      await s.waitFor(() => s.raw().includes(': connected'));
+      await new Promise((r) => setTimeout(r, 300)); // curseur initial posé
+      // Transaction longue (clôture d'un gros dataset) : `finished_at` = son début, validée bien plus tard.
+      let commit!: () => void;
+      const gate = new Promise<void>((r) => (commit = r));
+      let begun!: () => void;
+      const started = new Promise<void>((r) => (begun = r));
+      const holder = withClient(srv.db.url, async (c) => {
+        await c.query('BEGIN');
+        await c.query("UPDATE runs SET state = 'succeeded', outcome = 'clean', finished_at = now() WHERE id = $1", [slow.runId]);
+        begun();
+        await gate;
+        await c.query('COMMIT');
+      });
+      await started;
+      await new Promise((r) => setTimeout(r, 50));
+      // Clôture plus récente, validée tout de suite ; le flux a largement le temps de la servir avant la première.
+      await withClient(srv.db.url, (c) => c.query("UPDATE runs SET state = 'succeeded', outcome = 'clean', finished_at = now() WHERE id = $1", [quick.runId]));
+      await new Promise((r) => setTimeout(r, 800));
+      commit();
+      await holder;
+      const finished = () => s.frames.filter((f) => f.event === 'run.finished').map((f) => (JSON.parse(f.data) as { run_id: string }).run_id);
+      await s.waitFor(() => finished().includes(slow.runId) && finished().includes(quick.runId));
+    } finally {
+      await s.close();
+    }
+  });
+
+  test('assert_sse_identity_revalidated : identité revalidée pendant le flux : clé révoquée ou session fermée → le serveur ferme le flux, plus aucune trame', async () => {
+    const created = await srv.app.inject({ method: 'POST', url: '/api/api-keys', headers: { cookie: a.cookie, origin: PUBLIC_URL }, payload: { label: 'zz sse', scopes: ['runs:read'], currentPassword: a.user.password } });
+    expect(created.statusCode).toBe(201);
+    const key = created.json<{ id: string; key: string }>();
+    const viaKey = await openStream('/api/events', null, undefined, { authorization: `Bearer ${key.key}` });
+    let viaSession: Awaited<ReturnType<typeof openStream>> | null = null;
+    try {
+      expect(viaKey.res.status).toBe(200);
+      await viaKey.waitFor(() => viaKey.raw().includes(': connected'));
+      await new Promise((r) => setTimeout(r, 300));
+      expect(viaKey.ended()).toBe(false);
+      expect((await api(a, 'DELETE', `/api/api-keys/${key.id}`, '/api/api-keys/{id}')).status).toBe(204);
+      await viaKey.waitFor(() => viaKey.ended(), 5000);
+      // Session d'interface : déconnexion → le flux ouvert avec elle se ferme aussi.
+      const session: Party = { user: a.user, cookie: await signIn(srv, a.user) };
+      viaSession = await openStream('/api/events', session);
+      await viaSession.waitFor(() => viaSession!.raw().includes(': connected'));
+      await new Promise((r) => setTimeout(r, 300));
+      expect(viaSession.ended()).toBe(false);
+      const out = await srv.app.inject({ method: 'POST', url: '/api/auth/sign-out', headers: { cookie: session.cookie, origin: PUBLIC_URL }, payload: {} });
+      expect(out.statusCode).toBeLessThan(300);
+      await viaSession.waitFor(() => viaSession!.ended(), 5000);
+      // Un événement de l'utilisateur après la fermeture n'est servi à aucun des deux flux.
+      const framesBefore = viaKey.frames.length + viaSession.frames.length;
+      const api1 = await seedApi(srv.db.url, a.user.id);
+      await seedRun(srv.db.url, { apiId: api1.id, ownerId: a.user.id, items: [{ title: 'zz' }] });
+      await new Promise((r) => setTimeout(r, 400));
+      expect(viaKey.frames.length + viaSession.frames.length).toBe(framesBefore);
+    } finally {
+      await viaKey.close();
+      await viaSession?.close();
+    }
+  });
 });
 
 describe('planifications (08 § 5) : CRUD, miroir pg-boss, prochaines exécutions', () => {
@@ -719,7 +1145,7 @@ describe('webhooks (Standard Webhooks, 08 § 5) : garde SSRF, secret rendu une f
   });
 });
 
-describe('réglages de l’admin (08 § 1, § 2, § 7) : secrets en écriture seule (INV8)', () => {
+describe('réglages de l’admin (08 § 1, § 2, § 7) : secrets en écriture seule (INV8), assert_write_only_secret_bound_to_destination', () => {
   test('modèles IA : clé chiffrée, jamais relue, conservée si absente ; sonde vers un fournisseur injoignable → échec lisible', async () => {
     const key = 'zz_test_llm_key_0123456789abcdef';
     const put = await api(admin, 'PUT', '/api/settings/llm', '/api/settings/llm', {
@@ -737,6 +1163,20 @@ describe('réglages de l’admin (08 § 1, § 2, § 7) : secrets en écriture se
     expect(again.body['providers'][0]).toMatchObject({ api_key_set: true });
     expect((await api(admin, 'PUT', '/api/settings/llm', '/api/settings/llm', { providers: [{ id: 'zz-new', preset: 'custom', base_url: 'http://127.0.0.1:9/v1' }] })).body).toMatchObject({ error: { code: 'api_key_required' } });
     expect((await api(admin, 'GET', '/api/settings/llm', '/api/settings/llm')).raw.body).not.toContain(key);
+    // Secret lié à sa destination (INV8) : même fournisseur, autre base_url, sans clé → 400 ; la clé gardée ne part jamais
+    // vers la nouvelle URL (« Tester » vise toujours l'ancienne), aucune requête n'atteint la cible de l'attaquant.
+    const evil = `http://127.0.0.1:${hookPort}/v1`;
+    const before = hookCalls.length;
+    const moved = await api(admin, 'PUT', '/api/settings/llm', '/api/settings/llm', { providers: [{ id: 'zz-local', preset: 'custom', base_url: evil }] });
+    expect(moved.status).toBe(400);
+    expect(moved.body).toMatchObject({ error: { code: 'api_key_required' } });
+    expect((await api(admin, 'GET', '/api/settings/llm', '/api/settings/llm')).body['providers'][0]).toMatchObject({ id: 'zz-local', base_url: 'http://127.0.0.1:9/v1', api_key_set: true });
+    await api(admin, 'POST', '/api/settings/llm/test', '/api/settings/llm/test', { provider: 'zz-local', model: 'zz-model' });
+    expect(hookCalls.slice(before)).toEqual([]);
+    // Destination changée AVEC une clé ressaisie : accepté (la nouvelle clé remplace l'ancienne).
+    const rekeyed = await api(admin, 'PUT', '/api/settings/llm', '/api/settings/llm', { providers: [{ id: 'zz-local', preset: 'custom', base_url: 'http://127.0.0.1:9/v2', api_key: 'zz_test_llm_key_rekeyed_0123' }] });
+    expect(rekeyed.status).toBe(200);
+    expect(await count("SELECT count(*) FROM secrets WHERE kind = 'llm_api_key' AND owner_id IS NULL")).toBe(1);
     const probe = await api(admin, 'POST', '/api/settings/llm/test', '/api/settings/llm/test', { provider: 'zz-local', model: 'zz-model' });
     expect(probe.body).toMatchObject({ ok: false, profile: null, error: { code: expect.stringMatching(/^llm_/) } });
     expect((await api(admin, 'POST', '/api/settings/llm/test', '/api/settings/llm/test', { provider: 'zz-absent', model: 'm' })).status).toBe(404);
@@ -757,6 +1197,16 @@ describe('réglages de l’admin (08 § 1, § 2, § 7) : secrets en écriture se
       expect((await api(admin, 'GET', '/api/settings/proxies', '/api/settings/proxies')).raw.body).not.toContain('zz_test_proxy_password');
       expect((await api(admin, 'GET', `/api/settings/proxies/${id}`, '/api/settings/proxies/{id}')).body).toMatchObject({ id, label: 'zz_test dc' });
       expect((await api(admin, 'PATCH', `/api/settings/proxies/${id}`, '/api/settings/proxies/{id}', { label: 'zz_test dc 2' })).body).toMatchObject({ label: 'zz_test dc 2', password_set: true });
+      // Identifiants liés au proxy (INV8) : une autre URL sans identifiants ressaisis → 400, rien ne change ; la même URL passe.
+      const moved = await api(admin, 'PATCH', `/api/settings/proxies/${id}`, '/api/settings/proxies/{id}', { url: `http://127.0.0.1:${hookPort}` });
+      expect(moved.status).toBe(400);
+      expect(moved.body).toMatchObject({ error: { code: 'credentials_required' } });
+      expect((await api(admin, 'GET', `/api/settings/proxies/${id}`, '/api/settings/proxies/{id}')).body).toMatchObject({ url: `http://127.0.0.1:${port}` });
+      expect((await api(admin, 'PATCH', `/api/settings/proxies/${id}`, '/api/settings/proxies/{id}', { url: `http://127.0.0.1:${port}/` })).status).toBe(200);
+      const rehomed = await api(admin, 'PATCH', `/api/settings/proxies/${id}`, '/api/settings/proxies/{id}', { url: `http://127.0.0.1:${hookPort}`, username: 'zz_user', password: 'zz_test_proxy_password_2' });
+      expect(rehomed.body).toMatchObject({ url: `http://127.0.0.1:${hookPort}`, password_set: true });
+      expect((await api(admin, 'PATCH', `/api/settings/proxies/${id}`, '/api/settings/proxies/{id}', { url: `http://127.0.0.1:${port}`, username: 'zz_user', password: 'zz_test_proxy_password' })).status).toBe(200);
+      expect(await count("SELECT count(*) FROM secrets WHERE kind = 'proxy'")).toBe(1);
       expect((await api(admin, 'POST', `/api/settings/proxies/${id}/test`, '/api/settings/proxies/{id}/test')).body).toMatchObject({ ok: true, exit_ip: null });
       const user = await seedApi(srv.db.url, a.user.id);
       await withClient(srv.db.url, (c) => c.query(`UPDATE apis SET network_policy = jsonb_build_object('allow', '["direct","dc_proxy"]'::jsonb, 'proxy_ids', jsonb_build_object('dc_proxy', $2::text)) WHERE id = $1`, [user.id, id]));
@@ -770,11 +1220,19 @@ describe('réglages de l’admin (08 § 1, § 2, § 7) : secrets en écriture se
     expect((await api(b, 'GET', '/api/settings/proxies', '/api/settings/proxies')).status).toBe(403);
   });
 
-  test('SMTP : mot de passe jamais relu, conservé si absent ; test sans relais → échec lisible', async () => {
+  test('SMTP : mot de passe jamais relu, conservé si absent pour le même relais, exigé si l’hôte ou le port change ; test sans relais → échec lisible', async () => {
     const put = await api(owner, 'PUT', '/api/settings/smtp', '/api/settings/smtp', { host: '127.0.0.1', port: 9, security: 'starttls', from: 'zz_test@example.test', username: 'zz_user', password: 'zz_test_smtp_password' });
     expect(put.body).toMatchObject({ host: '127.0.0.1', username_set: true, password_set: true, tested_at: null });
-    const again = await api(owner, 'PUT', '/api/settings/smtp', '/api/settings/smtp', { host: '127.0.0.1', port: 10, security: 'starttls', from: 'zz_test@example.test', username: 'zz_user' });
-    expect(again.body).toMatchObject({ port: 10, password_set: true });
+    // Même relais, même identifiant, sans mot de passe : gardé.
+    const again = await api(owner, 'PUT', '/api/settings/smtp', '/api/settings/smtp', { host: '127.0.0.1', port: 9, security: 'tls', from: 'zz_test_2@example.test', username: 'zz_user' });
+    expect(again.body).toMatchObject({ port: 9, security: 'tls', password_set: true });
+    // Autre port, ou autre hôte, sans mot de passe : 400 password_required (le mot de passe ne part jamais vers un autre relais).
+    for (const target of [{ host: '127.0.0.1', port: 10 }, { host: 'localhost', port: 9 }]) {
+      const moved = await api(admin, 'PUT', '/api/settings/smtp', '/api/settings/smtp', { ...target, security: 'starttls', from: 'zz_test@example.test', username: 'zz_user' });
+      expect(moved.status).toBe(400);
+      expect(moved.body).toMatchObject({ error: { code: 'password_required' } });
+    }
+    expect((await api(owner, 'GET', '/api/settings/smtp', '/api/settings/smtp')).body).toMatchObject({ host: '127.0.0.1', port: 9 });
     expect(await count("SELECT count(*) FROM secrets WHERE kind = 'smtp_password'")).toBe(1);
     expect((await api(owner, 'GET', '/api/settings/smtp', '/api/settings/smtp')).raw.body).not.toContain('zz_test_smtp_password');
     const tested = await api(owner, 'POST', '/api/settings/smtp/test', '/api/settings/smtp/test', { to: 'zz_test@example.test' });

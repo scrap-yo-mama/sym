@@ -55,6 +55,13 @@ export const ALERTS_SETTING = 'alerts';
 
 export class AlertConfigError extends Error {
   override name = 'AlertConfigError';
+  /** Code d'erreur stable de la route de réglage (`invalid_smtp` par défaut, `password_required` : secret à ressaisir). */
+  readonly code: string;
+
+  constructor(message: string, code = 'invalid_smtp') {
+    super(message);
+    this.code = code;
+  }
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -118,17 +125,25 @@ async function writeSetting(db: Queryable, key: string, value: unknown): Promise
 export async function saveSmtpSettings(
   db: Queryable,
   store: SecretStore,
-  input: { host: string; port: number; security: SmtpSecurity; username?: string; password?: string; from: string; helo?: string; /** Mot de passe absent : garder celui en place (même identifiant, route de réglage 3.1). */ keepPassword?: boolean },
+  input: { host: string; port: number; security: SmtpSecurity; username?: string; password?: string; from: string; helo?: string; /** Mot de passe absent : garder celui en place (même identifiant, même hôte et même port, route de réglage 3.1). */ keepPassword?: boolean },
   changedBy: SmtpChangedBy,
 ): Promise<SmtpSettings> {
   const previous = await readSetting<SmtpSettings>(db, SMTP_SETTING);
-  const kept = input.password === undefined && input.keepPassword === true && previous !== null && previous.username !== null && previous.username === (input.username ?? null) ? previous.password_secret_id : null;
+  // Mot de passe gardé seulement pour le MÊME relais (hôte et port) et le même identifiant (INV8) : un mot de passe ne part
+  // jamais, par AUTH, vers un autre relais que celui pour lequel il a été saisi.
+  const sameRelay = previous !== null && previous.host === input.host.toLowerCase() && previous.port === input.port;
+  const keepable = input.password === undefined && input.keepPassword === true && previous !== null && previous.username !== null && previous.username === (input.username ?? null);
+  const kept = keepable && sameRelay ? previous.password_secret_id : null;
   if (!HOST.test(input.host)) throw new AlertConfigError('smtp.host : nom d\'hôte invalide');
   if (!Number.isInteger(input.port) || input.port < 1 || input.port > 65535) throw new AlertConfigError('smtp.port : 1 à 65535');
   if (!SECURITIES.includes(input.security)) throw new AlertConfigError(`smtp.security : ${SECURITIES.join(' | ')}`);
   if (!isMailAddress(input.from)) throw new AlertConfigError('smtp.from : adresse invalide');
   if (input.username !== undefined && input.security === 'none') throw new AlertConfigError('smtp : identifiants refusés sans TLS');
-  if (input.username !== undefined && (input.password ?? '') === '' && kept === null) throw new AlertConfigError('smtp.password : requis avec un identifiant');
+  if (input.username !== undefined && (input.password ?? '') === '' && kept === null) {
+    throw keepable && previous?.password_secret_id
+      ? new AlertConfigError('smtp.password : hôte ou port changé, ressaisissez le mot de passe', 'password_required')
+      : new AlertConfigError('smtp.password : requis avec un identifiant');
+  }
   const passwordSecretId =
     input.password === undefined ? kept : await store.put({ ownerId: null, kind: 'smtp_password', label: `smtp ${input.host}`, value: input.password });
   const settings: SmtpSettings = {

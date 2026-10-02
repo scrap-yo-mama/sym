@@ -72,6 +72,12 @@ type RestLimits = {
   pingMs: number;
   /** Flux SSE ouverts en même temps par un utilisateur (plafond, 06 § 3). */
   maxStreamsPerUser: number;
+  /** Revalidation de l'identité d'un flux SSE ouvert (ms, 30 s en production) : clé ou session révoquée → flux fermé. */
+  revalidateMs: number;
+  /** Runs actifs (hors pause) d'un même utilisateur au-delà desquels une création répond 429 `user_queue_full` (08b § 3). */
+  maxActiveRunsPerUser: number;
+  /** Créations de run par clé d'API et par minute au-delà desquelles une création répond 429 `key_rate_limited` (08b § 3). */
+  maxRunsPerKeyPerMinute: number;
 };
 
 export function initializedProbe(pool: pg.Pool): () => Promise<boolean> {

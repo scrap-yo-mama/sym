@@ -11,6 +11,7 @@ import {
   formatIssues,
   isTerminalRunState,
   NETWORKS,
+  schemaHasPersonalFields,
   type Execution,
   validateOutput,
   type StatusEventInput,
@@ -46,7 +47,7 @@ import {
   type ApiRow,
 } from '../rest/apis.js';
 import { buildRunResult, readRunRow, waitForRun } from '../rest/runs.js';
-import { rejectIfQueueFull, rejectWithoutAck, reasonMessage, triggerOf, waitSecondsOf } from '../rest/shared.js';
+import { rejectIfKeyRateLimited, rejectIfQueueFull, rejectWithoutAck, reasonMessage, reserveRunSlot, RunSlotError, sendRunSlotError, triggerOf, waitSecondsOf } from '../rest/shared.js';
 import { decodeCursor, encodeCursor, UUID } from './account-helpers.js';
 import { audit, notFound, sendError, type Actor } from './guard.js';
 
@@ -280,7 +281,7 @@ export function apiRoutes(app: FastifyInstance, ctx: ServerContext): void {
   app.post<{ Body: CreateBody; Querystring: { wait?: number } }>('/api/apis', { schema: { body: createSchema, querystring: waitQuery } }, async (request, reply) => {
     const actor = request.actor!;
     const body = request.body;
-    if (await rejectIfQueueFull(ctx, reply)) return reply;
+    if (await rejectIfKeyRateLimited(ctx, reply, actor)) return reply;
     // Validation automatique : le schéma proposé n'est pas encore connu ; s'il porte `x-personal`, la case est exigée.
     if (body.auto_validate === true && (await rejectWithoutAck(ctx, reply, actor, true))) return reply;
     let policy: Record<string, unknown> | null = null;
@@ -290,11 +291,14 @@ export function apiRoutes(app: FastifyInstance, ctx: ServerContext): void {
       if (error instanceof ApiInputError) return sendError(reply, 400, error.code, error.message);
       throw error;
     }
+    // URL illisible : 400 avant toute lecture (jamais 500) ; le reste de la demande est validé par l'enquête.
+    if (!URL.canParse(body.url)) return sendError(reply, 400, 'invalid_request', 'url : URL absolue attendue (https://…)');
     let created: { apiId: string; runId: string };
     try {
       const slug = await freeSlug(ctx, body.description, body.url);
       const queue = await ctx.jobs();
       created = await withActor(ctx.pool, actor, async (tx) => {
+        await reserveRunSlot(tx, ctx);
         const apiId = await insertApi(tx, actor, { slug, description: body.description.trim(), visibility: body.visibility ?? 'private', networkPolicy: policy });
         const { runId } = await startInvestigation(tx, queue, {
           apiId,
@@ -306,6 +310,7 @@ export function apiRoutes(app: FastifyInstance, ctx: ServerContext): void {
         return { apiId, runId };
       });
     } catch (error) {
+      if (error instanceof RunSlotError) return sendRunSlotError(reply, error);
       if (error instanceof InvestigationStateError) return investigationError(reply, error);
       if (error instanceof StorageFullError) return sendError(reply, 507, 'storage_full', 'stockage plein : purgez ou agrandissez la base');
       throw error;
@@ -396,20 +401,33 @@ export function apiRoutes(app: FastifyInstance, ctx: ServerContext): void {
     if (api === null) return notFound(reply);
     const { rowCount: active } = await ctx.pool.query("SELECT 1 FROM runs WHERE api_id = $1 AND state IN ('queued', 'running', 'waiting_tunnel') LIMIT 1", [api.id]);
     if (active) return sendError(reply, 409, 'runs_active', 'des runs sont en cours : annulez-les avant de supprimer l’API');
-    // Suppression complète (propriétaire vérifié ci-dessus), en identité système : runs et datasets de l'API, y compris
-    // ceux d'autres membres sur une API `instance` (leurs données suivent l'API), puis l'API (cascades : versions,
-    // statuts, planifications, clés de déduplication).
+    // Suppression (propriétaire vérifié ci-dessus), en identité système, sous le verrou de la ligne `apis` (un run ou une
+    // planification créés pendant ce temps attendent la fin : leur clé étrangère prend un verrou partagé sur la ligne).
+    // INV12 : une API `instance` sur laquelle un autre membre a un run, un dataset ou une planification n'est JAMAIS
+    // supprimée (409 `api_in_use_by_others`) : ses données ne partent pas avec l'API d'autrui. Sinon, seules les
+    // données du propriétaire partent, puis l'API (cascades : versions, statuts, planifications, clés de déduplication).
+    class InUseByOthers extends Error {}
     const client = await ctx.pool.connect();
     let schedules: string[];
     try {
       await client.query('BEGIN');
-      schedules = (await client.query<{ id: string }>('SELECT id FROM schedules WHERE api_id = $1', [api.id])).rows.map((r) => r.id);
-      await client.query('DELETE FROM datasets WHERE api_id = $1', [api.id]);
-      await client.query('DELETE FROM runs WHERE api_id = $1', [api.id]);
+      await client.query('SELECT 1 FROM apis WHERE id = $1 FOR UPDATE', [api.id]);
+      const others = await client.query(
+        `SELECT 1 FROM runs WHERE api_id = $1 AND owner_id <> $2
+         UNION ALL SELECT 1 FROM datasets WHERE api_id = $1 AND owner_id <> $2
+         UNION ALL SELECT 1 FROM schedules WHERE api_id = $1 AND owner_id <> $2
+         LIMIT 1`,
+        [api.id, actor.userId],
+      );
+      if (others.rowCount) throw new InUseByOthers();
+      schedules = (await client.query<{ id: string }>('SELECT id FROM schedules WHERE api_id = $1 AND owner_id = $2', [api.id, actor.userId])).rows.map((r) => r.id);
+      await client.query('DELETE FROM datasets WHERE api_id = $1 AND owner_id = $2', [api.id, actor.userId]);
+      await client.query('DELETE FROM runs WHERE api_id = $1 AND owner_id = $2', [api.id, actor.userId]);
       await client.query('DELETE FROM apis WHERE id = $1 AND owner_id = $2', [api.id, actor.userId]);
       await client.query('COMMIT');
     } catch (error) {
       await client.query('ROLLBACK');
+      if (error instanceof InUseByOthers) return sendError(reply, 409, 'api_in_use_by_others', 'd’autres membres ont des runs, des datasets ou des planifications sur cette API : elle ne peut pas être supprimée');
       throw error;
     } finally {
       client.release();
@@ -432,22 +450,28 @@ export function apiRoutes(app: FastifyInstance, ctx: ServerContext): void {
       const api = await withActor(ctx.pool, actor, (db) => readApiById(db, request.params.id));
       if (api === null || api.owner_id !== actor.userId) return notFound(reply);
       const state = await investigationOf(ctx, actor, api.id);
-      const schema = request.body.output_schema ?? state?.proposed_schema ?? {};
-      if (await rejectWithoutAck(ctx, reply, actor, schema)) return reply;
-      if (await rejectIfQueueFull(ctx, reply)) return reply;
+      // Case « j'ai lu » (17 § 11) exigée si le schéma PROPOSÉ ou le schéma corrigé porte `x-personal` : renvoyer le schéma
+      // proposé sans ses marques `x-personal` ne contourne pas la case.
+      const proposed = state?.proposed_schema ?? {};
+      const corrected = request.body.output_schema;
+      const personal = schemaHasPersonalFields(proposed) ? proposed : corrected !== undefined && schemaHasPersonalFields(corrected) ? corrected : {};
+      if (await rejectWithoutAck(ctx, reply, actor, personal)) return reply;
+      if (await rejectIfKeyRateLimited(ctx, reply, actor)) return reply;
       let runId: string;
       try {
         const queue = await ctx.jobs();
-        ({ runId } = await withActor(ctx.pool, actor, (tx) =>
-          validateInvestigationSchema(tx, queue, {
+        ({ runId } = await withActor(ctx.pool, actor, async (tx) => {
+          await reserveRunSlot(tx, ctx);
+          return validateInvestigationSchema(tx, queue, {
             apiId: api.id,
             ownerId: actor.userId,
             trigger: triggerOf(actor),
             ...(request.body.output_schema === undefined ? {} : { outputSchema: request.body.output_schema }),
             ...(request.body.exclude_executions === undefined ? {} : { excludeExecutions: request.body.exclude_executions }),
-          }),
-        ));
+          });
+        }));
       } catch (error) {
+        if (error instanceof RunSlotError) return sendRunSlotError(reply, error);
         if (error instanceof InvestigationStateError) return investigationError(reply, error);
         throw error;
       }
@@ -461,7 +485,7 @@ export function apiRoutes(app: FastifyInstance, ctx: ServerContext): void {
     if (await activeInvestigation(ctx, actor, api.id)) return sendError(reply, 409, 'investigation_in_progress', 'une enquête est déjà en file, en cours ou en pause sur cette API');
     const state = await investigationOf(ctx, actor, api.id);
     if (state === null) return sendError(reply, 409, 'no_investigation_request', 'aucune demande d’enquête connue pour cette API (créée hors enquête) : recréez-la');
-    if (await rejectIfQueueFull(ctx, reply)) return reply;
+    if (await rejectIfQueueFull(ctx, reply, actor)) return reply;
     const queue = await ctx.jobs();
     if (api.status !== 'enquete') {
       const event: StatusEventInput = api.status === 'action_requise' ? { type: 'user_acted' } : { type: 'reinvestigate', trigger };
@@ -525,19 +549,25 @@ export function apiRoutes(app: FastifyInstance, ctx: ServerContext): void {
         return sendError(reply, 409, 'invalid_input_schema', 'le schéma d’entrée de l’API est illisible : ré-enquêtez');
       }
       if (body.strategy_version !== undefined) {
-        const { rowCount } = await withActor(ctx.pool, actor, (db) => db.query('SELECT 1 FROM strategy_versions WHERE api_id = $1 AND version = $2', [api.id, body.strategy_version]));
-        if (!rowCount) return sendError(reply, 400, 'invalid_strategy_version', 'version de stratégie inconnue pour cette API');
+        // Choix de version réservé au propriétaire (un membre lance l'API `instance` d'autrui telle qu'elle est), et borné
+        // aux versions qui ont été courantes (06 § 2, comme un retour de version) : jamais un brouillon ni une vN+1 de
+        // réparation non validée.
+        if (api.owner_id !== actor.userId) return sendError(reply, 403, 'forbidden', 'seul le propriétaire de l’API choisit la version de stratégie');
+        const { rowCount } = await withActor(ctx.pool, actor, (db) => db.query('SELECT 1 FROM strategy_versions WHERE api_id = $1 AND version = $2 AND was_current', [api.id, body.strategy_version]));
+        if (!rowCount) return sendError(reply, 400, 'invalid_strategy_version', 'version de stratégie inconnue, ou jamais validée comme version courante, pour cette API');
       }
-      if (await rejectIfQueueFull(ctx, reply)) return reply;
+      if (await rejectIfKeyRateLimited(ctx, reply, actor)) return reply;
       let runId: string;
       try {
         const queue = await ctx.jobs();
         ({ runId } = await withActor(ctx.pool, actor, async (tx) => {
+          await reserveRunSlot(tx, ctx);
           const made = await createRun(tx, queue, { apiId: api.id, ownerId: actor.userId, trigger: triggerOf(actor), input: body.input });
           if (body.strategy_version !== undefined) await tx.query('UPDATE runs SET strategy_version = $2 WHERE id = $1', [made.runId, body.strategy_version]);
           return made;
         }));
       } catch (error) {
+        if (error instanceof RunSlotError) return sendRunSlotError(reply, error);
         if (error instanceof StorageFullError) return sendError(reply, 507, 'storage_full', 'stockage plein : purgez ou agrandissez la base');
         throw error;
       }
@@ -546,8 +576,8 @@ export function apiRoutes(app: FastifyInstance, ctx: ServerContext): void {
   );
 
   // ——— Versions de stratégie (06 § 2, « Stratégie & versions ») ———
-  type VersionRow = { version: number; execution: string; network: string; est_cost_usd: string | null; created_by: string; parent_version: number | null; created_at: Date; spec: Record<string, unknown> | null; script_ref: string | null; patch: unknown[] | null };
-  const VERSION_COLUMNS = 'version, execution, network, est_cost_usd, created_by, parent_version, created_at, spec, script_ref, patch';
+  type VersionRow = { version: number; execution: string; network: string; est_cost_usd: string | null; created_by: string; parent_version: number | null; created_at: Date; spec: Record<string, unknown> | null; script_ref: string | null; patch: unknown[] | null; was_current: boolean };
+  const VERSION_COLUMNS = 'version, execution, network, est_cost_usd, created_by, parent_version, created_at, spec, script_ref, patch, was_current';
 
   app.get<{ Params: { slug: string }; Querystring: { cursor?: string; limit?: number } }>('/api/apis/:slug/versions', { schema: { querystring: pageQuery } }, async (request, reply) => {
     const actor = request.actor!;
@@ -613,22 +643,39 @@ export function apiRoutes(app: FastifyInstance, ctx: ServerContext): void {
     if (api === null) return notFound(reply);
     const target = await readVersion(actor, api.slug, request.params.version);
     if (target === null) return notFound(reply);
-    if (api.status !== 'sain' && api.status !== 'warning') return sendError(reply, 409, 'status_not_runnable', 'un retour de version se fait depuis sain ou warning');
-    if (api.current_strategy_version === request.params.version) return sendError(reply, 409, 'already_current', 'cette version est déjà la version courante');
-    // Nouvelle version (created_by `revert`) copiée de la cible : l'historique reste linéaire, la cible n'est pas réécrite.
     const v = target.version;
-    await withActor(ctx.pool, actor, async (db) => {
-      const locked = await db.query<{ current_strategy_version: number | null; project_id: string }>('SELECT current_strategy_version, project_id FROM apis WHERE id = $1 AND owner_id = $2 FOR UPDATE', [api.id, actor.userId]);
-      const next = (await db.query<{ v: number }>('SELECT COALESCE(MAX(version), 0) + 1 AS v FROM strategy_versions WHERE api_id = $1', [api.id])).rows[0]!.v;
-      await db.query(
-        `INSERT INTO strategy_versions (api_id, version, owner_id, project_id, execution, network, spec, script_ref, est_cost_usd, created_by, parent_version)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'revert', $10)`,
-        [api.id, next, actor.userId, locked.rows[0]!.project_id, v.execution, v.network, JSON.stringify(v.spec ?? {}), v.script_ref, v.est_cost_usd, locked.rows[0]!.current_strategy_version],
-      );
-      await db.query('UPDATE apis SET current_strategy_version = $2, updated_at = now() WHERE id = $1', [api.id, next]);
-    });
-    const step = await applyStatusAndNotify(ctx.pool, await ctx.jobs(), { apiId: api.id, event: { type: 'version_rollback' }, clock: { now: () => new Date() } });
-    await audit(ctx, request, actor, { action: 'api.reverted', targetType: 'api', targetId: api.id, outcome: 'success', meta: { to_version: v.version, transitioned: step.ok } });
+    // 19 § « Retour de version borné », 05 § 4.1 : seule une version qui a été courante se rétablit (un brouillon jamais
+    // promu ou une vN+1 de réparation non validée, jamais).
+    if (!v.was_current) return sendError(reply, 400, 'version_not_revertable', 'seule une version qui a été courante peut être rétablie');
+    // Nouvelle version (created_by `revert`) copiée de la cible : l'historique reste linéaire, la cible n'est pas réécrite.
+    // Statut, version courante et transition 7 ou 8 sous le MÊME verrou et dans la MÊME transaction (INV3) : la machine
+    // refuse depuis un autre statut que sain ou warning, et rien n'est alors écrit.
+    class AlreadyCurrent extends Error {}
+    let step: Awaited<ReturnType<typeof applyStatusAndNotify>>;
+    try {
+      step = await applyStatusAndNotify(ctx.pool, await ctx.jobs(), {
+        apiId: api.id,
+        event: { type: 'version_rollback' },
+        clock: { now: () => new Date() },
+        beforeWrite: async (db) => {
+          const locked = await db.query<{ current_strategy_version: number | null; project_id: string }>('SELECT current_strategy_version, project_id FROM apis WHERE id = $1 AND owner_id = $2', [api.id, actor.userId]);
+          const row = locked.rows[0]!;
+          if (row.current_strategy_version === v.version) throw new AlreadyCurrent();
+          const next = (await db.query<{ v: number }>('SELECT COALESCE(MAX(version), 0) + 1 AS v FROM strategy_versions WHERE api_id = $1', [api.id])).rows[0]!.v;
+          await db.query(
+            `INSERT INTO strategy_versions (api_id, version, owner_id, project_id, execution, network, spec, script_ref, est_cost_usd, created_by, parent_version)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'revert', $10)`,
+            [api.id, next, actor.userId, row.project_id, v.execution, v.network, JSON.stringify(v.spec ?? {}), v.script_ref, v.est_cost_usd, row.current_strategy_version],
+          );
+          await db.query('UPDATE apis SET current_strategy_version = $2, updated_at = now() WHERE id = $1', [api.id, next]);
+        },
+      });
+    } catch (error) {
+      if (error instanceof AlreadyCurrent) return sendError(reply, 409, 'already_current', 'cette version est déjà la version courante');
+      throw error;
+    }
+    if (!step.ok) return sendError(reply, 409, 'status_not_runnable', 'un retour de version se fait depuis sain ou warning');
+    await audit(ctx, request, actor, { action: 'api.reverted', targetType: 'api', targetId: api.id, outcome: 'success', meta: { to_version: v.version } });
     const view = await withActor(ctx.pool, actor, async (db) => {
       const row = await readApiById(db, api.id);
       return row === null ? null : apiDetail(db, actor, row);

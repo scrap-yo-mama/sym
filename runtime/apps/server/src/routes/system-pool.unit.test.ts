@@ -23,6 +23,8 @@ const EXCEPTIONS: Record<string, string> = {
   'guard.ts|SELECT k.id, k.user_id, k.prefix, k.scopes': 'authentification',
   // Horodatage de dernière utilisation de la clé qui vient d'être authentifiée.
   'guard.ts|UPDATE api_keys SET last_used_at = now() WHERE id = $1': 'authentification',
+  // Revalidation d'un flux SSE ouvert (06 § 3) : la clé déjà authentifiée est relue (révoquée, expirée, compte, rôle).
+  'guard.ts|SELECT u.role, u.status, k.scopes': 'authentification',
   // Audit `denied` d'un accès à la clé d'autrui : existence seulement, la réponse reste 404 uniforme.
   'api-keys.ts|SELECT 1 FROM api_keys WHERE id = $1': 'audit denied',
   // Même audit `denied` pour l'appareil ou le domaine connecté d'autrui (tâche 2.6) : existence seulement, 404 uniforme.

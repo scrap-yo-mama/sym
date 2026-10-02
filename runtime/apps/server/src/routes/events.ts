@@ -2,15 +2,18 @@
 // Routes SSE (tâche 3.1, 06 § 3) : `GET /api/events` (un flux multiplexé par onglet) et `GET /api/runs/{id}/events`
 // (vue filtrée d'un run ou d'une enquête, rejouée depuis le début). Trames `id:`/`event:`/`data:`, commentaire `: ping`
 // périodique, reprise par `Last-Event-ID`, plafond de flux simultanés par utilisateur (429 `too_many_streams`).
+// L'identité est REVALIDÉE pendant le flux (`revalidateMs`, 30 s par défaut) : clé révoquée ou expirée, session fermée,
+// compte désactivé ou permission perdue → le serveur ferme le flux, aucune trame ne part ensuite ; le rôle relu sert
+// aux lectures suivantes (`withActor`).
 import { withActor } from '@runtime/db';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { ServerContext } from '../context.js';
 import { RunFeed, sseFrame, UserFeed, type SseFrame } from '../rest/events.js';
 import { readRunRow } from '../rest/runs.js';
 import { UUID } from './account-helpers.js';
-import { notFound, sendError } from './guard.js';
+import { notFound, revalidateActor, sendError, type Actor } from './guard.js';
 
-type Feed = { poll(): Promise<SseFrame[]>; readonly done?: boolean };
+type Feed = { poll(): Promise<SseFrame[]>; useActor(actor: Actor): void; readonly done?: boolean };
 
 export function eventRoutes(app: FastifyInstance, ctx: ServerContext): void {
   /** Flux ouverts par utilisateur (plafond) et ensemble des flux à fermer à l'arrêt du serveur. */
@@ -66,7 +69,14 @@ export function eventRoutes(app: FastifyInstance, ctx: ServerContext): void {
     try {
       await write(`retry: 3000\n: connected\n\n`);
       let lastWrite = Date.now();
+      let lastCheck = Date.now();
       while (!controller.signal.aborted) {
+        if (Date.now() - lastCheck >= ctx.rest.revalidateMs) {
+          const current = await revalidateActor(ctx, actor, request.routeSpec);
+          if (current === null) break;
+          feed.useActor(current);
+          lastCheck = Date.now();
+        }
         const frames = await feed.poll();
         for (const frame of frames) await write(sseFrame(frame));
         if (frames.length > 0) lastWrite = Date.now();
@@ -89,7 +99,7 @@ export function eventRoutes(app: FastifyInstance, ctx: ServerContext): void {
     return reply;
   }
 
-  app.get('/api/events', async (request, reply) => stream(request, reply, new UserFeed(ctx, request.actor!, lastEventId(request), ctx.rest.pollMs)));
+  app.get('/api/events', async (request, reply) => stream(request, reply, new UserFeed(ctx, request.actor!, lastEventId(request))));
 
   app.get<{ Params: { id: string } }>('/api/runs/:id/events', async (request, reply) => {
     const actor = request.actor!;

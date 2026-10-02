@@ -346,6 +346,8 @@ export const apis = pgTable(
     description: text('description').notNull().default(''),
     inputSchema: jsonb('input_schema').notNull().default({}),
     outputSchema: jsonb('output_schema').notNull().default({}),
+    // 0017_rest_api (3.1) : ordre déclaré des propriétés de premier niveau du schéma de sortie (colonnes du CSV).
+    outputColumns: text('output_columns').array(),
     views: jsonb('views').notNull().default({}),
     status: text('status', { enum: API_STATUSES }).notNull().default('enquete'),
     investigationPhase: text('investigation_phase', {
@@ -406,6 +408,8 @@ export const strategyVersions = pgTable(
     createdBy: text('created_by', { enum: STRATEGY_CREATORS }).notNull(),
     parentVersion: integer('parent_version'),
     patch: jsonb('patch'),
+    // 0017_rest_api (3.1) : la version a été courante au moins une fois (déclencheur sur apis) ; seule une telle version se rétablit.
+    wasCurrent: boolean('was_current').notNull().default(false),
     createdAt: createdAt(),
   },
   (t) => [primaryKey({ columns: [t.apiId, t.version] }), index('strategy_versions_owner_id_idx').on(t.ownerId)],
@@ -745,6 +749,16 @@ export const tunnels = pgTable(
     uniqueIndex('tunnels_owner_connected').on(t.ownerId).where(sql`${t.gatewayInstance} IS NOT NULL`),
   ],
 );
+
+/**
+ * Créations de run par clé d'API sur une fenêtre d'une minute ouverte par la première création (08b § 3, migration 0017) :
+ * compteur partagé entre instances du serveur. Table système, jamais lue sous runtime_app.
+ */
+export const runCreationCounters = pgTable('run_creation_counters', {
+  bucket: text('bucket').primaryKey(),
+  windowStart: tstz('window_start').notNull(),
+  hits: integer('hits').notNull(),
+});
 
 /** Code d'appairage de l'extension (07 § 1) : usage unique, 10 min, empreinte seulement (migration 0008). */
 export const extensionPairingCodes = pgTable(

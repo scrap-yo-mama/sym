@@ -3,9 +3,12 @@
 // codes de raison, file pleine, attente synchrone bornée, déclencheur, case « j'ai lu » (17 § 11).
 import { ACTIVE_RUN_STATES, schemaHasPersonalFields, type RunTrigger } from '@runtime/core';
 import type { FastifyReply } from 'fastify';
+import type pg from 'pg';
 import type { ServerContext } from '../context.js';
 import type { Actor } from '../routes/guard.js';
 import { sendError } from '../routes/guard.js';
+
+type Queryable = Pick<pg.ClientBase, 'query'>;
 
 /** Un montant `numeric(12,6)` en nombre, arrondi au micro-dollar. */
 export const usd = (v: string | number | null | undefined): number => Math.round(Number(v ?? 0) * 1e6) / 1e6;
@@ -24,15 +27,84 @@ export const iso = (d: Date | string | null | undefined): string | null => (d ==
 /** Déclencheur d'un run créé par l'API : `ui` pour la console (session), `rest` pour une clé d'API. */
 export const triggerOf = (actor: Actor): RunTrigger => (actor.via === 'ui' ? 'ui' : 'rest');
 
+/** Fenêtre de la limite par clé d'API (08b § 3). */
+const KEY_WINDOW_SECONDS = 60;
+
 /**
- * File pleine (05 § 4.3) : au-delà de `MAX_CONCURRENT_RUNS` runs actifs (hors pause) sur l'instance, 429 `queue_full` et
- * `Retry-After`. Comptage système : il ne lit que des états, jamais du contenu. Renvoie true si la réponse est partie.
+ * Limite par clé d'API (08b § 3) : au-delà de `MAX_RUNS_PER_KEY_PER_MINUTE` créations sur une fenêtre d'une minute ouverte
+ * par la première, 429 `key_rate_limited` avec `Retry-After` (fin de la fenêtre). Compteur PARTAGÉ en PostgreSQL
+ * (`run_creation_counters`, une ligne par clé, mise à jour atomique) : plusieurs instances du serveur et un redémarrage
+ * voient le même. Toute demande compte, refusée ou non. Sans clé (session de la console) : rien. Renvoie true si la
+ * réponse est partie.
  */
-export async function rejectIfQueueFull(ctx: ServerContext, reply: FastifyReply): Promise<boolean> {
-  const { rows } = await ctx.pool.query<{ n: number }>('SELECT count(*)::int AS n FROM runs WHERE state = ANY($1::text[]) AND paused_at IS NULL', [ACTIVE_RUN_STATES]);
-  if ((rows[0]?.n ?? 0) < ctx.rest.maxConcurrentRuns) return false;
+export async function rejectIfKeyRateLimited(ctx: ServerContext, reply: FastifyReply, actor: Actor): Promise<boolean> {
+  if (!actor.apiKey) return false;
+  const bucket = `key:${actor.apiKey.id}`;
+  const { rows } = await ctx.pool.query<{ hits: number; retry: number }>(
+    `INSERT INTO run_creation_counters AS c (bucket, window_start, hits) VALUES ($1, now(), 1)
+     ON CONFLICT (bucket) DO UPDATE SET
+       hits = CASE WHEN c.window_start <= now() - make_interval(secs => $2) THEN 1 ELSE c.hits + 1 END,
+       window_start = CASE WHEN c.window_start <= now() - make_interval(secs => $2) THEN now() ELSE c.window_start END
+     RETURNING hits, greatest(1, ceil(extract(epoch FROM window_start + make_interval(secs => $2) - now())))::int AS retry`,
+    [bucket, KEY_WINDOW_SECONDS],
+  );
+  // Fenêtres échues des autres clés : purgées au passage (table bornée par le nombre de clés actives).
+  await ctx.pool.query('DELETE FROM run_creation_counters WHERE window_start < now() - interval \'1 hour\' AND bucket <> $1', [bucket]);
+  const row = rows[0]!;
+  if (row.hits <= ctx.rest.maxRunsPerKeyPerMinute) return false;
+  reply.header('retry-after', String(row.retry));
+  await sendError(reply, 429, 'key_rate_limited', 'trop de runs lancés par cette clé dans la minute : réessayez après le délai indiqué (Retry-After)');
+  return true;
+}
+
+/** Plafond atteint à la création d'un run (`reserveRunSlot`) : 429 avec `Retry-After`, aucun run créé. */
+export class RunSlotError extends Error {
+  override name = 'RunSlotError';
+  readonly code: 'user_queue_full' | 'queue_full';
+
+  constructor(code: 'user_queue_full' | 'queue_full') {
+    super(code);
+    this.code = code;
+  }
+}
+
+/**
+ * Plafonds par utilisateur et par instance (05 § 4.3, 08b § 3), vérifiés ATOMIQUEMENT avec l'insertion : à appeler en
+ * PREMIER dans la transaction (sous l'acteur, `withActor`) qui crée ou reprend le run. La fonction `reserve_run_slot`
+ * prend un verrou consultatif de transaction : deux créations simultanées ne voient jamais la même place libre.
+ * 1. par utilisateur : `MAX_ACTIVE_RUNS_PER_USER` runs actifs (hors pause) lancés par l'acteur → `user_queue_full` (un
+ *    membre ne remplit pas la file des autres) ;
+ * 2. par instance : `MAX_CONCURRENT_RUNS` runs actifs (hors pause) → `queue_full`.
+ * Lève `RunSlotError` (la transaction est annulée).
+ */
+export async function reserveRunSlot(tx: Queryable, ctx: ServerContext): Promise<void> {
+  const { rows } = await tx.query<{ verdict: string }>('SELECT reserve_run_slot($1::text[], $2, $3) AS verdict', [ACTIVE_RUN_STATES, ctx.rest.maxActiveRunsPerUser, ctx.rest.maxConcurrentRuns]);
+  const verdict = rows[0]?.verdict;
+  if (verdict === 'user_queue_full' || verdict === 'queue_full') throw new RunSlotError(verdict);
+}
+
+/** Réponse 429 d'un plafond atteint (`RunSlotError`). */
+export async function sendRunSlotError(reply: FastifyReply, error: RunSlotError): Promise<FastifyReply> {
   reply.header('retry-after', '30');
-  await sendError(reply, 429, 'queue_full', 'file pleine : réessayez après le délai indiqué (Retry-After)');
+  return error.code === 'user_queue_full'
+    ? sendError(reply, 429, 'user_queue_full', 'trop de runs en cours pour ce compte : réessayez après le délai indiqué (Retry-After)')
+    : sendError(reply, 429, 'queue_full', 'file pleine : réessayez après le délai indiqué (Retry-After)');
+}
+
+/**
+ * Contrôle AVANT écriture, pour une création qui change d'abord le statut de l'API (ré-enquête : la transition et le run
+ * ne sont pas dans la même transaction) : limite par clé, puis plafonds utilisateur et instance lus sans verrou. Les
+ * autres créations passent par `reserveRunSlot`, atomique. Renvoie true si la réponse est partie.
+ */
+export async function rejectIfQueueFull(ctx: ServerContext, reply: FastifyReply, actor: Actor): Promise<boolean> {
+  if (await rejectIfKeyRateLimited(ctx, reply, actor)) return true;
+  const { rows } = await ctx.pool.query<{ total: number; mine: number }>(
+    'SELECT count(*)::int AS total, (count(*) FILTER (WHERE owner_id = $2))::int AS mine FROM runs WHERE state = ANY($1::text[]) AND paused_at IS NULL',
+    [ACTIVE_RUN_STATES, actor.userId],
+  );
+  const { total = 0, mine = 0 } = rows[0] ?? {};
+  if (mine < ctx.rest.maxActiveRunsPerUser && total < ctx.rest.maxConcurrentRuns) return false;
+  await sendRunSlotError(reply, new RunSlotError(mine >= ctx.rest.maxActiveRunsPerUser ? 'user_queue_full' : 'queue_full'));
   return true;
 }
 

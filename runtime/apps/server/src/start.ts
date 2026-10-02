@@ -57,7 +57,7 @@ export type PrepareOptions = {
   /** Passerelle tunnel : périodes de sondage, de revalidation et délai d'inactivité (tests ; défauts de production). */
   tunnel?: { pollMs?: number; revalidateMs?: number; idleMs?: number };
   /** API REST : relecture des attentes et du flux SSE, ping, plafond de flux (tests ; défauts de production). */
-  rest?: { pollMs?: number; pingMs?: number; maxStreamsPerUser?: number };
+  rest?: { pollMs?: number; pingMs?: number; maxStreamsPerUser?: number; revalidateMs?: number };
 };
 
 /** Files que le `server` alimente (runs, planifications, livraisons de webhooks, alertes) : créées si elles manquent. */
@@ -197,6 +197,9 @@ export async function prepareServer(env: NodeJS.ProcessEnv = process.env, option
         pollMs: options.rest?.pollMs ?? 500,
         pingMs: options.rest?.pingMs ?? 15_000,
         maxStreamsPerUser: options.rest?.maxStreamsPerUser ?? 5,
+        revalidateMs: options.rest?.revalidateMs ?? 30_000,
+        maxActiveRunsPerUser: config.rest.maxActiveRunsPerUser,
+        maxRunsPerKeyPerMinute: config.rest.maxRunsPerKeyPerMinute,
       },
       ...(options.extraCa ? { extraCa: options.extraCa } : {}),
       ...(options.oidcAllowHttp ? { oidcAllowHttp: true } : {}),

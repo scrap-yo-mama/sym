@@ -58,6 +58,10 @@ type RestConfig = {
   maxWaitSeconds: number;
   /** `MAX_CONCURRENT_RUNS` (défaut 50, à valider) : runs actifs de l'instance au-delà desquels la création répond 429 `queue_full`. */
   maxConcurrentRuns: number;
+  /** `MAX_ACTIVE_RUNS_PER_USER` (défaut 20, à valider) : runs actifs d'un utilisateur au-delà desquels la création répond 429 `user_queue_full`. */
+  maxActiveRunsPerUser: number;
+  /** `MAX_RUNS_PER_KEY_PER_MINUTE` (défaut 60, à valider) : créations de run par clé d'API et par minute (429 `key_rate_limited`). */
+  maxRunsPerKeyPerMinute: number;
 };
 
 function positiveInteger(env: NodeJS.ProcessEnv, name: string, fallback: number, max: number): number {
@@ -205,6 +209,11 @@ export function loadServerConfig(env: NodeJS.ProcessEnv = process.env): ServerCo
     mfaEnforced,
     ssrfPolicy,
     tunnel: loadTunnelConfig(env, databaseUrl),
-    rest: { maxWaitSeconds: positiveInteger(env, 'MAX_WAIT_SECONDS', 25, 25), maxConcurrentRuns: positiveInteger(env, 'MAX_CONCURRENT_RUNS', 50, 100_000) },
+    rest: {
+      maxWaitSeconds: positiveInteger(env, 'MAX_WAIT_SECONDS', 25, 25),
+      maxConcurrentRuns: positiveInteger(env, 'MAX_CONCURRENT_RUNS', 50, 100_000),
+      maxActiveRunsPerUser: positiveInteger(env, 'MAX_ACTIVE_RUNS_PER_USER', 20, 100_000),
+      maxRunsPerKeyPerMinute: positiveInteger(env, 'MAX_RUNS_PER_KEY_PER_MINUTE', 60, 100_000),
+    },
   };
 }

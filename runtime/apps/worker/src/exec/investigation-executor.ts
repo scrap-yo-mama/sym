@@ -104,6 +104,7 @@ import {
   saveInvestigationState,
   saveInvestigationStrategy,
   saveRunDataset,
+  schemaColumns,
   type InvestigationState,
   type RunTarget,
 } from '@runtime/db';
@@ -560,11 +561,12 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
         });
         if (spent >= request.budget_usd) return await budgetExhausted('investigation_budget_usd');
         if (!request.auto_validate) {
-          await save('awaiting_schema_validation', { proposal: proposal!, proposed_schema: built.outputSchema });
+          await save('awaiting_schema_validation', { proposal: proposal!, proposed_schema: built.outputSchema, proposed_columns: schemaColumns(built.outputSchema) });
           await event(EV.phase, { phase: 'awaiting_schema_validation', budget: budgetView() });
           return { state: 'succeeded', outcome: 'clean', degraded_reasons: [], items: 0 };
         }
-        await save('testing', { proposal: proposal!, proposed_schema: built.outputSchema, validated_schema: built.outputSchema, validated_by: 'auto' });
+        const columns = schemaColumns(built.outputSchema);
+        await save('testing', { proposal: proposal!, proposed_schema: built.outputSchema, validated_schema: built.outputSchema, proposed_columns: columns, validated_columns: columns, validated_by: 'auto' });
         await event(EV.schemaValidated, { by: 'auto' });
         await ctx.log('info', 'schema_auto_validated', {});
       } else if (remap) {
@@ -720,6 +722,7 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
             spec: kept.spec,
             estCostUsd: kept.estCostUsd,
             outputSchema,
+            ...(state.validated_columns === undefined ? {} : { outputColumns: state.validated_columns }),
             inputSchema: proposedInputSchema(entry.paginated),
             state: { ...state, spent_usd: spent, elapsed_ms: baseElapsed + Math.max(0, now() - started) },
           });

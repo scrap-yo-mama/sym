@@ -27,6 +27,12 @@ export type ApplyStatusInput = {
    * les webhooks et alertes (`notifyStatusChange`, 2.5) sont écrits au même COMMIT que les transitions qu'ils annoncent.
    */
   afterTransition?: (client: pg.PoolClient, events: StatusEventRow[]) => Promise<void>;
+  /**
+   * Appelé dans la transaction, la ligne `apis` verrouillée (FOR UPDATE) et la transition ACCEPTÉE par la machine, avant
+   * toute écriture du statut : l'écriture qui motive l'événement (ex. version rétablie par un retour) est validée au même
+   * COMMIT que sa transition, jamais sans elle (INV3). Une exception annule tout.
+   */
+  beforeWrite?: (client: pg.PoolClient) => Promise<void>;
 };
 
 export type ApplyStatusResult =
@@ -94,6 +100,7 @@ export async function applyStatusTransition(pool: pg.Pool, input: ApplyStatusInp
     const { row, state } = await loadState(client, input.apiId);
     const step = applyStatusEvent(state, input.event, { clock: input.clock, schedulePeriodMs: input.schedulePeriodMs ?? null });
     if (!step.ok) return { ok: false, state: step.state, rejected: step.rejected };
+    await input.beforeWrite?.(client);
 
     await client.query(
       'UPDATE apis SET status = $2, status_reason = $3, clean_streak = $4, last_signal_at = $5, updated_at = now() WHERE id = $1',

@@ -27,9 +27,10 @@ export async function seedApi(
   const slug = opts.slug ?? `zz-test-api-${next()}-${Math.random().toString(36).slice(2, 7)}`;
   return withClient(url, async (c) => {
     const { rows } = await c.query<{ id: string }>(
-      `INSERT INTO apis (slug, owner_id, visibility, description, status, requires_session, input_schema, output_schema, allow_write_actions)
-       VALUES ($1, $2, $3, 'zz_test api', $4, $5, $6, $7, $8) RETURNING id`,
-      [slug, ownerId, opts.visibility ?? 'private', opts.status ?? 'sain', opts.requiresSession === true, JSON.stringify(ZZ_INPUT_SCHEMA), JSON.stringify(ZZ_OUTPUT_SCHEMA), opts.allowWrite === true],
+      // output_columns : ordre déclaré des propriétés, relevé avant jsonb comme à la fin d'une enquête (0017_rest_api).
+      `INSERT INTO apis (slug, owner_id, visibility, description, status, requires_session, input_schema, output_schema, output_columns, allow_write_actions)
+       VALUES ($1, $2, $3, 'zz_test api', $4, $5, $6, $7, $8, $9) RETURNING id`,
+      [slug, ownerId, opts.visibility ?? 'private', opts.status ?? 'sain', opts.requiresSession === true, JSON.stringify(ZZ_INPUT_SCHEMA), JSON.stringify(ZZ_OUTPUT_SCHEMA), Object.keys(ZZ_OUTPUT_SCHEMA.properties), opts.allowWrite === true],
     );
     const id = rows[0]!.id;
     if (opts.strategy !== false) {

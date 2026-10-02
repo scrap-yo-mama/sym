@@ -31,6 +31,29 @@ describe('assert_csv_formula_neutralized : cellules CSV (08b § 2)', () => {
     expect(csvCell(['-1'])).toBe('"[""-1""]"');
     expect(csvLine(['=a', 1, 'b'])).toBe("'=a,1,b\r\n");
   });
+
+  // Excel en locale française ou allemande (séparateur de liste `;`) découpe un .csv sur `;` et ignore un guillemet placé au
+  // milieu d'un champ : un déclencheur juste APRÈS un séparateur possible (`;`, `,`, tabulation, fin de ligne) ouvre une
+  // cellule autonome, donc une formule ou un appel DDE. Il est neutralisé comme en tête de cellule.
+  test.each([
+    ["x;=cmd|' /C calc'!A0;", "x;'=cmd|' /C calc'!A0;"],
+    ['a;+1', "a;'+1"],
+    ['a; -2', "a; '-2"],
+    ['a;@SUM(A1)', "a;'@SUM(A1)"],
+    ['a,=1', `"a,'=1"`],
+    ['a\t=1', "a\t'=1"],
+    ['l1\n=1', `"l1\n'=1"`],
+    ['=a;=b', "'=a;'=b"],
+    ['prix ; 3 € ; ok', 'prix ; 3 € ; ok'],
+  ])('séparateur interne %j → %j', (value, expected) => {
+    expect(csvCell(value)).toBe(expected);
+  });
+
+  test('colonne non initiale et nom de colonne : aucune cellule `;=…` ne sort telle quelle', () => {
+    const line = csvLine(['ok', "x;=cmd|' /C calc'!A0;", 'k;=HYPERLINK("http://x")']);
+    expect(line).not.toMatch(/;=/);
+    expect(line.split(';').filter((cell) => /^\s*[=+\-@]/.test(cell))).toEqual([]);
+  });
 });
 
 describe('projection des items', () => {

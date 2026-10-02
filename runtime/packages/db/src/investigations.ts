@@ -36,6 +36,9 @@ export type InvestigationState = {
   readonly proposal?: InvestigationProposal;
   readonly proposed_schema?: Record<string, unknown>;
   readonly validated_schema?: Record<string, unknown>;
+  /** Ordre déclaré des propriétés de premier niveau (jsonb ne garde pas l'ordre des clés d'un objet ; un tableau, si). */
+  readonly proposed_columns?: readonly string[];
+  readonly validated_columns?: readonly string[];
   readonly validated_by?: 'auto' | 'user';
   /** Coût cumulé de l'enquête (LLM d'enquête et essais de tous ses runs). */
   readonly spent_usd: number;
@@ -44,6 +47,51 @@ export type InvestigationState = {
   /** Niveaux d'exécution retirés du plan d'essais par l'appelant (`exclude_executions`, 06 § 2, 3.1) : jamais un ajout. */
   readonly excluded_executions?: readonly Execution[];
 };
+
+/**
+ * Propriétés de premier niveau d'un schéma de sortie, dans l'ordre DÉCLARÉ (ordre des clés de l'objet JavaScript lu du
+ * JSON d'origine) : à relever AVANT tout passage par jsonb, qui réordonne les clés. Colonnes de l'export CSV.
+ */
+export function schemaColumns(schema: unknown): string[] {
+  const properties = typeof schema === 'object' && schema !== null ? (schema as { properties?: unknown }).properties : undefined;
+  return typeof properties === 'object' && properties !== null && !Array.isArray(properties) ? Object.keys(properties) : [];
+}
+
+const PERSONAL = 'x-personal';
+const isPlainRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
+
+/** Copie d'un schéma sans aucune marque `x-personal` (profondeur bornée). */
+function withoutPersonalMarks(schema: unknown, depth = 0): unknown {
+  if (depth > 64) return schema;
+  if (Array.isArray(schema)) return schema.map((s) => withoutPersonalMarks(s, depth + 1));
+  if (!isPlainRecord(schema)) return schema;
+  return Object.fromEntries(Object.entries(schema).filter(([k]) => k !== PERSONAL).map(([k, v]) => [k, withoutPersonalMarks(v, depth + 1)]));
+}
+
+/** Reporte sur `target` (en place) les marques `x-personal` de `source`, nœud par nœud au même chemin. */
+function copyPersonalMarks(source: unknown, target: unknown, depth = 0): void {
+  if (depth > 64) return;
+  if (Array.isArray(source) && Array.isArray(target)) {
+    source.forEach((s, i) => copyPersonalMarks(s, target[i], depth + 1));
+    return;
+  }
+  if (!isPlainRecord(source) || !isPlainRecord(target)) return;
+  for (const [k, v] of Object.entries(source)) {
+    if (k === PERSONAL) target[PERSONAL] = v;
+    else if (Object.hasOwn(target, k)) copyPersonalMarks(v, target[k], depth + 1);
+  }
+}
+
+/**
+ * Schéma corrigé par l'appelant (05 § 4.1 `validate_schema`) : ses marques `x-personal` sont IGNORÉES (une marque posée
+ * par l'appelant ne compte pas, une marque retirée ne contourne pas la case « j'ai lu ») ; celles que l'enquête a
+ * DÉTECTÉES sur le schéma proposé sont réappliquées aux mêmes champs, pour le masquage RGPD en aval (17 § 6).
+ */
+function correctedSchemaWithDetectedMarks(corrected: unknown, proposed: unknown): unknown {
+  const out = withoutPersonalMarks(corrected);
+  copyPersonalMarks(proposed, out);
+  return out;
+}
 
 /** `exclude_executions` : niveaux connus seulement, au moins un niveau gardé. */
 function checkExcluded(excluded: readonly string[] | undefined): readonly Execution[] | undefined {
@@ -176,14 +224,22 @@ export async function validateInvestigationSchema(
   if (row.investigation_phase !== 'awaiting_schema_validation' || state === null || state.proposed_schema === undefined) {
     throw new InvestigationStateError('not_awaiting_validation', 'aucun schéma proposé en attente de validation');
   }
-  const schema = input.outputSchema ?? state.proposed_schema;
+  const schema = input.outputSchema === undefined ? state.proposed_schema : correctedSchemaWithDetectedMarks(input.outputSchema, state.proposed_schema);
   try {
     assertSchemaAcceptable(schema);
   } catch (error) {
     if (error instanceof SchemaError) throw new InvestigationStateError('invalid_schema', error.message);
     throw error;
   }
-  const next: InvestigationState = { ...state, validated_schema: schema as Record<string, unknown>, validated_by: 'user', ...(excluded === undefined ? {} : { excluded_executions: excluded }) };
+  // Ordre des colonnes : celui du schéma corrigé (lu du corps de la requête), sinon celui relevé à la proposition.
+  const columns = input.outputSchema !== undefined ? schemaColumns(input.outputSchema) : state.proposed_columns;
+  const next: InvestigationState = {
+    ...state,
+    validated_schema: schema as Record<string, unknown>,
+    ...(columns === undefined ? {} : { validated_columns: columns }),
+    validated_by: 'user',
+    ...(excluded === undefined ? {} : { excluded_executions: excluded }),
+  };
   await tx.query("UPDATE apis SET investigation = $2::jsonb, investigation_phase = 'testing', updated_at = now() WHERE id = $1", [input.apiId, JSON.stringify(next)]);
   return createRun(tx, queue, { apiId: input.apiId, ownerId: input.ownerId, trigger: input.trigger, kind: 'investigation' });
 }
@@ -234,6 +290,8 @@ export async function saveInvestigationStrategy(
     spec: unknown;
     estCostUsd: number | null;
     outputSchema: unknown;
+    /** Ordre déclaré des colonnes (`validated_columns`) ; à défaut, celui des clés de `outputSchema`. */
+    outputColumns?: readonly string[];
     inputSchema: unknown;
     state: InvestigationState;
   },
@@ -254,9 +312,9 @@ export async function saveInvestigationStrategy(
     );
     await tx.query(
       `UPDATE apis SET current_strategy_version = $2, output_schema = $3::jsonb, input_schema = $4::jsonb, investigation = $5::jsonb,
-         investigation_phase = 'done', updated_at = now()
+         output_columns = $6::text[], investigation_phase = 'done', updated_at = now()
        WHERE id = $1`,
-      [args.apiId, version, JSON.stringify(args.outputSchema), JSON.stringify(args.inputSchema), JSON.stringify(args.state)],
+      [args.apiId, version, JSON.stringify(args.outputSchema), JSON.stringify(args.inputSchema), JSON.stringify(args.state), args.outputColumns ?? schemaColumns(args.outputSchema)],
     );
     return { version };
   });
