@@ -16,10 +16,13 @@
   },
   "devDependencies": {
     "@browserbasehq/stagehand": "catalog:",
+    "@testcontainers/postgresql": "catalog:",
     "@types/node": "catalog:",
+    "@types/pg": "catalog:",
     "@types/ws": "catalog:",
     "eslint": "catalog:",
     "fastify": "catalog:",
+    "pg": "catalog:",
     "playwright-core": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:",

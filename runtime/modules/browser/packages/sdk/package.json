@@ -4,7 +4,7 @@
   "version": "0.0.0",
   "type": "module",
   "license": "MIT",
-  "description": "SDK TypeScript de SYM Browser (MIT), types issus de @sym/contracts/browser. Squelette de la tâche 0.1.",
+  "description": "SDK TypeScript de SYM Browser (MIT) : client REST généré depuis l’OpenAPI de @sym/contracts/browser, connect() et connectCDP() vers Playwright, events() (SSE), profils, fichiers, libération à la sortie du process.",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
@@ -19,13 +19,17 @@
   "scripts": {
     "build": "tsc -b",
     "typecheck": "tsc -p tsconfig.check.json",
-    "test": "vitest run"
+    "test": "vitest run",
+    "gen": "node scripts/generate-client.ts",
+    "gen:check": "node scripts/generate-client.ts --check"
   },
   "dependencies": {
-    "@sym/contracts": "workspace:*"
+    "@sym/contracts": "workspace:*",
+    "playwright-core": "catalog:"
   },
   "devDependencies": {
     "@types/node": "catalog:",
+    "openapi-typescript": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:"
   }
