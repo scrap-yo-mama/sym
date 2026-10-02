@@ -4,7 +4,7 @@
   "version": "0.0.0",
   "type": "module",
   "license": "AGPL-3.0-only",
-  "description": "SYM Browser : chiffrement enveloppe AES-256-GCM, MASTER_KEY, rekey, masquage des journaux (même schéma et mêmes vecteurs de test que SYM) ; configuration (tâche 0.4).",
+  "description": "SYM Browser : chiffrement enveloppe AES-256-GCM, MASTER_KEY, rekey, masquage des journaux (même schéma et mêmes vecteurs de test que SYM) ; configuration (tâche 0.4) ; authentification : clés d'API argon2id, scopes, jetons de connexion (tâche 2.1).",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
@@ -20,7 +20,8 @@
     "build": "tsc -b",
     "typecheck": "tsc -p tsconfig.check.json",
     "test": "vitest run",
-    "keygen": "node dist/bin.js keygen"
+    "keygen": "node dist/bin.js keygen",
+    "apikey": "node dist/bin.js apikey"
   },
   "dependencies": {},
   "devDependencies": {
