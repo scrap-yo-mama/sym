@@ -1,5 +1,6 @@
 # Liste P (promesses) : 0 occurrence sur toute surface de la vitrine (20 §2.2, 22b §1). Union fr + en.
-# Interim de la tâche 4.12 : le paquet commun `forbidden.<langue>.txt` de 3.19 / 3.20 la remplacera ; mêmes entrées reprises.
+# Interim de la tâche 4.12 : le paquet commun `forbidden.<langue>.txt` de 3.19 / 3.20 la remplacera ; mêmes entrées reprises
+# (dont « invisible » seul et « franchi(r) / franchit » en racine) ; emplois neutres dans neutral-allowed.txt.
 # Une entrée par ligne ; `racine-` = préfixe de mot (stealth- prend stealthy) ; `-racine-` = n'importe où dans un mot ;
 # normalisation : casse, accents, traits d'union, espaces.
 indetectable
@@ -15,10 +16,12 @@ furtiv-
 stealth-
 anti-detect-
 invisible aux anti-bots
+invisible
 invisible pour les anti-bots
 invisible to anti-bots
 passe-partout
 dejou-
+franchi-
 franchir une protection
 franchir un defi
 resoudre les captchas

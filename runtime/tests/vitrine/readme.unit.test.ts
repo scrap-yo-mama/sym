@@ -187,6 +187,20 @@ describe('assert_readme_no_bypass_copy : 0 mot de P (hors registre) et 0 mot de 
     }
   });
 
+  test('cas négatifs rejoués par la vérification : « invisible » seul et « franchi(r) / franchit » (20 §2.2), ajoutés à un README conforme, le font échouer', () => {
+    for (const bad of ['SYM reste invisible.', 'Invisible for sites.', 'Invisibles pour les sites.', 'Il franchit un défi.', 'Franchir la protection.', 'Protection franchie.']) {
+      for (const lang of LANGS) expect(copyProblems(`${README[lang]}\n${bad}\n`, claims, { whitelistRegistry: true }).join(), `${lang} : ${bad}`).toMatch(/liste P/);
+    }
+  });
+
+  test('liste blanche des emplois neutres de 20 §2.2 : « icône invisible aux lecteurs d\'écran », « mot de passe », aria-hidden', () => {
+    for (const neutral of ['Icône invisible aux lecteurs d\'écran.', 'Icone invisible aux lecteurs d’ecran', 'Saisis ton mot de passe.', '<span aria-hidden="true">x</span>']) {
+      expect(copyProblems(neutral, claims, { whitelistRegistry: false }), neutral).toEqual([]);
+    }
+    // La liste blanche ne retire que la phrase neutre : un « invisible » ailleurs reste pris.
+    expect(copyProblems('Icône invisible aux lecteurs d\'écran. SYM reste invisible.', claims, { whitelistRegistry: false }).join()).toMatch(/liste P/);
+  });
+
   test('L reste interdit dans le README, même dans une phrase du registre (D-46) ; seul CLAIMS.md admet L dans une phrase du registre', () => {
     const engagement = claims.claims.find((c) => c.id === 'no-challenge-solving');
     expect(engagement?.en).toMatch(/captcha/i);

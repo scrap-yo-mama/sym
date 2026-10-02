@@ -222,7 +222,9 @@ const entryLabel = (entry: string): string => entry.replace(/\*/g, '');
 export function copyProblems(text: string, file: ClaimsFile, options: { whitelistRegistry: boolean; limitTermsInRegistry?: boolean; stripIdentifiers?: boolean }): string[] {
   if (options.stripIdentifiers) text = text.replace(/\bassert_[a-z0-9_]+/g, ' ');
   const phrases = file.claims.flatMap((claim) => [claim.en, claim.fr]);
-  const p = findEntries(options.whitelistRegistry ? stripPhrases(text, phrases) : text, loadList('forbidden-p.txt'));
+  // Emplois neutres de 20 §2.2 (« mot de passe », « icône invisible aux lecteurs d'écran », aria-hidden) retirés sur toute surface.
+  const registered = options.whitelistRegistry ? stripPhrases(text, phrases) : text;
+  const p = findEntries(stripPhrases(registered, loadList('neutral-allowed.txt')), loadList('forbidden-p.txt'));
   const l = findEntries(options.limitTermsInRegistry ? stripPhrases(text, phrases) : text, loadList('forbidden-l.txt'));
   return [...p.map((w) => `mot de la liste P : « ${entryLabel(w)} »`), ...l.map((w) => `mot de la liste L : « ${entryLabel(w)} »`)];
 }

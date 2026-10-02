@@ -4,12 +4,13 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { vitrineDir } from './paths.ts';
 
-/** Casse, accents, traits d'union et espaces (insécables compris) : « passe partout » = « passe-partout ». */
+/** Casse, accents, apostrophes typographiques, traits d'union et espaces (insécables compris) : « passe partout » = « passe-partout ». */
 export function normalize(text: string): string {
   return text
     .normalize('NFD')
     .replace(/\p{Diacritic}/gu, '')
     .toLowerCase()
+    .replace(/[\u2018\u2019\u02bc]/g, "'")
     .replace(/[\u2010-\u2015-]/g, ' ')
     .replace(/[\s\u00a0\u202f]+/g, ' ')
     .trim();
