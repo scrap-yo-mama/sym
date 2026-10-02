@@ -5,3 +5,4 @@ export * from './key-check.js';
 export * from './master-key.js';
 export * from './redact.js';
 export * from './rekey.js';
+export * from './serialized.js';

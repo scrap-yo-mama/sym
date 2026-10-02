@@ -7,10 +7,11 @@
 // et une seule doublure : SessionLauncher, nœud simulé qui écrit `running` comme le superviseur du nœud (tâche 1.2).
 // Quotas (tâche 2.4) : sessions simultanées des clients A et B à 1 000 sauf demande, file et nœuds réglables ; le nœud
 // simulé écrit `running` sur le nœud choisi par l'admission.
+// Événements et webhooks (tâche 2.5) : clés `admin` par client, révocation, écoute réelle pour le SSE.
 // Chaque réponse est validée contre l'OpenAPI publiée (statut déclaré, corps conforme au schéma) : « 0 écart schéma/réponse ».
 import { randomBytes } from 'node:crypto';
-import { ApiKeyAuthenticator, ConnectTokens, generateMasterKey, MasterKey, newApiKey } from '@sym-browser/core';
-import { insertApiKey, migrateUp, pgApiKeyStore, recordHeartbeat, transitionSession } from '@sym-browser/db';
+import { ApiKeyAuthenticator, ConnectTokens, MasterKey, newApiKey } from '@sym-browser/core';
+import { insertApiKey, migrateUp, pgApiKeyStore, recordHeartbeat, revokeApiKey, transitionSession } from '@sym-browser/db';
 import { browserOpenApi } from '@sym/contracts/browser';
 import { Ajv2020, type ValidateFunction } from 'ajv/dist/2020.js';
 import type { FastifyInstance, InjectOptions } from 'fastify';
@@ -27,7 +28,13 @@ export type Harness = {
   pool: pg.Pool;
   tenantA: string;
   tenantB: string;
-  keys: Record<'a' | 'aRead' | 'b', string>;
+  keys: Record<'a' | 'aRead' | 'b' | 'aAdmin' | 'bAdmin', string>;
+  /** URL d'écoute réelle (`listen`), pour les flux SSE et les webhooks (tâche 2.5). */
+  listen: () => Promise<string>;
+  /** Jetons de connexion réels (vérification des `connectUrls`). */
+  tokens: GatewayDeps['tokens'];
+  /** Révoque une clé du banc (tâche 2.1) : refusée dès la requête suivante. */
+  revoke: (key: keyof Harness['keys']) => Promise<void>;
   launcher: { mode: LauncherMode; launched: string[]; released: string[]; nodes: Map<string, string>; requests: Map<string, LaunchRequest> };
   call: (options: { method: InjectOptions['method']; url: string; key?: keyof Harness['keys'] | null; body?: unknown; headers?: Record<string, string> }) => Promise<Reply>;
   close: () => Promise<void>;
@@ -94,6 +101,8 @@ export type HarnessOptions = {
   tokens?: GatewayDeps['tokens'];
   /** Relais WSS `/playwright` et `/cdp` (tâche 2.3). */
   relay?: GatewayDeps['relay'];
+  events?: GatewayDeps['events'];
+  webhooks?: GatewayDeps['webhooks'];
 };
 
 export async function createHarness(options: HarnessOptions = {}): Promise<Harness> {
@@ -107,16 +116,22 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
   const one = async (sql: string, params: unknown[] = []): Promise<string> => (await pool.query<{ id: string }>(sql, params)).rows[0]?.id ?? '';
   const tenantA = await one('INSERT INTO tenants (name, max_session_seconds, max_concurrent_sessions) VALUES ($1, $2, $3) RETURNING id', ['a', options.maxSessionSeconds ?? 3600, options.maxConcurrentSessions ?? 1000]);
   const tenantB = await one("INSERT INTO tenants (name, max_concurrent_sessions) VALUES ('b', 1000) RETURNING id");
-  /** Clé réelle (argon2id) : la valeur en clair n'existe que dans ce banc, jamais en base. */
-  const apiKey = async (tenantId: string, scopes: Scope[]): Promise<string> => {
+  // Clés réelles (tâche 2.1) : empreinte argon2id en base, secret rendu une fois.
+  const keyIds = new Map<string, { tenantId: string; id: string }>();
+  const realKey = async (tenantId: string, scopes: Scope[]): Promise<string> => {
     const created = await newApiKey({ scopes });
-    await insertApiKey(pool, { tenantId, prefix: created.prefix, keyHash: created.keyHash, scopes: created.scopes, expiresAt: null });
-    return created.key.reveal();
+    const { id } = await insertApiKey(pool, { tenantId, prefix: created.prefix, keyHash: created.keyHash, scopes: created.scopes, expiresAt: null });
+    const secret = created.key.reveal();
+    keyIds.set(secret, { tenantId, id });
+    return secret;
   };
   const keys = {
-    a: await apiKey(tenantA, ['sessions:write', 'sessions:read']),
-    aRead: await apiKey(tenantA, ['sessions:read']),
-    b: await apiKey(tenantB, ['sessions:write', 'sessions:read']),
+    a: await realKey(tenantA, ['sessions:write', 'sessions:read']),
+    aRead: await realKey(tenantA, ['sessions:read']),
+    b: await realKey(tenantB, ['sessions:write', 'sessions:read']),
+    // Clés `admin` (admin de client, 03 § 6) : réglages du client, dont le webhook (tâche 2.5) ; sans `sessions:read`.
+    aAdmin: await realKey(tenantA, ['admin']),
+    bAdmin: await realKey(tenantB, ['admin']),
   };
 
   for (const [index, n] of (options.nodes ?? [{ id: 'node-a', region: 'frankfurt', slotsTotal: 4096 }]).entries()) {
@@ -158,16 +173,19 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
     },
   };
 
+  const tokens = options.tokens ?? new ConnectTokens({ current: MasterKey.generate() });
   const deps: GatewayDeps = {
     db: pool,
     auth: new ApiKeyAuthenticator(pgApiKeyStore(pool)),
-    tokens: options.tokens ?? new ConnectTokens({ current: MasterKey.parse(generateMasterKey()) }),
+    tokens,
     ...(options.relay === undefined ? {} : { relay: options.relay }),
     launcher,
     publicUrl: PUBLIC_URL,
     queueTimeoutMs: options.queueTimeoutMs ?? 2_000,
     ...(options.queue === undefined ? {} : { queue: options.queue }),
     queuePollMs: 25,
+    ...(options.events === undefined ? {} : { events: options.events }),
+    ...(options.webhooks === undefined ? {} : { webhooks: options.webhooks }),
   };
   const app = await createGatewayApi(deps);
   await app.ready();
@@ -193,7 +211,16 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
     tenantB,
     keys,
     launcher: state,
+    tokens,
+    revoke: async (key) => {
+      const ref = keyIds.get(keys[key]);
+      if (ref !== undefined) await revokeApiKey(pool, { tenantId: ref.tenantId, id: ref.id });
+    },
     call,
+    listen: async () => {
+      const address = await app.listen({ port: 0, host: '127.0.0.1' });
+      return address;
+    },
     close: async () => {
       await app.close();
       await pool.end();

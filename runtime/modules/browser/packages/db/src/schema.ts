@@ -18,6 +18,8 @@ export const EVENT_TYPES = [
 ] as const;
 export const ARTIFACT_TYPES = ['trace', 'har', 'video', 'console', 'network', 'download'] as const;
 export const USAGE_SOURCES = ['node', 'reconstructed'] as const;
+export const WEBHOOK_EVENT_TYPES = ['session.ended', 'recording.ready'] as const;
+export const WEBHOOK_DELIVERY_STATES = ['pending', 'delivered', 'failed'] as const;
 export const IDEMPOTENT_OPERATIONS = ['createSession', 'extendSession'] as const;
 
 const tstz = (name: string) => timestamp(name, { withTimezone: true, mode: 'date' });
@@ -33,6 +35,9 @@ export const tenants = pgTable('tenants', {
   monthlyBytes: big('monthly_bytes').notNull().default(10_737_418_240),
   maxSessionSeconds: integer('max_session_seconds').notNull().default(3600),
   createdAt: createdAt(),
+  // Webhook du client (tâche 2.5) : URL http(s) et secret Standard Webhooks scellé.
+  webhookUrl: text('webhook_url'),
+  webhookSecretEncrypted: text('webhook_secret_encrypted'),
 });
 
 export const apiKeys = pgTable('api_keys', {
@@ -166,3 +171,21 @@ export const idempotencyKeys = pgTable('idempotency_keys', {
   responseBody: jsonb('response_body').$type<Record<string, unknown>>(),
   createdAt: createdAt(),
 }, (t) => [primaryKey({ columns: [t.tenantId, t.operation, t.key] }), index('idempotency_keys_created_idx').on(t.createdAt)]);
+
+/** Livraisons de webhooks (tâche 2.5, migration 0003) : une par événement, relances et bail de la passerelle qui envoie. */
+export const webhookDeliveries = pgTable('webhook_deliveries', {
+  id: text('id').primaryKey(),
+  tenantId: uuid('tenant_id').notNull().references(() => tenants.id, { onDelete: 'cascade' }),
+  sessionId: uuid('session_id').notNull().references(() => sessions.id, { onDelete: 'cascade' }),
+  eventId: bigint('event_id', { mode: 'number' }).notNull().unique().references(() => sessionEvents.id, { onDelete: 'cascade' }),
+  type: text('type').notNull().$type<(typeof WEBHOOK_EVENT_TYPES)[number]>(),
+  url: text('url').notNull(),
+  status: text('status').notNull().default('pending').$type<(typeof WEBHOOK_DELIVERY_STATES)[number]>(),
+  attempts: integer('attempts').notNull().default(0),
+  nextAttemptAt: tstz('next_attempt_at').notNull().defaultNow(),
+  lockedUntil: tstz('locked_until'),
+  lastStatus: integer('last_status'),
+  lastError: text('last_error'),
+  createdAt: createdAt(),
+  deliveredAt: tstz('delivered_at'),
+}, (t) => [index('webhook_deliveries_due_idx').on(t.nextAttemptAt), index('webhook_deliveries_session_idx').on(t.sessionId)]);

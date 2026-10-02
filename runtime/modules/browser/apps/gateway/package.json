@@ -4,7 +4,7 @@
   "version": "0.0.0",
   "type": "module",
   "license": "AGPL-3.0-only",
-  "description": "SYM Browser : passerelle (REST /v1 et OpenAPI 3.1 des sessions, tâche 2.2 ; relais WSS et SSE à venir).",
+  "description": "SYM Browser : passerelle (REST /v1 et OpenAPI 3.1 des sessions, tâche 2.2 ; flux SSE et webhooks signés, tâche 2.5 ; relais WSS à venir).",
   "files": [
     "dist"
   ],
@@ -26,10 +26,12 @@
     "ws": "catalog:"
   },
   "devDependencies": {
+    "@sym-browser/node": "workspace:*",
     "@testcontainers/postgresql": "catalog:",
     "@types/node": "catalog:",
     "@types/pg": "catalog:",
     "@types/ws": "catalog:",
+    "standardwebhooks": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:"
   }

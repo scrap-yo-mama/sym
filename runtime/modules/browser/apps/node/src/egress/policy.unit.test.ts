@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Tâche 1.5 (04c § 1.2, § 1.3) : classement des adresses, garde de résolution unique, politique d'hôtes et de ports,
 // arguments figés de Chromium. Sans réseau ni navigateur.
+import { EGRESS_DENY_REASONS } from '@sym-browser/core';
+import { EGRESS_BLOCK_REASONS } from '@sym/contracts/browser';
 import { describe, expect, test } from 'vitest';
 import {
   EgressDeniedError,
@@ -68,6 +70,10 @@ describe('classement des adresses (ip)', () => {
 });
 
 describe('garde : résolution unique et contrôle des adresses (04c § 1.2)', () => {
+  test('garde partagée par le noyau (tâche 2.5) : motifs identiques à ceux du contrat', () => {
+    expect([...EGRESS_DENY_REASONS]).toEqual([...EGRESS_BLOCK_REASONS]);
+  });
+
   test('une seule résolution par demande, adresse publique épinglée', async () => {
     const calls: string[] = [];
     const guard = createEgressGuard({ resolver: resolverOf({ 'public.test': ['93.184.215.14', '2606:4700:4700::1111'] }, calls) });

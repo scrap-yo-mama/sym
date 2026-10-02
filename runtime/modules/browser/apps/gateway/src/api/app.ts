@@ -45,6 +45,11 @@ import {
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
 import { Admission, type Placement } from '../admission/admission.js';
 import { secondsUntilNextMonth } from '../admission/retry-after.js';
+import type pg from 'pg';
+import { registerTenantRoutes } from '../admin/tenants.js';
+import { createEventHub } from '../events/hub.js';
+import { serveEventStream, type OpenStream } from '../events/stream.js';
+import { createWebhookDispatcher } from '../webhooks/dispatcher.js';
 import { ApiProblem, invalidOption, preferredLanguage } from './errors.js';
 import type { GatewayDeps, Principal, Scope } from './types.js';
 import { isDateTime, parseCreateSession, parseExtendSession, UUID } from './validation.js';
@@ -440,6 +445,73 @@ export async function createGatewayApi(deps: GatewayDeps): Promise<FastifyInstan
       return { status: 200, body: await present(updated) };
     });
   });
+
+  // --- Événements (tâche 2.5) : flux SSE par session et par client, reprise par Last-Event-ID (04 § 2). ---
+  const heartbeatMs = deps.events?.heartbeatMs ?? 15_000;
+  const hub = createEventHub({ connection: deps.db.options as pg.ClientConfig, onError });
+  const streams = new Set<OpenStream>();
+  // Les flux ouverts tiendraient le serveur : fermés avant l'arrêt (le client reprend par Last-Event-ID).
+  app.addHook('preClose', async () => {
+    for (const stream of [...streams]) stream.end();
+  });
+  app.addHook('onClose', async () => {
+    await hub.close();
+  });
+
+  /** `Last-Event-ID` (en-tête de reprise d'EventSource) ou `lastEventId` en requête : identifiant décimal. */
+  const lastEventId = (request: FastifyRequest): string | undefined => {
+    const header = request.headers['last-event-id'];
+    const query = (request.query as Record<string, unknown>)['lastEventId'];
+    const value = typeof header === 'string' && header.trim() !== '' ? header.trim() : query;
+    if (value === undefined) return undefined;
+    if (typeof value !== 'string' || !/^\d{1,19}$/.test(value)) throw invalidOption([{ field: 'Last-Event-ID', reason: 'must be the id of a received event' }]);
+    return value;
+  };
+
+  const openStream = (request: FastifyRequest, reply: FastifyReply, scope: { tenantId: string; sessionId?: string }, afterId: string | undefined, sessionFinished: boolean): FastifyReply => {
+    const replayHistory = scope.sessionId !== undefined;
+    reply.hijack();
+    const opened: { stream?: OpenStream } = {};
+    const stream = serveEventStream(reply.raw, {
+      db: deps.db,
+      hub,
+      scope,
+      afterId,
+      replayHistory,
+      sessionFinished,
+      heartbeatMs,
+      headers: { 'x-request-id': request.id },
+      onError,
+      onClose: () => {
+        if (opened.stream !== undefined) streams.delete(opened.stream);
+      },
+    });
+    opened.stream = stream;
+    if (!reply.raw.writableEnded) streams.add(stream);
+    return reply;
+  };
+
+  app.get('/v1/sessions/:id/events', { preHandler: authorize('sessions:read') }, async (request, reply) => {
+    const view = await loadSession(request, (request.params as { id: string }).id);
+    const afterId = lastEventId(request);
+    return openStream(request, reply, { tenantId: view.tenantId, sessionId: view.id }, afterId, isTerminal(view.state));
+  });
+
+  app.get('/v1/events', { preHandler: authorize('sessions:read') }, async (request, reply) => {
+    const afterId = lastEventId(request);
+    return openStream(request, reply, { tenantId: principalOf(request).tenantId }, afterId, false);
+  });
+
+  // --- Webhooks (tâche 2.5) : réglage par l'admin du client, livraisons signées Standard Webhooks. ---
+  if (deps.webhooks !== undefined) {
+    const webhooks = deps.webhooks;
+    registerTenantRoutes(app, { db: deps.db, authorize, principalOf, guard: webhooks.guard, keys: webhooks.keys });
+    if (webhooks.dispatcher !== false) {
+      const dispatcher = createWebhookDispatcher({ db: deps.db, guard: webhooks.guard, keys: webhooks.keys, onError, ...webhooks.dispatcher });
+      app.addHook('onReady', async () => dispatcher.start());
+      app.addHook('preClose', async () => dispatcher.stop());
+    }
+  }
 
   return app;
 }
