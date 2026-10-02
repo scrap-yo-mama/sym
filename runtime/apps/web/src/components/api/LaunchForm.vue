@@ -5,7 +5,8 @@
  * @description Formulaire « Lancer » généré depuis `input_schema` (string, number, integer, boolean, enum, array de
  * scalaires ; les autres types passent par la saisie JSON). Le coût estimé précède le bouton (« coût habituel : ~0,002 $,
  * médiane de 10 runs » ou « non estimé »). Mode Relancer : champs pré-remplis, choix de la version (courante ou d'origine)
- * et avertissement sur les effets de bord. La validation est celle du serveur (400 `invalid_input`).
+ * et avertissement sur les effets de bord. La validation est celle du serveur (400 `invalid_input`). Mode « agent instruit »
+ * actif (tâche 2.13) : le coût estimé d'un run instruit est rappelé avant chaque lancement, un agent travaillant à chaque run.
  * @component
  * @example <LaunchForm :schema="detail.input_schema" :estimate="detail.cost_estimate" @submit="launch" />
  */
@@ -28,6 +29,8 @@ const props = defineProps<{
   initialInput?: Record<string, unknown>;
   /** Versions proposées en mode Relancer (courante en premier) ; absent : le formulaire lance la version courante. */
   versions?: { version: number; current: boolean }[];
+  /** Mode « agent instruit » actif : coût estimé d'un run (null : inconnu) ; absent hors de ce mode. */
+  instructedRunUsd?: number | null;
 }>();
 const emit = defineEmits<{ submit: [input: Record<string, unknown>, strategyVersion: number | undefined] }>();
 const { t, te, locale } = useI18n();
@@ -55,6 +58,12 @@ const estimateText = computed(() => {
   const value = props.estimate;
   if (!value || value.median_usd === null || value.sample_size < 1) return t('launch.estimate.unknown');
   return t('launch.estimate.known', { cost: formatUsd(value.median_usd, locale.value, true), n: String(value.sample_size) }, value.sample_size);
+});
+
+const instructedText = computed(() => {
+  if (props.instructedRunUsd === undefined) return null;
+  if (props.instructedRunUsd === null) return t('launch.instructedUnknown');
+  return t('launch.instructed', { cost: formatUsd(props.instructedRunUsd, locale.value, true) });
 });
 
 const errorText = computed(() => {
@@ -164,6 +173,7 @@ const selectClass = 'h-11 rounded-md border border-input bg-background px-2 text
 
     <!-- Le coût estimé précède le bouton (06 § 4.3, assert_cost_estimate_before_run). -->
     <p class="text-sm" data-testid="cost-estimate">{{ estimateText }}</p>
+    <p v-if="instructedText" class="rounded-md border border-foreground p-3 text-sm" data-testid="instructed-cost-reminder">{{ instructedText }}</p>
 
     <p v-if="errorText" role="alert" class="sym-error" data-testid="launch-error">{{ errorText }}</p>
     <div>

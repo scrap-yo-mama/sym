@@ -135,7 +135,8 @@ const ALLOWED_BY_TAB: Record<(typeof API_TABS)[number], RegExp[]> = {
   overview: exact(fr.ui.copy),
   schemas: [],
   strategy: exact(fr.strategy.seeInvestigation, fr.strategy.compareWith, fr.strategy.compareAction),
-  runs: exact(fr.runsTab.viewItems, fr.runsTab.exportJson, fr.runsTab.exportCsv),
+  // « Reprises » (2.13) : consultation du panneau des reprises par étape d'un run, jamais une reprise.
+  runs: exact(fr.runsTab.viewItems, fr.runsTab.exportJson, fr.runsTab.exportCsv, fr.repairs.show),
   status: exact(fr.statusTab.linkedRun, fr.statusTab.lastOccurrence),
   schedules: exact(fr.schedules.pause, fr.schedules.delete, fr.schedules.submit),
   access: exact(fr.accessTab.useOfficial),

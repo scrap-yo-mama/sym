@@ -13,6 +13,7 @@ import { getApi } from '@/lib/api';
 import { ApiRequestError, toRequestError, unwrap } from '@/lib/api-result';
 
 export type RunSummary = components['schemas']['RunSummary'];
+export type RunDetail = components['schemas']['Run'];
 
 export function useApiRuns(slug: MaybeRefOrGetter<string>, options: { immediate?: boolean } = {}) {
   const { me } = useSession();
@@ -59,6 +60,28 @@ export function useApiRuns(slug: MaybeRefOrGetter<string>, options: { immediate?
     return itemsError.value === null;
   }
 
+  // Panneau « Reprises » (tâche 2.13) : détail d'un run de l'appelant (essais de reprise d'étape, badge). Le run d'un autre
+  // n'est pas lu : le diff d'étape vient de la stratégie, contenu que l'admin ne voit pas (INV5).
+  const repairsRun = ref<RunDetail | null>(null);
+  const repairsLoading = ref(false);
+  const repairsError = ref<ApiRequestError | null>(null);
+
+  /** Détail d'un run de l'appelant pour son panneau « Reprises » ; false (aucune requête) pour le run d'un autre. */
+  async function showRepairs(run: RunSummary): Promise<boolean> {
+    if (!isOwn(run)) return false;
+    repairsLoading.value = true;
+    repairsError.value = null;
+    try {
+      repairsRun.value = unwrap(await getApi().GET('/api/runs/{id}', { params: { path: { id: run.id } } }));
+    } catch (cause) {
+      repairsRun.value = null;
+      repairsError.value = toRequestError(cause);
+    } finally {
+      repairsLoading.value = false;
+    }
+    return repairsError.value === null;
+  }
+
   /** Entrée d'un run de l'appelant, pour pré-remplir sa relance ; null (aucune requête) pour le run d'un autre. Lève si la lecture échoue. */
   async function relaunchInput(run: RunSummary): Promise<Record<string, unknown> | undefined | null> {
     if (!isOwn(run)) return null;
@@ -70,6 +93,14 @@ export function useApiRuns(slug: MaybeRefOrGetter<string>, options: { immediate?
     isOwn,
     showItems,
     relaunchInput,
+    showRepairs,
+    repairsRun,
+    repairsLoading,
+    repairsError,
+    closeRepairs: () => {
+      repairsRun.value = null;
+      repairsError.value = null;
+    },
     runs: list.items,
     loading: list.loading,
     loadingMore: list.loadingMore,

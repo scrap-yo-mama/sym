@@ -749,7 +749,12 @@
     "repair_exhausted": "Repair budget exhausted; version v{a} kept.",
     "proxy_not_configured": "A proxy is required for {country}.",
     "tunnel_offline": "Your computer is not connected.",
-    "not_found": "The page no longer exists (404 or 410)."
+    "not_found": "The page no longer exists (404 or 410).",
+    "repair_not_validated": "Repair conforms but was not validated without an agent; v{a} kept.",
+    "write_step_broken": "A step that acts on the site broke; nothing is repaired on its own.",
+    "step_cascade": "{n} steps broke: a new investigation is needed.",
+    "not_compilable": "No strategy replays without an agent. The “instructed agent” mode exists, with a cost on every run.",
+    "session_step_broken": "A step broke on a signed-in page; no agent acts there on its own."
   },
   "reasonLabel": {
     "retried": "Retries needed",
@@ -778,7 +783,19 @@
     "secret_unreadable": "Key unreadable",
     "account_limit": "Account limit",
     "session_owner_required": "Owner session required",
-    "llm_refused": "Request refused by the model"
+    "llm_refused": "Request refused by the model",
+    "repair_not_validated": "Repair not validated",
+    "write_step_broken": "Acting step broken",
+    "step_cascade": "Several steps broken",
+    "not_compilable": "No replayable strategy",
+    "session_step_broken": "Step broken on a signed-in page"
+  },
+  "reasonAction": {
+    "repair_not_validated": "See the repair",
+    "write_step_broken": "Open the draft",
+    "step_cascade": "Investigate again",
+    "not_compilable": "See the instructed agent mode",
+    "session_step_broken": "Open the draft"
   },
   "failureClass": {
     "transient": "Temporary error",
@@ -826,7 +843,12 @@
     "forbidden": "You do not have the rights for this action.",
     "conflict": "This action is not possible in the current state of the API.",
     "invalid_input": "The values entered do not match the input schema.",
-    "queue_full": "The queue is full. Try again in a moment."
+    "queue_full": "The queue is full. Try again in a moment.",
+    "human_confirmation_required": "This confirmation is made from the console, by a person.",
+    "sha_mismatch": "The steps changed since they were shown. Read them again before confirming.",
+    "instructed_steps_unconfirmed": "Confirm the instructed steps first: the instructed agent stays off.",
+    "compilable": "A strategy that replays without an agent exists: the instructed agent stays off.",
+    "no_instructed_steps": "This API has no instructed steps: the instructed agent stays off."
   },
   "actions": {
     "launch": "Run",
@@ -1010,7 +1032,9 @@
       "unknown": "Cost not estimated."
     },
     "started": "Run started.",
-    "followRun": "Follow the run"
+    "followRun": "Follow the run",
+    "instructed": "Instructed agent: an agent works on every run. Estimated cost of this run: {cost} at most.",
+    "instructedUnknown": "Instructed agent: an agent works on every run. Cost of this run not estimated."
   },
   "schemas": {
     "input": "Input schema",
@@ -1134,6 +1158,66 @@
     "noItems": "No item.",
     "absent": "absent",
     "relaunchUnavailable": "The input of this run cannot be read again. Run the API from the overview."
+  },
+  "repairs": {
+    "show": "Repairs",
+    "runTitle": "Repairs of the run of {date}",
+    "title": "Repairs",
+    "caption": "Step repairs: step, level, outcome, cost, tokens and step diff",
+    "autoRepaired": "Repaired automatically",
+    "empty": "No step repair in this run.",
+    "total": "{n} repair, total cost {cost} | {n} repairs, total cost {cost}",
+    "noDiff": "No change",
+    "tokens": "{in} in, {out} out",
+    "tokensEstimated": "~{in} in, ~{out} out",
+    "columns": {
+      "step": "Step",
+      "level": "Level",
+      "outcome": "Outcome",
+      "cost": "Cost",
+      "tokens": "Tokens",
+      "diff": "Step diff"
+    },
+    "level": {
+      "1": "Level 1: recorded locators, no AI",
+      "2": "Level 2: agent on the step",
+      "3": "Level 3: step segment"
+    },
+    "outcome": {
+      "replayed": "Replayed as is",
+      "alternate": "Fallback locator",
+      "agent_repaired": "Repaired by the agent",
+      "failed": "Failed"
+    },
+    "op": {
+      "add": "Added",
+      "remove": "Removed",
+      "replace": "Replaced"
+    }
+  },
+  "instructed": {
+    "title": "Instructed agent",
+    "intro": "No strategy of this API replays without an agent. In “instructed agent” mode, an agent follows the steps below on every run, with a cost on every run. This mode never turns on by itself.",
+    "cost": "Estimated cost: {cost} per run, at most.",
+    "costUnknown": "Cost per run not estimated.",
+    "stepsTitle": "Instructed steps",
+    "untrusted": "These intents were written by the AI from the pages it read: check them before confirming.",
+    "noPost": "No exit condition.",
+    "post": {
+      "url_changed": "The address changes",
+      "url_contains": "The address contains",
+      "element_present": "Element present",
+      "element_absent": "Element absent",
+      "text_present": "Text present"
+    },
+    "confirmHint": "The mode can only turn on after you confirm these exact steps.",
+    "confirm": "Confirm these steps",
+    "confirmedAt": "Steps confirmed on {date}.",
+    "enable": "Turn on the instructed agent",
+    "on": "On",
+    "off": "Off",
+    "label": "Instructed agent · {cost} per run",
+    "labelUnknown": "Instructed agent · cost per run not estimated"
   },
   "statusTab": {
     "timeline": "Status timeline",
