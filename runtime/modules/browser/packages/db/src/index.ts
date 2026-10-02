@@ -7,3 +7,4 @@ export * as schema from './schema.js';
 /** Tables du modèle de données (03 § 5). */
 export const TABLES = ['tenants', 'api_keys', 'nodes', 'sessions', 'session_events', 'profiles', 'proxy_profiles', 'artifacts', 'usage_records'] as const;
 export type TableName = (typeof TABLES)[number];
+export * from './sessions.js';

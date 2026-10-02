@@ -5,7 +5,7 @@
 //   idle_timeout_precision (A4) : horloge réelle, `timed_out` raison `idle` à ± 1 s du dernier message.
 //   assert_session_teardown (BINV3, volet 1.2) : toute fin détruit la session sur le pool, une seule fois, AVANT l'état
 //   final en base (04c § 3.2 : l'état public change à la dernière étape).
-import { checkTransition, createManualClock, createMemorySessionStore, systemClock, type Clock, type SessionState } from '@sym-browser/core';
+import { checkTransition, createManualClock, createMemorySessionStore, systemClock, type Clock, type ManualClock, type SessionState } from '@sym-browser/core';
 import type { EndReason } from '@sym/contracts/browser';
 import fc from 'fast-check';
 import type { Browser } from 'playwright-core';
@@ -46,12 +46,14 @@ function poolHarness(log: string[], options: { failOpen?: Set<string> } = {}) {
   };
   const pool = new BrowserPool({ slotsTotal: 8, launch, warmBrowsers: 0, constants: PROVISIONAL_CAPACITY, sweepIntervalMs: 0 });
   const destroyed = new Map<string, number>();
+  const opens = new Map<string, number>();
   const watchdogs = new Map<string, number | undefined>();
   const tracked: Pick<BrowserPool, 'acquire'> = {
     async acquire(request) {
       log.push(`open ${request.sessionId}`);
       watchdogs.set(request.sessionId, request.watchdogMs);
       const lease = await pool.acquire(request);
+      opens.set(request.sessionId, (opens.get(request.sessionId) ?? 0) + 1);
       let counted = false;
       return {
         ...lease,
@@ -66,11 +68,12 @@ function poolHarness(log: string[], options: { failOpen?: Set<string> } = {}) {
       };
     },
   };
-  return { pool, tracked, destroyed, watchdogs, crash: (sessionId: string) => browsers.get(sessionId)?.crash() };
+  return { pool, tracked, destroyed, opens, watchdogs, crash: (sessionId: string) => browsers.get(sessionId)?.crash() };
 }
 
 function setup(options: { clock?: Clock; failOpen?: Set<string>; failDestroy?: Set<string>; watchdogGraceMs?: number } = {}) {
-  const clock = options.clock ?? createManualClock(0);
+  // Horloge manuelle, sauf pour idle_timeout_precision (horloge réelle, sans appel à `advance`).
+  const clock = (options.clock ?? createManualClock(0)) as ManualClock;
   const log: string[] = [];
   const store = createMemorySessionStore({ now: () => clock.now() });
   const tracked = {
@@ -138,7 +141,13 @@ describe('assert_session_teardown (BINV3, volet 1.2)', () => {
     ['libération', (s) => s.supervisor.end('s1', 'released'), 'ended', 'released'],
     ['budget atteint', (s) => s.supervisor.end('s1', 'budget_exceeded'), 'ended', 'budget_exceeded'],
     ['minutes épuisées', (s) => s.supervisor.end('s1', 'quota'), 'ended', 'quota'],
-    ['délai total', async (s) => s.clock.advance(300_000), 'timed_out', 'timeout'],
+    ['délai total', async (s) => {
+      // Le client reste actif (un message toutes les 50 s) jusqu'à la fin au plus tard (300 s).
+      for (let i = 0; i < 6; i += 1) {
+        s.clock.advance(50_000);
+        s.supervisor.activity('s1');
+      }
+    }, 'timed_out', 'timeout'],
     ['inactivité', async (s) => s.clock.advance(60_000), 'timed_out', 'idle'],
     ['plantage de Chromium', async (s) => s.pool.crash('s1'), 'failed', 'crash'],
     ['arrêt du nœud', (s) => s.supervisor.shutdown(), 'ended', 'node_shutdown'],
@@ -235,7 +244,7 @@ describe('signaux du pool (interface de la tâche 1.1)', () => {
 describe('délais et prolongation', () => {
   test('chaque message du client repousse l’inactivité', async () => {
     const s = setup();
-    s.create('s1');
+    s.create('s1', 1_000_000);
     await s.begin('s1', 60);
     for (let i = 0; i < 5; i += 1) {
       s.clock.advance(50_000);
@@ -335,15 +344,16 @@ describe('state_machine_model (A5, fast-check, superviseur)', () => {
           }
           const final = s.store.get(sid);
           const terminal = final?.state === 'ended' || final?.state === 'timed_out' || final?.state === 'failed';
-          const opened = s.log.includes(`open ${sid}`);
-          // Toute session ouverte sur le pool puis terminée a été détruite exactement une fois, avant son état final.
-          if (opened && terminal) {
-            expect(s.pool.destroyed.get(sid)).toBe(1);
-            const destroyAt = s.log.indexOf(`destroy ${sid}`);
-            const finalAt = s.log.findIndex((l) => l.startsWith(`state ${sid} `) && !l.endsWith('running'));
-            if (finalAt >= 0) expect(destroyAt).toBeLessThan(finalAt);
+          // Chaque bail pris sur le pool est rendu une fois (destruction), sauf celui d'une session encore tenue.
+          const held = s.supervisor.active().includes(sid) ? 1 : 0;
+          expect(s.pool.destroyed.get(sid) ?? 0).toBe((s.pool.opens.get(sid) ?? 0) - held);
+          // Une session terminée après avoir tourné : sa destruction précède son état final.
+          const finalAt = s.log.findIndex((l) => l.startsWith(`state ${sid} `) && !l.endsWith('running'));
+          if (terminal && finalAt >= 0 && s.log.includes(`state ${sid} running`)) {
+            expect(s.log.indexOf(`destroy ${sid}`)).toBeGreaterThanOrEqual(0);
+            expect(s.log.indexOf(`destroy ${sid}`)).toBeLessThan(finalAt);
           }
-          if (final?.state === 'running') expect(s.supervisor.active()).toContain(sid);
+          expect(s.supervisor.active().includes(sid)).toBe(final?.state === 'running');
         }
       }),
       { numRuns: 300 },
