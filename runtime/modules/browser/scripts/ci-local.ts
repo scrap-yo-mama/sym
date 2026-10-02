@@ -41,7 +41,7 @@ const runtimeDir = new URL('../../..', import.meta.url).pathname;
 for (const [index, step] of steps.entries()) {
   console.log(`\n==> [${index + 1}/${steps.length}] browser : ${step.name}`);
   const [command = '', ...args] = step.cmd;
-  const result = spawnSync(command, args, { cwd: runtimeDir, stdio: ['inherit', step.expect ? 'pipe' : 'inherit', 'inherit'], encoding: 'utf8' });
+  const result = spawnSync(command, args, { cwd: runtimeDir, env: { ...process.env, ...(process.argv.includes('--skip-image') ? { SYM_BROWSER_SKIP_DOCKER: '1' } : {}) }, stdio: ['inherit', step.expect ? 'pipe' : 'inherit', 'inherit'], encoding: 'utf8' });
   if (step.expect && typeof result.stdout === 'string') process.stdout.write(result.stdout);
   const problem = result.status !== 0 ? `code ${result.status ?? 'signal'}` : step.expect?.(result.stdout ?? '');
   if (problem !== undefined) {
