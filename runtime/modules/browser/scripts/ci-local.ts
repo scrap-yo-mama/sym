@@ -8,6 +8,7 @@ import { randomBytes } from 'node:crypto';
 type Step = {
   name: string;
   cmd: string[];
+  env?: Record<string, string>;
   expect?: (stdout: string) => string | undefined;
   /** L'étape DOIT échouer (code ≠ 0) ; le contrôle porte sur sa sortie d'erreur. */
   expectFailure?: (stderr: string) => string | undefined;
@@ -27,7 +28,13 @@ const steps: Step[] = [
   { name: 'lint (frontière comprise)', cmd: ['pnpm', 'exec', 'eslint', 'modules/browser', 'packages/contracts'] },
   { name: 'en-têtes SPDX', cmd: ['node', 'scripts/spdx-headers.ts', '--check'] },
   { name: 'licences (SDK et contrat MIT sans copyleft)', cmd: ['node', 'scripts/check-licenses.ts'] },
-  { name: 'tests (contrat, paquets, racine du module)', cmd: ['pnpm', ...MODULE, 'test'] },
+  // Les tests d'intégration du schéma tournent ici sur PostgreSQL 16 (défaut) ; la matrice 17 et 18 suit (tâche 0.2).
+  { name: 'tests (contrat, paquets, racine du module ; schéma sur PostgreSQL 16)', cmd: ['pnpm', ...MODULE, 'test'] },
+  {
+    name: 'schéma : migrations up, down, up sur PostgreSQL 17 et 18',
+    cmd: ['pnpm', '--filter', '@sym-browser/db', 'test:matrix'],
+    env: { PG_VERSIONS: '17,18' },
+  },
 ];
 
 // Pool du nœud sur de vrais Chromium 153 (tâche 1.1 : pool_no_orphans, kill_on_close_timeout) : utilisateur non root,
@@ -61,7 +68,7 @@ const runtimeDir = new URL('../../..', import.meta.url).pathname;
 for (const [index, step] of steps.entries()) {
   console.log(`\n==> [${index + 1}/${steps.length}] browser : ${step.name}`);
   const [command = '', ...args] = step.cmd;
-  const result = spawnSync(command, args, { cwd: runtimeDir, stdio: ['inherit', step.expect ? 'pipe' : 'inherit', step.expectFailure ? 'pipe' : 'inherit'], encoding: 'utf8' });
+  const result = spawnSync(command, args, { cwd: runtimeDir, env: { ...process.env, ...step.env }, stdio: ['inherit', step.expect ? 'pipe' : 'inherit', step.expectFailure ? 'pipe' : 'inherit'], encoding: 'utf8' });
   if (step.expect && typeof result.stdout === 'string') process.stdout.write(result.stdout);
   if (step.expectFailure && typeof result.stderr === 'string') process.stderr.write(result.stderr);
   const problem = step.expectFailure
