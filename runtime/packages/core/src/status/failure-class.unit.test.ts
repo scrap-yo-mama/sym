@@ -48,7 +48,7 @@ describe('FailureClass unique', () => {
   });
 
   test('les codes de raison (04 §6) ne sont pas des failure_class', () => {
-    expect([...ACTION_REASONS].sort()).toEqual(['challenge_in_tunnel', 'proxy_not_configured', 'tunnel_offline']);
+    expect([...ACTION_REASONS].sort()).toEqual(['challenge_in_tunnel', 'proxy_not_configured', 'session_step_broken', 'tunnel_offline', 'write_step_broken']);
     for (const r of ACTION_REASONS) expect(isFailureClass(r), r).toBe(false);
   });
 

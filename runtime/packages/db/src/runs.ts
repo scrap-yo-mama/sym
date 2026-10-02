@@ -349,9 +349,9 @@ export async function recordAttempt(db: Queryable, runId: string, jobId: string,
        WHERE id = $1 AND job_id = $2 AND state = ANY($17::text[])
        RETURNING id, owner_id, project_id)
      INSERT INTO run_attempts (run_id, seq, owner_id, project_id, execution, network, result_class, est_cost_usd, cost_usd, ms,
-       model_id, prompt_version, engine)
+       model_id, prompt_version, engine, tokens_in, tokens_out, step_id, step_level, step_outcome)
      SELECT r.id, coalesce((SELECT max(seq) FROM run_attempts WHERE run_id = r.id), 0) + 1, r.owner_id, r.project_id,
-       $10, $11, $12, $13, $3::numeric + $4::numeric, $14, $15, $16, $18
+       $10, $11, $12, $13, $3::numeric + $4::numeric, $14, $15, $16, $18, $5, $7, $19, $20, $21
      FROM r RETURNING seq`,
     [
       runId,
@@ -372,6 +372,9 @@ export async function recordAttempt(db: Queryable, runId: string, jobId: string,
       a.prompt_version ?? null,
       ['running', 'waiting_tunnel'],
       a.engine ?? null,
+      a.step?.id ?? null,
+      a.step?.level ?? null,
+      a.step?.outcome ?? null,
     ],
   );
   const seq = rows[0]?.seq;

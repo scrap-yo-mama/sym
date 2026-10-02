@@ -44,8 +44,12 @@ export const REPAIR_ACTION_CLASSES = ['auth_required', 'payment_required', 'acco
  * proxy requis non configuré et tunnel hors ligne (transition 3), défi en tunnel (transition 14, 04 §3.2 « raison
  * `challenge_in_tunnel` », 07). Un run arrêté pour l'une de ces raisons l'est sans classe d'échec : événement `run_stopped`.
  */
+/*
+ * Reprise par étape (tâche 2.13, 19 §4) : une étape `side_effect: write` cassée (`write_step_broken`), ou une étape
+ * cassée d'un run avec session ou en tunnel dont le niveau 1 échoue (`session_step_broken`) : transition 14, sans agent.
+ */
 export const INVESTIGATION_ACTION_REASONS = ['proxy_not_configured', 'tunnel_offline'] as const;
-export const REPAIR_ACTION_REASONS = ['challenge_in_tunnel'] as const;
+export const REPAIR_ACTION_REASONS = ['challenge_in_tunnel', 'write_step_broken', 'session_step_broken'] as const;
 export const ACTION_REASONS = [...INVESTIGATION_ACTION_REASONS, ...REPAIR_ACTION_REASONS] as const;
 export type ActionReason = (typeof ACTION_REASONS)[number];
 
@@ -69,7 +73,7 @@ export type StatusEventInput =
   /** Fin d'enquête avec une stratégie conforme (1). */
   | { type: 'investigation_succeeded' }
   /** Enquête sans résultat conforme : budget épuisé (2 ou 21) ou robots.txt persistant en 5xx (2). */
-  | { type: 'investigation_failed'; cause: 'budget_exhausted' | 'robots_unreachable' }
+  | { type: 'investigation_failed'; cause: 'budget_exhausted' | 'robots_unreachable' | 'not_compilable' }
   /** Échec d'un run ou d'une étape : refus (3, 4, 14, 15), indisponibilité (6, 8), échec non transitoire (10, 11). */
   | { type: 'run_failed'; failureClass: FailureClass; httpStatus?: number }
   /** Run arrêté sans classe d'échec : proxy non configuré ou tunnel hors ligne (3), défi en tunnel (10/11 puis 14, ou 14). */
@@ -78,9 +82,13 @@ export type StatusEventInput =
   | { type: 'run_succeeded'; signals: readonly DegradedSignal[] }
   /** Retour à une version antérieure de la stratégie (7, 8). */
   | { type: 'version_rollback' }
-  /** Issue de la réparation : vN+1 conforme (12), budget épuisé ou correctif répété (13). */
-  | { type: 'repair_succeeded' }
-  | { type: 'repair_failed'; cause: 'budget_exhausted' | 'repeated_patch' }
+  /**
+   * Issue de la réparation : vN+1 conforme (12 ; `validated: false` : données livrées, vN+1 non validée sans agent,
+   * raison `repair_not_validated`, 2.13), budget épuisé, correctif répété, cascade d'étapes ou seule issue « agent à chaque
+   * run » sans `instructed_mode` (13).
+   */
+  | { type: 'repair_succeeded'; validated?: boolean }
+  | { type: 'repair_failed'; cause: 'budget_exhausted' | 'repeated_patch' | 'step_cascade' | 'not_compilable' }
   /** Ré-enquête : 16 (bouton), 18 (manuelle seulement), 19, 20. */
   | { type: 'reinvestigate'; trigger: ReinvestigationTrigger }
   /** Backoff automatique depuis `erreur` (16), réservé à certaines classes ; `attempt` compte à partir de 0. */

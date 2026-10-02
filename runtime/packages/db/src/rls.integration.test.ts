@@ -46,6 +46,8 @@ beforeAll(async () => {
     )).rows[0]!.id;
     await c.query("INSERT INTO run_attempts (run_id, seq, owner_id, execution, network) VALUES ($1, 1, $2, 'fetch', 'direct')", [run, A]);
     await c.query("INSERT INTO run_logs (run_id, seq, owner_id, level, event) VALUES ($1, 1, $2, 'info', 'zz_test')", [run, A]);
+    // 0017 (2.3) : quarantaine d'un run, appartenant à son appelant.
+    await c.query('INSERT INTO run_rejected_items (run_id, api_id, owner_id, total_rejected) VALUES ($1, $2, $3, 1)', [run, api, A]);
     await c.query("INSERT INTO run_artifacts (run_id, owner_id, kind, bytes, sensitivity, ciphertext, nonce, key_version) VALUES ($1, $2, 'trace', 1, 'high', '\\x00', '\\x00', 1)", [run, A]);
     await c.query("INSERT INTO investigation_events (run_id, seq, owner_id, kind) VALUES ($1, 1, $2, 'zz_test')", [run, A]);
     await c.query("INSERT INTO status_events (api_id, owner_id, to_status) VALUES ($1, $2, 'sain')", [api, A]);

@@ -2,7 +2,7 @@
 // Reprise par étape (19 §4, tâche 2.13) : orchestration pure, ports simulés. Garde de classification avant chaque reprise,
 // trois niveaux (alternates, agent sur l'étape, segment), patch borné, portes V0 à V5, étapes à effet, session, cascade.
 import { describe, expect, test } from 'vitest';
-import type { JsonPatchOperation } from '../dsl/patch.js';
+import type { JsonPatchOperation } from '../model/types.js';
 import type { ExecFailure } from '../exec/types.js';
 import { repairSteps, type StepAgentRequest, type StepRepairPorts, type StepReplayResult } from './step-repair.js';
 import { validateStepsSource, validateStepsSpec, type StepSource, type StepsSpec } from './spec.js';
@@ -163,8 +163,8 @@ describe('reprise par étape', () => {
     const spec = sixSteps({ s3: { target: { role: 'link', name: 'Page suivante', alternates: [] } } });
     const { ports: p } = ports({
       works: (s) => (targetName(s, 2) === 'Page suivante' ? { ...OK, ok: false, stepFailure: { index: 2, failure: extraction() } } : { ...OK, ok: false, observedWriteAt: 2 }),
-      // Le faux LLM déclare l'étape sans effet ; le clic envoie un POST au rejeu.
-      agent: () => ({ patch: [{ op: 'replace', path: '/steps/2/target', value: { role: 'link', name: 'Continuer', alternates: [], side_effect: 'none' } }] }),
+      // Le faux LLM tient la nouvelle cible pour un simple lien (sans effet) ; le clic envoie un POST au rejeu.
+      agent: () => ({ patch: [{ op: 'replace', path: '/steps/2/target', value: { role: 'link', name: 'Continuer', alternates: [] } }] }),
     });
     const out = await repairSteps({ spec, source: source(spec), failure: { index: 2, failure: extraction() }, context: { session: false, tunnel: false, runInputs: [] }, ports: p });
     expect(out.kind).toBe('write_step_broken');

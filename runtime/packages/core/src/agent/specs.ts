@@ -304,6 +304,20 @@ export function validateHybridSpec(input: unknown): SpecCheck<HybridSpec> {
   });
 }
 
+/**
+ * Champs d'une extraction par libellés (sans LLM), validés comme ceux d'une stratégie `hybrid` : réutilisé par l'étape
+ * `extract` du format `steps` (tâche 2.13).
+ */
+export function validateLabelFields(input: unknown): { ok: true; fields: Record<string, FieldLocator> } | { ok: false; errors: readonly string[] } {
+  const c = new Checker();
+  const raw = isRecord(input) ? input : {};
+  const names = Object.keys(raw);
+  if (!isRecord(input) || names.length === 0 || names.length > MAX_FIELDS) c.fail('fields', `1 à ${MAX_FIELDS} champs attendus`);
+  const fields: Record<string, FieldLocator> = {};
+  for (const name of names) fields[name] = checkLocator(c, raw[name], `fields.${name}`);
+  return c.errors.length === 0 ? { ok: true, fields } : { ok: false, errors: c.errors };
+}
+
 /** Vrai si une stratégie E5 s'exécute sans aucun appel LLM (aucune étape ni extraction déléguée). */
 export function hybridUsesLlm(spec: HybridSpec): boolean {
   return spec.extract.mode === 'agent' || spec.steps.some((s) => s.op === 'agent');

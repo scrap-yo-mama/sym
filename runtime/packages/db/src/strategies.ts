@@ -124,7 +124,8 @@ export async function saveCompiledStrategy(
       [args.apiId, version, args.ownerId, current.project_id, args.network, JSON.stringify(args.spec), args.estCostUsd, args.parentVersion],
     );
     const promoted = current.current_strategy_version === args.parentVersion;
-    if (promoted) await tx.query('UPDATE apis SET current_strategy_version = $2 WHERE id = $1', [args.apiId, version]);
+    // Une version compilée (rejouée sans LLM) devient courante : le mode « agent instruit » n'a plus lieu d'être (2.13).
+    if (promoted) await tx.query('UPDATE apis SET current_strategy_version = $2, instructed_mode = false WHERE id = $1', [args.apiId, version]);
     return { version, promoted };
   });
 }

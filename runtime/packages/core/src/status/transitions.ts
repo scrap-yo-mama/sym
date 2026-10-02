@@ -31,7 +31,7 @@ const REPLAY_FAILURES = [
 
 export const TRANSITIONS: readonly TransitionDef[] = [
   { id: 1, from: 'enquete', to: 'sain', slug: 'enquete_to_sain', reasons: ['strategy_conform'] },
-  { id: 2, from: 'enquete', to: 'erreur', slug: 'enquete_to_erreur', reasons: ['investigation_budget_exhausted', 'robots_unreachable'] },
+  { id: 2, from: 'enquete', to: 'erreur', slug: 'enquete_to_erreur', reasons: ['investigation_budget_exhausted', 'robots_unreachable', 'not_compilable'] },
   {
     id: 3, from: 'enquete', to: 'action_requise', slug: 'enquete_to_action_requise',
     reasons: [...INVESTIGATION_ACTION_CLASSES, ...INVESTIGATION_ACTION_REASONS],
@@ -44,8 +44,8 @@ export const TRANSITIONS: readonly TransitionDef[] = [
   { id: 9, from: 'warning', to: 'sain', slug: 'warning_to_sain', reasons: ['clean_streak', 'quiet_period'] },
   { id: 10, from: 'sain', to: 'reparation', slug: 'sain_to_reparation', reasons: REPLAY_FAILURES },
   { id: 11, from: 'warning', to: 'reparation', slug: 'warning_to_reparation', reasons: REPLAY_FAILURES },
-  { id: 12, from: 'reparation', to: 'warning', slug: 'reparation_to_warning', reasons: ['repaired'] },
-  { id: 13, from: 'reparation', to: 'erreur', slug: 'reparation_to_erreur', reasons: ['repair_budget_exhausted', 'repair_repeated_patch'] },
+  { id: 12, from: 'reparation', to: 'warning', slug: 'reparation_to_warning', reasons: ['repaired', 'repair_not_validated'] },
+  { id: 13, from: 'reparation', to: 'erreur', slug: 'reparation_to_erreur', reasons: ['repair_budget_exhausted', 'repair_repeated_patch', 'step_cascade', 'not_compilable'] },
   {
     id: 14, from: 'reparation', to: 'action_requise', slug: 'reparation_to_action_requise',
     reasons: [...REPAIR_ACTION_CLASSES, ...REPAIR_ACTION_REASONS],
@@ -57,7 +57,7 @@ export const TRANSITIONS: readonly TransitionDef[] = [
   { id: 19, from: 'sain', to: 'enquete', slug: 'sain_to_enquete', reasons: REINVESTIGATION },
   { id: 20, from: 'warning', to: 'enquete', slug: 'warning_to_enquete', reasons: REINVESTIGATION },
   // 21 : `to` est le statut précédent (sain ou warning), porté par `previous_status`.
-  { id: 21, from: 'enquete', to: 'sain', slug: 'enquete_to_previous_status', reasons: ['reinvestigation_failed'] },
+  { id: 21, from: 'enquete', to: 'sain', slug: 'enquete_to_previous_status', reasons: ['reinvestigation_failed', 'not_compilable'] },
 ];
 
 export const TRANSITION_COUNT = 21;
