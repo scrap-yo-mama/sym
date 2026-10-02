@@ -36,6 +36,7 @@ Contrat : `runtime/packages/contracts` (`@sym/contracts`, MIT, sous-chemin `brow
 - `MASTER_KEY` de développement : `pnpm --filter @sym-browser/core keygen` (après build ; jamais committée ni journalisée). Vecteurs de SYM rejoués : `packages/core/vectors/sym-crypto.json`.
 - Image : `docker build -f modules/browser/Dockerfile -t sym-browser:dev .` puis `docker run --rm --security-opt seccomp=modules/browser/deploy/seccomp-chromium.json --security-opt no-new-privileges --cap-drop ALL -e MASTER_KEY="$(openssl rand -base64 32)" -e DATABASE_URL=postgres://… sym-browser:dev` (`SYMB_MODE` : `all`, `gateway`, `node`).
 - Configuration : catalogue `packages/core/src/config/env-catalog.ts` (source unique, secrets `NOM_FILE`) ; config invalide = sortie code 1 nommant la variable ; `node dist/main.js --check-config` valide sans écouter ; `/healthz`, `/readyz`.
+- Capacité d'un nœud : constantes dans `packages/core/src/capacity.ts`, mesures et banc dans `bench/` (`bench/run.sh`), rapport `docs/mesures-capacite.md`.
 
 ## Versions et dépendances
 

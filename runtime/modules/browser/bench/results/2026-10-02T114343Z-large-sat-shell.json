@@ -1,0 +1,113 @@
+{
+  "meta": {
+    "task": "0.6",
+    "startedAt": "2026-10-02T11:43:44.112Z",
+    "label": "large-sat",
+    "variant": "shell",
+    "reps": 30,
+    "maxContexts": 8,
+    "concurrency": 2,
+    "settleMs": 1500,
+    "page": "typique : 1 500 lignes DOM, 30 SVG inline, ~150 000 objets JS",
+    "pageKind": "typical",
+    "playwright": "1.63.0",
+    "node": "v24.20.0",
+    "arch": "arm64",
+    "kernel": "6.10.14-linuxkit",
+    "cpuModel": "unknown",
+    "cpuVisible": 4,
+    "cgroupMemoryLimitMib": 3072
+  },
+  "results": {
+    "saturate": {
+      "limitMib": 3072,
+      "sessionsUnder90Percent": {
+        "n": 30,
+        "min": 16,
+        "median": 16,
+        "p95": 16,
+        "max": 16
+      },
+      "perSessionCgroupCurrentMib": {
+        "n": 30,
+        "min": 94.9,
+        "median": 100.9,
+        "p95": 102.4,
+        "max": 105.9
+      },
+      "failedLaunches": {
+        "n": 30,
+        "min": 0,
+        "median": 0,
+        "p95": 0,
+        "max": 0
+      },
+      "samples": {
+        "fitsUnder90": [
+          16,
+          16,
+          16,
+          16,
+          16,
+          16,
+          16,
+          16,
+          16,
+          16,
+          16,
+          16,
+          16,
+          16,
+          16,
+          16,
+          16,
+          16,
+          16,
+          16,
+          16,
+          16,
+          16,
+          16,
+          16,
+          16,
+          16,
+          16,
+          16,
+          16
+        ],
+        "perSessionCurrent": [
+          111044864,
+          105860608,
+          105580544,
+          105101312,
+          105110272,
+          105236992,
+          105156352,
+          105304064,
+          106371328,
+          99482112,
+          107388928,
+          106617344,
+          106488576,
+          105927936,
+          105881344,
+          106075904,
+          105637632,
+          105592576,
+          105521152,
+          105381632,
+          105559296,
+          105296640,
+          105176064,
+          106446592,
+          105946624,
+          106033408,
+          105666304,
+          106163456,
+          106275840,
+          105978112
+        ]
+      }
+    }
+  }
+}
