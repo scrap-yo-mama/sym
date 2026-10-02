@@ -1,0 +1,16 @@
+# Contexte de build de modules/browser/Dockerfile (BuildKit lit <Dockerfile>.dockerignore avant runtime/.dockerignore) :
+# seuls le workspace, le contrat et les paquets du module embarqués dans l'image entrent dans le contexte.
+**
+!package.json
+!pnpm-workspace.yaml
+!pnpm-lock.yaml
+!.pnpmfile.cjs
+!tsconfig.base.json
+!packages/contracts
+!modules/browser/packages/core
+!modules/browser/apps/gateway
+!modules/browser/apps/node
+**/node_modules
+**/dist
+**/*.tsbuildinfo
+**/.env*

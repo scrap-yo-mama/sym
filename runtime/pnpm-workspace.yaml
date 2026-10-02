@@ -4,6 +4,11 @@ packages:
   - fixtures
   # Paquet d'évaluation isolé du spike 0.6a (protocole §13) : seul endroit où Stagehand est installé.
   - eval/spike
+  # SYM Browser (ADR 23 étape 0 bis ; cdc/sym-browser 03 § 9) : module autonome. `modules/browser` porte les tests de module
+  # (frontière, environnement Claude) et la CI locale du module ; frontière vérifiée par le lint (modules/browser/eslint.boundaries.mjs).
+  - modules/browser
+  - modules/browser/apps/*
+  - modules/browser/packages/*
 
 # Catalogue unique : versions exactes (aucune plage ouverte), une seule source de vérité.
 catalog:

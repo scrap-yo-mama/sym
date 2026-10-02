@@ -1,0 +1,19 @@
+{
+  "name": "@sym-browser/module",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "license": "AGPL-3.0-only",
+  "description": "Racine du module SYM Browser : CI locale du module, tests de frontière et d'environnement. Les paquets sont dans apps/ et packages/.",
+  "scripts": {
+    "ci:local": "node scripts/ci-local.ts",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "eslint": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}
