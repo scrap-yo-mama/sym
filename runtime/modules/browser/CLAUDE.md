@@ -41,6 +41,7 @@ Contrat : `runtime/packages/contracts` (`@sym/contracts`, MIT, sous-chemin `brow
 - Proxys amont (04c § 2) : `apps/node/src/egress/upstream/` (`startUpstreamSessionEgress` : relais HTTP(S) et SOCKS5 authentifiés, profils chiffrés, test de l'IP de sortie, 502 `proxy_unreachable`) ; recette 10 sur Docker Compose (`fixtures/`).
 - Configuration : catalogue `packages/core/src/config/env-catalog.ts` (source unique, secrets `NOM_FILE`) ; config invalide = sortie code 1 nommant la variable ; `node dist/main.js --check-config` valide sans écouter ; `/healthz`, `/readyz`.
 - Capacité d'un nœud : constantes dans `packages/core/src/capacity.ts`, mesures et banc dans `bench/` (`bench/run.sh`), rapport `docs/mesures-capacite.md`.
+- ObjectStore `s3` (`packages/core/src/storage`) : ses tests lancent un MinIO jetable en conteneur (Docker requis, obligatoire sous `CI`, sauté avec avertissement sinon) ; point d'accès externe : `SYMB_TEST_S3_ENDPOINT`, `SYMB_TEST_S3_ACCESS_KEY_ID`, `SYMB_TEST_S3_SECRET_ACCESS_KEY`.
 - `MASTER_KEY` de développement : `pnpm --filter @sym-browser/core keygen` (après build ; jamais committée ni journalisée). Vecteurs de SYM rejoués : `packages/core/vectors/sym-crypto.json`.
 
 ## Versions et dépendances

@@ -7,8 +7,16 @@
 // (un Chromium ne sert jamais deux clients, BINV1). Le pool peut aussi imposer la fin (plantage, chien de garde, arrêt).
 // Protocole servi : Playwright natif seulement (`protocols.ts`). Les états de session (`pending → running → …`) et leur
 // persistance viennent de la tâche 1.2 : `onEnd` en est le point d'accroche.
+// Fichiers (tâche 1.8, 04c § 3.1 et § 5) : avec `dataDir`, la session a son répertoire `sessions/{id}` (0700 : téléchargements,
+// envois), créé à la création et supprimé à la fin, APRÈS la fermeture du contexte et le détachement des fichiers (les
+// téléchargements finis sont alors dans l'ObjectStore), AVANT que le slot soit rendu.
+import { mkdir, rm } from 'node:fs/promises';
+import { dirname } from 'node:path';
 import type { EndReason } from '@sym/contracts/browser';
 import type { BrowserContext } from 'playwright-core';
+import { sessionDir, type SessionDir } from '../dedicated/dedicated.js';
+import { attachBrowserFiles } from '../files/playwright.js';
+import type { AttachedFiles, SessionFiles } from '../files/session-files.js';
 import type { AcquireRequest, LeaseEndReason, PoolLease } from '../pool/index.js';
 import { sharedContextOptions, type SharedSessionInput } from './options.js';
 import { servedProtocols, type SessionProtocol } from './protocols.js';
@@ -39,6 +47,10 @@ export type SharedSessionsOptions = {
   /** Délai de fermeture d'un contexte ; au-delà, le slot est rendu (le pool ferme ou tue le Chromium à son délai dur). */
   closeTimeoutMs?: number;
   onEnd?: (end: SharedSessionEnd) => void;
+  /** `SYMB_DATA_DIR` : répertoire `sessions/{id}` de chaque session (téléchargements, envois). */
+  dataDir?: string;
+  /** Fichiers des sessions (tâche 1.8) ; exige `dataDir`. */
+  files?: SessionFiles;
 };
 
 export type CreateSharedSession = {
@@ -51,7 +63,7 @@ export type CreateSharedSession = {
   egressProxyUrl?: string;
 };
 
-type State = { session: SharedSession; lease: PoolLease; ending: Promise<void> | null; reason: SharedEndReason | null };
+type State = { session: SharedSession; lease: PoolLease; dir: SessionDir | undefined; files: AttachedFiles | undefined; ending: Promise<void> | null; reason: SharedEndReason | null };
 
 export class SharedSessions {
   readonly #options: SharedSessionsOptions;
@@ -76,27 +88,41 @@ export class SharedSessions {
   async create(request: CreateSharedSession): Promise<SharedSession> {
     // Validation d'abord : une option invalide ne réserve aucun slot.
     const contextOptions = sharedContextOptions(request.options, request.egressProxyUrl === undefined ? {} : { egressProxyUrl: request.egressProxyUrl });
+    if (this.#options.files !== undefined && this.#options.dataDir === undefined) throw new RangeError('fichiers de session : dataDir requis');
+    const dir = this.#options.dataDir === undefined ? undefined : sessionDir(this.#options.dataDir, request.sessionId);
     if (this.#sessions.has(request.sessionId) || this.#creating.has(request.sessionId)) throw new RangeError(`session ${request.sessionId} déjà présente sur ce nœud`);
     this.#creating.add(request.sessionId);
     try {
       const acquire: AcquireRequest = { sessionId: request.sessionId, type: 'shared', tenantId: request.tenantId };
       if (request.watchdogMs !== undefined) acquire.watchdogMs = request.watchdogMs;
       const lease = await this.#options.pool.acquire(acquire);
-      let context: BrowserContext;
+      let context: BrowserContext | undefined;
+      let files: AttachedFiles | undefined;
       try {
+        if (dir !== undefined) {
+          await mkdir(dirname(dir.root), { recursive: true, mode: 0o700 });
+          // Répertoire neuf : un répertoire déjà présent (identifiant réutilisé, destruction inachevée) est refusé.
+          await mkdir(dir.root, { mode: 0o700 });
+          await mkdir(dir.downloads, { mode: 0o700 });
+        }
         context = await lease.browser.newContext(contextOptions);
+        if (this.#options.files !== undefined && dir !== undefined) {
+          files = await attachBrowserFiles(this.#options.files, { sessionId: request.sessionId, tenantId: request.tenantId, dir, acceptDownloads: contextOptions.acceptDownloads === true, browser: lease.browser, context });
+        }
       } catch (error) {
+        await context?.close().catch(() => undefined);
+        if (dir !== undefined && !(error as NodeJS.ErrnoException).code?.startsWith('EEXIST')) await rm(dir.root, { recursive: true, force: true });
         await lease.release();
         throw error;
       }
-      const state: State = { session: undefined as unknown as SharedSession, lease, ending: null, reason: null };
+      const state: State = { session: undefined as unknown as SharedSession, lease, dir, files, ending: null, reason: null };
       state.session = {
         sessionId: request.sessionId,
         tenantId: request.tenantId,
         type: 'shared',
         browserId: lease.browserId,
         wsEndpoint: lease.wsEndpoint,
-        context,
+        context: context!,
         protocols: servedProtocols('shared'),
         get endReason() {
           return state.reason;
@@ -128,6 +154,8 @@ export class SharedSessions {
         new Promise<void>((resolve) => (timer = setTimeout(resolve, this.#options.closeTimeoutMs ?? 10_000))),
       ]);
       clearTimeout(timer);
+      await state.files?.detach().catch(() => undefined);
+      if (state.dir !== undefined) await rm(state.dir.root, { recursive: true, force: true });
       await state.lease.release();
       this.#options.onEnd?.({ sessionId: state.session.sessionId, tenantId: state.session.tenantId, reason });
     })();

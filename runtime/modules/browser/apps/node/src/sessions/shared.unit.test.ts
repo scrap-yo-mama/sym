@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Tâche 1.3 : cycle de vie d'une session shared (contexte neuf dans un Chromium chaud du pool), piloté par un pool simulé.
+import { existsSync, mkdtempSync, statSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { Browser, BrowserContext } from 'playwright-core';
 import { describe, expect, test } from 'vitest';
 import type { AcquireRequest, PoolLease } from '../pool/index.js';
@@ -118,5 +121,20 @@ describe('sessions shared : contexte neuf par session (04b § 1, 04c § 3.1)', (
     const s = await sessions.create({ sessionId: 's1', tenantId: 'A', options: {} });
     await s.release();
     expect(log.at(-1)).toBe('release s1');
+  });
+
+  test('répertoire de session (04c § 3.1) : sessions/{id}/downloads créé en 0700 à la création, supprimé avant que le slot soit rendu', async () => {
+    const { pool, log } = fakePool();
+    const dataDir = mkdtempSync(join(tmpdir(), 'symb-shared-'));
+    const root = join(dataDir, 'sessions', 's1');
+    const sessions = new SharedSessions({ pool, dataDir });
+    const s = await sessions.create({ sessionId: 's1', tenantId: 'A', options: {} });
+    expect(statSync(join(root, 'downloads')).mode & 0o777).toBe(0o700);
+    writeFileSync(join(root, 'downloads', 'reste.bin'), 'x');
+    const release = s.release();
+    await release;
+    expect(existsSync(root)).toBe(false);
+    expect(log.slice(-2)).toEqual(['context.close s1', 'release s1']);
+    await expect(sessions.create({ sessionId: '../x', tenantId: 'A', options: {} })).rejects.toThrow();
   });
 });
