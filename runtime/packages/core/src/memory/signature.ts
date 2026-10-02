@@ -105,7 +105,7 @@ export type SignatureInput = {
 export function computeSignature(input: SignatureInput): StrategySignature {
   const html = input.html ?? '';
   const tags = tagSequence(html);
-  let domain = '';
+  let domain: string;
   try {
     domain = registrableDomain(input.pageUrl);
   } catch {

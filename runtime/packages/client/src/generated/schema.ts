@@ -2139,6 +2139,55 @@ export interface components {
             input?: {
                 [key: string]: unknown;
             };
+            /** @description Fiche de qualité du run (tâche 2.12, 19 § 3) : profil calculé par le code après la garde de classification et Ajv ; un champ `x-personal` n'a que des formes. Absente pour l'admin sur un run d'autrui. */
+            quality?: components["schemas"]["RunQuality"] | null;
+            /** @description Avis CONSULTATIF du juge (19 § 3) ; il ne change jamais le statut ni la version. */
+            judge?: components["schemas"]["RunJudge"] | null;
+        };
+        RunQuality: {
+            items: number;
+            duplicates: number;
+            duplicate_rate: number;
+            fields: {
+                [key: string]: components["schemas"]["FieldQuality"];
+            };
+        };
+        FieldQuality: {
+            type: string;
+            personal: boolean;
+            suspected_personal: boolean;
+            fill_rate: number;
+            sentinel_rate: number;
+            top_pattern: string | null;
+            patterns?: {
+                [key: string]: number;
+            };
+            unique_rate: number;
+            distinct?: number;
+            constant: boolean;
+            length: {
+                min: number;
+                max: number;
+                mean: number;
+            };
+            /** @description Champs non personnels seulement. */
+            min?: number;
+            /** @description Champs non personnels seulement. */
+            max?: number;
+        };
+        RunJudge: {
+            flag: boolean;
+            /** @enum {string} */
+            trigger: "investigation" | "repair" | "anomaly";
+            /** Format: date-time */
+            at?: string;
+            verdicts: {
+                field: string;
+                /** @enum {string} */
+                verdict: "ok" | "wrong" | "unsure";
+                indices: number[];
+                reason: string;
+            }[];
         };
         RunLogLine: {
             seq: number;
@@ -2408,6 +2457,12 @@ export interface components {
             repair?: components["schemas"]["LlmRole"];
             extract?: components["schemas"]["LlmRole"];
             agent?: components["schemas"]["LlmRole"];
+            /** @description Juge de qualité consultatif (tâche 2.12, 19 § 3), actif seulement avec `judge.enabled`. */
+            judge?: components["schemas"]["LlmRole"];
+            /** @description Propositions de règles, toujours validées par un humain (19 § 5). */
+            reflect?: components["schemas"]["LlmRole"];
+            /** @description Embeddings de l'étage 4 de la mémoire du catalogue (option désactivée, `catalog_memory.embeddings`). */
+            embed?: components["schemas"]["LlmRole"];
         };
         LlmProviderBase: {
             id: string;
@@ -2442,6 +2497,14 @@ export interface components {
             log_prompts?: {
                 enabled?: boolean;
                 retention_days?: number;
+            };
+            /** @description Juge consultatif (tâche 2.12, 19 § 3) : désactivé par défaut, activé par l'admin avec l'avertissement « juge non étalonné, avis consultatif » ; son fournisseur s'ajoute à la mention fournisseur. */
+            judge?: {
+                enabled?: boolean;
+            };
+            /** @description Mémoire du catalogue (19 § 2) ; l'étage 4 par embeddings est une option désactivée (pgvector requis). */
+            catalog_memory?: {
+                embeddings?: boolean;
             };
         };
         LlmSettings: components["schemas"]["LlmSettingsCommon"] & {

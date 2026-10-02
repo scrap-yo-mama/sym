@@ -87,7 +87,13 @@ export function useLlmSettings() {
       const choice = roles[name];
       if (choice && choice.provider && choice.model.trim()) nextRoles[name] = { ...loaded?.roles?.[name], provider: choice.provider, model: choice.model.trim() };
     }
+    // Rôles hors de l'écran (`judge`, `reflect`, `embed`, 2.12) et réglages du juge et de la mémoire : gardés tels quels.
+    for (const [name, role] of Object.entries(loaded?.roles ?? {})) {
+      if (!(LLM_ROLES as readonly string[]).includes(name) && role) (nextRoles as Record<string, unknown>)[name] = role;
+    }
     body.roles = nextRoles;
+    if (loaded?.judge) body.judge = loaded.judge;
+    if (loaded?.catalog_memory) body.catalog_memory = loaded.catalog_memory;
     if (loaded?.redact) body.redact = loaded.redact;
     if (loaded?.log_prompts) body.log_prompts = loaded.log_prompts;
     return body;

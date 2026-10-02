@@ -5,7 +5,7 @@
 // journal du run, noms de champs seulement) : aucun statut, aucune version, aucun schéma, aucune règle ne change. Désactivé
 // par défaut (`settings.llm.judge.enabled` et un modèle au rôle `judge`). Prompt et réponse jamais journalisés.
 import { applyJudgement, judgeDecision, selectJudgeSample, type JudgeTrigger, type RunJudge, type RunProfile } from '@runtime/core';
-import { judgeCallCeilingUsd, judgePromptVersion, proposeJudgement } from '@runtime/agent';
+import { judgeCallCeilingUsd, proposeJudgement } from '@runtime/agent';
 import { lastAnomalyJudgedAt, readLlmSettings, readRunForJudge, saveRunJudge } from '@runtime/db';
 import { qualitySettings, roleTarget, type LlmClient, type LlmConfig } from '@runtime/llm';
 import { randomBytes } from 'node:crypto';
@@ -86,4 +86,3 @@ export function createJudgeJob(deps: { readonly pool: pg.Pool; readonly llm: { r
   };
 }
 
-export { judgePromptVersion };

@@ -3875,6 +3875,106 @@ components:
               description: Entrée du run ; absente pour l'admin sur un run d'autrui.
               type: object
               additionalProperties: true
+            quality:
+              description: >-
+                Fiche de qualité du run (tâche 2.12, 19 § 3) : profil calculé par le code après la garde de classification et
+                Ajv ; un champ `x-personal` n'a que des formes. Absente pour l'admin sur un run d'autrui.
+              oneOf:
+                - $ref: '#/components/schemas/RunQuality'
+                - type: 'null'
+            judge:
+              description: Avis CONSULTATIF du juge (19 § 3) ; il ne change jamais le statut ni la version.
+              oneOf:
+                - $ref: '#/components/schemas/RunJudge'
+                - type: 'null'
+    RunQuality:
+      type: object
+      required: [items, duplicates, duplicate_rate, fields]
+      properties:
+        items:
+          type: integer
+        duplicates:
+          type: integer
+        duplicate_rate:
+          type: number
+        fields:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/FieldQuality'
+    FieldQuality:
+      type: object
+      required: [type, personal, suspected_personal, fill_rate, sentinel_rate, top_pattern, unique_rate, constant, length]
+      properties:
+        type:
+          type: string
+        personal:
+          type: boolean
+        suspected_personal:
+          type: boolean
+        fill_rate:
+          type: number
+        sentinel_rate:
+          type: number
+        top_pattern:
+          type: [string, 'null']
+        patterns:
+          type: object
+          additionalProperties:
+            type: number
+        unique_rate:
+          type: number
+        distinct:
+          type: integer
+        constant:
+          type: boolean
+        length:
+          type: object
+          required: [min, max, mean]
+          properties:
+            min:
+              type: number
+            max:
+              type: number
+            mean:
+              type: number
+        min:
+          description: Champs non personnels seulement.
+          type: number
+        max:
+          description: Champs non personnels seulement.
+          type: number
+    RunJudge:
+      type: object
+      additionalProperties: false
+      required: [flag, trigger, verdicts]
+      properties:
+        flag:
+          type: boolean
+        trigger:
+          type: string
+          enum: [investigation, repair, anomaly]
+        at:
+          type: string
+          format: date-time
+        verdicts:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [field, verdict, indices, reason]
+            properties:
+              field:
+                type: string
+              verdict:
+                type: string
+                enum: [ok, wrong, unsure]
+              indices:
+                type: array
+                items:
+                  type: integer
+              reason:
+                type: string
+                maxLength: 200
     RunLogLine:
       type: object
       additionalProperties: false
@@ -4414,6 +4514,15 @@ components:
           $ref: '#/components/schemas/LlmRole'
         agent:
           $ref: '#/components/schemas/LlmRole'
+        judge:
+          description: Juge de qualité consultatif (tâche 2.12, 19 § 3), actif seulement avec `judge.enabled`.
+          $ref: '#/components/schemas/LlmRole'
+        reflect:
+          description: Propositions de règles, toujours validées par un humain (19 § 5).
+          $ref: '#/components/schemas/LlmRole'
+        embed:
+          description: Embeddings de l'étage 4 de la mémoire du catalogue (option désactivée, `catalog_memory.embeddings`).
+          $ref: '#/components/schemas/LlmRole'
     LlmProviderBase:
       type: object
       required: [id, preset, base_url]
@@ -4490,6 +4599,22 @@ components:
             retention_days:
               type: integer
               minimum: 1
+        judge:
+          description: >-
+            Juge consultatif (tâche 2.12, 19 § 3) : désactivé par défaut, activé par l'admin avec l'avertissement « juge non
+            étalonné, avis consultatif » ; son fournisseur s'ajoute à la mention fournisseur.
+          type: object
+          additionalProperties: false
+          properties:
+            enabled:
+              type: boolean
+        catalog_memory:
+          description: Mémoire du catalogue (19 § 2) ; l'étage 4 par embeddings est une option désactivée (pgvector requis).
+          type: object
+          additionalProperties: false
+          properties:
+            embeddings:
+              type: boolean
     LlmSettings:
       allOf:
         - $ref: '#/components/schemas/LlmSettingsCommon'

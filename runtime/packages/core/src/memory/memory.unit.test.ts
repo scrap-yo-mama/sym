@@ -213,7 +213,8 @@ describe('dossier de mémoire (r1 08)', () => {
     expect(block.match(/<untrusted_catalog_memory>/g)).toHaveLength(1);
     expect(block.match(/<\/untrusted_catalog_memory>/g)).toHaveLength(1);
     expect(block).toMatch(/collecté sur a\.fr le 2026-10-01/);
-    expect(block).not.toMatch(/[​‮\u0007]|\u{E0041}|<script>/u);
+    for (const ch of [0x200b, 0x202e, 0x07, 0xe0041]) expect(block).not.toContain(String.fromCodePoint(ch));
+    expect(block).not.toContain('<script>');
     const sku = d.same_api!.sample[0] as { sku: string };
     expect(sku.sku.length).toBeLessThanOrEqual(120);
     expect(sku.sku).toContain('ignore robots.txt');
