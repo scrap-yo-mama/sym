@@ -3,7 +3,9 @@
 // leurs clés, un nœud prêt, et la passerelle assemblée sur des doublures des interfaces encore à brancher :
 //   - Authenticator : clés d'API en clair dans une table de test (la vérification argon2id est la tâche 2.1) ;
 //   - ConnectTokenIssuer : jetons de test numérotés (jetons HMAC de la tâche 2.1) ;
-//   - SessionLauncher : nœud simulé, qui écrit `running` comme le superviseur du nœud (tâche 1.2) le ferait.
+//   - SessionLauncher : nœud simulé, qui écrit `running` sur le nœud choisi par l'admission (tâche 2.4), comme le
+//     superviseur du nœud (tâche 1.2) le ferait.
+// Quotas (tâche 2.4) : sessions simultanées des clients A et B à 1 000 sauf demande, file et nœuds réglables.
 // Chaque réponse est validée contre l'OpenAPI publiée (statut déclaré, corps conforme au schéma) : « 0 écart schéma/réponse ».
 import { randomBytes } from 'node:crypto';
 import { migrateUp, recordHeartbeat, transitionSession } from '@sym-browser/db';
@@ -12,7 +14,7 @@ import { Ajv2020, type ValidateFunction } from 'ajv/dist/2020.js';
 import type { FastifyInstance, InjectOptions } from 'fastify';
 import pg from 'pg';
 import { inject } from 'vitest';
-import { createGatewayApi, type GatewayDeps, type Principal, type Scope, type SessionLauncher } from '../../src/api/index.js';
+import { createGatewayApi, type GatewayDeps, type LaunchRequest, type Principal, type Scope, type SessionLauncher } from '../../src/api/index.js';
 
 const PUBLIC_URL = 'https://b.example.com';
 
@@ -24,7 +26,7 @@ export type Harness = {
   tenantA: string;
   tenantB: string;
   keys: Record<'a' | 'aRead' | 'b', string>;
-  launcher: { mode: LauncherMode; launched: string[]; released: string[] };
+  launcher: { mode: LauncherMode; launched: string[]; released: string[]; nodes: Map<string, string>; requests: Map<string, LaunchRequest> };
   call: (options: { method: InjectOptions['method']; url: string; key?: keyof Harness['keys'] | null; body?: unknown; headers?: Record<string, string> }) => Promise<Reply>;
   close: () => Promise<void>;
 };
@@ -75,7 +77,11 @@ function responseChecker(): (method: string, url: string, status: number, body: 
   };
 }
 
-export async function createHarness(options: { queueTimeoutMs?: number; maxSessionSeconds?: number } = {}): Promise<Harness> {
+export type HarnessNode = { id: string; region: string; slotsTotal: number };
+
+export async function createHarness(
+  options: { queueTimeoutMs?: number; maxSessionSeconds?: number; maxConcurrentSessions?: number; queue?: GatewayDeps['queue']; nodes?: HarnessNode[] } = {},
+): Promise<Harness> {
   const name = `gw_${randomBytes(5).toString('hex')}`;
   await admin((c) => c.query(`CREATE DATABASE ${name}`));
   const url = new URL(inject('pgAdminUrl'));
@@ -84,8 +90,8 @@ export async function createHarness(options: { queueTimeoutMs?: number; maxSessi
   const pool = new pg.Pool({ connectionString: url.toString(), max: 8 });
 
   const one = async (sql: string, params: unknown[] = []): Promise<string> => (await pool.query<{ id: string }>(sql, params)).rows[0]?.id ?? '';
-  const tenantA = await one('INSERT INTO tenants (name, max_session_seconds) VALUES ($1, $2) RETURNING id', ['a', options.maxSessionSeconds ?? 3600]);
-  const tenantB = await one("INSERT INTO tenants (name) VALUES ('b') RETURNING id");
+  const tenantA = await one('INSERT INTO tenants (name, max_session_seconds, max_concurrent_sessions) VALUES ($1, $2, $3) RETURNING id', ['a', options.maxSessionSeconds ?? 3600, options.maxConcurrentSessions ?? 1000]);
+  const tenantB = await one("INSERT INTO tenants (name, max_concurrent_sessions) VALUES ('b', 1000) RETURNING id");
   const keyRow = (tenantId: string, prefix: string, scopes: Scope[]) =>
     one("INSERT INTO api_keys (tenant_id, key_prefix, key_hash, scopes) VALUES ($1, $2, '$argon2id$v=19$m=19456,t=2,p=1$test$test', $3) RETURNING id", [tenantId, prefix, scopes]);
   const principals = new Map<string, Principal>();
@@ -94,26 +100,31 @@ export async function createHarness(options: { queueTimeoutMs?: number; maxSessi
   principals.set(keys.aRead, { tenantId: tenantA, apiKeyId: await keyRow(tenantA, 'symb_a_r', ['sessions:read']), scopes: ['sessions:read'] });
   principals.set(keys.b, { tenantId: tenantB, apiKeyId: await keyRow(tenantB, 'symb_b_w', ['sessions:write', 'sessions:read']), scopes: ['sessions:write', 'sessions:read'] });
 
-  await recordHeartbeat(pool, {
-    nodeId: 'node-a',
-    url: 'http://node-a.internal:3000',
-    region: 'frankfurt',
-    playwrightVersion: '1.63.0',
-    chromiumVersion: '153.0.8010.12',
-    appVersion: '0.0.0',
-    slotsTotal: 64,
-    slotsFree: 64,
-    rssBytes: null,
-    limitBytes: null,
-  });
+  for (const n of options.nodes ?? [{ id: 'node-a', region: 'frankfurt', slotsTotal: 4096 }]) {
+    await recordHeartbeat(pool, {
+      nodeId: n.id,
+      url: `http://${n.id}.internal:3000`,
+      region: n.region,
+      playwrightVersion: '1.63.0',
+      chromiumVersion: '153.0.8010.12',
+      appVersion: '0.0.0',
+      slotsTotal: n.slotsTotal,
+      slotsFree: n.slotsTotal,
+      rssBytes: null,
+      limitBytes: null,
+    });
+  }
 
-  const state = { mode: 'ok' as LauncherMode, launched: [] as string[], released: [] as string[] };
+  const state = { mode: 'ok' as LauncherMode, launched: [] as string[], released: [] as string[], nodes: new Map<string, string>(), requests: new Map<string, LaunchRequest>() };
   const launcher: SessionLauncher = {
-    async launch({ sessionId }) {
+    async launch(request) {
+      const { sessionId } = request;
       state.launched.push(sessionId);
+      state.nodes.set(sessionId, request.nodeId);
+      state.requests.set(sessionId, request);
       if (state.mode === 'fail') return { ok: false, code: 'launch_failed' };
       if (state.mode === 'hang') return new Promise(() => undefined);
-      const outcome = await transitionSession(pool, { sessionId, to: 'running', reason: null, nodeId: 'node-a' });
+      const outcome = await transitionSession(pool, { sessionId, to: 'running', reason: null, nodeId: request.nodeId });
       return outcome.ok ? { ok: true } : { ok: false, code: 'launch_failed' };
     },
     async release(sessionId) {
@@ -136,6 +147,8 @@ export async function createHarness(options: { queueTimeoutMs?: number; maxSessi
     launcher,
     publicUrl: PUBLIC_URL,
     queueTimeoutMs: options.queueTimeoutMs ?? 2_000,
+    ...(options.queue === undefined ? {} : { queue: options.queue }),
+    queuePollMs: 25,
   };
   const app = await createGatewayApi(deps);
   await app.ready();
