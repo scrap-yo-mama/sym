@@ -873,10 +873,16 @@ importers:
       '@sym/contracts':
         specifier: workspace:*
         version: link:../../../../packages/contracts
+      playwright-core:
+        specifier: 'catalog:'
+        version: 1.63.0
     devDependencies:
       '@types/node':
         specifier: 'catalog:'
         version: 24.13.6
+      openapi-typescript:
+        specifier: 'catalog:'
+        version: 7.13.0(typescript@5.9.3)
       typescript:
         specifier: 'catalog:'
         version: 5.9.3
