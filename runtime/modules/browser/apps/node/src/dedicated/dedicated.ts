@@ -55,6 +55,8 @@ export type DedicatedTeardownSteps = {
   groupAlive: () => boolean;
   /** Détachement de la connexion interne du nœud (les clients tombent avec le processus). */
   disconnect: () => Promise<void>;
+  /** Faux : `sessions/{id}` reste pour l'hôte des sessions (tâche 1.7, étapes 5 et 6 de 04c § 3.2). Défaut : vrai. */
+  removeDir?: boolean;
 };
 
 /** Destruction ordonnée, idempotente une fois réussie ; un échec (processus survivant) peut être retenté. */
@@ -64,7 +66,7 @@ export function createDedicatedTeardown(steps: DedicatedTeardownSteps): () => Pr
   const run = async (): Promise<void> => {
     if (!(await steps.killGroup().catch(() => false))) await steps.killFallback().catch(() => undefined);
     await steps.disconnect().catch(() => undefined);
-    await rm(steps.dir.root, { recursive: true, force: true });
+    if (steps.removeDir ?? true) await rm(steps.dir.root, { recursive: true, force: true });
     if (steps.groupAlive()) throw new Error('destruction : processus Chromium encore vivants après SIGKILL');
   };
   return () => {
@@ -84,6 +86,11 @@ export type DedicatedLauncherOptions = PlaywrightLauncherOptions & {
   /** `SYMB_DATA_DIR` (chemin absolu). */
   dataDir: string;
   pollMs?: number;
+  /**
+   * Vrai (défaut) : `sessions/{id}` est supprimé avec le processus (pool seul, tâche 1.4). Faux : le nœud complet, où l'hôte
+   * des sessions (tâche 1.7) copie d'abord les objets demandés puis supprime le répertoire (04c § 3.2, étapes 5 et 6).
+   */
+  removeSessionDir?: boolean;
 };
 
 type LaunchServerOptions = NonNullable<Parameters<typeof chromium.launchServer>[0]>;
@@ -150,6 +157,7 @@ export function dedicatedLauncher(options: DedicatedLauncherOptions): BrowserLau
       disconnect: async () => {
         await browser?.close();
       },
+      removeDir: options.removeSessionDir ?? true,
     });
 
     let cdpEndpoint: string;

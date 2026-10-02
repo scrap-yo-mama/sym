@@ -11,9 +11,14 @@
 // - nœud isolé (battement perdu, 04b § 6) : sessions locales détruites sans écriture (la passerelle les a déclarées
 //   `failed` raison `node_lost`).
 import { endStateFor, SessionTimers, systemClock, type Clock, type EndReason, type ExtendOutcome, type SessionStore, type TransitionOutcome } from '@sym-browser/core';
-import type { BrowserPool, LeaseEndReason, PoolLease, SessionType } from '../pool/index.js';
+import type { LaunchArg } from '@sym/contracts/browser';
+import type { AcquireRequest, LeaseEndReason, PoolLease, SessionType } from '../pool/index.js';
+import type { SharedSessionInput } from './options.js';
 
-export type SessionPool = Pick<BrowserPool, 'acquire'>;
+/** Requête de bail : celle du pool, plus les options de contexte d'une session shared (hôte des sessions, tâche 1.7). */
+export type SessionAcquireRequest = AcquireRequest & { options?: SharedSessionInput };
+/** Pool de Chromium (1.1) ou hôte des sessions (1.7), qui l'enveloppe avec la destruction de 04c § 3.2. */
+export type SessionPool = { acquire(request: SessionAcquireRequest): Promise<Lease> };
 
 /** Marge du chien de garde du pool au-delà de la fin au plus tard : la fin normale vient des délais du superviseur. */
 const WATCHDOG_GRACE_MS = 5_000;
@@ -30,6 +35,10 @@ export type StartRequest = {
   /** Création + durée maximale du client : aucune prolongation ne va au-delà. */
   maxExpiresAt: number;
   idleTimeoutSeconds: number;
+  /** Liste fermée (04 § 3), sessions dedicated. */
+  launchArgs?: readonly LaunchArg[];
+  /** Options de contexte d'une session shared (04 § 3). */
+  options?: SharedSessionInput;
 };
 
 export type StartOutcome = { ok: true } | { ok: false; code: 'open_failed' | 'already_started' | 'not_found' | 'invalid_transition' };
@@ -86,6 +95,8 @@ export class SessionSupervisor {
           type: request.type,
           tenantId: request.tenantId,
           watchdogMs: Math.max(0, request.maxExpiresAt - this.#clock.now()) + this.#watchdogGraceMs,
+          ...(request.launchArgs === undefined ? {} : { launchArgs: request.launchArgs }),
+          ...(request.options === undefined ? {} : { options: request.options }),
         });
       } catch (error) {
         // Le pool a déjà rendu le slot réservé ; la session échoue (04 § 5 : `pending → failed`, lancement impossible).
