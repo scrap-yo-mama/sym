@@ -59,6 +59,8 @@ Contrat : `runtime/packages/contracts` (`@sym/contracts`, MIT, sous-chemin `brow
 - Observabilité (tâche 3.7) : `packages/core/src/observability/` (registre Prometheus écrit à la main comme SYM, catalogue des 16 métriques de 04d § 3.1, `/metrics` sous `Authorization: Bearer <SYMB_METRICS_TOKEN>`, fermé sans jeton ; journal pino masqué) ; passerelle : `GET /metrics` de l'API ; nœud : `apps/node/src/metrics/` (pont pool, superviseur, egress).
 - Docs (tâche 3.8) : `docs/fr` (tutoiement) et `docs/en`, mêmes pages ; `docs/*/reference/` générée par `pnpm --filter @sym-browser/module docs:reference` (jamais éditée à la main) ; démarrage rapide rejoué tel quel (non root, PostgreSQL) : `pnpm --filter @sym-browser/module test:quickstart` (`quickstart_replayed`). Python : blocs de code dans le Markdown seulement.
 
+- README (tâche 5.5) : `README.md` et `README.fr.md` (DA du README de SYM), bannière et badges SVG dans `docs/assets/` (palette et icône de `packages/ui`), page du site SYM dans `docs/site/{en,fr}/` ; test `tests/readme.unit.test.ts` (liens, DA, parité fr/en, exemples).
+
 ## Versions et dépendances
 
 - Playwright **1.63.0**, Chromium **153.0.8010.12** (`BROWSER_ENGINE` du contrat ; le test du nœud vérifie `playwright-core`).
