@@ -21,7 +21,7 @@ import { join } from 'node:path';
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from '@testcontainers/postgresql';
 import type { FastifyInstance } from 'fastify';
 import pg from 'pg';
-import { ApiKeyAuthenticator, ConnectTokens, MasterKey, newApiKey } from '../../packages/core/src/index.ts';
+import { ApiKeyAuthenticator, CAPACITY, ConnectTokens, MasterKey, newApiKey } from '../../packages/core/src/index.ts';
 import { createPgSessionStore, insertApiKey, migrateUp, pgApiKeyStore, recordHeartbeat } from '../../packages/db/src/index.ts';
 import { createGatewayApi, type SessionLauncher } from '../../apps/gateway/src/api/index.ts';
 import { dedicatedLauncher, sessionDir } from '../../apps/node/src/dedicated/index.ts';
@@ -175,8 +175,9 @@ export async function startAllMode(): Promise<AllModeInstance> {
       playwrightVersion: '1.63.0',
       chromiumVersion: '153.0.8010.12',
       appVersion: '0.0.0',
-      slotsTotal: 4,
-      slotsFree: 4,
+      // Unités de slot (0.6, 2.4) : slots du pool × SLOT_UNITS, comme le battement du nœud.
+      slotsTotal: 4 * CAPACITY.SLOT_UNITS,
+      slotsFree: 4 * CAPACITY.SLOT_UNITS,
       rssBytes: null,
       limitBytes: null,
     });

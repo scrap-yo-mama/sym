@@ -23,7 +23,7 @@ import { dedicatedLauncher, sessionDir } from '../../apps/node/src/dedicated/ind
 import { createEgressGuard, startSessionEgress, type SessionEgress } from '../../apps/node/src/egress/index.ts';
 import { BrowserPool, OwnedProcessGroups, PROVISIONAL_CAPACITY, type BrowserLauncher, type PoolLease } from '../../apps/node/src/pool/index.ts';
 import { createNodeRelay } from '../../apps/node/src/relay/index.ts';
-import { ApiKeyAuthenticator, ConnectTokens, MasterKey, newApiKey } from '../../packages/core/src/index.ts';
+import { ApiKeyAuthenticator, CAPACITY, ConnectTokens, MasterKey, newApiKey } from '../../packages/core/src/index.ts';
 import { insertApiKey, migrateUp, pgApiKeyStore, recordHeartbeat, transitionSession } from '../../packages/db/src/index.ts';
 
 export type QuickstartInstance = {
@@ -181,8 +181,9 @@ export async function startQuickstartInstance(options: QuickstartInstanceOptions
     playwrightVersion: '1.63.0',
     chromiumVersion: '153.0.8010.12',
     appVersion: '0.0.0',
-    slotsTotal: pool.slotsTotal,
-    slotsFree: pool.slotsTotal,
+    // Unités de slot (0.6, 2.4) : slots du pool × SLOT_UNITS, comme le battement du nœud.
+    slotsTotal: pool.slotsTotal * CAPACITY.SLOT_UNITS,
+    slotsFree: pool.slotsTotal * CAPACITY.SLOT_UNITS,
     rssBytes: null,
     limitBytes: null,
   });

@@ -13,7 +13,7 @@ const session = (over: Record<string, unknown> = {}) => ({
   id: ID,
   state: 'running',
   type: 'shared',
-  connectUrls: { cdp: null, playwright: `ws://127.0.0.1:1/v1/sessions/${ID}/playwright?token=symbt_x`, bidi: null },
+  connectUrls: { cdp: null, playwright: `ws://127.0.0.1:1/v1/sessions/${ID}/playwright?token=symt_x`, bidi: null },
   expiresAt: '2026-10-02T10:02:00.000Z',
   createdAt: '2026-10-02T10:00:00.000Z',
   metadata: {},

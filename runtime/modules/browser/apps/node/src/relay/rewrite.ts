@@ -66,24 +66,29 @@ function parse(text: string): Message | undefined {
 const paramsOf = (message: Message): Record<string, unknown> =>
   message.params !== null && typeof message.params === 'object' && !Array.isArray(message.params) ? { ...(message.params as Record<string, unknown>) } : {};
 
-const cdpError = (id: unknown, message: string): RewriteResult => ({ kind: 'reply', text: JSON.stringify({ id, error: { code: -32000, message } }), release: false });
+/** Réponse d'erreur au client ; en session aplatie, le `sessionId` est repris (sinon le client ne la rattache à rien). */
+const cdpError = (request: Message, message: string): RewriteResult => ({
+  kind: 'reply',
+  text: JSON.stringify({ id: request.id, ...(typeof request['sessionId'] === 'string' ? { sessionId: request['sessionId'] } : {}), error: { code: -32000, message } }),
+  release: false,
+});
 
 export function rewriteCdpMessage(text: string, ctx: RewriteContext): RewriteResult {
   const message = parse(text);
   if (!message) return { kind: 'reject', code: 1007, reason: 'message CDP illisible' };
   const method = message.method;
-  if (typeof method === 'string' && DENIED_CDP_METHODS.has(method)) return cdpError(message.id, `${method} refusé par SYM Browser`);
-  if (typeof method === 'string' && CDP_NAVIGATIONS.has(method) && !navigable(paramsOf(message)['url'])) return cdpError(message.id, 'schéma de navigation refusé par SYM Browser');
+  if (typeof method === 'string' && DENIED_CDP_METHODS.has(method)) return cdpError(message, `${method} refusé par SYM Browser`);
+  if (typeof method === 'string' && CDP_NAVIGATIONS.has(method) && !navigable(paramsOf(message)['url'])) return cdpError(message, 'schéma de navigation refusé par SYM Browser');
   if (method === 'DOM.setFileInputFiles') {
     const files = paramsOf(message)['files'];
     const downloadsDir = ctx.downloadsDir;
     if (!downloadsDir || !Array.isArray(files) || !files.every((file) => insideUploads(file, downloadsDir))) {
-      return cdpError(message.id, 'fichiers hors des envois de la session (POST /v1/sessions/{id}/uploads)');
+      return cdpError(message, 'fichiers hors des envois de la session (POST /v1/sessions/{id}/uploads)');
     }
     return { kind: 'forward', text: JSON.stringify(message) };
   }
   if (method === 'Target.createBrowserContext') {
-    if (!ctx.egressProxyUrl) return cdpError(message.id, 'egress de la session indisponible');
+    if (!ctx.egressProxyUrl) return cdpError(message, 'egress de la session indisponible');
     return { kind: 'forward', text: JSON.stringify({ ...message, params: { ...paramsOf(message), proxyServer: ctx.egressProxyUrl, proxyBypassList: LOOPBACK_ONLY } }) };
   }
   if (typeof method === 'string' && DOWNLOAD_METHODS.has(method)) {
@@ -94,7 +99,7 @@ export function rewriteCdpMessage(text: string, ctx: RewriteContext): RewriteRes
     }
     // Tout autre comportement (allow, allowAndName, default, inconnu) : dossier de la session, nommage par guid et
     // événements actifs (plafonds de téléchargement tenus par le nœud, BINV3).
-    if (!ctx.downloadsDir) return cdpError(message.id, 'dossier de téléchargements de la session indisponible');
+    if (!ctx.downloadsDir) return cdpError(message, 'dossier de téléchargements de la session indisponible');
     const forced = method === 'Browser.setDownloadBehavior' ? { behavior: 'allowAndName', downloadPath: ctx.downloadsDir, eventsEnabled: true } : { behavior: 'allow', downloadPath: ctx.downloadsDir };
     return { kind: 'forward', text: JSON.stringify({ ...message, params: { ...params, ...forced } }) };
   }

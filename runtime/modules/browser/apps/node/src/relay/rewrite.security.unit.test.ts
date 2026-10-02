@@ -89,6 +89,14 @@ describe('audit 5.3 S04 : téléchargements figés sur le dossier de la session'
   });
 });
 
+describe('audit 5.3 : refus en session aplatie', () => {
+  test('la réponse d’erreur reprend le sessionId de la commande (sinon le client CDP attend indéfiniment)', () => {
+    const result = rewriteCdpMessage(JSON.stringify({ id: 4, sessionId: 'S1', method: 'Page.navigate', params: { url: 'file:///etc/passwd' } }), ctx);
+    expect(result.kind).toBe('reply');
+    expect(JSON.parse((result as { text: string }).text)).toMatchObject({ id: 4, sessionId: 'S1', error: { code: -32000 } });
+  });
+});
+
 describe('audit 5.3 S05 : méthodes CDP dangereuses refusées', () => {
   test.each(['Tethering.bind', 'Tethering.unbind', 'Target.exposeDevToolsProtocol', 'Browser.crash', 'Browser.crashGpuProcess'])('%s : refusé', (method) => {
     refused(cdp(method, { port: 9222 }));

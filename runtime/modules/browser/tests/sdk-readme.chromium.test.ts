@@ -76,7 +76,7 @@ describe('SDK contre le mode all (vrais Chromium)', () => {
       await using session = await symb.sessions.create({ egress: { allowedHosts: [SITE_HOST], ports: [port] }, metadata: { job: 'cdp' } });
       id = session.id;
       expect(session.type).toBe('dedicated');
-      expect(session.connectUrls?.cdp).toMatch(/^ws:\/\/127\.0\.0\.1:\d+\/v1\/sessions\/.+\/cdp\?token=symbt_/);
+      expect(session.connectUrls?.cdp).toMatch(/^ws:\/\/127\.0\.0\.1:\d+\/v1\/sessions\/.+\/cdp\?token=symt_/);
 
       const cdp = await symb.connectCDP(session);
       const page = await cdp.contexts()[0]!.newPage();

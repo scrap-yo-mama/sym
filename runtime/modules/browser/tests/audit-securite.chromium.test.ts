@@ -9,7 +9,7 @@
 // Prérequis : Docker, utilisateur non root, `playwright install chromium`. Sécurité : Chromium arrêtés par le pool.
 import { chromium } from 'playwright-core';
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
-import { startAllMode, type AllModeInstance } from './helpers/all-mode.ts';
+import { SITE_HOST, startAllMode, type AllModeInstance } from './helpers/all-mode.ts';
 
 let instance: AllModeInstance;
 
@@ -27,7 +27,8 @@ async function create(type: 'shared' | 'dedicated'): Promise<Created> {
   const res = await fetch(`${instance.url}/v1/sessions`, {
     method: 'POST',
     headers: { authorization: `Bearer ${instance.apiKey}`, 'content-type': 'application/json' },
-    body: JSON.stringify({ type }),
+    // Politique d'egress de la session : le site de test, sur son port (hors 80 et 443).
+    body: JSON.stringify({ type, egress: { allowedHosts: [SITE_HOST], ports: [Number(new URL(instance.siteUrl).port)] } }),
   });
   expect(res.status).toBe(201);
   return (await res.json()) as Created;
