@@ -44,6 +44,12 @@ export async function startS3(): Promise<S3Fixture> {
     docker(['rm', '-f', id]);
   };
   try {
+    // L'image Bitnami lance un serveur provisoire (~5 s), le configure, l'arrête, puis lance le vrai : on attend ce dernier.
+    const deadline = Date.now() + 120_000;
+    while (!/MinIO setup finished/.test(docker(['logs', id]).stdout + docker(['logs', id]).stderr)) {
+      if (Date.now() > deadline) throw new Error('MinIO : configuration non terminée dans les 120 s');
+      await sleep(250);
+    }
     const port = docker(['port', id, '9000/tcp']).stdout.trim().split('\n')[0]?.split(':').at(-1);
     if (!port) throw new Error('MinIO : port publié introuvable');
     const endpoint = `http://127.0.0.1:${port}`;
@@ -56,11 +62,10 @@ export async function startS3(): Promise<S3Fixture> {
 }
 
 /**
- * Crée le seau, en réessayant tant que MinIO démarre. L'image Bitnami démarre un serveur provisoire, le configure puis le
- * redémarre : un premier succès peut précéder ce redémarrage (connexions coupées, « other side closed », sous charge). Le
- * serveur n'est tenu pour prêt qu'après `STABLE_PROBES` succès consécutifs (création idempotente du seau), espacés de 500 ms.
+ * Crée le seau, en réessayant tant que le serveur définitif démarre (`startS3` a déjà attendu la fin de la configuration de
+ * l'image Bitnami, dont le serveur provisoire coupait les connexions sous charge) ; deux succès consécutifs exigés.
  */
-const STABLE_PROBES = 6;
+const STABLE_PROBES = 2;
 
 export async function createBucket(store: S3BlobStore, deadlineMs = 120_000): Promise<void> {
   const deadline = Date.now() + deadlineMs;
