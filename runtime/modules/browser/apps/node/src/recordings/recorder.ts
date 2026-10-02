@@ -138,11 +138,14 @@ export class SessionRecorder {
     const videos: PageVideo[] = [];
     if (options.video) {
       const ffmpeg = this.#options.ffmpeg ?? ffmpegPath();
+      // Numéro pris au lancement, pas à la fin du démarrage : deux pages ouvertes ensemble ne partagent pas un fichier.
+      let started = 0;
       const startVideo = (page: Page): void => {
         if (stopping) return;
-        const started = PageVideo.start(context, page, { path: join(workDir, `video-${videos.length + 1}.webm`), ffmpeg, maxBytes: max });
+        started += 1;
+        const starting = PageVideo.start(context, page, { path: join(workDir, `video-${started}.webm`), ffmpeg, maxBytes: max });
         track(
-          started.then((video) => {
+          starting.then((video) => {
             videos.push(video);
             page.once('close', () => track(video.stop()));
           }),
