@@ -29,8 +29,9 @@ Contrat : `runtime/packages/contracts` (`@sym/contracts`, MIT, sous-chemin `brow
 ## Commandes (depuis `runtime/`)
 
 - CI locale du module, sous verrou de test : `pnpm --filter @sym-browser/module ci:local` (skill `browser-ci`).
-- Sans l'image Docker : `pnpm --filter @sym-browser/module ci:local --skip-image`.
+- Sans l'image Docker : `pnpm --filter @sym-browser/module ci:local --skip-image` ; sans les tests sur Chromium réels : `--skip-chromium` (à dire dans le compte rendu).
 - Schéma (Docker requis) : `pnpm --filter @sym-browser/db test` (PostgreSQL 16, `PG_VERSION` pour 17 ou 18) ; matrice 16/17/18 : `pnpm --filter @sym-browser/db test:matrix`. Migrations dans `packages/db/migrations/NNNN_nom/{up,down}.sql`, jamais modifiées après fusion (somme de contrôle).
+- Pool du nœud sur de vrais Chromium (non root, espaces de noms utilisateur, `playwright install chromium`) : `pnpm --filter @sym-browser/node test:chromium`.
 - Tests d'un paquet : `pnpm --filter @sym-browser/gateway test` ; tout le module : `pnpm --filter "./modules/browser/**" test`.
 - Types : `pnpm --filter "./modules/browser/**" typecheck` ; lint : `pnpm exec eslint modules/browser packages/contracts`.
 - `MASTER_KEY` de développement : `pnpm --filter @sym-browser/core keygen` (après build ; jamais committée ni journalisée). Vecteurs de SYM rejoués : `packages/core/vectors/sym-crypto.json`.
