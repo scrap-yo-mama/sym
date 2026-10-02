@@ -49,6 +49,7 @@ export async function prepareRuntime(config: BrowserConfig, deps: RuntimeDeps): 
   const expected = expectedSchemaVersion();
   const cleanups: Array<() => Promise<void> | void> = [];
   let stopped = false;
+  let startupDone = false;
 
   const db = new pg.Pool({ connectionString: config.databaseUrl.reveal(), max: 5, application_name: `sym-browser-${config.mode}`, connectionTimeoutMillis: 5000 });
   // Une connexion inactive coupée par le serveur ne doit pas faire tomber le process ; le message peut contenir l'URL.
@@ -87,7 +88,10 @@ export async function prepareRuntime(config: BrowserConfig, deps: RuntimeDeps): 
       run: async () => {
         try {
           const version = await currentSchemaVersion(db);
-          return version === expected ? 'ok' : version < expected ? 'en attente' : 'version inconnue';
+          if (version !== expected) return version < expected ? 'en attente' : 'version inconnue';
+          // Passerelle : prête seulement après sa tâche de démarrage (première clé comprise), sinon un client qui attend
+          // /readyz 200 pourrait recevoir 401 avec la clé d'échange.
+          return runsGateway && !startupDone ? 'en attente' : 'ok';
         } catch {
           return 'injoignable';
         }
@@ -105,6 +109,7 @@ export async function prepareRuntime(config: BrowserConfig, deps: RuntimeDeps): 
         const result = await ensureFirstApiKey(db, await bootstrapApiKeyRecord(config.bootstrapApiKey));
         log('info', 'bootstrap_api_key', { result });
       }
+      startupDone = true;
     });
     const sweeper = setInterval(() => {
       void sweepLostNodes(db).then(
