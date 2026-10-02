@@ -10,6 +10,7 @@ import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import { checkMitPackages, classifyForMit, evaluateMitPackage, parseLicenseReport } from '../scripts/check-licenses.ts';
 import { checkHistory as checkX6History, checkRepo as checkX6Index } from '../scripts/check-x6.ts';
+import { MIT_PACKAGES } from '../scripts/spdx-headers.ts';
 import { checkSubject, isBreaking } from '../scripts/release/conventional.ts';
 import { checkCiImageJob, checkFullHistoryJobs, checkImageNonRoot, checkReleaseWorkflow, checkRepo as checkGates, checkWorkflowSecurity } from '../scripts/release/gates.ts';
 import { checkTagMatchesPackage, imageReferences, planRelease, ReleaseTagError } from '../scripts/release/plan.ts';
@@ -523,6 +524,6 @@ describe('release : licences par paquet (D-10, 16 §1)', () => {
     expect(checkMitPackages(runtimeDir)).toEqual([]);
     // Un rapport de licences simulé avec une dépendance GPL fait échouer le contrôle réel.
     mkdirSync(join(tmpdir()), { recursive: true });
-    expect(checkMitPackages(runtimeDir, () => ({ 'GPL-2.0-only': [dep('zz_test_gpl')] }))).toHaveLength(2);
+    expect(checkMitPackages(runtimeDir, () => ({ 'GPL-2.0-only': [dep('zz_test_gpl')] }))).toHaveLength(MIT_PACKAGES.length);
   }, 60_000);
 });

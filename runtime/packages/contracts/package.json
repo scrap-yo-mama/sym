@@ -1,0 +1,29 @@
+{
+  "name": "@sym/contracts",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "license": "MIT",
+  "description": "Contrats partagés de SYM (ADR 23 § 3). Un sous-chemin `exports` par contrat ; `exports` fermés : aucun import interne. Aujourd'hui : `browser` seul (SYM Browser).",
+  "exports": {
+    "./browser": {
+      "types": "./dist/browser/index.d.ts",
+      "default": "./dist/browser/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc -p tsconfig.check.json",
+    "test": "vitest run"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "ajv": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}
