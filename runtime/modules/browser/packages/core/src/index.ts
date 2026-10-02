@@ -3,6 +3,7 @@
 // configuration et modes (0.4).
 // Tâche 0.4 : catalogue d'environnement, chargement validé, hôte de service (`/healthz`, `/readyz`, drainage).
 export * from './crypto/index.js';
+export * from './net/index.js';
 export {
   BROWSER_ENV_CATALOG,
   BROWSER_ENV_GROUPS,
