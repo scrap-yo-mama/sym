@@ -11,12 +11,19 @@
     "fixtures:down": "node fixtures/src/up.ts down",
     "fixtures:local": "node fixtures/src/main.ts local",
     "typecheck": "tsc -p tsconfig.json",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:chromium": "vitest run --config vitest.chromium.config.ts"
   },
   "devDependencies": {
+    "@browserbasehq/stagehand": "catalog:",
     "@types/node": "catalog:",
+    "@types/ws": "catalog:",
     "eslint": "catalog:",
+    "fastify": "catalog:",
+    "playwright-core": "catalog:",
     "typescript": "catalog:",
-    "vitest": "catalog:"
+    "vitest": "catalog:",
+    "ws": "catalog:",
+    "zod": "catalog:"
   }
 }

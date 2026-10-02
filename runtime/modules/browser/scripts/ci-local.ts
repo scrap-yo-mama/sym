@@ -44,6 +44,8 @@ const steps: Step[] = [
 // espaces de noms utilisateur autorisés (bac à sable) et Chromium de Playwright 1.63 installé (`playwright install chromium`).
 const skipChromium = process.argv.includes('--skip-chromium');
 if (!skipChromium) steps.push({ name: 'tests sur Chromium réels (pool et sessions shared du nœud)', cmd: ['pnpm', '--filter', '@sym-browser/node', 'test:chromium'] });
+// Tâche 2.3 : assert_cdp_client_compat de bout en bout (passerelle → nœud → Chromium dedicated sur son egress).
+if (!skipChromium) steps.push({ name: 'tests sur Chromium réels (relais WSS et clients CDP, bout en bout)', cmd: ['pnpm', '--filter', '@sym-browser/module', 'test:chromium'] });
 
 if (!process.argv.includes('--skip-image')) {
   steps.push(
