@@ -8,12 +8,12 @@ import { DslError } from '../dsl/errors.js';
 import { extractRecords, type ItemPolicy } from '../dsl/extract.js';
 import { queryValues } from '../dsl/jsonpath.js';
 import { parseJsonBounded, resolveLimits, type DslLimits } from '../dsl/limits.js';
-import { advancePagination, initialParam, resolveNextUrl, startPagination, type StopReason } from '../dsl/pagination.js';
+import { advancePagination, initialParam, resolveNextUrl, ScrollTracker, startPagination, type StopReason } from '../dsl/pagination.js';
 import type { DeclarativeSpec } from '../dsl/spec.js';
 import { renderRequest, type RenderedRequest, type TemplateContext } from '../dsl/template.js';
 import { classifyExchange, classifyTransportError, TransportRefusal, type ClassifyContext } from './classify.js';
 import { applyParamAt } from './params.js';
-import type { AccessCheck, ExecFailure, HttpExchange, RequestPacer, Transport } from './types.js';
+import type { AccessCheck, ExecFailure, HttpExchange, RequestPacer, ScrollTransport, Transport } from './types.js';
 
 export type DeclarativeRunOptions = {
   readonly spec: DeclarativeSpec;
@@ -35,6 +35,12 @@ export type DeclarativeRunOptions = {
    * même la cadence ; un refus arrête l'essai sans aucune requête vers le chemin. Le worker le fournit toujours.
    */
   readonly access?: AccessCheck;
+  /**
+   * Suite d'une pagination `infinite_scroll` : fait défiler la page déjà chargée par le transport (E3) et rend son DOM
+   * à jour. Absent (E1, E2 : pas de page à faire défiler), la pagination s'arrête après la première page (`unsupported`).
+   * Chaque défilement passe par le contrôle d'accès, la cadence et la garde de classification comme une requête.
+   */
+  readonly scroll?: ScrollTransport;
 };
 
 export type DeclarativeStop = StopReason | 'max_requests_per_run' | 'max_items';
@@ -131,7 +137,7 @@ export async function runDeclarative(options: DeclarativeRunOptions): Promise<De
   let last: HttpExchange | undefined;
   const failed = (failure: ExecFailure): DeclarativeRunResult => ({ ok: false, failure, pages, requests, ...(last === undefined ? {} : { evidence: boundedEvidence(last) }) });
 
-  const send = async (request: RenderedRequest): Promise<HttpExchange> => {
+  const send = async (request: RenderedRequest, via: Transport = transport): Promise<HttpExchange> => {
     last = undefined;
     if (options.maxRequests !== undefined && requests >= options.maxRequests) throw new RequestCapReached();
     signal.throwIfAborted();
@@ -146,7 +152,7 @@ export async function runDeclarative(options: DeclarativeRunOptions): Promise<De
     requests += 1;
     let exchange: HttpExchange;
     try {
-      exchange = await transport(request, signal);
+      exchange = await via(request, signal);
       last = exchange;
     } catch (error) {
       if (signal.aborted) throw error;
@@ -190,6 +196,10 @@ export async function runDeclarative(options: DeclarativeRunOptions): Promise<De
     let nextUrl: string | undefined;
     const records: Record<string, unknown>[] = [];
     let escalated = false;
+    /** `infinite_scroll` : la prochaine « page » est un défilement de la page chargée, pas une requête de plus. */
+    let scrolling = false;
+    const scrollSeen = new ScrollTracker();
+    const scrollVia: Transport | undefined = options.scroll === undefined ? undefined : (_request, sig) => options.scroll!(sig);
 
     for (;;) {
       ctx.page = { number: state.pages + 1, offset: state.received, ...(param === undefined ? {} : { value: param.value }), ...(state.cursor === null ? {} : { cursor: state.cursor }) };
@@ -199,7 +209,7 @@ export async function runDeclarative(options: DeclarativeRunOptions): Promise<De
 
       let exchange: HttpExchange;
       try {
-        exchange = await send(request);
+        exchange = await (scrolling && scrollVia !== undefined ? send(request, scrollVia) : send(request));
       } catch (error) {
         if (error instanceof RequestCapReached && pages > 0) return { ok: true, records, pages, requests, escalated, stop: 'max_requests_per_run', truncated: true };
         throw error;
@@ -213,13 +223,17 @@ export async function runDeclarative(options: DeclarativeRunOptions): Promise<De
         const detail = codes.includes('schema_mismatch') ? 'schema_mismatch' : (codes[0] ?? 'no_records');
         return failed({ failure_class: 'extraction', retryable: false, detail });
       }
-      const got = out.ok ? out.records : [];
+      // Le DOM d'un flux à défilement est cumulatif : seuls les enregistrements jamais vus sont de cette « page ».
+      const got = out.ok ? (pagination?.type === 'infinite_scroll' ? scrollSeen.fresh(out.records) : out.records) : [];
       escalated ||= out.ok && out.escalated;
       for (const r of got) records.push(r);
       if (records.length >= limits.maxItems) {
         records.length = limits.maxItems;
         return { ok: true, records, pages, requests, escalated, stop: 'max_items', truncated: true };
       }
+      // Défilement expiré sans rien apporter, réseau encore occupé : ce n'est pas la fin du flux (site lent), la sortie est
+      // tronquée et le signal `pagination_short` levé ; `scroll_timeout` ne compte pas parmi les fins naturelles (enquête).
+      if (scrolling && exchange.scrollTimedOut === true && got.length === 0) return { ok: true, records, pages, requests, escalated, stop: 'scroll_timeout', truncated: true };
       const document = tryParseJson(exchange.body, limits);
       const linkHeader = exchange.headers['link'] ?? (pagination?.type === 'next_link' && document === undefined ? htmlNextLink(exchange.body, limits) : undefined);
       const decision = advancePagination(
@@ -230,6 +244,14 @@ export async function runDeclarative(options: DeclarativeRunOptions): Promise<De
         maxPagesInput,
       );
       if (decision.done) return { ok: true, records, pages, requests, escalated, stop: decision.reason, truncated: false };
+      if (decision.scroll === true) {
+        // Pas de page à faire défiler (E1, E2) : la liste n'est pas lue au-delà de la première page (sortie tronquée : signal
+        // `pagination_short`, 04 §6).
+        if (scrollVia === undefined) return { ok: true, records, pages, requests, escalated, stop: 'unsupported', truncated: true };
+        scrolling = true;
+        nextUrl = undefined;
+        continue;
+      }
       if (decision.nextUrl !== undefined) {
         nextUrl = resolveNextUrl(decision.nextUrl, exchange.url, allowed);
       } else if (decision.param !== undefined) {

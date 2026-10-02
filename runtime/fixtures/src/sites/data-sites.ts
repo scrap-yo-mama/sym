@@ -315,7 +315,7 @@ const infiniteScroll: SiteFactory = (env) => {
         return json(200, { items, offset, done: offset + items.length >= products.length });
       }
       if (req.path === '/') {
-        return html(200, page('Flux zz_test', `<h1>Flux</h1><div id="feed">${products.slice(0, batch).map(card).join('')}</div><div id="sentinel" style="height:1px"></div><script>${script}</script>`));
+        return html(200, page('Flux zz_test', `<style>.feed-item{height:600px}</style><h1>Flux</h1><div id="feed">${products.slice(0, batch).map(card).join('')}</div><div id="sentinel" style="height:1px"></div><script>${script}</script>`));
       }
       return notFound();
     },

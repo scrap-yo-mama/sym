@@ -114,6 +114,9 @@ const apiRow = async (apiId: string) =>
       [apiId],
     )
   ).rows[0]!;
+/** Le worker ferme le run puis applique `run_stopped` (transition 3) : le statut de l'API suit la fin du run, il ne la précède pas. */
+const apiStatusSettled = (apiId: string, expected: Record<string, unknown>) =>
+  vi.waitFor(async () => expect(await apiRow(apiId)).toMatchObject(expected), { timeout: 10_000, interval: 50 });
 const runRow = async (runId: string) =>
   (await pool.query<{ state: string; failure_class: string | null; error_detail: string | null }>('SELECT state, failure_class, error_detail FROM runs WHERE id = $1', [runId])).rows[0]!;
 const eventsOf = (runId: string) => listInvestigationEvents(pool, { runId, ownerId: A });
@@ -299,7 +302,7 @@ describe('enquête en tunnel (04 §4 : reconnaissance « en tunnel si la session
     const apiId = await insertApi('zz_test_fix_tunnel_offline', { networkPolicy: { allow: ['tunnel'] } });
     const run = await investigate(apiId, { url: site.url(TUN, '/'), description: 'liste', auto_validate: true });
     expect(await runRow(run.id)).toMatchObject({ state: 'failed', failure_class: null, error_detail: 'tunnel_offline' });
-    expect(await apiRow(apiId)).toMatchObject({ status: 'action_requise', status_reason: 'tunnel_offline', investigation_phase: 'done' });
+    await apiStatusSettled(apiId, { status: 'action_requise', status_reason: 'tunnel_offline', investigation_phase: 'done' });
     expect(run.attempts).toEqual([]);
     expect(fake.requests).toBe(0);
     const kinds = (await eventsOf(run.id)).map((e) => e.kind);
@@ -316,7 +319,7 @@ describe('enquête en tunnel (04 §4 : reconnaissance « en tunnel si la session
     const apiId = await insertApi('zz_test_fix_tunnel_offline_trial', { networkPolicy: { allow: ['tunnel'] } });
     const run = await investigate(apiId, { url: site.url(TUN, '/'), description: 'liste', auto_validate: true });
     expect(await runRow(run.id)).toMatchObject({ state: 'failed', failure_class: null, error_detail: 'tunnel_offline' });
-    expect(await apiRow(apiId)).toMatchObject({ status: 'action_requise', status_reason: 'tunnel_offline', investigation_phase: 'done' });
+    await apiStatusSettled(apiId, { status: 'action_requise', status_reason: 'tunnel_offline', investigation_phase: 'done' });
     expect(run.attempts).toEqual([]);
     const finished = (await eventsOf(run.id)).find((e) => e.kind === 'investigation.finished')!.payload as { outcome: string; at: string };
     expect(finished).toMatchObject({ outcome: 'stopped', at: 'testing' });
@@ -349,7 +352,7 @@ describe('fins d’enquête : phase close et récit fermé', () => {
     const apiId = await insertApi('zz_test_fix_proxy_secret', { networkPolicy: { allow: ['dc_proxy'], proxy_ids: { dc_proxy: 'zz_test_dc_auth' } } });
     const run = await investigate(apiId, { url: site.url(TUN, '/'), description: 'liste', auto_validate: true });
     expect(await runRow(run.id)).toMatchObject({ state: 'failed', failure_class: null, error_detail: 'proxy_credentials_unavailable' });
-    expect(await apiRow(apiId)).toMatchObject({ status: 'action_requise', status_reason: 'proxy_not_configured', investigation_phase: 'done' });
+    await apiStatusSettled(apiId, { status: 'action_requise', status_reason: 'proxy_not_configured', investigation_phase: 'done' });
     expect((await eventsOf(run.id)).map((e) => e.kind).at(-1)).toBe('investigation.finished');
     expect(site.hits).toEqual([]);
   });

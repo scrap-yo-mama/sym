@@ -93,8 +93,17 @@ docker compose -f docker-compose.prod.yml up -d
   [Modèle de privilèges](#modèle-de-privilèges-de-limage)) ; **pas de `cap_drop` de `SETUID` ou `SETGID` ni de `user:`** sur
   le worker : sans démarrage en root avec ces deux capacités, le bac à sable ne peut pas changer d'utilisateur et le worker
   refuse de démarrer en production.
-- Coolify et Dokploy : importez `docker-compose.prod.yml`, définissez `MASTER_KEY`, `PUBLIC_URL`, `ADMIN_BOOTSTRAP_TOKEN`,
-  `POSTGRES_PASSWORD` dans l'interface (mêmes valeurs que `install.sh` génère), laissez le proxy de la plateforme faire le TLS.
+- **Profil seccomp du worker** : le fichier `deploy/seccomp-chromium.json` doit être placé à côté du fichier compose
+  (`security_opt: seccomp=./seccomp-chromium.json` du worker). Sans lui, le conteneur worker ne peut pas être créé ; sous le
+  profil seccomp par défaut de Docker, Chromium refuse de démarrer avec son bac à sable (« No usable sandbox! »). C'est le
+  profil par défaut de Docker 28.0.4 plus la création d'espaces de noms utilisateur ; n'utilisez ni `seccomp=unconfined` ni
+  `--no-sandbox`. Détails : [guide Docker Compose](../apps/docs/content/guides/docker-compose.md) ; risque résiduel :
+  [espaces de noms utilisateur](#risque-résiduel--espaces-de-noms-utilisateur).
+- Coolify et Dokploy : importez `docker-compose.prod.yml` **et placez `deploy/seccomp-chromium.json` à côté** (même dossier
+  que le fichier compose, sinon le worker ne peut pas être créé), définissez `MASTER_KEY`, `PUBLIC_URL`,
+  `ADMIN_BOOTSTRAP_TOKEN`, `POSTGRES_PASSWORD` dans l'interface (mêmes valeurs que `install.sh` génère), laissez le proxy de
+  la plateforme faire le TLS. Voir le [guide Docker Compose](../apps/docs/content/guides/docker-compose.md) (section
+  Coolify, Dokploy).
 
 Mettre à jour : `pg_dump`, changez `RUNTIME_IMAGE` (ou le tag du fichier), `docker compose … up -d`.
 
@@ -236,6 +245,23 @@ Atténuation recommandée en compose : `read_only: true` sur `server` et `worker
 Chromium, fichiers temporaires) ; plus rien de ce qu'écrirait l'uid 0 ne survit au redémarrage. Non posé par défaut :
 à éprouver sur votre hôte (voir `docker-compose.prod.yml`).
 
+### Risque résiduel : espaces de noms utilisateur
+
+Le profil seccomp du worker (`deploy/seccomp-chromium.json`, constat F-20261002-02, décision D-56) ajoute au profil par
+défaut de Docker une seule entrée, celle que recommande Playwright : `clone`, `unshare` et `setns` **sans filtre
+d'arguments**. Elle vaut pour tout le conteneur worker, **enfant du bac à sable compris** (uid 1500). Le profil par défaut
+de Docker refusait la création d'espaces de noms sans `CAP_SYS_ADMIN` ; désormais, un code natif évadé de l'isolat
+(isolated-vm puis le mode permission de Node franchis) peut créer un espace de noms utilisateur (`unshare -U`), où il
+détient toutes les capacités sur des objets qui lui sont propres. Il n'obtient aucun droit sur les fichiers, processus ou
+secrets du worker, mais atteint une surface du noyau (pare-feu nf_tables, montages, files de messages) que le profil par
+défaut fermait et sur laquelle reposent beaucoup d'élévations de privilèges locales. Ce risque (INV7) est accepté pour
+garder le bac à sable de Chromium, qui en a besoin ; `--no-sandbox`, `seccomp=unconfined` et `SYS_ADMIN` seraient pires.
+`pnpm test:image` en garde la trace : sous le profil livré, l'enfant du bac à sable crée un espace de noms utilisateur.
+Atténuation : un noyau hôte à jour. La restriction AppArmor des espaces de noms non privilégiés d'Ubuntu 23.10 et
+suivantes (`kernel.apparmor_restrict_unprivileged_userns`) n'est pas une atténuation éprouvée : la CI la lève pour lancer
+Chromium, et son effet avec le profil livré n'est pas vérifié (voir le statut de vérification). Durcissement envisagé : un filtre seccomp propre à
+l'enfant, posé par le lanceur avant l'exec de Node, qui refuserait `unshare`, `setns` et `clone` avec `CLONE_NEWUSER`.
+
 ## Statut de vérification
 
 Tâche 4.1 **livrée avec réserves** (au 2026-10-01). La recette 27 (installation à froid par un tiers) reste à jouer, et le
@@ -244,8 +270,8 @@ navigateur) est **à confirmer par la recette 4.4** : aucun n'a été mesuré.
 
 | Cible | Vérifié | Comment | Reste |
 |---|---|---|---|
-| Docker Compose | `/api/ready` = 200 sur une base vierge, assistant (`POST /api/setup` 201 puis 404), `runtime doctor`, bac à sable isolé, arrêt propre | Image construite en local, `install.sh` puis `up -d`, sur la machine de développement (Docker Desktop) | Réserve MCP et réserve console (ci-dessous) |
-| Render | `render.yaml` conforme aux invariants (tests statiques) et au schéma officiel de Render au 2026-10-01 (schéma `render.com/schema/render.yaml.json`, sha256 57aa0a1ff9c3, ajv 2020-12) ; bac à sable sous le régime du conteneur Render (`NoNewPrivs: 1`, capacités CHOWN, DAC_OVERRIDE, FOWNER, SETGID, SETUID, SYS_CHROOT relevées sur Render le 2026-10-01, constat F-20261001-R01) : worker, `RUNTIME_MODE=all`, `runtime migrate`, arrêt propre | Tests statiques ; le régime de Render est reproduit sur l'image construite (`pnpm test:image`, joué par `pnpm ci:local`) | Déploiement réel (GO) : bouton « Deploy to Render » (dépôt public), `CREATE ROLE` sur la base gérée, MCP |
+| Docker Compose | `/api/ready` = 200 sur une base vierge, assistant (`POST /api/setup` 201 puis 404), `runtime doctor`, bac à sable isolé, arrêt propre | Image construite en local, `install.sh` puis `up -d`, sur la machine de développement (Docker Desktop) | Réserve MCP et réserve console (ci-dessous) ; hôte Ubuntu 23.10+ aux réglages par défaut non vérifié : la CI lève `kernel.apparmor_restrict_unprivileged_userns` (=0) sur son runner, le profil seccomp seul n'y est pas éprouvé ([guide Docker Compose](../apps/docs/content/guides/docker-compose.md)) |
+| Render | `render.yaml` conforme aux invariants (tests statiques) et au schéma officiel de Render au 2026-10-01 (schéma `render.com/schema/render.yaml.json`, sha256 57aa0a1ff9c3, ajv 2020-12) ; bac à sable sous le régime du conteneur Render (`NoNewPrivs: 1`, capacités CHOWN, DAC_OVERRIDE, FOWNER, SETGID, SETUID, SYS_CHROOT relevées sur Render le 2026-10-01, constat F-20261001-R01) : worker, `RUNTIME_MODE=all`, `runtime migrate`, arrêt propre | Tests statiques ; le régime de Render est reproduit sur l'image construite (`pnpm test:image`, joué par `pnpm ci:local`) | Déploiement réel (GO) : bouton « Deploy to Render » (dépôt public), `CREATE ROLE` sur la base gérée, MCP ; **seccomp réel de Render non vérifié** : le cas Render simulé applique le profil livré `deploy/seccomp-chromium.json`, que Render ne pose pas forcément ; sous un profil plus strict, Chromium refuserait de démarrer (« No usable sandbox! ») : à contrôler sur l'instance zz-test (D-57) |
 | Railway | Valeur générée de `MASTER_KEY` valide à chaque tirage, variables au catalogue | Tests statiques | Projet réel (compte, plan Hobby) |
 | Heroku | Syntaxe des Dockerfile, release phase `runtime migrate`, `run` explicite (web, worker) | Tests statiques ; le point d'entrée est exercé hors image | Déploiement réel ; démarrage des dynos et release phase avec l'ENTRYPOINT de l'image (entrypoint.sh, qui lance tini ; sans CMD) non observés sur Heroku ; `CREATE ROLE` sur Heroku Postgres ; uid du dyno (le bac à sable exige un démarrage en root ; sous un uid imposé, le worker refuse de démarrer) |
 
