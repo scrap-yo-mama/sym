@@ -11,7 +11,7 @@ import { generateMasterKey, MasterKey, PERSISTENCE_DEFAULTS, type JobQueue, type
 import pg from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'vitest';
 import { createTestDatabase, type TestDatabase } from '../../../tests/helpers/pg.js';
-import { migrateUp } from './migrate.js';
+import { loadMigrations, migrateDown, migrateUp } from './migrate.js';
 import { applyStatusAndNotify, finishRunAndNotify } from './notify.js';
 import {
   PERSISTENCE_QUEUE,
@@ -397,6 +397,17 @@ describe('assert_persistence_schedule_and_caps', () => {
     clock += HOUR;
     expect((await tickLaunched(apis[1]!)).attempt).toBe(1);
     expect(await runPersistenceAttempt(pool, ctx, apis[2]!)).toMatchObject({ kind: 'deferred', reason: 'domain_slot' });
+  });
+});
+
+describe('migration 0018_persistence_mode', () => {
+  test('aller-retour down/up : colonnes et tables retirées puis rendues', async () => {
+    const has = async () => (await pool.query("SELECT to_regclass('public.api_persistence') AS p, to_regclass('public.persistence_domain_slots') AS d")).rows[0];
+    await migrateDown({ connectionString: tdb.url, steps: loadMigrations().filter((m) => m.version >= 18).length });
+    expect(await has()).toEqual({ p: null, d: null });
+    expect((await pool.query("SELECT 1 FROM information_schema.columns WHERE table_name = 'apis' AND column_name IN ('persistence_mode', 'persistence_budget_usd')")).rowCount).toBe(0);
+    await migrateUp({ connectionString: tdb.url });
+    expect(await has()).toEqual({ p: 'api_persistence', d: 'persistence_domain_slots' });
   });
 });
 
