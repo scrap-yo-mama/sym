@@ -120,7 +120,8 @@ CREATE POLICY instance_read ON rule_files FOR SELECT TO runtime_app
 CREATE POLICY instance_admin_write ON rule_files FOR ALL TO runtime_app
   USING (visibility = 'instance' AND current_setting('app.role', true) IN ('admin', 'owner') AND app_current_user_id() IS NOT NULL)
   WITH CHECK (visibility = 'instance' AND current_setting('app.role', true) IN ('admin', 'owner') AND app_current_user_id() IS NOT NULL);
-GRANT SELECT, INSERT, UPDATE ON rule_files TO runtime_app;
+-- DELETE : le propriétaire efface son fichier privé (RLS) ; une version encore citée par une source le retient (clé étrangère).
+GRANT SELECT, INSERT, UPDATE, DELETE ON rule_files TO runtime_app;
 
 ALTER TABLE rule_file_versions ENABLE ROW LEVEL SECURITY;
 CREATE POLICY via_file ON rule_file_versions FOR SELECT TO runtime_app
@@ -136,7 +137,7 @@ GRANT SELECT, INSERT, UPDATE ON rule_file_versions TO runtime_app;
 ALTER TABLE strategy_version_rules ENABLE ROW LEVEL SECURITY;
 CREATE POLICY owner_isolation ON strategy_version_rules FOR ALL TO runtime_app
   USING (owner_id = app_current_user_id()) WITH CHECK (owner_id = app_current_user_id());
-GRANT SELECT, INSERT, DELETE ON strategy_version_rules TO runtime_app;
+GRANT SELECT, INSERT, UPDATE, DELETE ON strategy_version_rules TO runtime_app;
 
 -- Administration (18 §4.8, INV12) : nombre d'API d'autrui dont la version courante utilise une règle, sans api_id ni slug.
 CREATE VIEW admin_rule_usage WITH (security_barrier) AS
@@ -146,15 +147,16 @@ CREATE VIEW admin_rule_usage WITH (security_barrier) AS
   GROUP BY s.rule_file_id;
 GRANT SELECT ON admin_rule_usage TO runtime_app;
 
--- Politique par défaut (18 §4.2) : règle partagée d'instance, origine seed.
+-- Politique par défaut (18 §4.2) : règle partagée d'instance, origine seed. Identifiant et dates fixes : la migration est
+-- rejouable à l'identique (aller-retour up, down, up).
 WITH f AS (
-  INSERT INTO rule_files (owner_id, kind, name, description, applies_to, visibility, current_version)
-  VALUES (NULL, 'rule', 'escalade-par-defaut', 'Politique par défaut « du moins cher au plus cher » (04 §3.3) ; ordre, élagages et arrêts exécutés par le code.', '{*}', 'instance', 1)
+  INSERT INTO rule_files (id, owner_id, kind, name, description, applies_to, visibility, current_version, created_at, updated_at)
+  VALUES ('00000000-0000-0000-0000-000000000218', NULL, 'rule', 'escalade-par-defaut', 'Politique par défaut « du moins cher au plus cher » (04 §3.3) ; ordre, élagages et arrêts exécutés par le code.', '{*}', 'instance', 1, '2026-10-01T00:00:00Z', '2026-10-01T00:00:00Z')
   RETURNING id
 )
-INSERT INTO rule_file_versions (rule_file_id, version, content, sha256, description, applies_to, author_id, origin)
+INSERT INTO rule_file_versions (rule_file_id, version, content, sha256, description, applies_to, author_id, origin, created_at)
 SELECT f.id, 1, c.content, encode(sha256(convert_to(c.content, 'UTF8')), 'hex'),
-  'Politique par défaut « du moins cher au plus cher » (04 §3.3) ; ordre, élagages et arrêts exécutés par le code.', '{*}', NULL, 'seed'
+  'Politique par défaut « du moins cher au plus cher » (04 §3.3) ; ordre, élagages et arrêts exécutés par le code.', '{*}', NULL, 'seed', '2026-10-01T00:00:00Z'
 FROM f, (SELECT $seed$---
 name: escalade-par-defaut
 description: Politique par défaut « du moins cher au plus cher » (04 §3.3) ; ordre, élagages et arrêts exécutés par le code.

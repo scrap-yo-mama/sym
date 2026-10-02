@@ -53,6 +53,11 @@ beforeAll(async () => {
       `INSERT INTO run_rejected_items (run_id, api_id, owner_id, total_rejected, by_reason, sample) VALUES ($1, $2, $3, 1, '[{"keyword":"type","instance_path":"/x","count":1}]', '[{"x":"[masqué]"}]')`,
       [run, api, A],
     );
+    // Règles Markdown (2.10, 0018) : fichier privé de A et source d'une version de A.
+    const rule = (await c.query<{ id: string }>("INSERT INTO rule_files (owner_id, kind, name, description, applies_to, current_version) VALUES ($1, 'rule', 'zz-test-a', 'zz', '{*}', 1) RETURNING id", [A])).rows[0]!.id;
+    const content = '---\nname: zz-test-a\n---\nzz\n';
+    await c.query("INSERT INTO rule_file_versions (rule_file_id, version, content, sha256, description, applies_to, origin) VALUES ($1, 1, $2, encode(sha256(convert_to($2, 'UTF8')), 'hex'), 'zz', '{*}', 'ui')", [rule, content]);
+    await c.query("INSERT INTO strategy_version_rules (api_id, strategy_version, owner_id, rule_file_id, rule_version, sha256, level, loaded) SELECT $1, 1, $2, $3, 1, sha256, 'domain', 'injected' FROM rule_file_versions WHERE rule_file_id = $3", [api, A, rule]);
     await c.query("INSERT INTO status_events (api_id, owner_id, to_status) VALUES ($1, $2, 'sain')", [api, A]);
     const ds = (await c.query<{ id: string }>('INSERT INTO datasets (api_id, run_id, owner_id) VALUES ($1, $2, $3) RETURNING id', [api, run, A])).rows[0]!.id;
     await c.query("INSERT INTO dataset_items (dataset_id, seq, owner_id, item, size_bytes) VALUES ($1, 1, $2, '{\"x\": 1}', 8)", [ds, A]);
