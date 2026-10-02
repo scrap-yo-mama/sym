@@ -75,7 +75,7 @@ export function goBlockers(inputs: GoInputs): { blockers: string[]; manual: stri
  * Retire les commentaires (`// …`, `/* … *\/`) d'un fichier de test en gardant les chaînes intactes (une adresse `https://…` ou un
  * motif `**\/*.ts` dans une chaîne n'ouvre pas de commentaire) : une déclaration commentée n'est pas un test.
  */
-export function stripComments(text: string): string {
+function stripComments(text: string): string {
   let out = '';
   let mode: 'code' | '"' | "'" | '`' = 'code';
   /** Profondeur des accolades de chaque `${ … }` ouvert dans un gabarit. */

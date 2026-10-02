@@ -7,7 +7,7 @@ import lighthouse from 'lighthouse';
 import { chromium } from 'playwright-core';
 import type { LighthouseCategories } from './checks.ts';
 
-export const LIGHTHOUSE_CATEGORIES = ['performance', 'accessibility', 'seo'] as const;
+const LIGHTHOUSE_CATEGORIES = ['performance', 'accessibility', 'seo'] as const;
 
 export type LighthouseRun = {
   url: string;

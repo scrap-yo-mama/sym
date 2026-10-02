@@ -62,7 +62,7 @@ async function instrument(context: BrowserContext, sinks: { storage: string[]; v
 }
 
 /** Inventaire du stockage de la page, toutes API confondues (stockage local et de session, IndexedDB, Cache, service workers). */
-export async function snapshotStorage(page: Page): Promise<string[]> {
+async function snapshotStorage(page: Page): Promise<string[]> {
   return page.evaluate(async () => {
     const found: string[] = [];
     for (const name of ['localStorage', 'sessionStorage'] as const) {
