@@ -14,6 +14,7 @@ export * from './datasets.js';
 export * from './health.js';
 export * from './investigation-events.js';
 export * from './investigations.js';
+export * from './portability.js';
 export * from './extension.js';
 export * from './migrate.js';
 export * from './ops/index.js';

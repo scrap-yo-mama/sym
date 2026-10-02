@@ -31,4 +31,5 @@ export * from './observability/index.js';
 export * from './privacy/index.js';
 export type * from './sandbox/index.js';
 export * from './version.js';
+export * from './portability/index.js';
 export * from './config/env-catalog.js';

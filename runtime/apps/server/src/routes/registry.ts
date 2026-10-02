@@ -152,6 +152,10 @@ export const ROUTES: readonly RouteSpec[] = [
   { method: 'GET', url: '/api/apis/:slug/versions/:version/diff', auth: 'session_or_key', scope: 'apis:read', permission: 'apis:read', resource: { type: 'api', kind: 'item' } },
   { method: 'POST', url: '/api/apis/:slug/versions/:version/revert', auth: 'session_or_key', scope: 'apis:write', permission: 'apis:update', resource: { type: 'api', kind: 'item' } },
   { method: 'GET', url: '/api/apis/:slug/status-events', auth: 'session_or_key', scope: 'apis:read', permission: 'apis:read', resource: { type: 'api', kind: 'item' } },
+  // Portabilité (tâche 3.12, 16 § 6) : export (propriétaire seulement), import (repasse par l'enquête), OpenAPI par API.
+  { method: 'GET', url: '/api/apis/:slug/export', auth: 'session_or_key', scope: 'apis:read', permission: 'apis:read', resource: { type: 'api', kind: 'item' } },
+  { method: 'POST', url: '/api/apis/import', auth: 'session_or_key', scope: 'apis:write', permission: 'apis:create' },
+  { method: 'GET', url: '/api/apis/:slug/openapi.json', auth: 'session_or_key', scope: 'apis:read', permission: 'apis:read', resource: { type: 'api', kind: 'item' } },
   { method: 'GET', url: '/api/apis/:slug/schedules', auth: 'session_or_key', scope: 'apis:read', permission: 'schedules:manage', resource: { type: 'api', kind: 'item' } },
   { method: 'POST', url: '/api/apis/:slug/schedules', auth: 'session_or_key', scope: 'schedules:write', permission: 'schedules:manage', resource: { type: 'api', kind: 'item' } },
   { method: 'GET', url: '/api/apis/:slug/schedules/:id', auth: 'session_or_key', scope: 'apis:read', permission: 'schedules:manage', resource: { type: 'schedule', kind: 'item' } },

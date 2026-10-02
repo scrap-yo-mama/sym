@@ -1422,6 +1422,28 @@ describe('droits des personnes (17 § 6) et appairage (07 § 1)', () => {
   });
 });
 
+// Portabilité (tâche 3.12) : contrat de l'export, de l'aperçu d'import et de l'OpenAPI par API. Les cas détaillés
+// (assert_export_no_secret, import par l'enquête, modèles) sont dans portability.integration.test.ts.
+describe('portabilité (3.12) : export, aperçu d’import, OpenAPI par API au contrat', () => {
+  test('GET export → POST import (aperçu, rien d’écrit) → GET openapi.json', async () => {
+    const seeded = await seedApi(srv.db.url, a.user.id);
+    await withClient(srv.db.url, (c) =>
+      c.query('UPDATE apis SET investigation = $2::jsonb, input_schema = $3::jsonb WHERE id = $1', [
+        seeded.id,
+        JSON.stringify({ request: { url: 'https://zz-test-port.example/liste', description: 'zz_test liste', auto_validate: false, budget_usd: 1, timeout_s: 600 }, spent_usd: 0, elapsed_ms: 0 }),
+        JSON.stringify({ type: 'object', additionalProperties: false, properties: {} }),
+      ]),
+    );
+    const exported = await api(a, 'GET', `/api/apis/${seeded.slug}/export`, '/api/apis/{slug}/export');
+    expect(exported.status).toBe(200);
+    const apis = await count('SELECT count(*) FROM apis');
+    const preview = await api(a, 'POST', '/api/apis/import', '/api/apis/import', exported.body);
+    expect(preview).toMatchObject({ status: 200, body: { preview: true, ignored_fields: [] } });
+    expect(await count('SELECT count(*) FROM apis')).toBe(apis);
+    expect((await api(a, 'GET', `/api/apis/${seeded.slug}/openapi.json`, '/api/apis/{slug}/openapi.json')).status).toBe(200);
+  });
+});
+
 describe('assert_rest_endpoints_contract : chaque endpoint livré par 3.1 a des réponses contrôlées au contrat', () => {
   test('couverture', () => {
     // Routes livrées par 3.1 : le bloc du registre qui commence à GET /api/openapi.json (aucune liste à tenir à la main).

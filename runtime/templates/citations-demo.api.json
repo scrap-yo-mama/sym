@@ -1,0 +1,158 @@
+{
+  "api": {
+    "alert_targets": [],
+    "budget_daily_usd": 5,
+    "contains_personal_data": false,
+    "description": "Citations du site de démonstration quotes.toscrape.com, avec leurs étiquettes",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "max_pages": {
+          "description": "Nombre maximal de pages lues par run (une page par requête). La pagination s’arrête plus tôt quand le site n’a plus de page suivante.",
+          "maximum": 50,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "legal_basis": null,
+    "max_cost_usd": 0.5,
+    "network_policy": {
+      "allow": [
+        "direct"
+      ]
+    },
+    "output_columns": [
+      "text",
+      "tags"
+    ],
+    "output_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "tags": {
+          "description": "Étiquettes de la citation",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "text": {
+          "description": "Texte de la citation",
+          "type": "string"
+        }
+      },
+      "required": [
+        "text"
+      ],
+      "type": "object"
+    },
+    "purpose": "Modèle de démonstration : site conçu pour l’apprentissage de l’extraction de données",
+    "slug": "citations-demo",
+    "source_url": "https://quotes.toscrape.com/scroll",
+    "views": {}
+  },
+  "exported_at": "2026-10-02T00:00:00.000Z",
+  "fixtures": {
+    "items": [
+      {
+        "tags": [
+          "zz",
+          "exemple"
+        ],
+        "text": "Zz : une citation synthétique pour les tests."
+      },
+      {
+        "tags": [],
+        "text": "Zz : une seconde citation, sans auteur ni donnée réelle."
+      }
+    ]
+  },
+  "format": "scrapyomama.api",
+  "format_version": "1.0",
+  "history": [],
+  "integrity": {
+    "sha256": "2233bca75ae382697fa99b79a1bd5eb4cef9109e5991b43bd5c810d76769c880"
+  },
+  "min_runtime_version": "0.0.0",
+  "schedules": [
+    {
+      "cron": "0 6 * * 1",
+      "enabled": false,
+      "input": {
+        "max_pages": 2
+      },
+      "missed": "once",
+      "overlap": "skip",
+      "rules": {},
+      "timezone": "UTC"
+    }
+  ],
+  "strategy": {
+    "est_cost_usd": null,
+    "execution": "fetch",
+    "network": "direct",
+    "spec": {
+      "fields": {
+        "tags": {
+          "path": "$.tags",
+          "type": "array"
+        },
+        "text": {
+          "ops": [
+            "trim"
+          ],
+          "path": "$.text",
+          "required": true,
+          "type": "string"
+        }
+      },
+      "kind": "declarative",
+      "limits": {
+        "max_response_bytes": 5000000,
+        "timeout_ms": 15000
+      },
+      "pagination": {
+        "limits": {
+          "hard_max_pages": 50,
+          "max_pages_input": "input.max_pages"
+        },
+        "param": "url.query.page",
+        "start": 1,
+        "stop": [
+          {
+            "path": "$.has_next",
+            "value": false,
+            "when": "path_equals"
+          },
+          {
+            "when": "records_empty"
+          }
+        ],
+        "type": "page_param"
+      },
+      "request": {
+        "allowed_hosts": [
+          "quotes.toscrape.com"
+        ],
+        "method": "GET",
+        "params": [
+          {
+            "at": "url.query.page",
+            "role": "pagination"
+          }
+        ],
+        "url": "https://quotes.toscrape.com/api/quotes?page=1"
+      },
+      "schema_version": 1,
+      "sources": [
+        {
+          "format": "json",
+          "from": "response",
+          "id": "api",
+          "records": "$.quotes[*]"
+        }
+      ]
+    }
+  }
+}

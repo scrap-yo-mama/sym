@@ -118,7 +118,7 @@ export function waitSecondsOf(ctx: ServerContext, ...candidates: (number | undef
 export const RESPONSIBLE_USE_VERSION = '2026-10-01';
 
 /** L'utilisateur a coché « j'ai lu » pour la version courante de la page « Usage responsable ». */
-async function responsibleUseAcked(ctx: ServerContext, userId: string): Promise<boolean> {
+export async function responsibleUseAcked(ctx: ServerContext, userId: string): Promise<boolean> {
   const { rowCount } = await ctx.pool.query('SELECT 1 FROM responsible_use_acks WHERE user_id = $1 AND version = $2', [userId, RESPONSIBLE_USE_VERSION]);
   return (rowCount ?? 0) > 0;
 }

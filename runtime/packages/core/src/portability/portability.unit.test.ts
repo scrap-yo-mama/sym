@@ -121,7 +121,7 @@ describe('format portable (16 § 6)', () => {
     const out = parse(doc);
     expect(out).toMatchObject({ ok: true });
     if (!out.ok) throw new Error('attendu ok');
-    expect(out.ignored.sort()).toEqual(['$.api.cookies', '$.schedules[0].webhook_secret', '$.zz_extra']);
+    expect([...out.ignored].sort()).toEqual(['$.api.cookies', '$.schedules[0].webhook_secret', '$.zz_extra']);
     expect(JSON.stringify(out.export)).not.toContain('SECRET');
     expect(JSON.stringify(out.export)).not.toContain('whsec_zz');
   });
@@ -137,6 +137,12 @@ describe('format portable (16 § 6)', () => {
     expect(parse(sealExport(draft({ format_version: '1.7' })))).toMatchObject({ ok: true });
     expect(parse(sealExport(draft({ min_runtime_version: '9.0.0' })), '0.1.0')).toMatchObject({ ok: false, code: 'runtime_too_old' });
     expect(parse('{}')).toMatchObject({ ok: false, code: 'invalid_export' });
+    expect(parse({ format: API_EXPORT_FORMAT })).toMatchObject({ ok: false, code: 'invalid_export' });
+    // Anti-affectation de masse (08b § 4, cas 4) : identité, propriété, état ou session ne sont pas ignorés, ils sont refusés.
+    for (const key of ['owner_id', 'user_id', 'status', 'server_use_allowed', 'requires_session']) {
+      expect(parse({ ...sealed, [key]: 'zz' }), key).toMatchObject({ ok: false, code: 'invalid_export' });
+      expect(parse({ ...sealed, api: { ...sealed.api, [key]: 'zz' } }), `api.${key}`).toMatchObject({ ok: false, code: 'invalid_export' });
+    }
     expect(parse(sealExport({ ...draft(), api: { ...draft().api, description: '' } }))).toMatchObject({ ok: false, code: 'invalid_export' });
   });
 

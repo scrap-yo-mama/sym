@@ -39,13 +39,26 @@ export type InvestigationState = {
   /** Ordre déclaré des propriétés de premier niveau (jsonb ne garde pas l'ordre des clés d'un objet ; un tableau, si). */
   readonly proposed_columns?: readonly string[];
   readonly validated_columns?: readonly string[];
-  readonly validated_by?: 'auto' | 'user';
+  readonly validated_by?: 'auto' | 'user' | 'import';
+  /**
+   * Import (tâche 3.12, 16 § 6) : stratégie déclarative et schéma d'entrée venus du fichier. Après l'étape 0, l'enquête
+   * essaie CETTE stratégie (aucune reconnaissance ni appel LLM) ; la version retenue porte `created_by = import`.
+   */
+  readonly imported?: ImportedStrategy;
   /** Coût cumulé de l'enquête (LLM d'enquête et essais de tous ses runs). */
   readonly spent_usd: number;
   /** Durée active cumulée (hors attente de la validation). */
   readonly elapsed_ms: number;
   /** Niveaux d'exécution retirés du plan d'essais par l'appelant (`exclude_executions`, 06 § 2, 3.1) : jamais un ajout. */
   readonly excluded_executions?: readonly Execution[];
+};
+
+/** Stratégie d'un export relu (`@runtime/core` `parseApiExport`) : E1-E3, hors tunnel, sans session. */
+export type ImportedStrategy = {
+  readonly execution: Execution;
+  readonly network: Network;
+  readonly spec: Record<string, unknown>;
+  readonly input_schema: Record<string, unknown>;
 };
 
 /**
@@ -173,9 +186,23 @@ export async function startInvestigation(
     request: Parameters<typeof normalizeInvestigationRequest>[0];
     exampleOutput?: unknown;
     excludeExecutions?: readonly string[];
+    /**
+     * Import (3.12) : schéma de sortie validé par le fichier (contrôlé, aucun `$ref` distant) et, s'il y en a une, la
+     * stratégie importée. L'enquête entre quand même au stade `access_check` : rien n'est essayé sans rapport d'accès.
+     */
+    imported?: { outputSchema: Record<string, unknown>; outputColumns?: readonly string[]; strategy: ImportedStrategy | null };
   },
 ): Promise<{ runId: string; jobId: string }> {
   const request = normalizeInvestigationRequest(input.request);
+  if (input.imported !== undefined) {
+    try {
+      assertSchemaAcceptable(input.imported.outputSchema);
+      if (input.imported.strategy !== null) assertInputSchema(input.imported.strategy.input_schema);
+    } catch (error) {
+      if (error instanceof SchemaError) throw new InvestigationStateError('invalid_schema', error.message);
+      throw error;
+    }
+  }
   const excluded = checkExcluded(input.excludeExecutions);
   const locked = await tx.query<{ status: string }>('SELECT status FROM apis WHERE id = $1 AND owner_id = $2 FOR UPDATE', [input.apiId, input.ownerId]);
   if (locked.rowCount !== 1) throw new InvestigationStateError('api_not_found', 'API introuvable pour ce propriétaire');
@@ -187,7 +214,21 @@ export async function startInvestigation(
     [input.apiId],
   );
   if ((active.rowCount ?? 0) > 0) throw new InvestigationStateError('investigation_in_progress', 'une enquête est déjà en file ou en cours sur cette API');
-  const state: InvestigationState = { request, spent_usd: 0, elapsed_ms: 0, ...(excluded === undefined ? {} : { excluded_executions: excluded }) };
+  const imported = input.imported;
+  const state: InvestigationState = {
+    request,
+    spent_usd: 0,
+    elapsed_ms: 0,
+    ...(excluded === undefined ? {} : { excluded_executions: excluded }),
+    ...(imported === undefined
+      ? {}
+      : {
+          validated_schema: imported.outputSchema,
+          validated_columns: imported.outputColumns ?? schemaColumns(imported.outputSchema),
+          validated_by: 'import' as const,
+          ...(imported.strategy === null ? {} : { imported: imported.strategy }),
+        }),
+  };
   const { rowCount } = await tx.query("UPDATE apis SET investigation = $2::jsonb, investigation_phase = 'access_check', updated_at = now() WHERE id = $1 AND owner_id = $3", [
     input.apiId,
     JSON.stringify(state),
@@ -295,6 +336,8 @@ export async function saveInvestigationStrategy(
     outputColumns?: readonly string[];
     inputSchema: unknown;
     state: InvestigationState;
+    /** Auteur de la version : l'enquête, ou l'import d'un fichier (3.12) repassé par l'enquête. */
+    createdBy?: 'investigation' | 'import';
   },
 ): Promise<{ version: number }> {
   // Schéma d'entrée (04 §1) : chaque champ a une description (500 caractères au plus), sinon refus, avant toute écriture.
@@ -315,8 +358,8 @@ export async function saveInvestigationStrategy(
     const version = next.rows[0]!.v;
     await tx.query(
       `INSERT INTO strategy_versions (api_id, version, owner_id, project_id, execution, network, spec, est_cost_usd, created_by, parent_version)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'investigation', $9)`,
-      [args.apiId, version, args.ownerId, api.project_id, args.execution, args.network, JSON.stringify(args.spec), args.estCostUsd, api.current_strategy_version],
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $10, $9)`,
+      [args.apiId, version, args.ownerId, api.project_id, args.execution, args.network, JSON.stringify(args.spec), args.estCostUsd, api.current_strategy_version, args.createdBy ?? 'investigation'],
     );
     await tx.query(
       `UPDATE apis SET current_strategy_version = $2, output_schema = $3::jsonb, input_schema = $4::jsonb, investigation = $5::jsonb,

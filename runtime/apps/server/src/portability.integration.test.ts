@@ -96,7 +96,7 @@ async function seedSessionApi(owner: Party): Promise<{ id: string; slug: string 
     await c.query("UPDATE strategy_versions SET spec = $2::jsonb, est_cost_usd = 0.0002 WHERE api_id = $1 AND version = 1", [seeded.id, JSON.stringify(SPEC)]);
     await c.query('UPDATE apis SET input_schema = $2::jsonb WHERE id = $1', [seeded.id, JSON.stringify(INPUT)]);
     // Cookie de site (INV5) et secrets chiffrés (INV8) : les octets portent un marqueur lisible, pour le voir s'il fuyait.
-    await c.query("INSERT INTO site_sessions (owner_id, domain, server_use_allowed, ciphertext, nonce, key_version) VALUES ($1, 'shop.zz-test.example', true, $2, $3, 1)", [
+    await c.query("INSERT INTO site_sessions (owner_id, domain, server_use_allowed, ciphertext, nonce, dek_wrapped, alg, key_version) VALUES ($1, 'shop.zz-test.example', true, $2, $3, 'zz_dek', 'aes-256-gcm', 1)", [
       owner.user.id,
       Buffer.from(`sid=${MARK.cookie}`),
       Buffer.from('zz_nonce_000'),

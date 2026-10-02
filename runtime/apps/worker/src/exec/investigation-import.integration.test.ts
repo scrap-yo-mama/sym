@@ -98,7 +98,12 @@ async function importAs(slug: string, doc: ApiExport): Promise<{ apiId: string; 
   const { integrity: _integrity, ...content } = doc;
   const parsed = parseApiExport(JSON.parse(JSON.stringify(sealExport(content))), { runtimeVersion: '9.9.9' });
   if (!parsed.ok) throw new Error(`export illisible : ${parsed.code} ${parsed.message}`);
-  return withActor(pool, actorA, (tx) => importApi(tx, queue, { ownerId: A, slug, trigger: 'rest', export: parsed.export, networkPolicy: { allow: ['direct', 'dc_proxy'] } }));
+  return withActor(pool, actorA, async (tx) => {
+    const made = await importApi(tx, queue, { ownerId: A, slug, trigger: 'rest', export: parsed.export, networkPolicy: { allow: ['direct', 'dc_proxy'] } });
+    // Cadence de test (fixtures locales), posée dans la transaction de l'import : le job n'est visible qu'au commit.
+    await tx.query('UPDATE apis SET domain_pacing = $2 WHERE id = $1', [made.apiId, JSON.stringify({ min_delay_ms: 5, max_requests_per_run: 200, max_wait_ms: 60000 })]);
+    return made;
+  });
 }
 
 /** Copie de l'export dont la stratégie et la demande visent un autre hôte de fixture (même chemin), scellée à nouveau. */
