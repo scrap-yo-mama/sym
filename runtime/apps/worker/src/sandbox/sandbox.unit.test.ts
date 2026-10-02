@@ -248,6 +248,9 @@ describe('utilisateur dédié, lanceur et plafond CPU (08 §3)', () => {
     // SANDBOX_NODE : Node de l'enfant, distinct de la copie à capacités de fichier sous laquelle tourne le worker.
     expect(sandboxOptionsFromEnv({ SANDBOX_NODE: '/usr/bin/node' })).toEqual({ node: '/usr/bin/node' });
     expect(sandboxOptionsFromEnv({ SANDBOX_NODE: '' })).toEqual({});
+    // SANDBOX_SECCOMP : filtre seccomp posé sur l'enfant (aucun espace de noms, revue 4.1b).
+    expect(sandboxOptionsFromEnv({ SANDBOX_SECCOMP: '/usr/local/libexec/sandbox-seccomp' })).toEqual({ seccomp: '/usr/local/libexec/sandbox-seccomp' });
+    expect(sandboxOptionsFromEnv({ SANDBOX_SECCOMP: '' })).toEqual({});
     expect(() => sandboxOptionsFromEnv({ SANDBOX_UID: 'abc' })).toThrow(/SANDBOX_UID/);
     expect(() => sandboxOptionsFromEnv({ SANDBOX_UID: '1500' })).toThrow(/SANDBOX_GID/);
   });
@@ -305,6 +308,27 @@ describe('utilisateur dédié, lanceur et plafond CPU (08 §3)', () => {
     const r = spawnSync(plan.command, plan.args, { encoding: 'utf8', env: {} });
     expect(r.stdout).not.toContain('zz_test_started');
     expect(r.status).not.toBe(0);
+  test('assert_sandbox_child_no_namespaces — filtre seccomp de l’enfant (SANDBOX_SECCOMP) exécuté juste après le changement d’uid, avant le shell', () => {
+    // Le profil seccomp du compose permet clone, setns et unshare à tout le conteneur (bac à sable de Chromium) : l'enfant du bac à
+    // sable, lui, les perd (aucun espace de noms utilisateur, donc aucune capacité dans un espace imbriqué, revue 4.1b).
+    const plain = spawnPlan({ node: '/n', nodeArgs: [], script: 'c.js', cpuSeconds: 3 });
+    const launched = spawnPlan({ node: '/n', nodeArgs: [], script: 'c.js', cpuSeconds: 3, launcher: '/l', uid: 1500, gid: 1501, seccomp: '/s' });
+    expect(launched.command).toBe('/l');
+    expect(launched.args).toEqual(['--reuid=1500', '--regid=1501', '--clear-groups', '--no-new-privs', '--', '/s', '/bin/sh', '-c', plain.args[1], '3', '/n', 'c.js']);
+    const alone = spawnPlan({ node: '/n', nodeArgs: [], script: 'c.js', cpuSeconds: 3, seccomp: '/s' });
+    expect(alone).toEqual({ command: '/s', args: ['/bin/sh', '-c', plain.args[1], '3', '/n', 'c.js'] });
+    // La sonde d'isolation dit si l'enfant peut créer un espace de noms utilisateur (`absent` hors Linux).
+    const dockerfile = readFileSync(new URL('../../../../deploy/Dockerfile', import.meta.url), 'utf8');
+    expect(dockerfile).toMatch(/\bSANDBOX_SECCOMP=\/usr\/local\/libexec\/sandbox-seccomp\b/);
+    expect(dockerfile).toMatch(/COPY --from=seccomp --chmod=0755 \/src\/sandbox-seccomp \/usr\/local\/libexec\/sandbox-seccomp/);
+    const source = readFileSync(new URL('../../../../deploy/sandbox-seccomp.c', import.meta.url), 'utf8');
+    for (const name of ['__NR_unshare', '__NR_setns', '__NR_clone3', '__NR_clone', 'CLONE_NEWUSER', 'CLONE_NEWNET', 'PR_SET_NO_NEW_PRIVS', 'SECCOMP_RET_KILL_PROCESS']) expect(source, name).toContain(name);
+  });
+
+  test('assert_sandbox_child_no_namespaces — sonde d’isolation : création d’un espace de noms utilisateur rapportée', async () => {
+    const probe = await new ProcessSandboxEngine({ production: false, node: process.execPath }).probeIsolation();
+    expect(['allowed', 'denied', 'absent']).toContain(probe.namespaces);
+    if (process.platform !== 'linux') expect(probe.namespaces).toBe('absent');
   });
 
   test('Node de l’enfant : option `node` (SANDBOX_NODE) prise à la place de process.execPath', async () => {

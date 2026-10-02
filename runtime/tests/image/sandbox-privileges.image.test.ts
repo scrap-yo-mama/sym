@@ -16,6 +16,12 @@
 // processus de pwuser). Revue de F-20261001-R01 : le worker n'a cap_setuid,cap_setgid qu'en PERMIS (un process.setuid(0)
 // échoue), un processus détaché par un enfant ne survit pas au balayage de fin de run, rien de ce qu'exécute pwuser n'est
 // modifiable par l'uid dédié, et un démarrage sous un uid imposé pose quand même no-new-privileges.
+// Seccomp (revue 4.1b) : les deux profils ci-dessus appliquent le profil du compose (deploy/seccomp-chromium.json), que Render
+// n'applique pas (render.yaml n'a pas de security_opt ; son régime seccomp reste à relever, GO). Le régime de Render est donc
+// joué aussi sous le profil par défaut de Docker (builtin) et sans profil (unconfined) : (c), sonde d'isolation et run du bac
+// à sable verts dans les deux cas ; sous builtin, Chromium s'arrête sur « No usable sandbox! » et le worker le dit dès son
+// démarrage (alert: chromium_sandbox_unavailable, régime seccomp journalisé). Dans tous les profils, l'enfant du bac à sable
+// ne crée aucun espace de noms (filtre SANDBOX_SECCOMP), même là où le conteneur le permet à Chromium.
 // Lourd (construction de l'image, PostgreSQL, Chromium) : projet Vitest `image` (`pnpm test:image`), joué par `pnpm ci:local`.
 // RUNTIME_IMAGE_UNDER_TEST=<image locale> évite la construction (l'image n'est jamais poussée).
 import { spawnSync } from 'node:child_process';
@@ -50,18 +56,28 @@ function composeWorkerSecurityOpts(): string[] {
 }
 const WORKER_SECURITY = composeWorkerSecurityOpts();
 const RENDER_CAPS = ['CHOWN', 'DAC_OVERRIDE', 'FOWNER', 'SETGID', 'SETUID', 'SYS_CHROOT'];
-/** Capacités du conteneur de Render (bounding 0x400cb) et no-new-privileges ; profil seccomp de Render non relevé (celui du compose). */
-const renderFlags = (capabilities: readonly string[] = RENDER_CAPS) => [
+/**
+ * Capacités du conteneur de Render (bounding 0x400cb) et no-new-privileges, avec un régime seccomp au choix : celui du compose
+ * par défaut. Le régime seccomp de Render n'est pas relevé (à lire au GO dans le journal du worker : champ `seccomp`).
+ */
+const renderFlags = (capabilities: readonly string[] = RENDER_CAPS, seccomp: readonly string[] = WORKER_SECURITY) => [
   '--security-opt', 'no-new-privileges',
   '--cap-drop', 'ALL',
   ...capabilities.flatMap((c) => ['--cap-add', c]),
-  ...WORKER_SECURITY,
+  ...seccomp,
 ];
 const RENDER = renderFlags();
 const PROFILES = [
-  { name: 'Render (no-new-privileges, capacités réduites)', flags: RENDER, nnp: true, short: 'render' },
-  { name: 'Docker classique (capacités par défaut)', flags: [...WORKER_SECURITY], nnp: false, short: 'classic' },
+  { name: 'Render (no-new-privileges, capacités réduites), profil seccomp du compose', flags: RENDER, nnp: true, short: 'render' },
+  { name: 'Docker classique (capacités par défaut), profil seccomp du compose', flags: [...WORKER_SECURITY], nnp: false, short: 'classic' },
 ] as const;
+/** Régime de Render sans le profil du compose : profil par défaut de Docker (Chromium sans bac à sable utilisable), aucun profil. */
+const RENDER_SECCOMP_VARIANTS = [
+  { name: 'Render sous le profil seccomp par défaut de Docker (builtin)', flags: renderFlags(RENDER_CAPS, ['--security-opt', 'seccomp=builtin']), short: 'render_builtin', seccomp: '2', chromium: false },
+  { name: 'Render sans profil seccomp (unconfined)', flags: renderFlags(RENDER_CAPS, ['--security-opt', 'seccomp=unconfined']), short: 'render_unconfined', seccomp: '0', chromium: true },
+] as const;
+/** Filtre de l'enfant (sandbox-seccomp --self-test sous l'uid dédié) : aucun espace de noms, clone ordinaire permis. */
+const CHILD_NO_NAMESPACES = { unshareUser: 'EPERM', unshareNet: 'EPERM', setns: 'EPERM', clone3: 'ENOSYS', cloneUser: 'EPERM', cloneNet: 'EPERM', clone: 'ok' };
 
 const NONE = '0000000000000000';
 /** cap_setuid (7) et cap_setgid (6). */
@@ -213,10 +229,12 @@ const { spawnPlan, sandboxOptionsFromEnv, ProcessSandboxEngine } = await import(
 const options = sandboxOptionsFromEnv(process.env);
 const CHILD = "const fs=require('fs');const s=fs.readFileSync('/proc/self/status','utf8');const f=k=>(new RegExp('^'+k+':\\\\s*(.*)$','m').exec(s)||[])[1]||'';" +
   "const rd=p=>{try{fs.readFileSync(p);return 'readable'}catch(e){return e.code}};" +
-  "process.stdout.write(JSON.stringify({uid:process.getuid(),inh:f('CapInh'),prm:f('CapPrm'),eff:f('CapEff'),amb:f('CapAmb'),nnp:Number(f('NoNewPrivs')),pid1Environ:rd('/proc/1/environ'),parentEnviron:rd('/proc/'+process.ppid+'/environ'),keys:Object.keys(process.env),core:(/^Max core file size\\s+(\\S+)\\s+(\\S+)/m.exec(fs.readFileSync('/proc/self/limits','utf8'))||[]).slice(1).join(' '),coredumpFilter:fs.readFileSync('/proc/self/coredump_filter','utf8').trim(),userns:require('child_process').spawnSync('/usr/bin/unshare',['-U','/bin/true']).status}))";
-const plan = spawnPlan({ node: options.node ?? process.execPath, nodeArgs: ['-e', CHILD], cpuSeconds: 5, launcher: options.launcher, uid: options.uid, gid: options.gid });
-const child = spawnSync(plan.command, plan.args, { env: {}, encoding: 'utf8', cwd: '/app/apps/worker/dist/sandbox', uid: plan.uid, gid: plan.gid });
+  "process.stdout.write(JSON.stringify({uid:process.getuid(),inh:f('CapInh'),prm:f('CapPrm'),eff:f('CapEff'),amb:f('CapAmb'),nnp:Number(f('NoNewPrivs')),seccomp:f('Seccomp'),pid1Environ:rd('/proc/1/environ'),parentEnviron:rd('/proc/'+process.ppid+'/environ'),keys:Object.keys(process.env),core:(/^Max core file size\\s+(\\S+)\\s+(\\S+)/m.exec(fs.readFileSync('/proc/self/limits','utf8'))||[]).slice(1).join(' '),coredumpFilter:fs.readFileSync('/proc/self/coredump_filter','utf8').trim(),userns:require('child_process').spawnSync('/usr/bin/unshare',['-U','/bin/true']).status}))";
+const plan = spawnPlan({ node: options.node ?? process.execPath, nodeArgs: ['-e', CHILD], cpuSeconds: 5, launcher: options.launcher, uid: options.uid, gid: options.gid, seccomp: options.seccomp });const child = spawnSync(plan.command, plan.args, { env: {}, encoding: 'utf8', cwd: '/app/apps/worker/dist/sandbox', uid: plan.uid, gid: plan.gid });
 try { out.sandbox = JSON.parse(child.stdout); } catch { out.sandbox = { error: child.status + ' ' + child.stderr.slice(0, 500) }; }
+// Filtre de l'enfant, essayé sous l'uid dédié par le lanceur (comme spawnPlan le pose) : aucun espace de noms.
+const selfTest = spawnSync(options.launcher, ['--reuid=' + options.uid, '--regid=' + options.gid, '--clear-groups', '--no-new-privs', '--', options.seccomp, '--self-test'], { env: {}, encoding: 'utf8' });
+try { out.childNamespaces = JSON.parse(selfTest.stdout); } catch { out.childNamespaces = { error: selfTest.status + ' ' + selfTest.stderr.slice(0, 300) }; }
 const engine = new ProcessSandboxEngine({ ...options, production: true });
 out.probe = await engine.probeIsolation();
 await engine.idle();
@@ -244,11 +262,50 @@ type ProbeReport = {
   seccomp?: string;
   chromiumError?: string;
   chromium: Proc[];
-  sandbox: { uid: number; inh: string; prm: string; eff: string; amb: string; nnp: number; pid1Environ: string; parentEnviron: string; keys: string[]; core: string; coredumpFilter: string; userns: number | null; error?: string };
-  probe: { uid: number; parentEnviron: string; witness: string; noNewPrivs: boolean };  run: { outcome: string; value: unknown; error?: string };
-  stray: { uid: number; before: string; after: string };
+  sandbox: { uid: number; inh: string; prm: string; eff: string; amb: string; nnp: number; seccomp: string; pid1Environ: string; parentEnviron: string; keys: string[]; core: string; coredumpFilter: string; userns: number | null; error?: string };
+  childNamespaces: Record<string, string>;
+  probe: { uid: number; parentEnviron: string; witness: string; noNewPrivs: boolean; namespaces: string };
+  run: { outcome: string; value: unknown; error?: string };  stray: { uid: number; before: string; after: string };
   setuid0: string;
 };
+
+/** Lance la sonde à la place du worker (même point d'entrée, mêmes capacités) et rend son rapport. */
+async function runProbe(short: string, flags: readonly string[]): Promise<ProbeReport> {
+  const name = startContainer(`zz_test_img_probe_${short}_${run}`, flags, { RUNTIME_MODE: 'worker' }, ['-v', `${join(scratch, 'probe.mjs')}:/app/apps/worker/dist/index.js:ro`]);
+  // La sonde s'arrête d'elle-même (rapport ou erreur) : attendre l'arrêt du conteneur, pas un motif des journaux.
+  await until(`sonde terminée dans ${name}`, () => !running(name), 120_000).catch((error: unknown) => {
+    // Sonde bloquée : ses journaux et les processus du conteneur disent où.
+    const procs = running(name) ? JSON.stringify(processes(name).map((p) => ({ pid: p.pid, ppid: p.ppid, uid: p.uid, cmd: p.cmd.slice(0, 120) }))) : 'arrêté';
+    throw new Error(`${String(error)}\n${logsOf(name).slice(-3000)}\nprocessus : ${procs}`);
+  });
+  const logs = logsOf(name);
+  const line = logs.split('\n').find((l) => l.startsWith('ZZ_PROBE '));
+  expect(line, logs.slice(-3000)).toBeDefined();
+  return JSON.parse(line!.slice('ZZ_PROBE '.length)) as ProbeReport;
+}
+
+/**
+ * (c) enfant du bac à sable lancé par le plan de production : uid dédié, aucune capacité, filtre seccomp de l'enfant (aucun
+ * espace de noms), /proc/1/environ refusé ; sonde d'isolation verte ; vrai run ; processus détaché balayé à la fin du run ;
+ * worker : process.setuid(0) refusé (capacités permises, pas effectives).
+ */
+function expectSandboxChild(report: ProbeReport): void {
+  expect(report.sandbox).toMatchObject({ uid: SANDBOX_UID, ...noCaps, nnp: 1, seccomp: '2', pid1Environ: 'EACCES', parentEnviron: 'EACCES', keys: [] });
+  expect(report.childNamespaces).toEqual(CHILD_NO_NAMESPACES);
+  // assert_sandbox_no_core_dump (INV7) : aucun vidage mémoire possible, même vers un collecteur en tube de l'hôte.
+  expect({ core: report.sandbox.core, coredumpFilter: report.sandbox.coredumpFilter }).toEqual({ core: '1 1', coredumpFilter: '00000000' });
+  // assert_sandbox_child_no_namespaces : le profil seccomp livré permet les espaces de noms utilisateur au conteneur
+  // (Chromium) ; l'enfant (uid 1500), sous son filtre, ne peut pas en créer (risque résiduel de fix-pnpm-pin fermé, 4.1b).
+  expect(report.sandbox.userns, 'unshare -U sous l’uid 1500').toBeGreaterThan(0);
+  expect(report.probe).toEqual({ uid: SANDBOX_UID, parentEnviron: 'denied', witness: 'denied', noNewPrivs: true, namespaces: 'denied' });
+  expect(report.run).toMatchObject({ outcome: 'ok', value: 42 });
+  expect(report.stray).toMatchObject({ uid: SANDBOX_UID, before: 'alive' });
+  expect(['gone', 'zombie']).toContain(report.stray.after);
+  expect(report.setuid0).toBe('EPERM');
+}
+
+/** Ligne de journal JSON du worker qui contient `needle`. */
+const logLine = (name: string, needle: string): Record<string, unknown> => JSON.parse(logsOf(name).split('\n').find((l) => l.includes(needle)) ?? '{}') as Record<string, unknown>;
 
 beforeAll(() => {
   if (image === '') {
@@ -335,8 +392,10 @@ describe('assert_sandbox_image_privileges — image sous les capacités de Rende
         });
         await waitForLog(name, 'bac à sable : isolation éprouvée');
         expect(logsOf(name)).toMatch(/NODE_EXTRA_CA_CERTS est ignorée par le worker/);
-        const line = logsOf(name).split('\n').find((l) => l.includes('isolation éprouvée')) ?? '';
-        expect(JSON.parse(line)).toMatchObject({ sandboxUid: SANDBOX_UID, noNewPrivs: true });
+        expect(logLine(name, 'isolation éprouvée')).toMatchObject({ sandboxUid: SANDBOX_UID, noNewPrivs: true, namespaces: 'denied', seccomp: '2' });
+        // Profil seccomp du compose : bac à sable de Chromium disponible, dit au démarrage.
+        await waitForLog(name, 'Chromium : bac à sable disponible');
+        expect(logsOf(name)).not.toMatch(/chromium_sandbox_unavailable/);
         const procs = processes(name);
         console.log(`${name} : ${JSON.stringify(procs.map((p) => ({ pid: p.pid, cmd: p.cmd.slice(0, 60), uid: p.uid, ...caps(p), nnp: p.nnp })))}`);
         expect(procs.filter((p) => p.uid === 0), JSON.stringify(procs)).toEqual([]);
@@ -357,19 +416,7 @@ describe('assert_sandbox_image_privileges — image sous les capacités de Rende
       }, 240_000);
 
       test('(b)(c) enfants du worker : sh et Chromium sans capacité ; bac à sable sous l’uid dédié, sans capacité, /proc/1/environ refusé', async () => {
-        const name = startContainer(`zz_test_img_probe_${profile.short}_${run}`, profile.flags, { RUNTIME_MODE: 'worker' }, [
-          '-v', `${join(scratch, 'probe.mjs')}:/app/apps/worker/dist/index.js:ro`,
-        ]);
-        await until(`sonde terminée dans ${name}`, () => !running(name), 120_000).catch((error: unknown) => {
-          // Sonde bloquée : ses journaux et les processus du conteneur disent où.
-          const procs = running(name) ? JSON.stringify(processes(name).map((p) => ({ pid: p.pid, ppid: p.ppid, uid: p.uid, cmd: p.cmd.slice(0, 120) }))) : 'arrêté';
-          throw new Error(`${String(error)}\n${logsOf(name).slice(-3000)}\nprocessus : ${procs}`);
-        });
-        const logs = logsOf(name);
-        const line = logs.split('\n').find((l) => l.startsWith('ZZ_PROBE '));
-        expect(line, logs.slice(-3000)).toBeDefined();
-        const report = JSON.parse(line!.slice('ZZ_PROBE '.length)) as ProbeReport;
-        console.log(`${profile.name} : ${JSON.stringify({ worker: caps(report.worker), sh: report.sh, chromium: report.chromium.map((c) => ({ name: c.name, uid: c.uid, ...caps(c) })), sandbox: report.sandbox })}`);
+        const report = await runProbe(profile.short, profile.flags);        console.log(`${profile.name} : ${JSON.stringify({ worker: caps(report.worker), sh: report.sh, chromium: report.chromium.map((c) => ({ name: c.name, uid: c.uid, ...caps(c) })), sandbox: report.sandbox })}`);
         // Le worker (sonde lancée à sa place) : capacités effectives cap_setuid,cap_setgid, ni ambient ni héritables.
         expect(report.execPath).toBe('/usr/local/libexec/node-worker');
         expect(report.worker.uid).toBe(PWUSER);
@@ -380,21 +427,9 @@ describe('assert_sandbox_image_privileges — image sous les capacités de Rende
         expect(report.page).toBe('ok');
         expect(report.chromium.length).toBeGreaterThan(0);
         for (const c of report.chromium) expect({ uid: c.uid, ...caps(c) }, c.name).toEqual({ uid: PWUSER, ...noCaps });
-        // (c) enfant du bac à sable, lancé par le plan de production.
-        expect(report.sandbox).toMatchObject({ uid: SANDBOX_UID, ...noCaps, nnp: 1, pid1Environ: 'EACCES', parentEnviron: 'EACCES', keys: [] });
-        // assert_sandbox_no_core_dump (INV7) : aucun vidage mémoire possible, même vers un collecteur en tube de l'hôte.
-        expect({ core: report.sandbox.core, coredumpFilter: report.sandbox.coredumpFilter }).toEqual({ core: '1 1', coredumpFilter: '00000000' });
-        // Risque résiduel consigné (docs/deploiement.md, « espaces de noms utilisateur ») : sous le profil seccomp livré, l'enfant
-        // du bac à sable (uid 1500) crée un espace de noms utilisateur. Trace, pas une exigence : un filtre seccomp propre à
-        // l'enfant (durcissement envisagé) ferait passer ce statut à non nul, et cette ligne serait à inverser.
-        expect(report.sandbox.userns, 'unshare -U sous l’uid 1500').toBe(0);
-        expect(report.probe).toEqual({ uid: SANDBOX_UID, parentEnviron: 'denied', witness: 'denied', noNewPrivs: true });
-        expect(report.run).toMatchObject({ outcome: 'ok', value: 42 });
-        // Processus détaché sous l'uid dédié : vivant avant le run, balayé à sa fin.
-        expect(report.stray).toMatchObject({ uid: SANDBOX_UID, before: 'alive' });
-        expect(['gone', 'zombie']).toContain(report.stray.after);
-        // Worker compromis : process.setuid(0) refusé (capacités permises, pas effectives).
-        expect(report.setuid0).toBe('EPERM');
+        // (c) enfant du bac à sable, lancé par le plan de production ; le conteneur permet les espaces de noms (Chromium),
+        // l'enfant non (filtre SANDBOX_SECCOMP).
+        expectSandboxChild(report);
       }, 180_000);
 
       test('(e) RUNTIME_MODE=all : server sans capacité, worker lancé comme en mode worker, aucun root', async () => {
@@ -458,6 +493,55 @@ describe('assert_sandbox_image_privileges — image sous les capacités de Rende
         dockerOk(['stop', '-t', '30', name], 60_000);
         expect(docker(['inspect', '-f', '{{.State.ExitCode}}', name]).stdout.trim()).toBe('0');
       }, 240_000);
+    });
+  }
+
+  // Revue 4.1b : Render n'applique pas le profil seccomp du compose. Sous le profil par défaut de Docker comme sans profil,
+  // le bac à sable des scripts tient (uid dédié, sonde, run, balayage, aucun espace de noms pour l'enfant) ; sous le profil
+  // par défaut, Chromium n'a pas de bac à sable utilisable et le worker le dit dès son démarrage, régime seccomp compris.
+  for (const variant of RENDER_SECCOMP_VARIANTS) {
+    describe(variant.name, () => {
+      test(`assert_chromium_sandbox_reported — worker : isolation éprouvée, bac à sable de Chromium ${variant.chromium ? 'disponible' : 'indisponible, dit au démarrage'}`, async () => {
+        await until('PostgreSQL prêt', () => docker(['exec', pgName, 'pg_isready', '-U', 'runtime', '-d', 'runtime']).status === 0, 90_000);
+        const migrated = docker(['run', '--rm', '--network', network, '-e', `DATABASE_URL=${DATABASE_URL}`, image, 'runtime migrate'], 180_000);
+        expect(migrated.status, migrated.stderr.slice(-2000)).toBe(0);
+        const name = startContainer(`zz_test_img_worker_${variant.short}_${run}`, variant.flags, { RUNTIME_MODE: 'worker', DATABASE_URL, MASTER_KEY });
+        await waitForLog(name, 'bac à sable : isolation éprouvée');
+        expect(logLine(name, 'isolation éprouvée')).toMatchObject({ sandboxUid: SANDBOX_UID, noNewPrivs: true, namespaces: 'denied', seccomp: variant.seccomp });
+        if (variant.chromium) {
+          await waitForLog(name, 'Chromium : bac à sable disponible');
+          expect(logLine(name, 'Chromium : bac à sable disponible')).toMatchObject({ seccomp: variant.seccomp });
+          expect(logsOf(name)).not.toMatch(/chromium_sandbox_unavailable/);
+        } else {
+          await waitForLog(name, 'chromium_sandbox_unavailable');
+          const alert = logLine(name, 'chromium_sandbox_unavailable');
+          expect(alert).toMatchObject({ level: 50, seccomp: variant.seccomp, detail: expect.stringMatching(/Operation not permitted/) });
+          expect(alert['msg']).toMatch(/Chromium : bac à sable indisponible.*les runs navigateur échoueront/);
+        }
+        // Le worker reste en service (runs sans navigateur) et s'arrête proprement.
+        expect(running(name)).toBe(true);
+        dockerOk(['stop', '-t', '30', name], 60_000);
+        expect(docker(['inspect', '-f', '{{.State.ExitCode}}', name]).stdout.trim()).toBe('0');
+      }, 240_000);
+
+      test(`(c) bac à sable des scripts vert (uid dédié, sonde, run, balayage) ; Chromium ${variant.chromium ? 'avec son bac à sable' : 'arrêté sur « No usable sandbox! »'}`, async () => {
+        const report = await runProbe(variant.short, variant.flags);
+        console.log(`${variant.name} : ${JSON.stringify({ userns: report.userns, seccomp: report.seccomp, chromiumError: report.chromiumError, sandbox: report.sandbox, childNamespaces: report.childNamespaces })}`);
+        expect(report.seccomp).toBe(variant.seccomp);
+        expect(report.execPath).toBe('/usr/local/libexec/node-worker');
+        expect(caps(report.worker)).toEqual(workerCaps);
+        expect(report.sh).toEqual({ uid: PWUSER, ...noCaps });
+        if (variant.chromium) {
+          expect({ userns: report.userns, chromiumError: report.chromiumError }).toEqual({ userns: 'ok', chromiumError: undefined });
+          expect(report.page).toBe('ok');
+          for (const c of report.chromium) expect({ uid: c.uid, ...caps(c) }, c.name).toEqual({ uid: PWUSER, ...noCaps });
+        } else {
+          expect(report.userns).toMatch(/Operation not permitted/);
+          expect(report.chromiumError).toMatch(/No usable sandbox/);
+          expect(report.page).toBeUndefined();
+        }
+        expectSandboxChild(report);
+      }, 180_000);
     });
   }
 

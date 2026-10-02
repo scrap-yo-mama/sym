@@ -275,6 +275,12 @@ jobs:
       # documentée comme non vérifiée (apps/docs/content/guides/docker-compose.md, docs/deploiement.md).
       - name: Bac à sable de Chromium (espaces de noms utilisateur)
         run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      # Régime de sécurité de l'hôte, consigné avec le résultat (revue 4.1b) : profil seccomp par défaut et AppArmor
+      # (docker-default) du runner, que Docker Desktop n'a pas.
+      - name: Régime de sécurité de Docker (seccomp, AppArmor)
+        run: |
+          docker info --format '{{json .SecurityOptions}}'
+          sudo cat /sys/kernel/security/apparmor/profiles 2>/dev/null | grep -i docker || echo "AppArmor : aucun profil docker chargé"
       # Aucune relance : un échec instable doit rester visible (rapport junit archivé).
       - run: pnpm test:image --retry=0 --reporter=default --reporter=junit --outputFile.junit=reports/image-junit.xml
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

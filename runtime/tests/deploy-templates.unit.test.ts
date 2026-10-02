@@ -197,6 +197,32 @@ describe('assert_compose_chromium_seccomp — profil seccomp de Chromium (deploy
   });
 });
 
+describe('assert_compose_guide_matches_prod — guide publié « Déployer avec Docker Compose » aligné sur deploy/docker-compose.prod.yml (revue 4.1b)', () => {
+  type Svc = { healthcheck?: { test?: string[] }; [k: string]: unknown };
+  const guideText = readFileSync(join(runtimeDir, 'apps/docs/content/guides/docker-compose.md'), 'utf8');
+  const guideYaml = /```yaml\n([\s\S]*?)```/.exec(guideText)?.[1] ?? '';
+  const guide = parse(guideYaml) as { services: Record<string, Svc> };
+  const prod = yaml<{ services: Record<string, Svc> }>('docker-compose.prod.yml');
+  /** Champs de sécurité d'un service : ceux que le modèle de privilèges et le bac à sable de Chromium exigent ou excluent. */
+  const SECURITY_FIELDS = ['security_opt', 'cap_add', 'cap_drop', 'user', 'privileged', 'ipc', 'pid', 'userns_mode', 'read_only', 'init'] as const;
+
+  test('server, worker, migrate : mêmes champs de sécurité que le compose de production (profil seccomp de Chromium, pas d’ipc: host)', () => {
+    for (const name of ['migrate', 'server', 'worker']) {
+      for (const field of SECURITY_FIELDS) expect(guide.services[name]?.[field], `${name}.${field}`).toEqual(prod.services[name]?.[field]);
+    }
+    expect(guide.services['worker']?.['security_opt']).toEqual(['seccomp=./seccomp-chromium.json']);
+  });
+
+  test('sonde de santé du server : celle du compose de production, descendue sur pwuser (D-32)', () => {
+    expect(guide.services['server']?.healthcheck?.test).toEqual(prod.services['server']?.healthcheck?.test);
+  });
+
+  test('le guide dit où prendre seccomp-chromium.json et le pose à côté du fichier Compose', () => {
+    expect(guideText).toMatch(/curl -fsSLO https:\/\/raw\.githubusercontent\.com\/scrap-yo-mama\/sym\/[^/\s]+\/runtime\/deploy\/seccomp-chromium\.json/);
+    expect(guideText).toMatch(/No usable sandbox!/);
+  });
+});
+
 describe('docker-compose.prod.yml : cible bloquante', () => {
   type Svc = { image?: string; environment?: Record<string, string>; depends_on?: Record<string, { condition: string }>; healthcheck?: { test: string[] }; mem_limit?: string; ports?: string[]; [k: string]: unknown };
   const doc = yaml<{ services: Record<string, Svc> }>('docker-compose.prod.yml');

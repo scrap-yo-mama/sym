@@ -66,6 +66,13 @@ export type ProcessSandboxOptions = {
    * exécuter : l'enfant prend le Node ordinaire (`SANDBOX_NODE=/usr/bin/node`), sans capacité.
    */
   node?: string;
+  /**
+   * Filtre seccomp de l'enfant (`deploy/sandbox-seccomp.c`, `SANDBOX_SECCOMP`), exécuté juste après le changement d'uid :
+   * `unshare`, `setns` et `clone` avec un drapeau CLONE_NEW* refusés, `clone3` en ENOSYS. Le profil seccomp du compose
+   * permet les espaces de noms utilisateur à tout le conteneur (bac à sable de Chromium) ; l'enfant, lui, n'en crée aucun
+   * (aucune capacité dans un espace imbriqué, donc pas de surface netfilter, mount… après une double évasion).
+   */
+  seccomp?: string;
   /** Production : refuse de démarrer si l'enfant tournerait sous l'uid du worker (défaut : NODE_ENV=production). */
   production?: boolean;
   /** Mode permission de Node sur l'enfant (défaut vrai). */
@@ -83,8 +90,8 @@ export type ProcessSandboxOptions = {
 const SWEEP_EVERY_RUNS = 25;
 const SWEEP_EVERY_MS = 5 * 60_000;
 
-/** Options d'utilisateur dédié lues dans l'environnement du worker (SANDBOX_UID, SANDBOX_GID, SANDBOX_LAUNCHER, SANDBOX_NODE). */
-export function sandboxOptionsFromEnv(env: Readonly<Record<string, string | undefined>>): Pick<ProcessSandboxOptions, 'uid' | 'gid' | 'launcher' | 'node'> {
+/** Options d'utilisateur dédié lues dans l'environnement du worker (SANDBOX_UID, SANDBOX_GID, SANDBOX_LAUNCHER, SANDBOX_NODE, SANDBOX_SECCOMP). */
+export function sandboxOptionsFromEnv(env: Readonly<Record<string, string | undefined>>): Pick<ProcessSandboxOptions, 'uid' | 'gid' | 'launcher' | 'node' | 'seccomp'> {
   const id = (name: string): number | undefined => {
     const raw = env[name];
     if (raw === undefined || raw === '') return undefined;
@@ -97,11 +104,13 @@ export function sandboxOptionsFromEnv(env: Readonly<Record<string, string | unde
   const path = (name: string): string | undefined => (env[name] === undefined || env[name] === '' ? undefined : env[name]);
   const launcher = path('SANDBOX_LAUNCHER');
   const node = path('SANDBOX_NODE');
+  const seccomp = path('SANDBOX_SECCOMP');
   return {
     ...(uid !== undefined ? { uid } : {}),
     ...(gid !== undefined ? { gid } : {}),
     ...(launcher !== undefined ? { launcher } : {}),
     ...(node !== undefined ? { node } : {}),
+    ...(seccomp !== undefined ? { seccomp } : {}),
   };
 }
 
@@ -136,10 +145,9 @@ export type SpawnPlan = { command: string; args: string[]; uid?: number; gid?: n
  * Le lanceur change d'utilisateur sans nouveaux privilèges (premier exec, fait par le worker lui-même : sous
  * no-new-privileges, il n'obtient cap_setuid,cap_setgid que si l'appelant les détient), puis `/bin/sh`, sous l'uid dédié,
  * pose RLIMIT_CPU (souple N puis dur N + 1, dans cet ordre : SIGXCPU d’abord, SIGKILL ensuite) et interdit tout vidage
- * mémoire (Linux, voir launchScript), puis `env -i` rend un
- * environnement vide (le shell en ajoute), puis Node. Chaque étape fait `exec` : le pid suivi par le parent reste celui de
- * l'enfant.
- */
+ * mémoire (Linux, voir launchScript), puis `env -i` rend un environnement vide (le shell en ajoute), puis Node. Avec
+ * `seccomp`, le filtre de l'enfant s'exécute juste après le changement d'uid, avant le shell : tout ce qui suit en hérite.
+ * Chaque étape fait `exec` : le pid suivi par le parent reste celui de l'enfant. */
 export function spawnPlan(p: {
   node: string;
   nodeArgs: readonly string[];
@@ -151,14 +159,16 @@ export function spawnPlan(p: {
   gid?: number;
   /** Plateforme du worker (défaut `process.platform`) : sous Linux, aucun vidage mémoire de l'enfant (voir launchScript). */
   platform?: NodeJS.Platform;
+  seccomp?: string;
 }): SpawnPlan {
   const node = [p.node, ...p.nodeArgs, ...(p.script === undefined ? [] : [p.script])];
   const cpu = String(Math.max(1, Math.ceil(p.cpuSeconds)));
-  const shell = ['/bin/sh', '-c', launchScript(p.platform ?? process.platform), cpu, ...node];
+  const shell = [...(p.seccomp === undefined ? [] : [p.seccomp]), '/bin/sh', '-c', launchScript(p.platform ?? process.platform), cpu, ...node];
   if (p.launcher !== undefined && p.uid !== undefined && p.gid !== undefined) {
     return { command: p.launcher, args: [`--reuid=${p.uid}`, `--regid=${p.gid}`, '--clear-groups', '--no-new-privs', '--', ...shell] };
   }
-  const plan: SpawnPlan = { command: '/bin/sh', args: shell.slice(1) };
+  const [command = '/bin/sh', ...args] = shell;
+  const plan: SpawnPlan = { command, args };
   if (p.launcher === undefined && p.uid !== undefined) return { ...plan, uid: p.uid, gid: p.gid };
   return plan;
 }
@@ -317,6 +327,12 @@ export type IsolationProbe = {
   witness: 'denied' | 'readable' | 'absent';
   /** Linux : bit no_new_privs posé. */
   noNewPrivs: boolean | undefined;
+  /**
+   * Création d'un espace de noms utilisateur par l'enfant (`unshare --user`) : `denied` (attendu en production, filtre
+   * `SANDBOX_SECCOMP` ou profil seccomp de l'hôte), `allowed` (le worker refuse de démarrer en production), `absent`
+   * (pas de commande `unshare`, hors Linux).
+   */
+  namespaces?: 'denied' | 'allowed' | 'absent';
 };
 
 const PROBE_SCRIPT = `
@@ -329,7 +345,12 @@ try { fs.readFileSync(process.argv[1]); witness = 'readable'; }
 catch (e) { witness = e && e.code === 'ENOENT' ? 'absent' : 'denied'; }
 let noNewPrivs;
 try { noNewPrivs = /^NoNewPrivs:\\s+1$/m.test(fs.readFileSync('/proc/self/status', 'utf8')); } catch (e) {}
-process.stdout.write(JSON.stringify({ uid: process.getuid ? process.getuid() : undefined, parentEnviron, witness, noNewPrivs }));`;
+let namespaces = 'absent';
+if (fs.existsSync('/usr/bin/unshare')) {
+  const r = require('node:child_process').spawnSync('/usr/bin/unshare', ['--user', '/bin/true'], { stdio: 'ignore', timeout: 5000 });
+  namespaces = r.status === 0 ? 'allowed' : 'denied';
+}
+process.stdout.write(JSON.stringify({ uid: process.getuid ? process.getuid() : undefined, parentEnviron, witness, noNewPrivs, namespaces }));`;
 
 /**
  * Chemins d'un paquet résolu depuis `from` : lien symbolique (tel que la résolution le lit), cible réelle, et dossier
@@ -477,8 +498,8 @@ export class ProcessSandboxEngine implements SandboxEngine {
   }
 
   #plan(nodeArgs: readonly string[], script: string | undefined, cpuSeconds: number): SpawnPlan {
-    const { launcher, uid, gid } = this.#options;
-    return spawnPlan({ node: this.#options.node ?? process.execPath, nodeArgs, script, cpuSeconds, launcher, uid, gid });
+    const { launcher, uid, gid, seccomp } = this.#options;
+    return spawnPlan({ node: this.#options.node ?? process.execPath, nodeArgs, script, cpuSeconds, launcher, uid, gid, seccomp });
   }
 
   /**
