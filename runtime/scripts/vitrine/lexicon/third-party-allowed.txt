@@ -1,0 +1,9 @@
+# Mentions descriptives admises en texte courant, sans logo (22b §1) : le nom est retiré avant la recherche de la liste noire.
+github
+docker
+render
+railway
+chrome web store
+books.toscrape.com
+model context protocol
+MCP

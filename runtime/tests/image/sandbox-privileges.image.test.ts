@@ -31,6 +31,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import { parse } from 'yaml';
+import { imageDescription, loadClaims } from '../../scripts/vitrine/lib/claims.ts';
+import { identityOf, publicRepository } from '../../scripts/vitrine/lib/identity.ts';
+import { readRepoMetadata } from '../../scripts/vitrine/lib/surface.ts';
+import { imageLabelProblems } from '../../scripts/vitrine/lib/verify.ts';
 
 const runtimeDir = new URL('../..', import.meta.url).pathname;
 const run = randomBytes(4).toString('hex');
@@ -403,7 +407,7 @@ const logLine = (name: string, needle: string): Record<string, unknown> => JSON.
 
 beforeAll(() => {
   if (image === '') {
-    dockerOk(['build', '--quiet', '-f', 'deploy/Dockerfile', '-t', builtTag, runtimeDir.replace(/\/$/, '')], 900_000);
+    dockerOk(['build', '--quiet', '-f', 'deploy/Dockerfile', '--build-arg', `PUBLIC_REPOSITORY=${publicRepository()}`, '-t', builtTag, runtimeDir.replace(/\/$/, '')], 900_000);
     image = builtTag;
   }
   scratch = mkdtempSync(join(tmpdir(), 'zz_test_image_privileges-'));
@@ -420,6 +424,14 @@ afterAll(() => {
   if (image === builtTag) docker(['rmi', '-f', builtTag]);
   if (scratch !== '') rmSync(scratch, { recursive: true, force: true });
 }, 120_000);
+
+// assert_image_labels (tâche 4.12, 22b § 3) : étiquettes OCI de l'image CONSTRUITE (aucune poussée), dérivées de PUBLIC_REPOSITORY.
+describe('assert_image_labels — étiquettes OCI de l\'image construite', () => {
+  test('source, description (≤ 512), licenses et io.modelcontextprotocol.server.name = identité publique', () => {
+    const labels = JSON.parse(dockerOk(['image', 'inspect', '--format', '{{json .Config.Labels}}', image])) as Record<string, string>;
+    expect(imageLabelProblems(labels, identityOf(publicRepository()), imageDescription(readRepoMetadata(), loadClaims()))).toEqual([]);
+  });
+});
 
 describe('assert_sandbox_image_privileges — image sous les capacités de Render et en Docker classique', () => {
   test('image : démarre en root pour descendre aussitôt ; copie de Node du worker réservée à pwuser', () => {

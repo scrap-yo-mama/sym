@@ -23,6 +23,16 @@ RUN gcc -O2 -Wall -Wextra -Werror -o /src/sandbox-seccomp /src/sandbox-seccomp.c
 
 # --- Étape 2 : exécution (démarre en root, descend aussitôt sur pwuser : aucun processus ne reste root)
 FROM ${PLAYWRIGHT_IMAGE} AS runtime
+# Étiquettes OCI (tâche 4.12, 22 §3.4, assert_image_labels) : dérivées de l'identité publique du dépôt (PUBLIC_REPOSITORY, source
+# unique : .github/PUBLIC_REPOSITORY ; la release passe `--build-arg PUBLIC_REPOSITORY=${{ github.repository }}`, la release à blanc
+# et le test d'image la valeur lue dans cette source). Le nom MCP est io.github.<propriétaire>/<dépôt>. Jamais de valeur par
+# défaut : une construction locale ou compose sans --build-arg ne porte ni source ni nom MCP (étiquettes vides), plutôt
+# qu'une identité recopiée en constante. La description est celle relue du registre (un test les compare).
+ARG PUBLIC_REPOSITORY
+LABEL org.opencontainers.image.source="${PUBLIC_REPOSITORY:+https://github.com/}${PUBLIC_REPOSITORY}" \
+      org.opencontainers.image.description="Scrapyomama (SYM): self-hosted, open-source web data runtime. Pre-release: the README says what is delivered." \
+      org.opencontainers.image.licenses="AGPL-3.0-only" \
+      io.modelcontextprotocol.server.name="${PUBLIC_REPOSITORY:+io.github.}${PUBLIC_REPOSITORY}"
 ENV NODE_ENV=production
 # Version publiée par GET /api/health et /api/version (tâche 4.9) ; posée par la chaîne de release.
 ARG RUNTIME_VERSION=0.0.0
