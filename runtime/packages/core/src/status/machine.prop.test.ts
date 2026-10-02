@@ -100,10 +100,10 @@ function modelStep(m: ModelState, ev: StatusEventInput, now: number): Expected {
         ? go([13], 'erreur', ev.cause === 'repeated_patch' ? 'repair_repeated_patch' : 'repair_budget_exhausted')
         : same;
     case 'reinvestigate': {
-      const reason = { manual: 'reinvestigate_manual', schema_changed: 'output_schema_changed', force_investigate: 'force_investigate' }[ev.trigger];
+      const reason = { manual: 'reinvestigate_manual', schema_changed: 'output_schema_changed', force_investigate: 'force_investigate', rules_changed: 'rules_changed' }[ev.trigger];
       if (m.status === 'sain') return go([19], 'enquete', reason, { prev: 'sain' });
       if (m.status === 'warning') return go([20], 'enquete', reason, { prev: 'warning' });
-      if (m.status === 'erreur' && ev.trigger !== 'schema_changed') return go([16], 'enquete', reason, { prev: null });
+      if (m.status === 'erreur' && (ev.trigger === 'manual' || ev.trigger === 'force_investigate')) return go([16], 'enquete', reason, { prev: null });
       if (m.status === 'bloquee' && ev.trigger === 'manual') return go([18], 'enquete', reason, { prev: null });
       return same;
     }
@@ -243,7 +243,7 @@ const commandArbs = [
     { type: 'investigation_failed', cause: 'budget_exhausted' },
     { type: 'investigation_failed', cause: 'robots_unreachable' },
   ).map((e) => cmd(`InvestigationResult(${JSON.stringify(e)})`, (m, r) => drive(m, r, e))),
-  fc.constantFrom<ReinvestigationTrigger>('manual', 'schema_changed', 'force_investigate').map((trigger) =>
+  fc.constantFrom<ReinvestigationTrigger>('manual', 'schema_changed', 'force_investigate', 'rules_changed').map((trigger) =>
     cmd(`Reinvestigate(${trigger})`, (m, r) => drive(m, r, { type: 'reinvestigate', trigger }, { manualReinvestigation: trigger === 'manual' })),
   ),
   fc.constant(cmd('UserActed', (m, r) => drive(m, r, { type: 'user_acted' }))),

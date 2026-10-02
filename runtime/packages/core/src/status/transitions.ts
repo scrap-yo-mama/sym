@@ -23,7 +23,8 @@ export type TransitionDef = {
 const SIGNALS = [
   'retried', 'escalated', 'repaired', 'optional_fields_missing', 'volume_anomaly', 'pagination_short', 'slow', 'cost_anomaly',
 ] as const;
-const REINVESTIGATION = ['reinvestigate_manual', 'output_schema_changed', 'force_investigate'] as const;
+/** `rules_changed` : recompilation demandée par le propriétaire après la modification d'une règle (18 §4.8, tâche 2.10). */
+const REINVESTIGATION = ['reinvestigate_manual', 'output_schema_changed', 'force_investigate', 'rules_changed'] as const;
 /** Échec non transitoire de rejeu (10, 11) : y compris les refus, qui repartent aussitôt en 14 ou 15. */
 const REPLAY_FAILURES = [
   'extraction', 'code_error', 'network', 'not_found', ...REPAIR_ACTION_CLASSES, ...REPAIR_ACTION_REASONS, ...BLOCKING,

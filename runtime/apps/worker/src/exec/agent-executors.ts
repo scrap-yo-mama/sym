@@ -308,6 +308,7 @@ export async function runAgentFetchExecutor(options: AgentFetchOptions): Promise
   try {
     const out = await extractRecordsWithLlm(options.llm, {
       instruction: options.spec.instruction,
+      ...(options.spec.rules === undefined ? {} : { rules: options.spec.rules.text }),
       pageText: text,
       pageUrl: exchange.url,
       truncated,
@@ -693,6 +694,8 @@ export type AgentOptions = {
   readonly classify?: ClassifyFn;
   /** robots.txt (1.11, INV11) : chaque requête du Chromium dédié et des rejeux de compilation. */
   readonly access: AccessCheck;
+  /** `read_skill` de Stagehand (tâche 2.10) : skills épinglés de la version ; absent, `skill_not_found`. */
+  readonly readSkill?: (name: string) => Promise<string>;
 };
 
 function agentFailure(run: AgentRunResult, cost?: AttemptCost): ExecFailure {
@@ -805,6 +808,9 @@ async function runAgentInSlot(options: AgentOptions, lease: SlotLease): Promise<
         outputSchema: recordsSchema(options.outputSchema) as unknown as Record<string, unknown>,
         allowWriteActions: options.allowWriteActions,
         limits: { maxSteps: options.spec.limits.max_steps, maxDurationMs: options.spec.limits.timeout_ms, maxCostUsd: budget.limitUsd },
+        // Règles embarquées (tâche 2.10, 18 §4.5) : `systemPrompt` de Stagehand ; `read_skill` ne sert que l'ensemble
+        // fourni par l'appelant (résolu à l'enquête, épinglé au rejeu), sinon `skill_not_found`.
+        ...(options.spec.rules === undefined ? {} : { rules: { systemPrompt: options.spec.rules.text, readSkill: async (name: string) => (await options.readSkill?.(name)) ?? 'skill_not_found' } }),
       },
       { model: { modelId, temperature: 0, promptVersion }, signal: AbortSignal.any([options.signal, stop.signal]) },
     );

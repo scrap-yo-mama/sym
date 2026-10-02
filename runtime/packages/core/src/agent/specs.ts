@@ -20,6 +20,15 @@ const MAX_LABEL = 80;
 export const HYBRID_CLICK_ROLES = Object.freeze(['link', 'button', 'tab', 'menuitem', 'option', 'checkbox', 'radio', 'switch', 'treeitem'] as const);
 export type HybridClickRole = (typeof HYBRID_CLICK_ROLES)[number];
 
+/**
+ * Règles Markdown EMBARQUÉES dans un prompt figé E4-E6 (tâche 2.10, 18 §4.5) : texte des règles appliquées à la
+ * compilation (`RULES_MAX_TOKENS` de 1 000), avec leurs références ; le run ne relit jamais les règles courantes.
+ */
+export type EmbeddedRules = { readonly text: string; readonly refs: readonly string[] };
+/** Empreinte de compilation d'une étape E5 (19 §4, 19b §1) : règles `nom@version#sha256`, modèle, date. */
+export type CompiledWith = { readonly rules: readonly string[]; readonly model_id: string | null; readonly at: string };
+const MAX_EMBEDDED_RULES = 12_000;
+
 export type AgentFetchSpec = {
   readonly schema_version: 1;
   readonly kind: 'agent_fetch';
@@ -30,6 +39,7 @@ export type AgentFetchSpec = {
   /** Consigne d'extraction ; la page n'est JAMAIS une instruction (08 §4 mesure 1). */
   readonly instruction: string;
   readonly limits: { readonly max_response_bytes: number; readonly max_input_chars: number; readonly timeout_ms: number };
+  readonly rules?: EmbeddedRules;
 };
 
 export type AgentSpec = {
@@ -39,17 +49,19 @@ export type AgentSpec = {
   readonly allowed_hosts: readonly string[];
   readonly instruction: string;
   readonly limits: { readonly max_steps: number; readonly timeout_ms: number };
+  readonly rules?: EmbeddedRules;
 };
 
 export type HybridTarget = { readonly role: HybridClickRole; readonly name: string };
 
-export type HybridStep =
+export type HybridStep = (
   | { readonly op: 'goto'; readonly url: string }
   | { readonly op: 'click'; readonly target: HybridTarget }
   | { readonly op: 'scroll'; readonly direction: 'up' | 'down' }
   | { readonly op: 'wait'; readonly ms: number }
   /** Étape déléguée à l'agent (E5 « script + agent ») : LLM à chaque run. */
-  | { readonly op: 'agent'; readonly instruction: string };
+  | { readonly op: 'agent'; readonly instruction: string }
+) & { readonly compiled_with?: CompiledWith };
 
 /** Localisation d'un champ sans LLM : ligne « libellé : valeur » unique de la page, ou premier titre de niveau donné. */
 export type FieldLocator =
@@ -128,6 +140,29 @@ class Checker {
     if (spec['schema_version'] !== 1) this.fail('schema_version', '1 attendu');
     if (spec['kind'] !== kind) this.fail('kind', `« ${kind} » attendu`);
   }
+  rules(v: unknown, path: string): EmbeddedRules | undefined {
+    if (v === undefined) return undefined;
+    const r = isRecord(v) ? v : {};
+    for (const key of Object.keys(r)) if (key !== 'text' && key !== 'refs') this.fail(`${path}.${key}`, 'champ non autorisé');
+    const text = this.str(r['text'], `${path}.text`, MAX_EMBEDDED_RULES);
+    const refs = r['refs'];
+    if (!Array.isArray(refs) || refs.length > 20 || !refs.every((x) => typeof x === 'string' && x.length <= 80)) {
+      this.fail(`${path}.refs`, 'liste de 20 références nom@version au plus attendue');
+      return undefined;
+    }
+    return { text, refs: refs as string[] };
+  }
+  compiledWith(v: unknown, path: string): CompiledWith | undefined {
+    if (v === undefined) return undefined;
+    const r = isRecord(v) ? v : {};
+    for (const key of Object.keys(r)) if (!['rules', 'model_id', 'at'].includes(key)) this.fail(`${path}.${key}`, 'champ non autorisé');
+    const rules = r['rules'];
+    if (!Array.isArray(rules) || rules.length > 40 || !rules.every((x) => typeof x === 'string' && x.length <= 200)) this.fail(`${path}.rules`, 'liste de références nom@version#sha256 attendue');
+    const model = r['model_id'];
+    if (model !== null && (typeof model !== 'string' || model.length > 200)) this.fail(`${path}.model_id`, 'identifiant de modèle ou null attendu');
+    const at = this.str(r['at'], `${path}.at`, 40);
+    return { rules: Array.isArray(rules) ? (rules as string[]) : [], model_id: typeof model === 'string' ? model : null, at };
+  }
   done<T>(spec: T): SpecCheck<T> {
     return this.errors.length === 0 ? { ok: true, spec } : { ok: false, errors: this.errors };
   }
@@ -146,7 +181,9 @@ export function validateAgentFetchSpec(input: unknown): SpecCheck<AgentFetchSpec
   if (via !== 'fetch' && via !== 'fetch_in_page') c.fail('via', '« fetch » ou « fetch_in_page » attendu');
   const instruction = c.str(input['instruction'], 'instruction', MAX_INSTRUCTION);
   const limits = isRecord(input['limits']) ? input['limits'] : {};
+  const rules = c.rules(input['rules'], 'rules');
   return c.done<AgentFetchSpec>({
+    ...(rules === undefined ? {} : { rules }),
     schema_version: 1,
     kind: 'agent_fetch',
     request: { url, allowed_hosts: hosts },
@@ -169,7 +206,9 @@ export function validateAgentSpec(input: unknown): SpecCheck<AgentSpec> {
   const start = c.url(input['start_url'], 'start_url', hosts);
   const instruction = c.str(input['instruction'], 'instruction', MAX_INSTRUCTION);
   const limits = isRecord(input['limits']) ? input['limits'] : {};
+  const rules = c.rules(input['rules'], 'rules');
   return c.done<AgentSpec>({
+    ...(rules === undefined ? {} : { rules }),
     schema_version: 1,
     kind: 'agent',
     start_url: start,
@@ -221,8 +260,14 @@ function checkStep(c: Checker, v: unknown, path: string, hosts: readonly string[
     return null;
   }
   const allowKeys = (keys: readonly string[]) => {
-    for (const key of Object.keys(v)) if (!keys.includes(key)) c.fail(`${path}.${key}`, 'champ non autorisé');
+    for (const key of Object.keys(v)) if (!keys.includes(key) && key !== 'compiled_with') c.fail(`${path}.${key}`, 'champ non autorisé');
   };
+  const step = checkStepOp(c, v, path, hosts, allowKeys);
+  const compiledWith = c.compiledWith(v['compiled_with'], `${path}.compiled_with`);
+  return step === null || compiledWith === undefined ? step : { ...step, compiled_with: compiledWith };
+}
+
+function checkStepOp(c: Checker, v: Record<string, unknown>, path: string, hosts: readonly string[], allowKeys: (keys: readonly string[]) => void): HybridStep | null {
   switch (v['op']) {
     case 'goto':
       allowKeys(['op', 'url']);

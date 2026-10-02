@@ -85,7 +85,13 @@ export class AgentToolsetNotClosedError extends Error {
   }
 }
 
+/**
+ * Outils de NOTRE processus ajoutés à l'agent (tâche 2.10, 18 §4.5) : `read_skill` lit un skill de l'ensemble résolu (ou
+ * épinglé), sans réseau ni action sur la page. Aucun autre : jamais d'intégration MCP en V1 (18 §5).
+ */
+export const STAGEHAND_OWN_TOOLS: readonly string[] = Object.freeze(['read_skill']);
+
 /** Outils proposés hors de la liste fermée (vide si la liste est tenue). */
 export function toolsOutsideClosedList(names: readonly string[]): string[] {
-  return names.filter((n) => !Object.hasOwn(STAGEHAND_TOOL_ACTIONS, n));
+  return names.filter((n) => !Object.hasOwn(STAGEHAND_TOOL_ACTIONS, n) && !STAGEHAND_OWN_TOOLS.includes(n));
 }

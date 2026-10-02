@@ -101,6 +101,8 @@ export type AttemptRecord = {
   model_id?: string | null;
   prompt_version?: string | null;
   engine?: string | null;
+  /** `nom@version` des règles qui ont placé l'essai (18 §4.6, tâche 2.10). */
+  rule_refs?: readonly string[];
 };
 
 /** Fin d'un run décidée par l'exécuteur. */

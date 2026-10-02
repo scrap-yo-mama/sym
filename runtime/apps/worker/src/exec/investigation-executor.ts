@@ -22,6 +22,12 @@
 // 4. Fin : stratégie v1 (`created_by = investigation` ; une trace E6 n'est gardée que compilée en E5, 04 §3.1), schéma de
 //    sortie validé et schéma d'entrée proposé posés sur l'API, résultat livré (dataset du run), statut `sain` (1) ; sinon
 //    `bloquee`, `action_requise` ou `erreur` (2, 3, 21). Toute fin ferme la phase et le récit.
+// Règles Markdown (tâche 2.10, 18 §4) : résolues pour l'API (propriétaire et instance seulement), injectées dans le préfixe
+// stable du prompt `investigate` (<trusted_rules>, <skills>, skills lus par `read_skill`), avec l'ensemble des couples
+// autorisés et leur coût estimé ; le plan rendu (`plan[]`, `excluded[]`, `rule_refs`) ne fait que réordonner ou restreindre
+// cet ensemble (`applyRulePlan` : `pruned_by_rule`, `rule_widening_ignored`), puis le rattrapage du moins cher (code). La
+// version retenue enregistre sa source (`source.rules`, `strategy_version_rules`) ; une recompilation (`reason: recompile`)
+// garde le schéma de sortie et crée une version `created_by = recompile`.
 // Plafonds : `investigation_budget_usd` (coût imputé de tout le run d'enquête, cumulé sur ses runs ; chaque exécution
 // d'un couple sous le plus petit de `max_cost_usd` et du budget restant) et `investigation_timeout_s` (échéance de chaque
 // phase : étape 0, reconnaissance, appel LLM, essais), nombre d'essais. Rien ne s'élargit : réseaux de la politique de
@@ -54,6 +60,8 @@ import { classifyExchange, classifyTransportError, domainRequestPacer, failureRo
 import {
   analyzeCapture,
   buildFromProposal,
+  estimateCostUsd,
+  orderTrials,
   buildTrialPlan,
   discoverScriptEndpoints,
   INVESTIGATION_DEFAULTS,
@@ -95,14 +103,29 @@ import {
   type SecretReader,
   type SsrfGuard,
 } from '@runtime/core/net';
-import { buildInputSchema, type DomainPacer } from '@runtime/core';
-import { investigateCallCeilingUsd, investigatePromptVersion, proposeInvestigation } from '@runtime/agent';
+import {
+  applyRulePlan,
+  buildInputSchema,
+  compiledWithRules,
+  DEFAULT_POLICY_NAME,
+  DEFAULT_POLICY_SHA256,
+  jsonSha256,
+  renderRulesPrompt,
+  SkillReader,
+  sourceRuleRows,
+  type DomainPacer,
+  type ResolvedRules,
+  type StrategyRuleRow,
+} from '@runtime/core';
+import { investigateCallCeilingUsd, investigateMessages, investigatePromptVersion, proposeInvestigation, readSkillsPhase, renderSkillBodies } from '@runtime/agent';
 import {
   appendInvestigationEvent,
+  buildStrategySource,
   loadInvestigation,
   loadRunTarget,
   readProxySettings,
   recordAccessReport,
+  resolveRulesForApi,
   saveInvestigationState,
   saveInvestigationStrategy,
   saveRunDataset,
@@ -223,6 +246,12 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
     const budgetView = () => ({ spent_usd: spent, max_usd: request.budget_usd, elapsed_s: Math.round((baseElapsed + now() - started) / 1000), timeout_s: request.timeout_s });
     const event = (kind: string, payload: Record<string, unknown> = {}) =>
       appendInvestigationEvent(deps.pool, { runId: ctx.runId, ownerId: ctx.ownerId, kind, payload: { run_id: ctx.runId, ...payload } });
+    /** Décisions de l'enquête (source de la version, 18 §4.6) : événements qui les portent, `run:seq`. */
+    const decisions: string[] = [];
+    const decide = async (kind: string, payload: Record<string, unknown> = {}) => {
+      const { seq } = await event(kind, payload);
+      decisions.push(`${ctx.runId}:${seq}`);
+    };
     const save = async (next: InvestigationPhase | null, patch: Partial<InvestigationState> = {}) => {
       state = { ...state, ...patch, spent_usd: spent, elapsed_ms: baseElapsed + Math.max(0, now() - started) };
       phase = next;
@@ -284,6 +313,12 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
     const sessionRequired = target.api.requiresSession || target.api.requires.tunnel === true;
     const tunnelMode = sessionRequired || (rungs.length === 0 && tunnelChosen);
     const first = rungs[0];
+    // Session requise (04 §3.2, C2) : seul le tunnel porte l'identité de l'utilisateur. Le serveur n'utilise aucun
+    // cookie de session en V1 : un essai N1/N2 partirait sans la session (401/403 → arrêt, puis tunnel élagué, X3)
+    // ou retiendrait une stratégie serveur sans session pour une API à session. Le plan se limite donc au tunnel.
+    const networks: PlanNetwork[] = sessionRequired
+      ? [{ mode: 'tunnel', perGbUsd: 0 }]
+      : [...rungs.map((r) => ({ mode: r.mode, perGbUsd: r.mode === 'direct' ? 0 : r.proxy.price.perGbUsd })), ...(tunnelChosen ? [{ mode: 'tunnel' as const, perGbUsd: 0 }] : [])];
     // Politique sans réseau serveur ni tunnel : un proxy requis manque (transition 3).
     if (!tunnelMode && first === undefined) return await finishStopped('proxy_not_configured', 'proxy_not_configured', 'setup');
     let userAgent: string;
@@ -441,7 +476,9 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
       if (stopped1 !== null) return stopped1;
       const capture: ReconCapture = recon.capture;
       const fresh = recon.failure === null ? analyzeCapture(capture, apiHostsOf(capture, host, scope)) : [];
-      const candidates: readonly DataCandidate[] = firstRun ? fresh : rematchCandidates(state.candidates ?? [], fresh);
+      // Recompilation (schéma conservé, aucun gisement gardé) : gisements frais, comme un premier run.
+      const freshCandidates = firstRun || state.candidates === undefined;
+      const candidates: readonly DataCandidate[] = freshCandidates ? fresh : rematchCandidates(state.candidates ?? [], fresh);
       await event(EV.reconnaissance, {
         mode: capture.mode,
         ...(recon.failure === null ? {} : { failure_class: recon.failure.failure_class, detail: recon.failure.detail }),
@@ -463,7 +500,7 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
       if (recon.failure !== null) return await finishFailed(recon.failure, 'reconnaissance');
       // État : gisements SANS valeur (origine, chemin, noms de paramètres) ; ceux du premier run gardent leurs identifiants.
       await save(firstRun ? 'reconnaissance' : phase, {
-        candidates: firstRun ? fresh.map(storedCandidate) : (state.candidates ?? []),
+        candidates: freshCandidates ? fresh.map(storedCandidate) : (state.candidates ?? []),
         page: { url: pageUrl, host, document_bytes: capture.document?.bytes ?? 0, total_bytes: capture.totalBytes, mode: capture.mode },
       });
       if (spent >= request.budget_usd) return await budgetExhausted('investigation_budget_usd');
@@ -475,6 +512,7 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
       const agenticOnly = deps.agentic === true && (rolePrice(config, 'extract') !== undefined || (deps.browsers !== null && rolePrice(config, 'agent') !== undefined));
       const fixed = state.validated_schema;
       let proposal = state.proposal;
+      let rulesUsed = state.rules;
       const remap = proposal !== undefined && fixed !== undefined && JSON.stringify(fixed) !== JSON.stringify(state.proposed_schema);
       if (proposal === undefined || remap) {
         if (deps.llm === undefined || config === null || config.roles.investigate === undefined) {
@@ -491,12 +529,18 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
         }
         const model = config.roles.investigate.model;
         const exampleOutput = (ctx.input as { example_output?: unknown } | null)?.example_output;
-        const args = {
+        // Règles et skills applicables (18 §4.3) : propriétaire de l'API et instance seulement ; plafonds journalisés.
+        const ruled = await resolveRulesForApi(deps.pool, { apiId: ctx.apiId, ownerId: ctx.ownerId, role: 'investigate', host });
+        await logRuleBudgets(ctx, ruled.resolved);
+        const reader = new SkillReader(ruled.resolved.skills);
+        let args: Parameters<typeof investigateMessages>[0] = {
           description: request.description,
           ...(exampleOutput === undefined ? {} : { exampleOutput }),
           candidates,
           accessFacts: accessFactsForPrompt(report),
           ...(fixed === undefined ? {} : { fixedSchema: fixed }),
+          rules: renderRulesPrompt(ruled.resolved),
+          allowedCouples: previewCouples({ networks, browser: deps.browsers !== null, agentic: deps.agentic === true ? agenticPrices(config) : {}, candidates, documentBytes: state.page?.document_bytes ?? capture.document?.bytes ?? 0, totalBytes: state.page?.total_bytes ?? capture.totalBytes }),
         };
         // Coût d'un appel borné AVANT l'envoi (sortie plafonnée, entrée estimée par excès) : jamais un appel qui
         // ferait dépasser `investigation_budget_usd` ; prix inconnu → aucun appel (08 §1, jamais 0).
@@ -505,17 +549,22 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
           await ctx.log('warn', 'llm_price_missing', { model, role: 'investigate' });
           return await finishFailed({ failure_class: 'run_budget_exceeded', retryable: false, detail: 'llm_price_missing' }, 'schema');
         }
-        const callCeiling = investigateCallCeilingUsd(args, price);
+        let callCeiling = investigateCallCeilingUsd(args, price);
+        const beforeCall = () => {
+          if (spent + (client.meter.snapshot().cost_usd_known ?? 0) + callCeiling > request.budget_usd) throw new BudgetGuardError();
+        };
         let llmFailure: ExecFailure | null = null;
         try {
-          const out = await proposeInvestigation(client, {
-            ...args,
-            signal,
-            beforeCall: () => {
-              if (spent + (client.meter.snapshot().cost_usd_known ?? 0) + callCeiling > request.budget_usd) throw new BudgetGuardError();
-            },
-          });
+          // Chargement progressif (18 §4.4) : le corps d'un skill n'entre qu'après `read_skill`, exécuté ici.
+          const bodies = await readSkillsPhase(client, 'investigate', { messages: investigateMessages(args), reader, signal, beforeCall });
+          for (const read of reader.reads) await event('skill.read', { ref: read.ref, name: read.name, version: read.version, sha256: read.sha256 });
+          if (bodies.length > 0) {
+            args = { ...args, skills: renderSkillBodies(bodies) };
+            callCeiling = investigateCallCeilingUsd(args, price);
+          }
+          const out = await proposeInvestigation(client, { ...args, signal, beforeCall });
           proposal = out.proposal;
+          rulesUsed = { rows: sourceRuleRows(ruled.resolved, reader.reads), effective: effectiveRefs(ruled.resolved) };
         } catch (error) {
           if (ctx.signal.aborted) throw error;
           if (timedOut()) llmFailure = { failure_class: 'run_budget_exceeded', retryable: false, detail: 'investigation_timeout_s' };
@@ -560,15 +609,15 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
         });
         if (spent >= request.budget_usd) return await budgetExhausted('investigation_budget_usd');
         if (!request.auto_validate) {
-          await save('awaiting_schema_validation', { proposal: proposal!, proposed_schema: built.outputSchema });
+          await save('awaiting_schema_validation', { proposal: proposal!, proposed_schema: built.outputSchema, ...(rulesUsed === undefined ? {} : { rules: rulesUsed }) });
           await event(EV.phase, { phase: 'awaiting_schema_validation', budget: budgetView() });
           return { state: 'succeeded', outcome: 'clean', degraded_reasons: [], items: 0 };
         }
-        await save('testing', { proposal: proposal!, proposed_schema: built.outputSchema, validated_schema: built.outputSchema, validated_by: 'auto' });
-        await event(EV.schemaValidated, { by: 'auto' });
+        await save('testing', { proposal: proposal!, proposed_schema: built.outputSchema, validated_schema: built.outputSchema, validated_by: 'auto', ...(rulesUsed === undefined ? {} : { rules: rulesUsed }) });
+        await decide(EV.schemaValidated, { by: 'auto' });
         await ctx.log('info', 'schema_auto_validated', {});
       } else if (remap) {
-        await save(phase, { proposal: proposal! });
+        await save(phase, { proposal: proposal!, ...(rulesUsed === undefined ? {} : { rules: rulesUsed }) });
       }
       const outputSchema = built.outputSchema;
       if (spent >= request.budget_usd) return await budgetExhausted('investigation_budget_usd');
@@ -576,12 +625,6 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
 
       // --- 3. Essais du moins cher au plus cher --------------------------------------------------------------------
       await save('testing');
-      // Session requise (04 §3.2, C2) : seul le tunnel porte l'identité de l'utilisateur. Le serveur n'utilise aucun
-      // cookie de session en V1 : un essai N1/N2 partirait sans la session (401/403 → arrêt, puis tunnel élagué, X3)
-      // ou retiendrait une stratégie serveur sans session pour une API à session. Le plan se limite donc au tunnel.
-      const networks: PlanNetwork[] = sessionRequired
-        ? [{ mode: 'tunnel', perGbUsd: 0 }]
-        : [...rungs.map((r) => ({ mode: r.mode, perGbUsd: r.mode === 'direct' ? 0 : r.proxy.price.perGbUsd })), ...(tunnelChosen ? [{ mode: 'tunnel' as const, perGbUsd: 0 }] : [])];
       const plan = buildTrialPlan({
         strategies: built.strategies,
         networks,
@@ -593,12 +636,26 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
         documentBytes: state.page?.document_bytes ?? 0,
         totalBytes: state.page?.total_bytes ?? 0,
       });
+      // Règles embarquées dans les prompts figés E4-E6 (18 §4.5, RULES_MAX_TOKENS de 1 000) : le run ne relit pas les règles.
+      const embedded = plan.some((p) => p.execution === 'agent_fetch' || p.execution === 'agent') ? (await resolveRulesForApi(deps.pool, { apiId: ctx.apiId, ownerId: ctx.ownerId, role: 'embedded', host })).resolved : null;
+      const embeddedRows = embedded === null ? [] : sourceRuleRows({ rules: embedded.rules, skills: [], truncated: [] }, [], { embedded: true });
+      if (embedded !== null && embedded.rules.length > 0) {
+        const text = renderRulesPrompt({ rules: embedded.rules, skills: [], skillsWithoutDescription: [] });
+        for (const [i, p] of plan.entries()) if (p.execution === 'agent_fetch' || p.execution === 'agent') plan[i] = { ...p, spec: { ...p.spec, rules: { text, refs: embedded.rules.map((r) => r.ref) } } };
+      }
+      // Plan guidé par les règles (18 §4.5) : réordonner ou restreindre DANS l'ensemble autorisé, jamais élargir.
+      const guided = applyRulePlan(plan, proposal, new Set(rulesUsed?.effective ?? []));
+      for (const ignored of guided.ignored) await ctx.log('warn', 'rule_widening_ignored', { execution: ignored.execution, network: ignored.network, rule_refs: ignored.rule_refs, reason: ignored.reason });
+      for (const { pair, rule_refs } of guided.prunedByRule) {
+        await decide(EV.attemptPruned, { by: null, reason: 'pruned_by_rule', rule_refs, pruned: [{ execution: pair.execution, network: pair.network, source: pair.source, est_cost_usd: pair.est_cost_usd }] });
+      }
+      const ordered = guided.ordered;
       await event(EV.phase, {
         phase: 'testing',
-        plan: plan.map((p) => ({ execution: p.execution, network: p.network, source: p.source, est_cost_usd: p.est_cost_usd })),
+        plan: ordered.map((p) => ({ execution: p.execution, network: p.network, source: p.source, est_cost_usd: p.est_cost_usd, ...(guided.placed.has(p) ? { rule_refs: guided.placed.get(p) } : {}) })),
         budget: budgetView(),
       });
-      const entries = new Map<TrialPair, PlanEntry>(plan.map((p) => [p, p]));
+      const entries = new Map<TrialPair, PlanEntry>(ordered.map((p) => [p, p]));
       const lastRecords = new Map<TrialPair, Record<string, unknown>[]>();
       /** Trace E6 compilée en E5 par la dernière exécution conforme du couple (04 §3.1). */
       const compiledFor = new Map<TrialPair, unknown>();
@@ -608,7 +665,7 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
       let outcome: TrialsOutcome;
       try {
         outcome = await runTrials(
-          plan,
+          ordered,
           {
             now,
             execute: async (pair, index, limits, purpose = 'sample') => {
@@ -674,8 +731,9 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
                 ...(acc === undefined || (acc.model === null && acc.llm === 0)
                   ? {}
                   : { llm_usd: acc.llm, tokens: acc.tokens, model_id: acc.model, prompt_version: acc.prompt, engine: acc.engine }),
+                ...(guided.placed.has(o.pair as PlanEntry) ? { rule_refs: guided.placed.get(o.pair as PlanEntry) } : {}),
               });
-              await event(EV.attemptFinished, {
+              await decide(EV.attemptFinished, {
                 attempt: { execution: o.pair.execution, network: o.pair.network, est_cost_usd: o.pair.est_cost_usd, result: o.result, cost_usd: o.cost_usd, ms: o.ms },
                 source: o.pair.source,
                 ...(o.detail === null ? {} : { why: { code: o.detail, params: {} } }),
@@ -685,7 +743,7 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
               });
             },
             pruned: async (pairs, by, cls) => {
-              await event(EV.attemptPruned, {
+              await decide(EV.attemptPruned, {
                 by: { execution: by.execution, network: by.network, source: by.source },
                 reason: cls,
                 pruned: pairs.map((p) => ({ execution: p.execution, network: p.network, source: p.source, est_cost_usd: p.est_cost_usd })),
@@ -693,7 +751,7 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
             },
           },
           { maxUsd: request.budget_usd, spentUsd: spent, deadlineMs, maxAttempts: INVESTIGATION_DEFAULTS.maxAttempts, maxCostPerRunUsd: target.api.maxCostUsd },
-          { ...(deps.samples === undefined ? {} : { samples: deps.samples }), paginated: (p) => entries.get(p)?.paginated === true },
+          { ...(deps.samples === undefined ? {} : { samples: deps.samples }), paginated: (p) => entries.get(p)?.paginated === true, catchUp: true },
         );
       } catch (error) {
         if (!(error instanceof TunnelOfflineStop)) throw error;
@@ -711,16 +769,33 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
           const runs = Math.max(1, outcome.outcome.executions.length);
           const kept = retainedStrategy(entry, compiledFor.get(pair), round6((spend.get(pair)?.proxy ?? 0) / runs));
           if (!kept.ok) return await finishFailed({ failure_class: 'extraction', retryable: false, detail: kept.reason }, 'testing');
+          // Source (18 §4.6) : règles injectées et skills lus ; règles embarquées si le compilé porte un prompt (E4) ou vient
+          // d'une trace E6 (E5 : `compiled_with` par étape, 19 §4).
+          const agentic = entry.execution === 'agent_fetch' || entry.execution === 'agent';
+          const rows: StrategyRuleRow[] = [...(rulesUsed?.rows ?? []), ...(agentic ? embeddedRows.filter((e) => !(rulesUsed?.rows ?? []).some((r) => r.rule_file_id === e.rule_file_id)) : [])];
+          const spec = kept.execution === 'hybrid' ? withCompiledWith(kept.spec, compiledWithRules(agentic ? embeddedRows : rows), spend.get(pair)?.model ?? null, now()) : kept.spec;
+          const recompile = state.reason === 'recompile';
           const saved = await saveInvestigationStrategy(deps.pool, {
             apiId: ctx.apiId,
             ownerId: ctx.ownerId,
             execution: kept.execution,
             network: kept.network,
-            spec: kept.spec,
+            spec,
             estCostUsd: kept.estCostUsd,
             outputSchema,
             inputSchema: buildInputSchema({ paginated: entry.paginated, maxPages: PROPOSAL_HARD_MAX_PAGES }),
             state: { ...state, spent_usd: spent, elapsed_ms: baseElapsed + Math.max(0, now() - started) },
+            createdBy: recompile ? 'recompile' : 'investigation',
+            source: buildStrategySource({
+              reason: recompile ? 'recompile' : 'investigation',
+              description: request.description,
+              url: request.url,
+              outputSchemaSha256: jsonSha256(outputSchema),
+              investigationId: ctx.runId,
+              decisions,
+              rows,
+            }),
+            rules: rows,
           });
           phase = 'done';
           // Résultat livré (figure 1, étape I) : la sortie de la dernière exécution conforme, écrite comme le propriétaire.
@@ -762,6 +837,65 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
       await ports.close();
     }
   };
+}
+
+/** Prix des rôles agentiques (E4 : `extract`, E6 : `agent`) pour l'ensemble des couples autorisés. */
+function agenticPrices(config: LlmConfig | null): { extract?: TokenPrice | null; agent?: TokenPrice | null } {
+  const extract = rolePrice(config, 'extract');
+  const agent = rolePrice(config, 'agent');
+  return { ...(extract === undefined ? {} : { extract }), ...(agent === undefined ? {} : { agent }) };
+}
+
+/**
+ * Ensemble des couples autorisés montré au rôle `investigate` (18 §4.5) : mêmes règles que `buildTrialPlan` (réseaux de la
+ * politique et proxys de l'admin, niveaux servis par le worker, rôles configurés), coût estimé indicatif (plus petit
+ * gisement). Le plan exécuté est recalculé après la proposition ; rien de ce qui manque ici n'y entre.
+ */
+function previewCouples(input: {
+  networks: readonly PlanNetwork[];
+  browser: boolean;
+  agentic: { extract?: TokenPrice | null; agent?: TokenPrice | null };
+  candidates: readonly DataCandidate[];
+  documentBytes: number;
+  totalBytes: number;
+}): { execution: string; network: string; est_cost_usd: number | null }[] {
+  const usable = input.candidates.filter((c) => c.unsupported === undefined);
+  const bytes = usable.length === 0 ? 0 : Math.min(...usable.map((c) => c.bytes));
+  const out: TrialPair[] = [];
+  const add = (execution: TrialPair['execution'], network: PlanNetwork, b: number, llm: TokenPrice | null) =>
+    out.push({ execution, network: network.mode, source: '', est_cost_usd: estimateCostUsd(execution, network.mode, { bytes: b, pages: 1, perGbUsd: network.perGbUsd, llmPrice: llm }) });
+  for (const network of input.networks) {
+    const tunnel = network.mode === 'tunnel';
+    if (usable.length > 0) {
+      add('fetch', network, bytes, null);
+      if (input.browser || tunnel) {
+        add('fetch_in_page', network, input.documentBytes + bytes, null);
+        add('playwright', network, Math.max(input.totalBytes, bytes), null);
+      }
+    }
+    if (input.agentic.extract !== undefined && !tunnel) add('agent_fetch', network, input.documentBytes, input.agentic.extract);
+    if (input.agentic.agent !== undefined && input.browser && !tunnel) add('agent', network, input.totalBytes * 3, input.agentic.agent);
+  }
+  return orderTrials(out).map((p) => ({ execution: p.execution, network: p.network, est_cost_usd: p.est_cost_usd }));
+}
+
+/** Références effectives du plan : règles injectées, hors politique par défaut telle que livrée (ordre de 04 §3.3). */
+function effectiveRefs(resolved: ResolvedRules): string[] {
+  return resolved.rules.filter((r) => !(r.name === DEFAULT_POLICY_NAME && r.sha256 === DEFAULT_POLICY_SHA256)).map((r) => r.ref);
+}
+
+/** Plafonds de règles et de skills atteints (19 §2) : journalisés, sans contenu. */
+async function logRuleBudgets(ctx: RunCtx, resolved: ResolvedRules): Promise<void> {
+  if (resolved.truncated.length > 0) await ctx.log('warn', 'rules_truncated', { removed: resolved.truncated.map((r) => r.ref), budget_tokens: resolved.budget.rules });
+  if (resolved.skillsListingTruncated) await ctx.log('warn', 'skills_listing_truncated', { without_description: resolved.skillsWithoutDescription, budget_tokens: resolved.budget.skills });
+}
+
+/** Empreinte `compiled_with` de chaque étape d'une trace E6 compilée en E5 (19 §4, 19b §1). */
+function withCompiledWith(spec: unknown, rules: readonly string[], modelId: string | null, at: number): unknown {
+  const s = spec as { steps?: unknown[] } | null;
+  if (s === null || typeof s !== 'object' || !Array.isArray(s.steps)) return spec;
+  const compiled_with = { rules: [...rules], model_id: modelId, at: new Date(at).toISOString() };
+  return { ...s, steps: s.steps.map((step) => (typeof step === 'object' && step !== null ? { ...step, compiled_with } : step)) };
 }
 
 /** Garde du budget avant un appel du rôle `investigate` (levée par `beforeCall`, jamais réessayée). */

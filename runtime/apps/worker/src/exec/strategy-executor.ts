@@ -77,7 +77,7 @@ import {
   type HttpExchange,
   type RequestPacer,
 } from '@runtime/core/exec';
-import type { DomainPacer } from '@runtime/core';
+import type { DomainPacer, StrategyRuleRow, StrategySource } from '@runtime/core';
 import { InstanceContactError, RobotsCache, RobotsGate, sessionRobotsFetcher } from '@runtime/core/access';
 import {
   buildNetworkRungs,
@@ -186,7 +186,16 @@ export type CandidateCheck = {
 };
 
 /** Stratégie réparée (vN+1) : patch borné (ou `null` pour une escalade), sortie déjà rejouée et validée. */
-export type RepairedStrategy = { readonly execution: Execution; readonly network: FrozenStrategy['network']; readonly spec: DeclarativeSpec; readonly patch: JsonPatchOperation[] | null; readonly estCostUsd: number | null };
+export type RepairedStrategy = {
+  readonly execution: Execution;
+  readonly network: FrozenStrategy['network'];
+  readonly spec: DeclarativeSpec;
+  readonly patch: JsonPatchOperation[] | null;
+  readonly estCostUsd: number | null;
+  /** Source de vN+1 (tâche 2.10, 18 §4.6) : règles à jour injectées et skills lus. */
+  readonly source?: StrategySource;
+  readonly rules?: readonly StrategyRuleRow[];
+};
 
 /** Issue d'une réparation (04 §5). */
 export type RepairOutcome =

@@ -355,3 +355,26 @@ describe('sélection « moins cher conforme » avec rattrapage (18 §4.5)', () =
     expect(tried).toEqual(['fetch/direct']);
   });
 });
+
+describe('compilé E4-E6 (18 §4.5, 19 §4)', () => {
+  test('E4 et E6 embarquent le texte des règles ; E5 porte compiled_with par étape ; champs fermés', async () => {
+    const { validateAgentFetchSpec, validateAgentSpec, validateHybridSpec } = await import('../agent/specs.js');
+    const rules = { text: '<trusted_rules>\n## zz@1 (domain)\nx\n</trusted_rules>', refs: ['zz@1'] };
+    const e4 = validateAgentFetchSpec({ schema_version: 1, kind: 'agent_fetch', request: { url: 'http://zz.test/', allowed_hosts: ['zz.test'] }, instruction: 'x', rules });
+    expect(e4.ok && e4.spec.rules).toEqual(rules);
+    const e6 = validateAgentSpec({ schema_version: 1, kind: 'agent', start_url: 'http://zz.test/', allowed_hosts: ['zz.test'], instruction: 'x', rules });
+    expect(e6.ok && e6.spec.rules).toEqual(rules);
+    expect(validateAgentSpec({ schema_version: 1, kind: 'agent', start_url: 'http://zz.test/', allowed_hosts: ['zz.test'], instruction: 'x', rules: { ...rules, tools: ['mcp'] } }).ok).toBe(false);
+    const compiled_with = { rules: [`zz@1#${'a'.repeat(64)}`], model_id: 'zz-agent', at: '2026-10-02T00:00:00.000Z' };
+    const e5 = validateHybridSpec({
+      schema_version: 1,
+      kind: 'hybrid',
+      start_url: 'http://zz.test/',
+      allowed_hosts: ['zz.test'],
+      steps: [{ op: 'click', target: { role: 'link', name: 'Suivant' }, compiled_with }],
+      extract: { mode: 'labels', fields: { id: { label: 'Identifiant' } } },
+    });
+    expect(e5.ok && e5.spec.steps[0]!.compiled_with).toEqual(compiled_with);
+    expect(validateHybridSpec({ ...(e5.ok ? e5.spec : {}), steps: [{ op: 'wait', ms: 1, compiled_with: { ...compiled_with, side_effect: 'none' } }] }).ok).toBe(false);
+  });
+});

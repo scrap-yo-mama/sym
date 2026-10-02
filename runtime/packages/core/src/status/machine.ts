@@ -102,7 +102,14 @@ export function applyStatusEvent(state: ApiStatusState, event: StatusEventInput,
       ]);
 
     case 'reinvestigate': {
-      const reason = event.trigger === 'manual' ? 'reinvestigate_manual' : event.trigger === 'schema_changed' ? 'output_schema_changed' : 'force_investigate';
+      const reason =
+        event.trigger === 'manual'
+          ? 'reinvestigate_manual'
+          : event.trigger === 'schema_changed'
+            ? 'output_schema_changed'
+            : event.trigger === 'rules_changed'
+              ? 'rules_changed'
+              : 'force_investigate';
       if (status === 'sain' || status === 'warning') {
         return apply(state, ctx, [{ id: status === 'sain' ? 19 : 20, to: 'enquete', reason, patch: { previousStatus: status } }]);
       }

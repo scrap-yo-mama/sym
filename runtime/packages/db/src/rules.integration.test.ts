@@ -110,7 +110,7 @@ describe('migration 0018', () => {
     expect(rows).toEqual([{ kind: 'rule', visibility: 'instance', owner_id: null, applies_to: ['*'], origin: 'seed', sha256: DEFAULT_POLICY_SHA256, review_state: 'none' }]);
   });
   test('down puis up : réversible', async () => {
-    await migrateDown({ connectionString: tdb.url, to: '0017_run_rejected_items' });
+    await migrateDown({ connectionString: tdb.url, steps: 1 });
     expect((await pool.query("SELECT to_regclass('rule_files') AS t")).rows[0].t).toBeNull();
     await migrateUp({ connectionString: tdb.url });
     expect((await pool.query("SELECT to_regclass('rule_files') AS t")).rows[0].t).toBe('rule_files');
@@ -202,7 +202,7 @@ describe('relecture des écritures machine (18 §4.9, 19 §5)', () => {
   test('put_rule qui recopie une proposition en attente → 403 human_confirmation_required', async () => {
     const proposal = rule('zz-proposee', '["*.monsite.test"]', 'Exclure fetch sur monsite.');
     const file = await pool.query<{ id: string }>("INSERT INTO rule_files (owner_id, kind, name, description, applies_to, current_version) VALUES ($1, 'rule', 'zz-proposee', 'Règle zz-proposee', '{*.monsite.test}', 0) RETURNING id", [A]);
-    await pool.query("INSERT INTO rule_file_versions (rule_file_id, version, content, sha256, author_id, origin) VALUES ($1, 1, $2, $3, NULL, 'proposal')", [file.rows[0]!.id, proposal, ruleSha256(proposal)]);
+    await pool.query("INSERT INTO rule_file_versions (rule_file_id, version, content, sha256, description, applies_to, author_id, origin) VALUES ($1, 1, $2, $3, 'Règle zz-proposee', '{*.monsite.test}', NULL, 'proposal')", [file.rows[0]!.id, proposal, ruleSha256(proposal)]);
     expect((await pool.query("SELECT review_state FROM rule_file_versions WHERE rule_file_id = $1", [file.rows[0]!.id])).rows[0].review_state).toBe('to_review');
     await expectError(putRule(pool, { userId: A, role: 'member', via: 'mcp' }, { content: proposal }), 'human_confirmation_required', 403);
   });
