@@ -1923,7 +1923,12 @@ export interface components {
                 kind: string;
                 value: string;
             }[];
-            /** @description `Accept-Language` effectif envoyé aux sites cibles : celui d'un Chromium vierge de l'image, le même pour le client HTTP et pour le navigateur (21 § 6). Jamais la langue de l'interface, du compte ou du run. `null` : aucun en-tête (un Chromium vierge de l'image n'en envoie pas). */
+            /**
+             * @description Qui envoie les requêtes vers le site, donc leur `Accept-Language` (21 § 6) : `engine` = le moteur serveur, la valeur est dans `accept_language` ; `user_browser` = run en tunnel, le Chrome de l'utilisateur envoie sa langue réelle (21 § 6.4), non mesurée : `accept_language` est alors absent. Absent (rapport antérieur) : `engine`.
+             * @enum {string}
+             */
+            accept_language_source?: "engine" | "user_browser";
+            /** @description `Accept-Language` effectif envoyé aux sites cibles par le moteur : celui d'un Chromium vierge de l'image, le même pour le client HTTP et pour le navigateur (21 § 6). Jamais la langue de l'interface, du compte ou du run. `null` : aucun en-tête (un Chromium vierge de l'image n'en envoie pas). Absent quand `accept_language_source` vaut `user_browser` (tunnel). */
             accept_language?: string | null;
             llms_txt?: boolean;
             payment_offer?: string | null;

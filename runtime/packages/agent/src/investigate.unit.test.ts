@@ -124,16 +124,33 @@ describe('M6 : langue de la prose du LLM (21 § 4.5)', () => {
       const accented = { fields: [{ name: 'prénom', type: 'string', required: true, personal: true, description: 'Prénom' }], sources: [] };
       fake.setScenario('inv', [scripted.json(accented), scripted.json(accented), scripted.json(accented)]);
       await expect(proposeInvestigation(client, { description: 'x', candidates: [candidate()], proseLocale: 'fr' })).rejects.toThrow();
-      // Une description française (lue par le modèle client, 21 § 4.5 : anglais) est refusée, même avec runs.locale = fr.
-      const frDescription = { fields: [{ name: 'first_name', type: 'string', required: true, personal: true, description: 'Prénom de la personne' }], sources: [] };
-      fake.setScenario('inv', [scripted.json(frDescription), scripted.json(frDescription), scripted.json(frDescription)]);
-      await expect(proposeInvestigation(client, { description: 'x', candidates: [candidate()], proseLocale: 'fr' })).rejects.toThrow();
       // La même réponse en anglais passe, nom ET description : le schéma de sortie ne dépend pas de runs.locale.
       const ok = { fields: [{ name: 'first_name', type: 'string', required: true, personal: true, description: 'First name of the person' }], sources: [] };
       fake.setScenario('inv', [scripted.json(ok)]);
       const field = (await proposeInvestigation(client, { description: 'x', candidates: [candidate()], proseLocale: 'fr' })).proposal.fields[0];
       expect(field?.name).toBe('first_name');
       expect(field?.description).toBe('First name of the person');
+    } finally {
+      await fake.close();
+    }
+  });
+
+  test('assert_machine_fields_english : une description anglaise hors ASCII (« Price (€) », « Person’s name », « Café name ») est acceptée ; la langue de la description n’échoue jamais l’enquête', async () => {
+    const fake = await createFakeProvider();
+    try {
+      const client = createLlmClient({ providers: [{ id: 'f', baseUrl: fake.baseUrl, apiKey: new Secret('zz-test-key-0000'), models: [{ id: 'inv', price: { in: 1, out: 1 } }] }], roles: { investigate: { provider: 'f', model: 'inv' } } });
+      // 21 § 4.5 demande une description en anglais, pas en ASCII : symboles, apostrophe typographique, nom propre accentué ou
+      // mention d'une clé française du site sont de l'anglais légitime (les sites français sont la cible principale).
+      const descriptions = ['Price (€)', 'Person’s name', 'Café name', "Value of the site's 'prénom' key"];
+      const english = { fields: descriptions.map((description, i) => ({ name: `field_${i}`, type: 'string', required: false, personal: false, description })), sources: [] };
+      fake.setScenario('inv', [scripted.json(english)]);
+      const fields = (await proposeInvestigation(client, { description: 'x', candidates: [candidate()], proseLocale: 'fr' })).proposal.fields;
+      expect(fields.map((f) => f.description)).toEqual(descriptions);
+      // Une description restée en français (consigne du prompt non suivie) n'est pas une erreur de structure : la consigne
+      // « plain English » du prompt est la garde, jamais un échec de l'enquête (seuls noms et clés JSON sont refusés, M6).
+      const frDescription = { fields: [{ name: 'first_name', type: 'string', required: true, personal: true, description: 'Prénom de la personne' }], sources: [] };
+      fake.setScenario('inv', [scripted.json(frDescription)]);
+      expect((await proposeInvestigation(client, { description: 'x', candidates: [candidate()], proseLocale: 'fr' })).proposal.fields[0]?.name).toBe('first_name');
     } finally {
       await fake.close();
     }

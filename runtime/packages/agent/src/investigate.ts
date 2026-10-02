@@ -52,7 +52,8 @@ export type InvestigateArgs = {
  * Rappel placé APRÈS le bloc `Language:` : ce rôle n'écrit aucune phrase pour l'humain. Noms, types et descriptions de champs
  * sont des sorties machine, et la description est lue par le modèle client (21 § 4.5) : anglais, quelle que soit `runs.locale`.
  * Seul un `title` de champ (absent de la proposition V1) suivrait la langue du run. Le schéma de sortie ne dépend donc pas de la
- * langue du demandeur ; `INVESTIGATION_PROPOSAL_SCHEMA` refuse en plus une description hors ASCII imprimable.
+ * langue du demandeur. La consigne est la seule garde de la description : aucun motif de caractères ne la refuse (« Price (€) »,
+ * « Person’s name » sont de l'anglais), une description mal rédigée ne fait jamais échouer l'enquête.
  */
 const INVESTIGATE_MACHINE_FIELDS_NOTE =
   'This role writes no sentence for the user: field names, types and every description stay in plain English whatever the Language line says (descriptions are read by the API client and are never translated).';

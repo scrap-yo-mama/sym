@@ -60,3 +60,37 @@ describe('rapport d’accès : Accept-Language relevé pendant la sonde', () => 
     expect(view.accept_language).toBe(received[0]);
   });
 });
+
+describe('rapport d’accès en tunnel : la langue est celle du navigateur de l’utilisateur (21 § 6.4)', () => {
+  // En tunnel, robots.txt et la sonde partent par `page_fetch` dans l'onglet de l'utilisateur : son Chrome envoie SA langue
+  // réelle, que le worker ne relève pas. Le rapport ne doit jamais dire « aucune » (ce serait faux), ni inventer une valeur.
+  const robotsAllowAll = async () => ({ status: 200, location: null, body: 'User-agent: *\nDisallow:\n', truncated: false });
+  const robotsDenyAll = async () => ({ status: 200, location: null, body: 'User-agent: *\nDisallow: /\n', truncated: false });
+  const browserProbe = async (url: string) => ({ status: 200, headers: { 'content-type': 'text/html' }, body: '<html><body>ok</body></html>', url });
+
+  test('assert_accept_language_engine_real : sonde par le tunnel → source user_browser, aucune valeur, jamais null (« Aucune »)', async () => {
+    const gate = new RobotsGate({ fetch: robotsAllowAll });
+    const report = await buildAccessReport({ url: 'https://zz-test-tunnel-lang.example/page', gate, probe: browserProbe, requestsFrom: 'user_browser', signal, probeLlmsTxt: false });
+    const view = accessReportView(report);
+    expect(report.accept_language_source).toBe('user_browser');
+    expect(view.accept_language_source).toBe('user_browser');
+    expect('accept_language' in view).toBe(false);
+    expect(view.accept_language).not.toBeNull();
+  });
+
+  test('assert_accept_language_engine_real : tunnel, sonde qui relèverait un en-tête → ignoré (le navigateur de l’utilisateur décide) ; robots.txt interdit → toujours user_browser', async () => {
+    const reporting = async (url: string) => ({ ...(await browserProbe(url)), sent_accept_language: null });
+    const view = accessReportView(await buildAccessReport({ url: 'https://zz-test-tunnel-lang.example/page', gate: new RobotsGate({ fetch: robotsAllowAll }), probe: reporting, requestsFrom: 'user_browser', signal, probeLlmsTxt: false }));
+    expect(view).toMatchObject({ accept_language_source: 'user_browser' });
+    expect('accept_language' in view).toBe(false);
+    const denied = accessReportView(await buildAccessReport({ url: 'https://zz-test-tunnel-lang.example/page', gate: new RobotsGate({ fetch: robotsDenyAll }), probe: browserProbe, requestsFrom: 'user_browser', signal, probeLlmsTxt: false }));
+    expect(denied).toMatchObject({ signal: 'disallowed', accept_language_source: 'user_browser' });
+    expect('accept_language' in denied).toBe(false);
+  });
+
+  test('assert_accept_language_engine_real : moteur (défaut) → source engine, la valeur relevée ou null', async () => {
+    const { view } = await reportWith({ userAgent: 'ZzTestBot/1.0 (+mailto:ops@zz-test.example)' });
+    expect(view.accept_language_source).toBe('engine');
+    expect(view.accept_language).toBeNull();
+  });
+});

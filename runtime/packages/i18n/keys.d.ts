@@ -8,6 +8,7 @@ export type MessageKey =
   | 'access.signal.unknown'
   | 'accessTab.acceptLanguage'
   | 'accessTab.acceptLanguageNone'
+  | 'accessTab.acceptLanguageUserBrowser'
   | 'accessTab.checkedAt'
   | 'accessTab.contact'
   | 'accessTab.found'

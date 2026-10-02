@@ -146,6 +146,19 @@ describe('onglet Accès', () => {
     expect(sent).toMatch(/data-testid="accept-language"[^>]*>en-US,en;q=0\.9</);
   });
 
+  test('assert_accept_language_engine_real : run en tunnel → « celle de ton navigateur », jamais « Aucune » (21 § 6.4, § 6.6)', async () => {
+    // En tunnel, le Chrome de l'utilisateur envoie sa langue réelle : la vue porte accept_language_source = user_browser, sans valeur.
+    const tunnel = textOf(await renderHtml(ApiAccessTab, { detail: blockedDetail({ access_report: { ...report, accept_language_source: 'user_browser' as const } }) }));
+    expect(tunnel).toContain(fr.accessTab.acceptLanguageUserBrowser);
+    expect(tunnel).not.toContain(fr.accessTab.acceptLanguageNone);
+    // Même si une ancienne vue portait null à côté, la source prime.
+    const legacy = textOf(await renderHtml(ApiAccessTab, { detail: blockedDetail({ access_report: { ...report, accept_language: null, accept_language_source: 'user_browser' as const } }) }));
+    expect(legacy).toContain(fr.accessTab.acceptLanguageUserBrowser);
+    expect(legacy).not.toContain(fr.accessTab.acceptLanguageNone);
+    // En anglais aussi, une clé dédiée.
+    expect(en.accessTab.acceptLanguageUserBrowser).toMatch(/your browser/i);
+  });
+
   test('assert_no_robots_override_ui : aucune option pour ignorer robots.txt dans le code de la console (fiche, réglages, requêtes)', () => {
     const webSrc = new URL('../../', import.meta.url).pathname;
     const files = (dir: string): string[] =>

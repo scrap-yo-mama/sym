@@ -28,6 +28,12 @@ import { detectAccessSignals, parsePaymentOffer, type AccessSignal } from './sig
  */
 export type AccessProbe = (url: string, signal: AbortSignal) => Promise<HttpExchange & { readonly sent_accept_language?: string | null }>;
 
+/**
+ * Origine de l'`Accept-Language` vu par le site : le moteur serveur (valeur relevée, `null` = aucun en-tête) ou le navigateur de
+ * l'utilisateur en tunnel (21 § 6.4 : sa langue réelle, que l'extension ne touche pas et que le worker ne voit pas).
+ */
+export type AcceptLanguageSource = 'engine' | 'user_browser';
+
 /** Corps lu par la sonde (CGU, voies déclarées) : la tête de la page suffit. */
 export const ACCESS_PROBE_MAX_BYTES = 256 * 1024;
 
@@ -75,8 +81,14 @@ export type AccessReport = {
   /** Statut HTTP de la sonde de l'URL (`null` si aucune requête n'est partie). */
   readonly probe_status: number | null;
   /**
+   * Qui envoie les requêtes vers le site, donc leur `Accept-Language` (21 § 6) : `engine` = le moteur serveur (E1/E2/E3), dont
+   * l'en-tête est relevé ci-dessous ; `user_browser` = le Chrome de l'utilisateur (tunnel, 21 § 6.4), qui envoie sa langue réelle,
+   * non relevée par le worker. Absent (rapport antérieur) : `engine`.
+   */
+  readonly accept_language_source?: AcceptLanguageSource;
+  /**
    * `Accept-Language` relevé pendant la sonde (21 § 6.6) : `null` = aucun en-tête envoyé ; absent = non relevé (aucune requête,
-   * ou sonde par le tunnel). Jamais la langue d'un utilisateur, d'un compte ou d'un run.
+   * ou tunnel : voir `accept_language_source`). Jamais la langue d'un compte ou d'un run.
    */
   readonly accept_language?: string | null;
   readonly policy: { readonly prefer_official: boolean; readonly on_ai_signal: 'warn' };
@@ -178,6 +190,11 @@ export type BuildAccessReportOptions = {
   /** Sonde passive de `/llms.txt` (défaut : vrai, si robots.txt la permet). */
   readonly probeLlmsTxt?: boolean;
   readonly id?: string;
+  /**
+   * Qui envoie robots.txt et la sonde (défaut `engine`). `user_browser` (tunnel) : la langue est celle du navigateur de
+   * l'utilisateur ; un `sent_accept_language` éventuel de la sonde est ignoré et le rapport ne porte aucune valeur.
+   */
+  readonly requestsFrom?: AcceptLanguageSource;
 };
 
 /**
@@ -194,6 +211,7 @@ export async function buildAccessReport(options: BuildAccessReportOptions): Prom
     origin: url.origin,
     policy: { prefer_official: policy.prefer_official, on_ai_signal: policy.on_ai_signal },
   };
+  const requestsFrom: AcceptLanguageSource = options.requestsFrom ?? 'engine';
   const decision = await options.gate.check(url.href);
   const state = decision.state;
   const robotsLines = state?.kind === 'rules' ? [...state.file.globalSignals, ...selectGroup(state.file).signals] : [];
@@ -208,7 +226,8 @@ export async function buildAccessReport(options: BuildAccessReportOptions): Prom
     declared: { sitemaps, feeds: rest.feeds ?? [], official_api_url: rest.officialApi ?? null, llms_txt: rest.llms ?? false },
     payment: rest.payment,
     probe_status: rest.probe_status,
-    ...(sentLanguage === undefined ? {} : { accept_language: sentLanguage }),
+    accept_language_source: requestsFrom,
+    ...(sentLanguage === undefined || requestsFrom !== 'engine' ? {} : { accept_language: sentLanguage }),
     verdict: rest.verdict,
   });
   const noPayment = { required: false, offer: null };
@@ -316,11 +335,18 @@ export function accessReportView(report: AccessReport): {
   payment_offer: string | null;
   official_api_url: string | null;
   /**
-   * `Accept-Language` effectif envoyé aux sites : celui RELEVÉ pendant la sonde (21 § 6.6, u6 R18), à défaut celui du moteur ; jamais
-   * la langue d'un utilisateur. `null` : aucun en-tête, comme un Chromium vierge (`assert_accept_language_engine_real`).
+   * `engine` : requêtes du moteur serveur, `accept_language` donne la valeur. `user_browser` : run en tunnel, le Chrome de
+   * l'utilisateur envoie sa langue réelle (21 § 6.4) ; `accept_language` est alors ABSENT (non mesuré), jamais `null` (« aucune »).
    */
-  accept_language: string | null;
+  accept_language_source: AcceptLanguageSource;
+  /**
+   * `Accept-Language` effectif envoyé aux sites par le moteur : celui RELEVÉ pendant la sonde (21 § 6.6, u6 R18), à défaut celui
+   * du moteur ; jamais la langue d'un compte. `null` : aucun en-tête, comme un Chromium vierge (`assert_accept_language_engine_real`).
+   * Absent quand `accept_language_source` vaut `user_browser`.
+   */
+  accept_language?: string | null;
 } {
+  const source: AcceptLanguageSource = report.accept_language_source ?? 'engine';
   return {
     id: report.id,
     checked_at: report.checked_at,
@@ -330,7 +356,8 @@ export function accessReportView(report: AccessReport): {
     llms_txt: report.declared.llms_txt,
     payment_offer: report.payment.offer,
     official_api_url: report.declared.official_api_url,
-    accept_language: report.accept_language === undefined ? ENGINE_ACCEPT_LANGUAGE : report.accept_language,
+    accept_language_source: source,
+    ...(source === 'engine' ? { accept_language: report.accept_language === undefined ? ENGINE_ACCEPT_LANGUAGE : report.accept_language } : {}),
   };
 }
 

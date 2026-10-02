@@ -420,7 +420,8 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
       await event(EV.started, { phase, url: narrativeUrl(pageUrl), domain: host, network: ports.mode === 'tunnel' ? 'tunnel' : first?.mode, budget: budgetView() });
 
       // --- 0. Rapport d'accès -------------------------------------------------------------------------------------
-      const report: AccessReport = await buildAccessReport({ url: pageUrl, gate: robots, probe: ports.probe, ...(pacer === undefined ? {} : { pacer }), signal, now });
+      // En tunnel, robots.txt et la sonde partent du Chrome de l'utilisateur : sa langue réelle, non relevée (21 § 6.4, § 6.6).
+      const report: AccessReport = await buildAccessReport({ url: pageUrl, gate: robots, probe: ports.probe, requestsFrom: ports.mode === 'tunnel' ? 'user_browser' : 'engine', ...(pacer === undefined ? {} : { pacer }), signal, now });
       const stopped0 = await tunnelOutcome('access_check');
       if (stopped0 !== null) return stopped0;
       const accessWritten = await recordAccessReport(deps.pool, { runId: ctx.runId, ownerId: ctx.ownerId, payload: accessReportEventPayload(report) }, { onRenderedSentence: 'scrub' });
@@ -824,7 +825,10 @@ function tunnelRobotsFetcher(session: TunnelSession): RobotsFetcher {
   };
 }
 
-/** Sonde par l'extension (`page_fetch` dans un onglet du site) : un défi détecté arrête le tunnel sur-le-champ. */
+/**
+ * Sonde par l'extension (`page_fetch` dans un onglet du site) : un défi détecté arrête le tunnel sur-le-champ. Aucun
+ * `sent_accept_language` : le Chrome de l'utilisateur envoie sa propre langue (21 § 6.4), le rapport le dit (`requestsFrom`).
+ */
 function tunnelProbe(session: TunnelSession, maxBytes: number): AccessProbe {
   const transport = pageFetchTransport(session, maxBytes);
   return (url, signal) => transport({ method: 'GET', url, headers: {} }, signal);

@@ -1185,6 +1185,7 @@
     "checkedAt": "Vérifié le {date}",
     "acceptLanguage": "Langue envoyée aux sites (Accept-Language)",
     "acceptLanguageNone": "Aucune, comme un Chromium vierge",
+    "acceptLanguageUserBrowser": "Celle de ton navigateur (tunnel)",
     "robots": "robots.txt",
     "robotsStatus": "Statut",
     "robotsFetched": "Lu le",

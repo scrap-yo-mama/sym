@@ -1185,6 +1185,7 @@
     "checkedAt": "Checked on {date}",
     "acceptLanguage": "Language sent to sites (Accept-Language)",
     "acceptLanguageNone": "None, like a fresh Chromium",
+    "acceptLanguageUserBrowser": "Your browser's own (tunnel)",
     "robots": "robots.txt",
     "robotsStatus": "Status",
     "robotsFetched": "Read on",

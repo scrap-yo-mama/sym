@@ -255,5 +255,11 @@ describe('reconnaissance en tunnel : aucune URL d’action rejouée avec la sess
     expect(site.hits.filter((h) => h.path === '/logout')).toEqual([]);
     expect(tunnel.sent.filter((s) => s.url.includes('/logout'))).toEqual([]);
     expect(site.hits.some((h) => h.path === '/api/items' && h.via === 'tunnel')).toBe(true);
+    // assert_accept_language_engine_real (21 § 6.4, § 6.6) : en tunnel, la langue envoyée est celle du navigateur de
+    // l'utilisateur ; le rapport d'accès le dit (source user_browser), sans valeur inventée ni « aucune » (null).
+    const access = (await listInvestigationEvents(pool, { runId: run.id, ownerId: A })).find((e) => e.kind === 'access_report');
+    const view = (access?.payload as { view?: Record<string, unknown> } | undefined)?.view;
+    expect(view).toMatchObject({ accept_language_source: 'user_browser' });
+    expect(view).not.toHaveProperty('accept_language');
   });
 });
