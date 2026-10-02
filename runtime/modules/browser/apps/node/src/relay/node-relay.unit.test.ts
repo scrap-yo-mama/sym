@@ -180,7 +180,8 @@ describe('réécritures du relais CDP (04f § 4, liste fermée)', () => {
     client.ws.send(JSON.stringify({ id: 3, method: 'Browser.setDownloadBehavior', params: { behavior: 'deny' } }));
     await until(() => s.cdp.received.length === 3);
     const [a, b, c] = s.cdp.received.map((m) => JSON.parse(m));
-    expect(a.params).toEqual({ behavior: 'allow', downloadPath: DOWNLOADS, eventsEnabled: true });
+    // Audit 5.3 S04 : Browser.* nommé par guid (allowAndName) et événements actifs, quel que soit le comportement demandé.
+    expect(a.params).toEqual({ behavior: 'allowAndName', downloadPath: DOWNLOADS, eventsEnabled: true });
     expect(b).toEqual({ id: 2, method: 'Page.setDownloadBehavior', params: { behavior: 'allow', downloadPath: DOWNLOADS }, sessionId: 'T1' });
     expect(c.params).toEqual({ behavior: 'deny' });
   });

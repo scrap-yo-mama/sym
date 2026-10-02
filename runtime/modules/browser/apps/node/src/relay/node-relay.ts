@@ -57,6 +57,19 @@ export type NodeRelay = {
   close(): Promise<void>;
 };
 
+/** Identifiant décodé ; `undefined` si l'encodage est invalide (audit 5.3 S06 : jamais d'exception dans l'upgrade). */
+function decodeId(raw: string | undefined): string | undefined {
+  if (!raw) return undefined;
+  try {
+    return decodeURIComponent(raw);
+  } catch {
+    return undefined;
+  }
+}
+
+/** Délai d'ouverture de la connexion vers Chromium (local : quelques millisecondes). */
+const UPSTREAM_HANDSHAKE_MS = 10_000;
+
 const PATH = /^\/internal\/sessions\/([^/?#]+)\/([^/?#]+)$/;
 const JSON_VERSION_PATH = /^\/internal\/sessions\/([^/?#]+)\/cdp\/json\/version\/?$/;
 /** Champs de `/json/version` rendus (liste blanche) : jamais `webSocketDebuggerUrl` ni `devtoolsFrontendUrl` locaux. */
@@ -113,9 +126,11 @@ export function createNodeRelay(options: NodeRelayOptions): NodeRelay {
     const endpoint = protocol === 'cdp' ? session.cdp : session.playwright;
     const ctx: RewriteContext = { egressProxyUrl: session.egressProxyUrl, downloadsDir: session.downloadsDir };
     const rewrite = protocol === 'cdp' ? rewriteCdpMessage : rewritePlaywrightMessage;
-    const upstream = new WebSocket(endpoint ?? 'ws://127.0.0.1:1/', { maxPayload, perMessageDeflate: false });
+    const upstream = new WebSocket(endpoint ?? 'ws://127.0.0.1:1/', { maxPayload, perMessageDeflate: false, handshakeTimeout: UPSTREAM_HANDSHAKE_MS });
     upstreams.add(upstream);
+    // Audit 5.3 S07 : file d'attente avant l'ouverture du navigateur bornée à un plafond de message, sinon 1008.
     const queue: string[] = [];
+    let queuedBytes = 0;
     let closing = false;
 
     const closeBoth = (code: number, reason = ''): void => {
@@ -134,8 +149,10 @@ export function createNodeRelay(options: NodeRelayOptions): NodeRelay {
         if (result.release) void session.release().catch(onError);
         return;
       }
-      if (upstream.readyState === WebSocket.OPEN) upstream.send(result.text);
-      else queue.push(result.text);
+      if (upstream.readyState === WebSocket.OPEN) return upstream.send(result.text);
+      queuedBytes += Buffer.byteLength(result.text);
+      if (queuedBytes > maxMessageBytes) return closeBoth(1008, 'file d’attente au-delà du plafond');
+      queue.push(result.text);
     };
 
     client.on('message', (data: RawData, isBinary: boolean) => {
@@ -153,6 +170,7 @@ export function createNodeRelay(options: NodeRelayOptions): NodeRelay {
 
     upstream.on('open', () => {
       for (const text of queue.splice(0)) upstream.send(text);
+      queuedBytes = 0;
     });
     upstream.on('message', (data: RawData, isBinary: boolean) => {
       if (client.readyState === WebSocket.OPEN) client.send(data, { binary: isBinary });
@@ -178,7 +196,7 @@ export function createNodeRelay(options: NodeRelayOptions): NodeRelay {
       }
       const match = PATH.exec(path);
       const protocol = match?.[2];
-      const sessionId = match?.[1] ? decodeURIComponent(match[1]) : undefined;
+      const sessionId = decodeId(match?.[1]);
       if (sessionId && protocol === 'live') {
         const view = options.live?.get(sessionId);
         if (!view) {
@@ -218,7 +236,8 @@ export function createNodeRelay(options: NodeRelayOptions): NodeRelay {
         reply(401, { error: { code: 'unauthorized' } });
         return true;
       }
-      const session = options.sessions.get(decodeURIComponent(match[1] ?? ''));
+      const id = decodeId(match[1]);
+      const session = id === undefined ? undefined : options.sessions.get(id);
       if (!session) {
         reply(404, { error: { code: 'session_not_found' } });
         return true;

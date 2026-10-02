@@ -233,3 +233,35 @@ describe('assert_secrets_protected (3.1, BINV6) : profil chiffré au repos', () 
     await expect(a.store.restore(target(other, 'read'), newDir())).rejects.toBeInstanceOf(SecretDecryptError);
   });
 });
+
+describe('audit 5.3 S08 (BINV1, BINV6) : un registre altéré ne fait jamais restaurer le profil d’un autre client', () => {
+  test('pointeur de A vers l’objet de B : restauration refusée, aucun fichier écrit, verrou libéré', async () => {
+    const base = setup();
+    const victim = base.registry.create(tenantId, 'victime');
+    await writeSession(base.store, victim, CANARY);
+    const victimRow = await base.registry.get(tenantId, victim);
+    const otherTenant = randomUUID();
+    const attacker = base.registry.create(otherTenant, 'attaquant');
+    // Registre altéré (erreur d'administration, injection ailleurs) : la ligne de A pointe vers l'objet de B.
+    const tampered: ProfileRegistry = {
+      get: async (t, p) => {
+        const row = await base.registry.get(t, p);
+        return row && { ...row, version: victimRow!.version, objectKey: victimRow!.objectKey };
+      },
+      acquireWriteLock: async (t, p, s) => {
+        const lock = await base.registry.acquireWriteLock(t, p, s);
+        return lock.ok ? { ...lock, profile: { ...lock.profile, version: victimRow!.version, objectKey: victimRow!.objectKey } } : lock;
+      },
+      commitVersion: (...args) => base.registry.commitVersion(...args),
+      releaseLock: (...args) => base.registry.releaseLock(...args),
+    };
+    const store = new ProfileStore({ objects: base.objects, registry: tampered, maxBytes: 1_000_000 });
+    for (const mode of ['read', 'write'] as const) {
+      const dir = newDir();
+      const sessionId = randomUUID();
+      await expect(store.restore({ tenantId: otherTenant, profileId: attacker, mode, sessionId }, dir)).rejects.toThrow(/clé d’objet/);
+      expect(walk(dir)).toEqual([]);
+    }
+    expect((await base.registry.get(otherTenant, attacker))?.lockSessionId ?? null).toBeNull();
+  });
+});

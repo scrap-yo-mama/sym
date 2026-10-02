@@ -78,6 +78,10 @@ export class ProfileStore {
     try {
       await mkdir(dir, { recursive: true, mode: 0o700 });
       if (profile.version === 0 || profile.objectKey === null) return { version: 0, files: 0, bytes: 0 };
+      // Audit 5.3 S08 : la clé d'objet (et donc l'AAD) doit être celle de CE profil de CE client, jamais celle que la base dit.
+      if (profile.objectKey !== profileObjectKey({ tenantId, profileId, version: profile.version })) {
+        throw new RangeError('clé d’objet du profil incohérente avec le client et le profil demandés');
+      }
       const restored = await unpackProfile(await this.#objects.get(profile.objectKey), dir, { maxBytes: this.#maxBytes });
       return { version: profile.version, ...restored };
     } catch (error) {

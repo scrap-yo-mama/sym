@@ -10,6 +10,15 @@
 // Playwright natif (même règle BINV2, extension de la liste de 04f § 4 au protocole natif) : `newContext` et
 // `newContextForReuse` reçoivent le proxy de l'egress de la session, quel que soit le proxy demandé.
 // Sans egress ou sans dossier de session connu, la commande concernée est refusée (fermé par défaut), jamais transmise.
+// Audit de sécurité 5.3 (docs/audit-securite.md, S01 à S05), refus répondus au client, jamais transmis :
+//   - Playwright : `newCDPSession` et `newBrowserCDPSession` (CDP brut hors réécritures, 409 shared contourné : BINV1),
+//     `launch*` et `connect*` (lancement ou connexion sortante du serveur), `localPaths` et `localDirectory` ;
+//   - CDP : `DOM.setFileInputFiles` hors de `sessions/{id}/uploads/`, `Tethering.*`, `Target.exposeDevToolsProtocol`,
+//     `Browser.crash*` ;
+//   - navigation pilotée (`Page.navigate`, `Target.createTarget`, `goto`) vers un autre schéma que http(s), about:, data:,
+//     blob: (ni `file://` ni pages internes de Chromium) ;
+//   - téléchargements : `allowAndName` (Page : `allow`) vers le dossier de la session, événements actifs, ou `deny`.
+import { normalize } from 'node:path';
 
 export type RewriteContext = { egressProxyUrl: string | null; downloadsDir: string | null };
 
@@ -21,6 +30,27 @@ export type RewriteResult =
 const LOOPBACK_ONLY = '<-loopback>';
 const DOWNLOAD_METHODS = new Set(['Browser.setDownloadBehavior', 'Page.setDownloadBehavior']);
 const PLAYWRIGHT_CONTEXT_METHODS = new Set(['newContext', 'newContextForReuse']);
+const DENIED_CDP_METHODS = new Set(['Tethering.bind', 'Tethering.unbind', 'Target.exposeDevToolsProtocol', 'Browser.crash', 'Browser.crashGpuProcess']);
+const DENIED_PLAYWRIGHT_METHODS = new Set(['newCDPSession', 'newBrowserCDPSession', 'launch', 'launchPersistentContext', 'launchServer', 'connectOverCDP', 'connect']);
+const NAVIGATION_SCHEMES = new Set(['http:', 'https:', 'about:', 'data:', 'blob:']);
+const CDP_NAVIGATIONS = new Set(['Page.navigate', 'Target.createTarget']);
+
+/** Navigation pilotée admise : URL absolue de schéma http(s), about:, data: ou blob: (jamais `file:` ni `chrome:`). */
+function navigable(url: unknown): boolean {
+  if (typeof url !== 'string') return false;
+  try {
+    return NAVIGATION_SCHEMES.has(new URL(url).protocol);
+  } catch {
+    return false;
+  }
+}
+
+/** Chemin absolu, normalisé, strictement sous `sessions/{id}/uploads/` (dossier frère des téléchargements). */
+function insideUploads(path: unknown, downloadsDir: string): boolean {
+  if (typeof path !== 'string' || !path.startsWith('/')) return false;
+  const uploads = `${downloadsDir.replace(/\/downloads\/?$/, '')}/uploads/`;
+  return path === normalize(path) && path.startsWith(uploads) && path.length > uploads.length;
+}
 
 type Message = Record<string, unknown> & { id?: unknown; method?: unknown; params?: unknown };
 
@@ -42,31 +72,48 @@ export function rewriteCdpMessage(text: string, ctx: RewriteContext): RewriteRes
   const message = parse(text);
   if (!message) return { kind: 'reject', code: 1007, reason: 'message CDP illisible' };
   const method = message.method;
+  if (typeof method === 'string' && DENIED_CDP_METHODS.has(method)) return cdpError(message.id, `${method} refusé par SYM Browser`);
+  if (typeof method === 'string' && CDP_NAVIGATIONS.has(method) && !navigable(paramsOf(message)['url'])) return cdpError(message.id, 'schéma de navigation refusé par SYM Browser');
+  if (method === 'DOM.setFileInputFiles') {
+    const files = paramsOf(message)['files'];
+    const downloadsDir = ctx.downloadsDir;
+    if (!downloadsDir || !Array.isArray(files) || !files.every((file) => insideUploads(file, downloadsDir))) {
+      return cdpError(message.id, 'fichiers hors des envois de la session (POST /v1/sessions/{id}/uploads)');
+    }
+    return { kind: 'forward', text: JSON.stringify(message) };
+  }
   if (method === 'Target.createBrowserContext') {
     if (!ctx.egressProxyUrl) return cdpError(message.id, 'egress de la session indisponible');
     return { kind: 'forward', text: JSON.stringify({ ...message, params: { ...paramsOf(message), proxyServer: ctx.egressProxyUrl, proxyBypassList: LOOPBACK_ONLY } }) };
   }
   if (typeof method === 'string' && DOWNLOAD_METHODS.has(method)) {
     const params = paramsOf(message);
-    const allows = params['behavior'] === 'allow' || params['behavior'] === 'allowAndName';
-    if (allows || 'downloadPath' in params) {
-      if (!ctx.downloadsDir) return cdpError(message.id, 'dossier de téléchargements de la session indisponible');
-      return { kind: 'forward', text: JSON.stringify({ ...message, params: { ...params, downloadPath: ctx.downloadsDir } }) };
+    if (params['behavior'] === 'deny') {
+      const { downloadPath: _ignored, ...rest } = params;
+      return { kind: 'forward', text: JSON.stringify({ ...message, params: rest }) };
     }
-    return { kind: 'forward', text: JSON.stringify(message) };
+    // Tout autre comportement (allow, allowAndName, default, inconnu) : dossier de la session, nommage par guid et
+    // événements actifs (plafonds de téléchargement tenus par le nœud, BINV3).
+    if (!ctx.downloadsDir) return cdpError(message.id, 'dossier de téléchargements de la session indisponible');
+    const forced = method === 'Browser.setDownloadBehavior' ? { behavior: 'allowAndName', downloadPath: ctx.downloadsDir, eventsEnabled: true } : { behavior: 'allow', downloadPath: ctx.downloadsDir };
+    return { kind: 'forward', text: JSON.stringify({ ...message, params: { ...params, ...forced } }) };
   }
   if (method === 'Browser.close') return { kind: 'reply', text: JSON.stringify({ id: message.id, result: {} }), release: true };
   return { kind: 'forward', text: JSON.stringify(message) };
 }
 
+const playwrightError = (id: unknown, text: string): RewriteResult => ({ kind: 'reply', text: JSON.stringify({ id, error: { error: { name: 'Error', message: text } } }), release: false });
+
 export function rewritePlaywrightMessage(text: string, ctx: RewriteContext): RewriteResult {
   const message = parse(text);
   if (!message) return { kind: 'reject', code: 1007, reason: 'message Playwright illisible' };
+  const params = paramsOf(message);
+  if (typeof message.method === 'string' && DENIED_PLAYWRIGHT_METHODS.has(message.method)) return playwrightError(message.id, `${message.method} refusé par SYM Browser (CDP : connectUrls.cdp des sessions dedicated)`);
+  if ('localPaths' in params || 'localDirectory' in params) return playwrightError(message.id, 'chemins locaux du nœud refusés : envoyer le contenu des fichiers');
+  if (message.method === 'goto' && !navigable(params['url'])) return playwrightError(message.id, 'schéma de navigation refusé par SYM Browser');
   if (typeof message.method === 'string' && PLAYWRIGHT_CONTEXT_METHODS.has(message.method)) {
-    if (!ctx.egressProxyUrl) {
-      return { kind: 'reply', text: JSON.stringify({ id: message.id, error: { error: { name: 'Error', message: 'egress de la session indisponible' } } }), release: false };
-    }
-    return { kind: 'forward', text: JSON.stringify({ ...message, params: { ...paramsOf(message), proxy: { server: ctx.egressProxyUrl, bypass: LOOPBACK_ONLY } } }) };
+    if (!ctx.egressProxyUrl) return playwrightError(message.id, 'egress de la session indisponible');
+    return { kind: 'forward', text: JSON.stringify({ ...message, params: { ...params, proxy: { server: ctx.egressProxyUrl, bypass: LOOPBACK_ONLY } } }) };
   }
   return { kind: 'forward', text: JSON.stringify(message) };
 }
