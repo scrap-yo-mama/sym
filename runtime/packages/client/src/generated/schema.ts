@@ -408,7 +408,10 @@ export interface paths {
         get: operations["getApi"];
         put?: never;
         post?: never;
-        /** Supprime une API */
+        /**
+         * Supprime une API
+         * @description Supprime l'API, ses versions et les runs, datasets et planifications de son propriétaire. `409 runs_active` tant qu'un run est actif ; `409 api_in_use_by_others` si un autre membre a un run, un dataset ou une planification sur cette API `instance` (ses données ne partent jamais avec l'API d'autrui, INV12).
+         */
         delete: operations["deleteApi"];
         options?: never;
         head?: never;
@@ -442,7 +445,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Ré-enquête manuelle (transitions 17 et 18) ; seule reprise offerte à une API `bloquee` */
+        /**
+         * Ré-enquête manuelle (transitions 17 et 18) ; seule reprise offerte à une API `bloquee`
+         * @description La transition et l'enquête partent au même COMMIT : une enquête refusée (demande illisible, file pleine) laisse l'API dans son statut. Une API `bloquee` ne repart que par un geste humain dans la console (transition 18, 04 § 6) : par une clé d'API, `403 human_confirmation_required`, sans transition ni run.
+         */
         post: operations["reinvestigateApi"];
         delete?: never;
         options?: never;
@@ -544,7 +550,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Revient à cette version (l'API bascule en `warning`, raison `reverted`, transitions 7 ou 8) */
+        /**
+         * Revient à cette version (l'API bascule en `warning`, raison `reverted`, transitions 7 ou 8)
+         * @description Seule une version qui a été courante se rétablit (400 `version_not_revertable`) ; version courante et transition sont écrites dans la même transaction (INV3).
+         */
         post: operations["revertStrategyVersion"];
         delete?: never;
         options?: never;
@@ -698,7 +707,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Vue filtrée du flux SSE pour un run ou une enquête, rejouée depuis `investigation_events` */
+        /**
+         * Vue filtrée du flux SSE pour un run ou une enquête, rejouée depuis `investigation_events`
+         * @description Récit du run depuis le début (ou depuis `Last-Event-ID`), puis une trame `run.finished` d'identifiant `end` quand le run est terminé ; le serveur clôt alors le flux. Une reconnexion avec `Last-Event-ID: end` (run entièrement servi) reçoit `204 No Content`, qui arrête un client SSE standard (EventSource) au lieu de le faire reconnecter.
+         */
         get: operations["streamRunEvents"];
         put?: never;
         post?: never;
@@ -805,7 +817,10 @@ export interface paths {
         };
         /** Réglages des modèles IA (08 § 7) ; les clés ne sont jamais relues (INV8) */
         get: operations["getLlmSettings"];
-        /** Remplace les réglages (admin) ; un secret absent est conservé, un secret fourni est remplacé */
+        /**
+         * Remplace les réglages (admin) ; un secret absent est conservé, un secret fourni est remplacé
+         * @description Un secret est lié à sa destination (INV8) ; si la `base_url` d'un fournisseur change, sa clé est exigée dans la même requête (400 `api_key_required`) et ses en-têtes secrets d'avant sont abandonnés.
+         */
         put: operations["putLlmSettings"];
         post?: never;
         delete?: never;
@@ -864,7 +879,10 @@ export interface paths {
         delete: operations["deleteProxy"];
         options?: never;
         head?: never;
-        /** Modifie un proxy (admin) ; un identifiant absent est conservé */
+        /**
+         * Modifie un proxy (admin) ; un identifiant absent est conservé
+         * @description Identifiants liés au proxy (INV8) ; une `url` d'un autre schéma, hôte ou port sans `username` et `password` ressaisis est refusée (400 `credentials_required`).
+         */
         patch: operations["updateProxy"];
         trace?: never;
     };
@@ -894,7 +912,10 @@ export interface paths {
         };
         /** Réglages SMTP (alertes, invitations) ; mot de passe jamais relu */
         get: operations["getSmtpSettings"];
-        /** Remplace les réglages SMTP (admin) ; un secret absent est conservé */
+        /**
+         * Remplace les réglages SMTP (admin) ; un secret absent est conservé
+         * @description Le mot de passe n'est conservé que pour le même relais (hôte et port) et le même identifiant (INV8) ; sinon 400 `password_required`.
+         */
         put: operations["putSmtpSettings"];
         post?: never;
         delete?: never;
@@ -1331,6 +1352,24 @@ export interface paths {
         get: operations["listMyAuditEvents"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/me/responsible-use": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Case « j'ai lu » de la page « Usage responsable » (17 § 11) ; extension de 05 § 4.2 */
+        get: operations["getResponsibleUseAck"];
+        put?: never;
+        /** Coche « j'ai lu » ; sans elle, une API à champ `x-personal` est refusée (403 `responsible_use_ack_required`) */
+        post: operations["acknowledgeResponsibleUse"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1799,10 +1838,10 @@ export interface components {
             };
         };
         /**
-         * @description Noms d'événements du flux SSE (06 § 3). Toute trame porte `id:` (reprise par `Last-Event-ID`), `event:` et `data:` (JSON). Un nom ajouté par le serveur (3.1) s'ajoute ici.
+         * @description Noms d'événements du flux SSE (06 § 3). Toute trame porte `id:` (reprise par `Last-Event-ID`), `event:` et `data:` (JSON). Le récit d'une enquête reprend les noms de `investigation_events` (3.1) ; `status.changed` vient aussi de `status_events` et `run.finished` de la fin d'un run. La charge porte `run_id`, `api_id` et `api_slug`.
          * @enum {string}
          */
-        EventName: "investigation.started" | "phase.started" | "schema.proposed" | "attempt.finished" | "status.changed" | "action.required";
+        EventName: "investigation.started" | "access_report" | "phase.started" | "reconnaissance.finished" | "schema.proposed" | "schema.validated" | "attempt.finished" | "attempt.pruned" | "status.changed" | "action.required" | "investigation.finished" | "run.finished";
         /** @description Coût en dollars ; `null` quand le prix est inconnu (jamais 0 par défaut, 08 § 1). */
         Cost: {
             llm_usd: number | null;
@@ -1825,8 +1864,15 @@ export interface components {
         /** @description Modes réseau autorisés pour l'API ; `res_proxy` est un opt-in explicite par API. Une API ne référence un proxy que par son identifiant (08 § 2). Jamais de montée réseau après un refus (X4). */
         NetworkPolicy: {
             allow: components["schemas"]["Network"][];
-            proxy_ids?: string[];
+            /** @description Proxy choisi par niveau, par son identifiant (à défaut, le premier proxy du type). */
+            proxy_ids?: {
+                dc_proxy?: string;
+                res_proxy?: string;
+            };
             res_proxy_params?: {
+                country?: string;
+            };
+            dc_proxy_params?: {
                 country?: string;
             };
         };
@@ -1904,7 +1950,7 @@ export interface components {
             apis: components["schemas"]["ApiSummary"][];
             next_cursor: string | null;
         };
-        /** @description Fiche (= get_api, entité Api de 04b § 1). Pour l'admin face à une API avec session d'autrui, `metadata_only` vaut true et les schémas, l'échantillon et la stratégie sont absents (13 § 2, INV12). */
+        /** @description Fiche (= get_api, entité Api de 04b § 1). Pour l'admin face à une API avec session d'autrui, `metadata_only` vaut true et les schémas, l'échantillon et la stratégie sont absents (13 § 2, INV12). Un membre qui lit l'API `instance` d'autrui reçoit de quoi la lancer (schémas, statut, exécution, réseau autorisé, coût estimé), jamais la politique du propriétaire : `project_id`, `purpose`, `legal_basis`, `max_cost_usd`, `budget_daily_usd`, `domain_pacing`, ni les proxys et paramètres de `network_policy` (seulement `allow`). */
         ApiDetail: components["schemas"]["ApiSummary"] & {
             metadata_only: boolean;
             /** Format: uuid */
@@ -1979,7 +2025,7 @@ export interface components {
             /** Format: uuid */
             run_id?: string | null;
         };
-        /** @description Champs modifiables. Changer `output_schema` ou `input_schema` déclenche une ré-enquête. `access_policy` n'est pas modifiable (INV11) ; une API avec session reste `private`. */
+        /** @description Champs modifiables. Un schéma (`output_schema`, `input_schema`) ne change que par un brouillon puis une promotion (19 § 6, itération) : en place, 409 `draft_required`. `access_policy` n'est pas modifiable (INV11) ; une API avec session reste `private` (400 `session_api_private`). */
         ApiPatch: {
             description?: string;
             input_schema?: {
@@ -1998,9 +2044,10 @@ export interface components {
             purpose?: string | null;
             legal_basis?: string | null;
             contains_personal_data?: boolean;
+            /** @description Plafond de coût d'un run ; `null` revient au défaut de l'instance (0,5 $). */
             max_cost_usd?: number | null;
+            /** @description Budget quotidien de l'API ; `null` revient au défaut de l'instance (5 $). */
             budget_daily_usd?: number | null;
-            retention_days?: number | null;
         };
         /** @description Export portable d'une API (16 § 6), sans secret, session ni cookie ; format figé par la tâche 3.12. */
         ApiExport: {
@@ -2020,7 +2067,6 @@ export interface components {
             wait_seconds?: number;
         };
         InvestigateRequest: {
-            note?: string;
             /** @description Plan d'essais restreint avant exécution (06 § 2), dans les bornes de la politique réseau. */
             exclude_executions?: components["schemas"]["Execution"][];
         };
@@ -2030,7 +2076,7 @@ export interface components {
                 [key: string]: unknown;
             };
             force_investigate?: boolean;
-            /** @description Relance avec une version précise (courante ou d'origine, 06 § 2). */
+            /** @description Relance avec une version précise (06 § 2) : une version qui a été courante (la courante, l'origine), sinon `400 invalid_strategy_version` ; réservé au propriétaire de l'API (`403 forbidden` pour un membre). */
             strategy_version?: number;
         };
         RunAccepted: {
@@ -2308,7 +2354,8 @@ export interface components {
             id: string;
             /** Format: date-time */
             at: string;
-            event: components["schemas"]["WebhookEvent"];
+            /** @description Événement livré (`WebhookEvent`), ou `webhook.test` pour le bouton Tester. */
+            event: string;
             attempt: number;
             status_code: number | null;
             duration_ms: number | null;
@@ -2333,6 +2380,7 @@ export interface components {
             /** Format: uri */
             url: string;
             events: components["schemas"]["WebhookEvent"][];
+            /** @description API dont les événements sont livrés ; absent ou null, toutes les API du propriétaire. */
             api_slug?: string | null;
         };
         WebhookSubscriptionPatch: {
@@ -2341,7 +2389,7 @@ export interface components {
             events?: components["schemas"]["WebhookEvent"][];
             /** @enum {string} */
             status?: "active" | "disabled";
-            /** @description Nouveau secret ; l'ancien reste accepté pendant la rotation. */
+            /** @description Nouveau secret ; l'ancien reste accepté pendant la rotation (sauf si l'URL change dans la même requête). */
             rotate_secret?: boolean;
         };
         WebhookSubscriptionCreated: components["schemas"]["WebhookSubscription"] & {
@@ -2786,6 +2834,13 @@ export interface components {
             /** @description Code TOTP ou code de secours. */
             code: string;
         };
+        ResponsibleUseAck: {
+            version: string;
+            /** Format: date-time */
+            acknowledged_at: string | null;
+            /** @description Vrai tant que la version courante n'est pas cochée (la console affiche alors la page). */
+            required: boolean;
+        };
         /** @enum {string} */
         AuditOutcome: "success" | "denied" | "error";
         /** @description Événement d'audit ; `meta` ne contient ni secret, ni cookie, ni contenu, ni argument d'outil. */
@@ -2817,9 +2872,16 @@ export interface components {
             identifier: string;
             /** @enum {string} */
             kind?: "email" | "phone" | "other";
+            /**
+             * @description `own` : les données de l'appelant (contenu compris) ; `instance` : toute l'instance, réservé à l'admin et à l'owner, qui n'obtiennent que des métadonnées et les valeurs identifiantes (INV5). Défaut : `instance` pour l'admin, `own` pour un membre.
+             * @enum {string}
+             */
+            scope?: "own" | "instance";
         };
         SubjectEraseRequest: components["schemas"]["SubjectRequest"] & {
             dry_run: boolean;
+            /** @description Empreinte rendue par l'aperçu (`dry_run` à true), exigée pour effacer (sinon 409 `confirmation_required`). */
+            confirmation?: string;
         };
         SubjectEraseResult: {
             dry_run: boolean;
@@ -2829,17 +2891,36 @@ export interface components {
             };
             /** @description Ajoutée à la liste d'exclusion hachée (faux en aperçu). */
             excluded: boolean;
+            /** @description Aperçu seulement - empreinte du plan, à renvoyer pour effacer. */
+            confirmation?: string;
         };
+        /** @description Ce que l'instance détient sur la personne dans la portée (1.8, D-26) : items, runs, journaux, événements d'enquête, artefacts. Contenu rendu au seul propriétaire des données (`content: true`), métadonnées sinon. */
         SubjectExport: {
             identifier: string;
-            occurrences: {
-                /** Format: uuid */
-                dataset_id: string;
-                api_slug: string;
-                item: {
-                    [key: string]: unknown;
-                };
+            /** Format: date-time */
+            generated_at: string;
+            /** @enum {string} */
+            scope: "owner" | "instance";
+            content: boolean;
+            subject_hashes: string[];
+            excluded: boolean;
+            dataset_items: {
+                [key: string]: unknown;
             }[];
+            runs: {
+                [key: string]: unknown;
+            }[];
+            run_logs: {
+                [key: string]: unknown;
+            }[];
+            investigation_events: {
+                [key: string]: unknown;
+            }[];
+            run_artifacts: {
+                [key: string]: unknown;
+            }[];
+        } & {
+            [key: string]: unknown;
         };
         PairingCode: {
             /** @description Code à usage unique, valable 10 minutes. */
@@ -2981,7 +3062,7 @@ export interface components {
                 "application/json": components["schemas"]["RunAccepted"];
             };
         };
-        /** @description File pleine (`queue_full`), au-delà de `max_concurrent_runs` ; réessayer après `Retry-After`. */
+        /** @description File pleine (08b § 3) ; `queue_full` au-delà de `MAX_CONCURRENT_RUNS` runs actifs sur l'instance, `user_queue_full` au-delà de `MAX_ACTIVE_RUNS_PER_USER` pour l'appelant, `key_rate_limited` au-delà de `MAX_RUNS_PER_KEY_PER_MINUTE` créations par clé d'API ; réessayer après `Retry-After`. */
         QueueFull: {
             headers: {
                 "Retry-After"?: number;
@@ -3418,6 +3499,7 @@ export interface operations {
                 };
             };
             401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
             429: components["responses"]["Error"];
         };
     };
@@ -3599,6 +3681,7 @@ export interface operations {
             403: components["responses"]["Error"];
             409: components["responses"]["Error"];
             429: components["responses"]["QueueFull"];
+            507: components["responses"]["Error"];
         };
     };
     importApi: {
@@ -3662,6 +3745,7 @@ export interface operations {
             403: components["responses"]["Error"];
             404: components["responses"]["Error"];
             409: components["responses"]["Error"];
+            429: components["responses"]["QueueFull"];
         };
     };
     getApi: {
@@ -3712,6 +3796,7 @@ export interface operations {
             401: components["responses"]["Error"];
             403: components["responses"]["Error"];
             404: components["responses"]["Error"];
+            409: components["responses"]["Error"];
         };
     };
     updateApi: {
@@ -3742,6 +3827,7 @@ export interface operations {
             401: components["responses"]["Error"];
             403: components["responses"]["Error"];
             404: components["responses"]["Error"];
+            409: components["responses"]["Error"];
         };
     };
     runApi: {
@@ -3778,6 +3864,7 @@ export interface operations {
             404: components["responses"]["Error"];
             409: components["responses"]["Error"];
             429: components["responses"]["QueueFull"];
+            507: components["responses"]["Error"];
         };
     };
     reinvestigateApi: {
@@ -3796,8 +3883,17 @@ export interface operations {
         };
         responses: {
             202: components["responses"]["Accepted"];
+            400: components["responses"]["Error"];
             401: components["responses"]["Error"];
-            403: components["responses"]["Error"];
+            /** @description `human_confirmation_required` : API `bloquee` relancée hors de la console (clé d'API) ; `insufficient_scope` : clé sans `apis:write`. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
             404: components["responses"]["Error"];
             409: components["responses"]["Error"];
             429: components["responses"]["QueueFull"];
@@ -3878,7 +3974,9 @@ export interface operations {
                     "application/json": components["schemas"]["StrategyVersionList"];
                 };
             };
+            400: components["responses"]["Error"];
             401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
             404: components["responses"]["Error"];
         };
     };
@@ -3903,7 +4001,9 @@ export interface operations {
                     "application/json": components["schemas"]["StrategyVersion"];
                 };
             };
+            400: components["responses"]["Error"];
             401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
             404: components["responses"]["Error"];
         };
     };
@@ -3930,7 +4030,9 @@ export interface operations {
                     "application/json": components["schemas"]["StrategyDiff"];
                 };
             };
+            400: components["responses"]["Error"];
             401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
             404: components["responses"]["Error"];
         };
     };
@@ -3955,6 +4057,7 @@ export interface operations {
                     "application/json": components["schemas"]["ApiDetail"];
                 };
             };
+            400: components["responses"]["Error"];
             401: components["responses"]["Error"];
             403: components["responses"]["Error"];
             404: components["responses"]["Error"];
@@ -3985,7 +4088,9 @@ export interface operations {
                     "application/json": components["schemas"]["StatusEventList"];
                 };
             };
+            400: components["responses"]["Error"];
             401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
             404: components["responses"]["Error"];
         };
     };
@@ -4066,6 +4171,7 @@ export interface operations {
                 };
             };
             401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
             404: components["responses"]["Error"];
         };
     };
@@ -4242,6 +4348,7 @@ export interface operations {
             403: components["responses"]["Error"];
             404: components["responses"]["Error"];
             409: components["responses"]["Error"];
+            429: components["responses"]["QueueFull"];
         };
     };
     streamRunEvents: {
@@ -4266,8 +4373,17 @@ export interface operations {
                     "text/event-stream": string;
                 };
             };
+            /** @description Run terminé et entièrement servi (`Last-Event-ID: end`) ; rien à rejouer, ne pas se reconnecter. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
             401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
             404: components["responses"]["Error"];
+            429: components["responses"]["Error"];
         };
     };
     listRunLogs: {
@@ -4293,16 +4409,23 @@ export interface operations {
                     "application/json": components["schemas"]["RunLogList"];
                 };
             };
+            400: components["responses"]["Error"];
             401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
             404: components["responses"]["Error"];
         };
     };
     getDatasetItems: {
         parameters: {
             query?: {
+                /** @description CSV à cellules neutralisées (08b § 2) ; colonnes = propriétés du schéma de sortie dans leur ordre déclaré (ou `fields`). Un champ d'item hors des propriétés du schéma n'a pas de colonne CSV ; il reste dans JSON et NDJSON, ou se nomme par `fields`. */
                 format?: "json" | "ndjson" | "csv";
+                /** @description Curseur opaque du dernier item servi (`next_cursor`, ou en-tête `X-Next-Cursor`), ou `seq` en clair du dernier item reçu (rang dans le dataset, 0 pour le premier). */
                 after?: string;
-                limit?: components["parameters"]["Limit"];
+                /** @description Reprise d'un export coupé en cours de route : nombre d'items déjà reçus EN ENTIER (lignes NDJSON complètes, lignes CSV hors en-tête), avec les mêmes filtres ; l'export reprend à l'item suivant, sans doublon ni perte. */
+                offset?: number;
+                /** @description Nombre maximal d'items ; absent, l'export va jusqu'au bout du dataset, en flux. */
+                limit?: number;
                 /** @description Champs à garder, séparés par des virgules. */
                 fields?: string;
                 /** @description Champs à retirer, séparés par des virgules. */
@@ -4317,9 +4440,11 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Items. */
+            /** @description Items, écrits en flux (mémoire bornée) ; pièce jointe avec `nosniff` pour un export. CSV : cellules qui commencent par =, +, -, @, tabulation ou retour chariot préfixées d'une apostrophe (08b § 2). */
             200: {
                 headers: {
+                    /** @description Curseur de la suite quand `limit` arrête la page avant la fin du dataset. */
+                    "X-Next-Cursor"?: string;
                     [name: string]: unknown;
                 };
                 content: {
@@ -4404,6 +4529,7 @@ export interface operations {
                 };
             };
             401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
             404: components["responses"]["Error"];
         };
     };
@@ -4426,6 +4552,7 @@ export interface operations {
                 content?: never;
             };
             401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
             404: components["responses"]["Error"];
         };
     };
@@ -4444,7 +4571,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Abonnement à jour ; `secret` présent seulement après une rotation. */
+            /** @description Abonnement à jour ; `secret` présent seulement après une rotation. Changer l'URL fait tourner le secret (lié à sa destination), sans période de grâce : le nouveau secret est rendu une fois. */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -4455,6 +4582,7 @@ export interface operations {
             };
             400: components["responses"]["Error"];
             401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
             404: components["responses"]["Error"];
         };
     };
@@ -4479,6 +4607,7 @@ export interface operations {
                 };
             };
             401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
             404: components["responses"]["Error"];
         };
     };
@@ -4556,6 +4685,7 @@ export interface operations {
             400: components["responses"]["Error"];
             401: components["responses"]["Error"];
             403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
         };
     };
     listProxies: {
@@ -5385,6 +5515,7 @@ export interface operations {
             };
             400: components["responses"]["Error"];
             401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
             429: components["responses"]["Error"];
         };
     };
@@ -5542,6 +5673,59 @@ export interface operations {
                 };
             };
             401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+        };
+    };
+    getResponsibleUseAck: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Version courante de la page et date de lecture. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResponsibleUseAck"];
+                };
+            };
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+        };
+    };
+    acknowledgeResponsibleUse: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    version: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Lecture enregistrée. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResponsibleUseAck"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            409: components["responses"]["Error"];
         };
     };
     listAuditEvents: {
@@ -5626,6 +5810,7 @@ export interface operations {
             400: components["responses"]["Error"];
             401: components["responses"]["Error"];
             403: components["responses"]["Error"];
+            409: components["responses"]["Error"];
         };
     };
     exportSubject: {
@@ -5755,6 +5940,7 @@ export interface operations {
                 };
             };
             401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
         };
     };
     deleteExtensionSession: {
@@ -5774,6 +5960,7 @@ export interface operations {
                 content?: never;
             };
             401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
         };
     };
     openExtensionTunnel: {
@@ -5832,6 +6019,7 @@ export interface operations {
             };
             400: components["responses"]["Error"];
             401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
         };
     };
     disconnectExtensionSite: {
@@ -5854,6 +6042,7 @@ export interface operations {
             };
             400: components["responses"]["Error"];
             401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
         };
     };
     putExtensionSiteCookies: {
@@ -5880,6 +6069,7 @@ export interface operations {
             };
             400: components["responses"]["Error"];
             401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
             404: components["responses"]["Error"];
             409: components["responses"]["Error"];
         };
@@ -5903,6 +6093,7 @@ export interface operations {
                 };
             };
             401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
         };
     };
     revokeExtensionDevice: {
@@ -5924,6 +6115,7 @@ export interface operations {
                 content?: never;
             };
             401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
             404: components["responses"]["Error"];
         };
     };
@@ -5946,6 +6138,7 @@ export interface operations {
                 };
             };
             401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
         };
     };
     disconnectConnectedSite: {
@@ -5967,6 +6160,7 @@ export interface operations {
                 content?: never;
             };
             401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
             404: components["responses"]["Error"];
         };
     };

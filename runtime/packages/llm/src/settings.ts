@@ -3,7 +3,7 @@
 // (INV8 : jamais en clair dans `settings`), un modèle par rôle. Utilisé par le worker pour les rôles `extract` (E4, E5
 // délégué) et `agent` (E6, tâche 2.4). Toute incohérence lève `LlmSettingsError` : l'essai échoue en `code_error`
 // (`llm_not_configured`), jamais sur un fournisseur de repli implicite.
-import type { Secret } from '@runtime/core';
+import { Secret } from '@runtime/core';
 import type { LlmConfig, ModelConfig, ProviderConfig, RoleConfig } from './client.js';
 import type { CapabilityProfile, LlmRole, StructuredMode, ToolChoiceMode } from './profile.js';
 import type { RedactConfig } from './redact.js';
@@ -62,6 +62,22 @@ function roleOf(raw: unknown, name: string): RoleConfig | undefined {
 }
 
 /**
+ * En-têtes propres au fournisseur (08 § 1), saisis par l'admin et chiffrés au dépôt (`headers_secret_id`, objet JSON
+ * nom → valeur) : envoyés par chaque appel du client, comme par la sonde « Tester ». Illisibles ou malformés : refus
+ * explicite (un fournisseur qui les exige échouerait sinon sur chaque run).
+ */
+async function headersOf(provider: string, secretId: string, readSecret: (id: string) => Promise<Secret>): Promise<Record<string, Secret>> {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse((await readSecret(secretId)).reveal());
+  } catch {
+    throw new LlmSettingsError(`fournisseur ${provider} : en-têtes illisibles`);
+  }
+  if (!isRecord(parsed) || Object.values(parsed).some((v) => typeof v !== 'string')) throw new LlmSettingsError(`fournisseur ${provider} : en-têtes malformés`);
+  return Object.fromEntries(Object.entries(parsed as Record<string, string>).map(([name, value]) => [name, new Secret(value)]));
+}
+
+/**
  * Configuration du client depuis `settings.llm`. Seuls les fournisseurs des `roles` demandés sont résolus (une clé
  * illisible d'un fournisseur inutilisé ne bloque pas l'essai).
  */
@@ -91,10 +107,12 @@ export async function llmConfigFromSettings(value: unknown, readSecret: (id: str
     } catch {
       throw new LlmSettingsError(`fournisseur ${id} : clé illisible`);
     }
+    const headers = typeof raw['headers_secret_id'] === 'string' ? await headersOf(id, raw['headers_secret_id'], readSecret) : undefined;
     providers.push({
       id,
       baseUrl: raw['base_url'],
       apiKey,
+      ...(headers === undefined ? {} : { headers }),
       ...(typeof raw['timeout_ms'] === 'number' ? { timeoutMs: raw['timeout_ms'] } : {}),
       ...(isRecord(raw['extra_body']) ? { extraBody: raw['extra_body'] } : {}),
       models,
