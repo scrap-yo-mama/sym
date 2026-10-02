@@ -12,7 +12,7 @@ Tu demandes des données à ton IA. **SYM 👻** enquête sur le site en commen�
 > [!WARNING]
 > **Pré-version.** SYM est en plein développement et n'est pas encore prêt pour la production. Suis le dépôt pour la première version.
 >
-> **Pas encore livré :** la réparation et le serveur MCP. Tant qu'ils ne sont pas là, tu ne peux pas demander de données à ton IA via SYM.
+> **Pas encore livré :** la réparation étape par étape. D'ici là, une réparation corrige la stratégie, pas une étape seule.
 
 ## Ce que ça donne
 
@@ -76,5 +76,7 @@ cosign verify ghcr.io/scrap-yo-mama/sym:X.Y.Z \
 gh attestation verify oci://ghcr.io/scrap-yo-mama/sym:X.Y.Z -R scrap-yo-mama/sym
 sha256sum -c SHA256SUMS
 ```
+
+Remplace `X.Y.Z` par une version publiée : rien n'est publié avant la première version.
 
 Le cœur est sous [AGPL-3.0](https://github.com/scrap-yo-mama/sym/blob/main/LICENSE), le client et les schémas sous MIT. [Usage responsable](https://github.com/scrap-yo-mama/sym/blob/main/runtime/apps/docs/content/explications/usage-responsable.md) : voir la [doc](https://github.com/scrap-yo-mama/sym/blob/main/runtime/apps/docs/content/index.md). Sécurité : le [signalement privé des failles](https://github.com/scrap-yo-mama/sym/blob/main/runtime/SECURITY.md) est activé. Fait avec l'aide d'une IA, relu par des humains. [Lire en anglais](README.md).

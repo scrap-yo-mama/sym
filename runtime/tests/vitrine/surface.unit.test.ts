@@ -370,6 +370,18 @@ describe('registre des allégations : preuve, relecture, statut, CLAIMS.md gén�
     expect(testCorpusFiles().some((file) => file.endsWith('invariants.todo.test.ts'))).toBe(true);
   });
 
+  test('une entrée relue qui affirme la réparation ou le serveur MCP en cite une preuve propre (4.12b, 22 §3.2), jamais une preuve voisine ni reportée', () => {
+    const base = { ...claims.claims[0]!, status: 'relu' as const };
+    const one = (patch: Partial<ClaimsFile['claims'][number]>): string => claimProblems({ version: 1, claims: [{ ...base, ...patch }] }, context).join();
+    expect(one({ en: 'Sites that change: it repairs the step that broke', proof: ['runtime/apps/worker/src/exec/classification-guard.integration.test.ts'] })).toMatch(/la réparation sans preuve propre/);
+    expect(one({ fr: 'Rejoue sans LLM, répare étape par étape', proof: ['assert_e5_replay_without_llm'] })).toMatch(/la réparation sans preuve propre/);
+    expect(one({ en: 'Speaks MCP, REST, and has a console', proof: ['assert_openapi_served_valid'] })).toMatch(/le serveur MCP sans preuve propre/);
+    expect(one({ en: 'Speaks MCP, REST, and has a console', proof: ['assert_openapi_served_valid'], status: 'à relire' })).toBe('');
+    expect(one({ note: 'la preuve de la réparation s\'ajoute à sa livraison' })).toMatch(/reporte la preuve/);
+    expect(one({ en: 'Sites that change: it repairs the step that broke', proof: ['runtime/apps/worker/src/exec/repair.integration.test.ts'] })).toBe('');
+    expect(one({ en: 'Speaks MCP, REST, and has a console', proof: ['runtime/apps/server/src/mcp.integration.test.ts'] })).toBe('');
+  });
+
   test('« aucune télémétrie par défaut » est liée à 4.10 : l\'entrée repasse « à relire » à la livraison de cette tâche', () => {
     expect(claims.claims.filter((c) => c.task === '4.10').map((c) => c.id).sort()).toEqual(['no-telemetry-by-default', 'stays-yours']);
     const linked = { ...claims.claims.find((c) => c.id === 'stays-yours')!, status: 'relu' as const, reviewed: '2026-10-02' };

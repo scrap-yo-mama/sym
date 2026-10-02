@@ -197,13 +197,39 @@ function prose(text: string): string {
 const sentences = (text: string): string[] => text.split(/(?<=[.!?])\s+|\n+/).map((part) => part.replace(/^[>|#\-*\s]+/, '').trim()).filter((part) => part !== '');
 
 /**
- * Phrases factuelles hors puces (22 §3.2) : une phrase du README qui porte un chiffre avec unité, ou qui affirme dans
- * « Quickstart » que la CI rejoue les commandes, s'affiche seulement si elle fait partie d'une entrée du registre (surface readme).
+ * Phrases de prose du README hors puces (vérifiées par `claimsProblems`), titres, commandes, images et liens de langue :
+ * accroche, alerte de pré-version, transcription de « How it feels » (ligne par ligne), légende de « Deploy to Render », note de
+ * « Verify » et mentions. Gras et crochets de liens retirés.
+ */
+export function proseSentences(text: string): string[] {
+  const transcript = codeBlocks(text).filter((block) => block.lang === 'text').flatMap((block) => block.body.split('\n'));
+  const body = text
+    .replace(/^.*href="README\.fr\.md".*$/m, '\n')
+    .replace(/^#{1,6} .*$/gm, '\n')
+    .replace(/^- .*$/gm, '\n')
+    .replace(/^> \[!\w+\]$/gm, '\n')
+    .replace(/\[[^\]]*\]\(README(\.fr)?\.md\)\.?/g, ' ');
+  return [...sentences(prose(body)), ...transcript]
+    .map((sentence) => sentence.replace(/\*\*/g, '').replace(/[[\]]/g, '').replace(/\s+/g, ' ').trim())
+    .filter((sentence) => sentence !== '');
+}
+
+/**
+ * Une seule vérité (22 §1, §3.2) : chaque phrase de prose du README (`proseSentences`) fait partie d'une entrée RELUE du registre
+ * (surface readme). En particulier, une phrase qui porte un chiffre avec unité, ou qui affirme dans « Quickstart » que la CI
+ * rejoue les commandes, ne s'affiche que si elle est au registre.
  */
 export function unregisteredFactsProblems(text: string, lang: Lang, file: ClaimsFile): string[] {
-  const registered = file.claims.filter((claim) => claim.surfaces.includes('readme')).map((claim) => normalize(claim[lang]));
+  const readme = file.claims.filter((claim) => claim.surfaces.includes('readme'));
+  const registered = readme.map((claim) => normalize(claim[lang]));
   const isRegistered = (sentence: string): boolean => registered.some((phrase) => phrase.includes(normalize(sentence.replace(/\*\*/g, ''))));
   const problems: string[] = [];
+  for (const sentence of proseSentences(text)) {
+    const holds = (claim: ClaimsFile['claims'][number]): boolean => normalize(claim[lang]).includes(normalize(sentence));
+    const owner = readme.find((claim) => claim.status === 'relu' && holds(claim)) ?? readme.find(holds);
+    if (!owner) problems.push(`${lang} : phrase hors registre (claims.json, surface readme) : « ${sentence} »`);
+    else if (owner.status !== 'relu') problems.push(`${lang} : « ${sentence} » vient de l'entrée « ${owner.id} », ${owner.status}`);
+  }
   for (const sentence of sentences(prose(text))) {
     const number = NUMBER_WITH_UNIT.exec(sentence);
     if (number && !isRegistered(sentence)) problems.push(`${lang} : chiffre sans mesure au registre (« ${number[0]} ») : « ${sentence} »`);

@@ -12,7 +12,7 @@ You ask your AI for data. **SYM 👻** investigates the site cheapest-first (pla
 > [!WARNING]
 > **Pre-release.** SYM is under active development and not production-ready yet. Watch the repo for the first release.
 >
-> **Not delivered yet:** repair and the MCP server. Until they land, you cannot ask your AI for data through SYM.
+> **Not delivered yet:** step-by-step repair. Until it lands, a repair patches the strategy, not a single step.
 
 ## How it feels
 
@@ -76,5 +76,7 @@ cosign verify ghcr.io/scrap-yo-mama/sym:X.Y.Z \
 gh attestation verify oci://ghcr.io/scrap-yo-mama/sym:X.Y.Z -R scrap-yo-mama/sym
 sha256sum -c SHA256SUMS
 ```
+
+Replace `X.Y.Z` with a released version: nothing is published before the first release.
 
 Core [AGPL-3.0](https://github.com/scrap-yo-mama/sym/blob/main/LICENSE), client and schemas MIT. [Responsible use](https://github.com/scrap-yo-mama/sym/blob/main/runtime/apps/docs/content/explications/usage-responsable.md): see the [docs](https://github.com/scrap-yo-mama/sym/blob/main/runtime/apps/docs/content/index.md). Security: [private vulnerability reporting](https://github.com/scrap-yo-mama/sym/blob/main/runtime/SECURITY.md) is on. Built with AI assistance, reviewed by humans. [Lire en français](README.fr.md).

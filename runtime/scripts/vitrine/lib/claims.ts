@@ -51,6 +51,17 @@ export type ProofContext = {
   today: string;
 };
 
+/**
+ * Une entrée relue qui affirme une fonction cite une preuve de CETTE fonction (22 §3.2 : affichée seulement une fois prouvée et
+ * relue) : la réparation par un test de réparation, le serveur MCP par un test du serveur MCP. Une preuve voisine (la garde de
+ * classification pour la réparation, l'OpenAPI pour MCP) ne suffit pas, et une note qui reporte la preuve à la livraison non plus.
+ */
+const CAPABILITY_PROOFS: readonly { name: string; claim: RegExp; proof: RegExp }[] = [
+  { name: 'la réparation', claim: /\brepair|répar/i, proof: /repair/i },
+  { name: 'le serveur MCP', claim: /\bMCP\b/, proof: /mcp|assert_tool_definitions_budget/i },
+];
+const DEFERRED_PROOF = /s'ajoute à (sa|leur) livraison|added when .* deliver/i;
+
 /** Problèmes du registre (liste vide : conforme). */
 export function claimProblems(file: ClaimsFile, context: ProofContext): string[] {
   const problems: string[] = [];
@@ -83,6 +94,14 @@ export function claimProblems(file: ClaimsFile, context: ProofContext): string[]
       } else if (!context.exists(proof)) problems.push(`${at} : preuve ${proof} introuvable`);
     }
     if (claim.status === 'bloqué' && !claim.note) problems.push(`${at} : une entrée bloquée dit pourquoi (note)`);
+    if (claim.status === 'relu') {
+      for (const capability of CAPABILITY_PROOFS) {
+        if ((capability.claim.test(claim.en) || capability.claim.test(claim.fr)) && !claim.proof.some((proof) => capability.proof.test(proof))) {
+          problems.push(`${at} : affirme ${capability.name} sans preuve propre (relue, elle s'affiche)`);
+        }
+      }
+      if (claim.note && DEFERRED_PROOF.test(claim.note)) problems.push(`${at} : relue alors que sa note reporte la preuve à une livraison`);
+    }
   }
   return problems;
 }

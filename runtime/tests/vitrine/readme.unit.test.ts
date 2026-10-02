@@ -9,7 +9,7 @@ import { identityOf, publicRepository, verifyBlock } from '../../scripts/vitrine
 import { findEntries, loadList, normalize, parseList } from '../../scripts/vitrine/lib/text.ts';
 import {
   altProblems, badgeProblems, badgeKind, badges, bannerAltProblems, bannerTexts, claimsProblems, codeBlocks, copyProblems, headings, imageResolveProblems, images, lengthProblems, loadBudgets, marksProblems,
-  parityProblems, pictureProblems, quickstartProblems, readReadme, repoLinkProblems, sectionProblems, unregisteredFactsProblems, verifyBlockProblems, whatItDoes, type Lang,
+  parityProblems, pictureProblems, proseSentences, quickstartProblems, readReadme, repoLinkProblems, sectionProblems, unregisteredFactsProblems, verifyBlockProblems, whatItDoes, type Lang,
 } from '../../scripts/vitrine/lib/readme.ts';
 import { loadThirdPartyRepos, ownerReferenceFiles, ownerReferenceProblems } from '../../scripts/vitrine/lib/owners.ts';
 import { runtimeDir } from '../../scripts/vitrine/lib/paths.ts';
@@ -72,10 +72,12 @@ describe('assert_readme_sections_present : les blocs de la planche (D-60), dans 
     }
   });
 
-  // Écart assumé au titre du bloc 6 (22 §3.1 : « Try it in two minutes (no key) ») : la première construction de l'image prend
-  // plusieurs minutes, et le quickstart crée deux secrets d'instance : le README dit « Try it (no model key) » / « Essaie (sans
-  // clé de modèle) » (voir SECTION_TITLES dans lib/readme.ts).
-  
+  // 4.12b (D-60) : la planche Readme.dc.html n'a ni le bloc 2 de 22 §3.1 (liens Docs, Quickstart, Discussions et landing) ni le bloc 4
+  // (vignette de démo). Ils sont retirés du README avec la planche ; leur retour attend 4.11 (landing en ligne, dont dépend 4.5) et
+  // 3.11 (démo), et l'arbitrage de leur place dans la planche : le CDC (22 §3.1, 22b, 16) est à mettre à jour à la structure de D-60.
+  test.todo('bloc 2 de 22 §3.1 : lien vers la landing (4.11), absent de la planche (D-60) ; à rétablir à la mise en ligne de la landing (4.5 attend un README qui pointe vers elle), à la place que l\'arbitrage lui donne dans la planche');
+  test.todo('bloc 4 de 22 §3.1 : vignette de démo fr et en (PNG ≤ 150 Ko) cliquable vers la vidéo, absente de la planche (D-60) ; revient avec le GIF de 3.11 si l\'arbitrage la garde');
+
   test('cas négatifs : titre ajouté, sections permutées, deuxième lien « Responsible use », lien hors du paragraphe de mentions', () => {
     expect(sectionProblems(`${README.en}\n## Extra\n`, 'en').join()).toMatch(/titres/);
     expect(sectionProblems(README.en.replace('## Quickstart', '## Verify-x').replace('## Verify what you run', '## Quickstart').replace('## Verify-x', '## Verify what you run'), 'en').join()).toMatch(/titres/);
@@ -134,6 +136,37 @@ describe('assert_readme_claims_registered : chaque puce de « What SYM does » e
       expect(unregisteredFactsProblems(README[lang], lang, claims), lang).toEqual([]);
       expect(README[lang], lang).not.toMatch(/\d+\s*(USD|US\$|\$|€|EUR)\B|\$\s*\d+/i);
     }
+  });
+
+  test('une seule vérité (22 §1) : chaque phrase de l\'accroche, de l\'alerte, de la transcription, de la légende « Deploy to Render », de la note « Verify » et des mentions vient d\'une entrée relue', () => {
+    for (const lang of LANGS) {
+      expect(proseSentences(README[lang]).length, lang).toBeGreaterThanOrEqual(17);
+      expect(unregisteredFactsProblems(README[lang], lang, claims), lang).toEqual([]);
+    }
+    expect(proseSentences(README.en)).toEqual(expect.arrayContaining([
+      'You ask your AI for data.',
+      'Then it compiles an API that replays without an LLM and repairs itself when the site changes.',
+      'SYM 👻: Done. 20 books, no model cost per replay.',
+      'Security: private vulnerability reporting is on.',
+      'Built with AI assistance, reviewed by humans.',
+    ]));
+    expect(proseSentences(README.fr)).toEqual(expect.arrayContaining(['Tu demandes des données à ton IA.', 'Fait avec l\'aide d\'une IA, relu par des humains.']));
+    for (const lang of LANGS) expect(proseSentences(README[lang]).join('\n'), lang).not.toMatch(/Lire en|English|Français|WARNING/);
+  });
+
+  test('cas négatifs : phrase ajoutée à l\'accroche, à la transcription ou aux mentions ; entrée de l\'accroche à relire', () => {
+    const hero = README.en.replace('Your server, your database, your model.', 'Your server, your database, your model. It never breaks.');
+    expect(unregisteredFactsProblems(hero, 'en', claims).join()).toMatch(/hors registre.*It never breaks/);
+    const transcript = README.fr.replace('20 livres', '500 livres');
+    expect(transcript).not.toBe(README.fr);
+    expect(unregisteredFactsProblems(transcript, 'fr', claims).join()).toMatch(/500 livres/);
+    const mentions = README.en.replace('Built with AI assistance, reviewed by humans.', 'Built by humans only.');
+    expect(mentions).not.toBe(README.en);
+    expect(unregisteredFactsProblems(mentions, 'en', claims).join()).toMatch(/Built by humans only/);
+    const owner = claims.claims.find((c) => c.surfaces.includes('readme') && c.en.includes('You ask your AI for data.'));
+    expect(owner).toBeDefined();
+    const stale: ClaimsFile = { ...claims, claims: claims.claims.map((c) => (c.id === owner?.id ? { ...c, status: 'à relire' as const } : c)) };
+    expect(unregisteredFactsProblems(README.fr, 'fr', stale).join()).toMatch(/à relire/);
   });
 
   test('cas négatifs : chiffre sans mesure (« about 4 GB of memory »), rejeu par la CI reformulé hors registre, durée annoncée', () => {
@@ -293,6 +326,15 @@ describe('identité : liens du README et bloc « Verify » dérivés de PUBLIC_R
     expect(repoLinkProblems(README.en.replace(`${identity.repository}/blob/main/LICENSE`, `${homonym.repository}/blob/main/LICENSE`), identity).join()).toMatch(/autre dépôt/);
     expect(repoLinkProblems(README.en.replace('runtime/SECURITY.md', 'runtime/ABSENT.md'), identity).join()).toMatch(/introuvable/);
     expect(repoLinkProblems(README.en.replace(identity.image, homonym.image), identity).join()).toMatch(/GHCR/);
+  });
+
+  test('« Verify » : sous le bloc, une ligne dit de remplacer X.Y.Z et que rien n\'est publié avant la première version (4.12b)', () => {
+    const note = { en: /^Replace `X\.Y\.Z` [^\n]*nothing is published before the first release\.$/, fr: /^Remplace `X\.Y\.Z` [^\n]*rien n'est publié avant la première version\.$/ };
+    for (const lang of LANGS) {
+      const after = README[lang].slice(README[lang].indexOf(verifyBlock(identity)) + verifyBlock(identity).length).replace(/^\n```\n+/, '');
+      expect(after.split('\n')[0], lang).toMatch(note[lang]);
+    }
+    expect(codeBlocks(README.en).some((b) => b.body === verifyBlock(identity) && b.body.includes('X.Y.Z'))).toBe(true);
   });
 
   test('le bloc « Verify » est celui que dérive l\'identité (octet pour octet, en et fr)', () => {

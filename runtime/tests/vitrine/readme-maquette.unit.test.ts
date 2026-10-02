@@ -6,6 +6,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, test } from 'vitest';
 import { badges, bannerTexts, codeBlocks, headings, loadBudgets, readReadme, whatItDoes } from '../../scripts/vitrine/lib/readme.ts';
+import { loadClaims } from '../../scripts/vitrine/lib/claims.ts';
 import { githubDir, repoRoot } from '../../scripts/vitrine/lib/paths.ts';
 
 const PLANCHE = join(repoRoot, 'cdc/scrapyomama-runtime/maquette-ux/latest/project/Readme.dc.html');
@@ -28,7 +29,10 @@ const spans = (style: string): string[] => [...html.matchAll(new RegExp(`<span s
  *  - verify : la planche abrège le bloc par « … » et un `--certificate-identity-regexp` : le bloc est celui que dérive l'identité publique
  *    (assert_verify_snippet_works) ;
  *  - selector : le sélecteur de langue en première ligne est exigé par 22 §3.1 (u8 R2) en plus du lien final « Lire en français » ;
- *  - alert : la ligne « Not delivered yet » reste tant que 2.3 et 3.2 ne sont pas livrées (tests/public-showcase : les promesses restent vraies) ;
+ *  - alert : une ligne « Not delivered yet » nomme ce qui manque encore (la reprise étape par étape de 2.13 : « repairs step by step »,
+ *    « it repairs the step that broke ») et disparaît à sa livraison (tests/public-showcase : les promesses restent vraies) ;
+ *  - verify-note : sous le bloc « Verify », une ligne dit de remplacer X.Y.Z (la planche écrit [VERSION]) et que rien n'est publié avant
+ *    la première version, pour qu'aucun lecteur ne lance cosign sur une étiquette qui n'existe pas ;
  *  - links : la planche n'a qu'un lien (« Lire en français »), les mots des mentions en portent trois de plus (licence, usage responsable, doc, signalement
  *    privé) : D-46 et 22 §3.1 exigent le lien d'usage responsable, et « see the docs » sans lien n'ouvre rien ;
  *  - github : GitHub n'offre ni gris sur une ligne d'un bloc de code, ni police ou couleur des mentions (seule la taille de la légende de « Deploy to Render »,
@@ -38,6 +42,54 @@ const EXPLAINED = {
   cost: [', $0.0004 per replay', ', no model cost per replay'],
   render: [', about $38/month', ''],
 } as const;
+
+const claims = loadClaims();
+/** Traduction fr d'un texte en de la planche : l'entrée du registre (surface readme) dont le texte en le contient. */
+const frOf = (en: string): string | undefined => claims.claims.find((c) => c.surfaces.includes('readme') && c.en.replace(/\*\*/g, '').includes(en))?.fr;
+const FR_HEADINGS = ['Ce que ça donne', 'Ce que SYM fait', 'Ce que SYM sait gérer', 'Démarrage rapide', 'Vérifie ce que tu lances'];
+/** Dernier paragraphe (mentions), liens retirés. */
+const lastParagraph = (text: string): string => text.trimEnd().split('\n\n').pop()!;
+const unlinked = (text: string): string => text.replace(/\[([^\]]*)\]\([^)]*\)/g, '$1').replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
+
+/**
+ * README fr fidèle à la planche, traduite (guide de 3.19) : mêmes titres traduits, puces et accroche = traductions du registre
+ * des textes en de la planche, transcription de même forme (mêmes étapes, mêmes nombres), mentions de même structure (mêmes liens,
+ * licences, usage responsable, sécurité, IA, lien vers l'anglais). Liste vide : conforme.
+ */
+function frDrift(fr: string, en: string): string[] {
+  const problems: string[] = [];
+  if (headings(fr).join('|') !== FR_HEADINGS.join('|')) problems.push(`titres fr ${JSON.stringify(headings(fr))}`);
+  const li = [...html.matchAll(/<li>([^<]*)<\/li>/g)].map((m) => plain(m[1] ?? ''));
+  const wanted = li.map(frOf);
+  if (wanted.some((t) => t === undefined) || whatItDoes(fr, 'fr').join('|') !== wanted.join('|')) problems.push('puces fr : pas les traductions du registre des puces de la planche, dans l\'ordre');
+  const hero = plain(/<p style="margin: 0; font-size: 16px[^>]*>([\s\S]*?)<\/p>/.exec(html)?.[1] ?? '');
+  const heroFr = frOf(hero);
+  if (!heroFr || !fr.replace(/\*\*/g, '').includes(heroFr)) problems.push('accroche fr : pas la traduction du registre de l\'accroche de la planche');
+  const alert = plain(/border-left: 4px solid #FFC727[^>]*>([\s\S]*?)<\/div>/.exec(html)?.[1] ?? '');
+  const alertFr = frOf(alert);
+  if (!alertFr || !fr.replace(/\*\*/g, '').replace(/\n> /g, ' ').includes(alertFr)) problems.push('alerte fr : pas la traduction du registre de l\'alerte de la planche');
+  const caption = plain(/<span style="font-size: 13px; color: #59636E">(coming with[^<]*)<\/span>/.exec(html)?.[1] ?? '').replace(EXPLAINED.render[0], EXPLAINED.render[1]);
+  const captionFr = frOf(caption);
+  if (!captionFr || !fr.includes(`<sub>${captionFr}</sub>`)) problems.push('légende « Deploy to Render » fr : pas la traduction du registre');
+  const lines = codeBlocks(fr).find((b) => b.lang === 'text')?.body.split('\n') ?? [];
+  const linesEn = codeBlocks(en).find((b) => b.lang === 'text')?.body.split('\n') ?? [];
+  const shape = [/^toi> .*books\.toscrape\.com/, /^SYM 👻 : \S/, /^1\/4 \S.* · 2\/4 \S.* \(robots\.txt ok\) · 3\/4 \S.* · 4\/4 \S.*, ok$/, /^SYM 👻 : C'est fait\. /];
+  if (lines.length !== 4 || shape.some((re, i) => !re.test(lines[i] ?? ''))) problems.push(`transcription fr : forme ${JSON.stringify(lines)}`);
+  const numbers = (l: string[]): string => l.map((x) => (x.match(/\d+/g) ?? []).join(',')).join('|');
+  if (numbers(lines) !== numbers(linesEn)) problems.push('transcription fr : nombres différents de l\'anglais');
+  const closing = lastParagraph(fr);
+  const hrefs = (text: string): string[] => [...text.matchAll(/\]\(([^)]*)\)/g)].map((m) => m[1] ?? '').filter((h) => !/README(\.fr)?\.md$/.test(h));
+  if (hrefs(closing).join('|') !== hrefs(lastParagraph(en)).join('|')) problems.push('mentions fr : liens différents de l\'anglais');
+  const plainClosing = unlinked(closing);
+  for (const [what, re] of [['licences', /AGPL-3\.0.*\bMIT\b/], ['usage responsable', /\[Usage responsable\]\([^)]*usage-responsable\.md\)/], ['sécurité', /Sécurité : [^.]*\]\([^)]*SECURITY\.md\)/], ['IA', /\bIA\b.*relu par des humains/], ['anglais', /\[Lire en anglais\]\(README\.md\)\.$/]] as const) {
+    if (!re.test(what === 'licences' || what === 'IA' ? plainClosing : closing)) problems.push(`mentions fr : ${what}`);
+  }
+  for (const sentence of unlinked(lastParagraph(en)).replace(/ Lire en français\.$/, '').split(/(?<=\.) /)) {
+    const t = frOf(sentence);
+    if (!t || !plainClosing.includes(t)) problems.push(`mentions fr : pas la traduction du registre de « ${sentence} »`);
+  }
+  return problems;
+}
 
 describe.skipIf(!present)('assert_readme_matches_maquette : README en fidèle à la planche Readme.dc.html (D-60)', () => {
   test('bandeau : trois textes de la planche (titre, accroche barrée, ligne de contexte) et ses couleurs', () => {
@@ -102,5 +154,26 @@ describe.skipIf(!present)('assert_readme_matches_maquette : README en fidèle à
     expect(last(en)).toBe(closing);
     expect(last(fr)).toContain('Lire en anglais');
     expect(closing).toContain('Lire en français');
+  });
+
+  test('README fr : la planche traduite (titres, puces, accroche, alerte, légende, transcription, mentions)', () => {
+    expect(frDrift(fr, en)).toEqual([]);
+  });
+
+  test('cas négatifs fr : titre, puce, accroche, transcription ou mentions qui s\'écartent de la planche traduite', () => {
+    const drift = (from: string, to: string): string => {
+      const changed = fr.replace(from, to);
+      expect(changed, from).not.toBe(fr);
+      return frDrift(changed, en).join();
+    };
+    expect(drift('## Ce que SYM sait gérer', '## Ce que SYM gère')).toMatch(/titres fr/);
+    expect(drift('- Choisit la méthode la moins chère qui marche', '- Choisit toujours la méthode la moins chère')).toMatch(/puces fr/);
+    expect(drift('Ton serveur, ta base, ton modèle.', 'Ton serveur, ta base.')).toMatch(/accroche fr/);
+    expect(drift('Suis le dépôt pour la première version.', 'Reviens plus tard.')).toMatch(/alerte fr/);
+    expect(drift('20 livres', '25 livres')).toMatch(/nombres différents/);
+    expect(drift('toi> ', 'moi> ')).toMatch(/transcription fr : forme/);
+    expect(drift('Fait avec l\'aide d\'une IA, relu par des humains.', 'Fait à la main.')).toMatch(/mentions fr : IA/);
+    expect(drift('[Lire en anglais](README.md)', 'Lire en anglais')).toMatch(/mentions fr : anglais/);
+    expect(drift('Sécurité : le [signalement privé des failles]', 'Sécurité : le signalement privé des failles [ici]')).toMatch(/mentions fr/);
   });
 });
