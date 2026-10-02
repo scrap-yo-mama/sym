@@ -4,8 +4,10 @@
 // session et au protocole, ou clé d'API (jamais en query) avec le scope du protocole ; session du même client et `running`.
 // Toute discordance répond 401 sans dire laquelle (aucune fuite d'existence) ; clé valide sans le scope : 403.
 // Puis, propre au relais : CDP sur une session shared → 409 protocol_not_served ; nœud porteur absent ou `down` → 503.
+// Vue en direct (`live`, tâche 3.2) : seul le jeton de vue est accepté (`LiveTokens` : session, mode, échéance), en query `t` ;
+// jeton absent, invalide, expiré ou d'une autre session, session inconnue ou terminée : 401 ; le mode du jeton va au nœud.
 // Le motif détaillé du refus (`reason`) part au journal de la passerelle (`onDenied`), jamais au client.
-import { authorizeConnection, type ApiKeyAuthenticator, type ConnectTokens } from '@sym-browser/core';
+import { authorizeConnection, isTerminal, type ApiKeyAuthenticator, type ConnectTokens, type LiveTokens } from '@sym-browser/core';
 import { getRelayTarget, type RelayTarget } from '@sym-browser/db';
 import type pg from 'pg';
 import { ApiProblem } from '../api/errors.js';
@@ -16,11 +18,24 @@ export function createDbRelayResolver(deps: {
   db: pg.Pool;
   auth: Pick<ApiKeyAuthenticator, 'check'>;
   tokens: Pick<ConnectTokens, 'verify'>;
+  liveTokens?: Pick<LiveTokens, 'verify'>;
   onDenied?: (sessionId: string, reason: string) => void;
 }): RelayResolver {
   return {
     async authorize({ sessionId, protocol, headers, query }): Promise<RelayAuthorization> {
       if (!UUID.test(sessionId)) return { ok: false, problem: new ApiProblem('unauthorized', 'Missing, invalid or expired credential for this session.') };
+      if (protocol === 'live') {
+        const secret = typeof query.t === 'string' && query.t !== '' ? query.t : null;
+        const check = secret === null ? undefined : deps.liveTokens?.verify(secret, sessionId);
+        if (!check?.ok) {
+          deps.onDenied?.(sessionId, 'live_token');
+          return { ok: false, problem: new ApiProblem('unauthorized', 'Missing, invalid or expired credential for this session.') };
+        }
+        const live = await getRelayTarget(deps.db, sessionId);
+        if (!live || isTerminal(live.state)) return { ok: false, problem: new ApiProblem('unauthorized', 'Missing, invalid or expired credential for this session.') };
+        if (live.state !== 'running' || !live.nodeUrl || live.nodeState === 'down') return { ok: false, problem: new ApiProblem('no_node', 'Session node unavailable.', { retryAfter: 1 }) };
+        return { ok: true, nodeUrl: live.nodeUrl, sessionId, liveMode: check.mode };
+      }
       // Une seule lecture de la session, après authentification (authorizeConnection ne lit qu'une fois le jeton validé).
       let target: RelayTarget | null = null;
       const decision = await authorizeConnection(

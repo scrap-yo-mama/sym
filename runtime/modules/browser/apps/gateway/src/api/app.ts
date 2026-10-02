@@ -9,7 +9,7 @@
 // (`expiresAt` plafonné), budget d'egress borné par le reste du mois, puis admission : file FIFO bornée en base, sessions
 // simultanées du client, nœud au plus faible taux d'occupation ; refus 429 avec `Retry-After`.
 import { randomBytes } from 'node:crypto';
-import { authorizeRequest, endStateFor, isTerminal, resolveSessionType, sessionUnits } from '@sym-browser/core';
+import { authorizeRequest, endStateFor, isTerminal, liveViewUrl, resolveSessionType, sessionUnits } from '@sym-browser/core';
 import {
   abandonQueuedSession,
   assignedNodes,
@@ -174,6 +174,8 @@ export async function createGatewayApi(deps: GatewayDeps): Promise<FastifyInstan
     type: view.type,
     ...(view.nodeRegion === null ? {} : { nodeRegion: view.nodeRegion }),
     ...(view.state === 'running' ? { connectUrls: await connectUrls(view.id, view.type) } : {}),
+    // Vue en direct (04d § 1.1) : page de la console, jeton de lecture seule de 15 min ; `rw` par la route dédiée (contrat).
+    ...(view.state === 'running' && deps.relay?.liveTokens !== undefined ? { liveViewUrl: liveViewUrl(deps.publicUrl, view.id, deps.relay.liveTokens.issue({ sessionId: view.id, mode: 'ro' }).token) } : {}),
     expiresAt: view.expiresAt.toISOString(),
     createdAt: view.createdAt.toISOString(),
     ...(view.endReason === null ? {} : { endReason: view.endReason }),
@@ -232,7 +234,7 @@ export async function createGatewayApi(deps: GatewayDeps): Promise<FastifyInstan
 
   if (deps.relay) {
     await registerRelay(app, {
-      resolver: createDbRelayResolver({ db: deps.db, auth: deps.auth, tokens: deps.tokens }),
+      resolver: createDbRelayResolver({ db: deps.db, auth: deps.auth, tokens: deps.tokens, ...(deps.relay.liveTokens === undefined ? {} : { liveTokens: deps.relay.liveTokens }) }),
       nodeToken: deps.relay.nodeToken,
       ...(deps.relay.pingIntervalMs === undefined ? {} : { pingIntervalMs: deps.relay.pingIntervalMs }),
       ...(deps.relay.cdpMaxMessageBytes === undefined ? {} : { cdpMaxMessageBytes: deps.relay.cdpMaxMessageBytes }),

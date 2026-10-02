@@ -14,6 +14,9 @@
 // champs de `/json/version` de Chromium (lus par le nœud, liste blanche) et un `webSocketDebuggerUrl` de la passerelle à
 // jeton neuf : un client qui découvre son point (Puppeteer `browserURL`, Chrome DevTools MCP `--browserUrl`) ne voit
 // jamais le point local du nœud.
+// Vue en direct (tâche 3.2, 04d § 1.1) : `/v1/sessions/{id}/live/stream?t=<jeton de vue>`, jeton vérifié de la même façon
+// avant l'upgrade (seul secret accepté : la query `t`), relais vers `/internal/sessions/{id}/live` avec le mode du jeton
+// (`x-symb-live-mode`) ; le jeton du visionneur n'est jamais transmis au nœud.
 // Arrêt de la passerelle (SIGTERM, 04b § 9, tâche 2.7) : hook `preClose`, chaque relais ouvert est fermé en 1012 (redémarrage
 // du service) des deux côtés ; les sessions continuent sur leurs nœuds, le client se reconnecte par une autre passerelle.
 import { sendableCloseCode } from '@sym-browser/core';
@@ -23,17 +26,17 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { WebSocket, type RawData } from 'ws';
 import { ApiProblem, preferredLanguage } from '../api/errors.js';
 
-type RelayProtocol = 'playwright' | 'cdp';
+type RelayProtocol = 'playwright' | 'cdp' | 'live';
 
-export type RelayAuthorization = { ok: true; nodeUrl: string; sessionId: string } | { ok: false; problem: ApiProblem };
+export type RelayAuthorization = { ok: true; nodeUrl: string; sessionId: string; liveMode?: 'ro' | 'rw' } | { ok: false; problem: ApiProblem };
 
 export interface RelayResolver {
-  /** En-têtes et query de la demande d'upgrade, tels que reçus (seuls `authorization` et `token` sont lus). */
+  /** En-têtes et query de la demande d'upgrade, tels que reçus (seuls `authorization`, `token` et, pour `live`, `t` sont lus). */
   authorize(input: {
     sessionId: string;
     protocol: RelayProtocol;
     headers: { authorization?: string | string[] | undefined };
-    query: { token?: string | string[] | undefined };
+    query: { token?: string | string[] | undefined; t?: string | string[] | undefined };
   }): Promise<RelayAuthorization>;
 }
 
@@ -52,7 +55,7 @@ export type RelayOptions = {
 
 declare module 'fastify' {
   interface FastifyRequest {
-    relayTarget?: { nodeUrl: string; sessionId: string };
+    relayTarget?: { nodeUrl: string; sessionId: string; liveMode?: 'ro' | 'rw' };
   }
 }
 
@@ -89,12 +92,13 @@ export async function registerRelay(app: FastifyInstance, options: RelayOptions)
   };
 
   const decide = (request: FastifyRequest, protocol: RelayProtocol): Promise<RelayAuthorization> => {
-    const token = (request.query as Record<string, unknown>)['token'];
+    const query = request.query as Record<string, unknown>;
+    const text = (value: unknown): string | string[] | undefined => (typeof value === 'string' || Array.isArray(value) ? (value as string | string[]) : undefined);
     return options.resolver.authorize({
       sessionId: (request.params as { id: string }).id,
       protocol,
       headers: { authorization: request.headers.authorization },
-      query: { token: typeof token === 'string' || Array.isArray(token) ? (token as string | string[]) : undefined },
+      query: protocol === 'live' ? { t: text(query['t']) } : { token: text(query['token']) },
     });
   };
 
@@ -122,7 +126,7 @@ export async function registerRelay(app: FastifyInstance, options: RelayOptions)
 
   const route = (protocol: RelayProtocol): void => {
     app.get(
-      `/v1/sessions/:id/${protocol}`,
+      protocol === 'live' ? '/v1/sessions/:id/live/stream' : `/v1/sessions/:id/${protocol}`,
       {
         websocket: true,
         preValidation: async (request, reply) => {
@@ -131,7 +135,7 @@ export async function registerRelay(app: FastifyInstance, options: RelayOptions)
           if (protocol === 'playwright' && !playwrightClientAccepted(request.headers['user-agent'])) {
             return fail(request, reply, new ApiProblem('playwright_version_mismatch', `Playwright client ${SERVED_MINOR}.x required.`, { details: { served: BROWSER_ENGINE.playwright } }));
           }
-          request.relayTarget = { nodeUrl: decision.nodeUrl, sessionId: decision.sessionId };
+          request.relayTarget = { nodeUrl: decision.nodeUrl, sessionId: decision.sessionId, ...(protocol === 'live' ? { liveMode: decision.liveMode === 'rw' ? 'rw' : 'ro' } : {}) };
           return undefined;
         },
       },
@@ -139,7 +143,9 @@ export async function registerRelay(app: FastifyInstance, options: RelayOptions)
         const target = request.relayTarget;
         if (!target) return client.close(1011, 'relais sans cible');
         const nodeWs = `${target.nodeUrl.replace(/\/+$/, '').replace(/^http/, 'ws')}/internal/sessions/${encodeURIComponent(target.sessionId)}/${protocol}`;
-        const upstream = new WebSocket(nodeWs, { headers: { authorization: `Bearer ${options.nodeToken}` }, maxPayload, perMessageDeflate: false });
+        const headers: Record<string, string> = { authorization: `Bearer ${options.nodeToken}` };
+        if (target.liveMode !== undefined) headers['x-symb-live-mode'] = target.liveMode;
+        const upstream = new WebSocket(nodeWs, { headers, maxPayload, perMessageDeflate: false });
         const queue: { data: RawData; binary: boolean }[] = [];
         let closing = false;
         let missedPongs = 0;
@@ -201,4 +207,5 @@ export async function registerRelay(app: FastifyInstance, options: RelayOptions)
   };
   route('playwright');
   route('cdp');
+  route('live');
 }

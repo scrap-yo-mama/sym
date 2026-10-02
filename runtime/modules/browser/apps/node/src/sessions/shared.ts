@@ -10,15 +10,21 @@
 // Fichiers (tâche 1.8, 04c § 3.1 et § 5) : avec `dataDir`, la session a son répertoire `sessions/{id}` (0700 : téléchargements,
 // envois), créé à la création et supprimé à la fin, APRÈS la fermeture du contexte et le détachement des fichiers (les
 // téléchargements finis sont alors dans l'ObjectStore), AVANT que le slot soit rendu.
+// Enregistrements (tâche 3.3, 04d § 2) : avec `recorder` et `dataDir`, les enregistrements demandés sont produits par le
+// nœud sur le contexte de la session dans `sessions/{id}/recordings`, arrêtés et déposés chiffrés AVANT la fermeture du
+// contexte.
 import { mkdir, rm } from 'node:fs/promises';
-import { dirname } from 'node:path';
-import type { EndReason } from '@sym/contracts/browser';
+import { dirname, join } from 'node:path';
+import type { EndReason, RecordingOptions } from '@sym/contracts/browser';
 import type { BrowserContext } from 'playwright-core';
 import { sessionDir, type SessionDir } from '../dedicated/dedicated.js';
 import { attachBrowserFiles } from '../files/playwright.js';
 import type { AttachedFiles, SessionFiles } from '../files/session-files.js';
 import type { AcquireRequest, LeaseEndReason, PoolLease } from '../pool/index.js';
-import { sharedContextOptions, type SharedSessionInput } from './options.js';
+import { anyRecording, recordingOptions } from '../recordings/options.js';
+import type { ActiveRecording, SessionRecorder } from '../recordings/recorder.js';
+import type { LiveViews } from '../live/live-views.js';
+import { InvalidSessionOptionError, sharedContextOptions, type SharedSessionInput } from './options.js';
 import { servedProtocols, type SessionProtocol } from './protocols.js';
 
 /** Fins possibles d'une session shared vues par le nœud (sous-ensemble de `EndReason`). */
@@ -47,10 +53,14 @@ export type SharedSessionsOptions = {
   /** Délai de fermeture d'un contexte ; au-delà, le slot est rendu (le pool ferme ou tue le Chromium à son délai dur). */
   closeTimeoutMs?: number;
   onEnd?: (end: SharedSessionEnd) => void;
-  /** `SYMB_DATA_DIR` : répertoire `sessions/{id}` de chaque session (téléchargements, envois). */
+  /** `SYMB_DATA_DIR` : répertoire `sessions/{id}` de chaque session (téléchargements, envois, enregistrements). */
   dataDir?: string;
   /** Fichiers des sessions (tâche 1.8) ; exige `dataDir`. */
   files?: SessionFiles;
+  /** Enregistrements des sessions (tâche 3.3) ; exige `dataDir`. */
+  recorder?: SessionRecorder;
+  /** Vues en direct (tâche 3.2) : une par session, ouverte à la création, fermée en tête de la destruction. */
+  liveViews?: LiveViews;
 };
 
 export type CreateSharedSession = {
@@ -61,9 +71,13 @@ export type CreateSharedSession = {
   watchdogMs?: number;
   /** Egress de la session (tâche 1.5). */
   egressProxyUrl?: string;
+  /** Option `recordings` de la session (04d § 2.1). */
+  recordings?: RecordingOptions;
+  /** Option `liveView` de la session (04 § 3) : `interactive` permet les entrées d'un visionneur au jeton `rw`. */
+  liveView?: { interactive?: boolean };
 };
 
-type State = { session: SharedSession; lease: PoolLease; dir: SessionDir | undefined; files: AttachedFiles | undefined; ending: Promise<void> | null; reason: SharedEndReason | null };
+type State = { session: SharedSession; lease: PoolLease; dir: SessionDir | undefined; files: AttachedFiles | undefined; recording: ActiveRecording | undefined; ending: Promise<void> | null; reason: SharedEndReason | null };
 
 export class SharedSessions {
   readonly #options: SharedSessionsOptions;
@@ -89,6 +103,13 @@ export class SharedSessions {
     // Validation d'abord : une option invalide ne réserve aucun slot.
     const contextOptions = sharedContextOptions(request.options, request.egressProxyUrl === undefined ? {} : { egressProxyUrl: request.egressProxyUrl });
     if (this.#options.files !== undefined && this.#options.dataDir === undefined) throw new RangeError('fichiers de session : dataDir requis');
+    const live = request.liveView as unknown;
+    if (live !== undefined && (typeof live !== 'object' || live === null || Array.isArray(live) || Object.keys(live).some((k) => k !== 'interactive') || ((live as { interactive?: unknown }).interactive !== undefined && typeof (live as { interactive?: unknown }).interactive !== 'boolean'))) {
+      throw new InvalidSessionOptionError([{ field: 'liveView', reason: 'objet {interactive: booléen} attendu' }]);
+    }
+    const recordings = recordingOptions(request.recordings);
+    const recording = anyRecording(recordings);
+    if (recording && (this.#options.recorder === undefined || this.#options.dataDir === undefined)) throw new RangeError('enregistrements demandés : recorder et dataDir requis sur ce nœud');
     const dir = this.#options.dataDir === undefined ? undefined : sessionDir(this.#options.dataDir, request.sessionId);
     if (this.#sessions.has(request.sessionId) || this.#creating.has(request.sessionId)) throw new RangeError(`session ${request.sessionId} déjà présente sur ce nœud`);
     this.#creating.add(request.sessionId);
@@ -98,6 +119,7 @@ export class SharedSessions {
       const lease = await this.#options.pool.acquire(acquire);
       let context: BrowserContext | undefined;
       let files: AttachedFiles | undefined;
+      let active: ActiveRecording | undefined;
       try {
         if (dir !== undefined) {
           await mkdir(dirname(dir.root), { recursive: true, mode: 0o700 });
@@ -109,13 +131,16 @@ export class SharedSessions {
         if (this.#options.files !== undefined && dir !== undefined) {
           files = await attachBrowserFiles(this.#options.files, { sessionId: request.sessionId, tenantId: request.tenantId, dir, acceptDownloads: contextOptions.acceptDownloads === true, browser: lease.browser, context });
         }
+        if (recording && dir !== undefined) active = await this.#options.recorder!.start({ sessionId: request.sessionId, tenantId: request.tenantId, context, workDir: join(dir.root, 'recordings'), options: request.recordings });
       } catch (error) {
+        await files?.detach().catch(() => undefined);
         await context?.close().catch(() => undefined);
         if (dir !== undefined && !(error as NodeJS.ErrnoException).code?.startsWith('EEXIST')) await rm(dir.root, { recursive: true, force: true });
         await lease.release();
         throw error;
       }
-      const state: State = { session: undefined as unknown as SharedSession, lease, dir, files, ending: null, reason: null };
+      if (this.#options.liveViews !== undefined && context !== undefined) this.#options.liveViews.open({ sessionId: request.sessionId, context, interactive: request.liveView?.interactive === true });
+      const state: State = { session: undefined as unknown as SharedSession, lease, dir, files, recording: active, ending: null, reason: null };
       state.session = {
         sessionId: request.sessionId,
         tenantId: request.tenantId,
@@ -148,6 +173,10 @@ export class SharedSessions {
     state.ending ??= (async () => {
       state.reason = reason;
       this.#sessions.delete(state.session.sessionId);
+      // Enregistrements arrêtés et déposés tant que le contexte vit (étape 5 de la destruction, 04c § 3.2).
+      // Visionneurs prévenus ({t: closed}) et screencasts arrêtés en premier : plus aucune entrée n'atteint la session.
+      await this.#options.liveViews?.close(state.session.sessionId, reason).catch(() => undefined);
+      await state.recording?.stop().catch(() => undefined);
       let timer: NodeJS.Timeout | undefined;
       await Promise.race([
         state.session.context.close().catch(() => undefined),

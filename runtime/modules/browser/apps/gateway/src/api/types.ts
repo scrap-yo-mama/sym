@@ -8,6 +8,7 @@
 //     choix du nœud et file (tâche 2.4 : la passerelle place la session sur un nœud avant de la lancer).
 import type { ApiKeyAuthenticator, ApiScope, ConnectTokens, EgressGuard, Keys, Principal } from '@sym-browser/core';
 import type pg from 'pg';
+import type { LiveTokens } from '@sym-browser/core';
 import type { CreateSessionRequest, SessionType } from '@sym/contracts/browser';
 
 /** Scopes d'une clé d'API (04 § 1) : ensemble fermé de la tâche 2.1. */
@@ -55,8 +56,11 @@ export type GatewayDeps = {
   defaults?: { timeoutSeconds?: number; idleTimeoutSeconds?: number };
   /** Plateforme servie (`GET /v1/version`), défaut `process.platform`. */
   platform?: string;
-  /** Relais WSS `/playwright` et `/cdp` (tâche 2.3) ; absent : routes non servies. */
-  relay?: { nodeToken: string; pingIntervalMs?: number; cdpMaxMessageBytes?: number };
+  /**
+   * Relais WSS `/playwright` et `/cdp` (tâche 2.3) ; absent : routes non servies. `liveTokens` (tâche 3.2) : vue en direct,
+   * `liveViewUrl` dans les réponses et relais `/live/stream` ; absent : ni l'un ni l'autre.
+   */
+  relay?: { nodeToken: string; pingIntervalMs?: number; cdpMaxMessageBytes?: number; liveTokens?: Pick<LiveTokens, 'issue' | 'verify'> };
   /** Erreur interne (500) : journal masqué de la passerelle. */
   onError?: (error: unknown) => void;
   /** Flux SSE (tâche 2.5) : période du battement `: ping` (15 s par défaut). */
