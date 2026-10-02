@@ -28,7 +28,7 @@ export type Screen = {
 /** Onglets de la fiche d'une API (06 § 1, figure 1). */
 const TABS = ['overview', 'schemas', 'strategy', 'runs', 'status', 'schedules', 'access', 'investigations'] as const;
 
-const SETTINGS = ['models', 'proxies', 'extension', 'alerts', 'diagnostic', 'keys', 'account', 'security', 'sso'] as const;
+const SETTINGS = ['models', 'proxies', 'extension', 'alerts', 'diagnostic', 'keys', 'account', 'security', 'robot', 'sso'] as const;
 
 export const RUN_ID = UUID(201);
 const NEW_RUN = UUID(950);

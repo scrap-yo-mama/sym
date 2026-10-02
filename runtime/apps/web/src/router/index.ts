@@ -127,6 +127,7 @@ export function createAppRouter(history: RouterHistory = createWebHistory()): Ro
           // `/settings/account` : adresse de retour de la liaison SSO (`?sso=linked`), figée côté serveur.
           { path: 'account', name: 'settings-account', component: () => import('@/views/settings/AccountView.vue'), meta: { titleKey: 'account.title' } },
           { path: 'security', name: 'settings-security', component: () => import('@/views/settings/SecuritySettingsView.vue'), meta: { permission: 'settings:security:write', titleKey: 'instance.security.title' } },
+          { path: 'robot', name: 'settings-robot', component: () => import('@/views/settings/RobotIdentitySettingsView.vue'), meta: { permission: 'settings:identity:write', titleKey: 'instance.identity.title' } },
           { path: 'sso', name: 'settings-sso', component: () => import('@/views/settings/SsoSettingsView.vue'), meta: { permission: 'settings:sso:write', titleKey: 'instance.sso.title' } },
         ],
       },
