@@ -113,17 +113,28 @@ export function scheduleRoutes(app: FastifyInstance, ctx: ServerContext): void {
     },
   );
 
-  /** Planification de l'acteur sur une API visible ; null sinon (404 uniforme). */
-  const own = async (actor: Actor, slug: string, id: string) =>
-    withActor(ctx.pool, actor, async (db) => {
+  /**
+   * Planification de l'acteur sur une API visible ; null sinon (404 uniforme). `orphan` : aussi sur une API qui ne lui est
+   * plus visible (redevenue privée) — lecture, désactivation et suppression seulement, pour qu'elle ne reste pas ingérable ;
+   * l'API n'est retrouvée que par une planification de l'acteur (aucune fuite d'existence).
+   */
+  const own = async (actor: Actor, slug: string, id: string, orphan = false) => {
+    if (!UUID.test(id)) return null;
+    const visible = await withActor(ctx.pool, actor, async (db) => {
       const api = await readApiBySlug(db, slug);
-      if (api === null || !UUID.test(id)) return null;
+      if (api === null) return undefined;
       const row = (await db.query<Row>(`${SELECT} WHERE s.id = $1 AND s.api_id = $2`, [id, api.id])).rows[0];
-      return row ? { api, row } : null;
+      return row ? { api: { id: api.id, slug: api.slug }, row } : null;
     });
+    if (visible !== undefined || !orphan) return visible ?? null;
+    const target = (await ctx.pool.query<{ id: string; slug: string }>('SELECT a.id, a.slug FROM apis a JOIN schedules s ON s.api_id = a.id WHERE a.slug = $1 AND s.id = $2 AND s.owner_id = $3', [slug, id, actor.userId])).rows[0];
+    if (target === undefined) return null;
+    const row = await withActor(ctx.pool, actor, async (db) => (await db.query<Row>(`${SELECT} WHERE s.id = $1 AND s.api_id = $2`, [id, target.id])).rows[0]);
+    return row ? { api: target, row } : null;
+  };
 
   app.get<{ Params: { slug: string; id: string } }>('/api/apis/:slug/schedules/:id', async (request, reply) => {
-    const found = await own(request.actor!, request.params.slug, request.params.id);
+    const found = await own(request.actor!, request.params.slug, request.params.id, true);
     if (found === null) return notFound(reply);
     return view(found.row, found.api.slug);
   });
@@ -133,7 +144,9 @@ export function scheduleRoutes(app: FastifyInstance, ctx: ServerContext): void {
     { schema: { body: { type: 'object', additionalProperties: false, minProperties: 1, properties: fields } } },
     async (request, reply) => {
       const actor = request.actor!;
-      const found = await own(actor, request.params.slug, request.params.id);
+      // Désactiver seulement ({ enabled: false }) reste permis sur une API qui n'est plus visible.
+      const disableOnly = Object.keys(request.body).length === 1 && request.body.enabled === false;
+      const found = await own(actor, request.params.slug, request.params.id, disableOnly);
       if (found === null) return notFound(reply);
       const queue = await ctx.jobs();
       const cur = found.row;
@@ -168,7 +181,7 @@ export function scheduleRoutes(app: FastifyInstance, ctx: ServerContext): void {
 
   app.delete<{ Params: { slug: string; id: string } }>('/api/apis/:slug/schedules/:id', async (request, reply) => {
     const actor = request.actor!;
-    const found = await own(actor, request.params.slug, request.params.id);
+    const found = await own(actor, request.params.slug, request.params.id, true);
     if (found === null) return notFound(reply);
     await withActor(ctx.pool, actor, (db) => db.query('DELETE FROM schedules WHERE id = $1 AND owner_id = $2', [found.row.id, actor.userId]));
     await removeScheduleMirror(await ctx.jobs(), found.row.id);

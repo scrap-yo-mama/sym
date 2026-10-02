@@ -8,10 +8,10 @@ import { RUN_STATES, RUN_TRIGGERS } from '@runtime/core';
 import { applyStatusAndNotify, cancelRun, pauseRun, resumeRun, withActor } from '@runtime/db';
 import type { FastifyInstance } from 'fastify';
 import type { ServerContext } from '../context.js';
-import { readApiBySlug } from '../rest/apis.js';
+import { readApiById, readApiBySlug } from '../rest/apis.js';
 import { listRunRows, readRunRow, runDetail, runMetadataForAdmin, runSummary } from '../rest/runs.js';
-import { rejectIfKeyRateLimited, reserveRunSlot, RunSlotError, sendRunSlotError, usd, usdOrNull } from '../rest/shared.js';
-import { decodeCursor, encodeCursor, UUID } from './account-helpers.js';
+import { BLOCKING_STATUS, rejectIfKeyRateLimited, reserveRunSlot, RunSlotError, sendRunSlotError, usd, usdOrNull } from '../rest/shared.js';
+import { CURSOR_TIME, decodeCursor, encodeCursor, INT4_MAX, UUID } from './account-helpers.js';
 import { audit, notFound, sendError } from './guard.js';
 
 const listQuery = {
@@ -41,7 +41,7 @@ export function runRoutes(app: FastifyInstance, ctx: ServerContext): void {
       const q = request.query;
       const limit = q.limit ?? 50;
       const cursor = decodeCursor(q.cursor, 2);
-      if (cursor === null || (cursor && !UUID.test(cursor[1]!))) return sendError(reply, 400, 'invalid_cursor', 'curseur illisible');
+      if (cursor === null || (cursor && (!CURSOR_TIME.test(cursor[0]!) || !UUID.test(cursor[1]!)))) return sendError(reply, 400, 'invalid_cursor', 'curseur illisible');
       const out = await withActor(ctx.pool, actor, async (db) => {
         // « Tous les runs » de l'acteur (même ceux d'une API `instance` d'autrui) ; filtre `api` par slug visible.
         const where = ['r.owner_id = $1'];
@@ -145,9 +145,16 @@ export function runRoutes(app: FastifyInstance, ctx: ServerContext): void {
     if (await rejectIfKeyRateLimited(ctx, reply, actor)) return reply;
     const queue = await ctx.jobs();
     // Le run repris redevient actif : plafonds utilisateur et instance vérifiés dans la même transaction (atomique).
-    let resumed: boolean;
+    // L'API est relue sous l'identité de l'appelant, comme pour POST /runs : une API devenue invisible (redevenue privée,
+    // session) donne 404 (INV12) ; un statut qui interdit un run donne son 409 (05 § 4.3, INV3). Une enquête en pause
+    // reprend même pendant `enquete`, son propre statut.
+    let resumed: boolean | 'not_found' | { code: string; message: string };
     try {
       resumed = await withActor(ctx.pool, actor, async (tx) => {
+        const target = await readApiById(tx, exists.api_id);
+        if (target === null) return 'not_found' as const;
+        const blocking = BLOCKING_STATUS[target.status];
+        if (blocking && !(exists.kind === 'investigation' && target.status === 'enquete')) return blocking;
         await reserveRunSlot(tx, ctx);
         return resumeRun(tx, queue, request.params.id);
       });
@@ -155,6 +162,8 @@ export function runRoutes(app: FastifyInstance, ctx: ServerContext): void {
       if (error instanceof RunSlotError) return sendRunSlotError(reply, error);
       throw error;
     }
+    if (resumed === 'not_found') return notFound(reply);
+    if (typeof resumed === 'object') return sendError(reply, 409, resumed.code, resumed.message);
     if (!resumed) return sendError(reply, 409, 'run_not_paused', 'ce run n’est pas en pause');
     await audit(ctx, request, actor, { action: 'run.resumed', targetType: 'run', targetId: request.params.id, outcome: 'success' });
     return reply.code(202).send({ run_id: request.params.id, state: 'queued', poll_after_seconds: 5 });
@@ -162,7 +171,7 @@ export function runRoutes(app: FastifyInstance, ctx: ServerContext): void {
 
   app.get<{ Params: { id: string }; Querystring: { after?: number; limit?: number } }>(
     '/api/runs/:id/logs',
-    { schema: { querystring: { type: 'object', properties: { after: { type: 'integer', minimum: 0 }, limit: { type: 'integer', minimum: 1, maximum: 200 } } } } },
+    { schema: { querystring: { type: 'object', properties: { after: { type: 'integer', minimum: 0, maximum: INT4_MAX }, limit: { type: 'integer', minimum: 1, maximum: 200 } } } } },
     async (request, reply) => {
       const actor = request.actor!;
       if (!UUID.test(request.params.id)) return notFound(reply);

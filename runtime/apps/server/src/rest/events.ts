@@ -250,4 +250,32 @@ export class RunFeed {
 }
 
 /** Trame SSE (une seule ligne `data:` : JSON sans saut de ligne). */
+/** Attente abandonnable : l'écouteur `abort` est retiré à l'expiration (un flux fait un tour toutes les pollMs, des heures). */
+export function abortableSleep(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise<void>((resolve) => {
+    if (signal.aborted) return resolve();
+    const done = () => {
+      clearTimeout(timer);
+      signal.removeEventListener('abort', done);
+      resolve();
+    };
+    const timer = setTimeout(done, ms);
+    signal.addEventListener('abort', done, { once: true });
+  });
+}
+
+/** Attend `drain` (contre-pression) ou l'abandon du flux, puis retire les deux écouteurs. */
+export function waitDrain(out: { once(event: 'drain', fn: () => void): unknown; off(event: 'drain', fn: () => void): unknown }, signal: AbortSignal): Promise<void> {
+  return new Promise<void>((resolve) => {
+    if (signal.aborted) return resolve();
+    const done = () => {
+      out.off('drain', done);
+      signal.removeEventListener('abort', done);
+      resolve();
+    };
+    out.once('drain', done);
+    signal.addEventListener('abort', done, { once: true });
+  });
+}
+
 export const sseFrame = (f: SseFrame): string => `id: ${f.id}\nevent: ${f.event}\ndata: ${JSON.stringify(f.data)}\n\n`;

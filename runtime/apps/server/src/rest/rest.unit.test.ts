@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Briques pures de l'API REST (tâche 3.1) : cellules CSV neutralisées (assert_csv_formula_neutralized, 08b § 2),
 // projection des items (`fields`, `omit`), curseurs (items, flux SSE) qui refusent toute valeur forgée.
+import { EventEmitter, getEventListeners } from 'node:events';
 import { describe, expect, test } from 'vitest';
-import { decodeFeedCursor } from './events.js';
+import { abortableSleep, decodeFeedCursor, waitDrain } from './events.js';
 import { csvCell, csvLine, projectItem } from './export.js';
 import { decodeItemsCursor, itemsCursor } from './runs.js';
 import { reasonMessage } from './shared.js';
@@ -95,5 +96,34 @@ describe('codes de raison', () => {
     expect(reasonMessage('Le site a dit non')).toBeNull();
     expect(reasonMessage(null)).toBeNull();
     expect(reasonMessage(`a${'b'.repeat(80)}`)).toBeNull();
+  });
+});
+
+describe('flux SSE : attentes sans fuite d’écouteurs (un tour toutes les pollMs pendant des heures)', () => {
+  test('abortableSleep retire son écouteur abort quand le délai expire, et rend la main tout de suite à l’abandon', async () => {
+    const controller = new AbortController();
+    for (let i = 0; i < 25; i++) await abortableSleep(1, controller.signal);
+    expect(getEventListeners(controller.signal, 'abort')).toHaveLength(0);
+    const started = Date.now();
+    const pending = abortableSleep(60_000, controller.signal);
+    controller.abort();
+    await pending;
+    expect(Date.now() - started).toBeLessThan(1000);
+  });
+
+  test('waitDrain retire ses écouteurs (drain et abort) quelle que soit l’issue', async () => {
+    const controller = new AbortController();
+    const out = new EventEmitter();
+    for (let i = 0; i < 25; i++) {
+      const pending = waitDrain(out, controller.signal);
+      out.emit('drain');
+      await pending;
+    }
+    expect(out.listenerCount('drain')).toBe(0);
+    expect(getEventListeners(controller.signal, 'abort')).toHaveLength(0);
+    const pending = waitDrain(out, controller.signal);
+    controller.abort();
+    await pending;
+    expect(out.listenerCount('drain')).toBe(0);
   });
 });

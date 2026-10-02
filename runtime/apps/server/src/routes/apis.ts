@@ -47,8 +47,8 @@ import {
   type ApiRow,
 } from '../rest/apis.js';
 import { buildRunResult, readRunRow, waitForRun } from '../rest/runs.js';
-import { rejectIfKeyRateLimited, rejectIfQueueFull, rejectWithoutAck, reasonMessage, reserveRunSlot, RunSlotError, sendRunSlotError, triggerOf, waitSecondsOf } from '../rest/shared.js';
-import { decodeCursor, encodeCursor, UUID } from './account-helpers.js';
+import { BLOCKING_STATUS, rejectIfKeyRateLimited, rejectIfQueueFull, rejectWithoutAck, reasonMessage, reserveRunSlot, RunSlotError, sendRunSlotError, triggerOf, waitSecondsOf } from '../rest/shared.js';
+import { CURSOR_TIME, decodeCursor, encodeCursor, INT4_MAX, UUID } from './account-helpers.js';
 import { audit, notFound, sendError, type Actor } from './guard.js';
 
 const executionList = { type: 'array', uniqueItems: true, maxItems: 6, items: { type: 'string', enum: [...EXECUTIONS] } } as const;
@@ -142,7 +142,8 @@ const runBody = {
   type: 'object',
   additionalProperties: false,
   required: ['input'],
-  properties: { input: { type: 'object' }, force_investigate: { type: 'boolean' }, strategy_version: { type: 'integer', minimum: 1 } },
+  // `input` : tout JSON ici, contrôlé dans la route (non objet → 400 invalid_input, 05 § 4.3, et non invalid_request).
+  properties: { input: {}, force_investigate: { type: 'boolean' }, strategy_version: { type: 'integer', minimum: 1, maximum: INT4_MAX } },
 } as const;
 
 const investigateBody = { type: 'object', additionalProperties: false, properties: { exclude_executions: executionList } } as const;
@@ -160,14 +161,6 @@ const listQuery = {
 } as const;
 
 const pageQuery = { type: 'object', properties: { cursor: { type: 'string', maxLength: 512 }, limit: { type: 'integer', minimum: 1, maximum: 200 } } } as const;
-
-/** Statut de l'API qui interdit un run (05 § 4.3). `enquete` : la stratégie n'est pas encore là. */
-const BLOCKING_STATUS: Record<string, { code: string; message: string }> = {
-  erreur: { code: 'api_error', message: 'API en erreur : relancez une enquête (investigate) avant de l’appeler' },
-  action_requise: { code: 'action_required', message: 'action requise : connectez le site, configurez le proxy ou réglez l’accès payant, puis relancez' },
-  bloquee: { code: 'blocked', message: 'API bloquée par le site : informez l’utilisateur et ne réessayez pas' },
-  enquete: { code: 'investigation_in_progress', message: 'enquête en cours : aucune stratégie validée pour l’instant' },
-};
 
 /** Erreur d'état d'enquête → code HTTP (05 § 4.3). */
 function investigationError(reply: FastifyReply, error: InvestigationStateError): FastifyReply {
@@ -242,7 +235,7 @@ export function apiRoutes(app: FastifyInstance, ctx: ServerContext): void {
       const q = request.query;
       const limit = q.limit ?? 50;
       const cursor = decodeCursor(q.cursor, 2);
-      if (cursor === null) return sendError(reply, 400, 'invalid_cursor', 'curseur illisible');
+      if (cursor === null || (cursor && (!CURSOR_TIME.test(cursor[0]!) || !UUID.test(cursor[1]!)))) return sendError(reply, 400, 'invalid_cursor', 'curseur illisible');
       const where: string[] = ['true'];
       const params: unknown[] = [];
       const add = (sql: string, value: unknown) => {
@@ -399,14 +392,15 @@ export function apiRoutes(app: FastifyInstance, ctx: ServerContext): void {
     const actor = request.actor!;
     const api = await readOwnApi(ctx, actor, request.params.slug);
     if (api === null) return notFound(reply);
-    const { rowCount: active } = await ctx.pool.query("SELECT 1 FROM runs WHERE api_id = $1 AND state IN ('queued', 'running', 'waiting_tunnel') LIMIT 1", [api.id]);
-    if (active) return sendError(reply, 409, 'runs_active', 'des runs sont en cours : annulez-les avant de supprimer l’API');
     // Suppression (propriétaire vérifié ci-dessus), en identité système, sous le verrou de la ligne `apis` (un run ou une
     // planification créés pendant ce temps attendent la fin : leur clé étrangère prend un verrou partagé sur la ligne).
-    // INV12 : une API `instance` sur laquelle un autre membre a un run, un dataset ou une planification n'est JAMAIS
-    // supprimée (409 `api_in_use_by_others`) : ses données ne partent pas avec l'API d'autrui. Sinon, seules les
-    // données du propriétaire partent, puis l'API (cascades : versions, statuts, planifications, clés de déduplication).
+    // INV12 : une API `instance` sur laquelle un autre membre a un run (actif ou non), un dataset, une planification ou
+    // un abonnement webhook n'est JAMAIS supprimée (409 `api_in_use_by_others`) : ses données ne partent pas avec l'API
+    // d'autrui. Puis un run actif du propriétaire refuse (409 `runs_active`), contrôlé sous le même verrou (aucun run créé
+    // entre le contrôle et la suppression). Sinon, seules les données du propriétaire partent, puis l'API (cascades :
+    // versions, statuts, planifications, clés de déduplication, abonnements webhook du propriétaire).
     class InUseByOthers extends Error {}
+    class RunsActive extends Error {}
     const client = await ctx.pool.connect();
     let schedules: string[];
     try {
@@ -416,10 +410,13 @@ export function apiRoutes(app: FastifyInstance, ctx: ServerContext): void {
         `SELECT 1 FROM runs WHERE api_id = $1 AND owner_id <> $2
          UNION ALL SELECT 1 FROM datasets WHERE api_id = $1 AND owner_id <> $2
          UNION ALL SELECT 1 FROM schedules WHERE api_id = $1 AND owner_id <> $2
+         UNION ALL SELECT 1 FROM webhook_subscriptions WHERE api_id = $1 AND owner_id <> $2
          LIMIT 1`,
         [api.id, actor.userId],
       );
       if (others.rowCount) throw new InUseByOthers();
+      const active = await client.query("SELECT 1 FROM runs WHERE api_id = $1 AND owner_id = $2 AND state IN ('queued', 'running', 'waiting_tunnel') LIMIT 1", [api.id, actor.userId]);
+      if (active.rowCount) throw new RunsActive();
       schedules = (await client.query<{ id: string }>('SELECT id FROM schedules WHERE api_id = $1 AND owner_id = $2', [api.id, actor.userId])).rows.map((r) => r.id);
       await client.query('DELETE FROM datasets WHERE api_id = $1 AND owner_id = $2', [api.id, actor.userId]);
       await client.query('DELETE FROM runs WHERE api_id = $1 AND owner_id = $2', [api.id, actor.userId]);
@@ -427,7 +424,8 @@ export function apiRoutes(app: FastifyInstance, ctx: ServerContext): void {
       await client.query('COMMIT');
     } catch (error) {
       await client.query('ROLLBACK');
-      if (error instanceof InUseByOthers) return sendError(reply, 409, 'api_in_use_by_others', 'd’autres membres ont des runs, des datasets ou des planifications sur cette API : elle ne peut pas être supprimée');
+      if (error instanceof InUseByOthers) return sendError(reply, 409, 'api_in_use_by_others', 'd’autres membres ont des runs, des datasets, des planifications ou des webhooks sur cette API : elle ne peut pas être supprimée');
+      if (error instanceof RunsActive) return sendError(reply, 409, 'runs_active', 'des runs sont en cours : annulez-les avant de supprimer l’API');
       throw error;
     } finally {
       client.release();
@@ -538,6 +536,7 @@ export function apiRoutes(app: FastifyInstance, ctx: ServerContext): void {
         if (api.owner_id !== actor.userId) return sendError(reply, 403, 'forbidden', 'seul le propriétaire de l’API peut forcer une ré-enquête');
         return reinvestigate(request, reply, actor, api, 'force_investigate');
       }
+      if (body.input === null || typeof body.input !== 'object' || Array.isArray(body.input)) return sendError(reply, 400, 'invalid_input', 'entrée hors input_schema : objet JSON attendu');
       const blocking = BLOCKING_STATUS[api.status];
       if (blocking) return sendError(reply, 409, blocking.code, blocking.message);
       if (api.current_strategy_version === null) return sendError(reply, 409, 'investigation_in_progress', 'aucune stratégie validée pour l’instant');
@@ -582,7 +581,7 @@ export function apiRoutes(app: FastifyInstance, ctx: ServerContext): void {
   app.get<{ Params: { slug: string }; Querystring: { cursor?: string; limit?: number } }>('/api/apis/:slug/versions', { schema: { querystring: pageQuery } }, async (request, reply) => {
     const actor = request.actor!;
     const cursor = decodeCursor(request.query.cursor, 1);
-    if (cursor === null || (cursor && !/^\d+$/.test(cursor[0]!))) return sendError(reply, 400, 'invalid_cursor', 'curseur illisible');
+    if (cursor === null || (cursor && !/^\d{1,9}$/.test(cursor[0]!))) return sendError(reply, 400, 'invalid_cursor', 'curseur illisible');
     const limit = request.query.limit ?? 50;
     const out = await withActor(ctx.pool, actor, async (db) => {
       const api = await readApiBySlug(db, request.params.slug);
@@ -606,7 +605,7 @@ export function apiRoutes(app: FastifyInstance, ctx: ServerContext): void {
       return rows[0] ? { api, version: rows[0] } : null;
     });
 
-  const versionParams = { type: 'object', properties: { slug: { type: 'string' }, version: { type: 'integer', minimum: 1 } } } as const;
+  const versionParams = { type: 'object', properties: { slug: { type: 'string' }, version: { type: 'integer', minimum: 1, maximum: INT4_MAX } } } as const;
 
   app.get<{ Params: { slug: string; version: number } }>('/api/apis/:slug/versions/:version', { schema: { params: versionParams } }, async (request, reply) => {
     const found = await readVersion(request.actor!, request.params.slug, request.params.version);
@@ -618,7 +617,7 @@ export function apiRoutes(app: FastifyInstance, ctx: ServerContext): void {
   app.get<{ Params: { slug: string; version: number }; Querystring: { against?: number } }>(
     '/api/apis/:slug/versions/:version/diff',
     // `against` est exigé (OpenAPI), mais contrôlé APRÈS l'API : l'API d'autrui répond 404 comme l'inexistante (INV12).
-    { schema: { params: versionParams, querystring: { type: 'object', properties: { against: { type: 'integer', minimum: 1 } } } } },
+    { schema: { params: versionParams, querystring: { type: 'object', properties: { against: { type: 'integer', minimum: 1, maximum: INT4_MAX } } } } },
     async (request, reply) => {
       const actor = request.actor!;
       const to = await readVersion(actor, request.params.slug, request.params.version);
@@ -687,7 +686,7 @@ export function apiRoutes(app: FastifyInstance, ctx: ServerContext): void {
   app.get<{ Params: { slug: string }; Querystring: { cursor?: string; limit?: number } }>('/api/apis/:slug/status-events', { schema: { querystring: pageQuery } }, async (request, reply) => {
     const actor = request.actor!;
     const cursor = decodeCursor(request.query.cursor, 1);
-    if (cursor === null || (cursor && !/^\d+$/.test(cursor[0]!))) return sendError(reply, 400, 'invalid_cursor', 'curseur illisible');
+    if (cursor === null || (cursor && !/^\d{1,18}$/.test(cursor[0]!))) return sendError(reply, 400, 'invalid_cursor', 'curseur illisible');
     const limit = request.query.limit ?? 50;
     // Chronologie : celle de l'API du propriétaire (RLS sur status_events) ; un membre qui lit une API `instance` n'en voit rien.
     const out = await withActor(ctx.pool, actor, async (db) => {

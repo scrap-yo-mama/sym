@@ -3491,6 +3491,7 @@ export interface operations {
                 };
             };
             401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
             429: components["responses"]["Error"];
         };
     };
@@ -3957,7 +3958,9 @@ export interface operations {
                     "application/json": components["schemas"]["StrategyVersionList"];
                 };
             };
+            400: components["responses"]["Error"];
             401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
             404: components["responses"]["Error"];
         };
     };
@@ -3982,7 +3985,9 @@ export interface operations {
                     "application/json": components["schemas"]["StrategyVersion"];
                 };
             };
+            400: components["responses"]["Error"];
             401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
             404: components["responses"]["Error"];
         };
     };
@@ -4011,6 +4016,7 @@ export interface operations {
             };
             400: components["responses"]["Error"];
             401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
             404: components["responses"]["Error"];
         };
     };
@@ -4066,7 +4072,9 @@ export interface operations {
                     "application/json": components["schemas"]["StatusEventList"];
                 };
             };
+            400: components["responses"]["Error"];
             401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
             404: components["responses"]["Error"];
         };
     };
@@ -4147,6 +4155,7 @@ export interface operations {
                 };
             };
             401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
             404: components["responses"]["Error"];
         };
     };
@@ -4349,6 +4358,7 @@ export interface operations {
                 };
             };
             401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
             404: components["responses"]["Error"];
             429: components["responses"]["Error"];
         };
@@ -4376,7 +4386,9 @@ export interface operations {
                     "application/json": components["schemas"]["RunLogList"];
                 };
             };
+            400: components["responses"]["Error"];
             401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
             404: components["responses"]["Error"];
         };
     };
@@ -4494,6 +4506,7 @@ export interface operations {
                 };
             };
             401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
             404: components["responses"]["Error"];
         };
     };
@@ -4516,6 +4529,7 @@ export interface operations {
                 content?: never;
             };
             401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
             404: components["responses"]["Error"];
         };
     };
@@ -4545,6 +4559,7 @@ export interface operations {
             };
             400: components["responses"]["Error"];
             401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
             404: components["responses"]["Error"];
         };
     };
@@ -4569,6 +4584,7 @@ export interface operations {
                 };
             };
             401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
             404: components["responses"]["Error"];
         };
     };
@@ -5476,6 +5492,7 @@ export interface operations {
             };
             400: components["responses"]["Error"];
             401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
             429: components["responses"]["Error"];
         };
     };
@@ -5633,6 +5650,7 @@ export interface operations {
                 };
             };
             401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
         };
     };
     getResponsibleUseAck: {
@@ -5654,6 +5672,7 @@ export interface operations {
                 };
             };
             401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
         };
     };
     acknowledgeResponsibleUse: {
@@ -5682,6 +5701,7 @@ export interface operations {
             };
             400: components["responses"]["Error"];
             401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
             409: components["responses"]["Error"];
         };
     };
@@ -5897,6 +5917,7 @@ export interface operations {
                 };
             };
             401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
         };
     };
     deleteExtensionSession: {
@@ -5916,6 +5937,7 @@ export interface operations {
                 content?: never;
             };
             401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
         };
     };
     openExtensionTunnel: {
@@ -5974,6 +5996,7 @@ export interface operations {
             };
             400: components["responses"]["Error"];
             401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
         };
     };
     disconnectExtensionSite: {
@@ -5996,6 +6019,7 @@ export interface operations {
             };
             400: components["responses"]["Error"];
             401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
         };
     };
     putExtensionSiteCookies: {
@@ -6022,6 +6046,7 @@ export interface operations {
             };
             400: components["responses"]["Error"];
             401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
             404: components["responses"]["Error"];
             409: components["responses"]["Error"];
         };
@@ -6045,6 +6070,7 @@ export interface operations {
                 };
             };
             401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
         };
     };
     revokeExtensionDevice: {
@@ -6066,6 +6092,7 @@ export interface operations {
                 content?: never;
             };
             401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
             404: components["responses"]["Error"];
         };
     };
@@ -6088,6 +6115,7 @@ export interface operations {
                 };
             };
             401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
         };
     };
     disconnectConnectedSite: {
@@ -6109,6 +6137,7 @@ export interface operations {
                 content?: never;
             };
             401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
             404: components["responses"]["Error"];
         };
     };

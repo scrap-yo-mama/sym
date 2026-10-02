@@ -8,7 +8,7 @@
 import { withActor } from '@runtime/db';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { ServerContext } from '../context.js';
-import { RunFeed, sseFrame, UserFeed, type SseFrame } from '../rest/events.js';
+import { abortableSleep, RunFeed, sseFrame, UserFeed, waitDrain, type SseFrame } from '../rest/events.js';
 import { readRunRow } from '../rest/runs.js';
 import { UUID } from './account-helpers.js';
 import { notFound, revalidateActor, sendError, type Actor } from './guard.js';
@@ -40,33 +40,26 @@ export function eventRoutes(app: FastifyInstance, ctx: ServerContext): void {
     const controller = new AbortController();
     open.add(controller);
     const raw = reply.raw;
-    reply.hijack();
-    raw.writeHead(200, {
-      'content-type': 'text/event-stream; charset=utf-8',
-      'cache-control': 'no-store',
-      connection: 'keep-alive',
-      'x-accel-buffering': 'no',
-      'x-content-type-options': 'nosniff',
-    });
     const closed = () => controller.abort();
-    request.raw.once('close', closed);
-    raw.once('close', closed);
+    // Tout ce qui suit l'incrément est dans le try : le compteur par utilisateur et l'ensemble des flux sont rendus même si
+    // l'en-tête ne s'écrit pas (client déjà parti). Attentes sans fuite d'écouteurs (abortableSleep, waitDrain).
     const write = async (chunk: string) => {
       if (controller.signal.aborted) return;
-      if (!raw.write(chunk)) await new Promise<void>((resolve) => {
-        raw.once('drain', resolve);
-        controller.signal.addEventListener('abort', () => resolve(), { once: true });
-      });
+      if (!raw.write(chunk)) await waitDrain(raw, controller.signal);
     };
-    const sleep = (ms: number) =>
-      new Promise<void>((resolve) => {
-        const timer = setTimeout(resolve, ms);
-        controller.signal.addEventListener('abort', () => {
-          clearTimeout(timer);
-          resolve();
-        }, { once: true });
-      });
     try {
+      reply.hijack();
+      raw.writeHead(200, {
+        'content-type': 'text/event-stream; charset=utf-8',
+        'cache-control': 'no-store',
+        connection: 'keep-alive',
+        'x-accel-buffering': 'no',
+        'x-content-type-options': 'nosniff',
+      });
+      request.raw.once('close', closed);
+      raw.once('close', closed);
+      // Client parti avant l'écoute de 'close' : le flux s'arrête aussitôt (sinon une attente de drain ne finirait pas).
+      if (request.raw.destroyed || raw.destroyed) controller.abort();
       await write(`retry: 3000\n: connected\n\n`);
       let lastWrite = Date.now();
       let lastCheck = Date.now();
@@ -85,11 +78,13 @@ export function eventRoutes(app: FastifyInstance, ctx: ServerContext): void {
           await write(': ping\n\n');
           lastWrite = Date.now();
         }
-        await sleep(ctx.rest.pollMs);
+        await abortableSleep(ctx.rest.pollMs, controller.signal);
       }
     } catch (error) {
       request.log.warn({ err: error instanceof Error ? error.name : 'error' }, 'flux SSE interrompu');
     } finally {
+      request.raw.off('close', closed);
+      raw.off('close', closed);
       open.delete(controller);
       const left = (perUser.get(actor.userId) ?? 1) - 1;
       if (left <= 0) perUser.delete(actor.userId);

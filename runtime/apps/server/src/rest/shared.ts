@@ -134,3 +134,11 @@ export async function rejectWithoutAck(ctx: ServerContext, reply: FastifyReply, 
   await sendError(reply, 403, 'responsible_use_ack_required', 'lisez la page « Usage responsable » et cochez « j’ai lu » avant une API à données personnelles');
   return true;
 }
+
+/** Statut de l'API qui interdit un run (05 § 4.3). `enquete` : la stratégie n'est pas encore là. */
+export const BLOCKING_STATUS: Record<string, { code: string; message: string }> = {
+  erreur: { code: 'api_error', message: 'API en erreur : relancez une enquête (investigate) avant de l’appeler' },
+  action_requise: { code: 'action_required', message: 'action requise : connectez le site, configurez le proxy ou réglez l’accès payant, puis relancez' },
+  bloquee: { code: 'blocked', message: 'API bloquée par le site : informez l’utilisateur et ne réessayez pas' },
+  enquete: { code: 'investigation_in_progress', message: 'enquête en cours : aucune stratégie validée pour l’instant' },
+};

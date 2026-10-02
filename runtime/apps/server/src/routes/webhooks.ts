@@ -42,6 +42,8 @@ export function webhookRoutes(app: FastifyInstance, ctx: ServerContext): void {
   const configError = (reply: FastifyReply, error: unknown) => {
     if (findSsrfBlocked(error)) return sendError(reply, 400, 'ssrf_blocked', 'URL refusée : adresse privée ou réservée, ou port non autorisé');
     if (error instanceof WebhookConfigError) return sendError(reply, 400, 'invalid_webhook', error.message);
+    // URL illisible (new URL) : la valeur saisie, qui peut porter un jeton, n'est ni renvoyée ni journalisée.
+    if (error instanceof TypeError && (error as { code?: unknown }).code === 'ERR_INVALID_URL') return sendError(reply, 400, 'invalid_webhook', 'url : URL http(s) absolue attendue');
     throw error;
   };
 

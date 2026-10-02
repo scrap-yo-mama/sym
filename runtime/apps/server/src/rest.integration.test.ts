@@ -5,9 +5,11 @@
 // SSE multiplexé et reprise (`assert_sse_multiplexed_resume`), annulation, pause et reprise (`assert_run_cancel_pause_resume`),
 // case « j'ai lu » (`assert_responsible_use_ack`), OpenAPI servie valide (`assert_openapi_served_valid`).
 // Le worker est simulé en base (run terminé, dataset écrit) : ces tests portent sur le contrat HTTP, pas sur l'exécution.
+import { readFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import { createServer as createTcpServer, type AddressInfo } from 'node:net';
 import { createConfig, lintFromString } from '@redocly/openapi-core';
+import { buildInputSchema } from '@runtime/core';
 import { saveInvestigationStrategy, sweepOrphans, type InvestigationState } from '@runtime/db';
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import { OpenApiContract } from '../../../tests/helpers/openapi-contract.js';
@@ -80,6 +82,11 @@ const count = async (sql: string, params: unknown[] = []) => withClient(srv.db.u
 async function openStream(path: string, party: Party | null, lastEventId?: string, extra: Record<string, string> = {}) {
   const controller = new AbortController();
   const res = await fetch(`${base}${path}`, { headers: { ...(party ? { cookie: party.cookie } : {}), ...(lastEventId ? { 'last-event-id': lastEventId } : {}), ...extra }, signal: controller.signal });
+  // Ouverture au contrat : 200 `text/event-stream` déclaré par l'OpenAPI servie (les trames sont contrôlées par chaque test).
+  if (res.status === 200) {
+    expect(res.headers.get('content-type') ?? '').toMatch(/^text\/event-stream/);
+    expect(contract.check('GET', path.startsWith('/api/runs/') ? '/api/runs/{id}/events' : '/api/events', 200, undefined)).toEqual([]);
+  }
   const frames: SseEvent[] = [];
   let raw = '';
   let ended = false;
@@ -271,8 +278,18 @@ describe('catalogue (05 § 4.2) : création, liste, fiche, modification, suppres
     const schedule = await seedSchedule(srv.db.url, shared.id, b.user.id);
     expect((await api(a, 'DELETE', `/api/apis/${shared.slug}`, '/api/apis/{slug}')).body).toMatchObject({ error: { code: 'api_in_use_by_others' } });
     expect(await count('SELECT count(*) FROM schedules WHERE id = $1', [schedule])).toBe(1);
-    // Plus rien d'autrui : la suppression passe et n'emporte que les données de A.
     await withClient(srv.db.url, (c) => c.query('DELETE FROM schedules WHERE id = $1', [schedule]));
+    // Un run ACTIF de B : même refus (A ne peut pas l'annuler, `runs_active` l'inviterait à le faire).
+    const activeOfB = await seedRun(srv.db.url, { apiId: shared.id, ownerId: b.user.id, state: 'running' });
+    expect((await api(a, 'DELETE', `/api/apis/${shared.slug}`, '/api/apis/{slug}')).body).toMatchObject({ error: { code: 'api_in_use_by_others' } });
+    await withClient(srv.db.url, (c) => c.query('DELETE FROM runs WHERE id = $1', [activeOfB.runId]));
+    // Un abonnement webhook de B limité à cette API : la cascade l'emporterait sans prévenir B.
+    const hookOfB = await api(b, 'POST', '/api/webhook-subscriptions', '/api/webhook-subscriptions', { url: `http://127.0.0.1:${hookPort}/zz-test-hook-b`, events: ['run.failed'], api_slug: shared.slug });
+    expect(hookOfB.status).toBe(201);
+    expect((await api(a, 'DELETE', `/api/apis/${shared.slug}`, '/api/apis/{slug}')).body).toMatchObject({ error: { code: 'api_in_use_by_others' } });
+    expect(await count('SELECT count(*) FROM webhook_subscriptions WHERE id = $1', [hookOfB.body['id']])).toBe(1);
+    // Plus rien d'autrui : la suppression passe et n'emporte que les données de A.
+    expect((await api(b, 'DELETE', `/api/webhook-subscriptions/${hookOfB.body['id']}`, '/api/webhook-subscriptions/{id}')).status).toBe(204);
     expect((await api(a, 'DELETE', `/api/apis/${shared.slug}`, '/api/apis/{slug}')).status).toBe(204);
     expect(await count('SELECT count(*) FROM datasets WHERE id = $1', [mine.datasetId])).toBe(0);
   });
@@ -290,6 +307,34 @@ describe('catalogue (05 § 4.2) : création, liste, fiche, modification, suppres
     const bad = await api(a, 'POST', '/api/apis', '/api/apis', { description: 'zz', url: 'zz-pas-une-url' });
     expect(bad.status).toBe(400);
     expect(bad.body).toMatchObject({ error: { code: 'invalid_request' } });
+  });
+
+  test('assert_rest_inputs_bounded : nombres et curseurs hors bornes → 400, jamais 500 ; entrée de run non objet → 400 invalid_input, aucun run', async () => {
+    const api1 = await seedApi(srv.db.url, a.user.id);
+    const runId = (await seedRun(srv.db.url, { apiId: api1.id, ownerId: a.user.id, items: [{ title: 'zz' }] })).runId;
+    const big = 3_000_000_000;
+    const cur = (...parts: string[]) => Buffer.from(JSON.stringify(parts)).toString('base64url');
+    const cases: [string, string, string, unknown?][] = [
+      ['POST', `/api/apis/${api1.slug}/runs`, '/api/apis/{slug}/runs', { input: {}, strategy_version: big }],
+      ['GET', `/api/apis/${api1.slug}/versions/${big}`, '/api/apis/{slug}/versions/{version}'],
+      ['GET', `/api/apis/${api1.slug}/versions/1/diff?against=${big}`, '/api/apis/{slug}/versions/{version}/diff'],
+      ['GET', `/api/runs/${runId}/logs?after=${big}`, '/api/runs/{id}/logs'],
+      ['GET', `/api/apis/${api1.slug}/versions?cursor=${cur('99999999999999999999')}`, '/api/apis/{slug}/versions'],
+      ['GET', `/api/apis/${api1.slug}/status-events?cursor=${cur('99999999999999999999')}`, '/api/apis/{slug}/status-events'],
+      ['GET', `/api/apis?cursor=${cur('pas une date', 'pas un uuid')}`, '/api/apis'],
+      ['GET', `/api/runs?cursor=${cur('pas une date', '00000000-0000-0000-0000-000000000000')}`, '/api/runs'],
+    ];
+    for (const [method, url, template, body] of cases) {
+      const res = await api(a, method, url, template, body);
+      expect(res.status, `${method} ${url}`).toBe(400);
+    }
+    const before = await count('SELECT count(*) FROM runs WHERE api_id = $1', [api1.id]);
+    for (const input of ['zz', 42, null, ['zz']]) {
+      const res = await api(a, 'POST', `/api/apis/${api1.slug}/runs`, '/api/apis/{slug}/runs', { input });
+      expect(res.status, JSON.stringify(input)).toBe(400);
+      expect(res.body).toMatchObject({ error: { code: 'invalid_input' } });
+    }
+    expect(await count('SELECT count(*) FROM runs WHERE api_id = $1', [api1.id])).toBe(before);
   });
 
   test.todo('assert_brief_optional (REST) : `POST /api/apis` accepte `brief` (05 § 4.2, 19c) ; branché sur le service de 2.14 quand elle sera fusionnée (aujourd’hui `brief` → 400, schéma fermé)');
@@ -392,7 +437,7 @@ describe('validation du schéma : case « j’ai lu » non contournable, ordre d
       estCostUsd: 0,
       outputSchema: state.validated_schema,
       ...(state.validated_columns === undefined ? {} : { outputColumns: state.validated_columns }),
-      inputSchema: {},
+      inputSchema: buildInputSchema({ paginated: false }),
       state,
     });
     const run = await seedRun(srv.db.url, { apiId, ownerId: a.user.id, items: [{ a_note: '=n', price: 2, zeta_title: 't', extra: 'hors schéma' }] });
@@ -461,7 +506,7 @@ describe('assert_rest_error_codes : runs et codes de 05 § 4.3', () => {
     expect((await api(b, 'GET', '/api/runs', '/api/runs')).body['runs'].map((r: { id: string }) => r.id)).not.toContain(runId);
   });
 
-  test('run dégradé → 200, status warning et raisons ; budget épuisé → 200 sur get_run (failed, budget_exceeded)', async () => {
+  test('run dégradé → 200, status warning et raisons ; budget épuisé → 200 sur get_run (failed, budget_exceeded et run_budget_exceeded)', async () => {
     const api1 = await seedApi(srv.db.url, a.user.id, { status: 'warning' });
     const pending = api(a, 'POST', `/api/apis/${api1.slug}/runs?wait=10`, '/api/apis/{slug}/runs', { input: {} });
     await completeRun(await latestRun(api1.id), [{ title: 'zz' }], ['optional_fields_missing']);
@@ -469,10 +514,13 @@ describe('assert_rest_error_codes : runs et codes de 05 § 4.3', () => {
     expect(done.status).toBe(200);
     expect(done.body).toMatchObject({ state: 'succeeded', status: 'warning', degraded_reasons: ['optional_fields_missing'] });
     expect(done.body['message']).toMatch(/warnings/);
-    const failed = await seedRun(srv.db.url, { apiId: api1.id, ownerId: a.user.id, state: 'failed', failureClass: 'budget_exceeded' });
-    const run = await api(a, 'GET', `/api/runs/${failed.runId}`, '/api/runs/{id}');
-    expect(run.status).toBe(200);
-    expect(run.body).toMatchObject({ state: 'failed', failure_class: 'budget_exceeded', retryable: false });
+    // Les deux classes de budget de 05 § 4.3 : plafond journalier (budget_exceeded) et plafond du run (run_budget_exceeded).
+    for (const failureClass of ['budget_exceeded', 'run_budget_exceeded']) {
+      const failed = await seedRun(srv.db.url, { apiId: api1.id, ownerId: a.user.id, state: 'failed', failureClass });
+      const run = await api(a, 'GET', `/api/runs/${failed.runId}`, '/api/runs/{id}');
+      expect(run.status).toBe(200);
+      expect(run.body).toMatchObject({ state: 'failed', failure_class: failureClass, retryable: false });
+    }
   });
 
   test('file pleine → 429 queue_full avec Retry-After ; aucun run créé', async () => {
@@ -648,7 +696,7 @@ describe('assert_run_cancel_pause_resume : annulation, pause, reprise (05 § 4.4
     // Worker simulé : première enquête conforme (stratégie v1), API saine.
     await withClient(srv.db.url, (c) => c.query("UPDATE runs SET state = 'succeeded', outcome = 'clean', finished_at = now() WHERE id = $1", [created.body['run_id']]));
     const state = await withClient(srv.db.url, async (c) => (await c.query<{ investigation: InvestigationState }>('SELECT investigation FROM apis WHERE id = $1', [apiId])).rows[0]!.investigation);
-    await saveInvestigationStrategy(srv.started.ctx.pool, { apiId, ownerId: a.user.id, execution: 'fetch', network: 'direct', spec: { kind: 'declarative' }, estCostUsd: 0, outputSchema: { type: 'object', properties: { title: { type: 'string' } } }, inputSchema: {}, state });
+    await saveInvestigationStrategy(srv.started.ctx.pool, { apiId, ownerId: a.user.id, execution: 'fetch', network: 'direct', spec: { kind: 'declarative' }, estCostUsd: 0, outputSchema: { type: 'object', properties: { title: { type: 'string' } } }, inputSchema: buildInputSchema({ paginated: false }), state });
     await withClient(srv.db.url, (c) => c.query("UPDATE apis SET status = 'sain' WHERE id = $1", [apiId]));
     // Ré-enquête manuelle (transition 19), puis annulation de son run avant qu'un worker ne le prenne.
     const re = await api(a, 'POST', `/api/apis/${slug}/investigate`, '/api/apis/{slug}/investigate', {});
@@ -694,6 +742,25 @@ describe('assert_run_cancel_pause_resume : annulation, pause, reprise (05 § 4.4
     const writer = await seedApi(srv.db.url, a.user.id, { allowWrite: true });
     const wrun = await api(a, 'POST', `/api/apis/${writer.slug}/runs`, '/api/apis/{slug}/runs', { input: {} });
     expect((await api(a, 'POST', `/api/runs/${wrun.body['run_id']}/pause`, '/api/runs/{id}/pause')).body).toMatchObject({ error: { code: 'pause_not_allowed' } });
+  });
+
+  test('resume : statut de l’API relu (bloquee → 409 blocked, INV3) et accès relu (API d’autrui redevenue privée → 404, INV12), aucun job', async () => {
+    // Run en pause sur une API passée ensuite en `bloquee` : la reprise n'est pas un contournement du 409 de POST /runs.
+    const api1 = await seedApi(srv.db.url, a.user.id);
+    const runId = (await api(a, 'POST', `/api/apis/${api1.slug}/runs`, '/api/apis/{slug}/runs', { input: {} })).body['run_id'] as string;
+    expect((await api(a, 'POST', `/api/runs/${runId}/pause`, '/api/runs/{id}/pause')).status).toBe(202);
+    await withClient(srv.db.url, (c) => c.query("UPDATE apis SET status = 'bloquee' WHERE id = $1", [api1.id]));
+    const refused = await api(a, 'POST', `/api/runs/${runId}/resume`, '/api/runs/{id}/resume');
+    expect(refused.status).toBe(409);
+    expect(refused.body).toMatchObject({ error: { code: 'blocked' } });
+    expect(await count('SELECT count(*) FROM runs WHERE id = $1 AND job_id IS NULL AND paused_at IS NOT NULL', [runId])).toBe(1);
+    // B met en pause son run sur l'API `instance` de A, puis A la rend privée : B ne la relance plus (404 uniforme).
+    const shared = await seedApi(srv.db.url, a.user.id, { visibility: 'instance' });
+    const bRun = (await api(b, 'POST', `/api/apis/${shared.slug}/runs`, '/api/apis/{slug}/runs', { input: {} })).body['run_id'] as string;
+    expect((await api(b, 'POST', `/api/runs/${bRun}/pause`, '/api/runs/{id}/pause')).status).toBe(202);
+    await withClient(srv.db.url, (c) => c.query("UPDATE apis SET visibility = 'private' WHERE id = $1", [shared.id]));
+    expect((await api(b, 'POST', `/api/runs/${bRun}/resume`, '/api/runs/{id}/resume')).status).toBe(404);
+    expect(await count('SELECT count(*) FROM runs WHERE id = $1 AND job_id IS NULL AND paused_at IS NOT NULL', [bRun])).toBe(1);
   });
 });
 
@@ -761,8 +828,23 @@ describe('ré-enquête, versions et chronologie (05 § 4.2, 06 § 2, INV3)', () 
   });
 });
 
-/** Lots de 1 000 items lus d'avance par le serveur pour un client qui ne lit plus (contre-pression). */
+/** Lots de 1 000 items lus d'avance par le serveur pour un client qui ne lit plus (contre-pression), hors tampons TCP. */
 const EXPORT_MAX_READ_AHEAD_BATCHES = 5;
+
+/**
+ * Octets que les tampons TCP du noyau peuvent garder entre le serveur et le client (envoi + réception, plafonds de
+ * l'autoréglage Linux) : ils ne sont pas dans la mémoire du serveur mais remplissent son avance. 0 hors Linux.
+ */
+function kernelTcpBufferBytes(): number {
+  const max = (name: string) => {
+    try {
+      return Number(readFileSync(`/proc/sys/net/ipv4/${name}`, 'utf8').trim().split(/\s+/)[2] ?? 0) || 0;
+    } catch {
+      return 0;
+    }
+  };
+  return max('tcp_rmem') + max('tcp_wmem');
+}
 
 describe('assert_export_streaming : export des datasets en flux (05 § 4.4)', () => {
   test('100 000 items en NDJSON : mémoire bornée (lecture au rythme du client), reprise par `after` sans doublon', async () => {
@@ -797,13 +879,14 @@ describe('assert_export_streaming : export des datasets en flux (05 § 4.4)', ()
       }
       return client;
     };
+    let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
     try {
       const res = await fetch(`${base}/api/datasets/${ds}/items?format=ndjson`, { headers: { cookie: a.cookie } });
       expect(res.status).toBe(200);
       expect(res.headers.get('content-type')).toMatch(/application\/x-ndjson/);
       expect(res.headers.get('content-disposition')).toMatch(/^attachment; filename="dataset-/);
       expect(res.headers.get('x-content-type-options')).toBe('nosniff');
-      const reader = res.body!.getReader();
+      reader = res.body!.getReader();
       const first = await reader.read();
       expect(first.done).toBe(false);
       // Client lent : il ne lit plus rien. Le serveur cesse de lire le dataset dès que les tampons du flux sont pleins
@@ -820,14 +903,14 @@ describe('assert_export_streaming : export des datasets en flux (05 § 4.4)', ()
           stableSince = Date.now();
         }
       }
-      console.info(`assert_export_streaming : ${readAhead} lots lus d'avance`);
-      expect(readAhead).toBeLessThanOrEqual(EXPORT_MAX_READ_AHEAD_BATCHES);
       let text = new TextDecoder().decode(first.value);
+      let bytes = first.value!.byteLength;
       let lines = 0;
       const decoder = new TextDecoder();
       for (;;) {
         const { done, value } = await reader.read();
         if (done) break;
+        bytes += value.byteLength;
         text += decoder.decode(value, { stream: true });
         const cut = text.lastIndexOf('\n');
         if (cut >= 0) {
@@ -836,10 +919,18 @@ describe('assert_export_streaming : export des datasets en flux (05 § 4.4)', ()
         }
       }
       expect(lines).toBe(total);
+      // Avance bornée : quelques lots (tampons du flux Node et du client HTTP), plus ce que les tampons TCP du noyau
+      // peuvent contenir. La borne doit rester loin des 101 lots, sinon le test ne prouve rien (tampons à régler).
+      const lots = Math.ceil(total / 1000);
+      const bound = EXPORT_MAX_READ_AHEAD_BATCHES + Math.ceil(kernelTcpBufferBytes() / (bytes / lots));
+      console.info(`assert_export_streaming : ${readAhead} lots lus d'avance (borne ${bound} sur ${lots})`);
+      expect(bound).toBeLessThan(lots / 2);
+      expect(readAhead).toBeLessThanOrEqual(bound);
       // Lots de 1 000 lus un à un, au fil de la lecture du client : la mémoire du serveur reste bornée par un lot et les
       // tampons du flux, quelle que soit la taille du dataset (~45 Mo ici).
       expect(batches).toBe(Math.ceil(total / 1000) + 1);
     } finally {
+      await reader?.cancel().catch(() => undefined);
       (pool as { connect: unknown }).connect = connect;
     }
     // Reprise : page de 60 000 avec curseur de suite, puis le reste ; aucun doublon, rien de perdu.
@@ -1015,7 +1106,7 @@ describe('assert_sse_multiplexed_resume : flux SSE (06 § 3)', () => {
     await resumed.waitFor(() => resumed.ended());
     expect(resumed.frames.map((f) => f.id)).toEqual(['2', 'end']);
     await resumed.close();
-    expect((await srv.app.inject({ method: 'GET', url: `/api/runs/${inv.runId}/events`, headers: { cookie: b.cookie } })).statusCode).toBe(404);
+    expect((await api(b, 'GET', `/api/runs/${inv.runId}/events`, '/api/runs/{id}/events')).status).toBe(404);
   });
 
   test('plafond de flux par utilisateur : 429 too_many_streams au-delà', async () => {
@@ -1117,6 +1208,24 @@ describe('planifications (08 § 5) : CRUD, miroir pg-boss, prochaines exécution
     expect((await api(a, 'DELETE', `/api/apis/${api1.slug}/schedules/${id}`, '/api/apis/{slug}/schedules/{id}')).status).toBe(204);
     expect((await api(a, 'GET', `/api/apis/${api1.slug}/schedules/${id}`, '/api/apis/{slug}/schedules/{id}')).status).toBe(404);
   });
+
+  test('planification de B sur l’API `instance` de A redevenue privée : B la lit, la désactive et la supprime ; rien d’autre (404 sinon)', async () => {
+    const shared = await seedApi(srv.db.url, a.user.id, { visibility: 'instance' });
+    const created = await api(b, 'POST', `/api/apis/${shared.slug}/schedules`, '/api/apis/{slug}/schedules', { cron: '0 4 * * *', timezone: 'UTC', input: {} });
+    expect(created.status).toBe(201);
+    const id = created.body['id'] as string;
+    await withClient(srv.db.url, (c) => c.query("UPDATE apis SET visibility = 'private' WHERE id = $1", [shared.id]));
+    const path = `/api/apis/${shared.slug}/schedules/${id}`;
+    expect((await api(b, 'GET', path, '/api/apis/{slug}/schedules/{id}')).body).toMatchObject({ id, api_slug: shared.slug });
+    // Seule la désactivation passe : modifier le cron ou réactiver relancerait l'API d'autrui.
+    expect((await api(b, 'PATCH', path, '/api/apis/{slug}/schedules/{id}', { cron: '0 5 * * *' })).status).toBe(404);
+    expect((await api(b, 'PATCH', path, '/api/apis/{slug}/schedules/{id}', { enabled: true })).status).toBe(404);
+    expect((await api(b, 'PATCH', path, '/api/apis/{slug}/schedules/{id}', { enabled: false })).body).toMatchObject({ id, enabled: false });
+    // Un autre membre (ni A, propriétaire de l'API, par ce chemin) ne voit pas la planification de B.
+    expect((await api(a, 'GET', path, '/api/apis/{slug}/schedules/{id}')).status).toBe(404);
+    expect((await api(b, 'DELETE', path, '/api/apis/{slug}/schedules/{id}')).status).toBe(204);
+    expect(await count('SELECT count(*) FROM schedules WHERE id = $1', [id])).toBe(0);
+  });
 });
 
 describe('webhooks (Standard Webhooks, 08 § 5) : garde SSRF, secret rendu une fois, rotation, test signé', () => {
@@ -1124,10 +1233,16 @@ describe('webhooks (Standard Webhooks, 08 § 5) : garde SSRF, secret rendu une f
     const api1 = await seedApi(srv.db.url, a.user.id);
     const target = `http://127.0.0.1:${hookPort}/zz-test-hook`;
     expect((await api(a, 'POST', '/api/webhook-subscriptions', '/api/webhook-subscriptions', { url: 'http://169.254.169.254/latest', events: ['run.failed'] })).body).toMatchObject({ error: { code: 'ssrf_blocked' } });
+    // URL illisible (sans schéma) : 400, jamais 500, et la valeur saisie n'est pas recopiée.
+    const unreadable = await api(a, 'POST', '/api/webhook-subscriptions', '/api/webhook-subscriptions', { url: 'hooks.example.test/zz_test_hook_token', events: ['run.failed'] });
+    expect(unreadable.status).toBe(400);
+    expect(unreadable.body).toMatchObject({ error: { code: 'invalid_webhook' } });
+    expect(unreadable.raw.body).not.toContain('zz_test_hook_token');
     const created = await api(a, 'POST', '/api/webhook-subscriptions', '/api/webhook-subscriptions', { url: target, events: ['run.failed', 'api.status_changed'], api_slug: api1.slug });
     expect(created.status).toBe(201);
     expect(created.body).toMatchObject({ api_slug: api1.slug, status: 'active', secret: expect.stringMatching(/^whsec_/) });
     const id = created.body['id'] as string;
+    expect((await api(a, 'PATCH', `/api/webhook-subscriptions/${id}`, '/api/webhook-subscriptions/{id}', { url: 'not a url' })).body).toMatchObject({ error: { code: 'invalid_webhook' } });
     // Le secret n'est jamais relu.
     const read = await api(a, 'GET', `/api/webhook-subscriptions/${id}`, '/api/webhook-subscriptions/{id}');
     expect(read.raw.body).not.toContain(created.body['secret']);
@@ -1181,6 +1296,43 @@ describe('réglages de l’admin (08 § 1, § 2, § 7) : secrets en écriture se
     expect(probe.body).toMatchObject({ ok: false, profile: null, error: { code: expect.stringMatching(/^llm_/) } });
     expect((await api(admin, 'POST', '/api/settings/llm/test', '/api/settings/llm/test', { provider: 'zz-absent', model: 'm' })).status).toBe(404);
     expect((await api(a, 'GET', '/api/settings/llm', '/api/settings/llm')).status).toBe(403);
+  });
+
+  test('sonde « Tester » LLM pendant un changement de fournisseur : le profil relevé n’écrase jamais la nouvelle destination ni sa clé', async () => {
+    // Fournisseur lent : la première requête de la sonde attend qu'on la libère ; chaque réponse est un 400 (paramètre non
+    // supporté), donc la sonde aboutit et veut écrire son profil.
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    let reached!: () => void;
+    const firstRequest = new Promise<void>((resolve) => (reached = resolve));
+    const slow = createServer((req, res) => {
+      req.resume();
+      reached();
+      void gate.then(() => res.writeHead(400, { 'content-type': 'application/json' }).end(JSON.stringify({ error: { message: 'unsupported', type: 'invalid_request_error' } })));
+    });
+    await new Promise<void>((resolve) => slow.listen(0, '127.0.0.1', resolve));
+    try {
+      const base = `http://127.0.0.1:${(slow.address() as AddressInfo).port}/v1`;
+      const put = await api(admin, 'PUT', '/api/settings/llm', '/api/settings/llm', { providers: [{ id: 'zz-race', preset: 'custom', base_url: base, api_key: 'zz_test_llm_key_race_old_0123', models: { 'zz-model': {} } }] });
+      expect(put.status).toBe(200);
+      const probe = api(admin, 'POST', '/api/settings/llm/test', '/api/settings/llm/test', { provider: 'zz-race', model: 'zz-model' });
+      await firstRequest;
+      // Pendant la sonde, l'admin déplace le fournisseur avec une clé ressaisie (l'ancien secret est supprimé).
+      const moved = await api(admin, 'PUT', '/api/settings/llm', '/api/settings/llm', { providers: [{ id: 'zz-race', preset: 'custom', base_url: 'http://127.0.0.1:9/v3', api_key: 'zz_test_llm_key_race_new_0123', models: { 'zz-model': {} } }] });
+      expect(moved.status).toBe(200);
+      release();
+      expect((await probe).status).toBe(200);
+      const view = (await api(admin, 'GET', '/api/settings/llm', '/api/settings/llm')).body['providers'] as Record<string, unknown>[];
+      expect(view.find((p) => p['id'] === 'zz-race')).toMatchObject({ base_url: 'http://127.0.0.1:9/v3', api_key_set: true, api_key_unreadable: false });
+      const stored = await withClient(srv.db.url, async (c) => (await c.query<{ value: { providers: { id: string; api_key_secret_id: string; models?: Record<string, { profile?: unknown }> }[] } }>("SELECT value FROM settings WHERE key = 'llm'")).rows[0]!.value);
+      const race = stored.providers.find((p) => p.id === 'zz-race')!;
+      expect(await count('SELECT count(*) FROM secrets WHERE id = $1', [race.api_key_secret_id])).toBe(1);
+      // Le profil relevé sur l'ancienne destination n'est pas attribué à la nouvelle.
+      expect(race.models?.['zz-model']?.profile).toBeUndefined();
+    } finally {
+      release();
+      await new Promise<void>((resolve) => slow.close(() => resolve()));
+    }
   });
 
   test('proxys : identifiants jamais renvoyés, test de joignabilité, suppression refusée tant qu’une API le choisit', async () => {
@@ -1272,22 +1424,24 @@ describe('droits des personnes (17 § 6) et appairage (07 § 1)', () => {
 
 describe('assert_rest_endpoints_contract : chaque endpoint livré par 3.1 a des réponses contrôlées au contrat', () => {
   test('couverture', () => {
-    const delivered31 = [
-      'GET /api/openapi.json', 'GET /api/apis', 'POST /api/apis', 'POST /api/apis/{id}/validate-schema', 'GET /api/apis/{slug}', 'PATCH /api/apis/{slug}', 'DELETE /api/apis/{slug}',
-      'POST /api/apis/{slug}/runs', 'POST /api/apis/{slug}/investigate', 'GET /api/apis/{slug}/versions', 'GET /api/apis/{slug}/versions/{version}',
-      'GET /api/apis/{slug}/versions/{version}/diff', 'POST /api/apis/{slug}/versions/{version}/revert', 'GET /api/apis/{slug}/status-events',
-      'GET /api/apis/{slug}/schedules', 'POST /api/apis/{slug}/schedules', 'GET /api/apis/{slug}/schedules/{id}', 'PATCH /api/apis/{slug}/schedules/{id}', 'DELETE /api/apis/{slug}/schedules/{id}',
-      'GET /api/runs', 'GET /api/runs/{id}', 'POST /api/runs/{id}/cancel', 'POST /api/runs/{id}/pause', 'POST /api/runs/{id}/resume', 'GET /api/runs/{id}/logs', 'GET /api/datasets/{id}/items',
-      'GET /api/webhook-subscriptions', 'POST /api/webhook-subscriptions', 'GET /api/webhook-subscriptions/{id}', 'PATCH /api/webhook-subscriptions/{id}', 'DELETE /api/webhook-subscriptions/{id}', 'POST /api/webhook-subscriptions/{id}/test',
-      'GET /api/settings/llm', 'PUT /api/settings/llm', 'POST /api/settings/llm/test', 'GET /api/settings/proxies', 'POST /api/settings/proxies', 'GET /api/settings/proxies/{id}', 'PATCH /api/settings/proxies/{id}',
-      'DELETE /api/settings/proxies/{id}', 'POST /api/settings/proxies/{id}/test', 'GET /api/settings/smtp', 'PUT /api/settings/smtp', 'POST /api/settings/smtp/test',
-      'POST /api/subjects/erase', 'POST /api/subjects/export', 'POST /api/tunnel/pairing-code', 'GET /api/me/responsible-use', 'POST /api/me/responsible-use',
-    ];
+    // Routes livrées par 3.1 : le bloc du registre qui commence à GET /api/openapi.json (aucune liste à tenir à la main).
+    const first = ROUTES.findIndex((r) => r.method === 'GET' && r.url === '/api/openapi.json');
+    expect(first).toBeGreaterThan(0);
+    const delivered31 = ROUTES.slice(first).map((r) => `${r.method} ${r.url.replace(/:(\w+)/g, '{$1}')}`);
+    expect(delivered31).toEqual(expect.arrayContaining(['GET /api/events', 'GET /api/runs/{id}/events', 'POST /api/me/responsible-use']));
     const covered = [...contract.covered].map((c) => c.split(' ').slice(0, 2).join(' '));
     const successes = [...contract.covered].filter((c) => /\s2\d\d$/.test(c)).map((c) => c.split(' ').slice(0, 2).join(' '));
     expect(delivered31.filter((op) => !covered.includes(op))).toEqual([]);
     expect(delivered31.filter((op) => !successes.includes(op))).toEqual([]);
-    // Les deux flux SSE sont contrôlés à part (trames), leurs erreurs au contrat.
-    expect(contract.operations()).toEqual(expect.arrayContaining(['GET /api/events', 'GET /api/runs/{id}/events']));
+  });
+
+  test('chaque route que la garde peut refuser (session seule, scope, permission) déclare 403 dans l’OpenAPI servie', () => {
+    const missing = ROUTES.filter((r) => r.auth !== 'public' && !r.library && (r.auth === 'session' || r.auth === 'extension' || r.scope !== undefined || r.permission !== undefined))
+      .map((r) => `${r.method} ${r.url.replace(/:(\w+)/g, '{$1}')}`)
+      .filter((op) => {
+        const [method, path] = op.split(' ');
+        return contract.check(method!, path!, 403, { error: { code: 'forbidden', message: 'zz' } }).length > 0;
+      });
+    expect(missing).toEqual([]);
   });
 });

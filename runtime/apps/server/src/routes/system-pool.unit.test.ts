@@ -37,8 +37,9 @@ const EXCEPTIONS: Record<string, string> = {
   'settings.ts|SELECT id FROM secrets WHERE id = ANY($1::uuid[]) AND owner_id IS NULL AND state': 'état d’un secret d’instance',
   // Suppression d’un proxy d’instance : existence d’une API (de tout membre) qui le choisit, réponse 409 sans détail.
   'settings.ts|SELECT 1 FROM apis WHERE network_policy': 'proxy utilisé (existence)',
-  // Suppression d’une API par son propriétaire (tâche 3.1) : runs actifs de TOUS les membres sur une API instance (existence).
-  'apis.ts|SELECT 1 FROM runs WHERE api_id = $1 AND state IN': 'runs actifs (existence)',
+  // Planification d'un membre sur une API qui ne lui est plus visible (tâche 3.1) : l'API n'est retrouvée que par SA
+  // planification (owner_id = l'acteur), pour la lire, la désactiver ou la supprimer ; aucune fuite d'existence.
+  'schedules.ts|SELECT a.id, a.slug FROM apis a JOIN schedules s ON s.api_id = a.id': 'planification orpheline de l’acteur',
 };
 
 /**

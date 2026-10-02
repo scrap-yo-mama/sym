@@ -395,6 +395,8 @@ paths:
                 type: string
         '401':
           $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
         '429':
           $ref: '#/components/responses/Error'
   /api/version:
@@ -799,7 +801,11 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/StrategyVersionList'
+        '400':
+          $ref: '#/components/responses/Error'
         '401':
+          $ref: '#/components/responses/Error'
+        '403':
           $ref: '#/components/responses/Error'
         '404':
           $ref: '#/components/responses/Error'
@@ -818,7 +824,11 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/StrategyVersion'
+        '400':
+          $ref: '#/components/responses/Error'
         '401':
+          $ref: '#/components/responses/Error'
+        '403':
           $ref: '#/components/responses/Error'
         '404':
           $ref: '#/components/responses/Error'
@@ -836,6 +846,7 @@ paths:
           schema:
             type: integer
             minimum: 1
+            maximum: 2147483647
       responses:
         '200':
           description: Diff.
@@ -846,6 +857,8 @@ paths:
         '400':
           $ref: '#/components/responses/Error'
         '401':
+          $ref: '#/components/responses/Error'
+        '403':
           $ref: '#/components/responses/Error'
         '404':
           $ref: '#/components/responses/Error'
@@ -891,7 +904,11 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/StatusEventList'
+        '400':
+          $ref: '#/components/responses/Error'
         '401':
+          $ref: '#/components/responses/Error'
+        '403':
           $ref: '#/components/responses/Error'
         '404':
           $ref: '#/components/responses/Error'
@@ -958,6 +975,8 @@ paths:
               schema:
                 $ref: '#/components/schemas/Schedule'
         '401':
+          $ref: '#/components/responses/Error'
+        '403':
           $ref: '#/components/responses/Error'
         '404':
           $ref: '#/components/responses/Error'
@@ -1143,6 +1162,8 @@ paths:
           schema:
             type: string
       responses:
+        '403':
+          $ref: '#/components/responses/Error'
         '429':
           $ref: '#/components/responses/Error'
         '200':
@@ -1167,6 +1188,7 @@ paths:
           schema:
             type: integer
             minimum: 0
+            maximum: 2147483647
         - $ref: '#/components/parameters/Limit'
       responses:
         '200':
@@ -1175,7 +1197,11 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/RunLogList'
+        '400':
+          $ref: '#/components/responses/Error'
         '401':
+          $ref: '#/components/responses/Error'
+        '403':
           $ref: '#/components/responses/Error'
         '404':
           $ref: '#/components/responses/Error'
@@ -1314,6 +1340,8 @@ paths:
                 $ref: '#/components/schemas/WebhookSubscription'
         '401':
           $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
         '404':
           $ref: '#/components/responses/Error'
     patch:
@@ -1339,6 +1367,8 @@ paths:
           $ref: '#/components/responses/Error'
         '401':
           $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
         '404':
           $ref: '#/components/responses/Error'
     delete:
@@ -1351,6 +1381,8 @@ paths:
         '204':
           description: Supprimé.
         '401':
+          $ref: '#/components/responses/Error'
+        '403':
           $ref: '#/components/responses/Error'
         '404':
           $ref: '#/components/responses/Error'
@@ -1369,6 +1401,8 @@ paths:
               schema:
                 $ref: '#/components/schemas/TestResult'
         '401':
+          $ref: '#/components/responses/Error'
+        '403':
           $ref: '#/components/responses/Error'
         '404':
           $ref: '#/components/responses/Error'
@@ -2189,6 +2223,8 @@ paths:
           $ref: '#/components/responses/Error'
         '401':
           $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
         '429':
           $ref: '#/components/responses/Error'
   /api/me/2fa/backup-codes:
@@ -2334,6 +2370,8 @@ paths:
                 $ref: '#/components/schemas/AuditEventList'
         '401':
           $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
   /api/me/responsible-use:
     get:
       operationId: getResponsibleUseAck
@@ -2349,6 +2387,8 @@ paths:
               schema:
                 $ref: '#/components/schemas/ResponsibleUseAck'
         '401':
+          $ref: '#/components/responses/Error'
+        '403':
           $ref: '#/components/responses/Error'
     post:
       operationId: acknowledgeResponsibleUse
@@ -2378,6 +2418,8 @@ paths:
         '400':
           $ref: '#/components/responses/Error'
         '401':
+          $ref: '#/components/responses/Error'
+        '403':
           $ref: '#/components/responses/Error'
         '409':
           $ref: '#/components/responses/Error'
@@ -2606,6 +2648,8 @@ paths:
                 $ref: '#/components/schemas/ExtensionSession'
         '401':
           $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
     delete:
       operationId: deleteExtensionSession
       security:
@@ -2616,6 +2660,8 @@ paths:
         '204':
           description: Fait.
         '401':
+          $ref: '#/components/responses/Error'
+        '403':
           $ref: '#/components/responses/Error'
   /api/extension/tunnel:
     get:
@@ -2675,6 +2721,8 @@ paths:
           $ref: '#/components/responses/Error'
         '401':
           $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
     delete:
       operationId: disconnectExtensionSite
       security:
@@ -2694,6 +2742,8 @@ paths:
         '400':
           $ref: '#/components/responses/Error'
         '401':
+          $ref: '#/components/responses/Error'
+        '403':
           $ref: '#/components/responses/Error'
   /api/extension/sites/{domain}/cookies:
     put:
@@ -2722,6 +2772,8 @@ paths:
           $ref: '#/components/responses/Error'
         '401':
           $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
         '404':
           $ref: '#/components/responses/Error'
         '409':
@@ -2742,6 +2794,8 @@ paths:
                 $ref: '#/components/schemas/ExtensionDeviceList'
         '401':
           $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
   /api/extension/devices/{id}:
     delete:
       operationId: revokeExtensionDevice
@@ -2755,6 +2809,8 @@ paths:
         '204':
           description: Fait.
         '401':
+          $ref: '#/components/responses/Error'
+        '403':
           $ref: '#/components/responses/Error'
         '404':
           $ref: '#/components/responses/Error'
@@ -2772,6 +2828,8 @@ paths:
                 $ref: '#/components/schemas/ConnectedSiteList'
         '401':
           $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
   /api/sites/{id}:
     delete:
       operationId: disconnectConnectedSite
@@ -2785,6 +2843,8 @@ paths:
         '204':
           description: Fait.
         '401':
+          $ref: '#/components/responses/Error'
+        '403':
           $ref: '#/components/responses/Error'
         '404':
           $ref: '#/components/responses/Error'
@@ -2865,6 +2925,7 @@ components:
       schema:
         type: integer
         minimum: 1
+        maximum: 2147483647
     Cursor:
       name: cursor
       in: query
@@ -3777,6 +3838,7 @@ components:
             `400 invalid_strategy_version` ; réservé au propriétaire de l'API (`403 forbidden` pour un membre).
           type: integer
           minimum: 1
+          maximum: 2147483647
     RunAccepted:
       type: object
       additionalProperties: false

@@ -32,6 +32,17 @@ async function writeSetting(ctx: ServerContext, key: string, value: unknown): Pr
   );
 }
 
+/**
+ * Lecture puis écriture conditionnelle d'un réglage : l'écriture n'a lieu que si la valeur n'a pas changé depuis la
+ * relecture (comparaison jsonb) ; une écriture concurrente l'emporte. `undefined` : rien n'est écrit.
+ */
+async function updateSetting<T>(ctx: ServerContext, key: string, update: (current: T | null) => T | undefined): Promise<void> {
+  const current = await readSetting<T>(ctx, key);
+  const next = update(current);
+  if (next === undefined || current === null) return;
+  await ctx.pool.query('UPDATE settings SET value = $2::jsonb, updated_at = now() WHERE key = $1 AND value = $3::jsonb', [key, JSON.stringify(next), JSON.stringify(current)]);
+}
+
 async function deleteInstanceSecrets(ctx: ServerContext, ids: readonly (string | null | undefined)[]): Promise<void> {
   const list = ids.filter((id): id is string => typeof id === 'string');
   if (list.length > 0) await ctx.pool.query('DELETE FROM secrets WHERE id = ANY($1::uuid[]) AND owner_id IS NULL', [list]);
@@ -308,9 +319,15 @@ export function settingsRoutes(app: FastifyInstance, ctx: ServerContext): void {
           ...(p.sampling ? { sampling: p.sampling } : {}),
         };
         // Profil relevé gardé sur le modèle (le client LLM l'applique : paramètres refusés jamais envoyés).
-        const models = { ...(provider.models ?? {}) };
-        models[request.body.model] = { ...(models[request.body.model] ?? {}), profile: { ...profile, probed_at: p.probed_at } };
-        await writeSetting(ctx, 'llm', { ...stored, providers: stored.providers.map((x) => (x.id === provider.id ? { ...x, models } : x)) });
+        // Relu après la sonde (jusqu'à 60 s) et écrit sous condition : un PUT concurrent n'est jamais écrasé, et le profil
+        // n'est gardé que si le fournisseur vise toujours la destination sondée avec la même clé.
+        await updateSetting<StoredLlm>(ctx, 'llm', (current) => {
+          const now = current?.providers.find((x) => x.id === provider.id);
+          if (current === null || now === undefined || now.base_url !== provider.base_url || now.api_key_secret_id !== provider.api_key_secret_id) return undefined;
+          const models = { ...(now.models ?? {}) };
+          models[request.body.model] = { ...(models[request.body.model] ?? {}), profile: { ...profile, probed_at: p.probed_at } };
+          return { ...current, providers: current.providers.map((x) => (x.id === provider.id ? { ...x, models } : x)) };
+        });
         result = { ok: true, tested_at: testedAt, error: null, profile };
       } catch (error) {
         const code = error instanceof LlmError ? `llm_${error.class}` : findSsrfBlocked(error) ? 'ssrf_blocked' : 'llm_network';
