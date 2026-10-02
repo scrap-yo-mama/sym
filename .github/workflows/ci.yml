@@ -213,6 +213,9 @@ jobs:
         run: pnpm exec playwright install --with-deps chromium
       # E2 extension (tâche 2.6) : PostgreSQL 16 jetable (Testcontainers), sites de fixtures en boucle locale.
       - run: pnpm test:e2e
+      # Régression visuelle par langue (3.17, part de 3.6) : la suite visuelle de la console, sautée ci-dessus hors de l'image,
+      # est comparée aux instantanés linux dans l'image Playwright épinglée de deploy/Dockerfile ; une référence absente échoue.
+      - run: pnpm visual:image
       # Gate d'accessibilité de la console (tâche 3.9) : axe sur chaque écran (clair, sombre, en, fr), parcours au clavier seul, live
       # regions, reflow à 320 px ; la console est construite et servie en local par le test (apps/web/e2e). Parcours d'invitation
       # (tâche 3.8) : la console construite contre une instance réelle (PostgreSQL 16 jetable, serveur en écoute), runtime/tests/e2e. À venir :

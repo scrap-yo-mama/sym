@@ -9,7 +9,7 @@
 // (`assert_access_report_first`), robots.txt interdit → `bloquee` sans LLM ni requête.
 import { randomUUID } from 'node:crypto';
 import { DomainPacer, generateMasterKey, inputSchemaIssues, MasterKey, Secret, validateOutput, type RunExecutor } from '@runtime/core';
-import { firstCostInversion } from '@runtime/core/investigation';
+import { firstCostInversion, milestoneHeading, type InvestigationMilestone } from '@runtime/core/investigation';
 import * as net from '@runtime/core/net';
 import {
   keyCheck,
@@ -58,6 +58,18 @@ let price = { in: 1, out: 1 };
 let withExtract = false;
 
 const base = (host: string) => `http://${host}:${client.server.port}`;
+
+/**
+ * État d'enquête de la console (apps/web/src/lib/investigation.ts), chargé à l'exécution : la console a son propre build
+ * (vue-tsc) et n'est pas dans le typecheck du serveur ; seule la forme lue ici est déclarée.
+ */
+const CONSOLE_INVESTIGATION = '../../../web/src/lib/investigation.ts';
+type ConsoleState = { runId: string | null; phase: string | null; budget: { retainedEstUsd: number | null } | null };
+type ConsoleInvestigationLib = {
+  emptyInvestigation(): ConsoleState;
+  ingestEvent(state: ConsoleState, event: { id: string; event: string; data: string }, nowMs: number): boolean;
+  trialCards(state: ConsoleState): { execution: string; network: string | null; state: string }[];
+};
 
 function llmConfig(): LlmConfig {
   return {
@@ -324,6 +336,44 @@ describe('enquête (tâche 2.1)', () => {
     expect(kinds.indexOf('access_report')).toBeGreaterThan(-1);
     expect(kinds.indexOf('access_report')).toBeLessThan(kinds.indexOf('attempt.finished'));
     await expect(withActor(pool, actorA, (tx) => validateInvestigationSchema(tx, queue, { apiId, ownerId: A, trigger: 'rest' }))).rejects.toMatchObject({ code: 'not_awaiting_validation' });
+  });
+
+  test('assert_schema_gate_before_trials, assert_trial_plan_cheapest_first_ui (worker → console) : le plan chiffré et le coût de rejeu partent AVEC la porte, avant tout essai ; assert_milestones_same_labels (journaux)', async () => {
+    fake.setScenario(MODEL, [scripted.json(CONTACTS_PROPOSAL)]);
+    const apiId = await insertApi('zz_test_inv_gate_plan', { allow: ['direct', 'dc_proxy'] });
+    const first = await investigate(apiId, { url: `${base(API_HOST)}/`, description: 'liste des contacts' });
+    expect(first).toMatchObject({ state: 'succeeded', items: 0 });
+    expect(await attemptsOf(first.id)).toEqual([]);
+
+    // Le worker annonce le plan estimé et le coût de rejeu avec la phase de la porte : rien n'est encore essayé.
+    const events = await eventsOf(first.id);
+    type GatePayload = { phase: string; plan?: { execution: string; network: string; est_cost_usd: number }[]; budget: { retained_est_usd?: number } };
+    const gate = events.find((e) => e.kind === 'phase.started' && (e.payload as GatePayload).phase === 'awaiting_schema_validation')?.payload as GatePayload | undefined;
+    expect(gate?.plan?.map((p) => `${p.execution}/${p.network}`)).toEqual(['fetch/direct', 'fetch/dc_proxy']);
+    expect(firstCostInversion(gate!.plan!.map((p) => p.est_cost_usd))).toBe(-1);
+    expect(gate!.budget.retained_est_usd).toBe(gate!.plan![0]!.est_cost_usd);
+
+    // La console range ces mêmes événements (contrat de lib/investigation.ts) : plan chiffré à la porte, toutes les cartes « à essayer ».
+    const consoleLib = (await import(/* @vite-ignore */ CONSOLE_INVESTIGATION)) as ConsoleInvestigationLib;
+    const state = consoleLib.emptyInvestigation();
+    state.runId = first.id;
+    for (const e of events) consoleLib.ingestEvent(state, { id: `${first.id}:${e.seq}`, event: e.kind, data: JSON.stringify(e.payload) }, 0);
+    expect(state.phase).toBe('awaiting_schema_validation');
+    expect(consoleLib.trialCards(state).map((c) => `${c.execution}/${c.network}:${c.state}`)).toEqual(['fetch/direct:planned', 'fetch/dc_proxy:planned']);
+    expect(state.budget?.retainedEstUsd).toBe(gate!.plan![0]!.est_cost_usd);
+
+    // Second run (accord donné) : le plan essayé est celui montré à la porte.
+    const { runId } = await withActor(pool, actorA, (tx) => validateInvestigationSchema(tx, queue, { apiId, ownerId: A, trigger: 'rest' }));
+    expect(await waitRun(runId)).toMatchObject({ state: 'succeeded', strategy_version: 1 });
+    const testing = (await eventsOf(runId)).find((e) => e.kind === 'phase.started' && (e.payload as GatePayload).phase === 'testing')!.payload as GatePayload;
+    expect(testing.plan?.map((p) => `${p.execution}/${p.network}`)).toEqual(gate!.plan!.map((p) => `${p.execution}/${p.network}`));
+
+    // Journaux : chaque jalon atteint est écrit avec la clé et l'intitulé du noyau (« 2/4 Explore »), comme la frise et le récit.
+    const milestones = async (id: string) =>
+      (await pool.query<{ data: { milestone: string; heading: string } }>("SELECT data FROM run_logs WHERE run_id = $1 AND event = 'milestone' ORDER BY seq", [id])).rows.map((r) => r.data);
+    const logged = [...(await milestones(first.id)), ...(await milestones(runId))];
+    expect(logged.map((l) => l.milestone)).toEqual(['reconnaissance', 'schema', 'trials']);
+    expect(logged.map((l) => l.heading)).toEqual(logged.map((l) => milestoneHeading(l.milestone as InvestigationMilestone, 'en')));
   });
 
   test('assert_access_report_first — robots.txt interdit le chemin : rapport d’accès seul, bloquee, 0 requête sur /prive/, aucun appel au LLM', async () => {

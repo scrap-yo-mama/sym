@@ -34,6 +34,7 @@
     "i18n:check": "pnpm --filter @runtime/i18n i18n:parity && pnpm --filter @runtime/i18n i18n:types --check && pnpm --filter @runtime/i18n i18n:pseudo",
     "hooks:install": "git config core.hooksPath runtime/scripts/hooks",
     "ci:local": "node scripts/ci-local.ts",
+    "visual:image": "node scripts/visual-image.ts",
     "gen:openapi": "node scripts/gen-openapi-client.ts",
     "check:openapi-client": "node scripts/gen-openapi-client.ts --check",
     "package:extension": "node scripts/extension-package.ts",

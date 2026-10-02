@@ -7,12 +7,15 @@ import { test as base, expect, type Page } from '@playwright/test';
 import { watchCspViolations } from './csp.ts';
 import { anonymousRoutes, dataRoutes, signedInRoutes } from './fixtures.ts';
 import { startConsole, type ApiRoutes, type ConsoleApp } from './harness.ts';
+import { routePseudoLocale } from './pseudo.ts';
 
 export type Locale = 'en' | 'fr';
 export type Theme = 'light' | 'dark';
+/** Langue de l'interface du test ; `pseudo` : catalogue anglais pseudo-localisé (projet `ui-pseudo`, e2e/pseudo.ts). */
+export type UiLocale = Locale | 'pseudo';
 
 // `locale` est déjà une option de Playwright (langue du navigateur) : les options de la console portent un préfixe.
-type Options = { uiLocale: Locale; uiTheme: Theme };
+type Options = { uiLocale: UiLocale; uiTheme: Theme };
 type Fixtures = {
   /** Page ouverte sur la console ; `open` pose les routes de l'API (session ouverte, sauf `anonymous`) puis charge le chemin. */
   consolePage: { page: Page; app: ConsoleApp; errors: string[]; cspViolations: string[]; open: (path: string, options?: { anonymous?: boolean; routes?: ApiRoutes | ((locale: Locale, theme: Theme) => ApiRoutes) }) => Promise<void> };
@@ -31,7 +34,10 @@ export const test = base.extend<Fixtures & Options, WorkerFixtures>({
     },
     { scope: 'worker', timeout: 180_000 },
   ],
-  consolePage: async ({ page, app, uiLocale, uiTheme }, use) => {
+  consolePage: async ({ page, app, uiLocale: ui, uiTheme }, use) => {
+    // La pseudo-locale remplace le catalogue anglais : le compte et la page sont en `en`.
+    const uiLocale: Locale = ui === 'pseudo' ? 'en' : ui;
+    if (ui === 'pseudo') await routePseudoLocale(page);
     const errors = watchConsole(page);
     const cspViolations = await watchCspViolations(page.context());
     await seedPreferences(page, uiLocale, uiTheme);

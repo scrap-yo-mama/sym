@@ -164,6 +164,7 @@ describe('catalogue : colonnes', () => {
     expect(rowOf(html, 'zz-b')).not.toContain('computer-required');
   });
 
+  // 3.17 (planche Catalogue, D-60) : exécution et réseau partagent la colonne « Mode · réseau » ; les colonnes de 06 suivent.
   test('une API est un lien vers sa fiche ; le tableau a une légende et des en-têtes de colonne', async () => {
     const html = await renderHtml(ApiCatalogTable, { apis: [apiSummary({ slug: 'zz-books' })] });
     expect(html).toContain('href="/apis/zz-books"');
