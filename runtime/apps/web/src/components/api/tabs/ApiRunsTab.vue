@@ -148,8 +148,8 @@ const canRelaunch = computed(() => props.detail.status !== 'bloquee' && !props.d
                     <Button variant="outline" size="xs" as-child><a :href="datasetExportUrl(run.dataset_id, 'json')" download>{{ t('runsTab.exportJson') }}</a></Button>
                     <Button variant="outline" size="xs" as-child><a :href="datasetExportUrl(run.dataset_id, 'csv')" download>{{ t('runsTab.exportCsv') }}</a></Button>
                   </template>
-                  <Button v-if="!detail.metadata_only && runs.isOwn(run)" variant="outline" size="xs" data-testid="show-repairs" @click="showRepairs(run)">{{ t('repairs.show') }}</Button>
                   <Button v-if="canRelaunch && runs.isOwn(run)" variant="outline" size="xs" @click="startRelaunch(run)">{{ t('actions.relaunch') }}</Button>
+                  <Button v-if="!detail.metadata_only && runs.isOwn(run)" variant="outline" size="xs" data-testid="show-repairs" @click="showRepairs(run)">{{ t('repairs.show') }}</Button>
                 </div>
               </td>
             </tr>
