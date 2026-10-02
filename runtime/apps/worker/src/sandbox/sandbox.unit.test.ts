@@ -256,6 +256,8 @@ describe('utilisateur dédié, lanceur et plafond CPU (08 §3)', () => {
     expect(plain.command).toBe('/bin/sh');
     expect(plain.args.slice(2)).toEqual(['7', '/n', '--x', 'c.js']);
     expect(plain.args[1]).toMatch(/ulimit -S -t "\$0" && ulimit -H -t .* && exec \/usr\/bin\/env -i /);
+    // Linux : aucun vidage mémoire (assert_sandbox_no_core_dump) : RLIMIT_CORE d'un octet et coredump_filter nul, avant l'exec.
+    expect(plain.args[1]).toMatch(/&& \{ \[ ! -e \/proc\/self\/coredump_filter \] \|\| \{ echo 0 > \/proc\/self\/coredump_filter && \/usr\/bin\/prlimit --pid \$\$ --core=1:1; \}; \} && exec /);
     const launched = spawnPlan({ node: '/n', nodeArgs: [], script: 'c.js', cpuSeconds: 3, launcher: '/l', uid: 1500, gid: 1501 });
     // Sous no-new-privileges (Render), le lanceur n'obtient ses capacités de fichier que si son appelant les détient : il
     // doit donc être exécuté par le worker lui-même, jamais par un shell intermédiaire (F-20261001-R01).
