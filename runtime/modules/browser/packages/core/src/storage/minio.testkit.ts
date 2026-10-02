@@ -6,10 +6,10 @@
 import { spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { Secret } from '../crypto/redact.js';
-import { S3BlobStore, type S3Options } from './s3-store.js';
+import type { S3BlobStore, S3Options } from './s3-store.js';
 
 /** MinIO 2025-07-23 (image Bitnami « legacy », l'image `minio/minio` n'étant plus distribuée), épinglé par empreinte. */
-export const MINIO_IMAGE = 'bitnamilegacy/minio:2025.7.23@sha256:8935e75fa5d11295c17171e4aa49efe390a1193cd7f12e4d21b92af9ffef09d7';
+const MINIO_IMAGE = 'bitnamilegacy/minio:2025.7.23@sha256:8935e75fa5d11295c17171e4aa49efe390a1193cd7f12e4d21b92af9ffef09d7';
 
 export type S3Fixture = { options: (bucket: string) => S3Options; stop: () => void };
 

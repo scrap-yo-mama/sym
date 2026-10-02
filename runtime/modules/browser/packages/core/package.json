@@ -4,7 +4,7 @@
   "version": "0.0.0",
   "type": "module",
   "license": "AGPL-3.0-only",
-  "description": "SYM Browser : chiffrement enveloppe AES-256-GCM, MASTER_KEY, rekey, masquage des journaux (même schéma et mêmes vecteurs de test que SYM) ; configuration (tâche 0.4).",
+  "description": "SYM Browser : chiffrement enveloppe AES-256-GCM, MASTER_KEY, rekey, masquage des journaux (même schéma et mêmes vecteurs de test que SYM) ; configuration (tâche 0.4) ; ObjectStore disk et s3 chiffré par enveloppe, URL signées, rétention et purge (tâche 3.0).",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {

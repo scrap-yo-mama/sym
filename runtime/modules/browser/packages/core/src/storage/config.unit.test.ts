@@ -24,7 +24,7 @@ describe('configuration de l’ObjectStore', () => {
     expect(JSON.stringify(config)).not.toContain(secret);
 
     const fromFile = objectStoreConfigFromEnv(
-      { OBJECT_STORE: 's3', S3_BUCKET: 'b', S3_ACCESS_KEY_ID_FILE: '/run/secrets/id', S3_SECRET_ACCESS_KEY_FILE: '/run/secrets/key' },
+      { OBJECT_STORE: 's3', S3_BUCKET: 'symb', S3_ACCESS_KEY_ID_FILE: '/run/secrets/id', S3_SECRET_ACCESS_KEY_FILE: '/run/secrets/key' },
       { readFile: (p) => (p.endsWith('/id') ? 'id-from-file\n' : `${secret}\n`) },
     );
     if (fromFile.type !== 's3') throw new Error('s3 attendu');
@@ -38,11 +38,11 @@ describe('configuration de l’ObjectStore', () => {
       [{ OBJECT_STORE: 'ftp' }, /OBJECT_STORE/],
       [{ OBJECT_DIR: 'relatif/objets' }, /OBJECT_DIR/],
       [{ OBJECT_STORE: 's3', S3_ACCESS_KEY_ID: 'id', S3_SECRET_ACCESS_KEY: secret }, /S3_BUCKET/],
-      [{ OBJECT_STORE: 's3', S3_BUCKET: 'b', S3_SECRET_ACCESS_KEY: secret }, /S3_ACCESS_KEY_ID/],
-      [{ OBJECT_STORE: 's3', S3_BUCKET: 'b', S3_ACCESS_KEY_ID: 'id' }, /S3_SECRET_ACCESS_KEY/],
-      [{ OBJECT_STORE: 's3', S3_BUCKET: 'b', S3_ACCESS_KEY_ID: 'id', S3_SECRET_ACCESS_KEY: secret, S3_SECRET_ACCESS_KEY_FILE: '/x' }, /S3_SECRET_ACCESS_KEY_FILE/],
-      [{ OBJECT_STORE: 's3', S3_BUCKET: 'b', S3_ACCESS_KEY_ID: 'id', S3_SECRET_ACCESS_KEY: secret, S3_ENDPOINT: 'ftp://x' }, /S3_ENDPOINT/],
-      [{ OBJECT_STORE: 's3', S3_BUCKET: 'b', S3_ACCESS_KEY_ID: 'id', S3_SECRET_ACCESS_KEY: secret, S3_ENDPOINT: `https://u:${secret}@x` }, /S3_ENDPOINT/],
+      [{ OBJECT_STORE: 's3', S3_BUCKET: 'symb', S3_SECRET_ACCESS_KEY: secret }, /S3_ACCESS_KEY_ID/],
+      [{ OBJECT_STORE: 's3', S3_BUCKET: 'symb', S3_ACCESS_KEY_ID: 'id' }, /S3_SECRET_ACCESS_KEY/],
+      [{ OBJECT_STORE: 's3', S3_BUCKET: 'symb', S3_ACCESS_KEY_ID: 'id', S3_SECRET_ACCESS_KEY: secret, S3_SECRET_ACCESS_KEY_FILE: '/x' }, /S3_SECRET_ACCESS_KEY_FILE/],
+      [{ OBJECT_STORE: 's3', S3_BUCKET: 'symb', S3_ACCESS_KEY_ID: 'id', S3_SECRET_ACCESS_KEY: secret, S3_ENDPOINT: 'ftp://x' }, /S3_ENDPOINT/],
+      [{ OBJECT_STORE: 's3', S3_BUCKET: 'symb', S3_ACCESS_KEY_ID: 'id', S3_SECRET_ACCESS_KEY: secret, S3_ENDPOINT: `https://u:${secret}@x` }, /S3_ENDPOINT/],
       [{ OBJECT_STORE: 's3', S3_BUCKET: 'B/../x', S3_ACCESS_KEY_ID: 'id', S3_SECRET_ACCESS_KEY: secret }, /S3_BUCKET/],
     ];
     for (const [env, pattern] of cases) {

@@ -32,6 +32,7 @@ Contrat : `runtime/packages/contracts` (`@sym/contracts`, MIT, sous-chemin `brow
 - Sans l'image Docker : `pnpm --filter @sym-browser/module ci:local --skip-image`.
 - Tests d'un paquet : `pnpm --filter @sym-browser/gateway test` ; tout le module : `pnpm --filter "./modules/browser/**" test`.
 - Types : `pnpm --filter "./modules/browser/**" typecheck` ; lint : `pnpm exec eslint modules/browser packages/contracts`.
+- ObjectStore `s3` (`packages/core/src/storage`) : ses tests lancent un MinIO jetable en conteneur (Docker requis, obligatoire sous `CI`, sauté avec avertissement sinon) ; point d'accès externe : `SYMB_TEST_S3_ENDPOINT`, `SYMB_TEST_S3_ACCESS_KEY_ID`, `SYMB_TEST_S3_SECRET_ACCESS_KEY`.
 - `MASTER_KEY` de développement : `pnpm --filter @sym-browser/core keygen` (après build ; jamais committée ni journalisée). Vecteurs de SYM rejoués : `packages/core/vectors/sym-crypto.json`.
 - Image : `docker build -f modules/browser/Dockerfile -t sym-browser:dev .` puis `docker run --rm --security-opt seccomp=modules/browser/deploy/seccomp-chromium.json sym-browser:dev`.
 
