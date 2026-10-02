@@ -6,7 +6,7 @@
 //   - nœud : pool de Chromium 153 (1.1), Chromium chauds pour `shared` et Chromium dédié pour `dedicated` (1.3, 1.4),
 //     superviseur des sessions sur la base (1.2), egress par session (1.5), relais interne (2.3) ;
 //   - le lanceur du mode `all` relie la passerelle au superviseur du nœud dans le processus (types.ts de la passerelle).
-// Doublure restante : l'authentification des clés (argon2id, tâche 2.1, non fusionnée) est une table en mémoire.
+// Authentification : vraies clés argon2id et jetons HMAC de la tâche 2.1 (branchés à l'intégration).
 // Le binaire `SYMB_MODE=all` ne sert pas encore l'API (aucune tâche fusionnée ne l'a câblé) : ce banc en est l'assemblage.
 // Destination : le site de test de la tâche 0.5 sur 127.0.0.1, nommé `site-a.test` (résolveur et hôte privé admis du
 // banc, comme tests/cdp-compat.chromium.test.ts). Prérequis : Docker, utilisateur non root, Chromium de Playwright 1.63.

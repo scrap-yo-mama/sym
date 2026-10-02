@@ -55,18 +55,27 @@ export async function startS3(): Promise<S3Fixture> {
   }
 }
 
-/** Crée le seau, en réessayant tant que MinIO démarre (l'image Bitnami redémarre le serveur après sa configuration). */
+/**
+ * Crée le seau, en réessayant tant que MinIO démarre. L'image Bitnami démarre un serveur provisoire, le configure puis le
+ * redémarre : un premier succès peut précéder ce redémarrage (connexions coupées, « other side closed », sous charge). Le
+ * serveur n'est tenu pour prêt qu'après `STABLE_PROBES` succès consécutifs (création idempotente du seau), espacés de 500 ms.
+ */
+const STABLE_PROBES = 6;
+
 export async function createBucket(store: S3BlobStore, deadlineMs = 120_000): Promise<void> {
   const deadline = Date.now() + deadlineMs;
   let last: unknown;
+  let stable = 0;
   while (Date.now() < deadline) {
     try {
       await store.createBucket();
-      return;
+      stable += 1;
+      if (stable >= STABLE_PROBES) return;
     } catch (error) {
       last = error;
-      await sleep(500);
+      stable = 0;
     }
+    await sleep(500);
   }
   throw new Error(`MinIO : seau non créé (${(last as Error)?.message ?? 'délai dépassé'})`);
 }
