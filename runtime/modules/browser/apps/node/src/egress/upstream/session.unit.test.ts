@@ -6,14 +6,14 @@
 import { connect, type Socket } from 'node:net';
 import { inspect } from 'node:util';
 import { afterAll, afterEach, beforeAll, describe, expect, test } from 'vitest';
-import { MasterKey, kekFor } from '@sym-browser/core';
+import { MasterKey, findEnvVariable, kekFor } from '@sym-browser/core';
 import { PROXY_HTTP_CREDENTIALS, PROXY_SOCKS5_CREDENTIALS } from '../../../../../fixtures/src/config.ts';
 import { startHttpProxy } from '../../../../../fixtures/src/http-proxy.ts';
 import { startSite, type SiteHandle } from '../../../../../fixtures/src/site.ts';
 import { startSocks5Proxy } from '../../../../../fixtures/src/socks5-proxy.ts';
 import { startCountingRelay, type CountingRelay } from '../../testing/egress-fixtures.js';
 import { createEgressGuard, startSessionEgress, type EgressEvent } from '../index.js';
-import { ProxyUnreachableError, UpstreamError, createMemoryProxyProfileStore, createProxyProfiles, startUpstreamSessionEgress, type UpstreamSession } from './index.js';
+import { DEFAULT_IP_ECHO_URL, ProxyUnreachableError, UpstreamError, createMemoryProxyProfileStore, createProxyProfiles, startUpstreamSessionEgress, type UpstreamSession } from './index.js';
 
 type ProxyHandle = Awaited<ReturnType<typeof startHttpProxy>>;
 const TENANT = '00000000-0000-4000-8000-0000000000a1';
@@ -70,6 +70,11 @@ async function start(upstream: Parameters<typeof startUpstreamSessionEgress>[0][
 }
 
 describe('création avec proxy amont (04c § 2.3)', () => {
+  test('point d’écho par défaut : celui du catalogue de configuration (SYMB_IP_ECHO_URL), en HTTPS', () => {
+    expect(findEnvVariable('SYMB_IP_ECHO_URL')?.default).toBe(DEFAULT_IP_ECHO_URL);
+    expect(new URL(DEFAULT_IP_ECHO_URL).protocol).toBe('https:');
+  });
+
   test('http avec identifiants : test de connectivité (exitIp, latencyMs), puis navigation par l’amont seulement', async () => {
     const before = httpProxy.journal.entries().length;
     const { session } = await start({ type: 'http', host: '127.0.0.1', port: httpProxy.port, ...PROXY_HTTP_CREDENTIALS });
