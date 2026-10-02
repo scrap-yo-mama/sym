@@ -244,6 +244,28 @@ describe('infinite_scroll : défilement scripté', () => {
     expect(out.records.map((r) => r['text'])).toEqual(Array.from({ length: 25 }, (_, i) => `item-${i}`));
   });
 
+  it('assert_infinite_scroll_timeout_truncated — un défilement qui expire sans nouvel élément (site lent) n’est pas une fin naturelle : scroll_timeout, sortie tronquée', async () => {
+    const page = (count: number): HttpExchange => ({
+      status: 200,
+      headers: { 'content-type': 'text/html' },
+      body: `<html><body>${Array.from({ length: count }, (_, i) => `<div class="feed-item">item-${i}</div>`).join('')}</body></html>`,
+      url: 'http://zz_test_scroll.localhost/',
+    });
+    const f = { transport: (async () => page(10)) as Transport };
+    let n = 0;
+    // 1er défilement : 10 éléments de plus ; 2e : rien dans le délai (DOM inchangé), réseau encore occupé.
+    const scroll = async (): Promise<HttpExchange> => ((n += 1) === 1 ? page(20) : { ...page(20), scrollTimedOut: true });
+    const out = await runDeclarative({ spec: feedSpec(), input: {}, transport: f.transport, scroll, signal });
+    expect(out).toMatchObject({ ok: true, stop: 'scroll_timeout', truncated: true });
+    if (out.ok) expect(out.records).toHaveLength(20);
+  });
+
+  it('assert_infinite_scroll_timeout_truncated — le même défilement vide, réseau au calme (scrollTimedOut absent), est la fin naturelle : records_empty, non tronquée', async () => {
+    const f = feed(10);
+    const out = await runDeclarative({ spec: feedSpec(), input: {}, transport: f.transport, scroll: f.scroll, signal });
+    expect(out).toMatchObject({ ok: true, stop: 'records_empty', truncated: false });
+  });
+
   it('sans capacité de défilement (E1 : pas de navigateur), la page 1 est livrée puis l’exécuteur s’arrête sur `unsupported`', async () => {
     const f = feed();
     const out = await runDeclarative({ spec: feedSpec(), input: {}, transport: f.transport, signal });

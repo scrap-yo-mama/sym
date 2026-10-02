@@ -13,7 +13,7 @@ import { useSession, type Permission } from '@/composables/useSession';
 
 const { t } = useI18n();
 const { can } = useSession();
-/** Sections des réglages (06 § 1, figure 1). Sécurité et SSO n'apparaissent que si `can()` l'autorise (owner, 13 § 2). */
+/** Sections des réglages (06 § 1, figure 1). Sécurité, Identité du robot et SSO n'apparaissent que si `can()` l'autorise (13 § 2 : Sécurité et SSO pour l'owner, Identité du robot pour l'admin et l'owner). */
 const SECTIONS: readonly { id: string; permission?: Permission }[] = [
   { id: 'models' },
   { id: 'proxies' },
@@ -23,6 +23,7 @@ const SECTIONS: readonly { id: string; permission?: Permission }[] = [
   { id: 'diagnostic' },
   { id: 'account' },
   { id: 'security', permission: 'settings:security:write' },
+  { id: 'robot', permission: 'settings:identity:write' },
   { id: 'sso', permission: 'settings:sso:write' },
 ];
 const sections = computed(() => SECTIONS.filter((section) => !section.permission || can(section.permission)));

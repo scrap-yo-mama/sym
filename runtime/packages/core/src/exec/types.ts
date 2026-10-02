@@ -9,6 +9,11 @@ export type HttpExchange = {
   readonly headers: Readonly<Record<string, string>>;
   readonly body: string;
   readonly url: string;
+  /**
+   * Défilement seulement (`ScrollTransport`) : le délai est écoulé sans nouvel élément ET le réseau de la page était encore
+   * occupé. L'absence de nouvel élément n'est alors pas une fin de flux (site lent) : la sortie est tronquée (`scroll_timeout`).
+   */
+  readonly scrollTimedOut?: boolean;
 };
 
 /**

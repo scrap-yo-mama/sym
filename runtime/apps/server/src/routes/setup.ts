@@ -3,6 +3,8 @@
 // création de l'owner, puis 404 pour toujours (`assert_bootstrap_once`). Le jeton n'est ni stocké ni réaffiché.
 import { createHash, timingSafeEqual } from 'node:crypto';
 import { hashPassword, passwordPolicyViolation } from '@runtime/core';
+import { InstanceContactError, normalizeInstanceContact } from '@runtime/core/access';
+import { writeInstanceContactSetting } from '@runtime/db';
 import type { FastifyInstance } from 'fastify';
 import type { ServerContext } from '../context.js';
 import { localeFromAcceptLanguage } from '../locale.js';
@@ -18,10 +20,11 @@ const bodySchema = {
     email: { type: 'string', maxLength: 254, pattern: '^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$' },
     password: { type: 'string', minLength: 1, maxLength: 1024 },
     displayName: { type: 'string', maxLength: 100 },
+    instanceContact: { type: 'string', maxLength: 400 },
   },
 } as const;
 
-type Body = { token: string; email: string; password: string; displayName?: string };
+type Body = { token: string; email: string; password: string; displayName?: string; instanceContact?: string };
 
 const digest = (v: string) => createHash('sha256').update(v, 'utf8').digest();
 
@@ -51,6 +54,16 @@ export function setupRoutes(app: FastifyInstance, ctx: ServerContext): void {
     if (ctx.adminEmail && email !== ctx.adminEmail) return fail('email_not_allowed');
     const violation = passwordPolicyViolation(request.body.password);
     if (violation) return sendError(reply, 400, 'weak_password', `mot de passe refusé (${violation})`);
+    // Contact d'instance (17 §5) : facultatif ici (modifiable ensuite dans Réglages), validé avant toute écriture.
+    let instanceContact: string | null = null;
+    if (request.body.instanceContact !== undefined && request.body.instanceContact.trim() !== '') {
+      try {
+        instanceContact = normalizeInstanceContact(request.body.instanceContact);
+      } catch (error) {
+        if (error instanceof InstanceContactError) return sendError(reply, 400, 'invalid_instance_contact', error.message);
+        throw error;
+      }
+    }
 
     const passwordHash = await hashPassword(request.body.password);
     const client = await ctx.pool.connect();
@@ -67,6 +80,7 @@ export function setupRoutes(app: FastifyInstance, ctx: ServerContext): void {
         "INSERT INTO auth_accounts (user_id, provider_id, account_id, password_hash) VALUES ($1, 'credential', $2, $3)",
         [userId, userId, passwordHash],
       );
+      if (instanceContact !== null) await writeInstanceContactSetting(client, instanceContact);
       await client.query('COMMIT');
     } catch (error) {
       await client.query('ROLLBACK').catch(() => undefined);

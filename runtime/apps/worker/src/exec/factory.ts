@@ -9,10 +9,11 @@
 import { DomainPacer, type SandboxEngine } from '@runtime/core';
 import { SsrfGuard, ssrfPolicyFromEnv, startEgressProxy, type EgressProxy } from '@runtime/core/net';
 import { STAGEHAND_VERSION, StagehandEngine } from '@runtime/agent';
-import { resolveIdentifyInstance, resolveInstanceContact, RobotsCache } from '@runtime/core/access';
-import { PgPacingStore, readIdentifyInstanceSetting, readInstanceContactSetting, readLlmSettings, secretStore } from '@runtime/db';
+import { identityFromEnv, resolveIdentifyInstance, resolveInstanceContact, RobotsCache } from '@runtime/core/access';
+import { PgPacingStore, publishRobotEngine, readIdentifyInstanceSetting, readInstanceContactSetting, readLlmSettings, secretStore } from '@runtime/db';
 import { createLlmClient, llmConfigFromSettings, roleProblems, roleTarget, type LlmConfig, type LlmNote } from '@runtime/llm';
 import { launchAgentBrowser } from '../browser/agent-browser.js';
+import { installedEngineIdentity } from '../browser/engine-identity.js';
 import { cgroupMemoryLimitBytes, cgroupMemoryWorkingSetBytes } from '../browser/cgroup.js';
 import { BrowserPool, playwrightLauncher } from '../browser/pool.js';
 import { chromiumSandboxCheck, seccompMode, type ChromiumSandboxStatus } from '../browser/sandbox-check.js';
@@ -165,6 +166,15 @@ export function productionExecutorFactory(env: Readonly<Record<string, string | 
     // (réglage de l'assistant, puis INSTANCE_CONTACT), identification de l'instance relue aussi (réglage `identify_instance`,
     // puis IDENTIFY_INSTANCE, désactivée par défaut), version annoncée dans le jeton du User-Agent.
     const robotsCache = new RobotsCache();
+    // Moteur embarqué publié pour la console (tâche 3.8b) : elle en déduit le User-Agent réel, affiché en lecture seule, avec la
+    // version que CE worker annonce dans le jeton et les replis de SON environnement (IDENTIFY_INSTANCE, INSTANCE_CONTACT), que le
+    // serveur ne voit pas : l'aperçu de la console est ce qui part sur le fil. Best-effort : un échec ne retient pas le démarrage.
+    try {
+      const fallbacks = identityFromEnv(env);
+      await publishRobotEngine(pool, { ...installedEngineIdentity(), productVersion: config.version, identifyInstanceEnv: fallbacks.identifyInstance, instanceContactEnv: fallbacks.instanceContact });
+    } catch (error) {
+      logger.warn({ err: error instanceof Error ? error.message : String(error) }, 'moteur embarqué : publication impossible');
+    }
     const instanceContact = async (): Promise<string | null> => resolveInstanceContact(await readInstanceContactSetting(pool), env);
     const identifyInstance = async (): Promise<boolean> => resolveIdentifyInstance(await readIdentifyInstanceSetting(pool), env);
     const strategy = createStrategyRuntime({ pool, guard, pacer, browsers, secrets, logger, tunnel, script: { engine, loadScript: loadInlineScript }, agent, robotsCache, instanceContact, identifyInstance, version: config.version });
