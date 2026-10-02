@@ -406,6 +406,10 @@ jobs:
         with:
           node-version-file: runtime/.node-version
       - run: pnpm install --frozen-lockfile
+      # Les tests sur Chromium réels lancent Chromium avec son bac à sable (jamais --no-sandbox), comme les jobs security et
+      # image : Ubuntu 24.04 restreint par défaut les espaces de noms utilisateur non privilégiés.
+      - name: Bac à sable de Chromium (espaces de noms utilisateur)
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - name: CI du module SYM Browser
         run: node modules/browser/scripts/ci-local.ts
 
