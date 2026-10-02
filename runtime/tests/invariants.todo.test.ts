@@ -77,6 +77,10 @@ describe("invariants (à implémenter)", () => {
   // D-49 (2.3) : la quarantaine et l'enveloppe `RunResult.rejected` sont livrées (packages/db/src/rejected.ts) ; leur
   // exposition REST et MCP attend 3.1 et 3.2 (non fusionnées au moment de 2.3) et se joue en 4.2.
   test.todo("assert_rejected_items_quarantined — exposition REST et MCP : RunResult.rejected sur get_run et run_api, get_items(rejected: true) à l'appelant du run seul, 404 au propriétaire d'une API instance (05 §4.1)"); // D-49, tâche(s) 4.2 (après 3.1, 3.2)
+  // 2.12 (mémoire, profil, juge) : le banc A/B est livré par 2.8, non fusionnée au moment de 2.12 ; les bras « mémoire »
+  // et « ablation de la fiche » et la détection des défauts silencieux se jouent en 4.2.
+  test.todo("assert_silent_defects_detected — banc 2.8 : défauts silencieux (constante, sentinelles, motif, doublons, valeur d'énumération) détectés par le profil"); // 2.12, joué en 4.2
+  test.todo("bras « mémoire » du banc A/B (r1 R18) et ablation du contenu de la fiche (r4 R10) avant de figer run_profiles"); // 2.12, après 2.8, joué en 4.2
   // RGPD (1.8) : assert_retention_purge, assert_erasure_complete et assert_no_personal_data_in_logs sont dans
   // packages/db/src/retention/retention.integration.test.ts ; câblage worker (RunContext.personal, RunContext.excludeSubjects,
   // rekey) dans apps/worker/src/worker.integration.test.ts. Câblage par l'exécuteur réel (D-28, tâche 1.6) : items extraits
