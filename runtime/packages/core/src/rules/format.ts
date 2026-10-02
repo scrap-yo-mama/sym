@@ -45,7 +45,7 @@ export class RuleFormatError extends Error {
 
 /** Fichier normalisé : BOM retiré, fins de ligne LF. */
 export function normalizeRuleContent(text: string): string {
-  return text.replace(/^﻿/, '').replace(/\r\n?/g, '\n');
+  return text.replace(/^\uFEFF/, '').replace(/\r\n?/g, '\n');
 }
 
 export function ruleSha256(content: string): string {

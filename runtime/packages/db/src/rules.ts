@@ -128,6 +128,8 @@ export async function putRule(pool: pg.Pool, actor: RuleActor, input: { readonly
   }
   // `api:<slug>` : API du propriétaire du fichier seulement, résolue par identifiant.
   const fileOwner = instanceWrite && (doc.kind === 'instance' || existing?.owner_id === null) ? null : (existing?.owner_id ?? actor.userId);
+  // Un fichier installé pour l'instance (sans propriétaire) reste d'instance : il se modifie ou se réinitialise, jamais ne se privatise.
+  if (fileOwner === null && visibility !== 'instance') throw new RuleServiceError('invalid_rule', 'fichier d’instance : visibility instance obligatoire');
   const slugs = doc.applies_to.filter((s) => s.startsWith('api:')).map((s) => s.slice(4));
   const targetIds: string[] = [];
   if (slugs.length > 0) {

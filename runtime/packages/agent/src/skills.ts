@@ -9,7 +9,7 @@ import { READ_SKILL_TOOL, type SkillReader } from '@runtime/core';
 import type { ChatMessage, LlmClient, ToolDef } from '@runtime/llm';
 
 export const SKILL_PHASE_MAX_CALLS = 3;
-export const SKILL_PHASE_MAX_TOKENS = 512;
+const SKILL_PHASE_MAX_TOKENS = 512;
 
 const TOOL: ToolDef = { type: 'function', function: { name: READ_SKILL_TOOL.name, description: READ_SKILL_TOOL.description, parameters: READ_SKILL_TOOL.parameters } };
 
@@ -49,7 +49,7 @@ export async function readSkillsPhase(
     if (calls.length === 0) break;
     messages.push({ role: 'assistant', content: message.content ?? null, tool_calls: calls });
     for (const [index, call] of calls.entries()) {
-      let name: unknown = null;
+      let name: unknown;
       try {
         name = (JSON.parse(call.function.arguments) as { name?: unknown }).name;
       } catch {
