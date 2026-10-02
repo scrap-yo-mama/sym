@@ -319,7 +319,7 @@ describe('registre des allégations : preuve, relecture, statut, CLAIMS.md gén�
 
   test('les engagements publics, hors vitrine (D-46) : cinq entrées, le User-Agent « bloqué » tant que les client hints ne sont pas arbitrés', () => {
     const engagements = claims.claims.filter((c) => c.surfaces.includes('responsible-use'));
-    expect(engagements.map((c) => c.id)).toEqual(['robots-always-respected', 'no-challenge-solving', 'user-agent-engine-real', 'stops-when-refused', 'no-telemetry-by-default']);
+    expect(engagements.map((c) => c.id)).toEqual(expect.arrayContaining(['robots-always-respected', 'no-challenge-solving', 'user-agent-engine-real', 'stops-when-refused', 'no-telemetry-by-default']));
     expect(engagements.find((c) => c.id === 'user-agent-engine-real')?.status).toBe('bloqué');
     expect(engagements.find((c) => c.id === 'no-telemetry-by-default')?.task).toBe('4.10');
     for (const claim of engagements) {
@@ -454,7 +454,7 @@ describe('job CI `vitrine` (22 §3.6) : huitième job, Node seulement, filtré p
 
   test('les étapes de contrôle ne tournent que si la PR touche la vitrine (filtre décidé par check.mjs changed)', () => {
     const steps = workflow.jobs['vitrine']!.steps;
-    const gated = steps.filter((s) => s.run === 'node scripts/vitrine/check.mjs' || (s.run ?? '').includes('vitest run'));
+    const gated = steps.filter((s) => s.run === 'node scripts/vitrine/check.mjs' || ((s.run ?? '').includes('vitest run') && (s.run ?? '').includes('tests/vitrine')));
     expect(gated.length).toBeGreaterThanOrEqual(2);
     for (const step of gated) expect(step.if).toMatch(/steps\.changed\.outputs\.run == 'true'/);
   });

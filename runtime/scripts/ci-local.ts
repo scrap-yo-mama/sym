@@ -26,6 +26,12 @@ const STEPS: Step[] = [
   // Tâche 4.12 : job `vitrine` (README en et fr, visuels et budgets, registre des allégations, licence, surface du dépôt), Node seulement.
   { job: 'vitrine', name: 'vitrine : contrôles statiques', cmd: ['node', 'scripts/vitrine/check.mjs'] },
   { job: 'vitrine', name: 'vitrine : tests nommés', cmd: ['pnpm', 'vitest', 'run', '--project', 'unit', 'tests/vitrine', 'tests/public-showcase.unit.test.ts'] },
+  // Tâche 4.11 : job `vitrine` (critère : tous les assert_landing_* verts dans ce job). Les gates de contenu et du site construit
+  // (vitest, projets unit et contract), puis le volet Chromium sur la préproduction (build de production servi comme GitHub Pages, sans
+  // déploiement) : cookie, requêtes tierces, traceurs, CSP vue par le navigateur, axe, mouvement, budgets de poids ; puis la sonde.
+  { job: 'vitrine', name: 'landing : contenu et site construit', cmd: ['pnpm', 'vitest', 'run', '--project', 'unit', '--project', 'contract', 'apps/docs/src/landing'] },
+  { job: 'vitrine', name: 'landing : gates Chromium sur la préproduction', cmd: ['pnpm', '--filter', '@runtime/docs', 'test:e2e'] },
+  { job: 'vitrine', name: 'landing : sonde de préproduction', cmd: ['pnpm', '--filter', '@runtime/docs', 'landing:probe', '--preprod'] },
   { job: 'unit', name: 'tests unitaires + couverture', cmd: ['pnpm', 'test:coverage'] },
   // Étage S : garde SSRF sur fetch et Chromium (Playwright). Chromium : pnpm exec playwright install chromium.
   { job: 'security', name: 'sécurité (SSRF, Chromium)', cmd: ['pnpm', 'test:security'] },

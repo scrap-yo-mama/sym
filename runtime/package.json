@@ -47,7 +47,10 @@
     "docs:test": "vitest run --project unit --project contract apps/docs",
     "docs:quickstart": "node scripts/docs-quickstart.ts",
     "gen:env-docs": "node scripts/gen-env-docs.ts",
-    "check:env-docs": "node scripts/gen-env-docs.ts --check"
+    "check:env-docs": "node scripts/gen-env-docs.ts --check",
+    "landing:test": "vitest run --project unit --project contract apps/docs/src/landing && pnpm --filter @runtime/docs test:e2e",
+    "check:landing-go": "pnpm --filter @runtime/docs landing:go",
+    "landing:probe": "pnpm --filter @runtime/docs landing:probe"
   },
   "devDependencies": {
     "@eslint/js": "catalog:",
