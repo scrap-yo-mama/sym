@@ -24,8 +24,10 @@ export async function saveStepRepairedStrategy(
     if (current === undefined) throw new Error('API introuvable pour le propriétaire');
     const version = (await tx.query<{ v: number }>('SELECT COALESCE(MAX(version), 0) + 1 AS v FROM strategy_versions WHERE api_id = $1', [args.apiId])).rows[0]!.v;
     await tx.query(
-      `INSERT INTO strategy_versions (api_id, version, owner_id, project_id, execution, network, spec, est_cost_usd, created_by, parent_version, patch, compilable, archive_reason)
-       VALUES ($1, $2, $3, $4, 'hybrid', $5, $6, $7, 'repair', $8, $9::jsonb, 'yes', $10)`,
+      // La source des étapes (intent, pre, post) est reprise de la version parente : `post` est immuable en réparation.
+      `INSERT INTO strategy_versions (api_id, version, owner_id, project_id, execution, network, spec, est_cost_usd, created_by, parent_version, patch, compilable, archive_reason, source_steps)
+       VALUES ($1, $2, $3, $4, 'hybrid', $5, $6, $7, 'repair', $8, $9::jsonb, 'yes', $10,
+               (SELECT source_steps FROM strategy_versions WHERE api_id = $1 AND version = $8))`,
       [args.apiId, version, args.ownerId, current.project_id, args.network, JSON.stringify(args.spec), args.estCostUsd ?? null, args.parentVersion, JSON.stringify(args.patch), args.validated ? null : 'repair_not_validated'],
     );
     const promoted = args.validated && current.current_strategy_version === args.parentVersion;

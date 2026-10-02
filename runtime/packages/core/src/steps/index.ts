@@ -9,3 +9,4 @@ export * from './policy.js';
 export * from './instructed.js';
 export * from './phases.js';
 export * from './step-repair.js';
+export * from './compile.js';

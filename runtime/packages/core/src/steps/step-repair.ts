@@ -75,6 +75,8 @@ export type StepJournalEntry = {
   readonly step_level: StepRepairLevel | null;
   readonly step_outcome: StepOutcome;
   readonly cost_usd: number | null;
+  /** Part LLM (agent d'étape) de `cost_usd` ; `null` : prix inconnu. Les rejeux sont journalisés comme des essais. */
+  readonly llm_usd: number | null;
   readonly tokens_in: number;
   readonly tokens_out: number;
   /** Code stable (refus du patch, `intent_changed`, arrêt de l'agent…), jamais un texte du site. */
@@ -141,13 +143,13 @@ export async function repairSteps(args: {
     const usd = addUsd(spent.usd, r.costUsd);
     const id = current.steps[index]?.id ?? '?';
     const fail = (detail: string): Attempt => {
-      journal.push({ step_id: id, step_level: level, step_outcome: 'failed', cost_usd: usd, tokens_in: spent.tin, tokens_out: spent.tout, detail });
+      journal.push({ step_id: id, step_level: level, step_outcome: 'failed', cost_usd: usd, llm_usd: spent.usd, tokens_in: spent.tin, tokens_out: spent.tout, detail });
       return { kind: 'rejected', detail };
     };
     if (r.refusal !== null) return { kind: 'refused', failure: r.refusal };
     if (r.observedWriteAt !== null) return { kind: 'write', index: r.observedWriteAt };
     const repaired = (): void => {
-      journal.push({ step_id: id, step_level: level, step_outcome: level === 1 ? 'alternate' : 'agent_repaired', cost_usd: usd, tokens_in: spent.tin, tokens_out: spent.tout, detail: null, patch });
+      journal.push({ step_id: id, step_level: level, step_outcome: level === 1 ? 'alternate' : 'agent_repaired', cost_usd: usd, llm_usd: spent.usd, tokens_in: spent.tin, tokens_out: spent.tout, detail: null, patch });
     };
     if (!r.ok) {
       const f = r.stepFailure;
@@ -182,7 +184,7 @@ export async function repairSteps(args: {
     const route = stepRepairRoute({ failureClass: pending.failure.failure_class, sideEffect: step.side_effect, session: args.context.session, tunnel: args.context.tunnel });
     if (route.kind === 'classifier') return { kind: 'classified', failure: pending.failure, journal };
     if (route.kind === 'write_step_broken') {
-      journal.push({ step_id: step.id, step_level: null, step_outcome: 'failed', cost_usd: 0, tokens_in: 0, tokens_out: 0, detail: 'write_step_broken' });
+      journal.push({ step_id: step.id, step_level: null, step_outcome: 'failed', cost_usd: 0, llm_usd: 0, tokens_in: 0, tokens_out: 0, detail: 'write_step_broken' });
       return { kind: 'write_step_broken', stepId: step.id, journal };
     }
     if (cascade.register(step.id) === 'step_cascade') return { kind: 'step_cascade', broken: cascade.broken, journal };
@@ -220,12 +222,12 @@ export async function repairSteps(args: {
       });
       const spent = { usd: res.costUsd, tin: res.tokensIn, tout: res.tokensOut };
       if (res.patch === null || res.patch.length === 0) {
-        journal.push({ step_id: step.id, step_level: level, step_outcome: 'failed', cost_usd: res.costUsd, tokens_in: res.tokensIn, tokens_out: res.tokensOut, detail: `agent_${res.stop}` });
+        journal.push({ step_id: step.id, step_level: level, step_outcome: 'failed', cost_usd: res.costUsd, llm_usd: res.costUsd, tokens_in: res.tokensIn, tokens_out: res.tokensOut, detail: `agent_${res.stop}` });
         continue;
       }
       const checked = validateStepPatch(current, res.patch, { runInputs: args.context.runInputs });
       if (!checked.ok) {
-        journal.push({ step_id: step.id, step_level: level, step_outcome: 'failed', cost_usd: res.costUsd, tokens_in: res.tokensIn, tokens_out: res.tokensOut, detail: checked.rejections[0]?.code ?? 'invalid_patch' });
+        journal.push({ step_id: step.id, step_level: level, step_outcome: 'failed', cost_usd: res.costUsd, llm_usd: res.costUsd, tokens_in: res.tokensIn, tokens_out: res.tokensOut, detail: checked.rejections[0]?.code ?? 'invalid_patch' });
         continue;
       }
       // Index de l'étape réparée après d'éventuelles insertions devant elle.
@@ -243,7 +245,7 @@ export async function repairSteps(args: {
         return { kind: 'refused', failure: outcome.failure, journal };
       case 'write': {
         const id = current.steps[outcome.index]?.id ?? step.id;
-        journal.push({ step_id: id, step_level: null, step_outcome: 'failed', cost_usd: 0, tokens_in: 0, tokens_out: 0, detail: 'write_step_broken' });
+        journal.push({ step_id: id, step_level: null, step_outcome: 'failed', cost_usd: 0, llm_usd: 0, tokens_in: 0, tokens_out: 0, detail: 'write_step_broken' });
         return { kind: 'write_step_broken', stepId: id, journal };
       }
       case 'done':

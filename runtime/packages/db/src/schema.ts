@@ -418,6 +418,7 @@ export const strategyVersions = pgTable(
     instructedStepsSha256: text('instructed_steps_sha256'),
     instructedStepsConfirmed: jsonb('instructed_steps_confirmed'),
     archiveReason: text('archive_reason', { enum: STRATEGY_ARCHIVE_REASONS }),
+    sourceSteps: jsonb('source_steps'),
     createdAt: createdAt(),
   },
   (t) => [primaryKey({ columns: [t.apiId, t.version] }), index('strategy_versions_owner_id_idx').on(t.ownerId)],

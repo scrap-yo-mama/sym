@@ -8,6 +8,7 @@
 --   strategy_versions.compilable          yes | unknown | no (une trace E6 non compilable en E5 : `no`) ;
 --   strategy_versions.instructed_steps    intentions et `post`, sans `target` (non fiables tant que non confirmées) ;
 --   strategy_versions.instructed_steps_sha256, instructed_steps_confirmed (by, at, sha256 : acte humain) ;
+--   strategy_versions.source_steps        source des étapes (intent, pre, post) : non fiable, `post` immuable ;
 --   strategy_versions.archive_reason      `repair_not_validated` : vN+1 conforme mais non validée sans agent (V5),
 --                                         archivée non courante (les autres raisons de 19b §1 viennent avec 3.14) ;
 --   run_attempts.step_id, step_level, step_outcome, tokens_in, tokens_out : journal par étape (coût : `cost_usd`).
@@ -19,7 +20,9 @@ ALTER TABLE strategy_versions
   ADD COLUMN instructed_steps jsonb CHECK (instructed_steps IS NULL OR jsonb_typeof(instructed_steps) = 'array'),
   ADD COLUMN instructed_steps_sha256 text CHECK (instructed_steps_sha256 IS NULL OR instructed_steps_sha256 ~ '^[a-f0-9]{64}$'),
   ADD COLUMN instructed_steps_confirmed jsonb CHECK (instructed_steps_confirmed IS NULL OR jsonb_typeof(instructed_steps_confirmed) = 'object'),
-  ADD COLUMN archive_reason text CHECK (archive_reason IN ('repair_not_validated'));
+  ADD COLUMN archive_reason text CHECK (archive_reason IN ('repair_not_validated')),
+  -- `source.steps` de 19b §1 (intent, pre, post[] marqués derived_from_untrusted) : rejoindra la `source` de 2.10.
+  ADD COLUMN source_steps jsonb CHECK (source_steps IS NULL OR jsonb_typeof(source_steps) = 'array');
 
 ALTER TABLE run_attempts
   ADD COLUMN step_id text CHECK (step_id IS NULL OR step_id ~ '^[A-Za-z0-9_-]{1,40}$'),

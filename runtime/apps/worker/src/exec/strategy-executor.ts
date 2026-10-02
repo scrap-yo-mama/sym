@@ -41,6 +41,11 @@ import {
   validateDeclarativeSpec,
   validateHybridSpec,
   validateOutput,
+  validateStepsSource,
+  validateStepsSpec,
+  compileHybridToSteps,
+  type StepFailure,
+  type StepsSpec,
   ITEMS_REJECTED_DEFAULTS,
   partitionItems,
   quarantineSummary,
@@ -98,7 +103,7 @@ import {
   type SecretReader,
   type SsrfGuard,
 } from '@runtime/core/net';
-import { deleteRejectedItems, loadRunTarget, readProxySettings, readVolumeHistory, saveCompiledStrategy, saveRejectedItems, saveRepairedStrategy, saveRunDataset, type RunTarget } from '@runtime/db';
+import { deleteRejectedItems, loadRunTarget, readProxySettings, readVolumeHistory, saveCompiledStrategy, saveRejectedItems, saveRepairedStrategy, saveRunDataset, saveStepRepairedStrategy, markStrategyCompilable, type RunTarget } from '@runtime/db';
 import type { LlmClient, LlmConfig } from '@runtime/llm';
 import type pg from 'pg';
 import { pino, type Logger } from 'pino';
@@ -110,6 +115,8 @@ import type { AgentBrowser, AgentBrowserOptions } from '../browser/agent-browser
 import { runAgentExecutor, runAgentFetchExecutor, runHybridExecutor, type AgentOutcome, type EngineFactory, type LlmSpend } from './agent-executors.js';
 import { AttemptCost } from './attempt-cost.js';
 import { runTunnelExecutor, TunnelSession, type TunnelStop } from './tunnel-executor.js';
+import { StepsHost, type StepPageTools, type StepsTrialInfo } from './steps-host.js';
+import { STEPS_INTERPRETER_SOURCE } from './steps-interpreter.js';
 import type { TunnelPort } from '../tunnel/client.js';
 
 /**
@@ -186,14 +193,25 @@ export type CandidateCheck = {
 };
 
 /** Stratégie réparée (vN+1) : patch borné (ou `null` pour une escalade), sortie déjà rejouée et validée. */
-export type RepairedStrategy = { readonly execution: Execution; readonly network: FrozenStrategy['network']; readonly spec: DeclarativeSpec; readonly patch: JsonPatchOperation[] | null; readonly estCostUsd: number | null };
+export type RepairedStrategy = { readonly execution: Execution; readonly network: FrozenStrategy['network']; readonly spec: DeclarativeSpec | StepsSpec; readonly patch: JsonPatchOperation[] | null; readonly estCostUsd: number | null };
+
+/**
+ * Essai d'une stratégie `steps` (2.13) : arrêt de l'interprète AVANT une étape et action de l'hôte sur la page gardée
+ * (agent d'étape, niveaux 2 et 3), sans que la page ne quitte l'hôte.
+ */
+export type StepsTrialExtras = { readonly stopBefore?: number; readonly afterPause?: (tools: StepPageTools, host: StepsHost) => Promise<void> };
 
 /** Issue d'une réparation (04 §5). */
 export type RepairOutcome =
-  /** vN+1 conforme, déjà enregistrée par `commit` SOUS le bail (`saved`). */
-  | { readonly kind: 'repaired'; readonly strategy: RepairedStrategy; readonly check: CandidateCheck; readonly saved: { readonly version: number; readonly promoted: boolean } }
-  /** Budget épuisé ou correctif répété : transition 13, stratégie précédente conservée. */
-  | { readonly kind: 'failed'; readonly cause: RepairStopCause; readonly detail: string }
+  /**
+   * vN+1 conforme, déjà enregistrée par `commit` SOUS le bail (`saved`). `validated: false` (reprise par étape, V5 en
+   * échec) : données livrées, vN+1 archivée non courante, raison `repair_not_validated` (12).
+   */
+  | { readonly kind: 'repaired'; readonly strategy: RepairedStrategy; readonly check: CandidateCheck; readonly saved: { readonly version: number; readonly promoted: boolean }; readonly validated?: boolean }
+  /** Budget épuisé, correctif répété, cascade d'étapes, ou seule issue « agent à chaque run » : 13, stratégie gardée. */
+  | { readonly kind: 'failed'; readonly cause: RepairStopCause | 'step_cascade' | 'not_compilable'; readonly detail: string }
+  /** Reprise par étape arrêtée sans agent (2.13) : étape `write` ou run avec session : 14 (`action_requise`), brouillon proposé. */
+  | { readonly kind: 'stopped'; readonly reason: 'write_step_broken' | 'session_step_broken'; readonly stepId: string }
   /** Un refus est survenu pendant la réparation : la garde l'emporte (14 ou 15). */
   | { readonly kind: 'refused'; readonly failure: ExecFailure }
   /** Une autre réparation tenait le bail et a produit vN+1 : le run la rejoue. */
@@ -219,6 +237,12 @@ export type RepairPort = (request: {
   readonly reasons: readonly RejectionReason[];
   readonly trial: (candidate: FrozenStrategy, purpose: 'repair_patch' | 'repair_escalation') => Promise<CandidateCheck>;
   readonly commit: (repaired: RepairedStrategy) => Promise<{ version: number; promoted: boolean }>;
+  /** Stratégie `steps` (2.13) : étape en échec (classe retenue par la garde). */
+  readonly step?: StepFailure;
+  /** Stratégie `steps` : essai d'une candidate, avec arrêt avant une étape et action de l'hôte (agent d'étape). */
+  readonly stepTrial?: (candidate: FrozenStrategy, extras?: StepsTrialExtras) => Promise<CandidateCheck>;
+  /** Stratégie `steps` : vN+1, courante seulement si `validated` (portes V0 à V5), sinon archivée non courante. */
+  readonly commitSteps?: (repaired: { spec: StepsSpec; patch: JsonPatchOperation[]; validated: boolean }) => Promise<{ version: number; promoted: boolean }>;
 }) => Promise<RepairOutcome>;
 
 type Outcome = {
@@ -235,6 +259,8 @@ type Outcome = {
   stop?: TunnelStop;
   /** Mode tunnel : le site n'est pas connecté dans le navigateur de l'utilisateur. */
   needsUser?: boolean;
+  /** Stratégie `steps` (2.13) : étape en échec, effet observé, arrêt avant une étape. */
+  steps?: StepsTrialInfo;
 };
 
 /** Un essai d'une stratégie, gardes comprises, avant journalisation (`runTrial`). */
@@ -330,13 +356,19 @@ function scriptSpecOf(spec: unknown): { allowedHosts: string[]; startUrl: string
 type AgenticSpec =
   | { readonly kind: 'agent_fetch'; readonly spec: AgentFetchSpec; readonly hosts: readonly string[] }
   | { readonly kind: 'hybrid'; readonly spec: HybridSpec; readonly hosts: readonly string[] }
-  | { readonly kind: 'agent'; readonly spec: AgentSpec; readonly hosts: readonly string[] };
+  | { readonly kind: 'agent'; readonly spec: AgentSpec; readonly hosts: readonly string[] }
+  | { readonly kind: 'steps'; readonly spec: StepsSpec; readonly hosts: readonly string[] };
 
 /** Spécification d'une stratégie E4-E6, validée (liste fermée, domaines de l'API) ; refus `invalid_agent_spec`. */
 function agenticSpecOf(execution: string, spec: unknown): AgenticSpec | undefined {
   if (execution === 'agent_fetch') {
     const c = validateAgentFetchSpec(spec);
     return c.ok ? { kind: 'agent_fetch', spec: c.spec, hosts: c.spec.request.allowed_hosts } : refuse('code_error', 'invalid_agent_spec');
+  }
+  if (execution === 'hybrid' && (spec as { kind?: unknown } | null)?.kind === 'steps') {
+    // E5 au format `steps` (2.13) : interprété dans le bac à sable, reprise par étape.
+    const c = validateStepsSpec(spec);
+    return c.ok ? { kind: 'steps', spec: c.spec, hosts: c.spec.allowed_hosts } : refuse('code_error', 'invalid_agent_spec');
   }
   if (execution === 'hybrid') {
     const c = validateHybridSpec(spec);
@@ -495,7 +527,10 @@ export function createStrategyRuntime(deps: StrategyExecutorDeps): StrategyRunti
     return { result: out.result, usage: null, ...(out.stop === null ? {} : { stop: out.stop }), ...(out.needsUser ? { needsUser: true } : {}) };
   };
 
-  const execute = async (ctx: RunCtx, target: RunTarget, strategy: NonNullable<RunTarget['strategy']>, itemPolicy: ItemPolicy): Promise<Outcome> => {
+  const execute = async (ctx: RunCtx, target: RunTarget, strategy: NonNullable<RunTarget['strategy']>, itemPolicy: ItemPolicy, extras?: StepsTrialExtras): Promise<Outcome> => {
+    // Agent à chaque run (19 §4, 2.13) : une version E6 non compilable en E5 ne tourne qu'en mode « agent instruit »
+    // (opt-in explicite, étapes confirmées par un humain). Une version `unknown` a droit à son essai de compilation.
+    if (strategy.execution === 'agent' && strategy.compilable === 'no' && !target.api.instructedMode) return refuse('code_error', 'not_compilable');
     if (strategy.network === 'tunnel') return executeTunnel(ctx, target, strategy, itemPolicy);
     // E6 limité au serveur (0.6b, ADR 0001) : refusé en tunnel avant tout réseau.
     try {
@@ -508,7 +543,8 @@ export function createStrategyRuntime(deps: StrategyExecutorDeps): StrategyRunti
     // Entrée non prise en charge par E4-E6 (ADR 0001, « Suivi de l'intégration ») : leurs spécifications n'ont aucun
     // gabarit d'entrée et une trace E6 compilée fige les choix de l'agent. Servir l'essai rendrait la même sortie quelle
     // que soit l'entrée (conforme au schéma, mais fausse) : refus avant tout réseau et tout appel au modèle.
-    if (agentic !== undefined && hasInput(ctx.input)) return refuse('code_error', 'input_unsupported');
+    // Le format `steps` lit ses entrées par leur nom (`type`, `select` : entrées du run seulement), contrôlées par l'hôte.
+    if (agentic !== undefined && agentic.kind !== 'steps' && hasInput(ctx.input)) return refuse('code_error', 'input_unsupported');
     const { rung, credentials } = await rungFor(target, strategy.network);
     const { userAgent, from } = await userAgentFor();
     const script = strategy.execution === 'playwright' && strategy.scriptRef !== null ? scriptSpecOf(strategy.spec) : undefined;
@@ -566,7 +602,7 @@ export function createStrategyRuntime(deps: StrategyExecutorDeps): StrategyRunti
       ...(deps.classify === undefined ? {} : { classify: deps.classify }),
     };
     try {
-      const outcome = await executeOn(strategy, { spec, script, agentic, setLlmSpent: (f) => (llmSpent = f), sessionOptions, common, pacer, robots, userAgent, ctx, target, setOther: (o) => (otherUsd = { ...otherUsd, ...o }) });
+      const outcome = await executeOn(strategy, { spec, script, agentic, setLlmSpent: (f) => (llmSpent = f), sessionOptions, common, pacer, robots, userAgent, ctx, target, setOther: (o) => (otherUsd = { ...otherUsd, ...o }), ...(extras === undefined ? {} : { extras }) });
       return { ...outcome, usage: outcome.usage === null ? null : addUsage(outcome.usage, robotsSession.usage()) };
     } finally {
       await robotsSession.close().catch(() => undefined);
@@ -587,10 +623,71 @@ export function createStrategyRuntime(deps: StrategyExecutorDeps): StrategyRunti
     ctx: RunCtx;
     target: RunTarget;
     setOther: (o: Partial<{ egress: () => number; session: () => number }>) => void;
+    extras?: StepsTrialExtras;
+  };
+
+  /**
+   * E5 au format `steps` (2.13, 19 §4) : interprète FIXE dans le bac à sable de 1.5 (comme un script E3 : mêmes ponts,
+   * mêmes gardes), chaque action contrôlée par l'hôte contre sa copie de la stratégie (StepsHost) ; aucun LLM.
+   */
+  const executeSteps = async (strategy: NonNullable<RunTarget['strategy']>, stepsSpec: StepsSpec, args: ExecuteArgs): Promise<Outcome> => {
+    const { sessionOptions, pacer, robots, userAgent, ctx, target } = args;
+    const port = deps.script;
+    if (port === undefined) return refuse('code_error', 'sandbox_unavailable');
+    if (deps.browsers === null) return refuse('code_error', 'browser_disabled');
+    const source = validateStepsSource(strategy.sourceSteps ?? [], stepsSpec);
+    if (!source.ok) return refuse('code_error', 'invalid_steps_source');
+    const host = new StepsHost({ spec: stepsSpec, source: source.steps, runInput: ctx.input, stopBefore: args.extras?.stopBefore ?? null });
+    const egress = await openBrowserEgress(sessionOptions('egress'));
+    args.setOther({ egress: () => egress.usage().costUsd });
+    const session = openNetworkSession(sessionOptions('session'));
+    args.setOther({ session: () => session.usage().costUsd });
+    try {
+      const afterPause = args.extras?.afterPause;
+      const run = await runScriptExecutor({
+        pool: deps.browsers,
+        egress,
+        guard: deps.guard,
+        session,
+        engine: port.engine,
+        code: STEPS_INTERPRETER_SOURCE,
+        allowedHosts: stepsSpec.allowed_hosts,
+        startUrl: stepsSpec.start_url,
+        input: host.interpreterInput(),
+        signal: ctx.signal,
+        logger: logger.child({ runId: ctx.runId }),
+        ...(port.limits === undefined ? {} : { limits: port.limits }),
+        ...(pacer === undefined ? {} : { pacer }),
+        ...(target.api.domainPacing.max_requests_per_run === undefined ? {} : { maxRequests: target.api.domainPacing.max_requests_per_run }),
+        allowWriteActions: target.api.allowWriteActions,
+        ...(deps.classify === undefined ? {} : { classify: deps.classify }),
+        robots: robots.access,
+        userAgent,
+        steps: { host, ...(afterPause === undefined ? {} : { afterPause: (tools: StepPageTools) => afterPause(tools, host) }) },
+      });
+      let result = run.result;
+      const itemPolicy = args.common.itemPolicy ?? 'strict';
+      const conforming = (r: unknown): boolean => validateOutput(target.api.outputSchema, r).ok;
+      if (result.ok && host.info.paused === null && (itemPolicy === 'quarantine' ? !result.records.some(conforming) : result.records.some((r) => !conforming(r)))) {
+        result = { ok: false, failure: { failure_class: 'extraction', retryable: false, detail: 'schema_mismatch' }, pages: result.pages, requests: result.requests };
+      }
+      const exceeded = egress.budgetExceeded() || session.budgetExceeded();
+      return {
+        result: budgetChecked(refineEgress(result, egress), exceeded),
+        usage: addUsage(egress.usage(), session.usage()),
+        violations: run.violations,
+        scriptItems: run.items,
+        ...(run.steps === undefined ? {} : { steps: run.steps }),
+      };
+    } finally {
+      await session.close().catch(() => undefined);
+      await egress.close().catch(() => undefined);
+    }
   };
 
   const executeOn = async (strategy: NonNullable<RunTarget['strategy']>, args: ExecuteArgs): Promise<Outcome> => {
     const { spec, script, agentic, sessionOptions, common, pacer, robots, userAgent, ctx, target } = args;
+    if (agentic?.kind === 'steps') return executeSteps(strategy, agentic.spec, args);
     switch (strategy.execution) {
       case 'fetch': {
         const session = openNetworkSession(sessionOptions('session'));
@@ -730,10 +827,10 @@ export function createStrategyRuntime(deps: StrategyExecutorDeps): StrategyRunti
    * SSRF, verrou de domaines, cadence, plafond de coût, bac à sable, classification avant extraction (INV6), registre
    * de masquage et liste d'exclusion (D-28). Rien n'est journalisé dans `run_attempts` ni écrit en dataset ici.
    */
-  const runTrial = async (ctx: RunCtx, target: RunTarget, strategy: NonNullable<RunTarget['strategy']>, started = now(), itemPolicy: ItemPolicy = 'strict'): Promise<StrategyTrial> => {
+  const runTrial = async (ctx: RunCtx, target: RunTarget, strategy: NonNullable<RunTarget['strategy']>, started = now(), itemPolicy: ItemPolicy = 'strict', extras?: StepsTrialExtras): Promise<StrategyTrial> => {
     let outcome: Outcome;
     try {
-      outcome = await execute(ctx, target, strategy, itemPolicy);
+      outcome = await execute(ctx, target, strategy, itemPolicy, extras);
     } catch (error) {
       if (!(error instanceof TargetError)) throw error;
       outcome = { result: { ok: false, failure: error.failure, pages: 0, requests: 0 }, usage: null };
@@ -842,8 +939,8 @@ export function createStrategyRuntime(deps: StrategyExecutorDeps): StrategyRunti
   };
 
   /** Une candidate de réparation rejouée avec toutes les gardes, journalisée comme un essai. */
-  const checkCandidate = async (ctx: RunCtx, target: RunTarget, candidate: FrozenStrategy): Promise<CandidateCheck> => {
-    const trial = await runTrial(ctx, target, candidate, now(), 'quarantine');
+  const checkCandidate = async (ctx: RunCtx, target: RunTarget, candidate: FrozenStrategy, extras?: StepsTrialExtras): Promise<CandidateCheck> => {
+    const trial = await runTrial(ctx, target, candidate, now(), 'quarantine', extras);
     const sorted = sortItems(target, trial);
     await recordTrial(ctx, candidate, trial, sorted?.verdict ?? null);
     const failure = trial.result.ok ? null : (trial.guardedFailure ?? trial.result.failure);
@@ -879,7 +976,7 @@ export function createStrategyRuntime(deps: StrategyExecutorDeps): StrategyRunti
   const deliver = async (
     ctx: RunCtx,
     target: RunTarget,
-    args: { version: number; sorted: { partition: ItemPartition<Record<string, unknown>>; verdict: RejectionVerdict }; escalated: boolean; truncated: boolean; repaired: boolean; entered: boolean },
+    args: { version: number; sorted: { partition: ItemPartition<Record<string, unknown>>; verdict: RejectionVerdict }; escalated: boolean; truncated: boolean; repaired: boolean; entered: boolean; validated?: boolean },
   ): Promise<RunResult> => {
     const { partition, verdict } = args.sorted;
     await quarantine(ctx, target, partition, verdict);
@@ -893,7 +990,7 @@ export function createStrategyRuntime(deps: StrategyExecutorDeps): StrategyRunti
     if (volume) signals.push('volume_anomaly');
     // Réparation conforme : transition 12 (le signal `repaired` est sa raison) ; sinon run réussi (5, 8 ou 9).
     if (args.repaired) {
-      if (args.entered) await applyStatus(ctx, { type: 'repair_succeeded' });
+      if (args.entered) await applyStatus(ctx, { type: 'repair_succeeded', ...(args.validated === false ? { validated: false } : {}) });
     } else {
       await applyStatus(ctx, { type: 'run_succeeded', signals });
     }
@@ -917,7 +1014,7 @@ export function createStrategyRuntime(deps: StrategyExecutorDeps): StrategyRunti
     ctx: RunCtx,
     target: RunTarget,
     strategy: FrozenStrategy,
-    args: { original: ExecFailure; failure: ExecFailure; evidence: readonly AgentEvidence[]; reasons: readonly RejectionReason[]; rejected: number },
+    args: { original: ExecFailure; failure: ExecFailure; evidence: readonly AgentEvidence[]; reasons: readonly RejectionReason[]; rejected: number; step?: StepFailure },
   ): Promise<RunResult> => {
     const version = strategy.version;
     const failed = (f: ExecFailure, v: number = version): RunResult => ({
@@ -932,6 +1029,12 @@ export function createStrategyRuntime(deps: StrategyExecutorDeps): StrategyRunti
     const entry = await applyStatus(ctx, { type: 'run_failed', failureClass: failure.failure_class, ...(failure.status === undefined ? {} : { httpStatus: failure.status }) });
     // Ce run a fait entrer l'API en `reparation` (10 ou 11) : il doit l'en faire sortir (12, 13, 14 ou 15).
     const entered = entry?.ok === true && entry.status === 'reparation';
+    // Stratégie à agent à chaque run sans `instructed_mode` (2.13) : aucune réparation, seule issue un agent → 13.
+    if (failure.detail === 'not_compilable') {
+      await ctx.log('info', 'failure_route', { failure_class: failure.failure_class, next: 'not_compilable', agent_invoked: false });
+      if (entered) await applyStatus(ctx, { type: 'repair_failed', cause: 'not_compilable' });
+      return failed(failure);
+    }
     const repair = deps.repair;
     const guarded =
       repair === undefined
@@ -946,6 +1049,14 @@ export function createStrategyRuntime(deps: StrategyExecutorDeps): StrategyRunti
               reasons: args.reasons,
               trial: (candidate) => checkCandidate(ctx, target, candidate),
               commit: (repaired) => saveRepairedStrategy(deps.pool, { apiId: ctx.apiId, ownerId: ctx.ownerId, parentVersion: version, ...repaired }),
+              ...(args.step === undefined
+                ? {}
+                : {
+                    step: args.step,
+                    stepTrial: (candidate: FrozenStrategy, extras?: StepsTrialExtras) => checkCandidate(ctx, target, candidate, extras),
+                    commitSteps: (repaired: { spec: StepsSpec; patch: JsonPatchOperation[]; validated: boolean }) =>
+                      saveStepRepairedStrategy(deps.pool, { apiId: ctx.apiId, ownerId: ctx.ownerId, parentVersion: version, network: strategy.network, ...repaired }),
+                  }),
             }),
           );
     const route = failureRoute(failure.failure_class);
@@ -980,7 +1091,15 @@ export function createStrategyRuntime(deps: StrategyExecutorDeps): StrategyRunti
           truncated: result.ok && result.truncated,
           repaired: true,
           entered,
+          ...(out.validated === false ? { validated: false } : {}),
         });
+      }
+      case 'stopped': {
+        // Étape `write` ou run avec session (2.13) : aucun agent, la main revient à l'humain (14) ; un brouillon est
+        // proposé (journal : l'itération sur brouillon de 3.14 le matérialise).
+        await ctx.log('warn', 'step_draft_proposed', { reason: out.reason, step_id: out.stepId });
+        await applyStatus(ctx, { type: 'run_stopped', reason: out.reason });
+        return { state: 'failed', failure_class: null, stop_reason: out.reason, retryable: false, error_detail: out.reason, strategy_version: version };
       }
       case 'refused': {
         // La garde l'emporte : refus servi pendant la réparation → 15 ou 14 depuis `reparation`, sans autre agent.
@@ -1048,8 +1167,21 @@ export function createStrategyRuntime(deps: StrategyExecutorDeps): StrategyRunti
     if (proxyUsd + llmUsd > target.api.maxCostUsd) {
       return { state: 'failed', failure_class: 'run_budget_exceeded', retryable: false, error_detail: 'max_cost_usd', strategy_version: version };
     }
+    // Stratégie `steps` (2.13) : l'étape en échec, avec la classe retenue par la garde (un refus n'atteint pas l'échelle).
+    const stepFailed = (failure: ExecFailure): StepFailure | undefined => {
+      const info = outcome.steps;
+      if (info === undefined) return undefined;
+      if (info.observedWriteAt !== null) return { index: info.observedWriteAt, failure };
+      if (info.failure !== null) return { index: info.failure.index, failure: { ...info.failure.failure, failure_class: failure.failure_class } };
+      // Sortie hors schéma (D-49) : l'étape d'extraction est en cause.
+      const spec = strategy.spec as { steps?: { op?: unknown }[] } | null;
+      const last = (spec?.steps ?? []).map((st) => st.op).lastIndexOf('extract');
+      return last < 0 ? undefined : { index: last, failure };
+    };
     if (!result.ok) {
-      return onFailure(ctx, target, strategy, { original: result.failure, failure: guardedFailure ?? result.failure, evidence, reasons: [], rejected: 0 });
+      const failure = guardedFailure ?? result.failure;
+      const step = stepFailed(failure);
+      return onFailure(ctx, target, strategy, { original: result.failure, failure, evidence, reasons: [], rejected: 0, ...(step === undefined ? {} : { step }) });
     }
     // Casse par les items non conformes (D-49) : 0 item conforme, ou au-delà du seuil (part ET nombre). Rien n'est livré ;
     // la quarantaine est écrite pour le diagnostic, puis réparation dans le même run (classe `extraction`, INV1).
@@ -1057,19 +1189,35 @@ export function createStrategyRuntime(deps: StrategyExecutorDeps): StrategyRunti
       const reasons = await quarantine(ctx, target, sorted.partition, sorted.verdict);
       const failure: ExecFailure = { failure_class: 'extraction', retryable: false, detail: sorted.partition.conform.length === 0 ? 'schema_mismatch' : 'items_rejected' };
       await ctx.log('warn', 'schema_mismatch', { conform: sorted.partition.conform.length, rejected: sorted.partition.rejected.length });
-      return onFailure(ctx, target, strategy, { original: failure, failure, evidence: [], reasons, rejected: sorted.partition.rejected.length });
+      const step = stepFailed(failure);
+      return onFailure(ctx, target, strategy, { original: failure, failure, evidence: [], reasons, rejected: sorted.partition.rejected.length, ...(step === undefined ? {} : { step }) });
     }
-    // Compilation E6 → E5 vérifiée (04 §3.1) : nouvelle version `hybrid`, signal de baisse de coût journalisé.
+    // Compilation E6 → E5 vérifiée (04 §3.1), au grain de l'étape (2.13, 19 §4) : nouvelle version `hybrid` au format
+    // `steps` avec sa source (intention écrite par le code, `post` tirée de la trace), signal de baisse de coût journalisé.
     const compiled = outcome.agent?.compiled;
     if (compiled !== undefined) {
       try {
-        const saved = await saveCompiledStrategy(deps.pool, { apiId: ctx.apiId, ownerId: ctx.ownerId, parentVersion: version, network: strategy.network, spec: compiled, estCostUsd: proxyUsd });
-        await ctx.log('info', 'strategy_compiled', { from_version: version, to_version: saved.version, promoted: saved.promoted, llm_usd_saved: llmUsd });
+        const steps = compileHybridToSteps(compiled, { modelId: llm?.modelId ?? null, at: new Date(now()).toISOString(), ...(outcome.agent?.trace === undefined ? {} : { trace: outcome.agent.trace }) });
+        const saved = await saveCompiledStrategy(deps.pool, {
+          apiId: ctx.apiId,
+          ownerId: ctx.ownerId,
+          parentVersion: version,
+          network: strategy.network,
+          spec: steps?.spec ?? compiled,
+          estCostUsd: proxyUsd,
+          ...(steps === null ? {} : { sourceSteps: steps.source }),
+        });
+        await ctx.log('info', 'strategy_compiled', { from_version: version, to_version: saved.version, promoted: saved.promoted, llm_usd_saved: llmUsd, format: steps === null ? 'hybrid' : 'steps' });
       } catch {
         await ctx.log('warn', 'strategy_compile_not_saved', {});
       }
     } else if (outcome.agent?.compileFailure !== undefined) {
       await ctx.log('info', 'strategy_compile_skipped', { reason: outcome.agent.compileFailure });
+      // Trace E6 non compilable (2.13) : la version devient `compilable = no` ; sans `instructed_mode`, elle ne tourne
+      // plus (`not_compilable`), jamais un agent à chaque run sans opt-in explicite.
+      if (strategy.execution === 'agent' && strategy.compilable === 'unknown') {
+        await markStrategyCompilable(deps.pool, { apiId: ctx.apiId, ownerId: ctx.ownerId, version, compilable: 'no' }).catch(() => undefined);
+      }
     }
     return deliver(ctx, target, { version, sorted: sorted!, escalated: result.escalated, truncated: result.truncated, repaired: false, entered: false });
   };

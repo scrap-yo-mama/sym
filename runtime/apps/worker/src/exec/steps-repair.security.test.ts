@@ -355,8 +355,9 @@ describe('stratégie steps interprétée dans le bac à sable, reprise par étap
       spec: { schema_version: 1, kind: 'agent', start_url: `${base()}/`, allowed_hosts: [HOST], instruction: 'Lire titre et prix de la page 2.', limits: { max_steps: 5 } },
       source: null,
     });
-    const { run } = await runOf(apiId);
-    expect(run).toMatchObject({ state: 'failed', error_detail: 'not_compilable' });
+    const { runId, run } = await runOf(apiId);
+    expect(run.state).toBe('failed');
+    expect((await pool.query('SELECT failure_class, error_detail FROM runs WHERE id = $1', [runId])).rows).toEqual([{ failure_class: 'code_error', error_detail: 'not_compilable' }]);
     expect(await apiState(apiId)).toMatchObject({ status: 'erreur', status_reason: 'not_compilable', instructed_mode: false });
     expect(fake.calls).toHaveLength(0);
     expect(hits).toEqual([]);
@@ -369,8 +370,8 @@ describe('stratégie steps interprétée dans le bac à sable, reprise par étap
     const { runId, run } = await runOf(apiId);
     expect(run.state).toBe('failed');
     expect(await apiState(apiId)).toMatchObject({ status: 'erreur', status_reason: 'not_compilable', current_strategy_version: 1 });
-    // Agent borné par `agent_budget` (6 pas) aux niveaux 2 et 3 : 12 appels au plus.
-    expect(agentCalls()).toBeLessThanOrEqual(12);
+    // Agent borné par `agent_budget` : 6 pas au niveau 2, budget doublé pour le segment du niveau 3 (12) : 18 au plus.
+    expect(agentCalls()).toBeLessThanOrEqual(18);
     expect(await stepRows(runId)).toContainEqual(expect.objectContaining({ step_id: 's3', step_level: 2, step_outcome: 'failed' }));
     const versions = await pool.query<{ execution: string }>('SELECT execution FROM strategy_versions WHERE api_id = $1', [apiId]);
     expect(versions.rows.map((r) => r.execution)).toEqual(['hybrid']);

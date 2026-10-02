@@ -25,6 +25,7 @@ import {
   RepairLedger,
   validateDeclarativeSpec,
   validateRepairPatch,
+  validateStepsSpec,
   type DeclarativeSpec,
   type HealthyProfile,
   type JsonPatchOperation,
@@ -38,6 +39,7 @@ import { LlmError, roleTarget, toFailureClass, type LlmClient, type LlmConfig } 
 import type pg from 'pg';
 import { pino, type Logger } from 'pino';
 import type { CandidateCheck, RepairedStrategy, RepairOutcome, RepairPort } from './strategy-executor.js';
+import { repairStepsUnderLease, StepLeaseLost } from './step-repair-executor.js';
 
 export type RepairEngineDeps = {
   readonly pool: pg.Pool;
@@ -92,6 +94,17 @@ export function createRepairPort(deps: RepairEngineDeps): RepairPort {
 
   return async (request) => {
     const { ctx, target, strategy } = request;
+    // Stratégie `steps` (2.13) : reprise par étape (step-repair-executor.ts), sous le même bail.
+    const stepsChecked = request.step !== undefined && request.stepTrial !== undefined && (strategy.spec as { kind?: unknown } | null)?.kind === 'steps' ? validateStepsSpec(strategy.spec) : null;
+    if (stepsChecked !== null) {
+      if (!stepsChecked.ok) return { kind: 'failed', cause: 'budget_exhausted', detail: 'invalid_strategy_spec' };
+      return underLease(ctx, strategy.version, (holds, leaseLost) =>
+        repairStepsUnderLease({ pool: deps.pool, ...(deps.llm === undefined ? {} : { llm: deps.llm }), ...(deps.maxAttempts === undefined ? {} : { maxAttempts: deps.maxAttempts }), ...(deps.budgetUsd === undefined ? {} : { budgetUsd: deps.budgetUsd }) }, request, stepsChecked.spec, holds).catch((error: unknown) => {
+          if (error instanceof StepLeaseLost) return leaseLost();
+          throw error;
+        }),
+      );
+    }
     if (!DECLARATIVE.has(strategy.execution) || strategy.scriptRef !== null || strategy.network === 'tunnel') {
       // Patch borné : stratégies déclaratives seulement (04b §2) ; script E3 et E4-E6 : régénération hors de 2.3. En tunnel
       // (session de l'utilisateur), aucune réparation automatique ici : niveau 1 seulement, relève de 2.13 (19 §4).
@@ -102,9 +115,13 @@ export function createRepairPort(deps: RepairEngineDeps): RepairPort {
     if (!checked.ok) return { kind: 'failed', cause: 'budget_exhausted', detail: 'invalid_strategy_spec' };
     const spec: DeclarativeSpec = checked.spec;
 
-    // 1. Bail : une seule réparation à la fois par API.
+    return underLease(ctx, strategy.version, (holds) => repairUnderLease(ctx, request, spec, holds));
+  };
+
+  /** 1. Bail : une seule réparation à la fois par API ; `run` reçoit la vérification du bail et la sortie « bail perdu ». */
+  async function underLease(ctx: RunCtx, version: number, run: (holds: () => Promise<boolean>, leaseLost: () => Promise<RepairOutcome>) => Promise<RepairOutcome>): Promise<RepairOutcome> {
     const leaseOwner = `run:${ctx.runId}`;
-    if (!(await acquireRepairLease(deps.pool, ctx.apiId, leaseOwner, leaseTtl))) return waitForOtherRepair(ctx, strategy.version);
+    if (!(await acquireRepairLease(deps.pool, ctx.apiId, leaseOwner, leaseTtl))) return waitForOtherRepair(ctx, version);
     // Bail perdu (expiré puis pris par un autre) : plus aucune proposition ni vN+1 ; le run fait comme s'il avait trouvé le
     // bail tenu (attente, puis vN+1 de l'autre réparation, ou échec).
     let lost = false;
@@ -119,13 +136,17 @@ export function createRepairPort(deps: RepairEngineDeps): RepairPort {
         })
         .catch((error: unknown) => logger.warn({ runId: ctx.runId, err: error instanceof Error ? error.name : 'error' }, 'bail de réparation : renouvellement impossible'));
     }, Math.max(1_000, (leaseTtl * 1000) / 3));
+    const leaseLost = async (): Promise<RepairOutcome> => {
+      await ctx.log('warn', 'repair_lease_lost', { from_version: version });
+      return waitForOtherRepair(ctx, version);
+    };
     try {
-      return await repairUnderLease(ctx, request, spec, holds);
+      return await run(holds, leaseLost);
     } finally {
       clearInterval(renew);
       await releaseRepairLease(deps.pool, ctx.apiId, leaseOwner).catch(() => undefined);
     }
-  };
+  }
 
   async function repairUnderLease(ctx: RunCtx, request: Parameters<RepairPort>[0], spec: DeclarativeSpec, holds: () => Promise<boolean>): Promise<RepairOutcome> {
     const { target, strategy, failure } = request;

@@ -2,7 +2,7 @@
 // Lectures et écritures des exécuteurs (tâche 1.6) : la cible d'un run (API + version de stratégie figée) et le dataset
 // produit. Données d'utilisateur : lues et écrites sous `withActor` avec le propriétaire du run (RLS, INV12), jamais
 // sous l'identité système. Les proxys de l'admin (`settings.proxies`) sont une configuration d'instance (identité système).
-import type { Execution, Network } from '@runtime/core';
+import type { Execution, Network, StrategyCompilable } from '@runtime/core';
 import type pg from 'pg';
 import { ensureDatasetItemsPartitions } from './partitions.js';
 import { withActor } from './rls.js';
@@ -22,6 +22,8 @@ export type RunTarget = {
     readonly requires: { readonly session_domain?: string | null; readonly tunnel?: boolean };
     /** `apis.requires_session` : l'API exige la session (l'identité) de l'utilisateur (C2, 04 §3.2). */
     readonly requiresSession: boolean;
+    /** `apis.instructed_mode` (2.13) : opt-in explicite de l'agent instruit (étapes confirmées, déclencheur de 0018). */
+    readonly instructedMode: boolean;
   };
   readonly strategy: {
     readonly version: number;
@@ -30,6 +32,9 @@ export type RunTarget = {
     readonly spec: unknown;
     readonly scriptRef: string | null;
     readonly estCostUsd: number | null;
+    /** 2.13 : compilable en E5 (`no` : seul l'agent instruit la rejoue) ; source des étapes (`intent`, `pre`, `post`). */
+    readonly compilable: StrategyCompilable;
+    readonly sourceSteps: unknown;
   } | null;
 };
 
@@ -46,8 +51,9 @@ export async function loadRunTarget(pool: pg.Pool, args: { apiId: string; ownerI
       allow_write_actions: boolean;
       requires: RunTarget['api']['requires'] | null;
       requires_session: boolean;
+      instructed_mode: boolean;
     }>(
-      `SELECT id, project_id, output_schema, network_policy, domain_pacing, max_cost_usd, allow_write_actions, requires, requires_session
+      `SELECT id, project_id, output_schema, network_policy, domain_pacing, max_cost_usd, allow_write_actions, requires, requires_session, instructed_mode
        FROM apis WHERE id = $1 AND owner_id = $2`,
       [args.apiId, args.ownerId],
     );
@@ -55,8 +61,8 @@ export async function loadRunTarget(pool: pg.Pool, args: { apiId: string; ownerI
     if (api === undefined) return null;
     let strategy: RunTarget['strategy'] = null;
     if (args.version !== null) {
-      const sv = await tx.query<{ version: number; execution: Execution; network: Network; spec: unknown; script_ref: string | null; est_cost_usd: string | null }>(
-        'SELECT version, execution, network, spec, script_ref, est_cost_usd FROM strategy_versions WHERE api_id = $1 AND version = $2',
+      const sv = await tx.query<{ version: number; execution: Execution; network: Network; spec: unknown; script_ref: string | null; est_cost_usd: string | null; compilable: StrategyCompilable; source_steps: unknown }>(
+        'SELECT version, execution, network, spec, script_ref, est_cost_usd, compilable, source_steps FROM strategy_versions WHERE api_id = $1 AND version = $2',
         [args.apiId, args.version],
       );
       const s = sv.rows[0];
@@ -68,6 +74,8 @@ export async function loadRunTarget(pool: pg.Pool, args: { apiId: string; ownerI
           spec: s.spec,
           scriptRef: s.script_ref,
           estCostUsd: s.est_cost_usd === null ? null : Number(s.est_cost_usd),
+          compilable: s.compilable,
+          sourceSteps: s.source_steps,
         };
       }
     }
@@ -82,6 +90,7 @@ export async function loadRunTarget(pool: pg.Pool, args: { apiId: string; ownerI
         allowWriteActions: api.allow_write_actions,
         requires: api.requires ?? {},
         requiresSession: api.requires_session,
+        instructedMode: api.instructed_mode,
       },
       strategy,
     };
@@ -107,7 +116,7 @@ export async function readLlmSettings(db: Queryable): Promise<unknown> {
  */
 export async function saveCompiledStrategy(
   pool: pg.Pool,
-  args: { apiId: string; ownerId: string; parentVersion: number; network: Network; spec: unknown; estCostUsd: number },
+  args: { apiId: string; ownerId: string; parentVersion: number; network: Network; spec: unknown; estCostUsd: number; sourceSteps?: unknown },
 ): Promise<{ version: number; promoted: boolean }> {
   return withActor(pool, { userId: args.ownerId, role: 'member' }, async (tx) => {
     const locked = await tx.query<{ current_strategy_version: number | null; project_id: string }>('SELECT current_strategy_version, project_id FROM apis WHERE id = $1 AND owner_id = $2 FOR UPDATE', [
@@ -119,9 +128,9 @@ export async function saveCompiledStrategy(
     const next = await tx.query<{ v: number }>('SELECT COALESCE(MAX(version), 0) + 1 AS v FROM strategy_versions WHERE api_id = $1', [args.apiId]);
     const version = next.rows[0]!.v;
     await tx.query(
-      `INSERT INTO strategy_versions (api_id, version, owner_id, project_id, execution, network, spec, est_cost_usd, created_by, parent_version)
-       VALUES ($1, $2, $3, $4, 'hybrid', $5, $6, $7, 'investigation', $8)`,
-      [args.apiId, version, args.ownerId, current.project_id, args.network, JSON.stringify(args.spec), args.estCostUsd, args.parentVersion],
+      `INSERT INTO strategy_versions (api_id, version, owner_id, project_id, execution, network, spec, est_cost_usd, created_by, parent_version, compilable, source_steps)
+       VALUES ($1, $2, $3, $4, 'hybrid', $5, $6, $7, 'investigation', $8, 'yes', $9)`,
+      [args.apiId, version, args.ownerId, current.project_id, args.network, JSON.stringify(args.spec), args.estCostUsd, args.parentVersion, args.sourceSteps === undefined ? null : JSON.stringify(args.sourceSteps)],
     );
     const promoted = current.current_strategy_version === args.parentVersion;
     // Une version compilée (rejouée sans LLM) devient courante : le mode « agent instruit » n'a plus lieu d'être (2.13).

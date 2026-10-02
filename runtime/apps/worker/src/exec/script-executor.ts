@@ -56,6 +56,7 @@ import { chainRoot, hostAllowed, isMainNavigation, openRunContext, trackStrategy
 import { DEFAULT_SANDBOX_LIMITS } from '../sandbox/engine.js';
 import { createSandboxBridges, SandboxBridgeError, type BridgeResponse } from '../sandbox/bridges.js';
 import { ACCESS_REFUSED, createPageBridge, hostViolationWatch, issuedForWatch } from './script.js';
+import type { StepPageTools, StepsHost, StepsTrialInfo } from './steps-host.js';
 
 const NAVIGATION_TIMEOUT_MS = 30_000;
 const MAX_RESPONSE_BYTES = 5_000_000;
@@ -132,6 +133,12 @@ export type ScriptExecutorOptions = {
   readonly robots: AccessCheck;
   /** User-Agent du robot (1.11, `buildUserAgent`) : la chaîne du moteur, suivie du jeton si `identify_instance` est activé. */
   readonly userAgent?: string;
+  /**
+   * Stratégie `steps` (tâche 2.13) : hôte des étapes (pont `ctx.steps`, effet observé de chaque étape). `afterPause` :
+   * appelé quand l'interpréteur s'est arrêté avant l'étape `stopBefore` (agent d'étape), page du run encore ouverte et
+   * gardée ; l'agent n'y agit que par la vue de l'hôte (`StepsHost.agentPage`).
+   */
+  readonly steps?: { readonly host: StepsHost; readonly afterPause?: (tools: StepPageTools) => Promise<void> };
 };
 
 export type ScriptRunOutcome = {
@@ -150,6 +157,8 @@ export type ScriptRunOutcome = {
    * au registre de masquage du run (D-28, 17 §6).
    */
   readonly items: readonly unknown[];
+  /** Stratégie `steps` : étape en échec, effet d'écriture observé, arrêt avant une étape. */
+  readonly steps?: StepsTrialInfo;
 };
 
 const fail = (failure: ExecFailure, pages: number, requests: number): DeclarativeRunResult => ({ ok: false, failure, pages, requests });
@@ -376,6 +385,7 @@ export function runScriptExecutor(options: ScriptExecutorOptions): Promise<Scrip
         }
         // Soumission (navigation hors GET/HEAD) sans `allow_write_actions` : coupée, imputée au script.
         if (!allowWriteActions && request.isNavigationRequest() && !READ_METHODS.has(request.method())) {
+          options.steps?.host.noteBlockedWrite();
           host.report(new URL(request.url()).hostname, 'write_action_blocked', issued.get(chainRoot(request)));
           return false;
         }
@@ -413,6 +423,8 @@ export function runScriptExecutor(options: ScriptExecutorOptions): Promise<Scrip
     });
     const strategy = trackStrategyRequests(rc.context, options.allowedHosts);
     rc.context.on('request', (request) => {
+      // Effet observé d'une étape `steps` : toute requête hors GET/HEAD/OPTIONS du site pendant l'étape (19 §4).
+      if (hostAllowed(request.url(), options.allowedHosts)) options.steps?.host.noteRequest(request.method());
       const root = chainRoot(request);
       if (root === request) {
         issued.set(request, host.armed());
@@ -548,7 +560,11 @@ export function runScriptExecutor(options: ScriptExecutorOptions): Promise<Scrip
       if (!out.ok && out.failure.detail !== 'sandbox_violation' && refusal === undefined && strategy.cut() && (cls === 'network' || cls === 'transient' || cls === 'code_error')) {
         out = { ...out, failure: DOMAIN_NOT_ALLOWED };
       }
-      return { ...rest, result: out, logs, items };
+      // Stratégie `steps` : l'échec d'une étape (cible, `post`, effet observé) prime sur l'erreur de script qui en découle ;
+      // un refus d'accès (INV6) prime sur tout.
+      const stepInfo = options.steps?.host.info;
+      if (stepInfo !== undefined && stepInfo.failure !== null && refusal === undefined) out = { ok: false, failure: stepInfo.failure.failure, pages: 1, requests };
+      return { ...rest, result: out, logs, items, ...(stepInfo === undefined ? {} : { steps: stepInfo }) };
     };
     try {
       rc.page.setDefaultNavigationTimeout(timeoutMs);
@@ -636,7 +652,7 @@ export function runScriptExecutor(options: ScriptExecutorOptions): Promise<Scrip
         },
       });
       items = handle.items;
-      handle.bridges.page = createPageBridge({
+      const pageBridgeOptions: Parameters<typeof createPageBridge>[0] = {
         page: rc.page,
         guard: options.guard,
         allowedHosts: options.allowedHosts,
@@ -647,7 +663,10 @@ export function runScriptExecutor(options: ScriptExecutorOptions): Promise<Scrip
         allowWriteActions,
         accessGuard,
         strategy,
-      });
+        ...(options.steps === undefined ? {} : { steps: options.steps.host }),
+      };
+      const pageBridge = createPageBridge(pageBridgeOptions);
+      handle.bridges.page = pageBridge;
       // Un refus arrête l'enfant aussitôt (même mise à mort que l'annulation du run), sans verdict de violation.
       const sandbox = await options.engine.run(options.code, handle.bridges, options.limits ?? DEFAULT_SANDBOX_LIMITS, {
         input: options.input,
@@ -663,6 +682,12 @@ export function runScriptExecutor(options: ScriptExecutorOptions): Promise<Scrip
       if (refusal !== undefined) return finish(fail(refusal, 1, requests), base);
       if (sandbox.outcome !== 'ok') return finish(fail(codeError(capReached ? 'max_requests_per_run' : `sandbox_${sandbox.outcome}`), 1, requests), base);
       if (paceRefusal !== undefined) return finish(fail({ failure_class: 'rate_limited', retryable: true, detail: `pacing_${paceRefusal}` }, 1, requests), base);
+      // Interprète arrêté avant l'étape cassée : l'agent d'étape agit sur la page gardée, par la vue de l'hôte.
+      if (options.steps?.afterPause !== undefined && options.steps.host.info.paused !== null) {
+        await options.steps.afterPause(pageBridge.stepTools);
+        while (pending.size > 0) await Promise.allSettled([...pending]);
+        if (refusal !== undefined) return finish(fail(refusal, 1, requests), base);
+      }
       const records = handle.items.filter((i): i is Record<string, unknown> => typeof i === 'object' && i !== null && !Array.isArray(i));
       if (records.length !== handle.items.length) return finish(fail({ failure_class: 'extraction', retryable: false, detail: 'schema_mismatch' }, 1, requests), base);
       return finish(

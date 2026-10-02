@@ -20,6 +20,8 @@ import { BrowserPool, playwrightLauncher } from '../browser/pool.js';
 import { loadWorkerConfig } from '../config.js';
 import { startWorker, type Worker } from '../worker.js';
 import { stagehandEngineFor } from './factory.js';
+import { loadInlineScript } from './script-executor.js';
+import { ProcessSandboxEngine, sandboxOptionsFromEnv } from '../sandbox/engine.js';
 import { createStrategyExecutor } from './strategy-executor.js';
 import { AGENT_HOSTS } from '../../../../fixtures/src/sites/agent-sites.ts';
 import { agentReference, agentTasks, type AgentFixtureKey } from '../../../../fixtures/src/agent-tasks.ts';
@@ -129,6 +131,8 @@ beforeAll(async () => {
     pacer: new DomainPacer(new PgPacingStore(pool)),
     browsers,
     logger: pino({ level: 'silent' }),
+    // 2.13 : l'E5 compilée est au format `steps`, interprétée dans le bac à sable de 1.5.
+    script: { engine: new ProcessSandboxEngine({ ...sandboxOptionsFromEnv(process.env), production: false }), loadScript: loadInlineScript, limits: { timeoutMs: 60_000, memoryMb: 128 } },
     agent: {
       llmConfig: async () => llmConfig,
       client: (c) => createLlmClient(c),
@@ -202,6 +206,11 @@ describe('exécuteurs agentiques branchés sur le worker (base réelle, Chromium
       { version: 1, execution: 'agent', created_by: 'user', parent_version: null },
       { version: 2, execution: 'hybrid', created_by: 'investigation', parent_version: 1 },
     ]);
+    // Compilation au grain de l'étape (2.13) : format `steps`, source des étapes (intention écrite par le code, `post`).
+    const compiledRow = (await pool.query<{ spec: { kind: string }; source_steps: unknown[] | null; compilable: string }>('SELECT spec, source_steps, compilable FROM strategy_versions WHERE api_id = $1 AND version = 2', [apiId])).rows[0]!;
+    expect(compiledRow.spec.kind).toBe('steps');
+    expect(compiledRow.compilable).toBe('yes');
+    expect(compiledRow.source_steps?.length).toBeGreaterThan(0);
     const llmCalls = fake.requests;
     const second = await runOf(apiId);
     expect((await pool.query('SELECT failure_class, error_detail FROM runs WHERE id = $1', [second.runId])).rows).toEqual([{ failure_class: null, error_detail: null }]);

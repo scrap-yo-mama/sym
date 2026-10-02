@@ -195,6 +195,19 @@ type AccessPorts = {
 
 type SessionBase = Omit<Parameters<typeof openNetworkSession>[0], 'allowedHosts' | 'allowedHostSuffixes' | 'costCeiling' | 'checkUrl'>;
 
+/**
+ * Événement de statut d'une fin d'enquête en échec (04 §6) : refus et défis (4), connexion, paiement, limite de compte (3)
+ * par `run_failed` ; robots.txt injoignable (2) ; seule une trace E6 non compilable en E5 conforme, sans `instructed_mode`
+ * (2.13, 19 §4) : `not_compilable` (2, ou 21 pour une ré-enquête) ; tout le reste : budget épuisé (2 ou 21).
+ */
+export function investigationFailureEvent(failure: ExecFailure): StatusEventInput {
+  const cls = failure.failure_class;
+  if (BLOCKING.has(cls) || ACTION.has(cls)) return { type: 'run_failed', failureClass: cls, ...(failure.status === undefined ? {} : { httpStatus: failure.status }) };
+  if (cls === 'robots_unreachable') return { type: 'investigation_failed', cause: 'robots_unreachable' };
+  if (failure.detail === 'not_compilable') return { type: 'investigation_failed', cause: 'not_compilable' };
+  return { type: 'investigation_failed', cause: 'budget_exhausted' };
+}
+
 export function createInvestigationExecutor(deps: InvestigationExecutorDeps): RunExecutor {
   const now = deps.now ?? Date.now;
   const robotsCache = deps.robotsCache ?? new RobotsCache();
@@ -243,10 +256,7 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
      */
     const finishFailed = async (failure: ExecFailure, at: string): Promise<RunResult> => {
       const cls = failure.failure_class;
-      let statusEvent: StatusEventInput;
-      if (BLOCKING.has(cls) || ACTION.has(cls)) statusEvent = { type: 'run_failed', failureClass: cls, ...(failure.status === undefined ? {} : { httpStatus: failure.status }) };
-      else if (cls === 'robots_unreachable') statusEvent = { type: 'investigation_failed', cause: 'robots_unreachable' };
-      else statusEvent = { type: 'investigation_failed', cause: 'budget_exhausted' };
+      const statusEvent = investigationFailureEvent(failure);
       await save('done');
       if (ACTION.has(cls)) await event(EV.actionRequired, { cause: cls, domain: host });
       await applyStatus(statusEvent);
@@ -615,7 +625,7 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
               const entry = entries.get(pair)!;
               const trialTarget: RunTarget = {
                 api: { ...target.api, outputSchema, maxCostUsd: limits.ceilingUsd },
-                strategy: { version: 0, execution: entry.execution, network: entry.network, spec: entry.spec, scriptRef: null, estCostUsd: entry.est_cost_usd },
+                strategy: { version: 0, execution: entry.execution, network: entry.network, spec: entry.spec, scriptRef: null, estCostUsd: entry.est_cost_usd, compilable: 'unknown', sourceSteps: null },
               };
               const timeout = AbortSignal.timeout(Math.max(1, limits.deadlineMs - now()));
               const trialCtx: RunCtx = { ...ctx, signal: AbortSignal.any([ctx.signal, timeout]), input: trialInput(entry.paginated, purpose) };

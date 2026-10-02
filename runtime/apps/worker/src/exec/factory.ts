@@ -140,7 +140,7 @@ export function productionExecutorFactory(env: Readonly<Record<string, string | 
     }
     const instanceContact = async (): Promise<string | null> => resolveInstanceContact(await readInstanceContactSetting(pool), env);
     const identifyInstance = async (): Promise<boolean> => resolveIdentifyInstance(await readIdentifyInstanceSetting(pool), env);
-    // Réparation dans le même run (2.3) : rôle `repair` relu à chaque réparation, bail en table ; seuil de casse des items
+    // Réparation dans le même run (2.3) et reprise par étape (2.13) : rôles `repair` et `agent` relus à chaque réparation, bail en table ; seuil de casse des items
     // non conformes (D-49) lu au démarrage (`ITEMS_REJECTED_MAX_SHARE`, `ITEMS_REJECTED_MIN_COUNT`).
     const repair = createRepairPort({
       pool,
@@ -149,7 +149,8 @@ export function productionExecutorFactory(env: Readonly<Record<string, string | 
       llm: {
         config: async () => {
           const value = await readLlmSettings(pool);
-          return value === null ? null : llmConfigFromSettings(value, (id) => secrets.get(id), ['repair']);
+          // `agent` : agent d'étape de la reprise par étape (2.13, niveaux 2 et 3).
+          return value === null ? null : llmConfigFromSettings(value, (id) => secrets.get(id), ['repair', 'agent']);
         },
         client: (config) => createLlmClient(config, { note: (note) => logger.info(note, 'llm') }),
       },
