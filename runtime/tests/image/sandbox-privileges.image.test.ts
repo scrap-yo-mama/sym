@@ -76,8 +76,14 @@ const RENDER_SECCOMP_VARIANTS = [
   { name: 'Render sous le profil seccomp par défaut de Docker (builtin)', flags: renderFlags(RENDER_CAPS, ['--security-opt', 'seccomp=builtin']), short: 'render_builtin', seccomp: '2', chromium: false },
   { name: 'Render sans profil seccomp (unconfined)', flags: renderFlags(RENDER_CAPS, ['--security-opt', 'seccomp=unconfined']), short: 'render_unconfined', seccomp: '0', chromium: true },
 ] as const;
-/** Filtre de l'enfant (sandbox-seccomp --self-test sous l'uid dédié) : aucun espace de noms, clone ordinaire permis. */
-const CHILD_NO_NAMESPACES = { unshareUser: 'EPERM', unshareNet: 'EPERM', setns: 'EPERM', clone3: 'ENOSYS', cloneUser: 'EPERM', cloneNet: 'EPERM', clone: 'ok' };
+/**
+ * Filtre de l'enfant (sandbox-seccomp --self-test) : aucun espace de noms, clone ordinaire permis, ni ptrace ni lecture ou
+ * écriture de la mémoire d'un autre processus (revue 4.1b (4)).
+ */
+const CHILD_NO_NAMESPACES = {
+  unshareUser: 'EPERM', unshareNet: 'EPERM', setns: 'EPERM', clone3: 'ENOSYS', cloneUser: 'EPERM', cloneNet: 'EPERM', clone: 'ok',
+  ptrace: 'EPERM', processVmReadv: 'EPERM', processVmWritev: 'EPERM',
+};
 
 const NONE = '0000000000000000';
 /** cap_setuid (7) et cap_setgid (6). */
@@ -235,8 +241,8 @@ const CHILD = "const fs=require('fs');const s=fs.readFileSync('/proc/self/status
   "process.stdout.write(JSON.stringify({uid:process.getuid(),inh:f('CapInh'),prm:f('CapPrm'),eff:f('CapEff'),amb:f('CapAmb'),nnp:Number(f('NoNewPrivs')),seccomp:f('Seccomp'),pid1Environ:rd('/proc/1/environ'),parentEnviron:rd('/proc/'+process.ppid+'/environ'),keys:Object.keys(process.env),core:(/^Max core file size\\s+(\\S+)\\s+(\\S+)/m.exec(fs.readFileSync('/proc/self/limits','utf8'))||[]).slice(1).join(' '),coredumpFilter:fs.readFileSync('/proc/self/coredump_filter','utf8').trim(),userns:require('child_process').spawnSync('/usr/bin/unshare',['-U','/bin/true']).status}))";
 const plan = spawnPlan({ node: options.node ?? process.execPath, nodeArgs: ['-e', CHILD], cpuSeconds: 5, launcher: options.launcher, uid: options.uid, gid: options.gid, seccomp: options.seccomp });const child = spawnSync(plan.command, plan.args, { env: {}, encoding: 'utf8', cwd: '/app/apps/worker/dist/sandbox', uid: plan.uid, gid: plan.gid });
 try { out.sandbox = JSON.parse(child.stdout); } catch { out.sandbox = { error: child.status + ' ' + child.stderr.slice(0, 500) }; }
-// Filtre de l'enfant, essayé sous l'uid dédié par le lanceur (comme spawnPlan le pose) : aucun espace de noms.
-const selfTest = spawnSync(options.launcher, ['--reuid=' + options.uid, '--regid=' + options.gid, '--clear-groups', '--no-new-privs', '--', options.seccomp, '--self-test'], { env: {}, encoding: 'utf8' });
+// Filtre de l'enfant, essayé par le worker (premier exec de la chaîne de lancement, revue 4.1b (4)) : aucun espace de noms.
+const selfTest = spawnSync(options.seccomp, ['--self-test'], { env: {}, encoding: 'utf8' });
 try { out.childNamespaces = JSON.parse(selfTest.stdout); } catch { out.childNamespaces = { error: selfTest.status + ' ' + selfTest.stderr.slice(0, 300) }; }
 const engine = new ProcessSandboxEngine({ ...options, production: true });
 out.probe = await engine.probeIsolation();
@@ -273,8 +279,8 @@ type ProbeReport = {
 };
 
 /** Lance la sonde à la place du worker (même point d'entrée, mêmes capacités) et rend son rapport. */
-async function runProbe(short: string, flags: readonly string[]): Promise<ProbeReport> {
-  const name = startContainer(`zz_test_img_probe_${short}_${run}`, flags, { RUNTIME_MODE: 'worker' }, ['-v', `${join(scratch, 'probe.mjs')}:/app/apps/worker/dist/index.js:ro`]);
+async function runProbe<T = ProbeReport>(short: string, flags: readonly string[], file = 'probe.mjs', marker = 'ZZ_PROBE'): Promise<T> {
+  const name = startContainer(`zz_test_img_probe_${short}_${run}`, flags, { RUNTIME_MODE: 'worker' }, ['-v', `${join(scratch, file)}:/app/apps/worker/dist/index.js:ro`]);
   // La sonde s'arrête d'elle-même (rapport ou erreur) : attendre l'arrêt du conteneur, pas un motif des journaux.
   await until(`sonde terminée dans ${name}`, () => !running(name), 120_000).catch((error: unknown) => {
     // Sonde bloquée : ses journaux et les processus du conteneur disent où.
@@ -282,10 +288,95 @@ async function runProbe(short: string, flags: readonly string[]): Promise<ProbeR
     throw new Error(`${String(error)}\n${logsOf(name).slice(-3000)}\nprocessus : ${procs}`);
   });
   const logs = logsOf(name);
-  const line = logs.split('\n').find((l) => l.startsWith('ZZ_PROBE '));
+  const line = logs.split('\n').find((l) => l.startsWith(`${marker} `));
   expect(line, logs.slice(-3000)).toBeDefined();
-  return JSON.parse(line!.slice('ZZ_PROBE '.length)) as ProbeReport;
+  return JSON.parse(line!.slice(marker.length + 1)) as T;
 }
+
+/**
+ * Revue 4.1b (4) : aucun processus de l'uid dédié ne doit exister sans le filtre de l'enfant, même un instant. Posé APRÈS le
+ * changement d'uid, le filtre laissait à chaque lancement (enfant, sonde, arrêt forcé, balayage) une fenêtre où un processus
+ * de l'uid dédié tournait sans filtre ; sandbox-seccomp, sans capacité, y était attachable (ptrace, /proc/<pid>/mem si Yama
+ * vaut 0) par un enfant évadé, qui pouvait y injecter unshare(CLONE_NEWUSER). Ici, un processus évadé simulé (lancé comme un
+ * enfant, donc filtré, sous l'uid dédié) stoppe en boucle tous les processus de son uid (kill(-1, SIGSTOP), qu'il est en
+ * droit d'envoyer : D-67, dans un conteneur Linux sous l'uid dédié seulement), relève le nombre de filtres seccomp de chacun
+ * (Seccomp_filters), puis les relance, pendant que le worker enchaîne des arrêts forcés (killPlan, même chaîne que le
+ * balayage) et des lancements d'enfant (spawnPlan). Tout processus de l'uid dédié vu avec moins de filtres que l'évadé est
+ * une fenêtre sans filtre. Indépendant de Yama (lecture de /proc/<pid>/status, signaux du même uid), relevé pour mémoire.
+ */
+const RACE = String.raw`
+import { spawn, spawnSync, execFileSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
+const { spawnPlan, killPlan, sandboxOptionsFromEnv } = await import('/app/apps/worker/dist/sandbox/engine.js');
+const options = sandboxOptionsFromEnv(process.env);
+let yama = 'absent';
+try { yama = readFileSync('/proc/sys/kernel/yama/ptrace_scope', 'utf8').trim(); } catch {}
+const WATCH = '(' + function watch() {
+  const fs = require('fs');
+  // D-67 : kill(-1) seulement sous Linux, dans un conteneur, sous l'uid dédié.
+  if (process.platform !== 'linux' || process.getuid() !== 1500 || !fs.existsSync('/.dockerenv')) { process.stdout.write('{"refused":true}\n'); return; }
+  const status = (p) => { try { return fs.readFileSync('/proc/' + p + '/status', 'utf8'); } catch { return undefined; } };
+  const filters = (s) => Number((/^Seccomp_filters:\s*(\d+)/m.exec(s) || [])[1]);
+  const uids = (s) => ((/^Uid:\s*(.*)$/m.exec(s) || [])[1] || '').trim().split(/\s+/).map(Number);
+  const own = filters(status('self'));
+  const end = Date.now() + Number(process.argv[1]);
+  const seen = {};
+  const bad = [];
+  let scans = 0;
+  // Pause d'une milliseconde entre deux relevés : les lancements du worker avancent (sinon ils restent presque toujours stoppés).
+  const pause = new Int32Array(new SharedArrayBuffer(4));
+  process.stdout.write('ready\n');
+  while (Date.now() < end) {
+    try { process.kill(-1, 'SIGSTOP'); } catch {}
+    try {
+      for (const d of fs.readdirSync('/proc')) {
+        if (!/^\d+$/.test(d) || Number(d) === process.pid) continue;
+        const s = status(d);
+        if (s === undefined || !uids(s).includes(1500)) continue;
+        const name = (/^Name:\s*(.*)$/m.exec(s) || [])[1];
+        seen[name] = (seen[name] || 0) + 1;
+        if (!(filters(s) >= own)) bad.push({ pid: Number(d), name, filters: filters(s), seccomp: (/^Seccomp:\s*(\d)/m.exec(s) || [])[1] });
+      }
+    } finally {
+      try { process.kill(-1, 'SIGCONT'); } catch {}
+    }
+    scans++;
+    Atomics.wait(pause, 0, 0, 1);
+  }
+  process.stdout.write(JSON.stringify({ own, scans, seen, bad: bad.slice(0, 20), badCount: bad.length }) + '\n');
+}.toString() + ')()';
+const plan = (nodeArgs) => spawnPlan({ node: options.node ?? process.execPath, nodeArgs, cpuSeconds: 30, launcher: options.launcher, uid: options.uid, gid: options.gid, seccomp: options.seccomp });
+const w = plan(['-e', WATCH, '5000']);
+const watcher = spawn(w.command, w.args, { env: {}, cwd: '/', stdio: ['ignore', 'pipe', 'pipe'] });
+let out = '';
+let err = '';
+watcher.stdout.on('data', (d) => { out += d; });
+watcher.stderr.on('data', (d) => { err += d; });
+const exited = new Promise((resolve) => watcher.on('exit', resolve));
+await Promise.race([exited, new Promise((resolve) => { const t = setInterval(() => { if (out.includes('ready')) { clearInterval(t); resolve(); } }, 5); })]);
+// Arrêt forcé d'un pid inexistant (même chaîne que le balayage : filtre, lanceur, /bin/kill) et, de temps en temps, un enfant.
+const kill = killPlan(options, 4000000);
+const child = plan(['-e', '0']);
+let launches = 0;
+let children = 0;
+const deadline = Date.now() + 3500;
+while (Date.now() < deadline && watcher.exitCode === null) {
+  try { execFileSync(kill.command, kill.args, { env: {}, stdio: 'ignore', timeout: 5000 }); } catch {}
+  launches++;
+  if (launches % 20 === 0) { spawnSync(child.command, child.args, { env: {}, cwd: '/', stdio: 'ignore', timeout: 10000 }); children++; }
+}
+await exited;
+let report;
+try { report = JSON.parse(out.trim().split('\n').pop()); } catch { report = { error: (out + ' ' + err).slice(0, 500) }; }
+console.log('ZZ_RACE ' + JSON.stringify({ yama, launches, children, watcher: report }));
+`;
+
+type RaceReport = {
+  yama: string;
+  launches: number;
+  children: number;
+  watcher: { own: number; scans: number; seen: Record<string, number>; bad: unknown[]; badCount: number; refused?: boolean; error?: string };
+};
 
 /**
  * (c) enfant du bac à sable lancé par le plan de production : uid dédié, aucune capacité, filtre seccomp de l'enfant (aucun
@@ -317,6 +408,7 @@ beforeAll(() => {
   }
   scratch = mkdtempSync(join(tmpdir(), 'zz_test_image_privileges-'));
   writeFileSync(join(scratch, 'probe.mjs'), PROBE);
+  writeFileSync(join(scratch, 'race.mjs'), RACE);
   dockerOk(['network', 'create', network]);
   dockerOk(['run', '-d', '--name', pgName, '--network', network, '-e', 'POSTGRES_USER=runtime', '-e', `POSTGRES_PASSWORD=${PG_PASSWORD}`, '-e', 'POSTGRES_DB=runtime', PG_IMAGE]);
   containers.push(pgName);
@@ -333,8 +425,15 @@ describe('assert_sandbox_image_privileges — image sous les capacités de Rende
   test('image : démarre en root pour descendre aussitôt ; copie de Node du worker réservée à pwuser', () => {
     const user = dockerOk(['image', 'inspect', '--format', '{{.Config.User}}', image]).trim();
     expect(['root', '0', '']).toContain(user);
-    const stat = dockerOk(['run', '--rm', '--entrypoint', 'stat', image, '-c', '%U:%G %a', '/usr/local/libexec/node-worker', '/usr/local/libexec/sandbox-launch']);
-    expect(stat.trim().split('\n')).toEqual(['root:pwuser 750', 'root:pwuser 750']);
+    const stat = dockerOk(['run', '--rm', '--entrypoint', 'stat', image, '-c', '%U:%G %a', '/usr/local/libexec/node-worker', '/usr/local/libexec/sandbox-launch', '/usr/local/libexec/sandbox-seccomp']);
+    expect(stat.trim().split('\n')).toEqual(['root:pwuser 750', 'root:pwuser 750', 'root:pwuser 750']);
+    // Revue 4.1b (4) : le filtre de l'enfant précède le lanceur ; il lui transmet cap_setuid,cap_setgid (permises seulement).
+    const getcap = dockerOk(['run', '--rm', '--entrypoint', 'getcap', image, '/usr/local/libexec/node-worker', '/usr/local/libexec/sandbox-launch', '/usr/local/libexec/sandbox-seccomp']);
+    expect(getcap.trim().split('\n').sort()).toEqual([
+      '/usr/local/libexec/node-worker cap_setgid,cap_setuid=p',
+      '/usr/local/libexec/sandbox-launch cap_setgid,cap_setuid=ep',
+      '/usr/local/libexec/sandbox-seccomp cap_setgid,cap_setuid=p',
+    ]);
   });
 
   test('`runtime` lancée en root hors point d’entrée (docker exec, shell de l’hébergeur) : descend sur pwuser sans capacité', () => {
@@ -498,6 +597,19 @@ describe('assert_sandbox_image_privileges — image sous les capacités de Rende
       }, 240_000);
     });
   }
+
+  test('assert_sandbox_child_no_namespaces — aucun processus de l’uid dédié sans filtre, même un instant (lancements, arrêts forcés ; revue 4.1b (4))', async () => {
+    const report = await runProbe<RaceReport>('race', RENDER, 'race.mjs', 'ZZ_RACE');
+    console.log(`fenêtre sans filtre : ${JSON.stringify(report)}`);
+    expect(report.watcher.refused).toBeUndefined();
+    expect(report.watcher.error).toBeUndefined();
+    expect(report.watcher.bad, JSON.stringify(report.watcher.bad)).toEqual([]);
+    expect(report.watcher.badCount).toBe(0);
+    // Non vide : l'évadé simulé a bien vu passer les processus de l'uid dédié lancés par le worker (lanceur, /bin/kill).
+    expect(report.launches).toBeGreaterThan(20);
+    expect(report.watcher.scans).toBeGreaterThan(50);
+    expect(report.watcher.seen['kill'] ?? 0, JSON.stringify(report.watcher.seen)).toBeGreaterThan(0);
+  }, 180_000);
 
   // Revue 4.1b : Render n'applique pas le profil seccomp du compose. Sous le profil par défaut de Docker comme sans profil,
   // le bac à sable des scripts tient (uid dédié, sonde, run, balayage, aucun espace de noms pour l'enfant) ; sous le profil

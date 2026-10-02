@@ -45,9 +45,12 @@ WORKDIR /app
 #   le worker (jamais par un shell intermédiaire, qui les aurait perdues), avec --no-new-privs ; sous no-new-privileges il
 #   garde ses capacités par l'intersection avec le permis du worker. L'enfant exécute le Node ordinaire (SANDBOX_NODE),
 #   sans capacité ;
-# - sandbox-seccomp (root, 0755, sans capacité), exécuté par le lanceur juste après le changement d'uid : l'enfant perd
-#   unshare, setns et clone(CLONE_NEW*), que le profil seccomp du compose permet au conteneur pour le bac à sable de
-#   Chromium (revue 4.1b) ;
+# - sandbox-seccomp (root:pwuser 0750, cap_setuid,cap_setgid PERMISES seulement, comme node-worker), exécuté par le worker
+#   AVANT sandbox-launch, qu'il exécute à son tour : l'enfant perd unshare, setns et clone(CLONE_NEW*), que le profil
+#   seccomp du compose permet au conteneur pour le bac à sable de Chromium, ainsi que ptrace et process_vm_readv/writev
+#   (revue 4.1b). Posé sous l'uid du worker, le filtre précède tout processus de l'uid dédié (revue 4.1b (4) : posé après
+#   le changement d'uid, il laissait une fenêtre où un processus de l'uid dédié, sans filtre, était attachable) ; ses
+#   capacités permises ne servent qu'à les transmettre à sandbox-launch sous no-new-privileges ;
 # - /ms-playwright (Chromium, que le worker exécute sous pwuser) : l'image de base le livre en 777 ; rendu non modifiable
 #   par un autre que root (go-w), sans quoi un enfant évadé du bac à sable (uid 1500) remplacerait le binaire de Chromium.
 #   Firefox et WebKit, inutilisés, sont retirés (aucune copie de leurs fichiers dans cette couche).
@@ -91,12 +94,16 @@ COPY --from=build /app/apps/server/dist apps/server/dist
 COPY --from=build /app/apps/worker/dist apps/worker/dist
 COPY --from=build /app/apps/cli/dist apps/cli/dist
 COPY deploy/entrypoint.sh /usr/local/bin/entrypoint.sh
-COPY --from=seccomp --chmod=0755 /src/sandbox-seccomp /usr/local/libexec/sandbox-seccomp
+COPY --from=seccomp /src/sandbox-seccomp /usr/local/libexec/sandbox-seccomp
 # Commande `runtime` (CLI : migrate, keygen, doctor…) dans le PATH : champ « pré-déploiement » des hébergeurs,
 # `docker exec <conteneur> runtime doctor`, `docker run --rm <image> runtime keygen` (tâche 4.1).
 # Lancée en root (`docker exec`, shell de l'hébergeur : ils prennent l'USER de l'image, root), elle descend sur pwuser
 # sans capacité, comme le point d'entrée.
-RUN chmod 0755 /usr/local/bin/entrypoint.sh \
+# Filtre de l'enfant : chown avant setcap (chown efface les capacités de fichier).
+RUN chown root:pwuser /usr/local/libexec/sandbox-seccomp \
+ && chmod 0750 /usr/local/libexec/sandbox-seccomp \
+ && setcap cap_setuid,cap_setgid=p /usr/local/libexec/sandbox-seccomp \
+ && chmod 0755 /usr/local/bin/entrypoint.sh \
  && printf '#!/bin/sh\nif [ "$(id -u)" = 0 ]; then exec /usr/bin/setpriv --reuid=1001 --regid=1001 --init-groups --inh-caps=-all --no-new-privs -- node /app/apps/cli/dist/index.js "$@"; fi\nexec node /app/apps/cli/dist/index.js "$@"\n' > /usr/local/bin/runtime \
  && chmod 0755 /usr/local/bin/runtime
 

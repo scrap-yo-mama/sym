@@ -205,7 +205,8 @@ le bac à sable ne pourrait pas changer d'utilisateur (constat F-20261001-R01, d
 |---|---|---|
 | `server`, `runtime migrate`, commande passée au conteneur, `runtime …` lancée en root par `docker exec` ou le shell de l'hébergeur, sonde de santé du compose | pwuser | aucune |
 | `worker` (`/usr/local/libexec/node-worker`, copie de Node réservée au groupe pwuser) | pwuser | `cap_setuid,cap_setgid` **permises** seulement : ni effectives (un `process.setuid(0)` du worker échoue), ni ambient, ni héritables ; ses enfants (Chromium, shells) n'en ont aucune |
-| Lanceur du bac à sable (`sandbox-launch`, exécuté directement par le worker) | pwuser puis `sandbox` | les mêmes, effectives, le temps de changer d'utilisateur |
+| Filtre de l'enfant (`sandbox-seccomp`, premier exec du worker pour chaque processus de l'uid dédié) | pwuser | `cap_setuid,cap_setgid` **permises** seulement, transmises au lanceur qu'il exécute ; pose le filtre seccomp de l'enfant avant tout changement d'utilisateur |
+| Lanceur du bac à sable (`sandbox-launch`, exécuté par `sandbox-seccomp`, sans shell intermédiaire) | pwuser puis `sandbox` | les mêmes, effectives, le temps de changer d'utilisateur |
 | Enfant du bac à sable (Node ordinaire, `SANDBOX_NODE`) | `sandbox` (1500) | aucune ; `/proc/1/environ` et l'environnement du worker lui sont refusés |
 | tini, et le shell du point d'entrée en `RUNTIME_MODE=all` | pwuser | `cap_setuid,cap_setgid` (ambient) quand le rôle worker démarre ; ils n'exécutent aucun code tiers et retirent ces capacités au lancement de chaque rôle |
 
@@ -255,8 +256,9 @@ balayer `127.0.0.1`, trouver le port de débogage du Chromium agentique (`--remo
 authentification) et piloter l'essai d'un autre propriétaire (cookies, contenu des pages, actions hors de la garde de
 domaine), ou joindre les proxys d'egress locaux. La sonde « bac à sable : isolation éprouvée » ne couvre pas ce canal.
 Stagehand se connecte au Chromium agentique par une URL CDP (WebSocket) : `--remote-debugging-pipe` n'est pas utilisable
-tel quel. Pistes : espace de noms réseau dédié pour l'enfant, créé par le lanceur avant le filtre `sandbox-seccomp` (l'enfant,
-lui, n'en crée aucun), ou filtre seccomp de `socket()` ajouté à ce filtre. Risque consigné à côté de D-32.
+tel quel. Pistes : espace de noms réseau dédié pour l'enfant, créé avant le filtre `sandbox-seccomp` (l'enfant, lui, n'en crée
+aucun), ou filtre seccomp de `socket()` ajouté à ce filtre. Risque résiduel accepté en l'état (revue 4.1b) ; le
+durcissement reste à planifier.
 
 ### Risque résiduel : espaces de noms utilisateur
 
@@ -268,10 +270,15 @@ sur des objets qui lui sont propres : aucun droit sur les fichiers, processus ou
 noyau (pare-feu nf_tables, montages, files de messages) que le profil par défaut fermait et sur laquelle reposent beaucoup
 d'élévations locales de privilèges.
 
-- **Enfant du bac à sable des scripts : fermé.** Le lanceur exécute `/usr/local/libexec/sandbox-seccomp` (`SANDBOX_SECCOMP`,
-  source `deploy/sandbox-seccomp.c`) juste après le changement d'uid. Son filtre, hérité par tout ce qui suit et
-  irrévocable, refuse `unshare`, `setns` et `clone` avec un drapeau `CLONE_NEW*` (EPERM), rend `clone3` indisponible
-  (ENOSYS : glibc se replie sur `clone`) et tue tout appel d'une autre architecture. La sonde d'isolation essaie
+- **Enfant du bac à sable des scripts : fermé.** Le worker exécute d'abord `/usr/local/libexec/sandbox-seccomp`
+  (`SANDBOX_SECCOMP`, source `deploy/sandbox-seccomp.c`), qui pose son filtre sous l'uid du worker, puis exécute le
+  lanceur (changement d'uid). Ce filtre, hérité par tout ce qui suit et irrévocable, refuse `unshare`, `setns` et `clone`
+  avec un drapeau `CLONE_NEW*` (EPERM), rend `clone3` indisponible (ENOSYS : glibc se replie sur `clone`), refuse
+  `ptrace`, `process_vm_readv` et `process_vm_writev` (EPERM) et tue tout appel d'une autre architecture. Il précède le
+  changement d'uid : posé après, il laissait à chaque lancement une fenêtre où un processus de l'uid dédié, sans filtre
+  et attachable (`ptrace`, `/proc/<pid>/mem` si Yama vaut 0), pouvait être détourné par un enfant évadé (revue 4.1b).
+  `sandbox-seccomp` porte pour cela `cap_setuid,cap_setgid` en permis : sous `no-new-privileges`, le lanceur qu'il
+  exécute n'obtient ses capacités que si son appelant les détient. La sonde d'isolation essaie
   `unshare --user` sous l'uid dédié ; le worker refuse de démarrer en production si l'enfant y parvient. L'arrêt forcé
   d'un enfant et le balayage de fin de run (`/bin/kill` lancé sous l'uid dédié) passent par le même filtre : aucun
   processus de l'uid dédié ne tourne sans lui.

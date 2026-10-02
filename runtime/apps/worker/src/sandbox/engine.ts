@@ -67,10 +67,12 @@ export type ProcessSandboxOptions = {
    */
   node?: string;
   /**
-   * Filtre seccomp de l'enfant (`deploy/sandbox-seccomp.c`, `SANDBOX_SECCOMP`), exécuté juste après le changement d'uid :
-   * `unshare`, `setns` et `clone` avec un drapeau CLONE_NEW* refusés, `clone3` en ENOSYS. Le profil seccomp du compose
-   * permet les espaces de noms utilisateur à tout le conteneur (bac à sable de Chromium) ; l'enfant, lui, n'en crée aucun
-   * (aucune capacité dans un espace imbriqué, donc pas de surface netfilter, mount… après une double évasion).
+   * Filtre seccomp de l'enfant (`deploy/sandbox-seccomp.c`, `SANDBOX_SECCOMP`), premier exec du worker, AVANT le lanceur et
+   * donc avant le changement d'uid (revue 4.1b (4)) : `unshare`, `setns` et `clone` avec un drapeau CLONE_NEW* refusés,
+   * `clone3` en ENOSYS, `ptrace` et `process_vm_readv/writev` refusés. Le profil seccomp du compose permet les espaces de
+   * noms utilisateur à tout le conteneur (bac à sable de Chromium) ; l'enfant, lui, n'en crée aucun (aucune capacité dans un
+   * espace imbriqué, donc pas de surface netfilter, mount… après une double évasion). Dans l'image, il porte
+   * cap_setuid,cap_setgid en permis (=p) pour que le lanceur qu'il exécute garde les siennes sous no-new-privileges.
    */
   seccomp?: string;
   /** Production : refuse de démarrer si l'enfant tournerait sous l'uid du worker (défaut : NODE_ENV=production). */
@@ -148,8 +150,10 @@ export type SpawnPlan = { command: string; args: string[]; uid?: number; gid?: n
  * no-new-privileges, il n'obtient cap_setuid,cap_setgid que si l'appelant les détient), puis `/bin/sh`, sous l'uid dédié,
  * pose RLIMIT_CPU (souple N puis dur N + 1, dans cet ordre : SIGXCPU d’abord, SIGKILL ensuite) et interdit tout vidage
  * mémoire (Linux, voir launchScript), puis `env -i` rend un environnement vide (le shell en ajoute), puis Node. Avec
- * `seccomp`, le filtre de l'enfant s'exécute juste après le changement d'uid, avant le shell : tout ce qui suit en hérite.
- * Chaque étape fait `exec` : le pid suivi par le parent reste celui de l'enfant. */
+ * `seccomp` et un lanceur, le filtre de l'enfant s'exécute en PREMIER, sous l'uid du worker, puis exécute le lanceur
+ * (`asSandboxUid`) : aucun processus de l'uid dédié n'existe sans filtre. Chaque étape fait `exec` : le pid suivi par le
+ * parent reste celui de l'enfant. Sans lanceur (worker root, `spawn` change d'uid), le filtre suit le changement d'uid :
+ * mode de développement, l'image passe toujours par le lanceur. */
 export function spawnPlan(p: {
   node: string;
   nodeArgs: readonly string[];
@@ -165,11 +169,11 @@ export function spawnPlan(p: {
 }): SpawnPlan {
   const node = [p.node, ...p.nodeArgs, ...(p.script === undefined ? [] : [p.script])];
   const cpu = String(Math.max(1, Math.ceil(p.cpuSeconds)));
-  const shell = [...(p.seccomp === undefined ? [] : [p.seccomp]), '/bin/sh', '-c', launchScript(p.platform ?? process.platform), cpu, ...node];
+  const shell = ['/bin/sh', '-c', launchScript(p.platform ?? process.platform), cpu, ...node];
   if (p.launcher !== undefined && p.uid !== undefined && p.gid !== undefined) {
-    return { command: p.launcher, args: [`--reuid=${p.uid}`, `--regid=${p.gid}`, '--clear-groups', '--no-new-privs', '--', ...shell] };
+    return asSandboxUid({ launcher: p.launcher, uid: p.uid, gid: p.gid, seccomp: p.seccomp }, shell);
   }
-  const [command = '/bin/sh', ...args] = shell;
+  const [command = '/bin/sh', ...args] = p.seccomp === undefined ? shell : [p.seccomp, ...shell];
   const plan: SpawnPlan = { command, args };
   if (p.launcher === undefined && p.uid !== undefined) return { ...plan, uid: p.uid, gid: p.gid };
   return plan;
@@ -188,18 +192,23 @@ export function killPlan(
   if (o.launcher === undefined || o.uid === undefined || o.gid === undefined) return undefined;
   // Un pid d'enfant seulement : jamais 0 (groupe), négatif (kill -1, groupe) ni 1 (init) (F-20261002-06).
   if (!Number.isSafeInteger(pid) || pid <= 1) return undefined;
-  return { command: o.launcher, args: [...asSandboxUid(o.uid, o.gid, o.seccomp), '/bin/kill', '-KILL', String(pid)] };
+  return asSandboxUid({ ...o, launcher: o.launcher, uid: o.uid, gid: o.gid }, ['/bin/kill', '-KILL', String(pid)]);
 }
 
 /**
- * Préfixe des commandes lancées sous l'uid dédié : changement d'uid sans nouveaux privilèges, puis filtre seccomp de
- * l'enfant. Le profil du compose permet clone, setns et unshare au conteneur : un /bin/kill lancé sous l'uid dédié sans
- * filtre serait un processus de cet uid sans filtre, qu'un enfant évadé pourrait stopper puis détourner (ptrace, ou
- * /proc/<pid>/mem si Yama vaut 0) pour créer un espace de noms utilisateur. Arrêt forcé et balayage passent donc par le
- * même filtre que l'enfant (revue 4.1b).
+ * Commande lancée sous l'uid dédié : filtre seccomp de l'enfant d'abord (sous l'uid du worker), puis le lanceur (changement
+ * d'uid sans nouveaux privilèges), puis la commande. Le profil du compose permet clone, setns et unshare au conteneur : un
+ * processus de l'uid dédié sans filtre (enfant, /bin/kill de l'arrêt forcé ou du balayage) pourrait être stoppé puis détourné
+ * par un enfant évadé (ptrace, ou /proc/<pid>/mem si Yama vaut 0) pour créer un espace de noms utilisateur. Revue 4.1b (4) :
+ * posé APRÈS le changement d'uid, le filtre laissait cette fenêtre à chaque lancement (l'exec de sandbox-seccomp, sans
+ * capacité, rend le processus attachable avant que son `main` ne pose le filtre). Posé avant, sous l'uid du worker, il
+ * précède tout processus de l'uid dédié : le lanceur, filtré, n'est pas attachable (capacités, non dumpable après son
+ * changement d'uid) jusqu'à l'exec de la commande, filtrée elle aussi.
  */
-function asSandboxUid(uid: number, gid: number, seccomp: string | undefined): string[] {
-  return [`--reuid=${uid}`, `--regid=${gid}`, '--clear-groups', '--no-new-privs', '--', ...(seccomp === undefined ? [] : [seccomp])];
+function asSandboxUid(o: { launcher: string; uid: number; gid: number; seccomp?: string | undefined }, command: readonly string[]): { command: string; args: string[] } {
+  const launch = [o.launcher, `--reuid=${o.uid}`, `--regid=${o.gid}`, '--clear-groups', '--no-new-privs', '--', ...command];
+  const [first, ...args] = o.seccomp === undefined ? launch : [o.seccomp, ...launch];
+  return { command: first ?? o.launcher, args };
 }
 
 /**
@@ -210,7 +219,24 @@ function asSandboxUid(uid: number, gid: number, seccomp: string | undefined): st
  */
 export function sweepPlan(o: Pick<ProcessSandboxOptions, 'launcher' | 'uid' | 'gid' | 'seccomp'>): { command: string; args: string[] } | undefined {
   if (o.launcher === undefined || o.uid === undefined || o.gid === undefined) return undefined;
-  return { command: o.launcher, args: [...asSandboxUid(o.uid, o.gid, o.seccomp), '/bin/kill', '-KILL', '-1'] };
+  return asSandboxUid({ ...o, launcher: o.launcher, uid: o.uid, gid: o.gid }, ['/bin/kill', '-KILL', '-1']);
+}
+
+/**
+ * Vérification préalable à chaque balayage (revue 4.1b (3)) : `/usr/bin/id -u` lancé par la même chaîne que le balayage
+ * (filtre, lanceur). `sweepRefusal` ne compare que l'uid configuré à l'uid courant : un lanceur qui ne change pas réellement
+ * d'uid (mal installé, faux lanceur de test) passerait cette garde et `kill -1` partirait sous l'uid du worker.
+ */
+export function sweepIdentityPlan(o: Pick<ProcessSandboxOptions, 'launcher' | 'uid' | 'gid' | 'seccomp'>): { command: string; args: string[] } | undefined {
+  if (o.launcher === undefined || o.uid === undefined || o.gid === undefined) return undefined;
+  return asSandboxUid({ ...o, launcher: o.launcher, uid: o.uid, gid: o.gid }, ['/usr/bin/id', '-u']);
+}
+
+/** Uid rapporté par `sweepIdentityPlan` : motif du refus s'il n'est pas exactement l'uid dédié, sinon `undefined`. */
+export function sweepIdentityRefusal(p: { uid: number; reported: string | undefined }): string | undefined {
+  const seen = p.reported?.trim() ?? '';
+  if (seen === String(p.uid)) return undefined;
+  return `balayage refusé : le lanceur ne fait pas tourner sa commande sous l'uid dédié (${p.uid}) ; uid vu : ${seen === '' ? 'aucun' : seen.slice(0, 40)}`;
 }
 
 /**
@@ -326,7 +352,7 @@ export class SweepScheduler {
         return;
       }
     }
-    const message = `bac à sable : balayage de l'uid dédié en échec (processus survivants après ${this.#maxAttempts} essais) ; runs refusés`;
+    const message = `bac à sable : balayage de l'uid dédié en échec (processus survivants, ou balayage refusé, après ${this.#maxAttempts} essais) ; runs refusés`;
     this.#failure = new Error(message);
     this.#onFailure?.(message);
   }
@@ -503,11 +529,12 @@ export class ProcessSandboxEngine implements SandboxEngine {
 
   /**
    * Un balayage : `kill -1` sous l'uid dédié, puis aucun processus de cet uid ne doit subsister (Linux). Refusé par
-   * `sweepRefusal` : rien n'est lancé ; hors Linux, rien à balayer (pas de lanceur de production) ; sous Linux, échec
-   * (runs refusés, alerte), l'uid dédié n'étant pas distinct du worker.
+   * `sweepRefusal`, ou par `sweepIdentityRefusal` (le lanceur ne fait pas tourner `id -u` sous l'uid dédié) : rien n'est
+   * lancé ; hors Linux, rien à balayer (pas de lanceur de production) ; sous Linux, échec (runs refusés, alerte), l'uid
+   * dédié n'étant pas distinct du worker.
    */
   async #sweepOnce(plan: { command: string; args: string[] }, uid: number): Promise<boolean> {
-    const refused = sweepRefusal({ uid, ownUid: process.getuid?.(), platform: process.platform });
+    const refused = sweepRefusal({ uid, ownUid: process.getuid?.(), platform: process.platform }) ?? (await this.#sweepIdentity(uid));
     this.#options.onSweep?.({ command: plan.command, args: plan.args, ...(refused === undefined ? {} : { refused }) });
     if (refused !== undefined) return process.platform !== 'linux';
     await new Promise<void>((resolve) => {
@@ -520,6 +547,16 @@ export class ProcessSandboxEngine implements SandboxEngine {
       await new Promise((resolve) => setTimeout(resolve, 50));
     }
     return false;
+  }
+
+  /** Le lanceur fait-il tourner sa commande sous l'uid dédié ? Motif du refus sinon (`sweepIdentityRefusal`). */
+  async #sweepIdentity(uid: number): Promise<string | undefined> {
+    const plan = sweepIdentityPlan(this.#options);
+    if (plan === undefined) return 'balayage refusé : aucun lanceur';
+    const reported = await new Promise<string | undefined>((resolve) => {
+      execFile(plan.command, plan.args, { env: {}, timeout: 5000, encoding: 'utf8' }, (error, stdout) => resolve(error === null ? stdout : undefined));
+    });
+    return sweepIdentityRefusal({ uid, reported });
   }
 
   /** Attend la fin du balayage en cours (arrêt du worker, tests). */

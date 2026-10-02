@@ -417,6 +417,9 @@ describe('assert_sandbox — démarrage et utilisateur de l’enfant', () => {
       expect(probe.uid).not.toBe(process.getuid?.());
       expect(probe.parentEnviron).toBe('denied');
       expect(probe.noNewPrivs).toBe(true);
+      // Job security de la CI (revue 4.1b) : SANDBOX_SECCOMP compilé sur le runner, posé avant le lanceur comme dans l'image ;
+      // les balayages de ce fichier (kill -1 sous l'uid dédié, runner jetable, D-67) passent par la même chaîne.
+      if (dedicated.seccomp !== undefined) expect(probe.namespaces).toBe('denied');
     },
   );
 });

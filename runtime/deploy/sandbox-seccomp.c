@@ -1,12 +1,18 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Filtre seccomp de l'enfant du bac à sable (INV7, revue 4.1b). Le profil seccomp du compose (seccomp-chromium.json)
 // permet clone, setns et unshare à TOUT le conteneur, parce que le bac à sable de Chromium crée des espaces de noms utilisateur.
-// L'enfant du bac à sable (uid dédié 1500) n'en a pas besoin : ce programme, exécuté par le lanceur juste après le
-// changement d'uid (SANDBOX_SECCOMP, apps/worker/src/sandbox/engine.ts), pose un filtre qui refuse unshare, setns et clone
-// avec un drapeau CLONE_NEW* (EPERM), rend clone3 indisponible (ENOSYS : glibc se replie sur clone, dont les drapeaux sont
-// lisibles par le filtre), puis exécute la commande. Le filtre est hérité par tout ce qui suit (shell, env, Node) et ne
-// peut pas être retiré. Un enfant évadé deux fois n'obtient donc aucun espace de noms utilisateur, donc aucune capacité
-// dans un espace imbriqué (surface netfilter, mount… du noyau fermée).
+// L'enfant du bac à sable (uid dédié 1500) n'en a pas besoin : ce programme pose un filtre qui refuse unshare, setns et
+// clone avec un drapeau CLONE_NEW* (EPERM), rend clone3 indisponible (ENOSYS : glibc se replie sur clone, dont les drapeaux
+// sont lisibles par le filtre), refuse ptrace, process_vm_readv et process_vm_writev (EPERM : un enfant évadé n'accroche
+// pas les autres processus de l'uid dédié), puis exécute la commande. Le filtre est hérité par tout ce qui suit et ne peut
+// pas être retiré. Un enfant évadé deux fois n'obtient donc aucun espace de noms utilisateur, donc aucune capacité dans un
+// espace imbriqué (surface netfilter, mount… du noyau fermée).
+// Ordre (revue 4.1b (4), SANDBOX_SECCOMP, apps/worker/src/sandbox/engine.ts) : le worker exécute CE programme en premier,
+// sous son propre uid, et lui fait exécuter le lanceur (sandbox-launch, changement d'uid) : aucun processus de l'uid dédié
+// n'existe sans filtre. Posé après le changement d'uid, le filtre laissait une fenêtre (fin de l'exec de ce programme,
+// sans capacité donc attachable, jusqu'à prctl) où un enfant évadé pouvait accrocher le processus et y créer un espace de
+// noms. Dans l'image, il porte cap_setuid,cap_setgid en permis (=p, comme node-worker) : sous no-new-privileges, le lanceur
+// qu'il exécute n'obtient ses capacités de fichier que si son appelant les détient. Il ne les utilise pas lui-même.
 //   sandbox-seccomp <commande absolue> [arguments…]
 //   sandbox-seccomp --self-test     (pose le filtre, essaie chaque appel refusé et un clone ordinaire, écrit le résultat en JSON)
 // Construit dans deploy/Dockerfile (étape seccomp), sans dépendance hors de la libc.
@@ -21,7 +27,9 @@
 #include <stdio.h>
 #include <string.h>
 #include <sys/prctl.h>
+#include <sys/ptrace.h>
 #include <sys/syscall.h>
+#include <sys/uio.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -45,10 +53,14 @@ static struct sock_filter filter[] = {
     BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, FILTER_ARCH, 1, 0),
     RET(SECCOMP_RET_KILL_PROCESS),
     LOAD(nr),
+    // Sauts relatifs : jusqu'au RET EPERM (avant-dernière instruction) et au RET ENOSYS (dernière).
 #if defined(__x86_64__)
     // ABI x32 (numéros à partir de 0x40000000) : refusée.
-    BPF_JUMP(BPF_JMP | BPF_JGE | BPF_K, 0x40000000, 7, 0),
+    BPF_JUMP(BPF_JMP | BPF_JGE | BPF_K, 0x40000000, 10, 0),
 #endif
+    BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, __NR_ptrace, 9, 0),
+    BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, __NR_process_vm_readv, 8, 0),
+    BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, __NR_process_vm_writev, 7, 0),
     BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, __NR_unshare, 6, 0),
     BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, __NR_setns, 5, 0),
     BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, __NR_clone3, 5, 0),
@@ -83,6 +95,14 @@ static const char *try_clone(unsigned long flags) {
   return "ok";
 }
 
+// process_vm_readv / process_vm_writev sur sa propre mémoire (permis sans filtre).
+static const char *try_process_vm(int write) {
+  char local[8] = "zz_test", remote[8] = "zz_test";
+  struct iovec l = {.iov_base = local, .iov_len = sizeof(local)}, r = {.iov_base = remote, .iov_len = sizeof(remote)};
+  long n = syscall(write ? SYS_process_vm_writev : SYS_process_vm_readv, (long)getpid(), &l, 1L, &r, 1L, 0L);
+  return n < 0 ? outcome(-1) : "ok";
+}
+
 static int self_test(void) {
   const char *unshare_user = outcome(unshare(CLONE_NEWUSER));
   const char *unshare_net = outcome(unshare(CLONE_NEWNET));
@@ -91,8 +111,15 @@ static int self_test(void) {
   const char *clone_user = try_clone(CLONE_NEWUSER);
   const char *clone_net = try_clone(CLONE_NEWNET);
   const char *clone_plain = try_clone(0);
-  printf("{\"unshareUser\":\"%s\",\"unshareNet\":\"%s\",\"setns\":\"%s\",\"clone3\":\"%s\",\"cloneUser\":\"%s\",\"cloneNet\":\"%s\",\"clone\":\"%s\"}\n",
-         unshare_user, unshare_net, setns_, clone3_, clone_user, clone_net, clone_plain);
+  // PTRACE_PEEKDATA sur le parent : sans filtre, refusé ou permis selon Yama et l'uid ; avec le filtre, toujours EPERM.
+  errno = 0;
+  long peek = ptrace(PTRACE_PEEKDATA, getppid(), NULL, NULL);
+  const char *ptrace_ = (peek == -1 && errno != 0) ? outcome(-1) : "ok";
+  const char *vm_read = try_process_vm(0);
+  const char *vm_write = try_process_vm(1);
+  printf("{\"unshareUser\":\"%s\",\"unshareNet\":\"%s\",\"setns\":\"%s\",\"clone3\":\"%s\",\"cloneUser\":\"%s\",\"cloneNet\":\"%s\",\"clone\":\"%s\","
+         "\"ptrace\":\"%s\",\"processVmReadv\":\"%s\",\"processVmWritev\":\"%s\"}\n",
+         unshare_user, unshare_net, setns_, clone3_, clone_user, clone_net, clone_plain, ptrace_, vm_read, vm_write);
   return 0;
 }
 
