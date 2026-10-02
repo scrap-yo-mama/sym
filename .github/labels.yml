@@ -1,0 +1,14 @@
+# Étiquettes du dépôt (22 §3.4) : le nom porte le sens, la couleur vient de la charte (jetons --sym-* de runtime/packages/ui).
+# Appliquées au dépôt à la publication (GO) ; aucun script ne les pousse. Les formulaires d'issues n'utilisent que ces noms.
+- { name: needs-repro, color: FFC727, description: "Needs a reproduction, ideally on a local fixture. / Il manque une reproduction." }
+- { name: bug, color: FF5A1F, description: "Something does not work as documented. / Un comportement ne correspond pas à la doc." }
+- { name: enhancement, color: D8BDF7, description: "A new feature or an improvement. / Une nouvelle fonction ou une amélioration." }
+- { name: documentation, color: A8E3EA, description: "A page is wrong, incomplete or missing. / Une page est fausse, incomplète ou manquante." }
+- { name: good first issue, color: A8E3EA, description: "Small and well scoped: a good start. / Petit et bien cadré : un bon début." }
+- { name: help wanted, color: FFC727, description: "Contributions welcome. / Les contributions sont bienvenues." }
+- { name: out of scope, color: 8C877D, description: "Outside the project scope (see Out of scope). / Hors périmètre (voir la page dédiée)." }
+- { name: question, color: EDE6FB, description: "A question: prefer Discussions. / Une question : préférer les Discussions." }
+- { name: security, color: 24252D, description: "Never reported here: use private reporting (SECURITY.md). / Jamais ici : signalement privé." }
+- { name: duplicate, color: E3DCD0, description: "Already reported. / Déjà signalé." }
+- { name: wontfix, color: 4E4C47, description: "Will not be worked on. / Ne sera pas traité." }
+- { name: assets, color: EFE9DF, description: "Visuals and recordings of the showcase (automatic PR). / Visuels et enregistrements de la vitrine." }
