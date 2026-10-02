@@ -2,7 +2,7 @@
 
 Service de navigateurs à la demande : passerelle (REST `/v1`, WSS `/playwright` et `/cdp`, SSE), nœuds (pool de Chromium chauds, egress par session), profils, vue en direct, enregistrements, console et SDK. Aucune logique de SYM ici : SYM consomme ce module par le contrat.
 
-- CDC : `cdc/sym-browser/` (non versionné dans ce dépôt de travail ; lis-le dans l'arbre principal). Tâches : `06-taches.md`. Invariants BINV1 à BINV7 : `_index.md`.
+- CDC : `cdc/sym-browser/` à la racine du dépôt (versionné, privé : hors du miroir public). Tâches : `06-taches.md`. Invariants BINV1 à BINV7 : `_index.md`.
 - Architecture du dépôt : ADR 23 (`cdc/scrapyomama-runtime/23-architecture-modulaire.md`), étape 0 bis. Ce module est le pilote de l'environnement Claude par module.
 
 ## Frontière (lint bloquant)

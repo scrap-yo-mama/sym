@@ -5,7 +5,7 @@ description: Garde la parité entre le nœud SYM Browser et le pool navigateur d
 
 # Parité avec le pool navigateur de SYM
 
-SYM Browser remplace, à comportement égal, le Chromium que le worker de SYM lance lui-même (fournisseur `local`). Références : `cdc/sym-browser/04e-specs-integration-sym.md` (§ 1 existant, § 3 egress et gardes, § 4 identité, § 5 tests), `04g-specs-fournisseurs-sym.md` § 5 (parité à trois fournisseurs). Lis-les dans l'arbre principal avant d'écrire.
+SYM Browser remplace, à comportement égal, le Chromium que le worker de SYM lance lui-même (fournisseur `local`). Références : `cdc/sym-browser/04e-specs-integration-sym.md` (§ 1 existant, § 3 egress et gardes, § 4 identité, § 5 tests), `04g-specs-fournisseurs-sym.md` § 5 (parité à trois fournisseurs). Lis-les avant d’écrire.
 
 ## Ce qui doit rester identique
 

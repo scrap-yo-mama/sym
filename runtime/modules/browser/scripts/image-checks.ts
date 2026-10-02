@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Sondes de l'image SYM Browser, rejouées par scripts/ci-local.ts (job `browser` de la CI) et testées par
-// tests/image-checks.unit.test.ts : non root, filtre seccomp actif, aucun nouveau privilège ni capacité, aucun setuid.
+// tests/image-checks.unit.test.ts : non root, filtre seccomp actif, aucun nouveau privilège ni capacité, aucun setuid, tini en PID 1.
 
 /** Options de `docker run` : profil seccomp du module, no-new-privileges, toutes les capacités retirées. */
 export const RUN_FLAGS: readonly string[] = [
@@ -12,8 +12,15 @@ export const RUN_FLAGS: readonly string[] = [
   'ALL',
 ];
 
-/** Identité du processus du conteneur : uid, puis l'état du filtre et des privilèges lu dans /proc/self/status. */
-export const IDENTITY_PROBE: readonly string[] = ['sh', '-c', "id -u; grep -E '^(Seccomp|NoNewPrivs|CapEff):' /proc/self/status"];
+/**
+ * Identité du processus du conteneur : uid, l'état du filtre et des privilèges lu dans /proc/self/status, puis le nom du
+ * PID 1 (`tini` attendu : la sonde passe par le point d'entrée de l'image, comme la passerelle).
+ */
+export const IDENTITY_PROBE: readonly string[] = [
+  'sh',
+  '-c',
+  "id -u; grep -E '^(Seccomp|NoNewPrivs|CapEff):' /proc/self/status; printf 'Pid1:\\t%s\\n' \"$(cat /proc/1/comm)\"",
+];
 
 /** Fichiers setuid ou setgid de l'image (erreurs de lecture ignorées : pwuser ne lit pas tout le système de fichiers). */
 export const SETUID_PROBE: readonly string[] = ['sh', '-c', 'find / -xdev -perm /6000 -type f 2>/dev/null; true'];
@@ -28,6 +35,8 @@ export function checkIdentity(out: string): string | undefined {
   if (field('NoNewPrivs') !== '1') return `no-new-privileges absent (NoNewPrivs: ${field('NoNewPrivs') ?? 'absent'}, 1 attendu)`;
   const caps = field('CapEff');
   if (caps === undefined || !/^0+$/.test(caps)) return `capacités effectives non nulles (CapEff: ${caps ?? 'absent'})`;
+  // tini en PID 1 : relaie SIGTERM et récolte les zombies de Chromium (Dockerfile, ENTRYPOINT).
+  if (field('Pid1') !== 'tini') return `PID 1 attendu tini, obtenu « ${field('Pid1') ?? 'absent'} »`;
   return undefined;
 }
 

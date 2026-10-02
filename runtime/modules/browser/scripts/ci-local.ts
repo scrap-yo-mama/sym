@@ -24,7 +24,7 @@ if (!process.argv.includes('--skip-image')) {
   steps.push(
     { name: 'image : docker build', cmd: ['docker', 'build', '-f', 'modules/browser/Dockerfile', '-t', IMAGE, '.'] },
     {
-      name: 'image : uid ≠ 0, filtre seccomp actif (Seccomp: 2), NoNewPrivs: 1, aucune capacité effective',
+      name: 'image : uid ≠ 0, filtre seccomp actif (Seccomp: 2), NoNewPrivs: 1, aucune capacité effective, tini en PID 1',
       cmd: ['docker', 'run', '--rm', ...RUN_FLAGS, IMAGE, ...IDENTITY_PROBE],
       expect: checkIdentity,
     },
