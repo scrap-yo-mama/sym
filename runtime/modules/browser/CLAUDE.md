@@ -59,6 +59,7 @@ Contrat : `runtime/packages/contracts` (`@sym/contracts`, MIT, sous-chemin `brow
 - Observabilité (tâche 3.7) : `packages/core/src/observability/` (registre Prometheus écrit à la main comme SYM, catalogue des 16 métriques de 04d § 3.1, `/metrics` sous `Authorization: Bearer <SYMB_METRICS_TOKEN>`, fermé sans jeton ; journal pino masqué) ; passerelle : `GET /metrics` de l'API ; nœud : `apps/node/src/metrics/` (pont pool, superviseur, egress).
 - Docs (tâche 3.8) : `docs/fr` (tutoiement) et `docs/en`, mêmes pages ; `docs/*/reference/` générée par `pnpm --filter @sym-browser/module docs:reference` (jamais éditée à la main) ; démarrage rapide rejoué tel quel (non root, PostgreSQL) : `pnpm --filter @sym-browser/module test:quickstart` (`quickstart_replayed`). Python : blocs de code dans le Markdown seulement.
 
+- Audit de sécurité (tâche 5.3) : `docs/audit-securite.md` (constats S01 à S17, tests `audit 5.3 Snn`, constats acceptés A1 à A9, R1 : rôles de production à câbler) ; preuve sur vrai Chromium : `tests/audit-securite.chromium.test.ts` (dans `test:chromium`).
 - README (tâche 5.5) : `README.md` et `README.fr.md` (DA du README de SYM), bannière et badges SVG dans `docs/assets/` (palette et icône de `packages/ui`), page du site SYM dans `docs/site/{en,fr}/` ; test `tests/readme.unit.test.ts` (liens, DA, parité fr/en, exemples).
 
 ## Versions et dépendances
