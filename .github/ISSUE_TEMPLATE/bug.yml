@@ -1,43 +1,43 @@
-name: Bug
-description: Un comportement du produit ne correspond pas à la documentation.
-labels: ["needs-repro"]
+name: Bug · Bogue
+description: Behavior differs from the documentation. · Un comportement ne correspond pas à la documentation.
+labels: ["bug", "needs-repro"]
 body:
   - type: markdown
     attributes:
       value: |
-        Une faille de sécurité ne se signale **jamais** ici : voir `runtime/SECURITY.md`.
-        Ne collez aucun secret, cookie, clé ni URL cible réelle.
+        A security flaw is **never** reported here: see `runtime/SECURITY.md`. Paste no secret, cookie, key or real target URL.
+        Une faille de sécurité ne se signale **jamais** ici : voir `runtime/SECURITY.md`. Ne colle aucun secret, cookie, clé ni URL cible réelle.
   - type: checkboxes
     id: perimetre
     attributes:
-      label: Périmètre
+      label: Scope · Périmètre
       options:
-        - label: Cette demande ne relève pas de la page « Hors périmètre » (`runtime/docs/hors-perimetre.md`).
+        - label: This request is not on the "Out of scope" page (`runtime/docs/hors-perimetre.md`). · Cette demande ne relève pas de la page « Hors périmètre » (`runtime/docs/hors-perimetre.md`).
           required: true
   - type: input
     id: version
     attributes:
-      label: Version (sortie de GET /api/version)
+      label: Version (output of GET /api/version) · Version (sortie de GET /api/version)
     validations:
       required: true
   - type: textarea
     id: diagnostic
     attributes:
-      label: Diagnostic (obligatoire)
-      description: Sortie de la commande locale `runtime diagnostics` (JSON masqué, jamais envoyé automatiquement). Relisez-la avant de la coller.
+      label: Diagnostic (required) · Diagnostic (obligatoire)
+      description: Output of the local command `runtime diagnostics` (masked JSON, never sent automatically). Read it before pasting. · Sortie de la commande locale `runtime diagnostics` (JSON masqué, jamais envoyé automatiquement). Relis-la avant de la coller.
       render: json
     validations:
       required: true
   - type: textarea
     id: repro
     attributes:
-      label: Étapes pour reproduire
-      description: De préférence avec une fixture locale, sans site réel.
+      label: Steps to reproduce · Étapes pour reproduire
+      description: Preferably with a local fixture, no real site. · De préférence avec une fixture locale, sans site réel.
     validations:
       required: true
   - type: textarea
     id: attendu
     attributes:
-      label: Comportement attendu et comportement observé
+      label: Expected and observed behavior · Comportement attendu et comportement observé
     validations:
       required: true

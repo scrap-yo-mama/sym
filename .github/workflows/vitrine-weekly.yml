@@ -1,0 +1,59 @@
+# Tests « après publication » de la vitrine (22 §3.6, 22b §5) : chaque semaine, l'API GitHub du dépôt public est comparée
+# au fichier versionné (assert_repo_metadata, assert_license_detected_agpl, assert_community_profile_complete) et les liens
+# des README sont vérifiés (lychee). INACTIF avant le GO : le job ne tourne que si la variable de dépôt PUBLISHED vaut
+# 'true' (posée à la main au GO de la release, 4.5) et seulement sur le dépôt public. Lecture seule : rien n'est réglé,
+# publié ni poussé ; un échec ouvre une issue. Node seulement.
+name: vitrine-weekly
+
+on:
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    working-directory: runtime
+
+jobs:
+  published:
+    if: vars.PUBLISHED == 'true' && github.repository == vars.PUBLIC_REPOSITORY
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          package_json_file: runtime/package.json
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: runtime/.node-version
+      - run: pnpm install --frozen-lockfile
+      - name: Identité publique (PUBLIC_REPOSITORY = GITHUB_REPOSITORY)
+        env:
+          PUBLIC_REPOSITORY: ${{ vars.PUBLIC_REPOSITORY }}
+        run: node scripts/vitrine/check.mjs identity
+      - name: Dépôt publié (description, sujets, site web, Discussions, signalement privé, licence, profil de communauté)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PUBLIC_REPOSITORY: ${{ vars.PUBLIC_REPOSITORY }}
+        run: node scripts/vitrine/check.mjs published
+      - name: Liens des README (lychee)
+        uses: lycheeverse/lychee-action@e7477775783ea5526144ba13e8db5eec57747ce8 # v2.9.0
+        with:
+          args: --no-progress .github/README.md .github/README.fr.md
+          fail: true
+          jobSummary: true
+      - name: Issue en cas d'échec
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh issue create --repo "$GITHUB_REPOSITORY" --title "vitrine-weekly en échec ($(date -u +%F))" \
+            --body "Tests après publication en échec : $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"

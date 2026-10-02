@@ -1,0 +1,3 @@
+# Dépôts GitHub tiers relus, cités par la doc ou les textes de runtime/ (garde d'organisation homonyme, lib/owners.ts).
+# Un par ligne, propriétaire/dépôt. Jamais une source d'image ni un dépôt du projet.
+mozilla/inclusion
