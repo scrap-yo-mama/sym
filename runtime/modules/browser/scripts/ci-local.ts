@@ -3,12 +3,12 @@
 // Usage, depuis runtime/ : `pnpm --filter @sym-browser/module ci:local [--skip-image]`. S'arrête au premier échec (code ≠ 0).
 // Périmètre : le module (apps/*, packages/*, racine) et son contrat @sym/contracts ; la suite complète reste `pnpm ci:local`.
 import { spawnSync } from 'node:child_process';
+import { checkIdentity, checkNoSetuid, IDENTITY_PROBE, RUN_FLAGS, SETUID_PROBE } from './image-checks.ts';
 
 type Step = { name: string; cmd: string[]; env?: Record<string, string>; expect?: (stdout: string) => string | undefined };
 
 const MODULE = ['--filter', '@sym/contracts', '--filter', './modules/browser/**'];
 const IMAGE = 'sym-browser:ci-local';
-const SECCOMP = ['--security-opt', 'seccomp=modules/browser/deploy/seccomp-chromium.json'];
 
 const steps: Step[] = [
   { name: 'install (lockfile gelé)', cmd: ['pnpm', 'install', '--frozen-lockfile'] },
@@ -30,13 +30,18 @@ if (!process.argv.includes('--skip-image')) {
   steps.push(
     { name: 'image : docker build', cmd: ['docker', 'build', '-f', 'modules/browser/Dockerfile', '-t', IMAGE, '.'] },
     {
-      name: 'image : id -u du processus ≠ 0 (seccomp appliqué)',
-      cmd: ['docker', 'run', '--rm', ...SECCOMP, IMAGE, 'id', '-u'],
-      expect: (out) => (/^\d+$/.test(out.trim()) && Number(out.trim()) !== 0 ? undefined : `uid attendu non nul, obtenu « ${out.trim()} »`),
+      name: 'image : uid ≠ 0, filtre seccomp actif (Seccomp: 2), NoNewPrivs: 1, aucune capacité effective',
+      cmd: ['docker', 'run', '--rm', ...RUN_FLAGS, IMAGE, ...IDENTITY_PROBE],
+      expect: checkIdentity,
+    },
+    {
+      name: 'image : aucun binaire setuid ou setgid',
+      cmd: ['docker', 'run', '--rm', ...RUN_FLAGS, IMAGE, ...SETUID_PROBE],
+      expect: checkNoSetuid,
     },
     {
       name: 'image : point d’entrée (tini → passerelle)',
-      cmd: ['docker', 'run', '--rm', ...SECCOMP, IMAGE],
+      cmd: ['docker', 'run', '--rm', ...RUN_FLAGS, IMAGE],
       expect: (out) => (out.includes('SYM Browser gateway') ? undefined : `sortie inattendue : « ${out.trim()} »`),
     },
   );

@@ -12,7 +12,8 @@ import { browserBoundaries } from './modules/browser/eslint.boundaries.mjs';
 export default defineConfig(
   globalIgnores(['**/dist/', '**/.wxt/', '**/.output/', '**/coverage/', '**/blob-report/', '**/test-results/', '**/playwright-report/', '**/node_modules/']),
   {
-    files: ['**/*.ts'],
+    // .mts, .cts, .tsx : analysés en TypeScript (sinon la frontière du module ne les lirait pas).
+    files: ['**/*.{ts,mts,cts,tsx}'],
     extends: [js.configs.recommended, tseslint.configs.recommended],
     rules: {
       '@typescript-eslint/consistent-type-imports': 'error',
