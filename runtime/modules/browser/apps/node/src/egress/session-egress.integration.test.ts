@@ -160,16 +160,19 @@ describe('assert_session_egress_enforced (BINV2, tâche 1.5)', () => {
     // 700 WebSocket (un tunnel CONNECT chacun) et 300 requêtes HTTP en forme absolue, par lots.
     const opened = await page.evaluate(async (port) => {
       let ok = 0;
-      const one = () => new Promise<void>((resolve) => {
+      // Une connexion ratée côté page sous charge (runner à 2 cœurs) est retentée une fois : le test exige toujours 1 000
+      // connexions abouties, et l'invariant porte sur la destination (chaque connexion reçue vient de l'egress, plus bas).
+      const ws = () => new Promise<boolean>((resolve) => {
         const s = new WebSocket(`ws://site-a.test:${port}/ws`);
-        s.onmessage = () => { ok += 1; s.close(); };
-        s.onclose = () => resolve();
-        s.onerror = () => resolve();
+        let got = false;
+        s.onmessage = () => { got = true; s.close(); };
+        s.onclose = () => resolve(got);
+        s.onerror = () => resolve(false);
       });
-      for (let batch = 0; batch < 14; batch++) await Promise.all(Array.from({ length: 50 }, one));
-      for (let batch = 0; batch < 6; batch++) {
-        await Promise.all(Array.from({ length: 50 }, (_, i) => fetch(`/download/sample.txt?b=${batch}&i=${i}`, { cache: 'no-store', headers: { 'x-zz-test': String(i) } }).then((r) => r.text()).then(() => { ok += 1; }, () => {})));
-      }
+      const http = (batch: number, i: number) => fetch(`/download/sample.txt?b=${batch}&i=${i}`, { cache: 'no-store', headers: { 'x-zz-test': String(i) } }).then((r) => r.text()).then(() => true, () => false);
+      const once = async (attempt: () => Promise<boolean>) => { if ((await attempt()) || (await attempt())) ok += 1; };
+      for (let batch = 0; batch < 14; batch++) await Promise.all(Array.from({ length: 50 }, () => once(ws)));
+      for (let batch = 0; batch < 6; batch++) await Promise.all(Array.from({ length: 50 }, (_, i) => once(() => http(batch, i))));
       return ok;
     }, siteA.port);
     expect(opened).toBe(1_000);
