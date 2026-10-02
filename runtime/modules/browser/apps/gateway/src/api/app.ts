@@ -4,18 +4,23 @@
 // (curseur stable, filtres), libérer (rejouable), prolonger (plafonnée), `GET /v1/version`, `GET /v1/openapi.json`.
 // Toute session est vue au travers de son client : la session d'un autre client répond 404 (BINV7). Chaque réponse porte
 // `X-Request-Id` ; chaque erreur suit 04 § 6. L'authentification, les jetons et le démarrage sur un nœud passent par les
-// interfaces de types.ts (tâches 2.1, 2.3, 2.4).
+// interfaces de types.ts (tâches 2.1, 2.3).
+// Quotas et capacité (tâche 2.4, 04d § 4.2, 04b § 7) : minutes et octets du mois (429 `quota_exceeded`), durée maximale
+// (`expiresAt` plafonné), budget d'egress borné par le reste du mois, puis admission : file FIFO bornée en base, sessions
+// simultanées du client, nœud au plus faible taux d'occupation ; refus 429 avec `Retry-After`.
 // Comptage (04d § 4.3 et § 4.4, tâche 2.6) : `GET /v1/usage` et `GET /v1/usage.csv` (mêmes lignes, mêmes totaux ;
 // `sessions:read` limité à sa propre clé, `admin` toutes les clés du client), `POST /v1/admin/usage/reconcile` (admin).
 import { randomBytes } from 'node:crypto';
-import { endStateFor, isTerminal, resolveSessionType } from '@sym-browser/core';
+import { endStateFor, isTerminal, resolveSessionType, sessionUnits } from '@sym-browser/core';
 import {
+  abandonQueuedSession,
+  assignedNodes,
   claimIdempotencyKey,
   completeIdempotencyKey,
   extendSession,
   getSessionView,
-  insertSession,
   listSessionViews,
+  monthlyUsage,
   queryUsage,
   reconcileUsage,
   readyNodeExists,
@@ -43,6 +48,8 @@ import {
   type VersionInfo,
 } from '@sym/contracts/browser';
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
+import { Admission, type Placement } from '../admission/admission.js';
+import { secondsUntilNextMonth } from '../admission/retry-after.js';
 import { ApiProblem, invalidOption, preferredLanguage } from './errors.js';
 import type { GatewayDeps, Principal, Scope } from './types.js';
 import { usageCsv } from '../usage/csv.js';
@@ -93,6 +100,13 @@ export async function createGatewayApi(deps: GatewayDeps): Promise<FastifyInstan
     platform: deps.platform ?? process.platform,
     minSdk: BROWSER_MIN_SDK,
   };
+
+  const admission = new Admission({
+    db: deps.db,
+    ...(deps.queue === undefined ? {} : { limits: deps.queue }),
+    ...(deps.queuePollMs === undefined ? {} : { pollMs: deps.queuePollMs }),
+    onError,
+  });
 
   const app = Fastify({ logger: false, genReqId: () => `req_${randomBytes(9).toString('base64url')}`, bodyLimit: 1_048_576 });
 
@@ -216,6 +230,38 @@ export async function createGatewayApi(deps: GatewayDeps): Promise<FastifyInstan
     await transitionSession(deps.db, { sessionId, to: 'failed', reason });
   };
 
+  app.addHook('onClose', async () => admission.close());
+
+  /** Minutes et octets du mois (04d § 4.2) : 429 `quota_exceeded` si le solde est nul ; rend le reste d'octets. */
+  const monthlyBalance = async (tenantId: string): Promise<{ maxSessionSeconds: number; bytesLeft: number }> => {
+    const usage = await monthlyUsage(deps.db, tenantId);
+    const retryAfter = secondsUntilNextMonth();
+    if (usage.seconds >= usage.limits.monthlyMinutes * 60) {
+      throw new ApiProblem('quota_exceeded', 'Monthly browser minutes exhausted.', { details: { quota: 'minutes' }, retryAfter });
+    }
+    const bytesLeft = usage.limits.monthlyBytes - usage.bytes;
+    if (bytesLeft <= 0) throw new ApiProblem('quota_exceeded', 'Monthly egress bytes exhausted.', { details: { quota: 'bytes' }, retryAfter });
+    return { maxSessionSeconds: usage.limits.maxSessionSeconds, bytesLeft };
+  };
+
+  /** Attente du placement jusqu'à l'échéance ; file expirée : session `failed` raison `quota`, 429 `capacity_exceeded`. */
+  const placementOf = async (sessionId: string, deadline: number): Promise<Placement> => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), Math.max(0, deadline - Date.now()));
+    try {
+      const placement = await admission.wait(sessionId, controller.signal);
+      if (placement) return placement;
+    } finally {
+      clearTimeout(timer);
+    }
+    if (!(await abandonQueuedSession(deps.db, sessionId))) {
+      // Placée entre-temps (par cette passerelle ou une autre) : on la lance quand même.
+      const late = (await assignedNodes(deps.db, [sessionId])).get(sessionId);
+      if (late) return late;
+    }
+    throw new ApiProblem('capacity_exceeded', 'Session not started within the queue timeout.', { details: { limit: 'queue_timeout' }, retryAfter: admission.retryAfterSeconds() });
+  };
+
   app.get('/v1/version', async () => version);
   app.get('/v1/openapi.json', async () => browserOpenApi);
 
@@ -228,13 +274,18 @@ export async function createGatewayApi(deps: GatewayDeps): Promise<FastifyInstan
     const body = parseCreateSession(bodyOf(request));
 
     return idempotent(request, reply, 'createSession', `POST /v1/sessions?wait=${wait}`, body, async () => {
+      const deadline = Date.now() + queueTimeoutMs;
       const region = body.region ?? null;
       if (!(await readyNodeExists(deps.db, region))) throw new ApiProblem('no_node', 'No ready node in the requested region.', { retryAfter: RETRY_AFTER_SECONDS });
+      const { bytesLeft } = await monthlyBalance(principal.tenantId);
       const { type } = resolveSessionType(body);
       const timeoutSeconds = body.timeoutSeconds ?? defaults.timeoutSeconds;
       const idleTimeoutSeconds = body.idleTimeoutSeconds ?? defaults.idleTimeoutSeconds;
-      const { id: _id, region: _region, metadata, egress, ...rest } = body;
-      const inserted = await insertSession(deps.db, {
+      // Budget d'egress effectif : le plus petit de `budgetBytes` et du reste du mois (04c § 1.4).
+      const egress = { ...body.egress, budgetBytes: Math.min(body.egress?.budgetBytes ?? Number.MAX_SAFE_INTEGER, bytesLeft) };
+      const options = { ...body, egress };
+      const { id: _id, region: _region, metadata, egress: _egress, ...rest } = body;
+      const outcome = await admission.enqueue({
         ...(body.id === undefined ? {} : { id: body.id }),
         tenantId: principal.tenantId,
         apiKeyId: principal.apiKeyId,
@@ -242,48 +293,64 @@ export async function createGatewayApi(deps: GatewayDeps): Promise<FastifyInstan
         region,
         timeoutSeconds,
         options: { ...rest, type, timeoutSeconds, idleTimeoutSeconds },
-        egressPolicy: (egress ?? {}) as Record<string, unknown>,
+        egressPolicy: egress as Record<string, unknown>,
         metadata: metadata ?? {},
+        slotWeight: sessionUnits(type),
       });
-      if (!inserted.ok) throw new ApiProblem('session_id_taken', 'Session id already taken.');
-      const session = inserted.session;
-      const launch = deps.launcher.launch({
-        sessionId: session.id,
-        tenantId: principal.tenantId,
-        type,
-        region,
-        options: body,
-        expiresAt: session.expiresAt,
-        idleTimeoutSeconds,
-      });
+      if (!outcome.ok) {
+        if (outcome.code === 'session_id_taken') throw new ApiProblem('session_id_taken', 'Session id already taken.');
+        if (outcome.code === 'quota_exceeded') {
+          throw new ApiProblem('quota_exceeded', 'Concurrent sessions quota reached and tenant queue full.', { details: { quota: outcome.quota }, retryAfter: admission.retryAfterSeconds() });
+        }
+        throw new ApiProblem('capacity_exceeded', 'Session queue full.', { details: { limit: outcome.limit }, retryAfter: admission.retryAfterSeconds() });
+      }
+      const session = outcome.session;
+      const start = async (): Promise<{ ok: true } | { ok: false; code: 'launch_failed' } | 'timeout'> => {
+        const placement = outcome.admitted ? { nodeId: outcome.nodeId, nodeUrl: outcome.nodeUrl } : await placementOf(session.id, deadline);
+        const launch = deps.launcher.launch({
+          sessionId: session.id,
+          nodeId: placement.nodeId,
+          nodeUrl: placement.nodeUrl,
+          tenantId: principal.tenantId,
+          type,
+          region,
+          options,
+          expiresAt: session.expiresAt,
+          idleTimeoutSeconds,
+        });
+        let timer: NodeJS.Timeout | undefined;
+        return Promise.race([
+          launch.catch((error: unknown) => {
+            onError(error);
+            return { ok: false as const, code: 'launch_failed' as const };
+          }),
+          new Promise<'timeout'>((resolve) => {
+            timer = setTimeout(() => resolve('timeout'), Math.max(0, deadline - Date.now()));
+          }),
+        ]).finally(() => clearTimeout(timer));
+      };
 
       if (!wait) {
         // Démarrage en arrière-plan : la session passe `running` (ou `failed`) sans l'appelant.
-        void launch
-          .then((outcome) => (outcome.ok ? undefined : failPending(session.id, 'crash')))
-          .catch((error: unknown) => {
-            onError(error);
-            return failPending(session.id, 'crash');
+        void start()
+          .then((result) => (result === 'timeout' ? failPending(session.id, 'quota') : result.ok ? undefined : failPending(session.id, 'crash')))
+          .catch(async (error: unknown) => {
+            if (!(error instanceof ApiProblem)) {
+              onError(error);
+              await failPending(session.id, 'crash');
+            }
           })
-          .catch(onError);
+          .catch(onError)
+          .finally(() => void admission.pump());
         return { status: 202, body: await present(session) };
       }
 
-      let timer: NodeJS.Timeout | undefined;
-      const outcome = await Promise.race([
-        launch.catch((error: unknown) => {
-          onError(error);
-          return { ok: false as const, code: 'launch_failed' as const };
-        }),
-        new Promise<'timeout'>((resolve) => {
-          timer = setTimeout(() => resolve('timeout'), queueTimeoutMs);
-        }),
-      ]).finally(() => clearTimeout(timer));
-      if (outcome === 'timeout') {
+      const result = await start().finally(() => void admission.pump());
+      if (result === 'timeout') {
         await failPending(session.id, 'quota');
-        throw new ApiProblem('capacity_exceeded', 'Session not started within the queue timeout.', { retryAfter: RETRY_AFTER_SECONDS });
+        throw new ApiProblem('capacity_exceeded', 'Session not started within the queue timeout.', { details: { limit: 'queue_timeout' }, retryAfter: admission.retryAfterSeconds() });
       }
-      if (!outcome.ok) {
+      if (!result.ok) {
         await failPending(session.id, 'crash');
         throw new ApiProblem('no_node', 'No node could start the session.', { retryAfter: RETRY_AFTER_SECONDS });
       }
@@ -348,6 +415,8 @@ export async function createGatewayApi(deps: GatewayDeps): Promise<FastifyInstan
       const to = endStateFor(view.state, 'released');
       if (to !== undefined) await transitionSession(deps.db, { sessionId: view.id, to, reason: 'released' });
     }
+    // Des unités se sont libérées : la file est servie sans attendre le passage périodique.
+    void admission.pump();
     return present((await getSessionView(deps.db, { tenantId: view.tenantId, sessionId: view.id })) ?? view);
   });
 

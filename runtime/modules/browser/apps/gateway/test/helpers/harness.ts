@@ -3,7 +3,9 @@
 // leurs clés, un nœud prêt, et la passerelle assemblée sur des doublures des interfaces encore à brancher :
 //   - Authenticator : le vrai, de la tâche 2.1 (`ApiKeyAuthenticator` sur `pgApiKeyStore`), clés argon2id créées par `newApiKey` ;
 //   - ConnectTokenIssuer : jetons de test numérotés (jetons HMAC de la tâche 2.1) ;
-//   - SessionLauncher : nœud simulé, qui écrit `running` comme le superviseur du nœud (tâche 1.2) le ferait.
+//   - SessionLauncher : nœud simulé, qui écrit `running` sur le nœud choisi par l'admission (tâche 2.4), comme le
+//     superviseur du nœud (tâche 1.2) le ferait.
+// Quotas (tâche 2.4) : sessions simultanées des clients A et B à 1 000 sauf demande, file et nœuds réglables.
 // Chaque réponse est validée contre l'OpenAPI publiée (statut déclaré, corps conforme au schéma) : « 0 écart schéma/réponse ».
 import { randomBytes } from 'node:crypto';
 import { ApiKeyAuthenticator, newApiKey, type UsageClosure } from '@sym-browser/core';
@@ -13,7 +15,7 @@ import { Ajv2020, type ValidateFunction } from 'ajv/dist/2020.js';
 import type { FastifyInstance, InjectOptions } from 'fastify';
 import pg from 'pg';
 import { inject } from 'vitest';
-import { createGatewayApi, type GatewayDeps, type Scope, type SessionLauncher } from '../../src/api/index.js';
+import { createGatewayApi, type GatewayDeps, type LaunchRequest, type Scope, type SessionLauncher } from '../../src/api/index.js';
 
 const PUBLIC_URL = 'https://b.example.com';
 
@@ -28,7 +30,7 @@ export type Harness = {
   keys: Record<KeyName, string>;
   /** `api_keys.id` de chaque clé. */
   keyIds: Record<KeyName, string>;
-  launcher: { mode: LauncherMode; launched: string[]; released: string[] };
+  launcher: { mode: LauncherMode; launched: string[]; released: string[]; nodes: Map<string, string>; requests: Map<string, LaunchRequest> };
   call: (options: { method: InjectOptions['method']; url: string; key?: keyof Harness['keys'] | null; body?: unknown; headers?: Record<string, string> }) => Promise<Reply>;
   close: () => Promise<void>;
 };
@@ -79,7 +81,18 @@ function responseChecker(): (method: string, url: string, status: number, body: 
   };
 }
 
-export async function createHarness(options: { queueTimeoutMs?: number; maxSessionSeconds?: number; usageWal?: () => Promise<UsageClosure[]> } = {}): Promise<Harness> {
+export type HarnessNode = { id: string; region: string; slotsTotal: number };
+
+export async function createHarness(
+  options: {
+    queueTimeoutMs?: number;
+    maxSessionSeconds?: number;
+    maxConcurrentSessions?: number;
+    queue?: GatewayDeps['queue'];
+    nodes?: HarnessNode[];
+    usageWal?: () => Promise<UsageClosure[]>;
+  } = {},
+): Promise<Harness> {
   const name = `gw_${randomBytes(5).toString('hex')}`;
   await admin((c) => c.query(`CREATE DATABASE ${name}`));
   const url = new URL(inject('pgAdminUrl'));
@@ -88,8 +101,8 @@ export async function createHarness(options: { queueTimeoutMs?: number; maxSessi
   const pool = new pg.Pool({ connectionString: url.toString(), max: 8 });
 
   const one = async (sql: string, params: unknown[] = []): Promise<string> => (await pool.query<{ id: string }>(sql, params)).rows[0]?.id ?? '';
-  const tenantA = await one('INSERT INTO tenants (name, max_session_seconds) VALUES ($1, $2) RETURNING id', ['a', options.maxSessionSeconds ?? 3600]);
-  const tenantB = await one("INSERT INTO tenants (name) VALUES ('b') RETURNING id");
+  const tenantA = await one('INSERT INTO tenants (name, max_session_seconds, max_concurrent_sessions) VALUES ($1, $2, $3) RETURNING id', ['a', options.maxSessionSeconds ?? 3600, options.maxConcurrentSessions ?? 1000]);
+  const tenantB = await one("INSERT INTO tenants (name, max_concurrent_sessions) VALUES ('b', 1000) RETURNING id");
   // Vraies clés d'API (tâche 2.1) : secret rendu une seule fois, seule l'empreinte argon2id est en base.
   const keys = {} as Record<KeyName, string>;
   const keyIds = {} as Record<KeyName, string>;
@@ -105,26 +118,31 @@ export async function createHarness(options: { queueTimeoutMs?: number; maxSessi
   await keyRow('aAdmin', tenantA, ['admin']);
   await keyRow('bAdmin', tenantB, ['admin']);
 
-  await recordHeartbeat(pool, {
-    nodeId: 'node-a',
-    url: 'http://node-a.internal:3000',
-    region: 'frankfurt',
-    playwrightVersion: '1.63.0',
-    chromiumVersion: '153.0.8010.12',
-    appVersion: '0.0.0',
-    slotsTotal: 64,
-    slotsFree: 64,
-    rssBytes: null,
-    limitBytes: null,
-  });
+  for (const n of options.nodes ?? [{ id: 'node-a', region: 'frankfurt', slotsTotal: 4096 }]) {
+    await recordHeartbeat(pool, {
+      nodeId: n.id,
+      url: `http://${n.id}.internal:3000`,
+      region: n.region,
+      playwrightVersion: '1.63.0',
+      chromiumVersion: '153.0.8010.12',
+      appVersion: '0.0.0',
+      slotsTotal: n.slotsTotal,
+      slotsFree: n.slotsTotal,
+      rssBytes: null,
+      limitBytes: null,
+    });
+  }
 
-  const state = { mode: 'ok' as LauncherMode, launched: [] as string[], released: [] as string[] };
+  const state = { mode: 'ok' as LauncherMode, launched: [] as string[], released: [] as string[], nodes: new Map<string, string>(), requests: new Map<string, LaunchRequest>() };
   const launcher: SessionLauncher = {
-    async launch({ sessionId }) {
+    async launch(request) {
+      const { sessionId } = request;
       state.launched.push(sessionId);
+      state.nodes.set(sessionId, request.nodeId);
+      state.requests.set(sessionId, request);
       if (state.mode === 'fail') return { ok: false, code: 'launch_failed' };
       if (state.mode === 'hang') return new Promise(() => undefined);
-      const outcome = await transitionSession(pool, { sessionId, to: 'running', reason: null, nodeId: 'node-a' });
+      const outcome = await transitionSession(pool, { sessionId, to: 'running', reason: null, nodeId: request.nodeId });
       return outcome.ok ? { ok: true } : { ok: false, code: 'launch_failed' };
     },
     async release(sessionId) {
@@ -147,6 +165,8 @@ export async function createHarness(options: { queueTimeoutMs?: number; maxSessi
     launcher,
     publicUrl: PUBLIC_URL,
     queueTimeoutMs: options.queueTimeoutMs ?? 2_000,
+    ...(options.queue === undefined ? {} : { queue: options.queue }),
+    queuePollMs: 25,
     ...(options.usageWal === undefined ? {} : { usageWal: options.usageWal }),
   };
   const app = await createGatewayApi(deps);

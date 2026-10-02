@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Noyau de SYM Browser (cdc/sym-browser 03 § 9) : chiffrement, clé maîtresse, rekey et masquage des journaux (tâche 0.3),
-// configuration et modes (0.4), authentification : clés d'API, scopes, jetons de connexion, premier démarrage (2.1).
+// configuration et modes (0.4), authentification : clés d'API, scopes, jetons de connexion, premier démarrage (2.1),
+// constantes de capacité mesurées (0.6), comptage (2.6).
 export * from './auth/index.js';
 export * from './crypto/index.js';
 // Tâche 0.4 : catalogue d'environnement, chargement validé, hôte de service (`/healthz`, `/readyz`, drainage).
@@ -23,4 +24,5 @@ export { ConfigError, Reader, type Env } from './config/reader.js';
 export { Secret } from './config/secret.js';
 export { createLogger, runService, startService, type Logger, type ReadinessCheck, type RunOptions, type ServiceHandle, type ServiceOptions } from './service/service.js';
 export * from './session/index.js';
+export * from './capacity.js';
 export * from './usage/index.js';

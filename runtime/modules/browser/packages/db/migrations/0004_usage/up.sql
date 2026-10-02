@@ -1,5 +1,5 @@
 -- SPDX-License-Identifier: AGPL-3.0-only
--- 0003_usage : comptage (cdc/sym-browser 04d § 4.1 et § 4.4, tâche 2.6, BINV5).
+-- 0004_usage : comptage (cdc/sym-browser 04d § 4.1 et § 4.4, tâche 2.6, BINV5).
 --   usage_snapshots : dernière mesure en cours poussée par le nœud (toutes les 10 s) ; si le nœud est perdu, ses sessions
 --     sont closes sur cette mesure (`usage_records.source = 'reconstructed'`), puis remplacées par sa clôture réelle
 --     (usage.wal) quand il revient.

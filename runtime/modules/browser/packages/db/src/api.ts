@@ -74,6 +74,8 @@ export type NewSession = {
   options: Record<string, unknown>;
   egressPolicy: Record<string, unknown>;
   metadata: Record<string, string>;
+  /** Poids en unités de slot (tâche 2.4 : dedicated 4, shared 3) ; défaut de la base sinon. */
+  slotWeight?: number;
 };
 
 /**
@@ -83,12 +85,12 @@ export type NewSession = {
 export async function insertSession(db: Queryable, input: NewSession): Promise<{ ok: true; session: SessionView } | { ok: false; code: 'session_id_taken' }> {
   try {
     const { rows } = await db.query<{ id: string }>(
-      `INSERT INTO sessions (id, tenant_id, api_key_id, type, region, options, egress_policy, metadata, expires_at)
+      `INSERT INTO sessions (id, tenant_id, api_key_id, type, region, options, egress_policy, metadata, expires_at, slot_weight)
        SELECT coalesce($1::uuid, gen_random_uuid()), t.id, $3, $4, $5, $6, $7, $8,
-              now() + make_interval(secs => least($9::int, t.max_session_seconds))
+              now() + make_interval(secs => least($9::int, t.max_session_seconds)), coalesce($10::int, 1)
          FROM tenants t WHERE t.id = $2
        RETURNING id`,
-      [input.id ?? null, input.tenantId, input.apiKeyId, input.type, input.region, input.options, input.egressPolicy, input.metadata, input.timeoutSeconds],
+      [input.id ?? null, input.tenantId, input.apiKeyId, input.type, input.region, input.options, input.egressPolicy, input.metadata, input.timeoutSeconds, input.slotWeight ?? null],
     );
     const id = rows[0]?.id;
     if (!id) throw new Error(`client ${input.tenantId} introuvable`);
