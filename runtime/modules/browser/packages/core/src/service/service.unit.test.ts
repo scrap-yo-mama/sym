@@ -2,7 +2,7 @@
 // Hôte de service de SYM Browser (04d § 3.3 santé, 04b § 9 drainage) : `/healthz`, `/readyz`, arrêt, refus de démarrer.
 import { randomBytes } from 'node:crypto';
 import { afterEach, describe, expect, test } from 'vitest';
-import { loadConfig, runService, startService, type ReadinessCheck, type ServiceHandle } from '../index.js';
+import { loadConfig, runService, SHUTDOWN_TEARDOWN_MS, startService, type ReadinessCheck, type ServiceHandle } from '../index.js';
 
 const env = (extra: Record<string, string> = {}): Record<string, string> => ({
   MASTER_KEY: randomBytes(32).toString('base64'),
@@ -89,11 +89,31 @@ describe('drainage (04b § 9)', () => {
     await expect(fetch(`http://127.0.0.1:${service.port}/healthz`)).rejects.toThrow();
   });
 
-  test('la grâce de drainage borne l’attente (SHUTDOWN_GRACE_SECONDS) : un crochet bloqué ne retient pas l’arrêt', async () => {
-    const service = await start({ SHUTDOWN_GRACE_SECONDS: '1' }, { onDrain: [() => new Promise<void>(() => undefined)] });
+  test('la grâce de drainage borne l’attente (SHUTDOWN_GRACE_SECONDS + fenêtre de destruction) : un crochet bloqué ne retient pas l’arrêt', async () => {
+    const service = await start({ SHUTDOWN_GRACE_SECONDS: '1' }, { onDrain: [() => new Promise<void>(() => undefined)], teardownMs: 500 });
     const started = Date.now();
     await service.shutdown();
     expect(Date.now() - started).toBeLessThan(3000);
+  });
+
+  test('drain_teardown_window (04b § 9 étape 3) : à l’échéance de la grâce, la destruction des sessions restantes est attendue avant la fermeture', async () => {
+    // Le crochet du nœud détruit ses sessions restantes APRÈS l'échéance (node_shutdown) : la sortie attend cette destruction.
+    let destroyed = false;
+    const hook = (): Promise<void> =>
+      new Promise<void>((resolve) => {
+        setTimeout(() => {
+          destroyed = true;
+          resolve();
+        }, 1_400);
+      });
+    const service = await start({ SHUTDOWN_GRACE_SECONDS: '1' }, { onDrain: [hook], teardownMs: 5_000 });
+    await service.shutdown();
+    expect(destroyed).toBe(true);
+  });
+
+  test('la fenêtre de destruction par défaut tient dans maxShutdownDelaySeconds de Render (300 s) avec la grâce maximale', () => {
+    expect(SHUTDOWN_TEARDOWN_MS).toBeGreaterThanOrEqual(10_000);
+    expect(300 * 1000 - 270 * 1000).toBeGreaterThanOrEqual(SHUTDOWN_TEARDOWN_MS);
   });
 
   test('shutdown est idempotent', async () => {

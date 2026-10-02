@@ -10,7 +10,8 @@ import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import { createTestDatabase, type TestDatabase } from '../test/helpers/pg.js';
 import { migrateUp } from './migrate.js';
-import { createPgSessionStore, extendSession, recordHeartbeat, routeSession, sweepLostNodes, transitionSession, type NodeBeat } from './sessions.js';
+import { readyNodeExists } from './api.js';
+import { createPgSessionStore, extendSession, recordHeartbeat, routeSession, setNodeState, sweepLostNodes, transitionSession, type NodeBeat } from './sessions.js';
 
 let tdb: TestDatabase;
 let pool: pg.Pool;
@@ -225,6 +226,37 @@ describe('node_lost_detection (P7)', () => {
     expect(await recordHeartbeat(pool, beat('node-new', { slotsTotal: 5, slotsFree: 5 }))).toEqual({ state: 'draining', recovered: false });
     const node = (await pool.query("SELECT slots_total, slots_free, url FROM nodes WHERE id = 'node-new'")).rows[0];
     expect(node).toEqual({ slots_total: 5, slots_free: 5, url: 'http://node-new.internal:3000' });
+  });
+});
+
+describe('node_drain_state (04b § 5 et § 9, tâche 2.7)', () => {
+  test('SIGTERM : ready → draining (écarté du choix, sessions toujours routées, battement conservé), puis down (slots libérés)', async () => {
+    await recordHeartbeat(pool, beat('node-drain', { region: 'region-drain', slotsTotal: 4, slotsFree: 2 }));
+    const running = await newSession({ nodeId: 'node-drain' });
+    await transitionSession(pool, { sessionId: running, to: 'running', reason: null, nodeId: 'node-drain' });
+    expect(await readyNodeExists(pool, 'region-drain')).toBe(true);
+
+    expect(await setNodeState(pool, { nodeId: 'node-drain', state: 'draining' })).toEqual({ state: 'draining' });
+    // Plus aucune nouvelle session vers ce nœud : la passerelle ne le choisit plus (503 no_node si c'est le seul).
+    expect(await readyNodeExists(pool, 'region-drain')).toBe(false);
+    // Les sessions en cours restent joignables pendant la grâce, et le battement ne remet pas le nœud `ready`.
+    expect(await routeSession(pool, { sessionId: running, tenantId: tenantA })).toEqual({ ok: true, nodeId: 'node-drain', nodeUrl: 'http://node-drain.internal:3000' });
+    expect(await recordHeartbeat(pool, beat('node-drain', { region: 'region-drain', slotsTotal: 4, slotsFree: 3 }))).toEqual({ state: 'draining', recovered: false });
+    // Un second SIGTERM ne change rien.
+    expect(await setNodeState(pool, { nodeId: 'node-drain', state: 'draining' })).toEqual({ state: 'draining' });
+
+    await transitionSession(pool, { sessionId: running, to: 'ended', reason: 'node_shutdown' });
+    expect(await setNodeState(pool, { nodeId: 'node-drain', state: 'down' })).toEqual({ state: 'down' });
+    const node = (await pool.query("SELECT state, slots_total, slots_free FROM nodes WHERE id = 'node-drain'")).rows[0];
+    expect(node).toEqual({ state: 'down', slots_total: 4, slots_free: 4 });
+    expect(await row(running)).toMatchObject({ state: 'ended', end_reason: 'node_shutdown' });
+    // Un nœud `down` ne repasse pas `draining` (drainage demandé après l'arrêt : sans effet).
+    expect(await setNodeState(pool, { nodeId: 'node-drain', state: 'draining' })).toEqual({ state: 'down' });
+  });
+
+  test('nœud inconnu : null, aucune ligne créée', async () => {
+    expect(await setNodeState(pool, { nodeId: 'node-absent', state: 'draining' })).toBeNull();
+    expect((await pool.query("SELECT count(*)::int AS n FROM nodes WHERE id = 'node-absent'")).rows[0]).toEqual({ n: 0 });
   });
 });
 
