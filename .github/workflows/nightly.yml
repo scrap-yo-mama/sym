@@ -56,4 +56,4 @@ jobs:
         with:
           name: dependency-cruiser-report
           path: runtime/reports/
-          if-no-files-found: ignore
+          if-no-files-found: warn

@@ -4,7 +4,7 @@
 
 Couche LLM maison : transport Chat Completions, `providers[]` par rôle, sonde de capacités, échelle de sortie structurée S1 à S4
 avec validation Ajv finale, classification des échecs, mesure d'usage et coût, rédaction des secrets. Elle appartient au module
-**Brain** (`docs/modules.md`). Elle ne dépend que du noyau.
+**Brain** (`docs/modules.md` du dépôt de travail, non publié). Elle ne dépend que du noyau.
 
 ## Ce qu'elle expose
 

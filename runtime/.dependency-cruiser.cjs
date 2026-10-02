@@ -14,10 +14,18 @@ module.exports = {
   forbidden: [
     {
       name: 'front-pas-serveur',
-      comment: 'Front (console, docs, UI) : parle au serveur par @runtime/client, jamais en important le serveur, le worker, la base, le CLI ni le Brain.',
+      comment: 'Front (console, docs, UI ; 23 § 2) : parle au serveur par @runtime/client, jamais en important le serveur, le worker, la base, le CLI ni le Brain.',
       severity: 'warn',
-      from: { path: '(^|/)apps/(web|docs)/|(^|/)packages/(ui|client)/', pathNot: NOT_SHIPPED },
+      from: { path: '(^|/)apps/(web|docs)/|(^|/)packages/ui/', pathNot: NOT_SHIPPED },
       to: { path: any('server', 'worker', 'db', 'agent', 'llm', 'cli') },
+    },
+    {
+      name: 'client-schemas-seulement',
+      comment:
+        "Client de l'API (packages/client) : Core + Runner, producteur du contrat api consommé par le Front ; MIT et publié à part, il n'importe aucun paquet interne (AGPL) sauf @runtime/schemas.",
+      severity: 'warn',
+      from: { path: '(^|/)packages/client/', pathNot: NOT_SHIPPED },
+      to: { path: any('core', 'db', 'agent', 'llm', 'ui', 'server', 'worker', 'cli', 'web', 'docs', 'extension') },
     },
     {
       name: 'extension-pas-worker',

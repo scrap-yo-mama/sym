@@ -3,7 +3,7 @@
 ## Rôle et module
 
 Extension Chrome MV3 (WXT 0.21.4, popup en Vue 3 sans compilateur de gabarits : CSP MV3). Elle appartient au module
-**Extension** (`docs/modules.md`). Elle appaire l'appareil de l'utilisateur à l'instance, recueille le consentement par site, ouvre
+**Extension** (`docs/modules.md` du dépôt de travail, non publié). Elle appaire l'appareil de l'utilisateur à l'instance, recueille le consentement par site, ouvre
 la WSS du tunnel vers le serveur et exécute localement les commandes CDP reçues, sur une liste blanche figée. Aucune logique
 distante : tout le code exécuté est celui du paquet publié.
 
@@ -49,4 +49,5 @@ Tests nommés présents dans ce dossier (table : `runtime/tests/invariants.json`
   `assert_store_permissions_justified`, `assert_store_listing_complete`, `assert_fonts_self_hosted`.
 
 Ne jamais élargir la liste blanche CDP ni ajouter un hôte obligatoire sans décision et test. Les E2E qui lancent des processus
-respectent la règle de sécurité du `CLAUDE.md` racine (aucun `kill` large).
+respectent la règle de sécurité du `CLAUDE.md` racine du dépôt de travail (non publié) : aucun `kill` large (`kill -1`,
+`kill 0`, `pkill`, `killall`, `process.kill(0 | -1, …)`), on ne tue que le PID d'un enfant que le test a lui-même lancé.

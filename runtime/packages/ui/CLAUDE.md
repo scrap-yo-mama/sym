@@ -3,7 +3,7 @@
 ## Rôle et module
 
 Paquet de design SYM : jetons (couleurs OKLCH, typographie, mouvement), polices auto-hébergées, composant de marque et icône
-fantôme. Il appartient au module **Front** (`docs/modules.md`). Il est consommé par la console (`apps/web`) et, pour l'icône seule,
+fantôme. Il appartient au module **Front** (`docs/modules.md` du dépôt de travail, non publié). Il est consommé par la console (`apps/web`) et, pour l'icône seule,
 par l'extension MV3. Il est livré en sources (pas de `dist/`).
 
 ## Ce qu'il expose

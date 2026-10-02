@@ -4,7 +4,7 @@
 
 Moteur agentique serveur : boucle maison (`HomeLoopEngine`), moteur Stagehand 3.7.3 en mode `dom` local seulement
 (ADR 0001, `runtime/docs/adr/0001-agent-engine.md`), canaux `agent_step` Playwright et tunnel, extraction E4, interpréteur E5
-(`hybrid`) et rôle `investigate`. Il appartient au module **Brain** (`docs/modules.md`) : il implémente l'interface `AgentEngine`
+(`hybrid`) et rôle `investigate`. Il appartient au module **Brain** (`docs/modules.md` du dépôt de travail, non publié) : il implémente l'interface `AgentEngine`
 définie dans `@runtime/core`.
 
 ## Ce qu'il expose

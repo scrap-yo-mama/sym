@@ -3,7 +3,7 @@
 ## Rôle et module
 
 Site de documentation publique (VitePress 2.0.0-alpha.20, index Pagefind, `llms.txt`), structuré en Diataxis. Il appartient au
-module **Front** (`docs/modules.md`). Il se construit en site statique, sans serveur ni base.
+module **Front** (`docs/modules.md` du dépôt de travail, non publié). Il se construit en site statique, sans serveur ni base.
 
 ## Ce qu'il expose
 

@@ -24,10 +24,18 @@ function workspaceDirs(): string[] {
   );
 }
 
-/** Le CLAUDE.md racine (commandes de runtime/package.json) et ceux des dossiers de module de l'étape 0. */
+/**
+ * Dépôt de travail privé ou miroir public (D-44) : le miroir `scrap-yo-mama/sym` ne publie que runtime/, .github/ et quelques
+ * fichiers de la racine. La carte (docs/modules.md) et le CLAUDE.md racine n'y sont pas : leurs contrôles sont sautés là-bas
+ * (saut visible), jamais en erreur à la collecte. Même motif que apps/web/src/i18n/reasons.unit.test.ts.
+ */
+const PRIVATE = existsSync(join(repoDir, 'docs/modules.md'));
+const ROOT_CLAUDE = join(repoDir, 'CLAUDE.md');
+
+/** Le CLAUDE.md racine (commandes de runtime/package.json, dépôt de travail seulement) et ceux des dossiers de l'étape 0. */
 const STEP0_FOLDERS = ['apps/extension', 'apps/web', 'apps/docs', 'packages/agent', 'packages/llm', 'packages/ui'];
 const claudeFiles = [
-  { path: join(repoDir, 'CLAUDE.md'), pkgDir: runtimeDir },
+  ...(PRIVATE ? [{ path: ROOT_CLAUDE, pkgDir: runtimeDir }] : []),
   ...STEP0_FOLDERS.map((d) => ({ path: join(runtimeDir, d, 'CLAUDE.md'), pkgDir: join(runtimeDir, d) })),
 ];
 
@@ -64,8 +72,12 @@ function packagesByName(): Map<string, PackageJson & { dir: string }> {
   return map;
 }
 
-describe('assert_module_map_complete : carte des modules et CLAUDE.md (tâche 5.0)', () => {
-  const modulesMd = read(join(repoDir, 'docs/modules.md'));
+/** Lignes d'une table Markdown dont la première cellule est `runtime/<dossier>`. */
+const tableRow = (markdown: string, dir: string) => markdown.split('\n').find((line) => line.startsWith(`| \`runtime/${dir}\` |`));
+
+describe.skipIf(!PRIVATE)('assert_module_map_complete : carte des modules, dépôt de travail (tâche 5.0)', () => {
+  // Lu seulement dans le dépôt de travail : le corps d'un describe sauté est quand même collecté.
+  const modulesMd = PRIVATE ? read(join(repoDir, 'docs/modules.md')) : '';
 
   test('chaque dossier de runtime/apps/* et runtime/packages/* apparaît dans docs/modules.md, rattaché à une partie', () => {
     const dirs = workspaceDirs();
@@ -86,6 +98,47 @@ describe('assert_module_map_complete : carte des modules et CLAUDE.md (tâche 5.
     for (const dir of cited) expect(dirs.has(dir), `${dir} cité dans docs/modules.md mais absent de runtime/`).toBe(true);
   });
 
+  test('Front = apps/web, apps/docs, packages/ui (23 § 2) ; packages/client reste dans Core + Runner, producteur du contrat api', () => {
+    const parts = modulesMd.split('\n').filter((line) => line.startsWith('| **'));
+    const front = parts.find((line) => line.startsWith('| **Front**'))!;
+    const core = parts.find((line) => line.startsWith('| **Core + Runner**'))!;
+    const frontDirs = [...front.matchAll(/`runtime\/((?:apps|packages)\/[a-z0-9-]+)`/g)].map((m) => m[1]).sort();
+    expect(frontDirs).toEqual(['apps/docs', 'apps/web', 'packages/ui']);
+    expect(core).toContain('`runtime/packages/client`');
+    const client = tableRow(modulesMd, 'packages/client');
+    expect(client).toMatch(/\| Core \+ Runner \|/);
+    expect(client).toMatch(/contrat `api`/);
+    expect(client).toMatch(/Front/);
+  });
+
+  test('la carte liste les sous-chemins publics de @runtime/core importables par un module (23 § 2), et seulement des exports réels', () => {
+    const start = modulesMd.indexOf('## Sous-chemins publics de `@runtime/core` importables par un module');
+    expect(start, 'section « Sous-chemins publics de @runtime/core importables par un module » absente').toBeGreaterThan(-1);
+    const end = modulesMd.indexOf('\n## ', start + 1);
+    const section = modulesMd.slice(start, end === -1 ? undefined : end);
+    // Les quatre domaines nommés par 23 § 2.
+    for (const domain of ['config', 'chiffrement', 'journaux', 'garde réseau']) expect(section).toContain(domain);
+    // Chaque sous-chemin cité existe dans les exports de @runtime/core, et chaque export y est classé (importable ou réservé).
+    const exportsMap = json<{ exports: Record<string, unknown> }>(join(runtimeDir, 'packages/core/package.json')).exports;
+    const exported = Object.keys(exportsMap).filter((k) => k !== '.').map((k) => k.slice(2));
+    const cited = [...section.matchAll(/`@runtime\/core\/([a-z0-9-]+)`/g)].map((m) => m[1]!);
+    for (const sub of cited) expect(exported, `@runtime/core/${sub} cité mais absent des exports`).toContain(sub);
+    for (const sub of exported) expect(cited, `@runtime/core/${sub} exporté mais non classé dans la carte`).toContain(sub);
+  });
+
+  test('le CLAUDE.md racine nomme exactement les dossiers de runtime/ qui ont leur propre CLAUDE.md', () => {
+    const onDisk = workspaceDirs().filter((dir) => existsSync(join(runtimeDir, dir, 'CLAUDE.md'))).sort();
+    expect(onDisk).toEqual([...STEP0_FOLDERS].sort());
+    const root = read(ROOT_CLAUDE).replace(/\s+/g, ' ');
+    expect(root).not.toMatch(/chaque dossier de module a son propre/);
+    const sentence = root.match(/les dossiers ([^.]*?) ont leur propre `CLAUDE\.md`/);
+    expect(sentence, 'phrase « les dossiers … ont leur propre CLAUDE.md » absente du CLAUDE.md racine').not.toBeNull();
+    const named = [...sentence![1]!.matchAll(/`((?:apps|packages)\/[a-z0-9-]+)`/g)].map((m) => m[1]).sort();
+    expect(named).toEqual(onDisk);
+  });
+});
+
+describe('assert_module_map_complete : CLAUDE.md de dossier (tâche 5.0, publiés par le miroir)', () => {
   test.each(claudeFiles.map((f) => [f.path.replace(repoDir + '/', ''), f] as const))('%s : moins de 200 lignes, commandes pnpm existantes', (_name, file) => {
     expect(existsSync(file.path), `${file.path} manquant`).toBe(true);
     const text = read(file.path);
@@ -115,11 +168,21 @@ describe('assert_module_map_complete : carte des modules et CLAUDE.md (tâche 5.
       [undefined, 'inconnu'],
     ]);
   });
+
+  test('un CLAUDE.md publié (runtime/) qui renvoie à la carte ou au CLAUDE.md racine précise « du dépôt de travail » : ni l un ni l autre n est publié', () => {
+    for (const dir of STEP0_FOLDERS) {
+      const text = read(join(runtimeDir, dir, 'CLAUDE.md')).replace(/\s+/g, ' ');
+      const dangling = [...text.matchAll(/`docs\/modules\.md`|`CLAUDE\.md` racine/g)].filter(
+        (m) => !/^ (\(dépôt de travail|du dépôt de travail)/.test(text.slice(m.index! + m[0].length)),
+      );
+      expect(dangling.map((m) => m[0]), `${dir}/CLAUDE.md`).toEqual([]);
+    }
+  });
 });
 
 describe('assert_depcruise_report_published : dependency-cruiser du nightly, en rapport seulement (tâche 5.0)', () => {
   type Step = { name?: string; uses?: string; run?: string; if?: string; 'continue-on-error'?: boolean | string; with?: Record<string, string> };
-  type Workflow = { jobs: Record<string, { 'continue-on-error'?: boolean | string; steps: Step[] }> };
+  type Workflow = { on: Record<string, unknown>; jobs: Record<string, { 'continue-on-error'?: boolean | string; steps: Step[] }> };
   const workflow = parse(read(join(repoDir, '.github/workflows/nightly.yml'))) as Workflow;
   const jobEntry = Object.entries(workflow.jobs).find(([, job]) => job.steps.some((s) => s.run?.includes('depcruise')));
 
@@ -140,8 +203,35 @@ describe('assert_depcruise_report_published : dependency-cruiser du nightly, en 
     expect(upload, 'aucun upload-artifact après l étape depcruise').toBeDefined();
     expect(upload!.if).toContain('always()');
     expect(upload!.with?.path).toContain('reports');
+    // Un rapport non produit (étape en échec avant l écriture) se voit dans le run : avertissement, pas un silence.
+    expect(upload!.with?.['if-no-files-found']).toBe('warn');
     // Le fichier que l étape écrit est bien dans le dossier publié.
     expect(job.steps[index]!.run).toMatch(/--output-to reports\/dependency-cruiser\.(html|md)/);
+  });
+
+  test('tant que nightly.yml n a pas de cron, la note de l invariant le dit (rapport publié à chaque déclenchement manuel)', () => {
+    const note = json<{ test: string; note: string }[]>(join(runtimeDir, 'tests/invariants.json')).find((r) => r.test === 'assert_depcruise_report_published')!.note;
+    if (!('schedule' in workflow.on)) {
+      expect(note).toContain('workflow_dispatch');
+      expect(note).toMatch(/chaque nuit dès que le cron est activé/);
+    }
+  });
+
+  test('packages/client (Core + Runner, MIT) n est pas du Front ; règle dédiée : il n importe que @runtime/schemas', () => {
+    type Rule = { name: string; from: { path: string }; to: { path: string } };
+    const config = createRequire(import.meta.url)(join(runtimeDir, '.dependency-cruiser.cjs')) as { forbidden: Rule[] };
+    const rule = (name: string) => config.forbidden.find((r) => r.name === name)!;
+    expect(new RegExp(rule('front-pas-serveur').from.path).test('packages/client/src/index.ts')).toBe(false);
+    for (const front of ['apps/web/src/main.ts', 'apps/docs/src/x.ts', 'packages/ui/src/index.ts'])
+      expect(new RegExp(rule('front-pas-serveur').from.path).test(front), front).toBe(true);
+    const client = rule('client-schemas-seulement');
+    expect(client, 'règle client-schemas-seulement absente').toBeDefined();
+    expect(new RegExp(client.from.path).test('packages/client/src/index.ts')).toBe(true);
+    const to = new RegExp(client.to.path);
+    for (const target of ['@runtime/core', 'packages/core/src/index.ts', '@runtime/db', '@runtime/ui', 'apps/server/src/app.ts', '@runtime/agent'])
+      expect(to.test(target), target).toBe(true);
+    for (const allowed of ['@runtime/schemas', 'packages/schemas/src/index.ts', 'node_modules/openapi-fetch/dist/index.js'])
+      expect(to.test(allowed), allowed).toBe(false);
   });
 
   test('la configuration encode les frontières en warn seulement ; dépendance au catalogue en version exacte', () => {

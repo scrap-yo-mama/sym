@@ -3,7 +3,7 @@
 ## Rôle et module
 
 Console web (Vue 3, Vite 8, Tailwind 4, reka-ui, vue-i18n, vue-router) servie par le serveur. Elle appartient au module **Front**
-(`docs/modules.md`). Elle ne contient aucune logique métier : elle appelle l'API REST par le client typé `@runtime/client`.
+(`docs/modules.md` du dépôt de travail, non publié). Elle ne contient aucune logique métier : elle appelle l'API REST par le client typé `@runtime/client`.
 
 ## Ce qu'elle expose
 
