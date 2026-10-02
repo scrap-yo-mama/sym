@@ -1,0 +1,65 @@
+# Mise en ligne de la landing (accueil du site de doc) sur GitHub Pages du dépôt public : ⚠️ GO (22 § 2.9, D-43).
+# Créé mais NON DÉCLENCHÉ : déclencheur manuel seul. Rien ne part tant qu'un humain ne le lance pas, après le GO (relecture juridique
+# des pages et de l'accroche, relecture humaine des deux langues, dépôt public, Pages activé avec la source « GitHub Actions »).
+# Avant de publier, la porte du GO (`pnpm check:landing-go`) refuse la mise en ligne tant qu'une preuve n'est pas un vrai test, qu'un champ
+# juridique reste à fournir ou qu'une allégation n'est pas relue ; puis la sonde rejoue sur le build de production, servi en local comme
+# GitHub Pages, les contrôles cookie, tiers, traceurs et CSP. Le site est construit sous le chemin de base du dépôt (/<dépôt>/).
+name: pages
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+defaults:
+  run:
+    working-directory: runtime
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    env:
+      PUBLIC_REPOSITORY: ${{ vars.PUBLIC_REPOSITORY }}
+      DOCS_BASE: /${{ github.event.repository.name }}/
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          package_json_file: runtime/package.json
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: runtime/.node-version
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - name: Porte du GO de la landing (preuves livrées, champs juridiques fournis, allégations relues)
+        run: pnpm check:landing-go
+      - name: Chromium de Playwright
+        run: pnpm exec playwright install --with-deps chromium
+      - name: Contrôles de préproduction (build de production servi en local comme GitHub Pages)
+        run: pnpm --filter @runtime/docs landing:probe --preprod
+      - name: Site de doc et landing, build de production
+        run: pnpm docs:build
+      - uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: runtime/apps/docs/dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1

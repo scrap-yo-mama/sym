@@ -1,0 +1,14 @@
+{
+  "$comment": "Budgets de la landing (22 § 2.8, 22b § 1) : propositions de u7 R22, réglables ici sans toucher aux tests. Lighthouse n'est pas une dépendance du projet : les budgets sont mesurés en laboratoire par Chromium (apps/docs/e2e/landing-perf.e2e.ts).",
+  "landing": {
+    "firstViewKB": 250,
+    "jsGzipKB": 75,
+    "fontsKB": 80,
+    "requests": 25,
+    "thirdPartyRequests": 0,
+    "lcpMs": 2500,
+    "cls": 0.1,
+    "titleChars": 60,
+    "descriptionChars": 155
+  }
+}

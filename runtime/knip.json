@@ -126,12 +126,15 @@
         "scripts/*.ts",
         "content/.vitepress/config.ts",
         "content/.vitepress/theme/index.ts",
-        "src/**/*.test.ts"
+        "src/**/*.test.ts",
+        "e2e/*.e2e.ts"
       ],
       "project": [
         "src/**/*.ts",
         "scripts/**/*.ts",
-        "content/.vitepress/**/*.ts"
+        "content/.vitepress/**/*.ts",
+        "e2e/**/*.ts",
+        "*.ts"
       ]
     }
   }

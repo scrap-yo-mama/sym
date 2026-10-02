@@ -1,4 +1,4 @@
-# CI de runtime/ : 7 jobs (cdc/scrapyomama-runtime/15-strategie-tests.md §2), plus le job `docs` (tâche 4.8) et le job `image` (privilèges du bac à sable sur l'image construite, F-20261001-R01).
+# CI de runtime/ : 7 jobs (cdc/scrapyomama-runtime/15-strategie-tests.md §2), plus le job `docs` (tâche 4.8), le job `vitrine` (tâche 4.11) et le job `image` (privilèges du bac à sable sur l'image construite, F-20261001-R01).
 # Aucun filtre de chemin : `quality` ne doit jamais être masqué.
 name: ci
 
@@ -86,6 +86,39 @@ jobs:
         run: pnpm docs:test
       - name: Quickstart rejoué sur une instance vierge
         run: pnpm docs:quickstart
+
+  vitrine:
+    # Tâche 4.11 (22b § 5) : gates de la landing sur la préproduction, c'est-à-dire le build de production du commit servi par un
+    # serveur statique local qui reproduit GitHub Pages (chemin de base /sym/, aucun en-tête, CSP en balise meta). Rien n'est publié ni
+    # déployé : GitHub Pages n'est touché qu'au GO. Les tests de contenu et du site construit (assert_landing_*) tournent aussi dans le job
+    # docs ; ici le volet Chromium : cookie, requêtes tierces, traceurs, CSP vue par le navigateur, axe, mouvement, budgets de poids.
+    # Le volet « liens externes » (pnpm --filter @runtime/docs landing:links) ouvre des connexions sortantes : il tourne à la release
+    # et chaque semaine après la mise en ligne (landing-production.yml), jamais ici.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          package_json_file: runtime/package.json
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: runtime/.node-version
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - name: Chromium de Playwright
+        run: pnpm exec playwright install --with-deps chromium
+      - name: Landing, préproduction (build de production servi comme GitHub Pages) : gates Chromium
+        run: pnpm --filter @runtime/docs test:e2e
+      - name: Contrôles avant le GO (cookie, tiers, traceurs, CSP, formulaire) rejoués par la sonde, résultat daté archivé
+        run: pnpm --filter @runtime/docs landing:probe --preprod --out ../../landing-probe-preprod.json
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: landing-probe-preprod
+          path: runtime/landing-probe-preprod.json
+          if-no-files-found: error
+          retention-days: 14
 
   unit:
     runs-on: ubuntu-24.04

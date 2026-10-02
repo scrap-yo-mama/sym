@@ -23,6 +23,11 @@ const STEPS: Step[] = [
   // Tâche 4.8 : site de doc (VitePress, Pagefind, llms.txt) construit, 0 lien mort, puis tests de contenu (Usage responsable en 11
   // sections, Hors périmètre, variables, commandes). Rien n'est publié.
   { job: 'docs', name: 'site de doc : build, liens, llms.txt, contenu', cmd: ['pnpm', 'docs:test'] },
+  // Tâche 4.11 : job `vitrine`. Les gates de contenu et du site construit (assert_landing_*) sont déjà jouées par docs:test ci-dessus ; ici le
+  // volet Chromium sur la préproduction (build de production servi comme GitHub Pages, sans déploiement) : cookie, requêtes tierces,
+  // traceurs, CSP vue par le navigateur, axe, mouvement, budgets de poids ; puis la sonde (les mêmes contrôles que ceux de la production).
+  { job: 'vitrine', name: 'landing : gates Chromium sur la préproduction', cmd: ['pnpm', '--filter', '@runtime/docs', 'test:e2e'] },
+  { job: 'vitrine', name: 'landing : sonde de préproduction', cmd: ['pnpm', '--filter', '@runtime/docs', 'landing:probe', '--preprod'] },
   { job: 'unit', name: 'tests unitaires + couverture', cmd: ['pnpm', 'test:coverage'] },
   // Étage S : garde SSRF sur fetch et Chromium (Playwright). Chromium : pnpm exec playwright install chromium.
   { job: 'security', name: 'sécurité (SSRF, Chromium)', cmd: ['pnpm', 'test:security'] },

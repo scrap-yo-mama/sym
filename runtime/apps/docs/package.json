@@ -9,11 +9,23 @@
     "dev": "node scripts/gen-reference.ts && vitepress dev content",
     "preview": "vitepress preview content --port 4190",
     "typecheck": "tsc -p tsconfig.json",
-    "test": "vitest run --passWithNoTests"
+    "test": "vitest run --passWithNoTests",
+    "landing:og": "node scripts/landing-og.ts",
+    "test:e2e": "playwright test",
+    "landing:probe": "node scripts/landing-probe.ts",
+    "landing:go": "node scripts/landing-go.ts",
+    "landing:links": "node scripts/landing-links.ts",
+    "landing:stars": "node scripts/landing-stars.ts"
+  },
+  "dependencies": {
+    "@runtime/ui": "workspace:*"
   },
   "devDependencies": {
+    "@axe-core/playwright": "catalog:",
+    "@playwright/test": "catalog:",
     "@types/node": "catalog:",
     "pagefind": "catalog:",
+    "playwright-core": "catalog:",
     "typescript": "catalog:",
     "vitepress": "catalog:",
     "vitest": "catalog:",

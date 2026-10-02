@@ -10,13 +10,14 @@ import { join } from 'node:path';
 import { beforeAll, describe, expect, test } from 'vitest';
 import { PAGES } from './nav.ts';
 import { checkSite } from './site.ts';
+import { withBuildLock } from './testing/build-lock.ts';
 import { docsDir } from './testing/pages.ts';
 
 const dist = join(docsDir, 'dist');
 let output = '';
 
-beforeAll(() => {
-  const result = spawnSync('node', ['scripts/build.ts'], { cwd: docsDir, encoding: 'utf8', timeout: 240_000, env: { ...process.env, DOCS_BASE: '/' } });
+beforeAll(async () => {
+  const result = await withBuildLock(docsDir, () => spawnSync('node', ['scripts/build.ts'], { cwd: docsDir, encoding: 'utf8', timeout: 240_000, env: { ...process.env, DOCS_BASE: '/' } }));
   output = `${result.stdout}${result.stderr}`;
   if (result.status !== 0) throw new Error(`la construction du site a échoué (code ${result.status}) :\n${output}`);
 }, 300_000);
@@ -77,7 +78,8 @@ describe('assert_docs_no_external_resources : aucune ressource ne vient d\'aille
       if (file.endsWith('.html')) {
         // Les liens `<a href>` externes (sources citées) sont des liens, pas des ressources chargées.
         for (const match of text.matchAll(/<(?:script|link|img|iframe|source|video|audio)\b[^>]*>/g)) {
-          if (external.test(match[0])) offenders.push(`${file} : ${match[0].slice(0, 120)}`);
+          // Une balise canonique ou d'alternative de langue désigne une page (adresse absolue voulue), elle ne charge rien.
+          if (external.test(match[0]) && !/\brel="(?:canonical|alternate)"/.test(match[0])) offenders.push(`${file} : ${match[0].slice(0, 120)}`);
           external.lastIndex = 0;
         }
       } else {
