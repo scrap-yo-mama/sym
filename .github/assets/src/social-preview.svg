@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 640" width="1280" height="640" role="img" aria-label="Describe the data. SYM handles the rest.">
+  <rect width="1280" height="640" fill="#FBF8F3"/>
+  <circle cx="112" cy="112" r="48" fill="#FFC727"/>
+  <path transform="translate(80 80) scale(2.667)" fill="#24252D" fill-rule="evenodd" d="M12 2.5c-4.14 0-7.5 3.36-7.5 7.5v10.2c0 .92 1.1 1.4 1.77.77l1.93-1.77 2.1 1.9a2.4 2.4 0 0 0 3.4 0l2.1-1.9 1.93 1.77c.67.63 1.77.15 1.77-.77V10c0-4.14-3.36-7.5-7.5-7.5ZM9.25 8.75a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3Zm5.5 0a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3Z"/>
+  <text x="184" y="132" font-family="Bricolage Grotesque" font-weight="800" font-size="56" fill="#24252D">Scrapyomama</text>
+  <text id="line1" x="64" y="338" font-family="Bricolage Grotesque" font-weight="800" font-size="92" fill="#24252D">Describe the data.</text>
+  <text id="line2" x="64" y="446" font-family="Bricolage Grotesque" font-weight="800" font-size="92" fill="#24252D">SYM handles the rest.</text>
+  <rect x="64" y="504" width="200" height="72" rx="36" fill="#D8BDF7"/>
+  <rect x="284" y="504" width="72" height="72" rx="20" fill="#A8E3EA"/>
+  <circle cx="412" cy="540" r="36" fill="#FF5A1F"/>
+</svg>
