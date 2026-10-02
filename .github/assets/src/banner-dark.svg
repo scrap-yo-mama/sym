@@ -1,11 +1,13 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 400" width="1600" height="400" role="img" aria-label="Scrapyomama">
-  <rect width="1600" height="400" fill="#24252D"/>
-  <circle cx="1486" cy="96" r="56" fill="#D8BDF7"/>
-  <rect x="1396" y="200" width="104" height="104" rx="28" fill="#A8E3EA"/>
-  <rect x="1520" y="236" width="56" height="76" rx="28" fill="#FF5A1F"/>
-  <circle cx="1440" cy="352" r="24" fill="#FFC727"/>
-  <circle cx="216" cy="200" r="120" fill="#FFC727"/>
-  <path transform="translate(120 104) scale(8)" fill="#24252D" fill-rule="evenodd" d="M12 2.5c-4.14 0-7.5 3.36-7.5 7.5v10.2c0 .92 1.1 1.4 1.77.77l1.93-1.77 2.1 1.9a2.4 2.4 0 0 0 3.4 0l2.1-1.9 1.93 1.77c.67.63 1.77.15 1.77-.77V10c0-4.14-3.36-7.5-7.5-7.5ZM9.25 8.75a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3Zm5.5 0a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3Z"/>
-  <text x="392" y="228" font-family="Bricolage Grotesque" font-weight="800" font-size="132" fill="#FBF8F3">Scrapyomama</text>
-  <text x="398" y="318" font-family="JetBrains Mono" font-weight="600" font-size="46" fill="#D8BDF7">SYM</text>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 400" width="1600" height="400" role="img" aria-label="SYM">
+  <clipPath id="frame"><rect width="1600" height="400" rx="26"/></clipPath>
+  <g clip-path="url(#frame)">
+    <rect width="1600" height="400" fill="#24252D"/>
+    <circle cx="1507" cy="112" r="186" fill="#FF5A1F"/>
+    <rect x="1060" y="251" width="260" height="260" rx="74" fill="#D8BDF7" transform="rotate(16 1190 381)"/>
+    <circle cx="1419" cy="294" r="50" fill="#FFC727"/>
+    <text x="67" y="180" font-family="Bricolage Grotesque" font-weight="800" font-size="100" letter-spacing="-2.8" fill="#FBF8F3">SYM 👻</text>
+    <text x="67" y="248" font-family="Bricolage Grotesque" font-weight="800" font-size="41" fill="#FFC727"><tspan text-decoration="line-through" fill="#8F8A80">"I won't do that."</tspan> Too late, it's done.</text>
+    <text x="67" y="294" font-family="DM Sans" font-weight="400" font-size="24" fill="#C9C4BA">scrapyomama · open source · self-hosted</text>
+    <rect x="1" y="1" width="1598" height="398" rx="25" fill="none" stroke="#3A3C48" stroke-width="2"/>
+  </g>
 </svg>

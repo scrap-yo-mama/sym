@@ -30,18 +30,26 @@ const dependsOn = (name: string): boolean =>
 /** Le serveur MCP (tâche 3.2) n'existe que si le SDK MCP est une dépendance ; l'API REST des API (3.1) que si une route `apis` existe. */
 const MCP_DELIVERED = dependsOn('@modelcontextprotocol/sdk');
 const REST_APIS_DELIVERED = readdirSync(join(runtimeDir, 'apps/server/src/routes')).some((f) => /^(apis|runs)\.ts$/.test(f));
+/** La réparation (tâche 2.3) n'existe que si un fichier de ce nom est dans le worker ou l'agent. */
+const REPAIR_DELIVERED = ['apps/worker/src', 'packages/agent/src'].some((dir) => existsSync(join(runtimeDir, dir)) && readdirSync(join(runtimeDir, dir), { recursive: true }).some((f) => /(^|[\\/])repair[^\\/]*\.ts$/.test(String(f))));
 
 /** Affirmations au présent du parcours cible (2.1, 2.3, 3.1, 3.2), interdites tant qu'il n'est pas livré. */
 const PRESENT_CLAIMS = {
   en: [/Speaks MCP and REST/i, /Repairs itself/i, /\bSYM (investigates|compiles|repairs|looks for)\b/, /\byou ask your AI, over MCP\b/i],
   fr: [/Parle MCP et REST/i, /Se répare toute seule/i, /\bSYM (enquête|compile|répare|cherche)(?=[\s,.;:])/, /\btu demandes à ton IA, via MCP\b/i],
 };
+/**
+ * Tâche 4.12b (D-60) : l'accroche de la planche dit « repairs itself when the site changes » au présent. Une telle phrase n'est admise que
+ * si l'alerte `[!WARNING]` nomme, sur sa ligne « Not delivered yet », ce qui manque encore (la réparation) : la promesse reste vraie parce
+ * qu'elle est datée par l'alerte. Les autres affirmations ci-dessus restent interdites telles quelles.
+ */
+const COVERED_BY_ALERT = new Map<string, RegExp>([['repairs itself', /repair/], ['speaks mcp and rest', /MCP server/], ['se répare toute seule', /réparation/], ['parle mcp et rest', /serveur MCP/]]);
 
 describe('README public : ce qui marche aujourd\'hui, distingué de ce qui est prévu', () => {
-  // 4.12 : la vitrine suit les 11 blocs de 22 §3.1 (sans titre « What works today ») ; l'honnêteté de la pré-version tient dans
-  // l'alerte `[!WARNING]` qui précède « What it does », dont les puces ne décrivent que ce qui existe (registre claims.json).
-  test('alerte de pré-version avant « What it does » / « Ce que ça fait »', () => {
-    for (const [lang, heading] of [['en', '## What it does'], ['fr', '## Ce que ça fait']] as const) {
+  // 4.12b : la vitrine suit la planche (D-60, sans titre « What works today ») ; l'honnêteté de la pré-version tient dans l'alerte
+  // `[!WARNING]` qui précède toutes les sections (registre claims.json pour les puces).
+  test('alerte de pré-version avant « How it feels » / « Ce que ça donne »', () => {
+    for (const [lang, heading] of [['en', '## How it feels'], ['fr', '## Ce que ça donne']] as const) {
       const text = README[lang];
       expect(text, lang).toContain(heading);
       expect(text.indexOf('[!WARNING]'), lang).toBeGreaterThan(-1);
@@ -49,15 +57,26 @@ describe('README public : ce qui marche aujourd\'hui, distingué de ce qui est p
     }
   });
 
-  test.skipIf(MCP_DELIVERED && REST_APIS_DELIVERED)('parcours non livré : aucune affirmation au présent, et le README dit ce qui manque', () => {
+  test.skipIf(MCP_DELIVERED && REST_APIS_DELIVERED && REPAIR_DELIVERED)('parcours non livré : aucune affirmation au présent, et le README dit ce qui manque', () => {
     for (const lang of ['en', 'fr'] as const) {
-      for (const claim of PRESENT_CLAIMS[lang]) expect(README[lang], `${lang} : ${claim}`).not.toMatch(claim);
+      for (const claim of PRESENT_CLAIMS[lang]) {
+        const covering = COVERED_BY_ALERT.get(claim.source.toLowerCase());
+        const alert = (lang === 'en' ? /\*\*Not delivered yet:\*\*[^\n]*/ : /\*\*Pas encore livré\s*:\*\*[^\n]*/).exec(README[lang])?.[0] ?? '';
+        if (covering && covering.test(alert)) continue;
+        expect(README[lang], `${lang} : ${claim}`).not.toMatch(claim);
+      }
     }
+    // Seul ce qui manque est listé : la ligne s'allège à mesure que 2.3, 3.1 et 3.2 sont livrées.
     const missing = {
-      en: /\*\*Not delivered yet:\*\*[^\n]*repair[^\n]*REST API[^\n]*MCP server/,
-      fr: /\*\*Pas encore livré\s*:\*\*[^\n]*réparation[^\n]*API REST[^\n]*serveur MCP/,
+      en: [!REPAIR_DELIVERED && /repair/, !REST_APIS_DELIVERED && /REST API/, !MCP_DELIVERED && /MCP server/],
+      fr: [!REPAIR_DELIVERED && /réparation/, !REST_APIS_DELIVERED && /API REST/, !MCP_DELIVERED && /serveur MCP/],
     };
-    for (const lang of ['en', 'fr'] as const) expect(README[lang], lang).toMatch(missing[lang]);
+    const line = { en: /\*\*Not delivered yet:\*\*[^\n]*/, fr: /\*\*Pas encore livré\s*:\*\*[^\n]*/ };
+    for (const lang of ['en', 'fr'] as const) {
+      const found = line[lang].exec(README[lang])?.[0] ?? '';
+      expect(found, lang).not.toBe('');
+      for (const what of missing[lang]) if (what) expect(found, `${lang} : ${String(what)}`).toMatch(what);
+    }
   });
 
   test('parité en / fr : mêmes titres de section, même nombre de puces et d\'étapes', () => {

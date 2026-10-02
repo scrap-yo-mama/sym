@@ -11,6 +11,7 @@ and the logo stay under the trademark policy (`runtime/TRADEMARK.md`): the licen
 | `brand/banner-dark.png` | Scrapyomama maintainers | AGPL-3.0-only (name and logo: `runtime/TRADEMARK.md`) | 2026-10-02 |
 | `brand/logo-light.svg` | Scrapyomama maintainers | AGPL-3.0-only (name and logo: `runtime/TRADEMARK.md`) | 2026-10-02 |
 | `brand/logo-dark.svg` | Scrapyomama maintainers | AGPL-3.0-only (name and logo: `runtime/TRADEMARK.md`) | 2026-10-02 |
+| `brand/button-deploy-render.svg` | Scrapyomama maintainers | AGPL-3.0-only (name and logo: `runtime/TRADEMARK.md`) | 2026-10-02 |
 | `brand/social-preview.png` | Scrapyomama maintainers | AGPL-3.0-only (name and logo: `runtime/TRADEMARK.md`) | 2026-10-02 |
 | `brand/og-en.png` | Scrapyomama maintainers | AGPL-3.0-only (name and logo: `runtime/TRADEMARK.md`) | 2026-10-02 |
 | `brand/og-fr.png` | Scrapyomama maintainers | AGPL-3.0-only (name and logo: `runtime/TRADEMARK.md`) | 2026-10-02 |

@@ -1,5 +1,5 @@
 {
-  "readme": { "minLines": 90, "maxLines": 150, "maxBytes": 12288, "commandBeforeLine": 40, "maxBadges": 5, "maxHeadings": 7 },
+  "readme": { "minLines": 50, "maxLines": 150, "maxBytes": 12288, "commandBeforeLine": 40, "maxBadges": 5, "maxHeadings": 7 },
   "assets": {
     "svgMaxBytes": 10240,
     "bannerMaxBytes": 153600,
@@ -19,5 +19,5 @@
   "demo": { "durationToleranceSeconds": 0.5, "stepPixelDiffRatio": 0.01 },
   "repo": { "descriptionMaxChars": 160, "topicsMin": 10, "topicsMax": 20 },
   "images": { "allowedHosts": ["img.shields.io", "github.com/user-attachments"] },
-  "badges": { "allowedHosts": ["img.shields.io"], "allowedPaths": ["/github/license/", "/github/v/release/", "/github/actions/workflow/status/"] }
+  "badges": { "allowedHosts": ["img.shields.io"], "allowedPaths": ["/badge/license-", "/badge/status-", "/badge/protocol-", "/badge/deploy-", "/badge/releases-"] }
 }

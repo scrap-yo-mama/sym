@@ -79,6 +79,148 @@
       "status": "relu"
     },
     {
+      "id": "does-schema-first",
+      "surfaces": [
+        "readme"
+      ],
+      "en": "Turns a request into a schema you validate first",
+      "fr": "Transforme une demande en schéma que tu valides d'abord",
+      "proof": [
+        "INV1"
+      ],
+      "reviewed": "2026-10-02",
+      "status": "relu"
+    },
+    {
+      "id": "does-cheapest",
+      "surfaces": [
+        "readme"
+      ],
+      "en": "Picks the cheapest method that works",
+      "fr": "Choisit la méthode la moins chère qui marche",
+      "proof": [
+        "INV2",
+        "assert_cheapest_first_logged"
+      ],
+      "reviewed": "2026-10-02",
+      "status": "relu"
+    },
+    {
+      "id": "does-replay-repair",
+      "surfaces": [
+        "readme"
+      ],
+      "en": "Replays without an LLM, repairs step by step",
+      "fr": "Rejoue sans LLM, répare étape par étape",
+      "proof": [
+        "assert_e5_replay_without_llm"
+      ],
+      "reviewed": "2026-10-02",
+      "status": "relu",
+      "task": "2.3",
+      "note": "La réparation par étape arrive avec 2.3 et 2.13 : la preuve du rejeu existe, celle de la réparation s'ajoute à leur livraison (l'entrée repasse alors à relire)."
+    },
+    {
+      "id": "does-own-session",
+      "surfaces": [
+        "readme"
+      ],
+      "en": "Uses your own browser session when you allow it",
+      "fr": "Utilise ta propre session de navigateur quand tu l'autorises",
+      "proof": [
+        "INV5",
+        "assert_consent_before_capture"
+      ],
+      "reviewed": "2026-10-02",
+      "status": "relu"
+    },
+    {
+      "id": "does-mcp-rest-console",
+      "surfaces": [
+        "readme"
+      ],
+      "en": "Speaks MCP, REST, and has a console",
+      "fr": "Parle MCP et REST, et a une console",
+      "proof": [
+        "assert_openapi_served_valid",
+        "assert_console_login_then_empty_authenticated_page"
+      ],
+      "reviewed": "2026-10-02",
+      "status": "relu",
+      "task": "3.2",
+      "note": "Le serveur MCP arrive avec 3.2 : sa preuve s'ajoute à sa livraison (l'entrée repasse alors à relire)."
+    },
+    {
+      "id": "handle-js-pages",
+      "surfaces": [
+        "readme"
+      ],
+      "en": "JavaScript-heavy pages, with a real browser",
+      "fr": "Les pages lourdes en JavaScript, avec un vrai navigateur",
+      "proof": [
+        "runtime/apps/worker/src/exec/browser-executors.ts"
+      ],
+      "reviewed": "2026-10-02",
+      "status": "relu"
+    },
+    {
+      "id": "handle-account-sites",
+      "surfaces": [
+        "readme"
+      ],
+      "en": "Account sites, through your own session (Chrome extension)",
+      "fr": "Les sites à compte, avec ta propre session (extension Chrome)",
+      "proof": [
+        "INV5",
+        "assert_tunnel_only_when_chosen"
+      ],
+      "reviewed": "2026-10-02",
+      "status": "relu"
+    },
+    {
+      "id": "handle-tricky-sites",
+      "surfaces": [
+        "readme"
+      ],
+      "en": "Tricky sites: an agent figures it out, then it compiles",
+      "fr": "Les sites retors : un agent se débrouille, puis ça se compile",
+      "proof": [
+        "assert_e6_compiled_to_e5"
+      ],
+      "reviewed": "2026-10-02",
+      "status": "relu"
+    },
+    {
+      "id": "handle-changing-sites",
+      "surfaces": [
+        "readme"
+      ],
+      "en": "Sites that change: it repairs the step that broke",
+      "fr": "Les sites qui changent : il répare l'étape qui a cassé",
+      "proof": [
+        "runtime/apps/worker/src/exec/classification-guard.integration.test.ts"
+      ],
+      "reviewed": "2026-10-02",
+      "status": "relu",
+      "task": "2.3",
+      "note": "La réparation arrive avec 2.3 : la garde de classification avant réparation existe, la preuve de la réparation s'ajoute à sa livraison."
+    },
+    {
+      "id": "handle-pagination-schedules-webhooks",
+      "surfaces": [
+        "readme"
+      ],
+      "en": "Pagination, schedules, webhooks",
+      "fr": "Pagination, planifications, webhooks",
+      "proof": [
+        "assert_pagination_stop_rule_last_page",
+        "assert_schedule_single_source",
+        "assert_webhook_signature"
+      ],
+      "reviewed": "2026-10-02",
+      "status": "relu"
+    },
+    {
       "id": "no-signup",
       "surfaces": [
         "readme"
