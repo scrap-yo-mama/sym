@@ -10,11 +10,16 @@
 //   dernière étape ; BINV3). Une seule fin par session, quel que soit le nombre de déclencheurs concurrents.
 // - drainage (04b § 9, tâche 2.7) : après `drain`, toute nouvelle session est refusée (`draining`) ; `whenEmpty` attend la
 //   fin des sessions en cours, `shutdown` termine les restantes (`node_shutdown`), orchestré par `NodeDrain` (../drain).
-// - nœud isolé (battement perdu, 04b § 6) : sessions locales détruites sans écriture (la passerelle les a déclarées
-//   `failed` raison `node_lost`).
-import { endStateFor, SessionTimers, systemClock, type Clock, type EndReason, type ExtendOutcome, type SessionStore, type TransitionOutcome } from '@sym-browser/core';
+// - nœud isolé (battement perdu, 04b § 6) : sessions locales détruites sans écriture d'état (la passerelle les a
+//   déclarées `failed` raison `node_lost`).
+// - comptage (04d § 4.1, tâche 2.6, BINV5) : la mesure démarre au passage `running` et s'arrête une fois la destruction
+//   faite ; la clôture part dans `usage.wal` (fsync) PUIS dans la même écriture que l'état final. État final refusé ou
+//   nœud isolé : la clôture est écrite seule (elle remplace une valeur reconstruite) ; base injoignable : elle reste dans
+//   le journal, rejoué au redémarrage et lu par la réconciliation.
+import { endStateFor, SessionTimers, systemClock, type Clock, type EndReason, type ExtendOutcome, type SessionStore, type TransitionOutcome, type UsageClosure } from '@sym-browser/core';
 import type { LaunchArg } from '@sym/contracts/browser';
 import type { AcquireRequest, LeaseEndReason, PoolLease, SessionType } from '../pool/index.js';
+import type { UsageMeter, UsageWal } from '../usage/index.js';
 import type { SharedSessionInput } from './options.js';
 
 /** Requête de bail : celle du pool, plus les options de contexte d'une session shared (hôte des sessions, tâche 1.7). */
@@ -56,6 +61,8 @@ export type SessionSupervisorOptions = {
   store: SessionStore;
   clock?: Clock;
   watchdogGraceMs?: number;
+  /** Comptage (tâche 2.6) : compteur du nœud et son journal `usage.wal`. */
+  usage?: { meter: UsageMeter; wal: Pick<UsageWal, 'append'> };
   /** Erreur hors du chemin de l'appelant (destruction incomplète, écriture refusée) : journal du nœud. */
   onError?: (error: unknown) => void;
   /** Démarrage (demande → `running`) et fin (`running` → état final) : métriques du nœud (tâche 3.7). */
@@ -74,6 +81,7 @@ export class SessionSupervisor {
   readonly #watchdogGraceMs: number;
   readonly #onError: (error: unknown) => void;
   readonly #onLifecycle: (event: SessionLifecycleEvent) => void;
+  readonly #usage: SessionSupervisorOptions['usage'];
   readonly #sessions = new Map<string, Active>();
   readonly #starting = new Set<string>();
   readonly #inFlight = new Set<Promise<unknown>>();
@@ -89,6 +97,7 @@ export class SessionSupervisor {
     this.#watchdogGraceMs = options.watchdogGraceMs ?? WATCHDOG_GRACE_MS;
     this.#onError = options.onError ?? (() => undefined);
     this.#onLifecycle = options.onLifecycle ?? (() => undefined);
+    this.#usage = options.usage;
   }
 
   #lifecycle(event: SessionLifecycleEvent): void {
@@ -161,6 +170,7 @@ export class SessionSupervisor {
         await this.#release(lease);
         return { ok: false, code: outcome?.code ?? 'invalid_transition' };
       }
+      this.#usage?.meter.start(sessionId);
       const active: Active = {
         lease,
         timers: new SessionTimers({
@@ -210,8 +220,10 @@ export class SessionSupervisor {
     active.ending ??= (async (): Promise<EndOutcome> => {
       active.timers.stop();
       await this.#release(active.lease);
+      const usage = await this.#closeUsage(sessionId);
       const to = endStateFor('running', reason);
-      const outcome = to === undefined ? undefined : await this.#write({ sessionId, to, reason });
+      const outcome = to === undefined ? undefined : await this.#write({ sessionId, to, reason, ...(usage ? { usage } : {}) });
+      if (usage && !outcome?.ok) await this.#recordUsage(usage);
       this.#sessions.delete(sessionId);
       this.#lifecycle({ kind: 'ended', type: active.type, reason, durationMs: this.#clock.now() - active.runningAt });
       this.#notifyEmpty();
@@ -225,13 +237,15 @@ export class SessionSupervisor {
     await Promise.all(this.active().map((sessionId) => this.end(sessionId, 'node_shutdown')));
   }
 
-  /** Nœud isolé ou déclaré perdu : sessions locales détruites, aucune écriture d'état. */
+  /** Nœud isolé ou déclaré perdu : sessions locales détruites, aucune écriture d'état ; usage clôturé seul. */
   async isolate(): Promise<void> {
     await Promise.all(
       [...this.#sessions].map(([sessionId, active]) => {
         active.ending ??= (async (): Promise<EndOutcome> => {
           active.timers.stop();
           await this.#release(active.lease);
+          const usage = await this.#closeUsage(sessionId);
+          if (usage) await this.#recordUsage(usage);
           this.#sessions.delete(sessionId);
           this.#notifyEmpty();
           return { ok: false, code: 'isolated' };
@@ -258,6 +272,26 @@ export class SessionSupervisor {
   async #release(lease: Lease): Promise<void> {
     try {
       await lease.release();
+    } catch (error) {
+      this.#onError(error);
+    }
+  }
+
+  /** Destruction faite : mesure arrêtée, clôture journalisée dans usage.wal (fsync) avant toute écriture en base. */
+  async #closeUsage(sessionId: string): Promise<UsageClosure | undefined> {
+    const closure = this.#usage?.meter.stop(sessionId);
+    if (!closure) return undefined;
+    try {
+      await this.#usage?.wal.append(closure);
+    } catch (error) {
+      this.#onError(error);
+    }
+    return closure;
+  }
+
+  async #recordUsage(closure: UsageClosure): Promise<void> {
+    try {
+      await this.#store.recordUsage?.(closure);
     } catch (error) {
       this.#onError(error);
     }

@@ -172,7 +172,7 @@ export const idempotencyKeys = pgTable('idempotency_keys', {
   createdAt: createdAt(),
 }, (t) => [primaryKey({ columns: [t.tenantId, t.operation, t.key] }), index('idempotency_keys_created_idx').on(t.createdAt)]);
 
-/** Livraisons de webhooks (tâche 2.5, migration 0003) : une par événement, relances et bail de la passerelle qui envoie. */
+/** Livraisons de webhooks (tâche 2.5, migration 0004) : une par événement, relances et bail de la passerelle qui envoie. */
 export const webhookDeliveries = pgTable('webhook_deliveries', {
   id: text('id').primaryKey(),
   tenantId: uuid('tenant_id').notNull().references(() => tenants.id, { onDelete: 'cascade' }),
@@ -189,3 +189,28 @@ export const webhookDeliveries = pgTable('webhook_deliveries', {
   createdAt: createdAt(),
   deliveredAt: tstz('delivered_at'),
 }, (t) => [index('webhook_deliveries_due_idx').on(t.nextAttemptAt), index('webhook_deliveries_session_idx').on(t.sessionId)]);
+
+/** Dernière mesure en cours d'une session, poussée par le nœud (04d § 4.1, migration 0005, tâche 2.6). */
+export const usageSnapshots = pgTable('usage_snapshots', {
+  sessionId: uuid('session_id').primaryKey().references(() => sessions.id, { onDelete: 'cascade' }),
+  nodeId: text('node_id').notNull().references(() => nodes.id),
+  startedAt: tstz('started_at').notNull(),
+  browserMs: big('browser_ms').notNull(),
+  bytesIn: big('bytes_in').notNull(),
+  bytesOut: big('bytes_out').notNull(),
+  measuredAt: tstz('measured_at').notNull().defaultNow(),
+});
+
+/** Rapport de chaque réconciliation (04d § 4.4, migration 0005, tâche 2.6). */
+export const usageReconciliations = pgTable('usage_reconciliations', {
+  id: bigint('id', { mode: 'number' }).primaryKey().generatedAlwaysAsIdentity(),
+  ranAt: tstz('ran_at').notNull().defaultNow(),
+  closures: integer('closures').notNull(),
+  inserted: integer('inserted').notNull(),
+  replaced: integer('replaced').notNull(),
+  reconstructed: integer('reconstructed').notNull(),
+  driftSeconds: big('drift_seconds').notNull(),
+  driftBytes: big('drift_bytes').notNull(),
+  remainingDriftSeconds: big('remaining_drift_seconds').notNull(),
+  remainingDriftBytes: big('remaining_drift_bytes').notNull(),
+}, (t) => [index('usage_reconciliations_ran_idx').on(t.ranAt)]);

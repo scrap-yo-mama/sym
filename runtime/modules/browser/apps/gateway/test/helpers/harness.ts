@@ -8,9 +8,10 @@
 // Quotas (tâche 2.4) : sessions simultanées des clients A et B à 1 000 sauf demande, file et nœuds réglables ; le nœud
 // simulé écrit `running` sur le nœud choisi par l'admission.
 // Événements et webhooks (tâche 2.5) : clés `admin` par client, révocation, écoute réelle pour le SSE.
+// Comptage (tâche 2.6) : `keyIds` (`api_keys.id` de chaque clé), journaux usage.wal simulés (`usageWal`).
 // Chaque réponse est validée contre l'OpenAPI publiée (statut déclaré, corps conforme au schéma) : « 0 écart schéma/réponse ».
 import { randomBytes } from 'node:crypto';
-import { ApiKeyAuthenticator, ConnectTokens, createBrowserMetrics, MasterKey, MetricsRegistry, newApiKey, Secret } from '@sym-browser/core';
+import { ApiKeyAuthenticator, ConnectTokens, createBrowserMetrics, MasterKey, MetricsRegistry, newApiKey, Secret, type UsageClosure } from '@sym-browser/core';
 import { insertApiKey, migrateUp, pgApiKeyStore, recordHeartbeat, revokeApiKey, transitionSession } from '@sym-browser/db';
 import { browserOpenApi } from '@sym/contracts/browser';
 import { Ajv2020, type ValidateFunction } from 'ajv/dist/2020.js';
@@ -22,13 +23,16 @@ import { createGatewayApi, type GatewayDeps, type LaunchRequest, type Scope, typ
 const PUBLIC_URL = 'https://b.example.com';
 
 type LauncherMode = 'ok' | 'fail' | 'hang';
+type KeyName = 'a' | 'aRead' | 'b' | 'aAdmin' | 'bAdmin';
 
 export type Harness = {
   app: FastifyInstance;
   pool: pg.Pool;
   tenantA: string;
   tenantB: string;
-  keys: Record<'a' | 'aRead' | 'b' | 'aAdmin' | 'bAdmin', string>;
+  keys: Record<KeyName, string>;
+  /** `api_keys.id` de chaque clé (tâche 2.6). */
+  keyIds: Record<KeyName, string>;
   /** URL d'écoute réelle (`listen`), pour les flux SSE et les webhooks (tâche 2.5). */
   listen: () => Promise<string>;
   /** Jetons de connexion réels (vérification des `connectUrls`). */
@@ -105,6 +109,8 @@ export type HarnessOptions = {
   relay?: GatewayDeps['relay'];
   events?: GatewayDeps['events'];
   webhooks?: GatewayDeps['webhooks'];
+  /** Clôtures des journaux usage.wal des nœuds (réconciliation, tâche 2.6). */
+  usageWal?: () => Promise<UsageClosure[]>;
 };
 
 export async function createHarness(options: HarnessOptions = {}): Promise<Harness> {
@@ -119,15 +125,15 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
   const tenantA = await one('INSERT INTO tenants (name, max_session_seconds, max_concurrent_sessions) VALUES ($1, $2, $3) RETURNING id', ['a', options.maxSessionSeconds ?? 3600, options.maxConcurrentSessions ?? 1000]);
   const tenantB = await one("INSERT INTO tenants (name, max_concurrent_sessions) VALUES ('b', 1000) RETURNING id");
   // Clés réelles (tâche 2.1) : empreinte argon2id en base, secret rendu une fois.
-  const keyIds = new Map<string, { tenantId: string; id: string }>();
+  const keyRefs = new Map<string, { tenantId: string; id: string }>();
   const realKey = async (tenantId: string, scopes: Scope[]): Promise<string> => {
     const created = await newApiKey({ scopes });
     const { id } = await insertApiKey(pool, { tenantId, prefix: created.prefix, keyHash: created.keyHash, scopes: created.scopes, expiresAt: null });
     const secret = created.key.reveal();
-    keyIds.set(secret, { tenantId, id });
+    keyRefs.set(secret, { tenantId, id });
     return secret;
   };
-  const keys = {
+  const keys: Record<KeyName, string> = {
     a: await realKey(tenantA, ['sessions:write', 'sessions:read']),
     aRead: await realKey(tenantA, ['sessions:read']),
     b: await realKey(tenantB, ['sessions:write', 'sessions:read']),
@@ -135,6 +141,7 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
     aAdmin: await realKey(tenantA, ['admin']),
     bAdmin: await realKey(tenantB, ['admin']),
   };
+  const keyIds = Object.fromEntries(Object.entries(keys).map(([name, secret]) => [name, keyRefs.get(secret)?.id ?? ''])) as Record<KeyName, string>;
 
   for (const [index, n] of (options.nodes ?? [{ id: 'node-a', region: 'frankfurt', slotsTotal: 4096 }]).entries()) {
     await recordHeartbeat(pool, {
@@ -191,6 +198,7 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
     ...(options.events === undefined ? {} : { events: options.events }),
     ...(options.webhooks === undefined ? {} : { webhooks: options.webhooks }),
     observability: { registry, metrics: createBrowserMetrics(registry, 'gateway'), token: new Secret(metricsToken) },
+    ...(options.usageWal === undefined ? {} : { usageWal: options.usageWal }),
   };
   const app = await createGatewayApi(deps);
   await app.ready();
@@ -216,10 +224,11 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
     tenantB,
     keys,
     metricsToken,
+    keyIds,
     launcher: state,
     tokens,
     revoke: async (key) => {
-      const ref = keyIds.get(keys[key]);
+      const ref = keyRefs.get(keys[key]);
       if (ref !== undefined) await revokeApiKey(pool, { tenantId: ref.tenantId, id: ref.id });
     },
     call,

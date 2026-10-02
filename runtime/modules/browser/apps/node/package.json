@@ -19,6 +19,14 @@
     "./events": {
       "types": "./dist/events/index.d.ts",
       "default": "./dist/events/index.js"
+    },
+    "./sessions": {
+      "types": "./dist/sessions/index.d.ts",
+      "default": "./dist/sessions/index.js"
+    },
+    "./usage": {
+      "types": "./dist/usage/index.d.ts",
+      "default": "./dist/usage/index.js"
     }
   },
   "files": [

@@ -10,6 +10,8 @@
 // simultanées du client, nœud au plus faible taux d'occupation ; refus 429 avec `Retry-After`.
 // Observabilité (tâche 3.7, 04d § 3.1) : `GET /metrics` sous jeton, hors OpenAPI publique ; sessions par état et type,
 // file et nœuds vivants lus en base à chaque collecte, créations comptées par résultat, attente en file mesurée.
+// Comptage (04d § 4.3 et § 4.4, tâche 2.6) : `GET /v1/usage` et `GET /v1/usage.csv` (mêmes lignes, mêmes totaux ;
+// `sessions:read` limité à sa propre clé, `admin` toutes les clés du client), `POST /v1/admin/usage/reconcile` (admin).
 import { randomBytes } from 'node:crypto';
 import { authorizeRequest, endStateFor, isTerminal, liveViewUrl, metricsResponse, resolveSessionType, sessionUnits, type CreateResult } from '@sym-browser/core';
 import {
@@ -22,12 +24,15 @@ import {
   getSessionView,
   listSessionViews,
   monthlyUsage,
+  queryUsage,
+  reconcileUsage,
   readyNodeExists,
   releaseIdempotencyKey,
   requestHash,
   transitionSession,
   type IdempotentOperation,
   type SessionView,
+  type UsageGroup,
 } from '@sym-browser/db';
 import {
   BROWSER_API_VERSION,
@@ -55,6 +60,7 @@ import { serveEventStream, type OpenStream } from '../events/stream.js';
 import { createWebhookDispatcher } from '../webhooks/dispatcher.js';
 import { ApiProblem, invalidOption, preferredLanguage } from './errors.js';
 import type { GatewayDeps, Principal, Scope } from './types.js';
+import { usageCsv } from '../usage/csv.js';
 import { isDateTime, parseCreateSession, parseExtendSession, UUID } from './validation.js';
 import { createDbRelayResolver, registerRelay } from '../relay/index.js';
 
@@ -189,18 +195,28 @@ export async function createGatewayApi(deps: GatewayDeps): Promise<FastifyInstan
     fail(request, reply, request.url.startsWith('/v1/sessions/') ? sessionNotFound() : invalidOption([{ field: 'path', reason: 'unknown route' }])),
   );
 
-  /** Clé d'API en `Authorization: Bearer` puis scope requis (04 § 1) : décision de la tâche 2.1 (`authorizeRequest`). */
-  const authorize = (scope: Scope) => async (request: FastifyRequest): Promise<void> => {
-    const decision = await authorizeRequest(deps.auth, request.headers, scope);
+  /**
+   * Clé d'API en `Authorization: Bearer` puis au moins un des scopes requis (04 § 1 ; usage : `sessions:read` ou `admin`) :
+   * décision de la tâche 2.1 (`authorizeRequest`), la clé n'étant vérifiée (argon2id) qu'une fois par requête.
+   */
+  const authorizeAny = (scopes: readonly [Scope, ...Scope[]]) => async (request: FastifyRequest): Promise<void> => {
+    let checked: ReturnType<GatewayDeps['auth']['check']> | undefined;
+    const once: GatewayDeps['auth'] = { check: (secret) => (checked ??= deps.auth.check(secret)) };
+    let decision = await authorizeRequest(once, request.headers, scopes[0]);
+    for (const scope of scopes.slice(1)) {
+      if (decision.ok || decision.status !== 403) break;
+      decision = await authorizeRequest(once, request.headers, scope);
+    }
     if (decision.ok) {
       request.principal = decision.principal;
       return;
     }
-    if (decision.status === 403) throw new ApiProblem('forbidden', `Scope ${decision.requiredScope} required.`, { details: { requiredScope: decision.requiredScope } });
+    if (decision.status === 403) throw new ApiProblem('forbidden', `Scope ${scopes.join(' or ')} required.`, { details: { requiredScope: scopes[0] } });
     // Audit 5.3 S15 : file des vérifications argon2id pleine → 429 à réessayer, jamais 401.
     if (decision.reason === 'busy') throw new ApiProblem('capacity_exceeded', 'Too many API key verifications in progress.', { details: { limit: 'auth' }, retryAfter: 1 });
     throw new ApiProblem('unauthorized', 'Missing, unknown or expired API key.');
   };
+  const authorize = (scope: Scope) => authorizeAny([scope]);
   const principalOf = (request: FastifyRequest): Principal => {
     if (!request.principal) throw new ApiProblem('unauthorized', 'Missing API key.');
     return request.principal;
@@ -597,6 +613,71 @@ export async function createGatewayApi(deps: GatewayDeps): Promise<FastifyInstan
       app.addHook('preClose', async () => dispatcher.stop());
     }
   }
+
+  // --- Comptage (tâche 2.6) : usage mesuré par le nœud, agrégé en base, réconciliation à la demande. ---
+  /** Paramètres de l'API d'usage (04d § 4.3) : période [from, to) (mois UTC courant par défaut), regroupement, clé. */
+  const usageQuery = (request: FastifyRequest) => {
+    const principal = principalOf(request);
+    const query = request.query as Record<string, unknown>;
+    const single = (name: string): string | undefined => {
+      const value = query[name];
+      if (value === undefined) return undefined;
+      if (typeof value !== 'string') throw invalidOption([{ field: name, reason: 'must be given once' }]);
+      return value;
+    };
+    const date = (name: string): Date | undefined => {
+      const value = single(name);
+      if (value === undefined) return undefined;
+      if (!isDateTime(value)) throw invalidOption([{ field: name, reason: 'must be an RFC 3339 date-time' }]);
+      return new Date(value);
+    };
+    const now = new Date();
+    const from = date('from') ?? new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+    const to = date('to') ?? new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1));
+    if (from.getTime() >= to.getTime()) throw invalidOption([{ field: 'to', reason: 'must be after from' }]);
+    const groups = (single('groupBy') ?? 'key').split(',').map((g) => g.trim());
+    if (groups.some((g) => g !== 'key' && g !== 'day' && g !== 'session')) throw invalidOption([{ field: 'groupBy', reason: 'must be a list of key, day, session' }]);
+    const apiKeyId = single('apiKeyId');
+    if (apiKeyId !== undefined && !UUID.test(apiKeyId)) throw invalidOption([{ field: 'apiKeyId', reason: 'must be a UUID' }]);
+    // Sans `admin`, une clé ne lit que son propre usage.
+    if (!principal.scopes.includes('admin')) {
+      if (apiKeyId !== undefined && apiKeyId !== principal.apiKeyId) throw new ApiProblem('forbidden', 'Scope admin required to read another key.', { details: { requiredScope: 'admin' } });
+    }
+    const ownKey = principal.scopes.includes('admin') ? apiKeyId : principal.apiKeyId;
+    return {
+      tenantId: principal.tenantId,
+      from,
+      to,
+      groupBy: [...new Set(groups)] as UsageGroup[],
+      ...(ownKey === undefined ? {} : { apiKeyId: ownKey }),
+    };
+  };
+
+  app.get('/v1/usage', { preHandler: authorizeAny(['sessions:read', 'admin']) }, async (request) => {
+    const query = usageQuery(request);
+    const { items, totals } = await queryUsage(deps.db, query);
+    return {
+      period: { from: query.from.toISOString(), to: query.to.toISOString() },
+      items: items.map(({ apiKeyPrefix: _prefix, ...item }) => item),
+      totals,
+    };
+  });
+
+  app.get('/v1/usage.csv', { preHandler: authorizeAny(['sessions:read', 'admin']) }, async (request, reply) => {
+    const query = usageQuery(request);
+    const { items } = await queryUsage(deps.db, query);
+    const period = { from: query.from.toISOString(), to: query.to.toISOString() };
+    return reply
+      .header('content-type', 'text/csv; charset=utf-8')
+      .header('content-disposition', `attachment; filename="usage-${period.from.slice(0, 10)}.csv"`)
+      .send(usageCsv({ period, items, bySession: query.groupBy.includes('session') }));
+  });
+
+  app.post('/v1/admin/usage/reconcile', { preHandler: authorize('admin') }, async (_request, reply) => {
+    const report = await reconcileUsage(deps.db, { closures: (await deps.usageWal?.()) ?? [] });
+    deps.onUsageReconciled?.(report);
+    return reply.code(202).send({ reconciliation: { ...report, ranAt: report.ranAt.toISOString() } });
+  });
 
   return app;
 }

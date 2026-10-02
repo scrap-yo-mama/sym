@@ -8,7 +8,8 @@
 //     choix du nœud et file (tâche 2.4 : la passerelle place la session sur un nœud avant de la lancer).
 import type { ApiKeyAuthenticator, ApiScope, BrowserMetrics, ConnectTokens, EgressGuard, Keys, MetricsRegistry, Principal, Secret } from '@sym-browser/core';
 import type pg from 'pg';
-import type { LiveTokens } from '@sym-browser/core';
+import type { LiveTokens, UsageClosure } from '@sym-browser/core';
+import type { UsageReconciliation } from '@sym-browser/db';
 import type { CreateSessionRequest, SessionType } from '@sym/contracts/browser';
 
 /** Scopes d'une clé d'API (04 § 1) : ensemble fermé de la tâche 2.1. */
@@ -66,6 +67,13 @@ export type GatewayDeps = {
    * `Authorization: Bearer <SYMB_METRICS_TOKEN>` (`token` nul : route fermée). Absent : pas de route `/metrics`.
    */
   observability?: { registry: MetricsRegistry; metrics: BrowserMetrics; token: Secret | null };
+  /**
+   * Clôtures des journaux usage.wal des nœuds joignables (réconciliation, 04d § 4.4, tâche 2.6). Mode `all` : le journal du
+   * nœud du processus ; modes séparés : lecture interne des nœuds. Absent : seule la reconstruction s'applique.
+   */
+  usageWal?: () => Promise<UsageClosure[]>;
+  /** Rapport de chaque réconciliation demandée par l'API (jauge `symb_usage_drift_seconds`, journal `warn` si écart). */
+  onUsageReconciled?: (report: UsageReconciliation) => void;
   /** Erreur interne (500) : journal masqué de la passerelle. */
   onError?: (error: unknown) => void;
   /** Flux SSE (tâche 2.5) : période du battement `: ping` (15 s par défaut). */
