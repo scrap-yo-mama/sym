@@ -24,8 +24,14 @@ export type ReadinessCheck = { name: string; run: () => string | Promise<string>
 
 export type ServiceOptions = {
   checks?: readonly ReadinessCheck[];
-  /** Crochets de drainage : attendus (au plus `SHUTDOWN_GRACE_SECONDS`) avant la fermeture, ex. fin des sessions en cours. */
+  /**
+   * Crochets de drainage : attendus avant la fermeture (fin des sessions en cours), au plus `SHUTDOWN_GRACE_SECONDS` plus
+   * la fenêtre de destruction `teardownMs` : à l'échéance de la grâce, le crochet du nœud détruit encore les sessions
+   * restantes (`node_shutdown`, BINV3) et écrit `down` ; la sortie ne doit pas couper cette destruction.
+   */
   onDrain?: ReadonlyArray<() => void | Promise<void>>;
+  /** Fenêtre de destruction après la grâce (défaut `SHUTDOWN_TEARDOWN_MS`). */
+  teardownMs?: number;
   log?: Logger;
 };
 
@@ -40,6 +46,14 @@ export type ServiceHandle = {
   /** Fermeture immédiate. Idempotent. */
   close(): Promise<void>;
 };
+
+/**
+ * Fenêtre de destruction après la grâce : 25 s. Avec la grâce par défaut (270 s), grâce plus fenêtre tiennent dans
+ * `maxShutdownDelaySeconds` de Render (300 s, 04b § 9), avec 5 s de marge avant le SIGKILL de la plateforme ; une grâce
+ * au-delà de 275 s mange cette fenêtre (à régler avec le blueprint, tâche 5.1). La fermeture forcée d'un Chromium est
+ * bornée à 10 s (04b § 4) : la fenêtre la couvre.
+ */
+export const SHUTDOWN_TEARDOWN_MS = 25_000;
 
 const JSON_HEADERS = { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' } as const;
 
@@ -110,7 +124,7 @@ export async function startService(config: BrowserConfig, options: ServiceOption
       log('info', 'draining', { graceSeconds: config.shutdownGraceSeconds });
       let timer: NodeJS.Timeout | undefined;
       const grace = new Promise<void>((resolve) => {
-        timer = setTimeout(resolve, config.shutdownGraceSeconds * 1000);
+        timer = setTimeout(resolve, config.shutdownGraceSeconds * 1000 + (options.teardownMs ?? SHUTDOWN_TEARDOWN_MS));
       });
       const hooks = Promise.allSettled((options.onDrain ?? []).map(async (hook) => hook())).then(() => undefined);
       await Promise.race([hooks, grace]);

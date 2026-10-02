@@ -137,6 +137,23 @@ export async function recordHeartbeat(db: Queryable, beat: NodeBeat): Promise<{ 
 }
 
 /**
+ * Arrêt gracieux du nœud (04b § 5 et § 9, tâche 2.7) : `draining` à SIGTERM (seulement depuis `ready` : la passerelle
+ * l'écarte du choix, ses sessions restent routées, le battement le laisse `draining`), puis `down` en dernier (slots
+ * libérés). Rend l'état après l'écriture, `null` si le nœud est inconnu (aucune ligne créée).
+ */
+export async function setNodeState(db: Queryable, input: { nodeId: string; state: 'draining' | 'down' }): Promise<{ state: 'ready' | 'draining' | 'down' } | null> {
+  const { rows } = await db.query<{ state: 'ready' | 'draining' | 'down' }>(
+    input.state === 'draining'
+      ? `WITH upd AS (UPDATE nodes SET state = 'draining' WHERE id = $1 AND state IN ('ready', 'draining') RETURNING state)
+         SELECT coalesce((SELECT state FROM upd), n.state) AS state FROM nodes n WHERE n.id = $1`
+      : "UPDATE nodes SET state = 'down', slots_free = slots_total WHERE id = $1 RETURNING state",
+    [input.nodeId],
+  );
+  const row = rows[0];
+  return row ? { state: row.state } : null;
+}
+
+/**
  * Balayeur de la passerelle (toutes les 5 s, 04b § 6), sous verrou consultatif : un seul balayeur agit, les autres rendent
  * la main (`locked: false`). Tout nœud muet depuis plus de `staleAfterMs` passe `down`, ses slots sont libérés, et ses
  * sessions `pending` ou `running` passent `failed` raison `node_lost` avec leur événement `state` (une instruction).

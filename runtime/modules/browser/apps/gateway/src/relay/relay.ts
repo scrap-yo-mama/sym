@@ -8,6 +8,8 @@
 // secret du client n'est jamais transmis) : messages transmis sans modification (réécritures : nœud), codes de fermeture
 // propagés dans les deux sens, ping toutes les 20 s et fermeture 1001 après deux pongs manquants, messages plafonnés
 // (`SYMB_CDP_MAX_MESSAGE_BYTES`, fermeture 1009), nœud injoignable : 1011. Fermer la WebSocket ne libère pas la session.
+// Arrêt de la passerelle (SIGTERM, 04b § 9, tâche 2.7) : hook `preClose`, chaque relais ouvert est fermé en 1012 (redémarrage
+// du service) des deux côtés ; les sessions continuent sur leurs nœuds, le client se reconnecte par une autre passerelle.
 import { sendableCloseCode } from '@sym-browser/core';
 import { BROWSER_ENGINE } from '@sym/contracts/browser';
 import fastifyWebsocket from '@fastify/websocket';
@@ -61,6 +63,11 @@ export async function registerRelay(app: FastifyInstance, options: RelayOptions)
   const pingIntervalMs = options.pingIntervalMs ?? 20_000;
   const maxPayload = options.cdpMaxMessageBytes ?? 104_857_600;
   const onError = options.onError ?? (() => undefined);
+  // Relais ouverts : fermés en 1012 à l'arrêt. Hook posé AVANT celui de @fastify/websocket, qui fermerait sans code.
+  const open = new Set<(code: number, reason?: string) => void>();
+  app.addHook('preClose', async () => {
+    for (const close of [...open]) close(1012, 'arrêt de la passerelle');
+  });
   await app.register(fastifyWebsocket, { options: { maxPayload, perMessageDeflate: false } });
 
   const fail = (request: FastifyRequest, reply: FastifyReply, problem: ApiProblem): FastifyReply => {
@@ -97,12 +104,15 @@ export async function registerRelay(app: FastifyInstance, options: RelayOptions)
         const closeBoth = (code: number, reason = ''): void => {
           if (closing) return;
           closing = true;
+          open.delete(closeBoth);
           clearInterval(ping);
           const sendable = sendableCloseCode(code);
           if (client.readyState === WebSocket.OPEN) client.close(sendable, reason.slice(0, 120));
           if (upstream.readyState === WebSocket.OPEN) upstream.close(sendable, reason.slice(0, 120));
           else if (upstream.readyState === WebSocket.CONNECTING) upstream.terminate();
         };
+
+        open.add(closeBoth);
 
         // Ping toutes les `pingIntervalMs` ; deux pongs manquants : fermeture 1001 (04 § 8).
         const ping = setInterval(() => {

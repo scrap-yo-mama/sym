@@ -8,6 +8,8 @@
 // - fins : libération, budget, quota, délais, plantage (signal du pool), arrêt du nœud. Toute fin rend le bail (le pool
 //   arrête et détruit le Chromium s'il le doit) AVANT d'écrire l'état final (04c § 3.2 : l'état public change à la
 //   dernière étape ; BINV3). Une seule fin par session, quel que soit le nombre de déclencheurs concurrents.
+// - drainage (04b § 9, tâche 2.7) : après `drain`, toute nouvelle session est refusée (`draining`) ; `whenEmpty` attend la
+//   fin des sessions en cours, `shutdown` termine les restantes (`node_shutdown`), orchestré par `NodeDrain` (../drain).
 // - nœud isolé (battement perdu, 04b § 6) : sessions locales détruites sans écriture (la passerelle les a déclarées
 //   `failed` raison `node_lost`).
 import { endStateFor, SessionTimers, systemClock, type Clock, type EndReason, type ExtendOutcome, type SessionStore, type TransitionOutcome } from '@sym-browser/core';
@@ -41,7 +43,7 @@ export type StartRequest = {
   options?: SharedSessionInput;
 };
 
-export type StartOutcome = { ok: true } | { ok: false; code: 'open_failed' | 'already_started' | 'not_found' | 'invalid_transition' };
+export type StartOutcome = { ok: true } | { ok: false; code: 'open_failed' | 'already_started' | 'not_found' | 'invalid_transition' | 'draining' };
 export type EndOutcome = TransitionOutcome | { ok: false; code: 'isolated' };
 type ClientEndReason = Extract<EndReason, 'released' | 'budget_exceeded' | 'quota' | 'node_shutdown' | 'timeout' | 'idle' | 'crash'>;
 
@@ -68,6 +70,9 @@ export class SessionSupervisor {
   readonly #sessions = new Map<string, Active>();
   readonly #starting = new Set<string>();
   readonly #inFlight = new Set<Promise<unknown>>();
+  /** Attentes de `whenEmpty`, réveillées à chaque session retirée. */
+  readonly #emptyWaiters = new Set<() => void>();
+  #draining = false;
 
   constructor(options: SessionSupervisorOptions) {
     this.#nodeId = options.nodeId;
@@ -83,8 +88,38 @@ export class SessionSupervisor {
     return [...this.#sessions.keys()];
   }
 
+  /** Vrai dès `drain()` : plus aucune nouvelle session sur ce nœud (04b § 9). */
+  get draining(): boolean {
+    return this.#draining;
+  }
+
+  /** Arrêt gracieux, étape 1 (04b § 9) : toute nouvelle session est refusée (`draining`) ; celles en cours continuent. */
+  drain(): void {
+    this.#draining = true;
+  }
+
+  /** Rend `true` quand plus aucune session n'est tenue ni en démarrage, `false` si `signal` est interrompu avant. */
+  whenEmpty(signal?: AbortSignal): Promise<boolean> {
+    return new Promise((resolve) => {
+      const done = (empty: boolean): void => {
+        this.#emptyWaiters.delete(check);
+        signal?.removeEventListener('abort', abort);
+        resolve(empty);
+      };
+      const check = (): void => {
+        if (this.#sessions.size === 0 && this.#starting.size === 0) done(true);
+      };
+      const abort = (): void => done(false);
+      if (signal?.aborted) return done(false);
+      signal?.addEventListener('abort', abort, { once: true });
+      this.#emptyWaiters.add(check);
+      check();
+    });
+  }
+
   async start(request: StartRequest): Promise<StartOutcome> {
     const { sessionId } = request;
+    if (this.#draining) return { ok: false, code: 'draining' };
     if (this.#sessions.has(sessionId) || this.#starting.has(sessionId)) return { ok: false, code: 'already_started' };
     this.#starting.add(sessionId);
     try {
@@ -130,6 +165,7 @@ export class SessionSupervisor {
       return { ok: true };
     } finally {
       this.#starting.delete(sessionId);
+      this.#notifyEmpty();
     }
   }
 
@@ -157,6 +193,7 @@ export class SessionSupervisor {
       const to = endStateFor('running', reason);
       const outcome = to === undefined ? undefined : await this.#write({ sessionId, to, reason });
       this.#sessions.delete(sessionId);
+      this.#notifyEmpty();
       return outcome ?? { ok: false, code: 'not_found' };
     })();
     return active.ending;
@@ -175,6 +212,7 @@ export class SessionSupervisor {
           active.timers.stop();
           await this.#release(active.lease);
           this.#sessions.delete(sessionId);
+          this.#notifyEmpty();
           return { ok: false, code: 'isolated' };
         })();
         return active.ending;
@@ -185,6 +223,10 @@ export class SessionSupervisor {
   /** Attend la fin des fins déclenchées par les délais ou par le pool (tests, arrêt). */
   async idle(): Promise<void> {
     while (this.#inFlight.size > 0) await Promise.allSettled([...this.#inFlight]);
+  }
+
+  #notifyEmpty(): void {
+    for (const waiter of [...this.#emptyWaiters]) waiter();
   }
 
   #track(promise: Promise<unknown>): void {
