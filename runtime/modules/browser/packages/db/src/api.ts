@@ -224,3 +224,15 @@ export async function completeIdempotencyKey(db: Queryable, input: { tenantId: s
 export async function releaseIdempotencyKey(db: Queryable, input: { tenantId: string; operation: IdempotentOperation; key: string }): Promise<void> {
   await db.query('DELETE FROM idempotency_keys WHERE tenant_id = $1 AND operation = $2 AND key = $3 AND response_status IS NULL', [input.tenantId, input.operation, input.key]);
 }
+
+/** Cible d'un relais WSS (tâche 2.3) : client propriétaire, état, type et nœud porteur d'une session. */
+export type RelayTarget = { tenantId: string; state: SessionState; type: SessionType; nodeUrl: string | null; nodeState: 'ready' | 'draining' | 'down' | null };
+
+export async function getRelayTarget(db: Queryable, sessionId: string): Promise<RelayTarget | null> {
+  const { rows } = await db.query<{ tenant_id: string; state: SessionState; type: SessionType; url: string | null; node_state: RelayTarget['nodeState'] }>(
+    'SELECT s.tenant_id, s.state, s.type, n.url, n.state AS node_state FROM sessions s LEFT JOIN nodes n ON n.id = s.node_id WHERE s.id = $1::uuid',
+    [sessionId],
+  );
+  const row = rows[0];
+  return row ? { tenantId: row.tenant_id, state: row.state, type: row.type, nodeUrl: row.url, nodeState: row.node_state } : null;
+}

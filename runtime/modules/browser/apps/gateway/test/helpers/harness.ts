@@ -75,7 +75,18 @@ function responseChecker(): (method: string, url: string, status: number, body: 
   };
 }
 
-export async function createHarness(options: { queueTimeoutMs?: number; maxSessionSeconds?: number } = {}): Promise<Harness> {
+export type HarnessOptions = {
+  queueTimeoutMs?: number;
+  maxSessionSeconds?: number;
+  /** URL privée du nœud enregistré (relais WSS, tâche 2.3) ; défaut : nœud fictif injoignable. */
+  nodeUrl?: string;
+  /** Jetons de connexion réels (HMAC) au lieu des jetons de test numérotés. */
+  tokens?: GatewayDeps['tokens'];
+  /** Relais WSS `/playwright` et `/cdp` (tâche 2.3). */
+  relay?: GatewayDeps['relay'];
+};
+
+export async function createHarness(options: HarnessOptions = {}): Promise<Harness> {
   const name = `gw_${randomBytes(5).toString('hex')}`;
   await admin((c) => c.query(`CREATE DATABASE ${name}`));
   const url = new URL(inject('pgAdminUrl'));
@@ -96,7 +107,7 @@ export async function createHarness(options: { queueTimeoutMs?: number; maxSessi
 
   await recordHeartbeat(pool, {
     nodeId: 'node-a',
-    url: 'http://node-a.internal:3000',
+    url: options.nodeUrl ?? 'http://node-a.internal:3000',
     region: 'frankfurt',
     playwrightVersion: '1.63.0',
     chromiumVersion: '153.0.8010.12',
@@ -132,7 +143,8 @@ export async function createHarness(options: { queueTimeoutMs?: number; maxSessi
   const deps: GatewayDeps = {
     db: pool,
     auth: { authenticate: async (secret) => principals.get(secret) ?? null },
-    tokens: { issue: ({ protocol }) => `tok_${protocol}_${++tokenCounter}` },
+    tokens: options.tokens ?? { issue: ({ protocol }) => `tok_${protocol}_${++tokenCounter}` },
+    ...(options.relay === undefined ? {} : { relay: options.relay }),
     launcher,
     publicUrl: PUBLIC_URL,
     queueTimeoutMs: options.queueTimeoutMs ?? 2_000,

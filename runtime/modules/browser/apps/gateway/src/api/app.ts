@@ -41,6 +41,7 @@ import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest }
 import { ApiProblem, invalidOption, preferredLanguage } from './errors.js';
 import type { GatewayDeps, Principal, Scope } from './types.js';
 import { isDateTime, parseCreateSession, parseExtendSession, UUID } from './validation.js';
+import { createDbRelayResolver, registerRelay } from '../relay/index.js';
 
 /** Défauts de l'instance (04 § 3) et durée des jetons de connexion (04 § 7, « à valider, tâche 2.1 »). */
 const SESSION_DEFAULTS = Object.freeze({ timeoutSeconds: 300, idleTimeoutSeconds: 60 });
@@ -208,6 +209,18 @@ export async function createGatewayApi(deps: GatewayDeps): Promise<FastifyInstan
   const failPending = async (sessionId: string, reason: 'crash' | 'quota'): Promise<void> => {
     await transitionSession(deps.db, { sessionId, to: 'failed', reason });
   };
+
+  if (deps.relay) {
+    const verify = deps.tokens.verify;
+    if (!verify) throw new Error('relais WSS : la vérification des jetons de connexion (tokens.verify) est requise');
+    await registerRelay(app, {
+      resolver: createDbRelayResolver({ db: deps.db, auth: deps.auth, tokens: { verify } }),
+      nodeToken: deps.relay.nodeToken,
+      ...(deps.relay.pingIntervalMs === undefined ? {} : { pingIntervalMs: deps.relay.pingIntervalMs }),
+      ...(deps.relay.cdpMaxMessageBytes === undefined ? {} : { cdpMaxMessageBytes: deps.relay.cdpMaxMessageBytes }),
+      onError,
+    });
+  }
 
   app.get('/v1/version', async () => version);
   app.get('/v1/openapi.json', async () => browserOpenApi);

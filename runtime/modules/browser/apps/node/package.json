@@ -18,10 +18,12 @@
   "dependencies": {
     "@sym-browser/core": "workspace:*",
     "@sym/contracts": "workspace:*",
-    "playwright-core": "catalog:"
+    "playwright-core": "catalog:",
+    "ws": "catalog:"
   },
   "devDependencies": {
     "@types/node": "catalog:",
+    "@types/ws": "catalog:",
     "fast-check": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:"
