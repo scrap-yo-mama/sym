@@ -11,11 +11,16 @@
 // - Destruction (04c § 3.2, étapes 3, 4 et 6 ; BINV3), déclenchée par la libération, le plantage, le chien de garde ou
 //   l'arrêt du nœud (le pool appelle `close` ou `kill`) : SIGKILL du groupe de processus et attente de sa sortie, PUIS
 //   détachement de la connexion interne, PUIS suppression récursive de `sessions/{id}` (le port CDP meurt avec le processus).
+// - Profil persistant (tâche 3.1, 04c § 4.2) : restauré dans le profil temporaire AVANT le lancement (en écriture, le verrou
+//   est posé d'abord : 409 `profile_locked` sans aucun Chromium lancé) ; en écriture, fin normale = fermeture propre,
+//   sauvegarde `v{n+1}`, puis destruction (profiles/persistent.ts) ; plantage = destruction sans sauvegarde, verrou libéré.
 import { mkdir, readFile, rm } from 'node:fs/promises';
 import { isAbsolute, join } from 'node:path';
+import type { ProfileStore, ProfileTarget } from '@sym-browser/core';
 import { chromium, type Browser } from 'playwright-core';
 import { assertNotRoot, chromiumLaunchOptions, type PlaywrightLauncherOptions } from '../pool/launch.js';
 import type { BrowserLauncher, LaunchedBrowser } from '../pool/pool.js';
+import { createPersistentTeardown } from '../profiles/persistent.js';
 import { dedicatedLaunchFlags } from './launch-args.js';
 
 /** Destruction visée (04c § 3.2 : ≤ 5 s, à valider) ; attente de sortie du processus après SIGKILL. */
@@ -85,6 +90,8 @@ export function createDedicatedTeardown(steps: DedicatedTeardownSteps): () => Pr
 export type DedicatedLauncherOptions = PlaywrightLauncherOptions & {
   /** `SYMB_DATA_DIR` (chemin absolu). */
   dataDir: string;
+  /** Profils persistants (tâche 3.1) ; requis dès qu'une session demande un profil. */
+  profiles?: ProfileStore;
   pollMs?: number;
   /**
    * Vrai (défaut) : `sessions/{id}` est supprimé avec le processus (pool seul, tâche 1.4). Faux : le nœud complet, où l'hôte
@@ -125,6 +132,22 @@ export function dedicatedLauncher(options: DedicatedLauncherOptions): BrowserLau
     }
     for (const sub of [dir.profile, dir.artifacts, dir.downloads]) await mkdir(sub, { mode: 0o700 });
 
+    let profile: ProfileTarget | undefined;
+    if (purpose.profile !== undefined) {
+      profile = { ...purpose.profile, sessionId: purpose.sessionId };
+      try {
+        if (options.profiles === undefined) throw new RangeError('profil persistant demandé : aucun stockage de profils configuré sur ce nœud');
+        await options.profiles.restore(profile, dir.profile);
+      } catch (error) {
+        await rm(dir.root, { recursive: true, force: true });
+        throw error;
+      }
+    }
+    const profiles = options.profiles;
+    const releaseProfile = async () => {
+      if (profile !== undefined) await profiles?.release(profile);
+    };
+
     const serverOptions: LaunchServerOptions & { _userDataDir: string; artifactsDir: string } = {
       ...launch,
       args: [...launch.args, '--remote-debugging-port=0', ...flags],
@@ -139,6 +162,7 @@ export function dedicatedLauncher(options: DedicatedLauncherOptions): BrowserLau
       server = await chromium.launchServer(serverOptions);
     } catch (error) {
       await rm(dir.root, { recursive: true, force: true });
+      await releaseProfile().catch(() => undefined);
       throw error;
     }
     const pid = server.process().pid;
@@ -160,12 +184,23 @@ export function dedicatedLauncher(options: DedicatedLauncherOptions): BrowserLau
       removeDir: options.removeSessionDir ?? true,
     });
 
+    // Lecture seule : les changements disparaissent avec le répertoire. Écriture : sauvegarde à la fin normale.
+    const end =
+      profile?.mode === 'write' && profiles !== undefined
+        ? createPersistentTeardown({
+            teardown,
+            gracefulClose: () => server.close(),
+            save: () => profiles.save(profile, dir.profile),
+            abandon: releaseProfile,
+          })
+        : { close: teardown, kill: teardown };
+
     let cdpEndpoint: string;
     try {
       cdpEndpoint = await waitDevToolsActivePort(dir.profile, launch.timeout, options.pollMs ?? 20, () => exited);
       browser = await chromium.connect(server.wsEndpoint(), { timeout: launch.timeout });
     } catch (error) {
-      await teardown().catch(() => undefined);
+      await end.kill().catch(() => undefined);
       throw error;
     }
     const internal = browser;
@@ -177,8 +212,8 @@ export function dedicatedLauncher(options: DedicatedLauncherOptions): BrowserLau
       browser: internal,
       isConnected: () => internal.isConnected(),
       onDisconnected: (listener) => void internal.once('disconnected', () => listener()),
-      close: teardown,
-      kill: teardown,
+      close: end.close,
+      kill: end.kill,
     };
     return launched;
   };

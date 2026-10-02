@@ -47,8 +47,11 @@ export type LaunchedBrowser = {
   kill(): Promise<void>;
 };
 
-/** `launchArgs` : noms de la liste fermée (04 § 3), sessions dedicated seulement. */
-export type LaunchPurpose = { role: 'warm' | 'dedicated'; sessionId?: string; launchArgs?: readonly LaunchArg[] };
+/** Profil persistant d'une session dedicated (04c § 4.2, tâche 3.1) : client, profil, mode d'accès. */
+export type LaunchProfile = { tenantId: string; profileId: string; mode: 'read' | 'write' };
+
+/** `launchArgs` : noms de la liste fermée (04 § 3) ; `profile` : profil persistant. Sessions dedicated seulement. */
+export type LaunchPurpose = { role: 'warm' | 'dedicated'; sessionId?: string; launchArgs?: readonly LaunchArg[]; profile?: LaunchProfile };
 export type BrowserLauncher = (purpose: LaunchPurpose) => Promise<LaunchedBrowser>;
 
 export type PoolEvent =
@@ -122,6 +125,8 @@ export type AcquireRequest = {
   watchdogMs?: number;
   /** Arguments de la liste fermée (04 § 3) : sessions dedicated seulement (la bascule de type se fait avant le pool). */
   launchArgs?: readonly LaunchArg[];
+  /** Profil persistant (tâche 3.1) : sessions dedicated seulement, profil du même client. */
+  profile?: LaunchProfile;
 };
 
 export type PoolLease = {
@@ -233,13 +238,15 @@ export class BrowserPool {
   async acquire(request: AcquireRequest): Promise<PoolLease> {
     if (this.#closed) throw new PoolClosedError('pool de navigateurs fermé');
     if (request.type !== 'dedicated' && (request.launchArgs?.length ?? 0) > 0) throw new RangeError('launchArgs : réservés aux sessions dedicated');
+    if (request.profile !== undefined && request.type !== 'dedicated') throw new RangeError('profil persistant : réservé aux sessions dedicated');
+    if (request.profile !== undefined && request.profile.tenantId !== request.tenantId) throw new RangeError('profil persistant : profil d’un autre client');
     const units = sessionWeightUnits(request.type, this.#constants);
     if (this.slotsTotal * SLOT_UNITS - this.#usedUnits < units) throw new CapacityExceededError(request.type, this.freeFor(request.type));
     // Réservation synchrone avant tout `await` : deux demandes simultanées ne prennent jamais le même slot.
     this.#usedUnits += units;
     let entry: Entry;
     try {
-      entry = request.type === 'dedicated' ? await this.#launchEntry('dedicated', request.sessionId, request.launchArgs) : await this.#sharedEntryFor(request.tenantId);
+      entry = request.type === 'dedicated' ? await this.#launchEntry('dedicated', request.sessionId, request.launchArgs, request.profile) : await this.#sharedEntryFor(request.tenantId);
       if (this.#closed) {
         if (entry.leases.size === 0) await this.#retire(entry, 'shutdown');
         throw new PoolClosedError('pool de navigateurs fermé');
@@ -344,10 +351,11 @@ export class BrowserPool {
   }
 
   /** Lancement sous chien de garde : au-delà du délai, le Chromium (s'il arrive) est tué, et un second essai est fait. */
-  async #launchEntry(role: LaunchPurpose['role'], sessionId?: string, launchArgs?: readonly LaunchArg[]): Promise<Entry> {
+  async #launchEntry(role: LaunchPurpose['role'], sessionId?: string, launchArgs?: readonly LaunchArg[], profile?: LaunchProfile): Promise<Entry> {
     const launcher = role === 'dedicated' ? (this.#options.launchDedicated ?? this.#options.launch) : this.#options.launch;
     const purpose: LaunchPurpose = sessionId === undefined ? { role } : { role, sessionId };
     if (launchArgs !== undefined && launchArgs.length > 0) purpose.launchArgs = [...launchArgs];
+    if (profile !== undefined) purpose.profile = { ...profile };
     const timeoutMs = this.#options.launchTimeoutMs ?? POOL_DEFAULTS.launchTimeoutMs;
     let launched: LaunchedBrowser | undefined;
     for (let attempt = 0; attempt < 2 && launched === undefined; attempt += 1) {
