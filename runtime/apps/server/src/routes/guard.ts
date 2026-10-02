@@ -3,7 +3,7 @@
 // statut relus en base à chaque requête (ASVS 8.3.2), scope de clé, permission de rôle, contrôle d'Origin sur les
 // mutations d'interface. Aucune route ne choisit l'identité : elle vient d'ici seulement (pas d'impersonation, INV5).
 import { can, hashApiKey, isApiKeyFormat, isExtensionTokenFormat, isRole, mfaRequiredFor, type ApiKeyScope, type Role } from '@runtime/core';
-import { appendAudit, resolveExtensionToken, withActor } from '@runtime/db';
+import { appendAudit, resolveExtensionToken, withActor, type AuditEvent } from '@runtime/db';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import type { MfaMethod } from '../auth/better-auth.js';
 import { readSecuritySettings } from '../auth/security-settings.js';
@@ -194,23 +194,17 @@ function mfaBarrier(ctx: Pick<ServerContext, 'mfaEnforced'>, actor: Actor, spec:
   return null;
 }
 
-export async function audit(
-  ctx: ServerContext,
-  request: FastifyRequest,
-  actor: (Pick<Actor, 'userId' | 'role' | 'apiKey'> & { via: Actor['via'] | 'sso' }) | null,
-  event: { action: string; targetType?: string; targetId?: string; outcome: 'success' | 'denied' | 'error'; meta?: Record<string, unknown> },
-): Promise<void> {
+type AuditActor = (Pick<Actor, 'userId' | 'role' | 'apiKey'> & { via: Actor['via'] | 'sso' }) | null;
+type RouteAuditEvent = { action: string; targetType?: string; targetId?: string; outcome: 'success' | 'denied' | 'error'; meta?: Record<string, unknown> };
+
+/** Entrée d'audit d'une requête (acteur, IP, User-Agent du client), pour une écriture qui l'ajoute dans sa propre transaction. */
+export function auditEvent(request: FastifyRequest, actor: AuditActor, event: RouteAuditEvent): AuditEvent {
   const { ip, userAgent } = requestMeta(request);
-  await withActor(ctx.pool, actor ? { userId: actor.userId, role: actor.role } : null, (client) =>
-    appendAudit(client, {
-      actorUserId: actor?.userId ?? null,
-      actorVia: actor?.via ?? 'ui',
-      actorRef: actor?.apiKey?.prefix ?? null,
-      ip,
-      userAgent,
-      ...event,
-    }),
-  );
+  return { actorUserId: actor?.userId ?? null, actorVia: actor?.via ?? 'ui', actorRef: actor?.apiKey?.prefix ?? null, ip, userAgent, ...event };
+}
+
+export async function audit(ctx: ServerContext, request: FastifyRequest, actor: AuditActor, event: RouteAuditEvent): Promise<void> {
+  await withActor(ctx.pool, actor ? { userId: actor.userId, role: actor.role } : null, (client) => appendAudit(client, auditEvent(request, actor, event)));
 }
 
 /** Crochet `onRequest` global (enregistré par app.ts) : avant la lecture du corps. */

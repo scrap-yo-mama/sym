@@ -211,6 +211,7 @@ function accountRoutes(): ApiRoutes {
       },
     },
     'GET /api/settings/security': { body: { session_idle_minutes: 720, session_absolute_hours: 168, allowed_email_domains: ['zz-test.example'], api_key_max_lifetime_days: 365, audit_retention_months: 12 } satisfies Schemas['SecuritySettings'] },
+    'GET /api/settings/identity': { body: { identify_instance: true, identify_effective: true, identify_source: 'setting', instance_contact: 'mailto:ops@zz-test.example', instance_contact_effective: 'mailto:ops@zz-test.example', instance_contact_source: 'setting', engine: { version: '153.0.8010.12', platform: 'linux' }, worker_version: '1.0.0', user_agent: 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36', user_agent_identified: 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36 (compatible; Scrapyomama/1.0.0; +mailto:ops@zz-test.example)', product_version: '1.0.0' } satisfies Schemas['IdentitySettings'] },
     'GET /api/settings/sso': {
       body: {
         enabled: true,

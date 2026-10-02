@@ -145,16 +145,33 @@ export function robotFrom(contact: string | null): string | null {
  * (booléen, ou `{ enabled }`), puis `IDENTIFY_INSTANCE` (`true` / `false`). Toute autre valeur : désactivée.
  */
 export function resolveIdentifyInstance(setting: unknown, env: Readonly<Record<string, string | undefined>> = {}): boolean {
-  const read = (value: unknown): boolean | undefined => {
-    if (typeof value === 'boolean') return value;
-    if (typeof value === 'string') {
-      const text = value.trim().toLowerCase();
-      if (text === 'true') return true;
-      if (text === 'false') return false;
-      return undefined;
-    }
-    if (typeof value === 'object' && value !== null && 'enabled' in value) return read((value as { enabled?: unknown }).enabled);
+  return readIdentifyFlag(setting) ?? readIdentifyFlag(env['IDENTIFY_INSTANCE']) ?? false;
+}
+
+/** Interrupteur lu dans un réglage ou une variable : booléen, `true` / `false` (casse et espaces ignorés), ou `{ enabled }`. */
+function readIdentifyFlag(value: unknown): boolean | undefined {
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'string') {
+    const text = value.trim().toLowerCase();
+    if (text === 'true') return true;
+    if (text === 'false') return false;
     return undefined;
-  };
-  return read(setting) ?? read(env['IDENTIFY_INSTANCE']) ?? false;
+  }
+  if (typeof value === 'object' && value !== null && 'enabled' in value) return readIdentifyFlag((value as { enabled?: unknown }).enabled);
+  return undefined;
+}
+
+/**
+ * Replis que le worker lit dans SON environnement (`IDENTIFY_INSTANCE`, `INSTANCE_CONTACT`), publiés avec le moteur pour que
+ * la console affiche ce qui part réellement quand aucun réglage n'est posé (tâche 3.8b) : le serveur ne voit pas
+ * l'environnement du worker. `null` : variable absente ou illisible (le worker l'ignore alors aussi).
+ */
+export function identityFromEnv(env: Readonly<Record<string, string | undefined>>): { identifyInstance: boolean | null; instanceContact: string | null } {
+  let instanceContact: string | null;
+  try {
+    instanceContact = resolveInstanceContact(undefined, env);
+  } catch {
+    instanceContact = null;
+  }
+  return { identifyInstance: readIdentifyFlag(env['IDENTIFY_INSTANCE']) ?? null, instanceContact };
 }

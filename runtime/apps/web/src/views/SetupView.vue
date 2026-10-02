@@ -2,7 +2,7 @@
 <script setup lang="ts">
 /**
  * @file SetupView.vue
- * @description Assistant de premier démarrage (13 § 4), à usage unique : jeton de démarrage, e-mail, mot de passe. L'owner créé, la
+ * @description Assistant de premier démarrage (13 § 4), à usage unique : jeton de démarrage, e-mail, mot de passe, contact de l'opérateur (facultatif ici, 17 § 5). L'owner créé, la
  * console le connecte, montre UNE FOIS l'empreinte de la clé avec le rappel « sauvegarde MASTER_KEY hors de cette plateforme »
  * (case à cocher avant de continuer), puis enchaîne sur les modèles IA, les proxys et l'e-mail avec leurs boutons Tester. Aucun
  * compte par défaut. Quand un owner existe, la route répond « introuvable » (garde du routeur) ; la page ne garde ni le jeton ni
@@ -26,6 +26,7 @@ const router = useRouter();
 const token = ref('');
 const email = ref('');
 const displayName = ref('');
+const instanceContact = ref('');
 const password = ref('');
 const submitting = ref(false);
 /** Clé i18n de l'erreur du serveur, sinon null. */
@@ -51,7 +52,7 @@ async function submit(event: Event): Promise<void> {
   const secretToken = takeFieldValue(form, 'token', token);
   const secretPassword = takeFieldValue(form, 'password', password);
   const address = readFieldValue(form, 'email', email.value).trim();
-  const result = await postSetup({ token: secretToken, email: address, password: secretPassword, displayName: readFieldValue(form, 'displayName', displayName.value).trim() });
+  const result = await postSetup({ token: secretToken, email: address, password: secretPassword, displayName: readFieldValue(form, 'displayName', displayName.value).trim(), instanceContact: readFieldValue(form, 'instanceContact', instanceContact.value).trim() });
   if (!result.ok) {
     submitting.value = false;
     // Les codes du serveur (`forbidden`, `weak_password`, `too_many_attempts`) ont leur message ; sinon le message du statut.
@@ -123,6 +124,7 @@ async function goOn(): Promise<void> {
           <TextField id="setup-token" v-model="token" :label="t('setup.token')" :hint="t('setup.tokenHint')" type="password" name="token" autocomplete="off" required />
           <TextField id="setup-email" v-model="email" :label="t('setup.email')" type="email" name="email" autocomplete="username" required />
           <TextField id="setup-name" v-model="displayName" :label="t('setup.displayName')" :hint="t('setup.displayNameHint')" name="displayName" autocomplete="name" />
+          <TextField id="setup-contact" v-model="instanceContact" :label="t('setup.contact')" :hint="t('setup.contactHint')" name="instanceContact" autocomplete="off" inputmode="url" maxlength="400" />
           <TextField id="setup-password" v-model="password" :label="t('setup.password')" :hint="t('setup.passwordHint')" type="password" name="password" autocomplete="new-password" required />
           <Button type="submit" class="aria-disabled:pointer-events-none aria-disabled:opacity-50" :aria-disabled="submitting" :aria-busy="submitting">
             {{ submitting ? t('setup.submitting') : t('setup.submit') }}

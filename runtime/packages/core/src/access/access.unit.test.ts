@@ -2,7 +2,7 @@
 // `access_policy` (17 §4), identité du robot (17 §5), signaux d'accès et offre 402 (17 §2) : sans I/O.
 import { describe, expect, it } from 'vitest';
 import { AccessPolicyError, DEFAULT_ACCESS_POLICY, parseAccessPolicy } from './policy.js';
-import { buildUserAgent, EngineUserAgentError, InstanceContactError, normalizeInstanceContact, requireInstanceContact, resolveIdentifyInstance, resolveInstanceContact, robotFrom } from './identity.js';
+import { buildUserAgent, EngineUserAgentError, identityFromEnv, InstanceContactError, normalizeInstanceContact, requireInstanceContact, resolveIdentifyInstance, resolveInstanceContact, robotFrom } from './identity.js';
 import { detectAccessSignals, parsePaymentOffer, sanitizeSignalValue } from './signals.js';
 
 describe('access_policy : robots n’a qu’une valeur (INV11), champs réservés refusés en V1', () => {
@@ -72,6 +72,14 @@ describe('identité du robot : User-Agent réel du moteur, identification de l�
     expect(resolveIdentifyInstance(false, { IDENTIFY_INSTANCE: 'true' })).toBe(false);
     expect(resolveIdentifyInstance({ enabled: false }, { IDENTIFY_INSTANCE: 'true' })).toBe(false);
     expect(resolveIdentifyInstance('n’importe quoi', {})).toBe(false);
+  });
+
+  it('replis lus dans l’environnement du worker (publiés pour la console, tâche 3.8b) : mêmes règles que resolveIdentifyInstance et resolveInstanceContact, null si absent ou illisible', () => {
+    expect(identityFromEnv({})).toEqual({ identifyInstance: null, instanceContact: null });
+    expect(identityFromEnv({ IDENTIFY_INSTANCE: ' TRUE ', INSTANCE_CONTACT: 'ops@zz-test.example' })).toEqual({ identifyInstance: true, instanceContact: 'mailto:ops@zz-test.example' });
+    expect(identityFromEnv({ IDENTIFY_INSTANCE: 'false' }).identifyInstance).toBe(false);
+    expect(identityFromEnv({ IDENTIFY_INSTANCE: 'oui', INSTANCE_CONTACT: 'ops @zz-test.example' })).toEqual({ identifyInstance: null, instanceContact: null });
+    expect(identityFromEnv({ INSTANCE_CONTACT: '   ' }).instanceContact).toBeNull();
   });
 
   it('contact invalide refusé (injection d’en-tête, identifiants, schéma)', () => {

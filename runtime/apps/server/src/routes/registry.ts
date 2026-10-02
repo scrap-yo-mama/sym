@@ -115,6 +115,8 @@ export const ROUTES: readonly RouteSpec[] = [
   { method: 'GET', url: '/api/audit/export', auth: 'session', permission: 'audit:export' },
   { method: 'GET', url: '/api/settings/security', auth: 'session', permission: 'settings:security:write' },
   { method: 'PUT', url: '/api/settings/security', auth: 'session', permission: 'settings:security:write' },
+  { method: 'GET', url: '/api/settings/identity', auth: 'session', permission: 'settings:identity:write' },
+  { method: 'PUT', url: '/api/settings/identity', auth: 'session', permission: 'settings:identity:write' },
   { method: 'GET', url: '/api/settings/sso', auth: 'session', permission: 'settings:sso:write' },
   { method: 'PUT', url: '/api/settings/sso', auth: 'session', permission: 'settings:sso:write' },
 ];
