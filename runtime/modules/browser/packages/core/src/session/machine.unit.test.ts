@@ -15,12 +15,16 @@ import {
   sourcesFor,
 } from './index.js';
 
-/** Table de 04 § 5, recopiée à la main (plus 04b § 6 : une session `pending` d'un nœud perdu passe `failed`). */
+/**
+ * Table de 04 § 5, recopiée à la main, plus 04b § 6 (une session `pending` d'un nœud perdu passe `failed`) et 04 § 2
+ * (tâche 2.2 : `DELETE` libère aussi une session `pending`, créée avec `wait=false` et pas encore démarrée).
+ */
 const SPEC: [SessionState, SessionState, EndReason | null][] = [
   ['pending', 'running', null],
   ['pending', 'failed', 'crash'],
   ['pending', 'failed', 'quota'],
   ['pending', 'failed', 'node_lost'],
+  ['pending', 'ended', 'released'],
   ['running', 'ended', 'released'],
   ['running', 'ended', 'budget_exceeded'],
   ['running', 'ended', 'node_shutdown'],
@@ -64,7 +68,8 @@ describe('table de transitions (04 § 5)', () => {
     expect(endStateFor('pending', 'quota')).toBe('failed');
     expect(endStateFor('running', 'idle')).toBe('timed_out');
     expect(endStateFor('running', 'node_lost')).toBe('failed');
-    expect(endStateFor('pending', 'released')).toBeUndefined();
+    expect(endStateFor('pending', 'released')).toBe('ended');
+    expect(endStateFor('pending', 'idle')).toBeUndefined();
     expect(sourcesFor('failed', 'crash')).toEqual(['pending', 'running']);
     expect(sourcesFor('running', null)).toEqual(['pending']);
     expect(sourcesFor('ended', 'idle')).toEqual([]);
