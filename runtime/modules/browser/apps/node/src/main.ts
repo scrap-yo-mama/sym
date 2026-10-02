@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// Point d'entrée du nœud (squelette de la tâche 0.1) : affiche son rôle et rend la main.
-import { describeRole } from './engine.js';
+// Binaire du nœud : même hôte de service que la passerelle, mais `SYMB_MODE` vaut `node` quand il est absent (tâche 0.4).
+import { runService } from '@sym-browser/core';
 
-console.log(describeRole());
+await runService({ argv: process.argv.slice(2), defaultMode: 'node' });
