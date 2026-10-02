@@ -412,11 +412,17 @@ describe('assert_sandbox — démarrage et utilisateur de l’enfant', () => {
   test.skipIf(process.platform !== 'linux' || dedicated.uid === undefined)(
     'Linux, utilisateur dédié : l’enfant ne tourne pas sous l’uid du worker et /proc/<ppid>/environ lui est illisible',
     async () => {
-      const probe = await new ProcessSandboxEngine(dedicated).probeIsolation();
+      const engine = new ProcessSandboxEngine(dedicated);
+      const probe = await engine.probeIsolation();
+      // Le balayage de fin de sonde (kill -1 sous l'uid dédié) doit être fini avant le run du test suivant, sinon il tue son enfant.
+      await engine.idle();
       expect(probe.uid).toBe(dedicated.uid);
       expect(probe.uid).not.toBe(process.getuid?.());
       expect(probe.parentEnviron).toBe('denied');
       expect(probe.noNewPrivs).toBe(true);
+      // Job security de la CI (revue 4.1b) : SANDBOX_SECCOMP compilé sur le runner, posé avant le lanceur comme dans l'image ;
+      // les balayages de ce fichier (kill -1 sous l'uid dédié, runner jetable, D-67) passent par la même chaîne.
+      if (dedicated.seccomp !== undefined) expect(probe.namespaces).toBe('denied');
     },
   );
 });

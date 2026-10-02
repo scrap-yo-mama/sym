@@ -25,6 +25,12 @@ umask 077
 } > .env
 ```
 
+Le worker a besoin, à côté du fichier Compose, du profil seccomp de Chromium (voir plus bas). Prenez celui de la version que vous déployez (remplacez `main` par son tag) :
+
+```bash
+curl -fsSLO https://raw.githubusercontent.com/scrap-yo-mama/sym/main/runtime/deploy/seccomp-chromium.json
+```
+
 `RUNTIME_IMAGE` désigne l'image : `runtime:local` si vous l'avez construite depuis le dépôt (`docker build -f deploy/Dockerfile -t runtime:local .` depuis `runtime/`), ou, une fois publiée, une version épinglée `…:X.Y.Z` (jamais `latest`). Le fichier `.env` contient `MASTER_KEY` : droits `0600`, hors de tout dépôt, et **copie de la clé dans votre gestionnaire de mots de passe**.
 
 ## Le fichier Compose
@@ -71,7 +77,8 @@ services:
       migrate:
         condition: service_completed_successfully
     healthcheck:
-      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/ready').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
+      # Lancée en root par Docker (USER de l'image) : descente sur pwuser, sans capacité ni nouveaux privilèges.
+      test: ["CMD", "/usr/bin/setpriv", "--reuid=1001", "--regid=1001", "--init-groups", "--inh-caps=-all", "--no-new-privs", "--", "node", "-e", "fetch('http://127.0.0.1:3000/api/ready').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
       interval: 10s
       timeout: 3s
       retries: 10
@@ -79,8 +86,9 @@ services:
   worker:
     image: ${RUNTIME_IMAGE}
     restart: unless-stopped
-    ipc: host
     mem_limit: 3g
+    shm_size: 512m
+    # Bac à sable de Chromium : espaces de noms utilisateur, refusés par le profil seccomp par défaut de Docker.
     security_opt:
       - seccomp=./seccomp-chromium.json
     environment:
@@ -113,9 +121,10 @@ volumes:
 
 Points à connaître :
 
-- **`ipc: host` et `mem_limit`** pour le worker : Chromium a besoin de mémoire partagée et d'un plafond de mémoire clair, dont le worker déduit le nombre d'exécutions navigateur simultanées. Avec `mem_limit: 3g`, il en lance une.
-- **`security_opt: seccomp=./seccomp-chromium.json`** pour le worker : copiez `deploy/seccomp-chromium.json` du dépôt à côté du fichier Compose. C'est le profil seccomp par défaut de Docker plus la création d'espaces de noms utilisateur, sans laquelle Chromium refuse de démarrer avec son bac à sable (« No usable sandbox! ») ; n'utilisez ni `seccomp=unconfined` ni `--no-sandbox`.
+- **`mem_limit` et `shm_size`** pour le worker : un plafond de mémoire clair, dont le worker déduit le nombre d'exécutions navigateur simultanées (avec `mem_limit: 3g`, il en lance une), et une marge de mémoire partagée. **Pas de `ipc: host`** : Chromium reçoit `--disable-dev-shm-usage`, l'espace IPC de la machine n'a pas à être partagé avec un conteneur qui ouvre des sites tiers.
+- **`security_opt: seccomp=./seccomp-chromium.json`** pour le worker : copiez `deploy/seccomp-chromium.json` du dépôt à côté du fichier Compose. Chromium tourne avec son bac à sable, jamais en `--no-sandbox` ; ce bac à sable crée des espaces de noms utilisateur, que le profil seccomp par défaut de Docker refuse : sans le fichier, chaque exécution navigateur s'arrête sur « No usable sandbox! », et le worker le signale dès son démarrage (`alert: chromium_sandbox_unavailable`). Le fichier est le profil par défaut de Docker plus la règle de Playwright pour les espaces de noms utilisateur (`clone`, `setns`, `unshare`) ; n'utilisez ni `seccomp=unconfined` ni `--no-sandbox`. L'enfant du bac à sable des scripts, lui, n'en profite pas (filtre propre, posé par l'image).
 - **Hôte Ubuntu 23.10 ou plus récent** : ces versions restreignent par AppArmor les espaces de noms utilisateur non privilégiés (`kernel.apparmor_restrict_unprivileged_userns=1` par défaut). Notre CI lève cette restriction sur son runner (`sysctl -w kernel.apparmor_restrict_unprivileged_userns=0`) : le profil seccomp seul est donc **non vérifié** sur un hôte Ubuntu aux réglages par défaut. Si le worker journalise « No usable sandbox! » au lancement de Chromium, vérifiez ce réglage (`sysctl kernel.apparmor_restrict_unprivileged_userns`) ; le passer à `0` vaut pour tout l'hôte, décidez-le en connaissance de cause.
+- **Sonde de santé du server** : Docker la lance en root (l'image démarre en root et descend aussitôt sur `pwuser`) ; elle descend elle-même sur `pwuser` par `setpriv`. Faites de même pour toute commande que vous ajoutez. Ne posez ni `user:` ni `cap_drop` de `SETUID` ou `SETGID` sur le worker : il refuserait de démarrer.
 - **Pas de port exposé pour `server`** : seul le proxy inverse est joignable de l'extérieur. Avec `TRUST_PROXY: "1"`, l'instance lit l'adresse du client dans l'en-tête que Caddy pose ; sans proxy devant, laissez `TRUST_PROXY` à sa valeur par défaut.
 - **`migrate` n'est pas relancé** par `restart` : c'est un service ponctuel dont dépendent `server` et `worker`.
 - **PostgreSQL** : épinglez l'image par empreinte en production, et gardez la sauvegarde hors de ce serveur ([Sauvegarder et restaurer](./sauvegarde.md)).
