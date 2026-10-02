@@ -184,12 +184,34 @@ body:has(.lp) {
   padding-block: 0.75rem;
 }
 
+/*
+ * Disposition de l'en-tête fixée par la largeur de l'écran seule (CLS) : jamais de retour à la ligne décidé par la largeur des
+ * textes. Avec un flex qui passe à la ligne, un lien de plus ou de moins sur une ligne selon la police (repli puis DM Sans)
+ * change la hauteur de l'en-tête et décale toute la page au remplacement : à 412 px (écran mobile de Lighthouse), la navigation
+ * anglaise tenait sur une ligne à un pixel près. Mobile : marque, navigation sur deux lignes, outils ; tablette : marque et
+ * outils, puis navigation ; bureau : une seule ligne (médias en fin de fichier). Marge de chaque ligne : au moins 20 px à 320 px.
+ */
 .lp-header__inner {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-areas:
+    'brand'
+    'nav'
+    'tools';
   align-items: center;
-  justify-content: space-between;
   gap: 0.5rem 1.25rem;
+}
+
+.lp-brand {
+  grid-area: brand;
+  justify-self: start;
+}
+
+.lp-nav {
+  grid-area: nav;
+}
+
+.lp-tools {
+  grid-area: tools;
 }
 
 .lp-brand {
@@ -212,10 +234,13 @@ body:has(.lp) {
   letter-spacing: -0.03em;
 }
 
+/* Mobile : deux lignes quelle que soit la police (colonnes remplies de haut en bas, dans l'ordre du document). */
 .lp-nav ul {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0 1.25rem;
+  display: grid;
+  grid-auto-flow: column;
+  grid-template-rows: repeat(2, auto);
+  justify-content: start;
+  gap: 0 1rem;
 }
 
 .lp-header a,
@@ -246,7 +271,6 @@ body:has(.lp) {
 
 .lp-tools {
   display: flex;
-  flex-wrap: wrap;
   align-items: center;
   gap: 0 1rem;
 }
@@ -902,6 +926,21 @@ body:has(.lp) {
 }
 
 @media (min-width: 48rem) {
+  /* Tablette : marque et outils sur la première ligne, navigation sur une seule ligne en dessous. */
+  .lp-header__inner {
+    grid-template-areas:
+      'brand tools'
+      'nav nav';
+    grid-template-columns: auto auto;
+    justify-content: space-between;
+  }
+
+  .lp-nav ul {
+    grid-auto-flow: column;
+    grid-template-rows: auto;
+    gap: 0 1.25rem;
+  }
+
   .lp-hero__grid {
     grid-template-columns: 1.2fr 0.8fr;
   }
@@ -934,6 +973,12 @@ body:has(.lp) {
 }
 
 @media (min-width: 64rem) {
+  /* Bureau : marque, navigation et outils sur une seule ligne. */
+  .lp-header__inner {
+    grid-template-areas: 'brand nav tools';
+    grid-template-columns: auto auto auto;
+  }
+
   .lp-proof {
     grid-template-columns: repeat(4, minmax(0, 1fr));
   }
