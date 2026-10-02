@@ -158,3 +158,29 @@ describe('job detect : choix de la base et fichiers partagés', () => {
     expect(detect(r, { 'github.event_name': 'pull_request', 'github.ref': 'refs/pull/1/merge', 'github.event.before': '' }).browser).toBe('false');
   });
 });
+
+describe('job gate de ci.yml', () => {
+  // Le workflow fixe `working-directory: runtime` par défaut ; `gate` ne fait pas de checkout, ce dossier n'existe donc pas
+  // sur son exécuteur : sans répertoire propre, son étape échoue avant de lire les verdicts (PR #1, tous les jobs verts).
+  test('sans checkout, il s’exécute à la racine de l’espace de travail et donne son verdict', () => {
+    const lines = workflow.split('\n');
+    const start = lines.indexOf('  gate:');
+    expect(start).toBeGreaterThan(-1);
+    const end = lines.findIndex((line, i) => i > start && /^ {2}\S/.test(line));
+    const job = lines.slice(start, end === -1 ? undefined : end).join('\n');
+    expect(job).not.toContain('actions/checkout');
+    expect(job).toMatch(/\n {4}defaults:\n {6}run:\n {8}working-directory: \.\n/);
+    const script = /run: \|\n((?: {10}.*\n?)+)/.exec(job)?.[1]?.replace(/^ {10}/gm, '');
+    expect(script).toBeDefined();
+    const verdict = (results: string) => {
+      try {
+        return execFileSync('bash', ['-e', '-c', script!], { cwd: mkdtempSync(join(tmpdir(), 'gate-')), env: { PATH: process.env['PATH'] ?? '', RESULTS: results }, encoding: 'utf8' });
+      } catch (error) {
+        return `échec : ${(error as { stdout?: string }).stdout ?? ''}`;
+      }
+    };
+    expect(verdict('success skipped success')).toContain('gate : vert.');
+    expect(verdict('success failure')).toMatch(/^échec : .*au moins un job a échoué/s);
+    expect(verdict('cancelled success')).toMatch(/^échec : /);
+  });
+});

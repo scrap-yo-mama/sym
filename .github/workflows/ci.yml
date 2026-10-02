@@ -419,6 +419,10 @@ jobs:
     if: always()
     needs: [quality, docs, unit, integration, api-contract, e2e, security, image, detect, browser]
     runs-on: ubuntu-24.04
+    # Pas de checkout : le dossier `runtime` du défaut du workflow n'existe pas ici.
+    defaults:
+      run:
+        working-directory: .
     steps:
       - name: Verdict agrégé
         env:
