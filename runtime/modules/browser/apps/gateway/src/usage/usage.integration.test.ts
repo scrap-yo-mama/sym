@@ -30,11 +30,9 @@ const tenantOf = (key: KeyName): string => (key === 'b' ? h.tenantB : h.tenantA)
 beforeAll(async () => {
   dir = mkdtempSync(join(tmpdir(), 'symb-gw-usage-'));
   h = await createHarness({ usageWal: async () => (await Promise.all(wals.map((w) => w.read()))).flat() });
-  const { rows } = await h.pool.query<{ id: string; key_prefix: string }>('SELECT id, key_prefix FROM api_keys');
-  const byPrefix = Object.fromEntries(rows.map((r) => [r.key_prefix, r.id]));
-  keyIds.a = byPrefix['symb_a_w'] ?? '';
-  keyIds.aRead = byPrefix['symb_a_r'] ?? '';
-  keyIds.b = byPrefix['symb_b_w'] ?? '';
+  keyIds.a = h.keyIds.a;
+  keyIds.aRead = h.keyIds.aRead;
+  keyIds.b = h.keyIds.b;
 });
 afterAll(async () => {
   await Promise.all(wals.map((w) => w.close()));

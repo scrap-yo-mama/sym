@@ -1,21 +1,22 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Interfaces de la passerelle que d'autres tâches implémentent (tâche 2.2). L'API REST n'en connaît que la forme :
-//   - Authenticator : clés d'API `Authorization: Bearer` (argon2id, préfixe, scopes, expiration : tâche 2.1) ;
+//   - Authenticator : clés d'API `Authorization: Bearer` (argon2id, préfixe, scopes, expiration : tâche 2.1,
+//     `ApiKeyAuthenticator` de @sym-browser/core sur `pgApiKeyStore` de @sym-browser/db) ;
 //   - ConnectTokenIssuer : jetons de connexion courts liés à une session et à un protocole (HMAC dérivé de MASTER_KEY,
 //     tâche 2.1 ; vérifiés à l'upgrade WSS, tâche 2.3) ;
 //   - SessionLauncher : démarrage, libération et prolongation sur le nœud propriétaire. Mode `all` : le superviseur de
 //     sessions du nœud dans le même processus (tâche 1.2) ; modes séparés : `POST /internal/sessions` du nœud (04b § 8),
 //     choix du nœud et file (tâche 2.4).
 import type pg from 'pg';
-import type { UsageClosure } from '@sym-browser/core';
+import type { ApiScope, Principal as AuthPrincipal, UsageClosure } from '@sym-browser/core';
 import type { UsageReconciliation } from '@sym-browser/db';
 import type { CreateSessionRequest, SessionType } from '@sym/contracts/browser';
 
-/** Scopes d'une clé d'API (04 § 1). */
-export type Scope = 'sessions:write' | 'sessions:read' | 'profiles:write' | 'admin';
+/** Scopes d'une clé d'API (04 § 1) : ensemble fermé de la tâche 2.1. */
+export type Scope = ApiScope;
 
 /** Identité d'une clé d'API valide. */
-export type Principal = { tenantId: string; apiKeyId: string; scopes: readonly Scope[] };
+export type Principal = AuthPrincipal;
 
 interface Authenticator {
   /** Secret reçu en `Authorization: Bearer` ; `null` si la clé est inconnue, révoquée ou expirée. */
