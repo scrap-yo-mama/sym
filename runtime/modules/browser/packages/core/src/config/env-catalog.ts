@@ -64,7 +64,7 @@ export const BROWSER_ENV_CATALOG: readonly BrowserEnvVariable[] = [
   v({ name: 'HEARTBEAT_MS', group: 'Nœud', roles: NODE, default: '5000', description: 'Période du battement du nœud vers la passerelle, en millisecondes (100 au minimum).' }),
   v({ name: 'SYMB_DATA_DIR', group: 'Nœud', roles: NODE, default: '/data', description: 'Répertoires de travail des sessions (`sessions/{id}`), chemin absolu.' }),
   v({ name: 'SYMB_PRIVATE_HOSTS', group: 'Nœud', roles: NODE, description: 'Hôtes privés joignables par l’egress : noms exacts ou CIDR séparés par des virgules. Vide : tout hôte privé est refusé.' }),
-  v({ name: 'SYMB_IP_ECHO_URL', group: 'Nœud', roles: ALL, defaultLabel: 'fixée par la tâche 1.6', description: 'Point d’écho HTTPS du test de proxy à la création de session.' }),
+  v({ name: 'SYMB_IP_ECHO_URL', group: 'Nœud', roles: ALL, default: 'https://api.ipify.org/?format=json', description: 'Point d’écho HTTPS du test de proxy amont à la création de session (réponse JSON `{ip}` ou texte brut) : son hôte s’ajoute à la politique pour ce seul test (04c § 2.3).' }),
 
   v({ name: 'QUEUE_MAX', group: 'Passerelle', roles: GATEWAY, default: '50', description: 'Taille globale de la file d’attente de sessions.' }),
   v({ name: 'QUEUE_MAX_PER_TENANT', group: 'Passerelle', roles: GATEWAY, default: '10', description: 'Taille de la file par client.' }),

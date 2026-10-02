@@ -14,6 +14,7 @@ import type { EgressBlockReason, EgressPolicy, EgressState, UpstreamProxy, Upstr
 import { createBlockedReporter, type EgressEvent } from './events.js';
 import { EgressDeniedError, type EgressGuard } from './guard.js';
 import { compileEgressPolicy, normalizeHost, type CompiledEgressPolicy } from './policy.js';
+import { UpstreamError, WIRE_SOCKET } from './upstream/shared.js';
 
 export type EgressTarget = { host: string; port: number; via: 'http' | 'connect' };
 
@@ -26,8 +27,13 @@ export type UpstreamDialer = (target: UpstreamTarget, upstream: UpstreamProxy | 
 /** Connexion sortante ouverte par l'egress (observation : port local, preuve « 100 % des connexions vues »). */
 export type EgressConnection = { epoch: number; host: string; port: number; via: 'http' | 'connect'; localPort: number; remoteAddress: string };
 
+/** IP de sortie et latence mesurées par le test du proxy amont à la création (04c § 2.3). */
+export type EgressExit = { exitIp: string; latencyMs: number };
+
 export type SessionEgressDeps = {
   guard: EgressGuard;
+  /** Résultat du test du proxy amont (tâche 1.6), repris par `state()`. */
+  exit?: EgressExit;
   /** `egress.blocked` et `egress.budget_exceeded` (SSE et `session_events`, tâche 2.5). */
   onEvent?: (event: EgressEvent) => void;
   /** Toute demande reçue, avant décision. */
@@ -57,8 +63,11 @@ export type SessionEgress = {
   readonly url: string;
   readonly port: number;
   state(): EgressState;
-  /** Nouvelle politique (`PUT /v1/sessions/{id}/egress`) : nouvelle époque, compteurs à zéro, tunnels en cours coupés. */
-  replace(policy: EgressPolicy): EgressState;
+  /**
+   * Nouvelle politique (`PUT /v1/sessions/{id}/egress`) : nouvelle époque, compteurs à zéro, tunnels en cours coupés.
+   * `exit` : résultat du test du nouvel amont (tâche 1.6), affiché par `state()`.
+   */
+  replace(policy: EgressPolicy, exit?: EgressExit): EgressState;
   /** Connexions sortantes ouvertes (10 000 dernières). */
   connections(): readonly EgressConnection[];
   /** Coupe tous les tunnels et connexions en cours. */
@@ -155,6 +164,7 @@ async function start(initial: CompiledEgressPolicy, deps: SessionEgressDeps, clo
   let exceeded = false;
   let budgetEventSent = false;
   let shutDown = closedMode;
+  let exit = deps.exit;
   const history: EgressConnection[] = [];
   /** Sockets sortants et clients de tunnel : coupés ensemble. */
   const sockets = new Set<Duplex>();
@@ -169,7 +179,7 @@ async function start(initial: CompiledEgressPolicy, deps: SessionEgressDeps, clo
 
   const state = (): EgressState => {
     const budgetBytes = effectiveBudget();
-    return { epoch, requests, blocked, bytesIn, bytesOut, ...(budgetBytes === undefined ? {} : { budgetBytes }), budgetExceeded: exceeded };
+    return { epoch, requests, blocked, bytesIn, bytesOut, ...(budgetBytes === undefined ? {} : { budgetBytes }), budgetExceeded: exceeded, ...(exit === undefined ? {} : exit) };
   };
 
   /** Franchissement du budget : tout est coupé, événement une fois par époque, fin de session si demandée. */
@@ -203,11 +213,13 @@ async function start(initial: CompiledEgressPolicy, deps: SessionEgressDeps, clo
    */
   const track = (socket: Socket): void => {
     const socketEpoch = epoch;
+    // Tunnel TLS vers un proxy `https` : les octets comptés sont ceux du fil, sous le chiffrement.
+    const wire = (socket as Socket & { [WIRE_SOCKET]?: Socket })[WIRE_SOCKET] ?? socket;
     let lastRead = 0;
     let lastWritten = 0;
     const sample = (): void => {
-      const read = socket.bytesRead;
-      const written = socket.bytesWritten;
+      const read = wire.bytesRead;
+      const written = wire.bytesWritten;
       if (socketEpoch === epoch) {
         bytesIn += read - lastRead;
         bytesOut += written - lastWritten;
@@ -224,6 +236,7 @@ async function start(initial: CompiledEgressPolicy, deps: SessionEgressDeps, clo
     }) as Socket['write'];
     socket.prependListener('data', sample);
     socket.once('close', sample);
+    if (wire !== socket) wire.once('close', sample);
   };
 
   const refuse = (reason: EgressBlockReason, host: string, port: number, cause?: EgressDeniedError): never => {
@@ -279,8 +292,11 @@ async function start(initial: CompiledEgressPolicy, deps: SessionEgressDeps, clo
     return socket;
   };
 
+  // Refus de la politique : 403 et son motif. Échec de l'amont : 502 et son motif (`upstream_auth_failed`…), sans repli.
   const refusalBody = (error: unknown): { status: number; body: string } =>
-    error instanceof EgressDeniedError ? { status: 403, body: error.reason } : { status: 502, body: 'bad_gateway' };
+    error instanceof EgressDeniedError
+      ? { status: 403, body: error.reason }
+      : { status: 502, body: error instanceof UpstreamError ? error.reason : 'bad_gateway' };
 
   const server = createServer((req, res) => {
     const url = parseAbsolute(req.url);
@@ -390,10 +406,11 @@ async function start(initial: CompiledEgressPolicy, deps: SessionEgressDeps, clo
     url: `http://127.0.0.1:${port}`,
     port,
     state,
-    replace: (next) => {
+    replace: (next, nextExit) => {
       const compiled = compileEgressPolicy(next);
       assertUpstreamWired(compiled, deps);
       policy = compiled;
+      exit = compiled.upstream === undefined ? undefined : nextExit;
       epoch += 1;
       requests = 0;
       blocked = 0;

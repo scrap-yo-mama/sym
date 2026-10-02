@@ -46,6 +46,8 @@ describe('modes', () => {
     expect(config.retention).toEqual({ traceDays: 7, harDays: 7, videoDays: 7, logDays: 7, downloadHours: 24 });
     expect(config.limits).toMatchObject({ profileMaxBytes: 100 * 1024 ** 2, recordingMaxBytes: 200 * 1024 ** 2, cdpMaxMessageBytes: 100 * 1024 ** 2, downloadMaxBytes: 500 * 1024 ** 2, sessionDownloadMaxBytes: 2 * 1024 ** 3, uploadMaxBytes: 100 * 1024 ** 2 });
     expect(config.privateHosts).toEqual([]);
+    // Point d'écho du test de proxy amont (04c § 2.3), fixé par la tâche 1.6 : HTTPS, réponse JSON `{ip}`.
+    expect(config.ipEchoUrl).toBe('https://api.ipify.org/?format=json');
   });
 
   test('les trois modes sont acceptés ; all n’exige ni NODE_TOKEN ni NODE_PUBLIC_URL', () => {
