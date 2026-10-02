@@ -112,10 +112,10 @@ describe('mode all (une machine)', () => {
     const ready = await until(service, (r) => r.status === 200);
     expect(ready.body).toMatchObject({ status: 'ready', checks: { master_key: 'ok', database: 'ok', schema: 'ok', nodes: 'ok', heartbeat: 'ok', chromium: 'ok' } });
     expect(chromium.launched).toBeGreaterThanOrEqual(1);
-    const [version] = await query<{ v: number }>('SELECT max(version)::int AS v FROM symb_schema_migrations');
+    const [version] = await query<{ v: number }>(db, 'SELECT max(version)::int AS v FROM symb_schema_migrations');
     expect(version?.v).toBe(expectedSchemaVersion());
-    expect(await query('SELECT id, url, state, slots_total FROM nodes')).toEqual([{ id: 'all-1', url: `http://127.0.0.1:${service.port}`, state: 'ready', slots_total: 2 }]);
-    expect(await query('SELECT t.name FROM api_keys k JOIN tenants t ON t.id = k.tenant_id')).toEqual([{ name: 'sym' }]);
+    expect(await query(db, 'SELECT id, url, state, slots_total FROM nodes')).toEqual([{ id: 'all-1', url: `http://127.0.0.1:${service.port}`, state: 'ready', slots_total: 2 }]);
+    expect(await query(db, 'SELECT t.name FROM api_keys k JOIN tenants t ON t.id = k.tenant_id')).toEqual([{ name: 'sym' }]);
   });
 
   test('Chromium non lançable : /readyz 503, motif chromium, sans secret', async () => {
@@ -169,7 +169,7 @@ describe('passerelle et nœuds séparés', () => {
     await poller;
     expect(statuses.length).toBeGreaterThan(5);
     expect(statuses.filter((s) => s !== 200)).toEqual([]);
-    expect(await query('SELECT id, url, state FROM nodes ORDER BY id')).toEqual([
+    expect(await query(db, 'SELECT id, url, state FROM nodes ORDER BY id')).toEqual([
       { id: 'node-1', url: 'http://node-1.internal:3000', state: 'ready' },
       { id: 'node-2', url: 'http://node-2.internal:3000', state: 'ready' },
     ]);
@@ -193,7 +193,11 @@ describe('passerelle et nœuds séparés', () => {
     const [a, b] = await Promise.all([1, 2].map(() => boot(db, { SYMB_MODE: 'gateway', NODE_TOKEN, SYMB_BOOTSTRAP_API_KEY: key })));
     await until(a!, (r) => r.body.checks?.schema === 'ok');
     await until(b!, (r) => r.body.checks?.schema === 'ok');
-    expect(await query('SELECT count(*)::int AS n FROM api_keys')).toEqual([{ n: 1 }]);
+    // La clé suit les migrations dans la même tâche de démarrage : on attend qu'elle soit écrite, puis on vérifie l'unicité.
+    const deadline = Date.now() + 10_000;
+    while ((await query<{ n: number }>(db, 'SELECT count(*)::int AS n FROM api_keys'))[0]!.n === 0 && Date.now() < deadline) await new Promise((r) => setTimeout(r, 50));
+    await new Promise((r) => setTimeout(r, 500));
+    expect(await query(db, 'SELECT count(*)::int AS n FROM api_keys')).toEqual([{ n: 1 }]);
   });
 });
 
@@ -204,10 +208,11 @@ describe('drainage (point d’accroche de la tâche 2.7)', () => {
     const seen: string[] = [];
     let release!: () => void;
     const gate = new Promise<void>((resolve) => (release = resolve));
+    await boot(db, { SYMB_MODE: 'gateway', NODE_TOKEN });
     const node = await boot(db, { SYMB_MODE: 'node', NODE_TOKEN, NODE_ID: 'drain-1', NODE_PUBLIC_URL: 'http://drain-1.internal:3000', SHUTDOWN_GRACE_SECONDS: '5' }, {
       drainSessions: async ({ deadline }) => {
         seen.push(`drain:${deadline instanceof Date}`);
-        const [row] = await query<{ state: string }>("SELECT state FROM nodes WHERE id = 'drain-1'");
+        const [row] = await query<{ state: string }>(db, "SELECT state FROM nodes WHERE id = 'drain-1'");
         seen.push(`state:${row?.state}`);
         await gate;
       },
@@ -219,6 +224,6 @@ describe('drainage (point d’accroche de la tâche 2.7)', () => {
     release();
     await stopping;
     expect(seen).toEqual(['drain:true', 'state:draining']);
-    expect(await query("SELECT state FROM nodes WHERE id = 'drain-1'")).toEqual([{ state: 'down' }]);
+    expect(await query(db, "SELECT state FROM nodes WHERE id = 'drain-1'")).toEqual([{ state: 'down' }]);
   });
 });

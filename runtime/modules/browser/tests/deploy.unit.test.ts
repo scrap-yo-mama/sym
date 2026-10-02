@@ -31,7 +31,7 @@ type Compose = { name?: string; services: Record<string, Service>; volumes?: Rec
 
 const DEPLOY = join(MODULE_ROOT, 'deploy');
 const read = (file: string) => readFileSync(join(DEPLOY, file), 'utf8');
-const compose = (file: string) => parse(read(file)) as Compose;
+const compose = (file: string) => parse(read(file), { merge: true }) as Compose;
 const FILES = ['compose.yaml', 'compose.nodes.yaml', 'compose.standalone.yaml'] as const;
 const DEFAULT_IMAGE = '${SYMB_IMAGE:-ghcr.io/scrap-yo-mama/sym-browser:1}';
 const SECRETS = new Set(BROWSER_ENV_CATALOG.filter((v) => v.secret).map((v) => v.name));
@@ -169,7 +169,7 @@ describe('Render : blueprint « SYM Browser seul » (passerelle web + nœud priv
   });
 
   test('modes et santé : passerelle gateway sur /readyz ; nœud node, maxShutdownDelaySeconds 300 (04b § 9)', () => {
-    const env = (s: RenderService) => Object.fromEntries((s.envVars ?? []).map((v) => [v.key as string, v]));
+    const env = (s: RenderService) => Object.fromEntries((s.envVars ?? []).filter((v) => typeof v.key === 'string').map((v) => [v.key as string, v]));
     const [web] = byType('web');
     const [node] = byType('pserv');
     expect(env(web!).SYMB_MODE?.value).toBe('gateway');

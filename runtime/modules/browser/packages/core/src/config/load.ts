@@ -98,6 +98,10 @@ function privateHostProblem(entry: string): string | undefined {
   return undefined;
 }
 
+const isHostPort = (value: string): boolean => {
+  const match = /^([a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*):(\d{1,5})$/i.exec(value);
+  return match !== null && Number(match[2]) >= 1 && Number(match[2]) <= 65_535;
+};
 const isHttpUrl = (value: string, protocols: readonly string[]): boolean => {
   try {
     const url = new URL(value);
@@ -140,7 +144,10 @@ export function loadConfig(env: Env = process.env, options: LoadOptions = {}): B
   const masterKeyPrevious = reader.secret('MASTER_KEY_PREVIOUS', masterKeyProblem);
   const nodeToken = reader.secret('NODE_TOKEN', tokenCheck);
 
-  const publicUrlSet = reader.checked('NODE_PUBLIC_URL', 'URL http ou https attendue', (v) => isHttpUrl(v, ['http:', 'https:']));
+  // Forme `hôte:port` acceptée et complétée par `http://` : c'est ce que rend `fromService … property: hostport` de Render
+  // (blueprint de la tâche 5.1), comme pour `BROWSER_URL` côté SYM (04g § 2).
+  const publicUrlRaw = reader.checked('NODE_PUBLIC_URL', 'URL http ou https, ou hôte:port, attendue', (v) => isHttpUrl(v, ['http:', 'https:']) || isHostPort(v));
+  const publicUrlSet = publicUrlRaw === null ? null : isHostPort(publicUrlRaw) ? `http://${publicUrlRaw}` : publicUrlRaw;
   const node = {
     id: reader.checked('NODE_ID', '1 à 63 caractères A-Za-z0-9_.-', (v) => /^[A-Za-z0-9_.-]{1,63}$/.test(v)) ?? hostname(),
     region: reader.checked('NODE_REGION', '1 à 40 caractères a-z0-9_.-', (v) => /^[a-z0-9_.-]{1,40}$/.test(v)) ?? 'default',

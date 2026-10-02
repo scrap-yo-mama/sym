@@ -3,6 +3,7 @@
 // et miroir Drizzle ; clés d'API (tâche 2.1). Le module a sa propre base logique : rien n'est partagé avec `@runtime/db`.
 export * from './api-keys.js';
 export * from './migrate.js';
+export * from './nodes.js';
 export * as schema from './schema.js';
 
 /** Tables du modèle de données (03 § 5), plus `idempotency_keys` (04 § 9, tâche 2.2). */

@@ -76,7 +76,8 @@ function up(p: Project, services: string[] = []): void {
 }
 
 afterAll(() => {
-  for (const p of projects.splice(0)) compose(p, ['down', '-v', '--timeout', '30']);
+  // `--profile scale` : sans lui, `down` ignore node-2 (service au profil scale) et le laisserait tourner.
+  for (const p of projects.splice(0)) compose(p, ['--profile', 'scale', 'down', '-v', '--timeout', '30']);
 });
 
 describe.skipIf(!IMAGE)('gabarits Compose sur l’image construite', () => {

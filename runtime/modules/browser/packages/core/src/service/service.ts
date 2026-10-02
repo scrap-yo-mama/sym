@@ -139,6 +139,9 @@ export async function startService(config: BrowserConfig, options: ServiceOption
   };
 }
 
+/** Rôle assemblé par `RunOptions.prepare` : `onListening` reçoit le port réel (utile avec `PORT=0`, URL du nœud en mode `all`). */
+export type PreparedRole = ServiceOptions & { close?: () => Promise<void>; onListening?: (port: number) => void };
+
 export type RunOptions = ServiceOptions & {
   env?: Record<string, string | undefined>;
   argv?: readonly string[];
@@ -149,6 +152,12 @@ export type RunOptions = ServiceOptions & {
   exit?: (code: number) => void;
   /** Abonne SIGTERM et SIGINT au drainage (défaut : oui). */
   handleSignals?: boolean;
+  /**
+   * Assemblage du rôle (tâche 5.1), appelé une fois la configuration validée et avant l'écoute : vérifications de `/readyz`,
+   * crochets de drainage et fermeture des ressources (base, battement, Chromium). Ne doit pas attendre la base : un service
+   * démarre et répond `/healthz` même base injoignable. Une exception arrête le démarrage (code 1, message sans détail).
+   */
+  prepare?: (config: BrowserConfig, log: Logger) => Promise<PreparedRole>;
 };
 
 /**
@@ -177,15 +186,38 @@ export async function runService(options: RunOptions = {}): Promise<ServiceHandl
     return undefined;
   }
 
+  const log = options.log ?? createLogger(config.logLevel, stdout);
+  let prepared: PreparedRole = {};
+  if (options.prepare) {
+    try {
+      prepared = await options.prepare(config, log);
+    } catch (error) {
+      // Le message peut contenir une URL de base : seul le nom de l'erreur sort.
+      stderr(`Démarrage impossible : échec de la préparation du rôle ${config.mode} (${(error as Error).name ?? 'erreur'}).`);
+      exit(1);
+      return undefined;
+    }
+  }
+  const releaseResources = prepared.close ?? (async () => undefined);
+
   let service: ServiceHandle;
   try {
-    service = await startService(config, { ...options, log: options.log ?? createLogger(config.logLevel, stdout) });
+    service = await startService(config, {
+      ...options,
+      log,
+      checks: [...(options.checks ?? []), ...(prepared.checks ?? [])],
+      onDrain: [...(options.onDrain ?? []), ...(prepared.onDrain ?? [])],
+    });
   } catch (error) {
+    await releaseResources().catch(() => undefined);
     const code = (error as NodeJS.ErrnoException).code;
     stderr(code === 'EADDRINUSE' ? `PORT ${config.port} déjà utilisé : libérez-le ou choisissez un autre port.` : `Démarrage impossible : ${code ?? 'erreur d’écoute'} (PORT ${config.port}).`);
     exit(1);
     return undefined;
   }
+
+  prepared.onListening?.(service.port);
+  if (prepared.close) service = withRelease(service, releaseResources);
 
   if (options.handleSignals !== false) {
     let stopping = false;
@@ -198,4 +230,25 @@ export async function runService(options: RunOptions = {}): Promise<ServiceHandl
     }
   }
   return service;
+}
+
+/** Libère les ressources du rôle (base, battement, Chromium) après l'arrêt du serveur, une seule fois. */
+function withRelease(service: ServiceHandle, release: () => Promise<void>): ServiceHandle {
+  let released: Promise<void> | undefined;
+  const once = (): Promise<void> => (released ??= release().catch(() => undefined));
+  return {
+    mode: service.mode,
+    port: service.port,
+    get draining() {
+      return service.draining;
+    },
+    shutdown: async () => {
+      await service.shutdown();
+      await once();
+    },
+    close: async () => {
+      await service.close();
+      await once();
+    },
+  };
 }

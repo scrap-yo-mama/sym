@@ -68,6 +68,12 @@ if (!process.argv.includes('--skip-image')) {
       cmd: ['docker', 'run', '--rm', ...RUN_FLAGS, ...imageEnv('invalide'), IMAGE],
       expectFailure: (err) => (err.includes('MASTER_KEY invalide') ? undefined : `message sans MASTER_KEY : « ${err.trim()} »`),
     },
+    // Tâche 5.1 : gabarits Compose démarrés sur cette image (mode all à froid, 2e nœud à chaud, instance autonome).
+    {
+      name: 'image : gabarits Compose (cold_install_two_nodes, assert_standalone_instance)',
+      cmd: ['pnpm', '--filter', '@sym-browser/module', 'exec', 'vitest', 'run', 'tests/deploy.e2e.test.ts'],
+      env: { SYMB_E2E_IMAGE: IMAGE },
+    },
   );
 }
 
