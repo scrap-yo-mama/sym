@@ -131,7 +131,8 @@ const SIGNATURE_AUDIT = `(() => {
     if (variant === 'speaking' && !(colon.length === 1 && /^[\\u00A0]?:$/.test(colon[0].textContent || ''))) problems.push('SYM parle : deux-points attendu');
     if (sig.closest('[data-testid="status-badge"], [data-testid="blocked-panel"], [role="alert"], [data-testid="confirm-panel"]')) problems.push('signature dans une zone interdite (statut, Bloquée, erreur, confirmation)');
   }
-  return { problems, count: signatures.length, zones: signatures.map((s) => s.parentElement && s.parentElement.tagName) };
+  const inMain = signatures.filter((s) => s.closest('main'));
+  return { problems, count: signatures.length - inMain.length, inMain: inMain.length, zones: signatures.map((s) => s.parentElement && s.parentElement.tagName) };
 })()`;
 
 /** Écrans qui montrent la bulle de la carte d'illustration (connexion sans erreur, premier démarrage, étapes suivantes) ; tous les autres, erreurs comprises, n'en ont pas. */
@@ -147,13 +148,15 @@ test.describe('assert_sym_signature_rendering', () => {
       await expect(page.locator('h1').first()).toBeVisible();
       await app.settled();
       await screen.prepare?.(page, app);
-      const audit = (await page.evaluate(SIGNATURE_AUDIT)) as { problems: string[]; count: number };
+      const audit = (await page.evaluate(SIGNATURE_AUDIT)) as { problems: string[]; count: number; inMain: number };
       expect(audit.problems).toEqual([]);
       // Une signature de marque par écran (la barre de navigation) ; la bulle « SYM : » de la carte d'illustration (3.21) est la
-      // seule autre, sur quatre écrans, jamais sur une erreur : jamais plus d'une par zone d'écran (20 § 2.3).
+      // seule autre, sur quatre écrans, jamais sur une erreur : jamais plus d'une par zone d'écran (20 § 2.3). Le contenu
+      // principal en porte au plus une, parlante : la bulle « SYM : » d'une planche (porte du schéma de Nouvelle API, 20 § 5.3).
       const bubbles = await page.locator('[data-sym-bubble] [data-sym-signature][data-variant="speaking"]').count();
       expect(bubbles, 'bulle de SYM').toBe(BUBBLE_SCREENS.includes(screen.id) ? 1 : 0);
-      expect(audit.count).toBe(1 + bubbles);
+      expect(audit.count + audit.inMain).toBe(1 + bubbles);
+      expect(audit.inMain).toBeLessThanOrEqual(1);
     });
   }
 });

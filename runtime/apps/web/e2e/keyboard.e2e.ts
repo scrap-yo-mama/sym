@@ -108,20 +108,41 @@ test.describe('assert_keyboard_only_path : du catalogue à un run', () => {
         await page.keyboard.press('Enter');
         expect(await page.evaluate(() => document.activeElement?.id)).toBe('main');
 
-        // 2. Filtres : la recherche se tape, un filtre (liste native) se règle avec les flèches ou la saisie, et relit le serveur.
+        // 1 bis. Pastilles-filtres (20 § 5.2) : le tableau s'ouvre sur « À traiter » ; au clavier, « Tout » s'atteint par Tab et
+        //    s'active par Entrée (bouton à bascule), puis la liste complète s'affiche.
+        const allLabel = text(locale, 'catalog.pills.all');
+        let pill = await focused(page);
+        for (let step = 0; step < 12 && !pill.name?.startsWith(allLabel); step += 1) {
+          await page.keyboard.press('Tab');
+          pill = await focused(page);
+        }
+        expect(pill.name, 'Tab atteint la pastille « Tout »').toContain(allLabel);
+        await page.keyboard.press('Enter');
+        await expect(page.locator('[data-pill="all"]')).toHaveAttribute('aria-pressed', 'true');
+        await expect(page.locator('[data-slug="zz-sain"]')).toBeVisible();
+
+        // 2. Filtres : la recherche (à droite du titre, planche Catalogue : avant les pastilles) se tape, puis Tab mène par
+        //    « Nouvelle API » et les pastilles aux filtres de 06 ; une liste native se règle avec les flèches ou la saisie.
+        const back: Stop[] = [];
+        for (let step = 0; step < 12; step += 1) {
+          await page.keyboard.press('Shift+Tab');
+          const stop = await focused(page);
+          back.push(stop);
+          if (stop.id === 'catalog-search') break;
+        }
+        expect(back.at(-1)?.id, `arrêts : ${names(back).join(' ← ')}`).toBe('catalog-search');
+        await page.keyboard.type('livres');
+        await expect.poll(() => app.requests.some((entry) => entry.includes('q=livres'))).toBe(true);
+
         const stops: Stop[] = [];
         for (let step = 0; step < 12; step += 1) {
           await page.keyboard.press('Tab');
           const stop = await focused(page);
           stops.push(stop);
-          if (stop.id === 'catalog-search') break;
+          if (stop.id === 'catalog-status') break;
         }
-        expect(stops.at(-1)?.id, `arrêts : ${names(stops).join(' → ')}`).toBe('catalog-search');
-        await page.keyboard.type('livres');
-        await expect.poll(() => app.requests.some((entry) => entry.includes('q=livres'))).toBe(true);
-
-        await page.keyboard.press('Tab');
-        expect((await focused(page)).id).toBe('catalog-status');
+        expect(stops.at(-1)?.id, `arrêts : ${names(stops).join(' → ')}`).toBe('catalog-status');
+        expect(names(stops)[0], '« Nouvelle API » suit la recherche').toContain(text(locale, 'catalog.newApi'));
         await page.keyboard.press('Tab');
         expect((await focused(page)).id).toBe('catalog-execution');
         await page.keyboard.press('Tab');

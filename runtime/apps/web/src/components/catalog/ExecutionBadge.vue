@@ -10,12 +10,13 @@
 import { useI18n } from 'vue-i18n';
 import type { Execution } from '@/composables/useApiCatalog';
 
-defineProps<{ execution: Execution | null }>();
+withDefaults(defineProps<{ execution: Execution | null; /** Texte seul, sans pastille (colonne « MODE · RÉSEAU » de la planche du catalogue). */ plain?: boolean }>(), { plain: false });
 const { t } = useI18n();
 </script>
 
 <template>
-  <span v-if="execution" class="inline-flex items-center rounded-md bg-secondary px-2 py-0.5 text-xs font-medium text-secondary-foreground" data-testid="execution-badge">
+  <span v-if="execution && plain" data-testid="execution-badge">{{ t(`execution.${execution}`) }}</span>
+  <span v-else-if="execution" class="inline-flex items-center rounded-md bg-secondary px-2 py-0.5 text-xs font-medium text-secondary-foreground" data-testid="execution-badge">
     {{ t(`execution.${execution}`) }}
   </span>
   <span v-else class="text-sm text-muted-foreground">{{ t('ui.none') }}</span>
