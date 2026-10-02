@@ -12,14 +12,20 @@
     "fixtures:local": "node fixtures/src/main.ts local",
     "typecheck": "tsc -p tsconfig.json",
     "test": "vitest run",
-    "test:chromium": "vitest run --config vitest.chromium.config.ts"
+    "test:chromium": "vitest run --config vitest.chromium.config.ts",
+    "test:quickstart": "vitest run --config vitest.quickstart.config.ts",
+    "docs:reference": "node scripts/docs-reference.ts"
   },
   "devDependencies": {
     "@browserbasehq/stagehand": "catalog:",
+    "@sym/contracts": "workspace:*",
+    "@testcontainers/postgresql": "catalog:",
     "@types/node": "catalog:",
+    "@types/pg": "catalog:",
     "@types/ws": "catalog:",
     "eslint": "catalog:",
     "fastify": "catalog:",
+    "pg": "catalog:",
     "playwright-core": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:",
