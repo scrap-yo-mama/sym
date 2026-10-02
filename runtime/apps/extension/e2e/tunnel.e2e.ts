@@ -232,7 +232,7 @@ test(`run de ${HIDDEN_RUN_SECONDS} s en onglet caché : abouti, même onglet tou
   }
   const elapsed = (Date.now() - started) / 1000;
   const run = await waitRun(runId, 10_000);
-  expect(run).toMatchObject({ state: 'succeeded', items: pages * 10 });
+  expect(run, `run : ${JSON.stringify(run)}`).toMatchObject({ state: 'succeeded', items: pages * 10 });
   expect(elapsed).toBeGreaterThanOrEqual(HIDDEN_RUN_SECONDS);
   expect([...seen.keys()]).toEqual([tabId]);
   for (const t of seen.values()) expect(t).toMatchObject({ active: false, autoDiscardable: false, discarded: false, group: 'Scrapyomama' });
