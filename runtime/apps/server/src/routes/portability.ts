@@ -67,6 +67,7 @@ export function portabilityRoutes(app: FastifyInstance, ctx: ServerContext): voi
           source_url: doc.api.source_url,
           output_fields: doc.api.output_columns ?? schemaColumns(doc.api.output_schema),
           personal_fields: personal,
+          network_allow: (policy['allow'] as string[] | undefined) ?? ['direct'],
           strategy: doc.strategy === null ? null : { execution: doc.strategy.execution, network: doc.strategy.network },
           schedules: doc.schedules.length,
           alert_targets: (doc.api.alert_targets ?? []).map((t) => t.ref),

@@ -2205,6 +2205,8 @@ export interface components {
             output_fields: string[];
             /** @description Le schéma de sortie porte un champ `x-personal` (ou l'API se déclare à données personnelles). */
             personal_fields: boolean;
+            /** @description Niveaux réseau que l'API importée pourra utiliser (politique du fichier, contrôlée ; un proxy résidentiel se voit avant la confirmation). */
+            network_allow: components["schemas"]["Network"][];
             strategy: {
                 execution: components["schemas"]["Execution"];
                 network: components["schemas"]["Network"];

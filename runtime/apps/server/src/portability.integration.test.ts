@@ -246,6 +246,7 @@ describe('import : repasse par l’enquête (16 § 6)', () => {
       description: 'Les livres zz test importés',
       source_url: 'https://shop.zz-test.example/books',
       output_fields: ['title', 'price', 'note'],
+      network_allow: ['direct'],
       strategy: { execution: 'fetch', network: 'direct' },
       schedules: 1,
       alert_targets: [],

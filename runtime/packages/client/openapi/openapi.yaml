@@ -4084,7 +4084,7 @@ components:
       description: Aperçu d'un import (aucune écriture) ; confirmer par `POST /api/apis/import?confirm=true`.
       type: object
       additionalProperties: false
-      required: [preview, description, source_url, output_fields, personal_fields, strategy, schedules, alert_targets, ignored_fields, requires_ack]
+      required: [preview, description, source_url, output_fields, personal_fields, network_allow, strategy, schedules, alert_targets, ignored_fields, requires_ack]
       properties:
         preview:
           const: true
@@ -4099,6 +4099,11 @@ components:
         personal_fields:
           description: Le schéma de sortie porte un champ `x-personal` (ou l'API se déclare à données personnelles).
           type: boolean
+        network_allow:
+          description: Niveaux réseau que l'API importée pourra utiliser (politique du fichier, contrôlée ; un proxy résidentiel se voit avant la confirmation).
+          type: array
+          items:
+            $ref: '#/components/schemas/Network'
         strategy:
           oneOf:
             - type: object
