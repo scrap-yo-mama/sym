@@ -9,6 +9,7 @@
     "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
+    "@fastify/static": "catalog:",
     "@fastify/websocket": "catalog:",
     "@runtime/core": "workspace:*",
     "@runtime/db": "workspace:*",

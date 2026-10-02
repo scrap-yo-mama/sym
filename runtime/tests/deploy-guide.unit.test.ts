@@ -22,11 +22,13 @@ describe('assert_deploy_guide_reserves : statut de vérification honnête (4.1)'
     expect(status).toMatch(/verify\.sh/);
   });
 
-  test('réserve console : « l’assistant s’affiche » non atteint ; vue /setup (3.8) et service de la console par le server nommés', () => {
+  test('réserve console : console servie par le server dans l’image (fix-console-served) ; « l’assistant s’affiche » en navigateur reste à relever', () => {
     expect(status).toMatch(/Réserve console/);
-    expect(status).toMatch(/l'assistant s'affiche/);
-    expect(status).toMatch(/3\.8/);
+    expect(status).toMatch(/fix-console-served/);
+    expect(status).toMatch(/F-20261002-09/);
     expect(status).toMatch(/@fastify\/static/);
+    expect(status).toMatch(/assert_console_served/);
+    expect(status).toMatch(/l'assistant s'affiche/);
   });
 
   test('constat de conformité au schéma Render daté, avec l’empreinte du schéma et la commande de rejeu', () => {

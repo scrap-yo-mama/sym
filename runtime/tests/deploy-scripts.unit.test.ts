@@ -134,7 +134,7 @@ describe('install.sh : génère le .env de docker-compose.prod.yml', () => {
 describe('verify.sh : sondes d’une instance déployée', () => {
   let server: Server;
   let base = '';
-  const behaviour = { readyFailures: 0, ready: 200, mcp: 401, mcpBody: '{}', version: '{"server":"0.0.0","schema":11,"min_extension":"0.1.0","mcp_spec":"2025-11-25"}' };
+  const behaviour = { readyFailures: 0, ready: 200, mcp: 401, mcpBody: '{}', console: true, version: '{"server":"0.0.0","schema":11,"min_extension":"0.1.0","mcp_spec":"2025-11-25"}' };
   beforeAll(async () => {
     server = createServer((req, res) => {
       const reply = (code: number, body = '{}') => {
@@ -151,6 +151,10 @@ describe('verify.sh : sondes d’une instance déployée', () => {
       }
       if (req.url === '/api/version') return reply(200, behaviour.version);
       if (req.url === '/mcp') return reply(behaviour.mcp, behaviour.mcpBody);
+      if (req.url === '/' && behaviour.console) {
+        res.writeHead(200, { 'content-type': 'text/html; charset=UTF-8' });
+        return res.end('<!doctype html><div id="app"></div>');
+      }
       return reply(404);
     });
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -158,7 +162,7 @@ describe('verify.sh : sondes d’une instance déployée', () => {
   });
   afterAll(() => new Promise<void>((resolve) => server.close(() => resolve())));
   const verify = (args: string[] = [], env: Record<string, string> = {}) => sh(join(deployDir, 'verify.sh'), [base, ...args], { PATH: '/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin', ...env });
-  const reset = () => Object.assign(behaviour, { readyFailures: 0, ready: 200, mcp: 401, mcpBody: '{}' });
+  const reset = () => Object.assign(behaviour, { readyFailures: 0, ready: 200, mcp: 401, mcpBody: '{}', console: true });
 
   test('instance saine : health, ready, version et MCP joignable → code 0', async () => {
     reset();
@@ -166,7 +170,18 @@ describe('verify.sh : sondes d’une instance déployée', () => {
     expect(res.status, res.stdout).toBe(0);
     expect(res.stdout).toMatch(/\/api\/ready = 200/);
     expect(res.stdout).toMatch(/\/mcp joignable \(HTTP 401/);
+    expect(res.stdout).toMatch(/console servie \(GET \/ = 200, text\/html\)/);
     expect(res.stdout).toMatch(/Instance saine/);
+  });
+
+  test('assert_console_served : console absente (GET / = 404 JSON de l’API, constat F-20261002-09 sur Render) → échec, code 1', async () => {
+    reset();
+    behaviour.console = false;
+    const res = await verify();
+    expect(res.status, res.stdout).toBe(1);
+    expect(res.stdout).toMatch(/ECHEC console non servie : GET \/ = 404 application\/json/);
+    expect(res.stdout).not.toMatch(/Instance saine/);
+    reset();
   });
 
   test('/api/ready attend le démarrage : 503 puis 200 → code 0', async () => {

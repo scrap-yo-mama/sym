@@ -1,7 +1,8 @@
 #!/bin/sh
 # SPDX-License-Identifier: AGPL-3.0-only
 # Vérifie une instance déployée (tâche 4.1) : même contrôle sur Render, compose, Railway ou Heroku. Lecture seule, sans
-# identifiant : /api/health, /api/ready (attend jusqu'à WAIT secondes, 120 par défaut), /api/version, point d'entrée MCP.
+# identifiant : /api/health, /api/ready (attend jusqu'à WAIT secondes, 120 par défaut), /api/version, point d'entrée MCP,
+# console servie à la racine (GET / = 200 en text/html ; fix-console-served, F-20261002-09).
 #
 #   ./verify.sh https://runtime.example.org [--allow-missing-mcp]
 #
@@ -84,6 +85,13 @@ case "$code" in
       echo "  info  /mcp = 404 : cette version ne sert pas le MCP (toléré par --allow-missing-mcp)"
     fi ;;
   *) ko "/mcp = $code" ;;
+esac
+
+# Console (03 « Serveur HTTP » : servie par le server à la racine) : une page HTML, jamais le 404 JSON de l'API.
+console_type=$(curl -sS -o /dev/null -m 10 -w "%{http_code} %{content_type}" "$base/" 2>/dev/null || true)
+case "$console_type" in
+  "200 text/html"*) ok "console servie (GET / = 200, text/html)" ;;
+  *) ko "console non servie : GET / = ${console_type:-sans réponse} (attendu : 200 text/html ; image sans apps/web/dist ?)" ;;
 esac
 
 if [ "$fail" = 0 ]; then echo "Instance saine."; else echo "Instance NON saine : voir les échecs ci-dessus." >&2; fi
