@@ -166,7 +166,8 @@ describe('assert_openapi_served_valid : /api/openapi.json', () => {
     expect(doc.openapi).toBe('3.1.0');
     expect(res.raw.body).not.toContain('x-pending');
     const served = contract.operations();
-    const registered = ROUTES.map((r) => `${r.method} ${r.url.replace(/:(\w+)/g, '{$1}')}`).sort();
+    // Le protocole MCP (JSON-RPC, 3.2) n'est pas une route REST : hors de l'OpenAPI.
+    const registered = ROUTES.filter((r) => !r.mcp).map((r) => `${r.method} ${r.url.replace(/:(\w+)/g, '{$1}')}`).sort();
     expect(served).toEqual(registered);
     const ids = Object.values(doc.paths).flatMap((item) => Object.values(item).map((op) => op.operationId)).filter(Boolean);
     expect(new Set(ids).size).toBe(ids.length);
@@ -1645,7 +1646,7 @@ describe('assert_rest_endpoints_contract : chaque endpoint livré par 3.1 a des 
     // Routes livrées par 3.1 : le bloc du registre qui commence à GET /api/openapi.json (aucune liste à tenir à la main).
     const first = ROUTES.findIndex((r) => r.method === 'GET' && r.url === '/api/openapi.json');
     expect(first).toBeGreaterThan(0);
-    const delivered31 = ROUTES.slice(first).map((r) => `${r.method} ${r.url.replace(/:(\w+)/g, '{$1}')}`);
+    const delivered31 = ROUTES.slice(first).filter((r) => !r.mcp).map((r) => `${r.method} ${r.url.replace(/:(\w+)/g, '{$1}')}`);
     expect(delivered31).toEqual(expect.arrayContaining(['GET /api/events', 'GET /api/runs/{id}/events', 'POST /api/me/responsible-use']));
     const covered = [...contract.covered].map((c) => c.split(' ').slice(0, 2).join(' '));
     const successes = [...contract.covered].filter((c) => /\s2\d\d$/.test(c)).map((c) => c.split(' ').slice(0, 2).join(' '));
@@ -1654,7 +1655,7 @@ describe('assert_rest_endpoints_contract : chaque endpoint livré par 3.1 a des 
   });
 
   test('chaque route que la garde peut refuser (session seule, scope, permission) déclare 403 dans l’OpenAPI servie', () => {
-    const missing = ROUTES.filter((r) => r.auth !== 'public' && !r.library && (r.auth === 'session' || r.auth === 'extension' || r.scope !== undefined || r.permission !== undefined))
+    const missing = ROUTES.filter((r) => r.auth !== 'public' && !r.library && !r.mcp && (r.auth === 'session' || r.auth === 'extension' || r.scope !== undefined || r.permission !== undefined))
       .map((r) => `${r.method} ${r.url.replace(/:(\w+)/g, '{$1}')}`)
       .filter((op) => {
         const [method, path] = op.split(' ');

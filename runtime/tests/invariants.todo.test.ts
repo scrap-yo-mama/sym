@@ -66,8 +66,9 @@ describe("invariants (à implémenter)", () => {
   // remplace ce test.todo par le vrai test ; il ne se retire qu'avec lui.
   test.todo("assert_robots_respected — volet tunnel et extension : 0 requête sur un chemin interdit en mode tunnel, à chaque saut"); // INV11, tâche(s) 2.7b (D-33)
   // 4.8 livrée partiellement (16 § 8, 17 § 11) : la première API est rejouée par le quickstart depuis 3.1 (étape first-api) ; D0
-  // reste décrit (mode pending) et gardé par assert_quickstart_pending_steps_declared, qui échoue à la livraison de /mcp (3.2).
-  test.todo("assert_quickstart_d0_first_api"); // 16 § 8, reprise : 3.1 (première API sur fixture), 3.2 (D0 en MCP), vérifié en 4.4
+  // reste décrit (mode pending) et gardé par assert_quickstart_pending_steps_declared ; /mcp est livré (3.2), il échoue à la
+  // livraison des prompts MCP et du mode démo (3.10).
+  test.todo("assert_quickstart_d0_first_api"); // 16 § 8, reprise : 3.1 (première API sur fixture), 3.2 (serveur MCP), 3.10 (D0 en mode démo), vérifié en 4.4
   // Case « j'ai lu » (responsible_use_acks) et refus d'une API x-personal sans elle : livrés par 3.1 (assert_responsible_use_ack,
   // apps/server/src/rest.integration.test.ts). L'affichage de la page au premier lancement de la console reste à faire (console).
   // INV6 (revue de 1.7), câblage livré par 2.3 : le worker porte le run échoué au statut de l'API (10 puis 15 dans le même

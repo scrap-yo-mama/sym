@@ -328,15 +328,20 @@ export async function freeSlug(ctx: ServerContext, description: string, url: str
   throw new Error('aucun slug libre');
 }
 
-/** Insère l'API (sous l'acteur, propriétaire) ; l'enquête est lancée par l'appelant dans la même transaction. */
+/**
+ * Insère l'API (sous l'acteur, propriétaire) ; l'enquête est lancée par l'appelant dans la même transaction. Non épinglée
+ * pour le MCP (`mcp_exposed` faux, 05 § 1.1 « épinglées dans la console ») : en mode `pinned`, son outil `api_<slug>`
+ * n'apparaît qu'une fois épinglée par son propriétaire (console, ou PATCH /api/apis/{slug}) ; le défaut de colonne de 0001
+ * (vrai) ne vaut que pour les insertions hors de cette route.
+ */
 export async function insertApi(
   db: Queryable,
   actor: Actor,
   input: { slug: string; description: string; visibility: 'private' | 'instance'; networkPolicy: Record<string, unknown> | null },
 ): Promise<string> {
   const { rows } = await db.query<{ id: string }>(
-    `INSERT INTO apis (slug, owner_id, visibility, description, status, network_policy)
-     VALUES ($1, $2, $3, $4, 'enquete', coalesce($5::jsonb, '{"allow": ["direct"]}'::jsonb)) RETURNING id`,
+    `INSERT INTO apis (slug, owner_id, visibility, description, status, network_policy, mcp_exposed)
+     VALUES ($1, $2, $3, $4, 'enquete', coalesce($5::jsonb, '{"allow": ["direct"]}'::jsonb), false) RETURNING id`,
     [input.slug, actor.userId, input.visibility, input.description, input.networkPolicy === null ? null : JSON.stringify(input.networkPolicy)],
   );
   return rows[0]!.id;

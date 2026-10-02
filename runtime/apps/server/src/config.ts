@@ -14,6 +14,8 @@ import {
   type ObservabilityConfig,
 } from '@runtime/core';
 import { ssrfPolicyFromEnv, type SsrfPolicy } from '@runtime/core/net';
+import type { McpConfig } from './mcp/runtime.js';
+import { TOOL_EXPOSURES, type ToolExposure } from './mcp/tools.js';
 
 export class ConfigError extends Error {
   override name = 'ConfigError';
@@ -50,7 +52,68 @@ export type ServerConfig = {
   tunnel: TunnelConfig;
   /** API REST (tâche 3.1, 05 § 2) : attente synchrone et file. */
   rest: RestConfig;
+  /** Serveur MCP (tâche 3.2, 05 § 1 et § 3). */
+  mcp: McpConfig;
 };
+
+const HOSTNAME = /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*|\[[0-9a-f:.]+\])$/;
+
+/** Liste de noms d'hôte (sans schéma ni port), séparés par des virgules. */
+function hostnameList(env: NodeJS.ProcessEnv, name: string): string[] {
+  const values = (env[name] ?? '').split(',').map((v) => v.trim().toLowerCase()).filter((v) => v !== '');
+  for (const value of values) if (!HOSTNAME.test(value)) throw new ConfigError(`${name} : nom d'hôte invalide (${value}) ; attendu : noms d'hôte sans schéma ni port, séparés par des virgules.`);
+  return values;
+}
+
+/**
+ * `MCP_ALLOWED_ORIGINS` : origines complètes (`https://hote[:port]`, comparées en entier : schéma, hôte et port) et, plus
+ * lâches, noms d'hôte seuls (tout schéma, tout port de cet hôte). Ni chemin, ni identifiants, ni autre schéma que http(s).
+ */
+function originList(env: NodeJS.ProcessEnv): { origins: string[]; hosts: string[] } {
+  const origins: string[] = [];
+  const hosts: string[] = [];
+  const invalid = (value: string) =>
+    new ConfigError(`MCP_ALLOWED_ORIGINS : entrée invalide (${value}) ; attendu : origines complètes (https://hote:port) ou noms d'hôte, séparés par des virgules.`);
+  for (const raw of (env['MCP_ALLOWED_ORIGINS'] ?? '').split(',').map((v) => v.trim()).filter((v) => v !== '')) {
+    if (!raw.includes('://')) {
+      const host = raw.toLowerCase();
+      if (!HOSTNAME.test(host)) throw invalid(raw);
+      hosts.push(host);
+      continue;
+    }
+    let url: URL;
+    try {
+      url = new URL(raw);
+    } catch {
+      throw invalid(raw);
+    }
+    if (!['http:', 'https:'].includes(url.protocol) || url.username !== '' || url.password !== '' || url.search !== '' || url.hash !== '' || !/^[a-z]+:\/\/[^/]+\/?$/i.test(raw)) throw invalid(raw);
+    origins.push(url.origin);
+  }
+  return { origins, hosts };
+}
+
+/**
+ * Serveur MCP : `DISABLE_MCP`, `MCP_TOOL_EXPOSURE` (generic, pinned par défaut, all), hôtes (`Host`) et origines (`Origin`)
+ * admis (05 § 3 : Origin refusée si présente et non admise, Host contrôlé) : l'en-tête Host contre le nom d'hôte de
+ * PUBLIC_URL et `MCP_ALLOWED_HOSTS` ; l'en-tête Origin contre l'origine EXACTE de PUBLIC_URL (schéma, hôte, port) et les
+ * entrées de `MCP_ALLOWED_ORIGINS`.
+ */
+function loadMcpConfig(env: NodeJS.ProcessEnv, publicUrl: string): McpConfig {
+  const disabledRaw = (env['DISABLE_MCP'] ?? '').trim().toLowerCase();
+  if (!['', 'true', 'false'].includes(disabledRaw)) throw new ConfigError('DISABLE_MCP invalide : true ou false.');
+  const exposure = (env['MCP_TOOL_EXPOSURE'] ?? '').trim() || 'pinned';
+  if (!(TOOL_EXPOSURES as readonly string[]).includes(exposure)) throw new ConfigError(`MCP_TOOL_EXPOSURE invalide : ${TOOL_EXPOSURES.join(', ')}.`);
+  const own = new URL(publicUrl).hostname.toLowerCase();
+  const origins = originList(env);
+  return {
+    disabled: disabledRaw === 'true',
+    exposure: exposure as ToolExposure,
+    allowedHosts: [...new Set([own, ...hostnameList(env, 'MCP_ALLOWED_HOSTS')])],
+    allowedOrigins: [...new Set([new URL(publicUrl).origin, ...origins.origins])],
+    allowedOriginHosts: [...new Set(origins.hosts)],
+  };
+}
 
 /** Bornes de l'API REST (05 § 2, 14 § 2). */
 type RestConfig = {
@@ -215,5 +278,6 @@ export function loadServerConfig(env: NodeJS.ProcessEnv = process.env): ServerCo
       maxActiveRunsPerUser: positiveInteger(env, 'MAX_ACTIVE_RUNS_PER_USER', 20, 100_000),
       maxRunsPerKeyPerMinute: positiveInteger(env, 'MAX_RUNS_PER_KEY_PER_MINUTE', 60, 100_000),
     },
+    mcp: loadMcpConfig(env, publicUrl),
   };
 }

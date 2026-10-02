@@ -115,6 +115,16 @@ catalog:
   # Frontières entre modules (tâche 5.0, docs/modules.md) : rapport dependency-cruiser du nightly, NON bloquant ; MIT ;
   # 18.4.0 publiée le 2026-09-20 (plus de 7 jours au 2026-10-02, minimumReleaseAge ; 18.5.0 du 2026-09-30 < 7 jours).
   dependency-cruiser: 18.4.0
+  # Serveur MCP (tâche 3.2, 03 « MCP ») : SDK TypeScript v2 (MIT) et adaptateur Fastify ; @modelcontextprotocol/server 2.1.0 et
+  # @modelcontextprotocol/client 2.1.0 publiées le 2026-09-23 (2.2.0 du 2026-09-28 < 7 jours, minimumReleaseAge),
+  # @modelcontextprotocol/fastify 2.0.0 publiée le 2026-07-27 (dernière). Le client sert de client de test (devDependency).
+  "@modelcontextprotocol/server": 2.1.0
+  "@modelcontextprotocol/fastify": 2.0.0
+  "@modelcontextprotocol/client": 2.1.0
+  # Suite de conformité MCP officielle (15 § 6, tâche 3.2) : version épinglée, la seule à couvrir la révision 2026-07-28
+  # (0.1.16, dernière stable du 2026-03-30, s'arrête à 2025-11-25) ; 0.2.0-alpha.11 publiée le 2026-08-07 (alpha.12 du
+  # 2026-10-01 < 7 jours). Écarts attendus commentés : tests/mcp-conformance/expected-failures-<révision>.yaml.
+  "@modelcontextprotocol/conformance": 0.2.0-alpha.11
 
 # OTel coupé = aucun module de l'API ni du SDK résolu (14 § 10, assert_otel_off_by_default). Better Auth
 # (@better-auth/core) fait `import("@opentelemetry/api")` à chaque requête d'auth ; drizzle-orm et vitest déclarent le même

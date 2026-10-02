@@ -24,6 +24,7 @@ import { extensionRoutes } from './routes/extension.js';
 import { guard, notFound, sendError } from './routes/guard.js';
 import { identityRoutes } from './routes/identity.js';
 import { invitationRoutes } from './routes/invitations.js';
+import { mcpRoutes, mcpTransportGuard } from './routes/mcp.js';
 import { meRoutes } from './routes/me.js';
 import { findRoute } from './routes/registry.js';
 import { setupRoutes } from './routes/setup.js';
@@ -86,6 +87,8 @@ export function buildServer(
     reply.raw.once('close', () => span.end());
     span.run(done);
   });
+  // Serveur MCP (05 § 3) : Host et Origin contrôlés AVANT l'authentification (rebinding DNS, requêtes de navigateur).
+  app.addHook('onRequest', mcpTransportGuard(ctx));
   app.addHook('onRequest', guard(ctx));
   // En-têtes de 08b § 2 sur toute réponse du service (console, API, erreurs) ; un en-tête déjà posé par une route est gardé.
   const headers = Object.entries(securityHeaders(ctx.publicUrl));
@@ -133,6 +136,8 @@ export function buildServer(
   responsibleUseRoutes(app, ctx);
   openapiRoutes(app);
   identityRoutes(app, ctx);
+  // Serveur MCP (tâche 3.2, 05 § 1) : absent si DISABLE_MCP.
+  mcpRoutes(app, ctx);
   const gateway = ctx.tunnel;
   if (gateway !== null) {
     // WSS du tunnel (07 § 6) : maxPayload 1 Mio, compression désactivée (08b § 2), puis la route dans un contexte enfant

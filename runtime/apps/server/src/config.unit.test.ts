@@ -48,3 +48,15 @@ test('correctif 17 : origine du tunnel fermée par défaut (identifiants publié
   expect(loadServerConfig({ ...base(), TUNNEL_ALLOW_ANY_EXTENSION: 'true' }).tunnel.extensionOrigins).toEqual({ ids: [...PUBLISHED_EXTENSION_IDS], allowAny: true });
   expect(() => loadServerConfig({ ...base(), TUNNEL_ALLOW_ANY_EXTENSION: 'oui' })).toThrow(/TUNNEL_ALLOW_ANY_EXTENSION/);
 });
+
+test('MCP : origines admises comparées en entier (schéma, hôte, port) ; MCP_ALLOWED_ORIGINS mêle origines complètes et noms d’hôte', () => {
+  const own = loadServerConfig(base()).mcp;
+  expect(own.allowedOrigins).toEqual(['https://runtime.zz-test.example']);
+  expect(own.allowedOriginHosts).toEqual([]);
+  const mixed = loadServerConfig({ ...base(), MCP_ALLOWED_ORIGINS: 'https://claude.zz-test.example:8443, 127.0.0.1,HTTP://LOCALHOST:3100' }).mcp;
+  expect(mixed.allowedOrigins).toEqual(['https://runtime.zz-test.example', 'https://claude.zz-test.example:8443', 'http://localhost:3100']);
+  expect(mixed.allowedOriginHosts).toEqual(['127.0.0.1']);
+  for (const bad of ['https://claude.zz-test.example/path', 'ftp://claude.zz-test.example', 'claude.zz-test.example:8443', 'https://u:p@claude.zz-test.example']) {
+    expect(() => loadServerConfig({ ...base(), MCP_ALLOWED_ORIGINS: bad }), bad).toThrow(/MCP_ALLOWED_ORIGINS/);
+  }
+});
