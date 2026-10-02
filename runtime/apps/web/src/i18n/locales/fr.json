@@ -160,7 +160,8 @@
     "reset_link_invalid": "Ce lien de réinitialisation n'est pas valide ou a expiré.",
     "idp_unreachable": "Le fournisseur d'identité est injoignable. Réessaie plus tard.",
     "invalid_status": "Ce changement de statut n'est pas possible.",
-    "invalid_cursor": "La position dans la liste n'est plus valide. Recharge la liste."
+    "invalid_cursor": "La position dans la liste n'est plus valide. Recharge la liste.",
+    "invalid_instance_contact": "Ce contact n'est pas valide. Indique une adresse web (https://…), un lien mailto: ou une adresse e-mail, sans espace ni saut de ligne."
   },
   "common": {
     "loading": "Chargement…",
@@ -545,6 +546,7 @@
       "keys": "Clés d'API",
       "account": "Mon compte",
       "security": "Sécurité",
+      "robot": "Identité du robot",
       "sso": "SSO"
     },
     "adminOnly": "Seul un admin de ton instance peut lire ou modifier ces réglages.",
@@ -1265,7 +1267,8 @@
     "errors": {
       "forbidden": "Le jeton ou l'adresse n'est pas accepté.",
       "weak_password": "Ce mot de passe n'est pas accepté. Utilise au moins 12 caractères et évite les mots de passe courants.",
-      "too_many_attempts": "Trop de tentatives. Réessaie dans quelques minutes."
+      "too_many_attempts": "Trop de tentatives. Réessaie dans quelques minutes.",
+      "invalid_instance_contact": "Ce contact n'est pas valide. Indique une adresse web (https://…), un lien mailto: ou une adresse e-mail, sans espace ni saut de ligne."
     },
     "done": {
       "title": "Compte propriétaire créé",
@@ -1283,7 +1286,9 @@
       "alerts": "Alertes : e-mail (SMTP) et webhooks.",
       "open": "Ouvrir",
       "later": "Aller à la console"
-    }
+    },
+    "contact": "Contact de l'opérateur",
+    "contactHint": "Facultatif ici, mais requis avant la première enquête. Une adresse web (https://…) ou une adresse e-mail. Le robot ne l'annonce que si tu actives l'identification dans les réglages. Tu pourras le modifier là-bas."
   },
   "account": {
     "title": "Mon compte",
@@ -1673,6 +1678,25 @@
       "domainsHint": "Un par ligne. Vide : tous les domaines.",
       "keyMax": "Durée de vie maximale d'une clé d'API (jours)",
       "retention": "Conservation de l'audit (mois)",
+      "save": "Enregistrer"
+    },
+    "identity": {
+      "title": "Identité du robot",
+      "intro": "Comment le robot se présente aux sites qu'il lit. Par défaut, il envoie le vrai User-Agent de son navigateur embarqué, et rien de plus.",
+      "userAgent": "User-Agent du navigateur (lecture seule)",
+      "userAgentHint": "Le vrai User-Agent du Chromium embarqué, identique à chaque run de cette image. Il est affiché à titre d'information et ne se modifie pas ici.",
+      "userAgentUnknown": "Aucun worker n'a encore signalé son navigateur. Il apparaît dès qu'un worker a démarré.",
+      "identified": "User-Agent envoyé quand l'identification est active",
+      "identifiedHint": "La même chaîne suivie du jeton de l'instance et de ton contact. C'est ce que voient les sites une fois l'identification activée et enregistrée.",
+      "identify": "Identifier cette instance auprès des sites qu'elle lit",
+      "identifyHint": "Désactivé par défaut. Activé, le User-Agent se termine par le jeton de l'instance (« compatible; Scrapyomama », sa version et ton contact), et un contact e-mail part aussi dans l'en-tête From. Effet au prochain run.",
+      "identifyUnset": "Jamais défini ici : le worker lit sa variable IDENTIFY_INSTANCE, et l'identification reste désactivée si elle n'est pas posée non plus.",
+      "identifyFromEnvOn": "Non défini ici : la variable IDENTIFY_INSTANCE du worker active l'identification, d'où la case cochée. Décoche-la et enregistre pour la désactiver sur cette instance.",
+      "identifyFromEnvOff": "Non défini ici : la variable IDENTIFY_INSTANCE du worker désactive l'identification. Coche la case et enregistre pour l'activer sur cette instance.",
+      "contact": "Contact de l'instance",
+      "contactHint": "Qui exploite cette instance : une adresse web (https://…), un lien mailto: ou une adresse e-mail. Sans espace ni saut de ligne. Vide-le et enregistre pour le retirer.",
+      "contactUnset": "Non défini ici : le worker lit sa variable INSTANCE_CONTACT. Un contact est requis avant la première enquête.",
+      "contactFromEnv": "Non défini ici : le worker annonce sa variable INSTANCE_CONTACT, {contact}. Saisis un contact et enregistre pour la remplacer.",
       "save": "Enregistrer"
     },
     "sso": {
