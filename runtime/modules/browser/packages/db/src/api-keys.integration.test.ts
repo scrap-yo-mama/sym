@@ -34,11 +34,14 @@ async function createKey(tenantId: string, scopes: Array<'sessions:write' | 'ses
 describe('magasin des clés (PostgreSQL)', () => {
   test('seule l’empreinte est stockée : aucune colonne ne contient la clé ni son secret', async () => {
     const t = await tenant('stockage');
-    const { id, key } = await createKey(t, ['sessions:read']);
+    const { id, key, prefix } = await createKey(t, ['sessions:read']);
     const { rows } = await pool.query('SELECT to_jsonb(k)::text AS row FROM api_keys k WHERE id = $1', [id]);
     const row = rows[0].row as string;
     expect(row).not.toContain(key);
-    expect(row).not.toContain(key.split('_').at(-1)!.slice(0, 16));
+    // Secret = tout ce qui suit le préfixe affiché (le secret base64url peut lui-même contenir « _ »).
+    const secret = key.slice(prefix.length + 1);
+    expect(secret).toHaveLength(43);
+    expect(row).not.toContain(secret.slice(0, 16));
     expect(row).toMatch(/\$argon2id\$v=19\$/);
   });
 
