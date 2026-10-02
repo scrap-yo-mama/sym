@@ -226,13 +226,6 @@ jobs:
           # L'enfant lit son script et les paquets du moteur dans l'espace de travail : traversée des dossiers parents.
           d="$GITHUB_WORKSPACE"; while [ "$d" != / ]; do sudo chmod o+x "$d"; d="$(dirname "$d")"; done
           { echo SANDBOX_UID=1500; echo SANDBOX_GID=1500; echo SANDBOX_LAUNCHER=/usr/local/libexec/sandbox-launch; } >> "$GITHUB_ENV"
-      # L'enfant arrêté par RLIMIT_CPU reçoit SIGXCPU (action par défaut : vidage mémoire). Sur le runner, le vidage part au
-      # collecteur systemd-coredump par un tube (core_pattern « |… », RLIMIT_CORE ignorée) et retarde la fin de l'enfant
-      # de plusieurs secondes (isolat compris) : vidage vers un fichier, refusé par RLIMIT_CORE à 0 (étapes de test).
-      - name: Pas de collecteur de vidages mémoire sur le runner de test
-        run: |
-          echo "core_pattern d'origine : $(cat /proc/sys/kernel/core_pattern)"
-          sudo sysctl -w kernel.core_pattern=core
       - name: Chromium de Playwright (garde SSRF via le proxy d'egress, INV10)
         if: matrix.node == ''
         run: pnpm exec playwright install --with-deps chromium
@@ -243,10 +236,10 @@ jobs:
         run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       # Aucune relance : un échec instable doit rester visible (rapport junit archivé).
       - if: matrix.node == ''
-        run: ulimit -c 0 && pnpm test:security --retry=0 --reporter=default --reporter=junit --outputFile.junit=reports/security-junit.xml
+        run: pnpm test:security --retry=0 --reporter=default --reporter=junit --outputFile.junit=reports/security-junit.xml
       - name: assert_sandbox et borne isolated-vm sur Node 26
         if: matrix.node == '26'
-        run: ulimit -c 0 && pnpm vitest run --project unit --project security --retry=0 --reporter=default --reporter=junit --outputFile.junit=reports/security-junit.xml apps/worker/src/sandbox
+        run: pnpm vitest run --project unit --project security --retry=0 --reporter=default --reporter=junit --outputFile.junit=reports/security-junit.xml apps/worker/src/sandbox
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: failure()
         with:
