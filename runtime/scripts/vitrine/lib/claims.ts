@@ -86,7 +86,8 @@ export function claimProblems(file: ClaimsFile, context: ProofContext): string[]
           // Un test nommé de la landing peut être encore en test.todo avant le GO : la porte `check:landing-go` (tâche 4.11) l'exige alors vrai ; ici seul le nom est contrôlé.
           if (!/^assert_[a-z0-9_]+$/.test(value)) problems.push(`${at} : nom de test ${value} invalide`);
         } else if (kind === 'page') {
-          if (!context.exists(`apps/docs/content/${value}.md`)) problems.push(`${at} : page ${value} introuvable`);
+          // reference/rest.md est généré à la construction du site de doc (ignoré par git) : sa source est la spécification OpenAPI.
+          if (value !== 'reference/rest' && !context.exists(`apps/docs/content/${value}.md`)) problems.push(`${at} : page ${value} introuvable`);
         } else if (kind === 'decision') {
           if (!/^D-\d+$/.test(value)) problems.push(`${at} : décision ${value} invalide`);
         } else if (!context.exists(value)) problems.push(`${at} : preuve ${proof} introuvable`);
