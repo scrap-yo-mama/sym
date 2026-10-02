@@ -25,6 +25,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import { parse } from 'yaml';
+import { imageDescription, loadClaims } from '../../scripts/vitrine/lib/claims.ts';
 import { identityOf, publicRepository } from '../../scripts/vitrine/lib/identity.ts';
 import { readRepoMetadata } from '../../scripts/vitrine/lib/surface.ts';
 import { imageLabelProblems } from '../../scripts/vitrine/lib/verify.ts';
@@ -248,7 +249,7 @@ afterAll(() => {
 describe('assert_image_labels — étiquettes OCI de l\'image construite', () => {
   test('source, description (≤ 512), licenses et io.modelcontextprotocol.server.name = identité publique', () => {
     const labels = JSON.parse(dockerOk(['image', 'inspect', '--format', '{{json .Config.Labels}}', image])) as Record<string, string>;
-    expect(imageLabelProblems(labels, identityOf(publicRepository()), readRepoMetadata().description)).toEqual([]);
+    expect(imageLabelProblems(labels, identityOf(publicRepository()), imageDescription(readRepoMetadata(), loadClaims()))).toEqual([]);
   });
 });
 

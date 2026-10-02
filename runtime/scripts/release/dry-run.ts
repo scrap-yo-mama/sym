@@ -16,6 +16,7 @@ import { checkRepo as checkGates } from './gates.ts';
 import { planRelease, type ReleasePlan } from './plan.ts';
 import { catalogNames, checkSbomFile, generateLockfileSbom } from './sbom.ts';
 import { checkHistory as checkX6History } from '../check-x6.ts';
+import { imageDescription, loadClaims } from '../vitrine/lib/claims.ts';
 import { identityOf, publicRepository, verifyBlock } from '../vitrine/lib/identity.ts';
 import { checksumResult, imageLabelProblems, verifySnippetProblems } from '../vitrine/lib/verify.ts';
 import { readRepoMetadata } from '../vitrine/lib/surface.ts';
@@ -119,7 +120,7 @@ export function runDryRun(options: { runtimeDir: string; tag?: string; outDir?: 
     if (image && image.uid !== '1001') throw new Error(`l'image ne descend pas sur pwuser (uid ${image.uid}, USER ${image.user || 'vide'})`);
     // assert_image_labels (4.12) : étiquettes OCI de l'image construite = identité publique.
     if (image) {
-      const labelProblems = imageLabelProblems(image.labels, identityOf(REPOSITORY), readRepoMetadata().description);
+      const labelProblems = imageLabelProblems(image.labels, identityOf(REPOSITORY), imageDescription(readRepoMetadata(), loadClaims()));
       if (labelProblems.length > 0) throw new Error(`étiquettes de l'image : ${labelProblems.join(' ; ')}`);
     }
     if (image) writeFileSync(join(out, 'image.json'), `${JSON.stringify({ reference: image.reference, tags: plan.imageTags, digest: image.id }, null, 2)}\n`);
