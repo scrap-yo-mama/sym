@@ -45,6 +45,8 @@ export type BrowserRequestCheck = {
   readonly resourceType: string;
   /** Document du cadre principal de la page du run (navigation de la page, saut compris). */
   readonly mainFrame: boolean;
+  /** Méthode HTTP de la requête (`GET` pour la poignée de main d'un WebSocket). */
+  readonly method: string;
 };
 
 export type RequestCheck = (request: BrowserRequestCheck) => Promise<boolean>;
@@ -206,8 +208,9 @@ export async function installRequestGuard(context: BrowserContext, page: Page, i
       return;
     }
     const requestId = params['requestId'];
-    const request = params['request'] as { url?: unknown } | undefined;
+    const request = params['request'] as { url?: unknown; method?: unknown } | undefined;
     const url = typeof request?.url === 'string' ? request.url : '';
+    const method = typeof request?.method === 'string' ? request.method : 'GET';
     const networkId = typeof params['networkId'] === 'string' ? params['networkId'] : undefined;
     // Saut de redirection : `redirectedRequestId` (même origine), ou identifiant réseau déjà vu (redirection vers une
     // autre origine d'une requête CORS, que Chromium relance sans `redirectedRequestId`).
@@ -217,7 +220,7 @@ export async function installRequestGuard(context: BrowserContext, page: Page, i
     if (known === undefined && networkId !== undefined) remember(networkId, url);
     const resourceType = typeof params['resourceType'] === 'string' ? params['resourceType'] : 'Other';
     const mainFrame = mainFrameId !== undefined && params['frameId'] === mainFrameId && resourceType === 'Document';
-    const allowed = await requestVerdict(url, inScope, check, { redirect, rootUrl, resourceType, mainFrame });
+    const allowed = await requestVerdict(url, inScope, check, { redirect, rootUrl, resourceType, mainFrame, method });
     if (allowed) await channel.send('Fetch.continueRequest', { requestId }).catch(() => undefined);
     else await channel.send('Fetch.failRequest', { requestId, errorReason: 'BlockedByClient' }).catch(() => undefined);
   };

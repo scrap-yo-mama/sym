@@ -38,7 +38,7 @@ import { buildUserAgent } from '@runtime/core/access';
 import { chromiumEgressLaunchOptions } from '@runtime/core/net';
 import { chromium, type Browser, type BrowserContext, type Page } from 'playwright-core';
 import { installedEngineIdentity } from './engine-identity.js';
-import { assertNotRoot, chromiumEnv, CHROMIUM_SILENT_ARGS, INV11_DISABLED_FEATURES } from './launch.js';
+import { assertNotRoot, chromiumEnv, CHROMIUM_LAUNCH_TIMEOUT_MS, CHROMIUM_SILENT_ARGS, INV11_DISABLED_FEATURES } from './launch.js';
 import type { RequestCheck } from './request-guard.js';
 import { openRunContext, type RunContext } from './run-context.js';
 
@@ -77,8 +77,87 @@ export type AgentBrowser = {
   readonly refused: () => { pacing: number; maxRequests: number };
   /** Requêtes et WebSocket coupés par le verrou de domaines du contexte de run (hôtes seulement). */
   readonly violations: () => number;
+  /**
+   * Nombre d'écritures (méthode autre que GET, HEAD, OPTIONS) LANCÉES depuis le lancement, quel que soit leur verdict
+   * (coupée par la garde, par robots.txt, par la route des domaines, ou encore suspendue), toutes cibles de la page du
+   * run (cadres hors processus et workers dédiés compris), après une barrière sur la page : minorant du nombre réel, et
+   * au moins 1 si la barrière n'a pas répondu dans `timeoutMs` (échec fermé). Rend la main en `timeoutMs` au plus, même
+   * si le fil principal de la page boucle. À appeler à la fin de l'agent (08 §4 mesure 4) ; voir `trackPageWrites`.
+   */
+  readonly settleWrites: (timeoutMs: number) => Promise<number>;
   close(): Promise<void>;
 };
+
+/** Méthodes de lecture (même verdict que `installDomainGuard`, playwright-channel.ts). */
+const READ_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
+const isWrite = (method: string): boolean => !READ_METHODS.has(method.toUpperCase());
+
+/**
+ * Écritures (méthode autre que GET, HEAD, OPTIONS) LANCÉES pendant l'essai, quel que soit leur verdict : sans
+ * `allow_write_actions`, aucune n'est légitime, chacune est coupée par une couche ou une autre (verrou de l'agent,
+ * robots.txt, domaines). Compter le verdict de la garde ne suffit pas (revue de fix-flaky) : il arrive après la fin de
+ * l'agent quand une couche consultée avant elle tarde (robots.txt, cadence ; course constatée sous charge), et une
+ * écriture coupée par robots.txt ou par la route des domaines n'atteint jamais la garde d'écriture.
+ * Trois relevés, chacun un minorant du nombre d'écritures distinctes (une requête n'y est comptée qu'une fois) :
+ * - `page` : la session CDP `Network` de la page du run (page et cadres du même processus), ordonnée par la barrière ;
+ * - `route` : les routes Playwright du contexte (route des domaines du contexte de run, puis cadence), à l'entrée, avant
+ *   tout verdict : page, cadres hors processus, workers dédiés (requêtes initiales) ;
+ * - `check` : le contrôle CDP de chaque requête (robots.txt, request-guard.ts), à l'entrée, avant son verdict : page,
+ *   cadres hors processus et workers dédiés, requêtes d'un domaine de l'API.
+ */
+type WriteCounts = { readonly page: Set<string>; route: number; check: number };
+
+const newWriteCounts = (): WriteCounts => ({ page: new Set(), route: 0, check: 0 });
+
+/** Issue d'une étape bornée : réponse, rejet, ou échéance atteinte. */
+function within(step: Promise<unknown>, ms: number): Promise<'answered' | 'rejected' | 'timeout'> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve('timeout'), ms);
+    void step.then(
+      () => (clearTimeout(timer), resolve('answered')),
+      () => (clearTimeout(timer), resolve('rejected')),
+    );
+  });
+}
+
+/**
+ * Suivi `Network` de la page du run (sa propre session CDP, sans tampon de corps : `maxTotalBufferSize: 0`) et
+ * `settleWrites`. Blink émet `requestWillBeSent` au lancement d'une requête, sur le fil de la page ; une évaluation sur
+ * la même session sert de barrière : quand elle répond, le lancement de toute requête que ce moteur de rendu a émise
+ * avant est déjà connu. UNE échéance couvre toute l'attente : une page dont le fil principal boucle (l'évaluation ne
+ * répond jamais) ne tient ni l'essai ni le slot du pool ; la barrière sans réponse à l'échéance compte pour une écriture
+ * (non vérifiable : échec fermé). Une évaluation rejetée (contexte détruit par une navigation) est relancée.
+ * Limites (revue de fix-flaky), hors de portée de la barrière : une écriture d'un worker ou d'un cadre hors processus, et
+ * une navigation POST (envoi de formulaire, même dans la page : son `requestWillBeSent` vient du processus du navigateur,
+ * après l'IPC BeginNavigation, sur un autre canal que la réponse de l'évaluation). Elles ne sont connues qu'à leur arrivée
+ * à une couche de la garde (`route`, `check`), sans attendre aucun verdict : reste leur seul acheminement moteur de rendu
+ * → navigateur → Node, que Stagehand précède d'au moins 500 ms de calme réseau après chaque geste. Le rejeu E5 sur le pool
+ * refuse de toute façon toute écriture sans `allow_write_actions` (`navigationAdmission`, agent-executors.ts).
+ */
+async function trackPageWrites(context: BrowserContext, page: Page, counts: WriteCounts): Promise<(timeoutMs: number) => Promise<number>> {
+  const session = await context.newCDPSession(page);
+  session.on('Network.requestWillBeSent', (event) => {
+    if (isWrite(event.request.method) && /^https?:/i.test(event.request.url)) counts.page.add(event.requestId);
+  });
+  // Aucun tampon de corps de réponse ni de corps envoyé : seuls les identifiants des requêtes servent ici.
+  await session.send('Network.enable', { maxTotalBufferSize: 0, maxResourceBufferSize: 0, maxPostDataSize: 0 });
+  return async (timeoutMs) => {
+    const deadline = performance.now() + timeoutMs;
+    let verified = false;
+    for (;;) {
+      const left = deadline - performance.now();
+      if (left <= 0) break;
+      const outcome = await within(session.send('Runtime.evaluate', { expression: '0', silent: true }), left);
+      if (outcome === 'answered') {
+        verified = true;
+        break;
+      }
+      if (outcome === 'timeout') break;
+      await new Promise((resolve) => setTimeout(resolve, Math.min(50, Math.max(0, deadline - performance.now()))));
+    }
+    return Math.max(counts.page.size, counts.route, counts.check, verified ? 0 : 1);
+  };
+}
 
 /**
  * Étape de fermeture bornée (jamais rejetée) : une fois Chromium tué, un appel CDP parti avant que Playwright ne constate
@@ -176,6 +255,10 @@ export function agentChromiumArgs(egressServer: string, profileDir: string, user
 
 export async function launchAgentBrowser(options: AgentBrowserOptions): Promise<AgentBrowser> {
   assertNotRoot();
+  // Échec fermé (INV11), avant tout lancement : le contrôle est enveloppé plus bas (relevé des écritures), l'enveloppe ne doit
+  // jamais masquer son absence au refus de `openRunContext`.
+  const check = options.checkRequest;
+  if (typeof check !== 'function') throw new Error('Chromium agentique sans contrôle robots.txt (INV11) : refusé');
   const env = options.env ?? process.env;
   const profile = await mkdtemp(join(tmpdir(), 'zz_agent_chromium_'));
   const child = spawn(options.executablePath ?? chromium.executablePath(), agentChromiumArgs(options.egressServer, profile, options.userAgent ?? buildUserAgent({ engine: installedEngineIdentity() }), env), {
@@ -194,7 +277,7 @@ export async function launchAgentBrowser(options: AgentBrowserOptions): Promise<
     await rm(profile, { recursive: true, force: true }).catch(() => undefined);
   };
   try {
-    const [port, path] = (await waitForFile(join(profile, 'DevToolsActivePort'), options.launchTimeoutMs ?? 20_000, child)).trim().split('\n');
+    const [port, path] = (await waitForFile(join(profile, 'DevToolsActivePort'), options.launchTimeoutMs ?? CHROMIUM_LAUNCH_TIMEOUT_MS, child)).trim().split('\n');
     const cdpUrl = `ws://127.0.0.1:${Number(port)}${path ?? ''}`;
     browser = await chromium.connectOverCDP(cdpUrl);
     const context = browser.contexts()[0];
@@ -207,8 +290,11 @@ export async function launchAgentBrowser(options: AgentBrowserOptions): Promise<
     // elle, donc consultée d'abord) ; une requête admise retombe sur la garde (`fallback`).
     let documents = 0;
     const refused = { pacing: 0, maxRequests: 0 };
+    // Écritures lancées, relevées à l'entrée de chaque couche, avant tout verdict (voir `WriteCounts`).
+    const writes = newWriteCounts();
     await context.route('**/*', async (route) => {
       const request = route.request();
+      if (isWrite(request.method())) writes.route += 1;
       if (request.isNavigationRequest() && request.resourceType() === 'document' && request.redirectedFrom() === null) {
         if (options.maxRequests !== undefined && documents >= options.maxRequests) {
           refused.maxRequests += 1;
@@ -227,10 +313,24 @@ export async function launchAgentBrowser(options: AgentBrowserOptions): Promise<
     });
     // Garde robots.txt des contextes de run (posée en dernier : sa route est consultée avant les autres, une requête
     // admise retombe sur la cadence puis sur le verrou de domaines). Elle désigne la page du run.
-    rc = await openRunContext(browser, { dedicated: true, egressServer: options.egressServer, allowedHosts: options.allowedHosts, checkRequest: options.checkRequest });
+    // Écriture hors domaines : coupée par cette route, elle n'atteint ni la cadence ni la garde ; écriture d'un domaine de
+    // l'API : relevée par le contrôle CDP avant le verdict robots.txt (requête initiale, saut de redirection exclu).
+    rc = await openRunContext(browser, {
+      dedicated: true,
+      egressServer: options.egressServer,
+      allowedHosts: options.allowedHosts,
+      onViolation: (_host, request) => {
+        if (request !== undefined && isWrite(request.method())) writes.route += 1;
+      },
+      checkRequest: async (hop) => {
+        if (!hop.redirect && isWrite(hop.method)) writes.check += 1;
+        return check(hop);
+      },
+    });
     const run = rc;
     const page = run.page;
     const opened = browser;
+    const settleWrites = await trackPageWrites(context, page, writes);
     return {
       cdpUrl,
       browser: opened,
@@ -240,6 +340,7 @@ export async function launchAgentBrowser(options: AgentBrowserOptions): Promise<
       recorder,
       refused: () => ({ ...refused }),
       violations: () => run.violations.length,
+      settleWrites,
       close: async () => {
         recorder.dispose();
         // Processus tué AVANT tout détachement CDP : une requête encore suspendue par une interception (contrôle robots de
