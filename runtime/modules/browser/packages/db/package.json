@@ -24,6 +24,8 @@
     "test:matrix": "node scripts/test-matrix.ts"
   },
   "dependencies": {
+    "@sym-browser/core": "workspace:*",
+    "@sym/contracts": "workspace:*",
     "drizzle-orm": "catalog:",
     "pg": "catalog:"
   },
@@ -31,6 +33,7 @@
     "@testcontainers/postgresql": "catalog:",
     "@types/node": "catalog:",
     "@types/pg": "catalog:",
+    "fast-check": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:"
   }

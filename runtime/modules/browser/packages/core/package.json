@@ -21,9 +21,12 @@
     "typecheck": "tsc -p tsconfig.check.json",
     "test": "vitest run"
   },
-  "dependencies": {},
+  "dependencies": {
+    "@sym/contracts": "workspace:*"
+  },
   "devDependencies": {
     "@types/node": "catalog:",
+    "fast-check": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:"
   }
