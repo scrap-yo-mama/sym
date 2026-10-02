@@ -10,7 +10,7 @@
 // Événements et webhooks (tâche 2.5) : clés `admin` par client, révocation, écoute réelle pour le SSE.
 // Chaque réponse est validée contre l'OpenAPI publiée (statut déclaré, corps conforme au schéma) : « 0 écart schéma/réponse ».
 import { randomBytes } from 'node:crypto';
-import { ApiKeyAuthenticator, ConnectTokens, MasterKey, newApiKey } from '@sym-browser/core';
+import { ApiKeyAuthenticator, ConnectTokens, createBrowserMetrics, MasterKey, MetricsRegistry, newApiKey, Secret } from '@sym-browser/core';
 import { insertApiKey, migrateUp, pgApiKeyStore, recordHeartbeat, revokeApiKey, transitionSession } from '@sym-browser/db';
 import { browserOpenApi } from '@sym/contracts/browser';
 import { Ajv2020, type ValidateFunction } from 'ajv/dist/2020.js';
@@ -35,6 +35,8 @@ export type Harness = {
   tokens: GatewayDeps['tokens'];
   /** Révoque une clé du banc (tâche 2.1) : refusée dès la requête suivante. */
   revoke: (key: keyof Harness['keys']) => Promise<void>;
+  /** Jeton de lecture de `/metrics` (tâche 3.7). */
+  metricsToken: string;
   launcher: { mode: LauncherMode; launched: string[]; released: string[]; nodes: Map<string, string>; requests: Map<string, LaunchRequest> };
   call: (options: { method: InjectOptions['method']; url: string; key?: keyof Harness['keys'] | null; body?: unknown; headers?: Record<string, string> }) => Promise<Reply>;
   close: () => Promise<void>;
@@ -174,6 +176,8 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
   };
 
   const tokens = options.tokens ?? new ConnectTokens({ current: MasterKey.generate() });
+  const metricsToken = `zz_test_metrics_${randomBytes(12).toString('hex')}`;
+  const registry = new MetricsRegistry();
   const deps: GatewayDeps = {
     db: pool,
     auth: new ApiKeyAuthenticator(pgApiKeyStore(pool)),
@@ -186,6 +190,7 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
     queuePollMs: 25,
     ...(options.events === undefined ? {} : { events: options.events }),
     ...(options.webhooks === undefined ? {} : { webhooks: options.webhooks }),
+    observability: { registry, metrics: createBrowserMetrics(registry, 'gateway'), token: new Secret(metricsToken) },
   };
   const app = await createGatewayApi(deps);
   await app.ready();
@@ -210,6 +215,7 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
     tenantA,
     tenantB,
     keys,
+    metricsToken,
     launcher: state,
     tokens,
     revoke: async (key) => {

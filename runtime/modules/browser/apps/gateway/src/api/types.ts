@@ -6,7 +6,7 @@
 //   - SessionLauncher : démarrage, libération et prolongation sur le nœud propriétaire. Mode `all` : le superviseur de
 //     sessions du nœud dans le même processus (tâche 1.2) ; modes séparés : `POST /internal/sessions` du nœud (04b § 8),
 //     choix du nœud et file (tâche 2.4 : la passerelle place la session sur un nœud avant de la lancer).
-import type { ApiKeyAuthenticator, ApiScope, ConnectTokens, EgressGuard, Keys, Principal } from '@sym-browser/core';
+import type { ApiKeyAuthenticator, ApiScope, BrowserMetrics, ConnectTokens, EgressGuard, Keys, MetricsRegistry, Principal, Secret } from '@sym-browser/core';
 import type pg from 'pg';
 import type { LiveTokens } from '@sym-browser/core';
 import type { CreateSessionRequest, SessionType } from '@sym/contracts/browser';
@@ -61,6 +61,11 @@ export type GatewayDeps = {
    * `liveViewUrl` dans les réponses et relais `/live/stream` ; absent : ni l'un ni l'autre.
    */
   relay?: { nodeToken: string; pingIntervalMs?: number; cdpMaxMessageBytes?: number; liveTokens?: Pick<LiveTokens, 'issue' | 'verify'> };
+  /**
+   * Métriques de la passerelle (04d § 3.1, tâche 3.7) : registre servi par `GET /metrics` sous
+   * `Authorization: Bearer <SYMB_METRICS_TOKEN>` (`token` nul : route fermée). Absent : pas de route `/metrics`.
+   */
+  observability?: { registry: MetricsRegistry; metrics: BrowserMetrics; token: Secret | null };
   /** Erreur interne (500) : journal masqué de la passerelle. */
   onError?: (error: unknown) => void;
   /** Flux SSE (tâche 2.5) : période du battement `: ping` (15 s par défaut). */

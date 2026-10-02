@@ -55,6 +55,7 @@ Contrat : `runtime/packages/contracts` (`@sym/contracts`, MIT, sous-chemin `brow
 - Admin d'instance : `resolveBootstrapToken`, `setupFirstAdmin(store, token, form)` ; la table de l'admin et `/setup` arrivent avec la console (3.5).
 - Quotas et file (tâche 2.4) : admission en base `packages/db/src/admission.ts` (file = sessions `pending` sans nœud, verrou consultatif, nœud au plus faible taux d'occupation, poids en unités de `capacity.ts`), côté passerelle `apps/gateway/src/admission/` (`Retry-After`) ; tests `apps/gateway/src/api/quotas.integration.test.ts`.
 - Profils persistants (tâche 3.1) : `packages/core/src/profiles` (archive tar+gzip des seules bases d'état, `ProfileStore`, verrou 409 `profile_locked`), registre PostgreSQL `packages/db/src/profiles.ts`, cycle de vie côté nœud `apps/node/src/profiles` ; recette sur Chromium réel : `profile.chromium.test.ts` (dans `test:chromium`).
+- Observabilité (tâche 3.7) : `packages/core/src/observability/` (registre Prometheus écrit à la main comme SYM, catalogue des 16 métriques de 04d § 3.1, `/metrics` sous `Authorization: Bearer <SYMB_METRICS_TOKEN>`, fermé sans jeton ; journal pino masqué) ; passerelle : `GET /metrics` de l'API ; nœud : `apps/node/src/metrics/` (pont pool, superviseur, egress).
 
 ## Versions et dépendances
 

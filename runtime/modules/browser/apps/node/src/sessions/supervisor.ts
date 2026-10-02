@@ -48,7 +48,7 @@ export type EndOutcome = TransitionOutcome | { ok: false; code: 'isolated' };
 type ClientEndReason = Extract<EndReason, 'released' | 'budget_exceeded' | 'quota' | 'node_shutdown' | 'timeout' | 'idle' | 'crash'>;
 
 type Lease = Pick<PoolLease, 'signal' | 'release'>;
-type Active = { lease: Lease; timers: SessionTimers; ending: Promise<EndOutcome> | undefined };
+type Active = { lease: Lease; timers: SessionTimers; ending: Promise<EndOutcome> | undefined; type: SessionType; runningAt: number };
 
 export type SessionSupervisorOptions = {
   nodeId: string;
@@ -58,7 +58,13 @@ export type SessionSupervisorOptions = {
   watchdogGraceMs?: number;
   /** Erreur hors du chemin de l'appelant (destruction incomplète, écriture refusée) : journal du nœud. */
   onError?: (error: unknown) => void;
+  /** Démarrage (demande → `running`) et fin (`running` → état final) : métriques du nœud (tâche 3.7). */
+  onLifecycle?: (event: SessionLifecycleEvent) => void;
 };
+
+export type SessionLifecycleEvent =
+  | { kind: 'started'; type: SessionType; startMs: number }
+  | { kind: 'ended'; type: SessionType; reason: ClientEndReason; durationMs: number };
 
 export class SessionSupervisor {
   readonly #nodeId: string;
@@ -67,6 +73,7 @@ export class SessionSupervisor {
   readonly #clock: Clock;
   readonly #watchdogGraceMs: number;
   readonly #onError: (error: unknown) => void;
+  readonly #onLifecycle: (event: SessionLifecycleEvent) => void;
   readonly #sessions = new Map<string, Active>();
   readonly #starting = new Set<string>();
   readonly #inFlight = new Set<Promise<unknown>>();
@@ -81,6 +88,15 @@ export class SessionSupervisor {
     this.#clock = options.clock ?? systemClock;
     this.#watchdogGraceMs = options.watchdogGraceMs ?? WATCHDOG_GRACE_MS;
     this.#onError = options.onError ?? (() => undefined);
+    this.#onLifecycle = options.onLifecycle ?? (() => undefined);
+  }
+
+  #lifecycle(event: SessionLifecycleEvent): void {
+    try {
+      this.#onLifecycle(event);
+    } catch (error) {
+      this.#onError(error);
+    }
   }
 
   /** Sessions tenues par ce nœud (y compris celles dont la fin est en cours). */
@@ -122,6 +138,7 @@ export class SessionSupervisor {
     if (this.#draining) return { ok: false, code: 'draining' };
     if (this.#sessions.has(sessionId) || this.#starting.has(sessionId)) return { ok: false, code: 'already_started' };
     this.#starting.add(sessionId);
+    const requestedAt = this.#clock.now();
     try {
       let lease: Lease;
       try {
@@ -153,8 +170,11 @@ export class SessionSupervisor {
           onExpire: (reason) => this.#track(this.end(sessionId, reason)),
         }),
         ending: undefined,
+        type: request.type,
+        runningAt: this.#clock.now(),
       };
       this.#sessions.set(sessionId, active);
+      this.#lifecycle({ kind: 'started', type: request.type, startMs: active.runningAt - requestedAt });
       const onAbort = (): void => {
         const reason = lease.signal.reason as LeaseEndReason;
         this.#track(this.end(sessionId, POOL_END_REASONS[reason] ?? 'crash'));
@@ -193,6 +213,7 @@ export class SessionSupervisor {
       const to = endStateFor('running', reason);
       const outcome = to === undefined ? undefined : await this.#write({ sessionId, to, reason });
       this.#sessions.delete(sessionId);
+      this.#lifecycle({ kind: 'ended', type: active.type, reason, durationMs: this.#clock.now() - active.runningAt });
       this.#notifyEmpty();
       return outcome ?? { ok: false, code: 'not_found' };
     })();

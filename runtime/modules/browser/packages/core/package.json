@@ -24,7 +24,8 @@
     "apikey": "node dist/bin.js apikey"
   },
   "dependencies": {
-    "@sym/contracts": "workspace:*"
+    "@sym/contracts": "workspace:*",
+    "pino": "catalog:"
   },
   "devDependencies": {
     "@types/node": "catalog:",

@@ -14,3 +14,4 @@ export * from './sessions.js';
 export * from './admission.js';
 export * from './api.js';
 export * from './events.js';
+export * from './observability.js';
