@@ -229,6 +229,9 @@ export async function runDeclarative(options: DeclarativeRunOptions): Promise<De
         records.length = limits.maxItems;
         return { ok: true, records, pages, requests, escalated, stop: 'max_items', truncated: true };
       }
+      // Défilement expiré sans rien apporter, réseau encore occupé : ce n'est pas la fin du flux (site lent), la sortie est
+      // tronquée et le signal `pagination_short` levé ; `scroll_timeout` ne compte pas parmi les fins naturelles (enquête).
+      if (scrolling && exchange.scrollTimedOut === true && got.length === 0) return { ok: true, records, pages, requests, escalated, stop: 'scroll_timeout', truncated: true };
       const document = tryParseJson(exchange.body, limits);
       const linkHeader = exchange.headers['link'] ?? (pagination?.type === 'next_link' && document === undefined ? htmlNextLink(exchange.body, limits) : undefined);
       const decision = advancePagination(
