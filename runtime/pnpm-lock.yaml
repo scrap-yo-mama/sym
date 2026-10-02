@@ -753,6 +753,9 @@ importers:
         specifier: 'catalog:'
         version: 8.23.0
     devDependencies:
+      '@sym-browser/core':
+        specifier: workspace:*
+        version: link:../core
       '@testcontainers/postgresql':
         specifier: 'catalog:'
         version: 12.1.0(supports-color@10.2.2)

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Noyau de SYM Browser (cdc/sym-browser 03 § 9) : chiffrement (tâche 0.3), configuration et modes (0.4), journaux masqués,
-// stockage des objets (3.0).
+// stockage des objets (3.0), authentification : clés d'API, scopes, jetons de connexion, premier démarrage (2.1).
+export * from './auth/index.js';
 export * from './crypto/index.js';
 export * from './storage/index.js';
 // Tâche 0.4 : catalogue d'environnement, chargement validé, hôte de service (`/healthz`, `/readyz`, drainage).

@@ -4,6 +4,7 @@
 import { hostname } from 'node:os';
 import { isAbsolute } from 'node:path';
 import { isIP } from 'node:net';
+import { apiKeyPrefixOf } from '../auth/api-key.js';
 import { isServiceMode, SERVICE_MODES, unknownReservedVariablesWarning, type ServiceMode } from './env-catalog.js';
 import { ConfigError, Reader, type Env } from './reader.js';
 import type { Secret } from './secret.js';
@@ -63,6 +64,9 @@ export type BrowserConfig = {
 
 const TOKEN_MIN_LENGTH = 32;
 const tokenCheck = (value: string): string | undefined => (value.length < TOKEN_MIN_LENGTH ? `${TOKEN_MIN_LENGTH} caractères au moins` : undefined);
+/** Clé d'API de l'instance (tâche 2.1) : format `symb_…` exigé, la ligne se retrouve par son préfixe affiché. */
+const apiKeyCheck = (value: string): string | undefined =>
+  apiKeyPrefixOf(value) === null ? 'clé symb_<12 caractères>_<43 caractères> attendue ; générez-en une avec `pnpm --filter @sym-browser/core apikey`' : undefined;
 
 /** Base64 standard canonique de 32 octets : 43 caractères + un `=`. */
 const BASE64_32 = /^[A-Za-z0-9+/]{42}[AEIMQUYcgkosw048]=$/;
@@ -204,7 +208,7 @@ export function loadConfig(env: Env = process.env, options: LoadOptions = {}): B
   const logLevel = reader.oneOf('SYMB_LOG_LEVEL', LOG_LEVELS) ?? 'info';
   const metricsToken = reader.secret('SYMB_METRICS_TOKEN', tokenCheck);
   const bootstrapToken = reader.secret('SYMB_BOOTSTRAP_TOKEN', tokenCheck);
-  const bootstrapApiKey = reader.secret('SYMB_BOOTSTRAP_API_KEY', tokenCheck);
+  const bootstrapApiKey = reader.secret('SYMB_BOOTSTRAP_API_KEY', apiKeyCheck);
 
   // Drapeaux de test : leur présence hors NODE_ENV=test arrête le démarrage (04b § 11, 04c § 1.2).
   const flag = (name: 'SYMB_TEST_MODE' | 'SYMB_TEST_ALLOW_PRIVATE'): boolean => {

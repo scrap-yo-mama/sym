@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, expect, test } from 'vitest';
 import { runCli } from './cli.js';
+import { apiKeyPrefixOf } from './auth/index.js';
 import { MasterKey } from './crypto/master-key.js';
 
 describe('CLI du noyau : keygen', () => {
@@ -10,6 +11,14 @@ describe('CLI du noyau : keygen', () => {
     expect(first.out).toMatch(/^[A-Za-z0-9+/]{43}=$/);
     expect(() => MasterKey.parse(first.out)).not.toThrow();
     expect(runCli(['keygen']).out).not.toBe(first.out);
+  });
+
+  test('apikey : une clé d’API neuve au format symb_ (pour SYMB_BOOTSTRAP_API_KEY), jamais deux fois la même', () => {
+    const first = runCli(['apikey']);
+    expect(first.code).toBe(0);
+    expect(apiKeyPrefixOf(first.out)).not.toBeNull();
+    expect(runCli(['apikey']).out).not.toBe(first.out);
+    expect(runCli(['--help']).out).toMatch(/apikey/);
   });
 
   test('commande inconnue ou absente : usage, code 1', () => {
