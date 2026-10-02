@@ -4,8 +4,10 @@ name: ci
 
 on:
   push:
-    branches: [main]
+    # ci/** : branches candidates de fusion poussées par l orchestrateur (D-55), testées ici plutôt que sur la machine locale.
+    branches: [main, "ci/**"]
   pull_request:
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -186,6 +188,10 @@ jobs:
     # pour Node 26 seulement.
     name: security (Node ${{ matrix.label }})
     runs-on: ubuntu-24.04
+    env:
+      # Node 26 : engines (>=24 <25) bloque aussi pnpm build et pnpm vitest, pas seulement l installation.
+      npm_config_engine_strict: ${{ matrix.node == '26' && 'false' || 'true' }}
+      pnpm_config_engine_strict: ${{ matrix.node == '26' && 'false' || 'true' }}
     strategy:
       fail-fast: false
       matrix:
@@ -265,6 +271,8 @@ jobs:
       - run: pnpm install --frozen-lockfile
       # La sonde lance Chromium AVEC son bac à sable (chromiumSandbox: true) dans le conteneur : espaces de noms
       # utilisateur non privilégiés, restreints par AppArmor sur Ubuntu 24.04 (levée sur le runner de test seulement).
+      # Conséquence : un hôte Ubuntu 23.10+ aux réglages par défaut n'est pas couvert par ce job ; condition d'hôte
+      # documentée comme non vérifiée (apps/docs/content/guides/docker-compose.md, docs/deploiement.md).
       - name: Bac à sable de Chromium (espaces de noms utilisateur)
         run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       # Aucune relance : un échec instable doit rester visible (rapport junit archivé).

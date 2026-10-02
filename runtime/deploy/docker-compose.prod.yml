@@ -11,6 +11,7 @@
 #   donc `ipc: host` n'est pas nécessaire et n'est pas utilisé (il partagerait l'espace IPC de la machine avec un conteneur
 #   qui ouvre des sites tiers) ; `shm_size` garde une marge. Écart assumé à 14 § 12 (qui demande `init` et `ipc: host`),
 #   consigné dans docs/deploiement.md (statut de vérification).
+# - Worker : `security_opt: seccomp=./seccomp-chromium.json` (profil de Docker + espaces de noms utilisateur, voir le service).
 # - `security_opt: no-new-privileges` est admis (régime de Render). Ne PAS poser `cap_drop: [SETUID, SETGID]` ni `user:` sur le
 #   worker : l'image démarre en root et descend aussitôt sur pwuser en gardant ces deux capacités pour le seul changement
 #   d'utilisateur du bac à sable (INV7) ; sans elles, le worker refuse de démarrer en production (docs/deploiement.md,
@@ -106,6 +107,10 @@ services:
         condition: service_completed_successfully
     mem_limit: ${WORKER_MEM_LIMIT:-4g}
     shm_size: 512m
+    # Profil seccomp de Docker plus les espaces de noms utilisateur du bac à sable de Chromium (seccomp-chromium.json, à côté
+    # de ce fichier) : sous le profil par défaut, Chromium refuse de démarrer. Jamais seccomp=unconfined ni SYS_ADMIN.
+    security_opt:
+      - seccomp=./seccomp-chromium.json
 
 volumes:
   pgdata:

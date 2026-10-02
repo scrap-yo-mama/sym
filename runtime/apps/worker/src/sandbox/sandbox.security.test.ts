@@ -3,6 +3,7 @@
 // enfant est tué en moins de 2 s, `sandbox_violation` est journalisé, l'enfant ne voit ni MASTER_KEY ni DATABASE_URL.
 // La même suite tourne sur le moteur isolated-vm et sur l'adaptateur QuickJS (spike) sans changer un pont.
 // Tout reste en boucle locale : « api.zz-test » et « evil.zz-test » résolvent vers 127.0.0.1 (résolveur injecté).
+import { execFileSync, spawnSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { createServer, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
@@ -72,15 +73,32 @@ afterAll(async () => {
   }
 });
 
-type Run = SandboxResult & { logs: Record<string, unknown>[]; items: unknown[]; pid?: number; envKeys?: readonly string[]; environ?: string };
+type Run = SandboxResult & { logs: Record<string, unknown>[]; items: unknown[]; pid?: number; envKeys?: readonly string[]; environ?: string; environError?: string; dump?: DumpState };
+/** Ce qui décide d'un vidage mémoire de l'enfant, lu dans /proc à `ready` (Linux). */
+type DumpState = { coreLimit?: string | undefined; coredumpFilter?: string | undefined; error?: string | undefined };
 
 function alive(pid: number): boolean {
   try {
     process.kill(pid, 0);
     return true;
-  } catch {
-    return false;
+  } catch (error) {
+    // EPERM : le processus existe, sous un autre uid (utilisateur dédié) ; seul ESRCH dit qu'il n'existe plus.
+    return (error as NodeJS.ErrnoException).code === 'EPERM';
   }
+}
+
+/**
+ * Fichier /proc de l'enfant (Linux). Sous l'utilisateur dédié, le parent n'a pas le droit de lire son environnement
+ * (/proc/<pid>/environ exige l'accès ptrace : EACCES, c'est la frontière voulue) : la lecture passe par le lanceur, sous
+ * l'uid de l'enfant, comme l'arrêt forcé (killPlan).
+ */
+function readProc(pid: number, file: string, o: Pick<ProcessSandboxOptions, 'launcher' | 'uid' | 'gid'>): string {
+  const path = `/proc/${pid}/${file}`;
+  if (o.launcher !== undefined && o.uid !== undefined && o.gid !== undefined && o.uid !== process.getuid?.()) {
+    const args = [`--reuid=${o.uid}`, `--regid=${o.gid}`, '--clear-groups', '--no-new-privs', '--', '/bin/cat', path];
+    return execFileSync(o.launcher, args, { env: {}, encoding: 'utf8', timeout: 5000 });
+  }
+  return readFileSync(path, 'utf8');
 }
 
 type RunExtra = { bridge?: Partial<SandboxBridgeOptions>; engine?: Partial<ProcessSandboxOptions> };
@@ -91,21 +109,41 @@ async function run(engineId: SandboxEngineId, code: string, limits: Partial<Sand
   let pid: number | undefined;
   let envKeys: readonly string[] | undefined;
   let environ: string | undefined;
+  let environError: string | undefined;
+  let dump: DumpState | undefined;
+  // Job CI Linux avec utilisateur dédié : SANDBOX_UID, SANDBOX_GID, SANDBOX_LAUNCHER (README § Utilisateur dédié).
+  const options: ProcessSandboxOptions = { ...sandboxOptionsFromEnv(process.env), ...extra.engine };
   const engine = new ProcessSandboxEngine({
-    // Job CI Linux avec utilisateur dédié : SANDBOX_UID, SANDBOX_GID, SANDBOX_LAUNCHER (README § Utilisateur dédié).
-    ...sandboxOptionsFromEnv(process.env),
-    ...extra.engine,
+    ...options,
     engine: engineId,
     onChildReady: (info) => {
       pid = info.pid;
       envKeys = info.envKeys;
-      // Linux : lecture directe de l'environnement du processus, indépendante de ce que l'enfant déclare.
-      if (existsSync(`/proc/${info.pid}/environ`)) environ = readFileSync(`/proc/${info.pid}/environ`, 'utf8');
+      // Linux : lecture directe de l'environnement du processus, indépendante de ce que l'enfant déclare. Une exception ici
+      // remonterait dans le gestionnaire IPC du moteur et le run ne partirait jamais : elle est rendue au test.
+      if (existsSync(`/proc/${info.pid}/environ`)) {
+        try {
+          environ = readProc(info.pid, 'environ', options);
+        } catch (error) {
+          environError = String(error).slice(0, 300);
+        }
+        try {
+          dump = {
+            coreLimit: /^Max core file size\s+(\S+)\s+(\S+)/m.exec(readProc(info.pid, 'limits', options))?.slice(1).join(' '),
+            coredumpFilter: readProc(info.pid, 'coredump_filter', options).trim(),
+          };
+        } catch (error) {
+          dump = { error: String(error).slice(0, 300) };
+        }
+      }
     },
   });
   const { bridges, items } = createSandboxBridges({ allowedDomains: ['api.zz-test'], guard, logger, ...extra.bridge });
   const result = await engine.run(code, bridges, { timeoutMs: 1000, memoryMb: 64, ...limits }, { input: { secret: 'zz_test_input' } });
-  return { ...result, logs, items, pid, envKeys, environ };
+  // Un moteur par run ici (le worker n'en a qu'un) : le balayage de fin de run (`kill -1` sous l'uid dédié) doit être fini
+  // avant que le moteur du run suivant lance son enfant, sinon il le tue. Le worker l'attend de lui-même (#track).
+  await engine.idle();
+  return { ...result, logs, items, pid, envKeys, environ, ...(environError !== undefined ? { environError } : {}), ...(dump !== undefined ? { dump } : {}) };
 }
 
 const violationLogged = (r: Run, reason?: string) =>
@@ -304,6 +342,8 @@ describe.each(ENGINES)('assert_sandbox — %s', (engineId) => {
     expect(r.envKeys).not.toContain('MASTER_KEY');
     expect(r.envKeys).not.toContain('DATABASE_URL');
     expect(unexpectedEnvKeys(r.envKeys ?? ['?'])).toEqual([]);
+    // Linux : l'environnement réel est toujours lu (sous l'uid de l'enfant s'il en a un dédié), jamais une vérification vide.
+    if (process.platform === 'linux') expect(r.environ, r.environError).toBeDefined();
     if (r.environ !== undefined) expect(r.environ).not.toContain(CANARY);
     expect(JSON.stringify(r)).not.toContain(CANARY);
   });
@@ -356,6 +396,34 @@ describe('assert_sandbox — démarrage et utilisateur de l’enfant', () => {
       expect(probe.noNewPrivs).toBe(true);
     },
   );
+});
+
+// INV7 : aucun vidage mémoire d'un enfant (son tas tient le script, les données extraites, les réponses des ponts), même vers
+// un collecteur en tube (systemd-coredump, apport), auquel le noyau n'applique pas RLIMIT_CORE.
+describe('assert_sandbox_no_core_dump', () => {
+  test.skipIf(process.platform !== 'linux')('assert_sandbox_no_core_dump : enfant tué par RLIMIT_CPU (SIGXCPU), aucun vidage mémoire, même vers un collecteur en tube', async () => {
+    const timeoutMs = 15_000;
+    const r = await run('isolated-vm', 'while (true) {}', { timeoutMs, cpuLimitSeconds: 1 });
+    expect(r.outcome).toBe('timeout');
+    expect(r.violations).toContainEqual({ reason: 'time_limit', detail: 'cpu' });
+    // Fin par le plafond CPU, avant l'échéance murale. Pas de borne murale plus serrée : la durée dépend de la charge de la
+    // machine (6,8 à 9,1 s mesurés sous charge) ; la preuve est /proc et le journal du noyau ci-dessous.
+    expect(r.durationMs).toBeLessThan(timeoutMs);
+    // Hérité par l'enfant, lu dans /proc : RLIMIT_CORE d'un octet, souple et dure (sous la taille minimale d'un vidage vers un
+    // fichier ; valeur que le noyau traite comme un refus pour un tube) ; coredump_filter nul (aucune page mémoire).
+    expect(r.dump, JSON.stringify(r.dump)).toEqual({ coreLimit: '1 1', coredumpFilter: '00000000' });
+    // Collecteur en tube sur cette machine : le noyau journalise l'abandon du vidage pour CE processus. En CI (runner GitHub :
+    // apport en tube, sudo sans mot de passe), cette preuve est exigée ; ailleurs, la branche prise est journalisée.
+    const pattern = readFileSync('/proc/sys/kernel/core_pattern', 'utf8');
+    const kernel = spawnSync('sudo', ['-n', 'dmesg'], { encoding: 'utf8' });
+    const checked = pattern.startsWith('|') && kernel.status === 0;
+    console.info(`assert_sandbox_no_core_dump : journal du noyau ${checked ? 'vérifié' : 'non vérifié'} (core_pattern ${JSON.stringify(pattern.trim().slice(0, 60))}, sudo -n dmesg : ${String(kernel.status)})`);
+    if (process.env.CI === 'true') expect(checked, `core_pattern ${pattern.trim()} ; dmesg ${String(kernel.status)} ${kernel.stderr.slice(0, 200)}`).toBe(true);
+    if (checked) {
+      expect(r.pid).toBeDefined();
+      expect(kernel.stdout).toMatch(new RegExp(`\\b${r.pid}\\(.*RLIMIT_CORE (?:is )?set to 1`));
+    }
+  });
 });
 
 describe('assert_sandbox — mesure RSS (15 §7)', () => {
