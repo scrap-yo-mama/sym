@@ -34,10 +34,19 @@ Contrat : `runtime/packages/contracts` (`@sym/contracts`, MIT, sous-chemin `brow
 - Pool du nœud sur de vrais Chromium (non root, espaces de noms utilisateur, `playwright install chromium`) : `pnpm --filter @sym-browser/node test:chromium`.
 - Tests d'un paquet : `pnpm --filter @sym-browser/gateway test` ; tout le module : `pnpm --filter "./modules/browser/**" test`.
 - Types : `pnpm --filter "./modules/browser/**" typecheck` ; lint : `pnpm exec eslint modules/browser packages/contracts`.
+- `MASTER_KEY` de développement : `pnpm --filter @sym-browser/core keygen` (après build ; jamais committée ni journalisée). Vecteurs de SYM rejoués : `packages/core/vectors/sym-crypto.json`.
 - Image : `docker build -f modules/browser/Dockerfile -t sym-browser:dev .` puis `docker run --rm --security-opt seccomp=modules/browser/deploy/seccomp-chromium.json --security-opt no-new-privileges --cap-drop ALL -e MASTER_KEY="$(openssl rand -base64 32)" -e DATABASE_URL=postgres://… sym-browser:dev` (`SYMB_MODE` : `all`, `gateway`, `node`).
 - Egress par session (BINV2, 04c § 1) : `apps/node/src/egress/` (`startSessionEgress`, garde de résolution unique, arguments figés de Chromium) ; test `assert_session_egress_enforced` sur Chromium et le site de `fixtures/` (0.5).
 - Comptage (BINV5, 04d § 4) : mesure par le nœud dans `apps/node/src/usage/` (horloge monotone, époques d'egress cumulées, `usage.wal` fsync, instantanés 10 s) ; clôture avec l'état final (`transitionSession`, migration `0003_usage`) ; réconciliation et agrégats dans `packages/db/src/usage.ts` ; `/v1/usage`, `/v1/usage.csv`, `/v1/admin/usage/reconcile` dans la passerelle ; test `assert_usage_reconciled` (`apps/gateway/src/usage/`).
 - Configuration : catalogue `packages/core/src/config/env-catalog.ts` (source unique, secrets `NOM_FILE`) ; config invalide = sortie code 1 nommant la variable ; `node dist/main.js --check-config` valide sans écouter ; `/healthz`, `/readyz`.
+
+## Authentification (tâche 2.1)
+
+- Code : `packages/core/src/auth/` (pur) et `packages/db/src/api-keys.ts` (SQL). Formats : clé `symb_<12>_<43>` (préfixe affiché `symb_<12>` = `api_keys.key_prefix`), jeton de connexion `symt_…` ; masqués dans les journaux (`CREDENTIAL_PREFIXES`, `createLogger`).
+- Clé : `newApiKey({scopes, expiresAt})` rend la clé une seule fois (`Secret`) et l'empreinte argon2id (`node:crypto`) ; `insertApiKey`, `listApiKeys`, `revokeApiKey`. Première clé : `ensureFirstApiKey(pool, await bootstrapApiKeyRecord(config.bootstrapApiKey))` au démarrage de la passerelle ; clé neuve : `pnpm --filter @sym-browser/core apikey`.
+- REST (2.2) : `auth = new ApiKeyAuthenticator(pgApiKeyStore(pool))` remplit `GatewayDeps.auth` (`authenticate`) ; ou `authorizeRequest(auth, request.headers, scope)` → 401 `unauthorized` / 403 `forbidden` + `requiredScope`.
+- Jetons (2.2, 2.3) : `tokens = new ConnectTokens(keyring)` (`loadKeyring`) remplit `GatewayDeps.tokens` (`issue`, 300 s, 1 h au plus). Upgrade WSS et `json/version` (2.3) : `authorizeConnection({auth, tokens, session}, {sessionId, protocol, headers, query})` en `preValidation`, avant tout octet vers le nœud ; `session(id)` lit `tenant_id` et `state`.
+- Admin d'instance : `resolveBootstrapToken`, `setupFirstAdmin(store, token, form)` ; la table de l'admin et `/setup` arrivent avec la console (3.5).
 
 ## Versions et dépendances
 
