@@ -283,6 +283,18 @@ describe('assert_schema_remark_not_sent : « Une remarque pour SYM ? » n’envo
     expect(html).toContain('id="schema-remark"');
     expect(html).not.toContain('schema-remark-send');
   });
+
+  test.each([['en', en], ['fr', fr]] as const)('%s : l’aide « ne part nulle part » est VISIBLE sous le champ (pas seulement lue par un lecteur d’écran)', async (locale, messages) => {
+    const html = await render(InvestigationBoard, props(awaiting()), { locale });
+    const hint = /<p[^>]*id="schema-remark-hint"[^>]*>([\s\S]*?)<\/p>/.exec(html);
+    expect(hint, locale).not.toBeNull();
+    const tag = hint?.[0].slice(0, hint[0].indexOf('>')) ?? '';
+    expect(tag, locale).not.toMatch(/\bsr-only\b|\bhidden\b|aria-hidden/);
+    expect(tag, locale).toContain('data-testid="schema-remark-hint"');
+    expect(hint?.[1]?.replace(/&#39;|&apos;/g, "'").replace(/&quot;/g, '"').trim(), locale).toBe(messages.investigation.schema.remarkHint);
+    // Le champ reste décrit par cette aide visible : voyants et lecteurs d'écran lisent la même chose.
+    expect(html, locale).toMatch(/id="schema-remark"[^>]*aria-describedby="schema-remark-hint"|aria-describedby="schema-remark-hint"[^>]*id="schema-remark"/);
+  });
 });
 
 describe('assert_trial_plan_pruned_on_refusal : un refus retire les couples proxy ou tunnel dès l’essai refusé, sans attendre `bloquee`', () => {

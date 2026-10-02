@@ -18,15 +18,16 @@ const props = defineProps<{ health: CatalogHealth; partial?: boolean }>();
 const { t } = useI18n();
 
 /**
- * Surface de chaque segment (jetons de statut de packages/ui) ; la légende, dans l'ordre de la barre, est en texte. La surface du
+ * Surface de chaque segment (jetons de statut de packages/ui), aux couleurs de la planche Catalogue (D-60 : vert `status-sain-bar`,
+ * jaune, violet `status-reparation-bar`, bleu ; `assert_catalog_status_colors_match_planche`) ; la légende, dans l'ordre de la barre, est en texte. La surface du
  * statut `enquete` est celle de la carte (papier en clair, anthracite relevé en sombre) : son segment prend une surface atténuée et
  * un contour de statut, sinon il laisserait un trou dans la barre (`assert_health_bar_enquete_visible`).
  */
 const FILL: Record<ApiStatus, string> = {
   enquete: 'fill-muted stroke-status-border',
-  sain: 'fill-status-sain',
+  sain: 'fill-status-sain-bar',
   warning: 'fill-status-warning',
-  reparation: 'fill-status-reparation',
+  reparation: 'fill-status-reparation-bar',
   erreur: 'fill-status-erreur',
   action_requise: 'fill-status-action-requise',
   bloquee: 'fill-status-bloquee',

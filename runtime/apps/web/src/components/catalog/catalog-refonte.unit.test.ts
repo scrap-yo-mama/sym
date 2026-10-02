@@ -213,3 +213,60 @@ describe('assert_health_bar_enquete_visible : le segment « en enquête » se vo
     expect(rect).toContain('vector-effect="non-scaling-stroke"');
   });
 });
+
+describe('assert_catalog_status_colors_match_planche : barre de santé et badges aux couleurs de la planche Catalogue (D-60)', () => {
+  // Planche maquette-ux/latest/project/Catalogue.dc.html : segments l. 47-50 (sain #1F8A70, warning #FFC727, réparation
+  // #9B6BE0, action requise #3A33F0), badges « Saine » #D7F2EA / #0E5A46, « à surveiller » #FFF0BF / #6B4E00, « répare »
+  // #EDE2FB / #4B2490. Le thème sombre n'a pas de planche : bleu jamais sur anthracite, contrastes AA.
+  const mainCss = readText(new URL('../../assets/main.css', import.meta.url));
+  const themeCss = readText(new URL('../../../../../packages/ui/src/theme.css', import.meta.url));
+  const ROOT = cssVariables(themeCss, ':root');
+  const VARIABLES = { light: ROOT, dark: { ...ROOT, ...cssVariables(themeCss, '.dark, .sym-on-ink') } };
+  const colorMap = Object.fromEntries([...mainCss.matchAll(/--color-([\w-]+):\s*var\((--[\w-]+)\);/g)].map((m) => [m[1] ?? '', m[2] ?? '']));
+  const classToken = (classes: string, prefix: 'fill' | 'bg' | 'text'): string => {
+    const name = new RegExp(`(?:^|\\s)${prefix}-([a-z-]+)(?:\\s|$)`).exec(classes)?.[1] ?? '';
+    return colorMap[name] ?? `(aucun jeton pour ${prefix}-${name})`;
+  };
+  const hex = (theme: 'light' | 'dark', token: string): string => toHex(resolveColor(VARIABLES[theme], `var(${token})`)).toUpperCase();
+  const BAR: Partial<Record<ApiStatus, string>> = { sain: '#1F8A70', warning: '#FFC727', reparation: '#9B6BE0', action_requise: '#3A33F0' };
+  const BADGE: Partial<Record<ApiStatus, [string, string]>> = { sain: ['#D7F2EA', '#0E5A46'], warning: ['#FFF0BF', '#6B4E00'], reparation: ['#EDE2FB', '#4B2490'], action_requise: ['#3A33F0', '#FBF8F3'], bloquee: ['#24252D', '#FBF8F3'] };
+
+  async function barClasses(): Promise<Record<string, string>> {
+    const html = await renderHtml(CatalogHealth, { health: catalogHealth(countByStatus(oneApiPerStatus())) }, 'fr');
+    return Object.fromEntries([...html.matchAll(/<rect[^>]*>/g)].map((m) => [/data-status="([a-z_]+)"/.exec(m[0])?.[1] ?? '', /class="([^"]*)"/.exec(m[0])?.[1] ?? '']));
+  }
+
+  test('clair : chaque segment de la barre a la couleur de la planche', async () => {
+    const classes = await barClasses();
+    for (const [status, expected] of Object.entries(BAR)) expect(hex('light', classToken(classes[status] ?? '', 'fill')), status).toBe(expected);
+  });
+
+  test.each(['light', 'dark'] as const)('%s : segments sain, réparation et action requise à 3:1 au moins sur la carte ; jamais de bleu en sombre', async (theme) => {
+    const classes = await barClasses();
+    const card = resolveColor(VARIABLES[theme], 'var(--card)');
+    for (const status of ['sain', 'reparation', 'action_requise']) {
+      const fill = classToken(classes[status] ?? '', 'fill');
+      expect(contrast(resolveColor(VARIABLES[theme], `var(${fill})`), card), `${theme} ${status}`).toBeGreaterThanOrEqual(3);
+      if (theme === 'dark') expect(hex('dark', fill), status).not.toBe('#3A33F0');
+    }
+  });
+
+  test('clair : badges de statut aux surfaces et textes de la planche', async () => {
+    const html = await renderHtml(ApiCatalogTable, { apis: oneApiPerStatus() }, 'fr');
+    for (const [status, [surface, text]] of Object.entries(BADGE)) {
+      const badge = new RegExp(`<span[^>]*class="([^"]*)"[^>]*data-testid="status-badge" data-status="${status}"`).exec(html)?.[1] ?? '';
+      expect(badge, status).not.toBe('');
+      expect(hex('light', classToken(badge, 'bg')), `${status} surface`).toBe(surface);
+      expect(hex('light', classToken(badge, 'text')), `${status} texte`).toBe(text);
+    }
+  });
+
+  test.each(['light', 'dark'] as const)('%s : texte des badges à 4,5:1 au moins sur leur surface', async (theme) => {
+    const html = await renderHtml(ApiCatalogTable, { apis: oneApiPerStatus() }, 'fr');
+    for (const status of API_STATUSES) {
+      const badge = new RegExp(`<span[^>]*class="([^"]*)"[^>]*data-testid="status-badge" data-status="${status}"`).exec(html)?.[1] ?? '';
+      const ratio = contrast(resolveColor(VARIABLES[theme], `var(${classToken(badge, 'text')})`), resolveColor(VARIABLES[theme], `var(${classToken(badge, 'bg')})`));
+      expect(ratio, `${theme} ${status}`).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+});

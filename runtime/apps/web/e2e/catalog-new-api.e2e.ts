@@ -115,6 +115,9 @@ for (const locale of ['en', 'fr'] as const) {
       // assert_schema_remark_not_sent : la remarque se saisit, mais aucun bouton ne l'envoie et aucune relance ne part.
       await page.locator('#schema-remark').fill('le prix en euros');
       await expect(page.getByTestId('schema-remark-send')).toHaveCount(0);
+      // L'utilisateur voyant le lit aussi : l'aide « ne part nulle part » est affichée sous le champ.
+      await expect(page.getByTestId('schema-remark-hint')).toBeVisible();
+      await expect(page.getByTestId('schema-remark-hint')).toHaveText(text(locale, 'investigation.schema.remarkHint'));
       expect(app.requests.filter((entry) => entry.includes('/investigate')), 'la remarque ne relance rien').toEqual([]);
       await expect(page.locator('[data-testid="trial-card"][data-state="planned"]')).toHaveCount(2);
       await expect(page.locator('[data-testid="trial-card"]')).toHaveCount(2);

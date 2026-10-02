@@ -25,13 +25,14 @@ export const STATUS_ICON: Record<ApiStatus, StatusIcon> = {
 /**
  * Teinte du badge (classes Tailwind sur les jetons de packages/ui, qui changent avec le thème) : surface pleine et texte de
  * la famille du statut (20 § 1.2), bordure `status-border` ; une aide visuelle de plus, jamais la seule (forme d'icône,
- * libellé et raison). L'orange (`erreur`) n'est qu'une surface à texte anthracite.
+ * libellé et raison). L’orange (`erreur`) n’est qu’une surface à texte anthracite. `sain`, `warning` et `reparation` prennent les
+ * badges doux de la planche Catalogue (variante `-badge`, D-60, `assert_catalog_status_colors_match_planche`).
  */
 export const STATUS_TONE: Record<ApiStatus, string> = {
   enquete: 'border-status-border bg-status-enquete text-status-enquete-foreground',
-  sain: 'border-status-border bg-status-sain text-status-sain-foreground',
-  warning: 'border-status-border bg-status-warning text-status-warning-foreground',
-  reparation: 'border-status-border bg-status-reparation text-status-reparation-foreground',
+  sain: 'border-status-border bg-status-sain-badge text-status-sain-badge-foreground',
+  warning: 'border-status-border bg-status-warning-badge text-status-warning-badge-foreground',
+  reparation: 'border-status-border bg-status-reparation-badge text-status-reparation-badge-foreground',
   erreur: 'border-status-border bg-status-erreur text-status-erreur-foreground',
   action_requise: 'border-status-border bg-status-action-requise text-status-action-requise-foreground',
   bloquee: 'border-status-border bg-status-bloquee text-status-bloquee-foreground',

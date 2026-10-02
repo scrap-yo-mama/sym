@@ -54,6 +54,15 @@
   --color-status-erreur-foreground: var(--status-erreur-foreground);
   --color-status-bloquee: var(--status-bloquee);
   --color-status-bloquee-foreground: var(--status-bloquee-foreground);
+  /* Planche Catalogue (D-60) : segments de la barre de santé et badges doux. */
+  --color-status-sain-bar: var(--status-sain-bar);
+  --color-status-reparation-bar: var(--status-reparation-bar);
+  --color-status-sain-badge: var(--status-sain-badge);
+  --color-status-sain-badge-foreground: var(--status-sain-badge-foreground);
+  --color-status-warning-badge: var(--status-warning-badge);
+  --color-status-warning-badge-foreground: var(--status-warning-badge-foreground);
+  --color-status-reparation-badge: var(--status-reparation-badge);
+  --color-status-reparation-badge-foreground: var(--status-reparation-badge-foreground);
   /* Surfaces décoratives de la palette (pastilles numérotées du plan d'essais, 20 § 5.3) : toujours à texte anthracite. */
   --color-sym-ink: var(--sym-ink);
   --color-sym-yellow: var(--sym-yellow);
