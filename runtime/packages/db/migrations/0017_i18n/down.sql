@@ -1,6 +1,5 @@
 -- SPDX-License-Identifier: AGPL-3.0-only
 -- Retour de 0017_i18n. Les langues autres que en et fr sont ramenées à `en` avant de restaurer la liste fermée.
-DELETE FROM settings WHERE key = 'default_locale';
 DROP TRIGGER runs_set_locale ON runs;
 DROP FUNCTION runs_set_locale();
 ALTER TABLE runs DROP COLUMN locale;

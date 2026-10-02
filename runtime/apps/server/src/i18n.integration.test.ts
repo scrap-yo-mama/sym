@@ -108,6 +108,19 @@ describe('REST : message localisé, code stable', () => {
     }
   });
 
+  test('instance migrée sans réglage default_locale : la langue de l’owner en tient lieu, sans rien écrire', async () => {
+    await sql("DELETE FROM settings WHERE key = 'default_locale'");
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 2100)); // cache de 2 s du réglage
+      const res = await srv.app.inject({ method: 'GET', url: '/api/me' });
+      expect(res.headers['content-language']).toBe('fr');
+      expect(await sql("SELECT 1 FROM settings WHERE key = 'default_locale'")).toHaveLength(0);
+    } finally {
+      await sql("INSERT INTO settings (key, value) VALUES ('default_locale', '\"fr\"') ON CONFLICT (key) DO NOTHING");
+      await new Promise((resolve) => setTimeout(resolve, 2100));
+    }
+  }, 20_000);
+
   test('un message sans entrée de catalogue garde son texte d’origine (aucune clé brute)', async () => {
     const res = await srv.app.inject({ method: 'POST', url: '/api/auth/password-reset/confirm', headers: { 'accept-language': 'fr' }, payload: { token: 'zz', password: 'x' } });
     expect(res.json<{ error: { message: string } }>().error.message).not.toMatch(/^srv\./);

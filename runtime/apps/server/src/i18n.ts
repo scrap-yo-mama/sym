@@ -21,12 +21,19 @@ export function isSupportedLocale(value: unknown): value is string {
   return typeof value === 'string' && supportedLocales().includes(value);
 }
 
-/** Valeur stockée de `settings.default_locale`, ou null (cache de 2 s, vidé à l'écriture). */
+/** Valeur stockée de `settings.default_locale` (à défaut, langue de l'owner), ou null (cache de 2 s). */
 async function storedDefaultLocale(pool: pg.Pool): Promise<string | null> {
   const hit = cache.get(pool);
   if (hit && Date.now() - hit.at < CACHE_MS) return hit.value;
-  const { rows } = await pool.query<{ value: unknown }>('SELECT value FROM settings WHERE key = $1', [DEFAULT_LOCALE_SETTING]);
-  const raw = rows[0]?.value;
+  // Schéma en retard ou base indisponible (démarrage dégradé, 14 § 5) : la langue n'est jamais la cause d'un échec de réponse.
+  let raw: unknown;
+  try {
+    raw = (await pool.query<{ value: unknown }>('SELECT value FROM settings WHERE key = $1', [DEFAULT_LOCALE_SETTING])).rows[0]?.value;
+    // Instance migrée avant 0017 (aucun réglage écrit) : la langue de l'owner en tient lieu, sans rien écrire.
+    raw ??= (await pool.query<{ locale: string }>("SELECT locale FROM users WHERE role = 'owner' AND deleted_at IS NULL LIMIT 1")).rows[0]?.locale;
+  } catch {
+    return null;
+  }
   const value = typeof raw === 'string' && isSupportedLocale(raw) ? raw : null;
   cache.set(pool, { at: Date.now(), value });
   return value;

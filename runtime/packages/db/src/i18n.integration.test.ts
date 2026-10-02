@@ -63,18 +63,18 @@ describe('migration 0017_i18n', () => {
     await expect(pool.query("INSERT INTO invitations (email, role, token_hash, expires_at, locale) VALUES ('zz_test_inv2@example.test', 'member', 'h2', now() + interval '1 hour', 'Français')")).rejects.toThrow(/invitations_locale_format/);
   });
 
-  test('settings.default_locale est initialisée avec la langue de l’owner s’il existe déjà (sinon l’application l’écrit au premier démarrage)', async () => {
-    const db = await createTestDatabase('i18n_default');
+  test('une montée de version n’écrit aucune donnée : aucune ligne de settings ajoutée (la langue de l’instance est écrite par l’application)', async () => {
+    const db = await createTestDatabase('i18n_nodata');
     try {
       const target = loadMigrations().find((m) => m.name === 'i18n')!.version;
       await migrateUp({ connectionString: db.url, migrations: loadMigrations().filter((m) => m.version < target) });
       const p = new pg.Pool({ connectionString: db.url });
       await p.query("INSERT INTO users (email, role, status, locale) VALUES ('zz_test_o@example.test', 'owner', 'active', 'fr')");
-      await p.end();
+      const before = (await p.query('SELECT count(*)::int AS n FROM settings')).rows[0]?.n;
       await migrateUp({ connectionString: db.url });
-      const check = new pg.Pool({ connectionString: db.url });
-      expect((await check.query("SELECT value FROM settings WHERE key = 'default_locale'")).rows).toEqual([{ value: 'fr' }]);
-      await check.end();
+      expect((await p.query('SELECT count(*)::int AS n FROM settings')).rows[0]?.n).toBe(before);
+      expect((await p.query('SELECT locale FROM users')).rows).toEqual([{ locale: 'fr' }]);
+      await p.end();
     } finally {
       await db.drop();
     }

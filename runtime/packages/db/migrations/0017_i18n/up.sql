@@ -11,12 +11,13 @@
 --   runs.locale         users.locale de l'appelant au lancement (propriétaire de la planification pour un run planifié) ;
 --                       sert seulement à la prose du LLM, jamais à une requête vers un site cible. Posée par un déclencheur
 --                       quand l'insertion ne la fournit pas : `runtime_app` n'a pas accès à `users` (identité système).
---   settings            clé `default_locale` : langue d'instance, initialisée avec la langue de l'owner s'il existe déjà.
+--   settings            clé `default_locale` (langue d'instance) : aucune donnée n'est écrite ici (une montée de version ne change aucune
+--                       donnée existante). L'application l'écrit au premier démarrage ; sans elle, la langue de l'owner en tient lieu.
 
 ALTER TABLE users DROP CONSTRAINT users_locale_check;
 ALTER TABLE users ADD CONSTRAINT users_locale_format CHECK (locale ~ '^[a-z]{2,3}$');
 ALTER TABLE users ADD COLUMN timezone text
-  CONSTRAINT users_timezone_format CHECK (timezone IS NULL OR (char_length(timezone) BETWEEN 1 AND 64 AND timezone ~ '^[A-Za-z0-9_+/-]+$'));
+  CONSTRAINT users_timezone_format CHECK (timezone IS NULL OR timezone ~ '^[A-Za-z0-9_+/-]{1,64}$');
 
 ALTER TABLE invitations ADD COLUMN locale text NOT NULL DEFAULT 'en'
   CONSTRAINT invitations_locale_format CHECK (locale ~ '^[a-z]{2,3}$');
@@ -39,7 +40,3 @@ END
 $$;
 REVOKE ALL ON FUNCTION runs_set_locale() FROM PUBLIC;
 CREATE TRIGGER runs_set_locale BEFORE INSERT ON runs FOR EACH ROW EXECUTE FUNCTION runs_set_locale();
-
-INSERT INTO settings (key, value)
-SELECT 'default_locale', to_jsonb(u.locale) FROM users u WHERE u.role = 'owner' AND u.deleted_at IS NULL
-ON CONFLICT (key) DO NOTHING;
