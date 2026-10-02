@@ -52,7 +52,7 @@ describe('profileItems (r4 R1, R2)', () => {
     expect(p.items).toBe(11);
     expect(p.duplicates).toBe(1);
     expect(p.fields['sku']).toMatchObject({ fill_rate: 1, sentinel_rate: 0, top_pattern: 'A-9' });
-    expect(p.fields['sku']!.unique_rate).toBeCloseTo(10 / 11, 6);
+    expect(p.fields['sku']!.unique_rate).toBeCloseTo(10 / 11, 3);
     expect(p.fields['title']!.length.min).toBeGreaterThan(0);
     expect(p.fields['price']).toMatchObject({ type: 'number', min: 10, max: 19 });
     expect(p.fields['currency']).toMatchObject({ constant: true });

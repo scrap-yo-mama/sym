@@ -22,6 +22,12 @@ export const DEGRADED_SIGNALS = [
   'pagination_short',
   'slow',
   'cost_anomaly',
+  /** Motifs du profil des sorties (tâche 2.12, 19 §3, r4 R4) : informatifs, transitions 5 et 8 existantes. */
+  'field_constant',
+  'pattern_shift',
+  'sentinel_values',
+  'duplicate_items',
+  'new_enum_value',
 ] as const;
 export type DegradedSignal = (typeof DEGRADED_SIGNALS)[number];
 
@@ -85,6 +91,11 @@ export type StatusEventInput =
   | { type: 'reinvestigate'; trigger: ReinvestigationTrigger }
   /** Backoff automatique depuis `erreur` (16), réservé à certaines classes ; `attempt` compte à partir de 0. */
   | { type: 'backoff_elapsed'; failureClass: FailureClass; attempt: number }
+  /**
+   * Mémoire négative (tâche 2.12, 19 §2, r1 R14) : le domaine a déjà refusé l'accès (`forbidden`, `bloquee`) ; arrêt
+   * préventif AVANT tout appel LLM et toute requête, par la transition 4 existante, raison `prior_refusal`.
+   */
+  | { type: 'prior_refusal' }
   /** L'utilisateur a agi : connexion, proxy, paiement, tunnel (17). */
   | { type: 'user_acted' };
 

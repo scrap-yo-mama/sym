@@ -50,8 +50,8 @@ describe('couches 1 et 2', () => {
     const doc = readFileSync(new URL('../../../../docs/qualite/rappel-masquage.md', import.meta.url), 'utf8');
     const published = Object.fromEntries([...doc.matchAll(/^\| `([a-z_]+)` \| (\d+\/\d+) \|/gm)].map((m) => [m[1]!, m[2]!]));
     expect(published).toEqual(measured);
-    // Plancher : chaque type masque au moins les trois quarts du corpus.
-    for (const [type, r] of Object.entries(recall)) expect(r.hit / r.total, type as PiiType).toBeGreaterThanOrEqual(0.75);
+    // Plancher : chaque type masque au moins la moitié du corpus (les numéros à clé fausse, IBAN ou Luhn, ne sont pas masqués).
+    for (const [type, r] of Object.entries(recall)) expect(r.hit / r.total, type as PiiType).toBeGreaterThanOrEqual(0.5);
   });
 });
 

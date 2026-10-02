@@ -97,7 +97,8 @@ describe('mémoire du catalogue (0018)', () => {
   test('refusals : une API du même domaine en bloquee ou refusée par robots.txt est lue comme refus (fait et date)', async () => {
     await api(A, 'zz_test_mem_refused', 'https://refused.fr/', { status: 'bloquee', reason: 'forbidden' });
     const mem = await readCatalogMemory(pool, { ownerId: A, apiId: null, domain: 'refused.fr' });
-    expect(mem.entries[0]!.refusal).toMatchObject({ class: 'bloquee' });
+    expect(mem.entries.find((e) => e.slug === 'zz_test_mem_refused')!.refusal).toMatchObject({ class: 'bloquee' });
+    expect(mem.refusals.map((r) => r.domain)).toContain('refused.fr');
   });
 });
 

@@ -123,6 +123,11 @@ export interface StructuredCall {
   signal?: AbortSignal;
   /** Voir `ChatCall.beforeCall`. */
   beforeCall?: () => void;
+  /**
+   * Aucun outil dans la requête, même l'outil de soumission de S2 (E4, `judge`, `reflect` : phases sans outil, 19 §7,
+   * `assert_e4_no_tools`) : S2 descend en S3 si le profil le permet, sinon en S4.
+   */
+  noTools?: boolean;
 }
 
 export interface StructuredResult<T = unknown> {
@@ -365,7 +370,8 @@ export class LlmClient {
    */
   async generateStructured<T = unknown>(role: LlmRole, call: StructuredCall): Promise<StructuredResult<T>> {
     compileOriginal(typeof call.schema === 'boolean' ? {} : call.schema); // refuse tôt un schéma invalide ou un $ref distant
-    const level = call.level ?? pickLevel(this.profileOf(role));
+    const picked = call.level ?? pickLevel(this.profileOf(role));
+    const level: StructuredLevel = call.noTools === true && picked === 'S2' ? (this.profileOf(role)?.structured_modes.includes('json_object') === true ? 'S3' : 'S4') : picked;
     const name = (call.name ?? 'output').replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 64) || 'output';
     const transportSchema = toTransportSchema(call.schema);
     const { schema: rootSchema, wrapped } = wrapRoot(transportSchema);

@@ -98,6 +98,7 @@ cinq premières est posée. Pour PostgreSQL, passez la CA par `sslrootcert` dans
 | `RETENTION_DATASETS_DAYS` | 90 | worker | durée de conservation des jeux de données | lue |
 | `RETENTION_DATASETS_MAX_DAYS` | 3650 | worker | plafond d'instance ; la durée réglée par API ne peut pas le dépasser | lue |
 | `RETENTION_SAMPLES_DAYS` | 14 | worker | échantillons d'enquête, détails d'erreur, entrées de run | lue |
+| `RETENTION_PROFILES_DAYS` | 90 | worker | profils de qualité des runs, hors baseline validée (gardée avec sa version) | lue |
 | `RUN_LOG_RETENTION_DAYS` | 30 | server, worker | journaux de run | lue |
 | `ARTIFACT_RETENTION_DAYS` | 7 | server, worker | artefacts de run (captures, traces) | lue |
 | `RETENTION_TICK_SECONDS` | 300 | worker | période de la passe de rétention | lue |

@@ -14,7 +14,7 @@ export class LlmSettingsError extends Error {
 }
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
-const ROLES: readonly LlmRole[] = ['investigate', 'repair', 'extract', 'agent'];
+const ROLES: readonly LlmRole[] = ['investigate', 'repair', 'extract', 'agent', 'judge', 'reflect', 'embed'];
 const STRUCTURED: readonly StructuredMode[] = ['json_schema', 'tool_forced', 'json_object'];
 const CHOICES: readonly ToolChoiceMode[] = ['auto', 'required', 'named'];
 
@@ -118,4 +118,37 @@ export function roleTarget(config: LlmConfig, role: LlmRole): { provider: Provid
   const provider = config.providers.find((p) => p.id === r.provider);
   if (provider === undefined) return undefined;
   return { provider, model: provider.models.find((m) => m.id === r.model) ?? { id: r.model } };
+}
+
+/** Réglages du juge et de la mémoire lus dans `settings.llm` (tâche 2.12) : tout est désactivé par défaut. */
+export type QualitySettings = { readonly judgeEnabled: boolean; readonly embeddingsEnabled: boolean };
+
+/**
+ * `settings.llm.judge.enabled` (activé par l'admin, avec l'avertissement « juge non étalonné, avis consultatif ») et
+ * `settings.llm.catalog_memory.embeddings` (étage 4, option désactivée : sans `pgvector`, elle reste grisée). Le juge
+ * exige aussi un modèle affecté au rôle `judge`.
+ */
+export function qualitySettings(value: unknown): QualitySettings {
+  if (!isRecord(value)) return { judgeEnabled: false, embeddingsEnabled: false };
+  const roles = isRecord(value['roles']) ? value['roles'] : {};
+  const judge = isRecord(value['judge']) ? value['judge'] : {};
+  const memory = isRecord(value['catalog_memory']) ? value['catalog_memory'] : {};
+  return { judgeEnabled: judge['enabled'] === true && isRecord(roles['judge']), embeddingsEnabled: memory['embeddings'] === true && isRecord(roles['embed']) };
+}
+
+/**
+ * Mention fournisseur (08 §4 point 5, 19 §3) : fournisseurs qui recevront des extraits d'une API — rôles d'enquête,
+ * réparation, extraction, agent, et `reflect` s'il est affecté ; `judge` s'il est activé ; `embed` si l'étage 4 l'est.
+ */
+export function providersReceiving(value: unknown): string[] {
+  if (!isRecord(value)) return [];
+  const roles = isRecord(value['roles']) ? value['roles'] : {};
+  const q = qualitySettings(value);
+  const order: LlmRole[] = ['investigate', 'repair', 'extract', 'agent', ...(q.judgeEnabled ? (['judge'] as const) : []), 'reflect', ...(q.embeddingsEnabled ? (['embed'] as const) : [])];
+  const out: string[] = [];
+  for (const role of order) {
+    const r = roles[role];
+    if (isRecord(r) && typeof r['provider'] === 'string' && !out.includes(r['provider'])) out.push(r['provider']);
+  }
+  return out;
 }

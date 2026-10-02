@@ -23,6 +23,7 @@ import { TunnelJobClient } from '../tunnel/client.js';
 import type { EngineFactory } from './agent-executors.js';
 import { createInvestigationExecutor, dispatchByKind } from './investigation-executor.js';
 import { createRepairPort } from './repair-executor.js';
+import { createJudgeJob, settingsQualityPorts } from './quality-job.js';
 import { createStrategyRuntime, type AgentPorts } from './strategy-executor.js';
 
 /** Version du prompt du moteur : celui de Stagehand, non modifié (mesuré tel quel au spike 0.6a). */
@@ -142,6 +143,25 @@ export function productionExecutorFactory(env: Readonly<Record<string, string | 
     const identifyInstance = async (): Promise<boolean> => resolveIdentifyInstance(await readIdentifyInstanceSetting(pool), env);
     // Réparation dans le même run (2.3) : rôle `repair` relu à chaque réparation, bail en table ; seuil de casse des items
     // non conformes (D-49) lu au démarrage (`ITEMS_REJECTED_MAX_SHARE`, `ITEMS_REJECTED_MIN_COUNT`).
+    // Juge consultatif (2.12) : désactivé par défaut (`settings.llm.judge.enabled` et un modèle au rôle `judge`). Sur
+    // anomalie d'un rejeu, le jugement est un job séparé, lancé après la fin du run (le rejeu ne fait aucun appel LLM).
+    const judgeLlm = {
+      config: async () => {
+        const value = await readLlmSettings(pool);
+        return value === null ? null : llmConfigFromSettings(value, (id) => secrets.get(id), ['judge']);
+      },
+      client: (config: LlmConfig) => createLlmClient(config, { note: (note) => logger.info(note, 'llm') }),
+    };
+    const qualityBase = settingsQualityPorts(pool);
+    const judgeJob = createJudgeJob({ pool, llm: judgeLlm, quality: qualityBase });
+    const quality = {
+      ...qualityBase,
+      scheduleJudge: (job: { runId: string; ownerId: string }) => {
+        setTimeout(() => {
+          judgeJob({ ...job, trigger: 'anomaly' }).catch((error: unknown) => logger.warn({ runId: job.runId, err: error instanceof Error ? error.name : 'error' }, 'juge : jugement sur anomalie non fait'));
+        }, 1_000).unref();
+      },
+    };
     const repair = createRepairPort({
       pool,
       browser: pool_ !== null,
@@ -153,6 +173,7 @@ export function productionExecutorFactory(env: Readonly<Record<string, string | 
         },
         client: (config) => createLlmClient(config, { note: (note) => logger.info(note, 'llm') }),
       },
+      judgeLlm,
     });
     const strategy = createStrategyRuntime({
       pool,
@@ -170,6 +191,7 @@ export function productionExecutorFactory(env: Readonly<Record<string, string | 
       version: config.version,
       repair,
       rejection: rejectionThresholdsFromEnv(env),
+      quality,
     });
     // Enquête (2.1) : mêmes gardes, mêmes exécuteurs ; rôles `investigate` (schéma), `extract` et `agent` (prix des couples E4, E6).
     const investigation = createInvestigationExecutor({
@@ -186,10 +208,11 @@ export function productionExecutorFactory(env: Readonly<Record<string, string | 
       llm: {
         config: async () => {
           const value = await readLlmSettings(pool);
-          return value === null ? null : llmConfigFromSettings(value, (id) => secrets.get(id), ['investigate', 'extract', 'agent']);
+          return value === null ? null : llmConfigFromSettings(value, (id) => secrets.get(id), ['investigate', 'extract', 'agent', 'judge']);
         },
         client: (config) => createLlmClient(config),
       },
+      quality,
       robotsCache,
       instanceContact,
       identifyInstance,

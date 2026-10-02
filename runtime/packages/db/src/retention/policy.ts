@@ -18,6 +18,8 @@ export type RetentionPolicy = {
   runsDays: number;
   /** `audit_events` (13 § 9, 14 § 9 : 12 mois). */
   auditDays: number;
+  /** `run_profiles` hors baseline (tâche 2.12, 19 §3 : 90 jours, à valider) ; la baseline est gardée avec sa version. */
+  profilesDays: number;
 };
 
 export const DEFAULT_RETENTION_POLICY: RetentionPolicy = {
@@ -28,6 +30,7 @@ export const DEFAULT_RETENTION_POLICY: RetentionPolicy = {
   artifactsDays: 7,
   runsDays: 90,
   auditDays: 365,
+  profilesDays: 90,
 };
 
 function positiveInt(raw: string | undefined, fallback: number, name: string): number {
@@ -47,6 +50,7 @@ export function retentionPolicyFromEnv(env: NodeJS.ProcessEnv = process.env): Re
     samplesDays: positiveInt(env['RETENTION_SAMPLES_DAYS'], d.samplesDays, 'RETENTION_SAMPLES_DAYS'),
     logsDays: positiveInt(env['RUN_LOG_RETENTION_DAYS'], d.logsDays, 'RUN_LOG_RETENTION_DAYS'),
     artifactsDays: positiveInt(env['ARTIFACT_RETENTION_DAYS'], d.artifactsDays, 'ARTIFACT_RETENTION_DAYS'),
+    profilesDays: positiveInt(env['RETENTION_PROFILES_DAYS'], d.profilesDays, 'RETENTION_PROFILES_DAYS'),
   };
   if (policy.datasetsMaxDays < policy.datasetsDays) {
     throw new Error('RETENTION_DATASETS_MAX_DAYS invalide : le plafond d’instance doit valoir au moins RETENTION_DATASETS_DAYS.');

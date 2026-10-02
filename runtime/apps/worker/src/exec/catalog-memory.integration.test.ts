@@ -95,7 +95,7 @@ async function insertApi(owner: string, slug: string, host: string, opts: { stat
   if (opts.withVersion === true) {
     await pool.query(
       `INSERT INTO strategy_versions (api_id, version, owner_id, execution, network, spec, created_by) VALUES ($1, 1, $2, 'fetch', 'direct', $3::jsonb, 'investigation')`,
-      [id, owner, JSON.stringify({ schema_version: 1, kind: 'declarative', request: { method: 'GET', url: `${base(host)}/api/contacts?page=1`, allowed_hosts: [host] } })],
+      [id, owner, JSON.stringify({ schema_version: 1, kind: 'declarative', request: { method: 'GET', url: `${base(host)}/`, allowed_hosts: [host] }, sources: [{ id: 'dom', from: 'html', records: 'h1' }], fields: { id: { attr: 'text', type: 'string', required: true } } })],
     );
     await pool.query('UPDATE apis SET current_strategy_version = 1 WHERE id = $1', [id]);
   }

@@ -16,10 +16,17 @@
 //    d'extraction ne change jamais d'IP). Une issue qui exigerait un agent à chaque run n'est pas retenue (`instructed_mode`
 //    n'existe pas avant 2.13 : traité comme faux).
 // Le prompt ne reçoit que des squelettes (preuves minimisées) et des raisons sans valeur ; il n'est jamais journalisé.
+// Tâche 2.12 : le dossier de mémoire du catalogue (19 §2, valeurs du même domaine seulement, masqué) entre dans le prompt
+// à sa place fixe, avant les preuves ; le juge consultatif donne son avis avant que vN+1 devienne courante, sans rien
+// bloquer (19 §3).
 import { setTimeout as sleep } from 'node:timers/promises';
 import {
+  buildCatalogDossier,
   checkAgainstHealthy,
   escalationExecutions,
+  profileItems,
+  registrableDomain,
+  renderCatalogMemory,
   healthyProfile,
   patchKey,
   RepairLedger,
@@ -33,10 +40,11 @@ import {
 } from '@runtime/core';
 import { assertPromptSafe, ClassificationGuardError, type AgentEvidence, type ExecFailure } from '@runtime/core/exec';
 import { proposeRepair, repairCallCeilingUsd, repairPromptVersion } from '@runtime/agent';
-import { acquireRepairLease, readCurrentStrategyVersion, readHealthyItems, releaseRepairLease, renewRepairLease } from '@runtime/db';
+import { acquireRepairLease, readCatalogMemory, readCurrentStrategyVersion, readHealthyItems, releaseRepairLease, renewRepairLease, saveRunJudge, type CatalogMemory } from '@runtime/db';
 import { LlmError, roleTarget, toFailureClass, type LlmClient, type LlmConfig } from '@runtime/llm';
 import type pg from 'pg';
 import { pino, type Logger } from 'pino';
+import { flaggedFields, judgeItems, settingsQualityPorts, type QualityPorts } from './quality-job.js';
 import type { CandidateCheck, RepairedStrategy, RepairOutcome, RepairPort } from './strategy-executor.js';
 
 export type RepairEngineDeps = {
@@ -52,6 +60,11 @@ export type RepairEngineDeps = {
   readonly leaseWaitMs?: number;
   readonly leaseTtlSeconds?: number;
   readonly logger?: Logger;
+  /** Mémoire du catalogue (2.12) ; défaut : `readCatalogMemory`. */
+  readonly memory?: { readonly read: (args: { ownerId: string; apiId: string | null; domain: string }) => Promise<CatalogMemory> };
+  /** Juge consultatif (2.12) ; défaut : réglages `settings.llm`. Configuration du rôle `judge` : `judgeLlm`. */
+  readonly quality?: QualityPorts;
+  readonly judgeLlm?: { readonly config: () => Promise<LlmConfig | null>; readonly client: (config: LlmConfig) => LlmClient };
 };
 
 const DECLARATIVE = new Set(['fetch', 'fetch_in_page', 'playwright']);
@@ -75,6 +88,36 @@ export function createRepairPort(deps: RepairEngineDeps): RepairPort {
   const logger = deps.logger ?? pino({ enabled: false });
   const leaseTtl = deps.leaseTtlSeconds ?? 90;
   const leaseWaitMs = deps.leaseWaitMs ?? 60_000;
+  const quality = deps.quality ?? settingsQualityPorts(deps.pool);
+
+  /** Avis consultatif sur la sortie réparée, avant que vN+1 devienne courante : il ne bloque rien (19 §3). */
+  const judgeRepair = async (ctx: RunCtx, schema: unknown, items: readonly unknown[]): Promise<void> => {
+    if (deps.judgeLlm === undefined || !(await quality.judgeEnabled().catch(() => false))) return;
+    try {
+      const config = await deps.judgeLlm.config();
+      if (config === null) return;
+      const out = await judgeItems({ config, client: deps.judgeLlm.client, trigger: 'repair', schema, profile: profileItems(items, schema), items, signal: ctx.signal });
+      if (out === null) return;
+      await ctx.chargeCost?.({ llm_usd: out.costUsd, tokens: { ...out.tokens, estimated: false } });
+      await saveRunJudge(deps.pool, { runId: ctx.runId, ownerId: ctx.ownerId, judge: out.judge, costUsd: 0 });
+      if (out.judge.flag) await ctx.log('info', 'judge_flag', { trigger: 'repair', fields: flaggedFields(out.judge), seed: out.seed });
+    } catch {
+      await ctx.log('warn', 'judge_failed', { trigger: 'repair' });
+    }
+  };
+
+  /** Dossier de mémoire de la réparation (même propriétaire, valeurs du même domaine seulement). */
+  const repairMemory = async (ctx: RunCtx, spec: DeclarativeSpec, description: string): Promise<string> => {
+    try {
+      const domain = registrableDomain(spec.request.url);
+      const memory = await (deps.memory?.read ?? ((a) => readCatalogMemory(deps.pool, a)))({ ownerId: ctx.ownerId, apiId: ctx.apiId, domain });
+      const dossier = buildCatalogDossier({ ownerId: ctx.ownerId, apiId: ctx.apiId, domain, description, mode: 'repair', now: new Date() }, memory.entries);
+      if (dossier.refs.length > 0) await ctx.log('info', 'catalog_memory', { entries: dossier.refs.length, tokens: dossier.tokens, truncated: dossier.truncated, sha256: dossier.sha256 });
+      return renderCatalogMemory(dossier);
+    } catch {
+      return '';
+    }
+  };
 
   /** Attente du bail d'une autre réparation : vN+1 si elle a abouti, sinon échec (la stratégie reste celle du run). */
   const waitForOtherRepair = async (ctx: RunCtx, strategyVersion: number): Promise<RepairOutcome> => {
@@ -136,6 +179,7 @@ export function createRepairPort(deps: RepairEngineDeps): RepairPort {
     /** vN+1 enregistrée SOUS le bail (vérifié et prolongé juste avant), avant sa libération. */
     const committed = async (repaired: RepairedStrategy, check: CandidateCheck): Promise<RepairOutcome> => {
       if (!(await holds())) return leaseLost();
+      await judgeRepair(ctx, target.api.outputSchema, check.partition.conform);
       const saved = await request.commit(repaired);
       return { kind: 'repaired', strategy: repaired, check, saved };
     };
@@ -177,9 +221,10 @@ export function createRepairPort(deps: RepairEngineDeps): RepairPort {
     if (deps.llm !== undefined && config !== null && price !== null && price !== undefined) {
       const client = deps.llm.client({ ...config, roles: { repair: config.roles.repair! } });
       const model = config.roles.repair?.model ?? null;
+      const catalogMemory = await repairMemory(ctx, spec, '');
       for (;;) {
         if (!(await holds())) return leaseLost();
-        const args = { spec, outputSchema: target.api.outputSchema, failure, evidence, healthy, reasons: request.reasons, refused };
+        const args = { spec, outputSchema: target.api.outputSchema, failure, evidence, healthy, reasons: request.reasons, refused, ...(catalogMemory === '' ? {} : { catalogMemory }) };
         const ceiling = repairCallCeilingUsd(args, price);
         if (!ledger.canPropose(ceiling)) break;
         const before = client.meter.snapshot().cost_usd_known ?? 0;
