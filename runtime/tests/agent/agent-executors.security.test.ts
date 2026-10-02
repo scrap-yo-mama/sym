@@ -12,12 +12,14 @@ import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { StagehandEngine, recordsSchema } from '@runtime/agent';
 import { Secret, validateHybridSpec, type AgentFetchSpec, type AgentSpec, type HybridSpec } from '@runtime/core';
+import type { AccessCheck } from '@runtime/core/exec';
 import * as net from '@runtime/core/net';
 import { openBrowserEgress, openNetworkSession, startEgressProxy, type BrowserEgress, type EgressProxy, type SsrfGuard } from '@runtime/core/net';
 import { createLlmClient, type ModelPrice, type RedactConfig } from '@runtime/llm';
 import { createFakeProvider, scripted, type FakeProvider, type FakeRequestContext, type ScriptedResponse, type ScriptedStep } from '@runtime/llm/testing';
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'vitest';
-import { launchAgentBrowser } from '../../apps/worker/src/browser/agent-browser.ts';
+import { launchAgentBrowser, type AgentBrowser } from '../../apps/worker/src/browser/agent-browser.ts';
+import type { RequestCheck } from '../../apps/worker/src/browser/request-guard.ts';
 import { BrowserPool, playwrightLauncher, type BrowserLauncher } from '../../apps/worker/src/browser/pool.ts';
 import { runAgentExecutor, runAgentFetchExecutor, runHybridExecutor, type EngineFactory } from '../../apps/worker/src/exec/agent-executors.ts';
 import { AGENT_CANARY, AGENT_HOSTS, AGENT_TRAP_TYPED_PATH } from '../../fixtures/src/sites/agent-sites.ts';
@@ -33,6 +35,8 @@ const CHALLENGE_403 = 'zz_test_challenge.localhost';
 const HOSTS = [AGENT_HOSTS.e4, AGENT_HOSTS.e5, AGENT_HOSTS.e6, AGENT_HOSTS.inj, AGENT_HOSTS.trap, CHALLENGE_200, CHALLENGE_403];
 /** Serveur local du test (écritures en XHR, données personnelles, service worker) : hors du serveur de fixtures. */
 const LOCAL = 'zz_test_agent_local.localhost';
+/** Second domaine autorisé, d'un AUTRE site que LOCAL : son cadre tourne hors processus (site-per-process). */
+const OTHER = 'zz_test_agent_other.example';
 const AGENT_MODEL = 'zz-agent';
 const EXTRACT_MODEL = 'zz-extract';
 
@@ -41,7 +45,7 @@ let guard: SsrfGuard;
 let launchProxy: EgressProxy;
 let pool: BrowserPool;
 let fake: FakeProvider;
-let local: { server: Server; port: number; posts: number; paths: string[] };
+let local: { server: Server; port: number; posts: number; paths: string[]; releaseHang: () => void; resetHang: () => void };
 let localGuard: SsrfGuard;
 const signal = new AbortController().signal;
 const url = (host: string, path = '/') => `http://${host}:${client.server.port}${path}`;
@@ -160,12 +164,35 @@ async function startLocalServer(): Promise<typeof local> {
     }
     if (path === '/sw') return send(page('SW zz_test', '<h1>SW</h1>'));
     if (path === '/sw.js') return send("self.addEventListener('fetch', function () {});", 'text/javascript');
+    // Écritures hors de la session CDP de la page : worker dédié, cadre d'un autre site (hors processus).
+    if (path === '/worker') return send(page('Worker zz_test', "<h1>Worker</h1><script>new Worker('/worker.js')</script>"));
+    if (path === '/worker.js') return send("fetch('/wwrite',{method:'POST',body:'zz_test'}).catch(function(){});", 'text/javascript');
+    if (path === '/frame') return send(page('Cadre zz_test', `<h1>Cadre</h1><iframe src="http://${OTHER}:${(server.address() as AddressInfo).port}/inner"></iframe>`));
+    if (path === '/inner') return send(page('Interne zz_test', "<p>interne</p><script>fetch('/fwrite',{method:'POST',body:'zz_test'}).catch(function(){})</script>"));
+    // Fiche dont le bouton écrit puis fait boucler le fil principal de la page dès que /hang répond (fin de l'agent).
+    if (path === '/loop') {
+      return send(
+        page(
+          'Fiche zz_test',
+          '<h1>Lampe zz_test</h1><p>Identifiant : zz_test_item_0001</p>' +
+            "<button type=\"button\" onclick=\"fetch('/write',{method:'POST',body:'zz_test'}).catch(function(){});fetch('/hang').then(function(){for(;;){}})\">Envoyer</button>",
+        ),
+      );
+    }
+    if (path === '/hang') {
+      void hang.then(() => send('ok', 'text/plain'));
+      return;
+    }
     res.writeHead(404).end();
   });
+  let releaseHang = (): void => undefined;
+  let hang = new Promise<void>((resolve) => (releaseHang = resolve));
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
   return Object.defineProperties({ server, port: (server.address() as AddressInfo).port } as typeof local, {
     posts: { get: () => state.posts },
     paths: { get: () => state.paths },
+    releaseHang: { value: () => releaseHang() },
+    resetHang: { value: () => void (hang = new Promise<void>((resolve) => (releaseHang = resolve))) },
   });
 }
 const LOCAL_ITEM = { type: 'object', properties: { id: { type: 'string' }, title: { type: 'string' } }, required: ['id', 'title'], additionalProperties: false };
@@ -177,7 +204,7 @@ beforeAll(async () => {
   pool = new BrowserPool({ size: 1, launch: playwrightLauncher(launchProxy.url, process.env), recycleAfterRuns: 100 });
   fake = await createFakeProvider();
   local = await startLocalServer();
-  localGuard = fixtureGuard(local.port, [LOCAL], net);
+  localGuard = fixtureGuard(local.port, [LOCAL, OTHER], net);
 }, 120_000);
 
 afterAll(async () => {
@@ -185,6 +212,7 @@ afterAll(async () => {
   await launchProxy?.close();
   await fake?.close();
   await client?.close();
+  local?.releaseHang();
   await new Promise((resolve) => local?.server.close(resolve));
 });
 
@@ -192,6 +220,7 @@ beforeEach(async () => {
   fake.reset();
   await client.reset();
   local.paths.length = 0;
+  local.resetHang();
 });
 
 describe('E4 agent_fetch : HTML irrégulier mis en forme par le rôle extract', () => {
@@ -575,7 +604,7 @@ describe('injection de prompt (08 §4) : 0 requête vers le domaine piège', () 
     );
     expect(out.result).toMatchObject({ ok: false, failure: { failure_class: 'code_error', detail: 'agent_engine_error' } });
     expect(fake.requests).toBe(0);
-  }, 60_000);
+  }, 120_000); // lancement du Chromium dédié compris (CHROMIUM_LAUNCH_TIMEOUT_MS = 60 s), comme les autres essais E5/E6 du fichier
 });
 
 describe('plafond de coût de l’essai (04b « Schéma et coût », 08 §1) : reliquat, prix absent', () => {
@@ -880,6 +909,203 @@ describe('écritures sans allow_write_actions (08 §4 mesure 4) : E5 sur le pool
     expect(out.compiled).toBeUndefined();
     expect(out.compileFailure).toBe('write_blocked');
   }, 180_000);
+
+  /** Essai E6 sur le serveur local : un clic sur « Envoyer », sortie attendue rendue par `done`. */
+  const writeRun = (access: AccessCheck, startPath: string, taskId: string, steps: ScriptedStep[] = stagehandScript([scripted.toolCalls([{ name: 'act', arguments: { action: 'click the button "Envoyer"' } }])], { items: [{ id: 'zz_test_item_0001', title: 'Lampe zz_test' }] })) => {
+    fake.setScenario(AGENT_MODEL, steps);
+    return withEgress(
+      [LOCAL],
+      (egress) =>
+        runAgentExecutor({
+          access,
+          spec: { schema_version: 1, kind: 'agent', start_url: localUrl(startPath), allowed_hosts: [LOCAL], instruction: 'Read the product sheet.', limits: { max_steps: 10, timeout_ms: 90_000 } },
+          outputSchema: LOCAL_ITEM,
+          signal,
+          guard: localGuard,
+          egress,
+          agentBrowser: (o) => launchAgentBrowser({ ...o, egressServer: egress.server }),
+          engineFor: engineFor(),
+          pool,
+          allowWriteActions: false,
+          maxCostUsd: 0.5,
+          taskId,
+          version: 1,
+        }),
+      localGuard,
+    );
+  };
+  /** Contrôle robots.txt qui retient /write et /beacon jusqu'à `release` : la garde d'écriture ne les voit qu'ensuite. */
+  const holdWrites = (): { access: AccessCheck; release: () => void } => {
+    let release = (): void => undefined;
+    const held = new Promise<void>((resolve) => (release = resolve));
+    return {
+      access: async (u) => {
+        if (/^\/(write|beacon)$/.test(new URL(u).pathname)) await held;
+        return { allowed: true, crawlDelayMs: null };
+      },
+      release,
+    };
+  };
+
+  test('assert_write_action_blocked — E6 : verdict de la garde rendu APRÈS la fin de l’agent (écriture encore suspendue) : comptée quand même, jamais compilée', async () => {
+    // Course constatée sous charge (fix-flaky) : l'agent rendait « done » avant que la garde n'ait tranché sur les écritures
+    // lancées par son dernier clic ; le compte lu valait 0 et le clic était compilé en E5. Ici, le contrôle robots.txt
+    // (consulté avant le verrou de domaines) retient /write et /beacon jusqu'à la fin de l'essai : la garde d'écriture ne
+    // les voit jamais pendant l'agent (Stagehand, qui attend le calme du réseau après `act`, abandonne une requête bloquée
+    // au bout de 2 s). Seul le compte des écritures LANCÉES peut refuser la compilation.
+    const robots = holdWrites();
+    const before = local.posts;
+    try {
+      const out = await writeRun(robots.access, '/', 'zz_test_write_late');
+      expect(out.result.ok).toBe(true);
+      expect(local.posts - before).toBe(0);
+      expect(out.compiled).toBeUndefined();
+      expect(out.compileFailure).toBe('write_blocked');
+    } finally {
+      robots.release();
+    }
+  }, 180_000);
+
+  test('assert_write_action_blocked — E6 : écriture coupée par robots.txt (avant la garde d’écriture) : comptée, jamais compilée', async () => {
+    // Une écriture hors cadre principal refusée par robots.txt n'atteint pas la garde (aucun motif `write`) et n'est pas un
+    // refus du run (`mainFrame` faux) : sans compte des écritures lancées, le clic qui la déclenche était compilé.
+    const robotsDeniesWrites: AccessCheck = async (u) =>
+      /^\/(write|beacon)$/.test(new URL(u).pathname) ? { allowed: false, failure: { failure_class: 'robots_disallowed', retryable: false, detail: 'zz_test' } } : { allowed: true, crawlDelayMs: null };
+    const before = local.posts;
+    const out = await writeRun(robotsDeniesWrites, '/', 'zz_test_write_robots');
+    expect(out.result.ok).toBe(true);
+    expect(local.posts - before).toBe(0);
+    expect(out.compiled).toBeUndefined();
+    expect(out.compileFailure).toBe('write_blocked');
+  }, 180_000);
+
+  test('assert_write_action_blocked — E6 : la page boucle juste après le clic d’écriture : essai fini en ≤ 5 s + marge après `done`, slot rendu, écriture comptée', async () => {
+    // Revue de fix-flaky : la barrière (évaluation sur le fil principal de la page) n'était pas bornée ; une page qui boucle
+    // la tenait sans fin, et avec elle l'essai et le slot du pool. La page boucle dès que /hang répond, c'est-à-dire quand
+    // le modèle rend `done` (réponse retardée de 1,5 s pour que la boucle tourne déjà quand l'agent finit).
+    const robots = holdWrites();
+    let doneAt = 0;
+    const steps = stagehandScript([scripted.toolCalls([{ name: 'act', arguments: { action: 'click the button "Envoyer"' } }])], { items: [{ id: 'zz_test_item_0001', title: 'Lampe zz_test' }] }).map(
+      (step) =>
+        (ctx: FakeRequestContext): ScriptedResponse => {
+          const res = typeof step === 'function' ? step(ctx) : step;
+          const tools = ((ctx.body['tools'] ?? []) as { function: { name: string } }[]).map((t) => t.function.name);
+          if (tools.length !== 1 || tools[0] !== 'done' || res.kind !== 'completion') return res;
+          local.releaseHang();
+          doneAt = performance.now() + 1500;
+          return { ...res, delayMs: 1500 };
+        },
+    );
+    const before = local.posts;
+    try {
+      const out = await writeRun(robots.access, '/loop', 'zz_test_write_loop', steps);
+      expect(doneAt).toBeGreaterThan(0);
+      expect(performance.now() - doneAt).toBeLessThan(5000 + 5000);
+      expect(out.result.ok).toBe(true);
+      expect(local.posts - before).toBe(0);
+      expect(out.compiled).toBeUndefined();
+      expect(out.compileFailure).toBe('write_blocked');
+      // Slot du pool rendu (pool d'un seul slot) : un autre essai l'obtient aussitôt.
+      await expect(Promise.race([pool.hold(signal, async () => 'slot'), new Promise((resolve) => setTimeout(() => resolve('slot tenu'), 10_000))])).resolves.toBe('slot');
+    } finally {
+      robots.release();
+    }
+  }, 180_000);
+});
+
+describe('AgentBrowser.settleWrites : écritures lancées pendant l’agent, toutes cibles, quel que soit le verdict (08 §4 mesure 4)', () => {
+  /** Chromium dédié sur le serveur local (LOCAL et OTHER, deux sites), contrôle robots.txt fourni par le test. */
+  const withAgentBrowser = <T>(checkRequest: RequestCheck, fn: (ab: AgentBrowser) => Promise<T>): Promise<T> =>
+    withEgress(
+      [LOCAL, OTHER],
+      async (egress) => {
+        const ab = await launchAgentBrowser({ egressServer: egress.server, allowedHosts: [LOCAL, OTHER], allowWriteActions: false, checkRequest });
+        try {
+          return await fn(ab);
+        } finally {
+          await ab.close();
+        }
+      },
+      localGuard,
+    );
+  /** Contrôle qui retient sans fin les écritures `paths` (verdict jamais rendu) et signale leur arrivée. */
+  const holding = (paths: RegExp) => {
+    let release = (): void => undefined;
+    const held = new Promise<boolean>((resolve) => (release = () => resolve(false)));
+    let seen = (): void => undefined;
+    const arrived = new Promise<void>((resolve) => (seen = resolve));
+    const check: RequestCheck = async (hop) => {
+      if (!paths.test(new URL(hop.url).pathname)) return true;
+      seen();
+      return held;
+    };
+    return { check, arrived, release };
+  };
+
+  test('écriture d’un worker dédié (hors de la session CDP de la page), verdict jamais rendu : comptée', async () => {
+    const robots = holding(/^\/wwrite$/);
+    try {
+      await withAgentBrowser(robots.check, async (ab) => {
+        await ab.page.goto(localUrl('/worker'));
+        await robots.arrived;
+        expect(await ab.settleWrites(1000)).toBeGreaterThanOrEqual(1);
+        expect(ab.guard.blocked.filter((b) => b.reason === 'write')).toHaveLength(0);
+      });
+    } finally {
+      robots.release();
+    }
+  }, 120_000);
+
+  test('écriture d’un cadre d’un autre site (hors processus), verdict jamais rendu : comptée', async () => {
+    const robots = holding(/^\/fwrite$/);
+    try {
+      await withAgentBrowser(robots.check, async (ab) => {
+        await ab.page.goto(localUrl('/frame'));
+        await robots.arrived;
+        expect(await ab.settleWrites(1000)).toBeGreaterThanOrEqual(1);
+        expect(ab.guard.blocked.filter((b) => b.reason === 'write')).toHaveLength(0);
+      });
+    } finally {
+      robots.release();
+    }
+  }, 120_000);
+
+  test('écriture de la page suspendue, verdict jamais rendu : comptée sans attendre le délai', async () => {
+    const robots = holding(/^\/write$/);
+    try {
+      await withAgentBrowser(robots.check, async (ab) => {
+        await ab.page.goto(localUrl('/'));
+        await ab.page.evaluate("void fetch('/write', { method: 'POST', body: 'zz_test' }).catch(() => undefined)");
+        await robots.arrived;
+        const t0 = performance.now();
+        expect(await ab.settleWrites(4000)).toBeGreaterThanOrEqual(1);
+        expect(performance.now() - t0).toBeLessThan(3000);
+      });
+    } finally {
+      robots.release();
+    }
+  }, 120_000);
+
+  test('page dont le fil principal boucle après une écriture : settleWrites rend la main dans son délai, la fermeture aussi ; écriture comptée', async () => {
+    await withAgentBrowser(allowAllRequests, async (ab) => {
+      await ab.page.goto(localUrl('/'));
+      await ab.page.evaluate("void fetch('/write', { method: 'POST', body: 'zz_test' }).catch(() => undefined); setTimeout(() => { for (;;) {} }, 50)");
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      const t0 = performance.now();
+      expect(await ab.settleWrites(1000)).toBeGreaterThanOrEqual(1);
+      expect(performance.now() - t0).toBeLessThan(1000 + 1500);
+      const c0 = performance.now();
+      await ab.close();
+      expect(performance.now() - c0).toBeLessThan(10_000);
+    });
+  }, 120_000);
+
+  test('aucune écriture : 0', async () => {
+    await withAgentBrowser(allowAllRequests, async (ab) => {
+      await ab.page.goto(localUrl('/'));
+      expect(await ab.settleWrites(1000)).toBe(0);
+    });
+  }, 120_000);
 });
 
 describe('prompts de Stagehand : llm.redact et jetons d’URL (08 §1, 08 §4 mesure 5)', () => {

@@ -6,6 +6,7 @@
 // navigations de la page coupées). Chaque défilement est une requête pour la cadence et le contrôle d'accès.
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'vitest';
 import { BrowserPool, playwrightLauncher } from '../../apps/worker/src/browser/pool.ts';
+import { scrollStep } from '../../apps/worker/src/browser/bounded.ts';
 import { runPlaywrightExecutor } from '../../apps/worker/src/exec/browser-executors.ts';
 import { startClient, type Client } from '../../fixtures/src/test-helpers.ts';
 import { validateDeclarativeSpec, type DeclarativeSpec } from '@runtime/core';
@@ -115,6 +116,46 @@ describe('infinite_scroll en E3 (Chromium)', () => {
     const out = await withEgress((egress) => runPlaywrightExecutor({ access: allowAllRobots, pool, egress, guard, spec: feedSpec(), input: {}, signal, maxRequests: 2, renderWaitMs: 4_000, scrollWaitMs: 1_500 }));
     expect(out).toMatchObject({ ok: true, pages: 2, stop: 'max_requests_per_run', truncated: true });
     if (out.ok) expect(out.records).toHaveLength(20);
+  }, 60_000);
+});
+
+describe('infinite_scroll en E3 : délai dépassé ou fin du flux', () => {
+  const ORIGIN = 'http://zz_test_slowfeed.localhost';
+  const items = (n: number, from = 0): string => Array.from({ length: n }, (_, i) => `<div class="feed-item">item-${from + i}</div>`).join('');
+  // Page servie par `page.route` (aucun réseau) : au défilement, le site demande `/more` ; `delayMs` le fait attendre,
+  // `more = 0` : plus rien à servir (fin du flux).
+  const probe = (delayMs: number, more: number): Promise<{ grew: boolean; timedOut: boolean }> =>
+    pool.run(signal, async (browser) => {
+      const context = await browser.newContext();
+      try {
+        const page = await context.newPage();
+        const script = `const feed=document.getElementById("feed");new IntersectionObserver(async(e)=>{if(!e[0].isIntersecting)return;const r=await fetch("/more");feed.insertAdjacentHTML("beforeend",await r.text())}).observe(document.getElementById("sentinel"));`;
+        await page.route(`${ORIGIN}/**`, async (route) => {
+          const path = new URL(route.request().url()).pathname;
+          if (path === '/more') {
+            await new Promise((resolve) => setTimeout(resolve, delayMs));
+            return route.fulfill({ status: 200, contentType: 'text/html', body: items(more, 10) }).catch(() => undefined);
+          }
+          return route.fulfill({ status: 200, contentType: 'text/html', body: `<html><body><style>.feed-item{height:600px}</style><div id="feed">${items(10)}</div><div id="sentinel" style="height:1px"></div><script>${script}</script></body></html>` });
+        });
+        await page.goto(`${ORIGIN}/`);
+        await page.waitForLoadState('networkidle');
+        return await scrollStep(page, 'div.feed-item', 10, 700);
+      } finally {
+        await context.close();
+      }
+    });
+
+  test('assert_infinite_scroll_timeout_truncated — le site met plus longtemps que le délai à répondre : timedOut (sortie tronquée), pas une fin de flux', async () => {
+    expect(await probe(2_500, 10)).toEqual({ grew: false, timedOut: true });
+  }, 60_000);
+
+  test('assert_infinite_scroll_timeout_truncated — le site répond dans le délai : nouveaux éléments, pas timedOut', async () => {
+    expect(await probe(0, 10)).toEqual({ grew: true, timedOut: false });
+  }, 60_000);
+
+  test('assert_infinite_scroll_timeout_truncated — le site n’a plus rien à servir, réseau au calme : fin naturelle (pas timedOut)', async () => {
+    expect(await probe(0, 0)).toEqual({ grew: false, timedOut: false });
   }, 60_000);
 });
 

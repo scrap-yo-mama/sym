@@ -42,7 +42,7 @@ export async function countMatching(page: Page, selector: string): Promise<numbe
  * Fait défiler la page jusqu'en bas (événements `scroll`, observateurs d'intersection du site) puis attend, au plus
  * `timeoutMs`, qu'il y ait plus de `before` éléments pour `selector`. Rend vrai si de nouveaux éléments sont apparus.
  */
-export async function scrollForMore(page: Page, selector: string, before: number, timeoutMs: number): Promise<boolean> {
+async function scrollForMore(page: Page, selector: string, before: number, timeoutMs: number): Promise<boolean> {
   await page
     .evaluate(() => {
       const g = globalThis as unknown as ScrollGlobals;
@@ -63,6 +63,31 @@ export async function scrollForMore(page: Page, selector: string, before: number
     )
     .then(() => true)
     .catch(() => false);
+}
+
+/**
+ * Un défilement complet : défile, attend de nouveaux éléments (au plus `timeoutMs`), puis le calme du réseau. `timedOut` :
+ * rien de nouveau dans le délai ET des requêtes de la page encore en vol (site lent) ; sans nouvel élément et réseau au
+ * calme, c'est la fin du flux. Les requêtes en vol sont comptées par les événements de la page (`waitForLoadState` rend
+ * aussitôt si le calme a déjà été atteint avant le défilement).
+ */
+export async function scrollStep(page: Page, selector: string, before: number, timeoutMs: number): Promise<{ readonly grew: boolean; readonly timedOut: boolean }> {
+  const pending = new Set<unknown>();
+  const onStart = (r: unknown): void => void pending.add(r);
+  const onEnd = (r: unknown): void => void pending.delete(r);
+  page.on('request', onStart);
+  page.on('requestfinished', onEnd);
+  page.on('requestfailed', onEnd);
+  try {
+    const grew = await scrollForMore(page, selector, before, timeoutMs);
+    if (!grew) return { grew, timedOut: pending.size > 0 };
+    await page.waitForLoadState('networkidle', { timeout: timeoutMs }).catch(() => undefined);
+    return { grew, timedOut: false };
+  } finally {
+    page.off('request', onStart);
+    page.off('requestfinished', onEnd);
+    page.off('requestfailed', onEnd);
+  }
 }
 
 const bytesOk = (value: string, maxBytes: number): boolean => Buffer.byteLength(value) <= maxBytes;

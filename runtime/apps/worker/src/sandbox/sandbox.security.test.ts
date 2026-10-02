@@ -73,9 +73,14 @@ afterAll(async () => {
   }
 });
 
-type Run = SandboxResult & { logs: Record<string, unknown>[]; items: unknown[]; pid?: number; envKeys?: readonly string[]; environ?: string; environError?: string; dump?: DumpState };
 /** Ce qui décide d'un vidage mémoire de l'enfant, lu dans /proc à `ready` (Linux). */
 type DumpState = { coreLimit?: string | undefined; coredumpFilter?: string | undefined; error?: string | undefined };
+/**
+ * `runMs` : du message `ready` de l'enfant (script remis, échéance murale armée) au verdict. Les budgets de temps du
+ * script se mesurent là : `durationMs` compte aussi le démarrage de Node et de l'isolat, qui s'étire sous la charge d'une
+ * autre CI (temps mural ≠ temps CPU) sans rien dire du bac à sable.
+ */
+type Run = SandboxResult & { logs: Record<string, unknown>[]; items: unknown[]; pid?: number; envKeys?: readonly string[]; environ?: string; environError?: string; dump?: DumpState; runMs?: number };
 
 function alive(pid: number): boolean {
   try {
@@ -111,12 +116,14 @@ async function run(engineId: SandboxEngineId, code: string, limits: Partial<Sand
   let environ: string | undefined;
   let environError: string | undefined;
   let dump: DumpState | undefined;
+  let readyAt: number | undefined;
   // Job CI Linux avec utilisateur dédié : SANDBOX_UID, SANDBOX_GID, SANDBOX_LAUNCHER (README § Utilisateur dédié).
   const options: ProcessSandboxOptions = { ...sandboxOptionsFromEnv(process.env), ...extra.engine };
   const engine = new ProcessSandboxEngine({
     ...options,
     engine: engineId,
     onChildReady: (info) => {
+      readyAt ??= performance.now();
       pid = info.pid;
       envKeys = info.envKeys;
       // Linux : lecture directe de l'environnement du processus, indépendante de ce que l'enfant déclare. Une exception ici
@@ -143,7 +150,8 @@ async function run(engineId: SandboxEngineId, code: string, limits: Partial<Sand
   // Un moteur par run ici (le worker n'en a qu'un) : le balayage de fin de run (`kill -1` sous l'uid dédié) doit être fini
   // avant que le moteur du run suivant lance son enfant, sinon il le tue. Le worker l'attend de lui-même (#track).
   await engine.idle();
-  return { ...result, logs, items, pid, envKeys, environ, ...(environError !== undefined ? { environError } : {}), ...(dump !== undefined ? { dump } : {}) };
+  const runMs = readyAt === undefined ? undefined : Math.round(performance.now() - readyAt);
+  return { ...result, logs, items, pid, envKeys, environ, runMs, ...(environError !== undefined ? { environError } : {}), ...(dump !== undefined ? { dump } : {}) };
 }
 
 const violationLogged = (r: Run, reason?: string) =>
@@ -153,7 +161,9 @@ function expectKilledFast(r: Run, timeoutMs: number) {
   expect(r.killed).toBe(true);
   expect(r.killLatencyMs).toBeDefined();
   expect(r.killLatencyMs as number).toBeLessThan(KILL_BUDGET_MS);
-  expect(r.durationMs).toBeLessThan(timeoutMs + KILL_BUDGET_MS + 1000); // + démarrage de l'enfant
+  // Échéance du script + arrêt, comptés depuis `ready` : le démarrage de l'enfant n'est pas un budget du script.
+  expect(r.runMs).toBeDefined();
+  expect(r.runMs as number).toBeLessThan(timeoutMs + KILL_BUDGET_MS);
   if (r.pid !== undefined) expect(alive(r.pid)).toBe(false);
 }
 
@@ -271,23 +281,30 @@ describe.each(ENGINES)('assert_sandbox — %s', (engineId) => {
   test('7. sortie vers l’hôte : emit de 1 Mo en boucle cadencée → output_limit, enfant tué, RSS du parent bornée', async () => {
     const rss: number[] = [process.memoryUsage().rss];
     const sampler = setInterval(() => rss.push(process.memoryUsage().rss), 20);
+    // isolated-vm : le plafond cumulé (50 Mio) se franchit après ~52 Mo sérialisés, relayés par l'enfant et relus par
+    // l'hôte, soit du temps CPU des deux processus ; l'échéance murale, elle, court même quand la machine les prive de
+    // CPU (deux CI en parallèle : sortie en `timeout` à 4 s observée). Elle est donc portée à 20 s, loin de ce débit
+    // (~0,3-1,1 s mesurés sous une charge de 28) : c'est le plafond de sortie qui doit trancher, pas l'horloge. QuickJS :
+    // l'échéance reste à 4 s (voir plus bas, elle met fin au run).
+    const timeoutMs = engineId === 'isolated-vm' ? 20_000 : 4000;
     const r = await run(engineId, `
       const s = 'x'.repeat(1e6);
-      for (;;) { ctx.emit(s); const t = Date.now(); while (Date.now() - t < 2) {} }`, { timeoutMs: 4000 });
+      for (;;) { ctx.emit(s); const t = Date.now(); while (Date.now() - t < 2) {} }`, { timeoutMs });
     clearInterval(sampler);
     rss.push(process.memoryUsage().rss);
     const growthMb = (Math.max(...rss) - (rss[0] as number)) / 1048576;
     expect(r.outcome, JSON.stringify({ ...r, logs: undefined, items: r.items.length })).not.toBe('ok');
     if (engineId === 'isolated-vm') {
+      // Verdict `violation` (output_limit) et non `timeout` : le plafond, pas l'échéance, a arrêté le script.
       expect(r.outcome).toBe('violation');
       expect(violationLogged(r, 'output_limit')).toBe(true);
-      expect(r.durationMs).toBeLessThan(3000);
+      expect(r.violations.some((v) => v.reason === 'time_limit')).toBe(false);
     } else {
       // QuickJS tourne sur le fil principal de l'enfant : tant que le script ne rend pas la main, rien ne part vers le
       // parent (file IPC de l'enfant, bornée par le budget sortant) ; l'échéance murale le tue.
       expect(['violation', 'timeout']).toContain(r.outcome);
     }
-    expectKilledFast(r, 4000);
+    expectKilledFast(r, timeoutMs);
     // Plafond cumulé par défaut : 50 Mio d'éléments retenus (52 éléments de 1 000 002 octets).
     expect(r.items.length).toBeLessThanOrEqual(53);
     expect(growthMb).toBeLessThan(256);
@@ -297,7 +314,7 @@ describe.each(ENGINES)('assert_sandbox — %s', (engineId) => {
     const r = await run(engineId, `for (;;) { try { process; } catch (e) {} }`, { timeoutMs: 3000 });
     expect(r.outcome).toBe('violation');
     expectKilledFast(r, 3000);
-    expect(r.durationMs).toBeLessThan(2000);
+    expect(r.runMs as number).toBeLessThan(2000); // sans attendre l’échéance (3 s après `ready`)
     expect(r.violations.length).toBeLessThanOrEqual(32);
     expect(r.logs.filter((l) => l.event === 'sandbox_violation').length).toBeLessThanOrEqual(32);
   });
@@ -307,7 +324,7 @@ describe.each(ENGINES)('assert_sandbox — %s', (engineId) => {
     expect(r.outcome).toBe('violation');
     expect(violationLogged(r, 'domain_not_allowed')).toBe(true);
     expectKilledFast(r, 3000);
-    expect(r.durationMs).toBeLessThan(2000);
+    expect(r.runMs as number).toBeLessThan(2000);
   });
 
   test('10. journal inondé : au-delà du plafond, violation et enfant tué', async () => {
@@ -316,7 +333,7 @@ describe.each(ENGINES)('assert_sandbox — %s', (engineId) => {
     expect(violationLogged(r, 'output_limit')).toBe(true);
     expect(r.logs.filter((l) => l.event === 'sandbox_log').length).toBeLessThan(80);
     expectKilledFast(r, 3000);
-    expect(r.durationMs).toBeLessThan(2000);
+    expect(r.runMs as number).toBeLessThan(2000);
   });
 
   test('11. budget IPC du run : au-delà, output_limit et enfant tué', async () => {
@@ -327,10 +344,16 @@ describe.each(ENGINES)('assert_sandbox — %s', (engineId) => {
   });
 
   test('12. plafond CPU du processus (RLIMIT_CPU) : boucle tuée par le système avant l’échéance murale', async () => {
-    const r = await run(engineId, 'while (true) {}', { timeoutMs: 15_000, cpuLimitSeconds: 1 });
+    const timeoutMs = 15_000;
+    const r = await run(engineId, 'while (true) {}', { timeoutMs, cpuLimitSeconds: 1 });
     expect(r.outcome).toBe('timeout');
+    // `cpu` (SIGXCPU) et non `${timeoutMs} ms` : le système a tué l'enfant, l'échéance murale n'a pas tranché.
     expect(r.violations).toContainEqual({ reason: 'time_limit', detail: 'cpu' });
-    expect(r.durationMs).toBeLessThan(6000);
+    expect(r.violations).not.toContainEqual({ reason: 'time_limit', detail: `${timeoutMs} ms` });
+    // RLIMIT_CPU compte du temps CPU (1 s + démarrage de Node et de l'isolat), pas du temps mural : sous la charge d'une
+    // autre CI, l'enfant n'obtient qu'une fraction d'un cœur et la même seconde CPU s'étale (6,8 s observées en CI, 7,1 à
+    // 9,1 s mesurées sous une charge de 55). La borne murale est donc l'échéance elle-même, ce que dit le titre.
+    expect(r.durationMs).toBeLessThan(timeoutMs);
     if (r.pid !== undefined) expect(alive(r.pid)).toBe(false);
   });
 
