@@ -73,12 +73,12 @@ const actionLabel = (action: string): string => {
 <template>
   <section class="flex flex-col gap-6" aria-labelledby="account-heading">
     <header class="flex flex-col gap-1">
-      <h1 id="account-heading" data-route-heading tabindex="-1" class="text-2xl font-semibold tracking-tight">{{ t('account.title') }}</h1>
+      <h1 id="account-heading" data-route-heading tabindex="-1" class="sym-title">{{ t('account.title') }}</h1>
       <p class="text-sm text-muted-foreground">{{ t('account.intro') }}</p>
       <p v-if="me" class="text-sm" data-testid="account-identity">{{ me.displayName ? `${me.displayName} · ${me.email}` : me.email }}</p>
     </header>
 
-    <section class="flex flex-col gap-2 rounded-xl border p-4" aria-labelledby="preferences-heading">
+    <section class="flex flex-col gap-2 rounded-xl border bg-card p-4" aria-labelledby="preferences-heading">
       <h2 id="preferences-heading" class="text-lg font-semibold">{{ t('account.preferences.title') }}</h2>
       <p class="text-sm text-muted-foreground">{{ t('account.preferences.text') }}</p>
       <div class="flex flex-col gap-1">
@@ -94,7 +94,7 @@ const actionLabel = (action: string): string => {
 
     <TwoFactorPanel @sessions-closed="sessions.reload()" />
 
-    <section class="flex flex-col gap-3 rounded-xl border p-4" aria-labelledby="sessions-heading" data-testid="sessions-panel">
+    <section class="flex flex-col gap-3 rounded-xl border bg-card p-4" aria-labelledby="sessions-heading" data-testid="sessions-panel">
       <h2 id="sessions-heading" class="text-lg font-semibold">{{ t('account.sessions.title') }}</h2>
       <p class="text-sm text-muted-foreground">{{ t('account.sessions.intro') }}</p>
       <Alert v-if="sessions.actionFailure.value" variant="destructive"><AlertDescription>{{ t(sessions.actionFailure.value) }}</AlertDescription></Alert>
@@ -136,7 +136,7 @@ const actionLabel = (action: string): string => {
       </div>
     </section>
 
-    <section v-if="ssoProvider || identities.identities.value.length > 0" class="flex flex-col gap-3 rounded-xl border p-4" aria-labelledby="identities-heading" data-testid="identities-panel">
+    <section v-if="ssoProvider || identities.identities.value.length > 0" class="flex flex-col gap-3 rounded-xl border bg-card p-4" aria-labelledby="identities-heading" data-testid="identities-panel">
       <h2 id="identities-heading" class="text-lg font-semibold">{{ t('account.identities.title') }}</h2>
       <p class="text-sm text-muted-foreground">{{ t('account.identities.intro') }}</p>
       <p v-if="justLinked" role="status" class="text-sm">{{ t('account.identities.justLinked') }}</p>
@@ -170,7 +170,7 @@ const actionLabel = (action: string): string => {
       </form>
     </section>
 
-    <section class="flex flex-col gap-3 rounded-xl border p-4" aria-labelledby="activity-heading" data-testid="activity-panel">
+    <section class="flex flex-col gap-3 rounded-xl border bg-card p-4" aria-labelledby="activity-heading" data-testid="activity-panel">
       <h2 id="activity-heading" class="text-lg font-semibold">{{ t('account.activity.title') }}</h2>
       <p v-if="activity.loading.value && !activity.loaded.value" role="status" class="text-sm text-muted-foreground">{{ t('ui.loading') }}</p>
       <p v-else-if="activity.items.value.length === 0" class="text-sm text-muted-foreground">{{ t('account.activity.empty') }}</p>

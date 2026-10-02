@@ -71,7 +71,7 @@ async function confirmRevoke(): Promise<void> {
 <template>
   <section class="flex flex-col gap-6" aria-labelledby="keys-heading">
     <header class="flex flex-col gap-1">
-      <h1 id="keys-heading" data-route-heading tabindex="-1" class="text-2xl font-semibold tracking-tight">{{ t('keys.title') }}</h1>
+      <h1 id="keys-heading" data-route-heading tabindex="-1" class="sym-title">{{ t('keys.title') }}</h1>
       <p class="text-sm text-muted-foreground">{{ t('keys.intro') }}</p>
     </header>
 
@@ -85,7 +85,7 @@ async function confirmRevoke(): Promise<void> {
       @dismiss="keys.dismissCreated()"
     />
 
-    <form class="flex flex-col gap-3 rounded-xl border p-4" novalidate data-testid="key-form" @submit.prevent="submit">
+    <form class="flex flex-col gap-3 rounded-xl border bg-card p-4" novalidate data-testid="key-form" @submit.prevent="submit">
       <h2 class="text-lg font-semibold">{{ t('keys.createTitle') }}</h2>
       <Alert v-if="localError || failure" variant="destructive" data-testid="key-error"><AlertDescription>{{ localError ?? t(failure ?? 'errors.generic') }}</AlertDescription></Alert>
       <TextField id="key-label" v-model="label" :label="t('keys.label')" :hint="t('keys.labelHint')" name="label" class="max-w-md" autocomplete="off" maxlength="100" required />

@@ -268,7 +268,9 @@ export function guard(ctx: ServerContext) {
 
     const denied = async (reason: string) => {
       await audit(ctx, request, actor, { action: 'access.denied', outcome: 'denied', meta: { route: `${spec.method} ${spec.url}`, reason } });
-      await sendError(reply, 403, 'forbidden', 'action non autorisée');
+      // Clé sans le scope de la route : `insufficient_scope` (05 § 4.4), pour que l'agent sache quel droit demander.
+      if (reason === 'scope_missing') await sendError(reply, 403, 'insufficient_scope', `scope ${spec.scope ?? ''} requis pour cette clé d’API`);
+      else await sendError(reply, 403, 'forbidden', 'action non autorisée');
     };
     if (actor.via === 'apikey') {
       if (spec.auth === 'session') return denied('session_required');

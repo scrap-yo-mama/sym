@@ -258,10 +258,9 @@ describe('assert_quickstart_replayed : le tutoriel sur une instance vierge', () 
     expect(steps.length).toBeGreaterThanOrEqual(8);
     expect(new Set(steps.map((s) => s.id)).size).toBe(steps.length);
     for (const step of steps.filter((s) => s.mode === 'run')) {
-      // Toute requête du tutoriel vise l'instance locale ; le site à enquêter de la première API (3.1) est local aussi : le
-      // rejeu ne contacte aucun site.
+      // Toute requête du tutoriel vise l'instance locale ; le site à enquêter de la première API (3.1) est local aussi (site de
+      // test `zz_test_<id>.localhost` : sous-domaine de localhost, boucle locale par RFC 6761) : le rejeu ne contacte aucun site.
       for (const url of step.script.match(/https?:\/\/[^\s'"\\]+/g) ?? []) {
-        // `*.localhost` (RFC 6761) se résout toujours en boucle locale : c'est l'hôte des fixtures (`zz_test_<id>.localhost`).
         const host = new URL(url).hostname;
         const local = ['localhost', '127.0.0.1'].includes(host) || host.endsWith('.localhost');
         expect(url.startsWith(QUICKSTART_BASE_URL) || local, `${step.id} : ${url}`).toBe(true);

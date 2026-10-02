@@ -49,7 +49,9 @@ services:
       migrate:
         condition: service_completed_successfully
     healthcheck:
-      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/health').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
+      # Lancée en root par Docker (USER root de l'image) : descente sur pwuser, sans capacité ni nouveaux privilèges (D-32),
+      # comme deploy/docker-compose.prod.yml.
+      test: ["CMD", "/usr/bin/setpriv", "--reuid=1001", "--regid=1001", "--init-groups", "--inh-caps=-all", "--no-new-privs", "--", "node", "-e", "fetch('http://127.0.0.1:3000/api/health').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
       interval: 5s
       timeout: 3s
       retries: 10
@@ -63,6 +65,9 @@ services:
       RUNTIME_MODE: worker
       DATABASE_URL: postgres://runtime:runtime-dev@postgres:5432/runtime
       MASTER_KEY: ${MASTER_KEY:-}
+    # Bac à sable de Chromium (espaces de noms utilisateur) : refusé par le profil seccomp par défaut de Docker.
+    security_opt:
+      - seccomp=./deploy/seccomp-chromium.json
     depends_on:
       postgres:
         condition: service_healthy

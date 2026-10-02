@@ -91,23 +91,6 @@ export async function sendRunSlotError(reply: FastifyReply, error: RunSlotError)
     : sendError(reply, 429, 'queue_full', 'file pleine : réessayez après le délai indiqué (Retry-After)');
 }
 
-/**
- * Contrôle AVANT écriture, pour une création qui change d'abord le statut de l'API (ré-enquête : la transition et le run
- * ne sont pas dans la même transaction) : limite par clé, puis plafonds utilisateur et instance lus sans verrou. Les
- * autres créations passent par `reserveRunSlot`, atomique. Renvoie true si la réponse est partie.
- */
-export async function rejectIfQueueFull(ctx: ServerContext, reply: FastifyReply, actor: Actor): Promise<boolean> {
-  if (await rejectIfKeyRateLimited(ctx, reply, actor)) return true;
-  const { rows } = await ctx.pool.query<{ total: number; mine: number }>(
-    'SELECT count(*)::int AS total, (count(*) FILTER (WHERE owner_id = $2))::int AS mine FROM runs WHERE state = ANY($1::text[]) AND paused_at IS NULL',
-    [ACTIVE_RUN_STATES, actor.userId],
-  );
-  const { total = 0, mine = 0 } = rows[0] ?? {};
-  if (mine < ctx.rest.maxActiveRunsPerUser && total < ctx.rest.maxConcurrentRuns) return false;
-  await sendRunSlotError(reply, new RunSlotError(mine >= ctx.rest.maxActiveRunsPerUser ? 'user_queue_full' : 'queue_full'));
-  return true;
-}
-
 /** Attente demandée (`?wait=` ou `wait_seconds`), bornée par `MAX_WAIT_SECONDS` ; 0 par défaut en REST. */
 export function waitSecondsOf(ctx: ServerContext, ...candidates: (number | undefined)[]): number {
   const wanted = candidates.find((c) => typeof c === 'number' && Number.isFinite(c)) ?? 0;

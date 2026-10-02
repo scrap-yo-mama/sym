@@ -33,6 +33,12 @@ export type ApplyStatusInput = {
    * COMMIT que sa transition, jamais sans elle (INV3). Une exception annule tout.
    */
   beforeWrite?: (client: pg.PoolClient) => Promise<void>;
+  /**
+   * Appelé dans la transaction après l'écriture du statut et de `status_events`, avant les notifications, quand la
+   * transition a été ACCEPTÉE : l'écriture qui exige le NOUVEAU statut (ex. enquête lancée par une ré-enquête, 16 à 20,
+   * qui veut `enquete`) part au même COMMIT que sa transition. Une exception annule tout (statut compris).
+   */
+  afterWrite?: (client: pg.PoolClient) => Promise<void>;
 };
 
 export type ApplyStatusResult =
@@ -119,6 +125,7 @@ export async function applyStatusTransition(pool: pg.Pool, input: ApplyStatusInp
         [row.id, row.owner_id, row.project_id, e.from_status, e.to_status, e.reason, e.run_id, e.at],
       );
     }
+    await input.afterWrite?.(client);
     if (events.length > 0) await input.afterTransition?.(client, events);
     return { ok: true, state: step.state, transitions: step.transitions, events };
   });

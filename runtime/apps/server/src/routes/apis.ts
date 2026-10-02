@@ -18,6 +18,7 @@ import {
 } from '@runtime/core';
 import {
   applyStatusAndNotify,
+  asActorInTransaction,
   createRun,
   InvestigationStateError,
   removeScheduleMirror,
@@ -47,7 +48,7 @@ import {
   type ApiRow,
 } from '../rest/apis.js';
 import { buildRunResult, readRunRow, waitForRun } from '../rest/runs.js';
-import { BLOCKING_STATUS, rejectIfKeyRateLimited, rejectIfQueueFull, rejectWithoutAck, reasonMessage, reserveRunSlot, RunSlotError, sendRunSlotError, triggerOf, waitSecondsOf } from '../rest/shared.js';
+import { BLOCKING_STATUS, rejectIfKeyRateLimited, rejectWithoutAck, reasonMessage, reserveRunSlot, RunSlotError, sendRunSlotError, triggerOf, waitSecondsOf } from '../rest/shared.js';
 import { CURSOR_TIME, decodeCursor, encodeCursor, INT4_MAX, UUID } from './account-helpers.js';
 import { audit, notFound, sendError, type Actor } from './guard.js';
 
@@ -376,8 +377,11 @@ export function apiRoutes(app: FastifyInstance, ctx: ServerContext): void {
     if (body.purpose !== undefined) set('purpose', body.purpose ?? '');
     if (body.legal_basis !== undefined) set('legal_basis', body.legal_basis);
     if (body.contains_personal_data !== undefined) set('contains_personal_data', body.contains_personal_data);
-    if (body.max_cost_usd !== undefined && body.max_cost_usd !== null) set('max_cost_usd', body.max_cost_usd);
-    if (body.budget_daily_usd !== undefined && body.budget_daily_usd !== null) set('budget_daily_usd', body.budget_daily_usd);
+    // `null` : retour au défaut de l'instance (défaut de la colonne, 0,5 $ par run et 5 $ par jour), jamais ignoré.
+    if (body.max_cost_usd === null) sets.push('max_cost_usd = DEFAULT');
+    else if (body.max_cost_usd !== undefined) set('max_cost_usd', body.max_cost_usd);
+    if (body.budget_daily_usd === null) sets.push('budget_daily_usd = DEFAULT');
+    else if (body.budget_daily_usd !== undefined) set('budget_daily_usd', body.budget_daily_usd);
     const view = await withActor(ctx.pool, actor, async (db) => {
       if (sets.length > 0) await db.query(`UPDATE apis SET ${sets.join(', ')}, updated_at = now() WHERE id = $1 AND owner_id = $2`, params);
       const row = await readApiById(db, api.id);
@@ -478,30 +482,60 @@ export function apiRoutes(app: FastifyInstance, ctx: ServerContext): void {
     },
   );
 
-  /** Ré-enquête (16 à 20, 17 pour une action requise) puis enquête en file ; le statut passe par la machine (INV3). */
+  /**
+   * Ré-enquête (16 à 20, 17 pour une action requise) puis enquête en file ; le statut passe par la machine (INV3). La
+   * transition et l'enquête (plafonds de file réservés, run, job) partent au MÊME COMMIT, par le crochet `afterWrite` de
+   * la machine : une enquête refusée (demande illisible, file pleine) laisse l'API dans son statut, jamais en `enquete`
+   * sans run (ce qui répondrait 409 `investigation_in_progress` à chaque run jusqu'à une nouvelle ré-enquête).
+   * Une API `bloquee` ne repart que par un geste humain dans la console (transition 18, 04 § 6, INV6, 05 § 1.3) : par une
+   * clé d'API, 403 `human_confirmation_required`, contrôlé avant tout et de nouveau sous le verrou de la ligne `apis`.
+   */
   const reinvestigate = async (request: FastifyRequest, reply: FastifyReply, actor: Actor, api: ApiRow, trigger: 'manual' | 'force_investigate', exclude?: Execution[]) => {
+    class HumanOnly extends Error {}
+    const humanOnly = () => sendError(reply, 403, 'human_confirmation_required', 'une API bloquée par le site ne se ré-enquête que dans la console, par un humain : jamais par une clé d’API');
+    // `force_investigate` sur une API bloquée reste refusé par la machine (409 `blocked`, ne pas réessayer).
+    const guardBlocked = trigger === 'manual' && actor.via !== 'ui';
+    if (guardBlocked && api.status === 'bloquee') return humanOnly();
     if (await activeInvestigation(ctx, actor, api.id)) return sendError(reply, 409, 'investigation_in_progress', 'une enquête est déjà en file, en cours ou en pause sur cette API');
     const state = await investigationOf(ctx, actor, api.id);
     if (state === null) return sendError(reply, 409, 'no_investigation_request', 'aucune demande d’enquête connue pour cette API (créée hors enquête) : recréez-la');
-    if (await rejectIfQueueFull(ctx, reply, actor)) return reply;
+    if (await rejectIfKeyRateLimited(ctx, reply, actor)) return reply;
     const queue = await ctx.jobs();
-    if (api.status !== 'enquete') {
-      const event: StatusEventInput = api.status === 'action_requise' ? { type: 'user_acted' } : { type: 'reinvestigate', trigger };
-      const step = await applyStatusAndNotify(ctx.pool, queue, { apiId: api.id, event, clock: { now: () => new Date() } });
-      if (!step.ok) return sendError(reply, 409, step.rejected === 'bloquee_manual_only' ? 'blocked' : 'status_not_reinvestigable', 'ce statut ne permet pas cette ré-enquête');
-    }
+    const launch = async (tx: Parameters<typeof startInvestigation>[0]) => {
+      await reserveRunSlot(tx, ctx);
+      return startInvestigation(tx, queue, {
+        apiId: api.id,
+        ownerId: actor.userId,
+        trigger: triggerOf(actor),
+        request: state.request,
+        ...(exclude === undefined ? {} : { excludeExecutions: exclude }),
+      });
+    };
     let runId: string;
     try {
-      ({ runId } = await withActor(ctx.pool, actor, (tx) =>
-        startInvestigation(tx, queue, {
+      if (api.status === 'enquete') {
+        ({ runId } = await withActor(ctx.pool, actor, launch));
+      } else {
+        const event: StatusEventInput = api.status === 'action_requise' ? { type: 'user_acted' } : { type: 'reinvestigate', trigger };
+        let started: { runId: string } | undefined;
+        const step = await applyStatusAndNotify(ctx.pool, queue, {
           apiId: api.id,
-          ownerId: actor.userId,
-          trigger: triggerOf(actor),
-          request: state.request,
-          ...(exclude === undefined ? {} : { excludeExecutions: exclude }),
-        }),
-      ));
+          event,
+          clock: { now: () => new Date() },
+          beforeWrite: async (db) => {
+            // Statut relu sous le verrou : une API passée en `bloquee` entre-temps ne repart pas par une clé.
+            if (guardBlocked && (await db.query<{ status: string }>('SELECT status FROM apis WHERE id = $1', [api.id])).rows[0]?.status === 'bloquee') throw new HumanOnly();
+          },
+          afterWrite: async (db) => {
+            started = await asActorInTransaction(db, actor, launch);
+          },
+        });
+        if (!step.ok) return sendError(reply, 409, step.rejected === 'bloquee_manual_only' ? 'blocked' : 'status_not_reinvestigable', 'ce statut ne permet pas cette ré-enquête');
+        runId = started!.runId;
+      }
     } catch (error) {
+      if (error instanceof HumanOnly) return humanOnly();
+      if (error instanceof RunSlotError) return sendRunSlotError(reply, error);
       if (error instanceof InvestigationStateError) return investigationError(reply, error);
       throw error;
     }

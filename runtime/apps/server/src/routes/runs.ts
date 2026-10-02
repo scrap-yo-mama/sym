@@ -5,7 +5,7 @@
 // Droits : runs de l'acteur seulement (RLS, 404 uniforme) ; l'admin et l'owner lisent les MÉTADONNÉES du run d'autrui
 // (05 § 4.4, `assert_no_impersonation`), jamais son entrée, ses essais, ses items ni son journal.
 import { RUN_STATES, RUN_TRIGGERS } from '@runtime/core';
-import { applyStatusAndNotify, cancelRun, pauseRun, resumeRun, withActor } from '@runtime/db';
+import { applyStatusAndNotify, asActorInTransaction, cancelRun, pauseRun, resumeRun, withActor } from '@runtime/db';
 import type { FastifyInstance } from 'fastify';
 import type { ServerContext } from '../context.js';
 import { readApiById, readApiBySlug } from '../rest/apis.js';
@@ -89,33 +89,45 @@ export function runRoutes(app: FastifyInstance, ctx: ServerContext): void {
     const actor = request.actor!;
     if (!UUID.test(request.params.id)) return notFound(reply);
     const queue = await ctx.jobs();
+    const before = await withActor(ctx.pool, actor, (tx) => readRunRow(tx, request.params.id));
+    if (before === null) return notFound(reply);
     // Annulation (05 § 4.4) : état `cancelled` tout de suite, coûts engagés imputés (INV4) ; le worker s'arrête à son
-    // battement suivant (jeton de clôture).
-    const out = await withActor(ctx.pool, actor, async (tx) => {
-      const before = await readRunRow(tx, request.params.id);
-      if (before === null) return null;
-      const cancelled = await cancelRun(tx, queue, request.params.id);
-      const after = await readRunRow(tx, request.params.id);
-      return { cancelled, run: after ?? before };
-    });
-    if (out === null) return notFound(reply);
-    if (!out.cancelled) return sendError(reply, 409, 'run_not_active', 'ce run est déjà terminé');
-    if (out.run.kind === 'investigation') {
+    // battement suivant (jeton de clôture). Sous l'identité de l'acteur (RLS : ses runs seulement).
+    const cancelAs = async (tx: Parameters<typeof cancelRun>[0]) => {
+      const cancelled = await cancelRun(tx, queue, before.id);
+      return { cancelled, run: (await readRunRow(tx, before.id)) ?? before };
+    };
+    let out: Awaited<ReturnType<typeof cancelAs>> | undefined;
+    if (before.kind === 'investigation') {
       // Enquête annulée (en file, en pause ou tenue par un worker, qui perd alors son bail sans rien écrire) : l'API ne
       // reste pas en `enquete` sans enquête. Fin sans stratégie conforme, par la machine (INV3) : transition 21 (statut
-      // d'avant une ré-enquête, ancienne version gardée) ou 2 (`erreur`, d'où « Ré-enquêter » repart, 16) ; phase close
-      // au même COMMIT. Le catalogue fermé des raisons (04 § 6, 06) n'a pas de raison « annulée » : celle de la fin de
-      // budget est gardée (l'utilisateur a arrêté la dépense).
-      await applyStatusAndNotify(ctx.pool, queue, {
-        apiId: out.run.api_id,
-        runId: out.run.id,
-        event: { type: 'investigation_failed', cause: 'budget_exhausted' },
-        clock: { now: () => new Date() },
-        beforeWrite: async (db) => {
-          await db.query("UPDATE apis SET investigation_phase = 'done', updated_at = now() WHERE id = $1 AND investigation_phase IS DISTINCT FROM 'done'", [out.run.api_id]);
-        },
-      });
+      // d'avant une ré-enquête, ancienne version gardée) ou 2 (`erreur`, d'où « Ré-enquêter » repart, 16). Annulation,
+      // transition et phase close partent au MÊME COMMIT (crochet `beforeWrite`, ligne `apis` sous verrou) : si l'une
+      // échoue, rien n'est écrit et l'annulation se rejoue. Le catalogue fermé des raisons (04 § 6, 06) n'a pas de raison
+      // « annulée » : celle de la fin de budget est gardée (l'utilisateur a arrêté la dépense).
+      class NotActive extends Error {}
+      let done: Awaited<ReturnType<typeof cancelAs>> | undefined;
+      try {
+        const step = await applyStatusAndNotify(ctx.pool, queue, {
+          apiId: before.api_id,
+          runId: before.id,
+          event: { type: 'investigation_failed', cause: 'budget_exhausted' },
+          clock: { now: () => new Date() },
+          beforeWrite: async (db) => {
+            done = await asActorInTransaction(db, actor, cancelAs);
+            if (!done.cancelled) throw new NotActive();
+            await db.query("UPDATE apis SET investigation_phase = 'done', updated_at = now() WHERE id = $1 AND investigation_phase IS DISTINCT FROM 'done'", [before.api_id]);
+          },
+        });
+        if (step.ok) out = done;
+      } catch (error) {
+        if (error instanceof NotActive) return sendError(reply, 409, 'run_not_active', 'ce run est déjà terminé');
+        throw error;
+      }
+      // Transition refusée (l'API n'est plus en `enquete`) : l'annulation seule.
     }
+    out ??= await withActor(ctx.pool, actor, cancelAs);
+    if (!out.cancelled) return sendError(reply, 409, 'run_not_active', 'ce run est déjà terminé');
     await audit(ctx, request, actor, { action: 'run.cancelled', targetType: 'run', targetId: request.params.id, outcome: 'success' });
     const llm = usdOrNull(out.run.cost_llm_usd);
     const proxy = usd(out.run.cost_proxy_usd);

@@ -130,9 +130,11 @@ describe('assert_no_nested_headings', () => {
     }
   });
 
-  test('la page de connexion a un <h1> dans l’en-tête de la carte, hors du <h3> de CardTitle', () => {
+  test('la page de connexion a son <h1> dans l’en-tête de page (PageHeader, 3.21), hors du <h3> de CardTitle', () => {
     const login = readFileSync(join(webRoot, 'src/views/LoginView.vue'), 'utf8').replace(/<!--[\s\S]*?-->/g, '');
-    expect(login).toMatch(/<CardHeader>\s*<h1\b/);
+    const header = readFileSync(join(webRoot, 'src/components/brand/PageHeader.vue'), 'utf8').replace(/<!--[\s\S]*?-->/g, '');
+    expect(login).toMatch(/<PageHeader\b/);
+    expect(header).toMatch(/<h1\b[^>]*data-route-heading/);
     expect(login).not.toMatch(/<CardTitle\b/);
   });
 });
