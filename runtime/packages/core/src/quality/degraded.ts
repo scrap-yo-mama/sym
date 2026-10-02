@@ -39,7 +39,7 @@ export function degradedQualitySignals(profile: RunProfile, baseline: RunProfile
   for (const [name, f] of Object.entries(profile.fields)) {
     const b = baseline?.fields[name];
     if (f.constant && !constantOk.has(name) && (b === undefined ? required.has(name) : !b.constant)) found.add('field_constant');
-    if (f.sentinel_rate >= t.sentinelRate && (b === undefined || f.sentinel_rate > b.sentinel_rate + 0.1)) found.add('sentinel_values');
+    if (f.sentinel_rate >= t.sentinelRate && (b === undefined ? required.has(name) : f.sentinel_rate > b.sentinel_rate + 0.1)) found.add('sentinel_values');
     if (b === undefined) continue;
     if (b.top_pattern !== null && (b.patterns[b.top_pattern] ?? 0) - (f.patterns[b.top_pattern] ?? 0) >= t.patternDrop) found.add('pattern_shift');
     if (!f.personal && !f.suspected_personal && b.top !== undefined && f.top !== undefined && b.distinct > 0 && b.distinct <= t.enumMaxDistinct && b.distinct * 2 <= baseline!.items) {

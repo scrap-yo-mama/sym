@@ -82,7 +82,8 @@ function profileField(name: string, schema: unknown, items: readonly unknown[]):
   const values = items.map((it) => (isRecord(it) ? it[name] : undefined));
   const declared = isRecord(schema) && typeof schema['type'] === 'string' ? schema['type'] : null;
   const present = values.filter((v) => v !== undefined && v !== null && !isSentinel(v));
-  const sentinels = values.filter((v) => isSentinel(v) || v === null).length;
+  // Sentinelles : liste fermée de chaînes seulement ; un `null` d'un champ facultatif est une absence légitime, pas un remplissage.
+  const sentinels = values.filter((v) => isSentinel(v)).length;
   const texts = present.map((v) => (typeof v === 'string' ? v : canonical(v)));
   const looksPersonal = texts.filter((t) => EMAILISH.test(t) || PHONEISH.test(t)).length;
   const personal = personalFlag(schema);

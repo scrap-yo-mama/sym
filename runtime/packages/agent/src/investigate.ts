@@ -12,6 +12,7 @@
 import { createHash, randomBytes } from 'node:crypto';
 import type { DataCandidate } from '@runtime/core/investigation';
 import { INVESTIGATION_PROPOSAL_SCHEMA, narrativeUrl, parseProposal, type InvestigationProposal } from '@runtime/core/investigation';
+import { maskTextForLlm } from '@runtime/core';
 import type { ChatMessage, JsonSchema, LlmCallResult, LlmClient } from '@runtime/llm';
 
 export const INVESTIGATE_SYSTEM_PROMPT = [
@@ -66,9 +67,11 @@ export function investigateMessages(args: InvestigateArgs, token = randomBytes(1
     }));
   // Le bloc ne peut ni fermer la balise ni en imiter une autre.
   const block = JSON.stringify(candidates).replace(/untrusted_candidates/gi, 'untrusted-candidates');
-  const example = args.exampleOutput === undefined ? '' : JSON.stringify(args.exampleOutput).slice(0, MAX_EXAMPLE_CHARS);
+  // Masquage des couches 2 (motifs) sur le texte libre du propriétaire, toujours (19 §3, tâche 2.12) : e-mail, téléphone,
+  // IBAN, carte, IP, URL de profil, NIR ; le schéma n'est pas encore connu (couche 1 : sans objet ici).
+  const example = args.exampleOutput === undefined ? '' : maskTextForLlm(JSON.stringify(args.exampleOutput)).slice(0, MAX_EXAMPLE_CHARS);
   const user = [
-    `REQUEST (from the API owner): ${args.description.slice(0, MAX_REQUEST_CHARS)}`,
+    `REQUEST (from the API owner): ${maskTextForLlm(args.description).slice(0, MAX_REQUEST_CHARS)}`,
     example === '' ? '' : `EXAMPLE OUTPUT (from the API owner): ${example}`,
     args.fixedSchema === undefined ? '' : `VALIDATED OUTPUT SCHEMA (use exactly these field names and types): ${JSON.stringify(args.fixedSchema).slice(0, 8_000)}`,
     args.accessFacts === undefined ? '' : `ACCESS FACTS: ${JSON.stringify(args.accessFacts)}`,
