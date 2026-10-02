@@ -22,7 +22,7 @@ export interface PageOutcome {
   linkHeader?: string;
 }
 
-export type StopReason = 'no_pagination' | 'records_empty' | 'path_equals' | 'path_missing' | 'repeated_cursor' | 'hard_max_pages' | 'max_pages_input' | 'no_next' | 'unsupported';
+export type StopReason = 'no_pagination' | 'records_empty' | 'path_equals' | 'path_missing' | 'repeated_cursor' | 'hard_max_pages' | 'max_pages_input' | 'no_next' | 'unsupported' | 'scroll_timeout';
 
 export type PaginationDecision =
   | { done: true; reason: StopReason }

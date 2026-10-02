@@ -105,6 +105,16 @@ export function assertNotRoot(getuid: (() => number) | undefined = process.getui
   }
 }
 
+/**
+ * Délai de lancement de Chromium, le même pour le Chromium du pool (Playwright `launchServer`) et pour le Chromium
+ * dédié d'un essai agentique (agent-browser.ts, port CDP attendu) : même binaire, même machine. Un démarrage normal prend
+ * 0,2 à 2 s, charge CPU et disque comprises ; ce délai ne sert qu'aux arrêts passagers de la machine (un lancement
+ * dédié bloqué plus de 20 s observé une fois en CI, alors que le pool tolère 60 s).
+ * Écart à D-52 (revue de fix-flaky) : correctif de SYMPTÔME, la cause du lancement lent n'est pas reproduite
+ * (assert_stagehand_local_only, délai du test porté à 120 s) ; sous surveillance (flaky.md de l'orchestrateur).
+ */
+export const CHROMIUM_LAUNCH_TIMEOUT_MS = 60_000;
+
 export type ChromiumLaunchOptions = {
   readonly headless: true;
   /** Bac à sable de Chromium : jamais `--no-sandbox`. */
@@ -139,6 +149,6 @@ export function chromiumLaunchOptions(
     handleSIGINT: false,
     handleSIGTERM: false,
     handleSIGHUP: false,
-    timeout: 60_000,
+    timeout: CHROMIUM_LAUNCH_TIMEOUT_MS,
   });
 }
