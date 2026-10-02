@@ -119,6 +119,23 @@ describe('flux SSE d’une session', () => {
     stream.close();
   });
 
+  test('accès (clés réelles de la 2.1) : clé révoquée 401, clé inconnue au bon format 401', async () => {
+    const id = await newSession();
+    const extra = await createHarness();
+    try {
+      // Clé valide d'une autre instance : préfixe inconnu ici.
+      const foreign = await openSse(`${base}/v1/sessions/${id}/events`, { authorization: `Bearer ${extra.keys.a}` });
+      expect(foreign.status).toBe(401);
+    } finally {
+      await extra.close();
+    }
+    expect((await open(`/v1/sessions/${id}/events`, 'aRead')).status).toBe(200);
+    await h.revoke('aRead');
+    const revoked = await open(`/v1/sessions/${id}/events`, 'aRead');
+    expect(revoked.status).toBe(401);
+    expect(revoked.body).toMatchObject({ error: { code: 'unauthorized' } });
+  });
+
   test('accès : sans clé 401, scope sessions:read requis (403), session d’un autre client 404, Last-Event-ID invalide 422', async () => {
     const id = await newSession();
     expect((await open(`/v1/sessions/${id}/events`, null)).status).toBe(401);

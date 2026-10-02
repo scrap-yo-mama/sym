@@ -1,18 +1,19 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Banc des tests de l'API REST de la passerelle (tâche 2.2) : base PostgreSQL jetable et migrée, deux clients (A et B) avec
 // leurs clés, un nœud prêt, et la passerelle assemblée sur des doublures des interfaces encore à brancher :
-//   - Authenticator : clés d'API en clair dans une table de test (la vérification argon2id est la tâche 2.1) ;
-//   - ConnectTokenIssuer : jetons de test numérotés (jetons HMAC de la tâche 2.1) ;
+//   - Authenticator : le vrai de la tâche 2.1 (`ApiKeyAuthenticator` sur `pgApiKeyStore`), clés argon2id créées par `newApiKey` ;
+//   - ConnectTokenIssuer : les vrais jetons de connexion HMAC de la tâche 2.1 (`ConnectTokens`, clé maîtresse jetable) ;
 //   - SessionLauncher : nœud simulé, qui écrit `running` comme le superviseur du nœud (tâche 1.2) le ferait.
 // Chaque réponse est validée contre l'OpenAPI publiée (statut déclaré, corps conforme au schéma) : « 0 écart schéma/réponse ».
 import { randomBytes } from 'node:crypto';
-import { migrateUp, recordHeartbeat, transitionSession } from '@sym-browser/db';
+import { ApiKeyAuthenticator, ConnectTokens, MasterKey, newApiKey } from '@sym-browser/core';
+import { insertApiKey, migrateUp, pgApiKeyStore, recordHeartbeat, revokeApiKey, transitionSession } from '@sym-browser/db';
 import { browserOpenApi } from '@sym/contracts/browser';
 import { Ajv2020, type ValidateFunction } from 'ajv/dist/2020.js';
 import type { FastifyInstance, InjectOptions } from 'fastify';
 import pg from 'pg';
 import { inject } from 'vitest';
-import { createGatewayApi, type GatewayDeps, type Principal, type Scope, type SessionLauncher } from '../../src/api/index.js';
+import { createGatewayApi, type GatewayDeps, type Scope, type SessionLauncher } from '../../src/api/index.js';
 
 const PUBLIC_URL = 'https://b.example.com';
 
@@ -26,6 +27,10 @@ export type Harness = {
   keys: Record<'a' | 'aRead' | 'b' | 'aAdmin' | 'bAdmin', string>;
   /** URL d'écoute réelle (`listen`), pour les flux SSE et les webhooks (tâche 2.5). */
   listen: () => Promise<string>;
+  /** Jetons de connexion réels (vérification des `connectUrls`). */
+  tokens: ConnectTokens;
+  /** Révoque une clé du banc (tâche 2.1) : refusée dès la requête suivante. */
+  revoke: (key: keyof Harness['keys']) => Promise<void>;
   launcher: { mode: LauncherMode; launched: string[]; released: string[] };
   call: (options: { method: InjectOptions['method']; url: string; key?: keyof Harness['keys'] | null; body?: unknown; headers?: Record<string, string> }) => Promise<Reply>;
   close: () => Promise<void>;
@@ -90,16 +95,23 @@ export async function createHarness(
   const one = async (sql: string, params: unknown[] = []): Promise<string> => (await pool.query<{ id: string }>(sql, params)).rows[0]?.id ?? '';
   const tenantA = await one('INSERT INTO tenants (name, max_session_seconds) VALUES ($1, $2) RETURNING id', ['a', options.maxSessionSeconds ?? 3600]);
   const tenantB = await one("INSERT INTO tenants (name) VALUES ('b') RETURNING id");
-  const keyRow = (tenantId: string, prefix: string, scopes: Scope[]) =>
-    one("INSERT INTO api_keys (tenant_id, key_prefix, key_hash, scopes) VALUES ($1, $2, '$argon2id$v=19$m=19456,t=2,p=1$test$test', $3) RETURNING id", [tenantId, prefix, scopes]);
-  const principals = new Map<string, Principal>();
-  const keys = { a: 'symb_test_a_write', aRead: 'symb_test_a_read', b: 'symb_test_b_write', aAdmin: 'symb_test_a_admin', bAdmin: 'symb_test_b_admin' };
-  principals.set(keys.a, { tenantId: tenantA, apiKeyId: await keyRow(tenantA, 'symb_a_w', ['sessions:write', 'sessions:read']), scopes: ['sessions:write', 'sessions:read'] });
-  principals.set(keys.aRead, { tenantId: tenantA, apiKeyId: await keyRow(tenantA, 'symb_a_r', ['sessions:read']), scopes: ['sessions:read'] });
-  principals.set(keys.b, { tenantId: tenantB, apiKeyId: await keyRow(tenantB, 'symb_b_w', ['sessions:write', 'sessions:read']), scopes: ['sessions:write', 'sessions:read'] });
-  // Clés `admin` (admin de client, 03 § 6) : réglages du client, dont le webhook (tâche 2.5) ; sans `sessions:read`.
-  principals.set(keys.aAdmin, { tenantId: tenantA, apiKeyId: await keyRow(tenantA, 'symb_a_adm', ['admin']), scopes: ['admin'] });
-  principals.set(keys.bAdmin, { tenantId: tenantB, apiKeyId: await keyRow(tenantB, 'symb_b_adm', ['admin']), scopes: ['admin'] });
+  // Clés réelles (tâche 2.1) : empreinte argon2id en base, secret rendu une fois.
+  const keyIds = new Map<string, { tenantId: string; id: string }>();
+  const realKey = async (tenantId: string, scopes: Scope[]): Promise<string> => {
+    const created = await newApiKey({ scopes });
+    const { id } = await insertApiKey(pool, { tenantId, prefix: created.prefix, keyHash: created.keyHash, scopes: created.scopes, expiresAt: null });
+    const secret = created.key.reveal();
+    keyIds.set(secret, { tenantId, id });
+    return secret;
+  };
+  const keys = {
+    a: await realKey(tenantA, ['sessions:write', 'sessions:read']),
+    aRead: await realKey(tenantA, ['sessions:read']),
+    b: await realKey(tenantB, ['sessions:write', 'sessions:read']),
+    // Clés `admin` (admin de client, 03 § 6) : réglages du client, dont le webhook (tâche 2.5) ; sans `sessions:read`.
+    aAdmin: await realKey(tenantA, ['admin']),
+    bAdmin: await realKey(tenantB, ['admin']),
+  };
 
   await recordHeartbeat(pool, {
     nodeId: 'node-a',
@@ -135,11 +147,11 @@ export async function createHarness(
     },
   };
 
-  let tokenCounter = 0;
+  const tokens = new ConnectTokens({ current: MasterKey.generate() });
   const deps: GatewayDeps = {
     db: pool,
-    auth: { authenticate: async (secret) => principals.get(secret) ?? null },
-    tokens: { issue: ({ protocol }) => `tok_${protocol}_${++tokenCounter}` },
+    auth: new ApiKeyAuthenticator(pgApiKeyStore(pool)),
+    tokens,
     launcher,
     publicUrl: PUBLIC_URL,
     queueTimeoutMs: options.queueTimeoutMs ?? 2_000,
@@ -170,6 +182,11 @@ export async function createHarness(
     tenantB,
     keys,
     launcher: state,
+    tokens,
+    revoke: async (key) => {
+      const ref = keyIds.get(keys[key]);
+      if (ref !== undefined) await revokeApiKey(pool, { tenantId: ref.tenantId, id: ref.id });
+    },
     call,
     listen: async () => {
       const address = await app.listen({ port: 0, host: '127.0.0.1' });

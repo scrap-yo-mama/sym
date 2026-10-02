@@ -6,7 +6,7 @@
 // `X-Request-Id` ; chaque erreur suit 04 § 6. L'authentification, les jetons et le démarrage sur un nœud passent par les
 // interfaces de types.ts (tâches 2.1, 2.3, 2.4).
 import { randomBytes } from 'node:crypto';
-import { endStateFor, isTerminal, resolveSessionType } from '@sym-browser/core';
+import { authorizeRequest, endStateFor, isTerminal, resolveSessionType } from '@sym-browser/core';
 import {
   claimIdempotencyKey,
   completeIdempotencyKey,
@@ -131,14 +131,17 @@ export async function createGatewayApi(deps: GatewayDeps): Promise<FastifyInstan
     fail(request, reply, request.url.startsWith('/v1/sessions/') ? sessionNotFound() : invalidOption([{ field: 'path', reason: 'unknown route' }])),
   );
 
-  /** Clé d'API en `Authorization: Bearer` puis scope requis (04 § 1). */
+  /**
+   * Clé d'API en `Authorization: Bearer` puis scope requis (04 § 1) : décision de la tâche 2.1 (`authorizeRequest` : argon2id,
+   * révocation, expiration, scopes fermés), partagée avec l'ouverture des WebSocket (2.3). Le motif reste au journal.
+   */
   const authorize = (scope: Scope) => async (request: FastifyRequest): Promise<void> => {
-    const header = request.headers.authorization;
-    const secret = typeof header === 'string' ? /^Bearer\s+(\S+)\s*$/i.exec(header)?.[1] : undefined;
-    const principal = secret === undefined ? null : await deps.auth.authenticate(secret);
-    if (!principal) throw new ApiProblem('unauthorized', 'Missing, unknown or expired API key.');
-    if (!principal.scopes.includes(scope)) throw new ApiProblem('forbidden', `Scope ${scope} required.`, { details: { requiredScope: scope } });
-    request.principal = principal;
+    const decision = await authorizeRequest(deps.auth, request.headers, scope);
+    if (!decision.ok) {
+      if (decision.status === 403) throw new ApiProblem('forbidden', `Scope ${scope} required.`, { details: { requiredScope: decision.requiredScope } });
+      throw new ApiProblem('unauthorized', 'Missing, unknown or expired API key.');
+    }
+    request.principal = decision.principal;
   };
   const principalOf = (request: FastifyRequest): Principal => {
     if (!request.principal) throw new ApiProblem('unauthorized', 'Missing API key.');

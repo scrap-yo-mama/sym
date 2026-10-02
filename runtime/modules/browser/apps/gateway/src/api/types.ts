@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Interfaces de la passerelle que d'autres tâches implémentent (tâche 2.2). L'API REST n'en connaît que la forme :
-//   - Authenticator : clés d'API `Authorization: Bearer` (argon2id, préfixe, scopes, expiration : tâche 2.1) ;
-//   - ConnectTokenIssuer : jetons de connexion courts liés à une session et à un protocole (HMAC dérivé de MASTER_KEY,
-//     tâche 2.1 ; vérifiés à l'upgrade WSS, tâche 2.3) ;
+//   - auth : `ApiKeyAuthenticator` de la tâche 2.1 (argon2id, préfixe, scopes, expiration, révocation) sur `pgApiKeyStore` ;
+//   - tokens : `ConnectTokens` de la tâche 2.1 (jetons de connexion HMAC liés à une session et à un protocole, vérifiés à
+//     l'upgrade WSS, tâche 2.3) ;
 //   - SessionLauncher : démarrage, libération et prolongation sur le nœud propriétaire. Mode `all` : le superviseur de
 //     sessions du nœud dans le même processus (tâche 1.2) ; modes séparés : `POST /internal/sessions` du nœud (04b § 8),
 //     choix du nœud et file (tâche 2.4).
-import type { EgressGuard, Keys } from '@sym-browser/core';
+import type { ApiKeyAuthenticator, ConnectTokens, EgressGuard, Keys } from '@sym-browser/core';
 import type pg from 'pg';
 import type { CreateSessionRequest, SessionType } from '@sym/contracts/browser';
 
@@ -15,17 +15,6 @@ export type Scope = 'sessions:write' | 'sessions:read' | 'profiles:write' | 'adm
 
 /** Identité d'une clé d'API valide. */
 export type Principal = { tenantId: string; apiKeyId: string; scopes: readonly Scope[] };
-
-interface Authenticator {
-  /** Secret reçu en `Authorization: Bearer` ; `null` si la clé est inconnue, révoquée ou expirée. */
-  authenticate(secret: string): Promise<Principal | null>;
-}
-
-type ConnectProtocol = 'playwright' | 'cdp';
-
-interface ConnectTokenIssuer {
-  issue(input: { sessionId: string; protocol: ConnectProtocol; ttlSeconds: number }): string | Promise<string>;
-}
 
 type LaunchRequest = {
   sessionId: string;
@@ -48,8 +37,10 @@ export interface SessionLauncher {
 
 export type GatewayDeps = {
   db: pg.Pool;
-  auth: Authenticator;
-  tokens: ConnectTokenIssuer;
+  /** Clés d'API (tâche 2.1). */
+  auth: Pick<ApiKeyAuthenticator, 'check'>;
+  /** Jetons de connexion des `connectUrls` (tâche 2.1). */
+  tokens: Pick<ConnectTokens, 'issue'>;
   launcher: SessionLauncher;
   /** URL publique de la passerelle (`https://hôte`) : base des `connectUrls` (`wss://hôte/v1/sessions/{id}/…`). */
   publicUrl: string;

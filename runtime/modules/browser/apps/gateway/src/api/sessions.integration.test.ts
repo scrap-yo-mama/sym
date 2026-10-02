@@ -27,8 +27,13 @@ describe('session_default_dedicated (F1, F9)', () => {
     expect(session).toMatchObject({ state: 'running', type: 'dedicated', nodeRegion: 'frankfurt' });
     expect(session.id).toMatch(UUID);
     expect(Object.keys(session.connectUrls).sort()).toEqual(['bidi', 'cdp', 'playwright']);
-    expect(session.connectUrls.cdp).toMatch(new RegExp(`^wss://b\\.example\\.com/v1/sessions/${session.id}/cdp\\?token=tok_cdp_\\d+$`));
-    expect(session.connectUrls.playwright).toMatch(new RegExp(`^wss://b\\.example\\.com/v1/sessions/${session.id}/playwright\\?token=tok_playwright_\\d+$`));
+    expect(session.connectUrls.cdp).toMatch(new RegExp(`^wss://b\\.example\\.com/v1/sessions/${session.id}/cdp\\?token=symt_[A-Za-z0-9_-]+$`));
+    expect(session.connectUrls.playwright).toMatch(new RegExp(`^wss://b\\.example\\.com/v1/sessions/${session.id}/playwright\\?token=symt_[A-Za-z0-9_-]+$`));
+    // Jetons réels de la tâche 2.1 : signés, liés à la session et au protocole.
+    const tokenOf = (url: string) => decodeURIComponent(new URL(url).searchParams.get('token') ?? '');
+    expect(h.tokens.verify(tokenOf(session.connectUrls.cdp), { sessionId: session.id, protocol: 'cdp' })).toMatchObject({ ok: true });
+    expect(h.tokens.verify(tokenOf(session.connectUrls.playwright), { sessionId: session.id, protocol: 'playwright' })).toMatchObject({ ok: true });
+    expect(h.tokens.verify(tokenOf(session.connectUrls.playwright), { sessionId: session.id, protocol: 'cdp' })).toMatchObject({ ok: false });
     expect(session.connectUrls.bidi).toBeNull();
     expect(res.headers['x-request-id']).toMatch(/^req_/);
   });
