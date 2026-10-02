@@ -7,7 +7,7 @@ import { partitionItems, quarantineSummary } from '@runtime/core';
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import { createTestDatabase, type TestDatabase } from '../../../tests/helpers/pg.js';
-import { migrateDown, migrateUp } from './migrate.js';
+import { loadMigrations, migrateDown, migrateUp } from './migrate.js';
 import { readHealthyItems, readRejectedAggregates, readRejectedItems, readRejectedSample, readVolumeHistory, saveRejectedItems, saveRepairedStrategy } from './rejected.js';
 import { cleanupExpiredRunData, countSubjectOccurrences, DEFAULT_RETENTION_POLICY, eraseSubject } from './retention/index.js';
 import { withActor } from './rls.js';
@@ -171,7 +171,9 @@ describe('quarantine run_rejected_items (0018)', () => {
   });
 
   test('migration 0018 : aller-retour down/up', async () => {
-    await migrateDown({ connectionString: tdb.url, steps: 1 });
+    // Retour jusqu'à 0018 incluse, quel que soit le nombre de migrations venues après (0019_i18n, 3.20).
+    const target = loadMigrations().find((m) => m.name === 'run_rejected_items')!.version;
+    await migrateDown({ connectionString: tdb.url, steps: loadMigrations().length - (target - 1) });
     expect((await pool.query("SELECT to_regclass('public.run_rejected_items') AS t")).rows[0].t).toBeNull();
     expect((await pool.query("SELECT 1 FROM information_schema.columns WHERE table_name = 'runs' AND column_name = 'items_rejected'")).rowCount).toBe(0);
     await migrateUp({ connectionString: tdb.url });
