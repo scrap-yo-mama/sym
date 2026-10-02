@@ -6,7 +6,8 @@
 // Règles (arbitrages n° 2 et 5) :
 // - même propriétaire seulement (filtre ici en plus de la RLS : une API partagée avec l'instance reste hors du dossier) ;
 // - valeurs d'items pour l'API en cours et le même domaine enregistrable seulement ; autres domaines : structure, profil
-//   et `url_template` ; une API avec session ou en tunnel ne donne jamais de valeur ; agent instruit : structurel ;
+//   et `url_template` ; une API avec session ou en tunnel ne donne jamais de valeur ; agent instruit et réparation :
+//   structurel (la réparation ne voit que des squelettes, tâche 2.3 : restriction, jamais un élargissement) ;
 // - texte d'un retour pour l'API en cours seulement (300 caractères) ; ailleurs `kind` et `field` ;
 // - refus : le fait et la date seulement, et ni stratégie, ni réseau, ni tunnel pour un domaine refusé ;
 // - version remplacée : `superseded_by`, jamais en tête ; entrée sans run sain depuis D jours : `stale` ;
@@ -213,7 +214,8 @@ export function buildCatalogDossier(req: DossierRequest, entries: readonly Memor
     if ((refusedDomains.get(e.domain) ?? '') < at) refusedDomains.set(e.domain, at);
   }
   const registry = new PersonalValueRegistry();
-  const valuesAllowed = (e: MemoryEntry): boolean => mode !== 'instructed' && !e.session && e.domain === req.domain && !refusedDomains.has(e.domain);
+  // Réparation : structurel aussi (restriction de 2.12) — le prompt de réparation ne voit que des squelettes (2.3).
+  const valuesAllowed = (e: MemoryEntry): boolean => mode === 'investigate' && !e.session && e.domain === req.domain && !refusedDomains.has(e.domain);
   const sampleOf = (e: MemoryEntry): unknown[] => (valuesAllowed(e) ? maskItemsForLlm(e.sample.slice(0, sampleSize), e.output_schema, registry).items.map((i) => boundValue(i)) : []);
 
   const self = req.apiId === null ? undefined : own.find((e) => e.api_id === req.apiId);

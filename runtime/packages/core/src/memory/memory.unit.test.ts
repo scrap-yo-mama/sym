@@ -200,6 +200,8 @@ describe('dossier de mémoire (r1 08)', () => {
     // Agent instruit : dossier structurel seulement.
     const instructed = buildCatalogDossier(request({ apiId: sameApiFeedback.api_id, mode: 'instructed' }), [sameDomain, sameApiFeedback]);
     expect(instructed.text).not.toContain('ZZ-SAME-1');
+    // Réparation : structurel aussi (le prompt de réparation ne voit que des squelettes, 2.3).
+    expect(buildCatalogDossier(request({ apiId: sameApiFeedback.api_id, mode: 'repair' }), [sameDomain, sameApiFeedback]).text).not.toContain('ZZ-SAME-1');
   });
 
   test('assert_catalog_memory_untrusted — texte stocké dans <untrusted_catalog_memory> seulement, nettoyé, tronqué à 120, provenance en tête ; plan filtré : aucun essai res_proxy', () => {

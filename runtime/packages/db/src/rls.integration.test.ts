@@ -49,6 +49,10 @@ beforeAll(async () => {
     await c.query("INSERT INTO run_artifacts (run_id, owner_id, kind, bytes, sensitivity, ciphertext, nonce, key_version) VALUES ($1, $2, 'trace', 1, 'high', '\\x00', '\\x00', 1)", [run, A]);
     await c.query("INSERT INTO investigation_events (run_id, seq, owner_id, kind) VALUES ($1, 1, $2, 'zz_test')", [run, A]);
     await c.query("INSERT INTO status_events (api_id, owner_id, to_status) VALUES ($1, $2, 'sain')", [api, A]);
+    // 0017 (2.3) et 0018 (2.12) : quarantaine, profil du run, entrées de mémoire consultées.
+    await c.query('INSERT INTO run_rejected_items (run_id, api_id, owner_id, total_rejected) VALUES ($1, $2, $3, 1)', [run, api, A]);
+    await c.query("INSERT INTO run_profiles (run_id, api_id, owner_id, input_hash, profile) VALUES ($1, $2, $3, 'zz_test', '{}')", [run, api, A]);
+    await c.query("INSERT INTO strategy_version_memory_refs (api_id, strategy_version, owner_id, ref_api_id, tier, dossier_sha256) VALUES ($1, 1, $2, $1, 0, $3)", [api, A, '0'.repeat(64)]);
     const ds = (await c.query<{ id: string }>('INSERT INTO datasets (api_id, run_id, owner_id) VALUES ($1, $2, $3) RETURNING id', [api, run, A])).rows[0]!.id;
     await c.query("INSERT INTO dataset_items (dataset_id, seq, owner_id, item, size_bytes) VALUES ($1, 1, $2, '{\"x\": 1}', 8)", [ds, A]);
     await c.query("INSERT INTO dedup_keys (api_id, key_hash, owner_id) VALUES ($1, 'zz_test', $2)", [api, A]);
