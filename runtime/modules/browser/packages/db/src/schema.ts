@@ -61,6 +61,8 @@ export const nodes = pgTable('nodes', {
   state: text('state').notNull().default('ready').$type<(typeof NODE_STATES)[number]>(),
   lastBeatAt: tstz('last_beat_at').notNull().defaultNow(),
   createdAt: createdAt(),
+  /** Dernière session placée sur le nœud (0003, tâche 2.4) : départage à occupation égale. */
+  lastAssignedAt: tstz('last_assigned_at'),
 }, (t) => [index('nodes_state_region_idx').on(t.state, t.region)]);
 
 export const profiles = pgTable('profiles', {
@@ -111,6 +113,7 @@ export const sessions = pgTable('sessions', {
 }, (t) => [
   index('sessions_tenant_created_idx').on(t.tenantId, t.createdAt.desc()),
   index('sessions_node_idx').on(t.nodeId).where(sql`${t.state} IN ('pending', 'running')`),
+  index('sessions_queue_idx').on(t.createdAt, t.id).where(sql`${t.state} = 'pending' AND ${t.nodeId} IS NULL`),
   index('sessions_metadata_idx').using('gin', sql`${t.metadata} jsonb_path_ops`),
 ]);
 

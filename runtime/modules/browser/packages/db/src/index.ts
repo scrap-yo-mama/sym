@@ -8,4 +8,5 @@ export * as schema from './schema.js';
 export const TABLES = ['tenants', 'api_keys', 'nodes', 'sessions', 'session_events', 'profiles', 'proxy_profiles', 'artifacts', 'usage_records', 'idempotency_keys'] as const;
 export type TableName = (typeof TABLES)[number];
 export * from './sessions.js';
+export * from './admission.js';
 export * from './api.js';

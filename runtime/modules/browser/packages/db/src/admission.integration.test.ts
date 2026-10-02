@@ -209,7 +209,7 @@ describe('monthlyUsage : minutes et octets consommés du mois', () => {
         [t.tenantId, t.apiKeyId, startedAt, ms],
       );
       await pool.query(
-        "INSERT INTO usage_records (session_id, tenant_id, api_key_id, node_id, started_at, ended_at, browser_ms, billed_seconds, bytes_in, bytes_out, source) SELECT id, tenant_id, api_key_id, node_id, started_at, ended_at, $2, ($2 + 999) / 1000, $3, $4, 'node' FROM sessions WHERE id = $1",
+        "INSERT INTO usage_records (session_id, tenant_id, api_key_id, node_id, started_at, ended_at, browser_ms, billed_seconds, bytes_in, bytes_out, source) SELECT id, tenant_id, api_key_id, node_id, started_at, ended_at, $2::bigint, ($2::bigint + 999) / 1000, $3::bigint, $4::bigint, 'node' FROM sessions WHERE id = $1",
         [s.rows[0]!.id, ms, bytesIn, bytesOut],
       );
     };
