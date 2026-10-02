@@ -19,7 +19,6 @@ import { createServer as createNetServer, type AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from '@testcontainers/postgresql';
-import type { EgressPolicy } from '@sym/contracts/browser';
 import type { FastifyInstance } from 'fastify';
 import pg from 'pg';
 import { createConnectTokens } from '../../packages/core/src/index.ts';
@@ -187,7 +186,7 @@ export async function startAllMode(): Promise<AllModeInstance> {
     // Lanceur du mode `all` : la passerelle démarre, libère et prolonge sur le superviseur du nœud, dans le processus.
     const launcher: SessionLauncher = {
       async launch(request) {
-        const egress = await startSessionEgress((request.options.egress ?? {}) as EgressPolicy, { guard, onDenied: () => undefined });
+        const egress = await startSessionEgress((request.options.egress ?? {}) as Parameters<typeof startSessionEgress>[0], { guard, onDenied: () => undefined });
         egresses.set(request.sessionId, egress);
         const now = Date.now();
         const outcome = await supervisor.start({

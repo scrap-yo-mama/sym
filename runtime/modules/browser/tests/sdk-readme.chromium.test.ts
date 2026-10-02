@@ -71,7 +71,7 @@ describe('SDK contre le mode all (vrais Chromium)', () => {
   test('assert_cdp_client_compat (SDK) : dedicated par défaut, connectCDP puis connect natif lisent la fixture ; libération', async () => {
     const symb = new SymBrowser({ url: instance.url, apiKey: instance.apiKey, releaseOnExit: false });
     const port = Number(new URL(instance.siteUrl).port);
-    let id = '';
+    let id: string;
     {
       await using session = await symb.sessions.create({ egress: { allowedHosts: [SITE_HOST], ports: [port] }, metadata: { job: 'cdp' } });
       id = session.id;
