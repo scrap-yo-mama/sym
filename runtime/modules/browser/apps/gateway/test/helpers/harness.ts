@@ -6,6 +6,7 @@
 //   - SessionLauncher : nœud simulé, qui écrit `running` comme le superviseur du nœud (tâche 1.2) le ferait.
 // Chaque réponse est validée contre l'OpenAPI publiée (statut déclaré, corps conforme au schéma) : « 0 écart schéma/réponse ».
 import { randomBytes } from 'node:crypto';
+import type { UsageClosure } from '@sym-browser/core';
 import { migrateUp, recordHeartbeat, transitionSession } from '@sym-browser/db';
 import { browserOpenApi } from '@sym/contracts/browser';
 import { Ajv2020, type ValidateFunction } from 'ajv/dist/2020.js';
@@ -23,7 +24,7 @@ export type Harness = {
   pool: pg.Pool;
   tenantA: string;
   tenantB: string;
-  keys: Record<'a' | 'aRead' | 'b', string>;
+  keys: Record<'a' | 'aRead' | 'b' | 'aAdmin' | 'bAdmin', string>;
   launcher: { mode: LauncherMode; launched: string[]; released: string[] };
   call: (options: { method: InjectOptions['method']; url: string; key?: keyof Harness['keys'] | null; body?: unknown; headers?: Record<string, string> }) => Promise<Reply>;
   close: () => Promise<void>;
@@ -75,7 +76,7 @@ function responseChecker(): (method: string, url: string, status: number, body: 
   };
 }
 
-export async function createHarness(options: { queueTimeoutMs?: number; maxSessionSeconds?: number } = {}): Promise<Harness> {
+export async function createHarness(options: { queueTimeoutMs?: number; maxSessionSeconds?: number; usageWal?: () => Promise<UsageClosure[]> } = {}): Promise<Harness> {
   const name = `gw_${randomBytes(5).toString('hex')}`;
   await admin((c) => c.query(`CREATE DATABASE ${name}`));
   const url = new URL(inject('pgAdminUrl'));
@@ -89,10 +90,13 @@ export async function createHarness(options: { queueTimeoutMs?: number; maxSessi
   const keyRow = (tenantId: string, prefix: string, scopes: Scope[]) =>
     one("INSERT INTO api_keys (tenant_id, key_prefix, key_hash, scopes) VALUES ($1, $2, '$argon2id$v=19$m=19456,t=2,p=1$test$test', $3) RETURNING id", [tenantId, prefix, scopes]);
   const principals = new Map<string, Principal>();
-  const keys = { a: 'symb_test_a_write', aRead: 'symb_test_a_read', b: 'symb_test_b_write' };
+  const keys = { a: 'symb_test_a_write', aRead: 'symb_test_a_read', b: 'symb_test_b_write', aAdmin: 'symb_test_a_admin', bAdmin: 'symb_test_b_admin' };
   principals.set(keys.a, { tenantId: tenantA, apiKeyId: await keyRow(tenantA, 'symb_a_w', ['sessions:write', 'sessions:read']), scopes: ['sessions:write', 'sessions:read'] });
   principals.set(keys.aRead, { tenantId: tenantA, apiKeyId: await keyRow(tenantA, 'symb_a_r', ['sessions:read']), scopes: ['sessions:read'] });
   principals.set(keys.b, { tenantId: tenantB, apiKeyId: await keyRow(tenantB, 'symb_b_w', ['sessions:write', 'sessions:read']), scopes: ['sessions:write', 'sessions:read'] });
+  // Admins de client (scope `admin` seul) : usage de toutes les clés du client, réconciliation (tâche 2.6).
+  principals.set(keys.aAdmin, { tenantId: tenantA, apiKeyId: await keyRow(tenantA, 'symb_a_adm', ['admin']), scopes: ['admin'] });
+  principals.set(keys.bAdmin, { tenantId: tenantB, apiKeyId: await keyRow(tenantB, 'symb_b_adm', ['admin']), scopes: ['admin'] });
 
   await recordHeartbeat(pool, {
     nodeId: 'node-a',
@@ -136,6 +140,7 @@ export async function createHarness(options: { queueTimeoutMs?: number; maxSessi
     launcher,
     publicUrl: PUBLIC_URL,
     queueTimeoutMs: options.queueTimeoutMs ?? 2_000,
+    ...(options.usageWal === undefined ? {} : { usageWal: options.usageWal }),
   };
   const app = await createGatewayApi(deps);
   await app.ready();
