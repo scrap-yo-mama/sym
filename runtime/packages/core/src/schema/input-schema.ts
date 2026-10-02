@@ -19,30 +19,73 @@ export type InputSchemaIssue = {
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 
-/** Écarts de description d'un schéma de champ, puis de ses champs imbriqués (`properties`, `items`). */
-function walkProperties(node: unknown, path: string, issues: InputSchemaIssue[], depth = 0): void {
-  if (!isRecord(node) || depth > 32) return;
-  const properties = node['properties'];
-  if (isRecord(properties)) {
-    for (const [name, sub] of Object.entries(properties)) {
-      const at = `${path}/properties/${name.replaceAll('~', '~0').replaceAll('/', '~1')}`;
-      const description = isRecord(sub) ? sub['description'] : undefined;
-      if (typeof description !== 'string' || description.trim() === '') {
-        issues.push({ path: at, code: 'missing_description', message: `champ sans description (chaîne non vide, ${INPUT_DESCRIPTION_MAX} caractères au plus) : ${at}` });
-      } else if (description.trim().length > INPUT_DESCRIPTION_MAX) {
-        issues.push({ path: at, code: 'description_too_long', message: `description de plus de ${INPUT_DESCRIPTION_MAX} caractères : ${at}` });
-      }
-      walkProperties(sub, at, issues, depth + 1);
-    }
+const escapePointer = (key: string): string => key.replaceAll('~', '~0').replaceAll('/', '~1');
+
+/** Longueur en caractères (points de code), pas en unités UTF-16, du texte tel qu'il sera stocké (non rogné). */
+const characters = (text: string): number => [...text].length;
+
+/** Vérifie la description d'un champ (un schéma qui en déclare un) ; `at` est son pointeur JSON. */
+function checkDescription(field: unknown, at: string, issues: InputSchemaIssue[]): void {
+  const description = isRecord(field) ? field['description'] : undefined;
+  if (typeof description !== 'string' || description.trim() === '') {
+    issues.push({ path: at, code: 'missing_description', message: `champ sans description (chaîne non vide, ${INPUT_DESCRIPTION_MAX} caractères au plus) : ${at}` });
+  } else if (characters(description) > INPUT_DESCRIPTION_MAX) {
+    issues.push({ path: at, code: 'description_too_long', message: `description de plus de ${INPUT_DESCRIPTION_MAX} caractères : ${at}` });
   }
-  const items = node['items'];
-  if (isRecord(items)) walkProperties(items, `${path}/items`, issues, depth + 1);
+}
+
+/** Mots-clés dont la valeur est UN sous-schéma qui ne déclare pas de champ lui-même (éléments, condition, négation). */
+const SUBSCHEMA_KEYWORDS = ['items', 'contains', 'not', 'if', 'then', 'else', 'propertyNames', 'unevaluatedItems', 'unevaluatedProperties', 'contentSchema'] as const;
+/** Mots-clés dont la valeur est une liste de sous-schémas (variantes). */
+const SUBSCHEMA_LISTS = ['anyOf', 'oneOf', 'allOf'] as const;
+/** Mots-clés dont la valeur est une table de sous-schémas (définitions atteintes par `$ref`, schémas conditionnels). */
+const SUBSCHEMA_MAPS = ['$defs', 'definitions', 'dependentSchemas'] as const;
+
+/**
+ * Écarts de description d'un schéma d'entrée. Un champ est une valeur de `properties` ou de `patternProperties`, un schéma
+ * de `additionalProperties` ou un élément de `prefixItems` : chacun porte sa description. Tous les autres sous-schémas
+ * (`items`, `anyOf`/`oneOf`/`allOf`, `$defs`/`definitions`, `not`, `if`/`then`/`else`…) sont parcourus : les champs qu'ils
+ * déclarent sont décrits aussi.
+ */
+function walkSchema(node: unknown, path: string, issues: InputSchemaIssue[], depth = 0): void {
+  if (!isRecord(node) || depth > 64) return;
+  const fields = (map: unknown, keyword: string): void => {
+    if (!isRecord(map)) return;
+    for (const [name, sub] of Object.entries(map)) {
+      const at = `${path}/${keyword}/${escapePointer(name)}`;
+      checkDescription(sub, at, issues);
+      walkSchema(sub, at, issues, depth + 1);
+    }
+  };
+  fields(node['properties'], 'properties');
+  fields(node['patternProperties'], 'patternProperties');
+  const additional = node['additionalProperties'];
+  if (isRecord(additional)) {
+    checkDescription(additional, `${path}/additionalProperties`, issues);
+    walkSchema(additional, `${path}/additionalProperties`, issues, depth + 1);
+  }
+  const prefix = node['prefixItems'];
+  if (Array.isArray(prefix)) {
+    prefix.forEach((sub, i) => {
+      checkDescription(sub, `${path}/prefixItems/${i}`, issues);
+      walkSchema(sub, `${path}/prefixItems/${i}`, issues, depth + 1);
+    });
+  }
+  for (const keyword of SUBSCHEMA_KEYWORDS) walkSchema(node[keyword], `${path}/${keyword}`, issues, depth + 1);
+  for (const keyword of SUBSCHEMA_LISTS) {
+    const list = node[keyword];
+    if (Array.isArray(list)) list.forEach((sub, i) => walkSchema(sub, `${path}/${keyword}/${i}`, issues, depth + 1));
+  }
+  for (const keyword of SUBSCHEMA_MAPS) {
+    const map = node[keyword];
+    if (isRecord(map)) for (const [name, sub] of Object.entries(map)) walkSchema(sub, `${path}/${keyword}/${escapePointer(name)}`, issues, depth + 1);
+  }
 }
 
 /** Champs du schéma d'entrée sans description (ou avec une description trop longue), dans l'ordre du document. */
 export function inputSchemaIssues(schema: unknown): InputSchemaIssue[] {
   const issues: InputSchemaIssue[] = [];
-  walkProperties(schema, '', issues);
+  walkSchema(schema, '', issues);
   return issues;
 }
 

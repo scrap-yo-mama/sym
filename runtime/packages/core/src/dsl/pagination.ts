@@ -118,6 +118,10 @@ export function advancePagination(p: PaginationSpec | undefined, state: PageStat
  * Suivi des enregistrements déjà livrés d'un défilement infini. Le DOM d'un flux est cumulatif (les éléments déjà vus
  * restent) ou glissant (liste virtualisée : les anciens sortent) ; dans les deux cas, ce qui est « nouveau » après un
  * défilement est ce qui n'a pas déjà été vu, compté par occurrence (deux éléments identiques légitimes restent deux).
+ *
+ * Limite connue : l'identité d'un enregistrement est son contenu (JSON), la spec ne déclarant aucun champ identifiant. Sur
+ * une liste glissante, un nouvel enregistrement de contenu identique à un enregistrement déjà vu (sorti de la fenêtre)
+ * est écarté. Consignée dans tests/invariants.json (assert_infinite_scroll_paginated).
  */
 export class ScrollTracker {
   private readonly seen = new Map<string, number>();

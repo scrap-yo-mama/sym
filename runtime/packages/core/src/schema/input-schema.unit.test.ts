@@ -99,3 +99,65 @@ describe('schéma d’entrée proposé après l’enquête', () => {
     expect(() => buildInputSchema({ paginated: false, inputs: [{ name: '__proto__', type: 'string', description: 'Interdit.' }] })).toThrow(expect.objectContaining({ code: 'invalid_schema' }));
   });
 });
+
+describe('schéma d’entrée fourni par l’utilisateur : la règle de description tient sous les mots-clés qui déclarent des champs', () => {
+  const pathsOf = (schema: unknown): string[] => inputSchemaIssues(schema).map((i) => i.path);
+  const bare = { type: 'string' };
+
+  test.each([
+    ['anyOf', described({ q: { description: 'Choix.', anyOf: [{ type: 'object', properties: { a: bare } }, { type: 'null' }] } }), '/properties/q/anyOf/0/properties/a'],
+    ['oneOf', described({ q: { description: 'Choix.', oneOf: [{ type: 'null' }, { type: 'object', properties: { a: bare } }] } }), '/properties/q/oneOf/1/properties/a'],
+    ['allOf', described({ q: { description: 'Union.', allOf: [{ type: 'object', properties: { a: bare } }] } }), '/properties/q/allOf/0/properties/a'],
+    ['allOf à la racine', { ...described(), allOf: [{ properties: { extra: bare } }] }, '/allOf/0/properties/extra'],
+    ['$defs', { ...described({ q: { $ref: '#/$defs/box', description: 'Boîte.' } }), $defs: { box: { type: 'object', properties: { a: bare } } } }, '/$defs/box/properties/a'],
+    ['definitions', { ...described({ q: { $ref: '#/definitions/box', description: 'Boîte.' } }), definitions: { box: { type: 'object', properties: { a: bare } } } }, '/definitions/box/properties/a'],
+    ['not', described({ q: { description: 'Sauf.', not: { properties: { a: bare } } } }), '/properties/q/not/properties/a'],
+    ['if/then/else', described({ q: { description: 'Si.', if: { properties: { a: { const: 1, description: 'ok' } } }, then: { properties: { b: bare } } } }), '/properties/q/then/properties/b'],
+  ])('%s : un champ imbriqué sans description est signalé', (_name, schema, path) => {
+    expect(pathsOf(schema)).toEqual([path]);
+    expect(() => assertInputSchema(schema)).toThrow(expect.objectContaining({ code: 'missing_description' }));
+  });
+
+  test('additionalProperties, patternProperties et prefixItems : ces champs doivent être décrits, et leurs champs imbriqués aussi', () => {
+    expect(pathsOf(described({ m: { type: 'object', description: 'Table.', additionalProperties: bare } }))).toEqual(['/properties/m/additionalProperties']);
+    expect(pathsOf(described({ m: { type: 'object', description: 'Table.', additionalProperties: { type: 'object', description: 'Valeur.', properties: { a: bare } } } }))).toEqual([
+      '/properties/m/additionalProperties/properties/a',
+    ]);
+    expect(pathsOf(described({ m: { type: 'object', description: 'Table.', patternProperties: { '^x/(.*)~$': bare } } }))).toEqual(['/properties/m/patternProperties/^x~1(.*)~0$']);
+    expect(pathsOf(described({ t: { type: 'array', description: 'Couple.', prefixItems: [{ type: 'string', description: 'Clé.' }, bare] } }))).toEqual(['/properties/t/prefixItems/1']);
+    expect(pathsOf(described({ t: { type: 'array', description: 'Couple.', prefixItems: [{ type: 'object', description: 'Objet.', properties: { a: bare } }] } }))).toEqual([
+      '/properties/t/prefixItems/0/properties/a',
+    ]);
+  });
+
+  test('un schéma complet dont tout est décrit reste accepté ; additionalProperties booléen et variantes sans description propre aussi', () => {
+    const ok = {
+      ...described({
+        q: { description: 'Choix.', anyOf: [{ type: 'object', properties: { a: { type: 'string', description: 'A.' } } }, { type: 'null' }] },
+        m: { type: 'object', description: 'Table.', additionalProperties: { type: 'string', description: 'Valeur.' }, patternProperties: { '^x': { type: 'string', description: 'Préfixe x.' } } },
+        t: { type: 'array', description: 'Couple.', prefixItems: [{ type: 'string', description: 'Clé.' }], items: false },
+        r: { $ref: '#/$defs/box', description: 'Boîte.' },
+      }),
+      $defs: { box: { type: 'object', properties: { a: { type: 'string', description: 'A.' } } } },
+    };
+    expect(pathsOf(ok)).toEqual([]);
+    expect(() => assertInputSchema(ok)).not.toThrow();
+  });
+});
+
+describe('longueur de la description : texte brut, en caractères', () => {
+  test('une description complétée par des espaces est refusée (on mesure le texte tel qu’il sera stocké)', () => {
+    expect(() => assertInputSchema(described({ n: { type: 'integer', description: `court${' '.repeat(5000)}` } }))).toThrow(expect.objectContaining({ code: 'description_too_long' }));
+    expect(() => assertInputSchema(described({ n: { type: 'integer', description: `${'\n'.repeat(600)}court` } }))).toThrow(expect.objectContaining({ code: 'description_too_long' }));
+  });
+
+  test('on compte des caractères, pas des unités UTF-16 : 500 émojis passent, 501 sont refusés', () => {
+    expect(() => assertInputSchema(described({ n: { type: 'integer', description: '😀'.repeat(500) } }))).not.toThrow();
+    expect(() => assertInputSchema(described({ n: { type: 'integer', description: '😀'.repeat(501) } }))).toThrow(expect.objectContaining({ code: 'description_too_long' }));
+  });
+
+  test('buildInputSchema range la description rognée, dans la limite', () => {
+    const schema = buildInputSchema({ paginated: false, inputs: [{ name: 'query', type: 'string', description: `  ${'a'.repeat(500)}  ` }] }) as { properties: { query: { description: string } } };
+    expect(schema.properties.query.description).toBe('a'.repeat(500));
+  });
+});

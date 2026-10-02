@@ -57,6 +57,10 @@ export type PairOutcome = {
  * Vérification de la règle d'arrêt (04 §4). `verified` : une exécution a fini par la fin naturelle de la liste (règle de
  * `stop[]`, page vide, curseur absent ou répété, plus de lien suivant) ; `stop` est cette raison. Sinon `verified: false` :
  * la liste dépasse le plafond dur, ou la vérification a dépassé `max_cost_usd` (`reason`) ; la règle n'est pas démontrée.
+ *
+ * Limite connue (04 § 4 compte la règle d'arrêt vérifiée sur la dernière page dans le critère « ça marche ») : le couple
+ * est accepté avec `verified: false` dans ces deux cas, le plafond dur tenant lieu de règle d'arrêt d'une liste très longue.
+ * Écart consigné dans tests/invariants.json (assert_pagination_stop_rule_last_page), à inscrire au CDC par l'orchestrateur.
  */
 export type StopCheck = {
   readonly verified: boolean;
