@@ -1,23 +1,23 @@
-name: Documentation
-description: Une page est fausse, incomplète ou manquante.
+name: Documentation · Documentation
+description: A page is wrong, incomplete or missing. · Une page est fausse, incomplète ou manquante.
 labels: ["documentation"]
 body:
   - type: checkboxes
     id: perimetre
     attributes:
-      label: Périmètre
+      label: Scope · Périmètre
       options:
-        - label: Cette demande ne relève pas de la page « Hors périmètre » (`runtime/docs/hors-perimetre.md`).
+        - label: This request is not on the "Out of scope" page (`runtime/docs/hors-perimetre.md`). · Cette demande ne relève pas de la page « Hors périmètre » (`runtime/docs/hors-perimetre.md`).
           required: true
   - type: input
     id: page
     attributes:
-      label: Page concernée
+      label: Page concerned · Page concernée
     validations:
       required: true
   - type: textarea
     id: probleme
     attributes:
-      label: Ce qui manque ou ce qui est faux
+      label: What is missing or wrong · Ce qui manque ou ce qui est faux
     validations:
       required: true

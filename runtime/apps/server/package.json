@@ -13,6 +13,7 @@
     "@runtime/core": "workspace:*",
     "@runtime/db": "workspace:*",
     "@runtime/i18n": "workspace:*",
+    "@runtime/llm": "workspace:*",
     "@runtime/schemas": "workspace:*",
     "better-auth": "catalog:",
     "drizzle-orm": "catalog:",

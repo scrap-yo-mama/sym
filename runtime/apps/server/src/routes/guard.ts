@@ -256,7 +256,9 @@ export function guard(ctx: ServerContext) {
 
     const denied = async (reason: string) => {
       await audit(ctx, request, actor, { action: 'access.denied', outcome: 'denied', meta: { route: `${spec.method} ${spec.url}`, reason } });
-      await sendError(reply, 403, 'forbidden', 'action non autorisée');
+      // Clé sans le scope de la route : `insufficient_scope` (05 § 4.4), pour que l'agent sache quel droit demander.
+      if (reason === 'scope_missing') await sendError(reply, 403, 'insufficient_scope', `scope ${spec.scope ?? ''} requis pour cette clé d’API`);
+      else await sendError(reply, 403, 'forbidden', 'action non autorisée');
     };
     if (actor.via === 'apikey') {
       if (spec.auth === 'session') return denied('session_required');
@@ -267,6 +269,41 @@ export function guard(ctx: ServerContext) {
     }
     if (spec.permission && !can(actor.role, spec.permission)) return denied('role');
   };
+}
+
+/**
+ * Revalidation d'une identité déjà admise, pour une réponse qui dure (flux SSE, 06 § 3) : la garde ne voit la requête
+ * qu'à l'ouverture, mais une clé révoquée ou expirée, une session fermée (déconnexion, révocation d'accès, expiration,
+ * inactivité), un compte désactivé ou un rôle qui perd la permission de la route coupent aussi un flux déjà ouvert.
+ * Renvoie l'acteur à jour (rôle relu) ou null : le flux se ferme alors. Lecture système (étape d'authentification).
+ */
+export async function revalidateActor(ctx: ServerContext, actor: Actor, spec: Pick<RouteSpec, 'scope' | 'permission'> | null): Promise<Actor | null> {
+  let role: string;
+  if (actor.via === 'apikey' && actor.apiKey) {
+    const { rows } = await ctx.pool.query<{ role: string; status: string; scopes: string[]; ok: boolean }>(
+      `SELECT u.role, u.status, k.scopes, (k.revoked_at IS NULL AND k.expires_at > now()) AS ok
+       FROM api_keys k JOIN users u ON u.id = k.user_id WHERE k.id = $1 AND k.user_id = $2`,
+      [actor.apiKey.id, actor.userId],
+    );
+    const row = rows[0];
+    if (!row?.ok || row.status !== 'active' || (spec?.scope && !row.scopes.includes(spec.scope))) return null;
+    role = row.role;
+  } else if (actor.via === 'ui' && actor.sessionId) {
+    const { rows } = await ctx.pool.query<{ role: string; status: string; ok: boolean }>(
+      `SELECT u.role, u.status,
+              (s.revoked_at IS NULL AND s.expires_at > now() AND s.absolute_expires_at IS NOT NULL AND s.absolute_expires_at > now()
+               AND NOT s.mfa_pending AND s.last_seen_at >= now() - make_interval(mins => $3)) AS ok
+       FROM auth_sessions s JOIN users u ON u.id = s.user_id WHERE s.id = $1 AND s.user_id = $2`,
+      [actor.sessionId, actor.userId, (await readSecuritySettings(ctx.pool)).session_idle_minutes],
+    );
+    const row = rows[0];
+    if (!row?.ok || row.status !== 'active') return null;
+    role = row.role;
+  } else {
+    return null;
+  }
+  if (!isRole(role) || (spec?.permission && !can(role, spec.permission))) return null;
+  return role === actor.role ? actor : { ...actor, role };
 }
 
 /**

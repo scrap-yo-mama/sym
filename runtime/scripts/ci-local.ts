@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // CI locale (remplace GitHub Actions tant que la facturation est bloquée) : rejoue en séquence les étapes des jobs
-// quality, docs, unit, security, image, e2e et integration de .github/workflows/ci.yml. S'arrête au premier échec (code ≠ 0).
+// quality, docs, vitrine, unit, security, image, e2e et integration de .github/workflows/ci.yml. S'arrête au premier échec (code ≠ 0).
 import { spawnSync } from 'node:child_process';
 
 type Step = { job: string; name: string; cmd: string[]; cwd?: 'root' };
@@ -25,6 +25,9 @@ const STEPS: Step[] = [
   // Tâche 4.8 : site de doc (VitePress, Pagefind, llms.txt) construit, 0 lien mort, puis tests de contenu (Usage responsable en 11
   // sections, Hors périmètre, variables, commandes). Rien n'est publié.
   { job: 'docs', name: 'site de doc : build, liens, llms.txt, contenu', cmd: ['pnpm', 'docs:test'] },
+  // Tâche 4.12 : job `vitrine` (README en et fr, visuels et budgets, registre des allégations, licence, surface du dépôt), Node seulement.
+  { job: 'vitrine', name: 'vitrine : contrôles statiques', cmd: ['node', 'scripts/vitrine/check.mjs'] },
+  { job: 'vitrine', name: 'vitrine : tests nommés', cmd: ['pnpm', 'vitest', 'run', '--project', 'unit', 'tests/vitrine', 'tests/public-showcase.unit.test.ts'] },
   { job: 'unit', name: 'tests unitaires + couverture', cmd: ['pnpm', 'test:coverage'] },
   // Étage S : garde SSRF sur fetch et Chromium (Playwright). Chromium : pnpm exec playwright install chromium.
   { job: 'security', name: 'sécurité (SSRF, Chromium)', cmd: ['pnpm', 'test:security'] },

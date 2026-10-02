@@ -122,11 +122,12 @@ describe('EventStreamClient', () => {
     expect(unauthorized).toBe(1);
   });
 
-  test('une route absente (404) arrête le flux sans reconnexion ni bandeau', async () => {
+  test('avec stopOnNotFound, une route absente (404) arrête le flux sans reconnexion ni bandeau', async () => {
     let calls = 0;
     const statuses: StreamStatus[] = [];
     const client = new EventStreamClient({
       url: '/api/events',
+      stopOnNotFound: true,
       sleep: async () => undefined,
       fetch: async () => {
         calls += 1;
@@ -162,7 +163,7 @@ describe('EventStreamClient', () => {
     client.stop();
   });
 
-  test('par défaut, la 404 n’arrête le flux que tant que le serveur n’enregistre pas GET /api/events', () => {
+  test('par défaut, la 404 est une coupure (GET /api/events livré par 3.1)', () => {
     // Lien avec le registre des routes : voir tests/openapi-client.contract.test.ts (STOP_ON_NOT_FOUND_DEFAULT).
     expect(typeof STOP_ON_NOT_FOUND_DEFAULT).toBe('boolean');
   });

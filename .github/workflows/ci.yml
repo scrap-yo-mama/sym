@@ -1,4 +1,4 @@
-# CI de runtime/ : 7 jobs (cdc/scrapyomama-runtime/15-strategie-tests.md §2), plus le job `docs` (tâche 4.8) et le job `image` (privilèges du bac à sable sur l'image construite, F-20261001-R01).
+# CI de runtime/ : 7 jobs (cdc/scrapyomama-runtime/15-strategie-tests.md §2), plus le job `docs` (tâche 4.8), le job `image` (privilèges du bac à sable sur l'image construite, F-20261001-R01) et le 8e job `vitrine` (tâche 4.12).
 # Aucun filtre de chemin : `quality` ne doit jamais être masqué.
 name: ci
 
@@ -90,6 +90,40 @@ jobs:
         run: pnpm docs:test
       - name: Quickstart rejoué sur une instance vierge
         run: pnpm docs:quickstart
+
+  vitrine:
+    # Tâche 4.12 (22 §3.6, 22b §5) : vitrine du dépôt (README en et fr, visuels et budgets de poids, registre des allégations,
+    # licence, formulaires, étiquettes OCI, filtre par chemin). Node seulement : scripts/vitrine/check.mjs et les tests nommés
+    # de tests/vitrine (aucun .py, aucun service tiers). Le filtre par chemin est celui de CE job (check.mjs changed), jamais un
+    # filtre du workflow : `quality` et les autres jobs ne sont jamais masqués. Rien n'est publié, poussé ni réglé sur GitHub.
+    # Cible : moins de 3 minutes (à valider).
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0 # historique complet : le filtre par chemin compare à la branche de base, le registre lit les étiquettes de release
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          package_json_file: runtime/package.json
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: runtime/.node-version
+      - run: pnpm install --frozen-lockfile
+      # Sans filtre : les preuves du registre sont des tests de tout le monorepo (une preuve supprimée ou renommée fait échouer le job).
+      - name: Registre des allégations (preuves, relecture, CLAIMS.md à jour)
+        run: node scripts/vitrine/check.mjs claims
+      - name: La PR (ou le push) touche-t-elle la vitrine ? (README*, .github/**, apps/docs/**, docs/, deploy/, scripts/vitrine/**)
+        id: changed
+        env:
+          VITRINE_BASE: ${{ github.event_name == 'push' && github.event.before || '' }}
+        run: node scripts/vitrine/check.mjs changed
+      - name: Contrôles de la vitrine (budgets, parité en / fr, allégations, visuels, licence, surface du dépôt)
+        if: steps.changed.outputs.run == 'true'
+        run: node scripts/vitrine/check.mjs
+      - name: Tests nommés de la vitrine (assert_readme_*, assert_social_preview_spec, assert_svg_safe, assert_license_detected_agpl…)
+        if: steps.changed.outputs.run == 'true'
+        run: pnpm vitest run --project unit tests/vitrine tests/public-showcase.unit.test.ts
 
   unit:
     runs-on: ubuntu-24.04
@@ -217,7 +251,9 @@ jobs:
           node-version-file: runtime/.node-version
       - run: pnpm install --frozen-lockfile ${{ matrix.node == '26' && '--config.engine-strict=false' || '' }}
       - run: pnpm build
-      - name: Utilisateur dédié du bac à sable, comme deploy/Dockerfile (uid 1500, lanceur setpriv à capacités)
+      # D-67 (précision, revue 4.1b) : ce job exécute le vrai balayage (kill -1 sous l'uid 1500, sandbox.security.test.ts) sur
+      # un runner Linux jetable, sous l'uid dédié et sous le filtre SANDBOX_SECCOMP, comme dans l'image.
+      - name: Utilisateur dédié du bac à sable, comme deploy/Dockerfile (uid 1500, filtre seccomp, lanceur setpriv à capacités)
         run: |
           sudo apt-get install -y --no-install-recommends libcap2-bin
           sudo groupadd --system --gid 1500 sandbox
@@ -225,9 +261,14 @@ jobs:
           sudo install -d -m 0755 /usr/local/libexec
           sudo install -o root -g "$(id -gn)" -m 0750 /usr/bin/setpriv /usr/local/libexec/sandbox-launch
           sudo setcap cap_setuid,cap_setgid=ep /usr/local/libexec/sandbox-launch
+          # Filtre de l'enfant (revue 4.1b (4)), compilé par le gcc du runner : exécuté AVANT le lanceur, il lui transmet
+          # cap_setuid,cap_setgid (=p).
+          gcc -O2 -Wall -Wextra -Werror -o "$RUNNER_TEMP/sandbox-seccomp" deploy/sandbox-seccomp.c
+          sudo install -o root -g "$(id -gn)" -m 0750 "$RUNNER_TEMP/sandbox-seccomp" /usr/local/libexec/sandbox-seccomp
+          sudo setcap cap_setuid,cap_setgid=p /usr/local/libexec/sandbox-seccomp
           # L'enfant lit son script et les paquets du moteur dans l'espace de travail : traversée des dossiers parents.
           d="$GITHUB_WORKSPACE"; while [ "$d" != / ]; do sudo chmod o+x "$d"; d="$(dirname "$d")"; done
-          { echo SANDBOX_UID=1500; echo SANDBOX_GID=1500; echo SANDBOX_LAUNCHER=/usr/local/libexec/sandbox-launch; } >> "$GITHUB_ENV"
+          { echo SANDBOX_UID=1500; echo SANDBOX_GID=1500; echo SANDBOX_LAUNCHER=/usr/local/libexec/sandbox-launch; echo SANDBOX_SECCOMP=/usr/local/libexec/sandbox-seccomp; } >> "$GITHUB_ENV"
       - name: Chromium de Playwright (garde SSRF via le proxy d'egress, INV10)
         if: matrix.node == ''
         run: pnpm exec playwright install --with-deps chromium
@@ -277,6 +318,12 @@ jobs:
       # documentée comme non vérifiée (apps/docs/content/guides/docker-compose.md, docs/deploiement.md).
       - name: Bac à sable de Chromium (espaces de noms utilisateur)
         run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      # Régime de sécurité de l'hôte, consigné avec le résultat (revue 4.1b) : profil seccomp par défaut et AppArmor
+      # (docker-default) du runner, que Docker Desktop n'a pas.
+      - name: Régime de sécurité de Docker (seccomp, AppArmor)
+        run: |
+          docker info --format '{{json .SecurityOptions}}'
+          sudo cat /sys/kernel/security/apparmor/profiles 2>/dev/null | grep -i docker || echo "AppArmor : aucun profil docker chargé"
       # Aucune relance : un échec instable doit rester visible (rapport junit archivé).
       - run: pnpm test:image --retry=0 --reporter=default --reporter=junit --outputFile.junit=reports/image-junit.xml
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

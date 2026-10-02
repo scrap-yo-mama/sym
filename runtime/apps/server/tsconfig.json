@@ -5,24 +5,7 @@
     "rootDir": "src",
     "outDir": "dist"
   },
-  "include": [
-    "src"
-  ],
-  "exclude": [
-    "src/**/*.test.ts"
-  ],
-  "references": [
-    {
-      "path": "../../packages/schemas"
-    },
-    {
-      "path": "../../packages/core"
-    },
-    {
-      "path": "../../packages/db"
-    },
-    {
-      "path": "../../packages/i18n"
-    }
-  ]
+  "include": ["src"],
+  "exclude": ["src/**/*.test.ts"],
+  "references": [{ "path": "../../packages/schemas" }, { "path": "../../packages/core" }, { "path": "../../packages/db" }, { "path": "../../packages/llm" }, { "path": "../../packages/i18n" }]
 }

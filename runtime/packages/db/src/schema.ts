@@ -82,7 +82,7 @@ export const users = pgTable(
     image: text('image'),
     role: text('role', { enum: ['owner', 'admin', 'member'] }).notNull().default('member'),
     status: text('status', { enum: ['invited', 'active', 'disabled'] }).notNull().default('invited'),
-    // Migration 0017_i18n : le registre des langues (`@runtime/i18n`) valide ; la CHECK n'impose que la forme.
+    // Migration 0018_i18n : le registre des langues (`@runtime/i18n`) valide ; la CHECK n'impose que la forme.
     locale: text('locale').notNull().default('en'),
     theme: text('theme', { enum: ['light', 'dark', 'system'] }).notNull().default('system'),
     twoFactorEnabled: boolean('two_factor_enabled').notNull().default(false),
@@ -92,7 +92,7 @@ export const users = pgTable(
     lastLoginAt: tstz('last_login_at'),
     // Migration 0012_accounts_advanced (tâche 3.7) : compte supprimé et anonymisé.
     deletedAt: tstz('deleted_at'),
-    // Migration 0017_i18n : fuseau IANA (indice de localisation : donnée personnelle, 17 § 6), nullable.
+    // Migration 0018_i18n : fuseau IANA (indice de localisation : donnée personnelle, 17 § 6), nullable.
     timezone: text('timezone'),
   },
   (t) => [uniqueIndex('users_single_owner').on(t.role).where(sql`role = 'owner'`)],
@@ -188,7 +188,7 @@ export const invitations = pgTable(
     createdAt: createdAt(),
     // Migration 0012_accounts_advanced : échéance ≤ dernier envoi + 48 h (CHECK invitations_ttl).
     sentAt: tstz('sent_at').notNull().defaultNow(),
-    // Migration 0017_i18n : langue choisie par l'invitant, copiée dans users.locale à l'acceptation.
+    // Migration 0018_i18n : langue choisie par l'invitant, copiée dans users.locale à l'acceptation.
     locale: text('locale').notNull().default('en'),
   },
   (t) => [index('invitations_email_idx').on(t.email)],
@@ -351,6 +351,8 @@ export const apis = pgTable(
     description: text('description').notNull().default(''),
     inputSchema: jsonb('input_schema').notNull().default({}),
     outputSchema: jsonb('output_schema').notNull().default({}),
+    // 0017_rest_api (3.1) : ordre déclaré des propriétés de premier niveau du schéma de sortie (colonnes du CSV).
+    outputColumns: text('output_columns').array(),
     views: jsonb('views').notNull().default({}),
     status: text('status', { enum: API_STATUSES }).notNull().default('enquete'),
     investigationPhase: text('investigation_phase', {
@@ -411,6 +413,8 @@ export const strategyVersions = pgTable(
     createdBy: text('created_by', { enum: STRATEGY_CREATORS }).notNull(),
     parentVersion: integer('parent_version'),
     patch: jsonb('patch'),
+    // 0017_rest_api (3.1) : la version a été courante au moins une fois (déclencheur sur apis) ; seule une telle version se rétablit.
+    wasCurrent: boolean('was_current').notNull().default(false),
     createdAt: createdAt(),
   },
   (t) => [primaryKey({ columns: [t.apiId, t.version] }), index('strategy_versions_owner_id_idx').on(t.ownerId)],
@@ -462,7 +466,9 @@ export const runs = pgTable(
     scheduleJobId: uuid('schedule_job_id'),
     // 0016_investigation (2.1) : exécution d'une stratégie ou enquête.
     kind: text('kind', { enum: RUN_KINDS }).notNull().default('run'),
-    // Migration 0017_i18n : langue du demandeur au lancement (déclencheur `runs_set_locale`) ; prose du LLM seulement.
+    // 0017_rest_api (3.1) : pause demandée par l'utilisateur (run `queued` sans job), reprise par `resume`.
+    pausedAt: tstz('paused_at'),
+    // Migration 0018_i18n : langue du demandeur au lancement (déclencheur `runs_set_locale`) ; prose du LLM seulement.
     locale: text('locale').notNull(),
     createdAt: createdAt(),
     startedAt: tstz('started_at'),
@@ -751,6 +757,16 @@ export const tunnels = pgTable(
   ],
 );
 
+/**
+ * Créations de run par clé d'API sur une fenêtre d'une minute ouverte par la première création (08b § 3, migration 0017) :
+ * compteur partagé entre instances du serveur. Table système, jamais lue sous runtime_app.
+ */
+export const runCreationCounters = pgTable('run_creation_counters', {
+  bucket: text('bucket').primaryKey(),
+  windowStart: tstz('window_start').notNull(),
+  hits: integer('hits').notNull(),
+});
+
 /** Code d'appairage de l'extension (07 § 1) : usage unique, 10 min, empreinte seulement (migration 0008). */
 export const extensionPairingCodes = pgTable(
   'extension_pairing_codes',
@@ -832,6 +848,8 @@ export const webhookSubscriptions = pgTable(
     // 0011 (2.5) : dernier échec (série « continue » = jamais plus de 24 h sans échec). Clés étrangères liées au
     // propriétaire (secret_id, owner_id) → secrets (id, owner_id), `ON DELETE SET NULL (colonne)` : écrites en SQL seulement.
     lastFailureAt: tstz('last_failure_at'),
+    // 0017_rest_api (3.1) : abonnement limité à une API (NULL = toutes les API du propriétaire).
+    apiId: uuid('api_id').references((): AnyPgColumn => apis.id, { onDelete: 'cascade' }),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },

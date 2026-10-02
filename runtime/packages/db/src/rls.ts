@@ -42,3 +42,18 @@ export async function withActor<T>(pool: pg.Pool, actor: DbActor, fn: (client: p
   client.release();
   return result;
 }
+
+/**
+ * Exécute `fn` sous l'identité `actor` (rôle `runtime_app`, `app.user_id`, `app.role`) DANS la transaction en cours
+ * d'un client système (ex. un crochet de `applyStatusAndNotify`, qui tient la ligne `apis` sous verrou), puis rend
+ * l'identité système : l'écriture de l'utilisateur (RLS) et celle du système (statut, INV3) partent au même COMMIT. Une
+ * exception laisse la transaction à annuler par l'appelant (rien n'est écrit).
+ */
+export async function asActorInTransaction<T>(client: pg.PoolClient, actor: NonNullable<DbActor>, fn: (client: pg.PoolClient) => Promise<T>): Promise<T> {
+  await client.query(`SET LOCAL ROLE ${APP_ROLE}`);
+  await client.query("SELECT set_config('app.user_id', $1, true), set_config('app.role', $2, true)", [actor.userId, actor.role]);
+  const out = await fn(client);
+  await client.query('SET LOCAL ROLE NONE');
+  await client.query("SELECT set_config('app.user_id', '', true), set_config('app.role', '', true)");
+  return out;
+}

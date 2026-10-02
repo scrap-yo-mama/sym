@@ -72,7 +72,7 @@ export class PgBossJobQueue implements JobQueue {
     await this.#boss.stop({ graceful: true, close: true, timeout: options.timeoutMs ?? 5000 });
   }
 
-  async createQueue(definition: QueueDefinition): Promise<void> {
+  async createQueue(definition: QueueDefinition, createOptions: { keepExisting?: boolean } = {}): Promise<void> {
     const options = {
       policy: definition.policy ?? 'standard',
       expireInSeconds: definition.expireInSeconds,
@@ -82,6 +82,7 @@ export class PgBossJobQueue implements JobQueue {
     };
     // Idempotent ; une file existante garde sa politique, le reste est aligné sur la définition courante.
     await this.#boss.createQueue(definition.name, options);
+    if (createOptions.keepExisting) return;
     await this.#boss.updateQueue(definition.name, {
       expireInSeconds: options.expireInSeconds,
       retryLimit: options.retryLimit,

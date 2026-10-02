@@ -169,6 +169,41 @@ export async function cancelRun(tx: Queryable, queue: JobQueue, runId: string): 
   return true;
 }
 
+/** Pause refusée : run terminé, déjà en pause, ou API qui écrit (une reprise rejouerait ses écritures, comme le balayeur). */
+export type PauseOutcome = 'paused' | 'not_active' | 'already_paused' | 'write_actions';
+
+/**
+ * Met en pause un run actif (0017, 06 § 2) : `queued` sans job, `paused_at` posé, job pg-boss annulé, dans la transaction
+ * `tx` (sous withActor : l'acteur ne touche que ses runs). Le worker qui le tenait perd son bail au battement suivant ; les
+ * essais et les coûts déjà imputés restent (INV4). Le balayeur et `claimRun` ignorent un run en pause.
+ */
+export async function pauseRun(tx: Queryable, queue: JobQueue, runId: string): Promise<PauseOutcome> {
+  const { rows } = await tx.query<{ state: RunState; job_id: string | null; paused_at: Date | null; allow_write_actions: boolean }>(
+    'SELECT r.state, r.job_id, r.paused_at, a.allow_write_actions FROM runs r JOIN apis a ON a.id = r.api_id WHERE r.id = $1 FOR UPDATE OF r',
+    [runId],
+  );
+  const run = rows[0];
+  if (!run || !ACTIVE.includes(run.state)) return 'not_active';
+  if (run.paused_at !== null) return 'already_paused';
+  if (run.allow_write_actions) return 'write_actions';
+  await tx.query("UPDATE runs SET state = 'queued', paused_at = now(), job_id = NULL, worker_id = NULL WHERE id = $1", [runId]);
+  if (run.job_id) await queue.cancel(RUN_QUEUE, run.job_id, { tx: tx as QueryClient });
+  return 'paused';
+}
+
+/** Reprend un run en pause (action de l'utilisateur) : nouveau job dans la même transaction. false : le run n'était pas en pause. */
+export async function resumeRun(tx: Queryable, queue: JobQueue, runId: string): Promise<boolean> {
+  const jobId = randomUUID();
+  const { rowCount } = await tx.query(
+    "UPDATE runs SET paused_at = NULL, job_id = $2, heartbeat_at = now() WHERE id = $1 AND state = 'queued' AND paused_at IS NOT NULL",
+    [runId, jobId],
+  );
+  if (rowCount !== 1) return false;
+  const trace = currentTraceparent();
+  await queue.enqueue(RUN_QUEUE, { run_id: runId, ...(trace ? { _trace: trace } : {}) }, { tx: tx as QueryClient, id: jobId });
+  return true;
+}
+
 type RunRow = {
   id: string;
   api_id: string;
@@ -270,7 +305,7 @@ export type RunClaim = {
   allowWriteActions: boolean;
   /** `runs.kind` (0016) : le worker y choisit l'exécuteur (stratégie ou enquête). */
   kind: RunKind;
-  /** `runs.locale` (0017) : langue du demandeur au lancement ; prose du LLM seulement, jamais une requête vers un site (21 § 6). */
+  /** `runs.locale` (0018) : langue du demandeur au lancement ; prose du LLM seulement, jamais une requête vers un site (21 § 6). */
   locale: string;
 };
 
@@ -291,7 +326,7 @@ export async function claimRun(db: Queryable, args: { runId: string; jobId: stri
     `UPDATE runs r SET state = 'running', worker_id = $3, started_at = coalesce(r.started_at, now()), heartbeat_at = now(),
        strategy_version = coalesce(r.strategy_version, a.current_strategy_version)
      FROM apis a
-     WHERE r.id = $1 AND r.job_id = $2 AND r.state = 'queued' AND a.id = r.api_id
+     WHERE r.id = $1 AND r.job_id = $2 AND r.state = 'queued' AND r.paused_at IS NULL AND a.id = r.api_id
      RETURNING r.api_id, r.owner_id, r.strategy_version, r.input, a.allow_write_actions, r.kind, r.locale`,
     [args.runId, args.jobId, args.workerId],
   );
@@ -333,7 +368,8 @@ export async function setRunWaitingTunnel(db: Queryable, runId: string, jobId: s
 
 /**
  * Journalise un essai (INV2, INV4) et impute son coût et ses jetons au run, en une instruction : le coût du run est par
- * construction la somme de ses essais. Lève RunLeaseLostError si le run n'est plus à ce job. Un coût LLM inconnu
+ * construction la somme de ses essais. Lève RunLeaseLostError si le run n'est plus à ce job (l'essai est alors journalisé
+ * et imputé quand même, sans battement). Un coût LLM inconnu
  * (`llm_usd: null`, prix absent) rend l'essai et le run inconnus (NULL, jamais 0 ; 08 §1, INV4) : `NULL + x` reste NULL.
  */
 export async function recordAttempt(db: Queryable, runId: string, jobId: string, a: AttemptRecord): Promise<number> {
@@ -341,39 +377,44 @@ export async function recordAttempt(db: Queryable, runId: string, jobId: string,
   const proxy = a.proxy_usd ?? 0;
   if ((llm !== null && llm < 0) || proxy < 0) throw new RangeError('coût négatif');
   const t = a.tokens ?? {};
-  const { rows } = await db.query<{ seq: number }>(
+  const params = [
+    runId,
+    jobId,
+    llm,
+    proxy,
+    t.in ?? 0,
+    t.cached ?? 0,
+    t.out ?? 0,
+    t.reasoning ?? 0,
+    t.estimated ?? false,
+    a.execution,
+    a.network,
+    a.result,
+    a.est_cost_usd,
+    Math.round(a.ms),
+    a.model_id ?? null,
+    a.prompt_version ?? null,
+    ['running', 'waiting_tunnel'],
+    a.engine ?? null,
+  ];
+  const sql = (leased: boolean) =>
     `WITH r AS (
        UPDATE runs SET cost_llm_usd = cost_llm_usd + $3, cost_proxy_usd = cost_proxy_usd + $4,
          tokens_in = tokens_in + $5, tokens_cached = tokens_cached + $6, tokens_out = tokens_out + $7,
-         tokens_reasoning = tokens_reasoning + $8, usage_estimated = usage_estimated OR $9, heartbeat_at = now()
-       WHERE id = $1 AND job_id = $2 AND state = ANY($17::text[])
+         tokens_reasoning = tokens_reasoning + $8, usage_estimated = usage_estimated OR $9${leased ? ', heartbeat_at = now()' : ''}
+       WHERE id = $1 AND ${leased ? '' : 'NOT '}(job_id IS NOT DISTINCT FROM $2 AND state = ANY($17::text[]))
        RETURNING id, owner_id, project_id)
      INSERT INTO run_attempts (run_id, seq, owner_id, project_id, execution, network, result_class, est_cost_usd, cost_usd, ms,
        model_id, prompt_version, engine)
      SELECT r.id, coalesce((SELECT max(seq) FROM run_attempts WHERE run_id = r.id), 0) + 1, r.owner_id, r.project_id,
        $10, $11, $12, $13, $3::numeric + $4::numeric, $14, $15, $16, $18
-     FROM r RETURNING seq`,
-    [
-      runId,
-      jobId,
-      llm,
-      proxy,
-      t.in ?? 0,
-      t.cached ?? 0,
-      t.out ?? 0,
-      t.reasoning ?? 0,
-      t.estimated ?? false,
-      a.execution,
-      a.network,
-      a.result,
-      a.est_cost_usd,
-      Math.round(a.ms),
-      a.model_id ?? null,
-      a.prompt_version ?? null,
-      ['running', 'waiting_tunnel'],
-      a.engine ?? null,
-    ],
-  );
+     FROM r RETURNING seq`;
+  const { rows } = await db.query<{ seq: number }>(sql(true), params);
+  if (rows[0] === undefined) {
+    // Bail perdu (pause, annulation, balayeur) : l'essai a eu lieu et son coût est réel ; il est journalisé et imputé
+    // quand même (INV2, INV4 : une pause répétée ne ferait pas fuir le budget), sans battement, puis l'erreur est levée.
+    await db.query(sql(false), params);
+  }
   const seq = rows[0]?.seq;
   if (seq === undefined) throw new RunLeaseLostError(`run ${runId} : bail perdu`);
   return seq;
@@ -394,14 +435,18 @@ export async function chargeRunCost(
   const proxy = c.proxy_usd ?? 0;
   if ((llm !== null && llm < 0) || proxy < 0) throw new RangeError('coût négatif');
   const t = c.tokens ?? {};
-  const { rowCount } = await db.query(
+  const sql = (leased: boolean) =>
     `UPDATE runs SET cost_llm_usd = cost_llm_usd + $3, cost_proxy_usd = cost_proxy_usd + $4,
        tokens_in = tokens_in + $5, tokens_cached = tokens_cached + $6, tokens_out = tokens_out + $7,
-       tokens_reasoning = tokens_reasoning + $8, usage_estimated = usage_estimated OR $9, heartbeat_at = now()
-     WHERE id = $1 AND job_id = $2 AND state = ANY($10::text[])`,
-    [runId, jobId, llm, proxy, t.in ?? 0, t.cached ?? 0, t.out ?? 0, t.reasoning ?? 0, t.estimated ?? false, ['running', 'waiting_tunnel']],
-  );
-  if (rowCount !== 1) throw new RunLeaseLostError(`run ${runId} : bail perdu`);
+       tokens_reasoning = tokens_reasoning + $8, usage_estimated = usage_estimated OR $9${leased ? ', heartbeat_at = now()' : ''}
+     WHERE id = $1 AND ${leased ? '' : 'NOT '}(job_id IS NOT DISTINCT FROM $2 AND state = ANY($10::text[]))`;
+  const params = [runId, jobId, llm, proxy, t.in ?? 0, t.cached ?? 0, t.out ?? 0, t.reasoning ?? 0, t.estimated ?? false, ['running', 'waiting_tunnel']];
+  const { rowCount } = await db.query(sql(true), params);
+  if (rowCount !== 1) {
+    // Bail perdu : le coût engagé (appel LLM en vol au moment d'une pause ou d'une annulation) est imputé quand même (INV4).
+    await db.query(sql(false), params);
+    throw new RunLeaseLostError(`run ${runId} : bail perdu`);
+  }
 }
 
 /**
@@ -534,7 +579,7 @@ export async function sweepOrphans(
   return inTransaction(pool, async (tx) => {
     const { rows } = await tx.query<OrphanRow>(
       `SELECT r.id, r.state, r.job_id, r.requeue_count, a.allow_write_actions FROM runs r JOIN apis a ON a.id = r.api_id
-       WHERE r.state = ANY($1::text[]) AND coalesce(r.heartbeat_at, r.created_at) < now() - make_interval(secs => $2)
+       WHERE r.state = ANY($1::text[]) AND r.paused_at IS NULL AND coalesce(r.heartbeat_at, r.created_at) < now() - make_interval(secs => $2)
        ORDER BY r.state = 'queued', coalesce(r.heartbeat_at, r.created_at) LIMIT $3 FOR UPDATE OF r SKIP LOCKED`,
       [ACTIVE, stale, limit],
     );
