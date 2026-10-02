@@ -392,7 +392,7 @@ describe('warning au-delà de D', () => {
     expect(await checkLongWarnings({ pool, queue, now: () => new Date(NOW.getTime() + 9 * DAY) })).toEqual([]);
     const sent = await sendAlertEmail(ctx(), { api_id: id, cause: 'warning_stale', since: NOW.toISOString() });
     expect(sent.sent).toBe(true);
-    expect(smtp.mails[0]!.headers['subject']).toBe('[Scrapyomama] zz_test_warning : warning for too long');
+    expect(smtp.mails[0]!.headers['subject']).toBe('[Scrapyomama] zz_test_warning: warning for too long');
     expect(smtp.mails[0]!.text).toContain('In warning since');
   });
 
