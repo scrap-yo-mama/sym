@@ -230,56 +230,89 @@ export function settingsRoutes(app: FastifyInstance, ctx: ServerContext): void {
         if (t !== null && !ids.includes(t.provider)) return sendError(reply, 400, 'invalid_llm_settings', `rôle ${role} : fournisseur ${t.provider} inconnu`);
       }
     }
-    const previous = (await readSetting<StoredLlm>(ctx, 'llm')) ?? { providers: [] };
-    const before = new Map(previous.providers.map((p) => [p.id, p]));
-    // Un secret est lié à sa destination : une clé gardée ne part jamais vers une autre `base_url` que celle pour laquelle
-    // elle a été saisie (INV8 : un admin ne la ferait pas sortir par « Tester » vers un serveur à lui). Destination
-    // changée → la clé est exigée dans la même requête ; les en-têtes secrets d'avant sont abandonnés (à ressaisir).
-    const moved = (p: LlmWrite['providers'][number]) => {
-      const old = before.get(p.id);
-      return old !== undefined && !sameDestination(old.base_url, p.base_url);
-    };
-    const missingKey = body.providers.find((p) => p.api_key === undefined && (!before.get(p.id)?.api_key_secret_id || moved(p)));
-    if (missingKey) {
-      return sendError(reply, 400, 'api_key_required', moved(missingKey) ? `fournisseur ${missingKey.id} : base_url changée, ressaisissez la clé d'API` : `fournisseur ${missingKey.id} : clé d'API requise`);
+    // Écritures SÉRIALISÉES (verrou consultatif de transaction sur `llm`, ligne relue sous FOR UPDATE) : deux PUT
+    // concurrents se suivent, le second part de l'état écrit par le premier. Sans cela, A (clé k0 remplacée par kA)
+    // supprimerait k0 pendant que B, parti de l'état d'avant, réécrirait un réglage qui pointe vers k0 (« clé illisible »,
+    // runs en échec). Les secrets abandonnés ne sont supprimés qu'avec l'écriture, au même COMMIT ; une écriture refusée
+    // ou en échec supprime les secrets qu'elle venait de créer.
+    class Refused extends Error {
+      readonly code: string;
+      constructor(code: string, message: string) {
+        super(message);
+        this.code = code;
+      }
     }
-    const providers: StoredProvider[] = [];
-    const dropped: (string | undefined)[] = [];
-    for (const p of body.providers) {
-      const old = before.get(p.id);
-      let keyId = old?.api_key_secret_id;
-      if (p.api_key !== undefined) {
-        keyId = await secrets.put({ ownerId: null, kind: 'llm_api_key', label: `llm ${p.id}`, value: p.api_key });
-        dropped.push(old?.api_key_secret_id);
+    const created: string[] = [];
+    const client = await ctx.pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query("SELECT pg_advisory_xact_lock(hashtext('runtime.settings.llm'))");
+      const previous = (await client.query<{ value: StoredLlm }>("SELECT value FROM settings WHERE key = 'llm' FOR UPDATE")).rows[0]?.value ?? { providers: [] };
+      const before = new Map(previous.providers.map((p) => [p.id, p]));
+      // Un secret est lié à sa destination : une clé gardée ne part jamais vers une autre `base_url` que celle pour laquelle
+      // elle a été saisie (INV8 : un admin ne la ferait pas sortir par « Tester » vers un serveur à lui). Destination
+      // changée → la clé est exigée dans la même requête ; les en-têtes secrets d'avant sont abandonnés (à ressaisir).
+      const moved = (p: LlmWrite['providers'][number]) => {
+        const old = before.get(p.id);
+        return old !== undefined && !sameDestination(old.base_url, p.base_url);
+      };
+      const missingKey = body.providers.find((p) => p.api_key === undefined && (!before.get(p.id)?.api_key_secret_id || moved(p)));
+      if (missingKey) {
+        throw new Refused('api_key_required', moved(missingKey) ? `fournisseur ${missingKey.id} : base_url changée, ressaisissez la clé d'API` : `fournisseur ${missingKey.id} : clé d'API requise`);
       }
-      let headersId = old?.headers_secret_id;
-      if (p.headers === undefined && moved(p) && headersId !== undefined) {
-        headersId = undefined;
-        dropped.push(old?.headers_secret_id);
+      const put = async (kind: string, label: string, value: string) => {
+        const id = await secrets.put({ ownerId: null, kind, label, value });
+        created.push(id);
+        return id;
+      };
+      const providers: StoredProvider[] = [];
+      const dropped: (string | undefined)[] = [];
+      for (const p of body.providers) {
+        const old = before.get(p.id);
+        let keyId = old?.api_key_secret_id;
+        if (p.api_key !== undefined) {
+          keyId = await put('llm_api_key', `llm ${p.id}`, p.api_key);
+          dropped.push(old?.api_key_secret_id);
+        }
+        let headersId = old?.headers_secret_id;
+        if (p.headers === undefined && moved(p) && headersId !== undefined) {
+          headersId = undefined;
+          dropped.push(old?.headers_secret_id);
+        }
+        if (p.headers !== undefined) {
+          headersId = Object.keys(p.headers).length === 0 ? undefined : await put('llm_headers', `llm ${p.id} headers`, JSON.stringify(p.headers));
+          dropped.push(old?.headers_secret_id);
+        }
+        providers.push({
+          id: p.id,
+          preset: p.preset,
+          base_url: p.base_url,
+          ...(p.timeout_ms === undefined ? {} : { timeout_ms: p.timeout_ms }),
+          ...(p.max_retries === undefined ? {} : { max_retries: p.max_retries }),
+          models: p.models ?? old?.models ?? {},
+          api_key_secret_id: keyId!,
+          ...(headersId === undefined ? {} : { headers_secret_id: headersId }),
+        });
       }
-      if (p.headers !== undefined) {
-        headersId = Object.keys(p.headers).length === 0 ? undefined : await secrets.put({ ownerId: null, kind: 'llm_headers', label: `llm ${p.id} headers`, value: JSON.stringify(p.headers) });
-        dropped.push(old?.headers_secret_id);
-      }
-      providers.push({
-        id: p.id,
-        preset: p.preset,
-        base_url: p.base_url,
-        ...(p.timeout_ms === undefined ? {} : { timeout_ms: p.timeout_ms }),
-        ...(p.max_retries === undefined ? {} : { max_retries: p.max_retries }),
-        models: p.models ?? old?.models ?? {},
-        api_key_secret_id: keyId!,
-        ...(headersId === undefined ? {} : { headers_secret_id: headersId }),
-      });
+      for (const old of previous.providers) if (!ids.includes(old.id)) dropped.push(old.api_key_secret_id, old.headers_secret_id);
+      const value = {
+        providers,
+        ...(body.roles ? { roles: Object.fromEntries(Object.entries(body.roles).map(([k, v]) => [k, { provider: v.provider, model: v.model, ...(v.fallback ? { fallback: v.fallback } : {}) }])) } : {}),
+        ...(body.redact === undefined ? {} : { redact: body.redact }),
+        ...(body.log_prompts === undefined ? {} : { log_prompts: body.log_prompts }),
+      };
+      await client.query(`INSERT INTO settings (key, value) VALUES ('llm', $1::jsonb) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`, [JSON.stringify(value)]);
+      const gone = dropped.filter((id): id is string => typeof id === 'string');
+      if (gone.length > 0) await client.query('DELETE FROM secrets WHERE id = ANY($1::uuid[]) AND owner_id IS NULL', [gone]);
+      await client.query('COMMIT');
+    } catch (error) {
+      await client.query('ROLLBACK');
+      await deleteInstanceSecrets(ctx, created);
+      if (error instanceof Refused) return sendError(reply, 400, error.code, error.message);
+      throw error;
+    } finally {
+      client.release();
     }
-    for (const old of previous.providers) if (!ids.includes(old.id)) dropped.push(old.api_key_secret_id, old.headers_secret_id);
-    await writeSetting(ctx, 'llm', {
-      providers,
-      ...(body.roles ? { roles: Object.fromEntries(Object.entries(body.roles).map(([k, v]) => [k, { provider: v.provider, model: v.model, ...(v.fallback ? { fallback: v.fallback } : {}) }])) } : {}),
-      ...(body.redact === undefined ? {} : { redact: body.redact }),
-      ...(body.log_prompts === undefined ? {} : { log_prompts: body.log_prompts }),
-    });
-    await deleteInstanceSecrets(ctx, dropped);
     await audit(ctx, request, actor, { action: 'settings.llm.updated', targetType: 'settings', targetId: 'llm', outcome: 'success', meta: { providers: ids } });
     return llmView(ctx);
   });

@@ -167,7 +167,10 @@ export const versionSummary = (v: VersionRow) => ({
   run_id: null,
 });
 
-/** Fiche d'une API visible de l'acteur (`ApiDetail`). Le rapport d'accès et les runs récents sont ceux de l'acteur. */
+/**
+ * Fiche d'une API visible de l'acteur (`ApiDetail`). Le rapport d'accès et les runs récents sont ceux de l'acteur ; la
+ * politique du propriétaire (projet, finalité, base légale, budgets, rythme, proxys) n'est servie qu'à lui (constat B5).
+ */
 export async function apiDetail(db: Queryable, actor: Actor, r: ApiRow) {
   const current =
     r.current_strategy_version === null
@@ -188,10 +191,23 @@ export async function apiDetail(db: Queryable, actor: Actor, r: ApiRow) {
   const values = costs.rows.map((c) => usd(c.c)).sort((a, b) => a - b);
   const median = values.length === 0 ? null : values.length % 2 === 1 ? values[(values.length - 1) / 2]! : Math.round(((values[values.length / 2 - 1]! + values[values.length / 2]!) / 2) * 1e6) / 1e6;
   const policy = r.network_policy;
+  const allow = Array.isArray(policy['allow']) ? policy['allow'] : ['direct'];
+  // Membre qui lit l'API `instance` d'autrui : de quoi la lancer (schémas, statut, exécution, réseau autorisé, coût
+  // estimé), jamais la politique du propriétaire (projet, finalité, base légale, budgets, rythme par domaine, proxys).
+  const owner = r.owner_id === actor.userId;
+  const ownerPolicy = owner
+    ? {
+        project_id: r.project_id,
+        purpose: r.purpose === '' ? null : r.purpose,
+        legal_basis: r.legal_basis,
+        max_cost_usd: usd(r.max_cost_usd),
+        budget_daily_usd: usd(r.budget_daily_usd),
+        domain_pacing: r.domain_pacing,
+      }
+    : {};
   return {
     ...apiSummary(r, access?.signal ?? null),
     metadata_only: false,
-    project_id: r.project_id,
     investigation_phase: r.investigation_phase,
     input_schema: r.input_schema,
     output_schema: r.output_schema,
@@ -200,16 +216,14 @@ export async function apiDetail(db: Queryable, actor: Actor, r: ApiRow) {
     last_signal_at: iso(r.last_signal_at),
     current_strategy_version: r.current_strategy_version,
     current_strategy: current === null ? null : versionSummary(current),
-    network_policy: { allow: Array.isArray(policy['allow']) ? policy['allow'] : ['direct'], ...('proxy_ids' in policy ? { proxy_ids: policy['proxy_ids'] } : {}), ...('res_proxy_params' in policy ? { res_proxy_params: policy['res_proxy_params'] } : {}), ...('dc_proxy_params' in policy ? { dc_proxy_params: policy['dc_proxy_params'] } : {}) },
+    network_policy: owner
+      ? { allow, ...('proxy_ids' in policy ? { proxy_ids: policy['proxy_ids'] } : {}), ...('res_proxy_params' in policy ? { res_proxy_params: policy['res_proxy_params'] } : {}), ...('dc_proxy_params' in policy ? { dc_proxy_params: policy['dc_proxy_params'] } : {}) }
+      : { allow },
     access_policy: { robots: 'respect' as const, report_id: access?.id ?? null },
     access_report: access,
-    purpose: r.purpose === '' ? null : r.purpose,
-    legal_basis: r.legal_basis,
+    ...ownerPolicy,
     contains_personal_data: r.contains_personal_data,
     allow_write_actions: r.allow_write_actions,
-    max_cost_usd: usd(r.max_cost_usd),
-    budget_daily_usd: usd(r.budget_daily_usd),
-    domain_pacing: r.domain_pacing,
     cost_estimate: { median_usd: median, sample_size: values.length },
     session_owner: null,
     recent_runs: recent.map(runSummary),

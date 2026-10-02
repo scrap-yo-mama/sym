@@ -50,6 +50,7 @@ const EXCEPTIONS: Record<string, string> = {
 const SYSTEM_TRANSACTIONS: Record<string, string> = {
   'apis.ts': 'suppression d’une API par son propriétaire (vérifié) : runs et datasets des membres sur une API instance (tâche 3.1)',
   'auth.ts': 'réinitialisation du mot de passe : lien consommé, mot de passe, révocations du compte (13 § 5)',
+  'settings.ts': 'réglage llm de l’instance, écritures sérialisées : réglage (hors RLS) et secrets d’INSTANCE abandonnés (owner_id NULL) au même COMMIT (tâche 3.1)',
   'invitations.ts': 'acceptation : invitation verrouillée, compte et identifiant créés (13 § 6)',
   'sso.ts': 'OIDC : invitation acceptée ou compte créé à la volée (13 § 7)',
   'users.ts': 'administration : désactivation, suppression, lien de réinitialisation, révocations du compte cible (13 § 6)',

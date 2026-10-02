@@ -445,7 +445,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Ré-enquête manuelle (transitions 17 et 18) ; seule reprise offerte à une API `bloquee` */
+        /**
+         * Ré-enquête manuelle (transitions 17 et 18) ; seule reprise offerte à une API `bloquee`
+         * @description La transition et l'enquête partent au même COMMIT : une enquête refusée (demande illisible, file pleine) laisse l'API dans son statut. Une API `bloquee` ne repart que par un geste humain dans la console (transition 18, 04 § 6) : par une clé d'API, `403 human_confirmation_required`, sans transition ni run.
+         */
         post: operations["reinvestigateApi"];
         delete?: never;
         options?: never;
@@ -704,7 +707,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Vue filtrée du flux SSE pour un run ou une enquête, rejouée depuis `investigation_events` */
+        /**
+         * Vue filtrée du flux SSE pour un run ou une enquête, rejouée depuis `investigation_events`
+         * @description Récit du run depuis le début (ou depuis `Last-Event-ID`), puis une trame `run.finished` d'identifiant `end` quand le run est terminé ; le serveur clôt alors le flux. Une reconnexion avec `Last-Event-ID: end` (run entièrement servi) reçoit `204 No Content`, qui arrête un client SSE standard (EventSource) au lieu de le faire reconnecter.
+         */
         get: operations["streamRunEvents"];
         put?: never;
         post?: never;
@@ -1944,7 +1950,7 @@ export interface components {
             apis: components["schemas"]["ApiSummary"][];
             next_cursor: string | null;
         };
-        /** @description Fiche (= get_api, entité Api de 04b § 1). Pour l'admin face à une API avec session d'autrui, `metadata_only` vaut true et les schémas, l'échantillon et la stratégie sont absents (13 § 2, INV12). */
+        /** @description Fiche (= get_api, entité Api de 04b § 1). Pour l'admin face à une API avec session d'autrui, `metadata_only` vaut true et les schémas, l'échantillon et la stratégie sont absents (13 § 2, INV12). Un membre qui lit l'API `instance` d'autrui reçoit de quoi la lancer (schémas, statut, exécution, réseau autorisé, coût estimé), jamais la politique du propriétaire : `project_id`, `purpose`, `legal_basis`, `max_cost_usd`, `budget_daily_usd`, `domain_pacing`, ni les proxys et paramètres de `network_policy` (seulement `allow`). */
         ApiDetail: components["schemas"]["ApiSummary"] & {
             metadata_only: boolean;
             /** Format: uuid */
@@ -2038,7 +2044,9 @@ export interface components {
             purpose?: string | null;
             legal_basis?: string | null;
             contains_personal_data?: boolean;
+            /** @description Plafond de coût d'un run ; `null` revient au défaut de l'instance (0,5 $). */
             max_cost_usd?: number | null;
+            /** @description Budget quotidien de l'API ; `null` revient au défaut de l'instance (5 $). */
             budget_daily_usd?: number | null;
         };
         /** @description Export portable d'une API (16 § 6), sans secret, session ni cookie ; format figé par la tâche 3.12. */
@@ -2381,7 +2389,7 @@ export interface components {
             events?: components["schemas"]["WebhookEvent"][];
             /** @enum {string} */
             status?: "active" | "disabled";
-            /** @description Nouveau secret ; l'ancien reste accepté pendant la rotation. */
+            /** @description Nouveau secret ; l'ancien reste accepté pendant la rotation (sauf si l'URL change dans la même requête). */
             rotate_secret?: boolean;
         };
         WebhookSubscriptionCreated: components["schemas"]["WebhookSubscription"] & {
@@ -3877,7 +3885,15 @@ export interface operations {
             202: components["responses"]["Accepted"];
             400: components["responses"]["Error"];
             401: components["responses"]["Error"];
-            403: components["responses"]["Error"];
+            /** @description `human_confirmation_required` : API `bloquee` relancée hors de la console (clé d'API) ; `insufficient_scope` : clé sans `apis:write`. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
             404: components["responses"]["Error"];
             409: components["responses"]["Error"];
             429: components["responses"]["QueueFull"];
@@ -4357,6 +4373,13 @@ export interface operations {
                     "text/event-stream": string;
                 };
             };
+            /** @description Run terminé et entièrement servi (`Last-Event-ID: end`) ; rien à rejouer, ne pas se reconnecter. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
             401: components["responses"]["Error"];
             403: components["responses"]["Error"];
             404: components["responses"]["Error"];
@@ -4548,7 +4571,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Abonnement à jour ; `secret` présent seulement après une rotation. */
+            /** @description Abonnement à jour ; `secret` présent seulement après une rotation. Changer l'URL fait tourner le secret (lié à sa destination), sans période de grâce : le nouveau secret est rendu une fois. */
             200: {
                 headers: {
                     [name: string]: unknown;
