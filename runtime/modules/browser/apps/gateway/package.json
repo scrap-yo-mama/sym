@@ -16,17 +16,20 @@
     "start": "node dist/main.js"
   },
   "dependencies": {
+    "@fastify/websocket": "catalog:",
     "@sym-browser/core": "workspace:*",
     "@sym-browser/db": "workspace:*",
     "@sym/contracts": "workspace:*",
     "ajv": "catalog:",
     "fastify": "catalog:",
-    "pg": "catalog:"
+    "pg": "catalog:",
+    "ws": "catalog:"
   },
   "devDependencies": {
     "@testcontainers/postgresql": "catalog:",
     "@types/node": "catalog:",
     "@types/pg": "catalog:",
+    "@types/ws": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:"
   }

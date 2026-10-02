@@ -6,7 +6,7 @@
 // `X-Request-Id` ; chaque erreur suit 04 § 6. L'authentification, les jetons et le démarrage sur un nœud passent par les
 // interfaces de types.ts (tâches 2.1, 2.3, 2.4).
 import { randomBytes } from 'node:crypto';
-import { endStateFor, isTerminal, resolveSessionType } from '@sym-browser/core';
+import { authorizeRequest, endStateFor, isTerminal, resolveSessionType } from '@sym-browser/core';
 import {
   claimIdempotencyKey,
   completeIdempotencyKey,
@@ -41,6 +41,7 @@ import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest }
 import { ApiProblem, invalidOption, preferredLanguage } from './errors.js';
 import type { GatewayDeps, Principal, Scope } from './types.js';
 import { isDateTime, parseCreateSession, parseExtendSession, UUID } from './validation.js';
+import { createDbRelayResolver, registerRelay } from '../relay/index.js';
 
 /** Défauts de l'instance (04 § 3) et durée des jetons de connexion (04 § 7, « à valider, tâche 2.1 »). */
 const SESSION_DEFAULTS = Object.freeze({ timeoutSeconds: 300, idleTimeoutSeconds: 60 });
@@ -126,14 +127,15 @@ export async function createGatewayApi(deps: GatewayDeps): Promise<FastifyInstan
     fail(request, reply, request.url.startsWith('/v1/sessions/') ? sessionNotFound() : invalidOption([{ field: 'path', reason: 'unknown route' }])),
   );
 
-  /** Clé d'API en `Authorization: Bearer` puis scope requis (04 § 1). */
+  /** Clé d'API en `Authorization: Bearer` puis scope requis (04 § 1) : décision de la tâche 2.1 (`authorizeRequest`). */
   const authorize = (scope: Scope) => async (request: FastifyRequest): Promise<void> => {
-    const header = request.headers.authorization;
-    const secret = typeof header === 'string' ? /^Bearer\s+(\S+)\s*$/i.exec(header)?.[1] : undefined;
-    const principal = secret === undefined ? null : await deps.auth.authenticate(secret);
-    if (!principal) throw new ApiProblem('unauthorized', 'Missing, unknown or expired API key.');
-    if (!principal.scopes.includes(scope)) throw new ApiProblem('forbidden', `Scope ${scope} required.`, { details: { requiredScope: scope } });
-    request.principal = principal;
+    const decision = await authorizeRequest(deps.auth, request.headers, scope);
+    if (decision.ok) {
+      request.principal = decision.principal;
+      return;
+    }
+    if (decision.status === 403) throw new ApiProblem('forbidden', `Scope ${decision.requiredScope} required.`, { details: { requiredScope: decision.requiredScope } });
+    throw new ApiProblem('unauthorized', 'Missing, unknown or expired API key.');
   };
   const principalOf = (request: FastifyRequest): Principal => {
     if (!request.principal) throw new ApiProblem('unauthorized', 'Missing API key.');
@@ -208,6 +210,16 @@ export async function createGatewayApi(deps: GatewayDeps): Promise<FastifyInstan
   const failPending = async (sessionId: string, reason: 'crash' | 'quota'): Promise<void> => {
     await transitionSession(deps.db, { sessionId, to: 'failed', reason });
   };
+
+  if (deps.relay) {
+    await registerRelay(app, {
+      resolver: createDbRelayResolver({ db: deps.db, auth: deps.auth, tokens: deps.tokens }),
+      nodeToken: deps.relay.nodeToken,
+      ...(deps.relay.pingIntervalMs === undefined ? {} : { pingIntervalMs: deps.relay.pingIntervalMs }),
+      ...(deps.relay.cdpMaxMessageBytes === undefined ? {} : { cdpMaxMessageBytes: deps.relay.cdpMaxMessageBytes }),
+      onError,
+    });
+  }
 
   app.get('/v1/version', async () => version);
   app.get('/v1/openapi.json', async () => browserOpenApi);

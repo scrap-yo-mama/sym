@@ -1,18 +1,20 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Banc des tests de l'API REST de la passerelle (tâche 2.2) : base PostgreSQL jetable et migrée, deux clients (A et B) avec
-// leurs clés, un nœud prêt, et la passerelle assemblée sur des doublures des interfaces encore à brancher :
-//   - Authenticator : clés d'API en clair dans une table de test (la vérification argon2id est la tâche 2.1) ;
-//   - ConnectTokenIssuer : jetons de test numérotés (jetons HMAC de la tâche 2.1) ;
-//   - SessionLauncher : nœud simulé, qui écrit `running` comme le superviseur du nœud (tâche 1.2) le ferait.
+// leurs clés, un nœud prêt, et la passerelle assemblée sur les implémentations réelles de la tâche 2.1 :
+//   - clés d'API générées par `newApiKey` (argon2id), insérées par `insertApiKey`, vérifiées par `ApiKeyAuthenticator`
+//     sur `pgApiKeyStore` ;
+//   - jetons de connexion `ConnectTokens` sous une MASTER_KEY jetable ;
+// et une seule doublure : SessionLauncher, nœud simulé qui écrit `running` comme le superviseur du nœud (tâche 1.2).
 // Chaque réponse est validée contre l'OpenAPI publiée (statut déclaré, corps conforme au schéma) : « 0 écart schéma/réponse ».
 import { randomBytes } from 'node:crypto';
-import { migrateUp, recordHeartbeat, transitionSession } from '@sym-browser/db';
+import { ApiKeyAuthenticator, ConnectTokens, generateMasterKey, MasterKey, newApiKey } from '@sym-browser/core';
+import { insertApiKey, migrateUp, pgApiKeyStore, recordHeartbeat, transitionSession } from '@sym-browser/db';
 import { browserOpenApi } from '@sym/contracts/browser';
 import { Ajv2020, type ValidateFunction } from 'ajv/dist/2020.js';
 import type { FastifyInstance, InjectOptions } from 'fastify';
 import pg from 'pg';
 import { inject } from 'vitest';
-import { createGatewayApi, type GatewayDeps, type Principal, type Scope, type SessionLauncher } from '../../src/api/index.js';
+import { createGatewayApi, type GatewayDeps, type Scope, type SessionLauncher } from '../../src/api/index.js';
 
 const PUBLIC_URL = 'https://b.example.com';
 
@@ -75,7 +77,18 @@ function responseChecker(): (method: string, url: string, status: number, body: 
   };
 }
 
-export async function createHarness(options: { queueTimeoutMs?: number; maxSessionSeconds?: number } = {}): Promise<Harness> {
+export type HarnessOptions = {
+  queueTimeoutMs?: number;
+  maxSessionSeconds?: number;
+  /** URL privée du nœud enregistré (relais WSS, tâche 2.3) ; défaut : nœud fictif injoignable. */
+  nodeUrl?: string;
+  /** Jetons de connexion réels (HMAC) au lieu des jetons de test numérotés. */
+  tokens?: GatewayDeps['tokens'];
+  /** Relais WSS `/playwright` et `/cdp` (tâche 2.3). */
+  relay?: GatewayDeps['relay'];
+};
+
+export async function createHarness(options: HarnessOptions = {}): Promise<Harness> {
   const name = `gw_${randomBytes(5).toString('hex')}`;
   await admin((c) => c.query(`CREATE DATABASE ${name}`));
   const url = new URL(inject('pgAdminUrl'));
@@ -86,17 +99,21 @@ export async function createHarness(options: { queueTimeoutMs?: number; maxSessi
   const one = async (sql: string, params: unknown[] = []): Promise<string> => (await pool.query<{ id: string }>(sql, params)).rows[0]?.id ?? '';
   const tenantA = await one('INSERT INTO tenants (name, max_session_seconds) VALUES ($1, $2) RETURNING id', ['a', options.maxSessionSeconds ?? 3600]);
   const tenantB = await one("INSERT INTO tenants (name) VALUES ('b') RETURNING id");
-  const keyRow = (tenantId: string, prefix: string, scopes: Scope[]) =>
-    one("INSERT INTO api_keys (tenant_id, key_prefix, key_hash, scopes) VALUES ($1, $2, '$argon2id$v=19$m=19456,t=2,p=1$test$test', $3) RETURNING id", [tenantId, prefix, scopes]);
-  const principals = new Map<string, Principal>();
-  const keys = { a: 'symb_test_a_write', aRead: 'symb_test_a_read', b: 'symb_test_b_write' };
-  principals.set(keys.a, { tenantId: tenantA, apiKeyId: await keyRow(tenantA, 'symb_a_w', ['sessions:write', 'sessions:read']), scopes: ['sessions:write', 'sessions:read'] });
-  principals.set(keys.aRead, { tenantId: tenantA, apiKeyId: await keyRow(tenantA, 'symb_a_r', ['sessions:read']), scopes: ['sessions:read'] });
-  principals.set(keys.b, { tenantId: tenantB, apiKeyId: await keyRow(tenantB, 'symb_b_w', ['sessions:write', 'sessions:read']), scopes: ['sessions:write', 'sessions:read'] });
+  /** Clé réelle (argon2id) : la valeur en clair n'existe que dans ce banc, jamais en base. */
+  const apiKey = async (tenantId: string, scopes: Scope[]): Promise<string> => {
+    const created = await newApiKey({ scopes });
+    await insertApiKey(pool, { tenantId, prefix: created.prefix, keyHash: created.keyHash, scopes: created.scopes, expiresAt: null });
+    return created.key.reveal();
+  };
+  const keys = {
+    a: await apiKey(tenantA, ['sessions:write', 'sessions:read']),
+    aRead: await apiKey(tenantA, ['sessions:read']),
+    b: await apiKey(tenantB, ['sessions:write', 'sessions:read']),
+  };
 
   await recordHeartbeat(pool, {
     nodeId: 'node-a',
-    url: 'http://node-a.internal:3000',
+    url: options.nodeUrl ?? 'http://node-a.internal:3000',
     region: 'frankfurt',
     playwrightVersion: '1.63.0',
     chromiumVersion: '153.0.8010.12',
@@ -128,11 +145,11 @@ export async function createHarness(options: { queueTimeoutMs?: number; maxSessi
     },
   };
 
-  let tokenCounter = 0;
   const deps: GatewayDeps = {
     db: pool,
-    auth: { authenticate: async (secret) => principals.get(secret) ?? null },
-    tokens: { issue: ({ protocol }) => `tok_${protocol}_${++tokenCounter}` },
+    auth: new ApiKeyAuthenticator(pgApiKeyStore(pool)),
+    tokens: options.tokens ?? new ConnectTokens({ current: MasterKey.parse(generateMasterKey()) }),
+    ...(options.relay === undefined ? {} : { relay: options.relay }),
     launcher,
     publicUrl: PUBLIC_URL,
     queueTimeoutMs: options.queueTimeoutMs ?? 2_000,
