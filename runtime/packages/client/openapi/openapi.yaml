@@ -1665,6 +1665,49 @@ paths:
           $ref: '#/components/responses/Error'
         '403':
           $ref: '#/components/responses/Error'
+  /api/settings/identity:
+    get:
+      operationId: getIdentitySettings
+      security:
+        - sessionCookie: []
+      tags: [settings]
+      summary: "Identité du robot (admin ou owner) : interrupteur identify_instance, contact d'instance, User-Agent réel du moteur en lecture seule"
+      responses:
+        '200':
+          description: Réglages et User-Agent du moteur.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IdentitySettings'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+    put:
+      operationId: putIdentitySettings
+      security:
+        - sessionCookie: []
+      tags: [settings]
+      summary: "Écrit l'interrupteur identify_instance et/ou le contact d'instance (admin ou owner, audité)"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/IdentitySettingsWrite'
+      responses:
+        '200':
+          description: Réglages à jour.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IdentitySettings'
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
   /api/settings/sso:
     get:
       operationId: getSsoSettings
@@ -2876,6 +2919,10 @@ components:
         displayName:
           type: string
           maxLength: 100
+        instanceContact:
+          type: string
+          maxLength: 400
+          description: "Contact de l'opérateur de l'instance (URL http(s), mailto: ou adresse électronique) ; annoncé par le robot quand identify_instance est activé (17 §5)."
     SetupResult:
       type: object
       additionalProperties: false
@@ -2972,6 +3019,7 @@ components:
         - 'settings:llm:write'
         - 'settings:proxies:write'
         - 'settings:smtp:write'
+        - 'settings:identity:write'
         - 'settings:security:write'
         - 'settings:sso:write'
         - 'audit:read'
@@ -4672,6 +4720,46 @@ components:
           type: integer
           minimum: 1
           maximum: 120
+    IdentitySettings:
+      type: object
+      additionalProperties: false
+      required: [identify_instance, instance_contact, engine, user_agent, user_agent_identified, product_version]
+      properties:
+        identify_instance:
+          type: [boolean, 'null']
+          description: "Réglage admin ; null tant qu'il n'est pas posé (le worker retombe sur IDENTIFY_INSTANCE, puis sur désactivé)."
+        instance_contact:
+          type: [string, 'null']
+          description: "Contact d'instance normalisé (URL http(s) ou mailto:) ; null tant qu'il n'est pas posé (repli : INSTANCE_CONTACT)."
+        engine:
+          type: [object, 'null']
+          additionalProperties: false
+          required: [version, platform]
+          description: Moteur embarqué tel que le worker le publie ; null tant qu'aucun worker n'a démarré.
+          properties:
+            version:
+              type: string
+            platform:
+              type: string
+        user_agent:
+          type: [string, 'null']
+          description: "User-Agent réel du moteur (lecture seule, sans HeadlessChrome)."
+        user_agent_identified:
+          type: [string, 'null']
+          description: "Le même User-Agent suivi du jeton compatible; Scrapyomama/<version>; +<contact>, tel qu'il part quand identify_instance est activé."
+        product_version:
+          type: string
+    IdentitySettingsWrite:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        identify_instance:
+          type: boolean
+        instance_contact:
+          type: [string, 'null']
+          maxLength: 400
+          description: "URL http(s), mailto: ou adresse électronique, sans espace ni saut de ligne ; null efface le réglage."
     SsoCommon:
       type: object
       properties:

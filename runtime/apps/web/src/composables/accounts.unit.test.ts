@@ -8,7 +8,7 @@ import { acceptInvitation, confirmPasswordReset, postSetup, requestPasswordReset
 import { useCloseOtherSessions, usePasswordChange, useTwoFactor } from '@/composables/useAccount';
 import { useApiKeys, keyState } from '@/composables/useApiKeys';
 import { dayBound, useAudit } from '@/composables/useAudit';
-import { parseDomains, useSecuritySettings, useSsoSettings } from '@/composables/useInstanceSettings';
+import { parseDomains, useIdentitySettings, useSecuritySettings, useSsoSettings } from '@/composables/useInstanceSettings';
 import { can, dismissNotices, loadSession, resetSession, signIn, useSession, verifySecondFactor } from '@/composables/useSession';
 import { useUsers } from '@/composables/useUsers';
 import { onMfaBarrier, setApi } from '@/lib/api';
@@ -598,5 +598,81 @@ describe('réglages d’instance (owner)', () => {
     expect(sso.configured.value).toBe(false);
     expect(await sso.save()).toBe(false);
     expect(sso.failure.value).toBe('errors.invalid_settings');
+  });
+});
+
+describe('identité du robot (tâche 3.8b)', () => {
+  const view = (extra: Record<string, unknown> = {}) => ({ identify_instance: null, instance_contact: null, engine: null, user_agent: null, user_agent_identified: null, product_version: '1.0.0', ...extra });
+
+  test('lecture : jamais posé → interrupteur éteint dans le formulaire, contact vide ; écriture de l’interrupteur seul, contact non renvoyé', async () => {
+    const bodies: Record<string, unknown>[] = [];
+    installFakeServer({
+      'GET /api/settings/identity': () => json(200, view()),
+      'PUT /api/settings/identity': (call) => {
+        bodies.push(call.body as Record<string, unknown>);
+        return json(200, view({ identify_instance: true }));
+      },
+    });
+    const identity = useIdentitySettings();
+    await identity.load();
+    expect(identity.form).toEqual({ identify: false, contact: '' });
+    identity.form.identify = true;
+    expect(await identity.save()).toBe(true);
+    expect(bodies).toEqual([{ identify_instance: true }]);
+    expect(identity.saved.value).toBe(true);
+    expect(identity.form.identify).toBe(true);
+  });
+
+  test('contact saisi : envoyé tel quel (le serveur le normalise) et relu normalisé ; vidé : null (réglage effacé)', async () => {
+    const bodies: Record<string, unknown>[] = [];
+    let stored: string | null = null;
+    installFakeServer({
+      'GET /api/settings/identity': () => json(200, view({ instance_contact: stored })),
+      'PUT /api/settings/identity': (call) => {
+        const body = call.body as { instance_contact?: string | null };
+        bodies.push(body);
+        if (body.instance_contact !== undefined) stored = body.instance_contact === null ? null : `mailto:${body.instance_contact}`;
+        return json(200, view({ identify_instance: false, instance_contact: stored }));
+      },
+    });
+    const identity = useIdentitySettings();
+    await identity.load();
+    identity.form.contact = '  ops@zz-test.example ';
+    await identity.save();
+    expect(bodies[0]).toEqual({ identify_instance: false, instance_contact: 'ops@zz-test.example' });
+    expect(identity.form.contact).toBe('mailto:ops@zz-test.example');
+    identity.form.contact = '';
+    await identity.save();
+    expect(bodies[1]).toEqual({ identify_instance: false, instance_contact: null });
+    expect(identity.form.contact).toBe('');
+  });
+
+  test('contact refusé par le serveur → message propre, formulaire conservé ; 403 d’un non-admin → refus de droit', async () => {
+    installFakeServer({ 'GET /api/settings/identity': () => json(200, view()), 'PUT /api/settings/identity': () => err(400, 'invalid_instance_contact') });
+    const identity = useIdentitySettings();
+    await identity.load();
+    identity.form.contact = 'ops @zz-test.example';
+    expect(await identity.save()).toBe(false);
+    expect(identity.failure.value).toBe('errors.invalid_instance_contact');
+    expect(identity.form.contact).toBe('ops @zz-test.example');
+    installFakeServer({ 'GET /api/settings/identity': () => err(403, 'forbidden') });
+    const denied = useIdentitySettings();
+    await denied.load();
+    expect(denied.loadFailure.value).toBe('errors.forbidden');
+    expect(denied.forbidden.value).toBe(true);
+  });
+
+  test('premier démarrage : le contact est envoyé seulement s’il est saisi', async () => {
+    const bodies: Record<string, unknown>[] = [];
+    installFakeServer({
+      'POST /api/setup': (call) => {
+        bodies.push(call.body as Record<string, unknown>);
+        return json(201, { userId: ME.id, keyFingerprint: 'ab12', reminder: 'x' });
+      },
+    });
+    await postSetup({ token: 't', email: 'a@zz-test.example', password: 'pw', instanceContact: 'https://zz-test.example/contact' });
+    await postSetup({ token: 't', email: 'a@zz-test.example', password: 'pw', instanceContact: '' });
+    expect(bodies[0]).toMatchObject({ instanceContact: 'https://zz-test.example/contact' });
+    expect(bodies[1]).not.toHaveProperty('instanceContact');
   });
 });

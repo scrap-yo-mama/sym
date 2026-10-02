@@ -137,3 +137,51 @@ export function useSsoSettings() {
 
   return { ...resource, form, secretSet, configured, saving, saved, failure, load, addGroup, removeGroup, save };
 }
+
+/**
+ * Identité du robot (admin ou owner, 17 §5) : interrupteur `identify_instance` et contact d'instance sont modifiables ; le
+ * User-Agent réel du moteur est en lecture seule (le serveur ne l'accepte jamais en écriture). `null` pour l'interrupteur :
+ * jamais posé, le worker retombe sur la variable d'environnement puis sur « désactivé ».
+ */
+export type IdentitySettings = Schemas['IdentitySettings'];
+
+export function useIdentitySettings() {
+  const resource = useResource<IdentitySettings>(() => call(() => getApi().GET('/api/settings/identity')));
+  const form = reactive({ identify: false, contact: '' });
+  const saving = ref(false);
+  const saved = ref(false);
+  const failure = ref<string | null>(null);
+
+  function adopt(settings: IdentitySettings): void {
+    form.identify = settings.identify_instance === true;
+    form.contact = settings.instance_contact ?? '';
+  }
+
+  async function load(): Promise<void> {
+    if (await resource.reload()) adopt(resource.data.value as IdentitySettings);
+  }
+
+  async function save(): Promise<boolean> {
+    saving.value = true;
+    saved.value = false;
+    failure.value = null;
+    const current = resource.data.value;
+    const body: Schemas['IdentitySettingsWrite'] = { identify_instance: form.identify };
+    const contact = form.contact.trim();
+    // Contact vidé = réglage effacé (null) ; inchangé = non renvoyé (le serveur ne le réécrit pas).
+    if (contact !== (current?.instance_contact ?? '')) body.instance_contact = contact === '' ? null : contact;
+    const result = await call(() => getApi().PUT('/api/settings/identity', { body }));
+    saving.value = false;
+    if (!result.ok) {
+      failure.value = result.messageKey;
+      return false;
+    }
+    resource.data.value = result.data;
+    adopt(result.data);
+    saved.value = true;
+    return true;
+  }
+
+  // `failure` : échec de l'enregistrement ; l'échec de chargement garde son propre nom (le spread le masquerait).
+  return { ...resource, loadFailure: resource.failure, form, saving, saved, failure, load, save };
+}

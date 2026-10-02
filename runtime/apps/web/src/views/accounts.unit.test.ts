@@ -24,6 +24,7 @@ import UsersView from './admin/UsersView.vue';
 import RunsView from './RunsView.vue';
 import AccountView from './settings/AccountView.vue';
 import ApiKeysView from './settings/ApiKeysView.vue';
+import RobotIdentitySettingsView from './settings/RobotIdentitySettingsView.vue';
 import SecuritySettingsView from './settings/SecuritySettingsView.vue';
 import SettingsView from './settings/SettingsView.vue';
 import SsoSettingsView from './settings/SsoSettingsView.vue';
@@ -233,7 +234,7 @@ describe('assert_no_impersonation : aucune fonction « se faire passer pour » d
 });
 
 describe('pilotage par can() : les écrans réservés disparaissent et leurs routes redirigent', () => {
-  const RESERVED = ['/admin/users', '/admin/audit', '/settings/security', '/settings/sso'];
+  const RESERVED = ['/admin/users', '/admin/audit', '/settings/security', '/settings/robot', '/settings/sso'];
 
   async function landing(role: RoleName, path: string): Promise<string> {
     installFakeServer(session(role));
@@ -247,9 +248,10 @@ describe('pilotage par can() : les écrans réservés disparaissent et leurs rou
     for (const path of RESERVED) expect(await landing('member', path), path).toBe('home');
   });
 
-  test('un admin : Utilisateurs et Audit s’ouvrent ; Sécurité et SSO (owner) redirigent', async () => {
+  test('un admin : Utilisateurs, Audit et Identité du robot s’ouvrent ; Sécurité et SSO (owner) redirigent', async () => {
     expect(await landing('admin', '/admin/users')).toBe('admin-users');
     expect(await landing('admin', '/admin/audit')).toBe('admin-audit');
+    expect(await landing('admin', '/settings/robot')).toBe('settings-robot');
     expect(await landing('admin', '/settings/security')).toBe('home');
     expect(await landing('admin', '/settings/sso')).toBe('home');
   });
@@ -258,19 +260,20 @@ describe('pilotage par can() : les écrans réservés disparaissent et leurs rou
     expect(await landing('owner', '/admin/users')).toBe('admin-users');
     expect(await landing('owner', '/admin/audit')).toBe('admin-audit');
     expect(await landing('owner', '/settings/security')).toBe('settings-security');
+    expect(await landing('owner', '/settings/robot')).toBe('settings-robot');
     expect(await landing('owner', '/settings/sso')).toBe('settings-sso');
   });
 
-  test('le menu des réglages : Sécurité et SSO seulement pour l’owner ; clés et compte pour tous', async () => {
+  test('le menu des réglages : Sécurité et SSO seulement pour l’owner, Identité du robot pour l’admin et l’owner ; clés et compte pour tous', async () => {
     const sections = async (role: RoleName) => {
       installFakeServer(session(role));
       await signedIn();
       const html = await view(SettingsView);
-      return ['keys', 'account', 'security', 'sso'].filter((id) => html.includes(`href="/settings/${id}"`));
+      return ['keys', 'account', 'security', 'robot', 'sso'].filter((id) => html.includes(`href="/settings/${id}"`));
     };
     expect(await sections('member')).toEqual(['keys', 'account']);
-    expect(await sections('admin')).toEqual(['keys', 'account']);
-    expect(await sections('owner')).toEqual(['keys', 'account', 'security', 'sso']);
+    expect(await sections('admin')).toEqual(['keys', 'account', 'robot']);
+    expect(await sections('owner')).toEqual(['keys', 'account', 'security', 'robot', 'sso']);
   });
 
   test('l’invitation d’un admin n’est proposée qu’à qui peut changer un rôle (owner)', async () => {
@@ -440,5 +443,39 @@ describe('assert_secret_masked : secrets des comptes', () => {
     expect(html).toContain('data-testid="security-form"');
     expect(html).toContain('value="720"');
     expect(html).toContain('a.test');
+  });
+
+  test('Identité du robot (admin) : User-Agent du moteur en lecture seule, interrupteur et contact modifiables', async () => {
+    const ua = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36';
+    installFakeServer({
+      ...session('admin'),
+      'GET /api/settings/identity': () => json(200, { identify_instance: false, instance_contact: 'mailto:ops@zz-test.example', engine: { version: '153.0.8010.12', platform: 'linux' }, user_agent: ua, user_agent_identified: `${ua} (compatible; Scrapyomama/1.0.0; +mailto:ops@zz-test.example)`, product_version: '1.0.0' }),
+    });
+    await signedIn();
+    const html = await view(RobotIdentitySettingsView);
+    expect(html).toContain('data-testid="identity-form"');
+    expect(html).toContain(esc(en.instance.identity.title));
+    // User-Agent : champ en lecture seule, valeur exacte du moteur, aucune saisie possible.
+    expect(html).toMatch(/<input(?=[^>]*\sreadonly)(?=[^>]*data-testid="identity-ua")[^>]*>/);
+    expect(html).toContain(esc(ua));
+    expect(html).not.toMatch(/HeadlessChrome/);
+    expect(html).toContain('data-testid="identity-ua-identified"');
+    // Interrupteur désactivé par défaut (réglage posé à false), contact rendu.
+    expect(html).toMatch(/<input[^>]*type="checkbox"[^>]*data-testid="identity-identify"/);
+    expect(html).not.toMatch(/data-testid="identity-identify"[^>]*checked/);
+    expect(html).toContain('mailto:ops@zz-test.example');
+  });
+
+  test('Identité du robot : moteur pas encore publié, rien d’inventé', async () => {
+    installFakeServer({
+      ...session('owner'),
+      'GET /api/settings/identity': () => json(200, { identify_instance: null, instance_contact: null, engine: null, user_agent: null, user_agent_identified: null, product_version: '1.0.0' }),
+    });
+    await signedIn();
+    const html = await view(RobotIdentitySettingsView);
+    expect(html).toContain('data-testid="identity-ua-unknown"');
+    expect(html).not.toContain('data-testid="identity-ua"');
+    expect(html).toContain(esc(en.instance.identity.identifyUnset));
+    expect(html).toContain(esc(en.instance.identity.contactUnset));
   });
 });

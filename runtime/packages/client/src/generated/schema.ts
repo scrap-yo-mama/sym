@@ -938,6 +938,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/settings/identity": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Identité du robot (admin ou owner) : interrupteur identify_instance, contact d'instance, User-Agent réel du moteur en lecture seule */
+        get: operations["getIdentitySettings"];
+        /** Écrit l'interrupteur identify_instance et/ou le contact d'instance (admin ou owner, audité) */
+        put: operations["putIdentitySettings"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/settings/sso": {
         parameters: {
             query?: never;
@@ -1660,6 +1678,8 @@ export interface components {
             email: string;
             password: string;
             displayName?: string;
+            /** @description Contact de l'opérateur de l'instance (URL http(s), mailto: ou adresse électronique) ; annoncé par le robot quand identify_instance est activé (17 §5). */
+            instanceContact?: string;
         };
         SetupResult: {
             /** Format: uuid */
@@ -1700,7 +1720,7 @@ export interface components {
          * @description Permission de la matrice des rôles (13 § 2), nom de `packages/core/src/auth/roles.ts`.
          * @enum {string}
          */
-        Permission: "account:update" | "account:mfa" | "account:sessions" | "apikeys:manage" | "users:invite" | "users:list" | "users:deactivate" | "users:delete" | "users:set_role" | "owner:transfer" | "users:revoke_sessions" | "apis:create" | "apis:update" | "apis:delete" | "schedules:manage" | "apis:read" | "apis:set_visibility" | "apis:run" | "runs:read" | "datasets:read" | "runs:stats" | "sites:connect" | "sites:server_use" | "tunnel:pair" | "sites:read_cookies" | "tunnel:route_other" | "apikeys:read_other" | "tunnel:revoke_other" | "apikeys:revoke_other" | "settings:llm:write" | "settings:proxies:write" | "settings:smtp:write" | "settings:security:write" | "settings:sso:write" | "audit:read" | "audit:export" | "audit:purge";
+        Permission: "account:update" | "account:mfa" | "account:sessions" | "apikeys:manage" | "users:invite" | "users:list" | "users:deactivate" | "users:delete" | "users:set_role" | "owner:transfer" | "users:revoke_sessions" | "apis:create" | "apis:update" | "apis:delete" | "schedules:manage" | "apis:read" | "apis:set_visibility" | "apis:run" | "runs:read" | "datasets:read" | "runs:stats" | "sites:connect" | "sites:server_use" | "tunnel:pair" | "sites:read_cookies" | "tunnel:route_other" | "apikeys:read_other" | "tunnel:revoke_other" | "apikeys:revoke_other" | "settings:llm:write" | "settings:proxies:write" | "settings:smtp:write" | "settings:identity:write" | "settings:security:write" | "settings:sso:write" | "audit:read" | "audit:export" | "audit:purge";
         Me: {
             /** Format: uuid */
             id: string;
@@ -2519,6 +2539,27 @@ export interface components {
             allowed_email_domains: string[];
             api_key_max_lifetime_days: number;
             audit_retention_months?: number;
+        };
+        IdentitySettings: {
+            /** @description Réglage admin ; null tant qu'il n'est pas posé (le worker retombe sur IDENTIFY_INSTANCE, puis sur désactivé). */
+            identify_instance: boolean | null;
+            /** @description Contact d'instance normalisé (URL http(s) ou mailto:) ; null tant qu'il n'est pas posé (repli : INSTANCE_CONTACT). */
+            instance_contact: string | null;
+            /** @description Moteur embarqué tel que le worker le publie ; null tant qu'aucun worker n'a démarré. */
+            engine: {
+                version: string;
+                platform: string;
+            } | null;
+            /** @description User-Agent réel du moteur (lecture seule, sans HeadlessChrome). */
+            user_agent: string | null;
+            /** @description Le même User-Agent suivi du jeton compatible; Scrapyomama/<version>; +<contact>, tel qu'il part quand identify_instance est activé. */
+            user_agent_identified: string | null;
+            product_version: string;
+        };
+        IdentitySettingsWrite: {
+            identify_instance?: boolean;
+            /** @description URL http(s), mailto: ou adresse électronique, sans espace ni saut de ligne ; null efface le réglage. */
+            instance_contact?: string | null;
         };
         SsoCommon: {
             enabled?: boolean;
@@ -4773,6 +4814,55 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SecuritySettings"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+        };
+    };
+    getIdentitySettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Réglages et User-Agent du moteur. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IdentitySettings"];
+                };
+            };
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+        };
+    };
+    putIdentitySettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["IdentitySettingsWrite"];
+            };
+        };
+        responses: {
+            /** @description Réglages à jour. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IdentitySettings"];
                 };
             };
             400: components["responses"]["Error"];

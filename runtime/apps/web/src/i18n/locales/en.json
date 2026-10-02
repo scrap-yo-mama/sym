@@ -160,7 +160,8 @@
     "reset_link_invalid": "This reset link is not valid or has expired.",
     "idp_unreachable": "The identity provider cannot be reached. Try again later.",
     "invalid_status": "This status change is not possible.",
-    "invalid_cursor": "The list position is no longer valid. Reload the list."
+    "invalid_cursor": "The list position is no longer valid. Reload the list.",
+    "invalid_instance_contact": "This contact is not valid. Use a web address (https://…), a mailto: link or an e-mail address, with no spaces or line breaks."
   },
   "common": {
     "loading": "Loading…",
@@ -545,6 +546,7 @@
       "keys": "API keys",
       "account": "My account",
       "security": "Security",
+      "robot": "Robot identity",
       "sso": "SSO"
     },
     "adminOnly": "Only an admin of your instance can read or change these settings.",
@@ -1265,7 +1267,8 @@
     "errors": {
       "forbidden": "The token or the address is not accepted.",
       "weak_password": "This password is not accepted. Use at least 12 characters and avoid common passwords.",
-      "too_many_attempts": "Too many attempts. Try again in a few minutes."
+      "too_many_attempts": "Too many attempts. Try again in a few minutes.",
+      "invalid_instance_contact": "This contact is not valid. Use a web address (https://…), a mailto: link or an e-mail address, with no spaces or line breaks."
     },
     "done": {
       "title": "Owner account created",
@@ -1283,7 +1286,9 @@
       "alerts": "Alerts: e-mail (SMTP) and webhooks.",
       "open": "Open",
       "later": "Go to the console"
-    }
+    },
+    "contact": "Operator contact",
+    "contactHint": "Optional here, needed before the first investigation. A web address (https://…) or an e-mail address. The robot announces it only if you turn on identification in Settings. You can change it there later."
   },
   "account": {
     "title": "My account",
@@ -1673,6 +1678,22 @@
       "domainsHint": "One per line. Empty means every domain.",
       "keyMax": "Longest API key lifetime (days)",
       "retention": "Audit retention (months)",
+      "save": "Save"
+    },
+    "identity": {
+      "title": "Robot identity",
+      "intro": "How the robot introduces itself to the sites it reads. By default it sends the real User-Agent of its embedded browser and nothing more.",
+      "userAgent": "User-Agent of the browser (read only)",
+      "userAgentHint": "The real User-Agent of the embedded Chromium, the same for every run of this image. It is shown for information and cannot be edited here.",
+      "userAgentUnknown": "No worker has reported its browser yet. It appears once a worker has started.",
+      "identified": "User-Agent sent while identification is on",
+      "identifiedHint": "The same string followed by the instance token and your contact. This is what sites see once you turn identification on and save.",
+      "identify": "Identify this instance to the sites it reads",
+      "identifyHint": "Off by default. When on, the User-Agent ends with the instance token (“compatible; Scrapyomama”, its version and your contact), and an e-mail contact is also sent in the From header. It applies to the next run.",
+      "identifyUnset": "Never set here: the worker uses its IDENTIFY_INSTANCE variable, and identification stays off if that is not set either.",
+      "contact": "Instance contact",
+      "contactHint": "Who runs this instance: a web address (https://…), a mailto: link or an e-mail address. No spaces or line breaks. Empty it and save to remove it.",
+      "contactUnset": "Not set here: the worker uses its INSTANCE_CONTACT variable. A contact is needed before the first investigation.",
       "save": "Save"
     },
     "sso": {
