@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// Mode « SYM ne lâche pas » (tâche 2.16, D-49, 04 §6, migration 0018) : une API en `erreur` est ré-enquêtée seule à 1 h,
+// Mode « SYM ne lâche pas » (tâche 2.16, D-49, 04 §6, migration 0019) : une API en `erreur` est ré-enquêtée seule à 1 h,
 // 6 h, 24 h puis chaque jour, par les transitions existantes 16 puis 1 ou 21 (4 ou 3 sur un refus) ; aucune transition
 // nouvelle. Les décisions sont celles, pures, de `@runtime/core` (persistence) ; ce module les applique en base :
 // - `setPersistenceMode` : bascule comme le propriétaire (RLS), console seulement pour activer, chaque bascule auditée ;

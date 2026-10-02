@@ -27,6 +27,18 @@ export type ApplyStatusInput = {
    * les webhooks et alertes (`notifyStatusChange`, 2.5) sont écrits au même COMMIT que les transitions qu'ils annoncent.
    */
   afterTransition?: (client: pg.PoolClient, events: StatusEventRow[]) => Promise<void>;
+  /**
+   * Appelé dans la transaction, la ligne `apis` verrouillée (FOR UPDATE) et la transition ACCEPTÉE par la machine, avant
+   * toute écriture du statut : l'écriture qui motive l'événement (ex. version rétablie par un retour) est validée au même
+   * COMMIT que sa transition, jamais sans elle (INV3). Une exception annule tout.
+   */
+  beforeWrite?: (client: pg.PoolClient) => Promise<void>;
+  /**
+   * Appelé dans la transaction après l'écriture du statut et de `status_events`, avant les notifications, quand la
+   * transition a été ACCEPTÉE : l'écriture qui exige le NOUVEAU statut (ex. enquête lancée par une ré-enquête, 16 à 20,
+   * qui veut `enquete`) part au même COMMIT que sa transition. Une exception annule tout (statut compris).
+   */
+  afterWrite?: (client: pg.PoolClient) => Promise<void>;
 };
 
 export type ApplyStatusResult =
@@ -102,6 +114,7 @@ export async function applyStatusTransitionInTx(client: pg.PoolClient, input: Ap
   const { row, state } = await loadState(client, input.apiId);
   const step = applyStatusEvent(state, input.event, { clock: input.clock, schedulePeriodMs: input.schedulePeriodMs ?? null });
   if (!step.ok) return { ok: false, state: step.state, rejected: step.rejected };
+  await input.beforeWrite?.(client);
 
   await client.query(
     'UPDATE apis SET status = $2, status_reason = $3, clean_streak = $4, last_signal_at = $5, updated_at = now() WHERE id = $1',
@@ -120,6 +133,7 @@ export async function applyStatusTransitionInTx(client: pg.PoolClient, input: Ap
       [row.id, row.owner_id, row.project_id, e.from_status, e.to_status, e.reason, e.run_id, e.at],
     );
   }
+  await input.afterWrite?.(client);
   if (events.length > 0) await input.afterTransition?.(client, events);
   return { ok: true, state: step.state, transitions: step.transitions, events };
 }

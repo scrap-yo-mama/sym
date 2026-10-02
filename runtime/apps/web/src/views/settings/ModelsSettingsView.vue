@@ -33,7 +33,7 @@ function setRole(name: (typeof LLM_ROLES)[number], field: 'provider' | 'model', 
 <template>
   <section class="flex flex-col gap-5" aria-labelledby="models-heading">
     <header class="flex flex-col gap-1">
-      <h1 id="models-heading" data-route-heading tabindex="-1" class="text-2xl font-semibold tracking-tight">{{ t('settings.models.title') }}</h1>
+      <h1 id="models-heading" data-route-heading tabindex="-1" class="sym-title">{{ t('settings.models.title') }}</h1>
       <p class="text-sm text-muted-foreground">{{ t('settings.models.intro') }}</p>
     </header>
 

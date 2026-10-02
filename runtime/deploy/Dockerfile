@@ -101,6 +101,9 @@ COPY --from=build /app/packages/llm/dist packages/llm/dist
 COPY --from=build /app/packages/client/dist packages/client/dist
 COPY --from=build /app/packages/schemas/dist packages/schemas/dist
 COPY --from=build /app/apps/server/dist apps/server/dist
+# Console (fix-console-served, F-20261002-09) : fichiers statiques seuls (aucune dépendance d'exécution), servis par le
+# serveur depuis apps/web/dist, voisin de apps/server/dist (defaultConsoleDir, apps/server/src/console.ts).
+COPY --from=build /app/apps/web/dist apps/web/dist
 COPY --from=build /app/apps/worker/dist apps/worker/dist
 COPY --from=build /app/apps/cli/dist apps/cli/dist
 COPY deploy/entrypoint.sh /usr/local/bin/entrypoint.sh

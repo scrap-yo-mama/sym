@@ -1,5 +1,5 @@
 -- SPDX-License-Identifier: AGPL-3.0-only
--- 0018_persistence_mode (tâche 2.16, D-49, 04 §6) : mode « SYM ne lâche pas ».
+-- 0019_persistence_mode (tâche 2.16, D-49, 04 §6) : mode « SYM ne lâche pas ».
 --   apis.persistence_mode          opt-in par API, désactivé par défaut ; activé en console seulement (audit_events) ;
 --   apis.persistence_budget_usd    plafond propre, cumulé depuis l'entrée en `erreur` ; NULL = PERSISTENCE_BUDGET_USD_DEFAULT
 --                                  (jamais « illimité ») ; un plafond nul ou négatif ne s'enregistre pas ;

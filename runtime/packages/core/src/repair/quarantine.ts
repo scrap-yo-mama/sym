@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Items non conformes écartés (D-49, tâche 2.3, 04 §5, 04b §1) : Ajv valide CHAQUE item contre `output_schema`. Un item
 // non conforme n'est jamais livré (INV1 : tout ce qui est livré est conforme) ; il est compté et mis en quarantaine :
-// raisons sans valeur (mot-clé Ajv, pointeur de l'instance, nombre), échantillon de 5 items au plus, nettoyé avant
+// raisons sans valeur (mot-clé Ajv, pointeur réduit au schéma, nombre), échantillon de 5 items au plus, nettoyé avant
 // l'écriture (propriétés non déclarées retirées, valeurs des chemins en erreur masquées, puis couches 1 et 2 de 19 §3 :
 // champs `x-personal` et motifs). La casse (classe `extraction`, réparation) n'intervient que si 0 item n'est conforme, ou
 // si la part rejetée dépasse `ITEMS_REJECTED_MAX_SHARE` ET que le nombre rejeté atteint `ITEMS_REJECTED_MIN_COUNT`
@@ -107,18 +107,53 @@ export function rejectionVerdict(conform: number, rejected: number, thresholds: 
   return share > thresholds.maxShare && rejected >= thresholds.minCount ? 'break' : 'degraded';
 }
 
-/** Agrégats sans valeur : un compte par (mot-clé, pointeur), triés par compte décroissant puis par pointeur. */
-export function rejectionReasons(rejected: readonly RejectedItem[]): RejectionReason[] {
+/** Segment neutre d'un pointeur : remplace tout nom de clé non déclaré par `output_schema` (il vient du site). */
+const UNDECLARED_SEGMENT = '*';
+
+/**
+ * Pointeur réduit au schéma : chaque segment est une propriété DÉCLARÉE (`properties`) ou un indice de tableau ; au premier
+ * segment qui ne l'est pas, le reste devient `/*`. Un nom de clé inconnue (identifiant, nom, numéro de commande servant de
+ * clé) ne sort jamais dans les agrégats lisibles par le propriétaire d'une API partagée (`run_rejected_aggregates`).
+ */
+function schemaPointer(outputSchema: unknown, pointer: string): string {
+  const segs = segments(pointer);
+  let node: unknown = outputSchema;
+  let out = '';
+  for (const seg of segs) {
+    const props = isRecord(node) ? node['properties'] : undefined;
+    if (isRecord(props) && Object.hasOwn(props, seg) && !POISON.has(seg)) {
+      out += `/${escapeSegment(seg)}`;
+      node = props[seg];
+      continue;
+    }
+    if (/^\d{1,6}$/.test(seg) && isRecord(node) && (node['items'] !== undefined || node['prefixItems'] !== undefined)) {
+      out += `/${seg}`;
+      const prefix = node['prefixItems'];
+      node = Array.isArray(prefix) && Number(seg) < prefix.length ? prefix[Number(seg)] : node['items'];
+      continue;
+    }
+    return `${out}/${UNDECLARED_SEGMENT}`;
+  }
+  return out;
+}
+
+/**
+ * Agrégats sans valeur : un compte par (mot-clé, pointeur), triés par compte décroissant puis par pointeur. Avec
+ * `outputSchema`, les pointeurs sont réduits au schéma (`schemaPointer`) AVANT le compte : un item compte une fois par
+ * raison neutre, quel que soit le nombre de clés inconnues qu'il porte.
+ */
+export function rejectionReasons(rejected: readonly RejectedItem[], outputSchema?: unknown): RejectionReason[] {
   const counts = new Map<string, RejectionReason>();
   for (const r of rejected) {
     // Une raison compte une fois par item, même si Ajv la rapporte plusieurs fois.
     const seen = new Set<string>();
     for (const issue of r.issues) {
-      const key = `${issue.keyword}\u0000${issue.instance_path}`;
+      const path = outputSchema === undefined ? issue.instance_path : schemaPointer(outputSchema, issue.instance_path);
+      const key = `${issue.keyword}\u0000${path}`;
       if (seen.has(key)) continue;
       seen.add(key);
       const prev = counts.get(key);
-      counts.set(key, { keyword: issue.keyword, instance_path: issue.instance_path, count: (prev?.count ?? 0) + 1 });
+      counts.set(key, { keyword: issue.keyword, instance_path: path, count: (prev?.count ?? 0) + 1 });
     }
   }
   return [...counts.values()].sort((a, b) => b.count - a.count || a.instance_path.localeCompare(b.instance_path) || a.keyword.localeCompare(b.keyword)).slice(0, MAX_REASONS);
@@ -188,8 +223,24 @@ function maskAt(root: unknown, pointer: string): unknown {
   return root;
 }
 
+/**
+ * Chaîne tronquée à `SAMPLE_STRING_MAX` à la DERNIÈRE limite de mot : jamais un fragment de mot (« Jean Dupo… »), qu'un
+ * effacement par motif borné aux limites de mot ne trouverait plus. Risque résiduel, borné par RETENTION_SAMPLES_DAYS :
+ * un mot entier d'un nom (prénom seul) avant la coupe, dans un champ libre sans `x-personal` hors du registre du run.
+ */
+function truncateAtWord(value: string): string {
+  if (value.length <= SAMPLE_STRING_MAX) return value;
+  const head = value.slice(0, SAMPLE_STRING_MAX);
+  // La coupe tombe dans un mot (caractère de mot de part et d'autre) : ce mot est retiré en entier.
+  const cut = WORD_CHAR.test(value[SAMPLE_STRING_MAX] ?? '') ? head.replace(TRAILING_WORD, '') : head;
+  return `${cut.trimEnd()}…`;
+}
+
+const WORD_CHAR = /[\p{L}\p{N}_]/u;
+const TRAILING_WORD = /[\p{L}\p{N}_]+$/u;
+
 function truncateStrings(value: unknown, depth = 0): unknown {
-  if (typeof value === 'string') return value.length > SAMPLE_STRING_MAX ? `${value.slice(0, SAMPLE_STRING_MAX)}…` : value;
+  if (typeof value === 'string') return truncateAtWord(value);
   if (depth > MAX_DEPTH) return REJECTED_VALUE_MASK;
   if (Array.isArray(value)) return value.map((v) => truncateStrings(v, depth + 1));
   if (!isRecord(value)) return value;
@@ -202,7 +253,7 @@ function truncateStrings(value: unknown, depth = 0): unknown {
  * Échantillon d'un item rejeté, nettoyé AVANT toute écriture (04 §5) : (1) propriétés non déclarées retirées (le
  * masquage par chemin de schéma ne suffit pas sur un item hors schéma) ; (2) valeurs des chemins en erreur masquées ;
  * (3) couche 1 de 19 §3 : valeurs `x-personal` masquées ; (4) couche 2 : motifs (e-mail, téléphone), secrets connus et
- * valeurs du registre du run ; chaînes tronquées à 120 caractères.
+ * valeurs du registre du run ; chaînes tronquées à 120 caractères, à une limite de mot.
  */
 export function sanitizeRejectedItem(outputSchema: unknown, rejected: RejectedItem, registry?: PersonalValueRegistry): unknown {
   const { value } = stripUndeclared(outputSchema, rejected.item);
@@ -215,10 +266,11 @@ export function sanitizeRejectedItem(outputSchema: unknown, rejected: RejectedIt
   return truncateStrings(out);
 }
 
-/** Résumé de quarantaine : total, raisons (pointeurs masqués de toute donnée personnelle) et échantillon nettoyé. */
+/** Résumé de quarantaine : total, raisons (pointeurs réduits au schéma, sans nom de clé du site) et échantillon nettoyé. */
 export function quarantineSummary(outputSchema: unknown, rejected: readonly RejectedItem[], registry?: PersonalValueRegistry, sampleSize: number = ITEMS_REJECTED_DEFAULTS.sampleSize): QuarantineSummary {
-  // Un nom de clé inconnue vient du site : il reste dans les raisons (chemin), mais passé par le masquage des motifs.
-  const reasons = rejectionReasons(rejected).map((r) => ({ ...r, instance_path: maskPersonal(r.instance_path, registry) }));
+  // Un nom de clé inconnue vient du site : jamais dans les raisons (segment neutre `*`) ; les segments restants sont des
+  // noms du schéma, encore passés par le masquage (défense en profondeur).
+  const reasons = rejectionReasons(rejected, outputSchema).map((r) => ({ ...r, instance_path: maskPersonal(r.instance_path, registry) }));
   return {
     total_rejected: rejected.length,
     by_reason: reasons,

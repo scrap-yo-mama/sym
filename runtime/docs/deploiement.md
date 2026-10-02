@@ -324,11 +324,14 @@ navigateur) est **à confirmer par la recette 4.4** : aucun n'a été mesuré.
 en recette). À la fusion de 3.2, rejouer sur le compose `deploy/verify.sh <URL>` **sans option** : il exige `/mcp` et
 échoue sur un 404.
 
-**Réserve console.** Le critère « l'assistant s'affiche » (14 § 13) n'est pas atteint : l'image ne contient pas la console
-(`apps/web/dist` n'est pas copié) et le server ne la sert pas (`@fastify/static`, prévu par 03, n'est pas câblé). Seul
-l'appel `POST /api/setup` est vérifié. La vue `/setup` relève de la tâche 3.8 (UI comptes, assistant de premier démarrage) ;
-le service de la console par le server dans l'image n'est attribué à aucune ligne de 10-taches et doit être rattaché
-(3.8 ou 4.2) avant la recette.
+**Réserve console.** Levée en partie par `fix-console-served` (constat F-20261002-09 : sur Render, toutes les pages de
+la console répondaient 404, seule l'API répondait). L'image contient désormais la console (`apps/web/dist`, copié dans
+`/app/apps/web/dist`, voisin de `apps/server/dist` : aucune variable à poser) et le server la sert à la racine
+(`@fastify/static`) : repli vers `index.html` pour les routes de la console, jamais pour `/api`, `/mcp`, `/tunnel`,
+`/hooks`, `/.well-known` ni `/metrics` (404 JSON) ; fichiers hachés `assets/` en cache long immuable, `index.html` en
+`no-cache` ; CSP et en-têtes de 08b § 2 sur toute réponse. Vérifié sur l'image construite (`assert_console_served`,
+`pnpm test:image`) et par `deploy/verify.sh`, qui échoue si `GET /` n'est pas une page HTML. Reste : le critère
+« l'assistant s'affiche » (14 § 13) dans un navigateur sur une instance déployée (Render, compose), à relever en recette.
 
 **Écarts au CDC assumés.** 14 § 12 demande `init` et `ipc: host` dans le compose ; aucun des deux n'est posé. `init` :
 l'image lance déjà tini (par son point d'entrée), un second init est redondant. `ipc: host` : Chromium reçoit

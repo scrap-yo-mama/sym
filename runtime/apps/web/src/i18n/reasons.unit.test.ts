@@ -60,6 +60,11 @@ describe('assert_reason_codes_stable', () => {
     expect(EXTRA_REASON_CODES).toContain('not_found');
   });
 
+  // Écart du CDC (tâche 2.3, D-49) : le signal `items_rejected` (raison de la transition 5 et `degraded_reasons`) n'est pas
+  // dans la table de 06 § 4.2. À ajouter à la table, à la liste figée, à SPEC_REASON_CODES, aux deux langues et à la doc
+  // des codes de raison quand le CDC sera complété (reprise de la console, 3.x) ; d'ici là la console affiche le code brut.
+  test.todo('items_rejected (D-49) : ligne de 06 § 4.2, libellé et phrase en fr et en en, doc des codes de raison');
+
   test.skipIf(!existsSync(CDC_SPEC))('la liste figée suit la table du CDC (06 § 4.2) quand le CDC est disponible', () => {
     expect(cdcReasonCodes()).toEqual(snapshotCodes());
   });

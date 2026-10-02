@@ -85,12 +85,11 @@ export type EventStreamOptions = {
 };
 
 /**
- * Vrai tant que le serveur n'enregistre pas `GET /api/events` (livré par la tâche 3.1) : une 404 signifie alors
- * « pas de flux sur ce serveur ». Une fois la route livrée, une 404 trahit un déploiement cassé (routage, reverse proxy)
- * et doit afficher le bandeau puis reconnecter, sinon la console perdrait en silence toute mise à jour en direct.
- * DETTE (ADR 0002) : passer à false avec la livraison de la route ; tests/openapi-client.contract.test.ts l'impose.
+ * Faux depuis la livraison de `GET /api/events` (tâche 3.1) : une 404 trahit un déploiement cassé (routage, reverse
+ * proxy) et doit afficher le bandeau puis reconnecter, sinon la console perdrait en silence toute mise à jour en direct.
+ * tests/openapi-client.contract.test.ts lie cette valeur au registre des routes du serveur.
  */
-export const STOP_ON_NOT_FOUND_DEFAULT = true;
+export const STOP_ON_NOT_FOUND_DEFAULT = false;
 
 export const defaultBackoff = (attempt: number): number => Math.min(30_000, 1_000 * 2 ** attempt);
 
@@ -217,7 +216,7 @@ export class EventStreamClient {
           return;
         }
         if (response.status === 404 && this.#options.stopOnNotFound) {
-          // Route absente (serveur sans flux d'événements, avant 3.1) : rien à reprendre, ni boucle de reconnexion ni bandeau.
+          // Route absente, arrêt demandé par l'option (serveur sans flux d'événements) : ni boucle de reconnexion ni bandeau.
           this.stop();
           return;
         }

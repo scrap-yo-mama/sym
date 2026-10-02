@@ -3,12 +3,12 @@
 // avant l'enrôlement forcé à la 2FA, aucune entrée n'est proposée : rien d'autre n'est joignable (13 § 7).
 import type { Permission } from '@/composables/useSession';
 
-export type NavEntry = { to: string; label: string; permission?: Permission };
+export type NavEntry = { to: string; label: string; permission?: Permission; /** Bouton jaune à place fixe à droite de la barre (maquette, 20 § 5.1) au lieu d'un lien de la liste. */ cta?: boolean };
 
 const NAV: readonly NavEntry[] = [
   { to: '/', label: 'nav.home' },
   { to: '/apis', label: 'nav.catalog' },
-  { to: '/apis/new', label: 'nav.newApi' },
+  { to: '/apis/new', label: 'nav.newApi', cta: true },
   { to: '/runs', label: 'nav.runs' },
   { to: '/admin/users', label: 'nav.users', permission: 'users:list' },
   { to: '/admin/audit', label: 'nav.audit', permission: 'audit:read' },
