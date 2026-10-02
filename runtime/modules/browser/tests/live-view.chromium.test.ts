@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-/// <reference lib="dom" />
 // Vue en direct de bout en bout sur un vrai Chromium 153 (tâche 3.2 ; recette étape 6 ; 04d D1 à D4 ; BINV7) :
 //   visionneur (WebSocket) → relais WSS de la passerelle `/v1/sessions/{id}/live/stream?t=` (jeton de vue vérifié avant
 //   l'upgrade, tâche 2.3) → relais interne du nœud `/internal/sessions/{id}/live` (NODE_TOKEN) → `LiveView` de la session
@@ -143,7 +142,7 @@ describe('vue en direct de bout en bout (recette étape 6)', () => {
       expect(v.messages[0]).toMatchObject({ t: 'meta', url: 'https://zz-live.invalid/', title: 'Vue', mode: 'ro' });
       // Relevé avant les messages du visionneur : Chromium émet lui-même un mousemove synthétique au chargement d'une page.
       const page = session.context.pages()[0]!;
-      const counters = () => page.evaluate(() => ({ clicks: (window as unknown as { __clicks: number }).__clicks, inputs: (window as unknown as { __inputs: number }).__inputs }));
+      const counters = () => page.evaluate(() => ({ clicks: (globalThis as unknown as { __clicks: number }).__clicks, inputs: (globalThis as unknown as { __inputs: number }).__inputs }));
       const before = await counters();
       for (let i = 0; i < 50; i += 1) v.send(i % 2 === 0 ? { t: 'mouse', type: 'click', x: 300, y: 200 } : { t: 'key', type: 'down', key: 'a' });
       v.send({ t: 'text', text: 'bonjour' });
@@ -166,7 +165,7 @@ describe('vue en direct de bout en bout (recette étape 6)', () => {
     const v = await viewer(id, 'rw');
     await v.until(() => v.messages.some((m) => m.t === 'frame'), 'première trame');
     v.send({ t: 'mouse', type: 'click', x: box!.x + box!.width / 2, y: box!.y + box!.height / 2 });
-    const clicks = () => page.evaluate(() => (window as unknown as { __clicks: number }).__clicks);
+    const clicks = () => page.evaluate(() => (globalThis as unknown as { __clicks: number }).__clicks);
     for (let i = 0; i < 100 && (await clicks()) === 0; i += 1) await new Promise((r) => setTimeout(r, 25));
     expect(await clicks()).toBe(1);
     await session.release();
