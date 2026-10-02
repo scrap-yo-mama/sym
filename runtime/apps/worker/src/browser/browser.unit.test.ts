@@ -378,7 +378,7 @@ describe('boundedDocumentBody : corps brut d’un document lu seulement si sa ta
 
 // Revue de 1.11 (INV11) : verdict du contrôle CDP de chaque requête.
 describe('contrôle CDP : verdict d\'une requête', () => {
-  const hop = { redirect: false, rootUrl: 'http://zz-test.example/', resourceType: 'Document', mainFrame: true };
+  const hop = { redirect: false, rootUrl: 'http://zz-test.example/', resourceType: 'Document', mainFrame: true, method: 'GET' };
   const inScope = () => true;
 
   test('URL illisible présentée par CDP : coupée (échec fermé), sans appeler le contrôle', async () => {

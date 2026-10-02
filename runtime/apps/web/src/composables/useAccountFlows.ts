@@ -14,9 +14,10 @@ export type SetupResult = Schemas['SetupResult'];
 export type SsoPublic = Schemas['SsoPublic'];
 
 /** Premier démarrage : jeton de démarrage, e-mail, mot de passe. Après la création, `/setup` répond 404 pour toujours. */
-export function postSetup(input: { token: string; email: string; password: string; displayName?: string }): Promise<CallResult<SetupResult>> {
+export function postSetup(input: { token: string; email: string; password: string; displayName?: string; instanceContact?: string }): Promise<CallResult<SetupResult>> {
   const body: Schemas['SetupRequest'] = { token: input.token, email: input.email, password: input.password };
   if (input.displayName) body.displayName = input.displayName;
+  if (input.instanceContact) body.instanceContact = input.instanceContact;
   return call(() => getApi().POST('/api/setup', { body }));
 }
 

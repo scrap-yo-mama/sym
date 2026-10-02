@@ -42,6 +42,24 @@ describe('fixtures : inventaire', () => {
   });
 });
 
+describe('fixture scroll : lot initial', () => {
+  it('assert_scroll_fixture_initial_batch — 10 éléments au chargement, hauteur 600 px (aucun lot déclenché par l’observateur), 50 autres par /api/feed', async () => {
+    const page = await fx.get('zz_test_scroll.localhost', '/');
+    expect(page.status).toBe(200);
+    const html = typeof page.body === 'string' ? page.body : String(page.body);
+    expect(html.match(/<div class="feed-item"/g)).toHaveLength(10);
+    expect(html).toContain('.feed-item{height:600px}');
+    let total = 10;
+    for (let offset = 10; offset < 60; offset += 10) {
+      const batch = (await fx.json('zz_test_scroll.localhost', `/api/feed?offset=${offset}&limit=10`)) as { items: unknown[]; done: boolean };
+      expect(batch.items).toHaveLength(10);
+      total += batch.items.length;
+      expect(batch.done).toBe(offset === 50);
+    }
+    expect(total).toBe(60);
+  });
+});
+
 describe.each(Object.values(EXPECTED).flat())('fixture %s : fumée', (id) => {
   it('répond 200 sur /health de chaque hôte et sur sa requête de fumée', async () => {
     const site = sites.find((s) => s.id === id);

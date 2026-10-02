@@ -41,6 +41,7 @@ export const PERMISSIONS = {
   'settings:llm:write': { member: '-', admin: 'O', owner: 'O' },
   'settings:proxies:write': { member: '-', admin: 'O', owner: 'O' },
   'settings:smtp:write': { member: '-', admin: 'O', owner: 'O' },
+  'settings:identity:write': { member: '-', admin: 'O', owner: 'O' },
   'settings:security:write': { member: '-', admin: '-', owner: 'O' },
   'settings:sso:write': { member: '-', admin: '-', owner: 'O' },
   'audit:read': { member: '-', admin: 'O', owner: 'O' },

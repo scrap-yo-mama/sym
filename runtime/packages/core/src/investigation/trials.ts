@@ -3,7 +3,9 @@
 // estimé croissant ; le premier conforme est retenu (« on ne paie l'agent que s'il n'existe rien de moins cher »), c'est
 // donc le moins cher conforme parmi les couples essayés. « Conforme » : `N = 3` exécutions dont la sortie est valide
 // contre le schéma validé (INV1, contrôlé par l'exécuteur), dont au moins une en page 2 si la stratégie pagine (sauf
-// liste finie dès la page 1, règle d'arrêt atteinte). Le classifieur élague (`pruneAfter`), un refus ou un défi arrête
+// liste finie dès la page 1, règle d'arrêt atteinte), et, si elle pagine, règle d'arrêt vérifiée sur la dernière page
+// (tâche 2.2) : les N exécutions s'arrêtent à 2 pages, une exécution de plus, au plafond dur, doit finir par la fin
+// naturelle de la liste (sans quoi la règle est journalisée « non vérifiée », jamais présentée comme vérifiée). Le classifieur élague (`pruneAfter`), un refus ou un défi arrête
 // tout (INV6), une connexion requise rend la main. Plafonds : `investigation_budget_usd`, `investigation_timeout_s`,
 // nombre d'essais ; chaque exécution tourne sous le plus petit de `max_cost_usd` et du budget restant.
 // Orchestration pure : l'exécution d'un couple, le journal et l'horloge sont des ports.
@@ -19,6 +21,9 @@ export const INVESTIGATION_DEFAULTS = Object.freeze({
   timeoutSeconds: 600,
   maxAttempts: 12,
 });
+
+/** Raison d'une exécution de plus que les N exécutions d'échantillon : vérifier la règle d'arrêt (tâche 2.2). */
+export type TrialPurpose = 'sample' | 'stop_check';
 
 /** Une exécution d'un couple. */
 export type TrialExecution = {
@@ -39,18 +44,39 @@ export type PairOutcome = {
   /** `ok` ou classe d'échec du couple (première exécution en échec, ou contrôle de la page 2). */
   readonly result: 'ok' | FailureClass;
   readonly detail: string | null;
+  /** Les N exécutions d'échantillon (la vérification de la règle d'arrêt est dans `stop_check`). */
   readonly executions: readonly TrialExecution[];
-  /** Somme des exécutions ; `null` dès qu'une est inconnue. */
+  /** Règle d'arrêt de la pagination : constatée sur la dernière page ou non ; `null` : la stratégie ne pagine pas. */
+  readonly stop_check: StopCheck | null;
+  /** Somme des exécutions et de la vérification ; `null` dès qu'une est inconnue. */
   readonly cost_usd: number | null;
   readonly ms: number;
+};
+
+/**
+ * Vérification de la règle d'arrêt (04 §4). `verified` : une exécution a fini par la fin naturelle de la liste (règle de
+ * `stop[]`, page vide, curseur absent ou répété, plus de lien suivant) ; `stop` est cette raison. Sinon `verified: false` :
+ * la liste dépasse le plafond dur, ou la vérification a dépassé `max_cost_usd` (`reason`) ; la règle n'est pas démontrée.
+ *
+ * Limite connue (04 § 4 compte la règle d'arrêt vérifiée sur la dernière page dans le critère « ça marche ») : le couple
+ * est accepté avec `verified: false` dans ces deux cas, le plafond dur tenant lieu de règle d'arrêt d'une liste très longue.
+ * Écart consigné dans tests/invariants.json (assert_pagination_stop_rule_last_page), à inscrire au CDC par l'orchestrateur.
+ */
+export type StopCheck = {
+  readonly verified: boolean;
+  readonly stop: string | null;
+  readonly pages: number;
+  readonly records: number;
+  readonly reason?: 'max_cost_usd';
 };
 
 export type TrialPorts = {
   /**
    * Une exécution du couple sous le plafond `ceilingUsd` et l'échéance `deadlineMs` (epoch). Un plafond atteint rend
    * `run_budget_exceeded` ; l'échéance atteinte, `run_budget_exceeded` avec le détail `investigation_timeout_s`.
+   * `purpose = 'stop_check'` : exécution au plafond dur de pages, pour constater la règle d'arrêt sur la dernière page.
    */
-  execute(pair: TrialPair, index: number, limits: { readonly ceilingUsd: number; readonly deadlineMs: number }): Promise<TrialExecution>;
+  execute(pair: TrialPair, index: number, limits: { readonly ceilingUsd: number; readonly deadlineMs: number }, purpose?: TrialPurpose): Promise<TrialExecution>;
   /** Le couple est terminé (essai journalisé : `run_attempts` et `attempt.finished`). */
   finished(outcome: PairOutcome): Promise<void>;
   /** Couples sautés après l'échec de `by` (journalisés : `attempt.pruned`). */
@@ -108,22 +134,28 @@ export async function runTrials(
     const executions: TrialExecution[] = [];
     let failure: { cls: FailureClass; detail: string | null } | null = null;
     let budgetStop: BudgetStop | null = null;
-    for (let i = 0; i < samples; i += 1) {
+    let stopCheck: StopCheck | null = null;
+    let checkRun: TrialExecution | null = null;
+    /**
+     * Une exécution sous les plafonds ; rend vrai si la boucle doit s'arrêter (échec, budget). Même comptabilité pour les
+     * exécutions d'échantillon et pour la vérification de la règle d'arrêt.
+     */
+    const execute = async (index: number, purpose: TrialPurpose): Promise<{ stop: boolean; run: TrialExecution | null; perRunCap: boolean }> => {
       const left = Math.round((budget.maxUsd - spent) * 1e6) / 1e6;
       if (left <= 0) {
         budgetStop = 'investigation_budget_usd';
-        break;
+        return { stop: true, run: null, perRunCap: false };
       }
       if (ports.now() >= budget.deadlineMs) {
         budgetStop = 'investigation_timeout_s';
-        break;
+        return { stop: true, run: null, perRunCap: false };
       }
       const ceilingUsd = Math.min(budget.maxCostPerRunUsd, left);
-      const run = await ports.execute(pair, i, { ceilingUsd, deadlineMs: budget.deadlineMs });
-      executions.push(run);
+      const run = await ports.execute(pair, index, { ceilingUsd, deadlineMs: budget.deadlineMs }, purpose);
       // Un coût inconnu ne se tient pas sous un budget : l'enquête s'arrête là (08 §1, jamais 0 par défaut).
       if (run.cost_usd === null) budgetStop = 'investigation_budget_usd';
       else spent = Math.round((spent + run.cost_usd) * 1e6) / 1e6;
+      let perRunCap = false;
       if (!run.ok) {
         const cls = run.failure_class ?? 'code_error';
         if (cls === 'run_budget_exceeded') {
@@ -131,26 +163,54 @@ export async function runTrials(
           // écarte seulement ce couple, trop cher pour un run.
           if (run.detail === 'investigation_timeout_s') budgetStop = 'investigation_timeout_s';
           else if (ceilingUsd < budget.maxCostPerRunUsd) budgetStop = 'investigation_budget_usd';
+          else perRunCap = true;
         }
         failure = { cls, detail: run.detail };
-        break;
+        return { stop: true, run, perRunCap };
       }
-      if (budgetStop !== null) break;
+      return { stop: budgetStop !== null, run, perRunCap };
+    };
+    for (let i = 0; i < samples; i += 1) {
+      const step = await execute(i, 'sample');
+      if (step.run !== null) executions.push(step.run);
+      if (step.stop) break;
     }
+    const paginates = options.paginated?.(pair) === true;
     // Page 2 (04 §4) : une stratégie qui pagine doit l'atteindre au moins une fois, sauf liste finie dès la page 1.
-    if (failure === null && budgetStop === null && executions.length === samples && options.paginated?.(pair) === true) {
+    if (failure === null && budgetStop === null && executions.length === samples && paginates) {
       const reached = executions.some((e) => e.pages >= 2);
       const finished = executions.every((e) => e.pages === 1 && e.stop !== null && NATURAL_STOPS.has(e.stop));
       if (!reached && !finished) failure = { cls: 'extraction', detail: 'pagination_page2' };
     }
+    // Règle d'arrêt sur la dernière page (04 §4, tâche 2.2) : une exécution d'échantillon qui a fini par la fin naturelle de
+    // la liste l'a déjà constatée ; sinon une exécution de plus, au plafond dur, doit y arriver.
+    if (failure === null && budgetStop === null && executions.length === samples && paginates) {
+      const natural = executions.find((e) => e.stop !== null && NATURAL_STOPS.has(e.stop));
+      if (natural !== undefined) {
+        stopCheck = { verified: true, stop: natural.stop, pages: natural.pages, records: natural.records };
+      } else {
+        const step = await execute(samples, 'stop_check');
+        checkRun = step.run;
+        if (step.run?.ok === true) {
+          const natural = step.run.stop !== null && NATURAL_STOPS.has(step.run.stop);
+          stopCheck = { verified: natural, stop: step.run.stop, pages: step.run.pages, records: step.run.records };
+        } else if (step.perRunCap && budgetStop === null) {
+          // Trop cher pour un run : la règle n'est pas démontrée, mais le couple a fait ses N exécutions conformes.
+          failure = null;
+          stopCheck = { verified: false, stop: null, pages: step.run?.pages ?? 0, records: 0, reason: 'max_cost_usd' };
+        }
+      }
+    }
     const done = executions.length === samples && failure === null && budgetStop === null;
+    const all = checkRun === null ? executions : [...executions, checkRun];
     const outcome: PairOutcome = {
       pair,
       result: failure?.cls ?? (done ? 'ok' : 'run_budget_exceeded'),
       detail: failure?.detail ?? (done ? null : budgetStop),
       executions,
-      cost_usd: sumCost(executions),
-      ms: executions.reduce((s, e) => s + e.ms, 0),
+      stop_check: stopCheck,
+      cost_usd: sumCost(all),
+      ms: all.reduce((s, e) => s + e.ms, 0),
     };
     if (executions.length > 0) {
       tried.push(outcome);

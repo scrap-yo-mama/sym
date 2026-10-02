@@ -209,7 +209,7 @@ export async function openRunContext(browser: Browser, options: RunContextOption
       // Poignée de main = GET http sur le chemin : robots.txt d'abord (1.11).
       const handshake = websocketHandshakeUrl(ws.url());
       const allowed =
-        handshake !== undefined && (await options.checkRequest({ url: handshake, redirect: false, rootUrl: handshake, resourceType: 'WebSocket', mainFrame: false }).catch(() => false));
+        handshake !== undefined && (await options.checkRequest({ url: handshake, redirect: false, rootUrl: handshake, resourceType: 'WebSocket', mainFrame: false, method: 'GET' }).catch(() => false));
       if (!allowed) {
         await ws.close({ code: 1008, reason: 'robots_disallowed' });
         return;

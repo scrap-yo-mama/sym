@@ -5,7 +5,7 @@
 import { ENV_CATALOG, envVariableNames, MasterKey } from '@runtime/core';
 import { Ajv2020 } from 'ajv/dist/2020.js';
 import { spawnSync } from 'node:child_process';
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, test } from 'vitest';
@@ -204,9 +204,52 @@ describe('docker-compose.prod.yml : cible bloquante', () => {
 
   test('aucune option qui affaiblit l’hôte ou casse le bac à sable (INV7) : ni ipc host, ni privileged, ni no-new-privileges, ni cap_drop', () => {
     for (const [name, svc] of Object.entries(doc.services)) {
-      for (const forbidden of ['ipc', 'privileged', 'network_mode', 'pid', 'cap_add', 'cap_drop', 'security_opt', 'devices']) expect(svc[forbidden], `${name}.${forbidden}`).toBeUndefined();
+      for (const forbidden of ['ipc', 'privileged', 'network_mode', 'pid', 'cap_add', 'cap_drop', 'devices']) expect(svc[forbidden], `${name}.${forbidden}`).toBeUndefined();
+      // security_opt : seulement le profil seccomp du worker (jamais unconfined, ni no-new-privileges posé ici).
+      expect(svc['security_opt'], `${name}.security_opt`).toEqual(name === 'worker' ? ['seccomp=./seccomp-chromium.json'] : undefined);
     }
     expect(raw).not.toMatch(/^\s*init: true/m); // l'image embarque tini
+  });
+
+  test('profil seccomp du worker : celui de Docker 28.0.4 (moby, profiles/seccomp/default.json) plus la seule entrée de Playwright pour les espaces de noms utilisateur', () => {
+    type Rule = { comment?: string; names: string[]; action: string; args?: unknown[] | null; includes?: Record<string, unknown>; excludes?: Record<string, unknown> };
+    const profile = JSON.parse(text('seccomp-chromium.json')) as { defaultAction: string; syscalls: Rule[] };
+    const userns = { comment: 'Allow create user namespaces', names: ['clone', 'setns', 'unshare'], action: 'SCMP_ACT_ALLOW', args: [], includes: {}, excludes: {} };
+    expect(profile.syscalls.filter((r) => r.comment === userns.comment)).toEqual([userns]);
+    expect(profile.defaultAction).toBe('SCMP_ACT_ERRNO');
+    // Le reste est octet pour octet le profil par défaut de Docker 28.0.4 (moby v28.0.4, sha256 du fichier amont) : rien
+    // d'autre n'est ouvert (mount, ptrace, bpf… restent sous leurs capacités).
+    const upstream = { ...profile, syscalls: profile.syscalls.filter((r) => r.comment !== userns.comment) };
+    expect(createHash('sha256').update(JSON.stringify(upstream, null, '\t')).digest('hex')).toBe('9c1025c88ccaa517b648da571961838744ea2137f176bfe6a48b21294cae9c76');
+  });
+
+  test('profil seccomp documenté : à fournir à côté du compose (Coolify, Dokploy compris), limite Render, risque résiduel des espaces de noms utilisateur', () => {
+    const guide = readFileSync(join(runtimeDir, 'docs/deploiement.md'), 'utf8');
+    const section = (heading: string) => guide.slice(guide.indexOf(heading), guide.indexOf('\n## ', guide.indexOf(heading) + heading.length));
+    const compose = section('## Docker Compose');
+    // Sans le fichier, le conteneur worker ne peut pas être créé (security_opt du worker).
+    expect(compose).toMatch(/`deploy\/seccomp-chromium\.json`[^\n]*\n?[^\n]*à côté/);
+    const coolify = compose.split('\n- ').find((b) => b.startsWith('Coolify et Dokploy'));
+    expect(coolify).toContain('seccomp-chromium.json');
+    expect(coolify).toContain('(../apps/docs/content/guides/docker-compose.md)');
+    // Render : le cas simulé applique le profil livré ; le seccomp réel de Render n'est pas vérifié (D-57).
+    const render = guide.split('\n').find((l) => l.startsWith('| Render |'));
+    const reste = render?.split(' | ').at(-1) ?? '';
+    expect(reste).toMatch(/seccomp réel de Render/);
+    expect(reste).toContain('D-57');
+    expect(reste).toContain('zz-test');
+    // Risque résiduel (INV7) : l'enfant du bac à sable (uid 1500) peut créer des espaces de noms utilisateur après une évasion.
+    expect(section('## Modèle de privilèges')).toMatch(/### Risque résiduel : espaces de noms utilisateur/);
+    // Le README du bac à sable ne prétend plus que seccomp refuse unshare.
+    const readme = readFileSync(join(runtimeDir, 'apps/worker/src/sandbox/README.md'), 'utf8');
+    expect(readme).not.toMatch(/seccomp refuse `unshare`/);
+    expect(readme).toContain('docs/deploiement.md#risque-résiduel--espaces-de-noms-utilisateur');
+    // Condition d'hôte : la CI lève la restriction AppArmor des espaces de noms utilisateur (Ubuntu 23.10+) ; le profil
+    // seccomp seul n'est donc pas vérifié sur un hôte Ubuntu aux réglages par défaut, et le guide Compose le dit.
+    const composeGuide = readFileSync(join(runtimeDir, 'apps/docs/content/guides/docker-compose.md'), 'utf8');
+    expect(composeGuide).toMatch(/kernel\.apparmor_restrict_unprivileged_userns[\s\S]{0,400}non vérifié/);
+    const composeRow = guide.split('\n').find((l) => l.startsWith('| Docker Compose |'));
+    expect(composeRow?.split(' | ').at(-1)).toContain('apparmor_restrict_unprivileged_userns');
   });
 
   test('variables du conteneur : catalogue seulement ; secrets obligatoires (`:?`) ; image par RUNTIME_IMAGE, épinglée', () => {

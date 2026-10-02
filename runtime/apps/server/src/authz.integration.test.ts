@@ -165,6 +165,7 @@ const VALID_BODIES: Record<string, (party: Party) => Record<string, unknown>> = 
   'POST /api/invitations/:id/resend': () => ({}),
   'POST /api/invitations/accept': () => ({ token: 'zz_test_not_a_token', password: 'zz_test_long_password_1' }),
   'PUT /api/settings/security': () => ({ session_idle_minutes: 720, session_absolute_hours: 168, allowed_email_domains: [], api_key_max_lifetime_days: 365 }),
+  'PUT /api/settings/identity': () => ({ identify_instance: false }),
   'PUT /api/settings/sso': () => ({ enabled: false, slug: 'zz-test', issuer_url: 'https://idp.example.test/', client_id: 'zz_test_client' }),
   // API REST (3.1).
   'POST /api/apis': () => ({ description: 'zz_test authz', url: 'https://zz-test-authz.example/' }),
