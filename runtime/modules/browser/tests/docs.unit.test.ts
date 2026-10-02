@@ -15,8 +15,12 @@ import { ENV_DESCRIPTIONS_EN, REFERENCE_PAGES, renderReference } from '../script
 const DOCS = join(MODULE_ROOT, 'docs');
 const read = (path: string) => readFileSync(join(DOCS, path), 'utf8');
 
+// `assets/` (bannière et badges du README) et `site/` (page du site SYM) : tâche 5.5, vérifiés par readme.unit.test.ts.
+const OWNED_ELSEWHERE = new Set(['assets', 'site']);
+
 function files(dir: string): string[] {
   return readdirSync(dir).flatMap((name) => {
+    if (dir === DOCS && OWNED_ELSEWHERE.has(name)) return [];
     const path = join(dir, name);
     return statSync(path).isDirectory() ? files(path) : [relative(DOCS, path)];
   });

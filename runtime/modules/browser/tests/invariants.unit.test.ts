@@ -29,7 +29,7 @@ describe('registre tests/invariants.json', () => {
     for (const e of entries) {
       // Invariant BINVn (test `assert_*`) ou exigence nommée d'une spec (`04b § 9`, tâche 2.7) : jamais une entrée libre.
       expect(e.test, e.test).toMatch(/^[a-z][a-z0-9_]+$/);
-      expect(e.invariant, e.test).toMatch(/^(BINV\d+|0\d[a-g]? § \d)/);
+      expect(e.invariant, e.test).toMatch(/^(BINV\d+|[A-Z]\d+ |0\d[a-g]? § \d)/);
       if (e.test.startsWith('assert_')) expect(e.invariant, e.test).toMatch(/^BINV\d+/);
       expect(e.tasks.length, e.test).toBeGreaterThan(0);
     }

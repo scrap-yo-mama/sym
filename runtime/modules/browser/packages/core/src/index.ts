@@ -30,8 +30,7 @@ export { LOG_LEVELS, NODE_ENVS, describeConfig, loadConfig, type BrowserConfig, 
 export { ConfigError, Reader, type Env } from './config/reader.js';
 export { Secret } from './config/secret.js';
 export * from './capacity.js';
-export { createLogger, runService, SHUTDOWN_TEARDOWN_MS, startService, type Logger, type ReadinessCheck, type RunOptions, type ServiceHandle, type ServiceOptions } from './service/service.js';
 export * from './session/index.js';
 export { sendableCloseCode } from './relay/close-code.js';
 export * from './observability/index.js';
-export { createLogger, runService, startService, type Logger, type PreparedRole, type ReadinessCheck, type RunOptions, type ServiceHandle, type ServiceOptions } from './service/service.js';
+export { createLogger, runService, SHUTDOWN_TEARDOWN_MS, startService, type Logger, type PreparedRole, type ReadinessCheck, type RunOptions, type ServiceHandle, type ServiceOptions } from './service/service.js';

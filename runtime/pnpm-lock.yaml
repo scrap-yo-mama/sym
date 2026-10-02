@@ -658,6 +658,9 @@ importers:
       ws:
         specifier: 'catalog:'
         version: 8.21.3
+      yaml:
+        specifier: 'catalog:'
+        version: 2.9.1
       zod:
         specifier: 'catalog:'
         version: 4.3.6
@@ -740,6 +743,9 @@ importers:
       '@sym-browser/db':
         specifier: workspace:*
         version: link:../../packages/db
+      '@sym-browser/node':
+        specifier: workspace:*
+        version: link:../node
       '@sym/contracts':
         specifier: workspace:*
         version: link:../../../../packages/contracts
@@ -756,9 +762,6 @@ importers:
         specifier: 'catalog:'
         version: 8.21.3
     devDependencies:
-      '@sym-browser/node':
-        specifier: workspace:*
-        version: link:../node
       '@testcontainers/postgresql':
         specifier: 'catalog:'
         version: 12.1.0(supports-color@10.2.2)

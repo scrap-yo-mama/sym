@@ -21,9 +21,9 @@ import { join } from 'node:path';
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from '@testcontainers/postgresql';
 import type { FastifyInstance } from 'fastify';
 import pg from 'pg';
-import { createConnectTokens } from '../../packages/core/src/index.ts';
-import { createPgSessionStore, migrateUp, recordHeartbeat } from '../../packages/db/src/index.ts';
-import { createGatewayApi, type Principal, type SessionLauncher } from '../../apps/gateway/src/api/index.ts';
+import { ApiKeyAuthenticator, ConnectTokens, MasterKey, newApiKey } from '../../packages/core/src/index.ts';
+import { createPgSessionStore, insertApiKey, migrateUp, pgApiKeyStore, recordHeartbeat } from '../../packages/db/src/index.ts';
+import { createGatewayApi, type SessionLauncher } from '../../apps/gateway/src/api/index.ts';
 import { dedicatedLauncher, sessionDir } from '../../apps/node/src/dedicated/index.ts';
 import { createEgressGuard, startSessionEgress, type SessionEgress } from '../../apps/node/src/egress/index.ts';
 import { BrowserPool, OwnedProcessGroups, PROVISIONAL_CAPACITY, playwrightLauncher, startClosedLaunchProxy, type AcquireRequest, type ClosedLaunchProxy, type PoolLease } from '../../apps/node/src/pool/index.ts';
@@ -75,12 +75,10 @@ export async function startAllMode(): Promise<AllModeInstance> {
     cleanups.push(() => db.end());
     const one = async (sql: string, params: unknown[]): Promise<string> => (await db.query<{ id: string }>(sql, params)).rows[0]?.id ?? '';
     const tenantId = await one('INSERT INTO tenants (name, max_session_seconds) VALUES ($1, $2) RETURNING id', ['sdk', 3600]);
-    const apiKey = `symb_${randomBytes(18).toString('base64url')}`;
-    const apiKeyId = await one(
-      "INSERT INTO api_keys (tenant_id, key_prefix, key_hash, scopes) VALUES ($1, $2, '$argon2id$v=19$m=19456,t=2,p=1$test$test', $3) RETURNING id",
-      [tenantId, apiKey.slice(0, 9), ['sessions:write', 'sessions:read']],
-    );
-    const principal: Principal = { tenantId, apiKeyId, scopes: ['sessions:write', 'sessions:read'] };
+    // Clé réelle (argon2id, tâche 2.1) : seule son empreinte est en base.
+    const created = await newApiKey({ scopes: ['sessions:write', 'sessions:read'] });
+    await insertApiKey(db, { tenantId, prefix: created.prefix, keyHash: created.keyHash, scopes: created.scopes, expiresAt: null });
+    const apiKey = created.key.reveal();
 
     // Site de test (0.5) derrière le nom `site-a.test`.
     const site: SiteHandle = await startSite({ host: '127.0.0.1' });
@@ -215,10 +213,10 @@ export async function startAllMode(): Promise<AllModeInstance> {
     // Passerelle.
     const port = await freePort();
     const url = `http://127.0.0.1:${port}`;
-    const tokens = createConnectTokens(randomBytes(32));
+    const tokens = new ConnectTokens({ current: MasterKey.generate() });
     const gateway: FastifyInstance = await createGatewayApi({
       db,
-      auth: { authenticate: async (secret) => (secret === apiKey ? principal : null) },
+      auth: new ApiKeyAuthenticator(pgApiKeyStore(db)),
       tokens,
       launcher,
       publicUrl: url,

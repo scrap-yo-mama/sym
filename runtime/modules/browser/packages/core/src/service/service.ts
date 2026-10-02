@@ -275,6 +275,7 @@ function withRelease(service: ServiceHandle, release: () => Promise<void>): Serv
   return {
     mode: service.mode,
     port: service.port,
+    metrics: service.metrics,
     get draining() {
       return service.draining;
     },
