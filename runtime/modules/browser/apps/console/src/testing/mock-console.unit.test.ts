@@ -80,7 +80,11 @@ describe('sessions', () => {
     const stop = api.watchEvents(running.id, (e) => events.push(e));
     await new Promise((r) => setTimeout(r, 0));
     expect(events.length).toBeGreaterThan(0);
-    expect(events[0]).toMatchObject({ type: 'state', sessionId: running.id, data: { state: 'running' } });
+    // Historique dans l'ordre de la machine à états (04 § 5) : pending puis running.
+    expect(events.slice(0, 2)).toMatchObject([
+      { type: 'state', sessionId: running.id, data: { state: 'pending' } },
+      { type: 'state', sessionId: running.id, data: { state: 'running' } },
+    ]);
     const before = events.length;
     await api.releaseSession(running.id);
     expect(events.slice(before)).toEqual([expect.objectContaining({ type: 'state', data: { state: 'ended', endReason: 'released' } })]);

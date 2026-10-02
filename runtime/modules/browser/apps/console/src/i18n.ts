@@ -5,6 +5,7 @@
 // SymSignature de packages/ui, jamais un emoji dans le texte. Aucune phrase du serveur n'est affichée : les codes d'erreur
 // sont traduits ici.
 import { createI18n } from 'vue-i18n';
+import { screensEn, screensFr } from './i18n-screens.js';
 
 export const LOCALES = ['fr', 'en'] as const;
 export type Locale = (typeof LOCALES)[number];
@@ -69,9 +70,11 @@ const en = {
         unexpected: 'Something went wrong on our side. Try again in a moment.',
       },
     },
+    ...screensEn,
     home: {
+      ...screensEn.home,
       title: 'Home',
-      welcome: 'Welcome back. The Sessions, Nodes, Keys, Profiles and Usage screens are on their way.',
+      welcome: 'Welcome back. Pick a section: sessions, nodes, keys, profiles or usage.',
     },
   },
 };
@@ -137,9 +140,11 @@ const fr: MessageSchema = {
         unexpected: 'Un souci de notre côté. Réessaie dans un instant.',
       },
     },
+    ...screensFr,
     home: {
+      ...screensFr.home,
       title: 'Accueil',
-      welcome: 'Te revoilà. Les écrans Sessions, Nœuds, Clés, Profils et Consommation arrivent bientôt.',
+      welcome: 'Te revoilà. Choisis une section : sessions, nœuds, clés, profils ou consommation.',
     },
   },
 };
@@ -164,6 +169,12 @@ export function detectLocale(stored: string | null, navigatorLanguage: string | 
 export function errorKey(screen: 'login' | 'setup', code: string): string {
   const known = messages.en.console[screen].errors as Record<string, string>;
   return `console.${screen}.errors.${Object.hasOwn(known, code) ? code : 'unexpected'}`;
+}
+
+/** Code d'erreur d'un écran (3.6) → message ; un code inconnu devient `unexpected` (jamais de texte brut du serveur). */
+export function screenErrorKey(code: string): string {
+  const known = messages.en.console.errors as Record<string, string>;
+  return `console.errors.${code !== 'retry' && Object.hasOwn(known, code) ? code : 'unexpected'}`;
 }
 
 export function createConsoleI18n(locale: Locale) {

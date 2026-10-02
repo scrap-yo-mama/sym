@@ -27,7 +27,7 @@ const text = (html: string): string =>
   html
     .replace(/<[^>]+>/g, ' ')
     .replace(/&#39;/g, "'")
-    .replace(/&nbsp;| /g, ' ')
+    .replace(/&nbsp;|\u00a0/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
 const h1 = (html: string): string => text(/<h1[^>]*>([\s\S]*?)<\/h1>/.exec(html)?.[1] ?? '');

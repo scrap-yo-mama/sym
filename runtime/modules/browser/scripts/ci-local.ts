@@ -35,7 +35,7 @@ const steps: Step[] = [
 if (process.env['CI']) {
   steps.push({ name: 'Chromium de Playwright (CI)', cmd: ['pnpm', '--filter', '@sym-browser/console', 'exec', 'playwright', 'install', '--with-deps', 'chromium'] });
 }
-steps.push({ name: 'console : axe et connexion au clavier (Playwright, Chromium)', cmd: ['pnpm', '--filter', '@sym-browser/console', 'test:e2e'] });
+steps.push({ name: 'console : axe et parcours au clavier, connexion et 6 écrans (Playwright, Chromium)', cmd: ['pnpm', '--filter', '@sym-browser/console', 'test:e2e'] });
 
 if (!process.argv.includes('--skip-image')) {
   steps.push(

@@ -67,10 +67,14 @@ async function typeInto(page: Page, selector: string, value: string): Promise<vo
 /** Liste déroulante native : focus au clavier puis touches fléchées jusqu'à la valeur voulue. */
 async function chooseOption(page: Page, selector: string, value: string): Promise<void> {
   await tabTo(page, selector);
-  for (let i = 0; i < 30; i += 1) {
-    if ((await page.locator(selector).inputValue()) === value) return;
-    await page.keyboard.press('ArrowDown');
+  // Liste fermée : les flèches ne bouclent pas ; on descend jusqu'à la fin, puis on remonte.
+  for (const key of ['ArrowDown', 'ArrowUp']) {
+    for (let i = 0; i < 30; i += 1) {
+      if ((await page.locator(selector).inputValue()) === value) return;
+      await page.keyboard.press(key);
+    }
   }
+  if ((await page.locator(selector).inputValue()) === value) return;
   throw new Error(`${selector} : option ${value} non atteinte`);
 }
 
@@ -244,19 +248,23 @@ test.describe('parcours au clavier seul (fr)', () => {
     await page.keyboard.press('Enter');
     await expect(page.getByRole('status').filter({ hasText: 'importé' })).toBeVisible();
     await expect(page.locator('[data-profile="prof_shop"]')).toContainText('v4');
-    expect(errors).toEqual([]);
+    // Seul message attendu : le 502 du proxy injoignable, journalisé par Chromium (réponse d'API voulue par le test).
+    expect(errors.filter((e) => !/status of 502/.test(e))).toEqual([]);
   });
 
   test('consommation : période, tableau par clé, lien CSV, réconciliation', async ({ page }) => {
     const errors = await openSignedIn(page, '/usage');
     await expect(page.locator('#usage-drift')).toContainText(/\d+ s/);
-    await tabTo(page, '#usage-from');
-    await page.keyboard.type('01092026');
-    await tabTo(page, '#usage-to');
-    await page.keyboard.type('30092026');
+    // Mois précédent (UTC) : choisi dans le sélecteur de période (les champs de date dépendent de la langue du navigateur).
+    const now = new Date();
+    const first = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 1)).toISOString().slice(0, 10);
+    const last = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 0)).toISOString().slice(0, 10);
+    await chooseOption(page, '#usage-preset', 'previous-month');
+    await expect(page.locator('#usage-from')).toHaveValue(first);
+    await expect(page.locator('#usage-to')).toHaveValue(last);
     await tabTo(page, '#usage-apply');
     await page.keyboard.press('Enter');
-    await expect(page.locator('#usage-csv')).toHaveAttribute('href', '/v1/usage.csv?from=2026-09-01&to=2026-09-30&groupBy=key');
+    await expect(page.locator('#usage-csv')).toHaveAttribute('href', `/v1/usage.csv?from=${first}&to=${last}&groupBy=key`);
     await expect(page.locator('#usage-by-key tbody tr').first()).toBeVisible();
     await tabTo(page, '#usage-csv');
     await tabTo(page, '#usage-reconcile');
