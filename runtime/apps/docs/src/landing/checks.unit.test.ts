@@ -2,7 +2,7 @@
 // Contrôles de la landing hors CI de PR (22 § 2.9, 22b § 5) : verdict de la sonde, bloquants du GO, liens externes, étoiles. Sans réseau.
 import { describe, expect, test } from 'vitest';
 import { loadClaims } from './claims.ts';
-import { checkExternalLinks, evaluateProbes, goBlockers, isRealTestIn, lighthouseFailures, navigationTtfb, parseStars, parseStarsFile, probeReport, sharedPagesOrigin } from './checks.ts';
+import { checkExternalLinks, evaluateProbes, goBlockers, isRealTestIn, labNetworkConditions, lighthouseFailures, navigationTtfb, parseStars, parseStarsFile, probeReport, sharedPagesOrigin } from './checks.ts';
 import { startCommand } from './content.ts';
 import type { PageProbe } from './probe.ts';
 
@@ -198,6 +198,14 @@ describe('assert_landing_perf_budget : le premier octet se mesure depuis le déb
     expect(navigationTtfb(throttled)).toBe(563);
     expect(navigationTtfb(throttled)).toBeGreaterThanOrEqual(562 * 0.9);
     expect(navigationTtfb(undefined)).toBe(0);
+  });
+
+  test('le bridage passe par emulateNetworkConditionsByRule (règle globale) et overrideNetworkState : Network.emulateNetworkConditions, obsolète, n\'applique plus la latence dans Chromium 153 (premier octet à 2 ms)', () => {
+    const lab = { rttMs: 562.5, downloadKbps: 1474.56, uploadKbps: 675, cpuSlowdown: 4 };
+    const { byRule, state } = labNetworkConditions(lab);
+    expect(byRule.matchedNetworkConditions).toEqual([{ urlPattern: '', latency: 562.5, downloadThroughput: (1474.56 * 1024) / 8, uploadThroughput: (675 * 1024) / 8, connectionType: 'cellular4g' }]);
+    expect(byRule).not.toHaveProperty('offline');
+    expect(state).toEqual({ offline: false, latency: 562.5, downloadThroughput: (1474.56 * 1024) / 8, uploadThroughput: (675 * 1024) / 8, connectionType: 'cellular4g' });
   });
 });
 

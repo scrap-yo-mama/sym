@@ -209,6 +209,22 @@ export function navigationTtfb(entry: { startTime: number; responseStart: number
   return entry ? entry.responseStart - entry.startTime : 0;
 }
 
+type NetworkConditions = { latency: number; downloadThroughput: number; uploadThroughput: number; connectionType: 'cellular4g' };
+
+/**
+ * Bridage réseau du laboratoire (assert_landing_perf_budget) en paramètres du protocole DevTools : `Network.emulateNetworkConditions`
+ * est obsolète et n'applique plus la latence dans Chromium 153 (premier octet mesuré à 1-2 ms sur la boucle locale) ; on passe par
+ * `Network.emulateNetworkConditionsByRule` avec une règle globale (motif d'URL vide : toutes les requêtes) et `Network.overrideNetworkState`
+ * (navigator.connection), comme le recommande le protocole. Débits en octets par seconde.
+ */
+export function labNetworkConditions(lab: { rttMs: number; downloadKbps: number; uploadKbps: number }): {
+  byRule: { matchedNetworkConditions: (NetworkConditions & { urlPattern: string })[] };
+  state: NetworkConditions & { offline: false };
+} {
+  const conditions: NetworkConditions = { latency: lab.rttMs, downloadThroughput: (lab.downloadKbps * 1024) / 8, uploadThroughput: (lab.uploadKbps * 1024) / 8, connectionType: 'cellular4g' };
+  return { byRule: { matchedNetworkConditions: [{ urlPattern: '', ...conditions }] }, state: { offline: false, ...conditions } };
+}
+
 /**
  * Dépôts du même propriétaire qui publient AUSSI un site GitHub Pages (22 § 2.9) : sans domaine personnalisé, tous les sites Pages d'un
  * propriétaire partagent l'origine `https://<propriétaire>.github.io`, donc le `'self'` de la CSP de la landing autorise leurs scripts et

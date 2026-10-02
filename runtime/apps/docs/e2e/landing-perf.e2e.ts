@@ -6,7 +6,7 @@
 //   bridage s'applique (le premier octet arrive après un aller-retour réseau émulé) ;
 // - scores Lighthouse mobile (configuration par défaut : mobile, bridage simulé) : performance, accessibilité et SEO ≥ seuils.
 import { expect, test } from '@playwright/test';
-import { lighthouseFailures, navigationTtfb } from '../src/landing/checks.ts';
+import { labNetworkConditions, lighthouseFailures, navigationTtfb } from '../src/landing/checks.ts';
 import { runLighthouse } from '../src/landing/lighthouse.ts';
 import { budgets, homeUrl, LANGS_UNDER_TEST } from './pages.ts';
 
@@ -30,21 +30,27 @@ for (const lang of LANGS_UNDER_TEST) {
     // Bridage avant le premier octet : réseau (latence, débits en octets par seconde) et processeur.
     const cdp = await context.newCDPSession(page);
     await cdp.send('Network.enable');
-    await cdp.send('Network.emulateNetworkConditions', { offline: false, latency: limits.lab.rttMs, downloadThroughput: (limits.lab.downloadKbps * 1024) / 8, uploadThroughput: (limits.lab.uploadKbps * 1024) / 8 });
+    // Network.emulateNetworkConditions est obsolète (sans effet sur la latence dans Chromium 153) : règle globale + état du réseau.
+    const network = labNetworkConditions(limits.lab);
+    await cdp.send('Network.emulateNetworkConditionsByRule', network.byRule);
+    await cdp.send('Network.overrideNetworkState', network.state);
     await cdp.send('Emulation.setCPUThrottlingRate', { rate: limits.lab.cpuSlowdown });
     const responses: { url: string; type: string; transferred: number; body: number }[] = [];
     page.on('requestfinished', async (request) => {
       const sizes = await request.sizes();
       responses.push({ url: request.url(), type: request.resourceType(), transferred: sizes.responseBodySize + sizes.responseHeadersSize, body: sizes.responseBodySize });
     });
-    await page.goto(homeUrl(lang), { waitUntil: 'networkidle' });
+    const documentResponse = await page.goto(homeUrl(lang), { waitUntil: 'networkidle' });
     await page.waitForTimeout(300);
+    const browserTtfb = documentResponse ? documentResponse.request().timing().responseStart : -1;
     const metrics = await page.evaluate(() => (globalThis as unknown as { __metrics: Metrics }).__metrics);
     // Premier octet depuis le début de la navigation (navigationTtfb) : sous bridage, la latence émulée précède requestStart.
     const navigation = { ttfb: navigationTtfb(await page.evaluate(() => {
       const entry = performance.getEntriesByType('navigation')[0] as PerformanceNavigationTiming | undefined;
       return entry ? { startTime: entry.startTime, responseStart: entry.responseStart } : undefined;
     })) };
+    // Premier octet vu par le navigateur (Playwright, depuis startTime) : retenu s'il est plus grand que celui de la page.
+    navigation.ttfb = Math.max(navigation.ttfb, browserTtfb);
     const origin = new URL(homeUrl(lang)).origin;
 
     const total = responses.reduce((sum, r) => sum + r.transferred, 0);

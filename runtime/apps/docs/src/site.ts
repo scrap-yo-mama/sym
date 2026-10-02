@@ -153,7 +153,37 @@ export function checkSite(distDir: string, base: string): SiteProblem[] {
 }
 
 /** Index Pagefind du site construit (statique, sans tiers) : écrit `dist/pagefind/`. */
+/**
+ * Fichiers de l'index Pagefind vides (ou entrée JSON illisible) : `writeFiles` peut rendre la main avant que le moteur ait fini
+ * d'écrire, et `close()` l'arrête alors au milieu (pagefind-entry.json à 0 octet, vu sous charge). L'index est alors reconstruit.
+ */
+export function incompletePagefindFiles(distDir: string): string[] {
+  const dir = join(distDir, 'pagefind');
+  if (!existsSync(dir)) return ['pagefind-entry.json'];
+  const incomplete = readdirSync(dir)
+    .filter((name) => statSync(join(dir, name)).isFile() && statSync(join(dir, name)).size === 0)
+    .sort();
+  const entry = join(dir, 'pagefind-entry.json');
+  if (!incomplete.includes('pagefind-entry.json')) {
+    try {
+      JSON.parse(readFileSync(entry, 'utf8'));
+    } catch {
+      return [...incomplete, 'pagefind-entry.json'].sort();
+    }
+  }
+  return incomplete;
+}
+
 export async function buildSearchIndex(distDir: string): Promise<number> {
+  for (let attempt = 1; ; attempt++) {
+    const pages = await writeSearchIndex(distDir);
+    const incomplete = incompletePagefindFiles(distDir);
+    if (incomplete.length === 0) return pages;
+    if (attempt >= 3) throw new Error(`Pagefind : index incomplet après ${attempt} essais (${incomplete.join(', ')})`);
+  }
+}
+
+async function writeSearchIndex(distDir: string): Promise<number> {
   const pagefind = await import('pagefind');
   const { index, errors: createErrors } = await pagefind.createIndex({ rootSelector: '.vp-doc', forceLanguage: 'fr' });
   if (!index) throw new Error(`Pagefind : index non créé (${createErrors.join('; ')})`);

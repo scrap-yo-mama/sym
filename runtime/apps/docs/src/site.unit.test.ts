@@ -11,7 +11,7 @@ import { parse } from 'yaml';
 import { PAGES } from './nav.ts';
 import { renderReasonsReference } from './reasons-reference.ts';
 import { listOperations, plain, renderRestReference, type OpenApiDocument } from './rest-reference.ts';
-import { buildLlmsFull, buildLlmsTxt, checkSite, normalizeBase, siteLink, stripFrontmatter, writeLlmsFiles } from './site.ts';
+import { buildLlmsFull, buildLlmsTxt, checkSite, incompletePagefindFiles, normalizeBase, siteLink, stripFrontmatter, writeLlmsFiles } from './site.ts';
 import { handWritten, readSource, runtimeDir } from './testing/pages.ts';
 
 describe('assert_llms_txt_cites_every_page : llms.txt et versions Markdown', () => {
@@ -196,6 +196,26 @@ describe('assert_docs_rest_reference_generated : référence REST depuis l\'Open
         if (['enquete', 'sain', 'warning', 'reparation', 'erreur', 'action_requise', 'bloquee'].includes(code) || code === 'llm_*') continue;
         expect(known.has(code), `statuts-et-raisons : classe ${code} inconnue de la console`).toBe(true);
       }
+    }
+  });
+});
+
+describe('assert_docs_site_builds : index Pagefind complet', () => {
+  test('un fichier de l\'index laissé vide (moteur Pagefind arrêté avant la fin de l\'écriture) est détecté, pour reconstruire l\'index', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'zz_test_pagefind-'));
+    try {
+      mkdirSync(join(dir, 'pagefind'));
+      writeFileSync(join(dir, 'pagefind', 'pagefind-entry.json'), '');
+      writeFileSync(join(dir, 'pagefind', 'pagefind-ui.css'), '');
+      writeFileSync(join(dir, 'pagefind', 'pagefind.js'), 'export {}');
+      expect(incompletePagefindFiles(dir)).toEqual(['pagefind-entry.json', 'pagefind-ui.css']);
+      writeFileSync(join(dir, 'pagefind', 'pagefind-entry.json'), '{"version":"1","languages":{"fr":{"page_count":3}}}');
+      writeFileSync(join(dir, 'pagefind', 'pagefind-ui.css'), 'a{}');
+      expect(incompletePagefindFiles(dir)).toEqual([]);
+      writeFileSync(join(dir, 'pagefind', 'pagefind-entry.json'), '{"version":');
+      expect(incompletePagefindFiles(dir)).toEqual(['pagefind-entry.json']);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 });
