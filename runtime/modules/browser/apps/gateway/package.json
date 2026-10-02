@@ -18,6 +18,7 @@
   "dependencies": {
     "@sym-browser/core": "workspace:*",
     "@sym-browser/db": "workspace:*",
+    "@sym-browser/node": "workspace:*",
     "@sym/contracts": "workspace:*",
     "ajv": "catalog:",
     "fastify": "catalog:",
