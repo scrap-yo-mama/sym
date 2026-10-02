@@ -59,6 +59,12 @@ jobs:
           pnpm check:blacklist
           pnpm check:licenses
           pnpm check:release
+      - name: Landing, liens externes du site construit en 200 avant toute publication (assert_landing_links_resolve, 22b § 4)
+        env:
+          PUBLIC_REPOSITORY: ${{ github.repository }}
+        run: |
+          pnpm docs:build
+          pnpm --filter @runtime/docs landing:links
       - name: Plan de release (étiquette, canal, tags d'image ; la version du package.json doit être celle de l'étiquette)
         id: plan
         run: |

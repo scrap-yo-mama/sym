@@ -1,0 +1,36 @@
+# Archivage hebdomadaire du trafic GitHub du dépôt public (22 § 2.10, 22b § 5) : la seule mesure de la V1, sans traceur. L'API de trafic
+# ne garde que 14 jours : chaque semaine, ses agrégats (vues, clones, référents et chemins populaires) sont archivés en artefact du dépôt
+# (rétention à valider). Aucune donnée personnelle (des comptes et des domaines, jamais une adresse IP ni un visiteur), aucun appel
+# depuis l'instance ni depuis la landing.
+# Créé mais DÉSACTIVÉ, comme landing-production.yml : déclencheur manuel seul. Pour l'activer après la mise en ligne (⚠️ GO) : créer le
+# secret TRAFFIC_TOKEN (jeton à grain fin, lecture seule, permission « Administration : lecture » du seul dépôt public, que l'API de
+# trafic exige et que le jeton du workflow n'a pas), puis décommenter le déclencheur `schedule` ci-dessous.
+name: traffic-archive
+
+on:
+  workflow_dispatch:
+  # schedule:
+  #   - cron: '17 6 * * 1'
+
+permissions:
+  contents: read
+
+jobs:
+  archive:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Agrégats de l'API de trafic (14 derniers jours)
+        env:
+          GH_TOKEN: ${{ secrets.TRAFFIC_TOKEN }}
+        run: |
+          mkdir -p traffic
+          for endpoint in traffic/views traffic/clones traffic/popular/referrers traffic/popular/paths; do
+            gh api "repos/$GITHUB_REPOSITORY/$endpoint" > "traffic/$(echo "$endpoint" | tr / -).json"
+          done
+          date -u +%Y-%m-%dT%H:%M:%SZ > traffic/archived-at.txt
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: github-traffic
+          path: traffic/
+          if-no-files-found: error
+          retention-days: 90

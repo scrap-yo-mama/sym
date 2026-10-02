@@ -6,10 +6,14 @@
 // - assert_landing_no_third_party_tracker : aucun domaine de traceur demandé ni référencé dans le HTML ;
 // - assert_landing_no_cookie : document.cookie vide, aucun Set-Cookie, aucune écriture de stockage avant une action explicite ;
 // - assert_landing_csp_strict : la balise CSP précède tout script, 0 violation, aucun attribut style, forme exacte de la politique.
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { expect, test } from '@playwright/test';
 import { withBrowser, probePages, type PageProbe } from '../src/landing/probe.ts';
 import { HOST_INJECTIONS, TRACKER_DOMAINS } from '../src/landing/trackers.ts';
-import { allLandingUrls, homeUrl } from './pages.ts';
+import { startPagesServer } from './pages-server.ts';
+import { allLandingUrls, homeUrl, preprodUrl } from './pages.ts';
 
 let probes: PageProbe[] = [];
 test.beforeAll(async () => {
@@ -54,6 +58,25 @@ test.describe('assert_landing_no_cookie', () => {
       expect(probe.contextCookies, label(probe)).toEqual([]);
       expect(probe.setCookieHeaders, label(probe)).toEqual([]);
       expect(probe.storageWritesBeforeAction, label(probe)).toEqual([]);
+      expect(probe.storageAfterLoad, label(probe)).toEqual([]);
+    }
+  });
+
+  test('la sonde voit le stockage écrit autrement que par setItem : affectation directe, IndexedDB, Cache, service worker', async () => {
+    // Page témoin (hors landing) servie comme la préproduction : elle écrit par toutes les voies que setItem ne voit pas.
+    const dir = mkdtempSync(join(tmpdir(), 'zz-probe-storage-'));
+    writeFileSync(join(dir, 'sw.js'), '');
+    writeFileSync(join(dir, 'index.html'), `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>zz</title></head><body><p>zz</p><script>
+localStorage.zzDirect = '1'; sessionStorage['zzBracket'] = '1'; indexedDB.open('zz-db'); caches.open('zz-cache'); navigator.serviceWorker.register('sw.js');
+</script></body></html>`);
+    const server = await startPagesServer(dir, '/sym/');
+    try {
+      const [probe] = await withBrowser((browser) => probePages(browser, [`${server.url}/`]));
+      expect(probe?.storageWritesBeforeAction).toEqual([]);
+      expect(probe?.storageAfterLoad).toEqual(expect.arrayContaining(['localStorage.zzDirect', 'sessionStorage.zzBracket', 'indexedDB:zz-db', 'caches:zz-cache', `serviceWorker:${server.url}/`]));
+    } finally {
+      await server.close();
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 
@@ -83,6 +106,43 @@ test.describe('assert_landing_no_cookie', () => {
 });
 
 test.describe('assert_landing_csp_strict', () => {
+  test('depuis la doc, le lien du titre recharge la landing en entier : sa CSP s\'applique et elle n\'écrit rien avant une action ; Précédent ramène la doc', async () => {
+    await withBrowser(async (browser) => {
+      const context = await browser.newContext();
+      await context.addInitScript(() => {
+        const scope = globalThis as unknown as { __writes: string[] };
+        scope.__writes = [];
+        const original = Storage.prototype.setItem;
+        Storage.prototype.setItem = function patched(key: string, value: string): void {
+          scope.__writes.push(key);
+          original.call(this, key, value);
+        };
+      });
+      const page = await context.newPage();
+      const violations: string[] = [];
+      page.on('console', (message) => {
+        if (message.type() === 'error') violations.push(message.text());
+      });
+      await page.goto(`${preprodUrl()}/tutoriels/quickstart`, { waitUntil: 'networkidle' });
+      await page.evaluate(() => {
+        (globalThis as unknown as { __docMarker: boolean }).__docMarker = true;
+      });
+      await Promise.all([page.waitForURL(homeUrl('en')), page.locator('.VPNavBarTitle a').first().click()]);
+      await page.waitForLoadState('networkidle');
+      // Chargement complet : le marqueur posé sur la page de doc a disparu avec elle.
+      expect(await page.evaluate(() => (globalThis as unknown as { __docMarker?: boolean }).__docMarker ?? false)).toBe(false);
+      expect(await page.evaluate(() => document.head.firstElementChild?.getAttribute('http-equiv'))).toBe('Content-Security-Policy');
+      expect(await page.evaluate(() => (globalThis as unknown as { __writes: string[] }).__writes)).toEqual([]);
+      expect(await page.locator('.lp-theme').count()).toBeGreaterThan(0);
+      await page.goBack();
+      await page.waitForURL(/\/tutoriels\/quickstart$/);
+      await page.waitForLoadState('networkidle');
+      expect(await page.locator('.VPDoc').count()).toBeGreaterThan(0);
+      expect(violations).toEqual([]);
+      await context.close();
+    });
+  });
+
   test('la balise CSP est la première du head, avant tout script, et sa forme est exacte', () => {
     for (const probe of probes) {
       const head = probe.html.slice(probe.html.indexOf('<head>'));

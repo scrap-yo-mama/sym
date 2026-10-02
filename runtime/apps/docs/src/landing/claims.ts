@@ -6,6 +6,7 @@ import { readFileSync } from 'node:fs';
 import type { Lang } from './types.ts';
 
 type ClaimStatus = 'relu' | 'à relire' | 'bloqué';
+type ClaimReviewer = 'agent' | 'human';
 
 type Claim = {
   id: string;
@@ -15,6 +16,8 @@ type Claim = {
   proof: string[];
   reviewed: string;
   status: ClaimStatus;
+  /** Qui a relu l'entrée : « agent » (vérifiée contre le code et la doc) ou « human » ; le GO exige « human » pour toute entrée affichée. */
+  reviewer?: ClaimReviewer;
   tasks?: string[];
   surfaces?: string[];
   note?: string;
@@ -31,6 +34,7 @@ export function loadClaims(url: URL = CLAIMS_URL): ClaimsRegistry {
     if (ids.has(claim.id)) throw new Error(`claims.json : identifiant en double « ${claim.id} »`);
     ids.add(claim.id);
     if (!['relu', 'à relire', 'bloqué'].includes(claim.status)) throw new Error(`claims.json : statut inconnu pour « ${claim.id} »`);
+    if (claim.status === 'relu' && claim.reviewer !== 'agent' && claim.reviewer !== 'human') throw new Error(`claims.json : « ${claim.id} » est « relu » sans reviewer (agent ou human)`);
   }
   return registry;
 }

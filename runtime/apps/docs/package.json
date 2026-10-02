@@ -24,6 +24,7 @@
     "@axe-core/playwright": "catalog:",
     "@playwright/test": "catalog:",
     "@types/node": "catalog:",
+    "lighthouse": "catalog:",
     "pagefind": "catalog:",
     "playwright-core": "catalog:",
     "typescript": "catalog:",

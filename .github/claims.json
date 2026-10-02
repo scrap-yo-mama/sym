@@ -1,5 +1,5 @@
 {
-  "$comment": "Registre des allégations (22 § 3.2) : source unique de chaque phrase factuelle de la landing (apps/docs) et, à terme, du README. Une entrée affichée sur une surface doit être au statut « relu » ; « à relire » et « bloqué » ne s'affichent jamais. proof : référence vérifiable (test:<nom>, inv:<INV>, file:<chemin depuis la racine du dépôt>, page:<page du site de doc>, decision:<D-n>). tasks : tâches dont la livraison conditionne la phrase (la porte du GO, `pnpm check:landing-go`, refuse le GO tant qu'une preuve nommée n'est pas un vrai test ou qu'une tâche liée manque). Relecture : l'agent de 4.11 a vérifié chaque phrase contre le code et la doc ; la relecture humaine est une étape du GO.",
+  "$comment": "Registre des allégations (22 § 3.2) : source unique de chaque phrase factuelle de la landing (apps/docs) et, à terme, du README. Une entrée affichée sur une surface doit être au statut « relu » ; « à relire » et « bloqué » ne s'affichent jamais. proof : référence vérifiable (test:<nom>, inv:<INV>, file:<chemin depuis la racine du dépôt>, page:<page du site de doc>, decision:<D-n>). tasks : tâches dont la livraison conditionne la phrase (la porte du GO, `pnpm check:landing-go`, refuse le GO tant qu'une preuve nommée n'est pas un vrai test ou qu'une tâche liée manque). Relecture : `reviewer` dit qui a relu l'entrée au statut « relu » : « agent » (l'agent de 4.11 a vérifié chaque phrase contre le code et la doc) ou « human » (relecture humaine, 22b § 6). La porte du GO bloque tant qu'une entrée affichée n'est pas « human » ; seul un humain change ce champ, après sa relecture.",
   "version": 1,
   "claims": [
     {
@@ -11,6 +11,7 @@
       ],
       "reviewed": "2026-10-02",
       "status": "relu",
+      "reviewer": "agent",
       "surfaces": [
         "landing"
       ],
@@ -25,6 +26,7 @@
       ],
       "reviewed": "2026-10-02",
       "status": "relu",
+      "reviewer": "agent",
       "surfaces": [
         "landing"
       ]
@@ -40,6 +42,7 @@
       ],
       "reviewed": "2026-10-02",
       "status": "relu",
+      "reviewer": "agent",
       "tasks": [
         "2.3",
         "2.12"
@@ -58,6 +61,7 @@
       ],
       "reviewed": "2026-10-02",
       "status": "relu",
+      "reviewer": "agent",
       "surfaces": [
         "landing"
       ]
@@ -72,6 +76,7 @@
       ],
       "reviewed": "2026-10-02",
       "status": "relu",
+      "reviewer": "agent",
       "surfaces": [
         "landing"
       ]
@@ -85,6 +90,7 @@
       ],
       "reviewed": "2026-10-02",
       "status": "relu",
+      "reviewer": "agent",
       "surfaces": [
         "landing"
       ]
@@ -99,6 +105,7 @@
       ],
       "reviewed": "2026-10-02",
       "status": "relu",
+      "reviewer": "agent",
       "surfaces": [
         "landing"
       ]
@@ -112,6 +119,7 @@
       ],
       "reviewed": "2026-10-02",
       "status": "relu",
+      "reviewer": "agent",
       "surfaces": [
         "landing"
       ],
@@ -128,6 +136,7 @@
       ],
       "reviewed": "2026-10-02",
       "status": "relu",
+      "reviewer": "agent",
       "surfaces": [
         "landing"
       ]
@@ -141,6 +150,7 @@
       ],
       "reviewed": "2026-10-02",
       "status": "relu",
+      "reviewer": "agent",
       "surfaces": [
         "landing"
       ]
@@ -155,6 +165,7 @@
       ],
       "reviewed": "2026-10-02",
       "status": "relu",
+      "reviewer": "agent",
       "tasks": [
         "4.9"
       ],
@@ -171,6 +182,7 @@
       ],
       "reviewed": "2026-10-02",
       "status": "relu",
+      "reviewer": "agent",
       "surfaces": [
         "landing"
       ]
@@ -185,6 +197,7 @@
       ],
       "reviewed": "2026-10-02",
       "status": "relu",
+      "reviewer": "agent",
       "surfaces": [
         "landing"
       ]
@@ -198,6 +211,7 @@
       ],
       "reviewed": "2026-10-02",
       "status": "relu",
+      "reviewer": "agent",
       "tasks": [
         "3.2"
       ],
@@ -216,6 +230,7 @@
       ],
       "reviewed": "2026-10-02",
       "status": "relu",
+      "reviewer": "agent",
       "tasks": [
         "2.3"
       ],
@@ -232,6 +247,7 @@
       ],
       "reviewed": "2026-10-02",
       "status": "relu",
+      "reviewer": "agent",
       "tasks": [
         "3.1"
       ],
@@ -249,6 +265,7 @@
       ],
       "reviewed": "2026-10-02",
       "status": "relu",
+      "reviewer": "agent",
       "surfaces": [
         "landing"
       ]
@@ -262,6 +279,7 @@
       ],
       "reviewed": "2026-10-02",
       "status": "relu",
+      "reviewer": "agent",
       "tasks": [
         "2.10"
       ],
@@ -279,6 +297,7 @@
       ],
       "reviewed": "2026-10-02",
       "status": "relu",
+      "reviewer": "agent",
       "surfaces": [
         "landing"
       ]
@@ -294,6 +313,7 @@
       ],
       "reviewed": "2026-10-02",
       "status": "relu",
+      "reviewer": "agent",
       "surfaces": [
         "landing"
       ]
@@ -308,6 +328,7 @@
       ],
       "reviewed": "2026-10-02",
       "status": "relu",
+      "reviewer": "agent",
       "tasks": [
         "2.4",
         "2.10"
@@ -326,6 +347,7 @@
       ],
       "reviewed": "2026-10-02",
       "status": "relu",
+      "reviewer": "agent",
       "tasks": [
         "2.12"
       ],
@@ -342,6 +364,7 @@
       ],
       "reviewed": "2026-10-02",
       "status": "relu",
+      "reviewer": "agent",
       "surfaces": [
         "landing"
       ]
@@ -356,6 +379,7 @@
       ],
       "reviewed": "2026-10-02",
       "status": "relu",
+      "reviewer": "agent",
       "surfaces": [
         "landing"
       ]
@@ -369,6 +393,7 @@
       ],
       "reviewed": "2026-10-02",
       "status": "relu",
+      "reviewer": "agent",
       "surfaces": [
         "landing"
       ]
@@ -383,6 +408,7 @@
       ],
       "reviewed": "2026-10-02",
       "status": "relu",
+      "reviewer": "agent",
       "surfaces": [
         "landing"
       ]
@@ -396,6 +422,7 @@
       ],
       "reviewed": "2026-10-02",
       "status": "relu",
+      "reviewer": "agent",
       "tasks": [
         "3.2"
       ],
@@ -412,6 +439,7 @@
       ],
       "reviewed": "2026-10-02",
       "status": "relu",
+      "reviewer": "agent",
       "tasks": [
         "3.11"
       ],
@@ -428,6 +456,7 @@
       ],
       "reviewed": "2026-10-02",
       "status": "relu",
+      "reviewer": "agent",
       "surfaces": [
         "landing"
       ]
@@ -444,6 +473,7 @@
       ],
       "reviewed": "2026-10-02",
       "status": "relu",
+      "reviewer": "agent",
       "tasks": [
         "4.10"
       ],
@@ -462,6 +492,7 @@
       ],
       "reviewed": "2026-10-02",
       "status": "relu",
+      "reviewer": "agent",
       "surfaces": [
         "landing"
       ]
@@ -475,6 +506,7 @@
       ],
       "reviewed": "2026-10-02",
       "status": "relu",
+      "reviewer": "agent",
       "surfaces": [
         "landing"
       ]
@@ -489,6 +521,7 @@
       ],
       "reviewed": "2026-10-02",
       "status": "relu",
+      "reviewer": "agent",
       "surfaces": [
         "landing"
       ]
@@ -502,6 +535,7 @@
       ],
       "reviewed": "2026-10-02",
       "status": "relu",
+      "reviewer": "agent",
       "surfaces": [
         "landing"
       ]
@@ -515,23 +549,10 @@
       ],
       "reviewed": "2026-10-02",
       "status": "relu",
+      "reviewer": "agent",
       "surfaces": [
         "landing"
       ]
-    },
-    {
-      "id": "faq.legal",
-      "fr": "SYM ne te dispense pas de lire les conditions du site visé ni de respecter la loi. Le détail est dans la page Usage responsable.",
-      "en": "SYM doesn't exempt you from reading the target site's terms or from following the law. The details are on the Responsible use page.",
-      "proof": [
-        "page:explications/usage-responsable"
-      ],
-      "reviewed": "2026-10-02",
-      "status": "relu",
-      "surfaces": [
-        "landing"
-      ],
-      "note": "Formule de 22 § 4 (allégations juridiques) : jamais « légal », jamais « conforme RGPD »."
     },
     {
       "id": "faq.agpl",
@@ -542,6 +563,7 @@
       ],
       "reviewed": "2026-10-02",
       "status": "relu",
+      "reviewer": "agent",
       "surfaces": [
         "landing"
       ]
@@ -555,6 +577,7 @@
       ],
       "reviewed": "2026-10-02",
       "status": "relu",
+      "reviewer": "agent",
       "tasks": [
         "4.3"
       ],
@@ -562,6 +585,27 @@
         "landing"
       ],
       "note": "Transparence (u7 D11, 22 § 2.5). « audité » devient vrai à la livraison de 4.3 : le GO refuse tant que 4.3 manque."
+    },
+    {
+      "id": "faq.contribute",
+      "fr": "Oui, à partir de la première release : c'est là que s'ouvrent les contributions externes. Le guide de contribution donne les règles (signature DCO, CLA pour le cœur).",
+      "en": "Yes, from the first release: that is when outside contributions open. The contributing guide sets out the rules (DCO sign-off, CLA for the core).",
+      "proof": [
+        "file:runtime/CONTRIBUTING.md",
+        "file:runtime/DCO.md",
+        "file:runtime/CLA.md"
+      ],
+      "reviewed": "2026-10-02",
+      "status": "relu",
+      "reviewer": "agent",
+      "tasks": [
+        "4.5",
+        "4.7"
+      ],
+      "surfaces": [
+        "landing"
+      ],
+      "note": "FAQ « Je peux contribuer ? » (22 § 2.7). CONTRIBUTING.md : contributions externes fermées jusqu'à la première release (4.5) ; CLA provisoire (4.7)."
     },
     {
       "id": "compare.row.hosting",
@@ -572,6 +616,7 @@
       ],
       "reviewed": "2026-10-02",
       "status": "à relire",
+      "reviewer": "agent",
       "surfaces": [
         "landing-compare"
       ],
@@ -586,6 +631,7 @@
       ],
       "reviewed": "2026-10-02",
       "status": "à relire",
+      "reviewer": "agent",
       "surfaces": [
         "landing-compare"
       ]
@@ -599,6 +645,7 @@
       ],
       "reviewed": "2026-10-02",
       "status": "à relire",
+      "reviewer": "agent",
       "surfaces": [
         "landing-compare"
       ]
@@ -612,6 +659,7 @@
       ],
       "reviewed": "2026-10-02",
       "status": "à relire",
+      "reviewer": "agent",
       "surfaces": [
         "landing-compare"
       ]
@@ -625,6 +673,7 @@
       ],
       "reviewed": "2026-10-02",
       "status": "à relire",
+      "reviewer": "agent",
       "surfaces": [
         "landing-compare"
       ]
@@ -638,6 +687,7 @@
       ],
       "reviewed": "2026-10-02",
       "status": "à relire",
+      "reviewer": "agent",
       "surfaces": [
         "landing-compare"
       ]
@@ -651,6 +701,7 @@
       ],
       "reviewed": "2026-10-02",
       "status": "à relire",
+      "reviewer": "agent",
       "surfaces": [
         "landing-compare"
       ]
@@ -664,6 +715,7 @@
       ],
       "reviewed": "2026-10-02",
       "status": "à relire",
+      "reviewer": "agent",
       "surfaces": [
         "landing-compare"
       ]
@@ -677,6 +729,7 @@
       ],
       "reviewed": "2026-10-02",
       "status": "à relire",
+      "reviewer": "agent",
       "surfaces": [
         "landing-compare"
       ]
@@ -691,6 +744,7 @@
       ],
       "reviewed": "2026-10-02",
       "status": "à relire",
+      "reviewer": "agent",
       "surfaces": [
         "landing-compare"
       ]
@@ -704,6 +758,7 @@
       ],
       "reviewed": "2026-10-02",
       "status": "à relire",
+      "reviewer": "agent",
       "surfaces": [
         "landing-compare"
       ]
@@ -717,6 +772,7 @@
       ],
       "reviewed": "2026-10-02",
       "status": "à relire",
+      "reviewer": "agent",
       "tasks": [
         "2.12"
       ],
@@ -734,6 +790,7 @@
       ],
       "reviewed": "2026-10-02",
       "status": "relu",
+      "reviewer": "agent",
       "surfaces": [
         "responsible-use"
       ]
@@ -747,6 +804,7 @@
       ],
       "reviewed": "2026-10-02",
       "status": "relu",
+      "reviewer": "agent",
       "surfaces": [
         "responsible-use"
       ]
@@ -763,6 +821,7 @@
       ],
       "reviewed": "2026-10-02",
       "status": "bloqué",
+      "reviewer": "agent",
       "surfaces": [
         "responsible-use"
       ],
@@ -778,6 +837,7 @@
       ],
       "reviewed": "2026-10-02",
       "status": "relu",
+      "reviewer": "agent",
       "surfaces": [
         "responsible-use"
       ]
@@ -792,6 +852,7 @@
       ],
       "reviewed": "2026-10-02",
       "status": "relu",
+      "reviewer": "agent",
       "tasks": [
         "4.10"
       ],

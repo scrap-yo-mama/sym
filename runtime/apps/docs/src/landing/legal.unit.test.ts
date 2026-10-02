@@ -5,7 +5,7 @@
 // stockage local du thème et de la langue. Les éléments à fournir (éditeur, directeur de publication) restent des champs marqués.
 import { readFileSync } from 'node:fs';
 import { describe, expect, test } from 'vitest';
-import { HOME_PATHS, LEGAL_PATHS, LEGAL_REFERENCE_LANGUAGE } from './href.ts';
+import { HOME_PATHS, LEGAL_PATHS, LEGAL_REFERENCE_LANGUAGE, rewriteRepoHref } from './href.ts';
 import { LANGS, type Lang, type LegalPage } from './types.ts';
 
 const source = (lang: Lang, page: LegalPage): string => readFileSync(new URL(`../../content/${LEGAL_PATHS[lang][page]}.md`, import.meta.url), 'utf8');
@@ -66,17 +66,25 @@ describe('pages juridiques de la landing : registre, mentions, éléments à fou
     const fr = source('fr', 'privacy');
     expect(fr).toMatch(/stockage local/);
     expect(fr).toMatch(/thème/);
-    expect(fr).toMatch(/langue/);
+    // La langue : dit explicitement, stockée ou non (un simple mot « langue » ne suffit pas).
+    expect(fr).toMatch(/Ta langue (?:n'est pas enregistrée|est gardée dans (?:ce|le) stockage local)/);
     expect(fr).toMatch(/seulement après que tu as fait ce choix|qu'après que tu as fait ce choix/);
     expect(fr).toMatch(/aucun identifiant/);
     expect(fr).toMatch(/article 5, paragraphe 3/);
     const en = source('en', 'privacy');
     expect(en).toMatch(/local storage/);
     expect(en).toMatch(/theme/);
-    expect(en).toMatch(/language/);
+    expect(en).toMatch(/Your language (?:is not stored|is kept in (?:this|the) local storage)/);
     expect(en).toMatch(/only after you have made the choice/);
     expect(en).toMatch(/no identifier/);
     expect(en).toMatch(/article 5\(3\) of the ePrivacy directive/);
+  });
+
+  test('la Confidentialité couvre aussi les pages de documentation du même site, dont le sélecteur de thème écrit sa valeur par défaut dès l\'ouverture', () => {
+    expect(source('fr', 'privacy')).toMatch(/pages de documentation[^.]*dès (?:leur |l'|son )ouverture/);
+    expect(source('fr', 'privacy')).toMatch(/« auto »/);
+    expect(source('en', 'privacy')).toMatch(/documentation pages[^.]*as soon as (?:they open|one opens)/);
+    expect(source('en', 'privacy')).toMatch(/“auto”/);
   });
 
   test('la Confidentialité décrit les journaux de l\'hébergeur tels qu\'ils sont : GitHub Pages, adresse IP, aucun journal reçu', () => {
@@ -91,6 +99,18 @@ describe('pages juridiques de la landing : registre, mentions, éléments à fou
     expect(source('fr', 'notice')).toMatch(/GitHub, Inc\./);
     expect(source('fr', 'notice')).toMatch(/\[À compléter avant la mise en ligne : nom, forme juridique, adresse et e-mail de l'éditeur\.\]/);
     expect(source('en', 'notice')).toMatch(/\[To be completed before going live: name, legal form, address and e-mail of the publisher\.\]/);
+  });
+
+  test('les mentions légales renvoient vers LICENSE et TRADEMARK.md du dépôt public (22 § 2.11), liens dérivés de PUBLIC_REPOSITORY', () => {
+    for (const lang of LANGS) {
+      const text = source(lang, 'notice');
+      expect(text, lang).toContain('](repo:/blob/main/LICENSE)');
+      expect(text, lang).toContain('](repo:/blob/main/runtime/TRADEMARK.md)');
+      expect(text, lang).not.toMatch(/https:\/\/github\.com\/[^/)]+\/[^/)]+\/blob/);
+    }
+    expect(rewriteRepoHref('repo:/blob/main/LICENSE', 'org/depot')).toBe('https://github.com/org/depot/blob/main/LICENSE');
+    expect(rewriteRepoHref('https://docs.github.com/x', 'org/depot')).toBe('https://docs.github.com/x');
+    expect(rewriteRepoHref('/legal/privacy', 'org/depot')).toBe('/legal/privacy');
   });
 
   test('chaque page juridique renvoie vers Usage responsable et Hors périmètre ou vers les mentions, et vit sous son dossier de langue', () => {

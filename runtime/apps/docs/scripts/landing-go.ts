@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { goBlockers, isRealTestIn } from '../src/landing/checks.ts';
 import { loadClaims } from '../src/landing/claims.ts';
 import { buildLanding } from '../src/landing/content.ts';
-import { LEGAL_PATHS } from '../src/landing/href.ts';
+import { LEGAL_PATHS, LEGAL_REFERENCE_LANGUAGE } from '../src/landing/href.ts';
 import { buildInputs, readStars, siteEnv } from '../src/landing/site.ts';
 import { LANGS } from '../src/landing/types.ts';
 
@@ -28,7 +28,7 @@ const inputs = buildInputs(siteEnv(process.env, '/sym/'));
 const displayed = [...new Set(LANGS.flatMap((lang) => buildLanding(lang, inputs).claims))];
 const corpus = testFiles(runtimeDir);
 const legalSources = LANGS.flatMap((lang) => Object.values(LEGAL_PATHS[lang])).map((path) => ({ file: `content/${path}.md`, text: readFileSync(join(docsDir, 'content', `${path}.md`), 'utf8') }));
-const { blockers, manual } = goBlockers({ registry: loadClaims(), displayed, legalSources, isRealTest: (name) => isRealTestIn(corpus, name), version: readStars().version });
+const { blockers, manual } = goBlockers({ registry: loadClaims(), displayed, legalSources, isRealTest: (name) => isRealTestIn(corpus, name), version: readStars().version, legalReferenceLanguage: LEGAL_REFERENCE_LANGUAGE });
 
 console.log(`Porte du GO de la landing : ${blockers.length} bloquant(s), ${manual.length} vérification(s) humaine(s).`);
 for (const blocker of blockers) console.log(`  BLOQUANT  ${blocker}`);

@@ -12,7 +12,7 @@ import { hardcodedColors, sheetViolations } from '@runtime/ui/testing/color-rule
 import { parseQuickstart } from '../quickstart.ts';
 import { loadClaims, normalizeText, resolveClaim, type ClaimsRegistry } from './claims.ts';
 import { buildLanding, startCommand, STARS_THRESHOLD, type BuildInputs } from './content.ts';
-import { hrefOf, internalPath } from './href.ts';
+import { hrefOf, internalPath, isLandingPathname } from './href.ts';
 import { pagesBase, pagesOrigin, publicRepository, renderDeployUrl } from './identity.ts';
 import { findTerms, loadBrandExceptions, loadBrands, loadLexicon, normalizeForLexicon } from './lexicon.ts';
 import { buildInputs, readStars, siteEnv } from './site.ts';
@@ -88,6 +88,24 @@ describe('assert_landing_i18n_parity : une structure, deux langues', () => {
       expect(entries.length).toBeGreaterThanOrEqual(4);
       expect(entries.length).toBeLessThanOrEqual(10);
       for (const entry of entries) expect(entry.answer.length, entry.question).toBeLessThan(260);
+    }
+  });
+
+  test('FAQ : le socle de 22 § 2.7 et « Je peux contribuer ? », chaque réponse au registre', () => {
+    const claims = landing('fr').claims;
+    for (const id of ['faq.free', 'faq.data', 'faq.anysite', 'faq.ready', 'faq.contribute']) expect(claims, id).toContain(id);
+    const questions = landing('fr').page.faq.entries.map((entry) => entry.question);
+    expect(questions).toContain('Je peux contribuer ?');
+    expect(landing('en').page.faq.entries.map((entry) => entry.question)).toContain('Can I contribute?');
+  });
+});
+
+describe('assert_landing_claims_sourced : #preuves renvoie vers une preuve vérifiable', () => {
+  test('« 0 requête tierce » renvoie vers le résultat daté du contrôle de production (landing-production.yml), pas vers le code du test', () => {
+    for (const lang of LANGS) {
+      const item = landing(lang).page.proof.items.find((entry) => entry.text === resolveClaim(registry, 'page.no-third-party', lang).replace(/ ([:;?!])/g, ' $1'));
+      expect(item?.link, lang).toBeDefined();
+      expect(item?.link?.href).toEqual({ to: 'external', url: 'https://github.com/scrap-yo-mama/sym/actions/workflows/landing-production.yml' });
     }
   });
 });
@@ -302,6 +320,13 @@ describe('identité et liens : une seule source, PUBLIC_REPOSITORY', () => {
       expect(install.cards.some((card) => card.cta.style === 'primary')).toBe(false);
       expect(hero.ctas[0]?.href).toEqual({ to: 'external', url: 'https://render.com/deploy?repo=https://github.com/scrap-yo-mama/sym' });
     }
+  });
+
+  test('doc et landing ne partagent pas une navigation du routeur : le thème reconnaît les pages de la landing sous le chemin de base', () => {
+    for (const path of ['/sym/', '/sym', '/sym/index.html', '/sym/fr/', '/sym/fr', '/sym/fr/index.html', '/sym/legal/privacy', '/sym/legal/legal-notice.html', '/sym/fr/legal/confidentialite', '/sym/fr/legal/mentions-legales']) expect(isLandingPathname(path, '/sym/'), path).toBe(true);
+    for (const path of ['/sym/tutoriels/quickstart', '/sym/explications/usage-responsable.html', '/sym/404.html', '/autre/', '/', '/sym/fr/legal/']) expect(isLandingPathname(path, '/sym/'), path).toBe(false);
+    expect(isLandingPathname('/', '/')).toBe(true);
+    expect(isLandingPathname('/guides/render', '/')).toBe(false);
   });
 
   test('les liens internes se résolvent avec le chemin de base ; une ancre reste une ancre', () => {

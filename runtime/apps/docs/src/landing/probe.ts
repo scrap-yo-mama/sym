@@ -21,6 +21,12 @@ export type PageProbe = {
   setCookieHeaders: string[];
   /** Écritures de stockage local ou de session, avec la clé : doivent être vides avant une action explicite. */
   storageWritesBeforeAction: string[];
+  /**
+   * Ce que le navigateur garde après le chargement, avant le premier geste, quelle que soit la façon d'écrire : clés du stockage local
+   * et de session (une affectation directe `localStorage.k = v` échappe à setItem), bases IndexedDB, caches de l'API Cache,
+   * service workers enregistrés. Doit être vide.
+   */
+  storageAfterLoad: string[];
   cspViolations: string[];
   consoleErrors: string[];
   /** Balise CSP vue dans le DOM, pour le contrôle de forme. */
@@ -52,6 +58,24 @@ async function instrument(context: BrowserContext, sinks: { storage: string[]; v
       const e = event as unknown as { violatedDirective: string; blockedURI: string; sample: string };
       scope.__zzViolation?.(`${e.violatedDirective} : ${e.blockedURI || e.sample || 'inline'}`);
     });
+  });
+}
+
+/** Inventaire du stockage de la page, toutes API confondues (stockage local et de session, IndexedDB, Cache, service workers). */
+export async function snapshotStorage(page: Page): Promise<string[]> {
+  return page.evaluate(async () => {
+    const found: string[] = [];
+    for (const name of ['localStorage', 'sessionStorage'] as const) {
+      try {
+        for (const key of Object.keys(window[name])) found.push(`${name}.${key}`);
+      } catch {
+        found.push(`${name} : illisible`);
+      }
+    }
+    if (typeof indexedDB !== 'undefined' && typeof indexedDB.databases === 'function') for (const db of await indexedDB.databases()) found.push(`indexedDB:${db.name ?? '?'}`);
+    if (typeof caches !== 'undefined') for (const key of await caches.keys()) found.push(`caches:${key}`);
+    if (typeof navigator.serviceWorker !== 'undefined') for (const registration of await navigator.serviceWorker.getRegistrations()) found.push(`serviceWorker:${registration.scope}`);
+    return found;
   });
 }
 
@@ -102,6 +126,7 @@ export async function probePages(browser: Browser, urls: readonly string[], opti
     const html = (await response?.text()) ?? '';
     // Aucune écriture de stockage n'a eu lieu avant le premier geste : on la relève ici, puis on joue le parcours.
     const storageWritesBeforeAction = [...sinks.storage];
+    const storageAfterLoad = await snapshotStorage(page);
     const loaded = {
       documentCookie: await page.evaluate(() => document.cookie),
       formCount: await page.locator('form, input').count(),
@@ -118,6 +143,7 @@ export async function probePages(browser: Browser, urls: readonly string[], opti
       contextCookies: (await context.cookies()).map((cookie) => cookie.name),
       setCookieHeaders: setCookies,
       storageWritesBeforeAction,
+      storageAfterLoad,
       cspViolations: sinks.violations,
       consoleErrors,
       cspMeta: loaded.cspMeta,

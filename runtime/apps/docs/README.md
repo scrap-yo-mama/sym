@@ -17,14 +17,14 @@ L'accueil du site est la **landing** : anglais à `/`, français à `/fr/` (22 �
 
 | Commande (depuis `runtime/`) | Effet |
 |---|---|
-| `pnpm --filter @runtime/docs test:e2e` | construit la **préproduction** (`DOCS_BASE=/sym/`, sortie `dist-preprod`), la sert en local comme GitHub Pages (sans en-têtes, CSP en balise meta) et joue les gates Chromium : cookie, requêtes tierces, traceurs, CSP, axe en clair et en sombre, mouvement réduit, budgets de poids |
+| `pnpm --filter @runtime/docs test:e2e` | construit la **préproduction** (`DOCS_BASE=/sym/`, sortie `dist-preprod`), la sert en local comme GitHub Pages (sans en-têtes, CSP en balise meta) et joue les gates Chromium : cookie, requêtes tierces, traceurs, CSP (y compris en venant de la doc), axe en clair et en sombre, mouvement réduit, budgets de poids et LCP sous 4G lente et processeur ralenti, scores Lighthouse mobile |
 | `pnpm --filter @runtime/docs landing:probe --preprod` | les mêmes contrôles de confidentialité, avec résultat daté ; avec une adresse à la place de `--preprod`, la sonde lit la production (hebdomadaire après le GO) |
-| `pnpm check:landing-go` | porte du GO : rouge tant qu'une preuve du registre n'est pas un vrai test, qu'un champ juridique est à fournir ou qu'une tâche liée manque |
-| `pnpm --filter @runtime/docs landing:links` | liens externes en 200 (seule commande qui ouvre des connexions sortantes) |
-| `pnpm --filter @runtime/docs landing:stars` | écrit étoiles et version dans `landing/stars.json` (API publique de GitHub) |
+| `pnpm check:landing-go` | porte du GO : rouge tant qu'une preuve du registre n'est pas un vrai test, qu'un champ juridique est à fournir, qu'une allégation affichée n'est pas relue par un humain (`reviewer: "human"`) ou qu'aucune version n'est publiée ; liste aussi ce qu'un humain confirme (tâches liées, langue de référence des pages juridiques, résultat daté de la production) |
+| `pnpm --filter @runtime/docs landing:links` | liens externes en 200 (ouvre des connexions sortantes : lancée par pages.yml avant le déploiement, release.yml et landing-production.yml, jamais en PR) |
+| `pnpm --filter @runtime/docs landing:stars` | écrit étoiles et version dans `landing/stars.json` (API publique de GitHub ; lancée par pages.yml avant la porte du GO) ; le fichier est validé à chaque lecture |
 | `pnpm --filter @runtime/docs landing:og` | régénère les images sociales 1200×630 (`content/public/og/`) |
 
-- **Contenu** : `src/landing/content.ts` (une fonction pour les deux langues, chaque texte en paire fr/en) ; les phrases factuelles viennent de `.github/claims.json` (registre des allégations : statut, preuve, date). Le thème (`content/.vitepress/theme/landing/`) rend ce contenu avec les jetons de `packages/ui`, sans attribut `style`.
+- **Contenu** : `src/landing/content.ts` (une fonction pour les deux langues, chaque texte en paire fr/en) ; les phrases factuelles viennent de `.github/claims.json` (registre des allégations : statut, relecteur `agent` ou `human`, preuve, date). Le thème (`content/.vitepress/theme/landing/`) rend ce contenu avec les jetons de `packages/ui`, sans attribut `style`.
 - **CSP** : balise meta calculée à la construction (`src/landing/csp.ts`), empreintes sha256 des scripts en ligne, jamais écrites à la main ; `dist/_headers` (repli Cloudflare Pages) porte la même politique plus `frame-ancestors`. Les pages de doc n'ont pas cette CSP (leur recherche charge du WebAssembly).
 - **Variables de construction** : `PUBLIC_REPOSITORY` (propriétaire/dépôt, source unique de l'identité), `DOCS_BASE`, `DOCS_SITE_URL` (défaut : `https://<propriétaire>.github.io`), `DOCS_OUT_DIR` (dossier de sortie sous `apps/docs`), `LANDING_COMPARE=1` (tableau par catégories : éteint tant qu'un avocat ne l'a pas relu).
 - Lexique (`landing/lexicon/`), budgets (`scripts/vitrine/budgets.json`) et licences des ressources (`ASSETS-LICENSES.md`) : voir les fichiers.

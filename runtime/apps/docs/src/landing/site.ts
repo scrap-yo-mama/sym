@@ -4,6 +4,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { parseQuickstart } from '../quickstart.ts';
+import { parseStarsFile, type StarsFile } from './checks.ts';
 import { loadClaims } from './claims.ts';
 import { buildLanding, buildLegalChrome, type BuildInputs } from './content.ts';
 import { withCsp } from './csp.ts';
@@ -28,12 +29,10 @@ export function pageKind(relativePath: string): PageKind | undefined {
   return undefined;
 }
 
-export type StarsFile = { stars: number; version: string | null; updatedAt: string | null };
-
-/** Étoiles et version écrites au build (landing/stars.json) : lues, jamais demandées au navigateur (assert_landing_stars_build_time). */
+/** Étoiles et version écrites au build (landing/stars.json) : lues et validées, jamais demandées au navigateur (assert_landing_stars_build_time). */
 export function readStars(url: URL = STARS_FILE): StarsFile {
   if (!existsSync(url)) return { stars: 0, version: null, updatedAt: null };
-  return JSON.parse(readFileSync(url, 'utf8')) as StarsFile;
+  return parseStarsFile(JSON.parse(readFileSync(url, 'utf8')) as unknown);
 }
 
 export type SiteEnv = { base: string; siteUrl: string; repository: string; compare: boolean };

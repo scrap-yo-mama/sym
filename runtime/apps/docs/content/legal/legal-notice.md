@@ -28,7 +28,7 @@ Write to scrapyomama@gmail.com. To report a vulnerability, use the private repor
 
 ## Licenses and trademark
 
-The software is licensed under the AGPL-3.0 for the core and the MIT license for the client and the schemas. The full texts are in the repository, word for word. The names “Scrapyomama” and “SYM” are covered by the trademark policy, also in the repository.
+The software is licensed under the AGPL-3.0 for the core and the MIT license for the client and the schemas. The full texts are in the repository, word for word: the [AGPL-3.0 license](repo:/blob/main/LICENSE). The names “Scrapyomama” and “SYM” are covered by the [trademark policy](repo:/blob/main/runtime/TRADEMARK.md), also in the repository.
 
 ## Responsible use
 

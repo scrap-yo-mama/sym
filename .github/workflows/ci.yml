@@ -92,8 +92,10 @@ jobs:
     # serveur statique local qui reproduit GitHub Pages (chemin de base /sym/, aucun en-tête, CSP en balise meta). Rien n'est publié ni
     # déployé : GitHub Pages n'est touché qu'au GO. Les tests de contenu et du site construit (assert_landing_*) tournent aussi dans le job
     # docs ; ici le volet Chromium : cookie, requêtes tierces, traceurs, CSP vue par le navigateur, axe, mouvement, budgets de poids.
-    # Le volet « liens externes » (pnpm --filter @runtime/docs landing:links) ouvre des connexions sortantes : il tourne à la release
-    # et chaque semaine après la mise en ligne (landing-production.yml), jamais ici.
+    # Le volet « liens externes en 200 » de assert_landing_links_resolve (pnpm --filter @runtime/docs landing:links) ouvre des connexions
+    # sortantes vers le dépôt public : il ne tourne pas ici (une PR ne dépend pas de l'état du dépôt public), mais avant le déploiement
+    # dans pages.yml (mise en ligne, GO), dans release.yml avant toute publication, et chaque semaine après (landing-production.yml).
+    # Le volet interne (0 lien mort, fichier et ancre) tourne ici et dans le job docs.
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -109,7 +111,7 @@ jobs:
       - run: pnpm build
       - name: Chromium de Playwright
         run: pnpm exec playwright install --with-deps chromium
-      - name: Landing, préproduction (build de production servi comme GitHub Pages) : gates Chromium
+      - name: Landing, préproduction (build de production servi comme GitHub Pages), gates Chromium
         run: pnpm --filter @runtime/docs test:e2e
       - name: Contrôles avant le GO (cookie, tiers, traceurs, CSP, formulaire) rejoués par la sonde, résultat daté archivé
         run: pnpm --filter @runtime/docs landing:probe --preprod --out ../../landing-probe-preprod.json

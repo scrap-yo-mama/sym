@@ -28,7 +28,7 @@ GitHub, Inc., 88 Colin P. Kelly Jr. Street, San Francisco, CA 94107, États-Unis
 
 ## Licences et marque
 
-Le logiciel est sous licence AGPL-3.0 pour le cœur et sous licence MIT pour le client et les schémas. Les textes complets sont dans le dépôt, mot pour mot. Les noms « Scrapyomama » et « SYM » relèvent de la politique de marque, qui est aussi dans le dépôt.
+Le logiciel est sous licence AGPL-3.0 pour le cœur et sous licence MIT pour le client et les schémas. Les textes complets sont dans le dépôt, mot pour mot : la [licence AGPL-3.0](repo:/blob/main/LICENSE). Les noms « Scrapyomama » et « SYM » relèvent de la [politique de marque](repo:/blob/main/runtime/TRADEMARK.md), qui est aussi dans le dépôt.
 
 ## Usage responsable
 

@@ -42,3 +42,22 @@ export function hrefOf(href: Href, base: string): string {
 
 /** Un lien vers une autre page du site se charge en entier (pas de navigation du routeur) : la balise CSP de la page d'arrivée s'applique. */
 export const isFullLoad = (href: Href): boolean => href.to !== 'anchor' && href.to !== 'external';
+
+/** Schéma des liens « vers le dépôt public » des pages Markdown (`[LICENSE](repo:/blob/main/LICENSE)`), résolus au build depuis PUBLIC_REPOSITORY. */
+const REPO_SCHEME = 'repo:';
+
+/** `repo:/chemin` → `https://github.com/<PUBLIC_REPOSITORY>/chemin` ; tout autre lien est rendu tel quel. */
+export const rewriteRepoHref = (href: string, repository: string): string => (href.startsWith(REPO_SCHEME) ? `https://github.com/${repository}${href.slice(REPO_SCHEME.length)}` : href);
+
+/**
+ * La page servie à `pathname` est-elle une page de la landing (accueil ou page juridique) ? Sert au routeur : passer de la doc à la
+ * landing (ou l'inverse) recharge la page en entier, pour que la balise CSP de la page d'arrivée s'applique et que le thème de la doc
+ * (useDark, qui écrit dans le stockage local dès son démarrage) ne vive jamais sur une page de la landing.
+ */
+export function isLandingPathname(pathname: string, base: string): boolean {
+  const prefix = base.endsWith('/') ? base : `${base}/`;
+  if (!pathname.startsWith(prefix) && `${pathname}/` !== prefix) return false;
+  const path = pathname.slice(prefix.length).replace(/\.html$/, '').replace(/(^|\/)index$/, '$1');
+  const landing = [...Object.values(HOME_PATHS), ...Object.values(LEGAL_PATHS).flatMap((pages) => Object.values(pages))];
+  return landing.includes(path) || landing.includes(`${path}/`);
+}

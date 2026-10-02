@@ -4,6 +4,7 @@
 // (défaut `/`) pour un hébergement dans un sous-chemin.
 import { defineConfig } from 'vitepress';
 import { PAGES, QUADRANTS } from '../../src/nav.ts';
+import { rewriteRepoHref } from '../../src/landing/href.ts';
 import { buildInputs, landingData, landingHead, pageKind, siteEnv, transformLandingHtml } from '../../src/landing/site.ts';
 import type { LandingData } from '../../src/landing/types.ts';
 import { normalizeBase, outDirName, SITE_SUMMARY, SITE_TITLE } from '../../src/site.ts';
@@ -50,6 +51,20 @@ export default defineConfig({
   lastUpdated: false,
   // Aucun lien mort toléré : la construction échoue (et le vérificateur de liens contrôle le site construit).
   ignoreDeadLinks: false,
+  // Liens `repo:/chemin` des pages Markdown (pages juridiques : LICENSE, TRADEMARK.md) : résolus vers le dépôt public (PUBLIC_REPOSITORY),
+  // jamais écrits en dur dans une page (22b § 1).
+  markdown: {
+    config(md) {
+      md.core.ruler.push('sym-repo-links', (state) => {
+        for (const token of state.tokens) {
+          for (const child of token.children ?? []) {
+            const href = child.type === 'link_open' ? child.attrGet('href') : null;
+            if (href) child.attrSet('href', rewriteRepoHref(href, site.repository));
+          }
+        }
+      });
+    },
+  },
   head: [['link', { rel: 'alternate', type: 'text/plain', href: `${base}llms.txt`, title: 'llms.txt' }]],
   // Accueil et pages juridiques : contenu, titre et description calculés au build (frontmatter), en-tête et pied propres.
   transformPageData(pageData) {

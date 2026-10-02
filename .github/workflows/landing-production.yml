@@ -2,8 +2,8 @@
 # l'adresse publique, liens externes en 200, résultat daté archivé (celui que cite « #preuves »). Échec = issue automatique.
 # Créé mais DÉSACTIVÉ : déclencheur manuel seul. Pour l'activer après la mise en ligne (⚠️ GO) : renseigner la variable de dépôt
 # LANDING_URL (adresse avec son chemin de base, ex. https://<organisation>.github.io/<dépôt>/) et ajouter le déclencheur `schedule`
-# ci-dessous. Avant le GO, les mêmes contrôles tournent sur la préproduction (job `vitrine` de ci.yml) ; l'archivage du trafic GitHub
-# (22 § 2.10) partagera ce déclencheur.
+# ci-dessous. Avant le GO, les mêmes contrôles tournent sur la préproduction (job `vitrine` de ci.yml, et pages.yml au moment de la
+# mise en ligne) ; l'archivage du trafic GitHub (22 § 2.10) a son propre workflow, traffic-archive.yml, au même déclencheur.
 name: landing-production
 
 on:
@@ -26,7 +26,7 @@ jobs:
       issues: write
     env:
       LANDING_URL: ${{ vars.LANDING_URL }}
-      GH_TOKEN: ${{ github.token }}
+      PUBLIC_REPOSITORY: ${{ vars.PUBLIC_REPOSITORY }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -38,13 +38,16 @@ jobs:
         with:
           node-version-file: runtime/.node-version
       - run: pnpm install --frozen-lockfile
+      - run: pnpm build
       - name: Chromium de Playwright
         run: pnpm exec playwright install --with-deps chromium
       - name: Sonde de production (cookie, tiers, traceurs, CSP, formulaire)
         id: probe
         run: pnpm --filter @runtime/docs landing:probe "$LANDING_URL" --out ../../landing-probe-production.json
-      - name: Liens externes (200, hors exceptions documentées)
-        run: pnpm --filter @runtime/docs landing:links
+      - name: Liens externes du site construit sur ce commit (200, hors exceptions documentées)
+        run: |
+          pnpm docs:build
+          pnpm --filter @runtime/docs landing:links
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:
@@ -54,4 +57,8 @@ jobs:
           retention-days: 90
       - name: Issue automatique en cas d'échec
         if: failure()
-        run: gh issue create --repo "$GITHUB_REPOSITORY" --title "Contrôle hebdomadaire de la landing en échec" --body "Le contrôle de production de la landing a échoué : voir l'exécution $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+        # Le jeton d'écriture d'issues n'est visible que de cette étape : ni l'installation, ni Chromium, ni la sonde ne le voient.
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh issue create --repo "$GITHUB_REPOSITORY" --title "Contrôle hebdomadaire de la landing en échec" --body "Le contrôle de production de la landing a échoué : voir l'exécution $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"

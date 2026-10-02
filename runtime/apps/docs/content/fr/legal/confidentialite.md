@@ -20,7 +20,7 @@ Rien. Cette page ne dépose aucun cookie, n'exécute aucune analyse d'audience, 
 
 ## Ce que ton navigateur garde
 
-Si tu choisis un thème clair ou sombre, ton navigateur garde ce choix dans son stockage local. Cela n'arrive qu'après que tu as fait ce choix, n'utilise aucun identifiant et n'est envoyé nulle part. Ta langue n'est pas enregistrée : tu la choisis avec le lien de langue. Reste à confirmer par un avocat si ce stockage relève de l'article 5, paragraphe 3, de la directive ePrivacy.
+Si tu choisis un thème clair ou sombre, ton navigateur garde ce choix dans son stockage local. Cela n'arrive qu'après que tu as fait ce choix, n'utilise aucun identifiant et n'est envoyé nulle part. Ta langue n'est pas enregistrée : tu la choisis avec le lien de langue. Les pages de documentation du même site ont leur propre sélecteur de thème : il garde ta préférence dans ce même stockage local dès leur ouverture, avec la valeur « auto » (le thème de ton système) tant que tu n'as rien choisi, sans identifiant et sans rien envoyer. Reste à confirmer par un avocat si ce stockage relève de l'article 5, paragraphe 3, de la directive ePrivacy.
 
 ## Ce que l'hébergeur enregistre
 

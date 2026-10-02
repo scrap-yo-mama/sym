@@ -3,6 +3,7 @@
 // `L(en, fr)`, de sorte que les deux pages ont la même structure, les mêmes ancres et les mêmes liens par construction
 // (assert_landing_i18n_parity). Les phrases factuelles ne sont pas écrites ici : `claim(id)` les lit dans `.github/claims.json`.
 // Référence de contenu : la maquette de landing validée (D-46) ; l'alignement final sur le guide de voix est fait par 3.19.
+import { isReleaseVersion } from './checks.ts';
 import { resolveClaim, type ClaimsRegistry } from './claims.ts';
 import { renderDeployUrl, repositoryUrl } from './identity.ts';
 import type { Card, Chrome, Cta, DemoMessage, FaqEntry, Href, Lang, LandingData, LandingMeta, LandingPage, LegalPage, Link } from './types.ts';
@@ -42,6 +43,8 @@ const external = (url: string): Href => ({ to: 'external', url });
 /** Commande de démarrage : le clone, puis les deux blocs du tutoriel que la CI rejoue (4.8), octet pour octet. */
 export function startCommand(inputs: BuildInputs): string {
   const url = `${repositoryUrl(inputs.repository)}.git`;
+  // Seconde ligne de défense (la première : parseStars et readStars) : rien d'autre qu'une version X.Y.Z n'entre dans la commande à copier.
+  if (inputs.version !== null && !isReleaseVersion(inputs.version)) throw new Error(`version de release invalide pour la commande de démarrage : ${JSON.stringify(inputs.version)}`);
   const clone = inputs.version ? `git clone --branch v${inputs.version} --depth 1 ${url}` : `git clone --depth 1 ${url}`;
   const folder = inputs.repository.split('/')[1] ?? '';
   return [clone, `cd ${folder}/runtime`, inputs.quickstart.secrets, inputs.quickstart.start].join('\n');
@@ -178,7 +181,8 @@ export function buildLanding(lang: Lang, inputs: BuildInputs): LandingData {
         { text: claim('license'), link: link(L('Read the license', 'Lire la licence'), external(repo('/blob/main/LICENSE'))) },
         { text: claim('ci.in-repo'), link: link(L('Read the CI', 'Lire la CI'), external(repo('/blob/main/.github/workflows/ci.yml'))) },
         { text: claim('release.signed') },
-        { text: claim('page.no-third-party'), link: link(L('Read the check', 'Lire le contrôle'), external(repo('/blob/main/runtime/apps/docs/e2e/landing-privacy.e2e.ts'))) },
+        // Le résultat daté du contrôle de production (landing-production.yml, chaque semaine après la mise en ligne, 22 § 2.9).
+        { text: claim('page.no-third-party'), link: link(L('See the dated production checks', 'Voir les contrôles datés de la production'), external(repo('/actions/workflows/landing-production.yml'))) },
       ],
     },
     how: {
@@ -245,9 +249,9 @@ export function buildLanding(lang: Lang, inputs: BuildInputs): LandingData {
         faq(L('Do I need an account?', 'Il faut un compte ?'), 'faq.account'),
         faq(L('Which AI does it use?', 'Quelle IA ?'), 'faq.model'),
         faq(L('How much does it cost in model calls?', 'Combien ça coûte en modèle ?'), 'faq.cost'),
-        faq(L('What about sites\' terms and the law?', 'Et les conditions des sites, et la loi ?'), 'faq.legal', link(L('Responsible use', 'Usage responsable'), doc('explications/usage-responsable'))),
         faq(L('What about the AGPL in a company?', 'L\'AGPL en entreprise ?'), 'faq.agpl'),
         faq(L('Is it written with AI?', 'C\'est écrit avec de l\'IA ?'), 'faq.ai'),
+        faq(L('Can I contribute?', 'Je peux contribuer ?'), 'faq.contribute', link(L('Contributing guide', 'Guide de contribution'), external(repo('/blob/main/runtime/CONTRIBUTING.md')))),
       ],
     },
     community: {

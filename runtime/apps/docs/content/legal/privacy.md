@@ -20,7 +20,7 @@ Nothing. This page sets no cookie, runs no analytics, has no form and asks for n
 
 ## What your browser keeps
 
-If you choose a light or a dark theme, your browser keeps that choice in its local storage. This happens only after you have made the choice, uses no identifier and is sent nowhere. Your language is not stored: you choose it with the language link. Whether this storage falls under article 5(3) of the ePrivacy directive is to be confirmed by a lawyer.
+If you choose a light or a dark theme, your browser keeps that choice in its local storage. This happens only after you have made the choice, uses no identifier and is sent nowhere. Your language is not stored: you choose it with the language link. The documentation pages of the same site have their own theme switcher: it keeps your preference in this same local storage as soon as they open, with the value “auto” (your system theme) until you choose, with no identifier and without sending anything. Whether this storage falls under article 5(3) of the ePrivacy directive is to be confirmed by a lawyer.
 
 ## What the host logs
 
