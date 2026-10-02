@@ -13,7 +13,9 @@ import { RouterLink, useRoute, useRouter } from 'vue-router';
 import TextField from '@/components/account/TextField.vue';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardDescription, CardHeader } from '@/components/ui/card';
+import PageHeader from '@/components/brand/PageHeader.vue';
+import SymIllustration from '@/components/brand/SymIllustration.vue';
+import { Card, CardContent } from '@/components/ui/card';
 import { useSsoPublic } from '@/composables/useAccountFlows';
 import { signIn, signOut, useSession, verifySecondFactor, type SecondFactorFailure, type SignInFailure } from '@/composables/useSession';
 import { readFieldValue } from '@/lib/form-field';
@@ -90,13 +92,12 @@ async function cancelCode(): Promise<void> {
 </script>
 
 <template>
-  <section class="mx-auto flex max-w-md flex-col gap-6 py-10">
+  <section class="mx-auto grid max-w-6xl gap-7 py-8 lg:grid-cols-2 lg:items-start">
+    <div class="flex flex-col gap-6">
+      <PageHeader :title="awaitingCode ? t('auth.secondFactor.title') : t('auth.login.title')" :kicker="t('brand.kicker.login')">
+        <p class="sym-lead">{{ awaitingCode ? t('auth.secondFactor.description') : t('auth.login.description') }}</p>
+      </PageHeader>
     <Card>
-      <CardHeader>
-        <!-- Titre posé directement : CardTitle rend un h3, et un titre ne s'imbrique pas dans un titre -->
-        <h1 data-route-heading tabindex="-1" class="text-2xl leading-none font-semibold tracking-tight">{{ awaitingCode ? t('auth.secondFactor.title') : t('auth.login.title') }}</h1>
-        <CardDescription>{{ awaitingCode ? t('auth.secondFactor.description') : t('auth.login.description') }}</CardDescription>
-      </CardHeader>
       <CardContent>
         <form v-if="awaitingCode" class="flex flex-col gap-4" novalidate data-testid="second-factor-form" @submit.prevent="submitCode">
           <Alert v-if="errorText" variant="destructive" data-testid="login-error">
@@ -130,5 +131,8 @@ async function cancelCode(): Promise<void> {
         </div>
       </CardContent>
     </Card>
+    </div>
+    <!-- Pas de bulle sur un message d'erreur (20 § 2.3) : la signature de SYM n'accompagne jamais une erreur -->
+    <SymIllustration class="hidden lg:block" :bubble="errorText ? undefined : t('brand.bubble.onIt')" />
   </section>
 </template>

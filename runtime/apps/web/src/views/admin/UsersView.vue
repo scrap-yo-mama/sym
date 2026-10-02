@@ -13,6 +13,7 @@ import { useI18n } from 'vue-i18n';
 import SecretReveal from '@/components/account/SecretReveal.vue';
 import TextField from '@/components/account/TextField.vue';
 import ConfirmPanel from '@/components/api/ConfirmPanel.vue';
+import PageHeader from '@/components/brand/PageHeader.vue';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
@@ -142,10 +143,9 @@ function startTransfer(event: Event): void {
 
 <template>
   <section class="mx-auto flex max-w-6xl flex-col gap-6 py-8" aria-labelledby="users-heading">
-    <header class="flex flex-col gap-1">
-      <h1 id="users-heading" data-route-heading tabindex="-1" class="text-2xl font-semibold tracking-tight">{{ t('users.title') }}</h1>
-      <p class="text-sm text-muted-foreground">{{ t('users.intro') }}</p>
-    </header>
+    <PageHeader heading-id="users-heading" :title="t('users.title')" :kicker="t('brand.kicker.users')">
+      <p class="sym-lead">{{ t('users.intro') }}</p>
+    </PageHeader>
 
     <Alert v-if="failure" variant="destructive" data-testid="users-error"><AlertDescription>{{ t(failure) }}</AlertDescription></Alert>
     <p v-if="notice" role="status" class="text-sm" data-testid="users-notice">{{ t(notice.key, notice.params) }}</p>
@@ -188,7 +188,7 @@ function startTransfer(event: Event): void {
       <h2 class="text-lg font-semibold">{{ t('users.invitations.title') }}</h2>
       <p v-if="invitations.loading.value && !invitations.data.value" role="status" class="text-sm text-muted-foreground">{{ t('ui.loading') }}</p>
       <p v-else-if="(invitations.data.value ?? []).length === 0" class="text-sm text-muted-foreground" data-testid="invitations-empty">{{ t('users.invitations.empty') }}</p>
-      <div v-else class="relative overflow-x-auto rounded-xl border">
+      <div v-else class="relative overflow-x-auto rounded-xl border bg-card">
         <table class="w-full text-left text-sm" data-testid="invitations-table">
           <caption class="sr-only">{{ t('users.invitations.caption') }}</caption>
           <thead class="border-b bg-muted/50">
@@ -224,7 +224,7 @@ function startTransfer(event: Event): void {
       <p v-if="accounts.loading.value && !accounts.loaded.value" role="status" class="text-sm text-muted-foreground">{{ t('ui.loading') }}</p>
       <p v-else-if="accounts.error.value" class="sym-error" data-testid="accounts-error">{{ t('errors.generic') }}</p>
       <p v-else-if="accounts.items.value.length === 0" class="text-sm text-muted-foreground">{{ t('users.accounts.empty') }}</p>
-      <div v-else class="relative overflow-x-auto rounded-xl border">
+      <div v-else class="relative overflow-x-auto rounded-xl border bg-card">
         <table class="w-full text-left text-sm" data-testid="accounts-table">
           <caption class="sr-only">{{ t('users.accounts.caption') }}</caption>
           <thead class="border-b bg-muted/50">

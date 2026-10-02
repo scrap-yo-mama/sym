@@ -12,6 +12,7 @@ import { useI18n } from 'vue-i18n';
 import { RouterLink, useRouter } from 'vue-router';
 import TwoFactorPanel from '@/components/account/TwoFactorPanel.vue';
 import { Button } from '@/components/ui/button';
+import PageHeader from '@/components/brand/PageHeader.vue';
 import { signOut } from '@/composables/useSession';
 
 const { t } = useI18n();
@@ -27,10 +28,9 @@ async function leave(): Promise<void> {
 
 <template>
   <section class="mx-auto flex max-w-2xl flex-col gap-6 py-8">
-    <header class="flex flex-col gap-1">
-      <h1 data-route-heading tabindex="-1" class="text-2xl font-semibold tracking-tight">{{ t('twoFactorSetup.title') }}</h1>
-      <p class="text-sm text-muted-foreground">{{ t('twoFactorSetup.intro') }}</p>
-    </header>
+    <PageHeader :title="t('twoFactorSetup.title')" :kicker="t('brand.kicker.login')">
+      <p class="sym-lead">{{ t('twoFactorSetup.intro') }}</p>
+    </PageHeader>
     <TwoFactorPanel forced @backup-stored="finished = true" />
     <!-- L'enrôlement confirmé lève l'exigence : la page reste le temps d'afficher les codes de secours, puis la console s'ouvre. -->
     <div class="flex flex-wrap gap-3">
