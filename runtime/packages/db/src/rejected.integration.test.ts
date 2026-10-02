@@ -89,6 +89,18 @@ describe('quarantine run_rejected_items (0017)', () => {
     expect((await pool.query("SELECT 1 FROM run_rejected_items WHERE to_jsonb(run_rejected_items)::text LIKE '%example.invalid%'")).rowCount).toBe(0);
   });
 
+  test('raisons sans valeur : une clé inconnue du run de B (identifiant servant de clé) n’atteint jamais A par run_rejected_aggregates', async () => {
+    const runB = await newRun(B, { items: 1, itemsRejected: 1 });
+    const summary = summaryOf([{ titre: 'Vélo', prix: 3, zz_test_secret_id_123: { commande: 'zz_test_secret_order_9' } }]);
+    await saveRejectedItems(pool, { runId: runB, apiId, ownerId: B, projectId: '00000000-0000-0000-0000-000000000001', summary });
+    const asA = await withActor(pool, { userId: A, role: 'member' }, (tx) => tx.query('SELECT to_jsonb(v)::text AS row FROM run_rejected_aggregates v WHERE run_id = $1', [runB]));
+    expect(asA.rowCount).toBe(1);
+    expect(asA.rows[0]!.row).not.toMatch(/zz_test_secret/);
+    expect(await readRejectedItems(pool, { userId: A, role: 'member' }, runB)).toEqual({ access: 'api_owner', count: 1, by_reason: [{ keyword: 'additionalProperties', path: '/*', count: 1 }] });
+    // Nulle part en base (échantillon de B compris).
+    expect((await pool.query("SELECT 1 FROM run_rejected_items WHERE to_jsonb(run_rejected_items)::text LIKE '%zz_test_secret%'")).rowCount).toBe(0);
+  });
+
   test('owner_id = runs.owner_id imposé en base : C ne peut pas écrire la quarantaine du run de B (ni sous son nom ni sous celui de B)', async () => {
     const runB = await newRun(B);
     const summary = summaryOf([{ titre: 'x' }]);

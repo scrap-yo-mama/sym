@@ -199,7 +199,8 @@ describe('assert_no_circumvention : garde de classification avant extraction et 
       sources: [{ id: 'dom', from: 'html', records: 'li.item' }],
       fields: { name: { css: '.item-title', attr: 'text', type: 'string', required: true } },
     };
-    const run = await runOf(await insertApi('zz_test_dom_v2', spec));
+    // API `sain` : la réparation ne part que si la machine fait entrer l'API en `reparation` (10), jamais depuis `enquete`.
+    const run = await runOf(await insertApi('zz_test_dom_v2', spec, 'sain'));
     expect(run).toMatchObject({ state: 'failed', failure_class: 'extraction' });
     expect(repair).toHaveBeenCalledOnce();
     expect(repair.mock.calls[0]![0].failure).toMatchObject({ failure_class: 'extraction' });
@@ -225,6 +226,21 @@ describe('assert_no_circumvention : garde par preuves avant réparation (défi n
     expect(run).toMatchObject({ state: 'failed', failure_class: 'blocked_by_protection', retryable: false, items: 0 });
     expect(run.attempts[0]).toMatchObject({ result: 'blocked_by_protection' });
     expect(await routeLog(run.id)).toEqual([{ failure_class: 'blocked_by_protection', next: 'stop', agent_invoked: false, reclassified_from: 'extraction' }]);
+  });
+
+  test('défi passé inaperçu du classifieur dont la page fournit des enregistrements, tous non conformes (casse par le seuil, D-49) : la preuve passe par la garde, run en blocked_by_protection, agent jamais invoqué', async () => {
+    classifyOverride = () => null;
+    const spec = { ...headingSpec(HOSTS.challenge200), fields: { name: { attr: 'data-zz-absent', type: 'string', required: true } } };
+    const apiId = await insertApi('zz_test_evidence_items', spec, 'sain');
+    const run = await runOf(apiId);
+    expect(repair).not.toHaveBeenCalled();
+    expect(run).toMatchObject({ state: 'failed', failure_class: 'blocked_by_protection', retryable: false, items: 0, dataset_id: null });
+    expect(run.attempts[0]).toMatchObject({ result: 'blocked_by_protection' });
+    expect(await routeLog(run.id)).toEqual([{ failure_class: 'blocked_by_protection', next: 'stop', agent_invoked: false, reclassified_from: 'extraction' }]);
+    expect(await statusEventsOf(run.id)).toEqual([
+      ['sain', 'reparation', 'blocked_by_protection'],
+      ['reparation', 'bloquee', 'blocked_by_protection'],
+    ]);
   });
 
   test('interstitiel en 200 au titre exact, un seul signal (« Pardon Our Interruption », ~450 caractères) : passé par le classifieur PAR DÉFAUT, extraction en échec, refusé par la garde avant réparation ; agent jamais invoqué, refus rapporté au disjoncteur, sain → reparation → bloquee (revue de 1.7)', async () => {
