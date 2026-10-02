@@ -278,7 +278,8 @@
     "submitting": "Starting…",
     "countryInvalid": "Enter a country code of 2 letters, for example fr.",
     "descriptionRequired": "Describe what the API should return.",
-    "accountRequired": "Confirm the notice above to continue."
+    "accountRequired": "Confirm the notice above to continue.",
+    "descriptionTemplate": "A good request reads: “I want [what] from [where] to [what for].”"
   },
   "investigation": {
     "title": "Investigation of {domain}",
@@ -323,17 +324,11 @@
       "followSuspended": "Live updates suspended. New trials are not shown or announced."
     },
     "phase": {
-      "label": "Investigation steps",
       "announce": "Step: {phase}.",
-      "access_check": "Access check",
-      "reconnaissance": "Reconnaissance",
-      "awaiting_schema_validation": "Output schema",
-      "testing": "Trials",
-      "state": {
-        "done": "done",
-        "current": "in progress",
-        "upcoming": "upcoming"
-      }
+      "access_check": "Explore",
+      "reconnaissance": "Explore",
+      "awaiting_schema_validation": "Validate the schema",
+      "testing": "Try"
     },
     "log": {
       "title": "Trials",
@@ -357,7 +352,27 @@
       "title": "Trial plan",
       "hint": "Cheapest first. You can remove methods before the trials start, never add any.",
       "estimate": "estimated {cost}",
-      "atLeastOne": "At least one method must stay selected."
+      "atLeastOne": "At least one method must stay selected.",
+      "empty": "The trial plan appears here as soon as the server announces it.",
+      "rule": {
+        "default": "Rule: cheapest first",
+        "named": "Rule: {rule}"
+      },
+      "state": {
+        "planned": "to try",
+        "running": "running",
+        "succeeded": "succeeded",
+        "failed": "failed",
+        "pruned": "not run",
+        "excluded": "excluded"
+      },
+      "prunedReason": "Skipped: {reason}",
+      "failedReason": "Failed: {reason}",
+      "include": "Try this method",
+      "stop": {
+        "title": "Intentional stop",
+        "text": "If the site refuses access, shows a verification or asks robots to stay away, SYM stops here. Nothing else is tried."
+      }
     },
     "schema": {
       "title": "Output schema",
@@ -374,7 +389,29 @@
       "input": "Input schema",
       "strategy": "Chosen strategy: {execution}, {network}, version {version}",
       "tunnelNote": "Works only while your computer is on.",
-      "empty": "The schema will appear here once the reconnaissance is done."
+      "empty": "The schema will appear here once the reconnaissance is done.",
+      "gateTitle": "Here is what you are going to get",
+      "fieldsCaption": "Fields of the output schema: name, type and a real example from the sample",
+      "columns": {
+        "field": "Field",
+        "type": "Type",
+        "example": "Real example"
+      },
+      "noExample": "No example in the sample",
+      "personal": "Personal data: example hidden",
+      "types": {
+        "string": "text",
+        "number": "number",
+        "integer": "whole number",
+        "boolean": "true or false",
+        "array": "list",
+        "object": "object",
+        "null": "empty"
+      },
+      "remark": "A note for SYM?",
+      "remarkHint": "Optional. Sent with a new investigation if you ask for one.",
+      "reinvestigateWithNote": "Investigate again with this note",
+      "noFields": "The schema has no field to show."
     },
     "result": {
       "sain": "The investigation succeeded. Your API is ready.",
@@ -382,7 +419,32 @@
       "erreur": "The investigation ended in error. The trial list shows why.",
       "bloquee": "The investigation stopped: the site refuses automated access."
     },
-    "resuming": "Resuming the investigation…"
+    "resuming": "Resuming the investigation…",
+    "milestones": {
+      "label": "Investigation milestones",
+      "describe": "Describe",
+      "reconnaissance": "Explore",
+      "schema": "Validate the schema",
+      "trials": "Try",
+      "state": {
+        "todo": "to do",
+        "current": "in progress",
+        "done": "done",
+        "stopped": "stopped"
+      }
+    },
+    "gate": {
+      "title": "Shall we validate this schema?",
+      "noTrial": "No trial starts before your approval.",
+      "spent": "Already spent on the reconnaissance: {cost}.",
+      "spentUnknown": "Already spent on the reconnaissance: not available yet.",
+      "budget": "Maximum budget for the trials: {max}.",
+      "replay": "Estimated cost of a replay: {cost}.",
+      "validate": "Validate and start the trials · ~{max}",
+      "validateNoMax": "Validate and start the trials",
+      "edit": "Edit the schema",
+      "auto": "Schema validated automatically, as you asked."
+    }
   },
   "blocked": {
     "title": "Blocked: {domain} refuses automated access",
@@ -832,7 +894,7 @@
     "relaunch": "Run again"
   },
   "catalog": {
-    "title": "Catalog",
+    "title": "Your catalog",
     "follow": {
       "suspend": "Suspend live updates",
       "resume": "Resume live updates",
@@ -848,7 +910,8 @@
       "lastRun": "Last run",
       "cost": "Average cost",
       "success": "Success (30 d)",
-      "access": "Access"
+      "access": "Access",
+      "action": "Action"
     },
     "computerRequired": "Computer required",
     "filters": {
@@ -875,7 +938,41 @@
       "next": "Next",
       "page": "Page {n}"
     },
-    "statusChanged": "{slug}: {status}."
+    "statusChanged": "{slug}: {status}.",
+    "summary": {
+      "service": "No API in service | 1 API in service | {n} APIs in service",
+      "stopped": "None stopped | {n} stopped | {n} stopped",
+      "attention": "Nothing needs your attention. | One needs your attention. | {n} need your attention."
+    },
+    "health": {
+      "title": "Catalog health",
+      "ratio": "{healthy} of {total} healthy",
+      "noneInService": "No API in service",
+      "stopped": "No intentional stop | {n} intentional stop | {n} intentional stops",
+      "partial": "Partial counts: only the first {n} APIs are counted.",
+      "legend": {
+        "sain": "{n} healthy | {n} healthy",
+        "warning": "{n} to watch",
+        "enquete": "{n} investigating",
+        "reparation": "{n} repairing",
+        "erreur": "{n} in error",
+        "action_requise": "{n} needs you | {n} need you"
+      },
+      "legendLabel": "Count by status"
+    },
+    "pills": {
+      "label": "Quick filters",
+      "all": "All",
+      "attention": "To handle",
+      "healthy": "Healthy",
+      "stopped": "Intentional stops",
+      "withCount": "{label} · {n}",
+      "changed": "{label}: {n}."
+    },
+    "rowAction": {
+      "alternatives": "See alternatives",
+      "openTask": "See the task"
+    }
   },
   "detail": {
     "title": "API page",

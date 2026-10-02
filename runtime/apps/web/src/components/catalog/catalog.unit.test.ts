@@ -168,6 +168,6 @@ describe('catalogue : colonnes', () => {
     const html = await renderHtml(ApiCatalogTable, { apis: [apiSummary({ slug: 'zz-books' })] });
     expect(html).toContain('href="/apis/zz-books"');
     expect(html).toContain('<caption');
-    expect(html.match(/<th scope="col"/g)).toHaveLength(8);
+    expect(html.match(/<th scope="col"/g)).toHaveLength(9);
   });
 });

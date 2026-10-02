@@ -3,7 +3,7 @@
 // déplacer le focus. Essais d'une enquête : `role="log"` ; étape et état : `role="status"` ; catalogue : `role="status"`, seul le
 // changement de statut d'une ligne ; action requise et erreur : `role="alert"`, une fois. Le bandeau de coupure ne vole pas le focus.
 import { test, expect } from './console.fixture.ts';
-import { catalog, detail, text, UUID } from './fixtures.ts';
+import { apisRoute, catalog, detail, text, UUID } from './fixtures.ts';
 import { activeElement } from './keys.ts';
 
 const RUN = UUID(950);
@@ -17,8 +17,11 @@ for (const locale of ['en', 'fr'] as const) {
       const { page, app, open } = consolePage;
       let flipped = false;
       const rows = (): ReturnType<typeof catalog> => catalog().map((api) => (flipped && api.slug === 'zz-sain' ? { ...api, status: 'erreur' as const, stale: false } : api));
-      await open('/apis', { routes: { 'GET /api/apis': () => ({ body: { apis: rows(), next_cursor: null } }) } });
+      await open('/apis', { routes: { 'GET /api/apis': apisRoute(rows) } });
       await expect(page.getByTestId('catalog-row').first()).toBeVisible();
+      // Le tableau s'ouvre sur « À traiter » (20 § 5.2) : on lit la liste complète, où se trouve zz-sain.
+      await page.locator('[data-testid="catalog-pills"] [data-pill="all"]').click();
+      await expect(page.locator('[data-slug="zz-sain"]')).toBeVisible();
       const live = page.getByTestId('catalog-live');
       await expect(live).toHaveAttribute('role', 'status');
       await expect(live).toHaveText('');
@@ -29,7 +32,12 @@ for (const locale of ['en', 'fr'] as const) {
       expect(before).toContain('catalog-search');
       flipped = true;
       app.pushEvent('status.changed', { slug: 'zz-sain' }, '1');
-      await expect(live).toHaveText(text(locale, 'catalog.statusChanged').replace('{slug}', 'zz-sain').replace('{status}', text(locale, 'status.erreur')));
+      // La ligne qui change de statut, puis les compteurs de pastille qui en varient (20b § 3.3) : « À traiter » gagne une API, « Saines » en perd une.
+      const pillChanged = (pill: string, n: number): string => text(locale, 'catalog.pills.changed').replace('{label}', text(locale, `catalog.pills.${pill}`)).replace('{n}', String(n));
+      const attention = catalog().filter((api) => ['warning', 'erreur', 'action_requise'].includes(api.status)).length + 1;
+      await expect(live).toHaveText(
+        [text(locale, 'catalog.statusChanged').replace('{slug}', 'zz-sain').replace('{status}', text(locale, 'status.erreur')), pillChanged('attention', attention), pillChanged('healthy', 0)].join(' '),
+      );
       expect(await activeElement(page)).toBe(before);
       await expect(page.locator('[role="alert"]')).toHaveCount(0);
     });
@@ -38,9 +46,12 @@ for (const locale of ['en', 'fr'] as const) {
       const { page, app, open } = consolePage;
       let status: 'sain' | 'erreur' = 'sain';
       await open('/apis', {
-        routes: { 'GET /api/apis': () => ({ body: { apis: catalog().map((api) => (api.slug === 'zz-sain' ? { ...api, status } : api)), next_cursor: null } }) },
+        routes: { 'GET /api/apis': apisRoute(() => catalog().map((api) => (api.slug === 'zz-sain' ? { ...api, status } : api))) },
       });
       await expect(page.getByTestId('catalog-row').first()).toBeVisible();
+      // Le tableau s'ouvre sur « À traiter » (20 § 5.2) : on lit la liste complète, où se trouve zz-sain.
+      await page.locator('[data-testid="catalog-pills"] [data-pill="all"]').click();
+      await expect(page.locator('[data-slug="zz-sain"]')).toBeVisible();
       await page.getByTestId('catalog-follow-toggle').click();
       const reads = app.requests.filter((entry) => entry.startsWith('GET /api/apis?')).length;
       status = 'erreur';

@@ -2,36 +2,55 @@
 <script setup lang="ts">
 /**
  * @file ApiCatalogView.vue
- * @description Catalogue des API (06 § 2) : tableau à pagination serveur, filtres par statut, exécution et réseau,
- * recherche plein texte, bouton Nouvelle API. Rafraîchi toutes les 15 s et par le flux SSE ; seule un changement de
- * statut est annoncé (région `status`).
+ * @description Catalogue des API (06 § 2, 20 § 5.2) : titre et phrase de synthèse, barre de santé (les API bloquées à part,
+ * hors du ratio), pastilles-filtres avec compteurs en texte (« À traiter » d'abord s'il y en a), recherche, filtres par statut,
+ * exécution et réseau, tableau à pagination serveur avec une action utile par ligne. Rafraîchi toutes les 15 s et par le flux
+ * SSE ; la région `status` n'annonce que le changement de statut d'une ligne et la variation d'un compteur de pastille.
  * @page
  */
 import { computed } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { RouterLink } from 'vue-router';
 import ApiCatalogTable from '@/components/catalog/ApiCatalogTable.vue';
+import CatalogHealth from '@/components/catalog/CatalogHealth.vue';
+import CatalogPills from '@/components/catalog/CatalogPills.vue';
 import EmptyState from '@/components/EmptyState.vue';
 import ErrorState from '@/components/ErrorState.vue';
 import LoadingState from '@/components/LoadingState.vue';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { useApiCatalog } from '@/composables/useApiCatalog';
+import { useCatalogScreen } from '@/composables/useCatalogScreen';
+import { activePill } from '@/lib/catalog-health';
 import { API_STATUSES, EXECUTIONS, NETWORKS } from '@/lib/status';
 
 const { t } = useI18n();
-const catalog = useApiCatalog();
+const { catalog, overview, opened } = useCatalogScreen();
 const { filters } = catalog;
 
+const health = overview.health;
+const pill = computed(() => activePill(filters));
+
+/** « 6 API en service, 1 arrêtée. 2 demandent ton attention. » : des comptes réels, jamais un nombre d'exemple. */
+const summary = computed(() => {
+  const current = health.value;
+  if (!current || current.total === 0) return '';
+  const parts = [t('catalog.summary.service', { n: current.inService }, current.inService)];
+  if (current.stopped > 0) parts.push(t('catalog.summary.stopped', { n: current.stopped }, current.stopped));
+  return `${parts.join(', ')}. ${t('catalog.summary.attention', { n: current.attention }, current.attention)}`;
+});
+
 // Suivi suspendu (2.2.2) : la région annonce l'état du bouton, puis plus rien ne change tant que le suivi reste suspendu.
-const announcement = computed(() =>
-  catalog.suspended.value
-    ? t('catalog.follow.suspended')
-    : catalog.statusChanges.value.map((change) => t('catalog.statusChanged', { slug: change.slug, status: t(`status.${change.to}`) })).join(' '),
-);
+// Sinon : le changement de statut d'une ligne, puis la variation d'un compteur de pastille (06 § 3, assert_attention_filters_counts).
+const announcement = computed(() => {
+  if (catalog.suspended.value) return t('catalog.follow.suspended');
+  const rows = catalog.statusChanges.value.map((change) => t('catalog.statusChanged', { slug: change.slug, status: t(`status.${change.to}`) }));
+  const counters = overview.changes.value.map((change) => t('catalog.pills.changed', { label: t(`catalog.pills.${change.pill}`), n: change.count }));
+  return [...rows, ...counters].join(' ');
+});
 
 function resetFilters(): void {
   filters.status = '';
+  filters.attention = false;
   filters.execution = '';
   filters.network = '';
   filters.q = '';
@@ -42,13 +61,20 @@ const selectClass =
 </script>
 
 <template>
-  <section class="mx-auto flex max-w-7xl flex-col gap-4 py-6">
-    <header class="flex flex-wrap items-center justify-between gap-3">
-      <h1 data-route-heading tabindex="-1" class="text-2xl font-semibold tracking-tight">{{ t('catalog.title') }}</h1>
+  <section class="mx-auto flex max-w-7xl flex-col gap-5 py-6">
+    <header class="flex flex-wrap items-end justify-between gap-3">
+      <div class="flex flex-col gap-1">
+        <h1 data-route-heading tabindex="-1" class="text-3xl font-extrabold tracking-tight">{{ t('catalog.title') }}</h1>
+        <p v-if="summary" class="text-base text-muted-foreground" data-testid="catalog-summary">{{ summary }}</p>
+      </div>
       <Button as-child>
         <RouterLink to="/apis/new">{{ t('catalog.newApi') }}</RouterLink>
       </Button>
     </header>
+
+    <CatalogHealth v-if="health && health.total > 0" :health="health" :partial="overview.snapshot.value?.truncated ?? false" />
+
+    <CatalogPills :counts="overview.pills.value" :active="pill" @select="(selected) => catalog.setPill(selected)" />
 
     <form role="search" class="flex flex-wrap items-end gap-3" :aria-label="t('catalog.filters.label')" @submit.prevent>
       <div class="flex min-w-56 flex-1 flex-col gap-1">
@@ -81,10 +107,10 @@ const selectClass =
       </Button>
     </form>
 
-    <!-- Région `status` du plan de 06 § 3 : seul le changement de statut d'une ligne est annoncé. Toujours présente. -->
+    <!-- Région `status` du plan de 06 § 3 : seul le changement de statut d'une ligne et la variation d'un compteur sont annoncés. Toujours présente. -->
     <div role="status" aria-live="polite" class="sr-only" data-testid="catalog-live">{{ announcement }}</div>
 
-    <LoadingState v-if="catalog.loading.value && catalog.apis.value.length === 0" />
+    <LoadingState v-if="!opened || (catalog.loading.value && catalog.apis.value.length === 0)" />
     <ErrorState v-else-if="catalog.error.value && catalog.apis.value.length === 0" :error="catalog.error.value" @retry="catalog.refetch()" />
     <EmptyState v-else-if="catalog.apis.value.length === 0 && catalog.hasActiveFilter.value" :title="t('catalog.noMatch.title')" :description="t('catalog.noMatch.description')">
       <template #action>
@@ -100,8 +126,8 @@ const selectClass =
     </EmptyState>
     <template v-else>
       <ErrorState v-if="catalog.error.value" :error="catalog.error.value" @retry="catalog.refetch()" />
-      <ApiCatalogTable :apis="catalog.apis.value" :busy="catalog.loading.value" />
-      <nav class="flex flex-wrap items-center justify-between gap-2" :aria-label="t('catalog.pagination.label')">
+      <ApiCatalogTable :apis="catalog.apis.value" :busy="catalog.loading.value" :resuming="catalog.resuming.value" />
+      <nav v-if="catalog.hasPrevious.value || catalog.hasNext.value" class="flex flex-wrap items-center justify-between gap-2" :aria-label="t('catalog.pagination.label')">
         <Button variant="outline" size="sm" :disabled="!catalog.hasPrevious.value" @click="catalog.previous()">{{ t('catalog.pagination.previous') }}</Button>
         <span class="text-sm text-muted-foreground">{{ t('catalog.pagination.page', { n: catalog.pageNumber.value }) }}</span>
         <Button variant="outline" size="sm" :disabled="!catalog.hasNext.value" @click="catalog.next()">{{ t('catalog.pagination.next') }}</Button>

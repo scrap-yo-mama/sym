@@ -3,7 +3,7 @@
 // `en` et en `fr`. Un écran ajouté par une tâche suivante (comptes, audit, personnes : 3.8) s'ajoute ici avec sa donnée.
 import type { Page } from '@playwright/test';
 import type { components } from '@runtime/client';
-import { catalog, ME, runsOf, UUID } from './fixtures.ts';
+import { apisRoute, catalog, ME, runsOf, UUID } from './fixtures.ts';
 import type { ApiRoutes, ConsoleApp } from './harness.ts';
 
 type Locale = 'en' | 'fr';
@@ -143,12 +143,21 @@ export const SCREENS: Screen[] = [
     },
   },
   { id: 'home', path: '/' },
+  // Le tableau s'ouvre sur « À traiter » (20 § 5.2) ; « Tout » montre la liste complète et sa pagination.
   { id: 'catalog', path: '/apis' },
+  {
+    id: 'catalog-all',
+    path: '/apis',
+    prepare: async (page) => {
+      await page.locator('[data-testid="catalog-pills"] [data-pill="all"]').click();
+      await page.getByTestId('catalog-row').nth(6).waitFor();
+    },
+  },
   { id: 'catalog-empty', path: '/apis', routes: { 'GET /api/apis': { body: { apis: [], next_cursor: null } } } },
   {
     id: 'catalog-no-match',
     path: '/apis',
-    routes: { 'GET /api/apis': (request) => ({ body: { apis: request.query.get('q') ? [] : catalog(), next_cursor: null } }) },
+    routes: { 'GET /api/apis': (request) => (request.query.get('q') ? { body: { apis: [], next_cursor: null } } : apisRoute(catalog)(request)) },
     prepare: async (page) => {
       await page.locator('#catalog-search').fill('zz-introuvable');
       await page.getByTestId('empty-state').waitFor();

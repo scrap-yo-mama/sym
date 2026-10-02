@@ -4,11 +4,12 @@
 // de statut d'une ligne est annoncé aux lecteurs d'écran (région `status` du plan de 06 § 3).
 import type { components } from '@runtime/client';
 import { useDebounceFn } from '@vueuse/core';
-import { computed, reactive, readonly, ref, watch } from 'vue';
+import { computed, nextTick, reactive, readonly, ref, shallowRef, watch } from 'vue';
 import { useAsyncResource } from '@/composables/useAsyncResource';
 import { useLiveRefresh } from '@/composables/useLiveRefresh';
 import { getApi } from '@/lib/api';
 import { unwrap } from '@/lib/api-result';
+import { ATTENTION_STATUSES, type PillId } from '@/lib/catalog-health';
 
 export type ApiSummary = components['schemas']['ApiSummary'];
 export type Execution = components['schemas']['Execution'];
@@ -18,7 +19,11 @@ type ApiStatus = components['schemas']['ApiStatus'];
 const CATALOG_PAGE_SIZE = 25;
 export const CATALOG_POLL_MS = 15_000;
 
-export type CatalogFilters = { status: ApiStatus | ''; execution: Execution | ''; network: Network | ''; q: string };
+/** `attention` : la pastille « À traiter » (à surveiller, en erreur, action requise) ; exclusive du filtre de statut précis. */
+export type CatalogFilters = { status: ApiStatus | ''; execution: Execution | ''; network: Network | ''; q: string; attention: boolean };
+
+/** Pas de pagination pour « À traiter » : trois lectures au plus grand pas de l'API, fusionnées (l'ensemble à traiter reste petit). */
+const ATTENTION_PAGE_SIZE = 200;
 
 /** Changement de statut d'une ligne entre deux lectures : c'est ce que la région `status` annonce. */
 export type StatusChange = { slug: string; from: ApiStatus; to: ApiStatus };
@@ -33,29 +38,50 @@ export function statusChanges(before: readonly ApiSummary[], after: readonly Api
   return changes;
 }
 
-export function useApiCatalog(options: { pollMs?: number; searchDebounceMs?: number } = {}) {
-  const filters = reactive<CatalogFilters>({ status: '', execution: '', network: '', q: '' });
+export function useApiCatalog(options: { pollMs?: number; searchDebounceMs?: number; immediate?: boolean } = {}) {
+  const filters = reactive<CatalogFilters>({ status: '', execution: '', network: '', q: '', attention: false });
   /** Curseur de chaque page visitée ; la page courante est la dernière (`null` : première page). */
   const cursors = ref<(string | null)[]>([null]);
   const lastChanges = ref<StatusChange[]>([]);
+  /** API dont l'utilisateur vient d'agir (transition 17) : la ligne dit « Reprise de l'enquête… » tant que l'enquête est en cours. */
+  const resuming = shallowRef<ReadonlySet<string>>(new Set());
   /** « Suspendre le suivi » (WCAG 2.2.2) : plus de relecture automatique ni d'annonce ; la reprise relit une fois. */
   const suspended = ref(false);
   let rows: ApiSummary[] = [];
 
-  const resource = useAsyncResource(async () => {
-    const query = {
-      ...(filters.status ? { status: filters.status } : {}),
-      ...(filters.execution ? { execution: filters.execution } : {}),
-      ...(filters.network ? { network: filters.network } : {}),
-      ...(filters.q.trim() ? { q: filters.q.trim() } : {}),
-      ...(cursors.value.at(-1) ? { cursor: cursors.value.at(-1) as string } : {}),
-      limit: CATALOG_PAGE_SIZE,
-    };
-    const page = unwrap(await getApi().GET('/api/apis', { params: { query } }));
-    lastChanges.value = statusChanges(rows, page.apis);
-    rows = page.apis;
-    return page;
-  });
+  const resource = useAsyncResource(
+    async () => {
+      const shared = {
+        ...(filters.execution ? { execution: filters.execution } : {}),
+        ...(filters.network ? { network: filters.network } : {}),
+        ...(filters.q.trim() ? { q: filters.q.trim() } : {}),
+      };
+      let page: { apis: ApiSummary[]; next_cursor: string | null };
+      if (filters.attention) {
+        // « À traiter » : une lecture par statut à traiter, fusionnées par nom (le serveur filtre un seul statut à la fois).
+        const parts = await Promise.all(
+          ATTENTION_STATUSES.map(async (status) => unwrap(await getApi().GET('/api/apis', { params: { query: { ...shared, status, limit: ATTENTION_PAGE_SIZE } } }))),
+        );
+        page = { apis: parts.flatMap((part) => part.apis).sort((a, b) => (a.slug < b.slug ? -1 : a.slug > b.slug ? 1 : 0)), next_cursor: null };
+      } else {
+        const query = {
+          ...(filters.status ? { status: filters.status } : {}),
+          ...shared,
+          ...(cursors.value.at(-1) ? { cursor: cursors.value.at(-1) as string } : {}),
+          limit: CATALOG_PAGE_SIZE,
+        };
+        page = unwrap(await getApi().GET('/api/apis', { params: { query } }));
+      }
+      lastChanges.value = statusChanges(rows, page.apis);
+      const next = new Set(resuming.value);
+      for (const change of lastChanges.value) if (change.from === 'action_requise' && change.to === 'enquete') next.add(change.slug);
+      for (const slug of next) if (page.apis.find((row) => row.slug === slug)?.status !== 'enquete') next.delete(slug);
+      resuming.value = next;
+      rows = page.apis;
+      return page;
+    },
+    { immediate: options.immediate ?? true },
+  );
 
   const resetToFirstPage = () => {
     cursors.value = [null];
@@ -64,7 +90,25 @@ export function useApiCatalog(options: { pollMs?: number; searchDebounceMs?: num
     void resource.refetch();
   };
   const searchSoon = useDebounceFn(resetToFirstPage, options.searchDebounceMs ?? 300);
-  watch(() => [filters.status, filters.execution, filters.network], resetToFirstPage);
+  /** Vrai dès que l'utilisateur a touché à un filtre : l'ouverture sur « À traiter » (u3 R16) ne le déplace plus. */
+  const touched = ref(false);
+  let programmatic = false;
+  watch(
+    () => [filters.status, filters.execution, filters.network, filters.attention],
+    () => {
+      if (programmatic) programmatic = false;
+      else touched.value = true;
+      resetToFirstPage();
+    },
+  );
+  // Un statut précis choisi dans la liste remplace la pastille « À traiter ».
+  watch(
+    () => filters.status,
+    (status) => {
+      if (status !== '') filters.attention = false;
+    },
+    { flush: 'sync' },
+  );
   watch(() => filters.q, () => void searchSoon());
 
   useLiveRefresh(() => resource.refetch({ silent: true }), {
@@ -94,10 +138,30 @@ export function useApiCatalog(options: { pollMs?: number; searchDebounceMs?: num
     void resource.refetch();
   }
 
-  const hasActiveFilter = computed(() => filters.status !== '' || filters.execution !== '' || filters.network !== '' || filters.q.trim() !== '');
+  const hasActiveFilter = computed(() => filters.status !== '' || filters.execution !== '' || filters.network !== '' || filters.q.trim() !== '' || filters.attention);
+
+  /**
+   * Choisit une pastille-filtre : « Tout » vide le statut, « À traiter » active le regroupement, « Saines » et « Arrêts
+   * volontaires » filtrent `sain` et `bloquee`. `user: false` : ouverture automatique sur « À traiter », qui ne compte pas
+   * comme un choix de l'utilisateur.
+   */
+  function setPill(pill: PillId, { user = true }: { user?: boolean } = {}): void {
+    if (!user) {
+      programmatic = true;
+      // Le drapeau tombe après le tour de réactivité même si aucun filtre n'a changé.
+      void nextTick(() => {
+        programmatic = false;
+      });
+    }
+    filters.attention = pill === 'attention';
+    filters.status = pill === 'healthy' ? 'sain' : pill === 'stopped' ? 'bloquee' : '';
+  }
 
   return {
     filters,
+    touched: readonly(touched),
+    resuming,
+    setPill,
     suspended,
     apis: computed(() => resource.data.value?.apis ?? []),
     loading: resource.loading,

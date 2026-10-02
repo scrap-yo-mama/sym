@@ -2,39 +2,53 @@
 <script setup lang="ts">
 /**
  * @file PhaseTimeline.vue
- * @description Frise à 4 jalons de `investigation_phase` (06 § 2). L'état d'un jalon n'est jamais porté par la couleur
- * seule : forme du marqueur et texte (« terminée », « en cours », « à venir ») restent lisibles (WCAG 1.4.1).
+ * @description Frise des quatre jalons d'une enquête (06 § 2, 20 § 5.3) : Décrire, Reconnaître, Valider le schéma, Essayer.
+ * Mêmes clés et mêmes libellés que le récit MCP et les journaux (`packages/core/src/investigation/milestones.ts`, `assert_milestones_same_labels`).
+ * Liste ordonnée `<ol>` ; le jalon en cours porte `aria-current="step"`. L'état d'un jalon n'est jamais porté par la couleur
+ * seule : carré numéroté (coche pour « fait », carré plein pour « arrêté ») et état écrit (« à faire », « en cours », « fait », « arrêté »).
+ * Un arrêt marque le jalon où l'enquête s'est arrêtée « arrêté », jamais « fait », et ne propose aucune suite.
  * @component
- * @example <PhaseTimeline :phase="state.phase" />
+ * @example <PhaseTimeline :states="milestoneView(state, { created: true })" />
  */
-import { computed } from 'vue';
 import { useI18n } from 'vue-i18n';
-import { PHASE_MILESTONES, type InvestigationPhase } from '@/lib/investigation';
+import { INVESTIGATION_MILESTONES, type InvestigationMilestone, type MilestoneState } from '@/lib/investigation';
 
 interface Props {
-  phase: InvestigationPhase | null;
+  states: Readonly<Record<InvestigationMilestone, MilestoneState>>;
 }
 
-const props = defineProps<Props>();
+defineProps<Props>();
 const { t } = useI18n();
 
-const stepper = computed(() => {
-  const current = props.phase === null ? -1 : props.phase === 'done' ? PHASE_MILESTONES.length : PHASE_MILESTONES.indexOf(props.phase);
-  return PHASE_MILESTONES.map((milestone, at) => ({
-    milestone,
-    state: at < current ? ('done' as const) : at === current ? ('current' as const) : ('upcoming' as const),
-  }));
-});
+const MARKERS: Record<MilestoneState, (n: number) => string> = {
+  todo: (n) => String(n),
+  current: (n) => String(n),
+  done: () => '✓',
+  stopped: () => '■',
+};
 
-const MARKERS = { done: '✓', current: '●', upcoming: '○' } as const;
+/** Surface du carré par état : jaune (signature) en cours, aqua fait, anthracite arrêté, carte à faire. */
+const TONES: Record<MilestoneState, string> = {
+  todo: 'border-border bg-card text-muted-foreground',
+  current: 'border-status-border bg-signature text-signature-foreground',
+  done: 'border-status-border bg-status-sain text-status-sain-foreground',
+  stopped: 'border-status-border bg-status-bloquee text-status-bloquee-foreground',
+};
 </script>
 
 <template>
-  <ol class="flex flex-wrap gap-x-4 gap-y-1" :aria-label="t('investigation.phase.label')" data-testid="phase-timeline">
-    <li v-for="step in stepper" :key="step.milestone" class="flex items-center gap-1 text-sm" :aria-current="step.state === 'current' ? 'step' : undefined" :data-state="step.state">
-      <span aria-hidden="true">{{ MARKERS[step.state] }}</span>
-      <span :class="step.state === 'upcoming' ? 'text-muted-foreground' : 'font-medium'">{{ t(`investigation.phase.${step.milestone}`) }}</span>
-      <span class="sr-only">({{ t(`investigation.phase.state.${step.state}`) }})</span>
+  <ol class="flex flex-wrap gap-x-5 gap-y-2" :aria-label="t('investigation.milestones.label')" data-testid="phase-timeline">
+    <li
+      v-for="(milestone, at) in INVESTIGATION_MILESTONES"
+      :key="milestone"
+      class="flex items-center gap-2 text-sm"
+      :aria-current="states[milestone] === 'current' ? 'step' : undefined"
+      :data-milestone="milestone"
+      :data-state="states[milestone]"
+    >
+      <span class="inline-flex size-7 shrink-0 items-center justify-center rounded-md border-2 text-sm font-bold" :class="TONES[states[milestone]]" aria-hidden="true">{{ MARKERS[states[milestone]](at + 1) }}</span>
+      <span :class="states[milestone] === 'todo' ? 'text-muted-foreground' : 'font-medium'">{{ t(`investigation.milestones.${milestone}`) }}</span>
+      <span class="text-muted-foreground">({{ t(`investigation.milestones.state.${states[milestone]}`) }})</span>
     </li>
   </ol>
 </template>

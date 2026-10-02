@@ -4,7 +4,10 @@
  * @file ApiCatalogTable.vue
  * @description Tableau du catalogue (06 § 2) : nom et description, badge d'exécution, badge réseau, statut et raison
  * (la « colonne warning » ; pour une action requise, le titre de la tâche, même verbe que le bandeau de la fiche), dernier run, coût moyen (préfixe « ~ » s'il est estimé), taux de succès sur 30 jours, icône
- * « ordinateur requis » et pastille Accès. La raison est toujours visible en texte. Pagination et filtres : la vue.
+ * « ordinateur requis » et pastille Accès, puis UNE action utile par ligne (20 § 5.2) : « Voir les alternatives » pour une API
+ * bloquée, le verbe du bandeau de la fiche pour une action requise (qui devient « Reprise de l'enquête… » dès que l'enquête
+ * reprend), rien sur une ligne saine ; jamais de relance ni de tunnel après un blocage (A7). La raison est toujours visible en
+ * texte. Pagination et filtres : la vue.
  * @component
  * @example <ApiCatalogTable :apis="apis" />
  */
@@ -18,7 +21,9 @@ import StatusReason from '@/components/catalog/StatusReason.vue';
 import type { ApiSummary } from '@/composables/useApiCatalog';
 import { formatAgo, formatPercent, formatUsd } from '@/lib/display-format';
 
-defineProps<{ apis: readonly ApiSummary[]; busy?: boolean }>();
+import { rowAction } from '@/lib/catalog-actions';
+
+withDefaults(defineProps<{ apis: readonly ApiSummary[]; busy?: boolean; resuming?: ReadonlySet<string> }>(), { busy: false, resuming: () => new Set<string>() });
 const { t, locale } = useI18n();
 </script>
 
@@ -36,10 +41,11 @@ const { t, locale } = useI18n();
           <th scope="col" class="px-3 py-2 font-medium">{{ t('catalog.columns.cost') }}</th>
           <th scope="col" class="px-3 py-2 font-medium">{{ t('catalog.columns.success') }}</th>
           <th scope="col" class="px-3 py-2 font-medium">{{ t('catalog.columns.access') }}</th>
+          <th scope="col" class="px-3 py-2 font-medium">{{ t('catalog.columns.action') }}</th>
         </tr>
       </thead>
       <tbody>
-        <tr v-for="api in apis" :key="api.id" class="border-t align-top" data-testid="catalog-row" :data-slug="api.slug" :data-status="api.status">
+        <tr v-for="api in apis" :key="api.id" class="border-t align-top" :class="api.status === 'action_requise' ? 'bg-accent' : ''" data-testid="catalog-row" :data-slug="api.slug" :data-status="api.status">
           <th scope="row" class="max-w-[18rem] px-3 py-3 font-normal">
             <RouterLink :to="`/apis/${api.slug}`" class="font-medium underline-offset-4 hover:underline focus-visible:underline">{{ api.slug }}</RouterLink>
             <p class="mt-0.5 line-clamp-2 text-muted-foreground">{{ api.description }}</p>
@@ -65,6 +71,13 @@ const { t, locale } = useI18n();
           <td class="px-3 py-3 whitespace-nowrap">{{ formatUsd(api.avg_cost_usd, locale, api.avg_cost_estimated ?? false) }}</td>
           <td class="px-3 py-3 whitespace-nowrap">{{ formatPercent(api.success_rate_30d, locale) }}</td>
           <td class="px-3 py-3"><AccessSignal :signal="api.access_signal" /></td>
+          <td class="px-3 py-3" data-testid="row-action-cell">
+            <!-- La ligne se coche seule (flux SSE) puis dit « Reprise de l'enquête… » : une action requise n'est plus à faire. -->
+            <p v-if="resuming.has(api.slug)" class="text-sm font-medium" data-testid="row-resuming">{{ t('actionRequired.resuming') }}</p>
+            <template v-else-if="rowAction(api)">
+              <RouterLink :to="rowAction(api)!.to" class="font-medium underline underline-offset-4 focus-visible:underline" data-testid="row-action" :data-kind="rowAction(api)!.kind">{{ t(rowAction(api)!.labelKey) }}</RouterLink>
+            </template>
+          </td>
         </tr>
       </tbody>
     </table>

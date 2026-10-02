@@ -23,7 +23,7 @@ import { Button } from '@/components/ui/button';
 import type { Busy } from '@/composables/useInvestigation';
 import { useReason } from '@/composables/useReason';
 import { formatDuration, formatUsd } from '@/lib/format';
-import type { AttemptView, ExchangeView, Execution, InvestigationState } from '@/lib/investigation';
+import { milestoneView, trialCards, type AttemptView, type ExchangeView, type Execution, type InvestigationState } from '@/lib/investigation';
 
 interface Props {
   state: Readonly<InvestigationState>;
@@ -44,7 +44,8 @@ interface Emits {
   (e: 'resume'): void;
   (e: 'cancel'): void;
   (e: 'validate', payload: { outputSchema?: Record<string, unknown>; excludeExecutions: Execution[] }): void;
-  (e: 'reinvestigate'): void;
+  /** Ré-enquêter ; `note` : la remarque de l'utilisateur à la porte du schéma. */
+  (e: 'reinvestigate', note?: string): void;
 }
 const emit = defineEmits<Emits>();
 
@@ -53,6 +54,9 @@ const { resultLabel } = useReason();
 
 const title = computed(() => (props.state.domain ? t('investigation.title', { domain: props.state.domain }) : t('investigation.titleUnknown')));
 const finished = computed(() => props.state.terminal || props.cancelled);
+/** Les quatre jalons : « Décrire » est fait (l'API existe) ; un arrêt marque le jalon où l'enquête s'est arrêtée. */
+const milestones = computed(() => milestoneView(props.state, { created: true, cancelled: props.cancelled }));
+const cards = computed(() => trialCards(props.state, { halted: props.state.blocked !== null || finished.value }));
 const controlsDisabled = (): boolean => finished.value || props.busy !== null;
 
 // « Suspendre le suivi » (2.2.2) : fige l'affichage des essais et coupe les annonces ; le serveur continue.
@@ -123,7 +127,7 @@ function viewTrials(): void {
     />
     <ActionBanner v-if="state.action" :action="state.action" @reinvestigate="emit('reinvestigate')" />
 
-    <PhaseTimeline :phase="state.phase" />
+    <PhaseTimeline :states="milestones" />
 
     <div class="flex flex-wrap items-center gap-3" data-testid="investigation-controls">
       <Button
@@ -211,9 +215,12 @@ function viewTrials(): void {
           :input-schema="state.inputSchema"
           :strategy="state.strategy"
           :phase="state.phase"
-          :plan="state.plan"
-          :busy="busy === 'validate'"
+          :cards="cards"
+          :budget="state.budget"
+          :validated-by="state.validatedBy"
+          :busy="busy === 'validate' || busy === 'reinvestigate'"
           @validate="(payload) => emit('validate', payload)"
+          @reinvestigate="(note) => emit('reinvestigate', note)"
         />
       </section>
     </div>

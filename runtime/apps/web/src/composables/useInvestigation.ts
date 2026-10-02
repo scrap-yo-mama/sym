@@ -214,13 +214,13 @@ export function useInvestigation(options: InvestigationOptions = {}) {
     return true;
   }
 
-  /** « Ré-enquêter » (seule reprise offerte à une API bloquée, transition 18) : action manuelle de l'utilisateur. */
-  async function reinvestigate(): Promise<boolean> {
+  /** « Ré-enquêter » (seule reprise offerte à une API bloquée, transition 18) : action manuelle de l'utilisateur ; `note` : sa remarque (porte du schéma). */
+  async function reinvestigate(note?: string): Promise<boolean> {
     const slug = state.slug;
     if (!slug || busy.value) return false;
     busy.value = 'reinvestigate';
     failure.value = null;
-    const result = await call<unknown>(() => getApi().POST('/api/apis/{slug}/investigate', { params: { path: { slug } }, body: {} }));
+    const result = await call<unknown>(() => getApi().POST('/api/apis/{slug}/investigate', { params: { path: { slug } }, body: note ? { note } : {} }));
     busy.value = null;
     if (!result.ok) {
       failure.value = result.messageKey;

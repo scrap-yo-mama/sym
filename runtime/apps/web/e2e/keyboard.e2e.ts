@@ -108,6 +108,19 @@ test.describe('assert_keyboard_only_path : du catalogue à un run', () => {
         await page.keyboard.press('Enter');
         expect(await page.evaluate(() => document.activeElement?.id)).toBe('main');
 
+        // 1 bis. Pastilles-filtres (20 § 5.2) : le tableau s'ouvre sur « À traiter » ; au clavier, « Tout » s'atteint par Tab et
+        //    s'active par Entrée (bouton à bascule), puis la liste complète s'affiche.
+        const allLabel = text(locale, 'catalog.pills.all');
+        let pill = await focused(page);
+        for (let step = 0; step < 12 && !pill.name?.startsWith(allLabel); step += 1) {
+          await page.keyboard.press('Tab');
+          pill = await focused(page);
+        }
+        expect(pill.name, 'Tab atteint la pastille « Tout »').toContain(allLabel);
+        await page.keyboard.press('Enter');
+        await expect(page.locator('[data-pill="all"]')).toHaveAttribute('aria-pressed', 'true');
+        await expect(page.locator('[data-slug="zz-sain"]')).toBeVisible();
+
         // 2. Filtres : la recherche se tape, un filtre (liste native) se règle avec les flèches ou la saisie, et relit le serveur.
         const stops: Stop[] = [];
         for (let step = 0; step < 12; step += 1) {
