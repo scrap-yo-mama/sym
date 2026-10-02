@@ -242,6 +242,40 @@ describe('enregistrements côté nœud sur de vrais Chromium', () => {
     }
   });
 
+  test('page en pleine première navigation : Page.startScreencast « Not attached to an active page » → démarrage réessayé, vidéo produite', async () => {
+    const lease = await pool.acquire({ sessionId: 'rec-detached', type: 'shared', tenantId: 'tenant-c' });
+    const context = await lease.browser.newContext();
+    try {
+      const page = await context.newPage();
+      await page.goto(`${siteUrl}/static/about.html`);
+      // Deux refus, comme Chromium pendant que la navigation remplace about:blank, puis le screencast démarre.
+      let refusals = 2;
+      const detached = {
+        newCDPSession: async (target: typeof page) => {
+          const cdp = await context.newCDPSession(target);
+          const send = (method: string, params?: object) => {
+            if (method === 'Page.startScreencast' && refusals > 0) {
+              refusals -= 1;
+              return Promise.reject(new Error('cdpSession.send: Protocol error (Page.startScreencast): Not attached to an active page'));
+            }
+            return cdp.send(method as never, params as never);
+          };
+          return new Proxy(cdp, { get: (obj, key) => (key === 'send' ? send : Reflect.get(obj, key, obj)) });
+        },
+      } as unknown as typeof context;
+      const video = await PageVideo.start(detached, page, { path: join(root, 'detached.webm'), ffmpeg: ffmpegPath(), maxBytes: 10 * 1024 * 1024 });
+      await page.goto(`${siteUrl}/`);
+      await new Promise((resolve) => setTimeout(resolve, 1_500));
+      await video.stop();
+      expect(refusals).toBe(0);
+      expect(video.frames).toBeGreaterThan(0);
+      expect((await playVideo(readFileSync(video.path))).duration).toBeGreaterThan(1);
+    } finally {
+      await context.close();
+      await lease.release();
+    }
+  });
+
   test('assert_cdp_client_compat (F7) : session dedicated pilotée par un client CDP tiers → webm, HAR et console.ndjson produits côté nœud, recording.ready par type', async () => {
     const lease = await pool.acquire({ sessionId: 'rec-cdp', type: 'dedicated', tenantId: 'tenant-b' });
     const connection = await connectRecordingContext(lease.cdpEndpoint!);

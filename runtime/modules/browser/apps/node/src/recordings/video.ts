@@ -13,6 +13,7 @@ const VIDEO_SIZE = Object.freeze({ width: 1280, height: 720 });
 const FPS = 25;
 const FINALIZE_TIMEOUT_MS = 30_000;
 const FIRST_FRAME_TIMEOUT_MS = 5_000;
+const START_RETRY_MS = 100;
 
 type Frame = { data: string; sessionId: number; metadata: { timestamp?: number } };
 
@@ -52,7 +53,17 @@ export class PageVideo {
         void cdp.send('Page.screencastFrameAck', { sessionId: frame.sessionId }).catch(() => undefined);
         video.#onFrame(Buffer.from(frame.data, 'base64'), frame.metadata.timestamp ?? Date.now() / 1000);
       });
-      await cdp.send('Page.startScreencast', { format: 'jpeg', quality: 90, maxWidth: VIDEO_SIZE.width, maxHeight: VIDEO_SIZE.height, everyNthFrame: 1 });
+      // Page tout juste ouverte : pendant que sa première navigation remplace `about:blank`, Chromium répond « Not attached
+      // to an active page ». Démarrage réessayé jusqu'au délai, sinon la vidéo de la page entière est perdue.
+      for (let attempt = 1; ; attempt += 1) {
+        try {
+          await cdp.send('Page.startScreencast', { format: 'jpeg', quality: 90, maxWidth: VIDEO_SIZE.width, maxHeight: VIDEO_SIZE.height, everyNthFrame: 1 });
+          break;
+        } catch (error) {
+          if (page.isClosed() || attempt * START_RETRY_MS >= FIRST_FRAME_TIMEOUT_MS || !String(error).includes('Not attached to an active page')) throw error;
+          await new Promise((resolve) => setTimeout(resolve, START_RETRY_MS));
+        }
+      }
       // Le screencast n'émet une image qu'au prochain rendu : sur un Chromium chargé, aucune peut arriver avant la fin et
       // la vidéo est perdue. Première image prise tout de suite (bornée dans le temps) : la vidéo couvre la page dès son
       // ouverture, la dernière image étant répétée jusqu'à la suivante.
