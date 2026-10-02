@@ -17,6 +17,9 @@ Composants tiers dont une attribution explicite est attendue
 Apache License 2.0 (texte : https://www.apache.org/licenses/LICENSE-2.0)
   - Playwright (Microsoft Corporation) : pilotage du navigateur
   - Drizzle ORM (Drizzle Team) : accès à PostgreSQL
+  - Profil seccomp par défaut de Docker (The Moby Authors, moby v28.0.4,
+    profiles/seccomp/default.json) : repris dans deploy/seccomp-chromium.json,
+    modifié (une règle ajoutée : clone, setns et unshare, bac à sable de Chromium)
 
 MIT License
   - Ajv : validation de schémas JSON

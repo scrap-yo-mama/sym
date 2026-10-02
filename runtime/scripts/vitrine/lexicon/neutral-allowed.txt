@@ -1,0 +1,7 @@
+# Liste blanche des emplois neutres de la liste P (20 §2.2) : phrases retirées du texte avant la recherche des mots de P,
+# sur toute surface. Une phrase par ligne ; même normalisation que les listes (casse, accents, traits d'union, espaces, apostrophes).
+mot de passe
+icone invisible aux lecteurs d'ecran
+invisible aux lecteurs d'ecran
+invisible to screen readers
+aria-hidden
