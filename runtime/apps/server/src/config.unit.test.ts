@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { generateMasterKey } from '@runtime/core';
+import type { Db } from '@runtime/db';
+import pg from 'pg';
 import { afterEach, expect, test } from 'vitest';
+import { createAuth } from './auth/better-auth.js';
 import { ConfigError, loadServerConfig, PUBLISHED_EXTENSION_IDS, TELEMETRY_VARIABLES } from './config.js';
 
 const base = () => ({ DATABASE_URL: 'postgres://u@localhost/db', PUBLIC_URL: 'https://runtime.zz-test.example/', MASTER_KEY: generateMasterKey() });
@@ -58,5 +61,33 @@ test('MCP : origines admises comparées en entier (schéma, hôte, port) ; MCP_A
   expect(mixed.allowedOriginHosts).toEqual(['127.0.0.1']);
   for (const bad of ['https://claude.zz-test.example/path', 'ftp://claude.zz-test.example', 'claude.zz-test.example:8443', 'https://u:p@claude.zz-test.example']) {
     expect(() => loadServerConfig({ ...base(), MCP_ALLOWED_ORIGINS: bad }), bad).toThrow(/MCP_ALLOWED_ORIGINS/);
+  }
+});
+
+test('PUBLIC_URL normalisée : point final de l’hôte retiré, « / » final sans effet (F-20261002-12)', () => {
+  const origin = (publicUrl: string) => loadServerConfig({ ...base(), PUBLIC_URL: publicUrl }).publicUrl;
+  expect(origin('https://scrapyomama-runtime.onrender.com.')).toBe('https://scrapyomama-runtime.onrender.com');
+  expect(origin('https://scrapyomama-runtime.onrender.com./')).toBe('https://scrapyomama-runtime.onrender.com');
+  expect(origin('https://scrapyomama-runtime.onrender.com/')).toBe('https://scrapyomama-runtime.onrender.com');
+  expect(origin('https://runtime.zz-test.example.:8443')).toBe('https://runtime.zz-test.example:8443');
+  expect(origin('  HTTPS://Runtime.ZZ-Test.example.  ')).toBe('https://runtime.zz-test.example');
+});
+
+test('PUBLIC_URL avec chemin, requête, fragment ou identifiants : refusée au démarrage (ConfigError)', () => {
+  for (const bad of ['https://runtime.zz-test.example/console', 'https://runtime.zz-test.example/?a=1', 'https://runtime.zz-test.example?a=1', 'https://runtime.zz-test.example/#x', 'https://u:p@runtime.zz-test.example', 'https://u@runtime.zz-test.example']) {
+    expect(() => loadServerConfig({ ...base(), PUBLIC_URL: bad }), bad).toThrow(ConfigError);
+  }
+  expect(() => loadServerConfig({ ...base(), PUBLIC_URL: 'https://u:secret@runtime.zz-test.example' })).not.toThrow(/secret/);
+});
+
+test('la PUBLIC_URL normalisée atterrit dans la configuration de Better Auth (baseURL, trustedOrigins)', () => {
+  const config = loadServerConfig({ ...base(), PUBLIC_URL: 'https://scrapyomama-runtime.onrender.com.' });
+  const pool = new pg.Pool({ connectionString: config.databaseUrl });
+  try {
+    const auth = createAuth({ db: {} as Db, pool, secret: 'zz-test-secret-' + 'k'.repeat(32), publicUrl: config.publicUrl });
+    expect(auth.options.baseURL).toBe('https://scrapyomama-runtime.onrender.com');
+    expect(auth.options.trustedOrigins).toEqual(['https://scrapyomama-runtime.onrender.com']);
+  } finally {
+    void pool.end();
   }
 });

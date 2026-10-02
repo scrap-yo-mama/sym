@@ -34,3 +34,4 @@ export type * from './sandbox/index.js';
 export * from './version.js';
 export * from './portability/index.js';
 export * from './config/env-catalog.js';
+export * from './config/public-url.js';
