@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Image de SYM Browser (cdc/sym-browser 03 § 1 et § 9), cible ghcr.io/scrap-yo-mama/sym-browser. Contexte de build : runtime/
 #   docker build -f modules/browser/Dockerfile -t sym-browser:dev .
-#   docker run --rm --security-opt seccomp=modules/browser/deploy/seccomp-chromium.json -e MASTER_KEY=… -e DATABASE_URL=… sym-browser:dev
+#   docker run --rm --security-opt seccomp=modules/browser/deploy/seccomp-chromium.json --security-opt no-new-privileges --cap-drop ALL -e MASTER_KEY=… -e DATABASE_URL=… sym-browser:dev
 # Le contexte est filtré par modules/browser/Dockerfile.dockerignore : seuls le contrat et les paquets du module entrent.
 # Tâche 0.4 : un seul point d'entrée, le rôle vient de SYMB_MODE (all, gateway, node) ; configuration invalide : sortie code 1.
 # Variables obligatoires : DATABASE_URL, MASTER_KEY (+ NODE_TOKEN en gateway et node). /healthz et /readyz sur PORT (3000).
@@ -22,13 +22,15 @@ ENV NODE_ENV=production
 WORKDIR /app
 # tini en PID 1 : relaie SIGTERM (arrêt gracieux, tâche 2.7) et récolte les zombies de Chromium. /ms-playwright est livré
 # en 777 par l'image de base : rendu non modifiable par pwuser (un processus compromis ne remplace pas le binaire de
-# Chromium) ; Firefox et WebKit, inutilisés, sont retirés.
+# Chromium) ; Firefox et WebKit, inutilisés, sont retirés. Les bits setuid et setgid de la base (su, mount, passwd…) sont
+# retirés : aucun processus du conteneur ne peut regagner de privilège, même lancé sans no-new-privileges.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends tini \
  && rm -rf /var/lib/apt/lists/* \
  && corepack enable \
  && rm -rf /ms-playwright/firefox-* /ms-playwright/webkit-* \
- && chmod -R go-w,a+rX /ms-playwright
+ && chmod -R go-w,a+rX /ms-playwright \
+ && find / -xdev -perm /6000 -type f -exec chmod a-s {} +
 # .pnpmfile.cjs : crochet readPackage du workspace, exigé par le lockfile (pnpmfileChecksum).
 COPY package.json pnpm-workspace.yaml pnpm-lock.yaml .pnpmfile.cjs ./
 COPY packages/contracts/package.json packages/contracts/

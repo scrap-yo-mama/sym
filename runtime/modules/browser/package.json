@@ -7,6 +7,9 @@
   "description": "Racine du module SYM Browser : CI locale du module, tests de frontière et d'environnement. Les paquets sont dans apps/ et packages/.",
   "scripts": {
     "ci:local": "node scripts/ci-local.ts",
+    "fixtures": "node fixtures/src/up.ts up",
+    "fixtures:down": "node fixtures/src/up.ts down",
+    "fixtures:local": "node fixtures/src/main.ts local",
     "typecheck": "tsc -p tsconfig.json",
     "test": "vitest run"
   },

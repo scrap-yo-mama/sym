@@ -4,7 +4,7 @@
 // Les énumérations viennent des constantes du contrat : le schéma et les types TypeScript ne peuvent pas diverger.
 import { EGRESS_BLOCK_REASONS, ON_BUDGET_EXCEEDED, UPSTREAM_PROXY_KINDS, UPSTREAM_PROXY_TYPES } from './egress.js';
 import { ERROR_CODES } from './errors.js';
-import { COLOR_SCHEMES, END_REASONS, LAUNCH_ARGS, PROFILE_MODES, SESSION_STATES, SESSION_TYPES } from './session.js';
+import { COLOR_SCHEMES, END_REASONS, LAUNCH_ARGS, PROFILE_MODES, RESERVED_EXTRA_HEADER_PREFIXES, RESERVED_EXTRA_HEADERS, SESSION_STATES, SESSION_TYPES } from './session.js';
 import { BROWSER_PROTOCOL_VERSION } from './version.js';
 
 const ref = (name: string) => ({ $ref: `#/components/schemas/${name}` }) as const;
@@ -13,6 +13,25 @@ const error = (description: string) => ({ description, content: json(ref('Error'
 const sessionId = { name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } } as const;
 const strings = { type: 'object', additionalProperties: { type: 'string' } } as const;
 const nonNegative = { type: 'integer', minimum: 0 } as const;
+/** Motif insensible à la casse sans drapeau (JSON Schema n'en a pas) : `te` → `[tT][eE]` ; les noms réservés sont des lettres et des tirets. */
+const caseless = (name: string) => [...name].map((c) => (/[a-z]/.test(c) ? `[${c}${c.toUpperCase()}]` : c)).join('');
+/** Noms d'en-têtes : jeton RFC 9110 § 5.6.2, hors en-têtes réservés au navigateur et à l'egress (RESERVED_EXTRA_HEADERS). */
+const extraHeaders = {
+  type: 'object',
+  propertyNames: {
+    pattern: "^[!#$%&'*+.^_`|~0-9A-Za-z-]+$",
+    not: { pattern: `^(?:${[...RESERVED_EXTRA_HEADERS.map(caseless), ...RESERVED_EXTRA_HEADER_PREFIXES.map((prefix) => `${caseless(prefix)}.*`)].join('|')})$` },
+  },
+  additionalProperties: { type: 'string' },
+} as const;
+/** Hôte nu du proxy amont (nom DNS, IPv4 ou IPv6, sans schéma, port, chemin ni identifiants). La garde SSRF (04c § 1) s'y applique à l'exécution (tâches 1.5 et 2.x). */
+const proxyHost = {
+  type: 'string',
+  anyOf: [
+    { pattern: '^(?=.{1,253}$)[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$' },
+    { pattern: '^(?:[0-9A-Fa-f]{0,4}:){2,7}[0-9A-Fa-f]{0,4}$' },
+  ],
+} as const;
 
 export const browserOpenApi = {
   openapi: '3.1.0',
@@ -103,7 +122,7 @@ export const browserOpenApi = {
         required: ['type', 'host', 'port'],
         properties: {
           type: { enum: [...UPSTREAM_PROXY_TYPES] },
-          host: { type: 'string' },
+          host: proxyHost,
           port: { type: 'integer', minimum: 1, maximum: 65535 },
           username: { type: 'string' },
           password: { type: 'string', writeOnly: true },
@@ -160,7 +179,7 @@ export const browserOpenApi = {
           locale: { type: 'string' },
           timezoneId: { type: 'string' },
           userAgent: { type: 'string', maxLength: 512 },
-          extraHTTPHeaders: strings,
+          extraHTTPHeaders: extraHeaders,
           geolocation: {
             type: 'object',
             required: ['latitude', 'longitude'],

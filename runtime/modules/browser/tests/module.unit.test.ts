@@ -2,6 +2,7 @@
 // Hygiène du module SYM Browser (cdc/sym-browser 06 tâche 0.1) : environnement Claude (assert_module_claude_env, volet
 // statique ; le volet interactif `/context` et `/permissions` se vérifie dans une session lancée ici), licences AGPL/MIT,
 // en-têtes SPDX, versions par le catalogue, image non root avec tini et seccomp.
+import { execFileSync } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { dirname, join, relative } from 'node:path';
 import { describe, expect, test } from 'vitest';
@@ -10,6 +11,9 @@ import { MODULE_ROOT } from '../eslint.boundaries.mjs';
 const read = (file: string): string => readFileSync(join(MODULE_ROOT, file), 'utf8');
 type Manifest = { name: string; license: string; scripts?: Record<string, string>; dependencies?: Record<string, string>; devDependencies?: Record<string, string> };
 const manifest = (dir: string): Manifest => JSON.parse(read(join(dir, 'package.json'))) as Manifest;
+
+const REPO_ROOT = join(MODULE_ROOT, '../../..');
+const git = (...args: string[]): string => execFileSync('git', args, { cwd: REPO_ROOT, encoding: 'utf8' });
 
 const PACKAGES = ['.', 'apps/gateway', 'apps/node', 'apps/console', 'packages/sdk', 'packages/core', 'packages/db'];
 const MIT = new Set(['packages/sdk']);
@@ -52,16 +56,28 @@ describe('assert_module_claude_env (volet statique)', () => {
 
   test('skills du module : SKILL.md avec nom et description', () => {
     const skills = readdirSync(join(MODULE_ROOT, '.claude/skills'));
-    expect(skills.length).toBeGreaterThan(0);
+    // 03-architecture § 9 : browser-parity (parité avec le pool navigateur de SYM, 04e § 5 et 04g § 5).
+    expect(skills.sort()).toEqual(expect.arrayContaining(['browser-ci', 'browser-contract-change', 'browser-parity']));
     for (const skill of skills) {
       const text = read(`.claude/skills/${skill}/SKILL.md`);
       expect(text, skill).toMatch(new RegExp(`^---\\nname: ${skill}\\ndescription: .{20,}`));
     }
   });
 
-  test('agent browser-dev à la racine du dépôt (.claude/agents/)', () => {
+  test('agent browser-dev à la racine du dépôt (.claude/agents/), suivi par git malgré /.claude/ ignoré', () => {
     const agent = join(MODULE_ROOT, '../../../.claude/agents/browser-dev.md');
     expect(readFileSync(agent, 'utf8')).toMatch(/^---\nname: browser-dev\ndescription: /);
+    // /.claude/ est dans .gitignore : un « git add » ordinaire perdrait l'agent ; il doit rester dans l'index.
+    expect(git('ls-files', '--', '.claude/agents/browser-dev.md').trim()).toBe('.claude/agents/browser-dev.md');
+  });
+
+  test('parité deny racine/module : la liste du module couvre celle de la racine dès qu’elle est versionnée (tâche 5.0)', () => {
+    const own = JSON.parse(read('.claude/settings.json')) as { permissions: { deny: string[] } };
+    // Jusqu'à 5.0, aucune .claude/settings.json versionnée à la racine : la liste du module est la référence.
+    const tracked = git('ls-files', '--', '.claude/settings.json').trim();
+    if (tracked === '') return;
+    const root = JSON.parse(readFileSync(join(REPO_ROOT, tracked), 'utf8')) as { permissions?: { deny?: string[] } };
+    expect((root.permissions?.deny ?? []).filter((rule) => !own.permissions.deny.includes(rule))).toEqual([]);
   });
 });
 
@@ -84,6 +100,18 @@ describe('licences et en-têtes', () => {
 });
 
 describe('versions et image', () => {
+  test('dépendances déclarées : paquets du module, @sym/contracts, @runtime/ui ou npm tiers, jamais un autre paquet du dépôt', () => {
+    const forbidden: string[] = [];
+    for (const dir of PACKAGES) {
+      const { dependencies = {}, devDependencies = {} } = manifest(dir);
+      for (const name of Object.keys({ ...dependencies, ...devDependencies })) {
+        const allowed = name.startsWith('@sym-browser/') || name === '@sym/contracts' || name === '@runtime/ui' || !/^@(runtime|sym)\//.test(name);
+        if (!allowed) forbidden.push(`${dir} : ${name}`);
+      }
+    }
+    expect(forbidden).toEqual([]);
+  });
+
   test('dépendances par le catalogue (`catalog:`) ou le workspace (`workspace:*`), jamais une plage', () => {
     for (const dir of PACKAGES) {
       const { dependencies = {}, devDependencies = {} } = manifest(dir);
@@ -102,11 +130,26 @@ describe('versions et image', () => {
     expect(lastStage).toMatch(/^ENTRYPOINT \["\/usr\/bin\/tini", "--"\]$/m);
     expect(lastStage).toMatch(/apt-get install -y --no-install-recommends tini/);
     expect(dockerfile).not.toMatch(/--no-sandbox/);
+    // Aucun binaire setuid ou setgid dans l'image d'exécution (su, mount, passwd…) : bits retirés au build.
+    expect(lastStage).toMatch(/find \/ -xdev -perm \/6000 -type f -exec chmod a-s \{\} \+/);
   });
 
-  test('profil seccomp de Chromium présent (repris de SYM) et en JSON valide', () => {
-    const profile = JSON.parse(read('deploy/seccomp-chromium.json')) as { defaultAction: string; syscalls: unknown[] };
-    expect(profile.defaultAction).toMatch(/^SCMP_ACT_/);
+  test('docker run documenté et rejoué : seccomp, no-new-privileges et --cap-drop ALL', () => {
+    const runs = [read('CLAUDE.md'), read('Dockerfile')].flatMap((text) => text.split('\n').filter((line) => /docker run /.test(line)));
+    expect(runs.length).toBeGreaterThan(0);
+    for (const line of runs) {
+      expect(line).toContain('--security-opt seccomp=modules/browser/deploy/seccomp-chromium.json');
+      expect(line).toContain('--security-opt no-new-privileges');
+      expect(line).toContain('--cap-drop ALL');
+    }
+  });
+
+  test('profil seccomp de Chromium : copie exacte de celui de SYM, refus par défaut', () => {
+    const copy = read('deploy/seccomp-chromium.json');
+    // Une dérive entre les deux copies doit casser la CI : la mise à jour se fait des deux côtés à la fois.
+    expect(copy).toBe(readFileSync(join(MODULE_ROOT, '../../deploy/seccomp-chromium.json'), 'utf8'));
+    const profile = JSON.parse(copy) as { defaultAction: string; syscalls: unknown[] };
+    expect(profile.defaultAction).toBe('SCMP_ACT_ERRNO');
     expect(profile.syscalls.length).toBeGreaterThan(0);
   });
 
