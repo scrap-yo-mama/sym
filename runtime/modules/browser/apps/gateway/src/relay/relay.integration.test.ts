@@ -300,7 +300,8 @@ describe('découverte json/version (F5, tâche 2.8)', () => {
   };
 
   test('jeton en query ou en Bearer : champs de Chromium, webSocketDebuggerUrl vers la passerelle avec un jeton NEUF de la même session', async () => {
-    for (const headers of [{}, { authorization: `Bearer ${token(dedicated, 'cdp')}` }]) {
+    const variants: Record<string, string>[] = [{}, { authorization: `Bearer ${token(dedicated, 'cdp')}` }];
+    for (const headers of variants) {
       const given = token(dedicated, 'cdp');
       const path = Object.keys(headers).length > 0 ? `/v1/sessions/${dedicated}/cdp/json/version` : `/v1/sessions/${dedicated}/cdp/json/version?token=${given}`;
       const res = await discover(path, headers);

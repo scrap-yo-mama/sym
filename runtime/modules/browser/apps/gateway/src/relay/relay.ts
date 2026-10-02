@@ -8,7 +8,12 @@
 // Puis relais vers le nœud propriétaire (`WS /internal/sessions/{id}/{protocole}`, `Authorization: Bearer {NODE_TOKEN}` ; le
 // secret du client n'est jamais transmis) : messages transmis sans modification (réécritures : nœud), codes de fermeture
 // propagés dans les deux sens, ping toutes les 20 s et fermeture 1001 après deux pongs manquants, messages plafonnés
-// (`SYMB_CDP_MAX_MESSAGE_BYTES`, fermeture 1009), nœud injoignable : 1011. Fermer la WebSocket ne libère pas la session.
+// (`SYMB_CDP_MAX_MESSAGE_BYTES`, fermeture 1008, 04f § 4), nœud injoignable : 1011. Fermer la WebSocket ne libère pas la
+// session.
+// Découverte (tâche 2.8, F5) : `GET /v1/sessions/{id}/cdp/json/version`, mêmes contrôles que l'upgrade `/cdp`, rend les
+// champs de `/json/version` de Chromium (lus par le nœud, liste blanche) et un `webSocketDebuggerUrl` de la passerelle à
+// jeton neuf : un client qui découvre son point (Puppeteer `browserURL`, Chrome DevTools MCP `--browserUrl`) ne voit
+// jamais le point local du nœud.
 import { sendableCloseCode } from '@sym-browser/core';
 import { BROWSER_ENGINE } from '@sym/contracts/browser';
 import fastifyWebsocket from '@fastify/websocket';
@@ -38,6 +43,8 @@ export type RelayOptions = {
   pingIntervalMs?: number;
   /** Taille maximale d'un message relayé (`SYMB_CDP_MAX_MESSAGE_BYTES`, 100 Mio). */
   cdpMaxMessageBytes?: number;
+  /** Point WebSocket CDP public d'une session, à jeton neuf (`json/version`) ; absent : découverte non servie. */
+  cdpWebSocketUrl?: (sessionId: string) => string | Promise<string>;
   onError?: (error: unknown) => void;
 };
 
@@ -48,6 +55,11 @@ declare module 'fastify' {
 }
 
 const SERVED_MINOR = BROWSER_ENGINE.playwright.split('.').slice(0, 2).join('.');
+/** Champs de `/json/version` rendus au client (liste blanche, 04f § 2). */
+const VERSION_FIELDS = ['Browser', 'Protocol-Version', 'User-Agent', 'V8-Version', 'WebKit-Version', 'Android-Package'] as const;
+const DISCOVERY_TIMEOUT_MS = 5_000;
+
+const sizeOf = (data: RawData): number => (Array.isArray(data) ? data.reduce((n, part) => n + part.length, 0) : data instanceof ArrayBuffer ? data.byteLength : data.length);
 
 /** Version du client Playwright lue dans `User-Agent: Playwright/1.63.0 (…)` : même majeure.mineure exigée (04 § 8). */
 function playwrightClientAccepted(userAgent: string | undefined): boolean {
@@ -57,7 +69,9 @@ function playwrightClientAccepted(userAgent: string | undefined): boolean {
 
 export async function registerRelay(app: FastifyInstance, options: RelayOptions): Promise<void> {
   const pingIntervalMs = options.pingIntervalMs ?? 20_000;
-  const maxPayload = options.cdpMaxMessageBytes ?? 104_857_600;
+  const maxMessageBytes = options.cdpMaxMessageBytes ?? 104_857_600;
+  // Plafond dur de la bibliothèque (1009) bien au-dessus : entre les deux, le relais ferme lui-même en 1008 (04f § 4).
+  const maxPayload = maxMessageBytes + Math.max(maxMessageBytes, 1_048_576);
   const onError = options.onError ?? (() => undefined);
   await app.register(fastifyWebsocket, { options: { maxPayload, perMessageDeflate: false } });
 
@@ -67,20 +81,45 @@ export async function registerRelay(app: FastifyInstance, options: RelayOptions)
     return reply.code(problem.status).send(problem.body(request.id, preferredLanguage(request.headers['accept-language'])));
   };
 
+  const decide = (request: FastifyRequest, protocol: RelayProtocol): Promise<RelayAuthorization> => {
+    const token = (request.query as Record<string, unknown>)['token'];
+    return options.resolver.authorize({
+      sessionId: (request.params as { id: string }).id,
+      protocol,
+      headers: { authorization: request.headers.authorization },
+      query: { token: typeof token === 'string' || Array.isArray(token) ? (token as string | string[]) : undefined },
+    });
+  };
+
+  const cdpWebSocketUrl = options.cdpWebSocketUrl;
+  if (cdpWebSocketUrl) {
+    app.get('/v1/sessions/:id/cdp/json/version', async (request, reply) => {
+      const decision = await decide(request, 'cdp');
+      if (!decision.ok) return fail(request, reply, decision.problem);
+      const url = `${decision.nodeUrl.replace(/\/+$/, '')}/internal/sessions/${encodeURIComponent(decision.sessionId)}/cdp/json/version`;
+      let response: Response;
+      try {
+        response = await fetch(url, { headers: { authorization: `Bearer ${options.nodeToken}` }, signal: AbortSignal.timeout(DISCOVERY_TIMEOUT_MS) });
+      } catch (error) {
+        onError(error);
+        return fail(request, reply, new ApiProblem('no_node', 'Session node unreachable.', { retryAfter: 1 }));
+      }
+      if (response.status === 409) return fail(request, reply, new ApiProblem('protocol_not_served', 'CDP is served for dedicated sessions only.'));
+      if (!response.ok) return fail(request, reply, new ApiProblem('no_node', 'Session node unavailable.', { retryAfter: 1 }));
+      const raw = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+      const fields = Object.fromEntries(VERSION_FIELDS.filter((k) => typeof raw[k] === 'string').map((k) => [k, raw[k]]));
+      reply.header('x-request-id', request.id).header('cache-control', 'no-store');
+      return { ...fields, webSocketDebuggerUrl: await cdpWebSocketUrl(decision.sessionId) };
+    });
+  }
+
   const route = (protocol: RelayProtocol): void => {
     app.get(
       `/v1/sessions/:id/${protocol}`,
       {
         websocket: true,
         preValidation: async (request, reply) => {
-          const sessionId = (request.params as { id: string }).id;
-          const token = (request.query as Record<string, unknown>)['token'];
-          const decision = await options.resolver.authorize({
-            sessionId,
-            protocol,
-            headers: { authorization: request.headers.authorization },
-            query: { token: typeof token === 'string' || Array.isArray(token) ? (token as string | string[]) : undefined },
-          });
+          const decision = await decide(request, protocol);
           if (!decision.ok) return fail(request, reply, decision.problem);
           if (protocol === 'playwright' && !playwrightClientAccepted(request.headers['user-agent'])) {
             return fail(request, reply, new ApiProblem('playwright_version_mismatch', `Playwright client ${SERVED_MINOR}.x required.`, { details: { served: BROWSER_ENGINE.playwright } }));
@@ -121,6 +160,7 @@ export async function registerRelay(app: FastifyInstance, options: RelayOptions)
 
         client.on('message', (data: RawData, binary: boolean) => {
           if (closing) return;
+          if (sizeOf(data) > maxMessageBytes) return closeBoth(1008, 'message au-delà du plafond');
           if (upstream.readyState === WebSocket.OPEN) upstream.send(data, { binary });
           else queue.push({ data, binary });
         });

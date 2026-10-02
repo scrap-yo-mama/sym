@@ -232,7 +232,7 @@ describe('assert_cdp_client_compat (BINV8) sur vrai Chromium, au travers des deu
     expect(discovered['Protocol-Version']).toBe('1.3');
     const debuggerUrl = discovered['webSocketDebuggerUrl'] ?? '';
     expect(debuggerUrl.startsWith(`${gatewayBase}/v1/sessions/${SESSION}/cdp?token=symt_`)).toBe(true);
-    expect(JSON.stringify(discovered)).not.toMatch(/devtools\/browser|127\.0\.0\.1:(?!${new URL(gatewayBase).port})/);
+    expect(JSON.stringify(discovered)).not.toMatch(new RegExp(`devtools/browser|127\\.0\\.0\\.1:(?!${new URL(gatewayBase).port}/)`));
     const cdp = await rawCdp(debuggerUrl);
     expect(((await cdp.send('Browser.getVersion')) as { product: string }).product).toMatch(/Chrome\/153\./);
     await cdp.close();

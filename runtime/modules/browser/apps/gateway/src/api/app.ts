@@ -217,6 +217,8 @@ export async function createGatewayApi(deps: GatewayDeps): Promise<FastifyInstan
       nodeToken: deps.relay.nodeToken,
       ...(deps.relay.pingIntervalMs === undefined ? {} : { pingIntervalMs: deps.relay.pingIntervalMs }),
       ...(deps.relay.cdpMaxMessageBytes === undefined ? {} : { cdpMaxMessageBytes: deps.relay.cdpMaxMessageBytes }),
+      // Découverte json/version (tâche 2.8) : même URL que `connectUrls.cdp`, jeton neuf.
+      cdpWebSocketUrl: async (sessionId) => (await connectUrls(sessionId, 'dedicated')).cdp ?? '',
       onError,
     });
   }

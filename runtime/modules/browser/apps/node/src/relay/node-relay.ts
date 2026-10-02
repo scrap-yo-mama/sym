@@ -7,9 +7,12 @@
 // Puis relais vers le point local de Chromium (WebSocket Playwright de `launchServer`, ou CDP sur 127.0.0.1) : chaque
 // message du client passe par les réécritures (rewrite.ts) et compte comme activité (délai d'inactivité, tâche 1.2) ; les
 // messages du navigateur reviennent tels quels ; les codes de fermeture se propagent ; au-delà de `maxMessageBytes`,
-// fermeture 1009. La déconnexion du client ne libère pas la session (04 § 8) ; seul `Browser.close` le fait.
+// fermeture 1008 (04f § 4 ; plafond dur de la bibliothèque au-delà de plafond + max(plafond, 1 Mio) : 1009). La déconnexion du client ne libère pas la
+// session (04 § 8) ; seul `Browser.close` le fait.
+// Découverte (tâche 2.8) : `GET /internal/sessions/{id}/cdp/json/version` (mêmes contrôles) rend les champs de
+// `/json/version` de Chromium, liste blanche, SANS ses points locaux : la passerelle pose le sien, à jeton neuf (04f § 2).
 import { createHash, timingSafeEqual } from 'node:crypto';
-import type { IncomingMessage } from 'node:http';
+import { get as httpGet, type IncomingMessage, type ServerResponse } from 'node:http';
 import type { Duplex } from 'node:stream';
 import { sendableCloseCode } from '@sym-browser/core';
 import type { SessionType } from '@sym/contracts/browser';
@@ -35,7 +38,7 @@ export type NodeRelayOptions = {
   nodeToken: string;
   sessions: NodeSessionDirectory;
   onActivity?: (sessionId: string) => void;
-  /** Taille maximale d'un message (`SYMB_CDP_MAX_MESSAGE_BYTES`, 100 Mio par défaut) ; au-delà, fermeture 1009. */
+  /** Taille maximale d'un message (`SYMB_CDP_MAX_MESSAGE_BYTES`, 100 Mio par défaut) ; au-delà, fermeture 1008. */
   maxMessageBytes?: number;
   onError?: (error: unknown) => void;
 };
@@ -43,10 +46,40 @@ export type NodeRelayOptions = {
 export type NodeRelay = {
   /** Traite un upgrade sous `/internal/sessions/` ; `false` si le chemin n'est pas celui du relais (l'appelant décide). */
   handleUpgrade(request: IncomingMessage, socket: Duplex, head: Buffer): boolean;
+  /** Traite `GET /internal/sessions/{id}/cdp/json/version` ; `false` pour toute autre requête. */
+  handleRequest(request: IncomingMessage, response: ServerResponse): boolean;
   close(): Promise<void>;
 };
 
 const PATH = /^\/internal\/sessions\/([^/?#]+)\/([^/?#]+)$/;
+const JSON_VERSION_PATH = /^\/internal\/sessions\/([^/?#]+)\/cdp\/json\/version\/?$/;
+/** Champs de `/json/version` rendus (liste blanche) : jamais `webSocketDebuggerUrl` ni `devtoolsFrontendUrl` locaux. */
+const VERSION_FIELDS = ['Browser', 'Protocol-Version', 'User-Agent', 'V8-Version', 'WebKit-Version', 'Android-Package'] as const;
+const DISCOVERY_TIMEOUT_MS = 5_000;
+
+/** Taille d'un message reçu par `ws` (Buffer, ArrayBuffer ou fragments). */
+const sizeOf = (data: RawData): number => (Array.isArray(data) ? data.reduce((n, part) => n + part.length, 0) : data instanceof ArrayBuffer ? data.byteLength : data.length);
+
+/** `/json/version` du Chromium local de la session (point CDP en 127.0.0.1), champs de la liste blanche seulement. */
+function chromiumVersion(cdpEndpoint: string): Promise<Record<string, string>> {
+  const { host } = new URL(cdpEndpoint);
+  return new Promise((resolve, reject) => {
+    const req = httpGet({ host: host.split(':')[0], port: Number(host.split(':')[1]), path: '/json/version', timeout: DISCOVERY_TIMEOUT_MS }, (res) => {
+      const chunks: Buffer[] = [];
+      res.on('data', (chunk: Buffer) => chunks.push(chunk));
+      res.on('end', () => {
+        try {
+          const raw = JSON.parse(Buffer.concat(chunks).toString('utf8')) as Record<string, unknown>;
+          resolve(Object.fromEntries(VERSION_FIELDS.filter((k) => typeof raw[k] === 'string').map((k) => [k, raw[k] as string])));
+        } catch (error) {
+          reject(error);
+        }
+      });
+    });
+    req.on('timeout', () => req.destroy(new Error('json/version : délai dépassé')));
+    req.on('error', reject);
+  });
+}
 const STATUS_TEXT: Record<number, string> = { 401: 'Unauthorized', 404: 'Not Found', 409: 'Conflict' };
 
 function refuse(socket: Duplex, status: 401 | 404 | 409, code: string): void {
@@ -58,7 +91,9 @@ const digest = (value: string): Buffer => createHash('sha256').update(value).dig
 
 export function createNodeRelay(options: NodeRelayOptions): NodeRelay {
   const expected = digest(`Bearer ${options.nodeToken}`);
-  const maxPayload = options.maxMessageBytes ?? 104_857_600;
+  const maxMessageBytes = options.maxMessageBytes ?? 104_857_600;
+  // Plafond dur de la bibliothèque (1009) bien au-dessus du plafond : entre les deux, le relais ferme lui-même en 1008 (04f § 4).
+  const maxPayload = maxMessageBytes + Math.max(maxMessageBytes, 1_048_576);
   const onError = options.onError ?? (() => undefined);
   const wss = new WebSocketServer({ noServer: true, maxPayload, perMessageDeflate: false });
   const upstreams = new Set<WebSocket>();
@@ -99,6 +134,7 @@ export function createNodeRelay(options: NodeRelayOptions): NodeRelay {
 
     client.on('message', (data: RawData, isBinary: boolean) => {
       if (closing) return;
+      if (sizeOf(data) > maxMessageBytes) return closeBoth(1008, 'message au-delà du plafond');
       options.onActivity?.(sessionId);
       if (isBinary) return closeBoth(1007, 'message binaire refusé');
       handle(rewrite(data.toString(), ctx));
@@ -151,6 +187,37 @@ export function createNodeRelay(options: NodeRelayOptions): NodeRelay {
         return true;
       }
       wss.handleUpgrade(request, socket, head, (client) => pipe(client, sessionId, session, protocol));
+      return true;
+    },
+    handleRequest(request, response) {
+      const path = (request.url ?? '').split('?')[0] ?? '';
+      const match = JSON_VERSION_PATH.exec(path);
+      if (!match || request.method !== 'GET') return false;
+      const reply = (status: number, body: unknown): void => {
+        const text = JSON.stringify(body);
+        response.writeHead(status, { 'content-type': 'application/json', 'content-length': Buffer.byteLength(text), 'cache-control': 'no-store' });
+        response.end(text);
+      };
+      if (!authorized(request)) {
+        reply(401, { error: { code: 'unauthorized' } });
+        return true;
+      }
+      const session = options.sessions.get(decodeURIComponent(match[1] ?? ''));
+      if (!session) {
+        reply(404, { error: { code: 'session_not_found' } });
+        return true;
+      }
+      if (session.type !== 'dedicated' || session.cdp === null) {
+        reply(409, { error: { code: 'protocol_not_served' } });
+        return true;
+      }
+      chromiumVersion(session.cdp).then(
+        (version) => reply(200, version),
+        (error: unknown) => {
+          onError(error);
+          reply(502, { error: { code: 'browser_unreachable' } });
+        },
+      );
       return true;
     },
     async close() {
