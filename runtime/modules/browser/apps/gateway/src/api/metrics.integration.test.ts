@@ -15,13 +15,15 @@ beforeAll(async () => {
     ],
     queueTimeoutMs: 10_000,
   });
-  // node-old ne bat plus depuis 20 s : vu down par la métrique avant même le balayeur.
-  await h.pool.query("UPDATE nodes SET last_beat_at = now() - interval '20 seconds' WHERE id = 'node-old'");
+  // node-old (en drainage, ne reçoit plus de session) ne bat plus depuis 20 s : vu à 0 par la métrique avant même le
+  // balayeur qui le déclarera down.
+  await h.pool.query("UPDATE nodes SET state = 'draining', last_beat_at = now() - interval '20 seconds' WHERE id = 'node-old'");
 });
 afterAll(async () => h.close());
 
-async function metrics(authorization: string | undefined = `Bearer ${h.metricsToken}`): Promise<{ status: number; text: string; type: string | undefined }> {
-  const res = await h.app.inject({ method: 'GET', url: '/metrics', headers: authorization === undefined ? {} : { authorization } });
+/** `null` : sans en-tête Authorization. */
+async function metrics(authorization: string | null = `Bearer ${h.metricsToken}`): Promise<{ status: number; text: string; type: string | undefined }> {
+  const res = await h.app.inject({ method: 'GET', url: '/metrics', headers: authorization === null ? {} : { authorization } });
   return { status: res.statusCode, text: res.body, type: res.headers['content-type']?.toString() };
 }
 
@@ -32,7 +34,7 @@ function value(text: string, series: string): number | undefined {
 
 describe('/metrics de la passerelle', () => {
   test('401 sans le jeton (ni corps de métriques), 200 text/plain avec', async () => {
-    for (const header of [undefined, 'Bearer faux', `Bearer ${h.keys.a}`]) {
+    for (const header of [null, 'Bearer faux', `Bearer ${h.keys.a}`]) {
       const res = await metrics(header);
       expect(res.status).toBe(401);
       expect(res.text).not.toContain('symb_');

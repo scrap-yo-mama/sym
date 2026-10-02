@@ -16,6 +16,8 @@ export type AdmissionOptions = {
   pollMs?: number;
   onError?: (error: unknown) => void;
   now?: () => number;
+  /** Attente en file d'une session placée, en ms (`symb_queue_wait_seconds`, tâche 3.7). */
+  onWaited?: (ms: number) => void;
 };
 
 type Waiter = { enqueuedAt: number; resolve: (placement: Placement | null) => void };
@@ -27,6 +29,7 @@ export class Admission {
   readonly #pollMs: number;
   readonly #onError: (error: unknown) => void;
   readonly #now: () => number;
+  readonly #onWaited: (ms: number) => void;
   readonly #waiters = new Map<string, Waiter>();
   /** Placements arrivés avant que leur demandeur n'attende (même passage que la mise en file d'une autre demande). */
   readonly #early = new Map<string, Placement>();
@@ -44,6 +47,7 @@ export class Admission {
     this.#pollMs = options.pollMs ?? 250;
     this.#onError = options.onError ?? (() => undefined);
     this.#now = options.now ?? Date.now;
+    this.#onWaited = options.onWaited ?? (() => undefined);
   }
 
   /** Retry-After des refus de file ou de sessions simultanées (s). */
@@ -128,7 +132,11 @@ export class Admission {
   #settle(sessionId: string, placement: Placement | null): void {
     const waiter = this.#waiters.get(sessionId);
     if (!waiter) return;
-    if (placement) this.waits.record(this.#now() - waiter.enqueuedAt);
+    if (placement) {
+      const waited = this.#now() - waiter.enqueuedAt;
+      this.waits.record(waited);
+      this.#onWaited(waited);
+    }
     waiter.resolve(placement);
   }
 

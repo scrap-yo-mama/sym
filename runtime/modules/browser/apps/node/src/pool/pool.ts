@@ -218,6 +218,14 @@ export class BrowserPool {
     return Math.floor((this.slotsTotal * SLOT_UNITS - this.#usedUnits) / sessionWeightUnits(type, this.#constants));
   }
 
+  /**
+   * Chromium vivants du pool et leur type (`dedicated`, ou `shared` pour un Chromium chaud) : RSS par type de
+   * `symb_browser_rss_bytes` (tâche 3.7). Seuls les processus réels (pid connu) sont rendus.
+   */
+  processes(): { pid: number; kind: SessionType }[] {
+    return [...this.#entries].flatMap((e) => (e.launched.pid === undefined ? [] : [{ pid: e.launched.pid, kind: e.role === 'dedicated' ? ('dedicated' as const) : ('shared' as const) }]));
+  }
+
   stats(): PoolStats {
     const sessions: Record<SessionType, number> = { shared: 0, dedicated: 0 };
     const browsers = { warm: 0, shared: 0, dedicated: 0 };

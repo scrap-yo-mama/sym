@@ -10,3 +10,4 @@ export type TableName = (typeof TABLES)[number];
 export * from './sessions.js';
 export * from './admission.js';
 export * from './api.js';
+export * from './observability.js';

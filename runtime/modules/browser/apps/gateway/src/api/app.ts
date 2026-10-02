@@ -8,14 +8,17 @@
 // Quotas et capacité (tâche 2.4, 04d § 4.2, 04b § 7) : minutes et octets du mois (429 `quota_exceeded`), durée maximale
 // (`expiresAt` plafonné), budget d'egress borné par le reste du mois, puis admission : file FIFO bornée en base, sessions
 // simultanées du client, nœud au plus faible taux d'occupation ; refus 429 avec `Retry-After`.
+// Observabilité (tâche 3.7, 04d § 3.1) : `GET /metrics` sous jeton, hors OpenAPI publique ; sessions par état et type,
+// file et nœuds vivants lus en base à chaque collecte, créations comptées par résultat, attente en file mesurée.
 import { randomBytes } from 'node:crypto';
-import { endStateFor, isTerminal, resolveSessionType, sessionUnits } from '@sym-browser/core';
+import { endStateFor, isTerminal, metricsResponse, resolveSessionType, sessionUnits, type CreateResult } from '@sym-browser/core';
 import {
   abandonQueuedSession,
   assignedNodes,
   claimIdempotencyKey,
   completeIdempotencyKey,
   extendSession,
+  gatewaySnapshot,
   getSessionView,
   listSessionViews,
   monthlyUsage,
@@ -54,6 +57,8 @@ const SESSION_DEFAULTS = Object.freeze({ timeoutSeconds: 300, idleTimeoutSeconds
 const CONNECT_TOKEN_TTL_SECONDS = 300;
 const RETRY_AFTER_SECONDS = 5;
 const INVALID_BODY = Symbol('corps illisible');
+/** Message de la 503 d'un lancement impossible : compté `launch_failed` et non `no_node`. */
+const LAUNCH_FAILED = 'No node could start the session.';
 
 declare module 'fastify' {
   interface FastifyRequest {
@@ -100,7 +105,28 @@ export async function createGatewayApi(deps: GatewayDeps): Promise<FastifyInstan
     ...(deps.queue === undefined ? {} : { limits: deps.queue }),
     ...(deps.queuePollMs === undefined ? {} : { pollMs: deps.queuePollMs }),
     onError,
+    onWaited: (ms) => deps.observability?.metrics.queueWaitSeconds.observe({}, ms / 1000),
   });
+
+  const observability = deps.observability;
+  if (observability) {
+    const { metrics } = observability;
+    observability.registry.onCollect(async () => {
+      const snapshot = await gatewaySnapshot(deps.db);
+      metrics.sessions.reset();
+      for (const row of snapshot.sessions) metrics.sessions.set({ state: row.state, type: row.type }, row.count);
+      metrics.queueLength.set({}, snapshot.queueLength);
+      metrics.nodeUp.reset();
+      for (const node of snapshot.nodes) {
+        try {
+          metrics.nodeUp.set({ node: node.id }, node.up ? 1 : 0);
+        } catch (error) {
+          onError(error); // identifiant de nœud hors format d'étiquette : ignoré plutôt que d'exposer une cardinalité libre
+        }
+      }
+    });
+  }
+  const countCreation = (type: SessionType, result: CreateResult): void => observability?.metrics.sessionsCreated.inc({ type, result });
 
   const app = Fastify({ logger: false, genReqId: () => `req_${randomBytes(9).toString('base64url')}`, bodyLimit: 1_048_576 });
 
@@ -255,6 +281,13 @@ export async function createGatewayApi(deps: GatewayDeps): Promise<FastifyInstan
     throw new ApiProblem('capacity_exceeded', 'Session not started within the queue timeout.', { details: { limit: 'queue_timeout' }, retryAfter: admission.retryAfterSeconds() });
   };
 
+  if (observability) {
+    app.get('/metrics', async (request, reply) => {
+      const res = await metricsResponse(observability.registry, observability.token, request.headers.authorization);
+      return reply.code(res.status).headers(res.headers).send(res.body);
+    });
+  }
+
   app.get('/v1/version', async () => version);
   app.get('/v1/openapi.json', async () => browserOpenApi);
 
@@ -266,7 +299,23 @@ export async function createGatewayApi(deps: GatewayDeps): Promise<FastifyInstan
     const wait = waitParam !== 'false';
     const body = parseCreateSession(bodyOf(request));
 
+    const counted = resolveSessionType(body).type;
     return idempotent(request, reply, 'createSession', `POST /v1/sessions?wait=${wait}`, body, async () => {
+      try {
+        const created = await createSession();
+        countCreation(counted, created.status === 202 ? 'accepted' : 'started');
+        return created;
+      } catch (error) {
+        if (error instanceof ApiProblem) {
+          const result: CreateResult | undefined =
+            error.message === LAUNCH_FAILED ? 'launch_failed' : (['quota_exceeded', 'capacity_exceeded', 'no_node', 'session_id_taken'] as const).find((c) => c === error.code);
+          if (result) countCreation(counted, result);
+        }
+        throw error;
+      }
+    });
+
+    async function createSession(): Promise<{ status: number; body: Session }> {
       const deadline = Date.now() + queueTimeoutMs;
       const region = body.region ?? null;
       if (!(await readyNodeExists(deps.db, region))) throw new ApiProblem('no_node', 'No ready node in the requested region.', { retryAfter: RETRY_AFTER_SECONDS });
@@ -345,11 +394,11 @@ export async function createGatewayApi(deps: GatewayDeps): Promise<FastifyInstan
       }
       if (!result.ok) {
         await failPending(session.id, 'crash');
-        throw new ApiProblem('no_node', 'No node could start the session.', { retryAfter: RETRY_AFTER_SECONDS });
+        throw new ApiProblem('no_node', LAUNCH_FAILED, { retryAfter: RETRY_AFTER_SECONDS });
       }
       const started = (await getSessionView(deps.db, { tenantId: principal.tenantId, sessionId: session.id })) ?? session;
       return { status: 201, body: await present(started) };
-    });
+    }
   });
 
   app.get('/v1/sessions', { preHandler: authorize('sessions:read') }, async (request): Promise<SessionPage> => {

@@ -39,20 +39,22 @@ function setup() {
     ['s-dedicated', 4242],
     ['chaud', 5151],
   ]);
-  let bridge: ReturnType<typeof bindNodeMetrics> | undefined;
+  // Le pool émet ses événements vers le pont, créé juste après lui.
+  const ref: { bridge?: ReturnType<typeof bindNodeMetrics> } = {};
   const pool = new BrowserPool({
     slotsTotal: 3,
     launch: fakePool(pids),
     warmBrowsers: 0,
     constants: PROVISIONAL_CAPACITY,
     sweepIntervalMs: 0,
-    onEvent: (event) => bridge?.onPoolEvent(event),
+    onEvent: (event) => ref.bridge?.onPoolEvent(event),
   });
   const rss = new Map([
     [4242, 300_000_000],
     [5151, 200_000_000],
   ]);
-  bridge = bindNodeMetrics({ registry, metrics, nodeId: 'node-a', pool, rssOf: (pid) => rss.get(pid) ?? 0 });
+  const bridge = bindNodeMetrics({ registry, metrics, nodeId: 'node-a', pool, rssOf: (pid) => rss.get(pid) ?? 0 });
+  ref.bridge = bridge;
   return { registry, metrics, pool, bridge };
 }
 
