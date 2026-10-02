@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
+/// <reference lib="dom" />
 // Tâche 1.3 sur de vrais Chromium 153 : chaque option d'une session shared relue par `page.evaluate`, et
 // `assert_session_isolation` (BINV1, partie shared) : cookie, localStorage et IndexedDB d'une session absents des autres,
 // même client (même Chromium, autre contexte) ou client différent (autre Chromium). Le proxy de lancement reste fermé :
@@ -96,17 +97,13 @@ describe('sessions shared sur de vrais Chromium', () => {
         accuracy: 10,
         dark: true,
       });
-      const accept = await session.context.newPage().then(async (p) => {
-        const download = p.waitForEvent('download', { timeout: 2_000 }).then(
-          () => 'download',
-          () => 'none',
-        );
-        await p.setContent('<a id="d" href="data:text/plain,zz" download="zz.txt">d</a>');
-        await p.click('#d');
-        return download;
-      });
-      // acceptDownloads non demandé : refusé par défaut (04 § 3).
-      expect(accept).toBe('none');
+      // acceptDownloads non demandé : téléchargement refusé par défaut (04 § 3). Playwright signale l'événement, mais le
+      // téléchargement échoue (motif : acceptDownloads requis) et aucun fichier n'existe.
+      const downloadPage = await session.context.newPage();
+      await downloadPage.setContent('<a id="d" href="data:text/plain,zz" download="zz.txt">d</a>');
+      const [download] = await Promise.all([downloadPage.waitForEvent('download'), downloadPage.click('#d')]);
+      expect(await download.failure()).toContain('acceptDownloads: true');
+      await expect(download.path()).rejects.toThrow();
     } finally {
       await session.release();
     }
