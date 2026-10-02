@@ -242,7 +242,7 @@ describe('livraison des webhooks', () => {
     }
   });
 
-  test('secret absent des livraisons en base, des en-têtes et des corps reçus', async () => {
+  test('assert_secrets_protected (secret de webhook) : absent des livraisons en base, des en-têtes et des corps reçus', async () => {
     const secret = await configure(receiver.url);
     const before = receiver.received.length;
     await endedSession();

@@ -134,8 +134,11 @@ describe('flux SSE d’une session', () => {
 });
 
 describe('flux SSE du client (toutes ses sessions)', () => {
-  test('événements de toutes les sessions du client, jamais ceux d’un autre client ; reste ouvert ; reprise par Last-Event-ID', async () => {
+  test('événements de toutes les sessions du client, jamais ceux d’un autre client ; part de maintenant ; reste ouvert ; reprise par Last-Event-ID', async () => {
+    const older = await newSession('a');
+    await appendSessionEvent(h.pool, { sessionId: older, type: 'live.input', data: { avant: true } });
     const stream = await open('/v1/events');
+    await new Promise((r) => setTimeout(r, 100));
     const mine = await newSession('a');
     const theirs = await newSession('b');
     await appendSessionEvent(h.pool, { sessionId: theirs, type: 'egress.blocked', data: { host: 'secret-b.test', reason: 'domain_not_allowed', count: 1 } });
@@ -143,6 +146,8 @@ describe('flux SSE du client (toutes ses sessions)', () => {
     const frames = await stream.waitFor((f) => f.some((x) => x.event === 'egress.blocked'));
     await new Promise((r) => setTimeout(r, 200));
     expect(frames.every((f) => eventOf(f).sessionId !== theirs)).toBe(true);
+    // Sans Last-Event-ID, le flux du client ne rejoue pas l'historique.
+    expect(frames.every((f) => eventOf(f).sessionId !== older)).toBe(true);
     expect(JSON.stringify(frames)).not.toContain('secret-b.test');
     const blocked = frames.find((x) => x.event === 'egress.blocked');
     expect(eventOf(blocked!).sessionId).toBe(mine);

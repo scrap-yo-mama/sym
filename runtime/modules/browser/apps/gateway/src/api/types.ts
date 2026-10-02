@@ -6,6 +6,7 @@
 //   - SessionLauncher : démarrage, libération et prolongation sur le nœud propriétaire. Mode `all` : le superviseur de
 //     sessions du nœud dans le même processus (tâche 1.2) ; modes séparés : `POST /internal/sessions` du nœud (04b § 8),
 //     choix du nœud et file (tâche 2.4).
+import type { EgressGuard, Keys } from '@sym-browser/core';
 import type pg from 'pg';
 import type { CreateSessionRequest, SessionType } from '@sym/contracts/browser';
 
@@ -60,4 +61,15 @@ export type GatewayDeps = {
   platform?: string;
   /** Erreur interne (500) : journal masqué de la passerelle. */
   onError?: (error: unknown) => void;
+  /** Flux SSE (tâche 2.5) : période du battement `: ping` (15 s par défaut). */
+  events?: { heartbeatMs?: number };
+  /**
+   * Webhooks (tâche 2.5) : garde réseau de l'egress (SYMB_PRIVATE_HOSTS) appliquée aux URL, KEK de scellement des secrets,
+   * livreur (désactivé avec `false`). Sans elle, ni route de réglage ni livraison.
+   */
+  webhooks?: {
+    guard: EgressGuard;
+    keys: Keys;
+    dispatcher?: false | { pollMs?: number; retryDelaysMs?: readonly number[]; timeoutMs?: number; batch?: number };
+  };
 };

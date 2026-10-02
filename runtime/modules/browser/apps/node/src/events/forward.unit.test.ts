@@ -2,12 +2,17 @@
 // Tâche 2.5 : les événements de l'egress (1.5) partent vers `session_events` (puits injecté, PostgreSQL en production) dans
 // leur ordre d'émission, sans jamais bloquer ni faire échouer l'egress ; un échec d'écriture est signalé, pas levé.
 import { describe, expect, test } from 'vitest';
-import type { SessionEventSink } from '@sym-browser/core';
+import { STORED_SESSION_EVENT_TYPES, type SessionEventSink } from '@sym-browser/core';
+import { SESSION_EVENT_TYPES } from '@sym/contracts/browser';
 import { forwardEgressEvents } from './index.js';
 
 const SESSION = '00000000-0000-4000-8000-0000000000a1';
 
 describe('forwardEgressEvents', () => {
+  test('types d’événements du noyau identiques à ceux du contrat', () => {
+    expect([...STORED_SESSION_EVENT_TYPES]).toEqual([...SESSION_EVENT_TYPES]);
+  });
+
   test('ordre d’émission conservé même si les écritures ont des durées différentes ; horodatage d’émission', async () => {
     const written: { type: string; data: unknown; at?: Date }[] = [];
     let n = 0;
