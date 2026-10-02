@@ -19,17 +19,33 @@ const DOWNLOADS = '/data/sessions/6f1c0a52-3d1e-4c0b-9a52-2f0d9d7c1b11/downloads
 
 type FakeBrowser = { url: string; received: string[]; connections: number; close: () => Promise<void> };
 
-/** Faux Chromium : journalise chaque message reçu et répond `{id, result: {}}` à chaque commande. */
+/** `/json/version` de Chromium (champs réels), avec ses points locaux que le nœud ne doit jamais exposer. */
+const CHROMIUM_VERSION = {
+  Browser: 'Chrome/153.0.8010.12',
+  'Protocol-Version': '1.3',
+  'User-Agent': 'Mozilla/5.0 HeadlessChrome/153.0.8010.12',
+  'V8-Version': '15.3',
+  'WebKit-Version': '537.36',
+};
+
+/** Faux Chromium : journalise chaque message reçu et répond `{id, result: {}}` à chaque commande ; sert `/json/version`. */
 async function fakeBrowser(): Promise<FakeBrowser> {
-  const wss = new WebSocketServer({ host: '127.0.0.1', port: 0 });
-  await new Promise<void>((resolve) => wss.once('listening', () => resolve()));
+  const server = createServer((req, res) => {
+    if (req.url !== '/json/version') return void res.writeHead(404).end();
+    const port = (server.address() as AddressInfo).port;
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ ...CHROMIUM_VERSION, webSocketDebuggerUrl: `ws://127.0.0.1:${port}/devtools/browser/x`, devtoolsFrontendUrl: '/devtools/inspector.html' }));
+  });
+  const wss = new WebSocketServer({ server });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
   const state: FakeBrowser = {
-    url: `ws://127.0.0.1:${(wss.address() as AddressInfo).port}/devtools/browser/x`,
+    url: `ws://127.0.0.1:${(server.address() as AddressInfo).port}/devtools/browser/x`,
     received: [],
     connections: 0,
     close: () => new Promise<void>((resolve) => {
       for (const client of wss.clients) client.terminate();
-      wss.close(() => resolve());
+      wss.close(() => server.close(() => resolve()));
+      server.closeAllConnections();
     }),
   };
   wss.on('connection', (socket) => {
@@ -69,7 +85,9 @@ async function setup(options: { maxMessageBytes?: number } = {}) {
     onActivity: (id) => activity.push(id),
     ...(options.maxMessageBytes === undefined ? {} : { maxMessageBytes: options.maxMessageBytes }),
   });
-  const server: Server = createServer((_req, res) => res.writeHead(404).end());
+  const server: Server = createServer((req, res) => {
+    if (!relay.handleRequest(req, res)) res.writeHead(404).end();
+  });
   server.on('upgrade', (req, socket, head) => {
     if (!relay.handleUpgrade(req, socket, head)) socket.destroy();
   });
@@ -202,11 +220,11 @@ describe('réécritures du relais CDP (04f § 4, liste fermée)', () => {
     }
   });
 
-  test('message au-delà du plafond : fermeture 1009, rien transmis', async () => {
+  test('message au-delà du plafond : fermeture 1008 (04f § 4), rien transmis', async () => {
     const s = await setup({ maxMessageBytes: 1024 });
     const client = await open(`${s.base}/internal/sessions/${DEDICATED}/cdp`);
     client.ws.send(JSON.stringify({ id: 1, method: 'Runtime.evaluate', params: { expression: 'x'.repeat(2048) } }));
-    expect((await client.closed).code).toBe(1009);
+    expect((await client.closed).code).toBe(1008);
     expect(s.cdp.received).toEqual([]);
   });
 
@@ -238,5 +256,37 @@ describe('relais Playwright natif', () => {
     client.ws.close(4001, 'fin client');
     await new Promise((resolve) => setTimeout(resolve, 50));
     expect(s.released).toEqual([]);
+  });
+});
+
+describe('découverte json/version du nœud (F5, tâche 2.8)', () => {
+  const get = (url: string, headers: Record<string, string> = {}) =>
+    new Promise<{ status: number; body: unknown }>((resolve, reject) => {
+      const req = httpRequest(url.replace(/^ws/, 'http'), { headers }, (res) => {
+        const chunks: Buffer[] = [];
+        res.on('data', (c: Buffer) => chunks.push(c));
+        res.on('end', () => {
+          const text = Buffer.concat(chunks).toString();
+          resolve({ status: res.statusCode ?? 0, body: text ? JSON.parse(text) : null });
+        });
+      });
+      req.on('error', reject);
+      req.end();
+    });
+
+  test('NODE_TOKEN exigé ; champs de Chromium rendus SANS ses points locaux (webSocketDebuggerUrl, devtoolsFrontendUrl)', async () => {
+    const s = await setup();
+    const url = `${s.base}/internal/sessions/${DEDICATED}/cdp/json/version`;
+    expect((await get(url)).status).toBe(401);
+    expect((await get(url, { authorization: `Bearer ${'x'.repeat(40)}` })).status).toBe(401);
+    const ok = await get(url, { authorization: `Bearer ${NODE_TOKEN}` });
+    expect(ok).toEqual({ status: 200, body: CHROMIUM_VERSION });
+  });
+
+  test('session inconnue : 404 ; session shared : 409 protocol_not_served', async () => {
+    const s = await setup();
+    const auth = { authorization: `Bearer ${NODE_TOKEN}` };
+    expect((await get(`${s.base}/internal/sessions/00000000-0000-4000-8000-000000000000/cdp/json/version`, auth)).status).toBe(404);
+    expect((await get(`${s.base}/internal/sessions/${SHARED}/cdp/json/version`, auth)).status).toBe(409);
   });
 });
