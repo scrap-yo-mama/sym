@@ -19,5 +19,5 @@
   "demo": { "durationToleranceSeconds": 0.5, "stepPixelDiffRatio": 0.01 },
   "repo": { "descriptionMaxChars": 160, "topicsMin": 10, "topicsMax": 20 },
   "images": { "allowedHosts": ["img.shields.io", "github.com/user-attachments"] },
-  "badges": { "allowedHosts": ["img.shields.io"] }
+  "badges": { "allowedHosts": ["img.shields.io"], "allowedPaths": ["/github/license/", "/github/v/release/", "/github/actions/workflow/status/"] }
 }

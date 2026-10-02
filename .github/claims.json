@@ -177,6 +177,39 @@
       "reviewed": "2026-10-02",
       "status": "relu",
       "task": "4.10"
+    },
+    {
+      "id": "repo-description",
+      "surfaces": [
+        "repo"
+      ],
+      "en": "Self-hosted, open-source web data over MCP: describe the data, approve the schema, get an API that repairs itself and stops when a site says no.",
+      "fr": "Données web libres et auto-hébergées, par MCP : décris les données, valide le schéma, obtiens une API qui se répare et s'arrête quand un site dit non.",
+      "proof": [
+        "INV1",
+        "INV11",
+        "assert_robots_respected"
+      ],
+      "reviewed": "2026-10-02",
+      "status": "à relire",
+      "task": "3.2",
+      "note": "Promet le serveur MCP (3.2) et la réparation, pas encore livrés : à relire au GO de la release (4.5), avant d'appliquer la description au dépôt et à l'étiquette OCI."
+    },
+    {
+      "id": "image-description-prerelease",
+      "surfaces": [
+        "repo"
+      ],
+      "en": "Scrapyomama (SYM): self-hosted, open-source web data runtime. Pre-release: the README says what is delivered.",
+      "fr": "Scrapyomama (SYM) : runtime de données web libre et auto-hébergé. Pré-version : le README dit ce qui est livré.",
+      "proof": [
+        "LICENSE",
+        "runtime/deploy/docker-compose.prod.yml",
+        ".github/README.md"
+      ],
+      "reviewed": "2026-10-02",
+      "status": "relu",
+      "note": "Description de l'étiquette OCI tant que repo-description n'est pas relue."
     }
   ]
 }

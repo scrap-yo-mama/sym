@@ -1,8 +1,9 @@
 <!-- Generated from .github/claims.json by `pnpm vitrine:claims`. Do not edit by hand. -->
 # Claims register
 
-Every factual sentence of the public surfaces (README, landing, responsible-use page) comes from this register, with its proof
-and the date it was last reviewed. A claim marked `à relire` or `bloqué` is shown nowhere. Source: `claims.json`.
+Every factual sentence of the public surfaces (README, landing, responsible-use page, repository description and image label)
+comes from this register, with its proof and the date it was last reviewed. A claim marked `à relire` or `bloqué` is shown
+nowhere. Source: `claims.json`.
 
 ## readme
 
@@ -25,3 +26,10 @@ and the date it was last reviewed. A claim marked `à relire` or `bloqué` is sh
 | `user-agent-engine-real` | SYM sends the standard User-Agent string of its bundled Chromium version (without the HeadlessChrome marker), the same one for its HTTP client, with no rotation and no fingerprint spoofing. Turn on instance identification to name yourself to sites. | SYM envoie la chaîne User-Agent standard de la version de Chromium embarquée (sans le marqueur HeadlessChrome), la même pour son client HTTP, sans rotation ni falsification d'empreinte. Active l'identification de l'instance pour te nommer auprès des sites. | `INV6`, `assert_user_agent_engine_real`, `assert_no_fingerprint_spoofing` | 2026-10-02 | bloqué (Publication bloquée tant que la divergence des client hints n'est pas arbitrée (17 §12, D-39).) |  |
 | `stops-when-refused` | If a site refuses, SYM stops: no new IP, no other account to push through. | Si un site refuse, SYM s'arrête : pas de nouvelle IP, pas d'autre compte pour insister. | `INV6`, `assert_no_ip_change_after_refusal`, `assert_no_circumvention` | 2026-10-02 | relu |  |
 | `no-telemetry-by-default` | Nothing is sent to us without your explicit consent: no telemetry by default, no update check. | Rien ne part chez nous sans ton accord explicite : aucune télémétrie par défaut, aucune vérification de version. | `INV9`, `assert_no_telemetry` | 2026-10-02 | relu | 4.10 |
+
+## repo
+
+| Id | English | Français | Proof | Reviewed | Status | Task |
+|---|---|---|---|---|---|---|
+| `repo-description` | Self-hosted, open-source web data over MCP: describe the data, approve the schema, get an API that repairs itself and stops when a site says no. | Données web libres et auto-hébergées, par MCP : décris les données, valide le schéma, obtiens une API qui se répare et s'arrête quand un site dit non. | `INV1`, `INV11`, `assert_robots_respected` | 2026-10-02 | à relire (Promet le serveur MCP (3.2) et la réparation, pas encore livrés : à relire au GO de la release (4.5), avant d'appliquer la description au dépôt et à l'étiquette OCI.) | 3.2 |
+| `image-description-prerelease` | Scrapyomama (SYM): self-hosted, open-source web data runtime. Pre-release: the README says what is delivered. | Scrapyomama (SYM) : runtime de données web libre et auto-hébergé. Pré-version : le README dit ce qui est livré. | `LICENSE`, `runtime/deploy/docker-compose.prod.yml`, `.github/README.md` | 2026-10-02 | relu (Description de l'étiquette OCI tant que repo-description n'est pas relue.) |  |

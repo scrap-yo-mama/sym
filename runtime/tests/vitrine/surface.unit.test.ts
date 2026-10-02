@@ -8,14 +8,16 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, test } from 'vitest';
 import { parse } from 'yaml';
-import { claimProblems, claimsMarkdown, loadClaims, repoProofContext, unreviewedDisplayed, type ClaimsFile, type ProofContext } from '../../scripts/vitrine/lib/claims.ts';
+import { claimProblems, claimsMarkdown, imageDescription, imageDescriptionProblems, loadClaims, repoProofContext, unreviewedDisplayed, type ClaimsFile, type ProofContext } from '../../scripts/vitrine/lib/claims.ts';
 import { vitrineTouched } from '../../scripts/vitrine/lib/changed.ts';
-import { readTestCorpus } from '../../scripts/vitrine/lib/corpus.ts';
+import { readTestCorpus, testCorpusFiles, testTitles } from '../../scripts/vitrine/lib/corpus.ts';
+import { loadThirdPartyRepos, ownerReferenceFiles, ownerReferenceProblems } from '../../scripts/vitrine/lib/owners.ts';
+import { fetchPublishedState, publishedProblems, type PublishedState } from '../../scripts/vitrine/lib/published.ts';
 import { certificateIdentity, identityOf, identityProblems, parseRepository, publicRepository, verifyBlock } from '../../scripts/vitrine/lib/identity.ts';
 import { githubDir, repoRoot, runtimeDir, vitrineDir } from '../../scripts/vitrine/lib/paths.ts';
-import { copyProblems, loadBudgets, readReadme } from '../../scripts/vitrine/lib/readme.ts';
+import { copyProblems, loadBudgets, readReadme, verifyBlockProblems } from '../../scripts/vitrine/lib/readme.ts';
 import {
-  charterColors, formProblems, labelProblems, licenseProblems, readForms, readLabels, readLicenseFiles, readRepoMetadata, repoMetadataProblems, type Label,
+  charterColors, formProblems, labelProblems, licenseProblems, readForms, readLabels, readLicenseFiles, readRepoMetadata, repoMetadataProblems, type Label, type RepoMetadata,
 } from '../../scripts/vitrine/lib/surface.ts';
 import { checksumResult, dockerfileLabels, imageLabelProblems, parseVerifyBlock, verifySnippetProblems } from '../../scripts/vitrine/lib/verify.ts';
 import { userVerifyCommand } from '../../scripts/release/sign.ts';
@@ -23,6 +25,8 @@ import { userVerifyCommand } from '../../scripts/release/sign.ts';
 const budgets = loadBudgets();
 const claims = loadClaims();
 const identity = identityOf(publicRepository());
+/** Organisation homonyme dérivée de l'identité (jamais une constante) : cas négatifs des gardes d'identité. */
+const homonym = identityOf(`${identity.owner}-homonyme/${identity.name}`);
 const read = (path: string): string => readFileSync(join(repoRoot, path), 'utf8');
 const scratch = mkdtempSync(join(tmpdir(), 'zz_test_vitrine_surface-'));
 afterAll(() => rmSync(scratch, { recursive: true, force: true }));
@@ -48,6 +52,13 @@ describe('assert_license_detected_agpl : LICENSE racine = texte AGPL-3.0 mot pou
     expect(createHash('sha256').update(edited).digest('hex')).not.toBe(OFFICIAL_SHA256);
   });
 
+  test('après publication (hebdomadaire) : l\'API GitHub (license) doit renvoyer l\'identifiant SPDX AGPL-3.0', () => {
+    const state = publishedFixture(readRepoMetadata());
+    expect(publishedProblems(state, readRepoMetadata(), budgets)).toEqual([]);
+    expect(publishedProblems({ ...state, license: { license: { spdx_id: 'NOASSERTION' } } }, readRepoMetadata(), budgets).join()).toMatch(/AGPL-3\.0/);
+    expect(publishedProblems({ ...state, license: { license: null } }, readRepoMetadata(), budgets).join()).toMatch(/AGPL-3\.0/);
+  });
+
   test.todo('après publication : l\'API GitHub (licenses) renvoie l\'identifiant SPDX AGPL-3.0 (hebdomadaire, inactif avant le GO)');
 });
 
@@ -67,12 +78,32 @@ describe('assert_verify_snippet_works : le bloc « Verify » dit ce que la chaî
   });
 
   test('cas négatifs : autre propriétaire, autre émetteur, autre dépôt, forme illisible', () => {
-    expect(verifySnippetProblems(block.replace('scrap-yo-mama/sym/.github', 'scrapyomama/sym/.github'), identity).join()).toMatch(/identité du certificat/);
+    expect(verifySnippetProblems(block.replace(`${identity.repository}/.github`, `${homonym.repository}/.github`), identity).join()).toMatch(/identité du certificat/);
     expect(verifySnippetProblems(block.replace('token.actions.githubusercontent.com', 'issuer.example.org'), identity).join()).toMatch(/émetteur OIDC/);
-    expect(verifySnippetProblems(block.replace('-R scrap-yo-mama/sym', '-R scrapyomama/sym'), identity).join()).toMatch(/gh attestation verify/);
-    expect(verifySnippetProblems(block.replace('ghcr.io/scrap-yo-mama/sym:X.Y.Z \\', 'ghcr.io/scrapyomama/sym:X.Y.Z \\'), identity).join()).toMatch(/image/);
+    expect(verifySnippetProblems(block.replace(`-R ${identity.repository}`, `-R ${homonym.repository}`), identity).join()).toMatch(/gh attestation verify/);
+    expect(verifySnippetProblems(block.replace(`${identity.image}:X.Y.Z \\`, `${homonym.image}:X.Y.Z \\`), identity).join()).toMatch(/image/);
     expect(verifySnippetProblems('echo rien', identity).join()).toMatch(/forme attendue/);
     expect(parseVerifyBlock(block)?.checksum).toBe('sha256sum -c SHA256SUMS');
+  });
+
+  test('la doc, les guides de déploiement et les modèles citent le seul dépôt et la seule image de PUBLIC_REPOSITORY', () => {
+    const files = ownerReferenceFiles();
+    expect(files.some((file) => file.endsWith('docs/deploiement.md'))).toBe(true);
+    expect(files.some((file) => file.includes('apps/docs/content/'))).toBe(true);
+    const thirdParty = loadThirdPartyRepos();
+    for (const file of files) expect(ownerReferenceProblems(readFileSync(join(repoRoot, file), 'utf8'), identity, thirdParty), file).toEqual([]);
+  });
+
+  test('cas négatifs : organisation homonyme (GitHub et GHCR), autre dépôt du même propriétaire ; marques de réservation et dépôts tiers relus admis', () => {
+    const thirdParty = loadThirdPartyRepos();
+    const at = (text: string): string => ownerReferenceProblems(text, identity, thirdParty).join();
+    expect(at(`docker pull ${homonym.image}:1.2.3`)).toMatch(/GHCR/);
+    expect(at(`[Deploy](https://render.com/deploy?repo=${homonym.url})`)).toMatch(/autre dépôt/);
+    expect(at(`git clone ${identity.url}-workspace.git`)).toMatch(/autre dépôt/);
+    expect(at(`git clone ${identity.url}.git && docker pull ${identity.image}:X.Y.Z. Voir ${identity.url}/security/advisories/new.`)).toBe('');
+    expect(at('ghcr.io/<propriétaire>/<dépôt>@sha256:x https://github.com/${PUBLIC_REPOSITORY} ghcr.io/propriétaire/dépôt:X.Y.Z')).toBe('');
+    expect(at('https://github.com/mozilla/inclusion')).toBe('');
+    expect(ownerReferenceProblems('https://github.com/mozilla/inclusion', identity, []).join()).toMatch(/autre dépôt/);
   });
 
   test('`sha256sum -c SHA256SUMS` réussit sur les fichiers de la release et échoue sur un fichier altéré', () => {
@@ -95,14 +126,13 @@ describe('assert_verify_snippet_works : le bloc « Verify » dit ce que la chaî
 
 describe('assert_image_labels : source, description (≤ 512), licenses, io.modelcontextprotocol.server.name dérivés de PUBLIC_REPOSITORY', () => {
   const dockerfile = readFileSync(join(runtimeDir, 'deploy/Dockerfile'), 'utf8');
-  const description = readRepoMetadata().description;
+  const description = imageDescription(readRepoMetadata(), claims);
 
   test('le Dockerfile déclare les quatre étiquettes, résolues avec l\'identité publique', () => {
     const labels = dockerfileLabels(dockerfile, identity.repository);
     expect(imageLabelProblems(labels, identity, description)).toEqual([]);
-    expect(labels['org.opencontainers.image.source']).toBe('https://github.com/scrap-yo-mama/sym');
-    expect(labels['io.modelcontextprotocol.server.name']).toBe('io.github.scrap-yo-mama/sym');
-    expect(dockerfile).toMatch(/^ARG PUBLIC_REPOSITORY=scrap-yo-mama\/sym$/m);
+    expect(labels['org.opencontainers.image.source']).toBe(identity.url);
+    expect(labels['io.modelcontextprotocol.server.name']).toBe(identity.mcpName);
     expect(`${dockerfile.match(/^ARG PUBLIC_REPOSITORY=(.*)$/m)?.[1]}`).toBe(identity.repository);
   });
 
@@ -113,7 +143,7 @@ describe('assert_image_labels : source, description (≤ 512), licenses, io.mode
   });
 
   test('cas négatifs : un autre propriétaire dans les étiquettes, une étiquette absente, une description trop longue', () => {
-    const labels = dockerfileLabels(dockerfile, 'scrapyomama/sym');
+    const labels = dockerfileLabels(dockerfile, homonym.repository);
     expect(imageLabelProblems(labels, identity, description).join()).toMatch(/source/);
     const good = dockerfileLabels(dockerfile, identity.repository);
     const { 'io.modelcontextprotocol.server.name': _removed, ...missing } = good;
@@ -143,8 +173,34 @@ describe('assert_repo_metadata : description ≤ 160 caractères, 10 à 20 sujet
     expect(repoMetadataProblems({ ...meta, discussions: false, privateVulnerabilityReporting: false }, budgets).join()).toMatch(/Discussions/);
   });
 
-  test('la description du dépôt est celle de l\'étiquette OCI du Dockerfile (une seule source de texte)', () => {
-    expect(readFileSync(join(runtimeDir, 'deploy/Dockerfile'), 'utf8')).toContain(`description="${meta.description}"`);
+  test('la description du dépôt est au registre ; l\'étiquette OCI porte une description relue (celle du dépôt une fois relue)', () => {
+    const label = dockerfileLabels(readFileSync(join(runtimeDir, 'deploy/Dockerfile'), 'utf8'), identity.repository)['org.opencontainers.image.description'] ?? '';
+    expect(imageDescriptionProblems(label, meta, claims)).toEqual([]);
+    const entry = claims.claims.find((c) => c.surfaces.includes('repo') && c.en === meta.description);
+    expect(entry).toBeDefined();
+    expect(label).toBe(imageDescription(meta, claims));
+    if (entry?.status !== 'relu') expect(label).not.toBe(meta.description);
+    expect(copyProblems(label, claims, { whitelistRegistry: false })).toEqual([]);
+  });
+
+  test('cas négatifs : description du dépôt hors registre, étiquette non relue ou hors registre, description relue non reprise', () => {
+    const relu = (file: ClaimsFile): ClaimsFile => ({ ...file, claims: file.claims.map((c) => (c.surfaces.includes('repo') && c.en === meta.description ? { ...c, status: 'relu' as const } : c)) });
+    const stale = (file: ClaimsFile): ClaimsFile => ({ ...file, claims: file.claims.map((c) => (c.surfaces.includes('repo') && c.en === meta.description ? { ...c, status: 'à relire' as const } : c)) });
+    expect(imageDescriptionProblems(meta.description, meta, stale(claims)).join()).toMatch(/relue/);
+    expect(imageDescriptionProblems('Any text at all.', meta, claims).join()).toMatch(/registre/);
+    expect(imageDescriptionProblems(imageDescription(meta, stale(claims)), meta, relu(claims)).join()).toMatch(/description du dépôt/);
+    expect(imageDescriptionProblems(meta.description, meta, relu(claims))).toEqual([]);
+    expect(imageDescriptionProblems(imageDescription(meta, claims), { ...meta, description: 'Unregistered description.' }, claims).join()).toMatch(/pas au registre/);
+  });
+
+  test('après publication (hebdomadaire) : l\'API GitHub est comparée au fichier versionné', () => {
+    const state = publishedFixture(meta);
+    expect(publishedProblems(state, meta, budgets)).toEqual([]);
+    expect(publishedProblems({ ...state, repo: { ...state.repo, description: 'autre' } }, meta, budgets).join()).toMatch(/description/);
+    expect(publishedProblems({ ...state, repo: { ...state.repo, topics: state.repo.topics.slice(1) } }, meta, budgets).join()).toMatch(/sujets/);
+    expect(publishedProblems({ ...state, repo: { ...state.repo, homepage: null } }, meta, budgets).join()).toMatch(/site web/);
+    expect(publishedProblems({ ...state, repo: { ...state.repo, has_discussions: false } }, meta, budgets).join()).toMatch(/Discussions/);
+    expect(publishedProblems({ ...state, privateReporting: { enabled: false } }, meta, budgets).join()).toMatch(/signalement privé/);
   });
 
   test.todo('après publication : l\'API GitHub renvoie la description, les sujets, le site web, Discussions actives et le signalement privé (hebdomadaire, inactif avant le GO)');
@@ -156,6 +212,11 @@ describe('assert_community_profile_complete : le profil de communauté à 100 % 
       expect(existsSync(join(repoRoot, path)), path).toBe(true);
     }
     expect(readRepoMetadata().communityProfile).toContain('LICENSE');
+  });
+
+  test('après publication (hebdomadaire) : community/profile doit renvoyer health_percentage = 100', () => {
+    const state = publishedFixture(readRepoMetadata());
+    expect(publishedProblems({ ...state, community: { health_percentage: 85 } }, readRepoMetadata(), budgets).join()).toMatch(/85/);
   });
 
   test.todo('après publication : community/profile renvoie health_percentage = 100 (hebdomadaire, inactif avant le GO ; un fichier du profil hors de la racine est détecté par GitHub dans .github/ ou docs/)');
@@ -197,6 +258,14 @@ describe('formulaires d\'issues bilingues et étiquettes aux couleurs de la char
     for (const title of ['What changes for you · Ce qui change pour toi', 'Migration notes · Notes de migration', 'Verify what you download · Vérifie ce que tu télécharges']) expect(template).toContain(`## ${title}`);
     expect(copyProblems(template, claims, { whitelistRegistry: false })).toEqual([]);
   });
+
+  test('gabarit des notes de version : bloc « Verify » dérivé de l\'identité publique (22 §3.4), octet pour octet', () => {
+    const template = read('.github/release-notes-template.md');
+    expect(verifyBlockProblems(template, identity)).toEqual([]);
+    expect(template).toContain(`\`\`\`bash\n${verifyBlock(identity)}\n\`\`\``);
+    expect(verifyBlockProblems(template, homonym).join()).toMatch(/identité publique/);
+    expect(verifyBlockProblems(template.replace(/```bash[\s\S]*?```/, ''), identity).join()).toMatch(/Verify/);
+  });
 });
 
 describe('registre des allégations : preuve, relecture, statut, CLAIMS.md généré (22 §3.2)', () => {
@@ -217,7 +286,9 @@ describe('registre des allégations : preuve, relecture, statut, CLAIMS.md gén�
     expect(engagements.map((c) => c.id)).toEqual(['robots-always-respected', 'no-challenge-solving', 'user-agent-engine-real', 'stops-when-refused', 'no-telemetry-by-default']);
     expect(engagements.find((c) => c.id === 'user-agent-engine-real')?.status).toBe('bloqué');
     expect(engagements.find((c) => c.id === 'no-telemetry-by-default')?.task).toBe('4.10');
-    for (const claim of engagements) expect(readReadme('en') + readReadme('fr')).not.toContain(claim.en);
+    for (const claim of engagements) {
+      for (const text of [claim.en, claim.fr]) expect(readReadme('en') + readReadme('fr')).not.toContain(text);
+    }
   });
 
   test('cas négatifs : allégation sans preuve, preuve introuvable, statut inconnu, date future, relue avant la dernière release, doublon, entrée non relue affichée', () => {
@@ -238,6 +309,31 @@ describe('registre des allégations : preuve, relecture, statut, CLAIMS.md gén�
     expect(unreviewedDisplayed({ version: 1, claims: [base] }, `texte ${base.en}`)).toEqual([]);
   });
 
+  test('preuve « assert_… » : un test réel (test, it ou describe), jamais un test.todo, un commentaire ni les tests de la vitrine eux-mêmes', () => {
+    const source = [
+      "describe('assert_real_describe : x', () => {",
+      "  test('assert_real_test', () => {});",
+      "  it(\"assert_real_it\", () => {});",
+      "  test.skipIf(false)('assert_real_conditional', () => {});",
+      "  test.todo('assert_only_todo');",
+      "  it.todo('assert_only_it_todo');",
+      "  test.skip('assert_only_skipped', () => {});",
+      "  // assert_only_comment",
+      "  const name = 'assert_only_string';",
+      "});",
+    ].join('\n');
+    const titles = testTitles(source).join('\n');
+    for (const name of ['assert_real_describe', 'assert_real_test', 'assert_real_it', 'assert_real_conditional']) expect(titles, name).toContain(name);
+    for (const name of ['assert_only_todo', 'assert_only_it_todo', 'assert_only_skipped', 'assert_only_comment', 'assert_only_string']) expect(titles, name).not.toContain(name);
+    const base = claims.claims[0]!;
+    const ctx: ProofContext = { ...context, testCorpus: titles };
+    expect(claimProblems({ version: 1, claims: [{ ...base, proof: ['assert_real_test'] }] }, ctx)).toEqual([]);
+    expect(claimProblems({ version: 1, claims: [{ ...base, proof: ['assert_only_todo'] }] }, ctx).join()).toMatch(/introuvable/);
+    expect(claimProblems({ version: 1, claims: [{ ...base, proof: ['assert_real'] }] }, ctx).join()).toMatch(/introuvable/);
+    expect(testCorpusFiles().some((file) => file.includes('/tests/vitrine/'))).toBe(false);
+    expect(testCorpusFiles().some((file) => file.endsWith('invariants.todo.test.ts'))).toBe(true);
+  });
+
   test('« aucune télémétrie par défaut » est liée à 4.10 : l\'entrée repasse « à relire » à la livraison de cette tâche', () => {
     expect(claims.claims.filter((c) => c.task === '4.10').map((c) => c.id).sort()).toEqual(['no-telemetry-by-default', 'stays-yours']);
   });
@@ -246,27 +342,42 @@ describe('registre des allégations : preuve, relecture, statut, CLAIMS.md gén�
 });
 
 describe('identité publique : une seule source (PUBLIC_REPOSITORY), jamais une constante', () => {
-  test('la variable prime sur le fichier ; le fichier donne scrap-yo-mama/sym ; une valeur invalide est refusée', () => {
-    expect(publicRepository({ env: {}, file: 'scrap-yo-mama/sym\n' })).toBe('scrap-yo-mama/sym');
-    expect(publicRepository({ env: { PUBLIC_REPOSITORY: 'autre/depot' }, file: 'scrap-yo-mama/sym' })).toBe('autre/depot');
-    expect(publicRepository({ env: { PUBLIC_REPOSITORY: '' }, file: 'scrap-yo-mama/sym' })).toBe('scrap-yo-mama/sym');
+  test('la variable prime sur le fichier versionné ; une valeur invalide est refusée ; tout est dérivé du propriétaire et du dépôt', () => {
+    const versioned = read('.github/PUBLIC_REPOSITORY');
+    expect(publicRepository({ env: {}, file: versioned })).toBe(versioned.trim());
+    expect(publicRepository({ env: { PUBLIC_REPOSITORY: 'autre/depot' }, file: versioned })).toBe('autre/depot');
+    expect(publicRepository({ env: { PUBLIC_REPOSITORY: '' }, file: versioned })).toBe(versioned.trim());
     for (const bad of ['', 'sans-barre', 'a/b/c', 'a b/c', '/x']) expect(() => parseRepository(bad), bad).toThrow(/invalide/);
-    expect(identityOf('Scrap-Yo-Mama/Sym')).toMatchObject({ image: 'ghcr.io/scrap-yo-mama/sym', mcpName: 'io.github.Scrap-Yo-Mama/Sym' });
-    expect(identity).toMatchObject({ repository: 'scrap-yo-mama/sym', url: 'https://github.com/scrap-yo-mama/sym', image: 'ghcr.io/scrap-yo-mama/sym', mcpName: 'io.github.scrap-yo-mama/sym' });
+    expect(identityOf('Acme-Org/Tool')).toMatchObject({ image: 'ghcr.io/acme-org/tool', mcpName: 'io.github.Acme-Org/Tool', url: 'https://github.com/Acme-Org/Tool' });
+    const [owner, name] = versioned.trim().split('/');
+    expect(identity).toMatchObject({ repository: `${owner}/${name}`, owner, name, url: `https://github.com/${owner}/${name}`, mcpName: `io.github.${owner}/${name}` });
   });
 
   test('sur le dépôt public, PUBLIC_REPOSITORY égale GITHUB_REPOSITORY (garde d\'une organisation homonyme)', () => {
-    const file = 'scrap-yo-mama/sym\n';
+    const file = `${identity.repository}\n`;
     expect(identityProblems({}, file)).toEqual([]);
-    expect(identityProblems({ GITHUB_REPOSITORY: 'scrap-yo-mama/sym', PUBLIC_REPOSITORY: 'scrap-yo-mama/sym' }, file)).toEqual([]);
-    expect(identityProblems({ GITHUB_REPOSITORY: 'scrapyomama/sym' }, file).join()).toMatch(/doit égaler GITHUB_REPOSITORY/);
-    expect(identityProblems({ PUBLIC_REPOSITORY: 'scrapyomama/sym' }, file).join()).toMatch(/diffère/);
+    expect(identityProblems({ GITHUB_REPOSITORY: identity.repository, PUBLIC_REPOSITORY: identity.repository }, file)).toEqual([]);
+    expect(identityProblems({ GITHUB_REPOSITORY: homonym.repository }, file).join()).toMatch(/doit égaler GITHUB_REPOSITORY/);
+    expect(identityProblems({ PUBLIC_REPOSITORY: homonym.repository }, file).join()).toMatch(/diffère/);
     expect(identityProblems({}, 'n importe quoi').join()).toMatch(/invalide/);
+  });
+
+  test('dépôt de travail privé (D-44) : les contrôles de la vitrine ne comparent pas GITHUB_REPOSITORY, seule la forme ; la release l\'exige', () => {
+    const file = `${identity.repository}\n`;
+    const workspace = { GITHUB_REPOSITORY: `${identity.repository}-workspace` };
+    expect(identityProblems(workspace, file, { enforceRunningRepository: false })).toEqual([]);
+    expect(identityProblems({ ...workspace, PUBLIC_REPOSITORY: homonym.repository }, file, { enforceRunningRepository: false }).join()).toMatch(/diffère/);
+    expect(identityProblems({}, 'n importe quoi', { enforceRunningRepository: false }).join()).toMatch(/invalide/);
+    expect(identityProblems(workspace, file).join()).toMatch(/doit égaler GITHUB_REPOSITORY/);
   });
 
   test('aucun test, page ni script de la vitrine ne code le propriétaire en dur hors des fichiers d\'exemple et de contrat', () => {
     const lib = readdirLib().filter((f) => !/identity\.ts$/.test(f));
-    for (const file of lib) expect(readFileSync(file, 'utf8'), file).not.toMatch(/scrap-yo-mama/);
+    const tests = readdirSync(join(runtimeDir, 'tests/vitrine')).filter((name) => name.endsWith('.ts')).map((name) => join(runtimeDir, 'tests/vitrine', name));
+    for (const file of [...lib, ...tests]) {
+      const text = readFileSync(file, 'utf8');
+      expect(text.includes(identity.repository) || text.includes(identity.image), file).toBe(false);
+    }
   });
 });
 
@@ -296,8 +407,58 @@ describe('job CI `vitrine` (22 §3.6) : huitième job, Node seulement, filtré p
     for (const file of ['README.md', '.github/README.fr.md', '.github/assets/brand/banner-light.png', 'LICENSE', 'runtime/apps/docs/content/index.md', 'runtime/scripts/vitrine/budgets.json', 'runtime/deploy/Dockerfile']) {
       expect(vitrineTouched([file]), file).toBe(true);
     }
-    for (const file of ['runtime/apps/server/src/index.ts', 'runtime/packages/core/src/index.ts', 'render.yaml']) expect(vitrineTouched([file]), file).toBe(false);
+    for (const file of ['runtime/apps/server/src/index.ts', 'runtime/packages/core/src/index.ts', 'runtime/apps/web/src/main.ts', 'runtime/docs-old/x.md']) expect(vitrineTouched([file]), file).toBe(false);
     expect(vitrineTouched([])).toBe(false);
+  });
+
+  test('le registre des allégations se contrôle à chaque PR, sans filtre : une preuve supprimée ou renommée fait échouer le job', () => {
+    const steps = workflow.jobs['vitrine']!.steps;
+    const claimsStep = steps.find((s) => s.run === 'node scripts/vitrine/check.mjs claims');
+    expect(claimsStep).toBeDefined();
+    expect(claimsStep?.if).toBeUndefined();
+    const ok = spawnSync('node', ['scripts/vitrine/check.mjs', 'claims'], { cwd: runtimeDir, encoding: 'utf8' });
+    expect(ok.status, ok.stderr).toBe(0);
+    expect(ok.stdout).toMatch(/registre des allégations/);
+  });
+
+  test('filtre par chemin : la doc d\'exploitation, les modèles de déploiement et les textes de la racine de runtime/ déclenchent (identité du propriétaire)', () => {
+    for (const file of ['runtime/docs/deploiement.md', 'runtime/deploy/railway/template.yaml', 'render.yaml', 'runtime/SECURITY.md']) expect(vitrineTouched([file]), file).toBe(true);
+  });
+
+  test('tests après publication : workflow hebdomadaire inactif avant le GO (vars.PUBLISHED), lecture seule, lychee, issue en cas d\'échec', () => {
+    const text = read('.github/workflows/vitrine-weekly.yml');
+    const weekly = parse(text) as { on: Record<string, unknown>; permissions: Record<string, string>; jobs: Record<string, { if?: string; steps: { run?: string; uses?: string; if?: string; with?: Record<string, unknown> }[] }> };
+    expect(weekly.on).toHaveProperty('schedule');
+    const jobs = Object.values(weekly.jobs);
+    expect(jobs.length).toBeGreaterThan(0);
+    for (const job of jobs) expect(job.if).toMatch(/vars\.PUBLISHED == 'true'/);
+    const steps = jobs.flatMap((job) => job.steps);
+    expect(steps.some((s) => s.run === 'node scripts/vitrine/check.mjs published')).toBe(true);
+    expect(steps.some((s) => /^lycheeverse\/lychee-action@[0-9a-f]{40}$/.test(s.uses ?? ''))).toBe(true);
+    expect(steps.some((s) => s.if === 'failure()' && /gh issue create/.test(s.run ?? ''))).toBe(true);
+    expect(weekly.permissions['contents']).toBe('read');
+    expect(text).not.toMatch(/git push|gh release|gh repo edit|\.py\b|python/);
+  });
+
+  test('check.mjs published : adresses de l\'API GitHub dérivées de l\'identité, jeton jamais affiché', async () => {
+    const seen: string[] = [];
+    const meta = readRepoMetadata();
+    const answers = publishedFixture(meta);
+    const fake = async (url: string, init?: { headers?: Record<string, string> }): Promise<Response> => {
+      seen.push(url);
+      expect(init?.headers?.['Authorization']).toBe('Bearer jeton-de-test');
+      const path = new URL(url).pathname;
+      const body = path.endsWith('/license') ? answers.license : path.endsWith('/community/profile') ? answers.community : path.endsWith('/private-vulnerability-reporting') ? answers.privateReporting : answers.repo;
+      return new Response(JSON.stringify(body), { status: 200 });
+    };
+    const state = await fetchPublishedState(identity, 'jeton-de-test', fake);
+    expect(publishedProblems(state, meta, budgets)).toEqual([]);
+    const base = `https://api.github.com/repos/${identity.repository}`;
+    expect(seen.sort()).toEqual([base, `${base}/community/profile`, `${base}/license`, `${base}/private-vulnerability-reporting`]);
+    await expect(fetchPublishedState(identity, 'jeton-de-test', async () => new Response('{}', { status: 404 }))).rejects.toThrow(/404/);
+    const unpublished = spawnSync('node', ['scripts/vitrine/check.mjs', 'published'], { cwd: runtimeDir, encoding: 'utf8', env: { ...process.env, GH_TOKEN: '', GITHUB_TOKEN: '' } });
+    expect(unpublished.status).toBe(1);
+    expect(unpublished.stderr).toMatch(/jeton/);
   });
 
   test('budgets : un seul fichier, scripts/vitrine/budgets.json', () => {
@@ -309,6 +470,8 @@ describe('job CI `vitrine` (22 §3.6) : huitième job, Node seulement, filtré p
     const ok = spawnSync('node', ['scripts/vitrine/check.mjs'], { cwd: runtimeDir, encoding: 'utf8' });
     expect(ok.status, ok.stderr).toBe(0);
     expect(ok.stdout).toMatch(/contrôles verts/);
+    const workspace = spawnSync('node', ['scripts/vitrine/check.mjs'], { cwd: runtimeDir, encoding: 'utf8', env: { ...process.env, GITHUB_REPOSITORY: `${identity.repository}-workspace`, PUBLIC_REPOSITORY: '' } });
+    expect(workspace.status, workspace.stderr).toBe(0);
     const bad = spawnSync('node', ['scripts/vitrine/check.mjs', 'identity'], { cwd: runtimeDir, encoding: 'utf8', env: { ...process.env, GITHUB_REPOSITORY: 'autre/depot', PUBLIC_REPOSITORY: '' } });
     expect(bad.status).toBe(1);
     expect(bad.stderr).toMatch(/GITHUB_REPOSITORY/);
@@ -318,4 +481,14 @@ describe('job CI `vitrine` (22 §3.6) : huitième job, Node seulement, filtré p
 function readdirLib(): string[] {
   const dir = join(vitrineDir, 'lib');
   return readdirSync(dir).filter((name) => name.endsWith('.ts')).map((name) => join(dir, name));
+}
+
+/** État du dépôt publié tel que l'API GitHub le renverrait s'il était conforme au fichier versionné. */
+function publishedFixture(meta: RepoMetadata): PublishedState {
+  return {
+    repo: { description: meta.description, topics: [...meta.topics], homepage: meta.homepage ?? null, has_discussions: meta.discussions },
+    license: { license: { spdx_id: 'AGPL-3.0' } },
+    community: { health_percentage: 100 },
+    privateReporting: { enabled: meta.privateVulnerabilityReporting },
+  };
 }

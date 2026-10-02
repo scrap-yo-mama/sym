@@ -3,7 +3,7 @@
 <p align="center"><picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/brand/banner-dark.png">
   <source media="(prefers-color-scheme: light)" srcset="assets/brand/banner-light.png">
-  <img alt="Scrapyomama (SYM) : décris les données, obtiens une API." src="assets/brand/banner-light.png" width="800"></picture></p>
+  <img alt="Scrapyomama et SYM à côté du logo fantôme de SYM" src="assets/brand/banner-light.png" width="800"></picture></p>
 
 <p align="center"><b>Décris les données. SYM 👻 s'occupe du reste.</b><br>Libre et auto-hébergé : rien à quoi t'inscrire.</p>
 

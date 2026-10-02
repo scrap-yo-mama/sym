@@ -106,7 +106,10 @@ jobs:
         with:
           node-version-file: runtime/.node-version
       - run: pnpm install --frozen-lockfile
-      - name: La PR (ou le push) touche-t-elle la vitrine ? (README*, .github/**, apps/docs/**, scripts/vitrine/**)
+      # Sans filtre : les preuves du registre sont des tests de tout le monorepo (une preuve supprimée ou renommée fait échouer le job).
+      - name: Registre des allégations (preuves, relecture, CLAIMS.md à jour)
+        run: node scripts/vitrine/check.mjs claims
+      - name: La PR (ou le push) touche-t-elle la vitrine ? (README*, .github/**, apps/docs/**, docs/, deploy/, scripts/vitrine/**)
         id: changed
         env:
           VITRINE_BASE: ${{ github.event_name == 'push' && github.event.before || '' }}

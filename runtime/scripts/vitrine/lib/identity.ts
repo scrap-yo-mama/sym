@@ -74,8 +74,10 @@ export function verifyBlock(identity: PublicIdentity): string {
 /**
  * Garde d'identité : sur le dépôt public, `PUBLIC_REPOSITORY` égale `GITHUB_REPOSITORY`. Renvoie les problèmes
  * (liste vide : cohérent). Hors CI (pas de `GITHUB_REPOSITORY`), seule la forme est vérifiée.
+ * `enforceRunningRepository: false` : contrôles de la vitrine (job `vitrine`), qui tournent aussi sur le dépôt de travail
+ * privé (`…/sym-workspace`, D-44) où les PR sont ouvertes ; seule la release (`check.mjs identity`) exige l'égalité.
  */
-export function identityProblems(env: Record<string, string | undefined>, file: string): string[] {
+export function identityProblems(env: Record<string, string | undefined>, file: string, options: { enforceRunningRepository?: boolean } = {}): string[] {
   const problems: string[] = [];
   let fromFile: string | undefined;
   try {
@@ -85,7 +87,7 @@ export function identityProblems(env: Record<string, string | undefined>, file: 
   }
   const variable = env['PUBLIC_REPOSITORY']?.trim();
   if (variable && variable !== fromFile) problems.push(`la variable PUBLIC_REPOSITORY (${variable}) diffère de .github/PUBLIC_REPOSITORY (${fromFile})`);
-  const running = env['GITHUB_REPOSITORY']?.trim();
+  const running = options.enforceRunningRepository === false ? undefined : env['GITHUB_REPOSITORY']?.trim();
   if (running && running !== (variable || fromFile)) {
     problems.push(`PUBLIC_REPOSITORY (${variable || fromFile}) doit égaler GITHUB_REPOSITORY (${running}) quand le travail tourne sur le dépôt public`);
   }

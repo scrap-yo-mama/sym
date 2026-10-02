@@ -19,7 +19,7 @@ FROM ${PLAYWRIGHT_IMAGE} AS runtime
 # io.github.<propriétaire>/<dépôt>. La description est celle de .github/repo-metadata.json (un test les compare).
 ARG PUBLIC_REPOSITORY=scrap-yo-mama/sym
 LABEL org.opencontainers.image.source="https://github.com/${PUBLIC_REPOSITORY}" \
-      org.opencontainers.image.description="Self-hosted, open-source web data over MCP: describe the data, approve the schema, get an API that repairs itself and stops when a site says no." \
+      org.opencontainers.image.description="Scrapyomama (SYM): self-hosted, open-source web data runtime. Pre-release: the README says what is delivered." \
       org.opencontainers.image.licenses="AGPL-3.0-only" \
       io.modelcontextprotocol.server.name="io.github.${PUBLIC_REPOSITORY}"
 ENV NODE_ENV=production

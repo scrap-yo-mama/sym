@@ -6,10 +6,12 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { githubDir, repoRoot, runtimeDir } from './paths.ts';
+import { normalize } from './text.ts';
 
 const STATUSES = ['relu', 'à relire', 'bloqué'] as const;
 type ClaimStatus = (typeof STATUSES)[number];
-const SURFACES = ['readme', 'landing', 'responsible-use'] as const;
+const SURFACES = ['readme', 'landing', 'responsible-use', 'repo'] as const;
+export type Surface = (typeof SURFACES)[number];
 
 type Claim = {
   id: string;
@@ -36,7 +38,7 @@ export function loadClaims(path = join(githubDir, 'claims.json')): ClaimsFile {
 export const plainBullet = (line: string): string => line.replace(/^-\s+/, '').replace(/\*\*/g, '').trim();
 
 export type ProofContext = {
-  /** Texte de tous les fichiers de test du dépôt (noms `assert_…`). */
+  /** Titres des tests réels du dépôt (noms `assert_…`), hors test.todo et hors tests de la vitrine (corpus.ts). */
   testCorpus: string;
   /** Invariants connus (`tests/invariants.json`). */
   invariants: ReadonlySet<string>;
@@ -70,7 +72,7 @@ export function claimProblems(file: ClaimsFile, context: ProofContext): string[]
       if (/^INV\d+$/.test(proof)) {
         if (!context.invariants.has(proof)) problems.push(`${at} : invariant ${proof} absent de tests/invariants.json`);
       } else if (/^assert_[a-z0-9_]+$/.test(proof)) {
-        if (!context.testCorpus.includes(proof)) problems.push(`${at} : test ${proof} introuvable`);
+        if (!new RegExp(`(?<![a-z0-9_])${proof}(?![a-z0-9_])`).test(context.testCorpus)) problems.push(`${at} : test ${proof} introuvable (aucun test réel, test.todo exclu)`);
       } else if (!context.exists(proof)) problems.push(`${at} : preuve ${proof} introuvable`);
     }
     if (claim.status === 'bloqué' && !claim.note) problems.push(`${at} : une entrée bloquée dit pourquoi (note)`);
@@ -83,6 +85,40 @@ export function unreviewedDisplayed(file: ClaimsFile, surfaceText: string): stri
   return file.claims
     .filter((claim) => claim.status !== 'relu' && (surfaceText.includes(claim.en) || surfaceText.includes(claim.fr)))
     .map((claim) => `« ${claim.id} » (${claim.status}) est affichée sur une surface`);
+}
+
+/**
+ * Entrées du registre affichées sur `surface` (texte en ou fr présent) alors qu'elles ne portent pas cette surface : par
+ * exemple un engagement « Usage responsable » recopié dans le README (D-46). Liste vide : conforme.
+ */
+export function foreignClaimsDisplayed(file: ClaimsFile, surfaceText: string, surface: Surface): string[] {
+  const haystack = normalize(surfaceText);
+  return file.claims
+    .filter((claim) => !claim.surfaces.includes(surface) && [claim.en, claim.fr].some((text) => text.trim() !== '' && haystack.includes(normalize(text))))
+    .map((claim) => `« ${claim.id} » (surfaces ${claim.surfaces.join(', ')}) est affichée sur la surface ${surface}`);
+}
+
+/**
+ * Description de l'étiquette OCI de l'image (surface `repo`) : celle du dépôt une fois son entrée relue, sinon la
+ * description relue de pré-version. Une image construite avant le GO ne promet rien de non livré.
+ */
+export function imageDescription(meta: { description: string }, file: ClaimsFile): string {
+  const repo = file.claims.filter((claim) => claim.surfaces.includes('repo'));
+  if (repo.find((claim) => claim.en === meta.description)?.status === 'relu') return meta.description;
+  return repo.find((claim) => claim.status === 'relu' && claim.en !== meta.description)?.en ?? '';
+}
+
+/** La description du dépôt est au registre ; l'étiquette OCI porte une entrée relue, celle du dépôt dès qu'elle est relue. */
+export function imageDescriptionProblems(label: string, meta: { description: string }, file: ClaimsFile): string[] {
+  const problems: string[] = [];
+  const repo = file.claims.filter((claim) => claim.surfaces.includes('repo'));
+  const own = repo.find((claim) => claim.en === meta.description);
+  if (!own) problems.push('la description du dépôt (repo-metadata.json) n\'est pas au registre (claims.json, surface repo)');
+  const shown = repo.find((claim) => claim.en === label);
+  if (!shown) problems.push(`la description de l'étiquette OCI n'est pas au registre (surface repo) : « ${label} »`);
+  else if (shown.status !== 'relu') problems.push(`la description de l'étiquette OCI porte une entrée non relue : « ${shown.id} » (${shown.status})`);
+  if (own?.status === 'relu' && label !== meta.description) problems.push('la description du dépôt est relue : l\'étiquette OCI doit la reprendre');
+  return problems;
 }
 
 /** Date de la dernière release (étiquette `v*` la plus récente), ou undefined avant la première. */
@@ -116,8 +152,9 @@ export function claimsMarkdown(file: ClaimsFile): string {
     '<!-- Generated from .github/claims.json by `pnpm vitrine:claims`. Do not edit by hand. -->',
     '# Claims register',
     '',
-    'Every factual sentence of the public surfaces (README, landing, responsible-use page) comes from this register, with its proof',
-    'and the date it was last reviewed. A claim marked `à relire` or `bloqué` is shown nowhere. Source: `claims.json`.',
+    'Every factual sentence of the public surfaces (README, landing, responsible-use page, repository description and image label)',
+    'comes from this register, with its proof and the date it was last reviewed. A claim marked `à relire` or `bloqué` is shown',
+    'nowhere. Source: `claims.json`.',
     '',
   ];
   for (const surface of SURFACES) {

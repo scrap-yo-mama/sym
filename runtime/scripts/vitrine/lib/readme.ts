@@ -15,7 +15,8 @@ export type Budgets = {
   demo: { durationToleranceSeconds: number; stepPixelDiffRatio: number };
   repo: { descriptionMaxChars: number; topicsMin: number; topicsMax: number };
   images: { allowedHosts: string[] };
-  badges: { allowedHosts: string[] };
+  /** `allowedPaths` : sortes de badge admises (préfixe du chemin shields), V1 : licence, dernière version, CI (22 §3.1, bloc 3). */
+  badges: { allowedHosts: string[]; allowedPaths: string[] };
 };
 
 export const loadBudgets = (): Budgets => JSON.parse(readFileSync(join(vitrineDir, 'budgets.json'), 'utf8')) as Budgets;
@@ -23,7 +24,13 @@ export const loadBudgets = (): Budgets => JSON.parse(readFileSync(join(vitrineDi
 export const README_FILES: Record<Lang, string> = { en: 'README.md', fr: 'README.fr.md' };
 export const readReadme = (lang: Lang): string => readFileSync(join(githubDir, README_FILES[lang]), 'utf8');
 
-/** Titres `##` attendus, dans l'ordre (22 §3.1, blocs 5 à 11 ; les blocs 1 à 4 n'ont pas de titre). */
+/**
+ * Titres `##` attendus, dans l'ordre (22 §3.1, blocs 5 à 11 ; les blocs 1 à 4 n'ont pas de titre).
+ * Écart assumé (tâche 4.12, à reporter au CDC) : le bloc 6 s'intitule « Try it (no key) » / « Essaie (sans clé) » et non
+ * « Try it in two minutes (no key) » : la première construction de l'image prend plusieurs minutes, « deux minutes » serait
+ * une allégation sans mesure (22 §3.2). Le lien vers la landing (bloc 2, 4.11) et la vignette de démo (bloc 4, 3.11) sont
+ * des test.todo de tests/vitrine/readme.unit.test.ts tant que la landing et l'enregistrement n'existent pas.
+ */
 const SECTION_TITLES: Record<Lang, string[]> = {
   en: ['What it does', 'Try it (no key)', 'Connect your AI chat (MCP)', 'Verify what you download', "How it's built", 'Licenses', 'Contribute'],
   fr: ['Ce que ça fait', 'Essaie (sans clé)', 'Branche ton chat IA (MCP)', 'Vérifie ce que tu télécharges', "Comment c'est construit", 'Licences', 'Contribuer'],
@@ -72,7 +79,7 @@ function pictures(text: string): string[] {
 }
 
 /** Les badges : images servies par un service de badges. */
-function badges(text: string, budgets: Budgets): Image[] {
+export function badges(text: string, budgets: Budgets): Image[] {
   return images(text).filter((image) => budgets.badges.allowedHosts.some((host) => image.src.startsWith(`https://${host}/`)));
 }
 
@@ -127,9 +134,22 @@ export function sectionProblems(text: string, lang: Lang): string[] {
   return problems;
 }
 
+/** Sorte d'un badge : le préfixe autorisé de son chemin (`/github/license/`…), undefined hors liste. */
+export function badgeKind(src: string, budgets: Budgets): string | undefined {
+  let path: string;
+  try {
+    path = new URL(src).pathname;
+  } catch {
+    return undefined;
+  }
+  return budgets.badges.allowedPaths.find((prefix) => path.startsWith(prefix));
+}
+
 export function badgeProblems(text: string, budgets: Budgets): string[] {
   const shown = badges(text, budgets);
-  return shown.length > budgets.readme.maxBadges ? [`${shown.length} badges (au plus ${budgets.readme.maxBadges})`] : [];
+  const problems = shown.length > budgets.readme.maxBadges ? [`${shown.length} badges (au plus ${budgets.readme.maxBadges})`] : [];
+  for (const badge of shown) if (badgeKind(badge.src, budgets) === undefined) problems.push(`badge hors de la liste autorisée (${budgets.badges.allowedPaths.join(', ')}) : ${badge.src}`);
+  return problems;
 }
 
 /** Puces de « What it does » rendues en texte simple. */
@@ -152,12 +172,16 @@ export function claimsProblems(text: string, lang: Lang, file: ClaimsFile): stri
   return problems;
 }
 
-/** Lexique : 0 mot de P (hors phrases du registre) et 0 mot de L (D-46) dans le texte. */
-export function copyProblems(text: string, file: ClaimsFile, options: { whitelistRegistry: boolean; stripIdentifiers?: boolean }): string[] {
+/**
+ * Lexique (22b §1) : 0 mot de P hors phrases du registre (`whitelistRegistry`) et 0 mot de L. L se lit sur le texte brut
+ * (README, landing, description, formulaires : D-46), sauf `limitTermsInRegistry` (CLAIMS.md, le registre lui-même) où un
+ * terme de limite n'est admis que dans une phrase égale mot pour mot à une entrée du registre.
+ */
+export function copyProblems(text: string, file: ClaimsFile, options: { whitelistRegistry: boolean; limitTermsInRegistry?: boolean; stripIdentifiers?: boolean }): string[] {
   if (options.stripIdentifiers) text = text.replace(/\bassert_[a-z0-9_]+/g, ' ');
-  const phrases = options.whitelistRegistry ? file.claims.flatMap((claim) => [claim.en, claim.fr]) : [];
-  const p = findEntries(stripPhrases(text, phrases), loadList('forbidden-p.txt'));
-  const l = findEntries(options.whitelistRegistry ? stripPhrases(text, phrases) : text, loadList('forbidden-l.txt'));
+  const phrases = file.claims.flatMap((claim) => [claim.en, claim.fr]);
+  const p = findEntries(options.whitelistRegistry ? stripPhrases(text, phrases) : text, loadList('forbidden-p.txt'));
+  const l = findEntries(options.limitTermsInRegistry ? stripPhrases(text, phrases) : text, loadList('forbidden-l.txt'));
   return [...p.map((w) => `mot de la liste P : « ${w} »`), ...l.map((w) => `mot de la liste L : « ${w} »`)];
 }
 
@@ -196,6 +220,34 @@ export function altProblems(text: string, decorative: readonly string[] = []): s
     else if (image.alt.trim() === '' && !decorative.includes(image.src)) problems.push(`alt vide hors images décoratives listées : ${image.src}`);
     else if (/\bimage (de|of)\b|\bscreenshot of\b|\bcapture d'écran de\b/i.test(image.alt)) problems.push(`alt à reformuler : « ${image.alt} »`);
   }
+  return problems;
+}
+
+/** Textes du bandeau (balises <text> de ses sources SVG claire et sombre), dans l'ordre, sans doublon. */
+export function bannerTexts(): string[] {
+  const out: string[] = [];
+  for (const variant of ['light', 'dark']) {
+    const svg = readFileSync(join(githubDir, 'assets/src', `banner-${variant}.svg`), 'utf8');
+    for (const m of svg.matchAll(/<text\b[^>]*>([^<]*)<\/text>/g)) {
+      const value = (m[1] ?? '').trim();
+      if (value && !out.includes(value)) out.push(value);
+    }
+  }
+  return out;
+}
+
+/**
+ * L'alt du bandeau décrit l'image : il cite chacun de ses textes et ne porte ni accroche ni phrase absente de l'image
+ * (pas de deux-points, pas de point final). L'accroche est écrite en vrai texte sous l'image (22 §3.1, bloc 1).
+ */
+export function bannerAltProblems(text: string, texts: readonly string[]): string[] {
+  const picture = pictures(text)[0];
+  if (!picture) return ['aucun bandeau <picture>'];
+  const alt = /<img\b[^>]*\salt="([^"]*)"/i.exec(picture)?.[1];
+  if (!alt) return ['bandeau sans alt'];
+  const problems: string[] = [];
+  for (const value of texts) if (!alt.includes(value)) problems.push(`l'alt du bandeau ne cite pas « ${value} », texte du bandeau`);
+  if (/[:.!?]/.test(alt)) problems.push(`l'alt du bandeau porte une accroche ou une phrase absente de l'image : « ${alt} »`);
   return problems;
 }
 

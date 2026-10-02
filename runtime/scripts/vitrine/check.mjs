@@ -3,13 +3,18 @@
 //   node scripts/vitrine/check.mjs            tous les contrôles ; code 1 au premier problème (tous sont listés)
 //   node scripts/vitrine/check.mjs identity   PUBLIC_REPOSITORY = .github/PUBLIC_REPOSITORY = GITHUB_REPOSITORY (release)
 //   node scripts/vitrine/check.mjs changed    écrit `run=true|false` (sortie GITHUB_OUTPUT) selon les fichiers modifiés
+//   node scripts/vitrine/check.mjs claims     registre des allégations et CLAIMS.md seulement (sans filtre par chemin)
+//   node scripts/vitrine/check.mjs published  après publication (hebdomadaire, GO) : API GitHub du dépôt public, lecture seule
 // Les budgets sont dans scripts/vitrine/budgets.json. Ce script ne publie, ne pousse ni ne règle rien sur GitHub.
 import { execFileSync } from 'node:child_process';
 import { appendFileSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { runAllChecks } from './lib/all.ts';
+import { runAllChecks, runClaimsChecks } from './lib/all.ts';
 import { vitrineTouched } from './lib/changed.ts';
-import { identityProblems } from './lib/identity.ts';
+import { identityOf, identityProblems, publicRepository } from './lib/identity.ts';
+import { fetchPublishedState, publishedProblems } from './lib/published.ts';
+import { loadBudgets } from './lib/readme.ts';
+import { readRepoMetadata } from './lib/surface.ts';
 import { githubDir, repoRoot } from './lib/paths.ts';
 
 const command = process.argv[2] ?? 'all';
@@ -33,8 +38,19 @@ if (command === 'identity') {
   }
   console.log(`vitrine : run=${run}`);
   if (process.env['GITHUB_OUTPUT']) appendFileSync(process.env['GITHUB_OUTPUT'], `run=${run}\n`);
+} else if (command === 'published') {
+  const token = process.env['GH_TOKEN'] || process.env['GITHUB_TOKEN'];
+  if (!token) {
+    console.error('après publication : aucun jeton (GH_TOKEN ou GITHUB_TOKEN) pour lire l\'API GitHub');
+    process.exit(1);
+  }
+  const identity = identityOf(publicRepository());
+  const problems = publishedProblems(await fetchPublishedState(identity, token), readRepoMetadata(), loadBudgets());
+  for (const problem of problems) console.error(`après publication : ${problem}`);
+  if (problems.length > 0) process.exit(1);
+  console.log(`après publication : ${identity.repository} conforme (description, sujets, site web, Discussions, signalement privé, licence, profil de communauté).`);
 } else {
-  const results = runAllChecks();
+  const results = command === 'claims' ? runClaimsChecks() : runAllChecks();
   let failed = 0;
   for (const { name, problems } of results) {
     if (problems.length === 0) console.log(`  ok    ${name}`);

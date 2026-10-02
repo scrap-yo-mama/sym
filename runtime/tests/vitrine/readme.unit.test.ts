@@ -2,11 +2,11 @@
 // Tâche 4.12, critères README de 22b §3 (u8 R1, R2, R23) : chaque test nommé joue le contrôle sur les vrais README ET prouve par un
 // cas négatif que le contrôle échoue quand la règle est violée (un contrôle qui ne sait pas échouer ne prouve rien).
 import { describe, expect, test } from 'vitest';
-import { loadClaims, type ClaimsFile } from '../../scripts/vitrine/lib/claims.ts';
+import { foreignClaimsDisplayed, loadClaims, type ClaimsFile } from '../../scripts/vitrine/lib/claims.ts';
 import { identityOf, publicRepository, verifyBlock } from '../../scripts/vitrine/lib/identity.ts';
 import { findEntries, loadList, normalize, parseList } from '../../scripts/vitrine/lib/text.ts';
 import {
-  altProblems, badgeProblems, claimsProblems, codeBlocks, copyProblems, headings, imageResolveProblems, images, lengthProblems, loadBudgets, marksProblems,
+  altProblems, badgeProblems, badgeKind, badges, bannerAltProblems, bannerTexts, claimsProblems, codeBlocks, copyProblems, headings, imageResolveProblems, images, lengthProblems, loadBudgets, marksProblems,
   parityProblems, pictureProblems, quickstartProblems, readReadme, repoLinkProblems, sectionProblems, verifyBlockProblems, whatItDoes, type Lang,
 } from '../../scripts/vitrine/lib/readme.ts';
 
@@ -15,6 +15,8 @@ const claims = loadClaims();
 const identity = identityOf(publicRepository());
 const README = { en: readReadme('en'), fr: readReadme('fr') };
 const LANGS: Lang[] = ['en', 'fr'];
+/** Organisation homonyme dérivée de l'identité (jamais une constante) : cas négatifs des gardes d'identité. */
+const homonym = identityOf(`${identity.owner}-homonyme/${identity.name}`);
 const lineCount = (text: string): number => text.split('\n').length - (text.endsWith('\n') ? 1 : 0);
 
 describe('assert_readme_length_budget : 90 à 150 lignes, ≤ 12 Ko, commande avant la ligne 40', () => {
@@ -66,11 +68,16 @@ describe('assert_readme_sections_present : les 11 blocs de 22 §3.1, dans l\'ord
     }
   });
 
+  // Écart assumé au titre du bloc 6 (22 §3.1 : « Try it in two minutes (no key) ») : la première construction de l'image prend
+  // plusieurs minutes, le README dit « Try it (no key) » / « Essaie (sans clé) » (voir SECTION_TITLES dans lib/readme.ts).
+  test.todo('bloc 2 : lien vers la landing (4.11) à côté de Docs, Quickstart et Discussions, une fois la landing en ligne');
+  test.todo('bloc 4 : vignette de démo fr et en (PNG ≤ 150 Ko) cliquable vers la vidéo, ajoutée avec le GIF par 3.11');
+
   test('cas négatifs : titre ajouté, sections permutées, deuxième lien « Responsible use », lien hors du bloc des licences', () => {
     expect(sectionProblems(`${README.en}\n## Extra\n`, 'en').join()).toMatch(/titres/);
     expect(sectionProblems(README.en.replace('## Licenses', '## Contribute-x').replace('## Contribute\n', '## Licenses\n'), 'en').join()).toMatch(/titres/);
-    expect(sectionProblems(`${README.en}\n[Responsible use](https://github.com/scrap-yo-mama/sym/blob/main/LICENSE)\n`, 'en').join()).toMatch(/liens « Responsible use/);
-    const moved = README.en.replace(/\n\[Responsible use\][^\n]*\n/, '\n') + '\n[Responsible use](https://github.com/scrap-yo-mama/sym/blob/main/runtime/NOTICE)\n';
+    expect(sectionProblems(`${README.en}\n[Responsible use](${identity.url}/blob/main/LICENSE)\n`, 'en').join()).toMatch(/liens « Responsible use/);
+    const moved = `${README.en.replace(/\n\[Responsible use\][^\n]*\n/, '\n')}\n[Responsible use](${identity.url}/blob/main/runtime/NOTICE)\n`;
     expect(sectionProblems(moved, 'en').join()).toMatch(/pas dans le bloc des licences/);
   });
 });
@@ -81,6 +88,17 @@ describe('assert_readme_badges_budget : 5 badges au plus, tous de la liste autor
       expect(badgeProblems(README[lang], budgets), lang).toEqual([]);
       const hosts = images(README[lang]).filter((i) => i.src.startsWith('http')).map((i) => new URL(i.src).hostname);
       for (const host of hosts) expect(budgets.badges.allowedHosts).toContain(host);
+    }
+  });
+
+  test('V1 : licence, dernière version et CI seulement (22 §3.1, bloc 3) ; une étoile ou un compteur de téléchargements est refusé', () => {
+    for (const lang of LANGS) {
+      expect(badges(README[lang], budgets).map((badge) => badgeKind(badge.src, budgets)), lang).toEqual(budgets.badges.allowedPaths);
+    }
+    expect(budgets.badges.allowedPaths).toEqual(['/github/license/', '/github/v/release/', '/github/actions/workflow/status/']);
+    for (const kind of ['github/stars', 'github/downloads', 'github/forks', 'badge/build-passing-green']) {
+      const extra = `${README.en}\n![x](https://img.shields.io/${kind}/${identity.repository})\n`;
+      expect(badgeProblems(extra, budgets).join(), kind).toMatch(/hors de la liste autorisée/);
     }
   });
 
@@ -123,11 +141,31 @@ describe('assert_readme_no_bypass_copy : 0 mot de P (hors registre) et 0 mot de 
     }
   });
 
-  test('un mot de P ne passe que dans une phrase du registre (L reste interdit dans le README)', () => {
-    const phrase = claims.claims.find((c) => c.id === 'no-challenge-solving')?.en ?? '';
-    expect(phrase).toMatch(/captcha/i);
-    expect(copyProblems(phrase, claims, { whitelistRegistry: true })).toEqual([]);
-    expect(copyProblems(phrase, claims, { whitelistRegistry: false }).join()).toMatch(/captcha/);
+  test('L reste interdit dans le README, même dans une phrase du registre (D-46) ; seul CLAIMS.md admet L dans une phrase du registre', () => {
+    const engagement = claims.claims.find((c) => c.id === 'no-challenge-solving');
+    expect(engagement?.en).toMatch(/captcha/i);
+    for (const lang of LANGS) {
+      const phrase = engagement?.[lang] ?? '';
+      const readme = `${README[lang]}\n${phrase}\n`;
+      expect(copyProblems(readme, claims, { whitelistRegistry: true }).join(), lang).toMatch(/liste L : « captcha »/);
+      expect(copyProblems(phrase, claims, { whitelistRegistry: true, limitTermsInRegistry: true }), lang).toEqual([]);
+      expect(copyProblems(`${phrase} Captcha.`, claims, { whitelistRegistry: true, limitTermsInRegistry: true }).join(), lang).toMatch(/captcha/);
+    }
+  });
+
+  test('une phrase du registre n\'apparaît dans le README que si son entrée porte la surface readme (en et fr)', () => {
+    for (const lang of LANGS) expect(foreignClaimsDisplayed(claims, README[lang], 'readme'), lang).toEqual([]);
+    for (const claim of claims.claims.filter((c) => !c.surfaces.includes('readme'))) {
+      for (const lang of LANGS) expect(foreignClaimsDisplayed(claims, `${README[lang]}\n${claim[lang]}\n`, 'readme').join(), `${claim.id} ${lang}`).toMatch(new RegExp(claim.id));
+    }
+  });
+
+  test('un mot de P ne passe que dans une phrase du registre', () => {
+    const p = loadList('forbidden-p.txt');
+    const withP = claims.claims.find((c) => findEntries(c.en, p).length > 0) ?? { en: 'Stealth mode', id: 'fixture' };
+    const file: ClaimsFile = { ...claims, claims: [...claims.claims, { ...claims.claims[0]!, id: 'fixture-p', en: withP.en, fr: withP.en }] };
+    expect(copyProblems(withP.en, file, { whitelistRegistry: true })).toEqual([]);
+    expect(copyProblems(withP.en, file, { whitelistRegistry: false }).join()).toMatch(/liste P/);
   });
 });
 
@@ -172,6 +210,14 @@ describe('assert_readme_images_resolve, assert_readme_alt_text, assert_readme_pi
     expect(altProblems('![Image de la console](a.png)').join()).toMatch(/à reformuler/);
   });
 
+  test('l\'alt du bandeau décrit ce que montre le bandeau (ses textes), sans accroche ni phrase absente de l\'image', () => {
+    const texts = bannerTexts();
+    expect(texts).toEqual(['Scrapyomama', 'SYM'].filter((t) => texts.includes(t)));
+    for (const lang of LANGS) expect(bannerAltProblems(README[lang], texts), lang).toEqual([]);
+    expect(bannerAltProblems(README.en.replace(/(<picture>[\s\S]*?<img alt=")[^"]*"/, '$1Scrapyomama (SYM): describe the data, get an API."'), texts).join()).toMatch(/accroche|phrase/);
+    expect(bannerAltProblems(README.en.replace(/(<picture>[\s\S]*?<img alt=")[^"]*"/, '$1Ghost logo"'), texts).join()).toMatch(/Scrapyomama/);
+  });
+
   test('chaque <picture> a ses sources dark et light, un <img> de repli avec alt, et ses fichiers', () => {
     for (const lang of LANGS) expect(pictureProblems(README[lang]), lang).toEqual([]);
     const broken = '<picture><source media="(prefers-color-scheme: dark)" srcset="assets/brand/banner-dark.png"><img src="assets/brand/banner-light.png"></picture>';
@@ -188,9 +234,9 @@ describe('identité : liens du README et bloc « Verify » dérivés de PUBLIC_R
   });
 
   test('cas négatifs : autre propriétaire, chemin absent, image GHCR d\'une organisation homonyme', () => {
-    expect(repoLinkProblems(README.en.replace(/scrap-yo-mama\/sym\/discussions/, 'scrapyomama/sym/discussions'), identity).join()).toMatch(/autre dépôt/);
+    expect(repoLinkProblems(README.en.replace(`${identity.repository}/discussions`, `${homonym.repository}/discussions`), identity).join()).toMatch(/autre dépôt/);
     expect(repoLinkProblems(README.en.replace('runtime/SECURITY.md', 'runtime/ABSENT.md'), identity).join()).toMatch(/introuvable/);
-    expect(repoLinkProblems(README.en.replace('ghcr.io/scrap-yo-mama/sym', 'ghcr.io/scrapyomama/sym'), identity).join()).toMatch(/GHCR/);
+    expect(repoLinkProblems(README.en.replace(identity.image, homonym.image), identity).join()).toMatch(/GHCR/);
   });
 
   test('le bloc « Verify » est celui que dérive l\'identité (octet pour octet, en et fr)', () => {

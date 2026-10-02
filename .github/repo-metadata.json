@@ -1,5 +1,5 @@
 {
-  "note": "Réglages du dépôt public (22 §3.4), appliqués à la main au GO de la release (4.5) : description, site web, sujets, Discussions, signalement privé, discussions épinglées. Aucun test ni script ne les pousse. La description décrit la V1.0 : à appliquer à la release, pas avant.",
+  "note": "Réglages du dépôt public (22 §3.4), appliqués à la main au GO de la release (4.5) : description, site web, sujets, Discussions, signalement privé, discussions épinglées. Aucun test ni script ne les pousse. La description décrit la V1.0 : à appliquer à la release, pas avant, et seulement une fois son entrée « repo-description » de .github/claims.json relue ; d'ici là, l'étiquette OCI de l'image porte la description relue « image-description-prerelease ».",
   "description": "Self-hosted, open-source web data over MCP: describe the data, approve the schema, get an API that repairs itself and stops when a site says no.",
   "homepage": "https://scrap-yo-mama.github.io/sym/",
   "topics": [

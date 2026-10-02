@@ -3,7 +3,7 @@
 <p align="center"><picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/brand/banner-dark.png">
   <source media="(prefers-color-scheme: light)" srcset="assets/brand/banner-light.png">
-  <img alt="Scrapyomama (SYM): describe the data, get an API." src="assets/brand/banner-light.png" width="800"></picture></p>
+  <img alt="Scrapyomama and SYM next to the SYM ghost logo" src="assets/brand/banner-light.png" width="800"></picture></p>
 
 <p align="center"><b>Describe the data. SYM 👻 handles the rest.</b><br>Open source and self-hosted: nothing to sign up for.</p>
 
