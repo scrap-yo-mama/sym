@@ -14,7 +14,10 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 const CONSOLE_CSP =
   "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'";
 
-/** Préfixes du serveur : jamais de repli vers la console (404 JSON uniforme), même sous un segment exact (`/api`). */
+/**
+ * Préfixes du serveur : jamais de repli vers la console (404 JSON uniforme), même sous un segment exact (`/api`), quelle que
+ * soit la casse (`/API/x`) et avec un paramètre de chemin (`/api;x`) : comparés en minuscules, premier segment coupé au `;`.
+ */
 const SERVER_PREFIXES = ['/api', '/mcp', '/tunnel', '/hooks', '/.well-known', '/metrics'];
 
 /** Fichiers hachés par Vite (nom changé à chaque contenu) : cache long immuable. */
@@ -26,7 +29,13 @@ export function defaultConsoleDir(): string {
   return fileURLToPath(new URL('../../web/dist', import.meta.url));
 }
 
-/** En-têtes de 08b § 2 : CSP, Referrer-Policy, COOP, nosniff, aucun cadre ; HSTS seulement si PUBLIC_URL est en HTTPS. */
+/**
+ * En-têtes de 08b § 2 : CSP, Referrer-Policy, COOP, nosniff, aucun cadre ; HSTS seulement si PUBLIC_URL est en HTTPS.
+ * Posés à la main (hook onSend de app.ts) au lieu de @fastify/helmet : liste exacte de 08b § 2, sans les autres en-têtes par
+ * défaut de helmet (décision D-FCS-1 du journal). `X-Frame-Options: DENY` et `frame-ancestors 'none'` valent pour toute
+ * réponse : un futur aperçu HTML de dataset (08b § 2, `<iframe sandbox>`) sera servi par une origine distincte, ou sa seule
+ * route posera ses propres en-têtes (le hook garde un en-tête déjà posé).
+ */
 export function securityHeaders(publicUrl: string): Record<string, string> {
   return {
     'content-security-policy': CONSOLE_CSP,
@@ -54,7 +63,8 @@ function consolePath(url: string): string | null {
   const segments = decoded.split('/').filter((s) => s !== '');
   if (segments.some((s) => s.startsWith('.'))) return null;
   const path = '/' + segments.join('/');
-  if (SERVER_PREFIXES.some((prefix) => path === prefix || path.startsWith(prefix + '/'))) return null;
+  const probe = path.toLowerCase().split(';')[0] ?? '';
+  if (SERVER_PREFIXES.some((prefix) => probe === prefix || probe.startsWith(prefix + '/'))) return null;
   return path;
 }
 

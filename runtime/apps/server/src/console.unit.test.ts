@@ -3,7 +3,7 @@
 // serveur sert le build de la console (apps/web/dist) à la racine, avec repli SPA vers index.html pour les routes de la console,
 // jamais pour /api, /mcp, /tunnel, /hooks, /.well-known ni /metrics ; cache long sur les fichiers hachés, no-cache sur index.html.
 // assert_csp_headers (08b § 2) : CSP stricte, Referrer-Policy, COOP, nosniff ; HSTS seulement si PUBLIC_URL est en HTTPS.
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { FastifyInstance } from 'fastify';
@@ -44,6 +44,9 @@ beforeAll(() => {
   writeFileSync(join(consoleDir, '.env'), 'ZZ_TEST_DOTFILE=1');
   // Fichier voisin du dossier servi : jamais atteignable par un chemin de la console.
   writeFileSync(join(scratch, 'zz_test_secret.txt'), 'zz_test_outside');
+  // Liens symboliques dans le build vers l'extérieur (fichier voisin, dossier parent) : jamais suivis hors du dossier servi.
+  symlinkSync(join(scratch, 'zz_test_secret.txt'), join(consoleDir, 'zz_link.txt'));
+  symlinkSync(scratch, join(consoleDir, 'zz_up'));
 });
 
 afterAll(async () => {
@@ -100,6 +103,13 @@ describe('assert_console_served — la console est servie par le serveur, à la 
     }
   });
 
+  test('variantes d’un préfixe du serveur (casse, paramètre de chemin `;`, encodage) : 404 JSON, jamais index.html', async () => {
+    const app = await server();
+    for (const url of ['/API/x', '/Api', '/aPi/', '/MCP', '/Tunnel/zz', '/HOOKS', '/Metrics', '/api;x', '/api;x/y', '/mcp;zz', '/Api;x', '/%41pi/x', '/api%3Bx']) {
+      expectNotFoundJson(await app.inject({ method: 'GET', url }), url);
+    }
+  });
+
   test('fichier absent avec extension (asset manquant) : 404 JSON, jamais du HTML servi pour un script', async () => {
     const app = await server();
     for (const url of ['/assets/absent-zz.js', '/absent.css', '/favicon.ico']) expectNotFoundJson(await app.inject({ method: 'GET', url }), url);
@@ -112,6 +122,15 @@ describe('assert_console_served — la console est servie par le serveur, à la 
       expect(res.body, url).not.toContain('zz_test_outside');
       expect(res.body, url).not.toContain('ZZ_TEST_DOTFILE');
       expect([400, 404], url).toContain(res.statusCode);
+    }
+  });
+
+  test('aucun lien symbolique du build suivi hors du dossier servi', async () => {
+    const app = await server();
+    for (const url of ['/zz_link.txt', '/zz_up/zz_test_secret.txt']) {
+      const res = await app.inject({ method: 'GET', url });
+      expect(res.statusCode, url).toBe(404);
+      expect(res.body, url).not.toContain('zz_test_outside');
     }
   });
 
