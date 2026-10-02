@@ -39,6 +39,7 @@ Contrat : `runtime/packages/contracts` (`@sym/contracts`, MIT, sous-chemin `brow
 - Configuration : catalogue `packages/core/src/config/env-catalog.ts` (source unique, secrets `NOM_FILE`) ; config invalide = sortie code 1 nommant la variable ; `node dist/main.js --check-config` valide sans écouter ; `/healthz`, `/readyz`.
 - Quotas et file (tâche 2.4) : admission en base `packages/db/src/admission.ts` (file = sessions `pending` sans nœud, verrou consultatif, nœud au plus faible taux d'occupation, poids en unités de `capacity.ts`), côté passerelle `apps/gateway/src/admission/` (`Retry-After`) ; tests `apps/gateway/src/api/quotas.integration.test.ts`.
 - Capacité d'un nœud : constantes dans `packages/core/src/capacity.ts`, mesures et banc dans `bench/` (`bench/run.sh`), rapport `docs/mesures-capacite.md`.
+- `MASTER_KEY` de développement : `pnpm --filter @sym-browser/core keygen` (après build ; jamais committée ni journalisée). Vecteurs de SYM rejoués : `packages/core/vectors/sym-crypto.json`.
 
 ## Versions et dépendances
 
