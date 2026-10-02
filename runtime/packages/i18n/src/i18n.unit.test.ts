@@ -187,6 +187,9 @@ describe('M11 : formats Intl', () => {
     expect(isValidTimeZone('Europe/Paris')).toBe(true);
     expect(isValidTimeZone('UTC')).toBe(true);
     expect(isValidTimeZone('Paris')).toBe(false);
+    // Alias : un navigateur annonce l'une ou l'autre forme (« America/Buenos_Aires », « America/Argentina/Buenos_Aires »).
+    expect(isValidTimeZone('America/Argentina/Buenos_Aires')).toBe(true);
+    expect(isValidTimeZone('Europe/Paris; DROP TABLE users')).toBe(false);
     expect(isValidTimeZone(42)).toBe(false);
   });
 });

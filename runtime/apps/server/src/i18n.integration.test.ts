@@ -168,7 +168,7 @@ describe('M9 : invitation et réinitialisation dans la langue de leur destinatai
       };
       const tokyo = await ask();
       expect(tokyo.headers['content-language']).toBe('fr');
-      expect(tokyo.text).toContain('Réinitialise');
+      expect(tokyo.text).toContain('Une réinitialisation du mot de passe');
       expect(tokyo.text).toMatch(/UTC\+9|GMT\+9/);
       await sql('UPDATE users SET timezone = NULL WHERE id = $1', [user.id]);
       const utc = await ask();
@@ -188,7 +188,8 @@ describe('M5 : audit exporté en codes seulement', () => {
     expect(lines.length).toBeGreaterThan(5);
     const matches = sentenceMatcher(defaultI18n().catalogs);
     for (const line of lines) expect(findRenderedSentences({ action: line['action'], meta: line['meta'] }, matches), String(line['action'])).toEqual([]);
-    expect(findRenderedSentences({ action: 'x', meta: { reason: defaultI18n().renderer.render('srv.error.not_found', {}, 'en') + ' now' } }, matches).length).toBe(0);
+    // Une phrase du catalogue glissée dans une charge est vue, même entourée d'autre texte.
+    expect(findRenderedSentences({ action: 'x', meta: { reason: `${defaultI18n().renderer.render('srv.error.not_found', {}, 'en')} now` } }, matches)).toEqual(['$.meta.reason']);
     expect(findRenderedSentences({ meta: { detail: 'The instance is starting up: the database schema is not up to date yet (runtime migrate).' } }, matches)).toEqual(['$.meta.detail']);
   });
 });

@@ -115,9 +115,17 @@ export function collator(locale: string): Intl.Collator {
   return new Intl.Collator(safeLocale(locale), { numeric: true, sensitivity: 'base' });
 }
 
-/** Fuseau IANA valide (contrôlé contre `Intl.supportedValuesOf('timeZone')`, plus `UTC`). */
+/** Fuseau IANA valide : liste d'`Intl.supportedValuesOf('timeZone')`, plus `UTC` et les alias que `Intl` résout. */
 export function isValidTimeZone(value: unknown): value is string {
-  if (typeof value !== 'string' || value.length === 0 || value.length > 64) return false;
+  if (typeof value !== 'string' || value.length === 0 || value.length > 64 || !/^[A-Za-z0-9_+\-/]+$/.test(value)) return false;
   if (value === 'UTC') return true;
-  return (Intl as unknown as { supportedValuesOf(key: string): string[] }).supportedValuesOf('timeZone').includes(value);
+  // Liste d'ICU, puis alias : un navigateur annonce « America/Buenos_Aires » ou « America/Argentina/Buenos_Aires » selon sa version,
+  // et `supportedValuesOf` n'en liste qu'une forme. Un nom que `Intl` résout est un nom IANA connu (la forme exacte reste celle reçue).
+  if ((Intl as unknown as { supportedValuesOf(key: string): string[] }).supportedValuesOf('timeZone').includes(value)) return true;
+  try {
+    new Intl.DateTimeFormat('en', { timeZone: value });
+    return true;
+  } catch {
+    return false;
+  }
 }

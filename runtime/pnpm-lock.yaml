@@ -477,9 +477,6 @@ importers:
       clsx:
         specifier: 'catalog:'
         version: 2.1.1
-      cronstrue:
-        specifier: 'catalog:'
-        version: 3.27.0
       reka-ui:
         specifier: 'catalog:'
         version: 2.10.5(vue@3.5.43(typescript@5.9.3))

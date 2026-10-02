@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// assert_scraped_data_not_translated (tâche 3.20, 21b M7, renfort d'INV1) : la même fixture, la même API (partagée, visibilité
-// instance) et deux utilisateurs, l'un en `fr`, l'autre en `en` : les items collectés sont identiques octet pour octet. Aucune
+// assert_scraped_data_not_translated (tâche 3.20, 21b M7, renfort d'INV1) : la même fixture, la même API (définition identique, une
+// par utilisateur : un run s'exécute pour le propriétaire de l'API) et deux utilisateurs, l'un en `fr`, l'autre en `en` : les items
+// collectés sont identiques octet pour octet. Aucune
 // étape de traduction dans le pipeline ; `runs.locale` (langue de la prose du LLM) est enregistrée sans toucher aux données.
 import { randomUUID } from 'node:crypto';
 import { DomainPacer, generateMasterKey, MasterKey } from '@runtime/core';
@@ -27,7 +28,7 @@ let pool: pg.Pool;
 let queue: PgBossJobQueue;
 let client: Client;
 let worker: Worker;
-let apiId: string;
+const apiOf: Record<string, string> = {};
 
 beforeAll(async () => {
   client = await startClient();
@@ -47,14 +48,18 @@ beforeAll(async () => {
     logger: pino({ level: 'silent' }),
   });
   const base = `http://${API_HOST}:${client.server.port}`;
-  apiId = (
-    await pool.query<{ id: string }>(
-      `INSERT INTO apis (slug, owner_id, visibility, output_schema, domain_pacing) VALUES ('zz_test_shared_i18n', $1, 'instance', $2, '{"min_delay_ms": 5, "max_requests_per_run": 200, "max_wait_ms": 60000}') RETURNING id`,
-      [ALICE, JSON.stringify(SCHEMA_CONTACT)],
-    )
-  ).rows[0]!.id;
-  await pool.query("INSERT INTO strategy_versions (api_id, version, owner_id, execution, network, spec, est_cost_usd, created_by) VALUES ($1, 1, $2, 'fetch', 'direct', $3, 0, 'user')", [apiId, ALICE, JSON.stringify(contactsSpecInput(base, API_HOST, 50))]);
-  await pool.query('UPDATE apis SET current_strategy_version = 1 WHERE id = $1', [apiId]);
+  // Deux API de définition identique, une par utilisateur (même schéma, même stratégie, même fixture).
+  for (const [owner, slug] of [[ALICE, 'zz_test_i18n_fr'], [BOB, 'zz_test_i18n_en']] as const) {
+    const id = (
+      await pool.query<{ id: string }>(
+        `INSERT INTO apis (slug, owner_id, output_schema, domain_pacing) VALUES ($1, $2, $3, '{"min_delay_ms": 5, "max_requests_per_run": 200, "max_wait_ms": 60000}') RETURNING id`,
+        [slug, owner, JSON.stringify(SCHEMA_CONTACT)],
+      )
+    ).rows[0]!.id;
+    await pool.query("INSERT INTO strategy_versions (api_id, version, owner_id, execution, network, spec, est_cost_usd, created_by) VALUES ($1, 1, $2, 'fetch', 'direct', $3, 0, 'user')", [id, owner, JSON.stringify(contactsSpecInput(base, API_HOST, 50))]);
+    await pool.query('UPDATE apis SET current_strategy_version = 1 WHERE id = $1', [id]);
+    apiOf[owner] = id;
+  }
 }, 180_000);
 
 afterAll(async () => {
@@ -66,17 +71,18 @@ afterAll(async () => {
 });
 
 async function runAs(actor: { userId: string; role: 'member' }): Promise<{ datasetId: string; items: string[]; locale: string }> {
-  const { runId } = await withActor(pool, actor, (tx) => createRun(tx, queue, { apiId, ownerId: actor.userId, trigger: 'rest' }));
+  const { runId } = await withActor(pool, actor, (tx) => createRun(tx, queue, { apiId: apiOf[actor.userId]!, ownerId: actor.userId, trigger: 'rest' }));
   await vi.waitFor(async () => expect(['succeeded', 'failed']).toContain((await pool.query<{ state: string }>('SELECT state FROM runs WHERE id = $1', [runId])).rows[0]!.state), { timeout: 30_000, interval: 100 });
   const run = (await withActor(pool, actor, (tx) => readRun(tx, runId)))!;
-  expect(run).toMatchObject({ state: 'succeeded', outcome: 'clean', items: 500 });
+  const detail = (await pool.query<{ error_detail: string | null }>('SELECT error_detail FROM runs WHERE id = $1', [runId])).rows[0]?.error_detail;
+  expect({ state: run.state, outcome: run.outcome, items: run.items, failure_class: run.failure_class, attempts: run.attempts.map((a) => a.result) }, `${JSON.stringify(run)} ${detail}`).toMatchObject({ state: 'succeeded', outcome: 'clean', items: 500 });
   const rows = await withActor(pool, actor, (tx) => tx.query<{ item: string }>('SELECT item::text AS item FROM dataset_items WHERE dataset_id = $1 ORDER BY seq', [run.dataset_id]));
   const locale = (await pool.query<{ locale: string }>('SELECT locale FROM runs WHERE id = $1', [runId])).rows[0]!.locale;
   return { datasetId: run.dataset_id!, items: rows.rows.map((r) => r.item), locale };
 }
 
 describe('M7 : les données collectées ne se traduisent pas', () => {
-  test('assert_scraped_data_not_translated : même fixture, même API, un utilisateur fr et un en : items identiques octet pour octet', async () => {
+  test('assert_scraped_data_not_translated : même fixture, même définition d’API, un utilisateur fr et un en : items identiques octet pour octet', async () => {
     const fr = await runAs(asAlice);
     const en = await runAs(asBob);
     expect(fr.locale).toBe('fr');
