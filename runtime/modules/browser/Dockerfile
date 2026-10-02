@@ -8,8 +8,9 @@
 # Base épinglée par empreinte (même image et même Playwright 1.63.0 que SYM ; Renovate la met à jour).
 ARG PLAYWRIGHT_IMAGE=mcr.microsoft.com/playwright:v1.63.0-noble@sha256:eff16c30e6f3f4af0a03fa4b706120d5e9b0891c344a27d64559aff5900a4a27
 
-# --- Étape 1 : build (même base, donc même Node 24, que l'étape d'exécution)
-FROM ${PLAYWRIGHT_IMAGE} AS build
+# --- Étape 1 : build (même base, donc même Node 24, que l'étape d'exécution), sur la plateforme de construction : la
+# sortie est du JavaScript, identique pour amd64 et arm64 (image multi-arch, tâche 5.1 : scripts/image-build.ts).
+FROM --platform=$BUILDPLATFORM ${PLAYWRIGHT_IMAGE} AS build
 WORKDIR /app
 RUN corepack enable
 COPY . .
@@ -18,6 +19,11 @@ RUN pnpm install --frozen-lockfile --filter "@sym-browser/gateway..." --filter "
 
 # --- Étape 2 : exécution, non root du premier au dernier processus
 FROM ${PLAYWRIGHT_IMAGE} AS runtime
+# Étiquettes OCI : GHCR rattache l'image au dépôt public (miroir, tâche 5.8) et affiche sa licence.
+LABEL org.opencontainers.image.title="SYM Browser" \
+      org.opencontainers.image.description="Navigateurs à la demande : passerelle, nœuds Chromium, API /v1, CDP et Playwright" \
+      org.opencontainers.image.source="https://github.com/scrap-yo-mama/sym-browser" \
+      org.opencontainers.image.licenses="AGPL-3.0-only"
 ENV NODE_ENV=production
 WORKDIR /app
 # tini en PID 1 : relaie SIGTERM (arrêt gracieux, tâche 2.7) et récolte les zombies de Chromium. /ms-playwright est livré
@@ -30,7 +36,8 @@ RUN apt-get update \
  && corepack enable \
  && rm -rf /ms-playwright/firefox-* /ms-playwright/webkit-* \
  && chmod -R go-w,a+rX /ms-playwright \
- && find / -xdev -perm /6000 -type f -exec chmod a-s {} +
+ && find / -xdev -perm /6000 -type f -exec chmod a-s {} + \
+ && install -d -o pwuser -g pwuser /data
 # .pnpmfile.cjs : crochet readPackage du workspace, exigé par le lockfile (pnpmfileChecksum).
 COPY package.json pnpm-workspace.yaml pnpm-lock.yaml .pnpmfile.cjs ./
 COPY packages/contracts/package.json packages/contracts/
@@ -47,6 +54,7 @@ COPY --from=build /app/modules/browser/packages/db/migrations modules/browser/pa
 COPY --from=build /app/modules/browser/apps/gateway/dist modules/browser/apps/gateway/dist
 COPY --from=build /app/modules/browser/apps/node/dist modules/browser/apps/node/dist
 
+# /data (SYMB_DATA_DIR, OBJECT_DIR) appartient à pwuser : un volume Compose monté là en hérite (tâche 5.1).
 # Aucun processus root : pwuser (uid 1001, fourni par l'image Playwright). Le bac à sable de Chromium reste actif ; le
 # profil seccomp (deploy/seccomp-chromium.json, repris de SYM) s'applique au lancement du conteneur (--security-opt).
 USER pwuser

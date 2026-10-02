@@ -1,0 +1,10 @@
+{
+  "date": "2026-10-02T13:09:41.069Z",
+  "image": "sym-browser:ci-local",
+  "modeAllReadyMs": 6736,
+  "modeAllTotalMs": 10238,
+  "budgetMs": 600000,
+  "secondNodeGatewayProbes": 55,
+  "secondNodeGatewayNon200": 0,
+  "note": "image déjà construite ; base, migrations, nœud et Chromium chaud à froid"
+}

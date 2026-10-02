@@ -201,3 +201,59 @@ describe('runService : refus de démarrer', () => {
     expect(h.err.join('\n')).toContain('SYMB_MODEE');
   });
 });
+
+describe('runService : préparation des rôles (tâche 5.1)', () => {
+  test('prepare reçoit la configuration validée ; ses vérifications, crochets de drainage et fermeture sont branchés', async () => {
+    const calls: string[] = [];
+    let seenMode = '';
+    const service = await runService({
+      env: env({ SYMB_MODE: 'gateway', NODE_TOKEN: 'n'.repeat(32) }),
+      handleSignals: false,
+      stdout: () => undefined,
+      prepare: async (config) => {
+        seenMode = config.mode;
+        calls.push('prepare');
+        return {
+          checks: [{ name: 'database', run: () => 'ok' }, { name: 'nodes', run: () => 'aucun nœud' }],
+          onDrain: [async () => void calls.push('drain')],
+          close: async () => void calls.push('close'),
+        };
+      },
+    });
+    expect(service).toBeDefined();
+    running.push(service!);
+    expect(seenMode).toBe('gateway');
+    expect(await get(service!, '/readyz')).toMatchObject({ status: 503, body: { checks: { master_key: 'ok', database: 'ok', nodes: 'aucun nœud' } } });
+    await service!.shutdown();
+    expect(calls).toEqual(['prepare', 'drain', 'close']);
+  });
+
+  test('prepare n’est pas appelé par --check-config ni sur configuration invalide', async () => {
+    let called = false;
+    const prepare = async () => {
+      called = true;
+      return {};
+    };
+    await runService({ env: env(), argv: ['--check-config'], stdout: () => undefined, exit: () => undefined, prepare });
+    await runService({ env: env({ MASTER_KEY: 'invalide' }), stderr: () => undefined, exit: () => undefined, prepare });
+    expect(called).toBe(false);
+  });
+
+  test('prepare qui échoue : code 1, message sans secret, rien n’écoute', async () => {
+    const errors: string[] = [];
+    let code: number | undefined;
+    const service = await runService({
+      env: env(),
+      handleSignals: false,
+      stderr: (line) => errors.push(line),
+      exit: (c) => void (code = c),
+      prepare: async () => {
+        throw new Error('postgres://symb:secret@db.invalid:5432/symb refusé');
+      },
+    });
+    expect(service).toBeUndefined();
+    expect(code).toBe(1);
+    expect(errors.join('\n')).toMatch(/préparation/i);
+    expect(errors.join('\n')).not.toContain('secret@');
+  });
+});

@@ -69,15 +69,20 @@ afterAll(() => {
 });
 
 describe('Given chaque mode / When démarrage / Then /readyz 200 (tâche 0.4)', () => {
-  test.each(Object.keys(MODE_ENV))('mode %s : le process écoute, /healthz et /readyz répondent 200, SIGTERM sort avec 0', async (mode) => {
+  // Depuis la tâche 5.1, /readyz suit 04d § 3.3 (base joignable, migrations à jour…) : ici la base est injoignable, donc 503
+  // nommant `database`, sans l'URL ; le chemin 200 sur base réelle est couvert par apps/gateway/src/runtime (PostgreSQL) et
+  // par tests/deploy.e2e.test.ts (image et Compose).
+  test.each(Object.keys(MODE_ENV))('mode %s : le process écoute, /healthz 200, /readyz 503 base injoignable, SIGTERM sort avec 0', async (mode) => {
     const started = await launch(GATEWAY_MAIN, validEnv(MODE_ENV[mode]));
     expect(started.mode).toBe(mode);
     const health = await fetch(`http://127.0.0.1:${started.port}/healthz`);
     expect(health.status).toBe(200);
     expect(await health.json()).toEqual({ status: 'ok' });
     const ready = await fetch(`http://127.0.0.1:${started.port}/readyz`);
-    expect(ready.status).toBe(200);
-    expect(await ready.json()).toMatchObject({ status: 'ready', mode });
+    expect(ready.status).toBe(503);
+    const body = await ready.text();
+    expect(JSON.parse(body)).toMatchObject({ status: 'unready', mode, checks: { master_key: 'ok', database: 'injoignable' } });
+    expect(body).not.toContain('db.invalid');
     started.child.kill('SIGTERM');
     expect(await started.exited).toBe(0);
   });

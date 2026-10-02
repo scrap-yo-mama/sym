@@ -69,6 +69,15 @@ describe('modes', () => {
     expect(node).toMatch(/NODE_PUBLIC_URL obligatoire en mode node/);
   });
 
+  test('NODE_PUBLIC_URL : forme hôte:port sans schéma (fromService hostport de Render, tâche 5.1) complétée par http://', () => {
+    const node = (url: string) => loadConfig(base({ SYMB_MODE: 'node', NODE_TOKEN: 'n'.repeat(32), NODE_PUBLIC_URL: url })).node.publicUrl;
+    expect(node('sym-browser-node-x7k2:10000')).toBe('http://sym-browser-node-x7k2:10000');
+    expect(node('https://node.example.org')).toBe('https://node.example.org');
+    for (const bad of ['hôte invalide:1', 'node:99999', 'node', 'ftp://node:21']) {
+      expect(issues(base({ SYMB_MODE: 'node', NODE_TOKEN: 'n'.repeat(32), NODE_PUBLIC_URL: bad })).join('\n'), bad).toMatch(/NODE_PUBLIC_URL/);
+    }
+  });
+
   test('en mode all, le nœud s’enregistre sur 127.0.0.1 ; NODE_ID par défaut : nom d’hôte', () => {
     expect(loadConfig(base()).node.publicUrl).toBe('http://127.0.0.1:3000');
     expect(loadConfig(base({ PORT: '4100' })).node.publicUrl).toBe('http://127.0.0.1:4100');

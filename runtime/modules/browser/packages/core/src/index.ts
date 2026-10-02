@@ -9,6 +9,9 @@ export * from './profiles/index.js';
 export * from './storage/index.js';
 export * from './net/index.js';
 export * from './live/index.js';
+// Noyau de SYM Browser (cdc/sym-browser 03 § 9) : chiffrement (tâche 0.3), configuration et modes (0.4), journaux masqués,
+// stockage des objets (3.0), authentification : clés d'API, scopes, jetons de connexion, premier démarrage (2.1).
+// Tâche 0.4 : catalogue d'environnement, chargement validé, hôte de service (`/healthz`, `/readyz`, drainage).
 export {
   BROWSER_ENV_CATALOG,
   BROWSER_ENV_GROUPS,
@@ -31,3 +34,4 @@ export { createLogger, runService, SHUTDOWN_TEARDOWN_MS, startService, type Logg
 export * from './session/index.js';
 export { sendableCloseCode } from './relay/close-code.js';
 export * from './observability/index.js';
+export { createLogger, runService, startService, type Logger, type PreparedRole, type ReadinessCheck, type RunOptions, type ServiceHandle, type ServiceOptions } from './service/service.js';

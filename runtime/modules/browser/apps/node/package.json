@@ -5,7 +5,13 @@
   "type": "module",
   "license": "AGPL-3.0-only",
   "description": "SYM Browser : nœud (pool de Chromium chauds, sessions, egress par session).",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
   "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
     "./egress": {
       "types": "./dist/egress/index.d.ts",
       "default": "./dist/egress/index.js"

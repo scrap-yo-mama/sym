@@ -5,6 +5,7 @@
 export * from './api-keys.js';
 export * from './migrate.js';
 export * from './profiles.js';
+export * from './nodes.js';
 export * as schema from './schema.js';
 
 /** Tables du modèle de données (03 § 5), plus `idempotency_keys` (04 § 9, tâche 2.2) et `webhook_deliveries` (tâche 2.5). */

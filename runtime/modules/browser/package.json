@@ -14,7 +14,8 @@
     "test": "vitest run",
     "test:chromium": "vitest run --config vitest.chromium.config.ts",
     "test:quickstart": "vitest run --config vitest.quickstart.config.ts",
-    "docs:reference": "node scripts/docs-reference.ts"
+    "docs:reference": "node scripts/docs-reference.ts",
+    "test:deploy": "vitest run tests/deploy.e2e.test.ts"
   },
   "devDependencies": {
     "@browserbasehq/stagehand": "catalog:",
@@ -30,6 +31,7 @@
     "typescript": "catalog:",
     "vitest": "catalog:",
     "ws": "catalog:",
+    "yaml": "catalog:",
     "zod": "catalog:"
   }
 }
