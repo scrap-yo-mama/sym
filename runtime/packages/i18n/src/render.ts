@@ -6,14 +6,22 @@ import { compile, createCoreContext, fallbackWithLocaleChain, resolveValue, tran
 import { flatten, GHOST, type Catalog } from './catalog.js';
 import { pluralRule } from './plural.js';
 import { SOURCE_LOCALE, type Registry } from './registry.js';
+import type { MessageKey } from '../keys.d.ts';
 
 export type Params = Readonly<Record<string, unknown>>;
 
+/**
+ * Clé vérifiée au typecheck (21b § 2, `keys.d.ts` généré par `i18n:types`) : une clé LITTÉRALE doit exister dans `en.json`, sinon
+ * `tsc` échoue ; une clé calculée (`string`, gabarit `narrative.${string}` : code d'événement lu en base) reste permise, le texte
+ * générique d'un code inconnu la couvre à l'exécution.
+ */
+export type CheckedKey<K extends string> = K extends MessageKey ? K : Record<never, never> extends Record<K, 1> ? K : MessageKey;
+
 export interface Renderer {
   /** Message rendu ; clé absente dans la langue → repli sur `en` ; clé absente partout → texte générique citant la clé. */
-  render(key: string, params: Params, locale: string): string;
+  render<K extends string>(key: K & CheckedKey<K>, params: Params, locale: string): string;
   /** Message rendu ou `null` si la clé manque dans la langue (clés en omission, jamais de repli sur l'anglais). */
-  renderOptional(key: string, params: Params, locale: string): string | null;
+  renderOptional<K extends string>(key: K & CheckedKey<K>, params: Params, locale: string): string | null;
   /** La clé existe-t-elle dans cette langue (sans repli) ? */
   has(key: string, locale: string): boolean;
   /** Langues chargées. */

@@ -49,6 +49,7 @@ export const ME = {
   role: 'owner',
   locale: 'en',
   timezone: 'Europe/Paris',
+  timezoneInitialized: true,
   theme: 'system',
   via: 'ui',
   scopes: null,
@@ -74,7 +75,7 @@ export type Locale = string;
 
 /** Rend un composant en HTML (SSR) avec ses traductions et un routeur en mémoire placé sur `path`. */
 async function render(component: Component, props: Record<string, unknown> = {}, options: { locale?: Locale; path?: string } = {}): Promise<string> {
-  const i18n = createI18n({ legacy: false, locale: options.locale ?? 'en', fallbackLocale: 'en', messages: { en, fr } });
+  const i18n = createI18n({ legacy: false, locale: options.locale ?? 'en', fallbackLocale: 'en', messages: { en, fr } as unknown as Record<string, typeof en> });
   const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/:rest(.*)*', component: { render: () => null } }] });
   await router.push(options.path ?? '/');
   await router.isReady();

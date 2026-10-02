@@ -58,8 +58,8 @@ const llmConfig = (): LlmConfig => ({
 
 const PROPOSAL = {
   fields: [
-    { name: 'sku', type: 'string', required: true, personal: false, description: 'Référence' },
-    { name: 'title', type: 'string', required: true, personal: false, description: 'Titre' },
+    { name: 'sku', type: 'string', required: true, personal: false, description: 'Reference' },
+    { name: 'title', type: 'string', required: true, personal: false, description: 'Title' },
   ],
   sources: [
     {

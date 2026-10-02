@@ -1183,6 +1183,8 @@
     "noReport": "No access report for this API yet.",
     "summary": "Summary",
     "checkedAt": "Checked on {date}",
+    "acceptLanguage": "Language sent to sites (Accept-Language)",
+    "acceptLanguageNone": "None, like a fresh Chromium",
     "robots": "robots.txt",
     "robotsStatus": "Status",
     "robotsFetched": "Read on",

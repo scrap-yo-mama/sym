@@ -11,12 +11,12 @@ function safeLocale(locale: string): string {
 }
 
 /**
- * Coût en dollars américains, `currencyDisplay: 'narrowSymbol'` (« 0,50 $ », jamais « 0,50 $US »). Deux décimales au moins ; en
- * dessous de 1 $, jusqu'à 4 quand elles servent (« 0,0021 $ », « 0,0123 $ ») : un coût par run reste lisible. Aucune conversion de
- * devise (taux externe = sortie non décidée, INV9).
+ * Coût en dollars américains, `currencyDisplay: 'narrowSymbol'` (« 0,50 $ », jamais « 0,50 $US »). 2 décimales à partir de 0,01 $
+ * (« 0,01 $ » pour 0,0123), jusqu'à 4 en dessous (« 0,0021 $ ») : 21 § 5 (U2). Aucune conversion de devise (taux externe = sortie
+ * non décidée, INV9).
  */
 export function fmtUsd(amount: number, locale: string): string {
-  const small = Math.abs(amount) < 1;
+  const small = Math.abs(amount) < 0.01;
   return new Intl.NumberFormat(safeLocale(locale), {
     style: 'currency',
     currency: 'USD',

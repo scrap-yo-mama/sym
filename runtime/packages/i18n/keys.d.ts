@@ -6,6 +6,8 @@ export type MessageKey =
   | 'access.signal.disallowed'
   | 'access.signal.review'
   | 'access.signal.unknown'
+  | 'accessTab.acceptLanguage'
+  | 'accessTab.acceptLanguageNone'
   | 'accessTab.checkedAt'
   | 'accessTab.contact'
   | 'accessTab.found'

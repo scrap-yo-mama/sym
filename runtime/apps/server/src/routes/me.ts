@@ -119,6 +119,8 @@ export function meRoutes(app: FastifyInstance, ctx: ServerContext): void {
         sets.push(`${column} = $${values.length}`);
         changed.push(name);
       }
+      // Toute écriture du fuseau (même `null` : effacé dans Mon compte) marque son initialisation : la console ne le réécrit plus.
+      if (timezone !== undefined) sets.push('timezone_initialized = true');
       await ctx.pool.query(`UPDATE users SET ${sets.join(', ')}, updated_at = now() WHERE id = $1`, values);
       await audit(ctx, request, actor, { action: 'account.preferences_updated', targetType: 'user', targetId: actor.userId, outcome: 'success', meta: { fields: changed } });
       return meView(ctx, { ...actor, via: actor.via === 'extension' ? 'ui' : actor.via });

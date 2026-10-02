@@ -99,6 +99,10 @@ describe('M6 : langue de la prose du LLM (21 § 4.5)', () => {
       // Identique hors langue : un seul jeu de prompts, en anglais.
       expect(en.replace('English (en)', 'French (fr)')).toBe(fr);
       expect(fr.startsWith(INVESTIGATE_SYSTEM_PROMPT)).toBe(true);
+      // Le rôle investigate n'écrit aucune prose pour l'humain : les descriptions de champs restent en anglais (lues par le
+      // modèle client, 21 § 4.5), le bloc le dit explicitement et ne vise qu'un `title` éventuel.
+      expect(fr).toMatch(/descriptions?[^.\n]*\bEnglish\b[^.\n]*whatever the Language line/i);
+      expect(fr.indexOf('Language:')).toBeLessThan(fr.search(/whatever the Language line/i));
       expect(none.startsWith(INVESTIGATE_SYSTEM_PROMPT)).toBe(true);
       expect(none).not.toContain('Language:');
       // Une langue hors registre (injection par runs.locale) n'entre jamais dans le prompt.
@@ -120,10 +124,16 @@ describe('M6 : langue de la prose du LLM (21 § 4.5)', () => {
       const accented = { fields: [{ name: 'prénom', type: 'string', required: true, personal: true, description: 'Prénom' }], sources: [] };
       fake.setScenario('inv', [scripted.json(accented), scripted.json(accented), scripted.json(accented)]);
       await expect(proposeInvestigation(client, { description: 'x', candidates: [candidate()], proseLocale: 'fr' })).rejects.toThrow();
-      // La même réponse en anglais passe : seule la prose de la description peut être dans la langue du run.
-      const ok = { fields: [{ name: 'first_name', type: 'string', required: true, personal: true, description: 'Prénom de la personne' }], sources: [] };
+      // Une description française (lue par le modèle client, 21 § 4.5 : anglais) est refusée, même avec runs.locale = fr.
+      const frDescription = { fields: [{ name: 'first_name', type: 'string', required: true, personal: true, description: 'Prénom de la personne' }], sources: [] };
+      fake.setScenario('inv', [scripted.json(frDescription), scripted.json(frDescription), scripted.json(frDescription)]);
+      await expect(proposeInvestigation(client, { description: 'x', candidates: [candidate()], proseLocale: 'fr' })).rejects.toThrow();
+      // La même réponse en anglais passe, nom ET description : le schéma de sortie ne dépend pas de runs.locale.
+      const ok = { fields: [{ name: 'first_name', type: 'string', required: true, personal: true, description: 'First name of the person' }], sources: [] };
       fake.setScenario('inv', [scripted.json(ok)]);
-      expect((await proposeInvestigation(client, { description: 'x', candidates: [candidate()], proseLocale: 'fr' })).proposal.fields[0]?.name).toBe('first_name');
+      const field = (await proposeInvestigation(client, { description: 'x', candidates: [candidate()], proseLocale: 'fr' })).proposal.fields[0];
+      expect(field?.name).toBe('first_name');
+      expect(field?.description).toBe('First name of the person');
     } finally {
       await fake.close();
     }

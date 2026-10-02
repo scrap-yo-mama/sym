@@ -7,13 +7,15 @@
 //   CI ubuntu, poste macOS : un Chromium vierge n'envoie aucun `Accept-Language`), et le rapport d'accès affiche la valeur reçue ;
 // - E1 (client HTTP, y compris quand une stratégie pose son propre `Accept-Language`), E2/E3 (contexte de run) et Chromium agentique
 //   (E5/E6) envoient EXACTEMENT cette valeur, identique d'un essai à l'autre ;
-// - la langue de l'interface et le fuseau d'un compte (ici : un compte `qaa`, langue d'usage local qu'aucune machine n'a, fuseau
-//   `Pacific/Chatham`, une instance `DEFAULT_LOCALE=qaa`) ne changent rien : aucun en-tête, aucune URL, aucun corps reçu par la fixture
-//   ne les porte, et la page voit les langues et le fuseau RÉELS du moteur (ceux de la machine : un poste en français envoie du français,
-//   ce qui n'a rien à voir avec le compte) ;
+// - VOLET MOTEUR seulement : aucun réglage de langue ni de fuseau n'existe sur le chemin du moteur (rien à lui passer) ; on vérifie ici
+//   qu'aucun en-tête, aucune URL, aucun corps reçu par la fixture ne porte une langue ou un fuseau témoins (`qaa`, `Pacific/Chatham`)
+//   et que la page voit les langues et le fuseau RÉELS du moteur (ceux de la machine). Le volet de BOUT EN BOUT (deux enquêtes réelles
+//   par le worker, `runs.locale` fr puis en, `users.timezone` posé, mêmes en-têtes, URL et corps reçus) est
+//   apps/worker/src/exec/investigation-locale.integration.test.ts ;
 // - les commandes CDP réellement envoyées (journal `pw:protocol`) ne contiennent aucune commande de langue ni de fuseau, ni d'en-tête
 //   `Accept-Language` ajouté ; les arguments de lancement n'ont pas `--lang`.
-// Le volet statique (code source) est dans tests/i18n-engine.unit.test.ts ; l'enquête `fr` puis `en` de bout en bout est rejouée en 4.3.
+// Le volet statique (code source) est dans tests/i18n-engine.unit.test.ts ; l'enquête `fr` puis `en` de bout en bout dans
+// apps/worker/src/exec/investigation-locale.integration.test.ts (E1, sans navigateur) ; la recette 4.3 la rejoue avec Chromium.
 import { createServer, type IncomingHttpHeaders, type Server } from 'node:http';
 import { afterAll, beforeAll, describe, expect, test, vi } from 'vitest';
 
@@ -35,7 +37,7 @@ import { fixtureGuard } from '../helpers/fixture-net.ts';
 import { allowAllRequests } from '../helpers/robots-allow.ts';
 
 const HOST = 'zz_test_al.localhost';
-/** Compte de l'interface : langue et fuseau qui ne doivent atteindre AUCUNE requête vers un site. */
+/** Langue et fuseau témoins (langue d'usage local qu'aucune machine n'a) : aucune requête vers un site ne doit les porter. */
 const UI_USER = { locale: 'qaa', timezone: 'Pacific/Chatham' } as const;
 const signal = new AbortController().signal;
 
@@ -106,14 +108,11 @@ beforeAll(async () => {
   port = (server.address() as { port: number }).port;
   guard = fixtureGuard(port, [HOST], net);
   launchProxy = await startEgressProxy({ guard, refuseAll: true });
-  // Instance en français et compte `fr` : rien de cela ne doit atteindre le moteur.
-  process.env['DEFAULT_LOCALE'] = UI_USER.locale;
   pool = new BrowserPool({ size: 1, launch: playwrightLauncher(launchProxy.url, process.env), recycleAfterRuns: 100 });
   await pool.run(signal, async (browser) => browser.version());
 }, 120_000);
 
 afterAll(async () => {
-  delete process.env['DEFAULT_LOCALE'];
   await pool?.close();
   await launchProxy?.close();
   await new Promise<void>((resolve) => (server ? server.close(() => resolve()) : resolve()));

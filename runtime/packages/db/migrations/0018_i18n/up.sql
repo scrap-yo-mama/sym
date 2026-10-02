@@ -5,7 +5,8 @@
 --   users.timezone      fuseau IANA, nullable, initialisé par le navigateur à la première connexion. Donnée personnelle
 --                       (indice de localisation) : inventaire RGPD, export et effacement (17 § 6) ; jamais dans un journal,
 --                       un webhook ni une requête vers un site cible. Valeur contrôlée contre Intl.supportedValuesOf par
---                       le serveur ; ici seulement la forme.
+--                       le serveur ; ici seulement la forme. `timezone_initialized` marque la première écriture (toute
+--                       écriture du fuseau, même `null`) : la console n'initialise plus jamais ensuite.
 --   invitations.locale  langue choisie par l'invitant, copiée dans users.locale à l'acceptation. Non nulle, défaut 'en'
 --                       (additif : une image N-1 qui insère sans la colonne reste valable, 14 § 6).
 --   runs.locale         users.locale de l'appelant au lancement (propriétaire de la planification pour un run planifié) ;
@@ -18,6 +19,8 @@ ALTER TABLE users DROP CONSTRAINT users_locale_check;
 ALTER TABLE users ADD CONSTRAINT users_locale_format CHECK (locale ~ '^[a-z]{2,3}$');
 ALTER TABLE users ADD COLUMN timezone text
   CONSTRAINT users_timezone_format CHECK (timezone IS NULL OR timezone ~ '^[A-Za-z0-9_+/-]{1,64}$');
+-- Le fuseau est initialisé UNE fois (première connexion) : un fuseau effacé volontairement dans Mon compte reste effacé.
+ALTER TABLE users ADD COLUMN timezone_initialized boolean NOT NULL DEFAULT false;
 
 ALTER TABLE invitations ADD COLUMN locale text NOT NULL DEFAULT 'en'
   CONSTRAINT invitations_locale_format CHECK (locale ~ '^[a-z]{2,3}$');

@@ -4,6 +4,7 @@ DROP TRIGGER runs_set_locale ON runs;
 DROP FUNCTION runs_set_locale();
 ALTER TABLE runs DROP COLUMN locale;
 ALTER TABLE invitations DROP COLUMN locale;
+ALTER TABLE users DROP COLUMN timezone_initialized;
 ALTER TABLE users DROP COLUMN timezone;
 UPDATE users SET locale = 'en' WHERE locale NOT IN ('en', 'fr');
 ALTER TABLE users DROP CONSTRAINT users_locale_format;

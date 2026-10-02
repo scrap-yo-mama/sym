@@ -49,7 +49,7 @@ describe('M2 : la langue du compte est matérialisée une seule fois', () => {
     expect(again.statusCode).toBe(200);
     expect(await sql('SELECT locale FROM users WHERE id = $1', [owner.id])).toEqual([{ locale: 'fr' }]);
     const me = await srv.app.inject({ method: 'GET', url: '/api/me', headers: { cookie: sessionCookie(again), 'accept-language': 'en-US,en;q=0.9' } });
-    expect(me.json()).toMatchObject({ locale: 'fr', timezone: null });
+    expect(me.json()).toMatchObject({ locale: 'fr', timezone: null, timezoneInitialized: false });
   });
 
   test('PATCH /api/me : langue livrée seulement, fuseau IANA contrôlé, audit sans la valeur du fuseau', async () => {
@@ -60,9 +60,11 @@ describe('M2 : la langue du compte est matérialisée une seule fois', () => {
     const badZone = await patch({ timezone: 'Paris' });
     expect(badZone.statusCode).toBe(400);
     expect(badZone.json()).toMatchObject({ error: { code: 'invalid_timezone' } });
+    // Un refus ne marque pas l'initialisation du fuseau.
+    expect(await sql('SELECT timezone_initialized FROM users WHERE id = $1', [owner.id])).toEqual([{ timezone_initialized: false }]);
     const ok = await patch({ timezone: 'Europe/Paris' });
     expect(ok.statusCode, ok.body).toBe(200);
-    expect(ok.json()).toMatchObject({ locale: 'fr', timezone: 'Europe/Paris' });
+    expect(ok.json()).toMatchObject({ locale: 'fr', timezone: 'Europe/Paris', timezoneInitialized: true });
     expect((await patch({ locale: 'en' })).json()).toMatchObject({ locale: 'en', timezone: 'Europe/Paris' });
     expect((await patch({ locale: 'fr' })).json()).toMatchObject({ locale: 'fr' });
     // Le fuseau est une donnée personnelle : l'audit garde le nom du champ, jamais sa valeur (17 § 6).
@@ -70,8 +72,9 @@ describe('M2 : la langue du compte est matérialisée une seule fois', () => {
     expect(rows.length).toBeGreaterThanOrEqual(3);
     expect(JSON.stringify(rows)).not.toContain('Europe/Paris');
     expect(rows.map((r) => r.meta.fields)).toContainEqual(['timezone']);
-    // Effacer le fuseau.
-    expect((await patch({ timezone: null })).json()).toMatchObject({ timezone: null });
+    // Effacer le fuseau : l'initialisation reste marquée, la console ne le réécrira pas à la connexion suivante.
+    expect((await patch({ timezone: null })).json()).toMatchObject({ timezone: null, timezoneInitialized: true });
+    expect(await sql('SELECT timezone, timezone_initialized FROM users WHERE id = $1', [owner.id])).toEqual([{ timezone: null, timezone_initialized: true }]);
     expect((await patch({})).statusCode).toBe(400);
   });
 });

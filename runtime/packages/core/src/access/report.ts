@@ -21,8 +21,12 @@ import { selectGroup } from './robots.js';
 import { ENGINE_ACCEPT_LANGUAGE } from './identity.js';
 import { detectAccessSignals, parsePaymentOffer, type AccessSignal } from './signals.js';
 
-/** Sonde d'une URL (une requête GET, redirections suivies sous garde robots, corps borné). */
-export type AccessProbe = (url: string, signal: AbortSignal) => Promise<HttpExchange>;
+/**
+ * Sonde d'une URL (une requête GET, redirections suivies sous garde robots, corps borné). `sent_accept_language` : l'en-tête
+ * `Accept-Language` réellement envoyé (`null` = aucun), quand la sonde peut le relever (client HTTP du moteur ; pas le tunnel, où
+ * le navigateur de l'utilisateur envoie sa propre langue, 21 § 6.4).
+ */
+export type AccessProbe = (url: string, signal: AbortSignal) => Promise<HttpExchange & { readonly sent_accept_language?: string | null }>;
 
 /** Corps lu par la sonde (CGU, voies déclarées) : la tête de la page suffit. */
 export const ACCESS_PROBE_MAX_BYTES = 256 * 1024;
@@ -70,6 +74,11 @@ export type AccessReport = {
   readonly payment: { readonly required: boolean; readonly offer: string | null };
   /** Statut HTTP de la sonde de l'URL (`null` si aucune requête n'est partie). */
   readonly probe_status: number | null;
+  /**
+   * `Accept-Language` relevé pendant la sonde (21 § 6.6) : `null` = aucun en-tête envoyé ; absent = non relevé (aucune requête,
+   * ou sonde par le tunnel). Jamais la langue d'un utilisateur, d'un compte ou d'un run.
+   */
+  readonly accept_language?: string | null;
   readonly policy: { readonly prefer_official: boolean; readonly on_ai_signal: 'warn' };
   readonly verdict: AccessVerdict;
 };
@@ -189,6 +198,7 @@ export async function buildAccessReport(options: BuildAccessReportOptions): Prom
   const state = decision.state;
   const robotsLines = state?.kind === 'rules' ? [...state.file.globalSignals, ...selectGroup(state.file).signals] : [];
   const sitemaps = state?.kind === 'rules' ? [...state.file.sitemaps].slice(0, 10) : [];
+  let sentLanguage: string | null | undefined;
   const finish = (rest: Pick<AccessReport, 'signals' | 'terms_url' | 'payment' | 'probe_status' | 'verdict'> & { feeds?: string[]; officialApi?: string | null; llms?: boolean }): AccessReport => ({
     ...base,
     checked_at: iso(now()),
@@ -198,6 +208,7 @@ export async function buildAccessReport(options: BuildAccessReportOptions): Prom
     declared: { sitemaps, feeds: rest.feeds ?? [], official_api_url: rest.officialApi ?? null, llms_txt: rest.llms ?? false },
     payment: rest.payment,
     probe_status: rest.probe_status,
+    ...(sentLanguage === undefined ? {} : { accept_language: sentLanguage }),
     verdict: rest.verdict,
   });
   const noPayment = { required: false, offer: null };
@@ -217,7 +228,9 @@ export async function buildAccessReport(options: BuildAccessReportOptions): Prom
   }
   let exchange: HttpExchange;
   try {
-    exchange = await options.probe(url.href, options.signal);
+    const probed = await options.probe(url.href, options.signal);
+    sentLanguage = probed.sent_accept_language;
+    exchange = probed;
   } catch (error) {
     options.signal.throwIfAborted();
     const failure = classifyTransportError(error);
@@ -257,7 +270,7 @@ export async function buildAccessReport(options: BuildAccessReportOptions): Prom
 }
 
 /** Sonde par une session réseau (contrôle robots à chaque saut, User-Agent du robot), corps borné. */
-export function sessionAccessProbe(session: Pick<NetworkSession, 'fetch'>, maxBytes = ACCESS_PROBE_MAX_BYTES): AccessProbe {
+export function sessionAccessProbe(session: Pick<NetworkSession, 'fetch'> & Partial<Pick<NetworkSession, 'sentAcceptLanguage'>>, maxBytes = ACCESS_PROBE_MAX_BYTES): AccessProbe {
   return async (url, signal) => {
     const response = await session.fetch(url, { method: 'GET', headers: { accept: 'text/html,application/json;q=0.9,*/*;q=0.8' }, signal });
     const headers: Record<string, string> = {};
@@ -280,7 +293,8 @@ export function sessionAccessProbe(session: Pick<NetworkSession, 'fetch'>, maxBy
         size += value.byteLength;
       }
     }
-    return { status: response.status, headers, body: Buffer.concat(chunks).toString('utf8'), url: response.url === '' ? url : response.url };
+    const sent = session.sentAcceptLanguage?.();
+    return { status: response.status, headers, body: Buffer.concat(chunks).toString('utf8'), url: response.url === '' ? url : response.url, ...(sent === undefined ? {} : { sent_accept_language: sent }) };
   };
 }
 
@@ -302,8 +316,8 @@ export function accessReportView(report: AccessReport): {
   payment_offer: string | null;
   official_api_url: string | null;
   /**
-   * `Accept-Language` effectif envoyé aux sites : celui du moteur (21 § 6, u6 R18), jamais la langue d'un utilisateur. `null` : aucun
-   * en-tête, comme un Chromium vierge (valeur reçue par le site, mesurée par `assert_accept_language_engine_real`).
+   * `Accept-Language` effectif envoyé aux sites : celui RELEVÉ pendant la sonde (21 § 6.6, u6 R18), à défaut celui du moteur ; jamais
+   * la langue d'un utilisateur. `null` : aucun en-tête, comme un Chromium vierge (`assert_accept_language_engine_real`).
    */
   accept_language: string | null;
 } {
@@ -316,7 +330,7 @@ export function accessReportView(report: AccessReport): {
     llms_txt: report.declared.llms_txt,
     payment_offer: report.payment.offer,
     official_api_url: report.declared.official_api_url,
-    accept_language: ENGINE_ACCEPT_LANGUAGE,
+    accept_language: report.accept_language === undefined ? ENGINE_ACCEPT_LANGUAGE : report.accept_language,
   };
 }
 

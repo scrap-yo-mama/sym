@@ -51,8 +51,8 @@ const llmConfig = (): LlmConfig => ({
 
 const PROPOSAL = {
   fields: [
-    { name: 'sku', type: 'string', required: true, personal: false, description: 'Référence' },
-    { name: 'title', type: 'string', required: true, personal: false, description: 'Titre' },
+    { name: 'sku', type: 'string', required: true, personal: false, description: 'Reference' },
+    { name: 'title', type: 'string', required: true, personal: false, description: 'Title' },
   ],
   sources: [{ candidate: 'c1', paths: [{ field: 'sku', path: '$.id', ops: [] }, { field: 'title', path: '$.title', ops: [] }], pagination: { type: 'none', param: null, start: null, has_more_path: null, next_path: null } }],
 };

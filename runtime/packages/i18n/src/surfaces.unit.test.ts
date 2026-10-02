@@ -20,10 +20,12 @@ const { renderer, registry, catalogs, supported } = i18n;
 describe('narrative.light.* : omission, jamais de repli sur l’anglais (21 § 2)', () => {
   test('une touche légère absente d’une langue est omise ; présente, elle est rendue ; une clé ordinaire retombe sur en', () => {
     const local = createRenderer({ en: { narrative: { light: { wink: 'A wink.' }, plain: 'Plain.' } }, fr: { narrative: { light: {} } } }, registry);
-    expect(local.renderOptional('narrative.light.wink', {}, 'fr')).toBeNull();
-    expect(local.renderOptional('narrative.light.wink', {}, 'en')).toBe('A wink.');
-    expect(local.renderOptional('narrative.plain', {}, 'fr')).toBe('Plain.');
-    expect(local.renderOptional('narrative.absent', {}, 'fr')).toBeNull();
+    // Clés d'un catalogue de test (absentes de en.json) : typées `string`, comme des clés calculées.
+    const key = (k: string): string => k;
+    expect(local.renderOptional(key('narrative.light.wink'), {}, 'fr')).toBeNull();
+    expect(local.renderOptional(key('narrative.light.wink'), {}, 'en')).toBe('A wink.');
+    expect(local.renderOptional(key('narrative.plain'), {}, 'fr')).toBe('Plain.');
+    expect(local.renderOptional(key('narrative.absent'), {}, 'fr')).toBeNull();
   });
 });
 
@@ -265,5 +267,17 @@ describe('extension et doc : générés depuis le catalogue', () => {
     // @ts-expect-error clé absente de en.json : `tsc` doit échouer (21b § 2, i18n:types)
     const unknown: MessageKey = 'srv.error.zz_inexistante';
     expect([known, unknown]).toHaveLength(2);
+  });
+
+  test('clés typées : Renderer.render refuse une clé littérale inexistante au typecheck, accepte une clé calculée', () => {
+    const { renderer } = defaultI18n();
+    expect(renderer.render('srv.error.not_found', {}, 'en')).not.toBe('');
+    // @ts-expect-error clé littérale absente de en.json : `tsc` doit échouer (21b § 2, MessageKey)
+    expect(renderer.render('srv.error.zz_inexistante', {}, 'en')).toContain('zz_inexistante');
+    // @ts-expect-error idem pour renderOptional
+    expect(renderer.renderOptional('narrative.light.zz_inexistante', {}, 'en')).toBeNull();
+    // Une clé calculée (code d'événement lu en base) reste permise : le texte générique la couvre à l'exécution.
+    const kind: string = 'investigation_started';
+    expect(renderer.render(`narrative.${kind}`, { domain: 'x.example' }, 'en')).not.toBe('');
   });
 });

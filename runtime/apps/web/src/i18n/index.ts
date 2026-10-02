@@ -45,13 +45,44 @@ export function detectLocale(stored: string | null, navigatorLanguage: string | 
   return isLocale(stored) ? stored : normalizeLocale(navigatorLanguage);
 }
 
-export function createAppI18n(): AppI18n {
+/**
+ * Clé manquante (21b § 3) : en développement (`vite`, vitest) et en E2E (`VITE_I18N_STRICT=true` au build du banc), le gestionnaire
+ * `missing` LÈVE : une clé absente ou mal écrite casse l'écran au lieu de passer inaperçue. En production, repli chaîne par chaîne
+ * sur `en` et compteur local, aucune télémétrie (INV9). `te()` (codes dynamiques vérifiés avant affichage) ne le déclenche pas.
+ */
+const STRICT_MISSING: boolean = import.meta.env.DEV || import.meta.env.VITE_I18N_STRICT === 'true';
+
+export class MissingMessageError extends Error {
+  override name = 'MissingMessageError';
+  readonly locale: string;
+  readonly key: string;
+  constructor(locale: string, key: string) {
+    super(`clé de traduction absente : « ${key} » (${locale})`);
+    this.locale = locale;
+    this.key = key;
+  }
+}
+
+let missingCount = 0;
+/** Clés manquantes rencontrées dans ce navigateur depuis le chargement (compteur local, jamais envoyé). */
+export function missingMessageCount(): number {
+  return missingCount;
+}
+
+export function createAppI18n(options: { strictMissing?: boolean } = {}): AppI18n {
+  const strict = options.strictMissing ?? STRICT_MISSING;
   return createI18n({
     legacy: false,
     pluralRules: pluralRulesFor([...LOCALES, PSEUDO_LOCALE]),
     locale: FALLBACK_LOCALE,
     fallbackLocale: FALLBACK_LOCALE,
     messages: {} as Record<string, MessageSchema>,
+    missingWarn: false,
+    fallbackWarn: false,
+    missing: (locale: string, key: string): void => {
+      missingCount += 1;
+      if (strict) throw new MissingMessageError(locale, key);
+    },
   });
 }
 

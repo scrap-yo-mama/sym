@@ -24,6 +24,8 @@ export const PROPOSAL_OPERATORS = ['trim', 'lower', 'upper', 'collapse_spaces', 
 export const PROPOSAL_PAGINATION_TYPES = ['none', 'page_param', 'offset', 'cursor', 'next_link'] as const;
 
 const FIELD_NAME = '^[a-z][a-z0-9_]{0,63}$';
+/** Description d'un champ proposé : anglais lu par le modèle client (21 § 4.5) ; une description accentuée (traduite) est refusée. */
+const DESCRIPTION_TEXT = '^[\\x20-\\x7E]*$';
 
 /**
  * Schéma de la réponse structurée du rôle `investigate`. Toutes les propriétés sont requises (`null` pour l'absence) :
@@ -48,7 +50,8 @@ export const INVESTIGATION_PROPOSAL_SCHEMA = {
           required: { type: 'boolean' },
           /** Donnée personnelle (nom, e-mail, téléphone, identifiant de personne) : annotation `x-personal` (17 §6). */
           personal: { type: 'boolean' },
-          description: { type: 'string', maxLength: 500 },
+          /** Lue par le modèle client : anglais (21 § 4.5), jamais dans la langue du run ; ASCII imprimable, garde minimale. */
+          description: { type: 'string', maxLength: 500, pattern: DESCRIPTION_TEXT },
         },
       },
     },

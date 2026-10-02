@@ -94,6 +94,8 @@ export const users = pgTable(
     deletedAt: tstz('deleted_at'),
     // Migration 0018_i18n : fuseau IANA (indice de localisation : donnée personnelle, 17 § 6), nullable.
     timezone: text('timezone'),
+    // Migration 0018_i18n : fuseau déjà initialisé (toute écriture, même null) ; la console ne le pose qu'à la première connexion.
+    timezoneInitialized: boolean('timezone_initialized').notNull().default(false),
   },
   (t) => [uniqueIndex('users_single_owner').on(t.role).where(sql`role = 'owner'`)],
 );

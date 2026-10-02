@@ -169,6 +169,12 @@ export type NetworkSession = {
   usage(): NetworkUsage;
   /** Une requête a été refusée par le plafond de coût. */
   budgetExceeded(): boolean;
+  /**
+   * `Accept-Language` RÉELLEMENT envoyé par la dernière requête partie (relevé au dernier moment, dans le dispatcher, après le retrait
+   * de l'identité du robot) : `null` = aucun en-tête, `undefined` = aucune requête encore partie. Affiché dans le rapport d'accès
+   * (21 § 6.6, M8) : la valeur reçue par le site, jamais une constante.
+   */
+  sentAcceptLanguage(): string | null | undefined;
   close(): Promise<void>;
 };
 
@@ -269,6 +275,24 @@ function withoutAcceptLanguage(headers: Dispatcher.DispatchOptions['headers']): 
   return Object.fromEntries(Object.entries(headers as Record<string, unknown>).filter(([name]) => !drop(name))) as never;
 }
 
+/** Valeur d'un en-tête dans les options d'un dispatcher undici (objet, paires, liste plate ou itérable) ; `null` s'il est absent. */
+function headerValue(headers: Dispatcher.DispatchOptions['headers'], name: string): string | null {
+  const is = (n: unknown): boolean => typeof n === 'string' && n.toLowerCase() === name;
+  const text = (v: unknown): string | null => (v === undefined || v === null ? null : Array.isArray(v) ? v.join(', ') : String(v));
+  if (headers === undefined || headers === null) return null;
+  if (Array.isArray(headers)) {
+    if (headers.length > 0 && Array.isArray(headers[0])) return text((headers as unknown as [string, unknown][]).find(([n]) => is(n))?.[1]);
+    for (let i = 0; i + 1 < headers.length; i += 2) if (is(headers[i])) return text(headers[i + 1]);
+    return null;
+  }
+  if (typeof (headers as Iterable<unknown>)[Symbol.iterator] === 'function') {
+    for (const [n, v] of headers as Iterable<[string, unknown]>) if (is(n)) return text(v);
+    return null;
+  }
+  for (const [n, v] of Object.entries(headers as Record<string, unknown>)) if (is(n)) return text(v);
+  return null;
+}
+
 /**
  * Ouvre la session réseau d'un essai. Aucune connexion n'est ouverte avant le premier fetch. À fermer en fin
  * d'essai (`close`), puis imputer `usage().costUsd` au run.
@@ -294,9 +318,12 @@ export function openNetworkSession(options: NetworkSessionOptions): NetworkSessi
   // Une requête = un envoi par le dispatcher (chaque saut de redirection compte).
   // Identité du robot (E1) : la langue envoyée est celle d'un Chromium vierge, c'est-à-dire aucune (`ENGINE_ACCEPT_LANGUAGE` null).
   const stripLanguage = options.userAgent !== undefined && ENGINE_ACCEPT_LANGUAGE === null;
+  /** `Accept-Language` de la dernière requête réellement partie (`undefined` : aucune encore). */
+  let sentLanguage: string | null | undefined;
   const dispatcher = base.compose((dispatch) => (opts0, handler) => {
     requests += 1;
     const opts = stripLanguage ? { ...opts0, headers: withoutAcceptLanguage(opts0.headers) } : opts0;
+    sentLanguage = headerValue(opts.headers, 'accept-language');
     if (ceiling === undefined || price === undefined || handler.onResponseData === undefined) return dispatch(opts, handler);
     const guarded: Dispatcher.DispatchHandler = {
       onRequestStart: (controller, context) => handler.onRequestStart?.(controller, context),
@@ -339,6 +366,7 @@ export function openNetworkSession(options: NetworkSessionOptions): NetworkSessi
         ...(options.checkUrl === undefined ? {} : { checkUrl: options.checkUrl }),
       }),
     budgetExceeded: () => exceeded,
+    sentAcceptLanguage: () => sentLanguage,
     usage: () => {
       const bytes = meter.bytes;
       return { mode: rung.mode, proxyId, bytes, requests, costUsd: price === undefined ? 0 : proxyCostUsd(price, bytes, requests) };

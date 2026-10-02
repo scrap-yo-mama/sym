@@ -304,8 +304,8 @@ export async function meView(
   ctx: Pick<ServerContext, 'pool' | 'mfaEnforced'>,
   who: { userId: string; email: string; role: Role; via: 'ui' | 'apikey' | 'extension'; scopes: string[] | null; mfaMethod?: MfaMethod | null },
 ) {
-  const { rows } = await ctx.pool.query<{ display_name: string; locale: string; timezone: string | null; theme: string; mfa_enabled: boolean }>(
-    `SELECT u.display_name, u.locale, u.timezone, u.theme,
+  const { rows } = await ctx.pool.query<{ display_name: string; locale: string; timezone: string | null; timezone_initialized: boolean; theme: string; mfa_enabled: boolean }>(
+    `SELECT u.display_name, u.locale, u.timezone, u.timezone_initialized, u.theme,
             EXISTS (SELECT 1 FROM two_factor t WHERE t.user_id = u.id AND t.confirmed_at IS NOT NULL AND t.unreadable_since IS NULL) AS mfa_enabled
      FROM users u WHERE u.id = $1`,
     [who.userId],
@@ -319,6 +319,7 @@ export async function meView(
     role: who.role,
     locale: row?.locale ?? 'en',
     timezone: row?.timezone ?? null,
+    timezoneInitialized: row?.timezone_initialized === true,
     theme: row?.theme ?? 'system',
     via: who.via,
     scopes: who.scopes,

@@ -116,7 +116,8 @@ describe('assert_admin_metadata_only : l’admin voit l’état, le coût et la 
     expect((html.match(/data-testid="run-other"/g) ?? []).length).toBe(2);
     expect(html).toContain(esc(en.runs.other));
     expect(html).toContain('>Succeeded</span>'); // état
-    expect(html).toContain('$0.0123'); // coût
+    expect(html).toContain('$0.01'); // coût (2 décimales à partir de 0,01 $, 21 § 5)
+    expect(html).not.toContain('$0.0123');
     expect(html).toContain('2 s'); // durée
     expect(html).not.toMatch(CONTENT_WORDS);
     expect(html).not.toMatch(/\/items|\/datasets|download|export|télécharg/i);
@@ -140,7 +141,8 @@ describe('assert_admin_metadata_only : l’admin voit l’état, le coût et la 
     expect((html.match(/data-testid="runs-tab-row"/g) ?? []).length).toBe(2);
     expect((html.match(/data-testid="run-other"/g) ?? []).length).toBe(1);
     expect(html).toContain(esc(en.runs.other));
-    expect(html).toContain('$0.0123'); // coût
+    expect(html).toContain('$0.01'); // coût (2 décimales à partir de 0,01 $, 21 § 5)
+    expect(html).not.toContain('$0.0123');
     expect(html).toContain('2 s'); // durée
     expect(html).not.toMatch(CONTENT_WORDS);
     // Une seule série d'actions de contenu : celles du run de l'admin lui-même.

@@ -144,15 +144,22 @@ describe('render', () => {
 
 describe('M11 : formats Intl', () => {
   test('assert_intl_formats_by_locale : fmtUsd en narrowSymbol, jamais « $US »', () => {
-    expect(fmtUsd(0.5, 'fr')).toBe(new Intl.NumberFormat('fr', { style: 'currency', currency: 'USD', currencyDisplay: 'narrowSymbol', minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(0.5));
-    expect(fmtUsd(0.5, 'fr')).toMatch(/^0,50\s\$$/);
-    expect(fmtUsd(0.0021, 'fr')).toMatch(/^0,0021\s\$$/);
-    expect(fmtUsd(0.5, 'en')).toBe('$0.50');
+    // Comparaison à la sortie d'Intl calculée (21 § 5) : 2 décimales à partir de 0,01 $, jusqu'à 4 en dessous (U2).
+    const usd = (locale: string, amount: number, max: number) =>
+      new Intl.NumberFormat(locale, { style: 'currency', currency: 'USD', currencyDisplay: 'narrowSymbol', minimumFractionDigits: 2, maximumFractionDigits: max }).format(amount);
+    expect(fmtUsd(0.5, 'fr')).toBe(usd('fr', 0.5, 2));
+    expect(fmtUsd(0.0021, 'fr')).toBe(usd('fr', 0.0021, 4));
+    expect(fmtUsd(0.0021, 'fr')).toContain('0021');
+    expect(fmtUsd(0.5, 'en')).toBe(usd('en', 0.5, 2));
     expect(fmtUsd(0.5, 'fr')).not.toContain('US');
-    expect(fmtUsd(0, 'fr')).toMatch(/^0,00\s\$/);
-    // Moins de 1 $ : jusqu'à 4 décimales quand elles servent ; 1 $ et plus : 2.
-    expect(fmtUsd(0.0123, 'en')).toBe('$0.0123');
-    expect(fmtUsd(0.002, 'en')).toBe('$0.002');
+    expect(fmtUsd(0, 'fr')).toBe(usd('fr', 0, 2));
+    // 0,01 $ et plus : 2 décimales (« $0.01 », jamais « $0.0123 ») ; en dessous : jusqu'à 4.
+    expect(fmtUsd(0.0123, 'en')).toBe(usd('en', 0.0123, 2));
+    expect(fmtUsd(0.0123, 'en')).toBe('$0.01');
+    expect(fmtUsd(0.01, 'fr')).toBe(usd('fr', 0.01, 2));
+    expect(fmtUsd(0.5678, 'en')).toBe(usd('en', 0.5678, 2));
+    expect(fmtUsd(0.002, 'en')).toBe(usd('en', 0.002, 4));
+    expect(fmtUsd(-0.0042, 'en')).toBe(usd('en', -0.0042, 4));
     expect(fmtUsd(12.3456, 'en')).toBe('$12.35');
   });
 
@@ -213,14 +220,16 @@ describe('M12 : signature {sym}', () => {
       Object.entries(catalogs).map(([code, tree]) => [code, { ...tree, zz_test: { signed: code === 'fr' ? '{sym} Je m’en occupe.' : '{sym} I am on it.' } }]),
     ) as Record<string, Catalog>;
     const renderer = createRenderer(withSym, registry);
-    expect(renderer.render('zz_test.signed', {}, 'fr')).toBe(`SYM ${GHOST}\u00A0: Je m’en occupe.`);
-    expect(renderer.render('zz_test.signed', {}, 'en')).toBe(`SYM ${GHOST}: I am on it.`);
+    // Clé d'un catalogue de test (absente de en.json) : typée `string`, comme une clé calculée.
+    const SYNTHETIC_KEY: string = 'zz_test.signed';
+    expect(renderer.render(SYNTHETIC_KEY, {}, 'fr')).toBe(`SYM ${GHOST}\u00A0: Je m’en occupe.`);
+    expect(renderer.render(SYNTHETIC_KEY, {}, 'en')).toBe(`SYM ${GHOST}: I am on it.`);
     // La signature elle-même : une donnée de chaque catalogue (ponctuation de la langue : espace insécable avant le deux-points en
     // français, comme SymSignature de packages/ui), le fantôme vient du code seul.
     expect(renderer.render(SYM_SIGNATURE_KEY, {}, 'fr')).toBe(`SYM ${GHOST}\u00A0:`);
     expect(renderer.render(SYM_SIGNATURE_KEY, {}, 'en')).toBe(`SYM ${GHOST}:`);
     for (const locale of ['en', 'fr']) {
-      const out = renderer.render('zz_test.signed', {}, locale);
+      const out = renderer.render(SYNTHETIC_KEY, {}, locale);
       expect(out.toLowerCase(), locale).not.toContain(`sym${GHOST}`);
       expect(out, locale).not.toContain('{sym}');
     }

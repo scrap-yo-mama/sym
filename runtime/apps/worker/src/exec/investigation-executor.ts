@@ -222,8 +222,16 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
     const timedOut = () => !ctx.signal.aborted && (deadline.aborted || now() >= deadlineMs);
     let spent = state.spent_usd;
     const budgetView = () => ({ spent_usd: spent, max_usd: request.budget_usd, elapsed_s: Math.round((baseElapsed + now() - started) / 1000), timeout_s: request.timeout_s });
-    const event = (kind: string, payload: Record<string, unknown> = {}) =>
-      appendInvestigationEvent(deps.pool, { runId: ctx.runId, ownerId: ctx.ownerId, kind, payload: { run_id: ctx.runId, ...payload } });
+    // Garde « codes seulement » en mode scrub (21b § 1) : une prose de tiers (détail d'erreur d'un script, texte de site) qui
+    // recoupe le catalogue est remplacée par un code et le refus est journalisé (noms de chemins) ; l'enquête ne s'arrête pas.
+    const codesOnlyRefused = async (kind: string, paths: readonly string[]): Promise<void> => {
+      if (paths.length > 0) await ctx.log('warn', 'codes_only_refused', { table: 'investigation_events', kind, paths });
+    };
+    const event = async (kind: string, payload: Record<string, unknown> = {}) => {
+      const written = await appendInvestigationEvent(deps.pool, { runId: ctx.runId, ownerId: ctx.ownerId, kind, payload: { run_id: ctx.runId, ...payload } }, { onRenderedSentence: 'scrub' });
+      await codesOnlyRefused(kind, written.scrubbed ?? []);
+      return written;
+    };
     const save = async (next: InvestigationPhase | null, patch: Partial<InvestigationState> = {}) => {
       state = { ...state, ...patch, spent_usd: spent, elapsed_ms: baseElapsed + Math.max(0, now() - started) };
       phase = next;
@@ -415,7 +423,8 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
       const report: AccessReport = await buildAccessReport({ url: pageUrl, gate: robots, probe: ports.probe, ...(pacer === undefined ? {} : { pacer }), signal, now });
       const stopped0 = await tunnelOutcome('access_check');
       if (stopped0 !== null) return stopped0;
-      await recordAccessReport(deps.pool, { runId: ctx.runId, ownerId: ctx.ownerId, payload: accessReportEventPayload(report) });
+      const accessWritten = await recordAccessReport(deps.pool, { runId: ctx.runId, ownerId: ctx.ownerId, payload: accessReportEventPayload(report) }, { onRenderedSentence: 'scrub' });
+      await codesOnlyRefused('access_report', accessWritten.scrubbed ?? []);
       if (!report.verdict.proceed) {
         await charge(ctx, ports.proxyUsd());
         spent = round6(spent + ports.proxyUsd());

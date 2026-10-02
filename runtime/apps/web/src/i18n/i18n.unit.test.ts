@@ -6,7 +6,7 @@ import { createMemoryHistory } from 'vue-router';
 import { createAppRouter } from '@/router/index';
 import { SPEC_REASON_CODES } from '@/lib/reasons';
 import { pluralRule } from '@runtime/i18n/browser';
-import { createAppI18n, detectLocale, normalizeLocale, setLocale } from './index';
+import { MissingMessageError, createAppI18n, detectLocale, missingMessageCount, normalizeLocale, setLocale } from './index';
 import en from '@runtime/i18n/locales/en.json';
 import fr from '@runtime/i18n/locales/fr.json';
 
@@ -114,8 +114,9 @@ describe('chargement paresseux', () => {
     expect(root.lang).toBe('fr');
   });
 
-  test('assert_i18n_fallback_english : une clé absente d’une langue retombe sur l’anglais', async () => {
-    const i18n = createAppI18n();
+  test('assert_i18n_fallback_english : une clé absente d’une langue retombe sur l’anglais (production : repli et compteur local)', async () => {
+    const i18n = createAppI18n({ strictMissing: false });
+    const before = missingMessageCount();
     await setLocale(i18n.global, 'fr', document_stub());
     // Avant le retrait, la valeur française est servie ; après, c'est la valeur anglaise (repli), pas la clé brute.
     expect(i18n.global.t('app.skipToContent')).toBe(fr.app.skipToContent);
@@ -124,6 +125,19 @@ describe('chargement paresseux', () => {
     expect(i18n.global.t('app.skipToContent')).not.toBe('app.skipToContent');
     // Les autres clés restent en français.
     expect(i18n.global.t('auth.login.submit')).toBe(fr.auth.login.submit);
+    // Compteur local des clés manquantes (aucune télémétrie, 21b § 3).
+    expect(missingMessageCount()).toBeGreaterThan(before);
+  });
+
+  test('gestionnaire missing (21b § 3) : une clé manquante LÈVE en développement et en E2E (défaut sous vitest, DEV)', async () => {
+    const i18n = createAppI18n();
+    await setLocale(i18n.global, 'fr', document_stub());
+    expect(i18n.global.t('auth.login.submit')).toBe(fr.auth.login.submit);
+    expect(() => i18n.global.t('zz.cle.inexistante')).toThrow(MissingMessageError);
+    i18n.global.mergeLocaleMessage('fr', { app: { skipToContent: undefined } } as never);
+    expect(() => i18n.global.t('app.skipToContent')).toThrow(/app\.skipToContent/);
+    // te() (codes dynamiques vérifiés avant affichage) ne déclenche pas le gestionnaire.
+    expect(i18n.global.te('zz.cle.inexistante')).toBe(false);
   });
 });
 

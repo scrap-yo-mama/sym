@@ -27,7 +27,7 @@ afterEach(() => {
   resetSession();
 });
 
-const account = (over: Record<string, unknown> = {}) => ({ locale: 'fr', theme: 'system', timezone: 'Europe/Paris', ...over });
+const account = (over: Record<string, unknown> = {}) => ({ locale: 'fr', theme: 'system', timezone: 'Europe/Paris', timezoneInitialized: true, ...over });
 
 describe('applyAccountPreferences', () => {
   test('la langue du compte l’emporte sur le choix mémorisé dans ce navigateur', async () => {
@@ -43,7 +43,7 @@ describe('applyAccountPreferences', () => {
 
   test('premier passage sans fuseau : le fuseau du navigateur est enregistré une fois ; avec un fuseau, rien n’est écrit', async () => {
     const calls = installFakeServer({ 'PATCH /api/me': (call) => json(200, { ...ME, ...(call.body as object) }) });
-    await applyAccountPreferences(createAppI18n().global, account({ timezone: null }));
+    await applyAccountPreferences(createAppI18n().global, account({ timezone: null, timezoneInitialized: false }));
     const patch = calls.filter((c) => c.method === 'PATCH');
     expect(patch).toHaveLength(1);
     expect(patch[0]?.path).toBe('/api/me');
@@ -51,6 +51,15 @@ describe('applyAccountPreferences', () => {
     calls.length = 0;
     await applyAccountPreferences(createAppI18n().global, account());
     expect(calls).toEqual([]);
+  });
+
+  test('fuseau effacé volontairement dans Mon compte : la connexion suivante ne le réécrit pas (initialisation marquée, pas « timezone === null »)', async () => {
+    const calls = installFakeServer({ 'PATCH /api/me': (call) => json(200, { ...ME, ...(call.body as object) }) });
+    await applyAccountPreferences(createAppI18n().global, account({ timezone: null, timezoneInitialized: true }));
+    expect(calls.filter((c) => c.method === 'PATCH')).toEqual([]);
+    // Serveur d'avant le marqueur (champ absent) : aucune écriture non plus.
+    await applyAccountPreferences(createAppI18n().global, { locale: 'fr', theme: 'system', timezone: null });
+    expect(calls.filter((c) => c.method === 'PATCH')).toEqual([]);
   });
 
   test('l’heure affichée suit users.timezone', async () => {

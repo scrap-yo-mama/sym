@@ -1183,6 +1183,8 @@
     "noReport": "Aucun rapport d'accès pour cette API pour l'instant.",
     "summary": "Résumé",
     "checkedAt": "Vérifié le {date}",
+    "acceptLanguage": "Langue envoyée aux sites (Accept-Language)",
+    "acceptLanguageNone": "Aucune, comme un Chromium vierge",
     "robots": "robots.txt",
     "robotsStatus": "Statut",
     "robotsFetched": "Lu le",

@@ -23,7 +23,7 @@ describe('compilation des messages', () => {
       const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
       const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
       try {
-        const i18n = createI18n({ legacy: false, locale: code, fallbackLocale: false as unknown as string, missingWarn: true, fallbackWarn: true, messages: { [code]: messages } });
+        const i18n = createI18n({ legacy: false, locale: code, fallbackLocale: false as unknown as string, missingWarn: true, fallbackWarn: true, messages: { [code]: messages } as unknown as Record<string, typeof en> });
         for (const key of keys(messages as Tree)) {
           const raw = key.split('.').reduce<unknown>((node, part) => (node as Record<string, unknown>)[part], messages) as string;
           const out = i18n.global.t(key, paramsOf(raw));

@@ -79,9 +79,12 @@ function browserTimeZone(): string | null {
 
 /**
  * Applique les préférences du compte reçues à la connexion : la langue du compte l'emporte (21 § 3), le thème reste celui
- * choisi ici s'il y en a un. Premier passage sans fuseau : le fuseau du navigateur est enregistré une fois sur le compte.
+ * choisi ici s'il y en a un. Première connexion (fuseau jamais initialisé) : le fuseau du navigateur est enregistré une fois.
  */
-export async function applyAccountPreferences(target: LocaleTarget, account: { locale: string; theme: string; timezone?: string | null }): Promise<void> {
+export async function applyAccountPreferences(
+  target: LocaleTarget,
+  account: { locale: string; theme: string; timezone?: string | null; timezoneInitialized?: boolean },
+): Promise<void> {
   await setLocale(target, normalizeLocale(account.locale));
   setDisplayTimeZone(account.timezone);
   try {
@@ -93,7 +96,9 @@ export async function applyAccountPreferences(target: LocaleTarget, account: { l
     theme.value = account.theme;
     applyTheme(account.theme);
   }
-  if (account.timezone === null) {
+  // Initialisation marquée par le serveur (`users.timezone_initialized`), pas « fuseau null » : un fuseau effacé dans Mon compte
+  // reste effacé. Champ absent (serveur d'avant le marqueur) : aucune écriture.
+  if (account.timezoneInitialized === false && (account.timezone ?? null) === null) {
     const zone = browserTimeZone();
     if (zone !== null) await persistPreferences({ timezone: zone });
   }

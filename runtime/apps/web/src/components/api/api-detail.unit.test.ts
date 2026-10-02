@@ -137,6 +137,15 @@ describe('onglet Accès', () => {
     expect(textOf(await renderHtml(ApiAccessTab, { detail: apiDetail({ access_report: null }) }))).toContain(fr.accessTab.noReport);
   });
 
+  test('assert_accept_language_engine_real : la langue envoyée au site (Accept-Language du moteur) est affichée, « aucune » quand rien n’est envoyé (21 § 6.6, M8)', async () => {
+    const none = await renderHtml(ApiAccessTab, { detail: blockedDetail({ access_report: { ...report, accept_language: null } }) });
+    expect(none).toContain('data-testid="accept-language"');
+    expect(textOf(none)).toContain(fr.accessTab.acceptLanguage);
+    expect(textOf(none)).toContain(fr.accessTab.acceptLanguageNone);
+    const sent = await renderHtml(ApiAccessTab, { detail: blockedDetail({ access_report: { ...report, accept_language: 'en-US,en;q=0.9' } }) });
+    expect(sent).toMatch(/data-testid="accept-language"[^>]*>en-US,en;q=0\.9</);
+  });
+
   test('assert_no_robots_override_ui : aucune option pour ignorer robots.txt dans le code de la console (fiche, réglages, requêtes)', () => {
     const webSrc = new URL('../../', import.meta.url).pathname;
     const files = (dir: string): string[] =>

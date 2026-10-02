@@ -1764,6 +1764,8 @@ export interface components {
         Me: {
             /** @description Fuseau IANA du compte (`users.timezone`), null tant qu'il n'est pas posé ; sert aux e-mails, aux messages MCP et au fuseau par défaut d'une planification. Donnée personnelle, jamais déduite de la langue (21b § 1). */
             timezone: string | null;
+            /** @description Le fuseau a déjà été écrit une fois (première connexion ou Mon compte, même effacé) : la console ne pose le fuseau du navigateur qu'à la première connexion (21b § 1), jamais sur un fuseau effacé volontairement. */
+            timezoneInitialized?: boolean;
             /** Format: uuid */
             id: string;
             email: string;

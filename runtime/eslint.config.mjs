@@ -71,6 +71,10 @@ export default defineConfig(
       '@intlify/vue-i18n/valid-plural-forms': 'error',
       '@intlify/vue-i18n/no-missing-keys-in-other-locales': 'error',
       '@intlify/vue-i18n/no-duplicate-keys-in-locale': 'error',
+      '@intlify/vue-i18n/no-missing-keys': 'error',
+      // Texte brut dans un gabarit (21 § 9) : seuls la ponctuation, les symboles et des noms techniques identiques dans toutes les
+      // langues (fichiers lus sur le site, préfixe de version, multiplicateur de vitesse) restent permis.
+      '@intlify/vue-i18n/no-raw-text': ['error', { ignorePattern: '^[\\s()\\[\\]:;,.*·—–…×∅⦸◆!/|+-]*$', ignoreText: ['llms.txt', 'robots', 'v', 'x'] }],
     },
   },
   // Catalogues eux-mêmes : syntaxe vue-i18n 11, aucun HTML dans un message (« une phrase = une clé », 21b § 3), pluriels valides, clés uniques.

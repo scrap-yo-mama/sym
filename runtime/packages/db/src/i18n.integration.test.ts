@@ -10,12 +10,12 @@ import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import { createTestDatabase, type TestDatabase } from '../../../tests/helpers/pg.js';
 import { deleteOrAnonymizeUser } from './accounts.js';
 import { appendAudit } from './audit.js';
-import { RenderedSentenceError } from './codes-only.js';
+import { RENDERED_SENTENCE_REMOVED, RenderedSentenceError } from './codes-only.js';
 import { appendInvestigationEvent } from './investigation-events.js';
 import { loadMigrations, migrateDown, migrateUp } from './migrate.js';
 import { PgBossJobQueue } from './queue.js';
 import { eraseSubject, exportSubject } from './retention/index.js';
-import { appendRunLog } from './run-logs.js';
+import { appendRunLog, createRunLogger } from './run-logs.js';
 import { withActor } from './rls.js';
 import { createRun, recordSkippedRun, runQueueDefinition } from './runs.js';
 
@@ -144,6 +144,12 @@ describe('M5 : événements et audit en codes seulement', () => {
     const sentence = renderer.render('narrative.investigation_started', { domain: 'books.example' }, 'fr');
     await expect(appendInvestigationEvent(pool, { runId, ownerId: ALICE, kind: 'investigation.started', payload: { detail: sentence } })).rejects.toBeInstanceOf(RenderedSentenceError);
     await expect(appendInvestigationEvent(pool, { runId, ownerId: ALICE, kind: 'investigation.started', payload: { nested: { list: [`${sentence} fin`] } } })).rejects.toThrow(/phrase rendue/);
+    // Chemin de l'enquête (mode scrub) : un détail d'erreur de tiers qui recoupe le catalogue ne fait pas échouer l'écriture (ni
+    // finishFailed) ; la ligne porte un code à la place et les chemins refusés sont rendus pour être journalisés.
+    const kept = await appendInvestigationEvent(pool, { runId, ownerId: ALICE, kind: 'investigation.finished', payload: { outcome: 'failed', detail: `Error: ${sentence}` } }, { onRenderedSentence: 'scrub' });
+    expect(kept.scrubbed).toEqual(['$.detail']);
+    const keptRow = await pool.query<{ payload: Record<string, unknown> }>('SELECT payload FROM investigation_events WHERE run_id = $1 AND seq = $2', [runId, kept.seq]);
+    expect(keptRow.rows[0]?.payload).toEqual({ outcome: 'failed', detail: RENDERED_SENTENCE_REMOVED });
     // Non-régression (assert_events_codes_only_ignores_collected_data) : l'échantillon collecté (schema.proposed.sample) et le schéma proposé sont des DONNÉES du site, jamais contrôlées
     // comme des phrases, même quand un texte du site recoupe le catalogue (page de connexion, FAQ).
     const siteLine = renderer.render('narrative.investigation_started', { domain: 'shop.example' }, 'en');
@@ -231,5 +237,16 @@ describe('M10 : journaux en codes anglais', () => {
     expect(lines.every((l) => /^[a-z][a-z0-9_.]*$/.test(l.event))).toBe(true);
     const sentence = defaultI18n().renderer.render('narrative.attempt_pruned', { n: 2 }, 'fr');
     await expect(appendRunLog(pool, { runId, seq: 101, ownerId: ALICE, level: 'warn', event: sentence, data: {} }, personal)).rejects.toBeInstanceOf(RenderedSentenceError);
+    // Journal d'un run (chemin de l'enquête) : une prose de tiers qui recoupe le catalogue est remplacée par un code, l'entrée est
+    // écrite (rien n'est perdu ni levé) et le refus est consigné par le nom des chemins (assert_events_codes_only_never_fails_investigation).
+    const logger = await createRunLogger(pool, { runId, ownerId: ALICE, personal });
+    await logger.log('warn', 'attempt_finished', { failure_class: 'extraction', detail: `TypeError: ${sentence}` });
+    await logger.log('warn', sentence, {});
+    expect(logger.dropped).toBe(0);
+    const scrubbed = (await pool.query<{ event: string; data: Record<string, unknown> }>('SELECT event, data FROM run_logs WHERE run_id = $1 AND seq > 100 ORDER BY seq', [runId])).rows;
+    expect(scrubbed).toEqual([
+      { event: 'attempt_finished', data: { failure_class: 'extraction', detail: RENDERED_SENTENCE_REMOVED, codes_only_refused: ['$.data.detail'] } },
+      { event: RENDERED_SENTENCE_REMOVED, data: { codes_only_refused: ['$.event'] } },
+    ]);
   });
 });
