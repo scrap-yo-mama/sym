@@ -39,6 +39,14 @@ Contrat : `runtime/packages/contracts` (`@sym/contracts`, MIT, sous-chemin `brow
 - Configuration : catalogue `packages/core/src/config/env-catalog.ts` (source unique, secrets `NOM_FILE`) ; config invalide = sortie code 1 nommant la variable ; `node dist/main.js --check-config` valide sans écouter ; `/healthz`, `/readyz`.
 - `MASTER_KEY` de développement : `pnpm --filter @sym-browser/core keygen` (après build ; jamais committée ni journalisée). Vecteurs de SYM rejoués : `packages/core/vectors/sym-crypto.json`.
 
+## Authentification (tâche 2.1)
+
+- Code : `packages/core/src/auth/` (pur) et `packages/db/src/api-keys.ts` (SQL). Formats : clé `symb_<12>_<43>` (préfixe affiché `symb_<12>` = `api_keys.key_prefix`), jeton de connexion `symt_…` ; masqués dans les journaux (`CREDENTIAL_PREFIXES`, `createLogger`).
+- Clé : `newApiKey({scopes, expiresAt})` rend la clé une seule fois (`Secret`) et l'empreinte argon2id (`node:crypto`) ; `insertApiKey`, `listApiKeys`, `revokeApiKey`. Première clé : `ensureFirstApiKey(pool, await bootstrapApiKeyRecord(config.bootstrapApiKey))` au démarrage de la passerelle ; clé neuve : `pnpm --filter @sym-browser/core apikey`.
+- REST (2.2) : `auth = new ApiKeyAuthenticator(pgApiKeyStore(pool))` remplit `GatewayDeps.auth` (`authenticate`) ; ou `authorizeRequest(auth, request.headers, scope)` → 401 `unauthorized` / 403 `forbidden` + `requiredScope`.
+- Jetons (2.2, 2.3) : `tokens = new ConnectTokens(keyring)` (`loadKeyring`) remplit `GatewayDeps.tokens` (`issue`, 300 s, 1 h au plus). Upgrade WSS et `json/version` (2.3) : `authorizeConnection({auth, tokens, session}, {sessionId, protocol, headers, query})` en `preValidation`, avant tout octet vers le nœud ; `session(id)` lit `tenant_id` et `state`.
+- Admin d'instance : `resolveBootstrapToken`, `setupFirstAdmin(store, token, form)` ; la table de l'admin et `/setup` arrivent avec la console (3.5).
+
 ## Versions et dépendances
 
 - Playwright **1.63.0**, Chromium **153.0.8010.12** (`BROWSER_ENGINE` du contrat ; le test du nœud vérifie `playwright-core`).
