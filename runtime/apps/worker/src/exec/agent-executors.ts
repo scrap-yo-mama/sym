@@ -696,6 +696,11 @@ export type AgentOptions = {
   readonly classify?: ClassifyFn;
   /** robots.txt (1.11, INV11) : chaque requête du Chromium dédié et des rejeux de compilation. */
   readonly access: AccessCheck;
+  /**
+   * Agent instruit (2.13, 19 §4) : faux tant que K runs instruits n'ont pas réussi, la compilation n'est pas tentée
+   * (`instructed_compile_deferred`). Défaut : vrai (essai de compilation de chaque E6 réussi, 2.4).
+   */
+  readonly compile?: boolean;
 };
 
 function agentFailure(run: AgentRunResult, cost?: AttemptCost): ExecFailure {
@@ -847,6 +852,7 @@ async function runAgentInSlot(options: AgentOptions, lease: SlotLease): Promise<
   const items = (run.output as { items?: unknown } | null)?.items;
   const result = conform(Array.isArray(items) ? items : [], options.outputSchema, 1, options.itemPolicy);
   if (!result.ok) return { result, llm: spend, domainBlocked };
+  if (options.compile === false) return { result, llm: spend, compileFailure: 'instructed_compile_deferred', domainBlocked };
   const compiled = await compileAndVerify(options, lease, run, result.records, `${made.engine.id}@${made.engine.version}`, writesBlocked);
   return 'spec' in compiled ? { result, llm: spend, compiled: compiled.spec, trace: run.steps, domainBlocked } : { result, llm: spend, compileFailure: compiled.failure, domainBlocked };
 }

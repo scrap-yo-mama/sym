@@ -13,6 +13,7 @@ import {
   detectFalseSuccess,
   estimateInstructedRunUsd,
   evaluateGates,
+  instructedInstruction,
   instructedStepsSha256,
   isPaginationName,
   nonCompilableOutcome,
@@ -336,6 +337,14 @@ describe('assert_instructed_mode_explicit : agent instruit', () => {
     expect(nonCompilableOutcome({ instructedMode: false, phase: 'investigation' })).toEqual({ kind: 'not_compilable', status: { type: 'investigation_failed', cause: 'not_compilable' } });
     expect(nonCompilableOutcome({ instructedMode: false, phase: 'repair' })).toEqual({ kind: 'not_compilable', status: { type: 'repair_failed', cause: 'not_compilable' } });
     expect(nonCompilableOutcome({ instructedMode: true, phase: 'repair' })).toEqual({ kind: 'instructed' });
+  });
+  test('consigne d’un run instruit : consigne de l’API puis étapes confirmées, nettoyées, numérotées, bornées', () => {
+    const v = validateInstructedSteps(steps);
+    if (!v.ok) throw new Error('étapes');
+    const text = instructedInstruction('Lire les offres.', v.steps);
+    expect(text).toContain('1. Ouvrir la liste des offres (attendu : [{"kind":"element_present","role":"heading","name":"Offres"}])');
+    expect(text).toContain('2. Lire chaque offre');
+    expect(instructedInstruction('x', v.steps, 50).length).toBe(50);
   });
   test('coût estimé d’un run instruit : somme des budgets d’étape, connue avant le lancement', () => {
     expect(estimateInstructedRunUsd([{ agent_budget: { max_steps: 6, max_usd: 0.02 } }, { agent_budget: { max_steps: 6, max_usd: 0.03 } }])).toBeCloseTo(0.05, 6);

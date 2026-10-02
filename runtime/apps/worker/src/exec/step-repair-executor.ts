@@ -10,7 +10,9 @@
 //   si le rôle `agent` n'est pas configuré, ou avec session / en tunnel (le noyau ne l'appelle jamais alors).
 // Le journal par étape est écrit dans `run_attempts` (`step_id`, `step_level`, `step_outcome`, jetons, coût LLM).
 import {
+  agentToolRegistry,
   checkAgainstHealthy,
+  ruleOfTwoHolds,
   healthyProfile,
   primaryTarget,
   repairSteps,
@@ -73,6 +75,11 @@ export async function repairStepsUnderLease(deps: StepRepairDeps, request: Reque
   const input: Record<string, unknown> = isRecord(ctx.input) ? ctx.input : {};
   const runInputs = Object.fromEntries(Object.entries(input).filter((e): e is [string, string | number] => typeof e[1] === 'string' || typeof e[1] === 'number').map(([k, v]) => [k, String(v)]));
   const session = strategy.network === 'tunnel' || target.api.requiresSession;
+  // Règle des deux par phase (19 §7), partie « agent » : registre construit par le code, jamais A, B et C complets,
+  // aucun pont MCP (avec session ou en tunnel : aucun outil, niveau 1 seulement).
+  const registry = agentToolRegistry(session ? 'session_or_tunnel' : 'step_repair');
+  if (!ruleOfTwoHolds(registry)) throw new Error('registre d’outils hors règle des deux');
+  await ctx.log('info', 'agent_tool_registry', { phase: registry.phase, tools: [...registry.tools], mcp: registry.mcp, legs: registry.legs });
   const healthy = healthyProfile(await readHealthyItems(deps.pool, { apiId: ctx.apiId, ownerId: ctx.ownerId, excludeRunId: ctx.runId }));
   const ledger = new RepairLedger({ ...(deps.maxAttempts === undefined ? {} : { maxAttempts: deps.maxAttempts }), ...(deps.budgetUsd === undefined ? {} : { budgetUsd: deps.budgetUsd }) });
   /** Essai de chaque candidate (hors V5) : celui dont les données sont livrées si elle est retenue. */

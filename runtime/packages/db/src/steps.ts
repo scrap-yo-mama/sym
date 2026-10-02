@@ -165,3 +165,11 @@ export async function readStepAttempts(pool: pg.Pool, args: { runId: string; own
     return rows.map((r) => ({ seq: r.seq, step_id: r.step_id, step_level: r.step_level, step_outcome: r.step_outcome, tokens_in: Number(r.tokens_in), tokens_out: Number(r.tokens_out), cost_usd: r.cost_usd === null ? null : Number(r.cost_usd) }));
   });
 }
+
+/** Runs réussis d'une version (agent instruit : tentative de compilation après K runs réussis, 19 §4). */
+export async function countSucceededRuns(pool: pg.Pool, args: { apiId: string; ownerId: string; version: number }): Promise<number> {
+  return withActor(pool, { userId: args.ownerId, role: 'member' }, async (tx) => {
+    const { rows } = await tx.query<{ n: number }>("SELECT count(*)::int AS n FROM runs WHERE api_id = $1 AND strategy_version = $2 AND state = 'succeeded'", [args.apiId, args.version]);
+    return rows[0]?.n ?? 0;
+  });
+}

@@ -35,6 +35,8 @@ export type RunTarget = {
     /** 2.13 : compilable en E5 (`no` : seul l'agent instruit la rejoue) ; source des étapes (`intent`, `pre`, `post`). */
     readonly compilable: StrategyCompilable;
     readonly sourceSteps: unknown;
+    /** Étapes instruites (agent instruit) : brutes, avec l'empreinte et la confirmation humaine (non fiables sinon). */
+    readonly instructedSteps: unknown;
   } | null;
 };
 
@@ -61,8 +63,8 @@ export async function loadRunTarget(pool: pg.Pool, args: { apiId: string; ownerI
     if (api === undefined) return null;
     let strategy: RunTarget['strategy'] = null;
     if (args.version !== null) {
-      const sv = await tx.query<{ version: number; execution: Execution; network: Network; spec: unknown; script_ref: string | null; est_cost_usd: string | null; compilable: StrategyCompilable; source_steps: unknown }>(
-        'SELECT version, execution, network, spec, script_ref, est_cost_usd, compilable, source_steps FROM strategy_versions WHERE api_id = $1 AND version = $2',
+      const sv = await tx.query<{ version: number; execution: Execution; network: Network; spec: unknown; script_ref: string | null; est_cost_usd: string | null; compilable: StrategyCompilable; source_steps: unknown; instructed_steps: unknown }>(
+        'SELECT version, execution, network, spec, script_ref, est_cost_usd, compilable, source_steps, instructed_steps FROM strategy_versions WHERE api_id = $1 AND version = $2',
         [args.apiId, args.version],
       );
       const s = sv.rows[0];
@@ -76,6 +78,7 @@ export async function loadRunTarget(pool: pg.Pool, args: { apiId: string; ownerI
           estCostUsd: s.est_cost_usd === null ? null : Number(s.est_cost_usd),
           compilable: s.compilable,
           sourceSteps: s.source_steps,
+          instructedSteps: s.instructed_steps,
         };
       }
     }

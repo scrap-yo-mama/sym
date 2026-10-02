@@ -44,6 +44,12 @@ import {
   validateStepsSource,
   validateStepsSpec,
   compileHybridToSteps,
+  agentToolRegistry,
+  ruleOfTwoHolds,
+  estimateInstructedRunUsd,
+  instructedInstruction,
+  STEP_REPAIR_DEFAULTS,
+  validateInstructedSteps,
   type StepFailure,
   type StepsSpec,
   ITEMS_REJECTED_DEFAULTS,
@@ -103,7 +109,7 @@ import {
   type SecretReader,
   type SsrfGuard,
 } from '@runtime/core/net';
-import { deleteRejectedItems, loadRunTarget, readProxySettings, readVolumeHistory, saveCompiledStrategy, saveRejectedItems, saveRepairedStrategy, saveRunDataset, saveStepRepairedStrategy, markStrategyCompilable, type RunTarget } from '@runtime/db';
+import { deleteRejectedItems, loadRunTarget, readProxySettings, readVolumeHistory, saveCompiledStrategy, saveRejectedItems, saveRepairedStrategy, saveRunDataset, saveStepRepairedStrategy, markStrategyCompilable, countSucceededRuns, type RunTarget } from '@runtime/db';
 import type { LlmClient, LlmConfig } from '@runtime/llm';
 import type pg from 'pg';
 import { pino, type Logger } from 'pino';
@@ -531,6 +537,12 @@ export function createStrategyRuntime(deps: StrategyExecutorDeps): StrategyRunti
     // Agent à chaque run (19 §4, 2.13) : une version E6 non compilable en E5 ne tourne qu'en mode « agent instruit »
     // (opt-in explicite, étapes confirmées par un humain). Une version `unknown` a droit à son essai de compilation.
     if (strategy.execution === 'agent' && strategy.compilable === 'no' && !target.api.instructedMode) return refuse('code_error', 'not_compilable');
+    if (strategy.execution === 'agent') {
+      // Règle des deux (19 §7) : agent instruit ou essai de compilation E6 ; registre du code, aucun pont MCP par construction.
+      const registry = agentToolRegistry(strategy.compilable === 'no' ? 'instructed' : 'e6');
+      if (!ruleOfTwoHolds(registry)) return refuse('code_error', 'rule_of_two');
+      await ctx.log('info', 'agent_tool_registry', { phase: registry.phase, tools: [...registry.tools], mcp: registry.mcp });
+    }
     if (strategy.network === 'tunnel') return executeTunnel(ctx, target, strategy, itemPolicy);
     // E6 limité au serveur (0.6b, ADR 0001) : refusé en tunnel avant tout réseau.
     try {
@@ -795,9 +807,22 @@ export function createStrategyRuntime(deps: StrategyExecutorDeps): StrategyRunti
             });
           } else {
             if (config === null || config.roles.agent === undefined) return refuse('code_error', 'llm_not_configured');
+            // Agent instruit (2.13, 19 §4) : opt-in explicite, étapes CONFIRMÉES (déclencheur de 0018) rejouées par l'agent à
+            // chaque run ; coût estimé journalisé avant le lancement ; compilation tentée après K runs réussis.
+            let spec = agentic.spec;
+            let compile = true;
+            if (strategy.compilable === 'no' && target.api.instructedMode) {
+              const steps = validateInstructedSteps(strategy.instructedSteps ?? []);
+              if (!steps.ok || steps.steps.length === 0) return refuse('code_error', 'not_compilable');
+              spec = { ...spec, instruction: instructedInstruction(spec.instruction, steps.steps) };
+              const succeeded = await countSucceededRuns(deps.pool, { apiId: ctx.apiId, ownerId: ctx.ownerId, version: strategy.version });
+              compile = succeeded >= STEP_REPAIR_DEFAULTS.instructedCompileAfter;
+              await ctx.log('info', 'instructed_run', { estimated_usd: estimateInstructedRunUsd(steps.steps), steps: steps.steps.length, compile });
+            }
             out = await runAgentExecutor({
               ...common,
-              spec: agentic.spec,
+              spec,
+              compile,
               guard: deps.guard,
               egress: egress!,
               agentBrowser,

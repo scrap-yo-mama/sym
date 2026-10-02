@@ -71,3 +71,13 @@ export function estimateInstructedRunUsd(steps: readonly { readonly id?: string;
   const sum = steps.reduce((n, s) => n + (s.agent_budget ?? STEP_REPAIR_DEFAULTS.agentBudget).max_usd, 0);
   return Math.round(sum * 1e6) / 1e6;
 }
+
+/**
+ * Consigne d'un run instruit (19 §4) : la consigne de l'API, puis les étapes instruites CONFIRMÉES par un humain (seules
+ * admises ici : l'appelant a vérifié `canActivateInstructedMode`), nettoyées, numérotées avec leur `post`, bornées.
+ */
+export function instructedInstruction(base: string, steps: readonly InstructedStep[], max = 2000): string {
+  const lines = steps.map((s, i) => `${i + 1}. ${sanitizeStepIntent(s.intent)}${s.post.length === 0 ? '' : ` (attendu : ${JSON.stringify(s.post)})`}`);
+  const out = `${base.trim()}\nÉtapes confirmées par l’utilisateur :\n${lines.join('\n')}`;
+  return out.length <= max ? out : out.slice(0, max);
+}

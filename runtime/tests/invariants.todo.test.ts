@@ -57,8 +57,12 @@ import { describe, test } from "vitest";
 describe("invariants (à implémenter)", () => {
   // ADR 0001, point faible connu (F-E5, pagination par bouton) : 2.4 ne compile qu'une trace à un enregistrement ; une liste
   // est refusée (`list_not_compilable`, épinglé par assert_e5_list_not_compiled) et reste rejouée par l'agent (E5 « mouvant »).
-  // 2.1 (vérification) : une trace E6 n'est jamais retenue sans compilation en E5 (retainedStrategy) ; le code de raison dédié vient avec 2.13.
-  test.todo("assert_investigation_not_compilable_reason — enquête dont seule une trace E6 non compilable est conforme, sans instructed_mode : erreur raison not_compilable (transition 2), ré-enquête : statut précédent raison not_compilable (21)"); // 2.13
+  // 2.13 (reprise par étape) : ce qui dépend d'une tâche non fusionnée reste en test.todo, joué en 4.2 (10-taches, ligne 2.13).
+  // assert_investigation_not_compilable_reason est livré par 2.13 (status/step-reasons.unit.test.ts, investigation-not-compilable.unit.test.ts).
+  test.todo("2.13 — mutations par étape au banc (les 9 de r2 06 et insert_submit, miroir local) : bras du banc 2.8 non fusionné ; jouées en 4.2"); // 2.8, 4.2
+  test.todo("2.13 — read_skill rend les règles à jour et compiled_with porte les règles nom@version#sha256 (liste vide avant 2.10) ; widening_warnings couvre post, V0 à V5 et side_effect"); // 2.10
+  test.todo("2.13 — write_step_broken / session_step_broken : le brouillon proposé est un vrai brouillon (refine_api, draft_strategy_version), aujourd'hui journalisé step_draft_proposed"); // 3.14
+  test.todo("2.13 — routes REST PUT /api/apis/{slug}/instructed-mode et POST /api/apis/{slug}/instructed-steps/confirm (session console seulement, 403 human_confirmation_required) servies par le serveur ; coût estimé renvoyé avant chaque lancement"); // 3.1, 3.4
   test.todo("assert_e5_list_compiled — trace E6 réussie sur F-E5 compilée en E5 (clics « Suivant » répétés, extraction par enregistrement à chaque page) et rejouée sans LLM, sortie identique"); // ADR 0001, suivi de 2.4 (tâche de rattachement à créer dans 10-taches)
   // INV11 (revue de 1.11, journal D-33) : 17 § 1 et le contrat IA de 1.11 exigent 0 requête sur un chemin interdit AUSSI en
   // tunnel et via l'extension. 2.7 (passerelle WSS) a été fusionnée avant 1.11, sans contrôle robots : la tâche de suivi 2.7b

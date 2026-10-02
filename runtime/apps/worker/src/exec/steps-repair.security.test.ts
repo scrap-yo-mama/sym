@@ -292,6 +292,8 @@ describe('stratégie steps interprétée dans le bac à sable, reprise par étap
       expect(intentAt).toBeGreaterThan(p.indexOf('<untrusted_step_intent>'));
     }
     expect(hits.some((h) => h.includes('settings'))).toBe(false);
+    // assert_rule_of_two_by_phase rejoué sur l'agent réel : registre du code, outils fermés, aucun pont MCP.
+    expect((await logsOf(runId)).find((l) => l.event === 'agent_tool_registry')?.data).toMatchObject({ phase: 'step_repair', tools: ['click', 'type', 'scroll', 'read_skill', 'done'], mcp: false });
     expect(hits.every((h) => !h.includes('evil'))).toBe(true);
   }, 240_000);
 
@@ -334,6 +336,8 @@ describe('stratégie steps interprétée dans le bac à sable, reprise par étap
     expect(await apiState(apiId)).toMatchObject({ status: 'action_requise', status_reason: 'session_step_broken', current_strategy_version: 1 });
     expect(fake.calls).toHaveLength(0);
     expect((await logsOf(runId)).some((l) => l.event === 'step_draft_proposed')).toBe(true);
+    // assert_mcp_off_with_session : avec session, aucun outil d'agent, aucun pont MCP.
+    expect((await logsOf(runId)).find((l) => l.event === 'agent_tool_registry')?.data).toMatchObject({ phase: 'session_or_tunnel', tools: [], mcp: false });
   }, 240_000);
 
   test('assert_step_cascade_reinvestigates : 3 étapes cassées, max_step_repairs_per_run = 2 → erreur (step_cascade), stratégie précédente gardée', async () => {
