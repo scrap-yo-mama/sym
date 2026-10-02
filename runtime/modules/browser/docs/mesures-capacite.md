@@ -1,6 +1,6 @@
 # Mesures de capacité de SYM Browser (tâche 0.6)
 
-Daté du 2026-10-02. Rapport de référence des constantes de capacité d'un nœud ([cdc/sym-browser 04b §3](../../../../cdc/sym-browser/04b-specs-pool-noeuds.md), KPI K2 et K4 de `07-kpis.md`). Les résultats bruts (JSON, une entrée par répétition) sont dans `bench/results/` ; les tableaux ci-dessous sont générés par `node bench/report.ts`, sans retranscription.
+Daté du 2026-10-02. Rapport de référence des constantes de capacité d'un nœud (`cdc/sym-browser/04b-specs-pool-noeuds.md` § 3, KPI K2 et K4 de `07-kpis.md`). Les résultats bruts (JSON, une entrée par répétition) sont dans `bench/results/` ; les tableaux ci-dessous sont générés par `node bench/report.ts`, sans retranscription.
 
 ## 1. Résumé
 
