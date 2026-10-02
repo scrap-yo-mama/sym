@@ -102,6 +102,12 @@ export function acceptWebSocket(req: IncomingMessage, socket: Duplex, onOpen: (c
     buffer = Buffer.concat([buffer, chunk]);
     consume();
   });
+  // Le pair a fermé sa moitié (FIN sans trame de fermeture : tunnel coupé, onglet fermé) : le serveur HTTP garde les sockets
+  // surclassés en allowHalfOpen, on ferme donc la nôtre (sinon server.close() attendrait sans fin).
+  socket.on('end', () => {
+    closed = true;
+    socket.end();
+  });
   socket.on('close', () => {
     closed = true;
   });
