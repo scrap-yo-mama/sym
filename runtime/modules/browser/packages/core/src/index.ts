@@ -9,3 +9,4 @@ export type ServiceMode = (typeof SERVICE_MODES)[number];
 export function isServiceMode(value: unknown): value is ServiceMode {
   return typeof value === 'string' && (SERVICE_MODES as readonly string[]).includes(value);
 }
+export * from './capacity.js';
