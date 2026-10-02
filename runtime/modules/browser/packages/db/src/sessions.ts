@@ -3,9 +3,11 @@
 // de nœud mort (04b § 5 et § 6). Chaque écriture d'état est UNE instruction SQL conditionnelle : la ligne est verrouillée
 // (`FOR UPDATE`), l'état courant doit être une source permise par la table de `@sym-browser/core`, et l'événement `state`
 // est inséré dans la même instruction. Deux écrivains concurrents (nœud, balayeur, API) : un seul gagne, aucune transition
-// hors table n'atteint la base.
+// hors table n'atteint la base. Un état final peut porter la clôture d'usage du nœud (04d § 4.1, tâche 2.6) : elle est
+// insérée par la MÊME instruction, seulement si la transition est acceptée.
 import { sourcesFor, type ExtendOutcome, type SessionState, type SessionStore, type TransitionInput, type TransitionOutcome } from '@sym-browser/core';
 import type pg from 'pg';
+import { recordUsage } from './usage.js';
 
 type Queryable = Pick<pg.ClientBase, 'query'>;
 
@@ -30,7 +32,19 @@ export async function transitionSession(db: Queryable, input: TransitionInput): 
               ended_at = CASE WHEN $2 = ANY($6::text[]) THEN clock_timestamp() ELSE s.ended_at END
          FROM cur
         WHERE s.id = cur.id AND cur.state = ANY($5::text[])
-        RETURNING s.id, s.state, s.end_reason, cur.state AS previous, coalesce(s.ended_at, s.started_at) AS at),
+        RETURNING s.id, s.tenant_id, s.api_key_id, s.state, s.end_reason, cur.state AS previous, coalesce(s.ended_at, s.started_at) AS at),
+     us AS (
+       -- Clôture d'usage (tâche 2.6) : écrite avec l'état final ; jamais par-dessus une mesure, seulement sur une reconstruction.
+       INSERT INTO usage_records (session_id, tenant_id, api_key_id, node_id, started_at, ended_at, browser_ms, billed_seconds, bytes_in, bytes_out, source)
+       SELECT upd.id, upd.tenant_id, upd.api_key_id, $7, 'epoch'::timestamptz + $8::bigint * interval '1 millisecond',
+              'epoch'::timestamptz + ($8::bigint + $9::bigint) * interval '1 millisecond',
+              $9::bigint, ($9::bigint + 999) / 1000, $10::bigint, $11::bigint, 'node'
+         FROM upd
+        WHERE $9::bigint IS NOT NULL AND upd.state = ANY($6::text[])
+       ON CONFLICT (session_id) DO UPDATE SET
+         node_id = EXCLUDED.node_id, started_at = EXCLUDED.started_at, ended_at = EXCLUDED.ended_at, browser_ms = EXCLUDED.browser_ms,
+         billed_seconds = EXCLUDED.billed_seconds, bytes_in = EXCLUDED.bytes_in, bytes_out = EXCLUDED.bytes_out, source = 'node', updated_at = now()
+        WHERE usage_records.source = 'reconstructed'),
      ev AS (
        INSERT INTO session_events (session_id, occurred_at, type, data)
        SELECT id, at, 'state',
@@ -38,7 +52,19 @@ export async function transitionSession(db: Queryable, input: TransitionInput): 
          FROM upd)
      SELECT (SELECT state FROM cur) AS current, upd.previous, upd.state, upd.at
        FROM (SELECT 1) one LEFT JOIN upd ON true`,
-    [input.sessionId, input.to, input.reason, input.nodeId ?? null, sources, TERMINAL_STATES],
+    [
+      input.sessionId,
+      input.to,
+      input.reason,
+      input.nodeId ?? null,
+      sources,
+      TERMINAL_STATES,
+      input.usage?.nodeId ?? null,
+      input.usage?.startedAt ?? null,
+      input.usage?.browserMs ?? null,
+      input.usage?.bytesIn ?? null,
+      input.usage?.bytesOut ?? null,
+    ],
   );
   const row = rows[0];
   if (!row?.current) return { ok: false, code: 'not_found' };
@@ -170,6 +196,7 @@ export function createPgSessionStore(db: Queryable): SessionStore {
   return {
     transition: (input) => transitionSession(db, input),
     extend: (input) => extendSession(db, input),
+    recordUsage: (closure) => recordUsage(db, closure),
   };
 }
 

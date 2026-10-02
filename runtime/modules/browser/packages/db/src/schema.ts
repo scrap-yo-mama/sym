@@ -163,3 +163,28 @@ export const idempotencyKeys = pgTable('idempotency_keys', {
   responseBody: jsonb('response_body').$type<Record<string, unknown>>(),
   createdAt: createdAt(),
 }, (t) => [primaryKey({ columns: [t.tenantId, t.operation, t.key] }), index('idempotency_keys_created_idx').on(t.createdAt)]);
+
+/** Dernière mesure en cours d'une session, poussée par le nœud (04d § 4.1, migration 0003, tâche 2.6). */
+export const usageSnapshots = pgTable('usage_snapshots', {
+  sessionId: uuid('session_id').primaryKey().references(() => sessions.id, { onDelete: 'cascade' }),
+  nodeId: text('node_id').notNull().references(() => nodes.id),
+  startedAt: tstz('started_at').notNull(),
+  browserMs: big('browser_ms').notNull(),
+  bytesIn: big('bytes_in').notNull(),
+  bytesOut: big('bytes_out').notNull(),
+  measuredAt: tstz('measured_at').notNull().defaultNow(),
+});
+
+/** Rapport de chaque réconciliation (04d § 4.4, migration 0003, tâche 2.6). */
+export const usageReconciliations = pgTable('usage_reconciliations', {
+  id: bigint('id', { mode: 'number' }).primaryKey().generatedAlwaysAsIdentity(),
+  ranAt: tstz('ran_at').notNull().defaultNow(),
+  closures: integer('closures').notNull(),
+  inserted: integer('inserted').notNull(),
+  replaced: integer('replaced').notNull(),
+  reconstructed: integer('reconstructed').notNull(),
+  driftSeconds: big('drift_seconds').notNull(),
+  driftBytes: big('drift_bytes').notNull(),
+  remainingDriftSeconds: big('remaining_drift_seconds').notNull(),
+  remainingDriftBytes: big('remaining_drift_bytes').notNull(),
+}, (t) => [index('usage_reconciliations_ran_idx').on(t.ranAt)]);

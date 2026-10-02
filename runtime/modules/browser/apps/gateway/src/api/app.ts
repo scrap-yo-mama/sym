@@ -5,6 +5,8 @@
 // Toute session est vue au travers de son client : la session d'un autre client répond 404 (BINV7). Chaque réponse porte
 // `X-Request-Id` ; chaque erreur suit 04 § 6. L'authentification, les jetons et le démarrage sur un nœud passent par les
 // interfaces de types.ts (tâches 2.1, 2.3, 2.4).
+// Comptage (04d § 4.3 et § 4.4, tâche 2.6) : `GET /v1/usage` et `GET /v1/usage.csv` (mêmes lignes, mêmes totaux ;
+// `sessions:read` limité à sa propre clé, `admin` toutes les clés du client), `POST /v1/admin/usage/reconcile` (admin).
 import { randomBytes } from 'node:crypto';
 import { endStateFor, isTerminal, resolveSessionType } from '@sym-browser/core';
 import {
@@ -14,12 +16,15 @@ import {
   getSessionView,
   insertSession,
   listSessionViews,
+  queryUsage,
+  reconcileUsage,
   readyNodeExists,
   releaseIdempotencyKey,
   requestHash,
   transitionSession,
   type IdempotentOperation,
   type SessionView,
+  type UsageGroup,
 } from '@sym-browser/db';
 import {
   BROWSER_API_VERSION,
@@ -40,6 +45,7 @@ import {
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
 import { ApiProblem, invalidOption, preferredLanguage } from './errors.js';
 import type { GatewayDeps, Principal, Scope } from './types.js';
+import { usageCsv } from '../usage/csv.js';
 import { isDateTime, parseCreateSession, parseExtendSession, UUID } from './validation.js';
 
 /** Défauts de l'instance (04 § 3) et durée des jetons de connexion (04 § 7, « à valider, tâche 2.1 »). */
@@ -126,15 +132,16 @@ export async function createGatewayApi(deps: GatewayDeps): Promise<FastifyInstan
     fail(request, reply, request.url.startsWith('/v1/sessions/') ? sessionNotFound() : invalidOption([{ field: 'path', reason: 'unknown route' }])),
   );
 
-  /** Clé d'API en `Authorization: Bearer` puis scope requis (04 § 1). */
-  const authorize = (scope: Scope) => async (request: FastifyRequest): Promise<void> => {
+  /** Clé d'API en `Authorization: Bearer` puis au moins un des scopes requis (04 § 1 ; usage : `sessions:read` ou `admin`). */
+  const authorizeAny = (scopes: readonly Scope[]) => async (request: FastifyRequest): Promise<void> => {
     const header = request.headers.authorization;
     const secret = typeof header === 'string' ? /^Bearer\s+(\S+)\s*$/i.exec(header)?.[1] : undefined;
     const principal = secret === undefined ? null : await deps.auth.authenticate(secret);
     if (!principal) throw new ApiProblem('unauthorized', 'Missing, unknown or expired API key.');
-    if (!principal.scopes.includes(scope)) throw new ApiProblem('forbidden', `Scope ${scope} required.`, { details: { requiredScope: scope } });
+    if (!scopes.some((scope) => principal.scopes.includes(scope))) throw new ApiProblem('forbidden', `Scope ${scopes.join(' or ')} required.`, { details: { requiredScope: scopes[0] } });
     request.principal = principal;
   };
+  const authorize = (scope: Scope) => authorizeAny([scope]);
   const principalOf = (request: FastifyRequest): Principal => {
     if (!request.principal) throw new ApiProblem('unauthorized', 'Missing API key.');
     return request.principal;
@@ -358,6 +365,70 @@ export async function createGatewayApi(deps: GatewayDeps): Promise<FastifyInstan
       const updated = (await getSessionView(deps.db, { tenantId: view.tenantId, sessionId: view.id })) ?? view;
       return { status: 200, body: await present(updated) };
     });
+  });
+
+  /** Paramètres de l'API d'usage (04d § 4.3) : période [from, to) (mois UTC courant par défaut), regroupement, clé. */
+  const usageQuery = (request: FastifyRequest) => {
+    const principal = principalOf(request);
+    const query = request.query as Record<string, unknown>;
+    const single = (name: string): string | undefined => {
+      const value = query[name];
+      if (value === undefined) return undefined;
+      if (typeof value !== 'string') throw invalidOption([{ field: name, reason: 'must be given once' }]);
+      return value;
+    };
+    const date = (name: string): Date | undefined => {
+      const value = single(name);
+      if (value === undefined) return undefined;
+      if (!isDateTime(value)) throw invalidOption([{ field: name, reason: 'must be an RFC 3339 date-time' }]);
+      return new Date(value);
+    };
+    const now = new Date();
+    const from = date('from') ?? new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+    const to = date('to') ?? new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1));
+    if (from.getTime() >= to.getTime()) throw invalidOption([{ field: 'to', reason: 'must be after from' }]);
+    const groups = (single('groupBy') ?? 'key').split(',').map((g) => g.trim());
+    if (groups.some((g) => g !== 'key' && g !== 'day' && g !== 'session')) throw invalidOption([{ field: 'groupBy', reason: 'must be a list of key, day, session' }]);
+    const apiKeyId = single('apiKeyId');
+    if (apiKeyId !== undefined && !UUID.test(apiKeyId)) throw invalidOption([{ field: 'apiKeyId', reason: 'must be a UUID' }]);
+    // Sans `admin`, une clé ne lit que son propre usage.
+    if (!principal.scopes.includes('admin')) {
+      if (apiKeyId !== undefined && apiKeyId !== principal.apiKeyId) throw new ApiProblem('forbidden', 'Scope admin required to read another key.', { details: { requiredScope: 'admin' } });
+    }
+    const ownKey = principal.scopes.includes('admin') ? apiKeyId : principal.apiKeyId;
+    return {
+      tenantId: principal.tenantId,
+      from,
+      to,
+      groupBy: [...new Set(groups)] as UsageGroup[],
+      ...(ownKey === undefined ? {} : { apiKeyId: ownKey }),
+    };
+  };
+
+  app.get('/v1/usage', { preHandler: authorizeAny(['sessions:read', 'admin']) }, async (request) => {
+    const query = usageQuery(request);
+    const { items, totals } = await queryUsage(deps.db, query);
+    return {
+      period: { from: query.from.toISOString(), to: query.to.toISOString() },
+      items: items.map(({ apiKeyPrefix: _prefix, ...item }) => item),
+      totals,
+    };
+  });
+
+  app.get('/v1/usage.csv', { preHandler: authorizeAny(['sessions:read', 'admin']) }, async (request, reply) => {
+    const query = usageQuery(request);
+    const { items } = await queryUsage(deps.db, query);
+    const period = { from: query.from.toISOString(), to: query.to.toISOString() };
+    return reply
+      .header('content-type', 'text/csv; charset=utf-8')
+      .header('content-disposition', `attachment; filename="usage-${period.from.slice(0, 10)}.csv"`)
+      .send(usageCsv({ period, items, bySession: query.groupBy.includes('session') }));
+  });
+
+  app.post('/v1/admin/usage/reconcile', { preHandler: authorize('admin') }, async (_request, reply) => {
+    const report = await reconcileUsage(deps.db, { closures: (await deps.usageWal?.()) ?? [] });
+    deps.onUsageReconciled?.(report);
+    return reply.code(202).send({ reconciliation: { ...report, ranAt: report.ranAt.toISOString() } });
   });
 
   return app;

@@ -10,7 +10,7 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { billedSeconds, createManualClock, type ManualClock, type SessionStore, type UsageClosure } from '@sym-browser/core';
+import { billedSeconds, createManualClock, type ManualClock, type SessionStore } from '@sym-browser/core';
 import { createPgSessionStore, insertSession, recordHeartbeat, recordUsageSnapshots, sweepLostNodes } from '@sym-browser/db';
 import { SessionSupervisor, type SessionPool } from '@sym-browser/node/sessions';
 import { replayUsageWal, UsageMeter, UsageWal } from '@sym-browser/node/usage';

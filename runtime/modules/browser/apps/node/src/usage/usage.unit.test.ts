@@ -134,6 +134,7 @@ describe('instantanés (startUsageSnapshots)', () => {
     meter.start('s');
     meter.observe('s', egressState(1, 10, 1));
     clock.advance(10_000);
+    await new Promise((resolve) => setImmediate(resolve)); // écriture précédente terminée (sinon l'instantané est sauté)
     clock.advance(10_000);
     snapshots.stop();
     clock.advance(10_000);

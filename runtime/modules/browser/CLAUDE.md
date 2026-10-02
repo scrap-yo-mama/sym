@@ -36,6 +36,7 @@ Contrat : `runtime/packages/contracts` (`@sym/contracts`, MIT, sous-chemin `brow
 - Types : `pnpm --filter "./modules/browser/**" typecheck` ; lint : `pnpm exec eslint modules/browser packages/contracts`.
 - Image : `docker build -f modules/browser/Dockerfile -t sym-browser:dev .` puis `docker run --rm --security-opt seccomp=modules/browser/deploy/seccomp-chromium.json --security-opt no-new-privileges --cap-drop ALL -e MASTER_KEY="$(openssl rand -base64 32)" -e DATABASE_URL=postgres://… sym-browser:dev` (`SYMB_MODE` : `all`, `gateway`, `node`).
 - Egress par session (BINV2, 04c § 1) : `apps/node/src/egress/` (`startSessionEgress`, garde de résolution unique, arguments figés de Chromium) ; test `assert_session_egress_enforced` sur Chromium et le site de `fixtures/` (0.5).
+- Comptage (BINV5, 04d § 4) : mesure par le nœud dans `apps/node/src/usage/` (horloge monotone, époques d'egress cumulées, `usage.wal` fsync, instantanés 10 s) ; clôture avec l'état final (`transitionSession`, migration `0003_usage`) ; réconciliation et agrégats dans `packages/db/src/usage.ts` ; `/v1/usage`, `/v1/usage.csv`, `/v1/admin/usage/reconcile` dans la passerelle ; test `assert_usage_reconciled` (`apps/gateway/src/usage/`).
 - Configuration : catalogue `packages/core/src/config/env-catalog.ts` (source unique, secrets `NOM_FILE`) ; config invalide = sortie code 1 nommant la variable ; `node dist/main.js --check-config` valide sans écouter ; `/healthz`, `/readyz`.
 
 ## Versions et dépendances

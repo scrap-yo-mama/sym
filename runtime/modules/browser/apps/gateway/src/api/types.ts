@@ -7,6 +7,8 @@
 //     sessions du nœud dans le même processus (tâche 1.2) ; modes séparés : `POST /internal/sessions` du nœud (04b § 8),
 //     choix du nœud et file (tâche 2.4).
 import type pg from 'pg';
+import type { UsageClosure } from '@sym-browser/core';
+import type { UsageReconciliation } from '@sym-browser/db';
 import type { CreateSessionRequest, SessionType } from '@sym/contracts/browser';
 
 /** Scopes d'une clé d'API (04 § 1). */
@@ -58,6 +60,13 @@ export type GatewayDeps = {
   defaults?: { timeoutSeconds?: number; idleTimeoutSeconds?: number };
   /** Plateforme servie (`GET /v1/version`), défaut `process.platform`. */
   platform?: string;
+  /**
+   * Clôtures des journaux usage.wal des nœuds joignables (réconciliation, 04d § 4.4, tâche 2.6). Mode `all` : le journal du
+   * nœud du processus ; modes séparés : lecture interne des nœuds. Absent : seule la reconstruction s'applique.
+   */
+  usageWal?: () => Promise<UsageClosure[]>;
+  /** Rapport de chaque réconciliation demandée par l'API (jauge `symb_usage_drift_seconds`, journal `warn` si écart). */
+  onUsageReconciled?: (report: UsageReconciliation) => void;
   /** Erreur interne (500) : journal masqué de la passerelle. */
   onError?: (error: unknown) => void;
 };

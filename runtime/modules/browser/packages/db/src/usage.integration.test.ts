@@ -117,7 +117,7 @@ describe('nœud perdu, reconstruction et réconciliation', () => {
     await recordUsageSnapshots(pool, 'node-lost', [closure(measured, 'node-lost', 20_000, t0, [100, 10]), closure(unseen, 'node-lost', 8_500, t0, [50, 5])]);
     await recordUsageSnapshots(pool, 'node-lost', [closure(measured, 'node-lost', 30_000, t0, [300, 30])]); // instantané plus récent
     await pool.query("UPDATE nodes SET last_beat_at = now() - interval '1 minute' WHERE id = 'node-lost'");
-    expect((await sweepLostNodes(pool)).sessions.sort()).toEqual([measured, unseen].sort());
+    expect((await sweepLostNodes(pool, { staleAfterMs: 50_000 })).sessions.sort()).toEqual([measured, unseen].sort());
 
     // Première réconciliation : le journal du nœud perdu est hors d'atteinte ; ses sessions sont reconstruites.
     const first = await reconcileUsage(pool, { closures: [] });
@@ -167,7 +167,7 @@ describe('agrégats de l’API d’usage', () => {
     const d1 = Date.UTC(2026, 8, 1, 10);
     const d2 = Date.UTC(2026, 8, 2, 23, 59, 59);
     await make(k1, d1, 1_500, [10, 1]);
-    await make(k1, d2, 999, [20, 2]); // finit le 3 septembre à 00:00:00.998
+    await make(k1, d2, 1_000, [20, 2]); // finit le 3 septembre à 00:00:00.000 : comptée ce jour-là
     await make(k2, d1, 60_000, [30, 3]);
     await make(k2, Date.UTC(2026, 9, 1), 1_000, [1, 1]); // hors période
     const from = new Date(Date.UTC(2026, 8, 1));
