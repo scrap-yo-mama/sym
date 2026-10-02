@@ -1,6 +1,6 @@
 # Audit de sécurité de SYM Browser (tâche 5.3)
 
-Audit de la branche d'intégration `integ-browser-v1` (tâches 0.1 à 3.8, 5.1 et 5.5 fusionnées ; 2.6 pas encore livrée),
+Audit de la branche d'intégration `integ-browser-v1` (tâches 0.1 à 3.8, 5.1 et 5.5 fusionnées ; 2.6 fusionnée après l'audit et relue en § 4, A10),
 le 2026-10-02. Ligne 5.3 de `cdc/sym-browser/06-taches.md` : BINV1, BINV2, BINV6 et BINV7 (plus BINV3 et BINV8), relais
 WSS, OWASP API Top 10 (2023), secrets, en-têtes, image (uid, seccomp, capacités). Critère : aucun constat bloquant ni
 majeur ouvert, chaque invariant rejoué.
@@ -63,6 +63,7 @@ désactivé ; trois tests ont été alignés sur un comportement volontairement 
 | A7 | Identifiant de session fourni par le client : 409 `session_id_taken` révèle l'existence d'un UUID d'un autre client. | UUID imprévisibles ; clé `(tenant_id, id)` envisageable au prochain changement de schéma. |
 | A8 | Webhooks : tout port accepté (la garde SSRF s'applique : adresses privées, métadonnées, rebinding). | Restreindre à 80/443/8443 si un abus apparaît. |
 | A9 | `idempotency_keys` purgée seulement au réemploi d'une clé ; file globale partagée entre clients. | Croissance bornée par les quotas ; à revoir avec 5.2. |
+| A10 | 2.6 : `POST /v1/admin/usage/reconcile` (scope `admin` d'un client) lance la réconciliation de toute l'instance et renvoie ses totaux agrégés (écarts, sessions corrigées), tous clients confondus. Lecture `GET /v1/usage` et CSV : bornées au client, et à la clé sans `admin` (vérifié). | Conforme à 04d § 4.4 (instance auto-hébergée, exploitant = client admin) ; aucun identifiant d'un autre client exposé. Scope d'exploitant distinct à prévoir pour le mode multi-clients. |
 
 ## 5. Constat hors sécurité bloquant pour la recette
 
