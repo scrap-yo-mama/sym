@@ -27,3 +27,33 @@ jobs:
           node-version-file: runtime/.node-version
       - run: pnpm install --frozen-lockfile
       - run: 'echo "nightly : pas encore implémenté (k6, tests instables, N2) ; Node 26 du bac à sable : job security de ci.yml"'
+
+  # Tâche 5.0 (docs/modules.md) : frontières entre modules en RAPPORT seulement. Le job reste vert même avec des violations
+  # (continue-on-error ; les règles de runtime/.dependency-cruiser.cjs sont toutes en `warn`) ; le rapport est publié en
+  # artefact (HTML et Markdown) et dans le résumé du job.
+  dependency-cruiser:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          package_json_file: runtime/package.json
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: runtime/.node-version
+      - run: pnpm install --frozen-lockfile
+      - name: dependency-cruiser (rapport, non bloquant)
+        continue-on-error: true
+        run: |
+          mkdir -p reports
+          pnpm exec depcruise --config .dependency-cruiser.cjs --output-type err-html --output-to reports/dependency-cruiser.html apps packages
+          pnpm exec depcruise --config .dependency-cruiser.cjs --output-type markdown --output-to reports/dependency-cruiser.md apps packages
+          cat reports/dependency-cruiser.md >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: dependency-cruiser-report
+          path: runtime/reports/
+          if-no-files-found: ignore
