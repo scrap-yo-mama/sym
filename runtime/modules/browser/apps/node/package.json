@@ -4,7 +4,7 @@
   "version": "0.0.0",
   "type": "module",
   "license": "AGPL-3.0-only",
-  "description": "SYM Browser : nœud (pool de Chromium, egress par session). Squelette de la tâche 0.1.",
+  "description": "SYM Browser : nœud (pool de Chromium chauds, sessions, egress par session).",
   "files": [
     "dist"
   ],
@@ -12,6 +12,7 @@
     "build": "tsc -b",
     "typecheck": "tsc -p tsconfig.check.json",
     "test": "vitest run",
+    "test:chromium": "vitest run --config vitest.chromium.config.ts",
     "start": "node dist/main.js"
   },
   "dependencies": {
