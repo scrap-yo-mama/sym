@@ -6,7 +6,7 @@
 //   bridage s'applique (le premier octet arrive après un aller-retour réseau émulé) ;
 // - scores Lighthouse mobile (configuration par défaut : mobile, bridage simulé) : performance, accessibilité et SEO ≥ seuils.
 import { expect, test } from '@playwright/test';
-import { lighthouseFailures } from '../src/landing/checks.ts';
+import { lighthouseFailures, navigationTtfb } from '../src/landing/checks.ts';
 import { runLighthouse } from '../src/landing/lighthouse.ts';
 import { budgets, homeUrl, LANGS_UNDER_TEST } from './pages.ts';
 
@@ -40,10 +40,11 @@ for (const lang of LANGS_UNDER_TEST) {
     await page.goto(homeUrl(lang), { waitUntil: 'networkidle' });
     await page.waitForTimeout(300);
     const metrics = await page.evaluate(() => (globalThis as unknown as { __metrics: Metrics }).__metrics);
-    const navigation = await page.evaluate(() => {
+    // Premier octet depuis le début de la navigation (navigationTtfb) : sous bridage, la latence émulée précède requestStart.
+    const navigation = { ttfb: navigationTtfb(await page.evaluate(() => {
       const entry = performance.getEntriesByType('navigation')[0] as PerformanceNavigationTiming | undefined;
-      return { ttfb: entry ? entry.responseStart - entry.requestStart : 0 };
-    });
+      return entry ? { startTime: entry.startTime, responseStart: entry.responseStart } : undefined;
+    })) };
     const origin = new URL(homeUrl(lang)).origin;
 
     const total = responses.reduce((sum, r) => sum + r.transferred, 0);

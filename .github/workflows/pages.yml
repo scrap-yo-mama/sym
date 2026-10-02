@@ -6,6 +6,8 @@
 # juridique reste à fournir, qu'une allégation n'est pas relue par un humain ou qu'aucune version n'est publiée ; la sonde rejoue sur le
 # build de production, servi en local comme GitHub Pages, les contrôles cookie, tiers, traceurs et CSP ; les liens externes du site
 # construit répondent 200 (assert_landing_links_resolve). Le site est construit sous le chemin de base du dépôt (/<dépôt>/).
+# Origine : sans domaine personnalisé, tous les sites Pages du propriétaire partagent https://<propriétaire>.github.io, que vise le 'self'
+# de la CSP (22 § 2.9) ; landing:pages-origin refuse la mise en ligne si un autre dépôt du propriétaire publie un site Pages.
 name: pages
 
 on:
@@ -50,6 +52,10 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: pnpm --filter @runtime/docs landing:stars
+      - name: Origine partagée (CSP self), ce dépôt est le seul site Pages de son propriétaire
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: pnpm --filter @runtime/docs landing:pages-origin
       - name: Porte du GO de la landing (preuves livrées, champs juridiques fournis, allégations relues)
         run: pnpm check:landing-go
       - name: Chromium de Playwright

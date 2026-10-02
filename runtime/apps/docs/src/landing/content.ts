@@ -128,28 +128,22 @@ export function buildLanding(lang: Lang, inputs: BuildInputs): LandingData {
 
   const messages: DemoMessage[] = [
     { from: 'user', signature: false, text: L('Build me an API of the books on books.toscrape.com, with pagination: title, price, availability.', 'Fais-moi une API des livres de books.toscrape.com, avec la pagination : titre, prix, disponibilité.') },
-    { from: 'sym', signature: true, text: L('Got it, I\'m on it.', 'OK, je m\'en occupe.') },
-    { from: 'sym', signature: false, text: L('robots.txt read: path allowed. No public API. First attempt: a plain request on the HTML, the books are in the page.', 'robots.txt lu : chemin autorisé. Pas d\'API publique. Premier essai : requête simple sur le HTML, les livres sont dans la page.') },
-    { from: 'sym', signature: false, text: L('Here\'s the schema: title, price, availability, rating, URL. Shall I go on?', 'Voilà le schéma : titre, prix, disponibilité, note, URL. Je continue ?') },
+    // Bulles de SYM : entrées du registre (22 § 2.4 et § 3.2), relues au GO contre le scénario de la démo sans clé ; replay écrit à la main en V1.
+    { from: 'sym', signature: true, text: claim('demo.sym.ack') },
+    { from: 'sym', signature: false, text: claim('demo.sym.robots') },
+    { from: 'sym', signature: false, text: claim('demo.sym.schema') },
     { from: 'user', signature: false, text: L('OK.', 'OK.') },
-    { from: 'sym', signature: true, text: L('Done. The API is ready, replay it whenever you like.', 'C\'est fait. L\'API est prête, tu peux la rejouer quand tu veux.') },
+    { from: 'sym', signature: true, text: claim('demo.sym.done') },
     { from: 'user', signature: false, text: L('And for un-site-qui-refuse.example (a made-up site)?', 'Et pour un-site-qui-refuse.example (site fictif) ?') },
-    {
-      from: 'sym',
-      signature: false,
-      text: L(
-        'I took a look. This site keeps robots out (robots.txt). I\'m stopping here, without pushing. Here\'s what I can do instead: look for an official API, find another source, or give you the publisher\'s contact.',
-        'J\'ai regardé. Ce site refuse les robots (robots.txt). Je m\'arrête là, sans insister. Voilà ce que je peux faire à la place : chercher l\'API officielle, trouver une autre source, ou te donner le contact de l\'éditeur.',
-      ),
-    },
+    { from: 'sym', signature: false, text: claim('demo.sym.refusal') },
   ];
 
   const faq = (question: string, id: string, extra?: Link): FaqEntry => ({ question, answer: claim(id), ...(extra ? { link: extra } : {}) });
 
   const page: LandingPage = {
     hero: {
-      eyebrow: L('Open source · Self-hosted · No account', 'Open source · Auto-hébergé · Sans compte'),
-      title: L('Describe the data. SYM 👻 handles the rest.', 'Décris les données. SYM 👻 s\'occupe du reste.'),
+      eyebrow: claim('hero.eyebrow'),
+      title: claim('hero.title'),
       definition: claim('hero.definition'),
       sub: claim('hero.sub'),
       ctas: [primary, github],
@@ -204,8 +198,9 @@ export function buildLanding(lang: Lang, inputs: BuildInputs): LandingData {
     far: {
       id: 'va-loin',
       title: L('It goes far', 'Il va loin'),
-      hook: L('Where others give up, SYM 👻 keeps going.', 'Là où les autres lâchent, SYM 👻 continue.'),
-      sub: L('No lectures, no “I can\'t”. It digs, it finds, it hands you an API.', 'Pas de sermon, pas de « je ne peux pas ». Il cherche, il trouve, il te livre une API.'),
+      // 22 § 2.6 : chaque phrase de « Il va loin » est une entrée relue du registre, accroche comparative comprise (garde de 22 § 4).
+      hook: claim('far.hook'),
+      sub: claim('far.sub'),
       cards: [
         { title: L('JavaScript pages', 'Pages en JavaScript'), text: claim('far.js') },
         { title: L('Sites with accounts', 'Sites à compte'), text: claim('far.session') },

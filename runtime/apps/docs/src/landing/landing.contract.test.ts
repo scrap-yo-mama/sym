@@ -12,13 +12,14 @@ import { join } from 'node:path';
 import { beforeAll, describe, expect, test } from 'vitest';
 import { checkSite } from '../site.ts';
 import { PAGES } from '../nav.ts';
-import { attributeTexts, attributeValues, bodyOf, decodeEntities, headOf, linkTags, metaTags, pngSize, visibleText } from '../testing/html.ts';
+import { attributeTexts, attributeValues, bodyOf, decodeEntities, headOf, linkTags, metaTags, pngSize, signupCtas, visibleText } from '../testing/html.ts';
 import { withBuildLock } from '../testing/build-lock.ts';
+import { LANDING_LABELS, STRICT_SECTIONS, unsourcedRemainder } from '../testing/landing-labels.ts';
 import { docsDir } from '../testing/pages.ts';
 import { loadClaims, normalizeText, resolveClaim } from './claims.ts';
 import { buildCsp, cspOf, inlineScripts } from './csp.ts';
 import { buildLanding, startCommand } from './content.ts';
-import { HOME_PATHS, LEGAL_PATHS } from './href.ts';
+import { HOME_PATHS, landingHeaderPaths, LEGAL_PATHS } from './href.ts';
 import { findTerms, loadBrandExceptions, loadBrands, loadLexicon } from './lexicon.ts';
 import { TRACKER_DOMAINS } from './trackers.ts';
 import { buildInputs, siteEnv } from './site.ts';
@@ -76,7 +77,9 @@ describe('assert_landing_csp_strict : balise meta et empreintes calculées au bu
     expect(headers).toContain(`Content-Security-Policy: ${csp}; frame-ancestors 'none'`);
     expect(headers).toContain('X-Content-Type-Options: nosniff');
     expect(headers).toContain('Cross-Origin-Opener-Policy: same-origin');
-    expect(headers.split('\n').filter((line) => /^\//.test(line))).toEqual(['/sym/', '/sym/fr/', '/sym/legal/privacy', '/sym/legal/legal-notice', '/sym/fr/legal/confidentialite', '/sym/fr/legal/mentions-legales']);
+    // Chaque page sous les adresses qui la servent : URL propre, fichier .html et index.html (sinon nosniff et frame-ancestors manquent en silence).
+    expect(headers.split('\n').filter((line) => /^\//.test(line))).toEqual(landingHeaderPaths(BASE));
+    for (const path of ['/sym/', '/sym/index.html', '/sym/fr/', '/sym/fr/index.html', '/sym/legal/privacy', '/sym/legal/privacy.html', '/sym/fr/legal/mentions-legales', '/sym/fr/legal/mentions-legales.html']) expect(headers.split('\n'), path).toContain(path);
   });
 
   test('les pages de doc ne portent pas la CSP de la landing (leur recherche charge du WebAssembly)', () => {
@@ -89,7 +92,8 @@ describe('assert_landing_no_signup (HTML) : ni formulaire ni inscription', () =>
     for (const file of LANDING_FILES) {
       const html = bodyOf(read(0, file));
       expect(html, file).not.toMatch(/<form\b|<input\b|<textarea\b|<select\b|type="(?:email|password)"/);
-      expect(visibleText(read(0, file)), file).not.toMatch(/waitlist|liste d'attente|newsletter|inscri|sign ?up|s'abonner|subscribe/i);
+      // Liens et boutons seulement (22b § 2) : « Aucune inscription. » est une phrase de la maquette validée, pas un appel à s'inscrire.
+      expect(signupCtas(read(0, file)), file).toEqual([]);
     }
   });
 
@@ -219,6 +223,19 @@ describe('assert_landing_claims_sourced (HTML) : le texte rendu vient du registr
       const command = normalizeText(data.page.hero.command.text);
       rest = rest.split(command).join(' ');
       expect(rest.replace(/AGPL-3\.0|MIT|books\.toscrape\.com/g, ''), `${lang} : chiffre hors registre`).not.toMatch(/\d/);
+    });
+  }
+
+  for (const lang of LANGS) {
+    test(`${lang} : #va-loin, #faq, #preuves, #comment et #cout ne portent rien d'autre que des entrées du registre et les libellés de la liste blanche`, () => {
+      const html = read(0, pageFile(lang));
+      const data = buildLanding(lang, inputs);
+      const allowed = [...data.claims.map((id) => resolveClaim(registry, id, lang)), ...LANDING_LABELS[lang]];
+      for (const id of STRICT_SECTIONS) {
+        const section = new RegExp(`<section id="${id}"[\\s\\S]*?</section>`).exec(html)?.[0];
+        expect(section, `${lang} #${id}`).toBeDefined();
+        expect(unsourcedRemainder(visibleText(`<body>${section ?? ''}`), allowed), `${lang} #${id} : texte hors registre`).toBe('');
+      }
     });
   }
 

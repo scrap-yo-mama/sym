@@ -2,7 +2,7 @@
 // Contrôles de la landing hors CI de PR (22 § 2.9, 22b § 5) : verdict de la sonde, bloquants du GO, liens externes, étoiles. Sans réseau.
 import { describe, expect, test } from 'vitest';
 import { loadClaims } from './claims.ts';
-import { checkExternalLinks, evaluateProbes, goBlockers, isRealTestIn, lighthouseFailures, parseStars, parseStarsFile, probeReport } from './checks.ts';
+import { checkExternalLinks, evaluateProbes, goBlockers, isRealTestIn, lighthouseFailures, navigationTtfb, parseStars, parseStarsFile, probeReport, sharedPagesOrigin } from './checks.ts';
 import { startCommand } from './content.ts';
 import type { PageProbe } from './probe.ts';
 
@@ -25,6 +25,9 @@ describe('sonde de la landing : les cinq contrôles de la préproduction et de l
       ['assert_landing_no_cookie', { storageAfterLoad: ['indexedDB:db', 'caches:c', 'serviceWorker:https://x.example/sym/'] }],
       ['assert_landing_no_third_party_request', { thirdPartyRequests: ['https://cdn.example/a.js'] }],
       ['assert_landing_no_third_party_tracker', { trackerRequests: ['https://static.cloudflareinsights.com/beacon.min.js'] }],
+      // Référencé dans le HTML servi sans être chargé pendant la visite (chargement différé, ou bloqué par la CSP) : signalé aussi en production.
+      ['assert_landing_no_third_party_tracker', { html: '<script defer src="https://static.cloudflareinsights.com/beacon.min.js"></script>' }],
+      ['assert_landing_no_third_party_tracker', { html: '<script src="/cdn-cgi/scripts/email-decode.min.js"></script>' }],
       ['assert_landing_csp_strict', { cspViolations: ["style-src-attr : inline"] }],
       ['assert_landing_csp_strict', { cspMeta: null }],
       ['assert_landing_csp_strict', { cspMeta: "script-src 'unsafe-inline'" }],
@@ -74,6 +77,23 @@ describe('bloquants du GO de mise en ligne', () => {
     const { manual } = goBlockers(base);
     expect(manual.join('\n')).toMatch(/langue de référence des pages juridiques/);
     expect(manual.join('\n')).toMatch(/#preuves/);
+  });
+
+  test('assert_landing_csp_strict (GO) : les sites Pages de dépôts privés ou internes du propriétaire, invisibles du contrôle public, sont à vérifier par un humain', () => {
+    // landing:pages-origin ne liste que les dépôts publics ; 'self' couvre aussi un site Pages publié par un dépôt privé (offre payante).
+    expect(goBlockers(base).manual.join('\n')).toMatch(/dépôts? privés?.*Pages|Pages.*dépôts? privés?/);
+  });
+
+  test('assert_landing_no_cookie (GO) : le stockage du thème écrit dès l\'ouverture des pages de doc et leur absence de CSP sont soumis à l\'arbitrage de l\'avocat', () => {
+    const manual = goBlockers(base).manual.join('\n');
+    expect(manual).toMatch(/vitepress-theme-appearance/);
+    expect(manual).toMatch(/pages de doc.*sans CSP|sans CSP.*pages de doc/);
+  });
+
+  test('aucune entrée affichée sur la landing n\'est liée à une tâche hors V1.0 (4.10, télémétrie opt-in « après V1.0, si retenu ») : la porte du GO demanderait une livraison qui n\'aura pas lieu', () => {
+    const displayed = loaded.claims.filter((claim) => claim.surfaces?.includes('landing'));
+    for (const claim of displayed) expect(claim.tasks ?? [], claim.id).not.toContain('4.10');
+    expect(loaded.claims.find((claim) => claim.id === 'faq.data')?.note).toMatch(/4\.10/);
   });
 
   test('un test est « réel » s\'il figure dans un fichier de test sans y être seulement en test.todo', () => {
@@ -136,7 +156,8 @@ describe('étoiles et version écrites au build', () => {
     expect(parseStars(previous, { stargazers_count: 150 }, { tag_name: 'v0.2.0' }, now)).toEqual({ stars: 150, version: '0.2.0', updatedAt: now.toISOString() });
     expect(parseStars(previous, { message: 'rate limited' }, null, now)).toEqual(previous);
     expect(parseStars(previous, { stargazers_count: 120 }, { tag_name: 'nightly' }, now)).toEqual(previous);
-    expect(parseStars(previous, { stargazers_count: 120 }, { tag_name: 'v0.3.0-beta.2' }, now)).toEqual({ stars: 120, version: '0.3.0-beta.2', updatedAt: now.toISOString() });
+    // 22 § 2.3 : la commande clone un tag X.Y.Z ; une pré-version publiée en « dernière release » garde la version précédente.
+    expect(parseStars(previous, { stargazers_count: 120 }, { tag_name: 'v0.3.0-beta.2' }, now)).toEqual(previous);
   });
 
   test('assert_landing_stars_build_time : un tag de release piégé (nom de référence git valide mais commande shell) n\'entre jamais dans la commande à copier', () => {
@@ -149,7 +170,7 @@ describe('étoiles et version écrites au build', () => {
   test('assert_landing_stars_build_time : landing/stars.json est validé à la lecture ; un fichier altéré fait échouer le build', () => {
     expect(parseStarsFile({ stars: 0, version: null, updatedAt: null })).toEqual({ stars: 0, version: null, updatedAt: null });
     expect(parseStarsFile({ stars: 140, version: '1.2.3', updatedAt: '2026-10-02T00:00:00.000Z' })).toEqual({ stars: 140, version: '1.2.3', updatedAt: '2026-10-02T00:00:00.000Z' });
-    for (const bad of [null, [], { stars: -1, version: null, updatedAt: null }, { stars: 1.5, version: null, updatedAt: null }, { stars: '100', version: null, updatedAt: null }, { stars: 1, version: '1.0.0;curl${IFS}x|sh', updatedAt: null }, { stars: 1, version: 'v1.0.0', updatedAt: null }, { stars: 1, version: 2, updatedAt: null }, { stars: 1, version: null, updatedAt: 3 }]) {
+    for (const bad of [null, [], { stars: -1, version: null, updatedAt: null }, { stars: 1.5, version: null, updatedAt: null }, { stars: '100', version: null, updatedAt: null }, { stars: 1, version: '1.0.0;curl${IFS}x|sh', updatedAt: null }, { stars: 1, version: 'v1.0.0', updatedAt: null }, { stars: 1, version: '1.0.0-beta.1', updatedAt: null }, { stars: 1, version: 2, updatedAt: null }, { stars: 1, version: null, updatedAt: 3 }]) {
       expect(() => parseStarsFile(bad), JSON.stringify(bad)).toThrow(/landing\/stars\.json/);
     }
   });
@@ -158,6 +179,7 @@ describe('étoiles et version écrites au build', () => {
     const inputs = { registry: loadClaims(), repository: 'scrap-yo-mama/sym', stars: 0, quickstart: { secrets: 'echo secrets', start: 'docker compose up -d' }, compare: false };
     expect(startCommand({ ...inputs, version: '1.2.3' }).split('\n')[0]).toBe('git clone --branch v1.2.3 --depth 1 https://github.com/scrap-yo-mama/sym.git');
     expect(() => startCommand({ ...inputs, version: '1.0.0;curl${IFS}x|sh' })).toThrow(/version/);
+    expect(() => startCommand({ ...inputs, version: '1.0.0-beta.1' }), 'une pré-version n\'est pas un tag X.Y.Z (22 § 2.3)').toThrow(/version/);
   });
 });
 
@@ -166,5 +188,48 @@ describe('assert_landing_perf_budget (Lighthouse mobile) : verdict des scores', 
   test('chaque catégorie au seuil ou au-dessus passe ; en dessous, absente ou non notée, elle échoue', () => {
     expect(lighthouseFailures({ performance: { score: 0.95 }, accessibility: { score: 1 }, seo: { score: 0.98 } }, thresholds)).toEqual([]);
     expect(lighthouseFailures({ performance: { score: 0.94 }, accessibility: { score: null }, seo: undefined }, thresholds)).toEqual(['performance : 94 < 95', 'accessibility : non noté', 'seo : non noté']);
+  });
+});
+
+describe('assert_landing_perf_budget : le premier octet se mesure depuis le début de la navigation', () => {
+  test('la latence émulée par le bridage, retenue AVANT requestStart, compte dans le premier octet', () => {
+    // Mesure de Chromium bridé (4G lente, 562 ms d'aller-retour) : la requête attend avant requestStart, la réponse suit d'une milliseconde.
+    const throttled = { startTime: 0, requestStart: 562, responseStart: 563 };
+    expect(navigationTtfb(throttled)).toBe(563);
+    expect(navigationTtfb(throttled)).toBeGreaterThanOrEqual(562 * 0.9);
+    expect(navigationTtfb(undefined)).toBe(0);
+  });
+});
+
+describe('assert_landing_claims_sourced : l\'étiquette « Démo enregistrée » a une preuve pertinente et une relecture humaine au GO', () => {
+  const loaded = loadClaims();
+  test('demo.recorded renvoie au scénario de la démo sans clé (tutoriel « Démarrage rapide », cas D0, mode démo de 3.10), pas seulement à la sonde réseau', () => {
+    const claim = loaded.claims.find((entry) => entry.id === 'demo.recorded');
+    expect(claim?.proof).toContain('page:tutoriels/quickstart');
+    expect(claim?.proof.filter((proof) => proof !== 'test:assert_landing_no_third_party_request').length).toBeGreaterThan(0);
+    expect(claim?.tasks).toContain('3.10');
+    // La source du replay écrit à la main en V1 (les bulles de content.ts), et la note qui le dit.
+    expect(claim?.proof).toContain('file:runtime/apps/docs/src/landing/content.ts');
+    expect(claim?.note).toMatch(/écrit à la main/);
+  });
+
+  test('la porte du GO demande à un humain de relire l\'étiquette contre le scénario de la démo, tant que le replay est écrit à la main (V1)', () => {
+    const registry = { ...loaded, claims: loaded.claims.map((claim) => ({ ...claim, reviewer: 'human' as const })) };
+    const { manual } = goBlockers({ registry, displayed: ['demo.recorded'], legalSources: [], isRealTest: () => true, version: '1.0.0' });
+    expect(manual.join('\n')).toMatch(/« Démo enregistrée ».*scénario/);
+    expect(goBlockers({ registry, displayed: ['license'], legalSources: [], isRealTest: () => true, version: '1.0.0' }).manual.join('\n')).not.toMatch(/« Démo enregistrée »/);
+  });
+});
+
+describe('assert_landing_csp_strict : l\'origine GitHub Pages n\'est partagée avec aucun autre site du propriétaire', () => {
+  // 'self' (22 § 2.9) vaut https://<propriétaire>.github.io : tout autre dépôt du propriétaire qui publie un site Pages y sert aussi ses fichiers.
+  test('seul le dépôt de la landing publie un site Pages : rien à signaler', () => {
+    expect(sharedPagesOrigin([{ full_name: 'scrap-yo-mama/sym', has_pages: true }, { full_name: 'scrap-yo-mama/autre', has_pages: false }], 'scrap-yo-mama/sym')).toEqual([]);
+  });
+
+  test('un autre dépôt du propriétaire avec Pages (site de projet ou site <propriétaire>.github.io) partage l\'origine : signalé', () => {
+    const repos = [{ full_name: 'scrap-yo-mama/sym', has_pages: true }, { full_name: 'scrap-yo-mama/blog', has_pages: true }, { full_name: 'Scrap-Yo-Mama/scrap-yo-mama.github.io', has_pages: true }, { full_name: 'scrap-yo-mama/x' }];
+    expect(sharedPagesOrigin(repos, 'scrap-yo-mama/sym')).toEqual(['Scrap-Yo-Mama/scrap-yo-mama.github.io', 'scrap-yo-mama/blog']);
+    expect(sharedPagesOrigin(repos, 'SCRAP-YO-MAMA/SYM')).toHaveLength(2);
   });
 });

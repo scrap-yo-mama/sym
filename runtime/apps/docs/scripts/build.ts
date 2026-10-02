@@ -9,7 +9,7 @@ import { generateReference } from './gen-reference.ts';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { SYM_GHOST_PATH, SYM_GHOST_VIEWBOX } from '@runtime/ui/sym-ghost';
 import { buildFavicon, buildRobots, buildSitemap, siteEnv, writeFile } from '../src/landing/site.ts';
-import { HOME_PATHS, LEGAL_PATHS, withBasePath } from '../src/landing/href.ts';
+import { HOME_PATHS, landingHeaderPaths, LEGAL_PATHS } from '../src/landing/href.ts';
 import { buildHeadersFile, cspOf } from '../src/landing/csp.ts';
 import { PAGES } from '../src/nav.ts';
 
@@ -32,7 +32,8 @@ const landingPaths = [...Object.values(HOME_PATHS), ...Object.values(LEGAL_PATHS
 writeFile(`${distDir}/sitemap.xml`, buildSitemap([...landingPaths, ...PAGES.map((page) => page.path)], site));
 const homeCsp = cspOf(readFileSync(`${distDir}/index.html`, 'utf8'));
 if (!homeCsp) throw new Error('la page d\'accueil construite n\'a pas de balise CSP');
-writeFile(`${distDir}/_headers`, buildHeadersFile(landingPaths.map((path) => withBasePath(base, path)), homeCsp));
+// Repli Cloudflare Pages : règles sur le chemin de base de CE build (celui que le repli servira), URL propres et fichiers .html compris.
+writeFile(`${distDir}/_headers`, buildHeadersFile(landingHeaderPaths(base), homeCsp));
 writeFile(`${distDir}/robots.txt`, buildRobots(site));
 writeFile(`${distDir}/favicon.svg`, buildFavicon(readFileSync(new URL('../../../packages/ui/src/theme.css', import.meta.url), 'utf8'), SYM_GHOST_PATH, SYM_GHOST_VIEWBOX));
 

@@ -12,10 +12,13 @@ import { hardcodedColors, sheetViolations } from '@runtime/ui/testing/color-rule
 import { parseQuickstart } from '../quickstart.ts';
 import { loadClaims, normalizeText, resolveClaim, type ClaimsRegistry } from './claims.ts';
 import { buildLanding, startCommand, STARS_THRESHOLD, type BuildInputs } from './content.ts';
-import { hrefOf, internalPath, isLandingPathname } from './href.ts';
+import { buildHeadersFile } from './csp.ts';
+import { hrefOf, internalPath, isLandingPathname, landingHeaderPaths } from './href.ts';
 import { pagesBase, pagesOrigin, publicRepository, renderDeployUrl } from './identity.ts';
 import { findTerms, loadBrandExceptions, loadBrands, loadLexicon, normalizeForLexicon } from './lexicon.ts';
 import { buildInputs, readStars, siteEnv } from './site.ts';
+import { LANDING_LABELS, STRICT_SECTIONS, unsourced, unsourcedRemainder } from '../testing/landing-labels.ts';
+import { signupCtas } from '../testing/html.ts';
 import type { Href, Lang, LandingData } from './types.ts';
 import { LANGS } from './types.ts';
 
@@ -163,6 +166,87 @@ describe('assert_landing_claims_sourced : chaque phrase factuelle vient du regis
   test('chaque phrase du registre de la landing a une preuve nommée connue (test:, inv:, file:, page:, decision:)', () => {
     for (const claim of registry.claims) for (const proof of claim.proof) expect(proof, claim.id).toMatch(/^(test|inv|file|page|decision):\S+$/);
   });
+});
+
+describe('assert_landing_claims_sourced : #va-loin, #faq, #preuves, #comment et #cout ne portent que le registre et la liste blanche', () => {
+  const claimed = (lang: Lang): string[] => landing(lang).claims.map((id) => resolveClaim(registry, id, lang));
+  const sections = (data: LandingData): Record<(typeof STRICT_SECTIONS)[number], unknown> => ({ 'va-loin': data.page.far, faq: data.page.faq, preuves: data.page.proof, comment: data.page.how, cout: data.page.cost });
+
+  for (const lang of LANGS) {
+    test(`${lang} : chaque texte de ces sections est une entrée relue du registre ou un titre ou libellé de la liste blanche explicite`, () => {
+      const data = landing(lang);
+      for (const id of STRICT_SECTIONS) expect(unsourced(texts(sections(data)[id]), claimed(lang), LANDING_LABELS[lang]), `${lang} #${id}`).toEqual([]);
+    });
+  }
+
+  test('l\'accroche et le sous-titre de « Il va loin » (comparaison implicite, 22 § 4), le H1 et chaque bulle de SYM dans la démo sont des entrées du registre', () => {
+    for (const lang of LANGS) {
+      const data = landing(lang);
+      const entry = (id: string): string => normalizeText(resolveClaim(registry, id, lang));
+      expect(normalizeText(data.page.far.hook), lang).toBe(entry('far.hook'));
+      expect(normalizeText(data.page.far.sub), lang).toBe(entry('far.sub'));
+      expect(normalizeText(data.page.hero.title), lang).toBe(entry('hero.title'));
+      expect(normalizeText(data.page.hero.eyebrow), lang).toBe(entry('hero.eyebrow'));
+      const all = claimed(lang).map(normalizeText);
+      const sym = data.page.demo.messages.filter((message) => message.from === 'sym');
+      expect(sym.length).toBeGreaterThanOrEqual(4);
+      for (const message of sym) expect(all, `${lang} : ${message.text}`).toContain(normalizeText(message.text));
+    }
+  });
+
+  test('une phrase factuelle ajoutée hors registre fait échouer le contrôle, même sans chiffre ; un libellé connu passe', () => {
+    const extra = 'Il passe là où personne ne passe.';
+    expect(unsourced([...texts(landing('fr').page.far), extra], claimed('fr'), LANDING_LABELS.fr)).toEqual([extra]);
+    expect(unsourcedRemainder(`Il va loin ${extra}`, ['Il va loin'])).toBe(extra);
+    expect(unsourcedRemainder('Il va loin', ['Il va loin'])).toBe('');
+  });
+
+  test('la liste blanche ne porte que des titres et libellés : pas de phrase, aucune entrée du registre', () => {
+    for (const lang of LANGS) {
+      const entries = new Set(registry.claims.map((claim) => normalizeText(claim[lang])));
+      for (const label of LANDING_LABELS[lang]) {
+        expect(label.length, label).toBeLessThanOrEqual(45);
+        expect(label, label).not.toMatch(/[.:;!]$/);
+        expect(entries.has(normalizeText(label)), label).toBe(false);
+      }
+    }
+  });
+});
+
+describe('assert_landing_csp_strict : _headers du repli Cloudflare Pages, sur le chemin de base que le repli sert', () => {
+  test('servi à la racine (base /) : une règle par adresse de chaque page, URL propre, .html et index.html compris', () => {
+    expect(landingHeaderPaths('/')).toEqual(['/', '/index.html', '/fr/', '/fr/index.html', '/legal/privacy', '/legal/privacy.html', '/legal/legal-notice', '/legal/legal-notice.html', '/fr/legal/confidentialite', '/fr/legal/confidentialite.html', '/fr/legal/mentions-legales', '/fr/legal/mentions-legales.html']);
+    const file = buildHeadersFile(landingHeaderPaths('/'), "default-src 'none'");
+    for (const path of landingHeaderPaths('/')) expect(file, path).toContain(`\n${path}\n  Content-Security-Policy: default-src 'none'; frame-ancestors 'none'\n`.slice(path === '/' ? 1 : 0));
+    expect(file.match(/X-Content-Type-Options: nosniff/g)).toHaveLength(12);
+  });
+
+  test('servi sous /sym/ : les mêmes règles, préfixées par la base', () => {
+    expect(landingHeaderPaths('/sym/')).toEqual(landingHeaderPaths('/').map((path) => `/sym${path}`));
+    expect(landingHeaderPaths('/sym')).toEqual(landingHeaderPaths('/sym/'));
+  });
+});
+
+describe('assert_landing_no_signup : le contrôle vise les liens et les boutons, pas le texte courant', () => {
+  test('« Aucune inscription. Tu télécharges, tu lances. » (maquette validée, 4.11b, D-60) passe ; un lien ou un bouton d\'inscription ou de liste d\'attente échoue', () => {
+    expect(signupCtas('<body><p>Aucune inscription. Tu télécharges, tu lances.</p><p>No sign-up. Download it, run it.</p></body>')).toEqual([]);
+    expect(signupCtas('<body><a href="https://github.com/x">GitHub</a><button type="button">Copier la commande</button></body>')).toEqual([]);
+    for (const html of ['<a href="/waitlist">Rejoindre</a>', '<a href="https://x.example/">S\'inscrire</a>', '<button type="button">Sign up</button>', '<a href="https://x.example/newsletter">Suivre</a>', '<a href="/x"><span>Inscris-toi</span></a>', '<a href="/liste-d-attente">Liste</a>']) {
+      expect(signupCtas(`<body>${html}</body>`), html).not.toEqual([]);
+    }
+  });
+});
+
+describe('suivi : écarts connus, repris par d\'autres tâches (D-51, D-60)', () => {
+  // F-20261002-05, D-60 : la landing de 4.11 a la structure de 22 § 2.2 mais pas encore le texte ni la mise en page de la planche.
+  test.todo('4.11b : la landing reprend mot pour mot la planche Landing.dc.html (titre DA barré « ~~« Je ne le ferai pas. »~~ SYM 👻 : Trop tard, c\'est fait. », eyebrow « PRÉ-VERSION », carte « DANS TON IA · OUTILS SYM », « Ce qui change pour toi », « Trois étapes, zéro prise de tête. », « Aucune inscription. Tu télécharges, tu lances. », CTA final « Ta prochaine donnée ? »), avec test de chaîne fr et en');
+  // D-51 : listes P, L et marques provisoires dans apps/docs/landing/lexicon ; 22 § 2.5 et 20 § 2.2 veulent un seul régime partagé.
+  // 22b § 2 et § 4 : la page « Usage responsable » appartient à 4.8 ; elle n'existe qu'en français, au vouvoiement, et ne porte pas encore
+  // les engagements responsible.* mot pour mot ni le lien vers leur preuve. Le test rejoindra le job vitrine (ce dossier) avec elle.
+  test.todo('assert_responsible_use_claims_registered (4.8) : chaque engagement public de la page « Usage responsable », fr et en, est égal mot pour mot à son entrée relue responsible.* de claims.json, avec un lien vers sa preuve ; une entrée bloqué ou à relire affichée fait échouer');
+  // 22b § 1 : le registre est .github/claims.json (source) et .github/CLAIMS.md (généré) ; le générateur et son contrôle de fraîcheur sont livrés par 4.12.
+  test.todo('4.12 : .github/CLAIMS.md est généré depuis .github/claims.json et à jour de sa source (assert_readme_claims_registered)');
+  test.todo('3.19 : lexicon.ts lit les listes P, L et marques partagées de packages/i18n (forbidden.<langue>.txt) ; les copies de apps/docs/landing/lexicon disparaissent');
 });
 
 describe('assert_landing_no_bypass_copy : un seul régime de lexique', () => {

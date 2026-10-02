@@ -58,3 +58,17 @@ export function pngSize(bytes: Buffer): { width: number; height: number } {
   if (bytes.subarray(1, 4).toString('ascii') !== 'PNG') throw new Error('pas un PNG');
   return { width: bytes.readUInt32BE(16), height: bytes.readUInt32BE(20) };
 }
+
+/** Mots d'un appel à s'inscrire ou à rejoindre une liste d'attente, dans le texte ou l'adresse d'un lien ou d'un bouton. */
+const SIGNUP = /waitlist|wait-list|liste[ -]d[’'-]attente|newsletter|inscri|sign[ -]?up|register|s[’']abonner|subscribe/i;
+
+/**
+ * assert_landing_no_signup (22b § 2) : liens (`<a>`, texte et `href`) et boutons (`<button>`) qui mènent à une inscription ou à une liste
+ * d'attente. Le texte courant n'est pas visé : « Aucune inscription. » (maquette validée, D-60) dit l'inverse d'un appel à s'inscrire.
+ */
+export function signupCtas(html: string): string[] {
+  const body = bodyOf(html);
+  const anchors = [...body.matchAll(/<a\b([^>]*)>([\s\S]*?)<\/a>/g)].map((match) => `${/\shref="([^"]*)"/.exec(match[1] ?? '')?.[1] ?? ''} ${visibleText(`<body>${match[2] ?? ''}`)}`);
+  const buttons = [...body.matchAll(/<button\b[^>]*>([\s\S]*?)<\/button>/g)].map((match) => visibleText(`<body>${match[1] ?? ''}`));
+  return [...anchors, ...buttons].map((text) => decodeEntities(text).trim()).filter((text) => SIGNUP.test(text));
+}

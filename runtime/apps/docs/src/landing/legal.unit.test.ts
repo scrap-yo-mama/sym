@@ -95,6 +95,18 @@ describe('pages juridiques de la landing : registre, mentions, éléments à fou
     }
   });
 
+  test('la Confidentialité dit que les agrégats de trafic du dépôt (traffic-archive.yml) sont archivés en artefact PUBLIC, sans adresse IP ni compte', () => {
+    // GitHub réserve ces agrégats aux comptes qui ont le droit d'écrire ; un artefact d'un dépôt public se télécharge par tout compte connecté.
+    expect(source('fr', 'privacy')).toMatch(/## Ce que le dépôt mesure/);
+    expect(source('fr', 'privacy')).toMatch(/agrégats de trafic[^.]*\./);
+    expect(source('fr', 'privacy')).toMatch(/publi(?:c|que)[^.]*toute personne connectée à GitHub/);
+    expect(source('fr', 'privacy')).toMatch(/ni adresse IP ni compte/);
+    expect(source('en', 'privacy')).toMatch(/## What the repository measures/);
+    expect(source('en', 'privacy')).toMatch(/traffic aggregates[^.]*\./);
+    expect(source('en', 'privacy')).toMatch(/public[^.]*anyone signed in to GitHub/);
+    expect(source('en', 'privacy')).toMatch(/no IP address and no account/);
+  });
+
   test('les mentions légales nomment l\'hébergeur et gardent un champ marqué pour l\'éditeur, à compléter avant la mise en ligne', () => {
     expect(source('fr', 'notice')).toMatch(/GitHub, Inc\./);
     expect(source('fr', 'notice')).toMatch(/\[À compléter avant la mise en ligne : nom, forme juridique, adresse et e-mail de l'éditeur\.\]/);

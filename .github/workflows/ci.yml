@@ -90,8 +90,9 @@ jobs:
   vitrine:
     # Tâche 4.11 (22b § 5) : gates de la landing sur la préproduction, c'est-à-dire le build de production du commit servi par un
     # serveur statique local qui reproduit GitHub Pages (chemin de base /sym/, aucun en-tête, CSP en balise meta). Rien n'est publié ni
-    # déployé : GitHub Pages n'est touché qu'au GO. Les tests de contenu et du site construit (assert_landing_*) tournent aussi dans le job
-    # docs ; ici le volet Chromium : cookie, requêtes tierces, traceurs, CSP vue par le navigateur, axe, mouvement, budgets de poids.
+    # déployé : GitHub Pages n'est touché qu'au GO. Critère de 4.11 : TOUS les assert_landing_* tournent ici, les tests de contenu et du
+    # site construit (vitest, projets unit et contract, apps/docs/src/landing ; le job docs les rejoue avec le reste du site) puis le volet
+    # Chromium : cookie, requêtes tierces, traceurs, CSP vue par le navigateur, axe, mouvement, budgets de poids.
     # Le volet « liens externes en 200 » de assert_landing_links_resolve (pnpm --filter @runtime/docs landing:links) ouvre des connexions
     # sortantes vers le dépôt public : il ne tourne pas ici (une PR ne dépend pas de l'état du dépôt public), mais avant le déploiement
     # dans pages.yml (mise en ligne, GO), dans release.yml avant toute publication, et chaque semaine après (landing-production.yml).
@@ -109,6 +110,8 @@ jobs:
           node-version-file: runtime/.node-version
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
+      - name: Landing, contenu et site construit (assert_landing_* hors navigateur)
+        run: pnpm vitest run --project unit --project contract apps/docs/src/landing
       - name: Chromium de Playwright
         run: pnpm exec playwright install --with-deps chromium
       - name: Landing, préproduction (build de production servi comme GitHub Pages), gates Chromium

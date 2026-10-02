@@ -18,6 +18,20 @@ export const LEGAL_REFERENCE_LANGUAGE: Lang = 'fr';
 /** Préfixe `base` (« /sym/ ») + chemin (« fr/ ») → « /sym/fr/ ». */
 export const withBasePath = (base: string, path: string): string => `${base.endsWith('/') ? base : `${base}/`}${path.replace(/^\/+/, '')}`;
 
+/**
+ * Adresses qui servent chaque page de la landing sous `base`, pour `_headers` du repli Cloudflare Pages (22 § 2.9) : l'URL propre et le
+ * fichier lui-même (`index.html` d'un dossier, `.html` d'une page), sinon une page jointe par son fichier perd en silence frame-ancestors
+ * et nosniff. `base` est celle du build (DOCS_BASE) : le repli construit le site avec le chemin qu'il sert (`/` à la racine d'un domaine),
+ * les liens et `_headers` en dérivent ensemble.
+ */
+export function landingHeaderPaths(base: string): string[] {
+  const pages = [...Object.values(HOME_PATHS), ...Object.values(LEGAL_PATHS).flatMap((legal) => Object.values(legal))];
+  return pages.flatMap((path) => {
+    const clean = withBasePath(base, path);
+    return [clean, path === '' || path.endsWith('/') ? `${clean}index.html` : `${clean}.html`];
+  });
+}
+
 /** Chemin (sans base) vers lequel pointe un lien interne ; `undefined` pour une ancre ou un lien externe. */
 export function internalPath(href: Href): string | undefined {
   switch (href.to) {

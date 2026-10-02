@@ -26,6 +26,10 @@ Si tu choisis un thème clair ou sombre, ton navigateur garde ce choix dans son 
 
 Ce site est servi par GitHub Pages. Comme tout hébergeur web, GitHub peut enregistrer des données techniques quand ton navigateur demande une page, comme ton adresse IP, l'heure de la requête et le user agent de ton navigateur. Nous ne recevons pas ces journaux. La [déclaration de confidentialité](https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement) de GitHub décrit ce qu'il en fait.
 
+## Ce que le dépôt mesure
+
+Une fois le site en ligne, le dépôt GitHub archive chaque semaine les agrégats de trafic que GitHub lui fournit : nombre de vues et de clones, domaines référents et chemins les plus consultés. Ces totaux ne contiennent ni adresse IP ni compte. GitHub les réserve aux personnes qui ont le droit d'écrire sur le dépôt, mais l'archive est un fichier public du dépôt, que toute personne connectée à GitHub peut télécharger.
+
 ## Les liens vers d'autres sites
 
 Les liens vers GitHub, Render ou Railway envoient une requête à ces services seulement quand tu cliques dessus. Leurs propres politiques de confidentialité s'appliquent ensuite.

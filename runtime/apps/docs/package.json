@@ -15,7 +15,8 @@
     "landing:probe": "node scripts/landing-probe.ts",
     "landing:go": "node scripts/landing-go.ts",
     "landing:links": "node scripts/landing-links.ts",
-    "landing:stars": "node scripts/landing-stars.ts"
+    "landing:stars": "node scripts/landing-stars.ts",
+    "landing:pages-origin": "node scripts/landing-pages-origin.ts"
   },
   "dependencies": {
     "@runtime/ui": "workspace:*"

@@ -3,6 +3,11 @@
 // en-tête. Les empreintes sha256 des scripts en ligne (thème sombre et détection macOS de VitePress) sont calculées au build à
 // partir du HTML produit, jamais écrites à la main. `frame-ancestors` est ignoré dans une balise meta : il n'y figure pas
 // (perte consignée) ; sur le repli Cloudflare Pages, `_headers` le rétablit.
+// `'self'` (forme imposée par 22 § 2.9) vaut l'origine `https://<propriétaire>.github.io`, que partagent TOUS les sites Pages d'un même
+// propriétaire : un autre dépôt du propriétaire avec Pages pourrait servir des scripts et des feuilles que cette politique autorise. Une
+// source restreinte par chemin (`https://<propriétaire>.github.io/<dépôt>/assets/`) ne marcherait pas sur la préproduction servie en
+// local (autre origine) et s'écarterait de la politique spécifiée ; la règle retenue est donc : ce dépôt est le SEUL site Pages de son
+// propriétaire, vérifié avant la mise en ligne (pages.yml) et chaque semaine (landing-production.yml) par `landing:pages-origin`.
 import { createHash } from 'node:crypto';
 
 /** Contenu des scripts en ligne exécutables d'un document : ceux qui exigent une empreinte. Un bloc de données (JSON-LD) n'est pas exécuté. */
@@ -56,7 +61,8 @@ export function cspOf(html: string): string | undefined {
 /**
  * `_headers` du repli Cloudflare Pages (22 § 2.9) : la même politique que les balises meta (mêmes empreintes, lues dans le HTML
  * construit), plus `frame-ancestors 'none'` et les en-têtes que GitHub Pages ne permet pas de poser. Réservé aux pages de la landing :
- * les pages de doc chargent le moteur de recherche (WebAssembly) et gardent leur propre régime.
+ * les pages de doc chargent le moteur de recherche (WebAssembly) et gardent leur propre régime. `paths` : `landingHeaderPaths(base)`,
+ * toutes les adresses de chaque page sous le chemin de base du build.
  */
 export function buildHeadersFile(paths: readonly string[], csp: string): string {
   const rule = (path: string): string =>

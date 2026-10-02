@@ -5,7 +5,8 @@
 // - assert_landing_links_resolve : le volet « liens externes en 200 » tourne avant le déploiement et à la release (déclencheur
 //   « PR et release » de 22b § 4 : la PR joue le volet interne, sans connexion sortante) ;
 // - identité : PUBLIC_REPOSITORY égale le dépôt qui publie (22b § 1) ;
-// - le jeton d'écriture d'issues n'est visible que de l'étape qui crée l'issue ;
+// - le droit d'écrire des issues n'appartient qu'au job « report », séparé du job qui lance du code tiers ;
+// - release.yml : liens externes dans un job sans droit d'écriture ; pages.yml : l'origine Pages n'est partagée avec aucun autre site ;
 // - l'archivage hebdomadaire du trafic GitHub existe, désactivé jusqu'au GO comme la sonde de production.
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { describe, expect, test } from 'vitest';
@@ -13,7 +14,7 @@ import { parse } from 'yaml';
 
 const workflowsDir = new URL('../../../../../.github/workflows/', import.meta.url);
 type Step = { name?: string; run?: string; uses?: string; env?: Record<string, string>; if?: string; with?: Record<string, unknown> };
-type Job = { needs?: string | string[]; env?: Record<string, string>; steps: Step[]; permissions?: Record<string, string> };
+type Job = { needs?: string | string[]; if?: string; environment?: unknown; env?: Record<string, string>; steps: Step[]; permissions?: Record<string, string> };
 type Workflow = { on: Record<string, unknown> | null; jobs: Record<string, Job>; permissions?: Record<string, string> };
 const source = (file: string): string => readFileSync(new URL(file, workflowsDir), 'utf8');
 const workflow = (file: string): Workflow => parse(source(file)) as Workflow;
@@ -47,17 +48,23 @@ describe('assert_landing_links_resolve : liens externes en 200 avant la mise en 
     expect(wf.jobs['deploy']?.needs).toBe('build');
   });
 
-  test('release.yml vérifie les liens externes de la landing avant toute publication', () => {
-    const release = workflow('release.yml').jobs['release'];
+  test('release.yml vérifie les liens externes de la landing dans un job à part, sans droit d\'écriture, dont dépend la release', () => {
+    const wf = workflow('release.yml');
+    const links = wf.jobs['landing-links'];
+    const release = wf.jobs['release'];
+    expect(links, 'job landing-links absent de release.yml').toBeDefined();
     expect(release).toBeDefined();
-    if (!release) return;
-    const links = stepIndex(release, /landing:links/);
-    expect(links, 'landing:links absent de release.yml').toBeGreaterThanOrEqual(0);
-    // Le site est construit avant, dans une étape antérieure ou plus haut dans la même étape.
-    const build = stepIndex(release, /docs:build/);
+    if (!links || !release) return;
+    // Le build VitePress (binaire natif de Pagefind) et les connexions sortantes ne tournent pas dans le job qui signe et publie.
+    expect(links.permissions).toEqual({ contents: 'read' });
+    expect(links.environment).toBeUndefined();
+    const build = stepIndex(links, /docs:build/);
+    const check = stepIndex(links, /landing:links/);
     expect(build).toBeGreaterThanOrEqual(0);
-    expect(build < links || (release.steps[links]?.run ?? '').indexOf('docs:build') < (release.steps[links]?.run ?? '').indexOf('landing:links')).toBe(true);
-    expect(links).toBeLessThan(release.steps.findIndex((step) => (step.uses ?? '').startsWith('docker/login-action')));
+    expect(check).toBeGreaterThanOrEqual(build);
+    if (check === build) expect((links.steps[check]?.run ?? '').indexOf('docs:build')).toBeLessThan((links.steps[check]?.run ?? '').indexOf('landing:links'));
+    expect([release.needs ?? []].flat()).toContain('landing-links');
+    expect(stepIndex(release, /landing:links|docs:build/), 'le job release ne construit plus le site').toBe(-1);
   });
 
   test('le commentaire du job vitrine de ci.yml dit où tourne le volet externe, sans promesse fausse', () => {
@@ -82,16 +89,46 @@ describe('identité : PUBLIC_REPOSITORY égale le dépôt qui publie (22b § 1)'
   });
 });
 
-describe('landing-production.yml : le jeton d\'issues n\'est visible que de l\'étape qui crée l\'issue', () => {
-  test('aucun GH_TOKEN au niveau du job ; seule l\'étape « gh issue create » le reçoit', () => {
-    const job = workflow('landing-production.yml').jobs['production'];
-    expect(job).toBeDefined();
-    if (!job) return;
-    expect(job.env?.['GH_TOKEN']).toBeUndefined();
-    const withToken = job.steps.filter((step) => step.env?.['GH_TOKEN'] !== undefined);
-    expect(withToken).toHaveLength(1);
-    expect(withToken[0]?.run).toMatch(/gh issue create/);
-    expect(withToken[0]?.if).toBe('failure()');
+describe('landing-production.yml : le droit d\'écrire des issues n\'appartient qu\'à un job « report » qui ne lance aucun code tiers', () => {
+  test('le job production reste en lecture seule ; le job report (needs production, if failure()) a seul issues: write et ne fait que créer l\'issue', () => {
+    const wf = workflow('landing-production.yml');
+    const production = wf.jobs['production'];
+    const report = wf.jobs['report'];
+    expect(production).toBeDefined();
+    expect(report, 'job report absent').toBeDefined();
+    if (!production || !report) return;
+    expect(production.permissions).toEqual({ contents: 'read' });
+    expect(production.steps.some((step) => step.env?.['GH_TOKEN'] !== undefined || /gh issue/.test(step.run ?? ''))).toBe(false);
+    expect(report.needs).toBe('production');
+    expect(report.if).toBe('failure()');
+    expect(report.permissions).toEqual({ issues: 'write' });
+    // Aucun checkout, aucune installation, aucune action tierce : une seule commande gh, la seule à recevoir le jeton.
+    expect(report.steps).toHaveLength(1);
+    expect(report.steps[0]?.uses).toBeUndefined();
+    expect(report.steps[0]?.run).toMatch(/^gh issue create /);
+    expect(report.steps[0]?.env?.['GH_TOKEN']).toBe('${{ github.token }}');
+  });
+
+  test('le commentaire ne promet plus une isolation à l\'étape près', () => {
+    expect(source('landing-production.yml')).not.toMatch(/n'est visible que de cette étape/);
+    expect(source('landing-production.yml')).toMatch(/job « report »/);
+  });
+});
+
+describe('assert_landing_csp_strict : \'self\' = l\'origine <propriétaire>.github.io, partagée par tous les sites Pages du propriétaire', () => {
+  test('pages.yml refuse la mise en ligne si un autre dépôt du propriétaire publie un site Pages, avant le téléversement', () => {
+    const build = workflow('pages.yml').jobs['build'];
+    expect(build).toBeDefined();
+    if (!build) return;
+    const guard = stepIndex(build, /landing:pages-origin/);
+    expect(guard, 'landing:pages-origin absent de pages.yml').toBeGreaterThanOrEqual(0);
+    expect(guard).toBeLessThan(build.steps.findIndex((step) => (step.uses ?? '').startsWith('actions/upload-pages-artifact')));
+    expect(build.steps[guard]?.env?.['GITHUB_TOKEN']).toBe('${{ github.token }}');
+  });
+
+  test('la sonde hebdomadaire de production le revérifie (un autre dépôt peut activer Pages après la mise en ligne)', () => {
+    const production = workflow('landing-production.yml').jobs['production'];
+    expect(production && stepIndex(production, /landing:pages-origin/)).toBeGreaterThanOrEqual(0);
   });
 });
 
@@ -107,10 +144,39 @@ describe('archivage hebdomadaire du trafic GitHub (22 § 2.10, 22b § 5) : cré�
     expect(steps.some((step) => (step.uses ?? '').startsWith('actions/upload-artifact@'))).toBe(true);
     expect(wf.permissions).toEqual({ contents: 'read' });
   });
+
+  test('le commentaire dit que l\'archive est publique (tout compte connecté la télécharge) et ne parle pas de comptes que l\'API ne renvoie pas', () => {
+    const comment = source('traffic-archive.yml').split('\nname:')[0] ?? '';
+    expect(comment).toMatch(/artefact PUBLIC/);
+    expect(comment).toMatch(/tout compte GitHub connecté/);
+    expect(comment).toMatch(/Confidentialité/);
+    expect(comment).not.toMatch(/des comptes/);
+  });
 });
 
 describe('workflows de la landing : YAML valide (un nom d\'étape avec « : » casse tout le fichier)', () => {
   test('chaque workflow du dépôt se lit en YAML strict', () => {
     for (const file of readdirSync(workflowsDir).filter((name) => name.endsWith('.yml'))) expect(() => parse(source(file)), file).not.toThrow();
+  });
+});
+
+describe('job vitrine (critère de 4.11 : « tous les assert_landing_* verts dans le job vitrine »)', () => {
+  // Les tests de contenu et du site construit (vitest, projets unit et contract) ET le volet Chromium tournent dans le même job.
+  const landingVitest = /vitest run --project unit --project contract apps\/docs\/src\/landing|landing:test/;
+
+  test('ci.yml : le job vitrine lance les tests vitest de la landing, en plus du volet Chromium et de la sonde', () => {
+    const vitrine = workflow('ci.yml').jobs['vitrine'];
+    expect(vitrine).toBeDefined();
+    if (!vitrine) return;
+    expect(stepIndex(vitrine, landingVitest), 'vitest de la landing absent du job vitrine').toBeGreaterThanOrEqual(0);
+    expect(stepIndex(vitrine, /test:e2e/)).toBeGreaterThanOrEqual(0);
+    const ci = source('ci.yml');
+    expect(ci.slice(ci.indexOf('  vitrine:'), ci.indexOf('  unit:')), 'le commentaire ne renvoie plus ces tests au seul job docs').not.toMatch(/tournent aussi dans le job\s*#?\s*docs/);
+  });
+
+  test('ci:local rejoue la même étape dans son job vitrine', () => {
+    const local = readFileSync(new URL('../../../../scripts/ci-local.ts', import.meta.url), 'utf8');
+    const steps = local.split('\n').filter((line) => line.includes("job: 'vitrine'"));
+    expect(steps.some((line) => /'vitest', 'run', '--project', 'unit', '--project', 'contract', 'apps\/docs\/src\/landing'|'landing:test'/.test(line)), steps.join('\n')).toBe(true);
   });
 });

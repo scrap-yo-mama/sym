@@ -32,6 +32,39 @@
       ]
     },
     {
+      "id": "hero.eyebrow",
+      "fr": "Open source · Auto-hébergé · Sans compte",
+      "en": "Open source · Self-hosted · No account",
+      "proof": [
+        "file:.github/README.md",
+        "inv:INV9",
+        "page:explications/telemetrie"
+      ],
+      "reviewed": "2026-10-02",
+      "status": "relu",
+      "reviewer": "agent",
+      "surfaces": [
+        "landing"
+      ],
+      "note": "Surtitre du hero (22 § 2.5) : « Sans compte » = aucun compte chez l'éditeur (instance auto-hébergée, aucune inscription) ; un hébergeur tiers (Render, Railway) demande le sien, dit à côté de son bouton."
+    },
+    {
+      "id": "hero.title",
+      "fr": "Décris les données. SYM 👻 s'occupe du reste.",
+      "en": "Describe the data. SYM 👻 handles the rest.",
+      "proof": [
+        "decision:D-46",
+        "inv:INV1"
+      ],
+      "reviewed": "2026-10-02",
+      "status": "relu",
+      "reviewer": "agent",
+      "surfaces": [
+        "landing"
+      ],
+      "note": "H1 de 22 § 2.5 ; le titre DA barré de la planche (F-20261002-05) arrive avec 4.11b (D-60)."
+    },
+    {
       "id": "hero.sub",
       "fr": "Tu valides le schéma avant toute collecte. L'API tourne chez toi et se répare quand le site change.",
       "en": "You approve the schema before anything is collected. The API runs on your server and repairs itself when the site changes.",
@@ -115,6 +148,8 @@
       "fr": "Démo enregistrée : aucun modèle n'a été appelé.",
       "en": "Recorded demo: no model was called.",
       "proof": [
+        "file:runtime/apps/docs/src/landing/content.ts",
+        "page:tutoriels/quickstart",
         "test:assert_landing_no_third_party_request"
       ],
       "reviewed": "2026-10-02",
@@ -123,7 +158,94 @@
       "surfaces": [
         "landing"
       ],
-      "note": "Replay écrit à la main d'après le scénario de M2 ; la génération depuis l'enregistrement d'enquête de la démo sans clé est en V1.1 (assert_landing_demo_matches_recording)."
+      "note": "En V1, le replay est écrit à la main (bulles de runtime/apps/docs/src/landing/content.ts) d'après le scénario de la démo sans clé (tutoriel « Démarrage rapide », cas D0, mode démo de 3.10) : aucun modèle n'est appelé pendant la lecture. Sa génération depuis l'enregistrement d'enquête est en V1.1 (assert_landing_demo_matches_recording) ; d'ici là, un humain relit chaque bulle contre le scénario au GO.",
+      "tasks": [
+        "3.10"
+      ]
+    },
+    {
+      "id": "demo.sym.ack",
+      "fr": "OK, je m'en occupe.",
+      "en": "Got it, I'm on it.",
+      "proof": [
+        "decision:D-46",
+        "file:runtime/apps/docs/src/landing/content.ts"
+      ],
+      "reviewed": "2026-10-02",
+      "status": "relu",
+      "reviewer": "agent",
+      "surfaces": [
+        "landing"
+      ],
+      "note": "Bulle de SYM dans le replay écrit à la main (V1)."
+    },
+    {
+      "id": "demo.sym.robots",
+      "fr": "robots.txt lu : chemin autorisé. Pas d'API publique. Premier essai : requête simple sur le HTML, les livres sont dans la page.",
+      "en": "robots.txt read: path allowed. No public API. First attempt: a plain request on the HTML, the books are in the page.",
+      "proof": [
+        "inv:INV11",
+        "inv:INV2",
+        "test:assert_robots_respected",
+        "test:assert_cheapest_first_logged"
+      ],
+      "reviewed": "2026-10-02",
+      "status": "relu",
+      "reviewer": "agent",
+      "surfaces": [
+        "landing"
+      ],
+      "note": "Bulle de SYM dans le replay écrit à la main (V1), d'après le scénario de la démo sans clé."
+    },
+    {
+      "id": "demo.sym.schema",
+      "fr": "Voilà le schéma : titre, prix, disponibilité, note, URL. Je continue ?",
+      "en": "Here's the schema: title, price, availability, rating, URL. Shall I go on?",
+      "proof": [
+        "inv:INV1",
+        "test:assert_output_schema_enforced"
+      ],
+      "reviewed": "2026-10-02",
+      "status": "relu",
+      "reviewer": "agent",
+      "surfaces": [
+        "landing"
+      ],
+      "note": "Bulle de SYM dans le replay écrit à la main (V1) : le schéma est validé avant toute collecte."
+    },
+    {
+      "id": "demo.sym.done",
+      "fr": "C'est fait. L'API est prête, tu peux la rejouer quand tu veux.",
+      "en": "Done. The API is ready, replay it whenever you like.",
+      "proof": [
+        "inv:INV1",
+        "page:tutoriels/quickstart"
+      ],
+      "reviewed": "2026-10-02",
+      "status": "relu",
+      "reviewer": "agent",
+      "surfaces": [
+        "landing"
+      ],
+      "note": "Bulle de SYM dans le replay écrit à la main (V1)."
+    },
+    {
+      "id": "demo.sym.refusal",
+      "fr": "J'ai regardé. Ce site refuse les robots (robots.txt). Je m'arrête là, sans insister. Voilà ce que je peux faire à la place : chercher l'API officielle, trouver une autre source, ou te donner le contact de l'éditeur.",
+      "en": "I took a look. This site keeps robots out (robots.txt). I'm stopping here, without pushing. Here's what I can do instead: look for an official API, find another source, or give you the publisher's contact.",
+      "proof": [
+        "inv:INV11",
+        "inv:INV5",
+        "inv:INV6",
+        "test:assert_robots_respected"
+      ],
+      "reviewed": "2026-10-02",
+      "status": "relu",
+      "reviewer": "agent",
+      "surfaces": [
+        "landing"
+      ],
+      "note": "Bulle de SYM dans le replay écrit à la main (V1) : refus honnête avec alternatives (20 § 3), site fictif en .example."
     },
     {
       "id": "license",
@@ -286,6 +408,38 @@
       "surfaces": [
         "landing"
       ]
+    },
+    {
+      "id": "far.hook",
+      "fr": "Là où les autres lâchent, SYM 👻 continue.",
+      "en": "Where others give up, SYM 👻 keeps going.",
+      "proof": [
+        "decision:D-46"
+      ],
+      "reviewed": "2026-10-02",
+      "status": "relu",
+      "reviewer": "agent",
+      "surfaces": [
+        "landing"
+      ],
+      "note": "Accroche de « Il va loin » (22 § 2.6) : phrase comparative implicite, couverte par la garde juridique de 22 § 4 (relecture juridique au GO). Ce que « continuer » veut dire est borné par les cartes far.* et par INV5, INV6, INV11."
+    },
+    {
+      "id": "far.sub",
+      "fr": "Pas de sermon, pas de « je ne peux pas ». Il cherche, il trouve, il te livre une API.",
+      "en": "No lectures, no “I can't”. It digs, it finds, it hands you an API.",
+      "proof": [
+        "decision:D-46",
+        "inv:INV1",
+        "inv:INV2"
+      ],
+      "reviewed": "2026-10-02",
+      "status": "relu",
+      "reviewer": "agent",
+      "surfaces": [
+        "landing"
+      ],
+      "note": "Sous-titre de « Il va loin » (22 § 2.6, D-46). Quand un site refuse vraiment, SYM le dit et propose une autre piste (faq.anysite, INV6) : la phrase vise le ton, pas une promesse de passer partout."
     },
     {
       "id": "far.js",
@@ -474,13 +628,10 @@
       "reviewed": "2026-10-02",
       "status": "relu",
       "reviewer": "agent",
-      "tasks": [
-        "4.10"
-      ],
       "surfaces": [
         "landing"
       ],
-      "note": "Entrée liée à 4.10 (télémétrie opt-in) : à repasser « à relire » à sa livraison (22 § 3.2)."
+      "note": "Pas liée à 4.10 (télémétrie opt-in, « après V1.0, si retenu ») : la porte du GO demanderait une livraison qui n'aura pas lieu avant V1.0. Si 4.10 est livrée, réécrire « Aucune télémétrie » (« aucune télémétrie par défaut ») et repasser l'entrée « à relire » (22 § 3.2)."
     },
     {
       "id": "faq.anysite",

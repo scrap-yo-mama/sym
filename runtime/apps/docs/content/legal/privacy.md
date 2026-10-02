@@ -26,6 +26,10 @@ If you choose a light or a dark theme, your browser keeps that choice in its loc
 
 This site is served by GitHub Pages. Like any web host, GitHub may log technical data when your browser asks for a page, such as your IP address, the time of the request and your browser's user agent. We do not receive these logs. GitHub's [privacy statement](https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement) describes what it does with them.
 
+## What the repository measures
+
+Once the site is live, the GitHub repository archives every week the traffic aggregates that GitHub gives it: number of views and clones, referring domains and most visited paths. These totals hold no IP address and no account. GitHub shows them only to people who can write to the repository, but the archive is a public file of the repository that anyone signed in to GitHub can download.
+
 ## Links to other sites
 
 Links to GitHub, Render or Railway send a request to those services only when you click them. Their own privacy policies apply from then on.

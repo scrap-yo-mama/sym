@@ -4,6 +4,9 @@
 # LANDING_URL (adresse avec son chemin de base, ex. https://<organisation>.github.io/<dépôt>/) et ajouter le déclencheur `schedule`
 # ci-dessous. Avant le GO, les mêmes contrôles tournent sur la préproduction (job `vitrine` de ci.yml, et pages.yml au moment de la
 # mise en ligne) ; l'archivage du trafic GitHub (22 § 2.10) a son propre workflow, traffic-archive.yml, au même déclencheur.
+# Droits : le job « production » lance du code tiers (installation, build, Chromium sur la page publique, liens sortants) et reste en
+# lecture seule. Le droit d'écrire des issues appartient au seul job « report », lancé après un échec, sans checkout ni installation ni
+# action tierce : une commande gh. Masquer le jeton aux étapes d'un même job ne suffirait pas (le processus du runner le détient).
 name: landing-production
 
 on:
@@ -14,16 +17,14 @@ on:
 permissions:
   contents: read
 
-defaults:
-  run:
-    working-directory: runtime
-
 jobs:
   production:
     runs-on: ubuntu-24.04
     permissions:
       contents: read
-      issues: write
+    defaults:
+      run:
+        working-directory: runtime
     env:
       LANDING_URL: ${{ vars.LANDING_URL }}
       PUBLIC_REPOSITORY: ${{ vars.PUBLIC_REPOSITORY }}
@@ -44,6 +45,10 @@ jobs:
       - name: Sonde de production (cookie, tiers, traceurs, CSP, formulaire)
         id: probe
         run: pnpm --filter @runtime/docs landing:probe "$LANDING_URL" --out ../../landing-probe-production.json
+      - name: Origine partagée (CSP self), aucun autre site Pages du propriétaire sur la même origine
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: pnpm --filter @runtime/docs landing:pages-origin
       - name: Liens externes du site construit sur ce commit (200, hors exceptions documentées)
         run: |
           pnpm docs:build
@@ -55,10 +60,16 @@ jobs:
           path: runtime/landing-probe-production.json
           if-no-files-found: ignore
           retention-days: 90
+
+  report:
+    needs: production
+    if: failure()
+    runs-on: ubuntu-24.04
+    permissions:
+      issues: write
+    steps:
       - name: Issue automatique en cas d'échec
-        if: failure()
-        # Le jeton d'écriture d'issues n'est visible que de cette étape : ni l'installation, ni Chromium, ni la sonde ne le voient.
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
+        run: >-
           gh issue create --repo "$GITHUB_REPOSITORY" --title "Contrôle hebdomadaire de la landing en échec" --body "Le contrôle de production de la landing a échoué : voir l'exécution $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"

@@ -1,7 +1,11 @@
 # Archivage hebdomadaire du trafic GitHub du dépôt public (22 § 2.10, 22b § 5) : la seule mesure de la V1, sans traceur. L'API de trafic
 # ne garde que 14 jours : chaque semaine, ses agrégats (vues, clones, référents et chemins populaires) sont archivés en artefact du dépôt
-# (rétention à valider). Aucune donnée personnelle (des comptes et des domaines, jamais une adresse IP ni un visiteur), aucun appel
-# depuis l'instance ni depuis la landing.
+# (rétention à valider). L'API ne renvoie que des totaux, des domaines référents et des chemins : aucune adresse IP, aucun visiteur,
+# aucun nom d'utilisateur. Aucun appel depuis l'instance ni depuis la landing.
+# Visibilité : GitHub réserve ces agrégats aux personnes qui ont le droit d'écrire sur le dépôt, mais l'artefact d'un dépôt public se
+# télécharge par tout compte GitHub connecté. L'archive est donc un artefact PUBLIC : choix assumé et dit dans la page Confidentialité de
+# la landing (« Ce que le dépôt mesure »). Pour la garder privée, il faudrait l'écrire dans un dépôt privé (jeton à grain fin limité à
+# ce dépôt) au lieu d'un artefact ; à trancher au GO.
 # Créé mais DÉSACTIVÉ, comme landing-production.yml : déclencheur manuel seul. Pour l'activer après la mise en ligne (⚠️ GO) : créer le
 # secret TRAFFIC_TOKEN (jeton à grain fin, lecture seule, permission « Administration : lecture » du seul dépôt public, que l'API de
 # trafic exige et que le jeton du workflow n'a pas), puis décommenter le déclencheur `schedule` ci-dessous.
