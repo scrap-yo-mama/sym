@@ -28,6 +28,14 @@ export type ProfileMode = (typeof PROFILE_MODES)[number];
 export type ProfileRef = { id: string; mode: ProfileMode };
 
 export type Viewport = { width: number; height: number };
+
+/**
+ * En-têtes que `extraHTTPHeaders` refuse (422 `invalid_option`), sans égard à la casse : `Host` et les en-têtes saut à saut
+ * (RFC 9110 § 7.6.1) sont posés par le navigateur, et tout `Proxy-*` (préfixe) par l'egress de la session (04c § 2).
+ */
+export const RESERVED_EXTRA_HEADERS = ['host', 'connection', 'keep-alive', 'te', 'trailer', 'transfer-encoding', 'upgrade'] as const;
+export const RESERVED_EXTRA_HEADER_PREFIXES = ['proxy-'] as const;
+
 export type Geolocation = { latitude: number; longitude: number; accuracy?: number };
 export type RecordingOptions = { trace?: boolean; har?: boolean; video?: boolean; console?: boolean; network?: boolean };
 

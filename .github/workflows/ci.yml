@@ -296,8 +296,11 @@ jobs:
 
   detect:
     # ADR 23 § 6 : paquets touchés depuis origin/main et leurs dépendants (`pnpm --filter "...[origin/main]"`). Sur un push de
-    # main, la base est le premier parent. Un fichier partagé du workspace (lockfile, catalogue, tsconfig, lint, ce workflow)
-    # rejoue tous les modules. Aucun filtre `paths:` : ce job tourne toujours et décide pour les jobs de module.
+    # main, la base est github.event.before (tous les commits du push, avance rapide comprise), avec repli sur HEAD~1 si elle
+    # est nulle ou inconnue ; HEAD~1 sert aussi au lancement manuel sur main. Un fichier partagé du workspace (lockfile,
+    # catalogue, tsconfig, lint, .npmrc, .node-version, scripts SPDX et licences du job browser, ce workflow) rejoue tous les
+    # modules. Aucun filtre `paths:` : ce job tourne toujours et décide pour les jobs de module. Script testé par
+    # modules/browser/tests/ci-detect.unit.test.ts (rejoué dans des dépôts jetables).
     runs-on: ubuntu-24.04
     outputs:
       browser: ${{ steps.affected.outputs.browser }}
@@ -315,16 +318,25 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - name: Paquets touchés et dépendants
         id: affected
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          BEFORE: ${{ github.event.before }}
         run: |
           set -euo pipefail
           base=origin/main
-          if [ "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)" ]; then base=HEAD~1; fi
+          if [ "$EVENT_NAME" = push ] && [ "$REF" = refs/heads/main ]; then
+            base=HEAD~1
+            if [ -n "${BEFORE:-}" ] && ! [[ "$BEFORE" =~ ^0+$ ]] && git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then base=$BEFORE; fi
+          elif [ "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)" ]; then
+            base=HEAD~1
+          fi
           echo "Base de comparaison : $base"
           pnpm --filter "...[$base]" ls --depth -1 --json > "$RUNNER_TEMP/affected.json"
           node -e 'const l = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")); for (const p of l) console.log(p.name);' "$RUNNER_TEMP/affected.json" | tee "$RUNNER_TEMP/affected.txt"
           browser=false
           if grep -Eq '^(@sym-browser/|@sym/contracts$)' "$RUNNER_TEMP/affected.txt"; then browser=true; fi
-          if ! git diff --quiet "$base" -- pnpm-workspace.yaml pnpm-lock.yaml package.json .pnpmfile.cjs tsconfig.base.json eslint.config.mjs ../.github/workflows/ci.yml; then
+          if ! git diff --quiet "$base" -- pnpm-workspace.yaml pnpm-lock.yaml package.json .pnpmfile.cjs .npmrc .node-version tsconfig.base.json eslint.config.mjs scripts/spdx-headers.ts scripts/check-licenses.ts ../.github/workflows/ci.yml; then
             echo "Fichier partagé du workspace modifié : tous les modules sont rejoués."
             browser=true
           fi

@@ -5,7 +5,7 @@ description: Lance la CI locale du module SYM Browser sous le verrou de test par
 
 # CI locale du module SYM Browser
 
-La CI locale rejoue le job `browser` de `.github/workflows/ci.yml` : installation gelée, build, types, lint (frontière comprise), tests du module et de `@sym/contracts`, en-têtes SPDX, puis image Docker (`id -u` ≠ 0).
+La CI locale rejoue le job `browser` de `.github/workflows/ci.yml` : installation gelée, build, types, lint (frontière comprise), tests du module et de `@sym/contracts`, en-têtes SPDX, puis image Docker lancée avec seccomp, `no-new-privileges` et `--cap-drop ALL` (uid ≠ 0, `Seccomp: 2`, aucune capacité, aucun binaire setuid).
 
 ## Procédure
 
@@ -15,6 +15,6 @@ La CI locale rejoue le job `browser` de `.github/workflows/ci.yml` : installatio
    pnpm --filter @sym-browser/module ci:local            # complet, image comprise
    pnpm --filter @sym-browser/module ci:local --skip-image   # sans Docker (dis-le dans ton rapport)
    ```
-3. Si ta tâche modifie un fichier partagé (`pnpm-workspace.yaml`, lockfile, `eslint.config.mjs`, `ci.yml`, `packages/contracts`, `packages/ui`) : lance aussi `pnpm ci:local` (suite complète de SYM).
+3. Si ta tâche modifie un fichier partagé (`pnpm-workspace.yaml`, lockfile, `.npmrc`, `.node-version`, `eslint.config.mjs`, `ci.yml`, `scripts/spdx-headers.ts`, `scripts/check-licenses.ts`, `packages/contracts`, `packages/ui`) : lance aussi `pnpm ci:local` (suite complète de SYM).
 4. Supprime ton verrou (`rmdir`), même en cas d'échec.
 5. Rapporte : commande, dernière ligne de sortie, étape en échec le cas échéant. Ne prétends jamais qu'une étape a tourné si elle a été sautée.
