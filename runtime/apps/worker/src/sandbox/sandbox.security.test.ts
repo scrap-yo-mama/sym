@@ -402,18 +402,24 @@ describe('assert_sandbox — démarrage et utilisateur de l’enfant', () => {
 // un collecteur en tube (systemd-coredump, apport), auquel le noyau n'applique pas RLIMIT_CORE.
 describe('assert_sandbox_no_core_dump', () => {
   test.skipIf(process.platform !== 'linux')('assert_sandbox_no_core_dump : enfant tué par RLIMIT_CPU (SIGXCPU), aucun vidage mémoire, même vers un collecteur en tube', async () => {
-    const r = await run('isolated-vm', 'while (true) {}', { timeoutMs: 15_000, cpuLimitSeconds: 1 });
+    const timeoutMs = 15_000;
+    const r = await run('isolated-vm', 'while (true) {}', { timeoutMs, cpuLimitSeconds: 1 });
     expect(r.outcome).toBe('timeout');
     expect(r.violations).toContainEqual({ reason: 'time_limit', detail: 'cpu' });
+    // Fin par le plafond CPU, avant l'échéance murale. Pas de borne murale plus serrée : la durée dépend de la charge de la
+    // machine (6,8 à 9,1 s mesurés sous charge) ; la preuve est /proc et le journal du noyau ci-dessous.
+    expect(r.durationMs).toBeLessThan(timeoutMs);
     // Hérité par l'enfant, lu dans /proc : RLIMIT_CORE d'un octet, souple et dure (sous la taille minimale d'un vidage vers un
     // fichier ; valeur que le noyau traite comme un refus pour un tube) ; coredump_filter nul (aucune page mémoire).
     expect(r.dump, JSON.stringify(r.dump)).toEqual({ coreLimit: '1 1', coredumpFilter: '00000000' });
-    // Un vidage en cours retarde la fin de l'enfant de plusieurs secondes (isolat compris).
-    expect(r.durationMs).toBeLessThan(6000);
-    // Collecteur en tube sur cette machine : le noyau journalise l'abandon du vidage pour CE processus.
+    // Collecteur en tube sur cette machine : le noyau journalise l'abandon du vidage pour CE processus. En CI (runner GitHub :
+    // apport en tube, sudo sans mot de passe), cette preuve est exigée ; ailleurs, la branche prise est journalisée.
     const pattern = readFileSync('/proc/sys/kernel/core_pattern', 'utf8');
     const kernel = spawnSync('sudo', ['-n', 'dmesg'], { encoding: 'utf8' });
-    if (pattern.startsWith('|') && kernel.status === 0) {
+    const checked = pattern.startsWith('|') && kernel.status === 0;
+    console.info(`assert_sandbox_no_core_dump : journal du noyau ${checked ? 'vérifié' : 'non vérifié'} (core_pattern ${JSON.stringify(pattern.trim().slice(0, 60))}, sudo -n dmesg : ${String(kernel.status)})`);
+    if (process.env.CI === 'true') expect(checked, `core_pattern ${pattern.trim()} ; dmesg ${String(kernel.status)} ${kernel.stderr.slice(0, 200)}`).toBe(true);
+    if (checked) {
       expect(r.pid).toBeDefined();
       expect(kernel.stdout).toMatch(new RegExp(`\\b${r.pid}\\(.*RLIMIT_CORE (?:is )?set to 1`));
     }

@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Bac à sable (INV7, tâche 1.5), niveau unitaire : borne d'isolated-vm, validation des ponts (dont fuzz), protocole IPC.
 // La suite hostile de bout en bout (`assert_sandbox`) est dans sandbox.security.test.ts (pnpm test:security).
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import fc from 'fast-check';
@@ -256,8 +257,14 @@ describe('utilisateur dédié, lanceur et plafond CPU (08 §3)', () => {
     expect(plain.command).toBe('/bin/sh');
     expect(plain.args.slice(2)).toEqual(['7', '/n', '--x', 'c.js']);
     expect(plain.args[1]).toMatch(/ulimit -S -t "\$0" && ulimit -H -t .* && exec \/usr\/bin\/env -i /);
-    // Linux : aucun vidage mémoire (assert_sandbox_no_core_dump) : RLIMIT_CORE d'un octet et coredump_filter nul, avant l'exec.
-    expect(plain.args[1]).toMatch(/&& \{ \[ ! -e \/proc\/self\/coredump_filter \] \|\| \{ echo 0 > \/proc\/self\/coredump_filter && \/usr\/bin\/prlimit --pid \$\$ --core=1:1; \}; \} && exec /);
+    // Linux : aucun vidage mémoire (assert_sandbox_no_core_dump) : RLIMIT_CORE d'un octet et coredump_filter nul, avant l'exec,
+    // SANS condition (aucune garde sur la présence d'un fichier : un /proc absent ou masqué fait échouer le lancement).
+    const linux = spawnPlan({ node: '/n', nodeArgs: ['--x'], script: 'c.js', cpuSeconds: 7, platform: 'linux' });
+    expect(linux.args[1]).toMatch(/ulimit -H -t \$\(\(\$0 \+ 1\)\) && echo 0 > \/proc\/self\/coredump_filter && \/usr\/bin\/prlimit --pid \$\$ --core=1:1 && exec \/usr\/bin\/env -i /);
+    // Hors Linux (développement) : ni coredump_filter ni prlimit.
+    const darwin = spawnPlan({ node: '/n', nodeArgs: ['--x'], script: 'c.js', cpuSeconds: 7, platform: 'darwin' });
+    expect(darwin.args[1]).not.toMatch(/coredump_filter|prlimit/);
+    expect(plain.args[1]).toBe(process.platform === 'linux' ? linux.args[1] : darwin.args[1]);
     const launched = spawnPlan({ node: '/n', nodeArgs: [], script: 'c.js', cpuSeconds: 3, launcher: '/l', uid: 1500, gid: 1501 });
     // Sous no-new-privileges (Render), le lanceur n'obtient ses capacités de fichier que si son appelant les détient : il
     // doit donc être exécuté par le worker lui-même, jamais par un shell intermédiaire (F-20261001-R01).
@@ -268,6 +275,15 @@ describe('utilisateur dédié, lanceur et plafond CPU (08 §3)', () => {
     expect(launched.uid).toBeUndefined();
     const root = spawnPlan({ node: '/n', nodeArgs: [], script: 'c.js', cpuSeconds: 3, uid: 1500, gid: 1501 });
     expect(root).toMatchObject({ uid: 1500, gid: 1501 });
+  });
+
+  // assert_sandbox_no_core_dump : échec fermé. Sur une machine sans /proc/self/coredump_filter (ici macOS, comme un Linux
+  // au /proc absent ou masqué), le plan Linux ne lance pas l'enfant au lieu de le lancer sans protection contre le vidage.
+  test.skipIf(existsSync('/proc/self/coredump_filter'))('plan Linux sans /proc/self/coredump_filter : l’enfant ne démarre pas', () => {
+    const plan = spawnPlan({ node: process.execPath, nodeArgs: ['-e', 'process.stdout.write("zz_test_started")'], cpuSeconds: 5, platform: 'linux' });
+    const r = spawnSync(plan.command, plan.args, { encoding: 'utf8', env: {} });
+    expect(r.stdout).not.toContain('zz_test_started');
+    expect(r.status).not.toBe(0);
   });
 
   test('Node de l’enfant : option `node` (SANDBOX_NODE) prise à la place de process.execPath', async () => {

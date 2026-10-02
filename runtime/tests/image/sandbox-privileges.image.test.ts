@@ -194,7 +194,7 @@ const { spawnPlan, sandboxOptionsFromEnv, ProcessSandboxEngine } = await import(
 const options = sandboxOptionsFromEnv(process.env);
 const CHILD = "const fs=require('fs');const s=fs.readFileSync('/proc/self/status','utf8');const f=k=>(new RegExp('^'+k+':\\\\s*(.*)$','m').exec(s)||[])[1]||'';" +
   "const rd=p=>{try{fs.readFileSync(p);return 'readable'}catch(e){return e.code}};" +
-  "process.stdout.write(JSON.stringify({uid:process.getuid(),inh:f('CapInh'),prm:f('CapPrm'),eff:f('CapEff'),amb:f('CapAmb'),nnp:Number(f('NoNewPrivs')),pid1Environ:rd('/proc/1/environ'),parentEnviron:rd('/proc/'+process.ppid+'/environ'),keys:Object.keys(process.env),core:(/^Max core file size\\s+(\\S+)\\s+(\\S+)/m.exec(fs.readFileSync('/proc/self/limits','utf8'))||[]).slice(1).join(' '),coredumpFilter:fs.readFileSync('/proc/self/coredump_filter','utf8').trim()}))";
+  "process.stdout.write(JSON.stringify({uid:process.getuid(),inh:f('CapInh'),prm:f('CapPrm'),eff:f('CapEff'),amb:f('CapAmb'),nnp:Number(f('NoNewPrivs')),pid1Environ:rd('/proc/1/environ'),parentEnviron:rd('/proc/'+process.ppid+'/environ'),keys:Object.keys(process.env),core:(/^Max core file size\\s+(\\S+)\\s+(\\S+)/m.exec(fs.readFileSync('/proc/self/limits','utf8'))||[]).slice(1).join(' '),coredumpFilter:fs.readFileSync('/proc/self/coredump_filter','utf8').trim(),userns:require('child_process').spawnSync('/usr/bin/unshare',['-U','/bin/true']).status}))";
 const plan = spawnPlan({ node: options.node ?? process.execPath, nodeArgs: ['-e', CHILD], cpuSeconds: 5, launcher: options.launcher, uid: options.uid, gid: options.gid });
 const child = spawnSync(plan.command, plan.args, { env: {}, encoding: 'utf8', cwd: '/app/apps/worker/dist/sandbox', uid: plan.uid, gid: plan.gid });
 try { out.sandbox = JSON.parse(child.stdout); } catch { out.sandbox = { error: child.status + ' ' + child.stderr.slice(0, 500) }; }
@@ -222,7 +222,7 @@ type ProbeReport = {
   sh: Pick<Proc, 'uid' | 'inh' | 'prm' | 'eff' | 'amb'>;
   page: string;
   chromium: Proc[];
-  sandbox: { uid: number; inh: string; prm: string; eff: string; amb: string; nnp: number; pid1Environ: string; parentEnviron: string; keys: string[]; core: string; coredumpFilter: string; error?: string };
+  sandbox: { uid: number; inh: string; prm: string; eff: string; amb: string; nnp: number; pid1Environ: string; parentEnviron: string; keys: string[]; core: string; coredumpFilter: string; userns: number | null; error?: string };
   probe: { uid: number; parentEnviron: string; noNewPrivs: boolean };
   run: { outcome: string; value: unknown; error?: string };
   stray: { uid: number; before: string; after: string };
@@ -350,6 +350,10 @@ describe('assert_sandbox_image_privileges — image sous les capacités de Rende
         expect(report.sandbox).toMatchObject({ uid: SANDBOX_UID, ...noCaps, nnp: 1, pid1Environ: 'EACCES', parentEnviron: 'EACCES', keys: [] });
         // assert_sandbox_no_core_dump (INV7) : aucun vidage mémoire possible, même vers un collecteur en tube de l'hôte.
         expect({ core: report.sandbox.core, coredumpFilter: report.sandbox.coredumpFilter }).toEqual({ core: '1 1', coredumpFilter: '00000000' });
+        // Risque résiduel consigné (docs/deploiement.md, « espaces de noms utilisateur ») : sous le profil seccomp livré, l'enfant
+        // du bac à sable (uid 1500) crée un espace de noms utilisateur. Trace, pas une exigence : un filtre seccomp propre à
+        // l'enfant (durcissement envisagé) ferait passer ce statut à non nul, et cette ligne serait à inverser.
+        expect(report.sandbox.userns, 'unshare -U sous l’uid 1500').toBe(0);
         expect(report.probe).toEqual({ uid: SANDBOX_UID, parentEnviron: 'denied', noNewPrivs: true });
         expect(report.run).toMatchObject({ outcome: 'ok', value: 42 });
         // Processus détaché sous l'uid dédié : vivant avant le run, balayé à sa fin.

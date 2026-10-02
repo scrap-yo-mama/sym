@@ -115,6 +115,7 @@ Points à connaître :
 
 - **`ipc: host` et `mem_limit`** pour le worker : Chromium a besoin de mémoire partagée et d'un plafond de mémoire clair, dont le worker déduit le nombre d'exécutions navigateur simultanées. Avec `mem_limit: 3g`, il en lance une.
 - **`security_opt: seccomp=./seccomp-chromium.json`** pour le worker : copiez `deploy/seccomp-chromium.json` du dépôt à côté du fichier Compose. C'est le profil seccomp par défaut de Docker plus la création d'espaces de noms utilisateur, sans laquelle Chromium refuse de démarrer avec son bac à sable (« No usable sandbox! ») ; n'utilisez ni `seccomp=unconfined` ni `--no-sandbox`.
+- **Hôte Ubuntu 23.10 ou plus récent** : ces versions restreignent par AppArmor les espaces de noms utilisateur non privilégiés (`kernel.apparmor_restrict_unprivileged_userns=1` par défaut). Notre CI lève cette restriction sur son runner (`sysctl -w kernel.apparmor_restrict_unprivileged_userns=0`) : le profil seccomp seul est donc **non vérifié** sur un hôte Ubuntu aux réglages par défaut. Si le worker journalise « No usable sandbox! » au lancement de Chromium, vérifiez ce réglage (`sysctl kernel.apparmor_restrict_unprivileged_userns`) ; le passer à `0` vaut pour tout l'hôte, décidez-le en connaissance de cause.
 - **Pas de port exposé pour `server`** : seul le proxy inverse est joignable de l'extérieur. Avec `TRUST_PROXY: "1"`, l'instance lit l'adresse du client dans l'en-tête que Caddy pose ; sans proxy devant, laissez `TRUST_PROXY` à sa valeur par défaut.
 - **`migrate` n'est pas relancé** par `restart` : c'est un service ponctuel dont dépendent `server` et `worker`.
 - **PostgreSQL** : épinglez l'image par empreinte en production, et gardez la sauvegarde hors de ce serveur ([Sauvegarder et restaurer](./sauvegarde.md)).
@@ -132,7 +133,7 @@ La réponse contient `"initialized":false` tant que le propriétaire n'est pas c
 
 ## Coolify, Dokploy
 
-Ces plateformes importent le fichier ci-dessus. Posez les variables du `.env` dans leur interface (pas dans le dépôt), laissez-les gérer le TLS et supprimez le service `caddy` de la copie. Réglez `TRUST_PROXY` à `1`.
+Ces plateformes importent le fichier ci-dessus. Placez `deploy/seccomp-chromium.json` dans le même dossier que le fichier Compose : sans lui, le conteneur `worker` ne peut pas être créé (voir `security_opt` ci-dessus). Posez les variables du `.env` dans leur interface (pas dans le dépôt), laissez-les gérer le TLS et supprimez le service `caddy` de la copie. Réglez `TRUST_PROXY` à `1`.
 
 ## Mettre à jour
 
