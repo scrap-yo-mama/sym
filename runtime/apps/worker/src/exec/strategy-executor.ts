@@ -205,7 +205,7 @@ export type RepairedStrategy = { readonly execution: Execution; readonly network
  * Essai d'une stratégie `steps` (2.13) : arrêt de l'interprète AVANT une étape et action de l'hôte sur la page gardée
  * (agent d'étape, niveaux 2 et 3), sans que la page ne quitte l'hôte.
  */
-export type StepsTrialExtras = { readonly stopBefore?: number; readonly afterPause?: (tools: StepPageTools, host: StepsHost) => Promise<void> };
+type StepsTrialExtras = { readonly stopBefore?: number; readonly afterPause?: (tools: StepPageTools, host: StepsHost) => Promise<void> };
 
 /** Issue d'une réparation (04 §5). */
 export type RepairOutcome =
