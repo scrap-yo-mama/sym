@@ -38,6 +38,7 @@ export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
     'settings:llm:write',
     'settings:proxies:write',
     'settings:smtp:write',
+    'settings:identity:write',
     'settings:security:write',
     'settings:sso:write',
     'audit:read',
@@ -71,6 +72,7 @@ export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
     'settings:llm:write',
     'settings:proxies:write',
     'settings:smtp:write',
+    'settings:identity:write',
     'audit:read',
   ],
   member: [

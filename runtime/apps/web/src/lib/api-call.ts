@@ -44,6 +44,7 @@ const KNOWN_CODES = new Set([
   'sso_disabled',
   'last_login_method',
   'invalid_settings',
+  'invalid_instance_contact',
   'lifetime_too_long',
   'reset_link_invalid',
   'idp_unreachable',

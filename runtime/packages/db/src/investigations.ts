@@ -9,7 +9,7 @@
 // L'URL de la demande n'admet aucun paramètre secret (jeton, clé, session, signature). La colonne `investigation` reste
 // lisible des membres par `instance_read` (visibilité instance, sans session) : elle ne doit figurer dans AUCUNE projection
 // servie à un non-propriétaire (REST, MCP, console : 3.x), seulement dans celles du propriétaire.
-import { assertSchemaAcceptable, SchemaError, type Execution, type InvestigationPhase, type JobQueue, type Network, type RunTrigger } from '@runtime/core';
+import { assertInputSchema, assertSchemaAcceptable, SchemaError, type Execution, type InvestigationPhase, type JobQueue, type Network, type RunTrigger } from '@runtime/core';
 import type { InvestigationProposal, StoredCandidate } from '@runtime/core/investigation';
 import { INVESTIGATION_DEFAULTS } from '@runtime/core/investigation';
 import type pg from 'pg';
@@ -205,7 +205,8 @@ export async function saveInvestigationState(pool: pg.Pool, args: { apiId: strin
 
 /**
  * Fin d'enquête conforme (04 §4, figure 1 G-H) : version de stratégie `created_by = investigation` (numéro suivant),
- * devenue courante, schéma de sortie VALIDÉ (contrat, INV1) et schéma d'entrée proposé posés sur l'API, phase `done`.
+ * devenue courante, schéma de sortie VALIDÉ (contrat, INV1) et schéma d'entrée proposé (chaque champ décrit, 2.2) posés sur
+ * l'API, phase `done`.
  * Le statut (transition 1, ou 21 pour une ré-enquête) est appliqué ensuite par la machine à états.
  */
 export async function saveInvestigationStrategy(
@@ -222,6 +223,13 @@ export async function saveInvestigationStrategy(
     state: InvestigationState;
   },
 ): Promise<{ version: number }> {
+  // Schéma d'entrée (04 §1) : chaque champ a une description (500 caractères au plus), sinon refus, avant toute écriture.
+  try {
+    assertInputSchema(args.inputSchema);
+  } catch (error) {
+    if (error instanceof SchemaError) throw new InvestigationStateError('invalid_schema', error.message);
+    throw error;
+  }
   return withActor(pool, { userId: args.ownerId, role: 'member' }, async (tx) => {
     const locked = await tx.query<{ project_id: string; current_strategy_version: number | null }>('SELECT project_id, current_strategy_version FROM apis WHERE id = $1 AND owner_id = $2 FOR UPDATE', [
       args.apiId,

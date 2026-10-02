@@ -9,6 +9,7 @@ Bouton à valider au GO (dépôt public requis ; aucun déploiement Render réel
 | `Dockerfile`, `entrypoint.sh` | Image unique (`RUNTIME_MODE=server\|worker\|all\|migrate`) ; une commande passée en argument est exécutée telle quelle (pré-déploiement `runtime migrate` des hébergeurs) ; la commande `runtime` est dans le PATH |
 | [`../../render.yaml`](../../render.yaml) | Blueprint Render (cible de référence) : web, worker, base privée, `MASTER_KEY` générée et partagée. À la **racine** du dépôt, seul endroit où Render le lit (bouton compris) |
 | `docker-compose.prod.yml`, `install.sh` | Machine Docker (VPS, Coolify, Dokploy) : `install.sh` écrit le `.env` (clé, jeton, mot de passe), le fichier compose démarre postgres, migrate, server, worker |
+| `seccomp-chromium.json` | Profil seccomp du worker (posé par `docker-compose.prod.yml`, à garder à côté) : profil par défaut de Docker 28.0.4 (moby, Apache-2.0) plus l'entrée de Playwright qui permet les espaces de noms utilisateur du bac à sable de Chromium |
 | `verify.sh` | Contrôle d'une instance déployée, quelle que soit la cible : `/api/health`, `/api/ready`, `/api/version`, `/mcp` (exigé ; 503 `not_initialized` avant le premier démarrage compté joignable ; `--allow-missing-mcp` pour une version sans serveur MCP) |
 | `check-image-public.sh` | Piège GHCR : l'image est-elle tirable sans identifiant ? |
 | `railway/template.yaml` | Description du modèle Railway (best-effort) |

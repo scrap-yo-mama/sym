@@ -25,6 +25,6 @@ export {
 } from './spec.js';
 export { extractRecords, type ExtractOptions, type ExtractResult, type Problem, type ProblemCode, type ResponseInput, type SourceAttempt } from './extract.js';
 export { renderRequest, type RenderedRequest, type TemplateContext } from './template.js';
-export { advancePagination, initialParam, parseLinkNext, resolveNextUrl, startPagination, type PageOutcome, type PageState, type PaginationDecision, type StopReason } from './pagination.js';
+export { advancePagination, initialParam, parseLinkNext, resolveNextUrl, ScrollTracker, startPagination, type PageOutcome, type PageState, type PaginationDecision, type StopReason } from './pagination.js';
 export { PATCHABLE_ROOTS, patchKey, validateRepairPatch, type PatchCheck, type PatchRejection, type PatchRejectionCode } from './patch.js';
 export { shapeFingerprint } from './fingerprint.js';

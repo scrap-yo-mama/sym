@@ -98,11 +98,26 @@ export function sandboxOptionsFromEnv(env: Readonly<Record<string, string | unde
 /**
  * Script du shell de lancement. `env -i` retire ce que le shell exporte de lui-même (PWD, SHLVL…) mais garde le canal
  * IPC que Node passe à l'enfant (NODE_CHANNEL_*), que l'enfant retire de son environnement au démarrage.
+ *
+ * Linux, aucun vidage mémoire de l'enfant (INV7 : son tas tient le script, les données extraites, les réponses des ponts),
+ * y compris par SIGXCPU au plafond CPU : RLIMIT_CORE d'UN octet, souple et dure (`prlimit` : `ulimit -c` compte en blocs
+ * de 512 octets). Vers un fichier, c'est sous la taille minimale d'un vidage ; vers un collecteur en tube (systemd-coredump,
+ * apport), auquel RLIMIT_CORE ne s'applique pas, le noyau traite exactement 1 comme un refus (« RLIMIT_CORE is set to 1,
+ * aborting core »). En plus, coredump_filter nul : aucune page mémoire si un collecteur passait outre. Les deux sont hérités
+ * par `exec`. PR_SET_DUMPABLE serait plus direct mais n'est pas accessible : `exec` le remet, Node n'expose pas prctl.
+ * Échec de l'un ou l'autre : l'enfant ne démarre pas. La plateforme décide (celle du worker, `process.platform`), jamais la
+ * présence d'un fichier : sous Linux, un /proc absent ou masqué fait échouer le lancement (échec fermé) au lieu de lancer
+ * l'enfant sans protection. `prlimit` par son chemin absolu (util-linux) : le shell n'a pas de PATH fiable.
  */
-const LAUNCH_SCRIPT =
-  'ulimit -S -t "$0" && ulimit -H -t $(($0 + 1)) && exec /usr/bin/env -i ' +
-  '${NODE_CHANNEL_FD+"NODE_CHANNEL_FD=$NODE_CHANNEL_FD"} ' +
-  '${NODE_CHANNEL_SERIALIZATION_MODE+"NODE_CHANNEL_SERIALIZATION_MODE=$NODE_CHANNEL_SERIALIZATION_MODE"} "$@"';
+function launchScript(platform: NodeJS.Platform): string {
+  return (
+    'ulimit -S -t "$0" && ulimit -H -t $(($0 + 1)) && ' +
+    (platform === 'linux' ? 'echo 0 > /proc/self/coredump_filter && /usr/bin/prlimit --pid $$ --core=1:1 && ' : '') +
+    'exec /usr/bin/env -i ' +
+    '${NODE_CHANNEL_FD+"NODE_CHANNEL_FD=$NODE_CHANNEL_FD"} ' +
+    '${NODE_CHANNEL_SERIALIZATION_MODE+"NODE_CHANNEL_SERIALIZATION_MODE=$NODE_CHANNEL_SERIALIZATION_MODE"} "$@"'
+  );
+}
 
 /** Commande de lancement de l'enfant (pure, testée) : plafond CPU, environnement vidé, changement d'utilisateur. */
 export type SpawnPlan = { command: string; args: string[]; uid?: number; gid?: number };
@@ -110,7 +125,8 @@ export type SpawnPlan = { command: string; args: string[]; uid?: number; gid?: n
 /**
  * Le lanceur change d'utilisateur sans nouveaux privilèges (premier exec, fait par le worker lui-même : sous
  * no-new-privileges, il n'obtient cap_setuid,cap_setgid que si l'appelant les détient), puis `/bin/sh`, sous l'uid dédié,
- * pose RLIMIT_CPU (souple N puis dur N + 1, dans cet ordre : SIGXCPU d’abord, SIGKILL ensuite), puis `env -i` rend un
+ * pose RLIMIT_CPU (souple N puis dur N + 1, dans cet ordre : SIGXCPU d’abord, SIGKILL ensuite) et interdit tout vidage
+ * mémoire (Linux, voir launchScript), puis `env -i` rend un
  * environnement vide (le shell en ajoute), puis Node. Chaque étape fait `exec` : le pid suivi par le parent reste celui de
  * l'enfant.
  */
@@ -123,10 +139,12 @@ export function spawnPlan(p: {
   launcher?: string;
   uid?: number;
   gid?: number;
+  /** Plateforme du worker (défaut `process.platform`) : sous Linux, aucun vidage mémoire de l'enfant (voir launchScript). */
+  platform?: NodeJS.Platform;
 }): SpawnPlan {
   const node = [p.node, ...p.nodeArgs, ...(p.script === undefined ? [] : [p.script])];
   const cpu = String(Math.max(1, Math.ceil(p.cpuSeconds)));
-  const shell = ['/bin/sh', '-c', LAUNCH_SCRIPT, cpu, ...node];
+  const shell = ['/bin/sh', '-c', launchScript(p.platform ?? process.platform), cpu, ...node];
   if (p.launcher !== undefined && p.uid !== undefined && p.gid !== undefined) {
     return { command: p.launcher, args: [`--reuid=${p.uid}`, `--regid=${p.gid}`, '--clear-groups', '--no-new-privs', '--', ...shell] };
   }

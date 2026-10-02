@@ -6,7 +6,7 @@ import type { UserJsonSchema } from '../model/types.js';
 
 export const DRAFT_2020_12 = 'https://json-schema.org/draft/2020-12/schema';
 
-export type SchemaErrorCode = 'invalid_schema' | 'remote_ref' | 'schema_too_deep' | 'schema_too_large';
+export type SchemaErrorCode = 'invalid_schema' | 'remote_ref' | 'schema_too_deep' | 'schema_too_large' | 'missing_description' | 'description_too_long';
 
 /** Erreur de schéma utilisateur : `code` stable, message sans valeur de données. */
 export class SchemaError extends Error {

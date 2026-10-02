@@ -9,6 +9,11 @@ export type HttpExchange = {
   readonly headers: Readonly<Record<string, string>>;
   readonly body: string;
   readonly url: string;
+  /**
+   * Défilement seulement (`ScrollTransport`) : le délai est écoulé sans nouvel élément ET le réseau de la page était encore
+   * occupé. L'absence de nouvel élément n'est alors pas une fin de flux (site lent) : la sortie est tronquée (`scroll_timeout`).
+   */
+  readonly scrollTimedOut?: boolean;
 };
 
 /**
@@ -16,6 +21,13 @@ export type HttpExchange = {
  * E3 = navigation Chromium (DOM rendu). Le transport ne classe rien : il rend l'échange ou lève une erreur.
  */
 export type Transport = (request: RenderedRequest, signal: AbortSignal) => Promise<HttpExchange>;
+
+/**
+ * Défilement d'une page déjà chargée par le transport (`pagination.type = infinite_scroll`, E3) : fait défiler, attend les
+ * nouveaux éléments (bornée), rend le DOM à jour. Ne classe rien et n'ouvre aucune navigation : une navigation lancée
+ * par la page reste refusée (1.7).
+ */
+export type ScrollTransport = (signal: AbortSignal) => Promise<HttpExchange>;
 
 /** Échec d'un essai : classe fermée (04b §1), réessai possible, code stable (jamais une valeur de la cible). */
 export type ExecFailure = {
