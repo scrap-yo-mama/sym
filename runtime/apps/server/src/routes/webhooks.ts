@@ -131,6 +131,10 @@ export function webhookRoutes(app: FastifyInstance, ctx: ServerContext): void {
           if (body.status === 'disabled') {
             await db.query("UPDATE webhook_subscriptions SET status = 'disabled', disabled_at = now(), updated_at = now() WHERE id = $1 AND owner_id = $2", [row.id, actor.userId]);
           }
+          // Secret lié à sa destination (comme les secrets des réglages admin, INV8) : une URL changée fait tourner le secret,
+          // SANS période de grâce (l'ancien ne signe jamais rien vers la nouvelle URL) ; le nouveau est rendu une fois.
+          const moved = url !== undefined && url !== row.url;
+          if (moved) return (await rotateWebhookSecret(db, secrets, { subscriptionId: row.id, ownerId: actor.userId, graceHours: 0 })).secret;
           return body.rotate_secret === true ? (await rotateWebhookSecret(db, secrets, { subscriptionId: row.id, ownerId: actor.userId })).secret : undefined;
         });
       } catch (error) {

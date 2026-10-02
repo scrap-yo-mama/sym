@@ -246,6 +246,37 @@ describe('catalogue (05 § 4.2) : création, liste, fiche, modification, suppres
     expect((await api(a, 'PATCH', `/api/apis/${session.slug}`, '/api/apis/{slug}', { visibility: 'instance' })).body).toMatchObject({ error: { code: 'session_api_private' } });
   });
 
+  test('PATCH : `max_cost_usd: null` et `budget_daily_usd: null` reviennent au défaut de l’instance (jamais un 200 sans effet)', async () => {
+    const api1 = await seedApi(srv.db.url, a.user.id);
+    expect((await api(a, 'PATCH', `/api/apis/${api1.slug}`, '/api/apis/{slug}', { max_cost_usd: 2, budget_daily_usd: 7 })).body).toMatchObject({ max_cost_usd: 2, budget_daily_usd: 7 });
+    const reset = await api(a, 'PATCH', `/api/apis/${api1.slug}`, '/api/apis/{slug}', { max_cost_usd: null, budget_daily_usd: null });
+    expect(reset.status).toBe(200);
+    // Défauts de l'instance : ceux de la colonne (0,5 $ par run, 5 $ par jour).
+    expect(reset.body).toMatchObject({ max_cost_usd: 0.5, budget_daily_usd: 5 });
+    expect(await count('SELECT max_cost_usd::float FROM apis WHERE id = $1', [api1.id])).toBe(0.5);
+  });
+
+  test('fiche d’une API `instance` d’autrui : de quoi la lancer (schémas, statut, exécution, réseau, coût), jamais la politique du propriétaire', async () => {
+    const shared = await seedApi(srv.db.url, a.user.id, { visibility: 'instance' });
+    await withClient(srv.db.url, (c) =>
+      c.query(
+        `UPDATE apis SET purpose = 'zz_test_purpose_owner', legal_basis = 'zz_test_legal_owner', max_cost_usd = 3, budget_daily_usd = 9,
+           network_policy = '{"allow": ["direct", "dc_proxy"], "proxy_ids": {"dc_proxy": "zz-test-proxy-owner"}, "dc_proxy_params": {"country": "fr"}}' WHERE id = $1`,
+        [shared.id],
+      ),
+    );
+    const mine = await api(a, 'GET', `/api/apis/${shared.slug}`, '/api/apis/{slug}');
+    expect(mine.body).toMatchObject({ purpose: 'zz_test_purpose_owner', max_cost_usd: 3, network_policy: { proxy_ids: { dc_proxy: 'zz-test-proxy-owner' } } });
+    const other = await api(b, 'GET', `/api/apis/${shared.slug}`, '/api/apis/{slug}');
+    expect(other.status).toBe(200);
+    expect(other.body).toMatchObject({ slug: shared.slug, status: 'sain', metadata_only: false, network_policy: { allow: ['direct', 'dc_proxy'] }, cost_estimate: { sample_size: 0 } });
+    expect(other.body['input_schema']).toMatchObject({ type: 'object' });
+    expect(other.body['output_schema']).toMatchObject({ type: 'object' });
+    expect(other.body['network_policy']).toEqual({ allow: ['direct', 'dc_proxy'] });
+    for (const field of ['purpose', 'legal_basis', 'max_cost_usd', 'budget_daily_usd', 'domain_pacing', 'project_id']) expect(other.body, field).not.toHaveProperty(field);
+    expect(other.raw.body).not.toMatch(/zz_test_purpose_owner|zz_test_legal_owner|zz-test-proxy-owner/);
+  });
+
   test('DELETE : refusé tant qu’un run est actif (409), puis l’API, ses runs et ses datasets disparaissent', async () => {
     const api1 = await seedApi(srv.db.url, a.user.id);
     const done = await seedRun(srv.db.url, { apiId: api1.id, ownerId: a.user.id, items: [{ title: 'zz' }] });
@@ -712,6 +743,32 @@ describe('assert_run_cancel_pause_resume : annulation, pause, reprise (05 § 4.4
     expect((await api(a, 'POST', `/api/apis/${slug}/runs`, '/api/apis/{slug}/runs', { input: {} })).status).toBe(202);
   });
 
+  test('cancel d’une enquête : annulation et transition au MÊME COMMIT ; si la transition échoue, rien n’est écrit (jamais `enquete` sans run)', async () => {
+    const created = await api(a, 'POST', '/api/apis', '/api/apis', { description: 'zz_test annulation atomique', url: 'https://zz-test-atomic-cancel.example/' });
+    const apiId = created.body['api_id'] as string;
+    const runId = created.body['run_id'] as string;
+    expect(apiId).toMatch(/^[0-9a-f-]{36}$/);
+    // Panne simulée de l'écriture du statut (status_events refusé pour cette API seulement).
+    await withClient(srv.db.url, async (c) => {
+      await c.query(`CREATE OR REPLACE FUNCTION zz_test_fail_status() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'zz_test panne du statut'; END $$`);
+      await c.query(`CREATE TRIGGER zz_test_fail_status BEFORE INSERT ON status_events FOR EACH ROW WHEN (NEW.api_id = '${apiId}'::uuid) EXECUTE FUNCTION zz_test_fail_status()`);
+    });
+    try {
+      const failed = await srv.app.inject({ method: 'POST', url: `/api/runs/${runId}/cancel`, headers: { cookie: a.cookie, origin: PUBLIC_URL } });
+      expect(failed.statusCode).toBe(500);
+      // Rien n'est parti : le run est toujours en file (annulable de nouveau), l'API en `enquete` avec SON enquête.
+      expect(await count("SELECT count(*) FROM runs WHERE id = $1 AND state = 'queued'", [runId])).toBe(1);
+      expect(await count("SELECT count(*) FROM apis WHERE id = $1 AND status = 'enquete' AND investigation_phase = 'access_check'", [apiId])).toBe(1);
+    } finally {
+      await withClient(srv.db.url, async (c) => {
+        await c.query('DROP TRIGGER IF EXISTS zz_test_fail_status ON status_events');
+        await c.query('DROP FUNCTION IF EXISTS zz_test_fail_status()');
+      });
+    }
+    expect((await api(a, 'POST', `/api/runs/${runId}/cancel`, '/api/runs/{id}/cancel')).body).toMatchObject({ run_id: runId, state: 'cancelled' });
+    expect(await count("SELECT count(*) FROM apis WHERE id = $1 AND status = 'erreur' AND investigation_phase = 'done'", [apiId])).toBe(1);
+  });
+
   test('pause : run en file sans job, ignoré du balayeur ; resume : nouveau job ; essais gardés ; API qui écrit → 409', async () => {
     const api1 = await seedApi(srv.db.url, a.user.id);
     const accepted = await api(a, 'POST', `/api/apis/${api1.slug}/runs`, '/api/apis/{slug}/runs', { input: {} });
@@ -786,6 +843,55 @@ describe('ré-enquête, versions et chronologie (05 § 4.2, 06 § 2, INV3)', () 
     // force_investigate par un membre sur l'API `instance` d'autrui : 403.
     const shared = await seedApi(srv.db.url, a.user.id, { visibility: 'instance' });
     expect((await api(b, 'POST', `/api/apis/${shared.slug}/runs`, '/api/apis/{slug}/runs', { input: {}, force_investigate: true })).status).toBe(403);
+  });
+
+  test('investigate : transition et enquête au MÊME COMMIT ; l’enquête refusée ne laisse jamais l’API en `enquete` sans run', async () => {
+    const created = await api(a, 'POST', '/api/apis', '/api/apis', { description: 'zz_test reenquete atomique', url: 'https://zz-test-re-atomic.example/' });
+    const apiId = created.body['api_id'] as string;
+    const slug = created.body['slug'] as string;
+    // Première enquête terminée, API saine ; la demande gardée devient illisible (refusée par startInvestigation).
+    await withClient(srv.db.url, async (c) => {
+      await c.query("UPDATE runs SET state = 'succeeded', finished_at = now() WHERE api_id = $1", [apiId]);
+      await c.query(`UPDATE apis SET status = 'sain', investigation = jsonb_set(investigation, '{request,url}', '"zz-pas-une-url"') WHERE id = $1`, [apiId]);
+    });
+    const events = await count('SELECT count(*) FROM status_events WHERE api_id = $1', [apiId]);
+    const runs = await count('SELECT count(*) FROM runs WHERE api_id = $1', [apiId]);
+    const res = await api(a, 'POST', `/api/apis/${slug}/investigate`, '/api/apis/{slug}/investigate', {});
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ error: { code: 'invalid_request' } });
+    expect(await count("SELECT count(*) FROM apis WHERE id = $1 AND status = 'sain'", [apiId])).toBe(1);
+    expect(await count('SELECT count(*) FROM status_events WHERE api_id = $1', [apiId])).toBe(events);
+    expect(await count('SELECT count(*) FROM runs WHERE api_id = $1', [apiId])).toBe(runs);
+    // L'API se lance toujours (aucun 409 investigation_in_progress fantôme).
+    await withClient(srv.db.url, (c) => c.query("INSERT INTO strategy_versions (api_id, version, owner_id, execution, network, spec, created_by) VALUES ($1, 1, $2, 'fetch', 'direct', '{}', 'investigation') ON CONFLICT DO NOTHING", [apiId, a.user.id]));
+    await withClient(srv.db.url, (c) => c.query('UPDATE apis SET current_strategy_version = 1 WHERE id = $1', [apiId]));
+    expect((await api(a, 'POST', `/api/apis/${slug}/runs`, '/api/apis/{slug}/runs', { input: {} })).status).toBe(202);
+  });
+
+  test('assert_blocked_reinvestigation_human_only : clé d’API sur une API `bloquee` → 403 human_confirmation_required, aucune transition, aucun run (04 § 6, transition 18)', async () => {
+    const created = await api(a, 'POST', '/api/apis', '/api/apis', { description: 'zz_test bloquee par cle', url: 'https://zz-test-blocked-key.example/' });
+    const apiId = created.body['api_id'] as string;
+    const slug = created.body['slug'] as string;
+    await withClient(srv.db.url, async (c) => {
+      await c.query("UPDATE runs SET state = 'succeeded', finished_at = now() WHERE api_id = $1", [apiId]);
+      await c.query("UPDATE apis SET status = 'bloquee', status_reason = 'forbidden' WHERE id = $1", [apiId]);
+    });
+    const key = (await srv.app.inject({ method: 'POST', url: '/api/api-keys', headers: { cookie: a.cookie, origin: PUBLIC_URL }, payload: { label: 'zz blocked', scopes: ['apis:read', 'apis:write', 'apis:run'], currentPassword: a.user.password } })).json<{ key: string }>().key;
+    const events = await count('SELECT count(*) FROM status_events WHERE api_id = $1', [apiId]);
+    const runs = await count('SELECT count(*) FROM runs WHERE api_id = $1', [apiId]);
+    const res = await srv.app.inject({ method: 'POST', url: `/api/apis/${slug}/investigate`, headers: { authorization: `Bearer ${key}` }, payload: {} });
+    expect(res.statusCode).toBe(403);
+    expect(contract.check('POST', '/api/apis/{slug}/investigate', 403, res.json())).toEqual([]);
+    expect(res.json()).toMatchObject({ error: { code: 'human_confirmation_required' } });
+    // `force_investigate` reste refusé par la machine (409 blocked : ne pas réessayer).
+    const forced = await srv.app.inject({ method: 'POST', url: `/api/apis/${slug}/runs`, headers: { authorization: `Bearer ${key}` }, payload: { input: {}, force_investigate: true } });
+    expect(forced.statusCode).toBe(409);
+    expect(forced.json()).toMatchObject({ error: { code: 'blocked' } });
+    expect(await count("SELECT count(*) FROM apis WHERE id = $1 AND status = 'bloquee'", [apiId])).toBe(1);
+    expect(await count('SELECT count(*) FROM status_events WHERE api_id = $1', [apiId])).toBe(events);
+    expect(await count('SELECT count(*) FROM runs WHERE api_id = $1', [apiId])).toBe(runs);
+    // Dans la console (session), la ré-enquête manuelle reste permise (transition 18).
+    expect((await api(a, 'POST', `/api/apis/${slug}/investigate`, '/api/apis/{slug}/investigate', {})).status).toBe(202);
   });
 
   test('versions : liste, détail, diff à trois niveaux, retour (warning, version_rollback) ; chronologie des statuts', async () => {
@@ -922,7 +1028,9 @@ describe('assert_export_streaming : export des datasets en flux (05 § 4.4)', ()
       // Avance bornée : quelques lots (tampons du flux Node et du client HTTP), plus ce que les tampons TCP du noyau
       // peuvent contenir. La borne doit rester loin des 101 lots, sinon le test ne prouve rien (tampons à régler).
       const lots = Math.ceil(total / 1000);
-      const bound = EXPORT_MAX_READ_AHEAD_BATCHES + Math.ceil(kernelTcpBufferBytes() / (bytes / lots));
+      // Plafonnée sous la moitié des lots : sur un noyau aux tampons TCP très larges (exécuteurs Linux : borne brute 90 sur 100),
+      // la borne brute ne prouverait rien ; l'avance réelle (7 lots) reste très en dessous.
+      const bound = Math.min(EXPORT_MAX_READ_AHEAD_BATCHES + Math.ceil(kernelTcpBufferBytes() / (bytes / lots)), Math.floor(lots / 2) - 1);
       console.info(`assert_export_streaming : ${readAhead} lots lus d'avance (borne ${bound} sur ${lots})`);
       expect(bound).toBeLessThan(lots / 2);
       expect(readAhead).toBeLessThanOrEqual(bound);
@@ -1106,6 +1214,12 @@ describe('assert_sse_multiplexed_resume : flux SSE (06 § 3)', () => {
     await resumed.waitFor(() => resumed.ended());
     expect(resumed.frames.map((f) => f.id)).toEqual(['2', 'end']);
     await resumed.close();
+    // Flux servi jusqu'à sa fin : un client SSE standard (EventSource) qui se reconnecte avec `Last-Event-ID: end` reçoit
+    // 204 No Content, qui l'arrête (jamais un 200 vide suivi d'une reconnexion toutes les 3 s, sans fin).
+    const finished = await fetch(`${base}/api/runs/${inv.runId}/events`, { headers: { cookie: a.cookie, 'last-event-id': 'end' } });
+    expect(finished.status).toBe(204);
+    expect(await finished.text()).toBe('');
+    expect(contract.check('GET', '/api/runs/{id}/events', 204, undefined)).toEqual([]);
     expect((await api(b, 'GET', `/api/runs/${inv.runId}/events`, '/api/runs/{id}/events')).status).toBe(404);
   });
 
@@ -1209,6 +1323,25 @@ describe('planifications (08 § 5) : CRUD, miroir pg-boss, prochaines exécution
     expect((await api(a, 'GET', `/api/apis/${api1.slug}/schedules/${id}`, '/api/apis/{slug}/schedules/{id}')).status).toBe(404);
   });
 
+  test('entrée hors input_schema de l’API → 400 invalid_input à la création et à la modification (jamais un run planifié voué à l’échec)', async () => {
+    const api1 = await seedApi(srv.db.url, a.user.id);
+    const before = await count('SELECT count(*) FROM schedules WHERE api_id = $1', [api1.id]);
+    for (const input of [{ page: 0 }, { zz_inconnu: 1 }]) {
+      const refused = await api(a, 'POST', `/api/apis/${api1.slug}/schedules`, '/api/apis/{slug}/schedules', { cron: '0 3 * * *', timezone: 'UTC', input });
+      expect(refused.status, JSON.stringify(input)).toBe(400);
+      expect(refused.body).toMatchObject({ error: { code: 'invalid_input' } });
+    }
+    expect(await count('SELECT count(*) FROM schedules WHERE api_id = $1', [api1.id])).toBe(before);
+    const created = await api(a, 'POST', `/api/apis/${api1.slug}/schedules`, '/api/apis/{slug}/schedules', { cron: '0 3 * * *', timezone: 'UTC', input: { page: 2 } });
+    expect(created.status).toBe(201);
+    const path = `/api/apis/${api1.slug}/schedules/${created.body['id']}`;
+    const patched = await api(a, 'PATCH', path, '/api/apis/{slug}/schedules/{id}', { input: { page: -1 } });
+    expect(patched.status).toBe(400);
+    expect(patched.body).toMatchObject({ error: { code: 'invalid_input' } });
+    expect((await api(a, 'GET', path, '/api/apis/{slug}/schedules/{id}')).body).toMatchObject({ input: { page: 2 } });
+    expect((await api(a, 'DELETE', path, '/api/apis/{slug}/schedules/{id}')).status).toBe(204);
+  });
+
   test('planification de B sur l’API `instance` de A redevenue privée : B la lit, la désactive et la supprime ; rien d’autre (404 sinon)', async () => {
     const shared = await seedApi(srv.db.url, a.user.id, { visibility: 'instance' });
     const created = await api(b, 'POST', `/api/apis/${shared.slug}/schedules`, '/api/apis/{slug}/schedules', { cron: '0 4 * * *', timezone: 'UTC', input: {} });
@@ -1257,6 +1390,24 @@ describe('webhooks (Standard Webhooks, 08 § 5) : garde SSRF, secret rendu une f
     expect((await api(b, 'GET', '/api/webhook-subscriptions', '/api/webhook-subscriptions')).body['subscriptions']).toEqual([]);
     expect((await api(a, 'DELETE', `/api/webhook-subscriptions/${id}`, '/api/webhook-subscriptions/{id}')).status).toBe(204);
     expect(await count("SELECT count(*) FROM secrets WHERE owner_id = $1 AND kind = 'webhook_secret'", [a.user.id])).toBe(0);
+  });
+
+  test('secret lié à sa destination : changer l’URL fait tourner le secret (rendu une fois) ; l’ancien ne signe plus rien vers la nouvelle URL', async () => {
+    const created = await api(a, 'POST', '/api/webhook-subscriptions', '/api/webhook-subscriptions', { url: `http://127.0.0.1:${hookPort}/zz-test-hook-old`, events: ['run.failed'] });
+    expect(created.status).toBe(201);
+    const id = created.body['id'] as string;
+    const moved = await api(a, 'PATCH', `/api/webhook-subscriptions/${id}`, '/api/webhook-subscriptions/{id}', { url: `http://127.0.0.1:${hookPort}/zz-test-hook-new` });
+    expect(moved.status).toBe(200);
+    expect(moved.body).toMatchObject({ url: `http://127.0.0.1:${hookPort}/zz-test-hook-new`, secret: expect.stringMatching(/^whsec_/) });
+    expect(moved.body['secret']).not.toBe(created.body['secret']);
+    // Aucune période de grâce vers la nouvelle destination : une seule signature, celle du nouveau secret.
+    expect((await api(a, 'POST', `/api/webhook-subscriptions/${id}/test`, '/api/webhook-subscriptions/{id}/test')).body).toMatchObject({ ok: true });
+    const signatures = String(hookCalls.at(-1)!.headers['webhook-signature']).split(' ');
+    expect(signatures).toHaveLength(1);
+    // Même URL (ou autre champ) : le secret ne tourne pas.
+    const same = await api(a, 'PATCH', `/api/webhook-subscriptions/${id}`, '/api/webhook-subscriptions/{id}', { events: ['run.failed', 'api.status_changed'] });
+    expect(same.body).not.toHaveProperty('secret');
+    expect((await api(a, 'DELETE', `/api/webhook-subscriptions/${id}`, '/api/webhook-subscriptions/{id}')).status).toBe(204);
   });
 });
 
@@ -1389,6 +1540,51 @@ describe('réglages de l’admin (08 § 1, § 2, § 7) : secrets en écriture se
     expect((await api(owner, 'GET', '/api/settings/smtp', '/api/settings/smtp')).raw.body).not.toContain('zz_test_smtp_password');
     const tested = await api(owner, 'POST', '/api/settings/smtp/test', '/api/settings/smtp/test', { to: 'zz_test@example.test' });
     expect(tested.body).toMatchObject({ ok: false, error: { code: expect.stringMatching(/^smtp_/) } });
+  });
+
+  test('modèles IA : deux PUT concurrents se suivent ; le réglage écrit ne pointe jamais vers une clé supprimée par l’autre', async () => {
+    const provider = { id: 'zz-concurrent', preset: 'custom', base_url: 'http://127.0.0.1:9/v1', models: { 'zz-model': {} } };
+    expect((await api(admin, 'PUT', '/api/settings/llm', '/api/settings/llm', { providers: [{ ...provider, api_key: 'zz_test_llm_key_concurrent_k0' }] })).status).toBe(200);
+    const lockWaiters = () => count("SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock'");
+    const waitLocks = async (n: number) => {
+      const deadline = Date.now() + 10_000;
+      while ((await lockWaiters()) < n) {
+        if (Date.now() > deadline) throw new Error(`attente de ${n} verrous dépassée`);
+        await new Promise((r) => setTimeout(r, 20));
+      }
+    };
+    // La ligne `llm` est tenue : A (nouvelle clé kA) puis B (clé gardée) arrivent l'un après l'autre et attendent.
+    let release!: () => void;
+    const held = new Promise<void>((r) => (release = r));
+    let locked!: () => void;
+    const holding = new Promise<void>((r) => (locked = r));
+    const holder = withClient(srv.db.url, async (c) => {
+      await c.query('BEGIN');
+      await c.query("SELECT 1 FROM settings WHERE key = 'llm' FOR UPDATE");
+      locked();
+      await held;
+      await c.query('COMMIT');
+    });
+    await holding;
+    try {
+      const putA = api(admin, 'PUT', '/api/settings/llm', '/api/settings/llm', { providers: [{ ...provider, api_key: 'zz_test_llm_key_concurrent_ka' }] });
+      await waitLocks(1);
+      const putB = api(admin, 'PUT', '/api/settings/llm', '/api/settings/llm', { providers: [provider] });
+      await waitLocks(2);
+      release();
+      expect((await putA).status).toBe(200);
+      expect((await putB).status).toBe(200);
+    } finally {
+      release();
+      await holder;
+    }
+    const stored = await withClient(srv.db.url, async (c) => (await c.query<{ value: { providers: { id: string; api_key_secret_id: string }[] } }>("SELECT value FROM settings WHERE key = 'llm'")).rows[0]!.value);
+    const keyId = stored.providers.find((p) => p.id === 'zz-concurrent')!.api_key_secret_id;
+    // B a lu l'état écrit par A : il garde kA (jamais k0, supprimée par A) ; aucun secret orphelin.
+    expect(await count('SELECT count(*) FROM secrets WHERE id = $1', [keyId])).toBe(1);
+    expect(await count("SELECT count(*) FROM secrets WHERE kind = 'llm_api_key' AND owner_id IS NULL")).toBe(1);
+    expect((await api(admin, 'PUT', '/api/settings/llm', '/api/settings/llm', { providers: [] })).status).toBe(200);
+    expect(await count("SELECT count(*) FROM secrets WHERE kind = 'llm_api_key' AND owner_id IS NULL")).toBe(0);
   });
 });
 

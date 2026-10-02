@@ -67,13 +67,13 @@ async function addHook(): Promise<void> {
 <template>
   <section class="flex flex-col gap-6" aria-labelledby="alerts-heading">
     <header class="flex flex-col gap-1">
-      <h1 id="alerts-heading" data-route-heading tabindex="-1" class="text-2xl font-semibold tracking-tight">{{ t('settings.alerts.title') }}</h1>
+      <h1 id="alerts-heading" data-route-heading tabindex="-1" class="sym-title">{{ t('settings.alerts.title') }}</h1>
       <p class="text-sm text-muted-foreground">{{ t('settings.alerts.intro') }}</p>
     </header>
 
     <Alert v-if="smtp.forbidden.value && webhooks.forbidden.value" data-testid="settings-forbidden"><AlertDescription>{{ t('settings.adminOnly') }}</AlertDescription></Alert>
     <template v-else>
-      <form class="flex flex-col gap-3 rounded-xl border p-4" novalidate data-testid="smtp-form" @submit.prevent="saveSmtp">
+      <form class="flex flex-col gap-3 rounded-xl border bg-card p-4" novalidate data-testid="smtp-form" @submit.prevent="saveSmtp">
         <h2 class="text-lg font-semibold">{{ t('settings.alerts.smtp') }}</h2>
         <p v-if="!smtp.data.value && !smtp.loading.value" class="text-sm text-muted-foreground">{{ t('settings.alerts.smtpEmpty') }}</p>
         <div class="grid gap-3 sm:grid-cols-2">
@@ -168,7 +168,7 @@ async function addHook(): Promise<void> {
           </table>
         </div>
 
-        <form class="flex flex-col gap-3 rounded-xl border p-4" novalidate data-testid="webhook-form" @submit.prevent="addHook">
+        <form class="flex flex-col gap-3 rounded-xl border bg-card p-4" novalidate data-testid="webhook-form" @submit.prevent="addHook">
           <div class="flex flex-col gap-1">
             <Label for="webhook-url">{{ t('settings.alerts.url') }}</Label>
             <Input id="webhook-url" type="url" autocomplete="off" :model-value="hook.url" @update:model-value="(value: string | number) => (hook.url = String(value))" />

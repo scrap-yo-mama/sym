@@ -38,10 +38,13 @@ const PRESENT_CLAIMS = {
 };
 
 describe('README public : ce qui marche aujourd\'hui, distingué de ce qui est prévu', () => {
-  test('bloc « What works today » / « Ce qui marche aujourd\'hui » juste après le bandeau de pré-version', () => {
-    for (const [lang, heading] of [['en', '## What works today'], ['fr', '## Ce qui marche aujourd\'hui']] as const) {
+  // 4.12 : la vitrine suit les 11 blocs de 22 §3.1 (sans titre « What works today ») ; l'honnêteté de la pré-version tient dans
+  // l'alerte `[!WARNING]` qui précède « What it does », dont les puces ne décrivent que ce qui existe (registre claims.json).
+  test('alerte de pré-version avant « What it does » / « Ce que ça fait »', () => {
+    for (const [lang, heading] of [['en', '## What it does'], ['fr', '## Ce que ça fait']] as const) {
       const text = README[lang];
       expect(text, lang).toContain(heading);
+      expect(text.indexOf('[!WARNING]'), lang).toBeGreaterThan(-1);
       expect(text.indexOf(heading), lang).toBeGreaterThan(text.indexOf('[!WARNING]'));
     }
   });
@@ -51,8 +54,8 @@ describe('README public : ce qui marche aujourd\'hui, distingué de ce qui est p
       for (const claim of PRESENT_CLAIMS[lang]) expect(README[lang], `${lang} : ${claim}`).not.toMatch(claim);
     }
     const missing = {
-      en: /\*\*Not delivered yet\.\*\*[^\n]*investigation[^\n]*repair[^\n]*REST API[^\n]*MCP server/,
-      fr: /\*\*Pas encore livré\.\*\*[^\n]*enquête[^\n]*réparation[^\n]*API REST[^\n]*serveur MCP/,
+      en: /\*\*Not delivered yet:\*\*[^\n]*repair[^\n]*REST API[^\n]*MCP server/,
+      fr: /\*\*Pas encore livré\s*:\*\*[^\n]*réparation[^\n]*API REST[^\n]*serveur MCP/,
     };
     for (const lang of ['en', 'fr'] as const) expect(README[lang], lang).toMatch(missing[lang]);
   });

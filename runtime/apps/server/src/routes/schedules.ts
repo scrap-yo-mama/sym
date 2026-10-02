@@ -2,10 +2,11 @@
 // Planifications d'une API (tâche 3.1, 05 § 4.2, 08 § 5) : `schedules` est la source de vérité, le miroir pg-boss est
 // aligné après chaque écriture (mirrorSchedule). Validation par le service de 2.5 (cron à 5 champs, fréquence minimale
 // 1 minute, fuseau IANA, règles fermées, `bloquee` jamais retirée de `skip_if_status_in`) ; prochaines exécutions
-// calculées côté serveur. Une planification appartient à son créateur (RLS) ; l'API doit lui être visible.
-import { API_STATUSES } from '@runtime/core';
+// calculées côté serveur ; entrée contrôlée contre l'`input_schema` de l'API (400 `invalid_input`). Une planification
+// appartient à son créateur (RLS) ; l'API doit lui être visible.
+import { API_STATUSES, formatIssues, validateOutput } from '@runtime/core';
 import { mirrorSchedule, removeScheduleMirror, validateSchedule, withActor, type ScheduleRow } from '@runtime/db';
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyReply } from 'fastify';
 import type { ServerContext } from '../context.js';
 import { readApiBySlug } from '../rest/apis.js';
 import { UUID } from './account-helpers.js';
@@ -43,6 +44,22 @@ const fields = {
 type ScheduleBody = { cron?: string; timezone?: string; input?: Record<string, unknown>; overlap?: 'skip' | 'queue' | 'allow'; missed?: 'once' | 'skip'; rules?: Record<string, unknown>; enabled?: boolean };
 
 type Row = ScheduleRow & { created_at: Date };
+
+/**
+ * Entrée d'une planification contrôlée contre l'`input_schema` de l'API, comme celle d'un run (05 § 4.3) : 400
+ * `invalid_input` à la création ou à la modification, jamais un run planifié voué à l'échec à chaque exécution. Renvoie
+ * true si la réponse est partie.
+ */
+async function rejectInvalidInput(reply: FastifyReply, schema: Record<string, unknown>, input: Record<string, unknown>): Promise<boolean> {
+  try {
+    const checked = validateOutput(schema, input);
+    if (checked.ok) return false;
+    await sendError(reply, 400, 'invalid_input', `entrée hors input_schema : ${formatIssues(checked.errors).replace(/\n/g, ' ; ')}`);
+  } catch {
+    await sendError(reply, 409, 'invalid_input_schema', 'le schéma d’entrée de l’API est illisible : ré-enquêtez');
+  }
+  return true;
+}
 
 const SELECT = `SELECT s.id, s.api_id, s.owner_id, s.cron, s.timezone, s.input, s.rules, s.overlap, s.on_missed, s.enabled, s.created_at FROM schedules s`;
 
@@ -94,6 +111,7 @@ export function scheduleRoutes(app: FastifyInstance, ctx: ServerContext): void {
       if (api === null) return notFound(reply);
       const queue = await ctx.jobs();
       const body = request.body;
+      if (await rejectInvalidInput(reply, api.input_schema, body.input)) return reply;
       const checked = validateSchedule(queue, { cron: body.cron, timezone: body.timezone, input: body.input, ...(body.rules ? { rules: body.rules } : {}), ...(body.overlap ? { overlap: body.overlap } : {}), ...(body.missed ? { onMissed: body.missed } : {}), ...(body.enabled === undefined ? {} : { enabled: body.enabled }) });
       if (!checked.ok) return sendError(reply, 400, 'invalid_schedule', checked.errors.join(' ; '));
       const s = checked.schedule;
@@ -124,13 +142,14 @@ export function scheduleRoutes(app: FastifyInstance, ctx: ServerContext): void {
       const api = await readApiBySlug(db, slug);
       if (api === null) return undefined;
       const row = (await db.query<Row>(`${SELECT} WHERE s.id = $1 AND s.api_id = $2`, [id, api.id])).rows[0];
-      return row ? { api: { id: api.id, slug: api.slug }, row } : null;
+      return row ? { api: { id: api.id, slug: api.slug, input_schema: api.input_schema }, row } : null;
     });
     if (visible !== undefined || !orphan) return visible ?? null;
     const target = (await ctx.pool.query<{ id: string; slug: string }>('SELECT a.id, a.slug FROM apis a JOIN schedules s ON s.api_id = a.id WHERE a.slug = $1 AND s.id = $2 AND s.owner_id = $3', [slug, id, actor.userId])).rows[0];
     if (target === undefined) return null;
     const row = await withActor(ctx.pool, actor, async (db) => (await db.query<Row>(`${SELECT} WHERE s.id = $1 AND s.api_id = $2`, [id, target.id])).rows[0]);
-    return row ? { api: target, row } : null;
+    // API invisible : son schéma d'entrée n'est pas lu (seules la lecture, la désactivation et la suppression passent).
+    return row ? { api: { ...target, input_schema: null }, row } : null;
   };
 
   app.get<{ Params: { slug: string; id: string } }>('/api/apis/:slug/schedules/:id', async (request, reply) => {
@@ -151,6 +170,11 @@ export function scheduleRoutes(app: FastifyInstance, ctx: ServerContext): void {
       const queue = await ctx.jobs();
       const cur = found.row;
       const b = request.body;
+      // Entrée modifiée : contrôlée contre l'input_schema de l'API (visible : seule la désactivation passe sans elle).
+      if (b.input !== undefined) {
+        if (found.api.input_schema === null) return notFound(reply);
+        if (await rejectInvalidInput(reply, found.api.input_schema, b.input)) return reply;
+      }
       const checked = validateSchedule(queue, {
         cron: b.cron ?? cur.cron,
         timezone: b.timezone ?? cur.timezone,

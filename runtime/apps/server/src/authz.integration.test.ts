@@ -3,7 +3,7 @@
 // Toute nouvelle route rejoint routes/registry.ts ; si elle porte une ressource, RESOURCE_CASES doit savoir créer un
 // objet de A (sinon le test échoue), et si elle prend un corps, VALID_BODIES doit en fournir un.
 import { readFileSync } from 'node:fs';
-import { can } from '@runtime/core';
+import { can, GRANTABLE_SCOPES } from '@runtime/core';
 import { withActor } from '@runtime/db';
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import { withClient } from '../../../tests/helpers/pg.js';
@@ -30,6 +30,10 @@ async function pairDevice(party: Pick<Party, 'user' | 'cookie'>, deviceId: strin
 }
 
 let seq = 0;
+/** État d'un objet relevé à sa création (`intact` le compare après les appels croisés). */
+const snapshots = new Map<string, string>();
+const apiSnapshot = (id: string) => withClient(srv.db.url, async (c) => (await c.query<{ s: string }>('SELECT row_to_json(a)::text AS s FROM apis a WHERE id = $1', [id])).rows[0]?.s ?? '');
+const scheduleSnapshot = (id: string) => withClient(srv.db.url, async (c) => (await c.query<{ s: string }>('SELECT row_to_json(s)::text AS s FROM schedules s WHERE id = $1', [id])).rows[0]?.s ?? '');
 /** Paramètres de chemin d'un objet (`:id`, `:slug`, `:version`) ; le premier sert de marqueur dans les listes. */
 type Params = Record<string, string>;
 /**
@@ -101,9 +105,13 @@ const RESOURCE_CASES: Record<OwnedResource, { create: (party: Party) => Promise<
   api: {
     create: async (party) => {
       const api = await seedApi(srv.db.url, party.user.id);
+      snapshots.set(api.id, await apiSnapshot(api.id));
       return { slug: api.slug, version: '1', id: api.id };
     },
-    intact: async (party, { slug }) => (await srv.app.inject({ method: 'GET', url: `/api/apis/${slug}`, headers: { cookie: party.cookie } })).statusCode === 200,
+    // Visible par A, et INCHANGÉE (description, politiques, statut, versions, `updated_at`) : une écriture croisée qui
+    // répondrait quand même 404 serait vue.
+    intact: async (party, { slug, id }) =>
+      (await srv.app.inject({ method: 'GET', url: `/api/apis/${slug}`, headers: { cookie: party.cookie } })).statusCode === 200 && (await apiSnapshot(id!)) === snapshots.get(id!),
   },
   api_investigation: {
     create: async (party) => {
@@ -127,11 +135,15 @@ const RESOURCE_CASES: Record<OwnedResource, { create: (party: Party) => Promise<
     intact: async (party, { id }) => (await srv.app.inject({ method: 'GET', url: `/api/datasets/${id}/items`, headers: { cookie: party.cookie } })).body.includes('zz_test_item'),
   },
   schedule: {
+    // Planification ACTIVE : le PATCH { enabled: false } de VALID_BODIES aurait un effet visible s'il passait.
     create: async (party) => {
       const api = await seedApi(srv.db.url, party.user.id);
-      return { id: await seedSchedule(srv.db.url, api.id, party.user.id), slug: api.slug };
+      const id = await seedSchedule(srv.db.url, api.id, party.user.id, { enabled: true });
+      snapshots.set(id, await scheduleSnapshot(id));
+      return { id, slug: api.slug };
     },
-    intact: async (party, { id, slug }) => (await srv.app.inject({ method: 'GET', url: `/api/apis/${slug}/schedules/${id}`, headers: { cookie: party.cookie } })).statusCode === 200,
+    intact: async (party, { id, slug }) =>
+      (await srv.app.inject({ method: 'GET', url: `/api/apis/${slug}/schedules/${id}`, headers: { cookie: party.cookie } })).statusCode === 200 && (await scheduleSnapshot(id!)) === snapshots.get(id!),
   },
   webhook_subscription: {
     create: async (party) => ({ id: await seedWebhook(srv.db.url, party.user.id) }),
@@ -356,6 +368,17 @@ describe('assert_authz_matrix (squelette, 08b § 4) : paramétré sur le registr
       const { key } = await createKey(srv, a.cookie, a.user, ['apis:read', 'apis:run', 'apis:write', 'runs:read', 'datasets:read', 'schedules:write', 'sites:read']);
       const res = await call(route, { authorization: `Bearer ${key}` }, ZERO_UUID, VALID_BODIES[keyOf(route)]?.(a));
       expect(res.statusCode).toBe(403);
+    },
+  );
+
+  test.each(ROUTES.filter((r) => r.auth === 'session_or_key' && r.scope).map((r) => [keyOf(r), r] as const))(
+    'cas 2, clé sans le scope requis → 403 insufficient_scope (05 § 4.4) : %s',
+    async (_name, route) => {
+      // Tous les scopes accordables sauf celui de la route.
+      const { key } = await createKey(srv, a.cookie, a.user, GRANTABLE_SCOPES.filter((s) => s !== route.scope));
+      const res = await call(route, { authorization: `Bearer ${key}` }, ZERO_UUID, VALID_BODIES[keyOf(route)]?.(a));
+      expect(res.statusCode).toBe(403);
+      expect(res.json()).toMatchObject({ error: { code: 'insufficient_scope' } });
     },
   );
 

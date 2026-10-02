@@ -1,0 +1,66 @@
+# Liste noire des marques tierces (22 §4, 22b §1) : fournisseurs de modèles, clients MCP, outils de scraping, réseaux
+# sociaux, sites cibles, éditeurs de protection. Insensible à la casse, mot entier. Exceptions descriptives : third-party-allowed.txt.
+openai
+anthropic
+claude
+chatgpt
+gemini
+mistral
+llama
+deepseek
+copilot
+cursor
+windsurf
+cline
+zed
+firecrawl
+apify
+scrapy
+crawlee
+puppeteer
+selenium
+playwright
+octoparse
+zyte
+scrapingbee
+browserbase
+bright data
+brightdata
+oxylabs
+smartproxy
+cloudflare
+akamai
+datadome
+data dome
+perimeterx
+perimeter x
+imperva
+# Éditeurs de protection : mêmes noms que PROTECTION_NAMES de tests/ui-strings.unit.test.ts (un seul régime de lexique).
+incapsula
+kasada
+turnstile
+shape security
+shapesecurity
+arkose
+geetest
+capsolver
+flaresolverr
+recaptcha
+hcaptcha
+funcaptcha
+2captcha
+anticaptcha
+anti-captcha
+twitter
+linkedin
+facebook
+instagram
+tiktok
+reddit
+amazon
+google
+chrome
+chromium
+supabase
+vercel
+netlify

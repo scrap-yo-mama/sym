@@ -99,10 +99,10 @@ export async function seedRun(
   });
 }
 
-/** Planification d'un utilisateur sur une API. */
-export async function seedSchedule(url: string, apiId: string, ownerId: string): Promise<string> {
+/** Planification d'un utilisateur sur une API (désactivée par défaut ; aucun miroir pg-boss n'est écrit). */
+export async function seedSchedule(url: string, apiId: string, ownerId: string, opts: { enabled?: boolean } = {}): Promise<string> {
   return withClient(url, async (c) =>
-    (await c.query<{ id: string }>("INSERT INTO schedules (api_id, owner_id, cron, timezone, input, enabled) VALUES ($1, $2, '0 3 * * *', 'UTC', '{}', false) RETURNING id", [apiId, ownerId])).rows[0]!.id,
+    (await c.query<{ id: string }>("INSERT INTO schedules (api_id, owner_id, cron, timezone, input, enabled) VALUES ($1, $2, '0 3 * * *', 'UTC', '{}', $3) RETURNING id", [apiId, ownerId, opts.enabled === true])).rows[0]!.id,
   );
 }
 

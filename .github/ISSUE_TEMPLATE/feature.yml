@@ -1,27 +1,28 @@
-name: Fonction
-description: Proposer une nouvelle fonction ou une amélioration.
+name: Feature · Fonction
+description: Suggest a new feature or an improvement. · Proposer une nouvelle fonction ou une amélioration.
+labels: ["enhancement"]
 body:
   - type: checkboxes
     id: perimetre
     attributes:
-      label: Périmètre
+      label: Scope · Périmètre
       options:
-        - label: Cette demande ne relève pas de la page « Hors périmètre » (`runtime/docs/hors-perimetre.md`).
+        - label: This request is not on the "Out of scope" page (`runtime/docs/hors-perimetre.md`). · Cette demande ne relève pas de la page « Hors périmètre » (`runtime/docs/hors-perimetre.md`).
           required: true
   - type: textarea
     id: besoin
     attributes:
-      label: Le besoin
-      description: Quel problème voulez-vous résoudre, pour quel usage ?
+      label: The need · Le besoin
+      description: What problem do you want to solve, for which use? · Quel problème veux-tu résoudre, pour quel usage ?
     validations:
       required: true
   - type: textarea
     id: proposition
     attributes:
-      label: Proposition
+      label: Proposal · Proposition
     validations:
       required: true
   - type: textarea
     id: alternatives
     attributes:
-      label: Alternatives envisagées
+      label: Alternatives considered · Alternatives envisagées

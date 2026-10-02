@@ -16,6 +16,7 @@ import { launchAgentBrowser } from '../browser/agent-browser.js';
 import { installedEngineIdentity } from '../browser/engine-identity.js';
 import { cgroupMemoryLimitBytes, cgroupMemoryWorkingSetBytes } from '../browser/cgroup.js';
 import { BrowserPool, playwrightLauncher } from '../browser/pool.js';
+import { chromiumSandboxCheck, seccompMode, type ChromiumSandboxStatus } from '../browser/sandbox-check.js';
 import { ProcessSandboxEngine, sandboxOptionsFromEnv, type IsolationProbe } from '../sandbox/index.js';
 import type { ExecutorFactory } from '../worker.js';
 import { loadInlineScript } from './script-executor.js';
@@ -76,6 +77,8 @@ type FactoryEngine = SandboxEngine & { probeIsolation(): Promise<IsolationProbe>
 export type ProductionFactoryOverrides = {
   /** Moteur du bac à sable (tests) ; défaut : `ProcessSandboxEngine` sur l'utilisateur dédié lu dans l'environnement. */
   readonly sandboxEngine?: (options: { production: boolean }) => FactoryEngine;
+  /** Vérification du bac à sable de Chromium au démarrage (tests) ; défaut : `chromiumSandboxCheck()`. */
+  readonly chromiumSandbox?: () => Promise<ChromiumSandboxStatus>;
 };
 
 export function productionExecutorFactory(env: Readonly<Record<string, string | undefined>> = process.env, overrides: ProductionFactoryOverrides = {}): ExecutorFactory {
@@ -84,13 +87,34 @@ export function productionExecutorFactory(env: Readonly<Record<string, string | 
     const pacer = new DomainPacer(new PgPacingStore(pool));
     const secrets = secretStore(pool, config.keyring, checked);
     const production = env['NODE_ENV'] === 'production';
-    const engine: FactoryEngine = overrides.sandboxEngine?.({ production }) ?? new ProcessSandboxEngine({ ...sandboxOptionsFromEnv(env), production });
+    const sandbox = sandboxOptionsFromEnv(env);
+    const engine: FactoryEngine =
+      overrides.sandboxEngine?.({ production }) ??
+      new ProcessSandboxEngine({
+        ...sandbox,
+        production,
+        onSweepFailure: (message) => logger.error({ alert: 'sandbox_sweep_failed' }, message),
+      });
     if (production) {
       const probe = await engine.probeIsolation();
       if (probe.parentEnviron === 'readable') {
         throw new SandboxIsolationError("bac à sable : l'enfant lit l'environnement du worker (utilisateur dédié requis, D-30)");
       }
-      logger.info({ sandboxUid: probe.uid, noNewPrivs: probe.noNewPrivs }, 'bac à sable : isolation éprouvée');
+      // Sous no-new-privileges, /proc/<worker>/environ est refusé même à un enfant du MÊME uid (le worker détient des
+      // capacités permises) : la séparation se prouve par l'uid de l'enfant et par le fichier témoin du worker (revue 4.1b).
+      if (probe.uid === undefined || probe.uid === 0 || probe.uid === process.getuid?.() || (sandbox.uid !== undefined && probe.uid !== sandbox.uid)) {
+        throw new SandboxIsolationError(`bac à sable : l'enfant ne tourne pas sous l'uid dédié (uid ${String(probe.uid)}, attendu ${String(sandbox.uid)}, D-30)`);
+      }
+      if (probe.witness !== 'denied') {
+        throw new SandboxIsolationError("bac à sable : l'enfant lit les fichiers du worker (fichier témoin), utilisateur dédié requis (D-30)");
+      }
+      // Le profil seccomp du compose permet les espaces de noms utilisateur à tout le conteneur (bac à sable de Chromium) :
+      // l'enfant doit les perdre (filtre SANDBOX_SECCOMP, revue 4.1b).
+      if (probe.namespaces === 'allowed') {
+        throw new SandboxIsolationError("bac à sable : l'enfant peut créer un espace de noms utilisateur (filtre SANDBOX_SECCOMP requis, revue 4.1b)");
+      }
+      // Régime seccomp du conteneur (champ Seccomp de /proc/self/status : 0 aucun, 2 filtre) : relevé sur chaque hébergeur.
+      logger.info({ sandboxUid: probe.uid, noNewPrivs: probe.noNewPrivs, namespaces: probe.namespaces, seccomp: seccompMode() ?? 'inconnu' }, 'bac à sable : isolation éprouvée');
     }
     let browsers: BrowserPool | null = null;
     let launchProxy: EgressProxy | undefined;
@@ -108,6 +132,20 @@ export function productionExecutorFactory(env: Readonly<Record<string, string | 
         onEvent: (event) => logger.info(event, 'navigateur'),
       });
       logger.info({ browserConcurrency: config.browserConcurrency, source: config.browserConcurrencySource }, 'pool Chromium prêt (lancement à la demande)');
+      // Bac à sable de Chromium (jamais --no-sandbox) : sans espaces de noms utilisateur (profil seccomp par défaut de Docker,
+      // AppArmor de l'hôte), chaque run navigateur s'arrêterait sur « No usable sandbox! ». Dit dès le démarrage, sans
+      // empêcher les runs sans navigateur (revue 4.1b : Render n'applique pas le profil du compose).
+      if (production) {
+        const status = await (overrides.chromiumSandbox ?? chromiumSandboxCheck)();
+        const seccomp = seccompMode() ?? 'inconnu';
+        if (status.available) logger.info({ seccomp }, 'Chromium : bac à sable disponible');
+        else {
+          logger.error(
+            { alert: 'chromium_sandbox_unavailable', seccomp, detail: status.detail },
+            "Chromium : bac à sable indisponible (espaces de noms utilisateur refusés par le profil seccomp ou AppArmor de l'hôte) : les runs navigateur échoueront (« No usable sandbox! »). Docker : profil seccomp-chromium.json (security_opt du worker), voir docs/deploiement.md",
+          );
+        }
+      }
     }
     const pool_ = browsers;
     // E4-E6 (tâche 2.4) : réglages LLM relus à chaque essai, clés dans le dépôt de secrets (INV8).

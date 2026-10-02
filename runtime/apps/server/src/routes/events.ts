@@ -101,6 +101,9 @@ export function eventRoutes(app: FastifyInstance, ctx: ServerContext): void {
     if (!UUID.test(request.params.id)) return notFound(reply);
     const run = await withActor(ctx.pool, actor, (db) => readRunRow(db, request.params.id));
     if (run === null) return notFound(reply);
+    // Run déjà servi jusqu'à sa trame `end` : 204 No Content arrête un client SSE standard (EventSource), qui sinon se
+    // reconnecterait toutes les 3 s sans fin sur un flux 200 aussitôt clos.
+    if (lastEventId(request) === 'end') return reply.code(204).send();
     return stream(request, reply, new RunFeed(ctx, actor, run.id, lastEventId(request)));
   });
 }
