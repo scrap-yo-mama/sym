@@ -8,7 +8,8 @@
   "scripts": {
     "ci:local": "node scripts/ci-local.ts",
     "typecheck": "tsc -p tsconfig.json",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:deploy": "vitest run tests/deploy.e2e.test.ts"
   },
   "devDependencies": {
     "@types/node": "catalog:",
