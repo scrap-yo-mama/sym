@@ -36,6 +36,18 @@
   --color-nav: var(--nav);
   --color-nav-foreground: var(--nav-foreground);
   --color-nav-muted-foreground: var(--nav-muted-foreground);
+  /* Pastilles de statut (04d § 5.1) : jetons de statut de packages/ui ; la couleur accompagne toujours icône et libellé. */
+  --color-status-pending: var(--status-enquete);
+  --color-status-pending-foreground: var(--status-enquete-foreground);
+  --color-status-running: var(--status-sain);
+  --color-status-running-foreground: var(--status-sain-foreground);
+  --color-status-ended: var(--status-bloquee);
+  --color-status-ended-foreground: var(--status-bloquee-foreground);
+  --color-status-timed-out: var(--status-warning);
+  --color-status-timed-out-foreground: var(--status-warning-foreground);
+  --color-status-failed: var(--status-erreur);
+  --color-status-failed-foreground: var(--status-erreur-foreground);
+  --color-status-border: var(--status-border);
   --radius-md: var(--sym-radius-control);
   --radius-lg: 16px;
   --radius-xl: var(--sym-radius-card);
@@ -53,6 +65,14 @@
   h2,
   h3 {
     @apply font-display font-extrabold tracking-tight;
+  }
+  /* Focus visible au clavier (WCAG 2.4.11) : anneau bleu SYM ; jaune signature sur la barre anthracite. */
+  :focus-visible {
+    outline: 3px solid var(--ring);
+    outline-offset: 2px;
+  }
+  .sym-on-ink :focus-visible {
+    outline-color: var(--signature);
   }
   /* Cibles programmatiques du focus (h1 de page, main) : pas d'anneau parasite. */
   [tabindex="-1"]:focus {

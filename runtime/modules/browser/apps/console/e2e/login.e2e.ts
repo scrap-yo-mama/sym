@@ -103,7 +103,8 @@ test.describe('parcours au clavier seul (fr)', () => {
   test.use({ locale: 'fr-FR' });
 
   test('connexion refusée (message annoncé, mot de passe vidé), puis acceptée ; déconnexion', async ({ page }) => {
-    const errors = await open(page, '/sessions', { bootstrapToken: TOKEN, admin: ADMIN });
+    // Depuis l'accueil : /sessions existe depuis la tâche 3.6 (retour vers elle après connexion, autre parcours).
+    const errors = await open(page, '/', { bootstrapToken: TOKEN, admin: ADMIN });
     await expect(page).toHaveURL(/\/login$/);
     // Premier arrêt du clavier : le lien d'évitement.
     await page.keyboard.press('Tab');

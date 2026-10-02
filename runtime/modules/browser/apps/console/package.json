@@ -4,7 +4,7 @@
   "version": "0.0.0",
   "type": "module",
   "license": "AGPL-3.0-only",
-  "description": "Console de SYM Browser : Vue 3.5, Reka UI, Tailwind 4, design system SYM (packages/ui), vue-i18n en fr et en. Fondations de la tâche 3.5 : connexion admin, premier démarrage, service API typé.",
+  "description": "Console de SYM Browser : Vue 3.5, Reka UI, Tailwind 4, design system SYM (packages/ui), vue-i18n en fr et en. Fondations (tâche 3.5) : connexion admin, premier démarrage, service API typé ; écrans (tâche 3.6) : sessions, détail, nœuds, clés et quotas, profils, consommation.",
   "scripts": {
     "dev": "vite",
     "build": "vue-tsc --noEmit -p tsconfig.json && vite build",
@@ -28,11 +28,13 @@
     "@playwright/test": "catalog:",
     "@tailwindcss/vite": "catalog:",
     "@types/node": "catalog:",
+    "@types/ws": "catalog:",
     "@vitejs/plugin-vue": "catalog:",
     "tailwindcss": "catalog:",
     "typescript": "catalog:",
     "vite": "catalog:",
     "vitest": "catalog:",
-    "vue-tsc": "catalog:"
+    "vue-tsc": "catalog:",
+    "ws": "catalog:"
   }
 }
