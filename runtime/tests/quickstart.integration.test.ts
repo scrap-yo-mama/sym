@@ -257,8 +257,13 @@ describe('assert_quickstart_replayed : le tutoriel sur une instance vierge', () 
     expect(steps.length).toBeGreaterThanOrEqual(8);
     expect(new Set(steps.map((s) => s.id)).size).toBe(steps.length);
     for (const step of steps.filter((s) => s.mode === 'run')) {
-      // Toute requête du tutoriel vise l'instance locale : le rejeu ne contacte aucun site.
-      for (const url of step.script.match(/https?:\/\/[^\s'"\\]+/g) ?? []) expect(url.startsWith(QUICKSTART_BASE_URL), `${step.id} : ${url}`).toBe(true);
+      // Toute requête du tutoriel vise l'instance locale ; le site à enquêter de la première API (3.1) est local aussi (site de
+      // test `zz_test_<id>.localhost` : sous-domaine de localhost, boucle locale par RFC 6761) : le rejeu ne contacte aucun site.
+      for (const url of step.script.match(/https?:\/\/[^\s'"\\]+/g) ?? []) {
+        const host = new URL(url).hostname;
+        const local = ['localhost', '127.0.0.1'].includes(host) || host.endsWith('.localhost');
+        expect(url.startsWith(QUICKSTART_BASE_URL) || local, `${step.id} : ${url}`).toBe(true);
+      }
     }
   });
 
@@ -356,18 +361,19 @@ describe('assert_quickstart_no_egress : aucune connexion ne quitte la machine', 
 describe('assert_quickstart_pending_steps_declared : ce que le tutoriel décrit sans le rejouer', () => {
   const pending = steps.filter((s) => s.mode === 'pending');
 
-  test('les étapes D0 et première API sont déclarées en attente, avec leur cause', () => {
-    expect(pending.map((s) => s.id).sort()).toEqual(['d0', 'first-api']);
+  test('l’étape D0 est déclarée en attente, avec sa cause ; la première API (REST, 3.1) est rejouée', () => {
+    expect(pending.map((s) => s.id).sort()).toEqual(['d0']);
+    expect(steps.find((s) => s.id === 'first-api')?.mode).toBe('run');
     for (const step of pending) expect(step.pending, step.id).toBeTruthy();
   });
 
-  test('leurs routes ne sont pas encore livrées : sinon, il faut les rejouer (reprise : 3.1 première API, 3.2 D0)', () => {
+  test('sa route n’est pas encore livrée : sinon, il faut la rejouer (reprise : 3.2 D0) ; la création d’API l’est (3.1)', () => {
     const delivered = (method: string, url: string): boolean => ROUTES.some((r) => r.method === method && r.url === url);
-    expect(delivered('POST', '/api/apis'), 'POST /api/apis est livrée (3.1) : passez « first-api » en mode run et remplacez le test.todo assert_quickstart_d0_first_api').toBe(false);
+    expect(delivered('POST', '/api/apis'), 'POST /api/apis (3.1) : l’étape « first-api » est rejouée').toBe(true);
     expect(ROUTES.some((r) => r.url === '/mcp' || r.url.startsWith('/mcp/')), '/mcp est livré (3.2) : passez « d0 » en mode run et remplacez le test.todo assert_quickstart_d0_first_api').toBe(false);
     const openapi = readFileSync(join(runtimeDir, 'packages/client/openapi/openapi.yaml'), 'utf8').split('\n');
     const at = openapi.findIndex((line) => line.trim() === 'operationId: createApi');
     expect(at).toBeGreaterThan(0);
-    expect(openapi.slice(Math.max(0, at - 3), at).some((line) => line.includes('x-pending')), 'createApi n\'est plus « en préparation » dans l\'OpenAPI').toBe(true);
+    expect(openapi.slice(Math.max(0, at - 3), at).some((line) => line.includes('x-pending')), 'createApi est livrée : plus « en préparation » dans l\'OpenAPI').toBe(false);
   });
 });

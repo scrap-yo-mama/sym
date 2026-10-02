@@ -20,8 +20,9 @@ export type TransitionDef = {
   reasons: readonly string[];
 };
 
+/** Signaux d'un run dégradé (5, 8) : `items_rejected` compris (D-49, 04 §5). le test de propriété explore tout `DEGRADED_SIGNALS`. */
 const SIGNALS = [
-  'retried', 'escalated', 'repaired', 'optional_fields_missing', 'volume_anomaly', 'pagination_short', 'slow', 'cost_anomaly',
+  'retried', 'escalated', 'repaired', 'optional_fields_missing', 'volume_anomaly', 'items_rejected', 'pagination_short', 'slow', 'cost_anomaly',
   // Profil des sorties (2.12) : aucune transition nouvelle, les motifs passent par 5 et 8.
   'field_constant', 'pattern_shift', 'sentinel_values', 'duplicate_items', 'new_enum_value',
 ] as const;

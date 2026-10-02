@@ -7,6 +7,7 @@ import { describe, test } from 'vitest';
 import type { FailureClass } from '../model/enums.js';
 import {
   applyStatusEvent,
+  DEGRADED_SIGNALS,
   gateRun,
   initialStatusState,
   quietPeriodMs,
@@ -203,10 +204,8 @@ function drivenRun(model: Model, real: Real, ev: StatusEventInput, trigger: 'sch
   if (gate.kind === 'api_error') real.apiErrors += 1;
 }
 
-const signalsArb = fc.subarray<DegradedSignal>(
-  ['retried', 'escalated', 'repaired', 'optional_fields_missing', 'volume_anomaly', 'pagination_short', 'slow', 'cost_anomaly'],
-  { minLength: 1 },
-);
+// Tous les signaux de la machine (`DEGRADED_SIGNALS`), jamais une liste recopiée : un signal ajouté est exploré d'office.
+const signalsArb = fc.subarray<DegradedSignal>([...DEGRADED_SIGNALS], { minLength: 1 });
 const failureArb = fc.constantFrom<FailureClass>(
   'transient', 'extraction', 'code_error', 'network', 'auth_required', 'forbidden', 'blocked_by_protection', 'robots_disallowed',
   'payment_required', 'account_limit', 'rate_limited', 'not_found', 'robots_unreachable', 'run_budget_exceeded', 'budget_exceeded',

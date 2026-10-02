@@ -4,9 +4,12 @@
 // le rejeu lui-même fait 0 appel LLM. Le juge ne fait que poser `runs.judge` (et la raison informative `judge_flag` au
 // journal du run, noms de champs seulement) : aucun statut, aucune version, aucun schéma, aucune règle ne change. Désactivé
 // par défaut (`settings.llm.judge.enabled` et un modèle au rôle `judge`). Prompt et réponse jamais journalisés.
-import { applyJudgement, judgeDecision, selectJudgeSample, type JudgeTrigger, type RunJudge, type RunProfile } from '@runtime/core';
+// Revue 2.12 : chaque jugement a un plafond connu avant l'envoi (budget restant de l'enquête ou de la réparation, plafond
+// fixe `ANOMALY_JUDGE_MAX_USD` sur anomalie) ; l'échantillon porte un item de la baseline validée quand elle existe ; le
+// jugement sur anomalie est un job pg-boss (`quality-judge`, un par run), qui survit au redémarrage du worker.
+import { applyJudgement, judgeDecision, judgeSampleItems, type JudgeTrigger, type RunJudge, type RunProfile } from '@runtime/core';
 import { judgeCallCeilingUsd, proposeJudgement } from '@runtime/agent';
-import { lastAnomalyJudgedAt, readLlmSettings, readRunForJudge, saveRunJudge } from '@runtime/db';
+import { inputHash, lastAnomalyJudgedAt, readBaselineItem, readLlmSettings, readRunForJudge, saveRunJudge } from '@runtime/db';
 import { qualitySettings, roleTarget, type LlmClient, type LlmConfig } from '@runtime/llm';
 import { randomBytes } from 'node:crypto';
 import type pg from 'pg';
@@ -14,12 +17,20 @@ import type pg from 'pg';
 export type QualityPorts = {
   /** Juge activé par l'admin (défaut : `settings.llm.judge.enabled` et un modèle au rôle `judge`). */
   readonly judgeEnabled: () => Promise<boolean>;
-  /** Jugement sur anomalie d'un rejeu : job séparé, après le run (le worker le planifie). */
-  readonly scheduleJudge?: (job: { readonly runId: string; readonly ownerId: string }) => void;
+  /** Jugement sur anomalie d'un rejeu : job pg-boss séparé (`quality-judge`, un par run), traité après le run. */
+  readonly scheduleJudge?: (job: { readonly runId: string; readonly ownerId: string }) => Promise<unknown> | void;
 };
 
 export function settingsQualityPorts(pool: pg.Pool): QualityPorts {
   return { judgeEnabled: async () => qualitySettings(await readLlmSettings(pool)).judgeEnabled };
+}
+
+/** Plafond d'un jugement sur anomalie (USD) : hors de tout budget de run, il est fixe. */
+const ANOMALY_JUDGE_MAX_USD = 0.05;
+
+/** Run pas encore clos au moment du job : pg-boss le reprendra (retryLimit de la file). */
+class RunNotClosedError extends Error {
+  override name = 'RunNotClosedError';
 }
 
 export type JudgementOutcome = { readonly judge: RunJudge; readonly reasons: readonly 'judge_flag'[]; readonly costUsd: number | null; readonly tokens: { in: number; cached: number; out: number; reasoning: number }; readonly seed: string };
@@ -35,6 +46,8 @@ export async function judgeItems(args: {
   readonly schema: unknown;
   readonly profile: RunProfile;
   readonly items: readonly unknown[];
+  /** Item de la baseline validée (19 §3), ajouté en dernier à l'échantillon. */
+  readonly baselineItem?: unknown;
   readonly maxUsd?: number;
   readonly signal?: AbortSignal;
 }): Promise<JudgementOutcome | null> {
@@ -43,8 +56,7 @@ export async function judgeItems(args: {
   const price = 'price' in target.model ? target.model.price : undefined;
   if (price === undefined) return null;
   const seed = randomBytes(8).toString('hex');
-  const sample = selectJudgeSample(args.items, args.profile, { seed });
-  const items = sample.indices.map((i) => args.items[i]);
+  const { items } = judgeSampleItems(args.items, args.profile, { seed, ...(args.baselineItem === undefined || args.baselineItem === null ? {} : { baselineItem: args.baselineItem }) });
   if (args.maxUsd !== undefined && judgeCallCeilingUsd({ schema: args.schema, profile: args.profile, items }, price) > args.maxUsd) return null;
   const client = args.client({ ...args.config, roles: { judge: args.config.roles.judge! } });
   const out = await proposeJudgement(client, { schema: args.schema, profile: args.profile, items, ...(args.signal === undefined ? {} : { signal: args.signal }) });
@@ -73,13 +85,15 @@ export function createJudgeJob(deps: { readonly pool: pg.Pool; readonly llm: { r
       await sleep(500);
       run = await readRunForJudge(deps.pool, { runId: job.runId, ownerId: job.ownerId });
     }
+    if (run !== null && !TERMINAL.has(run.state)) throw new RunNotClosedError('run non clos');
     if (run === null || run.profile === null || run.state !== 'succeeded') return null;
     const enabled = await deps.quality.judgeEnabled();
     const last = trigger === 'anomaly' ? await lastAnomalyJudgedAt(deps.pool, { apiId: run.apiId, ownerId: job.ownerId }) : null;
     if (!judgeDecision({ enabled, trigger, lastJudgedAt: last, now: now() })) return null;
     const config = await deps.llm.config().catch(() => null);
     if (config === null) return null;
-    const out = await judgeItems({ config, client: deps.llm.client, trigger, schema: run.outputSchema, profile: run.profile, items: run.items }).catch(() => null);
+    const baselineItem = await readBaselineItem(deps.pool, { apiId: run.apiId, ownerId: job.ownerId, inputHash: inputHash(run.input) }).catch(() => null);
+    const out = await judgeItems({ config, client: deps.llm.client, trigger, schema: run.outputSchema, profile: run.profile, items: run.items, baselineItem, maxUsd: ANOMALY_JUDGE_MAX_USD }).catch(() => null);
     if (out === null) return null;
     await saveRunJudge(deps.pool, { runId: job.runId, ownerId: job.ownerId, judge: out.judge, costUsd: out.costUsd, tokens: out.tokens });
     return out.judge;

@@ -274,6 +274,12 @@ export function decodeCursor(cursor: string | undefined, size: number): string[]
 
 export const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+/** Horodatage d'un curseur (texte PostgreSQL ou ISO 8601, fuseau explicite) : contrôlé avant `::timestamptz` (sinon 500). */
+export const CURSOR_TIME = /^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(\.\d{1,6})?(Z|[+-]\d{2}(:?\d{2})?)$/;
+
+/** Plus grand entier PostgreSQL `integer` : borne des numéros (version, seq) reçus dans une URL. */
+export const INT4_MAX = 2_147_483_647;
+
 export const iso = (d: Date | null | undefined): string | null => (d ? d.toISOString() : null);
 
 // ---------------------------------------------------------------------------------------------------------------

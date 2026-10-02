@@ -5,6 +5,10 @@
 // (remplissage, sentinelles, motifs, longueurs), jamais min, max, top-k ni exemple ; un champ non annoté dont au moins
 // 20 % des valeurs ressemblent à un e-mail ou un téléphone devient `suspected_personal` (même traitement). Les motifs de
 // format sont des formes (`A-9`, `a.a9@a.a`) : lettres et chiffres réduits à leur classe, répétitions fusionnées.
+// Sous le seuil de soupçon, chaque valeur du top-k passe par la couche 2 du masquage (motifs : e-mail, téléphone, IBAN…) :
+// une adresse isolée dans un champ libre (1 note sur 10) n'entre ni dans `run_profiles`, ni dans `runs.quality`, ni dans
+// la baseline (revue 2.12). Les valeurs restantes (un nom libre, par exemple) sont couvertes par `erase_subject`.
+import { maskTextForLlm } from '../privacy/llm-mask.js';
 
 /** Liste fermée des sentinelles (r4 R5). */
 export const SENTINEL_VALUES: readonly string[] = Object.freeze(['N/A', 'n/a', '-', '—', 'null', 'undefined', '']);
@@ -123,7 +127,7 @@ function profileField(name: string, schema: unknown, items: readonly unknown[]):
     .filter((d) => typeof d.value === 'string' || typeof d.value === 'number' || typeof d.value === 'boolean')
     .sort((a, b) => b.count - a.count || canonical(a.value).localeCompare(canonical(b.value)))
     .slice(0, TOP_K)
-    .map((d) => ({ value: typeof d.value === 'string' ? d.value.slice(0, 120) : (d.value as number | boolean), count: d.count }));
+    .map((d) => ({ value: typeof d.value === 'string' ? maskTextForLlm(d.value).slice(0, 120) : (d.value as number | boolean), count: d.count }));
   return { ...base, ...(numbers.length > 0 ? { min: Math.min(...numbers), max: Math.max(...numbers) } : {}), top };
 }
 

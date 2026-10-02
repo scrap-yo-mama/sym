@@ -1,12 +1,30 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// Profils des runs et avis du juge (tâche 2.12, 19 §3, migration 0018) : écrits et lus comme le propriétaire (RLS, INV12).
-// La baseline est validée par l'utilisateur SEUL (r4 R3 : `promote_api`, ou confirmation après `test_api`) ; un retour
-// « ce champ est faux » sort le run de la baseline. L'avis du juge ne touche que `runs.judge` (et le coût du run, INV4) :
-// jamais le statut, la version courante, le schéma ni une règle.
+// Profils des runs et avis du juge (tâche 2.12, 19 §3, migration 0019) : écrits et lus comme le propriétaire (RLS, INV12).
+// Le profil appartient au RUN (revue 2.12, comme la quarantaine D-49) : `owner_id` = `runs.owner_id`. Quand B exécute
+// une API de A partagée avec l'instance, le profil (et son top-k, tiré des données de B) est à B : A ne le lit pas, et la
+// mémoire du catalogue de A ne voit que les profils de ses propres runs. La baseline est validée par le propriétaire de
+// l'API SEUL, sur l'un de ses propres runs (r4 R3 : `promote_api`, ou confirmation après `test_api`, tâche 3.14) ; un
+// retour « ce champ est faux » sort le run de la baseline. Les runs de B n'ont donc pas de baseline : seuls les contrôles
+// absolus (constante, sentinelles, doublons) s'y appliquent. L'avis du juge ne touche que `runs.judge` (et le coût du
+// run, INV4) : jamais le statut, la version courante, le schéma ni une règle.
 import { createHash } from 'node:crypto';
-import type { RunJudge, RunProfile } from '@runtime/core';
+import type { JobQueue, QueueDefinition, RunJudge, RunProfile } from '@runtime/core';
 import type pg from 'pg';
 import { withActor } from './rls.js';
+
+/** File du jugement sur anomalie d'un rejeu (19 §3) : un job par run, après sa clôture. */
+export const JUDGE_QUEUE = 'quality-judge';
+export type RunJudgeJob = { readonly run_id: string; readonly owner_id: string };
+
+export function judgeQueueDefinition(): QueueDefinition {
+  // `short` : un seul job en attente par clé (le run) ; quelques reprises si le run n'est pas encore clos.
+  return { name: JUDGE_QUEUE, expireInSeconds: 300, heartbeatSeconds: 30, retryLimit: 3, policy: 'short', deleteAfterSeconds: 7 * 86_400 };
+}
+
+/** Planifie le jugement sur anomalie d'un run ; `null` : un job attend déjà pour ce run (doublon écarté). */
+export async function scheduleRunJudge(queue: JobQueue, args: { runId: string; ownerId: string }): Promise<string | null> {
+  return queue.enqueueOnce<RunJudgeJob>(JUDGE_QUEUE, { run_id: args.runId, owner_id: args.ownerId }, { singletonKey: `judge:${args.runId}`, startAfterSeconds: 1 });
+}
 
 /** Empreinte stable de l'entrée d'un run (clés triées) : la baseline compare des runs à même `input_hash`. */
 export function inputHash(input: unknown): string {
@@ -29,6 +47,23 @@ export async function saveRunProfile(pool: pg.Pool, args: { runId: string; apiId
   });
 }
 
+/**
+ * Item de la baseline validée à même entrée, pour l'échantillon du juge (19 §3) : le premier item du run validé, lu comme
+ * le propriétaire ; `null` si aucune baseline ou si son run a été purgé.
+ */
+export async function readBaselineItem(pool: pg.Pool, args: { apiId: string; ownerId: string; inputHash: string }): Promise<unknown> {
+  return withActor(pool, { userId: args.ownerId, role: 'member' }, async (tx) => {
+    const { rows } = await tx.query<{ item: unknown }>(
+      `SELECT i.item FROM run_profiles p JOIN runs r ON r.id = p.run_id AND r.owner_id = $2
+         JOIN dataset_items i ON i.dataset_id = r.dataset_id AND i.owner_id = $2
+       WHERE p.api_id = $1 AND p.owner_id = $2 AND p.input_hash = $3 AND p.baseline
+       ORDER BY p.validated_at DESC, i.seq LIMIT 1`,
+      [args.apiId, args.ownerId, args.inputHash],
+    );
+    return rows[0]?.item ?? null;
+  });
+}
+
 /** Dernière baseline validée à même entrée ; `null` : aucune (les motifs comparatifs restent inactifs). */
 export async function readValidatedBaseline(pool: pg.Pool, args: { apiId: string; ownerId: string; inputHash: string }): Promise<RunProfile | null> {
   return withActor(pool, { userId: args.ownerId, role: 'member' }, async (tx) => {
@@ -40,10 +75,15 @@ export async function readValidatedBaseline(pool: pg.Pool, args: { apiId: string
   });
 }
 
-/** Acte humain : le profil d'un run devient baseline (le propriétaire de l'API seulement). */
+/** Acte humain : le profil d'un run devient baseline (le propriétaire de l'API seulement, sur l'un de ses runs). */
 export async function validateBaseline(pool: pg.Pool, args: { runId: string; ownerId: string; userId: string }): Promise<void> {
   await withActor(pool, { userId: args.userId, role: 'member' }, async (tx) => {
-    const { rowCount } = await tx.query('UPDATE run_profiles SET baseline = true, validated_by = $3, validated_at = now() WHERE run_id = $1 AND owner_id = $2', [args.runId, args.ownerId, args.userId]);
+    const { rowCount } = await tx.query(
+      `UPDATE run_profiles p SET baseline = true, validated_by = $3, validated_at = now()
+       WHERE p.run_id = $1 AND p.owner_id = $2 AND p.owner_id = $3
+         AND EXISTS (SELECT 1 FROM apis a WHERE a.id = p.api_id AND a.owner_id = $2)`,
+      [args.runId, args.ownerId, args.userId],
+    );
     if (rowCount !== 1) throw new Error('profil introuvable pour ce propriétaire');
   });
 }
@@ -78,15 +118,15 @@ export async function lastAnomalyJudgedAt(pool: pg.Pool, args: { apiId: string; 
 }
 
 /** Run, items et schéma pour un jugement (job séparé, après le run) : lus comme le propriétaire. */
-export async function readRunForJudge(pool: pg.Pool, args: { runId: string; ownerId: string }): Promise<{ apiId: string; outputSchema: unknown; items: unknown[]; profile: RunProfile | null; state: string } | null> {
+export async function readRunForJudge(pool: pg.Pool, args: { runId: string; ownerId: string }): Promise<{ apiId: string; outputSchema: unknown; items: unknown[]; profile: RunProfile | null; state: string; input: unknown } | null> {
   return withActor(pool, { userId: args.ownerId, role: 'member' }, async (tx) => {
-    const { rows } = await tx.query<{ api_id: string; output_schema: unknown; dataset_id: string | null; quality: RunProfile | null; state: string }>(
-      'SELECT r.api_id, a.output_schema, r.dataset_id, r.quality, r.state FROM runs r JOIN apis a ON a.id = r.api_id WHERE r.id = $1 AND r.owner_id = $2',
+    const { rows } = await tx.query<{ api_id: string; output_schema: unknown; dataset_id: string | null; quality: RunProfile | null; state: string; input: unknown }>(
+      'SELECT r.api_id, a.output_schema, r.dataset_id, r.quality, r.state, r.input FROM runs r JOIN apis a ON a.id = r.api_id WHERE r.id = $1 AND r.owner_id = $2',
       [args.runId, args.ownerId],
     );
     const r = rows[0];
     if (r === undefined) return null;
     const items = r.dataset_id === null ? [] : (await tx.query<{ item: unknown }>('SELECT item FROM dataset_items WHERE dataset_id = $1 ORDER BY seq LIMIT 100', [r.dataset_id])).rows.map((x) => x.item);
-    return { apiId: r.api_id, outputSchema: r.output_schema, items, profile: r.quality, state: r.state };
+    return { apiId: r.api_id, outputSchema: r.output_schema, items, profile: r.quality, state: r.state, input: r.input };
   });
 }

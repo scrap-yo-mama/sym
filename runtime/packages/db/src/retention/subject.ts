@@ -138,7 +138,7 @@ export async function isSubjectExcluded(db: Queryable, key: Buffer, value: strin
  * Tables balayées par l'outil (liste fermée). Jamais `users`, `auth_*`, `verifications`, `api_keys`, `secrets`,
  * `invitations` ni `audit_events` : ni compte ni contenu n'en sort, même agrégé (pas d'oracle de sous-chaîne).
  */
-export const SUBJECT_CONTENT_TABLES = ['dataset_items', 'runs', 'run_logs', 'investigation_events', 'run_rejected_items', 'status_events', 'tunnel_jobs', 'schedules'] as const;
+export const SUBJECT_CONTENT_TABLES = ['dataset_items', 'runs', 'run_logs', 'investigation_events', 'run_rejected_items', 'run_profiles', 'status_events', 'tunnel_jobs', 'schedules'] as const;
 
 /**
  * Nombre de lignes des tables de contenu contenant une valeur du sujet (SQL brut sur `to_jsonb(ligne)`, motif borné aux
@@ -176,12 +176,15 @@ export function scrubSubject(value: unknown, values: readonly string[]): unknown
 }
 
 type ScrubTarget = { table: string; pk: string[]; json: string[]; text: string[] };
-const SCRUB_TARGETS: Record<'run_logs' | 'runs' | 'investigation_events' | 'run_rejected_items' | 'status_events' | 'tunnel_jobs' | 'schedules', ScrubTarget> = {
+const SCRUB_TARGETS: Record<'run_logs' | 'runs' | 'investigation_events' | 'run_rejected_items' | 'run_profiles' | 'status_events' | 'tunnel_jobs' | 'schedules', ScrubTarget> = {
   run_logs: { table: 'run_logs', pk: ['run_id', 'seq'], json: ['data'], text: ['event'] },
-  runs: { table: 'runs', pk: ['id'], json: ['input'], text: ['error_detail'] },
+  // 2.12 : fiche de qualité (top-k des champs non annotés x-personal) et avis du juge (raison en texte libre du LLM).
+  runs: { table: 'runs', pk: ['id'], json: ['input', 'quality', 'judge'], text: ['error_detail'] },
   investigation_events: { table: 'investigation_events', pk: ['run_id', 'seq'], json: ['payload'], text: [] },
   // Quarantaine (D-49, 0017) : l'échantillon nettoyé et les pointeurs des raisons (une clé inconnue vient du site).
   run_rejected_items: { table: 'run_rejected_items', pk: ['run_id'], json: ['sample', 'by_reason'], text: [] },
+  // Profil des runs (2.12, 0019) : top-k gardé avec la baseline, sans limite de durée.
+  run_profiles: { table: 'run_profiles', pk: ['id'], json: ['profile'], text: [] },
   status_events: { table: 'status_events', pk: ['id'], json: [], text: ['reason'] },
   tunnel_jobs: { table: 'tunnel_jobs', pk: ['job_id'], json: ['payload', 'trace'], text: [] },
   schedules: { table: 'schedules', pk: ['id'], json: ['input'], text: [] },

@@ -1,0 +1,10 @@
+# Liste L (termes de limite) : 0 occurrence dans le README et sur la landing, qui n'ont plus de zone de limites (D-46).
+# `-captcha-` : n'importe où dans un mot (reCAPTCHA, hCaptcha, 2Captcha, anti-captcha).
+# Hors de ces deux surfaces, seulement dans une phrase égale mot pour mot à une entrée du registre. Union fr + en.
+-captcha-
+anti-bot
+empreinte
+fingerprint
+rotation
+residentiel
+residential

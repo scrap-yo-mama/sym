@@ -6,7 +6,7 @@
 import { randomUUID } from 'node:crypto';
 import { DomainPacer, generateMasterKey, MasterKey, Secret, type RunExecutor } from '@runtime/core';
 import * as net from '@runtime/core/net';
-import { createRun, keyCheck, migrateUp, PgBossJobQueue, PgPacingStore, readCatalogMemory, readRun, runQueueDefinition, startInvestigation, withActor } from '@runtime/db';
+import { createRun, keyCheck, migrateUp, PgBossJobQueue, PgPacingStore, readCatalogMemory, readRun, runQueueDefinition, scheduleRunJudge, startInvestigation, withActor } from '@runtime/db';
 import { createLlmClient, type LlmConfig } from '@runtime/llm';
 import { createFakeProvider, scripted, type FakeProvider } from '@runtime/llm/testing';
 import pg from 'pg';
@@ -38,6 +38,8 @@ let client: Client;
 let worker: Worker;
 let fake: FakeProvider;
 let judgeEnabled = false;
+/** Réglage du rôle `judge` illisible (fournisseur inconnu, clé illisible) : l'enquête ne doit pas en dépendre. */
+let judgeConfigFails = false;
 let memoryReads = 0;
 let judgeJob: ReturnType<typeof createJudgeJob>;
 
@@ -48,6 +50,12 @@ function llmConfig(): LlmConfig {
     providers: [{ id: 'fake', baseUrl: fake.baseUrl, apiKey: new Secret('zz-test-key-0000'), models: [{ id: MODEL, price: { in: 1, out: 1 } }, { id: JUDGE, price: { in: 1, out: 1 } }] }],
     roles: { investigate: { provider: 'fake', model: MODEL }, judge: { provider: 'fake', model: JUDGE } },
   };
+}
+
+/** Configuration de l'enquête SANS le rôle `judge` (résolu à part, comme dans la fabrique de production). */
+function investigateConfig(): LlmConfig {
+  const config = llmConfig();
+  return { ...config, roles: { investigate: config.roles.investigate! } };
 }
 
 const CONTACTS_PROPOSAL = {
@@ -74,11 +82,11 @@ const CONTACTS_PROPOSAL = {
 };
 const SCHEMA = { type: 'object', required: ['id'], properties: { id: { type: 'string' }, name: { type: 'string', 'x-personal': true } } };
 
-async function insertApi(owner: string, slug: string, host: string, opts: { status?: string; reason?: string; session?: boolean; visibility?: string; networkPolicy?: unknown; withVersion?: boolean } = {}): Promise<string> {
+async function insertApi(owner: string, slug: string, host: string, opts: { status?: string; reason?: string; session?: boolean; visibility?: string; networkPolicy?: unknown; withVersion?: boolean; network?: string; requires?: unknown } = {}): Promise<string> {
   const id = (
     await pool.query<{ id: string }>(
-      `INSERT INTO apis (slug, owner_id, status, status_reason, requires_session, visibility, network_policy, output_schema, description, investigation, domain_pacing)
-       VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8::jsonb, 'liste des contacts', $9::jsonb, '{"min_delay_ms": 5, "max_requests_per_run": 200, "max_wait_ms": 60000}') RETURNING id`,
+      `INSERT INTO apis (slug, owner_id, status, status_reason, requires_session, visibility, network_policy, output_schema, description, investigation, domain_pacing, requires)
+       VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8::jsonb, 'liste des contacts', $9::jsonb, '{"min_delay_ms": 5, "max_requests_per_run": 200, "max_wait_ms": 60000}', $10::jsonb) RETURNING id`,
       [
         slug,
         owner,
@@ -89,13 +97,14 @@ async function insertApi(owner: string, slug: string, host: string, opts: { stat
         JSON.stringify(opts.networkPolicy ?? { allow: ['direct', 'dc_proxy'] }),
         JSON.stringify(SCHEMA),
         JSON.stringify({ request: { url: `${base(host)}/`, description: 'x', auto_validate: true, budget_usd: 1, timeout_s: 60 }, spent_usd: 0, elapsed_ms: 0 }),
+        JSON.stringify(opts.requires ?? {}),
       ],
     )
   ).rows[0]!.id;
   if (opts.withVersion === true) {
     await pool.query(
-      `INSERT INTO strategy_versions (api_id, version, owner_id, execution, network, spec, created_by) VALUES ($1, 1, $2, 'fetch', 'direct', $3::jsonb, 'investigation')`,
-      [id, owner, JSON.stringify({ schema_version: 1, kind: 'declarative', request: { method: 'GET', url: `${base(host)}/`, allowed_hosts: [host] }, sources: [{ id: 'dom', from: 'html', records: 'h1' }], fields: { id: { attr: 'text', type: 'string', required: true } } })],
+      `INSERT INTO strategy_versions (api_id, version, owner_id, execution, network, spec, created_by) VALUES ($1, 1, $2, 'fetch', $4, $3::jsonb, 'investigation')`,
+      [id, owner, JSON.stringify({ schema_version: 1, kind: 'declarative', request: { method: 'GET', url: `${base(host)}/`, allowed_hosts: [host] }, sources: [{ id: 'dom', from: 'html', records: 'h1' }], fields: { id: { attr: 'text', type: 'string', required: true } } }), opts.network ?? 'direct'],
     );
     await pool.query('UPDATE apis SET current_strategy_version = 1 WHERE id = $1', [id]);
   }
@@ -141,7 +150,14 @@ beforeAll(async () => {
   await queue.createQueue(runQueueDefinition());
   const guard = fixtureGuard(client.server.port, [API_HOST, NEXT_HOST, CHALLENGE_HOST], net);
   const pacer = new DomainPacer(new PgPacingStore(pool));
-  const llm = { config: async () => llmConfig(), client: (config: LlmConfig) => createLlmClient(config) };
+  const llm = { config: async () => investigateConfig(), client: (config: LlmConfig) => createLlmClient(config) };
+  const judgeLlm = {
+    config: async () => {
+      if (judgeConfigFails) throw new Error('zz_test : rôle judge affecté à un fournisseur inconnu');
+      return llmConfig();
+    },
+    client: (config: LlmConfig) => createLlmClient(config),
+  };
   const quality = { judgeEnabled: async () => judgeEnabled };
   const strategy = createStrategyRuntime({ pool, guard, pacer, browsers: null, instanceContact: async () => 'mailto:ops@zz-test.example', version: '9.9.9', quality });
   const investigation = createInvestigationExecutor({
@@ -151,6 +167,7 @@ beforeAll(async () => {
     browsers: null,
     strategy,
     llm,
+    judgeLlm,
     quality,
     memory: {
       read: async (args) => {
@@ -161,11 +178,12 @@ beforeAll(async () => {
     instanceContact: async () => 'mailto:ops@zz-test.example',
     version: '9.9.9',
   });
-  judgeJob = createJudgeJob({ pool, llm, quality });
+  judgeJob = createJudgeJob({ pool, llm: judgeLlm, quality });
   const executor: RunExecutor = dispatchByKind({ run: strategy.executor, investigation });
   worker = await startWorker({
     config: loadWorkerConfig({ DATABASE_URL: tdb.url, MASTER_KEY: masterKey, QUEUE_POLLING_SECONDS: '0.5', RUN_HEARTBEAT_SECONDS: '0.5', RUN_STALE_SECONDS: '10', BROWSER_CONCURRENCY: '1' }),
-    executor,
+    // Jugement sur anomalie : file pg-boss `quality-judge` consommée par le worker (job unique par run).
+    executorFactory: async () => ({ executor, judge: async (job) => void (await judgeJob({ runId: job.run_id, ownerId: job.owner_id, trigger: 'anomaly' })) }),
     logger: pino({ level: 'silent' }),
   });
 }, 180_000);
@@ -182,6 +200,7 @@ afterAll(async () => {
 beforeEach(async () => {
   fake.reset();
   judgeEnabled = false;
+  judgeConfigFails = false;
   await client.reset();
 });
 
@@ -193,6 +212,12 @@ describe('mémoire du catalogue dans l’enquête (2.12)', () => {
     // API avec session du même domaine : aucune valeur.
     const session = await insertApi(A, 'zz_test_mem_session', API_HOST, { status: 'sain', session: true, withVersion: true });
     await pastRun(session, A, [{ id: 'ZZ-SESSION-CANARY' }]);
+    // Sans session mais en tunnel (politique tunnel, version N4 : session de l'utilisateur par l'extension) : aucune valeur.
+    const tunnel = await insertApi(A, 'zz_test_mem_tunnel', API_HOST, { status: 'sain', withVersion: true, network: 'tunnel', networkPolicy: { allow: ['tunnel'] } });
+    await pastRun(tunnel, A, [{ id: 'ZZ-TUNNEL-CANARY' }]);
+    // `requires.session_domain` seul : aucune valeur.
+    const sessionDomain = await insertApi(A, 'zz_test_mem_session_domain', API_HOST, { status: 'sain', withVersion: true, requires: { session_domain: 'zz_test_api_json.localhost' } });
+    await pastRun(sessionDomain, A, [{ id: 'ZZ-SESSION-DOMAIN-CANARY' }]);
     // Autre domaine : un retour piégé dans la source, des items ; ni valeur ni texte.
     const other = await insertApi(A, 'zz_test_mem_other', NEXT_HOST, { status: 'sain', withVersion: true });
     await pastRun(other, A, [{ id: 'ZZ-OTHER-DOMAIN-CANARY' }]);
@@ -215,7 +240,7 @@ describe('mémoire du catalogue dans l’enquête (2.12)', () => {
     const block = prompt.slice(open, close);
     expect(block).toContain('ZZ-SAME-VALUE');
     expect(block).not.toContain('zz personne');
-    expect(prompt).not.toMatch(/ZZ-SESSION-CANARY|ZZ-OTHER-DOMAIN-CANARY|ZZ-FEEDBACK-CANARY|ZZ-OTHER-OWNER-CANARY|zz_test_mem_theirs/);
+    expect(prompt).not.toMatch(/ZZ-SESSION-CANARY|ZZ-TUNNEL-CANARY|ZZ-SESSION-DOMAIN-CANARY|ZZ-OTHER-DOMAIN-CANARY|ZZ-FEEDBACK-CANARY|ZZ-OTHER-OWNER-CANARY|zz_test_mem_theirs/);
     // L'injection n'apparaît que dans l'enveloppe, tronquée ; aucun essai res_proxy (politique direct + dc_proxy).
     expect(prompt.indexOf(INJECTION)).toBeGreaterThan(open);
     expect(prompt.indexOf(INJECTION)).toBeLessThan(close);
@@ -235,7 +260,7 @@ describe('mémoire du catalogue dans l’enquête (2.12)', () => {
     expect(sig).toMatchObject({ registrable_domain: 'zz_test_api_json.localhost', couple: 'E1/N1' });
   });
 
-  test('assert_memory_refusal_stops_before_llm — domaine refusé : arrêt avant tout appel LLM, bloquee (4) raison prior_refusal, 0 requête ; ré-enquête manuelle : un seul essai au couple le moins cher', async () => {
+  test('assert_memory_refusal_stops_before_llm — domaine refusé : arrêt avant tout appel LLM, bloquee (4) raison prior_refusal, 0 requête', async () => {
     await insertApi(A, 'zz_test_mem_refused', CHALLENGE_HOST, { status: 'bloquee', reason: 'blocked_by_protection', withVersion: true });
     fake.setScenario(MODEL, [scripted.json(CONTACTS_PROPOSAL)]);
     const apiId = await insertApi(A, 'zz_test_mem_refused_new', CHALLENGE_HOST);
@@ -246,16 +271,6 @@ describe('mémoire du catalogue dans l’enquête (2.12)', () => {
     expect(await apiRow(apiId)).toMatchObject({ status: 'bloquee', status_reason: 'prior_refusal' });
     const transitions = (await pool.query<{ reason: string; to_status: string }>('SELECT reason, to_status FROM status_events WHERE api_id = $1', [apiId])).rows;
     expect(transitions).toEqual([{ reason: 'prior_refusal', to_status: 'bloquee' }]);
-
-    // Ré-enquête manuelle (18) : un essai de confirmation au couple le moins cher, sans changement de réseau.
-    await pool.query("UPDATE apis SET status = 'enquete', status_reason = 'reinvestigate_manual', investigation = NULL, investigation_phase = NULL WHERE id = $1", [apiId]);
-    fake.reset();
-    fake.setScenario(MODEL, [scripted.json(CONTACTS_PROPOSAL)]);
-    const confirm = await investigate(apiId, CHALLENGE_HOST);
-    const attempts = (await pool.query<{ execution: string; network: string; result_class: string }>('SELECT execution, network, result_class FROM run_attempts WHERE run_id = $1 ORDER BY seq', [confirm.id])).rows;
-    expect(attempts.length).toBeLessThanOrEqual(1);
-    for (const a of attempts) expect(a.network).toBe('direct');
-    expect((await apiRow(apiId)).status).toBe('bloquee');
   });
 
   test('assert_replay_no_llm_with_rules (volet mémoire) — 10 rejeux E1 sains : 0 appel LLM et 0 lecture de mémoire ; un profil par run', async () => {
@@ -310,5 +325,44 @@ describe('mémoire du catalogue dans l’enquête (2.12)', () => {
     expect(judgePrompt).not.toMatch(/@example\.invalid|Zztest\d/);
     const logs = JSON.stringify((await pool.query('SELECT data FROM run_logs WHERE run_id = $1', [replayed.id])).rows);
     expect(logs).not.toContain('untrusted_items');
+  });
+
+  test('assert_judge_advisory_only (anomalie) — jugement planifié dans pg-boss (file quality-judge, un job par run), exécuté par le worker', async () => {
+    judgeEnabled = true;
+    const wrong = { verdicts: [{ field: 'id', verdict: 'wrong', indices: [0], reason: 'faux' }] };
+    fake.setScenario(MODEL, [scripted.json(CONTACTS_PROPOSAL)]);
+    fake.setScenario(JUDGE, [scripted.json({ verdicts: [] }), scripted.json(wrong), scripted.json(wrong)]);
+    const apiId = await insertApi(A, 'zz_test_mem_judge_queue', API_HOST, { networkPolicy: { allow: ['direct'] } });
+    expect((await investigate(apiId)).state).toBe('succeeded');
+    const replayed = await replay(apiId);
+    const events = await statusEvents(apiId);
+    expect(await scheduleRunJudge(queue, { runId: replayed.id, ownerId: A })).not.toBeNull();
+    expect(await scheduleRunJudge(queue, { runId: replayed.id, ownerId: A })).toBeNull();
+    await vi.waitFor(async () => expect((await pool.query<{ judge: { trigger: string } | null }>('SELECT judge FROM runs WHERE id = $1', [replayed.id])).rows[0]!.judge).toMatchObject({ trigger: 'anomaly', flag: true }), { timeout: 30_000, interval: 200 });
+    expect(await statusEvents(apiId)).toBe(events);
+  });
+
+  test('rôle judge illisible (fournisseur inconnu ou clé) : l’enquête aboutit quand même, sans avis du juge', async () => {
+    judgeEnabled = true;
+    judgeConfigFails = true;
+    fake.setScenario(MODEL, [scripted.json(CONTACTS_PROPOSAL)]);
+    const apiId = await insertApi(A, 'zz_test_mem_judge_broken', API_HOST, { networkPolicy: { allow: ['direct'] } });
+    const run = await investigate(apiId);
+    expect(run.state).toBe('succeeded');
+    expect((await pool.query<{ judge: unknown }>('SELECT judge FROM runs WHERE id = $1', [run.id])).rows[0]!.judge).toBeNull();
+    expect(await apiRow(apiId)).toMatchObject({ status: 'sain', current_strategy_version: 1 });
+  });
+
+  // DERNIER test du fichier : il marque le domaine API_HOST comme refusé (forbidden), ce qui arrêterait les enquêtes suivantes.
+  test('assert_memory_refusal_stops_before_llm (confirmation) — ré-enquête manuelle (18) sur un domaine refusé (forbidden) dont la page est servie : exactement un essai, au couple le moins cher (E1/N1), classé, aucun autre réseau', async () => {
+    await insertApi(A, 'zz_test_mem_forbidden', API_HOST, { status: 'bloquee', reason: 'forbidden', withVersion: true });
+    fake.setScenario(MODEL, [scripted.json(CONTACTS_PROPOSAL)]);
+    const apiId = await insertApi(A, 'zz_test_mem_confirm', API_HOST, { status: 'enquete', reason: 'reinvestigate_manual' });
+    const confirm = await investigate(apiId);
+    const attempts = (await pool.query<{ execution: string; network: string; result_class: string | null }>('SELECT execution, network, result_class FROM run_attempts WHERE run_id = $1 ORDER BY seq', [confirm.id])).rows;
+    expect(attempts).toHaveLength(1);
+    expect(attempts[0]).toMatchObject({ execution: 'fetch', network: 'direct' });
+    expect(attempts[0]!.result_class).not.toBeNull();
+    expect((await client.stats()).hosts[API_HOST]).toBeDefined();
   });
 });

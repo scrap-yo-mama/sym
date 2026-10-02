@@ -9,6 +9,7 @@ import {
   degradedQualitySignals,
   JUDGE_VERDICT_SCHEMA,
   judgeDecision,
+  judgeSampleItems,
   minimalContentCheck,
   parseJudgement,
   profileItems,
@@ -140,6 +141,20 @@ describe('juge consultatif (arbitrage n° 3, r4 R6 à R10)', () => {
     expect(a.indices.length).toBe(4);
     expect(a.indices).toContain(29);
     expect(a.seed).toBe('zz-seed');
+  });
+
+  test('échantillon (19 §3) : un item de la baseline validée quand elle existe, 5 items au plus', () => {
+    const run = items(30);
+    const profile = profileItems(run, SCHEMA);
+    const baselineItem = { sku: 'ZZ-BASELINE', title: 't', price: 1, currency: 'EUR' };
+    const withBase = judgeSampleItems(run, profile, { seed: 'zz-seed', size: 5, baselineItem });
+    expect(withBase.items.length).toBeLessThanOrEqual(5);
+    expect(withBase.items.at(-1)).toEqual(baselineItem);
+    expect(withBase.baseline).toBe(true);
+    expect(withBase.items).toContainEqual(run[29]);
+    const without = judgeSampleItems(run, profile, { seed: 'zz-seed', size: 4 });
+    expect(without.baseline).toBe(false);
+    expect(without.items).toEqual(selectJudgeSample(run, profile, { seed: 'zz-seed', size: 4 }).indices.map((i) => run[i]));
   });
 
   test('sortie validée (raison ≤ 200, verdict fermé) ; illisible → aucun drapeau', () => {

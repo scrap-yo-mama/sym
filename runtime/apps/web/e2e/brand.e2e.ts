@@ -134,6 +134,9 @@ const SIGNATURE_AUDIT = `(() => {
   return { problems, count: signatures.length, zones: signatures.map((s) => s.parentElement && s.parentElement.tagName) };
 })()`;
 
+/** Écrans qui montrent la bulle de la carte d'illustration (connexion sans erreur, premier démarrage, étapes suivantes) ; tous les autres, erreurs comprises, n'en ont pas. */
+const BUBBLE_SCREENS = ['login', 'login-second-factor', 'setup', 'setup-next'];
+
 test.describe('assert_sym_signature_rendering', () => {
   test.use({ uiLocale: 'fr', uiTheme: 'dark' });
 
@@ -146,8 +149,11 @@ test.describe('assert_sym_signature_rendering', () => {
       await screen.prepare?.(page, app);
       const audit = (await page.evaluate(SIGNATURE_AUDIT)) as { problems: string[]; count: number };
       expect(audit.problems).toEqual([]);
-      // Une signature de marque par écran (la barre de navigation) : jamais plus d'une par zone d'écran (20 § 2.3).
-      expect(audit.count).toBe(1);
+      // Une signature de marque par écran (la barre de navigation) ; la bulle « SYM : » de la carte d'illustration (3.21) est la
+      // seule autre, sur quatre écrans, jamais sur une erreur : jamais plus d'une par zone d'écran (20 § 2.3).
+      const bubbles = await page.locator('[data-sym-bubble] [data-sym-signature][data-variant="speaking"]').count();
+      expect(bubbles, 'bulle de SYM').toBe(BUBBLE_SCREENS.includes(screen.id) ? 1 : 0);
+      expect(audit.count).toBe(1 + bubbles);
     });
   }
 });

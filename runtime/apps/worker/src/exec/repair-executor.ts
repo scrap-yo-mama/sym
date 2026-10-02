@@ -28,6 +28,7 @@ import {
   registrableDomain,
   renderCatalogMemory,
   healthyProfile,
+  maskTextForLlm,
   patchKey,
   RepairLedger,
   validateDeclarativeSpec,
@@ -40,7 +41,7 @@ import {
 } from '@runtime/core';
 import { assertPromptSafe, ClassificationGuardError, type AgentEvidence, type ExecFailure } from '@runtime/core/exec';
 import { proposeRepair, repairCallCeilingUsd, repairPromptVersion } from '@runtime/agent';
-import { acquireRepairLease, readCatalogMemory, readCurrentStrategyVersion, readHealthyItems, releaseRepairLease, renewRepairLease, saveRunJudge, type CatalogMemory } from '@runtime/db';
+import { acquireRepairLease, inputHash, readBaselineItem, readCatalogMemory, readCurrentStrategyVersion, readHealthyItems, releaseRepairLease, renewRepairLease, saveRunJudge, type CatalogMemory } from '@runtime/db';
 import { LlmError, roleTarget, toFailureClass, type LlmClient, type LlmConfig } from '@runtime/llm';
 import type pg from 'pg';
 import { pino, type Logger } from 'pino';
@@ -90,28 +91,38 @@ export function createRepairPort(deps: RepairEngineDeps): RepairPort {
   const leaseWaitMs = deps.leaseWaitMs ?? 60_000;
   const quality = deps.quality ?? settingsQualityPorts(deps.pool);
 
-  /** Avis consultatif sur la sortie réparée, avant que vN+1 devienne courante : il ne bloque rien (19 §3). */
-  const judgeRepair = async (ctx: RunCtx, schema: unknown, items: readonly unknown[]): Promise<void> => {
-    if (deps.judgeLlm === undefined || !(await quality.judgeEnabled().catch(() => false))) return;
+  /**
+   * Avis consultatif sur la sortie réparée, avant que vN+1 devienne courante : il ne bloque rien (19 §3). Plafond : le
+   * budget de réparation restant (`repair_budget_usd`) ; échantillon avec un item de la baseline validée s'il y en a une.
+   * Rend le coût du jugement (imputé au run), `0` sans jugement.
+   */
+  const judgeRepair = async (ctx: RunCtx, schema: unknown, items: readonly unknown[], maxUsd: number): Promise<number | null> => {
+    if (deps.judgeLlm === undefined || !(await quality.judgeEnabled().catch(() => false))) return 0;
     try {
-      const config = await deps.judgeLlm.config();
-      if (config === null) return;
-      const out = await judgeItems({ config, client: deps.judgeLlm.client, trigger: 'repair', schema, profile: profileItems(items, schema), items, signal: ctx.signal });
-      if (out === null) return;
+      const config = await deps.judgeLlm.config().catch(() => null);
+      if (config === null) return 0;
+      const baselineItem = await readBaselineItem(deps.pool, { apiId: ctx.apiId, ownerId: ctx.ownerId, inputHash: inputHash(ctx.input) }).catch(() => null);
+      const out = await judgeItems({ config, client: deps.judgeLlm.client, trigger: 'repair', schema, profile: profileItems(items, schema), items, baselineItem, maxUsd, signal: ctx.signal });
+      if (out === null) return 0;
       await ctx.chargeCost?.({ llm_usd: out.costUsd, tokens: { ...out.tokens, estimated: false } });
       await saveRunJudge(deps.pool, { runId: ctx.runId, ownerId: ctx.ownerId, judge: out.judge, costUsd: 0 });
       if (out.judge.flag) await ctx.log('info', 'judge_flag', { trigger: 'repair', fields: flaggedFields(out.judge), seed: out.seed });
+      return out.costUsd;
     } catch {
       await ctx.log('warn', 'judge_failed', { trigger: 'repair' });
+      return 0;
     }
   };
 
-  /** Dossier de mémoire de la réparation (même propriétaire, valeurs du même domaine seulement). */
+  /**
+   * Dossier de mémoire de la réparation (même propriétaire, structurel) ; `description` : la demande DÉJÀ masquée
+   * (couches 1 et 2), qui sert à l'étage 3 (plein texte).
+   */
   const repairMemory = async (ctx: RunCtx, spec: DeclarativeSpec, description: string): Promise<string> => {
     try {
       const domain = registrableDomain(spec.request.url);
       const memory = await (deps.memory?.read ?? ((a) => readCatalogMemory(deps.pool, a)))({ ownerId: ctx.ownerId, apiId: ctx.apiId, domain });
-      const dossier = buildCatalogDossier({ ownerId: ctx.ownerId, apiId: ctx.apiId, domain, description, mode: 'repair', now: new Date() }, memory.entries);
+      const dossier = buildCatalogDossier({ ownerId: ctx.ownerId, apiId: ctx.apiId, domain, description, mode: 'repair', refusals: memory.refusals, now: new Date() }, memory.entries);
       if (dossier.refs.length > 0) await ctx.log('info', 'catalog_memory', { entries: dossier.refs.length, tokens: dossier.tokens, truncated: dossier.truncated, sha256: dossier.sha256 });
       return renderCatalogMemory(dossier);
     } catch {
@@ -179,13 +190,15 @@ export function createRepairPort(deps: RepairEngineDeps): RepairPort {
     /** vN+1 enregistrée SOUS le bail (vérifié et prolongé juste avant), avant sa libération. */
     const committed = async (repaired: RepairedStrategy, check: CandidateCheck): Promise<RepairOutcome> => {
       if (!(await holds())) return leaseLost();
-      await judgeRepair(ctx, target.api.outputSchema, check.partition.conform);
+      const judgeUsd = await judgeRepair(ctx, target.api.outputSchema, check.partition.conform, ledger.remainingUsd);
+      if (judgeUsd !== 0) ledger.spend(judgeUsd);
       const saved = await request.commit(repaired);
       return { kind: 'repaired', strategy: repaired, check, saved };
     };
     const ledger = new RepairLedger({ ...(deps.maxAttempts === undefined ? {} : { maxAttempts: deps.maxAttempts }), ...(deps.budgetUsd === undefined ? {} : { budgetUsd: deps.budgetUsd }) });
     // Référence : items livrés des derniers runs réussis (chemins et types seulement entrent dans le prompt).
-    const healthy: HealthyProfile = healthyProfile(await readHealthyItems(deps.pool, { apiId: ctx.apiId, ownerId: ctx.ownerId, excludeRunId: ctx.runId }));
+    // Schéma COURANT : après une ré-enquête `output_schema_changed`, un champ retiré ou retypé n'est plus exigé.
+    const healthy: HealthyProfile = healthyProfile(await readHealthyItems(deps.pool, { apiId: ctx.apiId, ownerId: ctx.ownerId, excludeRunId: ctx.runId }), { outputSchema: target.api.outputSchema });
     const evidence: readonly AgentEvidence[] = request.evidence;
     // Aucune page de défi n'entre dans un prompt (04b §6) : un texte refusé arrête la réparation comme un refus.
     try {
@@ -221,10 +234,12 @@ export function createRepairPort(deps: RepairEngineDeps): RepairPort {
     if (deps.llm !== undefined && config !== null && price !== null && price !== undefined) {
       const client = deps.llm.client({ ...config, roles: { repair: config.roles.repair! } });
       const model = config.roles.repair?.model ?? null;
-      const catalogMemory = await repairMemory(ctx, spec, '');
+      // Masquage des couches 1 et 2 (19 §3, rôle `repair`) : la demande ne part jamais en clair, ni au prompt ni à l'étage 3.
+      const description = maskTextForLlm(target.api.description ?? '');
+      const catalogMemory = await repairMemory(ctx, spec, description);
       for (;;) {
         if (!(await holds())) return leaseLost();
-        const args = { spec, outputSchema: target.api.outputSchema, failure, evidence, healthy, reasons: request.reasons, refused, ...(catalogMemory === '' ? {} : { catalogMemory }) };
+        const args = { description, spec, outputSchema: target.api.outputSchema, failure, evidence, healthy, reasons: request.reasons, refused, ...(catalogMemory === '' ? {} : { catalogMemory }) };
         const ceiling = repairCallCeilingUsd(args, price);
         if (!ledger.canPropose(ceiling)) break;
         const before = client.meter.snapshot().cost_usd_known ?? 0;

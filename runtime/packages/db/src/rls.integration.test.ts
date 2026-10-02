@@ -48,9 +48,13 @@ beforeAll(async () => {
     await c.query("INSERT INTO run_logs (run_id, seq, owner_id, level, event) VALUES ($1, 1, $2, 'info', 'zz_test')", [run, A]);
     await c.query("INSERT INTO run_artifacts (run_id, owner_id, kind, bytes, sensitivity, ciphertext, nonce, key_version) VALUES ($1, $2, 'trace', 1, 'high', '\\x00', '\\x00', 1)", [run, A]);
     await c.query("INSERT INTO investigation_events (run_id, seq, owner_id, kind) VALUES ($1, 1, $2, 'zz_test')", [run, A]);
+    // Quarantaine D-49 (0018, 2.3) : échantillon et raisons du run de A, jamais lisibles par B.
+    await c.query(
+      `INSERT INTO run_rejected_items (run_id, api_id, owner_id, total_rejected, by_reason, sample) VALUES ($1, $2, $3, 1, '[{"keyword":"type","instance_path":"/x","count":1}]', '[{"x":"[masqué]"}]')`,
+      [run, api, A],
+    );
     await c.query("INSERT INTO status_events (api_id, owner_id, to_status) VALUES ($1, $2, 'sain')", [api, A]);
-    // 0017 (2.3) et 0018 (2.12) : quarantaine, profil du run, entrées de mémoire consultées.
-    await c.query('INSERT INTO run_rejected_items (run_id, api_id, owner_id, total_rejected) VALUES ($1, $2, $3, 1)', [run, api, A]);
+    // 0019 (2.12) : profil du run, entrées de mémoire consultées.
     await c.query("INSERT INTO run_profiles (run_id, api_id, owner_id, input_hash, profile) VALUES ($1, $2, $3, 'zz_test', '{}')", [run, api, A]);
     await c.query("INSERT INTO strategy_version_memory_refs (api_id, strategy_version, owner_id, ref_api_id, tier, dossier_sha256) VALUES ($1, 1, $2, $1, 0, $3)", [api, A, '0'.repeat(64)]);
     const ds = (await c.query<{ id: string }>('INSERT INTO datasets (api_id, run_id, owner_id) VALUES ($1, $2, $3) RETURNING id', [api, run, A])).rows[0]!.id;

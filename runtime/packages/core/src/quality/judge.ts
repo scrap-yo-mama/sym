@@ -100,6 +100,22 @@ export function selectJudgeSample(items: readonly unknown[], profile: RunProfile
   return { indices: [...picked].sort((a, b) => a - b), seed: opts.seed };
 }
 
+/**
+ * Items montrés au juge (19 §3) : l'échantillon de `selectJudgeSample` et, quand une baseline VALIDÉE existe, un de ses
+ * items en dernier (repère de ce qu'une sortie saine contient) ; 5 items au plus, 3 au moins issus du run.
+ */
+export function judgeSampleItems(
+  items: readonly unknown[],
+  profile: RunProfile,
+  opts: { readonly seed: string; readonly size?: number; readonly baselineItem?: unknown },
+): { readonly items: unknown[]; readonly indices: number[]; readonly seed: string; readonly baseline: boolean } {
+  const size = Math.max(3, Math.min(5, opts.size ?? 4));
+  const withBaseline = opts.baselineItem !== undefined && opts.baselineItem !== null;
+  const sample = selectJudgeSample(items, profile, { seed: opts.seed, size: withBaseline ? Math.max(3, size - 1) : size });
+  const picked = sample.indices.map((i) => items[i]);
+  return { items: withBaseline ? [...picked, opts.baselineItem] : picked, indices: sample.indices, seed: sample.seed, baseline: withBaseline };
+}
+
 const MAX_FIELD_CHARS = 200;
 
 function projectAndBound(item: unknown, names: readonly string[]): Record<string, unknown> {

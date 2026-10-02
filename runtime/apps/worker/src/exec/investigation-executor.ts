@@ -112,6 +112,7 @@ import {
   readCatalogMemory,
   recordMemoryRefs,
   saveRunJudge,
+  readBaselineItem,
   saveRunProfile,
   saveStrategySignature,
   type CatalogMemory,
@@ -121,6 +122,7 @@ import {
   saveInvestigationState,
   saveInvestigationStrategy,
   saveRunDataset,
+  schemaColumns,
   type InvestigationState,
   type RunTarget,
 } from '@runtime/db';
@@ -173,6 +175,11 @@ export type InvestigationExecutorDeps = {
   readonly memory?: { readonly read: (args: { ownerId: string; apiId: string | null; domain: string }) => Promise<CatalogMemory> };
   /** Juge consultatif (défaut : réglages `settings.llm`). */
   readonly quality?: QualityPorts;
+  /**
+   * Rôle `judge` résolu À PART de la configuration de l'enquête (revue 2.12) : une erreur de ses réglages (fournisseur
+   * inconnu, clé illisible) est ignorée et l'enquête se fait sans avis. Absent : rôle `judge` de la configuration `llm`.
+   */
+  readonly judgeLlm?: InvestigationLlmPorts;
 };
 
 const round6 = (v: number): number => Math.round(v * 1e6) / 1e6;
@@ -299,10 +306,15 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
      * Juge consultatif à l'enquête (19 §3) : avis posé sur la fiche du run, coût imputé au run sous le budget restant de
      * l'enquête ; il ne change rien d'autre (le statut suit son cours), et une erreur du juge n'arrête jamais l'enquête.
      */
-    const judgeInvestigation = async (records: readonly unknown[], schema: unknown, profile: ReturnType<typeof profileItems>, config: LlmConfig | null): Promise<void> => {
-      if (config === null || deps.llm === undefined || !(await quality.judgeEnabled().catch(() => false))) return;
+    const judgeInvestigation = async (records: readonly unknown[], schema: unknown, profile: ReturnType<typeof profileItems>, config: LlmConfig | null, hash: string): Promise<void> => {
+      if (!(await quality.judgeEnabled().catch(() => false))) return;
+      const judge = deps.judgeLlm ?? deps.llm;
+      if (judge === undefined) return;
       try {
-        const out = await judgeItems({ config, client: deps.llm.client, trigger: 'investigation', schema, profile, items: records, maxUsd: Math.max(0, request.budget_usd - spent), signal });
+        const judgeConfig = deps.judgeLlm === undefined ? config : await deps.judgeLlm.config().catch(() => null);
+        if (judgeConfig === null) return;
+        const baselineItem = await readBaselineItem(deps.pool, { apiId: ctx.apiId, ownerId: ctx.ownerId, inputHash: hash }).catch(() => null);
+        const out = await judgeItems({ config: judgeConfig, client: judge.client, trigger: 'investigation', schema, profile, items: records, baselineItem, maxUsd: Math.max(0, request.budget_usd - spent), signal });
         if (out === null) return;
         await charge(ctx, 0, out.costUsd, { ...out.tokens, estimated: false });
         if (out.costUsd !== null) spent = round6(spent + out.costUsd);
@@ -559,7 +571,7 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
         const exampleOutput = (ctx.input as { example_output?: unknown } | null)?.example_output;
         // Dossier de mémoire (19 §2) : calculé par le code, valeurs du même domaine seulement, masqué, sous son plafond.
         const signature = computeSignature({ pageUrl, html: capture.document?.renderedHtml ?? capture.document?.html ?? null, outputSchema: fixed ?? {}, execution: 'fetch', network: first?.mode ?? 'tunnel' });
-        dossier = buildCatalogDossier({ ownerId: ctx.ownerId, apiId: ctx.apiId, domain, signature, description: request.description, mode: 'investigate', now: new Date(now()) }, memory.entries);
+        dossier = buildCatalogDossier({ ownerId: ctx.ownerId, apiId: ctx.apiId, domain, signature, description: request.description, mode: 'investigate', refusals: memory.refusals, now: new Date(now()) }, memory.entries);
         const catalogMemory = renderCatalogMemory(dossier);
         const args = {
           description: request.description,
@@ -636,11 +648,12 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
         });
         if (spent >= request.budget_usd) return await budgetExhausted('investigation_budget_usd');
         if (!request.auto_validate) {
-          await save('awaiting_schema_validation', { proposal: proposal!, proposed_schema: built.outputSchema });
+          await save('awaiting_schema_validation', { proposal: proposal!, proposed_schema: built.outputSchema, proposed_columns: schemaColumns(built.outputSchema) });
           await event(EV.phase, { phase: 'awaiting_schema_validation', budget: budgetView() });
           return { state: 'succeeded', outcome: 'clean', degraded_reasons: [], items: 0 };
         }
-        await save('testing', { proposal: proposal!, proposed_schema: built.outputSchema, validated_schema: built.outputSchema, validated_by: 'auto' });
+        const columns = schemaColumns(built.outputSchema);
+        await save('testing', { proposal: proposal!, proposed_schema: built.outputSchema, validated_schema: built.outputSchema, proposed_columns: columns, validated_columns: columns, validated_by: 'auto' });
         await event(EV.schemaValidated, { by: 'auto' });
         await ctx.log('info', 'schema_auto_validated', {});
       } else if (remap) {
@@ -659,6 +672,8 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
         ? [{ mode: 'tunnel', perGbUsd: 0 }]
         : [...rungs.map((r) => ({ mode: r.mode, perGbUsd: r.mode === 'direct' ? 0 : r.proxy.price.perGbUsd })), ...(tunnelChosen ? [{ mode: 'tunnel' as const, perGbUsd: 0 }] : [])];
       const networks = confirmOnce ? allNetworks.slice(0, 1) : allNetworks;
+      // Plan restreint par l'appelant (`exclude_executions`, 06 § 2) : des niveaux retirés, jamais ajoutés.
+      const excluded = new Set<string>(state.excluded_executions ?? []);
       const fullPlan = buildTrialPlan({
         strategies: built.strategies,
         networks,
@@ -669,7 +684,7 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
         instruction: request.description,
         documentBytes: state.page?.document_bytes ?? 0,
         totalBytes: state.page?.total_bytes ?? 0,
-      });
+      }).filter((p) => !excluded.has(p.execution));
       // Confirmation d'un refus passé : le couple le moins cher seulement (le plan est déjà trié par coût croissant).
       const plan = confirmOnce ? fullPlan.slice(0, 1) : fullPlan;
       await event(EV.phase, {
@@ -805,6 +820,7 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
             spec: kept.spec,
             estCostUsd: kept.estCostUsd,
             outputSchema,
+            ...(state.validated_columns === undefined ? {} : { outputColumns: state.validated_columns }),
             inputSchema: buildInputSchema({ paginated: entry.paginated, maxPages: PROPOSAL_HARD_MAX_PAGES }),
             state: { ...state, spent_usd: spent, elapsed_ms: baseElapsed + Math.max(0, now() - started) },
           });
@@ -831,8 +847,9 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
           const dataset = await saveRunDataset(deps.pool, { runId: ctx.runId, apiId: ctx.apiId, ownerId: ctx.ownerId, projectId: target.api.projectId, items: records });
           // Profil du run (après Ajv et la garde de classification : sortie conforme), puis juge CONSULTATIF avant `sain`.
           const profile = profileItems(records, outputSchema);
-          await saveRunProfile(deps.pool, { runId: ctx.runId, apiId: ctx.apiId, ownerId: ctx.ownerId, strategyVersion: saved.version, inputHash: inputHash(trialInput(entry.paginated, 'sample')), profile });
-          await judgeInvestigation(records, outputSchema, profile, config);
+          const hash = inputHash(trialInput(entry.paginated, 'sample'));
+          await saveRunProfile(deps.pool, { runId: ctx.runId, apiId: ctx.apiId, ownerId: ctx.ownerId, strategyVersion: saved.version, inputHash: hash, profile });
+          await judgeInvestigation(records, outputSchema, profile, config, hash);
           await applyStatus({ type: 'investigation_succeeded' });
           await event(EV.finished, {
             outcome: 'conformant',

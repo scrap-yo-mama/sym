@@ -47,7 +47,11 @@ export interface JobQueue {
   start(): Promise<void>;
   /** Arrêt de la file (après `offWork`). */
   stop(options?: { timeoutMs?: number }): Promise<void>;
-  createQueue(definition: QueueDefinition): Promise<void>;
+  /**
+   * Crée la file si elle manque (idempotent). Une file existante est alignée sur la définition, sauf avec `keepExisting` :
+   * le `server` (3.1) s'assure seulement qu'elle existe, sans écraser les réglages du worker (`RUN_BUDGET_SECONDS`).
+   */
+  createQueue(definition: QueueDefinition, options?: { keepExisting?: boolean }): Promise<void>;
   /**
    * Met un job en file. Avec `tx`, l'insertion se fait dans la transaction de l'appelant (run et job : même COMMIT).
    * Renvoie l'identifiant du job.

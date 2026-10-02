@@ -75,6 +75,15 @@ describe('signature et gabarit d’URL (r1 R10)', () => {
     expect(urlTemplate('https://b.fr/p/a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d')).toBe('https://b.fr/p/{id}');
   });
 
+  test('url_template : segment avec chiffre, point ou forte entropie remplacé par {s} (identifiant ou jeton court d’un autre domaine)', () => {
+    expect(urlTemplate('https://b.fr/u/jean.dupont/messages')).toBe('https://b.fr/u/{s}/messages');
+    expect(urlTemplate('https://b.fr/t/aB3dE5fG7hJ9/x')).toBe('https://b.fr/t/{s}/x');
+    expect(urlTemplate('https://b.fr/s/zk4q/x')).toBe('https://b.fr/s/{s}/x');
+    expect(urlTemplate('https://b.fr/k/QwErTyUiOpAsDf/x')).toBe('https://b.fr/k/{s}/x');
+    // Segments de route ordinaires gardés.
+    expect(urlTemplate('https://b.fr/api/products/reviews')).toBe('https://b.fr/api/products/reviews');
+  });
+
   test('signature sans LLM ni texte : domaine enregistrable, techno, JSON-LD, profil de balises haché, forme du schéma', () => {
     const html = '<html><head><script id="__NEXT_DATA__" type="application/json">{}</script><script type="application/ld+json">{"@type":"Product"}</script></head><body class="zz-page"><div class="card zz">Texte secret ZZCANARY</div></body></html>';
     const sig = computeSignature({ pageUrl: 'https://www.shop.a.fr/c', requestUrl: 'https://shop.a.fr/api/p?page=1', html, outputSchema: SCHEMA, execution: 'fetch', network: 'direct', pagination: 'page_param' });
@@ -251,6 +260,37 @@ describe('dossier de mémoire (r1 08)', () => {
     expect(d.refusals).toEqual([{ domain: 'a.fr', at: '2026-09-20' }]);
     expect(d.similar).toEqual([]);
     expect(d.text).not.toMatch(/tunnel|E1\/N|fetch/);
+  });
+
+  test('refusals : confirmation manuelle sur un domaine refusé — l’API en cours ne cite ni couple écarté, ni intention d’étape, ni réseau', () => {
+    const self = entry({
+      status: 'enquete',
+      status_reason: 'reinvestigate_manual',
+      refusal: { class: 'forbidden', at: '2026-09-20T00:00:00Z' },
+      discarded: [{ couple: 'E1/N4', reason: 'forbidden' }, { couple: 'E3/N2', reason: 'blocked_by_protection' }],
+      step_intents: ['ouvrir la page via le tunnel'],
+    });
+    const d = buildCatalogDossier(request({ apiId: self.api_id }), [self]);
+    expect(d.same_api).toMatchObject({ versions: [], discarded: [], step_intents: [] });
+    expect(d.text).not.toMatch(/E\d\/N\d|E\?\/N|tunnel|N4/);
+  });
+
+  test('refusals : un refus connu hors des entrées (requête dédiée) vaut pour le dossier (versions et couples tus)', () => {
+    const self = entry({ discarded: [{ couple: 'E1/N1', reason: 'forbidden' }] });
+    const d = buildCatalogDossier(request({ apiId: self.api_id, refusals: [{ domain: 'a.fr', at: '2026-09-20T00:00:00Z', class: 'forbidden' }] }), [self]);
+    expect(d.refusals).toEqual([{ domain: 'a.fr', at: '2026-09-20' }]);
+    expect(d.same_api).toMatchObject({ versions: [], discarded: [] });
+    expect(d.text).not.toMatch(/E1\/N1/);
+  });
+
+  test('API avec session ou en tunnel d’un autre domaine : jamais son endpoint (ni gabarit) hors de son domaine', () => {
+    const sig = computeSignature({ pageUrl: 'https://b.fr', requestUrl: 'https://b.fr/api/me/inbox?folder=x', html: null, outputSchema: SCHEMA, execution: 'fetch', network: 'tunnel' });
+    const session = entry({ domain: 'b.fr', session: true, endpoint: 'https://b.fr/api/me/inbox?folder=x', signature: sig });
+    const fromSig = entry({ domain: 'b.fr', session: true, endpoint: null, signature: sig });
+    const d = buildCatalogDossier(request({ signature: computeSignature({ pageUrl: 'https://a.fr', html: null, outputSchema: SCHEMA, execution: 'fetch', network: 'direct' }) }), [session, fromSig]);
+    expect(d.similar.length).toBe(2);
+    for (const s of d.similar) expect(s.endpoint).toBeNull();
+    expect(d.text).not.toContain('inbox');
   });
 
   test('budget : dossier sous le plafond de tokens, les entrées les moins bien classées tombent d’abord', () => {

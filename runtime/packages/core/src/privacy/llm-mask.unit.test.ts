@@ -90,4 +90,18 @@ describe('assert_profile_no_personal_values', () => {
     const logged = JSON.stringify(maskPersonal({ note: run[0]!.note }));
     expect(leaked(logged)).toEqual([]);
   });
+
+  test('canari libre à faible densité (2 notes sur 12, champ non annoté) : 0 occurrence dans le profil (top compris)', () => {
+    const canaryMail = 'zz.low.density@example.test';
+    const canaryPhone = '06 98 76 54 32';
+    const run = Array.from({ length: 12 }, (_, i) => ({ name: 'x', note: i === 0 ? `écrire à ${canaryMail}` : i === 1 ? `appeler le ${canaryPhone}` : `note ordinaire ${i % 3}`, phone: null, price: i }));
+    const profile = profileItems(run, SCHEMA);
+    // Moins de 20 % des valeurs ont une allure personnelle : le champ n'est pas soupçonné, il garde un top-k… masqué.
+    expect(profile.fields['note']!.suspected_personal).toBe(false);
+    expect(profile.fields['note']!.top).toBeDefined();
+    const text = JSON.stringify(profile);
+    expect(text).not.toContain(canaryMail);
+    expect(text).not.toContain(canaryPhone);
+    expect(text).toContain('note ordinaire 1');
+  });
 });

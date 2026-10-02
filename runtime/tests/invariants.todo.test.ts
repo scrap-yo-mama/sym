@@ -65,22 +65,24 @@ describe("invariants (à implémenter)", () => {
   // contrôle robots.txt avant chaque commande de navigation ou de requête du tunnel (sauts de redirection compris) et
   // remplace ce test.todo par le vrai test ; il ne se retire qu'avec lui.
   test.todo("assert_robots_respected — volet tunnel et extension : 0 requête sur un chemin interdit en mode tunnel, à chaque saut"); // INV11, tâche(s) 2.7b (D-33)
-  // 4.8 livrée partiellement (16 § 8, 17 § 11) : le quickstart rejoué s'arrête à la clé d'API ; D0 et la première API sont
-  // décrits (mode pending) et gardés par assert_quickstart_pending_steps_declared, qui échoue à la livraison de leurs routes.
+  // 4.8 livrée partiellement (16 § 8, 17 § 11) : la première API est rejouée par le quickstart depuis 3.1 (étape first-api) ; D0
+  // reste décrit (mode pending) et gardé par assert_quickstart_pending_steps_declared, qui échoue à la livraison de /mcp (3.2).
   test.todo("assert_quickstart_d0_first_api"); // 16 § 8, reprise : 3.1 (première API sur fixture), 3.2 (D0 en MCP), vérifié en 4.4
-  // Case « j'ai lu » (responsible_use_acks), page affichée au premier lancement, refus d'une API x-personal sans la case :
-  // gardés par assert_responsible_use_ack_pending (tests/docs-guards.unit.test.ts), qui échoue si 3.1 livre POST /api/apis sans eux.
-  test.todo("assert_responsible_use_ack"); // 17 § 11 (critère 2 de 4.8), reprise : 3.1
+  // Case « j'ai lu » (responsible_use_acks) et refus d'une API x-personal sans elle : livrés par 3.1 (assert_responsible_use_ack,
+  // apps/server/src/rest.integration.test.ts). L'affichage de la page au premier lancement de la console reste à faire (console).
   // INV6 (revue de 1.7), câblage livré par 2.3 : le worker porte le run échoué au statut de l'API (10 puis 15 dans le même
   // run, sans réparation) : apps/worker/src/exec/classification-guard.integration.test.ts (status_events écrits par le worker)
   // et apps/worker/src/exec/repair.integration.test.ts (10 puis 12 ou 13).
   // D-49 (2.3) : la quarantaine et l'enveloppe `RunResult.rejected` sont livrées (packages/db/src/rejected.ts) ; leur
-  // exposition REST et MCP attend 3.1 et 3.2 (non fusionnées au moment de 2.3) et se joue en 4.2.
+  // exposition REST et MCP (3.1 et 3.2 non fusionnées au moment de 2.3) se joue en 4.2.
   test.todo("assert_rejected_items_quarantined — exposition REST et MCP : RunResult.rejected sur get_run et run_api, get_items(rejected: true) à l'appelant du run seul, 404 au propriétaire d'une API instance (05 §4.1)"); // D-49, tâche(s) 4.2 (après 3.1, 3.2)
   // 2.12 (mémoire, profil, juge) : le banc A/B est livré par 2.8, non fusionnée au moment de 2.12 ; les bras « mémoire »
   // et « ablation de la fiche » et la détection des défauts silencieux se jouent en 4.2.
   test.todo("assert_silent_defects_detected — banc 2.8 : défauts silencieux (constante, sentinelles, motif, doublons, valeur d'énumération) détectés par le profil"); // 2.12, joué en 4.2
   test.todo("bras « mémoire » du banc A/B (r1 R18) et ablation du contenu de la fiche (r4 R10) avant de figer run_profiles"); // 2.12, après 2.8, joué en 4.2
+  // 2.12 (revue) : validateBaseline et excludeFromBaseline (packages/db/src/quality.ts) n'ont pas encore d'appelant ; tant
+  // qu'aucune baseline n'est validée, les motifs comparatifs (pattern_shift, new_enum_value) restent inactifs.
+  test.todo("baseline validée par promote_api / test_api (3.14), sortie de baseline sur un retour « ce champ est faux » : motifs pattern_shift et new_enum_value actifs"); // 2.12, après 3.14, joué en 4.2
   // RGPD (1.8) : assert_retention_purge, assert_erasure_complete et assert_no_personal_data_in_logs sont dans
   // packages/db/src/retention/retention.integration.test.ts ; câblage worker (RunContext.personal, RunContext.excludeSubjects,
   // rekey) dans apps/worker/src/worker.integration.test.ts. Câblage par l'exécuteur réel (D-28, tâche 1.6) : items extraits

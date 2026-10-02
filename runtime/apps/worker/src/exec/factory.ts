@@ -10,12 +10,13 @@ import { DomainPacer, rejectionThresholdsFromEnv, type SandboxEngine } from '@ru
 import { SsrfGuard, ssrfPolicyFromEnv, startEgressProxy, type EgressProxy } from '@runtime/core/net';
 import { STAGEHAND_VERSION, StagehandEngine } from '@runtime/agent';
 import { identityFromEnv, resolveIdentifyInstance, resolveInstanceContact, RobotsCache } from '@runtime/core/access';
-import { PgPacingStore, publishRobotEngine, readIdentifyInstanceSetting, readInstanceContactSetting, readLlmSettings, secretStore } from '@runtime/db';
+import { PgPacingStore, publishRobotEngine, readIdentifyInstanceSetting, readInstanceContactSetting, readLlmSettings, scheduleRunJudge, secretStore } from '@runtime/db';
 import { createLlmClient, llmConfigFromSettings, roleProblems, roleTarget, type LlmConfig, type LlmNote } from '@runtime/llm';
 import { launchAgentBrowser } from '../browser/agent-browser.js';
 import { installedEngineIdentity } from '../browser/engine-identity.js';
 import { cgroupMemoryLimitBytes, cgroupMemoryWorkingSetBytes } from '../browser/cgroup.js';
 import { BrowserPool, playwrightLauncher } from '../browser/pool.js';
+import { chromiumSandboxCheck, seccompMode, type ChromiumSandboxStatus } from '../browser/sandbox-check.js';
 import { ProcessSandboxEngine, sandboxOptionsFromEnv, type IsolationProbe } from '../sandbox/index.js';
 import type { ExecutorFactory } from '../worker.js';
 import { loadInlineScript } from './script-executor.js';
@@ -25,6 +26,12 @@ import { createInvestigationExecutor, dispatchByKind } from './investigation-exe
 import { createRepairPort } from './repair-executor.js';
 import { createJudgeJob, settingsQualityPorts } from './quality-job.js';
 import { createStrategyRuntime, type AgentPorts } from './strategy-executor.js';
+
+/**
+ * Rôles résolus pour l'enquête (schéma, prix des couples E4 et E6). Le rôle `judge` n'en fait PAS partie (revue 2.12) :
+ * il est résolu à part (`judgeLlm`), et une erreur de ses réglages n'empêche jamais l'enquête.
+ */
+export const INVESTIGATION_LLM_ROLES = ['investigate', 'extract', 'agent'] as const;
 
 /** Version du prompt du moteur : celui de Stagehand, non modifié (mesuré tel quel au spike 0.6a). */
 const STAGEHAND_PROMPT_VERSION = `stagehand-${STAGEHAND_VERSION}-dom`;
@@ -78,21 +85,44 @@ type FactoryEngine = SandboxEngine & { probeIsolation(): Promise<IsolationProbe>
 export type ProductionFactoryOverrides = {
   /** Moteur du bac à sable (tests) ; défaut : `ProcessSandboxEngine` sur l'utilisateur dédié lu dans l'environnement. */
   readonly sandboxEngine?: (options: { production: boolean }) => FactoryEngine;
+  /** Vérification du bac à sable de Chromium au démarrage (tests) ; défaut : `chromiumSandboxCheck()`. */
+  readonly chromiumSandbox?: () => Promise<ChromiumSandboxStatus>;
 };
 
 export function productionExecutorFactory(env: Readonly<Record<string, string | undefined>> = process.env, overrides: ProductionFactoryOverrides = {}): ExecutorFactory {
-  return async ({ pool, config, checked, logger }) => {
+  return async ({ pool, config, checked, logger, queue }) => {
     const guard = new SsrfGuard({ policy: ssrfPolicyFromEnv(env) });
     const pacer = new DomainPacer(new PgPacingStore(pool));
     const secrets = secretStore(pool, config.keyring, checked);
     const production = env['NODE_ENV'] === 'production';
-    const engine: FactoryEngine = overrides.sandboxEngine?.({ production }) ?? new ProcessSandboxEngine({ ...sandboxOptionsFromEnv(env), production });
+    const sandbox = sandboxOptionsFromEnv(env);
+    const engine: FactoryEngine =
+      overrides.sandboxEngine?.({ production }) ??
+      new ProcessSandboxEngine({
+        ...sandbox,
+        production,
+        onSweepFailure: (message) => logger.error({ alert: 'sandbox_sweep_failed' }, message),
+      });
     if (production) {
       const probe = await engine.probeIsolation();
       if (probe.parentEnviron === 'readable') {
         throw new SandboxIsolationError("bac à sable : l'enfant lit l'environnement du worker (utilisateur dédié requis, D-30)");
       }
-      logger.info({ sandboxUid: probe.uid, noNewPrivs: probe.noNewPrivs }, 'bac à sable : isolation éprouvée');
+      // Sous no-new-privileges, /proc/<worker>/environ est refusé même à un enfant du MÊME uid (le worker détient des
+      // capacités permises) : la séparation se prouve par l'uid de l'enfant et par le fichier témoin du worker (revue 4.1b).
+      if (probe.uid === undefined || probe.uid === 0 || probe.uid === process.getuid?.() || (sandbox.uid !== undefined && probe.uid !== sandbox.uid)) {
+        throw new SandboxIsolationError(`bac à sable : l'enfant ne tourne pas sous l'uid dédié (uid ${String(probe.uid)}, attendu ${String(sandbox.uid)}, D-30)`);
+      }
+      if (probe.witness !== 'denied') {
+        throw new SandboxIsolationError("bac à sable : l'enfant lit les fichiers du worker (fichier témoin), utilisateur dédié requis (D-30)");
+      }
+      // Le profil seccomp du compose permet les espaces de noms utilisateur à tout le conteneur (bac à sable de Chromium) :
+      // l'enfant doit les perdre (filtre SANDBOX_SECCOMP, revue 4.1b).
+      if (probe.namespaces === 'allowed') {
+        throw new SandboxIsolationError("bac à sable : l'enfant peut créer un espace de noms utilisateur (filtre SANDBOX_SECCOMP requis, revue 4.1b)");
+      }
+      // Régime seccomp du conteneur (champ Seccomp de /proc/self/status : 0 aucun, 2 filtre) : relevé sur chaque hébergeur.
+      logger.info({ sandboxUid: probe.uid, noNewPrivs: probe.noNewPrivs, namespaces: probe.namespaces, seccomp: seccompMode() ?? 'inconnu' }, 'bac à sable : isolation éprouvée');
     }
     let browsers: BrowserPool | null = null;
     let launchProxy: EgressProxy | undefined;
@@ -110,6 +140,20 @@ export function productionExecutorFactory(env: Readonly<Record<string, string | 
         onEvent: (event) => logger.info(event, 'navigateur'),
       });
       logger.info({ browserConcurrency: config.browserConcurrency, source: config.browserConcurrencySource }, 'pool Chromium prêt (lancement à la demande)');
+      // Bac à sable de Chromium (jamais --no-sandbox) : sans espaces de noms utilisateur (profil seccomp par défaut de Docker,
+      // AppArmor de l'hôte), chaque run navigateur s'arrêterait sur « No usable sandbox! ». Dit dès le démarrage, sans
+      // empêcher les runs sans navigateur (revue 4.1b : Render n'applique pas le profil du compose).
+      if (production) {
+        const status = await (overrides.chromiumSandbox ?? chromiumSandboxCheck)();
+        const seccomp = seccompMode() ?? 'inconnu';
+        if (status.available) logger.info({ seccomp }, 'Chromium : bac à sable disponible');
+        else {
+          logger.error(
+            { alert: 'chromium_sandbox_unavailable', seccomp, detail: status.detail },
+            "Chromium : bac à sable indisponible (espaces de noms utilisateur refusés par le profil seccomp ou AppArmor de l'hôte) : les runs navigateur échoueront (« No usable sandbox! »). Docker : profil seccomp-chromium.json (security_opt du worker), voir docs/deploiement.md",
+          );
+        }
+      }
     }
     const pool_ = browsers;
     // E4-E6 (tâche 2.4) : réglages LLM relus à chaque essai, clés dans le dépôt de secrets (INV8).
@@ -144,7 +188,8 @@ export function productionExecutorFactory(env: Readonly<Record<string, string | 
     // Réparation dans le même run (2.3) : rôle `repair` relu à chaque réparation, bail en table ; seuil de casse des items
     // non conformes (D-49) lu au démarrage (`ITEMS_REJECTED_MAX_SHARE`, `ITEMS_REJECTED_MIN_COUNT`).
     // Juge consultatif (2.12) : désactivé par défaut (`settings.llm.judge.enabled` et un modèle au rôle `judge`). Sur
-    // anomalie d'un rejeu, le jugement est un job séparé, lancé après la fin du run (le rejeu ne fait aucun appel LLM).
+    // anomalie d'un rejeu, le jugement est un job pg-boss séparé (`quality-judge`, un par run) traité par le worker après
+    // la fin du run (le rejeu ne fait aucun appel LLM) ; il survit à un redémarrage.
     const judgeLlm = {
       config: async () => {
         const value = await readLlmSettings(pool);
@@ -156,10 +201,13 @@ export function productionExecutorFactory(env: Readonly<Record<string, string | 
     const judgeJob = createJudgeJob({ pool, llm: judgeLlm, quality: qualityBase });
     const quality = {
       ...qualityBase,
-      scheduleJudge: (job: { runId: string; ownerId: string }) => {
-        setTimeout(() => {
-          judgeJob({ ...job, trigger: 'anomaly' }).catch((error: unknown) => logger.warn({ runId: job.runId, err: error instanceof Error ? error.name : 'error' }, 'juge : jugement sur anomalie non fait'));
-        }, 1_000).unref();
+      scheduleJudge: async (job: { runId: string; ownerId: string }) => {
+        const q = queue?.();
+        if (q === undefined) {
+          logger.warn({ runId: job.runId }, 'juge : file indisponible, jugement sur anomalie non planifié');
+          return;
+        }
+        await scheduleRunJudge(q, job);
       },
     };
     const repair = createRepairPort({
@@ -208,10 +256,11 @@ export function productionExecutorFactory(env: Readonly<Record<string, string | 
       llm: {
         config: async () => {
           const value = await readLlmSettings(pool);
-          return value === null ? null : llmConfigFromSettings(value, (id) => secrets.get(id), ['investigate', 'extract', 'agent', 'judge']);
+          return value === null ? null : llmConfigFromSettings(value, (id) => secrets.get(id), [...INVESTIGATION_LLM_ROLES]);
         },
         client: (config) => createLlmClient(config),
       },
+      judgeLlm,
       quality,
       robotsCache,
       instanceContact,
@@ -220,6 +269,10 @@ export function productionExecutorFactory(env: Readonly<Record<string, string | 
     });
     return {
       executor: dispatchByKind({ run: strategy.executor, investigation }),
+      // Job `quality-judge` : jugement sur anomalie d'un rejeu, après sa clôture (RunNotClosedError : pg-boss le reprend).
+      judge: async (job) => {
+        await judgeJob({ runId: job.run_id, ownerId: job.owner_id, trigger: 'anomaly' });
+      },
       browserContexts: () => pool_?.active() ?? 0,
       close: async () => {
         await tunnel.close();

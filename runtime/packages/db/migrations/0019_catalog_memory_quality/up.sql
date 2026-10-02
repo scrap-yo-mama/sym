@@ -1,11 +1,13 @@
 -- SPDX-License-Identifier: AGPL-3.0-only
--- 0018_catalog_memory_quality (tâche 2.12, 19 §2 et §3, 19b §1 ; migration validée par l'arbitrage du 2026-10-01) :
+-- 0019_catalog_memory_quality (tâche 2.12, 19 §2 et §3, 19b §1 ; migration validée par l'arbitrage du 2026-10-01) :
 --   strategy_versions.signature     signature calculée par le code à la reconnaissance (sans LLM, sans texte du site) ;
 --   strategy_versions.source        source de la version (retours `feedback[]`, intentions `steps[]`, 19b §1) : ajoutée ici
 --                                   si 2.10 ne l'a pas déjà posée (IF NOT EXISTS) ; lue par la mémoire du catalogue ;
 --   runs.quality, runs.judge        fiche de qualité du run et avis CONSULTATIF du juge (ne change jamais un statut) ;
---   run_profiles                    profil de chaque run, après Ajv et la garde de classification ; baseline validée
---                                   par l'utilisateur seul ; purgé avec RETENTION_PROFILES_DAYS, sauf la baseline ;
+--   run_profiles                    profil de chaque run, après Ajv et la garde de classification ; il appartient au RUN
+--                                   (owner_id = runs.owner_id, comme la quarantaine D-49 : le top-k vient des données
+--                                   de l'appelant) ; baseline validée par le propriétaire de l'API seul, sur l'un de
+--                                   ses runs ; purgé avec RETENTION_PROFILES_DAYS, sauf la baseline ;
 --   strategy_version_memory_refs    entrées de mémoire consultées par une version, avec le sha256 du dossier.
 -- Toutes sous RLS `owner_id` (INV12), purgées avec l'API (ON DELETE CASCADE).
 ALTER TABLE strategy_versions ADD COLUMN IF NOT EXISTS source jsonb NOT NULL DEFAULT '{}';
@@ -38,16 +40,27 @@ CREATE FUNCTION run_profiles_owner_bound() RETURNS trigger
 LANGUAGE plpgsql
 AS $$
 BEGIN
-  IF NOT EXISTS (SELECT 1 FROM apis a WHERE a.id = NEW.api_id AND a.owner_id = NEW.owner_id)
-     OR (NEW.run_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM runs r WHERE r.id = NEW.run_id AND r.api_id = NEW.api_id)) THEN
-    RAISE EXCEPTION 'profil : owner_id et api_id doivent être ceux de l''API et du run'
+  -- Profil d'un run : owner_id et api_id sont ceux du run (B qui exécute l'API de A partagée avec l'instance : profil de B).
+  IF NEW.run_id IS NOT NULL THEN
+    IF NOT EXISTS (SELECT 1 FROM runs r WHERE r.id = NEW.run_id AND r.api_id = NEW.api_id AND r.owner_id = NEW.owner_id) THEN
+      RAISE EXCEPTION 'profil : owner_id et api_id doivent être ceux du run'
+        USING ERRCODE = 'check_violation', CONSTRAINT = 'run_profiles_owner_bound';
+    END IF;
+  -- Run purgé (ON DELETE SET NULL) : la baseline survit, sans changer de propriétaire ni d'API.
+  ELSIF TG_OP <> 'UPDATE' OR NEW.owner_id IS DISTINCT FROM OLD.owner_id OR NEW.api_id IS DISTINCT FROM OLD.api_id THEN
+    RAISE EXCEPTION 'profil : un profil sans run ne naît que de la purge de son run'
+      USING ERRCODE = 'check_violation', CONSTRAINT = 'run_profiles_owner_bound';
+  END IF;
+  -- Baseline : acte du propriétaire de l'API, sur l'un de ses propres runs (r4 R3).
+  IF NEW.baseline AND (NEW.validated_by IS DISTINCT FROM NEW.owner_id OR NOT EXISTS (SELECT 1 FROM apis a WHERE a.id = NEW.api_id AND a.owner_id = NEW.owner_id)) THEN
+    RAISE EXCEPTION 'profil : baseline validée par le propriétaire de l''API seul'
       USING ERRCODE = 'check_violation', CONSTRAINT = 'run_profiles_owner_bound';
   END IF;
   RETURN NEW;
 END
 $$;
 CREATE TRIGGER run_profiles_owner_bound
-  BEFORE INSERT OR UPDATE OF run_id, api_id, owner_id ON run_profiles
+  BEFORE INSERT OR UPDATE OF run_id, api_id, owner_id, baseline, validated_by ON run_profiles
   FOR EACH ROW EXECUTE FUNCTION run_profiles_owner_bound();
 
 ALTER TABLE run_profiles ENABLE ROW LEVEL SECURITY;

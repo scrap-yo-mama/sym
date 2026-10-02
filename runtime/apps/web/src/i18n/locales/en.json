@@ -15,9 +15,9 @@
     "signedInAs": "Signed in as {name}",
     "signOut": "Sign out",
     "main": "Main navigation",
-    "home": "Home",
+    "home": "Getting started",
     "newApi": "New API",
-    "runs": "All runs",
+    "runs": "Runs",
     "settings": "Settings",
     "catalog": "Catalog",
     "users": "Users",
@@ -26,6 +26,27 @@
     "roleBanner": {
       "owner": "You are the owner of this instance.",
       "admin": "You are an admin of this instance."
+    }
+  },
+  "brand": {
+    "kicker": {
+      "login": "Your instance",
+      "setup": "First start",
+      "setupNext": "Next steps",
+      "runs": "Runs",
+      "audit": "Admin",
+      "users": "Admin",
+      "settings": "Settings",
+      "api": "API"
+    },
+    "pills": {
+      "fetch": "Fetch",
+      "browser": "Browser",
+      "agent": "Agent"
+    },
+    "bubble": {
+      "onIt": "Got it, I'm on it.",
+      "done": "Done."
     }
   },
   "auth": {

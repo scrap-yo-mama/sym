@@ -37,10 +37,29 @@ export function coupleOf(execution: Execution, network: Network): string {
 
 const ID_SEGMENT = /^(?:[0-9a-f]{16,}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[A-Za-z0-9_-]{24,})$/i;
 
+/** Changements de casse dans un segment de lettres : au-delà de 3 sur 12 caractères ou plus, jeton probable. */
+const caseFlips = (seg: string): number => {
+  let flips = 0;
+  for (let i = 1; i < seg.length; i += 1) {
+    const a = seg[i - 1]!;
+    const b = seg[i]!;
+    if (/[a-z]/.test(a) && /[A-Z]/.test(b)) flips += 1;
+    else if (/[A-Z]/.test(a) && /[a-z]/.test(b) && i > 1) flips += 1;
+  }
+  return flips;
+};
+
+/**
+ * Segment de chemin qui peut porter une valeur (identifiant, nom d'utilisateur, jeton court) : un chiffre (hors segment
+ * tout numérique, `{n}`), un point (`jean.dupont`), ou une forte entropie (12 caractères ou plus, casses alternées).
+ * Revue 2.12 : un gabarit montré pour un autre domaine ne garde que des mots de route.
+ */
+const VALUE_LIKE = (seg: string): boolean => /\d/.test(seg) || seg.includes('.') || (seg.length >= 12 && caseFlips(seg) >= 3);
+
 /**
  * Gabarit d'URL : origine et chemin, segments numériques remplacés par `{n}`, identifiants longs (hex, UUID, jetons) par
- * `{id}`, valeur de chaque paramètre de requête par `{nom}` ; aucun fragment ni identifiant d'URL. Une URL illisible
- * donne une chaîne vide.
+ * `{id}`, segments d'allure de valeur (chiffre, point, forte entropie) ou hors alphabet par `{s}`, valeur de chaque
+ * paramètre de requête par `{nom}` ; aucun fragment ni identifiant d'URL. Une URL illisible donne une chaîne vide.
  */
 export function urlTemplate(url: string): string {
   let u: URL;
@@ -51,7 +70,7 @@ export function urlTemplate(url: string): string {
   }
   const path = u.pathname
     .split('/')
-    .map((seg) => (seg === '' ? seg : /^\d+$/.test(seg) ? '{n}' : ID_SEGMENT.test(seg) ? '{id}' : /^[A-Za-z0-9._~-]{1,64}$/.test(seg) ? seg : '{s}'))
+    .map((seg) => (seg === '' ? seg : /^\d+$/.test(seg) ? '{n}' : ID_SEGMENT.test(seg) ? '{id}' : /^[A-Za-z0-9_~-]{1,64}$/.test(seg) && !VALUE_LIKE(seg) ? seg : '{s}'))
     .join('/');
   const names = [...new Set([...u.searchParams.keys()])].filter((k) => /^[A-Za-z0-9_.[\]-]{1,64}$/.test(k));
   const query = names.map((k) => `${k}={${k}}`).join('&');

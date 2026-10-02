@@ -86,11 +86,11 @@ async function copyTemplate(): Promise<void> {
 </script>
 
 <template>
-  <section class="flex flex-col gap-4 rounded-xl border-2 border-dashed bg-card p-5 text-card-foreground" aria-labelledby="blocked-title" data-testid="blocked-panel">
+  <section class="flex flex-col gap-4 rounded-xl border-2 border-dashed border-foreground bg-card p-6 text-card-foreground" aria-labelledby="blocked-title" data-testid="blocked-panel">
     <header class="flex items-start gap-3">
       <!-- Cercle barré : forme distincte de l'erreur (croix dans un octogone) ; le libellé porte le sens -->
       <span aria-hidden="true" class="text-2xl leading-none">⦸</span>
-      <h2 id="blocked-title" class="text-lg font-semibold">{{ t('blocked.title', { domain: domainLabel }) }}</h2>
+      <h2 id="blocked-title" class="text-2xl font-extrabold">{{ t('blocked.title', { domain: domainLabel }) }}</h2>
     </header>
 
     <div>

@@ -6,10 +6,13 @@
 // Règles (arbitrages n° 2 et 5) :
 // - même propriétaire seulement (filtre ici en plus de la RLS : une API partagée avec l'instance reste hors du dossier) ;
 // - valeurs d'items pour l'API en cours et le même domaine enregistrable seulement ; autres domaines : structure, profil
-//   et `url_template` ; une API avec session ou en tunnel ne donne jamais de valeur ; agent instruit et réparation :
+//   et `url_template` ; une API avec session ou en tunnel ne donne jamais de valeur, ni son endpoint (même en gabarit)
+//   hors de son domaine ; agent instruit et réparation :
 //   structurel (la réparation ne voit que des squelettes, tâche 2.3 : restriction, jamais un élargissement) ;
 // - texte d'un retour pour l'API en cours seulement (300 caractères) ; ailleurs `kind` et `field` ;
-// - refus : le fait et la date seulement, et ni stratégie, ni réseau, ni tunnel pour un domaine refusé ;
+// - refus : le fait et la date seulement, et ni stratégie, ni réseau, ni tunnel pour un domaine refusé (ni versions, ni
+//   couples écartés, ni intentions d'étapes de l'API en cours, même lors d'une confirmation manuelle) ; les refus lus par
+//   la requête dédiée (sans limite) s'ajoutent à ceux des entrées ;
 // - version remplacée : `superseded_by`, jamais en tête ; entrée sans run sain depuis D jours : `stale` ;
 // - masquage des couches 1 et 2 sur toute valeur et tout texte (x-personal toujours masqué, aucun réglage ne le démasque) ;
 // - budget de tokens (≈ 4 caractères par token) : les entrées les moins bien classées tombent d'abord.
@@ -22,6 +25,7 @@ import { sanitizeUntrusted, safeFieldName } from './sanitize.js';
 import { coupleOf, urlTemplate, type StrategySignature } from './signature.js';
 import { structuralSimilarity } from './pqgram.js';
 import type { Execution, Network } from '../model/index.js';
+import type { PriorRefusal } from './refusal.js';
 
 /** Valeurs de départ (r1 R9, 19b §6 : à valider). */
 export const CATALOG_MEMORY_DEFAULTS = Object.freeze({
@@ -87,6 +91,8 @@ export type DossierRequest = {
   readonly signature?: StrategySignature | null;
   readonly description: string;
   readonly mode?: DossierMode;
+  /** Refus du propriétaire lus par la requête dédiée (`readCatalogMemory`), y compris hors des entrées du dossier. */
+  readonly refusals?: readonly PriorRefusal[];
   readonly now: Date;
   readonly sampleSize?: number;
   readonly maxTokens?: number;
@@ -208,11 +214,12 @@ export function buildCatalogDossier(req: DossierRequest, entries: readonly Memor
   const own = entries.filter((e) => e.owner_id === req.ownerId);
   const refusedDomains = new Map<string, string>();
   // Refus par domaine : le plus récent (le fait et la date seulement).
-  for (const e of own) {
-    if (e.refusal === null) continue;
-    const at = day(e.refusal.at);
-    if ((refusedDomains.get(e.domain) ?? '') < at) refusedDomains.set(e.domain, at);
-  }
+  const noteRefusal = (domain: string, at: string): void => {
+    if (domain === '') return;
+    if ((refusedDomains.get(domain) ?? '') < day(at)) refusedDomains.set(domain, day(at));
+  };
+  for (const e of own) if (e.refusal !== null) noteRefusal(e.domain, e.refusal.at);
+  for (const r of req.refusals ?? []) noteRefusal(r.domain, r.at);
   const registry = new PersonalValueRegistry();
   // Réparation : structurel aussi (restriction de 2.12) — le prompt de réparation ne voit que des squelettes (2.3).
   const valuesAllowed = (e: MemoryEntry): boolean => mode === 'investigate' && !e.session && e.domain === req.domain && !refusedDomains.has(e.domain);
@@ -230,6 +237,7 @@ export function buildCatalogDossier(req: DossierRequest, entries: readonly Memor
   const selfSample = self === undefined ? [] : sampleOf(self);
   const similarSamples = ranked.map((x) => sampleOf(x.e));
 
+  const selfRefused = self !== undefined && refusedDomains.has(self.domain);
   const same: SameApiSection | null =
     self === undefined
       ? null
@@ -239,22 +247,25 @@ export function buildCatalogDossier(req: DossierRequest, entries: readonly Memor
           reason: self.status_reason,
           observed_at: self.observed_at,
           stale: stale(self, req.now),
-          versions: refusedDomains.has(self.domain) ? [] : versionsOf(self),
-          discarded: self.discarded.slice(0, 10).map((d) => ({ couple: sanitizeUntrusted(d.couple, 8), reason: sanitizeUntrusted(d.reason, 40) })),
+          versions: selfRefused ? [] : versionsOf(self),
+          // Domaine refusé : ni couple écarté (exécution et réseau), ni intention d'étape (19 §2).
+          discarded: selfRefused ? [] : self.discarded.slice(0, 10).map((d) => ({ couple: sanitizeUntrusted(d.couple, 8), reason: sanitizeUntrusted(d.reason, 40) })),
           // Seul endroit où le texte d'un retour entre dans un dossier (300 caractères), masqué.
           feedback: self.feedback.slice(0, 5).map((f) => ({
             kind: sanitizeUntrusted(f.kind, 20),
             field: safeFieldName(f.field) ? f.field : null,
             text: sanitizeUntrusted(maskFeedbackForLlm(f.text, registry), CATALOG_MEMORY_DEFAULTS.feedbackChars),
           })),
-          step_intents: mode === 'instructed' ? [] : self.step_intents.slice(0, 10).map((s) => sanitizeUntrusted(maskFeedbackForLlm(s, registry), CATALOG_MEMORY_DEFAULTS.sampleChars)),
+          step_intents: mode === 'instructed' || selfRefused ? [] : self.step_intents.slice(0, 10).map((s) => sanitizeUntrusted(maskFeedbackForLlm(s, registry), CATALOG_MEMORY_DEFAULTS.sampleChars)),
           fields: fieldsOf(self),
           sample: selfSample,
         };
 
   const similar: SimilarSection[] = ranked.map(({ e, tier }, i) => {
     const cur = currentVersion(e);
-    const endpoint = e.endpoint === null ? (e.signature?.url_template ?? null) : urlTemplate(e.endpoint);
+    // API avec session ou en tunnel : jamais son endpoint (ni son gabarit) hors de son domaine.
+    const hidden = e.session && e.domain !== req.domain;
+    const endpoint = hidden ? null : e.endpoint === null ? (e.signature?.url_template ?? null) : urlTemplate(e.endpoint);
     return {
       api_id: e.api_id,
       tier,
