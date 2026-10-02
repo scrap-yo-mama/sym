@@ -1,0 +1,4 @@
+[
+  { "test": "assert_fixtures_egress_ips_distinct", "invariant": "BINV2 (préparation)", "tasks": ["0.5"], "stage": "I",
+    "note": "tests/fixtures-egress.integration.test.ts : Docker Compose, site, proxy HTTP (10.88.0.11) et SOCKS5 (10.88.0.12) vus par le site avec 3 IP distinctes ; journal des IP sources. Saut déclaré seulement avec SYM_BROWSER_SKIP_DOCKER=1 (ci:local --skip-image)." }
+]
