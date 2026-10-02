@@ -150,6 +150,9 @@ describe('invalid_option_typed (A3)', () => {
     [{ extraHTTPHeaders: { Host: 'evil.example' } }, 'extraHTTPHeaders'],
     [{ id: 'pas-un-uuid' }, 'id'],
     [{ metadata: { k: 'x'.repeat(513) } }, 'metadata.k'],
+    // Trouvés par Schemathesis : PostgreSQL ne garde ni U+0000 ni une moitié de paire de substitution en jsonb.
+    [{ metadata: { k: 'a\u0000b' } }, 'metadata.k'],
+    [{ storageState: { cookies: [{ name: '\ud800' }], origins: [] } }, 'storageState.cookies[0].name'],
   ])('%j → 422 invalid_option nommant %s', async (body, field) => {
     const res = await create(body);
     expect(res.status).toBe(422);

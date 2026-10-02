@@ -35,6 +35,8 @@ const steps: Step[] = [
     cmd: ['pnpm', '--filter', '@sym-browser/db', 'test:matrix'],
     env: { PG_VERSIONS: '17,18' },
   },
+  // Tâche 2.2 : contrat OpenAPI contre les réponses réelles, Schemathesis en image Docker épinglée (réseau hôte).
+  { name: 'contrat OpenAPI : Schemathesis (image Docker) contre la passerelle', cmd: ['pnpm', '--filter', '@sym-browser/gateway', 'test:schemathesis'] },
 ];
 
 // Nœud sur de vrais Chromium 153 (1.1 : pool_no_orphans, kill_on_close_timeout ; 1.3 : shared_context_options,

@@ -9,6 +9,7 @@
 import { spawn, spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import type { AddressInfo } from 'node:net';
+import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, expect, test } from 'vitest';
 import { createHarness, type Harness } from '../../test/helpers/harness.js';
 
@@ -22,6 +23,9 @@ const CHECKS = [
   'negative_data_rejection',
   'ignored_auth',
 ].join(',');
+
+/** Statuts 5xx admis : ceux que le contrat déclare (502, 503), voir schemathesis.toml. */
+const CONFIG = fileURLToPath(new URL('../../schemathesis.toml', import.meta.url));
 
 let h: Harness;
 let base: string;
@@ -37,13 +41,14 @@ afterAll(async () => {
 test('Schemathesis (A1) : 0 écart entre l’OpenAPI publiée et les réponses réelles', async () => {
   const name = `symb-schemathesis-${randomBytes(4).toString('hex')}`;
   const args = [
-    'run', '--rm', '--name', name, '--network', 'host', SCHEMATHESIS_IMAGE,
+    'run', '--rm', '--name', name, '--network', 'host', '-v', `${CONFIG}:/config/schemathesis.toml:ro`, SCHEMATHESIS_IMAGE,
+    '--config-file', '/config/schemathesis.toml',
     'run', `${base}/v1/openapi.json`,
     '--url', `${base}/v1`,
     '--header', `Authorization: Bearer ${h.keys.a}`,
     '--checks', CHECKS,
     '--max-examples', process.env.SCHEMATHESIS_MAX_EXAMPLES ?? '40',
-    '--seed', '20261002',
+    '--seed', process.env.SCHEMATHESIS_SEED ?? '20261002',
     '--request-timeout', '10',
   ];
   const output: string[] = [];

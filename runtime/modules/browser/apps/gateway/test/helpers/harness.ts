@@ -14,7 +14,7 @@ import pg from 'pg';
 import { inject } from 'vitest';
 import { createGatewayApi, type GatewayDeps, type Principal, type Scope, type SessionLauncher } from '../../src/api/index.js';
 
-export const PUBLIC_URL = 'https://b.example.com';
+const PUBLIC_URL = 'https://b.example.com';
 
 type LauncherMode = 'ok' | 'fail' | 'hang';
 
@@ -29,7 +29,9 @@ export type Harness = {
   close: () => Promise<void>;
 };
 
-export type Reply = { status: number; headers: Record<string, string | string[] | undefined>; body: any };
+// Corps déjà validé contre l'OpenAPI par `call` : les tests le lisent librement.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type Reply = { status: number; headers: Record<string, unknown>; body: any };
 
 async function admin<T>(fn: (client: pg.Client) => Promise<T>): Promise<T> {
   const client = new pg.Client({ connectionString: inject('pgAdminUrl') });

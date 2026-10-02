@@ -9,14 +9,16 @@ export type { EndReason, SessionState } from '@sym/contracts/browser';
 export type SessionTransition = { readonly from: SessionState; readonly to: SessionState; readonly reason: EndReason | null };
 
 /**
- * Table de 04 § 5. Ajout de 04b § 6 : les sessions `pending` d'un nœud déclaré mort passent aussi `failed` raison
- * `node_lost` (le diagramme de 04 § 5 ne montre que `running`).
+ * Table de 04 § 5. Ajouts : 04b § 6, les sessions `pending` d'un nœud déclaré mort passent aussi `failed` raison
+ * `node_lost` (le diagramme de 04 § 5 ne montre que `running`) ; 04 § 2 (tâche 2.2), `DELETE` libère aussi une session
+ * `pending` (créée avec `wait=false`, pas encore démarrée), raison `released`.
  */
 export const SESSION_TRANSITIONS: readonly SessionTransition[] = Object.freeze([
   { from: 'pending', to: 'running', reason: null },
   { from: 'pending', to: 'failed', reason: 'crash' },
   { from: 'pending', to: 'failed', reason: 'quota' },
   { from: 'pending', to: 'failed', reason: 'node_lost' },
+  { from: 'pending', to: 'ended', reason: 'released' },
   { from: 'running', to: 'ended', reason: 'released' },
   { from: 'running', to: 'ended', reason: 'budget_exceeded' },
   { from: 'running', to: 'ended', reason: 'node_shutdown' },

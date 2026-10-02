@@ -8,6 +8,7 @@
 !tsconfig.base.json
 !packages/contracts
 !modules/browser/packages/core
+!modules/browser/packages/db
 !modules/browser/apps/gateway
 !modules/browser/apps/node
 **/node_modules
