@@ -145,7 +145,7 @@ describe('fichiers des sessions sur de vrais Chromium', () => {
   test('session_upload_read_back (C13, dedicated, client CDP) et session_download_sha256 en CDP ; envoi supprimé à la destruction (assert_session_teardown)', async () => {
     const lease = await pool.acquire({ sessionId: 'up-dedicated', type: 'dedicated', tenantId: 'tenant-b' });
     const dir = sessionDir(dataDir, 'up-dedicated');
-    const attached = await attachBrowserFiles(files, { sessionId: 'up-dedicated', tenantId: 'tenant-b', dir, acceptDownloads: true, browser: lease.browser, context: lease.browser.contexts()[0]! });
+    const attached = await attachBrowserFiles(files, { sessionId: 'up-dedicated', tenantId: 'tenant-b', dir, acceptDownloads: true, browser: lease.browser });
     const content = Buffer.from(`envoi de test ${'z'.repeat(5_000)}`);
     const upload = await files.upload({ sessionId: 'up-dedicated', dir, body: [content], name: 'envoi.txt' });
     expect(upload).toMatchObject({ size: content.length, sha256: sha(content) });
