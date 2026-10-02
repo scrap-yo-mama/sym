@@ -158,7 +158,7 @@ describe('validation des valeurs', () => {
     ['SYMB_LOG_LEVEL', 'bavard'], ['NODE_ENV', 'staging'],
     ['SYMB_RETENTION_TRACE_DAYS', '0'], ['SYMB_PROFILE_MAX_BYTES', '12 Mo'],
     ['SYMB_IP_ECHO_URL', 'http://echo.example.org'], ['SYMB_METRICS_TOKEN', 'trop-court'],
-    ['SYMB_BOOTSTRAP_TOKEN', 'trop-court'], ['SYMB_BOOTSTRAP_API_KEY', 'trop-court'],
+    ['SYMB_BOOTSTRAP_TOKEN', 'trop-court'], ['SYMB_BOOTSTRAP_API_KEY', 'trop-court'], ['SYMB_BOOTSTRAP_API_KEY', 'n'.repeat(48)],
     ['SYMB_PRIVATE_HOSTS', '10.0.0.0/33'], ['SYMB_PRIVATE_HOSTS', 'hôte invalide'],
     ['NODE_REGION', 'Région 1'], ['NODE_ID', 'a b'],
   ])('%s=%s : refusée, la variable est nommée', (name, value) => {
@@ -179,6 +179,15 @@ describe('validation des valeurs', () => {
     expect(config.privateHosts).toEqual(['fixtures.internal', '10.1.0.0/16', 'fd00::/8']);
     expect(config.retention.videoDays).toBe(1);
     expect(config.shutdownGraceSeconds).toBe(300);
+  });
+
+  test('SYMB_BOOTSTRAP_API_KEY : une clé symb_ bien formée (tâche 2.1), jamais recopiée dans le message de refus', () => {
+    const valid = `symb_${'A1b2C3d4E5f6'}_${randomBytes(32).toString('base64url')}`;
+    expect(loadConfig(base({ SYMB_BOOTSTRAP_API_KEY: valid })).bootstrapApiKey?.reveal()).toBe(valid);
+    const invalid = `x${valid}`;
+    const found = issues(base({ SYMB_BOOTSTRAP_API_KEY: invalid })).join('\n');
+    expect(found).toMatch(/SYMB_BOOTSTRAP_API_KEY .*symb_/);
+    expect(found).not.toContain(invalid);
   });
 
   test('une valeur vide vaut absente (Compose passe souvent NOM=)', () => {

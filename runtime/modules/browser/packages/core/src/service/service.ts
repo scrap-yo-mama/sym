@@ -7,15 +7,22 @@ import type { AddressInfo } from 'node:net';
 import { describeConfig, LOG_LEVELS, loadConfig, type BrowserConfig, type LogLevel } from '../config/load.js';
 import { ConfigError } from '../config/reader.js';
 import type { ServiceMode } from '../config/env-catalog.js';
+import { CREDENTIAL_PREFIXES } from '../auth/api-key.js';
+import { compilePatterns, redact, secretValues } from '../crypto/redact.js';
 
 export type Logger = (level: LogLevel, msg: string, fields?: Record<string, unknown>) => void;
 
-/** Journal JSON, une ligne par événement, au-dessus du seuil `SYMB_LOG_LEVEL`. Les champs sont choisis par l'appelant (jamais un secret). */
+/**
+ * Journal JSON, une ligne par événement, au-dessus du seuil `SYMB_LOG_LEVEL`. Les champs sont choisis par l'appelant (jamais
+ * un secret) ; par sécurité, la ligne passe quand même le masquage de 0.3 (`Secret`, valeurs connues, puis motifs : `Bearer`,
+ * query `token`/`t`, clés `symb_` et jetons `symt_` de la tâche 2.1), BINV6.
+ */
 export function createLogger(threshold: LogLevel, write: (line: string) => void = (line) => process.stdout.write(`${line}\n`)): Logger {
   const min = LOG_LEVELS.indexOf(threshold);
+  const patterns = compilePatterns(CREDENTIAL_PREFIXES);
   return (level, msg, fields = {}) => {
     if (LOG_LEVELS.indexOf(level) < min) return;
-    write(JSON.stringify({ time: new Date().toISOString(), level, msg, ...fields }));
+    write(patterns(secretValues.redactText(JSON.stringify({ time: new Date().toISOString(), level, msg, ...redact(fields) }))));
   };
 }
 
