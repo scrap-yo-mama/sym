@@ -54,6 +54,7 @@ import { classifyExchange, classifyTransportError, domainRequestPacer, failureRo
 import {
   analyzeCapture,
   buildFromProposal,
+  buildImportedPlan,
   buildTrialPlan,
   discoverScriptEndpoints,
   INVESTIGATION_DEFAULTS,
@@ -67,6 +68,7 @@ import {
   siteScope,
   storedCandidate,
   withinSiteScope,
+  type BuiltStrategy,
   type CapturedExchange,
   type DataCandidate,
   type PairOutcome,
@@ -423,156 +425,175 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
       }
       if (timedOut()) return await budgetExhausted('investigation_timeout_s');
 
-      // --- 1. Reconnaissance (à chaque run : l'état ne garde aucune valeur du site, 17 §6) ------------------------
-      // Premier run : gisements frais. Run des essais (schéma validé) : mêmes gisements, retrouvés sous leurs identifiants.
-      const firstRun = state.validated_schema === undefined;
-      if (firstRun) {
-        await save('reconnaissance');
-        await event(EV.phase, { phase: 'reconnaissance', budget: budgetView() });
+      // --- Import (3.12, 16 § 6) : la stratégie du fichier est essayée telle quelle après l'étape 0 ------------------
+      // Ni reconnaissance ni appel LLM : le schéma de sortie validé et la spécification viennent du fichier, relus et
+      // contrôlés à l'import (INV1). Domaines : ceux de la page de la demande, jamais un voisin (INV10).
+      const imported = state.imported;
+      if (imported !== undefined) {
+        const hosts = (imported.spec['request'] as { allowed_hosts?: unknown } | undefined)?.allowed_hosts;
+        if (!Array.isArray(hosts) || !hosts.every((h) => typeof h === 'string' && withinSiteScope(h, scope))) {
+          return await finishFailed({ failure_class: 'code_error', retryable: false, detail: 'imported_hosts_out_of_scope' }, 'setup');
+        }
       }
-      const recon =
-        ports.mode === 'tunnel'
-          ? await staticRecon(ports.reconProbe, { url: pageUrl, allowHost: (h) => withinSiteScope(h, scope) && hostWithinDomain(h, ports.tunnel!.domain), signal, robots, mode: 'tunnel', ...(pacer === undefined ? {} : { pacer }) })
-          : deps.browsers !== null
-            ? await browserRecon(deps, { url: pageUrl, host, scope, signal, robots, userAgent, sessionBase: ports.server!.sessionBase, ceiling: ports.server!.ceiling, otherUsd: ports.proxyUsd, ...(pacer === undefined ? {} : { pacer }) })
-            : await staticRecon(ports.reconProbe, { url: pageUrl, allowHost: (h) => withinSiteScope(h, scope), signal, robots, mode: 'static', ...(pacer === undefined ? {} : { pacer }) });
-      await charge(ctx, ports.proxyUsd() + recon.proxyUsd);
-      spent = round6(spent + ports.proxyUsd() + recon.proxyUsd);
-      const stopped1 = await tunnelOutcome('reconnaissance');
-      if (stopped1 !== null) return stopped1;
-      const capture: ReconCapture = recon.capture;
-      const fresh = recon.failure === null ? analyzeCapture(capture, apiHostsOf(capture, host, scope)) : [];
-      const candidates: readonly DataCandidate[] = firstRun ? fresh : rematchCandidates(state.candidates ?? [], fresh);
-      await event(EV.reconnaissance, {
-        mode: capture.mode,
-        ...(recon.failure === null ? {} : { failure_class: recon.failure.failure_class, detail: recon.failure.detail }),
-        candidates: candidates.map((c) => ({
-          id: c.id,
-          from: c.from,
-          request: { method: c.request.method, url: narrativeUrl(c.request.url) },
-          ...(c.locator === undefined ? {} : { locator: c.locator.kind }),
-          records: c.records,
-          count: c.count,
-          bytes: c.bytes,
-          fields: Object.keys(c.skeleton).length,
-          ...(c.unsupported === undefined ? {} : { unsupported: c.unsupported }),
-        })),
-        document_bytes: capture.document?.bytes ?? 0,
-        total_bytes: capture.totalBytes,
-        budget: budgetView(),
-      });
-      if (recon.failure !== null) return await finishFailed(recon.failure, 'reconnaissance');
-      // État : gisements SANS valeur (origine, chemin, noms de paramètres) ; ceux du premier run gardent leurs identifiants.
-      await save(firstRun ? 'reconnaissance' : phase, {
-        candidates: firstRun ? fresh.map(storedCandidate) : (state.candidates ?? []),
-        page: { url: pageUrl, host, document_bytes: capture.document?.bytes ?? 0, total_bytes: capture.totalBytes, mode: capture.mode },
-      });
-      if (spent >= request.budget_usd) return await budgetExhausted('investigation_budget_usd');
-      if (timedOut()) return await budgetExhausted('investigation_timeout_s');
-
-      // --- 2. Schéma de sortie d'abord ------------------------------------------------------------------------------
-      const config = deps.llm === undefined ? null : await deps.llm.config().catch(() => null);
-      // Voies agentiques essayables (E4 par le réseau, E6 avec Chromium) : un schéma sans gisement de données leur reste ouvert.
-      const agenticOnly = deps.agentic === true && (rolePrice(config, 'extract') !== undefined || (deps.browsers !== null && rolePrice(config, 'agent') !== undefined));
-      const fixed = state.validated_schema;
-      let proposal = state.proposal;
-      const remap = proposal !== undefined && fixed !== undefined && JSON.stringify(fixed) !== JSON.stringify(state.proposed_schema);
-      if (proposal === undefined || remap) {
-        if (deps.llm === undefined || config === null || config.roles.investigate === undefined) {
-          return await finishFailed({ failure_class: 'code_error', retryable: false, detail: 'llm_not_configured' }, 'setup');
+      let config: LlmConfig | null = null;
+      let builtStrategies: readonly BuiltStrategy[] = [];
+      let outputSchema: Record<string, unknown>;
+      if (imported !== undefined && state.validated_schema !== undefined) {
+        outputSchema = state.validated_schema;
+      } else {
+        // --- 1. Reconnaissance (à chaque run : l'état ne garde aucune valeur du site, 17 §6) ------------------------
+        // Premier run (ou import sans stratégie : schéma validé par le fichier, aucun gisement relevé) : gisements frais.
+        // Run des essais (schéma validé) : mêmes gisements, retrouvés sous leurs identifiants.
+        const firstRun = state.validated_schema === undefined || state.candidates === undefined;
+        if (firstRun) {
+          await save('reconnaissance');
+          await event(EV.phase, { phase: 'reconnaissance', budget: budgetView() });
         }
-        if (!agenticOnly && candidates.filter((c) => c.unsupported === undefined).length === 0) {
-          return await finishFailed({ failure_class: 'extraction', retryable: false, detail: candidates.length > 0 ? 'client_signature' : 'no_data_source' }, 'reconnaissance');
-        }
-        let client: LlmClient;
-        try {
-          client = deps.llm.client({ ...config, roles: { investigate: config.roles.investigate } });
-        } catch {
-          return await finishFailed({ failure_class: 'code_error', retryable: false, detail: 'llm_not_configured' }, 'setup');
-        }
-        const model = config.roles.investigate.model;
-        const exampleOutput = (ctx.input as { example_output?: unknown } | null)?.example_output;
-        const args = {
-          description: request.description,
-          ...(exampleOutput === undefined ? {} : { exampleOutput }),
-          candidates,
-          accessFacts: accessFactsForPrompt(report),
-          ...(fixed === undefined ? {} : { fixedSchema: fixed }),
-        };
-        // Coût d'un appel borné AVANT l'envoi (sortie plafonnée, entrée estimée par excès) : jamais un appel qui
-        // ferait dépasser `investigation_budget_usd` ; prix inconnu → aucun appel (08 §1, jamais 0).
-        const price = rolePrice(config, 'investigate');
-        if (price === null || price === undefined) {
-          await ctx.log('warn', 'llm_price_missing', { model, role: 'investigate' });
-          return await finishFailed({ failure_class: 'run_budget_exceeded', retryable: false, detail: 'llm_price_missing' }, 'schema');
-        }
-        const callCeiling = investigateCallCeilingUsd(args, price);
-        let llmFailure: ExecFailure | null = null;
-        try {
-          const out = await proposeInvestigation(client, {
-            ...args,
-            signal,
-            beforeCall: () => {
-              if (spent + (client.meter.snapshot().cost_usd_known ?? 0) + callCeiling > request.budget_usd) throw new BudgetGuardError();
-            },
-          });
-          proposal = out.proposal;
-        } catch (error) {
-          if (ctx.signal.aborted) throw error;
-          if (timedOut()) llmFailure = { failure_class: 'run_budget_exceeded', retryable: false, detail: 'investigation_timeout_s' };
-          else if (error instanceof BudgetGuardError) llmFailure = { failure_class: 'run_budget_exceeded', retryable: false, detail: 'investigation_budget_usd' };
-          else if (error instanceof LlmError) llmFailure = { failure_class: toFailureClass(error.class), retryable: false, detail: `llm_${error.class}` };
-          else llmFailure = { failure_class: 'extraction', retryable: false, detail: 'proposal_unreadable' };
-        }
-        // Coût du rôle `investigate` (tentatives échouées comprises), imputé au run : inconnu si le prix manque.
-        const usage = client.meter.snapshot();
-        await charge(ctx, 0, usage.cost_usd, { in: usage.tokens_in, cached: usage.tokens_cached, out: usage.tokens_out, reasoning: usage.tokens_reasoning, estimated: usage.usage_estimated });
-        if (usage.cost_usd === null) {
-          await ctx.log('warn', 'llm_price_missing', { model, role: 'investigate' });
-          return await finishFailed({ failure_class: 'run_budget_exceeded', retryable: false, detail: 'llm_price_missing' }, 'schema');
-        }
-        spent = round6(spent + usage.cost_usd);
-        if (llmFailure !== null) {
-          if (llmFailure.failure_class === 'run_budget_exceeded') return await budgetExhausted(llmFailure.detail);
-          return await finishFailed(llmFailure, 'schema');
-        }
-        await ctx.log('info', 'investigate_call', { model, prompt_version: investigatePromptVersion, llm_usd: usage.cost_usd, calls: usage.calls });
-      }
-      const built = buildFromProposal(proposal!, candidates, fixed === undefined ? capture : null, { ...(fixed === undefined ? {} : { fixedSchema: fixed }), agenticOnly });
-      if (!built.ok) {
-        await event(EV.schemaProposed, { ok: false, reason: built.reason, rejected: built.rejected, budget: budgetView() });
-        return await finishFailed({ failure_class: 'extraction', retryable: false, detail: built.reason }, 'schema');
-      }
-      if (fixed === undefined) {
-        // Échantillon : données de l'utilisateur, inscrites au registre de masquage du run, puis passées par la liste
-        // d'exclusion des personnes effacées AVANT toute écriture (17 §6, assert_erasure_complete) : une personne effacée
-        // n'est jamais réécrite dans le récit ni montrée à l'appelant.
-        for (const item of built.sample) ctx.personal.addFromItem(built.outputSchema, item);
-        const { kept: sample, dropped } = ctx.excludeSubjects(built.outputSchema, built.sample);
-        if (dropped > 0) await ctx.log('info', 'subjects_excluded', { dropped, at: 'schema_sample' });
-        await event(EV.schemaProposed, {
-          ok: true,
-          output_schema: built.outputSchema,
-          sample,
-          sources: built.strategies.map((s) => s.candidate.id),
-          rejected: built.rejected,
-          llm: { prompt_version: investigatePromptVersion },
+        const recon =
+          ports.mode === 'tunnel'
+            ? await staticRecon(ports.reconProbe, { url: pageUrl, allowHost: (h) => withinSiteScope(h, scope) && hostWithinDomain(h, ports.tunnel!.domain), signal, robots, mode: 'tunnel', ...(pacer === undefined ? {} : { pacer }) })
+            : deps.browsers !== null
+              ? await browserRecon(deps, { url: pageUrl, host, scope, signal, robots, userAgent, sessionBase: ports.server!.sessionBase, ceiling: ports.server!.ceiling, otherUsd: ports.proxyUsd, ...(pacer === undefined ? {} : { pacer }) })
+              : await staticRecon(ports.reconProbe, { url: pageUrl, allowHost: (h) => withinSiteScope(h, scope), signal, robots, mode: 'static', ...(pacer === undefined ? {} : { pacer }) });
+        await charge(ctx, ports.proxyUsd() + recon.proxyUsd);
+        spent = round6(spent + ports.proxyUsd() + recon.proxyUsd);
+        const stopped1 = await tunnelOutcome('reconnaissance');
+        if (stopped1 !== null) return stopped1;
+        const capture: ReconCapture = recon.capture;
+        const fresh = recon.failure === null ? analyzeCapture(capture, apiHostsOf(capture, host, scope)) : [];
+        const candidates: readonly DataCandidate[] = firstRun ? fresh : rematchCandidates(state.candidates ?? [], fresh);
+        await event(EV.reconnaissance, {
+          mode: capture.mode,
+          ...(recon.failure === null ? {} : { failure_class: recon.failure.failure_class, detail: recon.failure.detail }),
+          candidates: candidates.map((c) => ({
+            id: c.id,
+            from: c.from,
+            request: { method: c.request.method, url: narrativeUrl(c.request.url) },
+            ...(c.locator === undefined ? {} : { locator: c.locator.kind }),
+            records: c.records,
+            count: c.count,
+            bytes: c.bytes,
+            fields: Object.keys(c.skeleton).length,
+            ...(c.unsupported === undefined ? {} : { unsupported: c.unsupported }),
+          })),
+          document_bytes: capture.document?.bytes ?? 0,
+          total_bytes: capture.totalBytes,
           budget: budgetView(),
         });
+        if (recon.failure !== null) return await finishFailed(recon.failure, 'reconnaissance');
+        // État : gisements SANS valeur (origine, chemin, noms de paramètres) ; ceux du premier run gardent leurs identifiants.
+        await save(firstRun ? 'reconnaissance' : phase, {
+          candidates: firstRun ? fresh.map(storedCandidate) : (state.candidates ?? []),
+          page: { url: pageUrl, host, document_bytes: capture.document?.bytes ?? 0, total_bytes: capture.totalBytes, mode: capture.mode },
+        });
         if (spent >= request.budget_usd) return await budgetExhausted('investigation_budget_usd');
-        if (!request.auto_validate) {
-          await save('awaiting_schema_validation', { proposal: proposal!, proposed_schema: built.outputSchema, proposed_columns: schemaColumns(built.outputSchema) });
-          await event(EV.phase, { phase: 'awaiting_schema_validation', budget: budgetView() });
-          return { state: 'succeeded', outcome: 'clean', degraded_reasons: [], items: 0 };
+        if (timedOut()) return await budgetExhausted('investigation_timeout_s');
+
+        // --- 2. Schéma de sortie d'abord ------------------------------------------------------------------------------
+        config = deps.llm === undefined ? null : await deps.llm.config().catch(() => null);
+        // Voies agentiques essayables (E4 par le réseau, E6 avec Chromium) : un schéma sans gisement de données leur reste ouvert.
+        const agenticOnly = deps.agentic === true && (rolePrice(config, 'extract') !== undefined || (deps.browsers !== null && rolePrice(config, 'agent') !== undefined));
+        const fixed = state.validated_schema;
+        let proposal = state.proposal;
+        const remap = proposal !== undefined && fixed !== undefined && JSON.stringify(fixed) !== JSON.stringify(state.proposed_schema);
+        if (proposal === undefined || remap) {
+          if (deps.llm === undefined || config === null || config.roles.investigate === undefined) {
+            return await finishFailed({ failure_class: 'code_error', retryable: false, detail: 'llm_not_configured' }, 'setup');
+          }
+          if (!agenticOnly && candidates.filter((c) => c.unsupported === undefined).length === 0) {
+            return await finishFailed({ failure_class: 'extraction', retryable: false, detail: candidates.length > 0 ? 'client_signature' : 'no_data_source' }, 'reconnaissance');
+          }
+          let client: LlmClient;
+          try {
+            client = deps.llm.client({ ...config, roles: { investigate: config.roles.investigate } });
+          } catch {
+            return await finishFailed({ failure_class: 'code_error', retryable: false, detail: 'llm_not_configured' }, 'setup');
+          }
+          const model = config.roles.investigate.model;
+          const exampleOutput = (ctx.input as { example_output?: unknown } | null)?.example_output;
+          const args = {
+            description: request.description,
+            ...(exampleOutput === undefined ? {} : { exampleOutput }),
+            candidates,
+            accessFacts: accessFactsForPrompt(report),
+            ...(fixed === undefined ? {} : { fixedSchema: fixed }),
+          };
+          // Coût d'un appel borné AVANT l'envoi (sortie plafonnée, entrée estimée par excès) : jamais un appel qui
+          // ferait dépasser `investigation_budget_usd` ; prix inconnu → aucun appel (08 §1, jamais 0).
+          const price = rolePrice(config, 'investigate');
+          if (price === null || price === undefined) {
+            await ctx.log('warn', 'llm_price_missing', { model, role: 'investigate' });
+            return await finishFailed({ failure_class: 'run_budget_exceeded', retryable: false, detail: 'llm_price_missing' }, 'schema');
+          }
+          const callCeiling = investigateCallCeilingUsd(args, price);
+          let llmFailure: ExecFailure | null = null;
+          try {
+            const out = await proposeInvestigation(client, {
+              ...args,
+              signal,
+              beforeCall: () => {
+                if (spent + (client.meter.snapshot().cost_usd_known ?? 0) + callCeiling > request.budget_usd) throw new BudgetGuardError();
+              },
+            });
+            proposal = out.proposal;
+          } catch (error) {
+            if (ctx.signal.aborted) throw error;
+            if (timedOut()) llmFailure = { failure_class: 'run_budget_exceeded', retryable: false, detail: 'investigation_timeout_s' };
+            else if (error instanceof BudgetGuardError) llmFailure = { failure_class: 'run_budget_exceeded', retryable: false, detail: 'investigation_budget_usd' };
+            else if (error instanceof LlmError) llmFailure = { failure_class: toFailureClass(error.class), retryable: false, detail: `llm_${error.class}` };
+            else llmFailure = { failure_class: 'extraction', retryable: false, detail: 'proposal_unreadable' };
+          }
+          // Coût du rôle `investigate` (tentatives échouées comprises), imputé au run : inconnu si le prix manque.
+          const usage = client.meter.snapshot();
+          await charge(ctx, 0, usage.cost_usd, { in: usage.tokens_in, cached: usage.tokens_cached, out: usage.tokens_out, reasoning: usage.tokens_reasoning, estimated: usage.usage_estimated });
+          if (usage.cost_usd === null) {
+            await ctx.log('warn', 'llm_price_missing', { model, role: 'investigate' });
+            return await finishFailed({ failure_class: 'run_budget_exceeded', retryable: false, detail: 'llm_price_missing' }, 'schema');
+          }
+          spent = round6(spent + usage.cost_usd);
+          if (llmFailure !== null) {
+            if (llmFailure.failure_class === 'run_budget_exceeded') return await budgetExhausted(llmFailure.detail);
+            return await finishFailed(llmFailure, 'schema');
+          }
+          await ctx.log('info', 'investigate_call', { model, prompt_version: investigatePromptVersion, llm_usd: usage.cost_usd, calls: usage.calls });
         }
-        const columns = schemaColumns(built.outputSchema);
-        await save('testing', { proposal: proposal!, proposed_schema: built.outputSchema, validated_schema: built.outputSchema, proposed_columns: columns, validated_columns: columns, validated_by: 'auto' });
-        await event(EV.schemaValidated, { by: 'auto' });
-        await ctx.log('info', 'schema_auto_validated', {});
-      } else if (remap) {
-        await save(phase, { proposal: proposal! });
+        const built = buildFromProposal(proposal!, candidates, fixed === undefined ? capture : null, { ...(fixed === undefined ? {} : { fixedSchema: fixed }), agenticOnly });
+        if (!built.ok) {
+          await event(EV.schemaProposed, { ok: false, reason: built.reason, rejected: built.rejected, budget: budgetView() });
+          return await finishFailed({ failure_class: 'extraction', retryable: false, detail: built.reason }, 'schema');
+        }
+        if (fixed === undefined) {
+          // Échantillon : données de l'utilisateur, inscrites au registre de masquage du run, puis passées par la liste
+          // d'exclusion des personnes effacées AVANT toute écriture (17 §6, assert_erasure_complete) : une personne effacée
+          // n'est jamais réécrite dans le récit ni montrée à l'appelant.
+          for (const item of built.sample) ctx.personal.addFromItem(built.outputSchema, item);
+          const { kept: sample, dropped } = ctx.excludeSubjects(built.outputSchema, built.sample);
+          if (dropped > 0) await ctx.log('info', 'subjects_excluded', { dropped, at: 'schema_sample' });
+          await event(EV.schemaProposed, {
+            ok: true,
+            output_schema: built.outputSchema,
+            sample,
+            sources: built.strategies.map((s) => s.candidate.id),
+            rejected: built.rejected,
+            llm: { prompt_version: investigatePromptVersion },
+            budget: budgetView(),
+          });
+          if (spent >= request.budget_usd) return await budgetExhausted('investigation_budget_usd');
+          if (!request.auto_validate) {
+            await save('awaiting_schema_validation', { proposal: proposal!, proposed_schema: built.outputSchema, proposed_columns: schemaColumns(built.outputSchema) });
+            await event(EV.phase, { phase: 'awaiting_schema_validation', budget: budgetView() });
+            return { state: 'succeeded', outcome: 'clean', degraded_reasons: [], items: 0 };
+          }
+          const columns = schemaColumns(built.outputSchema);
+          await save('testing', { proposal: proposal!, proposed_schema: built.outputSchema, validated_schema: built.outputSchema, proposed_columns: columns, validated_columns: columns, validated_by: 'auto' });
+          await event(EV.schemaValidated, { by: 'auto' });
+          await ctx.log('info', 'schema_auto_validated', {});
+        } else if (remap) {
+          await save(phase, { proposal: proposal! });
+        }
+        builtStrategies = built.strategies;
+        outputSchema = built.outputSchema;
       }
-      const outputSchema = built.outputSchema;
       if (spent >= request.budget_usd) return await budgetExhausted('investigation_budget_usd');
       if (timedOut()) return await budgetExhausted('investigation_timeout_s');
 
@@ -586,17 +607,21 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
         : [...rungs.map((r) => ({ mode: r.mode, perGbUsd: r.mode === 'direct' ? 0 : r.proxy.price.perGbUsd })), ...(tunnelChosen ? [{ mode: 'tunnel' as const, perGbUsd: 0 }] : [])];
       // Plan restreint par l'appelant (`exclude_executions`, 06 § 2) : des niveaux retirés, jamais ajoutés.
       const excluded = new Set<string>(state.excluded_executions ?? []);
-      const plan = buildTrialPlan({
-        strategies: built.strategies,
-        networks,
-        browser: deps.browsers !== null,
-        agentic: deps.agentic === true ? { ...(rolePrice(config, 'extract') === undefined ? {} : { extract: rolePrice(config, 'extract')! }), ...(rolePrice(config, 'agent') === undefined ? {} : { agent: rolePrice(config, 'agent')! }) } : {},
-        pageUrl,
-        pageHost: host,
-        instruction: request.description,
-        documentBytes: state.page?.document_bytes ?? 0,
-        totalBytes: state.page?.total_bytes ?? 0,
-      }).filter((p) => !excluded.has(p.execution));
+      const plan = (
+        imported !== undefined
+          ? buildImportedPlan({ execution: imported.execution, spec: imported.spec, networks, browser: deps.browsers !== null })
+          : buildTrialPlan({
+              strategies: builtStrategies,
+              networks,
+              browser: deps.browsers !== null,
+              agentic: deps.agentic === true ? { ...(rolePrice(config, 'extract') === undefined ? {} : { extract: rolePrice(config, 'extract')! }), ...(rolePrice(config, 'agent') === undefined ? {} : { agent: rolePrice(config, 'agent')! }) } : {},
+              pageUrl,
+              pageHost: host,
+              instruction: request.description,
+              documentBytes: state.page?.document_bytes ?? 0,
+              totalBytes: state.page?.total_bytes ?? 0,
+            })
+      ).filter((p) => !excluded.has(p.execution));
       await event(EV.phase, {
         phase: 'testing',
         plan: plan.map((p) => ({ execution: p.execution, network: p.network, source: p.source, est_cost_usd: p.est_cost_usd })),
@@ -724,7 +749,9 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
             estCostUsd: kept.estCostUsd,
             outputSchema,
             ...(state.validated_columns === undefined ? {} : { outputColumns: state.validated_columns }),
-            inputSchema: buildInputSchema({ paginated: entry.paginated, maxPages: PROPOSAL_HARD_MAX_PAGES }),
+            // Import : le schéma d'entrée du fichier (contrôlé à l'import) ; sinon celui que propose l'enquête (2.2).
+            inputSchema: imported !== undefined ? imported.input_schema : buildInputSchema({ paginated: entry.paginated, maxPages: PROPOSAL_HARD_MAX_PAGES }),
+            createdBy: state.validated_by === 'import' ? 'import' : 'investigation',
             state: { ...state, spent_usd: spent, elapsed_ms: baseElapsed + Math.max(0, now() - started) },
           });
           phase = 'done';

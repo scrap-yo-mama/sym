@@ -86,7 +86,8 @@ describe("invariants (à implémenter)", () => {
   // déduplication, qui naît avec `dedup_key` / `diff` des planifications (08 §5, tâche 2.5) :
   test.todo("assert_erasure_complete — dedup_keys.key_hash = dedupKeyHash(clé des sujets, dedup_key) à l'écriture des clés"); // RGPD, tâche(s) 2.5
   test.todo("assert_pacing_key_is_domain"); // politesse, tâche(s) 1.9
-  test.todo("assert_export_no_secret"); // INV5, INV8, tâche(s) 3.12
+  // 3.12 : assert_export_no_secret (INV5, INV8 : fichier, journal du serveur, audit, import sans session ni secret) est dans
+  // apps/server/src/portability.integration.test.ts.
   test.todo("assert_budget_and_stop_controls — Chromium (Playwright) : attempt.finished émis → [data-testid=attempt] visible en moins de 2 s"); // 06 § 4.3, tâche(s) 3.6 (3.5 : rendu SSR, sans navigateur)
   test.todo("assert_run_detail_error_open"); // 06 § 4.3 : écran Détail d'un run, confié à aucune tâche (ADR 0003 : 3.4 ou tâche nouvelle), E2E 3.6
   // 3.9 : assert_a11y_axe_clean, assert_keyboard_only_path, assert_live_regions_plan sont jugés en Chromium (apps/web/e2e/*.e2e.ts,

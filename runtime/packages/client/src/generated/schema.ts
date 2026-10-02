@@ -372,7 +372,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Importe une API exportée ; repasse toujours par l'enquête (16 § 6) */
+        /**
+         * Importe une API exportée (16 § 6) ; aperçu sans écriture, puis confirm=true ; repasse toujours par l'enquête
+         * @description Sans `confirm=true` : aperçu (200), rien n'est écrit. Avec `confirm=true` : nouvelle API privée en `enquete`, enquête en file au stade `access_check` (rapport d'accès, robots.txt) puis `testing` de la stratégie importée (`created_by: import`) ; planifications recréées désactivées, cibles d'alerte à configurer. Les champs inconnus sont ignorés (`ignored_fields`) ; un `$ref` distant (400 `remote_ref`), une empreinte fausse (400 `integrity_mismatch`) ou une version de format d'une autre majeure (400 `unsupported_format`) sont refusés.
+         */
         post: operations["importApi"];
         delete?: never;
         options?: never;
@@ -463,7 +466,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Export JSON d'une API, sans secret ni session (assert_export_no_secret) */
+        /** Export JSON d'une API, sans secret ni session (16 § 6, assert_export_no_secret) ; propriétaire seulement */
         get: operations["exportApi"];
         put?: never;
         post?: never;
@@ -480,7 +483,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** OpenAPI propre à une API, avec sa section webhooks (05 § 2) */
+        /** OpenAPI propre à une API (05 § 2, 16 § 6) - schémas d'entrée et de sortie, section webhooks */
         get: operations["getApiOpenApi"];
         put?: never;
         post?: never;
@@ -1671,7 +1674,76 @@ export interface paths {
         trace?: never;
     };
 }
-export type webhooks = Record<string, never>;
+export interface webhooks {
+    "run.succeeded": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Run réussi (ou dégradé) */
+        post: operations["webhookRunSucceeded"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "run.failed": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Run en échec */
+        post: operations["webhookRunFailed"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "api.status_changed": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Changement de statut d'une API */
+        post: operations["webhookApiStatusChanged"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "items.new": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Nouveaux items (planification avec diff) */
+        post: operations["webhookItemsNew"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+}
 export interface components {
     schemas: {
         ApiError: {
@@ -2049,14 +2121,185 @@ export interface components {
             /** @description Budget quotidien de l'API ; `null` revient au défaut de l'instance (5 $). */
             budget_daily_usd?: number | null;
         };
-        /** @description Export portable d'une API (16 § 6), sans secret, session ni cookie ; format figé par la tâche 3.12. */
+        /** @description Export portable d'une API (16 § 6, tâche 3.12), format `scrapyomama.api` 1.0, clés triées. AUCUN champ pour une session, un cookie, une clé LLM, un identifiant de proxy, un secret ou une URL de webhook, ni pour une donnée de run (cibles d'alerte en référence `$ALERT_WEBHOOK_1`). Stratégie déclarative seulement (E1-E3, hors tunnel). `integrity.sha256` : empreinte du JSON canonique (clés triées) de l'enveloppe sans `integrity`. À l'import, les champs inconnus sont ignorés (contrôle complet : `parseApiExport` du cœur). */
         ApiExport: {
-            format_version: number;
-            api: {
+            /** @constant */
+            format: "scrapyomama.api";
+            format_version: string;
+            min_runtime_version: string;
+            /** Format: date-time */
+            exported_at: string;
+            api: components["schemas"]["ApiExportApi"];
+            strategy: components["schemas"]["ApiExportStrategy"] | null;
+            history?: {
+                version: number;
+                execution: string;
+                network: string;
+                created_by: string;
+                created_at: string;
+            }[];
+            schedules: components["schemas"]["ApiExportSchedule"][];
+            /** @description Enregistrements synthétiques conformes au schéma de sortie (modèles de `templates/` seulement). */
+            fixtures?: {
+                items: {
+                    [key: string]: unknown;
+                }[];
+            };
+            integrity: {
+                sha256: string;
+            };
+        };
+        ApiExportApi: {
+            slug?: string;
+            description: string;
+            /** @description Page de la demande d'enquête, rejouée à l'import (rapport d'accès, robots.txt). */
+            source_url: string;
+            input_schema: {
                 [key: string]: unknown;
             };
-        } & {
-            [key: string]: unknown;
+            output_schema: {
+                [key: string]: unknown;
+            };
+            output_columns?: string[];
+            views?: {
+                columns?: string[];
+            };
+            purpose?: string | null;
+            legal_basis?: string | null;
+            contains_personal_data?: boolean;
+            max_cost_usd?: number;
+            budget_daily_usd?: number;
+            /** @description Niveaux réseau exportables seulement (jamais le tunnel ni un identifiant de proxy). */
+            network_policy?: {
+                allow: components["schemas"]["Network"][];
+            };
+            alert_targets?: {
+                ref: string;
+                events: components["schemas"]["WebhookEventName"][];
+            }[];
+        };
+        ApiExportStrategy: {
+            /** @enum {string} */
+            execution: "fetch" | "fetch_in_page" | "playwright";
+            /** @enum {string} */
+            network: "direct" | "dc_proxy" | "res_proxy";
+            /** @description Stratégie déclarative (04b § 2), sans session ni secret. */
+            spec: {
+                [key: string]: unknown;
+            };
+            est_cost_usd?: number | null;
+        };
+        ApiExportSchedule: {
+            cron: string;
+            timezone: string;
+            input: {
+                [key: string]: unknown;
+            };
+            rules: {
+                [key: string]: unknown;
+            };
+            /** @enum {string} */
+            overlap: "skip" | "queue" | "allow";
+            /** @enum {string} */
+            missed: "once" | "skip";
+            enabled: boolean;
+        };
+        /** @description Aperçu d'un import (aucune écriture) ; confirmer par `POST /api/apis/import?confirm=true`. */
+        ApiImportPreview: {
+            /** @constant */
+            preview: true;
+            description: string;
+            source_url: string;
+            output_fields: string[];
+            /** @description Le schéma de sortie porte un champ `x-personal` (ou l'API se déclare à données personnelles). */
+            personal_fields: boolean;
+            /** @description Niveaux réseau que l'API importée pourra utiliser (politique du fichier, contrôlée, jamais le tunnel ; un proxy résidentiel se voit avant la confirmation). */
+            network_allow: components["schemas"]["Network"][];
+            strategy: {
+                execution: components["schemas"]["Execution"];
+                network: components["schemas"]["Network"];
+            } | null;
+            /** @description Planifications recréées DÉSACTIVÉES. */
+            schedules: number;
+            /** @description Références de cibles d'alerte à configurer (aucune n'est créée). */
+            alert_targets: string[];
+            /** @description Chemins des champs inconnus ignorés (`$.api.x`) et des niveaux réseau écartés (`$.api.network_policy.allow[1]`, un `tunnel` n'étant jamais importé). */
+            ignored_fields: string[];
+            /** @description La case « j'ai lu » (17 § 11) doit être cochée avant la confirmation. */
+            requires_ack: boolean;
+        };
+        /** @enum {string} */
+        WebhookEventName: "run.succeeded" | "run.failed" | "api.status_changed" | "items.new";
+        /** @description Charge de `run.succeeded` (08 § 5) ; jamais d'item, seulement des identifiants et des compteurs. */
+        WebhookRunSucceeded: {
+            /** @constant */
+            type: "run.succeeded";
+            /** Format: date-time */
+            timestamp: string;
+            data: {
+                api: string;
+                /** Format: uuid */
+                api_id: string;
+                /** Format: uuid */
+                run_id: string;
+                status: components["schemas"]["ApiStatus"];
+                outcome: string;
+                items: number;
+                new_items?: number;
+                dataset_url?: string;
+            };
+        };
+        /** @description Charge de `run.failed` ; une classe bloquante n'est jamais `retryable`. */
+        WebhookRunFailed: {
+            /** @constant */
+            type: "run.failed";
+            /** Format: date-time */
+            timestamp: string;
+            data: {
+                api: string;
+                /** Format: uuid */
+                api_id: string;
+                /** Format: uuid */
+                run_id: string;
+                status: components["schemas"]["ApiStatus"];
+                failure_class: components["schemas"]["FailureClass"] | null;
+                retryable: boolean | null;
+            };
+        };
+        /** @description Charge de `api.status_changed` ; vers `bloquee`, `retryable` vaut false. */
+        WebhookApiStatusChanged: {
+            /** @constant */
+            type: "api.status_changed";
+            /** Format: date-time */
+            timestamp: string;
+            data: {
+                api: string;
+                /** Format: uuid */
+                api_id: string;
+                from: components["schemas"]["ApiStatus"] | null;
+                to: components["schemas"]["ApiStatus"];
+                reason: string | null;
+                /** Format: uuid */
+                run_id?: string;
+                retryable: boolean;
+            };
+        };
+        /** @description Charge de `items.new`. */
+        WebhookItemsNew: {
+            /** @constant */
+            type: "items.new";
+            /** Format: date-time */
+            timestamp: string;
+            data: {
+                api: string;
+                /** Format: uuid */
+                api_id: string;
+                /** Format: uuid */
+                run_id: string;
+                new_items: number;
+                items: number;
+                dataset_url?: string;
+            };
         };
         ValidateSchemaRequest: {
             output_schema?: {
@@ -3074,6 +3317,12 @@ export interface components {
         };
     };
     parameters: {
+        /** @description Identifiant de l'envoi (Standard Webhooks), stable d'une tentative à l'autre. */
+        WebhookId: string;
+        /** @description Horodatage Unix (secondes) de l'envoi. */
+        WebhookTimestamp: string;
+        /** @description Signature HMAC-SHA256 `v1,<base64>` de `id.timestamp.corps` (secret de la cible). */
+        WebhookSignature: string;
         Id: string;
         Slug: string;
         Version: number;
@@ -3686,7 +3935,9 @@ export interface operations {
     };
     importApi: {
         parameters: {
-            query?: never;
+            query?: {
+                confirm?: boolean;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -3697,6 +3948,15 @@ export interface operations {
             };
         };
         responses: {
+            /** @description Aperçu de l'import (aucune écriture). */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiImportPreview"];
+                };
+            };
             /** @description API importée, enquête lancée. */
             201: {
                 headers: {
@@ -3710,6 +3970,8 @@ export interface operations {
             401: components["responses"]["Error"];
             403: components["responses"]["Error"];
             409: components["responses"]["Error"];
+            429: components["responses"]["QueueFull"];
+            507: components["responses"]["Error"];
         };
     };
     validateSchema: {
@@ -3910,7 +4172,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Export. */
+            /** @description Export, servi en fichier `<slug>.api.json` (clés triées). */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -3922,6 +4184,7 @@ export interface operations {
             401: components["responses"]["Error"];
             403: components["responses"]["Error"];
             404: components["responses"]["Error"];
+            409: components["responses"]["Error"];
         };
     };
     getApiOpenApi: {
@@ -3935,7 +4198,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Document OpenAPI 3.1. */
+            /** @description Document OpenAPI 3.1 réduit à cette API, pour générer des types (openapi-typescript). */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -3947,6 +4210,7 @@ export interface operations {
                 };
             };
             401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
             404: components["responses"]["Error"];
         };
     };
@@ -6207,6 +6471,136 @@ export interface operations {
             401: components["responses"]["Error"];
             403: components["responses"]["Error"];
             404: components["responses"]["Error"];
+        };
+    };
+    webhookRunSucceeded: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Identifiant de l'envoi (Standard Webhooks), stable d'une tentative à l'autre. */
+                "webhook-id": components["parameters"]["WebhookId"];
+                /** @description Horodatage Unix (secondes) de l'envoi. */
+                "webhook-timestamp": components["parameters"]["WebhookTimestamp"];
+                /** @description Signature HMAC-SHA256 `v1,<base64>` de `id.timestamp.corps` (secret de la cible). */
+                "webhook-signature": components["parameters"]["WebhookSignature"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                /**
+                 * @example {
+                 *       "type": "run.succeeded",
+                 *       "timestamp": "2026-10-02T10:00:00.000Z",
+                 *       "data": {
+                 *         "api": "books-demo-a1b2c3",
+                 *         "api_id": "00000000-0000-0000-0000-000000000001",
+                 *         "run_id": "00000000-0000-0000-0000-000000000002",
+                 *         "status": "sain",
+                 *         "outcome": "clean",
+                 *         "items": 20
+                 *       }
+                 *     }
+                 */
+                "application/json": components["schemas"]["WebhookRunSucceeded"];
+            };
+        };
+        responses: {
+            /** @description Reçu (2xx en 15 s, sinon nouvelle tentative au barème). */
+            "2XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    webhookRunFailed: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Identifiant de l'envoi (Standard Webhooks), stable d'une tentative à l'autre. */
+                "webhook-id": components["parameters"]["WebhookId"];
+                /** @description Horodatage Unix (secondes) de l'envoi. */
+                "webhook-timestamp": components["parameters"]["WebhookTimestamp"];
+                /** @description Signature HMAC-SHA256 `v1,<base64>` de `id.timestamp.corps` (secret de la cible). */
+                "webhook-signature": components["parameters"]["WebhookSignature"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WebhookRunFailed"];
+            };
+        };
+        responses: {
+            /** @description Reçu. */
+            "2XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    webhookApiStatusChanged: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Identifiant de l'envoi (Standard Webhooks), stable d'une tentative à l'autre. */
+                "webhook-id": components["parameters"]["WebhookId"];
+                /** @description Horodatage Unix (secondes) de l'envoi. */
+                "webhook-timestamp": components["parameters"]["WebhookTimestamp"];
+                /** @description Signature HMAC-SHA256 `v1,<base64>` de `id.timestamp.corps` (secret de la cible). */
+                "webhook-signature": components["parameters"]["WebhookSignature"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WebhookApiStatusChanged"];
+            };
+        };
+        responses: {
+            /** @description Reçu. */
+            "2XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    webhookItemsNew: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Identifiant de l'envoi (Standard Webhooks), stable d'une tentative à l'autre. */
+                "webhook-id": components["parameters"]["WebhookId"];
+                /** @description Horodatage Unix (secondes) de l'envoi. */
+                "webhook-timestamp": components["parameters"]["WebhookTimestamp"];
+                /** @description Signature HMAC-SHA256 `v1,<base64>` de `id.timestamp.corps` (secret de la cible). */
+                "webhook-signature": components["parameters"]["WebhookSignature"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WebhookItemsNew"];
+            };
+        };
+        responses: {
+            /** @description Reçu. */
+            "2XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
         };
     };
 }

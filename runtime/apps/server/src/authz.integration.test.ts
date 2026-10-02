@@ -2,6 +2,7 @@
 // INV12 et INV5 sur les routes existantes (tâche 0.3b) : harnais paramétré par le registre des routes.
 // Toute nouvelle route rejoint routes/registry.ts ; si elle porte une ressource, RESOURCE_CASES doit savoir créer un
 // objet de A (sinon le test échoue), et si elle prend un corps, VALID_BODIES doit en fournir un.
+import { readFileSync } from 'node:fs';
 import { can, GRANTABLE_SCOPES } from '@runtime/core';
 import { withActor } from '@runtime/db';
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
@@ -185,6 +186,8 @@ const VALID_BODIES: Record<string, (party: Party) => Record<string, unknown>> = 
   'PATCH /api/apis/:slug': () => ({ description: 'zz_test authz' }),
   'POST /api/apis/:slug/runs': () => ({ input: {} }),
   'POST /api/apis/:slug/investigate': () => ({}),
+  // Portabilité (3.12) : un modèle de templates/ (aperçu, sans `confirm`).
+  'POST /api/apis/import': () => JSON.parse(readFileSync(new URL('../../../templates/livres-demo.api.json', import.meta.url), 'utf8')) as Record<string, unknown>,
   'POST /api/apis/:slug/versions/:version/revert': () => ({}),
   'POST /api/apis/:slug/schedules': () => ({ cron: '0 3 * * *', timezone: 'UTC', input: {} }),
   'PATCH /api/apis/:slug/schedules/:id': () => ({ enabled: false }),

@@ -12,6 +12,7 @@ import { apiRoutes } from './routes/apis.js';
 import { datasetRoutes } from './routes/datasets.js';
 import { eventRoutes } from './routes/events.js';
 import { openapiRoutes } from './routes/openapi.js';
+import { portabilityRoutes } from './routes/portability.js';
 import { responsibleUseRoutes } from './routes/responsible-use.js';
 import { runRoutes } from './routes/runs.js';
 import { scheduleRoutes } from './routes/schedules.js';
@@ -120,6 +121,8 @@ export function buildServer(
   ssoRoutes(app, ctx);
   // API REST (tâche 3.1, 05 § 4.2).
   apiRoutes(app, ctx);
+  // Portabilité (tâche 3.12, 16 § 6).
+  portabilityRoutes(app, ctx);
   runRoutes(app, ctx);
   datasetRoutes(app, ctx);
   eventRoutes(app, ctx);

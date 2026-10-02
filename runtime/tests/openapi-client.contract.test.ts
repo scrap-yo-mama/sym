@@ -18,11 +18,12 @@ function operationsOf(generated: string): string[] {
   const out: string[] = [];
   let path: string | null = null;
   for (const line of generated.split('\n')) {
+    // Fin des chemins : la section `webhooks` (OpenAPI 3.1, tâche 3.12) n'a pas de route du serveur.
+    if (/^export (?:type|interface) webhooks\b/.test(line)) break;
     const pathMatch = /^ {4}"(\/[^"]+)": \{$/.exec(line);
     if (pathMatch) path = pathMatch[1] ?? null;
     const opMatch = /^ {8}(get|put|post|delete|patch): operations\[/.exec(line);
     if (path && opMatch) out.push(`${(opMatch[1] ?? '').toUpperCase()} ${path}`);
-    if (line === 'export type webhooks = Record<string, never>;') path = null;
   }
   return out.sort();
 }
@@ -213,7 +214,10 @@ describe('OpenAPI spécifiée et routes livrées', () => {
     // la tâche 3.6 rejoue ce contrôle contre l'OpenAPI générée par le serveur (15 § 6) et exige une liste vide.
     const waiting = [...specified].filter(([op]) => !delivered.includes(op));
     expect(waiting.filter(([, task]) => task === null).map(([op]) => op)).toEqual([]);
-    expect(waiting.length).toBeGreaterThan(0);
+    // La liste d'attente est vide depuis 3.12 (export, import, OpenAPI par API) : le lecteur de la marque reste éprouvé
+    // sur un extrait, pour qu'une route spécifiée avant sa livraison soit encore reconnue.
+    const sample = ['paths:', '  /api/zz-test:', '    get:', "      x-pending: '9.9'", '      operationId: zzTest', 'components:'].join('\n');
+    expect(specifiedOperations(sample)).toEqual(new Map([['GET /api/zz-test', '9.9']]));
   });
 
   test('assert_openapi_specified_auth_matches_registry : le mode d’authentification spécifié est celui du registre', () => {

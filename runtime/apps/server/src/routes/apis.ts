@@ -164,7 +164,7 @@ const listQuery = {
 const pageQuery = { type: 'object', properties: { cursor: { type: 'string', maxLength: 512 }, limit: { type: 'integer', minimum: 1, maximum: 200 } } } as const;
 
 /** Erreur d'état d'enquête → code HTTP (05 § 4.3). */
-function investigationError(reply: FastifyReply, error: InvestigationStateError): FastifyReply {
+export function investigationError(reply: FastifyReply, error: InvestigationStateError): FastifyReply {
   const status = error.code === 'api_not_found' ? 404 : error.code === 'invalid_request' || error.code === 'invalid_schema' ? 400 : 409;
   return error.code === 'api_not_found' ? notFound(reply) : sendError(reply, status, error.code, error.message);
 }
@@ -194,7 +194,7 @@ async function investigationOf(ctx: ServerContext, actor: Actor, apiId: string):
 }
 
 /** Corps de `ApiCreated` (05 § 4.1) : phase, schéma proposé et échantillon (propriétaire), rapport d'accès, run. */
-async function createdView(ctx: ServerContext, actor: Actor, apiId: string, runId: string) {
+export async function createdView(ctx: ServerContext, actor: Actor, apiId: string, runId: string) {
   return withActor(ctx.pool, actor, async (db) => {
     const api = await readApiById(db, apiId);
     const proposal = await latestProposal(db, apiId);
