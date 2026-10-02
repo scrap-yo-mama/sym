@@ -12,3 +12,12 @@ describe('@sym-browser/core (squelette)', () => {
     for (const value of ['ALL', 'server', 'worker', '', undefined, 1]) expect(isServiceMode(value)).toBe(false);
   });
 });
+
+describe('@sym-browser/core : ObjectStore (tâche 3.0) exporté par le paquet', () => {
+  test('implémentations disk et s3, fabrique depuis la configuration', async () => {
+    const core = await import('./index.js');
+    for (const name of ['ObjectStore', 'DiskBlobStore', 'S3BlobStore', 'createObjectStore', 'objectStoreConfigFromEnv', 'retentionFromEnv']) {
+      expect(typeof (core as Record<string, unknown>)[name], name).toBe('function');
+    }
+  });
+});
