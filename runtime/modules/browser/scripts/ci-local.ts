@@ -4,6 +4,7 @@
 // Périmètre : le module (apps/*, packages/*, racine) et son contrat @sym/contracts ; la suite complète reste `pnpm ci:local`.
 import { spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
+import { checkIdentity, checkNoSetuid, IDENTITY_PROBE, RUN_FLAGS, SETUID_PROBE } from './image-checks.ts';
 
 type Step = {
   name: string;
@@ -16,7 +17,6 @@ type Step = {
 
 const MODULE = ['--filter', '@sym/contracts', '--filter', './modules/browser/**'];
 const IMAGE = 'sym-browser:ci-local';
-const SECCOMP = ['--security-opt', 'seccomp=modules/browser/deploy/seccomp-chromium.json'];
 // Clé jetable, tirée à chaque exécution : rien n'est versionné ni réutilisé. Seule la base n'est pas jointe (--check-config n'écoute pas).
 const validMasterKey = randomBytes(32).toString('base64');
 const imageEnv = (masterKey: string): string[] => ['-e', `MASTER_KEY=${masterKey}`, '-e', 'DATABASE_URL=postgres://symb:ci@db.invalid:5432/symb'];
@@ -46,18 +46,23 @@ if (!process.argv.includes('--skip-image')) {
   steps.push(
     { name: 'image : docker build', cmd: ['docker', 'build', '-f', 'modules/browser/Dockerfile', '-t', IMAGE, '.'] },
     {
-      name: 'image : id -u du processus ≠ 0 (seccomp appliqué)',
-      cmd: ['docker', 'run', '--rm', ...SECCOMP, IMAGE, 'id', '-u'],
-      expect: (out) => (/^\d+$/.test(out.trim()) && Number(out.trim()) !== 0 ? undefined : `uid attendu non nul, obtenu « ${out.trim()} »`),
+      name: 'image : uid ≠ 0, filtre seccomp actif (Seccomp: 2), NoNewPrivs: 1, aucune capacité effective',
+      cmd: ['docker', 'run', '--rm', ...RUN_FLAGS, IMAGE, ...IDENTITY_PROBE],
+      expect: checkIdentity,
+    },
+    {
+      name: 'image : aucun binaire setuid ou setgid',
+      cmd: ['docker', 'run', '--rm', ...RUN_FLAGS, IMAGE, ...SETUID_PROBE],
+      expect: checkNoSetuid,
     },
     {
       name: 'image : point d’entrée (tini → hôte de service), configuration valide',
-      cmd: ['docker', 'run', '--rm', ...SECCOMP, ...imageEnv(validMasterKey), IMAGE, 'node', 'modules/browser/apps/gateway/dist/main.js', '--check-config'],
+      cmd: ['docker', 'run', '--rm', ...RUN_FLAGS, ...imageEnv(validMasterKey), IMAGE, 'node', 'modules/browser/apps/gateway/dist/main.js', '--check-config'],
       expect: (out) => (out.includes('configuration valide') ? undefined : `sortie inattendue : « ${out.trim()} »`),
     },
     {
       name: 'image : MASTER_KEY invalide, refus de démarrer (code ≠ 0, variable nommée)',
-      cmd: ['docker', 'run', '--rm', ...SECCOMP, ...imageEnv('invalide'), IMAGE],
+      cmd: ['docker', 'run', '--rm', ...RUN_FLAGS, ...imageEnv('invalide'), IMAGE],
       expectFailure: (err) => (err.includes('MASTER_KEY invalide') ? undefined : `message sans MASTER_KEY : « ${err.trim()} »`),
     },
   );

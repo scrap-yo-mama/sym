@@ -85,6 +85,30 @@ describe('fixtures du CDC rejouées contre les schémas', () => {
     expect(validator('Error')({ error: { ...apiError.error, code: 'teapot' } })).toBe(false);
   });
 
+  // Revue browser-0.1 : en-têtes posés par la passerelle ou l'egress (Host, saut à saut, Proxy-*), jamais par le client ;
+  // l'hôte du proxy amont est un nom ou une adresse nus (la garde SSRF de 04c § 1 s'y applique à l'exécution, tâches 1.5 et 2.x).
+  test.each(['Host', 'host', 'Proxy-Authorization', 'proxy-connection', 'Proxy-Foo', 'Connection', 'Keep-Alive', 'Transfer-Encoding', 'TE', 'Trailer', 'Upgrade', 'bad name', 'X-A:b', ''])(
+    'extraHTTPHeaders invalide : %j',
+    (name) => {
+      expect(validator('CreateSessionRequest')({ extraHTTPHeaders: { [name]: 'x' } })).toBe(false);
+    },
+  );
+
+  test('extraHTTPHeaders valides : en-têtes applicatifs', () => {
+    expect(validator('CreateSessionRequest')({ extraHTTPHeaders: { 'X-Trace': '1', 'Accept-Language': 'fr-FR', 'x-hostname': 'a', Teapot: 'b' } })).toBe(true);
+  });
+
+  test.each(['http://proxy.example.com', 'proxy.example.com/path', 'user@proxy.example.com', 'proxy example.com', 'proxy.example.com:8080', ''])(
+    'hôte de proxy amont invalide : %j',
+    (host) => {
+      expect(validator('EgressPolicy')({ upstream: { type: 'http', host, port: 8080 } })).toBe(false);
+    },
+  );
+
+  test.each(['proxy.example.com', 'proxy-1.example.com', '203.0.113.7', '2001:db8::1'])('hôte de proxy amont valide : %s', (host) => {
+    expect(validator('EgressPolicy')({ upstream: { type: 'http', host, port: 8080 } })).toBe(true);
+  });
+
   test('événement discriminé par type (contrôle de types à la compilation)', () => {
     const event: SessionEvent = { type: 'egress.blocked', sessionId: session.id, at: session.createdAt, data: { host: 'evil.example', reason: 'domain_not_allowed', count: 1 } };
     expect(event.type).toBe('egress.blocked');
