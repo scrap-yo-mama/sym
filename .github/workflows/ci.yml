@@ -227,7 +227,7 @@ jobs:
           d="$GITHUB_WORKSPACE"; while [ "$d" != / ]; do sudo chmod o+x "$d"; d="$(dirname "$d")"; done
           { echo SANDBOX_UID=1500; echo SANDBOX_GID=1500; echo SANDBOX_LAUNCHER=/usr/local/libexec/sandbox-launch; } >> "$GITHUB_ENV"
       # L'enfant arrêté par RLIMIT_CPU reçoit SIGXCPU (action par défaut : vidage mémoire). Sur le runner, le vidage part au
-      # collecteur de plantages d'Ubuntu par un tube (core_pattern « |… », RLIMIT_CORE ignorée) et retarde la fin de l'enfant
+      # collecteur systemd-coredump par un tube (core_pattern « |… », RLIMIT_CORE ignorée) et retarde la fin de l'enfant
       # de plusieurs secondes (isolat compris) : vidage vers un fichier, refusé par RLIMIT_CORE à 0 (étapes de test).
       - name: Pas de collecteur de vidages mémoire sur le runner de test
         run: |
@@ -280,16 +280,6 @@ jobs:
       # utilisateur non privilégiés, restreints par AppArmor sur Ubuntu 24.04 (levée sur le runner de test seulement).
       - name: Bac à sable de Chromium (espaces de noms utilisateur)
         run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-      # DIAGNOSTIC TEMPORAIRE (fix-pnpm-pin) : espace de noms utilisateur dans un conteneur selon seccomp et AppArmor.
-      - name: Diagnostic temporaire, espaces de noms utilisateur en conteneur
-        run: |
-          docker info --format "{{.ServerVersion}} {{json .SecurityOptions}}"
-          for opts in "" "--security-opt seccomp=unconfined" "--security-opt apparmor=unconfined" "--security-opt seccomp=unconfined --security-opt apparmor=unconfined"; do
-            if docker run --rm --user 65534 $opts --entrypoint unshare "$PG_IMAGE" -U -r true; then echo "[$opts] permis"; else echo "[$opts] refusé"; fi
-          done
-          sudo dmesg | grep -i "apparmor.*denied" | tail -5 || true
-        env:
-          PG_IMAGE: postgres:16@sha256:1a6ab3f5345eb6dbe04a1349529caabdb0ab09293a09590fad07b2246bfa4b54
       # Aucune relance : un échec instable doit rester visible (rapport junit archivé).
       - run: pnpm test:image --retry=0 --reporter=default --reporter=junit --outputFile.junit=reports/image-junit.xml
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
