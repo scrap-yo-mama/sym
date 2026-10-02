@@ -5,7 +5,7 @@
 import { spawnSync } from 'node:child_process';
 import { checkIdentity, checkNoSetuid, IDENTITY_PROBE, RUN_FLAGS, SETUID_PROBE } from './image-checks.ts';
 
-type Step = { name: string; cmd: string[]; expect?: (stdout: string) => string | undefined };
+type Step = { name: string; cmd: string[]; env?: Record<string, string>; expect?: (stdout: string) => string | undefined };
 
 const MODULE = ['--filter', '@sym/contracts', '--filter', './modules/browser/**'];
 const IMAGE = 'sym-browser:ci-local';
@@ -17,7 +17,13 @@ const steps: Step[] = [
   { name: 'lint (frontière comprise)', cmd: ['pnpm', 'exec', 'eslint', 'modules/browser', 'packages/contracts'] },
   { name: 'en-têtes SPDX', cmd: ['node', 'scripts/spdx-headers.ts', '--check'] },
   { name: 'licences (SDK et contrat MIT sans copyleft)', cmd: ['node', 'scripts/check-licenses.ts'] },
-  { name: 'tests (contrat, paquets, racine du module)', cmd: ['pnpm', ...MODULE, 'test'] },
+  // Les tests d'intégration du schéma tournent ici sur PostgreSQL 16 (défaut) ; la matrice 17 et 18 suit (tâche 0.2).
+  { name: 'tests (contrat, paquets, racine du module ; schéma sur PostgreSQL 16)', cmd: ['pnpm', ...MODULE, 'test'] },
+  {
+    name: 'schéma : migrations up, down, up sur PostgreSQL 17 et 18',
+    cmd: ['pnpm', '--filter', '@sym-browser/db', 'test:matrix'],
+    env: { PG_VERSIONS: '17,18' },
+  },
 ];
 
 if (!process.argv.includes('--skip-image')) {
@@ -46,7 +52,7 @@ const runtimeDir = new URL('../../..', import.meta.url).pathname;
 for (const [index, step] of steps.entries()) {
   console.log(`\n==> [${index + 1}/${steps.length}] browser : ${step.name}`);
   const [command = '', ...args] = step.cmd;
-  const result = spawnSync(command, args, { cwd: runtimeDir, stdio: ['inherit', step.expect ? 'pipe' : 'inherit', 'inherit'], encoding: 'utf8' });
+  const result = spawnSync(command, args, { cwd: runtimeDir, env: { ...process.env, ...step.env }, stdio: ['inherit', step.expect ? 'pipe' : 'inherit', 'inherit'], encoding: 'utf8' });
   if (step.expect && typeof result.stdout === 'string') process.stdout.write(result.stdout);
   const problem = result.status !== 0 ? `code ${result.status ?? 'signal'}` : step.expect?.(result.stdout ?? '');
   if (problem !== undefined) {
