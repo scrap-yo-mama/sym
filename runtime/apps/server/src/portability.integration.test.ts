@@ -226,6 +226,23 @@ describe('assert_export_no_secret (INV5, INV8)', () => {
     expect(await count('SELECT count(*) FROM datasets WHERE api_id = $1', [imported.body['api_id']])).toBe(0);
   });
 
+  test('API à session en tunnel (politique direct + tunnel, stratégie courante en tunnel) : aucune stratégie, aucun « tunnel » dans le fichier', async () => {
+    const seeded = await seedSessionApi(b);
+    await withClient(srv.db.url, async (c) => {
+      await c.query('UPDATE apis SET network_policy = $2::jsonb WHERE id = $1', [seeded.id, JSON.stringify({ allow: ['direct', 'tunnel'] })]);
+      await c.query("UPDATE strategy_versions SET network = 'tunnel' WHERE api_id = $1 AND version = 1", [seeded.id]);
+    });
+    const res = await api(b, 'GET', `/api/apis/${seeded.slug}/export`, '/api/apis/{slug}/export');
+    expect(res.status).toBe(200);
+    const file = res.raw.body;
+    for (const [name, marker] of Object.entries(MARK)) expect(file, name).not.toContain(marker);
+    expect(res.body['strategy']).toBeNull();
+    expect(res.body['api']['network_policy']).toEqual({ allow: ['direct'] });
+    // Ni la politique, ni la stratégie, ni l'historique ne disent que l'API passe par le navigateur de l'utilisateur (INV5).
+    expect(file).not.toContain('tunnel');
+    expect(parseApiExport(JSON.parse(file), { runtimeVersion: '0.0.0' })).toMatchObject({ ok: true, ignored: [] });
+  });
+
   test('INV12 : l’export d’une API d’autrui (même visible) répond 404 ; l’OpenAPI d’une API invisible aussi', async () => {
     const seeded = await seedApi(srv.db.url, a.user.id, { visibility: 'instance' });
     expect((await api(b, 'GET', `/api/apis/${seeded.slug}/export`, '/api/apis/{slug}/export')).status).toBe(404);
@@ -308,6 +325,22 @@ describe('import : repasse par l’enquête (16 § 6)', () => {
     const secretUrl = sealExport(draft({ source_url: 'https://shop.zz-test.example/books?token=abc' }));
     expect((await api(a, 'POST', '/api/apis/import?confirm=true', '/api/apis/import', secretUrl)).status).toBe(400);
     expect(await count('SELECT count(*) FROM apis')).toBe(apisBefore);
+  });
+
+  test('INV5 : un fichier qui demande le tunnel ne le ramène pas — écarté (listé dans l’aperçu), politique enregistrée sans tunnel', async () => {
+    const both = sealExport(draft({ network_policy: { allow: ['direct', 'tunnel'] } }));
+    const preview = await api(a, 'POST', '/api/apis/import', '/api/apis/import', both);
+    expect(preview.status).toBe(200);
+    expect(preview.body['network_allow']).toEqual(['direct']);
+    expect(preview.body['ignored_fields']).toEqual(['$.api.network_policy.allow[1]']);
+    const created = await api(a, 'POST', '/api/apis/import?confirm=true', '/api/apis/import', both);
+    expect(created.status).toBe(201);
+    const only = await api(a, 'POST', '/api/apis/import?confirm=true', '/api/apis/import', sealExport(draft({ network_policy: { allow: ['tunnel'] } })));
+    expect(only.status).toBe(201);
+    for (const id of [created.body['api_id'], only.body['api_id']]) {
+      const row = await withClient(srv.db.url, async (c) => (await c.query<{ network_policy: unknown }>('SELECT network_policy FROM apis WHERE id = $1', [id])).rows[0]!);
+      expect(row.network_policy).toEqual({ allow: ['direct'] });
+    }
   });
 
   test('schéma marqué `x-personal` : la case « j’ai lu » est exigée avant l’import (17 § 11)', async () => {

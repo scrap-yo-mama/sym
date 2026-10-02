@@ -3,6 +3,7 @@
 // exportable (déclarative, sans session ni tunnel ni code), import qui ignore les champs inconnus et refuse un `$ref`
 // distant (INV1), une version de format inconnue, une empreinte fausse, une session.
 import { describe, expect, test } from 'vitest';
+import { buildImportedPlan } from '../investigation/candidates.js';
 import {
   API_EXPORT_FORMAT,
   API_EXPORT_FORMAT_VERSION,
@@ -11,6 +12,7 @@ import {
   exportableStrategy,
   formatExport,
   parseApiExport,
+  portableNetworkAllow,
   sealExport,
   type ApiExportDraft,
 } from './index.js';
@@ -180,5 +182,36 @@ describe('format portable (16 § 6)', () => {
     expect(exportableStrategy({ execution: 'fetch', network: 'tunnel', spec: SPEC, script_ref: null, est_cost_usd: null })).toBeNull();
     expect(exportableStrategy({ execution: 'fetch', network: 'direct', spec: { ...SPEC, request: { ...SPEC.request, session: { mode: 'cookie', domain: 'zz-test.example' } } }, script_ref: null, est_cost_usd: null })).toBeNull();
     expect(exportableStrategy({ execution: 'fetch', network: 'direct', spec: { ...SPEC, request: { ...SPEC.request, params: [{ at: 'header.x', role: 'session' }] } }, script_ref: null, est_cost_usd: null })).toBeNull();
+  });
+});
+
+describe('tunnel : jamais porté par un fichier (INV5, revue 3.12)', () => {
+  test('import : `tunnel` dans network_policy.allow est écarté et listé ; politique vide → direct', () => {
+    const both = parse(sealExport(draft({ api: { ...draft().api, network_policy: { allow: ['direct', 'tunnel'] } } })));
+    if (!both.ok) throw new Error(`attendu ok : ${both.code}`);
+    expect(both.export.api.network_policy).toEqual({ allow: ['direct'] });
+    expect(both.ignored).toEqual(['$.api.network_policy.allow[1]']);
+    const only = parse(sealExport(draft({ api: { ...draft().api, network_policy: { allow: ['tunnel'] } } })));
+    if (!only.ok) throw new Error(`attendu ok : ${only.code}`);
+    expect(only.export.api.network_policy).toEqual({ allow: ['direct'] });
+    expect(JSON.stringify(only.export.api)).not.toContain('tunnel');
+  });
+
+  test('portableNetworkAllow : niveaux exportables seulement, dans l’ordre, sans doublon ; jamais vide', () => {
+    expect(portableNetworkAllow(['direct', 'tunnel', 'dc_proxy'])).toEqual(['direct', 'dc_proxy']);
+    expect(portableNetworkAllow(['tunnel'])).toEqual(['direct']);
+    expect(portableNetworkAllow(['res_proxy', 'res_proxy', 'zz'])).toEqual(['res_proxy']);
+    expect(portableNetworkAllow(undefined)).toEqual(['direct']);
+  });
+
+  test('buildImportedPlan : une spécification importée ne passe jamais par le tunnel, même si la politique l’admet', () => {
+    const networks = [
+      { mode: 'direct' as const, perGbUsd: 0 },
+      { mode: 'tunnel' as const, perGbUsd: 0 },
+    ];
+    expect(buildImportedPlan({ execution: 'fetch', spec: SPEC, networks, browser: false }).map((p) => p.network)).toEqual(['direct']);
+    // Sans Chromium, E3 importé n'a aucun essai (jamais un repli vers le navigateur de l'utilisateur).
+    expect(buildImportedPlan({ execution: 'playwright', spec: SPEC, networks, browser: false })).toEqual([]);
+    expect(buildImportedPlan({ execution: 'playwright', spec: SPEC, networks, browser: true }).map((p) => p.network)).toEqual(['direct']);
   });
 });

@@ -4,11 +4,14 @@
 // E1-E3 sans session ni tunnel), avec des fixtures synthétiques conformes au schéma de sortie (INV1), sans aucun champ de
 // session, de cookie ni réglage de contournement, et sans mot de la liste d'exclusion. L'import sur une instance vierge
 // est joué par apps/server/src/portability.integration.test.ts.
+// « Tous passent leur fixture » (16 § 6) : chaque modèle a une réponse ENREGISTRÉE synthétique (`templates/responses/`),
+// sur laquelle sa stratégie déclarative est rejouée hors ligne ; la sortie doit égaler `fixtures.items`, champ par champ.
 import { readdirSync, readFileSync } from 'node:fs';
-import { formatExport, parseApiExport, validateOutput } from '@runtime/core';
+import { extractRecords, formatExport, parseApiExport, validateDeclarativeSpec, validateOutput } from '@runtime/core';
 import { describe, expect, test } from 'vitest';
 
 const DIR = new URL('../templates/', import.meta.url);
+const RESPONSES = new URL('../templates/responses/', import.meta.url);
 const files = readdirSync(DIR).filter((f) => f.endsWith('.json')).sort();
 
 describe('templates/ (16 § 6)', () => {
@@ -39,5 +42,23 @@ describe('templates/ (16 § 6)', () => {
     expect(doc.api.alert_targets).toEqual([]);
     expect(text).not.toMatch(/"(?:cookies?|session\w*|secret\w*|password|token|proxy_ids|credentials?)"\s*:/i);
     expect(text).not.toMatch(/stealth|undetect|ind[ée]tectable|bypass|contourn|captcha|furtif|fingerprint/i);
+  });
+
+  test.each(files)('%s : la stratégie rejouée hors ligne sur sa réponse enregistrée donne exactement fixtures.items', (file) => {
+    const parsed = parseApiExport(JSON.parse(readFileSync(new URL(file, DIR), 'utf8')), { runtimeVersion: '0.0.0' });
+    if (!parsed.ok) throw new Error(`${file} : ${parsed.code} ${parsed.message}`);
+    const doc = parsed.export;
+    const base = file.replace(/\.api\.json$/, '');
+    const recorded = readdirSync(RESPONSES).filter((f) => f.startsWith(`${base}.response.`));
+    expect(recorded, `${file} : une réponse enregistrée attendue dans templates/responses/`).toHaveLength(1);
+    const body = readFileSync(new URL(recorded[0]!, RESPONSES), 'utf8');
+    // Réponse synthétique : aucune donnée réelle (préfixe Zz sur chaque enregistrement).
+    expect(body).toMatch(/Zz/);
+    const spec = validateDeclarativeSpec(doc.strategy!.spec, { outputSchema: doc.api.output_schema });
+    if (!spec.ok) throw new Error(`${file} : stratégie invalide ${JSON.stringify(spec.errors)}`);
+    const out = extractRecords(spec.spec, { body }, { outputSchema: doc.api.output_schema });
+    expect(out.attempts.flatMap((a) => a.problems), file).toEqual([]);
+    expect(out.ok, file).toBe(true);
+    expect(out.records).toEqual(doc.fixtures!.items);
   });
 });

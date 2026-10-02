@@ -3,7 +3,8 @@
 //
 // Export : propriétaire seulement (404 uniforme pour l'API d'autrui, même `instance` : la demande d'enquête n'est servie
 // qu'à son propriétaire), fichier `<slug>.api.json` à clés triées ; ni session, ni cookie, ni secret, ni donnée de run
-// (`assert_export_no_secret`). Import : relu par `parseApiExport` (champs inconnus ignorés, `$ref` distant refusé, INV1),
+// (`assert_export_no_secret`). Import : relu par `parseApiExport` (champs inconnus ignorés, tunnel écarté de la politique,
+// `$ref` distant refusé, INV1),
 // aperçu sans écriture, puis `confirm=true` : API privée en `enquete`, enquête en file au stade `access_check` (rapport
 // d'accès, robots.txt, INV11) puis `testing` de la stratégie importée — aucun nouvel état (INV3). Le journal et l'audit ne
 // reçoivent que des compteurs et des codes, jamais le contenu du fichier.

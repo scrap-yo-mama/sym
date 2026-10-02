@@ -2169,7 +2169,7 @@ export interface components {
             contains_personal_data?: boolean;
             max_cost_usd?: number;
             budget_daily_usd?: number;
-            /** @description Niveaux réseau seulement ; jamais un identifiant de proxy. */
+            /** @description Niveaux réseau exportables seulement (jamais le tunnel ni un identifiant de proxy). */
             network_policy?: {
                 allow: components["schemas"]["Network"][];
             };
@@ -2213,7 +2213,7 @@ export interface components {
             output_fields: string[];
             /** @description Le schéma de sortie porte un champ `x-personal` (ou l'API se déclare à données personnelles). */
             personal_fields: boolean;
-            /** @description Niveaux réseau que l'API importée pourra utiliser (politique du fichier, contrôlée ; un proxy résidentiel se voit avant la confirmation). */
+            /** @description Niveaux réseau que l'API importée pourra utiliser (politique du fichier, contrôlée, jamais le tunnel ; un proxy résidentiel se voit avant la confirmation). */
             network_allow: components["schemas"]["Network"][];
             strategy: {
                 execution: components["schemas"]["Execution"];
@@ -2223,7 +2223,7 @@ export interface components {
             schedules: number;
             /** @description Références de cibles d'alerte à configurer (aucune n'est créée). */
             alert_targets: string[];
-            /** @description Chemins des champs inconnus ignorés (`$.api.x`). */
+            /** @description Chemins des champs inconnus ignorés (`$.api.x`) et des niveaux réseau écartés (`$.api.network_policy.allow[1]`, un `tunnel` n'étant jamais importé). */
             ignored_fields: string[];
             /** @description La case « j'ai lu » (17 § 11) doit être cochée avant la confirmation. */
             requires_ack: boolean;

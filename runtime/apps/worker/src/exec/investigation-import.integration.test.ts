@@ -5,7 +5,9 @@
 // ses gardes, N exécutions conformes validées contre le schéma (INV1), essais journalisés par coût croissant (INV2), puis
 // version `created_by = import` et statut `sain` par la machine à états (transition 1, aucun nouvel état : INV3).
 // Aucun appel au LLM (la stratégie et le schéma viennent du fichier). Robots.txt interdit → `bloquee` sans essai ;
-// stratégie importée non conforme → `erreur`, aucune version.
+// stratégie importée non conforme → `erreur`, aucune version. Import SANS stratégie (API à session ou en tunnel, exportée
+// avec `strategy: null`) : schéma validé par le fichier, reconnaissance fraîche, LLM contraint par ce schéma, essais sans
+// pause de validation, version `created_by = import`. Une spécification importée ne passe jamais par le tunnel (INV5).
 import { randomUUID } from 'node:crypto';
 import { DomainPacer, generateMasterKey, MasterKey, parseApiExport, sealExport, Secret, validateOutput, type ApiExport, type RunExecutor } from '@runtime/core';
 import { firstCostInversion } from '@runtime/core/investigation';
@@ -91,15 +93,16 @@ const eventsOf = (runId: string) => listInvestigationEvents(pool, { runId, owner
 
 /** API de référence enquêtée (stratégie v1 fetch/direct, schémas posés), puis exportée et relue comme le ferait le serveur. */
 let exported: ApiExport;
+let refId: string;
 
 /** Import comme `POST /api/apis/import?confirm=true` : relecture du fichier, API et enquête dans la même transaction. */
-async function importAs(slug: string, doc: ApiExport): Promise<{ apiId: string; runId: string }> {
+async function importAs(slug: string, doc: ApiExport, networkPolicy: { allow: string[] } = { allow: ['direct', 'dc_proxy'] }): Promise<{ apiId: string; runId: string }> {
   // Scellé à nouveau : les cas ci-dessous modifient la stratégie ou la demande (le fichier d'origine reste intact).
   const { integrity: _integrity, ...content } = doc;
   const parsed = parseApiExport(JSON.parse(JSON.stringify(sealExport(content))), { runtimeVersion: '9.9.9' });
   if (!parsed.ok) throw new Error(`export illisible : ${parsed.code} ${parsed.message}`);
   return withActor(pool, actorA, async (tx) => {
-    const made = await importApi(tx, queue, { ownerId: A, slug, trigger: 'rest', export: parsed.export, networkPolicy: { allow: ['direct', 'dc_proxy'] } });
+    const made = await importApi(tx, queue, { ownerId: A, slug, trigger: 'rest', export: parsed.export, networkPolicy });
     // Cadence de test (fixtures locales), posée dans la transaction de l'import : le job n'est visible qu'au commit.
     await tx.query('UPDATE apis SET domain_pacing = $2 WHERE id = $1', [made.apiId, JSON.stringify({ min_delay_ms: 5, max_requests_per_run: 200, max_wait_ms: 60000 })]);
     return made;
@@ -148,7 +151,7 @@ beforeAll(async () => {
 
   // Référence : enquête complète (LLM scripté) sur la fixture API JSON, puis export.
   fake.setScenario(MODEL, [scripted.json(CONTACTS_PROPOSAL)]);
-  const refId = await insertApi('zz-test-import-ref');
+  refId = await insertApi('zz-test-import-ref');
   const { runId } = await withActor(pool, actorA, (tx) => startInvestigation(tx, queue, { apiId: refId, ownerId: A, trigger: 'rest', request: { url: `${base(API_HOST)}/`, description: 'liste des contacts', auto_validate: true } }));
   expect(await waitRun(runId)).toMatchObject({ state: 'succeeded', strategy_version: 1 });
   const doc = await withActor(pool, actorA, (tx) => exportApi(tx, { apiId: refId, ownerId: A, exportedAt: new Date('2026-10-02T10:00:00Z') }));
@@ -232,5 +235,61 @@ describe('import : repasse par l’enquête (tâche 3.12)', () => {
     expect((await pool.query('SELECT 1 FROM strategy_versions WHERE api_id = $1', [apiId])).rowCount).toBe(0);
     expect((await attemptsOf(runId)).length).toBeGreaterThan(0);
     expect(fake.requests).toBe(0);
+  });
+
+  test('import SANS stratégie portable (API à session en tunnel) : reconnaissance, LLM sur le schéma du fichier, aucune pause, version import, sain', async () => {
+    // Source : même enquête que la référence, mais API à session dont la stratégie courante passe par le tunnel.
+    const src = (
+      await pool.query<{ id: string }>(
+        `INSERT INTO apis (slug, owner_id, network_policy, requires_session, description, investigation, output_schema, input_schema, output_columns, investigation_phase)
+         SELECT 'zz-test-import-src-session', owner_id, '{"allow": ["direct", "tunnel"]}', true, description, investigation, output_schema, input_schema, output_columns, 'done'
+         FROM apis WHERE id = $1 RETURNING id`,
+        [refId],
+      )
+    ).rows[0]!.id;
+    await pool.query(
+      `INSERT INTO strategy_versions (api_id, version, owner_id, project_id, execution, network, spec, est_cost_usd, created_by)
+       SELECT $2, 1, owner_id, project_id, execution, 'tunnel', spec, est_cost_usd, 'investigation' FROM strategy_versions WHERE api_id = $1 AND version = 1`,
+      [refId, src],
+    );
+    await pool.query('UPDATE apis SET current_strategy_version = 1 WHERE id = $1', [src]);
+    const doc = await withActor(pool, actorA, (tx) => exportApi(tx, { apiId: src, ownerId: A, exportedAt: new Date('2026-10-02T11:00:00Z') }));
+    if (doc === null) throw new Error('export introuvable');
+    expect(doc.strategy).toBeNull();
+    expect(JSON.stringify(doc)).not.toContain('tunnel');
+
+    fake.setScenario(MODEL, [scripted.json(CONTACTS_PROPOSAL)]);
+    const { apiId, runId } = await importAs('zz-test-import-nostrat', doc);
+    expect(await apiRow(apiId)).toMatchObject({ status: 'enquete', investigation_phase: 'access_check' });
+    const run = await waitRun(runId);
+    expect(run).toMatchObject({ state: 'succeeded', strategy_version: 1 });
+
+    const api = await apiRow(apiId);
+    expect(api).toMatchObject({ status: 'sain', investigation_phase: 'done', current_strategy_version: 1 });
+    // Schéma de sortie du fichier, inchangé : le LLM a été contraint par lui (aucun schéma proposé ni pause de validation).
+    expect(api.output_schema).toEqual(doc.api.output_schema);
+    const sv = (await pool.query<{ created_by: string; network: string }>('SELECT created_by, network FROM strategy_versions WHERE api_id = $1', [apiId])).rows;
+    expect(sv).toEqual([{ created_by: 'import', network: 'direct' }]);
+    const events = await eventsOf(runId);
+    const phases = events.filter((e) => e.kind === 'phase.started').map((e) => (e.payload as { phase: string }).phase);
+    expect(phases).toContain('reconnaissance');
+    expect(phases).not.toContain('awaiting_schema_validation');
+    // Étape 0 d'abord, puis reconnaissance fraîche ; schéma contraint : aucun schéma proposé à valider.
+    const kinds = events.map((e) => e.kind);
+    expect(kinds.indexOf('access_report')).toBeGreaterThan(-1);
+    expect(kinds.indexOf('access_report')).toBeLessThan(kinds.indexOf('reconnaissance.finished'));
+    expect(kinds).not.toContain('schema.proposed');
+    expect(fake.requests).toBe(1);
+  });
+
+  test('INV5 : politique de l’API importée élargie au tunnel → le plan d’essai de la spécification importée n’a aucune paire tunnel', async () => {
+    const { apiId, runId } = await importAs('zz-test-import-tunnel-policy', exported, { allow: ['direct', 'dc_proxy', 'tunnel'] });
+    const run = await waitRun(runId);
+    expect(run).toMatchObject({ state: 'succeeded' });
+    expect(await apiRow(apiId)).toMatchObject({ status: 'sain' });
+    const events = await eventsOf(runId);
+    const testing = events.find((e) => e.kind === 'phase.started' && (e.payload as { phase: string }).phase === 'testing')!.payload as { plan: { network: string }[] };
+    expect(testing.plan.map((p) => p.network)).not.toContain('tunnel');
+    expect((await attemptsOf(runId)).map((x) => x.network)).not.toContain('tunnel');
   });
 });

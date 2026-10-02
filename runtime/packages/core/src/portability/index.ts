@@ -5,12 +5,14 @@
 // schedules, fixtures?, integrity: {sha256}}`, fermée (`additionalProperties: false`), écrite à clés triées (diffs git
 // lisibles). Le format n'a AUCUN champ pour une session, un cookie, une clé LLM, un identifiant de proxy, un secret ou une
 // URL de webhook, ni pour une donnée de run : les cibles d'alerte sont des références (`$ALERT_WEBHOOK_1`), la politique
-// réseau ne garde que ses niveaux. La stratégie n'est exportée que déclarative (E1-E3), sans session, tunnel ni code.
+// réseau ne garde que ses niveaux exportables (jamais le tunnel, INV5). La stratégie n'est exportée que déclarative
+// (E1-E3), sans session, tunnel ni code.
 //
 // Import (`parseApiExport`) : les champs inconnus sont IGNORÉS (et listés), l'empreinte porte sur les champs connus ; une
 // version de format d'une autre majeure, un runtime trop ancien, une empreinte fausse, un `$ref` distant (INV1), une
-// stratégie hors format (session, secret, hôte hors du site) ou des fixtures hors schéma sont refusés. La suite (enquête :
-// `access_check` puis `testing`) est l'affaire de la base et du worker.
+// stratégie hors format (session, secret, hôte hors du site) ou des fixtures hors schéma sont refusés. Un `tunnel` dans
+// `api.network_policy.allow` est écarté (et listé) : un fichier ne fait jamais passer une API par le navigateur, la session
+// et l'IP de l'utilisateur (INV5). La suite (enquête : `access_check` puis `testing`) est l'affaire de la base et du worker.
 import { createHash } from 'node:crypto';
 import { Ajv2020 } from 'ajv/dist/2020.js';
 import { validateDeclarativeSpec } from '../dsl/spec.js';
@@ -30,6 +32,15 @@ export const API_EXPORT_MIN_RUNTIME_VERSION = '0.0.0';
 export const PORTABLE_EXECUTIONS = ['fetch', 'fetch_in_page', 'playwright'] as const;
 /** Réseaux exportables : jamais le tunnel, qui porte l'identité et la session de l'utilisateur (INV5). */
 export const PORTABLE_NETWORKS = ['direct', 'dc_proxy', 'res_proxy'] as const;
+
+/**
+ * Niveaux réseau d'une politique qu'un fichier peut porter, à l'export comme à l'import : exportables seulement (jamais
+ * le tunnel), dans l'ordre, sans doublon ; une politique vidée devient `['direct']`.
+ */
+export function portableNetworkAllow(allow: readonly unknown[] | undefined): string[] {
+  const kept = [...new Set((allow ?? []).filter((m): m is string => typeof m === 'string' && (PORTABLE_NETWORKS as readonly string[]).includes(m)))];
+  return kept.length > 0 ? kept : ['direct'];
+}
 
 export type ApiExportStrategy = {
   execution: (typeof PORTABLE_EXECUTIONS)[number];
@@ -115,7 +126,8 @@ export const API_EXPORT_SCHEMA = {
           type: 'object',
           additionalProperties: false,
           required: ['allow'],
-          properties: { allow: { type: 'array', minItems: 1, uniqueItems: true, items: { enum: ['direct', 'dc_proxy', 'res_proxy', 'tunnel'] } } },
+          // `tunnel` est LU (fichier écrit à la main ou par un autre outil) puis écarté par `parseApiExport` ; jamais écrit.
+          properties: { allow: { type: 'array', minItems: 1, uniqueItems: true, items: { enum: [...PORTABLE_NETWORKS, 'tunnel'] } } },
         },
         alert_targets: {
           type: 'array',
@@ -375,6 +387,16 @@ export function parseApiExport(input: unknown, options: { readonly runtimeVersio
     return fail('runtime_too_old', `ce fichier exige un runtime ${doc.min_runtime_version} ou plus récent`);
   }
   if (exportIntegrity(doc) !== doc.integrity.sha256) return fail('integrity_mismatch', 'empreinte sha256 différente du contenu : fichier modifié ou incomplet');
+
+  // INV5 : un fichier ne fait jamais passer l'API importée par le tunnel. Écarté APRÈS l'empreinte (portée par le fichier
+  // tel qu'écrit), listé comme un champ ignoré pour que l'aperçu le montre.
+  const allow = doc.api.network_policy?.allow;
+  if (allow !== undefined) {
+    allow.forEach((m, i) => {
+      if (!(PORTABLE_NETWORKS as readonly string[]).includes(m)) ignored.push(`$.api.network_policy.allow[${i}]`);
+    });
+    doc.api = { ...doc.api, network_policy: { allow: portableNetworkAllow(allow) } };
+  }
 
   const api = doc.api;
   let source: URL;

@@ -18,11 +18,14 @@ curl -sS -H "Authorization: Bearer $SYM_API_KEY" -H 'content-type: application/j
 
 ## Règles (vérifiées par la CI : `tests/templates.unit.test.ts`)
 
-- Modèles **déclaratifs** seulement (E1 à E3, réseau `direct`) : aucun code, aucun agent.
+- Modèles **déclaratifs** seulement (E1 à E3, réseau `direct`) : aucun code, aucun agent. Jamais le tunnel : un `tunnel`
+  dans `network_policy.allow` est écarté à l'import (listé dans `ignored_fields`).
 - Le format n'a **aucun champ** pour une session, un cookie, une clé, un identifiant de proxy, un secret ou un réglage de
   contournement ; un champ inconnu est ignoré à l'import.
 - `fixtures.items` : enregistrements **synthétiques** (préfixe `Zz`), conformes au schéma de sortie ; aucune donnée réelle,
   aucune donnée personnelle.
+- **Réponse enregistrée** : chaque modèle a une réponse synthétique dans `responses/<modèle>.response.<ext>` (JSON ou HTML,
+  préfixe `Zz`). La CI y rejoue la stratégie déclarative hors ligne : la sortie doit égaler `fixtures.items`, champ par champ.
 - Planifications désactivées, aucune cible d'alerte : le propriétaire les choisit après l'import.
 - Fichier **scellé** (`integrity.sha256`, empreinte du JSON canonique sans `integrity`) et écrit à **clés triées** : un
   modèle modifié à la main doit être rescellé (`sealExport` puis `formatExport` de `@runtime/core`), sinon l'import le

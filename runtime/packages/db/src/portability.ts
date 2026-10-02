@@ -5,6 +5,8 @@
 // code), l'historique de ses versions (métadonnées), les planifications DU PROPRIÉTAIRE et ses cibles d'alerte en
 // référence. Lecture par colonnes nommées : jamais `requires`, `requires_session`, une ligne `site_sessions`, `secrets`,
 // une URL ou un secret de webhook, un identifiant de proxy, ni une donnée de run (INV5, INV8, `assert_export_no_secret`).
+// Le tunnel (navigateur, session et IP de l'utilisateur) n'apparaît nulle part : ni dans la politique réseau, ni dans la
+// stratégie, ni dans l'historique (une version en tunnel dirait que l'API porte une session).
 //
 // Import : nouvelle API privée du propriétaire en `enquete` (aucun nouvel état, INV3), sans session ; l'enquête entre au
 // stade `access_check` avec le schéma de sortie du fichier validé et la stratégie importée à essayer (`testing`). Les
@@ -14,6 +16,8 @@ import {
   API_EXPORT_FORMAT_VERSION,
   API_EXPORT_MIN_RUNTIME_VERSION,
   exportableStrategy,
+  PORTABLE_NETWORKS,
+  portableNetworkAllow,
   sealExport,
   type ApiExport,
   type ApiExportSchedule,
@@ -82,7 +86,7 @@ export async function exportApi(db: Queryable, input: { apiId: string; ownerId: 
   ).rows;
   // Cibles d'alerte : seulement les ÉVÉNEMENTS, sous une référence ; ni l'URL (elle peut porter un jeton) ni le secret.
   const hooks = (await db.query<{ events: string[] }>('SELECT events FROM webhook_subscriptions WHERE api_id = $1 AND owner_id = $2 ORDER BY created_at, id', [input.apiId, input.ownerId])).rows;
-  const allow = Array.isArray(api.network_policy['allow']) ? (api.network_policy['allow'] as unknown[]).filter((m): m is string => typeof m === 'string') : ['direct'];
+  const allow = portableNetworkAllow(Array.isArray(api.network_policy['allow']) ? (api.network_policy['allow'] as unknown[]) : undefined);
   const columns = (api.output_columns ?? []).length > 0 ? api.output_columns! : schemaColumns(api.output_schema);
   const viewColumns = Array.isArray(api.views['columns']) ? (api.views['columns'] as unknown[]).filter((c): c is string => typeof c === 'string') : undefined;
 
@@ -105,11 +109,11 @@ export async function exportApi(db: Queryable, input: { apiId: string; ownerId: 
       contains_personal_data: api.contains_personal_data,
       max_cost_usd: Number(api.max_cost_usd),
       budget_daily_usd: Number(api.budget_daily_usd),
-      network_policy: { allow: allow.length > 0 ? allow : ['direct'] },
+      network_policy: { allow },
       alert_targets: hooks.map((h, i) => ({ ref: `$ALERT_WEBHOOK_${i + 1}`, events: [...h.events].sort() })),
     },
     strategy: current === undefined ? null : exportableStrategy(current),
-    history: versions.map((v) => ({ version: v.version, execution: v.execution, network: v.network, created_by: v.created_by, created_at: v.created_at.toISOString() })),
+    history: versions.filter((v) => (PORTABLE_NETWORKS as readonly string[]).includes(v.network)).map((v) => ({ version: v.version, execution: v.execution, network: v.network, created_by: v.created_by, created_at: v.created_at.toISOString() })),
     schedules: schedules.map((s) => ({
       cron: s.cron,
       timezone: s.timezone,
