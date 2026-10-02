@@ -397,6 +397,8 @@ const API_CLONE_EXCLUDED = new Set([
   'repair_lease_owner',
   'repair_lease_until',
   'warning_alerted_at',
+  // Mode « SYM ne lâche pas » (2.16) : un acte humain du propriétaire, jamais hérité par un clone.
+  'persistence_mode',
   'created_at',
   'updated_at',
 ]);

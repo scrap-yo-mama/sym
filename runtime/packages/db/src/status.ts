@@ -44,13 +44,17 @@ type ApiRow = {
   stale: boolean;
 };
 
-/** `previous_status` (transition 21) : statut d'où l'API est entrée en `enquete`, seulement depuis `sain` ou `warning`. */
+/**
+ * `previous_status` (transition 21) : statut d'où l'API est entrée en `enquete`, depuis `sain` ou `warning`, ou depuis
+ * `erreur` par une tentative du mode « SYM ne lâche pas » (raison `persistence_attempt`, D-49) : un échec y revient par la 21.
+ */
 async function previousStatus(client: pg.ClientBase, apiId: string): Promise<Status | null> {
-  const { rows } = await client.query<{ from_status: Status | null }>(
-    "SELECT from_status FROM status_events WHERE api_id = $1 AND to_status = 'enquete' ORDER BY id DESC LIMIT 1",
+  const { rows } = await client.query<{ from_status: Status | null; reason: string | null }>(
+    "SELECT from_status, reason FROM status_events WHERE api_id = $1 AND to_status = 'enquete' ORDER BY id DESC LIMIT 1",
     [apiId],
   );
   const from = rows[0]?.from_status;
+  if (from === 'erreur' && rows[0]?.reason === 'persistence_attempt') return 'erreur';
   return from === 'sain' || from === 'warning' ? from : null;
 }
 
@@ -90,31 +94,34 @@ async function inTransaction<T>(pool: pg.Pool, fn: (client: pg.PoolClient) => Pr
 }
 
 export async function applyStatusTransition(pool: pg.Pool, input: ApplyStatusInput): Promise<ApplyStatusResult> {
-  return inTransaction(pool, async (client) => {
-    const { row, state } = await loadState(client, input.apiId);
-    const step = applyStatusEvent(state, input.event, { clock: input.clock, schedulePeriodMs: input.schedulePeriodMs ?? null });
-    if (!step.ok) return { ok: false, state: step.state, rejected: step.rejected };
+  return inTransaction(pool, (client) => applyStatusTransitionInTx(client, input));
+}
 
+/** Comme `applyStatusTransition`, dans la transaction de l'appelant (tentative de persistance : statut, run et cycle au même COMMIT). */
+export async function applyStatusTransitionInTx(client: pg.PoolClient, input: ApplyStatusInput): Promise<ApplyStatusResult> {
+  const { row, state } = await loadState(client, input.apiId);
+  const step = applyStatusEvent(state, input.event, { clock: input.clock, schedulePeriodMs: input.schedulePeriodMs ?? null });
+  if (!step.ok) return { ok: false, state: step.state, rejected: step.rejected };
+
+  await client.query(
+    'UPDATE apis SET status = $2, status_reason = $3, clean_streak = $4, last_signal_at = $5, updated_at = now() WHERE id = $1',
+    [
+      row.id,
+      step.state.status,
+      step.state.reason,
+      step.state.cleanStreak,
+      step.state.lastSignalAt === null ? null : new Date(step.state.lastSignalAt),
+    ],
+  );
+  const events = step.transitions.map((t) => toStatusEventRow(t, input.runId ?? null));
+  for (const e of events) {
     await client.query(
-      'UPDATE apis SET status = $2, status_reason = $3, clean_streak = $4, last_signal_at = $5, updated_at = now() WHERE id = $1',
-      [
-        row.id,
-        step.state.status,
-        step.state.reason,
-        step.state.cleanStreak,
-        step.state.lastSignalAt === null ? null : new Date(step.state.lastSignalAt),
-      ],
+      'INSERT INTO status_events (api_id, owner_id, project_id, from_status, to_status, reason, run_id, at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)',
+      [row.id, row.owner_id, row.project_id, e.from_status, e.to_status, e.reason, e.run_id, e.at],
     );
-    const events = step.transitions.map((t) => toStatusEventRow(t, input.runId ?? null));
-    for (const e of events) {
-      await client.query(
-        'INSERT INTO status_events (api_id, owner_id, project_id, from_status, to_status, reason, run_id, at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)',
-        [row.id, row.owner_id, row.project_id, e.from_status, e.to_status, e.reason, e.run_id, e.at],
-      );
-    }
-    if (events.length > 0) await input.afterTransition?.(client, events);
-    return { ok: true, state: step.state, transitions: step.transitions, events };
-  });
+  }
+  if (events.length > 0) await input.afterTransition?.(client, events);
+  return { ok: true, state: step.state, transitions: step.transitions, events };
 }
 
 /** Met à jour le drapeau `stale` seul : jamais de transition, jamais de ligne `status_events`. */

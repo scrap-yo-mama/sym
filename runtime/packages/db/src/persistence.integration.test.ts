@@ -19,8 +19,10 @@ import {
   readPersistenceState,
   runPersistenceAttempt,
   setPersistenceMode,
+  sweepDuePersistence,
   type NegativeMemory,
   type PersistenceContext,
+  type PersistenceToggle,
 } from './persistence.js';
 import { PgBossJobQueue } from './queue.js';
 import { runQueueDefinition } from './runs.js';
@@ -61,10 +63,24 @@ beforeAll(async () => {
 let sent: { data: { api_id: string }; singletonKey: string }[] = [];
 beforeEach(() => {
   sent = [];
-  const recording: JobQueue = Object.create(queue) as JobQueue;
-  recording.enqueueOnce = (name, data, options) => {
-    if (name === PERSISTENCE_QUEUE) sent.push({ data: data as { api_id: string }, singletonKey: options.singletonKey });
-    return queue.enqueueOnce(name, data, options);
+  // Délégation explicite : les champs privés de PgBossJobQueue ne survivent pas à un prototype emprunté.
+  const recording: JobQueue = {
+    start: () => queue.start(),
+    stop: (o) => queue.stop(o),
+    createQueue: (d) => queue.createQueue(d),
+    enqueue: (name, data, options) => queue.enqueue(name, data, options),
+    enqueueOnce: (name, data, options) => {
+      if (name === PERSISTENCE_QUEUE) sent.push({ data: data as { api_id: string }, singletonKey: options.singletonKey });
+      return queue.enqueueOnce(name, data, options);
+    },
+    schedule: (...args) => queue.schedule(...args),
+    unschedule: (name, key) => queue.unschedule(name, key),
+    scheduledKeys: (name) => queue.scheduledKeys(name),
+    previewSchedule: (cron, options) => queue.previewSchedule(cron, options),
+    work: (name, options, handler) => queue.work(name, options, handler),
+    offWork: (name) => queue.offWork(name),
+    cancel: (name, id, options) => queue.cancel(name, id, options),
+    jobState: (name, id, options) => queue.jobState(name, id, options),
   };
   ctx = { queue: recording, now, random: () => 0.5, negativeMemory: memory };
 });
@@ -99,7 +115,7 @@ async function newApi(opts: ApiOpts = {}): Promise<string> {
 
 const consoleActor = (userId = A) => ({ userId, via: 'ui' as const });
 const keyActor = (userId = A) => ({ userId, via: 'apikey' as const, ref: 'sy_live_zz01' });
-const enable = (apiId: string, actor = consoleActor()) => setPersistenceMode(pool, ctx, { apiId, actor, enable: true });
+const enable = (apiId: string, actor: PersistenceToggle['actor'] = consoleActor()) => setPersistenceMode(pool, ctx, { apiId, actor, enable: true });
 
 /** Run de rejeu en échec puis réparation abandonnée : 11 puis 13, l'API entre en `erreur` comme en production. */
 async function breakApi(apiId: string, failure: { failureClass?: 'extraction' | 'network' | 'code_error' | 'not_found'; detail?: string } = {}): Promise<void> {
@@ -108,7 +124,8 @@ async function breakApi(apiId: string, failure: { failureClass?: 'extraction' | 
     "INSERT INTO runs (api_id, owner_id, api_owner_id, trigger, state, failure_class, error_detail, finished_at) VALUES ($1, $2, $2, 'ui', 'failed', $3, $4, now()) RETURNING id",
     [apiId, owner, failure.failureClass ?? 'extraction', failure.detail ?? null],
   );
-  const apply = (event: StatusEventInput) => applyStatusAndNotify(pool, queue, { apiId, runId: run.rows[0]!.id, event, clock: { now } }, { now });
+  // Comme le worker : la politique du mode (créneaux, jitter) accompagne l'annonce des transitions.
+  const apply = (event: StatusEventInput) => applyStatusAndNotify(pool, ctx.queue, { apiId, runId: run.rows[0]!.id, event, clock: { now } }, { now, persistence: ctx });
   expect((await apply({ type: 'run_failed', failureClass: failure.failureClass ?? 'extraction' })).ok).toBe(true);
   expect((await apply({ type: 'repair_failed', cause: 'budget_exhausted' })).ok).toBe(true);
 }
@@ -116,9 +133,9 @@ async function breakApi(apiId: string, failure: { failureClass?: 'extraction' | 
 /** Issue d'une tentative, jouée comme le worker : machine à états d'abord (exécuteur d'enquête), puis clôture du run. */
 async function settle(apiId: string, runId: string, event: StatusEventInput | null, result: RunResult, costUsd = 0.02): Promise<void> {
   await pool.query("UPDATE runs SET state = 'running', started_at = now(), cost_llm_usd = $2 WHERE id = $1", [runId, costUsd]);
-  if (event !== null) await applyStatusAndNotify(pool, queue, { apiId, runId, event, clock: { now } }, { now });
+  if (event !== null) await applyStatusAndNotify(pool, ctx.queue, { apiId, runId, event, clock: { now } }, { now, persistence: ctx });
   const { job_id } = (await pool.query<{ job_id: string }>('SELECT job_id FROM runs WHERE id = $1', [runId])).rows[0]!;
-  expect(await finishRunAndNotify(pool, queue, { runId, jobId: job_id, result, now }, { persistence: ctx })).toBe(true);
+  expect(await finishRunAndNotify(pool, ctx.queue, { runId, jobId: job_id, result, now }, { persistence: ctx })).toBe(true);
 }
 const failedAttempt = (apiId: string, runId: string) =>
   settle(apiId, runId, { type: 'investigation_failed', cause: 'budget_exhausted' }, { state: 'failed', failure_class: 'run_budget_exceeded', retryable: false, error_detail: 'investigation_budget_usd' });
@@ -348,6 +365,20 @@ describe('assert_persistence_schedule_and_caps', () => {
     expect((await pool.query("SELECT repair_lease_owner FROM apis WHERE id = $1", [api])).rows[0].repair_lease_owner).toBeNull();
   });
 
+  test('tentative annulée : jamais figée « en cours » — le filet la réveille, la 21 ramène l’API en erreur, fin du mode (un humain l’a arrêtée)', async () => {
+    const api = await newApi();
+    await enable(api);
+    await breakApi(api);
+    clock += HOUR;
+    const { runId } = await tickLaunched(api);
+    await pool.query("UPDATE runs SET state = 'cancelled', finished_at = now() WHERE id = $1", [runId]);
+    expect(await sweepDuePersistence(pool, ctx)).toBeGreaterThanOrEqual(1);
+    expect(await runPersistenceAttempt(pool, ctx, api)).toEqual({ kind: 'idle', reason: 'attempt_settled' });
+    expect(await statusOf(api)).toEqual({ status: 'erreur', status_reason: 'reinvestigation_failed' });
+    expect(await readPersistenceState(pool, { apiId: api, userId: A })).toMatchObject({ ended: 'ineligible', in_progress: false });
+    expect((await pool.query('SELECT repair_lease_owner FROM apis WHERE id = $1', [api])).rows[0].repair_lease_owner).toBeNull();
+  });
+
   test('trois API en erreur sur le même domaine : une seule tentative par créneau, la suivante après l’issue', async () => {
     const host = `zz-test-${randomUUID().slice(0, 8)}.example`;
     const apis = [await newApi({ host }), await newApi({ host: `www.${host}` }), await newApi({ host: `shop.${host}` })];
@@ -360,8 +391,9 @@ describe('assert_persistence_schedule_and_caps', () => {
     expect(await runPersistenceAttempt(pool, ctx, apis[1]!)).toMatchObject({ kind: 'deferred', reason: 'domain_slot' });
     expect(await runPersistenceAttempt(pool, ctx, apis[2]!)).toMatchObject({ kind: 'deferred', reason: 'domain_slot' });
     await failedAttempt(apis[0]!, first.runId);
-    // Issue connue mais même créneau : toujours un seul essai sur le domaine.
-    expect(await runPersistenceAttempt(pool, ctx, apis[1]!)).toMatchObject({ kind: 'deferred', reason: 'domain_slot' });
+    // Issue connue mais même créneau : toujours un seul essai sur le domaine (report jusqu'à la fin du créneau).
+    expect(['not_due', 'deferred']).toContain((await runPersistenceAttempt(pool, ctx, apis[1]!)).kind);
+    expect(await attemptRuns(apis[1]!)).toBe(0);
     clock += HOUR;
     expect((await tickLaunched(apis[1]!)).attempt).toBe(1);
     expect(await runPersistenceAttempt(pool, ctx, apis[2]!)).toMatchObject({ kind: 'deferred', reason: 'domain_slot' });

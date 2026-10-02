@@ -54,7 +54,7 @@ export const BACKOFF_CLASSES = ['extraction', 'code_error', 'network', 'robots_u
 
 export type ReinvestigationTrigger = 'manual' | 'schema_changed' | 'force_investigate';
 
-/** État persistant de la machine. `previousStatus` n'a de sens qu'en `enquete` (transition 21). */
+/** État persistant de la machine. `previousStatus` n'a de sens qu'en `enquete` (transition 21) : `sain`, `warning`, ou `erreur` pendant une tentative de persistance. */
 export type ApiStatusState = {
   status: Status;
   reason: string | null;
@@ -85,6 +85,11 @@ export type StatusEventInput =
   | { type: 'reinvestigate'; trigger: ReinvestigationTrigger }
   /** Backoff automatique depuis `erreur` (16), réservé à certaines classes ; `attempt` compte à partir de 0. */
   | { type: 'backoff_elapsed'; failureClass: FailureClass; attempt: number }
+  /**
+   * Tentative du mode « SYM ne lâche pas » (D-49, 2.16) : la 16 depuis `erreur` seulement, pour une classe de la 16 ;
+   * `erreur` devient le statut précédent, de sorte qu'un échec repasse par la 21 (jamais la 2) et un succès par la 1.
+   */
+  | { type: 'persistence_attempt'; failureClass: FailureClass }
   /** L'utilisateur a agi : connexion, proxy, paiement, tunnel (17). */
   | { type: 'user_acted' };
 
