@@ -122,15 +122,17 @@ describe('quickstart', () => {
     expect(en.code).toContain('process.env.SYMB_API_KEY');
   });
 
-  test('docker run de la doc : seccomp, no-new-privileges et --cap-drop ALL, MASTER_KEY générée', () => {
+  test("docker run de l'image de la doc : seccomp, no-new-privileges et --cap-drop ALL, MASTER_KEY générée", () => {
     for (const path of files(DOCS)) {
       for (const block of codeBlocks(read(path))) {
-        const commands = block.code.replace(/\\\n\s*/g, ' ').split('\n').filter((line) => /\bdocker run\b/.test(line));
+        // Seules les commandes qui lancent l'image SYM Browser (pas celle de PostgreSQL).
+        const commands = block.code.replace(/\\\n\s*/g, ' ').split('\n').filter((line) => /\bdocker run\b/.test(line) && line.includes('sym-browser:'));
         for (const line of commands) {
           expect(line, path).toContain('--security-opt seccomp=');
           expect(line, path).toContain('--security-opt no-new-privileges');
           expect(line, path).toContain('--cap-drop ALL');
-          if (line.includes('MASTER_KEY')) expect(line, path).toMatch(/MASTER_KEY="?\$\(openssl rand -base64 32\)"?/);
+          // MASTER_KEY : générée sur place, ou exportée avant (et sauvegardée) puis passée par `-e MASTER_KEY` ; jamais écrite.
+          for (const m of line.matchAll(/MASTER_KEY(=\S*)?/g)) expect(m[1] ?? '', path).toMatch(/^(|="?\$\(openssl rand -base64 32\)"?|="?\$\{?MASTER_KEY\}?"?)$/);
         }
       }
     }
@@ -178,7 +180,9 @@ describe('un guide par client CDP (04f § 7)', () => {
       for (const locale of DOC_LOCALES) {
         const text = read(join(locale, 'clients', page));
         for (const param of client.params) expect(text, `${locale}/clients/${page} : ${param}`).toContain(param);
-        expect(text.includes('Authorization: Bearer') || text.includes('Bearer'), `${locale}/clients/${page} : Bearer`).toBe(client.bearer);
+        // Jeton de connexion en en-tête `Authorization: Bearer` pour les clients qui le permettent (la création de session,
+        // elle, passe toujours la clé d'API en Bearer : on ne teste donc pas l'absence du mot pour les autres).
+        if (client.bearer) expect(text, `${locale}/clients/${page} : Bearer`).toMatch(/Bearer (\$\{token\}|<connect token>|<jeton de connexion>)/);
         expect(text, `${locale}/clients/${page} : jeton en query`).toContain('?token=');
         expect(codeBlocks(text).some((b) => b.info.startsWith(client.lang)), `${locale}/clients/${page} : bloc ${client.lang}`).toBe(true);
       }
