@@ -6,7 +6,7 @@
 // `X-Request-Id` ; chaque erreur suit 04 § 6. L'authentification, les jetons et le démarrage sur un nœud passent par les
 // interfaces de types.ts (tâches 2.1, 2.3, 2.4).
 import { randomBytes } from 'node:crypto';
-import { endStateFor, isTerminal, resolveSessionType } from '@sym-browser/core';
+import { endStateFor, isTerminal, liveViewUrl, resolveSessionType } from '@sym-browser/core';
 import {
   claimIdempotencyKey,
   completeIdempotencyKey,
@@ -154,6 +154,8 @@ export async function createGatewayApi(deps: GatewayDeps): Promise<FastifyInstan
     type: view.type,
     ...(view.nodeRegion === null ? {} : { nodeRegion: view.nodeRegion }),
     ...(view.state === 'running' ? { connectUrls: await connectUrls(view.id, view.type) } : {}),
+    // Vue en direct (04d § 1.1) : page de la console, jeton de lecture seule de 15 min ; `rw` par la route dédiée (contrat).
+    ...(view.state === 'running' && deps.relay?.liveTokens !== undefined ? { liveViewUrl: liveViewUrl(deps.publicUrl, view.id, deps.relay.liveTokens.issue({ sessionId: view.id, mode: 'ro' }).token) } : {}),
     expiresAt: view.expiresAt.toISOString(),
     createdAt: view.createdAt.toISOString(),
     ...(view.endReason === null ? {} : { endReason: view.endReason }),
@@ -214,7 +216,7 @@ export async function createGatewayApi(deps: GatewayDeps): Promise<FastifyInstan
     const verify = deps.tokens.verify;
     if (!verify) throw new Error('relais WSS : la vérification des jetons de connexion (tokens.verify) est requise');
     await registerRelay(app, {
-      resolver: createDbRelayResolver({ db: deps.db, auth: deps.auth, tokens: { verify } }),
+      resolver: createDbRelayResolver({ db: deps.db, auth: deps.auth, tokens: { verify }, ...(deps.relay.liveTokens === undefined ? {} : { liveTokens: deps.relay.liveTokens }) }),
       nodeToken: deps.relay.nodeToken,
       ...(deps.relay.pingIntervalMs === undefined ? {} : { pingIntervalMs: deps.relay.pingIntervalMs }),
       ...(deps.relay.cdpMaxMessageBytes === undefined ? {} : { cdpMaxMessageBytes: deps.relay.cdpMaxMessageBytes }),

@@ -6,7 +6,9 @@
 // sans dire laquelle : rien ne révèle l'existence d'une session d'un autre client. Seule une clé valide de BON client sans
 // le scope reçoit 403. Session `pending` : 503 no_node (réessayer) ; CDP sur shared : 409 protocol_not_served ; nœud porteur
 // déclaré `down` : 503 no_node.
-import { isConnectToken, isTerminal, type ConnectTokens } from '@sym-browser/core';
+// Vue en direct (`live`, tâche 3.2) : seul le jeton de vue est accepté (`LiveTokens` : session, mode, échéance) ; jeton absent,
+// invalide, expiré ou d'une autre session, session inconnue ou terminée : 401 ; le mode du jeton est transmis au nœud.
+import { isConnectToken, isTerminal, type ConnectTokens, type LiveTokens } from '@sym-browser/core';
 import { getRelayTarget } from '@sym-browser/db';
 import type pg from 'pg';
 import { ApiProblem } from '../api/errors.js';
@@ -16,10 +18,18 @@ import type { RelayAuthorization, RelayResolver } from './relay.js';
 
 const unauthorized = (): RelayAuthorization => ({ ok: false, problem: new ApiProblem('unauthorized', 'Missing, invalid or expired credential for this session.') });
 
-export function createDbRelayResolver(deps: { db: pg.Pool; auth: Authenticator; tokens: Pick<ConnectTokens, 'verify'> }): RelayResolver {
+export function createDbRelayResolver(deps: { db: pg.Pool; auth: Authenticator; tokens: Pick<ConnectTokens, 'verify'>; liveTokens?: Pick<LiveTokens, 'verify'> }): RelayResolver {
   return {
     async authorize({ sessionId, protocol, secret }) {
       if (secret === null || !UUID.test(sessionId)) return unauthorized();
+      if (protocol === 'live') {
+        const check = deps.liveTokens?.verify(secret, sessionId);
+        if (!check?.ok) return unauthorized();
+        const target = await getRelayTarget(deps.db, sessionId);
+        if (!target || isTerminal(target.state)) return unauthorized();
+        if (target.state !== 'running' || !target.nodeUrl || target.nodeState === 'down') return { ok: false, problem: new ApiProblem('no_node', 'Session node unavailable.', { retryAfter: 1 }) };
+        return { ok: true, nodeUrl: target.nodeUrl, sessionId, liveMode: check.mode };
+      }
       let tenantId: string | undefined;
       if (isConnectToken(secret)) {
         const check = deps.tokens.verify(secret);

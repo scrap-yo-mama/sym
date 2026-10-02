@@ -8,6 +8,7 @@
 //     choix du nœud et file (tâche 2.4).
 import type { ConnectTokens } from '@sym-browser/core';
 import type pg from 'pg';
+import type { LiveTokens } from '@sym-browser/core';
 import type { CreateSessionRequest, SessionType } from '@sym/contracts/browser';
 
 /** Scopes d'une clé d'API (04 § 1). */
@@ -60,8 +61,11 @@ export type GatewayDeps = {
   defaults?: { timeoutSeconds?: number; idleTimeoutSeconds?: number };
   /** Plateforme servie (`GET /v1/version`), défaut `process.platform`. */
   platform?: string;
-  /** Relais WSS `/playwright` et `/cdp` (tâche 2.3) ; absent : routes non servies. */
-  relay?: { nodeToken: string; pingIntervalMs?: number; cdpMaxMessageBytes?: number };
+  /**
+   * Relais WSS `/playwright` et `/cdp` (tâche 2.3) ; absent : routes non servies. `liveTokens` (tâche 3.2) : vue en direct,
+   * `liveViewUrl` dans les réponses et relais `/live/stream` ; absent : ni l'un ni l'autre.
+   */
+  relay?: { nodeToken: string; pingIntervalMs?: number; cdpMaxMessageBytes?: number; liveTokens?: Pick<LiveTokens, 'issue' | 'verify'> };
   /** Erreur interne (500) : journal masqué de la passerelle. */
   onError?: (error: unknown) => void;
 };

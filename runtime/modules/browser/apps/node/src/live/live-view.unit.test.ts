@@ -36,10 +36,12 @@ class FakePage {
   closed = false;
   readonly cdp = new FakeCdp();
   readonly #listeners = new Map<string, (() => void)[]>();
-  constructor(
-    readonly address: string,
-    readonly heading: string,
-  ) {}
+  readonly address: string;
+  readonly heading: string;
+  constructor(address: string, heading: string) {
+    this.address = address;
+    this.heading = heading;
+  }
   url(): string {
     return this.address;
   }

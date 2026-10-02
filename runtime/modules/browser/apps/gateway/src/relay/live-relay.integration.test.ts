@@ -8,7 +8,7 @@
 import { randomBytes } from 'node:crypto';
 import { request as httpRequest } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { LiveTokens, MasterKey } from '@sym-browser/core';
+import { LiveTokens, MasterKey, createConnectTokens } from '@sym-browser/core';
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import { WebSocket, WebSocketServer } from 'ws';
 import { createHarness, type Harness } from '../../test/helpers/harness.js';
@@ -46,7 +46,7 @@ let other: string;
 
 beforeAll(async () => {
   node = await fakeNode();
-  h = await createHarness({ nodeUrl: node.url, relay: { nodeToken: NODE_TOKEN, liveTokens } });
+  h = await createHarness({ nodeUrl: node.url, tokens: createConnectTokens(randomBytes(32)), relay: { nodeToken: NODE_TOKEN, liveTokens } });
   await h.app.listen({ host: '127.0.0.1', port: 0 });
   base = `ws://127.0.0.1:${(h.app.server.address() as AddressInfo).port}`;
   session = (await h.call({ method: 'POST', url: '/v1/sessions', body: { type: 'shared', liveView: { interactive: true } } })).body.id;
@@ -59,7 +59,7 @@ afterAll(async () => {
 
 function status(url: string, headers: Record<string, string> = {}): Promise<number> {
   return new Promise((resolve, reject) => {
-    const req = httpRequest(url.replace(/^ws/, 'http'), { headers: { connection: 'Upgrade', upgrade: 'websocket', 'sec-websocket-version': '13', 'sec-websocket-key': randomBytes(16).toString('base64'), ...headers } });
+    const req = httpRequest(url.replace(/^ws/, 'http'), { agent: false, headers: { connection: 'Upgrade', upgrade: 'websocket', 'sec-websocket-version': '13', 'sec-websocket-key': randomBytes(16).toString('base64'), ...headers } });
     req.on('response', (res) => (res.resume(), resolve(res.statusCode ?? 0)));
     req.on('upgrade', (_res, socket) => (socket.destroy(), resolve(101)));
     req.on('error', reject);

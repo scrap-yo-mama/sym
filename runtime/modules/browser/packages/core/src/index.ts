@@ -3,6 +3,7 @@
 // configuration, modes et hôte de service (0.4), stockage des objets (3.0).
 export * from './crypto/index.js';
 export * from './storage/index.js';
+export * from './live/index.js';
 export {
   BROWSER_ENV_CATALOG,
   BROWSER_ENV_GROUPS,

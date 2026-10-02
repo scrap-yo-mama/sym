@@ -99,7 +99,7 @@ const streamUrl = (sessionId: string, token: string) => `${gatewayBase}/v1/sessi
 
 function upgradeStatus(url: string): Promise<number> {
   return new Promise((resolve, reject) => {
-    const req = request(url.replace(/^ws/, 'http'), { headers: { Connection: 'Upgrade', Upgrade: 'websocket', 'Sec-WebSocket-Key': randomBytes(16).toString('base64'), 'Sec-WebSocket-Version': '13' } });
+    const req = request(url.replace(/^ws/, 'http'), { agent: false, headers: { Connection: 'Upgrade', Upgrade: 'websocket', 'Sec-WebSocket-Key': randomBytes(16).toString('base64'), 'Sec-WebSocket-Version': '13' } });
     req.on('response', (res) => (res.resume(), resolve(res.statusCode ?? 0)));
     req.on('upgrade', (res, socket) => (socket.destroy(), resolve(res.statusCode ?? 0)));
     req.on('error', reject);
@@ -141,12 +141,16 @@ describe('vue en direct de bout en bout (recette étape 6)', () => {
       const frame = v.messages.find((m): m is Extract<LiveServerMessage, { t: 'frame' }> => m.t === 'frame')!;
       expect(Buffer.from(frame.data, 'base64').subarray(0, 2).toString('hex')).toBe('ffd8');
       expect(v.messages[0]).toMatchObject({ t: 'meta', url: 'https://zz-live.invalid/', title: 'Vue', mode: 'ro' });
+      // Relevé avant les messages du visionneur : Chromium émet lui-même un mousemove synthétique au chargement d'une page.
+      const page = session.context.pages()[0]!;
+      const counters = () => page.evaluate(() => ({ clicks: (window as unknown as { __clicks: number }).__clicks, inputs: (window as unknown as { __inputs: number }).__inputs }));
+      const before = await counters();
       for (let i = 0; i < 50; i += 1) v.send(i % 2 === 0 ? { t: 'mouse', type: 'click', x: 300, y: 200 } : { t: 'key', type: 'down', key: 'a' });
       v.send({ t: 'text', text: 'bonjour' });
       v.send({ t: 'ping' });
       await v.until(() => v.messages.some((m) => m.t === 'pong'), 'pong');
-      const page = session.context.pages()[0]!;
-      expect(await page.evaluate(() => ({ clicks: (window as unknown as { __clicks: number }).__clicks, inputs: (window as unknown as { __inputs: number }).__inputs }))).toEqual({ clicks: 0, inputs: 0 });
+      // 0 événement d'entrée transmis : rien ne s'ajoute au relevé, aucun clic.
+      expect(await counters()).toEqual({ clicks: 0, inputs: before.inputs });
       expect(v.messages.some((m) => m.t === 'notice')).toBe(true);
       v.ws.close();
     } finally {

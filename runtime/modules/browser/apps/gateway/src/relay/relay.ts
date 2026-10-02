@@ -8,6 +8,9 @@
 // secret du client n'est jamais transmis) : messages transmis sans modification (réécritures : nœud), codes de fermeture
 // propagés dans les deux sens, ping toutes les 20 s et fermeture 1001 après deux pongs manquants, messages plafonnés
 // (`SYMB_CDP_MAX_MESSAGE_BYTES`, fermeture 1009), nœud injoignable : 1011. Fermer la WebSocket ne libère pas la session.
+// Vue en direct (tâche 3.2, 04d § 1.1) : `/v1/sessions/{id}/live/stream?t=<jeton de vue>`, jeton vérifié de la même façon
+// avant l'upgrade (seul secret accepté : la query `t`), relais vers `/internal/sessions/{id}/live` avec le mode du jeton
+// (`x-symb-live-mode`) ; le jeton du visionneur n'est jamais transmis au nœud.
 import { sendableCloseCode } from '@sym-browser/core';
 import { BROWSER_ENGINE } from '@sym/contracts/browser';
 import fastifyWebsocket from '@fastify/websocket';
@@ -15,9 +18,9 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { WebSocket, type RawData } from 'ws';
 import { ApiProblem, preferredLanguage } from '../api/errors.js';
 
-type RelayProtocol = 'playwright' | 'cdp';
+type RelayProtocol = 'playwright' | 'cdp' | 'live';
 
-export type RelayAuthorization = { ok: true; nodeUrl: string; sessionId: string } | { ok: false; problem: ApiProblem };
+export type RelayAuthorization = { ok: true; nodeUrl: string; sessionId: string; liveMode?: 'ro' | 'rw' } | { ok: false; problem: ApiProblem };
 
 export interface RelayResolver {
   /** `secret` : jeton de session ou clé d'API reçu par le client ; `null` s'il n'en a donné aucun. */
@@ -37,7 +40,7 @@ export type RelayOptions = {
 
 declare module 'fastify' {
   interface FastifyRequest {
-    relayTarget?: { nodeUrl: string; sessionId: string };
+    relayTarget?: { nodeUrl: string; sessionId: string; liveMode?: 'ro' | 'rw' };
   }
 }
 
@@ -49,7 +52,11 @@ function playwrightClientAccepted(userAgent: string | undefined): boolean {
   return match !== null && `${match[1]}.${match[2]}` === SERVED_MINOR;
 }
 
-function secretOf(request: FastifyRequest): string | null {
+function secretOf(request: FastifyRequest, protocol: RelayProtocol): string | null {
+  if (protocol === 'live') {
+    const t = (request.query as Record<string, unknown>)['t'];
+    return typeof t === 'string' && t !== '' ? t : null;
+  }
   const token = (request.query as Record<string, unknown>)['token'];
   if (typeof token === 'string' && token !== '') return token;
   const header = request.headers.authorization;
@@ -71,17 +78,17 @@ export async function registerRelay(app: FastifyInstance, options: RelayOptions)
 
   const route = (protocol: RelayProtocol): void => {
     app.get(
-      `/v1/sessions/:id/${protocol}`,
+      protocol === 'live' ? '/v1/sessions/:id/live/stream' : `/v1/sessions/:id/${protocol}`,
       {
         websocket: true,
         preValidation: async (request, reply) => {
           const sessionId = (request.params as { id: string }).id;
-          const decision = await options.resolver.authorize({ sessionId, protocol, secret: secretOf(request) });
+          const decision = await options.resolver.authorize({ sessionId, protocol, secret: secretOf(request, protocol) });
           if (!decision.ok) return fail(request, reply, decision.problem);
           if (protocol === 'playwright' && !playwrightClientAccepted(request.headers['user-agent'])) {
             return fail(request, reply, new ApiProblem('playwright_version_mismatch', `Playwright client ${SERVED_MINOR}.x required.`, { details: { served: BROWSER_ENGINE.playwright } }));
           }
-          request.relayTarget = { nodeUrl: decision.nodeUrl, sessionId: decision.sessionId };
+          request.relayTarget = { nodeUrl: decision.nodeUrl, sessionId: decision.sessionId, ...(protocol === 'live' ? { liveMode: decision.liveMode === 'rw' ? 'rw' : 'ro' } : {}) };
           return undefined;
         },
       },
@@ -89,7 +96,9 @@ export async function registerRelay(app: FastifyInstance, options: RelayOptions)
         const target = request.relayTarget;
         if (!target) return client.close(1011, 'relais sans cible');
         const nodeWs = `${target.nodeUrl.replace(/\/+$/, '').replace(/^http/, 'ws')}/internal/sessions/${encodeURIComponent(target.sessionId)}/${protocol}`;
-        const upstream = new WebSocket(nodeWs, { headers: { authorization: `Bearer ${options.nodeToken}` }, maxPayload, perMessageDeflate: false });
+        const headers: Record<string, string> = { authorization: `Bearer ${options.nodeToken}` };
+        if (target.liveMode !== undefined) headers['x-symb-live-mode'] = target.liveMode;
+        const upstream = new WebSocket(nodeWs, { headers, maxPayload, perMessageDeflate: false });
         const queue: { data: RawData; binary: boolean }[] = [];
         let closing = false;
         let missedPongs = 0;
@@ -147,4 +156,5 @@ export async function registerRelay(app: FastifyInstance, options: RelayOptions)
   };
   route('playwright');
   route('cdp');
+  route('live');
 }

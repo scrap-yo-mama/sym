@@ -18,7 +18,8 @@ import { sessionDir, type SessionDir } from '../dedicated/dedicated.js';
 import type { AcquireRequest, LeaseEndReason, PoolLease } from '../pool/index.js';
 import { anyRecording, recordingOptions } from '../recordings/options.js';
 import type { ActiveRecording, SessionRecorder } from '../recordings/recorder.js';
-import { sharedContextOptions, type SharedSessionInput } from './options.js';
+import type { LiveViews } from '../live/live-views.js';
+import { InvalidSessionOptionError, sharedContextOptions, type SharedSessionInput } from './options.js';
 import { servedProtocols, type SessionProtocol } from './protocols.js';
 
 /** Fins possibles d'une session shared vues par le nœud (sous-ensemble de `EndReason`). */
@@ -51,6 +52,8 @@ export type SharedSessionsOptions = {
   dataDir?: string;
   /** Enregistrements des sessions (tâche 3.3) ; exige `dataDir`. */
   recorder?: SessionRecorder;
+  /** Vues en direct (tâche 3.2) : une par session, ouverte à la création, fermée en tête de la destruction. */
+  liveViews?: LiveViews;
 };
 
 export type CreateSharedSession = {
@@ -63,6 +66,8 @@ export type CreateSharedSession = {
   egressProxyUrl?: string;
   /** Option `recordings` de la session (04d § 2.1). */
   recordings?: RecordingOptions;
+  /** Option `liveView` de la session (04 § 3) : `interactive` permet les entrées d'un visionneur au jeton `rw`. */
+  liveView?: { interactive?: boolean };
 };
 
 type State = { session: SharedSession; lease: PoolLease; dir: SessionDir | undefined; recording: ActiveRecording | undefined; ending: Promise<void> | null; reason: SharedEndReason | null };
@@ -90,6 +95,10 @@ export class SharedSessions {
   async create(request: CreateSharedSession): Promise<SharedSession> {
     // Validation d'abord : une option invalide ne réserve aucun slot.
     const contextOptions = sharedContextOptions(request.options, request.egressProxyUrl === undefined ? {} : { egressProxyUrl: request.egressProxyUrl });
+    const live = request.liveView as unknown;
+    if (live !== undefined && (typeof live !== 'object' || live === null || Array.isArray(live) || Object.keys(live).some((k) => k !== 'interactive') || ((live as { interactive?: unknown }).interactive !== undefined && typeof (live as { interactive?: unknown }).interactive !== 'boolean'))) {
+      throw new InvalidSessionOptionError([{ field: 'liveView', reason: 'objet {interactive: booléen} attendu' }]);
+    }
     const recordings = recordingOptions(request.recordings);
     const recording = anyRecording(recordings);
     if (recording && (this.#options.recorder === undefined || this.#options.dataDir === undefined)) throw new RangeError('enregistrements demandés : recorder et dataDir requis sur ce nœud');
@@ -118,6 +127,7 @@ export class SharedSessions {
         await lease.release();
         throw error;
       }
+      if (this.#options.liveViews !== undefined && context !== undefined) this.#options.liveViews.open({ sessionId: request.sessionId, context, interactive: request.liveView?.interactive === true });
       const state: State = { session: undefined as unknown as SharedSession, lease, dir: created ? dir : undefined, recording: active, ending: null, reason: null };
       state.session = {
         sessionId: request.sessionId,
@@ -152,6 +162,8 @@ export class SharedSessions {
       state.reason = reason;
       this.#sessions.delete(state.session.sessionId);
       // Enregistrements arrêtés et déposés tant que le contexte vit (étape 5 de la destruction, 04c § 3.2).
+      // Visionneurs prévenus ({t: closed}) et screencasts arrêtés en premier : plus aucune entrée n'atteint la session.
+      await this.#options.liveViews?.close(state.session.sessionId, reason).catch(() => undefined);
       await state.recording?.stop().catch(() => undefined);
       let timer: NodeJS.Timeout | undefined;
       await Promise.race([

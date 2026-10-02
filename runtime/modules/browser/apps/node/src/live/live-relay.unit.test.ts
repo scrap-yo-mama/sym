@@ -48,7 +48,7 @@ async function setup(interactive: boolean) {
 
 function status(url: string, headers: Record<string, string>): Promise<number> {
   return new Promise((resolve, reject) => {
-    const req = httpRequest(url.replace(/^ws/, 'http'), { headers: { connection: 'Upgrade', upgrade: 'websocket', 'sec-websocket-version': '13', 'sec-websocket-key': 'dGhlIHNhbXBsZSBub25jZQ==', ...headers } });
+    const req = httpRequest(url.replace(/^ws/, 'http'), { agent: false, headers: { connection: 'Upgrade', upgrade: 'websocket', 'sec-websocket-version': '13', 'sec-websocket-key': 'dGhlIHNhbXBsZSBub25jZQ==', ...headers } });
     req.on('response', (res) => (res.resume(), resolve(res.statusCode ?? 0)));
     req.on('upgrade', (_res, socket) => (socket.destroy(), resolve(101)));
     req.on('error', reject);

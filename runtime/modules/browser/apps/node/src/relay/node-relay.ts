@@ -8,12 +8,16 @@
 // message du client passe par les réécritures (rewrite.ts) et compte comme activité (délai d'inactivité, tâche 1.2) ; les
 // messages du navigateur reviennent tels quels ; les codes de fermeture se propagent ; au-delà de `maxMessageBytes`,
 // fermeture 1009. La déconnexion du client ne libère pas la session (04 § 8) ; seul `Browser.close` le fait.
+// Vue en direct (tâche 3.2, 04d § 1.2) : `WS /internal/sessions/{id}/live`, après le même contrôle du jeton de nœud ; le
+// visionneur est rattaché à la `LiveView` de la session dans le mode annoncé par la passerelle (`x-symb-live-mode`, qui a
+// vérifié le jeton de vue) : `rw` seulement s'il est annoncé, lecture seule sinon.
 import { createHash, timingSafeEqual } from 'node:crypto';
 import type { IncomingMessage } from 'node:http';
 import type { Duplex } from 'node:stream';
 import { sendableCloseCode } from '@sym-browser/core';
 import type { SessionType } from '@sym/contracts/browser';
 import { WebSocket, WebSocketServer, type RawData } from 'ws';
+import { attachLiveSocket, type LiveView } from '../live/index.js';
 import { rewriteCdpMessage, rewritePlaywrightMessage, type RewriteContext, type RewriteResult } from './rewrite.js';
 
 /** Points locaux d'une session tenue par ce nœud (pool 1.1, sessions 1.3 et 1.4, egress 1.5). */
@@ -38,6 +42,8 @@ export type NodeRelayOptions = {
   /** Taille maximale d'un message (`SYMB_CDP_MAX_MESSAGE_BYTES`, 100 Mio par défaut) ; au-delà, fermeture 1009. */
   maxMessageBytes?: number;
   onError?: (error: unknown) => void;
+  /** Vues en direct des sessions de ce nœud (tâche 3.2) ; sans elles, `/live` répond 404. */
+  live?: { get(sessionId: string): LiveView | undefined };
 };
 
 export type NodeRelay = {
@@ -137,6 +143,16 @@ export function createNodeRelay(options: NodeRelayOptions): NodeRelay {
       const match = PATH.exec(path);
       const protocol = match?.[2];
       const sessionId = match?.[1] ? decodeURIComponent(match[1]) : undefined;
+      if (sessionId && protocol === 'live') {
+        const view = options.live?.get(sessionId);
+        if (!view) {
+          refuse(socket, 404, 'session_not_found');
+          return true;
+        }
+        const mode = request.headers['x-symb-live-mode'] === 'rw' ? 'rw' : 'ro';
+        wss.handleUpgrade(request, socket, head, (client) => attachLiveSocket(view, client, mode));
+        return true;
+      }
       if (!sessionId || (protocol !== 'playwright' && protocol !== 'cdp')) {
         refuse(socket, 404, 'session_not_found');
         return true;
