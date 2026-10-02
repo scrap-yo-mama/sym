@@ -2,7 +2,7 @@
 // Bac à sable (INV7, tâche 1.5), niveau unitaire : borne d'isolated-vm, validation des ponts (dont fuzz), protocole IPC.
 // La suite hostile de bout en bout (`assert_sandbox`) est dans sandbox.security.test.ts (pnpm test:security).
 import { spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import fc from 'fast-check';
@@ -11,7 +11,7 @@ import { describe, expect, test } from 'vitest';
 import { SsrfGuard } from '@runtime/core/net';
 import { createSandboxBridges, domainAllowed, normalizeDomain, SandboxBridgeError, validateFetchRequest, type BridgeResponse } from './bridges.js';
 import type { SandboxBridges } from '@runtime/core';
-import { killPlan, ProcessSandboxEngine, sandboxOptionsFromEnv, spawnPlan, sweepPlan, unexpectedEnvKeys } from './engine.js';
+import { killPlan, ProcessSandboxEngine, sandboxOptionsFromEnv, sandboxSurvivors, spawnPlan, SweepScheduler, sweepIdentityPlan, sweepIdentityRefusal, sweepPlan, sweepRefusal, unexpectedEnvKeys } from './engine.js';
 import { parseChildMessage } from './protocol.js';
 import { checkIsolatedVmVersion, installedIsolatedVmVersion } from './version.js';
 
@@ -248,8 +248,32 @@ describe('utilisateur dédié, lanceur et plafond CPU (08 §3)', () => {
     // SANDBOX_NODE : Node de l'enfant, distinct de la copie à capacités de fichier sous laquelle tourne le worker.
     expect(sandboxOptionsFromEnv({ SANDBOX_NODE: '/usr/bin/node' })).toEqual({ node: '/usr/bin/node' });
     expect(sandboxOptionsFromEnv({ SANDBOX_NODE: '' })).toEqual({});
+    // SANDBOX_SECCOMP : filtre seccomp posé sur l'enfant (aucun espace de noms, revue 4.1b).
+    expect(sandboxOptionsFromEnv({ SANDBOX_SECCOMP: '/usr/local/libexec/sandbox-seccomp' })).toEqual({ seccomp: '/usr/local/libexec/sandbox-seccomp' });
+    expect(sandboxOptionsFromEnv({ SANDBOX_SECCOMP: '' })).toEqual({});
     expect(() => sandboxOptionsFromEnv({ SANDBOX_UID: 'abc' })).toThrow(/SANDBOX_UID/);
     expect(() => sandboxOptionsFromEnv({ SANDBOX_UID: '1500' })).toThrow(/SANDBOX_GID/);
+  });
+
+  test('assert_sandbox_probe_discriminating — uid ou gid 0, ou groupe du worker, refusés pour l’enfant (revue 4.1b) : le lanceur détient CAP_SETUID effectif', () => {
+    // SANDBOX_UID=0 : l'enfant tournerait root, propriétaire de /usr/bin/node, entrypoint.sh, /app. SANDBOX_GID d'un groupe
+    // du worker (pwuser) : l'enfant exécuterait node-worker et sandbox-launch et lirait les fichiers du groupe.
+    expect(() => new ProcessSandboxEngine({ production: false, uid: 0, gid: 1500 })).toThrow(/SANDBOX_UID.*0/);
+    expect(() => new ProcessSandboxEngine({ production: false, uid: 1500, gid: 0 })).toThrow(/SANDBOX_GID.*0/);
+    const ownGid = process.getgid?.() ?? 0;
+    if (ownGid !== 0) expect(() => new ProcessSandboxEngine({ production: false, uid: 1500, gid: ownGid })).toThrow(/SANDBOX_GID.*groupe du worker/);
+    for (const g of (process.getgroups?.() ?? []).filter((x) => x !== 0)) {
+      expect(() => new ProcessSandboxEngine({ production: false, uid: 1500, gid: g }), String(g)).toThrow(/SANDBOX_GID.*groupe du worker/);
+    }
+    expect(() => new ProcessSandboxEngine({ production: false, uid: 1500, gid: 1500 })).not.toThrow();
+  });
+
+  test('assert_sandbox_probe_discriminating — sonde d’isolation : fichier témoin 0600 du worker, lisible sous le même uid (la sonde le dit)', async () => {
+    // Sous no-new-privileges, /proc/<worker>/environ est refusé à tout processus sans capacité, même du MÊME uid : la sonde
+    // lit donc aussi un fichier témoin du worker, que seul un autre uid ne peut pas lire (revue 4.1b).
+    const probe = await new ProcessSandboxEngine({ production: false, node: process.execPath }).probeIsolation();
+    expect(probe.uid).toBe(process.getuid?.());
+    expect(probe.witness).toBe('readable');
   });
 
   test('commande de lancement : lanceur setpriv EXÉCUTÉ PAR LE WORKER, puis RLIMIT_CPU et environnement vidé sous l’uid dédié', () => {
@@ -286,6 +310,148 @@ describe('utilisateur dédié, lanceur et plafond CPU (08 §3)', () => {
     expect(r.status).not.toBe(0);
   });
 
+  test('assert_sandbox_child_no_namespaces — filtre seccomp de l’enfant (SANDBOX_SECCOMP) posé AVANT le changement d’uid : premier exec du worker, puis le lanceur', () => {
+    // Le profil seccomp du compose permet clone, setns et unshare à tout le conteneur (bac à sable de Chromium) : l'enfant du bac à
+    // sable, lui, les perd (aucun espace de noms utilisateur, donc aucune capacité dans un espace imbriqué, revue 4.1b).
+    // Revue 4.1b (4) : posé APRÈS le changement d'uid, le filtre laissait une fenêtre (fin de l'exec de sandbox-seccomp, ld.so,
+    // main) où un processus de l'uid dédié, sans filtre et redevenu attachable (dumpable), existait à chaque lancement ; un
+    // enfant évadé pouvait l'accrocher (ptrace, /proc/<pid>/mem si Yama vaut 0) et y créer un espace de noms utilisateur.
+    // Le filtre est donc posé sous l'uid du worker, que l'uid dédié ne peut pas accrocher ; le lanceur, déjà filtré, change
+    // d'uid ensuite (non attachable jusqu'à l'exec du shell, filtré).
+    const plain = spawnPlan({ node: '/n', nodeArgs: [], script: 'c.js', cpuSeconds: 3 });
+    const launched = spawnPlan({ node: '/n', nodeArgs: [], script: 'c.js', cpuSeconds: 3, launcher: '/l', uid: 1500, gid: 1501, seccomp: '/s' });
+    expect(launched.command).toBe('/s');
+    expect(launched.args).toEqual(['/l', '--reuid=1500', '--regid=1501', '--clear-groups', '--no-new-privs', '--', '/bin/sh', '-c', plain.args[1], '3', '/n', 'c.js']);
+    expect(launched.uid).toBeUndefined();
+    const alone = spawnPlan({ node: '/n', nodeArgs: [], script: 'c.js', cpuSeconds: 3, seccomp: '/s' });
+    expect(alone).toEqual({ command: '/s', args: ['/bin/sh', '-c', plain.args[1], '3', '/n', 'c.js'] });
+    // La sonde d'isolation dit si l'enfant peut créer un espace de noms utilisateur (`absent` hors Linux).
+    const dockerfile = readFileSync(new URL('../../../../deploy/Dockerfile', import.meta.url), 'utf8');
+    expect(dockerfile).toMatch(/\bSANDBOX_SECCOMP=\/usr\/local\/libexec\/sandbox-seccomp\b/);
+    // Exécuté par le worker sous no-new-privileges AVANT le lanceur : il doit détenir cap_setuid,cap_setgid en permis (=p, comme
+    // node-worker), sans quoi le lanceur qu'il exécute les perdrait (intersection avec le permis de l'appelant) ; réservé au
+    // groupe pwuser.
+    expect(dockerfile).toMatch(/COPY --from=seccomp \/src\/sandbox-seccomp \/usr\/local\/libexec\/sandbox-seccomp\n/);
+    expect(dockerfile).toContain('chown root:pwuser /usr/local/libexec/sandbox-seccomp');
+    expect(dockerfile).toContain('chmod 0750 /usr/local/libexec/sandbox-seccomp');
+    expect(dockerfile).toContain('setcap cap_setuid,cap_setgid=p /usr/local/libexec/sandbox-seccomp');
+    expect(dockerfile).not.toMatch(/--chmod=0755 \/src\/sandbox-seccomp/);
+    const source = readFileSync(new URL('../../../../deploy/sandbox-seccomp.c', import.meta.url), 'utf8');
+    for (const name of ['__NR_unshare', '__NR_setns', '__NR_clone3', '__NR_clone', 'CLONE_NEWUSER', 'CLONE_NEWNET', 'PR_SET_NO_NEW_PRIVS', 'SECCOMP_RET_KILL_PROCESS']) expect(source, name).toContain(name);
+    // Ni ptrace ni lecture/écriture de la mémoire d'un autre processus pour l'enfant (EPERM) : un enfant évadé n'accroche pas
+    // les processus de l'uid dédié (runs concurrents, balayeur).
+    for (const name of ['__NR_ptrace', '__NR_process_vm_readv', '__NR_process_vm_writev']) expect(source, name).toContain(name);
+  });
+
+  test('assert_sandbox_child_no_namespaces — sonde d’isolation : création d’un espace de noms utilisateur rapportée', async () => {
+    const probe = await new ProcessSandboxEngine({ production: false, node: process.execPath }).probeIsolation();
+    expect(['allowed', 'denied', 'absent']).toContain(probe.namespaces);
+    if (process.platform !== 'linux') expect(probe.namespaces).toBe('absent');
+  });
+
+  test('assert_sandbox_child_no_namespaces — arrêt forcé (killPlan) et balayage (sweepPlan) sous l’uid dédié : même filtre seccomp que l’enfant', () => {
+    // Le profil du compose permet clone, setns et unshare au conteneur : un /bin/kill lancé sous l'uid 1500 sans filtre serait
+    // un processus de cet uid sans filtre, qu'un enfant évadé pourrait stopper puis détourner (ptrace ou /proc/<pid>/mem si
+    // Yama vaut 0) pour y créer un espace de noms utilisateur. Le filtre s'exécute donc aussi avant /bin/kill.
+    // Filtre posé AVANT le changement d'uid (revue 4.1b (4)) : premier exec, puis le lanceur.
+    const o = { launcher: '/l', uid: 1500, gid: 1501, seccomp: '/s' };
+    expect(killPlan(o, 4242)).toEqual({ command: '/s', args: ['/l', '--reuid=1500', '--regid=1501', '--clear-groups', '--no-new-privs', '--', '/bin/kill', '-KILL', '4242'] });
+    expect(sweepPlan(o)).toEqual({ command: '/s', args: ['/l', '--reuid=1500', '--regid=1501', '--clear-groups', '--no-new-privs', '--', '/bin/kill', '-KILL', '-1'] });
+    expect(sweepIdentityPlan(o)).toEqual({ command: '/s', args: ['/l', '--reuid=1500', '--regid=1501', '--clear-groups', '--no-new-privs', '--', '/usr/bin/id', '-u'] });
+  });
+
+  /**
+   * Faux filtre et faux lanceur (aucun vrai changement d'uid). Ni l'un ni l'autre n'exécute JAMAIS /bin/kill, quelle que soit sa
+   * position (F-20261002-06, D-67 : kill -1 sous notre uid tue toute la session) : le faux filtre journalise `seccomp kill <cible>`
+   * et s'arrête. Sinon il marque l'environnement (ZZ_SECCOMP=1) et exécute le lanceur, qui journalise `launch[<marque>] $1 $2`.
+   * `fakeUid` : le faux lanceur répond à `/usr/bin/id -u` par l'uid demandé (--reuid), comme le vrai ; sinon il exécute `id`
+   * pour de bon (lanceur qui ne change pas d'uid).
+   */
+  function fakeSeccompLauncher(dir: string, fakeUid: boolean): { seccomp: string; launcher: string; calls: () => string[] } {
+    const log = join(dir, 'calls.log');
+    const launcher = join(dir, 'launch.sh');
+    const seccomp = join(dir, 'seccomp.sh');
+    writeFileSync(
+      launcher,
+      `#!/bin/sh\nu=; while [ "$1" != -- ]; do case "$1" in --reuid=*) u="\${1#--reuid=}";; esac; shift; done; shift\n` +
+        `printf '%s\\n' "launch[\${ZZ_SECCOMP:-0}] $1 $2" >> '${log}'\n` +
+        `for a in "$@"; do [ "$a" = /bin/kill ] && exit 0; done\n` +
+        (fakeUid ? `[ "$1" = /usr/bin/id ] && { echo "$u"; exit 0; }\n` : '') +
+        'exec "$@"\n',
+    );
+    writeFileSync(
+      seccomp,
+      `#!/bin/sh\nfor a in "$@"; do if [ "$a" = /bin/kill ]; then for l in "$@"; do :; done; printf 'seccomp kill %s\\n' "$l" >> '${log}'; exit 0; fi; done\n` +
+        'export ZZ_SECCOMP=1; exec "$@"\n',
+    );
+    chmodSync(launcher, 0o755);
+    chmodSync(seccomp, 0o755);
+    // Les arrêts forcés par pid (killPlan, `seccomp kill <pid>`) sont ignorés.
+    const calls = () => (existsSync(log) ? readFileSync(log, 'utf8').trim().split('\n').filter((c) => c !== '' && !/^seccomp kill \d+$/.test(c)) : []);
+    return { seccomp, launcher, calls };
+  }
+
+  test('assert_sandbox_child_no_namespaces — le moteur pose SANDBOX_SECCOMP AVANT le lanceur, au lancement de l’enfant ET au balayage', async () => {
+    // Le plan de balayage est lu par onSweep ; hors Linux, le moteur refuse de l'exécuter (assert_sweep_never_targets_own_uid).
+    const dir = mkdtempSync(join(tmpdir(), 'zz_test_sweep_seccomp-'));
+    const { seccomp, launcher, calls } = fakeSeccompLauncher(dir, true);
+    const bridges = { fetch: () => Promise.reject(new Error('non')), log: () => undefined, emit: () => undefined, violation: () => undefined } as unknown as SandboxBridges;
+    const sweeps: { command: string; args: readonly string[]; refused?: string }[] = [];
+    try {
+      const engine = new ProcessSandboxEngine({ production: false, launcher, uid: 1500, gid: 1500, seccomp, onSweep: (s) => sweeps.push(s) });
+      expect(await engine.run('return 1;', bridges, { timeoutMs: 5000, memoryMb: 64 })).toMatchObject({ outcome: 'ok', value: 1 });
+      await engine.idle();
+      // Le lanceur de l'enfant tourne déjà sous le filtre.
+      expect(calls()[0]).toBe('launch[1] /bin/sh -c');
+      expect(sweeps).toHaveLength(1);
+      expect(sweeps[0]).toMatchObject({ command: seccomp });
+      expect(sweeps[0]?.args[0]).toBe(launcher);
+      expect(sweeps[0]?.args.slice(-4)).toEqual(['--', '/bin/kill', '-KILL', '-1']);
+      if (process.platform === 'linux') {
+        // Vérification de l'uid du lanceur (sous le filtre), puis balayage.
+        expect(sweeps[0]?.refused).toBeUndefined();
+        expect(calls()).toEqual(['launch[1] /bin/sh -c', 'launch[1] /usr/bin/id -u', 'seccomp kill -1']);
+      } else {
+        expect(sweeps[0]?.refused).toMatch(/Linux/);
+        expect(calls()).toEqual(['launch[1] /bin/sh -c']);
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // Revue 4.1b (3) : sweepRefusal ne compare que l'uid configuré à l'uid courant ; un lanceur qui ne change pas réellement
+  // d'uid passerait la garde et `kill -1` partirait sous l'uid du worker. Avant chaque balayage, le moteur fait exécuter
+  // `/usr/bin/id -u` par le lanceur (même chaîne que le balayage) et refuse si l'uid vu n'est pas l'uid dédié.
+  test('assert_sweep_never_targets_own_uid — uid rapporté par le lanceur différent de l’uid dédié : balayage refusé (décision pure)', () => {
+    expect(sweepIdentityRefusal({ uid: 1500, reported: '1500\n' })).toBeUndefined();
+    expect(sweepIdentityRefusal({ uid: 1500, reported: '1001\n' })).toMatch(/uid dédié.*1001/);
+    expect(sweepIdentityRefusal({ uid: 1500, reported: '' })).toMatch(/uid dédié/);
+    expect(sweepIdentityRefusal({ uid: 1500, reported: undefined })).toMatch(/uid dédié/);
+    expect(sweepIdentityRefusal({ uid: 1500, reported: '15000' })).toMatch(/uid dédié/);
+    expect(sweepIdentityPlan({ uid: 1500, gid: 1500 })).toBeUndefined();
+    expect(sweepIdentityPlan({ launcher: '/l', uid: 1500, gid: 1501 })).toEqual({ command: '/l', args: ['--reuid=1500', '--regid=1501', '--clear-groups', '--no-new-privs', '--', '/usr/bin/id', '-u'] });
+  });
+
+  test.skipIf(process.platform !== 'linux')('assert_sweep_never_targets_own_uid — Linux : lanceur qui ne change pas d’uid, aucun balayage exécuté', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'zz_test_sweep_identity-'));
+    const { seccomp, launcher, calls } = fakeSeccompLauncher(dir, false);
+    const bridges = { fetch: () => Promise.reject(new Error('non')), log: () => undefined, emit: () => undefined, violation: () => undefined } as unknown as SandboxBridges;
+    const sweeps: { refused?: string }[] = [];
+    const alerts: string[] = [];
+    try {
+      const engine = new ProcessSandboxEngine({ production: false, launcher, uid: 1500, gid: 1500, seccomp, onSweep: (s) => sweeps.push(s), onSweepFailure: (m) => alerts.push(m) });
+      expect(await engine.run('return 1;', bridges, { timeoutMs: 5000, memoryMb: 64 })).toMatchObject({ outcome: 'ok', value: 1 });
+      await engine.idle();
+      expect(sweeps.length).toBeGreaterThan(0);
+      for (const s of sweeps) expect(s.refused).toMatch(/uid dédié/);
+      expect(calls()).not.toContain('seccomp kill -1');
+      expect(alerts).toHaveLength(1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test('Node de l’enfant : option `node` (SANDBOX_NODE) prise à la place de process.execPath', async () => {
     // Sans lanceur ni uid : seul le Node change. Un Node introuvable fait échouer la sonde, le Node courant la réussit.
     await expect(new ProcessSandboxEngine({ production: false, node: '/zz-test/absent/node' }).probeIsolation()).rejects.toThrow(/sonde d'isolation en échec/);
@@ -300,6 +466,8 @@ describe('utilisateur dédié, lanceur et plafond CPU (08 §3)', () => {
       args: ['--reuid=1500', '--regid=1501', '--clear-groups', '--no-new-privs', '--', '/bin/kill', '-KILL', '4242'],
     });
     expect(killPlan({ uid: 1500, gid: 1501 }, 4242)).toBeUndefined();
+    // Jamais kill 0 (groupe), kill -N (tous ou un groupe), kill 1 (init) : seul un pid d'enfant (> 1, entier) est visé.
+    for (const pid of [0, -1, -4242, 1, 1.5, Number.NaN]) expect(killPlan({ launcher: '/l', uid: 1500, gid: 1501 }, pid), String(pid)).toBeUndefined();
     expect(killPlan({}, 4242)).toBeUndefined();
   });
 
@@ -318,14 +486,16 @@ describe('utilisateur dédié, lanceur et plafond CPU (08 §3)', () => {
     const dir = mkdtempSync(join(tmpdir(), 'zz_test_sweep-'));
     const log = join(dir, 'calls.log');
     const launcher = join(dir, 'launch.sh');
-    writeFileSync(launcher, `#!/bin/sh\nwhile [ "$1" != -- ]; do shift; done; shift\nprintf '%s\\n' "$1 $3" >> '${log}'\ncase "$1" in /bin/kill) exit 0 ;; esac\nexec "$@"\n`);
+    // Il répond à `/usr/bin/id -u` (vérification de l'uid avant balayage) par l'uid demandé, comme le vrai lanceur.
+    writeFileSync(launcher, `#!/bin/sh\nwhile [ "$1" != -- ]; do shift; done; shift\nprintf '%s\\n' "$1 $3" >> '${log}'\nfor a in "$@"; do [ "$a" = /bin/kill ] && exit 0; done\n[ "$1" = /usr/bin/id ] && { echo 1500; exit 0; }\nexec "$@"\n`);
     chmodSync(launcher, 0o755);
-    // Lancements d'enfant (/bin/sh) et balayages (/bin/kill -1) ; les arrêts forcés par pid (killPlan) sont ignorés.
+    // Lancements d'enfant (/bin/sh, journalisés par le faux lanceur) et balayages (onSweep, dans le même journal : exécutés sous
+    // Linux, refusés ailleurs) ; les appels de /bin/kill vus par le faux lanceur (arrêts forcés, balayage Linux) sont ignorés.
     const calls = () =>
-      readFileSync(log, 'utf8').trim().split('\n').flatMap((c) => (c === '/bin/kill -1' ? ['sweep'] : c.startsWith('/bin/sh ') ? ['spawn'] : []));
+      readFileSync(log, 'utf8').trim().split('\n').flatMap((c) => (c === 'zz_sweep' ? ['sweep'] : c.startsWith('/bin/sh ') ? ['spawn'] : []));
     const bridges = { fetch: () => Promise.reject(new Error('non')), log: () => undefined, emit: () => undefined, violation: () => undefined } as unknown as SandboxBridges;
     try {
-      const engine = new ProcessSandboxEngine({ production: false, launcher, uid: 1500, gid: 1500 });
+      const engine = new ProcessSandboxEngine({ production: false, launcher, uid: 1500, gid: 1500, onSweep: () => appendFileSync(log, 'zz_sweep\n') });
       const limits = { timeoutMs: 5000, memoryMb: 64 };
       expect(await engine.run('return 1;', bridges, limits)).toMatchObject({ outcome: 'ok', value: 1 });
       await engine.idle();
@@ -343,6 +513,103 @@ describe('utilisateur dédié, lanceur et plafond CPU (08 §3)', () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe('assert_sandbox_sweep_verified — balayage de l’uid dédié : vidange périodique et vérification (revue 4.1b, D-32)', () => {
+  const tick = () => new Promise((resolve) => setImmediate(resolve));
+
+  test('runs qui se chevauchent sans fin : après N runs, nouveaux lancements suspendus jusqu’à la vidange, puis balayage', async () => {
+    const events: string[] = [];
+    const scheduler = new SweepScheduler({ sweepOnce: () => { events.push('sweep'); return Promise.resolve(true); }, everyRuns: 2, everyMs: 3_600_000 });
+    await scheduler.enter(); events.push('a');
+    await scheduler.enter(); events.push('b');
+    // Deux runs depuis le dernier balayage : le troisième attend que a et b soient finis, puis le balayage.
+    let cEntered = false;
+    const c = scheduler.enter().then(() => { cEntered = true; events.push('c'); });
+    await tick();
+    expect(cEntered).toBe(false);
+    scheduler.leave(); // a
+    await tick();
+    expect(cEntered).toBe(false);
+    scheduler.leave(); // b : plus aucun run actif → balayage
+    await c;
+    expect(events).toEqual(['a', 'b', 'sweep', 'c']);
+    scheduler.leave();
+    await scheduler.idle();
+    expect(events).toEqual(['a', 'b', 'sweep', 'c', 'sweep']);
+  });
+
+  test('vidange aussi après T secondes sans balayage, même sous le seuil de runs', async () => {
+    let now = 0;
+    const events: string[] = [];
+    const scheduler = new SweepScheduler({ sweepOnce: () => { events.push('sweep'); return Promise.resolve(true); }, everyRuns: 1000, everyMs: 60_000, now: () => now });
+    await scheduler.enter();
+    now = 60_001;
+    let entered = false;
+    const next = scheduler.enter().then(() => { entered = true; });
+    await tick();
+    expect(entered).toBe(false);
+    scheduler.leave();
+    await next;
+    expect(events).toEqual(['sweep']);
+  });
+
+  test('survivant après le balayage (balayeur stoppé par un processus évadé) : nouveau balayage ; échec persistant → runs refusés, alerte', async () => {
+    const alerts: string[] = [];
+    let attempts = 0;
+    const flaky = new SweepScheduler({ sweepOnce: () => Promise.resolve(++attempts >= 2), everyRuns: 10, everyMs: 3_600_000, onFailure: (m) => alerts.push(m) });
+    await flaky.enter();
+    flaky.leave();
+    await flaky.idle();
+    expect(attempts).toBe(2);
+    await expect(flaky.enter()).resolves.toBeUndefined();
+    flaky.leave();
+    await flaky.idle();
+
+    const stuck = new SweepScheduler({ sweepOnce: () => Promise.resolve(false), everyRuns: 10, everyMs: 3_600_000, maxAttempts: 3, onFailure: (m) => alerts.push(m) });
+    await stuck.enter();
+    stuck.leave();
+    await stuck.idle();
+    expect(alerts).toHaveLength(1);
+    expect(alerts[0]).toMatch(/balayage de l'uid dédié en échec/);
+    await expect(stuck.enter()).rejects.toThrow(/balayage de l'uid dédié en échec/);
+  });
+
+  test('sandboxSurvivors : processus de l’uid dédié encore vivants (uid réel, effectif ou sauvé), zombies exclus', async () => {
+    const proc = mkdtempSync(join(tmpdir(), 'zz_test_proc-'));
+    const status = (pid: number, uid: string, state: string) => {
+      mkdirSync(join(proc, String(pid)));
+      writeFileSync(join(proc, String(pid), 'status'), `Name:\tx\nState:\t${state}\nPid:\t${pid}\nUid:\t${uid}\nGid:\t1500\t1500\t1500\t1500\n`);
+    };
+    try {
+      status(10, '1001\t1001\t1001\t1001', 'S (sleeping)'); // worker
+      status(11, '1500\t1500\t1500\t1500', 'T (stopped)'); // balayeur stoppé
+      status(12, '1500\t1500\t1500\t1500', 'Z (zombie)'); // déjà mort
+      status(13, '1001\t1500\t1500\t1500', 'R (running)'); // uid effectif 1500
+      status(14, '0\t0\t0\t0', 'S (sleeping)');
+      mkdirSync(join(proc, 'self'));
+      expect((await sandboxSurvivors(1500, proc)).sort()).toEqual([11, 13]);
+      expect(await sandboxSurvivors(1600, proc)).toEqual([]);
+    } finally {
+      rmSync(proc, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('assert_sweep_never_targets_own_uid — balayage (kill -1) refusé hors Linux, sous l’uid du worker et sous root (F-20261002-06)', () => {
+  // Décision pure : aucun lanceur, aucun /bin/kill n'est exécuté ici. `kill -1` lancé sous l'uid du worker tuerait tous ses
+  // processus (sur un poste de développement : toute la session de l'utilisateur) ; sous root, tout le conteneur.
+  test('refus : plateforme autre que Linux, uid cible égal à l’uid courant, uid courant inconnu, uid cible 0', () => {
+    expect(sweepRefusal({ uid: 1500, ownUid: 1001, platform: 'linux' })).toBeUndefined();
+    expect(sweepRefusal({ uid: 1500, ownUid: 1001, platform: 'darwin' })).toMatch(/Linux/);
+    expect(sweepRefusal({ uid: 1500, ownUid: 1001, platform: 'win32' })).toMatch(/Linux/);
+    expect(sweepRefusal({ uid: 1001, ownUid: 1001, platform: 'linux' })).toMatch(/uid du worker/);
+    expect(sweepRefusal({ uid: 1500, ownUid: undefined, platform: 'linux' })).toMatch(/uid du worker/);
+    expect(sweepRefusal({ uid: 0, ownUid: 1001, platform: 'linux' })).toMatch(/root/);
+    // Sur cette machine, sous notre propre uid : toujours refusé, quelle que soit la plateforme.
+    const own = process.getuid?.();
+    if (own !== undefined) expect(sweepRefusal({ uid: own, ownUid: own, platform: process.platform })).toBeDefined();
   });
 });
 

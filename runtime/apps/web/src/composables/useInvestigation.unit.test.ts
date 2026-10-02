@@ -162,7 +162,7 @@ describe('validation et ré-enquête', () => {
     const investigation = useInvestigation({
       replayFactory: (runId) => {
         replayed.push(runId);
-        return new EventStreamClient({ url: `/api/runs/${runId}/events`, fetch: async () => new Response(null, { status: 404 }) });
+        return new EventStreamClient({ url: `/api/runs/${runId}/events`, stopOnNotFound: true, fetch: async () => new Response(null, { status: 404 }) });
       },
     });
     const calls = installFakeServer({
@@ -361,7 +361,7 @@ describe('assert_budget_and_stop_controls : un essai apparaît en moins de 2 s',
     investigation.dispose();
     const before = investigation.state.attempts.length;
     // L'abonnement est retiré : un événement du flux n'atteint plus l'état.
-    startEventStream(() => undefined, () => new EventStreamClient({ url: '/api/events', fetch: async () => new Response(null, { status: 404 }) }));
+    startEventStream(() => undefined, () => new EventStreamClient({ url: '/api/events', stopOnNotFound: true, fetch: async () => new Response(null, { status: 404 }) }));
     expect(investigation.state.attempts.length).toBe(before);
   });
 });

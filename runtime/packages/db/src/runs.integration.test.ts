@@ -13,10 +13,12 @@ import { withActor } from './rls.js';
 import {
   acquireRepairLease,
   cancelRun,
+  chargeRunCost,
   claimRun,
   createRun,
   finishRun,
   heartbeatRun,
+  pauseRun,
   readRun,
   recordAttempt,
   recordSkippedRun,
@@ -171,6 +173,26 @@ describe('exécution (worker, identité système)', () => {
     expect(await finishRun(pool, active.runId, active.jobId, { state: 'succeeded', outcome: 'clean', items: 1 })).toBe(false);
     expect((await row(active.runId))?.state).toBe('cancelled');
     expect(await withActor(pool, actorA, (tx) => cancelRun(tx, queue, active.runId))).toBe(false);
+  });
+
+  test('bail perdu (pause, annulation) : le coût déjà engagé par l’ancien worker est imputé quand même, sans battement (INV4)', async () => {
+    const cost = async (runId: string) =>
+      (await pool.query<{ llm: string; proxy: string; tokens_in: number; attempts: number }>(
+        'SELECT cost_llm_usd AS llm, cost_proxy_usd AS proxy, tokens_in, (SELECT count(*)::int FROM run_attempts WHERE run_id = runs.id) AS attempts FROM runs WHERE id = $1',
+        [runId],
+      )).rows[0]!;
+    for (const lose of ['pause', 'cancel'] as const) {
+      const { runId, jobId } = await create();
+      await claimRun(pool, { runId, jobId, workerId: 'zz_test_w_lost' });
+      await withActor<unknown>(pool, actorA, (tx) => (lose === 'pause' ? pauseRun(tx, queue, runId) : cancelRun(tx, queue, runId)));
+      // Un appel LLM était en vol : son coût réel arrive après la perte du bail.
+      await expect(chargeRunCost(pool, runId, jobId, { llm_usd: 0.25, proxy_usd: 0.01, tokens: { in: 100 } })).rejects.toBeInstanceOf(RunLeaseLostError);
+      await expect(recordAttempt(pool, runId, jobId, { execution: 'fetch', network: 'dc_proxy', est_cost_usd: 0, result: 'network', ms: 5, proxy_usd: 0.02 })).rejects.toBeInstanceOf(RunLeaseLostError);
+      const c = await cost(runId);
+      expect([Number(c.llm), Number(c.proxy), Number(c.tokens_in), c.attempts], lose).toEqual([0.25, 0.03, 100, 1]);
+      // Le run perdu ne retrouve pas son bail pour autant.
+      expect(await heartbeatRun(pool, runId, jobId)).toBe(false);
+    }
   });
 });
 

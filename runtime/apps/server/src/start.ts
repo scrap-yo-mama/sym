@@ -8,9 +8,23 @@
 // redémarrage (`/api/ready` passe de 503 à 200, recette 1). Schéma PLUS RÉCENT que le code : refus de démarrer (garde
 // contre un retour d'image sans restauration). Une erreur fatale pendant l'initialisation différée (clé, amorçage) est
 // remise à `onFatal` (index.ts : message clair puis sortie 1).
-import { initTelemetry, kekFor, MIN_EXTENSION_VERSION, type Telemetry } from '@runtime/core';
+import { initTelemetry, kekFor, MIN_EXTENSION_VERSION, type JobQueue, type Telemetry } from '@runtime/core';
 import { SsrfGuard } from '@runtime/core/net';
-import { currentSchemaVersion, createDb, expectedSchemaVersion, holdSecretsLock, KeyCheckError, keyCheck, schemaVersionRefusal, secretStore } from '@runtime/db';
+import {
+  alertQueueDefinition,
+  currentSchemaVersion,
+  createDb,
+  expectedSchemaVersion,
+  holdSecretsLock,
+  KeyCheckError,
+  keyCheck,
+  PgBossJobQueue,
+  runQueueDefinition,
+  scheduledRunQueueDefinition,
+  schemaVersionRefusal,
+  secretStore,
+  webhookDeliveryQueueDefinition,
+} from '@runtime/db';
 import type { FastifyBaseLogger, FastifyInstance } from 'fastify';
 import pg from 'pg';
 import { buildServer } from './app.js';
@@ -42,7 +56,12 @@ export type PrepareOptions = {
   oidcAllowHttp?: boolean;
   /** Passerelle tunnel : périodes de sondage, de revalidation et délai d'inactivité (tests ; défauts de production). */
   tunnel?: { pollMs?: number; revalidateMs?: number; idleMs?: number };
+  /** API REST : relecture des attentes et du flux SSE, ping, plafond de flux (tests ; défauts de production). */
+  rest?: { pollMs?: number; pingMs?: number; maxStreamsPerUser?: number; revalidateMs?: number };
 };
+
+/** Files que le `server` alimente (runs, planifications, livraisons de webhooks, alertes) : créées si elles manquent. */
+const SERVER_QUEUES = () => [runQueueDefinition(), scheduledRunQueueDefinition(), webhookDeliveryQueueDefinition(), alertQueueDefinition()];
 
 const BOOTSTRAP_REQUIRED =
   'premier démarrage sans ADMIN_BOOTSTRAP_TOKEN : refusé. Posez ADMIN_BOOTSTRAP_TOKEN (ou _FILE, `openssl rand -base64 32`) ' +
@@ -93,6 +112,28 @@ export async function prepareServer(env: NodeJS.ProcessEnv = process.env, option
       ctx.siteSessionKek = kekFor(config.keyring.current, checked.version, 'site_sessions');
       ctx.secretsKek = kekFor(config.keyring.current, checked.version, 'secrets');
       ctx.secrets = secretStore(pool, config.keyring, checked);
+      ctx.keyChecked = checked;
+    };
+
+    // File pg-boss (3.1) : démarrée au premier usage, sur la connexion de session (DATABASE_URL_DIRECT), sans supervision.
+    const queue = new PgBossJobQueue({
+      connectionString: config.tunnel.sessionUrl,
+      max: 2,
+      supervise: false,
+      application_name: 'runtime-server-queue',
+      onError: (error) => holder.app?.log.error({ err: error }, 'file : erreur pg-boss'),
+    });
+    let queueReady: Promise<JobQueue> | undefined;
+    const jobs = (): Promise<JobQueue> => {
+      queueReady ??= (async () => {
+        await queue.start();
+        for (const definition of SERVER_QUEUES()) await queue.createQueue(definition, { keepExisting: true });
+        return queue as JobQueue;
+      })().catch((error: unknown) => {
+        queueReady = undefined;
+        throw error;
+      });
+      return queueReady;
     };
 
     let state: 'waiting' | 'ready' | 'failed' = 'waiting';
@@ -148,6 +189,18 @@ export async function prepareServer(env: NodeJS.ProcessEnv = process.env, option
       guard: new SsrfGuard({ policy: config.ssrfPolicy }),
       secretsKek: kekFor(config.keyring.current, 0, 'secrets'),
       secrets: null,
+      keyChecked: null,
+      jobs,
+      rest: {
+        maxWaitSeconds: config.rest.maxWaitSeconds,
+        maxConcurrentRuns: config.rest.maxConcurrentRuns,
+        pollMs: options.rest?.pollMs ?? 500,
+        pingMs: options.rest?.pingMs ?? 15_000,
+        maxStreamsPerUser: options.rest?.maxStreamsPerUser ?? 5,
+        revalidateMs: options.rest?.revalidateMs ?? 30_000,
+        maxActiveRunsPerUser: config.rest.maxActiveRunsPerUser,
+        maxRunsPerKeyPerMinute: config.rest.maxRunsPerKeyPerMinute,
+      },
       ...(options.extraCa ? { extraCa: options.extraCa } : {}),
       ...(options.oidcAllowHttp ? { oidcAllowHttp: true } : {}),
       // Passerelle tunnel WSS (07 § 6) : LISTEN sur le canal de cette instance, démarrée avant l'écoute HTTP.
@@ -190,6 +243,7 @@ export async function prepareServer(env: NodeJS.ProcessEnv = process.env, option
       if (timer) clearInterval(timer);
       await ctx.tunnel?.close();
       await app.close();
+      if (queueReady) await queueReady.then((q) => q.stop({ timeoutMs: 2000 })).catch(() => undefined);
       await pending?.catch(() => undefined);
       await releaseLock?.().catch(() => undefined);
       await lockClient.end().catch(() => undefined);

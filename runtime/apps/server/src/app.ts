@@ -7,6 +7,16 @@ import Fastify, { type FastifyBaseLogger, type FastifyInstance, type FastifyServ
 import type { ExtensionOriginPolicy } from './config.js';
 import type { ServerContext } from './context.js';
 import { apiKeyRoutes } from './routes/api-keys.js';
+import { apiRoutes } from './routes/apis.js';
+import { datasetRoutes } from './routes/datasets.js';
+import { eventRoutes } from './routes/events.js';
+import { openapiRoutes } from './routes/openapi.js';
+import { responsibleUseRoutes } from './routes/responsible-use.js';
+import { runRoutes } from './routes/runs.js';
+import { scheduleRoutes } from './routes/schedules.js';
+import { settingsRoutes } from './routes/settings.js';
+import { subjectRoutes } from './routes/subjects.js';
+import { webhookRoutes } from './routes/webhooks.js';
 import { authRoutes } from './routes/auth.js';
 import { extensionRoutes } from './routes/extension.js';
 import { guard, notFound, sendError } from './routes/guard.js';
@@ -96,6 +106,17 @@ export function buildServer(
   userRoutes(app, ctx);
   invitationRoutes(app, ctx);
   ssoRoutes(app, ctx);
+  // API REST (tâche 3.1, 05 § 4.2).
+  apiRoutes(app, ctx);
+  runRoutes(app, ctx);
+  datasetRoutes(app, ctx);
+  eventRoutes(app, ctx);
+  scheduleRoutes(app, ctx);
+  webhookRoutes(app, ctx);
+  settingsRoutes(app, ctx);
+  subjectRoutes(app, ctx);
+  responsibleUseRoutes(app, ctx);
+  openapiRoutes(app);
   identityRoutes(app, ctx);
   const gateway = ctx.tunnel;
   if (gateway !== null) {

@@ -53,6 +53,10 @@ des cinq premières est posée. Une autorité de certification privée pour Post
 
 | Variable | Lue par | Statut | Défaut | Rôle |
 |---|---|---|---|---|
+| `MAX_WAIT_SECONDS` | server | facultative | 25 | Plafond, en secondes, de l’attente synchrone d’un appel REST ou MCP (paramètre `wait`, 1 à 25) ; au-delà, l’appel rend un run à suivre (202). |
+| `MAX_CONCURRENT_RUNS` | server | facultative | 50 | Runs actifs (en file ou en cours) de l’instance au-delà desquels une création de run ou d’API répond 429 `queue_full` avec `Retry-After` (valeur à valider en recette). |
+| `MAX_ACTIVE_RUNS_PER_USER` | server | facultative | 20 | Runs actifs (en file ou en cours, hors pause) d’un même utilisateur au-delà desquels sa création de run ou d’API répond 429 `user_queue_full` avec `Retry-After` : un membre ne remplit pas la file des autres (valeur à valider en recette). |
+| `MAX_RUNS_PER_KEY_PER_MINUTE` | server | facultative | 60 | Créations de run (ou d’API) par clé d’API et par minute au-delà desquelles l’appel répond 429 `key_rate_limited` avec `Retry-After` (compteur du processus ; valeur à valider en recette). |
 | `WORKER_CONCURRENCY` | worker, CLI | facultative | 5 | Jobs sans navigateur en parallèle par worker (inférieur ou égal à `DB_POOL_MAX`). |
 | `BROWSER_CONCURRENCY` | worker | facultative | déduit de la mémoire du conteneur | Runs navigateur simultanés par worker (1 à 32). Dimensionnement : 2 Go de mémoire pour 1 run navigateur, 4 Go pour 2. |
 | `DISABLE_BROWSER` | worker | facultative | false | `true` : aucun Chromium, les exécuteurs navigateur sont refusés. |
@@ -123,3 +127,4 @@ des cinq premières est posée. Une autorité de certification privée pour Post
 | `SANDBOX_GID` | worker | facultative | `1500` | Groupe dédié du bac à sable. Posée par l’image : ne pas la changer. |
 | `SANDBOX_LAUNCHER` | worker | facultative | `/usr/local/libexec/sandbox-launch` | Lanceur à capacités minimales du bac à sable. Posée par l’image : ne pas la changer. |
 | `SANDBOX_NODE` | worker | facultative | `/usr/bin/node` | Node exécuté par l’enfant du bac à sable (le worker tourne sous une copie de Node à capacités de fichier, réservée à son groupe). Posée par l’image : ne pas la changer. |
+| `SANDBOX_SECCOMP` | worker | facultative | `/usr/local/libexec/sandbox-seccomp` | Filtre seccomp de l’enfant du bac à sable (ni `unshare`, ni `setns`, ni `clone` vers un nouvel espace de noms), posé avant le changement d’utilisateur (premier programme lancé, il exécute le lanceur). Posée par l’image : ne pas la changer. |

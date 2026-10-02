@@ -47,6 +47,22 @@ describe('llmConfigFromSettings', () => {
     expect(await sampling('non')).toBeUndefined();
   });
 
+  it('en-têtes du fournisseur (`headers_secret_id`, 08 § 1) : lus au dépôt et envoyés par les runs comme par « Tester »', async () => {
+    const withHeaders = { ...SETTINGS, providers: [{ ...SETTINGS.providers[0]!, headers_secret_id: 'sec-h' }] };
+    const readH = async (id: string): Promise<Secret> => (id === 'sec-h' ? new Secret(JSON.stringify({ 'X-Zz-Tenant': 'zz_test_tenant' })) : read(id));
+    const config = await llmConfigFromSettings(withHeaders, readH, ['extract']);
+    const headers = config.providers[0]?.headers ?? {};
+    expect(Object.keys(headers)).toEqual(['X-Zz-Tenant']);
+    const value = headers['X-Zz-Tenant'];
+    expect(value).toBeInstanceOf(Secret);
+    expect((value as Secret).reveal()).toBe('zz_test_tenant');
+    // Sans en-têtes : aucun champ ; en-têtes illisibles ou malformés : refus explicite (jamais un run sans eux).
+    expect((await llmConfigFromSettings(SETTINGS, read, ['extract'])).providers[0]).not.toHaveProperty('headers');
+    await expect(llmConfigFromSettings(withHeaders, read, ['extract'])).rejects.toThrow(/en-têtes illisibles/);
+    const malformed = async (id: string): Promise<Secret> => (id === 'sec-h' ? new Secret('["pas un objet"]') : read(id));
+    await expect(llmConfigFromSettings(withHeaders, malformed, ['extract'])).rejects.toThrow(LlmSettingsError);
+  });
+
   it('clé illisible, fournisseur inconnu ou réglages absents : refus explicite', async () => {
     await expect(llmConfigFromSettings(SETTINGS, read, ['repair'])).rejects.toThrow(LlmSettingsError);
     await expect(llmConfigFromSettings({ ...SETTINGS, roles: { extract: { provider: 'nope', model: 'x' } } }, read, ['extract'])).rejects.toThrow(/inconnu/);

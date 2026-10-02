@@ -108,6 +108,7 @@ import {
   saveInvestigationState,
   saveInvestigationStrategy,
   saveRunDataset,
+  schemaColumns,
   type InvestigationState,
   type RunTarget,
 } from '@runtime/db';
@@ -556,6 +557,8 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
       const networks: PlanNetwork[] = sessionRequired
         ? [{ mode: 'tunnel', perGbUsd: 0 }]
         : [...rungs.map((r) => ({ mode: r.mode, perGbUsd: r.mode === 'direct' ? 0 : r.proxy.price.perGbUsd })), ...(tunnelChosen ? [{ mode: 'tunnel' as const, perGbUsd: 0 }] : [])];
+      // Plan restreint par l'appelant (`exclude_executions`, 06 § 2) : des niveaux retirés, jamais ajoutés.
+      const excluded = new Set<string>(state.excluded_executions ?? []);
       const plan = buildTrialPlan({
         strategies: built.strategies,
         networks,
@@ -566,7 +569,7 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
         instruction: request.description,
         documentBytes: state.page?.document_bytes ?? 0,
         totalBytes: state.page?.total_bytes ?? 0,
-      });
+      }).filter((p) => !excluded.has(p.execution));
       if (fixed === undefined) {
         // Échantillon : données de l'utilisateur, inscrites au registre de masquage du run, puis passées par la liste
         // d'exclusion des personnes effacées AVANT toute écriture (17 §6, assert_erasure_complete) : une personne effacée
@@ -585,7 +588,7 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
         });
         if (spent >= request.budget_usd) return await budgetExhausted('investigation_budget_usd');
         if (!request.auto_validate) {
-          await save('awaiting_schema_validation', { proposal: proposal!, proposed_schema: built.outputSchema });
+          await save('awaiting_schema_validation', { proposal: proposal!, proposed_schema: built.outputSchema, proposed_columns: schemaColumns(built.outputSchema) });
           await milestone('schema');
           // Coût d'un rejeu estimé : celui de la méthode la moins chère du plan (ce que retiendrait un premier essai conforme).
           const cheapest = plan.reduce<number | null>((min, p) => (p.est_cost_usd !== null && (min === null || p.est_cost_usd < min) ? p.est_cost_usd : min), null);
@@ -593,7 +596,8 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
           return { state: 'succeeded', outcome: 'clean', degraded_reasons: [], items: 0 };
         }
         await milestone('schema');
-        await save('testing', { proposal: proposal!, proposed_schema: built.outputSchema, validated_schema: built.outputSchema, validated_by: 'auto' });
+        const columns = schemaColumns(built.outputSchema);
+        await save('testing', { proposal: proposal!, proposed_schema: built.outputSchema, validated_schema: built.outputSchema, proposed_columns: columns, validated_columns: columns, validated_by: 'auto' });
         await event(EV.schemaValidated, { by: 'auto' });
         await ctx.log('info', 'schema_auto_validated', {});
       } else if (remap) {
@@ -728,6 +732,7 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
             spec: kept.spec,
             estCostUsd: kept.estCostUsd,
             outputSchema,
+            ...(state.validated_columns === undefined ? {} : { outputColumns: state.validated_columns }),
             inputSchema: buildInputSchema({ paginated: entry.paginated, maxPages: PROPOSAL_HARD_MAX_PAGES }),
             state: { ...state, spent_usd: spent, elapsed_ms: baseElapsed + Math.max(0, now() - started) },
           });

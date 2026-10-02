@@ -23,7 +23,9 @@ playwright-report/
 
 # Garde-fous contre un `git add` accidentel (fichiers locaux, jamais publiés)
 /.playwright-mcp/
-/.claude/
+/.claude/*
+!/.claude/settings.json
+!/.claude/agents/
 /bin/
 /*.pdf
 /home.png
