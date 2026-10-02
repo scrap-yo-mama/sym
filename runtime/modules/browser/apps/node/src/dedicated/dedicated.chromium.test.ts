@@ -60,7 +60,7 @@ const alive = (pgid: number) => readProcessTable().filter((p) => p.pgid === pgid
 function listening(port: number): string[] {
   const hex = `:${port.toString(16).toUpperCase().padStart(4, '0')}`;
   return ['/proc/net/tcp', '/proc/net/tcp6'].flatMap((file) => {
-    let lines: string[] = [];
+    let lines: string[];
     try {
       lines = readFileSync(file, 'utf8').split('\n').slice(1);
     } catch {
@@ -140,19 +140,22 @@ describe('sessions dedicated sur de vrais Chromium (tâche 1.4)', () => {
     const viaCdp = await chromium.connectOverCDP(lease.cdpEndpoint!);
     const cdpPage = await viaCdp.contexts()[0]!.newPage();
     await cdpPage.setContent('<p id="c">cdp</p>');
-    expect(await cdpPage.evaluate(() => document.getElementById('c')?.textContent)).toBe('cdp');
+    expect(await cdpPage.textContent('#c')).toBe('cdp');
     const version = await (await viaCdp.newBrowserCDPSession()).send('Browser.getVersion');
     expect(version.product).toMatch(/^HeadlessChrome\/153\./);
 
-    // Le processus est arrêté AVANT que les clients soient détachés (04c § 3.2, étapes 3 et 4).
-    const aliveAtDetach: number[] = [];
-    viaCdp.once('disconnected', () => aliveAtDetach.push(alive(pid).length));
-    viaPlaywright.once('disconnected', () => aliveAtDetach.push(alive(pid).length));
+    // Le processus principal est arrêté AVANT que les clients soient détachés (04c § 3.2, étapes 3 et 4) : quand un client
+    // voit sa connexion tomber, Chromium ne tourne plus (absent ou zombie) ; ses autres processus, frappés par le même
+    // SIGKILL de groupe, finissent de sortir (le groupe vide est vérifié juste après par expectDestroyed).
+    const mainRunning = () => readProcessTable().some((p) => p.pid === pid && p.state !== 'Z');
+    const runningAtDetach: boolean[] = [];
+    viaCdp.once('disconnected', () => runningAtDetach.push(mainRunning()));
+    viaPlaywright.once('disconnected', () => runningAtDetach.push(mainRunning()));
 
     await lease.release();
     await expectDestroyed(pid, sessionRootOf(dataDir, id), cdpPort);
-    await waitFor(() => aliveAtDetach.length === 2);
-    expect(aliveAtDetach).toEqual([0, 0]);
+    await waitFor(() => runningAtDetach.length === 2);
+    expect(runningAtDetach).toEqual([false, false]);
     expect(readdirSync(join(dataDir, 'sessions'))).toEqual([]);
     await pool.close();
   });
