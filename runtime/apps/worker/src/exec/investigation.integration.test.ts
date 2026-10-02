@@ -8,7 +8,7 @@
 // budget dépassé → `erreur`, validation du schéma en deux temps (`validate_schema`), étape 0 d'abord
 // (`assert_access_report_first`), robots.txt interdit → `bloquee` sans LLM ni requête.
 import { randomUUID } from 'node:crypto';
-import { DomainPacer, generateMasterKey, MasterKey, Secret, validateOutput, type RunExecutor } from '@runtime/core';
+import { DomainPacer, generateMasterKey, inputSchemaIssues, MasterKey, Secret, validateOutput, type RunExecutor } from '@runtime/core';
 import { firstCostInversion } from '@runtime/core/investigation';
 import * as net from '@runtime/core/net';
 import {
@@ -236,18 +236,29 @@ describe('enquête (tâche 2.1)', () => {
     expect(testing.plan.map((p) => `${p.execution}/${p.network}`)).toEqual(['fetch/direct', 'fetch/dc_proxy']);
     expect(firstCostInversion(testing.plan.map((p) => p.est_cost_usd))).toBe(-1);
     expect(testing.plan[0]!.est_cost_usd).toBeLessThan(testing.plan[1]!.est_cost_usd);
-    const finished = events.filter((e) => e.kind === 'attempt.finished').map((e) => e.payload as { executions: { ok: boolean; pages: number }[] });
+    const finished = events.filter((e) => e.kind === 'attempt.finished').map((e) => e.payload as { executions: { ok: boolean; pages: number }[]; pagination?: { verified: boolean; stop: string | null; pages: number } });
     expect(finished).toHaveLength(1);
     // N = 3 exécutions conformes, dont au moins une en page 2.
     expect(finished[0]!.executions).toHaveLength(3);
     expect(finished[0]!.executions.every((x) => x.ok)).toBe(true);
     expect(finished[0]!.executions.some((x) => x.pages >= 2)).toBe(true);
+    // Tâche 2.2 : les 3 exécutions s'arrêtent à 2 pages ; une exécution de plus, au plafond dur, constate la règle d'arrêt
+    // (`has_more` faux) sur la DERNIÈRE page des 500 contacts : 25 pages de 20, pas une de plus.
+    expect(finished[0]!.executions.map((x) => x.pages)).toEqual([2, 2, 2]);
+    expect(finished[0]!.pagination).toEqual({ verified: true, stop: 'path_equals', pages: 25 });
+    const paths = (await client.stats()).hosts[API_HOST]?.paths ?? {};
+    expect(paths['/api/contacts']).toBeGreaterThanOrEqual(3 * 2 + 25);
 
     // Résultat livré conforme au schéma validé ; schéma d'entrée proposé (plafond de pages).
     const items = await withActor(pool, actorA, (tx) => tx.query<{ item: unknown }>('SELECT item FROM dataset_items WHERE dataset_id = $1', [run.dataset_id]));
     expect(items.rows.length).toBe(run.items);
     for (const r of items.rows) expect(validateOutput(api.output_schema, r.item)).toEqual({ ok: true });
-    expect(api.input_schema).toMatchObject({ properties: { max_pages: { type: 'integer' } } });
+    expect(api.input_schema).toMatchObject({ properties: { max_pages: { type: 'integer', minimum: 1, maximum: 50 } } });
+    // Tâche 2.2 : le schéma d'entrée proposé décrit chaque champ (assert_input_schema_described).
+    expect(inputSchemaIssues(api.input_schema)).toEqual([]);
+    expect((api.input_schema as { properties: { max_pages: { description: string } } }).properties.max_pages.description.length).toBeGreaterThan(20);
+    const done = events.find((e) => e.kind === 'investigation.finished')!.payload as { pagination?: { verified: boolean; stop: string | null } };
+    expect(done.pagination).toMatchObject({ verified: true, stop: 'path_equals' });
 
     // Le rôle investigate n'a vu que des squelettes : aucune valeur de la page dans le prompt (une seule requête).
     expect(fake.requests).toBe(1);

@@ -251,13 +251,20 @@ describe('alertes actionnables', () => {
     const clock = new TestClock(Date.now());
     const q = new PgBossJobQueue({ connectionString: tdb.url, max: 3, clock, supervise: false, application_name: 'zz_test_alert_clock' });
     let handled = 0;
+    // Fin du traitement du job de cette API (e-mail envoyé ou échec), attendue au lieu d'un délai fixe.
+    let done = false;
     try {
       await q.start();
       await q.createQueue(alertQueueDefinition());
       await q.work<AlertJob>(ALERT_QUEUE, { concurrency: 1, pollingIntervalSeconds: 0.5 }, async (job) => {
         // Les jobs laissés par les autres tests passent aussi par ce worker : on ne compte que ceux de cette API.
-        if (job.data.api_id === id) handled += 1;
-        await sendAlertEmail(ctx({ queue: q }), job.data);
+        const own = job.data.api_id === id;
+        if (own) handled += 1;
+        try {
+          await sendAlertEmail(ctx({ queue: q }), job.data);
+        } finally {
+          if (own) done = true;
+        }
       });
       const at = (s: number) => new Date(NOW.getTime() + s * 1000);
       const runner = (event: Parameters<typeof applyStatusTransition>[1]['event'], when: Date) =>
@@ -284,7 +291,18 @@ describe('alertes actionnables', () => {
       expect(handled).toBe(0);
       expect(mine()).toHaveLength(0);
       await step(90_000); // t = 150 s : la fenêtre de 120 s est close
+      // Les jobs laissés par les tests précédents ont leur fenêtre close au même moment et passent avant (un job par relève,
+      // ordre de création) : on attend la fin du traitement de CE job, la relève étant pilotée par l'horloge de test avancée
+      // d'une période (500 ms) à la fois, plutôt qu'un délai réel fixe qu'une machine lente dépasse (borne : 30 s réelles).
+      const deadline = Date.now() + 30_000;
+      while (!done && Date.now() < deadline) {
+        await clock.tick(500);
+        await sleep(20);
+      }
       expect(handled).toBe(1);
+      // Les trois événements n'ont mis qu'un job en file (clé d'unicité, politique `short`).
+      const jobs = await pool.query<{ n: number }>("SELECT count(*)::int AS n FROM pgboss.job WHERE name = $1 AND data->>'api_id' = $2", [ALERT_QUEUE, id]);
+      expect(jobs.rows[0]!.n).toBe(1);
       expect(mine()).toHaveLength(1);
       expect(mine()[0]!.text).toContain('Transitions: 2');
     } finally {

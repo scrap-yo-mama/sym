@@ -60,6 +60,7 @@ import {
   INVESTIGATION_EVENTS as EV,
   isActionUrl,
   narrativeUrl,
+  PROPOSAL_HARD_MAX_PAGES,
   rematchCandidates,
   retainedStrategy,
   runTrials,
@@ -75,6 +76,7 @@ import {
   type TokenPrice,
   type TrialExecution,
   type TrialPair,
+  type TrialPurpose,
   type TrialsOutcome,
 } from '@runtime/core/investigation';
 import {
@@ -93,7 +95,7 @@ import {
   type SecretReader,
   type SsrfGuard,
 } from '@runtime/core/net';
-import type { DomainPacer } from '@runtime/core';
+import { buildInputSchema, type DomainPacer } from '@runtime/core';
 import { investigateCallCeilingUsd, investigatePromptVersion, proposeInvestigation } from '@runtime/agent';
 import {
   appendInvestigationEvent,
@@ -166,16 +168,14 @@ function rolePrice(config: LlmConfig | null, role: 'extract' | 'agent' | 'invest
   return price === undefined ? null : { in: price.in, out: price.out };
 }
 
-/** Schéma d'entrée proposé (04 §4 étape G) : plafond de pages pour une stratégie qui pagine ; le reste relève de 2.2. */
-function proposedInputSchema(paginated: boolean): Record<string, unknown> {
-  return {
-    $schema: 'https://json-schema.org/draft/2020-12/schema',
-    type: 'object',
-    description: "Entrée de l'API.",
-    properties: paginated ? { max_pages: { type: 'integer', minimum: 1, maximum: 50, description: 'Nombre maximal de pages lues par run (la liste peut finir avant).' } } : {},
-    additionalProperties: false,
-  };
-}
+/**
+ * Entrée d'une exécution d'essai : les N exécutions d'échantillon lisent au plus 2 pages (la page 2 est exigée, 04 §4) ;
+ * l'exécution de vérification de la règle d'arrêt va jusqu'au plafond dur de pages (tâche 2.2).
+ */
+const trialInput = (paginated: boolean, purpose: TrialPurpose): Record<string, unknown> => (paginated ? { max_pages: purpose === 'stop_check' ? PROPOSAL_HARD_MAX_PAGES : 2 } : {});
+
+/** Récit de la vérification de la règle d'arrêt (codes et nombres, aucune valeur du site). */
+const stopCheckView = (o: PairOutcome) => (o.stop_check === null ? undefined : { verified: o.stop_check.verified, stop: o.stop_check.stop, pages: o.stop_check.pages, ...(o.stop_check.reason === undefined ? {} : { reason: o.stop_check.reason }) });
 
 /** Transport de l'étape 0 et de la reconnaissance : réseau serveur (N1-N3) ou tunnel de l'extension (session requise). */
 type AccessPorts = {
@@ -612,14 +612,14 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
           plan,
           {
             now,
-            execute: async (pair, index, limits) => {
+            execute: async (pair, index, limits, purpose = 'sample') => {
               const entry = entries.get(pair)!;
               const trialTarget: RunTarget = {
                 api: { ...target.api, outputSchema, maxCostUsd: limits.ceilingUsd },
                 strategy: { version: 0, execution: entry.execution, network: entry.network, spec: entry.spec, scriptRef: null, estCostUsd: entry.est_cost_usd },
               };
               const timeout = AbortSignal.timeout(Math.max(1, limits.deadlineMs - now()));
-              const trialCtx: RunCtx = { ...ctx, signal: AbortSignal.any([ctx.signal, timeout]), input: entry.paginated ? { max_pages: 2 } : {} };
+              const trialCtx: RunCtx = { ...ctx, signal: AbortSignal.any([ctx.signal, timeout]), input: trialInput(entry.paginated, purpose) };
               let trial: StrategyTrial;
               try {
                 trial = await deps.strategy.trial(trialCtx, trialTarget, trialTarget.strategy!);
@@ -681,6 +681,7 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
                 source: o.pair.source,
                 ...(o.detail === null ? {} : { why: { code: o.detail, params: {} } }),
                 executions: o.executions.map((e) => ({ ok: e.ok, records: e.records, pages: e.pages, stop: e.stop, cost_usd: e.cost_usd, ms: e.ms })),
+                ...(stopCheckView(o) === undefined ? {} : { pagination: stopCheckView(o) }),
                 budget: budgetView(),
               });
             },
@@ -719,7 +720,7 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
             spec: kept.spec,
             estCostUsd: kept.estCostUsd,
             outputSchema,
-            inputSchema: proposedInputSchema(entry.paginated),
+            inputSchema: buildInputSchema({ paginated: entry.paginated, maxPages: PROPOSAL_HARD_MAX_PAGES }),
             state: { ...state, spent_usd: spent, elapsed_ms: baseElapsed + Math.max(0, now() - started) },
           });
           phase = 'done';
@@ -730,6 +731,7 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
             outcome: 'conformant',
             strategy: { version: saved.version, execution: kept.execution, network: kept.network, source: entry.source, est_cost_usd: kept.estCostUsd, ...(kept.execution !== entry.execution ? { compiled_from: entry.execution } : {}) },
             items: records.length,
+            ...(stopCheckView(outcome.outcome) === undefined ? {} : { pagination: stopCheckView(outcome.outcome) }),
             budget: budgetView(),
           });
           return { state: 'succeeded', outcome: 'clean', degraded_reasons: [], items: records.length, dataset_id: dataset.datasetId, strategy_version: saved.version };

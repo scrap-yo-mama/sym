@@ -17,6 +17,13 @@ export type HttpExchange = {
  */
 export type Transport = (request: RenderedRequest, signal: AbortSignal) => Promise<HttpExchange>;
 
+/**
+ * Défilement d'une page déjà chargée par le transport (`pagination.type = infinite_scroll`, E3) : fait défiler, attend les
+ * nouveaux éléments (bornée), rend le DOM à jour. Ne classe rien et n'ouvre aucune navigation : une navigation lancée
+ * par la page reste refusée (1.7).
+ */
+export type ScrollTransport = (signal: AbortSignal) => Promise<HttpExchange>;
+
 /** Échec d'un essai : classe fermée (04b §1), réessai possible, code stable (jamais une valeur de la cible). */
 export type ExecFailure = {
   readonly failure_class: FailureClass;
