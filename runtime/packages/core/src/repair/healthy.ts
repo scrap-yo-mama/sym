@@ -4,7 +4,9 @@
 // des items de référence). Une réparation qui « passe » le schéma en vidant un champ optionnel jusque-là toujours rempli,
 // ou en changeant son type, est un faux succès : elle est refusée. Profil = chemins et types seulement, jamais une valeur.
 // L'empreinte de forme (`shapeFingerprint`, chemins:types) sert de diff de forme au journal et au prompt de réparation.
+// La référence suit le schéma COURANT : items conformes à lui, champs qu'il déclare.
 import { shapeFingerprint } from '../dsl/fingerprint.js';
+import { compileSchema } from '../schema/validator.js';
 
 /** Seuils (à valider) : taille minimale de la référence, part d'items réparés qui doivent porter chaque champ stable. */
 export const HEALTHY_DEFAULTS = { minItems: 5, minPresence: 0.8, maxDepth: 4 } as const;
@@ -51,10 +53,33 @@ function fieldsOf(item: unknown, maxDepth: number): Map<string, JsonFieldType> {
   return out;
 }
 
-/** Profil des champs stables d'items de référence (sorties livrées des derniers runs réussis). */
-export function healthyProfile(items: readonly unknown[], options: { minItems?: number; maxDepth?: number } = {}): HealthyProfile {
+/** Le pointeur suit-il des propriétés DÉCLARÉES (`properties`, imbriquées) du schéma ? */
+function declaredPath(schema: unknown, pointer: string): boolean {
+  let node = schema;
+  for (const raw of pointer.slice(1).split('/')) {
+    const key = raw.replace(/~1/g, '/').replace(/~0/g, '~');
+    const props = isRecord(node) ? node['properties'] : undefined;
+    if (!isRecord(props) || !Object.hasOwn(props, key)) return false;
+    node = props[key];
+  }
+  return true;
+}
+
+/**
+ * Profil des champs stables d'items de référence (sorties livrées des derniers runs réussis). `outputSchema` (le schéma
+ * COURANT) : seuls comptent les items qui lui sont conformes et les champs qu'il déclare ; après un changement de schéma
+ * (ré-enquête `output_schema_changed`), un champ retiré ou retypé n'est plus exigé d'une réparation.
+ */
+export function healthyProfile(items: readonly unknown[], options: { minItems?: number; maxDepth?: number; outputSchema?: unknown } = {}): HealthyProfile {
   const minItems = options.minItems ?? HEALTHY_DEFAULTS.minItems;
   const maxDepth = options.maxDepth ?? HEALTHY_DEFAULTS.maxDepth;
+  const schema = options.outputSchema;
+  if (schema !== undefined) {
+    const validate = compileSchema(schema);
+    const current = items.filter((item) => validate(item));
+    const profile = healthyProfile(current, { minItems, maxDepth });
+    return { ...profile, stable: Object.fromEntries(Object.entries(profile.stable).filter(([p]) => declaredPath(schema, p))) };
+  }
   if (items.length < minItems) return { items: items.length, stable: {}, fingerprint: items[0] === undefined ? null : shapeFingerprint(items[0]) };
   let stable: Map<string, JsonFieldType> | null = null;
   for (const item of items) {

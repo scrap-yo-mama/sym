@@ -27,13 +27,13 @@ onServerPrefetch(() => settings.load());
 <template>
   <section class="flex flex-col gap-6" aria-labelledby="sso-heading">
     <header class="flex flex-col gap-1">
-      <h1 id="sso-heading" data-route-heading tabindex="-1" class="text-2xl font-semibold tracking-tight">{{ t('instance.sso.title') }}</h1>
+      <h1 id="sso-heading" data-route-heading tabindex="-1" class="sym-title">{{ t('instance.sso.title') }}</h1>
       <p class="text-sm text-muted-foreground">{{ t('instance.sso.intro') }}</p>
     </header>
 
     <p v-if="settings.loading.value && !settings.data.value" role="status" class="text-sm text-muted-foreground">{{ t('ui.loading') }}</p>
     <Alert v-else-if="settings.failure.value" variant="destructive" data-testid="sso-load-error"><AlertDescription>{{ t(settings.failure.value) }}</AlertDescription></Alert>
-    <form v-else class="flex flex-col gap-4 rounded-xl border p-4" novalidate data-testid="sso-form" @submit.prevent="settings.save()">
+    <form v-else class="flex flex-col gap-4 rounded-xl border bg-card p-4" novalidate data-testid="sso-form" @submit.prevent="settings.save()">
       <p v-if="!configured" class="text-sm text-muted-foreground">{{ t('instance.sso.notConfigured') }}</p>
       <Alert v-if="failure" variant="destructive" data-testid="sso-error"><AlertDescription>{{ t(failure) }}</AlertDescription></Alert>
       <p v-if="saved" role="status" class="text-sm">{{ t('common.saved') }}</p>

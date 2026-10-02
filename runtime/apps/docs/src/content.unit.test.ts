@@ -321,8 +321,9 @@ describe('quickstart : structure du tutoriel rejoué', () => {
   });
 
   test('le tutoriel ne contacte aucun site : aucune adresse externe dans ses commandes', () => {
+    // `localhost` et ses sous-domaines (`zz_test_<id>.localhost`, site de test du dépôt) : boucle locale (RFC 6761).
     for (const step of steps) {
-      for (const url of step.script.match(/https?:\/\/[^\s'"\\]+/g) ?? []) expect(url.startsWith('http://localhost:'), `${step.id} : ${url}`).toBe(true);
+      for (const url of step.script.match(/https?:\/\/[^\s'"\\]+/g) ?? []) expect(/^http:\/\/([a-z0-9_-]+\.)*localhost:\d+(\/|$)/.test(url), `${step.id} : ${url}`).toBe(true);
     }
   });
 });

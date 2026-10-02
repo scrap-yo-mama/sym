@@ -21,13 +21,16 @@ const { isAuthenticated, mustEnrollTwoFactor, state, me, can } = useSession();
 const { streamStatus } = useEventStream();
 
 /** Entrées de la navigation : Utilisateurs et Audit selon `can()` ; aucune avant l'enrôlement forcé à la 2FA (lib/nav.ts). */
-const navEntries = computed(() => visibleNav(can, mustEnrollTwoFactor.value));
+const allNav = computed(() => visibleNav(can, mustEnrollTwoFactor.value));
+/** Liens de la barre (le bouton « Nouvelle API » est posé à part, à droite). */
+const navEntries = computed(() => allNav.value.filter((entry) => !entry.cta));
+const ctaEntry = computed(() => allNav.value.find((entry) => entry.cta));
 /** Bandeau « tu es owner / admin » (06 § 2) : seul un rôle qui administre l'instance le voit. */
 const roleBanner = computed(() => (me.value?.role === 'owner' || me.value?.role === 'admin' ? `nav.roleBanner.${me.value.role}` : null));
 
 /** Classe de l'entrée courante ; « Mon compte » vit sous /settings mais n'allume pas aussi « Réglages ». */
 function activeClass(to: string): string {
-  return to === '/settings' && route.path.startsWith('/settings/account') ? 'router-link-active' : 'bg-accent font-bold text-nav-foreground';
+  return to === '/settings' && route.path.startsWith('/settings/account') ? 'router-link-active' : 'font-bold text-nav-foreground';
 }
 
 const displayName = computed(() => me.value?.displayName || me.value?.email || '');
@@ -87,19 +90,21 @@ function focusMain(): void {
   </a>
   <ConnectionBanner :status="streamStatus" />
   <!-- Barre de navigation anthracite de la maquette (20 § 5) ; `sym-on-ink` donne à ses textes et contrôles les jetons du thème sombre, et à `bg-nav` l’anthracite de la maquette en clair (surface relevée en sombre). -->
-  <header class="sym-on-ink mx-3 mt-3 mb-2 flex flex-wrap items-center justify-between gap-3 rounded-lg bg-nav px-4 py-3 text-nav-foreground sm:mx-4 sm:px-6">
+  <header class="sym-on-ink mx-3 mt-3 mb-2 flex flex-wrap items-center justify-between gap-x-6 gap-y-2 rounded-lg bg-nav px-4 py-3 text-nav-foreground sm:mx-4 sm:px-6">
     <div class="flex items-center gap-2.5">
-      <p class="font-display text-[22px] leading-none font-extrabold tracking-tight">{{ t('app.name') }}</p>
+      <p class="font-display text-[22px] leading-none font-extrabold tracking-[-0.03em] lowercase">{{ t('app.name') }}</p>
       <SymSignature variant="badge" />
     </div>
     <nav v-if="isAuthenticated && navEntries.length > 0" :aria-label="t('nav.main')">
-      <ul class="flex flex-wrap items-center gap-1">
+      <ul class="flex flex-wrap items-center gap-x-4 gap-y-1">
         <li v-for="entry in navEntries" :key="entry.to">
           <RouterLink :to="entry.to" class="flex min-h-11 items-center rounded-md px-3 text-sm text-nav-muted-foreground hover:bg-accent hover:text-nav-foreground" :active-class="activeClass(entry.to)">{{ t(entry.label) }}</RouterLink>
         </li>
       </ul>
     </nav>
-    <div class="flex flex-wrap items-center gap-3">
+    <RouterLink v-if="isAuthenticated && ctaEntry" :to="ctaEntry.to" class="flex min-h-11 items-center rounded-md bg-signature px-[18px] text-sm font-bold text-signature-foreground hover:brightness-95" data-testid="nav-cta">{{ t(ctaEntry.label) }}</RouterLink>
+    <!-- Préférences et compte sur leur propre ligne de la barre une fois connecté : la première ligne reste celle de la planche (logotype, navigation, bouton jaune) -->
+    <div class="flex flex-wrap items-center gap-3" :class="isAuthenticated ? 'w-full justify-end border-t border-border pt-2' : ''">
       <PreferencesBar />
       <template v-if="isAuthenticated">
         <span class="text-sm text-nav-muted-foreground">{{ t('nav.signedInAs', { name: displayName }) }}</span>

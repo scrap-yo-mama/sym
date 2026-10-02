@@ -45,7 +45,7 @@ async function add(): Promise<void> {
 <template>
   <section class="flex flex-col gap-5" aria-labelledby="proxies-heading">
     <header class="flex flex-col gap-1">
-      <h1 id="proxies-heading" data-route-heading tabindex="-1" class="text-2xl font-semibold tracking-tight">{{ t('settings.proxies.title') }}</h1>
+      <h1 id="proxies-heading" data-route-heading tabindex="-1" class="sym-title">{{ t('settings.proxies.title') }}</h1>
       <p class="text-sm text-muted-foreground">{{ t('settings.proxies.intro') }}</p>
       <p class="text-sm text-muted-foreground">{{ t('settings.proxies.residential') }}</p>
     </header>
@@ -92,7 +92,7 @@ async function add(): Promise<void> {
         </table>
       </div>
 
-      <form class="flex flex-col gap-3 rounded-xl border p-4" novalidate data-testid="proxy-form" @submit.prevent="add">
+      <form class="flex flex-col gap-3 rounded-xl border bg-card p-4" novalidate data-testid="proxy-form" @submit.prevent="add">
         <h2 class="text-lg font-semibold">{{ t('settings.proxies.add') }}</h2>
         <div class="grid gap-3 sm:grid-cols-2">
           <div class="flex flex-col gap-1">

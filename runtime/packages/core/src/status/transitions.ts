@@ -20,8 +20,9 @@ export type TransitionDef = {
   reasons: readonly string[];
 };
 
+/** Signaux d'un run dégradé (5, 8) : `items_rejected` compris (D-49, 04 §5). le test de propriété explore tout `DEGRADED_SIGNALS`. */
 const SIGNALS = [
-  'retried', 'escalated', 'repaired', 'optional_fields_missing', 'volume_anomaly', 'pagination_short', 'slow', 'cost_anomaly',
+  'retried', 'escalated', 'repaired', 'optional_fields_missing', 'volume_anomaly', 'items_rejected', 'pagination_short', 'slow', 'cost_anomaly',
 ] as const;
 const REINVESTIGATION = ['reinvestigate_manual', 'output_schema_changed', 'force_investigate'] as const;
 /** Échec non transitoire de rejeu (10, 11) : y compris les refus, qui repartent aussitôt en 14 ou 15. */

@@ -25,8 +25,10 @@ export interface ExtractOptions {
   outputSchema?: unknown;
   /**
    * `strict` (défaut, enquête : critère « ça marche ») : un enregistrement non conforme écarte la source. `quarantine`
-   * (runs, D-49) : les problèmes par enregistrement ne bloquent la source que si AUCUN enregistrement n'est conforme ;
-   * l'exécuteur trie ensuite chaque item (Ajv) et met les non conformes en quarantaine, jamais livrés (INV1).
+   * (runs, D-49) : les problèmes par enregistrement ne bloquent la source que si AUCUN enregistrement n'est conforme, et
+   * ce blocage ne sert qu'à choisir un repli : sans source conforme, les enregistrements de la première source qui en a
+   * sont rendus (`ok`). L'exécuteur trie ensuite chaque item (Ajv) et met les non conformes en quarantaine, jamais livrés
+   * (INV1) ; le seuil de casse se décide sur le run entier.
    */
   itemPolicy?: ItemPolicy;
   limits?: Partial<DslLimits>;
@@ -285,10 +287,20 @@ export function extractRecords(spec: DeclarativeSpec, response: ResponseInput, o
   const ctx: Context = { limits, deadline: new Deadline(limits.timeoutMs, options.now), outputSchema: options.outputSchema, itemPolicy: options.itemPolicy ?? 'strict' };
   const cache = new ParseCache(response.body, limits);
   const attempts: SourceAttempt[] = [];
+  /** Quarantaine : première source qui a des enregistrements, tous non conformes (aucun problème de source). */
+  let unsorted: { index: number; records: Record<string, unknown>[] } | undefined;
   for (const [index, source] of spec.sources.entries()) {
     const { attempt, records } = runSource(spec, source, cache, ctx);
     attempts.push(attempt);
     if (attempt.ok) return { ok: true, records, source_id: source.id, source_index: index, escalated: index > 0, attempts };
+    if (ctx.itemPolicy === 'quarantine' && unsorted === undefined && records.length > 0 && !attempt.problems.some((p) => p.blocking && p.record === null)) unsorted = { index, records };
+  }
+  // Quarantaine (D-49) : le blocage d'une source ne sert qu'à choisir un repli. Si aucune source n'a d'item conforme sur
+  // CETTE page, ses enregistrements sont rendus à l'exécuteur : le seuil de casse se décide sur le run entier (tri Ajv,
+  // `rejectionVerdict` : 0 conforme sur tout le run casse toujours), jamais page par page.
+  if (unsorted !== undefined) {
+    const source = spec.sources[unsorted.index] as SourceSpec;
+    return { ok: true, records: unsorted.records, source_id: source.id, source_index: unsorted.index, escalated: unsorted.index > 0, attempts };
   }
   return { ok: false, records: [], source_id: null, source_index: -1, escalated: false, attempts };
 }

@@ -22,6 +22,8 @@ export type RunTarget = {
     readonly requires: { readonly session_domain?: string | null; readonly tunnel?: boolean };
     /** `apis.requires_session` : l'API exige la session (l'identité) de l'utilisateur (C2, 04 §3.2). */
     readonly requiresSession: boolean;
+    /** `apis.description` : demande du propriétaire, source de la stratégie pour la réparation (04 §5 étape 1). */
+    readonly description: string;
   };
   readonly strategy: {
     readonly version: number;
@@ -46,8 +48,9 @@ export async function loadRunTarget(pool: pg.Pool, args: { apiId: string; ownerI
       allow_write_actions: boolean;
       requires: RunTarget['api']['requires'] | null;
       requires_session: boolean;
+      description: string;
     }>(
-      `SELECT id, project_id, output_schema, network_policy, domain_pacing, max_cost_usd, allow_write_actions, requires, requires_session
+      `SELECT id, project_id, output_schema, network_policy, domain_pacing, max_cost_usd, allow_write_actions, requires, requires_session, description
        FROM apis WHERE id = $1 AND owner_id = $2`,
       [args.apiId, args.ownerId],
     );
@@ -82,6 +85,7 @@ export async function loadRunTarget(pool: pg.Pool, args: { apiId: string; ownerI
         allowWriteActions: api.allow_write_actions,
         requires: api.requires ?? {},
         requiresSession: api.requires_session,
+        description: api.description,
       },
       strategy,
     };

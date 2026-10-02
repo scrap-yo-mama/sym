@@ -137,17 +137,29 @@ Demandez ensuite à votre IA : « Récupère les livres de books.toscrape.com, a
 
 ## 9. Créer votre première API
 
-<!-- quickstart {"id":"first-api","mode":"pending","pending":"API REST (3.1), enquête (2.1)"} -->
+<!-- quickstart {"id":"first-api","mode":"run","expect":"api_id"} -->
 ```bash
 curl -fsS -b cookies.txt -X POST http://localhost:3100/api/apis \
   -H 'content-type: application/json' -H 'origin: http://localhost:3100' \
-  -d '{"description":"Les livres du catalogue, avec titre et prix","url":"http://localhost:4010/"}'
+  -d '{"description":"Les produits du catalogue, avec titre et prix","url":"http://zz_test_ssr.localhost:4010/"}'
 ```
 
 L'agent enquête d'abord par un rapport d'accès (`robots.txt`, signaux d'usage, conditions du site), puis essaie les méthodes de la moins chère à la plus chère, et propose un schéma de sortie à valider. Une fois validé, l'API entre au catalogue et se rejoue à coût de code. Voir [Architecture](../explications/architecture.md).
 
-::: details État de ces deux étapes dans cette version
-Les étapes 8 et 9 décrivent le parcours visé. Elles dépendent du serveur MCP, de l'API REST et de l'enquête, qui ne sont pas encore livrés dans cette version de développement : la CI vérifie que ces routes sont toujours « en préparation » dans l'OpenAPI et échoue dès qu'elles sont livrées, pour forcer à rejouer ces étapes aussi. Voir la [référence REST](../reference/rest.md) pour l'état exact de chaque route.
+La réponse (`201`) donne l'identifiant de l'API (`api_id`), son `slug` et le run de l'enquête (`run_id`) ; l'enquête se suit par `GET /api/runs/{run_id}` ou le flux `GET /api/events`, et le schéma proposé se valide par `POST /api/apis/{api_id}/validate-schema`.
+
+::: warning Ce que cette étape prouve, et ce qu'il faut pour que l'enquête aboutisse
+Le `201` prouve que l'API est créée et que son enquête est en file : c'est ce que la CI rejoue. L'enquête elle-même tourne ensuite dans le worker, et l'URL de l'exemple vise le **site de test local** du dépôt (`zz_test_ssr`), qui ne répond que si vous l'avez lancé. Sans les trois conditions suivantes, l'enquête finit en échec (`GET /api/runs/{run_id}`) :
+
+1. le site de test tourne : `pnpm fixtures` depuis `runtime/` (port 4010, hôtes `zz_test_<id>.localhost` seulement) ;
+2. le worker a le droit de joindre cet hôte privé : la garde SSRF refuse `localhost` par défaut, démarrez-le avec `ALLOWED_PRIVATE_HOSTS=zz_test_ssr.localhost` (et vérifiez que `zz_test_ssr.localhost` se résout vers `127.0.0.1` sur votre poste) ;
+3. un modèle IA est branché ([Brancher son modèle IA](../guides/modele-llm.md)) : l'enquête en a besoin pour proposer le schéma.
+
+Pour un vrai site, remplacez l'URL par celle d'une page publique que vous avez le droit de collecter (lisez d'abord [Usage responsable](../explications/usage-responsable.md)) ; aucune variable n'est alors nécessaire.
+:::
+
+::: details État de l'étape 8 dans cette version
+L'étape 8 décrit le parcours visé. Elle dépend du serveur MCP, qui n'est pas encore livré dans cette version de développement : la CI vérifie que la route `/mcp` n'est pas encore enregistrée et échoue dès qu'elle l'est, pour forcer à rejouer cette étape aussi. L'étape 9 (API REST) est rejouée à chaque construction. Voir la [référence REST](../reference/rest.md) pour l'état exact de chaque route.
 :::
 
 ## Ce que le tutoriel a prouvé
