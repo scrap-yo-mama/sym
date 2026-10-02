@@ -125,3 +125,4 @@ des cinq premières est posée. Une autorité de certification privée pour Post
 | `SANDBOX_GID` | worker | facultative | `1500` | Groupe dédié du bac à sable. Posée par l’image : ne pas la changer. |
 | `SANDBOX_LAUNCHER` | worker | facultative | `/usr/local/libexec/sandbox-launch` | Lanceur à capacités minimales du bac à sable. Posée par l’image : ne pas la changer. |
 | `SANDBOX_NODE` | worker | facultative | `/usr/bin/node` | Node exécuté par l’enfant du bac à sable (le worker tourne sous une copie de Node à capacités de fichier, réservée à son groupe). Posée par l’image : ne pas la changer. |
+| `SANDBOX_SECCOMP` | worker | facultative | `/usr/local/libexec/sandbox-seccomp` | Filtre seccomp de l’enfant du bac à sable (ni `unshare`, ni `setns`, ni `clone` vers un nouvel espace de noms), posé avant le changement d’utilisateur (premier programme lancé, il exécute le lanceur). Posée par l’image : ne pas la changer. |
