@@ -108,7 +108,7 @@ function viewTrials(): void {
 
 <template>
   <section class="mx-auto flex max-w-7xl flex-col gap-4 py-8" aria-labelledby="investigation-heading" data-testid="investigation-board">
-    <h1 id="investigation-heading" data-route-heading tabindex="-1" class="sym-title" :class="gate ? 'sr-only' : ''">{{ title }}</h1>
+    <h1 id="investigation-heading" data-route-heading tabindex="-1" :class="gate ? 'sr-only' : ''" class="sym-title">{{ title }}</h1>
 
     <!-- Étape et état de l'enquête : `role="status"`, un changement d'étape est annoncé sans déplacer le focus -->
     <p role="status" class="min-h-6 text-sm" :class="gate ? 'sr-only' : ''" data-testid="investigation-status">{{ statusLine }}</p>
