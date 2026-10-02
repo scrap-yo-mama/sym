@@ -38,15 +38,22 @@ const MASTER_KEY = randomBytes(32).toString('base64');
 const ADMIN_BOOTSTRAP_TOKEN = randomBytes(32).toString('base64');
 const DATABASE_URL = `postgres://runtime:${PG_PASSWORD}@${pgName}:5432/runtime`;
 
+/**
+ * Profil seccomp livré (deploy/seccomp-chromium.json, posé par docker-compose.prod.yml) : celui de Docker plus les espaces de
+ * noms utilisateur du bac à sable de Chromium. Sous le profil par défaut, Chromium refuse de démarrer (« No usable sandbox! »).
+ * Render : son seccomp réel reste à vérifier ; le cas simulé applique le même profil.
+ */
+const SECCOMP = ['--security-opt', `seccomp=${join(runtimeDir, 'deploy/seccomp-chromium.json')}`];
 /** Capacités du conteneur de Render (bounding 0x400cb) et no-new-privileges. */
 const RENDER = [
+  ...SECCOMP,
   '--security-opt', 'no-new-privileges',
   '--cap-drop', 'ALL',
   ...['CHOWN', 'DAC_OVERRIDE', 'FOWNER', 'SETGID', 'SETUID', 'SYS_CHROOT'].flatMap((c) => ['--cap-add', c]),
 ];
 const PROFILES = [
   { name: 'Render (no-new-privileges, capacités réduites)', flags: RENDER, nnp: true },
-  { name: 'Docker classique (capacités par défaut)', flags: [] as string[], nnp: false },
+  { name: 'Docker classique (capacités par défaut)', flags: SECCOMP, nnp: false },
 ] as const;
 
 const NONE = '0000000000000000';
@@ -320,7 +327,7 @@ describe('assert_sandbox_image_privileges — image sous les capacités de Rende
         const name = startContainer(`zz_test_img_probe_${profile.nnp ? 'render' : 'classic'}_${run}`, profile.flags, { RUNTIME_MODE: 'worker' }, [
           '-v', `${join(scratch, 'probe.mjs')}:/app/apps/worker/dist/index.js:ro`,
         ]);
-        await until(`sonde terminée dans ${name}`, () => /ZZ_PROBE |Error/.test(logsOf(name)) && !running(name), 120_000).catch((error: unknown) => {
+        await until(`sonde terminée dans ${name}`, () => !running(name), 120_000).catch((error: unknown) => {
           // Sonde bloquée : ses journaux et les processus du conteneur disent où.
           const procs = running(name) ? JSON.stringify(processes(name).map((p) => ({ pid: p.pid, ppid: p.ppid, uid: p.uid, cmd: p.cmd.slice(0, 120) }))) : 'arrêté';
           throw new Error(`${String(error)}\n${logsOf(name).slice(-3000)}\nprocessus : ${procs}`);

@@ -81,6 +81,8 @@ services:
     restart: unless-stopped
     ipc: host
     mem_limit: 3g
+    security_opt:
+      - seccomp=./seccomp-chromium.json
     environment:
       RUNTIME_MODE: worker
       DATABASE_URL: postgres://runtime:${POSTGRES_PASSWORD}@postgres:5432/runtime
@@ -112,6 +114,7 @@ volumes:
 Points à connaître :
 
 - **`ipc: host` et `mem_limit`** pour le worker : Chromium a besoin de mémoire partagée et d'un plafond de mémoire clair, dont le worker déduit le nombre d'exécutions navigateur simultanées. Avec `mem_limit: 3g`, il en lance une.
+- **`security_opt: seccomp=./seccomp-chromium.json`** pour le worker : copiez `deploy/seccomp-chromium.json` du dépôt à côté du fichier Compose. C'est le profil seccomp par défaut de Docker plus la création d'espaces de noms utilisateur, sans laquelle Chromium refuse de démarrer avec son bac à sable (« No usable sandbox! ») ; n'utilisez ni `seccomp=unconfined` ni `--no-sandbox`.
 - **Pas de port exposé pour `server`** : seul le proxy inverse est joignable de l'extérieur. Avec `TRUST_PROXY: "1"`, l'instance lit l'adresse du client dans l'en-tête que Caddy pose ; sans proxy devant, laissez `TRUST_PROXY` à sa valeur par défaut.
 - **`migrate` n'est pas relancé** par `restart` : c'est un service ponctuel dont dépendent `server` et `worker`.
 - **PostgreSQL** : épinglez l'image par empreinte en production, et gardez la sauvegarde hors de ce serveur ([Sauvegarder et restaurer](./sauvegarde.md)).
