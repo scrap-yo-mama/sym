@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // CI locale du module SYM Browser : rejoue le job `browser` de .github/workflows/ci.yml (le job appelle ce même script).
-// Usage, depuis runtime/ : `pnpm --filter @sym-browser/module ci:local [--skip-image]`. S'arrête au premier échec (code ≠ 0).
+// Usage, depuis runtime/ : `pnpm --filter @sym-browser/module ci:local [--skip-image] [--skip-chromium]`. S'arrête au premier échec (code ≠ 0).
 // Périmètre : le module (apps/*, packages/*, racine) et son contrat @sym/contracts ; la suite complète reste `pnpm ci:local`.
 import { spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
@@ -29,6 +29,11 @@ const steps: Step[] = [
   { name: 'licences (SDK et contrat MIT sans copyleft)', cmd: ['node', 'scripts/check-licenses.ts'] },
   { name: 'tests (contrat, paquets, racine du module)', cmd: ['pnpm', ...MODULE, 'test'] },
 ];
+
+// Pool du nœud sur de vrais Chromium 153 (tâche 1.1 : pool_no_orphans, kill_on_close_timeout) : utilisateur non root,
+// espaces de noms utilisateur autorisés (bac à sable) et Chromium de Playwright 1.63 installé (`playwright install chromium`).
+const skipChromium = process.argv.includes('--skip-chromium');
+if (!skipChromium) steps.push({ name: 'tests sur Chromium réels (pool du nœud)', cmd: ['pnpm', '--filter', '@sym-browser/node', 'test:chromium'] });
 
 if (!process.argv.includes('--skip-image')) {
   steps.push(
@@ -71,5 +76,9 @@ for (const [index, step] of steps.entries()) {
     process.exit(result.status && result.status !== 0 ? result.status : 1);
   }
 }
-const skipped = process.argv.includes('--skip-image') ? ' (image Docker non vérifiée : --skip-image)' : '';
+const skippedParts = [
+  ...(process.argv.includes('--skip-image') ? ['image Docker non vérifiée : --skip-image'] : []),
+  ...(skipChromium ? ['tests sur Chromium réels non lancés : --skip-chromium'] : []),
+];
+const skipped = skippedParts.length > 0 ? ` (${skippedParts.join(' ; ')})` : '';
 console.log(`\nci:local (browser) : toutes les étapes sont vertes${skipped}.`);

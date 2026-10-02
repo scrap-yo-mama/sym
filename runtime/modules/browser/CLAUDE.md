@@ -29,7 +29,8 @@ Contrat : `runtime/packages/contracts` (`@sym/contracts`, MIT, sous-chemin `brow
 ## Commandes (depuis `runtime/`)
 
 - CI locale du module, sous verrou de test : `pnpm --filter @sym-browser/module ci:local` (skill `browser-ci`).
-- Sans l'image Docker : `pnpm --filter @sym-browser/module ci:local --skip-image`.
+- Sans l'image Docker : `pnpm --filter @sym-browser/module ci:local --skip-image` ; sans les tests sur Chromium réels : `--skip-chromium` (à dire dans le compte rendu).
+- Pool du nœud sur de vrais Chromium (non root, espaces de noms utilisateur, `playwright install chromium`) : `pnpm --filter @sym-browser/node test:chromium`.
 - Tests d'un paquet : `pnpm --filter @sym-browser/gateway test` ; tout le module : `pnpm --filter "./modules/browser/**" test`.
 - Types : `pnpm --filter "./modules/browser/**" typecheck` ; lint : `pnpm exec eslint modules/browser packages/contracts`.
 - Image : `docker build -f modules/browser/Dockerfile -t sym-browser:dev .` puis `docker run --rm --security-opt seccomp=modules/browser/deploy/seccomp-chromium.json -e MASTER_KEY="$(openssl rand -base64 32)" -e DATABASE_URL=postgres://… sym-browser:dev` (`SYMB_MODE` : `all`, `gateway`, `node`).
