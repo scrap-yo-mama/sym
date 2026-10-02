@@ -2,6 +2,7 @@
 // Garde unique de toutes les routes (13 § 2-5, 13.1) : 503 avant l'owner, identité (clé d'API ou session), rôle et
 // statut relus en base à chaque requête (ASVS 8.3.2), scope de clé, permission de rôle, contrôle d'Origin sur les
 // mutations d'interface. Aucune route ne choisit l'identité : elle vient d'ici seulement (pas d'impersonation, INV5).
+import { timingSafeEqual } from 'node:crypto';
 import { can, hashApiKey, isApiKeyFormat, isExtensionTokenFormat, isRole, mfaRequiredFor, type ApiKeyScope, type Role } from '@runtime/core';
 import { appendAudit, resolveExtensionToken, withActor, type AuditEvent } from '@runtime/db';
 import type { FastifyReply, FastifyRequest } from 'fastify';
@@ -9,6 +10,15 @@ import type { MfaMethod } from '../auth/better-auth.js';
 import { readSecuritySettings } from '../auth/security-settings.js';
 import type { ServerContext } from '../context.js';
 import { findRoute, type RouteSpec } from './registry.js';
+
+/** En-tête du jeton de canal MCP (requêtes REST internes du serveur MCP, tâche 3.2). */
+export const MCP_CHANNEL_HEADER = 'x-runtime-mcp-channel';
+
+function safeEqual(a: string, b: string): boolean {
+  const x = Buffer.from(a);
+  const y = Buffer.from(b);
+  return x.length === y.length && timingSafeEqual(x, y);
+}
 
 /** Une session en attente du second facteur expire après 10 minutes (mot de passe à ressaisir). */
 const MFA_PENDING_TTL_MS = 10 * 60 * 1000;
@@ -33,6 +43,11 @@ export type Actor = {
   mfaEnrolled?: boolean;
   /** Création de la session (ré-authentification récente des comptes sans mot de passe). */
   sessionCreatedAt?: Date;
+  /**
+   * Requête émise par le serveur MCP pour le compte de la clé (tâche 3.2) : même identité et mêmes scopes que la clé,
+   * mais l'audit dit `mcp` et un run créé a le déclencheur `mcp`. Posé par la garde seulement (jeton de canal du processus).
+   */
+  channel?: 'mcp';
 };
 
 declare module 'fastify' {
@@ -184,13 +199,13 @@ function mfaBarrier(ctx: Pick<ServerContext, 'mfaEnforced'>, actor: Actor, spec:
   return null;
 }
 
-type AuditActor = (Pick<Actor, 'userId' | 'role' | 'apiKey'> & { via: Actor['via'] | 'sso' }) | null;
+type AuditActor = (Pick<Actor, 'userId' | 'role' | 'apiKey' | 'channel'> & { via: Actor['via'] | 'sso' }) | null;
 type RouteAuditEvent = { action: string; targetType?: string; targetId?: string; outcome: 'success' | 'denied' | 'error'; meta?: Record<string, unknown> };
 
 /** Entrée d'audit d'une requête (acteur, IP, User-Agent du client), pour une écriture qui l'ajoute dans sa propre transaction. */
 export function auditEvent(request: FastifyRequest, actor: AuditActor, event: RouteAuditEvent): AuditEvent {
   const { ip, userAgent } = requestMeta(request);
-  return { actorUserId: actor?.userId ?? null, actorVia: actor?.via ?? 'ui', actorRef: actor?.apiKey?.prefix ?? null, ip, userAgent, ...event };
+  return { actorUserId: actor?.userId ?? null, actorVia: actor?.channel ?? actor?.via ?? 'ui', actorRef: actor?.apiKey?.prefix ?? null, ip, userAgent, ...event };
 }
 
 export async function audit(ctx: ServerContext, request: FastifyRequest, actor: AuditActor, event: RouteAuditEvent): Promise<void> {
@@ -223,6 +238,10 @@ export function guard(ctx: ServerContext) {
       // Routes de l'extension : jeton d'appareil seulement (ni session d'interface, ni clé d'API).
       const match = typeof authorization === 'string' ? /^Bearer (\S+)$/.exec(authorization) : null;
       resolution = match?.[1] ? await resolveExtension(ctx, match[1]) : { status: 401 };
+    } else if (spec.auth === 'key') {
+      // Serveur MCP (05 § 3) : clé d'API en `Authorization: Bearer` seulement ; une session de la console n'y donne pas accès.
+      const match = typeof authorization === 'string' ? /^Bearer (\S+)$/.exec(authorization) : null;
+      resolution = match?.[1] ? await resolveApiKey(ctx, request, match[1]) : { status: 401 };
     } else if (typeof authorization === 'string' && authorization.length > 0) {
       const match = /^Bearer (\S+)$/.exec(authorization);
       resolution = match?.[1] ? await resolveApiKey(ctx, request, match[1]) : { status: 401 };
@@ -236,6 +255,9 @@ export function guard(ctx: ServerContext) {
       return;
     }
     const actor = resolution.actor;
+    // Requête REST interne du serveur MCP (jeton de canal de ce processus, jamais servi) : l'acteur reste la clé.
+    const channel = request.headers[MCP_CHANNEL_HEADER];
+    if (actor.via === 'apikey' && typeof channel === 'string' && ctx.mcp !== null && safeEqual(channel, ctx.mcp.channelToken)) actor.channel = 'mcp';
     request.actor = actor;
     // Second facteur et enrôlement forcé (13 § 7) avant tout autre contrôle : une session à moitié authentifiée n'atteint rien d'autre.
     const barrier = mfaBarrier(ctx, actor, spec);

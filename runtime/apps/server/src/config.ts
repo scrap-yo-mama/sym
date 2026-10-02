@@ -14,6 +14,8 @@ import {
   type ObservabilityConfig,
 } from '@runtime/core';
 import { ssrfPolicyFromEnv, type SsrfPolicy } from '@runtime/core/net';
+import type { McpConfig } from './mcp/runtime.js';
+import { TOOL_EXPOSURES, type ToolExposure } from './mcp/tools.js';
 
 export class ConfigError extends Error {
   override name = 'ConfigError';
@@ -50,7 +52,37 @@ export type ServerConfig = {
   tunnel: TunnelConfig;
   /** API REST (tâche 3.1, 05 § 2) : attente synchrone et file. */
   rest: RestConfig;
+  /** Serveur MCP (tâche 3.2, 05 § 1 et § 3). */
+  mcp: McpConfig;
 };
+
+const HOSTNAME = /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*|\[[0-9a-f:.]+\])$/;
+
+/** Liste de noms d'hôte (sans schéma ni port), séparés par des virgules. */
+function hostnameList(env: NodeJS.ProcessEnv, name: string): string[] {
+  const values = (env[name] ?? '').split(',').map((v) => v.trim().toLowerCase()).filter((v) => v !== '');
+  for (const value of values) if (!HOSTNAME.test(value)) throw new ConfigError(`${name} : nom d'hôte invalide (${value}) ; attendu : noms d'hôte sans schéma ni port, séparés par des virgules.`);
+  return values;
+}
+
+/**
+ * Serveur MCP : `DISABLE_MCP`, `MCP_TOOL_EXPOSURE` (generic, pinned par défaut, all), hôtes (`Host`) et origines (`Origin`)
+ * admis : ceux de PUBLIC_URL, plus `MCP_ALLOWED_HOSTS` et `MCP_ALLOWED_ORIGINS` (05 § 3 : Origin refusée si présente et
+ * non admise, Host contrôlé).
+ */
+function loadMcpConfig(env: NodeJS.ProcessEnv, publicUrl: string): McpConfig {
+  const disabledRaw = (env['DISABLE_MCP'] ?? '').trim().toLowerCase();
+  if (!['', 'true', 'false'].includes(disabledRaw)) throw new ConfigError('DISABLE_MCP invalide : true ou false.');
+  const exposure = (env['MCP_TOOL_EXPOSURE'] ?? '').trim() || 'pinned';
+  if (!(TOOL_EXPOSURES as readonly string[]).includes(exposure)) throw new ConfigError(`MCP_TOOL_EXPOSURE invalide : ${TOOL_EXPOSURES.join(', ')}.`);
+  const own = new URL(publicUrl).hostname.toLowerCase();
+  return {
+    disabled: disabledRaw === 'true',
+    exposure: exposure as ToolExposure,
+    allowedHosts: [...new Set([own, ...hostnameList(env, 'MCP_ALLOWED_HOSTS')])],
+    allowedOrigins: [...new Set([own, ...hostnameList(env, 'MCP_ALLOWED_ORIGINS')])],
+  };
+}
 
 /** Bornes de l'API REST (05 § 2, 14 § 2). */
 type RestConfig = {
@@ -215,5 +247,6 @@ export function loadServerConfig(env: NodeJS.ProcessEnv = process.env): ServerCo
       maxActiveRunsPerUser: positiveInteger(env, 'MAX_ACTIVE_RUNS_PER_USER', 20, 100_000),
       maxRunsPerKeyPerMinute: positiveInteger(env, 'MAX_RUNS_PER_KEY_PER_MINUTE', 60, 100_000),
     },
+    mcp: loadMcpConfig(env, publicUrl),
   };
 }

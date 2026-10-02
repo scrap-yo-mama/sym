@@ -1,0 +1,87 @@
+# Écarts attendus de la suite de conformité MCP officielle (15 § 6, tâche 3.2), un fichier par révision, joués par
+# tests/mcp-conformance.integration.test.ts avec @modelcontextprotocol/conformance 0.2.0-alpha.11, aux exigences de la
+# révision 2026-07-28 (sans état). Une entrée = un scénario (ou un contrôle `scénario:id`) qui échoue ou avertit (la suite
+# compte un avertissement SHOULD comme un écart) PAR CONSTRUCTION
+# de SYM, jamais un défaut à corriger plus tard sans le dire. Une entrée qui se met à passer fait échouer la suite (baseline
+# périmée) : la retirer. Passent sans écart : server-initialize, server-session-lifecycle, ping, tools-list,
+# dns-rebinding-protection, http-header-validation et les autres
+# contrôles de server-stateless et caching.
+#
+# Raisons :
+# - [démo] le scénario appelle un outil, un prompt ou une ressource de démonstration de la suite (`test_simple_text`,
+#   `json_schema_2020_12_tool`, `greet`, `test://…`). SYM n'expose que ses 9 outils génériques et ses outils par API
+#   (05 § 1.1, descriptions figées comparées au code) : ajouter des outils de démonstration au serveur de production
+#   élargirait sa surface et son budget de définitions (assert_tool_definitions_budget).
+# - [3.10] prompts MCP, progression, élicitation : livrés par l'expérience MCP (tâche 3.10).
+# - [3.14] ressources MCP (ressource d'itération `scrapyomama://api/{slug}/iteration`) : tâche 3.14.
+# - [V2] extension `io.modelcontextprotocol/tasks` : V2 (05 § 1.4) ; journalisation MCP (dépréciée par SEP-2577) et
+#   complétion : non prévues par le CDC.
+server:
+  # [démo] contenus d'outils de la suite.
+  - tools-call-simple-text
+  - tools-call-image
+  - tools-call-audio
+  - tools-call-embedded-resource
+  - tools-call-mixed-content
+  - tools-call-error
+  - json-schema-2020-12
+  # [démo] + [3.10] progression, élicitation, échantillonnage par des outils de démonstration.
+  - tools-call-with-progress
+  - tools-call-elicitation
+  - tools-call-sampling
+  - elicitation-sep1034-defaults
+  - elicitation-sep1330-enums
+  - input-required-result-basic-elicitation
+  - input-required-result-basic-sampling
+  - input-required-result-basic-list-roots
+  - input-required-result-request-state
+  - input-required-result-multiple-input-requests
+  - input-required-result-multi-round
+  - input-required-result-non-tool-request
+  - input-required-result-result-type
+  - input-required-result-tampered-state
+  - input-required-result-capability-check
+  - input-required-result-missing-input-response
+  - input-required-result-ignore-extra-params
+  # [démo] contrôles de server-stateless qui exigent les outils de diagnostic de la suite (`test_missing_capability`,
+  # `test_streaming_elicitation`, `test_logging_tool`) ; les 24 autres contrôles passent.
+  - server-stateless:sep-2575-server-rejects-undeclared-capability
+  - server-stateless:sep-2575-missing-capability-http-400
+  - server-stateless:sep-2575-http-server-no-independent-requests-on-stream
+  - server-stateless:sep-2575-server-no-log-without-loglevel
+  # [démo] la suite change la liste d'outils par un outil de démonstration ; SYM la change par sa base (épinglage,
+  # création d'API) et publie list_changed à la relecture de l'empreinte (10 s), testé par mcp.integration.test.ts.
+  - server-stateless:sep-2575-server-sends-tools-list-changed-on-subscription
+  # [démo] en-têtes personnalisés (SEP-2243) : aucun outil SYM ne déclare `x-mcp-header`.
+  - http-custom-header-server-validation
+  # [3.10] prompts.
+  - prompts-list
+  - prompts-get-simple
+  - prompts-get-with-args
+  - prompts-get-embedded-resource
+  - prompts-get-with-image
+  - caching:sep-2549-prompts-list-caching-hints
+  # [3.14] ressources.
+  - resources-list
+  - resources-read-text
+  - resources-read-binary
+  - resources-templates-read
+  - resources-subscribe
+  - resources-unsubscribe
+  - caching:sep-2549-resources-list-caching-hints
+  - caching:sep-2549-resources-templates-list-caching-hints
+  - sep-2164-resource-not-found
+  # [V2] complétion et journalisation MCP non prévues.
+  - completion-complete
+  - logging-set-level
+  - tools-call-with-logging
+  # [V2] extension tasks (05 § 1.4).
+  - tasks-lifecycle
+  - tasks-capability-negotiation
+  - tasks-wire-fields
+  - tasks-request-state-removal
+  - tasks-mrtr-input
+  - tasks-request-headers
+  - tasks-dispatch-and-envelope
+  - tasks-required-task-error
+  - tasks-mrtr-composition

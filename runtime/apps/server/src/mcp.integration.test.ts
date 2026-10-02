@@ -5,7 +5,6 @@
 // structuredContent, entrée invalide sans run, Origin et Host, 401 avec WWW-Authenticate vers la PRM RFC 9728, 403
 // insufficient_scope, B contre A), volets MCP des tests de 2.14 (assert_tool_definitions_budget, assert_brief_report_no_echo
 // sur les erreurs). Le worker est simulé en base (run terminé, dataset écrit) : ces tests portent sur le contrat MCP.
-import type { AddressInfo } from 'node:net';
 import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import { withClient } from '../../../tests/helpers/pg.js';
@@ -215,16 +214,18 @@ describe('accès au serveur MCP (05 § 3, 13 § 11) : clé d’API, PRM RFC 9728
 
 describe('exposition des outils (05 § 1.1, § 4.4) : generic, pinned, all ; toolsets', () => {
   const mode = (value: 'generic' | 'pinned' | 'all') => {
-    srv.started.ctx.mcp.exposure = value;
+    srv.started.ctx.mcp!.exposure = value;
   };
   afterAll(() => mode('pinned'));
 
   test('25 API dont 5 épinglées, mode pinned : 9 outils génériques + 5 api_<slug> (inputSchema = schéma d’entrée, outputSchema = RunResult)', async () => {
     await resetCatalog(a);
     mode('pinned');
-    const apis = [];
+    const apis: { id: string; slug: string }[] = [];
     for (let i = 0; i < 25; i += 1) apis.push(await seedApi(srv.db.url, a.user.id, { slug: `zz-test-pin-${String(i).padStart(2, '0')}` }));
+    // Épinglée pour le MCP = `mcp_exposed` (vrai par défaut en base, 0001) : 5 épinglées, 20 retirées.
     await setExposure(apis.slice(0, 5).map((x) => x.id), true);
+    await setExposure(apis.slice(5).map((x) => x.id), false);
     // Une API épinglée d'autrui, privée : jamais dans la liste de A.
     const other = await seedApi(srv.db.url, b.user.id, { slug: 'zz-test-pin-other' });
     await setExposure([other.id], true);
@@ -316,7 +317,7 @@ describe('exposition des outils (05 § 1.1, § 4.4) : generic, pinned, all ; too
   });
 
   test('liste changée : le serveur publie notifications/tools/list_changed quand l’exposition change (subscriptions/listen)', async () => {
-    const notifier = srv.started.ctx.mcp;
+    const notifier = srv.started.ctx.mcp!;
     const published: number[] = [];
     const off = notifier.onToolsChanged(() => published.push(Date.now()));
     try {
@@ -575,7 +576,7 @@ describe('create_api et dossier d’enquête (05 § 4.1, 19c § 9) : volets MCP 
   test.todo('assert_brief_secret_rejected (MCP) : secret_in_brief sur un dossier à cookie, en-tête Authorization ou ?access_token= — détection livrée par 2.14, jouée à sa fusion');
 
   test('assert_tool_definitions_budget : pour chaque combinaison de toolsets, brief < 500 jetons estimés et définitions sous le budget', async () => {
-    srv.started.ctx.mcp.exposure = 'generic';
+    srv.started.ctx.mcp!.exposure = 'generic';
     try {
       const combos: string[][] = [[]];
       for (const set of TOOLSETS) for (const combo of [...combos]) combos.push([...combo, set]);
@@ -593,7 +594,7 @@ describe('create_api et dossier d’enquête (05 § 4.1, 19c § 9) : volets MCP 
         }
       }
     } finally {
-      srv.started.ctx.mcp.exposure = 'pinned';
+      srv.started.ctx.mcp!.exposure = 'pinned';
     }
   });
 });

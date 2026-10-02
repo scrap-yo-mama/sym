@@ -24,8 +24,8 @@ export function reasonMessage(code: string | null | undefined): { code: string; 
 
 export const iso = (d: Date | string | null | undefined): string | null => (d === null || d === undefined ? null : new Date(d).toISOString());
 
-/** Déclencheur d'un run créé par l'API : `ui` pour la console (session), `rest` pour une clé d'API. */
-export const triggerOf = (actor: Actor): RunTrigger => (actor.via === 'ui' ? 'ui' : 'rest');
+/** Déclencheur d'un run créé par l'API : `ui` pour la console (session), `mcp` pour le serveur MCP, `rest` pour une clé d'API. */
+export const triggerOf = (actor: Actor): RunTrigger => (actor.via === 'ui' ? 'ui' : actor.channel === 'mcp' ? 'mcp' : 'rest');
 
 /** Fenêtre de la limite par clé d'API (08b § 3). */
 const KEY_WINDOW_SECONDS = 60;

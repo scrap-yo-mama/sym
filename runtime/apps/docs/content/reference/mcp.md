@@ -7,8 +7,8 @@ description: "Outils génériques, outils par API, enveloppe de résultat, modes
 
 Le serveur MCP est la porte d'entrée « pour votre IA » : on ajoute l'instance à son client MCP, puis on demande une donnée en langage naturel. L'IA appelle des outils ; derrière, l'agent enquête, enregistre une API au catalogue et la rejoue ensuite à coût de code. Le même catalogue est accessible par l'[API REST](./rest.md).
 
-::: warning Disponibilité
-Cette page décrit le contrat du serveur MCP. Le serveur lui-même (`/mcp`) n'est pas encore livré dans cette version de développement : l'OpenAPI marque les routes correspondantes « en préparation » et la page [Démarrage rapide](../tutoriels/quickstart.md) le dit pour ses étapes 8 et 9. Ce qui est décrit ici est ce que la suite de conformité MCP vérifiera.
+::: info Disponibilité
+Le serveur MCP (`/mcp`) est livré : outils génériques, outils par API, enveloppe de résultat, erreurs, contrôle de `Origin` et `Host`, métadonnées RFC 9728. Ne le sont pas encore : le récit détaillé de l'enquête, la progression, les prompts et l'élicitation (expérience MCP), ainsi que la lecture du dossier d'enquête `brief` (un dossier valide est refusé avec `brief_unavailable`, rien n'est créé). La suite de conformité MCP officielle est jouée en CI, avec ses écarts attendus commentés.
 :::
 
 ## Se connecter
@@ -22,7 +22,7 @@ Cette page décrit le contrat du serveur MCP. Le serveur lui-même (`/mcp`) n'es
 
 | Outil | Entrée | Sortie |
 |---|---|---|
-| `create_api` | `description`, `url`, et facultativement `example_output`, `auto_validate`, `network_policy`, `wait_seconds` | identifiant, schéma de sortie proposé, échantillon, rapport d'accès et récit de l'enquête ; ou le résultat d'un run avec `auto_validate` |
+| `create_api` | `description`, `url`, et facultativement `example_output`, `brief`, `auto_validate`, `network_policy`, `wait_seconds` | identifiant, schéma de sortie proposé, échantillon, rapport d'accès et récit de l'enquête ; ou le résultat d'un run avec `auto_validate` |
 | `validate_schema` | `api_id`, et facultativement un `output_schema` corrigé | résultat d'un run (ou « en cours ») |
 | `run_api` | `slug` ou `api_id`, `input`, et facultativement `wait_seconds`, `force_investigate` | résultat d'un run |
 | `get_run` | `run_id` | résultat d'un run |

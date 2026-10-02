@@ -127,7 +127,9 @@ cinq premières est posée. Pour PostgreSQL, passez la CA par `sslrootcert` dans
 
 | Variable | Défaut | Lue par | Rôle | État |
 |---|---|---|---|---|
-| `MCP_TOOL_EXPOSURE` | `pinned` | — | outils exposés par API : `generic` (aucun), `pinned` (les API épinglées, 20 au plus) ou `all` (20 au plus) ; voir [Serveur MCP](./mcp.md) | prévue |
+| `MCP_TOOL_EXPOSURE` | `pinned` | server | outils exposés par API : `generic` (aucun), `pinned` (les API épinglées pour le MCP, 20 au plus) ou `all` (20 au plus) ; voir [Serveur MCP](./mcp.md) | lue |
+| `MCP_ALLOWED_HOSTS` | l'hôte de `PUBLIC_URL` | server | noms d'hôte supplémentaires (sans port) admis dans l'en-tête `Host` d'une requête MCP ; tout autre hôte reçoit 403 | lue |
+| `MCP_ALLOWED_ORIGINS` | l'hôte de `PUBLIC_URL` | server | noms d'hôte supplémentaires admis dans l'en-tête `Origin` ; une origine présente et non admise reçoit 403, une requête sans `Origin` est acceptée | lue |
 
 ## Interrupteurs de surfaces
 
@@ -136,7 +138,7 @@ Ces variables coupent une surface de l'instance, pour réduire ce qu'elle expose
 | Variable | Défaut | Lue par | Rôle | État |
 |---|---|---|---|---|
 | `DISABLE_REST` | `false` | — | coupe l'API REST | prévue |
-| `DISABLE_MCP` | `false` | — | coupe le serveur MCP | prévue |
+| `DISABLE_MCP` | `false` | server | coupe le serveur MCP : aucune route `/mcp` | lue |
 | `DISABLE_OPENAPI` | `false` | — | coupe la publication de l'OpenAPI | prévue |
 | `DISABLE_TUNNEL` | `false` | server | coupe la passerelle du tunnel : aucune route WSS, aucune commande envoyée à l'extension | lue |
 | `GATEWAY_INSTANCE` | hôte + pid + aléa | server | identifiant de cette instance pour la passerelle du tunnel (canal de notification PostgreSQL de ses commandes) ; à fixer si plusieurs instances partagent la base | lue |

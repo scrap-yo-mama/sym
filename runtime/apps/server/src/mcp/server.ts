@@ -1,0 +1,416 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Serveur MCP (tâche 3.2, 05 § 1 et § 4) : une instance `McpServer` (SDK v2) par requête, sans état, construite pour la
+// clé qui appelle. Chaque outil est une façade de l'API REST de 3.1 : les écritures (création, validation, run,
+// annulation) sont rejouées EN INTERNE sur la route REST avec la même clé (`inject`), donc avec sa garde, ses scopes, ses
+// plafonds, sa case « j'ai lu », son audit et son filtre par propriétaire (INV12) ; les lectures (run, items, catalogue)
+// passent par les mêmes services sous `withActor` (RLS). Aucune donnée d'une API d'autrui ne sort : objet d'autrui et
+// objet inexistant répondent la même erreur `not_found`.
+//
+// Erreurs (05 § 4.3) : bloc texte JSON `{ code, message, what_to_do, retryable, next_action }`, `isError: true`, SANS
+// `structuredContent`. Succès : `structuredContent` et le même contenu en texte (le texte seul suffit à un client qui
+// n'affiche pas `structuredContent`).
+import { randomUUID } from 'node:crypto';
+import { can, compileSchema, formatIssues, validateOutput, type Permission } from '@runtime/core';
+import { withActor } from '@runtime/db';
+import { fromJsonSchema, McpServer, requireScopes, type CallToolResult, type jsonSchemaValidator } from '@modelcontextprotocol/server';
+import type { FastifyInstance, FastifyRequest } from 'fastify';
+import type { ServerContext } from '../context.js';
+import { readApiById, readApiBySlug } from '../rest/apis.js';
+import { datasetItems } from '../rest/export.js';
+import { buildRunResult, decodeItemsCursor, itemsCursor, readRunRow } from '../rest/runs.js';
+import { waitSecondsOf } from '../rest/shared.js';
+import { UUID } from '../routes/account-helpers.js';
+import { audit, MCP_CHANNEL_HEADER, type Actor } from '../routes/guard.js';
+import {
+  apiToolDescription,
+  apiToolName,
+  BRIEF_MAX_BYTES,
+  BRIEF_SCHEMA,
+  GENERIC_TOOLS,
+  MAX_API_TOOLS,
+  MCP_INSTRUCTIONS,
+  RUN_RESULT_SCHEMA,
+  type GenericToolName,
+  type Toolset,
+} from './tools.js';
+
+/** Appel en cours : la clé (acteur), la requête HTTP d'origine (en-têtes, IP pour l'audit) et l'application. */
+export type McpCaller = { actor: Actor; request: FastifyRequest; app: FastifyInstance; toolsets: Set<Toolset> };
+
+type Json = Record<string, unknown>;
+
+/** Plafond de caractères d'une page d'items (≈ 10 000 jetons, 05 § 4.1, à valider), comme l'enveloppe RunResult. */
+const ITEMS_MAX_CHARS = 40_000;
+const ITEMS_DEFAULT_LIMIT = 20;
+
+// ---------------------------------------------------------------------------------------------------------------
+// Erreurs (05 § 4.3)
+// ---------------------------------------------------------------------------------------------------------------
+
+type ErrorGuide = { what_to_do: string; retryable: boolean };
+
+/** Conduite à tenir par code (texte pour le modèle, en anglais, 21 § 4.3) ; jamais un texte du site ni une valeur reçue. */
+const GUIDES: Record<string, ErrorGuide> = {
+  not_found: { what_to_do: 'Check the slug or id with list_apis or get_run: you only see your own objects and the shared APIs.', retryable: false },
+  invalid_input: { what_to_do: 'Fix the arguments to match the tool input schema (for run_api, the API input schema shown by get_api), then call again.', retryable: true },
+  invalid_request: { what_to_do: 'Fix the arguments to match the tool input schema, then call again.', retryable: true },
+  invalid_cursor: { what_to_do: 'Use the next_cursor returned by the previous call, or start again without cursor.', retryable: true },
+  invalid_fields: { what_to_do: 'Name at most 100 top-level fields of the output schema.', retryable: true },
+  invalid_schema: { what_to_do: 'Send a JSON Schema 2020-12 object without remote $ref, then call again.', retryable: true },
+  blocked: { what_to_do: 'Tell the user that the site refused automated access to this API. Do not retry it and do not try other ways to reach the site.', retryable: false },
+  api_error: { what_to_do: 'The API has no working strategy: its owner can investigate it again (run_api with force_investigate), or report_problem.', retryable: false },
+  action_required: {
+    what_to_do: 'Ask the user to act in the console first: connect the site with the browser extension, configure the proxy, or settle the paid access; then call again.',
+    retryable: false,
+  },
+  investigation_in_progress: { what_to_do: 'An investigation is running for this API: follow it with get_api or get_run, then call again when it is done.', retryable: true },
+  not_awaiting_validation: { what_to_do: 'This API is not waiting for a schema validation: read its state with get_api.', retryable: false },
+  queue_full: { what_to_do: 'The instance queue is full: wait about 30 seconds, then call again.', retryable: true },
+  user_queue_full: { what_to_do: 'Too many of your runs are active: wait for them (get_run) or cancel one (cancel_run), then call again.', retryable: true },
+  key_rate_limited: { what_to_do: 'Too many runs started with this key in the last minute: wait one minute, then call again.', retryable: true },
+  responsible_use_ack_required: { what_to_do: 'Ask the user to read the Responsible use page in the console and tick that they read it, then call again.', retryable: false },
+  run_not_active: { what_to_do: 'This run is already finished: read its result with get_run.', retryable: false },
+  forbidden: { what_to_do: 'This key or account is not allowed to do this; ask the API owner or an admin.', retryable: false },
+  storage_full: { what_to_do: 'The instance storage is full: tell the user to ask the admin to free or extend it.', retryable: false },
+  invalid_brief: { what_to_do: 'Remove or fix the named brief field (closed schema), or call create_api again without brief.', retryable: true },
+  brief_too_large: { what_to_do: `Keep the highest-confidence hints and drop notes; resend under ${Math.floor(BRIEF_MAX_BYTES / 1000)} KB.`, retryable: true },
+  brief_unavailable: { what_to_do: 'Call create_api again without brief: this instance does not read investigation briefs yet, and nothing was created.', retryable: true },
+};
+
+const DEFAULT_GUIDE: ErrorGuide = { what_to_do: 'Read the message; if it persists, report_problem with what you tried.', retryable: false };
+
+/** Erreur d'outil (05 § 4.3) : texte JSON, `isError`, aucun `structuredContent`. */
+function toolError(code: string, message: string, nextAction: Json | null = null): CallToolResult {
+  const guide = GUIDES[code] ?? DEFAULT_GUIDE;
+  const body = { code, message, what_to_do: guide.what_to_do, retryable: guide.retryable, next_action: nextAction };
+  return { isError: true, content: [{ type: 'text', text: JSON.stringify(body) }] };
+}
+
+const notFoundError = () => toolError('not_found', 'ressource introuvable', { tool: 'list_apis', args: {} });
+
+/** Succès : faits structurés, et les mêmes en texte (phrase puis JSON). */
+function success(summary: string, structured: Json): CallToolResult {
+  return { content: [{ type: 'text', text: `${summary}\n\n${JSON.stringify(structured)}` }], structuredContent: structured };
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Appels REST internes (même clé, même garde, canal `mcp`)
+// ---------------------------------------------------------------------------------------------------------------
+
+type RestAnswer = { status: number; body: Json };
+
+async function rest(ctx: ServerContext, caller: McpCaller, method: 'GET' | 'POST', url: string, payload?: Json): Promise<RestAnswer> {
+  const { request, app } = caller;
+  const userAgent = request.headers['user-agent'];
+  const res = await app.inject({
+    method,
+    url,
+    remoteAddress: request.ip,
+    headers: {
+      authorization: request.headers.authorization ?? '',
+      [MCP_CHANNEL_HEADER]: ctx.mcp!.channelToken,
+      ...(typeof userAgent === 'string' ? { 'user-agent': userAgent } : {}),
+      ...(payload === undefined ? {} : { 'content-type': 'application/json' }),
+    },
+    ...(payload === undefined ? {} : { payload: JSON.stringify(payload) }),
+  });
+  let body: Json;
+  try {
+    body = res.body === '' ? {} : (JSON.parse(res.body) as Json);
+  } catch {
+    body = {};
+  }
+  return { status: res.statusCode, body };
+}
+
+/** Réponse d'erreur REST → erreur d'outil ; `nextAction` selon le code. */
+function restError(answer: RestAnswer, nextAction: (code: string) => Json | null = () => null): CallToolResult {
+  const error = (answer.body['error'] ?? {}) as { code?: unknown; message?: unknown };
+  const code = typeof error.code === 'string' ? error.code : answer.status === 404 ? 'not_found' : 'internal';
+  if (code === 'not_found') return notFoundError();
+  return toolError(code, typeof error.message === 'string' ? error.message : 'erreur', nextAction(code));
+}
+
+const query = (params: Record<string, string | number | undefined>): string => {
+  const entries = Object.entries(params).filter(([, v]) => v !== undefined) as [string, string | number][];
+  return entries.length === 0 ? '' : `?${new URLSearchParams(entries.map(([k, v]): [string, string] => [k, String(v)])).toString()}`;
+};
+
+// ---------------------------------------------------------------------------------------------------------------
+// Outils
+// ---------------------------------------------------------------------------------------------------------------
+
+/** RunResult d'un run de l'acteur (lecture sous RLS) ; null si inexistant ou d'autrui. */
+async function runResultOf(ctx: ServerContext, actor: Actor, runId: string): Promise<Json | null> {
+  if (!UUID.test(runId)) return null;
+  const row = await withActor(ctx.pool, actor, (db) => readRunRow(db, runId));
+  return row === null ? null : ((await buildRunResult(ctx, actor, row)) as unknown as Json);
+}
+
+function runResultAnswer(envelope: Json): CallToolResult {
+  return success(String(envelope['message'] ?? ''), envelope);
+}
+
+/** Réponse REST d'une exécution (200 RunResult, 202 run à suivre) → RunResult. */
+async function executionAnswer(ctx: ServerContext, caller: McpCaller, answer: RestAnswer, nextAction?: (code: string) => Json | null): Promise<CallToolResult> {
+  if (answer.status === 200 && typeof answer.body['run_id'] === 'string' && Array.isArray(answer.body['items'])) return runResultAnswer(answer.body);
+  if (answer.status === 202 && typeof answer.body['run_id'] === 'string') {
+    const envelope = await runResultOf(ctx, caller.actor, answer.body['run_id']);
+    if (envelope !== null) return runResultAnswer(envelope);
+  }
+  return restError(answer, nextAction);
+}
+
+/** Erreur de statut d'API → prochaine action (05 § 4.3 : `api_error` → ré-enquête par le propriétaire). */
+const runNextAction = (slug: string) => (code: string): Json | null => (code === 'api_error' ? { tool: 'run_api', args: { slug, force_investigate: true } } : null);
+
+/** Contrôle d'un dossier d'enquête (19c § 9.1, § 9.3) : taille puis schéma fermé ; jamais une valeur reçue dans l'erreur. */
+function checkBrief(brief: unknown): CallToolResult | null {
+  if (Buffer.byteLength(JSON.stringify(brief), 'utf8') > BRIEF_MAX_BYTES) return toolError('brief_too_large', `brief : plus de ${BRIEF_MAX_BYTES} octets (aucune troncature)`);
+  const validate = compileSchema(BRIEF_SCHEMA);
+  if (!validate(brief)) {
+    const first = validate.errors?.[0];
+    const extra = first?.keyword === 'additionalProperties' ? `/${String((first.params as { additionalProperty?: unknown }).additionalProperty ?? '')}` : '';
+    const field = `brief${(first?.instancePath ?? '') + extra}`.replace(/\//g, '.').replace(/[^a-zA-Z0-9_.]/g, '');
+    return toolError('invalid_brief', `champ ${field} refusé (schéma fermé du dossier d'enquête)`);
+  }
+  // Service du dossier d'enquête (tâche 2.14) pas encore livré : un dossier valide n'est ni lu ni conservé.
+  return toolError('brief_unavailable', 'dossier d’enquête non pris en charge par cette instance : rien n’a été créé');
+}
+
+type Handler = (args: Json, caller: McpCaller) => Promise<CallToolResult>;
+
+function handlers(ctx: ServerContext): Record<GenericToolName, Handler> {
+  const wait = (args: Json) => waitSecondsOf(ctx, typeof args['wait_seconds'] === 'number' ? args['wait_seconds'] : ctx.rest.maxWaitSeconds);
+  /** Lecture directe sous RLS : la permission de rôle de la route REST équivalente s'applique aussi. */
+  const allowed = (caller: McpCaller, permission: Permission) => can(caller.actor.role, permission);
+
+  const runApi = async (slug: string, input: Json, args: Json, caller: McpCaller): Promise<CallToolResult> => {
+    const answer = await rest(ctx, caller, 'POST', `/api/apis/${encodeURIComponent(slug)}/runs${query({ wait: wait(args) })}`, {
+      input,
+      ...(args['force_investigate'] === true ? { force_investigate: true } : {}),
+    });
+    return executionAnswer(ctx, caller, answer, runNextAction(slug));
+  };
+
+  return {
+    async create_api(args, caller) {
+      const body: Json = { description: args['description'], url: args['url'] };
+      for (const key of ['example_output', 'auto_validate', 'network_policy'] as const) if (args[key] !== undefined) body[key] = args[key];
+      const answer = await rest(ctx, caller, 'POST', `/api/apis${query({ wait: wait(args) })}`, body);
+      if (answer.status !== 201) return restError(answer);
+      if (typeof answer.body['run_id'] === 'string' && Array.isArray(answer.body['items'])) return runResultAnswer(answer.body);
+      const phase = answer.body['investigation_phase'];
+      const summary =
+        phase === 'awaiting_schema_validation'
+          ? `API ${String(answer.body['slug'])} created. Proposed output schema below: show it to the user, then call validate_schema with api_id.`
+          : `API ${String(answer.body['slug'])} created; the investigation is running: poll get_run with run_id, then validate the proposed schema.`;
+      return success(summary, answer.body);
+    },
+
+    async validate_schema(args, caller) {
+      const apiId = String(args['api_id']);
+      if (!UUID.test(apiId)) return notFoundError();
+      const answer = await rest(ctx, caller, 'POST', `/api/apis/${apiId}/validate-schema${query({ wait: wait(args) })}`, args['output_schema'] === undefined ? {} : { output_schema: args['output_schema'] });
+      return executionAnswer(ctx, caller, answer);
+    },
+
+    async run_api(args, caller) {
+      const hasSlug = typeof args['slug'] === 'string';
+      const hasId = typeof args['api_id'] === 'string';
+      if (hasSlug === hasId) return toolError('invalid_input', 'slug ou api_id : exactement un des deux');
+      let slug = hasSlug ? String(args['slug']) : null;
+      if (slug === null) {
+        const id = String(args['api_id']);
+        const api = UUID.test(id) ? await withActor(ctx.pool, caller.actor, (db) => readApiById(db, id)) : null;
+        if (api === null) return notFoundError();
+        slug = api.slug;
+      }
+      return runApi(slug, args['input'] as Json, args, caller);
+    },
+
+    async get_run(args, caller) {
+      if (!allowed(caller, 'runs:read')) return toolError('forbidden', 'action non autorisée');
+      const envelope = await runResultOf(ctx, caller.actor, String(args['run_id']));
+      return envelope === null ? notFoundError() : runResultAnswer(envelope);
+    },
+
+    async get_items(args, caller) {
+      if (!allowed(caller, 'datasets:read')) return toolError('forbidden', 'action non autorisée');
+      const byRun = typeof args['run_id'] === 'string';
+      if (byRun === (typeof args['dataset_id'] === 'string')) return toolError('invalid_input', 'run_id ou dataset_id : exactement un des deux');
+      const id = String(byRun ? args['run_id'] : args['dataset_id']);
+      if (!UUID.test(id)) return notFoundError();
+      const after = decodeItemsCursor(typeof args['cursor'] === 'string' ? args['cursor'] : undefined);
+      if (after === null) return toolError('invalid_cursor', 'curseur illisible');
+      const datasetId = await withActor(ctx.pool, caller.actor, async (db) => {
+        if (byRun) {
+          const run = await readRunRow(db, id);
+          return run === null ? null : (run.dataset_id ?? '');
+        }
+        const { rows } = await db.query<{ id: string }>('SELECT id FROM datasets WHERE id = $1 AND deleted_at IS NULL', [id]);
+        return rows[0]?.id ?? null;
+      });
+      if (datasetId === null) return notFoundError();
+      if (datasetId === '') return success('The run has no items yet: poll get_run.', { items: [], next_cursor: null });
+      const limit = typeof args['limit'] === 'number' ? args['limit'] : ITEMS_DEFAULT_LIMIT;
+      const fields = Array.isArray(args['fields']) ? (args['fields'] as string[]) : undefined;
+      const items: Json[] = [];
+      let lastSeq = after ?? -1;
+      let more = false;
+      let chars = 0;
+      for await (const { seq, item } of datasetItems(ctx, caller.actor, { datasetId, afterSeq: after ?? -1, limit: limit + 1, ...(fields ? { fields } : {}) })) {
+        chars += JSON.stringify(item).length;
+        if (items.length >= limit || (chars > ITEMS_MAX_CHARS && items.length > 0)) {
+          more = true;
+          break;
+        }
+        items.push(item);
+        lastSeq = seq;
+      }
+      const next = more ? itemsCursor(lastSeq) : null;
+      return success(`${items.length} items${next === null ? '; no more items.' : '; call get_items again with next_cursor for the rest.'}`, { items, next_cursor: next });
+    },
+
+    async cancel_run(args, caller) {
+      const runId = String(args['run_id']);
+      if (!UUID.test(runId)) return notFoundError();
+      const answer = await rest(ctx, caller, 'POST', `/api/runs/${runId}/cancel`, {});
+      if (answer.status !== 200) return restError(answer);
+      return success('The run is cancelled; incurred costs remain charged.', answer.body);
+    },
+
+    async list_apis(args, caller) {
+      const answer = await rest(ctx, caller, 'GET', `/api/apis${query({ status: args['status'] as string | undefined, q: args['q'] as string | undefined, limit: (args['limit'] as number | undefined) ?? 20, cursor: args['cursor'] as string | undefined })}`);
+      if (answer.status !== 200) return restError(answer);
+      const apis = ((answer.body['apis'] ?? []) as Json[]).map((a) => ({
+        slug: a['slug'],
+        description: a['description'],
+        status: a['status'],
+        status_reason: (a['status_reason'] as { code?: string } | null)?.code ?? null,
+        stale: a['stale'],
+        execution: a['execution'],
+        network: a['network'],
+        requires: a['requires'],
+        avg_cost_usd: a['avg_cost_usd'],
+      }));
+      const next = answer.body['next_cursor'] ?? null;
+      return success(`${apis.length} APIs${next === null ? '.' : '; more with cursor.'}`, { apis, next_cursor: next });
+    },
+
+    async get_api(args, caller) {
+      const answer = await rest(ctx, caller, 'GET', `/api/apis/${encodeURIComponent(String(args['slug']))}${query({ response_format: args['response_format'] as string | undefined })}`);
+      if (answer.status !== 200) return restError(answer);
+      return success(`API ${String(answer.body['slug'])}: status ${String(answer.body['status'])}.`, answer.body);
+    },
+
+    async report_problem(args, caller) {
+      const slug = String(args['slug']);
+      const runId = typeof args['run_id'] === 'string' ? args['run_id'] : null;
+      const found = await withActor(ctx.pool, caller.actor, async (db) => {
+        const api = await readApiBySlug(db, slug);
+        if (api === null) return null;
+        if (runId !== null) {
+          const run = UUID.test(runId) ? await readRunRow(db, runId) : null;
+          if (run === null || run.api_id !== api.id) return null;
+        }
+        return api;
+      });
+      if (found === null) return notFoundError();
+      const bugId = randomUUID();
+      // Journal de l'API : audit en ajout seul (acteur, API, run) ; la note passe par le masquage de l'audit (INV8).
+      await audit(ctx, caller.request, { ...caller.actor, channel: 'mcp' }, {
+        action: 'api.problem_reported',
+        targetType: 'api',
+        targetId: found.id,
+        outcome: 'success',
+        meta: { bug_id: bugId, run_id: runId, note: String(args['note']).slice(0, 2000) },
+      });
+      return success(`Problem ${bugId} recorded for API ${found.slug}.`, { bug_id: bugId });
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Fabrique
+// ---------------------------------------------------------------------------------------------------------------
+
+/** Validation d'entrée laissée au serveur (erreur `invalid_input` de 05 § 4.3, et non le texte libre du SDK). */
+const acceptAll: jsonSchemaValidator = { getValidator: () => (input: unknown) => ({ valid: true, data: input as never, errorMessage: undefined }) };
+
+/** Outils par API (05 § 1.1) visibles par l'acteur, selon le mode d'exposition ; 20 au plus. */
+async function apiTools(ctx: ServerContext, actor: Actor): Promise<{ name: string; slug: string; inputSchema: Json }[]> {
+  const mode = ctx.mcp?.exposure ?? 'generic';
+  if (mode === 'generic' || !can(actor.role, 'apis:run')) return [];
+  const rows = await withActor(ctx.pool, actor, async (db) =>
+    (
+      await db.query<{ slug: string; input_schema: Json }>(
+        `SELECT slug, input_schema FROM apis WHERE current_strategy_version IS NOT NULL ${mode === 'pinned' ? 'AND mcp_exposed' : ''}
+         ORDER BY mcp_exposed DESC, pinned DESC, slug LIMIT $1`,
+        [MAX_API_TOOLS * 2],
+      )
+    ).rows,
+  );
+  const out: { name: string; slug: string; inputSchema: Json }[] = [];
+  const names = new Set<string>();
+  for (const row of rows) {
+    const name = apiToolName(row.slug);
+    const schema = row.input_schema;
+    // Schéma d'entrée objet seulement (un outil MCP prend un objet) ; sinon l'API reste joignable par run_api.
+    if (name === null || names.has(name) || schema === null || typeof schema !== 'object' || schema['type'] !== 'object') continue;
+    names.add(name);
+    out.push({ name, slug: row.slug, inputSchema: schema });
+    if (out.length === MAX_API_TOOLS) break;
+  }
+  return out;
+}
+
+/** Serveur MCP d'une requête : outils des toolsets demandés, outils par API de l'acteur. */
+export async function buildMcpServer(ctx: ServerContext, caller: McpCaller, version: string): Promise<McpServer> {
+  const server = new McpServer({ name: 'sym', version }, { instructions: MCP_INSTRUCTIONS, capabilities: { tools: { listChanged: true } } });
+  const all = handlers(ctx);
+  for (const tool of GENERIC_TOOLS) {
+    if (!caller.toolsets.has(tool.toolset)) continue;
+    server.registerTool(
+      tool.name,
+      {
+        description: tool.description,
+        inputSchema: fromJsonSchema(tool.inputSchema as never, acceptAll),
+        ...(tool.outputSchema ? { outputSchema: fromJsonSchema(tool.outputSchema as never) } : {}),
+        annotations: tool.annotations,
+        scopeChallenge: requireScopes(tool.scope),
+      },
+      async (args: unknown) => {
+        const input = (args ?? {}) as Json;
+        // Dossier d'enquête contrôlé AVANT le reste (19c § 9.3) : invalid_brief nomme le champ, brief_too_large sans troncature.
+        if (tool.name === 'create_api' && input['brief'] !== undefined) {
+          const refused = checkBrief(input['brief']);
+          if (refused) return refused;
+        }
+        const checked = validateOutput(tool.inputSchema, input);
+        if (!checked.ok) return toolError('invalid_input', `arguments hors du schéma de ${tool.name} : ${formatIssues(checked.errors).replace(/\n/g, ' ; ')}`);
+        return all[tool.name](input, caller);
+      },
+    );
+  }
+  if (caller.toolsets.has('run')) {
+    for (const api of await apiTools(ctx, caller.actor)) {
+      server.registerTool(
+        api.name,
+        {
+          description: apiToolDescription(api.slug),
+          inputSchema: fromJsonSchema(api.inputSchema as never, acceptAll),
+          outputSchema: fromJsonSchema(RUN_RESULT_SCHEMA as never),
+          annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
+          scopeChallenge: requireScopes('apis:run'),
+        },
+        async (args: unknown) => {
+          const input = (args ?? {}) as Json;
+          const answer = await rest(ctx, caller, 'POST', `/api/apis/${encodeURIComponent(api.slug)}/runs${query({ wait: waitSecondsOf(ctx, ctx.rest.maxWaitSeconds) })}`, { input });
+          return executionAnswer(ctx, caller, answer, runNextAction(api.slug));
+        },
+      );
+    }
+  }
+  return server;
+}

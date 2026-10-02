@@ -28,6 +28,7 @@ import {
 import type { FastifyBaseLogger, FastifyInstance } from 'fastify';
 import pg from 'pg';
 import { buildServer } from './app.js';
+import { createMcpRuntime } from './mcp/runtime.js';
 import { createAuth } from './auth/better-auth.js';
 import { readSecuritySettings } from './auth/security-settings.js';
 import { loadServerConfig, type ServerConfig } from './config.js';
@@ -201,6 +202,7 @@ export async function prepareServer(env: NodeJS.ProcessEnv = process.env, option
         maxActiveRunsPerUser: config.rest.maxActiveRunsPerUser,
         maxRunsPerKeyPerMinute: config.rest.maxRunsPerKeyPerMinute,
       },
+      mcp: config.mcp.disabled ? null : createMcpRuntime(pool, config.mcp),
       ...(options.extraCa ? { extraCa: options.extraCa } : {}),
       ...(options.oidcAllowHttp ? { oidcAllowHttp: true } : {}),
       // Passerelle tunnel WSS (07 § 6) : LISTEN sur le canal de cette instance, démarrée avant l'écoute HTTP.

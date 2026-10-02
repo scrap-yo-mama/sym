@@ -38,6 +38,10 @@ des cinq premières est posée. Une autorité de certification privée pour Post
 | `GATEWAY_INSTANCE` | server | facultative | hôte + pid + aléa | Identifiant de cette instance pour la passerelle du tunnel (canal de notification PostgreSQL de ses commandes) ; à fixer si plusieurs instances partagent la base. |
 | `TUNNEL_EXTENSION_IDS` | server | facultative | aucun | Identifiants (32 lettres a à p), séparés par des virgules, des extensions autorisées à ouvrir le tunnel : l’origine `chrome-extension://<id>` est vérifiée à l’ouverture. Tant que l’extension n’est pas publiée au Chrome Web Store, posez celui de votre extension empaquetée, sinon aucune extension n’est acceptée. |
 | `TUNNEL_ALLOW_ANY_EXTENSION` | server | facultative | false | `true` accepte toute extension (développement, extension décompressée) ; à ne pas poser en production. |
+| `DISABLE_MCP` | server | facultative | false | `true` : aucune route `/mcp` (serveur MCP coupé) ; l’API REST et la console restent servies. |
+| `MCP_TOOL_EXPOSURE` | server | facultative | pinned | Outils par API du serveur MCP : `generic` (aucun, tout passe par `run_api` et `list_apis`), `pinned` (les API épinglées pour le MCP, 20 au plus) ou `all` (toutes, 20 au plus ; au-delà de 30 API, `pinned` est conseillé). |
+| `MCP_ALLOWED_HOSTS` | server | facultative | l’hôte de `PUBLIC_URL` | Noms d’hôte supplémentaires (sans port), séparés par des virgules, admis dans l’en-tête `Host` d’une requête MCP (réseau interne, autre nom de l’instance) ; tout autre hôte reçoit 403. |
+| `MCP_ALLOWED_ORIGINS` | server | facultative | l’hôte de `PUBLIC_URL` | Noms d’hôte supplémentaires (sans schéma ni port), séparés par des virgules, admis dans l’en-tête `Origin` d’une requête MCP ; une origine présente et non admise reçoit 403, une requête sans `Origin` (client MCP hors navigateur) est acceptée. |
 
 ## Accès
 

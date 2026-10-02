@@ -121,7 +121,7 @@ catalog:
   "@modelcontextprotocol/client": 2.1.0
   # Suite de conformité MCP officielle (15 § 6, tâche 3.2) : version épinglée, la seule à couvrir la révision 2026-07-28
   # (0.1.16, dernière stable du 2026-03-30, s'arrête à 2025-11-25) ; 0.2.0-alpha.11 publiée le 2026-08-07 (alpha.12 du
-  # 2026-10-01 < 7 jours). Écarts attendus commentés : tests/mcp-conformance/expected-failures.yaml.
+  # 2026-10-01 < 7 jours). Écarts attendus commentés : tests/mcp-conformance/expected-failures-<révision>.yaml.
   "@modelcontextprotocol/conformance": 0.2.0-alpha.11
 
 # OTel coupé = aucun module de l'API ni du SDK résolu (14 § 10, assert_otel_off_by_default). Better Auth
