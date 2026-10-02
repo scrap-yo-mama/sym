@@ -7,7 +7,18 @@ import { isIP } from 'node:net';
 import { apiKeyPrefixOf } from '../auth/api-key.js';
 import { isServiceMode, SERVICE_MODES, unknownReservedVariablesWarning, type ServiceMode } from './env-catalog.js';
 import { ConfigError, Reader, type Env } from './reader.js';
+import { secretValues } from '../crypto/redact.js';
 import type { Secret } from './secret.js';
+
+/** Mot de passe de `DATABASE_URL` (décodé), masqué à part : il peut apparaître seul dans un message d'erreur. */
+function databaseUrlPassword(url: Secret | null): string | null {
+  if (url === null) return null;
+  try {
+    return decodeURIComponent(new URL(url.reveal()).password) || null;
+  } catch {
+    return null;
+  }
+}
 
 export const LOG_LEVELS = ['trace', 'debug', 'info', 'warn', 'error', 'fatal'] as const;
 export type LogLevel = (typeof LOG_LEVELS)[number];
@@ -237,6 +248,12 @@ export function loadConfig(env: Env = process.env, options: LoadOptions = {}): B
   }
 
   if (reader.issues.length > 0) throw new ConfigError([...reader.issues]);
+  // Audit 5.3 S16 (BINV6) : chaque secret de la configuration est inscrit au registre du masquage dès son chargement.
+  for (const secret of [databaseUrl, masterKey, masterKeyPrevious, nodeToken, metricsToken, bootstrapToken, bootstrapApiKey, s3Access, s3Secret]) {
+    if (secret !== null) secretValues.add(secret.reveal());
+  }
+  const dbPassword = databaseUrlPassword(databaseUrl);
+  if (dbPassword) secretValues.add(dbPassword);
   // Sans erreur, les valeurs obligatoires sont présentes (le lecteur a signalé l'absence sinon).
   const warning = unknownReservedVariablesWarning(env);
   return {

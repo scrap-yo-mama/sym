@@ -318,6 +318,19 @@ describe('découverte json/version (F5, tâche 2.8)', () => {
     expect(node.requests.at(-1)).toEqual({ path: `/internal/sessions/${dedicated}/cdp/json/version`, authorization: `Bearer ${NODE_TOKEN}` });
   });
 
+  test('audit 5.3 S14 (assert_access_authenticated) : la découverte par jeton ne prolonge jamais ce jeton ; par clé d’API : durée normale', async () => {
+    const given = token(dedicated, 'cdp', 60);
+    const res = await discover(`/v1/sessions/${dedicated}/cdp/json/version?token=${given}`);
+    expect(res.status).toBe(200);
+    const fresh = new URL(String(res.body.webSocketDebuggerUrl)).searchParams.get('token') ?? '';
+    const givenCheck = tokens.verify(given, { sessionId: dedicated, protocol: 'cdp' });
+    const freshCheck = tokens.verify(fresh, { sessionId: dedicated, protocol: 'cdp' });
+    expect(freshCheck.ok && givenCheck.ok && freshCheck.expiresAt.getTime() <= givenCheck.expiresAt.getTime()).toBe(true);
+    const viaKey = await discover(`/v1/sessions/${dedicated}/cdp/json/version`, { authorization: `Bearer ${h.keys.a}` });
+    const keyFresh = tokens.verify(new URL(String(viaKey.body.webSocketDebuggerUrl)).searchParams.get('token') ?? '', { sessionId: dedicated, protocol: 'cdp' });
+    expect(keyFresh.ok && keyFresh.expiresAt.getTime() - now).toBeGreaterThan(200_000);
+  });
+
   test('sans jeton, jeton d’une autre session : 401 ; session shared : 409 protocol_not_served ; 0 requête vers le nœud', async () => {
     const before = node.requests.length;
     expect((await discover(`/v1/sessions/${dedicated}/cdp/json/version`)).status).toBe(401);

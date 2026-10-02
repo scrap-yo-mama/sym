@@ -166,6 +166,15 @@ describe('couche 3 : valeurs connues et motifs', () => {
   });
 });
 
+describe('audit 5.3 S17 (BINV6, assert_secrets_protected) : en-têtes d’authentification applicatifs des HAR', () => {
+  test.each(['X-Api-Key', 'X-Auth-Token', 'X-CSRF-Token', 'X-Amz-Security-Token', 'X-Session-Id', 'Api-Secret'])('%s : valeur masquée, Accept gardé', (name) => {
+    const har = JSON.stringify({ log: { entries: [{ request: { headers: [{ name, value: 'zz_test_canary_s17' }, { name: 'Accept', value: 'text/html' }] } }] } });
+    const out = redactArtifactText(har, new SecretValueRegistry());
+    expect(out).not.toContain('zz_test_canary_s17');
+    expect(out).toContain('text/html');
+  });
+});
+
 describe('assert_secrets_protected (BINV6, partie journaux, tâche 0.3)', () => {
   test('mot de passe de proxy, jeton de connexion, clé d’API, jeton de vue : 0 occurrence en clair dans les lignes', () => {
     const reg = new SecretValueRegistry();

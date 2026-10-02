@@ -189,3 +189,24 @@ describe('ApiKeyAuthenticator', () => {
     expect(store.lookups).toEqual([]);
   });
 });
+
+describe('audit 5.3 S15 : coût argon2id borné face à des clés inventées (OWASP API4)', () => {
+  test('au plus N calculs simultanés, file bornée : au-delà, refus immédiat « busy » sans calcul', async () => {
+    const store = new MemoryStore();
+    const auth = new ApiKeyAuthenticator(store, { maxConcurrentVerifications: 1, maxQueuedVerifications: 1 });
+    const forged = () => generateApiKey().key.reveal();
+    const results = await Promise.all(Array.from({ length: 6 }, () => auth.check(forged())));
+    const reasons = results.map((r) => (r.ok ? 'ok' : r.reason));
+    expect(reasons.filter((r) => r === 'unknown')).toHaveLength(2);
+    expect(reasons.filter((r) => r === 'busy')).toHaveLength(4);
+  });
+
+  test('une clé déjà vérifiée (cache) passe même file pleine', async () => {
+    const { store, key } = await storeWith();
+    const auth = new ApiKeyAuthenticator(store, { maxConcurrentVerifications: 1, maxQueuedVerifications: 0 });
+    expect((await auth.check(key)).ok).toBe(true);
+    const flood = Array.from({ length: 3 }, () => auth.check(generateApiKey().key.reveal()));
+    expect((await auth.check(key)).ok).toBe(true);
+    await Promise.all(flood);
+  });
+});

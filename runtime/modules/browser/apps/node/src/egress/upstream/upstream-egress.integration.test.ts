@@ -101,7 +101,8 @@ describe.skipIf(SKIP)('assert_session_egress_enforced (C5 à C7) et assert_secre
     const run = await browse(id, socksRelay, 'socks5');
     expect(run.session.exitIp).toBe(EGRESS_IPS.socks5);
     expect(run.seen.ip).toBe(EGRESS_IPS.socks5);
-    const fresh = (await journal()).slice(before).filter((e) => e.path !== '/__ips');
+    // `/health` vu depuis 127.0.0.1 : sonde de santé Docker du conteneur du site lui-même, pas une requête de la session.
+    const fresh = (await journal()).slice(before).filter((e) => e.path !== '/__ips' && !(e.path === '/health' && e.ip === '127.0.0.1'));
     expect(fresh.length).toBeGreaterThan(0);
     expect(fresh.every((e) => e.ip === EGRESS_IPS.socks5)).toBe(true);
     for (const secret of SECRETS) expect(run.har).not.toContain(secret);
@@ -122,6 +123,6 @@ describe.skipIf(SKIP)('assert_session_egress_enforced (C5 à C7) et assert_secre
       expect(started).toBe(0);
       expect(JSON.stringify(error)).not.toContain('zz_test_mauvais_pw');
     }
-    expect((await journal()).slice(before).filter((e) => e.path !== '/__ips')).toEqual([]);
+    expect((await journal()).slice(before).filter((e) => e.path !== '/__ips' && !(e.path === '/health' && e.ip === '127.0.0.1'))).toEqual([]);
   }, 60_000);
 });

@@ -5,6 +5,7 @@
 // → révocation → expiration (instant exact compris) → scopes (ensemble fermé). La ligne est relue à chaque requête :
 // révocation, expiration et scopes s'appliquent immédiatement ; seul le calcul argon2id est mis en cache, lié à l'empreinte.
 import { createHmac, randomBytes } from 'node:crypto';
+import { availableParallelism } from 'node:os';
 import type { Secret } from '../crypto/redact.js';
 import { apiKeyPrefixOf, generateApiKey } from './api-key.js';
 import { burnVerification, hashSecret, verifySecret } from './hash.js';
@@ -30,7 +31,8 @@ export interface ApiKeyStore {
 /** Identité d'une clé valide (forme attendue par `GatewayDeps.auth` de l'API REST, tâche 2.2). */
 export type Principal = { tenantId: string; apiKeyId: string; scopes: readonly ApiScope[] };
 
-export type ApiKeyFailure = 'malformed' | 'unknown' | 'mismatch' | 'revoked' | 'expired' | 'invalid_record';
+/** `busy` : trop de calculs argon2id en cours et en attente (audit 5.3 S15) ; la passerelle répond 429, jamais 401. */
+export type ApiKeyFailure = 'malformed' | 'unknown' | 'mismatch' | 'revoked' | 'expired' | 'invalid_record' | 'busy';
 export type ApiKeyCheck = { ok: true; principal: Principal } | { ok: false; reason: ApiKeyFailure };
 
 export type AuthenticatorOptions = {
@@ -39,7 +41,36 @@ export type AuthenticatorOptions = {
   touchIntervalMs?: number;
   /** Entrées du cache de vérification (défaut 1 024). */
   cacheSize?: number;
+  /** Calculs argon2id simultanés (défaut : nombre de cœurs, 2 au moins) ; chacun prend ~19 Mio. */
+  maxConcurrentVerifications?: number;
+  /** Calculs en attente au-delà desquels la vérification est refusée sans calcul (`busy`, défaut 64). */
+  maxQueuedVerifications?: number;
 };
+
+/** File bornée de calculs coûteux : `undefined` si elle est pleine (rien n'est calculé). */
+class Limiter {
+  #running = 0;
+  readonly #waiting: Array<() => void> = [];
+  readonly concurrency: number;
+  readonly queue: number;
+  constructor(concurrency: number, queue: number) {
+    this.concurrency = concurrency;
+    this.queue = queue;
+  }
+  async run<T>(task: () => Promise<T>): Promise<T | undefined> {
+    if (this.#running >= this.concurrency) {
+      if (this.#waiting.length >= this.queue) return undefined;
+      await new Promise<void>((resolve) => this.#waiting.push(resolve));
+    } else this.#running += 1;
+    try {
+      return await task();
+    } finally {
+      const next = this.#waiting.shift();
+      if (next) next();
+      else this.#running -= 1;
+    }
+  }
+}
 
 export class ApiKeyAuthenticator {
   readonly #store: ApiKeyStore;
@@ -50,12 +81,14 @@ export class ApiKeyAuthenticator {
   readonly #verified = new Map<string, string>();
   readonly #cacheKey = randomBytes(32);
   readonly #touched = new Map<string, number>();
+  readonly #limiter: Limiter;
 
   constructor(store: ApiKeyStore, options: AuthenticatorOptions = {}) {
     this.#store = store;
     this.#now = options.now ?? (() => new Date());
     this.#touchIntervalMs = options.touchIntervalMs ?? 60_000;
     this.#cacheSize = options.cacheSize ?? 1024;
+    this.#limiter = new Limiter(options.maxConcurrentVerifications ?? Math.max(2, availableParallelism()), options.maxQueuedVerifications ?? 64);
   }
 
   /** Clé reçue en `Authorization: Bearer` ; `null` si elle est malformée, inconnue, fausse, révoquée ou expirée. */
@@ -70,10 +103,12 @@ export class ApiKeyAuthenticator {
     if (!prefix) return { ok: false, reason: 'malformed' };
     const row = await this.#store.findByPrefix(prefix);
     if (!row) {
-      await burnVerification();
+      if ((await this.#limiter.run(async () => (await burnVerification(), true))) === undefined) return { ok: false, reason: 'busy' };
       return { ok: false, reason: 'unknown' };
     }
-    if (!(await this.#matches(secret, row.keyHash))) return { ok: false, reason: 'mismatch' };
+    const matches = await this.#matches(secret, row.keyHash);
+    if (matches === undefined) return { ok: false, reason: 'busy' };
+    if (!matches) return { ok: false, reason: 'mismatch' };
     const now = this.#now();
     if (row.revokedAt !== null) return { ok: false, reason: 'revoked' };
     if (row.expiresAt !== null && row.expiresAt.getTime() <= now.getTime()) return { ok: false, reason: 'expired' };
@@ -82,10 +117,13 @@ export class ApiKeyAuthenticator {
     return { ok: true, principal: { tenantId: row.tenantId, apiKeyId: row.id, scopes: [...row.scopes] as ApiScope[] } };
   }
 
-  async #matches(secret: string, keyHash: string): Promise<boolean> {
+  /** `undefined` : file des calculs pleine. Une clé déjà vérifiée ne coûte aucun calcul et passe toujours. */
+  async #matches(secret: string, keyHash: string): Promise<boolean | undefined> {
     const digest = createHmac('sha256', this.#cacheKey).update(secret).digest('base64');
     if (this.#verified.get(digest) === keyHash) return true;
-    if (!(await verifySecret(secret, keyHash))) return false;
+    const verified = await this.#limiter.run(() => verifySecret(secret, keyHash));
+    if (verified === undefined) return undefined;
+    if (!verified) return false;
     if (this.#verified.size >= this.#cacheSize) this.#verified.delete(this.#verified.keys().next().value!);
     this.#verified.set(digest, keyHash);
     return true;

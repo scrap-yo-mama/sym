@@ -182,7 +182,11 @@ describe('idempotent_create (A9)', () => {
     const replay = await create({ metadata: { idem: '1' } }, { headers });
     expect(replay.status).toBe(201);
     expect(replay.headers['idempotent-replayed']).toBe('true');
-    expect(replay.body).toEqual(first.body);
+    // Audit 5.3 S10 : même session, mêmes champs ; jetons de connexion neufs (aucun jeton gardé au repos).
+    const { connectUrls: firstUrls, ...firstRest } = first.body;
+    const { connectUrls: replayUrls, ...replayRest } = replay.body;
+    expect(replayRest).toEqual(firstRest);
+    expect(Object.keys(replayUrls)).toEqual(Object.keys(firstUrls));
     expect((await h.pool.query("SELECT 1 FROM sessions WHERE metadata->>'idem' = '1'")).rowCount).toBe(1);
 
     const conflict = await create({ metadata: { idem: '2' } }, { headers });

@@ -51,6 +51,7 @@ export function createDbRelayResolver(deps: {
       );
       if (!decision.ok) {
         deps.onDenied?.(sessionId, decision.reason);
+        if (decision.status === 401 && decision.reason === 'busy') return { ok: false, problem: new ApiProblem('capacity_exceeded', 'Too many API key verifications in progress.', { details: { limit: 'auth' }, retryAfter: 1 }) };
         if (decision.status === 403) return { ok: false, problem: new ApiProblem('forbidden', `Scope ${decision.requiredScope} required.`, { details: { requiredScope: decision.requiredScope } }) };
         return { ok: false, problem: new ApiProblem('unauthorized', 'Missing, invalid or expired credential for this session.') };
       }
@@ -58,7 +59,8 @@ export function createDbRelayResolver(deps: {
       if (!session) return { ok: false, problem: new ApiProblem('unauthorized', 'Missing, invalid or expired credential for this session.') };
       if (protocol === 'cdp' && session.type !== 'dedicated') return { ok: false, problem: new ApiProblem('protocol_not_served', 'CDP is served for dedicated sessions only.') };
       if (!session.nodeUrl || session.nodeState === 'down') return { ok: false, problem: new ApiProblem('no_node', 'Session node unavailable.', { retryAfter: 1 }) };
-      return { ok: true, nodeUrl: session.nodeUrl, sessionId };
+      // Audit 5.3 S14 : ouvert par un jeton, le point découvert n'en dépasse jamais l'échéance (pas d'auto-renouvellement).
+      return { ok: true, nodeUrl: session.nodeUrl, sessionId, ...(decision.via === 'connect_token' ? { notAfter: decision.expiresAt } : {}) };
     },
   };
 }

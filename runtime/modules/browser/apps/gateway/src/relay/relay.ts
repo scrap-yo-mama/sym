@@ -28,7 +28,7 @@ import { ApiProblem, preferredLanguage } from '../api/errors.js';
 
 type RelayProtocol = 'playwright' | 'cdp' | 'live';
 
-export type RelayAuthorization = { ok: true; nodeUrl: string; sessionId: string; liveMode?: 'ro' | 'rw' } | { ok: false; problem: ApiProblem };
+export type RelayAuthorization = { ok: true; nodeUrl: string; sessionId: string; liveMode?: 'ro' | 'rw'; notAfter?: Date } | { ok: false; problem: ApiProblem };
 
 export interface RelayResolver {
   /** En-têtes et query de la demande d'upgrade, tels que reçus (seuls `authorization`, `token` et, pour `live`, `t` sont lus). */
@@ -49,7 +49,7 @@ export type RelayOptions = {
   /** Taille maximale d'un message relayé (`SYMB_CDP_MAX_MESSAGE_BYTES`, 100 Mio). */
   cdpMaxMessageBytes?: number;
   /** Point WebSocket CDP public d'une session, à jeton neuf (`json/version`) ; absent : découverte non servie. */
-  cdpWebSocketUrl?: (sessionId: string) => string | Promise<string>;
+  cdpWebSocketUrl?: (sessionId: string, notAfter?: Date) => string | Promise<string>;
   onError?: (error: unknown) => void;
 };
 
@@ -63,6 +63,8 @@ const SERVED_MINOR = BROWSER_ENGINE.playwright.split('.').slice(0, 2).join('.');
 /** Champs de `/json/version` rendus au client (liste blanche, 04f § 2). */
 const VERSION_FIELDS = ['Browser', 'Protocol-Version', 'User-Agent', 'V8-Version', 'WebKit-Version', 'Android-Package'] as const;
 const DISCOVERY_TIMEOUT_MS = 5_000;
+/** Délai d'ouverture de la connexion vers le nœud ; au-delà, 1011 (nœud injoignable). */
+const NODE_HANDSHAKE_MS = 10_000;
 
 const sizeOf = (data: RawData): number => (Array.isArray(data) ? data.reduce((n, part) => n + part.length, 0) : data instanceof ArrayBuffer ? data.byteLength : data.length);
 
@@ -120,7 +122,7 @@ export async function registerRelay(app: FastifyInstance, options: RelayOptions)
       const raw = (await response.json().catch(() => ({}))) as Record<string, unknown>;
       const fields = Object.fromEntries(VERSION_FIELDS.filter((k) => typeof raw[k] === 'string').map((k) => [k, raw[k]]));
       reply.header('x-request-id', request.id).header('cache-control', 'no-store');
-      return { ...fields, webSocketDebuggerUrl: await cdpWebSocketUrl(decision.sessionId) };
+      return { ...fields, webSocketDebuggerUrl: await cdpWebSocketUrl(decision.sessionId, decision.notAfter) };
     });
   }
 
@@ -145,8 +147,10 @@ export async function registerRelay(app: FastifyInstance, options: RelayOptions)
         const nodeWs = `${target.nodeUrl.replace(/\/+$/, '').replace(/^http/, 'ws')}/internal/sessions/${encodeURIComponent(target.sessionId)}/${protocol}`;
         const headers: Record<string, string> = { authorization: `Bearer ${options.nodeToken}` };
         if (target.liveMode !== undefined) headers['x-symb-live-mode'] = target.liveMode;
-        const upstream = new WebSocket(nodeWs, { headers, maxPayload, perMessageDeflate: false });
+        const upstream = new WebSocket(nodeWs, { headers, maxPayload, perMessageDeflate: false, handshakeTimeout: NODE_HANDSHAKE_MS });
+        // Audit 5.3 S13 : avant l'ouverture vers le nœud, l'attente est bornée à un plafond de message (sinon 1008).
         const queue: { data: RawData; binary: boolean }[] = [];
+        let queuedBytes = 0;
         let closing = false;
         let missedPongs = 0;
 
@@ -177,8 +181,10 @@ export async function registerRelay(app: FastifyInstance, options: RelayOptions)
         client.on('message', (data: RawData, binary: boolean) => {
           if (closing) return;
           if (sizeOf(data) > maxMessageBytes) return closeBoth(1008, 'message au-delà du plafond');
-          if (upstream.readyState === WebSocket.OPEN) upstream.send(data, { binary });
-          else queue.push({ data, binary });
+          if (upstream.readyState === WebSocket.OPEN) return upstream.send(data, { binary });
+          queuedBytes += sizeOf(data);
+          if (queuedBytes > maxMessageBytes) return closeBoth(1008, 'file d’attente au-delà du plafond');
+          queue.push({ data, binary });
         });
         client.on('close', (code, reason) => closeBoth(code, reason.toString()));
         client.on('error', (error) => {
@@ -188,6 +194,7 @@ export async function registerRelay(app: FastifyInstance, options: RelayOptions)
 
         upstream.on('open', () => {
           for (const { data, binary } of queue.splice(0)) upstream.send(data, { binary });
+          queuedBytes = 0;
         });
         upstream.on('message', (data: RawData, binary: boolean) => {
           if (client.readyState === WebSocket.OPEN) client.send(data, { binary });

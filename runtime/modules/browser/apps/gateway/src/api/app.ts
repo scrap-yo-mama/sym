@@ -72,6 +72,19 @@ declare module 'fastify' {
   }
 }
 
+/**
+ * Options gardées en base (`sessions.options`, informatives : le nœud reçoit la demande d'origine) : valeurs des en-têtes et
+ * `storageState` masquées (audit 5.3 S11, BINV6 : en-têtes d'authentification et cookies de session jamais en clair au repos).
+ */
+function persistedOptions(options: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = { ...options };
+  const headers = options['extraHTTPHeaders'];
+  if (headers !== null && typeof headers === 'object') out['extraHTTPHeaders'] = Object.fromEntries(Object.keys(headers).map((name) => [name, '[masqué]']));
+  const state = options['storageState'] as { cookies?: unknown[]; origins?: unknown[] } | undefined;
+  if (state !== undefined) out['storageState'] = { masked: true, cookies: state.cookies?.length ?? 0, origins: state.origins?.length ?? 0 };
+  return out;
+}
+
 const sessionNotFound = (): ApiProblem => new ApiProblem('session_not_found', 'Session not found.');
 
 /** Curseur opaque : position (`created_at` en microsecondes, `id`) de la dernière session de la page. */
@@ -152,6 +165,10 @@ export async function createGatewayApi(deps: GatewayDeps): Promise<FastifyInstan
   app.addHook('onSend', async (request, reply) => {
     reply.header('x-request-id', request.id);
     reply.header('cache-control', 'no-store');
+    // Audit 5.3 S12 : réponses JSON jamais interprétées autrement, jamais encadrées, jamais référencées (jetons en URL).
+    reply.header('x-content-type-options', 'nosniff');
+    reply.header('referrer-policy', 'no-referrer');
+    reply.header('x-frame-options', 'DENY');
   });
 
   const fail = (request: FastifyRequest, reply: FastifyReply, problem: ApiProblem): FastifyReply => {
@@ -180,6 +197,8 @@ export async function createGatewayApi(deps: GatewayDeps): Promise<FastifyInstan
       return;
     }
     if (decision.status === 403) throw new ApiProblem('forbidden', `Scope ${decision.requiredScope} required.`, { details: { requiredScope: decision.requiredScope } });
+    // Audit 5.3 S15 : file des vérifications argon2id pleine → 429 à réessayer, jamais 401.
+    if (decision.reason === 'busy') throw new ApiProblem('capacity_exceeded', 'Too many API key verifications in progress.', { details: { limit: 'auth' }, retryAfter: 1 });
     throw new ApiProblem('unauthorized', 'Missing, unknown or expired API key.');
   };
   const principalOf = (request: FastifyRequest): Principal => {
@@ -187,19 +206,22 @@ export async function createGatewayApi(deps: GatewayDeps): Promise<FastifyInstan
     return request.principal;
   };
 
-  const connectUrls = async (sessionId: string, type: SessionType): Promise<ConnectUrls> => {
+  const connectUrls = async (sessionId: string, type: SessionType, notAfter?: Date): Promise<ConnectUrls> => {
     const url = async (protocol: 'playwright' | 'cdp') =>
-      `${wsBase}/v1/sessions/${sessionId}/${protocol}?token=${encodeURIComponent(await deps.tokens.issue({ sessionId, protocol, ttlSeconds: CONNECT_TOKEN_TTL_SECONDS }))}`;
+      `${wsBase}/v1/sessions/${sessionId}/${protocol}?token=${encodeURIComponent(await deps.tokens.issue({ sessionId, protocol, ttlSeconds: CONNECT_TOKEN_TTL_SECONDS, ...(notAfter === undefined ? {} : { notAfter }) }))}`;
     return { cdp: type === 'dedicated' ? await url('cdp') : null, playwright: await url('playwright'), bidi: null };
   };
 
-  /** Réponse `Session` (04 § 4) : `connectUrls` à jeton neuf pour une session `running` seulement. */
-  const present = async (view: SessionView): Promise<Session> => ({
+  /**
+   * Réponse `Session` (04 § 4) : `connectUrls` à jeton neuf pour une session `running` seulement, et seulement pour qui peut
+   * la piloter (`sessions:write`, audit 5.3 S09 : une clé de lecture ne reçoit aucun jeton de pilotage).
+   */
+  const present = async (view: SessionView, canDrive = true): Promise<Session> => ({
     id: view.id,
     state: view.state,
     type: view.type,
     ...(view.nodeRegion === null ? {} : { nodeRegion: view.nodeRegion }),
-    ...(view.state === 'running' ? { connectUrls: await connectUrls(view.id, view.type) } : {}),
+    ...(view.state === 'running' && canDrive ? { connectUrls: await connectUrls(view.id, view.type) } : {}),
     // Vue en direct (04d § 1.1) : page de la console, jeton de lecture seule de 15 min ; `rw` par la route dédiée (contrat).
     ...(view.state === 'running' && deps.relay?.liveTokens !== undefined ? { liveViewUrl: liveViewUrl(deps.publicUrl, view.id, deps.relay.liveTokens.issue({ sessionId: view.id, mode: 'ro' }).token) } : {}),
     expiresAt: view.expiresAt.toISOString(),
@@ -242,10 +264,16 @@ export async function createGatewayApi(deps: GatewayDeps): Promise<FastifyInstan
     const scope = { tenantId: principalOf(request).tenantId, operation, key: header };
     const claim = await claimIdempotencyKey(deps.db, { ...scope, hash: requestHash(target, body) });
     if (claim.kind === 'conflict') throw new ApiProblem('idempotency_conflict', 'Idempotency-Key already used for another request.');
-    if (claim.kind === 'replay') return reply.code(claim.status).header('idempotent-replayed', 'true').send(claim.body);
+    if (claim.kind === 'replay') {
+      // Audit 5.3 S10 : la réponse gardée n'a aucun jeton ; le rejeu relit la session et émet des jetons neufs.
+      const stored = claim.body as Partial<Session>;
+      const view = typeof stored.id === 'string' ? await getSessionView(deps.db, { tenantId: scope.tenantId, sessionId: stored.id }) : null;
+      return reply.code(claim.status).header('idempotent-replayed', 'true').send(view ? await present(view) : claim.body);
+    }
     try {
       const result = await run();
-      await completeIdempotencyKey(deps.db, { ...scope, status: result.status, body: result.body });
+      const { connectUrls: _connectUrls, liveViewUrl: _liveViewUrl, ...kept } = result.body;
+      await completeIdempotencyKey(deps.db, { ...scope, status: result.status, body: kept as Session });
       return reply.code(result.status).send(result.body);
     } catch (error) {
       await releaseIdempotencyKey(deps.db, scope);
@@ -265,7 +293,8 @@ export async function createGatewayApi(deps: GatewayDeps): Promise<FastifyInstan
       ...(deps.relay.pingIntervalMs === undefined ? {} : { pingIntervalMs: deps.relay.pingIntervalMs }),
       ...(deps.relay.cdpMaxMessageBytes === undefined ? {} : { cdpMaxMessageBytes: deps.relay.cdpMaxMessageBytes }),
       // Découverte json/version (tâche 2.8) : même URL que `connectUrls.cdp`, jeton neuf.
-      cdpWebSocketUrl: async (sessionId) => (await connectUrls(sessionId, 'dedicated')).cdp ?? '',
+      // Ouverte par un jeton : jamais au-delà de son échéance (audit 5.3 S14).
+      cdpWebSocketUrl: async (sessionId, notAfter) => (await connectUrls(sessionId, 'dedicated', notAfter)).cdp ?? '',
       onError,
     });
   }
@@ -355,7 +384,7 @@ export async function createGatewayApi(deps: GatewayDeps): Promise<FastifyInstan
         type,
         region,
         timeoutSeconds,
-        options: { ...rest, type, timeoutSeconds, idleTimeoutSeconds },
+        options: persistedOptions({ ...rest, type, timeoutSeconds, idleTimeoutSeconds }),
         egressPolicy: egress as Record<string, unknown>,
         metadata: metadata ?? {},
         slotWeight: sessionUnits(type),
@@ -465,10 +494,13 @@ export async function createGatewayApi(deps: GatewayDeps): Promise<FastifyInstan
       ...(createdBefore === undefined ? {} : { createdBefore }),
     });
     const last = page.data.at(-1);
-    return { data: await Promise.all(page.data.map(present)), nextCursor: page.hasMore && last ? encodeCursor(last.position) : null };
+    const canDrive = principalOf(request).scopes.includes('sessions:write');
+    return { data: await Promise.all(page.data.map((view) => present(view, canDrive))), nextCursor: page.hasMore && last ? encodeCursor(last.position) : null };
   });
 
-  app.get('/v1/sessions/:id', { preHandler: authorize('sessions:read') }, async (request) => present(await loadSession(request, (request.params as { id: string }).id)));
+  app.get('/v1/sessions/:id', { preHandler: authorize('sessions:read') }, async (request) =>
+    present(await loadSession(request, (request.params as { id: string }).id), principalOf(request).scopes.includes('sessions:write')),
+  );
 
   app.delete('/v1/sessions/:id', { preHandler: authorize('sessions:write') }, async (request) => {
     const view = await loadSession(request, (request.params as { id: string }).id);

@@ -60,7 +60,7 @@ export type ConnectionInput = {
 export type ConnectionFailure = 'missing' | 'api_key_in_query' | 'session_not_found' | 'session_not_running' | ApiKeyFailure | TokenFailure;
 
 export type ConnectionDecision =
-  | { ok: true; via: 'connect_token'; tenantId: string }
+  | { ok: true; via: 'connect_token'; tenantId: string; expiresAt: Date }
   | { ok: true; via: 'api_key'; tenantId: string; apiKeyId: string }
   | Unauthorized<ConnectionFailure>
   | Forbidden;
@@ -96,7 +96,7 @@ export async function authorizeConnection(deps: ConnectionDeps, input: Connectio
     const session = await deps.session(input.sessionId);
     if (!session) return unauthorized('session_not_found');
     if (session.state !== 'running') return unauthorized('session_not_running');
-    return { ok: true, via: 'connect_token', tenantId: session.tenantId };
+    return { ok: true, via: 'connect_token', tenantId: session.tenantId, expiresAt: checked.expiresAt };
   }
 
   const result = await deps.auth.check(credential);

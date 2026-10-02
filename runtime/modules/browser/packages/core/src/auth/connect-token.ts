@@ -47,12 +47,13 @@ export class ConnectTokens {
   }
 
   /** Forme attendue par `GatewayDeps.tokens` de l'API REST (2.2). */
-  issue(input: { sessionId: string; protocol: ConnectProtocol; ttlSeconds?: number }): string {
+  /** `notAfter` : échéance à ne jamais dépasser (jeton dérivé d'un autre jeton, audit 5.3 S14). */
+  issue(input: { sessionId: string; protocol: ConnectProtocol; ttlSeconds?: number; notAfter?: Date }): string {
     const ttl = input.ttlSeconds ?? CONNECT_TOKEN_TTL_SECONDS;
     if (!Number.isInteger(ttl) || ttl < 1 || ttl > CONNECT_TOKEN_MAX_TTL_SECONDS) throw new RangeError(`durée de jeton (ttlSeconds) invalide : entier de 1 à ${CONNECT_TOKEN_MAX_TTL_SECONDS} attendu.`);
     if (typeof input.sessionId !== 'string' || input.sessionId === '' || input.sessionId.length > MAX_SESSION_ID_LENGTH) throw new TypeError('sessionId invalide.');
     if (!isProtocol(input.protocol)) throw new TypeError(`protocole invalide : ${String(input.protocol)}.`);
-    const payload: Payload = { v: 1, s: input.sessionId, p: input.protocol, e: Math.floor(this.#now() / 1000) + ttl, n: randomBytes(9).toString('base64url') };
+    const payload: Payload = { v: 1, s: input.sessionId, p: input.protocol, e: Math.min(Math.floor(this.#now() / 1000) + ttl, input.notAfter === undefined ? Infinity : Math.floor(input.notAfter.getTime() / 1000)), n: randomBytes(9).toString('base64url') };
     const body = `${CONNECT_TOKEN_PREFIX}${Buffer.from(JSON.stringify(payload)).toString('base64url')}`;
     return `${body}${this.#mac(this.#keys[0]!, body).toString('base64url')}`;
   }

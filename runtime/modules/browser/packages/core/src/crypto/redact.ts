@@ -173,7 +173,8 @@ export function redact<T>(value: T, registry: SecretValueRegistry = secretValues
   return walk(value, registry, new WeakMap()) as T;
 }
 
-const SENSITIVE_HEADER = /^(?:cookie|set-cookie|authorization|proxy-authorization)$/i;
+// Audit 5.3 S17 : en-têtes d’uthentification applicatifs (X-Api-Key, X-Auth-Token, X-CSRF-Token…) masqués aussi.
+const SENSITIVE_HEADER = /^(?:cookie|set-cookie|authorization|proxy-authorization)$|auth|token|secret|api[-_]?key|csrf|xsrf|session|signature|credential/i;
 
 /** HAR : `cookies[].value` (requête et réponse), `postData.text`, en-têtes sensibles. */
 function redactHar(node: unknown): unknown {
@@ -224,6 +225,8 @@ export function compilePatterns(apiKeyPrefixes: readonly string[] = []): (text: 
       .replace(/\b([a-z][a-z0-9+.-]*:\/\/)(?!\[REDACTED\]@)[^\s/?#@"'\\<>]+@/gi, `$1${REDACTED}@`)
       .replace(/([?&;])([^=&#;\s"'\\<>?]+)=([^&#;\s"'\\<>]*)/g, (match, sep: string, name: string) => (isSensitiveParam(name) ? `${sep}${name}=${REDACTED}` : match));
     if (keys) out = out.replace(keys, REDACTED);
+    // Audit 5.3 S16 : secret Standard Webhooks (`whsec_…`, base64) et jeton de vue en direct (`v1.<corps>.<mac>`).
+    out = out.replace(/(?<![A-Za-z0-9_-])whsec_[A-Za-z0-9+/=_-]{16,}/g, REDACTED).replace(/(?<![A-Za-z0-9_.-])v1\.[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{16,}/g, REDACTED);
     return out;
   };
 }

@@ -158,8 +158,8 @@ describe('assert_access_authenticated (BINV7) : ouverture de connexion (Playwrig
 
   test('jeton de session en query ou en Authorization: Bearer : accepté', async () => {
     const token = tokens.issue({ sessionId: own, protocol: 'cdp' });
-    expect(await authorizeConnection(deps, { sessionId: own, protocol: 'cdp', query: { token } })).toEqual({ ok: true, via: 'connect_token', tenantId: 'tA' });
-    expect(await authorizeConnection(deps, { sessionId: own, protocol: 'cdp', headers: { authorization: `Bearer ${token}` } })).toEqual({ ok: true, via: 'connect_token', tenantId: 'tA' });
+    expect(await authorizeConnection(deps, { sessionId: own, protocol: 'cdp', query: { token } })).toMatchObject({ ok: true, via: 'connect_token', tenantId: 'tA', expiresAt: expect.any(Date) });
+    expect(await authorizeConnection(deps, { sessionId: own, protocol: 'cdp', headers: { authorization: `Bearer ${token}` } })).toMatchObject({ ok: true, via: 'connect_token', tenantId: 'tA', expiresAt: expect.any(Date) });
   });
 
   test('sans jeton : 401 avant toute lecture de session', async () => {
