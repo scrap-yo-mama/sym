@@ -46,6 +46,8 @@ export type ProofContext = {
   exists: (path: string) => boolean;
   /** Date de la dernière release (AAAA-MM-JJ), ou undefined avant la première. */
   lastReleaseDate?: string | undefined;
+  /** Date (AAAA-MM-JJ) de la dernière livraison d'une tâche (dernier commit « <tâche> — »), ou undefined si jamais livrée. */
+  taskDeliveredOn?: ((task: string) => string | undefined) | undefined;
   today: string;
 };
 
@@ -66,6 +68,11 @@ export function claimProblems(file: ClaimsFile, context: ProofContext): string[]
     else if (claim.reviewed > context.today) problems.push(`${at} : relue dans le futur (${claim.reviewed})`);
     else if (claim.status === 'relu' && context.lastReleaseDate !== undefined && claim.reviewed < context.lastReleaseDate) {
       problems.push(`${at} : relue le ${claim.reviewed}, avant la dernière release (${context.lastReleaseDate}) : à relire`);
+    }
+    // 22 §3.2 : une entrée liée à une tâche repasse « à relire » à chaque livraison de cette tâche.
+    const delivered = claim.task !== undefined && claim.status === 'relu' ? context.taskDeliveredOn?.(claim.task) : undefined;
+    if (delivered !== undefined && /^\d{4}-\d{2}-\d{2}$/.test(claim.reviewed) && claim.reviewed < delivered) {
+      problems.push(`${at} : relue le ${claim.reviewed}, avant la livraison de sa tâche (tâche ${claim.task ?? ''} livrée le ${delivered}) : à relire`);
     }
     if (claim.proof.length === 0) problems.push(`${at} : aucune preuve (une allégation sans preuve est interdite)`);
     for (const proof of claim.proof) {
@@ -131,6 +138,23 @@ function lastReleaseDate(): string | undefined {
   }
 }
 
+/** Motif (`git log --grep`, expression régulière de base) des commits de livraison d'une tâche : « <tâche> — … » en tête de message. */
+export function taskCommitPattern(task: string): string {
+  if (!/^\d+\.\d+[a-z]?$/.test(task)) throw new Error(`identifiant de tâche invalide : ${task}`);
+  return `^${task.replace('.', '\\.')} —`;
+}
+
+/** Date (AAAA-MM-JJ) du dernier commit de livraison de `task` dans l'historique git, ou undefined si aucun. */
+export function taskDeliveryDate(task: string): string | undefined {
+  const pattern = taskCommitPattern(task);
+  try {
+    const out = execFileSync('git', ['log', '-1', '--date=short', '--format=%cd', `--grep=${pattern}`], { cwd: repoRoot, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+    return /^\d{4}-\d{2}-\d{2}$/.test(out.trim()) ? out.trim() : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /** Contexte de preuve du dépôt réel. */
 export function repoProofContext(readTestCorpus: () => string): ProofContext {
   const table = JSON.parse(readFileSync(join(runtimeDir, 'tests/invariants.json'), 'utf8')) as { invariant: string }[];
@@ -140,6 +164,7 @@ export function repoProofContext(readTestCorpus: () => string): ProofContext {
     invariants,
     exists: (path) => existsSync(join(repoRoot, path)) || existsSync(join(runtimeDir, path)),
     lastReleaseDate: lastReleaseDate(),
+    taskDeliveredOn: taskDeliveryDate,
     today: new Date().toLocaleDateString('sv-SE'),
   };
 }

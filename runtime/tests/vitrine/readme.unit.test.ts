@@ -1,14 +1,18 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Tâche 4.12, critères README de 22b §3 (u8 R1, R2, R23) : chaque test nommé joue le contrôle sur les vrais README ET prouve par un
 // cas négatif que le contrôle échoue quand la règle est violée (un contrôle qui ne sait pas échouer ne prouve rien).
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, expect, test } from 'vitest';
 import { foreignClaimsDisplayed, loadClaims, type ClaimsFile } from '../../scripts/vitrine/lib/claims.ts';
 import { identityOf, publicRepository, verifyBlock } from '../../scripts/vitrine/lib/identity.ts';
 import { findEntries, loadList, normalize, parseList } from '../../scripts/vitrine/lib/text.ts';
 import {
   altProblems, badgeProblems, badgeKind, badges, bannerAltProblems, bannerTexts, claimsProblems, codeBlocks, copyProblems, headings, imageResolveProblems, images, lengthProblems, loadBudgets, marksProblems,
-  parityProblems, pictureProblems, quickstartProblems, readReadme, repoLinkProblems, sectionProblems, verifyBlockProblems, whatItDoes, type Lang,
+  parityProblems, pictureProblems, quickstartProblems, readReadme, repoLinkProblems, sectionProblems, unregisteredFactsProblems, verifyBlockProblems, whatItDoes, type Lang,
 } from '../../scripts/vitrine/lib/readme.ts';
+import { loadThirdPartyRepos, ownerReferenceFiles, ownerReferenceProblems } from '../../scripts/vitrine/lib/owners.ts';
+import { runtimeDir } from '../../scripts/vitrine/lib/paths.ts';
 
 const budgets = loadBudgets();
 const claims = loadClaims();
@@ -69,7 +73,8 @@ describe('assert_readme_sections_present : les 11 blocs de 22 §3.1, dans l\'ord
   });
 
   // Écart assumé au titre du bloc 6 (22 §3.1 : « Try it in two minutes (no key) ») : la première construction de l'image prend
-  // plusieurs minutes, le README dit « Try it (no key) » / « Essaie (sans clé) » (voir SECTION_TITLES dans lib/readme.ts).
+  // plusieurs minutes, et le quickstart crée deux secrets d'instance : le README dit « Try it (no model key) » / « Essaie (sans
+  // clé de modèle) » (voir SECTION_TITLES dans lib/readme.ts).
   test.todo('bloc 2 : lien vers la landing (4.11) à côté de Docs, Quickstart et Discussions, une fois la landing en ligne');
   test.todo('bloc 4 : vignette de démo fr et en (PNG ≤ 150 Ko) cliquable vers la vidéo, ajoutée avec le GIF par 3.11');
 
@@ -125,6 +130,34 @@ describe('assert_readme_claims_registered : chaque puce de « What it does » a 
     const blocked: ClaimsFile = { ...claims, claims: claims.claims.map((c) => (c.id === 'guard-rails' ? { ...c, status: 'bloqué' as const } : c)) };
     expect(claimsProblems(README.fr, 'fr', blocked).join()).toMatch(/bloqué/);
   });
+
+  test('hors des puces : un chiffre avec unité, ou le rejeu par la CI dans « Try it », ne s\'affiche que si la phrase est au registre (22 §3.2)', () => {
+    for (const lang of LANGS) expect(unregisteredFactsProblems(README[lang], lang, claims), lang).toEqual([]);
+    const replay = claims.claims.find((c) => c.id === 'quickstart-replayed-by-ci');
+    expect(replay?.status).toBe('relu');
+    expect(replay?.surfaces).toContain('readme');
+    for (const lang of LANGS) expect(README[lang], lang).toContain(replay?.[lang] ?? '\0');
+  });
+
+  test('cas négatifs : chiffre sans mesure (« about 4 GB of memory »), rejeu par la CI reformulé hors registre, durée annoncée', () => {
+    const memory = README.en.replace('You need Docker with Compose.', 'You need Docker with Compose and about 4 GB of memory.');
+    expect(memory).not.toBe(README.en);
+    expect(unregisteredFactsProblems(memory, 'en', claims).join()).toMatch(/4 GB/);
+    const memoryFr = README.fr.replace('Il te faut Docker avec Compose.', 'Il te faut Docker avec Compose et environ 4 Go de mémoire.');
+    expect(memoryFr).not.toBe(README.fr);
+    expect(unregisteredFactsProblems(memoryFr, 'fr', claims).join()).toMatch(/4 Go/);
+    const replay = claims.claims.find((c) => c.id === 'quickstart-replayed-by-ci')?.en ?? '\0';
+    const ci = README.en.replace(replay, 'The CI replays these commands on every commit.');
+    expect(ci).not.toBe(README.en);
+    expect(unregisteredFactsProblems(ci, 'en', claims).join()).toMatch(/CI replays/);
+    expect(unregisteredFactsProblems(`${README.en}\nIt starts in 2 minutes.\n`, 'en', claims).join()).toMatch(/2 minutes/);
+  });
+
+  test('« Try it » dit quelle clé il ne demande pas : aucune clé de modèle (le mode démo sans aucune clé arrive avec la première version)', () => {
+    expect(headings(README.en)).toContain('Try it (no model key)');
+    expect(headings(README.fr)).toContain('Essaie (sans clé de modèle)');
+    for (const lang of LANGS) expect(sectionProblems(README[lang].replace(/^## (Try it|Essaie) \(.*\)$/m, '## $1 (no key)'), lang).join(), lang).toMatch(/titres/);
+  });
 });
 
 describe('assert_readme_no_bypass_copy : 0 mot de P (hors registre) et 0 mot de L (D-46)', () => {
@@ -138,6 +171,19 @@ describe('assert_readme_no_bypass_copy : 0 mot de P (hors registre) et 0 mot de 
       'Stealth mode', 'Tu ne seras jamais bloqué.', 'It never gets blocked, a ghost mode.', 'Résout les captchas', 'Fingerprint rotation',
     ]) {
       expect(copyProblems(bad, claims, { whitelistRegistry: false }), bad).not.toEqual([]);
+    }
+  });
+
+  test("cas négatifs rejoués par la vérification : dérivés et éditeurs de captcha ou d'anti-bot, ajoutés à un README conforme, le font échouer", () => {
+    for (const bad of ["Stealthy scraping.", "Evading bot walls.", "Solves reCAPTCHA and hCaptcha.", "Works with 2Captcha.", "Antidetect browser.", "Undetectably fast."]) {
+      for (const lang of LANGS) {
+        const readme = `${README[lang]}\n${bad}\n`;
+        const found = [...copyProblems(readme, claims, { whitelistRegistry: true }), ...marksProblems(readme)];
+        expect(found, `${lang} : ${bad}`).not.toEqual([]);
+      }
+    }
+    for (const vendor of ["reCAPTCHA", "hCaptcha", "2Captcha", "CapSolver", "Kasada", "Arkose", "GeeTest", "Incapsula"]) {
+      expect(marksProblems(`Works with ${vendor}.`), vendor).not.toEqual([]);
     }
   });
 
@@ -247,6 +293,43 @@ describe('identité : liens du README et bloc « Verify » dérivés de PUBLIC_R
   });
 });
 
+describe('assert_verify_snippet_works : garde d\'organisation homonyme sur le texte brut des README et des autres surfaces de .github/', () => {
+  const thirdParty = loadThirdPartyRepos();
+  const at = (text: string): string => ownerReferenceProblems(text, identity, thirdParty).join();
+  /** Nom refusé par GitHub (D-37, D-40) : il appartient à un tiers, aucune surface ne doit le citer. */
+  const refused = identityOf(`${identity.owner.replace(/-/g, '')}/${identity.name}`);
+
+  test('les deux README, CLAIMS.md, les formulaires d\'issues et le gabarit des notes de version sont dans le périmètre de la garde', () => {
+    const files = ownerReferenceFiles();
+    for (const file of ['.github/README.md', '.github/README.fr.md', '.github/CLAIMS.md', '.github/release-notes-template.md', '.github/ISSUE_TEMPLATE/bug.yml', '.github/ISSUE_TEMPLATE/config.yml']) {
+      expect(files, file).toContain(file);
+    }
+  });
+
+  test('le texte brut des README (blocs de code et badges compris) ne cite que le dépôt de PUBLIC_REPOSITORY', () => {
+    for (const lang of LANGS) expect(at(README[lang]), lang).toBe('');
+  });
+
+  test('cas négatifs : clonage d\'un autre dépôt (que le contrôle des liens et du quickstart laisse passer), badges d\'un autre propriétaire, `-R` d\'un autre dépôt', () => {
+    const clone = README.en.replace(`git clone ${identity.url}`, `git clone ${refused.url}`);
+    expect(clone).not.toBe(README.en);
+    expect(repoLinkProblems(clone, identity)).toEqual([]);
+    expect(at(clone)).toMatch(/autre dépôt/);
+    const license = README.en.replace(`img.shields.io/github/license/${identity.repository}`, `img.shields.io/github/license/${refused.repository}`);
+    expect(license).not.toBe(README.en);
+    expect(at(license)).toMatch(/badge/);
+    const release = README.fr.replace(`img.shields.io/github/v/release/${identity.repository}`, `img.shields.io/github/v/release/${homonym.repository}`);
+    expect(release).not.toBe(README.fr);
+    expect(at(release)).toMatch(/badge/);
+    const ci = README.en.replace(`img.shields.io/github/actions/workflow/status/${identity.repository}/`, `img.shields.io/github/actions/workflow/status/${homonym.repository}/`);
+    expect(ci).not.toBe(README.en);
+    expect(at(ci)).toMatch(/badge/);
+    const attestation = README.en.replace(`-R ${identity.repository}`, `-R ${homonym.repository}`);
+    expect(attestation).not.toBe(README.en);
+    expect(at(attestation)).toMatch(/-R/);
+  });
+});
+
 describe('lexique : normalisation (casse, accents, traits d\'union, espaces) et listes versionnées', () => {
   test('normalize et parseList : « passe partout » = « passe-partout », racines et pluriels', () => {
     expect(normalize('  Passe PARTOUT  ')).toBe(normalize('passe-partout'));
@@ -254,7 +337,44 @@ describe('lexique : normalisation (casse, accents, traits d\'union, espaces) et 
     expect(parseList('# commentaire\n\nstealth\ncontourn-\n')).toEqual(['stealth', 'contourn*']);
     expect(findEntries('Il contournera tout', parseList('contourn-'))).toEqual(['contourn*']);
     expect(findEntries('anti-bots', parseList('anti-bot'))).toEqual(['anti bot']);
+    // Sans tiret, une entrée reste un mot entier (pluriel admis) ; `racine-` = préfixe ; `-racine-` = n'importe où dans un mot.
     expect(findEntries('stealthy', parseList('stealth'))).toEqual([]);
+    expect(findEntries('stealthy', parseList('stealth-'))).toEqual(['stealth*']);
+    expect(parseList('-captcha-')).toEqual(['*captcha*']);
+    expect(findEntries('reCAPTCHA', parseList('-captcha-'))).toEqual(['*captcha*']);
+    expect(findEntries('2Captcha', parseList('-captcha-'))).toEqual(['*captcha*']);
+    expect(findEntries('capture', parseList('-captcha-'))).toEqual([]);
+  });
+
+  test('listes réelles : les dérivés passent par les racines (stealthy, evading, evasion, sneaky…) et « captcha » est trouvé dans un mot', () => {
+    const p = loadList('forbidden-p.txt');
+    const l = loadList('forbidden-l.txt');
+    for (const word of ['stealthy', 'stealthily', 'evading', 'evades', 'evasion', 'evasive', 'sneaky', 'sneaking', 'antidetect', 'undetectably']) {
+      expect(findEntries(`SYM is ${word}.`, p), word).not.toEqual([]);
+    }
+    for (const word of ['reCAPTCHA', 'hCaptcha', '2Captcha', 'FunCaptcha', 'anti-captcha', 'captchas']) expect(findEntries(`Works with ${word}.`, l), word).not.toEqual([]);
+    expect(findEntries('Evaluate the event, capture the page.', [...p, ...l])).toEqual([]);
+  });
+
+  test('un seul régime de lexique : chaque éditeur de protection interdit dans les chaînes de l\'interface (PROTECTION_NAMES) est pris par les listes de la vitrine', () => {
+    const source = readFileSync(join(runtimeDir, 'tests/ui-strings.unit.test.ts'), 'utf8');
+    const pattern = /const PROTECTION_NAMES =\s*\/(.+)\/[a-z]*;/.exec(source)?.[1];
+    expect(pattern).toBeDefined();
+    const lists = [...loadList('third-party-marks.txt'), ...loadList('forbidden-p.txt'), ...loadList('forbidden-l.txt')];
+    const marks = loadList('third-party-marks.txt');
+    // Chaque alternative de l'expression, déclinée sur ses parties facultatives (`\s?`, `-?`).
+    const variants = (alternative: string): string[] => {
+      const optional = /\\s\?|-\?/.exec(alternative);
+      if (!optional) return [alternative];
+      const before = alternative.slice(0, optional.index);
+      const after = alternative.slice(optional.index + optional[0].length);
+      const filler = optional[0] === '-?' ? '-' : ' ';
+      return [...variants(`${before}${after}`), ...variants(`${before}${filler}${after}`)];
+    };
+    const names = (pattern ?? '').split('|').flatMap(variants);
+    expect(names.length).toBeGreaterThan(20);
+    for (const name of names) expect(findEntries(`Works with ${name}.`, lists), name).not.toEqual([]);
+    for (const name of ['turnstile', 'kasada', 'incapsula', 'capsolver', 'flaresolverr', 'geetest', 'arkose']) expect(findEntries(name, marks), name).not.toEqual([]);
   });
 
   test('les listes P et L, la liste noire et la liste d\'exceptions existent et ne se recouvrent pas', () => {
@@ -263,7 +383,7 @@ describe('lexique : normalisation (casse, accents, traits d\'union, espaces) et 
     const marks = loadList('third-party-marks.txt');
     const allowed = loadList('third-party-allowed.txt');
     expect(p.length).toBeGreaterThan(30);
-    expect(l).toEqual(expect.arrayContaining(['captcha', 'anti bot', 'rotation']));
+    expect(l).toEqual(expect.arrayContaining(['*captcha*', 'anti bot', 'rotation']));
     expect(p.filter((entry) => l.includes(entry))).toEqual([]);
     expect(marks.filter((entry) => allowed.map((a) => a.toLowerCase()).includes(entry))).toEqual([]);
     expect(allowed).toEqual(expect.arrayContaining(['github', 'docker', 'render', 'railway', 'chrome web store', 'books.toscrape.com', 'model context protocol']));

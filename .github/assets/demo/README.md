@@ -1,7 +1,9 @@
 # Terminal demo (reserved slot)
 
-`quickstart.tape` is the [VHS](https://github.com/charmbracelet/vhs) script of the terminal GIF of the README: it replays the
-quickstart of the docs on the demo instance, from `docker compose up` to the first sign-in. The GIF itself
+`quickstart.tape` is the [VHS](https://github.com/charmbracelet/vhs) script of the terminal GIF of the README: it types the
+"secrets" and "start" steps of the quickstart of the docs (the `.env` first, then `docker compose up --build`) on the demo
+instance, up to the first sign-in. Run it from the root of the repository: `vhs .github/assets/demo/quickstart.tape` (it writes
+to `.github/assets/demo/` and types the commands in `runtime/`). The GIF itself
 (`quickstart-en.gif`, `quickstart-fr.gif`, at most 1.5 MB each) is produced by task 3.11, which ships the demo mode; until
 then the slot is reserved and `assert_demo_recording_reproducible` is a `test.todo`.
 

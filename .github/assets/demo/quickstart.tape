@@ -1,6 +1,9 @@
-# VHS tape: terminal GIF of the README (task 4.12, filled in by task 3.11). Replayable: `vhs demo/quickstart.tape`.
-# It only types the commands of the quickstart of the docs (the same ones `tests/quickstart.integration.test.ts` replays),
-# on the demo instance built on fixtures. No real site, no key, no personal path. Task 3.11 adds the demo steps.
+# VHS tape: terminal GIF of the README (task 4.12, filled in by task 3.11). Run it from the root of the repository:
+#   vhs .github/assets/demo/quickstart.tape
+# It types, line by line, the "secrets" then "start" steps of the quickstart of the docs (the steps that
+# `tests/quickstart.integration.test.ts` replays): the .env is created before `docker compose up`, so MASTER_KEY is set.
+# Recorded on the demo instance built on fixtures. No real site, no key in the script, no personal path. Task 3.11 adds the
+# demo steps that follow the start.
 Output .github/assets/demo/quickstart-en.gif
 Set Shell "bash"
 Set FontFamily "JetBrains Mono"
@@ -18,7 +21,24 @@ Enter
 Type "clear"
 Enter
 Show
-Type "# Recorded demo: no real site, no key"
+Type "# Recorded demo: no real site, no model key"
+Enter
+Sleep 600ms
+Type "("
+Enter
+Type "  umask 077"
+Enter
+Type "  set -C"
+Enter
+Type "  {"
+Enter
+Type `    echo "MASTER_KEY=$(openssl rand -base64 32)"`
+Enter
+Type `    echo "ADMIN_BOOTSTRAP_TOKEN=$(openssl rand -base64 32)"`
+Enter
+Type "  } > .env"
+Enter
+Type ")"
 Enter
 Sleep 600ms
 Type "docker compose up --build"

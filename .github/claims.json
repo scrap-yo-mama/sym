@@ -105,6 +105,22 @@
       "status": "relu"
     },
     {
+      "id": "quickstart-replayed-by-ci",
+      "surfaces": [
+        "readme"
+      ],
+      "en": "The commands are the ones the CI replays on a blank instance.",
+      "fr": "Les commandes sont celles que la CI rejoue sur une instance vierge.",
+      "proof": [
+        "assert_quickstart_replayed",
+        "assert_quickstart_compose_parity",
+        "runtime/tests/quickstart.integration.test.ts",
+        "runtime/tests/vitrine/readme.unit.test.ts"
+      ],
+      "reviewed": "2026-10-02",
+      "status": "relu"
+    },
+    {
       "id": "robots-always-respected",
       "surfaces": [
         "responsible-use"

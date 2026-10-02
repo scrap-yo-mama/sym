@@ -4,7 +4,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join, normalize as normalizePath } from 'node:path';
 import { githubDir, repoRoot, vitrineDir } from './paths.ts';
 import { verifyBlock, type PublicIdentity } from './identity.ts';
-import { findEntries, loadList, stripPhrases } from './text.ts';
+import { findEntries, loadList, normalize, stripPhrases } from './text.ts';
 import { plainBullet, type ClaimsFile } from './claims.ts';
 import { parseQuickstart } from '../../../apps/docs/src/quickstart.ts';
 
@@ -26,14 +26,15 @@ export const readReadme = (lang: Lang): string => readFileSync(join(githubDir, R
 
 /**
  * Titres `##` attendus, dans l'ordre (22 §3.1, blocs 5 à 11 ; les blocs 1 à 4 n'ont pas de titre).
- * Écart assumé (tâche 4.12, à reporter au CDC) : le bloc 6 s'intitule « Try it (no key) » / « Essaie (sans clé) » et non
- * « Try it in two minutes (no key) » : la première construction de l'image prend plusieurs minutes, « deux minutes » serait
- * une allégation sans mesure (22 §3.2). Le lien vers la landing (bloc 2, 4.11) et la vignette de démo (bloc 4, 3.11) sont
+ * Écart assumé (tâche 4.12, à reporter au CDC) : le bloc 6 s'intitule « Try it (no model key) » / « Essaie (sans clé de
+ * modèle) » et non « Try it in two minutes (no key) » : la première construction de l'image prend plusieurs minutes, « deux
+ * minutes » serait une allégation sans mesure (22 §3.2) ; et le quickstart crée deux secrets d'instance (MASTER_KEY, jeton
+ * d'amorçage) : la seule clé qu'il ne demande pas est celle d'un modèle (le mode démo sans aucune clé arrive avec 3.11). Le lien vers la landing (bloc 2, 4.11) et la vignette de démo (bloc 4, 3.11) sont
  * des test.todo de tests/vitrine/readme.unit.test.ts tant que la landing et l'enregistrement n'existent pas.
  */
 const SECTION_TITLES: Record<Lang, string[]> = {
-  en: ['What it does', 'Try it (no key)', 'Connect your AI chat (MCP)', 'Verify what you download', "How it's built", 'Licenses', 'Contribute'],
-  fr: ['Ce que ça fait', 'Essaie (sans clé)', 'Branche ton chat IA (MCP)', 'Vérifie ce que tu télécharges', "Comment c'est construit", 'Licences', 'Contribuer'],
+  en: ['What it does', 'Try it (no model key)', 'Connect your AI chat (MCP)', 'Verify what you download', "How it's built", 'Licenses', 'Contribute'],
+  fr: ['Ce que ça fait', 'Essaie (sans clé de modèle)', 'Branche ton chat IA (MCP)', 'Vérifie ce que tu télécharges', "Comment c'est construit", 'Licences', 'Contribuer'],
 };
 
 export type CodeBlock = { lang: string; body: string; line: number };
@@ -172,6 +173,47 @@ export function claimsProblems(text: string, lang: Lang, file: ClaimsFile): stri
   return problems;
 }
 
+/** Chiffre avec unité (mémoire, poids, durée, pourcentage, facteur) : un chiffre sans mesure est interdit (22 §3.2). */
+const NUMBER_WITH_UNIT = /(?<![\p{L}\d.])\d+(?:[.,]\d+)?\s?(?:%|[kmgt]i?b|[kmgt]o|min(?:ute)?s?|secondes?|seconds?|sec|s|ms|h|hours?|heures?|days?|jours?|x|×|times|fois)(?![\p{L}\d])/iu;
+/** Rejeu par la CI : une phrase de « Try it » qui l'affirme cite une preuve (le quickstart rejoué en CI). */
+const CI_CLAIM = /\bCI\b/;
+
+/** Texte courant du README : sans blocs de code, commentaires, balises HTML ni cibles de liens. */
+function prose(text: string): string {
+  return text
+    .replace(/^```[\s\S]*?^```/gm, '\n')
+    .replace(/<!--[\s\S]*?-->/g, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/\]\([^)]*\)/g, ']')
+    .replace(/https?:\/\/\S+/g, ' ');
+}
+
+const sentences = (text: string): string[] => text.split(/(?<=[.!?])\s+|\n+/).map((part) => part.replace(/^[>|#\-*\s]+/, '').trim()).filter((part) => part !== '');
+
+/**
+ * Phrases factuelles hors puces (22 §3.2) : une phrase du README qui porte un chiffre avec unité, ou qui affirme dans
+ * « Try it » que la CI rejoue les commandes, s'affiche seulement si elle fait partie d'une entrée du registre (surface readme).
+ */
+export function unregisteredFactsProblems(text: string, lang: Lang, file: ClaimsFile): string[] {
+  const registered = file.claims.filter((claim) => claim.surfaces.includes('readme')).map((claim) => normalize(claim[lang]));
+  const isRegistered = (sentence: string): boolean => registered.some((phrase) => phrase.includes(normalize(sentence.replace(/\*\*/g, ''))));
+  const problems: string[] = [];
+  for (const sentence of sentences(prose(text))) {
+    const number = NUMBER_WITH_UNIT.exec(sentence);
+    if (number && !isRegistered(sentence)) problems.push(`${lang} : chiffre sans mesure au registre (« ${number[0]} ») : « ${sentence} »`);
+  }
+  const title = SECTION_TITLES[lang][1] as string;
+  const start = text.indexOf(`## ${title}`);
+  const tryIt = start === -1 ? '' : (text.slice(start + title.length + 3).split(/\n## /)[0] ?? '');
+  for (const sentence of sentences(prose(tryIt))) {
+    if (CI_CLAIM.test(sentence) && !isRegistered(sentence)) problems.push(`${lang} : « ${sentence} » affirme un rejeu par la CI sans entrée au registre`);
+  }
+  return problems;
+}
+
+/** Entrée de liste affichée sans ses marques de racine (`*`). */
+const entryLabel = (entry: string): string => entry.replace(/\*/g, '');
+
 /**
  * Lexique (22b §1) : 0 mot de P hors phrases du registre (`whitelistRegistry`) et 0 mot de L. L se lit sur le texte brut
  * (README, landing, description, formulaires : D-46), sauf `limitTermsInRegistry` (CLAIMS.md, le registre lui-même) où un
@@ -182,14 +224,14 @@ export function copyProblems(text: string, file: ClaimsFile, options: { whitelis
   const phrases = file.claims.flatMap((claim) => [claim.en, claim.fr]);
   const p = findEntries(options.whitelistRegistry ? stripPhrases(text, phrases) : text, loadList('forbidden-p.txt'));
   const l = findEntries(options.limitTermsInRegistry ? stripPhrases(text, phrases) : text, loadList('forbidden-l.txt'));
-  return [...p.map((w) => `mot de la liste P : « ${w} »`), ...l.map((w) => `mot de la liste L : « ${w} »`)];
+  return [...p.map((w) => `mot de la liste P : « ${entryLabel(w)} »`), ...l.map((w) => `mot de la liste L : « ${entryLabel(w)} »`)];
 }
 
 /** Marques tierces : liste noire hors exceptions descriptives en texte courant (accroche D-46 exceptée). */
 export function marksProblems(text: string, extraAllowedPhrases: readonly string[] = []): string[] {
   const allowed = [...loadList('third-party-allowed.txt'), ...extraAllowedPhrases];
   const stripped = stripPhrases(text, allowed);
-  return findEntries(stripped, loadList('third-party-marks.txt')).map((mark) => `marque tierce : « ${mark} »`);
+  return findEntries(stripped, loadList('third-party-marks.txt')).map((mark) => `marque tierce : « ${entryLabel(mark)} »`);
 }
 
 // --- Images ---------------------------------------------------------------------------------------------------------

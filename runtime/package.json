@@ -37,6 +37,7 @@
     "package:extension": "node scripts/extension-package.ts",
     "vitrine:check": "node scripts/vitrine/check.mjs",
     "vitrine:claims": "node scripts/vitrine/claims-md.mjs",
+    "vitrine:community": "node scripts/vitrine/community-md.mjs",
     "assets:render": "node scripts/vitrine/render-assets.mjs",
     "brand:sync": "node scripts/vitrine/brand-sync.mjs",
     "release:dry-run": "node scripts/release/dry-run.ts",

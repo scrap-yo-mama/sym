@@ -8,8 +8,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, test } from 'vitest';
 import { parse } from 'yaml';
-import { claimProblems, claimsMarkdown, imageDescription, imageDescriptionProblems, loadClaims, repoProofContext, unreviewedDisplayed, type ClaimsFile, type ProofContext } from '../../scripts/vitrine/lib/claims.ts';
+import { claimProblems, claimsMarkdown, imageDescription, imageDescriptionProblems, loadClaims, repoProofContext, taskCommitPattern, taskDeliveryDate, unreviewedDisplayed, type ClaimsFile, type ProofContext } from '../../scripts/vitrine/lib/claims.ts';
 import { vitrineTouched } from '../../scripts/vitrine/lib/changed.ts';
+import { COMMUNITY_FILES, communityCopy, communityProblems, communityProfileLocation } from '../../scripts/vitrine/lib/community.ts';
 import { readTestCorpus, testCorpusFiles, testTitles } from '../../scripts/vitrine/lib/corpus.ts';
 import { loadThirdPartyRepos, ownerReferenceFiles, ownerReferenceProblems } from '../../scripts/vitrine/lib/owners.ts';
 import { fetchPublishedState, publishedProblems, type PublishedState } from '../../scripts/vitrine/lib/published.ts';
@@ -133,7 +134,21 @@ describe('assert_image_labels : source, description (≤ 512), licenses, io.mode
     expect(imageLabelProblems(labels, identity, description)).toEqual([]);
     expect(labels['org.opencontainers.image.source']).toBe(identity.url);
     expect(labels['io.modelcontextprotocol.server.name']).toBe(identity.mcpName);
-    expect(`${dockerfile.match(/^ARG PUBLIC_REPOSITORY=(.*)$/m)?.[1]}`).toBe(identity.repository);
+  });
+
+  test('aucune valeur par défaut (jamais une constante) : une construction sans PUBLIC_REPOSITORY ne porte aucune identité ; les constructions contrôlées la passent', () => {
+    expect(dockerfile).toMatch(/^ARG PUBLIC_REPOSITORY$/m);
+    expect(dockerfile).not.toMatch(/^ARG PUBLIC_REPOSITORY=/m);
+    expect(dockerfile.includes(identity.repository)).toBe(false);
+    const anonymous = dockerfileLabels(dockerfile, '');
+    expect(anonymous['org.opencontainers.image.source']).toBe('');
+    expect(anonymous['io.modelcontextprotocol.server.name']).toBe('');
+    expect(imageLabelProblems(anonymous, identity, description).join()).toMatch(/source/);
+    expect(dockerfileLabels(dockerfile, homonym.repository)['org.opencontainers.image.source']).toBe(homonym.url);
+    // Release à blanc et test d'image : PUBLIC_REPOSITORY lu dans la source unique, passé en --build-arg.
+    for (const file of ['scripts/release/dry-run.ts', 'tests/image/sandbox-privileges.image.test.ts']) {
+      expect(readFileSync(join(runtimeDir, file), 'utf8'), file).toMatch(/'--build-arg', `PUBLIC_REPOSITORY=\$\{(REPOSITORY|publicRepository\(\))\}`/);
+    }
   });
 
   test('la chaîne de release passe PUBLIC_REPOSITORY à la construction et contrôle l\'identité', () => {
@@ -207,11 +222,32 @@ describe('assert_repo_metadata : description ≤ 160 caractères, 10 à 20 sujet
 });
 
 describe('assert_community_profile_complete : le profil de communauté à 100 % repose sur ces fichiers', () => {
-  test('README, code de conduite, contribution, licence, sécurité, modèles d\'issues et de PR existent', () => {
-    for (const path of ['.github/README.md', 'runtime/CODE_OF_CONDUCT.md', 'runtime/CONTRIBUTING.md', 'LICENSE', 'runtime/SECURITY.md', '.github/PULL_REQUEST_TEMPLATE.md', '.github/ISSUE_TEMPLATE/bug.yml']) {
-      expect(existsSync(join(repoRoot, path)), path).toBe(true);
+  test('README, code de conduite, contribution, licence, sécurité, modèles d\'issues et de PR existent là où GitHub les détecte (racine, .github/ ou docs/)', () => {
+    // GitHub ne lit le profil qu'à la racine, dans .github/ ou dans docs/ : runtime/ (sous-dossier) n'est jamais détecté.
+    for (const name of ['README', 'CODE_OF_CONDUCT', 'CONTRIBUTING', 'LICENSE', 'SECURITY']) {
+      expect(communityProfileLocation(name), name).toBeDefined();
     }
+    for (const path of ['.github/PULL_REQUEST_TEMPLATE.md', '.github/ISSUE_TEMPLATE/bug.yml']) expect(existsSync(join(repoRoot, path)), path).toBe(true);
+    expect(communityProfileLocation('CODE_OF_CONDUCT', (path) => path.startsWith('runtime/') && existsSync(join(repoRoot, path)))).toBeUndefined();
     expect(readRepoMetadata().communityProfile).toContain('LICENSE');
+  });
+
+  test('les copies de .github/ (code de conduite, contribution, sécurité) sont celles dérivées de runtime/, liens relatifs résolus', () => {
+    expect(communityProblems()).toEqual([]);
+    for (const name of COMMUNITY_FILES) expect(read(`.github/${name}`)).toBe(communityCopy(name, read(`runtime/${name}`)));
+  });
+
+  test('cas négatifs : copie périmée ou absente, lien relatif cassé ; les liens relatifs de runtime/ sont réécrits vers ../runtime/', () => {
+    const stale = (path: string): string => (path === '.github/SECURITY.md' ? 'ancienne politique\n' : read(path));
+    expect(communityProblems(stale).join()).toMatch(/SECURITY\.md.*périmée/);
+    const absent = (path: string): string | undefined => (path === '.github/CONTRIBUTING.md' ? undefined : read(path));
+    expect(communityProblems(absent).join()).toMatch(/CONTRIBUTING\.md.*absente/);
+    const copy = communityCopy('CONTRIBUTING.md', 'Voir [Hors périmètre](docs/hors-perimetre.md), [site](https://example.org) et [plus bas](#licences).\n');
+    expect(copy).toContain('](../runtime/docs/hors-perimetre.md)');
+    expect(copy).toContain('](https://example.org)');
+    expect(copy).toContain('](#licences)');
+    const broken = (path: string): string => (path === 'runtime/CONTRIBUTING.md' ? `${read(path)}\n[absent](ABSENT.md)\n` : path === '.github/CONTRIBUTING.md' ? communityCopy('CONTRIBUTING.md', `${read('runtime/CONTRIBUTING.md')}\n[absent](ABSENT.md)\n`) : read(path));
+    expect(communityProblems(broken).join()).toMatch(/lien relatif introuvable.*ABSENT\.md/);
   });
 
   test('après publication (hebdomadaire) : community/profile doit renvoyer health_percentage = 100', () => {
@@ -219,7 +255,7 @@ describe('assert_community_profile_complete : le profil de communauté à 100 % 
     expect(publishedProblems({ ...state, community: { health_percentage: 85 } }, readRepoMetadata(), budgets).join()).toMatch(/85/);
   });
 
-  test.todo('après publication : community/profile renvoie health_percentage = 100 (hebdomadaire, inactif avant le GO ; un fichier du profil hors de la racine est détecté par GitHub dans .github/ ou docs/)');
+  test.todo('après publication : community/profile renvoie health_percentage = 100 (hebdomadaire, inactif avant le GO)');
 });
 
 describe('formulaires d\'issues bilingues et étiquettes aux couleurs de la charte (22 §3.4)', () => {
@@ -336,6 +372,26 @@ describe('registre des allégations : preuve, relecture, statut, CLAIMS.md gén�
 
   test('« aucune télémétrie par défaut » est liée à 4.10 : l\'entrée repasse « à relire » à la livraison de cette tâche', () => {
     expect(claims.claims.filter((c) => c.task === '4.10').map((c) => c.id).sort()).toEqual(['no-telemetry-by-default', 'stays-yours']);
+    const linked = { ...claims.claims.find((c) => c.id === 'stays-yours')!, status: 'relu' as const, reviewed: '2026-10-02' };
+    const delivered: ProofContext = { ...context, today: '2026-12-01', lastReleaseDate: undefined, taskDeliveredOn: (task) => (task === '4.10' ? '2026-11-15' : undefined) };
+    expect(claimProblems({ version: 1, claims: [linked] }, delivered).join()).toMatch(/tâche 4\.10 livrée le 2026-11-15.*à relire/);
+    expect(claimProblems({ version: 1, claims: [{ ...linked, reviewed: '2026-11-15' }] }, delivered)).toEqual([]);
+    expect(claimProblems({ version: 1, claims: [{ ...linked, status: 'à relire' }] }, delivered)).toEqual([]);
+    const { task: _task, ...unlinked } = linked;
+    expect(claimProblems({ version: 1, claims: [unlinked] }, delivered)).toEqual([]);
+    expect(claimProblems({ version: 1, claims: [linked] }, { ...delivered, taskDeliveredOn: () => undefined })).toEqual([]);
+  });
+
+  test('livraison d\'une tâche : date du dernier commit « <tâche> — » de l\'historique git (4.1 ne prend pas 4.12)', () => {
+    const date = taskDeliveryDate('4.12');
+    expect(date).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    expect(taskDeliveryDate('9.99')).toBeUndefined();
+    const pattern = new RegExp(taskCommitPattern('4.1'));
+    expect(pattern.test('4.1 — Mise en ligne')).toBe(true);
+    expect(pattern.test('4.12 — Vitrine')).toBe(false);
+    expect(pattern.test('4x1 — autre')).toBe(false);
+    expect(() => taskCommitPattern('4.1; rm -rf /')).toThrow(/identifiant de tâche/);
+    expect(context.taskDeliveredOn).toBeDefined();
   });
 
   test.todo('assert_responsible_use_claims_registered : les engagements de la page « Usage responsable » (fr et en) sont identiques mot pour mot aux entrées relues (page alignée par 4.11, version en par 3.20)');

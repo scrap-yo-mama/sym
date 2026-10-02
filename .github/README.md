@@ -24,9 +24,9 @@
 - **Guard rails.** Strategy code runs in a sandbox, outgoing requests pass an SSRF guard, and requests to each domain are paced.
 - **Your session, with your consent.** For sites behind a login, a browser extension runs steps through your own session, domain by domain, only after you agree.
 
-## Try it (no key)
+## Try it (no model key)
 
-SYM 👻: On it. You need Docker with Compose and about 4 GB of memory. The commands are the ones the CI replays on a blank instance.
+SYM 👻: On it. You need Docker with Compose. The commands are the ones the CI replays on a blank instance.
 
 ```bash
 git clone https://github.com/scrap-yo-mama/sym && cd sym/runtime

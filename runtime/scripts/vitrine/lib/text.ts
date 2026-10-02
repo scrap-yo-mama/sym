@@ -15,13 +15,16 @@ export function normalize(text: string): string {
     .trim();
 }
 
-/** Entrées d'une liste (une par ligne, `#` = commentaire), normalisées. */
+/**
+ * Entrées d'une liste (une par ligne, `#` = commentaire), normalisées. `racine-` devient `racine*` (préfixe de mot) ;
+ * `-racine-` devient `*racine*` (n'importe où dans un mot : `-captcha-` prend reCAPTCHA, hCaptcha, 2Captcha).
+ */
 export function parseList(text: string): string[] {
   return text
     .split('\n')
     .map((line) => line.trim())
     .filter((line) => line !== '' && !line.startsWith('#'))
-    .map((line) => (line.endsWith('-') ? `${normalize(line)}*` : normalize(line)));
+    .map((line) => `${line.startsWith('-') ? '*' : ''}${normalize(line)}${line.endsWith('-') ? '*' : ''}`);
 }
 
 export function loadList(name: string): string[] {
@@ -30,11 +33,15 @@ export function loadList(name: string): string[] {
 
 const escape = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
-/** Expression d'une entrée : `racine*` (racine- du fichier) = préfixe de mot ; sinon mot ou expression entière (pluriel admis). */
+/**
+ * Expression d'une entrée : `racine*` (racine- du fichier) = préfixe de mot ; `*racine*` (-racine- du fichier) = n'importe
+ * où dans un mot, chiffres compris ; sinon mot ou expression entière (pluriel admis).
+ */
 function entryPattern(entry: string): RegExp {
+  const infix = entry.startsWith('*');
   const prefix = entry.endsWith('*');
-  const body = escape(prefix ? entry.slice(0, -1) : entry);
-  return new RegExp(`(?<![a-z0-9])${body}${prefix ? '[a-z0-9]*' : 's?(?![a-z0-9])'}`, 'u');
+  const body = escape(entry.slice(infix ? 1 : 0, prefix ? -1 : undefined));
+  return new RegExp(`${infix ? '' : '(?<![a-z0-9])'}${body}${prefix ? '[a-z0-9]*' : 's?(?![a-z0-9])'}`, 'u');
 }
 
 /** Entrées de `list` présentes dans `text` (après normalisation). */

@@ -24,9 +24,9 @@
 - **Des garde-fous.** Le code d'une stratégie tourne dans un bac à sable, les requêtes sortantes passent par une garde SSRF, et les requêtes vers chaque domaine sont espacées.
 - **Ta session, avec ton accord.** Pour les sites derrière une connexion, une extension de navigateur exécute des étapes avec ta propre session, domaine par domaine, seulement après ton accord.
 
-## Essaie (sans clé)
+## Essaie (sans clé de modèle)
 
-SYM 👻 : OK, je m'en occupe. Il te faut Docker avec Compose et environ 4 Go de mémoire. Les commandes sont celles que la CI rejoue sur une instance vierge.
+SYM 👻 : OK, je m'en occupe. Il te faut Docker avec Compose. Les commandes sont celles que la CI rejoue sur une instance vierge.
 
 ```bash
 git clone https://github.com/scrap-yo-mama/sym && cd sym/runtime

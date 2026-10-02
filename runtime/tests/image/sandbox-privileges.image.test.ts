@@ -228,7 +228,7 @@ type ProbeReport = {
 
 beforeAll(() => {
   if (image === '') {
-    dockerOk(['build', '--quiet', '-f', 'deploy/Dockerfile', '-t', builtTag, runtimeDir.replace(/\/$/, '')], 900_000);
+    dockerOk(['build', '--quiet', '-f', 'deploy/Dockerfile', '--build-arg', `PUBLIC_REPOSITORY=${publicRepository()}`, '-t', builtTag, runtimeDir.replace(/\/$/, '')], 900_000);
     image = builtTag;
   }
   scratch = mkdtempSync(join(tmpdir(), 'zz_test_image_privileges-'));

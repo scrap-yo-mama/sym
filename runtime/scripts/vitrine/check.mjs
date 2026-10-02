@@ -5,6 +5,8 @@
 //   node scripts/vitrine/check.mjs changed    écrit `run=true|false` (sortie GITHUB_OUTPUT) selon les fichiers modifiés
 //   node scripts/vitrine/check.mjs claims     registre des allégations et CLAIMS.md seulement (sans filtre par chemin)
 //   node scripts/vitrine/check.mjs published  après publication (hebdomadaire, GO) : API GitHub du dépôt public, lecture seule
+//   node scripts/vitrine/check.mjs media X.Y.Z  release : écrit `draft=true|false` (GITHUB_OUTPUT) ; une MINOR dont MEDIA.md
+//                                              ne cite ni la version ni une URL user-attachments reste en brouillon (22b §5)
 // Les budgets sont dans scripts/vitrine/budgets.json. Ce script ne publie, ne pousse ni ne règle rien sur GitHub.
 import { execFileSync } from 'node:child_process';
 import { appendFileSync, readFileSync } from 'node:fs';
@@ -14,7 +16,7 @@ import { vitrineTouched } from './lib/changed.ts';
 import { identityOf, identityProblems, publicRepository } from './lib/identity.ts';
 import { fetchPublishedState, publishedProblems } from './lib/published.ts';
 import { loadBudgets } from './lib/readme.ts';
-import { readRepoMetadata } from './lib/surface.ts';
+import { mediaGate, readRepoMetadata } from './lib/surface.ts';
 import { githubDir, repoRoot } from './lib/paths.ts';
 
 const command = process.argv[2] ?? 'all';
@@ -38,6 +40,13 @@ if (command === 'identity') {
   }
   console.log(`vitrine : run=${run}`);
   if (process.env['GITHUB_OUTPUT']) appendFileSync(process.env['GITHUB_OUTPUT'], `run=${run}\n`);
+} else if (command === 'media') {
+  // assert_media_index_current (22b §3, §5) : ne fait jamais échouer la release, la garde en brouillon.
+  const version = (process.argv[3] ?? '').replace(/^v/, '');
+  const { draft, problems } = mediaGate(version);
+  for (const problem of problems) console.warn(`index des vidéos : ${problem}`);
+  console.log(`index des vidéos (${version}) : ${draft ? 'release en brouillon tant que MEDIA.md n\'est pas à jour' : 'à jour'} ; draft=${draft}`);
+  if (process.env['GITHUB_OUTPUT']) appendFileSync(process.env['GITHUB_OUTPUT'], `draft=${draft}\n`);
 } else if (command === 'published') {
   const token = process.env['GH_TOKEN'] || process.env['GITHUB_TOKEN'];
   if (!token) {

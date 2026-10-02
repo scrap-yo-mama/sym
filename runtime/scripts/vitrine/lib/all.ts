@@ -5,15 +5,16 @@ import { join } from 'node:path';
 import { assetMarksProblems, bannerProblems, licensesListedProblems, secretProblems, sizeProblems, socialPreviewProblems, svgFileProblems } from './assets.ts';
 import { brandDrift } from './brand-sync.ts';
 import { claimProblems, claimsMarkdown, foreignClaimsDisplayed, imageDescription, imageDescriptionProblems, loadClaims, repoProofContext, unreviewedDisplayed } from './claims.ts';
+import { communityProblems } from './community.ts';
 import { readTestCorpus } from './corpus.ts';
 import { identityOf, identityProblems, publicRepository, verifyBlock } from './identity.ts';
 import { loadThirdPartyRepos, ownerReferenceFiles, ownerReferenceProblems } from './owners.ts';
 import { githubDir, repoRoot, runtimeDir } from './paths.ts';
 import {
   altProblems, badgeProblems, bannerAltProblems, bannerTexts, claimsProblems, copyProblems, imageResolveProblems, lengthProblems, loadBudgets, marksProblems, parityProblems, pictureProblems, quickstartProblems,
-  README_FILES, readReadme, repoLinkProblems, sectionProblems, verifyBlockProblems, type Lang,
+  README_FILES, readReadme, repoLinkProblems, sectionProblems, unregisteredFactsProblems, verifyBlockProblems, type Lang,
 } from './readme.ts';
-import { formProblems, labelProblems, licenseProblems, mediaProblems, readForms, readLabels, readLicenseFiles, readRepoMetadata, repoMetadataProblems, tapeProblems, charterColors } from './surface.ts';
+import { formProblems, labelProblems, licenseProblems, readForms, readLabels, readLicenseFiles, readRepoMetadata, repoMetadataProblems, tapeProblems, charterColors } from './surface.ts';
 import { verifySnippetProblems, dockerfileLabels, imageLabelProblems } from './verify.ts';
 
 export type CheckResult = { name: string; problems: string[] };
@@ -35,7 +36,7 @@ export function runAllChecks(): CheckResult[] {
     add(`${tag} : longueur (assert_readme_length_budget)`, lengthProblems(text, budgets));
     add(`${tag} : sections (assert_readme_sections_present)`, sectionProblems(text, lang));
     add(`${tag} : badges (assert_readme_badges_budget)`, badgeProblems(text, budgets));
-    add(`${tag} : allégations (assert_readme_claims_registered)`, [...claimsProblems(text, lang, claims), ...unreviewedDisplayed(claims, text), ...foreignClaimsDisplayed(claims, text, 'readme')]);
+    add(`${tag} : allégations (assert_readme_claims_registered)`, [...claimsProblems(text, lang, claims), ...unreviewedDisplayed(claims, text), ...foreignClaimsDisplayed(claims, text, 'readme'), ...unregisteredFactsProblems(text, lang, claims)]);
     add(`${tag} : lexique (assert_readme_no_bypass_copy)`, copyProblems(text, claims, { whitelistRegistry: true }));
     add(`${tag} : marques tierces (assert_readme_no_third_party_marks)`, marksProblems(text));
     add(`${tag} : quickstart (assert_readme_quickstart_matches_ci)`, quickstartProblems(text));
@@ -69,8 +70,8 @@ export function runAllChecks(): CheckResult[] {
   add('étiquettes', labelProblems(readLabels(), Object.values(forms).flatMap((form) => form.labels ?? []), charterColors()));
   const template = readFileSync(join(githubDir, 'release-notes-template.md'), 'utf8');
   add('gabarit des notes de version : lexique', copyProblems(template, claims, { whitelistRegistry: false }));
-  const version = (JSON.parse(readFileSync(join(runtimeDir, 'package.json'), 'utf8')) as { version: string }).version;
-  add('index des vidéos (assert_media_index_current)', mediaProblems(version, readFileSync(join(githubDir, 'assets/MEDIA.md'), 'utf8')));
+  // L'index des vidéos n'est PAS contrôlé ici (22b §3, §5) : la PR release-please d'une MINOR resterait rouge tant qu'aucune
+  // vidéo n'est envoyée (3.11 et un envoi humain). La release le joue (`check.mjs media`) et passe alors en brouillon.
   add('script VHS', tapeProblems(readFileSync(join(githubDir, 'assets/demo/quickstart.tape'), 'utf8')));
   const labels = dockerfileLabels(readFileSync(join(runtimeDir, 'deploy/Dockerfile'), 'utf8'), identity.repository);
   const labelDescription = labels['org.opencontainers.image.description'] ?? '';
@@ -79,7 +80,8 @@ export function runAllChecks(): CheckResult[] {
     ...imageDescriptionProblems(labelDescription, meta, claims),
     ...copyProblems(labelDescription, claims, { whitelistRegistry: false }),
   ]);
-  add('doc, guides et modèles : dépôt et image de PUBLIC_REPOSITORY (assert_verify_snippet_works)', ownerReferenceFiles().flatMap((file) =>
+  add('profil de communauté : copies de .github/ à jour de runtime/ (assert_community_profile_complete)', communityProblems());
+  add('README, CLAIMS.md, formulaires, gabarits, doc, guides et modèles : dépôt, image, badge et -R de PUBLIC_REPOSITORY (assert_verify_snippet_works)', ownerReferenceFiles().flatMap((file) =>
     ownerReferenceProblems(readFileSync(join(repoRoot, file), 'utf8'), identity, loadThirdPartyRepos()).map((problem) => `${file} : ${problem}`)));
   add('gabarit des notes de version : bloc Verify (22 §3.4)', verifyBlockProblems(template, identity));
   return results;

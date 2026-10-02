@@ -1,17 +1,19 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Tâche 4.12, critères « Images et visuels » et « Enregistrements » de 22b §3 (u8 R3, R4, R5) : budgets de poids, aperçu social, SVG sûrs,
 // licences des visuels, absence de secret et de marque, copie vers le site de doc, script VHS reproductible, index des vidéos.
+import { spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, test } from 'vitest';
+import { parse } from 'yaml';
 import { assetMarksProblems, bannerProblems, licensesListedProblems, secretProblems, sizeProblems, socialPreviewProblems, svgFileProblems } from '../../scripts/vitrine/lib/assets.ts';
 import { brandDrift } from '../../scripts/vitrine/lib/brand-sync.ts';
 import { decodePng, isOpaque, parseGif, parsePng } from '../../scripts/vitrine/lib/images.ts';
-import { assetsDir } from '../../scripts/vitrine/lib/paths.ts';
+import { assetsDir, repoRoot, runtimeDir } from '../../scripts/vitrine/lib/paths.ts';
 import { localizedSvg, RENDER_JOBS } from '../../scripts/vitrine/lib/render.ts';
 import { loadBudgets } from '../../scripts/vitrine/lib/readme.ts';
-import { mediaProblems, tapeProblems } from '../../scripts/vitrine/lib/surface.ts';
+import { mediaProblems, quickstartTapeCommands, tapeCommands, tapeProblems } from '../../scripts/vitrine/lib/surface.ts';
 import { makePng } from './png-fixture.ts';
 
 const budgets = loadBudgets();
@@ -162,13 +164,37 @@ describe('assert_demo_recording_reproducible : quickstart.tape rejoué deux fois
   // D-51 : le GIF de démo est produit par 3.11 (mode démo) ; jusque-là l'emplacement est réservé et le rejeu est un test.todo.
   test.todo('assert_demo_recording_reproducible : deux rejeux de demo/quickstart.tape (VHS) : mêmes dimensions, durées à 0,5 s, poids sous budget, captures d\'étapes à 1 % de pixels ; une requête hors instance fait échouer (livré par 3.11)');
 
-  test('le script VHS du dépôt est rejouable : sortie, réglages figés, seules les commandes du quickstart, aucune URL hors instance', () => {
-    expect(tapeProblems(readFileSync(join(assetsDir, 'demo/quickstart.tape'), 'utf8'))).toEqual([]);
+  const tape = readFileSync(join(assetsDir, 'demo/quickstart.tape'), 'utf8');
+
+  // Contrôle de FORME du script (le rejeu réel, avec VHS, est le test.todo ci-dessus) : sortie, réglages figés, commandes
+  // tapées = étapes « secrets » puis « start » du quickstart rejoué en CI, aucune URL hors instance.
+  test('contrôle de forme du script VHS : sortie, réglages figés, aucune URL hors instance, aucun chemin personnel', () => {
+    expect(tapeProblems(tape)).toEqual([]);
+  });
+
+  test('les commandes tapées sont dérivées du quickstart (étapes « secrets » puis « start ») : le .env est créé avant le démarrage', () => {
+    const wanted = quickstartTapeCommands();
+    expect(wanted.join('\n')).toMatch(/MASTER_KEY=.*\n[\s\S]*docker compose up --build$/);
+    expect(tapeCommands(tape)).toEqual(wanted);
+    // Sans l'étape « secrets », MASTER_KEY reste vide (docker-compose.yml : ${MASTER_KEY:-}) et le serveur refuse de démarrer.
+    const withoutSecrets = tape.split('\n').filter((line) => !/^Type\s/.test(line) || /cd runtime|clear|# Recorded|docker compose/.test(line)).join('\n');
+    expect(withoutSecrets).not.toBe(tape);
+    expect(tapeProblems(withoutSecrets).join()).toMatch(/quickstart/);
+  });
+
+  test('l\'invocation documentée (lancée depuis la racine du dépôt) écrit là où dit `Output`, puis entre dans runtime/', () => {
+    const output = /^Output\s+(\S+)$/m.exec(tape)?.[1] ?? '';
+    expect(output.startsWith('.github/assets/demo/')).toBe(true);
+    const invocation = 'vhs .github/assets/demo/quickstart.tape';
+    expect(readFileSync(join(assetsDir, 'demo/README.md'), 'utf8')).toContain(invocation);
+    expect(tape).toContain(invocation);
+    expect(tape).not.toMatch(/vhs demo\/quickstart\.tape/);
+    expect(readFileSync(join(assetsDir, 'demo/README.md'), 'utf8')).not.toMatch(/vhs demo\/quickstart\.tape/);
+    expect(tapeProblems(tape.replace('Type "cd runtime"', 'Type "cd ."')).join()).toMatch(/cd runtime/);
   });
 
   test('cas négatifs : site réel, commande hors liste, chemin personnel, réglage manquant, sortie hors dossier', () => {
-    const tape = readFileSync(join(assetsDir, 'demo/quickstart.tape'), 'utf8');
-    expect(tapeProblems(`${tape}\nType "curl https://example.com"`).join()).toMatch(/hors liste/);
+    expect(tapeProblems(`${tape}\nType "curl https://example.com"`).join()).toMatch(/quickstart/);
     expect(tapeProblems(`${tape}\n# https://example.com`).join()).toMatch(/hors de l'instance/);
     expect(tapeProblems(`${tape}\n# /Users/thomas/clé`).join()).toMatch(/chemin personnel/);
     expect(tapeProblems(tape.replace(/^Set Width.*$/m, '')).join()).toMatch(/Set Width/);
@@ -191,11 +217,56 @@ describe('assert_media_index_current : une MINOR cite sa version et une URL user
     expect(media).toMatch(/not uploaded yet/);
   });
 
+  test('release (22b §5) : la release à blanc et release.yml jouent le contrôle ; une MINOR sans vidéo reste en brouillon', () => {
+    const run = (version: string): { status: number | null; output: string } => {
+      const out = join(scratch, `github-output-${(counter += 1)}`);
+      writeFileSync(out, '');
+      const result = spawnSync(process.execPath, ['scripts/vitrine/check.mjs', 'media', version], { cwd: runtimeDir, encoding: 'utf8', env: { ...process.env, GITHUB_OUTPUT: out } });
+      return { status: result.status, output: readFileSync(out, 'utf8') };
+    };
+    expect(run('0.2.0')).toEqual({ status: 0, output: 'draft=true\n' });
+    expect(run('0.2.1')).toEqual({ status: 0, output: 'draft=false\n' });
+    const dryRun = readFileSync(join(runtimeDir, 'scripts/release/dry-run.ts'), 'utf8');
+    expect(dryRun).toMatch(/mediaProblems\(plan\.version/);
+    const workflow = parse(readFileSync(join(repoRoot, '.github/workflows/release.yml'), 'utf8')) as { jobs: { release: { steps: { id?: string; run?: string; env?: Record<string, string> }[] } } };
+    const steps = workflow.jobs.release.steps;
+    const mediaStep = steps.findIndex((step) => step.id === 'media' && /node scripts\/vitrine\/check\.mjs media "\$VERSION"/.test(step.run ?? ''));
+    const publish = steps.findIndex((step) => /gh release create/.test(step.run ?? ''));
+    expect(mediaStep).toBeGreaterThan(-1);
+    expect(publish).toBeGreaterThan(mediaStep);
+    expect(steps[publish]?.env?.['DRAFT']).toBe('${{ steps.media.outputs.draft }}');
+    expect(steps[publish]?.run).toMatch(/"\$DRAFT" = true[\s\S]*--draft/);
+    expect(steps[publish]?.run).toMatch(/gh release edit "\$TAG" --draft=true/);
+  });
+
+  test("le job vitrine (check.mjs all) ne joue pas l'index des vidéos : la PR release-please d'une MINOR reste verte, seule la release passe en brouillon", () => {
+    const all = spawnSync(process.execPath, ["scripts/vitrine/check.mjs"], { cwd: runtimeDir, encoding: "utf8" });
+    expect(all.status, all.stderr).toBe(0);
+    expect(`${all.stdout}${all.stderr}`).not.toMatch(/assert_media_index_current|index des vidéos/);
+    expect(readFileSync(join(runtimeDir, "scripts/vitrine/lib/all.ts"), "utf8")).not.toMatch(/mediaProblems|mediaGate/);
+  });
+
   test('cas négatifs : MINOR sans version citée, sans URL ; un patch n\'exige rien', () => {
     expect(mediaProblems('0.2.0', media).join()).toMatch(/ne cite pas la version 0\.2\.0/);
-    expect(mediaProblems('0.2.0', `${media}\n0.2.0 no link`).join()).toMatch(/user-attachments/);
+    expect(mediaProblems('0.2.0', `${media}\n| 0.2.0 | Console | no link |`).join()).toMatch(/user-attachments/);
     expect(mediaProblems('0.2.0', '| 0.2.0 | Console | https://github.com/user-attachments/assets/abc |')).toEqual([]);
     expect(mediaProblems('0.2.1', media)).toEqual([]);
     expect(mediaProblems('1.0.0', media)).not.toEqual([]);
+  });
+
+  test("cas négatifs : la version se lit dans la cellule Version d'une ligne du tableau, exactement, avec une URL user-attachments sur la même ligne", () => {
+    const row = (version: string, url = "https://github.com/user-attachments/assets/abc"): string => `| Version | Video | URL |\n|---|---|---|\n| ${version} | Console | ${url} |\n`;
+    expect(mediaProblems("0.2.0", row("0.2.0"))).toEqual([]);
+    expect(mediaProblems("0.2.0", row("v0.2.0"))).toEqual([]);
+    expect(mediaProblems("0.2.0", row("10.2.0")).join()).toMatch(/0\.2\.0/);
+    expect(mediaProblems("0.2.0", row("0.2.0-beta")).join()).toMatch(/0\.2\.0/);
+    expect(mediaProblems("0.2.0", row("0.2.0", "not uploaded yet")).join()).toMatch(/user-attachments/);
+    // Une URL sur la ligne d'une autre version ne valide pas la ligne de 0.2.0.
+    expect(mediaProblems("0.2.0", `${row("0.1.0")}| 0.2.0 | Console | not uploaded yet |\n`).join()).toMatch(/user-attachments/);
+    // La version citée hors tableau (prose) ne compte pas.
+    expect(mediaProblems("0.2.0", "Video for 0.2.0: https://github.com/user-attachments/assets/abc").join()).toMatch(/0\.2\.0/);
+    // Une pré-version (canal beta) n'est pas la MINOR : rien à exiger ; une étiquette illisible garde la release en brouillon.
+    expect(mediaProblems("0.2.0-beta.1", "")).toEqual([]);
+    expect(mediaProblems("0.2", "").join()).toMatch(/illisible/);
   });
 });

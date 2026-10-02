@@ -143,14 +143,24 @@ jobs:
         with:
           subject-path: runtime/release-out/scrapyomama-extension-*.zip
 
-      - name: Release GitHub (fichiers joints ; notes générées si release-please n'a pas créé la release)
+      # assert_media_index_current (22b §3, §5) : une MINOR dont MEDIA.md ne cite ni la version ni une URL user-attachments
+      # est publiée en brouillon ; elle sort du brouillon à la main, une fois la vidéo envoyée et MEDIA.md à jour.
+      - name: Index des vidéos (MEDIA.md) à jour pour une MINOR ?
+        id: media
+        env:
+          VERSION: ${{ steps.plan.outputs.version }}
+        run: node scripts/vitrine/check.mjs media "$VERSION"
+      - name: Release GitHub (fichiers joints ; notes générées si release-please n'a pas créé la release ; brouillon si MEDIA.md n'est pas à jour)
         env:
           GH_TOKEN: ${{ github.token }}
           CHANNEL: ${{ steps.plan.outputs.channel }}
+          DRAFT: ${{ steps.media.outputs.draft }}
         run: |
           flags=()
           if [ "$CHANNEL" = beta ]; then flags+=(--prerelease); fi
+          if [ "$DRAFT" = true ]; then flags+=(--draft); fi
           gh release view "$TAG" > /dev/null 2>&1 || gh release create "$TAG" --verify-tag --generate-notes "${flags[@]}"
+          if [ "$DRAFT" = true ]; then gh release edit "$TAG" --draft=true; fi
           gh release upload "$TAG" release-out/* --clobber
 
       # Piège GHCR (tâche 4.1, 14 § 12) : un paquet est PRIVÉ à sa première publication. Render, Railway, Heroku et les machines

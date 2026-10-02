@@ -19,7 +19,7 @@ import { checkHistory as checkX6History } from '../check-x6.ts';
 import { imageDescription, loadClaims } from '../vitrine/lib/claims.ts';
 import { identityOf, publicRepository, verifyBlock } from '../vitrine/lib/identity.ts';
 import { checksumResult, imageLabelProblems, verifySnippetProblems } from '../vitrine/lib/verify.ts';
-import { readRepoMetadata } from '../vitrine/lib/surface.ts';
+import { mediaProblems, readRepoMetadata } from '../vitrine/lib/surface.ts';
 import { readReadme, verifyBlockProblems } from '../vitrine/lib/readme.ts';
 import { attestBlob, cosignVersion, generateTestKey, negativeChecks, type Refusal, signBlob, userVerifyCommand, verifyBlob, verifyBlobAttestation } from './sign.ts';
 
@@ -39,6 +39,8 @@ export type DryRunReport = {
   image?: { reference: string; id: string; user: string; uid: string; labels: Record<string, string> };
   /** `assert_verify_snippet_works` : sha256sum -c rejoué sur SHA256SUMS de la release à blanc ; identité du bloc « Verify » du README. */
   verifySnippet: { checksum: string };
+  /** `assert_media_index_current` (22b §5) : une MINOR dont MEDIA.md n'est pas à jour serait publiée en brouillon. */
+  media: { draft: boolean; problems: string[] };
   verifyCommand: string;
 };
 
@@ -66,7 +68,7 @@ function describeArtifact(dir: string, name: string): Artifact {
 function buildLocalImage(runtimeDir: string, plan: ReleasePlan): NonNullable<DryRunReport['image']> {
   const local = `zz_test_release:${plan.version}`;
   try {
-    sh('docker', ['build', '--quiet', '-f', 'deploy/Dockerfile', '--build-arg', `RUNTIME_VERSION=${plan.version}`, '-t', local, '.'], runtimeDir);
+    sh('docker', ['build', '--quiet', '-f', 'deploy/Dockerfile', '--build-arg', `RUNTIME_VERSION=${plan.version}`, '--build-arg', `PUBLIC_REPOSITORY=${REPOSITORY}`, '-t', local, '.'], runtimeDir);
     const id = sh('docker', ['image', 'inspect', '--format', '{{.Id}}', local], runtimeDir);
     const user = sh('docker', ['image', 'inspect', '--format', '{{.Config.User}}', local], runtimeDir);
     // Par le point d'entrée de l'image (USER root, descente aussitôt sur pwuser) : uid sous lequel tourne une commande.
@@ -137,6 +139,9 @@ export function runDryRun(options: { runtimeDir: string; tag?: string; outDir?: 
     writeFileSync(join(out, 'SHA256SUMS'), `${subjects.map((n) => `${sha256(join(out, n))}  ${n}`).join('\n')}\n`);
     subjects.push('SHA256SUMS');
     // assert_verify_snippet_works (4.12) : le bloc « Verify » du README cite l'identité de cette chaîne, et `sha256sum -c` réussit.
+    // Écart (22b §3, à reporter au CDC) : `cosign verify` (keyless, identité du certificat GitHub Actions) et `gh attestation
+    // verify` ne se rejouent pas ici, hors GitHub Actions et sans registre ; la vérification keyless est rejouée en 4.5
+    // (première release réelle). Ici : identité du bloc, `sha256sum -c`, et `cosign verify-blob` à clé de test plus bas.
     const identity = identityOf(REPOSITORY);
     const snippet = [
       ...verifySnippetProblems(verifyBlock(identity), identity),
@@ -144,6 +149,9 @@ export function runDryRun(options: { runtimeDir: string; tag?: string; outDir?: 
     ];
     const sums = checksumResult(out);
     if (snippet.length > 0 || !sums.ok) throw new Error(`bloc « Verify » : ${[...snippet, ...(sums.ok ? [] : [`sha256sum -c : ${sums.output}`])].join(' ; ')}`);
+
+    // assert_media_index_current (22b §5) : la release réelle reste en brouillon (release.yml) ; ici, le résultat est rapporté.
+    const mediaIndex = mediaProblems(plan.version, readFileSync(join(runtimeDir, '../.github/assets/MEDIA.md'), 'utf8'));
 
     // 6. Signature (clé de test jetable), attestations de SBOM et de provenance.
     const key = generateTestKey(keyDir);
@@ -174,6 +182,7 @@ export function runDryRun(options: { runtimeDir: string; tag?: string; outDir?: 
       plan, cosign: cosignVersion() ?? 'inconnue', artifacts, verified, refusals,
       ...(image ? { image } : {}),
       verifySnippet: { checksum: sums.output.split('\n').filter(Boolean).join(' ; ') },
+      media: { draft: mediaIndex.length > 0, problems: mediaIndex },
       verifyCommand: userVerifyCommand(REPOSITORY, plan.tag, `${IMAGE}@sha256:<empreinte>`),
     };
     writeFileSync(join(out, 'release-report.json'), `${JSON.stringify(report, null, 2)}\n`);
@@ -195,6 +204,7 @@ if (import.meta.main) {
   for (const a of report.artifacts) console.log(`  ${a.sha256.slice(0, 12)}  ${String(a.bytes).padStart(9)}  ${a.name}`);
   console.log(`  vérifiés : ${report.verified.length} (cosign verify-blob / verify-blob-attestation : OK)`);
   console.log(`  bloc « Verify » du README : identité conforme ; sha256sum -c SHA256SUMS : ${report.verifySnippet.checksum.replace(/\s+/g, ' ').slice(0, 120)}`);
+  console.log(`  index des vidéos (MEDIA.md) : ${report.media.draft ? `release en brouillon (${report.media.problems.join(' ; ')})` : 'à jour'}`);
   for (const r of report.refusals) console.log(`  refus attendu : ${r.case} -> ${r.refused ? `refusé (${r.reason})` : 'ACCEPTÉ'}`);
   if (report.image) console.log(`  image locale : uid ${report.image.uid}, USER ${report.image.user}, id ${report.image.id.slice(0, 19)}… (rien de poussé)`);
   console.log(`  sorties : ${outDir}`);

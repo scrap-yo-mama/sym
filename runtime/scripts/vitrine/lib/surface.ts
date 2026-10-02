@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { parse } from 'yaml';
 import { githubDir, repoRoot, runtimeDir } from './paths.ts';
 import type { Budgets } from './readme.ts';
+import { parseQuickstart } from '../../../apps/docs/src/quickstart.ts';
 
 /** `LICENSE` racine = texte AGPL-3.0 mot pour mot, identique à `LICENSES/AGPL-3.0-only.txt` (détection par GitHub). */
 export function licenseProblems(root: string, copy: string): string[] {
@@ -106,26 +107,76 @@ export function formProblems(forms: Record<string, Form>): string[] {
   return problems;
 }
 
-/** `assert_media_index_current` : à chaque MINOR (X.Y.0 avec X ou Y non nul), MEDIA.md cite la version et une URL `user-attachments`. */
-export function mediaProblems(version: string, media: string): string[] {
-  const match = /^(\d+)\.(\d+)\.(\d+)/.exec(version);
-  if (!match) return [`version illisible : ${version}`];
-  const [, major, minor, patch] = match.map(Number) as [number, number, number, number];
-  const isMinor = patch === 0 && (major > 0 || minor > 0);
-  if (!isMinor) return [];
-  const problems: string[] = [];
-  if (!media.includes(version)) problems.push(`MEDIA.md ne cite pas la version ${version}`);
-  if (!/https:\/\/github\.com\/user-attachments\/\S+/.test(media)) problems.push('MEDIA.md ne cite aucune URL github.com/user-attachments');
-  return problems;
+/** Index des vidéos à l'étiquette `version` : une MINOR dont MEDIA.md n'est pas à jour reste en brouillon (22b §3, §5). */
+export function mediaGate(version: string, media = readFileSync(join(githubDir, 'assets/MEDIA.md'), 'utf8')): { draft: boolean; problems: string[] } {
+  const problems = mediaProblems(version, media);
+  return { draft: problems.length > 0, problems };
 }
 
-/** Script VHS : rejouable, sans site réel, sans clé, sans chemin personnel ; seules les commandes du quickstart sont tapées. */
-export function tapeProblems(tape: string): string[] {
+/** Lignes du tableau de MEDIA.md : cellules, sans les lignes d'en-tête ni de séparation. */
+function mediaRows(media: string): string[][] {
+  return media
+    .split('\n')
+    .filter((line) => /^\s*\|.*\|\s*$/.test(line) && !/^\s*\|[\s|:-]+\|\s*$/.test(line))
+    .map((line) => line.trim().replace(/^\||\|$/g, '').split('|').map((cell) => cell.trim()));
+}
+
+/**
+ * `assert_media_index_current` : à chaque MINOR (X.Y.0 avec X ou Y non nul), MEDIA.md a une ligne de tableau dont la cellule
+ * Version (la première) vaut exactement X.Y.Z (`v` admis) et qui porte une URL `github.com/user-attachments`. « 10.2.0 »,
+ * « 0.2.0-beta », une version citée en prose ou l'URL d'une autre ligne ne comptent pas.
+ */
+export function mediaProblems(version: string, media: string): string[] {
+  const match = /^(\d+)\.(\d+)\.(\d+)(-[0-9A-Za-z.-]+)?$/.exec(version);
+  if (!match) return [`version illisible : ${version}`];
+  // Pré-version (canal beta) : ce n'est pas la MINOR, rien à exiger.
+  if (match[4] !== undefined) return [];
+  const [major, minor, patch] = match.slice(1, 4).map(Number) as [number, number, number];
+  const isMinor = patch === 0 && (major > 0 || minor > 0);
+  if (!isMinor) return [];
+  const rows = mediaRows(media).filter((cells) => (cells[0] ?? '').replace(/^v/, '') === version);
+  if (rows.length === 0) return [`MEDIA.md ne cite pas la version ${version} (cellule Version d'une ligne du tableau)`];
+  if (!rows.some((cells) => cells.some((cell) => /https:\/\/github\.com\/user-attachments\/\S+/.test(cell)))) {
+    return [`la ligne ${version} de MEDIA.md ne porte aucune URL github.com/user-attachments`];
+  }
+  return [];
+}
+
+/**
+ * Commandes que le script VHS doit taper, ligne par ligne : étapes « secrets » (le .env, sans quoi MASTER_KEY reste vide et
+ * le serveur refuse de démarrer) puis « start » du quickstart rejoué en CI (apps/docs/content/tutoriels/quickstart.md).
+ */
+export function quickstartTapeCommands(markdown = readFileSync(join(runtimeDir, 'apps/docs/content/tutoriels/quickstart.md'), 'utf8')): string[] {
+  const steps = parseQuickstart(markdown);
+  const scripts = ['secrets', 'start'].map((id) => steps.find((step) => step.id === id)?.script);
+  if (scripts.some((script) => script === undefined)) throw new Error('le quickstart n\'a plus les étapes « secrets » et « start »');
+  return scripts.join('\n').split('\n');
+}
+
+/** Préparation masquée (`Hide` … `Show`) : le script se lance depuis la racine du dépôt, les commandes se tapent dans runtime/. */
+const TAPE_SETUP = ['cd runtime', 'clear'];
+
+/** Lignes tapées après `Show` (chaînes VHS entre "…", '…' ou `…`), hors commentaires shell. */
+export function tapeCommands(tape: string): string[] {
+  const shown = tape.slice(Math.max(0, tape.search(/^Show$/m)));
+  return [...shown.matchAll(/^Type\s+(["'`])(.*)\1$/gm)].map((m) => m[2] ?? '').filter((line) => !line.startsWith('#'));
+}
+
+/**
+ * Script VHS, contrôle de FORME (le rejeu réel est `assert_demo_recording_reproducible`, livré par 3.11) : sortie dans
+ * .github/assets/demo/ (lancé depuis la racine du dépôt : `vhs .github/assets/demo/quickstart.tape`), réglages figés,
+ * préparation masquée `cd runtime`, commandes tapées = étapes secrets et start du quickstart, aucune URL hors instance,
+ * aucune clé ni chemin personnel.
+ */
+export function tapeProblems(tape: string, commands: readonly string[] = quickstartTapeCommands()): string[] {
   const problems: string[] = [];
   if (!/^Output\s+\.github\/assets\/demo\/[a-z0-9-]+\.gif$/m.test(tape)) problems.push('Output : un GIF de .github/assets/demo/');
   for (const key of ['Width', 'Height', 'FontSize', 'TypingSpeed']) if (!new RegExp(`^Set ${key}\\b`, 'm').test(tape)) problems.push(`Set ${key} manquant (rendu reproductible)`);
-  const allowed = new Set(['cd runtime', 'clear', 'docker compose up --build', '# Recorded demo: no real site, no key']);
-  for (const m of tape.matchAll(/^Type\s+"(.*)"$/gm)) if (!allowed.has(m[1] ?? '')) problems.push(`commande tapée hors liste : « ${m[1]} »`);
+  const hidden = /^Hide$([\s\S]*?)^Show$/m.exec(tape)?.[1] ?? '';
+  const setup = [...hidden.matchAll(/^Type\s+(["'`])(.*)\1$/gm)].map((m) => m[2] ?? '');
+  if (setup.join('\n') !== TAPE_SETUP.join('\n')) problems.push(`préparation masquée : ${TAPE_SETUP.join(', ')} attendus (le script se lance depuis la racine du dépôt), lu : ${setup.join(', ') || 'rien'}`);
+  const typed = tapeCommands(tape);
+  if (typed.join('\n') !== commands.join('\n')) problems.push(`commandes tapées ≠ étapes « secrets » et « start » du quickstart rejoué en CI (${typed.length} lignes tapées, ${commands.length} attendues)`);
   for (const url of tape.matchAll(/https?:\/\/[^\s"]+/g)) if (!/^https?:\/\/(localhost|127\.0\.0\.1)\b/.test(url[0])) problems.push(`URL hors de l'instance de démonstration : ${url[0]}`);
   if (/\/Users\/|\/home\/|sk-[A-Za-z0-9]{8,}|Bearer\s/.test(tape)) problems.push('chemin personnel ou clé dans le script');
   return problems;

@@ -31,8 +31,26 @@ smartproxy
 cloudflare
 akamai
 datadome
+data dome
 perimeterx
+perimeter x
 imperva
+# Éditeurs de protection : mêmes noms que PROTECTION_NAMES de tests/ui-strings.unit.test.ts (un seul régime de lexique).
+incapsula
+kasada
+turnstile
+shape security
+shapesecurity
+arkose
+geetest
+capsolver
+flaresolverr
+recaptcha
+hcaptcha
+funcaptcha
+2captcha
+anticaptcha
+anti-captcha
 twitter
 linkedin
 facebook

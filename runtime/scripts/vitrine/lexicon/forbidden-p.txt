@@ -1,18 +1,19 @@
 # Liste P (promesses) : 0 occurrence sur toute surface de la vitrine (20 §2.2, 22b §1). Union fr + en.
 # Interim de la tâche 4.12 : le paquet commun `forbidden.<langue>.txt` de 3.19 / 3.20 la remplacera ; mêmes entrées reprises.
-# Une entrée par ligne ; `racine-` = préfixe de mot ; normalisation : casse, accents, traits d'union, espaces.
+# Une entrée par ligne ; `racine-` = préfixe de mot (stealth- prend stealthy) ; `-racine-` = n'importe où dans un mot ;
+# normalisation : casse, accents, traits d'union, espaces.
 indetectable
 indetectables
-undetectable
-undetected
+undetect-
+antidetect-
 contourn-
 circumvent-
 bypass-
 debloqu-
 unblock-
 furtiv-
-stealth
-anti-detect
+stealth-
+anti-detect-
 invisible aux anti-bots
 invisible pour les anti-bots
 invisible to anti-bots
@@ -31,7 +32,8 @@ sans limite
 unlimited
 plus de 403
 no more blocks
-evade
+evad-
+evasi-
 get around
 mode fantome
 ghost mode
@@ -47,5 +49,5 @@ incognito
 personne ne te verra
 unseen
 slip past
-sneak
+sneak-
 discretement

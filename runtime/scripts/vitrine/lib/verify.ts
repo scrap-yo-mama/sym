@@ -77,7 +77,9 @@ export function dockerfileLabels(dockerfile: string, repository: string): Record
   const args: Record<string, string> = {};
   for (const m of last.matchAll(/^ARG (\w+)(?:=(.*))?$/gm)) args[m[1] ?? ''] = (m[2] ?? '').replace(/^"|"$/g, '');
   args['PUBLIC_REPOSITORY'] = repository;
-  const expand = (value: string): string => value.replace(/\$\{(\w+)\}/g, (_m, name: string) => args[name] ?? '');
+  // `${NOM}` et `${NOM:+mot}` (mot seulement si NOM est non vide), comme le Dockerfile.
+  const expand = (value: string): string =>
+    value.replace(/\$\{(\w+)(?::\+([^}]*))?\}/g, (_m, name: string, word: string | undefined) => (word === undefined ? (args[name] ?? '') : args[name] ? word : ''));
   const labels: Record<string, string> = {};
   const block = /^LABEL ((?:.*\\\n)*.*)$/m.exec(last)?.[1] ?? '';
   for (const m of block.replace(/\s*\\\n\s*/g, ' ').matchAll(/([\w.-]+)="([^"]*)"/g)) labels[m[1] ?? ''] = expand(m[2] ?? '');

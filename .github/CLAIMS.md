@@ -16,6 +16,7 @@ nowhere. Source: `claims.json`.
 | `own-session-consent` | Your session, with your consent. For sites behind a login, a browser extension runs steps through your own session, domain by domain, only after you agree. | Ta session, avec ton accord. Pour les sites derrière une connexion, une extension de navigateur exécute des étapes avec ta propre session, domaine par domaine, seulement après ton accord. | `INV5`, `assert_consent_before_capture`, `assert_tunnel_only_when_chosen` | 2026-10-02 | relu |  |
 | `no-signup` | Open source and self-hosted: nothing to sign up for. | Libre et auto-hébergé : rien à quoi t'inscrire. | `assert_quickstart_no_egress` | 2026-10-02 | relu |  |
 | `built-with-ai` | Much of this code and documentation was written with AI assistance, then reviewed, tested and run through CI. If something looks off, say so. | Une grande partie du code et de la documentation a été écrite avec l'aide d'une IA, puis relue, testée et passée en CI. Si quelque chose cloche, dis-le. | `.github/workflows/ci.yml` | 2026-10-02 | relu |  |
+| `quickstart-replayed-by-ci` | The commands are the ones the CI replays on a blank instance. | Les commandes sont celles que la CI rejoue sur une instance vierge. | `assert_quickstart_replayed`, `assert_quickstart_compose_parity`, `runtime/tests/quickstart.integration.test.ts`, `runtime/tests/vitrine/readme.unit.test.ts` | 2026-10-02 | relu |  |
 
 ## responsible-use
 
