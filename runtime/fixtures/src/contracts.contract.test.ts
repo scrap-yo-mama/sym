@@ -48,6 +48,12 @@ const contracts: Record<string, Contract> = {
     expect((await fx.get(H('api_json'), '/api/v2/contacts')).status).toBe(200);
     await setSite('api_json', { mutation: 'out_of_schema' });
     expect(items(obj(await fx.get(H('api_json'), '/api/contacts')))[0]).not.toHaveProperty('email');
+    await setSite('api_json', { mutation: 'one_item_bad_type' });
+    const bad = items(obj(await fx.get(H('api_json'), '/api/contacts')));
+    expect(bad.filter((c) => typeof c['score'] === 'string')).toHaveLength(1);
+    expect(bad[3]).toHaveProperty('extra.contact_email');
+    await setSite('api_json', { mutation: 'bad_items_30pct' });
+    expect(items(obj(await fx.get(H('api_json'), '/api/contacts'))).filter((c) => typeof c['score'] === 'string')).toHaveLength(6);
     await setSite('api_json', { mutation: 'empty' });
     expect(obj(await fx.get(H('api_json'), '/api/contacts'))['total']).toBe(0);
     expect((await setSite('api_json', { mutation: 'inconnue' })).status).toBe(400);

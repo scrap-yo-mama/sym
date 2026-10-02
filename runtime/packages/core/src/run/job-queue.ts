@@ -110,6 +110,8 @@ export type RunResult =
       outcome: Exclude<RunOutcome, 'failed'>;
       degraded_reasons?: string[];
       items: number;
+      /** Items extraits non conformes, écartés (quarantaine, jamais livrés : 04 §5, D-49). */
+      items_rejected?: number;
       dataset_id?: string | null;
       strategy_version?: number | null;
     }
@@ -120,6 +122,8 @@ export type RunResult =
       retryable: boolean;
       error_detail?: string | null;
       items?: number;
+      /** Items écartés avant la casse (D-49) : la quarantaine du run est gardée pour le diagnostic. */
+      items_rejected?: number;
       strategy_version?: number | null;
     }
   | {
@@ -134,6 +138,8 @@ export type RunResult =
       retryable: false;
       error_detail?: string | null;
       items?: number;
+      /** Items écartés avant la casse (D-49) : la quarantaine du run est gardée pour le diagnostic. */
+      items_rejected?: number;
       strategy_version?: number | null;
     }
   | {

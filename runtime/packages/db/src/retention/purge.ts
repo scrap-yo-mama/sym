@@ -183,7 +183,7 @@ export async function purgeMarkedDatasets(db: SessionDb, now: Date, opts: Physic
 }
 
 export type CleanupResult = Record<
-  'investigation_payloads' | 'error_detail' | 'run_inputs' | 'run_logs' | 'run_artifacts' | 'tunnel_jobs' | 'runs' | 'dedup_keys' | 'audit_events',
+  'investigation_payloads' | 'rejected_samples' | 'error_detail' | 'run_inputs' | 'run_logs' | 'run_artifacts' | 'tunnel_jobs' | 'runs' | 'dedup_keys' | 'audit_events',
   number
 >;
 
@@ -205,6 +205,12 @@ export async function cleanupExpiredRunData(
   // reste jusqu'à la purge du run.
   out.investigation_payloads = await count(
     `UPDATE investigation_events SET payload = '{}'::jsonb WHERE at < $1 AND payload <> '{}'::jsonb`,
+    [samples],
+  );
+  // Échantillons de la quarantaine (D-49, 0017) : vidés comme les échantillons d'enquête ; agrégats sans valeur gardés
+  // jusqu'à la purge du run (ON DELETE CASCADE).
+  out.rejected_samples = await count(
+    `UPDATE run_rejected_items SET sample = '[]'::jsonb WHERE created_at < $1 AND sample <> '[]'::jsonb`,
     [samples],
   );
   out.error_detail = await count(

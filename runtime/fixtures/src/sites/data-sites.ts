@@ -16,6 +16,10 @@ const MUTATIONS = [
   'type_change',
   'out_of_schema',
   'empty',
+  // D-49 (2.3) : items écartés. Un seul item hors schéma (score en texte, e-mail factice sous une clé inconnue), puis 30 %
+  // des items hors schéma (au-delà du seuil de casse : 20 % et 5 items).
+  'one_item_bad_type',
+  'bad_items_30pct',
 ] as const;
 type Mutation = (typeof MUTATIONS)[number];
 
@@ -24,6 +28,11 @@ const apiJson: SiteFactory = (env) => {
   let mutation: Mutation = 'none';
 
   const shape = (c: (typeof contacts)[number]): Record<string, unknown> => {
+    const index = contacts.indexOf(c);
+    if (mutation === 'one_item_bad_type' && index === 3) {
+      return { id: c.id, name: c.name, email: c.email, city: c.city, score: 'N/A', extra: { contact_email: 'zz_test_leak_0003@example.invalid' } };
+    }
+    if (mutation === 'bad_items_30pct' && index % 10 < 3) return { id: c.id, name: c.name, email: c.email, city: c.city, score: 'N/A' };
     switch (mutation) {
       case 'rename_field':
         return { id: c.id, full_name: c.name, email: c.email, city: c.city, score: c.score };

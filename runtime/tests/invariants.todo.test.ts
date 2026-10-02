@@ -71,8 +71,12 @@ describe("invariants (à implémenter)", () => {
   // Case « j'ai lu » (responsible_use_acks), page affichée au premier lancement, refus d'une API x-personal sans la case :
   // gardés par assert_responsible_use_ack_pending (tests/docs-guards.unit.test.ts), qui échoue si 3.1 livre POST /api/apis sans eux.
   test.todo("assert_responsible_use_ack"); // 17 § 11 (critère 2 de 4.8), reprise : 3.1
-  // INV6 (revue de 1.7) : le run échoué rend sa classe, mais aucun code de production ne la porte encore au statut de l'API.
-  test.todo("assert_no_circumvention — câblage run échoué → statut dans le worker : sain → reparation → bloquee (transitions 10 et 15), jamais de réparation sur un refus ni un défi servi en 200"); // INV6, tâche(s) 2.3
+  // INV6 (revue de 1.7), câblage livré par 2.3 : le worker porte le run échoué au statut de l'API (10 puis 15 dans le même
+  // run, sans réparation) : apps/worker/src/exec/classification-guard.integration.test.ts (status_events écrits par le worker)
+  // et apps/worker/src/exec/repair.integration.test.ts (10 puis 12 ou 13).
+  // D-49 (2.3) : la quarantaine et l'enveloppe `RunResult.rejected` sont livrées (packages/db/src/rejected.ts) ; leur
+  // exposition REST et MCP attend 3.1 et 3.2 (non fusionnées au moment de 2.3) et se joue en 4.2.
+  test.todo("assert_rejected_items_quarantined — exposition REST et MCP : RunResult.rejected sur get_run et run_api, get_items(rejected: true) à l'appelant du run seul, 404 au propriétaire d'une API instance (05 §4.1)"); // D-49, tâche(s) 4.2 (après 3.1, 3.2)
   // RGPD (1.8) : assert_retention_purge, assert_erasure_complete et assert_no_personal_data_in_logs sont dans
   // packages/db/src/retention/retention.integration.test.ts ; câblage worker (RunContext.personal, RunContext.excludeSubjects,
   // rekey) dans apps/worker/src/worker.integration.test.ts. Câblage par l'exécuteur réel (D-28, tâche 1.6) : items extraits

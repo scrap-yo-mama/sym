@@ -31,7 +31,7 @@ const norm = (type: string) => type.replace(/,\s+/g, ',');
 const BUSINESS_TABLES = [
   'apis', 'strategy_versions', 'runs', 'run_attempts', 'run_logs', 'run_artifacts', 'investigation_events',
   'status_events', 'datasets', 'dataset_items', 'dedup_keys', 'schedules', 'site_sessions', 'tunnels', 'tunnel_jobs',
-  'webhook_subscriptions', 'webhook_deliveries',
+  'webhook_subscriptions', 'webhook_deliveries', 'run_rejected_items',
 ];
 
 async function expectRejected(sql: string, params: unknown[] = []): Promise<void> {

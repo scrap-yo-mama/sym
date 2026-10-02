@@ -15,7 +15,7 @@ import { randomUUID } from 'node:crypto';
 import { DomainPacer, generateMasterKey, MasterKey } from '@runtime/core';
 import { classifyExchange, type ClassifyContext, type ExecFailure, type HttpExchange } from '@runtime/core/exec';
 import * as net from '@runtime/core/net';
-import { applyStatusTransition, createRun, keyCheck, migrateUp, PgBossJobQueue, PgPacingStore, readRun, runQueueDefinition, withActor } from '@runtime/db';
+import { createRun, keyCheck, migrateUp, PgBossJobQueue, PgPacingStore, readRun, runQueueDefinition, withActor } from '@runtime/db';
 import pg from 'pg';
 import { pino } from 'pino';
 import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from 'vitest';
@@ -34,7 +34,6 @@ const HOSTS = {
 };
 const A = randomUUID();
 const actorA = { userId: A, role: 'member' as const };
-const T0 = Date.parse('2026-10-01T12:00:00Z');
 const NAME_SCHEMA = { type: 'object', required: ['name'], properties: { name: { type: 'string' } } };
 
 let tdb: TestDatabase;
@@ -42,7 +41,7 @@ let pool: pg.Pool;
 let queue: PgBossJobQueue;
 let client: Client;
 let worker: Worker;
-const repair = vi.fn<RepairPort>(async () => null);
+const repair = vi.fn<RepairPort>(async () => ({ kind: 'failed', cause: 'budget_exhausted', detail: 'zz_test_no_repair' }));
 /**
  * Classifieur de l'exécuteur : celui par défaut, ou (test de la garde par preuves) un classifieur qui laisse tout passer,
  * pour qu'un défi non détecté avant extraction atteigne la porte de la réparation.
@@ -98,13 +97,13 @@ const routeLog = async (runId: string) =>
   (await pool.query<{ data: Record<string, unknown> }>("SELECT data FROM run_logs WHERE run_id = $1 AND event = 'failure_route'", [runId])).rows.map((r) => r.data);
 
 /** Applique l'échec du run à la machine à états. DIFFÉRÉ à 2.3 : aucun code de production ne relie encore un run échoué au statut (le câblage naît avec la réparation) ; ce test vérifie la machine à états sur la classe rendue par le run, pas le câblage. */
-async function applyFailure(apiId: string, runId: string, failureClass: string, httpStatus?: number) {
-  return applyStatusTransition(pool, {
-    apiId,
-    runId,
-    event: { type: 'run_failed', failureClass: failureClass as never, ...(httpStatus === undefined ? {} : { httpStatus }) },
-    clock: { now: () => new Date(T0) },
-  });
+/**
+ * Transitions écrites par le WORKER pendant le run (câblage run échoué → statut, tâche 2.3) : `status_events` du run,
+ * dans l'ordre, sous la forme `[de, vers, raison]`.
+ */
+async function statusEventsOf(runId: string): Promise<[string, string, string][]> {
+  const { rows } = await pool.query<{ from_status: string; to_status: string; reason: string }>('SELECT from_status, to_status, reason FROM status_events WHERE run_id = $1 ORDER BY id', [runId]);
+  return rows.map((r) => [r.from_status, r.to_status, r.reason]);
 }
 
 beforeAll(async () => {
@@ -163,12 +162,12 @@ describe('assert_no_circumvention : garde de classification avant extraction et 
     // La page de défi n'entre nulle part : ni dans le run, ni dans ses journaux.
     const dump = JSON.stringify([run, (await pool.query('SELECT event, data FROM run_logs WHERE run_id = $1', [run.id])).rows]);
     for (const text of ['Security check', 'verify you are human', 'zz_test_challenge_0001', 'not a robot']) expect(dump).not.toContain(text);
-    // Statut : refus pendant un rejeu → 10 puis 15, dans le même run, sans réparation.
-    const step = await applyFailure(apiId, run.id, run.failure_class!, 200);
-    expect(step.ok && step.transitions.map((t) => [t.transition, t.to])).toEqual([
-      [10, 'reparation'],
-      [15, 'bloquee'],
+    // Statut : refus pendant un rejeu → 10 puis 15, dans le même run, sans réparation (appliqué par le worker, 2.3).
+    expect(await statusEventsOf(run.id)).toEqual([
+      ['sain', 'reparation', 'blocked_by_protection'],
+      ['reparation', 'bloquee', 'blocked_by_protection'],
     ]);
+    expect((await pool.query<{ status: string }>('SELECT status FROM apis WHERE id = $1', [apiId])).rows[0]!.status).toBe('bloquee');
   });
 
   test('401 → auth_required (action_requise), 403 nu → forbidden (bloquee), 403 signé → blocked_by_protection : jamais network, jamais d’agent', async () => {
@@ -184,8 +183,9 @@ describe('assert_no_circumvention : garde de classification avant extraction et 
       expect(run, c.cls).toMatchObject({ state: 'failed', failure_class: c.cls, items: 0, dataset_id: null });
       expect(run.failure_class).not.toBe('network');
       expect(run.attempts.map((a) => a.network)).toEqual(['direct']);
-      const step = await applyFailure(apiId, run.id, run.failure_class!, c.http);
-      expect(step.ok && step.state.status, c.cls).toBe(c.status);
+      // Statut appliqué par le worker (2.3) : 10 puis 14 ou 15 dans le même run.
+      expect((await pool.query<{ status: string }>('SELECT status FROM apis WHERE id = $1', [apiId])).rows[0]!.status, `${c.cls} (HTTP ${c.http})`).toBe(c.status);
+      expect((await statusEventsOf(run.id)).map((e) => e[1]), c.cls).toEqual(['reparation', c.status]);
     }
     expect(repair).not.toHaveBeenCalled();
   });
@@ -243,10 +243,9 @@ describe('assert_no_circumvention : garde par preuves avant réparation (défi n
     const state = (await pool.query<{ consecutive_failures: number }>('SELECT consecutive_failures FROM domain_pacing_state WHERE domain = $1', [HOSTS.challenge200])).rows[0];
     expect(state).toMatchObject({ consecutive_failures: 1 });
     // Statut : bloquee (transition 15), jamais reparation → erreur ni relance automatique de l'enquête.
-    const step = await applyFailure(apiId, run.id, run.failure_class!, 200);
-    expect(step.ok && step.transitions.map((t) => [t.transition, t.to])).toEqual([
-      [10, 'reparation'],
-      [15, 'bloquee'],
+    expect(await statusEventsOf(run.id)).toEqual([
+      ['sain', 'reparation', 'blocked_by_protection'],
+      ['reparation', 'bloquee', 'blocked_by_protection'],
     ]);
   });
 });

@@ -41,12 +41,28 @@ import {
   validateDeclarativeSpec,
   validateHybridSpec,
   validateOutput,
+  ITEMS_REJECTED_DEFAULTS,
+  partitionItems,
+  quarantineSummary,
+  rejectionReasons,
+  rejectionVerdict,
+  volumeAnomaly,
+  type DegradedSignal,
+  type Execution,
+  type ItemPartition,
+  type ItemPolicy,
+  type JsonPatchOperation,
+  type RejectionReason,
+  type RejectionThresholds,
+  type RejectionVerdict,
+  type RepairStopCause,
   type SandboxViolation,
   type DeclarativeSpec,
   type FailureClass,
   type RunContext as RunCtx,
   type RunExecutor,
   type RunResult,
+  type StatusEventInput,
 } from '@runtime/core';
 import {
   domainRequestPacer,
@@ -83,7 +99,7 @@ import {
   type SecretReader,
   type SsrfGuard,
 } from '@runtime/core/net';
-import { loadRunTarget, readProxySettings, saveCompiledStrategy, saveRunDataset, type RunTarget } from '@runtime/db';
+import { deleteRejectedItems, loadRunTarget, readProxySettings, readVolumeHistory, saveCompiledStrategy, saveRejectedItems, saveRepairedStrategy, saveRunDataset, type RunTarget } from '@runtime/db';
 import type { LlmClient, LlmConfig } from '@runtime/llm';
 import type pg from 'pg';
 import { pino, type Logger } from 'pino';
@@ -136,6 +152,8 @@ export type StrategyExecutorDeps = {
    * `null` (échec d'origine conservé).
    */
   readonly repair?: RepairPort;
+  /** Seuil de casse des items non conformes (`ITEMS_REJECTED_MAX_SHARE`, `ITEMS_REJECTED_MIN_COUNT`, D-49). */
+  readonly rejection?: RejectionThresholds;
   /** Journal du worker (violations du bac à sable, détail admin). */
   readonly logger?: Logger;
   readonly now?: () => number;
@@ -149,20 +167,60 @@ export type StrategyExecutorDeps = {
   readonly version?: string;
 };
 
+/** Stratégie figée d'un run (version, exécution, réseau, spécification). */
+type FrozenStrategy = NonNullable<RunTarget['strategy']>;
+
+/**
+ * Une stratégie candidate rejouée par la réparation, avec TOUTES les gardes du run (essai journalisé) : items triés
+ * (conformes, écartés), verdict du seuil de casse (D-49), refus de la garde (un refus arrête la réparation, INV6).
+ */
+export type CandidateCheck = {
+  readonly trial: StrategyTrial;
+  readonly partition: ItemPartition<Record<string, unknown>>;
+  readonly verdict: RejectionVerdict;
+  /** Échec de l'essai (classe retenue par la garde), `null` s'il a réussi. */
+  readonly failure: ExecFailure | null;
+  /** Échec qui interdit tout agent (refus, défi, connexion, 429…) : la réparation s'arrête là. */
+  readonly refusal: ExecFailure | null;
+  /** Coût de l'essai (proxy + LLM) ; `null` : inconnu. */
+  readonly costUsd: number | null;
+};
+
+/** Stratégie réparée (vN+1) : patch borné (ou `null` pour une escalade), sortie déjà rejouée et validée. */
+export type RepairedStrategy = { readonly execution: Execution; readonly network: FrozenStrategy['network']; readonly spec: DeclarativeSpec; readonly patch: JsonPatchOperation[] | null; readonly estCostUsd: number | null };
+
+/** Issue d'une réparation (04 §5). */
+export type RepairOutcome =
+  /** vN+1 conforme, déjà enregistrée par `commit` SOUS le bail (`saved`). */
+  | { readonly kind: 'repaired'; readonly strategy: RepairedStrategy; readonly check: CandidateCheck; readonly saved: { readonly version: number; readonly promoted: boolean } }
+  /** Budget épuisé ou correctif répété : transition 13, stratégie précédente conservée. */
+  | { readonly kind: 'failed'; readonly cause: RepairStopCause; readonly detail: string }
+  /** Un refus est survenu pendant la réparation : la garde l'emporte (14 ou 15). */
+  | { readonly kind: 'refused'; readonly failure: ExecFailure }
+  /** Une autre réparation tenait le bail et a produit vN+1 : le run la rejoue. */
+  | { readonly kind: 'superseded'; readonly version: number };
+
 /**
  * Port de réparation (2.3). `evidence` : preuves DÉJÀ passées par la garde (aucune n'est un refus ni une page de défi,
  * un signal faible en 2xx est retiré) puis MINIMISÉES par `minimizeEvidence` avec le registre du run (`ctx.personal`) :
  * squelette HTML (balises, id, class), squelette JSON (clés, types), texte libre masqué ; jamais le corps de la page,
  * ses valeurs, ses cookies ni sa requête (04 §5 « journaux masqués, diff de forme », 17 §6, RGPD). Les sujets effacés
  * (`ctx.excludeSubjects`) ne sont connus que par empreinte : d'où « aucune valeur de la page ». Le port doit encore
- * passer chaque texte par `assertPromptSafe` avant de l'inclure dans un prompt (04b §6).
+ * passer chaque texte par `assertPromptSafe` avant de l'inclure dans un prompt (04b §6). `reasons` : raisons de rejet des
+ * items (sans valeur) quand la casse vient du seuil de D-49. `trial` rejoue une candidate (journalisée comme un essai).
+ * `commit` enregistre vN+1 : le port l'appelle AVANT de libérer le bail de réparation, pour qu'un run qui attendait le bail
+ * trouve vN+1 déjà courante (sinon il verrait le bail libre et la version d'origine, et échouerait sans raison).
  */
 export type RepairPort = (request: {
   readonly ctx: RunCtx;
+  readonly target: RunTarget;
+  readonly strategy: FrozenStrategy;
   readonly failure: ExecFailure;
-  readonly strategyVersion: number;
   readonly evidence: readonly AgentEvidence[];
-}) => Promise<RunResult | null>;
+  readonly reasons: readonly RejectionReason[];
+  readonly trial: (candidate: FrozenStrategy, purpose: 'repair_patch' | 'repair_escalation') => Promise<CandidateCheck>;
+  readonly commit: (repaired: RepairedStrategy) => Promise<{ version: number; promoted: boolean }>;
+}) => Promise<RepairOutcome>;
 
 type Outcome = {
   result: DeclarativeRunResult;
@@ -198,7 +256,11 @@ export type StrategyTrial = {
 /** Exécuteur des runs et essai d'une stratégie candidate (enquête, tâche 2.1), avec les mêmes gardes. */
 export type StrategyRuntime = {
   readonly executor: RunExecutor;
-  readonly trial: (ctx: RunCtx, target: RunTarget, strategy: NonNullable<RunTarget['strategy']>) => Promise<StrategyTrial>;
+  /**
+   * Un essai avec toutes les gardes. `itemPolicy` : `strict` (défaut, enquête : le moindre item non conforme fait échouer
+   * l'essai) ou `quarantine` (runs, D-49 : les items non conformes restent dans `result.records`, à trier par l'appelant).
+   */
+  readonly trial: (ctx: RunCtx, target: RunTarget, strategy: NonNullable<RunTarget['strategy']>, itemPolicy?: ItemPolicy) => Promise<StrategyTrial>;
 };
 
 /** Somme des usages réseau d'un essai (egress Chromium + session `ctx.fetch` du script). */
@@ -343,7 +405,7 @@ export function createStrategyRuntime(deps: StrategyExecutorDeps): StrategyRunti
     ctx: RunCtx,
     target: RunTarget,
     scriptRef: string,
-    base: { pool: BrowserPool; egress: BrowserEgress; session: NetworkSession; pacer?: RequestPacer; allowedHosts: readonly string[]; startUrl: string; robots: RobotsGate; userAgent: string },
+    base: { pool: BrowserPool; egress: BrowserEgress; session: NetworkSession; pacer?: RequestPacer; allowedHosts: readonly string[]; startUrl: string; robots: RobotsGate; userAgent: string; itemPolicy: ItemPolicy },
   ): Promise<Outcome> => {
     const port = deps.script;
     if (port === undefined) return { result: { ok: false, failure: { failure_class: 'code_error', retryable: false, detail: 'sandbox_unavailable' }, pages: 0, requests: 0 }, usage: null };
@@ -374,7 +436,9 @@ export function createStrategyRuntime(deps: StrategyExecutorDeps): StrategyRunti
       userAgent: base.userAgent,
     });
     let result = run.result;
-    if (result.ok && result.records.some((r) => !validateOutput(target.api.outputSchema, r).ok)) {
+    // Politique `quarantine` (runs, D-49) : 0 item conforme casse ; sinon les items non conformes sont triés par l'appelant.
+    const conforming = (r: unknown): boolean => validateOutput(target.api.outputSchema, r).ok;
+    if (result.ok && (base.itemPolicy === 'quarantine' ? !result.records.some(conforming) : result.records.some((r) => !conforming(r)))) {
       result = { ok: false, failure: { failure_class: 'extraction', retryable: false, detail: 'schema_mismatch' }, pages: result.pages, requests: result.requests };
     }
     const bytes = run.logs.reduce((sum, args) => sum + Buffer.byteLength(JSON.stringify(args)), 0);
@@ -386,7 +450,7 @@ export function createStrategyRuntime(deps: StrategyExecutorDeps): StrategyRunti
    * script E3 refusé (aucun code dans l'extension). Domaine = `requires.session_domain` de l'API, sinon l'hôte de la
    * requête ; toute URL de la stratégie doit y rester (vérifié aussi par la passerelle et par l'extension).
    */
-  const executeTunnel = async (ctx: RunCtx, target: RunTarget, strategy: NonNullable<RunTarget['strategy']>): Promise<Outcome> => {
+  const executeTunnel = async (ctx: RunCtx, target: RunTarget, strategy: NonNullable<RunTarget['strategy']>, itemPolicy: ItemPolicy): Promise<Outcome> => {
     // Pendant de `rungFor` (04 §3.2, X3, INV6) : le tunnel n'est servi que s'il est choisi dans la politique réseau de
     // l'API ou si l'API exige l'identité de l'utilisateur (`requires.tunnel`, `requires_session`). Une version de
     // stratégie `tunnel` venue d'une enquête, d'une réparation ou d'un import ne passe pas d'elle-même par son IP.
@@ -422,6 +486,7 @@ export function createStrategyRuntime(deps: StrategyExecutorDeps): StrategyRunti
       spec,
       input: ctx.input,
       outputSchema: target.api.outputSchema,
+      itemPolicy,
       signal: ctx.signal,
       ...(pacer === undefined ? {} : { pacer }),
       ...(target.api.domainPacing.max_requests_per_run === undefined ? {} : { maxRequests: target.api.domainPacing.max_requests_per_run }),
@@ -431,8 +496,8 @@ export function createStrategyRuntime(deps: StrategyExecutorDeps): StrategyRunti
     return { result: out.result, usage: null, ...(out.stop === null ? {} : { stop: out.stop }), ...(out.needsUser ? { needsUser: true } : {}) };
   };
 
-  const execute = async (ctx: RunCtx, target: RunTarget, strategy: NonNullable<RunTarget['strategy']>): Promise<Outcome> => {
-    if (strategy.network === 'tunnel') return executeTunnel(ctx, target, strategy);
+  const execute = async (ctx: RunCtx, target: RunTarget, strategy: NonNullable<RunTarget['strategy']>, itemPolicy: ItemPolicy): Promise<Outcome> => {
+    if (strategy.network === 'tunnel') return executeTunnel(ctx, target, strategy, itemPolicy);
     // E6 limité au serveur (0.6b, ADR 0001) : refusé en tunnel avant tout réseau.
     try {
       assertExecutionOnNetwork(strategy.execution, strategy.network);
@@ -494,6 +559,7 @@ export function createStrategyRuntime(deps: StrategyExecutorDeps): StrategyRunti
     const common = {
       input: ctx.input,
       outputSchema: target.api.outputSchema,
+      itemPolicy,
       signal: ctx.signal,
       access: robots.access,
       ...(pacer === undefined ? {} : { pacer }),
@@ -546,7 +612,7 @@ export function createStrategyRuntime(deps: StrategyExecutorDeps): StrategyRunti
             const session = openNetworkSession(sessionOptions('session'));
             args.setOther({ session: () => session.usage().costUsd });
             try {
-              const out = await runScript(ctx, target, strategy.scriptRef!, { pool: deps.browsers, egress, session, ...(pacer === undefined ? {} : { pacer }), ...script, robots, userAgent });
+              const out = await runScript(ctx, target, strategy.scriptRef!, { pool: deps.browsers, egress, session, ...(pacer === undefined ? {} : { pacer }), ...script, robots, userAgent, itemPolicy: common.itemPolicy ?? 'strict' });
               const exceeded = egress.budgetExceeded() || session.budgetExceeded();
               return { ...out, result: budgetChecked(refineEgress(out.result, egress), exceeded), usage: addUsage(egress.usage(), session.usage()) };
             } finally {
@@ -596,6 +662,7 @@ export function createStrategyRuntime(deps: StrategyExecutorDeps): StrategyRunti
         const maxRequests = target.api.domainPacing.max_requests_per_run;
         const common = {
           outputSchema: target.api.outputSchema,
+          itemPolicy: args.common.itemPolicy ?? 'strict',
           signal: ctx.signal,
           maxCostUsd: target.api.maxCostUsd,
           cost,
@@ -664,10 +731,10 @@ export function createStrategyRuntime(deps: StrategyExecutorDeps): StrategyRunti
    * SSRF, verrou de domaines, cadence, plafond de coût, bac à sable, classification avant extraction (INV6), registre
    * de masquage et liste d'exclusion (D-28). Rien n'est journalisé dans `run_attempts` ni écrit en dataset ici.
    */
-  const runTrial = async (ctx: RunCtx, target: RunTarget, strategy: NonNullable<RunTarget['strategy']>, started = now()): Promise<StrategyTrial> => {
+  const runTrial = async (ctx: RunCtx, target: RunTarget, strategy: NonNullable<RunTarget['strategy']>, started = now(), itemPolicy: ItemPolicy = 'strict'): Promise<StrategyTrial> => {
     let outcome: Outcome;
     try {
-      outcome = await execute(ctx, target, strategy);
+      outcome = await execute(ctx, target, strategy, itemPolicy);
     } catch (error) {
       if (!(error instanceof TargetError)) throw error;
       outcome = { result: { ok: false, failure: error.failure, pages: 0, requests: 0 }, usage: null };
@@ -716,14 +783,237 @@ export function createStrategyRuntime(deps: StrategyExecutorDeps): StrategyRunti
     };
   };
 
-  const executor: RunExecutor = async (ctx): Promise<RunResult> => {
+  const thresholds: RejectionThresholds = deps.rejection ?? ITEMS_REJECTED_DEFAULTS;
+
+  /** Machine à états du statut (04 §6), appliquée par le worker ; absente (tests) : aucun changement. */
+  const applyStatus = async (ctx: RunCtx, event: StatusEventInput) => {
+    try {
+      return (await ctx.applyStatus?.(event)) ?? null;
+    } catch (error) {
+      logger.error({ runId: ctx.runId, err: error instanceof Error ? error.name : 'error' }, 'statut : événement non appliqué');
+      return null;
+    }
+  };
+
+  /** Un essai journalisé (INV2, INV4) : exécution, réseau, classe (casse D-49 comprise), durée, coûts. */
+  const recordTrial = async (ctx: RunCtx, strategy: FrozenStrategy, trial: StrategyTrial, verdict: RejectionVerdict | null): Promise<void> => {
+    const llm = trial.llm;
+    await ctx.recordAttempt({
+      execution: strategy.execution,
+      network: strategy.network,
+      est_cost_usd: strategy.estCostUsd,
+      result:
+        trial.outcome.stop === 'challenge_in_tunnel'
+          ? 'blocked_by_protection'
+          : trial.guardedFailure !== undefined
+            ? trial.guardedFailure.failure_class
+            : verdict === 'break'
+              ? 'extraction'
+              : 'ok',
+      ms: trial.ms,
+      proxy_usd: trial.proxyUsd,
+      ...(llm === null ? {} : { llm_usd: trial.llmUsd, tokens: llm.tokens, model_id: llm.modelId, prompt_version: llm.promptVersion, engine: llm.engine }),
+    });
+  };
+
+  /** Items d'un essai réussi triés contre `output_schema` (D-49) : conformes livrables, non conformes en quarantaine. */
+  const sortItems = (target: RunTarget, trial: StrategyTrial): { partition: ItemPartition<Record<string, unknown>>; verdict: RejectionVerdict } | null => {
+    if (!trial.result.ok) return null;
+    const partition = partitionItems(target.api.outputSchema, trial.result.records);
+    return { partition, verdict: rejectionVerdict(partition.conform.length, partition.rejected.length, thresholds) };
+  };
+
+  /** Runs en cours dont la quarantaine est déjà écrite (casse puis réparation : la quarantaine est remplacée ou retirée). */
+  const quarantined = new Set<string>();
+  /** Quarantaine du run (D-49) : agrégats sans valeur et échantillon nettoyé, écrits comme l'appelant du run. */
+  const quarantine = async (ctx: RunCtx, target: RunTarget, partition: ItemPartition<Record<string, unknown>>, verdict: RejectionVerdict): Promise<void> => {
+    // Sortie (réparée) sans rejet : une quarantaine de diagnostic écrite à la casse ne décrit plus le run livré.
+    if (partition.rejected.length === 0) {
+      if (quarantined.delete(ctx.runId)) await deleteRejectedItems(deps.pool, { runId: ctx.runId, ownerId: ctx.ownerId });
+      return;
+    }
+    quarantined.add(ctx.runId);
+    const summary = quarantineSummary(target.api.outputSchema, partition.rejected, ctx.personal);
+    await saveRejectedItems(deps.pool, { runId: ctx.runId, apiId: ctx.apiId, ownerId: ctx.ownerId, projectId: target.api.projectId, summary });
+    await ctx.log('info', 'items_rejected', { count: summary.total_rejected, delivered: partition.conform.length, verdict, by_reason: summary.by_reason.slice(0, 10) });
+  };
+
+  /** Une candidate de réparation rejouée avec toutes les gardes, journalisée comme un essai. */
+  const checkCandidate = async (ctx: RunCtx, target: RunTarget, candidate: FrozenStrategy): Promise<CandidateCheck> => {
+    const trial = await runTrial(ctx, target, candidate, now(), 'quarantine');
+    const sorted = sortItems(target, trial);
+    await recordTrial(ctx, candidate, trial, sorted?.verdict ?? null);
+    const failure = trial.result.ok ? null : (trial.guardedFailure ?? trial.result.failure);
+    const stopped: ExecFailure | null = trial.outcome.stop === undefined ? null : { failure_class: 'blocked_by_protection', retryable: false, detail: trial.outcome.stop };
+    return {
+      trial,
+      partition: sorted?.partition ?? { conform: [], rejected: [] },
+      verdict: sorted?.verdict ?? 'break',
+      failure: stopped ?? failure,
+      refusal: stopped ?? (failure !== null && !failureRoute(failure.failure_class).agent ? failure : null),
+      costUsd: trial.llmUsd === null ? null : Math.round((trial.proxyUsd + trial.llmUsd) * 1e6) / 1e6,
+    };
+  };
+
+  /**
+   * Signal `volume_anomaly` (04 §6) compté sur les items EXTRAITS (livrés + écartés, D-49) : moins de la moitié de la
+   * médiane des runs réussis à même entrée, après 5 runs au moins.
+   */
+  const volumeSignal = async (ctx: RunCtx, extracted: number): Promise<boolean> => {
+    try {
+      const history = await readVolumeHistory(deps.pool, { apiId: ctx.apiId, ownerId: ctx.ownerId, input: ctx.input, excludeRunId: ctx.runId });
+      if (history.length === 0) return false;
+      const sorted = [...history].sort((a, b) => a - b);
+      const mid = Math.floor(sorted.length / 2);
+      const median = sorted.length % 2 === 0 ? ((sorted[mid - 1] as number) + (sorted[mid] as number)) / 2 : (sorted[mid] as number);
+      return volumeAnomaly(extracted, median, history.length);
+    } catch {
+      return false;
+    }
+  };
+
+  /** Livraison d'une sortie conforme : dataset (items conformes seuls), quarantaine, signaux et statut (5, 8, 9, 12). */
+  const deliver = async (
+    ctx: RunCtx,
+    target: RunTarget,
+    args: { version: number; sorted: { partition: ItemPartition<Record<string, unknown>>; verdict: RejectionVerdict }; escalated: boolean; truncated: boolean; repaired: boolean; entered: boolean },
+  ): Promise<RunResult> => {
+    const { partition, verdict } = args.sorted;
+    await quarantine(ctx, target, partition, verdict);
+    const saved = await saveRunDataset(deps.pool, { runId: ctx.runId, apiId: ctx.apiId, ownerId: ctx.ownerId, projectId: target.api.projectId, items: partition.conform });
+    const volume = await volumeSignal(ctx, partition.conform.length + partition.rejected.length);
+    const signals: DegradedSignal[] = [];
+    if (args.repaired) signals.push('repaired');
+    if (args.escalated) signals.push('escalated');
+    if (args.truncated) signals.push('pagination_short');
+    if (partition.rejected.length > 0) signals.push('items_rejected');
+    if (volume) signals.push('volume_anomaly');
+    // Réparation conforme : transition 12 (le signal `repaired` est sa raison) ; sinon run réussi (5, 8 ou 9).
+    if (args.repaired) {
+      if (args.entered) await applyStatus(ctx, { type: 'repair_succeeded' });
+    } else {
+      await applyStatus(ctx, { type: 'run_succeeded', signals });
+    }
+    return {
+      state: 'succeeded',
+      outcome: signals.length > 0 ? 'degraded' : 'clean',
+      degraded_reasons: signals,
+      items: partition.conform.length,
+      items_rejected: partition.rejected.length,
+      dataset_id: saved.datasetId,
+      strategy_version: args.version,
+    };
+  };
+
+  /**
+   * Échec d'un rejeu (04 §5, §6) : statut d'abord (10 ou 11 vers `reparation`, puis 14 ou 15 dans le même run pour un
+   * refus ; 6 ou 8 pour `transient`), puis réparation par la SEULE porte de la garde (`invokeAgentGuarded`) : 12 si vN+1
+   * est conforme, 13 si le budget est épuisé ou le correctif répété (stratégie précédente conservée).
+   */
+  const onFailure = async (
+    ctx: RunCtx,
+    target: RunTarget,
+    strategy: FrozenStrategy,
+    args: { original: ExecFailure; failure: ExecFailure; evidence: readonly AgentEvidence[]; reasons: readonly RejectionReason[]; rejected: number },
+  ): Promise<RunResult> => {
+    const version = strategy.version;
+    const failed = (f: ExecFailure, v: number = version): RunResult => ({
+      state: 'failed',
+      failure_class: f.failure_class,
+      retryable: f.retryable,
+      error_detail: f.detail,
+      strategy_version: v,
+      ...(args.rejected > 0 ? { items_rejected: args.rejected } : {}),
+    });
+    const { original, failure } = args;
+    const entry = await applyStatus(ctx, { type: 'run_failed', failureClass: failure.failure_class, ...(failure.status === undefined ? {} : { httpStatus: failure.status }) });
+    // Ce run a fait entrer l'API en `reparation` (10 ou 11) : il doit l'en faire sortir (12, 13, 14 ou 15).
+    const entered = entry?.ok === true && entry.status === 'reparation';
+    const repair = deps.repair;
+    const guarded =
+      repair === undefined
+        ? null
+        : await invokeAgentGuarded(original, args.evidence, (f, shown) =>
+            repair({
+              ctx,
+              target,
+              strategy,
+              failure: f,
+              evidence: shown.map((item) => minimizeEvidence(item, ctx.personal)),
+              reasons: args.reasons,
+              trial: (candidate) => checkCandidate(ctx, target, candidate),
+              commit: (repaired) => saveRepairedStrategy(deps.pool, { apiId: ctx.apiId, ownerId: ctx.ownerId, parentVersion: version, ...repaired }),
+            }),
+          );
+    const route = failureRoute(failure.failure_class);
+    await ctx.log('info', 'failure_route', {
+      failure_class: failure.failure_class,
+      next: route.next,
+      agent_invoked: guarded?.invoked ?? false,
+      ...(failure.failure_class === original.failure_class ? {} : { reclassified_from: original.failure_class }),
+    });
+    if (guarded === null || !guarded.invoked) {
+      // Aucune réparation possible (classe sans agent ou port absent) : une API laissée en `reparation` passe en `erreur`.
+      if (entered) await applyStatus(ctx, { type: 'repair_failed', cause: 'budget_exhausted' });
+      return failed(failure);
+    }
+    const out = guarded.value;
+    switch (out.kind) {
+      case 'repaired': {
+        const saved = out.saved;
+        await ctx.log('info', 'strategy_repaired', {
+          from_version: version,
+          to_version: saved.version,
+          promoted: saved.promoted,
+          execution: out.strategy.execution,
+          network: out.strategy.network,
+          patch_ops: out.strategy.patch?.length ?? 0,
+        });
+        const result = out.check.trial.result;
+        return deliver(ctx, target, {
+          version: saved.version,
+          sorted: { partition: out.check.partition, verdict: out.check.verdict },
+          escalated: (result.ok && result.escalated) || out.strategy.execution !== strategy.execution,
+          truncated: result.ok && result.truncated,
+          repaired: true,
+          entered,
+        });
+      }
+      case 'refused': {
+        // La garde l'emporte : refus servi pendant la réparation → 15 ou 14 depuis `reparation`, sans autre agent.
+        const step = await applyStatus(ctx, { type: 'run_failed', failureClass: out.failure.failure_class, ...(out.failure.status === undefined ? {} : { httpStatus: out.failure.status }) });
+        if (entered && step?.status === 'reparation') await applyStatus(ctx, { type: 'repair_failed', cause: 'budget_exhausted' });
+        return failed(out.failure);
+      }
+      case 'failed': {
+        if (entered) await applyStatus(ctx, { type: 'repair_failed', cause: out.cause });
+        return failed({ failure_class: failure.failure_class, retryable: false, detail: out.detail });
+      }
+      case 'superseded': {
+        // Une autre réparation a produit vN+1 pendant l'attente du bail : le run la rejoue, sans nouvelle réparation.
+        const next = await loadRunTarget(deps.pool, { apiId: ctx.apiId, ownerId: ctx.ownerId, version: out.version });
+        if (next === null || next.strategy === null) return failed(failure);
+        const trial = await runTrial(ctx, next, next.strategy, now(), 'quarantine');
+        const sorted = sortItems(next, trial);
+        await recordTrial(ctx, next.strategy, trial, sorted?.verdict ?? null);
+        if (!trial.result.ok || sorted === null || sorted.verdict === 'break') {
+          await ctx.log('warn', 'repair_superseded_failed', { version: out.version });
+          return failed(trial.result.ok ? failure : (trial.guardedFailure ?? trial.result.failure), out.version);
+        }
+        return deliver(ctx, next, { version: out.version, sorted, escalated: trial.result.escalated, truncated: trial.result.truncated, repaired: false, entered: false });
+      }
+    }
+  };
+
+  const executeRun = async (ctx: RunCtx): Promise<RunResult> => {
     const started = now();
     const target = await loadRunTarget(deps.pool, { apiId: ctx.apiId, ownerId: ctx.ownerId, version: ctx.strategyVersion });
     if (target === null) return { state: 'failed', failure_class: 'code_error', retryable: false, error_detail: 'api_not_found' };
     const strategy = target.strategy;
     if (strategy === null) return { state: 'failed', failure_class: 'code_error', retryable: false, error_detail: 'no_strategy_version' };
 
-    const trial = await runTrial(ctx, target, strategy, started);
+    // Runs : politique `quarantine` (D-49) — chaque item est trié contre `output_schema`, les non conformes ne sont jamais livrés.
+    const trial = await runTrial(ctx, target, strategy, started, 'quarantine');
     const { outcome, evidence, guardedFailure, proxyUsd, llm, llmUsd } = trial;
     const result = trial.result;
     // Extension hors ligne (04 §6, 05) : le run, resté en `waiting_tunnel`, se termine `skipped_tunnel_offline`. Aucun
@@ -738,23 +1028,8 @@ export function createStrategyRuntime(deps: StrategyExecutorDeps): StrategyRunti
     // Prix absent : coût LLM inconnu, écrit null (jamais 0, 08 §1 ; INV4), avec avertissement.
     if (llm !== null && llm.usd === null) await ctx.log('warn', 'llm_price_missing', { model: llm.modelId });
     if ((outcome.agent?.domainBlocked ?? 0) > 0) await ctx.log('warn', 'agent_domain_blocked', { count: outcome.agent?.domainBlocked });
-    await ctx.recordAttempt({
-      execution: strategy.execution,
-      network: strategy.network,
-      est_cost_usd: strategy.estCostUsd,
-      result: stop === 'challenge_in_tunnel' ? 'blocked_by_protection' : guardedFailure === undefined ? 'ok' : guardedFailure.failure_class,
-      ms: trial.ms,
-      proxy_usd: proxyUsd,
-      ...(llm === null
-        ? {}
-        : {
-            llm_usd: llmUsd,
-            tokens: llm.tokens,
-            model_id: llm.modelId,
-            prompt_version: llm.promptVersion,
-            engine: llm.engine,
-          }),
-    });
+    const sorted = sortItems(target, trial);
+    await recordTrial(ctx, strategy, trial, sorted?.verdict ?? null);
     const version = strategy.version;
     if (stop !== undefined) {
       await ctx.log('warn', stop, { network: 'tunnel' });
@@ -771,26 +1046,15 @@ export function createStrategyRuntime(deps: StrategyExecutorDeps): StrategyRunti
       return { state: 'failed', failure_class: 'run_budget_exceeded', retryable: false, error_detail: 'max_cost_usd', strategy_version: version };
     }
     if (!result.ok) {
-      const original = result.failure;
-      const failure = guardedFailure ?? original;
-      // Garde AVANT réparation (1.7) : l'agent n'est invoqué que pour `extraction`, `code_error` ou `not_found`, et
-      // seulement si aucune preuve n'est un refus ; il ne reçoit que des preuves passées par la garde.
-      const repair = deps.repair;
-      const guarded =
-        repair === undefined
-          ? null
-          : await invokeAgentGuarded(original, evidence, (f, shown) =>
-              repair({ ctx, failure: f, strategyVersion: version, evidence: shown.map((item) => minimizeEvidence(item, ctx.personal)) }),
-            );
-      const route = failureRoute(failure.failure_class);
-      await ctx.log('info', 'failure_route', {
-        failure_class: failure.failure_class,
-        next: route.next,
-        agent_invoked: guarded?.invoked ?? false,
-        ...(failure.failure_class === original.failure_class ? {} : { reclassified_from: original.failure_class }),
-      });
-      if (guarded !== null && guarded.invoked && guarded.value !== null) return guarded.value;
-      return { state: 'failed', failure_class: failure.failure_class, retryable: failure.retryable, error_detail: failure.detail, strategy_version: version };
+      return onFailure(ctx, target, strategy, { original: result.failure, failure: guardedFailure ?? result.failure, evidence, reasons: [], rejected: 0 });
+    }
+    // Casse par les items non conformes (D-49) : 0 item conforme, ou au-delà du seuil (part ET nombre). Rien n'est livré ;
+    // la quarantaine est écrite pour le diagnostic, puis réparation dans le même run (classe `extraction`, INV1).
+    if (sorted !== null && sorted.verdict === 'break') {
+      await quarantine(ctx, target, sorted.partition, sorted.verdict);
+      const failure: ExecFailure = { failure_class: 'extraction', retryable: false, detail: sorted.partition.conform.length === 0 ? 'schema_mismatch' : 'items_rejected' };
+      await ctx.log('warn', 'schema_mismatch', { conform: sorted.partition.conform.length, rejected: sorted.partition.rejected.length });
+      return onFailure(ctx, target, strategy, { original: failure, failure, evidence: [], reasons: rejectionReasons(sorted.partition.rejected), rejected: sorted.partition.rejected.length });
     }
     // Compilation E6 → E5 vérifiée (04 §3.1) : nouvelle version `hybrid`, signal de baisse de coût journalisé.
     const compiled = outcome.agent?.compiled;
@@ -804,18 +1068,16 @@ export function createStrategyRuntime(deps: StrategyExecutorDeps): StrategyRunti
     } else if (outcome.agent?.compileFailure !== undefined) {
       await ctx.log('info', 'strategy_compile_skipped', { reason: outcome.agent.compileFailure });
     }
-    const saved = await saveRunDataset(deps.pool, { runId: ctx.runId, apiId: ctx.apiId, ownerId: ctx.ownerId, projectId: target.api.projectId, items: result.records });
-    const reasons = [...(result.escalated ? ['escalated'] : []), ...(result.truncated ? ['pagination_short'] : [])];
-    return {
-      state: 'succeeded',
-      outcome: reasons.length > 0 ? 'degraded' : 'clean',
-      degraded_reasons: reasons,
-      items: result.records.length,
-      dataset_id: saved.datasetId,
-      strategy_version: version,
-    };
+    return deliver(ctx, target, { version, sorted: sorted!, escalated: result.escalated, truncated: result.truncated, repaired: false, entered: false });
   };
-  return { executor, trial: runTrial };
+  const executor: RunExecutor = async (ctx) => {
+    try {
+      return await executeRun(ctx);
+    } finally {
+      quarantined.delete(ctx.runId);
+    }
+  };
+  return { executor, trial: (ctx, target, strategy, itemPolicy) => runTrial(ctx, target, strategy, now(), itemPolicy ?? 'strict') };
 }
 
 /** Exécuteur des runs de stratégie (E1-E6, tunnel) : `createStrategyRuntime(deps).executor`. */

@@ -1,0 +1,244 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Réparation dans le même run (tâche 2.3, 04 §5, figure de 04 §6 : `reparation`). Appelée SEULEMENT à travers la garde
+// de classification (`invokeAgentGuarded`) : jamais après un refus, un défi, une connexion requise ou un 429 (INV6).
+// 1. Bail de réparation en table (`apis.repair_lease_*`) : une seule réparation à la fois par API ; vN+1 est enregistrée
+//    (`commit`) AVANT la libération du bail ; un run concurrent attend (dans la limite de `leaseWaitMs`), puis rejoue vN+1.
+// 2. Rôle `repair` (`proposeRepair`) : patch JSON BORNÉ (RFC 6902) sur `sources`, `fields`, `pagination` ; validé par
+//    `validateRepairPatch` (jamais `request.allowed_hosts`, `request.session` ni `output_schema` : `output_schema` n'est
+//    JAMAIS modifié par une réparation), puis rejoué avec TOUTES les gardes du run (essai journalisé, INV2, INV4).
+// 3. Validation de la sortie réparée : chaque item contre le schéma (même seuil de casse qu'un run, D-49) ET contre les
+//    champs stables des dernières sorties saines (`checkAgainstHealthy`) ; sinon la proposition est refusée.
+// 4. Arrêt : 3 propositions ou `repair_budget_usd` épuisés, ou le MÊME correctif proposé deux fois (`repeated_patch`) :
+//    l'API passe en `erreur` (13), la stratégie précédente est conservée.
+// 5. Escalade selon 04 §3.3 à partir du couple courant : exécutions déclaratives plus chères, MÊME réseau (X3 : un échec
+//    d'extraction ne change jamais d'IP). Une issue qui exigerait un agent à chaque run n'est pas retenue (`instructed_mode`
+//    n'existe pas avant 2.13 : traité comme faux).
+// Le prompt ne reçoit que des squelettes (preuves minimisées) et des raisons sans valeur ; il n'est jamais journalisé.
+import { setTimeout as sleep } from 'node:timers/promises';
+import {
+  checkAgainstHealthy,
+  escalationExecutions,
+  healthyProfile,
+  patchKey,
+  RepairLedger,
+  validateDeclarativeSpec,
+  validateRepairPatch,
+  type DeclarativeSpec,
+  type HealthyProfile,
+  type JsonPatchOperation,
+  type RepairStopCause,
+  type RunContext as RunCtx,
+} from '@runtime/core';
+import { assertPromptSafe, ClassificationGuardError, type AgentEvidence, type ExecFailure } from '@runtime/core/exec';
+import { proposeRepair, repairCallCeilingUsd, repairPromptVersion } from '@runtime/agent';
+import { acquireRepairLease, readCurrentStrategyVersion, readHealthyItems, releaseRepairLease, renewRepairLease } from '@runtime/db';
+import { LlmError, roleTarget, toFailureClass, type LlmClient, type LlmConfig } from '@runtime/llm';
+import type pg from 'pg';
+import { pino, type Logger } from 'pino';
+import type { CandidateCheck, RepairedStrategy, RepairOutcome, RepairPort } from './strategy-executor.js';
+
+export type RepairEngineDeps = {
+  readonly pool: pg.Pool;
+  /** Rôle `repair` : configuration relue à chaque réparation, client par réparation (compteur de coût). Absent : escalade seule. */
+  readonly llm?: { readonly config: () => Promise<LlmConfig | null>; readonly client: (config: LlmConfig) => LlmClient };
+  /** Chromium disponible (E2, E3 dans l'escalade). */
+  readonly browser: boolean;
+  /** 3 propositions et `repair_budget_usd` (à valider). */
+  readonly maxAttempts?: number;
+  readonly budgetUsd?: number;
+  /** Attente du bail tenu par une autre réparation (ms). */
+  readonly leaseWaitMs?: number;
+  readonly leaseTtlSeconds?: number;
+  readonly logger?: Logger;
+};
+
+const DECLARATIVE = new Set(['fetch', 'fetch_in_page', 'playwright']);
+const round6 = (v: number): number => Math.round(v * 1e6) / 1e6;
+
+/** Prix du rôle `repair` (USD par million de jetons) ; `undefined` : rôle absent, `null` : prix inconnu. */
+function repairPrice(config: LlmConfig | null): { in: number; out: number } | null | undefined {
+  if (config === null) return undefined;
+  const target = roleTarget(config, 'repair');
+  if (target === undefined) return undefined;
+  const price = 'price' in target.model ? target.model.price : undefined;
+  return price === undefined ? null : { in: price.in, out: price.out };
+}
+
+/** Garde du budget de réparation avant un appel LLM (levée par `beforeCall`, jamais réessayée). */
+class RepairBudgetGuard extends Error {
+  override name = 'RepairBudgetGuard';
+}
+
+/** vN+1 enregistrée pendant que le bail est encore tenu (appelé depuis `repairUnderLease`, avant la libération). */
+async function committed(request: Parameters<RepairPort>[0], strategy: RepairedStrategy, check: CandidateCheck): Promise<RepairOutcome> {
+  const saved = await request.commit(strategy);
+  return { kind: 'repaired', strategy, check, saved };
+}
+
+export function createRepairPort(deps: RepairEngineDeps): RepairPort {
+  const logger = deps.logger ?? pino({ enabled: false });
+  const leaseTtl = deps.leaseTtlSeconds ?? 90;
+  const leaseWaitMs = deps.leaseWaitMs ?? 60_000;
+
+  /** Attente du bail d'une autre réparation : vN+1 si elle a abouti, sinon échec (la stratégie reste celle du run). */
+  const waitForOtherRepair = async (ctx: RunCtx, strategyVersion: number): Promise<RepairOutcome> => {
+    const deadline = Date.now() + leaseWaitMs;
+    while (Date.now() < deadline && !ctx.signal.aborted) {
+      await sleep(250, undefined, { signal: ctx.signal }).catch(() => undefined);
+      const { rows } = await deps.pool.query<{ busy: boolean }>('SELECT (repair_lease_owner IS NOT NULL AND repair_lease_until >= now()) AS busy FROM apis WHERE id = $1', [ctx.apiId]);
+      if (rows[0]?.busy !== true) break;
+    }
+    const current = await readCurrentStrategyVersion(deps.pool, { apiId: ctx.apiId, ownerId: ctx.ownerId });
+    await ctx.log('info', 'repair_lease_waited', { from_version: strategyVersion, current_version: current });
+    if (current !== null && current !== strategyVersion) return { kind: 'superseded', version: current };
+    return { kind: 'failed', cause: 'budget_exhausted', detail: 'repair_lease_busy' };
+  };
+
+  return async (request) => {
+    const { ctx, target, strategy } = request;
+    if (!DECLARATIVE.has(strategy.execution) || strategy.scriptRef !== null || strategy.network === 'tunnel') {
+      // Patch borné : stratégies déclaratives seulement (04b §2) ; script E3 et E4-E6 : régénération hors de 2.3. En tunnel
+      // (session de l'utilisateur), aucune réparation automatique ici : niveau 1 seulement, relève de 2.13 (19 §4).
+      await ctx.log('info', 'repair_unsupported', { execution: strategy.execution, network: strategy.network });
+      return { kind: 'failed', cause: 'budget_exhausted', detail: 'repair_unsupported' };
+    }
+    const checked = validateDeclarativeSpec(strategy.spec, { outputSchema: target.api.outputSchema });
+    if (!checked.ok) return { kind: 'failed', cause: 'budget_exhausted', detail: 'invalid_strategy_spec' };
+    const spec: DeclarativeSpec = checked.spec;
+
+    // 1. Bail : une seule réparation à la fois par API.
+    const leaseOwner = `run:${ctx.runId}`;
+    if (!(await acquireRepairLease(deps.pool, ctx.apiId, leaseOwner, leaseTtl))) return waitForOtherRepair(ctx, strategy.version);
+    const renew = setInterval(() => {
+      renewRepairLease(deps.pool, ctx.apiId, leaseOwner, leaseTtl).catch((error: unknown) => logger.warn({ runId: ctx.runId, err: error instanceof Error ? error.name : 'error' }, 'bail de réparation : renouvellement impossible'));
+    }, Math.max(1_000, (leaseTtl * 1000) / 3));
+    try {
+      return await repairUnderLease(ctx, request, spec);
+    } finally {
+      clearInterval(renew);
+      await releaseRepairLease(deps.pool, ctx.apiId, leaseOwner).catch(() => undefined);
+    }
+  };
+
+  async function repairUnderLease(ctx: RunCtx, request: Parameters<RepairPort>[0], spec: DeclarativeSpec): Promise<RepairOutcome> {
+    const { target, strategy, failure } = request;
+    const ledger = new RepairLedger({ ...(deps.maxAttempts === undefined ? {} : { maxAttempts: deps.maxAttempts }), ...(deps.budgetUsd === undefined ? {} : { budgetUsd: deps.budgetUsd }) });
+    // Référence : items livrés des derniers runs réussis (chemins et types seulement entrent dans le prompt).
+    const healthy: HealthyProfile = healthyProfile(await readHealthyItems(deps.pool, { apiId: ctx.apiId, ownerId: ctx.ownerId, excludeRunId: ctx.runId }));
+    const evidence: readonly AgentEvidence[] = request.evidence;
+    // Aucune page de défi n'entre dans un prompt (04b §6) : un texte refusé arrête la réparation comme un refus.
+    try {
+      for (const e of evidence) assertPromptSafe(typeof e === 'string' ? e : e.body);
+    } catch (error) {
+      if (error instanceof ClassificationGuardError) return { kind: 'refused', failure: error.failure };
+      throw error;
+    }
+    const refused: string[] = [];
+    await ctx.log('info', 'repair_started', { from_version: strategy.version, failure_class: failure.failure_class, detail: failure.detail, healthy_items: healthy.items, stable_fields: Object.keys(healthy.stable).length });
+
+    /** Une candidate rejouée : conforme au schéma (seuil de casse) ET aux champs stables, sinon la raison du refus. */
+    const judge = async (check: CandidateCheck): Promise<string> => {
+      if (!check.trial.result.ok) return `trial_${check.failure?.failure_class ?? 'failed'}`;
+      if (check.verdict === 'break') return 'repair_not_validated';
+      const verdict = checkAgainstHealthy(healthy, check.partition.conform);
+      if (!verdict.ok) {
+        await ctx.log('info', 'repair_false_success', { missing: verdict.missing, type_changed: verdict.type_changed });
+        return 'repair_false_success';
+      }
+      return 'ok';
+    };
+
+    // 2. Propositions du rôle `repair`.
+    let config: LlmConfig | null;
+    try {
+      config = (await deps.llm?.config()) ?? null;
+    } catch {
+      config = null;
+    }
+    const price = repairPrice(config);
+    if (deps.llm !== undefined && config !== null && price === null) await ctx.log('warn', 'llm_price_missing', { role: 'repair' });
+    if (deps.llm !== undefined && config !== null && price !== null && price !== undefined) {
+      const client = deps.llm.client({ ...config, roles: { repair: config.roles.repair! } });
+      const model = config.roles.repair?.model ?? null;
+      for (;;) {
+        const args = { spec, outputSchema: target.api.outputSchema, failure, evidence, healthy, reasons: request.reasons, refused };
+        const ceiling = repairCallCeilingUsd(args, price);
+        if (!ledger.canPropose(ceiling)) break;
+        const before = client.meter.snapshot().cost_usd_known ?? 0;
+        let patch: JsonPatchOperation[] | null = null;
+        let llmFailure: ExecFailure | null = null;
+        try {
+          const out = await proposeRepair(client, {
+            ...args,
+            signal: ctx.signal,
+            beforeCall: () => {
+              if ((client.meter.snapshot().cost_usd_known ?? 0) - before + ceiling > ledger.remainingUsd + 1e-9) throw new RepairBudgetGuard();
+            },
+          });
+          patch = out.patch;
+        } catch (error) {
+          if (ctx.signal.aborted) throw error;
+          if (error instanceof RepairBudgetGuard) llmFailure = { failure_class: 'run_budget_exceeded', retryable: false, detail: 'repair_budget_usd' };
+          else if (error instanceof LlmError) llmFailure = { failure_class: toFailureClass(error.class), retryable: false, detail: `llm_${error.class}` };
+          else llmFailure = { failure_class: 'extraction', retryable: false, detail: 'repair_proposal_unreadable' };
+        }
+        const usage = client.meter.snapshot();
+        const callUsd = usage.cost_usd === null ? null : round6(usage.cost_usd - before);
+        ledger.spend(callUsd);
+        await ctx.chargeCost?.({ llm_usd: callUsd, tokens: { in: usage.tokens_in, cached: usage.tokens_cached, out: usage.tokens_out, reasoning: usage.tokens_reasoning, estimated: usage.usage_estimated } });
+        await ctx.log('info', 'repair_call', { model, prompt_version: repairPromptVersion, llm_usd: callUsd, attempt: ledger.attempts + 1 });
+        if (llmFailure !== null) {
+          ledger.propose(null);
+          refused.push(llmFailure.detail);
+          // Un LLM sans repli (refus, clé, quota) ou un budget atteint : plus de proposition.
+          if (llmFailure.failure_class !== 'extraction') break;
+          continue;
+        }
+        if (patch === null) {
+          ledger.propose(null);
+          refused.push('repair_proposal_unreadable');
+          continue;
+        }
+        // Liste vide : le modèle dit qu'aucun patch ne répare ; l'escalade prend le relais.
+        if (patch.length === 0) {
+          ledger.propose(null);
+          await ctx.log('info', 'repair_no_patch', {});
+          break;
+        }
+        const key = patchKey(patch);
+        if (!ledger.propose(key)) {
+          await ctx.log('warn', 'repair_repeated_patch', { patch_key: key });
+          return { kind: 'failed', cause: 'repeated_patch', detail: 'repair_repeated_patch' };
+        }
+        const valid = validateRepairPatch(spec, patch, { outputSchema: target.api.outputSchema });
+        if (!valid.ok) {
+          const codes = [...new Set(valid.rejections.map((r) => r.code))];
+          refused.push(...codes);
+          await ctx.log('info', 'repair_patch_refused', { patch_key: key, codes });
+          continue;
+        }
+        const check = await request.trial({ ...strategy, spec: valid.spec }, 'repair_patch');
+        ledger.spend(check.costUsd);
+        if (check.refusal !== null) return { kind: 'refused', failure: check.refusal };
+        const verdict = await judge(check);
+        await ctx.log('info', 'repair_candidate', { patch_key: key, verdict, conform: check.partition.conform.length, rejected: check.partition.rejected.length });
+        if (verdict === 'ok') return committed(request, { execution: strategy.execution, network: strategy.network, spec: valid.spec, patch, estCostUsd: strategy.estCostUsd }, check);
+        refused.push(verdict);
+      }
+    }
+
+    // 3. Escalade (04 §3.3) : exécutions déclaratives plus chères sur le même réseau, stratégie d'origine.
+    for (const execution of escalationExecutions(strategy.execution, { browser: deps.browser })) {
+      if (ledger.remainingUsd <= 0) break;
+      const check = await request.trial({ ...strategy, execution, estCostUsd: null }, 'repair_escalation');
+      ledger.spend(check.costUsd);
+      if (check.refusal !== null) return { kind: 'refused', failure: check.refusal };
+      const verdict = await judge(check);
+      await ctx.log('info', 'repair_escalation', { execution, network: strategy.network, verdict });
+      if (verdict === 'ok') return committed(request, { execution, network: strategy.network, spec, patch: null, estCostUsd: null }, check);
+    }
+    const cause: RepairStopCause = ledger.finish();
+    await ctx.log('warn', 'repair_failed', { cause, attempts: ledger.attempts, spent_usd: ledger.spentUsd, refused: [...new Set(refused)].slice(0, 10) });
+    return { kind: 'failed', cause, detail: cause === 'repeated_patch' ? 'repair_repeated_patch' : 'repair_budget_exhausted' };
+  }
+}

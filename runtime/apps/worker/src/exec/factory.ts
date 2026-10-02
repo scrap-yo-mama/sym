@@ -6,7 +6,7 @@
 // Bac à sable des scripts E3 (1.5) : utilisateur dédié lu dans l'environnement (SANDBOX_UID, SANDBOX_GID,
 // SANDBOX_LAUNCHER) ; en production, la frontière de l'OS est éprouvée au démarrage (`probeIsolation`) et le worker
 // refuse de démarrer si l'enfant pourrait lire l'environnement du worker (D-30).
-import { DomainPacer, type SandboxEngine } from '@runtime/core';
+import { DomainPacer, rejectionThresholdsFromEnv, type SandboxEngine } from '@runtime/core';
 import { SsrfGuard, ssrfPolicyFromEnv, startEgressProxy, type EgressProxy } from '@runtime/core/net';
 import { STAGEHAND_VERSION, StagehandEngine } from '@runtime/agent';
 import { resolveIdentifyInstance, resolveInstanceContact, RobotsCache } from '@runtime/core/access';
@@ -21,6 +21,7 @@ import { loadInlineScript } from './script-executor.js';
 import { TunnelJobClient } from '../tunnel/client.js';
 import type { EngineFactory } from './agent-executors.js';
 import { createInvestigationExecutor, dispatchByKind } from './investigation-executor.js';
+import { createRepairPort } from './repair-executor.js';
 import { createStrategyRuntime, type AgentPorts } from './strategy-executor.js';
 
 /** Version du prompt du moteur : celui de Stagehand, non modifié (mesuré tel quel au spike 0.6a). */
@@ -129,7 +130,37 @@ export function productionExecutorFactory(env: Readonly<Record<string, string | 
     const robotsCache = new RobotsCache();
     const instanceContact = async (): Promise<string | null> => resolveInstanceContact(await readInstanceContactSetting(pool), env);
     const identifyInstance = async (): Promise<boolean> => resolveIdentifyInstance(await readIdentifyInstanceSetting(pool), env);
-    const strategy = createStrategyRuntime({ pool, guard, pacer, browsers, secrets, logger, tunnel, script: { engine, loadScript: loadInlineScript }, agent, robotsCache, instanceContact, identifyInstance, version: config.version });
+    // Réparation dans le même run (2.3) : rôle `repair` relu à chaque réparation, bail en table ; seuil de casse des items
+    // non conformes (D-49) lu au démarrage (`ITEMS_REJECTED_MAX_SHARE`, `ITEMS_REJECTED_MIN_COUNT`).
+    const repair = createRepairPort({
+      pool,
+      browser: pool_ !== null,
+      logger,
+      llm: {
+        config: async () => {
+          const value = await readLlmSettings(pool);
+          return value === null ? null : llmConfigFromSettings(value, (id) => secrets.get(id), ['repair']);
+        },
+        client: (config) => createLlmClient(config, { note: (note) => logger.info(note, 'llm') }),
+      },
+    });
+    const strategy = createStrategyRuntime({
+      pool,
+      guard,
+      pacer,
+      browsers,
+      secrets,
+      logger,
+      tunnel,
+      script: { engine, loadScript: loadInlineScript },
+      agent,
+      robotsCache,
+      instanceContact,
+      identifyInstance,
+      version: config.version,
+      repair,
+      rejection: rejectionThresholdsFromEnv(env),
+    });
     // Enquête (2.1) : mêmes gardes, mêmes exécuteurs ; rôles `investigate` (schéma), `extract` et `agent` (prix des couples E4, E6).
     const investigation = createInvestigationExecutor({
       pool,

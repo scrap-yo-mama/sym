@@ -73,6 +73,8 @@ export const ENV_CATALOG: readonly EnvVariable[] = [
   v({ name: 'QUEUE_POLLING_SECONDS', group: 'Exécution', roles: ['worker'], required: false, default: '2', description: 'Période d’interrogation de la file (0,5 s au minimum).' }),
   v({ name: 'WARNING_CHECK_SECONDS', group: 'Exécution', roles: ['worker'], required: false, default: '900', description: 'Période du contrôle des API en avertissement.' }),
   v({ name: 'RETENTION_TICK_SECONDS', group: 'Exécution', roles: ['worker'], required: false, default: '300', description: 'Période de la passe de rétention.' }),
+  v({ name: 'ITEMS_REJECTED_MAX_SHARE', group: 'Exécution', roles: ['worker'], required: false, default: '0.2', description: 'Part d’items non conformes au-delà de laquelle un run casse (avec ITEMS_REJECTED_MIN_COUNT) ; en dessous, ils sont écartés et le reste est livré (à valider).' }),
+  v({ name: 'ITEMS_REJECTED_MIN_COUNT', group: 'Exécution', roles: ['worker'], required: false, default: '5', description: 'Nombre minimal d’items non conformes pour qu’un run casse (plancher absolu du seuil de casse, à valider).' }),
 
   v({ name: 'ALLOWED_PRIVATE_HOSTS', group: 'Sortie réseau', roles: ['server', 'worker'], required: false, default: 'vide', description: 'Dérogation de la garde SSRF réservée à l’administrateur : noms exacts ou CIDR séparés par des virgules (préfixe /16 au minimum). Vide : tout hôte privé est refusé.' }),
   v({ name: 'ALLOWED_EGRESS_PORTS', group: 'Sortie réseau', roles: ['server', 'worker'], required: false, default: '80, 443', description: 'Ports sortants autorisés, séparés par des virgules.' }),

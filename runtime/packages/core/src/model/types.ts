@@ -139,6 +139,19 @@ export interface Run {
   cost: RunCost;
   tokens: RunTokens;
   items: number;
+  /** Items extraits non conformes, jamais livrés (04b §1, D-49). */
+  items_rejected: number;
+  /**
+   * Agrégats de la quarantaine (05 §4.1 `RunResult.rejected`) : sans valeur, `null` sans rejet. L'échantillon n'est jamais
+   * ici : il se lit à part (`get_items(rejected)`), par l'appelant du run seul.
+   */
+  rejected: RunRejected | null;
   dataset_id: string | null;
   trace_id: string | null;
+}
+
+/** Agrégats sans valeur d'une quarantaine (04b §1, 05 §4.1). */
+export interface RunRejected {
+  count: number;
+  by_reason: { keyword: string; path: string; count: number }[];
 }

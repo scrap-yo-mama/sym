@@ -41,6 +41,7 @@ import {
   type AgentRunResult,
   type AgentSpec,
   type HybridSpec,
+  type ItemPolicy,
 } from '@runtime/core';
 import {
   extractRecordsWithLlm,
@@ -193,9 +194,18 @@ function llmFailure(error: unknown): ExecFailure {
   return classifyTransportError(error);
 }
 
-/** Enregistrements conformes : chaque item validé contre `output_schema` (INV1) ; 0 item = `extraction`. */
-function conform(records: readonly unknown[], outputSchema: unknown, requests: number): DeclarativeRunResult {
+/**
+ * Enregistrements conformes : chaque item validé contre `output_schema` (INV1) ; 0 item = `extraction`. Politique
+ * `quarantine` (runs, D-49) : les objets sont rendus tels quels si au moins un est conforme ; l'exécuteur écarte les autres
+ * (quarantaine), jamais livrés.
+ */
+function conform(records: readonly unknown[], outputSchema: unknown, requests: number, policy: ItemPolicy = 'strict'): DeclarativeRunResult {
   if (records.length === 0) return fail({ failure_class: 'extraction', retryable: false, detail: 'no_records' }, requests);
+  if (policy === 'quarantine') {
+    const objects = records.filter((r): r is Record<string, unknown> => typeof r === 'object' && r !== null && !Array.isArray(r));
+    if (objects.length !== records.length || !objects.some((r) => validateOutput(outputSchema, r).ok)) return fail({ failure_class: 'extraction', retryable: false, detail: 'schema_mismatch' }, requests);
+    return ok(objects, requests);
+  }
   for (const r of records) {
     if (typeof r !== 'object' || r === null || Array.isArray(r) || !validateOutput(outputSchema, r).ok) {
       return fail({ failure_class: 'extraction', retryable: false, detail: 'schema_mismatch' }, requests);
@@ -214,6 +224,8 @@ function pageText(exchange: HttpExchange, maxChars: number): { text: string; tru
 export type AgentFetchOptions = {
   readonly spec: AgentFetchSpec;
   readonly outputSchema: unknown;
+  /** Politique des items non conformes (D-49) : `strict` (défaut, enquête) ou `quarantine` (runs). */
+  readonly itemPolicy?: ItemPolicy;
   readonly llm: LlmClient;
   readonly modelId: string | null;
   readonly signal: AbortSignal;
@@ -307,7 +319,7 @@ export async function runAgentFetchExecutor(options: AgentFetchOptions): Promise
     const llm = spend();
     // Coût inconnu (prix absent) : jamais un succès dont le plafond n'a pas pu être tenu.
     if (llm.usd === null) return { result: fail(budgetFailure(true), 1), llm };
-    return { result: conform(out.records, options.outputSchema, 1), llm };
+    return { result: conform(out.records, options.outputSchema, 1, options.itemPolicy), llm };
   } catch (error) {
     if (options.signal.aborted) throw error;
     return { result: fail(llmFailure(error), 1), llm: spend() };
@@ -318,6 +330,8 @@ export async function runAgentFetchExecutor(options: AgentFetchOptions): Promise
 export type HybridOptions = {
   readonly spec: HybridSpec;
   readonly outputSchema: unknown;
+  /** Politique des items non conformes (D-49) : `strict` (défaut, enquête) ou `quarantine` (runs). */
+  readonly itemPolicy?: ItemPolicy;
   readonly signal: AbortSignal;
   readonly guard: SsrfGuard;
   readonly egress: BrowserEgress;
@@ -511,7 +525,7 @@ async function runHybridWithoutLlm(options: HybridOptions, onPage?: (page: Page)
       const extracted = await extractLabelsFromPage(rc.page, spec);
       await watch.settled();
       if (watch.refusal() !== undefined) return fail(watch.refusal()!, 1);
-      return extracted.ok ? conform(extracted.records, options.outputSchema, spec.steps.length + 1) : hybridFail(extracted.failure);
+      return extracted.ok ? conform(extracted.records, options.outputSchema, spec.steps.length + 1, options.itemPolicy) : hybridFail(extracted.failure);
     } finally {
       watch.dispose();
       await rc.close();
@@ -611,7 +625,7 @@ async function runHybridDelegated(options: HybridOptions, agentBrowser: NonNulla
     if (failure !== null) return { result: hybridFail(failure), llm: spend };
     if (spec.extract.mode === 'labels') {
       const extracted = await extractLabelsFromPage(ab.page, spec);
-      return { result: extracted.ok ? conform(extracted.records, options.outputSchema, spec.steps.length + 1) : hybridFail(extracted.failure), llm: spend };
+      return { result: extracted.ok ? conform(extracted.records, options.outputSchema, spec.steps.length + 1, options.itemPolicy) : hybridFail(extracted.failure), llm: spend };
     }
     if (extractLlm === null) return { result: fail({ failure_class: 'code_error', retryable: false, detail: 'llm_not_configured' }), llm: spend };
     // Reliquat contrôlé AVANT l'extraction déléguée : plus rien, aucun appel.
@@ -632,7 +646,7 @@ async function runHybridDelegated(options: HybridOptions, agentBrowser: NonNulla
       });
       spend = addSpend(spend, extractSpend());
       if (spend?.usd === null) return { result: fail(budgetFailure(true), 1), llm: spend };
-      return { result: conform(out.records, options.outputSchema, spec.steps.length + 1), llm: spend };
+      return { result: conform(out.records, options.outputSchema, spec.steps.length + 1, options.itemPolicy), llm: spend };
     } catch (error) {
       if (options.signal.aborted) throw error;
       spend = addSpend(spend, extractSpend());
@@ -649,6 +663,8 @@ async function runHybridDelegated(options: HybridOptions, agentBrowser: NonNulla
 export type AgentOptions = {
   readonly spec: AgentSpec;
   readonly outputSchema: unknown;
+  /** Politique des items non conformes (D-49) : `strict` (défaut, enquête) ou `quarantine` (runs). */
+  readonly itemPolicy?: ItemPolicy;
   readonly signal: AbortSignal;
   readonly guard: SsrfGuard;
   readonly egress: BrowserEgress;
@@ -814,7 +830,7 @@ async function runAgentInSlot(options: AgentOptions, lease: SlotLease): Promise<
   // Coût inconnu (prix absent) : plafond intenable, jamais un succès.
   if (spend.usd === null) return { result: fail(budgetFailure(true), 1), llm: spend, domainBlocked };
   const items = (run.output as { items?: unknown } | null)?.items;
-  const result = conform(Array.isArray(items) ? items : [], options.outputSchema, 1);
+  const result = conform(Array.isArray(items) ? items : [], options.outputSchema, 1, options.itemPolicy);
   if (!result.ok) return { result, llm: spend, domainBlocked };
   const compiled = await compileAndVerify(options, lease, run, result.records, `${made.engine.id}@${made.engine.version}`, writesBlocked);
   return 'spec' in compiled ? { result, llm: spend, compiled: compiled.spec, domainBlocked } : { result, llm: spend, compileFailure: compiled.failure, domainBlocked };

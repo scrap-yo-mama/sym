@@ -25,3 +25,4 @@ export { installSemanticRecorder, type SemanticClick, type SemanticRecorder } fr
 export { EXTRACT_SYSTEM_PROMPT, extractMessages, extractPromptVersion, extractRecordsWithLlm, recordsSchema, sourceLabel, type LlmExtraction } from './agent-extract.js';
 export { extractLabelsFromPage, readPageView, runHybridSteps, type HybridFailure, type HybridHooks } from './hybrid-runner.js';
 export { INVESTIGATE_SYSTEM_PROMPT, investigateCallCeilingUsd, investigateMessages, investigatePromptVersion, proposeInvestigation, type InvestigateArgs, type InvestigateResult } from './investigate.js';
+export { REPAIR_MAX_TOKENS, REPAIR_PROPOSAL_SCHEMA, REPAIR_SYSTEM_PROMPT, parseRepairProposal, proposeRepair, repairCallCeilingUsd, repairMessages, repairPromptVersion, type RepairArgs, type RepairProposal } from './repair.js';

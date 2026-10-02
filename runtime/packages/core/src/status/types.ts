@@ -17,6 +17,8 @@ export const DEGRADED_SIGNALS = [
   'repaired',
   'optional_fields_missing',
   'volume_anomaly',
+  /** Items non conformes écartés sous le seuil de casse (D-49, 04 §5) : le reste est livré. */
+  'items_rejected',
   'pagination_short',
   'slow',
   'cost_anomaly',

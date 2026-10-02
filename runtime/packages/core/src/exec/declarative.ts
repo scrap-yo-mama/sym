@@ -5,7 +5,7 @@
 // l'interpréteur de 1.1b fait toute l'extraction ; une réponse refusée (classe d'échec) n'est jamais extraite.
 import { selectElements, elementAttribute, parseHtml } from '../dsl/css.js';
 import { DslError } from '../dsl/errors.js';
-import { extractRecords } from '../dsl/extract.js';
+import { extractRecords, type ItemPolicy } from '../dsl/extract.js';
 import { queryValues } from '../dsl/jsonpath.js';
 import { parseJsonBounded, resolveLimits, type DslLimits } from '../dsl/limits.js';
 import { advancePagination, initialParam, resolveNextUrl, startPagination, type StopReason } from '../dsl/pagination.js';
@@ -20,6 +20,8 @@ export type DeclarativeRunOptions = {
   readonly input: unknown;
   /** `output_schema` d'un enregistrement : chaque page est validée (INV1). */
   readonly outputSchema?: unknown;
+  /** Politique des items non conformes (D-49) : `strict` (défaut, enquête) ou `quarantine` (runs). */
+  readonly itemPolicy?: ItemPolicy;
   readonly transport: Transport;
   readonly signal: AbortSignal;
   readonly pacer?: RequestPacer;
@@ -203,7 +205,7 @@ export async function runDeclarative(options: DeclarativeRunOptions): Promise<De
         throw error;
       }
       pages += 1;
-      const out = extractRecords(spec, { body: exchange.body }, { ...(options.outputSchema === undefined ? {} : { outputSchema: options.outputSchema }), limits });
+      const out = extractRecords(spec, { body: exchange.body }, { ...(options.outputSchema === undefined ? {} : { outputSchema: options.outputSchema }), ...(options.itemPolicy === undefined ? {} : { itemPolicy: options.itemPolicy }), limits });
       // Après la première page, une page vide marque la fin (`records_empty`), pas une casse.
       const emptyPage = !out.ok && pages > 1 && out.attempts.every((a) => a.records === 0 && a.problems.every((p) => p.code === 'no_records' || p.code === 'too_few_records'));
       if (!out.ok && !emptyPage) {

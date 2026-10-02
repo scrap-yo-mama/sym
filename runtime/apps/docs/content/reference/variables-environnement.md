@@ -71,6 +71,8 @@ Pour l'instant, le TLS vers la base se règle par `sslmode` dans `DATABASE_URL` 
 | `WORKER_HEARTBEAT_SECONDS` | 15 | worker | battement du worker | lue |
 | `QUEUE_POLLING_SECONDS` | 2 | worker | période d'interrogation de la file (0,5 au minimum) | lue |
 | `WARNING_CHECK_SECONDS` | 900 | worker | contrôle des API « À surveiller » qui durent | lue |
+| `ITEMS_REJECTED_MAX_SHARE` | 0.2 | worker | part d’items non conformes au-delà de laquelle un run casse (avec `ITEMS_REJECTED_MIN_COUNT`) ; en dessous, les items non conformes sont écartés et le reste est livré (à valider) | lue |
+| `ITEMS_REJECTED_MIN_COUNT` | 5 | worker | nombre minimal d’items non conformes pour qu’un run casse (à valider) | lue |
 | `AUTO_MIGRATE` | `false` dans les modèles | — | migrer au démarrage du serveur | prévue |
 
 ## Sécurité réseau et bac à sable

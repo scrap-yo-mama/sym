@@ -10,7 +10,7 @@ import { randomUUID } from 'node:crypto';
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from '@testcontainers/postgresql';
 import { DomainPacer, generateMasterKey, MasterKey } from '@runtime/core';
 import * as net from '@runtime/core/net';
-import { applyStatusTransition, createRun, keyCheck, migrateUp, PgBossJobQueue, PgPacingStore, readRun, runQueueDefinition, withActor } from '@runtime/db';
+import { createRun, keyCheck, migrateUp, PgBossJobQueue, PgPacingStore, readRun, runQueueDefinition, withActor } from '@runtime/db';
 import pg from 'pg';
 import { pino } from 'pino';
 import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from 'vitest';
@@ -40,7 +40,7 @@ let client: Client;
 let worker: Worker;
 let browsers: BrowserPool;
 let launchProxy: net.EgressProxy;
-const repair = vi.fn<RepairPort>(async () => null);
+const repair = vi.fn<RepairPort>(async () => ({ kind: 'failed', cause: 'budget_exhausted', detail: 'zz_test_no_repair' }));
 
 const base = (host: string) => `http://${host}:${client.server.port}`;
 
@@ -104,9 +104,9 @@ async function expectBlocked(apiId: string, run: Awaited<ReturnType<typeof runOf
   expect(repair).not.toHaveBeenCalled();
   const route = (await pool.query<{ data: Record<string, unknown> }>("SELECT data FROM run_logs WHERE run_id = $1 AND event = 'failure_route'", [run.id])).rows.map((r) => r.data);
   expect(route).toEqual([expect.objectContaining({ failure_class: 'robots_disallowed', next: 'stop', agent_invoked: false })]);
-  // Machine à états appliquée par le test (câblage run → statut : 2.3) : enquete → bloquee, transition existante (21 au total).
-  const res = await applyStatusTransition(pool, { apiId, runId: run.id, event: { type: 'run_failed', failureClass: 'robots_disallowed' }, clock: { now: () => new Date() } });
-  expect(res.ok).toBe(true);
+  // Machine à états appliquée par le worker (câblage run → statut, 2.3) : enquete → bloquee, transition existante 4.
+  const events = (await pool.query<{ to_status: string; reason: string }>('SELECT to_status, reason FROM status_events WHERE run_id = $1 ORDER BY id', [run.id])).rows;
+  expect(events).toEqual([{ to_status: 'bloquee', reason: 'robots_disallowed' }]);
   expect((await pool.query<{ status: string }>('SELECT status FROM apis WHERE id = $1', [apiId])).rows[0]!.status).toBe('bloquee');
 }
 
