@@ -46,6 +46,12 @@ const skipChromium = process.argv.includes('--skip-chromium');
 if (!skipChromium) steps.push({ name: 'tests sur Chromium réels (pool et sessions shared du nœud)', cmd: ['pnpm', '--filter', '@sym-browser/node', 'test:chromium'] });
 // Tâche 2.3 : assert_cdp_client_compat de bout en bout (passerelle → nœud → Chromium dedicated sur son egress).
 if (!skipChromium) steps.push({ name: 'tests sur Chromium réels (relais WSS et clients CDP, bout en bout)', cmd: ['pnpm', '--filter', '@sym-browser/module', 'test:chromium'] });
+// Console (tâche 3.5) : axe et parcours de connexion dans Chromium, sur la console construite à l'étape « build ».
+// En CI, Chromium est installé ici (le job `browser` appelle ce script tel quel) ; en local : `pnpm exec playwright install chromium`.
+if (process.env['CI']) {
+  steps.push({ name: 'Chromium de Playwright (CI)', cmd: ['pnpm', '--filter', '@sym-browser/console', 'exec', 'playwright', 'install', '--with-deps', 'chromium'] });
+}
+steps.push({ name: 'console : axe et connexion au clavier (Playwright, Chromium)', cmd: ['pnpm', '--filter', '@sym-browser/console', 'test:e2e'] });
 
 if (!process.argv.includes('--skip-image')) {
   steps.push(

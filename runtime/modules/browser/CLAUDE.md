@@ -34,6 +34,7 @@ Contrat : `runtime/packages/contracts` (`@sym/contracts`, MIT, sous-chemin `brow
 - Pool du nœud sur de vrais Chromium (non root, espaces de noms utilisateur, `playwright install chromium`) : `pnpm --filter @sym-browser/node test:chromium`.
 - Schéma (Docker requis) : `pnpm --filter @sym-browser/db test` (PostgreSQL 16, `PG_VERSION` pour 17 ou 18) ; matrice 16/17/18 : `pnpm --filter @sym-browser/db test:matrix`. Migrations dans `packages/db/migrations/NNNN_nom/{up,down}.sql`, jamais modifiées après fusion (somme de contrôle).
 - Tests d'un paquet : `pnpm --filter @sym-browser/gateway test` ; tout le module : `pnpm --filter "./modules/browser/**" test`.
+- Console : `pnpm --filter @sym-browser/console dev` (authentification simulée tant que 2.1 manque) ; E2E et axe sur la console construite : `pnpm --filter @sym-browser/console test:e2e` (Chromium : `pnpm exec playwright install chromium`).
 - Types : `pnpm --filter "./modules/browser/**" typecheck` ; lint : `pnpm exec eslint modules/browser packages/contracts`.
 - `MASTER_KEY` de développement : `pnpm --filter @sym-browser/core keygen` (après build ; jamais committée ni journalisée). Vecteurs de SYM rejoués : `packages/core/vectors/sym-crypto.json`.
 - Image : `docker build -f modules/browser/Dockerfile -t sym-browser:dev .` puis `docker run --rm --security-opt seccomp=modules/browser/deploy/seccomp-chromium.json --security-opt no-new-privileges --cap-drop ALL -e MASTER_KEY="$(openssl rand -base64 32)" -e DATABASE_URL=postgres://… sym-browser:dev` (`SYMB_MODE` : `all`, `gateway`, `node`).
