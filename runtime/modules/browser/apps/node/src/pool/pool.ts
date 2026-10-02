@@ -4,7 +4,8 @@
 //   déjà réservé à son client (moins de `CONTEXTS_PER_BROWSER` sessions), sinon un chaud, qu'elle réserve à son client.
 //   Un Chromium qui a servi un client ne sert jamais un autre client : à sa dernière session il est détruit (BINV1 entre
 //   clients) et le préchauffage en relance un neuf.
-// - Session `dedicated` : un Chromium à elle seule, lancé à la demande, détruit à la fin (profil, CDP, `launchArgs` : 1.4).
+// - Session `dedicated` : un Chromium à elle seule, lancé à la demande par `launchDedicated` (tâche 1.4 : profil temporaire,
+//   CDP sur 127.0.0.1, `launchArgs` de la liste fermée), détruit à la fin.
 // - Slots par type de session : la capacité (`capacity.ts`) est comptée en unités ; chaque session réserve le poids de son
 //   type avant tout lancement, et le rend une fois son Chromium arrêté s'il doit l'être. Pas de file ici : la file d'attente
 //   appartient à la passerelle (04b § 7, tâche 2.4) ; un nœud plein refuse (`CapacityExceededError`).
@@ -14,6 +15,7 @@
 // - Fermeture à délai dur : `close()`, puis kill du groupe de processus au-delà de `closeTimeoutMs` (`close_timeout`).
 // - Chiens de garde : de lancement (tué et relancé une fois) et de session (au-delà de son délai : signal `timed_out`,
 //   session libérée). Balayage des groupes de processus au démarrage puis toutes les `sweepIntervalMs`.
+import type { LaunchArg } from '@sym/contracts/browser';
 import type { Browser } from 'playwright-core';
 import { PROVISIONAL_CAPACITY, SLOT_UNITS, sessionWeightUnits, type CapacityConstants, type SessionType } from './capacity.js';
 
@@ -33,6 +35,8 @@ export type LaunchedBrowser = {
   readonly pid: number | undefined;
   /** WebSocket Playwright local (127.0.0.1, chemin imprévisible), pour le relais de la tâche 2.3. */
   readonly wsEndpoint: string;
+  /** Point CDP local (`ws://127.0.0.1:{port}/devtools/browser/{id}`) des Chromium dedicated (tâche 1.4). */
+  readonly cdpEndpoint?: string;
   /** Connexion interne du nœud : elle tient les contextes (une déconnexion du client ne les ferme pas). */
   readonly browser: Browser;
   isConnected(): boolean;
@@ -43,7 +47,8 @@ export type LaunchedBrowser = {
   kill(): Promise<void>;
 };
 
-export type LaunchPurpose = { role: 'warm' | 'dedicated'; sessionId?: string };
+/** `launchArgs` : noms de la liste fermée (04 § 3), sessions dedicated seulement. */
+export type LaunchPurpose = { role: 'warm' | 'dedicated'; sessionId?: string; launchArgs?: readonly LaunchArg[] };
 export type BrowserLauncher = (purpose: LaunchPurpose) => Promise<LaunchedBrowser>;
 
 export type PoolEvent =
@@ -115,6 +120,8 @@ export type AcquireRequest = {
   tenantId: string;
   /** Chien de garde de session : au-delà, la session est interrompue (`timed_out`) et libérée (`expiresAt`, tâche 1.2). */
   watchdogMs?: number;
+  /** Arguments de la liste fermée (04 § 3) : sessions dedicated seulement (la bascule de type se fait avant le pool). */
+  launchArgs?: readonly LaunchArg[];
 };
 
 export type PoolLease = {
@@ -123,6 +130,8 @@ export type PoolLease = {
   readonly tenantId: string;
   readonly browserId: string;
   readonly wsEndpoint: string;
+  /** Point CDP local de la session dedicated ; `undefined` pour une session shared (CDP non servi, 04f § 1). */
+  readonly cdpEndpoint: string | undefined;
   readonly browser: Browser;
   /** Interrompu quand le pool met fin à la session (raison : `LeaseEndReason`). */
   readonly signal: AbortSignal;
@@ -223,13 +232,14 @@ export class BrowserPool {
 
   async acquire(request: AcquireRequest): Promise<PoolLease> {
     if (this.#closed) throw new PoolClosedError('pool de navigateurs fermé');
+    if (request.type !== 'dedicated' && (request.launchArgs?.length ?? 0) > 0) throw new RangeError('launchArgs : réservés aux sessions dedicated');
     const units = sessionWeightUnits(request.type, this.#constants);
     if (this.slotsTotal * SLOT_UNITS - this.#usedUnits < units) throw new CapacityExceededError(request.type, this.freeFor(request.type));
     // Réservation synchrone avant tout `await` : deux demandes simultanées ne prennent jamais le même slot.
     this.#usedUnits += units;
     let entry: Entry;
     try {
-      entry = request.type === 'dedicated' ? await this.#launchEntry('dedicated', request.sessionId) : await this.#sharedEntryFor(request.tenantId);
+      entry = request.type === 'dedicated' ? await this.#launchEntry('dedicated', request.sessionId, request.launchArgs) : await this.#sharedEntryFor(request.tenantId);
       if (this.#closed) {
         if (entry.leases.size === 0) await this.#retire(entry, 'shutdown');
         throw new PoolClosedError('pool de navigateurs fermé');
@@ -256,6 +266,7 @@ export class BrowserPool {
       tenantId: request.tenantId,
       browserId: entry.launched.id,
       wsEndpoint: entry.launched.wsEndpoint,
+      cdpEndpoint: entry.role === 'dedicated' ? entry.launched.cdpEndpoint : undefined,
       browser: entry.launched.browser,
       signal: state.controller.signal,
       release: () => this.#release(state),
@@ -333,9 +344,10 @@ export class BrowserPool {
   }
 
   /** Lancement sous chien de garde : au-delà du délai, le Chromium (s'il arrive) est tué, et un second essai est fait. */
-  async #launchEntry(role: LaunchPurpose['role'], sessionId?: string): Promise<Entry> {
+  async #launchEntry(role: LaunchPurpose['role'], sessionId?: string, launchArgs?: readonly LaunchArg[]): Promise<Entry> {
     const launcher = role === 'dedicated' ? (this.#options.launchDedicated ?? this.#options.launch) : this.#options.launch;
     const purpose: LaunchPurpose = sessionId === undefined ? { role } : { role, sessionId };
+    if (launchArgs !== undefined && launchArgs.length > 0) purpose.launchArgs = [...launchArgs];
     const timeoutMs = this.#options.launchTimeoutMs ?? POOL_DEFAULTS.launchTimeoutMs;
     let launched: LaunchedBrowser | undefined;
     for (let attempt = 0; attempt < 2 && launched === undefined; attempt += 1) {
