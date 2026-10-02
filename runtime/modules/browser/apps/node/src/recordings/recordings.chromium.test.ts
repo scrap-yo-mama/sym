@@ -23,7 +23,7 @@ import { startSite, type SiteHandle } from '../../../../fixtures/src/site.ts';
 import { dedicatedLauncher, sessionDir } from '../dedicated/index.js';
 import { BrowserPool, OwnedProcessGroups, PROVISIONAL_CAPACITY, playwrightLauncher, type BrowserPool as Pool } from '../pool/index.js';
 import { SharedSessions } from '../sessions/index.js';
-import { RecordingVault, SessionRecorder, connectRecordingContext, readZip, validateHar, type RecordingEvent, type RecordingInfo } from './index.js';
+import { PageVideo, RecordingVault, SessionRecorder, connectRecordingContext, ffmpegPath, readZip, validateHar, type RecordingEvent, type RecordingInfo } from './index.js';
 
 const SECRET = 'zz_test_recording_secret_8d1f2c';
 
@@ -214,6 +214,32 @@ describe('enregistrements côté nœud sur de vrais Chromium', () => {
       expect(raw.includes(Buffer.from('"entries"'))).toBe(false);
     }
     expect(readdirSync(join(dataDir, 'sessions'))).toEqual([]);
+  });
+
+  test('Chromium chargé : aucune image de screencast avant la fin → vidéo produite quand même, lisible, de la durée de la page', async () => {
+    const lease = await pool.acquire({ sessionId: 'rec-noframe', type: 'shared', tenantId: 'tenant-c' });
+    const context = await lease.browser.newContext();
+    try {
+      const page = await context.newPage();
+      await page.goto(`${siteUrl}/static/about.html`);
+      // Chromium qui ne rend plus (CI chargée) : la session CDP du nœud ne reçoit jamais `Page.screencastFrame`.
+      const silent = {
+        newCDPSession: async (target: typeof page) => {
+          const cdp = await context.newCDPSession(target);
+          return new Proxy(cdp, { get: (obj, key) => (key === 'on' ? (event: string, listener: never) => (event === 'Page.screencastFrame' ? obj : obj.on(event as never, listener)) : Reflect.get(obj, key, obj)) });
+        },
+      } as unknown as typeof context;
+      const video = await PageVideo.start(silent, page, { path: join(root, 'noframe.webm'), ffmpeg: ffmpegPath(), maxBytes: 10 * 1024 * 1024 });
+      await new Promise((resolve) => setTimeout(resolve, 1_500));
+      await video.stop();
+      expect(video.frames).toBeGreaterThan(0);
+      const played = await playVideo(readFileSync(video.path));
+      expect(played.width).toBe(1280);
+      expect(played.duration).toBeGreaterThan(1);
+    } finally {
+      await context.close();
+      await lease.release();
+    }
   });
 
   test('assert_cdp_client_compat (F7) : session dedicated pilotée par un client CDP tiers → webm, HAR et console.ndjson produits côté nœud, recording.ready par type', async () => {

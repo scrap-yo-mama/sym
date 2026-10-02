@@ -12,6 +12,7 @@ import type { BrowserContext, CDPSession, Page } from 'playwright-core';
 const VIDEO_SIZE = Object.freeze({ width: 1280, height: 720 });
 const FPS = 25;
 const FINALIZE_TIMEOUT_MS = 30_000;
+const FIRST_FRAME_TIMEOUT_MS = 5_000;
 
 type Frame = { data: string; sessionId: number; metadata: { timestamp?: number } };
 
@@ -52,6 +53,17 @@ export class PageVideo {
         video.#onFrame(Buffer.from(frame.data, 'base64'), frame.metadata.timestamp ?? Date.now() / 1000);
       });
       await cdp.send('Page.startScreencast', { format: 'jpeg', quality: 90, maxWidth: VIDEO_SIZE.width, maxHeight: VIDEO_SIZE.height, everyNthFrame: 1 });
+      // Le screencast n'émet une image qu'au prochain rendu : sur un Chromium chargé, aucune peut arriver avant la fin et
+      // la vidéo est perdue. Première image prise tout de suite (bornée dans le temps) : la vidéo couvre la page dès son
+      // ouverture, la dernière image étant répétée jusqu'à la suivante.
+      const timestamp = Date.now() / 1000;
+      let timer: NodeJS.Timeout | undefined;
+      const shot = await Promise.race([
+        cdp.send('Page.captureScreenshot', { format: 'jpeg', quality: 90 }).catch(() => undefined),
+        new Promise<undefined>((resolve) => (timer = setTimeout(() => resolve(undefined), FIRST_FRAME_TIMEOUT_MS))),
+      ]);
+      clearTimeout(timer);
+      if (shot !== undefined && video.#start === undefined) video.#onFrame(Buffer.from(shot.data, 'base64'), timestamp);
     } catch {
       // Page fermée avant le début : vidéo vide, finalisée à l'arrêt.
     }
