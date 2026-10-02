@@ -82,18 +82,18 @@ async function client(lease: PoolLease): Promise<{ browser: Browser; context: Br
     if (url.pathname === '/login') {
       await route.fulfill({
         status: 200,
-        contentType: 'text/html',
+        contentType: 'text/html; charset=utf-8',
         headers: { 'set-cookie': `sid=${SID}; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=86400` },
         body: `<script>localStorage.setItem('zz_test_ls', 'connecté')</script><p id="s">login</p>`,
       });
       return;
     }
     if (url.pathname === '/logout') {
-      await route.fulfill({ status: 200, contentType: 'text/html', headers: { 'set-cookie': 'sid=; Path=/; Secure; Max-Age=0' }, body: `<script>localStorage.clear()</script><p id="s">logout</p>` });
+      await route.fulfill({ status: 200, contentType: 'text/html; charset=utf-8', headers: { 'set-cookie': 'sid=; Path=/; Secure; Max-Age=0' }, body: `<script>localStorage.clear()</script><p id="s">logout</p>` });
       return;
     }
     const cookie = (await route.request().allHeaders())['cookie'] ?? '';
-    await route.fulfill({ status: 200, contentType: 'text/html', body: `<p id="s">${cookie.includes(`sid=${SID}`) ? 'connecté' : 'anonyme'}</p>` });
+    await route.fulfill({ status: 200, contentType: 'text/html; charset=utf-8', body: `<p id="s">${cookie.includes(`sid=${SID}`) ? 'connecté' : 'anonyme'}</p>` });
   });
   return { browser, context };
 }
@@ -218,7 +218,10 @@ describe('profils persistants sur de vrais Chromium (tâche 3.1, recette étape 
     await s1.release();
 
     const s2 = await pool.acquire({ sessionId: randomUUID(), type: 'dedicated', tenantId, profile: { tenantId, profileId, mode: 'read' } });
-    expect(await status((await client(s2)).context)).toEqual({ me: 'connecté', ls: 'connecté' });
+    const c2 = await client(s2);
+    expect(await status(c2.context)).toEqual({ me: 'connecté', ls: 'connecté' });
+    // Comme `context.storageState()` : le localStorage exporté est celui des origines ouvertes dans une page.
+    await (await c2.context.newPage()).goto(`${FIXTURE}/me`);
     const exported = await exportStorageState(s2);
     expect(exported.cookies).toEqual([expect.objectContaining({ name: 'sid', value: SID, domain: 'fixture.test', httpOnly: true, secure: true })]);
     expect(exported.origins).toEqual([{ origin: FIXTURE, localStorage: [{ name: 'zz_test_ls', value: 'connecté' }] }]);

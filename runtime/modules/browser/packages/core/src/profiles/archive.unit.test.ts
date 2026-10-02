@@ -112,6 +112,7 @@ describe('packProfile / unpackProfile', () => {
     put(src, 'Default/Local Storage/leveldb/000003.log', 'zz_test_local');
     put(src, long, Buffer.alloc(70_000, 7));
     put(src, 'Default/Preferences', '{}');
+    put(src, 'Default/Local Storage/leveldb/LOCK', '');
     put(src, 'Default/Cache/Cache_Data/data_0', 'cache');
     put(src, 'Default/Code Cache/js/index', 'code');
     put(src, 'DevToolsActivePort', '1234\n/devtools/browser/x');
@@ -119,17 +120,18 @@ describe('packProfile / unpackProfile', () => {
     symlinkSync('/etc/passwd', join(src, 'Default', 'Cookies'));
 
     const packed = await packProfile(src, { maxBytes: 1_000_000 });
-    expect(packed.files).toBe(5);
+    expect(packed.files).toBe(6);
     const archive = await collect(packed.stream);
     expect(archive.subarray(0, 2)).toEqual(Buffer.from([0x1f, 0x8b]));
 
     const dest = join(newDir(), 'profile');
     mkdirSync(dest, { mode: 0o700 });
     const restored = await unpackProfile(once(archive), dest, { maxBytes: 1_000_000 });
-    expect(restored.files).toBe(5);
-    expect(files(dest)).toEqual([long,'Default/Local Storage/leveldb/000003.log', 'Default/Network/Cookies', 'Default/Preferences', 'Local State'].sort());
+    expect(restored.files).toBe(6);
+    expect(files(dest)).toEqual([long, 'Default/Local Storage/leveldb/000003.log', 'Default/Local Storage/leveldb/LOCK','Default/Network/Cookies', 'Default/Preferences', 'Local State'].sort());
     expect(readFileSync(join(dest, 'Default/Network/Cookies'))).toEqual(Buffer.from([0, 1, 2, 255]));
     expect(readFileSync(join(dest, ...long.split('/')))).toEqual(Buffer.alloc(70_000, 7));
+    expect(readFileSync(join(dest, 'Default/Local Storage/leveldb/LOCK'))).toEqual(Buffer.alloc(0));
     expect(statSync(join(dest, 'Default/Network/Cookies')).mode & 0o777).toBe(0o600);
     expect(statSync(join(dest, 'Default/Network')).mode & 0o777).toBe(0o700);
   });
