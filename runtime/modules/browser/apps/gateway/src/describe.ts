@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Passerelle de SYM Browser (cdc/sym-browser 03 § 2) : REST `/v1`, relais WSS `/playwright` et `/cdp`, SSE. Squelette de la
-// tâche 0.1 : aucune route ; la configuration et `/healthz` arrivent avec la tâche 0.4.
+// tâche 0.1 ; la configuration, `/healthz` et `/readyz` sont dans `@sym-browser/core` depuis la tâche 0.4 (aucune route REST encore).
 import type { ServiceMode } from '@sym-browser/core';
 import { BROWSER_API_VERSION, BROWSER_ENGINE } from '@sym/contracts/browser';
 

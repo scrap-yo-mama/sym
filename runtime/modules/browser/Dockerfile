@@ -1,9 +1,10 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Image de SYM Browser (cdc/sym-browser 03 § 1 et § 9), cible ghcr.io/scrap-yo-mama/sym-browser. Contexte de build : runtime/
 #   docker build -f modules/browser/Dockerfile -t sym-browser:dev .
-#   docker run --rm --security-opt seccomp=modules/browser/deploy/seccomp-chromium.json sym-browser:dev
+#   docker run --rm --security-opt seccomp=modules/browser/deploy/seccomp-chromium.json -e MASTER_KEY=… -e DATABASE_URL=… sym-browser:dev
 # Le contexte est filtré par modules/browser/Dockerfile.dockerignore : seuls le contrat et les paquets du module entrent.
-# Squelette de la tâche 0.1 : passerelle et nœud construits, aucun service exposé (configuration et modes : tâche 0.4).
+# Tâche 0.4 : un seul point d'entrée, le rôle vient de SYMB_MODE (all, gateway, node) ; configuration invalide : sortie code 1.
+# Variables obligatoires : DATABASE_URL, MASTER_KEY (+ NODE_TOKEN en gateway et node). /healthz et /readyz sur PORT (3000).
 # Base épinglée par empreinte (même image et même Playwright 1.63.0 que SYM ; Renovate la met à jour).
 ARG PLAYWRIGHT_IMAGE=mcr.microsoft.com/playwright:v1.63.0-noble@sha256:eff16c30e6f3f4af0a03fa4b706120d5e9b0891c344a27d64559aff5900a4a27
 
