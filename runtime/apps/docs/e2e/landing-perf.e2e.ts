@@ -5,7 +5,7 @@
 //   rien) : première vue, JS en gzip, polices, nombre de requêtes, requêtes tierces, LCP, CLS ; le test vérifie d'abord que le
 //   bridage s'applique (le premier octet arrive après un aller-retour réseau émulé) ;
 // - scores Lighthouse mobile (configuration par défaut : mobile, bridage simulé) : performance, accessibilité et SEO ≥ seuils.
-import { expect, test } from '@playwright/test';
+import { expect, test, type Browser } from '@playwright/test';
 import { labNetworkConditions, lighthouseFailures, navigationTtfb } from '../src/landing/checks.ts';
 import { runLighthouse } from '../src/landing/lighthouse.ts';
 import { budgets, homeUrl, LANGS_UNDER_TEST } from './pages.ts';
@@ -72,6 +72,44 @@ for (const lang of LANGS_UNDER_TEST) {
     expect(metrics.lcp, report).toBeLessThanOrEqual(limits.lcpMs);
     expect(metrics.cls, report).toBeLessThanOrEqual(limits.cls);
     await context.close();
+  });
+}
+
+// CLS à la source : l'en-tête précède tout le contenu, une ligne de plus ou de moins y décale toute la page. Sa disposition (hauteur,
+// ligne de chaque lien et de chaque outil) ne doit dépendre que de la largeur de l'écran, jamais de la police : identique avec les
+// polices web et avec le repli local affiché avant leur arrivée (font-display swap). Largeurs : de 320 px au bureau, dont 412 px
+// (écran mobile de Lighthouse), où la navigation anglaise tenait sur une ligne à un pixel près avec DM Sans et pas avec le repli.
+const HEADER_WIDTHS = [320, 360, 375, 390, 412, 430, 480, 540, 600, 700, 768, 820, 900, 1024, 1280, 1440];
+
+async function headerLayout(browser: Browser, url: string, width: number, webFonts: boolean): Promise<string> {
+  const context = await browser.newContext({ viewport: { width, height: 800 }, reducedMotion: 'reduce' });
+  if (!webFonts) await context.route('**/*.woff2', (route) => route.abort());
+  const page = await context.newPage();
+  await page.goto(url, { waitUntil: 'networkidle' });
+  const layout = await page.evaluate(async () => {
+    await document.fonts.ready;
+    const box = (el: Element): DOMRect => el.getBoundingClientRect();
+    const header = document.querySelector('.lp-header');
+    if (!header) return 'en-tête absent';
+    const rows = [...header.querySelectorAll('.lp-brand, .lp-nav li, .lp-tools > *')].map((el) => `${(el.textContent ?? '').trim().slice(0, 12) || el.className}@${Math.round(box(el).top)}`);
+    return `hauteur ${Math.round(box(header).height)} ; ${rows.join(' ')}`;
+  });
+  const fonts = await page.evaluate(() => [...document.fonts].filter((font) => font.status === 'loaded').map((font) => font.family).join(','));
+  await context.close();
+  if (webFonts && !fonts.includes('DM Sans')) throw new Error(`polices web non chargées à ${width} px : ${fonts}`);
+  return layout;
+}
+
+for (const lang of LANGS_UNDER_TEST) {
+  test(`assert_landing_perf_budget : disposition de l'en-tête indépendante des polices web (CLS), ${lang}`, async ({ browser }) => {
+    test.setTimeout(240_000);
+    const differences: string[] = [];
+    for (const width of HEADER_WIDTHS) {
+      const web = await headerLayout(browser, homeUrl(lang), width, true);
+      const fallback = await headerLayout(browser, homeUrl(lang), width, false);
+      if (web !== fallback) differences.push(`${width} px\n    polices web : ${web}\n    repli       : ${fallback}`);
+    }
+    expect(differences, differences.join('\n')).toEqual([]);
   });
 }
 
