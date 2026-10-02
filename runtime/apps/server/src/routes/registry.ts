@@ -15,8 +15,24 @@ type RouteAuth =
   /** Jeton d'un appareil appairé (extension, 07 § 1) seulement ; l'utilisateur est celui du jeton. */
   | 'extension';
 
-/** Ressources appartenant à un utilisateur exposées par les routes existantes (s'étend avec 3.1, 3.7, 2.6…). */
-export type OwnedResource = 'api_key' | 'tunnel' | 'site_session' | 'auth_session' | 'audit_event' | 'auth_identity';
+/**
+ * Ressources appartenant à un utilisateur exposées par les routes (s'étend avec chaque tâche). API REST (3.1) : `api` (par
+ * son slug), `api_investigation` (par son identifiant : validation du schéma), `run`, `dataset`, `schedule` (slug de l'API et
+ * identifiant), `webhook_subscription`.
+ */
+export type OwnedResource =
+  | 'api_key'
+  | 'tunnel'
+  | 'site_session'
+  | 'auth_session'
+  | 'audit_event'
+  | 'auth_identity'
+  | 'api'
+  | 'api_investigation'
+  | 'run'
+  | 'dataset'
+  | 'schedule'
+  | 'webhook_subscription';
 
 export type RouteSpec = {
   method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
@@ -40,6 +56,8 @@ export type RouteSpec = {
    * second facteur ; `enroll` : joignable par un compte tenu de s'enrôler (enrôlement forcé avant toute autre route).
    */
   mfa?: 'pending' | 'enroll';
+  /** Flux sans fin (SSE, 06 § 3) : les harnais qui lisent une réponse entière ne l'appellent pas sans le couper. */
+  stream?: true;
 };
 
 export const ROUTES: readonly RouteSpec[] = [
@@ -115,6 +133,63 @@ export const ROUTES: readonly RouteSpec[] = [
   { method: 'PUT', url: '/api/settings/security', auth: 'session', permission: 'settings:security:write' },
   { method: 'GET', url: '/api/settings/sso', auth: 'session', permission: 'settings:sso:write' },
   { method: 'PUT', url: '/api/settings/sso', auth: 'session', permission: 'settings:sso:write' },
+  // API REST (tâche 3.1, 05 § 4.2) : catalogue, enquête, runs, datasets, flux SSE, planifications, webhooks, réglages,
+  // droits des personnes. Scopes de clé de 13 § 8 ; lectures sous RLS, écritures au propriétaire (404 uniforme).
+  { method: 'GET', url: '/api/openapi.json', auth: 'session_or_key' },
+  { method: 'GET', url: '/api/events', auth: 'session_or_key', scope: 'runs:read', permission: 'runs:read', stream: true },
+  { method: 'GET', url: '/api/apis', auth: 'session_or_key', scope: 'apis:read', permission: 'apis:read', resource: { type: 'api', kind: 'collection' } },
+  { method: 'POST', url: '/api/apis', auth: 'session_or_key', scope: 'apis:write', permission: 'apis:create' },
+  { method: 'POST', url: '/api/apis/:id/validate-schema', auth: 'session_or_key', scope: 'apis:write', permission: 'apis:create', resource: { type: 'api_investigation', kind: 'item' } },
+  { method: 'GET', url: '/api/apis/:slug', auth: 'session_or_key', scope: 'apis:read', permission: 'apis:read', resource: { type: 'api', kind: 'item' } },
+  { method: 'PATCH', url: '/api/apis/:slug', auth: 'session_or_key', scope: 'apis:write', permission: 'apis:update', resource: { type: 'api', kind: 'item' } },
+  { method: 'DELETE', url: '/api/apis/:slug', auth: 'session_or_key', scope: 'apis:write', permission: 'apis:delete', resource: { type: 'api', kind: 'item' } },
+  { method: 'POST', url: '/api/apis/:slug/runs', auth: 'session_or_key', scope: 'apis:run', permission: 'apis:run', resource: { type: 'api', kind: 'item' } },
+  { method: 'POST', url: '/api/apis/:slug/investigate', auth: 'session_or_key', scope: 'apis:write', permission: 'apis:update', resource: { type: 'api', kind: 'item' } },
+  { method: 'GET', url: '/api/apis/:slug/versions', auth: 'session_or_key', scope: 'apis:read', permission: 'apis:read', resource: { type: 'api', kind: 'item' } },
+  { method: 'GET', url: '/api/apis/:slug/versions/:version', auth: 'session_or_key', scope: 'apis:read', permission: 'apis:read', resource: { type: 'api', kind: 'item' } },
+  { method: 'GET', url: '/api/apis/:slug/versions/:version/diff', auth: 'session_or_key', scope: 'apis:read', permission: 'apis:read', resource: { type: 'api', kind: 'item' } },
+  { method: 'POST', url: '/api/apis/:slug/versions/:version/revert', auth: 'session_or_key', scope: 'apis:write', permission: 'apis:update', resource: { type: 'api', kind: 'item' } },
+  { method: 'GET', url: '/api/apis/:slug/status-events', auth: 'session_or_key', scope: 'apis:read', permission: 'apis:read', resource: { type: 'api', kind: 'item' } },
+  { method: 'GET', url: '/api/apis/:slug/schedules', auth: 'session_or_key', scope: 'apis:read', permission: 'schedules:manage', resource: { type: 'api', kind: 'item' } },
+  { method: 'POST', url: '/api/apis/:slug/schedules', auth: 'session_or_key', scope: 'schedules:write', permission: 'schedules:manage', resource: { type: 'api', kind: 'item' } },
+  { method: 'GET', url: '/api/apis/:slug/schedules/:id', auth: 'session_or_key', scope: 'apis:read', permission: 'schedules:manage', resource: { type: 'schedule', kind: 'item' } },
+  { method: 'PATCH', url: '/api/apis/:slug/schedules/:id', auth: 'session_or_key', scope: 'schedules:write', permission: 'schedules:manage', resource: { type: 'schedule', kind: 'item' } },
+  { method: 'DELETE', url: '/api/apis/:slug/schedules/:id', auth: 'session_or_key', scope: 'schedules:write', permission: 'schedules:manage', resource: { type: 'schedule', kind: 'item' } },
+  { method: 'GET', url: '/api/runs', auth: 'session_or_key', scope: 'runs:read', permission: 'runs:read', resource: { type: 'run', kind: 'collection' } },
+  { method: 'GET', url: '/api/runs/:id', auth: 'session_or_key', scope: 'runs:read', permission: 'runs:read', resource: { type: 'run', kind: 'item' } },
+  { method: 'POST', url: '/api/runs/:id/cancel', auth: 'session_or_key', scope: 'apis:run', permission: 'apis:run', resource: { type: 'run', kind: 'item' } },
+  { method: 'POST', url: '/api/runs/:id/pause', auth: 'session_or_key', scope: 'apis:run', permission: 'apis:run', resource: { type: 'run', kind: 'item' } },
+  { method: 'POST', url: '/api/runs/:id/resume', auth: 'session_or_key', scope: 'apis:run', permission: 'apis:run', resource: { type: 'run', kind: 'item' } },
+  { method: 'GET', url: '/api/runs/:id/events', auth: 'session_or_key', scope: 'runs:read', permission: 'runs:read', resource: { type: 'run', kind: 'item' } },
+  { method: 'GET', url: '/api/runs/:id/logs', auth: 'session_or_key', scope: 'runs:read', permission: 'runs:read', resource: { type: 'run', kind: 'item' } },
+  { method: 'GET', url: '/api/datasets/:id/items', auth: 'session_or_key', scope: 'datasets:read', permission: 'datasets:read', resource: { type: 'dataset', kind: 'item' } },
+  { method: 'GET', url: '/api/webhook-subscriptions', auth: 'session_or_key', scope: 'schedules:write', permission: 'schedules:manage', resource: { type: 'webhook_subscription', kind: 'collection' } },
+  { method: 'POST', url: '/api/webhook-subscriptions', auth: 'session_or_key', scope: 'schedules:write', permission: 'schedules:manage' },
+  { method: 'GET', url: '/api/webhook-subscriptions/:id', auth: 'session_or_key', scope: 'schedules:write', permission: 'schedules:manage', resource: { type: 'webhook_subscription', kind: 'item' } },
+  { method: 'PATCH', url: '/api/webhook-subscriptions/:id', auth: 'session_or_key', scope: 'schedules:write', permission: 'schedules:manage', resource: { type: 'webhook_subscription', kind: 'item' } },
+  { method: 'DELETE', url: '/api/webhook-subscriptions/:id', auth: 'session_or_key', scope: 'schedules:write', permission: 'schedules:manage', resource: { type: 'webhook_subscription', kind: 'item' } },
+  { method: 'POST', url: '/api/webhook-subscriptions/:id/test', auth: 'session_or_key', scope: 'schedules:write', permission: 'schedules:manage', resource: { type: 'webhook_subscription', kind: 'item' } },
+  // Réglages d'instance (08 § 7) : admin et owner, session seulement ; secrets en écriture seule (INV8).
+  { method: 'GET', url: '/api/settings/llm', auth: 'session', permission: 'settings:llm:write' },
+  { method: 'PUT', url: '/api/settings/llm', auth: 'session', permission: 'settings:llm:write' },
+  { method: 'POST', url: '/api/settings/llm/test', auth: 'session', permission: 'settings:llm:write' },
+  { method: 'GET', url: '/api/settings/proxies', auth: 'session', permission: 'settings:proxies:write' },
+  { method: 'POST', url: '/api/settings/proxies', auth: 'session', permission: 'settings:proxies:write' },
+  { method: 'GET', url: '/api/settings/proxies/:id', auth: 'session', permission: 'settings:proxies:write' },
+  { method: 'PATCH', url: '/api/settings/proxies/:id', auth: 'session', permission: 'settings:proxies:write' },
+  { method: 'DELETE', url: '/api/settings/proxies/:id', auth: 'session', permission: 'settings:proxies:write' },
+  { method: 'POST', url: '/api/settings/proxies/:id/test', auth: 'session', permission: 'settings:proxies:write' },
+  { method: 'GET', url: '/api/settings/smtp', auth: 'session', permission: 'settings:smtp:write' },
+  { method: 'PUT', url: '/api/settings/smtp', auth: 'session', permission: 'settings:smtp:write' },
+  { method: 'POST', url: '/api/settings/smtp/test', auth: 'session', permission: 'settings:smtp:write' },
+  // Droits des personnes (17 § 6) : portée de l'appelant (membre : ses données ; admin : l'instance, métadonnées).
+  { method: 'POST', url: '/api/subjects/export', auth: 'session' },
+  { method: 'POST', url: '/api/subjects/erase', auth: 'session' },
+  // Appairage de l'extension sous le nom de 05 § 4.2 et 07 § 1 (même service que /api/extension/pairing-codes).
+  { method: 'POST', url: '/api/tunnel/pairing-code', auth: 'session', permission: 'tunnel:pair' },
+  // Case « j'ai lu » de la page « Usage responsable » (17 § 11) : acte humain, session seulement.
+  { method: 'GET', url: '/api/me/responsible-use', auth: 'session', permission: 'account:update' },
+  { method: 'POST', url: '/api/me/responsible-use', auth: 'session', permission: 'account:update' },
 ];
 
 const byKey = new Map(ROUTES.map((r) => [`${r.method} ${r.url}`, r]));

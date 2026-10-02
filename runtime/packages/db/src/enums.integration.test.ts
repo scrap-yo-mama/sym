@@ -34,12 +34,16 @@ afterAll(async () => {
   await tdb.drop();
 });
 
-/** Valeurs littérales citées dans le CHECK de `table.column` (`column IN ('a', 'b')` ou `= ANY (ARRAY[...])`). */
+/**
+ * Valeurs littérales citées dans le CHECK de `table.column` (`column IN ('a', 'b')` ou `= ANY (ARRAY[...])`). Seul le CHECK
+ * d'énumération est retenu : celui qui COMMENCE par `column = ANY` ; un CHECK croisé qui cite la colonne plus loin (ex.
+ * `runs_paused_state` de 0017 : `paused_at IS NULL OR state = ANY (...)`) n'en est pas un.
+ */
 async function checkValues(table: string, column: string): Promise<string[]> {
   const { rows } = await client.query<{ def: string }>(
     `SELECT pg_get_constraintdef(k.oid) AS def
        FROM pg_constraint k JOIN pg_class c ON c.oid = k.conrelid
-      WHERE c.relname = $1 AND k.contype = 'c' AND pg_get_constraintdef(k.oid) ~ ('\\(' || $2 || ' = ANY|\\(\\(' || $2 || ' = ANY')`,
+      WHERE c.relname = $1 AND k.contype = 'c' AND pg_get_constraintdef(k.oid) ~ ('^CHECK \\(\\(*' || $2 || ' = ANY')`,
     [table, column],
   );
   expect(rows, `CHECK de ${table}.${column}`).toHaveLength(1);

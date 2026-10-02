@@ -169,6 +169,41 @@ export async function cancelRun(tx: Queryable, queue: JobQueue, runId: string): 
   return true;
 }
 
+/** Pause refusée : run terminé, déjà en pause, ou API qui écrit (une reprise rejouerait ses écritures, comme le balayeur). */
+export type PauseOutcome = 'paused' | 'not_active' | 'already_paused' | 'write_actions';
+
+/**
+ * Met en pause un run actif (0017, 06 § 2) : `queued` sans job, `paused_at` posé, job pg-boss annulé, dans la transaction
+ * `tx` (sous withActor : l'acteur ne touche que ses runs). Le worker qui le tenait perd son bail au battement suivant ; les
+ * essais et les coûts déjà imputés restent (INV4). Le balayeur et `claimRun` ignorent un run en pause.
+ */
+export async function pauseRun(tx: Queryable, queue: JobQueue, runId: string): Promise<PauseOutcome> {
+  const { rows } = await tx.query<{ state: RunState; job_id: string | null; paused_at: Date | null; allow_write_actions: boolean }>(
+    'SELECT r.state, r.job_id, r.paused_at, a.allow_write_actions FROM runs r JOIN apis a ON a.id = r.api_id WHERE r.id = $1 FOR UPDATE OF r',
+    [runId],
+  );
+  const run = rows[0];
+  if (!run || !ACTIVE.includes(run.state)) return 'not_active';
+  if (run.paused_at !== null) return 'already_paused';
+  if (run.allow_write_actions) return 'write_actions';
+  await tx.query("UPDATE runs SET state = 'queued', paused_at = now(), job_id = NULL, worker_id = NULL WHERE id = $1", [runId]);
+  if (run.job_id) await queue.cancel(RUN_QUEUE, run.job_id, { tx: tx as QueryClient });
+  return 'paused';
+}
+
+/** Reprend un run en pause (action de l'utilisateur) : nouveau job dans la même transaction. false : le run n'était pas en pause. */
+export async function resumeRun(tx: Queryable, queue: JobQueue, runId: string): Promise<boolean> {
+  const jobId = randomUUID();
+  const { rowCount } = await tx.query(
+    "UPDATE runs SET paused_at = NULL, job_id = $2, heartbeat_at = now() WHERE id = $1 AND state = 'queued' AND paused_at IS NOT NULL",
+    [runId, jobId],
+  );
+  if (rowCount !== 1) return false;
+  const trace = currentTraceparent();
+  await queue.enqueue(RUN_QUEUE, { run_id: runId, ...(trace ? { _trace: trace } : {}) }, { tx: tx as QueryClient, id: jobId });
+  return true;
+}
+
 type RunRow = {
   id: string;
   api_id: string;
@@ -288,7 +323,7 @@ export async function claimRun(db: Queryable, args: { runId: string; jobId: stri
     `UPDATE runs r SET state = 'running', worker_id = $3, started_at = coalesce(r.started_at, now()), heartbeat_at = now(),
        strategy_version = coalesce(r.strategy_version, a.current_strategy_version)
      FROM apis a
-     WHERE r.id = $1 AND r.job_id = $2 AND r.state = 'queued' AND a.id = r.api_id
+     WHERE r.id = $1 AND r.job_id = $2 AND r.state = 'queued' AND r.paused_at IS NULL AND a.id = r.api_id
      RETURNING r.api_id, r.owner_id, r.strategy_version, r.input, a.allow_write_actions, r.kind`,
     [args.runId, args.jobId, args.workerId],
   );
@@ -530,7 +565,7 @@ export async function sweepOrphans(
   return inTransaction(pool, async (tx) => {
     const { rows } = await tx.query<OrphanRow>(
       `SELECT r.id, r.state, r.job_id, r.requeue_count, a.allow_write_actions FROM runs r JOIN apis a ON a.id = r.api_id
-       WHERE r.state = ANY($1::text[]) AND coalesce(r.heartbeat_at, r.created_at) < now() - make_interval(secs => $2)
+       WHERE r.state = ANY($1::text[]) AND r.paused_at IS NULL AND coalesce(r.heartbeat_at, r.created_at) < now() - make_interval(secs => $2)
        ORDER BY r.state = 'queued', coalesce(r.heartbeat_at, r.created_at) LIMIT $3 FOR UPDATE OF r SKIP LOCKED`,
       [ACTIVE, stale, limit],
     );

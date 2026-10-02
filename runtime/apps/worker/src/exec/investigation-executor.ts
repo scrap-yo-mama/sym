@@ -582,6 +582,8 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
       const networks: PlanNetwork[] = sessionRequired
         ? [{ mode: 'tunnel', perGbUsd: 0 }]
         : [...rungs.map((r) => ({ mode: r.mode, perGbUsd: r.mode === 'direct' ? 0 : r.proxy.price.perGbUsd })), ...(tunnelChosen ? [{ mode: 'tunnel' as const, perGbUsd: 0 }] : [])];
+      // Plan restreint par l'appelant (`exclude_executions`, 06 § 2) : des niveaux retirés, jamais ajoutés.
+      const excluded = new Set<string>(state.excluded_executions ?? []);
       const plan = buildTrialPlan({
         strategies: built.strategies,
         networks,
@@ -592,7 +594,7 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
         instruction: request.description,
         documentBytes: state.page?.document_bytes ?? 0,
         totalBytes: state.page?.total_bytes ?? 0,
-      });
+      }).filter((p) => !excluded.has(p.execution));
       await event(EV.phase, {
         phase: 'testing',
         plan: plan.map((p) => ({ execution: p.execution, network: p.network, source: p.source, est_cost_usd: p.est_cost_usd })),

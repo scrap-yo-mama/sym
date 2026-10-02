@@ -457,6 +457,8 @@ export const runs = pgTable(
     scheduleJobId: uuid('schedule_job_id'),
     // 0016_investigation (2.1) : exécution d'une stratégie ou enquête.
     kind: text('kind', { enum: RUN_KINDS }).notNull().default('run'),
+    // 0017_rest_api (3.1) : pause demandée par l'utilisateur (run `queued` sans job), reprise par `resume`.
+    pausedAt: tstz('paused_at'),
     createdAt: createdAt(),
     startedAt: tstz('started_at'),
     finishedAt: tstz('finished_at'),
@@ -825,6 +827,8 @@ export const webhookSubscriptions = pgTable(
     // 0011 (2.5) : dernier échec (série « continue » = jamais plus de 24 h sans échec). Clés étrangères liées au
     // propriétaire (secret_id, owner_id) → secrets (id, owner_id), `ON DELETE SET NULL (colonne)` : écrites en SQL seulement.
     lastFailureAt: tstz('last_failure_at'),
+    // 0017_rest_api (3.1) : abonnement limité à une API (NULL = toutes les API du propriétaire).
+    apiId: uuid('api_id').references((): AnyPgColumn => apis.id, { onDelete: 'cascade' }),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },

@@ -118,17 +118,19 @@ async function writeSetting(db: Queryable, key: string, value: unknown): Promise
 export async function saveSmtpSettings(
   db: Queryable,
   store: SecretStore,
-  input: { host: string; port: number; security: SmtpSecurity; username?: string; password?: string; from: string; helo?: string },
+  input: { host: string; port: number; security: SmtpSecurity; username?: string; password?: string; from: string; helo?: string; /** Mot de passe absent : garder celui en place (même identifiant, route de réglage 3.1). */ keepPassword?: boolean },
   changedBy: SmtpChangedBy,
 ): Promise<SmtpSettings> {
+  const previous = await readSetting<SmtpSettings>(db, SMTP_SETTING);
+  const kept = input.password === undefined && input.keepPassword === true && previous !== null && previous.username !== null && previous.username === (input.username ?? null) ? previous.password_secret_id : null;
   if (!HOST.test(input.host)) throw new AlertConfigError('smtp.host : nom d\'hôte invalide');
   if (!Number.isInteger(input.port) || input.port < 1 || input.port > 65535) throw new AlertConfigError('smtp.port : 1 à 65535');
   if (!SECURITIES.includes(input.security)) throw new AlertConfigError(`smtp.security : ${SECURITIES.join(' | ')}`);
   if (!isMailAddress(input.from)) throw new AlertConfigError('smtp.from : adresse invalide');
   if (input.username !== undefined && input.security === 'none') throw new AlertConfigError('smtp : identifiants refusés sans TLS');
-  if (input.username !== undefined && (input.password ?? '') === '') throw new AlertConfigError('smtp.password : requis avec un identifiant');
+  if (input.username !== undefined && (input.password ?? '') === '' && kept === null) throw new AlertConfigError('smtp.password : requis avec un identifiant');
   const passwordSecretId =
-    input.password === undefined ? null : await store.put({ ownerId: null, kind: 'smtp_password', label: `smtp ${input.host}`, value: input.password });
+    input.password === undefined ? kept : await store.put({ ownerId: null, kind: 'smtp_password', label: `smtp ${input.host}`, value: input.password });
   const settings: SmtpSettings = {
     host: input.host.toLowerCase(),
     port: input.port,
@@ -143,6 +145,8 @@ export async function saveSmtpSettings(
     changed_at: new Date().toISOString(),
   };
   await writeSetting(db, SMTP_SETTING, settings);
+  // Ancien mot de passe remplacé ou retiré : sa ligne `secrets` disparaît (aucun matériel de clé inutile).
+  if (previous?.password_secret_id && previous.password_secret_id !== passwordSecretId) await db.query('DELETE FROM secrets WHERE id = $1 AND owner_id IS NULL', [previous.password_secret_id]);
   return settings;
 }
 

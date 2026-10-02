@@ -48,7 +48,24 @@ export type ServerConfig = {
   ssrfPolicy: SsrfPolicy;
   /** Passerelle tunnel WSS (07 § 6, tâche 2.7). */
   tunnel: TunnelConfig;
+  /** API REST (tâche 3.1, 05 § 2) : attente synchrone et file. */
+  rest: RestConfig;
 };
+
+/** Bornes de l'API REST (05 § 2, 14 § 2). */
+type RestConfig = {
+  /** `MAX_WAIT_SECONDS` (défaut 25) : plafond du paramètre `wait` (REST, MCP). */
+  maxWaitSeconds: number;
+  /** `MAX_CONCURRENT_RUNS` (défaut 50, à valider) : runs actifs de l'instance au-delà desquels la création répond 429 `queue_full`. */
+  maxConcurrentRuns: number;
+};
+
+function positiveInteger(env: NodeJS.ProcessEnv, name: string, fallback: number, max: number): number {
+  const raw = env[name]?.trim();
+  if (raw === undefined || raw === '') return fallback;
+  if (!/^\d+$/.test(raw) || Number(raw) < 1 || Number(raw) > max) throw new ConfigError(`${name} invalide : entier de 1 à ${max}.`);
+  return Number(raw);
+}
 
 type TunnelConfig = {
   /** `DISABLE_TUNNEL=true` : aucune route WSS, aucune passerelle (14 § 2). */
@@ -188,5 +205,6 @@ export function loadServerConfig(env: NodeJS.ProcessEnv = process.env): ServerCo
     mfaEnforced,
     ssrfPolicy,
     tunnel: loadTunnelConfig(env, databaseUrl),
+    rest: { maxWaitSeconds: positiveInteger(env, 'MAX_WAIT_SECONDS', 25, 25), maxConcurrentRuns: positiveInteger(env, 'MAX_CONCURRENT_RUNS', 50, 100_000) },
   };
 }

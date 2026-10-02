@@ -53,6 +53,8 @@ des cinq premières est posée. Une autorité de certification privée pour Post
 
 | Variable | Lue par | Statut | Défaut | Rôle |
 |---|---|---|---|---|
+| `MAX_WAIT_SECONDS` | server | facultative | 25 | Plafond, en secondes, de l’attente synchrone d’un appel REST ou MCP (paramètre `wait`, 1 à 25) ; au-delà, l’appel rend un run à suivre (202). |
+| `MAX_CONCURRENT_RUNS` | server | facultative | 50 | Runs actifs (en file ou en cours) de l’instance au-delà desquels une création de run ou d’API répond 429 `queue_full` avec `Retry-After` (valeur à valider en recette). |
 | `WORKER_CONCURRENCY` | worker, CLI | facultative | 5 | Jobs sans navigateur en parallèle par worker (inférieur ou égal à `DB_POOL_MAX`). |
 | `BROWSER_CONCURRENCY` | worker | facultative | déduit de la mémoire du conteneur | Runs navigateur simultanés par worker (1 à 32). Dimensionnement : 2 Go de mémoire pour 1 run navigateur, 4 Go pour 2. |
 | `DISABLE_BROWSER` | worker | facultative | false | `true` : aucun Chromium, les exécuteurs navigateur sont refusés. |

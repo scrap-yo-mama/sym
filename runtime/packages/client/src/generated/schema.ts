@@ -1319,6 +1319,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/me/responsible-use": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Case « j'ai lu » de la page « Usage responsable » (17 § 11) ; extension de 05 § 4.2 */
+        get: operations["getResponsibleUseAck"];
+        put?: never;
+        /** Coche « j'ai lu » ; sans elle, une API à champ `x-personal` est refusée (403 `responsible_use_ack_required`) */
+        post: operations["acknowledgeResponsibleUse"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/audit": {
         parameters: {
             query?: never;
@@ -1779,10 +1797,10 @@ export interface components {
             };
         };
         /**
-         * @description Noms d'événements du flux SSE (06 § 3). Toute trame porte `id:` (reprise par `Last-Event-ID`), `event:` et `data:` (JSON). Un nom ajouté par le serveur (3.1) s'ajoute ici.
+         * @description Noms d'événements du flux SSE (06 § 3). Toute trame porte `id:` (reprise par `Last-Event-ID`), `event:` et `data:` (JSON). Le récit d'une enquête reprend les noms de `investigation_events` (3.1) ; `status.changed` vient aussi de `status_events` et `run.finished` de la fin d'un run. La charge porte `run_id`, `api_id` et `api_slug`.
          * @enum {string}
          */
-        EventName: "investigation.started" | "phase.started" | "schema.proposed" | "attempt.finished" | "status.changed" | "action.required";
+        EventName: "investigation.started" | "access_report" | "phase.started" | "reconnaissance.finished" | "schema.proposed" | "schema.validated" | "attempt.finished" | "attempt.pruned" | "status.changed" | "action.required" | "investigation.finished" | "run.finished";
         /** @description Coût en dollars ; `null` quand le prix est inconnu (jamais 0 par défaut, 08 § 1). */
         Cost: {
             llm_usd: number | null;
@@ -1805,8 +1823,15 @@ export interface components {
         /** @description Modes réseau autorisés pour l'API ; `res_proxy` est un opt-in explicite par API. Une API ne référence un proxy que par son identifiant (08 § 2). Jamais de montée réseau après un refus (X4). */
         NetworkPolicy: {
             allow: components["schemas"]["Network"][];
-            proxy_ids?: string[];
+            /** @description Proxy choisi par niveau, par son identifiant (à défaut, le premier proxy du type). */
+            proxy_ids?: {
+                dc_proxy?: string;
+                res_proxy?: string;
+            };
             res_proxy_params?: {
+                country?: string;
+            };
+            dc_proxy_params?: {
                 country?: string;
             };
         };
@@ -1959,7 +1984,7 @@ export interface components {
             /** Format: uuid */
             run_id?: string | null;
         };
-        /** @description Champs modifiables. Changer `output_schema` ou `input_schema` déclenche une ré-enquête. `access_policy` n'est pas modifiable (INV11) ; une API avec session reste `private`. */
+        /** @description Champs modifiables. Un schéma (`output_schema`, `input_schema`) ne change que par un brouillon puis une promotion (19 § 6, itération) : en place, 409 `draft_required`. `access_policy` n'est pas modifiable (INV11) ; une API avec session reste `private` (400 `session_api_private`). */
         ApiPatch: {
             description?: string;
             input_schema?: {
@@ -1980,7 +2005,6 @@ export interface components {
             contains_personal_data?: boolean;
             max_cost_usd?: number | null;
             budget_daily_usd?: number | null;
-            retention_days?: number | null;
         };
         /** @description Export portable d'une API (16 § 6), sans secret, session ni cookie ; format figé par la tâche 3.12. */
         ApiExport: {
@@ -2000,7 +2024,6 @@ export interface components {
             wait_seconds?: number;
         };
         InvestigateRequest: {
-            note?: string;
             /** @description Plan d'essais restreint avant exécution (06 § 2), dans les bornes de la politique réseau. */
             exclude_executions?: components["schemas"]["Execution"][];
         };
@@ -2288,7 +2311,8 @@ export interface components {
             id: string;
             /** Format: date-time */
             at: string;
-            event: components["schemas"]["WebhookEvent"];
+            /** @description Événement livré (`WebhookEvent`), ou `webhook.test` pour le bouton Tester. */
+            event: string;
             attempt: number;
             status_code: number | null;
             duration_ms: number | null;
@@ -2313,6 +2337,7 @@ export interface components {
             /** Format: uri */
             url: string;
             events: components["schemas"]["WebhookEvent"][];
+            /** @description API dont les événements sont livrés ; absent ou null, toutes les API du propriétaire. */
             api_slug?: string | null;
         };
         WebhookSubscriptionPatch: {
@@ -2729,6 +2754,13 @@ export interface components {
             /** @description Code TOTP ou code de secours. */
             code: string;
         };
+        ResponsibleUseAck: {
+            version: string;
+            /** Format: date-time */
+            acknowledged_at: string | null;
+            /** @description Vrai tant que la version courante n'est pas cochée (la console affiche alors la page). */
+            required: boolean;
+        };
         /** @enum {string} */
         AuditOutcome: "success" | "denied" | "error";
         /** @description Événement d'audit ; `meta` ne contient ni secret, ni cookie, ni contenu, ni argument d'outil. */
@@ -2760,9 +2792,16 @@ export interface components {
             identifier: string;
             /** @enum {string} */
             kind?: "email" | "phone" | "other";
+            /**
+             * @description `own` : les données de l'appelant (contenu compris) ; `instance` : toute l'instance, réservé à l'admin et à l'owner, qui n'obtiennent que des métadonnées et les valeurs identifiantes (INV5). Défaut : `instance` pour l'admin, `own` pour un membre.
+             * @enum {string}
+             */
+            scope?: "own" | "instance";
         };
         SubjectEraseRequest: components["schemas"]["SubjectRequest"] & {
             dry_run: boolean;
+            /** @description Empreinte rendue par l'aperçu (`dry_run` à true), exigée pour effacer (sinon 409 `confirmation_required`). */
+            confirmation?: string;
         };
         SubjectEraseResult: {
             dry_run: boolean;
@@ -2772,17 +2811,36 @@ export interface components {
             };
             /** @description Ajoutée à la liste d'exclusion hachée (faux en aperçu). */
             excluded: boolean;
+            /** @description Aperçu seulement - empreinte du plan, à renvoyer pour effacer. */
+            confirmation?: string;
         };
+        /** @description Ce que l'instance détient sur la personne dans la portée (1.8, D-26) : items, runs, journaux, événements d'enquête, artefacts. Contenu rendu au seul propriétaire des données (`content: true`), métadonnées sinon. */
         SubjectExport: {
             identifier: string;
-            occurrences: {
-                /** Format: uuid */
-                dataset_id: string;
-                api_slug: string;
-                item: {
-                    [key: string]: unknown;
-                };
+            /** Format: date-time */
+            generated_at: string;
+            /** @enum {string} */
+            scope: "owner" | "instance";
+            content: boolean;
+            subject_hashes: string[];
+            excluded: boolean;
+            dataset_items: {
+                [key: string]: unknown;
             }[];
+            runs: {
+                [key: string]: unknown;
+            }[];
+            run_logs: {
+                [key: string]: unknown;
+            }[];
+            investigation_events: {
+                [key: string]: unknown;
+            }[];
+            run_artifacts: {
+                [key: string]: unknown;
+            }[];
+        } & {
+            [key: string]: unknown;
         };
         PairingCode: {
             /** @description Code à usage unique, valable 10 minutes. */
@@ -3542,6 +3600,7 @@ export interface operations {
             403: components["responses"]["Error"];
             409: components["responses"]["Error"];
             429: components["responses"]["QueueFull"];
+            507: components["responses"]["Error"];
         };
     };
     importApi: {
@@ -3655,6 +3714,7 @@ export interface operations {
             401: components["responses"]["Error"];
             403: components["responses"]["Error"];
             404: components["responses"]["Error"];
+            409: components["responses"]["Error"];
         };
     };
     updateApi: {
@@ -3685,6 +3745,7 @@ export interface operations {
             401: components["responses"]["Error"];
             403: components["responses"]["Error"];
             404: components["responses"]["Error"];
+            409: components["responses"]["Error"];
         };
     };
     runApi: {
@@ -3721,6 +3782,7 @@ export interface operations {
             404: components["responses"]["Error"];
             409: components["responses"]["Error"];
             429: components["responses"]["QueueFull"];
+            507: components["responses"]["Error"];
         };
     };
     reinvestigateApi: {
@@ -3739,6 +3801,7 @@ export interface operations {
         };
         responses: {
             202: components["responses"]["Accepted"];
+            400: components["responses"]["Error"];
             401: components["responses"]["Error"];
             403: components["responses"]["Error"];
             404: components["responses"]["Error"];
@@ -3873,6 +3936,7 @@ export interface operations {
                     "application/json": components["schemas"]["StrategyDiff"];
                 };
             };
+            400: components["responses"]["Error"];
             401: components["responses"]["Error"];
             404: components["responses"]["Error"];
         };
@@ -4211,6 +4275,7 @@ export interface operations {
             };
             401: components["responses"]["Error"];
             404: components["responses"]["Error"];
+            429: components["responses"]["Error"];
         };
     };
     listRunLogs: {
@@ -4244,8 +4309,10 @@ export interface operations {
         parameters: {
             query?: {
                 format?: "json" | "ndjson" | "csv";
+                /** @description Curseur opaque du dernier item servi (`next_cursor`, ou en-tête `X-Next-Cursor`). */
                 after?: string;
-                limit?: components["parameters"]["Limit"];
+                /** @description Nombre maximal d'items ; absent, l'export va jusqu'au bout du dataset, en flux. */
+                limit?: number;
                 /** @description Champs à garder, séparés par des virgules. */
                 fields?: string;
                 /** @description Champs à retirer, séparés par des virgules. */
@@ -4260,9 +4327,11 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Items. */
+            /** @description Items, écrits en flux (mémoire bornée) ; pièce jointe avec `nosniff` pour un export. CSV : cellules qui commencent par =, +, -, @, tabulation ou retour chariot préfixées d'une apostrophe (08b § 2). */
             200: {
                 headers: {
+                    /** @description Curseur de la suite quand `limit` arrête la page avant la fin du dataset. */
+                    "X-Next-Cursor"?: string;
                     [name: string]: unknown;
                 };
                 content: {
@@ -4499,6 +4568,7 @@ export interface operations {
             400: components["responses"]["Error"];
             401: components["responses"]["Error"];
             403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
         };
     };
     listProxies: {
@@ -5438,6 +5508,56 @@ export interface operations {
             401: components["responses"]["Error"];
         };
     };
+    getResponsibleUseAck: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Version courante de la page et date de lecture. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResponsibleUseAck"];
+                };
+            };
+            401: components["responses"]["Error"];
+        };
+    };
+    acknowledgeResponsibleUse: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    version: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Lecture enregistrée. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResponsibleUseAck"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+        };
+    };
     listAuditEvents: {
         parameters: {
             query?: {
@@ -5520,6 +5640,7 @@ export interface operations {
             400: components["responses"]["Error"];
             401: components["responses"]["Error"];
             403: components["responses"]["Error"];
+            409: components["responses"]["Error"];
         };
     };
     exportSubject: {

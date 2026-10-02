@@ -404,6 +404,9 @@ importers:
       '@runtime/db':
         specifier: workspace:*
         version: link:../../packages/db
+      '@runtime/llm':
+        specifier: workspace:*
+        version: link:../../packages/llm
       '@runtime/schemas':
         specifier: workspace:*
         version: link:../../packages/schemas

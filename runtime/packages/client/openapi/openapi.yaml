@@ -373,7 +373,6 @@ paths:
           $ref: '#/components/responses/Error'
   /api/events:
     get:
-      x-pending: '3.1'
       operationId: streamEvents
       tags: [events]
       summary: Flux SSE multiplexé, un seul par onglet (06 § 3)
@@ -444,7 +443,6 @@ paths:
                 $ref: '#/components/schemas/ProtectedResourceMetadata'
   /api/openapi.json:
     get:
-      x-pending: '3.1'
       operationId: getOpenApi
       tags: [system]
       summary: OpenAPI 3.1 livrée par le serveur (05 § 2) ; comparée à ce fichier par le test de dérive (15 § 6, tâche 3.6)
@@ -471,7 +469,6 @@ paths:
                 $ref: '#/components/schemas/SsoPublic'
   /api/apis:
     get:
-      x-pending: '3.1'
       operationId: listApis
       tags: [apis]
       summary: Catalogue (= list_apis), pagination serveur, filtres par statut, exécution et réseau, recherche (06 § 2)
@@ -509,7 +506,6 @@ paths:
         '403':
           $ref: '#/components/responses/Error'
     post:
-      x-pending: '3.1'
       operationId: createApi
       tags: [apis]
       summary: Crée une API (= create_api) ; lance l'enquête, rapport d'accès en étape 0 (17 § 2)
@@ -522,6 +518,8 @@ paths:
             schema:
               $ref: '#/components/schemas/ApiCreate'
       responses:
+        '507':
+          $ref: '#/components/responses/Error'
         '201':
           description: API créée ; schéma proposé à valider, ou résultat de run si `auto_validate`.
           content:
@@ -571,7 +569,6 @@ paths:
           $ref: '#/components/responses/Error'
   /api/apis/{id}/validate-schema:
     post:
-      x-pending: '3.1'
       operationId: validateSchema
       tags: [apis]
       summary: Valide (ou corrige) le schéma de sortie proposé (= validate_schema)
@@ -605,7 +602,6 @@ paths:
           $ref: '#/components/responses/Error'
   /api/apis/{slug}:
     get:
-      x-pending: '3.1'
       operationId: getApi
       tags: [apis]
       summary: Fiche d'une API (= get_api) ; métadonnées seules pour l'admin sur une API avec session d'autrui
@@ -630,7 +626,6 @@ paths:
         '404':
           $ref: '#/components/responses/Error'
     patch:
-      x-pending: '3.1'
       operationId: updateApi
       tags: [apis]
       summary: Modifie description, politiques, schémas (→ ré-enquête), exposition MCP ; aucun réglage robots.txt (INV11)
@@ -643,6 +638,8 @@ paths:
             schema:
               $ref: '#/components/schemas/ApiPatch'
       responses:
+        '409':
+          $ref: '#/components/responses/Error'
         '200':
           description: Fiche à jour.
           content:
@@ -658,13 +655,14 @@ paths:
         '404':
           $ref: '#/components/responses/Error'
     delete:
-      x-pending: '3.1'
       operationId: deleteApi
       tags: [apis]
       summary: Supprime une API
       parameters:
         - $ref: '#/components/parameters/Slug'
       responses:
+        '409':
+          $ref: '#/components/responses/Error'
         '204':
           description: Supprimée.
         '401':
@@ -675,7 +673,6 @@ paths:
           $ref: '#/components/responses/Error'
   /api/apis/{slug}/runs:
     post:
-      x-pending: '3.1'
       operationId: runApi
       tags: [runs]
       summary: Lance un run (= run_api) ; synchrone jusqu'à `wait` secondes, sinon run à suivre (05 § 4.3)
@@ -689,6 +686,8 @@ paths:
             schema:
               $ref: '#/components/schemas/RunRequest'
       responses:
+        '507':
+          $ref: '#/components/responses/Error'
         '200':
           description: Run terminé (y compris dégradé, ou en échec de budget).
           content:
@@ -711,7 +710,6 @@ paths:
           $ref: '#/components/responses/QueueFull'
   /api/apis/{slug}/investigate:
     post:
-      x-pending: '3.1'
       operationId: reinvestigateApi
       tags: [apis]
       summary: Ré-enquête manuelle (transitions 17 et 18) ; seule reprise offerte à une API `bloquee`
@@ -724,6 +722,8 @@ paths:
             schema:
               $ref: '#/components/schemas/InvestigateRequest'
       responses:
+        '400':
+          $ref: '#/components/responses/Error'
         '202':
           $ref: '#/components/responses/Accepted'
         '401':
@@ -779,7 +779,6 @@ paths:
           $ref: '#/components/responses/Error'
   /api/apis/{slug}/versions:
     get:
-      x-pending: '3.1'
       operationId: listStrategyVersions
       tags: [apis]
       summary: Versions de stratégie (onglet « Stratégie & versions », 06 § 2) ; extension de 05 § 4.2
@@ -800,7 +799,6 @@ paths:
           $ref: '#/components/responses/Error'
   /api/apis/{slug}/versions/{version}:
     get:
-      x-pending: '3.1'
       operationId: getStrategyVersion
       tags: [apis]
       summary: Une version de stratégie, spécification déclarative ou référence de script (lecture seule)
@@ -820,7 +818,6 @@ paths:
           $ref: '#/components/responses/Error'
   /api/apis/{slug}/versions/{version}/diff:
     get:
-      x-pending: '3.1'
       operationId: diffStrategyVersions
       tags: [apis]
       summary: Diff à trois niveaux (phrase en code stable, champs modifiés, brut) entre deux versions (06 § 2)
@@ -840,13 +837,14 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/StrategyDiff'
+        '400':
+          $ref: '#/components/responses/Error'
         '401':
           $ref: '#/components/responses/Error'
         '404':
           $ref: '#/components/responses/Error'
   /api/apis/{slug}/versions/{version}/revert:
     post:
-      x-pending: '3.1'
       operationId: revertStrategyVersion
       tags: [apis]
       summary: Revient à cette version (l'API bascule en `warning`, raison `reverted`, transitions 7 ou 8)
@@ -870,7 +868,6 @@ paths:
           $ref: '#/components/responses/Error'
   /api/apis/{slug}/status-events:
     get:
-      x-pending: '3.1'
       operationId: listStatusEvents
       tags: [apis]
       summary: Chronologie des transitions de statut (onglet « Bugs & statut », 06 § 2) ; extension de 05 § 4.2
@@ -891,7 +888,6 @@ paths:
           $ref: '#/components/responses/Error'
   /api/apis/{slug}/schedules:
     get:
-      x-pending: '3.1'
       operationId: listSchedules
       tags: [schedules]
       summary: Planifications d'une API (08 § 5)
@@ -911,7 +907,6 @@ paths:
         '404':
           $ref: '#/components/responses/Error'
     post:
-      x-pending: '3.1'
       operationId: createSchedule
       tags: [schedules]
       summary: Crée une planification (fréquence minimale 1 minute)
@@ -940,7 +935,6 @@ paths:
           $ref: '#/components/responses/Error'
   /api/apis/{slug}/schedules/{id}:
     get:
-      x-pending: '3.1'
       operationId: getSchedule
       tags: [schedules]
       summary: Une planification, avec ses prochaines exécutions calculées côté serveur
@@ -959,7 +953,6 @@ paths:
         '404':
           $ref: '#/components/responses/Error'
     patch:
-      x-pending: '3.1'
       operationId: updateSchedule
       tags: [schedules]
       summary: Modifie une planification (dont la suspension)
@@ -988,7 +981,6 @@ paths:
         '404':
           $ref: '#/components/responses/Error'
     delete:
-      x-pending: '3.1'
       operationId: deleteSchedule
       tags: [schedules]
       summary: Supprime une planification
@@ -1006,7 +998,6 @@ paths:
           $ref: '#/components/responses/Error'
   /api/runs:
     get:
-      x-pending: '3.1'
       operationId: listRuns
       tags: [runs]
       summary: « Tous les runs » et historique d'une API, filtrables, pagination serveur (06 § 2) ; extension de 05 § 4.2
@@ -1051,7 +1042,6 @@ paths:
           $ref: '#/components/responses/Error'
   /api/runs/{id}:
     get:
-      x-pending: '3.1'
       operationId: getRun
       tags: [runs]
       summary: Un run (= get_run) ; l'admin n'obtient que les métadonnées d'un run avec session d'autrui
@@ -1072,7 +1062,6 @@ paths:
           $ref: '#/components/responses/Error'
   /api/runs/{id}/cancel:
     post:
-      x-pending: '3.1'
       operationId: cancelRun
       tags: [runs]
       summary: Arrête un run ou une enquête (= cancel_run), essais et coûts engagés conservés
@@ -1096,7 +1085,6 @@ paths:
   /api/runs/{id}/pause:
     post:
       # Extension de 05 § 4.2 (tâche 3.5) : 06 § 2 offre « Pause » et « Arrêter » sur une enquête ; 05 ne nomme que cancel et resume.
-      x-pending: '3.1'
       operationId: pauseRun
       tags: [runs]
       summary: Met en pause une enquête ou un run en cours (action de l'utilisateur) ; essais et coûts engagés conservés, reprise par `resume`
@@ -1115,7 +1103,6 @@ paths:
           $ref: '#/components/responses/Error'
   /api/runs/{id}/resume:
     post:
-      x-pending: '3.1'
       operationId: resumeRun
       tags: [runs]
       summary: Reprend un run en pause (action de l'utilisateur ; jamais en réponse à une vérification)
@@ -1134,7 +1121,6 @@ paths:
           $ref: '#/components/responses/Error'
   /api/runs/{id}/events:
     get:
-      x-pending: '3.1'
       operationId: streamRunEvents
       tags: [events]
       summary: Vue filtrée du flux SSE pour un run ou une enquête, rejouée depuis `investigation_events`
@@ -1146,6 +1132,8 @@ paths:
           schema:
             type: string
       responses:
+        '429':
+          $ref: '#/components/responses/Error'
         '200':
           description: Flux d'événements (mêmes trames que `/api/events`).
           content:
@@ -1158,7 +1146,6 @@ paths:
           $ref: '#/components/responses/Error'
   /api/runs/{id}/logs:
     get:
-      x-pending: '3.1'
       operationId: listRunLogs
       tags: [runs]
       summary: Journal d'un run (`run_logs`, vue Technique de 06 § 2) ; extension de 05 § 4.2
@@ -1183,7 +1170,6 @@ paths:
           $ref: '#/components/responses/Error'
   /api/datasets/{id}/items:
     get:
-      x-pending: '3.1'
       operationId: getDatasetItems
       tags: [datasets]
       summary: Items d'un dataset, exportés en flux (JSON, NDJSON, CSV à cellules neutralisées), curseur `after`
@@ -1197,9 +1183,16 @@ paths:
             default: json
         - name: after
           in: query
+          description: Curseur opaque du dernier item servi (`next_cursor`, ou en-tête `X-Next-Cursor`).
           schema:
             type: string
-        - $ref: '#/components/parameters/Limit'
+        - name: limit
+          in: query
+          description: Nombre maximal d'items ; absent, l'export va jusqu'au bout du dataset, en flux.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100000
         - name: fields
           in: query
           description: Champs à garder, séparés par des virgules.
@@ -1217,7 +1210,14 @@ paths:
             format: date-time
       responses:
         '200':
-          description: Items.
+          description: >-
+            Items, écrits en flux (mémoire bornée) ; pièce jointe avec `nosniff` pour un export. CSV : cellules qui
+            commencent par =, +, -, @, tabulation ou retour chariot préfixées d'une apostrophe (08b § 2).
+          headers:
+            X-Next-Cursor:
+              description: Curseur de la suite quand `limit` arrête la page avant la fin du dataset.
+              schema:
+                type: string
           content:
             application/json:
               schema:
@@ -1238,7 +1238,6 @@ paths:
           $ref: '#/components/responses/Error'
   /api/webhook-subscriptions:
     get:
-      x-pending: '3.1'
       operationId: listWebhookSubscriptions
       tags: [webhooks]
       summary: Abonnements webhook (Standard Webhooks, 08 § 5)
@@ -1254,7 +1253,6 @@ paths:
         '403':
           $ref: '#/components/responses/Error'
     post:
-      x-pending: '3.1'
       operationId: createWebhookSubscription
       tags: [webhooks]
       summary: Crée un abonnement ; l'URL est contrôlée par la garde SSRF, le secret `whsec_` n'apparaît qu'ici
@@ -1279,7 +1277,6 @@ paths:
           $ref: '#/components/responses/Error'
   /api/webhook-subscriptions/{id}:
     get:
-      x-pending: '3.1'
       operationId: getWebhookSubscription
       tags: [webhooks]
       summary: Un abonnement, avec le journal de ses dernières livraisons
@@ -1297,7 +1294,6 @@ paths:
         '404':
           $ref: '#/components/responses/Error'
     patch:
-      x-pending: '3.1'
       operationId: updateWebhookSubscription
       tags: [webhooks]
       summary: Modifie un abonnement (URL, événements, réactivation, rotation du secret)
@@ -1323,7 +1319,6 @@ paths:
         '404':
           $ref: '#/components/responses/Error'
     delete:
-      x-pending: '3.1'
       operationId: deleteWebhookSubscription
       tags: [webhooks]
       summary: Supprime un abonnement
@@ -1338,7 +1333,6 @@ paths:
           $ref: '#/components/responses/Error'
   /api/webhook-subscriptions/{id}/test:
     post:
-      x-pending: '3.1'
       operationId: testWebhookSubscription
       tags: [webhooks]
       summary: Bouton **Tester** (06 § 2, Alertes) ; extension de 05 § 4.2
@@ -1357,8 +1351,9 @@ paths:
           $ref: '#/components/responses/Error'
   /api/settings/llm:
     get:
-      x-pending: '3.1'
       operationId: getLlmSettings
+      security:
+        - sessionCookie: []
       tags: [settings]
       summary: Réglages des modèles IA (08 § 7) ; les clés ne sont jamais relues (INV8)
       responses:
@@ -1373,8 +1368,9 @@ paths:
         '403':
           $ref: '#/components/responses/Error'
     put:
-      x-pending: '3.1'
       operationId: putLlmSettings
+      security:
+        - sessionCookie: []
       tags: [settings]
       summary: Remplace les réglages (admin) ; un secret absent est conservé, un secret fourni est remplacé
       requestBody:
@@ -1398,8 +1394,9 @@ paths:
           $ref: '#/components/responses/Error'
   /api/settings/llm/test:
     post:
-      x-pending: '3.1'
       operationId: testLlmProvider
+      security:
+        - sessionCookie: []
       tags: [settings]
       summary: Sonde de 5 appels minuscules d'un couple fournisseur × modèle (08 § 1) ; extension de 05 § 4.2
       requestBody:
@@ -1409,6 +1406,8 @@ paths:
             schema:
               $ref: '#/components/schemas/LlmProbeRequest'
       responses:
+        '404':
+          $ref: '#/components/responses/Error'
         '200':
           description: Profil de capacités relevé, ou échec lisible.
           content:
@@ -1423,8 +1422,9 @@ paths:
           $ref: '#/components/responses/Error'
   /api/settings/proxies:
     get:
-      x-pending: '3.1'
       operationId: listProxies
+      security:
+        - sessionCookie: []
       tags: [settings]
       summary: Proxys définis par l'admin (08 § 2) ; une API ne référence qu'un identifiant
       responses:
@@ -1439,8 +1439,9 @@ paths:
         '403':
           $ref: '#/components/responses/Error'
     post:
-      x-pending: '3.1'
       operationId: createProxy
+      security:
+        - sessionCookie: []
       tags: [settings]
       summary: Ajoute un proxy (admin)
       requestBody:
@@ -1464,8 +1465,9 @@ paths:
           $ref: '#/components/responses/Error'
   /api/settings/proxies/{id}:
     get:
-      x-pending: '3.1'
       operationId: getProxy
+      security:
+        - sessionCookie: []
       tags: [settings]
       summary: Un proxy, identifiants masqués
       parameters:
@@ -1484,8 +1486,9 @@ paths:
         '404':
           $ref: '#/components/responses/Error'
     patch:
-      x-pending: '3.1'
       operationId: updateProxy
+      security:
+        - sessionCookie: []
       tags: [settings]
       summary: Modifie un proxy (admin) ; un identifiant absent est conservé
       parameters:
@@ -1512,8 +1515,9 @@ paths:
         '404':
           $ref: '#/components/responses/Error'
     delete:
-      x-pending: '3.1'
       operationId: deleteProxy
+      security:
+        - sessionCookie: []
       tags: [settings]
       summary: Supprime un proxy (admin)
       parameters:
@@ -1531,8 +1535,9 @@ paths:
           $ref: '#/components/responses/Error'
   /api/settings/proxies/{id}/test:
     post:
-      x-pending: '3.1'
       operationId: testProxy
+      security:
+        - sessionCookie: []
       tags: [settings]
       summary: Bouton **Tester** d'un proxy (IP et pays de sortie, 06 § 2) ; extension de 05 § 4.2
       parameters:
@@ -1552,8 +1557,9 @@ paths:
           $ref: '#/components/responses/Error'
   /api/settings/smtp:
     get:
-      x-pending: '3.1'
       operationId: getSmtpSettings
+      security:
+        - sessionCookie: []
       tags: [settings]
       summary: Réglages SMTP (alertes, invitations) ; mot de passe jamais relu
       responses:
@@ -1570,8 +1576,9 @@ paths:
         '403':
           $ref: '#/components/responses/Error'
     put:
-      x-pending: '3.1'
       operationId: putSmtpSettings
+      security:
+        - sessionCookie: []
       tags: [settings]
       summary: Remplace les réglages SMTP (admin) ; un secret absent est conservé
       requestBody:
@@ -1595,8 +1602,9 @@ paths:
           $ref: '#/components/responses/Error'
   /api/settings/smtp/test:
     post:
-      x-pending: '3.1'
       operationId: testSmtp
+      security:
+        - sessionCookie: []
       tags: [settings]
       summary: Bouton **Tester** du SMTP (06 § 2, Alertes) ; extension de 05 § 4.2
       requestBody:
@@ -2257,6 +2265,53 @@ paths:
                 $ref: '#/components/schemas/AuditEventList'
         '401':
           $ref: '#/components/responses/Error'
+  /api/me/responsible-use:
+    get:
+      operationId: getResponsibleUseAck
+      security:
+        - sessionCookie: []
+      tags: [account]
+      summary: Case « j'ai lu » de la page « Usage responsable » (17 § 11) ; extension de 05 § 4.2
+      responses:
+        '200':
+          description: Version courante de la page et date de lecture.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResponsibleUseAck'
+        '401':
+          $ref: '#/components/responses/Error'
+    post:
+      operationId: acknowledgeResponsibleUse
+      security:
+        - sessionCookie: []
+      tags: [account]
+      summary: Coche « j'ai lu » ; sans elle, une API à champ `x-personal` est refusée (403 `responsible_use_ack_required`)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [version]
+              properties:
+                version:
+                  type: string
+                  maxLength: 32
+      responses:
+        '200':
+          description: Lecture enregistrée.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResponsibleUseAck'
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
   /api/audit:
     get:
       operationId: listAuditEvents
@@ -2334,8 +2389,9 @@ paths:
           $ref: '#/components/responses/Error'
   /api/subjects/erase:
     post:
-      x-pending: '3.1'
       operationId: eraseSubject
+      security:
+        - sessionCookie: []
       tags: [subjects]
       summary: Effacement d'une personne (RGPD, 17 § 6), aperçu `dry_run` d'abord ; admin, audité
       requestBody:
@@ -2345,6 +2401,8 @@ paths:
             schema:
               $ref: '#/components/schemas/SubjectEraseRequest'
       responses:
+        '409':
+          $ref: '#/components/responses/Error'
         '200':
           description: Comptes par table (aperçu ou effacement réalisé).
           content:
@@ -2359,8 +2417,9 @@ paths:
           $ref: '#/components/responses/Error'
   /api/subjects/export:
     post:
-      x-pending: '3.1'
       operationId: exportSubject
+      security:
+        - sessionCookie: []
       tags: [subjects]
       summary: Export des données d'une personne (droit d'accès, 17 § 6) ; admin, audité
       requestBody:
@@ -2386,8 +2445,9 @@ paths:
     post:
       # Route nommée par 05 § 4.2 et 07 § 1. La tâche 2.6 a livré le même service sous POST /api/extension/pairing-codes
       # (corps camelCase) : 3.1 tranche (alias de la route du CDC ou mise à jour du CDC) puis retire cette entrée.
-      x-pending: '3.1'
       operationId: createPairingCode
+      security:
+        - sessionCookie: []
       tags: [tunnel]
       summary: Code d'appairage de l'extension, usage unique, 10 minutes (07 § 1) ; session récente exigée
       requestBody:
@@ -3141,9 +3201,22 @@ components:
     EventName:
       description: >-
         Noms d'événements du flux SSE (06 § 3). Toute trame porte `id:` (reprise par `Last-Event-ID`), `event:` et
-        `data:` (JSON). Un nom ajouté par le serveur (3.1) s'ajoute ici.
+        `data:` (JSON). Le récit d'une enquête reprend les noms de `investigation_events` (3.1) ; `status.changed` vient
+        aussi de `status_events` et `run.finished` de la fin d'un run. La charge porte `run_id`, `api_id` et `api_slug`.
       type: string
-      enum: [investigation.started, phase.started, schema.proposed, attempt.finished, status.changed, action.required]
+      enum:
+        - investigation.started
+        - access_report
+        - phase.started
+        - reconnaissance.finished
+        - schema.proposed
+        - schema.validated
+        - attempt.finished
+        - attempt.pruned
+        - status.changed
+        - action.required
+        - investigation.finished
+        - run.finished
     # ——— Objets communs ———
     Cost:
       description: Coût en dollars ; `null` quand le prix est inconnu (jamais 0 par défaut, 08 § 1).
@@ -3199,11 +3272,24 @@ components:
           items:
             $ref: '#/components/schemas/Network'
         proxy_ids:
-          type: array
-          items:
-            type: string
-            format: uuid
+          description: Proxy choisi par niveau, par son identifiant (à défaut, le premier proxy du type).
+          type: object
+          additionalProperties: false
+          properties:
+            dc_proxy:
+              type: string
+              maxLength: 64
+            res_proxy:
+              type: string
+              maxLength: 64
         res_proxy_params:
+          type: object
+          additionalProperties: false
+          properties:
+            country:
+              type: string
+              pattern: '^[a-z]{2}$'
+        dc_proxy_params:
           type: object
           additionalProperties: false
           properties:
@@ -3514,8 +3600,9 @@ components:
           format: uuid
     ApiPatch:
       description: >-
-        Champs modifiables. Changer `output_schema` ou `input_schema` déclenche une ré-enquête. `access_policy` n'est pas
-        modifiable (INV11) ; une API avec session reste `private`.
+        Champs modifiables. Un schéma (`output_schema`, `input_schema`) ne change que par un brouillon puis une promotion
+        (19 § 6, itération) : en place, 409 `draft_required`. `access_policy` n'est pas modifiable (INV11) ; une API avec
+        session reste `private` (400 `session_api_private`).
       type: object
       additionalProperties: false
       minProperties: 1
@@ -3560,9 +3647,6 @@ components:
         budget_daily_usd:
           type: [number, 'null']
           minimum: 0
-        retention_days:
-          type: [integer, 'null']
-          minimum: 1
     ApiExport:
       description: Export portable d'une API (16 § 6), sans secret, session ni cookie ; format figé par la tâche 3.12.
       type: object
@@ -3595,9 +3679,6 @@ components:
       type: object
       additionalProperties: false
       properties:
-        note:
-          type: string
-          maxLength: 2000
         exclude_executions:
           description: Plan d'essais restreint avant exécution (06 § 2), dans les bornes de la politique réseau.
           type: array
@@ -4158,7 +4239,8 @@ components:
           type: string
           format: date-time
         event:
-          $ref: '#/components/schemas/WebhookEvent'
+          description: Événement livré (`WebhookEvent`), ou `webhook.test` pour le bouton Tester.
+          type: string
         attempt:
           type: integer
         status_code:
@@ -4212,6 +4294,7 @@ components:
           items:
             $ref: '#/components/schemas/WebhookEvent'
         api_slug:
+          description: API dont les événements sont livrés ; absent ou null, toutes les API du propriétaire.
           type: [string, 'null']
     WebhookSubscriptionPatch:
       type: object
@@ -5135,6 +5218,19 @@ components:
           description: Code TOTP ou code de secours.
           type: string
           maxLength: 32
+    ResponsibleUseAck:
+      type: object
+      additionalProperties: false
+      required: [version, acknowledged_at, required]
+      properties:
+        version:
+          type: string
+        acknowledged_at:
+          type: [string, 'null']
+          format: date-time
+        required:
+          description: Vrai tant que la version courante n'est pas cochée (la console affiche alors la page).
+          type: boolean
     AuditOutcome:
       type: string
       enum: [success, denied, error]
@@ -5196,6 +5292,13 @@ components:
         kind:
           type: string
           enum: [email, phone, other]
+        scope:
+          description: >-
+            `own` : les données de l'appelant (contenu compris) ; `instance` : toute l'instance, réservé à l'admin et à
+            l'owner, qui n'obtiennent que des métadonnées et les valeurs identifiantes (INV5). Défaut : `instance` pour
+            l'admin, `own` pour un membre.
+          type: string
+          enum: [own, instance]
     SubjectEraseRequest:
       allOf:
         - $ref: '#/components/schemas/SubjectRequest'
@@ -5204,6 +5307,10 @@ components:
           properties:
             dry_run:
               type: boolean
+            confirmation:
+              description: Empreinte rendue par l'aperçu (`dry_run` à true), exigée pour effacer (sinon 409 `confirmation_required`).
+              type: string
+              maxLength: 128
     SubjectEraseResult:
       type: object
       additionalProperties: false
@@ -5219,28 +5326,58 @@ components:
         excluded:
           description: Ajoutée à la liste d'exclusion hachée (faux en aperçu).
           type: boolean
+        confirmation:
+          description: Aperçu seulement - empreinte du plan, à renvoyer pour effacer.
+          type: string
     SubjectExport:
+      description: >-
+        Ce que l'instance détient sur la personne dans la portée (1.8, D-26) : items, runs, journaux, événements d'enquête,
+        artefacts. Contenu rendu au seul propriétaire des données (`content: true`), métadonnées sinon.
       type: object
-      additionalProperties: false
-      required: [identifier, occurrences]
+      additionalProperties: true
+      required: [identifier, generated_at, scope, content, subject_hashes, excluded, dataset_items, runs, run_logs, investigation_events, run_artifacts]
       properties:
         identifier:
           type: string
-        occurrences:
+        generated_at:
+          type: string
+          format: date-time
+        scope:
+          type: string
+          enum: [owner, instance]
+        content:
+          type: boolean
+        subject_hashes:
+          type: array
+          items:
+            type: string
+        excluded:
+          type: boolean
+        dataset_items:
           type: array
           items:
             type: object
-            additionalProperties: false
-            required: [dataset_id, api_slug, item]
-            properties:
-              dataset_id:
-                type: string
-                format: uuid
-              api_slug:
-                type: string
-              item:
-                type: object
-                additionalProperties: true
+            additionalProperties: true
+        runs:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        run_logs:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        investigation_events:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        run_artifacts:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
     PairingCode:
       type: object
       additionalProperties: false

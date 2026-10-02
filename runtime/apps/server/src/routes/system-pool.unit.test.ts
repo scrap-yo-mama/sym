@@ -30,6 +30,13 @@ const EXCEPTIONS: Record<string, string> = {
   'extension.ts|SELECT 1 FROM site_sessions WHERE id = $1': 'audit denied',
   // Secret du client OIDC remplacé par l'owner (tâche 3.7) : secret d'INSTANCE (owner_id NULL), jamais celui d'un membre.
   'sso.ts|DELETE FROM secrets WHERE id = $1 AND owner_id IS NULL': 'secret d’instance remplacé',
+  // Réglages d’instance de l’admin (tâche 3.1) : secrets d’INSTANCE seulement (owner_id NULL), écriture seule.
+  'settings.ts|DELETE FROM secrets WHERE id = ANY($1::uuid[]) AND owner_id IS NULL': 'secret d’instance remplacé',
+  'settings.ts|SELECT id FROM secrets WHERE id = ANY($1::uuid[]) AND owner_id IS NULL AND state': 'état d’un secret d’instance',
+  // Suppression d’un proxy d’instance : existence d’une API (de tout membre) qui le choisit, réponse 409 sans détail.
+  'settings.ts|SELECT 1 FROM apis WHERE network_policy': 'proxy utilisé (existence)',
+  // Suppression d’une API par son propriétaire (tâche 3.1) : runs actifs de TOUS les membres sur une API instance (existence).
+  'apis.ts|SELECT 1 FROM runs WHERE api_id = $1 AND state IN': 'runs actifs (existence)',
 };
 
 /**
@@ -38,6 +45,7 @@ const EXCEPTIONS: Record<string, string> = {
  * owner_isolation rendrait vides ; chaque requête y filtre par l'identifiant de la cible.
  */
 const SYSTEM_TRANSACTIONS: Record<string, string> = {
+  'apis.ts': 'suppression d’une API par son propriétaire (vérifié) : runs et datasets des membres sur une API instance (tâche 3.1)',
   'auth.ts': 'réinitialisation du mot de passe : lien consommé, mot de passe, révocations du compte (13 § 5)',
   'invitations.ts': 'acceptation : invitation verrouillée, compte et identifiant créés (13 § 6)',
   'sso.ts': 'OIDC : invitation acceptée ou compte créé à la volée (13 § 7)',

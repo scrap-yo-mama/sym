@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Dépendances partagées par les routes.
-import type { Kek, Keyring, MfaEnforced, Secret } from '@runtime/core';
+import type { JobQueue, Kek, Keyring, MfaEnforced, Secret } from '@runtime/core';
 import type { SsrfGuard } from '@runtime/core/net';
-import type { SecretStore } from '@runtime/db';
+import type { KeyCheckResult, SecretStore } from '@runtime/db';
 import type pg from 'pg';
 import type { Auth } from './auth/better-auth.js';
 import type { MetricsCollector } from './metrics.js';
@@ -51,6 +51,27 @@ export type ServerContext = {
   extraCa?: string[];
   /** Tests seulement : IdP OIDC en http (jamais en production : l'issuer doit être https). */
   oidcAllowHttp?: boolean;
+  /** Résultat de keyCheck (posé par finishInit) : clé des sujets (RGPD, 17 § 6) et version de clé. */
+  keyChecked: KeyCheckResult | null;
+  /**
+   * File pg-boss du `server` (tâche 3.1) : démarrée au premier usage (création de run, planification, annulation), sans
+   * supervision ni planificateur (le worker les tient). Les files qu'il alimente sont créées si elles manquent, sans
+   * écraser les réglages du worker.
+   */
+  jobs: () => Promise<JobQueue>;
+  /** Bornes de l'API REST (05 § 2) et du flux SSE (06 § 3). */
+  rest: RestLimits;
+};
+
+type RestLimits = {
+  maxWaitSeconds: number;
+  maxConcurrentRuns: number;
+  /** Période de relecture d'une attente synchrone et du flux SSE (ms). */
+  pollMs: number;
+  /** Commentaire `: ping` du flux SSE (ms, 15 à 20 s en production). */
+  pingMs: number;
+  /** Flux SSE ouverts en même temps par un utilisateur (plafond, 06 § 3). */
+  maxStreamsPerUser: number;
 };
 
 export function initializedProbe(pool: pg.Pool): () => Promise<boolean> {
