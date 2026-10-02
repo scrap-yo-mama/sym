@@ -37,6 +37,8 @@ const steps: Step[] = [
   },
   // Tâche 2.2 : contrat OpenAPI contre les réponses réelles, Schemathesis en image Docker épinglée (réseau hôte).
   { name: 'contrat OpenAPI : Schemathesis (image Docker) contre la passerelle', cmd: ['pnpm', '--filter', '@sym-browser/gateway', 'test:schemathesis'] },
+  // Tâche 3.8 : référence générée (API depuis l'OpenAPI du contrat, configuration depuis le catalogue) à jour.
+  { name: 'docs : référence générée à jour', cmd: ['node', 'modules/browser/scripts/docs-reference.ts', '--check'] },
 ];
 
 // Nœud sur de vrais Chromium 153 (1.1 : pool_no_orphans, kill_on_close_timeout ; 1.3 : shared_context_options,
@@ -52,6 +54,8 @@ if (process.env['CI']) {
   steps.push({ name: 'Chromium de Playwright (CI)', cmd: ['pnpm', '--filter', '@sym-browser/console', 'exec', 'playwright', 'install', '--with-deps', 'chromium'] });
 }
 steps.push({ name: 'console : axe et parcours au clavier, connexion et 6 écrans (Playwright, Chromium)', cmd: ['pnpm', '--filter', '@sym-browser/console', 'test:e2e'] });
+// Tâche 3.8 : quickstart_replayed, le code du démarrage rapide (docs/en/quickstart.md) exécuté tel quel contre une instance.
+if (!skipChromium) steps.push({ name: 'docs : démarrage rapide rejoué de bout en bout', cmd: ['pnpm', '--filter', '@sym-browser/module', 'test:quickstart'] });
 
 if (!process.argv.includes('--skip-image')) {
   steps.push(

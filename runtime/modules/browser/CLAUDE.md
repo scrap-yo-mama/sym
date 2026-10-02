@@ -56,6 +56,7 @@ Contrat : `runtime/packages/contracts` (`@sym/contracts`, MIT, sous-chemin `brow
 - Quotas et file (tâche 2.4) : admission en base `packages/db/src/admission.ts` (file = sessions `pending` sans nœud, verrou consultatif, nœud au plus faible taux d'occupation, poids en unités de `capacity.ts`), côté passerelle `apps/gateway/src/admission/` (`Retry-After`) ; tests `apps/gateway/src/api/quotas.integration.test.ts`.
 - Profils persistants (tâche 3.1) : `packages/core/src/profiles` (archive tar+gzip des seules bases d'état, `ProfileStore`, verrou 409 `profile_locked`), registre PostgreSQL `packages/db/src/profiles.ts`, cycle de vie côté nœud `apps/node/src/profiles` ; recette sur Chromium réel : `profile.chromium.test.ts` (dans `test:chromium`).
 - Observabilité (tâche 3.7) : `packages/core/src/observability/` (registre Prometheus écrit à la main comme SYM, catalogue des 16 métriques de 04d § 3.1, `/metrics` sous `Authorization: Bearer <SYMB_METRICS_TOKEN>`, fermé sans jeton ; journal pino masqué) ; passerelle : `GET /metrics` de l'API ; nœud : `apps/node/src/metrics/` (pont pool, superviseur, egress).
+- Docs (tâche 3.8) : `docs/fr` (tutoiement) et `docs/en`, mêmes pages ; `docs/*/reference/` générée par `pnpm --filter @sym-browser/module docs:reference` (jamais éditée à la main) ; démarrage rapide rejoué tel quel (non root, PostgreSQL) : `pnpm --filter @sym-browser/module test:quickstart` (`quickstart_replayed`). Python : blocs de code dans le Markdown seulement.
 
 ## Versions et dépendances
 
