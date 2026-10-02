@@ -11,7 +11,7 @@
 import { randomUUID } from 'node:crypto';
 import { DomainPacer, generateMasterKey, MasterKey, Secret, validateOutput, type RunExecutor } from '@runtime/core';
 import * as net from '@runtime/core/net';
-import { createRun, keyCheck, migrateUp, PgBossJobQueue, PgPacingStore, readRejectedItems, readRun, runQueueDefinition, withActor } from '@runtime/db';
+import { createRun, keyCheck, migrateUp, PgBossJobQueue, PgPacingStore, putRule, readRejectedItems, readRun, readStrategySource, runQueueDefinition, withActor } from '@runtime/db';
 import { createLlmClient, type LlmConfig } from '@runtime/llm';
 import { createFakeProvider, scripted, type FakeProvider, type ScriptedStep } from '@runtime/llm/testing';
 import pg from 'pg';
@@ -365,5 +365,30 @@ describe('bail de réparation (04 §5)', () => {
     expect((await logEvents(runId)).map((e) => e.event)).toContain('repair_lease_lost');
     // Le bail de l'autre détenteur n'est jamais libéré par ce run.
     expect((await pool.query<{ owner: string | null }>('SELECT repair_lease_owner AS owner FROM apis WHERE id = $1', [apiId])).rows[0]!.owner).toBe('zz_test_thief');
+  });
+});
+
+describe('règles Markdown dans la réparation (tâche 2.10, 18 §4.5)', () => {
+  test('assert_strategy_source_recorded (réparation) — règles injectées dans le prompt `repair` (<trusted_rules>, préfixe stable) ; vN+1 enregistre source.rules et strategy_version_rules, empreintes égales à rule_file_versions', async () => {
+    const apiId = await healthyContacts('zz_test_rules_repair');
+    await putRule(pool, { userId: A, role: 'member', via: 'console' }, {
+      content: `---\nname: zz-contacts-repair\ndescription: Les contacts gardent leurs champs.\nkind: rule\napplies_to: ["${API_HOST}"]\n---\nLe nom complet vit dans full_name quand name disparaît.\n`,
+    });
+    await site('api_json', { mutation: 'rename_field' });
+    fake.setScenario(MODEL, [proposal([{ op: 'replace', path: '/fields/name/path', value: '$.full_name' }])]);
+    const run = await runOf(apiId);
+    expect(run).toMatchObject({ state: 'succeeded', strategy_version: 2 });
+    const system = String((fake.calls[0]!.body as { messages: { role: string; content: unknown }[] }).messages.find((m) => m.role === 'system')?.content);
+    expect(system).toContain('<trusted_rules>');
+    expect(system).toContain('zz-contacts-repair@1 (domain)');
+    expect(system).toContain('escalade-par-defaut@1 (domain)');
+    const source = await readStrategySource(pool, { apiId, ownerId: A, version: 2 });
+    expect(source!.source.reason).toBe('repair');
+    expect(source!.source.rules.map((r) => `${r.name}@${r.version}`).sort()).toEqual(['escalade-par-defaut@1', 'zz-contacts-repair@1']);
+    const { rows } = await pool.query<{ ok: boolean }>(
+      `SELECT bool_and(s.sha256 = v.sha256) AS ok FROM strategy_version_rules s JOIN rule_file_versions v ON v.rule_file_id = s.rule_file_id AND v.version = s.rule_version WHERE s.api_id = $1 AND s.strategy_version = 2`,
+      [apiId],
+    );
+    expect(rows[0]!.ok).toBe(true);
   });
 });
