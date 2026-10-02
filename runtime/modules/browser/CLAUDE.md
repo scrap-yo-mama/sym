@@ -38,6 +38,7 @@ Contrat : `runtime/packages/contracts` (`@sym/contracts`, MIT, sous-chemin `brow
 - Egress par session (BINV2, 04c § 1) : `apps/node/src/egress/` (`startSessionEgress`, garde de résolution unique, arguments figés de Chromium) ; test `assert_session_egress_enforced` sur Chromium et le site de `fixtures/` (0.5).
 - Relais WSS (tâche 2.3) : passerelle `apps/gateway/src/relay/` (authentification à l'upgrade, routage, ping), nœud `apps/node/src/relay/` (NODE_TOKEN, réécritures CDP de 04f § 4) ; bout en bout sur vrai Chromium (non root) : `pnpm --filter @sym-browser/module test:chromium`.
 - Configuration : catalogue `packages/core/src/config/env-catalog.ts` (source unique, secrets `NOM_FILE`) ; config invalide = sortie code 1 nommant la variable ; `node dist/main.js --check-config` valide sans écouter ; `/healthz`, `/readyz`.
+- Docs (tâche 3.8) : `docs/fr` (tutoiement) et `docs/en`, mêmes pages ; `docs/*/reference/` générée par `pnpm --filter @sym-browser/module docs:reference` (jamais éditée à la main) ; démarrage rapide rejoué tel quel (non root, PostgreSQL) : `pnpm --filter @sym-browser/module test:quickstart` (`quickstart_replayed`). Python : blocs de code dans le Markdown seulement.
 
 ## Versions et dépendances
 

@@ -37,6 +37,8 @@ const steps: Step[] = [
   },
   // Tâche 2.2 : contrat OpenAPI contre les réponses réelles, Schemathesis en image Docker épinglée (réseau hôte).
   { name: 'contrat OpenAPI : Schemathesis (image Docker) contre la passerelle', cmd: ['pnpm', '--filter', '@sym-browser/gateway', 'test:schemathesis'] },
+  // Tâche 3.8 : référence générée (API depuis l'OpenAPI du contrat, configuration depuis le catalogue) à jour.
+  { name: 'docs : référence générée à jour', cmd: ['node', 'modules/browser/scripts/docs-reference.ts', '--check'] },
 ];
 
 // Nœud sur de vrais Chromium 153 (1.1 : pool_no_orphans, kill_on_close_timeout ; 1.3 : shared_context_options,
@@ -46,6 +48,8 @@ const skipChromium = process.argv.includes('--skip-chromium');
 if (!skipChromium) steps.push({ name: 'tests sur Chromium réels (pool et sessions shared du nœud)', cmd: ['pnpm', '--filter', '@sym-browser/node', 'test:chromium'] });
 // Tâche 2.3 : assert_cdp_client_compat de bout en bout (passerelle → nœud → Chromium dedicated sur son egress).
 if (!skipChromium) steps.push({ name: 'tests sur Chromium réels (relais WSS et clients CDP, bout en bout)', cmd: ['pnpm', '--filter', '@sym-browser/module', 'test:chromium'] });
+// Tâche 3.8 : quickstart_replayed, le code du démarrage rapide (docs/en/quickstart.md) exécuté tel quel contre une instance.
+if (!skipChromium) steps.push({ name: 'docs : démarrage rapide rejoué de bout en bout', cmd: ['pnpm', '--filter', '@sym-browser/module', 'test:quickstart'] });
 
 if (!process.argv.includes('--skip-image')) {
   steps.push(
