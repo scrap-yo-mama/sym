@@ -336,9 +336,9 @@ export function dataRoutes(): ApiRoutes {
   };
 }
 
-/** Texte traduit d'une clé de la console (fichiers de langue de src/i18n), pour attendre le texte exact affiché. */
+/** Texte traduit d'une clé de la console (fichiers de langue de packages/i18n), pour attendre le texte exact affiché. */
 export function text(locale: 'en' | 'fr', key: string): string {
-  const messages = JSON.parse(readFileSync(new URL(`../src/i18n/locales/${locale}.json`, import.meta.url), 'utf8')) as Record<string, unknown>;
+  const messages = JSON.parse(readFileSync(new URL(`../../../packages/i18n/locales/${locale}.json`, import.meta.url), 'utf8')) as Record<string, unknown>;
   const found = key.split('.').reduce<unknown>((node, part) => (typeof node === 'object' && node !== null ? (node as Record<string, unknown>)[part] : undefined), messages);
   if (typeof found !== 'string') throw new Error(`clé absente : ${locale} ${key}`);
   return found;
