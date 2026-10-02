@@ -53,7 +53,7 @@ describe('productionExecutorFactory', () => {
       id: 'isolated-vm' as const,
       probeIsolation: () => {
         probed += 1;
-        return Promise.resolve({ uid: 1500, parentEnviron: 'readable' as const, noNewPrivs: true });
+        return Promise.resolve({ uid: 1500, parentEnviron: 'readable' as const, witness: 'denied' as const, noNewPrivs: true });
       },
       run: () => Promise.reject(new Error('jamais appelé')),
     };
@@ -62,9 +62,86 @@ describe('productionExecutorFactory', () => {
     ).rejects.toMatchObject({ name: 'SandboxIsolationError', message: expect.stringMatching(/lit l'environnement du worker/) });
     expect(probed).toBe(1);
     // Témoin : sonde saine → le worker démarre.
-    const sane = { ...engine, probeIsolation: () => Promise.resolve({ uid: 1500, parentEnviron: 'denied' as const, noNewPrivs: true }) };
+    const sane = { ...engine, probeIsolation: () => Promise.resolve({ uid: 1500, parentEnviron: 'denied' as const, witness: 'denied' as const, noNewPrivs: true }) };
     const handle = await productionExecutorFactory({ NODE_ENV: 'production' }, { sandboxEngine: () => sane })({ pool, config: loadWorkerConfig(env({ DISABLE_BROWSER: 'true' })), checked, logger });
     await handle.close?.();
+    await pool.end();
+  });
+
+  test('assert_sandbox_probe_discriminating — production, sonde d’isolation : uid autre que SANDBOX_UID, root, uid du worker, ou témoin du worker lisible → refus de démarrer (revue 4.1b)', async () => {
+    // Sous no-new-privileges, /proc/<worker>/environ est refusé même à un enfant du MÊME uid : seul l’uid et le témoin
+    // prouvent la séparation.
+    const pool = new pg.Pool({ connectionString: 'postgres://zz_test@127.0.0.1:1/zz_test' });
+    const sane = { uid: 1500, parentEnviron: 'denied' as const, witness: 'denied' as const, noNewPrivs: true };
+    const start = (probe: object, extra: Record<string, string> = {}) =>
+      productionExecutorFactory(
+        { NODE_ENV: 'production', SANDBOX_UID: '1500', SANDBOX_GID: '1500', ...extra },
+        { sandboxEngine: () => ({ id: 'isolated-vm' as const, probeIsolation: () => Promise.resolve(probe as typeof sane), run: () => Promise.reject(new Error('jamais appelé')) }) },
+      )({ pool, config: loadWorkerConfig(env({ DISABLE_BROWSER: 'true' })), checked, logger });
+    for (const probe of [{ ...sane, uid: 1600 }, { ...sane, uid: 0 }, { ...sane, uid: process.getuid?.() ?? 1001 }, { ...sane, uid: undefined }, { ...sane, witness: 'readable' }, { ...sane, witness: 'absent' }]) {
+      await expect(start(probe), JSON.stringify(probe)).rejects.toMatchObject({ name: 'SandboxIsolationError' });
+    }
+    const handle = await start(sane);
+    await handle.close?.();
+    await pool.end();
+  });
+
+  test('assert_sandbox_child_no_namespaces — production, sonde : l’enfant peut créer un espace de noms utilisateur → refus de démarrer (revue 4.1b)', async () => {
+    const pool = new pg.Pool({ connectionString: 'postgres://zz_test@127.0.0.1:1/zz_test' });
+    const sane = { uid: 1500, parentEnviron: 'denied' as const, witness: 'denied' as const, noNewPrivs: true, namespaces: 'denied' as const };
+    const start = (probe: object) =>
+      productionExecutorFactory(
+        { NODE_ENV: 'production', SANDBOX_UID: '1500', SANDBOX_GID: '1500' },
+        { sandboxEngine: () => ({ id: 'isolated-vm' as const, probeIsolation: () => Promise.resolve(probe as typeof sane), run: () => Promise.reject(new Error('jamais appelé')) }) },
+      )({ pool, config: loadWorkerConfig(env({ DISABLE_BROWSER: 'true' })), checked, logger });
+    await expect(start({ ...sane, namespaces: 'allowed' })).rejects.toMatchObject({ name: 'SandboxIsolationError', message: expect.stringMatching(/espace de noms/) });
+    for (const probe of [sane, { ...sane, namespaces: 'absent' }]) {
+      const handle = await start(probe);
+      await handle.close?.();
+    }
+    await pool.end();
+  });
+
+  test('assert_chromium_sandbox_reported — production : bac à sable de Chromium indisponible → alerte claire au démarrage, worker démarré ; régime seccomp journalisé', async () => {
+    // Render n'applique pas le profil seccomp du compose : sous le profil par défaut de Docker, Chromium s'arrêterait sur
+    // « No usable sandbox! » à chaque run navigateur. Le worker le dit dès le démarrage, sans repli sur --no-sandbox.
+    const pool = new pg.Pool({ connectionString: 'postgres://zz_test@127.0.0.1:1/zz_test' });
+    const sane = { uid: 1500, parentEnviron: 'denied' as const, witness: 'denied' as const, noNewPrivs: true, namespaces: 'denied' as const };
+    const start = async (available: boolean) => {
+      const lines: Record<string, unknown>[] = [];
+      const log = pino({ level: 'info' }, { write: (l: string) => void lines.push(JSON.parse(l) as Record<string, unknown>) });
+      let checks = 0;
+      const handle = await productionExecutorFactory(
+        { NODE_ENV: 'production', SANDBOX_UID: '1500', SANDBOX_GID: '1500' },
+        {
+          sandboxEngine: () => ({ id: 'isolated-vm' as const, probeIsolation: () => Promise.resolve(sane), run: () => Promise.reject(new Error('jamais appelé')) }),
+          chromiumSandbox: () => {
+            checks += 1;
+            return Promise.resolve(available ? { available: true } : { available: false, detail: 'unshare: unshare failed: Operation not permitted' });
+          },
+        },
+      )({ pool, config: loadWorkerConfig(env()), checked, logger: log });
+      await handle.close?.();
+      expect(checks).toBe(1);
+      return lines;
+    };
+    const down = await start(false);
+    const alert = down.find((l) => l['alert'] === 'chromium_sandbox_unavailable');
+    expect(alert, JSON.stringify(down)).toMatchObject({ level: 50, detail: expect.stringMatching(/Operation not permitted/) });
+    expect(alert!['msg']).toMatch(/Chromium : bac à sable indisponible.*runs navigateur échoueront.*seccomp-chromium\.json/);
+    expect(alert).toHaveProperty('seccomp');
+    expect(down.find((l) => l['msg'] === 'bac à sable : isolation éprouvée')).toHaveProperty('seccomp');
+    const up = await start(true);
+    expect(up.find((l) => l['alert'] === 'chromium_sandbox_unavailable')).toBeUndefined();
+    expect(up.find((l) => l['msg'] === 'Chromium : bac à sable disponible'), JSON.stringify(up)).toHaveProperty('seccomp');
+    // DISABLE_BROWSER : aucune vérification.
+    let checks = 0;
+    const handle = await productionExecutorFactory(
+      { NODE_ENV: 'production', SANDBOX_UID: '1500', SANDBOX_GID: '1500' },
+      { sandboxEngine: () => ({ id: 'isolated-vm' as const, probeIsolation: () => Promise.resolve(sane), run: () => Promise.reject(new Error('jamais appelé')) }), chromiumSandbox: () => ((checks += 1), Promise.resolve({ available: true })) },
+    )({ pool, config: loadWorkerConfig(env({ DISABLE_BROWSER: 'true' })), checked, logger });
+    await handle.close?.();
+    expect(checks).toBe(0);
     await pool.end();
   });
 

@@ -12,6 +12,15 @@ COPY . .
 # lien mort de la doc, sans rien apporter à l'exécution (tâche 4.8).
 RUN pnpm install --frozen-lockfile && pnpm -r --filter '!@runtime/docs' build
 
+# --- Étape 1 bis : filtre seccomp de l'enfant du bac à sable (deploy/sandbox-seccomp.c, revue 4.1b). Le compilateur reste
+# dans cette étape : seul le binaire entre dans l'image.
+FROM ${PLAYWRIGHT_IMAGE} AS seccomp
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends gcc libc6-dev \
+ && rm -rf /var/lib/apt/lists/*
+COPY deploy/sandbox-seccomp.c /src/sandbox-seccomp.c
+RUN gcc -O2 -Wall -Wextra -Werror -o /src/sandbox-seccomp /src/sandbox-seccomp.c
+
 # --- Étape 2 : exécution (démarre en root, descend aussitôt sur pwuser : aucun processus ne reste root)
 FROM ${PLAYWRIGHT_IMAGE} AS runtime
 ENV NODE_ENV=production
@@ -36,6 +45,12 @@ WORKDIR /app
 #   le worker (jamais par un shell intermédiaire, qui les aurait perdues), avec --no-new-privs ; sous no-new-privileges il
 #   garde ses capacités par l'intersection avec le permis du worker. L'enfant exécute le Node ordinaire (SANDBOX_NODE),
 #   sans capacité ;
+# - sandbox-seccomp (root:pwuser 0750, cap_setuid,cap_setgid PERMISES seulement, comme node-worker), exécuté par le worker
+#   AVANT sandbox-launch, qu'il exécute à son tour : l'enfant perd unshare, setns et clone(CLONE_NEW*), que le profil
+#   seccomp du compose permet au conteneur pour le bac à sable de Chromium, ainsi que ptrace et process_vm_readv/writev
+#   (revue 4.1b). Posé sous l'uid du worker, le filtre précède tout processus de l'uid dédié (revue 4.1b (4) : posé après
+#   le changement d'uid, il laissait une fenêtre où un processus de l'uid dédié, sans filtre, était attachable) ; ses
+#   capacités permises ne servent qu'à les transmettre à sandbox-launch sous no-new-privileges ;
 # - /ms-playwright (Chromium, que le worker exécute sous pwuser) : l'image de base le livre en 777 ; rendu non modifiable
 #   par un autre que root (go-w), sans quoi un enfant évadé du bac à sable (uid 1500) remplacerait le binaire de Chromium.
 #   Firefox et WebKit, inutilisés, sont retirés (aucune copie de leurs fichiers dans cette couche).
@@ -79,11 +94,16 @@ COPY --from=build /app/apps/server/dist apps/server/dist
 COPY --from=build /app/apps/worker/dist apps/worker/dist
 COPY --from=build /app/apps/cli/dist apps/cli/dist
 COPY deploy/entrypoint.sh /usr/local/bin/entrypoint.sh
+COPY --from=seccomp /src/sandbox-seccomp /usr/local/libexec/sandbox-seccomp
 # Commande `runtime` (CLI : migrate, keygen, doctor…) dans le PATH : champ « pré-déploiement » des hébergeurs,
 # `docker exec <conteneur> runtime doctor`, `docker run --rm <image> runtime keygen` (tâche 4.1).
 # Lancée en root (`docker exec`, shell de l'hébergeur : ils prennent l'USER de l'image, root), elle descend sur pwuser
 # sans capacité, comme le point d'entrée.
-RUN chmod 0755 /usr/local/bin/entrypoint.sh \
+# Filtre de l'enfant : chown avant setcap (chown efface les capacités de fichier).
+RUN chown root:pwuser /usr/local/libexec/sandbox-seccomp \
+ && chmod 0750 /usr/local/libexec/sandbox-seccomp \
+ && setcap cap_setuid,cap_setgid=p /usr/local/libexec/sandbox-seccomp \
+ && chmod 0755 /usr/local/bin/entrypoint.sh \
  && printf '#!/bin/sh\nif [ "$(id -u)" = 0 ]; then exec /usr/bin/setpriv --reuid=1001 --regid=1001 --init-groups --inh-caps=-all --no-new-privs -- node /app/apps/cli/dist/index.js "$@"; fi\nexec node /app/apps/cli/dist/index.js "$@"\n' > /usr/local/bin/runtime \
  && chmod 0755 /usr/local/bin/runtime
 
@@ -93,7 +113,8 @@ RUN chmod 0755 /usr/local/bin/entrypoint.sh \
 # worker refuse alors de démarrer en production (fermeture sûre). Kubernetes : runAsNonRoot: true refuse l'image (D-32).
 USER root
 ENV RUNTIME_MODE=all PORT=3000 HOST=0.0.0.0 \
-    SANDBOX_UID=1500 SANDBOX_GID=1500 SANDBOX_LAUNCHER=/usr/local/libexec/sandbox-launch SANDBOX_NODE=/usr/bin/node
+    SANDBOX_UID=1500 SANDBOX_GID=1500 SANDBOX_LAUNCHER=/usr/local/libexec/sandbox-launch SANDBOX_NODE=/usr/bin/node \
+    SANDBOX_SECCOMP=/usr/local/libexec/sandbox-seccomp
 EXPOSE 3000
 # entrypoint.sh lance tini (PID 1, sous pwuser) qui relaie les signaux et récolte les zombies Chromium.
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]

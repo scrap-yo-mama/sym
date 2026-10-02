@@ -14,8 +14,9 @@
 # - Worker : `security_opt: seccomp=./seccomp-chromium.json` (profil de Docker + espaces de noms utilisateur, voir le service).
 # - `security_opt: no-new-privileges` est admis (régime de Render). Ne PAS poser `cap_drop: [SETUID, SETGID]` ni `user:` sur le
 #   worker : l'image démarre en root et descend aussitôt sur pwuser en gardant ces deux capacités pour le seul changement
-#   d'utilisateur du bac à sable (INV7) ; sans elles, le worker refuse de démarrer en production (docs/deploiement.md,
-#   « Modèle de privilèges de l'image »).
+#   d'utilisateur du bac à sable (INV7) ; sans elles, le conteneur s'arrête dès le point d'entrée (root ne peut pas
+#   descendre), et sous un uid imposé le worker refuse de démarrer en production (docs/deploiement.md, « Modèle de
+#   privilèges de l'image »).
 # - Les commandes lancées par Docker dans le conteneur (sonde de santé, `docker exec` sans `-u`) prennent l'USER de l'image,
 #   root : la sonde du server descend donc elle-même sur pwuser sans capacité (setpriv), comme le point d'entrée.
 # - Recommandé (non posé par défaut, à éprouver sur votre hôte) : `read_only: true` sur server et worker, avec
