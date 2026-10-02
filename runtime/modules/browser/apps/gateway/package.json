@@ -27,7 +27,6 @@
     "ws": "catalog:"
   },
   "devDependencies": {
-    "@sym-browser/node": "workspace:*",
     "@testcontainers/postgresql": "catalog:",
     "@types/node": "catalog:",
     "@types/pg": "catalog:",

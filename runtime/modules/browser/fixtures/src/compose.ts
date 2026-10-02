@@ -13,7 +13,7 @@ export interface ComposeOptions {
   ports: ComposePorts;
 }
 
-export const COMPOSE_FILE = fileURLToPath(new URL('../compose.yaml', import.meta.url));
+const COMPOSE_FILE = fileURLToPath(new URL('../compose.yaml', import.meta.url));
 export const DEFAULT_PROJECT = 'sym-browser-fixtures';
 export const DEFAULT_PORTS: ComposePorts = { site: 18_080, http: 18_081, socks5: 18_082 };
 

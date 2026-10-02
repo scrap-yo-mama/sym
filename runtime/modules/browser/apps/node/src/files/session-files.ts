@@ -32,7 +32,7 @@ export interface CdpLike {
   detach(): Promise<void>;
 }
 
-export type FileLimits = { downloadMaxBytes: number; sessionDownloadMaxBytes: number; uploadMaxBytes: number };
+type FileLimits = { downloadMaxBytes: number; sessionDownloadMaxBytes: number; uploadMaxBytes: number };
 
 /** Événement `download` du flux de la session (04c § 5.1, 04d). `id` : guid du téléchargement ; `fileId` une fois stocké. */
 export type DownloadEvent = {

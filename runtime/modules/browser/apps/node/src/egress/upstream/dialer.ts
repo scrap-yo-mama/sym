@@ -222,7 +222,7 @@ function openTls(raw: Socket, servername: string, ca: string | Buffer | undefine
 }
 
 /** Ouvre un tunnel vers `target` par le proxy amont ; rend le flux prêt à porter les octets du navigateur. */
-export async function dialUpstream(upstream: ResolvedUpstream, target: UpstreamTarget, options: UpstreamDialerOptions = {}): Promise<Socket> {
+async function dialUpstream(upstream: ResolvedUpstream, target: UpstreamTarget, options: UpstreamDialerOptions = {}): Promise<Socket> {
   const timeoutMs = options.connectTimeoutMs ?? 10_000;
   let raw: Socket | undefined;
   let stream: Socket | undefined;

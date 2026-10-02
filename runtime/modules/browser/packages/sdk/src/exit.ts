@@ -8,7 +8,7 @@
 // comportement du process. Aucun signal n'est envoyé à un autre process.
 
 /** Délai maximal d'une libération pendant la sortie du process. */
-export const EXIT_RELEASE_TIMEOUT_MS = 5_000;
+const EXIT_RELEASE_TIMEOUT_MS = 5_000;
 
 export type Releasable = { release(): Promise<unknown> };
 

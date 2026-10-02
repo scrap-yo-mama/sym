@@ -12,9 +12,9 @@ import { sendWebhook } from './send.js';
 import { webhookHeaders } from './standard.js';
 
 /** Délai avant chaque tentative, en ms : immédiat, 5 s, 5 min, 30 min, 2 h (barème de SYM, à valider). */
-export const WEBHOOK_RETRY_DELAYS_MS: readonly number[] = [0, 5_000, 300_000, 1_800_000, 7_200_000];
+const WEBHOOK_RETRY_DELAYS_MS: readonly number[] = [0, 5_000, 300_000, 1_800_000, 7_200_000];
 /** Une réponse 2xx dans les 15 s vaut livraison. */
-export const WEBHOOK_TIMEOUT_MS = 15_000;
+const WEBHOOK_TIMEOUT_MS = 15_000;
 
 export type WebhookDispatcherOptions = {
   db: pg.Pool;

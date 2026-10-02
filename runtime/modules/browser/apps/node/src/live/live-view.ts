@@ -28,8 +28,8 @@ export const LIVE_DEFAULTS = Object.freeze({
 
 export const READ_ONLY_NOTICE = 'SYM 👻 : lecture seule';
 
-export type LiveTab = { id: string; url: string; title: string };
-export type LiveFrameMessage = { t: 'frame'; data: string; ts: number; w: number; h: number; tab: string };
+type LiveTab = { id: string; url: string; title: string };
+type LiveFrameMessage = { t: 'frame'; data: string; ts: number; w: number; h: number; tab: string };
 export type LiveServerMessage =
   | LiveFrameMessage
   | { t: 'meta'; url: string; title: string; tabs: LiveTab[]; tab: string | null; mode: LiveMode; interactive: boolean }
@@ -48,7 +48,7 @@ export type LiveEvent = { type: 'live.input'; sessionId: string; count: number; 
 export class LiveViewFullError extends Error {
   override name = 'LiveViewFullError';
 }
-export class LiveViewClosedError extends Error {
+class LiveViewClosedError extends Error {
   override name = 'LiveViewClosedError';
 }
 
@@ -72,7 +72,7 @@ const BUTTONS = new Set(['left', 'middle', 'right', 'none']);
 const finite = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
 const shortText = (v: unknown, max: number): v is string => typeof v === 'string' && v.length > 0 && v.length <= max;
 
-export type LiveViewerStats = { sent: number; replaced: number; maxInFlight: number; dropped: number; inputs: number };
+type LiveViewerStats = { sent: number; replaced: number; maxInFlight: number; dropped: number; inputs: number };
 
 export type LiveViewer = {
   receive(message: unknown): Promise<void>;

@@ -13,7 +13,7 @@ export interface WsConnection {
   close(code?: number): void;
 }
 
-export function encodeFrame(opcode: number, payload: Buffer): Buffer {
+function encodeFrame(opcode: number, payload: Buffer): Buffer {
   const length = payload.length;
   const head =
     length < 126

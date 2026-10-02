@@ -21,7 +21,7 @@ export type EventsOptions = {
 type RawEvent = { id: string | undefined; event: string; data: string };
 
 /** Découpe un flux `text/event-stream` en événements (spécification HTML, « event stream interpretation »). */
-export class SseParser {
+class SseParser {
   #buffer = '';
   #data: string[] = [];
   #event = '';

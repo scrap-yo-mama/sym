@@ -9,7 +9,7 @@ import { COLOR_SCHEMES } from '@sym/contracts/browser';
 import type { BrowserContextOptions } from 'playwright-core';
 
 /** Options de contexte d'une session shared (sous-ensemble de `CreateSessionRequest`). */
-export type SharedSessionOptions = Pick<CreateSessionRequest, 'viewport' | 'locale' | 'timezoneId' | 'userAgent' | 'extraHTTPHeaders' | 'geolocation' | 'colorScheme' | 'acceptDownloads' | 'storageState'>;
+type SharedSessionOptions = Pick<CreateSessionRequest, 'viewport' | 'locale' | 'timezoneId' | 'userAgent' | 'extraHTTPHeaders' | 'geolocation' | 'colorScheme' | 'acceptDownloads' | 'storageState'>;
 
 /** Champs reçus par le nœud : les options shared, plus ceux qui imposent `dedicated` (refusés ici, bascule à la création). */
 export type SharedSessionInput = SharedSessionOptions & Pick<CreateSessionRequest, 'profile' | 'launchArgs'>;

@@ -26,7 +26,7 @@ import { checkUpstreamFields, type UpstreamProxyConfig } from './dialer.js';
 export type ProxyProfileKeys = { current: Kek; previous?: Kek };
 
 /** Ligne de `proxy_profiles` (colonnes du miroir Drizzle de la tâche 0.2). */
-export type StoredProxyProfile = {
+type StoredProxyProfile = {
   id: string;
   tenantId: string;
   name: string;
@@ -49,7 +49,7 @@ export interface ProxyProfileStore {
 }
 
 /** Vue d'API d'un profil : jamais de mot de passe, utilisateur masqué. */
-export type ProxyProfileView = {
+type ProxyProfileView = {
   id: string;
   name: string;
   type: UpstreamProxyType;
@@ -63,7 +63,7 @@ export type ProxyProfileView = {
   updatedAt: string;
 };
 
-export type ProxyProfileInput = {
+type ProxyProfileInput = {
   name: string;
   type: UpstreamProxyType;
   host: string;
@@ -75,16 +75,16 @@ export type ProxyProfileInput = {
 };
 
 /** Correctif (`PATCH`) : champ absent conservé ; `username` ou `password` à `null` efface les identifiants. */
-export type ProxyProfilePatch = Partial<Omit<ProxyProfileInput, 'username' | 'password' | 'kind'>> & {
+type ProxyProfilePatch = Partial<Omit<ProxyProfileInput, 'username' | 'password' | 'kind'>> & {
   username?: string | null;
   password?: string | null;
   kind?: UpstreamProxyKind | null;
 };
 
 /** Profil ouvert par le nœud pour une session (mot de passe en `Secret`). */
-export type OpenedProxyProfile = UpstreamProxyConfig & { dnsViaProxy: boolean };
+type OpenedProxyProfile = UpstreamProxyConfig & { dnsViaProxy: boolean };
 
-export class ProxyProfileNotFoundError extends Error {
+class ProxyProfileNotFoundError extends Error {
   override name = 'ProxyProfileNotFoundError';
   readonly code = 'not_found';
   constructor() {
@@ -98,7 +98,7 @@ export function maskUsername(username: string): string {
 }
 
 /** Format texte d'une valeur scellée (`credentials_encrypted`) : JSON versionné, champs binaires en base64. */
-export function serializeSealed(sealed: SealedValue): string {
+function serializeSealed(sealed: SealedValue): string {
   return JSON.stringify({
     v: 1,
     alg: sealed.alg,
@@ -109,7 +109,7 @@ export function serializeSealed(sealed: SealedValue): string {
   });
 }
 
-export function parseSealed(text: string): SealedValue {
+function parseSealed(text: string): SealedValue {
   let raw: { v?: unknown; alg?: unknown; kekVersion?: unknown; nonce?: unknown; ciphertext?: unknown; dekWrapped?: unknown };
   try {
     raw = JSON.parse(text) as typeof raw;

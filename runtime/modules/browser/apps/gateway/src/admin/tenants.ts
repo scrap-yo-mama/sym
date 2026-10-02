@@ -17,7 +17,7 @@ import { generateWebhookSecret } from '../webhooks/standard.js';
 
 const MAX_URL_LENGTH = 2_048;
 
-export type TenantView = { id: string; name: string; webhookUrl: string | null; webhookSecretSet: boolean };
+type TenantView = { id: string; name: string; webhookUrl: string | null; webhookSecretSet: boolean };
 
 type Deps = {
   db: pg.Pool;

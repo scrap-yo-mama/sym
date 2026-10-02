@@ -30,7 +30,6 @@
     "pg": "catalog:"
   },
   "devDependencies": {
-    "@sym-browser/core": "workspace:*",
     "@testcontainers/postgresql": "catalog:",
     "@types/node": "catalog:",
     "@types/pg": "catalog:",

@@ -37,7 +37,7 @@ export type SessionEgress = {
   stop(): Promise<void>;
 };
 
-export type EgressFactory = (session: { sessionId: string; tenantId: string; type: SessionType }) => Promise<SessionEgress>;
+type EgressFactory = (session: { sessionId: string; tenantId: string; type: SessionType }) => Promise<SessionEgress>;
 
 /** Connexion d'un client (relais Playwright ou CDP de la tâche 2.3). */
 export type ClientConnection = { close(): Promise<void> | void };

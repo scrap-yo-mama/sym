@@ -10,7 +10,7 @@ import { createJournal, normalizeIp, type Journal } from './journal.ts';
 import { boundaryOf, parseMultipart } from './multipart.ts';
 import { acceptWebSocket } from './ws.ts';
 
-export interface SeenRequest {
+interface SeenRequest {
   at: string;
   ip: string;
   method: string;

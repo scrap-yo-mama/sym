@@ -7,9 +7,9 @@ import { SESSION_EVENTS_CHANNEL, parseSessionEventNotification, type SessionEven
 import pg from 'pg';
 
 /** Nom de la connexion d'écoute (visible dans `pg_stat_activity`). */
-export const EVENTS_APPLICATION_NAME = 'symb-gateway-events';
+const EVENTS_APPLICATION_NAME = 'symb-gateway-events';
 
-export type HubListener = {
+type HubListener = {
   onEvent(event: SessionEventNotification): void;
   /** La connexion d'écoute a été rétablie : des notifications ont pu manquer, relire la base. */
   onResync(): void;

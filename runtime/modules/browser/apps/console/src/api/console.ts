@@ -63,7 +63,7 @@ export const CONSOLE_ROUTES = {
 
 export const CURRENT_STATES: readonly SessionState[] = SESSION_STATES.filter((s) => !(TERMINAL_SESSION_STATES as readonly string[]).includes(s));
 export const PAST_STATES: readonly SessionState[] = TERMINAL_SESSION_STATES;
-export const SESSION_PAGE_SIZE = 50;
+const SESSION_PAGE_SIZE = 50;
 
 const METADATA_KEY = /^[A-Za-z0-9_.-]{1,64}$/;
 

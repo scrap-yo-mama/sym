@@ -26,7 +26,7 @@ export interface RecordingIndex {
   remove(id: string): Promise<void>;
 }
 
-export class MemoryRecordingIndex implements RecordingIndex {
+class MemoryRecordingIndex implements RecordingIndex {
   readonly #rows = new Map<string, RecordingRecord>();
   insert(record: RecordingRecord): Promise<void> {
     this.#rows.set(record.id, { ...record });

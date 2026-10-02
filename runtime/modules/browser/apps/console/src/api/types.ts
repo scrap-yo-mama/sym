@@ -6,7 +6,7 @@
 // À BRANCHER (tâche de contrat, skill browser-contract-change) : déplacer ces types dans `@sym/contracts/browser`, avec
 // `BROWSER_PROTOCOL_VERSION` qui change et des fixtures, puis les importer ici ; ajouter au type `Session` du contrat les
 // champs que la console affiche (`apiKeyId`, `apiKeyPrefix`, `nodeId`, `startedAt`, `endedAt`, `liveView.interactive`).
-import type { Session, SessionState, SessionType, StorageState } from '@sym/contracts/browser';
+import type { Session, SessionState, SessionType } from '@sym/contracts/browser';
 
 /** Session telle que la console admin la lit : session du contrat + clé, nœud et dates (proposition pour 2.2). */
 export type ConsoleSession = Session & {
@@ -43,8 +43,7 @@ export type Recording = { id: string; type: 'trace' | 'har' | 'video' | 'console
 /** Fichier téléchargé par la session (04c § 5.1). */
 export type SessionFile = { id: string; name: string; size: number; sha256: string; createdAt: string; expiresAt: string };
 
-export const NODE_STATES = ['ready', 'draining', 'down'] as const;
-export type NodeState = (typeof NODE_STATES)[number];
+type NodeState = 'ready' | 'draining' | 'down';
 
 /** Nœud et capacité (03 § 5 `nodes`, 04b § 5). */
 export type NodeInfo = {
@@ -61,7 +60,7 @@ export type NodeInfo = {
 };
 
 /** Quotas d'un client (04d § 4.2). */
-export type TenantQuotas = { concurrentSessions: number; minutesPerMonth: number; bytesPerMonth: number; maxSessionSeconds: number };
+type TenantQuotas = { concurrentSessions: number; minutesPerMonth: number; bytesPerMonth: number; maxSessionSeconds: number };
 export type Tenant = { id: string; name: string; quotas: TenantQuotas; createdAt: string };
 
 export const API_KEY_SCOPES = ['sessions:read', 'sessions:write', 'profiles:write', 'admin'] as const;
@@ -94,7 +93,7 @@ export type ProxyTestResult = { ok: true; exitIp: string; latencyMs: number };
 export type UsageGroupBy = 'day' | 'key';
 export type UsageQuery = { from: string; to: string; groupBy: UsageGroupBy; apiKeyId?: string };
 export type UsageItem = { apiKeyId?: string; apiKeyPrefix?: string; day?: string; sessions: number; billedSeconds: number; bytesIn: number; bytesOut: number };
-export type UsageTotals = { sessions: number; billedSeconds: number; bytesIn: number; bytesOut: number };
+type UsageTotals = { sessions: number; billedSeconds: number; bytesIn: number; bytesOut: number };
 /** `drift` : écart de réconciliation (04d § 4.4), proposé en plus de la réponse de 04d § 4.3. */
 export type UsageReport = { period: { from: string; to: string }; items: UsageItem[]; totals: UsageTotals; drift: { seconds: number; bytes: number; checkedAt: string } };
 
@@ -124,4 +123,3 @@ export type LiveConnection = {
   close(): void;
 };
 
-export type { StorageState };

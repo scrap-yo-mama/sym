@@ -3,4 +3,5 @@
 // (`SYMB_MODE`), assemble le pool de Chromium et le battement du nœud en mode `all` et `node`.
 export * from './engine.js';
 export * from './pool/index.js';
+export * from './drain/index.js';
 export { HEARTBEAT_DEFAULTS, startHeartbeat, type HeartbeatOptions } from './sessions/heartbeat.js';

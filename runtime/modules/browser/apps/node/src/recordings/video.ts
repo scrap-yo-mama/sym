@@ -9,7 +9,7 @@ import { statSync } from 'node:fs';
 import type { Readable, Writable } from 'node:stream';
 import type { BrowserContext, CDPSession, Page } from 'playwright-core';
 
-export const VIDEO_SIZE = Object.freeze({ width: 1280, height: 720 });
+const VIDEO_SIZE = Object.freeze({ width: 1280, height: 720 });
 const FPS = 25;
 const FINALIZE_TIMEOUT_MS = 30_000;
 

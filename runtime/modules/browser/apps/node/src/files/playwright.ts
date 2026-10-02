@@ -7,7 +7,7 @@ import type { Browser, BrowserContext } from 'playwright-core';
 import type { SessionDir } from '../dedicated/index.js';
 import type { AttachedFiles, CdpLike, SessionFiles } from './session-files.js';
 
-export async function browserContextIdOf(context: BrowserContext): Promise<string> {
+async function browserContextIdOf(context: BrowserContext): Promise<string> {
   const page = await context.newPage();
   try {
     const cdp = await context.newCDPSession(page);
@@ -21,7 +21,7 @@ export async function browserContextIdOf(context: BrowserContext): Promise<strin
 }
 
 /** `browserContextId` du contexte par défaut d'un Chromium (celui des clients CDP d'une session dedicated). */
-export async function defaultBrowserContextIdOf(browser: Browser): Promise<string> {
+async function defaultBrowserContextIdOf(browser: Browser): Promise<string> {
   const cdp = await browser.newBrowserCDPSession();
   try {
     const { targetId } = await cdp.send('Target.createTarget', { url: 'about:blank', background: true });

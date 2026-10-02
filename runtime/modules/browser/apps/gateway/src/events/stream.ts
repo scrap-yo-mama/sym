@@ -19,7 +19,7 @@ const REPLAY_PAGE = 500;
 const MAX_BUFFERED_BYTES = 1_048_576;
 const RECENT_IDS = 4_096;
 
-export type StreamScope = { tenantId: string; sessionId?: string };
+type StreamScope = { tenantId: string; sessionId?: string };
 
 export type StreamOptions = {
   db: pg.Pool;

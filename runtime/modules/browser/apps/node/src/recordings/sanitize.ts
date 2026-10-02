@@ -9,10 +9,10 @@ import { redactArtifactText, redactPatterns, secretValues } from '@sym-browser/c
 import { readZip, writeZip } from './zip.js';
 
 /** Masquage d'un texte libre (message de console, motif d'échec). */
-export const maskText = (text: string): string => redactPatterns(secretValues.redactText(text));
+const maskText = (text: string): string => redactPatterns(secretValues.redactText(text));
 
 /** URL sans query, fragment ni identifiants ; texte masqué si ce n'est pas une URL. */
-export function urlWithoutQuery(raw: string): string {
+function urlWithoutQuery(raw: string): string {
   try {
     const url = new URL(raw);
     url.username = '';

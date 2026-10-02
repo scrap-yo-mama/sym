@@ -6,7 +6,7 @@
 // `standardwebhooks` dans les tests. Sans I/O.
 import { createHmac, randomBytes } from 'node:crypto';
 
-export const WEBHOOK_SECRET_PREFIX = 'whsec_';
+const WEBHOOK_SECRET_PREFIX = 'whsec_';
 
 /** Nouveau secret : 32 octets aléatoires. Affiché une seule fois, scellé au repos par l'appelant (BINV6). */
 export function generateWebhookSecret(): string {

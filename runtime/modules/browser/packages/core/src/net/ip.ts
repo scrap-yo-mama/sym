@@ -119,7 +119,7 @@ export function stripAddress(raw: string): string {
 }
 
 /** Octets d'une adresse IPv6 valide (formes compressées et IPv4 finale en notation pointée comprises). */
-export function ipv6ToBytes(address: string): Uint8Array {
+function ipv6ToBytes(address: string): Uint8Array {
   let text: string = stripAddress(address).toLowerCase();
   if (!isIPv6(text)) throw new TypeError(`IPv6 invalide : ${address}`);
   // IPv4 finale en notation pointée → deux groupes hexadécimaux.
@@ -151,7 +151,7 @@ function startsWith(bytes: Uint8Array, prefix: readonly number[]): boolean {
 }
 
 /** IPv4 intégrée dans une IPv6 : mappée (::ffff:0:0/96), SIIT (::ffff:0:0:0/96), NAT64 (64:ff9b::/96), 6to4 (2002::/16). */
-export function embeddedIPv4(address: string): string | undefined {
+function embeddedIPv4(address: string): string | undefined {
   const bytes = ipv6ToBytes(address);
   if (startsWith(bytes, [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff])) return v4FromBytes(bytes, 12);
   if (startsWith(bytes, [0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff, 0, 0])) return v4FromBytes(bytes, 12);

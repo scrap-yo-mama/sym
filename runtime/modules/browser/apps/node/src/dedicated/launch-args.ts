@@ -21,7 +21,7 @@ export class InvalidLaunchArgError extends Error {
   }
 }
 
-export function isLaunchArg(value: string): value is LaunchArg {
+function isLaunchArg(value: string): value is LaunchArg {
   return (LAUNCH_ARGS as readonly string[]).includes(value);
 }
 
