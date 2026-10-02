@@ -16,7 +16,7 @@ import { createRequire } from 'node:module';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { DiskBlobStore, MasterKey, ObjectStore } from '@sym-browser/core';
+import { DiskBlobStore, MasterKey, ObjectStore, secretValues } from '@sym-browser/core';
 import { chromium } from 'playwright-core';
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import { startSite, type SiteHandle } from '../../../../fixtures/src/site.ts';
@@ -71,6 +71,9 @@ const events: RecordingEvent[] = [];
 
 beforeAll(async () => {
   if (process.getuid?.() === 0) throw new Error('tests Chromium : lance-les sous un utilisateur non root (le bac à sable de Chromium refuse root, 03 § 7).');
+  // Secret de test inscrit au registre des valeurs connues du processus, comme le nœud inscrit ses vrais secrets (clés,
+  // mots de passe de proxy) : couche 3 du masquage de 0.3, appliquée à chaque artefact.
+  secretValues.add(SECRET);
   site = await startSite({ port: 0, host: '127.0.0.1' });
   siteUrl = `http://127.0.0.1:${site.port}`;
   proxy = await startSiteOnlyProxy(siteUrl);
@@ -92,6 +95,7 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  secretValues.delete(SECRET);
   await pool?.close();
   await proxy?.close();
   await site?.close();
@@ -135,7 +139,7 @@ async function playVideo(webm: Buffer): Promise<{ width: number; height: number;
 }
 
 /** Trace ouverte par `playwright show-trace` (visionneuse servie en HTTP), puis lue par un Chromium. */
-async function openWithShowTrace(traceZip: Buffer): Promise<string> {
+async function openWithShowTrace(traceZip: Buffer, expected: string): Promise<string> {
   const path = join(root, `trace-${Date.now()}.zip`);
   writeFileSync(path, traceZip);
   const cli = join(dirname(createRequire(import.meta.url).resolve('playwright-core/package.json')), 'cli.js');
@@ -151,7 +155,8 @@ async function openWithShowTrace(traceZip: Buffer): Promise<string> {
     if (url === undefined) throw new Error(`show-trace n’a pas démarré : ${output}`);
     const page = await browser.newPage();
     await page.goto(url);
-    await page.getByText('Network', { exact: true }).first().waitFor({ timeout: 30_000 });
+    // Liste des actions rendue : l'action attendue (navigation vers la fixture) y figure.
+    await page.getByText(expected).first().waitFor({ timeout: 30_000 });
     return await page.locator('body').innerText();
   } finally {
     await browser.close();
@@ -194,7 +199,7 @@ describe('enregistrements côté nœud sur de vrais Chromium', () => {
     expect(video.duration).toBeGreaterThan(1);
     // Trace ouverte par show-trace : la visionneuse affiche la page de la fixture et ses requêtes.
     expect([...readZip(byType.trace!).keys()]).toEqual(expect.arrayContaining(['trace.trace', 'trace.network']));
-    const viewer = await openWithShowTrace(byType.trace!);
+    const viewer = await openWithShowTrace(byType.trace!, 'about.html');
     expect(viewer).toContain('about.html');
 
     // assert_secrets_protected : aucun secret dans les artefacts déchiffrés (trace décompressée comprise)…
@@ -249,14 +254,16 @@ describe('enregistrements côté nœud sur de vrais Chromium', () => {
     await connection.close();
     await lease.release();
 
-    expect(produced.map((r) => r.type).sort()).toEqual(['console', 'har', 'video']);
+    // Une vidéo par page : l'onglet initial du Chromium dédié et la page du client.
+    expect([...new Set(produced.map((r) => r.type))].sort()).toEqual(['console', 'har', 'video']);
     for (const r of produced) expect(events).toContainEqual(expect.objectContaining({ type: 'recording.ready', sessionId: 'rec-cdp', recordingId: r.id, recordingType: r.type }));
     const get = (type: string) => readRecording('rec-cdp', produced.find((r) => r.type === type)!);
     const har = JSON.parse((await get('har')).toString()) as { log: { entries: { request: { url: string } }[] } };
     expect(validateHar(har)).toEqual([]);
     expect(har.log.entries.some((e) => e.request.url === `${siteUrl}/static/about.html`)).toBe(true);
     expect((await get('console')).toString()).toContain('console du client CDP');
-    const video = await playVideo(await get('video'));
-    expect(video.duration).toBeGreaterThan(1);
+    const durations: number[] = [];
+    for (const r of produced.filter((p) => p.type === 'video')) durations.push((await playVideo(await readRecording('rec-cdp', r))).duration);
+    expect(Math.max(...durations)).toBeGreaterThan(1);
   });
 });

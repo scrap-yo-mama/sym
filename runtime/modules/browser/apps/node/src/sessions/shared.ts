@@ -7,9 +7,17 @@
 // (un Chromium ne sert jamais deux clients, BINV1). Le pool peut aussi imposer la fin (plantage, chien de garde, arrêt).
 // Protocole servi : Playwright natif seulement (`protocols.ts`). Les états de session (`pending → running → …`) et leur
 // persistance viennent de la tâche 1.2 : `onEnd` en est le point d'accroche.
-import type { EndReason } from '@sym/contracts/browser';
+// Enregistrements (tâche 3.3, 04d § 2) : avec `recorder` et `dataDir`, les enregistrements demandés sont produits par le
+// nœud sur le contexte de la session dans `sessions/{id}/recordings`, arrêtés et déposés chiffrés AVANT la fermeture du
+// contexte ; le répertoire `sessions/{id}` est supprimé avant que le slot soit rendu.
+import { mkdir, rm } from 'node:fs/promises';
+import { join } from 'node:path';
+import type { EndReason, RecordingOptions } from '@sym/contracts/browser';
 import type { BrowserContext } from 'playwright-core';
+import { sessionDir, type SessionDir } from '../dedicated/dedicated.js';
 import type { AcquireRequest, LeaseEndReason, PoolLease } from '../pool/index.js';
+import { anyRecording, recordingOptions } from '../recordings/options.js';
+import type { ActiveRecording, SessionRecorder } from '../recordings/recorder.js';
 import { sharedContextOptions, type SharedSessionInput } from './options.js';
 import { servedProtocols, type SessionProtocol } from './protocols.js';
 
@@ -39,6 +47,10 @@ export type SharedSessionsOptions = {
   /** Délai de fermeture d'un contexte ; au-delà, le slot est rendu (le pool ferme ou tue le Chromium à son délai dur). */
   closeTimeoutMs?: number;
   onEnd?: (end: SharedSessionEnd) => void;
+  /** `SYMB_DATA_DIR` : répertoire `sessions/{id}` de chaque session (enregistrements). */
+  dataDir?: string;
+  /** Enregistrements des sessions (tâche 3.3) ; exige `dataDir`. */
+  recorder?: SessionRecorder;
 };
 
 export type CreateSharedSession = {
@@ -49,9 +61,11 @@ export type CreateSharedSession = {
   watchdogMs?: number;
   /** Egress de la session (tâche 1.5). */
   egressProxyUrl?: string;
+  /** Option `recordings` de la session (04d § 2.1). */
+  recordings?: RecordingOptions;
 };
 
-type State = { session: SharedSession; lease: PoolLease; ending: Promise<void> | null; reason: SharedEndReason | null };
+type State = { session: SharedSession; lease: PoolLease; dir: SessionDir | undefined; recording: ActiveRecording | undefined; ending: Promise<void> | null; reason: SharedEndReason | null };
 
 export class SharedSessions {
   readonly #options: SharedSessionsOptions;
@@ -76,27 +90,42 @@ export class SharedSessions {
   async create(request: CreateSharedSession): Promise<SharedSession> {
     // Validation d'abord : une option invalide ne réserve aucun slot.
     const contextOptions = sharedContextOptions(request.options, request.egressProxyUrl === undefined ? {} : { egressProxyUrl: request.egressProxyUrl });
+    const recordings = recordingOptions(request.recordings);
+    const recording = anyRecording(recordings);
+    if (recording && (this.#options.recorder === undefined || this.#options.dataDir === undefined)) throw new RangeError('enregistrements demandés : recorder et dataDir requis sur ce nœud');
+    const dir = this.#options.dataDir === undefined ? undefined : sessionDir(this.#options.dataDir, request.sessionId);
     if (this.#sessions.has(request.sessionId) || this.#creating.has(request.sessionId)) throw new RangeError(`session ${request.sessionId} déjà présente sur ce nœud`);
     this.#creating.add(request.sessionId);
     try {
       const acquire: AcquireRequest = { sessionId: request.sessionId, type: 'shared', tenantId: request.tenantId };
       if (request.watchdogMs !== undefined) acquire.watchdogMs = request.watchdogMs;
       const lease = await this.#options.pool.acquire(acquire);
-      let context: BrowserContext;
+      let context: BrowserContext | undefined;
+      let active: ActiveRecording | undefined;
+      let created = false;
       try {
+        if (dir !== undefined && recording) {
+          await mkdir(join(dir.root, '..'), { recursive: true, mode: 0o700 });
+          // Répertoire neuf : un répertoire déjà présent (identifiant réutilisé, destruction inachevée) est refusé.
+          await mkdir(dir.root, { mode: 0o700 });
+          created = true;
+        }
         context = await lease.browser.newContext(contextOptions);
+        if (recording && dir !== undefined) active = await this.#options.recorder!.start({ sessionId: request.sessionId, tenantId: request.tenantId, context, workDir: join(dir.root, 'recordings'), options: request.recordings });
       } catch (error) {
+        await context?.close().catch(() => undefined);
+        if (created && dir !== undefined) await rm(dir.root, { recursive: true, force: true });
         await lease.release();
         throw error;
       }
-      const state: State = { session: undefined as unknown as SharedSession, lease, ending: null, reason: null };
+      const state: State = { session: undefined as unknown as SharedSession, lease, dir: created ? dir : undefined, recording: active, ending: null, reason: null };
       state.session = {
         sessionId: request.sessionId,
         tenantId: request.tenantId,
         type: 'shared',
         browserId: lease.browserId,
         wsEndpoint: lease.wsEndpoint,
-        context,
+        context: context!,
         protocols: servedProtocols('shared'),
         get endReason() {
           return state.reason;
@@ -122,12 +151,15 @@ export class SharedSessions {
     state.ending ??= (async () => {
       state.reason = reason;
       this.#sessions.delete(state.session.sessionId);
+      // Enregistrements arrêtés et déposés tant que le contexte vit (étape 5 de la destruction, 04c § 3.2).
+      await state.recording?.stop().catch(() => undefined);
       let timer: NodeJS.Timeout | undefined;
       await Promise.race([
         state.session.context.close().catch(() => undefined),
         new Promise<void>((resolve) => (timer = setTimeout(resolve, this.#options.closeTimeoutMs ?? 10_000))),
       ]);
       clearTimeout(timer);
+      if (state.dir !== undefined) await rm(state.dir.root, { recursive: true, force: true });
       await state.lease.release();
       this.#options.onEnd?.({ sessionId: state.session.sessionId, tenantId: state.session.tenantId, reason });
     })();

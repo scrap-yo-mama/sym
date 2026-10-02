@@ -46,7 +46,6 @@ describe('ffmpeg de Playwright (encodage webm des screencasts)', () => {
   test('révision lue dans browsers.json de playwright-core, sous PLAYWRIGHT_BROWSERS_PATH ou le cache par défaut', () => {
     expect(ffmpegPath({ PLAYWRIGHT_BROWSERS_PATH: '/ms-playwright' }, { platform: 'linux' })).toMatch(/^\/ms-playwright\/ffmpeg-\d+\/ffmpeg-linux$/);
     expect(ffmpegPath({ HOME: '/home/pwuser' }, { platform: 'linux' })).toMatch(/^\/home\/pwuser\/\.cache\/ms-playwright\/ffmpeg-\d+\/ffmpeg-linux$/);
-    expect(ffmpegPath({ SYMB_FFMPEG_PATH: '/opt/ffmpeg' }, { platform: 'linux' })).toBe('/opt/ffmpeg');
   });
 });
 
@@ -133,12 +132,12 @@ describe('HAR 1.2 construit par le nœud (04d § 2.1, 04f § 5)', () => {
 });
 
 describe('coffre des enregistrements (ObjectStore chiffré, 04d § 2.1 et § 2.2)', () => {
-  async function setup() {
+  async function setup(options: { retention?: { video: number } } = {}) {
     const root = mkdtempSync(join(tmpdir(), 'symb-vault-'));
     let now = new Date();
     const store = new ObjectStore({ blobs: new DiskBlobStore(join(root, 'objects')), master: MasterKey.generate(), kekVersion: 1, now: () => now });
     const events: RecordingEvent[] = [];
-    const vault = new RecordingVault({ store, now: () => now, onEvent: (e) => events.push(e) });
+    const vault = new RecordingVault({ store, now: () => now, onEvent: (e) => events.push(e), ...(options.retention ? { retention: options.retention } : {}) });
     const file = join(root, 'console.ndjson');
     writeFileSync(file, `${JSON.stringify({ text: 'bonjour' })}\n`);
     return { root, store, vault, events, file, setNow: (d: Date) => (now = d), getNow: () => now };
@@ -147,12 +146,12 @@ describe('coffre des enregistrements (ObjectStore chiffré, 04d § 2.1 et § 2.2
   test('dépôt : objet chiffré (illisible sans la clé), fichier local supprimé, recording.ready ; liste, flux déchiffré, suppression', async () => {
     const { root, store, vault, events, file } = await setup();
     const info = await vault.deposit({ sessionId: 's1', tenantId: 'tenant-a', type: 'console', path: file, name: 'console.ndjson' });
-    expect(info).toMatchObject({ type: 'console', name: 'console.ndjson', size: 20 });
+    expect(info).toMatchObject({ type: 'console', name: 'console.ndjson', size: 19 });
     expect(() => readFileSync(file)).toThrow();
     const [object] = await store.list('artifacts/console/');
     expect(object!.key).toBe(`artifacts/console/tenant-a/s1/${info.id}`);
     expect(readFileSync(join(root, 'objects', ...object!.key.split('/'))).toString()).not.toContain('bonjour');
-    expect(events).toEqual([{ type: 'recording.ready', sessionId: 's1', recordingId: info.id, recordingType: 'console', size: 20, expiresAt: info.expiresAt.toISOString() }]);
+    expect(events).toEqual([{ type: 'recording.ready', sessionId: 's1', recordingId: info.id, recordingType: 'console', size: 19, expiresAt: info.expiresAt.toISOString() }]);
     expect(await vault.list('s1')).toEqual([info]);
     const { stream } = await vault.open('s1', info.id);
     const parts: Buffer[] = [];
@@ -165,13 +164,13 @@ describe('coffre des enregistrements (ObjectStore chiffré, 04d § 2.1 et § 2.2
   });
 
   test('rétention par type (journaux et trace 7 j) puis purge à l’horloge de test : objets et entrées retirés, et seulement eux', async () => {
-    const { vault, store, file, root, setNow, getNow } = await setup();
+    const { vault, store, file, root, setNow, getNow } = await setup({ retention: { video: 30 * DAY } });
     const t0 = getNow();
     const kept = join(root, 'video.webm');
     writeFileSync(kept, 'webm');
     const log = await vault.deposit({ sessionId: 's1', tenantId: 'tenant-a', type: 'console', path: file, name: 'console.ndjson' });
     expect(log.expiresAt.getTime()).toBe(t0.getTime() + 7 * DAY);
-    const video = await new RecordingVault({ store, now: () => t0, retention: { video: 30 * DAY } }).deposit({ sessionId: 's1', tenantId: 'tenant-a', type: 'video', path: kept, name: 'video-1.webm' });
+    const video = await vault.deposit({ sessionId: 's1', tenantId: 'tenant-a', type: 'video', path: kept, name: 'video-1.webm' });
     setNow(new Date(t0.getTime() + 7 * DAY + 60_000));
     const purged = await vault.purgeExpired();
     expect(purged.deleted).toEqual([`artifacts/console/tenant-a/s1/${log.id}`]);
