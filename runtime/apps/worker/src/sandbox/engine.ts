@@ -84,6 +84,8 @@ export type ProcessSandboxOptions = {
   sweepEveryMs?: number;
   /** Alerte : balayage de l'uid dédié en échec persistant, tous les runs suivants sont refusés. */
   onSweepFailure?: (message: string) => void;
+  /** Diagnostic (tests) : plan de chaque balayage, et motif du refus s'il n'est pas exécuté (`sweepRefusal`). */
+  onSweep?: (info: { command: string; args: readonly string[]; refused?: string }) => void;
 };
 
 /** Vidange forcée par défaut : au plus 25 runs ou 5 minutes entre deux balayages de l'uid dédié. */
@@ -180,14 +182,24 @@ export function spawnPlan(p: {
  * n'est fait que si Node n'a pas encore vu sa fin.
  */
 export function killPlan(
-  o: Pick<ProcessSandboxOptions, 'launcher' | 'uid' | 'gid'>,
+  o: Pick<ProcessSandboxOptions, 'launcher' | 'uid' | 'gid' | 'seccomp'>,
   pid: number,
 ): { command: string; args: string[] } | undefined {
   if (o.launcher === undefined || o.uid === undefined || o.gid === undefined) return undefined;
-  return {
-    command: o.launcher,
-    args: [`--reuid=${o.uid}`, `--regid=${o.gid}`, '--clear-groups', '--no-new-privs', '--', '/bin/kill', '-KILL', String(pid)],
-  };
+  // Un pid d'enfant seulement : jamais 0 (groupe), négatif (kill -1, groupe) ni 1 (init) (F-20261002-06).
+  if (!Number.isSafeInteger(pid) || pid <= 1) return undefined;
+  return { command: o.launcher, args: [...asSandboxUid(o.uid, o.gid, o.seccomp), '/bin/kill', '-KILL', String(pid)] };
+}
+
+/**
+ * Préfixe des commandes lancées sous l'uid dédié : changement d'uid sans nouveaux privilèges, puis filtre seccomp de
+ * l'enfant. Le profil du compose permet clone, setns et unshare au conteneur : un /bin/kill lancé sous l'uid dédié sans
+ * filtre serait un processus de cet uid sans filtre, qu'un enfant évadé pourrait stopper puis détourner (ptrace, ou
+ * /proc/<pid>/mem si Yama vaut 0) pour créer un espace de noms utilisateur. Arrêt forcé et balayage passent donc par le
+ * même filtre que l'enfant (revue 4.1b).
+ */
+function asSandboxUid(uid: number, gid: number, seccomp: string | undefined): string[] {
+  return [`--reuid=${uid}`, `--regid=${gid}`, '--clear-groups', '--no-new-privs', '--', ...(seccomp === undefined ? [] : [seccomp])];
 }
 
 /**
@@ -196,12 +208,23 @@ export function killPlan(
  * suivi : un enfant évadé de l'isolat pourrait laisser un processus détaché qui observerait les runs suivants (/proc,
  * ptrace selon Yama). Joué quand aucun autre run n'est actif ; `undefined` sans lanceur (même uid, ou worker root).
  */
-export function sweepPlan(o: Pick<ProcessSandboxOptions, 'launcher' | 'uid' | 'gid'>): { command: string; args: string[] } | undefined {
+export function sweepPlan(o: Pick<ProcessSandboxOptions, 'launcher' | 'uid' | 'gid' | 'seccomp'>): { command: string; args: string[] } | undefined {
   if (o.launcher === undefined || o.uid === undefined || o.gid === undefined) return undefined;
-  return {
-    command: o.launcher,
-    args: [`--reuid=${o.uid}`, `--regid=${o.gid}`, '--clear-groups', '--no-new-privs', '--', '/bin/kill', '-KILL', '-1'],
-  };
+  return { command: o.launcher, args: [...asSandboxUid(o.uid, o.gid, o.seccomp), '/bin/kill', '-KILL', '-1'] };
+}
+
+/**
+ * Garde du balayage (F-20261002-06, défense en profondeur) : `kill -1` atteint tous les processus de l'uid qui l'envoie.
+ * Lancé sous l'uid du worker, il tuerait le worker et tout ce que cet uid fait tourner (sur un poste de développement : toute
+ * la session de l'utilisateur) ; sous root, tout le conteneur. Le balayage n'est donc exécuté que sous Linux (la plateforme
+ * du lanceur de production), vers un uid connu, ni root ni celui du processus courant. Rend le motif du refus, sinon
+ * `undefined`. Décision pure : la plateforme et l'uid courant sont lus par l'appelant (`process.platform`, `process.getuid`).
+ */
+export function sweepRefusal(p: { uid: number; ownUid: number | undefined; platform: NodeJS.Platform }): string | undefined {
+  if (p.platform !== 'linux') return `balayage refusé : plateforme ${p.platform}, Linux seulement`;
+  if (p.uid === 0) return 'balayage refusé : uid cible 0 (root)';
+  if (p.ownUid === undefined || p.uid === p.ownUid) return `balayage refusé : l'uid cible (${p.uid}) est l'uid du worker ou l'uid du worker est inconnu`;
+  return undefined;
 }
 
 /**
@@ -478,8 +501,15 @@ export class ProcessSandboxEngine implements SandboxEngine {
     }
   }
 
-  /** Un balayage : `kill -1` sous l'uid dédié, puis aucun processus de cet uid ne doit subsister (Linux). */
+  /**
+   * Un balayage : `kill -1` sous l'uid dédié, puis aucun processus de cet uid ne doit subsister (Linux). Refusé par
+   * `sweepRefusal` : rien n'est lancé ; hors Linux, rien à balayer (pas de lanceur de production) ; sous Linux, échec
+   * (runs refusés, alerte), l'uid dédié n'étant pas distinct du worker.
+   */
   async #sweepOnce(plan: { command: string; args: string[] }, uid: number): Promise<boolean> {
+    const refused = sweepRefusal({ uid, ownUid: process.getuid?.(), platform: process.platform });
+    this.#options.onSweep?.({ command: plan.command, args: plan.args, ...(refused === undefined ? {} : { refused }) });
+    if (refused !== undefined) return process.platform !== 'linux';
     await new Promise<void>((resolve) => {
       execFile(plan.command, plan.args, { env: {}, timeout: 5000 }, () => resolve());
     });

@@ -217,7 +217,8 @@ observer les runs suivants. Limite : ce balayage n'a lieu que quand aucun autre 
 même sous des runs qui se chevauchent (`WORKER_CONCURRENCY` > 1), le worker suspend les nouveaux lancements après 25 runs
 ou 5 minutes sans balayage, jusqu'à ce que les runs en cours finissent. Chaque balayage est vérifié dans `/proc` (aucun
 processus de l'uid dédié ne doit subsister, balayeur compris) et repris jusqu'à trois fois ; en cas d'échec persistant,
-le worker refuse tout nouveau run et l'écrit au journal (`alert: sandbox_sweep_failed`).
+le worker refuse tout nouveau run et l'écrit au journal (`alert: sandbox_sweep_failed`). Le balayage (`kill -1`) n'est
+lancé que sous Linux, vers un uid dédié ni root ni égal à celui du worker : sinon il tuerait le worker lui-même.
 
 Conséquences pour l'hébergeur :
 
@@ -271,7 +272,9 @@ d'élévations locales de privilèges.
   source `deploy/sandbox-seccomp.c`) juste après le changement d'uid. Son filtre, hérité par tout ce qui suit et
   irrévocable, refuse `unshare`, `setns` et `clone` avec un drapeau `CLONE_NEW*` (EPERM), rend `clone3` indisponible
   (ENOSYS : glibc se replie sur `clone`) et tue tout appel d'une autre architecture. La sonde d'isolation essaie
-  `unshare --user` sous l'uid dédié ; le worker refuse de démarrer en production si l'enfant y parvient.
+  `unshare --user` sous l'uid dédié ; le worker refuse de démarrer en production si l'enfant y parvient. L'arrêt forcé
+  d'un enfant et le balayage de fin de run (`/bin/kill` lancé sous l'uid dédié) passent par le même filtre : aucun
+  processus de l'uid dédié ne tourne sans lui.
 - **Chromium : risque accepté.** Ses processus (uid du worker, sans capacité dans l'espace du conteneur) gardent cette
   surface : un rendu compromis qui sortirait aussi du bac à sable de Chromium l'atteindrait, avec les secrets du worker
   déjà à portée. C'est le prix du bac à sable de Chromium sans `CAP_SYS_ADMIN` ni binaire setuid (interdit par
