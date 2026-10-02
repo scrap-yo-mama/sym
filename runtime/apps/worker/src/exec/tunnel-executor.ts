@@ -225,6 +225,8 @@ export type TunnelRunOptions = Omit<DeclarativeRunOptions, 'transport'> & { read
 export async function runTunnelExecutor(options: TunnelRunOptions): Promise<{ result: DeclarativeRunResult; stop: TunnelStop | null; needsUser: boolean }> {
   const maxBytes = options.spec.limits?.max_response_bytes ?? FETCH_DEFAULT_MAX_BYTES;
   const transport = options.execution === 'playwright' ? pageScriptTransport(options.session, options.spec, maxBytes, options.signal) : pageFetchTransport(options.session, maxBytes);
+  // Limite connue (tests/invariants.json, assert_infinite_scroll_paginated) : pas de `scroll` en tunnel, l'extension n'exposant
+  // aucune commande de défilement ; `infinite_scroll` s'arrête à la page 1 (`unsupported`, sortie tronquée). Tâches de l'extension.
   const result = await runDeclarative({ ...options, transport });
   return { result, stop: options.session.stop, needsUser: options.session.needsUser };
 }

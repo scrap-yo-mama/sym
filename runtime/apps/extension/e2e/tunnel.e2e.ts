@@ -169,7 +169,9 @@ test('run E2 en tunnel : fetch dans un onglet du site, onglet caché, non décha
   await expect.poll(async () => (tabs = await automationTabs()).filter((t) => t.group !== null).length, { timeout: 30_000 }).toBeGreaterThan(0);
   expect(tabs.find((t) => t.group !== null)).toMatchObject({ active: false, autoDiscardable: false, group: 'Scrapyomama' });
   const run = await waitRun(runId, 60_000);
-  expect(run).toMatchObject({ state: 'succeeded', items: 30 });
+  // En échec : la cause du run et l'état de chaque commande du tunnel (le diff ne montre que les champs attendus).
+  const detail = async () => JSON.stringify({ run, jobs: await h.sql("SELECT cmd, state, trace FROM tunnel_jobs WHERE run_id = $1 ORDER BY created_at", [runId]) }).slice(0, 3000);
+  expect(run, run.state === 'succeeded' ? undefined : await detail()).toMatchObject({ state: 'succeeded', items: 30 });
   const attempts = await h.sql('SELECT execution, network, result_class FROM run_attempts WHERE run_id = $1', [runId]);
   expect(attempts).toEqual([{ execution: 'fetch_in_page', network: 'tunnel', result_class: 'ok' }]);
   expect(h.siteHits.filter((hit) => hit.startsWith(`${SHOP}/api/items`))).toHaveLength(3);
@@ -232,7 +234,7 @@ test(`run de ${HIDDEN_RUN_SECONDS} s en onglet caché : abouti, même onglet tou
   }
   const elapsed = (Date.now() - started) / 1000;
   const run = await waitRun(runId, 10_000);
-  expect(run).toMatchObject({ state: 'succeeded', items: pages * 10 });
+  expect(run, `run : ${JSON.stringify(run)}`).toMatchObject({ state: 'succeeded', items: pages * 10 });
   expect(elapsed).toBeGreaterThanOrEqual(HIDDEN_RUN_SECONDS);
   expect([...seen.keys()]).toEqual([tabId]);
   for (const t of seen.values()) expect(t).toMatchObject({ active: false, autoDiscardable: false, discarded: false, group: 'Scrapyomama' });
