@@ -13,7 +13,7 @@ import { createMockAuthApi, type MockAuthOptions } from '../src/testing/mock-aut
 export const DIST = fileURLToPath(new URL('../dist/', import.meta.url));
 
 /** CSP de la console en production : aucun script ni style en ligne, aucune origine tierce. */
-export const CONSOLE_CSP =
+const CONSOLE_CSP =
   "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'";
 
 const TYPES: Record<string, string> = {
@@ -52,7 +52,7 @@ export async function startConsole(options: MockAuthOptions): Promise<Harness> {
       const body = req.method === 'GET' || req.method === 'HEAD' ? undefined : await readBody(req);
       const headers = new Headers();
       for (const [name, value] of Object.entries(req.headers)) if (typeof value === 'string') headers.set(name, value);
-      const response = await api(new Request(url, { method: req.method, headers, body }));
+      const response = await api(new Request(url, { method: req.method, headers, body: body ? new Uint8Array(body) : undefined }));
       res.writeHead(response.status, Object.fromEntries(response.headers));
       res.end(Buffer.from(await response.arrayBuffer()));
       return;

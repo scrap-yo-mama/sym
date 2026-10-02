@@ -104,7 +104,7 @@ test.describe('parcours au clavier seul (fr)', () => {
 
   test('connexion refusée (message annoncé, mot de passe vidé), puis acceptée ; déconnexion', async ({ page }) => {
     const errors = await open(page, '/sessions', { bootstrapToken: TOKEN, admin: ADMIN });
-    await expect(page).toHaveURL(/\/login\?redirect=/);
+    await expect(page).toHaveURL(/\/login$/);
     // Premier arrêt du clavier : le lien d'évitement.
     await page.keyboard.press('Tab');
     await expect(page.locator('a[href="#main"]')).toBeFocused();
@@ -123,7 +123,7 @@ test.describe('parcours au clavier seul (fr)', () => {
     await page.keyboard.press('Enter');
     await expect(page.locator('h1')).toHaveText('Accueil');
     await expect(page).toHaveURL(/\/$/);
-    await expect(page.getByText(`Connecté en tant que ${ADMIN.email}`)).toBeVisible();
+    await expect(page.getByText(`Compte connecté\u00a0: ${ADMIN.email}`)).toBeVisible();
 
     await tabTo(page, 'header button');
     await page.keyboard.press('Enter');

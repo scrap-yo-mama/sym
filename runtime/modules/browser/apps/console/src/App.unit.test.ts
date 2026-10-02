@@ -5,7 +5,7 @@ import { renderToString } from 'vue/server-renderer';
 import { createMemoryHistory } from 'vue-router';
 import { describe, expect, test } from 'vitest';
 import { createConsoleApp } from './app.js';
-import { detectLocale, LOCALES, messages, normalizeLocale, type Locale } from './i18n.js';
+import { detectLocale, errorKey, LOCALES, messages, normalizeLocale, type Locale } from './i18n.js';
 import { createMockAuthApi } from './testing/mock-auth.js';
 
 const ADMIN = { email: 'admin@example.test', password: 'douze-caracteres-au-moins' };
@@ -87,6 +87,15 @@ describe('messages', () => {
 
   test('aucun emoji dans les messages : la signature SYM est l’icône SVG de packages/ui', () => {
     expect(values(messages.fr).concat(values(messages.en)).filter((v) => /\p{Extended_Pictographic}/u.test(v))).toEqual([]);
+  });
+
+  test('chaque code d’erreur d’AuthApi et du transport a son message ; un code inconnu devient `unexpected`', () => {
+    const login = ['invalid_credentials', 'rate_limited', 'not_initialized', 'invalid_code', 'no_pending_login', 'network', 'unexpected'];
+    const setup = ['invalid_bootstrap_token', 'already_initialized', 'weak_password', 'invalid_email', 'rate_limited', 'network', 'unexpected'];
+    for (const code of login) expect(errorKey('login', code)).toBe(`console.login.errors.${code}`);
+    for (const code of setup) expect(errorKey('setup', code)).toBe(`console.setup.errors.${code}`);
+    expect(errorKey('login', 'toString')).toBe('console.login.errors.unexpected');
+    expect(errorKey('setup', 'phrase du serveur')).toBe('console.setup.errors.unexpected');
   });
 
   test('langue : choix mémorisé, sinon navigateur (fr-* → fr), sinon en', () => {

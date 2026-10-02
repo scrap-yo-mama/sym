@@ -31,6 +31,7 @@ Contrat : `runtime/packages/contracts` (`@sym/contracts`, MIT, sous-chemin `brow
 - CI locale du module, sous verrou de test : `pnpm --filter @sym-browser/module ci:local` (skill `browser-ci`).
 - Sans l'image Docker : `pnpm --filter @sym-browser/module ci:local --skip-image`.
 - Tests d'un paquet : `pnpm --filter @sym-browser/gateway test` ; tout le module : `pnpm --filter "./modules/browser/**" test`.
+- Console : `pnpm --filter @sym-browser/console dev` (authentification simulée tant que 2.1 manque) ; E2E et axe sur la console construite : `pnpm --filter @sym-browser/console test:e2e` (Chromium : `pnpm exec playwright install chromium`).
 - Types : `pnpm --filter "./modules/browser/**" typecheck` ; lint : `pnpm exec eslint modules/browser packages/contracts`.
 - Image : `docker build -f modules/browser/Dockerfile -t sym-browser:dev .` puis `docker run --rm --security-opt seccomp=modules/browser/deploy/seccomp-chromium.json -e MASTER_KEY="$(openssl rand -base64 32)" -e DATABASE_URL=postgres://… sym-browser:dev` (`SYMB_MODE` : `all`, `gateway`, `node`).
 - Configuration : catalogue `packages/core/src/config/env-catalog.ts` (source unique, secrets `NOM_FILE`) ; config invalide = sortie code 1 nommant la variable ; `node dist/main.js --check-config` valide sans écouter ; `/healthz`, `/readyz`.

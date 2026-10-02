@@ -46,7 +46,7 @@ describe('garde de navigation', () => {
     await router.push('/setup');
     expect(router.currentRoute.value.name).toBe('home');
     await auth.logout();
-    await router.push('/');
+    await router.push('/?apres=deconnexion');
     expect(router.currentRoute.value.name).toBe('login');
   });
 
