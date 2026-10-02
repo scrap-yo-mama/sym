@@ -347,8 +347,11 @@ const READ_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
 /** Classes qui arrêtent l'agent ou le script (INV6, 04 §3.3) ; un 404 ou un 5xx n'arrête pas : l'agent peut revenir. */
 const STOP_CLASSES: ReadonlySet<string> = new Set(['blocked_by_protection', 'forbidden', 'rate_limited', 'robots_disallowed', 'auth_required', 'payment_required', 'account_limit']);
 const MAX_CLASSIFIED_BODY = 5_000_000;
-/** Attente au plus du verdict de la garde sur les écritures lancées par la page avant la fin de l'agent. */
-const WRITE_VERDICT_TIMEOUT_MS = 5000;
+/**
+ * Échéance de la barrière qui précède le compte des écritures lancées pendant l'agent (`settleWrites`) : une page qui
+ * boucle ne tient ni l'essai ni le slot du pool au-delà ; la barrière sans réponse compte pour une écriture (échec fermé).
+ */
+const WRITE_BARRIER_TIMEOUT_MS = 5000;
 /** Attente au plus du corps d'un document à classer (un document qui ne finit pas n'est classé que sur statut et en-têtes). */
 const CLASSIFY_BODY_TIMEOUT_MS = 10_000;
 
@@ -692,7 +695,8 @@ function agentFailure(run: AgentRunResult, cost?: AttemptCost): ExecFailure {
  * Compilation E6 → E5 vérifiée : étapes depuis la trace, puis rejeu 1 (contexte neuf, aucun LLM) pour induire
  * l'extraction par libellés sur la page atteinte, puis rejeu 2 (autre contexte neuf) de la stratégie complète, qui doit
  * rendre exactement l'enregistrement validé. Refusée :
- * - si la garde a coupé une écriture pendant l'agent (`write_blocked`) : le clic qui l'a déclenchée, rejoué sur le pool,
+ * - si une écriture a été lancée pendant l'agent (`write_blocked` ; sans `allow_write_actions`, toute écriture est coupée,
+ *   par la garde ou avant elle) : le clic qui l'a déclenchée, rejoué sur le pool,
  *   deviendrait une écriture à chaque run (08 §4 mesure 4) ;
  * - si la sortie compte plusieurs enregistrements (`list_not_compilable`) : l'extraction par libellés lit UNE fiche ; une
  *   liste paginée par bouton (F-E5) reste rejouée par l'agent, point faible connu de l'ADR 0001 (E5 « mouvant »).
@@ -803,12 +807,14 @@ async function runAgentInSlot(options: AgentOptions, lease: SlotLease): Promise<
     await watch.settled();
     // Une coupure n'est comptée que par la couche qui la fait (sans double compte, voir `dedicated` dans run-context.ts) :
     // route du contexte de run (requêtes initiales, WebSocket), interception du verrou (sauts de redirection), proxy d'egress.
-    // Écritures du dernier geste de l'agent : leur verdict arrive APRÈS la fin du run (course constatée sous charge, le
-    // clic d'écriture était alors compilé en E5). On l'attend ; une écriture encore suspendue au bout du délai compte
-    // comme coupée (sans `allow_write_actions`, la garde ne la laissera pas passer).
-    const unsettledWrites = options.allowWriteActions ? 0 : await ab.settleWrites(WRITE_VERDICT_TIMEOUT_MS);
+    // Écritures : le verdict de la garde sur celles du dernier geste de l'agent arrive APRÈS la fin du run quand une couche
+    // consultée avant elle tarde (robots.txt, cadence ; course constatée sous charge, le clic d'écriture était alors compilé
+    // en E5), et une écriture coupée par robots.txt ou par la route des domaines ne l'atteint jamais. Sans
+    // `allow_write_actions`, toute écriture LANCÉE est coupée : c'est elle qui est comptée, quel que soit son verdict
+    // (`settleWrites`, toutes cibles). Les deux comptes sont des minorants des mêmes écritures.
+    const launchedWrites = options.allowWriteActions ? 0 : await ab.settleWrites(WRITE_BARRIER_TIMEOUT_MS);
     domainBlocked = ab.guard.blocked.filter((b) => b.reason === 'domain').length + ab.violations() + options.egress.domainBlockedCount();
-    writesBlocked = ab.guard.blocked.filter((b) => b.reason === 'write').length + unsettledWrites;
+    writesBlocked = Math.max(ab.guard.blocked.filter((b) => b.reason === 'write').length, launchedWrites);
   } finally {
     watch.dispose();
     await ab.close();

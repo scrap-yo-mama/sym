@@ -12,7 +12,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import type { Browser } from 'playwright-core';
 import { describe, expect, test, vi } from 'vitest';
-import { agentChromiumArgs, type AgentBrowserOptions } from './agent-browser.js';
+import { agentChromiumArgs, launchAgentBrowser, type AgentBrowserOptions } from './agent-browser.js';
 import { INV11_DISABLED_FEATURES } from './launch.js';
 import { openRunContext, type RunContextOptions } from './run-context.js';
 import type { AgentFetchOptions, AgentOptions, HybridOptions } from '../exec/agent-executors.js';
@@ -91,7 +91,10 @@ describe('assert_all_browser_contexts_guarded — aucun contexte Chromium de run
 
   test('le Chromium dédié des essais agentiques (E5-E6, Stagehand) ouvre son contexte de run par openRunContext, checkRequest exigé', () => {
     const text = code(readFileSync(join(runtime, 'apps/worker/src/browser/agent-browser.ts'), 'utf8'));
-    expect(text).toMatch(/openRunContext\(browser, \{ dedicated: true, [^}]*checkRequest: options\.checkRequest[^}]*\}\)/);
+    // Le contrôle passé à `openRunContext` est celui des options, enveloppé (relevé des écritures lancées) ; son absence est
+    // refusée avant l'enveloppe (test suivant), qui ne doit jamais la masquer.
+    expect(text).toMatch(/const check = options\.checkRequest;\s*if \(typeof check !== 'function'\) throw /);
+    expect(text).toMatch(/openRunContext\(browser, \{\s*dedicated: true,(?:(?!\}\);)[\s\S])*?checkRequest: async \(hop\) => \{[^}]*return check\(hop\);\s*\},\s*\}\);/);
     // La page du run est celle de la garde (aucune autre page n'est créée ni prise ici).
     expect(text).toMatch(/const page = run\.page;/);
     expect(text).not.toMatch(/context\.pages\(\)/);
@@ -118,6 +121,11 @@ describe('assert_all_browser_contexts_guarded — aucun contexte Chromium de run
     expect(browser.newContext).not.toHaveBeenCalled();
     expect(browser.newBrowserCDPSession).not.toHaveBeenCalled();
     expect(browser.contexts).not.toHaveBeenCalled();
+  });
+
+  test('échec fermé : launchAgentBrowser sans checkRequest refuse avant tout lancement (le contrôle enveloppé ne masque pas son absence)', async () => {
+    const options = { egressServer: 'http://127.0.0.1:1', allowedHosts: ['zz_test.localhost'], allowWriteActions: false, executablePath: '/nonexistent/zz_test_chromium' } as unknown as AgentBrowserOptions;
+    await expect(launchAgentBrowser(options)).rejects.toThrow(/robots\.txt/);
   });
 
   test('Chromium dédié : un userAgent passé à openRunContext est refusé avant toute ouverture (il relève du lancement)', async () => {
