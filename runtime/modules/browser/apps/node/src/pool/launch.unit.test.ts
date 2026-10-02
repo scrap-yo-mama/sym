@@ -62,8 +62,10 @@ describe('groupes de processus possédés par le pool', () => {
     expect(signals).toEqual([]);
   });
 
+  // Groupes factices au-delà de pid_max (4 194 304) : jamais le pid ni le groupe du processus de test (sur un runner, 8000
+  // pouvait l'être).
   test('kill : SIGKILL au groupe enregistré, attente de sa disparition, oubli une fois vide ; balayage des groupes retirés non vides', async () => {
-    let alive = [{ pid: 5000, pgid: 5000, state: 'S' }, { pid: 5001, pgid: 5000, state: 'S' }, { pid: 6000, pgid: 6000, state: 'S' }];
+    let alive = [{ pid: 5005000, pgid: 5005000, state: 'S' }, { pid: 5005001, pgid: 5005000, state: 'S' }, { pid: 5006000, pgid: 5006000, state: 'S' }];
     const signals: [number, string][] = [];
     const groups = new OwnedProcessGroups({
       signal: (pid, sig) => {
@@ -73,24 +75,24 @@ describe('groupes de processus possédés par le pool', () => {
       table: () => alive,
       pollMs: 1,
     });
-    groups.add(5000);
-    expect(groups.members(5000)).toEqual([5000, 5001]);
-    expect(await groups.kill(5000)).toBe(true);
-    expect(signals).toEqual([[-5000, 'SIGKILL']]);
+    groups.add(5005000);
+    expect(groups.members(5005000)).toEqual([5005000, 5005001]);
+    expect(await groups.kill(5005000)).toBe(true);
+    expect(signals).toEqual([[-5005000, 'SIGKILL']]);
     expect(groups.owned()).toEqual([]);
     // Groupe retiré (fermeture propre) dont un processus survit : le balayage le tue ; groupe vide : oublié sans signal.
-    alive.push({ pid: 7001, pgid: 7000, state: 'S' });
-    groups.add(7000);
-    groups.add(8000);
-    groups.retire(7000);
-    groups.retire(8000);
-    expect(await groups.sweep()).toEqual([7000]);
-    expect(signals).toEqual([[-5000, 'SIGKILL'], [-7000, 'SIGKILL']]);
+    alive.push({ pid: 5007001, pgid: 5007000, state: 'S' });
+    groups.add(5007000);
+    groups.add(5008000);
+    groups.retire(5007000);
+    groups.retire(5008000);
+    expect(await groups.sweep()).toEqual([5007000]);
+    expect(signals).toEqual([[-5005000, 'SIGKILL'], [-5007000, 'SIGKILL']]);
     expect(groups.owned()).toEqual([]);
     // Un zombie ne compte pas comme membre vivant.
-    alive.push({ pid: 9000, pgid: 9000, state: 'Z' });
-    groups.add(9000);
-    expect(groups.members(9000)).toEqual([]);
+    alive.push({ pid: 5009000, pgid: 5009000, state: 'Z' });
+    groups.add(5009000);
+    expect(groups.members(5009000)).toEqual([]);
   });
 
   test('table des processus lue dans /proc (Linux) : ce processus y figure avec son groupe', () => {

@@ -23,6 +23,9 @@ const imageEnv = (masterKey: string): string[] => ['-e', `MASTER_KEY=${masterKey
 
 const steps: Step[] = [
   { name: 'install (lockfile gelé)', cmd: ['pnpm', 'install', '--frozen-lockfile'] },
+  // En CI (le job `browser` appelle ce script tel quel), Chromium de Playwright et ses dépendances système avant toute étape
+  // qui le lance : tests d'egress du nœud (1.5, 1.6) dans « tests », puis Chromium réels, console et quickstart.
+  ...(process.env['CI'] ? [{ name: 'Chromium de Playwright (CI)', cmd: ['pnpm', '--filter', '@sym-browser/console', 'exec', 'playwright', 'install', '--with-deps', 'chromium'] }] : []),
   { name: 'build (contrat puis module)', cmd: ['pnpm', ...MODULE, 'build'] },
   { name: 'typecheck', cmd: ['pnpm', ...MODULE, 'typecheck'] },
   { name: 'lint (frontière comprise)', cmd: ['pnpm', 'exec', 'eslint', 'modules/browser', 'packages/contracts'] },
@@ -50,10 +53,7 @@ if (!skipChromium) steps.push({ name: 'tests sur Chromium réels (pool et sessio
 // Tâche 3.4 : sdk_readme_example, l'exemple du README du SDK contre le mode all (PostgreSQL en Docker, vrais Chromium).
 if (!skipChromium) steps.push({ name: 'tests sur Chromium réels (relais WSS, clients CDP et SDK contre le mode all, bout en bout)', cmd: ['pnpm', '--filter', '@sym-browser/module', 'test:chromium'] });
 // Console (tâche 3.5) : axe et parcours de connexion dans Chromium, sur la console construite à l'étape « build ».
-// En CI, Chromium est installé ici (le job `browser` appelle ce script tel quel) ; en local : `pnpm exec playwright install chromium`.
-if (process.env['CI']) {
-  steps.push({ name: 'Chromium de Playwright (CI)', cmd: ['pnpm', '--filter', '@sym-browser/console', 'exec', 'playwright', 'install', '--with-deps', 'chromium'] });
-}
+// Chromium : installé en CI avant l'étape « tests » (voir plus haut) ; en local : `pnpm exec playwright install chromium`.
 steps.push({ name: 'console : axe et parcours au clavier, connexion et 6 écrans (Playwright, Chromium)', cmd: ['pnpm', '--filter', '@sym-browser/console', 'test:e2e'] });
 // Tâche 3.8 : quickstart_replayed, le code du démarrage rapide (docs/en/quickstart.md) exécuté tel quel contre une instance.
 if (!skipChromium) steps.push({ name: 'docs : démarrage rapide rejoué de bout en bout', cmd: ['pnpm', '--filter', '@sym-browser/module', 'test:quickstart'] });
