@@ -47,14 +47,13 @@ async function viaHttp(egress: SessionEgress, target: string, extra = ''): Promi
 async function viaConnect(egress: SessionEgress, authority: string, path = '/'): Promise<{ connect: Reply; inner?: Reply }> {
   const socket = await open(egress);
   const parts: Buffer[] = [];
-  let established = false;
+  let head: Reply | undefined;
   const closed = new Promise<void>((resolve) => socket.once('close', () => resolve()));
   socket.on('error', () => {});
   socket.on('data', (part: Buffer) => {
     parts.push(part);
-    if (!established && Buffer.concat(parts).includes('\r\n\r\n')) {
-      established = true;
-      const head = parseReply(Buffer.concat(parts));
+    if (head === undefined && Buffer.concat(parts).includes('\r\n\r\n')) {
+      head = parseReply(Buffer.concat(parts));
       if (head.status === 200) {
         parts.length = 0;
         socket.write(`GET ${path} HTTP/1.1\r\nHost: ${authority}\r\nConnection: close\r\n\r\n`);
@@ -63,11 +62,8 @@ async function viaConnect(egress: SessionEgress, authority: string, path = '/'):
   });
   socket.write(`CONNECT ${authority} HTTP/1.1\r\nHost: ${authority}\r\n\r\n`);
   await closed;
-  const all = Buffer.concat(parts);
-  if (all.toString('latin1').startsWith('HTTP/1.1 403') || all.toString('latin1').startsWith('HTTP/1.1 502') || all.length === 0) {
-    return { connect: parseReply(all) };
-  }
-  return { connect: { status: 200, body: '', raw: Buffer.alloc(0) }, inner: parseReply(all) };
+  if (head === undefined || head.status !== 200) return { connect: parseReply(Buffer.concat(parts)) };
+  return { connect: head, inner: parseReply(Buffer.concat(parts)) };
 }
 
 const NAMES = { 'site-a.test': ['127.0.0.1'], 'site-b.test': ['127.0.0.1'], 'piege.test': ['127.0.0.1'], 'meta.test': ['169.254.169.254'], 'prive.test': ['10.0.0.7'] } as Record<string, string[]>;
@@ -162,6 +158,14 @@ describe('proxy d’egress de session', () => {
     expect((await viaConnect(egress, `${host}:${site.port}`)).connect).toMatchObject({ status: 403, body: 'address_not_public' });
     expect(site.connections()).toBe(0);
     expect(events[0]?.data).toMatchObject({ reason: 'address_not_public' });
+  });
+
+  test('journal du nœud : le détail du refus (adresse, classe) passe par onDenied, pas par la réponse', async () => {
+    const denied: { reason: string; address?: string; detail?: string }[] = [];
+    const { egress } = await egressFor({}, { onDenied: (e) => denied.push({ reason: e.reason, ...(e.address === undefined ? {} : { address: e.address }), ...(e.detail === undefined ? {} : { detail: e.detail }) }) });
+    const reply = await viaHttp(egress, `http://meta.test:${site.port}/`);
+    expect(reply.body).toBe('address_not_public');
+    expect(denied).toEqual([{ reason: 'address_not_public', address: '169.254.169.254', detail: 'cloud_metadata' }]);
   });
 
   test('nom introuvable : 403 unresolvable', async () => {
@@ -365,14 +369,18 @@ describe('proxy amont (accroche de la tâche 1.6)', () => {
     const upstream = { type: 'http' as const, host: 'proxy.test', port: 8080 };
     const { egress } = await egressFor({ upstream }, { guard, dialUpstream });
     expect((await viaHttp(egress, `http://site-a.test:${site.port}/`)).status).toBe(200);
+    expect(egress.state().bytesIn).toBe(site.bytesWritten());
     expect(seen.at(-1)).toEqual({ host: 'site-a.test', port: site.port });
     expect(calls).toEqual([]);
     expect(await viaHttp(egress, `http://localhost:${site.port}/`)).toMatchObject({ status: 403, body: 'address_not_public' });
+    expect((await viaConnect(egress, `169.254.169.254:${site.port}`)).connect).toMatchObject({ status: 403, body: 'address_not_public' });
+    expect(seen).toHaveLength(1);
     egress.replace({ upstream, dnsViaProxy: false, ports: [site.port] });
+    const before = site.bytesWritten();
     expect((await viaHttp(egress, `http://site-a.test:${site.port}/`)).status).toBe(200);
     expect(seen.at(-1)).toEqual({ host: 'site-a.test', port: site.port, address: '127.0.0.1' });
     expect(calls).toEqual(['site-a.test']);
-    await settle(() => egress.state().bytesIn === site.bytesWritten());
-    expect(egress.state().bytesIn).toBe(site.bytesWritten());
+    await settle(() => egress.state().bytesIn === site.bytesWritten() - before);
+    expect(egress.state().bytesIn).toBe(site.bytesWritten() - before);
   });
 });

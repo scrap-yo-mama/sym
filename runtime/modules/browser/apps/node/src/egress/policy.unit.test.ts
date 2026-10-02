@@ -11,6 +11,7 @@ import {
   compileEgressPolicy,
   createEgressGuard,
   dedicatedChromiumArgs,
+  egressGuardFromConfig,
   hostMatcher,
   sharedContextOptions,
   sharedLaunchOptions,
@@ -133,11 +134,30 @@ describe('garde : résolution unique et contrôle des adresses (04c § 1.2)', ()
     expect(await denied(guard.resolve('metadata.google.internal', 80))).toMatchObject({ reason: 'address_not_public' });
   });
 
+  test('contrôle du nom seul (dnsViaProxy) : noms réservés, et IP littérales contrôlées comme des adresses', () => {
+    const guard = createEgressGuard({ privateHosts: ['10.1.0.0/16'] });
+    expect(() => guard.checkName('site.test', 443)).not.toThrow();
+    expect(() => guard.checkName('93.184.215.14', 443)).not.toThrow();
+    expect(() => guard.checkName('10.1.2.3', 443)).not.toThrow();
+    for (const host of ['localhost', 'metadata.goog', '169.254.169.254', '127.0.0.1', '[::1]', '10.2.0.1']) {
+      expect(() => guard.checkName(host, 443)).toThrow(EgressDeniedError);
+    }
+  });
+
   test('adresse distante effective du socket contrôlée à nouveau', () => {
     const guard = createEgressGuard({ privateHosts: ['fixtures.internal'] });
     expect(() => guard.checkAddress('fixtures.internal', '127.0.0.1')).not.toThrow();
     expect(() => guard.checkAddress('public.test', '127.0.0.1')).toThrow(EgressDeniedError);
     expect(() => guard.checkAddress('public.test', '')).toThrow(EgressDeniedError);
+  });
+
+  test('depuis la configuration du nœud (tâche 0.4) : SYMB_PRIVATE_HOSTS et SYMB_TEST_ALLOW_PRIVATE', async () => {
+    const resolver = resolverOf({ 'fixtures.internal': ['127.0.0.1'], 'autre.test': ['127.0.0.1'] });
+    const strict = egressGuardFromConfig({ privateHosts: ['fixtures.internal'], test: { mode: false, allowPrivate: false } }, resolver);
+    await expect(strict.resolve('fixtures.internal', 80)).resolves.toMatchObject({ address: '127.0.0.1' });
+    expect(await denied(strict.resolve('autre.test', 80))).toMatchObject({ reason: 'address_not_public' });
+    const test = egressGuardFromConfig({ privateHosts: [], test: { mode: true, allowPrivate: true } }, resolver);
+    await expect(test.resolve('autre.test', 80)).resolves.toMatchObject({ address: '127.0.0.1' });
   });
 
   test('SYMB_PRIVATE_HOSTS invalide : refusé à la construction', () => {
