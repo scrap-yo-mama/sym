@@ -2,7 +2,7 @@
 // Instance SYM Browser assemblée pour rejouer le quickstart de la documentation (tâche 3.8), dans le process des tests, à
 // partir des briques réelles du module :
 //   - API REST de la passerelle (`createGatewayApi`, tâche 2.2) sur une base PostgreSQL jetable et migrée (0.2), servie en
-//     HTTP sur 127.0.0.1, avec ses jetons de connexion HMAC (`createConnectTokens`) et son relais WSS public (2.3) ;
+//     HTTP sur 127.0.0.1, avec ses jetons de connexion HMAC (`ConnectTokens`) et son relais WSS public (2.3) ;
 //   - nœud : relais interne (`createNodeRelay`, 2.3, NODE_TOKEN), pool de Chromium (1.1) et Chromium dédiés (1.4) lancés sur
 //     l'egress propre à chaque session (1.5), qui applique la politique `egress` de la requête de création ;
 //   - un nœud enregistré par battement en base (table de routage), comme le ferait le nœud en mode `all`.
@@ -18,13 +18,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import pg from 'pg';
-import { createGatewayApi, type Principal, type SessionLauncher } from '../../apps/gateway/src/api/index.ts';
+import { createGatewayApi, type SessionLauncher } from '../../apps/gateway/src/api/index.ts';
 import { dedicatedLauncher, sessionDir } from '../../apps/node/src/dedicated/index.ts';
 import { createEgressGuard, startSessionEgress, type SessionEgress } from '../../apps/node/src/egress/index.ts';
 import { BrowserPool, OwnedProcessGroups, PROVISIONAL_CAPACITY, type BrowserLauncher, type PoolLease } from '../../apps/node/src/pool/index.ts';
 import { createNodeRelay } from '../../apps/node/src/relay/index.ts';
-import { createConnectTokens } from '../../packages/core/src/index.ts';
-import { migrateUp, recordHeartbeat, transitionSession } from '../../packages/db/src/index.ts';
+import { ApiKeyAuthenticator, ConnectTokens, MasterKey, newApiKey } from '../../packages/core/src/index.ts';
+import { insertApiKey, migrateUp, pgApiKeyStore, recordHeartbeat, transitionSession } from '../../packages/db/src/index.ts';
 
 export type QuickstartInstance = {
   /** `SYMB_URL` du quickstart. */
@@ -79,14 +79,10 @@ export async function startQuickstartInstance(options: QuickstartInstanceOptions
   const db = new pg.Pool({ connectionString: dbUrl.toString(), max: 8 });
 
   const tenantId = (await db.query<{ id: string }>("INSERT INTO tenants (name) VALUES ('quickstart') RETURNING id")).rows[0]!.id;
-  const apiKeyId = (
-    await db.query<{ id: string }>(
-      "INSERT INTO api_keys (tenant_id, key_prefix, key_hash, scopes) VALUES ($1, 'symb_qs', '$argon2id$v=19$m=19456,t=2,p=1$test$test', $2) RETURNING id",
-      [tenantId, ['sessions:write', 'sessions:read']],
-    )
-  ).rows[0]!.id;
-  const apiKey = `symb_qs_${randomBytes(16).toString('hex')}`;
-  const principal: Principal = { tenantId, apiKeyId, scopes: ['sessions:write', 'sessions:read'] };
+  // Clé réelle (argon2id, tâche 2.1) : seule son empreinte est en base.
+  const created = await newApiKey({ scopes: ['sessions:write', 'sessions:read'] });
+  await insertApiKey(db, { tenantId, prefix: created.prefix, keyHash: created.keyHash, scopes: created.scopes, expiresAt: null });
+  const apiKey = created.key.reveal();
 
   // Nœud : pool de Chromium dédiés, chacun lancé sur l'egress de sa session.
   const dataDir = await mkdtemp(join(tmpdir(), 'zz_symb_quickstart_'));
@@ -196,8 +192,8 @@ export async function startQuickstartInstance(options: QuickstartInstanceOptions
   const url = `http://127.0.0.1:${port}`;
   const app: FastifyInstance = await createGatewayApi({
     db,
-    auth: { authenticate: async (secret) => (secret === apiKey ? principal : null) },
-    tokens: createConnectTokens(randomBytes(32)),
+    auth: new ApiKeyAuthenticator(pgApiKeyStore(db)),
+    tokens: new ConnectTokens({ current: MasterKey.generate() }),
     launcher,
     publicUrl: url,
     relay: { nodeToken },

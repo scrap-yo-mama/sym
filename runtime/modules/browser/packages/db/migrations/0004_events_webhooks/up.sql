@@ -1,5 +1,5 @@
 -- SPDX-License-Identifier: AGPL-3.0-only
--- 0003_events_webhooks : flux d'événements et webhooks (cdc/sym-browser 03 § 5 et § 6, 04 § 2, tâche 2.5).
+-- 0004_events_webhooks : flux d'événements et webhooks (cdc/sym-browser 03 § 5 et § 6, 04 § 2, tâche 2.5).
 -- 1. Chaque insertion dans session_events est notifiée sur le canal `symb_session_events` (les notifications partent à la
 --    validation, dans l'ordre des validations ; rien pour une transaction annulée). Charge : identifiant, session, client,
 --    type, instant et données ; au-delà de 7 900 octets, sans données (`truncated`), relues en base par la passerelle.

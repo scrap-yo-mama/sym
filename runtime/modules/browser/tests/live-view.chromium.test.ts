@@ -63,7 +63,8 @@ beforeAll(async () => {
   await registerRelay(gateway, {
     nodeToken: NODE_TOKEN,
     resolver: {
-      async authorize({ sessionId, protocol, secret }) {
+      async authorize({ sessionId, protocol, query }) {
+        const secret = typeof query.t === 'string' && query.t !== '' ? query.t : null;
         if (protocol !== 'live' || secret === null) return { ok: false, problem: new ApiProblem('unauthorized', 'Invalid live token.') };
         const check = tokens.verify(secret, sessionId);
         if (!check.ok || views.get(sessionId) === undefined) return { ok: false, problem: new ApiProblem('unauthorized', 'Invalid live token.') };

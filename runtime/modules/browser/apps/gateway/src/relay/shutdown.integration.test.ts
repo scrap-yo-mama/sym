@@ -4,15 +4,14 @@
 //     avec le code 1012 (redémarrage du service) côté client ; la connexion vers le nœud est fermée sans code d'erreur, et la
 //     session reste `running` sur son nœud (« laisse les sessions vivre sur les nœuds ») : le client se reconnecte ailleurs.
 // Sécurité : aucun processus lancé ici (faux nœud en WebSocket local).
-import { randomBytes } from 'node:crypto';
 import type { AddressInfo } from 'node:net';
-import { createConnectTokens } from '@sym-browser/core';
+import { ConnectTokens, MasterKey } from '@sym-browser/core';
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import { WebSocket, WebSocketServer } from 'ws';
 import { createHarness, type Harness } from '../../test/helpers/harness.js';
 
 const NODE_TOKEN = 'nodetoken-'.repeat(4);
-const tokens = createConnectTokens(randomBytes(32));
+const tokens = new ConnectTokens({ current: MasterKey.generate() });
 let wss: WebSocketServer;
 const nodeClosed: number[] = [];
 let h: Harness;

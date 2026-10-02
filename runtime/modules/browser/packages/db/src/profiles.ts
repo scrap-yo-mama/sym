@@ -8,7 +8,7 @@
 import type pg from 'pg';
 
 /** Connexion ou pool (`pg.Pool`, `pg.Client`, `pg.PoolClient`). */
-export type Queryable = Pick<pg.Pool, 'query'>;
+type Queryable = Pick<pg.Pool, 'query'>;
 
 export type ProfileRow = {
   tenantId: string;
