@@ -22,7 +22,7 @@ export function isVendored(file: string): boolean {
 }
 
 /** `<!--` : composant Vue (SFC), en-tête en commentaire HTML fermé sur la même ligne. */
-const COMMENT_PREFIX: Record<string, string> = { ts: '//', mjs: '//', sql: '--', sh: '#', vue: '<!--' };
+const COMMENT_PREFIX: Record<string, string> = { ts: '//', mjs: '//', sql: '--', sh: '#', vue: '<!--', c: '//' };
 const HOOK_FILES = new Set(['scripts/hooks/pre-commit']);
 
 /** Préfixe de commentaire du fichier, ou undefined si ce n'est pas une source soumise à l'en-tête. */

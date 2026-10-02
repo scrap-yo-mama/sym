@@ -34,12 +34,14 @@ import {
   hybridUsesLlm,
   htmlToVisibleText,
   induceLabelExtraction,
+  partitionItems,
   validateHybridSpec,
   validateOutput,
   type AgentEngine,
   type AgentFetchSpec,
   type AgentRunResult,
   type AgentSpec,
+  type AgentTaskRules,
   type HybridSpec,
   type ItemPolicy,
 } from '@runtime/core';
@@ -196,16 +198,13 @@ function llmFailure(error: unknown): ExecFailure {
 
 /**
  * Enregistrements conformes : chaque item validé contre `output_schema` (INV1) ; 0 item = `extraction`. Politique
- * `quarantine` (runs, D-49) : les objets sont rendus tels quels si au moins un est conforme ; l'exécuteur écarte les autres
- * (quarantaine), jamais livrés.
+ * `quarantine` (runs, D-49) : TOUS les enregistrements sont rendus ; l'exécuteur les trie (Ajv : un non-objet échoue sur
+ * `type`), écarte les non conformes en quarantaine, jamais livrés, et décide la casse sur le run (0 conforme casse).
  */
-function conform(records: readonly unknown[], outputSchema: unknown, requests: number, policy: ItemPolicy = 'strict'): DeclarativeRunResult {
+export function conformRecords(records: readonly unknown[], outputSchema: unknown, requests: number, policy: ItemPolicy = 'strict'): DeclarativeRunResult {
   if (records.length === 0) return fail({ failure_class: 'extraction', retryable: false, detail: 'no_records' }, requests);
-  if (policy === 'quarantine') {
-    const objects = records.filter((r): r is Record<string, unknown> => typeof r === 'object' && r !== null && !Array.isArray(r));
-    if (objects.length !== records.length || !objects.some((r) => validateOutput(outputSchema, r).ok)) return fail({ failure_class: 'extraction', retryable: false, detail: 'schema_mismatch' }, requests);
-    return ok(objects, requests);
-  }
+  // Les non-objets voyagent tels quels jusqu'au tri (`partitionItems`), qui ne lit jamais leurs clés.
+  if (policy === 'quarantine') return ok(records as Record<string, unknown>[], requests);
   for (const r of records) {
     if (typeof r !== 'object' || r === null || Array.isArray(r) || !validateOutput(outputSchema, r).ok) {
       return fail({ failure_class: 'extraction', retryable: false, detail: 'schema_mismatch' }, requests);
@@ -239,6 +238,11 @@ export type AgentFetchOptions = {
   readonly cost?: AttemptCost;
   /** robots.txt (1.11, INV11) : chaque requête du navigateur (`fetch_in_page`) ; la session réseau a le sien (`checkUrl`). */
   readonly access: AccessCheck;
+  /**
+   * Règles embarquées (tâche 2.10, 18 §4.5) : texte reconstruit par l'appelant depuis les références de `spec.rules`
+   * (`rule_file_versions` du propriétaire, empreintes vérifiées) ; absent, aucune règle injectée.
+   */
+  readonly rulesText?: string;
 };
 
 async function fetchPage(options: AgentFetchOptions): Promise<HttpExchange> {
@@ -308,7 +312,7 @@ export async function runAgentFetchExecutor(options: AgentFetchOptions): Promise
   try {
     const out = await extractRecordsWithLlm(options.llm, {
       instruction: options.spec.instruction,
-      ...(options.spec.rules === undefined ? {} : { rules: options.spec.rules.text }),
+      ...(options.rulesText === undefined || options.rulesText === '' ? {} : { rules: options.rulesText }),
       pageText: text,
       pageUrl: exchange.url,
       truncated,
@@ -320,7 +324,7 @@ export async function runAgentFetchExecutor(options: AgentFetchOptions): Promise
     const llm = spend();
     // Coût inconnu (prix absent) : jamais un succès dont le plafond n'a pas pu être tenu.
     if (llm.usd === null) return { result: fail(budgetFailure(true), 1), llm };
-    return { result: conform(out.records, options.outputSchema, 1, options.itemPolicy), llm };
+    return { result: conformRecords(out.records, options.outputSchema, 1, options.itemPolicy), llm };
   } catch (error) {
     if (options.signal.aborted) throw error;
     return { result: fail(llmFailure(error), 1), llm: spend() };
@@ -531,7 +535,7 @@ async function runHybridWithoutLlm(options: HybridOptions, onPage?: (page: Page)
       const extracted = await extractLabelsFromPage(rc.page, spec);
       await watch.settled();
       if (watch.refusal() !== undefined) return fail(watch.refusal()!, 1);
-      return extracted.ok ? conform(extracted.records, options.outputSchema, spec.steps.length + 1, options.itemPolicy) : hybridFail(extracted.failure);
+      return extracted.ok ? conformRecords(extracted.records, options.outputSchema, spec.steps.length + 1, options.itemPolicy) : hybridFail(extracted.failure);
     } finally {
       watch.dispose();
       await rc.close();
@@ -631,7 +635,7 @@ async function runHybridDelegated(options: HybridOptions, agentBrowser: NonNulla
     if (failure !== null) return { result: hybridFail(failure), llm: spend };
     if (spec.extract.mode === 'labels') {
       const extracted = await extractLabelsFromPage(ab.page, spec);
-      return { result: extracted.ok ? conform(extracted.records, options.outputSchema, spec.steps.length + 1, options.itemPolicy) : hybridFail(extracted.failure), llm: spend };
+      return { result: extracted.ok ? conformRecords(extracted.records, options.outputSchema, spec.steps.length + 1, options.itemPolicy) : hybridFail(extracted.failure), llm: spend };
     }
     if (extractLlm === null) return { result: fail({ failure_class: 'code_error', retryable: false, detail: 'llm_not_configured' }), llm: spend };
     // Reliquat contrôlé AVANT l'extraction déléguée : plus rien, aucun appel.
@@ -652,7 +656,7 @@ async function runHybridDelegated(options: HybridOptions, agentBrowser: NonNulla
       });
       spend = addSpend(spend, extractSpend());
       if (spend?.usd === null) return { result: fail(budgetFailure(true), 1), llm: spend };
-      return { result: conform(out.records, options.outputSchema, spec.steps.length + 1, options.itemPolicy), llm: spend };
+      return { result: conformRecords(out.records, options.outputSchema, spec.steps.length + 1, options.itemPolicy), llm: spend };
     } catch (error) {
       if (options.signal.aborted) throw error;
       spend = addSpend(spend, extractSpend());
@@ -694,8 +698,11 @@ export type AgentOptions = {
   readonly classify?: ClassifyFn;
   /** robots.txt (1.11, INV11) : chaque requête du Chromium dédié et des rejeux de compilation. */
   readonly access: AccessCheck;
-  /** `read_skill` de Stagehand (tâche 2.10) : skills épinglés de la version ; absent, `skill_not_found`. */
-  readonly readSkill?: (name: string) => Promise<string>;
+  /**
+   * Règles embarquées (tâche 2.10, 18 §4.5) : `systemPrompt` reconstruit par l'appelant depuis les références de
+   * `spec.rules` (empreintes vérifiées) et `read_skill` sur les seuls skills référencés, à leur version épinglée.
+   */
+  readonly rules?: AgentTaskRules;
 };
 
 function agentFailure(run: AgentRunResult, cost?: AttemptCost): ExecFailure {
@@ -808,9 +815,9 @@ async function runAgentInSlot(options: AgentOptions, lease: SlotLease): Promise<
         outputSchema: recordsSchema(options.outputSchema) as unknown as Record<string, unknown>,
         allowWriteActions: options.allowWriteActions,
         limits: { maxSteps: options.spec.limits.max_steps, maxDurationMs: options.spec.limits.timeout_ms, maxCostUsd: budget.limitUsd },
-        // Règles embarquées (tâche 2.10, 18 §4.5) : `systemPrompt` de Stagehand ; `read_skill` ne sert que l'ensemble
-        // fourni par l'appelant (résolu à l'enquête, épinglé au rejeu), sinon `skill_not_found`.
-        ...(options.spec.rules === undefined ? {} : { rules: { systemPrompt: options.spec.rules.text, readSkill: async (name: string) => (await options.readSkill?.(name)) ?? 'skill_not_found' } }),
+        // Règles embarquées (tâche 2.10, 18 §4.5) : `systemPrompt` de Stagehand ; `read_skill` ne sert que les skills
+        // référencés par la stratégie (version épinglée, empreinte vérifiée), sinon `skill_not_found`.
+        ...(options.rules === undefined ? {} : { rules: options.rules }),
       },
       { model: { modelId, temperature: 0, promptVersion }, signal: AbortSignal.any([options.signal, stop.signal]) },
     );
@@ -848,8 +855,12 @@ async function runAgentInSlot(options: AgentOptions, lease: SlotLease): Promise<
   // Coût inconnu (prix absent) : plafond intenable, jamais un succès.
   if (spend.usd === null) return { result: fail(budgetFailure(true), 1), llm: spend, domainBlocked };
   const items = (run.output as { items?: unknown } | null)?.items;
-  const result = conform(Array.isArray(items) ? items : [], options.outputSchema, 1, options.itemPolicy);
+  const result = conformRecords(Array.isArray(items) ? items : [], options.outputSchema, 1, options.itemPolicy);
   if (!result.ok) return { result, llm: spend, domainBlocked };
+  // La compilation E6 → E5 ne part que d'une sortie entièrement CONFORME (quarantaine : les non conformes sont encore dans
+  // `result.records`) ; une sortie dont un item est écarté n'est pas compilée (une liste réduite à un item conforme
+  // passerait pour une fiche).
+  if (options.itemPolicy === 'quarantine' && partitionItems(options.outputSchema, result.records).rejected.length > 0) return { result, llm: spend, compileFailure: 'items_rejected', domainBlocked };
   const compiled = await compileAndVerify(options, lease, run, result.records, `${made.engine.id}@${made.engine.version}`, writesBlocked);
   return 'spec' in compiled ? { result, llm: spend, compiled: compiled.spec, domainBlocked } : { result, llm: spend, compileFailure: compiled.failure, domainBlocked };
 }

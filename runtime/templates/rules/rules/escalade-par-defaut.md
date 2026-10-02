@@ -17,9 +17,7 @@ Couples autorisés triés par `est_cost_usd` croissant, puis par E (E1 à E6), p
 ## Élagage après un échec (classe du classifieur)
 
 - `network` : sauter les couples restants avec le même N.
-- `extraction` : sauter les couples restants avec le même E pour le même gisement de données.
-- Toute autre classe garde le réseau courant : les couples d'un autre N sont sautés (seule `network` fait changer de N).
-- `rate_limited` (429) : ralentir, les essais s'arrêtent.
+- `extraction` : sauter les couples restants avec le même E.
 
 ## Arrêts
 

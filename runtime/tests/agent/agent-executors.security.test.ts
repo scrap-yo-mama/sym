@@ -1343,7 +1343,9 @@ describe('règles Markdown dans Stagehand (tâche 2.10, 18 §4.5, §4.10)', () =
       (egress) =>
         runAgentExecutor({
           access: allowAllRobots,
-          spec: { schema_version: 1, kind: 'agent', start_url: localUrl('/defi-lien'), allowed_hosts: [LOCAL], instruction: 'Read the product sheet.', limits: { max_steps: 10, timeout_ms: 90_000 }, rules: { text: ruleText, refs: ['zz-resous-defi@1'] } },
+          spec: { schema_version: 1, kind: 'agent', start_url: localUrl('/defi-lien'), allowed_hosts: [LOCAL], instruction: 'Read the product sheet.', limits: { max_steps: 10, timeout_ms: 90_000 } },
+          // Texte reconstruit par l'appelant depuis les références épinglées de la spec (strategy-executor).
+          rules: { systemPrompt: ruleText, readSkill: async () => 'skill_not_found' },
           outputSchema: LOCAL_ITEM,
           signal,
           guard: localGuard,

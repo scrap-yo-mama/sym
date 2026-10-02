@@ -109,12 +109,14 @@ import {
   compiledWithRules,
   DEFAULT_POLICY_NAME,
   DEFAULT_POLICY_SHA256,
+  embeddedRulesOf,
   jsonSha256,
   renderRulesPrompt,
   SkillReader,
   sourceRuleRows,
   type DomainPacer,
   type ResolvedRules,
+  type SkillRead,
   type StrategyRuleRow,
 } from '@runtime/core';
 import { investigateCallCeilingUsd, investigateMessages, investigatePromptVersion, proposeInvestigation, readSkillsPhase, renderSkillBodies } from '@runtime/agent';
@@ -129,6 +131,7 @@ import {
   saveInvestigationState,
   saveInvestigationStrategy,
   saveRunDataset,
+  schemaColumns,
   type InvestigationState,
   type RunTarget,
 } from '@runtime/db';
@@ -609,11 +612,12 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
         });
         if (spent >= request.budget_usd) return await budgetExhausted('investigation_budget_usd');
         if (!request.auto_validate) {
-          await save('awaiting_schema_validation', { proposal: proposal!, proposed_schema: built.outputSchema, ...(rulesUsed === undefined ? {} : { rules: rulesUsed }) });
+          await save('awaiting_schema_validation', { proposal: proposal!, proposed_schema: built.outputSchema, proposed_columns: schemaColumns(built.outputSchema), ...(rulesUsed === undefined ? {} : { rules: rulesUsed }) });
           await event(EV.phase, { phase: 'awaiting_schema_validation', budget: budgetView() });
           return { state: 'succeeded', outcome: 'clean', degraded_reasons: [], items: 0 };
         }
-        await save('testing', { proposal: proposal!, proposed_schema: built.outputSchema, validated_schema: built.outputSchema, validated_by: 'auto', ...(rulesUsed === undefined ? {} : { rules: rulesUsed }) });
+        const columns = schemaColumns(built.outputSchema);
+        await save('testing', { proposal: proposal!, proposed_schema: built.outputSchema, validated_schema: built.outputSchema, proposed_columns: columns, validated_columns: columns, validated_by: 'auto', ...(rulesUsed === undefined ? {} : { rules: rulesUsed }) });
         await decide(EV.schemaValidated, { by: 'auto' });
         await ctx.log('info', 'schema_auto_validated', {});
       } else if (remap) {
@@ -625,6 +629,8 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
 
       // --- 3. Essais du moins cher au plus cher --------------------------------------------------------------------
       await save('testing');
+      // Plan restreint par l'appelant (`exclude_executions`, 06 § 2) : des niveaux retirés, jamais ajoutés.
+      const excluded = new Set<string>(state.excluded_executions ?? []);
       const plan = buildTrialPlan({
         strategies: built.strategies,
         networks,
@@ -635,14 +641,23 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
         instruction: request.description,
         documentBytes: state.page?.document_bytes ?? 0,
         totalBytes: state.page?.total_bytes ?? 0,
-      });
-      // Règles embarquées dans les prompts figés E4-E6 (18 §4.5, RULES_MAX_TOKENS de 1 000) : le run ne relit pas les règles.
+      }).filter((p) => !excluded.has(p.execution));
+      // Règles embarquées dans les prompts figés E4-E6 (18 §4.5, RULES_MAX_TOKENS de 1 000) : la spec ne porte que leurs
+      // RÉFÉRENCES (`nom@version#sha256`, jamais le texte : INV12, spec lisible des membres d'une API partagée) ; l'essai et
+      // le rejeu reconstruisent le texte depuis ces versions épinglées (strategy-executor). E6 reçoit aussi la liste des
+      // skills (`read_skill`, 18 §4.4) ; E4, sans outil, seulement les règles.
       const embedded = plan.some((p) => p.execution === 'agent_fetch' || p.execution === 'agent') ? (await resolveRulesForApi(deps.pool, { apiId: ctx.apiId, ownerId: ctx.ownerId, role: 'embedded', host })).resolved : null;
+      if (embedded !== null) await logRuleBudgets(ctx, embedded);
       const embeddedRows = embedded === null ? [] : sourceRuleRows({ rules: embedded.rules, skills: [], truncated: [] }, [], { embedded: true });
-      if (embedded !== null && embedded.rules.length > 0) {
-        const text = renderRulesPrompt({ rules: embedded.rules, skills: [], skillsWithoutDescription: [] });
-        for (const [i, p] of plan.entries()) if (p.execution === 'agent_fetch' || p.execution === 'agent') plan[i] = { ...p, spec: { ...p.spec, rules: { text, refs: embedded.rules.map((r) => r.ref) } } };
+      if (embedded !== null) {
+        for (const [i, p] of plan.entries()) {
+          if (p.execution !== 'agent_fetch' && p.execution !== 'agent') continue;
+          const rules = embeddedRulesOf(embedded, { skills: p.execution === 'agent' });
+          if (rules.rules.length > 0 || rules.skills.length > 0) plan[i] = { ...p, spec: { ...p.spec, rules } };
+        }
       }
+      /** Skills lus par l'agent pendant les essais (`read_skill`), par couple : journalisés, versés dans la source du retenu. */
+      const skillReads = new Map<TrialPair, SkillRead[]>();
       // Plan guidé par les règles (18 §4.5) : réordonner ou restreindre DANS l'ensemble autorisé, jamais élargir.
       const guided = applyRulePlan(plan, proposal, new Set(rulesUsed?.effective ?? []));
       for (const ignored of guided.ignored) await ctx.log('warn', 'rule_widening_ignored', { execution: ignored.execution, network: ignored.network, rule_refs: ignored.rule_refs, reason: ignored.reason });
@@ -696,6 +711,12 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
                 acc.engine = trial.llm.engine ?? acc.engine;
               }
               spend.set(pair, acc);
+              for (const read of trial.outcome.skillReads ?? []) {
+                const seen = skillReads.get(pair) ?? [];
+                if (seen.some((r) => r.ref === read.ref)) continue;
+                skillReads.set(pair, [...seen, read]);
+                await event('skill.read', { ref: read.ref, name: read.name, version: read.version, sha256: read.sha256, execution: entry.execution });
+              }
               const cost = trial.llmUsd === null ? null : round6(trial.proxyUsd + trial.llmUsd);
               trialsUsd = round6(trialsUsd + (cost ?? 0));
               const r = trial.result;
@@ -772,8 +793,12 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
           // Source (18 §4.6) : règles injectées et skills lus ; règles embarquées si le compilé porte un prompt (E4) ou vient
           // d'une trace E6 (E5 : `compiled_with` par étape, 19 §4).
           const agentic = entry.execution === 'agent_fetch' || entry.execution === 'agent';
-          const rows: StrategyRuleRow[] = [...(rulesUsed?.rows ?? []), ...(agentic ? embeddedRows.filter((e) => !(rulesUsed?.rows ?? []).some((r) => r.rule_file_id === e.rule_file_id)) : [])];
-          const spec = kept.execution === 'hybrid' ? withCompiledWith(kept.spec, compiledWithRules(agentic ? embeddedRows : rows), spend.get(pair)?.model ?? null, now()) : kept.spec;
+          // Skills lus par l'agent pendant les essais de ce couple : `skill_read`, à leur version servie (épinglée).
+          const agentReads = agentic && embedded !== null ? sourceRuleRows({ rules: [], skills: embedded.skills, truncated: [] }, skillReads.get(pair) ?? []) : [];
+          const known = (rows: readonly StrategyRuleRow[], id: string) => rows.some((r) => r.rule_file_id === id);
+          const rows: StrategyRuleRow[] = [...(rulesUsed?.rows ?? [])];
+          for (const extra of agentic ? [...agentReads, ...embeddedRows] : []) if (!known(rows, extra.rule_file_id)) rows.push(extra);
+          const spec = kept.execution === 'hybrid' ? withCompiledWith(kept.spec, compiledWithRules(agentic ? [...embeddedRows, ...agentReads] : rows), spend.get(pair)?.model ?? null, now()) : kept.spec;
           const recompile = state.reason === 'recompile';
           const saved = await saveInvestigationStrategy(deps.pool, {
             apiId: ctx.apiId,
@@ -783,6 +808,7 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
             spec,
             estCostUsd: kept.estCostUsd,
             outputSchema,
+            ...(state.validated_columns === undefined ? {} : { outputColumns: state.validated_columns }),
             inputSchema: buildInputSchema({ paginated: entry.paginated, maxPages: PROPOSAL_HARD_MAX_PAGES }),
             state: { ...state, spent_usd: spent, elapsed_ms: baseElapsed + Math.max(0, now() - started) },
             createdBy: recompile ? 'recompile' : 'investigation',

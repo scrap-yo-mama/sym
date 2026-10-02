@@ -5,7 +5,11 @@
 // - réordonner : les couples placés par une règle effective passent en tête, dans l'ordre du plan ; le reste garde l'ordre
 //   de 04 §3.3. Le RÉSEAU du premier essai reste celui du code : une règle ne fait jamais commencer sur un autre réseau
 //   (X4 : seule une classe `network` fait changer de N ; 18 §4.7 : politique réseau) ;
-// - restreindre : un couple exclu par une règle effective est retiré (`pruned_by_rule`, avec ses `rule_refs`) ;
+// - restreindre : un couple exclu par une règle effective est retiré (`pruned_by_rule`, avec ses `rule_refs`). Une exclusion
+//   ne fait jamais changer de réseau : si les exclusions vident le réseau du premier essai du code, celles qui le vident
+//   sont ignorées (`rule_widening_ignored`, raison `network_order`) ; si un couple moins cher d'un autre réseau passerait
+//   en tête, le premier couple restant du réseau du code est placé avant lui (écart porté par les `rule_refs` de
+//   l'exclusion). Un autre réseau n'est ensuite atteint qu'après un échec de classe `network` (`pruneAfter`) ;
 // - jamais élargir : un couple hors de l'ensemble autorisé (tunnel, proxy non autorisé, niveau non servi) est ignoré et
 //   journalisé `rule_widening_ignored` avec ses `rule_refs`.
 // Une référence n'est effective que si elle désigne une règle INJECTÉE dans ce prompt et autre que la politique par défaut
@@ -41,11 +45,18 @@ export function applyRulePlan<T extends TrialPair>(plan: readonly T[], proposal:
     if (refs.length === 0) continue;
     for (const p of plan) if (same(p, c) && !prunedByRule.some((x) => x.pair === p)) prunedByRule.push({ pair: p, rule_refs: refs });
   }
+  // Une exclusion ne vide jamais le réseau du premier essai du code (X4 : seule une classe `network` fait changer de N).
+  const firstNetwork = plan[0]?.network;
+  if (firstNetwork !== undefined && plan.every((p) => p.network !== firstNetwork || prunedByRule.some((x) => x.pair === p))) {
+    for (const x of prunedByRule.filter((x) => x.pair.network === firstNetwork)) {
+      ignored.push({ execution: String(x.pair.execution), network: String(x.pair.network), rule_refs: [...x.rule_refs], reason: 'network_order' });
+    }
+    for (let i = prunedByRule.length - 1; i >= 0; i -= 1) if (prunedByRule[i]!.pair.network === firstNetwork) prunedByRule.splice(i, 1);
+  }
   const excluded = new Set(prunedByRule.map((x) => x.pair));
   const rest = plan.filter((p) => !excluded.has(p));
 
   // Réordonner, dans l'ensemble autorisé et sur le réseau du premier essai du code.
-  const firstNetwork = plan[0]?.network;
   const front: T[] = [];
   for (const c of proposal?.plan ?? []) {
     const matching = rest.filter((p) => same(p, c));
@@ -65,15 +76,27 @@ export function applyRulePlan<T extends TrialPair>(plan: readonly T[], proposal:
       placed.set(p, refs);
     }
   }
-  return { ordered: [...front, ...rest.filter((p) => !front.includes(p))], prunedByRule, ignored, placed };
+  const ordered = [...front, ...rest.filter((p) => !front.includes(p))];
+  // Exclusion qui laisse en tête un couple (moins cher) d'un autre réseau : le premier couple restant du réseau du code
+  // passe devant, placé par les règles d'exclusion (`rule_refs` de l'écart à l'ordre de coût, INV2).
+  if (ordered[0] !== undefined && ordered[0].network !== firstNetwork) {
+    const i = ordered.findIndex((p) => p.network === firstNetwork);
+    if (i > 0) {
+      const [moved] = ordered.splice(i, 1);
+      ordered.unshift(moved!);
+      placed.set(moved!, [...new Set(prunedByRule.flatMap((x) => x.rule_refs))]);
+    }
+  }
+  return { ordered, prunedByRule, ignored, placed };
 }
 
 /**
  * Rattrapage de la sélection « moins cher conforme » (18 §4.5) : couples restants STRICTEMENT moins chers que le couple
- * conforme retenu (coût inconnu : jamais moins cher), dans l'ordre de coût croissant. Ils sont essayés avant de retenir.
+ * conforme retenu (coût inconnu : jamais moins cher), SUR SON RÉSEAU (X4 : aucun changement de N sans échec de classe
+ * `network`), dans l'ordre de coût croissant. Ils sont essayés avant de retenir.
  */
 export function cheaperPairs<T extends TrialPair>(remaining: readonly T[], than: TrialPair): T[] {
   const cost = than.est_cost_usd;
-  const cheaper = remaining.filter((p) => p.est_cost_usd !== null && (cost === null || p.est_cost_usd < cost));
+  const cheaper = remaining.filter((p) => p.network === than.network && p.est_cost_usd !== null && (cost === null || p.est_cost_usd < cost));
   return orderTrials(cheaper) as T[];
 }

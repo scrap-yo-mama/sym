@@ -11,6 +11,7 @@
 import { onMounted, onServerPrefetch } from 'vue';
 import { useI18n } from 'vue-i18n';
 import TextField from '@/components/account/TextField.vue';
+import PageHeader from '@/components/brand/PageHeader.vue';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -48,10 +49,9 @@ const OUTCOME_MARK: Record<string, string> = { success: '✓', denied: '✕', er
 
 <template>
   <section class="mx-auto flex max-w-7xl flex-col gap-4 py-8" aria-labelledby="audit-heading">
-    <header class="flex flex-col gap-1">
-      <h1 id="audit-heading" data-route-heading tabindex="-1" class="text-2xl font-semibold tracking-tight">{{ t('audit.title') }}</h1>
-      <p class="text-sm text-muted-foreground">{{ t('audit.intro') }}</p>
-    </header>
+    <PageHeader heading-id="audit-heading" :title="t('audit.title')" :kicker="t('brand.kicker.audit')">
+      <p class="sym-lead">{{ t('audit.intro') }}</p>
+    </PageHeader>
 
     <form class="flex flex-wrap items-end gap-3" novalidate data-testid="audit-filters" @submit.prevent="events.refetch()">
       <fieldset class="flex flex-wrap items-end gap-3">
@@ -95,7 +95,7 @@ const OUTCOME_MARK: Record<string, string> = { success: '✓', denied: '✕', er
       <Button type="button" variant="outline" size="sm" @click="events.refetch()">{{ t('ui.retry') }}</Button>
     </div>
     <p v-else-if="events.items.value.length === 0" class="text-sm text-muted-foreground" data-testid="audit-empty">{{ t('audit.empty') }}</p>
-    <div v-else class="relative overflow-x-auto rounded-xl border">
+    <div v-else class="relative overflow-x-auto rounded-xl border bg-card">
       <table class="w-full text-left text-sm" data-testid="audit-table" :aria-busy="events.loading.value">
         <caption class="sr-only">{{ t('audit.caption') }}</caption>
         <thead class="border-b bg-muted/50">

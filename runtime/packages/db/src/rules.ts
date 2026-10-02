@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// Règles, consignes et skills Markdown (tâche 2.10, 18 §4, migration 0018) : service partagé par la console, REST et MCP
+// Règles, consignes et skills Markdown (tâche 2.10, 18 §4, migration 0019) : service partagé par la console, REST et MCP
 // (routes, outils et écran : tâche 3.13). Toutes les lectures et écritures passent par `withActor` (RLS, INV12).
 // - Enregistrement : format fermé (`invalid_rule`, 422), version par contenu (même contenu : même version ; version
 //   fournie et périmée : `version_conflict`, 409), `widening_warnings` (le fichier est enregistré, la protection est le
@@ -10,14 +10,16 @@
 //   ce fichier (aucune copie privée qui l'ombrerait).
 // - Origines `mcp` et `import` : version « à relire » forcée par la base ; la résolution garde la dernière version
 //   confirmée ; seule la console confirme (`human_confirmation_required` sinon). Recopier une proposition en attente
-//   (même empreinte) : `human_confirmation_required`.
+//   (même forme canonique : espaces, lignes vides et `version` sans effet) : `human_confirmation_required`.
 // - Audit (13 §9) : `rule.created`, `rule.updated`, `rule.shared`, `rule.unshared`, `rule.imported`,
 //   `instance_directive.updated`, `rule.confirmed`, `recompile.requested`, avec `nom@version` et `sha256`, jamais le contenu.
 // - Recompilation (18 §4.8) : propriétaire de l'API seulement (404 uniforme), une seule à la fois
 //   (`recompile_in_progress`), transition 19 ou 20 raison `rules_changed`, schéma de sortie conservé.
 import {
+  parseEmbeddedRef,
   parseRuleFile,
   resolveRules,
+  ruleCanonical,
   RuleFormatError,
   RULES_MAX_TOKENS,
   sourceRules,
@@ -30,16 +32,17 @@ import {
   type RuleLevel,
   type RulesBudgetRole,
   type RunTrigger,
-  type SkillFile,
+  type EmbeddedFile,
   type StrategyRuleRow,
   type StrategySource,
   type WideningWarning,
 } from '@runtime/core';
+import { INVESTIGATION_DEFAULTS } from '@runtime/core/investigation';
 import type pg from 'pg';
 import { appendAudit, type AuditEvent } from './audit.js';
 import type { InvestigationState } from './investigations.js';
 import { applyStatusAndNotify } from './notify.js';
-import { withActor } from './rls.js';
+import { asActorInTransaction, withActor } from './rls.js';
 import { createRun } from './runs.js';
 
 type Queryable = Pick<pg.ClientBase, 'query'>;
@@ -148,8 +151,19 @@ export async function putRule(pool: pg.Pool, actor: RuleActor, input: { readonly
 
   return withActor(pool, { userId: actor.userId, role: actor.role }, async (tx) => {
     // Recopie d'une proposition en attente (19 §5) : jamais sans acte humain en console.
-    const copy = await tx.query("SELECT 1 FROM rule_file_versions WHERE sha256 = $1 AND origin IN ('proposal', 'optimizer') AND review_state = 'to_review' LIMIT 1", [doc.sha256]);
-    if ((copy.rowCount ?? 0) > 0) throw new RuleServiceError('human_confirmation_required', 'cette règle recopie une proposition en attente : à accepter en console');
+    // Comparaison sur la forme canonique (espaces, lignes vides, `version` sans effet) : une quasi-copie est une recopie.
+    // Contrôle provisoire ; 2.11 et 3.13 marquent en base les versions dérivées d'une proposition.
+    const pending = await tx.query<{ sha256: string; content: string }>("SELECT sha256, content FROM rule_file_versions WHERE origin IN ('proposal', 'optimizer') AND review_state = 'to_review'");
+    const canonical = ruleCanonical(doc.content);
+    const copies = (p: { sha256: string; content: string }) => {
+      if (p.sha256 === doc.sha256) return true;
+      try {
+        return ruleCanonical(p.content) === canonical;
+      } catch {
+        return false;
+      }
+    };
+    if (pending.rows.some(copies)) throw new RuleServiceError('human_confirmation_required', 'cette règle recopie une proposition en attente : à accepter en console');
     let file: FileRow;
     if (existing === null) {
       const inserted = await tx.query<FileRow>(
@@ -388,16 +402,20 @@ export async function readStrategySource(
 }
 
 /**
- * Skills épinglés d'une version (rejeu E4-E6, 18 §4.5) : lus dans `rule_file_versions` à la version de la source ; le
- * lecteur vérifie leur `sha256` (`pinnedSkillReader`).
+ * Fichiers référencés par une stratégie E4-E6 (`spec.rules`, `nom@version#sha256`, 18 §4.5) : lus dans `rule_file_versions`
+ * SOUS L'IDENTITÉ DU PROPRIÉTAIRE de l'API (RLS : ses fichiers et ceux partagés d'instance, jamais ceux d'un autre), à la
+ * version et à l'empreinte référencées, jamais la version courante. Le texte est reconstruit et vérifié par le cœur
+ * (`renderEmbeddedRules`) : une référence introuvable n'injecte rien.
  */
-export async function readPinnedSkills(pool: pg.Pool, args: { readonly apiId: string; readonly ownerId: string; readonly version: number }): Promise<SkillFile[]> {
+export async function readEmbeddedFiles(pool: pg.Pool, args: { readonly ownerId: string; readonly refs: readonly string[] }): Promise<EmbeddedFile[]> {
+  const parsed = args.refs.map(parseEmbeddedRef).filter((r): r is NonNullable<typeof r> => r !== null);
+  if (parsed.length === 0) return [];
   return withActor(pool, { userId: args.ownerId, role: 'member' }, async (tx) => {
-    const { rows } = await tx.query<SkillFile>(
-      `SELECT f.name, s.rule_version AS version, s.sha256, v.content FROM strategy_version_rules s
-       JOIN rule_files f ON f.id = s.rule_file_id JOIN rule_file_versions v ON v.rule_file_id = s.rule_file_id AND v.version = s.rule_version
-       WHERE s.api_id = $1 AND s.strategy_version = $2 AND f.kind = 'skill' AND s.loaded IN ('skill_read', 'embedded')`,
-      [args.apiId, args.version],
+    const { rows } = await tx.query<EmbeddedFile>(
+      `SELECT f.name, f.kind, v.version, v.sha256, v.content, v.description FROM rule_file_versions v JOIN rule_files f ON f.id = v.rule_file_id
+       JOIN unnest($2::text[], $3::int[], $4::text[]) AS r(name, version, sha256) ON r.name = f.name AND r.version = v.version AND r.sha256 = v.sha256
+       WHERE f.owner_id = $1 OR f.visibility = 'instance'`,
+      [args.ownerId, parsed.map((r) => r.name), parsed.map((r) => r.version), parsed.map((r) => r.sha256)],
     );
     return rows;
   });
@@ -430,28 +448,62 @@ export async function requestRecompile(
   const specUrl = api.spec === null ? undefined : [(api.spec['request'] as { url?: unknown } | undefined)?.url, api.spec['start_url']].find((u): u is string => typeof u === 'string');
   const url = api.investigation?.request?.url ?? specUrl;
   if (url === undefined || api.current_strategy_version === null) throw new RuleServiceError('not_recompilable', 'aucune source à recompiler (ni demande d’enquête, ni stratégie courante)');
-  // La machine à états est le verrou : une seconde demande concurrente trouve l'API en `enquete` et est refusée.
-  const step = await applyStatusAndNotify(pool, queue, { apiId: api.id, event: { type: 'reinvestigate', trigger: 'rules_changed' }, clock: { now: () => new Date() } });
+  // La machine à états est le verrou : une seconde demande concurrente trouve l'API en `enquete` et est refusée. La
+  // transition, la demande d'enquête et le run partent au MÊME COMMIT (crochet `afterWrite`) : un échec de mise en file
+  // laisse l'API dans son statut, jamais en `enquete` sans run.
+  const previous = api.investigation?.request;
+  const state: InvestigationState = {
+    request: {
+      url,
+      description: previous?.description ?? 'recompile',
+      auto_validate: true,
+      // Sans demande enregistrée : plafonds par défaut de l'enquête (`investigation_budget_usd`, `investigation_timeout_s`).
+      budget_usd: previous?.budget_usd ?? INVESTIGATION_DEFAULTS.budgetUsd,
+      timeout_s: previous?.timeout_s ?? INVESTIGATION_DEFAULTS.timeoutSeconds,
+    },
+    reason: 'recompile',
+    validated_schema: api.output_schema as Record<string, unknown>,
+    validated_by: 'user',
+    spent_usd: 0,
+    elapsed_ms: 0,
+  };
+  let started: { runId: string; jobId: string } | undefined;
+  const step = await applyStatusAndNotify(pool, queue, {
+    apiId: api.id,
+    event: { type: 'reinvestigate', trigger: 'rules_changed' },
+    clock: { now: () => new Date() },
+    afterWrite: async (client) => {
+      started = await asActorInTransaction(client, { userId: args.userId, role: 'member' }, async (tx) => {
+        await tx.query("UPDATE apis SET investigation = $2::jsonb, investigation_phase = 'access_check', updated_at = now() WHERE id = $1 AND owner_id = $3", [api.id, JSON.stringify(state), args.userId]);
+        await appendAudit(tx, { actorUserId: args.userId, actorVia: args.trigger === 'mcp' ? 'mcp' : args.trigger === 'rest' ? 'apikey' : 'ui', action: 'recompile.requested', targetType: 'api', targetId: api.id, outcome: 'success', meta: { slug: args.slug } });
+        return createRun(tx, queue, { apiId: api.id, ownerId: args.userId, trigger: args.trigger, kind: 'investigation' });
+      });
+    },
+  });
   if (!step.ok) throw new RuleServiceError(step.state.status === 'enquete' ? 'recompile_in_progress' : 'not_recompilable', `recompilation refusée depuis ce statut (${step.rejected})`);
-  return withActor(pool, { userId: args.userId, role: 'member' }, async (tx) => {
-    const previous = api.investigation?.request;
-    const state: InvestigationState = {
-      request: {
-        url,
-        description: previous?.description ?? 'recompile',
-        auto_validate: true,
-        budget_usd: previous?.budget_usd ?? 1,
-        timeout_s: previous?.timeout_s ?? 600,
-      },
-      reason: 'recompile',
-      validated_schema: api.output_schema as Record<string, unknown>,
-      validated_by: 'user',
-      spent_usd: 0,
-      elapsed_ms: 0,
-    };
-    await tx.query("UPDATE apis SET investigation = $2::jsonb, investigation_phase = 'access_check', updated_at = now() WHERE id = $1 AND owner_id = $3", [api.id, JSON.stringify(state), args.userId]);
-    await appendAudit(tx, { actorUserId: args.userId, actorVia: args.trigger === 'mcp' ? 'mcp' : args.trigger === 'rest' ? 'apikey' : 'ui', action: 'recompile.requested', targetType: 'api', targetId: api.id, outcome: 'success', meta: { slug: args.slug } });
-    return createRun(tx, queue, { apiId: api.id, ownerId: args.userId, trigger: args.trigger, kind: 'investigation' });
+  return started!;
+}
+
+/**
+ * Ce que vN+1 reprend de la source de vN (réparation, 18 §2 : « recompiler depuis la source ») : la demande et les
+ * décisions de l'enquête. À défaut de source sur vN (version d'avant 2.10, importée), la demande d'enquête de l'API.
+ * Propriétaire seul ; `null` sinon.
+ */
+export async function readSourceBase(
+  pool: pg.Pool,
+  args: { readonly apiId: string; readonly ownerId: string; readonly version: number },
+): Promise<{ readonly request: StrategySource['request']; readonly decisions: readonly string[]; readonly investigation_id: string | null } | null> {
+  return withActor(pool, { userId: args.ownerId, role: 'member' }, async (tx) => {
+    const { rows } = await tx.query<{ source: StrategySource | null; investigation: Partial<InvestigationState> | null }>(
+      'SELECT s.source, a.investigation FROM apis a LEFT JOIN strategy_versions s ON s.api_id = a.id AND s.version = $3 WHERE a.id = $1 AND a.owner_id = $2',
+      [args.apiId, args.ownerId, args.version],
+    );
+    const row = rows[0];
+    if (row === undefined) return null;
+    if (row.source !== null) return { request: row.source.request, decisions: row.source.decisions, investigation_id: row.source.investigation_id };
+    const request = row.investigation?.request;
+    if (request === undefined) return null;
+    return { request: { description: request.description, url: request.url, example_output_ref: null }, decisions: [], investigation_id: null };
   });
 }
 
@@ -464,9 +516,10 @@ export function buildStrategySource(args: {
   readonly investigationId: string | null;
   readonly decisions?: readonly string[];
   readonly rows: readonly StrategyRuleRow[];
+  readonly exampleOutputRef?: string | null;
 }): StrategySource {
   return {
-    request: { description: args.description, url: args.url, example_output_ref: null },
+    request: { description: args.description, url: args.url, example_output_ref: args.exampleOutputRef ?? null },
     output_schema_sha256: args.outputSchemaSha256,
     investigation_id: args.investigationId,
     decisions: [...(args.decisions ?? [])],

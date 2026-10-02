@@ -9,7 +9,7 @@
 // L'URL de la demande n'admet aucun paramètre secret (jeton, clé, session, signature). La colonne `investigation` reste
 // lisible des membres par `instance_read` (visibilité instance, sans session) : elle ne doit figurer dans AUCUNE projection
 // servie à un non-propriétaire (REST, MCP, console : 3.x), seulement dans celles du propriétaire.
-import { assertInputSchema, assertSchemaAcceptable, SchemaError, type Execution, type InvestigationPhase, type JobQueue, type Network, type RunTrigger, type StrategyRuleRow, type StrategySource } from '@runtime/core';
+import { assertInputSchema, assertSchemaAcceptable, EXECUTIONS, SchemaError, type Execution, type InvestigationPhase, type JobQueue, type Network, type RunTrigger, type StrategyRuleRow, type StrategySource } from '@runtime/core';
 import type { InvestigationProposal, StoredCandidate } from '@runtime/core/investigation';
 import { INVESTIGATION_DEFAULTS } from '@runtime/core/investigation';
 import type pg from 'pg';
@@ -44,12 +44,73 @@ export type InvestigationState = {
   readonly rules?: { readonly rows: readonly StrategyRuleRow[]; readonly effective: readonly string[] };
   readonly proposed_schema?: Record<string, unknown>;
   readonly validated_schema?: Record<string, unknown>;
+  /** Ordre déclaré des propriétés de premier niveau (jsonb ne garde pas l'ordre des clés d'un objet ; un tableau, si). */
+  readonly proposed_columns?: readonly string[];
+  readonly validated_columns?: readonly string[];
   readonly validated_by?: 'auto' | 'user';
   /** Coût cumulé de l'enquête (LLM d'enquête et essais de tous ses runs). */
   readonly spent_usd: number;
   /** Durée active cumulée (hors attente de la validation). */
   readonly elapsed_ms: number;
+  /** Niveaux d'exécution retirés du plan d'essais par l'appelant (`exclude_executions`, 06 § 2, 3.1) : jamais un ajout. */
+  readonly excluded_executions?: readonly Execution[];
 };
+
+/**
+ * Propriétés de premier niveau d'un schéma de sortie, dans l'ordre DÉCLARÉ (ordre des clés de l'objet JavaScript lu du
+ * JSON d'origine) : à relever AVANT tout passage par jsonb, qui réordonne les clés. Colonnes de l'export CSV.
+ */
+export function schemaColumns(schema: unknown): string[] {
+  const properties = typeof schema === 'object' && schema !== null ? (schema as { properties?: unknown }).properties : undefined;
+  return typeof properties === 'object' && properties !== null && !Array.isArray(properties) ? Object.keys(properties) : [];
+}
+
+const PERSONAL = 'x-personal';
+const isPlainRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
+
+/** Copie d'un schéma sans aucune marque `x-personal` (profondeur bornée). */
+function withoutPersonalMarks(schema: unknown, depth = 0): unknown {
+  if (depth > 64) return schema;
+  if (Array.isArray(schema)) return schema.map((s) => withoutPersonalMarks(s, depth + 1));
+  if (!isPlainRecord(schema)) return schema;
+  return Object.fromEntries(Object.entries(schema).filter(([k]) => k !== PERSONAL).map(([k, v]) => [k, withoutPersonalMarks(v, depth + 1)]));
+}
+
+/** Reporte sur `target` (en place) les marques `x-personal` de `source`, nœud par nœud au même chemin. */
+function copyPersonalMarks(source: unknown, target: unknown, depth = 0): void {
+  if (depth > 64) return;
+  if (Array.isArray(source) && Array.isArray(target)) {
+    source.forEach((s, i) => copyPersonalMarks(s, target[i], depth + 1));
+    return;
+  }
+  if (!isPlainRecord(source) || !isPlainRecord(target)) return;
+  for (const [k, v] of Object.entries(source)) {
+    if (k === PERSONAL) target[PERSONAL] = v;
+    else if (Object.hasOwn(target, k)) copyPersonalMarks(v, target[k], depth + 1);
+  }
+}
+
+/**
+ * Schéma corrigé par l'appelant (05 § 4.1 `validate_schema`) : ses marques `x-personal` sont IGNORÉES (une marque posée
+ * par l'appelant ne compte pas, une marque retirée ne contourne pas la case « j'ai lu ») ; celles que l'enquête a
+ * DÉTECTÉES sur le schéma proposé sont réappliquées aux mêmes champs, pour le masquage RGPD en aval (17 § 6).
+ */
+function correctedSchemaWithDetectedMarks(corrected: unknown, proposed: unknown): unknown {
+  const out = withoutPersonalMarks(corrected);
+  copyPersonalMarks(proposed, out);
+  return out;
+}
+
+/** `exclude_executions` : niveaux connus seulement, au moins un niveau gardé. */
+function checkExcluded(excluded: readonly string[] | undefined): readonly Execution[] | undefined {
+  if (excluded === undefined || excluded.length === 0) return undefined;
+  const known = new Set<string>(EXECUTIONS);
+  const unique = [...new Set(excluded)];
+  if (!unique.every((e) => known.has(e)) || unique.length >= EXECUTIONS.length) {
+    throw new InvestigationStateError('invalid_request', 'exclude_executions : niveaux connus, au moins un niveau gardé');
+  }
+  return unique as Execution[];
+}
 
 export class InvestigationStateError extends Error {
   readonly code: 'invalid_request' | 'not_awaiting_validation' | 'invalid_schema' | 'api_not_found' | 'investigation_in_progress' | 'reinvestigation_required';
@@ -119,9 +180,11 @@ export async function startInvestigation(
     trigger: RunTrigger;
     request: Parameters<typeof normalizeInvestigationRequest>[0];
     exampleOutput?: unknown;
+    excludeExecutions?: readonly string[];
   },
 ): Promise<{ runId: string; jobId: string }> {
   const request = normalizeInvestigationRequest(input.request);
+  const excluded = checkExcluded(input.excludeExecutions);
   const locked = await tx.query<{ status: string }>('SELECT status FROM apis WHERE id = $1 AND owner_id = $2 FOR UPDATE', [input.apiId, input.ownerId]);
   if (locked.rowCount !== 1) throw new InvestigationStateError('api_not_found', 'API introuvable pour ce propriétaire');
   if (locked.rows[0]!.status !== 'enquete') {
@@ -132,7 +195,7 @@ export async function startInvestigation(
     [input.apiId],
   );
   if ((active.rowCount ?? 0) > 0) throw new InvestigationStateError('investigation_in_progress', 'une enquête est déjà en file ou en cours sur cette API');
-  const state: InvestigationState = { request, spent_usd: 0, elapsed_ms: 0 };
+  const state: InvestigationState = { request, spent_usd: 0, elapsed_ms: 0, ...(excluded === undefined ? {} : { excluded_executions: excluded }) };
   const { rowCount } = await tx.query("UPDATE apis SET investigation = $2::jsonb, investigation_phase = 'access_check', updated_at = now() WHERE id = $1 AND owner_id = $3", [
     input.apiId,
     JSON.stringify(state),
@@ -156,8 +219,9 @@ export async function startInvestigation(
 export async function validateInvestigationSchema(
   tx: Queryable,
   queue: JobQueue,
-  input: { apiId: string; ownerId: string; trigger: RunTrigger; outputSchema?: unknown },
+  input: { apiId: string; ownerId: string; trigger: RunTrigger; outputSchema?: unknown; excludeExecutions?: readonly string[] },
 ): Promise<{ runId: string; jobId: string }> {
+  const excluded = checkExcluded(input.excludeExecutions);
   const { rows } = await tx.query<{ investigation: InvestigationState | null; investigation_phase: InvestigationPhase | null }>(
     'SELECT investigation, investigation_phase FROM apis WHERE id = $1 AND owner_id = $2 FOR UPDATE',
     [input.apiId, input.ownerId],
@@ -168,14 +232,22 @@ export async function validateInvestigationSchema(
   if (row.investigation_phase !== 'awaiting_schema_validation' || state === null || state.proposed_schema === undefined) {
     throw new InvestigationStateError('not_awaiting_validation', 'aucun schéma proposé en attente de validation');
   }
-  const schema = input.outputSchema ?? state.proposed_schema;
+  const schema = input.outputSchema === undefined ? state.proposed_schema : correctedSchemaWithDetectedMarks(input.outputSchema, state.proposed_schema);
   try {
     assertSchemaAcceptable(schema);
   } catch (error) {
     if (error instanceof SchemaError) throw new InvestigationStateError('invalid_schema', error.message);
     throw error;
   }
-  const next: InvestigationState = { ...state, validated_schema: schema as Record<string, unknown>, validated_by: 'user' };
+  // Ordre des colonnes : celui du schéma corrigé (lu du corps de la requête), sinon celui relevé à la proposition.
+  const columns = input.outputSchema !== undefined ? schemaColumns(input.outputSchema) : state.proposed_columns;
+  const next: InvestigationState = {
+    ...state,
+    validated_schema: schema as Record<string, unknown>,
+    ...(columns === undefined ? {} : { validated_columns: columns }),
+    validated_by: 'user',
+    ...(excluded === undefined ? {} : { excluded_executions: excluded }),
+  };
   await tx.query("UPDATE apis SET investigation = $2::jsonb, investigation_phase = 'testing', updated_at = now() WHERE id = $1", [input.apiId, JSON.stringify(next)]);
   return createRun(tx, queue, { apiId: input.apiId, ownerId: input.ownerId, trigger: input.trigger, kind: 'investigation' });
 }
@@ -227,6 +299,8 @@ export async function saveInvestigationStrategy(
     spec: unknown;
     estCostUsd: number | null;
     outputSchema: unknown;
+    /** Ordre déclaré des colonnes (`validated_columns`) ; à défaut, celui des clés de `outputSchema`. */
+    outputColumns?: readonly string[];
     inputSchema: unknown;
     state: InvestigationState;
     /** `recompile` : ré-enquête demandée après la modification d'une règle (18 §4.8). */
@@ -260,9 +334,9 @@ export async function saveInvestigationStrategy(
     if (args.source !== undefined) await recordStrategySource(tx, { apiId: args.apiId, ownerId: args.ownerId, version, source: args.source, rules: args.rules ?? [] });
     await tx.query(
       `UPDATE apis SET current_strategy_version = $2, output_schema = $3::jsonb, input_schema = $4::jsonb, investigation = $5::jsonb,
-         investigation_phase = 'done', updated_at = now()
+         output_columns = $6::text[], investigation_phase = 'done', updated_at = now()
        WHERE id = $1`,
-      [args.apiId, version, JSON.stringify(args.outputSchema), JSON.stringify(args.inputSchema), JSON.stringify(args.state)],
+      [args.apiId, version, JSON.stringify(args.outputSchema), JSON.stringify(args.inputSchema), JSON.stringify(args.state), args.outputColumns ?? schemaColumns(args.outputSchema)],
     );
     return { version };
   });

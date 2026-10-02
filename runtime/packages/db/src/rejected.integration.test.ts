@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// Quarantaine des items non conformes (tâche 2.3, D-49, migration 0017) sur base réelle : l'échantillon appartient à
+// Quarantaine des items non conformes (tâche 2.3, D-49, migration 0018) sur base réelle : l'échantillon appartient à
 // l'APPELANT du run (RLS), le propriétaire d'une API partagée ne lit que les agrégats (404 sur l'échantillon), l'admin les
 // métadonnées ; purge avec `RETENTION_SAMPLES_DAYS` ; comprise dans l'effacement d'une personne ; vN+1 de réparation.
 import { randomBytes, randomUUID } from 'node:crypto';
@@ -60,7 +60,7 @@ afterAll(async () => {
   await tdb?.drop();
 });
 
-describe('quarantine run_rejected_items (0017)', () => {
+describe('quarantine run_rejected_items (0018)', () => {
   test('assert_cross_user_denied — B sur l’API instance de A : B lit l’échantillon, A n’a que les agrégats (404 sur l’échantillon), C rien', async () => {
     const runB = await newRun(B, { items: 47, itemsRejected: 1 });
     const summary = summaryOf([{ titre: 'Vélo', vendeur: 'zz_test_vendeur@example.invalid' }]);
@@ -87,6 +87,18 @@ describe('quarantine run_rejected_items (0017)', () => {
     expect(run).toMatchObject({ items: 47, items_rejected: 1, rejected: { count: 1, by_reason: [{ keyword: 'required', path: '/prix', count: 1 }] } });
     // Aucune valeur personnelle écrite nulle part.
     expect((await pool.query("SELECT 1 FROM run_rejected_items WHERE to_jsonb(run_rejected_items)::text LIKE '%example.invalid%'")).rowCount).toBe(0);
+  });
+
+  test('raisons sans valeur : une clé inconnue du run de B (identifiant servant de clé) n’atteint jamais A par run_rejected_aggregates', async () => {
+    const runB = await newRun(B, { items: 1, itemsRejected: 1 });
+    const summary = summaryOf([{ titre: 'Vélo', prix: 3, zz_test_secret_id_123: { commande: 'zz_test_secret_order_9' } }]);
+    await saveRejectedItems(pool, { runId: runB, apiId, ownerId: B, projectId: '00000000-0000-0000-0000-000000000001', summary });
+    const asA = await withActor(pool, { userId: A, role: 'member' }, (tx) => tx.query('SELECT to_jsonb(v)::text AS row FROM run_rejected_aggregates v WHERE run_id = $1', [runB]));
+    expect(asA.rowCount).toBe(1);
+    expect(asA.rows[0]!.row).not.toMatch(/zz_test_secret/);
+    expect(await readRejectedItems(pool, { userId: A, role: 'member' }, runB)).toEqual({ access: 'api_owner', count: 1, by_reason: [{ keyword: 'additionalProperties', path: '/*', count: 1 }] });
+    // Nulle part en base (échantillon de B compris).
+    expect((await pool.query("SELECT 1 FROM run_rejected_items WHERE to_jsonb(run_rejected_items)::text LIKE '%zz_test_secret%'")).rowCount).toBe(0);
   });
 
   test('owner_id = runs.owner_id imposé en base : C ne peut pas écrire la quarantaine du run de B (ni sous son nom ni sous celui de B)', async () => {
@@ -158,8 +170,8 @@ describe('quarantine run_rejected_items (0017)', () => {
     expect(await readVolumeHistory(pool, { apiId: api, ownerId: A, input: null, excludeRunId: randomUUID() })).toEqual([3]);
   });
 
-  test('migration 0017 : aller-retour down/up', async () => {
-    // 0018 (règles, 2.10) puis 0017.
+  test('migration 0018 : aller-retour down/up', async () => {
+    // 0019 (règles, 2.10) puis 0018.
     await migrateDown({ connectionString: tdb.url, steps: 2 });
     expect((await pool.query("SELECT to_regclass('public.run_rejected_items') AS t")).rows[0].t).toBeNull();
     expect((await pool.query("SELECT 1 FROM information_schema.columns WHERE table_name = 'runs' AND column_name = 'items_rejected'")).rowCount).toBe(0);

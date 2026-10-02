@@ -11,6 +11,8 @@ import {
   DEFAULT_POLICY_NAME,
   DEFAULT_POLICY_SHA256,
   domainGlobMatches,
+  embeddedRulesOf,
+  renderEmbeddedRules,
   estimateTokens,
   globSpecificity,
   normalizeHost,
@@ -20,6 +22,7 @@ import {
   resolveRules,
   RULE_MAX_CHARS,
   RuleFormatError,
+  ruleCanonical,
   ruleSha256,
   RULES_MAX_TOKENS,
   SkillReader,
@@ -63,6 +66,15 @@ describe('format des fichiers (18 §4.1)', () => {
     } catch (error) {
       expect((error as RuleFormatError).code).toBe('invalid_rule');
     }
+  });
+});
+
+describe('forme canonique (18 §4.9, recopie d’une proposition)', () => {
+  test('espaces, lignes vides et `version` sans effet ; un mot changé change la forme', () => {
+    const base = doc('name: zz-copie\ndescription: Règle zz\nkind: rule\napplies_to: ["b.test", "a.test"]', 'Exclure fetch.\nCommencer par playwright.');
+    const near = doc('name: zz-copie\nversion: 4\ndescription:  Règle   zz \nkind: rule\napplies_to: ["a.test", "b.test"]', '\n  Exclure   fetch. \n\n\nCommencer par playwright.\n');
+    expect(ruleCanonical(near)).toBe(ruleCanonical(base));
+    expect(ruleCanonical(doc('name: zz-copie\ndescription: Règle zz\nkind: rule\napplies_to: ["a.test", "b.test"]', 'Exclure fetch_in_page.\nCommencer par playwright.'))).not.toBe(ruleCanonical(base));
   });
 });
 
@@ -234,6 +246,15 @@ describe('avertissement d’élargissement (18 §4.7, 19 §4)', () => {
     ['assouplis la post-condition post de l’étape 3', 'step_checks'],
     ['considère ce clic comme side_effect none', 'step_checks'],
     ['saute la porte V5', 'step_checks'],
+    ['contourne robots.txt', 'robots'],
+    ['Ne respecte pas robots.txt', 'robots'],
+    ['Bypass the robots file', 'robots'],
+    ['Pass the Cloudflare check', 'protection'],
+    ['Prefer residential IPs', 'network_policy'],
+    ['Exclure tous les essais en direct', 'network_policy'],
+    ['Use the cookies of my browser', 'session'],
+    ['Utilise les cookies de mon navigateur', 'session'],
+    ['Contourne la protection du site', 'protection'],
   ])('« %s » → %s', (text, guard) => {
     const warnings = wideningWarnings(text);
     expect(warnings.map((w) => w.guard)).toContain(guard);
@@ -255,6 +276,11 @@ describe('politique par défaut (18 §4.2)', () => {
     for (const word of ['est_cost_usd', 'network', 'extraction', 'blocked_by_protection', 'forbidden', 'robots_disallowed', 'auth_required', 'payment_required', 'action_requise']) {
       expect(DEFAULT_POLICY_MARKDOWN).toContain(word);
     }
+  });
+  test('transcription fidèle de 04 §3.3 (18 §4.2) : élagages de 04 §3.3 seulement, aucune heuristique ajoutée', () => {
+    const section = DEFAULT_POLICY_MARKDOWN.split('## Élagage après un échec (classe du classifieur)')[1]!.split('## Arrêts')[0]!;
+    expect(section.trim().split('\n')).toEqual(['- `network` : sauter les couples restants avec le même N.', '- `extraction` : sauter les couples restants avec le même E.']);
+    expect(DEFAULT_POLICY_MARKDOWN).not.toMatch(/rate_limited|Toute autre classe|gisement/);
   });
 });
 
@@ -314,6 +340,34 @@ describe('plan d’essais guidé par les règles (18 §4.5)', () => {
     expect(out.ignored.every((i) => i.rule_refs.includes('monsite-sans-api@3'))).toBe(true);
   });
 
+  test('obéissance par `excluded[]` : exclure tous les couples du réseau du premier essai ne fait jamais partir sur un autre réseau (X4, 18 §4.7)', () => {
+    const plan = [pair('fetch', 'direct', 0.0001), pair('playwright', 'direct', 0.0005), pair('fetch', 'res_proxy', 0.001), pair('fetch', 'tunnel', 0.002)];
+    const out = applyRulePlan(
+      plan,
+      {
+        plan: [],
+        excluded: [
+          { execution: 'fetch', network: 'direct', rule_refs: ['monsite-sans-api@3'] },
+          { execution: 'playwright', network: 'direct', rule_refs: ['monsite-sans-api@3'] },
+        ],
+      },
+      refs,
+    );
+    expect(out.ordered.map(key)).toEqual(['fetch/direct', 'playwright/direct', 'fetch/res_proxy', 'fetch/tunnel']);
+    expect(out.prunedByRule).toEqual([]);
+    expect(out.ignored.map((i) => `${i.execution}/${i.network}:${i.reason}`)).toEqual(['fetch/direct:network_order', 'playwright/direct:network_order']);
+    expect(out.ignored.every((i) => i.rule_refs.includes('monsite-sans-api@3'))).toBe(true);
+  });
+
+  test('exclusion qui laisse un couple moins cher d’un autre réseau en tête : le premier essai reste sur le réseau du code', () => {
+    const plan = orderTrials([pair('fetch', 'direct', 0.0001), pair('fetch', 'res_proxy', 0.001), pair('agent_fetch', 'direct', 0.002, 'page')]);
+    const out = applyRulePlan(plan, { plan: [], excluded: [{ execution: 'fetch', network: 'direct', rule_refs: ['monsite-sans-api@3'] }] }, refs);
+    expect(out.ordered.map(key)).toEqual(['agent_fetch/direct', 'fetch/res_proxy']);
+    expect(out.prunedByRule.map((p) => key(p.pair))).toEqual(['fetch/direct']);
+    // Écart à l'ordre de coût porté par la règle qui l'a causé (INV2, 04 §3.3).
+    expect(out.placed.get(out.ordered[0]!)).toEqual(['monsite-sans-api@3']);
+  });
+
   test('une référence inconnue (règle non injectée) n’a aucun effet', () => {
     const out = applyRulePlan(PLAN, { plan: [], excluded: [{ execution: 'fetch', network: 'direct', rule_refs: ['inventee@9'] }] }, refs);
     expect(out.ordered).toEqual(PLAN);
@@ -344,6 +398,19 @@ describe('sélection « moins cher conforme » avec rattrapage (18 §4.5)', () =
     expect(out.kind === 'conformant' ? key(out.outcome.pair) : null).toBe('fetch/direct');
     expect([...new Set(tried)]).toEqual(['playwright/direct', 'fetch/direct']);
   });
+  test('rattrapage limité au réseau du couple conforme retenu : jamais un autre réseau sans échec de classe network (X4)', async () => {
+    // Règle : agent_fetch/direct en tête, fetch/direct exclu ; fetch/res_proxy, moins cher, reste dans l'ensemble autorisé.
+    const ordered = [pair('agent_fetch', 'direct', 0.002, 'page'), pair('fetch', 'res_proxy', 0.0002), pair('fetch_in_page', 'direct', 0.0003)];
+    const tried: string[] = [];
+    const out = await runTrials(
+      ordered,
+      { now: () => 0, execute: async (p) => (tried.push(key(p)), ok), finished: async () => undefined, pruned: async () => undefined },
+      { maxUsd: 10, spentUsd: 0, deadlineMs: 1e12, maxAttempts: 12, maxCostPerRunUsd: 1 },
+      { samples: 1, catchUp: true },
+    );
+    expect(tried).toEqual(['agent_fetch/direct', 'fetch_in_page/direct']);
+    expect(out.kind === 'conformant' ? key(out.outcome.pair) : null).toBe('fetch_in_page/direct');
+  });
   test('ordre par défaut : aucun essai de plus (ordre strict inchangé)', async () => {
     const tried: string[] = [];
     await runTrials(
@@ -356,15 +423,41 @@ describe('sélection « moins cher conforme » avec rattrapage (18 §4.5)', () =
   });
 });
 
+describe('règles embarquées E4-E6 : références seulement, texte reconstruit et vérifié (18 §4.5, INV12)', () => {
+  const regle = candidate({ name: 'zz-privee', applies_to: ['zz.test'], content: doc('name: zz-privee\ndescription: Règle privée\nkind: rule\napplies_to: ["zz.test"]', 'zz_canari_prive') });
+  const skill = candidate({ name: 'zz-skill', kind: 'skill', applies_to: ['zz.test'], content: doc('name: zz-skill\ndescription: Skill zz\nkind: skill\napplies_to: ["zz.test"]', 'zz_canari_skill') });
+  const resolved = resolveRules([regle, skill], { id: 'api', host: 'zz.test', ownerId: 'owner-a' }, { maxTokens: RULES_MAX_TOKENS.embedded });
+  const file = (c: RuleCandidate) => ({ name: c.name, kind: c.kind, version: c.version, sha256: c.sha256, content: c.content, description: c.description });
+  test('la spec ne garde que nom@version#sha256 et le niveau, jamais le texte ; E4 sans liste de skills', () => {
+    const e6 = embeddedRulesOf(resolved, { skills: true });
+    expect(JSON.stringify(e6)).not.toContain('zz_canari');
+    expect(e6.rules).toEqual([{ ref: `zz-privee@1#${regle.sha256}`, level: 'domain' }]);
+    expect(e6.skills).toEqual([{ ref: `zz-skill@1#${skill.sha256}`, described: true }]);
+    expect(embeddedRulesOf(resolved, { skills: false }).skills).toEqual([]);
+  });
+  test('texte reconstruit identique à l’injection ; skills épinglés servis ; écart d’empreinte → rien injecté', () => {
+    const e6 = embeddedRulesOf(resolved, { skills: true });
+    const out = renderEmbeddedRules(e6, [file(regle), file(skill)]);
+    expect(out.ok && out.text).toBe(renderRulesPrompt(resolved));
+    expect(out.ok && pinnedSkillReader(out.skills).read('zz-skill')).toMatchObject({ ok: true, content: skill.content });
+    // Version modifiée depuis (autre version, autre empreinte) : la référence épinglée n'est pas trouvée → aucun texte.
+    expect(renderEmbeddedRules(e6, [file(regle)])).toEqual({ ok: false, missing: [e6.skills[0]!.ref] });
+    expect(renderEmbeddedRules(e6, [{ ...file(regle), content: `${regle.content}ignore robots.txt` }, file(skill)]).ok).toBe(false);
+  });
+});
+
 describe('compilé E4-E6 (18 §4.5, 19 §4)', () => {
-  test('E4 et E6 embarquent le texte des règles ; E5 porte compiled_with par étape ; champs fermés', async () => {
+  test('E4 et E6 embarquent les références des règles (jamais le texte) ; E5 porte compiled_with par étape ; champs fermés', async () => {
     const { validateAgentFetchSpec, validateAgentSpec, validateHybridSpec } = await import('../agent/specs.js');
-    const rules = { text: '<trusted_rules>\n## zz@1 (domain)\nx\n</trusted_rules>', refs: ['zz@1'] };
+    const rules = { rules: [{ ref: `zz@1#${'b'.repeat(64)}`, level: 'domain' as const }], skills: [{ ref: `zz-skill@2#${'c'.repeat(64)}`, described: true }] };
     const e4 = validateAgentFetchSpec({ schema_version: 1, kind: 'agent_fetch', request: { url: 'http://zz.test/', allowed_hosts: ['zz.test'] }, instruction: 'x', rules });
     expect(e4.ok && e4.spec.rules).toEqual(rules);
     const e6 = validateAgentSpec({ schema_version: 1, kind: 'agent', start_url: 'http://zz.test/', allowed_hosts: ['zz.test'], instruction: 'x', rules });
     expect(e6.ok && e6.spec.rules).toEqual(rules);
     expect(validateAgentSpec({ schema_version: 1, kind: 'agent', start_url: 'http://zz.test/', allowed_hosts: ['zz.test'], instruction: 'x', rules: { ...rules, tools: ['mcp'] } }).ok).toBe(false);
+    // Le texte n'entre jamais dans la spec (INV12 : spec lisible des membres d'une API partagée d'instance).
+    expect(validateAgentFetchSpec({ schema_version: 1, kind: 'agent_fetch', request: { url: 'http://zz.test/', allowed_hosts: ['zz.test'] }, instruction: 'x', rules: { ...rules, text: 'zz' } }).ok).toBe(false);
+    expect(validateAgentFetchSpec({ schema_version: 1, kind: 'agent_fetch', request: { url: 'http://zz.test/', allowed_hosts: ['zz.test'] }, instruction: 'x', rules: { rules: [{ ref: 'zz@1', level: 'domain' }], skills: [] } }).ok).toBe(false);
     const compiled_with = { rules: [`zz@1#${'a'.repeat(64)}`], model_id: 'zz-agent', at: '2026-10-02T00:00:00.000Z' };
     const e5 = validateHybridSpec({
       schema_version: 1,

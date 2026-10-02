@@ -5,8 +5,19 @@ import websocket from '@fastify/websocket';
 import { TUNNEL_MAX_PAYLOAD } from '@runtime/core/tunnel';
 import Fastify, { type FastifyBaseLogger, type FastifyInstance, type FastifyServerOptions } from 'fastify';
 import type { ExtensionOriginPolicy } from './config.js';
+import { defaultConsoleDir, registerConsole, securityHeaders } from './console.js';
 import type { ServerContext } from './context.js';
 import { apiKeyRoutes } from './routes/api-keys.js';
+import { apiRoutes } from './routes/apis.js';
+import { datasetRoutes } from './routes/datasets.js';
+import { eventRoutes } from './routes/events.js';
+import { openapiRoutes } from './routes/openapi.js';
+import { responsibleUseRoutes } from './routes/responsible-use.js';
+import { runRoutes } from './routes/runs.js';
+import { scheduleRoutes } from './routes/schedules.js';
+import { settingsRoutes } from './routes/settings.js';
+import { subjectRoutes } from './routes/subjects.js';
+import { webhookRoutes } from './routes/webhooks.js';
 import { authRoutes } from './routes/auth.js';
 import { extensionRoutes } from './routes/extension.js';
 import { guard, notFound, sendError } from './routes/guard.js';
@@ -36,7 +47,7 @@ const SERVER_KEEP_ALIVE_TIMEOUT_MS = 90_000;
 
 export function buildServer(
   ctx: ServerContext,
-  options: { logger?: boolean; loggerInstance?: FastifyBaseLogger; logLevel?: LogLevel; trustProxy?: boolean | number | string; tunnelOrigins?: ExtensionOriginPolicy } = {},
+  options: { logger?: boolean; loggerInstance?: FastifyBaseLogger; logLevel?: LogLevel; trustProxy?: boolean | number | string; tunnelOrigins?: ExtensionOriginPolicy; consoleDir?: string | null } = {},
 ): FastifyInstance {
   const serverOptions: FastifyServerOptions = {
     // 07 § 6 : keep-alive ≥ 90 s (défaut Fastify 72 s), au-delà du ping de 20 s et de l'alarme de 30 s de l'extension.
@@ -75,8 +86,19 @@ export function buildServer(
     span.run(done);
   });
   app.addHook('onRequest', guard(ctx));
+  // En-têtes de 08b § 2 sur toute réponse du service (console, API, erreurs) ; un en-tête déjà posé par une route est gardé.
+  const headers = Object.entries(securityHeaders(ctx.publicUrl));
+  app.addHook('onSend', (_request, reply, payload, done) => {
+    for (const [name, value] of headers) if (!reply.hasHeader(name)) reply.header(name, value);
+    done(null, payload);
+  });
 
-  app.setNotFoundHandler((_request, reply) => notFound(reply));
+  // Console (apps/web/dist) : chemin hors registre, GET ou HEAD, hors préfixes du serveur ; sinon 404 uniforme.
+  const serveConsole = registerConsole(app, options.consoleDir === undefined ? defaultConsoleDir() : options.consoleDir);
+  app.setNotFoundHandler(async (request, reply) => {
+    if (await serveConsole(request, reply)) return reply;
+    return notFound(reply);
+  });
   app.setErrorHandler((error: { validation?: unknown; statusCode?: number }, request, reply) => {
     if (error.validation) return sendError(reply, 400, 'invalid_request', 'requête invalide');
     if (error.statusCode && error.statusCode >= 400 && error.statusCode < 500) {
@@ -96,6 +118,17 @@ export function buildServer(
   userRoutes(app, ctx);
   invitationRoutes(app, ctx);
   ssoRoutes(app, ctx);
+  // API REST (tâche 3.1, 05 § 4.2).
+  apiRoutes(app, ctx);
+  runRoutes(app, ctx);
+  datasetRoutes(app, ctx);
+  eventRoutes(app, ctx);
+  scheduleRoutes(app, ctx);
+  webhookRoutes(app, ctx);
+  settingsRoutes(app, ctx);
+  subjectRoutes(app, ctx);
+  responsibleUseRoutes(app, ctx);
+  openapiRoutes(app);
   identityRoutes(app, ctx);
   const gateway = ctx.tunnel;
   if (gateway !== null) {

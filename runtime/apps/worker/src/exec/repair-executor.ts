@@ -41,7 +41,7 @@ import {
 } from '@runtime/core';
 import { assertPromptSafe, ClassificationGuardError, type AgentEvidence, type ExecFailure } from '@runtime/core/exec';
 import { proposeRepair, readSkillsPhase, renderSkillBodies, repairCallCeilingUsd, repairMessages, repairPromptVersion } from '@runtime/agent';
-import { acquireRepairLease, buildStrategySource, readCurrentStrategyVersion, readHealthyItems, releaseRepairLease, renewRepairLease, resolveRulesForApi } from '@runtime/db';
+import { acquireRepairLease, buildStrategySource, readCurrentStrategyVersion, readHealthyItems, readSourceBase, releaseRepairLease, renewRepairLease, resolveRulesForApi } from '@runtime/db';
 import { LlmError, roleTarget, toFailureClass, type LlmClient, type LlmConfig } from '@runtime/llm';
 import type pg from 'pg';
 import { pino, type Logger } from 'pino';
@@ -155,12 +155,27 @@ export function createRepairPort(deps: RepairEngineDeps): RepairPort {
     const rulesPrompt = resolved === null ? '' : renderRulesPrompt(resolved);
     let skillsPrompt = '';
     let skillsRead = false;
+    // Source de vN+1 (18 §2, §4.6) : demande et décisions reprises de la source de vN (ou de la demande d'enquête de
+    // l'API) ; seules les règles et la raison changent.
+    const base = await readSourceBase(deps.pool, { apiId: ctx.apiId, ownerId: ctx.ownerId, version: strategy.version }).catch(() => null);
     const sourceOf = (): Pick<RepairedStrategy, 'source' | 'rules'> => {
       if (resolved === null) return {};
       const rows = sourceRuleRows(resolved, reader.reads);
-      const spec = strategy.spec as { request?: { url?: unknown } } | null;
-      const url = typeof spec?.request?.url === 'string' ? spec.request.url : '';
-      return { source: buildStrategySource({ reason: 'repair', description: '', url, outputSchemaSha256: jsonSha256(target.api.outputSchema), investigationId: null, rows }), rules: rows };
+      const spec = strategy.spec as { request?: { url?: unknown }; start_url?: unknown } | null;
+      const specUrl = typeof spec?.request?.url === 'string' ? spec.request.url : typeof spec?.start_url === 'string' ? spec.start_url : '';
+      return {
+        source: buildStrategySource({
+          reason: 'repair',
+          description: base?.request.description ?? '',
+          url: base?.request.url ?? specUrl,
+          exampleOutputRef: base?.request.example_output_ref ?? null,
+          outputSchemaSha256: jsonSha256(target.api.outputSchema),
+          investigationId: base?.investigation_id ?? null,
+          decisions: base?.decisions ?? [],
+          rows,
+        }),
+        rules: rows,
+      };
     };
     const committed = async (repaired: RepairedStrategy, check: CandidateCheck): Promise<RepairOutcome> => {
       if (!(await holds())) return leaseLost();
@@ -169,7 +184,8 @@ export function createRepairPort(deps: RepairEngineDeps): RepairPort {
     };
     const ledger = new RepairLedger({ ...(deps.maxAttempts === undefined ? {} : { maxAttempts: deps.maxAttempts }), ...(deps.budgetUsd === undefined ? {} : { budgetUsd: deps.budgetUsd }) });
     // Référence : items livrés des derniers runs réussis (chemins et types seulement entrent dans le prompt).
-    const healthy: HealthyProfile = healthyProfile(await readHealthyItems(deps.pool, { apiId: ctx.apiId, ownerId: ctx.ownerId, excludeRunId: ctx.runId }));
+    // Schéma COURANT : après une ré-enquête `output_schema_changed`, un champ retiré ou retypé n'est plus exigé.
+    const healthy: HealthyProfile = healthyProfile(await readHealthyItems(deps.pool, { apiId: ctx.apiId, ownerId: ctx.ownerId, excludeRunId: ctx.runId }), { outputSchema: target.api.outputSchema });
     const evidence: readonly AgentEvidence[] = request.evidence;
     // Aucune page de défi n'entre dans un prompt (04b §6) : un texte refusé arrête la réparation comme un refus.
     try {
@@ -207,7 +223,7 @@ export function createRepairPort(deps: RepairEngineDeps): RepairPort {
       const model = config.roles.repair?.model ?? null;
       for (;;) {
         if (!(await holds())) return leaseLost();
-        const base = { spec, outputSchema: target.api.outputSchema, failure, evidence, healthy, reasons: request.reasons, refused, rules: rulesPrompt };
+        const base = { description: target.api.description, spec, outputSchema: target.api.outputSchema, failure, evidence, healthy, reasons: request.reasons, refused, rules: rulesPrompt };
         const args = skillsPrompt === '' ? base : { ...base, skills: skillsPrompt };
         const ceiling = repairCallCeilingUsd(args, price);
         if (!ledger.canPropose(ceiling)) break;

@@ -173,3 +173,19 @@ export function parseRuleFile(text: string): RuleDocument {
   const body = lines.slice(end + 1).join('\n');
   return { name, description, kind: kind as RuleKind, applies_to: [...new Set(applies)], version, body, content, sha256: ruleSha256(content) };
 }
+
+/**
+ * Forme canonique d'un fichier (comparaison de quasi-copies, 18 §4.9) : en-tête sans `version`, sélecteurs triés, espaces
+ * et lignes vides du corps et de la description sans effet. Sert à refuser la recopie d'une proposition en attente avec
+ * un octet changé. Contrôle de 2.10, à reprendre par 2.11 et 3.13 (marquage en base des versions dérivées d'une proposition).
+ */
+export function ruleCanonical(content: string): string {
+  const d = parseRuleFile(content);
+  const squash = (s: string) => s.trim().replace(/\s+/g, ' ');
+  const body = d.body
+    .split('\n')
+    .map(squash)
+    .filter((l) => l !== '')
+    .join('\n');
+  return JSON.stringify({ name: d.name, kind: d.kind, description: squash(d.description), applies_to: [...d.applies_to].sort(), body });
+}

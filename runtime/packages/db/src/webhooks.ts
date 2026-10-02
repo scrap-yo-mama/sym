@@ -68,7 +68,7 @@ export async function createWebhookSubscription(
   db: Queryable,
   store: SecretStore,
   guard: SsrfGuard,
-  input: { ownerId: string; url: string; events: readonly string[]; projectId?: string },
+  input: { ownerId: string; url: string; events: readonly string[]; projectId?: string; /** Abonnement limité à une API (0017). */ apiId?: string | null },
 ): Promise<CreatedSubscription> {
   const events = [...new Set(input.events)];
   if (events.length === 0 || !events.every(isWebhookEvent)) {
@@ -79,9 +79,9 @@ export async function createWebhookSubscription(
   const id = randomUUID();
   const secretId = await store.put({ ownerId: input.ownerId, kind: 'webhook_secret', label: `webhook ${url.host}`, value: secret, ...(input.projectId ? { projectId: input.projectId } : {}) });
   await db.query(
-    `INSERT INTO webhook_subscriptions (id, owner_id, project_id, url, events, secret_id)
-     VALUES ($1, $2, coalesce($3::uuid, '00000000-0000-0000-0000-000000000001'), $4, $5, $6)`,
-    [id, input.ownerId, input.projectId ?? null, url.toString(), events, secretId],
+    `INSERT INTO webhook_subscriptions (id, owner_id, project_id, url, events, secret_id, api_id)
+     VALUES ($1, $2, coalesce($3::uuid, '00000000-0000-0000-0000-000000000001'), $4, $5, $6, $7)`,
+    [id, input.ownerId, input.projectId ?? null, url.toString(), events, secretId, input.apiId ?? null],
   );
   return { id, secret };
 }
@@ -193,8 +193,9 @@ export async function emitWebhookEvent(tx: Queryable, queue: JobQueue, input: Em
   const { rows } = await tx.query<{ id: string; owner_id: string; project_id: string }>(
     `SELECT id, owner_id, project_id FROM webhook_subscriptions
      WHERE status = 'active'
-       AND ((owner_id = ANY($1::uuid[]) AND $2 = ANY(events)) OR id = ANY($3::uuid[]))`,
-    [input.ownerIds ?? [], input.event, input.subscriptionIds ?? []],
+       AND ((owner_id = ANY($1::uuid[]) AND $2 = ANY(events) AND (api_id IS NULL OR api_id::text = $4)) OR id = ANY($3::uuid[]))`,
+    // Une cible limitée à une API (0017, 3.1) ne reçoit que les événements de cette API (`data.api_id`).
+    [input.ownerIds ?? [], input.event, input.subscriptionIds ?? [], typeof input.payload.data['api_id'] === 'string' ? input.payload.data['api_id'] : null],
   );
   const deliveries: string[] = [];
   for (const sub of rows) {

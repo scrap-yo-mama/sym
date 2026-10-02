@@ -1,0 +1,23 @@
+{
+  "readme": { "minLines": 90, "maxLines": 150, "maxBytes": 12288, "commandBeforeLine": 40, "maxBadges": 5, "maxHeadings": 7 },
+  "assets": {
+    "svgMaxBytes": 10240,
+    "bannerMaxBytes": 153600,
+    "bannerWidth": 1600,
+    "bannerHeight": 400,
+    "socialPreviewMaxBytes": 409600,
+    "socialPreviewWidth": 1280,
+    "socialPreviewHeight": 640,
+    "socialPreviewBackground": "#FBF8F3",
+    "socialPreviewMargin": 64,
+    "ogWidth": 1200,
+    "ogHeight": 630,
+    "ogMaxBytes": 153600,
+    "gifMaxBytes": 1572864,
+    "totalMaxBytes": 5242880
+  },
+  "demo": { "durationToleranceSeconds": 0.5, "stepPixelDiffRatio": 0.01 },
+  "repo": { "descriptionMaxChars": 160, "topicsMin": 10, "topicsMax": 20 },
+  "images": { "allowedHosts": ["img.shields.io", "github.com/user-attachments"] },
+  "badges": { "allowedHosts": ["img.shields.io"], "allowedPaths": ["/github/license/", "/github/v/release/", "/github/actions/workflow/status/"] }
+}

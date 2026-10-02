@@ -13,7 +13,8 @@ import { RouterLink } from 'vue-router';
 import TextField from '@/components/account/TextField.vue';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardDescription, CardHeader } from '@/components/ui/card';
+import PageHeader from '@/components/brand/PageHeader.vue';
+import { Card, CardContent } from '@/components/ui/card';
 import { requestPasswordReset } from '@/composables/useAccountFlows';
 import { readFieldValue } from '@/lib/form-field';
 
@@ -36,12 +37,11 @@ async function submit(event: Event): Promise<void> {
 </script>
 
 <template>
-  <section class="mx-auto flex max-w-md flex-col gap-6 py-10">
+  <section class="mx-auto flex max-w-xl flex-col gap-6 py-8">
+    <PageHeader :title="t('auth.forgot.title')" :kicker="t('brand.kicker.login')">
+      <p class="sym-lead">{{ t('auth.forgot.description') }}</p>
+    </PageHeader>
     <Card>
-      <CardHeader>
-        <h1 data-route-heading tabindex="-1" class="text-2xl leading-none font-semibold tracking-tight">{{ t('auth.forgot.title') }}</h1>
-        <CardDescription>{{ t('auth.forgot.description') }}</CardDescription>
-      </CardHeader>
       <CardContent class="flex flex-col gap-4">
         <p v-if="done" role="status" class="text-sm" data-testid="forgot-done">{{ t('auth.forgot.done') }}</p>
         <form v-else class="flex flex-col gap-4" novalidate @submit.prevent="submit">

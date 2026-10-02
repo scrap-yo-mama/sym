@@ -25,7 +25,7 @@ import {
   type DeviceView,
   type SiteView,
 } from '@runtime/db';
-import type { FastifyInstance, FastifyRequest } from 'fastify';
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { ServerContext } from '../context.js';
 import { AttemptLimiter } from '../rate-limit.js';
 import { reauthenticate } from './account-helpers.js';
@@ -122,18 +122,36 @@ export function extensionRoutes(app: FastifyInstance, ctx: ServerContext): void 
 
   // --- Console : appairage -------------------------------------------------------------------------------------------
 
-  app.post<{ Body: { currentPassword?: string } }>('/api/extension/pairing-codes', { schema: { body: pairingCodeSchema } }, async (request, reply) => {
+  /** Code d'appairage (07 § 1) après ré-authentification ; null si la réponse d'erreur est partie. */
+  const pairingCode = async (request: FastifyRequest, reply: FastifyReply, password: string | undefined): Promise<{ code: string; expiresAt: Date } | null> => {
     const actor = request.actor!;
     // Opération sensible (13 § 5, ASVS 7.5.1) : mot de passe actuel, ou connexion de moins de 10 min pour un compte
     // OIDC sans mot de passe local ; 5 échecs → 429 et session fermée.
-    if (!(await reauthenticate(ctx, request, reply, actor, request.body.currentPassword, 'tunnel.pairing_code'))) return reply;
+    if (!(await reauthenticate(ctx, request, reply, actor, password, 'tunnel.pairing_code'))) return null;
     const created = await withActor(ctx.pool, actor, (db) => createPairingCode(db, actor.userId));
-    if (!created) return sendError(reply, 429, 'too_many_pairing_codes', 'trop de codes d’appairage actifs : utilisez-en un ou attendez son expiration (10 min)');
-    const { code, expiresAt } = created;
-    await audit(ctx, request, actor, { action: 'tunnel.pairing_code_created', outcome: 'success', meta: { expiresAt: expiresAt.toISOString() } });
+    if (!created) {
+      await sendError(reply, 429, 'too_many_pairing_codes', 'trop de codes d’appairage actifs : utilisez-en un ou attendez son expiration (10 min)');
+      return null;
+    }
+    await audit(ctx, request, actor, { action: 'tunnel.pairing_code_created', outcome: 'success', meta: { expiresAt: created.expiresAt.toISOString() } });
+    return created;
+  };
+
+  app.post<{ Body: { currentPassword?: string } }>('/api/extension/pairing-codes', { schema: { body: pairingCodeSchema } }, async (request, reply) => {
+    const created = await pairingCode(request, reply, request.body.currentPassword);
     // Seule apparition du code : il n'est stocké que sous forme d'empreinte.
-    return reply.code(201).send({ code, expiresAt: expiresAt.toISOString() });
+    return created === null ? reply : reply.code(201).send({ code: created.code, expiresAt: created.expiresAt.toISOString() });
   });
+
+  // Route nommée par 05 § 4.2 et 07 § 1 (3.1) : même service, corps et réponse en snake_case (`PasswordConfirmation`, `PairingCode`).
+  app.post<{ Body: { current_password?: string } }>(
+    '/api/tunnel/pairing-code',
+    { schema: { body: { type: 'object', additionalProperties: false, properties: { current_password: { type: 'string', minLength: 1, maxLength: 1024 } } } } },
+    async (request, reply) => {
+      const created = await pairingCode(request, reply, request.body.current_password);
+      return created === null ? reply : reply.code(201).send({ code: created.code, expires_at: created.expiresAt.toISOString() });
+    },
+  );
 
   app.post<{ Body: { code: string; deviceId: string; deviceLabel?: string; extensionVersion?: string } }>('/api/extension/pair', { schema: { body: pairSchema } }, async (request, reply) => {
     const { extensionVersion } = request.body;

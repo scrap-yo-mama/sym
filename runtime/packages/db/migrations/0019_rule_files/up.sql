@@ -1,5 +1,5 @@
 -- SPDX-License-Identifier: AGPL-3.0-only
--- 0018_rule_files (tâche 2.10, 18 §4.6, 19b §1) : règles, consignes et skills Markdown ; source des versions de stratégie.
+-- 0019_rule_files (tâche 2.10, 18 §4.6, 19b §1) : règles, consignes et skills Markdown ; source des versions de stratégie.
 --   rule_files              un fichier (kind instance | rule | skill) d'un propriétaire, ou d'instance (owner_id NULL,
 --                           visibility instance : installé au démarrage ou écrit par un admin en console) ; unique par
 --                           propriétaire, kind et nom ; `target_api_ids` : résolution de `api:<slug>` (API du propriétaire) ;
@@ -176,9 +176,7 @@ Couples autorisés triés par `est_cost_usd` croissant, puis par E (E1 à E6), p
 ## Élagage après un échec (classe du classifieur)
 
 - `network` : sauter les couples restants avec le même N.
-- `extraction` : sauter les couples restants avec le même E pour le même gisement de données.
-- Toute autre classe garde le réseau courant : les couples d'un autre N sont sautés (seule `network` fait changer de N).
-- `rate_limited` (429) : ralentir, les essais s'arrêtent.
+- `extraction` : sauter les couples restants avec le même E.
 
 ## Arrêts
 

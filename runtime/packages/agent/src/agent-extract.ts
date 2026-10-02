@@ -74,7 +74,7 @@ export async function extractRecordsWithLlm(
     pageUrl: string;
     truncated: boolean;
     itemSchema: unknown;
-    /** Règles embarquées dans la stratégie E4 (`spec.rules.text`). */
+    /** Règles embarquées dans la stratégie E4 : texte reconstruit depuis les références épinglées de `spec.rules`. */
     rules?: string;
     signal?: AbortSignal;
     /** Garde avant chaque envoi (plafond de coût de l'essai) : voir `ChatCall.beforeCall`. */

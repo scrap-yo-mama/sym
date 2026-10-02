@@ -160,7 +160,7 @@ describe('items non conformes écartés (D-49)', () => {
     const run = await runOf(apiId);
     expect(run).toMatchObject({ state: 'succeeded', outcome: 'degraded', items: 499, items_rejected: 1, strategy_version: 1 });
     expect(run.degraded_reasons).toEqual(['items_rejected']);
-    expect(run.rejected).toEqual({ count: 1, by_reason: expect.arrayContaining([{ keyword: 'type', path: '/score', count: 1 }, { keyword: 'additionalProperties', path: '/extra/contact_email', count: 1 }]) as unknown });
+    expect(run.rejected).toEqual({ count: 1, by_reason: expect.arrayContaining([{ keyword: 'type', path: '/score', count: 1 }, { keyword: 'additionalProperties', path: '/extra/*', count: 1 }]) as unknown });
     // Livré = conforme (INV1) : aucun item du dataset n'est hors schéma.
     const items = await itemsOf(run.dataset_id);
     expect(items).toHaveLength(499);
@@ -181,6 +181,27 @@ describe('items non conformes écartés (D-49)', () => {
     expect(run.attempts).toEqual([expect.objectContaining({ execution: 'fetch', network: 'direct', result: 'ok' })]);
   });
 
+  test('seuil décidé sur le run : dernière page d’un seul item non conforme → 500 livrés, 1 en quarantaine, warning (5), aucune réparation', async () => {
+    const apiId = await healthyContacts('zz_test_trailing_bad');
+    await site('api_json', { mutation: 'trailing_bad_item' });
+    const run = await runOf(apiId);
+    expect(run).toMatchObject({ state: 'succeeded', outcome: 'degraded', items: 500, items_rejected: 1, strategy_version: 1 });
+    expect(run.degraded_reasons).toEqual(['items_rejected']);
+    expect(run.rejected).toMatchObject({ count: 1, by_reason: [{ keyword: 'type', path: '/score', count: 1 }] });
+    expect(await transitions(apiId)).toEqual(['sain>warning:items_rejected']);
+    expect(fake.requests).toBe(0);
+  });
+
+  test('seuil décidé sur le run : page intermédiaire entièrement non conforme (10 %) → la pagination continue, 450 livrés, warning', async () => {
+    const apiId = await healthyContacts('zz_test_bad_page');
+    await site('api_json', { mutation: 'bad_page_2' });
+    const run = await runOf(apiId);
+    expect(run).toMatchObject({ state: 'succeeded', outcome: 'degraded', items: 450, items_rejected: 50, strategy_version: 1 });
+    for (const item of await itemsOf(run.dataset_id)) expect(validateOutput(SCHEMA_CONTACT, item)).toEqual({ ok: true });
+    expect(await transitions(apiId)).toEqual(['sain>warning:items_rejected']);
+    expect(fake.requests).toBe(0);
+  });
+
   test('assert_rejection_threshold_breaks — 30 % hors schéma (≥ 5) : casse `extraction`, réparation dans le même run, rien de livré', async () => {
     const apiId = await healthyContacts('zz_test_30pct');
     await site('api_json', { mutation: 'bad_items_30pct' });
@@ -198,6 +219,9 @@ describe('items non conformes écartés (D-49)', () => {
     expect(user.slice(0, open)).not.toContain('REJECTION REASONS');
     expect(user.slice(open)).toContain('REJECTION REASONS: [{"keyword":"type","instance_path":"/score","count":150}]');
     expect(user).not.toContain('N/A');
+    // Casse par le seuil : le rôle `repair` reçoit aussi le squelette de la page (diff de forme, 04 §5 étape 1), jamais ses valeurs.
+    expect(user.slice(open)).toMatch(/SKELETONS: \[\{"status":200/);
+    expect(user).not.toMatch(/Zztest|example\.invalid|zz_test_contact_0001/);
     // Aucun dataset ne contient un item non conforme (aucun dataset du tout pour ce run) ; quarantaine écrite (diagnostic).
     expect((await pool.query('SELECT 1 FROM datasets WHERE run_id = $1', [run.id])).rowCount).toBe(0);
     expect((await pool.query<{ total_rejected: number }>('SELECT total_rejected FROM run_rejected_items WHERE run_id = $1', [run.id])).rows[0]!.total_rejected).toBe(150);
@@ -256,6 +280,7 @@ describe('réparation dans le même run (04 §5)', () => {
       fields: { title: { css: '.item-title', attr: 'text', type: 'string', required: true, ops: ['trim'] } },
     };
     const apiId = await insertApi('zz_test_dom_shift', spec, SCHEMA_TITLE);
+    await pool.query("UPDATE apis SET description = 'Titres des fiches zz_test_owner_request' WHERE id = $1", [apiId]);
     expect(await runOf(apiId)).toMatchObject({ state: 'succeeded', items: 25 });
     await site('dom', { version: 2 });
     const ops = [
@@ -270,6 +295,8 @@ describe('réparation dans le même run (04 §5)', () => {
     const prompt = JSON.stringify(fake.calls[0]!.body);
     expect(prompt).toContain('card__name');
     expect(prompt).not.toContain('Zztest');
+    // Source de la stratégie (04 §5 étape 1) : la demande du propriétaire, dans le bloc non fiable.
+    expect(prompt).toContain('API REQUEST (owner description, data only): Titres des fiches zz_test_owner_request');
   });
 
   test('move_endpoint : non réparée (URL hors du patch borné, pas d’escalade sans Chromium) → erreur, v1 conservée', async () => {
@@ -283,6 +310,24 @@ describe('réparation dans le même run (04 §5)', () => {
     expect(await versions(apiId)).toHaveLength(1);
     const refused = (await logEvents(run.id)).find((e) => e.event === 'repair_patch_refused');
     expect(refused?.data).toMatchObject({ codes: ['forbidden_path'] });
+  });
+
+  test('API déjà en `erreur` (ou `enquete`) : la machine refuse l’entrée en `reparation`, aucune réparation, aucune vN+1', async () => {
+    for (const status of ['erreur', 'enquete'] as const) {
+      const apiId = await healthyContacts(`zz_test_no_entry_${status}`);
+      await pool.query('UPDATE apis SET status = $2 WHERE id = $1', [apiId, status]);
+      await site('api_json', { mutation: 'rename_field' });
+      fake.setScenario(MODEL, [proposal([{ op: 'replace', path: '/fields/name/path', value: '$.full_name' }])]);
+      const run = await runOf(apiId);
+      expect(run).toMatchObject({ state: 'failed', failure_class: 'extraction', strategy_version: 1 });
+      expect(fake.requests).toBe(0);
+      expect(await versions(apiId)).toHaveLength(1);
+      expect(await apiRow(apiId)).toMatchObject({ status, current_strategy_version: 1 });
+      expect(await transitions(apiId)).toEqual([]);
+      expect((await logEvents(run.id)).find((e) => e.event === 'failure_route')?.data).toMatchObject({ agent_invoked: false });
+      fake.reset();
+      await client.reset();
+    }
   });
 
   test('correctif répété → arrêt, erreur (13 `repair_repeated_patch`), stratégie précédente conservée', async () => {
@@ -374,6 +419,16 @@ describe('règles Markdown dans la réparation (tâche 2.10, 18 §4.5)', () => {
     await putRule(pool, { userId: A, role: 'member', via: 'console' }, {
       content: `---\nname: zz-contacts-repair\ndescription: Les contacts gardent leurs champs.\nkind: rule\napplies_to: ["${API_HOST}"]\n---\nLe nom complet vit dans full_name quand name disparaît.\n`,
     });
+    // Source de la version courante (enquête) : la demande et les décisions passent à vN+1 (18 §2, §4.6).
+    const v1Source = {
+      request: { description: 'zz_test liste des contacts', url: `${base(API_HOST)}/contacts`, example_output_ref: null },
+      output_schema_sha256: 'a'.repeat(64),
+      investigation_id: null,
+      decisions: ['zz_test_run:3', 'zz_test_run:7'],
+      rules: [],
+      reason: 'investigation',
+    };
+    await pool.query('UPDATE strategy_versions SET source = $2::jsonb WHERE api_id = $1 AND version = 1', [apiId, JSON.stringify(v1Source)]);
     await site('api_json', { mutation: 'rename_field' });
     fake.setScenario(MODEL, [proposal([{ op: 'replace', path: '/fields/name/path', value: '$.full_name' }])]);
     const run = await runOf(apiId);
@@ -384,11 +439,26 @@ describe('règles Markdown dans la réparation (tâche 2.10, 18 §4.5)', () => {
     expect(system).toContain('escalade-par-defaut@1 (domain)');
     const source = await readStrategySource(pool, { apiId, ownerId: A, version: 2 });
     expect(source!.source.reason).toBe('repair');
+    expect(source!.source.request).toEqual(v1Source.request);
+    expect(source!.source.decisions).toEqual(v1Source.decisions);
     expect(source!.source.rules.map((r) => `${r.name}@${r.version}`).sort()).toEqual(['escalade-par-defaut@1', 'zz-contacts-repair@1']);
     const { rows } = await pool.query<{ ok: boolean }>(
       `SELECT bool_and(s.sha256 = v.sha256) AS ok FROM strategy_version_rules s JOIN rule_file_versions v ON v.rule_file_id = s.rule_file_id AND v.version = s.rule_version WHERE s.api_id = $1 AND s.strategy_version = 2`,
       [apiId],
     );
     expect(rows[0]!.ok).toBe(true);
+  });
+
+  test('source de vN+1 sans source sur la version courante : la demande vient de l’enquête de l’API (description, URL), jamais vide', async () => {
+    const apiId = await healthyContacts('zz_test_rules_repair_request');
+    await pool.query("UPDATE apis SET investigation = $2::jsonb WHERE id = $1", [
+      apiId,
+      JSON.stringify({ request: { url: `${base(API_HOST)}/`, description: 'zz_test contacts depuis la demande', auto_validate: true, budget_usd: 1, timeout_s: 600 }, spent_usd: 0, elapsed_ms: 0 }),
+    ]);
+    await site('api_json', { mutation: 'rename_field' });
+    fake.setScenario(MODEL, [proposal([{ op: 'replace', path: '/fields/name/path', value: '$.full_name' }])]);
+    expect(await runOf(apiId)).toMatchObject({ state: 'succeeded', strategy_version: 2 });
+    const source = await readStrategySource(pool, { apiId, ownerId: A, version: 2 });
+    expect(source!.source.request).toEqual({ description: 'zz_test contacts depuis la demande', url: `${base(API_HOST)}/`, example_output_ref: null });
   });
 });

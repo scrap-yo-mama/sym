@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// Règles et skills Markdown (tâche 2.10, 18 §4, migration 0018) sur base réelle, AU NIVEAU DU SERVICE (les routes
+// Règles et skills Markdown (tâche 2.10, 18 §4, migration 0019) sur base réelle, AU NIVEAU DU SERVICE (les routes
 // `/api/rules`, les outils MCP et l'écran sont de 3.13) :
 // - enregistrement : format (`invalid_rule`), version par contenu (même contenu : même version), `version_conflict`,
 //   `widening_warnings` ; écritures d'instance réservées à un admin en session console (`insufficient_scope` pour toute
@@ -14,6 +14,7 @@
 // - aperçu `resolved-rules` (19 §2) : ensemble résolu, jetons, ce qui est retiré.
 import { randomUUID } from 'node:crypto';
 import { DEFAULT_POLICY_NAME, DEFAULT_POLICY_SHA256, ruleSha256 } from '@runtime/core';
+import { INVESTIGATION_DEFAULTS } from '@runtime/core/investigation';
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import { createTestDatabase, type TestDatabase } from '../../../tests/helpers/pg.js';
@@ -101,7 +102,7 @@ afterAll(async () => {
   await tdb?.drop();
 });
 
-describe('migration 0018', () => {
+describe('migration 0019', () => {
   test('politique par défaut installée : règle partagée d’instance, origine seed, empreinte du template', async () => {
     const { rows } = await pool.query<{ kind: string; visibility: string; owner_id: string | null; applies_to: string[]; origin: string; sha256: string; review_state: string }>(
       `SELECT f.kind, f.visibility, f.owner_id, f.applies_to, v.origin, v.sha256, v.review_state FROM rule_files f JOIN rule_file_versions v ON v.rule_file_id = f.id WHERE f.name = $1`,
@@ -205,6 +206,10 @@ describe('relecture des écritures machine (18 §4.9, 19 §5)', () => {
     await pool.query("INSERT INTO rule_file_versions (rule_file_id, version, content, sha256, description, applies_to, author_id, origin) VALUES ($1, 1, $2, $3, 'Règle zz-proposee', '{*.monsite.test}', NULL, 'proposal')", [file.rows[0]!.id, proposal, ruleSha256(proposal)]);
     expect((await pool.query("SELECT review_state FROM rule_file_versions WHERE rule_file_id = $1", [file.rows[0]!.id])).rows[0].review_state).toBe('to_review');
     await expectError(putRule(pool, { userId: A, role: 'member', via: 'mcp' }, { content: proposal }), 'human_confirmation_required', 403);
+    // Quasi-copie (espaces, ligne vide, `version` ajoutée) : même refus, par toute voie machine (forme canonique).
+    const nearCopy = `---\nname: zz-proposee\nversion: 1\ndescription:   Règle zz-proposee\nkind: rule\napplies_to: ["*.monsite.test"]\n---\n\n  Exclure   fetch sur monsite. \n\n`;
+    await expectError(putRule(pool, { userId: A, role: 'member', via: 'api_key' }, { content: nearCopy }), 'human_confirmation_required', 403);
+    await expectError(putRule(pool, { userId: A, role: 'member', via: 'mcp' }, { content: nearCopy }), 'human_confirmation_required', 403);
   });
 });
 
@@ -266,6 +271,28 @@ describe('recompilation proposée, à la demande (18 §4.8)', () => {
     expect(ev.rows).toEqual([{ from_status: 'sain', to_status: 'enquete', reason: 'rules_changed' }]);
     // Une seule recompilation en cours.
     await expectError(requestRecompile(pool, queue, { userId: A, slug: 'zz-a-x', trigger: 'rest' }), 'recompile_in_progress', 409);
+  });
+
+  test('transition et run au même COMMIT : un échec de mise en file laisse l’API dans son statut, sans run ni demande écrite', async () => {
+    const x = await insertApi(A, 'zz-a-file-en-panne');
+    const failing = { enqueue: async () => { throw new Error('zz_test file en panne'); } } as unknown as PgBossJobQueue;
+    await expect(requestRecompile(pool, failing, { userId: A, slug: 'zz-a-file-en-panne', trigger: 'rest' })).rejects.toThrow('zz_test file en panne');
+    const api = (await pool.query<{ status: string; investigation: { reason?: string } }>('SELECT status, investigation FROM apis WHERE id = $1', [x])).rows[0]!;
+    expect(api.status).toBe('sain');
+    expect(api.investigation.reason).toBeUndefined();
+    expect(Number((await pool.query<{ n: string }>('SELECT count(*) AS n FROM runs WHERE api_id = $1', [x])).rows[0]!.n)).toBe(0);
+    expect((await pool.query('SELECT 1 FROM status_events WHERE api_id = $1', [x])).rowCount).toBe(0);
+    // La file revenue, la recompilation part normalement.
+    await requestRecompile(pool, queue, { userId: A, slug: 'zz-a-file-en-panne', trigger: 'rest' });
+  });
+
+  test('sans demande d’enquête enregistrée : plafonds de l’enquête par défaut (INVESTIGATION_DEFAULTS), jamais des valeurs en dur', async () => {
+    const x = await insertApi(A, 'zz-a-sans-demande');
+    await pool.query("UPDATE apis SET investigation = NULL WHERE id = $1", [x]);
+    await pool.query(`UPDATE strategy_versions SET spec = '{"request": {"url": "https://www.monsite.test/liste"}}' WHERE api_id = $1`, [x]);
+    await requestRecompile(pool, queue, { userId: A, slug: 'zz-a-sans-demande', trigger: 'rest' });
+    const request = (await pool.query<{ investigation: { request: { budget_usd: number; timeout_s: number } } }>('SELECT investigation FROM apis WHERE id = $1', [x])).rows[0]!.investigation.request;
+    expect(request).toMatchObject({ budget_usd: INVESTIGATION_DEFAULTS.budgetUsd, timeout_s: INVESTIGATION_DEFAULTS.timeoutSeconds });
   });
 
   test('par le propriétaire seulement : un membre qui voit une API partagée d’instance reçoit le 404 uniforme, aucun run', async () => {

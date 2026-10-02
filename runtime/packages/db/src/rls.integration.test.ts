@@ -48,12 +48,12 @@ beforeAll(async () => {
     await c.query("INSERT INTO run_logs (run_id, seq, owner_id, level, event) VALUES ($1, 1, $2, 'info', 'zz_test')", [run, A]);
     await c.query("INSERT INTO run_artifacts (run_id, owner_id, kind, bytes, sensitivity, ciphertext, nonce, key_version) VALUES ($1, $2, 'trace', 1, 'high', '\\x00', '\\x00', 1)", [run, A]);
     await c.query("INSERT INTO investigation_events (run_id, seq, owner_id, kind) VALUES ($1, 1, $2, 'zz_test')", [run, A]);
-    // Quarantaine D-49 (0017, 2.3) : échantillon et raisons du run de A, jamais lisibles par B.
+    // Quarantaine D-49 (0018, 2.3) : échantillon et raisons du run de A, jamais lisibles par B.
     await c.query(
       `INSERT INTO run_rejected_items (run_id, api_id, owner_id, total_rejected, by_reason, sample) VALUES ($1, $2, $3, 1, '[{"keyword":"type","instance_path":"/x","count":1}]', '[{"x":"[masqué]"}]')`,
       [run, api, A],
     );
-    // Règles Markdown (2.10, 0018) : fichier privé de A et source d'une version de A.
+    // Règles Markdown (2.10, 0019) : fichier privé de A et source d'une version de A.
     const rule = (await c.query<{ id: string }>("INSERT INTO rule_files (owner_id, kind, name, description, applies_to, current_version) VALUES ($1, 'rule', 'zz-test-a', 'zz', '{*}', 1) RETURNING id", [A])).rows[0]!.id;
     const content = '---\nname: zz-test-a\n---\nzz\n';
     await c.query("INSERT INTO rule_file_versions (rule_file_id, version, content, sha256, description, applies_to, origin) VALUES ($1, 1, $2, encode(sha256(convert_to($2, 'UTF8')), 'hex'), 'zz', '{*}', 'ui')", [rule, content]);

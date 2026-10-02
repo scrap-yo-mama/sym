@@ -21,13 +21,20 @@ export const HYBRID_CLICK_ROLES = Object.freeze(['link', 'button', 'tab', 'menui
 export type HybridClickRole = (typeof HYBRID_CLICK_ROLES)[number];
 
 /**
- * Règles Markdown EMBARQUÉES dans un prompt figé E4-E6 (tâche 2.10, 18 §4.5) : texte des règles appliquées à la
- * compilation (`RULES_MAX_TOKENS` de 1 000), avec leurs références ; le run ne relit jamais les règles courantes.
+ * Règles Markdown EMBARQUÉES dans un prompt figé E4-E6 (tâche 2.10, 18 §4.5) : RÉFÉRENCES seulement (`nom@version#sha256`)
+ * des règles appliquées à la compilation (`RULES_MAX_TOKENS` de 1 000), avec leur niveau, et des skills listés (E6). Le
+ * texte n'est jamais stocké dans la spec (lisible des membres d'une API partagée d'instance, INV12) : au run, il est relu
+ * dans `rule_file_versions` sous l'identité du propriétaire et vérifié par `sha256` ; le run ne lit jamais les règles
+ * COURANTES. Aucun texte injecté en cas d'écart.
  */
-export type EmbeddedRules = { readonly text: string; readonly refs: readonly string[] };
+export type EmbeddedRuleRef = { readonly ref: string; readonly level: 'instance' | 'domain' | 'api' };
+export type EmbeddedSkillRef = { readonly ref: string; readonly described: boolean };
+export type EmbeddedRules = { readonly rules: readonly EmbeddedRuleRef[]; readonly skills: readonly EmbeddedSkillRef[] };
+/** `nom@version#sha256`. */
+export const EMBEDDED_REF_RE = /^([a-z0-9-]{1,64})@([1-9][0-9]{0,8})#([0-9a-f]{64})$/;
+const EMBEDDED_LEVELS = new Set(['instance', 'domain', 'api']);
 /** Empreinte de compilation d'une étape E5 (19 §4, 19b §1) : règles `nom@version#sha256`, modèle, date. */
 export type CompiledWith = { readonly rules: readonly string[]; readonly model_id: string | null; readonly at: string };
-const MAX_EMBEDDED_RULES = 12_000;
 
 export type AgentFetchSpec = {
   readonly schema_version: 1;
@@ -143,14 +150,29 @@ class Checker {
   rules(v: unknown, path: string): EmbeddedRules | undefined {
     if (v === undefined) return undefined;
     const r = isRecord(v) ? v : {};
-    for (const key of Object.keys(r)) if (key !== 'text' && key !== 'refs') this.fail(`${path}.${key}`, 'champ non autorisé');
-    const text = this.str(r['text'], `${path}.text`, MAX_EMBEDDED_RULES);
-    const refs = r['refs'];
-    if (!Array.isArray(refs) || refs.length > 20 || !refs.every((x) => typeof x === 'string' && x.length <= 80)) {
-      this.fail(`${path}.refs`, 'liste de 20 références nom@version au plus attendue');
-      return undefined;
-    }
-    return { text, refs: refs as string[] };
+    for (const key of Object.keys(r)) if (key !== 'rules' && key !== 'skills') this.fail(`${path}.${key}`, 'champ non autorisé (références seulement, jamais le texte)');
+    const list = <T>(raw: unknown, at: string, max: number, keys: readonly string[], item: (o: Record<string, unknown>) => T | null): T[] => {
+      if (!Array.isArray(raw) || raw.length > max) {
+        this.fail(at, `liste de ${max} références au plus attendue`);
+        return [];
+      }
+      const out: T[] = [];
+      for (const [i, x] of raw.entries()) {
+        const o = isRecord(x) ? x : {};
+        for (const key of Object.keys(o)) if (!keys.includes(key)) this.fail(`${at}[${i}].${key}`, 'champ non autorisé');
+        const ref = o['ref'];
+        if (typeof ref !== 'string' || !EMBEDDED_REF_RE.test(ref)) this.fail(`${at}[${i}].ref`, 'référence nom@version#sha256 attendue');
+        const value = item(o);
+        if (value === null) this.fail(`${at}[${i}]`, 'référence invalide');
+        else out.push(value);
+      }
+      return out;
+    };
+    const rules = list(r['rules'], `${path}.rules`, 20, ['ref', 'level'], (o) =>
+      typeof o['ref'] === 'string' && typeof o['level'] === 'string' && EMBEDDED_LEVELS.has(o['level']) ? { ref: o['ref'], level: o['level'] as EmbeddedRuleRef['level'] } : null,
+    );
+    const skills = list(r['skills'] ?? [], `${path}.skills`, 100, ['ref', 'described'], (o) => (typeof o['ref'] === 'string' && typeof o['described'] === 'boolean' ? { ref: o['ref'], described: o['described'] } : null));
+    return { rules, skills };
   }
   compiledWith(v: unknown, path: string): CompiledWith | undefined {
     if (v === undefined) return undefined;

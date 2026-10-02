@@ -13,7 +13,8 @@ import { RouterLink, useRoute } from 'vue-router';
 import TextField from '@/components/account/TextField.vue';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardDescription, CardHeader } from '@/components/ui/card';
+import PageHeader from '@/components/brand/PageHeader.vue';
+import { Card, CardContent } from '@/components/ui/card';
 import { confirmPasswordReset } from '@/composables/useAccountFlows';
 import { readFieldValue, takeFieldValue } from '@/lib/form-field';
 
@@ -50,12 +51,11 @@ async function submit(event: Event): Promise<void> {
 </script>
 
 <template>
-  <section class="mx-auto flex max-w-md flex-col gap-6 py-10">
+  <section class="mx-auto flex max-w-xl flex-col gap-6 py-8">
+    <PageHeader :title="t('auth.reset.title')" :kicker="t('brand.kicker.login')">
+      <p class="sym-lead">{{ t('auth.reset.description') }}</p>
+    </PageHeader>
     <Card>
-      <CardHeader>
-        <h1 data-route-heading tabindex="-1" class="text-2xl leading-none font-semibold tracking-tight">{{ t('auth.reset.title') }}</h1>
-        <CardDescription>{{ t('auth.reset.description') }}</CardDescription>
-      </CardHeader>
       <CardContent>
         <div v-if="done" class="flex flex-col gap-4">
           <p role="status" class="text-sm" data-testid="reset-done">{{ t('auth.reset.done') }}</p>

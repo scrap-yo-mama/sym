@@ -10,7 +10,8 @@ import { pathToFileURL } from 'node:url';
 import { describe, expect, test } from 'vitest';
 import { ROUTES } from '../apps/server/src/routes/registry.ts';
 import { STOP_ON_NOT_FOUND_DEFAULT } from '../apps/web/src/lib/sse.ts';
-import { generateSchema, GENERATED_URL, isInSync, SPEC_URL } from '../scripts/gen-openapi-client.ts';
+import { deliveredOpenApi } from '../apps/server/src/routes/openapi.ts';
+import { generateSchema, GENERATED_URL, isInSync, isServerSpecInSync, SPEC_URL } from '../scripts/gen-openapi-client.ts';
 
 /** « MÉTHODE /chemin/{param} » de chaque opération du fichier généré. */
 function operationsOf(generated: string): string[] {
@@ -44,6 +45,10 @@ describe('assert_openapi_client_in_sync', () => {
 
   test('la génération est déterministe', async () => {
     expect(await generateSchema()).toBe(await generateSchema());
+  });
+
+  test('le document servi par le serveur (/api/openapi.json, 3.1) est généré depuis la même OpenAPI spécifiée', () => {
+    expect(isServerSpecInSync()).toBe(true);
   });
 });
 
@@ -243,6 +248,13 @@ describe('OpenAPI spécifiée et routes livrées', () => {
     expect(drifted).not.toBe(yaml);
     expect(parseOperations(drifted).get('GET /api/admin/tunnels')?.security).toBeNull();
     expect(parseOperations(yaml).get('GET /api/admin/tunnels')?.security).toEqual(['sessionCookie']);
+  });
+
+  test('assert_openapi_served_vs_specified : le document servi garde exactement les opérations livrées, sans x-pending', () => {
+    const served = deliveredOpenApi(ROUTES.map((r) => `${r.method} ${r.url}`)) as { paths: Record<string, Record<string, unknown>> };
+    const ops = Object.entries(served.paths).flatMap(([path, item]) => Object.keys(item).filter((k) => ['get', 'put', 'post', 'delete', 'patch'].includes(k)).map((m) => `${m.toUpperCase()} ${path}`));
+    expect(ops.sort()).toEqual(delivered);
+    expect(JSON.stringify(served)).not.toContain('x-pending');
   });
 
   test('la console arrête le flux sur une 404 de /api/events tant que la route n’est pas livrée, jamais après', () => {
