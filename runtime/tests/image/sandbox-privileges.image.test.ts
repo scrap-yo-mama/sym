@@ -223,7 +223,10 @@ try {
   await browser.close();
 } catch (e) {
   // Chromium sans bac à sable utilisable : rapporté avec le diagnostic au lieu d'un arrêt de la sonde.
-  out.chromiumError = String(e && e.message || e).split('\n').filter((l) => /FATAL|sandbox|launch/i.test(l)).join(' | ').slice(0, 800);
+  // Lignes FATAL (« No usable sandbox! ») d'abord : la ligne <launching> (commande complète de Chromium) dépasserait la borne.
+  const lines = String(e && e.message || e).split('\n');
+  const fatal = (l) => /FATAL|No usable sandbox/i.test(l);
+  out.chromiumError = [...lines.filter(fatal), ...lines.filter((l) => !fatal(l) && !/<launching>/.test(l) && /sandbox|launch/i.test(l))].join(' | ').slice(0, 800);
 }
 const { spawnPlan, sandboxOptionsFromEnv, ProcessSandboxEngine } = await import('/app/apps/worker/dist/sandbox/engine.js');
 const options = sandboxOptionsFromEnv(process.env);
