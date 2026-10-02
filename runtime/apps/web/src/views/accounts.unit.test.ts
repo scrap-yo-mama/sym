@@ -449,7 +449,7 @@ describe('assert_secret_masked : secrets des comptes', () => {
     const ua = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36';
     installFakeServer({
       ...session('admin'),
-      'GET /api/settings/identity': () => json(200, { identify_instance: false, instance_contact: 'mailto:ops@zz-test.example', engine: { version: '153.0.8010.12', platform: 'linux' }, user_agent: ua, user_agent_identified: `${ua} (compatible; Scrapyomama/1.0.0; +mailto:ops@zz-test.example)`, product_version: '1.0.0' }),
+      'GET /api/settings/identity': () => json(200, { identify_instance: false, identify_effective: false, identify_source: 'setting', instance_contact: 'mailto:ops@zz-test.example', instance_contact_effective: 'mailto:ops@zz-test.example', instance_contact_source: 'setting', engine: { version: '153.0.8010.12', platform: 'linux' }, worker_version: '1.0.0', user_agent: ua, user_agent_identified: `${ua} (compatible; Scrapyomama/1.0.0; +mailto:ops@zz-test.example)`, product_version: '1.0.0' }),
     });
     await signedIn();
     const html = await view(RobotIdentitySettingsView);
@@ -469,7 +469,7 @@ describe('assert_secret_masked : secrets des comptes', () => {
   test('Identité du robot : moteur pas encore publié, rien d’inventé', async () => {
     installFakeServer({
       ...session('owner'),
-      'GET /api/settings/identity': () => json(200, { identify_instance: null, instance_contact: null, engine: null, user_agent: null, user_agent_identified: null, product_version: '1.0.0' }),
+      'GET /api/settings/identity': () => json(200, { identify_instance: null, identify_effective: null, identify_source: null, instance_contact: null, instance_contact_effective: null, instance_contact_source: null, engine: null, worker_version: null, user_agent: null, user_agent_identified: null, product_version: '1.0.0' }),
     });
     await signedIn();
     const html = await view(RobotIdentitySettingsView);
@@ -477,5 +477,20 @@ describe('assert_secret_masked : secrets des comptes', () => {
     expect(html).not.toContain('data-testid="identity-ua"');
     expect(html).toContain(esc(en.instance.identity.identifyUnset));
     expect(html).toContain(esc(en.instance.identity.contactUnset));
+  });
+
+  test('Identité du robot : réglages jamais posés, environnement du worker appliqué → case cochée et origine dite (rien ne s’éteint en douce)', async () => {
+    const ua = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36';
+    installFakeServer({
+      ...session('admin'),
+      'GET /api/settings/identity': () =>
+        json(200, { identify_instance: null, identify_effective: true, identify_source: 'env', instance_contact: null, instance_contact_effective: 'https://zz-test.example/env', instance_contact_source: 'env', engine: { version: '153.0.8010.12', platform: 'linux' }, worker_version: '4.5.6', user_agent: ua, user_agent_identified: `${ua} (compatible; Scrapyomama/4.5.6; +https://zz-test.example/env)`, product_version: '1.0.0' }),
+    });
+    await signedIn();
+    const html = await view(RobotIdentitySettingsView);
+    expect(html).toMatch(/data-testid="identity-identify"[^>]*checked|checked[^>]*data-testid="identity-identify"/);
+    expect(html).toContain(esc(en.instance.identity.identifyFromEnvOn));
+    expect(html).toContain(esc(en.instance.identity.contactFromEnv.replace('{contact}', 'https://zz-test.example/env')));
+    expect(html).toContain('Scrapyomama/4.5.6');
   });
 });

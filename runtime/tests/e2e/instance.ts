@@ -34,6 +34,8 @@ export type Instance = {
   url: string;
   bootstrapToken: string;
   masterKey: string;
+  /** Base de l'instance : un worker réel peut s'y brancher (même MASTER_KEY). */
+  dbUrl: string;
   sql: <T extends Record<string, unknown>>(text: string, params?: unknown[]) => Promise<T[]>;
   close: () => Promise<void>;
 };
@@ -97,7 +99,7 @@ export async function startInstance(env: NodeJS.ProcessEnv = {}): Promise<Instan
     const pool = new pg.Pool({ connectionString: dbUrl, max: 2 });
     cleanups.push(() => pool.end());
     const sql = async <T extends Record<string, unknown>>(text: string, params: unknown[] = []) => (await pool.query<T>(text, params)).rows;
-    return { url, bootstrapToken, masterKey, sql, close };
+    return { url, bootstrapToken, masterKey, dbUrl, sql, close };
   } catch (error) {
     await close();
     throw error;

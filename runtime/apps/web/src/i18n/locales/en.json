@@ -1691,9 +1691,12 @@
       "identify": "Identify this instance to the sites it reads",
       "identifyHint": "Off by default. When on, the User-Agent ends with the instance token (“compatible; Scrapyomama”, its version and your contact), and an e-mail contact is also sent in the From header. It applies to the next run.",
       "identifyUnset": "Never set here: the worker uses its IDENTIFY_INSTANCE variable, and identification stays off if that is not set either.",
+      "identifyFromEnvOn": "Not set here: the worker’s IDENTIFY_INSTANCE variable turns identification on, so the box is ticked. Untick it and save to turn it off for this instance.",
+      "identifyFromEnvOff": "Not set here: the worker’s IDENTIFY_INSTANCE variable turns identification off. Tick the box and save to turn it on for this instance.",
       "contact": "Instance contact",
       "contactHint": "Who runs this instance: a web address (https://…), a mailto: link or an e-mail address. No spaces or line breaks. Empty it and save to remove it.",
       "contactUnset": "Not set here: the worker uses its INSTANCE_CONTACT variable. A contact is needed before the first investigation.",
+      "contactFromEnv": "Not set here: the worker announces its INSTANCE_CONTACT variable, {contact}. Type a contact and save to replace it.",
       "save": "Save"
     },
     "sso": {

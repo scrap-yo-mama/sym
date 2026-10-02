@@ -1691,9 +1691,12 @@
       "identify": "Identifier cette instance auprès des sites qu'elle lit",
       "identifyHint": "Désactivé par défaut. Activé, le User-Agent se termine par le jeton de l'instance (« compatible; Scrapyomama », sa version et ton contact), et un contact e-mail part aussi dans l'en-tête From. Effet au prochain run.",
       "identifyUnset": "Jamais défini ici : le worker lit sa variable IDENTIFY_INSTANCE, et l'identification reste désactivée si elle n'est pas posée non plus.",
+      "identifyFromEnvOn": "Non défini ici : la variable IDENTIFY_INSTANCE du worker active l'identification, d'où la case cochée. Décoche-la et enregistre pour la désactiver sur cette instance.",
+      "identifyFromEnvOff": "Non défini ici : la variable IDENTIFY_INSTANCE du worker désactive l'identification. Coche la case et enregistre pour l'activer sur cette instance.",
       "contact": "Contact de l'instance",
       "contactHint": "Qui exploite cette instance : une adresse web (https://…), un lien mailto: ou une adresse e-mail. Sans espace ni saut de ligne. Vide-le et enregistre pour le retirer.",
       "contactUnset": "Non défini ici : le worker lit sa variable INSTANCE_CONTACT. Un contact est requis avant la première enquête.",
+      "contactFromEnv": "Non défini ici : le worker annonce sa variable INSTANCE_CONTACT, {contact}. Saisis un contact et enregistre pour la remplacer.",
       "save": "Enregistrer"
     },
     "sso": {

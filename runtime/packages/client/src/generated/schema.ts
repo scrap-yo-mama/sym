@@ -2543,16 +2543,32 @@ export interface components {
         IdentitySettings: {
             /** @description Réglage admin ; null tant qu'il n'est pas posé (le worker retombe sur IDENTIFY_INSTANCE, puis sur désactivé). */
             identify_instance: boolean | null;
+            /** @description Valeur que le worker applique : le réglage, sinon IDENTIFY_INSTANCE publiée par le worker, sinon désactivé ; null sans réglage tant qu'aucun worker n'a publié son environnement. */
+            identify_effective: boolean | null;
+            /**
+             * @description Origine de identify_effective : réglage admin, environnement du worker, ou défaut (désactivé).
+             * @enum {string|null}
+             */
+            identify_source: "setting" | "env" | "default" | null;
             /** @description Contact d'instance normalisé (URL http(s) ou mailto:) ; null tant qu'il n'est pas posé (repli : INSTANCE_CONTACT). */
             instance_contact: string | null;
+            /** @description Contact que le worker annonce : le réglage, sinon INSTANCE_CONTACT publiée par le worker ; null si aucun. */
+            instance_contact_effective: string | null;
+            /**
+             * @description Origine de instance_contact_effective : réglage ou environnement du worker.
+             * @enum {string|null}
+             */
+            instance_contact_source: "setting" | "env" | null;
             /** @description Moteur embarqué tel que le worker le publie ; null tant qu'aucun worker n'a démarré. */
             engine: {
                 version: string;
                 platform: string;
             } | null;
+            /** @description Version que le worker annonce dans le jeton (sa RUNTIME_VERSION), publiée avec son moteur ; null pour un worker qui ne la publie pas. */
+            worker_version: string | null;
             /** @description User-Agent réel du moteur (lecture seule, sans HeadlessChrome). */
             user_agent: string | null;
-            /** @description Le même User-Agent suivi du jeton compatible; Scrapyomama/<version>; +<contact>, tel qu'il part quand identify_instance est activé. */
+            /** @description Le même User-Agent suivi du jeton compatible; Scrapyomama/<version du worker>; +<contact appliqué>, tel qu'il part quand l'identification est activée. */
             user_agent_identified: string | null;
             product_version: string;
         };

@@ -1,17 +1,24 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Identité du robot dans la console, en Chromium contre une instance réelle (tâche 3.8b, 17 §5, 06 « Identité du robot ») :
 //   contact d'instance saisi à l'assistant de premier démarrage (refusé s'il est invalide) → l'admin ouvre Réglages > Identité du robot,
-//   voit le User-Agent réel du moteur en lecture seule, active `identify_instance` et pose un contact → le run suivant porte le jeton
-//   (l'identité que le worker calcule à chaque run, sur cette base, vaut le User-Agent du moteur suivi de `compatible; Scrapyomama/…`)
-//   → un contact avec espace est refusé → le changement est audité → un membre n'a ni l'écran ni la route (403).
+//   voit le User-Agent réel du moteur en lecture seule (publié par un worker RÉEL branché sur la même base), active `identify_instance`
+//   et pose un contact → le run suivant, un vrai run (file → worker → exécuteur E1 de production), arrive sur une cible locale qui relève
+//   les en-têtes reçus : User-Agent du moteur suivi de `compatible; Scrapyomama/<version du worker>; +<contact>`, exactement l'aperçu
+//   de la console, et `From` pour un contact électronique → un contact avec espace est refusé → le changement est audité → un membre
+//   n'a ni l'écran ni la route (403).
 // assert_identity_settings_admin_only (stade E2E ; la matrice des refus et la validation sont dans apps/server/src/identity.integration.test.ts).
 // Aucun site réel. assert_no_csp_violation : chaque test échoue s'il laisse une violation de la CSP stricte de la console.
 import { readFileSync } from 'node:fs';
+import { createServer, type Server } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { hashPassword } from '@runtime/core';
-import { engineUserAgent, resolveIdentifyInstance, resolveInstanceContact } from '@runtime/core/access';
-import { publishRobotEngine, readIdentifyInstanceSetting, readInstanceContactSetting } from '@runtime/db';
+import { engineUserAgent } from '@runtime/core/access';
+import { createRun, PgBossJobQueue, withActor } from '@runtime/db';
 import { test, expect, type Browser, type BrowserContext, type Page } from '@playwright/test';
-import { robotIdentity } from '../../apps/worker/dist/exec/robot-identity.js';
+import pg from 'pg';
+import { loadWorkerConfig } from '../../apps/worker/dist/config.js';
+import { productionExecutorFactory } from '../../apps/worker/dist/exec/factory.js';
+import { startWorker, type Worker } from '../../apps/worker/dist/worker.js';
 import { CONSOLE_CSP, watchCspViolations } from '../../apps/web/e2e/csp.ts';
 import { startInstance, type Instance } from './instance.ts';
 
@@ -27,8 +34,8 @@ const strong = (): string => `zz_test_${Math.random().toString(36).slice(2)}_${D
 const OWNER = { email: 'zz_test_id_owner@example.test', password: strong() };
 const ADMIN = { email: 'zz_test_id_admin@example.test', password: strong() };
 const MEMBER = { email: 'zz_test_id_membre@example.test', password: strong() };
-/** Le moteur que « le worker » publie : version réelle du Chromium épinglé, plateforme réelle (jamais une constante). */
-const ENGINE = { version: '153.0.8010.12', platform: process.platform };
+/** Version que le worker annonce dans le jeton (sa RUNTIME_VERSION), distincte de celle du serveur (0.0.0) : l'aperçu doit suivre le worker. */
+const WORKER_VERSION = '9.9.9';
 
 type Person = { context: BrowserContext; page: Page };
 let baseURL = '';
@@ -50,9 +57,10 @@ async function signIn(page: Page, who: { email: string; password: string }): Pro
 }
 
 /** Compte actif créé en base (équivalent d'une invitation acceptée : ce parcours est celui de invitation.e2e.ts). */
-async function createAccount(instance: Instance, who: { email: string; password: string }, role: 'admin' | 'member'): Promise<void> {
+async function createAccount(instance: Instance, who: { email: string; password: string }, role: 'admin' | 'member'): Promise<string> {
   const [{ id }] = await instance.sql<{ id: string }>("INSERT INTO users (email, role, status, email_verified) VALUES ($1, $2, 'active', true) RETURNING id", [who.email, role]) as [{ id: string }];
   await instance.sql("INSERT INTO auth_accounts (user_id, provider_id, account_id, password_hash) VALUES ($1, 'credential', $2, $3)", [id, id, await hashPassword(who.password)]);
+  return id;
 }
 
 /** Enregistre et attend la réponse du serveur (le message « enregistré » d'un envoi précédent peut encore être affiché). */
@@ -62,16 +70,41 @@ async function save(page: Page, status = 200): Promise<void> {
   await answered;
 }
 
-/** La lecture du worker (factory.ts) sur cette base : réglages d'abord, puis l'environnement (ici vide). */
-function runIdentity(instance: Instance): () => Promise<{ userAgent: string; from: string | null }> {
-  const db = { query: async (text: string, params?: unknown[]) => ({ rows: await instance.sql(text, params) }) } as Parameters<typeof readIdentifyInstanceSetting>[0];
-  return robotIdentity({
-    version: '9.9.9',
-    engine: () => ENGINE,
-    instanceContact: async () => resolveInstanceContact(await readInstanceContactSetting(db), {}),
-    identifyInstance: async () => resolveIdentifyInstance(await readIdentifyInstanceSetting(db), {}),
-    warn: () => undefined,
+/** Cible locale (aucun site réel) : relève le User-Agent et le `From` de chaque requête reçue ; `/ua` rend un item, robots.txt 404. */
+type Seen = { path: string; ua: string | null; from: string | null };
+async function startTarget(): Promise<{ server: Server; port: number; seen: Seen[] }> {
+  const seen: Seen[] = [];
+  const server = createServer((req, res) => {
+    const header = (name: string) => (typeof req.headers[name] === 'string' ? (req.headers[name] as string) : null);
+    seen.push({ path: (req.url ?? '/').split('?')[0] ?? '/', ua: header('user-agent'), from: header('from') });
+    if (req.url?.startsWith('/ua')) {
+      res.setHeader('content-type', 'application/json');
+      res.end(JSON.stringify({ items: [{ id: String(seen.length) }] }));
+      return;
+    }
+    res.statusCode = 404;
+    res.end();
   });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  return { server, port: (server.address() as AddressInfo).port, seen };
+}
+
+/** API E1 (`fetch`, direct) de l'admin vers la cible locale, en base comme le ferait une enquête promue. */
+async function createTargetApi(instance: Instance, ownerId: string, port: number): Promise<string> {
+  const [{ id }] = (await instance.sql<{ id: string }>(
+    `INSERT INTO apis (slug, owner_id, output_schema, network_policy, domain_pacing) VALUES ('zz_test_identity_ua', $1, '{}', '{"allow": ["direct"]}', '{"min_delay_ms": 5, "max_requests_per_run": 20, "max_wait_ms": 60000}') RETURNING id`,
+    [ownerId],
+  )) as [{ id: string }];
+  const spec = {
+    schema_version: 1,
+    kind: 'declarative',
+    request: { method: 'GET', url: `http://127.0.0.1:${port}/ua`, allowed_hosts: ['127.0.0.1'] },
+    sources: [{ id: 'api', from: 'response', records: '$.items[*]' }],
+    fields: { id: { path: '$.id', type: 'string', required: true } },
+  };
+  await instance.sql("INSERT INTO strategy_versions (api_id, version, owner_id, execution, network, spec, est_cost_usd, created_by) VALUES ($1, 1, $2, 'fetch', 'direct', $3, 0, 'user')", [id, ownerId, JSON.stringify(spec)]);
+  await instance.sql('UPDATE apis SET current_strategy_version = 1 WHERE id = $1', [id]);
+  return id;
 }
 
 test.describe.serial('assert_identity_settings_admin_only : du contact de premier démarrage au run suivant', () => {
@@ -79,6 +112,25 @@ test.describe.serial('assert_identity_settings_admin_only : du contact de premie
   let owner: Person;
   let admin: Person;
   let member: Person;
+  let adminId = '';
+  let target: Awaited<ReturnType<typeof startTarget>> | undefined;
+  let worker: Worker | undefined;
+  let queue: PgBossJobQueue | undefined;
+  let pool: pg.Pool | undefined;
+
+  /** Un vrai run de l'API de l'admin (file → worker → exécuteur E1) ; rend les en-têtes que la cible a reçus sur `/ua`. */
+  async function nextRun(apiId: string): Promise<{ ua: string | null; from: string | null }> {
+    const before = target!.seen.length;
+    const { runId } = await withActor(pool!, { userId: adminId, role: 'admin' }, (tx) => createRun(tx, queue!, { apiId, ownerId: adminId, trigger: 'rest' }));
+    await expect
+      .poll(async () => (await instance.sql<{ state: string }>('SELECT state FROM runs WHERE id = $1', [runId]))[0]?.state, { timeout: 60_000 })
+      .toMatch(/^(succeeded|failed)$/);
+    const [run] = await instance.sql<{ state: string; error_detail: string | null }>('SELECT state, error_detail FROM runs WHERE id = $1', [runId]);
+    expect(run, JSON.stringify(run)).toMatchObject({ state: 'succeeded' });
+    const hits = target!.seen.slice(before).filter((s) => s.path === '/ua');
+    expect(hits).toHaveLength(1);
+    return { ua: hits[0]!.ua, from: hits[0]!.from };
+  }
 
   test.beforeAll(async ({ browser }) => {
     instance = await startInstance();
@@ -89,6 +141,10 @@ test.describe.serial('assert_identity_settings_admin_only : du contact de premie
   });
   test.afterAll(async () => {
     for (const p of [owner, admin, member]) await p?.context.close();
+    await worker?.stop();
+    await queue?.stop({ timeoutMs: 1000 });
+    await pool?.end();
+    if (target) await new Promise<void>((resolve) => target!.server.close(() => resolve()));
     await instance?.close();
   });
 
@@ -110,18 +166,13 @@ test.describe.serial('assert_identity_settings_admin_only : du contact de premie
     await page.getByTestId('setup-form').locator('button[type="submit"]').click();
     await expect(page.getByTestId('key-fingerprint')).toBeVisible();
     expect(await instance.sql("SELECT value FROM settings WHERE key = 'instance_contact'")).toEqual([{ value: 'mailto:ops@zz-test.example' }]);
-    await createAccount(instance, ADMIN, 'admin');
+    adminId = await createAccount(instance, ADMIN, 'admin');
     await createAccount(instance, MEMBER, 'member');
   });
 
-  test('l’admin active identify_instance dans l’UI : User-Agent du moteur en lecture seule, puis le run suivant porte le jeton', async () => {
+  test('l’admin active identify_instance dans l’UI : User-Agent du moteur en lecture seule, puis le run suivant (vrai run) porte le jeton', async () => {
     const { page } = admin;
     await signIn(page, ADMIN);
-    const identity = runIdentity(instance);
-    const engineUa = engineUserAgent(ENGINE);
-
-    // Avant tout : désactivé par défaut, le robot envoie le User-Agent du moteur, sans jeton ni From.
-    expect(await identity()).toEqual({ userAgent: engineUa, from: null });
 
     await page.goto('/settings');
     const nav = page.getByRole('navigation', { name: t('settings.nav.label') });
@@ -131,9 +182,26 @@ test.describe.serial('assert_identity_settings_admin_only : du contact de premie
 
     // Aucun worker n'a encore publié son moteur : rien d'inventé.
     await expect(page.getByTestId('identity-ua-unknown')).toHaveText(t('instance.identity.userAgentUnknown'));
-    await publishRobotEngine({ query: async (text: string, params?: unknown[]) => ({ rows: await instance.sql(text, params) }) } as Parameters<typeof publishRobotEngine>[0], ENGINE);
-    await page.reload();
 
+    // Un worker réel démarre sur cette base (exécuteur de production, sans navigateur, cible locale permise en test) : il publie son
+    // moteur, sa version et les replis de son environnement (ici aucun : identification désactivée par défaut).
+    target = await startTarget();
+    pool = new pg.Pool({ connectionString: instance.dbUrl, max: 2 });
+    queue = new PgBossJobQueue({ connectionString: instance.dbUrl, max: 2, supervise: false });
+    await queue.start();
+    worker = await startWorker({
+      config: loadWorkerConfig({ DATABASE_URL: instance.dbUrl, MASTER_KEY: instance.masterKey, QUEUE_POLLING_SECONDS: '0.5', RUN_HEARTBEAT_SECONDS: '0.5', RUN_STALE_SECONDS: '10', DISABLE_BROWSER: 'true', BROWSER_CONCURRENCY: '1', RUNTIME_VERSION: WORKER_VERSION, LOG_LEVEL: 'warn' }),
+      executorFactory: productionExecutorFactory({ NODE_ENV: 'test', RUNTIME_TEST_ALLOW_PRIVATE: '1', DISABLE_BROWSER: 'true' }),
+    });
+    const [published] = await instance.sql<{ value: { version: string; platform: string } }>("SELECT value FROM settings WHERE key = 'robot_engine'");
+    expect(published?.value.platform).toBe(process.platform);
+    const engineUa = engineUserAgent(published!.value);
+    const apiId = await createTargetApi(instance, adminId, target.port);
+
+    // Avant tout : désactivé par défaut, le run envoie le User-Agent du moteur, sans jeton ni From.
+    expect(await nextRun(apiId)).toEqual({ ua: engineUa, from: null });
+
+    await page.reload();
     // User-Agent réel du moteur : champ en lecture seule, valeur exacte.
     const ua = page.getByTestId('identity-ua');
     await expect(ua).toHaveValue(engineUa);
@@ -147,33 +215,37 @@ test.describe.serial('assert_identity_settings_admin_only : du contact de premie
     await expect(page.getByTestId('identity-error')).toHaveText(t('errors.invalid_instance_contact'));
     expect(await instance.sql("SELECT 1 FROM settings WHERE key = 'identify_instance'")).toEqual([]);
 
-    // Activation + contact : enregistrés, normalisés, affichés.
+    // Activation + contact : enregistrés, normalisés, affichés ; l'aperçu porte la version du WORKER.
     await page.locator('#identity-contact').fill('https://zz-test.example/robot');
     await page.getByTestId('identity-identify').check();
     await save(page);
     await expect(page.getByTestId('identity-saved')).toBeVisible();
     await expect(page.getByTestId('identity-error')).toHaveCount(0);
-    const token = `${engineUa} (compatible; Scrapyomama/${'0.0.0'}; +https://zz-test.example/robot)`;
+    const token = `${engineUa} (compatible; Scrapyomama/${WORKER_VERSION}; +https://zz-test.example/robot)`;
     await expect(page.getByTestId('identity-ua-identified')).toHaveValue(token);
     await expect(ua).toHaveValue(engineUa); // le User-Agent du moteur n'a pas bougé
 
-    // Le run suivant porte le jeton (version annoncée : celle du worker).
-    expect(await identity()).toEqual({ userAgent: `${engineUa} (compatible; Scrapyomama/9.9.9; +https://zz-test.example/robot)`, from: null });
+    // Le run suivant porte le jeton : exactement l'aperçu de la console.
+    expect(await nextRun(apiId)).toEqual({ ua: token, from: null });
 
-    // Contact électronique : l'en-tête From part aussi. Désactivation : retour au User-Agent seul.
+    // Contact électronique seul (interrupteur non renvoyé) : l'en-tête From part aussi. Désactivation : retour au User-Agent seul.
     await page.locator('#identity-contact').fill('ops@zz-test.example');
     await save(page);
     await expect(page.getByTestId('identity-saved')).toBeVisible();
-    expect(await identity()).toEqual({ userAgent: `${engineUa} (compatible; Scrapyomama/9.9.9; +mailto:ops@zz-test.example)`, from: 'ops@zz-test.example' });
+    expect(await nextRun(apiId)).toEqual({ ua: `${engineUa} (compatible; Scrapyomama/${WORKER_VERSION}; +mailto:ops@zz-test.example)`, from: 'ops@zz-test.example' });
     await page.getByTestId('identity-identify').uncheck();
     await save(page);
     await expect(page.getByTestId('identity-saved')).toBeVisible();
-    expect(await identity()).toEqual({ userAgent: engineUa, from: null });
+    expect(await nextRun(apiId)).toEqual({ ua: engineUa, from: null });
 
-    // Audité : champs modifiés et état de l'interrupteur, jamais le contact.
+    // Audité : champs réellement modifiés et état de l'interrupteur quand il change, jamais le contact.
     const events = await instance.sql<{ outcome: string; meta: { fields: string[]; identify_instance?: boolean } }>("SELECT outcome, meta FROM audit_events WHERE action = 'settings.identity_updated' ORDER BY id");
     expect(events.map((e) => e.outcome)).toEqual(['success', 'success', 'success']);
-    expect(events.map((e) => e.meta.identify_instance)).toEqual([true, true, false]);
+    expect(events.map((e) => e.meta)).toEqual([
+      { fields: ['identify_instance', 'instance_contact'], identify_instance: true },
+      { fields: ['instance_contact'] },
+      { fields: ['identify_instance'], identify_instance: false },
+    ]);
     expect(JSON.stringify(await instance.sql('SELECT * FROM audit_events'))).not.toContain('zz-test.example/robot');
   });
 

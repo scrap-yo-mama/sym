@@ -602,7 +602,20 @@ describe('réglages d’instance (owner)', () => {
 });
 
 describe('identité du robot (tâche 3.8b)', () => {
-  const view = (extra: Record<string, unknown> = {}) => ({ identify_instance: null, instance_contact: null, engine: null, user_agent: null, user_agent_identified: null, product_version: '1.0.0', ...extra });
+  const view = (extra: Record<string, unknown> = {}) => ({
+    identify_instance: null,
+    identify_effective: false,
+    identify_source: 'default',
+    instance_contact: null,
+    instance_contact_effective: null,
+    instance_contact_source: null,
+    engine: null,
+    worker_version: null,
+    user_agent: null,
+    user_agent_identified: null,
+    product_version: '1.0.0',
+    ...extra,
+  });
 
   test('lecture : jamais posé → interrupteur éteint dans le formulaire, contact vide ; écriture de l’interrupteur seul, contact non renvoyé', async () => {
     const bodies: Record<string, unknown>[] = [];
@@ -632,19 +645,47 @@ describe('identité du robot (tâche 3.8b)', () => {
         const body = call.body as { instance_contact?: string | null };
         bodies.push(body);
         if (body.instance_contact !== undefined) stored = body.instance_contact === null ? null : `mailto:${body.instance_contact}`;
-        return json(200, view({ identify_instance: false, instance_contact: stored }));
+        return json(200, view({ instance_contact: stored, instance_contact_effective: stored, instance_contact_source: stored === null ? null : 'setting' }));
       },
     });
     const identity = useIdentitySettings();
     await identity.load();
     identity.form.contact = '  ops@zz-test.example ';
     await identity.save();
-    expect(bodies[0]).toEqual({ identify_instance: false, instance_contact: 'ops@zz-test.example' });
+    // Interrupteur non touché : il n'est pas renvoyé (un réglage jamais posé reste null, l'environnement du worker s'applique).
+    expect(bodies[0]).toEqual({ instance_contact: 'ops@zz-test.example' });
     expect(identity.form.contact).toBe('mailto:ops@zz-test.example');
     identity.form.contact = '';
     await identity.save();
-    expect(bodies[1]).toEqual({ identify_instance: false, instance_contact: null });
+    expect(bodies[1]).toEqual({ instance_contact: null });
     expect(identity.form.contact).toBe('');
+  });
+
+  test('réglage jamais posé, IDENTIFY_INSTANCE=true côté worker : interrupteur coché (valeur appliquée), un changement de contact seul ne coupe pas l’identification', async () => {
+    const bodies: Record<string, unknown>[] = [];
+    const envView = (extra: Record<string, unknown> = {}) => view({ identify_effective: true, identify_source: 'env', ...extra });
+    installFakeServer({
+      'GET /api/settings/identity': () => json(200, envView()),
+      'PUT /api/settings/identity': (call) => {
+        bodies.push(call.body as Record<string, unknown>);
+        return json(200, envView({ instance_contact: 'mailto:ops@zz-test.example', instance_contact_effective: 'mailto:ops@zz-test.example', instance_contact_source: 'setting' }));
+      },
+    });
+    const identity = useIdentitySettings();
+    await identity.load();
+    expect(identity.form.identify).toBe(true);
+    identity.form.contact = 'ops@zz-test.example';
+    expect(await identity.save()).toBe(true);
+    expect(bodies).toEqual([{ instance_contact: 'ops@zz-test.example' }]);
+    expect(identity.form.identify).toBe(true);
+    // Rien de modifié : aucune requête (le serveur exige au moins un champ), « enregistré » quand même.
+    expect(await identity.save()).toBe(true);
+    expect(bodies).toHaveLength(1);
+    expect(identity.saved.value).toBe(true);
+    // Décocher l’identification que l’environnement active : réglage posé à false, explicitement.
+    identity.form.identify = false;
+    await identity.save();
+    expect(bodies[1]).toEqual({ identify_instance: false });
   });
 
   test('contact refusé par le serveur → message propre, formulaire conservé ; 403 d’un non-admin → refus de droit', async () => {

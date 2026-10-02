@@ -4723,14 +4723,28 @@ components:
     IdentitySettings:
       type: object
       additionalProperties: false
-      required: [identify_instance, instance_contact, engine, user_agent, user_agent_identified, product_version]
+      required: [identify_instance, identify_effective, identify_source, instance_contact, instance_contact_effective, instance_contact_source, engine, worker_version, user_agent, user_agent_identified, product_version]
       properties:
         identify_instance:
           type: [boolean, 'null']
           description: "Réglage admin ; null tant qu'il n'est pas posé (le worker retombe sur IDENTIFY_INSTANCE, puis sur désactivé)."
+        identify_effective:
+          type: [boolean, 'null']
+          description: "Valeur que le worker applique : le réglage, sinon IDENTIFY_INSTANCE publiée par le worker, sinon désactivé ; null sans réglage tant qu'aucun worker n'a publié son environnement."
+        identify_source:
+          type: [string, 'null']
+          enum: [setting, env, default, null]
+          description: "Origine de identify_effective : réglage admin, environnement du worker, ou défaut (désactivé)."
         instance_contact:
           type: [string, 'null']
           description: "Contact d'instance normalisé (URL http(s) ou mailto:) ; null tant qu'il n'est pas posé (repli : INSTANCE_CONTACT)."
+        instance_contact_effective:
+          type: [string, 'null']
+          description: "Contact que le worker annonce : le réglage, sinon INSTANCE_CONTACT publiée par le worker ; null si aucun."
+        instance_contact_source:
+          type: [string, 'null']
+          enum: [setting, env, null]
+          description: "Origine de instance_contact_effective : réglage ou environnement du worker."
         engine:
           type: [object, 'null']
           additionalProperties: false
@@ -4741,12 +4755,15 @@ components:
               type: string
             platform:
               type: string
+        worker_version:
+          type: [string, 'null']
+          description: "Version que le worker annonce dans le jeton (sa RUNTIME_VERSION), publiée avec son moteur ; null pour un worker qui ne la publie pas."
         user_agent:
           type: [string, 'null']
           description: "User-Agent réel du moteur (lecture seule, sans HeadlessChrome)."
         user_agent_identified:
           type: [string, 'null']
-          description: "Le même User-Agent suivi du jeton compatible; Scrapyomama/<version>; +<contact>, tel qu'il part quand identify_instance est activé."
+          description: "Le même User-Agent suivi du jeton compatible; Scrapyomama/<version du worker>; +<contact appliqué>, tel qu'il part quand l'identification est activée."
         product_version:
           type: string
     IdentitySettingsWrite:

@@ -138,6 +138,54 @@ describe('assert_identity_settings_admin_only : réglages d’identité du robot
     expect((await put(adminCookie, { user_agent: 'Mozilla/5.0 (X11) Firefox/130' })).statusCode).toBe(400);
     expect((await get(adminCookie)).json<{ user_agent: string }>().user_agent).toBe(engineUserAgent(engine));
   });
+
+  test('réglages jamais posés : la console montre ce que le worker applique (environnement publié par le worker, sa version), comme sur le fil', async () => {
+    await sql("DELETE FROM settings WHERE key IN ('identify_instance', 'instance_contact')");
+    const engine = { version: '153.0.8010.12', platform: 'linux' };
+    const env = { IDENTIFY_INSTANCE: 'true', INSTANCE_CONTACT: 'https://zz-test.example/env' };
+    await withClient(srv.db.url, (c) => publishRobotEngine(c, { ...engine, productVersion: '4.5.6', identifyInstanceEnv: true, instanceContactEnv: 'https://zz-test.example/env' }));
+    const view = (await get(adminCookie)).json<Record<string, unknown>>();
+    expect(view).toMatchObject({
+      identify_instance: null,
+      identify_effective: true,
+      identify_source: 'env',
+      instance_contact: null,
+      instance_contact_effective: 'https://zz-test.example/env',
+      instance_contact_source: 'env',
+      engine,
+      worker_version: '4.5.6',
+    });
+    // Ce que le worker envoie avec ce même environnement : exactement l'aperçu de la console (version du worker, pas du serveur).
+    const worker = await workerView(env);
+    expect(worker).toEqual({ identify: true, contact: 'https://zz-test.example/env' });
+    expect(view.user_agent_identified).toBe(buildUserAgent({ engine, identify: { version: '4.5.6', contact: worker.contact } }));
+    // Le réglage l'emporte, dans les deux sens : désactivé ici, la source devient le réglage.
+    const off = (await put(adminCookie, { identify_instance: false })).json<Record<string, unknown>>();
+    expect(off).toMatchObject({ identify_instance: false, identify_effective: false, identify_source: 'setting' });
+    expect((await workerView(env)).identify).toBe(false);
+  });
+
+  test('audit : seuls les champs dont la valeur change ; une écriture identique ne liste aucun champ', async () => {
+    const before = (await auditOf('settings.identity_updated')).length;
+    await put(adminCookie, { identify_instance: false, instance_contact: 'ops@zz-test.example' });
+    await put(adminCookie, { identify_instance: false, instance_contact: 'ops@zz-test.example' });
+    await put(adminCookie, { identify_instance: true, instance_contact: 'mailto:ops@zz-test.example' });
+    const events = (await auditOf('settings.identity_updated')).slice(before).map((e) => e.meta);
+    expect(events).toEqual([{ fields: ['instance_contact'] }, { fields: [] }, { fields: ['identify_instance'], identify_instance: true }]);
+  });
+
+  test('écriture et audit dans la même transaction : un audit impossible n’écrit aucun réglage', async () => {
+    await sql(`CREATE FUNCTION zz_test_audit_fail() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.action = 'settings.identity_updated' THEN RAISE EXCEPTION 'zz_test audit indisponible'; END IF; RETURN NEW; END $$`);
+    await sql('CREATE TRIGGER zz_test_audit_fail BEFORE INSERT ON audit_events FOR EACH ROW EXECUTE FUNCTION zz_test_audit_fail()');
+    try {
+      expect((await put(adminCookie, { identify_instance: false, instance_contact: 'https://zz-test.example/other' })).statusCode).toBe(500);
+      expect(await settingRows('identify_instance')).toEqual([{ value: true }]);
+      expect(await settingRows('instance_contact')).toEqual([{ value: 'mailto:ops@zz-test.example' }]);
+    } finally {
+      await sql('DROP TRIGGER zz_test_audit_fail ON audit_events');
+      await sql('DROP FUNCTION zz_test_audit_fail()');
+    }
+  });
 });
 
 describe('assert_setup_instance_contact : le contact d’instance à l’assistant de premier démarrage', () => {

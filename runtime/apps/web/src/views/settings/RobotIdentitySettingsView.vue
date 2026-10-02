@@ -8,7 +8,7 @@
  * serveur refuse (403) tout autre rôle ; la route redirige aussi.
  * @page
  */
-import { onMounted, onServerPrefetch } from 'vue';
+import { computed, onMounted, onServerPrefetch } from 'vue';
 import { useI18n } from 'vue-i18n';
 import TextField from '@/components/account/TextField.vue';
 import { Alert, AlertDescription } from '@/components/ui/alert';
@@ -20,6 +20,20 @@ import { useIdentitySettings } from '@/composables/useInstanceSettings';
 const { t } = useI18n();
 const settings = useIdentitySettings();
 const { form, saving, saved, failure } = settings;
+
+// Réglage jamais posé : dire d'où vient ce que le worker applique (sa variable d'environnement), plutôt qu'un « désactivé » supposé.
+const identifyHint = computed(() => {
+  const data = settings.data.value;
+  if (data?.identify_instance !== null) return t('instance.identity.identifyHint');
+  if (data.identify_source === 'env') return t(data.identify_effective === true ? 'instance.identity.identifyFromEnvOn' : 'instance.identity.identifyFromEnvOff');
+  return t('instance.identity.identifyUnset');
+});
+const contactHint = computed(() => {
+  const data = settings.data.value;
+  if (data?.instance_contact !== null) return t('instance.identity.contactHint');
+  if (data.instance_contact_source === 'env' && data.instance_contact_effective !== null) return t('instance.identity.contactFromEnv', { contact: data.instance_contact_effective });
+  return t('instance.identity.contactUnset');
+});
 
 onMounted(() => void settings.load());
 onServerPrefetch(() => settings.load());
@@ -58,12 +72,12 @@ onServerPrefetch(() => settings.load());
           <input v-model="form.identify" type="checkbox" class="mt-0.5 size-5" name="identify" aria-describedby="identity-identify-hint" data-testid="identity-identify" />
           <span>{{ t('instance.identity.identify') }}</span>
         </label>
-        <p id="identity-identify-hint" class="-mt-2 ml-8 text-xs text-muted-foreground">{{ settings.data.value.identify_instance === null ? t('instance.identity.identifyUnset') : t('instance.identity.identifyHint') }}</p>
+        <p id="identity-identify-hint" class="-mt-2 ml-8 text-xs text-muted-foreground" data-testid="identity-identify-hint">{{ identifyHint }}</p>
         <TextField
           id="identity-contact"
           v-model="form.contact"
           :label="t('instance.identity.contact')"
-          :hint="settings.data.value.instance_contact === null ? t('instance.identity.contactUnset') : t('instance.identity.contactHint')"
+          :hint="contactHint"
           name="contact"
           class="max-w-xl"
           autocomplete="off"
