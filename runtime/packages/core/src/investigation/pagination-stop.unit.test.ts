@@ -67,6 +67,13 @@ describe('règle d’arrêt vérifiée sur la dernière page (2.2)', () => {
     expect(p.log[0]!.stop_check).toMatchObject({ verified: false, stop: 'hard_max_pages', pages: 50 });
   });
 
+  test('assert_infinite_scroll_timeout_truncated — un défilement expiré (scroll_timeout) n’est pas une fin naturelle : verified: false, jamais présenté comme vérifié', async () => {
+    const p = ports((_p, _i, purpose) => (purpose === 'sample' ? run(2, 'max_pages_input') : run(4, 'scroll_timeout', 0.002)));
+    const out = await runTrials([pair('playwright', 0.00005)], p, budget, paginated);
+    expect(out.kind).toBe('conformant');
+    expect(p.log[0]!.stop_check).toMatchObject({ verified: false, stop: 'scroll_timeout', pages: 4 });
+  });
+
   test('l’exécution de vérification n’a pas de page de plus que le plafond de coût d’un run : max_cost_usd dépassé → non vérifiée, pas un échec du couple', async () => {
     const p = ports((_p, _i, purpose) => (purpose === 'sample' ? run(2, 'max_pages_input') : { ...failed('run_budget_exceeded', 'max_cost_usd'), cost_usd: 0.1 }));
     const out = await runTrials([pair('fetch', 0.00005)], p, { ...budget, maxCostPerRunUsd: 0.05 }, paginated);

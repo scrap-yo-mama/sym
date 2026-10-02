@@ -39,7 +39,7 @@ import { DslError } from '@runtime/core';
 import type { CapturedExchange, ReconCapture } from '@runtime/core/investigation';
 import { DomainNotAllowedError, guardedGoto, type BrowserEgress, type SsrfGuard } from '@runtime/core/net';
 import type { Page, Request, Response } from 'playwright-core';
-import { boundedContent, boundedDocumentBody, boundedRawBody, countMatching, scrollForMore, TOO_LARGE, trackDecodedSizes, type DecodedSizes } from '../browser/bounded.js';
+import { boundedContent, boundedDocumentBody, boundedRawBody, countMatching, scrollStep, TOO_LARGE, trackDecodedSizes, type DecodedSizes } from '../browser/bounded.js';
 import type { BrowserPool } from '../browser/pool.js';
 import { hostAllowed, isMainNavigation, openRunContext, trackStrategyRequests, type BrowserRequestCheck, type RunContext, type StrategyRequests } from '../browser/run-context.js';
 
@@ -465,14 +465,14 @@ export function runPlaywrightExecutor(options: BrowserExecutorOptions): Promise<
         : async () => {
             if (loaded === undefined) throw new DslError('unsupported', 'défilement avant tout chargement');
             const served = { status: loaded.status, headers: loaded.headers, body: '', url: page.url() };
+            let timedOut = false;
             await guardNav.during(async () => {
               const before = await countMatching(page, renderSelector);
-              await scrollForMore(page, renderSelector, before, scrollWaitMs);
-              await page.waitForLoadState('networkidle', { timeout: scrollWaitMs }).catch(() => undefined);
+              timedOut = (await scrollStep(page, renderSelector, before, scrollWaitMs)).timedOut;
             }, () => served);
             const body = capped(await guardNav.during(() => boundedContent(page, maxBytes), () => served));
             if (guardNav.attempted()) throw guardNav.refusal(served);
-            return { status: loaded.status, headers: loaded.headers, body, url: page.url() };
+            return { status: loaded.status, headers: loaded.headers, body, url: page.url(), ...(timedOut ? { scrollTimedOut: true } : {}) };
           };
     return runDeclarative({ ...options, transport, ...(scroll === undefined ? {} : { scroll }) });
   });
