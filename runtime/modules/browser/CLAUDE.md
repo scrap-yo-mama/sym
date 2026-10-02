@@ -37,7 +37,7 @@ Contrat : `runtime/packages/contracts` (`@sym/contracts`, MIT, sous-chemin `brow
 - `MASTER_KEY` de développement : `pnpm --filter @sym-browser/core keygen` (après build ; jamais committée ni journalisée). Vecteurs de SYM rejoués : `packages/core/vectors/sym-crypto.json`.
 - Image : `docker build -f modules/browser/Dockerfile -t sym-browser:dev .` puis `docker run --rm --security-opt seccomp=modules/browser/deploy/seccomp-chromium.json --security-opt no-new-privileges --cap-drop ALL -e MASTER_KEY="$(openssl rand -base64 32)" -e DATABASE_URL=postgres://… sym-browser:dev` (`SYMB_MODE` : `all`, `gateway`, `node`).
 - Egress par session (BINV2, 04c § 1) : `apps/node/src/egress/` (`startSessionEgress`, garde de résolution unique, arguments figés de Chromium) ; test `assert_session_egress_enforced` sur Chromium et le site de `fixtures/` (0.5).
-- Relais WSS (tâche 2.3) : passerelle `apps/gateway/src/relay/` (authentification à l'upgrade, routage, ping), nœud `apps/node/src/relay/` (NODE_TOKEN, réécritures CDP de 04f § 4) ; bout en bout sur vrai Chromium (non root) : `pnpm --filter @sym-browser/module test:chromium`.
+- Relais WSS (tâche 2.3) : passerelle `apps/gateway/src/relay/` (`authorizeConnection` de 2.1 en preValidation, routage, ping), nœud `apps/node/src/relay/` (NODE_TOKEN, réécritures CDP de 04f § 4) ; bout en bout sur vrai Chromium (non root) : `pnpm --filter @sym-browser/module test:chromium`.
 - Configuration : catalogue `packages/core/src/config/env-catalog.ts` (source unique, secrets `NOM_FILE`) ; config invalide = sortie code 1 nommant la variable ; `node dist/main.js --check-config` valide sans écouter ; `/healthz`, `/readyz`.
 
 ## Authentification (tâche 2.1)

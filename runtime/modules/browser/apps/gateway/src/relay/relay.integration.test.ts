@@ -8,10 +8,9 @@
 //   version_gate (A7) : client Playwright 1.62 → 428 playwright_version_mismatch ; 1.63 → relayé.
 //   disconnect_not_release (A8) : la fermeture de la WebSocket laisse la session running ; la même URL se rouvre.
 // Sécurité : aucun processus lancé ici (faux nœud en WebSocket local).
-import { randomBytes } from 'node:crypto';
 import { request as httpRequest } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { createConnectTokens } from '@sym-browser/core';
+import { ConnectTokens, generateMasterKey, MasterKey } from '@sym-browser/core';
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import { WebSocket, WebSocketServer } from 'ws';
 import { createHarness, type Harness } from '../../test/helpers/harness.js';
@@ -48,7 +47,7 @@ async function fakeNode(): Promise<FakeNode> {
 }
 
 let now = Date.now();
-const tokens = createConnectTokens(randomBytes(32), { now: () => now });
+const tokens = new ConnectTokens({ current: MasterKey.parse(generateMasterKey()) }, { now: () => now });
 let h: Harness;
 let node: FakeNode;
 let base: string;
@@ -107,12 +106,13 @@ describe('assert_access_authenticated (BINV7) : refus à l’upgrade, 0 connexio
     ['jeton d’un autre protocole', () => `/v1/sessions/${dedicated}/cdp?token=${token(dedicated, 'playwright')}`, {}, 401, 'unauthorized'],
     ['jeton falsifié', () => `/v1/sessions/${dedicated}/cdp?token=${token(dedicated, 'cdp').slice(0, -2)}xx`, {}, 401, 'unauthorized'],
     ['clé d’API inconnue en Bearer', () => `/v1/sessions/${dedicated}/cdp`, { authorization: 'Bearer symb_inconnue' }, 401, 'unauthorized'],
-    ['clé d’API d’un autre client', () => `/v1/sessions/${dedicated}/cdp`, { authorization: 'Bearer symb_test_b_write' }, 401, 'unauthorized'],
-    ['clé d’API sans sessions:write', () => `/v1/sessions/${dedicated}/cdp`, { authorization: 'Bearer symb_test_a_read' }, 403, 'forbidden'],
+    ['clé d’API d’un autre client', () => `/v1/sessions/${dedicated}/cdp`, () => ({ authorization: `Bearer ${h.keys.b}` }), 401, 'unauthorized'],
+    ['clé d’API sans sessions:write', () => `/v1/sessions/${dedicated}/cdp`, () => ({ authorization: `Bearer ${h.keys.aRead}` }), 403, 'forbidden'],
+    ['clé d’API en query (refusée : en-tête seulement)', () => `/v1/sessions/${dedicated}/cdp?token=${h.keys.a}`, {}, 401, 'unauthorized'],
     ['session inconnue', () => `/v1/sessions/00000000-0000-4000-8000-000000000000/cdp?token=${token('00000000-0000-4000-8000-000000000000', 'cdp')}`, {}, 401, 'unauthorized'],
   ] as const)('%s → %i %s', async (_name, path, headers, status, code) => {
     const before = node.connections.length;
-    const res = await attempt(path(), headers);
+    const res = await attempt(path(), typeof headers === 'function' ? headers() : headers);
     expect(res.status).toBe(status);
     expect('body' in res && res.body.error?.code).toBe(code);
     expect(node.connections.length).toBe(before);
@@ -138,7 +138,7 @@ describe('assert_access_authenticated (BINV7) : refus à l’upgrade, 0 connexio
     const ways: [string, Record<string, string>][] = [
       [`/v1/sessions/${dedicated}/cdp?token=${token(dedicated, 'cdp')}`, {}],
       [`/v1/sessions/${dedicated}/cdp`, { authorization: `Bearer ${token(dedicated, 'cdp')}` }],
-      [`/v1/sessions/${dedicated}/cdp`, { authorization: 'Bearer symb_test_a_write' }],
+      [`/v1/sessions/${dedicated}/cdp`, { authorization: `Bearer ${h.keys.a}` }],
     ];
     for (const [path, headers] of ways) {
       const before = node.connections.length;

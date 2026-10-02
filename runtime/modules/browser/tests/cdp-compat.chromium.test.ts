@@ -20,7 +20,7 @@ import { chromium } from 'playwright-core';
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import { WebSocket } from 'ws';
 import Fastify, { type FastifyInstance } from 'fastify';
-import { createConnectTokens } from '../packages/core/src/index.ts';
+import { ConnectTokens, generateMasterKey, MasterKey } from '../packages/core/src/index.ts';
 import { ApiProblem } from '../apps/gateway/src/api/errors.ts';
 import { registerRelay } from '../apps/gateway/src/relay/index.ts';
 import { dedicatedLauncher, sessionDir } from '../apps/node/src/dedicated/index.ts';
@@ -32,7 +32,7 @@ import { startSite, type SiteHandle } from '../fixtures/src/site.ts';
 
 const NODE_TOKEN = randomBytes(24).toString('base64url');
 const SESSION = '6f1c0a52-3d1e-4c0b-9a52-2f0d9d7c1b11';
-const tokens = createConnectTokens(randomBytes(32));
+const tokens = new ConnectTokens({ current: MasterKey.parse(generateMasterKey()) });
 
 let site: SiteHandle;
 let siteA: CountingRelay;
@@ -97,9 +97,12 @@ beforeAll(async () => {
   await registerRelay(gateway, {
     nodeToken: NODE_TOKEN,
     resolver: {
-      async authorize({ sessionId, protocol, secret }) {
-        const check = secret === null ? undefined : tokens.verify(secret);
-        if (!check?.ok || check.sessionId !== sessionId || check.protocol !== protocol) return { ok: false, problem: new ApiProblem('unauthorized', 'Invalid connect token.') };
+      // Jeton de connexion de la tâche 2.1 : en-tête Bearer prioritaire, sinon query `token` (même règle qu'authorizeConnection).
+      async authorize({ sessionId, protocol, headers, query }) {
+        const header = typeof headers.authorization === 'string' ? /^Bearer +(\S+)$/i.exec(headers.authorization)?.[1] : undefined;
+        const secret = header ?? (typeof query.token === 'string' ? query.token : undefined);
+        const check = secret === undefined ? undefined : tokens.verify(secret, { sessionId, protocol });
+        if (!check?.ok) return { ok: false, problem: new ApiProblem('unauthorized', 'Invalid connect token.') };
         return { ok: true, nodeUrl, sessionId };
       },
     },

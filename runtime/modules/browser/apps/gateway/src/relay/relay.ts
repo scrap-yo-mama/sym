@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Relais WSS public de la passerelle (cdc/sym-browser 04 § 8, 04f § 2 à § 4, tâche 2.3) : `/v1/sessions/{id}/playwright` et
 // `/v1/sessions/{id}/cdp`. Tout se décide dans `preValidation`, AVANT l'upgrade et avant tout contact avec le nœud (BINV7) :
-//   1. secret : jeton court en query `token` OU en `Authorization: Bearer` (jeton de session ou clé d'API) ;
-//   2. résolveur : session du bon client, `running`, protocole servi (CDP sur shared : 409), nœud porteur ;
+//   1-2. résolveur : décision de la tâche 2.1 (`authorizeConnection` : jeton court en query `token` ou en
+//        `Authorization: Bearer`, ou clé d'API en Bearer ; session du bon client, `running`), puis protocole servi (CDP
+//        sur shared : 409) et nœud porteur ;
 //   3. `/playwright` : version du client Playwright (`User-Agent`) = version servie en majeure.mineure, sinon 428.
 // Puis relais vers le nœud propriétaire (`WS /internal/sessions/{id}/{protocole}`, `Authorization: Bearer {NODE_TOKEN}` ; le
 // secret du client n'est jamais transmis) : messages transmis sans modification (réécritures : nœud), codes de fermeture
@@ -20,8 +21,13 @@ type RelayProtocol = 'playwright' | 'cdp';
 export type RelayAuthorization = { ok: true; nodeUrl: string; sessionId: string } | { ok: false; problem: ApiProblem };
 
 export interface RelayResolver {
-  /** `secret` : jeton de session ou clé d'API reçu par le client ; `null` s'il n'en a donné aucun. */
-  authorize(input: { sessionId: string; protocol: RelayProtocol; secret: string | null }): Promise<RelayAuthorization>;
+  /** En-têtes et query de la demande d'upgrade, tels que reçus (seuls `authorization` et `token` sont lus). */
+  authorize(input: {
+    sessionId: string;
+    protocol: RelayProtocol;
+    headers: { authorization?: string | string[] | undefined };
+    query: { token?: string | string[] | undefined };
+  }): Promise<RelayAuthorization>;
 }
 
 export type RelayOptions = {
@@ -49,14 +55,6 @@ function playwrightClientAccepted(userAgent: string | undefined): boolean {
   return match !== null && `${match[1]}.${match[2]}` === SERVED_MINOR;
 }
 
-function secretOf(request: FastifyRequest): string | null {
-  const token = (request.query as Record<string, unknown>)['token'];
-  if (typeof token === 'string' && token !== '') return token;
-  const header = request.headers.authorization;
-  const bearer = typeof header === 'string' ? /^Bearer\s+(\S+)\s*$/i.exec(header)?.[1] : undefined;
-  return bearer ?? null;
-}
-
 export async function registerRelay(app: FastifyInstance, options: RelayOptions): Promise<void> {
   const pingIntervalMs = options.pingIntervalMs ?? 20_000;
   const maxPayload = options.cdpMaxMessageBytes ?? 104_857_600;
@@ -76,7 +74,13 @@ export async function registerRelay(app: FastifyInstance, options: RelayOptions)
         websocket: true,
         preValidation: async (request, reply) => {
           const sessionId = (request.params as { id: string }).id;
-          const decision = await options.resolver.authorize({ sessionId, protocol, secret: secretOf(request) });
+          const token = (request.query as Record<string, unknown>)['token'];
+          const decision = await options.resolver.authorize({
+            sessionId,
+            protocol,
+            headers: { authorization: request.headers.authorization },
+            query: { token: typeof token === 'string' || Array.isArray(token) ? (token as string | string[]) : undefined },
+          });
           if (!decision.ok) return fail(request, reply, decision.problem);
           if (protocol === 'playwright' && !playwrightClientAccepted(request.headers['user-agent'])) {
             return fail(request, reply, new ApiProblem('playwright_version_mismatch', `Playwright client ${SERVED_MINOR}.x required.`, { details: { served: BROWSER_ENGINE.playwright } }));
