@@ -7,6 +7,7 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { describe, expect, test } from 'vitest';
 import config from '../playwright.config.ts';
+import { visualMode } from '../e2e/visual-policy.ts';
 import { PSEUDO_CLOSE, PSEUDO_OPEN, pseudoMessage, pseudoMessages } from '../e2e/pseudo.ts';
 import en from '@/i18n/locales/en.json';
 
@@ -65,5 +66,51 @@ describe('assert_no_hardcoded_strings_pseudo, assert_no_text_overflow_pseudo : l
     expect(pseudoMessage('{n} of {total} healthy')).toMatch(/^⟦\{n\} óƒ \{total\} ĥéáĺţĥý ·+⟧$/u);
     expect(pseudoMessage('No API | 1 API | {n} APIs').split('|')).toHaveLength(3);
     expect(pseudoMessage('@:common.retry')).toBe('@:common.retry');
+  });
+});
+
+describe('assert_visual_baselines_ci_platform (renfort d’assert_visual_regression_by_locale) : la CI compare toujours (instantanés de sa plateforme, image épinglée)', () => {
+  const runtimeRoot = new URL('../../../', import.meta.url);
+  const read = (path: string): string => readFileSync(new URL(path, runtimeRoot), 'utf8');
+  const base = { ci: false, hasBaselines: true, updating: false, inImage: false };
+
+  test('mode : comparer quand les références existent ; en CI sans références, erreur (jamais de réussite silencieuse)', () => {
+    expect(visualMode({ ...base, platform: 'darwin' })).toBe('compare');
+    expect(visualMode({ ...base, platform: 'darwin', hasBaselines: false })).toBe('ignore');
+    expect(() => visualMode({ ...base, platform: 'darwin', hasBaselines: false, ci: true })).toThrow(/aucun instantané de référence pour darwin/);
+    expect(() => visualMode({ ...base, platform: 'linux', inImage: true, hasBaselines: false, ci: true })).toThrow(/aucun instantané de référence pour linux/);
+    expect(visualMode({ ...base, platform: 'linux', inImage: true, ci: true })).toBe('compare');
+    expect(visualMode({ ...base, platform: 'darwin', updating: true, hasBaselines: false, ci: true })).toBe('update');
+  });
+
+  test('linux hors de l’image épinglée : suite sautée avec sa raison, jamais comparée ni écrite (polices du système)', () => {
+    for (const ci of [true, false]) for (const updating of [true, false]) expect(visualMode({ ...base, platform: 'linux', ci, updating })).toBe('excluded');
+    const suite = readFileSync(new URL('../e2e/visual.e2e.ts', import.meta.url), 'utf8');
+    expect(suite).toMatch(/test\.skip\(process\.env\.SYM_VISUAL_MODE === 'excluded'/);
+    const projects = config.projects ?? [];
+    for (const name of PROJECTS) expect(projects.find((entry) => entry.name === name)?.ignoreSnapshots, name).toBe(false);
+  });
+
+  test('les instantanés de linux, plateforme de la CI, sont là au complet, comme ceux de darwin', () => {
+    const platforms = readdirSync(VISUAL_DIR);
+    expect(platforms).toEqual(expect.arrayContaining(['darwin', 'linux']));
+    for (const project of PROJECTS) {
+      expect(readdirSync(new URL(`linux/${project}/`, VISUAL_DIR)).sort(), project).toEqual(readdirSync(new URL(`darwin/${project}/`, VISUAL_DIR)).sort());
+    }
+  });
+
+  test('la CI officielle et la CI locale jouent la suite visuelle dans l’image Playwright épinglée de deploy/Dockerfile', () => {
+    const workflow = read('../.github/workflows/ci.yml');
+    const e2eJob = /\n {2}e2e:\n([\s\S]*?)(?=\n {2}[a-z][\w-]*:\n)/.exec(workflow)?.[1] ?? '';
+    expect(e2eJob).toMatch(/run: pnpm visual:image\b/);
+    expect(read('scripts/ci-local.ts')).toMatch(/cmd: \['pnpm', 'visual:image'\]/);
+    const manifest = JSON.parse(read('package.json')) as { scripts: Record<string, string> };
+    expect(manifest.scripts['visual:image']).toBe('node scripts/visual-image.ts');
+    const script = read('scripts/visual-image.ts');
+    // Une seule image, épinglée par empreinte : celle de deploy/Dockerfile, lue par le script (jamais une étiquette mobile).
+    expect(script).toContain('deploy/Dockerfile');
+    expect(script).toContain('SYM_VISUAL_IMAGE=1');
+    expect(script).not.toMatch(/playwright:v\d/);
+    expect(read('deploy/Dockerfile')).toMatch(/^ARG PLAYWRIGHT_IMAGE=mcr\.microsoft\.com\/playwright:v[\d.]+-noble@sha256:[0-9a-f]{64}$/m);
   });
 });

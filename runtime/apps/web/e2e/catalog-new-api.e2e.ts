@@ -112,6 +112,10 @@ for (const locale of ['en', 'fr'] as const) {
       await expect(page.getByTestId('gate-spent')).toBeVisible();
       await expect(page.getByTestId('gate-auto')).toHaveCount(0);
       expect(app.requests.filter((entry) => entry.includes('validate-schema')), 'aucun essai avant l’accord').toEqual([]);
+      // assert_schema_remark_not_sent : la remarque se saisit, mais aucun bouton ne l'envoie et aucune relance ne part.
+      await page.locator('#schema-remark').fill('le prix en euros');
+      await expect(page.getByTestId('schema-remark-send')).toHaveCount(0);
+      expect(app.requests.filter((entry) => entry.includes('/investigate')), 'la remarque ne relance rien').toEqual([]);
       await expect(page.locator('[data-testid="trial-card"][data-state="planned"]')).toHaveCount(2);
       await expect(page.locator('[data-testid="trial-card"]')).toHaveCount(2);
       // Du moins cher au plus cher, quel que soit l'ordre reçu.
@@ -195,7 +199,11 @@ for (const locale of ['en', 'fr'] as const) {
       );
       await expect(page.locator('[data-testid="trial-card"]')).toHaveCount(4);
       app.pushEvent('attempt.finished', { ...frame, attempt: { index: 0, execution: 'fetch', network: 'direct', state: 'done', est_cost_usd: 0.0004, result: 'forbidden', cost_usd: 0.0004, ms: 120 } }, '3');
-      app.pushEvent('status.changed', { ...frame, status: 'bloquee', status_reason: { code: 'forbidden', params: {} } }, '4');
+      app.pushEvent('attempt.pruned', { ...frame, reason: 'forbidden', pruned: [{ execution: 'fetch', network: 'dc_proxy', est_cost_usd: 0.0021 }, { execution: 'playwright', network: 'direct', est_cost_usd: 0.003 }, { execution: 'playwright', network: 'dc_proxy', est_cost_usd: 0.006 }] }, '4');
+      // assert_trial_plan_pruned_on_refusal : entre l'élagage et le statut `bloquee`, les cartes proxy ont déjà disparu.
+      await expect(page.locator('[data-testid="trial-card"]')).toHaveCount(2);
+      await expect(page.getByTestId('trial-plan')).not.toContainText(new RegExp(`${text(locale, 'network.dc_proxy')}|tunnel`, 'i'));
+      app.pushEvent('status.changed', { ...frame, status: 'bloquee', status_reason: { code: 'forbidden', params: {} } }, '5');
       await expect(page.getByTestId('blocked-panel')).toBeVisible();
       const cards = page.locator('[data-testid="trial-card"]');
       await expect(cards).toHaveCount(2);

@@ -3,6 +3,7 @@
 // compteurs en texte, une action utile par ligne. Rendu côté serveur sous Node ; le comportement à l'ouverture (« À traiter »
 // d'abord) et l'annonce des compteurs sont dans views/catalog-screen.unit.test.ts, le navigateur réel dans e2e/catalog-new-api.e2e.ts.
 import { describe, expect, test } from 'vitest';
+import { contrast, cssVariables, readText, resolveColor, toHex } from '@runtime/ui/testing/contrast';
 import ActionRequiredBanner from '@/components/api/ActionRequiredBanner.vue';
 import ApiCatalogTable from '@/components/catalog/ApiCatalogTable.vue';
 import CatalogHealth from '@/components/catalog/CatalogHealth.vue';
@@ -178,5 +179,37 @@ describe('assert_row_action_by_status : une action utile par ligne, aucune relan
     const apis = oneApiPerStatus().filter((api) => api.status === 'enquete');
     const html = await renderHtml(ApiCatalogTable, { apis, resuming: new Set(['zz-enquete']) }, 'fr');
     expect(textOf(actionCell(html, 'zz-enquete'))).toBe(fr.actionRequired.resuming);
+  });
+});
+
+describe('assert_health_bar_enquete_visible : le segment « en enquête » se voit sur la carte, en clair comme en sombre', () => {
+  // La surface du statut `enquete` est celle de la carte (papier en clair, anthracite relevé en sombre) : posé tel quel, le
+  // segment laissait un trou dans la barre. Il porte donc une surface distincte de la carte et un contour contrasté (1.4.11).
+  const mainCss = readText(new URL('../../assets/main.css', import.meta.url));
+  const themeCss = readText(new URL('../../../../../packages/ui/src/theme.css', import.meta.url));
+  const ROOT = cssVariables(themeCss, ':root');
+  const VARIABLES = { light: ROOT, dark: { ...ROOT, ...cssVariables(themeCss, '.dark, .sym-on-ink') } };
+  const colorMap = Object.fromEntries([...mainCss.matchAll(/--color-([\w-]+):\s*var\((--[\w-]+)\);/g)].map((m) => [m[1] ?? '', m[2] ?? '']));
+  const tokenOf = (classes: string, prefix: 'fill' | 'stroke'): string | undefined => {
+    const name = new RegExp(`(?:^|\\s)${prefix}-([a-z-]+)(?:\\s|$)`).exec(classes)?.[1];
+    return name === undefined ? undefined : colorMap[name];
+  };
+
+  test.each(['light', 'dark'] as const)('%s : surface distincte de la carte et contour d’au moins 3:1 sur la carte', async (theme) => {
+    const health = catalogHealth(countByStatus([apiSummary(), apiSummary({ id: UUID(2), slug: 'zz-2', status: 'enquete' })]));
+    const html = await renderHtml(CatalogHealth, { health }, 'fr');
+    const rect = /<rect[^>]*data-status="enquete"[^>]*>/.exec(html)?.[0] ?? '';
+    expect(rect).not.toBe('');
+    const classes = /class="([^"]*)"/.exec(rect)?.[1] ?? '';
+    const variables = VARIABLES[theme];
+    const card = resolveColor(variables, 'var(--card)');
+    const fill = tokenOf(classes, 'fill');
+    const stroke = tokenOf(classes, 'stroke');
+    expect(fill, classes).toBeDefined();
+    expect(stroke, classes).toBeDefined();
+    expect(toHex(resolveColor(variables, `var(${fill})`))).not.toBe(toHex(card));
+    expect(contrast(resolveColor(variables, `var(${stroke})`), card)).toBeGreaterThanOrEqual(3);
+    // Le contour garde son épaisseur malgré la barre étirée (viewBox sans proportions).
+    expect(rect).toContain('vector-effect="non-scaling-stroke"');
   });
 });

@@ -432,8 +432,7 @@
         "null": "empty"
       },
       "remark": "A note for SYM?",
-      "remarkHint": "Optional. Sent with a new investigation if you ask for one.",
-      "reinvestigateWithNote": "Investigate again with this note",
+      "remarkHint": "Optional. Your note stays on this screen and goes nowhere: to change a field, use “Edit the schema”.",
       "noFields": "The schema has no field to show.",
       "remarkPlaceholder": "e.g. the price in euros, add the book's URL",
       "range": "{min} to {max}",

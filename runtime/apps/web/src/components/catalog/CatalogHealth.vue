@@ -17,9 +17,13 @@ import type { ApiStatus } from '@/lib/status';
 const props = defineProps<{ health: CatalogHealth; partial?: boolean }>();
 const { t } = useI18n();
 
-/** Surface de chaque segment (jetons de statut de packages/ui) ; la légende, dans l'ordre de la barre, est en texte. */
+/**
+ * Surface de chaque segment (jetons de statut de packages/ui) ; la légende, dans l'ordre de la barre, est en texte. La surface du
+ * statut `enquete` est celle de la carte (papier en clair, anthracite relevé en sombre) : son segment prend une surface atténuée et
+ * un contour de statut, sinon il laisserait un trou dans la barre (`assert_health_bar_enquete_visible`).
+ */
 const FILL: Record<ApiStatus, string> = {
-  enquete: 'fill-status-enquete',
+  enquete: 'fill-muted stroke-status-border',
   sain: 'fill-status-sain',
   warning: 'fill-status-warning',
   reparation: 'fill-status-reparation',
@@ -40,6 +44,9 @@ const rects = computed(() => {
     return rect;
   });
 });
+/** Contour du segment `enquete` : épaisseur en pixels, gardée malgré la barre étirée (viewBox sans proportions). */
+const OUTLINE = { 'vector-effect': 'non-scaling-stroke', 'stroke-width': 2 } as const;
+const outlineOf = (status: ApiStatus) => (status === 'enquete' ? OUTLINE : {});
 </script>
 
 <template>
@@ -52,7 +59,7 @@ const rects = computed(() => {
     </p>
     <div class="flex items-center gap-6">
       <svg class="h-4 flex-1 overflow-hidden rounded-full" viewBox="0 0 100 4" preserveAspectRatio="none" aria-hidden="true" focusable="false" data-testid="health-bar">
-        <rect v-for="rect in rects" :key="rect.status" :class="FILL[rect.status]" :x="rect.x" y="0" :width="rect.width" height="4" :data-status="rect.status" />
+        <rect v-for="rect in rects" :key="rect.status" :class="FILL[rect.status]" :x="rect.x" y="0" :width="rect.width" height="4" v-bind="outlineOf(rect.status)" :data-status="rect.status" />
       </svg>
       <!-- Les arrêts volontaires sont à part (planche : « 1 arrêtée ») : séparateur en pointillés et carré anthracite, hors de la barre et du ratio. -->
       <span v-if="health.stopped > 0" class="flex items-center gap-2 border-l-2 border-dashed border-nav-muted-foreground pl-5" data-testid="health-stopped-mark">

@@ -73,8 +73,8 @@ async function submit(): Promise<void> {
   focusRouteHeading();
 }
 
-async function reinvestigate(note?: string): Promise<void> {
-  if (await investigation.reinvestigate(note)) {
+async function reinvestigate(): Promise<void> {
+  if (await investigation.reinvestigate()) {
     if (state.runId) await router.replace({ name: 'new-api-run', params: { runId: state.runId } });
   }
 }
@@ -95,7 +95,7 @@ const inputError = 'sym-error';
     @resume="investigation.resume()"
     @cancel="investigation.cancel()"
     @validate="(payload) => investigation.validate(payload)"
-    @reinvestigate="(note) => reinvestigate(note)"
+    @reinvestigate="reinvestigate()"
   />
   <section v-else class="mx-auto flex max-w-2xl flex-col gap-6 py-10">
     <!-- Jalon 1 « Décrire » en cours : la frise est la même que pendant l'enquête (20 § 5.3). -->

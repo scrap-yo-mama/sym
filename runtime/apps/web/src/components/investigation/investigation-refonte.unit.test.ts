@@ -253,3 +253,77 @@ describe('assert_schema_examples_untranslated : le même échantillon donne les 
     }
   });
 });
+
+describe('assert_schema_remark_not_sent : « Une remarque pour SYM ? » n’envoie rien tant qu’aucun contrat ne la porte', () => {
+  // InvestigateRequest (OpenAPI, 3.1) n'a pas de `note` et refuse toute propriété en plus (400) ; ni le serveur ni le worker ne
+  // liraient la remarque, et une relance referait (et paierait) toute la reconnaissance. Le champ de la planche reste, sans envoi.
+  const source = readFileSync(new URL('./SchemaPanel.vue', import.meta.url), 'utf8');
+  const composable = readFileSync(new URL('../../composables/useInvestigation.ts', import.meta.url), 'utf8');
+
+  test('le panneau du schéma n’émet aucune relance et n’a pas de bouton d’envoi de la remarque', () => {
+    expect(source).not.toMatch(/emit\('reinvestigate'/);
+    expect(source).not.toContain('schema-remark-send');
+    expect(source).not.toContain('reinvestigateWithNote');
+    // Le champ de la planche reste (D-60) : libellé « Une remarque pour SYM ? » et son exemple.
+    expect(source).toContain('id="schema-remark"');
+  });
+
+  test('la ré-enquête n’envoie jamais de `note` (le corps de POST /api/apis/{slug}/investigate est celui de l’OpenAPI)', () => {
+    expect(composable).not.toMatch(/\bnote\b/);
+  });
+
+  test.each([['en', en], ['fr', fr]] as const)('%s : l’aide du champ ne promet aucun envoi, et le libellé d’envoi a disparu', (_locale, messages) => {
+    const schema = messages.investigation.schema as unknown as Record<string, unknown>;
+    expect(schema.reinvestigateWithNote).toBeUndefined();
+    expect(schema.remarkHint).not.toMatch(/envoy|sent with|transmise avec/iu);
+  });
+
+  test('rendu de la porte : le champ est là, aucun bouton d’envoi', async () => {
+    const html = await render(InvestigationBoard, props(awaiting()), { locale: 'fr' });
+    expect(html).toContain('id="schema-remark"');
+    expect(html).not.toContain('schema-remark-send');
+  });
+});
+
+describe('assert_trial_plan_pruned_on_refusal : un refus retire les couples proxy ou tunnel dès l’essai refusé, sans attendre `bloquee`', () => {
+  const PLAN = [
+    { execution: 'fetch', network: 'direct', est_cost_usd: 0.0004 },
+    { execution: 'fetch', network: 'dc_proxy', est_cost_usd: 0.0021 },
+    { execution: 'playwright', network: 'direct', est_cost_usd: 0.003 },
+    { execution: 'playwright', network: 'tunnel', est_cost_usd: 0.004 },
+    { execution: 'playwright', network: 'dc_proxy', est_cost_usd: 0.006 },
+  ];
+
+  test.each(['forbidden', 'blocked_by_protection', 'robots_disallowed', 'challenge_in_tunnel'])(
+    'essai rendu en %s, puis attempt.pruned, statut pas encore reçu : seuls les couples directs restent, aucune carte proxy ni tunnel',
+    async (code) => {
+      const state = emptyInvestigation();
+      state.runId = 'r7';
+      const events: [string, Record<string, unknown>][] = [
+        ['investigation.started', { run_id: 'r7', domain: 'exemple.test' }],
+        ['schema.proposed', { run_id: 'r7', output_schema: SCHEMA, sample: SAMPLE }],
+        ['phase.started', { run_id: 'r7', phase: 'testing', plan: PLAN }],
+        ['attempt.finished', { run_id: 'r7', attempt: { index: 0, execution: 'fetch', network: 'direct', state: 'done', est_cost_usd: 0.0004, result: code, cost_usd: 0.0004, ms: 120 } }],
+        ['attempt.pruned', { run_id: 'r7', reason: code, pruned: PLAN.slice(1) }],
+      ];
+      for (const [name, data] of events) ingestEvent(state, frame(name, data), 0);
+      expect(state.blocked).toBeNull();
+      const cards = trialCards(state);
+      expect(cards.map((card) => `${card.execution}|${card.network}`)).toEqual(['fetch|direct', 'playwright|direct']);
+      for (const locale of ['fr', 'en'] as const) {
+        const html = await render(InvestigationBoard, props(state), { locale });
+        const plan = html.slice(html.indexOf('data-testid="trial-plan"'));
+        expect((plan.match(/data-testid="trial-card"/g) ?? []).length, locale).toBe(2);
+        expect(plan, locale).not.toMatch(/dc_proxy|proxy serveur|server proxy|datacenter|tunnel/iu);
+      }
+    },
+  );
+
+  test('un échec qui n’est pas un refus (extraction) laisse le plan entier : le couple proxy reste « à essayer »', () => {
+    const state = emptyInvestigation();
+    state.runId = 'r8';
+    ingestEvent(state, frame('phase.started', { run_id: 'r8', phase: 'testing', plan: PLAN }), 0);
+    ingestEvent(state, frame('attempt.finished', { run_id: 'r8', attempt: { index: 0, execution: 'fetch', network: 'direct', state: 'done', est_cost_usd: 0.0004, result: 'extraction', cost_usd: 0.0004, ms: 120 } }), 0);
+    expect(trialCards(state)).toHaveLength(PLAN.length);
+  });
+});

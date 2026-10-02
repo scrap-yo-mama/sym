@@ -432,8 +432,7 @@
         "null": "vide"
       },
       "remark": "Une remarque pour SYM ?",
-      "remarkHint": "Facultatif. Envoyée avec une nouvelle enquête si tu en demandes une.",
-      "reinvestigateWithNote": "Ré-enquêter avec cette remarque",
+      "remarkHint": "Facultatif. Ta remarque reste sur cet écran, elle ne part nulle part : pour changer un champ, utilise « Modifier le schéma ».",
       "noFields": "Le schéma n’a aucun champ à montrer.",
       "remarkPlaceholder": "ex. le prix en euros, ajoute l'URL du livre",
       "range": "{min} à {max}",

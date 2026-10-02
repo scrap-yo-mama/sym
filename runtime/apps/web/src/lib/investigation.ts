@@ -20,6 +20,7 @@
 // `budget` : { spent_usd, max_usd, elapsed_s, timeout_s, retained_est_usd?, full_agent_est_usd? }. Toute charge est lue avec
 // des gardes de type : une charge inattendue est ignorée, jamais rendue telle quelle (aucun HTML, texte seul).
 import type { components } from '@runtime/client';
+import { isRefusal } from '@/lib/refusal';
 import { INVESTIGATION_MILESTONES, milestoneStates, type InvestigationMilestone, type MilestonePhase, type MilestoneState } from '@/lib/milestones';
 import type { SseEvent } from '@/lib/sse';
 
@@ -556,12 +557,14 @@ function orderPlan<T extends { estCostUsd: number | null; rule?: string | null }
  * (essai en cours, réussi, échoué, élagué avec sa raison) tiré des essais et des élagages reçus. Sans plan reçu : aucune carte. `halted` : l'enquête est arrêtée, les couples jamais lancés sont grisés (« non lancé »).
  * `refused` : l'enquête s'est arrêtée sur un refus (403, défi, robots.txt : statut `bloquee`). Un refus mène à l'arrêt volontaire,
  * jamais à un autre réseau (X3, X4) : les couples par proxy ou tunnel jamais lancés disparaissent du plan, pour qu'aucune carte
- * « changer d'adresse » ni proxy ne reste après le refus, même grisée.
+ * « changer d'adresse » ni proxy ne reste après le refus, même grisée. Le refus se lit aussi dès l'essai refusé ou l'élagage
+ * qu'il provoque (`REFUSAL_RESULTS`), sans attendre le statut `bloquee` qui suit (`assert_trial_plan_pruned_on_refusal`).
  */
 export function trialCards(state: Readonly<Pick<InvestigationState, 'plan' | 'attempts' | 'pruned'>>, options: { halted?: boolean; refused?: boolean } = {}): TrialCard[] {
   if (!state.plan || state.plan.length === 0) return [];
   const launched = (step: PlanStep): boolean => state.attempts.some((entry) => entry.state !== 'pruned' && entry.execution === step.execution && entry.network === (step.network ?? entry.network));
-  const steps = options.refused === true ? state.plan.filter((step) => (step.network ?? 'direct') === 'direct' || launched(step)) : state.plan;
+  const refused = options.refused === true || state.attempts.some((entry) => isRefusal(entry.result)) || state.pruned.some((entry) => isRefusal(entry.reason));
+  const steps = refused ? state.plan.filter((step) => (step.network ?? 'direct') === 'direct' || launched(step)) : state.plan;
   return orderPlan(steps).map((step) => {
     const exact = cardKey(step.execution, step.network, step.source);
     const loose = (source: string | null | undefined): boolean => !step.source || !source || source === step.source;

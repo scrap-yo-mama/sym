@@ -4,11 +4,15 @@
 // comparé à son instantané de référence (`assert_visual_regression_by_locale`). En pseudo-locale (e2e/pseudo.ts), aucun texte de
 // l'interface ne reste en clair (`assert_no_hardcoded_strings_pseudo`) et aucun texte ne déborde de son conteneur ni de la page
 // (`assert_no_text_overflow_pseudo`). Horloge figée : les dates relatives (« il y a 2 j ») ne bougent pas d'un jour à l'autre.
-// Les instantanés vivent par plateforme dans e2e/__visual__/<plateforme>/ ; une plateforme sans instantanés de référence ne
-// compare pas (ignoreSnapshots) : ils se créent par `pnpm test:e2e --update-snapshots` sur cette plateforme, puis se relisent.
+// Les instantanés vivent par plateforme dans e2e/__visual__/<plateforme>/ (mode décidé par e2e/visual-policy.ts) : un poste
+// local sans instantanés de référence ne compare pas (ignoreSnapshots), la CI échoue ; ils se créent par
+// `pnpm test:e2e --update-snapshots` sur cette plateforme, puis se relisent. Ceux de linux ne se créent et ne se comparent que
+// dans l'image Playwright épinglée (`pnpm visual:image [--update]`) : ailleurs sous linux, la suite est sautée avec sa raison.
 import { test, expect, type Theme } from './console.fixture.ts';
 import { PSEUDO_CLOSE, PSEUDO_OPEN } from './pseudo.ts';
 import { SCREENS } from './screens.ts';
+
+test.skip(process.env.SYM_VISUAL_MODE === 'excluded', 'instantanés linux : comparés seulement dans l’image Playwright épinglée (pnpm visual:image)');
 
 const VISUAL_SCREENS = ['catalog', 'catalog-all', 'new-api-gate'] as const;
 const THEMES: Theme[] = ['light', 'dark'];

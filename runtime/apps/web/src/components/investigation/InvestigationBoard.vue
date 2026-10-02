@@ -46,8 +46,8 @@ interface Emits {
   (e: 'resume'): void;
   (e: 'cancel'): void;
   (e: 'validate', payload: { outputSchema?: Record<string, unknown>; excludeExecutions: Execution[] }): void;
-  /** Ré-enquêter ; `note` : la remarque de l'utilisateur à la porte du schéma. */
-  (e: 'reinvestigate', note?: string): void;
+  /** Ré-enquêter (action manuelle de l'utilisateur, corps vide). */
+  (e: 'reinvestigate'): void;
 }
 const emit = defineEmits<Emits>();
 
@@ -147,7 +147,6 @@ function viewTrials(): void {
       :description="state.description"
       :busy="busy === 'validate' || busy === 'reinvestigate'"
       @validate="(payload) => emit('validate', payload)"
-      @reinvestigate="(note) => emit('reinvestigate', note)"
     />
 
     <template v-else>
@@ -243,7 +242,6 @@ function viewTrials(): void {
             :validated-by="state.validatedBy"
             :busy="busy === 'validate' || busy === 'reinvestigate'"
             @validate="(payload) => emit('validate', payload)"
-            @reinvestigate="(note) => emit('reinvestigate', note)"
           />
         </section>
       </div>

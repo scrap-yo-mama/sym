@@ -229,6 +229,27 @@ describe('catalogue (05 § 4.2) : création, liste, fiche, modification, suppres
     expect((await api(b, 'DELETE', `/api/apis/${shared.slug}`, '/api/apis/{slug}')).status).toBe(404);
   });
 
+  test('assert_catalog_summary_domain : chaque ligne de GET /api/apis (et la fiche) porte le domaine de la page enquêtée, en minuscules ; null sans enquête', async () => {
+    const created = await api(a, 'POST', '/api/apis', '/api/apis', {
+      description: 'Les romans du catalogue zz domaine, avec titre',
+      url: 'https://Romans.ZZ-Test-Domaine.example/liste?page=1',
+      network_policy: { allow: ['direct'] },
+    });
+    expect(created.status).toBe(201);
+    const seeded = await seedApi(srv.db.url, a.user.id);
+    const rows = (await api(a, 'GET', '/api/apis?limit=100', '/api/apis')).body['apis'] as { id: string; domain?: string | null }[];
+    expect(rows.find((row) => row.id === created.body['api_id'])?.domain).toBe('romans.zz-test-domaine.example');
+    // API créée hors enquête : aucun domaine connu, le champ est là et vaut null (jamais la description à la place).
+    const plain = rows.find((row) => row.id === seeded.id);
+    expect(plain).toBeDefined();
+    expect(plain?.domain).toBeNull();
+    const detail = await api(a, 'GET', `/api/apis/${created.body['slug']}`, '/api/apis/{slug}');
+    expect(detail.body['domain']).toBe('romans.zz-test-domaine.example');
+    // Seul le domaine sort de l'état d'enquête : ni l'URL de départ ni l'état ne sont servis.
+    expect(JSON.stringify(detail.body)).not.toContain('/liste?page=1');
+    expect(JSON.stringify(detail.body)).not.toContain('start_url');
+  });
+
   test('POST /api/apis refuse : URL à jeton, politique réseau inconnue, corps hors schéma (400) ; validation automatique sans « j’ai lu » (403)', async () => {
     expect((await api(a, 'POST', '/api/apis', '/api/apis', { description: 'zz', url: 'https://zz-test.example/?token=abc' })).body).toMatchObject({ error: { code: 'invalid_request' } });
     expect((await api(a, 'POST', '/api/apis', '/api/apis', { description: 'zz', url: 'https://zz-test.example/', network_policy: { allow: ['dc_proxy'], proxy_ids: { dc_proxy: 'zz-unknown' } } })).body).toMatchObject({ error: { code: 'invalid_network_policy' } });

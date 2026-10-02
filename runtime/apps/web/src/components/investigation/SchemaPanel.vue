@@ -4,9 +4,10 @@
  * @file SchemaPanel.vue
  * @description Ce que l'agent a produit (06 § 2, 20 § 5.3). Au jalon 3 (schéma proposé, en attente d'accord), la planche
  * NouvelleApi.dc.html : trois cartes côte à côte. (1) « Voici ce que tu vas récupérer » : un champ par ligne, nom en mono, type en
- * pastille et un exemple réel tiré de l'échantillon (valeur jamais traduite ni mise en forme selon la langue), puis « Une remarque
- * pour SYM ? ». (2) Le plan d'essais chiffré (TrialPlan). (3) La PORTE : bulle anthracite « SYM : J'ai trouvé … On valide ce
- * schéma ? Aucun essai ne démarre avant ton accord. Déjà dépensé pour la reconnaissance : … », budget max de l'enquête et coût du
+ * pastille et un exemple réel tiré de l'échantillon (valeur jamais traduite ni mise en forme selon la langue), puis le champ « Une
+ * remarque pour SYM ? » de la planche. Aucun contrat ne porte encore la remarque (InvestigateRequest et ValidateSchemaRequest n'ont
+ * pas de `note`) : elle n'est envoyée nulle part, et son aide le dit (`assert_schema_remark_not_sent`). (2) Le plan
+ * d'essais chiffré (TrialPlan). (3) La PORTE : bulle anthracite « SYM : J'ai trouvé … On valide ce schéma ? Aucun essai ne démarre avant ton accord. Déjà dépensé pour la reconnaissance : … », budget max de l'enquête et coût du
  * rejeu ensuite (« sans IA » seulement si la méthode la moins chère n'appelle pas de modèle), « Valider et lancer les essais · ~max »
  * et « Modifier le schéma ». Rien ne part avant le clic (INV1) : le composant n'émet `validate` que sur l'action de l'utilisateur.
  * Hors du jalon 3 (troisième colonne de 06 § 2) : le schéma, le bandeau « Schéma validé automatiquement, à ta demande » sous
@@ -47,8 +48,6 @@ const props = withDefaults(defineProps<Props>(), { busy: false, domain: null, de
 interface Emits {
   /** Valider le schéma proposé, ou le schéma modifié, avec le plan d'essais restreint : seulement sur l'action de l'utilisateur. */
   (e: 'validate', payload: { outputSchema?: Record<string, unknown>; excludeExecutions: Execution[] }): void;
-  /** Ré-enquêter avec la remarque de l'utilisateur. */
-  (e: 'reinvestigate', note: string): void;
 }
 const emit = defineEmits<Emits>();
 
@@ -117,11 +116,6 @@ function validateEdited(): void {
     draftError.value = true;
   }
 }
-
-function sendRemark(): void {
-  const note = remark.value.trim();
-  if (note !== '' && !props.busy) emit('reinvestigate', note.slice(0, 2000));
-}
 </script>
 
 <template>
@@ -174,11 +168,6 @@ function sendRemark(): void {
           aria-describedby="schema-remark-hint"
         />
         <p id="schema-remark-hint" class="sr-only">{{ t('investigation.schema.remarkHint') }}</p>
-        <div v-if="remark.trim() !== ''">
-          <Button type="button" variant="outline" size="sm" :aria-disabled="busy" class="aria-disabled:pointer-events-none aria-disabled:opacity-50" data-testid="schema-remark-send" @click="sendRemark">
-            {{ t('investigation.schema.reinvestigateWithNote') }}
-          </Button>
-        </div>
       </div>
     </section>
 
