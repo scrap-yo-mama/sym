@@ -10,6 +10,8 @@
   },
   "dependencies": {
     "@fastify/websocket": "catalog:",
+    "@modelcontextprotocol/fastify": "catalog:",
+    "@modelcontextprotocol/server": "catalog:",
     "@runtime/core": "workspace:*",
     "@runtime/db": "workspace:*",
     "@runtime/llm": "workspace:*",
@@ -22,6 +24,7 @@
     "ws": "catalog:"
   },
   "devDependencies": {
+    "@modelcontextprotocol/client": "catalog:",
     "@types/node": "catalog:",
     "@types/pg": "catalog:",
     "@types/ws": "catalog:",
