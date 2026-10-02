@@ -3,15 +3,17 @@
 // compteurs en texte, une action utile par ligne. Rendu côté serveur sous Node ; le comportement à l'ouverture (« À traiter »
 // d'abord) et l'annonce des compteurs sont dans views/catalog-screen.unit.test.ts, le navigateur réel dans e2e/catalog-new-api.e2e.ts.
 import { describe, expect, test } from 'vitest';
+import ActionRequiredBanner from '@/components/api/ActionRequiredBanner.vue';
 import ApiCatalogTable from '@/components/catalog/ApiCatalogTable.vue';
 import CatalogHealth from '@/components/catalog/CatalogHealth.vue';
 import CatalogPills from '@/components/catalog/CatalogPills.vue';
 import en from '@/i18n/locales/en.json';
 import fr from '@/i18n/locales/fr.json';
+import { ACTION_CAUSE_CODES } from '@/lib/action-required';
 import { rowAction } from '@/lib/catalog-actions';
 import { activePill, catalogHealth, countByStatus, countChanges, pillCounts } from '@/lib/catalog-health';
 import { API_STATUSES, type ApiStatus } from '@/lib/status';
-import { apiSummary, controls, oneApiPerStatus, renderHtml, TUNNEL_WORDING, textOf, UUID } from '@/testing/console-fixtures';
+import { apiDetail, apiSummary, controls, oneApiPerStatus, renderHtml, TUNNEL_WORDING, textOf, UUID } from '@/testing/console-fixtures';
 
 /** 7 API : 5 saines, 1 à surveiller, 1 bloquée (le cas de 20b § 3.3). */
 function sevenApis() {
@@ -105,7 +107,7 @@ describe('assert_attention_filters_counts : pastilles-filtres, compteurs en text
   });
 
   test('les libellés de pastille sont ceux de 20 § 5.2 en français', () => {
-    expect([fr.catalog.pills.all, fr.catalog.pills.attention, fr.catalog.pills.healthy, fr.catalog.pills.stopped]).toEqual(['Tout', 'À traiter', 'Saines', 'Arrêts volontaires']);
+    expect([fr.catalog.pills.all, fr.catalog.pills.attention, fr.catalog.pills.healthy, fr.catalog.pills.stopped]).toEqual(['Tout', 'À traiter', 'Saines', 'Arrêtées']);
   });
 });
 
@@ -148,6 +150,29 @@ describe('assert_row_action_by_status : une action utile par ligne, aucune relan
     // Une API bloquée ne propose jamais autre chose que ses alternatives, quelle que soit sa raison.
     expect(rowAction({ slug: 'zz-a', status: 'bloquee', status_reason: { code: 'tunnel_offline' } })?.kind).toBe('alternatives');
   });
+
+  test.each(ACTION_CAUSE_CODES.flatMap((code) => [[code, 'zz-editeur.example'] as const, [code, null] as const]))(
+    'assert_row_action_by_status : cause %s (domaine %s) : la ligne reprend le bouton du bandeau de la fiche, même libellé, même destination',
+    async (code, domain) => {
+      const reason: { code: string; params: Record<string, string> } = { code, params: domain ? { domain } : {} };
+      for (const locale of ['fr', 'en'] as const) {
+        const banner = await renderHtml(ActionRequiredBanner, { detail: apiDetail({ slug: 'zz-a', status: 'action_requise', status_reason: reason }), resuming: false }, locale);
+        const primary = /<a\b[^>]*data-testid="action-primary"[^>]*>[\s\S]*?<\/a>/.exec(banner)?.[0] ?? null;
+        const table = await renderHtml(ApiCatalogTable, { apis: [apiSummary({ slug: 'zz-a', status: 'action_requise', status_reason: reason })] }, locale);
+        const row = controls(actionCell(table, 'zz-a'));
+        expect(row, `${code}/${locale}`).toHaveLength(1);
+        if (primary !== null) {
+          const [bannerButton] = controls(primary);
+          expect(row[0]?.text, `${code}/${locale}`).toBe(bannerButton?.text);
+          expect(/href="([^"]*)"/.exec(row[0]?.attrs ?? '')?.[1], `${code}/${locale}`).toBe(/href="([^"]*)"/.exec(bannerButton?.attrs ?? '')?.[1]?.replace(/^#/, '/apis/zz-a#'));
+        } else {
+          // Le bandeau n'a aucun bouton (limite de compte, paiement sans site connu) : la ligne mène à la fiche, qui dit la tâche.
+          expect(row[0]?.text, `${code}/${locale}`).toBe((locale === 'fr' ? fr : en).catalog.rowAction.openTask);
+          expect(row[0]?.attrs, `${code}/${locale}`).toContain('href="/apis/zz-a"');
+        }
+      }
+    },
+  );
 
   test('une ligne dont l’utilisateur vient d’agir dit « Reprise de l’enquête… » à la place du bouton', async () => {
     const apis = oneApiPerStatus().filter((api) => api.status === 'enquete');

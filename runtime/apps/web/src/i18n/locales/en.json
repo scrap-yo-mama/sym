@@ -350,15 +350,10 @@
       "why": "Why: {reason}"
     },
     "plan": {
-      "title": "Trial plan",
-      "hint": "Cheapest first. You can remove methods before the trials start, never add any.",
-      "estimate": "estimated {cost}",
+      "title": "The trial plan",
+      "hint": "Cheapest first. SYM stops at the first one that works.",
       "atLeastOne": "At least one method must stay selected.",
       "empty": "The trial plan appears here as soon as the server announces it.",
-      "rule": {
-        "default": "Rule: cheapest first",
-        "named": "Rule: {rule}"
-      },
       "state": {
         "planned": "to try",
         "running": "running",
@@ -373,6 +368,33 @@
       "stop": {
         "title": "Intentional stop",
         "text": "If the site refuses access, shows a verification or asks robots to stay away, SYM stops here. Nothing else is tried."
+      },
+      "footer": "Estimates · rule applied: {rule}",
+      "card": {
+        "fetch": {
+          "title": "Direct fetch",
+          "text": "the page HTML, no browser"
+        },
+        "fetch_in_page": {
+          "title": "In-page fetch",
+          "text": "the page's own requests, from a browser"
+        },
+        "playwright": {
+          "title": "Browser",
+          "text": "if the page is built with JavaScript"
+        },
+        "agent_fetch": {
+          "title": "Agent + fetch",
+          "text": "the AI reads the HTML on every run"
+        },
+        "hybrid": {
+          "title": "Script + agent",
+          "text": "a script, and the agent when it gets stuck"
+        },
+        "agent": {
+          "title": "Agent",
+          "text": "as a last resort, then compiled"
+        }
       }
     },
     "schema": {
@@ -404,7 +426,7 @@
         "string": "text",
         "number": "number",
         "integer": "whole number",
-        "boolean": "true or false",
+        "boolean": "yes / no",
         "array": "list",
         "object": "object",
         "null": "empty"
@@ -412,7 +434,11 @@
       "remark": "A note for SYM?",
       "remarkHint": "Optional. Sent with a new investigation if you ask for one.",
       "reinvestigateWithNote": "Investigate again with this note",
-      "noFields": "The schema has no field to show."
+      "noFields": "The schema has no field to show.",
+      "remarkPlaceholder": "e.g. the price in euros, add the book's URL",
+      "range": "{min} to {max}",
+      "quoteOpen": "“",
+      "quoteClose": "”"
     },
     "result": {
       "sain": "The investigation succeeded. Your API is ready.",
@@ -432,19 +458,23 @@
         "current": "in progress",
         "done": "done",
         "stopped": "stopped"
-      }
+      },
+      "step": "{n} · {label}"
     },
     "gate": {
-      "title": "Shall we validate this schema?",
+      "title": "I found {what}. Shall we validate this schema?",
       "noTrial": "No trial starts before your approval.",
       "spent": "Already spent on the reconnaissance: {cost}.",
       "spentUnknown": "Already spent on the reconnaissance: not available yet.",
-      "budget": "Maximum budget for the trials: {max}.",
-      "replay": "Estimated cost of a replay: {cost}.",
+      "budget": "Max budget for the investigation",
+      "replay": "Replays after that: about {cost}, no AI.",
       "validate": "Validate and start the trials · ~{max}",
       "validateNoMax": "Validate and start the trials",
       "edit": "Edit the schema",
-      "auto": "Schema validated automatically, as you asked."
+      "auto": "Schema validated automatically, as you asked.",
+      "what": "the data from {domain}",
+      "whatUnknown": "the data",
+      "replayWithAi": "Replays after that: about {cost}, with the AI on every run."
     }
   },
   "blocked": {
@@ -905,25 +935,25 @@
     "newApi": "New API",
     "caption": "API catalog: name, execution, network, status and reason, last run, average cost, success rate and access",
     "columns": {
-      "name": "Name",
-      "execution": "Execution",
-      "network": "Network",
-      "status": "Status and reason",
+      "name": "API",
+      "status": "Status",
       "lastRun": "Last run",
-      "cost": "Average cost",
+      "cost": "Cost / run",
       "success": "Success (30 d)",
       "access": "Access",
-      "action": "Action"
+      "action": "Action",
+      "mode": "Mode · network"
     },
     "computerRequired": "Computer required",
     "filters": {
       "label": "Catalog filters",
       "search": "Search",
-      "searchPlaceholder": "Name or description",
+      "searchPlaceholder": "name, domain…",
       "status": "Status",
       "execution": "Execution",
       "network": "Network",
-      "all": "All"
+      "all": "All",
+      "searchLabel": "Search the catalog"
     },
     "empty": {
       "title": "Your catalog is ready to fill up",
@@ -944,7 +974,18 @@
     "summary": {
       "service": "No API in service | 1 API in service | {n} APIs in service",
       "stopped": "None stopped | {n} stopped | {n} stopped",
-      "attention": "Nothing needs your attention. | One needs your attention. | {n} need your attention."
+      "attention": "Nothing needs your attention. | One needs your attention. | {count} need your attention.",
+      "words": {
+        "n2": "Two",
+        "n3": "Three",
+        "n4": "Four",
+        "n5": "Five",
+        "n6": "Six",
+        "n7": "Seven",
+        "n8": "Eight",
+        "n9": "Nine",
+        "n10": "Ten"
+      }
     },
     "health": {
       "title": "Catalog health",
@@ -967,14 +1008,15 @@
       "all": "All",
       "attention": "To handle",
       "healthy": "Healthy",
-      "stopped": "Intentional stops",
+      "stopped": "Stopped",
       "withCount": "{label} · {n}",
       "changed": "{label}: {n}."
     },
     "rowAction": {
       "alternatives": "See alternatives",
       "openTask": "See the task"
-    }
+    },
+    "attentionPartial": "Partial list: only the first {n} APIs to handle are shown."
   },
   "detail": {
     "title": "API page",
@@ -1034,7 +1076,7 @@
     "resuming": "Resuming the investigation…",
     "connect": {
       "title": "Connect {domain}",
-      "button": "Connect in the extension",
+      "button": "Connect my session",
       "verify": "The session shows up here as soon as the extension sends it (live update)."
     },
     "deviceBound": {

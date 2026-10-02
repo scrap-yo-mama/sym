@@ -2,7 +2,8 @@
 // Refonte du Catalogue et de Nouvelle API en Chromium (3.17, 20 § 5.2-§ 5.3, critères de 20b § 3.3, étage E1) : barre de santé
 // sans les API bloquées, pastilles-filtres, une action utile par ligne ; quatre jalons, porte d'accord avant tout essai, exemples
 // réels des champs identiques en `en` et en `fr`. Aucun site réel : le faux serveur de e2e/harness.ts. La régression visuelle par
-// langue et pseudo-locale de ces écrans est la suite de 3.6 (assert_visual_regression_by_locale).
+// langue et pseudo-locale de ces écrans est e2e/visual.e2e.ts (projets ui-en, ui-fr, ui-pseudo) ; les captures côte à côte avec
+// les planches, e2e/maquette-fidelity.e2e.ts.
 import { test, expect } from './console.fixture.ts';
 import { catalog, text, UUID } from './fixtures.ts';
 
@@ -163,6 +164,43 @@ for (const locale of ['en', 'fr'] as const) {
       expect(await cards.evaluateAll((all) => all.map((card) => `${card.getAttribute('data-execution')}:${card.getAttribute('data-state')}`))).toEqual(['fetch:failed', 'playwright:pruned', 'agent:planned']);
       await expect(page.locator('[data-testid="trial-card"][data-state="pruned"]')).toContainText(text(locale, 'investigation.plan.prunedReason').split('{reason}')[0] ?? '');
       await expect(page.getByTestId('trial-plan')).not.toContainText(/changer d.adresse|change (the )?address|proxy|tunnel/i);
+      await expect(page.getByTestId('trial-stop-branch')).toBeVisible();
+    });
+
+    test('assert_trial_plan_cheapest_first_ui : après un refus (403 → bloquee), le plan direct + proxy serveur du serveur ne montre aucune carte proxy', async ({ consolePage }) => {
+      const { page, app, open } = consolePage;
+      await open('/apis/new', {
+        routes: { 'POST /api/apis': { status: 201, body: { api_id: API, slug: SLUG, investigation_phase: 'access_check', proposed_output_schema: null, sample: [], access_report: null, run_id: RUN } } },
+      });
+      await page.locator('#api-description').fill('Titre et prix de chaque livre');
+      await page.locator('#api-url').fill('https://zz-test.example/livres');
+      await page.getByRole('button', { name: text(locale, 'newApi.submit') }).click();
+      await expect(page.getByTestId('investigation-board')).toBeVisible();
+      const frame = { run_id: RUN, api_id: API, api_slug: SLUG };
+      app.pushEvent('schema.proposed', { ...frame, output_schema: SCHEMA, sample: SAMPLE }, '1');
+      // Plan réel d'une politique direct + proxy serveur (worker : buildTrialPlan), annoncé au lancement des essais.
+      app.pushEvent(
+        'phase.started',
+        {
+          ...frame,
+          phase: 'testing',
+          plan: [
+            { execution: 'fetch', network: 'direct', est_cost_usd: 0.0004 },
+            { execution: 'fetch', network: 'dc_proxy', est_cost_usd: 0.0021 },
+            { execution: 'playwright', network: 'direct', est_cost_usd: 0.003 },
+            { execution: 'playwright', network: 'dc_proxy', est_cost_usd: 0.006 },
+          ],
+        },
+        '2',
+      );
+      await expect(page.locator('[data-testid="trial-card"]')).toHaveCount(4);
+      app.pushEvent('attempt.finished', { ...frame, attempt: { index: 0, execution: 'fetch', network: 'direct', state: 'done', est_cost_usd: 0.0004, result: 'forbidden', cost_usd: 0.0004, ms: 120 } }, '3');
+      app.pushEvent('status.changed', { ...frame, status: 'bloquee', status_reason: { code: 'forbidden', params: {} } }, '4');
+      await expect(page.getByTestId('blocked-panel')).toBeVisible();
+      const cards = page.locator('[data-testid="trial-card"]');
+      await expect(cards).toHaveCount(2);
+      expect(await cards.evaluateAll((all) => all.map((card) => card.getAttribute('data-execution')))).toEqual(['fetch', 'playwright']);
+      await expect(page.getByTestId('trial-plan')).not.toContainText(new RegExp(`${text(locale, 'network.dc_proxy')}|changer d.adresse|change (the )?address|tunnel`, 'i'));
       await expect(page.getByTestId('trial-stop-branch')).toBeVisible();
     });
   });

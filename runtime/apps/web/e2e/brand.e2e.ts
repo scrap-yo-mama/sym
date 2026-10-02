@@ -131,7 +131,8 @@ const SIGNATURE_AUDIT = `(() => {
     if (variant === 'speaking' && !(colon.length === 1 && /^[\\u00A0]?:$/.test(colon[0].textContent || ''))) problems.push('SYM parle : deux-points attendu');
     if (sig.closest('[data-testid="status-badge"], [data-testid="blocked-panel"], [role="alert"], [data-testid="confirm-panel"]')) problems.push('signature dans une zone interdite (statut, Bloquée, erreur, confirmation)');
   }
-  return { problems, count: signatures.length, zones: signatures.map((s) => s.parentElement && s.parentElement.tagName) };
+  const inMain = signatures.filter((s) => s.closest('main'));
+  return { problems, count: signatures.length - inMain.length, inMain: inMain.length, zones: signatures.map((s) => s.parentElement && s.parentElement.tagName) };
 })()`;
 
 test.describe('assert_sym_signature_rendering', () => {
@@ -144,10 +145,12 @@ test.describe('assert_sym_signature_rendering', () => {
       await expect(page.locator('h1').first()).toBeVisible();
       await app.settled();
       await screen.prepare?.(page, app);
-      const audit = (await page.evaluate(SIGNATURE_AUDIT)) as { problems: string[]; count: number };
+      const audit = (await page.evaluate(SIGNATURE_AUDIT)) as { problems: string[]; count: number; inMain: number };
       expect(audit.problems).toEqual([]);
-      // Une signature de marque par écran (la barre de navigation) : jamais plus d'une par zone d'écran (20 § 2.3).
+      // Une signature de marque par écran (la barre de navigation) : jamais plus d'une par zone d'écran (20 § 2.3). Le contenu
+      // principal en porte au plus une, parlante : la bulle « SYM : » d'une planche (porte du schéma de Nouvelle API, 20 § 5.3).
       expect(audit.count).toBe(1);
+      expect(audit.inMain).toBeLessThanOrEqual(1);
     });
   }
 });

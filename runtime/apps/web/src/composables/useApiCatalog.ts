@@ -22,8 +22,13 @@ export const CATALOG_POLL_MS = 15_000;
 /** `attention` : la pastille « À traiter » (à surveiller, en erreur, action requise) ; exclusive du filtre de statut précis. */
 export type CatalogFilters = { status: ApiStatus | ''; execution: Execution | ''; network: Network | ''; q: string; attention: boolean };
 
-/** Pas de pagination pour « À traiter » : trois lectures au plus grand pas de l'API, fusionnées (l'ensemble à traiter reste petit). */
+/**
+ * « À traiter » n'a pas de pagination à l'écran : chaque statut à traiter est lu par curseur, au plus grand pas de l'API, jusqu'à
+ * `ATTENTION_MAX_ROWS` lignes en tout (le plafond de la vue d'ensemble) ; au-delà, `truncated` est vrai et la vue le dit
+ * (« comptes partiels ») : jamais de ligne manquante en silence.
+ */
 const ATTENTION_PAGE_SIZE = 200;
+export const ATTENTION_MAX_ROWS = 1000;
 
 /** Changement de statut d'une ligne entre deux lectures : c'est ce que la région `status` annonce. */
 export type StatusChange = { slug: string; from: ApiStatus; to: ApiStatus };
@@ -56,13 +61,35 @@ export function useApiCatalog(options: { pollMs?: number; searchDebounceMs?: num
         ...(filters.network ? { network: filters.network } : {}),
         ...(filters.q.trim() ? { q: filters.q.trim() } : {}),
       };
-      let page: { apis: ApiSummary[]; next_cursor: string | null };
+      let page: { apis: ApiSummary[]; next_cursor: string | null; truncated?: boolean };
       if (filters.attention) {
-        // « À traiter » : une lecture par statut à traiter, fusionnées par nom (le serveur filtre un seul statut à la fois).
-        const parts = await Promise.all(
-          ATTENTION_STATUSES.map(async (status) => unwrap(await getApi().GET('/api/apis', { params: { query: { ...shared, status, limit: ATTENTION_PAGE_SIZE } } }))),
-        );
-        page = { apis: parts.flatMap((part) => part.apis).sort((a, b) => (a.slug < b.slug ? -1 : a.slug > b.slug ? 1 : 0)), next_cursor: null };
+        // « À traiter » : une lecture par statut à traiter (le serveur filtre un seul statut à la fois), page après page par
+        // curseur, fusionnées par nom ; le plafond est partagé entre les statuts.
+        const apis: ApiSummary[] = [];
+        let truncated = false;
+        /** Lit un statut page après page, au plus jusqu'au plafond ; `keep` trie les lignes gardées. */
+        const readStatus = async (status: ApiStatus, keep: (row: ApiSummary) => boolean = () => true): Promise<void> => {
+          let cursor: string | null = null;
+          do {
+            // Plafond atteint : une lecture d'une ligne dit s'il en reste (la mention n'apparaît que s'il en manque vraiment).
+            const full = apis.length >= ATTENTION_MAX_ROWS;
+            const limit = full ? 1 : Math.min(ATTENTION_PAGE_SIZE, ATTENTION_MAX_ROWS - apis.length);
+            const part: { apis: ApiSummary[]; next_cursor: string | null } = unwrap(await getApi().GET('/api/apis', { params: { query: { ...shared, status, limit, ...(cursor ? { cursor } : {}) } } }));
+            if (full) {
+              truncated ||= part.apis.some(keep);
+              break;
+            }
+            apis.push(...part.apis.filter(keep));
+            cursor = part.next_cursor;
+          } while (cursor);
+        };
+        for (const status of ATTENTION_STATUSES) await readStatus(status);
+        // Une action requise dont l'utilisateur vient d'agir repasse en enquête (transition 17) : elle n'est plus « à traiter »,
+        // mais sa ligne reste là le temps de la reprise pour dire « Reprise de l'enquête… » (20 § 5.2), puis sort.
+        const present = new Set(apis.map((row) => row.slug));
+        const resumed = new Set([...rows.filter((row) => row.status === 'action_requise').map((row) => row.slug), ...resuming.value].filter((slug) => !present.has(slug)));
+        if (resumed.size > 0) await readStatus('enquete', (row) => resumed.has(row.slug));
+        page = { apis: apis.sort((a, b) => (a.slug < b.slug ? -1 : a.slug > b.slug ? 1 : 0)), next_cursor: null, truncated };
       } else {
         const query = {
           ...(filters.status ? { status: filters.status } : {}),
@@ -173,6 +200,8 @@ export function useApiCatalog(options: { pollMs?: number; searchDebounceMs?: num
     hasPrevious,
     pageNumber: computed(() => cursors.value.length),
     hasActiveFilter,
+    /** « À traiter » dépasse le plafond de lecture : la liste montrée est partielle, et la vue le dit. */
+    attentionTruncated: computed(() => resource.data.value?.truncated === true),
     /** Changements de statut de la dernière lecture (annoncés une fois par la région `status`). */
     statusChanges: readonly(lastChanges),
   };

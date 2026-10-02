@@ -54,6 +54,13 @@
   --color-status-erreur-foreground: var(--status-erreur-foreground);
   --color-status-bloquee: var(--status-bloquee);
   --color-status-bloquee-foreground: var(--status-bloquee-foreground);
+  /* Surfaces décoratives de la palette (pastilles numérotées du plan d'essais, 20 § 5.3) : toujours à texte anthracite. */
+  --color-sym-ink: var(--sym-ink);
+  --color-sym-yellow: var(--sym-yellow);
+  --color-sym-lilac: var(--sym-lilac);
+  --color-sym-orange: var(--sym-orange);
+  --color-sym-todo: var(--sym-todo);
+  --color-sym-aqua-ink: var(--sym-aqua-ink);
   --color-diff-added: var(--diff-added);
   --color-diff-removed: var(--diff-removed);
   --color-diff-changed: var(--diff-changed);

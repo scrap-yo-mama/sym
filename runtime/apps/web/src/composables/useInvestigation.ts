@@ -104,7 +104,7 @@ export function useInvestigation(options: InvestigationOptions = {}) {
     failure.value = null;
     waitingForRun = true;
     buffer.length = 0;
-    Object.assign(state, emptyInvestigation(), { domain: hostOf(body.url) });
+    Object.assign(state, emptyInvestigation(), { domain: hostOf(body.url), description: body.description.trim() || null });
     const result = await call<unknown>(() => getApi().POST('/api/apis', { params: { query: { wait: 0 } }, body }));
     busy.value = null;
     if (!result.ok) {

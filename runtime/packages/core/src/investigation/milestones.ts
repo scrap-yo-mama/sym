@@ -2,7 +2,7 @@
 // Les quatre jalons d'une enquête (20 § 5.3, 20b § 3.3, u3 R6) : Décrire, Reconnaître, Valider le schéma, Essayer. Une seule
 // définition, de clés fermées et de libellés par langue, pour la frise de la console, le récit MCP (« 1/4 Décrire … ») et les
 // journaux : `assert_milestones_same_labels` (I1). La console garde ses libellés dans ses catalogues (`investigation.milestones.*`)
-// et un test les compare à ce fichier ; le récit MCP (3.19) et le rendu des journaux lisent celui-ci. « Décrire » n'est pas un
+// et un test les compare à ce fichier ; le récit MCP (3.19) le lira ; le worker écrit chaque jalon atteint dans `run_logs` par `milestoneLogEntry`. « Décrire » n'est pas un
 // sous-état serveur : il précède l'enquête (`investigation_phase` nul) et se termine quand `create_api` a rendu l'`api_id`.
 // Fonctions pures, sans I/O ; aucun libellé n'est un texte généré (les phrases de voix sont celles de la tâche 3.19).
 
@@ -60,4 +60,15 @@ export function milestoneStates(input: { phase: MilestonePhase | null; created: 
 /** Ligne de récit d'un jalon : « 1/4 Décrire ». Le résultat (`… {résultat}`) est ajouté par l'appelant (voix de 3.19). */
 export function milestoneHeading(key: InvestigationMilestone, locale: MilestoneLocale): string {
   return `${INVESTIGATION_MILESTONES.indexOf(key) + 1}/${INVESTIGATION_MILESTONES.length} ${MILESTONE_LABELS[locale][key]}`;
+}
+
+/** Entrée de journal d'un jalon atteint (`run_logs`, événement `milestone`) : clé, intitulé de récit et libellés du noyau. */
+export type MilestoneLogEntry = { milestone: InvestigationMilestone; heading: string; labels: Record<MilestoneLocale, string> };
+
+/**
+ * Ce que le worker écrit dans les journaux quand une enquête atteint un jalon : la même clé, le même intitulé (« 2/4 Explore »,
+ * en anglais : langue des journaux) et les mêmes libellés que la frise de la console et le récit MCP.
+ */
+export function milestoneLogEntry(key: InvestigationMilestone): MilestoneLogEntry {
+  return { milestone: key, heading: milestoneHeading(key, 'en'), labels: { en: MILESTONE_LABELS.en[key], fr: MILESTONE_LABELS.fr[key] } };
 }

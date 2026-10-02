@@ -1881,6 +1881,8 @@ export interface components {
             id: string;
             slug: string;
             description: string;
+            /** @description Domaine de la page enquêtée (hôte de l'URL de départ, en minuscules), affiché sous le nom dans le catalogue (20 § 5.2) ; null s'il n'est pas connu. */
+            domain?: string | null;
             status: components["schemas"]["ApiStatus"];
             status_reason: components["schemas"]["ReasonMessage"] | null;
             stale: boolean;

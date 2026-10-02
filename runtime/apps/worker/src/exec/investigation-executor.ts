@@ -59,6 +59,7 @@ import {
   INVESTIGATION_DEFAULTS,
   INVESTIGATION_EVENTS as EV,
   isActionUrl,
+  milestoneLogEntry,
   narrativeUrl,
   PROPOSAL_HARD_MAX_PAGES,
   rematchCandidates,
@@ -69,6 +70,7 @@ import {
   withinSiteScope,
   type CapturedExchange,
   type DataCandidate,
+  type InvestigationMilestone,
   type PairOutcome,
   type PlanEntry,
   type PlanNetwork,
@@ -223,6 +225,9 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
     const budgetView = () => ({ spent_usd: spent, max_usd: request.budget_usd, elapsed_s: Math.round((baseElapsed + now() - started) / 1000), timeout_s: request.timeout_s });
     const event = (kind: string, payload: Record<string, unknown> = {}) =>
       appendInvestigationEvent(deps.pool, { runId: ctx.runId, ownerId: ctx.ownerId, kind, payload: { run_id: ctx.runId, ...payload } });
+    /** Jalon atteint, écrit dans les journaux du run avec la clé et l'intitulé du noyau (`assert_milestones_same_labels`). */
+    const milestone = (key: InvestigationMilestone) => ctx.log('info', 'milestone', milestoneLogEntry(key));
+    const planView = (entries: readonly PlanEntry[]) => entries.map((p) => ({ execution: p.execution, network: p.network, source: p.source, est_cost_usd: p.est_cost_usd }));
     const save = async (next: InvestigationPhase | null, patch: Partial<InvestigationState> = {}) => {
       state = { ...state, ...patch, spent_usd: spent, elapsed_ms: baseElapsed + Math.max(0, now() - started) };
       phase = next;
@@ -427,6 +432,7 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
       const firstRun = state.validated_schema === undefined;
       if (firstRun) {
         await save('reconnaissance');
+        await milestone('reconnaissance');
         await event(EV.phase, { phase: 'reconnaissance', budget: budgetView() });
       }
       const recon =
@@ -542,6 +548,25 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
         await event(EV.schemaProposed, { ok: false, reason: built.reason, rejected: built.rejected, budget: budgetView() });
         return await finishFailed({ failure_class: 'extraction', retryable: false, detail: built.reason }, 'schema');
       }
+      // Plan d'essais chiffré (pur, sans requête) : annoncé AVEC la porte du schéma (20 § 5.3 : le plan et le coût du rejeu se
+      // lisent avant l'accord), puis rejoué tel quel au lancement des essais.
+      // Session requise (04 §3.2, C2) : seul le tunnel porte l'identité de l'utilisateur. Le serveur n'utilise aucun
+      // cookie de session en V1 : un essai N1/N2 partirait sans la session (401/403 → arrêt, puis tunnel élagué, X3)
+      // ou retiendrait une stratégie serveur sans session pour une API à session. Le plan se limite donc au tunnel.
+      const networks: PlanNetwork[] = sessionRequired
+        ? [{ mode: 'tunnel', perGbUsd: 0 }]
+        : [...rungs.map((r) => ({ mode: r.mode, perGbUsd: r.mode === 'direct' ? 0 : r.proxy.price.perGbUsd })), ...(tunnelChosen ? [{ mode: 'tunnel' as const, perGbUsd: 0 }] : [])];
+      const plan = buildTrialPlan({
+        strategies: built.strategies,
+        networks,
+        browser: deps.browsers !== null,
+        agentic: deps.agentic === true ? { ...(rolePrice(config, 'extract') === undefined ? {} : { extract: rolePrice(config, 'extract')! }), ...(rolePrice(config, 'agent') === undefined ? {} : { agent: rolePrice(config, 'agent')! }) } : {},
+        pageUrl,
+        pageHost: host,
+        instruction: request.description,
+        documentBytes: state.page?.document_bytes ?? 0,
+        totalBytes: state.page?.total_bytes ?? 0,
+      });
       if (fixed === undefined) {
         // Échantillon : données de l'utilisateur, inscrites au registre de masquage du run, puis passées par la liste
         // d'exclusion des personnes effacées AVANT toute écriture (17 §6, assert_erasure_complete) : une personne effacée
@@ -561,9 +586,13 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
         if (spent >= request.budget_usd) return await budgetExhausted('investigation_budget_usd');
         if (!request.auto_validate) {
           await save('awaiting_schema_validation', { proposal: proposal!, proposed_schema: built.outputSchema });
-          await event(EV.phase, { phase: 'awaiting_schema_validation', budget: budgetView() });
+          await milestone('schema');
+          // Coût d'un rejeu estimé : celui de la méthode la moins chère du plan (ce que retiendrait un premier essai conforme).
+          const cheapest = plan.reduce<number | null>((min, p) => (p.est_cost_usd !== null && (min === null || p.est_cost_usd < min) ? p.est_cost_usd : min), null);
+          await event(EV.phase, { phase: 'awaiting_schema_validation', plan: planView(plan), budget: { ...budgetView(), ...(cheapest === null ? {} : { retained_est_usd: cheapest }) } });
           return { state: 'succeeded', outcome: 'clean', degraded_reasons: [], items: 0 };
         }
+        await milestone('schema');
         await save('testing', { proposal: proposal!, proposed_schema: built.outputSchema, validated_schema: built.outputSchema, validated_by: 'auto' });
         await event(EV.schemaValidated, { by: 'auto' });
         await ctx.log('info', 'schema_auto_validated', {});
@@ -576,28 +605,8 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
 
       // --- 3. Essais du moins cher au plus cher --------------------------------------------------------------------
       await save('testing');
-      // Session requise (04 §3.2, C2) : seul le tunnel porte l'identité de l'utilisateur. Le serveur n'utilise aucun
-      // cookie de session en V1 : un essai N1/N2 partirait sans la session (401/403 → arrêt, puis tunnel élagué, X3)
-      // ou retiendrait une stratégie serveur sans session pour une API à session. Le plan se limite donc au tunnel.
-      const networks: PlanNetwork[] = sessionRequired
-        ? [{ mode: 'tunnel', perGbUsd: 0 }]
-        : [...rungs.map((r) => ({ mode: r.mode, perGbUsd: r.mode === 'direct' ? 0 : r.proxy.price.perGbUsd })), ...(tunnelChosen ? [{ mode: 'tunnel' as const, perGbUsd: 0 }] : [])];
-      const plan = buildTrialPlan({
-        strategies: built.strategies,
-        networks,
-        browser: deps.browsers !== null,
-        agentic: deps.agentic === true ? { ...(rolePrice(config, 'extract') === undefined ? {} : { extract: rolePrice(config, 'extract')! }), ...(rolePrice(config, 'agent') === undefined ? {} : { agent: rolePrice(config, 'agent')! }) } : {},
-        pageUrl,
-        pageHost: host,
-        instruction: request.description,
-        documentBytes: state.page?.document_bytes ?? 0,
-        totalBytes: state.page?.total_bytes ?? 0,
-      });
-      await event(EV.phase, {
-        phase: 'testing',
-        plan: plan.map((p) => ({ execution: p.execution, network: p.network, source: p.source, est_cost_usd: p.est_cost_usd })),
-        budget: budgetView(),
-      });
+      await milestone('trials');
+      await event(EV.phase, { phase: 'testing', plan: planView(plan), budget: budgetView() });
       const entries = new Map<TrialPair, PlanEntry>(plan.map((p) => [p, p]));
       const lastRecords = new Map<TrialPair, Record<string, unknown>[]>();
       /** Trace E6 compilée en E5 par la dernière exécution conforme du couple (04 §3.1). */

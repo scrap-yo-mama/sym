@@ -148,6 +148,8 @@ export interface InvestigationState {
   apiId: string | null;
   slug: string | null;
   domain: string | null;
+  /** Ce que l'utilisateur a demandé (description saisie à la création) ; nulle pour une enquête rouverte. */
+  description: string | null;
   phase: InvestigationPhase | null;
   status: ApiStatus | null;
   statusReason: ReasonView | null;
@@ -181,6 +183,7 @@ export function emptyInvestigation(): InvestigationState {
     apiId: null,
     slug: null,
     domain: null,
+    description: null,
     phase: null,
     status: null,
     statusReason: null,
@@ -503,6 +506,26 @@ export function milestoneView(state: Readonly<InvestigationState>, options: { cr
 export type { InvestigationMilestone, MilestoneState };
 export { INVESTIGATION_MILESTONES };
 
+/** Phrase-modèle de la description (20 § 5.3, m3 R7) : « Je veux [quoi] depuis [où] … », « I want [what] from [where] … ». */
+const REQUEST_PATTERNS: Readonly<Record<string, RegExp>> = { fr: /^\s*je\s+veux\s+(.+?)\s+depuis\s+\S/iu, en: /^\s*i\s+want\s+(.+?)\s+from\s+\S/iu };
+const REQUESTED_MAX_CHARS = 80;
+
+/**
+ * Les items demandés, tels que l'utilisateur les a nommés dans la phrase-modèle (« les livres ») : la bulle de la porte dit
+ * « J'ai trouvé les livres. » (planche NouvelleApi.dc.html). Nul hors phrase-modèle ou au-delà de 80 caractères : la bulle
+ * retombe alors sur le domaine enquêté, jamais sur un nom deviné. Seule la phrase-modèle de la langue de l'interface compte : une
+ * description française n'entre pas dans une phrase anglaise. Texte de l'utilisateur, rendu en texte (jamais en HTML).
+ */
+export function requestedItems(description: string | null | undefined, locale: string): string | null {
+  const pattern = REQUEST_PATTERNS[locale];
+  if (!description || !pattern) return null;
+  const what = pattern.exec(description)?.[1]?.trim();
+  return what && Array.from(what).length <= REQUESTED_MAX_CHARS ? what : null;
+}
+
+/** Politique par défaut du moins cher d'abord, livrée en Markdown (04 § 3, 18) : la règle appliquée quand aucune autre n'a ordonné le plan. */
+export const DEFAULT_RULE = 'escalade-par-defaut.md';
+
 /** Une carte du plan d'essais : un couple (exécution, réseau), son coût estimé, sa règle et son état. */
 export interface TrialCard {
   key: string;
@@ -531,10 +554,15 @@ function orderPlan<T extends { estCostUsd: number | null; rule?: string | null }
 /**
  * Cartes du plan d'essais (06 § 2, 20 § 5.3) : le plan du serveur, dans l'ordre de coût, chaque carte portant son état
  * (essai en cours, réussi, échoué, élagué avec sa raison) tiré des essais et des élagages reçus. Sans plan reçu : aucune carte. `halted` : l'enquête est arrêtée, les couples jamais lancés sont grisés (« non lancé »).
+ * `refused` : l'enquête s'est arrêtée sur un refus (403, défi, robots.txt : statut `bloquee`). Un refus mène à l'arrêt volontaire,
+ * jamais à un autre réseau (X3, X4) : les couples par proxy ou tunnel jamais lancés disparaissent du plan, pour qu'aucune carte
+ * « changer d'adresse » ni proxy ne reste après le refus, même grisée.
  */
-export function trialCards(state: Readonly<Pick<InvestigationState, 'plan' | 'attempts' | 'pruned'>>, options: { halted?: boolean } = {}): TrialCard[] {
+export function trialCards(state: Readonly<Pick<InvestigationState, 'plan' | 'attempts' | 'pruned'>>, options: { halted?: boolean; refused?: boolean } = {}): TrialCard[] {
   if (!state.plan || state.plan.length === 0) return [];
-  return orderPlan(state.plan).map((step) => {
+  const launched = (step: PlanStep): boolean => state.attempts.some((entry) => entry.state !== 'pruned' && entry.execution === step.execution && entry.network === (step.network ?? entry.network));
+  const steps = options.refused === true ? state.plan.filter((step) => (step.network ?? 'direct') === 'direct' || launched(step)) : state.plan;
+  return orderPlan(steps).map((step) => {
     const exact = cardKey(step.execution, step.network, step.source);
     const loose = (source: string | null | undefined): boolean => !step.source || !source || source === step.source;
     const attempt = state.attempts.find((entry) => entry.execution === step.execution && entry.network === (step.network ?? entry.network) && loose(entry.source));
@@ -559,6 +587,8 @@ export interface SchemaField {
   example: string | null;
   /** Champ de données personnelles (`x-personal`) : l'exemple est masqué. */
   personal: boolean;
+  /** Bornes déclarées d'un nombre (`minimum` et `maximum`), affichées « 1 à 5 » ; nulles sinon. */
+  range: { min: number; max: number } | null;
 }
 
 const EXAMPLE_MAX_CHARS = 120;
@@ -566,6 +596,26 @@ const EXAMPLE_MAX_CHARS = 120;
 const PERSONAL_MASK = '•••';
 const FIELDS_MAX = 100;
 const SAMPLE_ROWS_READ = 50;
+
+/** Valeur d'un nœud du schéma, avec ses champs `x-personal` masqués (objets par `properties`, listes par `items`). */
+function maskNode(schema: unknown, value: unknown): unknown {
+  if (!isRecord(schema)) return value;
+  if (schema['x-personal'] === true) return PERSONAL_MASK;
+  if (Array.isArray(value)) return isRecord(schema.items) ? value.map((entry) => maskNode(schema.items, entry)) : value;
+  if (!isRecord(value) || !isRecord(schema.properties)) return value;
+  const properties = schema.properties;
+  return Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, Object.hasOwn(properties, key) ? maskNode(properties[key], entry) : entry]));
+}
+
+/**
+ * Échantillon montré à l'écran (bloc « Échantillon » de la troisième colonne) : les champs `x-personal` du schéma de sortie,
+ * à toute profondeur, y sont masqués comme dans la liste des champs. Jamais la valeur personnelle en clair sur le panneau.
+ */
+export function maskedSample(schema: Record<string, unknown> | null, sample: readonly Record<string, unknown>[]): unknown[] {
+  if (!schema) return [...sample];
+  const row = schema.type === 'array' && isRecord(schema.items) ? schema.items : schema;
+  return sample.map((entry) => maskNode(row, entry));
+}
 
 function exampleText(value: unknown): string {
   const raw = typeof value === 'string' ? value : (JSON.stringify(value) ?? '');
@@ -590,6 +640,7 @@ export function schemaFields(schema: Record<string, unknown> | null, sample: rea
       const type = declared.type;
       const types = (Array.isArray(type) ? type : [type]).filter((entry): entry is string => typeof entry === 'string');
       const personal = declared['x-personal'] === true;
+      const range = typeof declared.minimum === 'number' && typeof declared.maximum === 'number' ? { min: declared.minimum, max: declared.maximum } : null;
       let example: string | null = null;
       for (const row of sample.slice(0, SAMPLE_ROWS_READ)) {
         const value = Object.hasOwn(row, name) ? row[name] : undefined;
@@ -598,6 +649,6 @@ export function schemaFields(schema: Record<string, unknown> | null, sample: rea
           break;
         }
       }
-      return { name, types, example, personal };
+      return { name, types, example, personal, range };
     });
 }

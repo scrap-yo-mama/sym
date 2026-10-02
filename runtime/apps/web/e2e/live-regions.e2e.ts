@@ -27,7 +27,8 @@ for (const locale of ['en', 'fr'] as const) {
       await expect(live).toHaveText('');
 
       // Le focus est sur le champ de recherche pendant qu'une ligne change de statut.
-      for (let step = 0; step < 20 && !(await activeElement(page)).includes('catalog-search'); step += 1) await page.keyboard.press('Tab');
+      // La recherche est au-dessus des pastilles (planche Catalogue, à droite du titre) : on y revient en arrière au clavier.
+      for (let step = 0; step < 20 && !(await activeElement(page)).includes('catalog-search'); step += 1) await page.keyboard.press('Shift+Tab');
       const before = await activeElement(page);
       expect(before).toContain('catalog-search');
       flipped = true;

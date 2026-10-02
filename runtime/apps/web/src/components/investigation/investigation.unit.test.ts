@@ -182,8 +182,9 @@ describe('troisième colonne', () => {
     expect(html).toContain('data-testid="schema-edit"');
     expect(html).toContain('Un titre');
     expect(html).toContain('data-testid="trial-plan"');
-    expect(html).toContain('(estimated ~$0.0004)');
-    expect(html).toContain('full agent, direct');
+    // Planche NouvelleApi.dc.html (3.17, D-60) : coût estimé « ~ » à droite de chaque carte, nom et sous-titre de la méthode.
+    expect(html).toContain('~$0.0004');
+    expect(html).toContain(en.investigation.plan.card.agent.text);
     expect((html.match(/type="checkbox"/g) ?? []).length).toBe(3);
   });
 

@@ -37,10 +37,11 @@ const REASONS: Record<Schemas['ApiStatus'], Schemas['ReasonMessage']> = {
   bloquee: { code: 'blocked_by_protection', params: {} },
 };
 
-const summary = (overrides: Partial<Schemas['ApiSummary']> = {}): Schemas['ApiSummary'] => ({
+export const summary = (overrides: Partial<Schemas['ApiSummary']> = {}): Schemas['ApiSummary'] => ({
   id: UUID(1),
   slug: 'zz-books',
   description: 'Livres de la page d’accueil',
+  domain: 'zz-livres.example',
   status: 'sain',
   status_reason: REASONS.sain,
   stale: false,

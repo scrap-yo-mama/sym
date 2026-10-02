@@ -2,9 +2,10 @@
 <script setup lang="ts">
 /**
  * @file ApiCatalogView.vue
- * @description Catalogue des API (06 § 2, 20 § 5.2) : titre et phrase de synthèse, barre de santé (les API bloquées à part,
- * hors du ratio), pastilles-filtres avec compteurs en texte (« À traiter » d'abord s'il y en a), recherche, filtres par statut,
- * exécution et réseau, tableau à pagination serveur avec une action utile par ligne. Rafraîchi toutes les 15 s et par le flux
+ * @description Catalogue des API (06 § 2, 20 § 5.2, planche Catalogue.dc.html) : titre Bricolage de 44 px et phrase de synthèse,
+ * recherche à droite du titre, carte de santé (les API bloquées à part, hors du ratio), pastilles-filtres avec compteurs en texte
+ * (« À traiter » d'abord s'il y en a), filtres de 06 par statut, exécution et réseau, tableau en carte à pagination serveur avec
+ * une action utile par ligne. Rafraîchi toutes les 15 s et par le flux
  * SSE ; la région `status` n'annonce que le changement de statut d'une ligne et la variation d'un compteur de pastille.
  * @page
  */
@@ -19,24 +20,30 @@ import ErrorState from '@/components/ErrorState.vue';
 import LoadingState from '@/components/LoadingState.vue';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { ATTENTION_MAX_ROWS } from '@/composables/useApiCatalog';
 import { useCatalogScreen } from '@/composables/useCatalogScreen';
 import { activePill } from '@/lib/catalog-health';
 import { API_STATUSES, EXECUTIONS, NETWORKS } from '@/lib/status';
 
-const { t } = useI18n();
+const { t, te } = useI18n();
 const { catalog, overview, opened } = useCatalogScreen();
 const { filters } = catalog;
 
 const health = overview.health;
 const pill = computed(() => activePill(filters));
 
-/** « 6 API en service, 1 arrêtée. 2 demandent ton attention. » : des comptes réels, jamais un nombre d'exemple. */
+/**
+ * « 6 API en service, 1 arrêtée. Deux demandent ton attention. » (planche, mot pour mot) : des comptes réels, jamais un nombre
+ * d'exemple. En tête de phrase, le nombre à traiter s'écrit en lettres jusqu'à dix, en chiffres au-delà.
+ */
 const summary = computed(() => {
   const current = health.value;
   if (!current || current.total === 0) return '';
   const parts = [t('catalog.summary.service', { n: current.inService }, current.inService)];
   if (current.stopped > 0) parts.push(t('catalog.summary.stopped', { n: current.stopped }, current.stopped));
-  return `${parts.join(', ')}. ${t('catalog.summary.attention', { n: current.attention }, current.attention)}`;
+  const word = `catalog.summary.words.n${current.attention}`;
+  const count = te(word) ? t(word) : String(current.attention);
+  return `${parts.join(', ')}. ${t('catalog.summary.attention', { count }, current.attention)}`;
 });
 
 // Suivi suspendu (2.2.2) : la région annonce l'état du bouton, puis plus rien ne change tant que le suivi reste suspendu.
@@ -56,47 +63,51 @@ function resetFilters(): void {
   filters.q = '';
 }
 
-const selectClass =
-  'h-11 rounded-md border border-input bg-background px-2 text-sm focus-visible:border-ring outline-none';
+const selectClass = 'h-11 rounded-md border-[1.5px] border-foreground bg-card px-2 text-sm focus-visible:border-ring outline-none';
 </script>
 
 <template>
-  <section class="mx-auto flex max-w-7xl flex-col gap-5 py-6">
-    <header class="flex flex-wrap items-end justify-between gap-3">
-      <div class="flex flex-col gap-1">
-        <h1 data-route-heading tabindex="-1" class="text-3xl font-extrabold tracking-tight">{{ t('catalog.title') }}</h1>
+  <section class="mx-auto flex max-w-[75rem] flex-col gap-[22px] py-6">
+    <!-- Planche Catalogue.dc.html : titre Bricolage de 44 px et phrase de synthèse à gauche, recherche à droite. -->
+    <header class="flex flex-wrap items-end justify-between gap-4">
+      <div class="flex flex-col gap-1.5">
+        <h1 data-route-heading tabindex="-1" class="font-display text-[44px] leading-[1.1] font-extrabold tracking-[-1px]">{{ t('catalog.title') }}</h1>
         <p v-if="summary" class="text-base text-muted-foreground" data-testid="catalog-summary">{{ summary }}</p>
       </div>
-      <Button as-child>
-        <RouterLink to="/apis/new">{{ t('catalog.newApi') }}</RouterLink>
-      </Button>
+      <div class="flex flex-wrap items-end gap-3">
+        <form role="search" class="flex flex-col gap-1" :aria-label="t('catalog.filters.searchLabel')" @submit.prevent>
+          <label for="catalog-search" class="text-[13px] font-bold">{{ t('catalog.filters.search') }}</label>
+          <Input id="catalog-search" v-model="filters.q" type="search" class="h-11 w-[280px] max-w-full border-[1.5px] border-foreground bg-card px-3.5 text-[15px]" :placeholder="t('catalog.filters.searchPlaceholder')" />
+        </form>
+        <!-- La barre de navigation n'a pas (encore) le bouton « Nouvelle API » de la planche : il reste à portée ici. -->
+        <Button as-child variant="signature" class="rounded-md">
+          <RouterLink to="/apis/new">{{ t('catalog.newApi') }}</RouterLink>
+        </Button>
+      </div>
     </header>
 
     <CatalogHealth v-if="health && health.total > 0" :health="health" :partial="overview.snapshot.value?.truncated ?? false" />
 
     <CatalogPills :counts="overview.pills.value" :active="pill" @select="(selected) => catalog.setPill(selected)" />
 
-    <form role="search" class="flex flex-wrap items-end gap-3" :aria-label="t('catalog.filters.label')" @submit.prevent>
-      <div class="flex min-w-56 flex-1 flex-col gap-1">
-        <label for="catalog-search" class="text-sm font-medium">{{ t('catalog.filters.search') }}</label>
-        <Input id="catalog-search" v-model="filters.q" type="search" :placeholder="t('catalog.filters.searchPlaceholder')" />
-      </div>
+    <!-- Filtres de 06 § 2 (statut, exécution, réseau) et suivi : sous les pastilles de la planche. -->
+    <div role="group" class="flex flex-wrap items-end gap-3" :aria-label="t('catalog.filters.label')">
       <div class="flex flex-col gap-1">
-        <label for="catalog-status" class="text-sm font-medium">{{ t('catalog.filters.status') }}</label>
+        <label for="catalog-status" class="text-[13px] font-bold">{{ t('catalog.filters.status') }}</label>
         <select id="catalog-status" v-model="filters.status" :class="selectClass">
           <option value="">{{ t('catalog.filters.all') }}</option>
           <option v-for="status in API_STATUSES" :key="status" :value="status">{{ t(`status.${status}`) }}</option>
         </select>
       </div>
       <div class="flex flex-col gap-1">
-        <label for="catalog-execution" class="text-sm font-medium">{{ t('catalog.filters.execution') }}</label>
+        <label for="catalog-execution" class="text-[13px] font-bold">{{ t('catalog.filters.execution') }}</label>
         <select id="catalog-execution" v-model="filters.execution" :class="selectClass">
           <option value="">{{ t('catalog.filters.all') }}</option>
           <option v-for="execution in EXECUTIONS" :key="execution" :value="execution">{{ t(`execution.${execution}`) }}</option>
         </select>
       </div>
       <div class="flex flex-col gap-1">
-        <label for="catalog-network" class="text-sm font-medium">{{ t('catalog.filters.network') }}</label>
+        <label for="catalog-network" class="text-[13px] font-bold">{{ t('catalog.filters.network') }}</label>
         <select id="catalog-network" v-model="filters.network" :class="selectClass">
           <option value="">{{ t('catalog.filters.all') }}</option>
           <option v-for="network in NETWORKS" :key="network" :value="network">{{ t(`network.${network}`) }}</option>
@@ -105,7 +116,7 @@ const selectClass =
       <Button type="button" variant="outline" data-testid="catalog-follow-toggle" @click="catalog.suspended.value = !catalog.suspended.value">
         {{ catalog.suspended.value ? t('catalog.follow.resume') : t('catalog.follow.suspend') }}
       </Button>
-    </form>
+    </div>
 
     <!-- Région `status` du plan de 06 § 3 : seul le changement de statut d'une ligne et la variation d'un compteur sont annoncés. Toujours présente. -->
     <div role="status" aria-live="polite" class="sr-only" data-testid="catalog-live">{{ announcement }}</div>
@@ -126,6 +137,7 @@ const selectClass =
     </EmptyState>
     <template v-else>
       <ErrorState v-if="catalog.error.value" :error="catalog.error.value" @retry="catalog.refetch()" />
+      <p v-if="filters.attention && catalog.attentionTruncated.value" class="text-sm text-muted-foreground" data-testid="attention-partial">{{ t('catalog.attentionPartial', { n: ATTENTION_MAX_ROWS }) }}</p>
       <ApiCatalogTable :apis="catalog.apis.value" :busy="catalog.loading.value" :resuming="catalog.resuming.value" />
       <nav v-if="catalog.hasPrevious.value || catalog.hasNext.value" class="flex flex-wrap items-center justify-between gap-2" :aria-label="t('catalog.pagination.label')">
         <Button variant="outline" size="sm" :disabled="!catalog.hasPrevious.value" @click="catalog.previous()">{{ t('catalog.pagination.previous') }}</Button>

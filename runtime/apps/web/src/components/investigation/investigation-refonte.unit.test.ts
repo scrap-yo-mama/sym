@@ -130,10 +130,51 @@ describe('assert_trial_plan_cheapest_first_ui : plan chiffré du moins cher au p
     expect(cards.map((card) => card.state)).toEqual(['failed', 'pruned', 'planned']);
     const html = await render(TrialPlan, { cards });
     expect(html).toMatch(/data-state="pruned"[^>]*data-execution="playwright"/);
-    expect(html).toMatch(/border-dashed bg-muted text-muted-foreground[^"]*"[^>]*data-testid="trial-card" data-state="pruned"/);
+    expect(html).toMatch(/border-dashed[^"]*bg-muted text-muted-foreground[^"]*"[^>]*data-testid="trial-card" data-state="pruned"/);
     expect(html).toContain('Skipped:');
     const halted = trialCards(state, { halted: true });
     expect(halted.map((card) => card.state)).toEqual(['failed', 'pruned', 'pruned']);
+  });
+
+  test.each([
+    ['403', 'forbidden'],
+    ['défi', 'blocked_by_protection'],
+    ['robots.txt', 'robots_disallowed'],
+  ] as const)('après un refus (%s → bloquee), aucune carte proxy ni changement d’adresse : le plan direct + dc_proxy du serveur ne montre plus que le direct', async (_label, code) => {
+    // Plan réel du serveur (enquête avec une politique direct + proxy serveur, cf. le test d'intégration du worker).
+    const state = emptyInvestigation();
+    state.runId = 'r9';
+    const events: [string, Record<string, unknown>][] = [
+      ['investigation.started', { run_id: 'r9', domain: 'exemple.test' }],
+      ['schema.proposed', { run_id: 'r9', output_schema: SCHEMA, sample: SAMPLE }],
+      [
+        'phase.started',
+        {
+          run_id: 'r9',
+          phase: 'testing',
+          plan: [
+            { execution: 'fetch', network: 'direct', est_cost_usd: 0.0004 },
+            { execution: 'fetch', network: 'dc_proxy', est_cost_usd: 0.0021 },
+            { execution: 'playwright', network: 'direct', est_cost_usd: 0.003 },
+            { execution: 'playwright', network: 'dc_proxy', est_cost_usd: 0.006 },
+          ],
+        },
+      ],
+      ['attempt.finished', { run_id: 'r9', attempt: { index: 0, execution: 'fetch', network: 'direct', state: 'done', est_cost_usd: 0.0004, result: code, cost_usd: 0.0004, ms: 120 } }],
+      ['status.changed', { run_id: 'r9', status: 'bloquee', status_reason: { code, params: {}, message: 'zz' } }],
+    ];
+    for (const [name, data] of events) ingestEvent(state, frame(name, data), 0);
+    expect(state.status).toBe('bloquee');
+    expect(state.blocked).not.toBeNull();
+    for (const locale of ['fr', 'en'] as const) {
+      const html = await render(InvestigationBoard, props(state), { locale });
+      const plan = html.slice(html.indexOf('data-testid="trial-plan"'));
+      const shown = [...plan.matchAll(/data-testid="trial-card"[^>]*data-execution="([a-z_]+)"[^>]*>([\s\S]*?)<\/li>/g)].map((match) => `${match[1]}:${match[2] ?? ''}`);
+      expect(shown.length, locale).toBe(2);
+      // Ni carte proxy, ni « changer d'adresse » : le refus mène à l'arrêt volontaire.
+      expect(plan).not.toMatch(/proxy serveur|server proxy|datacenter|dc_proxy|résidentiel|residential|changer d.adresse|change (the )?address/iu);
+      expect(plan).toContain('data-testid="trial-stop-branch"');
+    }
   });
 
   test('une règle qui a réordonné le plan est respectée : la console ne le retrie pas', () => {
@@ -196,5 +237,19 @@ describe('assert_schema_examples_untranslated : le même échantillon donne les 
     expect(byName.email?.personal).toBe(true);
     expect(Array.from(byName.long?.example ?? '')).toHaveLength(121);
     expect(byName.long?.example?.endsWith('…')).toBe(true);
+  });
+
+  test.each(['awaiting_schema_validation', 'testing', 'done'] as const)('%s : un champ x-personal est masqué partout sur le panneau, échantillon brut compris (jamais la valeur en clair)', async (phase) => {
+    const state = awaiting();
+    state.phase = phase;
+    if (phase !== 'awaiting_schema_validation') state.validatedBy = 'user';
+    for (const locale of ['fr', 'en'] as const) {
+      const html = await render(InvestigationBoard, props(state), { locale });
+      expect(html, `${phase}/${locale}`).toContain('data-testid="schema-panel"');
+      expect(html, `${phase}/${locale}`).not.toContain('lecteur@exemple.test');
+      expect(html, `${phase}/${locale}`).not.toContain('autre@exemple.test');
+      // Hors de la porte, l'échantillon brut est montré : ses autres valeurs restent lisibles telles quelles.
+      if (phase !== 'awaiting_schema_validation') expect(html, `${phase}/${locale}`).toContain('Le Rouge et le Noir');
+    }
   });
 });
