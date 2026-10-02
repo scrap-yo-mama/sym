@@ -48,6 +48,8 @@ Contrat : `runtime/packages/contracts` (`@sym/contracts`, MIT, sous-chemin `brow
 - Jetons (2.2, 2.3) : `tokens = new ConnectTokens(keyring)` (`loadKeyring`) remplit `GatewayDeps.tokens` (`issue`, 300 s, 1 h au plus). Upgrade WSS et `json/version` (2.3) : `authorizeConnection({auth, tokens, session}, {sessionId, protocol, headers, query})` en `preValidation`, avant tout octet vers le nœud ; `session(id)` lit `tenant_id` et `state`.
 - Admin d'instance : `resolveBootstrapToken`, `setupFirstAdmin(store, token, form)` ; la table de l'admin et `/setup` arrivent avec la console (3.5).
 
+- README (tâche 5.5) : `README.md` et `README.fr.md` (DA du README de SYM), bannière et badges SVG dans `docs/assets/` (palette et icône de `packages/ui`), page du site SYM dans `docs/site/{en,fr}/` ; test `tests/readme.unit.test.ts` (liens, DA, parité fr/en, exemples).
+
 ## Versions et dépendances
 
 - Playwright **1.63.0**, Chromium **153.0.8010.12** (`BROWSER_ENGINE` du contrat ; le test du nœud vérifie `playwright-core`).

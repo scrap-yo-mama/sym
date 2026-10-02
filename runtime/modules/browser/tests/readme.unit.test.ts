@@ -172,11 +172,12 @@ describe('readme_fr_en_parity', () => {
   test.each([
     ['README', README_EN, README_FR],
     ['page du site', SITE_EN, SITE_FR],
-  ])('%s : mêmes sections, mêmes blocs de code (hors commentaires), mêmes liens hors langue', (_name, en, fr) => {
+  ])('%s : mêmes sections, mêmes blocs de code (hors commentaires ; dialogues `text` traduits), mêmes liens hors langue', (_name, en, fr) => {
     const a = read(en);
     const b = read(fr);
     expect(sections(a).length).toBe(sections(b).length);
-    expect(codeBlocks(a).map((c) => [c.lang, bareCode(c.code)])).toEqual(codeBlocks(b).map((c) => [c.lang, bareCode(c.code)]));
+    const code = (md: string) => codeBlocks(md).map((c) => (c.lang === 'text' ? [c.lang] : [c.lang, bareCode(c.code)]));
+    expect(code(a)).toEqual(code(b));
     const external = (md: string) => links(md).filter((l) => /^https:/.test(l.url)).map((l) => l.url).sort();
     expect(external(a)).toEqual(external(b));
   });
