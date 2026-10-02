@@ -166,7 +166,11 @@ describe('node_choice_least_loaded (P8)', () => {
   test('nœuds à 20 % et 60 % → la session part sur celui à 20 % ; région absente → 503 no_node', async () => {
     const fill = async (nodeId: string, units: number) => {
       for (let i = 0; i < units; i += 1) {
-        await h.pool.query("INSERT INTO sessions (tenant_id, api_key_id, type, node_id, slot_weight, state, started_at, expires_at) SELECT tenant_id, id, 'dedicated', $1, 1, 'running', now(), now() + interval '1 hour' FROM api_keys WHERE key_prefix = 'symb_b_w'", [nodeId]);
+        const { rowCount } = await h.pool.query(
+          "INSERT INTO sessions (tenant_id, api_key_id, type, node_id, slot_weight, state, started_at, expires_at) SELECT tenant_id, id, 'dedicated', $1, 1, 'running', now(), now() + interval '1 hour' FROM api_keys WHERE tenant_id = $2 AND 'sessions:write' = ANY(scopes) LIMIT 1",
+          [nodeId, h.tenantB],
+        );
+        expect(rowCount).toBe(1);
       }
     };
     await fill('node-20', 4);
@@ -189,8 +193,8 @@ describe('quotas mensuels et durée maximale (04d § 4.2)', () => {
 
   const consume = async (seconds: number, bytes: number) => {
     const { rows } = await h.pool.query<{ id: string }>(
-      "INSERT INTO sessions (tenant_id, api_key_id, type, node_id, state, end_reason, started_at, ended_at, expires_at) SELECT tenant_id, id, 'dedicated', 'node-a', 'ended', 'released', now() - make_interval(secs => $1), now(), now() FROM api_keys WHERE key_prefix = 'symb_a_w' RETURNING id",
-      [seconds],
+      "INSERT INTO sessions (tenant_id, api_key_id, type, node_id, state, end_reason, started_at, ended_at, expires_at) SELECT tenant_id, id, 'dedicated', 'node-a', 'ended', 'released', now() - make_interval(secs => $1), now(), now() FROM api_keys WHERE tenant_id = $2 AND 'sessions:write' = ANY(scopes) LIMIT 1 RETURNING id",
+      [seconds, h.tenantA],
     );
     await h.pool.query(
       "INSERT INTO usage_records (session_id, tenant_id, api_key_id, node_id, started_at, ended_at, browser_ms, billed_seconds, bytes_in, bytes_out, source) SELECT id, tenant_id, api_key_id, node_id, started_at, ended_at, $2::bigint * 1000, $2, $3, 0, 'node' FROM sessions WHERE id = $1",

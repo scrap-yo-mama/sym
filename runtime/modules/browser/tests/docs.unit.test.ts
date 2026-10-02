@@ -42,7 +42,8 @@ describe('pages : mêmes pages en fr et en en', () => {
       'reference/api.md',
       'reference/configuration.md',
     ]);
-    const expected = ['README.md', ...DOC_LOCALES.flatMap((locale) => DOC_PAGES.map((page) => join(locale, page)))].sort();
+    // Hors des pages localisées : le rapport de mesures de capacité de la tâche 0.6 (renvoyé par CLAUDE.md).
+    const expected = ['README.md', 'mesures-capacite.md', ...DOC_LOCALES.flatMap((locale) => DOC_PAGES.map((page) => join(locale, page)))].sort();
     expect(files(DOCS).sort()).toEqual(expected);
   });
 

@@ -38,7 +38,7 @@ Environment variables read by the image (`SYMB_MODE`: `all`, `gateway` or `node`
 | `HEARTBEAT_MS` | `5000` | — | no | Period of the node heartbeat to the gateway, in milliseconds (at least 100). |
 | `SYMB_DATA_DIR` | `/data` | — | no | Session working directories (`sessions/{id}`), absolute path. |
 | `SYMB_PRIVATE_HOSTS` | — | — | no | Private hosts reachable by the egress: exact names or CIDR, comma-separated. Empty: every private host is refused. |
-| `SYMB_IP_ECHO_URL` | fixée par la tâche 1.6 | — | no | HTTPS echo endpoint of the proxy test at session creation. |
+| `SYMB_IP_ECHO_URL` | `https://api.ipify.org/?format=json` | — | no | HTTPS echo endpoint of the proxy test at session creation. |
 
 ## Gateway
 

@@ -2,7 +2,7 @@
 
 Service de navigateurs à la demande : passerelle (REST `/v1`, WSS `/playwright` et `/cdp`, SSE), nœuds (pool de Chromium chauds, egress par session), profils, vue en direct, enregistrements, console et SDK. Aucune logique de SYM ici : SYM consomme ce module par le contrat.
 
-- CDC : `cdc/sym-browser/` à la racine du dépôt (versionné, privé : hors du miroir public). Tâches : `06-taches.md`. Invariants BINV1 à BINV7 : `_index.md`.
+- CDC : `cdc/sym-browser/` à la racine du dépôt (versionné, privé : hors du miroir public). Tâches : `06-taches.md`. Invariants BINV1 à BINV8 : `_index.md`.
 - Architecture du dépôt : ADR 23 (`cdc/scrapyomama-runtime/23-architecture-modulaire.md`), étape 0 bis. Ce module est le pilote de l'environnement Claude par module.
 
 ## Frontière (lint bloquant)
@@ -32,7 +32,6 @@ Contrat : `runtime/packages/contracts` (`@sym/contracts`, MIT, sous-chemin `brow
 - Sans l'image Docker : `pnpm --filter @sym-browser/module ci:local --skip-image` ; sans les tests sur Chromium réels : `--skip-chromium` (à dire dans le compte rendu).
 - Schéma (Docker requis) : `pnpm --filter @sym-browser/db test` (PostgreSQL 16, `PG_VERSION` pour 17 ou 18) ; matrice 16/17/18 : `pnpm --filter @sym-browser/db test:matrix`. Migrations dans `packages/db/migrations/NNNN_nom/{up,down}.sql`, jamais modifiées après fusion (somme de contrôle).
 - Pool du nœud sur de vrais Chromium (non root, espaces de noms utilisateur, `playwright install chromium`) : `pnpm --filter @sym-browser/node test:chromium`.
-- Schéma (Docker requis) : `pnpm --filter @sym-browser/db test` (PostgreSQL 16, `PG_VERSION` pour 17 ou 18) ; matrice 16/17/18 : `pnpm --filter @sym-browser/db test:matrix`. Migrations dans `packages/db/migrations/NNNN_nom/{up,down}.sql`, jamais modifiées après fusion (somme de contrôle).
 - Tests d'un paquet : `pnpm --filter @sym-browser/gateway test` ; tout le module : `pnpm --filter "./modules/browser/**" test`.
 - Console : `pnpm --filter @sym-browser/console dev` (authentification simulée tant que 2.1 manque) ; E2E et axe sur la console construite : `pnpm --filter @sym-browser/console test:e2e` (Chromium : `pnpm exec playwright install chromium`).
 - Types : `pnpm --filter "./modules/browser/**" typecheck` ; lint : `pnpm exec eslint modules/browser packages/contracts`.
@@ -45,7 +44,6 @@ Contrat : `runtime/packages/contracts` (`@sym/contracts`, MIT, sous-chemin `brow
 - Configuration : catalogue `packages/core/src/config/env-catalog.ts` (source unique, secrets `NOM_FILE`) ; config invalide = sortie code 1 nommant la variable ; `node dist/main.js --check-config` valide sans écouter ; `/healthz`, `/readyz`.
 - Capacité d'un nœud : constantes dans `packages/core/src/capacity.ts`, mesures et banc dans `bench/` (`bench/run.sh`), rapport `docs/mesures-capacite.md`.
 - ObjectStore `s3` (`packages/core/src/storage`) : ses tests lancent un MinIO jetable en conteneur (Docker requis, obligatoire sous `CI`, sauté avec avertissement sinon) ; point d'accès externe : `SYMB_TEST_S3_ENDPOINT`, `SYMB_TEST_S3_ACCESS_KEY_ID`, `SYMB_TEST_S3_SECRET_ACCESS_KEY`.
-- `MASTER_KEY` de développement : `pnpm --filter @sym-browser/core keygen` (après build ; jamais committée ni journalisée). Vecteurs de SYM rejoués : `packages/core/vectors/sym-crypto.json`.
 
 ## Authentification (tâche 2.1)
 - Code : `packages/core/src/auth/` (pur) et `packages/db/src/api-keys.ts` (SQL). Formats : clé `symb_<12>_<43>` (préfixe affiché `symb_<12>` = `api_keys.key_prefix`), jeton de connexion `symt_…` ; masqués dans les journaux (`CREDENTIAL_PREFIXES`, `createLogger`).

@@ -38,7 +38,7 @@ Variables d’environnement lues par l’image (`SYMB_MODE` : `all`, `gateway` o
 | `HEARTBEAT_MS` | `5000` | — | non | Période du battement du nœud vers la passerelle, en millisecondes (100 au minimum). |
 | `SYMB_DATA_DIR` | `/data` | — | non | Répertoires de travail des sessions (`sessions/{id}`), chemin absolu. |
 | `SYMB_PRIVATE_HOSTS` | — | — | non | Hôtes privés joignables par l’egress : noms exacts ou CIDR séparés par des virgules. Vide : tout hôte privé est refusé. |
-| `SYMB_IP_ECHO_URL` | fixée par la tâche 1.6 | — | non | Point d’écho HTTPS du test de proxy à la création de session. |
+| `SYMB_IP_ECHO_URL` | `https://api.ipify.org/?format=json` | — | non | Point d’écho HTTPS du test de proxy amont à la création de session (réponse JSON `{ip}` ou texte brut) : son hôte s’ajoute à la politique pour ce seul test (04c § 2.3). |
 
 ## Passerelle
 
