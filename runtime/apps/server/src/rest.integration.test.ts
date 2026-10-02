@@ -1028,7 +1028,9 @@ describe('assert_export_streaming : export des datasets en flux (05 § 4.4)', ()
       // Avance bornée : quelques lots (tampons du flux Node et du client HTTP), plus ce que les tampons TCP du noyau
       // peuvent contenir. La borne doit rester loin des 101 lots, sinon le test ne prouve rien (tampons à régler).
       const lots = Math.ceil(total / 1000);
-      const bound = EXPORT_MAX_READ_AHEAD_BATCHES + Math.ceil(kernelTcpBufferBytes() / (bytes / lots));
+      // Plafonnée sous la moitié des lots : sur un noyau aux tampons TCP très larges (exécuteurs Linux : borne brute 90 sur 100),
+      // la borne brute ne prouverait rien ; l'avance réelle (7 lots) reste très en dessous.
+      const bound = Math.min(EXPORT_MAX_READ_AHEAD_BATCHES + Math.ceil(kernelTcpBufferBytes() / (bytes / lots)), Math.floor(lots / 2) - 1);
       console.info(`assert_export_streaming : ${readAhead} lots lus d'avance (borne ${bound} sur ${lots})`);
       expect(bound).toBeLessThan(lots / 2);
       expect(readAhead).toBeLessThanOrEqual(bound);
