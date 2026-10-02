@@ -112,6 +112,9 @@ catalog:
   # binaire par plate-forme en optionalDependencies, sans script d'installation) ; yaml (déclaré plus haut, tâche 4.1) sert aussi à lire l'OpenAPI spécifiée.
   vitepress: 2.0.0-alpha.20
   pagefind: 1.5.2
+  # Frontières entre modules (tâche 5.0, docs/modules.md) : rapport dependency-cruiser du nightly, NON bloquant ; MIT ;
+  # 18.4.0 publiée le 2026-09-20 (plus de 7 jours au 2026-10-02, minimumReleaseAge ; 18.5.0 du 2026-09-30 < 7 jours).
+  dependency-cruiser: 18.4.0
 
 # OTel coupé = aucun module de l'API ni du SDK résolu (14 § 10, assert_otel_off_by_default). Better Auth
 # (@better-auth/core) fait `import("@opentelemetry/api")` à chaque requête d'auth ; drizzle-orm et vitest déclarent le même
