@@ -8,6 +8,51 @@
  */
 @import '@runtime/ui/theme.css';
 
+/*
+ * Repli à métriques ajustées (CLS) : tant que DM Sans et Bricolage Grotesque ne sont pas arrivées (font-display swap, réseau lent),
+ * le texte s'affiche dans une police locale dont la largeur et les hauteurs de ligne sont réglées sur celles de la police finale,
+ * pour que le remplacement ne déplace rien. Les trois repliers ne chargent rien : local() seulement, aucune requête.
+ */
+@font-face {
+  font-family: 'SYM Repli Sans';
+  font-style: normal;
+  font-weight: 400 700;
+  src: local('Arial'), local('Liberation Sans'), local('Arimo'), local('Helvetica');
+  size-adjust: 104.3%;
+  ascent-override: 95.1%;
+  descent-override: 29.7%;
+  line-gap-override: 0%;
+}
+
+@font-face {
+  font-family: 'SYM Repli Titre';
+  font-style: normal;
+  font-weight: 800;
+  src: local('Arial Bold'), local('Arial-BoldMT'), local('Liberation Sans Bold'), local('Arimo Bold');
+  size-adjust: 102.4%;
+  ascent-override: 90.9%;
+  descent-override: 26.4%;
+  line-gap-override: 0%;
+}
+
+@font-face {
+  font-family: 'SYM Repli Mono';
+  font-style: normal;
+  font-weight: 400 600;
+  src: local('Courier New'), local('Liberation Mono'), local('Cousine');
+  size-adjust: 100%;
+  ascent-override: 102%;
+  descent-override: 30%;
+  line-gap-override: 0%;
+}
+
+body:has(.lp),
+.lp {
+  --sym-font-sans: 'DM Sans', 'SYM Repli Sans', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --sym-font-display: 'Bricolage Grotesque', 'SYM Repli Titre', 'DM Sans', 'SYM Repli Sans', ui-sans-serif, system-ui, sans-serif;
+  --sym-font-mono: 'JetBrains Mono', 'SYM Repli Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+}
+
 body:has(.lp) {
   background-color: var(--background);
 }
