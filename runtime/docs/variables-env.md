@@ -69,6 +69,8 @@ des cinq premières est posée. Une autorité de certification privée pour Post
 | `QUEUE_POLLING_SECONDS` | worker | facultative | 2 | Période d’interrogation de la file (0,5 s au minimum). |
 | `WARNING_CHECK_SECONDS` | worker | facultative | 900 | Période du contrôle des API en avertissement. |
 | `RETENTION_TICK_SECONDS` | worker | facultative | 300 | Période de la passe de rétention. |
+| `ITEMS_REJECTED_MAX_SHARE` | worker | facultative | 0.2 | Part d’items non conformes au-delà de laquelle un run casse (avec ITEMS_REJECTED_MIN_COUNT) ; en dessous, ils sont écartés et le reste est livré (à valider). |
+| `ITEMS_REJECTED_MIN_COUNT` | worker | facultative | 5 | Nombre minimal d’items non conformes pour qu’un run casse (plancher absolu du seuil de casse, à valider). |
 
 ## Sortie réseau
 

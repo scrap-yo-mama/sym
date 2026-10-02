@@ -463,6 +463,8 @@ export const runs = pgTable(
     kind: text('kind', { enum: RUN_KINDS }).notNull().default('run'),
     // 0017_rest_api (3.1) : pause demandée par l'utilisateur (run `queued` sans job), reprise par `resume`.
     pausedAt: tstz('paused_at'),
+    // 0018_run_rejected_items (2.3, D-49) : items extraits non conformes, jamais livrés.
+    itemsRejected: integer('items_rejected').notNull().default(0),
     createdAt: createdAt(),
     startedAt: tstz('started_at'),
     finishedAt: tstz('finished_at'),
@@ -554,6 +556,30 @@ export const investigationEvents = pgTable(
     at: tstz('at').notNull().defaultNow(),
   },
   (t) => [primaryKey({ columns: [t.runId, t.seq] }), index('investigation_events_owner_id_idx').on(t.ownerId)],
+);
+
+// 0018_run_rejected_items (2.3, D-49) : quarantaine d'un run (agrégats sans valeur, échantillon nettoyé de 5 items au plus).
+export const runRejectedItems = pgTable(
+  'run_rejected_items',
+  {
+    runId: uuid('run_id')
+      .primaryKey()
+      .references(() => runs.id, { onDelete: 'cascade' }),
+    apiId: uuid('api_id')
+      .notNull()
+      .references(() => apis.id, { onDelete: 'cascade' }),
+    ownerId: ownerId(),
+    projectId: projectId(),
+    totalRejected: integer('total_rejected').notNull(),
+    byReason: jsonb('by_reason').notNull().default([]),
+    sample: jsonb('sample').notNull().default([]),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    index('run_rejected_items_owner_id_idx').on(t.ownerId),
+    index('run_rejected_items_api_id_idx').on(t.apiId),
+    index('run_rejected_items_created_at_idx').on(t.createdAt),
+  ],
 );
 
 export const statusEvents = pgTable(

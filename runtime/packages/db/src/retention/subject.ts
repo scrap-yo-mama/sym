@@ -15,7 +15,8 @@
 //    d'une valeur demandée : **égalité exacte** sur les champs `x-personal`, jamais une sous-chaîne ; un item qui ne fait
 //    que mentionner le sujet (texte libre) est expurgé (`[erased]`) ; compteurs des datasets recalculés ;
 //  - dedup_keys : clés dont `key_hash` = `dedupKeyHash` d'une valeur demandée ou de la clé d'un item supprimé ;
-//  - run_logs, runs (input, error_detail), investigation_events (dont les échantillons), status_events, tunnel_jobs,
+//  - run_logs, runs (input, error_detail), investigation_events (dont les échantillons), run_rejected_items (échantillon
+//    de la quarantaine, D-49), status_events, tunnel_jobs,
 //    schedules (input) : valeur remplacée par `[erased]` (motif borné aux limites de mot) ;
 //  - run_artifacts (chiffrés, donc illisibles) : supprimés pour tout run lié au sujet ;
 //  - subject_exclusions : HMAC-SHA256 de chaque valeur normalisée (téléphones en E.164), clé des sujets de l'instance ;
@@ -137,7 +138,7 @@ export async function isSubjectExcluded(db: Queryable, key: Buffer, value: strin
  * Tables balayées par l'outil (liste fermée). Jamais `users`, `auth_*`, `verifications`, `api_keys`, `secrets`,
  * `invitations` ni `audit_events` : ni compte ni contenu n'en sort, même agrégé (pas d'oracle de sous-chaîne).
  */
-export const SUBJECT_CONTENT_TABLES = ['dataset_items', 'runs', 'run_logs', 'investigation_events', 'status_events', 'tunnel_jobs', 'schedules'] as const;
+export const SUBJECT_CONTENT_TABLES = ['dataset_items', 'runs', 'run_logs', 'investigation_events', 'run_rejected_items', 'status_events', 'tunnel_jobs', 'schedules'] as const;
 
 /**
  * Nombre de lignes des tables de contenu contenant une valeur du sujet (SQL brut sur `to_jsonb(ligne)`, motif borné aux
@@ -175,10 +176,12 @@ export function scrubSubject(value: unknown, values: readonly string[]): unknown
 }
 
 type ScrubTarget = { table: string; pk: string[]; json: string[]; text: string[] };
-const SCRUB_TARGETS: Record<'run_logs' | 'runs' | 'investigation_events' | 'status_events' | 'tunnel_jobs' | 'schedules', ScrubTarget> = {
+const SCRUB_TARGETS: Record<'run_logs' | 'runs' | 'investigation_events' | 'run_rejected_items' | 'status_events' | 'tunnel_jobs' | 'schedules', ScrubTarget> = {
   run_logs: { table: 'run_logs', pk: ['run_id', 'seq'], json: ['data'], text: ['event'] },
   runs: { table: 'runs', pk: ['id'], json: ['input'], text: ['error_detail'] },
   investigation_events: { table: 'investigation_events', pk: ['run_id', 'seq'], json: ['payload'], text: [] },
+  // Quarantaine (D-49, 0017) : l'échantillon nettoyé et les pointeurs des raisons (une clé inconnue vient du site).
+  run_rejected_items: { table: 'run_rejected_items', pk: ['run_id'], json: ['sample', 'by_reason'], text: [] },
   status_events: { table: 'status_events', pk: ['id'], json: [], text: ['reason'] },
   tunnel_jobs: { table: 'tunnel_jobs', pk: ['job_id'], json: ['payload', 'trace'], text: [] },
   schedules: { table: 'schedules', pk: ['id'], json: ['input'], text: [] },

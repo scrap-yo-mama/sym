@@ -12,6 +12,9 @@ import { applyOperators, compileOperators } from './operators.js';
 import type { DeclarativeSpec, FieldLocator, FieldSpec, SourceSpec } from './spec.js';
 import { validateOutput } from '../schema/validator.js';
 
+/** Politique des enregistrements non conformes (voir `ExtractOptions.itemPolicy`). */
+export type ItemPolicy = 'strict' | 'quarantine';
+
 export interface ResponseInput {
   /** Corps de la réponse, déjà décodé en texte. */
   body: string;
@@ -20,6 +23,14 @@ export interface ResponseInput {
 export interface ExtractOptions {
   /** `output_schema` : schéma d'UN enregistrement. Sans lui, seuls les `type` et `required` des champs sont contrôlés. */
   outputSchema?: unknown;
+  /**
+   * `strict` (défaut, enquête : critère « ça marche ») : un enregistrement non conforme écarte la source. `quarantine`
+   * (runs, D-49) : les problèmes par enregistrement ne bloquent la source que si AUCUN enregistrement n'est conforme, et
+   * ce blocage ne sert qu'à choisir un repli : sans source conforme, les enregistrements de la première source qui en a
+   * sont rendus (`ok`). L'exécuteur trie ensuite chaque item (Ajv) et met les non conformes en quarantaine, jamais livrés
+   * (INV1) ; le seuil de casse se décide sur le run entier.
+   */
+  itemPolicy?: ItemPolicy;
   limits?: Partial<DslLimits>;
   now?: () => number;
 }
@@ -90,6 +101,7 @@ interface Context {
   limits: DslLimits;
   deadline: Deadline;
   outputSchema: unknown;
+  itemPolicy: ItemPolicy;
 }
 
 /** Valeurs d'un champ pour un enregistrement JSON : chemin principal, puis replis, première liste non vide. */
@@ -158,6 +170,9 @@ function buildRecord(
     }
     if (!typeMatches(field.type, value)) {
       push('type_mismatch', `champ « ${name} » : type ${field.type} attendu`);
+      // Quarantaine (D-49) : un champ REQUIS mal typé garde sa valeur, pour que la raison du rejet soit `type` (et non
+      // `required`) ; l'item sera écarté par Ajv, jamais livré. Un champ facultatif mal typé reste omis, comme à l'enquête.
+      if (ctx.itemPolicy === 'quarantine' && field.required === true) setOwn(record, name, value);
       continue;
     }
     setOwn(record, name, value);
@@ -172,7 +187,8 @@ function runSource(spec: DeclarativeSpec, source: SourceSpec, cache: ParseCache,
     const minRecords = Math.max(1, spec.expect?.min_records ?? 1);
     if (records.length === 0) problems.push({ record: null, code: 'no_records', message: 'aucun enregistrement', blocking: true });
     else if (records.length < minRecords) problems.push({ record: null, code: 'too_few_records', message: `moins de ${minRecords} enregistrements`, blocking: true });
-    if (ctx.outputSchema !== undefined && !problems.some((p) => p.blocking)) checkOutputSchema(ctx.outputSchema, records, problems);
+    if (ctx.itemPolicy === 'quarantine') relaxPerRecordProblems(ctx.outputSchema, records, problems);
+    else if (ctx.outputSchema !== undefined && !problems.some((p) => p.blocking)) checkOutputSchema(ctx.outputSchema, records, problems);
     return { attempt: { source_id: source.id, from: source.from, records: records.length, ok: !problems.some((p) => p.blocking), problems }, records };
   };
   try {
@@ -192,6 +208,27 @@ function runSource(spec: DeclarativeSpec, source: SourceSpec, cache: ParseCache,
     problems.push({ record: null, code: error.code, message: error.message, blocking: true });
     return { attempt: { source_id: source.id, from: source.from, records: 0, ok: false, problems }, records: [] };
   }
+}
+
+/**
+ * Politique `quarantine` (D-49) : les problèmes d'un enregistrement (champ requis absent ou mal typé, opérateur, sortie
+ * hors schéma) ne bloquent la source que si AUCUN enregistrement n'est sain ; sinon ils restent décrits, non bloquants,
+ * et l'exécuteur écarte ces items (quarantaine). Un problème de source (aucun enregistrement, trop peu) bloque toujours.
+ */
+function relaxPerRecordProblems(schema: unknown, records: Record<string, unknown>[], problems: Problem[]): void {
+  if (problems.some((p) => p.blocking && p.record === null)) return;
+  const bad = new Set(problems.filter((p) => p.blocking && p.record !== null).map((p) => p.record as number));
+  if (schema !== undefined) {
+    for (const [i, record] of records.entries()) {
+      if (bad.has(i)) continue;
+      const check = validateOutput(schema, record);
+      if (check.ok) continue;
+      bad.add(i);
+      if (problems.length < MAX_PROBLEMS_PER_SOURCE) problems.push({ record: i, code: 'schema_mismatch', message: 'sortie hors output_schema', blocking: true });
+    }
+  }
+  if (records.length > 0 && bad.size >= records.length) return;
+  for (const p of problems) if (p.record !== null) p.blocking = false;
 }
 
 function checkOutputSchema(schema: unknown, records: Record<string, unknown>[], problems: Problem[]): void {
@@ -247,13 +284,23 @@ class ParseCache {
 export function extractRecords(spec: DeclarativeSpec, response: ResponseInput, options: ExtractOptions = {}): ExtractResult {
   const limits = resolveLimits(spec.limits, options.limits);
   assertResponseSize(response.body, limits);
-  const ctx: Context = { limits, deadline: new Deadline(limits.timeoutMs, options.now), outputSchema: options.outputSchema };
+  const ctx: Context = { limits, deadline: new Deadline(limits.timeoutMs, options.now), outputSchema: options.outputSchema, itemPolicy: options.itemPolicy ?? 'strict' };
   const cache = new ParseCache(response.body, limits);
   const attempts: SourceAttempt[] = [];
+  /** Quarantaine : première source qui a des enregistrements, tous non conformes (aucun problème de source). */
+  let unsorted: { index: number; records: Record<string, unknown>[] } | undefined;
   for (const [index, source] of spec.sources.entries()) {
     const { attempt, records } = runSource(spec, source, cache, ctx);
     attempts.push(attempt);
     if (attempt.ok) return { ok: true, records, source_id: source.id, source_index: index, escalated: index > 0, attempts };
+    if (ctx.itemPolicy === 'quarantine' && unsorted === undefined && records.length > 0 && !attempt.problems.some((p) => p.blocking && p.record === null)) unsorted = { index, records };
+  }
+  // Quarantaine (D-49) : le blocage d'une source ne sert qu'à choisir un repli. Si aucune source n'a d'item conforme sur
+  // CETTE page, ses enregistrements sont rendus à l'exécuteur : le seuil de casse se décide sur le run entier (tri Ajv,
+  // `rejectionVerdict` : 0 conforme sur tout le run casse toujours), jamais page par page.
+  if (unsorted !== undefined) {
+    const source = spec.sources[unsorted.index] as SourceSpec;
+    return { ok: true, records: unsorted.records, source_id: source.id, source_index: unsorted.index, escalated: unsorted.index > 0, attempts };
   }
   return { ok: false, records: [], source_id: null, source_index: -1, escalated: false, attempts };
 }

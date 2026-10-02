@@ -26,6 +26,7 @@ export * from './subject-key.js';
 export * from './status.js';
 export * from './queue.js';
 export * from './retention/index.js';
+export * from './rejected.js';
 export * from './runs.js';
 export * from './schedules.js';
 export * from './webhooks.js';
