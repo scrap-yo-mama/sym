@@ -36,7 +36,7 @@ describe('job promptfoo', () => {
   test('image épinglée par empreinte, version sortie depuis plus de 7 jours (0.122.2, 2026-08-28)', () => {
     expect(PROMPTFOO_IMAGE).toMatch(/^ghcr\.io\/promptfoo\/promptfoo:0\.122\.2@sha256:[0-9a-f]{64}$/);
     expect(ARGS).toContain(PROMPTFOO_IMAGE);
-    expect(ARGS.slice(-12)).toEqual(expect.arrayContaining(['eval', '-c', '/bench/promptfooconfig.yaml', '--repeat', '3', '-o', '/out/promptfoo.json']));
+    expect(ARGS.slice(ARGS.indexOf(PROMPTFOO_IMAGE))).toEqual(expect.arrayContaining(['eval', '-c', '/bench/promptfooconfig.yaml', '--repeat', '3', '-o', '/out/promptfoo.json']));
   });
 
   test('configuration : un test par tâche et par modèle, fournisseur http vers le point d’accès du banc, assertion sur la référence', () => {

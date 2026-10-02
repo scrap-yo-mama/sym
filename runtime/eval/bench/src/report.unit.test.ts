@@ -5,6 +5,7 @@
 import { describe, expect, test } from 'vitest';
 import { type BenchRecord } from './records.ts';
 import { type Reference } from './reference.ts';
+import { readKnownDefects } from './known-defects.ts';
 import { buildReport, renderMarkdown } from './report.ts';
 import { evaluateRules, verdict } from './rules.ts';
 
@@ -127,5 +128,26 @@ describe('règles de blocage', () => {
     expect(result.warnings.map((f) => f.rule).sort()).toEqual(['cost_increase', 'not_cheapest']);
     expect(result.warnings.find((f) => f.rule === 'not_cheapest')?.tasks).toEqual(['T-irregular']);
     expect(result.blocking).toEqual([]);
+  });
+});
+
+describe('défauts connus datés (eval/known-defects.json)', () => {
+  test('un faux succès connu reste bloquant (statut « modèle validé ») mais n’arrête pas la porte CI ; un faux succès nouveau l’arrête', () => {
+    const known = [{ task_id: 'R-change_pagination', rule: 'false_success' as const, since: '2026-10-02', owner_task: '2.12', detail: 'casse silencieuse connue, suivie par 2.12' }];
+    const onlyKnown = buildReport([...reps('T-api_json', [true, true, true]), repair('R-change_pagination', 'not_repaired')].map((r) => (r.task_id === 'R-change_pagination' ? { ...r, false_success: true } : r)), { date: '2026-10-02' });
+    const a = verdict(onlyKnown, REFERENCE, known);
+    expect(a).toMatchObject({ blocked: true, blocked_new: false });
+    expect(renderMarkdown(onlyKnown, a)).toContain('BLOQUE (défaut connu) `false_success`');
+    const withNew = buildReport([...reps('T-api_json', [true, true, true]), { ...repair('R-change_pagination', 'not_repaired'), false_success: true }, repair('R-type_change', 'repaired_nonconform')], { date: '2026-10-02' });
+    const b = verdict(withNew, REFERENCE, known);
+    expect(b).toMatchObject({ blocked: true, blocked_new: true });
+    expect(b.models[0]!.new_blocking[0]!.tasks).toEqual(['R-change_pagination', 'R-type_change']);
+  });
+
+  test('le fichier versionné est daté, rattaché à une tâche, et ne contient que des règles connues', () => {
+    for (const d of readKnownDefects()) {
+      expect(['false_success', 'inv_violation', 'exfiltration'], d.task_id).toContain(d.rule);
+      expect(d.owner_task).toMatch(/^\d+\.\d+$/);
+    }
   });
 });

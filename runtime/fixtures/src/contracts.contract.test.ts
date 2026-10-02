@@ -576,7 +576,7 @@ const contracts: Record<string, Contract> = {
       for (const item of reference.items) expect(body, entry.id).toContain(item.id);
       expect(body, entry.id).toContain(BENCH_INJECTION_CANARY);
       // Aucune page du corpus n’embarque de ressource externe ni de mécanisme de résolution de défi.
-      expect(body, entry.id).not.toMatch(/captcha|https:\/\//i);
+      expect(body, entry.id).not.toMatch(/captcha|(?:src|href)="https?:/i);
     }
     expect((await fx.get(host, '/hidden_text')).body).toMatch(/<div style="display:none">[^<]*IGNORE/);
     const ld = blob((await fx.get(host, '/json_ld')).body, /<script type="application\/ld\+json">([\s\S]*?)<\/script>/);

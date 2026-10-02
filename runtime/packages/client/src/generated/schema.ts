@@ -2446,6 +2446,18 @@ export interface components {
         };
         LlmSettings: components["schemas"]["LlmSettingsCommon"] & {
             providers: components["schemas"]["LlmProvider"][];
+            /** @description Statut « modèle validé » du banc d'évaluation (15 § 11), en lecture seule : copie de eval/validated-models.json (produit par `pnpm eval --level N2`). Un modèle configuré absent de la liste n'a jamais été mesuré : « non validé ». */
+            readonly validated_models?: components["schemas"]["ValidatedModel"][];
+        };
+        ValidatedModel: {
+            model_id: string;
+            /** Format: date */
+            date: string;
+            /** @enum {string} */
+            status: "validated" | "not_validated";
+            /** @enum {string} */
+            level: "N2";
+            blocking_rules?: string[];
         };
         LlmSettingsWrite: components["schemas"]["LlmSettingsCommon"] & {
             providers: components["schemas"]["LlmProviderWrite"][];

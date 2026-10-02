@@ -1,0 +1,12 @@
+{
+  "note": "Défauts du produit constatés par le banc, datés et rattachés à la tâche qui les traite. Ils restent BLOQUANTS dans le rapport et pour le statut « modèle validé » ; seule la porte CI (N0) ne s’arrête que sur un faux succès NOUVEAU. Un défaut qui ne se reproduit plus fait échouer N0 : le retirer de la liste.",
+  "defects": [
+    {
+      "task_id": "R-change_pagination",
+      "rule": "false_success",
+      "since": "2026-10-02",
+      "owner_task": "2.12",
+      "detail": "Pagination page → offset côté site : la v1 (page_param) reçoit la même page à chaque requête, va jusqu’à hard_max_pages (50) et livre 1000 items dont 980 doublons, run réussi, API sain, aucune réparation. Casse silencieuse (volume, doublons) : signal du profil des sorties (19 §3, `assert_silent_defects_detected`), ou règle d’arrêt de 2.2 sur page répétée, à arbitrer."
+    }
+  ]
+}

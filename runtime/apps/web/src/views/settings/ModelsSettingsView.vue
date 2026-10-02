@@ -16,13 +16,20 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { LLM_PRESETS, LLM_ROLES, useLlmSettings, type LlmPreset } from '@/composables/useSettings';
 import { selectClass } from '@/lib/classes';
+import { modelValidation } from '@/lib/model-validation';
 
 const { t } = useI18n();
 const settings = useLlmSettings();
-const { providers, roles, saving, saveFailure, saved, outcomes, loading, failure, forbidden } = settings;
+const { providers, roles, validatedModels, saving, saveFailure, saved, outcomes, loading, failure, forbidden } = settings;
 
 onMounted(() => void settings.load());
 onServerPrefetch(() => settings.load());
+
+/** Libellé du statut du banc pour le modèle saisi (lecture seule). */
+function validationLabel(model: string): string {
+  const validation = modelValidation(validatedModels.value, model.trim());
+  return validation.status === 'validated' ? t('settings.models.validation.validated', { date: validation.date }) : t('settings.models.validation.notValidated');
+}
 
 function setRole(name: (typeof LLM_ROLES)[number], field: 'provider' | 'model', value: string): void {
   const current = roles[name] ?? { provider: '', model: '' };
@@ -109,6 +116,15 @@ function setRole(name: (typeof LLM_ROLES)[number], field: 'provider' | 'model', 
             <Input :id="`role-model-${role}`" autocomplete="off" :model-value="roles[role]?.model ?? ''" @update:model-value="(value: string | number) => setRole(role, 'model', String(value))" />
           </div>
           <Button type="button" variant="outline" :disabled="!roles[role]?.provider || !roles[role]?.model" @click="settings.test(role)">{{ t('settings.test') }}</Button>
+          <p
+            v-if="roles[role]?.model?.trim()"
+            class="text-sm sm:col-span-4"
+            :class="modelValidation(validatedModels, roles[role]!.model.trim()).status === 'validated' ? 'text-foreground' : 'text-muted-foreground'"
+            :title="t('settings.models.validation.hint')"
+            data-testid="model-validation"
+          >
+{{ validationLabel(roles[role]!.model) }}
+</p>
           <div class="sm:col-span-4"><TestOutcome :outcome="outcomes[role]" /></div>
         </div>
       </div>

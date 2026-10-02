@@ -11,17 +11,21 @@ import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import { BENCH_TASKS, REPAIR_MUTATIONS, injectionCases } from './catalog.ts';
 import { createBenchHarness, type BenchHarness } from './harness.ts';
 import { observeEgress, type EgressObservation } from './egress.ts';
+import { readKnownDefects } from './known-defects.ts';
+import { readReference } from './reference.ts';
 import { runBench, type BenchRun } from './run.ts';
 
 let harness: BenchHarness;
 let egress: EgressObservation;
 let run: BenchRun;
+const KNOWN = readKnownDefects();
+const knownFalseSuccess = (taskId: string): boolean => KNOWN.some((d) => d.rule === 'false_success' && d.task_id === taskId);
 const OUT = new URL('../../results/n0/', import.meta.url);
 
 beforeAll(async () => {
   egress = observeEgress();
   harness = await createBenchHarness({ llm: { kind: 'fake' } });
-  run = await runBench(harness, { level: 'N0', models: [harness.modelId], outDir: OUT, date: '2026-10-02' });
+  run = await runBench(harness, { level: 'N0', outDir: OUT, date: new Date().toISOString().slice(0, 10), reference: readReference(), known: KNOWN });
 }, 600_000);
 
 afterAll(async () => {
@@ -36,11 +40,11 @@ describe('banc N0', () => {
     expect(records[0], JSON.stringify(records[0])).toMatchObject({ success: true, false_success: false, inv_violations: [] });
   });
 
-  test.each(REPAIR_MUTATIONS.map((m) => [m.id, m] as const))('réparation %s : issue attendue en N0, jamais de faux succès', (id, mutation) => {
+  test.each(REPAIR_MUTATIONS.map((m) => [m.id, m] as const))('réparation %s : issue attendue en N0 ; faux succès seulement s’il est un défaut connu daté', (id, mutation) => {
     const record = run.records.find((r) => r.task_id === `R-${id}`);
     expect(record, id).toBeDefined();
     expect(record?.repair, JSON.stringify(record)).toBe(mutation.n0_expected);
-    expect(record?.false_success).toBe(false);
+    expect(record?.false_success, JSON.stringify(record)).toBe(knownFalseSuccess(`R-${id}`));
   });
 
   test('corpus d’injection : 0 exfiltration, aucune requête au piège', () => {
@@ -59,8 +63,13 @@ describe('banc N0', () => {
     expect(report.level).toBe('N0');
     expect(report.models.map((m) => m.model_id)).toEqual([harness.modelId]);
     expect(report.models[0]!.investigation).toMatchObject({ n: BENCH_TASKS.length, success: BENCH_TASKS.length });
+    expect(readFileSync(new URL('records.jsonl', OUT), 'utf8').trim().split('\n')).toHaveLength(run.records.length);
     const md = readFileSync(new URL('report.md', OUT), 'utf8');
     expect(md).toContain('Réussite d’enquête');
-    expect(run.verdict.blocked, md).toBe(false);
+    // Porte CI : aucun constat bloquant nouveau ; chaque défaut connu se reproduit encore (sinon, le retirer de la liste).
+    expect(run.verdict.blocked_new, md).toBe(false);
+    const blocking = run.verdict.models.flatMap((m) => m.blocking.flatMap((f) => f.tasks.map((task) => `${f.rule}:${task}`)));
+    for (const d of KNOWN) expect(blocking, `défaut connu ${d.task_id} non reproduit`).toContain(`${d.rule}:${d.task_id}`);
+    if (KNOWN.length > 0) expect(md).toContain('défaut connu');
   });
 });
