@@ -15,7 +15,9 @@ import { RouterLink, useRouter } from 'vue-router';
 import TextField from '@/components/account/TextField.vue';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardDescription, CardHeader } from '@/components/ui/card';
+import PageHeader from '@/components/brand/PageHeader.vue';
+import SymIllustration from '@/components/brand/SymIllustration.vue';
+import { Card, CardContent } from '@/components/ui/card';
 import { postSetup } from '@/composables/useAccountFlows';
 import { signIn } from '@/composables/useSession';
 import { takeFieldValue, readFieldValue } from '@/lib/form-field';
@@ -73,62 +75,69 @@ async function goOn(): Promise<void> {
 </script>
 
 <template>
-  <section class="mx-auto flex max-w-xl flex-col gap-6 py-10">
-    <Card v-if="showNext" data-testid="setup-next">
-      <CardHeader>
-        <h1 data-route-heading tabindex="-1" class="text-2xl leading-none font-semibold tracking-tight">{{ t('setup.next.title') }}</h1>
-        <CardDescription>{{ t('setup.next.intro') }}</CardDescription>
-      </CardHeader>
-      <CardContent class="flex flex-col gap-4">
-        <ol class="flex flex-col gap-3">
-          <li v-for="step in ['models', 'proxies', 'alerts'] as const" :key="step" class="flex flex-wrap items-center justify-between gap-3 rounded-lg border p-3">
-            <span class="text-sm">{{ t(`setup.next.${step}`) }}</span>
-            <Button as-child variant="outline" size="sm"><RouterLink :to="`/settings/${step}`">{{ t('setup.next.open') }}</RouterLink></Button>
-          </li>
-        </ol>
-        <div><Button as-child><RouterLink to="/">{{ t('setup.next.later') }}</RouterLink></Button></div>
-      </CardContent>
-    </Card>
+  <section class="mx-auto grid max-w-6xl gap-7 py-8 lg:grid-cols-2 lg:items-start">
+    <div v-if="showNext" class="flex flex-col gap-6" data-testid="setup-next">
+      <PageHeader :title="t('setup.next.title')" :kicker="t('brand.kicker.setupNext')">
+        <p class="sym-lead">{{ t('setup.next.intro') }}</p>
+      </PageHeader>
+      <Card>
+        <CardContent class="flex flex-col gap-4">
+          <ol class="flex flex-col gap-3">
+            <li v-for="step in ['models', 'proxies', 'alerts'] as const" :key="step" class="flex flex-wrap items-center justify-between gap-3 rounded-lg border p-3">
+              <span class="text-sm">{{ t(`setup.next.${step}`) }}</span>
+              <Button as-child variant="outline" size="sm"><RouterLink :to="`/settings/${step}`">{{ t('setup.next.open') }}</RouterLink></Button>
+            </li>
+          </ol>
+          <div><Button as-child><RouterLink to="/">{{ t('setup.next.later') }}</RouterLink></Button></div>
+        </CardContent>
+      </Card>
+    </div>
 
-    <Card v-else-if="fingerprint !== null" data-testid="setup-done">
-      <CardHeader>
-        <h1 data-route-heading tabindex="-1" class="text-2xl leading-none font-semibold tracking-tight">{{ t('setup.done.title') }}</h1>
-      </CardHeader>
-      <CardContent class="flex flex-col gap-4">
-        <Alert v-if="!signedIn" variant="destructive"><AlertDescription>{{ t('setup.signInFailed') }}</AlertDescription></Alert>
-        <div role="status" class="flex flex-col gap-2 rounded-lg border-2 p-3">
-          <p class="text-sm font-medium">{{ t('setup.done.fingerprint') }}</p>
-          <code class="font-mono text-lg break-all select-all" data-testid="key-fingerprint">{{ fingerprint }}</code>
-          <p class="text-sm text-muted-foreground">{{ t('setup.done.onlyOnce') }}</p>
-        </div>
-        <p class="text-sm font-medium" data-testid="key-reminder">{{ t('setup.done.reminder') }}</p>
-        <label class="flex min-h-11 items-center gap-3 text-sm">
-          <input v-model="acknowledged" type="checkbox" class="size-5" data-testid="key-acknowledge" />
-          <span>{{ t('setup.done.acknowledge') }}</span>
-        </label>
-        <div>
-          <Button type="button" class="aria-disabled:pointer-events-none aria-disabled:opacity-50" :aria-disabled="!acknowledged" data-testid="setup-continue" @click="acknowledged && goOn()">{{ t('setup.done.continue') }}</Button>
-        </div>
-      </CardContent>
-    </Card>
+    <div v-else-if="fingerprint !== null" class="flex flex-col gap-6" data-testid="setup-done">
+      <PageHeader :title="t('setup.done.title')" :kicker="t('brand.kicker.setup')" />
+      <Card>
+        <CardContent class="flex flex-col gap-4">
+          <Alert v-if="!signedIn" variant="destructive"><AlertDescription>{{ t('setup.signInFailed') }}</AlertDescription></Alert>
+          <div role="status" class="flex flex-col gap-2 rounded-lg border-2 p-3">
+            <p class="text-sm font-medium">{{ t('setup.done.fingerprint') }}</p>
+            <code class="font-mono text-lg break-all select-all" data-testid="key-fingerprint">{{ fingerprint }}</code>
+            <p class="text-sm text-muted-foreground">{{ t('setup.done.onlyOnce') }}</p>
+          </div>
+          <p class="text-sm font-medium" data-testid="key-reminder">{{ t('setup.done.reminder') }}</p>
+          <label class="flex min-h-11 items-center gap-3 text-sm">
+            <input v-model="acknowledged" type="checkbox" class="size-5" data-testid="key-acknowledge" />
+            <span>{{ t('setup.done.acknowledge') }}</span>
+          </label>
+          <div>
+            <Button type="button" class="aria-disabled:pointer-events-none aria-disabled:opacity-50" :aria-disabled="!acknowledged" data-testid="setup-continue" @click="acknowledged && goOn()">{{ t('setup.done.continue') }}</Button>
+          </div>
+        </CardContent>
+      </Card>
+    </div>
 
-    <Card v-else>
-      <CardHeader>
-        <h1 data-route-heading tabindex="-1" class="text-2xl leading-none font-semibold tracking-tight">{{ t('setup.title') }}</h1>
-        <CardDescription>{{ t('setup.intro') }}</CardDescription>
-      </CardHeader>
-      <CardContent>
-        <form class="flex flex-col gap-4" novalidate data-testid="setup-form" @submit.prevent="submit">
-          <Alert v-if="errorText" variant="destructive" data-testid="setup-error"><AlertDescription>{{ errorText }}</AlertDescription></Alert>
-          <TextField id="setup-token" v-model="token" :label="t('setup.token')" :hint="t('setup.tokenHint')" type="password" name="token" autocomplete="off" required />
-          <TextField id="setup-email" v-model="email" :label="t('setup.email')" type="email" name="email" autocomplete="username" required />
-          <TextField id="setup-name" v-model="displayName" :label="t('setup.displayName')" :hint="t('setup.displayNameHint')" name="displayName" autocomplete="name" />
-          <TextField id="setup-password" v-model="password" :label="t('setup.password')" :hint="t('setup.passwordHint')" type="password" name="password" autocomplete="new-password" required />
-          <Button type="submit" class="aria-disabled:pointer-events-none aria-disabled:opacity-50" :aria-disabled="submitting" :aria-busy="submitting">
-            {{ submitting ? t('setup.submitting') : t('setup.submit') }}
-          </Button>
-        </form>
-      </CardContent>
-    </Card>
+    <div v-else class="flex flex-col gap-6">
+      <PageHeader :title="t('setup.title')" :kicker="t('brand.kicker.setup')">
+        <p class="sym-lead">{{ t('setup.intro') }}</p>
+      </PageHeader>
+      <Card>
+        <CardContent>
+          <form class="flex flex-col gap-4" novalidate data-testid="setup-form" @submit.prevent="submit">
+            <Alert v-if="errorText" variant="destructive" data-testid="setup-error"><AlertDescription>{{ errorText }}</AlertDescription></Alert>
+            <TextField id="setup-token" v-model="token" :label="t('setup.token')" :hint="t('setup.tokenHint')" type="password" name="token" autocomplete="off" required />
+            <TextField id="setup-email" v-model="email" :label="t('setup.email')" type="email" name="email" autocomplete="username" required />
+            <TextField id="setup-name" v-model="displayName" :label="t('setup.displayName')" :hint="t('setup.displayNameHint')" name="displayName" autocomplete="name" />
+            <TextField id="setup-password" v-model="password" :label="t('setup.password')" :hint="t('setup.passwordHint')" type="password" name="password" autocomplete="new-password" required />
+            <Button type="submit" class="aria-disabled:pointer-events-none aria-disabled:opacity-50" :aria-disabled="submitting" :aria-busy="submitting">
+              {{ submitting ? t('setup.submitting') : t('setup.submit') }}
+            </Button>
+          </form>
+        </CardContent>
+      </Card>
+    </div>
+
+    <!-- Jamais de bulle sur une erreur, un consentement ou la clé affichée une seule fois (20 § 2.3) : elle n'accompagne que le formulaire sans erreur et la suite -->
+    <SymIllustration v-if="showNext" class="hidden lg:block" :bubble="t('brand.bubble.done')" />
+    <SymIllustration v-else-if="fingerprint === null" class="hidden lg:block" :bubble="errorText ? undefined : t('brand.bubble.onIt')" />
+    <SymIllustration v-else class="hidden lg:block" />
   </section>
 </template>

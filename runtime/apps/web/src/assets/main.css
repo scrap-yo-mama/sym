@@ -36,6 +36,13 @@
   --color-ring: var(--ring);
   --color-signature: var(--signature);
   --color-signature-foreground: var(--signature-foreground);
+  --color-sym-ink: var(--sym-ink);
+  --color-sym-paper: var(--sym-paper);
+  --color-sym-blue: var(--sym-blue);
+  --color-sym-orange: var(--sym-orange);
+  --color-sym-lilac: var(--sym-lilac);
+  --color-sym-yellow: var(--sym-yellow);
+  --color-sym-aqua: var(--sym-aqua);
   --color-nav: var(--nav);
   --color-nav-foreground: var(--nav-foreground);
   --color-nav-muted-foreground: var(--nav-muted-foreground);
@@ -90,4 +97,20 @@
  */
 @utility sym-error {
   @apply w-fit max-w-full rounded-md bg-destructive px-2 py-1 text-sm font-medium text-destructive-foreground;
+}
+
+/*
+ * Langage visuel des planches (3.21, D-60, 20 § 1.2) pour les écrans sans planche : titre Bricolage de 44 à 54 px, pastille
+ * de rubrique, phrase d'appui. Les valeurs viennent de la maquette (Main.dc.html) ; aucune couleur n'est écrite ici.
+ */
+@utility sym-title {
+  @apply font-display text-[2.75rem] leading-[1.02] font-extrabold tracking-[-0.03em] break-words sm:text-[3.375rem];
+}
+
+@utility sym-kicker {
+  @apply w-fit max-w-full rounded-full border-[1.5px] border-foreground bg-card px-3 py-1 text-xs font-bold tracking-wide text-card-foreground uppercase;
+}
+
+@utility sym-lead {
+  @apply max-w-[520px] text-[17px] leading-normal text-muted-foreground;
 }

@@ -26,13 +26,13 @@ onServerPrefetch(() => settings.load());
 <template>
   <section class="flex flex-col gap-6" aria-labelledby="security-heading">
     <header class="flex flex-col gap-1">
-      <h1 id="security-heading" data-route-heading tabindex="-1" class="text-2xl font-semibold tracking-tight">{{ t('instance.security.title') }}</h1>
+      <h1 id="security-heading" data-route-heading tabindex="-1" class="sym-title">{{ t('instance.security.title') }}</h1>
       <p class="text-sm text-muted-foreground">{{ t('instance.security.intro') }}</p>
     </header>
 
     <p v-if="settings.loading.value && !settings.data.value" role="status" class="text-sm text-muted-foreground">{{ t('ui.loading') }}</p>
     <Alert v-else-if="settings.failure.value" variant="destructive" data-testid="security-load-error"><AlertDescription>{{ t(settings.failure.value) }}</AlertDescription></Alert>
-    <form v-else class="flex flex-col gap-4 rounded-xl border p-4" novalidate data-testid="security-form" @submit.prevent="settings.save()">
+    <form v-else class="flex flex-col gap-4 rounded-xl border bg-card p-4" novalidate data-testid="security-form" @submit.prevent="settings.save()">
       <Alert v-if="failure" variant="destructive" data-testid="security-error"><AlertDescription>{{ t(failure) }}</AlertDescription></Alert>
       <p v-if="saved" role="status" class="text-sm">{{ t('common.saved') }}</p>
       <TextField id="security-idle" v-model="form.idle" :label="t('instance.security.idle')" type="number" min="5" max="720" name="idle" class="max-w-40" inputmode="numeric" required />

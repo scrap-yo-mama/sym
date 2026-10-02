@@ -11,6 +11,8 @@ import { computed, onMounted, onServerPrefetch } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { RouterLink } from 'vue-router';
 import RunStateBadge from '@/components/runs/RunStateBadge.vue';
+import PageHeader from '@/components/brand/PageHeader.vue';
+import SymIllustration from '@/components/brand/SymIllustration.vue';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -42,10 +44,9 @@ const outcomeOf = (run: RunSummary): string => {
 
 <template>
   <section class="mx-auto flex max-w-7xl flex-col gap-4 py-8" aria-labelledby="runs-heading">
-    <header class="flex flex-col gap-1">
-      <h1 id="runs-heading" data-route-heading tabindex="-1" class="text-2xl font-semibold tracking-tight">{{ t('runs.title') }}</h1>
-      <p class="text-sm text-muted-foreground">{{ t('runs.intro') }}</p>
-    </header>
+    <PageHeader heading-id="runs-heading" :title="t('runs.title')" :kicker="t('brand.kicker.runs')">
+      <p class="sym-lead">{{ t('runs.intro') }}</p>
+    </PageHeader>
 
     <form class="flex flex-wrap items-end gap-3" novalidate data-testid="runs-filters" @submit.prevent="apply()">
       <fieldset class="flex flex-wrap items-end gap-3">
@@ -91,13 +92,14 @@ const outcomeOf = (run: RunSummary): string => {
       </AlertDescription>
     </Alert>
 
-    <div v-else-if="runs.length === 0" class="flex flex-col items-start gap-2 rounded-xl border p-6" data-testid="runs-empty">
+    <div v-else-if="runs.length === 0" class="flex flex-col items-start gap-3 rounded-xl border bg-card p-6" data-testid="runs-empty">
+      <SymIllustration compact class="max-w-sm" />
       <h2 class="text-lg font-semibold">{{ filtered ? t('runs.emptyFiltered.title') : t('runs.empty.title') }}</h2>
       <p class="text-sm text-muted-foreground">{{ filtered ? t('runs.emptyFiltered.text') : t('runs.empty.text') }}</p>
       <Button v-if="!filtered" as-child><RouterLink to="/apis/new">{{ t('runs.empty.button') }}</RouterLink></Button>
     </div>
 
-    <div v-else class="relative overflow-x-auto rounded-xl border">
+    <div v-else class="relative overflow-x-auto rounded-xl border bg-card">
       <table class="w-full text-left text-sm" data-testid="runs-table" :aria-busy="loading">
         <caption class="sr-only">{{ t('runs.caption') }}</caption>
         <thead class="border-b bg-muted/50">

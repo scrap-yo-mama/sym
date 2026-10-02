@@ -46,13 +46,13 @@ async function createCode(event: Event): Promise<void> {
 <template>
   <section class="flex flex-col gap-6" aria-labelledby="extension-heading">
     <header class="flex flex-col gap-1">
-      <h1 id="extension-heading" data-route-heading tabindex="-1" class="text-2xl font-semibold tracking-tight">{{ t('settings.extension.title') }}</h1>
+      <h1 id="extension-heading" data-route-heading tabindex="-1" class="sym-title">{{ t('settings.extension.title') }}</h1>
       <p class="text-sm text-muted-foreground">{{ t('settings.extension.intro') }}</p>
     </header>
 
     <Alert v-if="failure" id="extension-failure" variant="destructive" data-testid="extension-failure"><AlertDescription>{{ t(failure) }}</AlertDescription></Alert>
 
-    <form class="flex flex-col gap-3 rounded-xl border p-4" novalidate data-testid="pairing-form" @submit.prevent="createCode">
+    <form class="flex flex-col gap-3 rounded-xl border bg-card p-4" novalidate data-testid="pairing-form" @submit.prevent="createCode">
       <h2 class="text-lg font-semibold">{{ t('settings.extension.pairing') }}</h2>
       <p class="text-sm text-muted-foreground">{{ t('settings.extension.pairingHelp') }}</p>
       <div class="flex flex-col gap-1">
