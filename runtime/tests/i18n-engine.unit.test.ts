@@ -110,7 +110,7 @@ describe('frontière langue d’interface / requêtes vers un site (21 § 6)', (
 
   test('la seule langue envoyée à un site est la constante du moteur (ENGINE_ACCEPT_LANGUAGE), posée par le client HTTP', () => {
     const session = readFileSync(join(root, 'packages/core/src/net/modes/session.ts'), 'utf8');
-    expect(session).toMatch(/headers\.set\('accept-language', ENGINE_ACCEPT_LANGUAGE\)/);
+    expect(session).toMatch(/headers\.delete\('accept-language'\);\s*if \(ENGINE_ACCEPT_LANGUAGE !== null\) headers\.set\('accept-language', ENGINE_ACCEPT_LANGUAGE\)/);
     const hits = engineCode().filter((s) => /['"]accept-language['"]/i.test(s.code) && s.file !== 'packages/core/src/net/modes/session.ts').map((s) => s.file);
     // Les listes d'en-têtes inter-origines (bac à sable, fetch) NOMMENT l'en-tête pour le filtrer ; aucun ne l'écrit.
     for (const file of hits) expect(readFileSync(join(root, file), 'utf8'), file).not.toMatch(/\.set\(\s*['"]accept-language['"]/i);

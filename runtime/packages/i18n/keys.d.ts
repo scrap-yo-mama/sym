@@ -794,6 +794,7 @@ export type MessageKey =
   | 'mcp.user.prompt.resume_api.title'
   | 'mcp.user.prompt.review_catalog.description'
   | 'mcp.user.prompt.review_catalog.title'
+  | 'mcp.user.sym_signature'
   | 'narrative.access_report.absent'
   | 'narrative.access_report.allowed'
   | 'narrative.access_report.disallowed'

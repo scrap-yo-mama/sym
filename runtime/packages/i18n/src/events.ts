@@ -102,12 +102,45 @@ export function sentenceMatcher(catalogs: Readonly<Record<string, Catalog>>): (t
   return (text) => text.length >= 16 && patterns.some((re) => re.test(text));
 }
 
-/** Chemins des valeurs de `payload` qui sont des phrases du catalogue (liste vide : codes et paramètres seulement). */
-export function findRenderedSentences(payload: unknown, matches: (text: string) => boolean, path = '$'): string[] {
-  if (typeof payload === 'string') return matches(payload) ? [path] : [];
-  if (Array.isArray(payload)) return payload.flatMap((v, i) => findRenderedSentences(v, matches, `${path}[${i}]`));
-  if (typeof payload === 'object' && payload !== null) return Object.entries(payload).flatMap(([k, v]) => findRenderedSentences(v, matches, `${path}.${k}`));
-  return [];
+/**
+ * Champs d'une charge qui portent des DONNÉES collectées sur un site (échantillon, schéma proposé, signaux d'accès, offre de
+ * paiement, liens et règles lus sur le site), jamais une phrase produite par le code. La garde « codes seulement » ne les
+ * contrôle pas : un texte de site peut ressembler à un message du catalogue (« Too many attempts, try again later. » sur une
+ * FAQ) sans être une phrase rendue, et une donnée ne se traduit ni ne se refuse (21 § 6).
+ */
+export const COLLECTED_DATA_FIELDS: ReadonlySet<string> = new Set([
+  'sample',
+  'samples',
+  'items',
+  'records',
+  'output_schema',
+  'proposed_schema',
+  'signals',
+  'usage_signals',
+  'payment',
+  'payment_offer',
+  'declared',
+  'terms_url',
+  'official_api_url',
+  'rule',
+  'url',
+]);
+
+/**
+ * Chemins des valeurs de `payload` qui sont des phrases du catalogue (liste vide : codes et paramètres seulement). `skip` : noms de
+ * champs dont la valeur entière (sous-arbre compris) est une donnée collectée, jamais contrôlée (`COLLECTED_DATA_FIELDS`).
+ */
+export function findRenderedSentences(payload: unknown, matches: (text: string) => boolean, options: { readonly skip?: ReadonlySet<string> } = {}): string[] {
+  const skip = options.skip;
+  const walk = (value: unknown, path: string): string[] => {
+    if (typeof value === 'string') return matches(value) ? [path] : [];
+    if (Array.isArray(value)) return value.flatMap((v, i) => walk(v, `${path}[${i}]`));
+    if (typeof value === 'object' && value !== null) {
+      return Object.entries(value).flatMap(([k, v]) => (skip?.has(k) === true ? [] : walk(v, `${path}.${k}`)));
+    }
+    return [];
+  };
+  return walk(payload, '$');
 }
 
 /** Clés d'un contrat d'événement sortant (webhook) qui ne doivent jamais exister : une phrase n'y a pas sa place (M10). */

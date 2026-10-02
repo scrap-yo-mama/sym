@@ -3,7 +3,8 @@
 // 21 § 6, 21b M8), étage S : vrai Chromium 153 (Playwright 1.63) sur une fixture qui ENREGISTRE les en-têtes reçus et ce que la page
 // voit d'elle-même (langues, fuseau).
 // - la valeur attendue est celle d'un Chromium VIERGE du même navigateur (contexte sans aucun réglage), lue sur le moteur, jamais écrite
-//   ici ; `ENGINE_ACCEPT_LANGUAGE` (ce que le client HTTP envoie) lui est égal ;
+//   ici ; `ENGINE_ACCEPT_LANGUAGE` (ce que le client HTTP envoie, `null` = aucun en-tête) lui est égal SUR TOUTE PLATEFORME (image Linux,
+//   CI ubuntu, poste macOS : un Chromium vierge n'envoie aucun `Accept-Language`), et le rapport d'accès affiche la valeur reçue ;
 // - E1 (client HTTP, y compris quand une stratégie pose son propre `Accept-Language`), E2/E3 (contexte de run) et Chromium agentique
 //   (E5/E6) envoient EXACTEMENT cette valeur, identique d'un essai à l'autre ;
 // - la langue de l'interface et le fuseau d'un compte (ici : un compte `qaa`, langue d'usage local qu'aucune machine n'a, fuseau
@@ -21,7 +22,7 @@ vi.hoisted(() => {
   process.env['DEBUG'] = [process.env['DEBUG'], 'pw:protocol'].filter(Boolean).join(',');
 });
 
-import { ENGINE_ACCEPT_LANGUAGE } from '@runtime/core/access';
+import { accessReportView, buildAccessReport, ENGINE_ACCEPT_LANGUAGE, RobotsGate, sessionAccessProbe, sessionRobotsFetcher } from '@runtime/core/access';
 import * as net from '@runtime/core/net';
 import { openBrowserEgress, openNetworkSession, startEgressProxy, type BrowserEgress, type EgressProxy, type SsrfGuard } from '@runtime/core/net';
 import { isValidTimeZone, resolveLocale } from '@runtime/i18n';
@@ -154,11 +155,11 @@ async function virgin(): Promise<NonNullable<typeof real>> {
 }
 
 describe('assert_accept_language_engine_real : la langue envoyée est celle du moteur, jamais celle de l’interface', () => {
-  test('la valeur de référence est celle d’un Chromium vierge ; sur l’image (Linux), ENGINE_ACCEPT_LANGUAGE (client HTTP) lui est égale', async () => {
+  test('la valeur de référence est celle d’un Chromium vierge ; ENGINE_ACCEPT_LANGUAGE (client HTTP) lui est égale sur toute plateforme', async () => {
     const ref = await virgin();
-    // L'image (Linux, sans langue d'environnement) : Chromium envoie `en-US,en;q=0.9`. Sur un poste de développement, la langue du système
-    // peut changer cette valeur (ou la supprimer) : la constante est alors constatée sur Linux seulement (CI, image).
-    if (process.platform === 'linux') expect(ref.header).toBe(ENGINE_ACCEPT_LANGUAGE);
+    // Constaté sur l'image (Linux, LANG=C.UTF-8), sur la CI ubuntu et sur macOS : un Chromium vierge n'envoie AUCUN `Accept-Language`
+    // (`navigator.languages` vaut pourtant ['en-US']). Contrôle inconditionnel : E1 envoie exactement ce que le moteur envoie.
+    expect(ref.header).toBe(ENGINE_ACCEPT_LANGUAGE ?? '');
     expect(ref.self.languages.length).toBeGreaterThan(0);
     // Le compte `fr` de l'interface n'a rien changé au moteur : la résolution de langue de l'UI est un autre monde.
     expect(resolveLocale({ surface: 'console', user: UI_USER.locale }, ['en', 'fr', UI_USER.locale]).locale).toBe(UI_USER.locale);
@@ -178,7 +179,29 @@ describe('assert_accept_language_engine_real : la langue envoyée est celle du m
     } finally {
       await session.close();
     }
-    expect(acceptLanguages('/api')).toEqual([ENGINE_ACCEPT_LANGUAGE, ENGINE_ACCEPT_LANGUAGE, ENGINE_ACCEPT_LANGUAGE]);
+    const ref = await virgin();
+    // E1 envoie ce qu'un Chromium vierge envoie (absence comprise), quoi que pose la stratégie.
+    expect(acceptLanguages('/api')).toEqual([ref.header, ref.header, ref.header]);
+  });
+
+  test('rapport d’accès : la langue affichée est celle reçue par le site (mesurée), identique à celle d’un Chromium vierge', async () => {
+    const ref = await virgin();
+    seen = [];
+    const identity = await robotIdentity({ warn: () => undefined })();
+    const robotsSession = openNetworkSession({ rung: { mode: 'direct' }, guard, userAgent: identity.userAgent });
+    const gate = new RobotsGate({ fetch: sessionRobotsFetcher(robotsSession) });
+    const session = openNetworkSession({ rung: { mode: 'direct' }, guard, checkUrl: gate.checkUrl, userAgent: identity.userAgent });
+    try {
+      const report = await buildAccessReport({ url: base('/api'), gate, probe: sessionAccessProbe(session), signal, probeLlmsTxt: false });
+      const shown = accessReportView(report).accept_language;
+      const received = acceptLanguages('/api');
+      expect(received.length).toBeGreaterThan(0);
+      for (const header of received) expect(shown ?? '').toBe(header);
+      expect(shown ?? '').toBe(ref.header);
+    } finally {
+      await session.close();
+      await robotsSession.close();
+    }
   });
 
   test('E2/E3 (contexte de run) : document et sous-ressource portent la valeur du moteur, la page voit les langues et le fuseau réels', async () => {

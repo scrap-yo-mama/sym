@@ -1875,8 +1875,8 @@ export interface components {
                 kind: string;
                 value: string;
             }[];
-            /** @description `Accept-Language` effectif envoyé aux sites cibles : celui d'un Chromium vierge de l'image, le même pour le client HTTP et pour le navigateur (21 § 6). Jamais la langue de l'interface, du compte ou du run. */
-            accept_language?: string;
+            /** @description `Accept-Language` effectif envoyé aux sites cibles : celui d'un Chromium vierge de l'image, le même pour le client HTTP et pour le navigateur (21 § 6). Jamais la langue de l'interface, du compte ou du run. `null` : aucun en-tête (un Chromium vierge de l'image n'en envoie pas). */
+            accept_language?: string | null;
             llms_txt?: boolean;
             payment_offer?: string | null;
             official_api_url?: string | null;

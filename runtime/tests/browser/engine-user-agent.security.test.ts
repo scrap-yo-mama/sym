@@ -238,7 +238,7 @@ describe('assert_user_agent_engine_real : le User-Agent est celui du moteur emba
     expect(installedEngineIdentity().version).toBe(browserVersion);
   });
 
-  test('E1 (client HTTP) : User-Agent exactement celui du moteur, Accept et Accept-Language de navigateur, pas de From ni de jeton', async () => {
+  test('E1 (client HTTP) : User-Agent exactement celui du moteur, Accept de navigateur, Accept-Language du moteur (aucun), pas de From ni de jeton', async () => {
     seen = [];
     const identity = await identityOf();
     expect(identity.userAgent).toBe(expectedUserAgent(browserVersion));
@@ -256,7 +256,8 @@ describe('assert_user_agent_engine_real : le User-Agent est celui du moteur emba
     for (const r of requests) {
       expect(r.headers['user-agent']).toBe(expectedUserAgent(browserVersion));
       expect(String(r.headers['user-agent'])).not.toMatch(/HeadlessChrome|Scrapyomama/);
-      expect(r.headers['accept-language']).toBe('en-US,en;q=0.9');
+      // Un Chromium vierge n'envoie aucun Accept-Language (assert_accept_language_engine_real) : E1 non plus.
+      expect(r.headers['accept-language']).toBeUndefined();
       expect(r.headers['from']).toBeUndefined();
     }
     expect(requests[0]!.headers['accept']).toMatch(/^text\/html,application\/xhtml\+xml,application\/xml;q=0\.9/);

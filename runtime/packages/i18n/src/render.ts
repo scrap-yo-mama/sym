@@ -3,7 +3,7 @@
 // (vue-i18n 11) : `@intlify/core-base` côté serveur (u6 R3). Code inconnu : texte générique localisé qui cite le code,
 // jamais la clé brute. Repli chaîne par chaîne sur `en` ; `narrative.light.*` est omis, jamais remplacé (21 § 2).
 import { compile, createCoreContext, fallbackWithLocaleChain, resolveValue, translate, type CoreContext } from '@intlify/core-base';
-import { flatten, type Catalog } from './catalog.js';
+import { flatten, GHOST, type Catalog } from './catalog.js';
 import { pluralRule } from './plural.js';
 import { SOURCE_LOCALE, type Registry } from './registry.js';
 
@@ -19,6 +19,14 @@ export interface Renderer {
   /** Langues chargées. */
   readonly locales: readonly string[];
 }
+
+/**
+ * Signature de SYM sur les surfaces texte (MCP, CLI, M12) : `{sym}` dans un message devient la valeur de cette clé, rendue avec le
+ * fantôme (U+1F47B, fourni par le code, jamais présent dans un catalogue) : « SYM 👻 : » en `fr`, « SYM 👻: » en `en`. La ponctuation
+ * est une donnée de chaque catalogue (une 3e langue l'apporte par fichier). La console et l'extension passent leur propre `sym`
+ * (composant SymSignature de packages/ui, SVG `aria-hidden`).
+ */
+export const SYM_SIGNATURE_KEY = 'mcp.user.sym_signature';
 
 /** Clé du texte générique d'un code inconnu (serveur plus récent que le client, code retiré, faute de frappe). */
 export const UNKNOWN_CODE_KEY = 'srv.unknown_code';
@@ -76,10 +84,16 @@ export function createRenderer(catalogs: Readonly<Record<string, Catalog>>, regi
   }
 
   const has = (key: string, locale: string): boolean => flat.get(locale)?.has(key) === true;
+  const message = (key: string, locale: string): string => flat.get(locale)?.get(key) ?? flat.get(SOURCE_LOCALE)?.get(key) ?? '';
+  /** `{sym}` des surfaces texte : la signature de la langue, ou `SYM 👻:` si aucun catalogue ne la porte. */
+  const signature = (locale: string): string =>
+    has(SYM_SIGNATURE_KEY, locale) || has(SYM_SIGNATURE_KEY, SOURCE_LOCALE) ? run(SYM_SIGNATURE_KEY, {}, locale) : `SYM ${GHOST}:`;
 
   function run(key: string, params: Params, locale: string): string {
     const plural = pluralOf(params);
-    const named = Object.fromEntries(Object.entries(params).map(([k, v]) => [k, typeof v === 'string' || typeof v === 'number' ? v : v === null || v === undefined ? '' : String(v)]));
+    const named: Record<string, string | number> = Object.fromEntries(Object.entries(params).map(([k, v]) => [k, typeof v === 'string' || typeof v === 'number' ? v : v === null || v === undefined ? '' : String(v)]));
+    if (!('sym' in params) && key !== SYM_SIGNATURE_KEY && message(key, locale).includes('{sym}')) named['sym'] = signature(locale);
+    if (key === SYM_SIGNATURE_KEY && !('ghost' in params)) named['ghost'] = GHOST;
     const options = { locale, ...(plural === undefined ? {} : { plural }) };
     const out = quietly(() => translate(contextFor(locale), key, named, options));
     return typeof out === 'string' ? out : String(out);

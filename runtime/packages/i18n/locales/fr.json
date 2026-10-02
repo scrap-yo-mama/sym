@@ -1912,7 +1912,8 @@
       },
       "link": {
         "console": "Ouvrir dans la console"
-      }
+      },
+      "sym_signature": "SYM {ghost} :"
     }
   }
 }

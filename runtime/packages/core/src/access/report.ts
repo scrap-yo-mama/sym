@@ -301,8 +301,11 @@ export function accessReportView(report: AccessReport): {
   llms_txt: boolean;
   payment_offer: string | null;
   official_api_url: string | null;
-  /** `Accept-Language` effectif envoyé aux sites : celui du moteur (21 § 6, u6 R18), jamais la langue d'un utilisateur. */
-  accept_language: string;
+  /**
+   * `Accept-Language` effectif envoyé aux sites : celui du moteur (21 § 6, u6 R18), jamais la langue d'un utilisateur. `null` : aucun
+   * en-tête, comme un Chromium vierge (valeur reçue par le site, mesurée par `assert_accept_language_engine_real`).
+   */
+  accept_language: string | null;
 } {
   return {
     id: report.id,

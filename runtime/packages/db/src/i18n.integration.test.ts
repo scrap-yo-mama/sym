@@ -144,6 +144,17 @@ describe('M5 : événements et audit en codes seulement', () => {
     const sentence = renderer.render('narrative.investigation_started', { domain: 'books.example' }, 'fr');
     await expect(appendInvestigationEvent(pool, { runId, ownerId: ALICE, kind: 'investigation.started', payload: { detail: sentence } })).rejects.toBeInstanceOf(RenderedSentenceError);
     await expect(appendInvestigationEvent(pool, { runId, ownerId: ALICE, kind: 'investigation.started', payload: { nested: { list: [`${sentence} fin`] } } })).rejects.toThrow(/phrase rendue/);
+    // Non-régression (assert_events_codes_only_ignores_collected_data) : l'échantillon collecté (schema.proposed.sample) et le schéma proposé sont des DONNÉES du site, jamais contrôlées
+    // comme des phrases, même quand un texte du site recoupe le catalogue (page de connexion, FAQ).
+    const siteLine = renderer.render('narrative.investigation_started', { domain: 'shop.example' }, 'en');
+    const sample = [{ title: 'How to reset your password on Amazon' }, { title: 'FAQ: Too many attempts, try again later.' }, { title: 'Le compte est inactif.' }, { title: siteLine }];
+    const proposed = await appendInvestigationEvent(pool, {
+      runId,
+      ownerId: ALICE,
+      kind: 'schema.proposed',
+      payload: { run_id: runId, ok: true, output_schema: { type: 'object', properties: { title: { type: 'string', description: siteLine } } }, sample },
+    });
+    expect(proposed.seq).toBeGreaterThan(1);
     const stored = JSON.stringify((await pool.query('SELECT payload FROM investigation_events WHERE run_id = $1', [runId])).rows);
     expect(stored).not.toContain('books.example');
   });

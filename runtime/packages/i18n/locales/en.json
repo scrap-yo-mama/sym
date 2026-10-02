@@ -1912,7 +1912,8 @@
       },
       "link": {
         "console": "Open in the console"
-      }
+      },
+      "sym_signature": "SYM {ghost}:"
     },
     "model": {
       "instructions": {

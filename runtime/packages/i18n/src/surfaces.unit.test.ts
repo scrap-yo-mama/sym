@@ -7,7 +7,7 @@ import { flatten, type Catalog } from './catalog.js';
 import { reasonCodesMarkdown, reasonRows } from './doc-codes.js';
 import { renderAlertEmailLocalized, renderInviteEmail, renderResetEmail } from './email.js';
 import { buildExtensionLocales } from './ext-locales.js';
-import { FORBIDDEN_SENTENCE_FIELDS, findRenderedSentences, narrativeLine, renderNarrative, sentenceMatcher } from './events.js';
+import { COLLECTED_DATA_FIELDS, FORBIDDEN_SENTENCE_FIELDS, findRenderedSentences, narrativeLine, renderNarrative, sentenceMatcher } from './events.js';
 import { languageBlock, withLanguageBlock } from './llm.js';
 import { MCP_INSTRUCTIONS_MAX, MCP_INSTRUCTIONS_VITAL_WINDOW, MCP_PROMPT_NAMES, MCP_PROMPTS_TTL_MS, buildInstructions, elicitation, listPrompts, localizedMessage, promptTail, resolveMcpLocale, whatToDoTranslate } from './mcp.js';
 import { defaultI18n } from './node.js';
@@ -106,6 +106,18 @@ describe('M4 : prompts, élicitation, instructions', () => {
   });
 });
 
+// Câblage dans le serveur MCP (D-51) : les fonctions d'adaptation ci-dessus sont livrées par 3.20, mais aucun serveur MCP n'est
+// fusionné (3.10 absente). Le branchement est fait par 3.10 avec packages/i18n, puis rejoué de bout en bout en 4.2.
+describe('M3, M4 : câblage dans le serveur MCP (3.10, rejoué en 4.2)', () => {
+  test.todo('assert_mcp_message_follows_account_locale (serveur MCP, 3.10) : un outil appelé par la clé d’un compte fr répond message en français, message_locale fr, what_to_do identique à un compte en');
+  test.todo('assert_mcp_lang_param_overrides_account (serveur MCP, 3.10) : ?lang=en sur l’URL du serveur MCP l’emporte sur un compte fr');
+  test.todo('assert_mcp_prompt_titles_localized_names_stable (serveur MCP, 3.10) : prompts/list renvoie des name identiques et des title localisés pour un compte fr et un compte en');
+  test.todo('assert_mcp_cache_scope_private_when_localized (serveur MCP, 3.10) : prompts/list localisé porte cacheScope private');
+  test.todo('assert_mcp_elicitation_enum_values_stable (serveur MCP, 3.10) : une élicitation réelle en fr a message et enumNames en français, enum identique à en');
+  test.todo('assert_instructions_length (serveur MCP, 3.10) : les instructions servies à initialize tiennent en 1 000 caractères, règles vitales dans les 512 premiers, phrase de langue en fin');
+  test.todo('rejeu de bout en bout (4.2) : M3 et M4 sur le serveur MCP déployé, quatre clients de la matrice');
+});
+
 describe('M5 : récit rendu à la lecture, événements en codes seulement', () => {
   const events = [
     { kind: 'investigation.started', payload: { run_id: 'r1', domain: 'books.example', phase: 'access_check' } },
@@ -141,6 +153,25 @@ describe('M5 : récit rendu à la lecture, événements en codes seulement', () 
     const rendered = renderNarrative(renderer, events, 'fr');
     for (const line of rendered.slice(0, 4)) expect(findRenderedSentences({ detail: line }, matches), line).toEqual(['$.detail']);
     expect(findRenderedSentences({ code: 'blocked_by_protection', params: { n: 3 } }, matches)).toEqual([]);
+  });
+
+  test('assert_events_codes_only_ignores_collected_data : une donnée collectée (échantillon, schéma, signaux du site) qui ressemble à une phrase du catalogue n’est pas une phrase rendue', () => {
+    const matches = sentenceMatcher(catalogs);
+    const line = renderNarrative(renderer, events, 'fr')[0]!;
+    // Textes réels de sites (pages de connexion, FAQ) qui recoupent le catalogue, et une phrase du catalogue telle quelle.
+    const siteTexts = ['How to reset your password on Amazon', 'FAQ: Too many attempts, try again later.', 'Le compte est inactif.', line];
+    const payload = {
+      ok: true,
+      output_schema: { type: 'object', properties: { title: { type: 'string', description: siteTexts[1] } } },
+      sample: siteTexts.map((title) => ({ title })),
+      signals: [{ kind: 'meta', value: siteTexts[2] }],
+      view: { usage_signals: [{ kind: 'meta', value: siteTexts[0] }] },
+      payment: { required: false, offer: siteTexts[3] },
+    };
+    expect(findRenderedSentences(payload, matches, { skip: COLLECTED_DATA_FIELDS })).toEqual([]);
+    // Un champ produit par le code reste contrôlé, même à côté d’un échantillon.
+    expect(findRenderedSentences({ ...payload, detail: line }, matches, { skip: COLLECTED_DATA_FIELDS })).toEqual(['$.detail']);
+    for (const field of ['sample', 'output_schema', 'signals', 'usage_signals', 'payment']) expect(COLLECTED_DATA_FIELDS.has(field), field).toBe(true);
   });
 
   test('le schéma d’un webhook interdit message, text et description (aucune phrase dans la charge, M10)', () => {

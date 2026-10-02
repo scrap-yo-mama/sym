@@ -232,7 +232,8 @@ const BROWSER_ACCEPT = 'text/html,application/xhtml+xml,application/xml;q=0.9,im
 
 /**
  * En-têtes de la requête avec l'identité du robot imposée : User-Agent (tout `user-agent` fourni est remplacé, X2),
- * `From` s'il est posé, `Accept` standard de navigateur SEULEMENT si la requête n'en pose pas, `Accept-Language` toujours celui du moteur.
+ * `From` s'il est posé, `Accept` standard de navigateur SEULEMENT si la requête n'en pose pas, `Accept-Language` toujours celui du moteur
+ * (aucun : `ENGINE_ACCEPT_LANGUAGE` vaut `null`, l'en-tête d'une stratégie est retiré).
  */
 function withRobotHeaders(init: FetchInit, options: { userAgent?: string | undefined; from?: string | undefined }): FetchInit {
   if (options.userAgent === undefined && options.from === undefined) return init;
@@ -241,10 +242,31 @@ function withRobotHeaders(init: FetchInit, options: { userAgent?: string | undef
     headers.set('user-agent', options.userAgent);
     if (!headers.has('accept')) headers.set('accept', BROWSER_ACCEPT);
     // Langue : celle du moteur, imposée comme le User-Agent (21 § 6 : jamais la langue d'un utilisateur, d'un compte ou d'un proxy).
-    headers.set('accept-language', ENGINE_ACCEPT_LANGUAGE);
+    // Un Chromium vierge n'en envoie aucune (`null`) : l'en-tête d'une stratégie est retiré, rien n'est ajouté.
+    headers.delete('accept-language');
+    if (ENGINE_ACCEPT_LANGUAGE !== null) headers.set('accept-language', ENGINE_ACCEPT_LANGUAGE);
   }
   if (options.from !== undefined) headers.set('from', options.from);
   return { ...init, headers };
+}
+
+/**
+ * `Accept-Language` retiré au dernier moment (dispatcher) : le `fetch` d'undici ajoute `accept-language: *` à toute requête qui n'en
+ * pose pas (Fetch Standard), ce qu'un Chromium vierge ne fait pas. Seul l'envoi réel compte (assert_accept_language_engine_real).
+ */
+function withoutAcceptLanguage(headers: Dispatcher.DispatchOptions['headers']): Dispatcher.DispatchOptions['headers'] {
+  const drop = (name: unknown): boolean => typeof name === 'string' && name.toLowerCase() === 'accept-language';
+  if (headers === undefined || headers === null) return headers;
+  if (Array.isArray(headers)) {
+    if (headers.length > 0 && Array.isArray(headers[0])) return (headers as unknown as [string, string][]).filter(([name]) => !drop(name)) as never;
+    const flat: (string | string[])[] = [];
+    for (let i = 0; i + 1 < headers.length; i += 2) if (!drop(headers[i])) flat.push(headers[i] as string, headers[i + 1] as string | string[]);
+    return flat as never;
+  }
+  if (typeof (headers as Iterable<unknown>)[Symbol.iterator] === 'function') {
+    return [...(headers as Iterable<[string, string | string[] | undefined]>)].filter(([name]) => !drop(name)) as never;
+  }
+  return Object.fromEntries(Object.entries(headers as Record<string, unknown>).filter(([name]) => !drop(name))) as never;
 }
 
 /**
@@ -270,8 +292,11 @@ export function openNetworkSession(options: NetworkSessionOptions): NetworkSessi
   const overBytes = (): boolean =>
     ceiling !== undefined && price !== undefined && proxyCostUsd(price, meter.bytes + COST_BYTE_MARGIN, requests) + (ceiling.otherUsd?.() ?? 0) > ceiling.maxUsd;
   // Une requête = un envoi par le dispatcher (chaque saut de redirection compte).
-  const dispatcher = base.compose((dispatch) => (opts, handler) => {
+  // Identité du robot (E1) : la langue envoyée est celle d'un Chromium vierge, c'est-à-dire aucune (`ENGINE_ACCEPT_LANGUAGE` null).
+  const stripLanguage = options.userAgent !== undefined && ENGINE_ACCEPT_LANGUAGE === null;
+  const dispatcher = base.compose((dispatch) => (opts0, handler) => {
     requests += 1;
+    const opts = stripLanguage ? { ...opts0, headers: withoutAcceptLanguage(opts0.headers) } : opts0;
     if (ceiling === undefined || price === undefined || handler.onResponseData === undefined) return dispatch(opts, handler);
     const guarded: Dispatcher.DispatchHandler = {
       onRequestStart: (controller, context) => handler.onRequestStart?.(controller, context),

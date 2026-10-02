@@ -3371,8 +3371,9 @@ components:
         accept_language:
           description: >-
             `Accept-Language` effectif envoyé aux sites cibles : celui d'un Chromium vierge de l'image, le même pour le client HTTP et
-            pour le navigateur (21 § 6). Jamais la langue de l'interface, du compte ou du run.
-          type: string
+            pour le navigateur (21 § 6). Jamais la langue de l'interface, du compte ou du run. `null` : aucun en-tête (un Chromium
+            vierge de l'image n'en envoie pas).
+          type: [string, 'null']
         llms_txt:
           type: boolean
         payment_offer:

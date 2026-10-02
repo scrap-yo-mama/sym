@@ -10,6 +10,7 @@ import { describeCronLocalized } from './cron.js';
 import { fmtBytes, fmtDate, fmtDuration, fmtList, fmtRelative, fmtUsd, isValidTimeZone } from './format.js';
 import { createI18n, DEFAULT_LOCALES_DIR, defaultI18n, render } from './node.js';
 import { PSEUDO_CLOSE, PSEUDO_OPEN, pseudoCatalog, pseudoLocalize } from './pseudo.js';
+import { createRenderer, SYM_SIGNATURE_KEY } from './render.js';
 import { SPEC_REASON_CODES } from './reason-codes.js';
 import { shippedCodes } from './registry.js';
 import { matchLocale, parseLanguageRanges, resolveLocale, type ResolveInput, type Source } from './resolve.js';
@@ -204,6 +205,33 @@ describe('M12 : signature {sym}', () => {
       expect(readFileSync(join(DEFAULT_LOCALES_DIR, file), 'utf8').includes(GHOST), file).toBe(false);
     }
   });
+
+  test('assert_sym_signature_placeholder_only : {sym} rendu en « SYM 👻 : » (fr) et « SYM 👻: » (en) sur les surfaces texte (MCP, CLI), jamais « sym👻 »', () => {
+    const { catalogs, registry } = defaultI18n();
+    // Un message de surface texte qui porte la signature (les catalogues de 3.19 l'emploieront dans le récit MCP).
+    const withSym = Object.fromEntries(
+      Object.entries(catalogs).map(([code, tree]) => [code, { ...tree, zz_test: { signed: code === 'fr' ? '{sym} Je m’en occupe.' : '{sym} I am on it.' } }]),
+    ) as Record<string, Catalog>;
+    const renderer = createRenderer(withSym, registry);
+    expect(renderer.render('zz_test.signed', {}, 'fr')).toBe(`SYM ${GHOST}\u00A0: Je m’en occupe.`);
+    expect(renderer.render('zz_test.signed', {}, 'en')).toBe(`SYM ${GHOST}: I am on it.`);
+    // La signature elle-même : une donnée de chaque catalogue (ponctuation de la langue : espace insécable avant le deux-points en
+    // français, comme SymSignature de packages/ui), le fantôme vient du code seul.
+    expect(renderer.render(SYM_SIGNATURE_KEY, {}, 'fr')).toBe(`SYM ${GHOST}\u00A0:`);
+    expect(renderer.render(SYM_SIGNATURE_KEY, {}, 'en')).toBe(`SYM ${GHOST}:`);
+    for (const locale of ['en', 'fr']) {
+      const out = renderer.render('zz_test.signed', {}, locale);
+      expect(out.toLowerCase(), locale).not.toContain(`sym${GHOST}`);
+      expect(out, locale).not.toContain('{sym}');
+    }
+    // Un message sans {sym} n'est pas touché ; la console et l'extension rendent {sym} elles-mêmes (SVG aria-hidden, 3.15 et 3.18).
+    expect(renderer.render('srv.error.not_found', {}, 'fr')).toBe('Ressource introuvable.');
+  });
+
+  // Le composant SymSignature (SVG aria-hidden, sans emoji) est déjà gardé par assert_sym_signature_rendering (packages/ui, extension e2e).
+  test.todo('assert_sym_signature_placeholder_only (console, 3.15) : un message du catalogue qui porte {sym} est rendu par <i18n-t> avec SymSignature (SVG aria-hidden), jamais U+1F47B dans le DOM');
+  test.todo('assert_sym_signature_placeholder_only (extension, 3.18) : un message du catalogue qui porte {sym} est rendu avec SymSignature (SVG aria-hidden) dans le panneau latéral');
+  test.todo('assert_sym_signature_placeholder_only (récit MCP, 3.19) : les messages narrative.* signés emploient {sym}, instantané texte « SYM 👻 : » / « SYM 👻: »');
 });
 
 describe('M13 : mots interdits par langue', () => {
