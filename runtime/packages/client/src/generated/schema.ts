@@ -2113,7 +2113,7 @@ export interface components {
             max_cost_usd?: number | null;
             budget_daily_usd?: number | null;
         };
-        /** @description Export portable d'une API (16 § 6, tâche 3.12), format `scrapyomama.api` 1.0, clés triées. AUCUN champ pour une session, un cookie, une clé LLM, un identifiant de proxy, un secret ou une URL de webhook, ni pour une donnée de run (cibles d'alerte en référence `$ALERT_WEBHOOK_1`). Stratégie déclarative seulement (E1-E3, hors tunnel). `integrity.sha256` : empreinte du JSON canonique (clés triées) de l'enveloppe sans `integrity`. À l'import, les champs inconnus sont ignorés ; le contrôle complet est `parseApiExport` de @runtime/core. */
+        /** @description Export portable d'une API (16 § 6, tâche 3.12), format `scrapyomama.api` 1.0, clés triées. AUCUN champ pour une session, un cookie, une clé LLM, un identifiant de proxy, un secret ou une URL de webhook, ni pour une donnée de run (cibles d'alerte en référence `$ALERT_WEBHOOK_1`). Stratégie déclarative seulement (E1-E3, hors tunnel). `integrity.sha256` : empreinte du JSON canonique (clés triées) de l'enveloppe sans `integrity`. À l'import, les champs inconnus sont ignorés (contrôle complet : `parseApiExport` du cœur). */
         ApiExport: {
             /** @constant */
             format: "scrapyomama.api";
