@@ -8,6 +8,7 @@
 // Quotas (tâche 2.4) : sessions simultanées des clients A et B à 1 000 sauf demande, file et nœuds réglables.
 // Chaque réponse est validée contre l'OpenAPI publiée (statut déclaré, corps conforme au schéma) : « 0 écart schéma/réponse ».
 import { randomBytes } from 'node:crypto';
+import { createBrowserMetrics, MetricsRegistry, Secret } from '@sym-browser/core';
 import { migrateUp, recordHeartbeat, transitionSession } from '@sym-browser/db';
 import { browserOpenApi } from '@sym/contracts/browser';
 import { Ajv2020, type ValidateFunction } from 'ajv/dist/2020.js';
@@ -26,6 +27,8 @@ export type Harness = {
   tenantA: string;
   tenantB: string;
   keys: Record<'a' | 'aRead' | 'b', string>;
+  /** Jeton de lecture de `/metrics` (tâche 3.7). */
+  metricsToken: string;
   launcher: { mode: LauncherMode; launched: string[]; released: string[]; nodes: Map<string, string>; requests: Map<string, LaunchRequest> };
   call: (options: { method: InjectOptions['method']; url: string; key?: keyof Harness['keys'] | null; body?: unknown; headers?: Record<string, string> }) => Promise<Reply>;
   close: () => Promise<void>;
@@ -139,6 +142,8 @@ export async function createHarness(
     },
   };
 
+  const metricsToken = `zz_test_metrics_${randomBytes(12).toString('hex')}`;
+  const registry = new MetricsRegistry();
   let tokenCounter = 0;
   const deps: GatewayDeps = {
     db: pool,
@@ -149,6 +154,7 @@ export async function createHarness(
     queueTimeoutMs: options.queueTimeoutMs ?? 2_000,
     ...(options.queue === undefined ? {} : { queue: options.queue }),
     queuePollMs: 25,
+    observability: { registry, metrics: createBrowserMetrics(registry, 'gateway'), token: new Secret(metricsToken) },
   };
   const app = await createGatewayApi(deps);
   await app.ready();
@@ -173,6 +179,7 @@ export async function createHarness(
     tenantA,
     tenantB,
     keys,
+    metricsToken,
     launcher: state,
     call,
     close: async () => {
