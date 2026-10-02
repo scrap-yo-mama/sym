@@ -43,6 +43,7 @@ function fakePool(behaviour: { newContextFails?: boolean; hangOnClose?: boolean 
         tenantId: request.tenantId,
         browserId: `b-${request.tenantId}`,
         wsEndpoint: 'ws://127.0.0.1:1/x',
+        // Session shared : aucun point CDP (seules les sessions dedicated en ont un, tâche 1.4).
         cdpEndpoint: undefined,
         browser,
         signal: controller.signal,

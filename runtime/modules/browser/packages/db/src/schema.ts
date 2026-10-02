@@ -2,7 +2,7 @@
 // Schéma Drizzle : miroir typé de migrations/*/up.sql, qui fait foi. Jamais de `drizzle-kit push`.
 // Concordance vérifiée par schema.integration.test.ts (colonnes, types, nullabilité) sur base migrée.
 import { sql } from 'drizzle-orm';
-import { bigint, boolean, index, integer, jsonb, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
+import { bigint, boolean, index, integer, jsonb, pgTable, primaryKey, text, timestamp, uuid } from 'drizzle-orm/pg-core';
 
 export const SCOPES = ['sessions:write', 'sessions:read', 'profiles:write', 'admin'] as const;
 export const NODE_STATES = ['ready', 'draining', 'down'] as const;
@@ -18,6 +18,7 @@ export const EVENT_TYPES = [
 ] as const;
 export const ARTIFACT_TYPES = ['trace', 'har', 'video', 'console', 'network', 'download'] as const;
 export const USAGE_SOURCES = ['node', 'reconstructed'] as const;
+export const IDEMPOTENT_OPERATIONS = ['createSession', 'extendSession'] as const;
 
 const tstz = (name: string) => timestamp(name, { withTimezone: true, mode: 'date' });
 const createdAt = () => tstz('created_at').notNull().defaultNow();
@@ -151,3 +152,14 @@ export const usageRecords = pgTable('usage_records', {
   index('usage_records_tenant_ended_idx').on(t.tenantId, t.endedAt),
   index('usage_records_key_ended_idx').on(t.apiKeyId, t.endedAt),
 ]);
+
+/** `Idempotency-Key` (04 § 9, migration 0002) : réponse 2xx d'origine par client, opération et clé, gardée 24 h. */
+export const idempotencyKeys = pgTable('idempotency_keys', {
+  tenantId: uuid('tenant_id').notNull().references(() => tenants.id),
+  operation: text('operation').notNull().$type<(typeof IDEMPOTENT_OPERATIONS)[number]>(),
+  key: text('key').notNull(),
+  requestHash: text('request_hash').notNull(),
+  responseStatus: integer('response_status'),
+  responseBody: jsonb('response_body').$type<Record<string, unknown>>(),
+  createdAt: createdAt(),
+}, (t) => [primaryKey({ columns: [t.tenantId, t.operation, t.key] }), index('idempotency_keys_created_idx').on(t.createdAt)]);

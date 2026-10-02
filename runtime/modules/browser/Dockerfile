@@ -35,11 +35,15 @@ RUN apt-get update \
 COPY package.json pnpm-workspace.yaml pnpm-lock.yaml .pnpmfile.cjs ./
 COPY packages/contracts/package.json packages/contracts/
 COPY modules/browser/packages/core/package.json modules/browser/packages/core/
+COPY modules/browser/packages/db/package.json modules/browser/packages/db/
 COPY modules/browser/apps/gateway/package.json modules/browser/apps/gateway/
 COPY modules/browser/apps/node/package.json modules/browser/apps/node/
 RUN pnpm install --frozen-lockfile --prod --filter "@sym-browser/gateway..." --filter "@sym-browser/node..."
 COPY --from=build /app/packages/contracts/dist packages/contracts/dist
 COPY --from=build /app/modules/browser/packages/core/dist modules/browser/packages/core/dist
+# Passerelle (tâche 2.2) : schéma et migrations SQL de @sym-browser/db, lues à l'exécution.
+COPY --from=build /app/modules/browser/packages/db/dist modules/browser/packages/db/dist
+COPY --from=build /app/modules/browser/packages/db/migrations modules/browser/packages/db/migrations
 COPY --from=build /app/modules/browser/apps/gateway/dist modules/browser/apps/gateway/dist
 COPY --from=build /app/modules/browser/apps/node/dist modules/browser/apps/node/dist
 

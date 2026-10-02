@@ -5,6 +5,9 @@ import type { EgressPolicy } from './egress.js';
 export const SESSION_TYPES = ['shared', 'dedicated'] as const;
 export type SessionType = (typeof SESSION_TYPES)[number];
 
+/** Type d'une session créée sans `type` (04f § 1) : un Chromium à elle seule, servi en CDP et en Playwright natif. */
+export const DEFAULT_SESSION_TYPE = 'dedicated' satisfies SessionType;
+
 export const SESSION_STATES = ['pending', 'running', 'ended', 'timed_out', 'failed'] as const;
 export type SessionState = (typeof SESSION_STATES)[number];
 
@@ -31,9 +34,10 @@ export type Viewport = { width: number; height: number };
 
 /**
  * En-têtes que `extraHTTPHeaders` refuse (422 `invalid_option`), sans égard à la casse : `Host` et les en-têtes saut à saut
- * (RFC 9110 § 7.6.1) sont posés par le navigateur, et tout `Proxy-*` (préfixe) par l'egress de la session (04c § 2).
+ * (RFC 9110 § 7.6.1) et `Content-Length` sont posés par le navigateur, et tout `Proxy-*` (préfixe) par l'egress de la
+ * session (04c § 2). Mêmes règles que la validation du nœud (tâche 1.3).
  */
-export const RESERVED_EXTRA_HEADERS = ['host', 'connection', 'keep-alive', 'te', 'trailer', 'transfer-encoding', 'upgrade'] as const;
+export const RESERVED_EXTRA_HEADERS = ['host', 'connection', 'keep-alive', 'content-length', 'te', 'trailer', 'transfer-encoding', 'upgrade'] as const;
 export const RESERVED_EXTRA_HEADER_PREFIXES = ['proxy-'] as const;
 
 export type Geolocation = { latitude: number; longitude: number; accuracy?: number };
@@ -69,8 +73,18 @@ export type CreateSessionRequest = {
   metadata?: Record<string, string>;
 };
 
-/** URL `wss://` à jeton court ; `cdp` présent pour toute session `dedicated`. */
-export type ConnectUrls = { playwright: string; cdp?: string };
+/**
+ * URL `wss://` à jeton court d'une session `running` (04f § 2) : trois clés toujours présentes. `cdp` : URL pour toute
+ * session `dedicated`, `null` pour `shared` (Playwright natif seulement) ; `bidi` : réservé, `null` en V1.
+ */
+export type ConnectUrls = {
+  readonly cdp: string | null;
+  readonly playwright: string;
+  readonly bidi: null;
+};
+
+/** `metadata` : 16 clés au plus, valeurs de 512 caractères au plus, filtrables à la liste (04 § 3, § 9). */
+export const METADATA_LIMITS = { maxKeys: 16, maxKeyLength: 64, maxValueLength: 512 } as const;
 
 export type SessionUsage = { seconds: number; bytesIn: number; bytesOut: number };
 

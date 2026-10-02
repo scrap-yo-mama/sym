@@ -4,7 +4,7 @@
   "version": "0.0.0",
   "type": "module",
   "license": "AGPL-3.0-only",
-  "description": "SYM Browser : passerelle (REST, WSS, SSE). Squelette de la tâche 0.1.",
+  "description": "SYM Browser : passerelle (REST /v1 et OpenAPI 3.1 des sessions, tâche 2.2 ; relais WSS et SSE à venir).",
   "files": [
     "dist"
   ],
@@ -12,14 +12,21 @@
     "build": "tsc -b",
     "typecheck": "tsc -p tsconfig.check.json",
     "test": "vitest run",
+    "test:schemathesis": "vitest run --config vitest.schemathesis.config.ts",
     "start": "node dist/main.js"
   },
   "dependencies": {
     "@sym-browser/core": "workspace:*",
-    "@sym/contracts": "workspace:*"
+    "@sym-browser/db": "workspace:*",
+    "@sym/contracts": "workspace:*",
+    "ajv": "catalog:",
+    "fastify": "catalog:",
+    "pg": "catalog:"
   },
   "devDependencies": {
+    "@testcontainers/postgresql": "catalog:",
     "@types/node": "catalog:",
+    "@types/pg": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:"
   }

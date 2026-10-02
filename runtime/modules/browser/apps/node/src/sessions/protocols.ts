@@ -3,9 +3,8 @@
 // Playwright natif (`browserType.connect`) ; CDP brut sur un Chromium partagé laisserait un client énumérer les cibles des
 // autres contextes (AD8, BINV1). `connectUrls.cdp` est nul pour shared ; une demande CDP répond 409 `protocol_not_served`.
 // BiDi : réservé, nul en V1 (AD10).
-// Le contrat `@sym/contracts/browser` ne porte pas encore `protocol_not_served` ni `cdp: null` / `bidi` (changement de
-// contrat : tâche séparée, skill browser-contract-change) ; ce module en fixe le comportement côté nœud.
-import type { SessionType } from '@sym/contracts/browser';
+// Formes du contrat `@sym/contracts/browser` 1.0.0 (tâche 2.2) : `ConnectUrls` et l'erreur `protocol_not_served`.
+import { ERROR_STATUS, type ConnectUrls, type SessionType } from '@sym/contracts/browser';
 
 export type SessionProtocol = 'playwright' | 'cdp' | 'bidi';
 
@@ -14,14 +13,14 @@ export function servedProtocols(type: SessionType): Record<SessionProtocol, bool
 }
 
 /** `connectUrls` d'une session `running` : trois clés, `cdp` nul pour shared, `bidi` nul en V1. */
-export function connectUrlsFor(type: SessionType, urls: { playwright: string; cdp: string }): { playwright: string; cdp: string | null; bidi: null } {
+export function connectUrlsFor(type: SessionType, urls: { playwright: string; cdp: string }): ConnectUrls {
   return { playwright: urls.playwright, cdp: servedProtocols(type).cdp ? urls.cdp : null, bidi: null };
 }
 
 export class ProtocolNotServedError extends Error {
   override name = 'ProtocolNotServedError';
   readonly code = 'protocol_not_served';
-  readonly status = 409;
+  readonly status = ERROR_STATUS.protocol_not_served;
   readonly retryable = false;
   readonly what_to_do = 'Crée la session en type `dedicated` pour la piloter en CDP.';
   readonly protocol: SessionProtocol;

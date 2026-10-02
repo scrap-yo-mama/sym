@@ -4,3 +4,4 @@ export * from './clock.js';
 export * from './machine.js';
 export * from './store.js';
 export * from './timers.js';
+export * from './type.js';

@@ -668,13 +668,31 @@ importers:
       '@sym-browser/core':
         specifier: workspace:*
         version: link:../../packages/core
+      '@sym-browser/db':
+        specifier: workspace:*
+        version: link:../../packages/db
       '@sym/contracts':
         specifier: workspace:*
         version: link:../../../../packages/contracts
+      ajv:
+        specifier: 'catalog:'
+        version: 8.20.0
+      fastify:
+        specifier: 'catalog:'
+        version: 5.12.5
+      pg:
+        specifier: 'catalog:'
+        version: 8.23.0
     devDependencies:
+      '@testcontainers/postgresql':
+        specifier: 'catalog:'
+        version: 12.1.0(supports-color@10.2.2)
       '@types/node':
         specifier: 'catalog:'
         version: 24.13.6
+      '@types/pg':
+        specifier: 'catalog:'
+        version: 8.23.1
       typescript:
         specifier: 'catalog:'
         version: 5.9.3

@@ -4,5 +4,5 @@
     "noEmit": true,
     "composite": false
   },
-  "include": ["src"]
+  "include": ["src", "test", "vitest.config.ts", "vitest.schemathesis.config.ts"]
 }

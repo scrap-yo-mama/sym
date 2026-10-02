@@ -52,7 +52,7 @@ const session = (tenantId: string, keyId: string, extra = '', params: unknown[] 
   id(`INSERT INTO sessions (tenant_id, api_key_id, type, expires_at${extra ? ', ' + extra.split('|')[0] : ''}) VALUES ($1, $2, 'dedicated', now() + interval '5 minutes'${extra ? ', ' + extra.split('|')[1] : ''}) RETURNING id`, [tenantId, keyId, ...params]);
 
 describe(`schéma de SYM Browser sur PostgreSQL ${inject('pgVersion')}`, () => {
-  test('mêmes tables en base, dans TABLES et dans le schéma Drizzle (les neuf tables de 03 § 5)', async () => {
+  test('mêmes tables en base, dans TABLES et dans le schéma Drizzle (les neuf tables de 03 § 5, plus idempotency_keys de la tâche 2.2)', async () => {
     const { rows } = await client.query<{ t: string }>(
       "SELECT tablename AS t FROM pg_tables WHERE schemaname = 'public' AND tablename <> 'symb_schema_migrations' ORDER BY 1",
     );
