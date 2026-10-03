@@ -30,6 +30,7 @@ export * from './alerts/index.js';
 export * from './observability/index.js';
 export * from './privacy/index.js';
 export * from './repair/index.js';
+export * from './persistence/index.js';
 export * from './rules/index.js';
 export * from './memory/index.js';
 export * from './quality/index.js';

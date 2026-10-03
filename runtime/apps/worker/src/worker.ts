@@ -211,6 +211,7 @@ export async function startWorker(options: StartWorkerOptions): Promise<Worker> 
       now: options.scheduling?.now ?? (() => new Date()),
       warningCheckSeconds: config.warningCheckSeconds,
       pollingIntervalSeconds: config.queuePollingSeconds,
+      persistence: config.persistence,
       ...(options.scheduling?.smtpCa ? { smtpCa: options.scheduling.smtpCa } : {}),
     });
     log.info({ workerId, key: checked.fingerprint, concurrency: config.concurrency }, 'worker démarré');
@@ -340,7 +341,7 @@ export async function startWorker(options: StartWorkerOptions): Promise<Worker> 
           // Machine à états (04 §6) : une enquête mène son API à `sain`, `bloquee`, `action_requise` ou `erreur`
           // (transitions 1 à 4, 21) ; status_events, webhooks et alertes dans la même transaction.
           applyStatus: async (event) => {
-            const step = await applyStatusAndNotify(pool, q, { apiId: claim.apiId, runId, event, clock: { now: () => new Date() } });
+            const step = await applyStatusAndNotify(pool, q, { apiId: claim.apiId, runId, event, clock: { now: () => new Date() } }, { persistence: { policy: config.persistence } });
             await runLog.log('info', 'status_event', { event: event.type, applied: step.ok });
             return { ok: step.ok, status: step.state.status, reason: step.state.reason };
           },
@@ -357,7 +358,7 @@ export async function startWorker(options: StartWorkerOptions): Promise<Worker> 
       }
       // Bail perdu ou arrêt : le run a déjà été annulé, repris ou remis en file ; rien n'est écrit.
       if (entry.cause === 'lease_lost' || entry.cause === 'shutdown') return;
-      const closed = await finishRunAndNotify(pool, q, { runId, jobId, result }, { personal, subjectKey: subjects });
+      const closed = await finishRunAndNotify(pool, q, { runId, jobId, result }, { personal, subjectKey: subjects, persistence: { policy: config.persistence } });
       if (result.state === 'failed') span.fail(result.failure_class ?? result.stop_reason);
       if (result.state === 'skipped_tunnel_offline') span.fail(result.stop_reason);
       // Run arrêté sans classe d'échec (défi en tunnel, extension hors ligne) : événement `run_stopped` de la machine à

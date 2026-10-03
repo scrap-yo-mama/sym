@@ -331,7 +331,17 @@ export async function deactivateUser(db: Queryable, userId: string, by: string |
   const revoked = await revokeUserAccess(db, userId, by, { wipeCookies: true });
   await db.query("UPDATE users SET status = 'disabled', disabled_at = now(), updated_at = now() WHERE id = $1", [userId]);
   const schedules = await db.query('UPDATE schedules SET enabled = false, updated_at = now() WHERE owner_id = $1 AND enabled', [userId]);
+  await stopPersistenceOf(db, userId);
   return { ...revoked, schedules: schedules.rowCount ?? 0 };
+}
+
+/**
+ * Mode « SYM ne lâche pas » (2.16, D-49) coupé sur toutes les API du compte, cycles en cours retirés : aucune ré-enquête
+ * automatique au nom d'un compte désactivé ou supprimé. Un compte réactivé le rallume en console (acte humain).
+ */
+async function stopPersistenceOf(db: Queryable, ownerId: string): Promise<void> {
+  await db.query('DELETE FROM api_persistence WHERE api_id IN (SELECT id FROM apis WHERE owner_id = $1)', [ownerId]);
+  await db.query('UPDATE apis SET persistence_mode = false, updated_at = now() WHERE owner_id = $1 AND persistence_mode', [ownerId]);
 }
 
 export async function reactivateUser(db: Queryable, userId: string): Promise<void> {
@@ -372,6 +382,7 @@ export async function deleteOrAnonymizeUser(client: pg.ClientBase, userId: strin
     [userId],
   );
   await client.query('UPDATE schedules SET enabled = false, updated_at = now() WHERE owner_id = $1', [userId]);
+  await stopPersistenceOf(client, userId);
   return 'anonymized';
 }
 
@@ -397,6 +408,8 @@ const API_CLONE_EXCLUDED = new Set([
   'repair_lease_owner',
   'repair_lease_until',
   'warning_alerted_at',
+  // Mode « SYM ne lâche pas » (2.16) : un acte humain du propriétaire, jamais hérité par un clone.
+  'persistence_mode',
   'created_at',
   'updated_at',
 ]);
@@ -454,12 +467,15 @@ export async function cloneApi(db: Queryable, input: { apiId: string; fromOwnerI
  * forcé ici (INV3 : seule la machine à états le change, au prochain run sans session : `auth_required`).
  */
 export async function transferApisWithoutSession(db: Queryable, fromOwnerId: string, toOwnerId: string): Promise<{ transferred: string[]; kept: string[] }> {
+  // Mode « SYM ne lâche pas » (2.16) : un acte humain de l'ancien propriétaire, jamais hérité (comme un clone) ; plafond
+  // propre remis au défaut et cycle en cours retiré : le nouveau propriétaire l'active lui-même en console s'il le veut.
   const moved = await db.query<{ id: string }>(
-    'UPDATE apis SET owner_id = $2, updated_at = now() WHERE owner_id = $1 AND NOT requires_session RETURNING id',
+    'UPDATE apis SET owner_id = $2, persistence_mode = false, persistence_budget_usd = NULL, updated_at = now() WHERE owner_id = $1 AND NOT requires_session RETURNING id',
     [fromOwnerId, toOwnerId],
   );
   const ids = moved.rows.map((r) => r.id);
   if (ids.length > 0) {
+    await db.query('DELETE FROM api_persistence WHERE api_id = ANY($1::uuid[])', [ids]);
     await db.query('UPDATE strategy_versions SET owner_id = $2 WHERE api_id = ANY($1::uuid[])', [ids, toOwnerId]);
     await db.query('UPDATE schedules SET owner_id = $2, enabled = false, updated_at = now() WHERE api_id = ANY($1::uuid[])', [ids, toOwnerId]);
   }
