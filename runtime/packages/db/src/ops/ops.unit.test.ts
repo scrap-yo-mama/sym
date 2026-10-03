@@ -5,7 +5,7 @@ import { connectionBudget } from './budget.js';
 import { diagnosticsReadErrorCode, isConnectionError } from './diagnostics.js';
 import { ENCRYPTED_COLUMNS } from '../secrets.js';
 import { KEY_LOSS_TREATMENT } from './key-loss.js';
-import { doctorExitCode, formatDoctor, type DoctorCheck } from './doctor.js';
+import { doctorExitCode, formatDoctor, runDoctor, type DoctorCheck } from './doctor.js';
 import { schemaCompatibility, schemaVersionRefusal } from './schema-version.js';
 
 test('budget de connexions : le profil S du CDC (pool 5, 1 web, 1 worker) fait 18 connexions, à la limite sur 20', () => {
@@ -89,4 +89,18 @@ test('diagnostics : seule une erreur de connexion fait dire « injoignable » ; 
   expect(diagnosticsReadErrorCode(pgError('42703'))).toBe('schema_mismatch');
   expect(diagnosticsReadErrorCode(pgError('42501'))).toBe('read_failed');
   expect(diagnosticsReadErrorCode(new Error('x'))).toBe('read_failed');
+});
+
+test('doctor : PUBLIC_URL jugée comme au démarrage du serveur (normalizePublicUrl), message sans la valeur (F-20261002-12)', async () => {
+  const publicUrl = async (value: string) => (await runDoctor({ env: { PUBLIC_URL: value } })).checks.find((c) => c.id === 'public_url');
+  for (const bad of ['https://runtime.example.test/console', 'https://u:zz-secret@runtime.example.test', 'https://runtime.example.test/?a=1', 'https://runtime.example.test/#x', 'https://runtime.example.test;x', 'pas une url']) {
+    const res = await publicUrl(bad);
+    expect(res, bad).toMatchObject({ status: 'error', code: 'public_url_invalid' });
+    expect(res?.message, bad).toMatch(/PUBLIC_URL/);
+    expect(res?.message, bad).not.toContain('zz-secret');
+  }
+  expect(await publicUrl('https://runtime.example.test.')).toMatchObject({ status: 'ok', code: 'public_url_https' });
+  expect(await publicUrl('http://localhost.:3000')).toMatchObject({ status: 'ok', code: 'public_url_loopback' });
+  expect(await publicUrl('http://[::1]:3000/')).toMatchObject({ status: 'ok', code: 'public_url_loopback' });
+  expect(await publicUrl('http://runtime.example.test')).toMatchObject({ status: 'warn', code: 'public_url_http' });
 });
