@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Dépendances partagées par les routes.
-import type { JobQueue, Kek, Keyring, MfaEnforced, Secret } from '@runtime/core';
+import type { JobQueue, Kek, Keyring, MfaEnforced, PersistencePolicy, Secret } from '@runtime/core';
 import type { SsrfGuard } from '@runtime/core/net';
-import type { KeyCheckResult, SecretStore } from '@runtime/db';
+import type { KeyCheckResult, NegativeMemory, SecretStore } from '@runtime/db';
 import type pg from 'pg';
 import type { Auth } from './auth/better-auth.js';
 import type { McpRuntime } from './mcp/runtime.js';
@@ -68,6 +68,12 @@ export type ServerContext = {
   mcp: McpRuntime | null;
   /** Fichier du statut « modèle validé » (eval/validated-models.json, 15 § 11) ; tests : un autre fichier. */
   validatedModelsFile?: URL | string;
+  /**
+   * Mode « SYM ne lâche pas » (2.16, D-49) : politique `PERSISTENCE_*` et mémoire négative (2.12). Sans mémoire en
+   * service (défaut : port non encore branché sur la mémoire de 2.12, volet prior_refusal joué en 4.2), toute activation
+   * répond 409 `negative_memory_unavailable`.
+   */
+  persistence: { policy: PersistencePolicy; negativeMemory?: NegativeMemory };
 };
 
 type RestLimits = {

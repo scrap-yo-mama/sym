@@ -24,12 +24,14 @@ import {
 import type pg from 'pg';
 import { loadAlertSettings, queueAlert, queueStatusAlerts, type StatusTransition } from './alerts.js';
 import { commitRunDedupKeys } from './datasets.js';
+import { onPersistenceTransitions, settlePersistenceAttempt, type PersistenceContext } from './persistence.js';
 import { finishRun } from './runs.js';
 import { applyStatusTransition, type ApplyStatusInput, type ApplyStatusResult } from './status.js';
 import { emitWebhookEvent } from './webhooks.js';
 
 type Queryable = Pick<pg.ClientBase, 'query'>;
-type Ctx = { now?: () => Date };
+/** `persistence` : créneaux et plafonds du mode « SYM ne lâche pas » (D-49), mémoire négative ; défauts sinon. */
+type Ctx = { now?: () => Date; persistence?: Omit<PersistenceContext, 'queue' | 'now'> };
 
 type RunFacts = {
   id: string;
@@ -122,7 +124,7 @@ export async function finishRunAndNotify(
   pool: pg.Pool,
   queue: JobQueue,
   input: { runId: string; jobId: string; result: RunResult; now?: () => Date },
-  opts: { personal?: PersonalValueRegistry; subjectKey?: Buffer } = {},
+  opts: { personal?: PersonalValueRegistry; subjectKey?: Buffer; persistence?: Omit<PersistenceContext, 'queue'> } = {},
 ): Promise<boolean> {
   const client = await pool.connect();
   try {
@@ -131,6 +133,8 @@ export async function finishRunAndNotify(
     if (closed) {
       if (input.result.state === 'succeeded') await commitRunDedupKeys(client, input.runId, opts.subjectKey);
       await notifyRunFinished(client, queue, input.runId, input.now ? { now: input.now } : {});
+      // Issue d'une tentative du mode « SYM ne lâche pas » : au même COMMIT que la clôture de son run (sans effet sinon).
+      await settlePersistenceAttempt(client, { ...opts.persistence, queue, ...(input.now ? { now: input.now } : {}) }, input.runId);
     }
     await client.query('COMMIT');
     return closed;
@@ -175,6 +179,8 @@ export async function notifyStatusChange(
     deliveries += made.length;
   }
   const alerts = await queueStatusAlerts(tx, queue, { api, runId: input.runId ?? null, transitions: input.transitions });
+  // Mode « SYM ne lâche pas » (2.16) : la 13 ouvre le cycle, un retour à `sain` ou un refus hors tentative le clôt.
+  await onPersistenceTransitions(tx, { ...ctx.persistence, queue, now: () => now }, input.apiId, input.transitions);
   return { deliveries, alerts };
 }
 

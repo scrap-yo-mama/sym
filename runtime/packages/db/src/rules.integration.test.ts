@@ -111,9 +111,8 @@ describe('migration 0019', () => {
     expect(rows).toEqual([{ kind: 'rule', visibility: 'instance', owner_id: null, applies_to: ['*'], origin: 'seed', sha256: DEFAULT_POLICY_SHA256, review_state: 'none' }]);
   });
   test('down puis up : réversible', async () => {
-    // Retour jusqu'à 0019 incluse, quel que soit le nombre de migrations venues après (0020_catalog_memory_quality, 2.12 ; 0021_i18n, 3.20).
-    const target = loadMigrations().find((m) => m.name === 'rule_files')!.version;
-    await migrateDown({ connectionString: tdb.url, steps: loadMigrations().length - (target - 1) });
+    // 0019 et les migrations venues après elle (0020 de 2.12, 0021 de 2.16…) : la 0019 n'est pas forcément la dernière.
+    await migrateDown({ connectionString: tdb.url, steps: loadMigrations().filter((m) => m.version >= 19).length });
     expect((await pool.query("SELECT to_regclass('rule_files') AS t")).rows[0].t).toBeNull();
     await migrateUp({ connectionString: tdb.url });
     expect((await pool.query("SELECT to_regclass('rule_files') AS t")).rows[0].t).toBe('rule_files');

@@ -712,6 +712,10 @@
         "deepseek": "DeepSeek",
         "qwen": "Qwen",
         "openai": "OpenAI",
+        "anthropic": "Anthropic",
+        "gemini": "Google Gemini",
+        "mistral": "Mistral",
+        "groq": "Groq",
         "custom": "Custom"
       },
       "validation": {
@@ -1912,6 +1916,24 @@
       "notConfigured": "SSO is not configured yet."
     }
   },
+  "persistence": {
+    "switch": {
+      "label": "SYM never gives up",
+      "help": "Retry on its own while the API is in error. Never after a refusal, a challenge or a required login."
+    },
+    "reason": {
+      "refused": "the site said no",
+      "ineligible": "this outcome is not retried",
+      "prior_refusal": "the site already said no",
+      "geo_restricted": "the site is not available from here",
+      "negative_memory_unavailable": "the refusal memory is not available"
+    },
+    "when": {
+      "today": "today",
+      "tomorrow": "tomorrow",
+      "on": "on {date}"
+    }
+  },
   "quality": {
     "title": "Run quality sheet",
     "summary": "{n} items, {d} duplicates",
@@ -2074,7 +2096,13 @@
     "action_required": "Action required on {domain}: {cause}.",
     "investigation_finished": "Investigation finished: {outcome}.",
     "next_step": "Next step: call {tool}.",
-    "light": {}
+    "light": {},
+    "persistence": {
+      "attempt": "{sym} Still in error. I will try again {when} at {time}.",
+      "recovered": "{sym} I did not give up: {api} is healthy again.",
+      "stopped": "{sym} I am no longer retrying ({reason}). Nothing will restart on its own.",
+      "exhausted": "{sym} The cap or the duration of “SYM never gives up” has been reached: no more automatic attempts."
+    }
   },
   "ext": {
     "manifest": {

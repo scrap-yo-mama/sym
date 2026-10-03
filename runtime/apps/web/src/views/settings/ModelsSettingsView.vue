@@ -66,7 +66,7 @@ function setRole(name: (typeof LLM_ROLES)[number], field: 'provider' | 'model', 
             </div>
             <div class="flex flex-col gap-1">
               <Label :for="`provider-preset-${at}`">{{ t('settings.models.preset') }}</Label>
-              <select :id="`provider-preset-${at}`" v-model="provider.preset" :class="selectClass">
+              <select :id="`provider-preset-${at}`" :value="provider.preset" :class="selectClass" @change="settings.setPreset(at, ($event.target as HTMLSelectElement).value as LlmPreset)">
                 <option v-for="preset in LLM_PRESETS" :key="preset" :value="preset as LlmPreset">{{ t(`settings.models.presets.${preset}`) }}</option>
               </select>
             </div>

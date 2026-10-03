@@ -18,12 +18,14 @@ import {
   holdSecretsLock,
   KeyCheckError,
   keyCheck,
+  persistenceQueueDefinition,
   PgBossJobQueue,
   runQueueDefinition,
   scheduledRunQueueDefinition,
   schemaVersionRefusal,
   secretStore,
   webhookDeliveryQueueDefinition,
+  type NegativeMemory,
 } from '@runtime/db';
 import type { FastifyBaseLogger, FastifyInstance } from 'fastify';
 import pg from 'pg';
@@ -63,10 +65,12 @@ export type PrepareOptions = {
   mcp?: McpListenTuning;
   /** Statut « modèle validé » : autre fichier que eval/validated-models.json (tests). */
   validatedModelsFile?: URL | string;
+  /** Mode « SYM ne lâche pas » : mémoire négative (2.12) ; tests seulement tant que le port n'est pas branché (volet prior_refusal, 4.2). */
+  persistence?: { negativeMemory?: NegativeMemory };
 };
 
 /** Files que le `server` alimente (runs, planifications, livraisons de webhooks, alertes) : créées si elles manquent. */
-const SERVER_QUEUES = () => [runQueueDefinition(), scheduledRunQueueDefinition(), webhookDeliveryQueueDefinition(), alertQueueDefinition()];
+const SERVER_QUEUES = () => [runQueueDefinition(), scheduledRunQueueDefinition(), webhookDeliveryQueueDefinition(), alertQueueDefinition(), persistenceQueueDefinition()];
 
 const BOOTSTRAP_REQUIRED =
   'premier démarrage sans ADMIN_BOOTSTRAP_TOKEN : refusé. Posez ADMIN_BOOTSTRAP_TOKEN (ou _FILE, `openssl rand -base64 32`) ' +
@@ -208,6 +212,7 @@ export async function prepareServer(env: NodeJS.ProcessEnv = process.env, option
         maxRunsPerKeyPerMinute: config.rest.maxRunsPerKeyPerMinute,
       },
       mcp: config.mcp.disabled ? null : createMcpRuntime(pool, config.mcp, options.mcp),
+      persistence: { policy: config.persistence, ...(options.persistence?.negativeMemory === undefined ? {} : { negativeMemory: options.persistence.negativeMemory }) },
       ...(options.extraCa ? { extraCa: options.extraCa } : {}),
       ...(options.oidcAllowHttp ? { oidcAllowHttp: true } : {}),
       ...(options.validatedModelsFile === undefined ? {} : { validatedModelsFile: options.validatedModelsFile }),

@@ -64,7 +64,7 @@ import {
   type AccessReport,
   type RobotsFetcher,
 } from '@runtime/core/access';
-import { classifyExchange, classifyTransportError, domainRequestPacer, failureRoute, type ExecFailure, type HttpExchange, type RequestPacer } from '@runtime/core/exec';
+import { classifyExchange, classifyTransportError, domainRequestPacer, failureRoute, isGeoRestrictionDetail, type ExecFailure, type HttpExchange, type RequestPacer } from '@runtime/core/exec';
 import {
   analyzeCapture,
   buildFromProposal,
@@ -269,6 +269,9 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
     let state: InvestigationState = inv.state;
     let phase: InvestigationPhase | null = inv.phase;
     const request = state.request;
+    // `investigation_budget_usd` ; une tentative du mode « SYM ne lâche pas » (2.16) le borne encore au reste de son
+    // plafond et du budget du jour (`budget_cap_usd`) : le plafond annoncé est strict.
+    const budgetUsd = Math.min(request.budget_usd, state.budget_cap_usd ?? Number.POSITIVE_INFINITY);
     const pageUrl = new URL(request.url).href;
     const host = new URL(pageUrl).hostname.toLowerCase();
     // Domaines de l'API (04b §2) : la page et ses sous-domaines (ou ceux du domaine sans `www.`), jamais un voisin.
@@ -280,7 +283,7 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
     const signal = AbortSignal.any([ctx.signal, deadline]);
     const timedOut = () => !ctx.signal.aborted && (deadline.aborted || now() >= deadlineMs);
     let spent = state.spent_usd;
-    const budgetView = () => ({ spent_usd: spent, max_usd: request.budget_usd, elapsed_s: Math.round((baseElapsed + now() - started) / 1000), timeout_s: request.timeout_s });
+    const budgetView = () => ({ spent_usd: spent, max_usd: budgetUsd, elapsed_s: Math.round((baseElapsed + now() - started) / 1000), timeout_s: request.timeout_s });
     // Garde « codes seulement » en mode scrub (21b § 1) : une prose de tiers (détail d'erreur d'un script, texte de site) qui
     // recoupe le catalogue est remplacée par un code et le refus est journalisé (noms de chemins) ; l'enquête ne s'arrête pas.
     const codesOnlyRefused = async (kind: string, paths: readonly string[]): Promise<void> => {
@@ -360,7 +363,7 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
         const judgeConfig = deps.judgeLlm === undefined ? config : await deps.judgeLlm.config().catch(() => null);
         if (judgeConfig === null) return;
         const baselineItem = await readBaselineItem(deps.pool, { apiId: ctx.apiId, ownerId: ctx.ownerId, inputHash: hash }).catch(() => null);
-        const out = await judgeItems({ config: judgeConfig, client: judge.client, trigger: 'investigation', schema, profile, items: records, baselineItem, maxUsd: Math.max(0, request.budget_usd - spent), signal });
+        const out = await judgeItems({ config: judgeConfig, client: judge.client, trigger: 'investigation', schema, profile, items: records, baselineItem, maxUsd: Math.max(0, budgetUsd - spent), signal });
         if (out === null) return;
         await charge(ctx, 0, out.costUsd, { ...out.tokens, estimated: false });
         if (out.costUsd !== null) spent = round6(spent + out.costUsd);
@@ -489,7 +492,7 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
         }
       }
       // Étape 0 et reconnaissance sous le plus petit de `max_cost_usd` et du budget restant de l'enquête.
-      const ceiling = Math.max(0, Math.min(target.api.maxCostUsd, request.budget_usd - spent));
+      const ceiling = Math.max(0, Math.min(target.api.maxCostUsd, budgetUsd - spent));
       const sessionBase: SessionBase = {
         rung,
         guard: deps.guard,
@@ -641,7 +644,7 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
           candidates: firstRun ? fresh.map(storedCandidate) : (state.candidates ?? []),
           page: { url: pageUrl, host, document_bytes: capture.document?.bytes ?? 0, total_bytes: capture.totalBytes, mode: capture.mode },
         });
-        if (spent >= request.budget_usd) return await budgetExhausted('investigation_budget_usd');
+        if (spent >= budgetUsd) return await budgetExhausted('investigation_budget_usd');
         if (timedOut()) return await budgetExhausted('investigation_timeout_s');
 
         // --- 2. Schéma de sortie d'abord ------------------------------------------------------------------------------
@@ -693,7 +696,7 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
           }
           let callCeiling = investigateCallCeilingUsd(args, price);
           const beforeCall = () => {
-            if (spent + (client.meter.snapshot().cost_usd_known ?? 0) + callCeiling > request.budget_usd) throw new BudgetGuardError();
+            if (spent + (client.meter.snapshot().cost_usd_known ?? 0) + callCeiling > budgetUsd) throw new BudgetGuardError();
           };
           let llmFailure: ExecFailure | null = null;
           try {
@@ -755,7 +758,7 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
             llm: { prompt_version: investigatePromptVersion },
             budget: budgetView(),
           });
-          if (spent >= request.budget_usd) return await budgetExhausted('investigation_budget_usd');
+          if (spent >= budgetUsd) return await budgetExhausted('investigation_budget_usd');
           if (!request.auto_validate) {
             await save('awaiting_schema_validation', { proposal: proposal!, proposed_schema: built.outputSchema, proposed_columns: schemaColumns(built.outputSchema), ...(rulesUsed === undefined ? {} : { rules: rulesUsed }) });
             await milestone('schema');
@@ -775,7 +778,7 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
         builtStrategies = built.strategies;
         outputSchema = built.outputSchema;
       }
-      if (spent >= request.budget_usd) return await budgetExhausted('investigation_budget_usd');
+      if (spent >= budgetUsd) return await budgetExhausted('investigation_budget_usd');
       if (timedOut()) return await budgetExhausted('investigation_timeout_s');
 
       // --- 3. Essais du moins cher au plus cher --------------------------------------------------------------------
@@ -920,7 +923,7 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
               });
             },
           },
-          { maxUsd: request.budget_usd, spentUsd: spent, deadlineMs, maxAttempts: INVESTIGATION_DEFAULTS.maxAttempts, maxCostPerRunUsd: target.api.maxCostUsd },
+          { maxUsd: budgetUsd, spentUsd: spent, deadlineMs, maxAttempts: INVESTIGATION_DEFAULTS.maxAttempts, maxCostPerRunUsd: target.api.maxCostUsd },
           { ...(deps.samples === undefined ? {} : { samples: deps.samples }), paginated: (p) => entries.get(p)?.paginated === true, catchUp: true },
         );
       } catch (error) {
@@ -1017,6 +1020,11 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
         case 'budget_exhausted':
           return await budgetExhausted(outcome.reason);
         case 'exhausted': {
+          // Une géo-restriction (451, redirection de pays : `geo_*`, 04 §7) rencontrée par un essai est un « non » : elle
+          // reste lisible dans l'issue (`network`, son code), jamais fondue dans `no_conformant_strategy` (D-49 : le mode
+          // « SYM ne lâche pas » s'arrête dessus, sans ré-enquête le lendemain).
+          const geo = outcome.tried.find((t) => t.result === 'network' && isGeoRestrictionDetail(t.detail));
+          if (geo !== undefined) return await finishFailed({ failure_class: 'network', retryable: false, detail: geo.detail! }, 'testing');
           const last = outcome.tried.at(-1);
           const lastClass = last?.result;
           const detail = last?.detail === 'not_compilable' ? 'not_compilable' : 'no_conformant_strategy';

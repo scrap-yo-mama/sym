@@ -226,9 +226,8 @@ describe('run_profiles et baseline (0020)', () => {
   });
 
   test('migration 0020 réversible', async () => {
-    // Retour jusqu'à 0020 incluse, quel que soit le nombre de migrations venues après (0021_i18n, 3.20).
-    const target = loadMigrations().find((m) => m.name === 'catalog_memory_quality')!.version;
-    await migrateDown({ connectionString: tdb.url, steps: loadMigrations().length - (target - 1) });
+    // 0020 et les migrations venues après elle (0021 de 2.16…) : la 0020 n'est pas forcément la dernière.
+    await migrateDown({ connectionString: tdb.url, steps: loadMigrations().filter((m) => m.version >= 20).length });
     expect((await pool.query("SELECT to_regclass('run_profiles') AS t")).rows[0].t).toBeNull();
     await migrateUp({ connectionString: tdb.url });
     expect((await pool.query("SELECT to_regclass('run_profiles') AS t")).rows[0].t).toBe('run_profiles');

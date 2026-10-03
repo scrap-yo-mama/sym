@@ -712,6 +712,10 @@
         "deepseek": "DeepSeek",
         "qwen": "Qwen",
         "openai": "OpenAI",
+        "anthropic": "Anthropic",
+        "gemini": "Google Gemini",
+        "mistral": "Mistral",
+        "groq": "Groq",
         "custom": "Personnalisé"
       },
       "validation": {
@@ -1912,6 +1916,24 @@
       "notConfigured": "Le SSO n'est pas encore configuré."
     }
   },
+  "persistence": {
+    "switch": {
+      "label": "SYM ne lâche pas",
+      "help": "Réessayer seul quand l’API est en erreur. Jamais après un refus, un défi ou une connexion requise."
+    },
+    "reason": {
+      "refused": "le site a dit non",
+      "ineligible": "cette issue ne se réessaie pas",
+      "prior_refusal": "le site a déjà dit non",
+      "geo_restricted": "le site n’est pas accessible d’ici",
+      "negative_memory_unavailable": "la mémoire des refus n’est pas disponible"
+    },
+    "when": {
+      "today": "aujourd’hui",
+      "tomorrow": "demain",
+      "on": "le {date}"
+    }
+  },
   "quality": {
     "title": "Fiche qualité du run",
     "summary": "{n} items, {d} doublons",
@@ -2074,7 +2096,13 @@
     "action_required": "Action requise sur {domain} : {cause}.",
     "investigation_finished": "Enquête terminée : {outcome}.",
     "next_step": "Prochaine étape : appelle {tool}.",
-    "light": {}
+    "light": {},
+    "persistence": {
+      "attempt": "{sym} Toujours en erreur. Je réessaie {when} à {time}.",
+      "recovered": "{sym} Je n’ai pas lâché : {api} est de nouveau saine.",
+      "stopped": "{sym} J’arrête de réessayer ({reason}). Rien ne repartira seul.",
+      "exhausted": "{sym} Plafond ou durée du mode « SYM ne lâche pas » atteint : plus d’essai automatique."
+    }
   },
   "ext": {
     "manifest": {

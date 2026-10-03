@@ -6,6 +6,7 @@ import {
   loadObservabilityConfig,
   parseMfaEnforced,
   normalizePublicUrl,
+  persistencePolicyFromEnv,
   scrubOtelEnvironment,
   unknownReservedVariablesWarning,
   Secret,
@@ -13,6 +14,7 @@ import {
   type Keyring,
   type MfaEnforced,
   type ObservabilityConfig,
+  type PersistencePolicy,
 } from '@runtime/core';
 import { ssrfPolicyFromEnv, type SsrfPolicy } from '@runtime/core/net';
 import { supportedLocales } from './i18n.js';
@@ -58,6 +60,11 @@ export type ServerConfig = {
   rest: RestConfig;
   /** Serveur MCP (tâche 3.2, 05 § 1 et § 3). */
   mcp: McpConfig;
+  /**
+   * Mode « SYM ne lâche pas » (2.16, D-49) : `PERSISTENCE_*` (14 § 2), mêmes valeurs que le worker. Le serveur s'en sert
+   * pour l'activation (plafond effectif), le premier créneau d'une API déjà en `erreur` et l'état `Api.persistence`.
+   */
+  persistence: PersistencePolicy;
 };
 
 const HOSTNAME = /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*|\[[0-9a-f:.]+\])$/;
@@ -267,6 +274,12 @@ export function loadServerConfig(env: NodeJS.ProcessEnv = process.env): ServerCo
   if (defaultLocale !== null && !supportedLocales().includes(defaultLocale)) {
     throw new ConfigError(`DEFAULT_LOCALE invalide : « ${defaultLocale} » (langues livrées : ${supportedLocales().join(', ')}).`);
   }
+  let persistence: PersistencePolicy;
+  try {
+    persistence = persistencePolicyFromEnv(env);
+  } catch (error) {
+    throw new ConfigError((error as Error).message);
+  }
   return {
     databaseUrl,
     publicUrl,
@@ -283,6 +296,7 @@ export function loadServerConfig(env: NodeJS.ProcessEnv = process.env): ServerCo
     ssrfPolicy,
     defaultLocale,
     tunnel: loadTunnelConfig(env, databaseUrl),
+    persistence,
     rest: {
       maxWaitSeconds: positiveInteger(env, 'MAX_WAIT_SECONDS', 25, 25),
       maxConcurrentRuns: positiveInteger(env, 'MAX_CONCURRENT_RUNS', 50, 100_000),

@@ -75,6 +75,9 @@ des cinq premières est posée. Une autorité de certification privée pour Post
 | `WARNING_CHECK_SECONDS` | worker | facultative | 900 | Période du contrôle des API en avertissement. |
 | `RETENTION_TICK_SECONDS` | worker | facultative | 300 | Période de la passe de rétention. |
 | `ITEMS_REJECTED_MAX_SHARE` | worker | facultative | 0.2 | Part d’items non conformes au-delà de laquelle un run casse (avec ITEMS_REJECTED_MIN_COUNT) ; en dessous, ils sont écartés et le reste est livré (à valider). |
+| `PERSISTENCE_SCHEDULE` | server, worker | facultative | 1h,6h,24h | Délais du mode « SYM ne lâche pas » entre deux ré-enquêtes d’une API en erreur (s, m, h, d) ; le dernier se répète chaque jour, jitter ±20 % (à valider). |
+| `PERSISTENCE_BUDGET_USD_DEFAULT` | server, worker | facultative | 1 | Plafond de dépense du mode « SYM ne lâche pas » quand persistence_budget_usd vaut null, cumulé depuis l’entrée en erreur ; jamais illimité, 0 refuse l’activation (à valider). |
+| `PERSISTENCE_MAX_DAYS` | server, worker | facultative | 30 | Durée maximale en erreur avec le mode « SYM ne lâche pas », puis persistence_exhausted (à valider). |
 | `ITEMS_REJECTED_MIN_COUNT` | worker | facultative | 5 | Nombre minimal d’items non conformes pour qu’un run casse (plancher absolu du seuil de casse, à valider). |
 
 ## Sortie réseau

@@ -83,7 +83,7 @@ export const users = pgTable(
     image: text('image'),
     role: text('role', { enum: ['owner', 'admin', 'member'] }).notNull().default('member'),
     status: text('status', { enum: ['invited', 'active', 'disabled'] }).notNull().default('invited'),
-    // Migration 0021_i18n : le registre des langues (`@runtime/i18n`) valide ; la CHECK n'impose que la forme.
+    // Migration 0022_i18n : le registre des langues (`@runtime/i18n`) valide ; la CHECK n'impose que la forme.
     locale: text('locale').notNull().default('en'),
     theme: text('theme', { enum: ['light', 'dark', 'system'] }).notNull().default('system'),
     twoFactorEnabled: boolean('two_factor_enabled').notNull().default(false),
@@ -93,9 +93,9 @@ export const users = pgTable(
     lastLoginAt: tstz('last_login_at'),
     // Migration 0012_accounts_advanced (tâche 3.7) : compte supprimé et anonymisé.
     deletedAt: tstz('deleted_at'),
-    // Migration 0021_i18n : fuseau IANA (indice de localisation : donnée personnelle, 17 § 6), nullable.
+    // Migration 0022_i18n : fuseau IANA (indice de localisation : donnée personnelle, 17 § 6), nullable.
     timezone: text('timezone'),
-    // Migration 0021_i18n : fuseau déjà initialisé (toute écriture, même null) ; la console ne le pose qu'à la première connexion.
+    // Migration 0022_i18n : fuseau déjà initialisé (toute écriture, même null) ; la console ne le pose qu'à la première connexion.
     timezoneInitialized: boolean('timezone_initialized').notNull().default(false),
   },
   (t) => [uniqueIndex('users_single_owner').on(t.role).where(sql`role = 'owner'`)],
@@ -191,7 +191,7 @@ export const invitations = pgTable(
     createdAt: createdAt(),
     // Migration 0012_accounts_advanced : échéance ≤ dernier envoi + 48 h (CHECK invitations_ttl).
     sentAt: tstz('sent_at').notNull().defaultNow(),
-    // Migration 0021_i18n : langue choisie par l'invitant, copiée dans users.locale à l'acceptation.
+    // Migration 0022_i18n : langue choisie par l'invitant, copiée dans users.locale à l'acceptation.
     locale: text('locale').notNull().default('en'),
   },
   (t) => [index('invitations_email_idx').on(t.email)],
@@ -387,6 +387,9 @@ export const apis = pgTable(
     warningAlertedAt: tstz('warning_alerted_at'),
     // 0016_investigation (2.1) : état de l'enquête entre deux runs (demande, gisements, proposition, schéma validé).
     investigation: jsonb('investigation'),
+    // 0021_persistence_mode (2.16, D-49) : mode « SYM ne lâche pas », opt-in ; plafond propre (NULL = défaut d'instance).
+    persistenceMode: boolean('persistence_mode').notNull().default(false),
+    persistenceBudgetUsd: usd('persistence_budget_usd'),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
@@ -396,8 +399,44 @@ export const apis = pgTable(
     check('apis_session_private', sql`NOT ${t.requiresSession} OR ${t.visibility} = 'private'`),
     check('apis_access_policy_robots', sql`${t.accessPolicy} ->> 'robots' = 'respect'`),
     check('apis_access_policy_payment', sql`coalesce(${t.accessPolicy} #>> '{payment,mode}', 'never') = 'never'`),
+    check('apis_persistence_budget_usd_check', sql`${t.persistenceBudgetUsd} IS NULL OR ${t.persistenceBudgetUsd} > 0`),
   ],
 );
+
+// 0021_persistence_mode (2.16, D-49) : cycle du mode « SYM ne lâche pas » d'une API en `erreur` (aucune valeur du site).
+export const apiPersistence = pgTable(
+  'api_persistence',
+  {
+    apiId: uuid('api_id')
+      .primaryKey()
+      .references(() => apis.id, { onDelete: 'cascade' }),
+    domain: text('domain').notNull(),
+    enteredErrorAt: tstz('entered_error_at').notNull(),
+    failureClass: text('failure_class'),
+    attempt: integer('attempt').notNull().default(0),
+    nextAt: tstz('next_at'),
+    runId: uuid('run_id').references(() => runs.id, { onDelete: 'set null' }),
+    lastAttemptAt: tstz('last_attempt_at'),
+    spentUsd: usd('spent_usd').notNull().default('0'),
+    lastOutcome: text('last_outcome'),
+    ended: text('ended', { enum: ['refused', 'ineligible', 'exhausted'] }),
+    endedReason: text('ended_reason'),
+    updatedAt: updatedAt(),
+  },
+  (t) => [
+    index('api_persistence_domain_idx').on(t.domain).where(sql`${t.ended} IS NULL`),
+    index('api_persistence_due_idx').on(t.nextAt).where(sql`${t.ended} IS NULL AND ${t.runId} IS NULL`),
+    check('api_persistence_ended_idle', sql`${t.ended} IS NULL OR (${t.nextAt} IS NULL AND ${t.runId} IS NULL)`),
+  ],
+);
+
+// Une tentative par domaine enregistrable et par créneau (clé = domaine seul) ; identité système seulement.
+export const persistenceDomainSlots = pgTable('persistence_domain_slots', {
+  domain: text('domain').primaryKey(),
+  apiId: uuid('api_id').references(() => apis.id, { onDelete: 'set null' }),
+  runId: uuid('run_id').references(() => runs.id, { onDelete: 'set null' }),
+  slotUntil: tstz('slot_until').notNull(),
+});
 
 export const strategyVersions = pgTable(
   'strategy_versions',
@@ -544,7 +583,7 @@ export const runs = pgTable(
     kind: text('kind', { enum: RUN_KINDS }).notNull().default('run'),
     // 0017_rest_api (3.1) : pause demandée par l'utilisateur (run `queued` sans job), reprise par `resume`.
     pausedAt: tstz('paused_at'),
-    // Migration 0021_i18n : langue du demandeur au lancement (déclencheur `runs_set_locale`) ; prose du LLM seulement.
+    // Migration 0022_i18n : langue du demandeur au lancement (déclencheur `runs_set_locale`) ; prose du LLM seulement.
     locale: text('locale').notNull(),
     // 0018_run_rejected_items (2.3, D-49) : items extraits non conformes, jamais livrés.
     itemsRejected: integer('items_rejected').notNull().default(0),
