@@ -33,7 +33,7 @@ Quand le produit rencontre un refus ou un défi, il **s'arrête et rend la main*
 - Utiliser des proxys fournis et configurés par vous.
 - Utiliser votre propre session et votre propre adresse IP, avec votre consentement explicite par domaine, quand vous avez choisi ce mode.
 - Planifier des exécutions.
-- Respecter `robots.txt` : il est respecté sans option pour l'ignorer.
+- Consulter `robots.txt` comme source d'information, par exemple pour trouver le sitemap ; il ne conditionne pas la collecte.
 
 ## Ce qui reste votre responsabilité
 
@@ -47,4 +47,4 @@ Réponse type, portée par le label `out-of-scope` :
 
 > Cette demande relève d'une fonction que le projet ne fournit pas (résolution de défis, furtivité, franchissement de protections, changement d'IP après un refus, multi-comptes, code de contournement). Le produit s'arrête et rend la main. Voir [Hors périmètre](./hors-perimetre.md) et l'API officielle du site s'il en a une.
 
-Ce qui reste bienvenu : respect de `robots.txt` et des conditions d'usage, limitation de cadence, API officielles, meilleur diagnostic des blocages, documentation des cas où le produit s'arrête. Pour la recherche en sécurité, le canal est `SECURITY.md`, pas une pull request publique.
+Ce qui reste bienvenu : respect des conditions d'usage, limitation de cadence, API officielles, meilleur diagnostic des blocages, documentation des cas où le produit s'arrête. Pour la recherche en sécurité, le canal est `SECURITY.md`, pas une pull request publique.

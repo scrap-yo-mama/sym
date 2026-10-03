@@ -81,11 +81,6 @@ export type GuardedFetchOptions = {
   allowHost?: (host: string) => boolean;
   /** Appelé avant chaque envoi (chaque saut compte) : contrôle du plafond de coût du run, qui lève pour refuser. */
   beforeRequest?: () => void;
-  /**
-   * Contrôle d'URL du module d'accès (tâche 1.11, INV11) : appelé à CHAQUE saut, après le verrou de domaines et avant
-   * toute connexion ; lève (`AccessRefusedError`) pour refuser. robots.txt est ainsi tenu aussi sur les redirections.
-   */
-  checkUrl?: (url: URL) => Promise<void>;
 };
 
 type Init = Omit<RequestInit, 'dispatcher' | 'redirect'>;
@@ -106,7 +101,6 @@ export async function guardedFetch(input: string | URL, init: Init, options: Gua
   for (let hop = 0; ; hop++) {
     guard.checkUrlStatic(url);
     if (options.allowHost !== undefined && !options.allowHost(url.hostname)) throw new DomainNotAllowedError(url.hostname);
-    if (options.checkUrl !== undefined) await options.checkUrl(url);
     options.beforeRequest?.();
     let response: Response;
     try {

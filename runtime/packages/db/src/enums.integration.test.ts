@@ -6,6 +6,7 @@ import {
   EXECUTIONS,
   FAILURE_CLASSES,
   INVESTIGATION_PHASES,
+  LEGACY_FAILURE_CLASSES,
   LLM_FAILURE_CLASS_PATTERN,
   NETWORKS,
   RUN_KINDS,
@@ -73,8 +74,9 @@ describe('énumérations TS = CHECK SQL', () => {
     expect(sorted(await checkValues(table, column))).toEqual(sorted(values));
   });
 
-  test('runs.failure_class : liste fermée identique, motif llm_* identique', async () => {
-    expect(sorted(await checkValues('runs', 'failure_class'))).toEqual(sorted(FAILURE_CLASSES));
+  // Valeurs historiques (D-91) : plus produites, toujours admises par la base pour que les lignes anciennes restent lisibles.
+  test('runs.failure_class : liste fermée identique (valeurs historiques comprises), motif llm_* identique', async () => {
+    expect(sorted(await checkValues('runs', 'failure_class'))).toEqual(sorted([...FAILURE_CLASSES, ...LEGACY_FAILURE_CLASSES]));
     const { rows } = await client.query<{ def: string }>(
       `SELECT pg_get_constraintdef(k.oid) AS def FROM pg_constraint k JOIN pg_class c ON c.oid = k.conrelid
         WHERE c.relname = 'runs' AND k.contype = 'c' AND pg_get_constraintdef(k.oid) LIKE '%failure_class%'`,
@@ -84,7 +86,7 @@ describe('énumérations TS = CHECK SQL', () => {
   });
 
   test('run_attempts.result_class : ok + même liste fermée, même motif llm_*', async () => {
-    expect(sorted(await checkValues('run_attempts', 'result_class'))).toEqual(sorted(ATTEMPT_RESULTS));
+    expect(sorted(await checkValues('run_attempts', 'result_class'))).toEqual(sorted([...ATTEMPT_RESULTS, ...LEGACY_FAILURE_CLASSES]));
     const { rows } = await client.query<{ def: string }>(
       `SELECT pg_get_constraintdef(k.oid) AS def FROM pg_constraint k JOIN pg_class c ON c.oid = k.conrelid
         WHERE c.relname = 'run_attempts' AND k.contype = 'c' AND pg_get_constraintdef(k.oid) LIKE '%result_class%'`,

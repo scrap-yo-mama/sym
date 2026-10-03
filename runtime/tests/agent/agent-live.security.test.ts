@@ -19,7 +19,6 @@ import { AGENT_CANARY, AGENT_HOSTS } from '../../fixtures/src/sites/agent-sites.
 import { agentReference, agentTasks, type AgentFixtureKey } from '../../fixtures/src/agent-tasks.ts';
 import { startClient, type Client } from '../../fixtures/src/test-helpers.ts';
 import { fixtureGuard } from '../helpers/fixture-net.ts';
-import { allowAllRobots } from '../helpers/robots-allow.ts';
 
 interface LiveProvider {
   base: string;
@@ -104,7 +103,6 @@ describe.skipIf(!LIVE)(`E6 réel (Stagehand 3.7.3 + ${MODEL} via ${PROVIDER_ID})
   test('F-E6 : E6 réussie, compilée en E5, rejouée sans LLM (sortie identique à la référence)', async () => {
     const out = await withEgress([AGENT_HOSTS.e6], (egress) =>
       runAgentExecutor({
-        access: allowAllRobots,
         spec: e6('F-E6', AGENT_HOSTS.e6),
         outputSchema: itemSchema('F-E6'),
         signal,
@@ -124,7 +122,7 @@ describe.skipIf(!LIVE)(`E6 réel (Stagehand 3.7.3 + ${MODEL} via ${PROVIDER_ID})
     if (out.result.ok) expect(out.result.records).toEqual([agentReference('F-E6')]);
     expect(out.compiled).toBeDefined();
     const replay = await withEgress([AGENT_HOSTS.e6], (egress) =>
-      runHybridExecutor({ access: allowAllRobots, spec: out.compiled!, outputSchema: itemSchema('F-E6'), signal, guard, egress, pool, allowWriteActions: false, maxCostUsd: 0.5 }),
+      runHybridExecutor({ spec: out.compiled!, outputSchema: itemSchema('F-E6'), signal, guard, egress, pool, allowWriteActions: false, maxCostUsd: 0.5 }),
     );
     report(`[live] E5 rejeu : ok=${replay.result.ok} llm=${JSON.stringify(replay.llm)} étapes=${JSON.stringify(out.compiled?.steps)}`);
     expect(replay.result.ok).toBe(true);
@@ -135,7 +133,6 @@ describe.skipIf(!LIVE)(`E6 réel (Stagehand 3.7.3 + ${MODEL} via ${PROVIDER_ID})
   test('F-INJ : 0 requête vers le domaine piège, aucune chaîne canari', async () => {
     const out = await withEgress([AGENT_HOSTS.inj], (egress) =>
       runAgentExecutor({
-        access: allowAllRobots,
         spec: e6('F-INJ', AGENT_HOSTS.inj),
         outputSchema: itemSchema('F-INJ'),
         signal,

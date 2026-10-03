@@ -173,7 +173,7 @@ describe('assert_repo_metadata : description ≤ 160 caractères, 10 à 20 sujet
   test('le fichier versionné que le GO applique au dépôt', () => {
     expect(repoMetadataProblems(meta, budgets)).toEqual([]);
     expect(meta.description.length).toBeLessThanOrEqual(160);
-    expect(meta.topics).toHaveLength(16);
+    expect(meta.topics).toHaveLength(15);
     expect(copyProblems([meta.description, ...meta.topics].join('\n'), claims, { whitelistRegistry: false })).toEqual([]);
   });
 
@@ -317,9 +317,9 @@ describe('registre des allégations : preuve, relecture, statut, CLAIMS.md gén�
     expect(claimsMarkdown({ ...claims, claims: claims.claims.slice(0, 1) })).not.toBe(read('.github/CLAIMS.md'));
   });
 
-  test('les engagements publics, hors vitrine (D-46) : cinq entrées, le User-Agent « bloqué » tant que les client hints ne sont pas arbitrés', () => {
+  test('les engagements publics, hors vitrine (D-46) : quatre entrées (D-91), le User-Agent « bloqué » tant que les client hints ne sont pas arbitrés', () => {
     const engagements = claims.claims.filter((c) => c.surfaces.includes('responsible-use'));
-    expect(engagements.map((c) => c.id)).toEqual(expect.arrayContaining(['robots-always-respected', 'no-challenge-solving', 'user-agent-engine-real', 'stops-when-refused', 'no-telemetry-by-default']));
+    expect(engagements.map((c) => c.id)).toEqual(expect.arrayContaining(['no-challenge-solving', 'user-agent-engine-real', 'stops-when-refused', 'no-telemetry-by-default']));
     expect(engagements.find((c) => c.id === 'user-agent-engine-real')?.status).toBe('bloqué');
     expect(engagements.find((c) => c.id === 'no-telemetry-by-default')?.task).toBe('4.10');
     for (const claim of engagements) {

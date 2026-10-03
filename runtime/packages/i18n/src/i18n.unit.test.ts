@@ -72,6 +72,9 @@ describe('M1 : parité sur toutes les surfaces', () => {
     }
     expect(SPEC_REASON_CODES).toHaveLength(27);
     expect(new Set(SPEC_REASON_CODES).size).toBe(27);
+    // Même liste, même ordre que celle de la console (table de 06 § 4.2 ; D-91 a retiré robots_disallowed et robots_unreachable).
+    const consoleCodes = (JSON.parse(readFileSync(new URL('../../../apps/web/src/testing/spec-reason-codes.json', import.meta.url), 'utf8')) as { codes: string[] }).codes;
+    expect([...SPEC_REASON_CODES]).toEqual(consoleCodes);
   });
 
   test('chaque clé ext.manifest.* existe en en et en fr (source du _locales généré)', () => {

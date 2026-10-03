@@ -185,7 +185,7 @@ describe('assert_docs_rest_reference_generated : référence REST depuis l\'Open
     const spec = (JSON.parse(readFileSync(join(runtimeDir, 'apps/web/src/testing/spec-reason-codes.json'), 'utf8')) as { codes: string[] }).codes;
     const reasons = renderReasonsReference(fr, spec);
     for (const code of spec) expect(reasons, code).toContain(`| \`${code}\` |`);
-    expect(reasons).toContain('Le site demande aux robots de ne pas visiter cette page.');
+    expect(reasons).toContain('Le site refuse l\'accès automatisé. Scrapyomama s\'arrête.');
     expect(reasons).toContain('## Classes d\'échec');
   });
 

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Briques communes de l'API REST (tâche 3.1, 05 § 2 et § 4.3), réutilisables par le serveur MCP (3.2) : montants,
 // codes de raison, file pleine, attente synchrone bornée, déclencheur, case « j'ai lu » (17 § 11).
-import { ACTIVE_RUN_STATES, schemaHasPersonalFields, type RunKind, type RunTrigger } from '@runtime/core';
+import { ACTIVE_RUN_STATES, personalFieldPaths, schemaHasPersonalFields, type RunKind, type RunTrigger } from '@runtime/core';
 import { runEnvelopeUsd, userBudgetCommittedUsd } from '@runtime/db';
 import type { FastifyReply } from 'fastify';
 import type pg from 'pg';
@@ -124,14 +124,27 @@ export async function responsibleUseAcked(ctx: ServerContext, userId: string): P
 }
 
 /**
+ * Message du refus `responsible_use_ack_required` (UX-19) : il nomme les champs `x-personal` du schéma retenu (le schéma
+ * PROPOSÉ par l'enquête s'il en porte : retirer la marque dans une correction ne contourne pas la case).
+ */
+export function responsibleUseMessage(schema: unknown | true, origin: 'proposed' | 'corrected' = 'corrected'): string {
+  const base = 'lisez la page « Usage responsable » et cochez « j’ai lu » avant une API à données personnelles';
+  const fields = schema === true ? [] : personalFieldPaths(schema);
+  if (fields.length === 0) return base;
+  const named = `${base} : champ(s) marqué(s) x-personal : ${fields.join(', ')}`;
+  // La phrase sur le schéma proposé n'est vraie que si les champs viennent de lui.
+  return origin === 'proposed' ? `${named} (la marque du schéma proposé par l’enquête compte : la retirer dans une correction ne suffit pas)` : named;
+}
+
+/**
  * 17 § 11 (critère 2 de 4.8) : sans la case « j'ai lu », une API à champ `x-personal` est refusée (403
  * `responsible_use_ack_required`). `schema` : schéma retenu ; `true` : le schéma n'est pas encore connu (validation
  * automatique d'une enquête), refusé de même. Renvoie true si la réponse est partie.
  */
-export async function rejectWithoutAck(ctx: ServerContext, reply: FastifyReply, actor: Actor, schema: unknown | true): Promise<boolean> {
+export async function rejectWithoutAck(ctx: ServerContext, reply: FastifyReply, actor: Actor, schema: unknown | true, origin: 'proposed' | 'corrected' = 'corrected'): Promise<boolean> {
   if (schema !== true && !schemaHasPersonalFields(schema)) return false;
   if (await responsibleUseAcked(ctx, actor.userId)) return false;
-  await sendError(reply, 403, 'responsible_use_ack_required', 'lisez la page « Usage responsable » et cochez « j’ai lu » avant une API à données personnelles');
+  await sendError(reply, 403, 'responsible_use_ack_required', responsibleUseMessage(schema, origin));
   return true;
 }
 

@@ -64,10 +64,10 @@ describe('assert_persistence_opt_in_only', () => {
 
 describe('assert_persistence_never_on_refusal', () => {
   test('entrée : seulement après une classe de la transition 16', () => {
-    for (const failureClass of ['extraction', 'code_error', 'network', 'robots_unreachable'] as const) {
+    for (const failureClass of ['extraction', 'code_error', 'network'] as const) {
       expect(persistenceEntry({ failureClass })).toEqual({ eligible: true });
     }
-    for (const failureClass of ['forbidden', 'blocked_by_protection', 'robots_disallowed', 'auth_required', 'payment_required', 'not_found', 'llm_refused', 'rate_limited', 'transient', null] as const) {
+    for (const failureClass of ['forbidden', 'blocked_by_protection', 'auth_required', 'payment_required', 'not_found', 'llm_refused', 'rate_limited', 'transient', null] as const) {
       expect(persistenceEntry({ failureClass })).toEqual({ eligible: false, reason: 'class_not_eligible' });
     }
   });
@@ -97,9 +97,8 @@ describe('assert_persistence_never_on_refusal', () => {
     }
   });
 
-  test('issue : refus robots.txt, défi, 401, 403, connexion requise, 451, géo-restriction, llm_refused → fin du mode (refused)', () => {
+  test('issue : défi, 401, 403, connexion requise, 451, géo-restriction, llm_refused → fin du mode (refused)', () => {
     const refused = [
-      { failureClass: 'robots_disallowed' },
       { failureClass: 'blocked_by_protection' },
       { failureClass: 'forbidden', httpStatus: 403 },
       { failureClass: 'auth_required', httpStatus: 401 },
@@ -124,7 +123,7 @@ describe('assert_persistence_never_on_refusal', () => {
   });
 
   test('issue : classes de 16, enquête sans conforme, 429 et indisponibilité → créneau suivant ; succès → retour à sain', () => {
-    for (const failureClass of ['extraction', 'code_error', 'network', 'robots_unreachable', 'run_budget_exceeded', 'rate_limited', 'transient'] as const) {
+    for (const failureClass of ['extraction', 'code_error', 'network', 'run_budget_exceeded', 'rate_limited', 'transient'] as const) {
       expect(persistenceAttemptOutcome({ state: 'failed', failureClass })).toEqual({ kind: 'retry', reason: failureClass });
     }
     expect(persistenceAttemptOutcome({ state: 'succeeded', failureClass: null })).toEqual({ kind: 'recovered' });

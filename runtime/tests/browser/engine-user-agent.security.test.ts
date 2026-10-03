@@ -31,7 +31,6 @@ import { robotIdentity, type RobotIdentity } from '../../apps/worker/src/exec/ro
 import * as net from '@runtime/core/net';
 import { openBrowserEgress, openNetworkSession, startEgressProxy, type BrowserEgress, type EgressProxy, type SsrfGuard } from '@runtime/core/net';
 import { fixtureGuard } from '../helpers/fixture-net.ts';
-import { allowAllRequests } from '../helpers/robots-allow.ts';
 
 const HOST = 'zz_test_ua.localhost';
 /** Second site (cadre hors processus : isolation des sites de Chromium). */
@@ -146,7 +145,7 @@ const identityOf = (options: { identify?: boolean; contact?: string | null } = {
 async function visitWithRunContext(userAgent: string | undefined): Promise<{ navigator: string; webdriver: unknown }> {
   return pool.run(signal, (browser) =>
     withEgress(async (egress) => {
-      const rc = await openRunContext(browser, { egressServer: egress.server, allowedHosts: [HOST], checkRequest: allowAllRequests, ...(userAgent === undefined ? {} : { userAgent }) });
+      const rc = await openRunContext(browser, { egressServer: egress.server, allowedHosts: [HOST], ...(userAgent === undefined ? {} : { userAgent }) });
       try {
         await rc.page.goto(base('/'), { waitUntil: 'load' });
         await rc.page.waitForResponse((r) => r.url().endsWith('/sub')).catch(() => undefined);
@@ -277,7 +276,7 @@ describe('assert_user_agent_engine_real : le User-Agent est celui du moteur emba
     seen = [];
     await pool.run(signal, (browser) =>
       withEgress(async (egress) => {
-        const rc = await openRunContext(browser, { egressServer: egress.server, allowedHosts: [HOST], checkRequest: allowAllRequests });
+        const rc = await openRunContext(browser, { egressServer: egress.server, allowedHosts: [HOST] });
         try {
           await rc.page.goto(base('/'), { waitUntil: 'load' });
           await rc.page.evaluate((url) => {
@@ -311,7 +310,7 @@ describe('assert_user_agent_engine_real : le User-Agent est celui du moteur emba
   test('Chromium agentique (E5/E6) : la chaîne exacte du moteur dès le lancement', async () => {
     seen = [];
     const ua = await withEgress(async (egress) => {
-      const ab = await launchAgentBrowser({ egressServer: egress.server, allowedHosts: [HOST], allowWriteActions: false, checkRequest: allowAllRequests });
+      const ab = await launchAgentBrowser({ egressServer: egress.server, allowedHosts: [HOST], allowWriteActions: false });
       try {
         await ab.page.goto(base('/'), { waitUntil: 'load' });
         await ab.page.waitForResponse((r) => r.url().endsWith('/sub')).catch(() => undefined);
@@ -389,7 +388,7 @@ describe('assert_no_fingerprint_spoofing : navigator.webdriver intact, aucun ove
     const run = await visitWithRunContext(undefined);
     expect(run.webdriver).toBe(true);
     const agent = await withEgress(async (egress) => {
-      const ab = await launchAgentBrowser({ egressServer: egress.server, allowedHosts: [HOST], allowWriteActions: false, checkRequest: allowAllRequests });
+      const ab = await launchAgentBrowser({ egressServer: egress.server, allowedHosts: [HOST], allowWriteActions: false });
       try {
         await ab.page.goto(base('/'));
         return await ab.page.evaluate(() => (navigator as unknown as { webdriver?: boolean }).webdriver);
@@ -423,7 +422,7 @@ describe('assert_no_fingerprint_spoofing : navigator.webdriver intact, aucun ove
           seen = [];
           const got = await lender.run(signal, (browser) =>
             withEgress(async (egress) => {
-              const rc = await openRunContext(browser, { egressServer: egress.server, allowedHosts: [HOST, HOST2], checkRequest: allowAllRequests, ...(userAgent === undefined ? {} : { userAgent }) });
+              const rc = await openRunContext(browser, { egressServer: egress.server, allowedHosts: [HOST, HOST2], ...(userAgent === undefined ? {} : { userAgent }) });
               try {
                 await rc.page.goto(base('/'), { waitUntil: 'load' });
                 await rc.page.waitForResponse((r) => r.url().endsWith('/sub')).catch(() => undefined);

@@ -96,11 +96,18 @@ describe('mémoire du catalogue (0020)', () => {
     expect((await pool.query('SELECT 1 FROM strategy_version_memory_refs WHERE api_id = $1', [target])).rowCount).toBe(0);
   });
 
-  test('refusals : une API du même domaine en bloquee ou refusée par robots.txt est lue comme refus (fait et date)', async () => {
+  test('refusals : une API du même domaine en bloquee est lue comme refus (fait et date)', async () => {
     await api(A, 'zz_test_mem_refused', 'https://refused.fr/', { status: 'bloquee', reason: 'forbidden' });
     const mem = await readCatalogMemory(pool, { ownerId: A, apiId: null, domain: 'refused.fr' });
     expect(mem.entries.find((e) => e.slug === 'zz_test_mem_refused')!.refusal).toMatchObject({ class: 'bloquee' });
     expect(mem.refusals.map((r) => r.domain)).toContain('refused.fr');
+  });
+
+  test('D-91 : un ancien arrêt robots_disallowed (valeur historique) n’est pas un refus du domaine', async () => {
+    await api(A, 'zz_test_mem_robots', 'https://ancien-robots.fr/', { status: 'bloquee', reason: 'robots_disallowed' });
+    const mem = await readCatalogMemory(pool, { ownerId: A, apiId: null, domain: 'ancien-robots.fr' });
+    expect(mem.entries.find((e) => e.slug === 'zz_test_mem_robots')!.refusal).toBeNull();
+    expect(mem.refusals.map((r) => r.domain)).not.toContain('ancien-robots.fr');
   });
 });
 

@@ -375,7 +375,7 @@ export interface paths {
         put?: never;
         /**
          * Importe une API exportée (16 § 6) ; aperçu sans écriture, puis confirm=true ; repasse toujours par l'enquête
-         * @description Sans `confirm=true` : aperçu (200), rien n'est écrit. Avec `confirm=true` : nouvelle API privée en `enquete`, enquête en file au stade `access_check` (rapport d'accès, robots.txt) puis `testing` de la stratégie importée (`created_by: import`) ; planifications recréées désactivées, cibles d'alerte à configurer. Les champs inconnus sont ignorés (`ignored_fields`) ; un `$ref` distant (400 `remote_ref`), une empreinte fausse (400 `integrity_mismatch`) ou une version de format d'une autre majeure (400 `unsupported_format`) sont refusés. Un `max_cost_usd` ou un `budget_daily_usd` du fichier au-dessus des plafonds de l'instance (`MAX_COST_USD_PER_RUN`, `USER_BUDGET_DAILY_USD`) est refusé de même (400 `cost_cap_exceeded`), aperçu compris.
+         * @description Sans `confirm=true` : aperçu (200), rien n'est écrit. Avec `confirm=true` : nouvelle API privée en `enquete`, enquête en file au stade `access_check` (rapport d'accès) puis `testing` de la stratégie importée (`created_by: import`) ; planifications recréées désactivées, cibles d'alerte à configurer. Les champs inconnus sont ignorés (`ignored_fields`) ; un `$ref` distant (400 `remote_ref`), une empreinte fausse (400 `integrity_mismatch`) ou une version de format d'une autre majeure (400 `unsupported_format`) sont refusés. Un `max_cost_usd` ou un `budget_daily_usd` du fichier au-dessus des plafonds de l'instance (`MAX_COST_USD_PER_RUN`, `USER_BUDGET_DAILY_USD`) est refusé de même (400 `cost_cap_exceeded`), aperçu compris.
          */
         post: operations["importApi"];
         delete?: never;
@@ -420,7 +420,7 @@ export interface paths {
         options?: never;
         head?: never;
         /**
-         * Modifie description, politiques, schémas (→ ré-enquête), exposition MCP ; aucun réglage robots.txt (INV11)
+         * Modifie description, politiques, schémas (→ ré-enquête), exposition MCP
          * @description Mode « SYM ne lâche pas » (`persistence_mode`, `persistence_budget_usd`, D-49) : décidé avant tout autre champ ; refusé, rien n'est écrit. Activer (ou changer le plafond d'un mode actif) par une clé d'API : `403 human_confirmation_required` ; API sans version courante, mémoire des refus absente ou plafond effectif ≤ 0 : `409 persistence_not_eligible` (`reason`) ; les deux avec `what_to_do`. Désactiver est permis à toute clé. Un `max_cost_usd` ou un `budget_daily_usd` au-dessus des plafonds de l'instance (`MAX_COST_USD_PER_RUN`, `USER_BUDGET_DAILY_USD`) : `400 cost_cap_exceeded`.
          */
         patch: operations["updateApi"];
@@ -1934,7 +1934,7 @@ export interface components {
         RunState: "queued" | "running" | "waiting_tunnel" | "succeeded" | "failed" | "cancelled" | "skipped_tunnel_offline" | "skipped_window" | "skipped_quota" | "skipped_status" | "skipped_overlap";
         /** @enum {string} */
         RunOutcome: "clean" | "degraded" | "failed";
-        /** @description Classe d'échec fermée (04b § 1), ou famille `llm_*` (08 § 1). Code stable, jamais localisé. */
+        /** @description Classe d'échec fermée (04b § 1), ou famille `llm_*` (08 § 1). Code stable, jamais localisé. `robots_disallowed` et `robots_unreachable` sont des valeurs historiques (D-91) : plus produites, encore lisibles sur les runs anciens. */
         FailureClass: string;
         /** @description Code de raison stable (06 § 4.2 : `retried`, `escalated`, `repaired`, `stale`, `reverted`, `cookie_expired`…), traduit par la console ; jamais une phrase. */
         ReasonCode: string;
@@ -1984,10 +1984,12 @@ export interface components {
                 country?: string;
             };
         };
-        /** @description `robots` n'a qu'une valeur (INV11) : aucun réglage ne l'ignore. */
         AccessPolicy: {
-            /** @constant */
-            robots: "respect";
+            /**
+             * @deprecated
+             * @description Champ retiré (D-91), toléré et ignoré ; présent seulement sur les politiques écrites avant.
+             */
+            robots?: unknown;
             /** Format: uuid */
             report_id?: string | null;
             user_agent_contact?: string;
@@ -2004,11 +2006,15 @@ export interface components {
             /** Format: date-time */
             checked_at: string;
             /**
-             * @description Pastille Accès du catalogue (vert, orange, rouge).
+             * @description Pastille Accès du catalogue (vert, orange). `disallowed` est une valeur historique (D-91), sur les rapports anciens.
              * @enum {string}
              */
             signal: "allowed" | "review" | "disallowed";
-            robots: {
+            /**
+             * @deprecated
+             * @description Section historique (D-91), présente seulement sur les rapports produits avant ; plus produite.
+             */
+            robots?: {
                 /** @enum {string} */
                 status: "allowed" | "disallowed" | "absent" | "unreachable";
                 /** Format: date-time */
@@ -2221,7 +2227,7 @@ export interface components {
         ApiExportApi: {
             slug?: string;
             description: string;
-            /** @description Page de la demande d'enquête, rejouée à l'import (rapport d'accès, robots.txt). */
+            /** @description Page de la demande d'enquête, rejouée à l'import (rapport d'accès). */
             source_url: string;
             input_schema: {
                 [key: string]: unknown;

@@ -228,8 +228,6 @@
     "geo_restriction": "Content unavailable from this country; trying the proxy of the country allowed by the API.",
     "blocked_by_protection": "The site refuses automated access. Scrapyomama stops.",
     "forbidden": "The site refuses access to this address. The IP address does not change.",
-    "robots_disallowed": "The site asks robots not to visit this page.",
-    "robots_unreachable": "robots.txt cannot be reached: to be safe, nothing is collected.",
     "payment_required": "The site asks for a payment: {offre}.",
     "auth_required": "{domaine} asks for a sign-in.",
     "cookie_expired": "The session of {domaine} has expired.",
@@ -263,8 +261,6 @@
     "rate_limited": "Site asked to slow down",
     "forbidden": "Access refused",
     "blocked_by_protection": "Automated access refused",
-    "robots_disallowed": "Disallowed by robots.txt",
-    "robots_unreachable": "robots.txt unreachable",
     "payment_required": "Payment required",
     "auth_required": "Sign-in required",
     "account_limit": "Account limit",
@@ -363,10 +359,7 @@
     "log": {
       "title": "Trials",
       "empty": "No trial yet.",
-      "robotsAllowed": "robots.txt read: path allowed",
-      "robotsDisallowed": "robots.txt read: path disallowed",
-      "robotsAbsent": "robots.txt not found: no rule applies",
-      "robotsUnreachable": "robots.txt unreachable: to be safe, nothing is collected",
+      "accessProbed": "Access report: page probed",
       "signal": "Usage signal {kind}: {value}",
       "llmsTxt": "llms.txt found",
       "officialApi": "Official route found: {url}",
@@ -512,14 +505,12 @@
       "heading": "What happened",
       "protection": "On {date}, trial {n} (“{execution}”, {network}), {domain} answered with a verification page. No other trial was started. Investigation cost: {cost}.",
       "forbidden": "On {date}, trial {n} (“{execution}”, {network}), {domain} answered with an access refusal. No other trial was started. Investigation cost: {cost}.",
-      "robots": "{domain} asks robots not to visit this page. No request was sent to this path. Investigation cost: {cost}.",
       "generic": "{domain} refused access. No other trial was started. Investigation cost: {cost}."
     },
     "why": {
       "heading": "Why we stop",
       "protection": "This is the decision of the site. Scrapyomama does not answer in place of a person and does not change IP address after a refusal.",
-      "forbidden": "The site refuses access to this address. The IP address does not change after a refusal. Check your access rights or contact the publisher.",
-      "robots": "This site asks robots not to visit this page. Scrapyomama respects this rule."
+      "forbidden": "The site refuses access to this address. The IP address does not change after a refusal. Check your access rights or contact the publisher."
     },
     "todo": {
       "heading": "What you can do",
@@ -864,9 +855,9 @@
   },
   "access": {
     "signal": {
-      "allowed": "Access allowed",
+      "allowed": "Nothing to report",
       "review": "To review",
-      "disallowed": "Access disallowed",
+      "disallowed": "Refusal reported (older report)",
       "unknown": "Access not checked"
     }
   },
@@ -887,8 +878,6 @@
     "geo_restriction": "Content unavailable from this country; trying with the proxy of the country allowed by the API.",
     "blocked_by_protection": "The site refuses automated access. Scrapyomama stops.",
     "forbidden": "The site refuses access to this address. The IP address does not change.",
-    "robots_disallowed": "The site asks robots not to visit this page.",
-    "robots_unreachable": "robots.txt is unreachable: as a precaution, nothing is collected.",
     "payment_required": "The site asks for a payment: {offer}.",
     "auth_required": "{domain} asks you to sign in.",
     "cookie_expired": "The session on {domain} has expired.",
@@ -932,8 +921,6 @@
     "geo_restriction": "Geographic restriction",
     "blocked_by_protection": "Automated access refused",
     "forbidden": "Access refused",
-    "robots_disallowed": "Page disallowed by robots.txt",
-    "robots_unreachable": "robots.txt unreachable",
     "payment_required": "Payment requested",
     "auth_required": "Sign-in required",
     "cookie_expired": "Session expired",
@@ -952,8 +939,6 @@
     "rate_limited": "Site rate limit",
     "forbidden": "Access refused",
     "blocked_by_protection": "Automated access refused",
-    "robots_disallowed": "Page disallowed by robots.txt",
-    "robots_unreachable": "robots.txt unreachable",
     "payment_required": "Payment requested",
     "auth_required": "Sign-in required",
     "account_limit": "Account limit",
@@ -1115,7 +1100,6 @@
       "title": "What happened",
       "attempt": "On {date}, attempt {n} (“{execution}”, {network}), {domain} answered with {answer}.",
       "generic": "{domain} answered with {answer}.",
-      "robots": "This site asks robots not to visit this page. Scrapyomama respects this rule.",
       "forbidden": "The site refuses access to this address. The IP address does not change after a refusal. Check your access rights or contact the publisher."
     },
     "answer": {
@@ -1127,7 +1111,6 @@
     "why": {
       "title": "Why we stop",
       "protection": "This is the site's decision. Scrapyomama does not answer in place of a person and does not change IP address after a refusal.",
-      "robots": "This is the rule the site declares in its robots.txt file. Scrapyomama always respects it.",
       "forbidden": "This is the site's decision. Scrapyomama does not change IP address after a refusal."
     },
     "todo": {
@@ -1413,17 +1396,6 @@
     "acceptLanguage": "Language sent to sites (Accept-Language)",
     "acceptLanguageNone": "None, like a fresh Chromium",
     "acceptLanguageUserBrowser": "Your browser's own (tunnel)",
-    "robots": "robots.txt",
-    "robotsStatus": "Status",
-    "robotsFetched": "Read on",
-    "robotsRule": "Rule applied",
-    "robotsStatuses": {
-      "allowed": "Allows the path",
-      "disallowed": "Disallows the path",
-      "absent": "Absent (no rule)",
-      "unreachable": "Unreachable (as a precaution, nothing is collected)"
-    },
-    "robotsAlways": "robots.txt is always respected: no setting can ignore it.",
     "signals": "Usage signals",
     "signalsHint": "These signals are shown as data: they block nothing and are never passed to the model as instructions.",
     "noSignals": "No signal detected.",
@@ -1473,7 +1445,7 @@
     "kinds": {
       "investigation_started": "Investigation started.",
       "phase_started": "Phase: {phase}.",
-      "access_report": "Access report: robots.txt, {robots}.",
+      "access_report": "Access report: page probed.",
       "schema_proposed": "Output schema proposed.",
       "attempt_finished": "Attempt {n} finished: {execution}, {network}, result {result}.",
       "status_changed": "Status: {to}.",
@@ -2118,7 +2090,7 @@
   "narrative": {
     "investigation_started": "Investigation of {domain} started.",
     "phase": {
-      "access_check": "Access report: reading robots.txt and the usage signals of the site",
+      "access_check": "Access report: probing the page and reading the usage signals of the site",
       "reconnaissance": "Reconnaissance: looking at how the page gets its data",
       "awaiting_schema_validation": "Waiting for the schema to be validated",
       "testing": "Trials: from the cheapest method to the most expensive",
@@ -2126,10 +2098,9 @@
     },
     "phase_started": "Step: {phase}.",
     "access_report": {
-      "allowed": "Access report: robots.txt allows the path [{duration}, {cost}].",
-      "disallowed": "Access report: robots.txt disallows the path. SYM stops here [{duration}, {cost}].",
-      "absent": "Access report: no robots.txt, so nothing forbids the path [{duration}, {cost}].",
-      "unreachable": "Access report: robots.txt could not be read. SYM stops here [{duration}, {cost}].",
+      "proceed": "Access report: page probed [{duration}, {cost}].",
+      "review": "Access report: page probed, usage signals to read [{duration}, {cost}].",
+      "stopped": "Access report: the site refuses access. SYM stops here [{duration}, {cost}].",
       "unknown": "Access report done [{duration}, {cost}]."
     },
     "reconnaissance_finished": "Reconnaissance done: {n} data source found | Reconnaissance done: {n} data sources found",

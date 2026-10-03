@@ -109,7 +109,7 @@ describe('politique réseau et échelle', () => {
   test('seule la classe network fait monter ; jamais de retour en arrière ; échelle épuisée signalée', () => {
     expect(networkDecision('network')).toBe('escalate');
     expect(networkDecision('rate_limited')).toBe('slow_down');
-    for (const cls of ['forbidden', 'blocked_by_protection', 'robots_disallowed'] as const) expect(networkDecision(cls)).toBe('stop');
+    for (const cls of ['forbidden', 'blocked_by_protection'] as const) expect(networkDecision(cls)).toBe('stop');
     expect(networkDecision('auth_required')).toBe('action_required');
     const at = new Date('2026-10-01T00:00:00Z');
     const ladder = new NetworkLadder(buildNetworkRungs(parseNetworkPolicy({ allow: ['direct', 'dc_proxy'] }), proxies), { now: () => at });

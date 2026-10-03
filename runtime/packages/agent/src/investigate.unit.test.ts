@@ -24,7 +24,7 @@ const candidate = (over: Partial<DataCandidate> = {}): DataCandidate => ({
 describe('prompt du rôle investigate', () => {
   test('squelettes et noms de paramètres seulement ; balise à jeton non fermable ; gisement unsupported absent', () => {
     const [system, user] = investigateMessages(
-      { description: 'liste des articles', candidates: [candidate(), candidate({ id: 'c2', unsupported: 'client_signature', request: { method: 'GET', url: 'https://shop.test/api/signed?sig=deadbeef' } })], accessFacts: { robots: 'allowed', proceed: true } },
+      { description: 'liste des articles', candidates: [candidate(), candidate({ id: 'c2', unsupported: 'client_signature', request: { method: 'GET', url: 'https://shop.test/api/signed?sig=deadbeef' } })], accessFacts: { sitemap_declared: true, proceed: true } },
       'tok123',
     );
     expect(system!.role).toBe('system');

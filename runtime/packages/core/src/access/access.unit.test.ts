@@ -4,21 +4,22 @@ import { describe, expect, it } from 'vitest';
 import { AccessPolicyError, DEFAULT_ACCESS_POLICY, parseAccessPolicy } from './policy.js';
 import { buildUserAgent, EngineUserAgentError, identityFromEnv, InstanceContactError, normalizeInstanceContact, requireInstanceContact, resolveIdentifyInstance, resolveInstanceContact, robotFrom } from './identity.js';
 import { detectAccessSignals, parsePaymentOffer, sanitizeSignalValue } from './signals.js';
+import { buildAccessReport } from './report.js';
 
-describe('access_policy : robots n’a qu’une valeur (INV11), champs réservés refusés en V1', () => {
+describe('access_policy : champs réservés refusés en V1, champ retiré robots toléré (D-91)', () => {
   it('défauts de 17 §4', () => {
     expect(parseAccessPolicy(undefined)).toEqual(DEFAULT_ACCESS_POLICY);
-    expect(parseAccessPolicy({})).toMatchObject({ robots: 'respect', on_ai_signal: 'warn', intended_use: 'context', prefer_official: true, payment: { mode: 'never' } });
+    expect(parseAccessPolicy({})).toMatchObject({ on_ai_signal: 'warn', intended_use: 'context', prefer_official: true, payment: { mode: 'never' } });
     expect(parseAccessPolicy({ robots: 'respect', report_id: '00000000-0000-4000-8000-000000000001', user_agent_contact: 'from_settings' })).toMatchObject({ report_id: '00000000-0000-4000-8000-000000000001' });
     expect(parseAccessPolicy({ prefer_official: false }).prefer_official).toBe(false);
   });
 
-  it('aucune valeur ne permet d’ignorer robots.txt', () => {
-    for (const robots of ['ignore', 'off', false, 'respect_unless_manual', null, 0]) {
-      expect(() => parseAccessPolicy({ robots }), String(robots)).toThrow(AccessPolicyError);
+  it('robots : champ retiré par D-91, toléré et ignoré (politique écrite avant), jamais produit', () => {
+    expect(DEFAULT_ACCESS_POLICY).not.toHaveProperty('robots');
+    for (const robots of ['respect', 'ignore', false, null]) {
+      expect(parseAccessPolicy({ robots, prefer_official: false }), String(robots)).toEqual({ ...DEFAULT_ACCESS_POLICY, prefer_official: false });
     }
     expect(() => parseAccessPolicy({ ignore_robots: true })).toThrow(/champ inconnu/);
-    expect(() => parseAccessPolicy({ respect_robots: false })).toThrow(/champ inconnu/);
   });
 
   it('valeurs réservées V2 refusées : enforce, train, paiement', () => {
@@ -117,5 +118,39 @@ describe('signaux d’accès et offre 402 : des données bornées, jamais des co
     expect(parsePaymentOffer({ 'crawler-price': 'USD 0.01' })).toEqual({ display: 'USD 0.01', amount: '0.01', currency: 'USD' });
     expect(parsePaymentOffer({ 'crawler-price': '0.5 eur' })).toEqual({ display: 'EUR 0.5', amount: '0.5', currency: 'EUR' });
     expect(parsePaymentOffer({})).toEqual({ display: null, amount: null, currency: null });
+  });
+});
+
+describe('rapport d’accès : la lecture de la page est au mieux, jamais une exception (UX-24)', () => {
+  const page = (body: string) => async (url: string) => ({ status: 200, headers: { 'content-type': 'text/html' }, body, url });
+  const card = `<a href="/bien/1"><h3>Maison de village</h3><p>${'Belle maison provençale avec jardin, piscine et vue dégagée. '.repeat(8)}</p></a>`;
+
+  it('lien au texte de plus de 200 caractères (carte d’annonce) : rapport rendu, CGU trouvées après la carte', async () => {
+    const body = `<html><body>${card}<a href="/mentions-legales">Mentions légales</a></body></html>`;
+    const report = await buildAccessReport({ url: 'https://zz-test.example/annonces', probe: page(body), signal: new AbortController().signal, probeLlmsTxt: false });
+    expect(report.verdict).toEqual({ proceed: true });
+    expect(report.terms_url).toBe('https://zz-test.example/mentions-legales');
+  });
+
+  it('plus de 500 liens : rapport rendu (voies déclarées lues au mieux)', async () => {
+    const body = `<html><body>${Array.from({ length: 600 }, (_, i) => `<a href="/p/${i}">${i}</a>`).join('')}</body></html>`;
+    const report = await buildAccessReport({ url: 'https://zz-test.example/annonces', probe: page(body), signal: new AbortController().signal, probeLlmsTxt: false });
+    expect(report.verdict).toEqual({ proceed: true });
+  });
+
+  it('plus de 500 liens : la CGU du pied de page est trouvée (toute la liste bornée est parcourue)', async () => {
+    const body = `<html><body>${Array.from({ length: 600 }, (_, i) => `<a href="/p/${i}">${i}</a>`).join('')}<a href="/mentions-legales">Mentions légales</a></body></html>`;
+    const report = await buildAccessReport({ url: 'https://zz-test.example/annonces', probe: page(body), signal: new AbortController().signal, probeLlmsTxt: false });
+    expect(report.terms_url).toBe('https://zz-test.example/mentions-legales');
+  });
+
+  it('plus de 20 liens alternate typés et plus de 5 liens api : rapport rendu, flux et API lus au mieux', async () => {
+    const alternates = Array.from({ length: 30 }, (_, i) => `<link rel="alternate" type="application/rss+xml" href="/feed/${i}.xml">`).join('');
+    const apis = Array.from({ length: 8 }, (_, i) => `<link rel="api" href="/api/v${i}">`).join('');
+    const body = `<html><head>${alternates}${apis}</head><body><a href="/x">x</a></body></html>`;
+    const report = await buildAccessReport({ url: 'https://zz-test.example/annonces', probe: page(body), signal: new AbortController().signal, probeLlmsTxt: false });
+    expect(report.verdict).toEqual({ proceed: true });
+    expect(report.declared.feeds).toHaveLength(5);
+    expect(report.declared.official_api_url).toBe('https://zz-test.example/api/v0');
   });
 });

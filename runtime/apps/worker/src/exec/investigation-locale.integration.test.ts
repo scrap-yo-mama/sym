@@ -191,16 +191,12 @@ describe('M8 : enquêtes fr et en, mêmes requêtes vers le site', () => {
     expect(fr.systemPrompts.every((p) => p.includes('in French (fr)'))).toBe(true);
     expect(en.systemPrompts.every((p) => p.includes('in English (en)'))).toBe(true);
 
-    // Le site a reçu de vraies requêtes (robots.txt, sonde, reconnaissance, essais)…
+    // Le site a reçu de vraies requêtes (sonde, reconnaissance, essais)…
     expect(fr.requests.length).toBeGreaterThan(3);
-    // … exactement les mêmes pour les deux enquêtes : méthode, URL (requête comprise), en-têtes, corps. Seule exception, sans lien
-    // avec la langue : robots.txt est mis en cache par le worker (même origine), la 2e enquête peut ne pas le relire ; chaque lecture
-    // de robots.txt porte alors exactement les mêmes en-têtes.
-    const isRobots = (r: Received): boolean => r.url.split('?')[0] === '/robots.txt';
-    expect(fr.requests.filter((r) => !isRobots(r)).map(comparable).sort()).toEqual(en.requests.filter((r) => !isRobots(r)).map(comparable).sort());
-    const robots = [...fr.requests, ...en.requests].filter(isRobots);
-    expect(fr.requests.some(isRobots)).toBe(true);
-    expect(new Set(robots.map(comparable)).size).toBe(1);
+    // … exactement les mêmes pour les deux enquêtes : méthode, URL (requête comprise), en-têtes, corps. Depuis D-91, aucune
+    // enquête ne lit robots.txt : plus d'exception de cache.
+    expect(fr.requests.map(comparable).sort()).toEqual(en.requests.map(comparable).sort());
+    expect([...fr.requests, ...en.requests].some((r) => r.url.split('?')[0] === '/robots.txt')).toBe(false);
 
     // Ni la langue de l'interface, ni le fuseau (nom de ville compris) n'apparaissent dans une requête vers le site.
     for (const { requests } of [fr, en]) {

@@ -144,11 +144,6 @@ export type NetworkSessionOptions = {
   /** Plafond `max_cost_usd` de l'API, contrôlé avant chaque requête (tâche 1.6). */
   readonly costCeiling?: CostCeiling;
   /**
-   * Module d'accès (tâche 1.11) : contrôle robots.txt de chaque saut avant connexion (`AccessRefusedError` pour refuser).
-   * Absent seulement pour la session qui lit robots.txt elle-même.
-   */
-  readonly checkUrl?: (url: URL) => Promise<void>;
-  /**
    * User-Agent du robot (`buildUserAgent` : celui du moteur embarqué, plus le jeton si `identify_instance`), imposé à
    * chaque requête : une stratégie ne le remplace jamais (X2). Avec lui, `Accept` et `Accept-Language` standard d'un
    * navigateur quand la requête n'en pose pas.
@@ -363,7 +358,6 @@ export function openNetworkSession(options: NetworkSessionOptions): NetworkSessi
         ...(opts.followRedirects === false ? { followRedirects: false } : {}),
         ...(allowHost === undefined ? {} : { allowHost }),
         ...(options.costCeiling === undefined ? {} : { beforeRequest }),
-        ...(options.checkUrl === undefined ? {} : { checkUrl: options.checkUrl }),
       }),
     budgetExceeded: () => exceeded,
     sentAcceptLanguage: () => sentLanguage,

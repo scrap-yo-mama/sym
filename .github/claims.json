@@ -130,21 +130,6 @@
       "reviewer": "agent"
     },
     {
-      "id": "robots-always-respected",
-      "surfaces": [
-        "responsible-use"
-      ],
-      "en": "robots.txt is always respected. There is no option to ignore it.",
-      "fr": "robots.txt est toujours respecté. Il n'existe aucune option pour l'ignorer.",
-      "proof": [
-        "inv:INV11",
-        "test:assert_robots_respected"
-      ],
-      "reviewed": "2026-10-02",
-      "status": "relu",
-      "reviewer": "agent"
-    },
-    {
       "id": "no-challenge-solving",
       "surfaces": [
         "responsible-use"
@@ -216,8 +201,8 @@
       "fr": "Données web libres et auto-hébergées, par MCP : décris les données, valide le schéma, obtiens une API qui se répare et s'arrête quand un site dit non.",
       "proof": [
         "inv:INV1",
-        "inv:INV11",
-        "test:assert_robots_respected"
+        "inv:INV6",
+        "test:assert_no_ip_change_after_refusal"
       ],
       "reviewed": "2026-10-02",
       "status": "à relire",
@@ -421,13 +406,12 @@
       "note": "Bulle de SYM dans le replay écrit à la main (V1)."
     },
     {
-      "id": "demo.sym.robots",
-      "fr": "robots.txt lu : chemin autorisé. Pas d'API publique. Premier essai : requête simple sur le HTML, les livres sont dans la page.",
-      "en": "robots.txt read: path allowed. No public API. First attempt: a plain request on the HTML, the books are in the page.",
+      "id": "demo.sym.access",
+      "fr": "Rapport d'accès : le site répond, rien à signaler. Pas d'API publique. Premier essai : requête simple sur le HTML, les livres sont dans la page.",
+      "en": "Access report: the site answers, nothing to report. No public API. First attempt: a plain request on the HTML, the books are in the page.",
       "proof": [
-        "inv:INV11",
         "inv:INV2",
-        "test:assert_robots_respected",
+        "test:assert_access_report_first",
         "test:assert_cheapest_first_logged"
       ],
       "reviewed": "2026-10-02",
@@ -472,13 +456,12 @@
     },
     {
       "id": "demo.sym.refusal",
-      "fr": "J'ai regardé. Ce site refuse les robots (robots.txt). Je m'arrête là, sans insister. Voilà ce que je peux faire à la place : chercher l'API officielle, trouver une autre source, ou te donner le contact de l'éditeur.",
-      "en": "I took a look. This site keeps robots out (robots.txt). I'm stopping here, without pushing. Here's what I can do instead: look for an official API, find another source, or give you the publisher's contact.",
+      "fr": "J'ai regardé. Ce site me refuse l'accès (403 ou défi). Je m'arrête là, sans insister. Voilà ce que je peux faire à la place : chercher l'API officielle, trouver une autre source, ou te donner le contact de l'éditeur.",
+      "en": "I took a look. This site refuses me access (403 or a challenge). I'm stopping here, without pushing. Here's what I can do instead: look for an official API, find another source, or give you the publisher's contact.",
       "proof": [
-        "inv:INV11",
         "inv:INV5",
         "inv:INV6",
-        "test:assert_robots_respected"
+        "test:assert_no_ip_change_after_refusal"
       ],
       "reviewed": "2026-10-02",
       "status": "relu",
@@ -1170,21 +1153,6 @@
       ],
       "surfaces": [
         "landing-compare"
-      ]
-    },
-    {
-      "id": "responsible.robots",
-      "fr": "robots.txt est toujours respecté. Il n'existe aucune option pour l'ignorer.",
-      "en": "robots.txt is always respected. There is no option to ignore it.",
-      "proof": [
-        "inv:INV11",
-        "test:assert_robots_respected"
-      ],
-      "reviewed": "2026-10-02",
-      "status": "relu",
-      "reviewer": "agent",
-      "surfaces": [
-        "responsible-use"
       ]
     },
     {

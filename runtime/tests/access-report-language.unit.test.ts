@@ -3,7 +3,7 @@
 // celui que la sonde a RÉELLEMENT envoyé au site (relevé au dernier moment, après le retrait du client HTTP), jamais une constante.
 // Une fixture locale enregistre l'en-tête reçu : le rapport affiche exactement la même chose (absence comprise).
 import { createServer, type Server } from 'node:http';
-import { accessReportView, buildAccessReport, RobotsGate, sessionAccessProbe, sessionRobotsFetcher } from '@runtime/core/access';
+import { accessReportView, buildAccessReport, sessionAccessProbe } from '@runtime/core/access';
 import * as net from '@runtime/core/net';
 import { openNetworkSession } from '@runtime/core/net';
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
@@ -17,8 +17,6 @@ let received: (string | undefined)[] = [];
 
 beforeAll(async () => {
   server = createServer((req, res) => {
-    const path = (req.url ?? '/').split('?')[0];
-    if (path === '/robots.txt') return void res.writeHead(200, { 'content-type': 'text/plain' }).end('User-agent: *\nDisallow:\n');
     received.push(req.headers['accept-language']);
     res.writeHead(200, { 'content-type': 'text/html' }).end('<!doctype html><html><body>ok</body></html>');
   });
@@ -32,15 +30,12 @@ afterAll(async () => {
 async function reportWith(options: { userAgent?: string }) {
   received = [];
   const guard = fixtureGuard(port, [HOST], net);
-  const robotsSession = openNetworkSession({ rung: { mode: 'direct' }, guard, ...options });
-  const gate = new RobotsGate({ fetch: sessionRobotsFetcher(robotsSession) });
-  const session = openNetworkSession({ rung: { mode: 'direct' }, guard, checkUrl: gate.checkUrl, ...options });
+  const session = openNetworkSession({ rung: { mode: 'direct' }, guard, ...options });
   try {
-    const report = await buildAccessReport({ url: `http://${HOST}:${port}/page`, gate, probe: sessionAccessProbe(session), signal, probeLlmsTxt: false });
+    const report = await buildAccessReport({ url: `http://${HOST}:${port}/page`, probe: sessionAccessProbe(session), signal, probeLlmsTxt: false, probeSitemap: false });
     return { report, view: accessReportView(report) };
   } finally {
     await session.close();
-    await robotsSession.close();
   }
 }
 
@@ -62,15 +57,12 @@ describe('rapport d’accès : Accept-Language relevé pendant la sonde', () => 
 });
 
 describe('rapport d’accès en tunnel : la langue est celle du navigateur de l’utilisateur (21 § 6.4)', () => {
-  // En tunnel, robots.txt et la sonde partent par `page_fetch` dans l'onglet de l'utilisateur : son Chrome envoie SA langue
+  // En tunnel, la sonde part par `page_fetch` dans l'onglet de l'utilisateur : son Chrome envoie SA langue
   // réelle, que le worker ne relève pas. Le rapport ne doit jamais dire « aucune » (ce serait faux), ni inventer une valeur.
-  const robotsAllowAll = async () => ({ status: 200, location: null, body: 'User-agent: *\nDisallow:\n', truncated: false });
-  const robotsDenyAll = async () => ({ status: 200, location: null, body: 'User-agent: *\nDisallow: /\n', truncated: false });
   const browserProbe = async (url: string) => ({ status: 200, headers: { 'content-type': 'text/html' }, body: '<html><body>ok</body></html>', url });
 
   test('assert_accept_language_engine_real : sonde par le tunnel → source user_browser, aucune valeur, jamais null (« Aucune »)', async () => {
-    const gate = new RobotsGate({ fetch: robotsAllowAll });
-    const report = await buildAccessReport({ url: 'https://zz-test-tunnel-lang.example/page', gate, probe: browserProbe, requestsFrom: 'user_browser', signal, probeLlmsTxt: false });
+    const report = await buildAccessReport({ url: 'https://zz-test-tunnel-lang.example/page', probe: browserProbe, requestsFrom: 'user_browser', signal, probeLlmsTxt: false, probeSitemap: false });
     const view = accessReportView(report);
     expect(report.accept_language_source).toBe('user_browser');
     expect(view.accept_language_source).toBe('user_browser');
@@ -78,13 +70,14 @@ describe('rapport d’accès en tunnel : la langue est celle du navigateur de l�
     expect(view.accept_language).not.toBeNull();
   });
 
-  test('assert_accept_language_engine_real : tunnel, sonde qui relèverait un en-tête → ignoré (le navigateur de l’utilisateur décide) ; robots.txt interdit → toujours user_browser', async () => {
+  test('assert_accept_language_engine_real : tunnel, sonde qui relèverait un en-tête → ignoré (le navigateur de l’utilisateur décide) ; site qui refuse (403) → toujours user_browser', async () => {
     const reporting = async (url: string) => ({ ...(await browserProbe(url)), sent_accept_language: null });
-    const view = accessReportView(await buildAccessReport({ url: 'https://zz-test-tunnel-lang.example/page', gate: new RobotsGate({ fetch: robotsAllowAll }), probe: reporting, requestsFrom: 'user_browser', signal, probeLlmsTxt: false }));
+    const view = accessReportView(await buildAccessReport({ url: 'https://zz-test-tunnel-lang.example/page', probe: reporting, requestsFrom: 'user_browser', signal, probeLlmsTxt: false, probeSitemap: false }));
     expect(view).toMatchObject({ accept_language_source: 'user_browser' });
     expect('accept_language' in view).toBe(false);
-    const denied = accessReportView(await buildAccessReport({ url: 'https://zz-test-tunnel-lang.example/page', gate: new RobotsGate({ fetch: robotsDenyAll }), probe: browserProbe, requestsFrom: 'user_browser', signal, probeLlmsTxt: false }));
-    expect(denied).toMatchObject({ signal: 'disallowed', accept_language_source: 'user_browser' });
+    const refusing = async (url: string) => ({ ...(await browserProbe(url)), status: 403 });
+    const denied = accessReportView(await buildAccessReport({ url: 'https://zz-test-tunnel-lang.example/page', probe: refusing, requestsFrom: 'user_browser', signal, probeLlmsTxt: false, probeSitemap: false }));
+    expect(denied).toMatchObject({ signal: 'review', accept_language_source: 'user_browser' });
     expect('accept_language' in denied).toBe(false);
   });
 

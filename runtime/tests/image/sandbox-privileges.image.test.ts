@@ -35,6 +35,7 @@ import { imageDescription, loadClaims } from '../../scripts/vitrine/lib/claims.t
 import { identityOf, publicRepository } from '../../scripts/vitrine/lib/identity.ts';
 import { readRepoMetadata } from '../../scripts/vitrine/lib/surface.ts';
 import { imageLabelProblems } from '../../scripts/vitrine/lib/verify.ts';
+import { until, waitForPostgres } from './docker-wait.ts';
 
 const runtimeDir = new URL('../..', import.meta.url).pathname;
 const run = randomBytes(4).toString('hex');
@@ -110,13 +111,6 @@ function dockerOk(args: string[], timeoutMs?: number): string {
   return r.stdout;
 }
 
-async function until(what: string, check: () => boolean, timeoutMs: number): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  while (!check()) {
-    if (Date.now() > deadline) throw new Error(`délai dépassé : ${what}`);
-    await new Promise((resolve) => setTimeout(resolve, 500));
-  }
-}
 
 type Proc = { pid: number; ppid: number; name: string; uid: number; inh: string; prm: string; eff: string; amb: string; nnp: number; cmd: string };
 
@@ -531,7 +525,7 @@ describe('assert_sandbox_image_privileges — image sous les capacités de Rende
   for (const profile of PROFILES) {
     describe(profile.name, () => {
       test('(f) `runtime migrate` passé au point d’entrée : pwuser, aucune capacité, migrations appliquées', async () => {
-        await until('PostgreSQL prêt', () => docker(['exec', pgName, 'pg_isready', '-U', 'runtime', '-d', 'runtime']).status === 0, 90_000);
+        await waitForPostgres(docker, pgName);
         const cmd = `grep -E '^(Uid|CapInh|CapPrm|CapEff|CapAmb|NoNewPrivs):' /proc/$$/status && runtime migrate`;
         const r = docker(['run', '--rm', '--network', network, ...profile.flags, '-e', `DATABASE_URL=${DATABASE_URL}`, image, cmd], 180_000);
         expect(r.status, r.stderr.slice(-2000)).toBe(0);
@@ -674,7 +668,7 @@ describe('assert_sandbox_image_privileges — image sous les capacités de Rende
   for (const variant of RENDER_SECCOMP_VARIANTS) {
     describe(variant.name, () => {
       test(`assert_chromium_sandbox_reported — worker : isolation éprouvée, bac à sable de Chromium ${variant.chromium ? 'disponible' : 'indisponible, dit au démarrage'}`, async () => {
-        await until('PostgreSQL prêt', () => docker(['exec', pgName, 'pg_isready', '-U', 'runtime', '-d', 'runtime']).status === 0, 90_000);
+        await waitForPostgres(docker, pgName);
         const migrated = docker(['run', '--rm', '--network', network, '-e', `DATABASE_URL=${DATABASE_URL}`, image, 'runtime migrate'], 180_000);
         expect(migrated.status, migrated.stderr.slice(-2000)).toBe(0);
         const name = startContainer(`zz_test_img_worker_${variant.short}_${run}`, variant.flags, { RUNTIME_MODE: 'worker', DATABASE_URL, MASTER_KEY });
@@ -723,7 +717,7 @@ describe('assert_sandbox_image_privileges — image sous les capacités de Rende
   // migrations appliquées ici (startWorker vérifie le schéma AVANT la fabrique d'exécuteurs, donc avant la sonde).
   for (const profile of PROFILES) {
     test(`uid imposé (--user 1001), RUNTIME_MODE=worker, ${profile.short} : sonde d’isolation en échec, refus de démarrer (code 2)`, async () => {
-      await until('PostgreSQL prêt', () => docker(['exec', pgName, 'pg_isready', '-U', 'runtime', '-d', 'runtime']).status === 0, 90_000);
+      await waitForPostgres(docker, pgName);
       const migrated = docker(['run', '--rm', '--network', network, '-e', `DATABASE_URL=${DATABASE_URL}`, image, 'runtime migrate'], 180_000);
       expect(migrated.status, migrated.stderr.slice(-2000)).toBe(0);
       const name = startContainer(`zz_test_img_imposed_uid_${profile.short}_${run}`, [...profile.flags, '-u', String(PWUSER)], { RUNTIME_MODE: 'worker', DATABASE_URL, MASTER_KEY });

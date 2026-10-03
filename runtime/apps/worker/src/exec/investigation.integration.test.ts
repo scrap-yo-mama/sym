@@ -6,7 +6,7 @@
 // 1.9) → stratégie v1, résultat livré, statut (1.2).
 // Critères : `assert_cheapest_first_logged` (fixture API JSON : `fetch/direct` retenu), fixture Next : E1 `embedded`,
 // budget dépassé → `erreur`, validation du schéma en deux temps (`validate_schema`), étape 0 d'abord
-// (`assert_access_report_first`), robots.txt interdit → `bloquee` sans LLM ni requête.
+// (`assert_access_report_first`), robots.txt qui interdit le chemin sans effet sur l'enquête (D-91).
 import { randomUUID } from 'node:crypto';
 import { DomainPacer, generateMasterKey, inputSchemaIssues, MasterKey, Secret, validateOutput, type RunExecutor } from '@runtime/core';
 import { firstCostInversion, milestoneHeading, type InvestigationMilestone } from '@runtime/core/investigation';
@@ -376,18 +376,22 @@ describe('enquête (tâche 2.1)', () => {
     expect(logged.map((l) => l.heading)).toEqual(logged.map((l) => milestoneHeading(l.milestone as InvestigationMilestone, 'en')));
   });
 
-  test('assert_access_report_first — robots.txt interdit le chemin : rapport d’accès seul, bloquee, 0 requête sur /prive/, aucun appel au LLM', async () => {
+  test('assert_robots_not_gating / assert_robots_not_auto_fetched — robots.txt interdit le chemin : l’enquête se poursuit, statut jamais bloquee, robots.txt jamais demandé', async () => {
     fake.setScenario(MODEL, [scripted.json(CONTACTS_PROPOSAL)]);
     const apiId = await insertApi('zz_test_inv_robots');
     const run = await investigate(apiId, { url: `${base(ROBOTS_HOST)}/prive/liste`, description: 'liste', auto_validate: true });
-    expect(run).toMatchObject({ state: 'failed', failure_class: 'robots_disallowed', retryable: false });
-    expect(await apiRow(apiId)).toMatchObject({ status: 'bloquee', status_reason: 'robots_disallowed' });
-    const kinds = (await eventsOf(run.id)).map((e) => e.kind);
-    expect(kinds).toContain('access_report');
-    expect(kinds.filter((k) => k.startsWith('attempt') || k.startsWith('reconnaissance'))).toEqual([]);
+    expect(run.failure_class ?? '').not.toMatch(/^robots_/);
+    const api = await apiRow(apiId);
+    expect(api.status).not.toBe('bloquee');
+    expect(String(api.status_reason ?? '')).not.toMatch(/^robots_/);
+    const events = await eventsOf(run.id);
+    const report = events.find((e) => e.kind === 'access_report')!.payload as { verdict: { proceed: boolean }; robots?: unknown };
+    expect(report.verdict.proceed).toBe(true);
+    expect(report.robots).toBeUndefined();
+    expect(events.map((e) => e.kind)).toContain('reconnaissance.finished');
     const paths = (await client.stats()).hosts[ROBOTS_HOST]?.paths ?? {};
-    expect(Object.entries(paths).filter(([p]) => p.startsWith('/prive/')).reduce((n, [, c]) => n + c, 0)).toBe(0);
-    expect(fake.requests).toBe(0);
+    expect(paths['/prive/liste']).toBeGreaterThanOrEqual(1);
+    expect(paths['/robots.txt']).toBeUndefined();
   });
 
   test('page sans API ni blob (rendu serveur) : schéma proposé sans gisement, seule la voie E4 (agent_fetch) est essayable sans navigateur, et retenue', async () => {

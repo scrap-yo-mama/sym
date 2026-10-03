@@ -237,7 +237,7 @@ export async function apiDetail(db: Queryable, actor: Actor, r: ApiRow, persiste
     network_policy: owner
       ? { allow, ...('proxy_ids' in policy ? { proxy_ids: policy['proxy_ids'] } : {}), ...('res_proxy_params' in policy ? { res_proxy_params: policy['res_proxy_params'] } : {}), ...('dc_proxy_params' in policy ? { dc_proxy_params: policy['dc_proxy_params'] } : {}) }
       : { allow },
-    access_policy: { robots: 'respect' as const, report_id: access?.id ?? null },
+    access_policy: { report_id: access?.id ?? null },
     access_report: access,
     ...ownerPolicy,
     contains_personal_data: r.contains_personal_data,

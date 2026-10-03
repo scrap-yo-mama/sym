@@ -117,11 +117,11 @@ describe('assert_pacing_key_is_domain : deux workers, une base', () => {
     expect(other.slot.getTime()).toBeLessThan(first.slot.getTime() + 5_000);
   });
 
-  test('Crawl-delay plus grand que min_delay_ms : c’est lui qui espace les requêtes', async () => {
+  test('min_delay_ms de l’API : c’est lui qui espace les requêtes du domaine', async () => {
     const { clock } = manualClock();
     const pacer = new DomainPacer(new PgPacingStore(pool(), { now: clock.now }), { clock, random: () => 0 });
-    const a = await pacer.acquire('https://example.com/a', { minDelayMs: 1500, crawlDelayMs: 8000 });
-    const b = await pacer.acquire('https://example.com/b', { minDelayMs: 1500, crawlDelayMs: 8000 });
+    const a = await pacer.acquire('https://example.com/a', { minDelayMs: 8000 });
+    const b = await pacer.acquire('https://example.com/b', { minDelayMs: 8000 });
     expect(a).toMatchObject({ granted: true, waitedMs: 0 });
     expect(b).toMatchObject({ granted: true, waitedMs: 8000 });
   });

@@ -26,8 +26,6 @@ import { startConnectProxy, type UpstreamTestProxy } from '../../../../tests/hel
 
 const SPA = 'zz_test_spa.localhost';
 const PERSONAL = 'zz_test_personal.localhost';
-/** robots.txt de plus de 500 Kio (fixture O8 `robots_big`). */
-const BIG = 'zz_test_robots_big.localhost';
 const A = randomUUID();
 const actorA = { userId: A, role: 'member' as const };
 const SCHEMA_PERSON = {
@@ -90,7 +88,7 @@ beforeAll(async () => {
   await pool.query("INSERT INTO settings (key, value) VALUES ('proxies', $1)", [
     JSON.stringify([{ id: 'zz_test_dc', type: 'dc', url: proxy.url, allow_private_address: true, price: { per_gb_usd: 5, per_request_usd: 0.0001 } }]),
   ]);
-  const guard = fixtureGuard(client.server.port, [SPA, PERSONAL, BIG], net);
+  const guard = fixtureGuard(client.server.port, [SPA, PERSONAL], net);
   launchProxy = await net.startEgressProxy({ guard, refuseAll: true });
   browsers = new BrowserPool({ size: 1, launch: playwrightLauncher(launchProxy.url, process.env), recycleAfterRuns: 100 });
   const engine = new ProcessSandboxEngine({ ...sandboxOptionsFromEnv(process.env), production: false });
@@ -233,25 +231,6 @@ describe('RunExecutor de production, Chromium réel (E2, E3 en script)', () => {
     const items = await withActor(pool, actorA, (tx) => tx.query<{ item: unknown }>('SELECT item FROM dataset_items WHERE dataset_id = $1', [run.dataset_id]));
     expect(items.rows).toHaveLength(30);
     for (const r of items.rows) expect(validateOutput(SCHEMA_PRODUCT, r.item)).toEqual({ ok: true });
-  }, 120_000);
-
-  // Revue de 1.11 : la session qui lit robots.txt passe par le barreau de l'essai (ici dc_proxy, payant) ; sans plafond
-  // propre, elle lisait jusqu'à 500 Kio à chaque saut et son coût n'était constaté qu'après coup.
-  test('robots.txt lu par un barreau payant sous le plafond max_cost_usd de l’API : lecture coupée avant le dépassement, coût de l’essai ≤ plafond', async () => {
-    const spec = {
-      schema_version: 1,
-      kind: 'declarative',
-      request: { method: 'GET', url: `http://${BIG}:${client.server.port}/liste`, allowed_hosts: [BIG] },
-      sources: [{ id: 'api', from: 'response', records: '$.items[*]' }],
-      fields: { id: { path: '$.id', type: 'string', required: true } },
-    };
-    const apiId = await insertApi('zz_test_robots_cost', { execution: 'fetch', network: 'dc_proxy', spec }, { type: 'object', required: ['id'], properties: { id: { type: 'string' } } }, { allow: ['direct', 'dc_proxy'] });
-    await pool.query('UPDATE apis SET max_cost_usd = 0.001 WHERE id = $1', [apiId]);
-    const run = await runOf(apiId);
-    expect(run).toMatchObject({ state: 'failed', items: 0 });
-    expect(run.attempts).toHaveLength(1);
-    expect(run.attempts[0]).toMatchObject({ network: 'dc_proxy' });
-    expect(run.attempts[0]!.cost_usd).toBeLessThanOrEqual(0.001);
   }, 120_000);
 
   test('E3 en script hors format (start_url hors des domaines) → code_error invalid_script_spec, essai tracé', async () => {

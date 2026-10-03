@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// Garde des documents d'un run (revue de 1.11, INV11) : script injecté par `context.addInitScript` dans CHAQUE document du
+// Garde des documents d'un run (revue de 1.11) : script injecté par `context.addInitScript` dans CHAQUE document du
 // contexte (cadre principal, cadres, cadres hors processus, about:blank, srcdoc, data:), avant tout code du site ou du
 // script. Il ferme deux voies que ni `context.route`, ni l'interception CDP Fetch, ni le proxy d'egress ne voient.
 //
@@ -62,7 +62,7 @@ const GUARD = String.raw`function () {
   };
   const NativeDOMException = G.DOMException;
   const refuse = () => {
-    throw new NativeDOMException('scrapyomama: shadowrootmode refusé (robots.txt)', 'NotSupportedError');
+    throw new NativeDOMException('scrapyomama: shadowrootmode refusé (garde du run)', 'NotSupportedError');
   };
   const mentionsShadowRoot = (text) => apply(indexOf, lower(text), ['shadowrootmode']) !== -1;
 
@@ -80,7 +80,7 @@ const GUARD = String.raw`function () {
       construct(target, args, newTarget) {
         const resolved = construct(NativeURL, [Str(args[0]), apply(baseURI, doc0, [])]);
         const scheme = apply(protocol, resolved, []);
-        if (scheme !== 'http:' && scheme !== 'https:') throw new NativeDOMException('scrapyomama: worker ' + scheme + ' refusé (robots.txt)', 'SecurityError');
+        if (scheme !== 'http:' && scheme !== 'https:') throw new NativeDOMException('scrapyomama: worker ' + scheme + ' refusé (garde du run)', 'SecurityError');
         return construct(target, args.length > 1 ? [apply(href, resolved, []), args[1]] : [apply(href, resolved, [])], newTarget);
       },
     });
@@ -95,7 +95,7 @@ const GUARD = String.raw`function () {
   if (typeof NativeSharedWorker === 'function') {
     const WrappedShared = new Proxy(NativeSharedWorker, {
       construct() {
-        throw new NativeDOMException('scrapyomama: SharedWorker refusé (robots.txt)', 'SecurityError');
+        throw new NativeDOMException('scrapyomama: SharedWorker refusé (garde du run)', 'SecurityError');
       },
     });
     define(NativeSharedWorker.prototype, 'constructor', { value: WrappedShared, writable: true, configurable: true, enumerable: false });
@@ -249,7 +249,7 @@ const GUARD = String.raw`function () {
     const NativePromise = G.Promise;
     const reject = NativePromise.reject;
     const register = function register() {
-      return apply(reject, NativePromise, [new NativeDOMException('scrapyomama: service worker refusé (robots.txt)', 'SecurityError')]);
+      return apply(reject, NativePromise, [new NativeDOMException('scrapyomama: service worker refusé (garde du run)', 'SecurityError')]);
     };
     try {
       define(Container.prototype, 'register', { value: register, writable: false, configurable: false, enumerable: true });

@@ -34,8 +34,11 @@ export function narrativeLine(renderer: Renderer, event: NarrativeEvent, locale:
       return renderer.has(key, 'en') ? renderer.render(key, {}, locale) : renderer.render('narrative.phase_started', { phase }, locale);
     }
     case 'access_report': {
-      const status = asString(asRecord(asRecord(p.view).robots).status, asString(asRecord(p.robots).status));
-      const key = `narrative.access_report.${renderer.has(`narrative.access_report.${status}`, 'en') ? status : 'unknown'}`;
+      // D-91 : le rapport ne lit plus robots.txt. Refus du site (verdict) → arrêt ; signaux d'usage → « à lire » ; sinon sondée.
+      const proceed = asRecord(p.verdict).proceed;
+      const signal = asString(asRecord(p.view).signal);
+      const outcome = proceed === false ? 'stopped' : proceed === true ? (signal === 'review' ? 'review' : 'proceed') : 'unknown';
+      const key = `narrative.access_report.${outcome}`;
       return renderer.render(key, { duration: time(p.ms ?? p.duration_ms), cost: money(p.cost_usd) }, locale);
     }
     case 'reconnaissance.finished': {

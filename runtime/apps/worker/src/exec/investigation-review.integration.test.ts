@@ -177,8 +177,9 @@ describe('identité du robot pendant l’enquête (D-33, 17 §5)', () => {
     expect(run).toMatchObject({ state: 'succeeded', strategy_version: 1 });
     const engineUa = buildUserAgent({ engine: installedEngineIdentity() });
     const hits = site.hits.filter((h) => h.via === 'http');
-    // robots.txt, page (étape 0 et reconnaissance), point de données (reconnaissance et essais).
-    expect(hits.map((h) => h.path)).toEqual(expect.arrayContaining(['/robots.txt', '/', '/api/items']));
+    // Page (étape 0 et reconnaissance), point de données (reconnaissance et essais) ; robots.txt jamais demandé (D-91).
+    expect(hits.map((h) => h.path)).toEqual(expect.arrayContaining(['/', '/api/items']));
+    expect(hits.map((h) => h.path)).not.toContain('/robots.txt');
     for (const h of hits) {
       expect(h.userAgent, h.path).toBe(engineUa);
       expect(h.from, h.path).toBeUndefined();

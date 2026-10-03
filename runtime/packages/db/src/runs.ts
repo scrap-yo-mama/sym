@@ -310,7 +310,7 @@ export type RunClaim = {
   allowWriteActions: boolean;
   /** `runs.kind` (0016) : le worker y choisit l'exécuteur (stratégie ou enquête). */
   kind: RunKind;
-  /** `runs.locale` (0022) : langue du demandeur au lancement ; prose du LLM seulement, jamais une requête vers un site (21 § 6). */
+  /** `runs.locale` (0023) : langue du demandeur au lancement ; prose du LLM seulement, jamais une requête vers un site (21 § 6). */
   locale: string;
 };
 

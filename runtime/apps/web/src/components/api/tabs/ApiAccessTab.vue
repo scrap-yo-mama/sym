@@ -2,10 +2,12 @@
 <script setup lang="ts">
 /**
  * @file ApiAccessTab.vue
- * @description « Accès » (06 § 2, 17 § 2), en lecture seule : robots.txt (horodatage, règle), signaux d'usage (AIPREF,
- * TDMRep, Content Signals : des données, jamais des consignes), `llms.txt`, offre de paiement, voie officielle, valeur
- * d'`access_policy`, `Accept-Language` envoyé aux sites (celui du moteur, ou celui du navigateur de l'utilisateur en tunnel, 21 § 6.4 et § 6.6). Bouton « Utiliser l'API officielle » si elle existe. AUCUN réglage sur la règle robots.txt (INV11) :
- * cet onglet ne contient aucun champ ni aucun bouton d'action, seulement des liens vers la voie officielle.
+ * @description « Accès » (06 § 2, 17 § 2), en lecture seule : pastille et date du rapport, signaux d'usage (AIPREF,
+ * TDMRep, Content Signals : des données, jamais des consignes), `llms.txt`, offre de paiement (affichée, jamais payée),
+ * voie officielle, contact annoncé d'`access_policy`, `Accept-Language` envoyé aux sites (celui du moteur, ou celui du
+ * navigateur de l'utilisateur en tunnel, 21 § 6.4 et § 6.6). Bouton « Utiliser l'API officielle » si elle existe. Le robots.txt
+ * n'est ni une règle ni un blocage (D-91) : l'onglet n'en fait aucune section, même pour un rapport ancien qui la porte.
+ * Aucun champ ni bouton d'action, seulement des liens vers la voie officielle.
  * @component
  * @example <ApiAccessTab :detail="detail" />
  */
@@ -39,19 +41,6 @@ const officialHref = computed(() => safeHref(report.value?.official_api_url));
         </dl>
       </section>
 
-      <section aria-labelledby="access-robots" class="flex flex-col gap-2">
-        <h2 id="access-robots" class="text-lg font-semibold">{{ t('accessTab.robots') }}</h2>
-        <dl class="grid grid-cols-[max-content_1fr] gap-x-6 gap-y-2 text-sm">
-          <dt class="text-muted-foreground">{{ t('accessTab.robotsStatus') }}</dt>
-          <dd data-testid="robots-status">{{ t(`accessTab.robotsStatuses.${report.robots.status}`) }}</dd>
-          <dt class="text-muted-foreground">{{ t('accessTab.robotsFetched') }}</dt>
-          <dd>{{ formatDateTime(report.robots.fetched_at, locale) }}</dd>
-          <dt class="text-muted-foreground">{{ t('accessTab.robotsRule') }}</dt>
-          <dd class="font-mono">{{ report.robots.rule ?? '—' }}</dd>
-        </dl>
-        <p class="text-sm text-muted-foreground" data-testid="robots-respected">{{ t('accessTab.robotsAlways') }}</p>
-      </section>
-
       <section aria-labelledby="access-signals" class="flex flex-col gap-2">
         <h2 id="access-signals" class="text-lg font-semibold">{{ t('accessTab.signals') }}</h2>
         <p class="text-sm text-muted-foreground">{{ t('accessTab.signalsHint') }}</p>
@@ -79,13 +68,9 @@ const officialHref = computed(() => safeHref(report.value?.official_api_url));
 
     <section aria-labelledby="access-policy" class="flex flex-col gap-2">
       <h2 id="access-policy" class="text-lg font-semibold">{{ t('accessTab.policy') }}</h2>
-      <dl class="grid grid-cols-[max-content_1fr] gap-x-6 gap-y-2 text-sm">
-        <dt class="text-muted-foreground">robots</dt>
-        <dd class="font-mono" data-testid="access-policy-robots">{{ detail.access_policy?.robots ?? 'respect' }}</dd>
-        <template v-if="detail.access_policy?.user_agent_contact">
-          <dt class="text-muted-foreground">{{ t('accessTab.contact') }}</dt>
-          <dd>{{ detail.access_policy.user_agent_contact }}</dd>
-        </template>
+      <dl v-if="detail.access_policy?.user_agent_contact" class="grid grid-cols-[max-content_1fr] gap-x-6 gap-y-2 text-sm">
+        <dt class="text-muted-foreground">{{ t('accessTab.contact') }}</dt>
+        <dd data-testid="access-policy-contact">{{ detail.access_policy.user_agent_contact }}</dd>
       </dl>
       <p class="text-sm text-muted-foreground">{{ t('accessTab.policyFixed') }}</p>
     </section>

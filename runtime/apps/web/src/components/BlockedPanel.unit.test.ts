@@ -6,7 +6,7 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, test } from 'vitest';
 import en from '@runtime/i18n/locales/en.json';
 import fr from '@runtime/i18n/locales/fr.json';
-import { emptyInvestigation, BLOCK_CAUSES, type AttemptView, type BlockCause } from '@/lib/investigation';
+import { emptyInvestigation, ingestEvent, BLOCK_CAUSES, type AttemptView, type BlockCause } from '@/lib/investigation';
 import { esc, view, type Locale } from '@/testing/console.testkit';
 import BlockedPanel from './BlockedPanel.vue';
 import InvestigationBoard from './investigation/InvestigationBoard.vue';
@@ -109,14 +109,17 @@ describe('panneau « Bloquée » : contenu', () => {
     expect(html).toContain('L&#39;adresse IP ne change pas après un refus.');
   });
 
-  test('robots_disallowed : règle respectée, API officielle et contact, aucune relance « plus tard »', async () => {
-    const html = await view(BlockedPanel, props('robots_disallowed', { attempt: null }));
-    expect(html).toContain('asks robots not to visit this page');
-    expect(html).toContain('Scrapyomama respects this rule.');
+  test('raison historique robots_disallowed (D-91) : lue comme un refus du site, aucun texte sur le robots.txt', async () => {
+    const state = emptyInvestigation();
+    state.runId = 'r1';
+    state.domain = 'exemple.test';
+    ingestEvent(state, { id: '1', event: 'status.changed', data: JSON.stringify({ run_id: 'r1', status: 'bloquee', status_reason: { code: 'robots_disallowed', params: {} } }) }, 0);
+    expect(state.blocked?.cause).toBe('forbidden');
+    const html = await view(BlockedPanel, props(state.blocked?.cause ?? 'blocked_by_protection', { attempt: null }));
+    expect(html).toContain(en.blocked.why.forbidden);
     expect(html).toContain(en.blocked.todo.official);
     expect(html).toContain(en.blocked.todo.contact);
-    expect(html).not.toContain(en.blocked.todo.later);
-    expect(html).not.toContain(en.blocked.todo.other);
+    expect(html).not.toMatch(/robots/i);
   });
 
   test('sans essai connu ni domaine : le panneau reste lisible', async () => {

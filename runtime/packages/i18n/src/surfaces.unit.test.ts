@@ -123,7 +123,7 @@ describe('M3, M4 : câblage dans le serveur MCP (3.10, rejoué en 4.2)', () => {
 describe('M5 : récit rendu à la lecture, événements en codes seulement', () => {
   const events = [
     { kind: 'investigation.started', payload: { run_id: 'r1', domain: 'books.example', phase: 'access_check' } },
-    { kind: 'access_report', payload: { view: { robots: { status: 'allowed' } }, ms: 200, cost_usd: 0 } },
+    { kind: 'access_report', payload: { view: { signal: 'allowed' }, verdict: { proceed: true }, ms: 200, cost_usd: 0 } },
     { kind: 'phase.started', payload: { phase: 'reconnaissance' } },
     { kind: 'reconnaissance.finished', payload: { candidates: [{ id: 'c1' }] } },
     { kind: 'attempt.finished', payload: { attempt: { execution: 'fetch', network: 'direct', result: 'ok', ms: 400, cost_usd: 0 } } },
@@ -138,8 +138,15 @@ describe('M5 : récit rendu à la lecture, événements en codes seulement', () 
     expect(alice).toHaveLength(bob.length);
     expect(alice[0]).toBe('Enquête sur books.example lancée.');
     expect(bob[0]).toBe('Investigation of books.example started.');
-    expect(alice[1]).toContain("robots.txt autorise le chemin");
-    expect(bob[1]).toContain('robots.txt allows the path');
+    // D-91 : le rapport d'accès ne lit plus robots.txt ; le récit dit la sonde, jamais une règle robots.
+    expect(alice[1]).toContain('Rapport d\'accès : page sondée');
+    expect(bob[1]).toContain('Access report: page probed');
+    for (const line of [...alice, ...bob]) expect(line).not.toMatch(/robots/i);
+    const refused = { kind: 'access_report', payload: { view: { signal: 'review' }, verdict: { proceed: false }, ms: 120, cost_usd: 0 } };
+    expect(narrativeLine(renderer, refused, 'fr')).toContain('le site refuse l\'accès');
+    expect(narrativeLine(renderer, refused, 'en')).toContain('the site refuses access');
+    const signals = { kind: 'access_report', payload: { view: { signal: 'review' }, verdict: { proceed: true }, ms: 120, cost_usd: 0 } };
+    expect(narrativeLine(renderer, signals, 'en')).toContain('usage signals');
     expect(alice[3]).toContain('1 source de données trouvée');
     expect(alice[5]).toContain('2 méthodes plus chères écartées');
     expect(bob[5]).toContain('2 costlier methods skipped');

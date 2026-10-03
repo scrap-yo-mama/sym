@@ -4,7 +4,7 @@
 // (= run_api), ré-enquête manuelle, versions de stratégie (liste, détail, diff, retour), chronologie des statuts.
 //
 // Droits : lectures sous `withActor` (RLS : siennes + `instance` sans session) ; écritures réservées au propriétaire (404
-// uniforme pour l'API d'autrui, même visible) ; codes d'erreur de 05 § 4.3. Aucun réglage robots.txt n'existe (INV11).
+// uniforme pour l'API d'autrui, même visible) ; codes d'erreur de 05 § 4.3.
 import {
   API_STATUSES,
   EXECUTIONS,
@@ -518,8 +518,9 @@ export function apiRoutes(app: FastifyInstance, ctx: ServerContext): void {
       // proposé sans ses marques `x-personal` ne contourne pas la case.
       const proposed = state?.proposed_schema ?? {};
       const corrected = request.body.output_schema;
-      const personal = schemaHasPersonalFields(proposed) ? proposed : corrected !== undefined && schemaHasPersonalFields(corrected) ? corrected : {};
-      if (await rejectWithoutAck(ctx, reply, actor, personal)) return reply;
+      const fromProposed = schemaHasPersonalFields(proposed);
+      const personal = fromProposed ? proposed : corrected !== undefined && schemaHasPersonalFields(corrected) ? corrected : {};
+      if (await rejectWithoutAck(ctx, reply, actor, personal, fromProposed ? 'proposed' : 'corrected')) return reply;
       if (await rejectIfKeyRateLimited(ctx, reply, actor)) return reply;
       let runId: string;
       try {

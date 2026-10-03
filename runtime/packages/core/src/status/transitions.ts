@@ -35,7 +35,7 @@ const REPLAY_FAILURES = [
 
 export const TRANSITIONS: readonly TransitionDef[] = [
   { id: 1, from: 'enquete', to: 'sain', slug: 'enquete_to_sain', reasons: ['strategy_conform'] },
-  { id: 2, from: 'enquete', to: 'erreur', slug: 'enquete_to_erreur', reasons: ['investigation_budget_exhausted', 'robots_unreachable'] },
+  { id: 2, from: 'enquete', to: 'erreur', slug: 'enquete_to_erreur', reasons: ['investigation_budget_exhausted'] },
   {
     id: 3, from: 'enquete', to: 'action_requise', slug: 'enquete_to_action_requise',
     reasons: [...INVESTIGATION_ACTION_CLASSES, ...INVESTIGATION_ACTION_REASONS],

@@ -556,10 +556,9 @@ describe('assert_persistence_never_on_refusal', () => {
     expect(await attemptRuns(apis[2]!)).toBe(0);
   });
 
-  test('401, robots.txt, défi, 451 ou llm_refused pendant une tentative : fin du mode (refused) ; llm_auth, llm_quota_exhausted, not_found : ineligible', async () => {
+  test('401, défi, 451 ou llm_refused pendant une tentative : fin du mode (refused) ; llm_auth, llm_quota_exhausted, not_found : ineligible', async () => {
     const cases: [StatusEventInput, RunResult, string, string][] = [
       [{ type: 'run_failed', failureClass: 'auth_required', httpStatus: 401 }, { state: 'failed', failure_class: 'auth_required', retryable: false, error_detail: 'http_401' }, 'action_requise', 'refused'],
-      [{ type: 'run_failed', failureClass: 'robots_disallowed' }, { state: 'failed', failure_class: 'robots_disallowed', retryable: false, error_detail: 'robots' }, 'bloquee', 'refused'],
       [{ type: 'run_failed', failureClass: 'blocked_by_protection' }, { state: 'failed', failure_class: 'blocked_by_protection', retryable: false, error_detail: 'challenge' }, 'bloquee', 'refused'],
       [{ type: 'investigation_failed', cause: 'budget_exhausted' }, { state: 'failed', failure_class: 'network', retryable: false, error_detail: 'geo_restriction' }, 'erreur', 'refused'],
       // Redirection de pays (classify : network/geo_redirect) : une géo-restriction, jamais réessayée.

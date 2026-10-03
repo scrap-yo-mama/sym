@@ -77,7 +77,7 @@ export type MemoryEntry = {
   readonly output_schema: unknown;
   readonly fields: Readonly<Record<string, FieldProfile>> | null;
   readonly sample: readonly unknown[];
-  readonly refusal: { readonly class: 'robots_disallowed' | 'forbidden' | 'bloquee'; readonly at: string } | null;
+  readonly refusal: { readonly class: 'forbidden' | 'bloquee'; readonly at: string } | null;
 };
 
 export type DossierMode = 'investigate' | 'repair' | 'instructed';

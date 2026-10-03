@@ -24,7 +24,7 @@ vi.hoisted(() => {
   process.env['DEBUG'] = [process.env['DEBUG'], 'pw:protocol'].filter(Boolean).join(',');
 });
 
-import { accessReportView, buildAccessReport, ENGINE_ACCEPT_LANGUAGE, RobotsGate, sessionAccessProbe, sessionRobotsFetcher } from '@runtime/core/access';
+import { accessReportView, buildAccessReport, ENGINE_ACCEPT_LANGUAGE, sessionAccessProbe } from '@runtime/core/access';
 import * as net from '@runtime/core/net';
 import { openBrowserEgress, openNetworkSession, startEgressProxy, type BrowserEgress, type EgressProxy, type SsrfGuard } from '@runtime/core/net';
 import { isValidTimeZone, resolveLocale } from '@runtime/i18n';
@@ -34,7 +34,6 @@ import { BrowserPool, playwrightLauncher } from '../../apps/worker/src/browser/p
 import { openRunContext } from '../../apps/worker/src/browser/run-context.ts';
 import { robotIdentity } from '../../apps/worker/src/exec/robot-identity.ts';
 import { fixtureGuard } from '../helpers/fixture-net.ts';
-import { allowAllRequests } from '../helpers/robots-allow.ts';
 
 const HOST = 'zz_test_al.localhost';
 /** Langue et fuseau témoins (langue d'usage local qu'aucune machine n'a) : aucune requête vers un site ne doit les porter. */
@@ -99,7 +98,6 @@ beforeAll(async () => {
         reported.push(JSON.parse(decodeURIComponent((req.url ?? '').split('?d=')[1] ?? '{}')) as PageSelf);
         return void res.writeHead(204).end();
       }
-      if (path === '/robots.txt') return void res.writeHead(200, { 'content-type': 'text/plain' }).end('User-agent: *\nDisallow:\n');
       if (path === '/api') return void res.writeHead(200, { 'content-type': 'application/json' }).end('{"items":[]}');
       res.writeHead(200, { 'content-type': 'text/html' }).end(PAGE);
     });
@@ -187,11 +185,9 @@ describe('assert_accept_language_engine_real : la langue envoyée est celle du m
     const ref = await virgin();
     seen = [];
     const identity = await robotIdentity({ warn: () => undefined })();
-    const robotsSession = openNetworkSession({ rung: { mode: 'direct' }, guard, userAgent: identity.userAgent });
-    const gate = new RobotsGate({ fetch: sessionRobotsFetcher(robotsSession) });
-    const session = openNetworkSession({ rung: { mode: 'direct' }, guard, checkUrl: gate.checkUrl, userAgent: identity.userAgent });
+    const session = openNetworkSession({ rung: { mode: 'direct' }, guard, userAgent: identity.userAgent });
     try {
-      const report = await buildAccessReport({ url: base('/api'), gate, probe: sessionAccessProbe(session), signal, probeLlmsTxt: false });
+      const report = await buildAccessReport({ url: base('/api'), probe: sessionAccessProbe(session), signal, probeLlmsTxt: false, probeSitemap: false });
       const shown = accessReportView(report).accept_language;
       const received = acceptLanguages('/api');
       expect(received.length).toBeGreaterThan(0);
@@ -199,7 +195,6 @@ describe('assert_accept_language_engine_real : la langue envoyée est celle du m
       expect(shown ?? '').toBe(ref.header);
     } finally {
       await session.close();
-      await robotsSession.close();
     }
   });
 
@@ -209,7 +204,7 @@ describe('assert_accept_language_engine_real : la langue envoyée est celle du m
     reported = [];
     await pool.run(signal, (browser) =>
       withEgress(async (egress) => {
-        const rc = await openRunContext(browser, { egressServer: egress.server, allowedHosts: [HOST], checkRequest: allowAllRequests });
+        const rc = await openRunContext(browser, { egressServer: egress.server, allowedHosts: [HOST] });
         try {
           await rc.page.goto(base('/'), { waitUntil: 'load' });
           await rc.page.waitForResponse((r) => r.url().endsWith('/sub')).catch(() => undefined);
@@ -231,7 +226,7 @@ describe('assert_accept_language_engine_real : la langue envoyée est celle du m
       seen = [];
       reported = [];
       await withEgress(async (egress) => {
-        const ab = await launchAgentBrowser({ egressServer: egress.server, allowedHosts: [HOST], allowWriteActions: false, checkRequest: allowAllRequests });
+        const ab = await launchAgentBrowser({ egressServer: egress.server, allowedHosts: [HOST], allowWriteActions: false });
         try {
           await ab.page.goto(base('/'), { waitUntil: 'load' });
           await ab.page.waitForResponse((r) => r.url().endsWith('/sub')).catch(() => undefined);

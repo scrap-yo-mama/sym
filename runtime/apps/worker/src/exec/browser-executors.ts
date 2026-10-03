@@ -27,7 +27,6 @@ import {
   failureRoute,
   TransportRefusal,
   runDeclarative,
-  type AccessCheck,
   type DeclarativeRunOptions,
   type DeclarativeRunResult,
   type ExecFailure,
@@ -41,7 +40,7 @@ import { DomainNotAllowedError, guardedGoto, type BrowserEgress, type SsrfGuard 
 import type { Page, Request, Response } from 'playwright-core';
 import { boundedContent, boundedDocumentBody, boundedRawBody, countMatching, scrollStep, TOO_LARGE, trackDecodedSizes, type DecodedSizes } from '../browser/bounded.js';
 import type { BrowserPool } from '../browser/pool.js';
-import { hostAllowed, isMainNavigation, openRunContext, trackStrategyRequests, type BrowserRequestCheck, type RunContext, type StrategyRequests } from '../browser/run-context.js';
+import { hostAllowed, isMainNavigation, openRunContext, trackStrategyRequests, type RunContext, type StrategyRequests } from '../browser/run-context.js';
 
 const BROWSER_NAVIGATION_TIMEOUT_MS = 30_000;
 /** Attente du rendu d'une page (sélecteur des enregistrements) avant lecture du DOM. */
@@ -49,9 +48,7 @@ const BROWSER_RENDER_WAIT_MS = 10_000;
 /** Attente de nouveaux éléments après un défilement (`infinite_scroll`) : au-delà, la fin du flux est constatée. */
 const BROWSER_SCROLL_WAIT_MS = 5_000;
 
-export type BrowserExecutorOptions = Omit<DeclarativeRunOptions, 'transport' | 'access'> & {
-  /** robots.txt (1.11, INV11) : obligatoire, chaque requête du contexte Chromium du run est contrôlée. */
-  readonly access: AccessCheck;
+export type BrowserExecutorOptions = Omit<DeclarativeRunOptions, 'transport'> & {
   readonly pool: BrowserPool;
   readonly egress: BrowserEgress;
   readonly guard: SsrfGuard;
@@ -172,60 +169,18 @@ function navigationGuard(): NavigationGuard & { bind(page: Page, sizes?: Decoded
 }
 
 /** Contexte de run neuf sur un Chromium du pool ; l'interruption du run (annulation, bail perdu) ferme le contexte. */
-/** Types CDP d'une requête de données lancée par la page (`fetch`, XHR). */
-const FETCH_TYPES = new Set(['Fetch', 'XHR']);
-
 async function withRunContext(
   options: BrowserExecutorOptions,
-  fn: (rc: RunContext, strategy: StrategyRequests, nav: NavigationGuard, claimFetch: (url: string) => void) => Promise<DeclarativeRunResult>,
+  fn: (rc: RunContext, strategy: StrategyRequests, nav: NavigationGuard) => Promise<DeclarativeRunResult>,
 ): Promise<DeclarativeRunResult> {
   return options.pool.run(options.signal, async (browser) => {
     const nav = navigationGuard();
-    /**
-     * Refus de robots.txt (1.11, INV11) d'une navigation du cadre principal (page d'accueil d'E2, page de la stratégie) :
-     * coupée sans connexion, elle donne sa classe à l'essai. Une sous-ressource refusée est seulement coupée.
-     */
-    let robotsRefusal: ExecFailure | undefined;
-    const access = options.access;
-    /** URL des `fetch` de la stratégie (transport d'E2) : un saut refusé de leur chaîne donne sa classe à l'essai. */
-    const strategyFetches = new Set<string>();
-    const claimFetch = (url: string) => {
-      strategyFetches.add(url);
-      try {
-        strategyFetches.add(new URL(url).href);
-      } catch {
-        // URL refusée en amont par l'interpréteur.
-      }
-    };
-    const robotsVerdict = (url: string) =>
-      access(url).catch((): { allowed: false; failure: ExecFailure } => ({ allowed: false, failure: { failure_class: 'robots_unreachable', retryable: true, detail: 'robots_check_failed' } }));
     const rc = await openRunContext(browser, {
       egressServer: options.egress.server,
       allowedHosts: options.spec.request.allowed_hosts,
       ...(options.allowedHostSuffixes === undefined ? {} : { allowedHostSuffixes: options.allowedHostSuffixes }),
       ...(options.userAgent === undefined ? {} : { userAgent: options.userAgent }),
-      // robots.txt à CHAQUE saut que Chromium suit (redirections que `admit` ne voit pas, cadres hors processus) : un saut
-      // refusé du cadre principal ou d'un `fetch` de la stratégie arrête l'essai ; une sous-ressource est seulement coupée.
-      checkRequest: async (hop: BrowserRequestCheck) => {
-        const decision = await robotsVerdict(hop.url);
-        if (decision.allowed) return true;
-        if (hop.mainFrame || (FETCH_TYPES.has(hop.resourceType) && strategyFetches.has(hop.rootUrl))) robotsRefusal ??= decision.failure;
-        return false;
-      },
-      admit: async (request) => {
-        const decision = await robotsVerdict(request.url());
-        if (!decision.allowed) {
-          let main = false;
-          try {
-            main = request.isNavigationRequest() && request.frame().parentFrame() === null;
-          } catch {
-            // Requête sans cadre : jamais la navigation de la page du run.
-          }
-          if (main) robotsRefusal ??= decision.failure;
-          return false;
-        }
-        return nav.admit(request);
-      },
+      admit: async (request) => nav.admit(request),
       // Navigation lancée par la page vers un hôte hors API (redirection JS d'un défi vers son éditeur) : coupée par la
       // politique de domaines sans passer par `admit`, elle compte comme toute navigation non demandée.
       onViolation: (_host, request) => {
@@ -240,9 +195,8 @@ async function withRunContext(
     try {
       rc.page.setDefaultNavigationTimeout(options.navigationTimeoutMs ?? BROWSER_NAVIGATION_TIMEOUT_MS);
       rc.page.setDefaultTimeout(options.navigationTimeoutMs ?? BROWSER_NAVIGATION_TIMEOUT_MS);
-      const result = await fn(rc, strategy, nav, claimFetch);
+      const result = await fn(rc, strategy, nav);
       options.signal.throwIfAborted();
-      if (!result.ok && robotsRefusal !== undefined) return { ok: false, failure: robotsRefusal, pages: result.pages, requests: result.requests };
       return refine(result, options.egress, strategy);
     } finally {
       options.signal.removeEventListener('abort', onAbort);
@@ -306,7 +260,7 @@ export function runFetchInPageExecutor(options: BrowserExecutorOptions): Promise
   const classify = options.classify ?? classifyExchange;
   const maxBytes = maxBytesOf(options);
   const pageUrl = `${new URL(options.spec.request.url).origin}/`;
-  return withRunContext(options, async ({ page }, strategy, nav, claimFetch) => {
+  return withRunContext(options, async ({ page }, strategy, nav) => {
     // Ouverture du site : réservée à la cadence, classée avant toute requête de données (un refus arrête l'essai).
     if (options.pacer !== undefined) {
       const slot = await options.pacer.acquire(pageUrl);
@@ -350,7 +304,6 @@ export function runFetchInPageExecutor(options: BrowserExecutorOptions): Promise
       // Lecture bornée dans la page (flux coupé au-delà du plafond) ; seules des valeurs primitives bornées sont rendues :
       // une page qui surcharge `ArrayBuffer`, `TextDecoder` ou `JSON` fausse ses données, jamais la borne du transfert.
       const target = sameUrl(request.url);
-      claimFetch(request.url);
       const evaluation = nav.during(() => strategy.during((r) => r.resourceType() === 'fetch' && target(r.url()), () => page.evaluate(
         async (a: { url: string; method: string; headers: Record<string, string>; body: string | null; maxBytes: number; maxMeta: number }) => {
           try {
@@ -498,8 +451,8 @@ const STOPPING_ROUTES = new Set(['stop', 'action_required', 'slow_down']);
 
 /**
  * Reconnaissance de l'enquête (tâche 2.1, 04 §4) : UNE passe E3 sur la page, dans le même contexte gardé que les essais
- * (proxy d'egress de l'essai, SSRF, verrou de domaines, robots.txt à chaque saut et chaque sous-ressource, cadence pour
- * la page, navigations lancées par la page coupées). La réponse SERVIE est classée avant tout rendu (INV6) : un refus
+ * (proxy d'egress de l'essai, SSRF, verrou de domaines à chaque saut et chaque sous-ressource, cadence pour la page,
+ * navigations lancées par la page coupées). La réponse SERVIE est classée avant tout rendu (INV6) : un refus
  * ou un défi arrête la passe. Sinon, on attend le calme du réseau (borné) et on garde : les réponses JSON des requêtes
  * `fetch` / XHR vers un domaine de l'API (corps bornés, taille décodée vue par CDP), le document servi et le DOM rendu.
  * CHAQUE réponse `fetch` / XHR d'un domaine de l'API est classée aussi (INV6, comme la reconnaissance statique) : un
