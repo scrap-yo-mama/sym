@@ -58,7 +58,8 @@ type NarrativeCatalog = {
   running: string;
   cancelled: string;
   action: (cause: string) => string;
-  next: { validate: string; run: (tool: string) => string; poll: (seconds: number | null) => string; items: string; none: string; schemaRemark: string };
+  /** `ids` : arguments de `next_action` déjà rendus (« api_id <uuid> »), ou null (le texte dit alors « cet api_id »). */
+  next: { validate: (ids: string | null) => string; run: (tool: string) => string; poll: (seconds: number | null, ids: string | null) => string; items: (ids: string | null) => string; none: string; schemaRemark: (ids: string | null) => string };
   console: string;
   stepWord: string;
   costWord: string;
@@ -99,12 +100,12 @@ const EN: NarrativeCatalog = {
   cancelled: 'The investigation was cancelled; costs already incurred remain charged.',
   action: (cause) => `Action needed (${cause}).`,
   next: {
-    validate: 'Next step: show the proposed schema to the user, then call validate_schema with this api_id (add output_schema only to correct it).',
+    validate: (ids) => `Next step: show the proposed schema to the user, then call validate_schema with ${ids ?? 'this api_id'} (add output_schema only to correct it).`,
     run: (tool) => `Next step: call ${tool} with its input, or run_api.`,
-    poll: (s) => `Next step: call get_run with this run_id${s === null ? '' : ` in about ${s} seconds`}.`,
-    items: 'Next step: call get_items with next_cursor for the rest.',
+    poll: (s, ids) => `Next step: call get_run with ${ids ?? 'this run_id'}${s === null ? '' : ` in about ${s} seconds`}.`,
+    items: (ids) => `Next step: call get_items with ${ids ?? 'next_cursor'} for the rest.`,
     none: 'Next step: none.',
-    schemaRemark: 'Next step: adjust the schema to the remark, show it to the user again, then call validate_schema with output_schema.',
+    schemaRemark: (ids) => `Next step: adjust the schema to the remark, show it to the user again, then call validate_schema with ${ids === null ? '' : `${ids} and `}output_schema.`,
   },
   console: 'Console',
   stepWord: 'Step',
@@ -143,12 +144,12 @@ const FR: NarrativeCatalog = {
   cancelled: 'L’enquête est annulée ; les coûts déjà engagés restent imputés.',
   action: (cause) => `Action attendue (${cause}).`,
   next: {
-    validate: 'Prochaine étape : montre le schéma proposé à l’utilisateur, puis appelle validate_schema avec cet api_id (output_schema seulement pour le corriger).',
+    validate: (ids) => `Prochaine étape : montre le schéma proposé à l’utilisateur, puis appelle validate_schema avec ${ids ?? 'cet api_id'} (output_schema seulement pour le corriger).`,
     run: (tool) => `Prochaine étape : appelle ${tool} avec son entrée, ou run_api.`,
-    poll: (s) => `Prochaine étape : appelle get_run avec ce run_id${s === null ? '' : ` dans environ ${s} secondes`}.`,
-    items: 'Prochaine étape : appelle get_items avec next_cursor pour la suite.',
+    poll: (s, ids) => `Prochaine étape : appelle get_run avec ${ids ?? 'ce run_id'}${s === null ? '' : ` dans environ ${s} secondes`}.`,
+    items: (ids) => `Prochaine étape : appelle get_items avec ${ids ?? 'next_cursor'} pour la suite.`,
     none: 'Prochaine étape : aucune.',
-    schemaRemark: 'Prochaine étape : ajuste le schéma à la remarque, montre-le de nouveau à l’utilisateur, puis appelle validate_schema avec output_schema.',
+    schemaRemark: (ids) => `Prochaine étape : ajuste le schéma à la remarque, montre-le de nouveau à l’utilisateur, puis appelle validate_schema avec ${ids === null ? '' : `${ids} et `}output_schema.`,
   },
   console: 'Console',
   stepWord: 'Étape',

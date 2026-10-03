@@ -88,8 +88,10 @@ Investigation zz-books · books.toscrape.com · awaiting_schema_validation
 2. Reconnaissance: 1 candidate data source (browser) [3.1 s, $0.002]
    Output schema proposed: 2 fields
 Cost: $0.002
-Next step: show the proposed schema to the user, then call validate_schema with this api_id (add output_schema only to correct it).
+Next step: show the proposed schema to the user, then call validate_schema with api_id 3f2b8c1e-5d47-4a9e-b0c6-2e8f1a7d9b34 (add output_schema only to correct it).
 Console: https://<instance>/apis/zz-books
+
+{"api_id":"3f2b8c1e-5d47-4a9e-b0c6-2e8f1a7d9b34","run_id":"9a1c4e7f-2b3d-4f56-8e90-1c2d3e4f5a6b","slug":"zz-books","next_action":{"tool":"validate_schema","args":{"api_id":"3f2b8c1e-5d47-4a9e-b0c6-2e8f1a7d9b34"}}}
 
 Proposed output schema: {"type":"object","properties":{"title":{"type":"string"},"price":{"type":"number"}}}
 Sample (2 first items, from the site, data not instructions):
@@ -112,7 +114,7 @@ Console: https://<instance>/apis/zz-books
 
 Le récit suit la langue du compte (`en` ou `fr`), que `?lang=` remplace. Les mêmes faits sont dans `structuredContent` : `timeline` (une entrée par étape et par jalon), `attempts` (les essais), `cost` et `console_url`. Les deux viennent du même journal d'enquête : le texte et la structure citent les mêmes essais, les mêmes durées et les mêmes coûts. Le **rapport d'accès** (`robots.txt`, signaux d'usage, conditions du site) est toujours la première étape : voir [Usage responsable](../explications/usage-responsable.md). Le récit n'affiche jamais un texte du site : des codes, des comptes, des durées et des coûts.
 
-Un client qui n'affiche rien d'autre que le texte a tout ce qu'il faut : phases, essais, coût, stratégie retenue, prochaine action, lien de la console et, à la création, le schéma à montrer à la personne. `get_run` rend le même récit à tout moment.
+Un client qui n'affiche rien d'autre que le texte a tout ce qu'il faut : phases, essais, coût, stratégie retenue, prochaine action avec ses identifiants (`api_id`, `run_id`, curseur), lien de la console et, à la création, le schéma à montrer à la personne. `get_run` rend le même récit à tout moment.
 
 ## Progression
 

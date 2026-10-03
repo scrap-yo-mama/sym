@@ -194,7 +194,10 @@ function narrativeAnswer(envelope: Json, call: Call, extra?: { consoleUrl?: stri
     call.locale,
   );
   const { timeline: _t, attempts: _a, ...rest } = structured;
-  const itemsPart = Array.isArray(rest['items']) && (rest['items'] as unknown[]).length > 0 ? `\n\n${JSON.stringify({ items: rest['items'], total: rest['total'], next_cursor: rest['next_cursor'], run_id: rest['run_id'], status: rest['status'], degraded_reasons: rest['degraded_reasons'] })}` : '';
+  // Le run_id et la prochaine action restent dans le texte même sans items : le client qui n'affiche que `content` suit le run.
+  const itemsPart = Array.isArray(rest['items']) && (rest['items'] as unknown[]).length > 0
+    ? `\n\n${JSON.stringify({ items: rest['items'], total: rest['total'], next_cursor: rest['next_cursor'], run_id: rest['run_id'], status: rest['status'], degraded_reasons: rest['degraded_reasons'] })}`
+    : `\n\n${JSON.stringify({ run_id: rest['run_id'], status: rest['status'], next_action: rest['next_action'] ?? null })}`;
   return { content: [{ type: 'text', text: `${text}${itemsPart}` }], structuredContent: structured };
 }
 
@@ -413,7 +416,9 @@ function handlers(ctx: ServerContext): Record<GenericToolName, Handler> {
       },
       call.locale,
     );
-    return { content: [{ type: 'text', text: `${extra.note === undefined ? '' : `${extra.note}\n\n`}${narrative}${schemaSection(view)}` }], structuredContent: structured };
+    // Identifiants dans le texte (assert_text_only_sufficient) : un client qui n'affiche que `content` appelle la suite avec eux.
+    const ids = JSON.stringify({ api_id: view['api_id'], run_id: view['run_id'], slug: view['slug'], next_action: structured['next_action'] });
+    return { content: [{ type: 'text', text: `${extra.note === undefined ? '' : `${extra.note}\n\n`}${narrative}\n\n${ids}${schemaSection(view)}` }], structuredContent: structured };
   };
 
   /** Tour suivant d'une élicitation : valider (essais lancés), modifier (rien lancé), refuser ou annuler (rien lancé). */

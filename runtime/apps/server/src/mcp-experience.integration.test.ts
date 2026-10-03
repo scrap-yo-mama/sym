@@ -218,9 +218,14 @@ describe('récit et timeline (05 § 1.2)', () => {
     const client = await connect(a.key);
     const sim = simulateFirstInvestigation(a);
     const created = await call(client, 'create_api', { description: 'zz_test livres', url: 'https://zz-books.example/catalogue/', wait_seconds: 5 });
-    const { apiId } = await sim;
+    const simulated = await sim;
     expect(created.isError ?? false).toBe(false);
     const first = text(created);
+    // Les identifiants de la suite sont dans le texte : le client qui n'affiche que `content` appelle validate_schema avec eux.
+    const apiId = /validate_schema with api_id ([0-9a-f-]{36})/.exec(first)?.[1];
+    expect(apiId, 'api_id dans le texte de create_api').toBe(simulated.apiId);
+    expect(first).toContain(`"api_id":"${simulated.apiId}"`);
+    expect(first).toContain(`"run_id":"${simulated.runId}"`);
     // Phases, étapes numérotées, coût en tête de ligne, prochaine action et lien console, schéma à montrer à la personne.
     expect(first).toMatch(/^Investigation [a-z0-9-]+ · zz-books\.example · awaiting_schema_validation/m);
     expect(first).toMatch(/^1\. Access report: robots\.txt allows this page \[\d+\.\d s, \$0\]/m);

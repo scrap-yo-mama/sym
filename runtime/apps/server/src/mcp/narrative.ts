@@ -130,13 +130,37 @@ export function renderNarrative(input: NarrativeInput, locale: McpLocale): strin
   return lines.join('\n');
 }
 
+/** Arguments de `next_action` cités par le récit, dans cet ordre ; chacun garde sa forme (uuid, curseur opaque) ou n'est pas cité. */
+const NEXT_ARGS: readonly (readonly [string, RegExp])[] = [
+  ['api_id', /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i],
+  ['run_id', /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i],
+  ['dataset_id', /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i],
+  ['cursor', /^[A-Za-z0-9_.~=-]{1,512}$/],
+];
+
+/**
+ * Les identifiants de la prochaine action, en texte (« api_id <uuid> », « dataset_id <uuid> and cursor <c> ») : un client
+ * qui n'affiche que `content` doit pouvoir faire l'appel suivant (assert_text_only_sufficient). Null si aucun n'a sa forme.
+ */
+function nextArgsText(nextAction: NarrativeInput['nextAction'], locale: McpLocale): string | null {
+  const args = nextAction?.args;
+  if (typeof args !== 'object' || args === null) return null;
+  const parts: string[] = [];
+  for (const [key, shape] of NEXT_ARGS) {
+    const value = (args as Record<string, unknown>)[key];
+    if (typeof value === 'string' && shape.test(value)) parts.push(`${key} ${value}`);
+  }
+  return parts.length === 0 ? null : parts.join(locale === 'fr' ? ' et ' : ' and ');
+}
+
 function nextLine(input: NarrativeInput, locale: McpLocale): string {
   const c = narrativeCatalog(locale).next;
-  if (input.schemaRemark === true) return c.schemaRemark;
+  const ids = nextArgsText(input.nextAction, locale);
   const tool = input.nextAction?.tool ?? null;
-  if (tool === 'validate_schema') return c.validate;
-  if (tool === 'get_run') return c.poll(input.pollAfterSeconds);
-  if (tool === 'get_items') return c.items;
+  if (input.schemaRemark === true) return c.schemaRemark(tool === 'validate_schema' ? ids : null);
+  if (tool === 'validate_schema') return c.validate(ids);
+  if (tool === 'get_run') return c.poll(input.pollAfterSeconds, ids);
+  if (tool === 'get_items') return c.items(ids);
   const start = input.timeline.find((e) => e.kind === 'investigation');
   const done = input.timeline.some((e) => e.kind === 'finished' && e.outcome === 'conformant');
   if (done && start?.kind === 'investigation') return `${c.run(apiToolName(start.slug) ?? 'run_api')} ${narrativeCatalog(locale).header.restart}`;
