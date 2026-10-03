@@ -29,6 +29,13 @@ export type StepPageTools = {
   /** Clic de l'hôte : contrôle d'envoi refusé sans `allow_write_actions`, navigation du dispatch attendue. */
   click(locator: Locator): Promise<void>;
   readonly timeoutMs: number;
+  /**
+   * Garde de classification seule (INV6) : classements en cours terminés, document courant classé ; lève `access_refused`
+   * au premier refus. Présente sur les outils de l'agent d'étape (hors d'un appel de l'isolat).
+   */
+  guard?(): Promise<void>;
+  /** Arrêt de l'essai (annulation, refus retenu) : la boucle de l'agent d'étape s'arrête au premier refus. */
+  readonly signal?: AbortSignal;
 };
 
 export type StepsTrialInfo = {
@@ -56,27 +63,95 @@ const NAVIGATION_SETTLE_MS = 1_500;
 
 const stepFailed = (failure_class: 'extraction' | 'code_error', detail: string): ExecFailure => ({ failure_class, retryable: false, detail });
 
-/** Éléments sémantiques et texte visibles, BORNÉS dans la page (primitives seulement) : vue de l'agent et empreinte. */
+/** Séparateurs de la vue rendue par la page (caractères de contrôle, jamais présents dans les valeurs copiées). */
+const SEP_FIELD = '\u0001';
+const SEP_ELEMENT = '\u0002';
+const SEP_TEXT = '\u0003';
+const MAX_ROLE = 40;
+const MAX_NAME = 300;
+/** Plafond de la chaîne rendue par la page : éléments, séparateurs et texte (borne tenue dans la page, revérifiée ici). */
+const MAX_VIEW = MAX_ELEMENTS * (MAX_ROLE + MAX_NAME + 2) + MAX_TEXT + 1;
+/** Nœuds parcourus au plus (une liste de nœuds truquée ne fait pas tourner la boucle sans fin). */
+const MAX_SCAN = 20_000;
+
+/**
+ * Éléments sémantiques et texte visibles : vue de l'agent d'étape et empreinte du début et de la fin de chaque étape.
+ * Bornée DANS LA PAGE sur le modèle de browser/bounded.ts (1.6) : la page peut surcharger toute méthode (`slice`,
+ * `replace`, `trim`, `split`, `push`, getters du DOM) ; seuls `typeof`, la longueur et l'indexation d'une chaîne
+ * primitive, les comparaisons et la concaténation par `+` ne se surchargent pas. Chaque valeur lue est copiée caractère
+ * par caractère jusqu'à sa borne (espaces normalisés, caractères de contrôle écartés), les éléments sont comptés par un
+ * index, et la page ne rend qu'UNE chaîne primitive dont la longueur est contrôlée avant le transfert ; au-delà, rien.
+ * Côté hôte, chaque rôle, nom, le nombre d'éléments et le texte sont revérifiés avant tout usage.
+ */
 async function observePage(page: Page): Promise<StepAgentObservation> {
-  const raw = await page
+  const raw: unknown = await page
     .evaluate(
-      (a: { maxElements: number; maxText: number }) => {
+      (a: { maxElements: number; maxRole: number; maxName: number; maxText: number; maxView: number; maxScan: number; fs: string; es: string; ts: string }) => {
         try {
-          type El = { tagName: string; getAttribute(n: string): string | null; innerText?: string; textContent: string | null; type?: string; labels?: ArrayLike<{ innerText?: string }> | null; checkVisibility?: () => boolean };
-          const g = globalThis as unknown as { document: { body: { innerText: string } | null; querySelectorAll(s: string): ArrayLike<El>; getElementById(id: string): El | null } };
+          type El = { tagName: unknown; getAttribute(n: string): unknown; innerText?: unknown; textContent: unknown; labels?: unknown; checkVisibility?: unknown };
+          const g = globalThis as unknown as { document: { body: { innerText: unknown } | null; querySelectorAll(s: string): { length: unknown; [i: number]: El | undefined }; getElementById(id: string): El | null } };
           const d = g.document;
-          const out: { role: string; name: string }[] = [];
-          const implicit = (el: El): string | null => {
-            const explicit = el.getAttribute('role');
-            if (explicit !== null && explicit !== '') return explicit.split(' ')[0] ?? null;
-            const tag = el.tagName.toLowerCase();
+          const isBlank = (c: string): boolean => c <= ' ' || c === ' ' || c === ' ' || c === ' ';
+          /** Copie bornée d'une chaîne primitive : blancs réduits à une espace, bords nettoyés ; `null` si ce n'est pas une chaîne. */
+          const clean = (v: unknown, max: number): string | null => {
+            if (typeof v !== 'string') return null;
+            const scan = v.length < max * 8 + 64 ? v.length : max * 8 + 64;
+            let s = '';
+            let blank = false;
+            for (let i = 0; i < scan; i++) {
+              const c = v[i] as string;
+              if (isBlank(c)) {
+                blank = s.length > 0;
+                continue;
+              }
+              if (blank) {
+                if (s.length + 1 >= max) break;
+                s += ' ';
+                blank = false;
+              }
+              if (s.length >= max) break;
+              s += c;
+            }
+            return s;
+          };
+          /** Premier mot d'une valeur nettoyée (rôle explicite, identifiant de `aria-labelledby`). */
+          const firstWord = (v: string | null): string => {
+            if (v === null) return '';
+            let s = '';
+            for (let i = 0; i < v.length; i++) {
+              const c = v[i] as string;
+              if (c === ' ') break;
+              s += c;
+            }
+            return s;
+          };
+          const LOWER: Record<string, string> = { A: 'a', B: 'b', C: 'c', D: 'd', E: 'e', F: 'f', G: 'g', H: 'h', I: 'i', J: 'j', K: 'k', L: 'l', M: 'm', N: 'n', O: 'o', P: 'p', Q: 'q', R: 'r', S: 's', T: 't', U: 'u', V: 'v', W: 'w', X: 'x', Y: 'y', Z: 'z' };
+          const lower = (v: string | null): string => {
+            if (v === null) return '';
+            let s = '';
+            for (let i = 0; i < v.length; i++) {
+              const c = v[i] as string;
+              const l = c >= 'A' && c <= 'Z' ? LOWER[c] : c;
+              s += typeof l === 'string' && l.length === 1 ? l : c;
+            }
+            return s;
+          };
+          const attr = (el: El, n: string, max: number): string | null => {
+            const v: unknown = el.getAttribute(n);
+            return clean(v, max);
+          };
+          const role = (el: El): string | null => {
+            const explicit = firstWord(attr(el, 'role', a.maxRole));
+            if (explicit !== '') return explicit;
+            const tag = lower(clean(el.tagName, 16));
             if (tag === 'a' && el.getAttribute('href') !== null) return 'link';
             if (tag === 'button') return 'button';
             if (tag === 'select') return 'combobox';
             if (tag === 'textarea') return 'textbox';
-            if (/^h[1-6]$/.test(tag)) return 'heading';
+            if (tag === 'h1' || tag === 'h2' || tag === 'h3' || tag === 'h4' || tag === 'h5' || tag === 'h6') return 'heading';
             if (tag === 'input') {
-              const t = (el.getAttribute('type') ?? 'text').toLowerCase();
+              const raw = attr(el, 'type', 16);
+              const t = raw === null ? 'text' : lower(raw);
               if (t === 'submit' || t === 'button' || t === 'reset' || t === 'image') return 'button';
               if (t === 'search') return 'searchbox';
               if (t === 'checkbox') return 'checkbox';
@@ -85,40 +160,73 @@ async function observePage(page: Page): Promise<StepAgentObservation> {
             }
             return null;
           };
-          const nameOf = (el: El): string => {
-            const label = el.getAttribute('aria-label');
-            if (label !== null && label.trim() !== '') return label;
-            const by = el.getAttribute('aria-labelledby');
-            if (by !== null) {
-              const ref = d.getElementById(by.split(' ')[0] ?? '');
-              if (ref !== null) return ref.textContent ?? '';
+          const nameOf = (el: El, tag: string): string => {
+            const label = attr(el, 'aria-label', a.maxName);
+            if (label !== null && label !== '') return label;
+            const by = firstWord(attr(el, 'aria-labelledby', 200));
+            if (by !== '') {
+              const ref = d.getElementById(by);
+              if (ref !== null && ref !== undefined) return clean(ref.textContent, a.maxName) ?? '';
             }
-            const labels = el.labels;
-            if (labels !== null && labels !== undefined && labels.length > 0) return labels[0]?.innerText ?? '';
-            const tag = el.tagName.toLowerCase();
-            if (tag === 'input') return el.getAttribute('value') ?? el.getAttribute('placeholder') ?? '';
-            return el.innerText ?? el.textContent ?? '';
+            const labels = el.labels as { length?: unknown; [i: number]: { innerText?: unknown } | undefined } | null | undefined;
+            if (labels !== null && labels !== undefined && typeof labels.length === 'number' && labels.length > 0) return clean(labels[0]?.innerText, a.maxName) ?? '';
+            if (tag === 'input') return attr(el, 'value', a.maxName) ?? attr(el, 'placeholder', a.maxName) ?? '';
+            return clean(el.innerText, a.maxName) ?? clean(el.textContent, a.maxName) ?? '';
           };
           const nodes = d.querySelectorAll('a[href],button,input,select,textarea,h1,h2,h3,h4,h5,h6,[role]');
-          for (let i = 0; i < nodes.length && out.length < a.maxElements; i++) {
-            const el = nodes[i]!;
-            if (typeof el.checkVisibility === 'function' && !el.checkVisibility()) continue;
-            const role = implicit(el);
-            if (role === null) continue;
-            const name = nameOf(el).replace(/\s+/g, ' ').trim().slice(0, 300);
-            out.push({ role, name });
+          const total = typeof nodes.length === 'number' ? nodes.length : 0;
+          let out = '';
+          let count = 0;
+          for (let i = 0; i < total && i < a.maxScan && count < a.maxElements; i++) {
+            const el = nodes[i];
+            if (el === undefined || el === null) continue;
+            if (typeof el.checkVisibility === 'function' && (el.checkVisibility as () => unknown)() === false) continue;
+            const r = role(el);
+            if (r === null || r === '' || r.length > a.maxRole) continue;
+            const n = nameOf(el, lower(clean(el.tagName, 16)));
+            if (typeof n !== 'string' || n.length > a.maxName) continue;
+            const piece = (count === 0 ? '' : a.es) + r + a.fs + n;
+            if (out.length + piece.length > a.maxView) return null;
+            out += piece;
+            count += 1;
           }
-          const text = d.body === null ? '' : String(d.body.innerText).slice(0, a.maxText);
-          return { elements: out, text };
+          // Texte : copie des premiers caractères (retours à la ligne gardés), séparateurs et contrôles écartés.
+          let text = '';
+          const body = d.body;
+          const inner: unknown = body === null ? '' : body.innerText;
+          if (typeof inner === 'string') {
+            for (let i = 0; i < inner.length && i < a.maxText * 4 && text.length < a.maxText; i++) {
+              const c = inner[i] as string;
+              if (c < ' ' && c !== '\n' && c !== '\t') continue;
+              text += c;
+            }
+          }
+          const view = out + a.ts + text;
+          return typeof view === 'string' && view.length <= a.maxView ? view : null;
         } catch {
-          return { elements: [], text: '' };
+          return null;
         }
       },
-      { maxElements: MAX_ELEMENTS, maxText: MAX_TEXT },
+      { maxElements: MAX_ELEMENTS, maxRole: MAX_ROLE, maxName: MAX_NAME, maxText: MAX_TEXT, maxView: MAX_VIEW, maxScan: MAX_SCAN, fs: SEP_FIELD, es: SEP_ELEMENT, ts: SEP_TEXT },
     )
-    .catch(() => ({ elements: [] as { role: string; name: string }[], text: '' }));
-  const elements = Array.isArray(raw.elements) ? raw.elements.filter((e) => typeof e?.role === 'string' && typeof e?.name === 'string').slice(0, MAX_ELEMENTS) : [];
-  return { url: page.url(), elements, text: typeof raw.text === 'string' ? raw.text.slice(0, MAX_TEXT) : '' };
+    .catch(() => null);
+  const empty: StepAgentObservation = { url: page.url(), elements: [], text: '' };
+  if (typeof raw !== 'string' || raw.length > MAX_VIEW) return empty;
+  const cut = raw.indexOf(SEP_TEXT);
+  if (cut < 0) return empty;
+  const text = raw.slice(cut + 1);
+  if (text.length > MAX_TEXT) return empty;
+  const list = cut === 0 ? [] : raw.slice(0, cut).split(SEP_ELEMENT);
+  if (list.length > MAX_ELEMENTS) return empty;
+  const elements: { role: string; name: string }[] = [];
+  for (const entry of list) {
+    const at = entry.indexOf(SEP_FIELD);
+    const role = at < 0 ? '' : entry.slice(0, at);
+    const name = at < 0 ? '' : entry.slice(at + 1);
+    if (role === '' || role.length > MAX_ROLE || name.length > MAX_NAME || name.includes(SEP_FIELD)) return empty;
+    elements.push({ role, name });
+  }
+  return { url: page.url(), elements, text };
 }
 
 const digestOf = (o: StepAgentObservation): string => createHash('sha256').update(JSON.stringify([o.url, o.text, o.elements])).digest('hex');
@@ -383,12 +491,25 @@ export class StepsHost {
       if (n !== 1) throw new SandboxBridgeError('page_failed', false, n === 0 ? 'target_not_found' : 'target_ambiguous');
       return loc;
     };
+    // Garde de classification (INV6, 19 §4 « sans jamais transmettre une page de défi ») : avant et après chaque
+    // observation (le DOM part dans le prompt), après chaque action ; un refus lève `access_refused` et arrête l'agent.
+    const guard = async (): Promise<void> => {
+      await tools.guard?.();
+    };
     return {
-      observe: () => observePage(page),
+      observe: async () => {
+        await guard();
+        const obs = await observePage(page);
+        await guard();
+        return obs;
+      },
       click: (t) =>
         guarded(async () => {
           if (computeSideEffect({ op: 'click', target: t }) === 'write') throw new SandboxBridgeError('page_failed', false, 'write_target');
           await tools.click(await single(t));
+          // Comme une étape `click` : le document lancé par le clic est attendu, puis classé avant toute observation.
+          await page.waitForLoadState('load', { timeout: NAVIGATION_SETTLE_MS }).catch(() => undefined);
+          await guard();
           if (this.#writes > 0) throw new SandboxBridgeError('page_failed', false, 'write_observed');
         }),
       // La valeur saisie est une entrée du run (contrôlée par l'agent d'étape) ; le champ ne doit pas être dans un formulaire.
@@ -398,9 +519,16 @@ export class StepsHost {
           const loc = await single(t);
           const inForm = await loc.evaluate((el) => (el as unknown as { closest(s: string): unknown }).closest('form') !== null).catch(() => true);
           if (inForm) throw new SandboxBridgeError('page_failed', false, 'type_in_form');
+          await guard();
           await loc.fill(text, { timeout: this.#spec.limits.step_timeout_ms });
+          await guard();
         }),
-      scroll: (direction) => guarded(async () => page.mouse.wheel(0, direction === 'up' ? -800 : 800)),
+      scroll: (direction) =>
+        guarded(async () => {
+          await guard();
+          await page.mouse.wheel(0, direction === 'up' ? -800 : 800);
+          await guard();
+        }),
     };
   }
 }

@@ -937,13 +937,10 @@ paths:
         '409':
           $ref: '#/components/responses/Error'
   # Extension de 05 § 4.2 (tâche 2.13, 19 § 4) : confirmation humaine des étapes instruites et opt-in du mode
-  # « agent instruit ». Le serveur REST les livre avec les autres routes des API (3.1).
+  # « agent instruit ». Livrées par 2.13 dans le registre REST de 3.1.
   /api/apis/{slug}/instructed-steps/confirm:
     post:
-      x-pending: '3.1'
       operationId: confirmInstructedSteps
-      security:
-        - sessionCookie: []
       tags: [apis]
       summary: Confirme les étapes instruites affichées (acte humain, session console seulement)
       description: >-
@@ -985,7 +982,6 @@ paths:
                 $ref: '#/components/schemas/ApiError'
   /api/apis/{slug}/instructed-mode:
     put:
-      x-pending: '3.1'
       operationId: setInstructedMode
       tags: [apis]
       summary: Active ou désactive le mode « agent instruit » (opt-in explicite, jamais par défaut)

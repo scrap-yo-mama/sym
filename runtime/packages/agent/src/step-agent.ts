@@ -139,85 +139,92 @@ export async function runStepAgent(client: LlmClient, args: StepAgentArgs): Prom
   };
   if (args.price === null) return result('budget', null);
   const token = randomBytes(12).toString('hex');
-  for (;;) {
-    args.signal?.throwIfAborted();
-    const obs = await args.page.observe();
-    const msgs = messages(args, obs, history, token);
-    if (!meter.canCall(ceilingUsd(msgs, args.price))) return result(meter.stop === 'max_steps' ? 'max_steps' : 'budget', null);
-    const before = client.meter.snapshot();
-    let action: Action | null = null;
-    try {
-      const out = await client.generateStructured<Action>('agent', { messages: msgs, schema: ACTION_SCHEMA as unknown as JsonSchema, name: 'step_action', maxTokens: MAX_TOKENS, maxRepairs: 0, ...(args.signal === undefined ? {} : { signal: args.signal }) });
-      action = out.value;
-    } catch (error) {
-      if (!(error instanceof LlmError)) throw error;
-      if (error.class !== 'schema_invalid') {
-        calls += 1;
-        meter.spend(null);
-        return result('error', null);
+  try {
+    for (;;) {
+      args.signal?.throwIfAborted();
+      const obs = await args.page.observe();
+      const msgs = messages(args, obs, history, token);
+      if (!meter.canCall(ceilingUsd(msgs, args.price))) return result(meter.stop === 'max_steps' ? 'max_steps' : 'budget', null);
+      const before = client.meter.snapshot();
+      let action: Action | null = null;
+      try {
+        const out = await client.generateStructured<Action>('agent', { messages: msgs, schema: ACTION_SCHEMA as unknown as JsonSchema, name: 'step_action', maxTokens: MAX_TOKENS, maxRepairs: 0, ...(args.signal === undefined ? {} : { signal: args.signal }) });
+        action = out.value;
+      } catch (error) {
+        if (!(error instanceof LlmError)) throw error;
+        if (error.class !== 'schema_invalid') {
+          calls += 1;
+          meter.spend(null);
+          return result('error', null);
+        }
+        // Action hors du schéma fermé (outil inconnu, champ en plus) : refusée, rien n'est exécuté.
+        refused.push('invalid_action');
+        history.push('invalid_action');
+      } finally {
+        const after = client.meter.snapshot();
+        if (after.cost_usd === null) unknownCost = true;
       }
-      // Action hors du schéma fermé (outil inconnu, champ en plus) : refusée, rien n'est exécuté.
-      refused.push('invalid_action');
-      history.push('invalid_action');
-    } finally {
+      calls += 1;
       const after = client.meter.snapshot();
-      if (after.cost_usd === null) unknownCost = true;
-    }
-    calls += 1;
-    const after = client.meter.snapshot();
-    meter.spend(after.cost_usd === null ? null : (after.cost_usd_known ?? 0) - (before.cost_usd_known ?? 0));
-    if (action === null) continue;
-    switch (action.tool) {
-      case 'click': {
-        const target = onPage(obs, action.role, action.name);
-        if (target === null) {
-          refused.push('unknown_element');
-          history.push('click:unknown_element');
+      meter.spend(after.cost_usd === null ? null : (after.cost_usd_known ?? 0) - (before.cost_usd_known ?? 0));
+      if (action === null) continue;
+      switch (action.tool) {
+        case 'click': {
+          const target = onPage(obs, action.role, action.name);
+          if (target === null) {
+            refused.push('unknown_element');
+            history.push('click:unknown_element');
+            break;
+          }
+          const r = await args.page.click(target);
+          if (r.ok) actions.push({ tool: 'click', target });
+          history.push(r.ok ? `click:${target.role}` : `click:${r.error}`);
           break;
         }
-        const r = await args.page.click(target);
-        if (r.ok) actions.push({ tool: 'click', target });
-        history.push(r.ok ? `click:${target.role}` : `click:${r.error}`);
-        break;
-      }
-      case 'type': {
-        // Politique de requêtes de l'agent (19 §7) : seule une entrée du run, désignée par son nom, est saisie.
-        const value = action.input === null ? undefined : args.runInputs[action.input];
-        if (value === undefined) {
-          refused.push('agent_request_blocked');
-          history.push('type:agent_request_blocked');
+        case 'type': {
+          // Politique de requêtes de l'agent (19 §7) : seule une entrée du run, désignée par son nom, est saisie.
+          const value = action.input === null ? undefined : args.runInputs[action.input];
+          if (value === undefined) {
+            refused.push('agent_request_blocked');
+            history.push('type:agent_request_blocked');
+            break;
+          }
+          const target = onPage(obs, action.role, action.name);
+          if (target === null) {
+            refused.push('unknown_element');
+            history.push('type:unknown_element');
+            break;
+          }
+          const r = await args.page.type(target, value);
+          if (r.ok) actions.push({ tool: 'type', target });
+          history.push(r.ok ? `type:${action.input}` : `type:${r.error}`);
           break;
         }
-        const target = onPage(obs, action.role, action.name);
-        if (target === null) {
-          refused.push('unknown_element');
-          history.push('type:unknown_element');
+        case 'scroll': {
+          const r = await args.page.scroll(action.direction ?? 'down');
+          actions.push({ tool: 'scroll' });
+          history.push(r.ok ? `scroll:${action.direction ?? 'down'}` : `scroll:${r.error}`);
           break;
         }
-        const r = await args.page.type(target, value);
-        if (r.ok) actions.push({ tool: 'type', target });
-        history.push(r.ok ? `type:${action.input}` : `type:${r.error}`);
-        break;
-      }
-      case 'scroll': {
-        const r = await args.page.scroll(action.direction ?? 'down');
-        actions.push({ tool: 'scroll' });
-        history.push(r.ok ? `scroll:${action.direction ?? 'down'}` : `scroll:${r.error}`);
-        break;
-      }
-      case 'read_skill':
-        // Règles de 2.10 : liste vide avant sa fusion ; une règle ne peut que restreindre (18 §4.7).
-        history.push(args.rules.some((r) => r.name === action.skill) ? `read_skill:${action.skill ?? ''}` : 'read_skill:none');
-        break;
-      case 'done': {
-        const target = onPage(obs, action.role, action.name);
-        if (target === null) {
-          refused.push('unknown_element');
-          history.push('done:unknown_element');
+        case 'read_skill':
+          // Règles de 2.10 : liste vide avant sa fusion ; une règle ne peut que restreindre (18 §4.7).
+          history.push(args.rules.some((r) => r.name === action.skill) ? `read_skill:${action.skill ?? ''}` : 'read_skill:none');
           break;
+        case 'done': {
+          const target = onPage(obs, action.role, action.name);
+          if (target === null) {
+            refused.push('unknown_element');
+            history.push('done:unknown_element');
+            break;
+          }
+          return result('done', target);
         }
-        return result('done', target);
       }
     }
+  } catch (error) {
+    // Arrêt demandé (refus retenu par la garde de classification pendant une observation ou une action, annulation du
+    // run) : la boucle s'arrête sans autre appel, et l'issue garde le coût des appels déjà faits (INV4).
+    if (args.signal?.aborted === true) return result('error', null);
+    throw error;
   }
 }

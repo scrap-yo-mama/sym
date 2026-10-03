@@ -21,11 +21,13 @@ import {
 import {
   applyStatusAndNotify,
   asActorInTransaction,
+  confirmInstructedSteps,
   createRun,
   InvestigationStateError,
   PersistenceApiNotFoundError,
   removeScheduleMirror,
   resolvedRulesPreview,
+  setInstructedMode,
   setPersistenceMode,
   StorageFullError,
   startInvestigation,
@@ -56,6 +58,15 @@ import { buildRunResult, readRunRow, waitForRun } from '../rest/runs.js';
 import { BLOCKING_STATUS, rejectIfKeyRateLimited, rejectWithoutAck, reasonMessage, reserveRunSlot, RunSlotError, sendRunSlotError, triggerOf, waitSecondsOf } from '../rest/shared.js';
 import { CURSOR_TIME, decodeCursor, encodeCursor, INT4_MAX, UUID } from './account-helpers.js';
 import { audit, notFound, sendError, type Actor } from './guard.js';
+
+/** Confirmation des étapes instruites affichées (version et empreinte reçues de la fiche, 2.13). */
+const instructedConfirmSchema = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['version', 'sha256'],
+  properties: { version: { type: 'integer', minimum: 1, maximum: INT4_MAX }, sha256: { type: 'string', pattern: '^[0-9a-f]{64}$' } },
+} as const;
+const instructedModeSchema = { type: 'object', additionalProperties: false, required: ['enabled'], properties: { enabled: { type: 'boolean' } } } as const;
 
 const executionList = { type: 'array', uniqueItems: true, maxItems: 6, items: { type: 'string', enum: [...EXECUTIONS] } } as const;
 
@@ -776,6 +787,47 @@ export function apiRoutes(app: FastifyInstance, ctx: ServerContext): void {
       return row === null ? null : apiDetail(db, actor, row, ctx.persistence.policy);
     });
     return view ?? notFound(reply);
+  });
+
+  // ——— Agent instruit (tâche 2.13, 19 § 4) : confirmation humaine des étapes instruites, opt-in explicite ———
+  const detailAfterWrite = (actor: Actor, apiId: string) =>
+    withActor(ctx.pool, actor, async (db) => {
+      const row = await readApiById(db, apiId);
+      return row === null ? null : apiDetail(db, actor, row, ctx.persistence.policy);
+    });
+
+  app.post<{ Params: { slug: string }; Body: { version: number; sha256: string } }>(
+    '/api/apis/:slug/instructed-steps/confirm',
+    { schema: { body: instructedConfirmSchema } },
+    async (request, reply) => {
+      const actor = request.actor!;
+      // Acte HUMAIN, depuis la console : une clé d'API (outil MCP compris) ne confirme jamais, avant toute lecture de l'API.
+      if (actor.via !== 'ui') return sendError(reply, 403, 'human_confirmation_required', 'la confirmation des étapes instruites se fait depuis la console');
+      const api = await readOwnApi(ctx, actor, request.params.slug);
+      if (api === null) return notFound(reply);
+      const done = await confirmInstructedSteps(ctx.pool, { apiId: api.id, ownerId: actor.userId, userId: actor.userId, version: request.body.version, sha256: request.body.sha256 });
+      if (!done.ok) {
+        if (done.reason === 'not_found') return notFound(reply);
+        return sendError(reply, 409, done.reason, done.reason === 'sha_mismatch' ? 'les étapes ont changé depuis leur affichage' : 'cette version n’a pas d’étapes instruites');
+      }
+      await audit(ctx, request, actor, { action: 'api.instructed_steps_confirmed', targetType: 'api', targetId: api.id, outcome: 'success', meta: { version: request.body.version } });
+      return (await detailAfterWrite(actor, api.id)) ?? notFound(reply);
+    },
+  );
+
+  app.put<{ Params: { slug: string }; Body: { enabled: boolean } }>('/api/apis/:slug/instructed-mode', { schema: { body: instructedModeSchema } }, async (request, reply) => {
+    const actor = request.actor!;
+    const api = await readOwnApi(ctx, actor, request.params.slug);
+    if (api === null) return notFound(reply);
+    // Activation : API non compilable, étapes instruites EXACTES confirmées par un humain (code ET déclencheur de 0021) ;
+    // sinon 409 et `instructed_mode` reste faux. La désactivation est toujours acceptée.
+    const done = await setInstructedMode(ctx.pool, { apiId: api.id, ownerId: actor.userId, enabled: request.body.enabled });
+    if (!done.ok) {
+      if (done.reason === 'not_found') return notFound(reply);
+      return sendError(reply, 409, done.reason, 'le mode « agent instruit » ne s’active pas');
+    }
+    await audit(ctx, request, actor, { action: 'api.instructed_mode_set', targetType: 'api', targetId: api.id, outcome: 'success', meta: { enabled: request.body.enabled } });
+    return (await detailAfterWrite(actor, api.id)) ?? notFound(reply);
   });
 
   // ——— Chronologie des statuts (06 § 2, « Bugs & statut ») ———

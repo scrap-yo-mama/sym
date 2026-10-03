@@ -13,7 +13,7 @@ import type { AddressInfo } from 'node:net';
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from '@testcontainers/postgresql';
 import { DomainPacer, generateMasterKey, MasterKey, Secret } from '@runtime/core';
 import * as net from '@runtime/core/net';
-import { createRun, keyCheck, migrateUp, PgBossJobQueue, PgPacingStore, readRun, runQueueDefinition, withActor } from '@runtime/db';
+import { createRun, keyCheck, migrateUp, PgBossJobQueue, PgPacingStore, readRun, runQueueDefinition, startInvestigation, withActor } from '@runtime/db';
 import { createLlmClient, type CapabilityProfile, type LlmConfig } from '@runtime/llm';
 import { createFakeProvider, scripted, type FakeProvider } from '@runtime/llm/testing';
 import pg from 'pg';
@@ -27,10 +27,14 @@ import { startWorker, type Worker } from '../worker.js';
 import { stagehandEngineFor } from './factory.js';
 import { createRepairPort } from './repair-executor.js';
 import { loadInlineScript } from './script-executor.js';
-import { createStrategyExecutor } from './strategy-executor.js';
+import { createInvestigationExecutor, dispatchByKind } from './investigation-executor.js';
+import { createStrategyRuntime } from './strategy-executor.js';
 import { fixtureGuard } from '../../../../tests/helpers/fixture-net.ts';
+import { stagehandScript } from '../../../../tests/helpers/stagehand-script.ts';
 
 const HOST = 'zz_test_steps.localhost';
+/** Modèle du rôle `investigate` (proposition de schéma de l'enquête), distinct de l'agent. */
+const INVESTIGATE = 'zz-investigate';
 const A = randomUUID();
 const actorA = { userId: A, role: 'member' as const };
 const SCHEMA = {
@@ -185,13 +189,24 @@ beforeAll(async () => {
   browsers = new BrowserPool({ size: 1, launch: playwrightLauncher(launchProxy.url, process.env), recycleAfterRuns: 100 });
   const engine = new ProcessSandboxEngine({ ...sandboxOptionsFromEnv(process.env), production: false });
   llmConfig = {
-    providers: [{ id: 'fake', baseUrl: fake.baseUrl, apiKey: new Secret('zz_test_fake_key'), models: [{ id: 'zz-agent', price: { in: 1, out: 2 }, profile: AGENT_PROFILE }] }],
-    roles: { agent: { provider: 'fake', model: 'zz-agent' } },
+    providers: [
+      {
+        id: 'fake',
+        baseUrl: fake.baseUrl,
+        apiKey: new Secret('zz_test_fake_key'),
+        models: [
+          { id: 'zz-agent', price: { in: 1, out: 2 }, profile: AGENT_PROFILE },
+          { id: INVESTIGATE, price: { in: 1, out: 1 } },
+        ],
+      },
+    ],
+    roles: { agent: { provider: 'fake', model: 'zz-agent' }, investigate: { provider: 'fake', model: INVESTIGATE } },
   };
-  const executor = createStrategyExecutor({
+  const pacer = new DomainPacer(new PgPacingStore(pool));
+  const strategy = createStrategyRuntime({
     pool,
     guard,
-    pacer: new DomainPacer(new PgPacingStore(pool)),
+    pacer,
     browsers,
     logger: pino({ level: 'silent' }),
     script: { engine, loadScript: loadInlineScript, limits: { timeoutMs: 60_000, memoryMb: 128 } },
@@ -202,7 +217,23 @@ beforeAll(async () => {
       agentBrowser: (options) => launchAgentBrowser({ ...options, env: process.env }),
     },
     repair: createRepairPort({ pool, browser: true, logger: pino({ level: 'silent' }), llm: { config: async () => llmConfig, client: (c) => createLlmClient(c) } }),
+    instanceContact: async () => 'mailto:ops@zz-test.example',
+    version: '9.9.9',
   });
+  // Enquête de production (2.1), voies agentiques branchées : seule l'E6 entre au plan (aucun gisement, pas de rôle `extract`).
+  const investigation = createInvestigationExecutor({
+    pool,
+    guard,
+    pacer,
+    browsers,
+    strategy,
+    llm: { config: async () => llmConfig, client: (c) => createLlmClient(c) },
+    agentic: true,
+    samples: 1,
+    instanceContact: async () => 'mailto:ops@zz-test.example',
+    version: '9.9.9',
+  });
+  const executor = dispatchByKind({ run: strategy.executor, investigation });
   worker = await startWorker({
     config: loadWorkerConfig({ DATABASE_URL: dbUrl, MASTER_KEY: masterKey, QUEUE_POLLING_SECONDS: '0.5', RUN_HEARTBEAT_SECONDS: '0.5', RUN_STALE_SECONDS: '60', BROWSER_CONCURRENCY: '1' }),
     executor,
@@ -250,6 +281,27 @@ describe('stratégie steps interprétée dans le bac à sable, reprise par étap
     expect(await stepRows(runId)).toEqual([]);
     expect((await logsOf(runId)).find((l) => l.event === 'failure_route')?.data).toMatchObject({ agent_invoked: false });
   }, 180_000);
+
+  test('assert_step_classification_guard (phase de l’agent d’étape) : défi servi après un clic de l’agent → blocked_by_protection, bloquee, 0 appel LLM ultérieur, aucun texte du défi dans un prompt', async () => {
+    site.label = 'Page 2 →';
+    site.mode = 'challenge';
+    // L'agent clique le lien (qui sert un défi), puis défilerait jusqu'à épuiser ses pas si la boucle continuait.
+    fake.setScenario('zz-agent', [
+      scripted.json({ tool: 'click', role: 'link', name: 'Page 2 →', input: null, direction: null, skill: null }),
+      ...Array.from({ length: 20 }, () => scripted.json({ tool: 'scroll', role: null, name: null, input: null, direction: 'down', skill: null })),
+    ]);
+    const apiId = await insertApi('zz_test_steps_agent_challenge', { spec: stepsSpec() });
+    const { runId, run } = await runOf(apiId);
+    expect(run).toMatchObject({ state: 'failed', failure_class: 'blocked_by_protection' });
+    expect((await apiState(apiId)).status).toBe('bloquee');
+    expect(hits).toContain('GET /p2');
+    // Un seul appel : celui qui a décidé le clic ; aucune observation de la page de défi n'est partie au modèle.
+    expect(agentCalls()).toBe(1);
+    for (const c of fake.calls) expect(JSON.stringify(c.body)).not.toContain('Checking your browser');
+    expect((await pool.query('SELECT 1 FROM strategy_versions WHERE api_id = $1 AND version > 1', [apiId])).rowCount).toBe(0);
+    // Le coût de l'appel fait n'est pas perdu (INV4) : journalisé sur l'étape, niveau 2.
+    expect(await stepRows(runId)).toContainEqual(expect.objectContaining({ step_id: 's3', step_level: 2 }));
+  }, 240_000);
 
   test('libellé changé, alternate enregistrée : niveau 1 (0 LLM), post tenue, V5 (2 rejeux sans LLM), vN+1 courante, journal par étape — assert_promote_requires_llm_free_replay', async () => {
     site.label = 'Suivant';
@@ -401,4 +453,57 @@ describe('stratégie steps interprétée dans le bac à sable, reprise par étap
     const versions = await pool.query<{ execution: string }>('SELECT execution FROM strategy_versions WHERE api_id = $1', [apiId]);
     expect(versions.rows.map((r) => r.execution)).toEqual(['hybrid']);
   }, 240_000);
+  test('2.13 (19 §4) : enquête E6 compilable → version 1 au format steps (source, compilable = yes) → libellé changé : reprise par étape (niveau 2, ancienne cible gardée en alternate), puis libellé d’origine : niveau 1, 0 LLM', async () => {
+    const field = (name: string) => ({ name, type: 'string', required: true, personal: false, description: `${name} du vélo` });
+    fake.setScenario(INVESTIGATE, [scripted.json({ fields: [field('titre'), field('prix')], sources: [] })]);
+    fake.setScenario('zz-agent', stagehandScript([scripted.toolCalls([{ name: 'act', arguments: { action: 'click the link "Page suivante"' } }])], { items: [{ titre: 'Vélo rouge', prix: '120' }] }));
+    const apiId = (
+      await pool.query<{ id: string }>(
+        `INSERT INTO apis (slug, owner_id, network_policy, domain_pacing) VALUES ('zz_test_steps_investigated', $1, '{"allow": ["direct"]}', '{"min_delay_ms": 5, "max_requests_per_run": 200, "max_wait_ms": 60000}') RETURNING id`,
+        [A],
+      )
+    ).rows[0]!.id;
+    const { runId: investigationId } = await withActor(pool, actorA, (tx) =>
+      startInvestigation(tx, queue, { apiId, ownerId: A, trigger: 'rest', request: { url: `${base()}/`, description: 'titre et prix du vélo de la page suivante', auto_validate: true } }),
+    );
+    await vi.waitFor(async () => expect(['succeeded', 'failed']).toContain((await pool.query<{ state: string }>('SELECT state FROM runs WHERE id = $1', [investigationId])).rows[0]!.state), {
+      timeout: 150_000,
+      interval: 250,
+    });
+    const investigated = (await withActor(pool, actorA, (tx) => readRun(tx, investigationId)))!;
+    expect(investigated).toMatchObject({ state: 'succeeded', strategy_version: 1 });
+    expect(investigated.attempts).toEqual([expect.objectContaining({ execution: 'agent', result: 'ok' })]);
+    // Version 1 née de l'enquête : E5 au format `steps`, avec la source de ses étapes, compilable.
+    const v1 = (
+      await pool.query<{ execution: string; created_by: string; compilable: string; spec: { kind: string; steps: { id: string; op: string; target?: { name: string } }[] }; source_steps: { id: string; intent: string }[] | null }>(
+        'SELECT execution, created_by, compilable, spec, source_steps FROM strategy_versions WHERE api_id = $1 AND version = 1',
+        [apiId],
+      )
+    ).rows[0]!;
+    expect(v1).toMatchObject({ execution: 'hybrid', created_by: 'investigation', compilable: 'yes' });
+    expect(v1.spec.kind).toBe('steps');
+    const click = v1.spec.steps.find((st) => st.op === 'click')!;
+    expect(click.target?.name).toBe('Page suivante');
+    expect(v1.source_steps).toEqual(expect.arrayContaining([expect.objectContaining({ id: click.id, intent: 'Cliquer sur l’élément link « Page suivante »', derived_from_untrusted: true })]));
+    expect(await apiState(apiId)).toMatchObject({ status: 'sain', current_strategy_version: 1 });
+
+    // Libellé changé, aucune alternate enregistrée par la compilation : reprise PAR ÉTAPE (niveau 2), pas la réparation de 2.3.
+    fake.reset();
+    site.label = 'Page 2 →';
+    fake.setScenario('zz-agent', [scripted.json({ tool: 'done', role: 'link', name: 'Page 2 →', input: null, direction: null, skill: null })]);
+    const second = await runOf(apiId);
+    expect(second.run).toMatchObject({ state: 'succeeded', items: 1, strategy_version: 2 });
+    expect(await stepRows(second.runId)).toContainEqual(expect.objectContaining({ step_id: click.id, step_level: 2, step_outcome: 'agent_repaired' }));
+    const v2 = (await pool.query<{ spec: { steps: { id: string; target?: { name: string; alternates: { name: string }[] } }[] } }>('SELECT spec FROM strategy_versions WHERE api_id = $1 AND version = 2', [apiId])).rows[0]!;
+    const repaired = v2.spec.steps.find((st) => st.id === click.id)!;
+    expect(repaired.target).toMatchObject({ name: 'Page 2 →', alternates: [expect.objectContaining({ name: 'Page suivante' })] });
+
+    // Libellé d'origine revenu : niveau 1 (alternate enregistrée), 0 appel au modèle.
+    fake.reset();
+    site.label = 'Page suivante';
+    const third = await runOf(apiId);
+    expect(third.run).toMatchObject({ state: 'succeeded', items: 1, strategy_version: 3 });
+    expect(await stepRows(third.runId)).toEqual([expect.objectContaining({ step_id: click.id, step_level: 1, step_outcome: 'alternate' })]);
+    expect(fake.calls).toHaveLength(0);
+  }, 420_000);
 });

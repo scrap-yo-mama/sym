@@ -94,6 +94,7 @@ import {
   type PlanEntry,
   type PlanNetwork,
   type ReconCapture,
+  type StepsCompileContext,
   type TokenPrice,
   type TrialExecution,
   type TrialPair,
@@ -823,6 +824,8 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
       const sampleOutputs = new Map<TrialPair, Record<string, unknown>[][]>();
       /** Trace E6 compilée en E5 par la dernière exécution conforme du couple (04 §3.1). */
       const compiledFor = new Map<TrialPair, unknown>();
+      /** Contexte de la compilation au grain de l'étape (2.13) : trace de l'E6 conforme, modèle, date. */
+      const compileContextFor = new Map<TrialPair, StepsCompileContext>();
       const spend = new Map<TrialPair, { proxy: number; llm: number | null; tokens: { in: number; cached: number; out: number; reasoning: number; estimated: boolean }; model: string | null; prompt: string | null; engine: string | null }>();
       const spentBeforeTrials = spent;
       let trialsUsd = 0;
@@ -885,6 +888,8 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
                 const compiled = trial.outcome.agent?.compiled;
                 if (compiled === undefined) return execution(false, 'extraction', 'not_compilable', r.pages, cost, trial.ms, null);
                 compiledFor.set(pair, compiled);
+                const trace = trial.outcome.agent?.trace;
+                compileContextFor.set(pair, { modelId: trial.llm?.modelId ?? null, at: new Date(now()).toISOString(), ...(trace === undefined ? {} : { trace }) });
               }
               lastRecords.set(pair, r.records);
               if (purpose === 'sample') sampleOutputs.set(pair, [...(sampleOutputs.get(pair) ?? []), r.records]);
@@ -942,7 +947,7 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
           const entry = entries.get(pair)!;
           const records = lastRecords.get(pair) ?? [];
           const runs = Math.max(1, outcome.outcome.executions.length);
-          const kept = retainedStrategy(entry, compiledFor.get(pair), round6((spend.get(pair)?.proxy ?? 0) / runs));
+          const kept = retainedStrategy(entry, compiledFor.get(pair), round6((spend.get(pair)?.proxy ?? 0) / runs), compileContextFor.get(pair));
           if (!kept.ok) return await finishFailed({ failure_class: 'extraction', retryable: false, detail: kept.reason }, 'testing');
           // Source (18 §4.6) : règles injectées et skills lus ; règles embarquées si le compilé porte un prompt (E4) ou vient
           // d'une trace E6 (E5 : `compiled_with` par étape, 19 §4).
@@ -961,6 +966,8 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
             network: kept.network,
             spec,
             estCostUsd: kept.estCostUsd,
+            ...(kept.compilable === undefined ? {} : { compilable: kept.compilable }),
+            ...(kept.sourceSteps === undefined ? {} : { sourceSteps: kept.sourceSteps }),
             outputSchema,
             ...(state.validated_columns === undefined ? {} : { outputColumns: state.validated_columns }),
             // Import : le schéma d'entrée du fichier (contrôlé à l'import) ; sinon celui que propose l'enquête (2.2).

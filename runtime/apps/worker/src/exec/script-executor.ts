@@ -666,6 +666,7 @@ export function runScriptExecutor(options: ScriptExecutorOptions): Promise<Scrip
         allowWriteActions,
         accessGuard,
         strategy,
+        stopSignal: AbortSignal.any([options.signal, stopOnRefusal.signal]),
         ...(options.steps === undefined ? {} : { steps: options.steps.host }),
       };
       const pageBridge = createPageBridge(pageBridgeOptions);

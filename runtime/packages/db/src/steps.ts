@@ -74,21 +74,24 @@ const stepsOf = (raw: unknown): InstructedStep[] | null => {
 
 /** État du mode « agent instruit » de l'API (version courante), lu comme le propriétaire ; `null` : API invisible. */
 export async function readInstructedState(pool: pg.Pool, args: { apiId: string; ownerId: string }): Promise<InstructedState | null> {
-  return withActor(pool, { userId: args.ownerId, role: 'member' }, async (tx) => {
-    const r = await readRow(tx, args.apiId);
-    if (r === null || r.version === null) return null;
-    const steps = stepsOf(r.instructed_steps);
-    return {
-      instructed_mode: r.instructed_mode,
-      version: r.version,
-      compilable: r.compilable ?? 'unknown',
-      steps,
-      sha256: r.instructed_steps_sha256,
-      confirmed_by: r.instructed_steps_confirmed?.by ?? null,
-      confirmed_at: r.instructed_steps_confirmed?.at ?? null,
-      estimated_run_usd: steps === null ? null : estimateInstructedRunUsd(steps),
-    };
-  });
+  return withActor(pool, { userId: args.ownerId, role: 'member' }, (tx) => instructedStateIn(tx, args.apiId));
+}
+
+/** Même lecture dans une transaction déjà ouverte comme le propriétaire (fiche REST de 3.1, `instructed`). */
+export async function instructedStateIn(tx: Pick<pg.ClientBase, 'query'>, apiId: string): Promise<InstructedState | null> {
+  const r = await readRow(tx, apiId);
+  if (r === null || r.version === null) return null;
+  const steps = stepsOf(r.instructed_steps);
+  return {
+    instructed_mode: r.instructed_mode,
+    version: r.version,
+    compilable: r.compilable ?? 'unknown',
+    steps,
+    sha256: r.instructed_steps_sha256,
+    confirmed_by: r.instructed_steps_confirmed?.by ?? null,
+    confirmed_at: r.instructed_steps_confirmed?.at ?? null,
+    estimated_run_usd: steps === null ? null : estimateInstructedRunUsd(steps),
+  };
 }
 
 /**

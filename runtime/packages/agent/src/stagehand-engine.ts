@@ -22,9 +22,6 @@
 // garde son prompt système (mesuré tel quel au spike), auquel s'ajoutent les règles Markdown (tâche 2.10, 18 §4.5) :
 // `systemPrompt` = <trusted_rules> et liste des skills (inséré par Stagehand dans <customInstructions>), `tools` =
 // { read_skill } exécuté dans notre processus, `integrations` (clients MCP) TOUJOURS vide en V1 (18 §5).
-import { mkdtemp, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import { Stagehand, type ModelConfiguration } from '@browserbasehq/stagehand';
 import { READ_SKILL_TOOL, type AgentEngine, type AgentRunContext, type AgentRunResult, type AgentRunStatus, type AgentTask, type AgentTraceStep } from '@runtime/core';
 import { computeUsage, createRedactor, type CapabilityProfile, type ModelPrice, type RawUsage, type RedactConfig } from '@runtime/llm';

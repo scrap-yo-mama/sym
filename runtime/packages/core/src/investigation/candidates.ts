@@ -5,7 +5,11 @@
 // configuré ; croisés avec les réseaux AUTORISÉS (politique de l'API et proxys de l'admin, jamais élargis), chiffrés
 // (`estimateCostUsd`) et triés (`orderTrials`). E5 n'est pas essayé directement : il naît de la compilation d'une trace
 // E6 réussie (04 §3.1). Le tunnel ne sert que s'il est dans la politique réseau de l'API, jamais E6 ni un script.
+import type { AgentTraceStep } from '../agent/engine.js';
+import type { HybridSpec } from '../agent/specs.js';
 import type { Execution, Network } from '../model/enums.js';
+import { compileHybridToSteps } from '../steps/compile.js';
+import type { StepSource } from '../steps/spec.js';
 import { estimateCostUsd, orderTrials, type TokenPrice, type TrialPair } from './plan.js';
 import type { BuiltStrategy } from './proposal.js';
 
@@ -79,18 +83,45 @@ export function buildTrialPlan(input: BuildPlanInput): PlanEntry[] {
 
 /** Version retenue au terme de l'enquête, ou refus (`not_compilable`). */
 export type RetainedStrategy =
-  | { readonly ok: true; readonly execution: Execution; readonly network: Network; readonly spec: unknown; readonly estCostUsd: number | null }
+  | {
+      readonly ok: true;
+      readonly execution: Execution;
+      readonly network: Network;
+      readonly spec: unknown;
+      readonly estCostUsd: number | null;
+      /** E5 compilée d'une trace E6 (2.13) : `compilable = yes`. */
+      readonly compilable?: 'yes';
+      /** Source des étapes (intent, pre, post) quand l'E5 compilée est au format `steps` (2.13, 19 §4). */
+      readonly sourceSteps?: readonly StepSource[];
+    }
   | { readonly ok: false; readonly reason: 'not_compilable' };
+
+/** Contexte de la compilation au grain de l'étape : modèle de l'agent, date, trace de l'E6 (URL avant / après chaque action). */
+export type StepsCompileContext = { readonly modelId: string | null; readonly at: string; readonly trace?: readonly AgentTraceStep[] };
 
 /**
  * Stratégie gardée pour le couple conforme (04 §3.1) : E6 (`agent`) ne devient JAMAIS courant sans « agent instruit »
- * (2.13) ; sa trace compilée en E5 (`hybrid`, rejouée sans LLM) est gardée, au coût mesuré de ses exécutions hors LLM.
- * Sans compilation : `not_compilable` (transition 2 ; code de raison dédié avec 2.13). Les autres niveaux : tels quels.
+ * (2.13) ; sa trace compilée en E5 (`hybrid`, rejouée sans LLM) est gardée, au coût mesuré de ses exécutions hors LLM,
+ * AU FORMAT `steps` (2.13, 19 §4 : « E5 adopte un format kind: "steps" ») avec la source de ses étapes, pour que la
+ * reprise par étape s'applique aux API nées d'une enquête ; repli sur le hybride seulement si la conversion échoue
+ * (étape ou extraction déléguée à l'agent). Sans compilation : `not_compilable` (transition 2). Les autres niveaux : tels quels.
  */
-export function retainedStrategy(entry: Pick<PlanEntry, 'execution' | 'network' | 'spec' | 'est_cost_usd'>, compiled: unknown, measuredUsd: number | null): RetainedStrategy {
+export function retainedStrategy(
+  entry: Pick<PlanEntry, 'execution' | 'network' | 'spec' | 'est_cost_usd'>,
+  compiled: unknown,
+  measuredUsd: number | null,
+  context: StepsCompileContext = { modelId: null, at: new Date().toISOString() },
+): RetainedStrategy {
   if (entry.execution !== 'agent') return { ok: true, execution: entry.execution, network: entry.network, spec: entry.spec, estCostUsd: entry.est_cost_usd };
   if (compiled === undefined || compiled === null) return { ok: false, reason: 'not_compilable' };
-  return { ok: true, execution: 'hybrid', network: entry.network, spec: compiled, estCostUsd: measuredUsd };
+  let steps: ReturnType<typeof compileHybridToSteps>;
+  try {
+    steps = compileHybridToSteps(compiled as HybridSpec, context);
+  } catch {
+    steps = null;
+  }
+  if (steps === null) return { ok: true, execution: 'hybrid', network: entry.network, spec: compiled, estCostUsd: measuredUsd, compilable: 'yes' };
+  return { ok: true, execution: 'hybrid', network: entry.network, spec: steps.spec, estCostUsd: measuredUsd, compilable: 'yes', sourceSteps: steps.source };
 }
 
 /** Octets supposés d'une page de données importée (aucune reconnaissance n'a mesuré la réponse) : chiffre les proxys. */

@@ -209,6 +209,11 @@ export type PageBridgeOptions = {
    * absent (script E3), elle est refusée comme toute opération hors liste.
    */
   readonly steps?: StepsHost;
+  /**
+   * Arrêt de l'essai (annulation du run, ou refus retenu par la garde de classification) : remis à l'agent d'étape avec
+   * les outils de l'hôte, pour que sa boucle s'arrête au premier refus (2.13, 19 §4).
+   */
+  readonly stopSignal?: AbortSignal;
 };
 
 /** Code rendu au script quand une réponse a été refusée par la garde de classification (l'enfant est arrêté). */
@@ -495,6 +500,9 @@ export function createPageBridge(options: PageBridgeOptions): NonNullable<Sandbo
     timeoutMs: options.timeoutMs,
     goto: (url) => withGuards(true, () => stepTools.goto(url)),
     click: (locator) => withGuards(true, () => stepTools.click(locator)),
+    // Garde seule (observation, saisie, défilement de l'agent d'étape) : classements terminés, document courant classé.
+    guard: () => accessGuard(),
+    ...(options.stopSignal === undefined ? {} : { signal: options.stopSignal }),
   };
   return Object.assign(handler, { stepTools: guardedTools });
 }

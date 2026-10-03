@@ -142,7 +142,8 @@ export async function repairStepsUnderLease(deps: StepRepairDeps, request: Reque
               budget,
               price,
               rules: [],
-              signal: ctx.signal,
+              // Annulation du run ou refus retenu par la garde pendant la phase de l'agent : la boucle s'arrête aussitôt.
+              signal: tools.signal === undefined ? ctx.signal : AbortSignal.any([ctx.signal, tools.signal]),
             });
           },
         },

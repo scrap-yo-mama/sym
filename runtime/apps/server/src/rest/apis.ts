@@ -8,7 +8,7 @@
 import { randomBytes } from 'node:crypto';
 import type { PersistencePolicy } from '@runtime/core';
 import { parseNetworkPolicy, NetworkConfigError } from '@runtime/core/net';
-import { persistenceStateOf, withActor } from '@runtime/db';
+import { instructedStateIn, persistenceStateOf, withActor } from '@runtime/db';
 import type pg from 'pg';
 import type { ServerContext } from '../context.js';
 import type { Actor } from '../routes/guard.js';
@@ -204,6 +204,9 @@ export async function apiDetail(db: Queryable, actor: Actor, r: ApiRow, persiste
      WHERE r.api_id = $1 AND r.owner_id = $2 AND r.state = 'succeeded' AND r.kind = 'run' AND r.cost_llm_usd IS NOT NULL ORDER BY r.created_at DESC LIMIT 10`,
     [r.id, actor.userId],
   );
+  // Mode « agent instruit » (2.13, 19 § 4) : propriétaire seul ; étapes instruites de la version courante (intentions NON
+  // FIABLES, affichées en texte brut), empreinte à confirmer, coût estimé d'un run instruit.
+  const instructed = r.owner_id === actor.userId ? await instructedStateIn(db, r.id) : null;
   const values = costs.rows.map((c) => usd(c.c)).sort((a, b) => a - b);
   const median = values.length === 0 ? null : values.length % 2 === 1 ? values[(values.length - 1) / 2]! : Math.round(((values[values.length / 2 - 1]! + values[values.length / 2]!) / 2) * 1e6) / 1e6;
   const policy = r.network_policy;
@@ -240,6 +243,23 @@ export async function apiDetail(db: Queryable, actor: Actor, r: ApiRow, persiste
     access_policy: { robots: 'respect' as const, report_id: access?.id ?? null },
     access_report: access,
     ...ownerPolicy,
+    ...(r.owner_id === actor.userId
+      ? {
+          instructed_mode: instructed?.instructed_mode ?? false,
+          instructed:
+            instructed === null || instructed.steps === null || instructed.steps.length === 0 || instructed.sha256 === null
+              ? null
+              : {
+                  version: instructed.version,
+                  compilable: instructed.compilable,
+                  steps: instructed.steps,
+                  sha256: instructed.sha256,
+                  confirmed_by: instructed.confirmed_by,
+                  confirmed_at: instructed.confirmed_at,
+                  estimated_run_usd: instructed.estimated_run_usd,
+                },
+        }
+      : {}),
     contains_personal_data: r.contains_personal_data,
     allow_write_actions: r.allow_write_actions,
     cost_estimate: { median_usd: median, sample_size: values.length },
