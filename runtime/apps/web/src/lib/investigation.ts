@@ -45,6 +45,7 @@ const ACTION_CAUSES = [
   'session_device_bound',
   'proxy_required',
   'tunnel_offline',
+  'instance_contact_missing',
   'challenge_in_tunnel',
   'secret_unreadable',
   'payment_required',

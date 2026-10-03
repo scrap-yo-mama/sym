@@ -36,6 +36,7 @@ const TARGETS: Record<ActionCause, string | null> = {
   session_device_bound: '/settings/extension',
   proxy_required: '/settings/proxies',
   tunnel_offline: '/settings/extension',
+  instance_contact_missing: '/settings/robot',
   challenge_in_tunnel: null,
   secret_unreadable: '/settings/models',
   payment_required: null,

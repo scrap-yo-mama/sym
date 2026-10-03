@@ -570,6 +570,11 @@
       "body": "Le run est arrêté : {domain} affiche une vérification dans ton navigateur. Rien n'a été envoyé sur cette page et rien n'y sera envoyé. Tu peux relancer un run plus tard ; Scrapyomama ne répond jamais à une vérification.",
       "button": "Ré-enquêter"
     },
+    "instance_contact_missing": {
+      "title": "Renseigne le contact du robot",
+      "body": "Le contact de l'opérateur est requis avant la première enquête. Renseigne-le dans Réglages > Identité du robot, ou via la variable INSTANCE_CONTACT, puis relance l'enquête.",
+      "button": "Ouvrir Réglages > Identité du robot"
+    },
     "secret_unreadable": {
       "title": "Une clé enregistrée est illisible",
       "body": "Ressaisis la clé dans les réglages, puis teste-la.",
@@ -865,6 +870,7 @@
     "session_device_bound": "La session de {domain} est liée à ton appareil et ne peut pas être copiée sur le serveur.",
     "challenge_in_tunnel": "Une vérification est apparue dans ton navigateur. Le run est en pause.",
     "secret_unreadable": "Une clé enregistrée est illisible.",
+    "instance_contact_missing": "Le contact du robot n'est pas renseigné : il est requis avant la première enquête.",
     "account_limit": "La plateforme a signalé une limite sur ton compte. Aucune relance.",
     "session_owner_required": "Cette API utilise la session de son propriétaire.",
     "llm_refused": "Le modèle a refusé la demande ; aucun repli automatique.",
@@ -907,6 +913,7 @@
     "cookie_expired": "Session expirée",
     "session_device_bound": "Session liée à l'appareil",
     "challenge_in_tunnel": "Vérification dans le navigateur",
+    "instance_contact_missing": "Contact du robot manquant",
     "secret_unreadable": "Clé illisible",
     "account_limit": "Limite de compte",
     "session_owner_required": "Session du propriétaire requise",
@@ -1111,6 +1118,11 @@
     },
     "whyStop": "Pourquoi cet arrêt ?"
   },
+  "instanceContactBanner": {
+    "title": "Renseigne le contact du robot avant ta première API",
+    "text": "Le contact de l'opérateur est requis avant la première enquête : sans lui, une enquête s'arrête aussitôt. Une adresse web (https://…) ou une adresse e-mail suffit, ou la variable INSTANCE_CONTACT du serveur.",
+    "link": "Ouvrir Réglages > Identité du robot"
+  },
   "actionRequired": {
     "resuming": "Reprise de l'enquête…",
     "connect": {
@@ -1138,6 +1150,11 @@
       "text": "Rien n'a été envoyé sur cette page et rien n'y sera envoyé. Tu peux relancer un run plus tard ; Scrapyomama ne répond jamais à une vérification.",
       "button": "Réessayer plus tard (nouveau run)",
       "verify": "Aucune reprise automatique : seule une nouvelle action de ta part relance un run."
+    },
+    "instanceContact": {
+      "title": "Renseigne le contact du robot",
+      "button": "Ouvrir Réglages > Identité du robot",
+      "verify": "Dès que le contact est enregistré, relance l'enquête : rien n'a été envoyé et rien n'a été dépensé."
     },
     "secret": {
       "title": "Une clé enregistrée est illisible",
@@ -1466,7 +1483,7 @@
       "later": "Aller à la console"
     },
     "contact": "Contact de l'opérateur",
-    "contactHint": "Facultatif ici, mais requis avant la première enquête. Une adresse web (https://…) ou une adresse e-mail. Le robot ne l'annonce que si tu actives l'identification dans les réglages. Tu pourras le modifier là-bas."
+    "contactHint": "Requis avant la première enquête ; tu peux le saisir plus tard dans Réglages > Identité du robot. Une adresse web (https://…) ou une adresse e-mail. Le robot ne l'annonce que si tu actives l'identification dans les réglages. Tu pourras le modifier là-bas."
   },
   "account": {
     "title": "Mon compte",
