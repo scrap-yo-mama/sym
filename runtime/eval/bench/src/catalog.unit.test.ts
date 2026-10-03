@@ -30,14 +30,15 @@ describe('catalogue du banc (15 §11)', () => {
     expect(taskById('T-challenge').reference).toMatchObject({ kind: 'stop', status: 'bloquee' });
   });
 
-  test('« moins cher atteint » atteignable : E1 seulement si le scénario N0 propose un gisement, sinon E4 ; jamais E5 ni E6 (harnais sans navigateur)', () => {
+  test('« moins cher atteint » atteignable : E1 seulement si le scénario N0 propose un gisement ou une recette html compilée (2e appel investigate, UX-20), sinon E4 ; jamais E5 ni E6 (harnais sans navigateur)', () => {
     for (const task of BENCH_TASKS) {
       if (task.reference.kind !== 'conform') continue;
-      const [step] = taskScript(task.id)?.[FAKE_MODELS.investigate] ?? [];
+      const steps = taskScript(task.id)?.[FAKE_MODELS.investigate] ?? [];
+      const [step] = steps;
       const content = (step as { content?: unknown } | undefined)?.content;
       expect(typeof content, task.id).toBe('string');
       const proposal = JSON.parse(content as string) as { sources: unknown[] };
-      expect(task.reference.level_e_min, task.id).toBe(proposal.sources.length > 0 ? 'E1' : 'E4');
+      expect(task.reference.level_e_min, task.id).toBe(proposal.sources.length > 0 || steps.length > 1 ? 'E1' : 'E4');
     }
   });
 
