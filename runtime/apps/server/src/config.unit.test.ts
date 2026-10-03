@@ -91,3 +91,10 @@ test('la PUBLIC_URL normalisée atterrit dans la configuration de Better Auth (b
     void pool.end();
   }
 });
+
+test('MCP : hôtes et origines admis dérivés de la PUBLIC_URL normalisée (point final retiré, F-20261002-12)', () => {
+  const mcp = loadServerConfig({ ...base(), PUBLIC_URL: 'https://scrapyomama-runtime.onrender.com.' }).mcp;
+  expect(mcp.allowedHosts).toContain('scrapyomama-runtime.onrender.com');
+  expect(mcp.allowedHosts).not.toContain('scrapyomama-runtime.onrender.com.');
+  expect(mcp.allowedOrigins[0]).toBe('https://scrapyomama-runtime.onrender.com');
+});
