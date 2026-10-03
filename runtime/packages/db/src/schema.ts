@@ -350,6 +350,8 @@ export const apis = pgTable(
     description: text('description').notNull().default(''),
     inputSchema: jsonb('input_schema').notNull().default({}),
     outputSchema: jsonb('output_schema').notNull().default({}),
+    // 0017_rest_api (3.1) : ordre déclaré des propriétés de premier niveau du schéma de sortie (colonnes du CSV).
+    outputColumns: text('output_columns').array(),
     views: jsonb('views').notNull().default({}),
     status: text('status', { enum: API_STATUSES }).notNull().default('enquete'),
     investigationPhase: text('investigation_phase', {
@@ -381,7 +383,7 @@ export const apis = pgTable(
     warningAlertedAt: tstz('warning_alerted_at'),
     // 0016_investigation (2.1) : état de l'enquête entre deux runs (demande, gisements, proposition, schéma validé).
     investigation: jsonb('investigation'),
-    // 0018_step_repair (2.13) : mode « agent instruit », opt-in explicite (déclencheur apis_instructed_mode_guard).
+    // 0019_step_repair (2.13) : mode « agent instruit », opt-in explicite (déclencheur apis_instructed_mode_guard).
     instructedMode: boolean('instructed_mode').notNull().default(false),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
@@ -412,13 +414,15 @@ export const strategyVersions = pgTable(
     createdBy: text('created_by', { enum: STRATEGY_CREATORS }).notNull(),
     parentVersion: integer('parent_version'),
     patch: jsonb('patch'),
-    // 0018_step_repair (2.13) : compilable en E5, étapes instruites (non fiables tant que non confirmées), archivage.
+    // 0019_step_repair (2.13) : compilable en E5, étapes instruites (non fiables tant que non confirmées), archivage.
     compilable: text('compilable', { enum: STRATEGY_COMPILABLE }).notNull().default('unknown'),
     instructedSteps: jsonb('instructed_steps'),
     instructedStepsSha256: text('instructed_steps_sha256'),
     instructedStepsConfirmed: jsonb('instructed_steps_confirmed'),
     archiveReason: text('archive_reason', { enum: STRATEGY_ARCHIVE_REASONS }),
     sourceSteps: jsonb('source_steps'),
+    // 0017_rest_api (3.1) : la version a été courante au moins une fois (déclencheur sur apis) ; seule une telle version se rétablit.
+    wasCurrent: boolean('was_current').notNull().default(false),
     createdAt: createdAt(),
   },
   (t) => [primaryKey({ columns: [t.apiId, t.version] }), index('strategy_versions_owner_id_idx').on(t.ownerId)],
@@ -470,7 +474,9 @@ export const runs = pgTable(
     scheduleJobId: uuid('schedule_job_id'),
     // 0016_investigation (2.1) : exécution d'une stratégie ou enquête.
     kind: text('kind', { enum: RUN_KINDS }).notNull().default('run'),
-    // 0017_run_rejected_items (2.3, D-49) : items extraits non conformes, jamais livrés.
+    // 0017_rest_api (3.1) : pause demandée par l'utilisateur (run `queued` sans job), reprise par `resume`.
+    pausedAt: tstz('paused_at'),
+    // 0018_run_rejected_items (2.3, D-49) : items extraits non conformes, jamais livrés.
     itemsRejected: integer('items_rejected').notNull().default(0),
     createdAt: createdAt(),
     startedAt: tstz('started_at'),
@@ -498,7 +504,7 @@ export const runAttempts = pgTable(
     modelId: text('model_id'),
     promptVersion: text('prompt_version'),
     engine: text('engine'),
-    // 0018_step_repair (2.13) : journal par étape (jetons et coût par étape, `cost_usd`).
+    // 0019_step_repair (2.13) : journal par étape (jetons et coût par étape, `cost_usd`).
     stepId: text('step_id'),
     stepLevel: smallint('step_level'),
     stepOutcome: text('step_outcome', { enum: STEP_OUTCOMES }),
@@ -571,7 +577,7 @@ export const investigationEvents = pgTable(
   (t) => [primaryKey({ columns: [t.runId, t.seq] }), index('investigation_events_owner_id_idx').on(t.ownerId)],
 );
 
-// 0017_run_rejected_items (2.3, D-49) : quarantaine d'un run (agrégats sans valeur, échantillon nettoyé de 5 items au plus).
+// 0018_run_rejected_items (2.3, D-49) : quarantaine d'un run (agrégats sans valeur, échantillon nettoyé de 5 items au plus).
 export const runRejectedItems = pgTable(
   'run_rejected_items',
   {
@@ -789,6 +795,16 @@ export const tunnels = pgTable(
   ],
 );
 
+/**
+ * Créations de run par clé d'API sur une fenêtre d'une minute ouverte par la première création (08b § 3, migration 0017) :
+ * compteur partagé entre instances du serveur. Table système, jamais lue sous runtime_app.
+ */
+export const runCreationCounters = pgTable('run_creation_counters', {
+  bucket: text('bucket').primaryKey(),
+  windowStart: tstz('window_start').notNull(),
+  hits: integer('hits').notNull(),
+});
+
 /** Code d'appairage de l'extension (07 § 1) : usage unique, 10 min, empreinte seulement (migration 0008). */
 export const extensionPairingCodes = pgTable(
   'extension_pairing_codes',
@@ -870,6 +886,8 @@ export const webhookSubscriptions = pgTable(
     // 0011 (2.5) : dernier échec (série « continue » = jamais plus de 24 h sans échec). Clés étrangères liées au
     // propriétaire (secret_id, owner_id) → secrets (id, owner_id), `ON DELETE SET NULL (colonne)` : écrites en SQL seulement.
     lastFailureAt: tstz('last_failure_at'),
+    // 0017_rest_api (3.1) : abonnement limité à une API (NULL = toutes les API du propriétaire).
+    apiId: uuid('api_id').references((): AnyPgColumn => apis.id, { onDelete: 'cascade' }),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },

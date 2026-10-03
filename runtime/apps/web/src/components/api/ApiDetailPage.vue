@@ -66,8 +66,9 @@ const reasonAction = computed(() => {
 <template>
   <header class="flex flex-col gap-2">
     <p class="text-sm"><RouterLink to="/apis" class="underline underline-offset-4">{{ t('detail.backToCatalog') }}</RouterLink></p>
+    <p class="sym-kicker" data-testid="page-kicker">{{ t('brand.kicker.api') }}</p>
     <div class="flex flex-wrap items-center justify-between gap-3">
-      <h1 data-route-heading tabindex="-1" class="text-2xl font-semibold tracking-tight">{{ slug }}</h1>
+      <h1 data-route-heading tabindex="-1" class="sym-title">{{ slug }}</h1>
       <div v-if="!detail.metadata_only && detail.status !== 'bloquee'" class="flex flex-wrap gap-2">
         <Button as-child><RouterLink :to="{ path: `/apis/${slug}/overview`, hash: '#launch' }">{{ t('actions.launch') }}</RouterLink></Button>
         <Button variant="outline" :disabled="reinvestigating" data-testid="header-reinvestigate" @click="$emit('reinvestigate')">{{ t('actions.reinvestigate') }}</Button>

@@ -433,6 +433,51 @@ describe('assert_image_labels — étiquettes OCI de l\'image construite', () =>
   });
 });
 
+// assert_console_served (constat F-20261002-09) : l'image contient le build de la console et le serveur la sert (sous Render,
+// toutes les pages de la console répondaient 404, seule l'API répondait). Lu depuis le conteneur, sous pwuser.
+const CONSOLE_PROBE = `
+const base = 'http://127.0.0.1:3000';
+const get = async (path) => { const r = await fetch(base + path); return { status: r.status, type: r.headers.get('content-type'), cache: r.headers.get('cache-control'), csp: r.headers.get('content-security-policy'), body: await r.text() }; };
+const root = await get('/');
+const route = await get('/settings/models');
+const api = await get('/api/inconnu');
+const asset = /src="(\\/assets\\/[^"]+\\.js)"/.exec(root.body)?.[1] ?? null;
+const js = asset ? await get(asset) : null;
+const short = (r) => r && { status: r.status, type: r.type, cache: r.cache, csp: r.csp, app: r.body.includes('<div id="app">'), body: r.body.slice(0, 120) };
+console.log(JSON.stringify({ root: short(root), route: short(route), api: short(api), asset, js: short(js), same: root.body === route.body }));
+`;
+
+describe('assert_console_served — l’image construite sert la console (apps/web/dist) à la racine', () => {
+  test('RUNTIME_MODE=server sous Render : GET / et une route de la console → index.html ; script haché en cache long ; /api/inconnu → 404 JSON', async () => {
+    const name = startContainer(`zz_test_img_console_${run}`, RENDER, { RUNTIME_MODE: 'server', DATABASE_URL, MASTER_KEY, ADMIN_BOOTSTRAP_TOKEN, PUBLIC_URL: 'http://localhost:3000' });
+    const health = "fetch('http://127.0.0.1:3000/api/health').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))";
+    await until('serveur à l’écoute', () => docker(['exec', '-u', String(PWUSER), name, 'node', '-e', health]).status === 0, 90_000);
+    const r = docker(['exec', '-u', String(PWUSER), name, 'node', '--input-type=module', '-e', CONSOLE_PROBE]);
+    expect(r.status, r.stderr).toBe(0);
+    const report = JSON.parse(r.stdout.trim().split('\n').pop() ?? '{}') as {
+      root: { status: number; type: string; cache: string; csp: string; app: boolean };
+      route: { status: number; type: string; app: boolean };
+      api: { status: number; type: string; body: string };
+      asset: string | null;
+      js: { status: number; type: string; cache: string } | null;
+      same: boolean;
+    };
+    console.log(`${name} : ${JSON.stringify(report)}`);
+    expect(report.root).toMatchObject({ status: 200, cache: 'no-cache', app: true });
+    expect(report.root.type).toMatch(/^text\/html/);
+    expect(report.root.csp).toContain("default-src 'self'");
+    expect(report.route).toMatchObject({ status: 200, app: true });
+    expect(report.same).toBe(true);
+    expect(report.api.status).toBe(404);
+    expect(report.api.type).toMatch(/^application\/json/);
+    expect(JSON.parse(report.api.body)).toMatchObject({ error: { code: 'not_found' } });
+    expect(report.asset).toMatch(/^\/assets\//);
+    expect(report.js).toMatchObject({ status: 200, cache: 'public, max-age=31536000, immutable' });
+    expect(report.js?.type).toMatch(/javascript/);
+    dockerOk(['stop', '-t', '30', name], 60_000);
+  }, 240_000);
+});
+
 describe('assert_sandbox_image_privileges — image sous les capacités de Render et en Docker classique', () => {
   test('image : démarre en root pour descendre aussitôt ; copie de Node du worker réservée à pwuser', () => {
     const user = dockerOk(['image', 'inspect', '--format', '{{.Config.User}}', image]).trim();

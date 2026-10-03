@@ -16,6 +16,8 @@ catalog:
   # Passerelle tunnel WSS (tâche 2.7, 03 « Serveur HTTP ») : @fastify/websocket 11.3.1 (MIT, 2026-09-18), ws 8.21.3 (MIT ; 8.22.0 < 7 jours au 2026-10-01, minimumReleaseAge), @types/ws 8.18.1 (8.18.2 < 7 jours).
   '@fastify/websocket': 11.3.1
   ws: 8.21.3
+  # Console servie par le serveur (fix-console-served, 03 « Serveur HTTP » : Fastify 5 + @fastify/static) : @fastify/static 10.1.4 (MIT, 2026-09-17 ; 10.1.5 < 7 jours au 2026-10-02, minimumReleaseAge).
+  '@fastify/static': 10.1.4
   '@types/ws': 8.18.1
   pino: 10.3.1
   # Outillage qualité (tâche 0.8)
@@ -64,6 +66,9 @@ catalog:
   # Client API (tâche 3.3) : types générés par openapi-typescript depuis l'OpenAPI spécifiée, appels par openapi-fetch.
   openapi-fetch: 0.17.0
   openapi-typescript: 7.13.0
+  # Validation structurelle de l'OpenAPI SERVIE (tâche 3.1, assert_openapi_served_valid, règle `struct`) : MIT, déjà dans l'arbre
+  # par openapi-typescript (même version, une seule copie) ; 1.34.20 publiée il y a plus de 7 jours (minimumReleaseAge).
+  '@redocly/openapi-core': 1.34.20
   # Aide cron des planifications (tâche 3.4, 06 § 2 « Cron ») : MIT, sans dépendance ; 3.27.0 publiée le 2026-09-15 (plus de 7 jours).
   cronstrue: 3.27.0
   # Lint des composants .vue (tâche 3.3).

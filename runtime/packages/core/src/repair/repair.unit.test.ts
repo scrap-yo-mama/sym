@@ -3,6 +3,9 @@
 // sorties saines, boucle de réparation (correctif répété, budget), escalade, `output_schema` jamais modifié.
 import { describe, expect, test } from 'vitest';
 import { extractRecords } from '../dsl/extract.js';
+import type { RenderedRequest } from '../dsl/template.js';
+import { runDeclarative } from '../exec/declarative.js';
+import type { HttpExchange } from '../exec/types.js';
 import { validateRepairPatch } from '../dsl/patch.js';
 import { validateDeclarativeSpec, type DeclarativeSpec } from '../dsl/spec.js';
 import { PersonalValueRegistry } from '../privacy/mask.js';
@@ -68,8 +71,34 @@ describe('items écartés (D-49, 04 §5)', () => {
     const text = JSON.stringify(summary);
     expect(text).not.toContain('example.invalid');
     expect(summary.sample).toEqual([{ titre: 'Vélo', prix: REJECTED_VALUE_MASK, extra: { ville: 'Lyon' } }]);
-    // Les chemins des propriétés non déclarées restent dans les raisons, sans leur valeur.
-    expect(summary.by_reason.map((r) => `${r.keyword}:${r.instance_path}`).sort()).toEqual(['additionalProperties:/extra/contact_email', 'additionalProperties:/note_cachee', 'type:/prix']);
+    // Une propriété non déclarée n'est jamais nommée dans les raisons (son nom vient du site) : segment neutre `*`.
+    expect(summary.by_reason.map((r) => `${r.keyword}:${r.instance_path}`).sort()).toEqual(['additionalProperties:/*', 'additionalProperties:/extra/*', 'type:/prix']);
+  });
+
+  test('raisons sans valeur : un nom de clé non déclaré (identifiant, nom…) ne sort jamais dans by_reason, seulement `*`', () => {
+    const items = [
+      { titre: 'a', prix: 1, zz_test_secret_id_123: true },
+      { titre: 'b', prix: 2, extra: { ville: 'Lyon', zz_test_secret_id_123: 'x', autre_cle: 1 } },
+      { titre: 'c', prix: 'N/A', zz_test_secret_id_123: 1, zz_test_other_456: 2 },
+    ];
+    const summary = quarantineSummary(SCHEMA, partitionItems(SCHEMA, items).rejected);
+    expect(JSON.stringify(summary)).not.toMatch(/zz_test_secret_id_123|zz_test_other_456|autre_cle/);
+    // Un compte par item et par (mot-clé, pointeur neutre) : deux clés inconnues du même item comptent une fois.
+    expect(summary.by_reason).toEqual([
+      { keyword: 'additionalProperties', instance_path: '/*', count: 2 },
+      { keyword: 'additionalProperties', instance_path: '/extra/*', count: 1 },
+      { keyword: 'type', instance_path: '/prix', count: 1 },
+    ]);
+  });
+
+  test('échantillon : une chaîne longue est coupée à une limite de mot, jamais au milieu d’un mot (effacement par motif borné)', () => {
+    const titre = `${'A'.repeat(110)} Jean Dupont et la suite`;
+    const sample = sanitizeRejectedItem(SCHEMA, { item: { titre, prix: 'x' }, issues: [{ keyword: 'type', instance_path: '/prix' }] }) as Record<string, string>;
+    expect(sample['titre']).toBe(`${'A'.repeat(110)} Jean…`);
+    expect(sample['titre']).not.toContain('Dupo');
+    // Un seul mot plus long que la borne : rien n'en reste.
+    const one = sanitizeRejectedItem(SCHEMA, { item: { titre: 'B'.repeat(300), prix: 'x' }, issues: [] }) as Record<string, string>;
+    expect(one['titre']).toBe('…');
   });
 
   test('échantillon : propriétés non déclarées retirées même sous __proto__, valeurs du registre du run masquées, chaînes tronquées', () => {
@@ -143,9 +172,88 @@ describe('extraction en politique `quarantine` (runs)', () => {
     expect(rejected[0]!.issues).toEqual([{ keyword: 'type', instance_path: '/prix' }]);
   });
 
-  test('quarantine : 0 enregistrement conforme bloque la source (repli possible, puis casse)', () => {
-    const all = JSON.stringify({ items: [{ title: 'a' }, { title: 'b' }] });
-    expect(extractRecords(spec(), { body: all }, { outputSchema: OUT, itemPolicy: 'quarantine' }).ok).toBe(false);
+  test('quarantine : 0 enregistrement conforme sur une page : la source est écartée (repli), mais ses enregistrements sont rendus à l’exécuteur', () => {
+    const all = JSON.stringify({ items: [{ title: 'a' }, { title: 'b', price: 'N/A' }] });
+    const out = extractRecords(spec(), { body: all }, { outputSchema: OUT, itemPolicy: 'quarantine' });
+    // Le seuil de casse se décide sur le run (D-49), pas sur la page : les items vont au tri (Ajv), puis en quarantaine.
+    expect(out.ok).toBe(true);
+    expect(out.attempts[0]!.ok).toBe(false);
+    expect(out.records).toHaveLength(2);
+    expect(partitionItems(OUT, out.records).conform).toHaveLength(0);
+    // Strict (enquête) : inchangé, la source casse.
+    expect(extractRecords(spec(), { body: all }, { outputSchema: OUT }).ok).toBe(false);
+  });
+
+  test('quarantine : une source de repli conforme l’emporte sur une source sans aucun item conforme', () => {
+    const withFallback = validateDeclarativeSpec(
+      { ...SPEC_INPUT, sources: [{ id: 'api', from: 'response', format: 'json', records: '$.items[*]' }, { id: 'alt', from: 'response', format: 'json', records: '$.alt[*]' }] },
+      { outputSchema: OUT },
+    );
+    if (!withFallback.ok) throw new Error(JSON.stringify(withFallback.errors));
+    const body2 = JSON.stringify({ items: [{ title: 'a' }], alt: [{ title: 'b', price: 2 }] });
+    const out = extractRecords(withFallback.spec, { body: body2 }, { outputSchema: OUT, itemPolicy: 'quarantine' });
+    expect(out).toMatchObject({ ok: true, source_id: 'alt', escalated: true });
+    expect(out.records).toEqual([{ titre: 'b', prix: 2 }]);
+  });
+
+  test('quarantine : une source sans aucun enregistrement casse toujours (problème de source, pas d’item)', () => {
+    expect(extractRecords(spec(), { body: JSON.stringify({ items: [] }) }, { outputSchema: OUT, itemPolicy: 'quarantine' }).ok).toBe(false);
+  });
+});
+
+describe('pagination en politique `quarantine` : le seuil de casse se décide sur le run, pas page par page (04 §5)', () => {
+  const PAGED = {
+    ...SPEC_INPUT,
+    request: { ...SPEC_INPUT.request, params: [{ at: 'url.query.page', role: 'pagination' }] },
+    pagination: { type: 'page_param', param: 'url.query.page', start: 1, stop: [{ when: 'records_empty' }], limits: { hard_max_pages: 10 } },
+  };
+  const paged = (): DeclarativeSpec => {
+    const check = validateDeclarativeSpec(PAGED, { outputSchema: OUT });
+    if (!check.ok) throw new Error(JSON.stringify(check.errors));
+    return check.spec;
+  };
+  const goods = (from: number, n: number) => Array.from({ length: n }, (_, i) => ({ title: `t${from + i}`, price: from + i }));
+  const transport = (pages: Record<string, unknown[]>) => async (r: RenderedRequest): Promise<HttpExchange> => {
+    const page = new URL(r.url).searchParams.get('page') ?? '1';
+    return { status: 200, headers: {}, body: JSON.stringify({ items: pages[page] ?? [] }), url: r.url };
+  };
+  const run = (pages: Record<string, unknown[]>) =>
+    runDeclarative({ spec: paged(), input: {}, outputSchema: OUT, itemPolicy: 'quarantine', transport: transport(pages), signal: new AbortController().signal });
+
+  test('dernière page d’un seul item non conforme : 20 livrés, 1 écarté, run dégradé (1/21, sous 20 % et sous 5)', async () => {
+    const out = await run({ '1': goods(0, 10), '2': goods(10, 10), '3': [{ title: 'last', price: 'N/A' }] });
+    expect(out.ok).toBe(true);
+    if (!out.ok) return;
+    expect(out.records).toHaveLength(21);
+    const { conform, rejected } = partitionItems(OUT, out.records);
+    expect(conform).toHaveLength(20);
+    expect(rejected).toHaveLength(1);
+    expect(rejectionVerdict(conform.length, rejected.length)).toBe('degraded');
+    // Preuve d'une page aux items écartés (garde puis squelette pour le rôle `repair`, 04 §5 étape 1).
+    expect(out.evidence?.body).toContain('N/A');
+  });
+
+  test('page intermédiaire entièrement non conforme, sous le seuil : la pagination continue, le run livre', async () => {
+    const out = await run({ '1': goods(0, 10), '2': [{ title: 'x' }, { title: 'y', price: 'N/A' }, { title: 'z' }], '3': goods(20, 10) });
+    expect(out.ok).toBe(true);
+    if (!out.ok) return;
+    expect(out.pages).toBe(4);
+    const { conform, rejected } = partitionItems(OUT, out.records);
+    expect([conform.length, rejected.length]).toEqual([20, 3]);
+    expect(rejectionVerdict(conform.length, rejected.length)).toBe('degraded');
+  });
+
+  test('0 item conforme sur tout le run : casse (verdict `break`), pas une livraison', async () => {
+    const out = await run({ '1': [{ title: 'x' }], '2': [{ title: 'y', price: 'N/A' }] });
+    expect(out.ok).toBe(true);
+    if (!out.ok) return;
+    const { conform, rejected } = partitionItems(OUT, out.records);
+    expect(rejectionVerdict(conform.length, rejected.length)).toBe('break');
+  });
+
+  test('strict (enquête) : une page non conforme fait toujours échouer l’essai', async () => {
+    const out = await runDeclarative({ spec: paged(), input: {}, outputSchema: OUT, transport: transport({ '1': goods(0, 10), '2': [{ title: 'last', price: 'N/A' }] }), signal: new AbortController().signal });
+    expect(out).toMatchObject({ ok: false, failure: { failure_class: 'extraction' } });
   });
 });
 
@@ -177,6 +285,22 @@ describe('réparation : patch borné, sorties saines, arrêt', () => {
     expect(checkAgainstHealthy(healthy, retyped)).toEqual({ ok: false, missing: [], type_changed: ['/score'] });
     // Sans référence suffisante, seul le schéma juge.
     expect(checkAgainstHealthy(healthyProfile([{ a: 1 }]), [])).toEqual({ ok: true });
+  });
+
+  test('sorties saines après un changement de output_schema : seuls les champs DÉCLARÉS du schéma courant, items conformes à lui', () => {
+    // Anciennes sorties : `legacy` toujours rempli, `score` en nombre. Schéma courant : `legacy` retiré, `score` en texte.
+    const old = Array.from({ length: 10 }, (_, i) => ({ id: `c${i}`, name: `n${i}`, legacy: 'x', score: i }));
+    const current = { type: 'object', required: ['id', 'name'], properties: { id: { type: 'string' }, name: { type: 'string' }, score: { type: 'string' } } };
+    const profile = healthyProfile(old, { outputSchema: current });
+    // Aucune ancienne sortie n'est conforme au schéma courant (score en nombre) : pas de référence, seul le schéma juge.
+    expect(profile.stable).toEqual({});
+    const repaired = Array.from({ length: 10 }, (_, i) => ({ id: `c${i}`, name: `n${i}`, score: String(i) }));
+    expect(checkAgainstHealthy(profile, repaired)).toEqual({ ok: true });
+    // Champ retiré du schéma (propriétés libres) : il n'est plus « stable », la réparation qui ne le livre plus passe.
+    const open = { type: 'object', required: ['id'], properties: { id: { type: 'string' }, name: { type: 'string' } } };
+    const kept = healthyProfile(old, { outputSchema: open });
+    expect(kept.stable).toEqual({ '/id': 'string', '/name': 'string' });
+    expect(checkAgainstHealthy(kept, repaired.map(({ score: _s, ...r }) => r))).toEqual({ ok: true });
   });
 
   test('correctif répété → arrêt `repeated_patch` ; budget et nombre de propositions bornés', () => {

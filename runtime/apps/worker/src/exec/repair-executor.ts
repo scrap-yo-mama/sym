@@ -162,7 +162,8 @@ export function createRepairPort(deps: RepairEngineDeps): RepairPort {
     };
     const ledger = new RepairLedger({ ...(deps.maxAttempts === undefined ? {} : { maxAttempts: deps.maxAttempts }), ...(deps.budgetUsd === undefined ? {} : { budgetUsd: deps.budgetUsd }) });
     // Référence : items livrés des derniers runs réussis (chemins et types seulement entrent dans le prompt).
-    const healthy: HealthyProfile = healthyProfile(await readHealthyItems(deps.pool, { apiId: ctx.apiId, ownerId: ctx.ownerId, excludeRunId: ctx.runId }));
+    // Schéma COURANT : après une ré-enquête `output_schema_changed`, un champ retiré ou retypé n'est plus exigé.
+    const healthy: HealthyProfile = healthyProfile(await readHealthyItems(deps.pool, { apiId: ctx.apiId, ownerId: ctx.ownerId, excludeRunId: ctx.runId }), { outputSchema: target.api.outputSchema });
     const evidence: readonly AgentEvidence[] = request.evidence;
     // Aucune page de défi n'entre dans un prompt (04b §6) : un texte refusé arrête la réparation comme un refus.
     try {
@@ -200,7 +201,7 @@ export function createRepairPort(deps: RepairEngineDeps): RepairPort {
       const model = config.roles.repair?.model ?? null;
       for (;;) {
         if (!(await holds())) return leaseLost();
-        const args = { spec, outputSchema: target.api.outputSchema, failure, evidence, healthy, reasons: request.reasons, refused };
+        const args = { description: target.api.description, spec, outputSchema: target.api.outputSchema, failure, evidence, healthy, reasons: request.reasons, refused };
         const ceiling = repairCallCeilingUsd(args, price);
         if (!ledger.canPropose(ceiling)) break;
         const before = client.meter.snapshot().cost_usd_known ?? 0;

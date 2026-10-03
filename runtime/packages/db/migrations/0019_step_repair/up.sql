@@ -1,5 +1,5 @@
 -- SPDX-License-Identifier: AGPL-3.0-only
--- 0018_step_repair (tâche 2.13, 19 §4, 19b §1 ; migration validée par l'arbitrage du 2026-10-01) : reprise par étape et
+-- 0019_step_repair (tâche 2.13, 19 §4, 19b §1 ; migration validée par l'arbitrage du 2026-10-01) : reprise par étape et
 -- mode « agent instruit ».
 --   apis.instructed_mode                  opt-in EXPLICITE par API (défaut faux) ; vrai seulement si la version courante
 --                                         est non compilable et que ses étapes instruites ont été confirmées par un

@@ -1,5 +1,5 @@
 -- SPDX-License-Identifier: AGPL-3.0-only
--- 0017_run_rejected_items (tâche 2.3, D-49, 04 §5, 04b §1) : items non conformes écartés et quarantaine.
+-- 0018_run_rejected_items (tâche 2.3, D-49, 04 §5, 04b §1) : items non conformes écartés et quarantaine.
 --   runs.items_rejected   items extraits non conformes, jamais livrés (le dataset ne contient que les items livrés) ;
 --   run_rejected_items    une ligne par run qui a écarté des items : agrégats sans valeur (`total_rejected`,
 --                         `by_reason` : mot-clé Ajv, pointeur, nombre) et échantillon de 5 items au plus, nettoyé avant

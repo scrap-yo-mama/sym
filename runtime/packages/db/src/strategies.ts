@@ -22,8 +22,10 @@ export type RunTarget = {
     readonly requires: { readonly session_domain?: string | null; readonly tunnel?: boolean };
     /** `apis.requires_session` : l'API exige la session (l'identité) de l'utilisateur (C2, 04 §3.2). */
     readonly requiresSession: boolean;
-    /** `apis.instructed_mode` (2.13) : opt-in explicite de l'agent instruit (étapes confirmées, déclencheur de 0018). */
+    /** `apis.instructed_mode` (2.13) : opt-in explicite de l'agent instruit (étapes confirmées, déclencheur de 0019). */
     readonly instructedMode: boolean;
+    /** `apis.description` : demande du propriétaire, source de la stratégie pour la réparation (04 §5 étape 1). */
+    readonly description: string;
   };
   readonly strategy: {
     readonly version: number;
@@ -55,8 +57,9 @@ export async function loadRunTarget(pool: pg.Pool, args: { apiId: string; ownerI
       requires: RunTarget['api']['requires'] | null;
       requires_session: boolean;
       instructed_mode: boolean;
+      description: string;
     }>(
-      `SELECT id, project_id, output_schema, network_policy, domain_pacing, max_cost_usd, allow_write_actions, requires, requires_session, instructed_mode
+      `SELECT id, project_id, output_schema, network_policy, domain_pacing, max_cost_usd, allow_write_actions, requires, requires_session, instructed_mode, description
        FROM apis WHERE id = $1 AND owner_id = $2`,
       [args.apiId, args.ownerId],
     );
@@ -97,6 +100,7 @@ export async function loadRunTarget(pool: pg.Pool, args: { apiId: string; ownerI
         requires: api.requires ?? {},
         requiresSession: api.requires_session,
         instructedMode: api.instructed_mode,
+        description: api.description,
       },
       strategy,
     };

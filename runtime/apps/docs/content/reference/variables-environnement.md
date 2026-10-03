@@ -44,7 +44,10 @@ Pour l'instant, le TLS vers la base se règle par `sslmode` dans `DATABASE_URL` 
 | `TRUST_PROXY` | `false` | server | nombre de sauts de proxy, ou liste d'adresses ou de plages CIDR. Jamais `true` sans proxy devant | lue |
 | `INSTANCE_CONTACT` | aucun | worker | contact de l'opérateur, annoncé dans le jeton du User-Agent du robot et dans `From` quand `IDENTIFY_INSTANCE` est activé ; le réglage saisi à l'assistant de premier démarrage l'emporte | lue |
 | `IDENTIFY_INSTANCE` | `false` | worker | `true` : jeton `compatible; Scrapyomama/<version>; +<contact>` dans le User-Agent et en-tête `From` (adresse électronique) ; sinon le User-Agent est celui, réel, du Chromium embarqué. Le réglage admin `identify_instance` l'emporte | lue |
-| `MAX_WAIT_SECONDS` | 25 | — | plafond du paramètre `wait` (REST, MCP) | prévue |
+| `MAX_WAIT_SECONDS` | 25 | server | plafond, en secondes, de l’attente synchrone d’un appel REST ou MCP (paramètre `wait`, 1 à 25) ; au-delà, un run à suivre (202) | lue |
+| `MAX_CONCURRENT_RUNS` | 50 | server | runs actifs de l’instance au-delà desquels une création de run ou d’API répond 429 `queue_full` avec `Retry-After` (valeur à valider) | lue |
+| `MAX_ACTIVE_RUNS_PER_USER` | 20 | server | runs actifs (hors pause) d’un même utilisateur au-delà desquels sa création de run ou d’API répond 429 `user_queue_full` avec `Retry-After` (valeur à valider) | lue |
+| `MAX_RUNS_PER_KEY_PER_MINUTE` | 60 | server | créations de run ou d’API par clé d’API et par minute au-delà desquelles l’appel répond 429 `key_rate_limited` avec `Retry-After` (compteur du processus, valeur à valider) | lue |
 
 ## Premier démarrage et comptes
 

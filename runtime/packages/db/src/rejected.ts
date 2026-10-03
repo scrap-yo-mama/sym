@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// Quarantaine des items non conformes (tâche 2.3, D-49, migration 0017) et lectures de la réparation :
+// Quarantaine des items non conformes (tâche 2.3, D-49, migration 0018) et lectures de la réparation :
 // - écriture de la quarantaine d'un run sous l'identité de l'APPELANT du run (RLS : `owner_id = runs.owner_id`) ;
 // - service de lecture : l'appelant du run lit agrégats et échantillon ; le propriétaire d'une API partagée ne lit que les
 //   agrégats (`total_rejected`, `by_reason`) et obtient « introuvable » (404) sur l'échantillon ; tout autre utilisateur,
