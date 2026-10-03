@@ -13,8 +13,9 @@ import {
   readRobotEngine,
   writeRobotIdentitySettings,
 } from '@runtime/db';
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyReply } from 'fastify';
 import type { ServerContext } from '../context.js';
+import { runErrorFor } from '../rest/run-error.js';
 import { auditEvent, sendError } from './guard.js';
 
 type Body = { identify_instance?: boolean; instance_contact?: string | null };
@@ -121,13 +122,37 @@ async function identityView(ctx: ServerContext): Promise<IdentityView> {
 }
 
 /**
- * Le contact d'instance manque-t-il pour la première enquête (17 § 5, UX-04) ? Même résolution que le worker : le réglage, puis
- * l'environnement que le worker a publié avec son moteur. Tant qu'aucun worker n'a publié, son environnement est inconnu :
- * le serveur ne devine pas (false) plutôt que de refuser un contact que le worker lirait dans sa variable.
+ * Le contact d'instance est-il inutilisable pour la première enquête (17 § 5, UX-04, UX-05) ? Même résolution que le worker
+ * (`resolveInstanceContact` sur le réglage brut, puis l'environnement publié par le worker avec son moteur) : `missing` sans
+ * aucun contact, `invalid` quand celui qui s'applique est illisible (réglage, ou `INSTANCE_CONTACT` du worker), sinon `null`.
+ * Tant qu'aucun worker n'a publié, son environnement est inconnu : le serveur ne devine pas (null) plutôt que de refuser un
+ * contact que le worker lirait dans sa variable.
  */
-export async function instanceContactMissing(ctx: ServerContext): Promise<boolean> {
-  const view = await identityView(ctx);
-  return view.engine !== null && view.instance_contact_effective === null;
+async function instanceContactProblem(ctx: ServerContext): Promise<'missing' | 'invalid' | null> {
+  const [setting, engine] = await Promise.all([readInstanceContactSetting(ctx.pool), readRobotEngine(ctx.pool)]);
+  if (engine === null) return null;
+  const env: Record<string, string> = {};
+  if (engine.env !== null && engine.env.instanceContact !== null) env['INSTANCE_CONTACT'] = engine.env.instanceContact;
+  try {
+    if (resolveInstanceContact(setting, env) !== null) return null;
+  } catch {
+    return 'invalid';
+  }
+  // Worker trop ancien pour publier son environnement : sa variable est inconnue, rien n'est deviné.
+  if (engine.env === null) return null;
+  return engine.env.instanceContactInvalid ? 'invalid' : 'missing';
+}
+
+/**
+ * Refus AVANT toute création (UX-04, point d'entrée qui lance une enquête : création, import, ré-enquête) quand le contact du
+ * robot est inutilisable : 409 `instance_contact_missing` avec message, `what_to_do` et `retryable` (même texte que la cause d'un
+ * run arrêté). Vrai si la réponse est partie.
+ */
+export async function rejectWithoutInstanceContact(ctx: ServerContext, reply: FastifyReply): Promise<boolean> {
+  const problem = await instanceContactProblem(ctx);
+  if (problem === null) return false;
+  await reply.code(409).send({ error: runErrorFor(problem === 'invalid' ? 'instance_contact_invalid' : 'instance_contact_missing') });
+  return true;
 }
 
 export function identityRoutes(app: FastifyInstance, ctx: ServerContext): void {

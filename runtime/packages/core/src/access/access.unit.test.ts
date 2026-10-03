@@ -2,7 +2,7 @@
 // `access_policy` (17 §4), identité du robot (17 §5), signaux d'accès et offre 402 (17 §2) : sans I/O.
 import { describe, expect, it } from 'vitest';
 import { AccessPolicyError, DEFAULT_ACCESS_POLICY, parseAccessPolicy } from './policy.js';
-import { buildUserAgent, EngineUserAgentError, identityFromEnv, InstanceContactError, normalizeInstanceContact, requireInstanceContact, resolveIdentifyInstance, resolveInstanceContact, robotFrom } from './identity.js';
+import { buildUserAgent, EngineUserAgentError, identityFromEnv, instanceContactEnvInvalid, InstanceContactError, normalizeInstanceContact, requireInstanceContact, resolveIdentifyInstance, resolveInstanceContact, robotFrom } from './identity.js';
 import { detectAccessSignals, parsePaymentOffer, sanitizeSignalValue } from './signals.js';
 
 describe('access_policy : robots n’a qu’une valeur (INV11), champs réservés refusés en V1', () => {
@@ -80,6 +80,13 @@ describe('identité du robot : User-Agent réel du moteur, identification de l�
     expect(identityFromEnv({ IDENTIFY_INSTANCE: 'false' }).identifyInstance).toBe(false);
     expect(identityFromEnv({ IDENTIFY_INSTANCE: 'oui', INSTANCE_CONTACT: 'ops @zz-test.example' })).toEqual({ identifyInstance: null, instanceContact: null });
     expect(identityFromEnv({ INSTANCE_CONTACT: '   ' }).instanceContact).toBeNull();
+  });
+
+  it('INSTANCE_CONTACT posé mais illisible : signalé à part (le worker refusera l’enquête, UX-05) ; absent ou valide : non', () => {
+    expect(instanceContactEnvInvalid({ INSTANCE_CONTACT: 'ops @zz-test.example' })).toBe(true);
+    expect(instanceContactEnvInvalid({ INSTANCE_CONTACT: 'ops@zz-test.example' })).toBe(false);
+    expect(instanceContactEnvInvalid({ INSTANCE_CONTACT: '   ' })).toBe(false);
+    expect(instanceContactEnvInvalid({})).toBe(false);
   });
 
   it('contact invalide refusé (injection d’en-tête, identifiants, schéma)', () => {

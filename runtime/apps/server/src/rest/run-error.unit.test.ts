@@ -15,6 +15,15 @@ describe('cause d’un run en échec (UX-04)', () => {
     expect(runErrorFor('instance_contact_missing')).toEqual(error);
   });
 
+  test('contact posé mais invalide : même raison (instance_contact_missing), message qui dit de le corriger, jamais « renseigne-le »', () => {
+    const error = runErrorOf({ state: 'failed', error_detail: 'instance_contact_invalid' });
+    expect(error).toMatchObject({ code: 'instance_contact_missing', retryable: true });
+    expect(error!.message).toContain('invalide');
+    expect(error!.message).not.toMatch(/^Renseigne/);
+    expect(error!.what_to_do).toContain('/settings/robot');
+    expect(runErrorFor('instance_contact_invalid')).toEqual(error);
+  });
+
   test('un run qui n’a pas échoué, ou un détail non nommé, ne publie aucune cause', () => {
     expect(runErrorOf({ state: 'succeeded', error_detail: 'instance_contact_missing' })).toBeNull();
     expect(runErrorOf({ state: 'failed', error_detail: 'https://zz-test.example/secret' })).toBeNull();

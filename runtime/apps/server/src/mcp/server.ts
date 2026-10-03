@@ -90,8 +90,8 @@ const GUIDES: Record<string, ErrorGuide> = {
 const DEFAULT_GUIDE: ErrorGuide = { what_to_do: 'Read the message; if it persists, report_problem with what you tried.', retryable: false };
 
 /** Erreur d'outil (05 § 4.3) : texte JSON, `isError`, aucun `structuredContent`. */
-function toolError(code: string, message: string, nextAction: Json | null = null): CallToolResult {
-  const guide = GUIDES[code] ?? DEFAULT_GUIDE;
+function toolError(code: string, message: string, nextAction: Json | null = null, own?: ErrorGuide): CallToolResult {
+  const guide = own ?? GUIDES[code] ?? DEFAULT_GUIDE;
   const body = { code, message, what_to_do: guide.what_to_do, retryable: guide.retryable, next_action: nextAction };
   return { isError: true, content: [{ type: 'text', text: JSON.stringify(body) }] };
 }
@@ -155,10 +155,12 @@ async function rest(ctx: ServerContext, caller: McpCaller, method: 'GET' | 'POST
 
 /** Réponse d'erreur REST → erreur d'outil ; `nextAction` selon le code. */
 function restError(answer: RestAnswer, nextAction: (code: string) => Json | null = () => null): CallToolResult {
-  const error = (answer.body['error'] ?? {}) as { code?: unknown; message?: unknown };
+  const error = (answer.body['error'] ?? {}) as { code?: unknown; message?: unknown; what_to_do?: unknown; retryable?: unknown };
   const code = typeof error.code === 'string' ? error.code : answer.status === 404 ? 'not_found' : 'internal';
   if (code === 'not_found') return notFoundError();
-  return toolError(code, typeof error.message === 'string' ? error.message : 'erreur', nextAction(code));
+  // Marche à suivre écrite par la route elle-même (ex. contact du robot absent ou invalide, UX-04/UX-05) : reprise telle quelle.
+  const own = typeof error.what_to_do === 'string' && typeof error.retryable === 'boolean' ? { what_to_do: error.what_to_do, retryable: error.retryable } : undefined;
+  return toolError(code, typeof error.message === 'string' ? error.message : 'erreur', nextAction(code), own);
 }
 
 const query = (params: Record<string, string | number | undefined>): string => {

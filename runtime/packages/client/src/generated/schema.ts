@@ -1774,6 +1774,8 @@ export interface components {
                 reason?: string;
                 /** @description Marche à suivre, en anglais (05 § 1). */
                 what_to_do?: string;
+                /** @description L'appel peut être refait tel quel une fois la marche à suivre faite (ex. `instance_contact_missing` : le contact du robot posé, UX-04). */
+                retryable?: boolean;
             };
         };
         /** @description Erreur de la bibliothèque d'authentification (format à plat, sans enveloppe `error`). */

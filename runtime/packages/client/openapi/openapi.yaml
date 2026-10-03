@@ -3180,6 +3180,11 @@ components:
             what_to_do:
               description: Marche à suivre, en anglais (05 § 1).
               type: string
+            retryable:
+              description: >-
+                L'appel peut être refait tel quel une fois la marche à suivre faite (ex. `instance_contact_missing` : le
+                contact du robot posé, UX-04).
+              type: boolean
     AuthError:
       description: Erreur de la bibliothèque d'authentification (format à plat, sans enveloppe `error`).
       type: object

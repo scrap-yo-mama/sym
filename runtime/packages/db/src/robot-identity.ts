@@ -95,12 +95,14 @@ export type RobotEnginePublication = RobotEngineSetting & {
   readonly productVersion?: string;
   readonly identifyInstanceEnv?: boolean | null;
   readonly instanceContactEnv?: string | null;
+  /** `INSTANCE_CONTACT` posé mais illisible (UX-05) : le worker refusera l'enquête ; `instanceContactEnv` vaut alors `null`. */
+  readonly instanceContactEnvInvalid?: boolean;
 };
 
 /** Dernière publication lue : `productVersion` et `env` à `null` pour un worker qui ne les publiait pas encore. */
 export type RobotEngineView = RobotEngineSetting & {
   readonly productVersion: string | null;
-  readonly env: { readonly identifyInstance: boolean | null; readonly instanceContact: string | null } | null;
+  readonly env: { readonly identifyInstance: boolean | null; readonly instanceContact: string | null; readonly instanceContactInvalid: boolean } | null;
 };
 
 /** Publié par le worker au démarrage (best-effort) : la console en tire le User-Agent réel, sans embarquer de navigateur. */
@@ -108,7 +110,7 @@ export async function publishRobotEngine(db: Queryable, engine: RobotEnginePubli
   const value: Record<string, unknown> = { version: engine.version, platform: engine.platform };
   if (engine.productVersion !== undefined) value['product_version'] = engine.productVersion;
   if (engine.identifyInstanceEnv !== undefined || engine.instanceContactEnv !== undefined) {
-    value['env'] = { identify_instance: engine.identifyInstanceEnv ?? null, instance_contact: engine.instanceContactEnv ?? null };
+    value['env'] = { identify_instance: engine.identifyInstanceEnv ?? null, instance_contact: engine.instanceContactEnv ?? null, ...(engine.instanceContactEnvInvalid === true ? { instance_contact_invalid: true } : {}) };
   }
   await db.query(
     `INSERT INTO settings (key, value) VALUES ($1, $2::jsonb) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
@@ -119,7 +121,7 @@ export async function publishRobotEngine(db: Queryable, engine: RobotEnginePubli
 /** Dernier moteur publié par un worker ; `null` si aucun worker n'a encore démarré. */
 export async function readRobotEngine(db: Queryable): Promise<RobotEngineView | null> {
   const { rows } = await db.query<{ value: unknown }>('SELECT value FROM settings WHERE key = $1', [ROBOT_ENGINE_SETTING]);
-  const value = rows[0]?.value as { version?: unknown; platform?: unknown; product_version?: unknown; env?: { identify_instance?: unknown; instance_contact?: unknown } } | undefined;
+  const value = rows[0]?.value as { version?: unknown; platform?: unknown; product_version?: unknown; env?: { identify_instance?: unknown; instance_contact?: unknown; instance_contact_invalid?: unknown } } | undefined;
   if (typeof value?.version !== 'string' || typeof value.platform !== 'string') return null;
   const env = typeof value.env === 'object' && value.env !== null ? value.env : null;
   return {
@@ -132,6 +134,7 @@ export async function readRobotEngine(db: Queryable): Promise<RobotEngineView | 
         : {
             identifyInstance: typeof env.identify_instance === 'boolean' ? env.identify_instance : null,
             instanceContact: typeof env.instance_contact === 'string' ? env.instance_contact : null,
+            instanceContactInvalid: env.instance_contact_invalid === true,
           },
   };
 }

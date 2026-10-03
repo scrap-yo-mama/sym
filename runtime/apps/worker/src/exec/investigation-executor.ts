@@ -427,9 +427,9 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
         warn: () => undefined,
       })());
     } catch (error) {
-      // Contact absent : une tâche pour l'opérateur (transition 3, `action_requise`), jamais un échec ni un budget épuisé.
-      if (error instanceof InstanceContactError && error.code === 'instance_contact_missing') return await finishStopped('instance_contact_missing', error.code, 'setup');
-      if (error instanceof InstanceContactError) return await finishFailed({ failure_class: 'code_error', retryable: false, detail: error.code }, 'setup');
+      // Contact absent ou illisible : une tâche pour l'opérateur (transition 3, `action_requise`, raison `instance_contact_missing` :
+      // aucun contact utilisable), jamais un échec ni un budget épuisé (UX-05). Le détail (`instance_contact_invalid`) dit lequel.
+      if (error instanceof InstanceContactError) return await finishStopped('instance_contact_missing', error.code, 'setup');
       throw error;
     }
     const pacerFor = (robots?: RobotsGate): RequestPacer | undefined =>
