@@ -5,7 +5,6 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { BENCH_TASKS, LEVELS, REPAIR_MUTATIONS, injectionCases, taskById } from './catalog.ts';
 import type { BenchHarness } from './harness.ts';
-import type { KnownDefect } from './known-defects.ts';
 import type { BenchLevel, BenchRecord } from './records.ts';
 import type { Reference } from './reference.ts';
 import { buildReport, renderMarkdown, type BenchReport } from './report.ts';
@@ -22,9 +21,14 @@ function caseIds(): string[] {
   return [...BENCH_TASKS.map((t) => t.id), ...REPAIR_MUTATIONS.map((m) => `R-${m.id}`), ...injectionCases().map((c) => `I-${c.technique}`)];
 }
 
-/** Cas d'un niveau : N1 sur fixtures figées (enquête, injection) ; N0 et N2 avec les mutations de réparation. */
+/** Suffixe des cas du corpus d'injection joués avec un modèle obéissant (N0). */
+const OBEDIENT = '_obedient';
+
+/** Cas d'un niveau : N1 sur fixtures figées (enquête, injection) ; N0 et N2 avec les mutations de réparation. N0 joue en plus le
+ * corpus d'injection avec un modèle OBÉISSANT (`I-<technique>_obedient`, faux fournisseur seulement). */
 export function casesFor(level: BenchLevel): string[] {
-  return LEVELS[level].sites === 'fixtures' && level !== 'N0' ? caseIds().filter((id) => !id.startsWith('R-')) : caseIds();
+  if (level === 'N0') return [...caseIds(), ...injectionCases().map((c) => `I-${c.technique}${OBEDIENT}`)];
+  return LEVELS[level].sites === 'fixtures' ? caseIds().filter((id) => !id.startsWith('R-')) : caseIds();
 }
 
 /** Un cas, une répétition : c'est aussi ce que sert le point d'accès appelé par promptfoo. */
@@ -35,14 +39,15 @@ export async function runCase(harness: BenchHarness, id: string, level: BenchLev
     if (mutation === undefined) throw new Error(`mutation inconnue : ${id}`);
     return harness.runRepair(mutation, level, repetition);
   }
-  const entry = injectionCases().find((c) => `I-${c.technique}` === id);
+  const obedient = id.endsWith(OBEDIENT);
+  const entry = injectionCases().find((c) => `I-${c.technique}` === (obedient ? id.slice(0, -OBEDIENT.length) : id));
   if (entry === undefined) throw new Error(`cas du banc inconnu : ${id}`);
-  return harness.runInjection(entry, level, repetition);
+  return harness.runInjection(entry, level, repetition, { obedient });
 }
 
-export function finishRun(records: BenchRecord[], options: { outDir: URL; date: string; reference?: Reference; known?: readonly KnownDefect[] }): BenchRun {
+export function finishRun(records: BenchRecord[], options: { outDir: URL; date: string; reference?: Reference}): BenchRun {
   const report = buildReport(records, { date: options.date });
-  const result = verdict(report, options.reference, options.known);
+  const result = verdict(report, options.reference);
   mkdirSync(options.outDir, { recursive: true });
   writeFileSync(new URL('records.jsonl', options.outDir), records.map((r) => JSON.stringify(r)).join('\n') + '\n');
   writeFileSync(new URL('report.json', options.outDir), `${JSON.stringify({ ...report, verdict: result }, null, 2)}\n`);
@@ -51,7 +56,7 @@ export function finishRun(records: BenchRecord[], options: { outDir: URL; date: 
 }
 
 /** Coureur intégré (N0) : chaque cas, `LEVELS[level].repeat` fois, l'un après l'autre (fixtures remises à zéro par cas). */
-export async function runBench(harness: BenchHarness, options: { level: BenchLevel; outDir: URL; date: string; reference?: Reference; known?: readonly KnownDefect[] }): Promise<BenchRun> {
+export async function runBench(harness: BenchHarness, options: { level: BenchLevel; outDir: URL; date: string; reference?: Reference}): Promise<BenchRun> {
   const records: BenchRecord[] = [];
   for (let repetition = 0; repetition < LEVELS[options.level].repeat; repetition++) {
     for (const id of casesFor(options.level)) records.push(await runCase(harness, id, options.level, repetition));

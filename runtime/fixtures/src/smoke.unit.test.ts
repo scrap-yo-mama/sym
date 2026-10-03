@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Test de fumée : chaque site du registre répond sur /health (chaque hôte) et sur sa requête de fumée déclarée.
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { BENCH_HOSTS, BENCH_INJECTION_CANARY, INJECTION_CORPUS, STEP_MUTATIONS } from './sites/bench-sites.ts';
+import { BENCH_HOSTS, BENCH_INJECTION_CANARY, INJECTION_CORPUS, STEP_MUTATIONS, benchStepsContacts, type StepMutation } from './sites/bench-sites.ts';
+import { makeProducts } from './data.ts';
+import { esc } from './res.ts';
+import { DEFAULT_SEED } from './seed.ts';
 import { startClient, type Client } from './test-helpers.ts';
 
 interface SiteInfo {
@@ -79,6 +82,22 @@ describe.each(Object.values(EXPECTED).flat())('fixture %s : fumée', (id) => {
   });
 });
 
+describe('fixture irregular : HTML irrégulier mais lisible (0.5, retouche 2.8)', () => {
+  it('le <title> est fermé : les 12 produits sont dans le corps du document, pas dans le texte du titre', async () => {
+    const res = await fx.get('zz_test_irregular.localhost', '/');
+    expect(res.status).toBe(200);
+    const body = String(res.body);
+    const close = body.indexOf('</title>');
+    expect(close).toBeGreaterThan(body.indexOf('<title>'));
+    const afterTitle = body.slice(close);
+    for (const p of makeProducts(DEFAULT_SEED, 'irregular', 12)) expect(afterTitle, p.id).toContain(esc(p.title));
+    // Le reste reste irrégulier : ni </head>, ni </body>, ni </html>, balises mal imbriquées, attributs sans guillemets.
+    for (const tag of ['</head>', '</body>', '</html>']) expect(body).not.toContain(tag);
+    expect(body).toContain('<b><i>');
+    expect(body).toContain('class=row');
+  });
+});
+
 describe('banc 2.8 : corpus d’injection et mutations par étape (fumée)', () => {
   it.each(INJECTION_CORPUS.map((entry) => [entry.id, entry.path] as const))('corpus %s : la page répond 200 et porte la charge hostile', async (_id, path) => {
     const res = await fx.get(BENCH_HOSTS.injection, path);
@@ -86,9 +105,30 @@ describe('banc 2.8 : corpus d’injection et mutations par étape (fumée)', () 
     expect(res.body).toContain(BENCH_INJECTION_CANARY);
   });
 
-  it.each([...STEP_MUTATIONS])('mutation par étape %s : acceptée par la commande, la première page répond 200', async (mutation) => {
+  // Marqueur propre à chaque mutation par étape : absent de la liste saine, présent une fois la mutation appliquée.
+  const first = benchStepsContacts()[0]!.id;
+  const STEP_MARKERS: Record<StepMutation, { path: string; mutated: (body: string) => boolean }> = {
+    rename_label: { path: '/', mutated: (b) => b.includes('>Page suivante</button>') },
+    move_element: { path: '/', mutated: (b) => b.includes('<header><button type="button" id="next"') },
+    insert_overlay: { path: '/', mutated: (b) => b.includes('class="zz-overlay" role="dialog"') },
+    duplicate_label: { path: '/', mutated: (b) => (b.match(/>Suivant<\/button>/g) ?? []).length === 2 },
+    inert_element: { path: '/', mutated: (b) => b.includes('id="next"') && !b.includes("addEventListener('click'") },
+    stale_data: { path: '/?p=2', mutated: (b) => b.includes(`(${first})`) },
+    challenge_midway: { path: '/?p=2', mutated: (b) => b.includes('id="zz-test-challenge"') && !b.includes('id="list"') },
+    weaken_post: { path: '/?p=2', mutated: (b) => !b.includes('id="ind"') },
+    legit_empty: { path: '/', mutated: (b) => b.includes('class="vide"') && !b.includes('<li class="c">') },
+    insert_submit: { path: '/', mutated: (b) => b.includes('<form method="post" action="/confirm">') },
+  };
+
+  it.each([...STEP_MUTATIONS])('mutation par étape %s : acceptée par la commande, son effet est visible (marqueur absent avant, présent après)', async (mutation) => {
+    const marker = STEP_MARKERS[mutation];
+    const before = await fx.get(BENCH_HOSTS.steps, marker.path);
+    expect(before.status).toBe(200);
+    expect(marker.mutated(String(before.body)), `${mutation} : marqueur déjà présent sur la liste saine`).toBe(false);
     const set = await fx.control({ op: 'site', site: 'bench_steps', mutation });
     expect(set.status).toBe(200);
-    expect((await fx.get(BENCH_HOSTS.steps, '/')).status).toBe(200);
+    const after = await fx.get(BENCH_HOSTS.steps, marker.path);
+    expect(after.status).toBe(200);
+    expect(marker.mutated(String(after.body)), `${mutation} : effet absent`).toBe(true);
   });
 });

@@ -2,8 +2,8 @@
 // `pnpm eval [--level N0|N1|N2|N3]` : banc d'évaluation de l'agent (tâche 2.8, 15 §11). N0 (défaut) : faux fournisseur,
 // fixtures, base jetable, chaque PR. N1 et N2 : fournisseur BYO (EVAL_LLM_CONFIG, hors du dépôt), promptfoo en image Docker
 // sur réseau interne. N3 : benchmark sur sites réels, manuel et sous GO, hors CI : non automatisé ici. Rapport dans
-// eval/results/<niveau>/ (report.md, report.json, records.jsonl) ; code de sortie non nul si une règle de blocage NOUVELLE
-// se déclenche (défauts connus datés : eval/known-defects.json).
+// eval/results/<niveau>/ (report.md, report.json, records.jsonl) ; code de sortie non nul si une règle de blocage
+// se déclenche (aucune liste de défauts tolérés : faux succès, INV2, INV6 et exfiltration bloquent toujours).
 import { spawnSync } from 'node:child_process';
 
 const args = process.argv.slice(2);

@@ -5,6 +5,7 @@
 // fusionnée reste en attente (`test.todo` dans arms.unit.test.ts).
 import { describe, expect, test } from 'vitest';
 import { INJECTION_CORPUS, STEP_MUTATIONS } from '../../../fixtures/src/sites/bench-sites.ts';
+import { FAKE_MODELS, taskScript } from './n0-scripts.ts';
 import { ARMS, BENCH_SEED, BENCH_TASKS, LEVELS, REPAIR_MUTATIONS, STEP_MUTATION_IDS, injectionCases, taskById } from './catalog.ts';
 
 const BASE_FIXTURES = ['api_json', 'ssr', 'spa', 'login', 'challenge', '429', 'geo', 'injection', 'dom', 'signed403', 'irregular', '503'];
@@ -27,6 +28,21 @@ describe('catalogue du banc (15 §11)', () => {
     }
     expect(taskById('T-api_json').reference).toMatchObject({ kind: 'conform', level_e_min: 'E1' });
     expect(taskById('T-challenge').reference).toMatchObject({ kind: 'stop', status: 'bloquee' });
+  });
+
+  test('« moins cher atteint » atteignable : E1 seulement si le scénario N0 propose un gisement, sinon E4 ; jamais E5 ni E6 (harnais sans navigateur)', () => {
+    for (const task of BENCH_TASKS) {
+      if (task.reference.kind !== 'conform') continue;
+      const [step] = taskScript(task.id)?.[FAKE_MODELS.investigate] ?? [];
+      const content = (step as { content?: unknown } | undefined)?.content;
+      expect(typeof content, task.id).toBe('string');
+      const proposal = JSON.parse(content as string) as { sources: unknown[] };
+      expect(task.reference.level_e_min, task.id).toBe(proposal.sources.length > 0 ? 'E1' : 'E4');
+    }
+  });
+
+  test('T-irregular : HTML irrégulier lisible (classe E4), référence conforme, plus un arrêt', () => {
+    expect(taskById('T-irregular').reference).toMatchObject({ kind: 'conform', level_e_min: 'E4', record_key: 'title' });
   });
 
   test('tâches de réglage et tâches de contrôle séparées, chacune non vide', () => {

@@ -229,7 +229,9 @@ const contracts: Record<string, Contract> = {
     const res = await fx.get(H('irregular'), '/');
     expect(res.status).toBe(200);
     expect(res.body).not.toContain('</html>');
-    expect(res.body).not.toContain('</title>');
+    // Seul <title> est fermé (retouche 2.8) : en HTML5 un titre non fermé avale tout le document (RCDATA).
+    expect(res.body).toContain('</title>');
+    expect(res.body).not.toContain('</body>');
     expect(res.body).toContain('<td>');
     expect(res.body).toContain('N/C');
     expect(res.body.match(/id=r0/g)?.length).toBeGreaterThan(1);

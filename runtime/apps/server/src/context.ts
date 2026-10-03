@@ -61,6 +61,8 @@ export type ServerContext = {
   jobs: () => Promise<JobQueue>;
   /** Bornes de l'API REST (05 § 2) et du flux SSE (06 § 3). */
   rest: RestLimits;
+  /** Fichier du statut « modèle validé » (eval/validated-models.json, 15 § 11) ; tests : un autre fichier. */
+  validatedModelsFile?: URL | string;
 };
 
 type RestLimits = {

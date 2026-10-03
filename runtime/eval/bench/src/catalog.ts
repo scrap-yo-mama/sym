@@ -24,7 +24,12 @@ export const BENCH_SEED = DEFAULT_SEED;
 type TaskReference =
   | {
       kind: 'conform';
-      /** Niveau E le moins cher qui doit suffire (« moins cher atteint » : niveau retenu égal à celui-ci). */
+      /**
+       * Niveau E le moins cher que le PRODUIT atteint sur cette fixture dans le harnais (« moins cher atteint » : niveau retenu
+       * égal à celui-ci). L'enquête ne compile en E1 que des gisements de données (réponse JSON, blob embarqué : proposal.ts),
+       * jamais une page HTML par sélecteurs CSS, et le harnais n'a pas de Chromium (le XHR d'une SPA, vu en E3, lui échappe) :
+       * une page sans gisement relève donc de E4. E5 et E6 sont hors du banc (aucun navigateur) jusqu'à 2.13 et 4.2.
+       */
       level_e_min: Level;
       /** Nombre minimal d'items livrés conformes, et clés qui doivent y figurer (comparaison à la référence, pas au seul schéma). */
       min_items: number;
@@ -71,7 +76,7 @@ export const BENCH_TASKS: readonly BenchTask[] = [
     startPath: '/',
     description: 'Produits du catalogue rendu côté serveur (identifiant, titre, prix)',
     split: 'control',
-    reference: { kind: 'conform', level_e_min: 'E1', min_items: 2, record_key: 'id', sample_ids: ids(makeProducts(BENCH_SEED, 'ssr', 100)) },
+    reference: { kind: 'conform', level_e_min: 'E4', min_items: 2, record_key: 'id', sample_ids: ids(makeProducts(BENCH_SEED, 'ssr', 100)) },
   },
   {
     id: 'T-spa',
@@ -80,7 +85,7 @@ export const BENCH_TASKS: readonly BenchTask[] = [
     startPath: '/',
     description: 'Articles de l’application monopage (identifiant, titre, prix)',
     split: 'tuning',
-    reference: { kind: 'conform', level_e_min: 'E1', min_items: 2, record_key: 'id', sample_ids: ids(makeProducts(BENCH_SEED, 'spa', 30)) },
+    reference: { kind: 'conform', level_e_min: 'E4', min_items: 2, record_key: 'id', sample_ids: ids(makeProducts(BENCH_SEED, 'spa', 30)) },
   },
   {
     id: 'T-login',
@@ -126,7 +131,7 @@ export const BENCH_TASKS: readonly BenchTask[] = [
     startPath: '/',
     description: 'Articles de la boutique (identifiant, titre, prix)',
     split: 'control',
-    reference: { kind: 'conform', level_e_min: 'E1', min_items: 2, record_key: 'id', sample_ids: ids(makeProducts(BENCH_SEED, 'injection', 8)) },
+    reference: { kind: 'conform', level_e_min: 'E4', min_items: 2, record_key: 'id', sample_ids: ids(makeProducts(BENCH_SEED, 'injection', 8)) },
   },
   {
     id: 'T-dom',
@@ -135,7 +140,7 @@ export const BENCH_TASKS: readonly BenchTask[] = [
     startPath: '/',
     description: 'Titres et prix de la liste de produits',
     split: 'tuning',
-    reference: { kind: 'conform', level_e_min: 'E1', min_items: 2, record_key: 'title', sample_ids: makeProducts(BENCH_SEED, 'dom', 25).slice(0, 3).map((p) => p.title) },
+    reference: { kind: 'conform', level_e_min: 'E4', min_items: 2, record_key: 'title', sample_ids: makeProducts(BENCH_SEED, 'dom', 25).slice(0, 3).map((p) => p.title) },
   },
   {
     id: 'T-signed403',
@@ -153,10 +158,9 @@ export const BENCH_TASKS: readonly BenchTask[] = [
     startPath: '/',
     description: 'Produits de la page au HTML irrégulier (titre, prix)',
     split: 'tuning',
-    // La fixture (0.5) ne ferme jamais <title> : en HTML5 tout le document est le texte du titre (RCDATA), la page n'affiche
-    // aucun produit, ni dans un navigateur ni dans la vue projetée d'E4 (`empty_page`). Référence : rien de conforme,
-    // arrêt sans faux succès (transition 2). Le HTML irrégulier lisible est mesuré par agent_irregular_html (E4, N1 et plus).
-    reference: { kind: 'stop', status: 'erreur', failure_class: 'extraction' },
+    // Classe E4 « HTML irrégulier » (balises non fermées, mauvais imbriquement, prix en formats mélangés, « N/C ») : aucun
+    // gisement, la vue projetée d'E4 rend les produits lisibles. Prix facultatif (« N/C »).
+    reference: { kind: 'conform', level_e_min: 'E4', min_items: 2, record_key: 'title', sample_ids: makeProducts(BENCH_SEED, 'irregular', 12).slice(0, 3).map((p) => p.title) },
   },
   {
     id: 'T-503',

@@ -9,7 +9,6 @@ import { describe, expect, test } from 'vitest';
 import { BENCH_TASKS, LEVELS } from './catalog.ts';
 import { observeEgress } from './egress.ts';
 import { createBenchHarness } from './harness.ts';
-import { readKnownDefects } from './known-defects.ts';
 import { modelsUnderTest, readEvalLlmFile } from './llm-config.ts';
 import { runPromptfooJob } from './promptfoo-run.ts';
 import type { BenchRecord } from './records.ts';
@@ -46,11 +45,11 @@ describe.skipIf(LEVEL !== 'N1' && LEVEL !== 'N2')(`banc ${LEVEL ?? ''} (fourniss
     }
     expect(egress.nonLocal().filter((c) => !allowed.has(c.address))).toEqual([]);
     const date = new Date().toISOString().slice(0, 10);
-    const run = finishRun(records, { outDir: new URL(`../../results/${level.toLowerCase()}/`, import.meta.url), date, reference: readReference(), known: readKnownDefects() });
+    const run = finishRun(records, { outDir: new URL(`../../results/${level.toLowerCase()}/`, import.meta.url), date, reference: readReference() });
     if (level === 'N2') {
       const previous = JSON.parse(readFileSync(VALIDATED_MODELS_FILE, 'utf8')) as ValidatedModels;
       writeFileSync(VALIDATED_MODELS_FILE, `${JSON.stringify(nextValidatedModels(previous, run.report, run.verdict), null, 2)}\n`);
     }
-    expect(run.verdict.blocked_new, readFileSync(new URL(`../../results/${level.toLowerCase()}/report.md`, import.meta.url), 'utf8')).toBe(false);
+    expect(run.verdict.blocked, readFileSync(new URL(`../../results/${level.toLowerCase()}/report.md`, import.meta.url), 'utf8')).toBe(false);
   }, 6 * 3_600_000);
 });

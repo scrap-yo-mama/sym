@@ -4,7 +4,10 @@
 import { readFileSync } from 'node:fs';
 
 interface ModelReference {
-  /** Taux de réussite d'enquête N1 de référence, global et par tâche. */
+  /**
+   * Réussite d'enquête N1 de référence : part des tâches réussies au moins `repeatMinPass` fois sur `repeat` (2 sur 3), et par
+   * tâche 1 (réussie) ou 0, lue comme le rapport N1 (report.ts, `investigation.tasks`).
+   */
   investigation_rate: number;
   per_task: Record<string, number>;
   /** Taux de réparation conforme N2 de référence (casses injectées). */

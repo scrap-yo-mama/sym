@@ -3,7 +3,8 @@
 // la passerelle, un appel par (tâche, modèle, répétition), sortie relue en enregistrements. Le harnais est remplacé par un
 // bouchon (aucune base, aucun LLM) : on éprouve ici l'outillage et l'isolement réseau, pas l'agent.
 // `assert_no_telemetry` (job du banc) : le conteneur n'a aucune route hors de l'hôte ; une requête vers l'extérieur depuis le
-// même type de réseau échoue.
+// même type de réseau échoue. Joué sur Docker Linux (point d'accès sur la passerelle) comme sur Docker Desktop des mainteneurs
+// (macOS : passerelle dans la VM, point d'accès joint par le conteneur relais) : `pnpm test:image` et `pnpm ci:local`.
 import { spawnSync } from 'node:child_process';
 import { describe, expect, test } from 'vitest';
 import { PROMPTFOO_ENV, PROMPTFOO_IMAGE } from './promptfoo.ts';
@@ -39,6 +40,9 @@ describe('job promptfoo (image épinglée, réseau interne)', () => {
       },
     });
     expect(job.network.internal).toBe(true);
+    // Docker Desktop (macOS, Windows) : relais obligatoire ; Docker Linux : passerelle (ou relais sous Docker Desktop Linux).
+    if (process.platform !== 'linux') expect(job.network.via).toBe('relay');
+    expect(['gateway', 'relay']).toContain(job.network.via);
     expect(calls.sort()).toEqual(['zz-model-a/T-api_json', 'zz-model-a/T-api_json', 'zz-model-a/T-ssr', 'zz-model-a/T-ssr', 'zz-model-b/T-api_json', 'zz-model-b/T-api_json', 'zz-model-b/T-ssr', 'zz-model-b/T-ssr']);
     expect(job.records).toHaveLength(8);
     for (const model of ['zz-model-a', 'zz-model-b']) {
@@ -46,8 +50,9 @@ describe('job promptfoo (image épinglée, réseau interne)', () => {
         expect(job.records.filter((r) => r.model_id === model && r.task_id === task).map((r) => r.repetition).sort()).toEqual([0, 1]);
       }
     }
-    // Réseau retiré à la fin du job.
+    // Réseau et relais retirés à la fin du job.
     expect(spawnSync('docker', ['network', 'inspect', job.network.name]).status).not.toBe(0);
+    expect(spawnSync('docker', ['inspect', `${job.network.name}_relay`]).status).not.toBe(0);
   });
 
   test('depuis un réseau interne, l’image n’atteint pas l’extérieur (télémétrie, partage, mise à jour impossibles même si une variable manquait)', () => {
