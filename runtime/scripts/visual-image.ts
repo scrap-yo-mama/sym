@@ -13,7 +13,7 @@ import { spawnSync } from 'node:child_process';
 import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { runBoundedContainer, visualContainerName, visualTimeoutMs } from './visual-image-bound.ts';
+import { runBoundedContainer, visualContainerName, visualContainerScript, visualTimeoutMs } from './visual-image-bound.ts';
 
 const runtimeDir = new URL('..', import.meta.url).pathname;
 const dockerfile = readFileSync(join(runtimeDir, 'deploy/Dockerfile'), 'utf8');
@@ -25,21 +25,9 @@ if (image === undefined) {
 
 const update = process.argv.includes('--update');
 const outDir = mkdtempSync(join(tmpdir(), 'sym-visual-'));
-const EXCLUDED = ['node_modules', 'dist', 'coverage', 'test-results', 'blob-report', 'playwright-report', '.wxt', '.output', '.vitepress/cache', '.vitepress/dist', '*.tsbuildinfo'];
-const inner = [
-  'set -eu',
-  'mkdir -p /work',
-  `tar -C /src ${EXCLUDED.map((name) => `--exclude=${name}`).join(' ')} -cf - . | tar -C /work -xf -`,
-  'cd /work',
-  'corepack enable >/dev/null',
-  'pnpm install --frozen-lockfile --filter "@runtime/web..." --store-dir /pnpm-store --reporter=append-only',
-  'pnpm --filter "@runtime/web^..." build',
-  'cd apps/web',
-  `status=0; pnpm exec playwright test --project ui-en --project ui-fr --project ui-pseudo${update ? ' --update-snapshots=all' : ''} || status=$?`,
-  update ? 'cp -R e2e/__visual__/linux /out/linux' : 'true',
-  'if [ -d test-results ]; then cp -R test-results /out/test-results; fi',
-  'exit $status',
-].join('\n');
+// Propriétaire de l'hôte : /out lui est rendu par le conteneur (root), pour que ce script puisse le supprimer.
+const owner = process.getuid && process.getgid ? `${process.getuid()}:${process.getgid()}` : null;
+const inner = visualContainerScript({ update, owner });
 
 // La sous-commande `run` et le nom du conteneur sont posés par runBoundedContainer (borne de durée, D-88).
 const args = [
@@ -70,5 +58,12 @@ if (update && status === 0) {
   console.log(`visual:image : instantanés écrits dans ${target} ; relisez-les avant de les committer.`);
 }
 if (status !== 0 && existsSync(join(outDir, 'test-results'))) console.error(`visual:image : écarts et captures dans ${join(outDir, 'test-results')}`);
-if (status === 0) rmSync(outDir, { recursive: true, force: true });
+if (status === 0) {
+  // Un reste illisible (ancien conteneur sans chown) ne change pas le verdict : la suite est verte.
+  try {
+    rmSync(outDir, { recursive: true, force: true });
+  } catch (error) {
+    console.warn(`visual:image : dossier temporaire ${outDir} laissé en place (${(error as Error).message}).`);
+  }
+}
 process.exit(status);

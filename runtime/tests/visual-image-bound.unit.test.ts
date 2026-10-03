@@ -4,7 +4,7 @@
 // l'expiration, le conteneur est supprimé de force et la commande échoue. La CI GitHub borne aussi le job e2e et l'étape.
 import { readFileSync } from 'node:fs';
 import { describe, expect, test } from 'vitest';
-import { DEFAULT_VISUAL_TIMEOUT_MS, runBoundedContainer, visualContainerName, visualTimeoutMs, type SpawnLike } from '../scripts/visual-image-bound.ts';
+import { DEFAULT_VISUAL_TIMEOUT_MS, runBoundedContainer, visualContainerScript, visualContainerName, visualTimeoutMs, type SpawnLike } from '../scripts/visual-image-bound.ts';
 
 const runtimeRoot = new URL('../', import.meta.url);
 const read = (path: string): string => readFileSync(new URL(path, runtimeRoot), 'utf8');
@@ -45,6 +45,19 @@ describe('pnpm visual:image : conteneur nommé et borné dans le temps (D-88)', 
     expect(result.timedOut).toBe(true);
     expect(result.status).not.toBe(0);
     expect(calls.map((c) => [c.command, ...c.args].join(' '))).toContain('docker rm -f sym-visual-7');
+  });
+
+  test('dossier de sortie rendu au propriétaire de l’hôte (root dans le conteneur, coureur non root sur GitHub) ; captures copiées seulement en échec', () => {
+    const compare = visualContainerScript({ update: false, owner: '1001:121' });
+    expect(compare).toContain('chown -R 1001:121 /out');
+    // Le chown passe après les copies et avant la sortie, même en échec de la suite.
+    expect(compare.indexOf('chown -R 1001:121 /out')).toBeGreaterThan(compare.indexOf('/out/test-results'));
+    expect(compare.trimEnd().endsWith('exit $status')).toBe(true);
+    expect(compare).toMatch(/if \[ "\$status" -ne 0 \] && \[ -d test-results \]; then cp -R test-results \/out\/test-results; fi/);
+    expect(compare).not.toContain('/out/linux');
+    expect(visualContainerScript({ update: true, owner: '501:20' })).toContain('cp -R e2e/__visual__/linux /out/linux');
+    // Sans propriétaire connu (Windows), aucun chown.
+    expect(visualContainerScript({ update: false, owner: null })).not.toContain('chown');
   });
 
   test('visual-image.ts passe par cette borne ; la CI GitHub borne le job e2e et l’étape pnpm visual:image', () => {

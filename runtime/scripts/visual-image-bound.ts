@@ -3,7 +3,7 @@
 // heures durant (et, sur GitHub, consommerait le runner jusqu'à sa limite). Le conteneur porte un nom propre au processus ;
 // la commande docker reçoit une durée maximale ; à l'expiration, le client docker est tué, le conteneur supprimé de force
 // (`docker rm -f`, le tuer suffit à libérer le verrou) et la commande échoue. `timeout`/`gtimeout` n'existent pas sous macOS :
-// la borne vit donc ici, en Node, quel que soit le poste.
+// la borne vit donc ici, en Node, quel que soit le poste. Le script joué dans le conteneur (visualContainerScript) est ici aussi.
 
 /** Durée maximale par défaut : 25 minutes (installation, build et suite visuelle dans l'image tiennent en moins de 10). */
 export const DEFAULT_VISUAL_TIMEOUT_MS = 25 * 60 * 1000;
@@ -44,4 +44,30 @@ export function runBoundedContainer(spawn: SpawnLike, args: readonly string[], o
     return { status: timedOut ? TIMED_OUT_STATUS : 1, timedOut };
   }
   return { status: result.status, timedOut: false };
+}
+
+/** Dossiers exclus de la copie de runtime/ dans le conteneur (dépendances et builds de l'hôte, d'une autre plateforme). */
+const EXCLUDED = ['node_modules', 'dist', 'coverage', 'test-results', 'blob-report', 'playwright-report', '.wxt', '.output', '.vitepress/cache', '.vitepress/dist', '*.tsbuildinfo'];
+
+/**
+ * Script joué dans le conteneur : copie de runtime/ (monté en lecture seule), installation, build, suite visuelle, puis
+ * copie dans /out des instantanés (`update`) et des captures d'écart (en échec seulement). Le conteneur tourne en root : /out est
+ * rendu à `owner` (« uid:gid » de l'hôte) avant la sortie, sinon le coureur GitHub, non root, ne peut plus supprimer le dossier.
+ */
+export function visualContainerScript(options: { update: boolean; owner: string | null }): string {
+  return [
+    'set -eu',
+    'mkdir -p /work',
+    `tar -C /src ${EXCLUDED.map((name) => `--exclude=${name}`).join(' ')} -cf - . | tar -C /work -xf -`,
+    'cd /work',
+    'corepack enable >/dev/null',
+    'pnpm install --frozen-lockfile --filter "@runtime/web..." --store-dir /pnpm-store --reporter=append-only',
+    'pnpm --filter "@runtime/web^..." build',
+    'cd apps/web',
+    `status=0; pnpm exec playwright test --project ui-en --project ui-fr --project ui-pseudo${options.update ? ' --update-snapshots=all' : ''} || status=$?`,
+    options.update ? 'if [ "$status" -eq 0 ]; then cp -R e2e/__visual__/linux /out/linux; fi' : 'true',
+    'if [ "$status" -ne 0 ] && [ -d test-results ]; then cp -R test-results /out/test-results; fi',
+    ...(options.owner === null ? [] : [`chown -R ${options.owner} /out || true`]),
+    'exit $status',
+  ].join('\n');
 }
