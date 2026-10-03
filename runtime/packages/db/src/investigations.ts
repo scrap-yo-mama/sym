@@ -9,11 +9,12 @@
 // L'URL de la demande n'admet aucun paramètre secret (jeton, clé, session, signature). La colonne `investigation` reste
 // lisible des membres par `instance_read` (visibilité instance, sans session) : elle ne doit figurer dans AUCUNE projection
 // servie à un non-propriétaire (REST, MCP, console : 3.x), seulement dans celles du propriétaire.
-import { assertInputSchema, assertSchemaAcceptable, EXECUTIONS, SchemaError, type Execution, type InvestigationPhase, type JobQueue, type Network, type RunTrigger } from '@runtime/core';
+import { assertInputSchema, assertSchemaAcceptable, EXECUTIONS, SchemaError, type MemoryRef, type Execution, type InvestigationPhase, type JobQueue, type Network, type RunTrigger, type StrategyRuleRow, type StrategySource } from '@runtime/core';
 import type { InvestigationProposal, StoredCandidate } from '@runtime/core/investigation';
 import { INVESTIGATION_DEFAULTS } from '@runtime/core/investigation';
 import type pg from 'pg';
 import { withActor } from './rls.js';
+import { recordStrategySource } from './rules.js';
 import { createRun } from './runs.js';
 
 type Queryable = Pick<pg.ClientBase, 'query'>;
@@ -30,10 +31,17 @@ export type InvestigationRequest = {
 /** État persistant d'une enquête (`apis.investigation`). */
 export type InvestigationState = {
   readonly request: InvestigationRequest;
+  /** `recompile` : ré-enquête demandée après la modification d'une règle (18 §4.8, tâche 2.10), schéma de sortie conservé. */
+  readonly reason?: 'investigation' | 'recompile';
   /** Gisements observés à la reconnaissance (aucune valeur du site). */
   readonly candidates?: readonly StoredCandidate[];
   readonly page?: { readonly url: string; readonly host: string; readonly document_bytes: number; readonly total_bytes: number; readonly mode: 'browser' | 'static' | 'tunnel' };
   readonly proposal?: InvestigationProposal;
+  /**
+   * Règles injectées dans le prompt qui a produit la proposition (tâche 2.10) : lignes de la source et références
+   * effectives du plan. Gardées avec la proposition (run suivant après `validate_schema`) ; aucune valeur du site.
+   */
+  readonly rules?: { readonly rows: readonly StrategyRuleRow[]; readonly effective: readonly string[] };
   readonly proposed_schema?: Record<string, unknown>;
   readonly validated_schema?: Record<string, unknown>;
   /** Ordre déclaré des propriétés de premier niveau (jsonb ne garde pas l'ordre des clés d'un objet ; un tableau, si). */
@@ -49,6 +57,11 @@ export type InvestigationState = {
   readonly spent_usd: number;
   /** Durée active cumulée (hors attente de la validation). */
   readonly elapsed_ms: number;
+  /**
+   * Mémoire du catalogue consultée par l'appel `investigate` (tâche 2.12) : identifiants des entrées, étage et sha256 du
+   * dossier, jamais son contenu ; écrite dans `strategy_version_memory_refs` quand la version est retenue.
+   */
+  readonly memory?: { readonly sha256: string; readonly refs: readonly MemoryRef[] };
   /** Niveaux d'exécution retirés du plan d'essais par l'appelant (`exclude_executions`, 06 § 2, 3.1) : jamais un ajout. */
   readonly excluded_executions?: readonly Execution[];
 };
@@ -336,8 +349,11 @@ export async function saveInvestigationStrategy(
     outputColumns?: readonly string[];
     inputSchema: unknown;
     state: InvestigationState;
-    /** Auteur de la version : l'enquête, ou l'import d'un fichier (3.12) repassé par l'enquête. */
-    createdBy?: 'investigation' | 'import';
+    /** Auteur de la version : l'enquête, l'import d'un fichier (3.12) repassé par l'enquête, ou `recompile` (ré-enquête demandée après la modification d'une règle, 18 §4.8). */
+    createdBy?: 'investigation' | 'import' | 'recompile';
+    /** Source de la version (tâche 2.10, 18 §4.6) : demande, schéma, décisions, règles injectées et skills lus. */
+    source?: StrategySource;
+    rules?: readonly StrategyRuleRow[];
   },
 ): Promise<{ version: number }> {
   // Schéma d'entrée (04 §1) : chaque champ a une description (500 caractères au plus), sinon refus, avant toute écriture.
@@ -361,6 +377,7 @@ export async function saveInvestigationStrategy(
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $10, $9)`,
       [args.apiId, version, args.ownerId, api.project_id, args.execution, args.network, JSON.stringify(args.spec), args.estCostUsd, api.current_strategy_version, args.createdBy ?? 'investigation'],
     );
+    if (args.source !== undefined) await recordStrategySource(tx, { apiId: args.apiId, ownerId: args.ownerId, version, source: args.source, rules: args.rules ?? [] });
     await tx.query(
       `UPDATE apis SET current_strategy_version = $2, output_schema = $3::jsonb, input_schema = $4::jsonb, investigation = $5::jsonb,
          output_columns = $6::text[], investigation_phase = 'done', updated_at = now()

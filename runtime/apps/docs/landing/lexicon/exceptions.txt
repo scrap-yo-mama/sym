@@ -1,0 +1,12 @@
+# Exceptions descriptives en texte simple, sans logo (22 § 2.5) : citées pour ce qu'elles sont, jamais comme un partenariat.
+github
+docker
+render
+railway
+chrome web store
+chrome
+chromium
+postgresql
+books.toscrape.com
+model context protocol
+mcp

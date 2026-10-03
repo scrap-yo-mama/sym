@@ -77,7 +77,7 @@ import {
   type HttpExchange,
   type RequestPacer,
 } from '@runtime/core/exec';
-import type { DomainPacer } from '@runtime/core';
+import { embeddedRefs, pinnedSkillReader, renderEmbeddedRules, type DomainPacer, type EmbeddedRules, type SkillRead, type StrategyRuleRow, type StrategySource } from '@runtime/core';
 import { InstanceContactError, RobotsCache, RobotsGate, sessionRobotsFetcher } from '@runtime/core/access';
 import {
   buildNetworkRungs,
@@ -98,8 +98,10 @@ import {
   type SecretReader,
   type SsrfGuard,
 } from '@runtime/core/net';
-import { deleteRejectedItems, loadRunTarget, readProxySettings, readVolumeHistory, saveCompiledStrategy, saveRejectedItems, saveRepairedStrategy, saveRunDataset, type RunTarget } from '@runtime/db';
+import { deleteRejectedItems, inputHash, loadRunTarget, readEmbeddedFiles, readValidatedBaseline, saveRunProfile, readProxySettings, readVolumeHistory, saveCompiledStrategy, saveRejectedItems, saveRepairedStrategy, saveRunDataset, type RunTarget } from '@runtime/db';
 import type { LlmClient, LlmConfig } from '@runtime/llm';
+import { degradedQualitySignals, profileItems } from '@runtime/core';
+import type { QualityPorts } from './quality-job.js';
 import type pg from 'pg';
 import { pino, type Logger } from 'pino';
 import type { BrowserPool } from '../browser/pool.js';
@@ -164,6 +166,12 @@ export type StrategyExecutorDeps = {
   readonly identifyInstance?: () => Promise<boolean>;
   /** Version annoncée dans le jeton du User-Agent (`RUNTIME_VERSION`). */
   readonly version?: string;
+  /**
+   * Profil des sorties et juge consultatif (tâche 2.12, 19 §3). Le profil est calculé par le code sur chaque sortie
+   * livrée (après Ajv et la garde de classification), sans LLM ; un motif dégradé planifie, si le juge est activé, un
+   * jugement SÉPARÉ après le run (`scheduleJudge`) : le rejeu lui-même ne fait aucun appel LLM et ne lit aucune mémoire.
+   */
+  readonly quality?: QualityPorts;
 };
 
 /** Stratégie figée d'un run (version, exécution, réseau, spécification). */
@@ -186,7 +194,16 @@ export type CandidateCheck = {
 };
 
 /** Stratégie réparée (vN+1) : patch borné (ou `null` pour une escalade), sortie déjà rejouée et validée. */
-export type RepairedStrategy = { readonly execution: Execution; readonly network: FrozenStrategy['network']; readonly spec: DeclarativeSpec; readonly patch: JsonPatchOperation[] | null; readonly estCostUsd: number | null };
+export type RepairedStrategy = {
+  readonly execution: Execution;
+  readonly network: FrozenStrategy['network'];
+  readonly spec: DeclarativeSpec;
+  readonly patch: JsonPatchOperation[] | null;
+  readonly estCostUsd: number | null;
+  /** Source de vN+1 (tâche 2.10, 18 §4.6) : règles à jour injectées et skills lus. */
+  readonly source?: StrategySource;
+  readonly rules?: readonly StrategyRuleRow[];
+};
 
 /** Issue d'une réparation (04 §5). */
 export type RepairOutcome =
@@ -235,6 +252,8 @@ type Outcome = {
   stop?: TunnelStop;
   /** Mode tunnel : le site n'est pas connecté dans le navigateur de l'utilisateur. */
   needsUser?: boolean;
+  /** Skills lus par l'agent E6 (`read_skill`, tâche 2.10) : versions épinglées servies, empreintes ; jamais le contenu. */
+  skillReads?: readonly SkillRead[];
 };
 
 /** Un essai d'une stratégie, gardes comprises, avant journalisation (`runTrial`). */
@@ -380,6 +399,17 @@ export function createStrategyRuntime(deps: StrategyExecutorDeps): StrategyRunti
   const robotsCache = deps.robotsCache ?? new RobotsCache();
 
   const logger = deps.logger ?? pino({ enabled: false });
+
+  /** Prompt embarqué d'une stratégie E4/E6 (références de `spec.rules`) ; `null` sans règle ou en cas d'écart (journalisé). */
+  const embeddedFor = async (ctx: RunCtx, rules: EmbeddedRules | undefined) => {
+    if (rules === undefined || (rules.rules.length === 0 && rules.skills.length === 0)) return null;
+    const out = renderEmbeddedRules(rules, await readEmbeddedFiles(deps.pool, { ownerId: ctx.ownerId, refs: embeddedRefs(rules) }));
+    if (!out.ok) {
+      await ctx.log('warn', 'embedded_rules_mismatch', { missing: out.missing });
+      return null;
+    }
+    return { text: out.text, reader: pinnedSkillReader(out.skills) };
+  };
 
   /**
    * Identité du robot pour ce run (17 §5) : le User-Agent réel du moteur embarqué ; avec `identify_instance`, le jeton
@@ -631,6 +661,9 @@ export function createStrategyRuntime(deps: StrategyExecutorDeps): StrategyRunti
       case 'agent': {
         const ports = deps.agent;
         if (ports === undefined || agentic === undefined) return refuse('code_error', 'execution_unavailable');
+        // Règles embarquées (18 §4.5, INV12) : texte reconstruit depuis les références de la spec, sous l'identité du
+        // propriétaire, empreintes vérifiées ; `read_skill` ne sert que les skills référencés, à leur version épinglée.
+        const embedded = agentic.kind === 'hybrid' ? null : await embeddedFor(ctx, agentic.spec.rules);
         // Chromium requis pour E5 et E6, et pour E4 par le navigateur (`DISABLE_BROWSER`).
         if (deps.browsers === null && !(agentic.kind === 'agent_fetch' && agentic.spec.via === 'fetch')) return refuse('code_error', 'browser_disabled');
         let config: LlmConfig | null;
@@ -680,6 +713,7 @@ export function createStrategyRuntime(deps: StrategyExecutorDeps): StrategyRunti
             out = await runAgentFetchExecutor({
               ...common,
               spec: agentic.spec,
+              ...(embedded === null || embedded.text === '' ? {} : { rulesText: embedded.text }),
               llm,
               modelId: config?.roles.extract?.model ?? null,
               ...(session === undefined ? {} : { session }),
@@ -710,12 +744,25 @@ export function createStrategyRuntime(deps: StrategyExecutorDeps): StrategyRunti
               allowWriteActions: target.api.allowWriteActions,
               taskId: ctx.runId,
               version: strategy.version,
+              ...(embedded === null
+                ? {}
+                : {
+                    rules: {
+                      systemPrompt: embedded.text,
+                      readSkill: async (name: string) => {
+                        const read = embedded.reader.read(name);
+                        return read.ok ? read.content : 'skill_not_found';
+                      },
+                    },
+                  }),
             });
           }
+          const skillReads = embedded?.reader.reads ?? [];
+          for (const read of skillReads) await ctx.log('info', 'skill_read', { ref: read.ref, sha256: read.sha256 });
           const exceeded = (egress?.budgetExceeded() ?? false) || (session?.budgetExceeded() ?? false);
           const usage = egress !== undefined && session !== undefined ? addUsage(egress.usage(), session.usage()) : (egress?.usage() ?? session?.usage() ?? null);
           const { result, ...agent } = out;
-          return { result: budgetChecked(egress === undefined ? result : refineEgress(result, egress), exceeded), usage, agent };
+          return { result: budgetChecked(egress === undefined ? result : refineEgress(result, egress), exceeded), usage, agent, ...(skillReads.length === 0 ? {} : { skillReads: [...skillReads] }) };
         } finally {
           await session?.close().catch(() => undefined);
           await egress?.close().catch(() => undefined);
@@ -895,6 +942,29 @@ export function createStrategyRuntime(deps: StrategyExecutorDeps): StrategyRunti
     }
   };
 
+  /** Profil du run et motifs dégradés (19 §3) ; une erreur ici n'empêche jamais la livraison (signal informatif). */
+  const qualitySignals = async (ctx: RunCtx, target: RunTarget, version: number, items: readonly Record<string, unknown>[]): Promise<DegradedSignal[]> => {
+    try {
+      const profile = profileItems(items, target.api.outputSchema);
+      const hash = inputHash(ctx.input);
+      await saveRunProfile(deps.pool, { runId: ctx.runId, apiId: ctx.apiId, ownerId: ctx.ownerId, strategyVersion: version, inputHash: hash, profile });
+      const baseline = await readValidatedBaseline(deps.pool, { apiId: ctx.apiId, ownerId: ctx.ownerId, inputHash: hash });
+      const found = degradedQualitySignals(profile, baseline, target.api.outputSchema);
+      if (found.length > 0) {
+        await ctx.log('info', 'quality_signals', { signals: found, baseline: baseline !== null });
+        // Jugement sur anomalie : job pg-boss séparé (`quality-judge`, un par run), traité après le run (au plus un par
+        // API et par jour, décidé par le job) ; une file indisponible n'empêche jamais la livraison.
+        if (deps.quality?.scheduleJudge !== undefined && (await deps.quality.judgeEnabled().catch(() => false))) {
+          await Promise.resolve(deps.quality.scheduleJudge({ runId: ctx.runId, ownerId: ctx.ownerId })).catch(() => ctx.log('warn', 'judge_schedule_failed', {}));
+        }
+      }
+      return found;
+    } catch (error) {
+      logger.warn({ runId: ctx.runId, err: error instanceof Error ? error.name : 'error' }, 'profil du run non écrit');
+      return [];
+    }
+  };
+
   /** Livraison d'une sortie conforme : dataset (items conformes seuls), quarantaine, signaux et statut (5, 8, 9, 12). */
   const deliver = async (
     ctx: RunCtx,
@@ -905,12 +975,16 @@ export function createStrategyRuntime(deps: StrategyExecutorDeps): StrategyRunti
     await quarantine(ctx, target, partition, verdict);
     const saved = await saveRunDataset(deps.pool, { runId: ctx.runId, apiId: ctx.apiId, ownerId: ctx.ownerId, projectId: target.api.projectId, items: partition.conform });
     const volume = await volumeSignal(ctx, partition.conform.length + partition.rejected.length);
+    // Profil (2.12) : seulement ici, sur une sortie qui a passé la garde de classification et Ajv (jamais sur une page de
+    // défi servie en 200, qui n'arrive jamais à la livraison). Motifs comparatifs contre la baseline VALIDÉE seulement.
+    const quality = await qualitySignals(ctx, target, args.version, partition.conform);
     const signals: DegradedSignal[] = [];
     if (args.repaired) signals.push('repaired');
     if (args.escalated) signals.push('escalated');
     if (args.truncated) signals.push('pagination_short');
     if (partition.rejected.length > 0) signals.push('items_rejected');
     if (volume) signals.push('volume_anomaly');
+    signals.push(...quality);
     // Réparation conforme : transition 12 (le signal `repaired` est sa raison) ; sinon run réussi (5, 8 ou 9).
     if (args.repaired) {
       if (args.entered) await applyStatus(ctx, { type: 'repair_succeeded' });

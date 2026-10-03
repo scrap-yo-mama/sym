@@ -6,9 +6,10 @@ import { Readable } from 'node:stream';
 import Fastify, { type FastifyReply, type FastifyRequest } from 'fastify';
 import { createClock } from './clock.ts';
 import { ControlError, type Env, type FxRequest, type FxResponse, type Site } from './core.ts';
+import { DEFAULT_SEED } from './seed.ts';
 import { SITE_FACTORIES } from './sites/index.ts';
 
-export const DEFAULT_SEED = 20_260_101;
+export { DEFAULT_SEED };
 export const DEFAULT_TOKEN = 'zz_test_control_token';
 const RESERVED = new Set(['/health', '/__reset', '/__stats', '/__control', '/__sites']);
 const LOOPBACK = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1']);

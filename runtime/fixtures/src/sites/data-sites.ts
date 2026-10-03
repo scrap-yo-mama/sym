@@ -218,7 +218,7 @@ const irregularHtml: SiteFactory = (env) => {
   return {
     id: 'irregular',
     lot: 'base',
-    description: 'HTML irrégulier : balises non fermées, mauvais imbriquement, attributs sans guillemets, formats de prix mélangés',
+    description: 'HTML irrégulier mais lisible : balises non fermées, mauvais imbriquement, attributs sans guillemets, formats de prix mélangés ; seul <title> est fermé (sinon tout le document serait le texte du titre)',
     hosts: ['zz_test_irregular.localhost'],
     smoke: { path: '/', status: 200 },
     handle(req) {
@@ -234,7 +234,7 @@ const irregularHtml: SiteFactory = (env) => {
             return `<dl><dt>Nom<dd>${esc(p.title)}<dt>Tarif<dd>${price}&nbsp;<dt>Dispo<dd>${p.in_stock ? '&#x2713;' : '&times;'}</dl>`;
         }
       });
-      return html(200, `<html><head><title>Liste irrégulière<body bgcolor=white>\n<h1>Articles &amp; prix</h1>\n${blocks.join('\n')}\n<div id=r0>doublon d'identifiant<ul><li>un<li>deux</ul>`);
+      return html(200, `<html><head><title>Liste irrégulière</title><body bgcolor=white>\n<h1>Articles &amp; prix</h1>\n${blocks.join('\n')}\n<div id=r0>doublon d'identifiant<ul><li>un<li>deux</ul>`);
     },
   };
 };

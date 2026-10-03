@@ -5,7 +5,11 @@ import type { ChatRequest, ChatResult, LlmTransport, ToolDef } from './types.js'
 
 export type StructuredMode = 'json_schema' | 'tool_forced' | 'json_object';
 export type ToolChoiceMode = 'auto' | 'required' | 'named';
-export type LlmRole = 'investigate' | 'repair' | 'extract' | 'agent';
+/**
+ * Rôles (08 §1). `judge` (juge de qualité consultatif, désactivé par défaut), `reflect` (propositions de règles, toujours
+ * validées par un humain) et `embed` (embeddings de l'étage 4 de la mémoire, option désactivée) : tâche 2.12.
+ */
+export type LlmRole = 'investigate' | 'repair' | 'extract' | 'agent' | 'judge' | 'reflect' | 'embed';
 
 /** Paramètres d'échantillonnage que le fournisseur accepte pour ce modèle (claude-opus-4-8 compatible OpenAI : 400 sur `temperature` et `top_p`). */
 export interface SamplingSupport {

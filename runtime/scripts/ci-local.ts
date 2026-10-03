@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // CI locale (remplace GitHub Actions tant que la facturation est bloquée) : rejoue en séquence les étapes des jobs
-// quality, docs, vitrine, unit, security, image, e2e et integration de .github/workflows/ci.yml. S'arrête au premier échec (code ≠ 0).
+// quality, docs, vitrine, unit, security, image, e2e, integration et eval de .github/workflows/ci.yml. S'arrête au premier échec (code ≠ 0).
 import { spawnSync } from 'node:child_process';
 
 type Step = { job: string; name: string; cmd: string[]; cwd?: 'root' };
@@ -26,6 +26,12 @@ const STEPS: Step[] = [
   // Tâche 4.12 : job `vitrine` (README en et fr, visuels et budgets, registre des allégations, licence, surface du dépôt), Node seulement.
   { job: 'vitrine', name: 'vitrine : contrôles statiques', cmd: ['node', 'scripts/vitrine/check.mjs'] },
   { job: 'vitrine', name: 'vitrine : tests nommés', cmd: ['pnpm', 'vitest', 'run', '--project', 'unit', 'tests/vitrine', 'tests/public-showcase.unit.test.ts'] },
+  // Tâche 4.11 : job `vitrine` (critère : tous les assert_landing_* verts dans ce job). Les gates de contenu et du site construit
+  // (vitest, projets unit et contract), puis le volet Chromium sur la préproduction (build de production servi comme GitHub Pages, sans
+  // déploiement) : cookie, requêtes tierces, traceurs, CSP vue par le navigateur, axe, mouvement, budgets de poids ; puis la sonde.
+  { job: 'vitrine', name: 'landing : contenu et site construit', cmd: ['pnpm', 'vitest', 'run', '--project', 'unit', '--project', 'contract', 'apps/docs/src/landing'] },
+  { job: 'vitrine', name: 'landing : gates Chromium sur la préproduction', cmd: ['pnpm', '--filter', '@runtime/docs', 'test:e2e'] },
+  { job: 'vitrine', name: 'landing : sonde de préproduction', cmd: ['pnpm', '--filter', '@runtime/docs', 'landing:probe', '--preprod'] },
   { job: 'unit', name: 'tests unitaires + couverture', cmd: ['pnpm', 'test:coverage'] },
   // Étage S : garde SSRF sur fetch et Chromium (Playwright). Chromium : pnpm exec playwright install chromium.
   { job: 'security', name: 'sécurité (SSRF, Chromium)', cmd: ['pnpm', 'test:security'] },
@@ -41,6 +47,8 @@ const STEPS: Step[] = [
   // Matrice PostgreSQL 16, 17, 18 jouée l'une après l'autre (Testcontainers, PG_VERSIONS surchargeable).
   { job: 'integration', name: 'integration (PG ' + (process.env.PG_VERSIONS ?? '16,17,18') + ')', cmd: ['pnpm', 'test:integration'] },
   { job: 'integration', name: 'contract', cmd: ['pnpm', 'vitest', 'run', '--project', 'contract'] },
+  // Tâche 2.8 : banc d'évaluation N0 (faux fournisseur, fixtures, base jetable, aucune sortie de l'instance).
+  { job: 'eval', name: 'banc N0 (pnpm eval)', cmd: ['pnpm', 'eval'] },
   // Tâche 4.8 : le quickstart du site de doc rejoué sur une instance vierge (même script que le job `docs` de la CI).
   { job: 'docs', name: 'quickstart rejoué sur une instance vierge', cmd: ['pnpm', 'docs:quickstart'] },
 ];

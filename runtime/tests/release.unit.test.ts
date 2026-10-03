@@ -4,14 +4,15 @@
 // cosign est exécuté pour de bon avec une clé de test jetable (aucun réseau, aucune publication) ; les fixtures ne
 // contiennent que des fragments de workflow ou de manifeste à refuser.
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import { checkMitPackages, classifyForMit, evaluateMitPackage, parseLicenseReport } from '../scripts/check-licenses.ts';
 import { checkHistory as checkX6History, checkRepo as checkX6Index } from '../scripts/check-x6.ts';
+import { MIT_PACKAGES } from '../scripts/spdx-headers.ts';
 import { checkSubject, isBreaking } from '../scripts/release/conventional.ts';
-import { checkCiImageJob, checkFullHistoryJobs, checkImageNonRoot, checkReleaseWorkflow, checkRepo as checkGates, checkWorkflowSecurity } from '../scripts/release/gates.ts';
+import { checkCiImageJob, checkFullHistoryJobs, checkImageNonRoot, checkModuleImages, checkReleaseWorkflow, checkRepo as checkGates, checkWorkflowSecurity } from '../scripts/release/gates.ts';
 import { checkTagMatchesPackage, imageReferences, planRelease, ReleaseTagError } from '../scripts/release/plan.ts';
 import { checkChannelConfig, checkReleasePleaseConfigs, nextVersion, type ReleasePleaseConfig } from '../scripts/release/release-please.ts';
 import { catalogNames, checkSbomFile, generateLockfileSbom, validateImageSbom, validateSbom } from '../scripts/release/sbom.ts';
@@ -116,6 +117,23 @@ describe('release : portes (assert_release_gates)', () => {
     expect(checkImageNonRoot('d', 'FROM a AS b\nUSER pwuser\nFROM c AS r\nRUN true\n')).toHaveLength(1);
     expect(checkImageNonRoot('d', 'FROM c\nUSER 0\n')).toHaveLength(1);
     expect(checkImageNonRoot('d', 'FROM c\nUSER 1001:1001\n')).toEqual([]);
+  });
+
+  test('assert_image_nonroot : les images des modules (modules/*/Dockerfile) passent la même porte, sans exception root', () => {
+    const root = mkdtempSync(join(tmpdir(), 'gates-modules-'));
+    try {
+      expect(checkModuleImages(root)).toEqual([]);
+      mkdirSync(join(root, 'modules/browser'), { recursive: true });
+      writeFileSync(join(root, 'modules/browser/Dockerfile'), 'FROM c\nUSER pwuser\nFROM d\nRUN true\n');
+      expect(checkModuleImages(root)).toEqual([expect.stringContaining('modules/browser/Dockerfile')]);
+      writeFileSync(join(root, 'modules/browser/Dockerfile'), 'FROM c\nUSER pwuser\n');
+      expect(checkModuleImages(root)).toEqual([]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+    // Le vrai module SYM Browser est couvert.
+    expect(checkModuleImages(runtimeDir)).toEqual([]);
+    expect(existsSync(join(runtimeDir, 'modules/browser/Dockerfile'))).toBe(true);
   });
 
   test('assert_image_nonroot : USER root admis seulement si deploy/entrypoint.sh descend sur un uid non root avant tout (F-20261001-R01)', () => {
@@ -523,6 +541,6 @@ describe('release : licences par paquet (D-10, 16 §1)', () => {
     expect(checkMitPackages(runtimeDir)).toEqual([]);
     // Un rapport de licences simulé avec une dépendance GPL fait échouer le contrôle réel.
     mkdirSync(join(tmpdir()), { recursive: true });
-    expect(checkMitPackages(runtimeDir, () => ({ 'GPL-2.0-only': [dep('zz_test_gpl')] }))).toHaveLength(2);
+    expect(checkMitPackages(runtimeDir, () => ({ 'GPL-2.0-only': [dep('zz_test_gpl')] }))).toHaveLength(MIT_PACKAGES.length);
   }, 60_000);
 });

@@ -183,7 +183,7 @@ export async function purgeMarkedDatasets(db: SessionDb, now: Date, opts: Physic
 }
 
 export type CleanupResult = Record<
-  'investigation_payloads' | 'rejected_samples' | 'error_detail' | 'run_inputs' | 'run_logs' | 'run_artifacts' | 'tunnel_jobs' | 'runs' | 'dedup_keys' | 'audit_events',
+  'investigation_payloads' | 'rejected_samples' | 'run_profiles' | 'error_detail' | 'run_inputs' | 'run_logs' | 'run_artifacts' | 'tunnel_jobs' | 'runs' | 'dedup_keys' | 'audit_events',
   number
 >;
 
@@ -213,6 +213,8 @@ export async function cleanupExpiredRunData(
     `UPDATE run_rejected_items SET sample = '[]'::jsonb WHERE created_at < $1 AND sample <> '[]'::jsonb`,
     [samples],
   );
+  // Profils des runs (2.12) : la baseline validée reste avec sa version (purgée avec l'API).
+  out.run_profiles = await count(`DELETE FROM run_profiles WHERE NOT baseline AND created_at < $1`, [before(policy.profilesDays)]);
   out.error_detail = await count(
     `UPDATE runs SET error_detail = NULL WHERE error_detail IS NOT NULL AND state <> ALL($2::text[]) AND coalesce(finished_at, created_at) < $1`,
     [samples, ACTIVE_STATES],

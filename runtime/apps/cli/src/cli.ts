@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { readFileSync, writeFileSync } from 'node:fs';
-import { generateMasterKey, generateOpaqueToken, loadKeyring, MasterKeyError, RESET_LINK_TTL_HOURS } from '@runtime/core';
+import { generateMasterKey, generateOpaqueToken, loadKeyring, MasterKeyError, normalizePublicUrl, RESET_LINK_TTL_HOURS } from '@runtime/core';
 import pg from 'pg';
 import {
   acceptKeyLossLocked,
@@ -264,11 +264,12 @@ async function rekeyCmd(args: string[], deps: CliDeps): Promise<CliResult> {
 async function resetLinkCmd(scope: 'user' | 'owner', args: string[], deps: CliDeps): Promise<CliResult> {
   const email = args[0];
   if (scope === 'user' && (!email || email.startsWith('-'))) return { code: 1, out: USAGE };
-  const raw = (deps.env ?? process.env)['PUBLIC_URL'];
-  if (!raw || !/^https?:\/\/[^/]+/.test(raw)) {
-    return { code: 2, out: 'Refus : PUBLIC_URL manquante ou invalide (URL http(s) de l’instance, celle du serveur) : le lien doit pointer vers la console.' };
+  let publicUrl: string;
+  try {
+    publicUrl = normalizePublicUrl((deps.env ?? process.env)['PUBLIC_URL']);
+  } catch (error) {
+    return { code: 2, out: `Refus : ${(error as Error).message} Le lien doit pointer vers la console.` };
   }
-  const publicUrl = new URL(raw).origin;
   const { token, hash } = generateOpaqueToken();
   const res = await withSessionClient(deps, (client) => issueOperatorResetLink(client, scope === 'owner' ? { owner: true } : { email: email! }, hash, RESET_LINK_TTL_HOURS));
   if (!res.ok) {

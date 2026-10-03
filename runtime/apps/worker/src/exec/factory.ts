@@ -10,7 +10,7 @@ import { DomainPacer, rejectionThresholdsFromEnv, type SandboxEngine } from '@ru
 import { SsrfGuard, ssrfPolicyFromEnv, startEgressProxy, type EgressProxy } from '@runtime/core/net';
 import { STAGEHAND_VERSION, StagehandEngine } from '@runtime/agent';
 import { identityFromEnv, resolveIdentifyInstance, resolveInstanceContact, RobotsCache } from '@runtime/core/access';
-import { PgPacingStore, publishRobotEngine, readIdentifyInstanceSetting, readInstanceContactSetting, readLlmSettings, secretStore } from '@runtime/db';
+import { PgPacingStore, publishRobotEngine, readIdentifyInstanceSetting, readInstanceContactSetting, readLlmSettings, scheduleRunJudge, secretStore } from '@runtime/db';
 import { createLlmClient, llmConfigFromSettings, roleProblems, roleTarget, type LlmConfig, type LlmNote } from '@runtime/llm';
 import { launchAgentBrowser } from '../browser/agent-browser.js';
 import { installedEngineIdentity } from '../browser/engine-identity.js';
@@ -24,7 +24,14 @@ import { TunnelJobClient } from '../tunnel/client.js';
 import type { EngineFactory } from './agent-executors.js';
 import { createInvestigationExecutor, dispatchByKind } from './investigation-executor.js';
 import { createRepairPort } from './repair-executor.js';
+import { createJudgeJob, settingsQualityPorts } from './quality-job.js';
 import { createStrategyRuntime, type AgentPorts } from './strategy-executor.js';
+
+/**
+ * Rôles résolus pour l'enquête (schéma, prix des couples E4 et E6). Le rôle `judge` n'en fait PAS partie (revue 2.12) :
+ * il est résolu à part (`judgeLlm`), et une erreur de ses réglages n'empêche jamais l'enquête.
+ */
+export const INVESTIGATION_LLM_ROLES = ['investigate', 'extract', 'agent'] as const;
 
 /** Version du prompt du moteur : celui de Stagehand, non modifié (mesuré tel quel au spike 0.6a). */
 const STAGEHAND_PROMPT_VERSION = `stagehand-${STAGEHAND_VERSION}-dom`;
@@ -83,7 +90,7 @@ export type ProductionFactoryOverrides = {
 };
 
 export function productionExecutorFactory(env: Readonly<Record<string, string | undefined>> = process.env, overrides: ProductionFactoryOverrides = {}): ExecutorFactory {
-  return async ({ pool, config, checked, logger }) => {
+  return async ({ pool, config, checked, logger, queue }) => {
     const guard = new SsrfGuard({ policy: ssrfPolicyFromEnv(env) });
     const pacer = new DomainPacer(new PgPacingStore(pool));
     const secrets = secretStore(pool, config.keyring, checked);
@@ -180,6 +187,29 @@ export function productionExecutorFactory(env: Readonly<Record<string, string | 
     const identifyInstance = async (): Promise<boolean> => resolveIdentifyInstance(await readIdentifyInstanceSetting(pool), env);
     // Réparation dans le même run (2.3) : rôle `repair` relu à chaque réparation, bail en table ; seuil de casse des items
     // non conformes (D-49) lu au démarrage (`ITEMS_REJECTED_MAX_SHARE`, `ITEMS_REJECTED_MIN_COUNT`).
+    // Juge consultatif (2.12) : désactivé par défaut (`settings.llm.judge.enabled` et un modèle au rôle `judge`). Sur
+    // anomalie d'un rejeu, le jugement est un job pg-boss séparé (`quality-judge`, un par run) traité par le worker après
+    // la fin du run (le rejeu ne fait aucun appel LLM) ; il survit à un redémarrage.
+    const judgeLlm = {
+      config: async () => {
+        const value = await readLlmSettings(pool);
+        return value === null ? null : llmConfigFromSettings(value, (id) => secrets.get(id), ['judge']);
+      },
+      client: (config: LlmConfig) => createLlmClient(config, { note: (note) => logger.info(note, 'llm') }),
+    };
+    const qualityBase = settingsQualityPorts(pool);
+    const judgeJob = createJudgeJob({ pool, llm: judgeLlm, quality: qualityBase });
+    const quality = {
+      ...qualityBase,
+      scheduleJudge: async (job: { runId: string; ownerId: string }) => {
+        const q = queue?.();
+        if (q === undefined) {
+          logger.warn({ runId: job.runId }, 'juge : file indisponible, jugement sur anomalie non planifié');
+          return;
+        }
+        await scheduleRunJudge(q, job);
+      },
+    };
     const repair = createRepairPort({
       pool,
       browser: pool_ !== null,
@@ -191,6 +221,7 @@ export function productionExecutorFactory(env: Readonly<Record<string, string | 
         },
         client: (config) => createLlmClient(config, { note: (note) => logger.info(note, 'llm') }),
       },
+      judgeLlm,
     });
     const strategy = createStrategyRuntime({
       pool,
@@ -208,6 +239,7 @@ export function productionExecutorFactory(env: Readonly<Record<string, string | 
       version: config.version,
       repair,
       rejection: rejectionThresholdsFromEnv(env),
+      quality,
     });
     // Enquête (2.1) : mêmes gardes, mêmes exécuteurs ; rôles `investigate` (schéma), `extract` et `agent` (prix des couples E4, E6).
     const investigation = createInvestigationExecutor({
@@ -224,10 +256,12 @@ export function productionExecutorFactory(env: Readonly<Record<string, string | 
       llm: {
         config: async () => {
           const value = await readLlmSettings(pool);
-          return value === null ? null : llmConfigFromSettings(value, (id) => secrets.get(id), ['investigate', 'extract', 'agent']);
+          return value === null ? null : llmConfigFromSettings(value, (id) => secrets.get(id), [...INVESTIGATION_LLM_ROLES]);
         },
         client: (config) => createLlmClient(config),
       },
+      judgeLlm,
+      quality,
       robotsCache,
       instanceContact,
       identifyInstance,
@@ -235,6 +269,10 @@ export function productionExecutorFactory(env: Readonly<Record<string, string | 
     });
     return {
       executor: dispatchByKind({ run: strategy.executor, investigation }),
+      // Job `quality-judge` : jugement sur anomalie d'un rejeu, après sa clôture (RunNotClosedError : pg-boss le reprend).
+      judge: async (job) => {
+        await judgeJob({ runId: job.run_id, ownerId: job.owner_id, trigger: 'anomaly' });
+      },
       browserContexts: () => pool_?.active() ?? 0,
       close: async () => {
         await tunnel.close();

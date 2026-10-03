@@ -1,0 +1,62 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# SYM Browser seul sur une machine, mode `all` : passerelle et nœud dans un process, PostgreSQL à côté (cdc/sym-browser
+# 03 § 4, tâche 5.1). Guide : README.md de ce dossier.
+#   cp .env.example .env   # puis remplir les trois secrets (commandes dans .env.example)
+#   docker compose up -d && docker compose ps
+# Point d'entrée publié sur 127.0.0.1:3000 par défaut : mets un reverse proxy TLS devant (Caddy, Traefik, nginx) ;
+# SYMB_BIND=0.0.0.0:3000 l'ouvre à tous, à éviter sans TLS.
+name: sym-browser
+
+services:
+  postgres:
+    image: postgres:16.10-alpine@sha256:029660641a0cfc575b14f336ba448fb8a75fd595d42e1fa316b9fb4378742297
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: symb
+      POSTGRES_DB: symb
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?à définir dans .env}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U symb -d symb"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  sym-browser:
+    image: ${SYMB_IMAGE:-ghcr.io/scrap-yo-mama/sym-browser:1}
+    restart: unless-stopped
+    environment:
+      SYMB_MODE: all
+      DATABASE_URL: postgres://symb:${POSTGRES_PASSWORD:?à définir dans .env}@postgres:5432/symb
+      MASTER_KEY: ${MASTER_KEY:?à définir dans .env (pnpm --filter @sym-browser/core keygen)}
+      SYMB_BOOTSTRAP_API_KEY: ${SYMB_BOOTSTRAP_API_KEY:?à définir dans .env (pnpm --filter @sym-browser/core apikey)}
+      SYMB_LOG_LEVEL: ${SYMB_LOG_LEVEL:-info}
+    ports:
+      - ${SYMB_BIND:-127.0.0.1:3000}:3000
+    volumes:
+      - sym-browser-data:/data
+    # Confinement de Chromium : profil seccomp du module (repris de SYM), aucun nouveau privilège, toutes les capacités
+    # retirées sauf SYS_CHROOT, que le bac à sable utilise dans son espace de noms utilisateur (aucune capacité effective
+    # pour pwuser). /dev/shm agrandi pour Chromium.
+    security_opt:
+      - seccomp=seccomp-chromium.json
+      - no-new-privileges:true
+    cap_drop: [ALL]
+    cap_add: [SYS_CHROOT]
+    shm_size: 1gb
+    # Drainage (04b § 9) : SHUTDOWN_GRACE_SECONDS (270 s) plus la fermeture.
+    stop_grace_period: 300s
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/readyz').then((r) => process.exit(r.ok ? 0 : 1), () => process.exit(1))"]
+      interval: 5s
+      timeout: 4s
+      retries: 3
+      start_period: 120s
+
+volumes:
+  postgres-data:
+  sym-browser-data:

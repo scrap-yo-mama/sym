@@ -1,0 +1,406 @@
+{
+  "$comment": "Vecteurs produits par l’implémentation de SYM (runtime/packages/core/src/crypto) avec un aléa déterministe consigné dans draws. Clés de test dérivées de seed (base64(sha256(seed))), jamais des clés réelles.",
+  "source": {
+    "repo": "scrap-yo-mama/sym-workspace",
+    "path": "runtime/packages/core/src/crypto",
+    "commit": "07c86184002b964cdc0464e8fe3e1fb4e48bdd4e",
+    "procedure": "Hors du module (frontière ADR 23) : build de @runtime/core, puis script Node qui remplace node:crypto.randomBytes par les tirages consignés (module.syncBuiltinESMExports) et appelle sealSecret, rotate, createKeyCheck, verifyKeyCheck, SecretValueRegistry.redactText, redactUrl, redactArtifactText et redact du dist ; sorties écrites telles quelles. Tirages = sha256('zz_test_vector:draw:<cas>:<dek|nonce|wrap>') tronqué."
+  },
+  "constants": {
+    "alg": "aes-256-gcm",
+    "nonceBytes": 12,
+    "tagBytes": 16,
+    "dekBytes": 32,
+    "hkdfSalt": "scrapyomama-runtime/master-key/v1",
+    "REDACTED": "[REDACTED]",
+    "MIN_SCAN_LENGTH": 6
+  },
+  "masterKeys": [
+    {
+      "seed": "zz_test_vector:sym-browser:master-key:1",
+      "derivation": "base64(sha256(seed))",
+      "fingerprint": "dd53-0993-fe24",
+      "kekSecrets": "84f8fdf4e240bd97ebc15f93a77a0e50aef7e8801cca4ffceb461d3933cbbf0f"
+    },
+    {
+      "seed": "zz_test_vector:sym-browser:master-key:2",
+      "derivation": "base64(sha256(seed))",
+      "fingerprint": "8a75-60db-5ac5",
+      "kekSecrets": "f9b87141329bbd84908c20bf7f31ce603f665496e859765e6008e56110f9b8da"
+    }
+  ],
+  "seal": [
+    {
+      "name": "secret-utf8",
+      "key": 1,
+      "version": 1,
+      "aad": "secret|0b1f6c1e-4a4e-4f4f-9a51-6b9e2a0c1d11|proxy_password|instance",
+      "plaintext": {
+        "utf8": "zz_test_canary_mot-de-passe-proxy p@ss!~\"x:y'(z) é漢"
+      },
+      "draws": {
+        "dek": "1d9d3c9b30e3a013184b2e3e9c39364423c2d8bec9c2060bd19535dd4f5a4558",
+        "nonce": "d44eba1aa8c8e8c92b989b3c",
+        "wrapNonce": "2299ed7bd5b13ce2d1cd204c"
+      },
+      "sealed": {
+        "alg": "aes-256-gcm",
+        "kekVersion": 1,
+        "nonce": "d44eba1aa8c8e8c92b989b3c",
+        "ciphertext": "3cf0e85cd0c59d00c99eec45d35822da58116c9bfa1f47ea198cb8b3c55cbfa3381f6d80b370035f6d4d1dcfc80fee4df0c2fbf88b8c88e1b0e8b83f17d0382ee569e0a591ac",
+        "dekWrapped": "2299ed7bd5b13ce2d1cd204c87e8a0953974bc73a1bd62f760b07d81c95ede7e718c4c952fa7cc9b216c1024e34b0a4be4a94d4676461142045b4272"
+      }
+    },
+    {
+      "name": "vide",
+      "key": 1,
+      "version": 1,
+      "aad": "secret|0b1f6c1e-4a4e-4f4f-9a51-6b9e2a0c1d12|token|instance",
+      "plaintext": {
+        "utf8": ""
+      },
+      "draws": {
+        "dek": "5e65e189b33e5130e5b7fa792e1f85b6f41b3913c81b8812d8f9679e051d5273",
+        "nonce": "30997d2f10de208e70fd6536",
+        "wrapNonce": "bac706df074afa2fe1a85409"
+      },
+      "sealed": {
+        "alg": "aes-256-gcm",
+        "kekVersion": 1,
+        "nonce": "30997d2f10de208e70fd6536",
+        "ciphertext": "c9b41c9c4f98e33a6e5b5cef40f6a443",
+        "dekWrapped": "bac706df074afa2fe1a854096ae52303421abfe20baa29622f3cf0316647893da148a16cc8d352b85a7b273236c54ddd58026e33e7a43a50b354738c"
+      }
+    },
+    {
+      "name": "binaire",
+      "key": 2,
+      "version": 7,
+      "aad": "profile|tenant_a|profile_1|3",
+      "plaintext": {
+        "hex": "0b30557a9fc4e90e33587da2c7ec11365b80a5caef14395e83a8cdf2173c6186abd0f51a3f6489aed3f81d42678cb1d6fb20456a8fb4d9fe23486d92b7dc01264b7095badf04294e7398bde2072c51769bc0e50a2f54799ec3e80d32577ca1c6eb10355a7fa4c9ee13385d82a7ccf1163b6085aacff4193e6388add2f71c41668bb0d5fa1f44698eb3d8fd22476c91b6db00254a6f94b9de03284d7297bce1062b50759abfe4092e53789dc2e70c31567ba0c5ea0f34597ea3c8ed12375c81a6cbf0153a5f84a9cef3183d6287acd1f61b40658aafd4f91e43688db2d7fc21466b90b5daff24496e93b8dd02274c7196bbe0052a4f7499bee3082d52779cc1e60b30557a9fc4e90e33587da2c7ec11365b80a5caef14395e83a8cdf2173c6186abd0f51a3f6489aed3f81d42"
+      },
+      "draws": {
+        "dek": "16247c01f6dfc3347692568f4c1b5a035d223872692b00565e0cc2618a5e223d",
+        "nonce": "33dd569c8f780b37fc706659",
+        "wrapNonce": "d5e8ad15a980fe1ca7e0f822"
+      },
+      "sealed": {
+        "alg": "aes-256-gcm",
+        "kekVersion": 7,
+        "nonce": "33dd569c8f780b37fc706659",
+        "ciphertext": "dfd59a448a6cd111b6bcbd56a330ad0bee97ec4a00d8656cd00c84f1dc4c3a90709b48a8ac02d843cfa46f4b612220c54ea4a67c8116a9898281f7da55e5c3c457f001d4d18a0079ed8419171bb6c978de893aa52f2fb4230816cb3a0f9f630e39eb99fc82ad02ad82a9f3b3161d9cbf9dbcf5d4d9f5d832d0e88f23a91c8d035107827e69837537110fa04bae5b80490e0d95786ea0e1739beb0e07460deda665504f3690f8bae4a5ca3bf9e168e8545b47bc4e443bb20626d5594d63e72f3a500d40976b96d42c026426b183acfc7e2ae6c997493a94e1d752f4679a719b0b487ba976ed03b01193d42fc6f0d7ae8a26d93ba8ff9d8bc735934e889e5105c97a3b8dab9b3dcf40eae1e2e58f0d77df4ef39a05fe4d943009768a288e92e4e601d430add2f190adfef6adb47d72ffdffc5fe2e8ed2830bd50a833ab",
+        "dekWrapped": "d5e8ad15a980fe1ca7e0f822ad018fa54e5881347b49ab6ee21443f46a1b6f7e7f3b94ac29ea6b48a51769200cf7b98f4bfa9c01cba71ee6ad09f97b"
+      }
+    }
+  ],
+  "rotate": {
+    "from": {
+      "key": 2,
+      "version": 1
+    },
+    "to": {
+      "key": 1,
+      "version": 2
+    },
+    "aad": "proxy_profile|tenant_a|profile_9",
+    "plaintext": {
+      "utf8": "zz_test_canary_rotation"
+    },
+    "source": {
+      "alg": "aes-256-gcm",
+      "kekVersion": 1,
+      "nonce": "0dced6715957b29bd677961e",
+      "ciphertext": "90cc6c7b33f67426522aa723fe9bc5f20a71c148f9c80c0909845d655e49528eaedecbd255407b",
+      "dekWrapped": "b342ca7e134afb263399f3f65d1c2a118d2a4b496792f822849cf65f6d3cba746c28cfdc87744914c3ca5af305b465df8bd633aa74707f1d07c61479"
+    },
+    "draws": {
+      "dek": "789d09671b6c392e5a67d64c18cf0a5888576c9f1c54936c73667ecfa0d41017",
+      "nonce": "8be018f76c0d6d0030949ce5",
+      "wrapNonce": "289aebed534a968d0ee4399d"
+    },
+    "sealed": {
+      "alg": "aes-256-gcm",
+      "kekVersion": 2,
+      "nonce": "8be018f76c0d6d0030949ce5",
+      "ciphertext": "d5b2d22a1276afbba4b7b855c666d297fd39e9f8e2628b2b2c1d093a4e70cfd91c293b2760bfb2",
+      "dekWrapped": "289aebed534a968d0ee4399dd53a2058ce956240852d2a943627800e24f942620f7591b280d7dafea32aae32e0ed7faebbfa964160ab30a9b978778a"
+    }
+  },
+  "keyCheck": {
+    "key": 1,
+    "version": 1,
+    "draws": {
+      "dek": "35b0ceee3d201f8861a2c8d48e63ccfdadd6b61118a93f6c095052ae310a55ec",
+      "nonce": "1e04c9fb80a692b57a742dcd",
+      "wrapNonce": "d1c4fdb90ae440ba774c3ba9"
+    },
+    "record": {
+      "format": 1,
+      "version": 1,
+      "fingerprint": "dd53-0993-fe24",
+      "alg": "aes-256-gcm",
+      "nonce": "HgTJ+4CmkrV6dC3N",
+      "ciphertext": "r75C65egqoUwfZ925jaa5kR/YYZbj9H6xpOE5E/LyES6bZ0Rt6lYZ1eShNqliPEl",
+      "dekWrapped": "0cT9uQrkQLp3TDupJKDwF2vch2FQ+/khUhzmcLK5ST3CHGTD44Iu7SiXK5vUXxknTlcrfNy1ocZd0nEn"
+    },
+    "verify": {
+      "key1": true,
+      "key2": false
+    }
+  },
+  "redaction": {
+    "registryValues": [
+      "zz_test_canary_0123456789abcdef p@ss!~\"x:y'(z)",
+      "zz_test_canary_fedcba98",
+      "pw1"
+    ],
+    "redactText": [
+      {
+        "input": "zz_test_canary_0123456789abcdef p@ss!~\"x:y'(z)",
+        "output": "[REDACTED]"
+      },
+      {
+        "input": "\"zz_test_canary_0123456789abcdef p@ss!~\\\"x:y'(z)\"",
+        "output": "\"[REDACTED]\""
+      },
+      {
+        "input": "zz_test_canary_0123456789abcdef%20p%40ss!~%22x%3Ay'(z)",
+        "output": "[REDACTED]"
+      },
+      {
+        "input": "q=zz_test_canary_0123456789abcdef+p%40ss%21%7E%22x%3Ay%27%28z%29",
+        "output": "q=[REDACTED]"
+      },
+      {
+        "input": "Authorization: Basic dXM6enpfdGVzdF9jYW5hcnlfMDEyMzQ1Njc4OWFiY2RlZiBwQHNzIX4ieDp5Jyh6KQ==",
+        "output": "Authorization: Basic dXM6[REDACTED]Q=="
+      },
+      {
+        "input": "Authorization: Basic dXNlOnp6X3Rlc3RfY2FuYXJ5XzAxMjM0NTY3ODlhYmNkZWYgcEBzcyF+Ing6eScoeik=",
+        "output": "Authorization: Basic dXNlOn[REDACTED]k="
+      },
+      {
+        "input": "Authorization: Basic dXNlcjp6el90ZXN0X2NhbmFyeV8wMTIzNDU2Nzg5YWJjZGVmIHBAc3MhfiJ4OnknKHop",
+        "output": "Authorization: Basic dXNlcjp[REDACTED]"
+      },
+      {
+        "input": "password=pw1&x=apw1b",
+        "output": "password=[REDACTED]&x=apw1b"
+      },
+      {
+        "input": "Bearer pw1",
+        "output": "Bearer [REDACTED]"
+      },
+      {
+        "input": "{\"secret\":\"pw1\"}",
+        "output": "{\"secret\":\"[REDACTED]\"}"
+      },
+      {
+        "input": "http://u:pw1@h",
+        "output": "http://u:[REDACTED]@h"
+      },
+      {
+        "input": "tabcd abc pw1",
+        "output": "tabcd abc pw1"
+      },
+      {
+        "input": "préfixe zz_test_canary_fedcba98 suffixe et zz_test_ca",
+        "output": "préfixe [REDACTED] suffixe et zz_test_ca"
+      }
+    ],
+    "redactUrl": [
+      {
+        "input": "http://u:p4ssword@proxy.example:3128/x?token=abc&page=2",
+        "output": "http://proxy.example:3128/x?token=[REDACTED]&page=2"
+      },
+      {
+        "input": "pas une url",
+        "output": "pas une url"
+      },
+      {
+        "input": "http://h.example/x?token=t0k&note=zz_test_canary_0123456789abcdef%20p%40ss!~%22x%3Ay'(z)&x_api_key_v2=abc123&passphrase=def456&page=2",
+        "output": "http://h.example/x?token=[REDACTED]&note=[REDACTED]&x_api_key_v2=[REDACTED]&passphrase=[REDACTED]&page=2"
+      },
+      {
+        "input": "wss://gw.example/playwright?sessionId=s1&signature=zzsig&Auth=1&cookie_jar=c&page=3",
+        "output": "wss://gw.example/playwright?sessionId=[REDACTED]&signature=[REDACTED]&Auth=[REDACTED]&cookie_jar=[REDACTED]&page=3"
+      },
+      {
+        "input": "socks5://user:secret@10.0.0.1:1080",
+        "output": "socks5://10.0.0.1:1080"
+      }
+    ],
+    "redactArtifactText": [
+      {
+        "input": "{\"headers\":[{\"name\":\"Cookie\",\"value\":\"sid=abc\"},{\"name\":\"Accept\",\"value\":\"text/html\"}]}",
+        "output": "{\"headers\":[{\"name\":\"Cookie\",\"value\":\"[REDACTED]\"},{\"name\":\"Accept\",\"value\":\"text/html\"}]}"
+      },
+      {
+        "input": "{\"log\":{\"entries\":[{\"request\":{\"cookies\":[{\"name\":\"sid\",\"value\":\"har-cookie-req\"}],\"postData\":{\"mimeType\":\"x\",\"text\":\"user=a&password=har-post\"}},\"response\":{\"cookies\":[{\"name\":\"sid\",\"value\":\"har-cookie-res\"}],\"headers\":[{\"name\":\"Accept\",\"value\":\"text/html\"},{\"name\":\"Set-Cookie\",\"value\":\"a=zz_test_canary_0123456789abcdef p@ss!~\\\"x:y'(z)\"}]}}]}}",
+        "output": "{\"log\":{\"entries\":[{\"request\":{\"cookies\":[{\"name\":\"sid\",\"value\":\"[REDACTED]\"}],\"postData\":{\"mimeType\":\"x\",\"text\":\"[REDACTED]\"}},\"response\":{\"cookies\":[{\"name\":\"sid\",\"value\":\"[REDACTED]\"}],\"headers\":[{\"name\":\"Accept\",\"value\":\"text/html\"},{\"name\":\"Set-Cookie\",\"value\":\"[REDACTED]\"}]}}]}}"
+      },
+      {
+        "input": "texte non JSON {\"name\": \"Authorization\", \"value\": \"Bearer xyz\"} et zz_test_canary_0123456789abcdef p@ss!~\"x:y'(z)",
+        "output": "texte non JSON {\"name\": \"Authorization\", \"value\": \"[REDACTED]\"} et [REDACTED]"
+      }
+    ],
+    "redact": [
+      {
+        "input": {
+          "msg": "clé=zz_test_canary_0123456789abcdef p@ss!~\"x:y'(z)",
+          "list": [
+            "zz_test_canary_0123456789abcdef p@ss!~\"x:y'(z)",
+            1,
+            null,
+            true
+          ],
+          "url": "http://user:pw1@proxy.example:8080/?api_key=zz",
+          "nested": {
+            "a": {
+              "b": "x zz_test_canary_fedcba98 y"
+            }
+          },
+          "zz_test_canary_fedcba98": "clé porteuse"
+        },
+        "output": {
+          "msg": "clé=[REDACTED]",
+          "list": [
+            "[REDACTED]",
+            1,
+            null,
+            true
+          ],
+          "url": "http://user:[REDACTED]@proxy.example:8080/?api_key=zz",
+          "nested": {
+            "a": {
+              "b": "x [REDACTED] y"
+            }
+          },
+          "[REDACTED]": "clé porteuse"
+        }
+      }
+    ],
+    "logRedactPaths": [
+      "password",
+      "token",
+      "apiKey",
+      "api_key",
+      "secret",
+      "authorization",
+      "Authorization",
+      "cookie",
+      "Cookie",
+      "body.password",
+      "body.token",
+      "body.apiKey",
+      "body.api_key",
+      "body.secret",
+      "body.authorization",
+      "body.Authorization",
+      "body.cookie",
+      "body.Cookie",
+      "data.password",
+      "data.token",
+      "data.apiKey",
+      "data.api_key",
+      "data.secret",
+      "data.authorization",
+      "data.Authorization",
+      "data.cookie",
+      "data.Cookie",
+      "proxy.password",
+      "proxy.token",
+      "proxy.apiKey",
+      "proxy.api_key",
+      "proxy.secret",
+      "proxy.authorization",
+      "proxy.Authorization",
+      "proxy.cookie",
+      "proxy.Cookie",
+      "llm.password",
+      "llm.token",
+      "llm.apiKey",
+      "llm.api_key",
+      "llm.secret",
+      "llm.authorization",
+      "llm.Authorization",
+      "llm.cookie",
+      "llm.Cookie",
+      "params.password",
+      "params.token",
+      "params.apiKey",
+      "params.api_key",
+      "params.secret",
+      "params.authorization",
+      "params.Authorization",
+      "params.cookie",
+      "params.Cookie",
+      "query.password",
+      "query.token",
+      "query.apiKey",
+      "query.api_key",
+      "query.secret",
+      "query.authorization",
+      "query.Authorization",
+      "query.cookie",
+      "query.Cookie",
+      "headers.authorization",
+      "headers.Authorization",
+      "headers.cookie",
+      "headers.Cookie",
+      "headers[\"set-cookie\"]",
+      "headers[\"Set-Cookie\"]",
+      "headers[\"proxy-authorization\"]",
+      "headers[\"Proxy-Authorization\"]",
+      "req.headers.authorization",
+      "req.headers.Authorization",
+      "req.headers.cookie",
+      "req.headers.Cookie",
+      "req.headers[\"set-cookie\"]",
+      "req.headers[\"Set-Cookie\"]",
+      "req.headers[\"proxy-authorization\"]",
+      "req.headers[\"Proxy-Authorization\"]",
+      "res.headers.authorization",
+      "res.headers.Authorization",
+      "res.headers.cookie",
+      "res.headers.Cookie",
+      "res.headers[\"set-cookie\"]",
+      "res.headers[\"Set-Cookie\"]",
+      "res.headers[\"proxy-authorization\"]",
+      "res.headers[\"Proxy-Authorization\"]",
+      "request.headers.authorization",
+      "request.headers.Authorization",
+      "request.headers.cookie",
+      "request.headers.Cookie",
+      "request.headers[\"set-cookie\"]",
+      "request.headers[\"Set-Cookie\"]",
+      "request.headers[\"proxy-authorization\"]",
+      "request.headers[\"Proxy-Authorization\"]",
+      "response.headers.authorization",
+      "response.headers.Authorization",
+      "response.headers.cookie",
+      "response.headers.Cookie",
+      "response.headers[\"set-cookie\"]",
+      "response.headers[\"Set-Cookie\"]",
+      "response.headers[\"proxy-authorization\"]",
+      "response.headers[\"Proxy-Authorization\"]",
+      "config.headers.authorization",
+      "config.headers.Authorization",
+      "config.headers.cookie",
+      "config.headers.Cookie",
+      "config.headers[\"set-cookie\"]",
+      "config.headers[\"Set-Cookie\"]",
+      "config.headers[\"proxy-authorization\"]",
+      "config.headers[\"Proxy-Authorization\"]",
+      "err.config.headers.authorization",
+      "err.config.headers.Authorization",
+      "err.config.headers.cookie",
+      "err.config.headers.Cookie",
+      "err.config.headers[\"set-cookie\"]",
+      "err.config.headers[\"Set-Cookie\"]",
+      "err.config.headers[\"proxy-authorization\"]",
+      "err.config.headers[\"Proxy-Authorization\"]"
+    ]
+  }
+}

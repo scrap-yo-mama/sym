@@ -564,6 +564,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/apis/{slug}/resolved-rules": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Aperçu de l'ensemble de règles résolu pour l'API (19 § 2, 19b § 2, tâche 2.10) ; propriétaire seul, 404 sinon */
+        get: operations["getResolvedRules"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/apis/{slug}/status-events": {
         parameters: {
             query?: never;
@@ -2430,6 +2447,55 @@ export interface components {
             input?: {
                 [key: string]: unknown;
             };
+            /** @description Fiche de qualité du run (tâche 2.12, 19 § 3) : profil calculé par le code après la garde de classification et Ajv ; un champ `x-personal` n'a que des formes. Absente pour l'admin sur un run d'autrui. */
+            quality?: components["schemas"]["RunQuality"] | null;
+            /** @description Avis CONSULTATIF du juge (19 § 3) ; il ne change jamais le statut ni la version. */
+            judge?: components["schemas"]["RunJudge"] | null;
+        };
+        RunQuality: {
+            items: number;
+            duplicates: number;
+            duplicate_rate: number;
+            fields: {
+                [key: string]: components["schemas"]["FieldQuality"];
+            };
+        };
+        FieldQuality: {
+            type: string;
+            personal: boolean;
+            suspected_personal: boolean;
+            fill_rate: number;
+            sentinel_rate: number;
+            top_pattern: string | null;
+            patterns?: {
+                [key: string]: number;
+            };
+            unique_rate: number;
+            distinct?: number;
+            constant: boolean;
+            length: {
+                min: number;
+                max: number;
+                mean: number;
+            };
+            /** @description Champs non personnels seulement. */
+            min?: number;
+            /** @description Champs non personnels seulement. */
+            max?: number;
+        };
+        RunJudge: {
+            flag: boolean;
+            /** @enum {string} */
+            trigger: "investigation" | "repair" | "anomaly";
+            /** Format: date-time */
+            at?: string;
+            verdicts: {
+                field: string;
+                /** @enum {string} */
+                verdict: "ok" | "wrong" | "unsure";
+                indices: number[];
+                reason: string;
+            }[];
         };
         RunLogLine: {
             seq: number;
@@ -2479,6 +2545,36 @@ export interface components {
             patch?: {
                 [key: string]: unknown;
             }[] | null;
+        };
+        /** @description Ensemble résolu des règles et skills d'une API (19 § 2) ; noms, versions, empreintes et jetons, jamais le contenu. */
+        ResolvedRules: {
+            /** @enum {string} */
+            role: "investigate" | "repair" | "embedded";
+            budget_tokens: number;
+            tokens: number;
+            rules: {
+                name: string;
+                version: number;
+                /** @enum {string} */
+                level: "instance" | "domain" | "api";
+                tokens: number;
+                sha256: string;
+            }[];
+            skills: {
+                name: string;
+                version: number;
+                description: string | null;
+                sha256: string;
+            }[];
+            truncated: {
+                name: string;
+                version: number;
+                /** @enum {string} */
+                level: "instance" | "domain" | "api";
+                tokens: number;
+            }[];
+            skills_listing_truncated: boolean;
+            skills_tokens: number;
         };
         StrategyVersionList: {
             versions: components["schemas"]["StrategyVersionSummary"][];
@@ -2701,6 +2797,12 @@ export interface components {
             repair?: components["schemas"]["LlmRole"];
             extract?: components["schemas"]["LlmRole"];
             agent?: components["schemas"]["LlmRole"];
+            /** @description Juge de qualité consultatif (tâche 2.12, 19 § 3), actif seulement avec `judge.enabled`. */
+            judge?: components["schemas"]["LlmRole"];
+            /** @description Propositions de règles, toujours validées par un humain (19 § 5). */
+            reflect?: components["schemas"]["LlmRole"];
+            /** @description Embeddings de l'étage 4 de la mémoire du catalogue (option désactivée, `catalog_memory.embeddings`). */
+            embed?: components["schemas"]["LlmRole"];
         };
         LlmProviderBase: {
             id: string;
@@ -2736,9 +2838,29 @@ export interface components {
                 enabled?: boolean;
                 retention_days?: number;
             };
+            /** @description Juge consultatif (tâche 2.12, 19 § 3) : désactivé par défaut, activé par l'admin avec l'avertissement « juge non étalonné, avis consultatif » ; son fournisseur s'ajoute à la mention fournisseur. */
+            judge?: {
+                enabled?: boolean;
+            };
+            /** @description Mémoire du catalogue (19 § 2) ; l'étage 4 par embeddings est une option désactivée (pgvector requis). */
+            catalog_memory?: {
+                embeddings?: boolean;
+            };
         };
         LlmSettings: components["schemas"]["LlmSettingsCommon"] & {
             providers: components["schemas"]["LlmProvider"][];
+            /** @description Statut « modèle validé » du banc d'évaluation (15 § 11), en lecture seule : copie de eval/validated-models.json (produit par `pnpm eval --level N2`). Un modèle configuré absent de la liste n'a jamais été mesuré : « non validé ». */
+            readonly validated_models?: components["schemas"]["ValidatedModel"][];
+        };
+        ValidatedModel: {
+            model_id: string;
+            /** Format: date */
+            date: string;
+            /** @enum {string} */
+            status: "validated" | "not_validated";
+            /** @enum {string} */
+            level: "N2";
+            blocking_rules?: string[];
         };
         LlmSettingsWrite: components["schemas"]["LlmSettingsCommon"] & {
             providers: components["schemas"]["LlmProviderWrite"][];
@@ -4328,6 +4450,35 @@ export interface operations {
             403: components["responses"]["Error"];
             404: components["responses"]["Error"];
             409: components["responses"]["Error"];
+        };
+    };
+    getResolvedRules: {
+        parameters: {
+            query?: {
+                /** @description Usage du plafond RULES_MAX_TOKENS (investigate et repair 3 000, embedded 1 000) ; défaut investigate. */
+                role?: "investigate" | "repair" | "embedded";
+            };
+            header?: never;
+            path: {
+                slug: components["parameters"]["Slug"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Règles injectées, skills listés, jetons et ce que les plafonds ont retiré (aucun contenu de règle). */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResolvedRules"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
         };
     };
     listStatusEvents: {

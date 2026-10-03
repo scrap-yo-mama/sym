@@ -155,8 +155,10 @@ test.describe('assert_sym_signature_rendering', () => {
       // principal en porte au plus une, parlante : la bulle « SYM : » d'une planche (porte du schéma de Nouvelle API, 20 § 5.3).
       const bubbles = await page.locator('[data-sym-bubble] [data-sym-signature][data-variant="speaking"]').count();
       expect(bubbles, 'bulle de SYM').toBe(BUBBLE_SCREENS.includes(screen.id) ? 1 : 0);
-      expect(audit.count + audit.inMain).toBe(1 + bubbles);
-      expect(audit.inMain).toBeLessThanOrEqual(1);
+      // Hors bulle d'illustration, la seule signature du contenu principal est celle d'une planche (porte du schéma, 20 § 5.3).
+      const mainBoard = await page.locator('main [data-sym-signature][data-variant="speaking"]:not([data-sym-bubble] *)').count();
+      expect(mainBoard).toBeLessThanOrEqual(1);
+      expect(audit.count + audit.inMain - bubbles - mainBoard).toBe(1);
     });
   }
 });

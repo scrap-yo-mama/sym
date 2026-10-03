@@ -1,4 +1,5 @@
 {
+  "$comment": "Registre des allégations (22 § 3.2) : source unique de chaque phrase factuelle de la landing (apps/docs) et, à terme, du README. Une entrée affichée sur une surface doit être au statut « relu » ; « à relire » et « bloqué » ne s'affichent jamais. proof : référence vérifiable (test:<nom>, inv:<INV>, file:<chemin depuis la racine du dépôt>, page:<page du site de doc>, decision:<D-n>). tasks : tâches dont la livraison conditionne la phrase (la porte du GO, `pnpm check:landing-go`, refuse le GO tant qu'une preuve nommée n'est pas un vrai test ou qu'une tâche liée manque). Relecture : `reviewer` dit qui a relu l'entrée au statut « relu » : « agent » (l'agent de 4.11 a vérifié chaque phrase contre le code et la doc) ou « human » (relecture humaine, 22b § 6). La porte du GO bloque tant qu'une entrée affichée n'est pas « human » ; seul un humain change ce champ, après sa relecture.",
   "version": 1,
   "note": "Registre des allégations (22 §3.2) : source unique de la vitrine ; CLAIMS.md en est généré (pnpm vitrine:claims). Statuts : relu, à relire, bloqué. Une entrée à relire ou bloquée ne s'affiche sur aucune surface.",
   "claims": [
@@ -10,13 +11,14 @@
       "en": "Stays yours. Self-hosted, bring your own model, and nothing is sent to us by default.",
       "fr": "Reste chez toi. Auto-hébergé, ton propre modèle, et rien ne part chez nous par défaut.",
       "proof": [
-        "INV9",
-        "assert_no_telemetry",
-        "assert_otel_off_by_default"
+        "inv:INV9",
+        "test:assert_no_telemetry",
+        "test:assert_otel_off_by_default"
       ],
       "reviewed": "2026-10-02",
       "status": "relu",
-      "task": "4.10"
+      "task": "4.10",
+      "reviewer": "agent"
     },
     {
       "id": "cheapest-route-first",
@@ -26,11 +28,12 @@
       "en": "Cheapest route first. SYM tries the cheapest executor first (plain HTTP, then a real browser, then a model or an agent) and logs every attempt.",
       "fr": "La route la moins chère d'abord. SYM essaie d'abord l'exécuteur le moins cher (HTTP simple, puis un vrai navigateur, puis un modèle ou un agent) et journalise chaque tentative.",
       "proof": [
-        "INV2",
-        "assert_cheapest_first_logged"
+        "inv:INV2",
+        "test:assert_cheapest_first_logged"
       ],
       "reviewed": "2026-10-02",
-      "status": "relu"
+      "status": "relu",
+      "reviewer": "agent"
     },
     {
       "id": "six-executors",
@@ -40,11 +43,12 @@
       "en": "Six executors. HTTP fetch, a real browser page, sandboxed scripts, model-shaped extraction, script plus agent steps and a full agent; a successful agent run compiles into a replayable strategy.",
       "fr": "Six exécuteurs. Requête HTTP, page d'un vrai navigateur, scripts en bac à sable, extraction par modèle, étapes script plus agent et agent complet ; un run d'agent réussi se compile en stratégie rejouable.",
       "proof": [
-        "runtime/apps/worker/src/exec/strategy-executor.integration.test.ts",
-        "runtime/apps/worker/src/exec/agent-strategy.security.test.ts"
+        "file:runtime/apps/worker/src/exec/strategy-executor.integration.test.ts",
+        "file:runtime/apps/worker/src/exec/agent-strategy.security.test.ts"
       ],
       "reviewed": "2026-10-02",
-      "status": "relu"
+      "status": "relu",
+      "reviewer": "agent"
     },
     {
       "id": "guard-rails",
@@ -54,14 +58,15 @@
       "en": "Guard rails. Strategy code runs in a sandbox, outgoing requests pass an SSRF guard, and requests to each domain are paced.",
       "fr": "Des garde-fous. Le code d'une stratégie tourne dans un bac à sable, les requêtes sortantes passent par une garde SSRF, et les requêtes vers chaque domaine sont espacées.",
       "proof": [
-        "INV7",
-        "assert_sandbox",
-        "INV10",
-        "assert_ssrf_guard",
-        "assert_pacing_key_is_domain"
+        "inv:INV7",
+        "test:assert_sandbox",
+        "inv:INV10",
+        "test:assert_ssrf_guard",
+        "test:assert_pacing_key_is_domain"
       ],
       "reviewed": "2026-10-02",
-      "status": "relu"
+      "status": "relu",
+      "reviewer": "agent"
     },
     {
       "id": "own-session-consent",
@@ -71,12 +76,1181 @@
       "en": "Your session, with your consent. For sites behind a login, a browser extension runs steps through your own session, domain by domain, only after you agree.",
       "fr": "Ta session, avec ton accord. Pour les sites derrière une connexion, une extension de navigateur exécute des étapes avec ta propre session, domaine par domaine, seulement après ton accord.",
       "proof": [
-        "INV5",
-        "assert_consent_before_capture",
-        "assert_tunnel_only_when_chosen"
+        "inv:INV5",
+        "test:assert_consent_before_capture",
+        "test:assert_tunnel_only_when_chosen"
       ],
       "reviewed": "2026-10-02",
-      "status": "relu"
+      "status": "relu",
+      "reviewer": "agent"
+    },
+    {
+      "id": "no-signup",
+      "surfaces": [
+        "readme"
+      ],
+      "en": "Open source and self-hosted: nothing to sign up for.",
+      "fr": "Libre et auto-hébergé : rien à quoi t'inscrire.",
+      "proof": [
+        "test:assert_quickstart_no_egress"
+      ],
+      "reviewed": "2026-10-02",
+      "status": "relu",
+      "reviewer": "agent"
+    },
+    {
+      "id": "built-with-ai",
+      "surfaces": [
+        "readme"
+      ],
+      "en": "Much of this code and documentation was written with AI assistance, then reviewed, tested and run through CI. If something looks off, say so.",
+      "fr": "Une grande partie du code et de la documentation a été écrite avec l'aide d'une IA, puis relue, testée et passée en CI. Si quelque chose cloche, dis-le.",
+      "proof": [
+        "file:.github/workflows/ci.yml"
+      ],
+      "reviewed": "2026-10-02",
+      "status": "relu",
+      "reviewer": "agent"
+    },
+    {
+      "id": "quickstart-replayed-by-ci",
+      "surfaces": [
+        "readme"
+      ],
+      "en": "The commands are the ones the CI replays on a blank instance.",
+      "fr": "Les commandes sont celles que la CI rejoue sur une instance vierge.",
+      "proof": [
+        "test:assert_quickstart_replayed",
+        "test:assert_quickstart_compose_parity",
+        "file:runtime/tests/quickstart.integration.test.ts",
+        "file:runtime/tests/vitrine/readme.unit.test.ts"
+      ],
+      "reviewed": "2026-10-02",
+      "status": "relu",
+      "reviewer": "agent"
+    },
+    {
+      "id": "robots-always-respected",
+      "surfaces": [
+        "responsible-use"
+      ],
+      "en": "robots.txt is always respected. There is no option to ignore it.",
+      "fr": "robots.txt est toujours respecté. Il n'existe aucune option pour l'ignorer.",
+      "proof": [
+        "inv:INV11",
+        "test:assert_robots_respected"
+      ],
+      "reviewed": "2026-10-02",
+      "status": "relu",
+      "reviewer": "agent"
+    },
+    {
+      "id": "no-challenge-solving",
+      "surfaces": [
+        "responsible-use"
+      ],
+      "en": "No captcha is ever solved, by SYM or by any third-party service.",
+      "fr": "Aucun captcha n'est résolu, ni par SYM ni par un service tiers.",
+      "proof": [
+        "inv:INV6",
+        "test:assert_no_circumvention"
+      ],
+      "reviewed": "2026-10-02",
+      "status": "relu",
+      "reviewer": "agent"
+    },
+    {
+      "id": "user-agent-engine-real",
+      "surfaces": [
+        "responsible-use"
+      ],
+      "en": "SYM sends the standard User-Agent string of its bundled Chromium version (without the HeadlessChrome marker), the same one for its HTTP client, with no rotation and no fingerprint spoofing. Turn on instance identification to name yourself to sites.",
+      "fr": "SYM envoie la chaîne User-Agent standard de la version de Chromium embarquée (sans le marqueur HeadlessChrome), la même pour son client HTTP, sans rotation ni falsification d'empreinte. Active l'identification de l'instance pour te nommer auprès des sites.",
+      "proof": [
+        "inv:INV6",
+        "test:assert_user_agent_engine_real",
+        "test:assert_no_fingerprint_spoofing"
+      ],
+      "reviewed": "2026-10-02",
+      "status": "bloqué",
+      "note": "Publication bloquée tant que la divergence des client hints n'est pas arbitrée (17 §12, D-39)."
+    },
+    {
+      "id": "stops-when-refused",
+      "surfaces": [
+        "responsible-use"
+      ],
+      "en": "If a site refuses, SYM stops: no new IP, no other account to push through.",
+      "fr": "Si un site refuse, SYM s'arrête : pas de nouvelle IP, pas d'autre compte pour insister.",
+      "proof": [
+        "inv:INV6",
+        "test:assert_no_ip_change_after_refusal",
+        "test:assert_no_circumvention"
+      ],
+      "reviewed": "2026-10-02",
+      "status": "relu",
+      "reviewer": "agent"
+    },
+    {
+      "id": "no-telemetry-by-default",
+      "surfaces": [
+        "responsible-use"
+      ],
+      "en": "Nothing is sent to us without your explicit consent: no telemetry by default, no update check.",
+      "fr": "Rien ne part chez nous sans ton accord explicite : aucune télémétrie par défaut, aucune vérification de version.",
+      "proof": [
+        "inv:INV9",
+        "test:assert_no_telemetry"
+      ],
+      "reviewed": "2026-10-02",
+      "status": "relu",
+      "task": "4.10",
+      "reviewer": "agent"
+    },
+    {
+      "id": "repo-description",
+      "surfaces": [
+        "repo"
+      ],
+      "en": "Self-hosted, open-source web data over MCP: describe the data, approve the schema, get an API that repairs itself and stops when a site says no.",
+      "fr": "Données web libres et auto-hébergées, par MCP : décris les données, valide le schéma, obtiens une API qui se répare et s'arrête quand un site dit non.",
+      "proof": [
+        "inv:INV1",
+        "inv:INV11",
+        "test:assert_robots_respected"
+      ],
+      "reviewed": "2026-10-02",
+      "status": "à relire",
+      "task": "3.2",
+      "note": "Promet le serveur MCP (3.2) et la réparation, pas encore livrés : à relire au GO de la release (4.5), avant d'appliquer la description au dépôt et à l'étiquette OCI."
+    },
+    {
+      "id": "image-description-prerelease",
+      "surfaces": [
+        "repo"
+      ],
+      "en": "Scrapyomama (SYM): self-hosted, open-source web data runtime. Pre-release: the README says what is delivered.",
+      "fr": "Scrapyomama (SYM) : runtime de données web libre et auto-hébergé. Pré-version : le README dit ce qui est livré.",
+      "proof": [
+        "file:LICENSE",
+        "file:runtime/deploy/docker-compose.prod.yml",
+        "file:.github/README.md"
+      ],
+      "reviewed": "2026-10-02",
+      "status": "relu",
+      "note": "Description de l'étiquette OCI tant que repo-description n'est pas relue.",
+      "reviewer": "agent"
+    },
+    {
+      "id": "brand.hook",
+      "fr": "Claude ne veut pas le faire. SYM 👻 : OK, je m'en occupe.",
+      "en": "Claude won't do it. SYM 👻: On it.",
+      "proof": [
+        "decision:D-46"
+      ],
+      "reviewed": "2026-10-02",
+      "status": "relu",
+      "reviewer": "agent",
+      "surfaces": [
+        "landing"
+      ],
+      "note": "Accroche de la DA (D-46), seul emploi du nom « Claude » ; relecture juridique (publicité comparative, marque) au GO, 22 § 4."
+    },
+    {
+      "id": "brand.hook.sub",
+      "fr": "Pas de discours. Tu demandes, il s'en occupe, tu récupères une API.",
+      "en": "No speeches. You ask, it handles it, you get an API.",
+      "proof": [
+        "decision:D-46"
+      ],
+      "reviewed": "2026-10-02",
+      "status": "relu",
+      "reviewer": "agent",
+      "surfaces": [
+        "landing"
+      ]
+    },
+    {
+      "id": "hero.eyebrow",
+      "fr": "Open source · Auto-hébergé · Sans compte",
+      "en": "Open source · Self-hosted · No account",
+      "proof": [
+        "file:.github/README.md",
+        "inv:INV9",
+        "page:explications/telemetrie"
+      ],
+      "reviewed": "2026-10-02",
+      "status": "relu",
+      "reviewer": "agent",
+      "surfaces": [
+        "landing"
+      ],
+      "note": "Surtitre du hero (22 § 2.5) : « Sans compte » = aucun compte chez l'éditeur (instance auto-hébergée, aucune inscription) ; un hébergeur tiers (Render, Railway) demande le sien, dit à côté de son bouton."
+    },
+    {
+      "id": "hero.title",
+      "fr": "Décris les données. SYM 👻 s'occupe du reste.",
+      "en": "Describe the data. SYM 👻 handles the rest.",
+      "proof": [
+        "decision:D-46",
+        "inv:INV1"
+      ],
+      "reviewed": "2026-10-02",
+      "status": "relu",
+      "reviewer": "agent",
+      "surfaces": [
+        "landing",
+        "readme"
+      ],
+      "note": "H1 de 22 § 2.5 ; le titre DA barré de la planche (F-20261002-05) arrive avec 4.11b (D-60)."
+    },
+    {
+      "id": "hero.sub",
+      "fr": "Tu valides le schéma avant toute collecte. L'API tourne chez toi et se répare quand le site change.",
+      "en": "You approve the schema before anything is collected. The API runs on your server and repairs itself when the site changes.",
+      "proof": [
+        "inv:INV1",
+        "test:assert_output_schema_enforced",
+        "test:assert_step_patch_bounded"
+      ],
+      "reviewed": "2026-10-02",
+      "status": "relu",
+      "reviewer": "agent",
+      "tasks": [
+        "2.3",
+        "2.12"
+      ],
+      "surfaces": [
+        "landing"
+      ]
+    },
+    {
+      "id": "hero.command",
+      "fr": "La commande clone le dépôt, crée tes deux secrets dans un fichier .env, puis lance l'instance.",
+      "en": "The command clones the repository, creates your two secrets in a .env file, then starts the instance.",
+      "proof": [
+        "page:tutoriels/quickstart",
+        "test:assert_quickstart_replayed"
+      ],
+      "reviewed": "2026-10-02",
+      "status": "relu",
+      "reviewer": "agent",
+      "surfaces": [
+        "landing"
+      ]
+    },
+    {
+      "id": "install.health",
+      "fr": "Résultat attendu : l'instance répond sur /api/health.",
+      "en": "Expected result: your instance answers on /api/health.",
+      "proof": [
+        "page:guides/deploiement",
+        "page:tutoriels/quickstart"
+      ],
+      "reviewed": "2026-10-02",
+      "status": "relu",
+      "reviewer": "agent",
+      "surfaces": [
+        "landing"
+      ]
+    },
+    {
+      "id": "community.where",
+      "fr": "Bonnes premières issues, Discussions et feuille de route sont sur GitHub.",
+      "en": "Good first issues, Discussions and the roadmap are on GitHub.",
+      "proof": [
+        "file:runtime/CONTRIBUTING.md"
+      ],
+      "reviewed": "2026-10-02",
+      "status": "relu",
+      "reviewer": "agent",
+      "surfaces": [
+        "landing"
+      ]
+    },
+    {
+      "id": "hero.definition",
+      "fr": "Scrapyomama est un outil open source, auto-hébergé, qui transforme une demande en langage naturel en API de données rejouable.",
+      "en": "Scrapyomama is an open source, self-hosted tool that turns a plain-language request into a replayable data API.",
+      "proof": [
+        "file:.github/README.md",
+        "inv:INV1"
+      ],
+      "reviewed": "2026-10-02",
+      "status": "relu",
+      "reviewer": "agent",
+      "surfaces": [
+        "landing"
+      ]
+    },
+    {
+      "id": "demo.recorded",
+      "fr": "Démo enregistrée : aucun modèle n'a été appelé.",
+      "en": "Recorded demo: no model was called.",
+      "proof": [
+        "file:runtime/apps/docs/src/landing/content.ts",
+        "page:tutoriels/quickstart",
+        "test:assert_landing_no_third_party_request"
+      ],
+      "reviewed": "2026-10-02",
+      "status": "relu",
+      "reviewer": "agent",
+      "surfaces": [
+        "landing"
+      ],
+      "note": "En V1, le replay est écrit à la main (bulles de runtime/apps/docs/src/landing/content.ts) d'après le scénario de la démo sans clé (tutoriel « Démarrage rapide », cas D0, mode démo de 3.10) : aucun modèle n'est appelé pendant la lecture. Sa génération depuis l'enregistrement d'enquête est en V1.1 (assert_landing_demo_matches_recording) ; d'ici là, un humain relit chaque bulle contre le scénario au GO.",
+      "tasks": [
+        "3.10"
+      ]
+    },
+    {
+      "id": "demo.sym.ack",
+      "fr": "OK, je m'en occupe.",
+      "en": "Got it, I'm on it.",
+      "proof": [
+        "decision:D-46",
+        "file:runtime/apps/docs/src/landing/content.ts"
+      ],
+      "reviewed": "2026-10-02",
+      "status": "relu",
+      "reviewer": "agent",
+      "surfaces": [
+        "landing",
+        "readme"
+      ],
+      "note": "Bulle de SYM dans le replay écrit à la main (V1)."
+    },
+    {
+      "id": "demo.sym.robots",
+      "fr": "robots.txt lu : chemin autorisé. Pas d'API publique. Premier essai : requête simple sur le HTML, les livres sont dans la page.",
+      "en": "robots.txt read: path allowed. No public API. First attempt: a plain request on the HTML, the books are in the page.",
+      "proof": [
+        "inv:INV11",
+        "inv:INV2",
+        "test:assert_robots_respected",
+        "test:assert_cheapest_first_logged"
+      ],
+      "reviewed": "2026-10-02",
+      "status": "relu",
+      "reviewer": "agent",
+      "surfaces": [
+        "landing"
+      ],
+      "note": "Bulle de SYM dans le replay écrit à la main (V1), d'après le scénario de la démo sans clé."
+    },
+    {
+      "id": "demo.sym.schema",
+      "fr": "Voilà le schéma : titre, prix, disponibilité, note, URL. Je continue ?",
+      "en": "Here's the schema: title, price, availability, rating, URL. Shall I go on?",
+      "proof": [
+        "inv:INV1",
+        "test:assert_output_schema_enforced"
+      ],
+      "reviewed": "2026-10-02",
+      "status": "relu",
+      "reviewer": "agent",
+      "surfaces": [
+        "landing"
+      ],
+      "note": "Bulle de SYM dans le replay écrit à la main (V1) : le schéma est validé avant toute collecte."
+    },
+    {
+      "id": "demo.sym.done",
+      "fr": "C'est fait. L'API est prête, tu peux la rejouer quand tu veux.",
+      "en": "Done. The API is ready, replay it whenever you like.",
+      "proof": [
+        "inv:INV1",
+        "page:tutoriels/quickstart"
+      ],
+      "reviewed": "2026-10-02",
+      "status": "relu",
+      "reviewer": "agent",
+      "surfaces": [
+        "landing"
+      ],
+      "note": "Bulle de SYM dans le replay écrit à la main (V1)."
+    },
+    {
+      "id": "demo.sym.refusal",
+      "fr": "J'ai regardé. Ce site refuse les robots (robots.txt). Je m'arrête là, sans insister. Voilà ce que je peux faire à la place : chercher l'API officielle, trouver une autre source, ou te donner le contact de l'éditeur.",
+      "en": "I took a look. This site keeps robots out (robots.txt). I'm stopping here, without pushing. Here's what I can do instead: look for an official API, find another source, or give you the publisher's contact.",
+      "proof": [
+        "inv:INV11",
+        "inv:INV5",
+        "inv:INV6",
+        "test:assert_robots_respected"
+      ],
+      "reviewed": "2026-10-02",
+      "status": "relu",
+      "reviewer": "agent",
+      "surfaces": [
+        "landing"
+      ],
+      "note": "Bulle de SYM dans le replay écrit à la main (V1) : refus honnête avec alternatives (20 § 3), site fictif en .example."
+    },
+    {
+      "id": "license",
+      "fr": "Licence AGPL-3.0 pour le cœur, MIT pour le client et les schémas.",
+      "en": "AGPL-3.0 license for the core, MIT for the client and the schemas.",
+      "proof": [
+        "file:LICENSE",
+        "file:runtime/LICENSES/MIT.txt",
+        "test:assert_licenses_compatible"
+      ],
+      "reviewed": "2026-10-02",
+      "status": "relu",
+      "reviewer": "agent",
+      "surfaces": [
+        "landing"
+      ]
+    },
+    {
+      "id": "ci.in-repo",
+      "fr": "La CI est dans le dépôt : chacun peut lire chaque test.",
+      "en": "The CI lives in the repository: anyone can read every test.",
+      "proof": [
+        "file:.github/workflows/ci.yml"
+      ],
+      "reviewed": "2026-10-02",
+      "status": "relu",
+      "reviewer": "agent",
+      "surfaces": [
+        "landing"
+      ]
+    },
+    {
+      "id": "release.signed",
+      "fr": "Chaque release est signée (cosign) et livrée avec son SBOM ; la chaîne est testée à blanc dans la CI.",
+      "en": "Every release is signed (cosign) and ships with its SBOM; the pipeline is dry-run in CI.",
+      "proof": [
+        "file:runtime/scripts/release/dry-run.ts",
+        "file:.github/workflows/release.yml"
+      ],
+      "reviewed": "2026-10-02",
+      "status": "relu",
+      "reviewer": "agent",
+      "tasks": [
+        "4.9"
+      ],
+      "surfaces": [
+        "landing"
+      ]
+    },
+    {
+      "id": "page.no-third-party",
+      "fr": "Cette page n'envoie aucune requête vers un tiers.",
+      "en": "This page makes no request to a third party.",
+      "proof": [
+        "test:assert_landing_no_third_party_request"
+      ],
+      "reviewed": "2026-10-02",
+      "status": "relu",
+      "reviewer": "agent",
+      "surfaces": [
+        "landing"
+      ]
+    },
+    {
+      "id": "page.no-tracker",
+      "fr": "Cette page n'utilise aucun traceur.",
+      "en": "This page uses no trackers.",
+      "proof": [
+        "test:assert_landing_no_third_party_tracker",
+        "test:assert_landing_no_cookie"
+      ],
+      "reviewed": "2026-10-02",
+      "status": "relu",
+      "reviewer": "agent",
+      "surfaces": [
+        "landing"
+      ]
+    },
+    {
+      "id": "how.describe",
+      "fr": "Tu dis à ton IA, en MCP, les données que tu veux et le site visé.",
+      "en": "You tell your AI, over MCP, which data you want and from which site.",
+      "proof": [
+        "page:reference/mcp"
+      ],
+      "reviewed": "2026-10-02",
+      "status": "relu",
+      "reviewer": "agent",
+      "tasks": [
+        "3.2"
+      ],
+      "surfaces": [
+        "landing"
+      ]
+    },
+    {
+      "id": "how.investigate",
+      "fr": "SYM enquête, cherche la méthode la moins chère et te montre le schéma ; il attend ton accord avant de collecter.",
+      "en": "SYM investigates, looks for the cheapest method, shows you the schema and waits for your OK before collecting.",
+      "proof": [
+        "inv:INV2",
+        "test:assert_cheapest_first_logged",
+        "test:assert_schema_gate_before_trials"
+      ],
+      "reviewed": "2026-10-02",
+      "status": "relu",
+      "reviewer": "agent",
+      "tasks": [
+        "2.3"
+      ],
+      "surfaces": [
+        "landing"
+      ]
+    },
+    {
+      "id": "how.run",
+      "fr": "L'API tourne chez toi : tu l'appelles à la demande ou sur un planning.",
+      "en": "The API runs on your server: call it on demand or on a schedule.",
+      "proof": [
+        "page:reference/rest"
+      ],
+      "reviewed": "2026-10-02",
+      "status": "relu",
+      "reviewer": "agent",
+      "tasks": [
+        "3.1"
+      ],
+      "surfaces": [
+        "landing"
+      ]
+    },
+    {
+      "id": "cost.ladder",
+      "fr": "SYM essaie d'abord une requête simple, puis un vrai navigateur, puis un agent, et seulement si la méthode précédente ne suffit pas.",
+      "en": "SYM tries a plain request first, then a real browser, then an agent, and only when the previous method falls short.",
+      "proof": [
+        "inv:INV2",
+        "test:assert_cheapest_first_logged"
+      ],
+      "reviewed": "2026-10-02",
+      "status": "relu",
+      "reviewer": "agent",
+      "surfaces": [
+        "landing"
+      ]
+    },
+    {
+      "id": "cost.replay",
+      "fr": "Quand la stratégie le permet, l'API se rejoue sans modèle d'IA.",
+      "en": "When the strategy allows it, the API replays without an AI model.",
+      "proof": [
+        "test:assert_replay_no_llm_with_rules"
+      ],
+      "reviewed": "2026-10-02",
+      "status": "relu",
+      "reviewer": "agent",
+      "tasks": [
+        "2.10"
+      ],
+      "surfaces": [
+        "landing"
+      ]
+    },
+    {
+      "id": "far.hook",
+      "fr": "Là où les autres lâchent, SYM 👻 continue.",
+      "en": "Where others give up, SYM 👻 keeps going.",
+      "proof": [
+        "decision:D-46"
+      ],
+      "reviewed": "2026-10-02",
+      "status": "relu",
+      "reviewer": "agent",
+      "surfaces": [
+        "landing"
+      ],
+      "note": "Accroche de « Il va loin » (22 § 2.6) : phrase comparative implicite, couverte par la garde juridique de 22 § 4 (relecture juridique au GO). Ce que « continuer » veut dire est borné par les cartes far.* et par INV5, INV6, INV11."
+    },
+    {
+      "id": "far.sub",
+      "fr": "Pas de sermon, pas de « je ne peux pas ». Il cherche, il trouve, il te livre une API.",
+      "en": "No lectures, no “I can't”. It digs, it finds, it hands you an API.",
+      "proof": [
+        "decision:D-46",
+        "inv:INV1",
+        "inv:INV2"
+      ],
+      "reviewed": "2026-10-02",
+      "status": "relu",
+      "reviewer": "agent",
+      "surfaces": [
+        "landing"
+      ],
+      "note": "Sous-titre de « Il va loin » (22 § 2.6, D-46). Quand un site refuse vraiment, SYM le dit et propose une autre piste (faq.anysite, INV6) : la phrase vise le ton, pas une promesse de passer partout."
+    },
+    {
+      "id": "far.js",
+      "fr": "Il ouvre un vrai navigateur quand une simple requête ne suffit pas.",
+      "en": "It opens a real browser when a plain request isn't enough.",
+      "proof": [
+        "inv:INV2",
+        "test:assert_cheapest_first_logged"
+      ],
+      "reviewed": "2026-10-02",
+      "status": "relu",
+      "reviewer": "agent",
+      "surfaces": [
+        "landing"
+      ]
+    },
+    {
+      "id": "far.session",
+      "fr": "Il passe par ta session, depuis ton navigateur, grâce à l'extension Chrome.",
+      "en": "It works through your own session, from your own browser, with the Chrome extension.",
+      "proof": [
+        "inv:INV5",
+        "test:assert_tunnel_single_user",
+        "page:guides/extension-et-tunnel"
+      ],
+      "reviewed": "2026-10-02",
+      "status": "relu",
+      "reviewer": "agent",
+      "surfaces": [
+        "landing"
+      ]
+    },
+    {
+      "id": "far.agent",
+      "fr": "Un agent se débrouille, puis tout est compilé en API qui tourne sans IA quand la stratégie le permet.",
+      "en": "An agent figures it out, then everything is compiled into an API that runs without AI when the strategy allows it.",
+      "proof": [
+        "page:explications/architecture",
+        "test:assert_replay_no_llm_with_rules"
+      ],
+      "reviewed": "2026-10-02",
+      "status": "relu",
+      "reviewer": "agent",
+      "tasks": [
+        "2.4",
+        "2.10"
+      ],
+      "surfaces": [
+        "landing"
+      ],
+      "note": "Formulation prudente imposée par 22 § 3.2 : « quand la stratégie le permet »."
+    },
+    {
+      "id": "far.repair",
+      "fr": "Il reprend à l'étape qui casse et répare tout seul.",
+      "en": "It resumes at the step that broke and repairs it on its own.",
+      "proof": [
+        "test:assert_step_patch_bounded"
+      ],
+      "reviewed": "2026-10-02",
+      "status": "relu",
+      "reviewer": "agent",
+      "tasks": [
+        "2.12"
+      ],
+      "surfaces": [
+        "landing"
+      ]
+    },
+    {
+      "id": "install.render",
+      "fr": "Render crée la base, le serveur et le worker à partir du modèle du dépôt.",
+      "en": "Render creates the database, the server and the worker from the template in the repository.",
+      "proof": [
+        "file:render.yaml"
+      ],
+      "reviewed": "2026-10-02",
+      "status": "relu",
+      "reviewer": "agent",
+      "surfaces": [
+        "landing"
+      ]
+    },
+    {
+      "id": "install.docker",
+      "fr": "Docker Compose lance PostgreSQL, les migrations, le serveur et le worker sur ta machine.",
+      "en": "Docker Compose starts PostgreSQL, the migrations, the server and the worker on your machine.",
+      "proof": [
+        "file:runtime/docker-compose.yml",
+        "page:tutoriels/quickstart"
+      ],
+      "reviewed": "2026-10-02",
+      "status": "relu",
+      "reviewer": "agent",
+      "surfaces": [
+        "landing"
+      ]
+    },
+    {
+      "id": "install.docker.memory",
+      "fr": "Compte environ 4 Go de mémoire pour Docker : l'image embarque Chromium.",
+      "en": "Allow about 4 GB of memory for Docker: the image bundles Chromium.",
+      "proof": [
+        "page:tutoriels/quickstart"
+      ],
+      "reviewed": "2026-10-02",
+      "status": "relu",
+      "reviewer": "agent",
+      "surfaces": [
+        "landing"
+      ]
+    },
+    {
+      "id": "install.railway",
+      "fr": "Le modèle Railway est fourni au mieux, sans garantie : c'est une cible secondaire.",
+      "en": "The Railway template is provided on a best-effort basis, with no guarantee: it is a secondary target.",
+      "proof": [
+        "file:runtime/deploy/railway/template.yaml",
+        "page:guides/autres-hebergeurs"
+      ],
+      "reviewed": "2026-10-02",
+      "status": "relu",
+      "reviewer": "agent",
+      "surfaces": [
+        "landing"
+      ]
+    },
+    {
+      "id": "install.mcp",
+      "fr": "Ajoute l'adresse /mcp de ton instance à ton client MCP, avec ta clé d'API.",
+      "en": "Add your instance's /mcp address to your MCP client, with your API key.",
+      "proof": [
+        "page:reference/mcp"
+      ],
+      "reviewed": "2026-10-02",
+      "status": "relu",
+      "reviewer": "agent",
+      "tasks": [
+        "3.2"
+      ],
+      "surfaces": [
+        "landing"
+      ]
+    },
+    {
+      "id": "install.demo",
+      "fr": "Pas encore de modèle d'IA ? Le mode démo n'en demande pas.",
+      "en": "No AI model yet? The demo mode doesn't need one.",
+      "proof": [
+        "page:tutoriels/quickstart"
+      ],
+      "reviewed": "2026-10-02",
+      "status": "relu",
+      "reviewer": "agent",
+      "tasks": [
+        "3.11"
+      ],
+      "surfaces": [
+        "landing"
+      ]
+    },
+    {
+      "id": "faq.free",
+      "fr": "Le logiciel, oui : il est sous licence AGPL-3.0. Tu paies ton hébergement et ton modèle d'IA.",
+      "en": "The software is: it is licensed AGPL-3.0. You pay for your hosting and your AI model.",
+      "proof": [
+        "file:LICENSE"
+      ],
+      "reviewed": "2026-10-02",
+      "status": "relu",
+      "reviewer": "agent",
+      "surfaces": [
+        "landing"
+      ]
+    },
+    {
+      "id": "faq.data",
+      "fr": "Nulle part chez nous. Ton instance parle aux sites visés et au modèle que tu choisis. Aucune télémétrie, ni cookie ni traceur sur cette page.",
+      "en": "Nowhere on our side. Your instance talks to the sites you target and to the model you choose. No telemetry, and no cookie or tracker on this page.",
+      "proof": [
+        "inv:INV9",
+        "test:assert_no_telemetry",
+        "page:explications/telemetrie",
+        "test:assert_landing_no_cookie"
+      ],
+      "reviewed": "2026-10-02",
+      "status": "relu",
+      "reviewer": "agent",
+      "surfaces": [
+        "landing"
+      ],
+      "note": "Pas liée à 4.10 (télémétrie opt-in, « après V1.0, si retenu ») : la porte du GO demanderait une livraison qui n'aura pas lieu avant V1.0. Si 4.10 est livrée, réécrire « Aucune télémétrie » (« aucune télémétrie par défaut ») et repasser l'entrée « à relire » (22 § 3.2)."
+    },
+    {
+      "id": "faq.anysite",
+      "fr": "Aucun pourcentage tant qu'il n'est pas mesuré. Quand un site bloque vraiment, SYM le dit tout de suite et propose une autre piste.",
+      "en": "No percentage until one has been measured. When a site really blocks access, SYM tells you right away and suggests another route.",
+      "proof": [
+        "inv:INV6",
+        "page:explications/usage-responsable"
+      ],
+      "reviewed": "2026-10-02",
+      "status": "relu",
+      "reviewer": "agent",
+      "surfaces": [
+        "landing"
+      ]
+    },
+    {
+      "id": "faq.ready",
+      "fr": "C'est une pré-version : tu peux l'installer et l'essayer, mais ne bâtis rien de critique dessus pour l'instant.",
+      "en": "It is a pre-release: you can install and try it, but don't build anything critical on it yet.",
+      "proof": [
+        "file:.github/README.md"
+      ],
+      "reviewed": "2026-10-02",
+      "status": "relu",
+      "reviewer": "agent",
+      "surfaces": [
+        "landing"
+      ]
+    },
+    {
+      "id": "faq.account",
+      "fr": "Pas chez nous. Render ou Railway demandent le leur ; avec Docker, aucun.",
+      "en": "Not with us. Render or Railway ask for theirs; with Docker, none.",
+      "proof": [
+        "file:runtime/docker-compose.yml",
+        "file:render.yaml"
+      ],
+      "reviewed": "2026-10-02",
+      "status": "relu",
+      "reviewer": "agent",
+      "surfaces": [
+        "landing"
+      ]
+    },
+    {
+      "id": "faq.model",
+      "fr": "La tienne, distante ou locale, tant qu'elle expose une API de chat standard. Le mode démo n'en demande pas.",
+      "en": "Yours, remote or local, as long as it exposes a standard chat API. The demo mode doesn't need one.",
+      "proof": [
+        "page:guides/modele-llm"
+      ],
+      "reviewed": "2026-10-02",
+      "status": "relu",
+      "reviewer": "agent",
+      "surfaces": [
+        "landing"
+      ]
+    },
+    {
+      "id": "faq.cost",
+      "fr": "Une enquête consomme des appels de modèle ; le rejeu peut n'en consommer aucun quand la stratégie le permet. Le coût sera publié quand il aura été mesuré.",
+      "en": "An investigation uses model calls; a replay can use none when the strategy allows it. The cost will be published once it has been measured.",
+      "proof": [
+        "test:assert_replay_no_llm_with_rules"
+      ],
+      "reviewed": "2026-10-02",
+      "status": "relu",
+      "reviewer": "agent",
+      "surfaces": [
+        "landing"
+      ]
+    },
+    {
+      "id": "faq.agpl",
+      "fr": "C'est une question de licence : fais-la relire par un avocat. Le texte complet est dans le dépôt.",
+      "en": "That is a licensing question: have a lawyer review it. The full text is in the repository.",
+      "proof": [
+        "file:LICENSE"
+      ],
+      "reviewed": "2026-10-02",
+      "status": "relu",
+      "reviewer": "agent",
+      "surfaces": [
+        "landing"
+      ]
+    },
+    {
+      "id": "faq.ai",
+      "fr": "Le dépôt est écrit avec l'aide d'agents d'IA, puis relu, testé et audité.",
+      "en": "The repository is written with the help of AI agents, then reviewed, tested and audited.",
+      "proof": [
+        "file:.github/workflows/ci.yml"
+      ],
+      "reviewed": "2026-10-02",
+      "status": "relu",
+      "reviewer": "agent",
+      "tasks": [
+        "4.3"
+      ],
+      "surfaces": [
+        "landing"
+      ],
+      "note": "Transparence (u7 D11, 22 § 2.5). « audité » devient vrai à la livraison de 4.3 : le GO refuse tant que 4.3 manque."
+    },
+    {
+      "id": "faq.contribute",
+      "fr": "Oui, à partir de la première release : c'est là que s'ouvrent les contributions externes. Le guide de contribution donne les règles (signature DCO, CLA pour le cœur).",
+      "en": "Yes, from the first release: that is when outside contributions open. The contributing guide sets out the rules (DCO sign-off, CLA for the core).",
+      "proof": [
+        "file:runtime/CONTRIBUTING.md",
+        "file:runtime/DCO.md",
+        "file:runtime/CLA.md"
+      ],
+      "reviewed": "2026-10-02",
+      "status": "relu",
+      "reviewer": "agent",
+      "tasks": [
+        "4.5",
+        "4.7"
+      ],
+      "surfaces": [
+        "landing"
+      ],
+      "note": "FAQ « Je peux contribuer ? » (22 § 2.7). CONTRIBUTING.md : contributions externes fermées jusqu'à la première release (4.5) ; CLA provisoire (4.7)."
+    },
+    {
+      "id": "compare.row.hosting",
+      "fr": "Où tourne l'outil",
+      "en": "Where the tool runs",
+      "proof": [
+        "decision:D-46"
+      ],
+      "reviewed": "2026-10-02",
+      "status": "à relire",
+      "reviewer": "agent",
+      "surfaces": [
+        "landing-compare"
+      ],
+      "note": "Tableau par catégories, derrière le drapeau de build LANDING_COMPARE, éteint par défaut : jamais affiché avant relecture d'un avocat (22 § 2.2, u7 R13)."
+    },
+    {
+      "id": "compare.row.data",
+      "fr": "Où vivent les données",
+      "en": "Where the data lives",
+      "proof": [
+        "decision:D-46"
+      ],
+      "reviewed": "2026-10-02",
+      "status": "à relire",
+      "reviewer": "agent",
+      "surfaces": [
+        "landing-compare"
+      ]
+    },
+    {
+      "id": "compare.row.repair",
+      "fr": "Quand le site change",
+      "en": "When the site changes",
+      "proof": [
+        "decision:D-46"
+      ],
+      "reviewed": "2026-10-02",
+      "status": "à relire",
+      "reviewer": "agent",
+      "surfaces": [
+        "landing-compare"
+      ]
+    },
+    {
+      "id": "compare.script.hosting",
+      "fr": "Sur ta machine",
+      "en": "On your machine",
+      "proof": [
+        "decision:D-46"
+      ],
+      "reviewed": "2026-10-02",
+      "status": "à relire",
+      "reviewer": "agent",
+      "surfaces": [
+        "landing-compare"
+      ]
+    },
+    {
+      "id": "compare.script.data",
+      "fr": "Chez toi",
+      "en": "With you",
+      "proof": [
+        "decision:D-46"
+      ],
+      "reviewed": "2026-10-02",
+      "status": "à relire",
+      "reviewer": "agent",
+      "surfaces": [
+        "landing-compare"
+      ]
+    },
+    {
+      "id": "compare.script.repair",
+      "fr": "Tu le répares à la main",
+      "en": "You fix it by hand",
+      "proof": [
+        "decision:D-46"
+      ],
+      "reviewed": "2026-10-02",
+      "status": "à relire",
+      "reviewer": "agent",
+      "surfaces": [
+        "landing-compare"
+      ]
+    },
+    {
+      "id": "compare.service.hosting",
+      "fr": "Chez le fournisseur",
+      "en": "At the provider",
+      "proof": [
+        "decision:D-46"
+      ],
+      "reviewed": "2026-10-02",
+      "status": "à relire",
+      "reviewer": "agent",
+      "surfaces": [
+        "landing-compare"
+      ]
+    },
+    {
+      "id": "compare.service.data",
+      "fr": "Chez le fournisseur, selon son contrat",
+      "en": "At the provider, under its contract",
+      "proof": [
+        "decision:D-46"
+      ],
+      "reviewed": "2026-10-02",
+      "status": "à relire",
+      "reviewer": "agent",
+      "surfaces": [
+        "landing-compare"
+      ]
+    },
+    {
+      "id": "compare.service.repair",
+      "fr": "Selon l'offre",
+      "en": "Depends on the offer",
+      "proof": [
+        "decision:D-46"
+      ],
+      "reviewed": "2026-10-02",
+      "status": "à relire",
+      "reviewer": "agent",
+      "surfaces": [
+        "landing-compare"
+      ]
+    },
+    {
+      "id": "compare.sym.hosting",
+      "fr": "Sur ton serveur : Render, Docker ou ton propre hébergeur",
+      "en": "On your server: Render, Docker or your own host",
+      "proof": [
+        "file:render.yaml",
+        "file:runtime/docker-compose.yml"
+      ],
+      "reviewed": "2026-10-02",
+      "status": "à relire",
+      "reviewer": "agent",
+      "surfaces": [
+        "landing-compare"
+      ]
+    },
+    {
+      "id": "compare.sym.data",
+      "fr": "Chez toi, chiffrées au repos",
+      "en": "With you, encrypted at rest",
+      "proof": [
+        "inv:INV8"
+      ],
+      "reviewed": "2026-10-02",
+      "status": "à relire",
+      "reviewer": "agent",
+      "surfaces": [
+        "landing-compare"
+      ]
+    },
+    {
+      "id": "compare.sym.repair",
+      "fr": "Réparation pas à pas, bornée par le schéma validé",
+      "en": "Step-by-step repair, bounded by the approved schema",
+      "proof": [
+        "test:assert_step_patch_bounded"
+      ],
+      "reviewed": "2026-10-02",
+      "status": "à relire",
+      "reviewer": "agent",
+      "tasks": [
+        "2.12"
+      ],
+      "surfaces": [
+        "landing-compare"
+      ]
+    },
+    {
+      "id": "responsible.robots",
+      "fr": "robots.txt est toujours respecté. Il n'existe aucune option pour l'ignorer.",
+      "en": "robots.txt is always respected. There is no option to ignore it.",
+      "proof": [
+        "inv:INV11",
+        "test:assert_robots_respected"
+      ],
+      "reviewed": "2026-10-02",
+      "status": "relu",
+      "reviewer": "agent",
+      "surfaces": [
+        "responsible-use"
+      ]
+    },
+    {
+      "id": "responsible.challenge",
+      "fr": "Aucun captcha n'est résolu, ni par SYM ni par un service tiers.",
+      "en": "No captcha is ever solved, by SYM or by any third-party service.",
+      "proof": [
+        "inv:INV6"
+      ],
+      "reviewed": "2026-10-02",
+      "status": "relu",
+      "reviewer": "agent",
+      "surfaces": [
+        "responsible-use"
+      ]
+    },
+    {
+      "id": "responsible.user-agent",
+      "fr": "SYM envoie la chaîne User-Agent standard de la version de Chromium embarquée (sans le marqueur HeadlessChrome), la même pour son client HTTP, sans rotation ni falsification d'empreinte. Active l'identification de l'instance pour te nommer auprès des sites.",
+      "en": "SYM sends the standard User-Agent string of its bundled Chromium version (without the HeadlessChrome marker), the same one for its HTTP client, with no rotation and no fingerprint spoofing. Turn on instance identification to name yourself to sites.",
+      "proof": [
+        "inv:INV6",
+        "test:assert_user_agent_engine_real",
+        "test:assert_no_fingerprint_spoofing",
+        "decision:D-39"
+      ],
+      "reviewed": "2026-10-02",
+      "status": "bloqué",
+      "reviewer": "agent",
+      "surfaces": [
+        "responsible-use"
+      ],
+      "note": "Publication bloquée tant que la divergence des client hints (Sec-CH-UA porte encore HeadlessChrome) n'est pas arbitrée (17 § 12)."
+    },
+    {
+      "id": "responsible.refusal",
+      "fr": "Si un site refuse, SYM s'arrête : pas de nouvelle IP, pas d'autre compte pour insister.",
+      "en": "If a site refuses, SYM stops: no new IP, no other account to push through.",
+      "proof": [
+        "inv:INV5",
+        "inv:INV6"
+      ],
+      "reviewed": "2026-10-02",
+      "status": "relu",
+      "reviewer": "agent",
+      "surfaces": [
+        "responsible-use"
+      ]
+    },
+    {
+      "id": "responsible.consent",
+      "fr": "Rien ne part chez nous sans ton accord explicite : aucune télémétrie par défaut, aucune vérification de version.",
+      "en": "Nothing is sent to us without your explicit consent: no telemetry by default, no update check.",
+      "proof": [
+        "inv:INV9",
+        "test:assert_no_telemetry"
+      ],
+      "reviewed": "2026-10-02",
+      "status": "relu",
+      "reviewer": "agent",
+      "tasks": [
+        "4.10"
+      ],
+      "surfaces": [
+        "responsible-use"
+      ]
     },
     {
       "id": "does-schema-first",
@@ -365,157 +1539,6 @@
       "reviewed": "2026-10-03",
       "status": "relu",
       "note": "Réglage du dépôt public scrap-yo-mama/sym constaté le 2026-10-03 (API GitHub private-vulnerability-reporting : enabled)."
-    },
-    {
-      "id": "no-signup",
-      "surfaces": [
-        "readme"
-      ],
-      "en": "Open source and self-hosted: nothing to sign up for.",
-      "fr": "Libre et auto-hébergé : rien à quoi t'inscrire.",
-      "proof": [
-        "assert_quickstart_no_egress"
-      ],
-      "reviewed": "2026-10-02",
-      "status": "relu"
-    },
-    {
-      "id": "built-with-ai",
-      "surfaces": [
-        "readme"
-      ],
-      "en": "Built with AI assistance, reviewed by humans.",
-      "fr": "Fait avec l'aide d'une IA, relu par des humains.",
-      "proof": [
-        ".github/workflows/ci.yml",
-        ".github/CONTRIBUTING.md"
-      ],
-      "reviewed": "2026-10-03",
-      "status": "relu",
-      "note": "Mots de la planche (D-60), remplacent « Much of this code and documentation was written with AI assistance… » : chaque fusion dans main est relue avant d'entrer, puis passe la CI."
-    },
-    {
-      "id": "quickstart-replayed-by-ci",
-      "surfaces": [
-        "readme"
-      ],
-      "en": "The commands are the ones the CI replays on a blank instance.",
-      "fr": "Les commandes sont celles que la CI rejoue sur une instance vierge.",
-      "proof": [
-        "assert_quickstart_replayed",
-        "assert_quickstart_compose_parity",
-        "runtime/tests/quickstart.integration.test.ts",
-        "runtime/tests/vitrine/readme.unit.test.ts"
-      ],
-      "reviewed": "2026-10-02",
-      "status": "relu"
-    },
-    {
-      "id": "robots-always-respected",
-      "surfaces": [
-        "responsible-use"
-      ],
-      "en": "robots.txt is always respected. There is no option to ignore it.",
-      "fr": "robots.txt est toujours respecté. Il n'existe aucune option pour l'ignorer.",
-      "proof": [
-        "INV11",
-        "assert_robots_respected"
-      ],
-      "reviewed": "2026-10-02",
-      "status": "relu"
-    },
-    {
-      "id": "no-challenge-solving",
-      "surfaces": [
-        "responsible-use"
-      ],
-      "en": "No captcha is ever solved, by SYM or by any third-party service.",
-      "fr": "Aucun captcha n'est résolu, ni par SYM ni par un service tiers.",
-      "proof": [
-        "INV6",
-        "assert_no_circumvention"
-      ],
-      "reviewed": "2026-10-02",
-      "status": "relu"
-    },
-    {
-      "id": "user-agent-engine-real",
-      "surfaces": [
-        "responsible-use"
-      ],
-      "en": "SYM sends the standard User-Agent string of its bundled Chromium version (without the HeadlessChrome marker), the same one for its HTTP client, with no rotation and no fingerprint spoofing. Turn on instance identification to name yourself to sites.",
-      "fr": "SYM envoie la chaîne User-Agent standard de la version de Chromium embarquée (sans le marqueur HeadlessChrome), la même pour son client HTTP, sans rotation ni falsification d'empreinte. Active l'identification de l'instance pour te nommer auprès des sites.",
-      "proof": [
-        "INV6",
-        "assert_user_agent_engine_real",
-        "assert_no_fingerprint_spoofing"
-      ],
-      "reviewed": "2026-10-02",
-      "status": "bloqué",
-      "note": "Publication bloquée tant que la divergence des client hints n'est pas arbitrée (17 §12, D-39)."
-    },
-    {
-      "id": "stops-when-refused",
-      "surfaces": [
-        "responsible-use"
-      ],
-      "en": "If a site refuses, SYM stops: no new IP, no other account to push through.",
-      "fr": "Si un site refuse, SYM s'arrête : pas de nouvelle IP, pas d'autre compte pour insister.",
-      "proof": [
-        "INV6",
-        "assert_no_ip_change_after_refusal",
-        "assert_no_circumvention"
-      ],
-      "reviewed": "2026-10-02",
-      "status": "relu"
-    },
-    {
-      "id": "no-telemetry-by-default",
-      "surfaces": [
-        "responsible-use"
-      ],
-      "en": "Nothing is sent to us without your explicit consent: no telemetry by default, no update check.",
-      "fr": "Rien ne part chez nous sans ton accord explicite : aucune télémétrie par défaut, aucune vérification de version.",
-      "proof": [
-        "INV9",
-        "assert_no_telemetry"
-      ],
-      "reviewed": "2026-10-02",
-      "status": "relu",
-      "task": "4.10"
-    },
-    {
-      "id": "repo-description",
-      "surfaces": [
-        "repo"
-      ],
-      "en": "Self-hosted, open-source web data over MCP: describe the data, approve the schema, get an API that repairs itself and stops when a site says no.",
-      "fr": "Données web libres et auto-hébergées, par MCP : décris les données, valide le schéma, obtiens une API qui se répare et s'arrête quand un site dit non.",
-      "proof": [
-        "INV1",
-        "INV11",
-        "assert_robots_respected"
-      ],
-      "reviewed": "2026-10-02",
-      "status": "à relire",
-      "task": "3.2",
-      "note": "Promet le serveur MCP (3.2) et la réparation, pas encore livrés : à relire au GO de la release (4.5), avant d'appliquer la description au dépôt et à l'étiquette OCI."
-    },
-    {
-      "id": "image-description-prerelease",
-      "surfaces": [
-        "repo"
-      ],
-      "en": "Scrapyomama (SYM): self-hosted, open-source web data runtime. Pre-release: the README says what is delivered.",
-      "fr": "Scrapyomama (SYM) : runtime de données web libre et auto-hébergé. Pré-version : le README dit ce qui est livré.",
-      "proof": [
-        "LICENSE",
-        "runtime/deploy/docker-compose.prod.yml",
-        ".github/README.md"
-      ],
-      "reviewed": "2026-10-02",
-      "status": "relu",
-      "note": "Description de l'étiquette OCI tant que repo-description n'est pas relue."
     }
   ]
 }

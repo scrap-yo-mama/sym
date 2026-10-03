@@ -921,6 +921,35 @@ paths:
           $ref: '#/components/responses/Error'
         '409':
           $ref: '#/components/responses/Error'
+  /api/apis/{slug}/resolved-rules:
+    get:
+      operationId: getResolvedRules
+      tags: [apis]
+      summary: Aperçu de l'ensemble de règles résolu pour l'API (19 § 2, 19b § 2, tâche 2.10) ; propriétaire seul, 404 sinon
+      parameters:
+        - $ref: '#/components/parameters/Slug'
+        - name: role
+          in: query
+          required: false
+          description: Usage du plafond RULES_MAX_TOKENS (investigate et repair 3 000, embedded 1 000) ; défaut investigate.
+          schema:
+            type: string
+            enum: [investigate, repair, embedded]
+      responses:
+        '200':
+          description: Règles injectées, skills listés, jetons et ce que les plafonds ont retiré (aucun contenu de règle).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResolvedRules'
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
   /api/apis/{slug}/status-events:
     get:
       operationId: listStatusEvents
@@ -4540,6 +4569,106 @@ components:
               description: Entrée du run ; absente pour l'admin sur un run d'autrui.
               type: object
               additionalProperties: true
+            quality:
+              description: >-
+                Fiche de qualité du run (tâche 2.12, 19 § 3) : profil calculé par le code après la garde de classification et
+                Ajv ; un champ `x-personal` n'a que des formes. Absente pour l'admin sur un run d'autrui.
+              oneOf:
+                - $ref: '#/components/schemas/RunQuality'
+                - type: 'null'
+            judge:
+              description: Avis CONSULTATIF du juge (19 § 3) ; il ne change jamais le statut ni la version.
+              oneOf:
+                - $ref: '#/components/schemas/RunJudge'
+                - type: 'null'
+    RunQuality:
+      type: object
+      required: [items, duplicates, duplicate_rate, fields]
+      properties:
+        items:
+          type: integer
+        duplicates:
+          type: integer
+        duplicate_rate:
+          type: number
+        fields:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/FieldQuality'
+    FieldQuality:
+      type: object
+      required: [type, personal, suspected_personal, fill_rate, sentinel_rate, top_pattern, unique_rate, constant, length]
+      properties:
+        type:
+          type: string
+        personal:
+          type: boolean
+        suspected_personal:
+          type: boolean
+        fill_rate:
+          type: number
+        sentinel_rate:
+          type: number
+        top_pattern:
+          type: [string, 'null']
+        patterns:
+          type: object
+          additionalProperties:
+            type: number
+        unique_rate:
+          type: number
+        distinct:
+          type: integer
+        constant:
+          type: boolean
+        length:
+          type: object
+          required: [min, max, mean]
+          properties:
+            min:
+              type: number
+            max:
+              type: number
+            mean:
+              type: number
+        min:
+          description: Champs non personnels seulement.
+          type: number
+        max:
+          description: Champs non personnels seulement.
+          type: number
+    RunJudge:
+      type: object
+      additionalProperties: false
+      required: [flag, trigger, verdicts]
+      properties:
+        flag:
+          type: boolean
+        trigger:
+          type: string
+          enum: [investigation, repair, anomaly]
+        at:
+          type: string
+          format: date-time
+        verdicts:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [field, verdict, indices, reason]
+            properties:
+              field:
+                type: string
+              verdict:
+                type: string
+                enum: [ok, wrong, unsure]
+              indices:
+                type: array
+                items:
+                  type: integer
+              reason:
+                type: string
+                maxLength: 200
     RunLogLine:
       type: object
       additionalProperties: false
@@ -4627,6 +4756,57 @@ components:
               items:
                 type: object
                 additionalProperties: true
+    ResolvedRules:
+      description: Ensemble résolu des règles et skills d'une API (19 § 2) ; noms, versions, empreintes et jetons, jamais le contenu.
+      type: object
+      additionalProperties: false
+      required: [role, budget_tokens, tokens, rules, skills, truncated, skills_listing_truncated, skills_tokens]
+      properties:
+        role:
+          type: string
+          enum: [investigate, repair, embedded]
+        budget_tokens:
+          type: integer
+        tokens:
+          type: integer
+        rules:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [name, version, level, tokens, sha256]
+            properties:
+              name: { type: string }
+              version: { type: integer }
+              level: { type: string, enum: [instance, domain, api] }
+              tokens: { type: integer }
+              sha256: { type: string }
+        skills:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [name, version, description, sha256]
+            properties:
+              name: { type: string }
+              version: { type: integer }
+              description: { type: [string, 'null'] }
+              sha256: { type: string }
+        truncated:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [name, version, level, tokens]
+            properties:
+              name: { type: string }
+              version: { type: integer }
+              level: { type: string, enum: [instance, domain, api] }
+              tokens: { type: integer }
+        skills_listing_truncated:
+          type: boolean
+        skills_tokens:
+          type: integer
     StrategyVersionList:
       type: object
       additionalProperties: false
@@ -5081,6 +5261,15 @@ components:
           $ref: '#/components/schemas/LlmRole'
         agent:
           $ref: '#/components/schemas/LlmRole'
+        judge:
+          description: Juge de qualité consultatif (tâche 2.12, 19 § 3), actif seulement avec `judge.enabled`.
+          $ref: '#/components/schemas/LlmRole'
+        reflect:
+          description: Propositions de règles, toujours validées par un humain (19 § 5).
+          $ref: '#/components/schemas/LlmRole'
+        embed:
+          description: Embeddings de l'étage 4 de la mémoire du catalogue (option désactivée, `catalog_memory.embeddings`).
+          $ref: '#/components/schemas/LlmRole'
     LlmProviderBase:
       type: object
       required: [id, preset, base_url]
@@ -5157,6 +5346,22 @@ components:
             retention_days:
               type: integer
               minimum: 1
+        judge:
+          description: >-
+            Juge consultatif (tâche 2.12, 19 § 3) : désactivé par défaut, activé par l'admin avec l'avertissement « juge non
+            étalonné, avis consultatif » ; son fournisseur s'ajoute à la mention fournisseur.
+          type: object
+          additionalProperties: false
+          properties:
+            enabled:
+              type: boolean
+        catalog_memory:
+          description: Mémoire du catalogue (19 § 2) ; l'étage 4 par embeddings est une option désactivée (pgvector requis).
+          type: object
+          additionalProperties: false
+          properties:
+            embeddings:
+              type: boolean
     LlmSettings:
       allOf:
         - $ref: '#/components/schemas/LlmSettingsCommon'
@@ -5167,6 +5372,34 @@ components:
               type: array
               items:
                 $ref: '#/components/schemas/LlmProvider'
+            validated_models:
+              description: >-
+                Statut « modèle validé » du banc d'évaluation (15 § 11), en lecture seule : copie de eval/validated-models.json
+                (produit par `pnpm eval --level N2`). Un modèle configuré absent de la liste n'a jamais été mesuré : « non validé ».
+              type: array
+              readOnly: true
+              items:
+                $ref: '#/components/schemas/ValidatedModel'
+    ValidatedModel:
+      type: object
+      additionalProperties: false
+      required: [model_id, date, status, level]
+      properties:
+        model_id:
+          type: string
+        date:
+          type: string
+          format: date
+        status:
+          type: string
+          enum: [validated, not_validated]
+        level:
+          type: string
+          enum: [N2]
+        blocking_rules:
+          type: array
+          items:
+            type: string
     LlmSettingsWrite:
       allOf:
         - $ref: '#/components/schemas/LlmSettingsCommon'

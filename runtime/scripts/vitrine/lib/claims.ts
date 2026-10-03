@@ -10,7 +10,7 @@ import { normalize } from './text.ts';
 
 const STATUSES = ['relu', 'à relire', 'bloqué'] as const;
 type ClaimStatus = (typeof STATUSES)[number];
-const SURFACES = ['readme', 'landing', 'responsible-use', 'repo'] as const;
+const SURFACES = ['readme', 'landing', 'landing-compare', 'responsible-use', 'repo'] as const;
 export type Surface = (typeof SURFACES)[number];
 
 type Claim = {
@@ -26,6 +26,11 @@ type Claim = {
   /** Tâche liée : l'entrée repasse « à relire » à chaque livraison de cette tâche. */
   task?: string;
   note?: string;
+};
+
+/** Pages du site de doc générées à la construction (apps/docs/scripts/gen-reference.ts), non versionnées : leurs sources (chemins de runtime/). */
+const GENERATED_PAGE_SOURCES: Readonly<Record<string, readonly string[]>> = {
+  'reference/rest': ['packages/client/openapi/openapi.yaml', 'apps/docs/scripts/gen-reference.ts'],
 };
 
 export type ClaimsFile = { version: number; note?: string; claims: Claim[] };
@@ -68,7 +73,7 @@ export function claimProblems(file: ClaimsFile, context: ProofContext): string[]
   const seen = new Set<string>();
   for (const claim of file.claims) {
     const at = `claims.json « ${claim.id} »`;
-    if (!/^[a-z0-9-]+$/.test(claim.id)) problems.push(`${at} : identifiant invalide`);
+    if (!/^[a-z0-9][a-z0-9.-]*$/.test(claim.id)) problems.push(`${at} : identifiant invalide`);
     if (seen.has(claim.id)) problems.push(`${at} : identifiant en double`);
     seen.add(claim.id);
     if (!claim.en?.trim() || !claim.fr?.trim()) problems.push(`${at} : texte en ou fr manquant`);
@@ -87,7 +92,25 @@ export function claimProblems(file: ClaimsFile, context: ProofContext): string[]
     }
     if (claim.proof.length === 0) problems.push(`${at} : aucune preuve (une allégation sans preuve est interdite)`);
     for (const proof of claim.proof) {
-      if (/^INV\d+$/.test(proof)) {
+      // Preuves de la landing (tâche 4.11) : `inv:`, `test:`, `file:`, `page:`, `decision:` ; leur sens exact est contrôlé par la porte du GO (check:landing-go).
+      const prefixed = /^(inv|test|file|page|decision):(.+)$/.exec(proof);
+      if (prefixed) {
+        const [, kind = '', value = ''] = prefixed;
+        if (kind === 'inv') {
+          if (!context.invariants.has(value)) problems.push(`${at} : invariant ${value} absent de tests/invariants.json`);
+        } else if (kind === 'test') {
+          // Un test nommé de la landing peut être encore en test.todo avant le GO : la porte `check:landing-go` (tâche 4.11) l'exige alors vrai ; ici seul le nom est contrôlé.
+          if (!/^assert_[a-z0-9_]+$/.test(value)) problems.push(`${at} : nom de test ${value} invalide`);
+        } else if (kind === 'page') {
+          // Une page générée à la construction du site de doc (ignorée par git) est prouvée par ses sources : spécification et générateur.
+          const sources = GENERATED_PAGE_SOURCES[value];
+          if (sources) {
+            for (const source of sources) if (!context.exists(source)) problems.push(`${at} : page ${value} : source ${source} introuvable`);
+          } else if (!context.exists(`apps/docs/content/${value}.md`)) problems.push(`${at} : page ${value} introuvable`);
+        } else if (kind === 'decision') {
+          if (!/^D-\d+$/.test(value)) problems.push(`${at} : décision ${value} invalide`);
+        } else if (!context.exists(value)) problems.push(`${at} : preuve ${proof} introuvable`);
+      } else if (/^INV\d+$/.test(proof)) {
         if (!context.invariants.has(proof)) problems.push(`${at} : invariant ${proof} absent de tests/invariants.json`);
       } else if (/^assert_[a-z0-9_]+$/.test(proof)) {
         if (!new RegExp(`(?<![a-z0-9_])${proof}(?![a-z0-9_])`).test(context.testCorpus)) problems.push(`${at} : test ${proof} introuvable (aucun test réel, test.todo exclu)`);
@@ -114,13 +137,17 @@ export function unreviewedDisplayed(file: ClaimsFile, surfaceText: string): stri
 }
 
 /**
+ * Les libellés très courts (« Chez toi », « With you » : cellules du tableau comparatif de la landing) ne sont pas des phrases :
+ * moins de 12 caractères, ils ne sont pas comptés comme affichés (faux positifs dans n'importe quel texte).
+ */
+/**
  * Entrées du registre affichées sur `surface` (texte en ou fr présent) alors qu'elles ne portent pas cette surface : par
  * exemple un engagement « Usage responsable » recopié dans le README (D-46). Liste vide : conforme.
  */
 export function foreignClaimsDisplayed(file: ClaimsFile, surfaceText: string, surface: Surface): string[] {
   const haystack = normalize(surfaceText);
   return file.claims
-    .filter((claim) => !claim.surfaces.includes(surface) && [claim.en, claim.fr].some((text) => text.trim() !== '' && haystack.includes(normalize(text))))
+    .filter((claim) => !claim.surfaces.includes(surface) && [claim.en, claim.fr].some((text) => text.trim().length >= 12 && haystack.includes(normalize(text))))
     .map((claim) => `« ${claim.id} » (surfaces ${claim.surfaces.join(', ')}) est affichée sur la surface ${surface}`);
 }
 

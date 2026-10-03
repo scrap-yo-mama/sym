@@ -26,7 +26,7 @@ jobs:
         with:
           node-version-file: runtime/.node-version
       - run: pnpm install --frozen-lockfile
-      - run: 'echo "nightly : pas encore implémenté (k6, tests instables, N2) ; Node 26 du bac à sable : job security de ci.yml"'
+      - run: 'echo "nightly : pas encore implémenté (k6, tests instables ; banc N2 : clé BYO réelle à obtenir, lancement manuel pnpm eval --level N2, voir runtime/eval/README.md) ; Node 26 du bac à sable : job security de ci.yml"'
 
   # Tâche 5.0 (docs/modules.md) : frontières entre modules en RAPPORT seulement. Le job reste vert même avec des violations
   # (continue-on-error ; les règles de runtime/.dependency-cruiser.cjs sont toutes en `warn`) ; le rapport est publié en

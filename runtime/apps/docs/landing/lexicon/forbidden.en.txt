@@ -1,0 +1,54 @@
+# Forbidden lexicon, English (20 § 2.2, 22b § 1). One term per line; "[P]" promises, "[L]" limit terms; a term ending in "-" is a
+# stem (prefix). Normalization before comparing: case, accents, hyphens, non-breaking spaces. Provisional: 3.19 moves the full lists
+# to packages/i18n (forbidden.<language>.txt); the landing will then take their union. The English terms of P also apply in French.
+[P]
+undetectable
+undetected
+stealth
+bypass-
+circumvent-
+unblock-
+anti-detect
+evade
+evasion
+get around
+invisible to anti-bots
+never blocked
+solve captchas
+solving captchas
+human-like
+like a human
+unlimited
+no more blocks
+ghost mode
+like a ghost
+leave no trace
+under the radar
+unseen
+slip past
+sneak-
+invisible
+datadome
+cloudflare
+turnstile
+perimeterx
+akamai
+imperva
+incapsula
+kasada
+shape security
+recaptcha
+hcaptcha
+arkose
+funcaptcha
+geetest
+anticaptcha
+2captcha
+capsolver
+flaresolverr
+[L]
+captcha
+anti-bot
+fingerprint
+rotation
+residential

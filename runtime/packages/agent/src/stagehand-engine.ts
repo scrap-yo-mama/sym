@@ -19,12 +19,14 @@
 // - trace : une étape par outil d'action, avec la cible sémantique (rôle + nom accessible) des clics, lue par
 //   l'enregistreur (semantic-recorder.ts) : base de la compilation E6 → E5. Aucun contenu de page dans la trace.
 // Le contenu des pages reste une donnée non fiable : la consigne de l'utilisateur est la seule instruction ; Stagehand
-// garde son prompt système (mesuré tel quel au spike).
+// garde son prompt système (mesuré tel quel au spike), auquel s'ajoutent les règles Markdown (tâche 2.10, 18 §4.5) :
+// `systemPrompt` = <trusted_rules> et liste des skills (inséré par Stagehand dans <customInstructions>), `tools` =
+// { read_skill } exécuté dans notre processus, `integrations` (clients MCP) TOUJOURS vide en V1 (18 §5).
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Stagehand, type ModelConfiguration } from '@browserbasehq/stagehand';
-import type { AgentEngine, AgentRunContext, AgentRunResult, AgentRunStatus, AgentTask, AgentTraceStep } from '@runtime/core';
+import { READ_SKILL_TOOL, type AgentEngine, type AgentRunContext, type AgentRunResult, type AgentRunStatus, type AgentTask, type AgentTraceStep } from '@runtime/core';
 import { computeUsage, createRedactor, type CapabilityProfile, type ModelPrice, type RawUsage, type RedactConfig } from '@runtime/llm';
 import { z } from 'zod';
 import type { SemanticClick, SemanticRecorder } from './semantic-recorder.js';
@@ -233,6 +235,30 @@ export function stagehandTrace(actions: readonly StagehandAction[], clicks: read
   return steps;
 }
 
+/** Configuration de `stagehand.agent()` (18 §4.5, assert_stagehand_no_integrations) ; un client MCP fourni est refusé. */
+export function stagehandAgentConfig(task: AgentTask): {
+  readonly mode: 'dom';
+  readonly systemPrompt?: string;
+  readonly tools: { readonly read_skill: { readonly description: string; readonly inputSchema: z.ZodType; readonly execute: (args: { name?: unknown }) => Promise<string> } };
+  readonly integrations: readonly never[];
+} {
+  const extra = (task as unknown as { integrations?: unknown }).integrations;
+  if (extra !== undefined && !(Array.isArray(extra) && extra.length === 0)) throw new Error('integrations (clients MCP) interdites en V1 (18 §5)');
+  const rules = task.rules;
+  return {
+    mode: 'dom',
+    ...(rules === undefined || rules.systemPrompt === '' ? {} : { systemPrompt: rules.systemPrompt }),
+    tools: {
+      read_skill: {
+        description: READ_SKILL_TOOL.description,
+        inputSchema: z.object({ name: z.string().max(64) }),
+        execute: async (args) => (rules === undefined || typeof args.name !== 'string' ? 'skill_not_found' : rules.readSkill(args.name)),
+      },
+    },
+    integrations: [],
+  };
+}
+
 export class StagehandEngine implements AgentEngine {
   readonly id = 'stagehand' as const;
   readonly version = STAGEHAND_VERSION;
@@ -390,7 +416,8 @@ export class StagehandEngine implements AgentEngine {
       const page = stagehand.context.pages()[0] ?? (await stagehand.context.newPage());
       // `startUrl` vide : étape déléguée d'une stratégie E5, l'agent reprend la page où le script l'a laissée.
       if (task.startUrl !== '') await page.goto(task.startUrl, { waitUntil: 'domcontentloaded' });
-      const agent = stagehand.agent({ mode: 'dom' });
+      const { integrations: _none, ...agentConfig } = stagehandAgentConfig(task);
+      const agent = stagehand.agent(agentConfig as unknown as { mode: 'dom' });
       const result = await agent.execute({
         instruction: task.instruction,
         maxSteps: task.limits.maxSteps,

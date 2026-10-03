@@ -3,7 +3,7 @@
 /**
  * @file ApiCatalogTable.vue
  * @description Tableau du catalogue (06 § 2, planche Catalogue.dc.html : carte papier, nom puis domaine, en-têtes « API · STATUT · MODE · RÉSEAU ·
- * COÛT / RUN · DERNIER RUN », ligne action requise surlignée) : nom et description, statut et raison, exécution et réseau
+ * COÛT / RUN · DERNIER RUN », ligne action requise surlignée) : nom lisible (la description), domaine et slug, statut et raison, exécution et réseau
  * (la « colonne warning » ; pour une action requise, le titre de la tâche, même verbe que le bandeau de la fiche), dernier run, coût moyen (préfixe « ~ » s'il est estimé), taux de succès sur 30 jours, icône
  * « ordinateur requis » et pastille Accès, puis UNE action utile par ligne (20 § 5.2) : « Voir les alternatives » pour une API
  * bloquée, le verbe du bandeau de la fiche pour une action requise (qui devient « Reprise de l'enquête… » dès que l'enquête
@@ -49,11 +49,14 @@ const domainOf = (api: ApiSummary): string | null => api.domain ?? api.requires.
       </thead>
       <tbody>
         <tr v-for="api in apis" :key="api.id" class="border-t align-middle" :class="api.status === 'action_requise' ? 'bg-accent' : ''" data-testid="catalog-row" :data-slug="api.slug" :data-status="api.status">
-          <th scope="row" class="max-w-[18rem] px-4 py-3.5 font-normal">
-            <RouterLink :to="`/apis/${api.slug}`" class="text-[15px] font-bold underline-offset-4 hover:underline focus-visible:underline">{{ api.slug }}</RouterLink>
-            <!-- Planche : le nom, puis le domaine (donnée, jamais traduite). Sans domaine connu, la description de 06 § 2. -->
-            <p v-if="domainOf(api)" class="mt-0.5 truncate text-[13px] text-muted-foreground" translate="no" data-testid="row-domain">{{ domainOf(api) }}</p>
-            <p v-else class="mt-0.5 line-clamp-2 text-[13px] text-muted-foreground">{{ api.description }}</p>
+          <th scope="row" class="min-w-[15rem] max-w-[20rem] px-4 py-3.5 font-normal">
+            <!-- Planche : le nom lisible (« Livres de l'accueil »), c'est-à-dire la description de 06 § 2, puis le domaine ; le slug,
+                 identifiant de l'URL et du MCP, en secondaire. Données servies, jamais traduites. -->
+            <RouterLink :to="`/apis/${api.slug}`" class="line-clamp-2 text-[15px] font-bold break-words underline-offset-4 hover:underline focus-visible:underline" data-testid="row-name">{{ api.description || api.slug }}</RouterLink>
+            <!-- Domaine puis slug, chacun d'un seul tenant : la ligne se replie entre les deux, jamais au milieu d'un mot. -->
+            <p class="mt-0.5 flex flex-wrap items-baseline gap-x-1.5 text-[13px] text-muted-foreground" translate="no" data-testid="row-secondary">
+              <template v-if="domainOf(api)"><span class="break-all" data-testid="row-domain">{{ domainOf(api) }}</span><span aria-hidden="true">·</span></template><span class="font-mono text-xs break-all">{{ api.slug }}</span>
+            </p>
           </th>
           <td class="px-4 py-3.5">
             <StatusBadge :status="api.status" :stale="api.stale" />
