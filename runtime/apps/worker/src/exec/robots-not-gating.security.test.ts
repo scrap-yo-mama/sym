@@ -197,7 +197,7 @@ describe('assert_robots_not_auto_fetched — aucun run en rejeu ne demande /robo
   }, 180_000);
 
   test('le robots.txt reste une page comme une autre : un script qui choisit de le lire le reçoit', async () => {
-    const source = `const r = await ctx.fetch('${base(ROBOTS)}/robots.txt'); ctx.emit({ id: r.body.includes('Disallow') ? 'lu' : 'vide' });`;
+    const source = `const r = await ctx.fetch('${base(ROBOTS)}/robots.txt'); const t = await r.text(); ctx.emit({ id: t.includes('Disallow') ? 'lu' : 'vide' });`;
     const run = await runOf(await insertApi(script(ROBOTS, '/', source)));
     expect(run).toMatchObject({ state: 'succeeded', items: 1 });
     const items = (await withActor(pool, actorA, (tx) => tx.query<{ item: { id: string } }>('SELECT item FROM dataset_items WHERE dataset_id = $1', [run.dataset_id]))).rows;
