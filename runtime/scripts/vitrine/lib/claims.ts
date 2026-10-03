@@ -69,8 +69,7 @@ const CAPABILITY_PROOFS: readonly { name: string; claim: RegExp; proof: RegExp }
   {
     name: 'la reprise par étape',
     claim: /\brepairs? (step by step|the step)\b|\brépare (étape par étape|l['’]étape)/i,
-    // Forme nue ou préfixée « test: » (le registre de la landing exige le préfixe pour toute entrée).
-    proof: /^(?:test:)?assert_(step_classification_guard|step_patch_bounded|side_effect_computed_by_code)$/,
+    proof: /^(test:)?assert_(step_classification_guard|step_patch_bounded|side_effect_computed_by_code)$/,
   },
   { name: 'le serveur MCP', claim: /\bMCP\b/, proof: /mcp|assert_tool_definitions_budget/i },
 ];
