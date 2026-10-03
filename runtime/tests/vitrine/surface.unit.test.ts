@@ -328,7 +328,7 @@ describe('registre des allégations : preuve, relecture, statut, CLAIMS.md gén�
   });
 
   test('cas négatifs : allégation sans preuve, preuve introuvable, statut inconnu, date future, relue avant la dernière release, doublon, entrée non relue affichée', () => {
-    const base = claims.claims[0]!;
+    const { note: _note, ...base } = claims.claims[0]!;
     const one = (patch: Partial<ClaimsFile['claims'][number]>, ctx: ProofContext = context): string => claimProblems({ version: 1, claims: [{ ...base, ...patch }] }, ctx).join();
     expect(one({ proof: [] })).toMatch(/aucune preuve/);
     expect(one({ proof: [`assert_${'zz'}_absent_test`] })).toMatch(/introuvable/);
@@ -361,7 +361,7 @@ describe('registre des allégations : preuve, relecture, statut, CLAIMS.md gén�
     const titles = testTitles(source).join('\n');
     for (const name of ['assert_real_describe', 'assert_real_test', 'assert_real_it', 'assert_real_conditional']) expect(titles, name).toContain(name);
     for (const name of ['assert_only_todo', 'assert_only_it_todo', 'assert_only_skipped', 'assert_only_comment', 'assert_only_string']) expect(titles, name).not.toContain(name);
-    const base = claims.claims[0]!;
+    const { note: _note, ...base } = claims.claims[0]!;
     const ctx: ProofContext = { ...context, testCorpus: titles };
     expect(claimProblems({ version: 1, claims: [{ ...base, proof: ['assert_real_test'] }] }, ctx)).toEqual([]);
     expect(claimProblems({ version: 1, claims: [{ ...base, proof: ['assert_only_todo'] }] }, ctx).join()).toMatch(/introuvable/);
@@ -399,7 +399,7 @@ describe('registre des allégations : preuve, relecture, statut, CLAIMS.md gén�
   });
 
   test('formulation prudente imposée (22 §3.2) : « without an LLM » / « sans LLM » suivi de « when the strategy allows » / « quand la stratégie le permet »', () => {
-    const base = claims.claims[0]!;
+    const { note: _note, ...base } = claims.claims[0]!;
     const one = (patch: Partial<ClaimsFile['claims'][number]>): string => claimProblems({ version: 1, claims: [{ ...base, ...patch }] }, context).join();
     expect(one({ en: 'Replays without an LLM, repairs itself' })).toMatch(/formulation prudente/);
     expect(one({ en: 'an API that replays without LLM and repairs itself' })).toMatch(/formulation prudente/);

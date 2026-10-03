@@ -41,10 +41,12 @@ const spans = (style: string): string[] => [...html.matchAll(new RegExp(`<span s
  *    est rendu par la police emoji du système, œuvre tierce et différente d'une machine à l'autre (20 §2.3 : l'image porte l'icône SVG) ;
  *  - verify-note : sous le bloc « Verify », une ligne dit de remplacer X.Y.Z (la planche écrit [VERSION]) et que rien n'est publié avant
  *    la première version, pour qu'aucun lecteur ne lance cosign sur une étiquette qui n'existe pas ;
- *  - links : la planche n'a qu'un lien (« Lire en français »), les mots des mentions en portent trois de plus (licence, usage responsable, doc, signalement
+ *  - links : la planche n'a qu'un lien (« Lire en français »), les mots des mentions en portent quatre de plus (« Core » : politique de marque TRADEMARK.md, u8 R17 ; usage responsable, doc, signalement
  *    privé) : D-46 et 22 §3.1 exigent le lien d'usage responsable, et « see the docs » sans lien n'ouvre rien ;
  *  - github : GitHub n'offre ni gris sur une ligne d'un bloc de code, ni police ou couleur des mentions (seule la taille de la légende de « Deploy to Render »,
  *    par <sub>), ni couleur d'alerte autre que la sienne ; l'indentation de la 3e ligne de la transcription, sans effet dans la planche (HTML), est retirée.
+ *  - github-rendu : écarts de rendu que GitHub impose, relevés sur la capture côte à côte (rendu local du README en et fr, planche à 900 px) : voir EXPLAINED.github ;
+ *  - docs-fr : « docs » et « Responsible use » renvoient vers des pages en français ; la mention « (in French) » de la version de main n'est pas dans la planche et disparaît (écart accepté, texte de la planche ; elle revient si la planche est amendée, avec une entrée du registre).
  */
 const EXPLAINED = {
   cost: [', $0.0004 per replay', ', no model cost per replay'],
@@ -52,6 +54,13 @@ const EXPLAINED = {
   llm: [['replays without an LLM and', 'replays without an LLM when the strategy allows, and'], ['Replays without an LLM,', 'Replays without an LLM when the strategy allows,']],
   step: [['repairs step by step', 'repairs itself'], ['it repairs the step that broke', 'the API repairs itself']],
   ghost: [' 👻', ''],
+  /** Écarts de rendu propres à GitHub (aucun n'est dans le texte du README) et écart de langue de la doc. */
+  github: [
+    'bordures : GitHub dessine des bordures aux cellules de la <table> qui porte les deux colonnes de la planche',
+    'ligne de titre : l\'alerte [!WARNING] porte une ligne de titre « Warning » que la planche n\'a pas',
+    'badges flat : shields.io rend les badges en forme « flat » (rayon 3 px), la planche les arrondit à 6 px',
+    'docs en français : « docs » et « Responsible use » renvoient vers du contenu en français, sans la mention « (in French) » de main (texte de la planche)',
+  ],
 } as const;
 /** Texte de la planche avec les écarts `llm` et `step` appliqués : ce que le README doit afficher. */
 const explained = (text: string): string => [...EXPLAINED.llm, ...EXPLAINED.step].reduce((acc, [from, to]) => acc.replace(from, to), text);
@@ -105,6 +114,11 @@ function frDrift(fr: string, en: string): string[] {
 }
 
 describe.skipIf(!present)('assert_readme_matches_maquette : README en fidèle à la planche Readme.dc.html (D-60)', () => {
+  test('écarts de rendu propres à GitHub et langue de la doc : tous listés dans EXPLAINED', () => {
+    const listed = EXPLAINED.github.join(' | ');
+    for (const word of ['bordures', 'Warning', 'flat', 'docs en français']) expect(listed, word).toContain(word);
+  });
+
   test('bandeau : trois textes de la planche (titre, accroche barrée, ligne de contexte) et ses couleurs', () => {
     const title = spans('font-size: 54px')[0];
     const tagline = spans('font-size: 22px')[0];

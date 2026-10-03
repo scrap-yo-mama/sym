@@ -6,7 +6,7 @@
     {
       "id": "stays-yours",
       "surfaces": [
-        "readme"
+        "reserve"
       ],
       "en": "Stays yours. Self-hosted, bring your own model, and nothing is sent to us by default.",
       "fr": "Reste chez toi. Auto-hébergé, ton propre modèle, et rien ne part chez nous par défaut.",
@@ -18,12 +18,13 @@
       "reviewed": "2026-10-02",
       "status": "relu",
       "task": "4.10",
-      "reviewer": "agent"
+      "reviewer": "agent",
+      "note": "En réserve : la planche du README (D-60) ne l’affiche plus ; elle ne s’affiche sur aucune surface, et repasse sur une surface avec sa relecture."
     },
     {
       "id": "cheapest-route-first",
       "surfaces": [
-        "readme"
+        "reserve"
       ],
       "en": "Cheapest route first. SYM tries the cheapest executor first (plain HTTP, then a real browser, then a model or an agent) and logs every attempt.",
       "fr": "La route la moins chère d'abord. SYM essaie d'abord l'exécuteur le moins cher (HTTP simple, puis un vrai navigateur, puis un modèle ou un agent) et journalise chaque tentative.",
@@ -33,12 +34,13 @@
       ],
       "reviewed": "2026-10-02",
       "status": "relu",
-      "reviewer": "agent"
+      "reviewer": "agent",
+      "note": "En réserve : la planche du README (D-60) ne l’affiche plus ; elle ne s’affiche sur aucune surface, et repasse sur une surface avec sa relecture."
     },
     {
       "id": "six-executors",
       "surfaces": [
-        "readme"
+        "reserve"
       ],
       "en": "Six executors. HTTP fetch, a real browser page, sandboxed scripts, model-shaped extraction, script plus agent steps and a full agent; a successful agent run compiles into a replayable strategy.",
       "fr": "Six exécuteurs. Requête HTTP, page d'un vrai navigateur, scripts en bac à sable, extraction par modèle, étapes script plus agent et agent complet ; un run d'agent réussi se compile en stratégie rejouable.",
@@ -48,12 +50,13 @@
       ],
       "reviewed": "2026-10-02",
       "status": "relu",
-      "reviewer": "agent"
+      "reviewer": "agent",
+      "note": "En réserve : la planche du README (D-60) ne l’affiche plus ; elle ne s’affiche sur aucune surface, et repasse sur une surface avec sa relecture."
     },
     {
       "id": "guard-rails",
       "surfaces": [
-        "readme"
+        "reserve"
       ],
       "en": "Guard rails. Strategy code runs in a sandbox, outgoing requests pass an SSRF guard, and requests to each domain are paced.",
       "fr": "Des garde-fous. Le code d'une stratégie tourne dans un bac à sable, les requêtes sortantes passent par une garde SSRF, et les requêtes vers chaque domaine sont espacées.",
@@ -66,12 +69,13 @@
       ],
       "reviewed": "2026-10-02",
       "status": "relu",
-      "reviewer": "agent"
+      "reviewer": "agent",
+      "note": "En réserve : la planche du README (D-60) ne l’affiche plus ; elle ne s’affiche sur aucune surface, et repasse sur une surface avec sa relecture."
     },
     {
       "id": "own-session-consent",
       "surfaces": [
-        "readme"
+        "reserve"
       ],
       "en": "Your session, with your consent. For sites behind a login, a browser extension runs steps through your own session, domain by domain, only after you agree.",
       "fr": "Ta session, avec ton accord. Pour les sites derrière une connexion, une extension de navigateur exécute des étapes avec ta propre session, domaine par domaine, seulement après ton accord.",
@@ -82,12 +86,13 @@
       ],
       "reviewed": "2026-10-02",
       "status": "relu",
-      "reviewer": "agent"
+      "reviewer": "agent",
+      "note": "En réserve : la planche du README (D-60) ne l’affiche plus ; elle ne s’affiche sur aucune surface, et repasse sur une surface avec sa relecture."
     },
     {
       "id": "no-signup",
       "surfaces": [
-        "readme"
+        "reserve"
       ],
       "en": "Open source and self-hosted: nothing to sign up for.",
       "fr": "Libre et auto-hébergé : rien à quoi t'inscrire.",
@@ -96,12 +101,13 @@
       ],
       "reviewed": "2026-10-02",
       "status": "relu",
-      "reviewer": "agent"
+      "reviewer": "agent",
+      "note": "En réserve : la planche du README (D-60) ne l’affiche plus ; elle ne s’affiche sur aucune surface, et repasse sur une surface avec sa relecture."
     },
     {
       "id": "built-with-ai",
       "surfaces": [
-        "readme"
+        "reserve"
       ],
       "en": "Much of this code and documentation was written with AI assistance, then reviewed, tested and run through CI. If something looks off, say so.",
       "fr": "Une grande partie du code et de la documentation a été écrite avec l'aide d'une IA, puis relue, testée et passée en CI. Si quelque chose cloche, dis-le.",
@@ -110,12 +116,13 @@
       ],
       "reviewed": "2026-10-02",
       "status": "relu",
-      "reviewer": "agent"
+      "reviewer": "agent",
+      "note": "En réserve : la planche du README (D-60) ne l’affiche plus ; elle ne s’affiche sur aucune surface, et repasse sur une surface avec sa relecture."
     },
     {
       "id": "quickstart-replayed-by-ci",
       "surfaces": [
-        "readme"
+        "reserve"
       ],
       "en": "The commands are the ones the CI replays on a blank instance.",
       "fr": "Les commandes sont celles que la CI rejoue sur une instance vierge.",
@@ -127,7 +134,8 @@
       ],
       "reviewed": "2026-10-02",
       "status": "relu",
-      "reviewer": "agent"
+      "reviewer": "agent",
+      "note": "En réserve : la planche du README (D-60) ne l’affiche plus ; elle ne s’affiche sur aucune surface, et repasse sur une surface avec sa relecture."
     },
     {
       "id": "robots-always-respected",
@@ -299,8 +307,7 @@
       "status": "relu",
       "reviewer": "agent",
       "surfaces": [
-        "landing",
-        "readme"
+        "landing"
       ],
       "note": "H1 de 22 § 2.5 ; le titre DA barré de la planche (F-20261002-05) arrive avec 4.11b (D-60)."
     },
@@ -535,6 +542,25 @@
       "surfaces": [
         "landing"
       ]
+    },
+    {
+      "id": "readme-badge-signed",
+      "surfaces": [
+        "readme"
+      ],
+      "en": "releases: signed",
+      "fr": "versions : signées",
+      "proof": [
+        "file:runtime/scripts/release/dry-run.ts",
+        "file:.github/workflows/release.yml"
+      ],
+      "reviewed": "2026-10-03",
+      "status": "relu",
+      "tasks": [
+        "4.9"
+      ],
+      "reviewer": "agent",
+      "note": "Badge du README (D-60) : la chaîne de signature de release.signed, testée à blanc dans la CI ; aucune version n’est encore publiée."
     },
     {
       "id": "page.no-third-party",
@@ -1567,12 +1593,13 @@
       "en": "Built with AI assistance, reviewed by humans.",
       "fr": "Fait avec l'aide d'une IA, relu par des humains.",
       "proof": [
+        "decision:D-60",
         "file:.github/workflows/ci.yml"
       ],
       "reviewed": "2026-10-03",
       "status": "relu",
       "reviewer": "agent",
-      "note": "Mention courte de la planche (D-60) ; la version longue (built-with-ai) reste celle de la landing et du registre."
+      "note": "Mention courte de la planche Readme.dc.html validée par l’utilisateur (D-60) : la preuve de la relecture humaine est cette validation, la CI ne prouve que les tests. À confirmer par Thomas (reviewer « agent » tant qu’aucun humain ne l’a relue, 22b §6)."
     }
   ]
 }

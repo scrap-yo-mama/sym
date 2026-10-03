@@ -10,7 +10,7 @@ import { normalize } from './text.ts';
 
 const STATUSES = ['relu', 'à relire', 'bloqué'] as const;
 type ClaimStatus = (typeof STATUSES)[number];
-const SURFACES = ['readme', 'landing', 'landing-compare', 'responsible-use', 'repo'] as const;
+const SURFACES = ['readme', 'landing', 'landing-compare', 'responsible-use', 'repo', 'reserve'] as const;
 export type Surface = (typeof SURFACES)[number];
 
 type Claim = {
@@ -146,7 +146,7 @@ export function claimProblems(file: ClaimsFile, context: ProofContext): string[]
     if (claim.status === 'bloqué' && !claim.note) problems.push(`${at} : une entrée bloquée dit pourquoi (note)`);
     // Les preuves propres visent les surfaces du dépôt (README, dépôt) ; celles de la landing relèvent de la porte du GO (4.11, check:landing-go).
     if (claim.status === 'relu') {
-      const ownProofs = claim.surfaces.some((surface) => surface === 'readme' || surface === 'repo' || surface === 'responsible-use');
+      const ownProofs = claim.surfaces.some((surface) => surface === 'readme' || surface === 'repo' || surface === 'responsible-use' || surface === 'reserve');
       for (const capability of ownProofs ? CAPABILITY_PROOFS : []) {
         if ((capability.claim.test(claim.en) || capability.claim.test(claim.fr)) && !claim.proof.some((proof) => capability.proof.test(proof))) {
           problems.push(`${at} : affirme ${capability.name} sans preuve propre (relue, elle s'affiche)`);
