@@ -47,10 +47,10 @@ export const REPAIR_ACTION_CLASSES = ['auth_required', 'payment_required', 'acco
 
 /**
  * Codes de raison de transition (`status_reason`, 04 §6) qui ne sont PAS des `failure_class` (04b § 1 : liste fermée) :
- * proxy requis non configuré et tunnel hors ligne (transition 3), défi en tunnel (transition 14, 04 §3.2 « raison
+ * proxy requis non configuré, tunnel hors ligne et contact d'instance absent (transition 3 ; 17 § 5) et prix du modèle d'enquête absent (transition 3 ; UX-11), défi en tunnel (transition 14, 04 §3.2 « raison
  * `challenge_in_tunnel` », 07). Un run arrêté pour l'une de ces raisons l'est sans classe d'échec : événement `run_stopped`.
  */
-export const INVESTIGATION_ACTION_REASONS = ['proxy_not_configured', 'tunnel_offline'] as const;
+export const INVESTIGATION_ACTION_REASONS = ['proxy_not_configured', 'tunnel_offline', 'instance_contact_missing', 'llm_price_missing'] as const;
 export const REPAIR_ACTION_REASONS = ['challenge_in_tunnel'] as const;
 export const ACTION_REASONS = [...INVESTIGATION_ACTION_REASONS, ...REPAIR_ACTION_REASONS] as const;
 export type ActionReason = (typeof ACTION_REASONS)[number];

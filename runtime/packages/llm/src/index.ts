@@ -12,3 +12,4 @@ export * from './schema.js';
 export * from './transport.js';
 export * from './client.js';
 export * from './settings.js';
+export * from './known-prices.js';

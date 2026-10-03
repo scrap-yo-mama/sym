@@ -16,7 +16,7 @@
 //   { request: { method, url }, response?: { status?, content_type?, bytes? } } — jamais d'en-tête ni de corps (INV8) ; la
 //   console ne garde de l'URL que l'origine et le chemin (ni requête ni fragment), et ignore une méthode ou un schéma inattendus.
 //   status.changed         { run_id?, api_id?, api_slug?, status, status_reason?, domain?, at?, strategy?, input_schema?, budget? }
-//   action.required        { run_id?, api_id?, api_slug?, cause, domain?, platform?, offer? }
+//   action.required        { run_id?, api_id?, api_slug?, cause, domain?, platform?, offer?, model? }
 // `budget` : { spent_usd, max_usd, elapsed_s, timeout_s, retained_est_usd?, full_agent_est_usd? }. Toute charge est lue avec
 // des gardes de type : une charge inattendue est ignorée, jamais rendue telle quelle (aucun HTML, texte seul).
 import type { components } from '@runtime/client';
@@ -45,6 +45,8 @@ const ACTION_CAUSES = [
   'session_device_bound',
   'proxy_required',
   'tunnel_offline',
+  'instance_contact_missing',
+  'llm_price_missing',
   'challenge_in_tunnel',
   'secret_unreadable',
   'payment_required',
@@ -134,6 +136,8 @@ export interface ActionView {
   domain: string | null;
   platform: string | null;
   offer: string | null;
+  /** Modèle sans prix (`llm_price_missing`) : celui que l'enquête allait appeler. */
+  model?: string | null;
   /** Transition 17 : l'utilisateur a agi, l'enquête reprend (« Reprise de l'enquête… »). */
   resuming: boolean;
 }
@@ -443,7 +447,7 @@ export function ingestEvent(state: InvestigationState, event: SseEvent, nowMs: n
     }
     case 'action.required': {
       const cause = oneOf(data.cause, ACTION_CAUSES);
-      if (cause) state.action = { cause, domain: state.domain, platform: text(data.platform), offer: text(data.offer), resuming: false };
+      if (cause) state.action = { cause, domain: state.domain, platform: text(data.platform), offer: text(data.offer), model: text(data.model), resuming: false };
       break;
     }
     default:

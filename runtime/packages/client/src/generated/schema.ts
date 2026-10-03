@@ -2124,6 +2124,10 @@ export interface components {
             access_report: components["schemas"]["AccessReport"] | null;
             /** Format: uuid */
             run_id?: string | null;
+            /** @description État réel du run d'enquête à la réponse (UX-07) : en cours, ou terminé (`failed` avec `error`). */
+            run_state?: components["schemas"]["RunState"];
+            status?: components["schemas"]["ApiStatus"];
+            error?: components["schemas"]["RunError"];
         };
         /** @description Champs modifiables. Un schéma (`output_schema`, `input_schema`) ne change que par un brouillon puis une promotion (19 § 6, itération) : en place, 409 `draft_required`. `access_policy` n'est pas modifiable (INV11) ; une API avec session reste `private` (400 `session_api_private`). */
         ApiPatch: {
@@ -2374,6 +2378,13 @@ export interface components {
             state: components["schemas"]["RunState"];
             poll_after_seconds?: number | null;
         };
+        /** @description Cause nommée d'un run arrêté ou en échec (UX-04) : code stable (`instance_contact_missing`…), message lisible, marche à suivre pour l'agent (en anglais) et `retryable`. Absente quand la cause n'est pas nommée. */
+        RunError: {
+            code: components["schemas"]["ReasonCode"];
+            message: string;
+            what_to_do: string;
+            retryable: boolean;
+        };
         /** @description Enveloppe commune des sorties d'exécution (05 § 4.1), identique en MCP et en REST. */
         RunResult: {
             /** Format: uuid */
@@ -2390,6 +2401,7 @@ export interface components {
             next_cursor: string | null;
             degraded_reasons: components["schemas"]["ReasonCode"][];
             message: string;
+            error?: components["schemas"]["RunError"];
             next_action: components["schemas"]["NextAction"] | null;
             poll_after_seconds: number | null;
             timeline: {
@@ -2421,6 +2433,7 @@ export interface components {
             degraded_reasons: components["schemas"]["ReasonCode"][];
             failure_class: components["schemas"]["FailureClass"] | null;
             retryable?: boolean;
+            error?: components["schemas"]["RunError"];
             /** Format: date-time */
             created_at: string;
             /** Format: date-time */
@@ -2791,11 +2804,12 @@ export interface components {
                 top_p?: boolean;
             };
         };
+        /** @description USD par million de jetons ; nombres positifs ou nuls, `in` et `out` obligatoires (un prix négatif est refusé). */
         LlmPrice: {
-            in?: number;
+            in: number;
             in_cached?: number;
             in_cache_write?: number;
-            out?: number;
+            out: number;
             windows?: {
                 [key: string]: unknown;
             }[];
@@ -2837,8 +2851,9 @@ export interface components {
             base_url: string;
             timeout_ms?: number;
             max_retries?: number;
+            /** @description Modèles du fournisseur (au plus 50), indexés par identifiant. En écriture (`PUT /api/settings/llm`), la requête est FUSIONNÉE avec la table enregistrée, modèle par modèle puis clé par clé : un modèle ou une clé absents de la requête sont gardés (le prix survit à toute écriture qui ne le mentionne pas) ; `models[m].price: null` (ou `profile`, `extra_body`) retire cette clé ; `models[m]: null` retire le modèle entier. La table fusionnée est bornée à 50 modèles (sinon `too_many_models`, 400). */
             models?: {
-                [key: string]: components["schemas"]["LlmModel"];
+                [key: string]: components["schemas"]["LlmModel"] | null;
             };
         };
         LlmProvider: components["schemas"]["LlmProviderBase"] & {
@@ -2878,6 +2893,24 @@ export interface components {
             providers: components["schemas"]["LlmProvider"][];
             /** @description Statut « modèle validé » du banc d'évaluation (15 § 11), en lecture seule : copie de eval/validated-models.json (produit par `pnpm eval --level N2`). Un modèle configuré absent de la liste n'a jamais été mesuré : « non validé ». */
             readonly validated_models?: components["schemas"]["ValidatedModel"][];
+            /** @description Prix connus (UX-11), en lecture seule : table versionnée de la couche LLM (USD par million de jetons) qui pré-remplit le prix d'un modèle reconnu par son nom. Le prix saisi dans `providers[].models[m].price` fait foi. */
+            readonly known_prices?: components["schemas"]["KnownModelPrice"][];
+        };
+        KnownModelPrice: {
+            model: string;
+            provider: string;
+            /**
+             * @description `verified` : prix relevé dans le dépôt ; `to_validate` : aucun prix relevé, à saisir.
+             * @enum {string}
+             */
+            status: "verified" | "to_validate";
+            price: {
+                in: number;
+                out: number;
+                in_cached?: number;
+            } | null;
+            source: string;
+            as_of?: string;
         };
         ValidatedModel: {
             model_id: string;

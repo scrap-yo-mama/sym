@@ -12,6 +12,7 @@ import { providersReceiving, type ProviderNoticeSettings } from '@/lib/provider-
 import { computed, nextTick, onMounted, onServerPrefetch, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { useRoute, useRouter } from 'vue-router';
+import InstanceContactBanner from '@/components/InstanceContactBanner.vue';
 import AccountSiteWarning from '@/components/investigation/AccountSiteWarning.vue';
 import InvestigationBoard from '@/components/investigation/InvestigationBoard.vue';
 import PhaseTimeline from '@/components/investigation/PhaseTimeline.vue';
@@ -104,6 +105,7 @@ const inputError = 'sym-error';
   <section v-else class="mx-auto flex max-w-2xl flex-col gap-6 py-10">
     <!-- Jalon 1 « Décrire » en cours : la frise est la même que pendant l'enquête (20 § 5.3). -->
     <PhaseTimeline :states="formMilestones" />
+    <InstanceContactBanner />
     <Card>
       <CardHeader>
         <h1 data-route-heading tabindex="-1" class="text-2xl leading-none font-semibold tracking-tight">{{ t('newApi.title') }}</h1>
