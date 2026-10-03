@@ -42,28 +42,26 @@ const label = (prefix: string, key: string | null | undefined) => (key && te(`${
       <p v-if="brief.brief.value.latest.erased" class="text-sm text-muted-foreground">{{ t('brief.erased') }}</p>
       <h3 class="font-medium">{{ t('brief.hintsHeading') }}</h3>
       <p v-if="brief.brief.value.report.length === 0 && brief.brief.value.hints.length === 0" class="text-sm text-muted-foreground">{{ t('brief.noFacts') }}</p>
-      <table v-else class="w-full text-sm">
-        <thead>
-          <tr class="text-left text-muted-foreground">
-            <th scope="col">{{ t('brief.columns.hint') }}</th>
-            <th scope="col">{{ t('brief.columns.kind') }}</th>
-            <th scope="col">{{ t('brief.columns.state') }}</th>
-            <th scope="col">{{ t('brief.columns.reason') }}</th>
-            <th scope="col">{{ t('brief.columns.cost') }}</th>
-            <th scope="col">{{ t('brief.columns.version') }}</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="entry in brief.brief.value.report" :key="`r-${entry.id}`" class="border-t">
-            <td><code>{{ entry.id }}</code><span v-if="entry.template" class="ml-2 text-muted-foreground">{{ entry.template }}</span></td>
-            <td>{{ label('brief.kind', entry.kind) }}</td>
-            <td>{{ label('brief.state', entry.state) }}<span v-if="entry.stale" class="ml-1 text-muted-foreground">({{ t('brief.stale') }})</span></td>
-            <td>{{ label('brief.reason', entry.reason) }}</td>
-            <td>{{ entry.cost_usd === null ? '—' : formatUsd(entry.cost_usd, locale) }}</td>
-            <td>{{ String(brief.brief.value.latest.version) }}</td>
-          </tr>
-        </tbody>
-      </table>
+      <!-- Liste (et non tableau) : lisible à 320 px sans défilement horizontal (WCAG 1.4.10). -->
+      <ul v-else class="flex flex-col gap-2 text-sm" data-testid="brief-hint-rows">
+        <li v-for="entry in brief.brief.value.report" :key="`r-${entry.id}`" class="flex min-w-0 flex-col gap-1 rounded-lg border p-3">
+          <div class="flex min-w-0 flex-wrap items-center gap-2">
+            <code>{{ entry.id }}</code>
+            <span>{{ label('brief.kind', entry.kind) }}</span>
+            <span v-if="entry.template" class="min-w-0 break-all text-muted-foreground">{{ entry.template }}</span>
+          </div>
+          <dl class="grid min-w-0 grid-cols-[auto_1fr] gap-x-3 gap-y-1">
+            <dt class="text-muted-foreground">{{ t('brief.columns.state') }}</dt>
+            <dd class="min-w-0">{{ label('brief.state', entry.state) }}<span v-if="entry.stale" class="ml-1 text-muted-foreground">({{ t('brief.stale') }})</span></dd>
+            <dt class="text-muted-foreground">{{ t('brief.columns.reason') }}</dt>
+            <dd class="min-w-0">{{ label('brief.reason', entry.reason) }}</dd>
+            <dt class="text-muted-foreground">{{ t('brief.columns.cost') }}</dt>
+            <dd>{{ entry.cost_usd === null ? '—' : formatUsd(entry.cost_usd, locale) }}</dd>
+            <dt class="text-muted-foreground">{{ t('brief.columns.version') }}</dt>
+            <dd>{{ String(brief.brief.value.latest.version) }}</dd>
+          </dl>
+        </li>
+      </ul>
       <h3 class="font-medium">{{ t('brief.versionsHeading') }}</h3>
       <ul class="flex flex-col gap-1 text-sm">
         <li v-for="v in brief.brief.value.versions" :key="v.strategy_version">
