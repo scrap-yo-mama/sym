@@ -13,6 +13,7 @@ import { getApi } from '@/lib/api';
 import { ApiRequestError, toRequestError, unwrap } from '@/lib/api-result';
 
 export type RunSummary = components['schemas']['RunSummary'];
+export type RunDetail = components['schemas']['Run'];
 
 export function useApiRuns(slug: MaybeRefOrGetter<string>, options: { immediate?: boolean } = {}) {
   const { me } = useSession();
@@ -66,10 +67,21 @@ export function useApiRuns(slug: MaybeRefOrGetter<string>, options: { immediate?
     return detailed.input;
   }
 
+  /**
+   * Fiche qualité et avis consultatif du juge d'un run de l'appelant (tâche 2.12, `Run.quality`, `Run.judge`) ; null
+   * (aucune requête) pour le run d'un autre. Lève si la lecture échoue.
+   */
+  async function quality(run: RunSummary): Promise<Pick<RunDetail, 'quality' | 'judge'> | null> {
+    if (!isOwn(run)) return null;
+    const detailed = unwrap(await getApi().GET('/api/runs/{id}', { params: { path: { id: run.id } } }));
+    return { quality: detailed.quality ?? null, judge: detailed.judge ?? null };
+  }
+
   return {
     isOwn,
     showItems,
     relaunchInput,
+    quality,
     runs: list.items,
     loading: list.loading,
     loadingMore: list.loadingMore,

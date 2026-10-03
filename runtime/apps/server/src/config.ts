@@ -5,6 +5,7 @@ import {
   loadKeyring,
   loadObservabilityConfig,
   parseMfaEnforced,
+  normalizePublicUrl,
   scrubOtelEnvironment,
   unknownReservedVariablesWarning,
   Secret,
@@ -229,9 +230,11 @@ export function loadServerConfig(env: NodeJS.ProcessEnv = process.env): ServerCo
 
   const databaseUrl = env['DATABASE_URL'];
   if (!databaseUrl) throw new ConfigError('DATABASE_URL manquante.');
-  const publicUrl = env['PUBLIC_URL'];
-  if (!publicUrl || !/^https?:\/\/[^/]+/.test(publicUrl)) {
-    throw new ConfigError('PUBLIC_URL manquante ou invalide (URL http(s) de l’instance, ex. https://runtime.example.org).');
+  let publicUrl: string;
+  try {
+    publicUrl = normalizePublicUrl(env['PUBLIC_URL']); // origine pure : point final retiré, chemin/requête/fragment/identifiants refusés
+  } catch (error) {
+    throw new ConfigError((error as Error).message);
   }
   const token = readSecretVariable(env, 'ADMIN_BOOTSTRAP_TOKEN');
   if (token !== undefined && token.length < BOOTSTRAP_TOKEN_MIN_LENGTH) {
@@ -266,7 +269,7 @@ export function loadServerConfig(env: NodeJS.ProcessEnv = process.env): ServerCo
   }
   return {
     databaseUrl,
-    publicUrl: new URL(publicUrl).origin,
+    publicUrl,
     keyring,
     bootstrapToken: token === undefined ? null : new Secret(token),
     adminEmail: env['ADMIN_EMAIL']?.trim().toLowerCase() || null,

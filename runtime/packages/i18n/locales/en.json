@@ -248,7 +248,14 @@
     "volume_anomaly": "Unusual volume",
     "pagination_short": "Pagination cut short",
     "slow": "Slow",
-    "cost_anomaly": "Unusual cost"
+    "cost_anomaly": "Unusual cost",
+    "field_constant": "constant value",
+    "pattern_shift": "format changed",
+    "sentinel_values": "empty values",
+    "duplicate_items": "duplicates",
+    "new_enum_value": "new value",
+    "prior_refusal": "domain refused before",
+    "judge_flag": "judge opinion (advisory)"
   },
   "failure": {
     "transient": "Temporary problem",
@@ -301,6 +308,7 @@
     "countryInvalid": "Enter a country code of 2 letters, for example fr.",
     "descriptionRequired": "Describe what the API should return.",
     "accountRequired": "Confirm the notice above to continue.",
+    "providerNoticeMany": "{providers} will receive cleaned traffic excerpts.",
     "descriptionTemplate": "A good request reads: “I want [what] from [where] to [what for].”"
   },
   "investigation": {
@@ -705,6 +713,11 @@
         "qwen": "Qwen",
         "openai": "OpenAI",
         "custom": "Custom"
+      },
+      "validation": {
+        "validated": "Validated model (bench N2, {date})",
+        "notValidated": "Not validated",
+        "hint": "Measured by the evaluation bench; read-only."
       }
     },
     "proxies": {
@@ -861,7 +874,14 @@
     "repair_exhausted": "Repair budget exhausted; version v{a} kept.",
     "proxy_not_configured": "A proxy is required for {country}.",
     "tunnel_offline": "Your computer is not connected.",
-    "not_found": "The page no longer exists (404 or 410)."
+    "not_found": "The page no longer exists (404 or 410).",
+    "field_constant": "Field {field} has the same value on every item.",
+    "pattern_shift": "The format of field {field} changed ({p} % of items).",
+    "sentinel_values": "{p} % of the values of {field} are empty or placeholders.",
+    "duplicate_items": "{p} % of the items are duplicates.",
+    "new_enum_value": "New value for {field}: to check.",
+    "prior_refusal": "This domain already refused access on {date}. Scrapyomama stops.",
+    "judge_flag": "Advisory opinion of the judge: {field} looks wrong."
   },
   "reasonLabel": {
     "retried": "Retries needed",
@@ -1891,6 +1911,41 @@
       "removeGroup": "Remove group {group}",
       "save": "Save",
       "notConfigured": "SSO is not configured yet."
+    }
+  },
+  "quality": {
+    "title": "Run quality sheet",
+    "summary": "{n} items, {d} duplicates",
+    "caption": "Profile of each field, computed by code without AI",
+    "columns": {
+      "field": "Field",
+      "type": "Type",
+      "fill": "Filled",
+      "sentinels": "Empty or placeholder",
+      "pattern": "Main format",
+      "unique": "Distinct values",
+      "range": "Min – max"
+    },
+    "personal": "personal: shapes only",
+    "suspected": "likely personal: shapes only",
+    "signals": "Run signals",
+    "show": "Show the quality sheet",
+    "loading": "Loading the quality sheet…",
+    "empty": "No quality sheet for this run.",
+    "judge": {
+      "title": "Judge opinion",
+      "advisory": "Advisory opinion: the judge is not calibrated.",
+      "unchanged": "This opinion changes neither the API status nor its version.",
+      "trigger": {
+        "investigation": "at investigation",
+        "repair": "at repair",
+        "anomaly": "on a profile anomaly"
+      },
+      "verdict": {
+        "ok": "correct",
+        "wrong": "looks wrong",
+        "unsure": "unsure"
+      }
     }
   },
   "srv": {

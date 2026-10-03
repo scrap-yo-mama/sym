@@ -61,6 +61,8 @@ export type PrepareOptions = {
   rest?: { pollMs?: number; pingMs?: number; maxStreamsPerUser?: number; revalidateMs?: number };
   /** Serveur MCP : relecture et plafonds des flux subscriptions/listen (tests ; défauts de production). */
   mcp?: McpListenTuning;
+  /** Statut « modèle validé » : autre fichier que eval/validated-models.json (tests). */
+  validatedModelsFile?: URL | string;
 };
 
 /** Files que le `server` alimente (runs, planifications, livraisons de webhooks, alertes) : créées si elles manquent. */
@@ -208,6 +210,7 @@ export async function prepareServer(env: NodeJS.ProcessEnv = process.env, option
       mcp: config.mcp.disabled ? null : createMcpRuntime(pool, config.mcp, options.mcp),
       ...(options.extraCa ? { extraCa: options.extraCa } : {}),
       ...(options.oidcAllowHttp ? { oidcAllowHttp: true } : {}),
+      ...(options.validatedModelsFile === undefined ? {} : { validatedModelsFile: options.validatedModelsFile }),
       // Passerelle tunnel WSS (07 § 6) : LISTEN sur le canal de cette instance, démarrée avant l'écoute HTTP.
       tunnel: config.tunnel.disabled
         ? null

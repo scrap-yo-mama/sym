@@ -79,7 +79,7 @@ const login: SiteFactory = (env) => {
 };
 
 // ---------------------------------------------------------------- 5. Défi simulé (403) et défi servi en HTTP 200
-function challengePage(): string {
+export function challengePage(): string {
   return page(
     'Security check',
     '<main id="zz-test-challenge" class="zz-test-challenge"><h1>Security check</h1><p>Please verify you are human to continue.</p><div class="zz-test-challenge-widget"><label><input type="checkbox" disabled> I am not a robot</label></div><p>Reference: zz_test_challenge_0001</p><noscript>Enable JavaScript and cookies to continue.</noscript></main>',

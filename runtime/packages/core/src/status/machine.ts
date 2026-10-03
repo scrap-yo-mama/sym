@@ -77,6 +77,11 @@ export function applyStatusEvent(state: ApiStatusState, event: StatusEventInput,
         },
       ]);
 
+    case 'prior_refusal':
+      // Mémoire négative (2.12) : arrêt préventif de l'enquête, même transition que le refus observé (4).
+      if (status !== 'enquete') return reject(state, 'not_investigating');
+      return apply(state, ctx, [{ id: 4, to: 'bloquee', reason: 'prior_refusal', patch: { previousStatus: null } }]);
+
     case 'run_failed':
       return onRunFailed(state, event.failureClass, event.httpStatus, ctx, now);
 

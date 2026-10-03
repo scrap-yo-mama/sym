@@ -19,11 +19,19 @@
 // Règles Markdown (tâche 2.10, 18 §2) : réparer, c'est recompiler depuis la source À JOUR : les règles résolues de l'API
 // (propriétaire et instance) sont injectées dans le préfixe du prompt `repair`, les skills lus par `read_skill` ; vN+1
 // enregistre sa source (`source.rules`, `strategy_version_rules`).
+// Tâche 2.12 : le dossier de mémoire du catalogue (19 §2, valeurs du même domaine seulement, masqué) entre dans le prompt
+// à sa place fixe, avant les preuves ; le juge consultatif donne son avis avant que vN+1 devienne courante, sans rien
+// bloquer (19 §3).
 import { setTimeout as sleep } from 'node:timers/promises';
 import {
+  buildCatalogDossier,
   checkAgainstHealthy,
   escalationExecutions,
+  profileItems,
+  registrableDomain,
+  renderCatalogMemory,
   healthyProfile,
+  maskTextForLlm,
   patchKey,
   RepairLedger,
   validateDeclarativeSpec,
@@ -41,10 +49,11 @@ import {
 } from '@runtime/core';
 import { assertPromptSafe, ClassificationGuardError, type AgentEvidence, type ExecFailure } from '@runtime/core/exec';
 import { proposeRepair, readSkillsPhase, renderSkillBodies, repairCallCeilingUsd, repairMessages, repairPromptVersion } from '@runtime/agent';
-import { acquireRepairLease, buildStrategySource, readCurrentStrategyVersion, readHealthyItems, readSourceBase, releaseRepairLease, renewRepairLease, resolveRulesForApi } from '@runtime/db';
+import { acquireRepairLease, buildStrategySource, inputHash, readBaselineItem, readCatalogMemory, readCurrentStrategyVersion, readHealthyItems, readSourceBase, releaseRepairLease, renewRepairLease, resolveRulesForApi, saveRunJudge, type CatalogMemory } from '@runtime/db';
 import { LlmError, roleTarget, toFailureClass, type LlmClient, type LlmConfig } from '@runtime/llm';
 import type pg from 'pg';
 import { pino, type Logger } from 'pino';
+import { flaggedFields, judgeItems, settingsQualityPorts, type QualityPorts } from './quality-job.js';
 import type { CandidateCheck, RepairedStrategy, RepairOutcome, RepairPort } from './strategy-executor.js';
 
 export type RepairEngineDeps = {
@@ -60,6 +69,11 @@ export type RepairEngineDeps = {
   readonly leaseWaitMs?: number;
   readonly leaseTtlSeconds?: number;
   readonly logger?: Logger;
+  /** Mémoire du catalogue (2.12) ; défaut : `readCatalogMemory`. */
+  readonly memory?: { readonly read: (args: { ownerId: string; apiId: string | null; domain: string }) => Promise<CatalogMemory> };
+  /** Juge consultatif (2.12) ; défaut : réglages `settings.llm`. Configuration du rôle `judge` : `judgeLlm`. */
+  readonly quality?: QualityPorts;
+  readonly judgeLlm?: { readonly config: () => Promise<LlmConfig | null>; readonly client: (config: LlmConfig) => LlmClient };
 };
 
 const DECLARATIVE = new Set(['fetch', 'fetch_in_page', 'playwright']);
@@ -83,6 +97,46 @@ export function createRepairPort(deps: RepairEngineDeps): RepairPort {
   const logger = deps.logger ?? pino({ enabled: false });
   const leaseTtl = deps.leaseTtlSeconds ?? 90;
   const leaseWaitMs = deps.leaseWaitMs ?? 60_000;
+  const quality = deps.quality ?? settingsQualityPorts(deps.pool);
+
+  /**
+   * Avis consultatif sur la sortie réparée, avant que vN+1 devienne courante : il ne bloque rien (19 §3). Plafond : le
+   * budget de réparation restant (`repair_budget_usd`) ; échantillon avec un item de la baseline validée s'il y en a une.
+   * Rend le coût du jugement (imputé au run), `0` sans jugement.
+   */
+  const judgeRepair = async (ctx: RunCtx, schema: unknown, items: readonly unknown[], maxUsd: number): Promise<number | null> => {
+    if (deps.judgeLlm === undefined || !(await quality.judgeEnabled().catch(() => false))) return 0;
+    try {
+      const config = await deps.judgeLlm.config().catch(() => null);
+      if (config === null) return 0;
+      const baselineItem = await readBaselineItem(deps.pool, { apiId: ctx.apiId, ownerId: ctx.ownerId, inputHash: inputHash(ctx.input) }).catch(() => null);
+      const out = await judgeItems({ config, client: deps.judgeLlm.client, trigger: 'repair', schema, profile: profileItems(items, schema), items, baselineItem, maxUsd, signal: ctx.signal });
+      if (out === null) return 0;
+      await ctx.chargeCost?.({ llm_usd: out.costUsd, tokens: { ...out.tokens, estimated: false } });
+      await saveRunJudge(deps.pool, { runId: ctx.runId, ownerId: ctx.ownerId, judge: out.judge, costUsd: 0 });
+      if (out.judge.flag) await ctx.log('info', 'judge_flag', { trigger: 'repair', fields: flaggedFields(out.judge), seed: out.seed });
+      return out.costUsd;
+    } catch {
+      await ctx.log('warn', 'judge_failed', { trigger: 'repair' });
+      return 0;
+    }
+  };
+
+  /**
+   * Dossier de mémoire de la réparation (même propriétaire, structurel) ; `description` : la demande DÉJÀ masquée
+   * (couches 1 et 2), qui sert à l'étage 3 (plein texte).
+   */
+  const repairMemory = async (ctx: RunCtx, spec: DeclarativeSpec, description: string): Promise<string> => {
+    try {
+      const domain = registrableDomain(spec.request.url);
+      const memory = await (deps.memory?.read ?? ((a) => readCatalogMemory(deps.pool, a)))({ ownerId: ctx.ownerId, apiId: ctx.apiId, domain });
+      const dossier = buildCatalogDossier({ ownerId: ctx.ownerId, apiId: ctx.apiId, domain, description, mode: 'repair', refusals: memory.refusals, now: new Date() }, memory.entries);
+      if (dossier.refs.length > 0) await ctx.log('info', 'catalog_memory', { entries: dossier.refs.length, tokens: dossier.tokens, truncated: dossier.truncated, sha256: dossier.sha256 });
+      return renderCatalogMemory(dossier);
+    } catch {
+      return '';
+    }
+  };
 
   /** Attente du bail d'une autre réparation : vN+1 si elle a abouti, sinon échec (la stratégie reste celle du run). */
   const waitForOtherRepair = async (ctx: RunCtx, strategyVersion: number): Promise<RepairOutcome> => {
@@ -179,6 +233,8 @@ export function createRepairPort(deps: RepairEngineDeps): RepairPort {
     };
     const committed = async (repaired: RepairedStrategy, check: CandidateCheck): Promise<RepairOutcome> => {
       if (!(await holds())) return leaseLost();
+      const judgeUsd = await judgeRepair(ctx, target.api.outputSchema, check.partition.conform, ledger.remainingUsd);
+      if (judgeUsd !== 0) ledger.spend(judgeUsd);
       const saved = await request.commit({ ...repaired, ...sourceOf() });
       return { kind: 'repaired', strategy: repaired, check, saved };
     };
@@ -221,9 +277,12 @@ export function createRepairPort(deps: RepairEngineDeps): RepairPort {
     if (deps.llm !== undefined && config !== null && price !== null && price !== undefined) {
       const client = deps.llm.client({ ...config, roles: { repair: config.roles.repair! } });
       const model = config.roles.repair?.model ?? null;
+      // Masquage des couches 1 et 2 (19 §3, rôle `repair`) : la demande ne part jamais en clair, ni au prompt ni à l'étage 3.
+      const description = maskTextForLlm(target.api.description ?? '');
+      const catalogMemory = await repairMemory(ctx, spec, description);
       for (;;) {
         if (!(await holds())) return leaseLost();
-        const base = { description: target.api.description, spec, outputSchema: target.api.outputSchema, failure, evidence, healthy, reasons: request.reasons, refused, rules: rulesPrompt };
+        const base = { description, spec, outputSchema: target.api.outputSchema, failure, evidence, healthy, reasons: request.reasons, refused, rules: rulesPrompt, ...(catalogMemory === '' ? {} : { catalogMemory }) };
         const args = skillsPrompt === '' ? base : { ...base, skills: skillsPrompt };
         const ceiling = repairCallCeilingUsd(args, price);
         if (!ledger.canPropose(ceiling)) break;

@@ -119,6 +119,7 @@ des cinq premières est posée. Une autorité de certification privée pour Post
 | `RETENTION_DATASETS_DAYS` | worker, CLI | facultative | 90 | Conservation des jeux de données (valeur initiale, modifiable dans Réglages). |
 | `RETENTION_DATASETS_MAX_DAYS` | worker, CLI | facultative | 3650 | Plafond de conservation des jeux de données. |
 | `RETENTION_SAMPLES_DAYS` | worker, CLI | facultative | 14 | Conservation des échantillons d’enquête. |
+| `RETENTION_PROFILES_DAYS` | worker, CLI | facultative | 90 | Conservation des profils de qualité des runs (hors baseline validée, gardée avec sa version). |
 | `RUN_LOG_RETENTION_DAYS` | server, worker, CLI | facultative | 30 | Conservation des journaux de run. |
 | `STORAGE_PLAN_GB` | server, worker, CLI | facultative | aucun | Taille de la base de votre offre, en Go. Sans elle, pas de garde disque ; à 95 %, un nouveau run est refusé (`storage_full`). |
 | `PHONE_DEFAULT_REGION` | worker, CLI | facultative | FR | Région ISO 3166-1 des numéros de téléphone nationaux des personnes concernées (droit à l’effacement). |

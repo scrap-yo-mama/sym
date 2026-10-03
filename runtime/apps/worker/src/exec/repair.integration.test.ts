@@ -28,6 +28,7 @@ import { createStrategyRuntime, type RepairPort } from './strategy-executor.js';
 const API_HOST = 'zz_test_api_json.localhost';
 const DOM_HOST = 'zz_test_dom.localhost';
 const MODEL = 'zz_repair';
+const JUDGE = 'zz_judge';
 const A = randomUUID();
 const actorA = { userId: A, role: 'member' as const };
 
@@ -44,6 +45,8 @@ let queue: PgBossJobQueue;
 let client: Client;
 let worker: Worker;
 let fake: FakeProvider;
+/** Juge consultatif (2.12) : désactivé par défaut, activé par test. */
+let judgeEnabled = false;
 /** Version courante de l'API lue au retour du port de réparation, c'est-à-dire avant que le run ne reprenne la main. */
 const currentAtPortReturn = new Map<string, number[]>();
 
@@ -51,8 +54,8 @@ const base = (host: string) => `http://${host}:${client.server.port}`;
 
 function llmConfig(): LlmConfig {
   return {
-    providers: [{ id: 'fake', baseUrl: fake.baseUrl, apiKey: new Secret('zz-test-key-0000'), models: [{ id: MODEL, price: { in: 1, out: 1 } }] }],
-    roles: { repair: { provider: 'fake', model: MODEL } },
+    providers: [{ id: 'fake', baseUrl: fake.baseUrl, apiKey: new Secret('zz-test-key-0000'), models: [{ id: MODEL, price: { in: 1, out: 1 } }, { id: JUDGE, price: { in: 1, out: 1 } }] }],
+    roles: { repair: { provider: 'fake', model: MODEL }, judge: { provider: 'fake', model: JUDGE } },
   };
 }
 
@@ -110,7 +113,14 @@ beforeAll(async () => {
   await queue.start();
   await queue.createQueue(runQueueDefinition());
   const guard = fixtureGuard(client.server.port, [API_HOST, DOM_HOST], net);
-  const inner = createRepairPort({ pool, browser: false, llm: { config: async () => llmConfig(), client: (config) => createLlmClient(config) }, leaseWaitMs: 15_000 });
+  const inner = createRepairPort({
+    pool,
+    browser: false,
+    llm: { config: async () => llmConfig(), client: (config) => createLlmClient(config) },
+    judgeLlm: { config: async () => llmConfig(), client: (config) => createLlmClient(config) },
+    quality: { judgeEnabled: async () => judgeEnabled },
+    leaseWaitMs: 15_000,
+  });
   // Observation du bail : quand le port rend la main, il a libéré le bail ; vN+1 doit déjà être la version courante.
   const repair: RepairPort = async (request) => {
     const out = await inner(request);
@@ -140,6 +150,7 @@ afterAll(async () => {
 
 beforeEach(async () => {
   fake.reset();
+  judgeEnabled = false;
   await client.reset();
 });
 
@@ -370,6 +381,45 @@ describe('réparation dans le même run (04 §5)', () => {
     // Essais journalisés : v1, la candidate « faux succès », la candidate retenue (le patch refusé n'a rien rejoué).
     expect(run.attempts.map((a) => a.result)).toEqual(['extraction', 'ok', 'ok']);
     expect((await versions(apiId))[1]!.patch).toEqual([{ op: 'replace', path: '/fields/name/path', value: '$.full_name' }]);
+  });
+});
+
+describe('réparation : masquage et juge consultatif (2.12)', () => {
+  test('masquage des couches 1 et 2 pour le rôle repair (19 §3) : canaris e-mail et téléphone de apis.description absents de tout prompt de réparation', async () => {
+    const apiId = await healthyContacts('zz_test_repair_masked');
+    await pool.query("UPDATE apis SET description = 'Contacts du CRM ; écrire à zz.canary.repair@example.test ou appeler le 06 12 34 56 78' WHERE id = $1", [apiId]);
+    await site('api_json', { mutation: 'rename_field' });
+    fake.setScenario(MODEL, [proposal([{ op: 'replace', path: '/fields/name/path', value: '$.full_name' }])]);
+    const run = await runOf(apiId);
+    expect(run).toMatchObject({ state: 'succeeded', strategy_version: 2 });
+    expect(fake.calls.length).toBeGreaterThan(0);
+    const prompts = fake.calls.map((c) => JSON.stringify(c.body)).join('\n');
+    expect(prompts).not.toContain('zz.canary.repair@example.test');
+    expect(prompts).not.toContain('06 12 34 56 78');
+    expect(prompts).toContain('Contacts du CRM ; écrire à [email] ou appeler le [phone]');
+  });
+
+  test('assert_judge_advisory_only (réparation) — juge « wrong » sur tous les champs avant que vN+1 devienne courante : runs.judge repair et flag, vN+1 courante, transitions d’un run sans juge, coût du jugement imputé au run', async () => {
+    const apiId = await healthyContacts('zz_test_repair_judged');
+    await site('api_json', { mutation: 'rename_field' });
+    judgeEnabled = true;
+    const wrong = { verdicts: ['id', 'name', 'email', 'city', 'score'].map((field) => ({ field, verdict: 'wrong', indices: [0], reason: 'faux' })) };
+    fake.setScenario(MODEL, [proposal([{ op: 'replace', path: '/fields/name/path', value: '$.full_name' }])]);
+    fake.setScenario(JUDGE, [scripted.json(wrong)]);
+    const run = await runOf(apiId);
+    expect(run).toMatchObject({ state: 'succeeded', outcome: 'degraded', items: 500, strategy_version: 2 });
+    const row = (await pool.query<{ judge: { trigger: string; flag: boolean } | null; cost_llm_usd: string | null }>('SELECT judge, cost_llm_usd FROM runs WHERE id = $1', [run.id])).rows[0]!;
+    expect(row.judge).toMatchObject({ trigger: 'repair', flag: true });
+    // Avis seul : vN+1 courante, statut et transitions identiques à un run réparé sans juge, aucune ligne due au juge.
+    expect(await apiRow(apiId)).toMatchObject({ status: 'warning', status_reason: 'repaired', current_strategy_version: 2 });
+    expect(await transitions(apiId)).toEqual(['sain>reparation:extraction', 'reparation>warning:repaired']);
+    expect(currentAtPortReturn.get(apiId)).toEqual([2]);
+    // Coût : l'appel du rôle repair (journal) plus celui du juge, imputés au run (INV4).
+    expect(fake.calls.filter((c) => (c.body as { model: string }).model === JUDGE)).toHaveLength(1);
+    const repairUsd = ((await logEvents(run.id)).find((e) => e.event === 'repair_call')!.data as { llm_usd: number }).llm_usd;
+    expect(Number(row.cost_llm_usd)).toBeGreaterThan(repairUsd);
+    const judged = (await logEvents(run.id)).find((e) => e.event === 'judge_flag');
+    expect(judged?.data).toMatchObject({ trigger: 'repair' });
   });
 });
 

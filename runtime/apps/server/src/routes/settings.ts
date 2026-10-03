@@ -15,6 +15,7 @@ import { LlmError, OpenAICompatTransport, probeCapabilities } from '@runtime/llm
 import type { FastifyInstance, FastifyReply } from 'fastify';
 import type { ServerContext } from '../context.js';
 import { reasonMessage } from '../rest/shared.js';
+import { readValidatedModels } from '../validated-models.js';
 import { iso, UUID } from './account-helpers.js';
 import { audit, notFound, sendError } from './guard.js';
 
@@ -157,6 +158,8 @@ async function llmView(ctx: ServerContext) {
       headers_set: typeof p.headers_secret_id === 'string',
       api_key_unreadable: bad.has(p.api_key_secret_id),
     })),
+    // Statut « modèle validé » du banc (15 § 11), lecture seule : dernière mesure N2 de chaque modèle.
+    validated_models: readValidatedModels(ctx.validatedModelsFile),
   };
 }
 

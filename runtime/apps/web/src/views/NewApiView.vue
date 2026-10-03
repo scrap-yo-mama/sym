@@ -8,6 +8,7 @@
  * (le journal se rejoue depuis le début).
  * @page
  */
+import { providersReceiving, type ProviderNoticeSettings } from '@/lib/provider-notice';
 import { computed, nextTick, onMounted, onServerPrefetch, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { useRoute, useRouter } from 'vue-router';
@@ -40,8 +41,11 @@ const showBoard = computed(() => state.runId !== null || state.apiId !== null ||
 const llm = useLlmSettings();
 onMounted(() => void llm.load());
 onServerPrefetch(() => llm.load());
+// Mention étendue (2.12) : `judge` s'il est activé, `reflect`, et `embed` si l'étage 4 de la mémoire l'est.
 const providerNotice = computed(() => {
-  const roleProvider = llm.roles.investigate?.provider;
+  const receiving = providersReceiving(llm.data.value as ProviderNoticeSettings | null);
+  if (receiving.length > 1) return t('newApi.providerNoticeMany', { providers: receiving.join(', ') });
+  const roleProvider = receiving[0] ?? llm.roles.investigate?.provider;
   const named = llm.providers.value.find((provider) => provider.id === roleProvider) ?? llm.providers.value[0];
   return named ? t('newApi.providerNotice', { provider: named.id }) : t('newApi.providerNoticeGeneric');
 });

@@ -315,6 +315,9 @@ importers:
       pg:
         specifier: 'catalog:'
         version: 8.23.0
+      pino:
+        specifier: 'catalog:'
+        version: 10.3.1
       playwright-core:
         specifier: 'catalog:'
         version: 1.63.0

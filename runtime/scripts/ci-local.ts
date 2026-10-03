@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // CI locale (remplace GitHub Actions tant que la facturation est bloquée) : rejoue en séquence les étapes des jobs
-// quality, docs, vitrine, unit, security, image, e2e et integration de .github/workflows/ci.yml. S'arrête au premier échec (code ≠ 0).
+// quality, docs, vitrine, unit, security, image, e2e, integration et eval de .github/workflows/ci.yml. S'arrête au premier échec (code ≠ 0).
 import { spawnSync } from 'node:child_process';
 
 type Step = { job: string; name: string; cmd: string[]; cwd?: 'root' };
@@ -43,6 +43,8 @@ const STEPS: Step[] = [
   // Matrice PostgreSQL 16, 17, 18 jouée l'une après l'autre (Testcontainers, PG_VERSIONS surchargeable).
   { job: 'integration', name: 'integration (PG ' + (process.env.PG_VERSIONS ?? '16,17,18') + ')', cmd: ['pnpm', 'test:integration'] },
   { job: 'integration', name: 'contract', cmd: ['pnpm', 'vitest', 'run', '--project', 'contract'] },
+  // Tâche 2.8 : banc d'évaluation N0 (faux fournisseur, fixtures, base jetable, aucune sortie de l'instance).
+  { job: 'eval', name: 'banc N0 (pnpm eval)', cmd: ['pnpm', 'eval'] },
   // Tâche 4.8 : le quickstart du site de doc rejoué sur une instance vierge (même script que le job `docs` de la CI).
   { job: 'docs', name: 'quickstart rejoué sur une instance vierge', cmd: ['pnpm', 'docs:quickstart'] },
 ];

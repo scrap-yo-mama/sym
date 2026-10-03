@@ -66,6 +66,8 @@ export type ServerContext = {
   rest: RestLimits;
   /** Serveur MCP (tâche 3.2) ; null : `DISABLE_MCP` (aucune route /mcp). */
   mcp: McpRuntime | null;
+  /** Fichier du statut « modèle validé » (eval/validated-models.json, 15 § 11) ; tests : un autre fichier. */
+  validatedModelsFile?: URL | string;
 };
 
 type RestLimits = {

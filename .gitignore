@@ -10,6 +10,10 @@ dist/
 site/e2e/reports/
 .lighthouseci/
 test-results/
+# Rapports du banc d'évaluation (tâche 2.8) : produits par `pnpm eval`, publiés en artefact de CI, jamais versionnés.
+runtime/eval/results/n0/
+runtime/eval/results/n1/
+runtime/eval/results/n2/
 playwright-report/
 
 # Secrets et état Netlify

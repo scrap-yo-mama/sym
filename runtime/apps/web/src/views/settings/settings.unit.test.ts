@@ -115,6 +115,23 @@ describe('Réglages > Modèles IA', () => {
     expect(html).toContain(en.settings.models.rolesIntro);
   });
 
+  test('statut « modèle validé » en lecture seule (15 §11) : un modèle jamais mesuré par le banc est « non validé »', async () => {
+    const validated_models = [
+      { model_id: 'glm', date: '2026-09-30', status: 'validated', level: 'N2' },
+      { model_id: 'zz-mesure-ko', date: '2026-09-30', status: 'not_validated', level: 'N2' },
+    ];
+    installFakeServer({ ...sessionRoutes, 'GET /api/settings/llm': () => json(200, { ...llmSettings, validated_models }) });
+    const html = await view(ModelsSettingsView);
+    const badges = [...html.matchAll(/<p[^>]*data-testid="model-validation"[^>]*>([^<]*)<\/p>/g)].map((m) => m[1]?.trim());
+    // investigate → glm (validé le 30/09), extract → qwen (jamais mesuré) ; repair et agent sans modèle : aucun badge.
+    expect(badges).toEqual([en.settings.models.validation.validated.replace('{date}', '2026-09-30'), en.settings.models.validation.notValidated]);
+    // Sans liste du serveur (route antérieure), tout modèle configuré reste « non validé ».
+    installFakeServer({ ...sessionRoutes, 'GET /api/settings/llm': () => json(200, llmSettings) });
+    const bare = await view(ModelsSettingsView);
+    expect((bare.match(/data-testid="model-validation"/g) ?? []).length).toBe(2);
+    expect(bare).not.toContain(en.settings.models.validation.validated.replace('{date}', '2026-09-30'));
+  });
+
   test('un non-admin (403) lit un message clair, pas une panne', async () => {
     installFakeServer({ ...sessionRoutes, 'GET /api/settings/llm': () => json(403, { error: { code: 'forbidden', message: 'x' } }) });
     const html = await view(ModelsSettingsView);
