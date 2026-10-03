@@ -253,12 +253,12 @@ jobs:
       - run: 'echo "api-contract : pas encore implémenté (tâches 3.1 et 3.2 : Schemathesis en image Docker, conformité MCP)"'
 
   e2e:
-    # Les quatre suites tournent en parallèle (une par runner) au lieu de s'enchaîner : ~20 min ramenées à ~10 (D-93).
+    # Les suites tournent en parallèle (console en deux moitiés) (une par runner) au lieu de s'enchaîner : ~20 min ramenées à ~10 (D-93).
     name: e2e (${{ matrix.suite }})
     strategy:
       fail-fast: false
       matrix:
-        suite: [extension, web, instance, visual]
+        suite: [extension, web-1, web-2, instance, visual]
     runs-on: ubuntu-24.04
     # Borne du job (D-88) : un blocage ne consomme jamais les 6 h du runner.
     timeout-minutes: 60
@@ -280,16 +280,16 @@ jobs:
       # E2 extension (tâche 2.6) : PostgreSQL 16 jetable (Testcontainers), sites de fixtures en boucle locale.
       - if: matrix.suite == 'extension'
         run: pnpm --filter @runtime/extension test:e2e
-      - if: matrix.suite == 'web'
-        run: pnpm --filter @runtime/web test:e2e
+      - if: matrix.suite == 'web-1' || matrix.suite == 'web-2'
+        run: pnpm --filter @runtime/web exec playwright test --shard=${{ matrix.suite == 'web-1' && '1' || '2' }}/2
       - if: matrix.suite == 'instance'
         run: pnpm exec playwright test -c tests/e2e/playwright.config.ts
       # Régression visuelle par langue (3.17, part de 3.6) : la suite visuelle de la console, sautée ci-dessus hors de l'image,
       # est comparée aux instantanés linux dans l'image Playwright épinglée de deploy/Dockerfile ; une référence absente échoue.
       # Le conteneur se borne lui-même (SYM_VISUAL_TIMEOUT_MS, 25 min, scripts/visual-image-bound.ts, D-88) ; l'étape en filet.
-      - if: matrix.suite == 'visual'
-        run: pnpm visual:image
+      - run: pnpm visual:image
         timeout-minutes: 30
+        if: matrix.suite == 'visual'
       # Gate d'accessibilité de la console (tâche 3.9) : axe sur chaque écran (clair, sombre, en, fr), parcours au clavier seul, live
       # regions, reflow à 320 px ; la console est construite et servie en local par le test (apps/web/e2e). Parcours d'invitation
       # (tâche 3.8) : la console construite contre une instance réelle (PostgreSQL 16 jetable, serveur en écoute), runtime/tests/e2e. À venir :
