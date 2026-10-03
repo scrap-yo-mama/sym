@@ -25,6 +25,15 @@ Deux ères de protocole, un seul code (le SDK serveur fait la correspondance) :
   pas de question et reste sur le repli `validate_schema`. Le texte, `progress` (si le client envoie un jeton) et `list_changed`
   fonctionnent sans changement.
 
+## Statut à la livraison de 3.10
+
+Le critère de 05 § 4.4 sur les clients réels (« le jeu de 12 prompts tourne sur les 4 clients de la matrice, l'outil attendu
+est choisi ») n'est **pas joué** par la tâche 3.10 : il est reporté à la recette (étape MCP), comme le prévoit 15 § 6 (jeu
+rejoué à la recette, clients réels manuels, captures consignées). Ce report est à consigner au journal d'exécution du CDC par l'orchestrateur (la tâche n'écrit pas dans `cdc/`). Ce
+que la tâche livre : le jeu de prompts (`eval/mcp-prompts.json`), la grille ci-dessous, et la seconde moitié du critère
+(descriptions servies identiques aux textes figés) vérifiée automatiquement. Toutes les cases restent « à constater »
+jusqu'à la recette.
+
 ## Grille de recette : 4 clients réels
 
 Clients de la matrice (05 § 1) : Claude (Desktop, web ou Code), ChatGPT, Cursor, opencode. Pour chacun : ajouter

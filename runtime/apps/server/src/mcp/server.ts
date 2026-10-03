@@ -717,7 +717,7 @@ function registerPrompts(server: McpServer, locale: McpLocale): void {
 
 /** Serveur MCP d'une requête : outils des toolsets demandés, outils par API de l'acteur, prompts. */
 export async function buildMcpServer(ctx: ServerContext, caller: McpCaller, version: string): Promise<McpServer> {
-  const server = new McpServer({ name: 'sym', version }, { instructions: MCP_INSTRUCTIONS, capabilities: { tools: { listChanged: true } } });
+  const server = new McpServer({ name: 'sym', version }, { instructions: MCP_INSTRUCTIONS, capabilities: { tools: { listChanged: true }, prompts: { listChanged: false } } });
   const locale = await localeOf(ctx, caller);
   const all = handlers(ctx);
   /** Outils enregistrés et scope exigé par chacun. */

@@ -12,7 +12,8 @@
 #   `json_schema_2020_12_tool`, `greet`, `test://…`). SYM n'expose que ses 9 outils génériques et ses outils par API
 #   (05 § 1.1, descriptions figées comparées au code) : ajouter des outils de démonstration au serveur de production
 #   élargirait sa surface et son budget de définitions (assert_tool_definitions_budget).
-# - [3.10] prompts MCP, progression, élicitation : livrés par l'expérience MCP (tâche 3.10).
+# - [3.10] prompts MCP, progression, élicitation : livrés par l'expérience MCP (tâche 3.10). La liste des prompts est fixe :
+#   capacité `prompts` déclarée sans `listChanged`.
 # - [3.14] ressources MCP (ressource d'itération `scrapyomama://api/{slug}/iteration`) : tâche 3.14.
 # - [V2] extension `io.modelcontextprotocol/tasks` : V2 (05 § 1.4) ; journalisation MCP (dépréciée par SEP-2577) et
 #   complétion : non prévues par le CDC.
@@ -57,13 +58,12 @@ server:
   - server-sse-multiple-streams
   # [démo] en-têtes personnalisés (SEP-2243) : aucun outil SYM ne déclare `x-mcp-header`.
   - http-custom-header-server-validation
-  # [3.10] prompts.
-  - prompts-list
+  # [3.10] SYM sert ses 4 prompts (prompts-list passe) ; les scénarios prompts-get-* demandent les prompts de
+  # démonstration de la suite (`test_simple_prompt`…), que SYM n'expose pas (même raison que [démo]).
   - prompts-get-simple
   - prompts-get-with-args
   - prompts-get-embedded-resource
   - prompts-get-with-image
-  - caching:sep-2549-prompts-list-caching-hints
   # [3.14] ressources.
   - resources-list
   - resources-read-text

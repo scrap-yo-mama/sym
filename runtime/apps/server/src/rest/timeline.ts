@@ -21,6 +21,18 @@ const str = (v: unknown): string | null => (typeof v === 'string' && v !== '' ? 
 const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
 const round6 = (v: number) => Math.round(v * 1e6) / 1e6;
 
+/** Forme d'un code du worker (cause, classe d'échec, résultat, mode, phase, chemin) : liste fermée, jamais un texte. */
+const CODE = /^[a-z][a-z0-9_]{0,39}$/;
+/** Nom d'hôte en minuscules (domaine de l'enquête), sans port ni chemin. */
+const HOST = /^(?=.{1,253}$)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*$/;
+
+/** Code présent : lui-même s'il a la forme d'un code, sinon `unknown` (jamais le texte reçu). */
+export const codeOf = (v: unknown): string => (typeof v === 'string' && CODE.test(v) ? v : 'unknown');
+/** Code facultatif : `null` s'il est absent, `unknown` s'il n'a pas la forme d'un code. */
+export const codeOrNull = (v: unknown): string | null => (v === null || v === undefined || v === '' ? null : codeOf(v));
+/** Domaine : le nom d'hôte s'il en a la forme, sinon `null`. */
+export const hostOrNull = (v: unknown): string | null => (typeof v === 'string' && HOST.test(v) ? v : null);
+
 /** Premier élément de la chronologie : l'enquête elle-même (API, domaine, phase courante). */
 type TimelineStart = { kind: 'investigation'; step: 0; slug: string; domain: string | null; phase: string };
 export type TimelineAccess = { kind: 'access_report'; step: number; signal: 'allowed' | 'review' | 'disallowed' | null; robots: string | null; cost_usd: number; ms: number };
@@ -75,7 +87,7 @@ function phaseOf(events: readonly EventRow[]): string {
 export function buildTimeline(events: readonly EventRow[], slug: string): TimelineEntry[] {
   const sorted = [...events].sort((a, b) => a.seq - b.seq);
   const first = sorted.find((e) => e.kind === EV.started);
-  const out: TimelineEntry[] = [{ kind: 'investigation', step: 0, slug, domain: str(rec(first?.payload)['domain']), phase: phaseOf(sorted) }];
+  const out: TimelineEntry[] = [{ kind: 'investigation', step: 0, slug, domain: hostOrNull(rec(first?.payload)['domain']), phase: codeOf(phaseOf(sorted)) }];
   let step = 0;
   let spent = 0;
   let previousAt: Date | null = null;
@@ -92,7 +104,7 @@ export function buildTimeline(events: readonly EventRow[], slug: string): Timeli
           kind: 'access_report',
           step: (step += 1),
           signal: signal === 'allowed' || signal === 'review' || signal === 'disallowed' ? signal : null,
-          robots: str(rec(view['robots'])['status']),
+          robots: codeOrNull(rec(view['robots'])['status']),
           cost_usd: 0,
           ms: elapsed,
         });
@@ -102,9 +114,9 @@ export function buildTimeline(events: readonly EventRow[], slug: string): Timeli
         out.push({
           kind: 'reconnaissance',
           step: (step += 1),
-          mode: str(p['mode']),
+          mode: codeOrNull(p['mode']),
           sources: Array.isArray(p['candidates']) ? p['candidates'].length : 0,
-          failure_class: str(p['failure_class']),
+          failure_class: codeOrNull(p['failure_class']),
           cost_usd: delta,
           ms: elapsed,
         });
@@ -122,9 +134,9 @@ export function buildTimeline(events: readonly EventRow[], slug: string): Timeli
         out.push({
           kind: 'attempt',
           step: (step += 1),
-          execution: str(a['execution']) ?? '',
-          network: str(a['network']) ?? '',
-          result: str(a['result']) ?? 'unknown',
+          execution: codeOf(a['execution']),
+          network: codeOf(a['network']),
+          result: codeOf(a['result']),
           records: num(last?.['records']),
           pages: num(last?.['pages']),
           est_cost_usd: num(a['est_cost_usd']),
@@ -138,25 +150,25 @@ export function buildTimeline(events: readonly EventRow[], slug: string): Timeli
         out.push({
           kind: 'pruned',
           step: null,
-          by: str(by['execution']) === null ? null : { execution: str(by['execution'])!, network: str(by['network']) ?? '' },
-          reason: str(p['reason']),
+          by: str(by['execution']) === null ? null : { execution: codeOf(by['execution']), network: codeOf(by['network']) },
+          reason: codeOrNull(p['reason']),
           count: Array.isArray(p['pruned']) ? p['pruned'].length : 0,
         });
         break;
       }
       case EV.actionRequired:
-        out.push({ kind: 'action_required', step: null, cause: str(p['cause']) ?? 'unknown' });
+        out.push({ kind: 'action_required', step: null, cause: codeOf(p['cause']) });
         break;
       case EV.finished: {
         const s = rec(p['strategy']);
         out.push({
           kind: 'finished',
           step: null,
-          outcome: str(p['outcome']) ?? 'unknown',
-          strategy: str(s['execution']) === null ? null : { version: num(s['version']), execution: str(s['execution'])!, network: str(s['network']) ?? '', est_cost_usd: num(s['est_cost_usd']) },
+          outcome: codeOf(p['outcome']),
+          strategy: str(s['execution']) === null ? null : { version: num(s['version']), execution: codeOf(s['execution']), network: codeOf(s['network']), est_cost_usd: num(s['est_cost_usd']) },
           items: num(p['items']),
-          stop_reason: str(p['stop_reason']),
-          failure_class: str(p['failure_class']),
+          stop_reason: codeOrNull(p['stop_reason']),
+          failure_class: codeOrNull(p['failure_class']),
         });
         break;
       }

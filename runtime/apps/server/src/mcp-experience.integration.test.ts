@@ -26,6 +26,8 @@ let srv: TestServer;
 let base: string;
 let a: Party;
 let b: Party;
+/** Compte dont la langue enregistrée est `fr` (21 § 4.3 : la langue du compte, sans ?lang=). */
+let frAccount: Party;
 const clients: Client[] = [];
 
 type Elicit = { seen: { message: string; requestedSchema: unknown }[]; answer: () => { action: 'accept' | 'decline' | 'cancel'; content?: Record<string, string | number | boolean | string[]> } };
@@ -116,11 +118,18 @@ async function simulateFirstInvestigation(owner: Party, gapMs = 120): Promise<{ 
   return { runId, apiId };
 }
 
-/** Worker simulé, essais après validation : un essai conforme sur 2 pages, stratégie retenue, run terminé. */
+/**
+ * Worker simulé, essais après validation : comme le vrai worker, chaque run d'enquête commence par le rapport d'accès
+ * (étape 0, imposé par le déclencheur investigation_events_access_report_first de 0015) et refait la reconnaissance (l'état
+ * ne garde aucune valeur du site, 17 § 6) ; puis un essai conforme sur 2 pages, stratégie retenue, run terminé.
+ */
 async function simulateTrials(owner: Party, gapMs = 100): Promise<string> {
   const { runId, apiId } = await nextInvestigation(owner);
   await emit(runId, 'investigation.started', { phase: 'testing', url: 'https://zz-books.example/catalogue/', domain: 'zz-books.example', network: 'direct', budget: BUDGET(0.002) });
   await sleep(gapMs);
+  await emit(runId, 'access_report', { id: ACCESS_VIEW.id, view: ACCESS_VIEW, verdict: { proceed: true } });
+  await sleep(gapMs);
+  await emit(runId, 'reconnaissance.finished', { mode: 'browser', candidates: [{ id: 'c1' }, { id: 'c2' }], document_bytes: 100, total_bytes: 200, budget: BUDGET(0.002) });
   await emit(runId, 'phase.started', { phase: 'testing', plan: [], budget: BUDGET(0.002) });
   await sleep(gapMs);
   await emit(runId, 'attempt.finished', {
@@ -140,7 +149,7 @@ async function simulateTrials(owner: Party, gapMs = 100): Promise<string> {
 
 beforeAll(async () => {
   srv = await startTestServer(
-    'mcp-exp',
+    'mcp_exp',
     { MAX_WAIT_SECONDS: '5', MAX_CONCURRENT_RUNS: '1000', MAX_ACTIVE_RUNS_PER_USER: '1000', MAX_RUNS_PER_KEY_PER_MINUTE: '1000', MCP_ALLOWED_HOSTS: '127.0.0.1' },
     { rest: { pollMs: 40 } },
   );
@@ -152,6 +161,8 @@ beforeAll(async () => {
   await party(owner);
   a = await party(await createUser(srv, 'zz_test_mcpx_a@example.test'));
   b = await party(await createUser(srv, 'zz_test_mcpx_b@example.test'));
+  frAccount = await party(await createUser(srv, 'zz_test_mcpx_fr@example.test'));
+  await withClient(srv.db.url, (c) => c.query("UPDATE users SET locale = 'fr' WHERE id = $1", [frAccount.user.id]));
   base = await srv.app.listen({ port: 0, host: '127.0.0.1' });
 }, 180_000);
 
@@ -172,9 +183,12 @@ describe('instructions et prompts (05 § 1.3, 19c § 8, 21 § 4.3)', () => {
   });
 
   test('4 prompts : noms stables, titres de marque sym:, titres localisés par ?lang=, cacheScope privé', async () => {
-    const en = await (await connect(a.key, { lang: 'en' })).listPrompts();
+    const enClient = await connect(a.key, { lang: 'en' });
+    // Liste fixe de 4 prompts : capacité prompts déclarée sans listChanged (aucune notification promise, jamais envoyée).
+    expect(enClient.getServerCapabilities()?.prompts).toEqual({ listChanged: false });
+    const en = await enClient.listPrompts();
     const fr = await (await connect(a.key, { lang: 'fr' })).listPrompts();
-    expect(en.prompts.map((p) => p.name).sort()).toEqual(['fix_api', 'first_steps', 'new_api', 'review_catalog']);
+    expect(en.prompts.map((p) => p.name).sort()).toEqual(['first_steps', 'fix_api', 'new_api', 'review_catalog']);
     expect(fr.prompts.map((p) => p.name).sort()).toEqual(en.prompts.map((p) => p.name).sort());
     for (const p of en.prompts) expect(p.title).toMatch(/^sym:/);
     const enNew = en.prompts.find((p) => p.name === 'new_api')!;
@@ -208,13 +222,13 @@ describe('récit et timeline (05 § 1.2)', () => {
     expect(created.isError ?? false).toBe(false);
     const first = text(created);
     // Phases, étapes numérotées, coût en tête de ligne, prochaine action et lien console, schéma à montrer à la personne.
-    expect(first).toMatch(/^Investigation zz-test-livres? .*· zz-books\.example · awaiting_schema_validation/m);
+    expect(first).toMatch(/^Investigation [a-z0-9-]+ · zz-books\.example · awaiting_schema_validation/m);
     expect(first).toMatch(/^1\. Access report: robots\.txt allows this page \[\d+\.\d s, \$0\]/m);
     expect(first).toMatch(/^2\. Reconnaissance: 2 candidate data sources \(browser\) \[\d+\.\d s, \$0\.002\]/m);
     expect(first).toContain('Output schema proposed: 2 fields');
     expect(first).toMatch(/Cost: \$0\.002/);
     expect(first).toContain('Next step: show the proposed schema to the user, then call validate_schema');
-    expect(first).toMatch(/Console: http\S+\/apis\/zz-test-livres?/);
+    expect(first).toMatch(/Console: http\S+\/apis\/[a-z0-9-]+$/m);
     expect(first).toContain('Proposed output schema: {"type":"object"');
     expect(first).toContain('zz_test A');
 
@@ -224,7 +238,9 @@ describe('récit et timeline (05 § 1.2)', () => {
     await trials;
     const second = text(validated);
     expect(second).toMatch(/^Investigation .* · done/m);
-    expect(second).toMatch(/^1\. Trial fetch\/direct: conformant, 20 items, 2 pages \[0\.4 s, \$0\.0001\]/m);
+    expect(second).toMatch(/^1\. Access report: robots\.txt allows this page \[\d+\.\d s, \$0\]/m);
+    expect(second).toMatch(/^2\. Reconnaissance: 2 candidate data sources \(browser\) \[\d+\.\d s, \$0\]/m);
+    expect(second).toMatch(/^3\. Trial fetch\/direct: conformant, 20 items, 2 pages \[0\.4 s, \$0\.0001\]/m);
     expect(second).toContain('Strategy kept: fetch/direct (E1, $0.0001 per run)');
     expect(second).toMatch(/Cost: \$0\.0021/);
     expect(second).toMatch(/Next step: call api_\w+ with its input, or run_api\./);
@@ -276,6 +292,27 @@ describe('récit et timeline (05 § 1.2)', () => {
     expect(body).toMatch(/^1\. Rapport d’accès : robots\.txt autorise cette page \[\d+,\d s, 0 \$\]/m);
     expect(body).toContain('Prochaine étape : montre le schéma proposé');
     expect(created.structuredContent).toMatchObject({ message_locale: 'fr', investigation_phase: 'awaiting_schema_validation' });
+  });
+
+  test('langue du compte sans ?lang= (21 § 4.3) : compte en fr, récit et titres de prompts en français ; ?lang=en la remplace', async () => {
+    const own = await connect(frAccount.key);
+    const asked = await (await connect(a.key, { lang: 'fr' })).listPrompts();
+    const english = await (await connect(a.key, { lang: 'en' })).listPrompts();
+    const prompts = await own.listPrompts();
+    const byName = (list: typeof prompts) => Object.fromEntries(list.prompts.map((p) => [p.name, { title: p.title, description: p.description }]));
+    expect(byName(prompts)).toEqual(byName(asked));
+    expect(byName(prompts)).not.toEqual(byName(english));
+    const sim = simulateFirstInvestigation(frAccount, 40);
+    const created = await call(own, 'create_api', { description: 'zz_test livres du compte fr', url: 'https://zz-books.example/catalogue/', wait_seconds: 5 });
+    await sim;
+    const body = text(created);
+    expect(body).toMatch(/^Enquête /m);
+    expect(body).toMatch(/^1\. Rapport d’accès : /m);
+    expect(body).toContain('Prochaine étape : montre le schéma proposé');
+    expect(created.structuredContent).toMatchObject({ message_locale: 'fr' });
+    // ?lang= remplace la langue du compte.
+    const overridden = await (await connect(frAccount.key, { lang: 'en' })).listPrompts();
+    expect(byName(overridden)).toEqual(byName(english));
   });
 
   test('get_run d’une enquête : le même récit (timeline non vide) ; run ordinaire : phrase et JSON, timeline vide', async () => {
@@ -404,6 +441,11 @@ describe('élicitation de la validation du schéma (05 § 1.3) : question plate,
   test('auto_validate : aucune question (la validation est demandée par l’appelant)', async () => {
     const elicit = elicitBy(() => ({ action: 'decline' }));
     const client = await connect(a.key, { era: 'modern', elicit });
+    // Sans la case « j'ai lu » (17 § 11), auto_validate est refusé par la route REST : une erreur, jamais une question.
+    const refused = await call(client, 'create_api', { description: 'zz_test livres auto', url: 'https://zz-books.example/catalogue/', auto_validate: true, wait_seconds: 0 });
+    expect(refused.isError).toBe(true);
+    expect(text(refused)).toContain('responsible_use_ack_required');
+    await withClient(srv.db.url, (c) => c.query("INSERT INTO responsible_use_acks (user_id, version) VALUES ($1, '2026-10-01') ON CONFLICT DO NOTHING", [a.user.id]));
     // L'enquête ne se termine pas pendant l'attente (aucun worker) : le résultat est « running », jamais une question.
     const result = await call(client, 'create_api', { description: 'zz_test livres auto', url: 'https://zz-books.example/catalogue/', auto_validate: true, wait_seconds: 0 });
     expect(elicit.seen).toHaveLength(0);

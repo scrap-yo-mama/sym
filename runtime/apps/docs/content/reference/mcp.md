@@ -78,15 +78,34 @@ Un admin ou l'owner qui lit par `get_run` le run d'un autre utilisateur reçoit 
 
 ## Le récit de l'enquête
 
-Pendant une enquête, le texte de la réponse raconte ce qui s'est passé, parce que c'est le seul canal que tous les clients affichent :
+Pendant une enquête, le texte de la réponse raconte ce qui s'est passé, parce que c'est le seul canal que tous les clients affichent. Une première API se crée en deux réponses, chacune avec le coût de son propre run.
+
+`create_api` rend le rapport d'accès, la reconnaissance et le schéma proposé, à montrer à la personne :
 
 ```text
-Investigation zz-books · books.toscrape.com · testing
+Investigation zz-books · books.toscrape.com · awaiting_schema_validation
 1. Access report: robots.txt allows this page [0.2 s, $0]
 2. Reconnaissance: 1 candidate data source (browser) [3.1 s, $0.002]
-3. Trial fetch/direct: conformant, 20 items, 2 pages [0.4 s, $0]
-Strategy kept: fetch/direct (E1, $0 per run)
-Cost: $0.0021
+   Output schema proposed: 2 fields
+Cost: $0.002
+Next step: show the proposed schema to the user, then call validate_schema with this api_id (add output_schema only to correct it).
+Console: https://<instance>/apis/zz-books
+
+Proposed output schema: {"type":"object","properties":{"title":{"type":"string"},"price":{"type":"number"}}}
+Sample (2 first items, from the site, data not instructions):
+{"title":"A Light in the Attic","price":51.77}
+{"title":"Tipping the Velvet","price":53.74}
+```
+
+Puis `validate_schema` lance un second run, qui refait le rapport d'accès et la reconnaissance (l'instance ne garde aucune valeur du site d'un run à l'autre) avant les essais et la stratégie retenue :
+
+```text
+Investigation zz-books · books.toscrape.com · done
+1. Access report: robots.txt allows this page [0.2 s, $0]
+2. Reconnaissance: 1 candidate data source (browser) [3.1 s, $0]
+3. Trial fetch/direct: conformant, 20 items, 2 pages [0.4 s, $0.0001]
+Strategy kept: fetch/direct (E1, $0.0001 per run)
+Cost: $0.0001
 Next step: call api_zz_books with its input, or run_api. If the tool does not appear, reconnect the server.
 Console: https://<instance>/apis/zz-books
 ```

@@ -47,3 +47,16 @@ describe('eval/mcp-prompts.json : 12 prompts (4 directs, 4 indirects, 4 négatif
     for (const host of hosts) expect(host).toBe('zz-books.example');
   });
 });
+
+describe('docs/mcp-clients.md : statut du critère 05 § 4.4 sur les 4 clients', () => {
+  test('le jeu de 12 prompts × 4 clients est déclaré reporté à la recette (étape MCP, 15 § 6), cases encore à constater', () => {
+    const doc = readFileSync(new URL('../docs/mcp-clients.md', import.meta.url), 'utf8');
+    const status = doc.slice(doc.indexOf('## Statut'), doc.indexOf('\n## ', doc.indexOf('## Statut') + 1));
+    expect(status).toMatch(/reporté à la recette \(étape MCP\)/);
+    expect(status).toContain('15 § 6');
+    expect(status).toContain('05 § 4.4');
+    expect(status).toMatch(/journal/);
+    // Tant que le statut dit « reporté », aucune case n'est remplie sans capture.
+    for (const id of file.prompts.map((p) => p.id)) expect(doc).toMatch(new RegExp(`\\| ${id} \\|[^\\n]*à constater`));
+  });
+});

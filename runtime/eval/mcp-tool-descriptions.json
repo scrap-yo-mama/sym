@@ -1,5 +1,11 @@
 {
   "description": "Empreintes SHA-256 des descriptions d’outils MCP servies (05 § 3 : descriptions figées, comparées au CDC par un test). Une description ne change qu’avec le CDC : régénérer ce fichier dans la même tâche.",
+  "fingerprint_policy": "05 § 3 (« descriptions figées, comparées au CDC par un test ») et 05 § 4.4 n’écrivent aucune description d’outil en toutes lettres : le CDC fixe des règles (anglais, aucun contenu scrapé, aucun statut, contenu vital repris des instructions), pas un texte. L’empreinte SHA-256 ci-dessous tient donc lieu de texte de référence : relue contre ces règles à la tâche qui la régénère, elle fige le texte servi, et toute retouche d’une description fait échouer le test tant que ce fichier n’est pas régénéré dans la même tâche.",
+  "cdc_literal": {
+    "source": "19c § 8 (« Faire compiler le dossier par l’IA ») : seuls textes du MCP que le CDC écrit en toutes lettres, recopiés tels quels ; le texte servi doit leur être identique.",
+    "brief_description": "Optional. What you already found about this site, as typed hints and what you tried. SYM checks each hint and may ignore it. It never widens access or budgets. No cookies, tokens or personal data. Keep it under 6 KB.",
+    "instructions_brief_sentence": "Before create_api, put what you found in brief."
+  },
   "sha256": {
     "create_api": "90c63c6a8dedfe2673c36dbd9a2c2d96e530d298c865ad172a377f1088899001",
     "validate_schema": "9d1854947f0aec3c29f6e1c18984d509ebba9ada847cf92d6cf73eb6e26fae5a",

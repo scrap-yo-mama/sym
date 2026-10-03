@@ -6,7 +6,7 @@
 //
 // Gabarits fermés (texts.ts) : jamais un texte du site ni du dossier d'enquête. Le dossier (19c § 7) n'entre que par des
 // identifiants validés (`h1`), des types et des états du code ; huit lignes d'indices au plus.
-import type { TimelineAccess, TimelineAttempt, TimelineEntry, TimelineFinished, TimelineRecon } from '../rest/timeline.js';
+import { codeOf, codeOrNull, hostOrNull, type TimelineAccess, type TimelineAttempt, type TimelineEntry, type TimelineFinished, type TimelineRecon } from '../rest/timeline.js';
 import {
   ACTION_CAUSES,
   actionTemplate,
@@ -48,7 +48,12 @@ export const BRIEF_MAX_LINES = 8;
 
 const ACTIVE = new Set(['queued', 'running', 'waiting_tunnel']);
 
-const pathLabel = (e: { execution: string; network: string }) => `${e.execution}/${e.network}`;
+/**
+ * Le générateur filtre lui-même chaque code qu'il écrit (cause, stop_reason, failure_class, result, raison d'élagage, mode,
+ * phase, chemin) : forme d'un code, sinon `unknown` ; domaine : forme d'un nom d'hôte, sinon rien. La chronologie applique
+ * déjà ces filtres (rest/timeline.ts) ; le récit ne compte pas sur elle : une entrée venue d'ailleurs n'y glisse aucun texte.
+ */
+const pathLabel = (e: { execution: string; network: string }) => `${codeOf(e.execution)}/${codeOf(e.network)}`;
 
 /** Texte d'une étape ou d'un jalon, sans numéro (le récit le numérote ; la progression MCP l'utilise telle quelle). */
 export function entryText(entry: TimelineEntry, locale: McpLocale): string | null {
@@ -62,28 +67,28 @@ export function entryText(entry: TimelineEntry, locale: McpLocale): string | nul
     }
     case 'reconnaissance': {
       const e: TimelineRecon = entry;
-      return `Reconnaissance${space}${e.failure_class === null ? c.recon(e.sources, e.mode) : c.reconFailed(e.failure_class)} ${cost(e)}`;
+      return `Reconnaissance${space}${e.failure_class === null ? c.recon(e.sources, codeOrNull(e.mode)) : c.reconFailed(codeOf(e.failure_class))} ${cost(e)}`;
     }
     case 'attempt': {
       const e: TimelineAttempt = entry;
-      return `${c.trial(pathLabel(e), e.result === 'ok', e.result, e.records, e.pages)} ${cost(e)}`;
+      return `${c.trial(pathLabel(e), e.result === 'ok', codeOf(e.result), e.records, e.pages)} ${cost(e)}`;
     }
     case 'schema':
       return c.schema(entry.ok, entry.fields);
     case 'pruned':
-      return entry.count === 0 ? null : c.pruned(entry.by === null ? null : pathLabel(entry.by), entry.reason, entry.count);
+      return entry.count === 0 ? null : c.pruned(entry.by === null ? null : pathLabel(entry.by), codeOrNull(entry.reason), entry.count);
     case 'action_required':
-      return (BLOCKED_CAUSES as readonly string[]).includes(entry.cause) ? blockedTemplate(locale, entry.cause) : (ACTION_CAUSES as readonly string[]).includes(entry.cause) ? actionTemplate(locale, entry.cause) : c.action(entry.cause);
+      return (BLOCKED_CAUSES as readonly string[]).includes(entry.cause) ? blockedTemplate(locale, entry.cause) : (ACTION_CAUSES as readonly string[]).includes(entry.cause) ? actionTemplate(locale, entry.cause) : c.action(codeOf(entry.cause));
     case 'finished': {
       const e: TimelineFinished = entry;
       if (e.outcome === 'conformant' && e.strategy !== null) {
         const code = EXECUTION_CODE[e.strategy.execution] ?? '';
         return c.strategy(pathLabel(e.strategy), code, fmtUsd(e.strategy.est_cost_usd, locale));
       }
-      if (e.outcome === 'stopped') return c.stopped(e.stop_reason);
+      if (e.outcome === 'stopped') return c.stopped(codeOrNull(e.stop_reason));
       if (e.outcome === 'budget_exhausted') return c.budget;
       if (e.outcome === 'cancelled') return c.cancelled;
-      return c.failed(e.failure_class);
+      return c.failed(codeOrNull(e.failure_class));
     }
     default:
       return null;
@@ -108,7 +113,7 @@ export function renderNarrative(input: NarrativeInput, locale: McpLocale): strin
   const lines: string[] = [];
   const brief = input.brief === undefined ? null : briefLines(input.brief, locale);
   if (brief !== null) lines.push(brief.head);
-  if (start !== undefined && start.kind === 'investigation') lines.push(c.title(start.slug, start.domain, start.phase));
+  if (start !== undefined && start.kind === 'investigation') lines.push(c.title(start.slug, hostOrNull(start.domain), codeOf(start.phase)));
   for (const entry of input.timeline) {
     const text = entryText(entry, locale);
     if (text === null) continue;
