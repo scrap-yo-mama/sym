@@ -195,7 +195,8 @@ describe('assert_tunnel_single_user (INV5)', () => {
     await vi.waitFor(async () => expect((await readTunnelJob(pool, forged))?.state).toBe('failed'), { timeout: 10_000 });
     expect(await readTunnelJob(pool, forged)).toMatchObject({ error: 'owner_mismatch', dispatched: false });
     expect(sA.received).toEqual([]);
-    expect((await auditActions('tunnel.route_denied')).at(-1)).toMatchObject({ outcome: 'denied', meta: { jobId: forged, reason: 'owner_mismatch' } });
+    // L'audit s'écrit après l'échec du job (autre transaction) : attendu, pas lu à l'instant (instable sous charge).
+    await vi.waitFor(async () => expect((await auditActions('tunnel.route_denied')).at(-1)).toMatchObject({ outcome: 'denied', meta: { jobId: forged, reason: 'owner_mismatch' } }), { timeout: 10_000 });
     expect(srv.started.ctx.tunnel!.routeDenied).toBeGreaterThanOrEqual(1);
     await sA.close();
   });
