@@ -6,12 +6,14 @@
 // volume Docker local), ses paquets construits, puis la suite visuelle jouée.
 //   pnpm visual:image            compare aux instantanés de apps/web/e2e/__visual__/linux (CI posée : une référence absente échoue)
 //   pnpm visual:image --update   (ré)écrit ces instantanés, à relire avant de les committer
+// Durée bornée (D-88) : SYM_VISUAL_TIMEOUT_MS (25 min par défaut) ; à l'expiration, le conteneur sym-visual-<pid> est supprimé.
 // Aucun site réel : la console est servie en boucle locale par le faux serveur d'API de apps/web/e2e/harness.ts. Rien n'est
 // publié, aucune image n'est construite ni poussée.
 import { spawnSync } from 'node:child_process';
 import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { runBoundedContainer, visualContainerName, visualTimeoutMs } from './visual-image-bound.ts';
 
 const runtimeDir = new URL('..', import.meta.url).pathname;
 const dockerfile = readFileSync(join(runtimeDir, 'deploy/Dockerfile'), 'utf8');
@@ -39,8 +41,8 @@ const inner = [
   'exit $status',
 ].join('\n');
 
+// La sous-commande `run` et le nom du conteneur sont posés par runBoundedContainer (borne de durée, D-88).
 const args = [
-  'run',
   '--rm',
   '--init',
   '-e', 'SYM_VISUAL_IMAGE=1',
@@ -54,8 +56,8 @@ const args = [
   'bash', '-c', inner,
 ];
 console.log(`visual:image : ${update ? 'mise à jour' : 'comparaison'} des instantanés linux dans ${image}`);
-const result = spawnSync('docker', args, { stdio: 'inherit' });
-const status = result.status ?? 1;
+// Borne de durée (D-88) : conteneur nommé, supprimé de force à l'expiration (SYM_VISUAL_TIMEOUT_MS, 25 min par défaut).
+const { status } = runBoundedContainer(spawnSync, args, { name: visualContainerName(process.pid), timeoutMs: visualTimeoutMs(process.env) });
 
 if (update && status === 0) {
   const target = join(runtimeDir, 'apps/web/e2e/__visual__/linux');

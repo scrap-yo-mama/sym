@@ -228,6 +228,8 @@ jobs:
 
   e2e:
     runs-on: ubuntu-24.04
+    # Borne du job (D-88) : un blocage ne consomme jamais les 6 h du runner.
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -246,7 +248,9 @@ jobs:
       - run: pnpm test:e2e
       # Régression visuelle par langue (3.17, part de 3.6) : la suite visuelle de la console, sautée ci-dessus hors de l'image,
       # est comparée aux instantanés linux dans l'image Playwright épinglée de deploy/Dockerfile ; une référence absente échoue.
+      # Le conteneur se borne lui-même (SYM_VISUAL_TIMEOUT_MS, 25 min, scripts/visual-image-bound.ts, D-88) ; l'étape en filet.
       - run: pnpm visual:image
+        timeout-minutes: 30
       # Gate d'accessibilité de la console (tâche 3.9) : axe sur chaque écran (clair, sombre, en, fr), parcours au clavier seul, live
       # regions, reflow à 320 px ; la console est construite et servie en local par le test (apps/web/e2e). Parcours d'invitation
       # (tâche 3.8) : la console construite contre une instance réelle (PostgreSQL 16 jetable, serveur en écoute), runtime/tests/e2e. À venir :

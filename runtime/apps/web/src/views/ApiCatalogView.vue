@@ -55,14 +55,6 @@ const announcement = computed(() => {
   return [...rows, ...counters].join(' ');
 });
 
-function resetFilters(): void {
-  filters.status = '';
-  filters.attention = false;
-  filters.execution = '';
-  filters.network = '';
-  filters.q = '';
-}
-
 const selectClass = 'h-11 rounded-md border-[1.5px] border-foreground bg-card px-2 text-sm focus-visible:border-ring outline-none';
 </script>
 
@@ -74,16 +66,11 @@ const selectClass = 'h-11 rounded-md border-[1.5px] border-foreground bg-card px
         <h1 data-route-heading tabindex="-1" class="font-display text-[44px] leading-[1.1] font-extrabold tracking-[-1px]">{{ t('catalog.title') }}</h1>
         <p v-if="summary" class="text-base text-muted-foreground" data-testid="catalog-summary">{{ summary }}</p>
       </div>
-      <div class="flex flex-wrap items-end gap-3">
-        <form role="search" class="flex flex-col gap-1" :aria-label="t('catalog.filters.searchLabel')" @submit.prevent>
-          <label for="catalog-search" class="text-[13px] font-bold">{{ t('catalog.filters.search') }}</label>
-          <Input id="catalog-search" v-model="filters.q" type="search" class="h-11 w-[280px] max-w-full border-[1.5px] border-foreground bg-card px-3.5 text-[15px]" :placeholder="t('catalog.filters.searchPlaceholder')" />
-        </form>
-        <!-- La barre de navigation n'a pas (encore) le bouton « Nouvelle API » de la planche : il reste à portée ici. -->
-        <Button as-child variant="signature" class="rounded-md">
-          <RouterLink to="/apis/new">{{ t('catalog.newApi') }}</RouterLink>
-        </Button>
-      </div>
+      <!-- « Nouvelle API » : le bouton jaune de la barre de navigation (3.21), seul comme sur la planche. -->
+      <form role="search" class="flex flex-col gap-1" :aria-label="t('catalog.filters.searchLabel')" @submit.prevent>
+        <label for="catalog-search" class="text-[13px] font-bold">{{ t('catalog.filters.search') }}</label>
+        <Input id="catalog-search" v-model="filters.q" type="search" class="h-11 w-[280px] max-w-full border-[1.5px] border-foreground bg-card px-3.5 text-[15px]" :placeholder="t('catalog.filters.searchPlaceholder')" />
+      </form>
     </header>
 
     <CatalogHealth v-if="health && health.total > 0" :health="health" :partial="overview.snapshot.value?.truncated ?? false" />
@@ -123,12 +110,13 @@ const selectClass = 'h-11 rounded-md border-[1.5px] border-foreground bg-card px
 
     <LoadingState v-if="!opened || (catalog.loading.value && catalog.apis.value.length === 0)" />
     <ErrorState v-else-if="catalog.error.value && catalog.apis.value.length === 0" :error="catalog.error.value" @retry="catalog.refetch()" />
-    <EmptyState v-else-if="catalog.apis.value.length === 0 && catalog.hasActiveFilter.value" :title="t('catalog.noMatch.title')" :description="t('catalog.noMatch.description')">
-      <template #action>
-        <Button variant="outline" @click="resetFilters">{{ t('catalog.noMatch.reset') }}</Button>
-      </template>
-    </EmptyState>
-    <EmptyState v-else-if="catalog.apis.value.length === 0" :title="t('catalog.empty.title')" :description="t('catalog.empty.description')">
+    <!-- Filtre vide (20 § 5.2) : texte seul ; les filtres et pastilles restent juste au-dessus pour élargir. -->
+    <p v-else-if="catalog.apis.value.length === 0 && catalog.hasActiveFilter.value" class="text-base text-muted-foreground" data-testid="catalog-no-match">
+      <strong class="font-bold text-foreground">{{ t('catalog.noMatch.title') }}.</strong> {{ t('catalog.noMatch.description') }}
+    </p>
+    <!-- Catalogue vide (20 § 5.2, u3 R5) : formes plates aria-hidden, titre positif, « Nouvelle API ». Le lien « Voir un exemple
+         avec la démo » attend la démo de 3.16 (test.todo de views/catalog-screen.unit.test.ts). -->
+    <EmptyState v-else-if="catalog.apis.value.length === 0" :title="t('catalog.empty.title')" :description="t('catalog.empty.description')" shapes>
       <template #action>
         <Button as-child>
           <RouterLink to="/apis/new">{{ t('catalog.newApi') }}</RouterLink>

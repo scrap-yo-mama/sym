@@ -986,8 +986,7 @@
     },
     "noMatch": {
       "title": "No API matches",
-      "description": "Change or remove filters to see more results.",
-      "reset": "Reset filters"
+      "description": "Change or remove filters to see more results."
     },
     "pagination": {
       "label": "Catalog pagination",

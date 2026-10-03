@@ -122,7 +122,8 @@ test.describe('assert_keyboard_only_path : du catalogue à un run', () => {
         await expect(page.locator('[data-slug="zz-sain"]')).toBeVisible();
 
         // 2. Filtres : la recherche (à droite du titre, planche Catalogue : avant les pastilles) se tape, puis Tab mène par
-        //    « Nouvelle API » et les pastilles aux filtres de 06 ; une liste native se règle avec les flèches ou la saisie.
+        //    les pastilles aux filtres de 06 (« Nouvelle API » est dans la barre de navigation, avant la recherche, 3.21) ; une
+        //    liste native se règle avec les flèches ou la saisie.
         const back: Stop[] = [];
         for (let step = 0; step < 12; step += 1) {
           await page.keyboard.press('Shift+Tab');
@@ -142,7 +143,8 @@ test.describe('assert_keyboard_only_path : du catalogue à un run', () => {
           if (stop.id === 'catalog-status') break;
         }
         expect(stops.at(-1)?.id, `arrêts : ${names(stops).join(' → ')}`).toBe('catalog-status');
-        expect(names(stops)[0], '« Nouvelle API » suit la recherche').toContain(text(locale, 'catalog.newApi'));
+        expect(names(stops)[0], 'la pastille « Tout » suit la recherche').toContain(allLabel);
+        expect(names(stops).some((name) => name.includes(text(locale, 'catalog.newApi'))), 'aucun second « Nouvelle API » après la recherche').toBe(false);
         await page.keyboard.press('Tab');
         expect((await focused(page)).id).toBe('catalog-execution');
         await page.keyboard.press('Tab');

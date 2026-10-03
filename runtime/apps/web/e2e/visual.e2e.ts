@@ -9,7 +9,7 @@
 // `pnpm test:e2e --update-snapshots` sur cette plateforme, puis se relisent. Ceux de linux ne se créent et ne se comparent que
 // dans l'image Playwright épinglée (`pnpm visual:image [--update]`) : ailleurs sous linux, la suite est sautée avec sa raison.
 import { test, expect, type Theme } from './console.fixture.ts';
-import { PSEUDO_CLOSE, PSEUDO_OPEN } from './pseudo.ts';
+import { OVERFLOW_EXEMPT, PSEUDO_CLOSE, PSEUDO_OPEN } from './pseudo.ts';
 import { SCREENS } from './screens.ts';
 
 test.skip(process.env.SYM_VISUAL_MODE === 'excluded', 'instantanés linux : comparés seulement dans l’image Playwright épinglée (pnpm visual:image)');
@@ -64,11 +64,12 @@ for (const theme of THEMES) {
           );
           expect(plain, `assert_no_hardcoded_strings_pseudo (${id}) : textes restés en clair`).toEqual([]);
 
-          // assert_no_text_overflow_pseudo : le texte allongé tient dans son conteneur et la page ne défile pas en largeur.
-          const overflow = await page.evaluate(() => {
+          // assert_no_text_overflow_pseudo : le texte allongé tient dans son conteneur et la page ne défile pas en largeur. Les
+          // cellules du tableau du catalogue sont contrôlées ; seuls les conteneurs qui défilent exprès sont exemptés (OVERFLOW_EXEMPT).
+          const overflow = await page.evaluate((exempt) => {
             const cut = [...document.querySelectorAll<HTMLElement>('body *')]
               .filter((el) => {
-                if (el.closest('[data-reflow-exempt], table, pre, [role="log"], .sr-only, svg')) return false;
+                if (el.closest(exempt)) return false;
                 const style = getComputedStyle(el);
                 const clips = style.overflowX === 'hidden' || style.overflowX === 'clip' || style.textOverflow === 'ellipsis';
                 return clips && el.scrollWidth > el.clientWidth + 1 && (el.textContent ?? '').trim() !== '';
@@ -76,7 +77,7 @@ for (const theme of THEMES) {
               .slice(0, 5)
               .map((el) => `${el.tagName.toLowerCase()}[${el.getAttribute('data-testid') ?? ''}] ${(el.textContent ?? '').trim().slice(0, 40)}`);
             return { cut, scrollWidth: document.documentElement.scrollWidth, clientWidth: document.documentElement.clientWidth };
-          });
+          }, OVERFLOW_EXEMPT);
           expect(overflow.cut, `assert_no_text_overflow_pseudo (${id}) : texte coupé`).toEqual([]);
           expect(overflow.scrollWidth, `assert_no_text_overflow_pseudo (${id}) : défilement horizontal`).toBeLessThanOrEqual(overflow.clientWidth);
         }
