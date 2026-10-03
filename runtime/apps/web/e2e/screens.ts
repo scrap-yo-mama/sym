@@ -197,7 +197,7 @@ export const SCREENS: Screen[] = [
     routes: { 'GET /api/apis': (request) => (request.query.get('q') ? { body: { apis: [], next_cursor: null } } : apisRoute(catalog)(request)) },
     prepare: async (page) => {
       await page.locator('#catalog-search').fill('zz-introuvable');
-      await page.getByTestId('empty-state').waitFor();
+      await page.getByTestId('catalog-no-match').waitFor();
     },
   },
   { id: 'catalog-error', path: '/apis', expectsNetworkError: true, routes: { 'GET /api/apis': { status: 500, body: { error: { code: 'internal', message: 'zz' } } } } },

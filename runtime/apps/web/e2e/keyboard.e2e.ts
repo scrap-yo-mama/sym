@@ -192,8 +192,8 @@ test.describe('assert_keyboard_only_path : du catalogue à un run', () => {
         // La page ne vole pas le focus : il reste sur le bouton, dans le formulaire.
         expect(await page.evaluate(() => document.activeElement?.closest('#launch') !== null)).toBe(true);
 
-        // 6. Retour au catalogue par la navigation (Maj+Tab jusqu'au lien « Catalogue », puis Entrée) ; « Nouvelle API » : bouton de
-        //    l'en-tête de la page, atteint par Tab, ouvert par Entrée. Aucune action du navigateur (pas de retour arrière).
+        // 6. Retour au catalogue par la navigation (Maj+Tab jusqu'au lien « Catalogue », puis Entrée) ; « Nouvelle API » :
+        //    bouton de la barre de navigation, atteint par Maj+Tab depuis le titre, ouvert par Entrée. Aucune action du navigateur.
         const catalogLabel = text(locale, 'nav.catalog');
         let nav = await focused(page);
         for (let step = 0; step < 80 && !(nav.tag === 'a' && nav.href === '/apis' && nav.name === catalogLabel); step += 1) {
@@ -206,12 +206,14 @@ test.describe('assert_keyboard_only_path : du catalogue à un run', () => {
         await expect(page.getByTestId('catalog-row').first()).toBeVisible();
         await expect.poll(() => page.evaluate(() => document.activeElement?.tagName)).toBe('H1');
         let link = await focused(page);
+        // « Nouvelle API » : le bouton jaune de la barre de navigation (3.21, seul comme sur la planche), avant le titre : Maj+Tab.
         for (let step = 0; step < 60 && !(link.tag === 'a' && link.href === '/apis/new'); step += 1) {
-          await page.keyboard.press('Tab');
+          await page.keyboard.press('Shift+Tab');
           link = await focused(page);
         }
         expect(link).toMatchObject({ tag: 'a', href: '/apis/new' });
-        expect(await page.evaluate(() => document.activeElement?.closest('main') !== null), 'le bouton de l’en-tête de page, pas le lien de la navigation').toBe(true);
+        expect(await page.evaluate(() => document.activeElement?.getAttribute('data-testid')), 'le bouton jaune de la barre de navigation').toBe('nav-cta');
+        expect(await page.locator('main a[href="/apis/new"]').count(), 'aucun second « Nouvelle API » dans la page').toBe(0);
         await page.keyboard.press('Enter');
         await expect(page).toHaveURL(/\/apis\/new$/);
         await expect.poll(() => page.evaluate(() => document.activeElement?.tagName)).toBe('H1');
