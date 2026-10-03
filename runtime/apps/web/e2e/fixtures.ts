@@ -270,6 +270,18 @@ export function dataRoutes(): ApiRoutes {
         raw: { before: { steps: [{ fetch: 'https://zz-test.example/a' }] }, after: { steps: [{ fetch: 'https://zz-test.example/b' }] } },
       } satisfies Schemas['StrategyDiff'],
     }),
+    // Dossier d'enquête (2.14) : indices de la fiche API (état, raison, coût, version), onglet Enquêtes.
+    'GET /api/apis/:slug/brief': {
+      body: {
+        latest: { version: 1, created_at: '2026-09-21T09:00:00.000Z', hints: 2, tried: 1, open_questions: 0, erased: false },
+        hints: [],
+        versions: [{ strategy_version: 3, brief_version: 1, used: 1, ignored: 1 }],
+        report: [
+          { id: 'h1', kind: 'endpoint', state: 'used', reason: 'brief_used', provenance: 'probe', template: 'zz-test.example/api/list', stale: false, cost_usd: 0.0001 },
+          { id: 'h2', kind: 'example_url', state: 'ignored', reason: 'brief_host_ignored', provenance: null, template: 'evil.example/x', stale: false, cost_usd: null },
+        ],
+      } satisfies Schemas['ApiBriefView'],
+    },
     'GET /api/apis/:slug/status-events': {
       body: {
         events: [
