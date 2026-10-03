@@ -2891,6 +2891,24 @@ export interface components {
             providers: components["schemas"]["LlmProvider"][];
             /** @description Statut « modèle validé » du banc d'évaluation (15 § 11), en lecture seule : copie de eval/validated-models.json (produit par `pnpm eval --level N2`). Un modèle configuré absent de la liste n'a jamais été mesuré : « non validé ». */
             readonly validated_models?: components["schemas"]["ValidatedModel"][];
+            /** @description Prix connus (UX-11), en lecture seule : table versionnée de la couche LLM (USD par million de jetons) qui pré-remplit le prix d'un modèle reconnu par son nom. Le prix saisi dans `providers[].models[m].price` fait foi. */
+            readonly known_prices?: components["schemas"]["KnownModelPrice"][];
+        };
+        KnownModelPrice: {
+            model: string;
+            provider: string;
+            /**
+             * @description `verified` : prix relevé dans le dépôt ; `to_validate` : aucun prix relevé, à saisir.
+             * @enum {string}
+             */
+            status: "verified" | "to_validate";
+            price: {
+                in: number;
+                out: number;
+                in_cached?: number;
+            } | null;
+            source: string;
+            as_of?: string;
         };
         ValidatedModel: {
             model_id: string;

@@ -5475,6 +5475,44 @@ components:
               readOnly: true
               items:
                 $ref: '#/components/schemas/ValidatedModel'
+            known_prices:
+              description: >-
+                Prix connus (UX-11), en lecture seule : table versionnée de la couche LLM (USD par million de jetons) qui
+                pré-remplit le prix d'un modèle reconnu par son nom. Le prix saisi dans `providers[].models[m].price` fait foi.
+              type: array
+              readOnly: true
+              items:
+                $ref: '#/components/schemas/KnownModelPrice'
+    KnownModelPrice:
+      type: object
+      additionalProperties: false
+      required: [model, provider, status, price, source]
+      properties:
+        model:
+          type: string
+        provider:
+          type: string
+        status:
+          description: '`verified` : prix relevé dans le dépôt ; `to_validate` : aucun prix relevé, à saisir.'
+          type: string
+          enum: [verified, to_validate]
+        price:
+          oneOf:
+            - type: object
+              additionalProperties: false
+              required: [in, out]
+              properties:
+                in:
+                  type: number
+                out:
+                  type: number
+                in_cached:
+                  type: number
+            - type: 'null'
+        source:
+          type: string
+        as_of:
+          type: string
     ValidatedModel:
       type: object
       additionalProperties: false

@@ -11,7 +11,7 @@ import { connect } from 'node:net';
 import { Secret } from '@runtime/core';
 import { createOperatorConfigDispatcher, findSsrfBlocked, operatorConfigFetch, parseProxyDefinitions } from '@runtime/core/net';
 import { AlertConfigError, saveSmtpSettings, testSmtp, type SecretStore, type SmtpSettings } from '@runtime/db';
-import { LlmError, OpenAICompatTransport, probeCapabilities } from '@runtime/llm';
+import { KNOWN_PRICES, LlmError, OpenAICompatTransport, probeCapabilities } from '@runtime/llm';
 import type { FastifyInstance, FastifyReply } from 'fastify';
 import type { ServerContext } from '../context.js';
 import { reasonMessage } from '../rest/shared.js';
@@ -160,6 +160,8 @@ async function llmView(ctx: ServerContext) {
     })),
     // Statut « modèle validé » du banc (15 § 11), lecture seule : dernière mesure N2 de chaque modèle.
     validated_models: readValidatedModels(ctx.validatedModelsFile),
+    // Prix connus (UX-11), lecture seule : pré-remplissent le prix d'un modèle reconnu par son nom ; `price` du réglage fait foi.
+    known_prices: KNOWN_PRICES.map((entry) => ({ ...entry, price: entry.price === null ? null : { ...entry.price } })),
   };
 }
 

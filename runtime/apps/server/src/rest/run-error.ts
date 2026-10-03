@@ -14,16 +14,36 @@ const RUN_ERRORS: Record<string, Omit<RunError, 'code'>> = {
       'Ask the user to set the robot contact in the console (Settings > Robot identity, /settings/robot) or the INSTANCE_CONTACT variable of the server, then call again: nothing was fetched and nothing was spent.',
     retryable: true,
   },
+  // UX-11/UX-12 : le prix du modèle n'est réglé que dans Réglages > Modèles IA ; sans lui le worker n'appelle jamais le modèle
+  // (0 €, jamais compté comme 0). Le message est celui de la console ; `{model}` vaut le modèle nommé par l'enquête.
+  llm_price_missing: {
+    message: 'Renseigne le prix du modèle {model} dans Réglages > Modèles IA',
+    what_to_do:
+      'Ask the user to enter the price of model {model} (USD per million tokens: input, output, optional cached input) in the console (Settings > AI models, /settings/models), then call again: no model call was made and nothing was spent.',
+    retryable: true,
+  },
 };
+
+/** Nom de modèle publiable (identifiants de fournisseurs : `claude-opus-4-8`, `zai-org/GLM-5.3`, `qwen3:8b`) : jamais un détail libre (INV8). */
+const MODEL_NAME = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/;
+
+function describe(code: string, detail: string): RunError | null {
+  const known = RUN_ERRORS[code];
+  if (known === undefined) return null;
+  const suffix = detail.slice(code.length + 1);
+  const model = detail.startsWith(`${code}:`) && MODEL_NAME.test(suffix) && !/^[a-z]+:\/\//i.test(suffix) ? suffix : null;
+  const fill = (text: string) => text.replaceAll('{model}', model ?? (text.startsWith('Renseigne') ? 'utilisé' : 'used'));
+  return { code, message: fill(known.message), what_to_do: fill(known.what_to_do), retryable: known.retryable };
+}
 
 /** Cause d'un run terminé en échec (`failed`), ou null si elle n'est pas nommée. */
 export function runErrorOf(run: { state: string; error_detail?: string | null }): RunError | null {
   if (run.state !== 'failed' || typeof run.error_detail !== 'string') return null;
-  const known = RUN_ERRORS[run.error_detail];
-  return known === undefined ? null : { code: run.error_detail, ...known };
+  // Un détail `code:modèle` (UX-11) nomme le modèle ; tout autre détail non listé reste hors de la réponse.
+  return describe(run.error_detail.split(':', 1)[0]!, run.error_detail);
 }
 
 /** Refus de création (`create_api`) quand le prérequis manque : même texte que la cause d'un run. */
 export function runErrorFor(code: keyof typeof RUN_ERRORS): RunError {
-  return { code, ...RUN_ERRORS[code]! };
+  return describe(code, code)!;
 }
