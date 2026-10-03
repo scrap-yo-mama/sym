@@ -183,9 +183,10 @@ describe('troisième colonne', () => {
     expect(html).toContain('data-testid="schema-validate"');
     expect(html).toContain('data-testid="schema-edit"');
     expect(html).toContain('Un titre');
-    expect(html).toContain('data-testid="plan-picker"');
-    expect(html).toContain('(estimated ~$0.0004)');
-    expect(html).toContain('full agent, direct');
+    expect(html).toContain('data-testid="trial-plan"');
+    // Planche NouvelleApi.dc.html (3.17, D-60) : coût estimé « ~ » à droite de chaque carte, nom et sous-titre de la méthode.
+    expect(html).toContain('~$0.0004');
+    expect(html).toContain(en.investigation.plan.card.agent.text);
     expect((html.match(/type="checkbox"/g) ?? []).length).toBe(3);
   });
 
@@ -195,7 +196,7 @@ describe('troisième colonne', () => {
     state.strategy = { version: 1, execution: 'fetch_in_page', network: 'tunnel' };
     const html = await render(InvestigationBoard, props(state));
     expect(html).not.toContain('data-testid="schema-validate"');
-    expect(html).not.toContain('data-testid="plan-picker"');
+    expect(html).not.toContain('data-testid="trial-plan"');
     expect(html).toContain('Chosen strategy: fetch in the browser, tunnel, version 1');
     expect(html).toContain(en.investigation.schema.tunnelNote);
   });

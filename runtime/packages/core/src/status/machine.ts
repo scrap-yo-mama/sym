@@ -64,7 +64,8 @@ export function applyStatusEvent(state: ApiStatusState, event: StatusEventInput,
 
     case 'investigation_failed':
       if (status !== 'enquete') return reject(state, 'not_investigating');
-      if (event.cause === 'budget_exhausted' && state.previousStatus !== null) {
+      // Tentative de persistance (D-49) : tout échec repasse par la 21 vers `erreur`, jamais par la 2 (robots.txt compris).
+      if ((event.cause === 'budget_exhausted' && state.previousStatus !== null) || state.previousStatus === 'erreur') {
         // 21 : ré-enquête d'une API existante sans stratégie conforme, ancienne version gardée.
         return apply(state, ctx, [{ id: 21, to: state.previousStatus, reason: 'reinvestigation_failed', patch: { previousStatus: null } }]);
       }
@@ -128,6 +129,12 @@ export function applyStatusEvent(state: ApiStatusState, event: StatusEventInput,
         return reject(state, 'backoff_exhausted');
       }
       return apply(state, ctx, [{ id: 16, to: 'enquete', reason: 'backoff', patch: { previousStatus: null } }]);
+
+    case 'persistence_attempt':
+      // Jamais depuis `bloquee` ni `action_requise` ; jamais pour une classe hors de la 16 (un « non » n'est jamais relancé).
+      if (status !== 'erreur') return reject(state, 'not_in_error');
+      if (!includes(BACKOFF_CLASSES, event.failureClass)) return reject(state, 'backoff_class_not_allowed');
+      return apply(state, ctx, [{ id: 16, to: 'enquete', reason: 'persistence_attempt', patch: { previousStatus: 'erreur' } }]);
 
     case 'user_acted':
       if (status !== 'action_requise') return reject(state, 'no_action_required');

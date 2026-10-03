@@ -6,7 +6,7 @@
 // Bac à sable des scripts E3 (1.5) : utilisateur dédié lu dans l'environnement (SANDBOX_UID, SANDBOX_GID,
 // SANDBOX_LAUNCHER) ; en production, la frontière de l'OS est éprouvée au démarrage (`probeIsolation`) et le worker
 // refuse de démarrer si l'enfant pourrait lire l'environnement du worker (D-30).
-import { DomainPacer, rejectionThresholdsFromEnv, type SandboxEngine } from '@runtime/core';
+import { costCapsFromEnv, DomainPacer, rejectionThresholdsFromEnv, type SandboxEngine } from '@runtime/core';
 import { SsrfGuard, ssrfPolicyFromEnv, startEgressProxy, type EgressProxy } from '@runtime/core/net';
 import { STAGEHAND_VERSION, StagehandEngine } from '@runtime/agent';
 import { identityFromEnv, resolveIdentifyInstance, resolveInstanceContact } from '@runtime/core/access';
@@ -92,6 +92,8 @@ export type ProductionFactoryOverrides = {
 export function productionExecutorFactory(env: Readonly<Record<string, string | undefined>> = process.env, overrides: ProductionFactoryOverrides = {}): ExecutorFactory {
   return async ({ pool, config, checked, logger, queue }) => {
     const guard = new SsrfGuard({ policy: ssrfPolicyFromEnv(env) });
+    // PA-02 : plafonds d'instance appliqués à ce que le worker lit en base (import, lignes antérieures).
+    const costCaps = costCapsFromEnv(env);
     const pacer = new DomainPacer(new PgPacingStore(pool));
     const secrets = secretStore(pool, config.keyring, checked);
     const production = env['NODE_ENV'] === 'production';
@@ -238,6 +240,7 @@ export function productionExecutorFactory(env: Readonly<Record<string, string | 
       repair,
       rejection: rejectionThresholdsFromEnv(env),
       quality,
+      costCaps,
     });
     // Enquête (2.1) : mêmes gardes, mêmes exécuteurs ; rôles `investigate` (schéma), `extract` et `agent` (prix des couples E4, E6).
     const investigation = createInvestigationExecutor({
@@ -263,6 +266,7 @@ export function productionExecutorFactory(env: Readonly<Record<string, string | 
       instanceContact,
       identifyInstance,
       version: config.version,
+      costCaps,
     });
     return {
       executor: dispatchByKind({ run: strategy.executor, investigation }),

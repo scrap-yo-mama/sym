@@ -4,7 +4,7 @@
 import { readFileSync } from 'node:fs';
 import type { components } from '@runtime/client';
 import { ROLE_PERMISSIONS } from '../src/testing/permissions.ts';
-import type { ApiRoutes } from './harness.ts';
+import type { ApiHandler, ApiRoutes } from './harness.ts';
 
 type Schemas = components['schemas'];
 
@@ -37,10 +37,11 @@ const REASONS: Record<Schemas['ApiStatus'], Schemas['ReasonMessage']> = {
   bloquee: { code: 'blocked_by_protection', params: {} },
 };
 
-const summary = (overrides: Partial<Schemas['ApiSummary']> = {}): Schemas['ApiSummary'] => ({
+export const summary = (overrides: Partial<Schemas['ApiSummary']> = {}): Schemas['ApiSummary'] => ({
   id: UUID(1),
   slug: 'zz-books',
   description: 'Livres de la page d’accueil',
+  domain: 'zz-livres.example',
   status: 'sain',
   status_reason: REASONS.sain,
   stale: false,
@@ -232,12 +233,25 @@ export const anonymousRoutes: ApiRoutes = {
   'POST /api/auth/sign-in/email': { status: 401, body: { code: 'INVALID_EMAIL_OR_PASSWORD', message: 'zz' } },
 };
 
+/**
+ * Route `GET /api/apis` d'un serveur qui honore le filtre `status` (la console lit un statut à la fois pour « À traiter ») et la
+ * pagination : une page courte (`limit` < 200 : le tableau) annonce une page suivante, la vue d'ensemble (200) et un filtre non.
+ */
+export const apisRoute =
+  (rows: () => Schemas['ApiSummary'][], options: { nextPage?: boolean } = {}): ApiHandler =>
+  (request) => {
+    const status = request.query.get('status');
+    const apis = rows().filter((api) => !status || api.status === status);
+    const more = options.nextPage === true && !status && !request.query.get('cursor') && Number(request.query.get('limit') ?? 25) < 200;
+    return { body: { apis, next_cursor: more ? 'zz-next' : null } satisfies Schemas['ApiList'] };
+  };
+
 /** Routes de données : catalogue, fiches, runs, réglages. */
 export function dataRoutes(): ApiRoutes {
   const apis = catalog();
   return {
     ...accountRoutes(),
-    'GET /api/apis': { body: { apis, next_cursor: 'zz-next' } satisfies Schemas['ApiList'] },
+    'GET /api/apis': apisRoute(() => apis, { nextPage: true }),
     'GET /api/apis/:slug': (request) => {
       const found = apis.find((api) => api.slug === request.params.slug);
       return found ? { body: detail(found.status, found.slug) } : { status: 404, body: { error: { code: 'not_found', message: 'zz' } } };

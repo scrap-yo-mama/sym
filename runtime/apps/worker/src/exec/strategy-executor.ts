@@ -95,7 +95,7 @@ import {
 } from '@runtime/core/net';
 import { deleteRejectedItems, inputHash, loadRunTarget, readEmbeddedFiles, readValidatedBaseline, saveRunProfile, readProxySettings, readVolumeHistory, saveCompiledStrategy, saveRejectedItems, saveRepairedStrategy, saveRunDataset, type RunTarget } from '@runtime/db';
 import type { LlmClient, LlmConfig } from '@runtime/llm';
-import { degradedQualitySignals, profileItems } from '@runtime/core';
+import { degradedQualitySignals, profileItems, type CostCaps } from '@runtime/core';
 import type { QualityPorts } from './quality-job.js';
 import type pg from 'pg';
 import { pino, type Logger } from 'pino';
@@ -165,6 +165,8 @@ export type StrategyExecutorDeps = {
    * jugement SÉPARÉ après le run (`scheduleJudge`) : le rejeu lui-même ne fait aucun appel LLM et ne lit aucune mémoire.
    */
   readonly quality?: QualityPorts;
+  /** Plafonds d'instance (`MAX_COST_USD_PER_RUN`, PA-02) : bornent le `max_cost_usd` lu en base, importé ou antérieur. */
+  readonly costCaps?: Pick<CostCaps, 'maxCostUsdPerRun'>;
 };
 
 /** Stratégie figée d'un run (version, exécution, réseau, spécification). */
@@ -1049,7 +1051,7 @@ export function createStrategyRuntime(deps: StrategyExecutorDeps): StrategyRunti
       }
       case 'superseded': {
         // Une autre réparation a produit vN+1 pendant l'attente du bail : le run la rejoue, sans nouvelle réparation.
-        const next = await loadRunTarget(deps.pool, { apiId: ctx.apiId, ownerId: ctx.ownerId, version: out.version });
+        const next = await loadRunTarget(deps.pool, { apiId: ctx.apiId, ownerId: ctx.ownerId, version: out.version, ...(deps.costCaps === undefined ? {} : { caps: deps.costCaps }) });
         if (next === null || next.strategy === null) return failed(failure);
         const trial = await runTrial(ctx, next, next.strategy, now(), 'quarantine');
         const sorted = sortItems(next, trial);
@@ -1066,7 +1068,7 @@ export function createStrategyRuntime(deps: StrategyExecutorDeps): StrategyRunti
 
   const executeRun = async (ctx: RunCtx): Promise<RunResult> => {
     const started = now();
-    const target = await loadRunTarget(deps.pool, { apiId: ctx.apiId, ownerId: ctx.ownerId, version: ctx.strategyVersion });
+    const target = await loadRunTarget(deps.pool, { apiId: ctx.apiId, ownerId: ctx.ownerId, version: ctx.strategyVersion, ...(deps.costCaps === undefined ? {} : { caps: deps.costCaps }) });
     if (target === null) return { state: 'failed', failure_class: 'code_error', retryable: false, error_detail: 'api_not_found' };
     const strategy = target.strategy;
     if (strategy === null) return { state: 'failed', failure_class: 'code_error', retryable: false, error_detail: 'no_strategy_version' };

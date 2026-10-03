@@ -69,6 +69,10 @@ export interface Api {
   max_cost_usd: number;
   budget_daily_usd: number;
   domain_pacing: DomainPacing;
+  /** Mode « SYM ne lâche pas » (D-49, 04 §6) : opt-in, désactivé par défaut ; activé en console seulement. */
+  persistence_mode?: boolean;
+  /** Plafond propre du mode, cumulé depuis l'entrée en `erreur` ; `null` = `PERSISTENCE_BUDGET_USD_DEFAULT`, jamais illimité. */
+  persistence_budget_usd?: number | null;
 }
 
 /** Opération RFC 6902. */

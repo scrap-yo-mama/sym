@@ -1,5 +1,5 @@
 -- SPDX-License-Identifier: AGPL-3.0-only
--- 0021_robots_not_read (D-91) : le robots.txt n'est plus lu automatiquement ni contrôlé avant une requête. Migration
+-- 0022_robots_not_read (D-91) : le robots.txt n'est plus lu automatiquement ni contrôlé avant une requête. Migration
 -- NON destructive : aucune donnée n'est réécrite ni supprimée.
 -- 1. `access_policy.robots` est un champ retiré : la contrainte `apis_access_policy_robots` (0001, durcie par 0015) qui
 --    l'exigeait disparaît et la valeur par défaut ne le porte plus. Une politique écrite avant garde sa clé, ignorée à la

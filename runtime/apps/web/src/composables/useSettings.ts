@@ -13,7 +13,26 @@ export type LlmSettings = Schemas['LlmSettings'];
 export type LlmRoleName = 'investigate' | 'repair' | 'extract' | 'agent';
 export const LLM_ROLES: readonly LlmRoleName[] = ['investigate', 'repair', 'extract', 'agent'];
 export type LlmPreset = Schemas['LlmPreset'];
-export const LLM_PRESETS: readonly LlmPreset[] = ['zai', 'openrouter', 'vllm', 'ollama', 'deepseek', 'qwen', 'openai', 'custom'];
+/**
+ * URL de base pré-remplie par préréglage (points d'accès compatibles OpenAI) ; chaîne vide = à saisir (`vllm`, `ollama`,
+ * `custom`). `satisfies Record<LlmPreset, string>` impose, à la compilation, une entrée par valeur de l'enum du contrat :
+ * un préréglage ajouté à OpenAPI sans entrée ici casse le typecheck. L'ordre des clés est celui de la liste déroulante.
+ */
+const LLM_PRESET_BASE_URLS = {
+  zai: 'https://api.z.ai/api/paas/v4',
+  openrouter: 'https://openrouter.ai/api/v1',
+  vllm: '',
+  ollama: '',
+  deepseek: 'https://api.deepseek.com/v1',
+  qwen: 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1',
+  openai: 'https://api.openai.com/v1',
+  anthropic: 'https://api.anthropic.com/v1',
+  gemini: 'https://generativelanguage.googleapis.com/v1beta/openai',
+  mistral: 'https://api.mistral.ai/v1',
+  groq: 'https://api.groq.com/openai/v1',
+  custom: '',
+} as const satisfies Record<LlmPreset, string>;
+export const LLM_PRESETS = Object.keys(LLM_PRESET_BASE_URLS) as readonly LlmPreset[];
 
 /** Fournisseur en cours d'édition ; `newApiKey` est le seul endroit où une clé vit, et seulement le temps de la saisie. */
 export interface ProviderDraft {
@@ -67,6 +86,18 @@ export function useLlmSettings() {
 
   function addProvider(): void {
     providers.value = [...providers.value, { id: '', preset: 'custom', base_url: '', apiKeySet: false, apiKeyUnreadable: false, newApiKey: '' }];
+  }
+
+  /**
+   * Change de préréglage et remplace l'URL de base par celle du nouveau (vide s'il n'en a pas), sauf si l'utilisateur en a
+   * saisi une autre à la main : seule une URL vide ou celle du préréglage précédent est remplacée.
+   */
+  function setPreset(index: number, preset: LlmPreset): void {
+    const provider = providers.value[index];
+    if (!provider) return;
+    const current = provider.base_url.trim();
+    if (current === '' || current === LLM_PRESET_BASE_URLS[provider.preset]) provider.base_url = LLM_PRESET_BASE_URLS[preset];
+    provider.preset = preset;
   }
 
   function removeProvider(index: number): void {
@@ -126,7 +157,7 @@ export function useLlmSettings() {
     return tester.run(role, () => call(() => getApi().POST('/api/settings/llm/test', { body: { provider: choice.provider, model: choice.model } })));
   }
 
-  return { ...resource, providers, roles, validatedModels, saving, saveFailure, saved, outcomes: tester.outcomes, load, addProvider, removeProvider, save, test };
+  return { ...resource, providers, roles, validatedModels, saving, saveFailure, saved, outcomes: tester.outcomes, load, addProvider, removeProvider, setPreset, save, test };
 }
 
 export type ProxyWrite = Schemas['ProxyWrite'];

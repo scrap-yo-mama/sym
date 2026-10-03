@@ -7,7 +7,7 @@ import { partitionItems, quarantineSummary } from '@runtime/core';
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import { createTestDatabase, type TestDatabase } from '../../../tests/helpers/pg.js';
-import { migrateDown, migrateUp } from './migrate.js';
+import { loadMigrations, migrateDown, migrateUp } from './migrate.js';
 import { readHealthyItems, readRejectedAggregates, readRejectedItems, readRejectedSample, readVolumeHistory, saveRejectedItems, saveRepairedStrategy } from './rejected.js';
 import { cleanupExpiredRunData, countSubjectOccurrences, DEFAULT_RETENTION_POLICY, eraseSubject } from './retention/index.js';
 import { withActor } from './rls.js';
@@ -171,8 +171,9 @@ describe('quarantine run_rejected_items (0018)', () => {
   });
 
   test('migration 0018 : aller-retour down/up', async () => {
-    // 0021 (D-91), 0020 (2.12) puis 0019 (règles, 2.10) la suivent : quatre pas en arrière pour retirer 0018.
-    await migrateDown({ connectionString: tdb.url, steps: 4 });
+    // 0018 et toutes les migrations venues après elle (0019 de 2.10, 0020 de 2.12, 0021 de 2.16…) : la 0018 n'est pas
+    // forcément la dernière.
+    await migrateDown({ connectionString: tdb.url, steps: loadMigrations().filter((m) => m.version >= 18).length });
     expect((await pool.query("SELECT to_regclass('public.run_rejected_items') AS t")).rows[0].t).toBeNull();
     expect((await pool.query("SELECT 1 FROM information_schema.columns WHERE table_name = 'runs' AND column_name = 'items_rejected'")).rowCount).toBe(0);
     await migrateUp({ connectionString: tdb.url });

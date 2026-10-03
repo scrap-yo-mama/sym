@@ -72,7 +72,7 @@ type StoredProvider = {
 };
 type StoredLlm = { providers: StoredProvider[]; roles?: Record<string, unknown>; redact?: unknown; log_prompts?: unknown };
 
-const PRESETS = ['zai', 'openrouter', 'vllm', 'ollama', 'deepseek', 'qwen', 'openai', 'custom'];
+export const LLM_PRESETS = ['zai', 'openrouter', 'vllm', 'ollama', 'deepseek', 'qwen', 'openai', 'anthropic', 'gemini', 'mistral', 'groq', 'custom'];
 const ROLE_NAMES = ['investigate', 'repair', 'extract', 'agent'];
 const roleSchema = {
   type: 'object',
@@ -99,7 +99,7 @@ const llmWriteSchema = {
         required: ['id', 'preset', 'base_url'],
         properties: {
           id: { type: 'string', pattern: '^[a-z0-9][a-z0-9_-]{0,31}$' },
-          preset: { type: 'string', enum: PRESETS },
+          preset: { type: 'string', enum: LLM_PRESETS },
           base_url: { type: 'string', minLength: 1, maxLength: 2048 },
           timeout_ms: { type: 'integer', minimum: 1000, maximum: 600000 },
           max_retries: { type: 'integer', minimum: 0, maximum: 3 },

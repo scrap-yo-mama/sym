@@ -19,3 +19,5 @@ __pycache__/
 # Release à blanc (tâche 4.9) : clés de test cosign et sorties jamais versionnées
 zz_test_cosign*
 release-out/
+
+landing-probe-*.json

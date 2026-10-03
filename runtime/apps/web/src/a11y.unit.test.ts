@@ -239,7 +239,8 @@ function controlsWithoutInputBorder(file: string): string[] {
   const script = `${text.slice(0, text.indexOf('<template>'))}\n${readFileSync(join(webSrc, 'lib/classes.ts'), 'utf8')}`;
   return openingTags(templateOf(file), ['input', 'select', 'textarea'])
     .filter((tag) => !/\stype="(checkbox|radio|hidden)"/.test(tag))
-    .filter((tag) => !/\bborder-input\b/.test(classesOf(tag, script)))
+    // `border-foreground` : la bordure anthracite des planches (D-60), plus contrastée que `border-input` dans les deux thèmes.
+    .filter((tag) => !/\bborder-(input|foreground)\b/.test(classesOf(tag, script)))
     .map((tag) => `${rel(file)} : ${tag.replace(/\s+/g, ' ').slice(0, 90)}`);
 }
 
@@ -253,7 +254,7 @@ describe('assert_contrast_tokens : bordure des contrôles de formulaire', () => 
     expect(classesOf('<select class="border">', "const selectClass = 'border-input'")).not.toContain('border-input');
   });
 
-  test('tout <input>, <select> et <textarea> à bordure porte border-input (3:1) : le jeton --border est décoratif et ne dessine jamais un contrôle', () => {
+  test('tout <input>, <select> et <textarea> à bordure porte border-input (3:1) ou border-foreground (encre des planches) : le jeton --border est décoratif et ne dessine jamais un contrôle', () => {
     const offenders = vueFiles.filter((file) => !rel(file).startsWith('components/ui/')).flatMap(controlsWithoutInputBorder);
     expect(offenders).toEqual([]);
     // Le composant partagé <Input> porte la bordure de ses champs.

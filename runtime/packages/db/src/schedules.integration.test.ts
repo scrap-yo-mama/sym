@@ -612,4 +612,20 @@ describe('règles', () => {
     expect(row.scheduled_at).toEqual(new Date('2026-10-01T10:00:00Z'));
     expect(RUN_QUEUE).toBe('run');
   });
+
+  test('assert_budget_usd_daily : un run planifié n’est pas lancé quand le budget USD du jour du propriétaire est atteint (skipped_quota, budget_exceeded)', async () => {
+    await resetSchedules();
+    const api = await newApi();
+    const id = await newSchedule(api, { overlap: 'allow' });
+    const now = new Date().toISOString();
+    const withBudget = (userBudgetDailyUsd: number) =>
+      handleScheduledRun({ pool, queue: plain, now: () => new Date(now), jobId: randomUUID(), data: { schedule_id: id } satisfies ScheduledRunJobData, userBudgetDailyUsd });
+    // Budget de 0,05 USD, dépense du jour de 0,06 (autre run du propriétaire) : le déclenchement est sauté et tracé.
+    await pool.query("INSERT INTO runs (api_id, owner_id, api_owner_id, trigger, state, cost_llm_usd, cost_proxy_usd) VALUES ($1, $2, $2, 'rest', 'succeeded', 0.05, 0.01)", [api, owner]);
+    expect(await withBudget(0.05)).toMatchObject({ outcome: 'skipped', state: 'skipped_quota', reason: 'budget_exceeded' });
+    expect((await runsOf(id)).map((r) => r.state)).toEqual(['skipped_quota']);
+    // Sous le budget : le run part ; sans budget transmis, comportement inchangé.
+    expect((await withBudget(1)).outcome).toBe('run');
+    expect((await fire(id, now)).outcome).toBe('run');
+  });
 });

@@ -64,8 +64,8 @@ describe('teintes de statut (lib/status.ts)', () => {
   test('chaque statut emploie la surface et le texte de sa propre famille, avec la bordure de statut', () => {
     for (const status of API_STATUSES) {
       const tone = STATUS_TONE[status];
-      expect(tone, status).toContain(`bg-status-${family(status)} `);
-      expect(tone, status).toContain(`text-status-${family(status)}-foreground`);
+      expect(tone, status).toMatch(new RegExp(`(?:^|\\s)bg-status-${family(status)}(?:-badge)? `));
+      expect(tone, status).toMatch(new RegExp(`(?:^|\\s)text-status-${family(status)}(?:-badge)?-foreground(?:\\s|$)`));
       expect(tone, status).toContain('border-status-border');
     }
   });

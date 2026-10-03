@@ -108,20 +108,43 @@ test.describe('assert_keyboard_only_path : du catalogue à un run', () => {
         await page.keyboard.press('Enter');
         expect(await page.evaluate(() => document.activeElement?.id)).toBe('main');
 
-        // 2. Filtres : la recherche se tape, un filtre (liste native) se règle avec les flèches ou la saisie, et relit le serveur.
+        // 1 bis. Pastilles-filtres (20 § 5.2) : le tableau s'ouvre sur « À traiter » ; au clavier, « Tout » s'atteint par Tab et
+        //    s'active par Entrée (bouton à bascule), puis la liste complète s'affiche.
+        const allLabel = text(locale, 'catalog.pills.all');
+        let pill = await focused(page);
+        for (let step = 0; step < 12 && !pill.name?.startsWith(allLabel); step += 1) {
+          await page.keyboard.press('Tab');
+          pill = await focused(page);
+        }
+        expect(pill.name, 'Tab atteint la pastille « Tout »').toContain(allLabel);
+        await page.keyboard.press('Enter');
+        await expect(page.locator('[data-pill="all"]')).toHaveAttribute('aria-pressed', 'true');
+        await expect(page.locator('[data-slug="zz-sain"]')).toBeVisible();
+
+        // 2. Filtres : la recherche (à droite du titre, planche Catalogue : avant les pastilles) se tape, puis Tab mène par
+        //    les pastilles aux filtres de 06 (« Nouvelle API » est dans la barre de navigation, avant la recherche, 3.21) ; une
+        //    liste native se règle avec les flèches ou la saisie.
+        const back: Stop[] = [];
+        for (let step = 0; step < 12; step += 1) {
+          await page.keyboard.press('Shift+Tab');
+          const stop = await focused(page);
+          back.push(stop);
+          if (stop.id === 'catalog-search') break;
+        }
+        expect(back.at(-1)?.id, `arrêts : ${names(back).join(' ← ')}`).toBe('catalog-search');
+        await page.keyboard.type('livres');
+        await expect.poll(() => app.requests.some((entry) => entry.includes('q=livres'))).toBe(true);
+
         const stops: Stop[] = [];
         for (let step = 0; step < 12; step += 1) {
           await page.keyboard.press('Tab');
           const stop = await focused(page);
           stops.push(stop);
-          if (stop.id === 'catalog-search') break;
+          if (stop.id === 'catalog-status') break;
         }
-        expect(stops.at(-1)?.id, `arrêts : ${names(stops).join(' → ')}`).toBe('catalog-search');
-        await page.keyboard.type('livres');
-        await expect.poll(() => app.requests.some((entry) => entry.includes('q=livres'))).toBe(true);
-
-        await page.keyboard.press('Tab');
-        expect((await focused(page)).id).toBe('catalog-status');
+        expect(stops.at(-1)?.id, `arrêts : ${names(stops).join(' → ')}`).toBe('catalog-status');
+        expect(names(stops)[0], 'la pastille « Tout » suit la recherche').toContain(allLabel);
+        expect(names(stops).some((name) => name.includes(text(locale, 'catalog.newApi'))), 'aucun second « Nouvelle API » après la recherche').toBe(false);
         await page.keyboard.press('Tab');
         expect((await focused(page)).id).toBe('catalog-execution');
         await page.keyboard.press('Tab');
@@ -169,8 +192,8 @@ test.describe('assert_keyboard_only_path : du catalogue à un run', () => {
         // La page ne vole pas le focus : il reste sur le bouton, dans le formulaire.
         expect(await page.evaluate(() => document.activeElement?.closest('#launch') !== null)).toBe(true);
 
-        // 6. Retour au catalogue par la navigation (Maj+Tab jusqu'au lien « Catalogue », puis Entrée) ; « Nouvelle API » : bouton de
-        //    l'en-tête de la page, atteint par Tab, ouvert par Entrée. Aucune action du navigateur (pas de retour arrière).
+        // 6. Retour au catalogue par la navigation (Maj+Tab jusqu'au lien « Catalogue », puis Entrée) ; « Nouvelle API » :
+        //    bouton de la barre de navigation, atteint par Maj+Tab depuis le titre, ouvert par Entrée. Aucune action du navigateur.
         const catalogLabel = text(locale, 'nav.catalog');
         let nav = await focused(page);
         for (let step = 0; step < 80 && !(nav.tag === 'a' && nav.href === '/apis' && nav.name === catalogLabel); step += 1) {
@@ -183,12 +206,14 @@ test.describe('assert_keyboard_only_path : du catalogue à un run', () => {
         await expect(page.getByTestId('catalog-row').first()).toBeVisible();
         await expect.poll(() => page.evaluate(() => document.activeElement?.tagName)).toBe('H1');
         let link = await focused(page);
+        // « Nouvelle API » : le bouton jaune de la barre de navigation (3.21, seul comme sur la planche), avant le titre : Maj+Tab.
         for (let step = 0; step < 60 && !(link.tag === 'a' && link.href === '/apis/new'); step += 1) {
-          await page.keyboard.press('Tab');
+          await page.keyboard.press('Shift+Tab');
           link = await focused(page);
         }
         expect(link).toMatchObject({ tag: 'a', href: '/apis/new' });
-        expect(await page.evaluate(() => document.activeElement?.closest('main') !== null), 'le bouton de l’en-tête de page, pas le lien de la navigation').toBe(true);
+        expect(await page.evaluate(() => document.activeElement?.getAttribute('data-testid')), 'le bouton jaune de la barre de navigation').toBe('nav-cta');
+        expect(await page.locator('main a[href="/apis/new"]').count(), 'aucun second « Nouvelle API » dans la page').toBe(0);
         await page.keyboard.press('Enter');
         await expect(page).toHaveURL(/\/apis\/new$/);
         await expect.poll(() => page.evaluate(() => document.activeElement?.tagName)).toBe('H1');

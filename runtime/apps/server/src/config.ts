@@ -2,17 +2,21 @@
 // Configuration de `server` (14 § 3) : lue une fois au démarrage, variables sensibles retirées de l'environnement.
 import { readFileSync } from 'node:fs';
 import {
+  costCapsFromEnv,
   loadKeyring,
   loadObservabilityConfig,
   parseMfaEnforced,
   normalizePublicUrl,
+  persistencePolicyFromEnv,
   scrubOtelEnvironment,
   unknownReservedVariablesWarning,
   Secret,
   secretValues,
+  type CostCaps,
   type Keyring,
   type MfaEnforced,
   type ObservabilityConfig,
+  type PersistencePolicy,
 } from '@runtime/core';
 import { ssrfPolicyFromEnv, type SsrfPolicy } from '@runtime/core/net';
 import type { McpConfig } from './mcp/runtime.js';
@@ -55,6 +59,11 @@ export type ServerConfig = {
   rest: RestConfig;
   /** Serveur MCP (tâche 3.2, 05 § 1 et § 3). */
   mcp: McpConfig;
+  /**
+   * Mode « SYM ne lâche pas » (2.16, D-49) : `PERSISTENCE_*` (14 § 2), mêmes valeurs que le worker. Le serveur s'en sert
+   * pour l'activation (plafond effectif), le premier créneau d'une API déjà en `erreur` et l'état `Api.persistence`.
+   */
+  persistence: PersistencePolicy;
 };
 
 const HOSTNAME = /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*|\[[0-9a-f:.]+\])$/;
@@ -126,6 +135,10 @@ type RestConfig = {
   maxActiveRunsPerUser: number;
   /** `MAX_RUNS_PER_KEY_PER_MINUTE` (défaut 60, à valider) : créations de run par clé d'API et par minute (429 `key_rate_limited`). */
   maxRunsPerKeyPerMinute: number;
+  /** `USER_BUDGET_DAILY_USD` (défaut 50, à valider) : budget USD par utilisateur et par jour (429 `budget_exceeded`, 08b § 3). */
+  userBudgetDailyUsd: number;
+  /** `MAX_COST_USD_PER_RUN` (défaut 10, à valider) : plafond d'instance du `max_cost_usd` d'une API (400 `cost_cap_exceeded`). */
+  maxCostUsdPerRun: number;
 };
 
 function positiveInteger(env: NodeJS.ProcessEnv, name: string, fallback: number, max: number): number {
@@ -216,6 +229,9 @@ function parseTrustProxy(value: string | undefined): boolean | number | string {
   throw new ConfigError(`TRUST_PROXY invalide : true, false, un nombre de sauts ou une liste d’IP/CIDR.`);
 }
 
+/** Hôtes de boucle locale admis en http:// même en production (08b § 2). */
+const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
+
 export function loadServerConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
   // Better Auth lit process.env quel que soit `env` : les deux sont nettoyés.
   const removed = TELEMETRY_VARIABLES.filter((name) => env[name] !== undefined || process.env[name] !== undefined);
@@ -230,6 +246,19 @@ export function loadServerConfig(env: NodeJS.ProcessEnv = process.env): ServerCo
   let publicUrl: string;
   try {
     publicUrl = normalizePublicUrl(env['PUBLIC_URL']); // origine pure : point final retiré, chemin/requête/fragment/identifiants refusés
+  } catch (error) {
+    throw new ConfigError((error as Error).message);
+  }
+  // 08b § 2 : PUBLIC_URL en http:// ferait voyager le jeton de session en clair (cookie sans __Host- ni Secure, pas de
+  // HSTS). Refus PAR DÉFAUT (D-PA03-2) : seuls passent la boucle locale (localhost, 127.0.0.1, [::1] ; D-PA03-1), NODE_ENV
+  // valant development ou test, ou le drapeau explicite ALLOW_INSECURE_PUBLIC_URL=true. Un NODE_ENV absent ou écrasé
+  // chez l’hébergeur ne désarme donc pas le refus. Le message ne recopie pas la valeur.
+  if (publicUrl.startsWith("http://") && !LOOPBACK_HOSTS.has(new URL(publicUrl).hostname) && !["development", "test"].includes(env["NODE_ENV"] ?? "") && env["ALLOW_INSECURE_PUBLIC_URL"] !== "true") {
+    throw new ConfigError("PUBLIC_URL doit être en HTTPS (08b § 2) : le cookie de session et HSTS l’exigent. Seuls localhost, 127.0.0.1 et [::1] restent admis en http ; pour un essai hors production, posez NODE_ENV=development ou ALLOW_INSECURE_PUBLIC_URL=true.");
+  }
+  let costCaps: CostCaps;
+  try {
+    costCaps = costCapsFromEnv(env);
   } catch (error) {
     throw new ConfigError((error as Error).message);
   }
@@ -260,6 +289,12 @@ export function loadServerConfig(env: NodeJS.ProcessEnv = process.env): ServerCo
   } catch (error) {
     throw new ConfigError((error as Error).message);
   }
+  let persistence: PersistencePolicy;
+  try {
+    persistence = persistencePolicyFromEnv(env);
+  } catch (error) {
+    throw new ConfigError((error as Error).message);
+  }
   return {
     databaseUrl,
     publicUrl,
@@ -275,11 +310,13 @@ export function loadServerConfig(env: NodeJS.ProcessEnv = process.env): ServerCo
     mfaEnforced,
     ssrfPolicy,
     tunnel: loadTunnelConfig(env, databaseUrl),
+    persistence,
     rest: {
       maxWaitSeconds: positiveInteger(env, 'MAX_WAIT_SECONDS', 25, 25),
       maxConcurrentRuns: positiveInteger(env, 'MAX_CONCURRENT_RUNS', 50, 100_000),
       maxActiveRunsPerUser: positiveInteger(env, 'MAX_ACTIVE_RUNS_PER_USER', 20, 100_000),
       maxRunsPerKeyPerMinute: positiveInteger(env, 'MAX_RUNS_PER_KEY_PER_MINUTE', 60, 100_000),
+      ...costCaps,
     },
     mcp: loadMcpConfig(env, publicUrl),
   };

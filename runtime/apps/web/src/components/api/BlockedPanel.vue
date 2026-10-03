@@ -80,7 +80,7 @@ async function copyTemplate(): Promise<void> {
 </script>
 
 <template>
-  <section class="flex flex-col gap-4 rounded-xl border-2 border-foreground bg-card p-6" aria-labelledby="blocked-title" data-testid="blocked-panel" :data-variant="variant">
+  <section id="blocked-panel" class="flex flex-col gap-4 rounded-xl border-2 border-foreground bg-card p-6" aria-labelledby="blocked-title" data-testid="blocked-panel" :data-variant="variant">
     <h2 id="blocked-title" class="text-2xl font-extrabold">{{ t('blockedPanel.title', { domain }) }}</h2>
 
     <div data-testid="blocked-what">

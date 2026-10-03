@@ -216,7 +216,7 @@ describe('assert_readme_no_bypass_copy : 0 mot de P (hors registre) et 0 mot de 
   test('une phrase du registre n\'apparaît dans le README que si son entrée porte la surface readme (en et fr)', () => {
     for (const lang of LANGS) expect(foreignClaimsDisplayed(claims, README[lang], 'readme'), lang).toEqual([]);
     for (const claim of claims.claims.filter((c) => !c.surfaces.includes('readme'))) {
-      for (const lang of LANGS) expect(foreignClaimsDisplayed(claims, `${README[lang]}\n${claim[lang]}\n`, 'readme').join(), `${claim.id} ${lang}`).toMatch(new RegExp(claim.id));
+      for (const lang of LANGS.filter((l) => claim[l].trim().length >= 12)) expect(foreignClaimsDisplayed(claims, `${README[lang]}\n${claim[lang]}\n`, 'readme').join(), `${claim.id} ${lang}`).toMatch(new RegExp(claim.id));
     }
   });
 

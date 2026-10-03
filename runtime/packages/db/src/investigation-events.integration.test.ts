@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Étape 0 sur base réelle (tâche 1.11, migration 0015) : le rapport d'accès précède tout essai, et un rapport qui arrête
-// l'enquête (refus du site, 402) interdit tout essai ensuite ; 402 mène à `action_requise` (transition 3). Migration 0021
+// l'enquête (refus du site, 402) interdit tout essai ensuite ; 402 mène à `action_requise` (transition 3). Migration 0022
 // (D-91) : `access_policy.robots` n'est plus exigé ; une politique écrite avant le garde, sans effet.
 import { randomBytes } from 'node:crypto';
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import { createTestDatabase, type TestDatabase } from '../../../tests/helpers/pg.js';
 import { AccessReportFirstError, appendInvestigationEvent, listInvestigationEvents, recordAccessReport } from './investigation-events.js';
-import { migrateUp } from './migrate.js';
+import { migrateDown, migrateUp } from './migrate.js';
 import { withActor } from './rls.js';
 import { applyStatusTransition } from './status.js';
 
@@ -127,7 +127,7 @@ describe('classes du module d’accès → statut (transitions existantes, toujo
     expect((await pool.query('SELECT status FROM apis WHERE id = $1', [b.apiId])).rows[0]).toMatchObject({ status: 'action_requise' });
   });
 
-  test('migration 0021 : access_policy sans robots par défaut, ancienne clé gardée telle quelle, contrainte retirée', async () => {
+  test('migration 0022 : access_policy sans robots par défaut, ancienne clé gardée telle quelle, contrainte retirée', async () => {
     const { apiId } = await newInvestigation();
     const { rows } = await pool.query<{ access_policy: Record<string, unknown> }>('SELECT access_policy FROM apis WHERE id = $1', [apiId]);
     expect(rows[0]!.access_policy).toEqual({ on_ai_signal: 'warn', intended_use: 'context', prefer_official: true, payment: { mode: 'never' } });
@@ -142,5 +142,17 @@ describe('classes du module d’accès → statut (transitions existantes, toujo
     await pool.query("UPDATE runs SET state = 'failed', failure_class = 'robots_disallowed' WHERE id = $1", [runId]);
     await pool.query("INSERT INTO run_attempts (run_id, seq, owner_id, execution, network, result_class) VALUES ($1, 1, $2, 'fetch', 'direct', 'robots_unreachable')", [runId, ownerId]);
     expect((await pool.query<{ failure_class: string }>('SELECT failure_class FROM runs WHERE id = $1', [runId])).rows[0]!.failure_class).toBe('robots_disallowed');
+  });
+
+  test('migration 0022 : aller-retour down/up, contrainte et défaut de 0021 rétablis puis retirés, sans réécrire de donnée', async () => {
+    const { apiId } = await newInvestigation();
+    const constraints = async () => (await pool.query("SELECT 1 FROM pg_constraint WHERE conname = 'apis_access_policy_robots'")).rowCount;
+    expect(await constraints()).toBe(0);
+    await migrateDown({ connectionString: tdb.url, steps: 1 });
+    expect(await constraints()).toBe(1);
+    expect((await pool.query<{ r: string }>("SELECT access_policy ->> 'robots' AS r FROM apis WHERE id = $1", [apiId])).rows[0]!.r).toBe('respect');
+    await migrateUp({ connectionString: tdb.url });
+    expect(await constraints()).toBe(0);
+    expect((await pool.query<{ r: string | null }>("SELECT access_policy ->> 'robots' AS r FROM apis WHERE id = $1", [apiId])).rows[0]!.r).toBe('respect');
   });
 });

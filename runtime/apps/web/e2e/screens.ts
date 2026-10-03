@@ -3,7 +3,7 @@
 // `en` et en `fr`. Un écran ajouté par une tâche suivante (comptes, audit, personnes : 3.8) s'ajoute ici avec sa donnée.
 import type { Page } from '@playwright/test';
 import type { components } from '@runtime/client';
-import { catalog, ME, runsOf, UUID } from './fixtures.ts';
+import { apisRoute, catalog, ME, runsOf, UUID } from './fixtures.ts';
 import type { ApiRoutes, ConsoleApp } from './harness.ts';
 
 type Locale = 'en' | 'fr';
@@ -56,11 +56,48 @@ async function startInvestigation(page: Page, app: ConsoleApp): Promise<void> {
   await page.locator('form[data-testid="new-api-form"] button[type="submit"]').click();
   await page.getByTestId('investigation-board').waitFor();
   await page.waitForFunction(() => document.querySelectorAll('[role="log"]').length > 0);
-  app.pushEvent('phase.started', { run_id: NEW_RUN, api_id: NEW_API, api_slug: 'zz-nouvelle', domain: 'zz-test.example', phase: 'testing', plan: [{ execution: 'fetch', network: 'direct', est_cost_usd: 0.001 }, { execution: 'agent', network: 'direct', est_cost_usd: 0.09 }], budget: { spent_usd: 0.002, max_usd: 0.5, elapsed_s: 12, timeout_s: 300, retained_est_usd: 0.002, full_agent_est_usd: 0.09 } }, '1');
-  app.pushEvent('attempt.finished', attempt(0), '2');
-  app.pushEvent('schema.proposed', { run_id: NEW_RUN, output_schema: { type: 'object', properties: { title: { type: 'string' }, price: { type: 'number' } } }, sample: [{ title: 'Vélo', price: 120 }] }, '3');
-  app.pushEvent('attempt.finished', attempt(1, { state: 'pruned', pruned_reason: 'cheaper_succeeded', result: null, cost_usd: null, ms: null }), '4');
+  // Ordre du serveur : schéma proposé, accord, puis essais (jalon 4, les trois colonnes de 06 § 2 et le journal).
+  app.pushEvent('schema.proposed', { run_id: NEW_RUN, output_schema: { type: 'object', properties: { title: { type: 'string' }, price: { type: 'number' } } }, sample: [{ title: 'Vélo', price: 120 }] }, '1');
+  app.pushEvent('schema.validated', { run_id: NEW_RUN, by: 'user' }, '2');
+  app.pushEvent('phase.started', { run_id: NEW_RUN, api_id: NEW_API, api_slug: 'zz-nouvelle', domain: 'zz-test.example', phase: 'testing', plan: [{ execution: 'fetch', network: 'direct', est_cost_usd: 0.001 }, { execution: 'agent', network: 'direct', est_cost_usd: 0.09 }], budget: { spent_usd: 0.002, max_usd: 0.5, elapsed_s: 12, timeout_s: 300, retained_est_usd: 0.002, full_agent_est_usd: 0.09 } }, '3');
+  app.pushEvent('attempt.finished', attempt(0), '4');
+  app.pushEvent('attempt.finished', attempt(1, { state: 'pruned', pruned_reason: 'cheaper_succeeded', result: null, cost_usd: null, ms: null }), '5');
   await page.getByTestId('investigation-board').locator('[role="log"] li').nth(1).waitFor();
+}
+
+/**
+ * Jalon 3 de Nouvelle API (planche NouvelleApi.dc.html, 20 § 5.3) : le schéma est proposé, la porte attend l'accord, le plan
+ * chiffré et le budget sont annoncés avec elle. Données de la planche, sur un domaine fictif.
+ */
+const GATE_SAMPLE = [{ titre: 'A Light in the Attic', prix: 51.77, en_stock: true, note: 3 }];
+const GATE_SCHEMA = { type: 'array', items: { type: 'object', properties: { titre: { type: 'string' }, prix: { type: 'number' }, en_stock: { type: 'boolean' }, note: { type: 'integer', minimum: 1, maximum: 5 } } } };
+export async function reachSchemaGate(page: Page, app: ConsoleApp): Promise<void> {
+  const locale = await page.evaluate(() => document.documentElement.lang);
+  // Phrase-modèle (« Je veux [quoi] depuis [où] … ») : la bulle dit « J'ai trouvé les livres. » comme la planche.
+  await page.locator('#api-description').fill(locale === 'fr' ? 'Je veux les livres depuis zz-livres.example pour suivre les prix' : 'I want the books from zz-livres.example to track prices');
+  await page.locator('#api-url').fill('https://zz-livres.example/');
+  await page.locator('form[data-testid="new-api-form"] button[type="submit"]').click();
+  await page.getByTestId('investigation-board').waitFor();
+  const frame = { run_id: NEW_RUN, api_id: NEW_API, api_slug: 'zz-nouvelle' };
+  const budget = { spent_usd: 0.01, max_usd: 0.1, elapsed_s: 12, timeout_s: 300 };
+  app.pushEvent('phase.started', { ...frame, domain: 'zz-livres.example', phase: 'reconnaissance', budget }, '1');
+  app.pushEvent('schema.proposed', { ...frame, output_schema: GATE_SCHEMA, sample: GATE_SAMPLE, budget }, '2');
+  app.pushEvent(
+    'phase.started',
+    {
+      ...frame,
+      phase: 'awaiting_schema_validation',
+      plan: [
+        { execution: 'fetch', network: 'direct', est_cost_usd: 0.0004 },
+        { execution: 'playwright', network: 'direct', est_cost_usd: 0.003 },
+        { execution: 'agent', network: 'direct', est_cost_usd: 0.04 },
+      ],
+      budget: { ...budget, retained_est_usd: 0.0004, full_agent_est_usd: 0.04 },
+    },
+    '3',
+  );
+  await page.getByTestId('schema-gate').waitFor();
+  await page.locator('[data-testid="trial-card"]').nth(2).waitFor();
 }
 
 /** Run de la version 2 de la stratégie (rejoué par le replay de l'onglet Enquêtes : `run_id` de `version(2)`, voir fixtures.ts). */
@@ -143,15 +180,24 @@ export const SCREENS: Screen[] = [
     },
   },
   { id: 'home', path: '/' },
+  // Le tableau s'ouvre sur « À traiter » (20 § 5.2) ; « Tout » montre la liste complète et sa pagination.
   { id: 'catalog', path: '/apis' },
+  {
+    id: 'catalog-all',
+    path: '/apis',
+    prepare: async (page) => {
+      await page.locator('[data-testid="catalog-pills"] [data-pill="all"]').click();
+      await page.getByTestId('catalog-row').nth(6).waitFor();
+    },
+  },
   { id: 'catalog-empty', path: '/apis', routes: { 'GET /api/apis': { body: { apis: [], next_cursor: null } } } },
   {
     id: 'catalog-no-match',
     path: '/apis',
-    routes: { 'GET /api/apis': (request) => ({ body: { apis: request.query.get('q') ? [] : catalog(), next_cursor: null } }) },
+    routes: { 'GET /api/apis': (request) => (request.query.get('q') ? { body: { apis: [], next_cursor: null } } : apisRoute(catalog)(request)) },
     prepare: async (page) => {
       await page.locator('#catalog-search').fill('zz-introuvable');
-      await page.getByTestId('empty-state').waitFor();
+      await page.getByTestId('catalog-no-match').waitFor();
     },
   },
   { id: 'catalog-error', path: '/apis', expectsNetworkError: true, routes: { 'GET /api/apis': { status: 500, body: { error: { code: 'internal', message: 'zz' } } } } },
@@ -167,6 +213,8 @@ export const SCREENS: Screen[] = [
   { id: 'new-api', path: '/apis/new' },
   { id: 'new-api-account-site', path: '/apis/new', prepare: async (page) => void (await page.getByTestId('account-declare').check()) },
   { id: 'new-api-investigating', path: '/apis/new', routes: creation, prepare: startInvestigation },
+  // Jalon 3 (3.17) : la porte d'accord, le plan chiffré et le budget, en trois cartes.
+  { id: 'new-api-gate', path: '/apis/new', routes: creation, prepare: reachSchemaGate },
   { id: 'new-api-reopened', path: `/apis/new/${NEW_RUN}` },
   { id: 'runs', path: '/runs' },
   { id: 'not-found', path: '/zz-introuvable' },

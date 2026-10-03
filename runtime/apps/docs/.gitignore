@@ -1,5 +1,8 @@
 # Sortie du site et pages générées à la construction (scripts/gen-reference.ts) : jamais versionnées.
 dist/
+dist-preprod/
+dist-landing-a/
+dist-landing-b/
 content/.vitepress/cache/
 content/reference/rest.md
 content/reference/codes-de-raison.md

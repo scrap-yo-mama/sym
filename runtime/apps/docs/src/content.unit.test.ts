@@ -14,6 +14,9 @@ import { PAGES, QUADRANTS } from './nav.ts';
 import { parseQuickstart, QUICKSTART_BASE_URL } from './quickstart.ts';
 import { codeBlocks, contentDir, handWritten, markdownFiles, pageFile, prose, readSource, runtimeDir } from './testing/pages.ts';
 import { existsSync } from 'node:fs';
+import { HOME_PATHS, LEGAL_PATHS } from './landing/href.ts';
+import { buildLanding } from './landing/content.ts';
+import { buildInputs, siteEnv } from './landing/site.ts';
 
 describe('assert_docs_diataxis_structure : quatre quadrants, un registre unique', () => {
   test('chaque quadrant a des pages, chaque page est dans le dossier de son quadrant', () => {
@@ -25,7 +28,9 @@ describe('assert_docs_diataxis_structure : quatre quadrants, un registre unique'
 
   test('les pages écrites à la main existent ; aucun fichier de contenu n\'échappe au registre', () => {
     for (const page of handWritten) expect(existsSync(pageFile(page)), page.path).toBe(true);
-    const known = new Set<string>(['index', ...PAGES.map((p) => p.path)]);
+    // L'accueil et les pages juridiques de la landing (4.11) ne sont pas des pages Diátaxis : leur registre est src/landing/href.ts.
+    const landing = [...Object.values(HOME_PATHS).map((path) => `${path}index`), ...Object.values(LEGAL_PATHS).flatMap((legal) => Object.values(legal))];
+    const known = new Set<string>([...landing, ...PAGES.map((p) => p.path)]);
     expect(markdownFiles().filter((file) => !known.has(file)), 'page sur disque absente de src/nav.ts').toEqual([]);
   });
 
@@ -66,12 +71,18 @@ describe('assert_docs_diataxis_structure : quatre quadrants, un registre unique'
     }
   });
 
-  test('la page d\'accueil renvoie vers les quatre quadrants', () => {
-    const home = readFileSync(join(contentDir, 'index.md'), 'utf8');
-    for (const quadrant of QUADRANTS) {
-      expect(home, quadrant.id).toContain(`link: /${quadrant.id}/`);
+  test('la page d\'accueil (la landing, 4.11) mène à la doc : premier tutoriel, Usage responsable, Hors périmètre, llms.txt, et chaque lien interne vise une page du site', () => {
+    const known = new Set(PAGES.map((p) => p.path));
+    for (const lang of ['en', 'fr'] as const) {
+      const { chrome, page } = buildLanding(lang, buildInputs(siteEnv({}, '/')));
+      const hrefs = JSON.stringify([chrome, page]);
+      expect(hrefs, lang).toContain('"path":"tutoriels/quickstart"');
+      expect(hrefs, lang).toContain('"path":"explications/usage-responsable"');
+      expect(hrefs, lang).toContain('"path":"explications/hors-perimetre"');
+      expect(hrefs, lang).toContain('"path":"llms.txt"');
+      for (const match of hrefs.matchAll(/"to":"doc","path":"([^"]+)"/g)) expect(known.has(match[1] ?? ''), `${lang} : ${match[1]}`).toBe(true);
     }
-    expect(home).toContain('/llms.txt');
+    expect(readFileSync(join(contentDir, 'index.md'), 'utf8')).toContain('layout: landing');
   });
 });
 
