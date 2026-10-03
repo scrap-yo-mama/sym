@@ -5230,7 +5230,7 @@ components:
     # ——— Réglages (08 § 7, 13) : les secrets sont en écriture seule, jamais relus (INV8) ———
     LlmPreset:
       type: string
-      enum: [zai, openrouter, vllm, ollama, deepseek, qwen, openai, custom]
+      enum: [zai, openrouter, vllm, ollama, deepseek, qwen, openai, anthropic, gemini, mistral, groq, custom]
     LlmProfile:
       type: object
       additionalProperties: false

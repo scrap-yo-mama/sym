@@ -2775,7 +2775,7 @@ export interface components {
             error?: components["schemas"]["ReasonMessage"] | null;
         };
         /** @enum {string} */
-        LlmPreset: "zai" | "openrouter" | "vllm" | "ollama" | "deepseek" | "qwen" | "openai" | "custom";
+        LlmPreset: "zai" | "openrouter" | "vllm" | "ollama" | "deepseek" | "qwen" | "openai" | "anthropic" | "gemini" | "mistral" | "groq" | "custom";
         LlmProfile: {
             tools?: boolean;
             tool_choice?: string[];

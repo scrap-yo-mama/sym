@@ -13,7 +13,17 @@ export type LlmSettings = Schemas['LlmSettings'];
 export type LlmRoleName = 'investigate' | 'repair' | 'extract' | 'agent';
 export const LLM_ROLES: readonly LlmRoleName[] = ['investigate', 'repair', 'extract', 'agent'];
 export type LlmPreset = Schemas['LlmPreset'];
-export const LLM_PRESETS: readonly LlmPreset[] = ['zai', 'openrouter', 'vllm', 'ollama', 'deepseek', 'qwen', 'openai', 'custom'];
+export const LLM_PRESETS: readonly LlmPreset[] = ['zai', 'openrouter', 'vllm', 'ollama', 'deepseek', 'qwen', 'openai', 'anthropic', 'gemini', 'mistral', 'groq', 'custom'];
+
+/** URL de base pré-remplie par préréglage (points d'accès compatibles OpenAI). `custom`, `vllm` et `ollama` : à saisir. */
+export const LLM_PRESET_BASE_URLS: Partial<Record<LlmPreset, string>> = {
+  openrouter: 'https://openrouter.ai/api/v1',
+  openai: 'https://api.openai.com/v1',
+  anthropic: 'https://api.anthropic.com/v1',
+  gemini: 'https://generativelanguage.googleapis.com/v1beta/openai',
+  mistral: 'https://api.mistral.ai/v1',
+  groq: 'https://api.groq.com/openai/v1',
+};
 
 /** Fournisseur en cours d'édition ; `newApiKey` est le seul endroit où une clé vit, et seulement le temps de la saisie. */
 export interface ProviderDraft {
@@ -67,6 +77,16 @@ export function useLlmSettings() {
 
   function addProvider(): void {
     providers.value = [...providers.value, { id: '', preset: 'custom', base_url: '', apiKeySet: false, apiKeyUnreadable: false, newApiKey: '' }];
+  }
+
+  /** Change de préréglage et pré-remplit l'URL de base, sauf si l'utilisateur en a saisi une autre à la main. */
+  function setPreset(index: number, preset: LlmPreset): void {
+    const provider = providers.value[index];
+    if (!provider) return;
+    const previous = LLM_PRESET_BASE_URLS[provider.preset];
+    const next = LLM_PRESET_BASE_URLS[preset];
+    if (next && (provider.base_url.trim() === '' || provider.base_url === previous)) provider.base_url = next;
+    provider.preset = preset;
   }
 
   function removeProvider(index: number): void {
@@ -126,7 +146,7 @@ export function useLlmSettings() {
     return tester.run(role, () => call(() => getApi().POST('/api/settings/llm/test', { body: { provider: choice.provider, model: choice.model } })));
   }
 
-  return { ...resource, providers, roles, validatedModels, saving, saveFailure, saved, outcomes: tester.outcomes, load, addProvider, removeProvider, save, test };
+  return { ...resource, providers, roles, validatedModels, saving, saveFailure, saved, outcomes: tester.outcomes, load, addProvider, removeProvider, setPreset, save, test };
 }
 
 export type ProxyWrite = Schemas['ProxyWrite'];

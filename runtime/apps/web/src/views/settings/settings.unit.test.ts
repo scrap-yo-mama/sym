@@ -395,3 +395,31 @@ describe('Diagnostic local', () => {
     expect(await collectDiagnostic(api, 'en', new Date('2026-10-01T10:00:00Z'))).toEqual({ generated_at: '2026-10-01T10:00:00.000Z', console_locale: 'en', instance: { server: null, schema: null, min_extension: null, mcp_spec: null }, readiness: { ok: null } });
   });
 });
+
+describe('Réglages > Modèles IA : préréglages de fournisseurs (UX-01)', () => {
+  test('Anthropic est proposé, libellé « Anthropic », avec les autres fournisseurs compatibles OpenAI', async () => {
+    installFakeServer({ ...sessionRoutes, 'GET /api/settings/llm': () => json(200, llmSettings) });
+    const html = await view(ModelsSettingsView);
+    for (const preset of ['anthropic', 'gemini', 'mistral', 'groq']) {
+      expect(html).toContain(`<option value="${preset}">${en.settings.models.presets[preset as 'anthropic']}</option>`);
+    }
+    expect(en.settings.models.presets.anthropic).toBe('Anthropic');
+  });
+
+  test('choisir Anthropic pré-remplit l’URL de base ; une URL saisie à la main n’est pas écrasée', async () => {
+    installFakeServer({ ...sessionRoutes, 'GET /api/settings/llm': () => json(200, llmSettings) });
+    const settings = useLlmSettings();
+    settings.addProvider();
+    const draft = (): NonNullable<(typeof settings.providers.value)[number]> => settings.providers.value[0] as never;
+    settings.setPreset(0, 'anthropic');
+    expect(draft().preset).toBe('anthropic');
+    expect(draft().base_url).toBe('https://api.anthropic.com/v1');
+    settings.setPreset(0, 'mistral');
+    expect(draft().base_url).toBe('https://api.mistral.ai/v1');
+    settings.providers.value[0]!.base_url = 'https://proxy.interne.test/v1';
+    settings.setPreset(0, 'groq');
+    expect(draft().base_url).toBe('https://proxy.interne.test/v1');
+    settings.setPreset(0, 'custom');
+    expect(draft().base_url).toBe('https://proxy.interne.test/v1');
+  });
+});
