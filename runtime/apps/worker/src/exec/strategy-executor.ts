@@ -77,7 +77,7 @@ import {
   type HttpExchange,
   type RequestPacer,
 } from '@runtime/core/exec';
-import type { DomainPacer } from '@runtime/core';
+import { embeddedRefs, pinnedSkillReader, renderEmbeddedRules, type DomainPacer, type EmbeddedRules, type SkillRead, type StrategyRuleRow, type StrategySource } from '@runtime/core';
 import { InstanceContactError, RobotsCache, RobotsGate, sessionRobotsFetcher } from '@runtime/core/access';
 import {
   buildNetworkRungs,
@@ -98,7 +98,7 @@ import {
   type SecretReader,
   type SsrfGuard,
 } from '@runtime/core/net';
-import { deleteRejectedItems, loadRunTarget, readProxySettings, readVolumeHistory, saveCompiledStrategy, saveRejectedItems, saveRepairedStrategy, saveRunDataset, type RunTarget } from '@runtime/db';
+import { deleteRejectedItems, loadRunTarget, readEmbeddedFiles, readProxySettings, readVolumeHistory, saveCompiledStrategy, saveRejectedItems, saveRepairedStrategy, saveRunDataset, type RunTarget } from '@runtime/db';
 import type { LlmClient, LlmConfig } from '@runtime/llm';
 import type pg from 'pg';
 import { pino, type Logger } from 'pino';
@@ -186,7 +186,16 @@ export type CandidateCheck = {
 };
 
 /** Stratégie réparée (vN+1) : patch borné (ou `null` pour une escalade), sortie déjà rejouée et validée. */
-export type RepairedStrategy = { readonly execution: Execution; readonly network: FrozenStrategy['network']; readonly spec: DeclarativeSpec; readonly patch: JsonPatchOperation[] | null; readonly estCostUsd: number | null };
+export type RepairedStrategy = {
+  readonly execution: Execution;
+  readonly network: FrozenStrategy['network'];
+  readonly spec: DeclarativeSpec;
+  readonly patch: JsonPatchOperation[] | null;
+  readonly estCostUsd: number | null;
+  /** Source de vN+1 (tâche 2.10, 18 §4.6) : règles à jour injectées et skills lus. */
+  readonly source?: StrategySource;
+  readonly rules?: readonly StrategyRuleRow[];
+};
 
 /** Issue d'une réparation (04 §5). */
 export type RepairOutcome =
@@ -235,6 +244,8 @@ type Outcome = {
   stop?: TunnelStop;
   /** Mode tunnel : le site n'est pas connecté dans le navigateur de l'utilisateur. */
   needsUser?: boolean;
+  /** Skills lus par l'agent E6 (`read_skill`, tâche 2.10) : versions épinglées servies, empreintes ; jamais le contenu. */
+  skillReads?: readonly SkillRead[];
 };
 
 /** Un essai d'une stratégie, gardes comprises, avant journalisation (`runTrial`). */
@@ -380,6 +391,17 @@ export function createStrategyRuntime(deps: StrategyExecutorDeps): StrategyRunti
   const robotsCache = deps.robotsCache ?? new RobotsCache();
 
   const logger = deps.logger ?? pino({ enabled: false });
+
+  /** Prompt embarqué d'une stratégie E4/E6 (références de `spec.rules`) ; `null` sans règle ou en cas d'écart (journalisé). */
+  const embeddedFor = async (ctx: RunCtx, rules: EmbeddedRules | undefined) => {
+    if (rules === undefined || (rules.rules.length === 0 && rules.skills.length === 0)) return null;
+    const out = renderEmbeddedRules(rules, await readEmbeddedFiles(deps.pool, { ownerId: ctx.ownerId, refs: embeddedRefs(rules) }));
+    if (!out.ok) {
+      await ctx.log('warn', 'embedded_rules_mismatch', { missing: out.missing });
+      return null;
+    }
+    return { text: out.text, reader: pinnedSkillReader(out.skills) };
+  };
 
   /**
    * Identité du robot pour ce run (17 §5) : le User-Agent réel du moteur embarqué ; avec `identify_instance`, le jeton
@@ -631,6 +653,9 @@ export function createStrategyRuntime(deps: StrategyExecutorDeps): StrategyRunti
       case 'agent': {
         const ports = deps.agent;
         if (ports === undefined || agentic === undefined) return refuse('code_error', 'execution_unavailable');
+        // Règles embarquées (18 §4.5, INV12) : texte reconstruit depuis les références de la spec, sous l'identité du
+        // propriétaire, empreintes vérifiées ; `read_skill` ne sert que les skills référencés, à leur version épinglée.
+        const embedded = agentic.kind === 'hybrid' ? null : await embeddedFor(ctx, agentic.spec.rules);
         // Chromium requis pour E5 et E6, et pour E4 par le navigateur (`DISABLE_BROWSER`).
         if (deps.browsers === null && !(agentic.kind === 'agent_fetch' && agentic.spec.via === 'fetch')) return refuse('code_error', 'browser_disabled');
         let config: LlmConfig | null;
@@ -680,6 +705,7 @@ export function createStrategyRuntime(deps: StrategyExecutorDeps): StrategyRunti
             out = await runAgentFetchExecutor({
               ...common,
               spec: agentic.spec,
+              ...(embedded === null || embedded.text === '' ? {} : { rulesText: embedded.text }),
               llm,
               modelId: config?.roles.extract?.model ?? null,
               ...(session === undefined ? {} : { session }),
@@ -710,12 +736,25 @@ export function createStrategyRuntime(deps: StrategyExecutorDeps): StrategyRunti
               allowWriteActions: target.api.allowWriteActions,
               taskId: ctx.runId,
               version: strategy.version,
+              ...(embedded === null
+                ? {}
+                : {
+                    rules: {
+                      systemPrompt: embedded.text,
+                      readSkill: async (name: string) => {
+                        const read = embedded.reader.read(name);
+                        return read.ok ? read.content : 'skill_not_found';
+                      },
+                    },
+                  }),
             });
           }
+          const skillReads = embedded?.reader.reads ?? [];
+          for (const read of skillReads) await ctx.log('info', 'skill_read', { ref: read.ref, sha256: read.sha256 });
           const exceeded = (egress?.budgetExceeded() ?? false) || (session?.budgetExceeded() ?? false);
           const usage = egress !== undefined && session !== undefined ? addUsage(egress.usage(), session.usage()) : (egress?.usage() ?? session?.usage() ?? null);
           const { result, ...agent } = out;
-          return { result: budgetChecked(egress === undefined ? result : refineEgress(result, egress), exceeded), usage, agent };
+          return { result: budgetChecked(egress === undefined ? result : refineEgress(result, egress), exceeded), usage, agent, ...(skillReads.length === 0 ? {} : { skillReads: [...skillReads] }) };
         } finally {
           await session?.close().catch(() => undefined);
           await egress?.close().catch(() => undefined);

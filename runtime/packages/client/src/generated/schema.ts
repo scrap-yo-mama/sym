@@ -564,6 +564,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/apis/{slug}/resolved-rules": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Aperçu de l'ensemble de règles résolu pour l'API (19 § 2, 19b § 2, tâche 2.10) ; propriétaire seul, 404 sinon */
+        get: operations["getResolvedRules"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/apis/{slug}/status-events": {
         parameters: {
             query?: never;
@@ -2478,6 +2495,36 @@ export interface components {
                 [key: string]: unknown;
             }[] | null;
         };
+        /** @description Ensemble résolu des règles et skills d'une API (19 § 2) ; noms, versions, empreintes et jetons, jamais le contenu. */
+        ResolvedRules: {
+            /** @enum {string} */
+            role: "investigate" | "repair" | "embedded";
+            budget_tokens: number;
+            tokens: number;
+            rules: {
+                name: string;
+                version: number;
+                /** @enum {string} */
+                level: "instance" | "domain" | "api";
+                tokens: number;
+                sha256: string;
+            }[];
+            skills: {
+                name: string;
+                version: number;
+                description: string | null;
+                sha256: string;
+            }[];
+            truncated: {
+                name: string;
+                version: number;
+                /** @enum {string} */
+                level: "instance" | "domain" | "api";
+                tokens: number;
+            }[];
+            skills_listing_truncated: boolean;
+            skills_tokens: number;
+        };
         StrategyVersionList: {
             versions: components["schemas"]["StrategyVersionSummary"][];
             next_cursor: string | null;
@@ -4326,6 +4373,35 @@ export interface operations {
             403: components["responses"]["Error"];
             404: components["responses"]["Error"];
             409: components["responses"]["Error"];
+        };
+    };
+    getResolvedRules: {
+        parameters: {
+            query?: {
+                /** @description Usage du plafond RULES_MAX_TOKENS (investigate et repair 3 000, embedded 1 000) ; défaut investigate. */
+                role?: "investigate" | "repair" | "embedded";
+            };
+            header?: never;
+            path: {
+                slug: components["parameters"]["Slug"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Règles injectées, skills listés, jetons et ce que les plafonds ont retiré (aucun contenu de règle). */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResolvedRules"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
         };
     };
     listStatusEvents: {

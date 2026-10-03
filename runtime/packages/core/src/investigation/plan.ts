@@ -126,7 +126,8 @@ export function pruneAfter(cls: FailureClass, failed: TrialPair, remaining: read
   if (cls === 'network') return { next: 'continue', pruned: rest.filter((p) => p.network === failed.network) };
   // Toute autre classe garde le réseau courant (échelle de 1.4 et X4 : seule `network` fait changer de N) : les couples
   // d'un autre N sont élagués. Écart à la lettre de 04 §3.3 (qui n'élague que le même E après `extraction`), à consigner
-  // au journal des décisions et à transcrire dans `escalade-par-defaut.md` (2.10).
+  // au journal des décisions ; `escalade-par-defaut.md` reste la transcription fidèle de 04 §3.3 (18 §4.2) tant qu'aucune
+  // décision D-* ne l'étend.
   return {
     next: 'continue',
     pruned: rest.filter((p) => p.network !== failed.network || (cls === 'extraction' && p.execution === failed.execution && p.source === failed.source)),

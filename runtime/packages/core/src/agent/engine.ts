@@ -69,6 +69,16 @@ export interface AgentTask {
   readonly outputSchema: Readonly<Record<string, unknown>>;
   readonly allowWriteActions: boolean;
   readonly limits: AgentRunLimits;
+  /**
+   * Règles Markdown (tâche 2.10, 18 §4.5) : `systemPrompt` = bloc <trusted_rules> et liste des skills ; `readSkill` sert un
+   * skill de l'ensemble résolu (enquête) ou épinglé dans la source de la version (rejeu), sinon `skill_not_found`.
+   */
+  readonly rules?: AgentTaskRules;
+}
+
+export interface AgentTaskRules {
+  readonly systemPrompt: string;
+  readSkill(name: string): Promise<string>;
 }
 
 export interface AgentRunLimits {

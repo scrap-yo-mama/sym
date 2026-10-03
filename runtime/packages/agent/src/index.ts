@@ -10,7 +10,7 @@ export { HomeLoopEngine, HOME_LOOP_SYSTEM_PROMPT, homeLoopPromptVersion, frameSn
 export { AGENT_CONTEXT_OPTIONS, PlaywrightStepChannel, installDomainGuard, newAgentContext, type BlockedRequest, type DomainGuard, type DomainGuardOptions, type PlaywrightChannelOptions } from './playwright-channel.js';
 export { contentDigest, hasRef, hostAllowed, hostOf, semanticOf, truncateTree, DEFAULT_MAX_TREE_CHARS } from './snapshot.js';
 export { AgentStepProtocolError, AgentStepRefusedError, ThirdPartyEngineNotViaTunnelError, TunnelStepChannel, assertTunnelEngine, runAgentInTunnel, type AgentStepTransport, type AgentTunnelRunOptions } from './tunnel-channel.js';
-export { STAGEHAND_VERSION, StagehandEngine, jsonSchemaToZod, stagehandTrace, type StagehandEngineHooks, type StagehandEngineOptions, type StagehandLlmCall } from './stagehand-engine.js';
+export { STAGEHAND_VERSION, StagehandEngine, jsonSchemaToZod, stagehandAgentConfig, stagehandTrace, type StagehandEngineHooks, type StagehandEngineOptions, type StagehandLlmCall } from './stagehand-engine.js';
 export { cleanUrlTokens, sanitizeModelPrompt, type PromptSanitizeOptions } from './stagehand-prompt.js';
 export {
   AgentToolsetNotClosedError,
@@ -24,5 +24,6 @@ export {
 export { installSemanticRecorder, type SemanticClick, type SemanticRecorder } from './semantic-recorder.js';
 export { EXTRACT_SYSTEM_PROMPT, extractMessages, extractPromptVersion, extractRecordsWithLlm, recordsSchema, sourceLabel, type LlmExtraction } from './agent-extract.js';
 export { extractLabelsFromPage, readPageView, runHybridSteps, type HybridFailure, type HybridHooks } from './hybrid-runner.js';
-export { INVESTIGATE_SYSTEM_PROMPT, investigateCallCeilingUsd, investigateMessages, investigatePromptVersion, proposeInvestigation, type InvestigateArgs, type InvestigateResult } from './investigate.js';
+export { INVESTIGATE_SYSTEM_PROMPT, investigateCallCeilingUsd, investigateMessages, investigateSystem, investigatePromptVersion, proposeInvestigation, type InvestigateArgs, type InvestigateResult } from './investigate.js';
 export { REPAIR_MAX_TOKENS, REPAIR_PROPOSAL_SCHEMA, REPAIR_SYSTEM_PROMPT, parseRepairProposal, proposeRepair, repairCallCeilingUsd, repairMessages, repairPromptVersion, type RepairArgs, type RepairProposal } from './repair.js';
+export { readSkillsPhase, renderSkillBodies, SKILL_PHASE_MAX_CALLS, type SkillBody } from './skills.js';

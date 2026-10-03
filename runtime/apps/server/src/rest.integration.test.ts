@@ -822,6 +822,26 @@ describe('assert_run_cancel_pause_resume : annulation, pause, reprise (05 § 4.4
   });
 });
 
+describe('aperçu des règles résolues (19 § 2, 19b § 2, tâche 2.10)', () => {
+  test('GET /api/apis/{slug}/resolved-rules?role= : A voit son ensemble résolu (budget 3000 ou 1000 selon le rôle), B reçoit le 404 uniforme, même sur une API partagée d’instance', async () => {
+    const own = await seedApi(srv.db.url, a.user.id, { visibility: 'instance' });
+    // Hôte de l'API (demande d'enquête) : la politique par défaut, partagée d'instance (`*`), s'y applique.
+    await withClient(srv.db.url, (c) => c.query(`UPDATE apis SET investigation = '{"request": {"url": "https://zz-test-rules.example/", "description": "zz_test", "auto_validate": true, "budget_usd": 1, "timeout_s": 600}, "spent_usd": 0, "elapsed_ms": 0}' WHERE id = $1`, [own.id]));
+    const path = '/api/apis/{slug}/resolved-rules';
+    const investigate = await api(a, 'GET', `/api/apis/${own.slug}/resolved-rules`, path);
+    expect(investigate.status).toBe(200);
+    expect(investigate.body).toMatchObject({ role: 'investigate', budget_tokens: 3000, skills_listing_truncated: false });
+    expect((investigate.body['rules'] as { name: string; sha256: string }[]).map((r) => r.name)).toContain('escalade-par-defaut');
+    expect(JSON.stringify(investigate.body)).not.toContain('Transcription de 04');
+    expect((await api(a, 'GET', `/api/apis/${own.slug}/resolved-rules?role=repair`, path)).body).toMatchObject({ role: 'repair', budget_tokens: 3000 });
+    expect((await api(a, 'GET', `/api/apis/${own.slug}/resolved-rules?role=embedded`, path)).body).toMatchObject({ role: 'embedded', budget_tokens: 1000 });
+    expect((await api(a, 'GET', `/api/apis/${own.slug}/resolved-rules?role=autre`, path)).status).toBe(400);
+    const other = await api(b, 'GET', `/api/apis/${own.slug}/resolved-rules`, path);
+    expect(other.status).toBe(404);
+    expect((await api(b, 'GET', '/api/apis/zz-inexistante/resolved-rules', path)).body).toEqual(other.body);
+  });
+});
+
 describe('ré-enquête, versions et chronologie (05 § 4.2, 06 § 2, INV3)', () => {
   test('investigate : 19/20 depuis sain, 18 depuis bloquee, 17 depuis action_requise ; 409 si une enquête tourne ; demande inconnue → 409', async () => {
     const created = await api(a, 'POST', '/api/apis', '/api/apis', { description: 'zz_test reenquete', url: 'https://zz-test-re.example/' });

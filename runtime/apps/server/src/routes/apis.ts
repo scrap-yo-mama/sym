@@ -22,6 +22,7 @@ import {
   createRun,
   InvestigationStateError,
   removeScheduleMirror,
+  resolvedRulesPreview,
   StorageFullError,
   startInvestigation,
   validateInvestigationSchema,
@@ -605,6 +606,19 @@ export function apiRoutes(app: FastifyInstance, ctx: ServerContext): void {
         throw error;
       }
       return runResponse(ctx, request, reply, actor, runId, waitSecondsOf(ctx, request.query.wait));
+    },
+  );
+
+  // ——— Règles résolues (tâche 2.10, 19 § 2, 19b § 2) ———
+  // Ensemble résolu au plafond du rôle (`investigate`, `repair` : 3 000 jetons ; `embedded` : 1 000), noms, versions,
+  // empreintes, jetons et retraits ; jamais le contenu. Propriétaire de l'API seul : 404 uniforme sinon (INV12), même
+  // pour un membre qui voit une API partagée d'instance.
+  app.get<{ Params: { slug: string }; Querystring: { role?: 'investigate' | 'repair' | 'embedded' } }>(
+    '/api/apis/:slug/resolved-rules',
+    { schema: { querystring: { type: 'object', additionalProperties: false, properties: { role: { type: 'string', enum: ['investigate', 'repair', 'embedded'] } } } } },
+    async (request, reply) => {
+      const view = await resolvedRulesPreview(ctx.pool, { userId: request.actor!.userId, slug: request.params.slug, role: request.query.role ?? 'investigate' });
+      return view === null ? notFound(reply) : view;
     },
   );
 

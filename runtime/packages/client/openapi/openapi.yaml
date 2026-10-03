@@ -921,6 +921,35 @@ paths:
           $ref: '#/components/responses/Error'
         '409':
           $ref: '#/components/responses/Error'
+  /api/apis/{slug}/resolved-rules:
+    get:
+      operationId: getResolvedRules
+      tags: [apis]
+      summary: Aperçu de l'ensemble de règles résolu pour l'API (19 § 2, 19b § 2, tâche 2.10) ; propriétaire seul, 404 sinon
+      parameters:
+        - $ref: '#/components/parameters/Slug'
+        - name: role
+          in: query
+          required: false
+          description: Usage du plafond RULES_MAX_TOKENS (investigate et repair 3 000, embedded 1 000) ; défaut investigate.
+          schema:
+            type: string
+            enum: [investigate, repair, embedded]
+      responses:
+        '200':
+          description: Règles injectées, skills listés, jetons et ce que les plafonds ont retiré (aucun contenu de règle).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResolvedRules'
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
   /api/apis/{slug}/status-events:
     get:
       operationId: listStatusEvents
@@ -4622,6 +4651,57 @@ components:
               items:
                 type: object
                 additionalProperties: true
+    ResolvedRules:
+      description: Ensemble résolu des règles et skills d'une API (19 § 2) ; noms, versions, empreintes et jetons, jamais le contenu.
+      type: object
+      additionalProperties: false
+      required: [role, budget_tokens, tokens, rules, skills, truncated, skills_listing_truncated, skills_tokens]
+      properties:
+        role:
+          type: string
+          enum: [investigate, repair, embedded]
+        budget_tokens:
+          type: integer
+        tokens:
+          type: integer
+        rules:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [name, version, level, tokens, sha256]
+            properties:
+              name: { type: string }
+              version: { type: integer }
+              level: { type: string, enum: [instance, domain, api] }
+              tokens: { type: integer }
+              sha256: { type: string }
+        skills:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [name, version, description, sha256]
+            properties:
+              name: { type: string }
+              version: { type: integer }
+              description: { type: [string, 'null'] }
+              sha256: { type: string }
+        truncated:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [name, version, level, tokens]
+            properties:
+              name: { type: string }
+              version: { type: integer }
+              level: { type: string, enum: [instance, domain, api] }
+              tokens: { type: integer }
+        skills_listing_truncated:
+          type: boolean
+        skills_tokens:
+          type: integer
     StrategyVersionList:
       type: object
       additionalProperties: false
