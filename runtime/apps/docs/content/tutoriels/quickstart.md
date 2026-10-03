@@ -144,7 +144,7 @@ curl -fsS -b cookies.txt -X POST http://localhost:3100/api/apis \
   -d '{"description":"Les produits du catalogue, avec titre et prix","url":"http://zz_test_ssr.localhost:4010/"}'
 ```
 
-L'agent enquête d'abord par un rapport d'accès (`robots.txt`, signaux d'usage, conditions du site), puis essaie les méthodes de la moins chère à la plus chère, et propose un schéma de sortie à valider. Une fois validé, l'API entre au catalogue et se rejoue à coût de code. Voir [Architecture](../explications/architecture.md).
+L'agent enquête d'abord par un rapport d'accès (signaux d'usage, conditions du site), puis essaie les méthodes de la moins chère à la plus chère, et propose un schéma de sortie à valider. Une fois validé, l'API entre au catalogue et se rejoue à coût de code. Voir [Architecture](../explications/architecture.md).
 
 La réponse (`201`) donne l'identifiant de l'API (`api_id`), son `slug` et le run de l'enquête (`run_id`) ; l'enquête se suit par `GET /api/runs/{run_id}` ou le flux `GET /api/events`, et le schéma proposé se valide par `POST /api/apis/{api_id}/validate-schema`.
 

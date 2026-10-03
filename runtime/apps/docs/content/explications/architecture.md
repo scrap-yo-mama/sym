@@ -67,7 +67,7 @@ Les couples autorisés sont triés par **coût estimé croissant** : on essaie l
 
 ## L'enquête
 
-1. **Rapport d'accès, avant tout** : `robots.txt` (lu et respecté, sans option pour l'ignorer), signaux d'usage (`Content-Signal`, `tdm-reservation`, `Content-Usage`, affichés sans bloquer), conditions du site signalées, réponse 402. Un chemin interdit s'arrête là : zéro requête de contenu.
+1. **Rapport d'accès, avant tout** : sonde de l'adresse (signaux d'usage `Content-Signal`, `tdm-reservation`, `Content-Usage`, affichés sans bloquer ; conditions du site signalées ; flux et API officielle ; réponse 402 affichée, sans paiement), puis `/llms.txt` et `/sitemap.xml` en sondes passives. Le `robots.txt` est une source d'information que l'agent peut consulter, par exemple pour trouver le sitemap ; il ne conditionne pas la collecte.
 2. **Reconnaissance** : le trafic réseau de la page est capturé, et les données embarquées (états de framework, JSON-LD) sont cherchées avant de conclure qu'il n'y a pas d'API. Un jeton calculé côté client rend la voie « non supportée », sans tentative de le reproduire.
 3. **Schéma de sortie proposé**, avec un échantillon : vous le validez ou le corrigez (ou l'agent le valide seul avec `auto_validate`).
 4. **Essais par coût croissant**, élagués par le classifieur d'échec. « Ça marche » = sortie conforme sur plusieurs exécutions, dont la page 2 si l'API est paginée.
@@ -95,7 +95,7 @@ Quelques règles ne se négocient pas, et chacune est un test nommé :
 - **Chaque run est tracé** : stratégie, mode d'exécution, réseau, coût, classe d'échec.
 - **Une session appartient à son propriétaire**, sans impersonation.
 - **Aucun contournement intégré** ([Hors périmètre](./hors-perimetre.md)).
-- **Le code généré tourne en bac à sable**, **les secrets sont chiffrés**, **rien ne part vers l'éditeur**, **toute sortie réseau passe la garde SSRF**, **`robots.txt` est respecté**, **les utilisateurs sont isolés**. Voir [Sécurité](./securite.md).
+- **Le code généré tourne en bac à sable**, **les secrets sont chiffrés**, **rien ne part vers l'éditeur**, **toute sortie réseau passe la garde SSRF**, **les utilisateurs sont isolés**. Voir [Sécurité](./securite.md).
 
 ## La pile technique
 

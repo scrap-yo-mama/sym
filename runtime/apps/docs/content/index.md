@@ -31,7 +31,7 @@ features:
 
 **Il fait** : enquêter sur un site pour trouver la méthode la moins chère (une requête HTTP, un navigateur, un agent), valider la sortie contre un schéma, la rejouer à coût de code, la réparer quand elle casse, et vous dire l'état de chaque API (saine, à surveiller, bloquée…). Il s'appelle en MCP comme en REST, se partage avec une équipe sans que chacun voie les données des autres, et s'installe sur Render, sur un VPS ou sur n'importe quel hébergeur de conteneurs.
 
-**Il ne fait pas** : résoudre de captcha, masquer son identité, franchir un défi anti-robot, changer d'adresse IP après un refus, faire tourner plusieurs comptes. Il respecte `robots.txt` sans option pour l'ignorer. Ce n'est pas une limite technique, c'est une ligne choisie : voir [Hors périmètre](/explications/hors-perimetre). Certains sites protégés resteront donc « bloqués », même pour un usage légitime.
+**Il ne fait pas** : résoudre de captcha, masquer son identité, franchir un défi anti-robot, changer d'adresse IP après un refus, faire tourner plusieurs comptes. Ce n'est pas une limite technique, c'est une ligne choisie : voir [Hors périmètre](/explications/hors-perimetre). Certains sites protégés resteront donc « bloqués », même pour un usage légitime.
 
 Il n'envoie **rien** à l'éditeur ([Télémétrie](/explications/telemetrie)), et la conformité de vos collectes reste **votre responsabilité** ([Usage responsable](/explications/usage-responsable)).
 

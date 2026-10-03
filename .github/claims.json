@@ -121,20 +121,6 @@
       "status": "relu"
     },
     {
-      "id": "robots-always-respected",
-      "surfaces": [
-        "responsible-use"
-      ],
-      "en": "robots.txt is always respected. There is no option to ignore it.",
-      "fr": "robots.txt est toujours respecté. Il n'existe aucune option pour l'ignorer.",
-      "proof": [
-        "INV11",
-        "assert_robots_respected"
-      ],
-      "reviewed": "2026-10-02",
-      "status": "relu"
-    },
-    {
       "id": "no-challenge-solving",
       "surfaces": [
         "responsible-use"
@@ -203,8 +189,8 @@
       "fr": "Données web libres et auto-hébergées, par MCP : décris les données, valide le schéma, obtiens une API qui se répare et s'arrête quand un site dit non.",
       "proof": [
         "INV1",
-        "INV11",
-        "assert_robots_respected"
+        "INV6",
+        "assert_no_ip_change_after_refusal"
       ],
       "reviewed": "2026-10-02",
       "status": "à relire",
