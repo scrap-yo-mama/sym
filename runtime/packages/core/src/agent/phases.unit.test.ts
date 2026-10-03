@@ -2,7 +2,7 @@
 // Règle des deux par phase (tâche 2.12, 19 §7, r6 R1, R3 à R6) : registre d'outils construit par le code et politique
 // de requêtes de l'agent, en tests unitaires (la partie « agent » se rejoue en 2.13 et 4.3).
 import { describe, expect, test } from 'vitest';
-import { AGENT_PHASES, agentRequestPolicy, legsOf, toolRegistryForPhase, type AgentRequestContext } from './phases.js';
+import { AGENT_PHASES, agentRequestPolicy, legsOf, phaseAllowsTool, toolRegistryForPhase, type AgentRequestContext } from './phases.js';
 
 describe('assert_rule_of_two_by_phase', () => {
   test('aucune phase ne réunit A, B et C complets ; aucune n’a de pont MCP en V1', () => {
@@ -67,5 +67,42 @@ describe('assert_agent_request_policy (politique en test unitaire ; corpus sur l
     const many = Array.from({ length: 12 }, (_, i) => `p${i}=1`).join('&');
     expect(blocked(`https://shop.a.fr/api/items?page=1&${many}`, { templates: [] , trafficUrls: [`https://shop.a.fr/api/items?page=1&${many}`] })).toMatchObject({ allowed: false, reason: 'too_many_params' });
     expect(blocked('javascript:alert(1)')).toMatchObject({ allowed: false });
+  });
+});
+
+describe('assert_agent_request_policy : valeurs des paramètres (PA-09) et outil hors phase (PA-01)', () => {
+  const ctx = (over: Partial<AgentRequestContext> = {}): AgentRequestContext => ({
+    targetHosts: ['shop.a.fr'],
+    targetSuffixes: ['a.fr'],
+    domUrls: ['https://shop.a.fr/search?q=chaise&page=1'],
+    trafficUrls: [],
+    templates: [],
+    runInputs: { query: 'table' },
+    sensitiveValues: [],
+    ...over,
+  });
+  const decide = (url: string, over: Partial<AgentRequestContext> = {}) => agentRequestPolicy({ method: 'GET', url }, ctx(over));
+
+  test('mêmes clés que l’URL connue mais valeur libre : refusée (param_value_untrusted)', () => {
+    expect(decide('https://shop.a.fr/search?q=un-item-d-un-autre-domaine&page=1')).toEqual({ allowed: false, code: 'agent_request_blocked', reason: 'param_value_untrusted' });
+  });
+
+  test('valeur identique à l’URL connue, entrée du run, nombre (pagination) ou texte de la consigne du propriétaire : permise', () => {
+    expect(decide('https://shop.a.fr/search?q=chaise&page=1')).toEqual({ allowed: true });
+    expect(decide('https://shop.a.fr/search?q=chaise&page=12')).toEqual({ allowed: true });
+    expect(decide('https://shop.a.fr/search?q=table&page=1')).toEqual({ allowed: true });
+    expect(decide('https://shop.a.fr/search?q=fauteuil&page=1')).toMatchObject({ allowed: false, reason: 'param_value_untrusted' });
+    expect(decide('https://shop.a.fr/search?q=fauteuil&page=1', { trustedValues: ['fauteuil'] })).toEqual({ allowed: true });
+  });
+});
+
+describe('assert_rule_of_two_by_phase : outil hors phase refusé', () => {
+  test('un outil hors du registre de la phase est refusé, y compris pour les phases sans outil', () => {
+    expect(phaseAllowsTool(toolRegistryForPhase('e5_e6'), 'navigate')).toBe(true);
+    expect(phaseAllowsTool(toolRegistryForPhase('e5_e6'), 'shell')).toBe(false);
+    for (const phase of ['replay', 'e4_extract', 'investigation', 'recompile', 'judge', 'reflect'] as const) {
+      expect(phaseAllowsTool(toolRegistryForPhase(phase), 'navigate')).toBe(false);
+      expect(phaseAllowsTool(toolRegistryForPhase(phase), 'click')).toBe(false);
+    }
   });
 });

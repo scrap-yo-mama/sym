@@ -69,6 +69,11 @@ export function toolRegistryForPhase(phase: AgentPhase, ctx: PhaseContext = {}):
   }
 }
 
+/** Un outil n'est permis que s'il figure au registre de la phase (liste fermée construite par le code) ; `read_skill` (lecture de règles, sans réseau) n'en fait pas partie. */
+export function phaseAllowsTool(registry: PhaseRegistry, tool: string): boolean {
+  return (registry.tools as readonly string[]).includes(tool);
+}
+
 /** Jambes COMPLÈTES de la règle des deux : une jambe partielle (réduite par du code) ne compte pas. */
 export function legsOf(reg: PhaseRegistry): { readonly A: boolean; readonly B: boolean; readonly C: boolean } {
   // C complète : sortie libre (outil de requête arbitraire, MCP) ; `bounded` et `declared` sont réduites par le code.
@@ -89,6 +94,8 @@ export type AgentRequestContext = {
   readonly runInputs: Readonly<Record<string, unknown>>;
   /** Valeurs sensibles connues (mémoire, items d'autres API, secrets) : jamais dans une URL ni un corps. */
   readonly sensitiveValues: readonly string[];
+  /** Valeurs de confiance supplémentaires (texte de la consigne du propriétaire de l'API) : admises comme valeur de paramètre. */
+  readonly trustedValues?: readonly string[];
   readonly maxParams?: number;
   readonly maxParamLength?: number;
 };
@@ -161,7 +168,22 @@ export function agentRequestPolicy(req: { readonly method: string; readonly url:
     }
   });
   if (!fromPage && !ctx.templates.some((t) => matchesTemplate(u, t))) return blocked('url_not_from_page');
-  // Valeurs de paramètres : venues de l'URL connue, des entrées du run, ou numériques (pagination).
+  // Valeurs de paramètres (PA-09) : sauf gabarit déclaré, chaque valeur vient de l'URL connue (même clé, même valeur), d'une entrée du
+  // run, de la consigne du propriétaire, ou est numérique (pagination). Une valeur libre sur les mêmes clés est refusée.
+  if (!ctx.templates.some((t) => matchesTemplate(u, t))) {
+    const trusted = new Set((ctx.trustedValues ?? []).map((v) => v.toLowerCase()));
+    const sameKnown = known.flatMap((k) => {
+      try {
+        const ku = new URL(k);
+        return withoutQuery(ku) === withoutQuery(u) ? [ku] : [];
+      } catch {
+        return [];
+      }
+    });
+    const valueOk = ([key, value]: [string, string]): boolean =>
+      /^\d{1,12}$/.test(value) || inputs.has(value.toLowerCase()) || trusted.has(value.toLowerCase()) || sameKnown.some((ku) => ku.searchParams.getAll(key).includes(value));
+    if (!params.every(valueOk)) return blocked('param_value_untrusted');
+  }
   return { allowed: true };
 }
 
