@@ -40,6 +40,7 @@ import {
   validateStepsSpec,
   compileHybridToSteps,
   agentToolRegistry,
+  secretValues,
   ruleOfTwoHolds,
   estimateInstructedRunUsd,
   instructedInstruction,
@@ -784,6 +785,9 @@ export function createStrategyRuntime(deps: StrategyExecutorDeps): StrategyRunti
           signal: ctx.signal,
           maxCostUsd: target.api.maxCostUsd,
           cost,
+          // Politique de requêtes de l'agent (19 §7, PA-01) : jamais de valeur sensible du run (données personnelles vues,
+          // secrets) dans une URL de l'agent ; relues à chaque requête.
+          sensitiveValues: (): string[] => [...ctx.personal.values(), ...secretValues.values()],
           ...(pacer === undefined ? {} : { pacer }),
           ...(maxRequests === undefined ? {} : { maxRequests }),
           ...(deps.classify === undefined ? {} : { classify: deps.classify }),
@@ -820,6 +824,7 @@ export function createStrategyRuntime(deps: StrategyExecutorDeps): StrategyRunti
             // chaque run ; coût estimé journalisé avant le lancement ; compilation tentée après K runs réussis.
             let spec = agentic.spec;
             let compile = true;
+            const instructed = strategy.compilable === 'no' && target.api.instructedMode;
             if (strategy.compilable === 'no' && target.api.instructedMode) {
               const steps = validateInstructedSteps(strategy.instructedSteps ?? []);
               // Revérifié AU RUN, sur la version exécutée : étapes confirmées par un humain sur leur empreinte exacte.
@@ -835,6 +840,7 @@ export function createStrategyRuntime(deps: StrategyExecutorDeps): StrategyRunti
               ...common,
               spec,
               compile,
+              phase: instructed ? 'instructed' : 'e5_e6',
               guard: deps.guard,
               egress: egress!,
               agentBrowser,
@@ -1254,6 +1260,8 @@ export function createStrategyRuntime(deps: StrategyExecutorDeps): StrategyRunti
     // Prix absent : coût LLM inconnu, écrit null (jamais 0, 08 §1 ; INV4), avec avertissement.
     if (llm !== null && llm.usd === null) await ctx.log('warn', 'llm_price_missing', { model: llm.modelId });
     if ((outcome.agent?.domainBlocked ?? 0) > 0) await ctx.log('warn', 'agent_domain_blocked', { count: outcome.agent?.domainBlocked });
+    // Requêtes de l'agent refusées par la politique de requêtes (19 §7) : le code et le motif, jamais l'URL ni le contenu.
+    if (outcome.agent?.requestPolicy !== undefined) await ctx.log('warn', 'agent_request_blocked', { code: 'agent_request_blocked', count: outcome.agent.requestPolicy.blocked, reasons: [...new Set(outcome.agent.requestPolicy.reasons)] });
     const sorted = sortItems(target, trial);
     const broke = sorted?.verdict === 'break' ? await thresholdFailure(target, trial, sorted) : null;
     await recordTrial(ctx, strategy, trial, sorted?.verdict ?? null, broke?.failure ?? null);
