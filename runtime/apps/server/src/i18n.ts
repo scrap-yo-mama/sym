@@ -29,7 +29,7 @@ async function storedDefaultLocale(pool: pg.Pool): Promise<string | null> {
   let raw: unknown;
   try {
     raw = (await pool.query<{ value: unknown }>('SELECT value FROM settings WHERE key = $1', [DEFAULT_LOCALE_SETTING])).rows[0]?.value;
-    // Instance migrée avant 0019 (aucun réglage écrit) : la langue de l'owner en tient lieu, sans rien écrire.
+    // Instance migrée avant 0020_i18n (aucun réglage écrit) : la langue de l'owner en tient lieu, sans rien écrire.
     raw ??= (await pool.query<{ locale: string }>("SELECT locale FROM users WHERE role = 'owner' AND deleted_at IS NULL LIMIT 1")).rows[0]?.locale;
   } catch {
     return null;

@@ -171,7 +171,7 @@ describe('quarantine run_rejected_items (0018)', () => {
   });
 
   test('migration 0018 : aller-retour down/up', async () => {
-    // Retour jusqu'à 0018 incluse, quel que soit le nombre de migrations venues après (0019_i18n, 3.20).
+    // Retour jusqu'à 0018 incluse, quel que soit le nombre de migrations venues après (0019_rule_files, 2.10 ; 0020_i18n, 3.20).
     const target = loadMigrations().find((m) => m.name === 'run_rejected_items')!.version;
     await migrateDown({ connectionString: tdb.url, steps: loadMigrations().length - (target - 1) });
     expect((await pool.query("SELECT to_regclass('public.run_rejected_items') AS t")).rows[0].t).toBeNull();

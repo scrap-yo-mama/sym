@@ -29,6 +29,18 @@ const FIELD_NAME = '^[a-z][a-z0-9_]{0,63}$';
  * Schéma de la réponse structurée du rôle `investigate`. Toutes les propriétés sont requises (`null` pour l'absence) :
  * compatible avec la sortie structurée stricte des fournisseurs (S1).
  */
+/** Couple (E, N) cité par le plan d'essais, avec les règles qui le demandent. */
+const RULE_PLAN_COUPLE = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['execution', 'network', 'rule_refs'],
+  properties: {
+    execution: { type: 'string', maxLength: 32 },
+    network: { type: 'string', maxLength: 32 },
+    rule_refs: { type: 'array', maxItems: 10, items: { type: 'string', maxLength: 80 } },
+  },
+} as const;
+
 export const INVESTIGATION_PROPOSAL_SCHEMA = {
   type: 'object',
   additionalProperties: false,
@@ -97,6 +109,11 @@ export const INVESTIGATION_PROPOSAL_SCHEMA = {
         },
       },
     },
+    // Plan d'essais guidé par les règles (tâche 2.10, 18 §4.5) : couples (E, N) placés en tête ou exclus, chacun avec les
+    // références `nom@version` des règles qui le demandent. Facultatifs : absents, l'ordre de 04 §3.3 s'applique. Le code
+    // les filtre par l'ensemble autorisé (`applyRulePlan`) ; ils ne peuvent rien élargir.
+    plan: { type: ['array', 'null'], maxItems: 24, items: RULE_PLAN_COUPLE },
+    excluded: { type: ['array', 'null'], maxItems: 24, items: RULE_PLAN_COUPLE },
   },
 } as const;
 
@@ -110,7 +127,13 @@ export type ProposalPagination = {
   readonly next_path: string | null;
 };
 export type ProposalSource = { readonly candidate: string; readonly paths: readonly ProposalPath[]; readonly pagination: ProposalPagination };
-export type InvestigationProposal = { readonly fields: readonly ProposalField[]; readonly sources: readonly ProposalSource[] };
+export type ProposalCouple = { readonly execution: string; readonly network: string; readonly rule_refs: readonly string[] };
+export type InvestigationProposal = {
+  readonly fields: readonly ProposalField[];
+  readonly sources: readonly ProposalSource[];
+  readonly plan?: readonly ProposalCouple[] | null;
+  readonly excluded?: readonly ProposalCouple[] | null;
+};
 
 /** Plafond dur de pages d'une stratégie proposée (`hard_max_pages`, 04b §2). */
 export const PROPOSAL_HARD_MAX_PAGES = 50;

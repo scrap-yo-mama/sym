@@ -82,7 +82,7 @@ export const users = pgTable(
     image: text('image'),
     role: text('role', { enum: ['owner', 'admin', 'member'] }).notNull().default('member'),
     status: text('status', { enum: ['invited', 'active', 'disabled'] }).notNull().default('invited'),
-    // Migration 0019_i18n : le registre des langues (`@runtime/i18n`) valide ; la CHECK n'impose que la forme.
+    // Migration 0020_i18n : le registre des langues (`@runtime/i18n`) valide ; la CHECK n'impose que la forme.
     locale: text('locale').notNull().default('en'),
     theme: text('theme', { enum: ['light', 'dark', 'system'] }).notNull().default('system'),
     twoFactorEnabled: boolean('two_factor_enabled').notNull().default(false),
@@ -92,9 +92,9 @@ export const users = pgTable(
     lastLoginAt: tstz('last_login_at'),
     // Migration 0012_accounts_advanced (tâche 3.7) : compte supprimé et anonymisé.
     deletedAt: tstz('deleted_at'),
-    // Migration 0019_i18n : fuseau IANA (indice de localisation : donnée personnelle, 17 § 6), nullable.
+    // Migration 0020_i18n : fuseau IANA (indice de localisation : donnée personnelle, 17 § 6), nullable.
     timezone: text('timezone'),
-    // Migration 0019_i18n : fuseau déjà initialisé (toute écriture, même null) ; la console ne le pose qu'à la première connexion.
+    // Migration 0020_i18n : fuseau déjà initialisé (toute écriture, même null) ; la console ne le pose qu'à la première connexion.
     timezoneInitialized: boolean('timezone_initialized').notNull().default(false),
   },
   (t) => [uniqueIndex('users_single_owner').on(t.role).where(sql`role = 'owner'`)],
@@ -190,7 +190,7 @@ export const invitations = pgTable(
     createdAt: createdAt(),
     // Migration 0012_accounts_advanced : échéance ≤ dernier envoi + 48 h (CHECK invitations_ttl).
     sentAt: tstz('sent_at').notNull().defaultNow(),
-    // Migration 0019_i18n : langue choisie par l'invitant, copiée dans users.locale à l'acceptation.
+    // Migration 0020_i18n : langue choisie par l'invitant, copiée dans users.locale à l'acceptation.
     locale: text('locale').notNull().default('en'),
   },
   (t) => [index('invitations_email_idx').on(t.email)],
@@ -418,8 +418,79 @@ export const strategyVersions = pgTable(
     // 0017_rest_api (3.1) : la version a été courante au moins une fois (déclencheur sur apis) ; seule une telle version se rétablit.
     wasCurrent: boolean('was_current').notNull().default(false),
     createdAt: createdAt(),
+    // 0019 : source de la version (demande, schéma, décisions, règles ; 18 §4.6).
+    source: jsonb('source'),
   },
   (t) => [primaryKey({ columns: [t.apiId, t.version] }), index('strategy_versions_owner_id_idx').on(t.ownerId)],
+);
+
+// --- Règles et skills Markdown (tâche 2.10, 18 §4.6, migration 0019) -----------------------------------------------
+
+export const ruleFiles = pgTable(
+  'rule_files',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    // NULL : fichier d'instance (installé au démarrage ou écrit par un admin en console).
+    ownerId: uuid('owner_id').references(() => users.id),
+    projectId: projectId(),
+    kind: text('kind', { enum: ['instance', 'rule', 'skill'] }).notNull(),
+    name: text('name').notNull(),
+    description: text('description').notNull(),
+    appliesTo: text('applies_to').array().notNull().default(sql`'{}'`),
+    targetApiIds: uuid('target_api_ids').array().notNull().default(sql`'{}'`),
+    visibility: text('visibility', { enum: ['private', 'instance'] }).notNull().default('private'),
+    currentVersion: integer('current_version').notNull().default(0),
+    createdAt: createdAt(),
+    updatedAt: tstz('updated_at').notNull().defaultNow(),
+    deletedAt: tstz('deleted_at'),
+  },
+  (t) => [index('rule_files_owner_id_idx').on(t.ownerId)],
+);
+
+export const ruleFileVersions = pgTable(
+  'rule_file_versions',
+  {
+    ruleFileId: uuid('rule_file_id')
+      .notNull()
+      .references(() => ruleFiles.id, { onDelete: 'cascade' }),
+    version: integer('version').notNull(),
+    content: text('content').notNull(),
+    sha256: text('sha256').notNull(),
+    description: text('description').notNull(),
+    appliesTo: text('applies_to').array().notNull().default(sql`'{}'`),
+    targetApiIds: uuid('target_api_ids').array().notNull().default(sql`'{}'`),
+    authorId: uuid('author_id').references(() => users.id),
+    origin: text('origin', { enum: ['ui', 'rest', 'mcp', 'import', 'seed', 'proposal', 'optimizer'] }).notNull(),
+    reviewState: text('review_state', { enum: ['none', 'to_review', 'confirmed'] }).notNull().default('none'),
+    confirmedBy: uuid('confirmed_by').references(() => users.id),
+    confirmedAt: tstz('confirmed_at'),
+    createdAt: createdAt(),
+  },
+  (t) => [primaryKey({ columns: [t.ruleFileId, t.version] }), index('rule_file_versions_sha256_idx').on(t.sha256)],
+);
+
+export const strategyVersionRules = pgTable(
+  'strategy_version_rules',
+  {
+    apiId: uuid('api_id').notNull(),
+    strategyVersion: integer('strategy_version').notNull(),
+    ownerId: ownerId(),
+    projectId: projectId(),
+    ruleFileId: uuid('rule_file_id')
+      .notNull()
+      .references(() => ruleFiles.id),
+    ruleVersion: integer('rule_version').notNull(),
+    sha256: text('sha256').notNull(),
+    level: text('level', { enum: ['instance', 'domain', 'api'] }).notNull(),
+    loaded: text('loaded', { enum: ['injected', 'skill_read', 'embedded', 'truncated'] }).notNull(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.apiId, t.strategyVersion, t.ruleFileId] }),
+    foreignKey({ name: 'strategy_version_rules_api_id_strategy_version_fkey', columns: [t.apiId, t.strategyVersion], foreignColumns: [strategyVersions.apiId, strategyVersions.version] }).onDelete('cascade'),
+    foreignKey({ name: 'strategy_version_rules_rule_file_id_rule_version_fkey', columns: [t.ruleFileId, t.ruleVersion], foreignColumns: [ruleFileVersions.ruleFileId, ruleFileVersions.version] }),
+    index('strategy_version_rules_owner_id_idx').on(t.ownerId),
+    index('strategy_version_rules_rule_idx').on(t.ruleFileId),
+  ],
 );
 
 // --- Exécutions ----------------------------------------------------------------
@@ -470,7 +541,7 @@ export const runs = pgTable(
     kind: text('kind', { enum: RUN_KINDS }).notNull().default('run'),
     // 0017_rest_api (3.1) : pause demandée par l'utilisateur (run `queued` sans job), reprise par `resume`.
     pausedAt: tstz('paused_at'),
-    // Migration 0019_i18n : langue du demandeur au lancement (déclencheur `runs_set_locale`) ; prose du LLM seulement.
+    // Migration 0020_i18n : langue du demandeur au lancement (déclencheur `runs_set_locale`) ; prose du LLM seulement.
     locale: text('locale').notNull(),
     // 0018_run_rejected_items (2.3, D-49) : items extraits non conformes, jamais livrés.
     itemsRejected: integer('items_rejected').notNull().default(0),
@@ -501,6 +572,8 @@ export const runAttempts = pgTable(
     promptVersion: text('prompt_version'),
     engine: text('engine'),
     createdAt: createdAt(),
+    // 0019 : règles qui ont placé l'essai (`nom@version`, 18 §4.6).
+    ruleRefs: text('rule_refs').array().notNull().default(sql`'{}'`),
   },
   (t) => [primaryKey({ columns: [t.runId, t.seq] }), index('run_attempts_owner_id_idx').on(t.ownerId)],
 );

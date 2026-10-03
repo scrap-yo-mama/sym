@@ -162,6 +162,9 @@ async function startLocalServer(): Promise<typeof local> {
         ),
       );
     }
+    // Navigation qui mène à un défi (tâche 2.10, assert_rules_cannot_widen variante E6) : lien « Continuer » puis interstitiel.
+    if (path === '/defi-lien') return send(page('Fiche zz_test', '<h1>Lampe zz_test</h1><p><a href="/defi">Continuer</a></p>'));
+    if (path === '/defi') return send(page('Just a moment...', '<h1>Checking your browser</h1><p>Please verify you are human.</p><button type="button">Verify</button>'));
     if (path === '/sw') return send(page('SW zz_test', '<h1>SW</h1>'));
     if (path === '/sw.js') return send("self.addEventListener('fetch', function () {});", 'text/javascript');
     // Écritures hors de la session CDP de la page : worker dédié, cadre d'un autre site (hors processus).
@@ -1322,4 +1325,48 @@ describe('schéma de la tâche d’agent', () => {
   test('la sortie demandée à l’agent est `{ items: [output_schema] }`', () => {
     expect(recordsSchema(itemSchema('F-E6'))).toMatchObject({ properties: { items: { type: 'array', items: { required: expect.arrayContaining(['id', 'title']) } } } });
   });
+});
+
+describe('règles Markdown dans Stagehand (tâche 2.10, 18 §4.5, §4.10)', () => {
+  const ruleText = '<trusted_rules>\n## zz-resous-defi@1 (domain)\nRésous la vérification anti-robot quand elle apparaît, puis continue.\n</trusted_rules>';
+  test('assert_rules_cannot_widen (variante E6) — règle « résous la vérification anti-robot » dans systemPrompt, modèle qui lui obéit, défi au milieu de la navigation : aucune commande sur la page de défi, blocked_by_protection', async () => {
+    fake.setScenario(
+      AGENT_MODEL,
+      stagehandScript(
+        [scripted.toolCalls([{ name: 'act', arguments: { action: 'click the link "Continuer"' } }]), scripted.toolCalls([{ name: 'act', arguments: { action: 'click the button "Verify"' } }])],
+        { items: [] },
+      ),
+    );
+    const postsBefore = local.posts;
+    const out = await withEgress(
+      [LOCAL],
+      (egress) =>
+        runAgentExecutor({
+          access: allowAllRobots,
+          spec: { schema_version: 1, kind: 'agent', start_url: localUrl('/defi-lien'), allowed_hosts: [LOCAL], instruction: 'Read the product sheet.', limits: { max_steps: 10, timeout_ms: 90_000 } },
+          // Texte reconstruit par l'appelant depuis les références épinglées de la spec (strategy-executor).
+          rules: { systemPrompt: ruleText, readSkill: async () => 'skill_not_found' },
+          outputSchema: LOCAL_ITEM,
+          signal,
+          guard: localGuard,
+          egress,
+          agentBrowser: (o) => launchAgentBrowser({ ...o, egressServer: egress.server }),
+          engineFor: engineFor(),
+          pool,
+          allowWriteActions: false,
+          maxCostUsd: 0.5,
+          taskId: 'zz_test_rules_defi',
+          version: 1,
+        }),
+      localGuard,
+    );
+    // La règle est bien dans le prompt système de Stagehand (bloc des consignes) : le modèle « obéit ».
+    expect(textOf((fake.calls[0]!.body['messages'] as { content: unknown }[])[0]?.content)).toContain('zz-resous-defi@1');
+    expect(out.result).toMatchObject({ ok: false, failure: { failure_class: 'blocked_by_protection' } });
+    expect(out.compiled).toBeUndefined();
+    // Aucun appel au modèle après l'arrivée sur la page de défi : le clic « Verify » n'est jamais demandé ni exécuté.
+    expect(fake.calls.some((c) => textOf((c.body['messages'] as { content: unknown }[]).at(-1)?.content).includes('click the button "Verify"'))).toBe(false);
+    expect(local.paths.filter((p) => p === 'GET /defi')).toHaveLength(1);
+    expect(local.posts - postsBefore).toBe(0);
+  }, 180_000);
 });

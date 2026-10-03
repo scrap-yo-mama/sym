@@ -67,10 +67,11 @@ test('migrations : numérotées sans trou, up et down présents', () => {
   }
 });
 
-test('migrations : noms uniques ; i18n (3.20) numérotée après run_rejected_items (2.3, fusionnée avant)', () => {
+test('migrations : noms uniques ; i18n (3.20) numérotée après run_rejected_items (2.3) et rule_files (2.10), fusionnées avant', () => {
   const migrations = loadMigrations();
   expect(new Set(migrations.map((m) => m.name)).size).toBe(migrations.length);
   const byName = new Map(migrations.map((m) => [m.name, m.version]));
   expect(byName.get('run_rejected_items')).toBe(18);
-  expect(byName.get('i18n')).toBe(19);
+  expect(byName.get('rule_files')).toBe(19);
+  expect(byName.get('i18n')).toBe(20);
 });

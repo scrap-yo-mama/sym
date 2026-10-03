@@ -1,5 +1,5 @@
 -- SPDX-License-Identifier: AGPL-3.0-only
--- 0019_i18n : multilingue (tâche 3.20, 21b § 1, arbitrages du 2026-10-01 ; exception de 10-taches « garde-fous »).
+-- 0020_i18n : multilingue (tâche 3.20, 21b § 1, arbitrages du 2026-10-01 ; exception de 10-taches « garde-fous »).
 --   users.locale        la liste fermée ('en', 'fr') de la CHECK est remplacée par un format : la liste des langues est
 --                       `registry.json` (21 § 2), ajouter une langue ne demande aucune migration (M14). Le registre valide.
 --   users.timezone      fuseau IANA, nullable, initialisé par le navigateur à la première connexion. Donnée personnelle

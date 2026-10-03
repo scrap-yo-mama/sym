@@ -11,7 +11,9 @@
 //    en texte JSON (`value_json`) puis est relue par le code ; le patch est ensuite validé par `validateRepairPatch`
 //    (racines permises, `output_schema`, `request.allowed_hosts` et `request.session` interdits, stratégie revalidée) ;
 // 3. `output_schema` est montré pour cartographier, jamais modifiable : la consigne le dit, le code l'impose ;
-// 4. le coût d'un appel est borné AVANT l'envoi (`repairCallCeilingUsd`) ; prompt et réponse ne sont jamais journalisés.
+// 4. le coût d'un appel est borné AVANT l'envoi (`repairCallCeilingUsd`) ; prompt et réponse ne sont jamais journalisés ;
+// 5. règles Markdown À JOUR (tâche 2.10, 18 §2 « réparer, c'est recompiler depuis la source ») : <trusted_rules>, <skills> et
+//    skills lus dans le préfixe stable du message système, jamais mêlés aux preuves ; elles guident le patch, le code le borne.
 import { createHash, randomBytes } from 'node:crypto';
 import type { AgentEvidence, ExecFailure } from '@runtime/core/exec';
 import { narrativeUrl } from '@runtime/core/investigation';
@@ -77,6 +79,9 @@ export type RepairArgs = {
   readonly reasons: readonly RejectionReason[];
   /** Codes des propositions refusées plus tôt dans la même réparation (`PatchRejectionCode`, `repair_not_validated`…). */
   readonly refused: readonly string[];
+  /** Règles résolues et liste des skills (`renderRulesPrompt`), puis skills lus (`renderSkillBodies`). */
+  readonly rules?: string;
+  readonly skills?: string;
 };
 
 /** Stratégie montrée au modèle : URL réduite à l'origine et au chemin, ni en-têtes, ni corps, ni paramètres d'entrée. */
@@ -114,7 +119,7 @@ export function repairMessages(args: RepairArgs, token = randomBytes(12).toStrin
     `</${tag}>`,
   ].join('\n');
   return [
-    { role: 'system', content: REPAIR_SYSTEM_PROMPT },
+    { role: 'system', content: [REPAIR_SYSTEM_PROMPT, args.rules ?? '', args.skills ?? ''].filter((part) => part !== '').join('\n') },
     { role: 'user', content: user },
   ];
 }

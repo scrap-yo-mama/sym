@@ -9,6 +9,9 @@
 // 3. le prompt et la réponse ne sont jamais journalisés ;
 // 4. le coût d'un appel est borné AVANT l'envoi (`investigateCallCeilingUsd`) : sortie plafonnée par `max_tokens`, entrée
 //    estimée par excès ; l'exécuteur refuse l'appel qui ferait dépasser `investigation_budget_usd`.
+// 5. règles Markdown (tâche 2.10, 18 §4.5) : <trusted_rules>, <skills> puis les skills lus (<trusted_skills>) dans le
+//    PRÉFIXE STABLE du message système, distincts de toute donnée du site ; l'ensemble des couples autorisés et leur coût
+//    estimé dans le message utilisateur ; le plan rendu (`plan[]`, `excluded[]`, `rule_refs`) est filtré par le code.
 import { createHash, randomBytes } from 'node:crypto';
 import type { DataCandidate } from '@runtime/core/investigation';
 import { INVESTIGATION_PROPOSAL_SCHEMA, narrativeUrl, parseProposal, type InvestigationProposal } from '@runtime/core/investigation';
@@ -24,6 +27,7 @@ export const INVESTIGATE_SYSTEM_PROMPT = [
   'For pagination, use "page_param" with param "url.query.<name>" when the request has a page number parameter, "offset" for an offset parameter, "cursor" with next_path when a record set carries the next cursor, "next_link" with next_path for a next URL, otherwise "none". Set has_more_path when the response has a boolean telling whether more pages exist.',
   'When no candidate can serve the fields, return the fields with an empty sources list.',
   'Use null for every absent optional value. Never invent a source, a key or a path that is not in the skeletons.',
+  'Return "plan" and "excluded" only when a rule in <trusted_rules> asks to reorder or exclude couples of the ALLOWED COUPLES list: "plan" lists the couples (execution, network) to try first, in order, "excluded" the couples not to try, each with the rule_refs (name@version) of the rules that ask for it. Otherwise use null for both. Couples outside the allowed list are ignored by the code.',
 ].join('\n');
 
 /** Version du prompt d'enquête (trace de l'appel, `prompt_version`). */
@@ -46,6 +50,11 @@ export type InvestigateArgs = {
   readonly fixedSchema?: unknown;
   /** `runs.locale` : langue de la prose destinée à l'humain (bloc `Language:` ajouté par le code, 21 § 4.5) ; sans elle, aucun bloc. */
   readonly proseLocale?: string;
+  /** Règles résolues et liste des skills (`renderRulesPrompt`), puis skills lus (`renderSkillBodies`) : préfixe de confiance. */
+  readonly rules?: string;
+  readonly skills?: string;
+  /** Ensemble des couples autorisés (calculé par le code) et coût estimé indicatif. */
+  readonly allowedCouples?: readonly { readonly execution: string; readonly network: string; readonly est_cost_usd: number | null }[];
 };
 
 /**
@@ -69,6 +78,14 @@ function systemPrompt(proseLocale: string | undefined): string {
   return withLanguageBlock(INVESTIGATE_SYSTEM_PROMPT, `${languageBlock(renderer, registry, proseLocale)}\n${INVESTIGATE_MACHINE_FIELDS_NOTE}`);
 }
 
+/**
+ * Message système : consignes produit fixes et, quand `runs.locale` est connue, le bloc `Language:` (3.20), puis règles et
+ * skills (2.10) : préfixe stable pour le cache du fournisseur.
+ */
+export function investigateSystem(args: Pick<InvestigateArgs, 'rules' | 'skills' | 'proseLocale'>): string {
+  return [systemPrompt(args.proseLocale), args.rules ?? '', args.skills ?? ''].filter((part) => part !== '').join('\n');
+}
+
 /** Messages du rôle `investigate` : consignes, demande du propriétaire, puis gisements encadrés par un jeton imprévisible. */
 export function investigateMessages(args: InvestigateArgs, token = randomBytes(12).toString('hex')): ChatMessage[] {
   const tag = `untrusted_candidates_${token}`;
@@ -90,6 +107,7 @@ export function investigateMessages(args: InvestigateArgs, token = randomBytes(1
     example === '' ? '' : `EXAMPLE OUTPUT (from the API owner): ${example}`,
     args.fixedSchema === undefined ? '' : `VALIDATED OUTPUT SCHEMA (use exactly these field names and types): ${JSON.stringify(args.fixedSchema).slice(0, 8_000)}`,
     args.accessFacts === undefined ? '' : `ACCESS FACTS: ${JSON.stringify(args.accessFacts)}`,
+    args.allowedCouples === undefined ? '' : `ALLOWED COUPLES (computed by the code; est_cost_usd per run): ${JSON.stringify(args.allowedCouples.slice(0, 40))}`,
     `TOKEN: ${token}`,
     `<${tag}>`,
     block,
@@ -98,7 +116,7 @@ export function investigateMessages(args: InvestigateArgs, token = randomBytes(1
     .filter((line) => line !== '')
     .join('\n');
   return [
-    { role: 'system', content: systemPrompt(args.proseLocale) },
+    { role: 'system', content: investigateSystem(args) },
     { role: 'user', content: user },
   ];
 }

@@ -16,6 +16,9 @@
 //    d'extraction ne change jamais d'IP). Une issue qui exigerait un agent à chaque run n'est pas retenue (`instructed_mode`
 //    n'existe pas avant 2.13 : traité comme faux).
 // Le prompt ne reçoit que des squelettes (preuves minimisées) et des raisons sans valeur ; il n'est jamais journalisé.
+// Règles Markdown (tâche 2.10, 18 §2) : réparer, c'est recompiler depuis la source À JOUR : les règles résolues de l'API
+// (propriétaire et instance) sont injectées dans le préfixe du prompt `repair`, les skills lus par `read_skill` ; vN+1
+// enregistre sa source (`source.rules`, `strategy_version_rules`).
 import { setTimeout as sleep } from 'node:timers/promises';
 import {
   checkAgainstHealthy,
@@ -30,10 +33,15 @@ import {
   type JsonPatchOperation,
   type RepairStopCause,
   type RunContext as RunCtx,
+  jsonSha256,
+  renderRulesPrompt,
+  SkillReader,
+  sourceRuleRows,
+  type ResolvedRules,
 } from '@runtime/core';
 import { assertPromptSafe, ClassificationGuardError, type AgentEvidence, type ExecFailure } from '@runtime/core/exec';
-import { proposeRepair, repairCallCeilingUsd, repairPromptVersion } from '@runtime/agent';
-import { acquireRepairLease, readCurrentStrategyVersion, readHealthyItems, releaseRepairLease, renewRepairLease } from '@runtime/db';
+import { proposeRepair, readSkillsPhase, renderSkillBodies, repairCallCeilingUsd, repairMessages, repairPromptVersion } from '@runtime/agent';
+import { acquireRepairLease, buildStrategySource, readCurrentStrategyVersion, readHealthyItems, readSourceBase, releaseRepairLease, renewRepairLease, resolveRulesForApi } from '@runtime/db';
 import { LlmError, roleTarget, toFailureClass, type LlmClient, type LlmConfig } from '@runtime/llm';
 import type pg from 'pg';
 import { pino, type Logger } from 'pino';
@@ -134,9 +142,44 @@ export function createRepairPort(deps: RepairEngineDeps): RepairPort {
       return waitForOtherRepair(ctx, strategy.version);
     };
     /** vN+1 enregistrée SOUS le bail (vérifié et prolongé juste avant), avant sa libération. */
+    // Règles à jour de l'API (18 §4.3) : résolues comme son propriétaire ; plafonds journalisés.
+    let resolved: ResolvedRules | null = null;
+    try {
+      resolved = (await resolveRulesForApi(deps.pool, { apiId: ctx.apiId, ownerId: ctx.ownerId, role: 'repair' })).resolved;
+    } catch (error) {
+      logger.warn({ runId: ctx.runId, err: error instanceof Error ? error.name : 'error' }, 'réparation : règles illisibles');
+    }
+    if (resolved !== null && resolved.truncated.length > 0) await ctx.log('warn', 'rules_truncated', { removed: resolved.truncated.map((r) => r.ref), budget_tokens: resolved.budget.rules });
+    if (resolved !== null && resolved.skillsListingTruncated) await ctx.log('warn', 'skills_listing_truncated', { without_description: resolved.skillsWithoutDescription, budget_tokens: resolved.budget.skills });
+    const reader = new SkillReader(resolved?.skills ?? []);
+    const rulesPrompt = resolved === null ? '' : renderRulesPrompt(resolved);
+    let skillsPrompt = '';
+    let skillsRead = false;
+    // Source de vN+1 (18 §2, §4.6) : demande et décisions reprises de la source de vN (ou de la demande d'enquête de
+    // l'API) ; seules les règles et la raison changent.
+    const base = await readSourceBase(deps.pool, { apiId: ctx.apiId, ownerId: ctx.ownerId, version: strategy.version }).catch(() => null);
+    const sourceOf = (): Pick<RepairedStrategy, 'source' | 'rules'> => {
+      if (resolved === null) return {};
+      const rows = sourceRuleRows(resolved, reader.reads);
+      const spec = strategy.spec as { request?: { url?: unknown }; start_url?: unknown } | null;
+      const specUrl = typeof spec?.request?.url === 'string' ? spec.request.url : typeof spec?.start_url === 'string' ? spec.start_url : '';
+      return {
+        source: buildStrategySource({
+          reason: 'repair',
+          description: base?.request.description ?? '',
+          url: base?.request.url ?? specUrl,
+          exampleOutputRef: base?.request.example_output_ref ?? null,
+          outputSchemaSha256: jsonSha256(target.api.outputSchema),
+          investigationId: base?.investigation_id ?? null,
+          decisions: base?.decisions ?? [],
+          rows,
+        }),
+        rules: rows,
+      };
+    };
     const committed = async (repaired: RepairedStrategy, check: CandidateCheck): Promise<RepairOutcome> => {
       if (!(await holds())) return leaseLost();
-      const saved = await request.commit(repaired);
+      const saved = await request.commit({ ...repaired, ...sourceOf() });
       return { kind: 'repaired', strategy: repaired, check, saved };
     };
     const ledger = new RepairLedger({ ...(deps.maxAttempts === undefined ? {} : { maxAttempts: deps.maxAttempts }), ...(deps.budgetUsd === undefined ? {} : { budgetUsd: deps.budgetUsd }) });
@@ -180,20 +223,25 @@ export function createRepairPort(deps: RepairEngineDeps): RepairPort {
       const model = config.roles.repair?.model ?? null;
       for (;;) {
         if (!(await holds())) return leaseLost();
-        const args = { description: target.api.description, spec, outputSchema: target.api.outputSchema, failure, evidence, healthy, reasons: request.reasons, refused };
+        const base = { description: target.api.description, spec, outputSchema: target.api.outputSchema, failure, evidence, healthy, reasons: request.reasons, refused, rules: rulesPrompt };
+        const args = skillsPrompt === '' ? base : { ...base, skills: skillsPrompt };
         const ceiling = repairCallCeilingUsd(args, price);
         if (!ledger.canPropose(ceiling)) break;
         const before = client.meter.snapshot().cost_usd_known ?? 0;
         let patch: JsonPatchOperation[] | null = null;
         let llmFailure: ExecFailure | null = null;
+        const beforeCall = () => {
+          if ((client.meter.snapshot().cost_usd_known ?? 0) - before + ceiling > ledger.remainingUsd + 1e-9) throw new RepairBudgetGuard();
+        };
         try {
-          const out = await proposeRepair(client, {
-            ...args,
-            signal: ctx.signal,
-            beforeCall: () => {
-              if ((client.meter.snapshot().cost_usd_known ?? 0) - before + ceiling > ledger.remainingUsd + 1e-9) throw new RepairBudgetGuard();
-            },
-          });
+          // Chargement progressif des skills (18 §4.4), une fois par réparation.
+          if (!skillsRead) {
+            skillsRead = true;
+            const bodies = await readSkillsPhase(client, 'repair', { messages: repairMessages(args), reader, signal: ctx.signal, beforeCall });
+            for (const read of reader.reads) await ctx.log('info', 'skill_read', { ref: read.ref, sha256: read.sha256 });
+            if (bodies.length > 0) skillsPrompt = renderSkillBodies(bodies);
+          }
+          const out = await proposeRepair(client, { ...args, ...(skillsPrompt === '' ? {} : { skills: skillsPrompt }), signal: ctx.signal, beforeCall });
           patch = out.patch;
         } catch (error) {
           if (ctx.signal.aborted) throw error;
