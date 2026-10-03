@@ -91,6 +91,10 @@ type RestLimits = {
   maxActiveRunsPerUser: number;
   /** Créations de run par clé d'API et par minute au-delà desquelles une création répond 429 `key_rate_limited` (08b § 3). */
   maxRunsPerKeyPerMinute: number;
+  /** Budget USD par utilisateur et par jour (UTC) : atteint, une création de run répond 429 `budget_exceeded` (08b § 3). */
+  userBudgetDailyUsd: number;
+  /** Plafond d'instance du `max_cost_usd` d'une API : au-delà, 400 `cost_cap_exceeded`. */
+  maxCostUsdPerRun: number;
 };
 
 export function initializedProbe(pool: pg.Pool): () => Promise<boolean> {

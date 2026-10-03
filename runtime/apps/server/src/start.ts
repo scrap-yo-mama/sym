@@ -210,6 +210,8 @@ export async function prepareServer(env: NodeJS.ProcessEnv = process.env, option
         revalidateMs: options.rest?.revalidateMs ?? 30_000,
         maxActiveRunsPerUser: config.rest.maxActiveRunsPerUser,
         maxRunsPerKeyPerMinute: config.rest.maxRunsPerKeyPerMinute,
+        userBudgetDailyUsd: config.rest.userBudgetDailyUsd,
+        maxCostUsdPerRun: config.rest.maxCostUsdPerRun,
       },
       mcp: config.mcp.disabled ? null : createMcpRuntime(pool, config.mcp, options.mcp),
       persistence: { policy: config.persistence, ...(options.persistence?.negativeMemory === undefined ? {} : { negativeMemory: options.persistence.negativeMemory }) },

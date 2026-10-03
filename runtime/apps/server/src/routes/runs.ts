@@ -167,7 +167,7 @@ export function runRoutes(app: FastifyInstance, ctx: ServerContext): void {
         if (target === null) return 'not_found' as const;
         const blocking = BLOCKING_STATUS[target.status];
         if (blocking && !(exists.kind === 'investigation' && target.status === 'enquete')) return blocking;
-        await reserveRunSlot(tx, ctx);
+        await reserveRunSlot(tx, ctx, { kind: exists.kind === 'investigation' ? 'investigation' : 'run', runId: request.params.id });
         return resumeRun(tx, queue, request.params.id);
       });
     } catch (error) {
