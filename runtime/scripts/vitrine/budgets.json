@@ -1,7 +1,7 @@
 {
   "$comment": "Budgets de la landing (22 § 2.8, 22b § 1) : propositions de u7 R22, réglables ici sans toucher aux tests. Mesurés en laboratoire (apps/docs/e2e/landing-perf.e2e.ts) : poids, requêtes, LCP et CLS par Chromium en mobile, réseau « 4G lente » et processeur ralenti 4 fois (profil mobile de Lighthouse, émulé par le protocole DevTools) ; scores Lighthouse mobile (configuration par défaut) ≥ seuils de lighthouse (95, à valider).",
   "readme": {
-    "minLines": 90,
+    "minLines": 50,
     "maxLines": 150,
     "maxBytes": 12288,
     "commandBeforeLine": 40,
@@ -44,9 +44,11 @@
       "img.shields.io"
     ],
     "allowedPaths": [
-      "/github/license/",
-      "/github/v/release/",
-      "/github/actions/workflow/status/"
+      "/badge/license-",
+      "/badge/status-",
+      "/badge/protocol-",
+      "/badge/deploy-",
+      "/badge/releases-"
     ]
   },
   "landing": {

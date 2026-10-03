@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, test } from 'vitest';
 import { parse } from 'yaml';
-import { claimProblems, claimsMarkdown, imageDescription, imageDescriptionProblems, loadClaims, repoProofContext, taskCommitPattern, taskDeliveryDate, unreviewedDisplayed, type ClaimsFile, type ProofContext } from '../../scripts/vitrine/lib/claims.ts';
+import { cautiousWordingProblems, claimProblems, claimsMarkdown, imageDescription, imageDescriptionProblems, loadClaims, repoProofContext, taskCommitPattern, taskDeliveryDate, unreviewedDisplayed, type ClaimsFile, type ProofContext } from '../../scripts/vitrine/lib/claims.ts';
 import { vitrineTouched } from '../../scripts/vitrine/lib/changed.ts';
 import { COMMUNITY_FILES, communityCopy, communityProblems, communityProfileLocation } from '../../scripts/vitrine/lib/community.ts';
 import { readTestCorpus, testCorpusFiles, testTitles } from '../../scripts/vitrine/lib/corpus.ts';
@@ -378,8 +378,39 @@ describe('registre des allégations : preuve, relecture, statut, CLAIMS.md gén�
     expect(one({ en: 'Speaks MCP, REST, and has a console', proof: ['assert_openapi_served_valid'] })).toMatch(/le serveur MCP sans preuve propre/);
     expect(one({ en: 'Speaks MCP, REST, and has a console', proof: ['assert_openapi_served_valid'], status: 'à relire' })).toBe('');
     expect(one({ note: 'la preuve de la réparation s\'ajoute à sa livraison' })).toMatch(/reporte la preuve/);
-    expect(one({ en: 'Sites that change: it repairs the step that broke', proof: ['runtime/apps/worker/src/exec/repair.integration.test.ts'] })).toBe('');
+    expect(one({ en: 'Sites that change: the API repairs itself', proof: ['runtime/apps/worker/src/exec/repair.integration.test.ts'] })).toBe('');
     expect(one({ en: 'Speaks MCP, REST, and has a console', proof: ['runtime/apps/server/src/mcp.integration.test.ts'] })).toBe('');
+    // La reprise par étape (2.13) n'est prouvée que par un assert de 19 §4 : la réparation de la stratégie (2.3) est une preuve voisine.
+    const repair = 'runtime/apps/worker/src/exec/repair.integration.test.ts';
+    expect(one({ en: 'Sites that change: it repairs the step that broke', proof: [repair] })).toMatch(/la reprise par étape sans preuve propre/);
+    expect(one({ en: 'Replays without an LLM when the strategy allows, repairs step by step', proof: [repair] })).toMatch(/la reprise par étape sans preuve propre/);
+    expect(one({ fr: 'Les sites qui changent : il répare l\'étape qui a cassé', proof: [repair] })).toMatch(/la reprise par étape sans preuve propre/);
+    expect(one({ fr: 'Rejoue sans LLM quand la stratégie le permet, répare étape par étape', proof: [repair] })).toMatch(/la reprise par étape sans preuve propre/);
+    const steps: ProofContext = { ...context, testCorpus: `${context.testCorpus}\nassert_step_classification_guard` };
+    expect(claimProblems({ version: 1, claims: [{ ...base, en: 'Sites that change: it repairs the step that broke', proof: [repair, 'assert_step_classification_guard'] }] }, steps)).toEqual([]);
+  });
+
+  test('les preuves propres d’une fonction ne visent que les surfaces du dépôt : celles de la landing relèvent de la porte du GO (4.11, check:landing-go)', () => {
+    const base = { ...claims.claims[0]!, status: 'relu' as const };
+    const one = (surfaces: string[]): string =>
+      claimProblems({ version: 1, claims: [{ ...base, surfaces, en: 'It repairs the step that broke', proof: ['assert_step_patch_bounded'] }] }, { ...context, testCorpus: `${context.testCorpus}\nassert_step_patch_bounded` }).join();
+    expect(one(['landing'])).toBe('');
+    expect(one(['readme'])).toMatch(/la réparation sans preuve propre/);
+  });
+
+  test('formulation prudente imposée (22 §3.2) : « without an LLM » / « sans LLM » suivi de « when the strategy allows » / « quand la stratégie le permet »', () => {
+    const base = claims.claims[0]!;
+    const one = (patch: Partial<ClaimsFile['claims'][number]>): string => claimProblems({ version: 1, claims: [{ ...base, ...patch }] }, context).join();
+    expect(one({ en: 'Replays without an LLM, repairs itself' })).toMatch(/formulation prudente/);
+    expect(one({ en: 'an API that replays without LLM and repairs itself' })).toMatch(/formulation prudente/);
+    expect(one({ en: 'an API with no LLM at replay' })).toMatch(/formulation prudente/);
+    expect(one({ fr: 'Ensuite il compile une API qui rejoue sans LLM et se répare.' })).toMatch(/formulation prudente/);
+    expect(one({ fr: 'Rejoue sans LLM, quand la stratégie le permet' })).toMatch(/formulation prudente/);
+    expect(one({ status: 'à relire', en: 'Replays without an LLM' })).toMatch(/formulation prudente/);
+    expect(one({ en: 'Replays without an LLM when the strategy allows, repairs itself', fr: 'Rejoue sans LLM quand la stratégie le permet, se répare', proof: ['runtime/apps/worker/src/exec/repair.integration.test.ts'] })).toBe('');
+    expect(cautiousWordingProblems('replays **without an LLM** when the strategy allows', 'en')).toEqual([]);
+    expect(cautiousWordingProblems('rejoue **sans LLM** quand la stratégie le permet', 'fr')).toEqual([]);
+    expect(cautiousWordingProblems('replays **without an LLM** and repairs itself', 'en').join()).toMatch(/formulation prudente/);
   });
 
   test('« aucune télémétrie par défaut » est liée à 4.10 : l\'entrée repasse « à relire » à la livraison de cette tâche', () => {

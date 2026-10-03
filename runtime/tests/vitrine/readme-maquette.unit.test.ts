@@ -6,6 +6,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, test } from 'vitest';
 import { badges, bannerTexts, codeBlocks, headings, loadBudgets, readReadme, whatItDoes } from '../../scripts/vitrine/lib/readme.ts';
+import { bannerGhostProblems } from '../../scripts/vitrine/lib/assets.ts';
 import { loadClaims } from '../../scripts/vitrine/lib/claims.ts';
 import { githubDir, repoRoot } from '../../scripts/vitrine/lib/paths.ts';
 
@@ -29,8 +30,15 @@ const spans = (style: string): string[] => [...html.matchAll(new RegExp(`<span s
  *  - verify : la planche abrège le bloc par « … » et un `--certificate-identity-regexp` : le bloc est celui que dérive l'identité publique
  *    (assert_verify_snippet_works) ;
  *  - selector : le sélecteur de langue en première ligne est exigé par 22 §3.1 (u8 R2) en plus du lien final « Lire en français » ;
- *  - alert : une ligne « Not delivered yet » nomme ce qui manque encore (la reprise étape par étape de 2.13 : « repairs step by step »,
- *    « it repairs the step that broke ») et disparaît à sa livraison (tests/public-showcase : les promesses restent vraies) ;
+ *  - alert : une ligne « Not delivered yet » nomme ce qui manque encore (la reprise étape par étape de 2.13) et disparaît à sa
+ *    livraison (tests/public-showcase : les promesses restent vraies) ;
+ *  - step : jusqu'à la livraison de 2.13 (reprise par étape, 19 §4), « repairs step by step » devient « repairs itself » et « it repairs
+ *    the step that broke » devient « the API repairs itself » : aucune affirmation au présent d'une fonction non livrée, même nommée
+ *    par l'alerte (D-46, 22 §3.2) ; une réparation livrée (2.3) corrige la stratégie, pas une étape ;
+ *  - llm : « without an LLM » porte la réserve imposée par 22 §3.2, « when the strategy allows » : les stratégies E4 à E6 et une API
+ *    not_compilable rejouent avec un modèle (04 §2) ;
+ *  - ghost : le bandeau écrit « SYM » et trace l'icône SVG de packages/ui (sym-ghost.svg) au lieu de l'emoji 👻 de la planche : un emoji
+ *    est rendu par la police emoji du système, œuvre tierce et différente d'une machine à l'autre (20 §2.3 : l'image porte l'icône SVG) ;
  *  - verify-note : sous le bloc « Verify », une ligne dit de remplacer X.Y.Z (la planche écrit [VERSION]) et que rien n'est publié avant
  *    la première version, pour qu'aucun lecteur ne lance cosign sur une étiquette qui n'existe pas ;
  *  - links : la planche n'a qu'un lien (« Lire en français »), les mots des mentions en portent trois de plus (licence, usage responsable, doc, signalement
@@ -41,7 +49,12 @@ const spans = (style: string): string[] => [...html.matchAll(new RegExp(`<span s
 const EXPLAINED = {
   cost: [', $0.0004 per replay', ', no model cost per replay'],
   render: [', about $38/month', ''],
+  llm: [['replays without an LLM and', 'replays without an LLM when the strategy allows, and'], ['Replays without an LLM,', 'Replays without an LLM when the strategy allows,']],
+  step: [['repairs step by step', 'repairs itself'], ['it repairs the step that broke', 'the API repairs itself']],
+  ghost: [' 👻', ''],
 } as const;
+/** Texte de la planche avec les écarts `llm` et `step` appliqués : ce que le README doit afficher. */
+const explained = (text: string): string => [...EXPLAINED.llm, ...EXPLAINED.step].reduce((acc, [from, to]) => acc.replace(from, to), text);
 
 const claims = loadClaims();
 /** Traduction fr d'un texte en de la planche : l'entrée du registre (surface readme) dont le texte en le contient. */
@@ -59,10 +72,10 @@ const unlinked = (text: string): string => text.replace(/\[([^\]]*)\]\([^)]*\)/g
 function frDrift(fr: string, en: string): string[] {
   const problems: string[] = [];
   if (headings(fr).join('|') !== FR_HEADINGS.join('|')) problems.push(`titres fr ${JSON.stringify(headings(fr))}`);
-  const li = [...html.matchAll(/<li>([^<]*)<\/li>/g)].map((m) => plain(m[1] ?? ''));
+  const li = [...html.matchAll(/<li>([^<]*)<\/li>/g)].map((m) => explained(plain(m[1] ?? '')));
   const wanted = li.map(frOf);
   if (wanted.some((t) => t === undefined) || whatItDoes(fr, 'fr').join('|') !== wanted.join('|')) problems.push('puces fr : pas les traductions du registre des puces de la planche, dans l\'ordre');
-  const hero = plain(/<p style="margin: 0; font-size: 16px[^>]*>([\s\S]*?)<\/p>/.exec(html)?.[1] ?? '');
+  const hero = explained(plain(/<p style="margin: 0; font-size: 16px[^>]*>([\s\S]*?)<\/p>/.exec(html)?.[1] ?? ''));
   const heroFr = frOf(hero);
   if (!heroFr || !fr.replace(/\*\*/g, '').includes(heroFr)) problems.push('accroche fr : pas la traduction du registre de l\'accroche de la planche');
   const alert = plain(/border-left: 4px solid #FFC727[^>]*>([\s\S]*?)<\/div>/.exec(html)?.[1] ?? '');
@@ -97,7 +110,8 @@ describe.skipIf(!present)('assert_readme_matches_maquette : README en fidèle à
     const tagline = spans('font-size: 22px')[0];
     const context = spans('font-size: 13px; color: #C9C4BA')[0];
     expect(title).toBe('SYM 👻');
-    expect(bannerTexts()).toEqual([title, tagline, context]);
+    expect(bannerTexts()).toEqual([title?.replace(EXPLAINED.ghost[0], EXPLAINED.ghost[1]), tagline, context]);
+    expect(bannerGhostProblems(), 'le 👻 de la planche est l\'icône sym-ghost.svg tracée').toEqual([]);
     const svg = readFileSync(join(githubDir, 'assets/src/banner-light.svg'), 'utf8');
     for (const color of ['#24252D', '#FF5A1F', '#D8BDF7', '#FFC727', '#FBF8F3', '#8F8A80', '#C9C4BA']) expect(svg, color).toContain(color);
     expect(svg).toContain('text-decoration="line-through"');
@@ -121,9 +135,10 @@ describe.skipIf(!present)('assert_readme_matches_maquette : README en fidèle à
     expect(headings(en)).toEqual(h2);
     const li = [...html.matchAll(/<li>([^<]*)<\/li>/g)].map((m) => plain(m[1] ?? ''));
     expect(li).toHaveLength(10);
-    expect(whatItDoes(en, 'en')).toEqual(li);
+    expect(whatItDoes(en, 'en')).toEqual(li.map(explained));
     const hero = plain(/<p style="margin: 0; font-size: 16px[^>]*>([\s\S]*?)<\/p>/.exec(html)?.[1] ?? '');
-    expect(en.replace(/\*\*/g, '')).toContain(hero);
+    for (const [from] of [...EXPLAINED.llm, ...EXPLAINED.step]) expect([...li, hero].some((line) => line.includes(from)), `écart sans objet : « ${from} »`).toBe(true);
+    expect(en.replace(/\*\*/g, '')).toContain(explained(hero));
     expect(hero).toMatch(/^You ask your AI for data\./);
     const alert = plain(/border-left: 4px solid #FFC727[^>]*>([\s\S]*?)<\/div>/.exec(html)?.[1] ?? '');
     expect(en.replace(/\*\*/g, '').replace(/\n> /g, ' ')).toContain(alert);

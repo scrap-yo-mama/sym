@@ -7,7 +7,7 @@
 
 <p><a href="https://github.com/scrap-yo-mama/sym/blob/main/LICENSE"><img alt="licence : AGPL-3.0" src="https://img.shields.io/badge/license-AGPL--3.0-3A33F0?labelColor=24252D"></a> <img alt="statut : pré-version" src="https://img.shields.io/badge/status-pre--release-FFC727?labelColor=24252D"> <img alt="protocole : MCP" src="https://img.shields.io/badge/protocol-MCP-D8BDF7?labelColor=24252D"> <img alt="déploiement : auto-hébergé" src="https://img.shields.io/badge/deploy-self--hosted-A8E3EA?labelColor=24252D"> <img alt="versions : signées" src="https://img.shields.io/badge/releases-signed-FF5A1F?labelColor=24252D"></p>
 
-Tu demandes des données à ton IA. **SYM 👻** enquête sur le site en commençant par le moins cher (requête simple, puis navigateur, puis agent), te montre le schéma et attend ton OK. Ensuite il compile une API qui rejoue **sans LLM** et se répare quand le site change. Ton serveur, ta base, ton modèle.
+Tu demandes des données à ton IA. **SYM 👻** enquête sur le site en commençant par le moins cher (requête simple, puis navigateur, puis agent), te montre le schéma et attend ton OK. Ensuite il compile une API qui rejoue **sans LLM** quand la stratégie le permet, et se répare quand le site change. Ton serveur, ta base, ton modèle.
 
 > [!WARNING]
 > **Pré-version.** SYM est en plein développement et n'est pas encore prêt pour la production. Suis le dépôt pour la première version.
@@ -31,7 +31,7 @@ SYM 👻 : C'est fait. 20 livres, aucun coût de modèle par rejeu.
 
 - Transforme une demande en schéma que tu valides d'abord
 - Choisit la méthode la moins chère qui marche
-- Rejoue sans LLM, répare étape par étape
+- Rejoue sans LLM quand la stratégie le permet, se répare
 - Utilise ta propre session de navigateur quand tu l'autorises
 - Parle MCP et REST, et a une console
 
@@ -43,7 +43,7 @@ SYM 👻 : C'est fait. 20 livres, aucun coût de modèle par rejeu.
 - Les pages lourdes en JavaScript, avec un vrai navigateur
 - Les sites à compte, avec ta propre session (extension Chrome)
 - Les sites retors : un agent se débrouille, puis ça se compile
-- Les sites qui changent : il répare l'étape qui a cassé
+- Les sites qui changent : l'API se répare
 - Pagination, planifications, webhooks
 
 </td>

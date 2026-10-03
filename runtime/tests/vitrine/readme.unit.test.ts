@@ -145,7 +145,7 @@ describe('assert_readme_claims_registered : chaque puce de « What SYM does » e
     }
     expect(proseSentences(README.en)).toEqual(expect.arrayContaining([
       'You ask your AI for data.',
-      'Then it compiles an API that replays without an LLM and repairs itself when the site changes.',
+      'Then it compiles an API that replays without an LLM when the strategy allows, and repairs itself when the site changes.',
       'SYM 👻: Done. 20 books, no model cost per replay.',
       'Security: private vulnerability reporting is on.',
       'Built with AI assistance, reviewed by humans.',
@@ -248,6 +248,14 @@ describe('assert_readme_no_bypass_copy : 0 mot de P (hors registre) et 0 mot de 
     }
   });
 
+  test('un libellé de cellule du comparatif (landing-compare) n\'est une copie que s\'il occupe toute une ligne : « when the site changes » au milieu d\'une phrase n\'en est pas une (4.12b)', () => {
+    const label = claims.claims.find((c) => c.id === 'compare.row.repair')!;
+    expect(foreignClaimsDisplayed(claims, `It repairs itself ${label.en.toLowerCase()}, and more.\n`, 'readme')).toEqual([]);
+    expect(foreignClaimsDisplayed(claims, `Il se répare ${label.fr.toLowerCase()}.\n`, 'readme')).toEqual([]);
+    expect(foreignClaimsDisplayed(claims, `intro\n${label.en}\n`, 'readme').join()).toMatch(/compare\.row\.repair/);
+    expect(foreignClaimsDisplayed(claims, `intro\n| ${label.fr} |\n`, 'readme').join()).toMatch(/compare\.row\.repair/);
+  });
+
   test('un mot de P ne passe que dans une phrase du registre', () => {
     const p = loadList('forbidden-p.txt');
     const withP = claims.claims.find((c) => findEntries(c.en, p).length > 0) ?? { en: 'Stealth mode', id: 'fixture' };
@@ -301,7 +309,8 @@ describe('assert_readme_images_resolve, assert_readme_alt_text, assert_readme_pi
   test('l\'alt du bandeau décrit ce que montre le bandeau (ses textes), sans accroche ni phrase absente de l\'image', () => {
     const texts = bannerTexts();
     expect(texts).toHaveLength(3);
-    expect(texts[0]).toBe('SYM 👻');
+    // La signature du bandeau est le texte « SYM » et l'icône sym-ghost.svg tracée, jamais l'emoji (20 §2.3, svgEmojiProblems).
+    expect(texts[0]).toBe('SYM');
     for (const lang of LANGS) expect(bannerAltProblems(README[lang], texts), lang).toEqual([]);
     expect(bannerAltProblems(README.en.replace(/(<picture>[\s\S]*?<img alt=")[^"]*"/, `$1${texts.join(' ').replace(/"/g, '&quot;')} Describe the data: get an API."`), texts).join()).toMatch(/accroche|phrase/);
     expect(bannerAltProblems(README.en.replace(/(<picture>[\s\S]*?<img alt=")[^"]*"/, '$1Ghost logo"'), texts).join()).toMatch(/SYM/);

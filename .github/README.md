@@ -7,7 +7,7 @@
 
 <p><a href="https://github.com/scrap-yo-mama/sym/blob/main/LICENSE"><img alt="license: AGPL-3.0" src="https://img.shields.io/badge/license-AGPL--3.0-3A33F0?labelColor=24252D"></a> <img alt="status: pre-release" src="https://img.shields.io/badge/status-pre--release-FFC727?labelColor=24252D"> <img alt="protocol: MCP" src="https://img.shields.io/badge/protocol-MCP-D8BDF7?labelColor=24252D"> <img alt="deploy: self-hosted" src="https://img.shields.io/badge/deploy-self--hosted-A8E3EA?labelColor=24252D"> <img alt="releases: signed" src="https://img.shields.io/badge/releases-signed-FF5A1F?labelColor=24252D"></p>
 
-You ask your AI for data. **SYM 👻** investigates the site cheapest-first (plain request, then browser, then agent), shows you the schema and waits for your OK. Then it compiles an API that replays **without an LLM** and repairs itself when the site changes. Your server, your database, your model.
+You ask your AI for data. **SYM 👻** investigates the site cheapest-first (plain request, then browser, then agent), shows you the schema and waits for your OK. Then it compiles an API that replays **without an LLM** when the strategy allows, and repairs itself when the site changes. Your server, your database, your model.
 
 > [!WARNING]
 > **Pre-release.** SYM is under active development and not production-ready yet. Watch the repo for the first release.
@@ -31,7 +31,7 @@ SYM 👻: Done. 20 books, no model cost per replay.
 
 - Turns a request into a schema you validate first
 - Picks the cheapest method that works
-- Replays without an LLM, repairs step by step
+- Replays without an LLM when the strategy allows, repairs itself
 - Uses your own browser session when you allow it
 - Speaks MCP, REST, and has a console
 
@@ -43,7 +43,7 @@ SYM 👻: Done. 20 books, no model cost per replay.
 - JavaScript-heavy pages, with a real browser
 - Account sites, through your own session (Chrome extension)
 - Tricky sites: an agent figures it out, then it compiles
-- Sites that change: it repairs the step that broke
+- Sites that change: the API repairs itself
 - Pagination, schedules, webhooks
 
 </td>

@@ -2,21 +2,22 @@
 
 Every file under `.github/assets/` is listed here with its author, license and date (`assert_assets_licenses_listed`).
 The drawings are flat shapes made for the project; there is no third-party art, photograph or screenshot. The ghost icon
-is the one of `runtime/packages/ui/icons/sym-ghost.svg`. License of a file: AGPL-3.0-only for the file itself. The name
+is the one of `runtime/packages/ui/icons/sym-ghost.svg`, drawn as a path: no emoji is set as text, so no system emoji font is rendered
+into a PNG. License of a file: AGPL-3.0-only for the file itself. The name
 and the logo stay under the trademark policy (`runtime/TRADEMARK.md`): the license of a file does not grant a right on them.
 
 | File | Author | License | Date |
 |---|---|---|---|
-| `brand/banner-light.png` | Scrapyomama maintainers | AGPL-3.0-only (name and logo: `runtime/TRADEMARK.md`) | 2026-10-02 |
-| `brand/banner-dark.png` | Scrapyomama maintainers | AGPL-3.0-only (name and logo: `runtime/TRADEMARK.md`) | 2026-10-02 |
+| `brand/banner-light.png` | Scrapyomama maintainers | AGPL-3.0-only (name and logo: `runtime/TRADEMARK.md`) | 2026-10-03 |
+| `brand/banner-dark.png` | Scrapyomama maintainers | AGPL-3.0-only (name and logo: `runtime/TRADEMARK.md`) | 2026-10-03 |
 | `brand/logo-light.svg` | Scrapyomama maintainers | AGPL-3.0-only (name and logo: `runtime/TRADEMARK.md`) | 2026-10-02 |
 | `brand/logo-dark.svg` | Scrapyomama maintainers | AGPL-3.0-only (name and logo: `runtime/TRADEMARK.md`) | 2026-10-02 |
 | `brand/button-deploy-render.svg` | Scrapyomama maintainers | AGPL-3.0-only (name and logo: `runtime/TRADEMARK.md`) | 2026-10-02 |
 | `brand/social-preview.png` | Scrapyomama maintainers | AGPL-3.0-only (name and logo: `runtime/TRADEMARK.md`) | 2026-10-02 |
 | `brand/og-en.png` | Scrapyomama maintainers | AGPL-3.0-only (name and logo: `runtime/TRADEMARK.md`) | 2026-10-02 |
 | `brand/og-fr.png` | Scrapyomama maintainers | AGPL-3.0-only (name and logo: `runtime/TRADEMARK.md`) | 2026-10-02 |
-| `src/banner-light.svg` | Scrapyomama maintainers | AGPL-3.0-only (name and logo: `runtime/TRADEMARK.md`) | 2026-10-02 |
-| `src/banner-dark.svg` | Scrapyomama maintainers | AGPL-3.0-only (name and logo: `runtime/TRADEMARK.md`) | 2026-10-02 |
+| `src/banner-light.svg` | Scrapyomama maintainers | AGPL-3.0-only (name and logo: `runtime/TRADEMARK.md`) | 2026-10-03 |
+| `src/banner-dark.svg` | Scrapyomama maintainers | AGPL-3.0-only (name and logo: `runtime/TRADEMARK.md`) | 2026-10-03 |
 | `src/social-preview.svg` | Scrapyomama maintainers | AGPL-3.0-only (name and logo: `runtime/TRADEMARK.md`) | 2026-10-02 |
 | `demo/quickstart.tape` | Scrapyomama maintainers | AGPL-3.0-only | 2026-10-02 |
 | `demo/README.md` | Scrapyomama maintainers | AGPL-3.0-only | 2026-10-02 |
