@@ -79,7 +79,7 @@ export function runFailedPayload(
       run_id: input.run_id,
       status: input.status,
       failure_class: input.failure_class,
-      // Classe bloquante (refus, interdit, robots.txt) : jamais « réessayable », quoi que rapporte l'exécuteur (X3, X4).
+      // Classe bloquante (refus, interdit) : jamais « réessayable », quoi que rapporte l'exécuteur (X3, X4).
       retryable: input.failure_class !== null && (BLOCKING_CLASSES as readonly string[]).includes(input.failure_class) ? false : input.retryable,
     },
   };

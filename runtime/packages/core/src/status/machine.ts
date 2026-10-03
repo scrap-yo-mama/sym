@@ -68,14 +68,7 @@ export function applyStatusEvent(state: ApiStatusState, event: StatusEventInput,
         // 21 : ré-enquête d'une API existante sans stratégie conforme, ancienne version gardée.
         return apply(state, ctx, [{ id: 21, to: state.previousStatus, reason: 'reinvestigation_failed', patch: { previousStatus: null } }]);
       }
-      return apply(state, ctx, [
-        {
-          id: 2,
-          to: 'erreur',
-          reason: event.cause === 'robots_unreachable' ? 'robots_unreachable' : 'investigation_budget_exhausted',
-          patch: { previousStatus: null },
-        },
-      ]);
+      return apply(state, ctx, [{ id: 2, to: 'erreur', reason: 'investigation_budget_exhausted', patch: { previousStatus: null } }]);
 
     case 'prior_refusal':
       // Mémoire négative (2.12) : arrêt préventif de l'enquête, même transition que le refus observé (4).
@@ -185,7 +178,7 @@ function onRunFailed(
     if (repairAction) return apply(state, ctx, [into, { id: 14, to: 'action_requise', reason: cls }]);
     return apply(state, ctx, [into]);
   }
-  // rate_limited (ralentir, disjoncteur), llm_*, robots_unreachable (abstention), run_budget_exceeded, budget_exceeded,
+  // rate_limited (ralentir, disjoncteur), llm_*, run_budget_exceeded, budget_exceeded,
   // et les raisons tunnel_offline, proxy_not_configured hors enquête : aucune transition dans les 21.
   return unchanged(state);
 }
@@ -218,16 +211,11 @@ export type RunGate =
   /** `erreur` : réponse immédiate `api_error` avec la dernière raison, aucun essai. Exception : `force_investigate`. */
   | { kind: 'api_error'; reason: string | null }
   /** `bloquee` : aucun run planifié (`skip_if_status_in` contient `bloquee`). */
-  | { kind: 'skipped_status' }
-  /** `robots_disallowed` : 0 requête sur le chemin (INV11). */
-  | { kind: 'refused'; reason: 'robots_disallowed' };
+  | { kind: 'skipped_status' };
 
 export function gateRun(state: ApiStatusState, opts: { trigger: 'schedule' | 'on_demand'; forceInvestigate?: boolean }): RunGate {
   if (state.status === 'erreur' && opts.forceInvestigate !== true) return { kind: 'api_error', reason: state.reason };
-  if (state.status === 'bloquee') {
-    if (state.reason === 'robots_disallowed') return { kind: 'refused', reason: 'robots_disallowed' };
-    if (opts.trigger === 'schedule') return { kind: 'skipped_status' };
-  }
+  if (state.status === 'bloquee' && opts.trigger === 'schedule') return { kind: 'skipped_status' };
   return { kind: 'run' };
 }
 

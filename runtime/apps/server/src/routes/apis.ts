@@ -4,7 +4,7 @@
 // (= run_api), ré-enquête manuelle, versions de stratégie (liste, détail, diff, retour), chronologie des statuts.
 //
 // Droits : lectures sous `withActor` (RLS : siennes + `instance` sans session) ; écritures réservées au propriétaire (404
-// uniforme pour l'API d'autrui, même visible) ; codes d'erreur de 05 § 4.3. Aucun réglage robots.txt n'existe (INV11).
+// uniforme pour l'API d'autrui, même visible) ; codes d'erreur de 05 § 4.3.
 import {
   API_STATUSES,
   EXECUTIONS,

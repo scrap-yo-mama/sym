@@ -21,7 +21,7 @@ Couples autorisés triés par `est_cost_usd` croissant, puis par E (E1 à E6), p
 
 ## Arrêts
 
-- `blocked_by_protection`, `forbidden`, `robots_disallowed` : arrêt de tout essai, statut `bloquee`.
+- `blocked_by_protection`, `forbidden` : arrêt de tout essai, statut `bloquee`.
 - `auth_required`, `payment_required` : la main revient à l'utilisateur, statut `action_requise`.
 
 ## Sélection

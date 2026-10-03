@@ -268,9 +268,9 @@ describe('enquête en tunnel (04 §4 : reconnaissance « en tunnel si la session
     expect(kinds.indexOf('access_report')).toBeGreaterThan(-1);
     expect(kinds.indexOf('access_report')).toBeLessThan(kinds.indexOf('reconnaissance.finished'));
     expect((events.find((e) => e.kind === 'reconnaissance.finished')!.payload as { mode: string }).mode).toBe('tunnel');
-    // Tout est passé par l'extension (robots.txt compris) : le serveur n'a jamais contacté le site.
+    // Tout est passé par l'extension : le serveur n'a jamais contacté le site ; robots.txt jamais demandé (D-91).
     expect(site.hits.filter((h) => h.via === 'http')).toEqual([]);
-    expect(site.hits.some((h) => h.path === '/robots.txt' && h.via === 'tunnel')).toBe(true);
+    expect(site.hits.some((h) => h.path === '/robots.txt')).toBe(false);
     expect(site.hits.some((h) => h.path === '/api/items' && h.via === 'tunnel')).toBe(true);
   });
 

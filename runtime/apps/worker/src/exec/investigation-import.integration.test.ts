@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Tâche 3.12 de bout en bout sur base réelle, fixtures locales (0.5), faux fournisseur LLM (15 §4), sans navigateur :
 // une API exportée puis importée REPASSE PAR L'ENQUÊTE (16 § 6). L'import entre au stade `access_check` (rapport
-// d'accès, robots.txt, INV11), puis `testing` : la stratégie importée est essayée par l'exécuteur de stratégie et toutes
+// d'accès), puis `testing` : la stratégie importée est essayée par l'exécuteur de stratégie et toutes
 // ses gardes, N exécutions conformes validées contre le schéma (INV1), essais journalisés par coût croissant (INV2), puis
 // version `created_by = import` et statut `sain` par la machine à états (transition 1, aucun nouvel état : INV3).
-// Aucun appel au LLM (la stratégie et le schéma viennent du fichier). Robots.txt interdit → `bloquee` sans essai ;
+// Aucun appel au LLM (la stratégie et le schéma viennent du fichier). Un robots.txt qui interdit le chemin ne change rien (D-91) ;
 // stratégie importée non conforme → `erreur`, aucune version. Import SANS stratégie (API à session ou en tunnel, exportée
 // avec `strategy: null`) : schéma validé par le fichier, reconnaissance fraîche, LLM contraint par ce schéma, essais sans
 // pause de validation, version `created_by = import`. Une spécification importée ne passe jamais par le tunnel (INV5).
@@ -211,17 +211,20 @@ describe('import : repasse par l’enquête (tâche 3.12)', () => {
     expect(fake.requests).toBe(0);
   });
 
-  test('INV11 : robots.txt interdit le chemin de l’API importée → rapport d’accès seul, bloquee, aucun essai, aucune requête sur /prive/', async () => {
+  test('assert_robots_not_gating — robots.txt interdit le chemin de l’API importée : rapport favorable, essais faits, jamais bloquee, robots.txt jamais demandé', async () => {
     const { apiId, runId } = await importAs('zz-test-import-robots', retarget(exported, ROBOTS_HOST, '/prive/liste'));
     const run = await waitRun(runId);
-    expect(run).toMatchObject({ state: 'failed', failure_class: 'robots_disallowed', retryable: false });
-    expect(await apiRow(apiId)).toMatchObject({ status: 'bloquee', status_reason: 'robots_disallowed', current_strategy_version: null });
-    expect(await attemptsOf(runId)).toEqual([]);
-    const kinds = (await eventsOf(runId)).map((e) => e.kind);
-    expect(kinds).toContain('access_report');
-    expect(kinds.filter((k) => k.startsWith('attempt'))).toEqual([]);
+    expect(run.failure_class ?? '').not.toMatch(/^robots_/);
+    const api = await apiRow(apiId);
+    expect(api.status).not.toBe('bloquee');
+    expect(String(api.status_reason ?? '')).not.toMatch(/^robots_/);
+    const events = await eventsOf(runId);
+    const report = events.find((e) => e.kind === 'access_report')!.payload as { verdict: { proceed: boolean } };
+    expect(report.verdict.proceed).toBe(true);
+    expect((await attemptsOf(runId)).length).toBeGreaterThan(0);
     const paths = (await client.stats()).hosts[ROBOTS_HOST]?.paths ?? {};
-    expect(Object.entries(paths).filter(([p]) => p.startsWith('/prive/')).reduce((n, [, c]) => n + c, 0)).toBe(0);
+    expect(paths['/prive/liste']).toBeGreaterThanOrEqual(1);
+    expect(paths['/robots.txt']).toBeUndefined();
     expect(fake.requests).toBe(0);
   });
 

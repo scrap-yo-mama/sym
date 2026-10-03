@@ -39,8 +39,6 @@ import type { FailureClass, SandboxEngine, SandboxLimits, SandboxViolation } fro
 import {
   classifyExchange,
   classifyTransportError,
-  type AccessCheck,
-  type AccessDecision,
   type ClassifyContext,
   type DeclarativeRunResult,
   type ExecFailure,
@@ -52,7 +50,7 @@ import type { Logger } from 'pino';
 import type { CDPSession, Request, Response } from 'playwright-core';
 import { boundedContent, boundedDocumentBody, TOO_LARGE, trackDecodedSizes, type DecodedSizes } from '../browser/bounded.js';
 import type { BrowserPool } from '../browser/pool.js';
-import { chainRoot, hostAllowed, isMainNavigation, openRunContext, trackStrategyRequests, type BrowserRequestCheck } from '../browser/run-context.js';
+import { chainRoot, hostAllowed, isMainNavigation, openRunContext, trackStrategyRequests } from '../browser/run-context.js';
 import { DEFAULT_SANDBOX_LIMITS } from '../sandbox/engine.js';
 import { createSandboxBridges, SandboxBridgeError, type BridgeResponse } from '../sandbox/bridges.js';
 import { ACCESS_REFUSED, createPageBridge, hostViolationWatch, issuedForWatch } from './script.js';
@@ -124,12 +122,6 @@ export type ScriptExecutorOptions = {
   /** Garde de classification (1.7) ; défaut : `classifyExchange` (statut, en-têtes de protection, défi servi en 200, redirection). */
   readonly classify?: (exchange: HttpExchange, context?: ClassifyContext) => ExecFailure | null;
   readonly navigationTimeoutMs?: number;
-  /**
-   * Module d'accès (1.11, INV11) : robots.txt contrôlé avant chaque requête du contexte (page de départ, `ctx.page.*`,
-   * requêtes de la page) et chaque saut de `ctx.fetch`. Un refus imputable à la stratégie (navigation du cadre
-   * principal, `ctx.fetch`, requête lancée par le script) arrête l'essai avec sa classe ; une sous-ressource est coupée.
-   */
-  readonly robots: AccessCheck;
   /** User-Agent du robot (1.11, `buildUserAgent`) : la chaîne du moteur, suivie du jeton si `identify_instance` est activé. */
   readonly userAgent?: string;
 };
@@ -256,9 +248,6 @@ export function runScriptExecutor(options: ScriptExecutorOptions): Promise<Scrip
     return 'paced';
   };
   const pacedRequests = new WeakSet<Request>();
-  /** Verdict de robots.txt ; une lecture en échec inattendu vaut injoignable (on s'abstient). */
-  const robotsDecision = (url: string): Promise<AccessDecision> =>
-    options.robots(url).catch((): AccessDecision => ({ allowed: false, failure: { failure_class: 'robots_unreachable', retryable: true, detail: 'robots_check_failed' } }));
 
   return options.pool.run(options.signal, async (browser) => {
     const host = hostViolationWatch();
@@ -266,11 +255,6 @@ export function runScriptExecutor(options: ScriptExecutorOptions): Promise<Scrip
     const issued = new WeakMap<Request, boolean>();
     /** Requêtes initiales qui sont une navigation du cadre principal (relevé à l'émission). */
     const mainNavigations = new WeakSet<Request>();
-    /**
-     * État du guet à l'émission, par URL de requête initiale (borné) : imputation d'un saut de redirection refusé par
-     * robots.txt, que le contrôle CDP voit sans objet `Request` de Playwright.
-     */
-    const issuedByUrl = new Map<string, boolean>();
     /**
      * État d'émission transmis au guet : jamais appris d'un saut de redirection, d'une requête de la stratégie
      * (`ctx.page.goto`, clic du script) ni d'une navigation du cadre principal (`issuedForWatch`, D-29).
@@ -355,25 +339,8 @@ export function runScriptExecutor(options: ScriptExecutorOptions): Promise<Scrip
         if (request !== undefined && refusal === undefined) selfNavigation(request);
         host.report(h, 'domain_not_allowed', state);
       },
-      // robots.txt à CHAQUE saut que Chromium suit (`ctx.page.goto`, `fetch` lancé dans `evaluate`, sous-ressources,
-      // cadres hors processus) : un saut refusé du cadre principal ou d'une chaîne lancée par le code du script arrête
-      // l'essai ; une sous-ressource du site est seulement coupée.
-      checkRequest: async (hop: BrowserRequestCheck) => {
-        const decision = await robotsDecision(hop.url);
-        if (decision.allowed) return true;
-        const issuedState = hop.redirect ? issuedByUrl.get(hop.rootUrl) : host.armed();
-        if (hop.mainFrame || issuedState === true) retain(decision.failure);
-        return false;
-      },
       admit: async (request) => {
         if (refusal !== undefined) return false;
-        // robots.txt (1.11) : chemin interdit ou robots.txt injoignable → coupée sans connexion ; l'essai s'arrête si la
-        // requête est celle de la stratégie (navigation du cadre principal, requête lancée par le script).
-        const decision = await robotsDecision(request.url());
-        if (!decision.allowed) {
-          if (mainRoot(request) || issued.get(chainRoot(request)) === true) retain(decision.failure);
-          return false;
-        }
         // Soumission (navigation hors GET/HEAD) sans `allow_write_actions` : coupée, imputée au script.
         if (!allowWriteActions && request.isNavigationRequest() && !READ_METHODS.has(request.method())) {
           host.report(new URL(request.url()).hostname, 'write_action_blocked', issued.get(chainRoot(request)));
@@ -416,8 +383,6 @@ export function runScriptExecutor(options: ScriptExecutorOptions): Promise<Scrip
       const root = chainRoot(request);
       if (root === request) {
         issued.set(request, host.armed());
-        if (issuedByUrl.size >= 2000) issuedByUrl.delete(issuedByUrl.keys().next().value as string);
-        issuedByUrl.set(request.url(), host.armed());
         try {
           if (isMainNavigation(rc.page)(request)) {
             mainNavigations.add(request);
@@ -597,12 +562,6 @@ export function runScriptExecutor(options: ScriptExecutorOptions): Promise<Scrip
         // `ctx.fetch` : un saut à la fois (le pont contrôle le domaine de chaque redirection), par la session de l'essai,
         // chaque saut réservé à la cadence et compté dans le plafond du run.
         fetch: async (request, signal) => {
-          // robots.txt avant tout (chaque saut) : un chemin interdit ne reçoit aucune requête, l'essai s'arrête.
-          const decision = await robotsDecision(request.url);
-          if (!decision.allowed) {
-            retain(decision.failure);
-            throw new SandboxBridgeError(ACCESS_REFUSED, false);
-          }
           const slot = await reserve(request.url);
           if (slot === 'refused') throw new SandboxBridgeError(ACCESS_REFUSED, false);
           if (slot === 'cap') throw new SandboxBridgeError('request_cap', false);

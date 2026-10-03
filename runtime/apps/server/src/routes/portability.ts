@@ -6,7 +6,7 @@
 // (`assert_export_no_secret`). Import : relu par `parseApiExport` (champs inconnus ignorés, tunnel écarté de la politique,
 // `$ref` distant refusé, INV1),
 // aperçu sans écriture, puis `confirm=true` : API privée en `enquete`, enquête en file au stade `access_check` (rapport
-// d'accès, robots.txt, INV11) puis `testing` de la stratégie importée — aucun nouvel état (INV3). Le journal et l'audit ne
+// d'accès) puis `testing` de la stratégie importée — aucun nouvel état (INV3). Le journal et l'audit ne
 // reçoivent que des compteurs et des codes, jamais le contenu du fichier.
 import { formatExport, parseApiExport, schemaHasPersonalFields, type ApiExport } from '@runtime/core';
 import { exportApi, importApi, InvestigationStateError, PortabilityError, schemaColumns, StorageFullError, withActor } from '@runtime/db';

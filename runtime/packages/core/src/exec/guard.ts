@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Garde de classification AVANT réparation (tâche 1.7, 04 §5 et §7, INV6) : la suite de chaque classe d'échec, et la
 // seule porte par laquelle un agent (réparation, E4-E6) peut être invoqué après un échec.
-// - Refus et défis (`blocked_by_protection`, `forbidden`, `robots_disallowed`) : arrêt, aucun agent, aucun changement
-//   de réseau ; statut `bloquee`. Jamais de proposition du tunnel (A7, X3) : aucune suite ne le nomme.
+// - Refus et défis (`blocked_by_protection`, `forbidden`) : arrêt, aucun agent, aucun changement de réseau ;
+//   statut `bloquee`. Jamais de proposition du tunnel (A7, X3) : aucune suite ne le nomme.
 // - `auth_required`, `payment_required`, `account_limit` : la main revient à l'utilisateur (`action_requise`).
 // - Seules `extraction`, `code_error` et `not_found` (réparation limitée à retrouver l'URL) ouvrent l'agent, et
 //   seulement si aucune preuve transmise n'est une page de défi ou un refus : sinon la classe est corrigée en
@@ -29,9 +29,7 @@ export type FailureNext =
   /** Arrêt de toute escalade. */
   | 'stop'
   /** La main revient à l'utilisateur. */
-  | 'action_required'
-  /** robots.txt injoignable : on s'abstient (RFC 9309). */
-  | 'abstain';
+  | 'action_required';
 
 export type FailureRoute = {
   readonly next: FailureNext;
@@ -58,7 +56,6 @@ export function failureRoute(cls: FailureClass): FailureRoute {
   switch (cls) {
     case 'blocked_by_protection':
     case 'forbidden':
-    case 'robots_disallowed':
       return route('stop', false, 'bloquee', cls);
     case 'auth_required':
     case 'payment_required':
@@ -70,8 +67,6 @@ export function failureRoute(cls: FailureClass): FailureRoute {
       return route('retry', false, 'warning', cls);
     case 'network':
       return route('next_network', false, null, cls);
-    case 'robots_unreachable':
-      return route('abstain', false, 'erreur', cls);
     case 'extraction':
     case 'code_error':
     case 'not_found':

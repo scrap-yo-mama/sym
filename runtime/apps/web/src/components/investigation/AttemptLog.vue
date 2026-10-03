@@ -2,9 +2,10 @@
 <script setup lang="ts">
 /**
  * @file AttemptLog.vue
- * @description Journal d'enquête (06 § 2, § 3) : première ligne « robots.txt lu : chemin autorisé », signaux d'usage et
- * voie officielle trouvée, puis les essais qui défilent avec leur « pourquoi » et leur raison d'échec en clair. Région
- * `role="log"` : une phrase par essai terminé, sans déplacer le focus. Le défilement n'est jamais forcé.
+ * @description Journal d'enquête (06 § 2, § 3) : première ligne « Rapport d'accès : page sondée », signaux d'usage,
+ * `llms.txt` et voie officielle trouvée (des données, rien ne bloque), puis les essais qui défilent avec leur « pourquoi »
+ * et leur raison d'échec en clair. Région `role="log"` : une phrase par essai terminé, sans déplacer le focus. Le
+ * défilement n'est jamais forcé.
  * @component
  * @example <AttemptLog :attempts="state.attempts" :access="state.access" :live="true" />
  */
@@ -25,13 +26,11 @@ const props = withDefaults(defineProps<Props>(), { live: true });
 const { t, locale } = useI18n();
 const { reasonText, resultLabel } = useReason();
 
-const ROBOTS_KEYS = { allowed: 'robotsAllowed', disallowed: 'robotsDisallowed', absent: 'robotsAbsent', unreachable: 'robotsUnreachable' } as const;
-
 /** Lignes d'accès, avant le premier essai (rapport d'accès, étape 0 de l'enquête). */
 const accessLines = computed<string[]>(() => {
   const report = props.access;
   if (!report) return [];
-  const lines = [t(`investigation.log.${ROBOTS_KEYS[report.robots.status]}`)];
+  const lines = [t('investigation.log.accessProbed')];
   for (const signal of report.usage_signals ?? []) lines.push(t('investigation.log.signal', { kind: signal.kind, value: signal.value }));
   if (report.llms_txt) lines.push(t('investigation.log.llmsTxt'));
   if (report.official_api_url) lines.push(t('investigation.log.officialApi', { url: report.official_api_url }));

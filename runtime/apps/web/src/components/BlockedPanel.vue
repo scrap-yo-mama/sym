@@ -6,7 +6,8 @@
  * parties (ce qui est arrivé, pourquoi on s'arrête, ce que tu peux faire) plus l'essai déclencheur et le coût déjà dépensé.
  * AUCUN bouton ni lien vers le tunnel, aucun bouton de relance, aucun réglage réseau : le seul bouton de reprise est
  * « Ré-enquêter » (manuel, transition 18). `assert_blocked_panel_no_tunnel_link` le vérifie sur le rendu.
- * Ni nom d'outil de protection ni description de ce que le site a détecté.
+ * Ni nom d'outil de protection ni description de ce que le site a détecté. Deux variantes : protection et refus d'accès ;
+ * le robots.txt ne conditionne pas la collecte (D-91), aucune variante ne s'y rapporte.
  * @component
  * @example <BlockedPanel cause="blocked_by_protection" domain="exemple.test" :attempt="attempt" @reinvestigate="go" />
  */
@@ -59,11 +60,10 @@ const officialHref = computed(() => {
 });
 const domainLabel = computed(() => props.domain ?? t('blocked.unknownDomain'));
 const costLabel = computed(() => formatUsd(props.costUsd, locale.value) ?? t('blocked.cost.unknown'));
-const variant = computed<'protection' | 'forbidden' | 'robots'>(() => (props.cause === 'robots_disallowed' ? 'robots' : props.cause === 'forbidden' ? 'forbidden' : 'protection'));
+const variant = computed<'protection' | 'forbidden'>(() => (props.cause === 'forbidden' ? 'forbidden' : 'protection'));
 
 const whatText = computed(() => {
   const params = { domain: domainLabel.value, cost: costLabel.value };
-  if (variant.value === 'robots') return t('blocked.what.robots', params);
   if (!props.attempt) return t('blocked.what.generic', params);
   return t(`blocked.what.${variant.value}`, {
     ...params,
@@ -110,9 +110,9 @@ async function copyTemplate(): Promise<void> {
           {{ t('blocked.todo.official') }}
           <a v-if="officialHref" :href="officialHref" rel="noopener noreferrer" class="text-foreground underline underline-offset-4">{{ t('blocked.officialApi') }}</a>
         </li>
-        <li v-if="variant !== 'robots'">{{ t('blocked.todo.other') }}</li>
+        <li>{{ t('blocked.todo.other') }}</li>
         <li>{{ t('blocked.todo.contact') }}</li>
-        <li v-if="variant !== 'robots'">{{ t('blocked.todo.later') }}</li>
+        <li>{{ t('blocked.todo.later') }}</li>
       </ol>
     </div>
 

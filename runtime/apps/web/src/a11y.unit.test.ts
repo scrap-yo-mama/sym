@@ -82,7 +82,7 @@ function templateOf(file: string): string {
 }
 
 /** Noms de fichiers et de protocoles, identiques dans toutes les langues. */
-const TECHNICAL_NAMES = new Set(['llms.txt', 'robots', 'robots.txt']);
+const TECHNICAL_NAMES = new Set(['llms.txt']);
 
 /** Textes écrits en dur dans un gabarit : nœuds de texte et attributs lus par un lecteur d'écran (aria-label, title, placeholder, alt). */
 function hardcodedText(rawTemplate: string): string[] {

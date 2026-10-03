@@ -98,7 +98,7 @@ describe('replay', () => {
     expect(event).toEqual({ id: '1', seq: 4, kind: 'attempt.finished', at: '2026-10-01T08:00:00Z', params: { n: 2, execution: 'fetch' } });
     expect(parseReplayEvent({ id: null, event: 'x', data: 'pas du json' }, 1)).toBeNull();
     expect(parseReplayEvent({ id: null, event: 'message', data: '{}' }, 1)).toBeNull();
-    expect(parseReplayEvent(frame({ kind: 'access_report', payload: { robots: 'allowed' } }, 'message'), 7)).toMatchObject({ kind: 'access_report', seq: 7 });
+    expect(parseReplayEvent(frame({ kind: 'access_report', payload: { signal: 'allowed' } }, 'message'), 7)).toMatchObject({ kind: 'access_report', seq: 7 });
   });
 
   const at = (seconds: number) => new Date(Date.UTC(2026, 9, 1, 8, 0, seconds)).toISOString();

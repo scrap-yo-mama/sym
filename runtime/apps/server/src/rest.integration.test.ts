@@ -209,7 +209,8 @@ describe('catalogue (05 § 4.2) : création, liste, fiche, modification, suppres
     expect(second.body['slug']).not.toBe(created.body['slug']);
 
     const detail = await api(a, 'GET', `/api/apis/${created.body['slug']}`, '/api/apis/{slug}');
-    expect(detail.body).toMatchObject({ status: 'enquete', metadata_only: false, access_policy: { robots: 'respect' }, owner_id: a.user.id });
+    expect(detail.body).toMatchObject({ status: 'enquete', metadata_only: false, access_policy: { report_id: null }, owner_id: a.user.id });
+    expect(detail.body.access_policy).not.toHaveProperty('robots');
     expect(JSON.stringify(detail.body)).not.toContain('"investigation"');
 
     const list = await api(a, 'GET', '/api/apis?limit=1', '/api/apis');
@@ -233,7 +234,7 @@ describe('catalogue (05 § 4.2) : création, liste, fiche, modification, suppres
   test('POST /api/apis refuse : URL à jeton, politique réseau inconnue, corps hors schéma (400) ; validation automatique sans « j’ai lu » (403)', async () => {
     expect((await api(a, 'POST', '/api/apis', '/api/apis', { description: 'zz', url: 'https://zz-test.example/?token=abc' })).body).toMatchObject({ error: { code: 'invalid_request' } });
     expect((await api(a, 'POST', '/api/apis', '/api/apis', { description: 'zz', url: 'https://zz-test.example/', network_policy: { allow: ['dc_proxy'], proxy_ids: { dc_proxy: 'zz-unknown' } } })).body).toMatchObject({ error: { code: 'invalid_network_policy' } });
-    expect((await api(a, 'POST', '/api/apis', '/api/apis', { description: 'zz', url: 'https://zz-test.example/', robots: 'ignore' })).status).toBe(400);
+    expect((await api(a, 'POST', '/api/apis', '/api/apis', { description: 'zz', url: 'https://zz-test.example/', zz_unknown: true })).status).toBe(400);
     expect((await api(b, 'POST', '/api/apis', '/api/apis', { description: 'zz', url: 'https://zz-test.example/', auto_validate: true })).body).toMatchObject({ error: { code: 'responsible_use_ack_required' } });
   });
 

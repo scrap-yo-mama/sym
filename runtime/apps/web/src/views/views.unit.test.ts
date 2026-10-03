@@ -1,7 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // « Tous les runs » et « Nouvelle API » (06 § 2, tâche 3.5), rendus côté serveur avec un faux serveur REST (aucun réseau réel).
-import { readdirSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
 import en from '@/i18n/locales/en.json';
 import { resetSession } from '@/composables/useSession';
@@ -158,22 +156,7 @@ describe('Nouvelle API : formulaire', () => {
   });
 });
 
-describe('aucune option pour ignorer robots.txt dans la console (INV11)', () => {
-  function sources(dir: string): string[] {
-    return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
-      const full = join(dir, entry.name);
-      return entry.isDirectory() ? sources(full) : /\.(vue|ts|json)$/.test(entry.name) && !/\.test\.ts$/.test(entry.name) ? [full] : [];
-    });
-  }
-
-  test('ni code ni texte de la console n’offre d’ignorer, de contourner ou de désactiver robots.txt', () => {
-    const webSrc = new URL('..', import.meta.url).pathname;
-    for (const file of sources(webSrc)) {
-      const source = readFileSync(file, 'utf8');
-      expect(source, file).not.toMatch(/ignor\w*[\s_-]*robots|robots[\s_-]*(override|ignore|bypass|off|disable)|disable[\s_-]*robots|respect[\s_-]*robots\s*[:=]\s*false/i);
-    }
-  });
-
+describe('robots.txt : ni règle ni réglage (D-91)', () => {
   test('le formulaire de création n’a aucun champ robots', async () => {
     installFakeServer({ ...sessionRoutes, 'GET /api/settings/llm': () => json(403, { error: { code: 'forbidden', message: 'x' } }) });
     const html = await view(NewApiView);

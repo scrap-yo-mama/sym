@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// Accès (O8) : robots.txt (Disallow, 4xx, 5xx, redirection, gros fichier, Crawl-delay, Content-Signal) et réponse 402.
+// Accès (O8) : sites qui publient un robots.txt (Disallow, 4xx, 5xx, redirection, gros fichier, Crawl-delay, Content-Signal)
+// et réponse 402. Depuis D-91, ils servent à prouver qu'un robots.txt ne conditionne aucune requête et n'est jamais lu de
+// lui-même.
 // Chaque site sert un contenu JSON sur tout chemin hors robots.txt : le compteur de GET /__stats dit si un chemin a été visité.
 import { ControlError, type FxRequest, type FxResponse, type Site, type SiteFactory } from '../core.ts';
 import { html, json, page, redirect, sleep, text } from '../res.ts';
@@ -21,7 +23,7 @@ const speculationRules = (prefetch: string, prerender: string): string =>
   JSON.stringify({ prefetch: [{ source: 'list', urls: [prefetch], eagerness: 'immediate' }], prerender: [{ source: 'list', urls: [prerender], eagerness: 'immediate' }] });
 
 /**
- * Redirections d'un chemin permis vers un chemin interdit (INV11 à chaque saut, Chromium compris) : `/depart` → 302
+ * Redirections d'un chemin permis vers un chemin que robots.txt interdit (chaque saut, Chromium compris) : `/depart` → 302
  * `/prive/x` ; `/prive` → 301 `/prive/` (barre oblique finale) ; `/vers-autre` → 302 vers `/prive/x` d'un second hôte
  * (`robots_redirect`, qui interdit /prive/) ; `/vers-injoignable` → 302 vers l'hôte `robots_5xx` (robots.txt en 503) ;
  * `/page-fetch` : page dont le script demande au chargement `/prive/page-fetch` et `/depart` (→ 302 `/prive/x`) ;

@@ -5,20 +5,20 @@ import { AccessPolicyError, DEFAULT_ACCESS_POLICY, parseAccessPolicy } from './p
 import { buildUserAgent, EngineUserAgentError, identityFromEnv, InstanceContactError, normalizeInstanceContact, requireInstanceContact, resolveIdentifyInstance, resolveInstanceContact, robotFrom } from './identity.js';
 import { detectAccessSignals, parsePaymentOffer, sanitizeSignalValue } from './signals.js';
 
-describe('access_policy : robots n’a qu’une valeur (INV11), champs réservés refusés en V1', () => {
+describe('access_policy : champs réservés refusés en V1, champ retiré robots toléré (D-91)', () => {
   it('défauts de 17 §4', () => {
     expect(parseAccessPolicy(undefined)).toEqual(DEFAULT_ACCESS_POLICY);
-    expect(parseAccessPolicy({})).toMatchObject({ robots: 'respect', on_ai_signal: 'warn', intended_use: 'context', prefer_official: true, payment: { mode: 'never' } });
+    expect(parseAccessPolicy({})).toMatchObject({ on_ai_signal: 'warn', intended_use: 'context', prefer_official: true, payment: { mode: 'never' } });
     expect(parseAccessPolicy({ robots: 'respect', report_id: '00000000-0000-4000-8000-000000000001', user_agent_contact: 'from_settings' })).toMatchObject({ report_id: '00000000-0000-4000-8000-000000000001' });
     expect(parseAccessPolicy({ prefer_official: false }).prefer_official).toBe(false);
   });
 
-  it('aucune valeur ne permet d’ignorer robots.txt', () => {
-    for (const robots of ['ignore', 'off', false, 'respect_unless_manual', null, 0]) {
-      expect(() => parseAccessPolicy({ robots }), String(robots)).toThrow(AccessPolicyError);
+  it('robots : champ retiré par D-91, toléré et ignoré (politique écrite avant), jamais produit', () => {
+    expect(DEFAULT_ACCESS_POLICY).not.toHaveProperty('robots');
+    for (const robots of ['respect', 'ignore', false, null]) {
+      expect(parseAccessPolicy({ robots, prefer_official: false }), String(robots)).toEqual({ ...DEFAULT_ACCESS_POLICY, prefer_official: false });
     }
     expect(() => parseAccessPolicy({ ignore_robots: true })).toThrow(/champ inconnu/);
-    expect(() => parseAccessPolicy({ respect_robots: false })).toThrow(/champ inconnu/);
   });
 
   it('valeurs réservées V2 refusées : enforce, train, paiement', () => {

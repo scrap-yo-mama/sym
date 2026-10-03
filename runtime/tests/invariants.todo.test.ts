@@ -27,14 +27,14 @@ import { describe, test } from "vitest";
 // (E2) ; le volet tunnel (2.7) : assert_tunnel_single_user et assert_gateway_instance_routing dans tests/tunnel/gateway.integration.test.ts. assert_consent_before_capture,
 // assert_optional_hosts, assert_no_cookie_in_tunnel_mode : apps/extension/src/core/*.unit.test.ts et e2e/extension.e2e.ts.
 // INV6, X4 (1.4) : assert_no_ip_change_after_refusal est dans tests/network/network-modes.unit.test.ts (proxy de test local).
-// INV11 et étape 0 (1.11) : assert_robots_respected est dans packages/core/src/access/access.fixtures.unit.test.ts (fixtures O8,
-// session réseau réelle : E1, URL saisie à la main, saut de redirection, 4xx/5xx/redirections/500 Kio/Crawl-delay/Content-Signal/402),
-// packages/db/src/investigation-events.integration.test.ts (statuts, contrainte robots = respect) et
-// apps/worker/src/exec/robots.security.test.ts (worker réel, Chromium : E1, E2, E3, script : page de départ, ctx.fetch, ctx.page.goto ;
-// chaque saut de redirection suivi par Chromium, barre oblique finale, second hôte autorisé, WebSocket, robots.txt redirigé vers un
-// autre hôte) et apps/worker/src/browser/request-guard.security.test.ts (contrôle CDP : cadre hors processus, worker dédié) ;
-// le volet tunnel et extension (17 § 1 : 0 requête aussi en mode tunnel) est repris par 2.7 (test.todo ci-dessous) ;
-// assert_access_report_first : packages/db/src/investigation-events.integration.test.ts (migration 0015) et, enquête réelle
+// D-91 (exigences de tâche, robots.txt source d'information) : assert_robots_not_gating est dans
+// packages/core/src/access/access.fixtures.unit.test.ts et robots.unit.test.ts (fixtures O8, session réseau réelle : E1,
+// URL saisie à la main, saut de redirection, rapport d'accès), apps/worker/src/exec/robots-not-gating.security.test.ts
+// (worker réel, Chromium : E1, E2, E3 en script), agent-robots-not-gating.security.test.ts (E4, E5, E6),
+// apps/worker/src/exec/investigation.integration.test.ts et investigation-import.integration.test.ts (enquêtes) et la
+// console (apps/web/src/components/api/api-detail.unit.test.ts) ; assert_robots_not_auto_fetched dans les mêmes fichiers
+// du worker (aucun run en rejeu ni étape 0 ne demande /robots.txt).
+// Étape 0 (1.11) : assert_access_report_first : packages/db/src/investigation-events.integration.test.ts (migration 0015) et, enquête réelle
 // (2.1), apps/worker/src/exec/investigation.integration.test.ts.
 // INV2 (2.1) : le test nommé du moins cher d'abord est dans apps/worker/src/exec/investigation.integration.test.ts (sans navigateur),
 // apps/worker/src/exec/investigation.security.test.ts (Chromium, capture XHR) et packages/core/src/investigation/investigation.unit.test.ts.
@@ -60,11 +60,6 @@ describe("invariants (à implémenter)", () => {
   // 2.1 (vérification) : une trace E6 n'est jamais retenue sans compilation en E5 (retainedStrategy) ; le code de raison dédié vient avec 2.13.
   test.todo("assert_investigation_not_compilable_reason — enquête dont seule une trace E6 non compilable est conforme, sans instructed_mode : erreur raison not_compilable (transition 2), ré-enquête : statut précédent raison not_compilable (21)"); // 2.13
   test.todo("assert_e5_list_compiled — trace E6 réussie sur F-E5 compilée en E5 (clics « Suivant » répétés, extraction par enregistrement à chaque page) et rejouée sans LLM, sortie identique"); // ADR 0001, suivi de 2.4 (tâche de rattachement à créer dans 10-taches)
-  // INV11 (revue de 1.11, journal D-33) : 17 § 1 et le contrat IA de 1.11 exigent 0 requête sur un chemin interdit AUSSI en
-  // tunnel et via l'extension. 2.7 (passerelle WSS) a été fusionnée avant 1.11, sans contrôle robots : la tâche de suivi 2.7b
-  // contrôle robots.txt avant chaque commande de navigation ou de requête du tunnel (sauts de redirection compris) et
-  // remplace ce test.todo par le vrai test ; il ne se retire qu'avec lui.
-  test.todo("assert_robots_respected — volet tunnel et extension : 0 requête sur un chemin interdit en mode tunnel, à chaque saut"); // INV11, tâche(s) 2.7b (D-33)
   // 4.8 livrée partiellement (16 § 8, 17 § 11) : la première API est rejouée par le quickstart depuis 3.1 (étape first-api) ; D0
   // reste décrit (mode pending) et gardé par assert_quickstart_pending_steps_declared ; /mcp est livré (3.2), il échoue à la
   // livraison des prompts MCP et du mode démo (3.10).

@@ -237,9 +237,9 @@ describe('escalade : motifs réseau seulement (04 §7, X4)', () => {
     }
   });
 
-  test('défi, robots_disallowed, forbidden : décision d’arrêt, barreau inchangé', () => {
+  test('défi, forbidden : décision d’arrêt, barreau inchangé', () => {
     const ladder = new NetworkLadder(buildNetworkRungs(policy(ALL), proxies));
-    for (const cls of ['blocked_by_protection', 'robots_disallowed', 'forbidden', 'auth_required', 'rate_limited', 'payment_required', 'account_limit', 'transient', 'extraction', 'llm_refused'] as const) {
+    for (const cls of ['blocked_by_protection', 'forbidden', 'auth_required', 'rate_limited', 'payment_required', 'account_limit', 'transient', 'extraction', 'llm_refused'] as const) {
       const step = ladder.onFailure(cls, 'geo_restriction');
       expect(step.changed).toBe(false);
       expect(step.decision).not.toBe('escalate');

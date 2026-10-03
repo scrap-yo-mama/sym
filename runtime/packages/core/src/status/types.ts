@@ -33,13 +33,13 @@ export type DegradedSignal = (typeof DEGRADED_SIGNALS)[number];
 
 /*
  * Classes d'échec : l'énumération unique `FailureClass` du modèle (04b § 1, 04 §7), importée telle quelle.
- * Les `llm_*`, `rate_limited`, `robots_unreachable` (pendant un run), `run_budget_exceeded` et `budget_exceeded` ne
- * changent jamais le statut à elles seules : l'épuisement d'un budget d'enquête ou de réparation passe par
- * `investigation_failed` (2, 21) ou `repair_failed` (13).
+ * Les `llm_*`, `rate_limited`, `run_budget_exceeded` et `budget_exceeded` ne changent jamais le statut à
+ * elles seules : l'épuisement d'un budget d'enquête ou de réparation passe par `investigation_failed` (2, 21) ou
+ * `repair_failed` (13).
  */
 
 /** Refus qui mènent à `bloquee` (transitions 4 et 15). */
-export const BLOCKING_CLASSES = ['blocked_by_protection', 'forbidden', 'robots_disallowed'] as const satisfies readonly FailureClass[];
+export const BLOCKING_CLASSES = ['blocked_by_protection', 'forbidden'] as const satisfies readonly FailureClass[];
 /** Classes qui mènent à `action_requise` pendant l'enquête (transition 3). */
 export const INVESTIGATION_ACTION_CLASSES = ['auth_required', 'payment_required', 'account_limit'] as const satisfies readonly FailureClass[];
 /** Classes qui mènent à `action_requise` pendant une réparation (transition 14). */
@@ -56,7 +56,7 @@ export const ACTION_REASONS = [...INVESTIGATION_ACTION_REASONS, ...REPAIR_ACTION
 export type ActionReason = (typeof ACTION_REASONS)[number];
 
 /** Classes pour lesquelles le backoff automatique de `erreur` est permis (transition 16). */
-export const BACKOFF_CLASSES = ['extraction', 'code_error', 'network', 'robots_unreachable'] as const satisfies readonly FailureClass[];
+export const BACKOFF_CLASSES = ['extraction', 'code_error', 'network'] as const satisfies readonly FailureClass[];
 
 /** `rules_changed` : recompilation à la demande (18 §4.8), depuis `sain` ou `warning` seulement (19, 20). */
 export type ReinvestigationTrigger = 'manual' | 'schema_changed' | 'force_investigate' | 'rules_changed';
@@ -75,8 +75,8 @@ export type ApiStatusState = {
 export type StatusEventInput =
   /** Fin d'enquête avec une stratégie conforme (1). */
   | { type: 'investigation_succeeded' }
-  /** Enquête sans résultat conforme : budget épuisé (2 ou 21) ou robots.txt persistant en 5xx (2). */
-  | { type: 'investigation_failed'; cause: 'budget_exhausted' | 'robots_unreachable' }
+  /** Enquête sans résultat conforme : budget épuisé (2 ou 21). */
+  | { type: 'investigation_failed'; cause: 'budget_exhausted' }
   /** Échec d'un run ou d'une étape : refus (3, 4, 14, 15), indisponibilité (6, 8), échec non transitoire (10, 11). */
   | { type: 'run_failed'; failureClass: FailureClass; httpStatus?: number }
   /** Run arrêté sans classe d'échec : proxy non configuré ou tunnel hors ligne (3), défi en tunnel (10/11 puis 14, ou 14). */

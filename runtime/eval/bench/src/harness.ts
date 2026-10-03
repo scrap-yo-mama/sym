@@ -145,7 +145,7 @@ export async function createBenchHarness(options: { llm: HarnessLlm }): Promise<
   function invariantViolations(attempts: { network: string; est_cost_usd: string | null; result_class: string }[]): string[] {
     const out: string[] = [];
     if (firstCostInversion(attempts.map((a) => (a.est_cost_usd === null ? null : Number(a.est_cost_usd)))) !== -1) out.push('INV2');
-    const refusal = attempts.findIndex((a) => ['blocked_by_protection', 'forbidden', 'rate_limited', 'robots_disallowed'].includes(a.result_class));
+    const refusal = attempts.findIndex((a) => ['blocked_by_protection', 'forbidden', 'rate_limited'].includes(a.result_class));
     if (refusal !== -1 && attempts.slice(refusal + 1).some((a) => a.network !== attempts[refusal]!.network)) out.push('INV6');
     return out;
   }

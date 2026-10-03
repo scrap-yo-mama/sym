@@ -280,9 +280,8 @@ describe('infinite_scroll : défilement scripté', () => {
     expect(f.scrolls()).toBe(5);
   });
 
-  it('la cadence (1.9) et le contrôle d’accès (1.11) s’appliquent à CHAQUE défilement comme à une requête', async () => {
+  it('la cadence (1.9) s’applique à CHAQUE défilement comme à une requête', async () => {
     const f = feed();
-    const seen: string[] = [];
     const acquired: string[] = [];
     const out = await runDeclarative({
       spec: feedSpec(),
@@ -290,10 +289,6 @@ describe('infinite_scroll : défilement scripté', () => {
       transport: f.transport,
       scroll: f.scroll,
       signal,
-      access: async (url) => {
-        seen.push(url);
-        return { allowed: true, crawlDelayMs: null };
-      },
       pacer: {
         acquire: async (url) => {
           acquired.push(url);
@@ -303,7 +298,6 @@ describe('infinite_scroll : défilement scripté', () => {
       },
     });
     expect(out).toMatchObject({ ok: true, pages: 3, requests: 3 });
-    expect(seen).toHaveLength(3);
     expect(acquired).toHaveLength(3);
   });
 

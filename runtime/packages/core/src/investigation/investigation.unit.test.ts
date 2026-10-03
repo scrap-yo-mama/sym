@@ -50,7 +50,7 @@ describe('ordre d’essai et élagage', () => {
     const ext = pruneAfter('extraction', a, rest);
     // Un autre N ne change rien à une extraction (échelle de 1.4 : seule `network` change de N) ; l'autre gisement reste.
     expect(ext.pruned.map((p) => `${p.execution}/${p.network}/${p.source}`)).toEqual(['fetch/dc_proxy/c1', 'fetch_in_page/dc_proxy/c1']);
-    for (const cls of ['blocked_by_protection', 'forbidden', 'robots_disallowed'] as const) {
+    for (const cls of ['blocked_by_protection', 'forbidden'] as const) {
       expect(pruneAfter(cls, a, rest)).toEqual({ next: 'stop', pruned: rest });
     }
     for (const cls of ['auth_required', 'payment_required', 'account_limit'] as const) expect(pruneAfter(cls, a, rest).next).toBe('action_required');

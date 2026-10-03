@@ -4,7 +4,7 @@
 // défi en tunnel) vivent à part, dans `ACTION_REASONS`.
 import { describe, expect, expectTypeOf, test } from 'vitest';
 import type * as core from '../index.js';
-import { FAILURE_CLASSES, isFailureClass, type FailureClass } from '../model/enums.js';
+import { FAILURE_CLASSES, isFailureClass, LEGACY_FAILURE_CLASSES, type FailureClass } from '../model/enums.js';
 import {
   ACTION_REASONS,
   BACKOFF_CLASSES,
@@ -40,11 +40,18 @@ describe('FailureClass unique', () => {
   test('liste fermée de 04b § 1 (hors llm_*)', () => {
     expect([...FAILURE_CLASSES].sort()).toEqual(
       [
-        'transient', 'network', 'rate_limited', 'forbidden', 'blocked_by_protection', 'robots_disallowed', 'robots_unreachable',
-        'payment_required', 'auth_required', 'account_limit', 'not_found', 'extraction', 'code_error', 'run_budget_exceeded',
-        'budget_exceeded',
+        'transient', 'network', 'rate_limited', 'forbidden', 'blocked_by_protection', 'payment_required', 'auth_required',
+        'account_limit', 'not_found', 'extraction', 'code_error', 'run_budget_exceeded', 'budget_exceeded',
       ].sort(),
     );
+  });
+
+  test('valeurs historiques (D-91) : robots_disallowed et robots_unreachable, lisibles en base, jamais produites', () => {
+    expect([...LEGACY_FAILURE_CLASSES]).toEqual(['robots_disallowed', 'robots_unreachable']);
+    for (const c of LEGACY_FAILURE_CLASSES) {
+      expect(isFailureClass(c), c).toBe(false);
+      expect((FAILURE_CLASSES as readonly string[]).includes(c)).toBe(false);
+    }
   });
 
   test('les codes de raison (04 §6) ne sont pas des failure_class', () => {

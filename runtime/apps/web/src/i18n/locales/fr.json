@@ -228,8 +228,6 @@
     "geo_restriction": "Contenu indisponible depuis ce pays ; essai avec le proxy du pays autorisé par l'API.",
     "blocked_by_protection": "Le site refuse l'accès automatisé. Scrapyomama s'arrête.",
     "forbidden": "Le site refuse l'accès à cette adresse. L'adresse IP ne change pas.",
-    "robots_disallowed": "Le site demande aux robots de ne pas visiter cette page.",
-    "robots_unreachable": "robots.txt est injoignable : par prudence, rien n'est collecté.",
     "payment_required": "Le site demande un paiement : {offre}.",
     "auth_required": "{domaine} demande une connexion.",
     "cookie_expired": "La session de {domaine} a expiré.",
@@ -263,8 +261,6 @@
     "rate_limited": "Le site demande de ralentir",
     "forbidden": "Accès refusé",
     "blocked_by_protection": "Accès automatisé refusé",
-    "robots_disallowed": "Interdit par robots.txt",
-    "robots_unreachable": "robots.txt injoignable",
     "payment_required": "Paiement requis",
     "auth_required": "Connexion requise",
     "account_limit": "Limite de compte",
@@ -368,10 +364,7 @@
     "log": {
       "title": "Essais",
       "empty": "Aucun essai pour l'instant.",
-      "robotsAllowed": "robots.txt lu : chemin autorisé",
-      "robotsDisallowed": "robots.txt lu : chemin interdit",
-      "robotsAbsent": "robots.txt introuvable : aucune règle ne s'applique",
-      "robotsUnreachable": "robots.txt injoignable : par prudence, rien n'est collecté",
+      "accessProbed": "Rapport d'accès : page sondée",
       "signal": "Signal d'usage {kind} : {value}",
       "llmsTxt": "llms.txt trouvé",
       "officialApi": "Voie officielle trouvée : {url}",
@@ -421,14 +414,12 @@
       "heading": "Ce qui est arrivé",
       "protection": "Le {date}, essai {n} (« {execution} », {network}), {domain} a répondu par une page de vérification. Aucun autre essai n'a été lancé. Coût de l'enquête : {cost}.",
       "forbidden": "Le {date}, essai {n} (« {execution} », {network}), {domain} a répondu par un refus d'accès. Aucun autre essai n'a été lancé. Coût de l'enquête : {cost}.",
-      "robots": "{domain} demande aux robots de ne pas visiter cette page. Aucune requête n'a été envoyée sur ce chemin. Coût de l'enquête : {cost}.",
       "generic": "{domain} a refusé l'accès. Aucun autre essai n'a été lancé. Coût de l'enquête : {cost}."
     },
     "why": {
       "heading": "Pourquoi on s'arrête",
       "protection": "C'est la décision du site. Scrapyomama n'y répond pas à la place d'une personne et ne change pas d'adresse IP après un refus.",
-      "forbidden": "Le site refuse l'accès à cette adresse. L'adresse IP ne change pas après un refus. Vérifie tes droits d'accès ou contacte l'éditeur.",
-      "robots": "Ce site demande aux robots de ne pas visiter cette page. Scrapyomama respecte cette règle."
+      "forbidden": "Le site refuse l'accès à cette adresse. L'adresse IP ne change pas après un refus. Vérifie tes droits d'accès ou contacte l'éditeur."
     },
     "todo": {
       "heading": "Ce que tu peux faire",
@@ -743,9 +734,9 @@
   },
   "access": {
     "signal": {
-      "allowed": "Accès autorisé",
+      "allowed": "Rien à signaler",
       "review": "À examiner",
-      "disallowed": "Accès interdit",
+      "disallowed": "Refus signalé (ancien rapport)",
       "unknown": "Accès non vérifié"
     }
   },
@@ -766,8 +757,6 @@
     "geo_restriction": "Contenu indisponible depuis ce pays ; essai avec le proxy du pays autorisé par l'API.",
     "blocked_by_protection": "Le site refuse l'accès automatisé. Scrapyomama s'arrête.",
     "forbidden": "Le site refuse l'accès à cette adresse. L'adresse IP ne change pas.",
-    "robots_disallowed": "Le site demande aux robots de ne pas visiter cette page.",
-    "robots_unreachable": "robots.txt est injoignable : par prudence, rien n'est collecté.",
     "payment_required": "Le site demande un paiement : {offer}.",
     "auth_required": "{domain} demande une connexion.",
     "cookie_expired": "La session de {domain} a expiré.",
@@ -809,8 +798,6 @@
     "geo_restriction": "Restriction géographique",
     "blocked_by_protection": "Accès automatisé refusé",
     "forbidden": "Accès refusé",
-    "robots_disallowed": "Page interdite par robots.txt",
-    "robots_unreachable": "robots.txt injoignable",
     "payment_required": "Paiement demandé",
     "auth_required": "Connexion requise",
     "cookie_expired": "Session expirée",
@@ -827,8 +814,6 @@
     "rate_limited": "Limite de cadence du site",
     "forbidden": "Accès refusé",
     "blocked_by_protection": "Accès automatisé refusé",
-    "robots_disallowed": "Page interdite par robots.txt",
-    "robots_unreachable": "robots.txt injoignable",
     "payment_required": "Paiement demandé",
     "auth_required": "Connexion requise",
     "account_limit": "Limite de compte",
@@ -944,7 +929,6 @@
       "title": "Ce qui s'est produit",
       "attempt": "Le {date}, essai {n} (« {execution} », {network}), {domain} a répondu par {answer}.",
       "generic": "{domain} a répondu par {answer}.",
-      "robots": "Ce site demande aux robots de ne pas visiter cette page. Scrapyomama respecte cette règle.",
       "forbidden": "Le site refuse l'accès à cette adresse. L'adresse IP ne change pas après un refus. Vérifie tes droits d'accès ou contacte l'éditeur."
     },
     "answer": {
@@ -956,7 +940,6 @@
     "why": {
       "title": "Pourquoi on s'arrête",
       "protection": "C'est la décision du site. Scrapyomama n'y répond pas à la place d'une personne et ne change pas d'adresse IP après un refus.",
-      "robots": "C'est la règle que le site déclare dans son fichier robots.txt. Scrapyomama la respecte toujours.",
       "forbidden": "C'est la décision du site. Scrapyomama ne change pas d'adresse IP après un refus."
     },
     "todo": {
@@ -1224,17 +1207,6 @@
     "noReport": "Aucun rapport d'accès pour cette API pour l'instant.",
     "summary": "Résumé",
     "checkedAt": "Vérifié le {date}",
-    "robots": "robots.txt",
-    "robotsStatus": "Statut",
-    "robotsFetched": "Lu le",
-    "robotsRule": "Règle appliquée",
-    "robotsStatuses": {
-      "allowed": "Autorise le chemin",
-      "disallowed": "Interdit le chemin",
-      "absent": "Absent (aucune règle)",
-      "unreachable": "Injoignable (par prudence, rien n'est collecté)"
-    },
-    "robotsAlways": "robots.txt est toujours respecté : aucun réglage ne permet de l'ignorer.",
     "signals": "Signaux d'usage",
     "signalsHint": "Ces signaux sont affichés comme des données : ils ne bloquent rien et ne sont jamais transmis comme des consignes au modèle.",
     "noSignals": "Aucun signal détecté.",
@@ -1284,7 +1256,7 @@
     "kinds": {
       "investigation_started": "Enquête démarrée.",
       "phase_started": "Phase : {phase}.",
-      "access_report": "Rapport d'accès : robots.txt, {robots}.",
+      "access_report": "Rapport d'accès : page sondée.",
       "schema_proposed": "Schéma de sortie proposé.",
       "attempt_finished": "Essai {n} terminé : {execution}, {network}, résultat {result}.",
       "status_changed": "Statut : {to}.",

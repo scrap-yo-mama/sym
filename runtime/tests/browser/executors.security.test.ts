@@ -37,7 +37,6 @@ import {
 } from '@runtime/core/net';
 import { contactsSpecInput, fixtureGuard, SCHEMA_CONTACT, SCHEMA_PRODUCT, spaApiSpecInput, spaSpecInput, ssrSpecInput } from '../helpers/fixture-net.ts';
 import { memoryPacingStore } from '../helpers/memory-pacing.ts';
-import { allowAllRequests, allowAllRobots } from '../helpers/robots-allow.ts';
 import { startConnectProxy, startSocks5Proxy, type UpstreamTestProxy } from '../helpers/upstream-proxies.ts';
 
 const API = 'zz_test_api_json.localhost';
@@ -111,7 +110,7 @@ describe('assert_chromium_idle_silent : Chromium à vide, 0 requête sortante', 
     launchSeen.length = 0;
     await pool.run(signal, (browser) =>
       withEgress({ mode: 'direct' }, async (egress) => {
-        const rc = await openRunContext(browser, { checkRequest: allowAllRequests, egressServer: egress.server, allowedHosts: HOSTS });
+        const rc = await openRunContext(browser, { egressServer: egress.server, allowedHosts: HOSTS });
         await rc.page.goto('about:blank');
         await new Promise((r) => setTimeout(r, 10_000));
         await rc.close();
@@ -170,7 +169,7 @@ describe('assert_executors_conform_fixtures : E1, E2, E3 × fixtures API, SSR, S
   test.each([['api'], ['ssr'], ['spa_api']] as const)('E2 fetch_in_page : %s', async (name) => {
     const c = cases[name];
     const out = await withEgress({ mode: 'direct' }, (egress) =>
-      runFetchInPageExecutor({ access: allowAllRobots, pool, egress, guard, spec: valid(c.spec(), c.schema), input: {}, outputSchema: c.schema, signal }),
+      runFetchInPageExecutor({ pool, egress, guard, spec: valid(c.spec(), c.schema), input: {}, outputSchema: c.schema, signal }),
     );
     expectConform(out, c.schema, c.count);
     // Le site est ouvert dans le navigateur (page d'accueil), puis les données sont lues par fetch dans la page.
@@ -180,7 +179,7 @@ describe('assert_executors_conform_fixtures : E1, E2, E3 × fixtures API, SSR, S
   test.each([['api'], ['ssr'], ['spa_dom']] as const)('E3 playwright : %s', async (name) => {
     const c = cases[name];
     const out = await withEgress({ mode: 'direct' }, async (egress) => {
-      const result = await runPlaywrightExecutor({ access: allowAllRobots, pool, egress, guard, spec: valid(c.spec(), c.schema), input: {}, outputSchema: c.schema, signal });
+      const result = await runPlaywrightExecutor({ pool, egress, guard, spec: valid(c.spec(), c.schema), input: {}, outputSchema: c.schema, signal });
       expect(egress.usage().requests).toBeGreaterThan(0);
       return result;
     });
@@ -201,7 +200,7 @@ describe('garde SSRF et politique de domaines', () => {
       { schema_version: 1, kind: 'declarative', request: { method: 'GET', url: `${base(host)}/`, allowed_hosts: [host] }, sources: [{ id: 'dom', from: 'html', records: 'li' }], fields: { title: { attr: 'text', type: 'string', required: true } } },
       undefined,
     );
-    const out = await withEgress({ mode: 'direct' }, (egress) => runPlaywrightExecutor({ access: allowAllRobots, pool, egress, guard, spec, input: {}, signal }));
+    const out = await withEgress({ mode: 'direct' }, (egress) => runPlaywrightExecutor({ pool, egress, guard, spec, input: {}, signal }));
     expect(out).toMatchObject({ ok: false, failure: { failure_class: 'forbidden', detail: 'ssrf_blocked' } });
     expect((await client.stats()).hosts[host]?.total ?? 0).toBe(0);
   });
@@ -210,7 +209,7 @@ describe('garde SSRF et politique de domaines', () => {
       { schema_version: 1, kind: 'declarative', request: { method: 'GET', url: `${base(SSRF)}/to-internal`, allowed_hosts: [SSRF] }, sources: [{ id: 'dom', from: 'html', records: 'li' }], fields: { title: { attr: 'text', type: 'string', required: true } } },
       undefined,
     );
-    const out = await withEgress({ mode: 'direct' }, (egress) => runPlaywrightExecutor({ access: allowAllRobots, pool, egress, guard, spec, input: {}, signal }), { allowedHosts: [SSRF] });
+    const out = await withEgress({ mode: 'direct' }, (egress) => runPlaywrightExecutor({ pool, egress, guard, spec, input: {}, signal }), { allowedHosts: [SSRF] });
     expect(out).toMatchObject({ ok: false, failure: { failure_class: 'code_error', retryable: false, detail: 'domain_not_allowed' } });
     expect((await client.stats()).hosts[INTERNAL]?.total ?? 0).toBe(0);
   });
@@ -227,7 +226,7 @@ describe('garde SSRF et politique de domaines', () => {
     const out = await withEgress(
       { mode: 'direct' },
       async (egress) => {
-        const result = await runPlaywrightExecutor({ access: allowAllRobots, pool, egress, guard, spec, input: {}, signal });
+        const result = await runPlaywrightExecutor({ pool, egress, guard, spec, input: {}, signal });
         domainBlocked = egress.domainBlockedCount();
         return result;
       },
@@ -249,7 +248,7 @@ describe('garde SSRF et politique de domaines', () => {
       peak = Math.max(peak, process.memoryUsage().rss);
     }, 5);
     try {
-      const out = await withEgress({ mode: 'direct' }, (egress) => runFetchInPageExecutor({ access: allowAllRobots, pool, egress, guard, spec, input: {}, outputSchema: SCHEMA_PRODUCT, signal }));
+      const out = await withEgress({ mode: 'direct' }, (egress) => runFetchInPageExecutor({ pool, egress, guard, spec, input: {}, outputSchema: SCHEMA_PRODUCT, signal }));
       expect(out).toMatchObject({ ok: false, failure: { failure_class: 'extraction', detail: 'response_too_large' } });
     } finally {
       clearInterval(sampler);
@@ -271,7 +270,7 @@ describe('garde SSRF et politique de domaines', () => {
       undefined,
     );
     const started = Date.now();
-    const out = await withEgress({ mode: 'direct' }, (egress) => runFetchInPageExecutor({ access: allowAllRobots, pool, egress, guard, spec, input: {}, signal, navigationTimeoutMs: 1_500 }));
+    const out = await withEgress({ mode: 'direct' }, (egress) => runFetchInPageExecutor({ pool, egress, guard, spec, input: {}, signal, navigationTimeoutMs: 1_500 }));
     expect(out).toMatchObject({ ok: false, failure: { failure_class: 'transient', retryable: true } });
     expect(Date.now() - started).toBeLessThan(5_000);
     expect(pool.active()).toBe(0);
@@ -280,7 +279,7 @@ describe('garde SSRF et politique de domaines', () => {
   test('seconde couche : fetch et WebSocket de la page vers un hôte hors de l’API coupés, violation journalisée', async () => {
     await pool.run(signal, (browser) =>
       withEgress({ mode: 'direct' }, async (egress) => {
-        const rc = await openRunContext(browser, { checkRequest: allowAllRequests, egressServer: egress.server, allowedHosts: [SSR] });
+        const rc = await openRunContext(browser, { egressServer: egress.server, allowedHosts: [SSR] });
         await rc.page.goto(`${base(SSR)}/`);
         const fetched = await rc.page.evaluate((u) => fetch(u).then(() => 'ok', () => 'blocked'), `${base(SPA)}/api/items.json`);
         const ws = await rc.page.evaluate(
@@ -309,7 +308,7 @@ describe('garde SSRF et politique de domaines', () => {
       await api.dispose();
       expect(egress.usage().requests).toBe(1);
       await pool.run(signal, async (browser) => {
-        const rc = await openRunContext(browser, { checkRequest: allowAllRequests, egressServer: egress.server, allowedHosts: [SPA] });
+        const rc = await openRunContext(browser, { egressServer: egress.server, allowedHosts: [SPA] });
         expect((await rc.context.request.get(`${base(SPA)}/api/items.json`)).status()).toBe(200);
         await rc.close();
       });
@@ -345,7 +344,7 @@ describe('assert_browser_egress_chained : chaînage au proxy BYO (1.4)', () => {
     const out = await withEgress(
       { mode: 'dc_proxy', proxy: def(proxy.url), params: {} },
       async (egress) => {
-        const result = await runPlaywrightExecutor({ access: allowAllRobots, pool, egress, guard, spec: valid(spaSpecInput(base(SPA), SPA), SCHEMA_PRODUCT), input: {}, outputSchema: SCHEMA_PRODUCT, signal });
+        const result = await runPlaywrightExecutor({ pool, egress, guard, spec: valid(spaSpecInput(base(SPA), SPA), SCHEMA_PRODUCT), input: {}, outputSchema: SCHEMA_PRODUCT, signal });
         const usage = egress.usage();
         expect(usage.mode).toBe('dc_proxy');
         expect(usage.costUsd).toBeGreaterThan(0);
@@ -388,7 +387,6 @@ describe('E3 en script dans le bac à sable (1.5) : ctx.page.*, ctx.fetch, ctx.e
         const session = openNetworkSession({ rung: { mode: 'direct' }, guard, allowedHosts: opts.allowedHosts ?? [SPA] });
         try {
           return await runScriptExecutor({
-            robots: allowAllRobots,
             pool,
             egress,
             guard,
@@ -957,8 +955,8 @@ describe('assert_no_circumvention (Chromium, tâche 1.7) : garde de classificati
       },
       { type: 'object', required: ['name'], properties: { name: { type: 'string' } } },
     );
-  const e3 = (spec: DeclarativeSpec) => withEgress({ mode: 'direct' }, (egress) => runPlaywrightExecutor({ access: allowAllRobots, pool, egress, guard, spec, input: {}, signal }), { allowedHosts: spec.request.allowed_hosts });
-  const e2 = (spec: DeclarativeSpec) => withEgress({ mode: 'direct' }, (egress) => runFetchInPageExecutor({ access: allowAllRobots, pool, egress, guard, spec, input: {}, signal }), { allowedHosts: spec.request.allowed_hosts });
+  const e3 = (spec: DeclarativeSpec) => withEgress({ mode: 'direct' }, (egress) => runPlaywrightExecutor({ pool, egress, guard, spec, input: {}, signal }), { allowedHosts: spec.request.allowed_hosts });
+  const e2 = (spec: DeclarativeSpec) => withEgress({ mode: 'direct' }, (egress) => runFetchInPageExecutor({ pool, egress, guard, spec, input: {}, signal }), { allowedHosts: spec.request.allowed_hosts });
 
   test('E3 : défi servi en 200 (DOM rendu) → blocked_by_protection, rien d’extrait, aucune requête de plus', async () => {
     const out = await e3(heading(CHALLENGE_200));
@@ -987,7 +985,7 @@ describe('assert_no_circumvention (Chromium, tâche 1.7) : garde de classificati
     // Classifieur qui ne lit que le statut : le corps brut passe, seule la garde de navigation peut arrêter l'essai.
     const statusOnly = (exchange: HttpExchange): ExecFailure | null => (exchange.status >= 200 && exchange.status < 300 ? null : { failure_class: 'forbidden', retryable: false, detail: `http_${exchange.status}` });
     const spec = products();
-    const out = await withEgress({ mode: 'direct' }, (egress) => runPlaywrightExecutor({ access: allowAllRobots, pool, egress, guard, spec, input: {}, signal, classify: statusOnly }), { allowedHosts: spec.request.allowed_hosts });
+    const out = await withEgress({ mode: 'direct' }, (egress) => runPlaywrightExecutor({ pool, egress, guard, spec, input: {}, signal, classify: statusOnly }), { allowedHosts: spec.request.allowed_hosts });
     expect(out).toMatchObject({ ok: false, pages: 0, failure: { failure_class: 'blocked_by_protection', detail: 'self_navigation' } });
     expect((await client.stats()).hosts[CHALLENGE_200]?.paths['/']).toBe(1);
   }, 60_000);

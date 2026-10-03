@@ -47,9 +47,6 @@ describe('assert_status_transitions', () => {
     expect(run(st('enquete'), { type: 'investigation_failed', cause: 'budget_exhausted' }).path).toEqual([
       [2, 'enquete', 'erreur', 'investigation_budget_exhausted'],
     ]);
-    expect(run(st('enquete'), { type: 'investigation_failed', cause: 'robots_unreachable' }).path).toEqual([
-      [2, 'enquete', 'erreur', 'robots_unreachable'],
-    ]);
   });
 
   test('transition_03_enquete_to_action_requise', () => {
@@ -63,7 +60,7 @@ describe('assert_status_transitions', () => {
   });
 
   test('transition_04_enquete_to_bloquee', () => {
-    for (const cls of ['blocked_by_protection', 'forbidden', 'robots_disallowed'] as const) {
+    for (const cls of ['blocked_by_protection', 'forbidden'] as const) {
       expect(run(st('enquete'), { type: 'run_failed', failureClass: cls }).path).toEqual([[4, 'enquete', 'bloquee', cls]]);
     }
   });
@@ -146,17 +143,17 @@ describe('assert_status_transitions', () => {
   });
 
   test('transition_15_reparation_to_bloquee', () => {
-    for (const cls of ['blocked_by_protection', 'forbidden', 'robots_disallowed'] as const) {
+    for (const cls of ['blocked_by_protection', 'forbidden'] as const) {
       expect(run(st('reparation'), { type: 'run_failed', failureClass: cls }).path).toEqual([[15, 'reparation', 'bloquee', cls]]);
     }
   });
 
   test('transition_16_erreur_to_enquete', () => {
-    for (const cls of ['extraction', 'code_error', 'network', 'robots_unreachable'] as const) {
+    for (const cls of ['extraction', 'code_error', 'network'] as const) {
       expect(run(st('erreur'), { type: 'backoff_elapsed', failureClass: cls, attempt: 0 }).path).toEqual([[16, 'erreur', 'enquete', 'backoff']]);
     }
     expect(run(st('erreur'), { type: 'reinvestigate', trigger: 'manual' }).path).toEqual([[16, 'erreur', 'enquete', 'reinvestigate_manual']]);
-    // Le backoff est réservé à quatre classes et s'arrête après 1 h, 6 h, 24 h.
+    // Le backoff est réservé à trois classes et s'arrête après 1 h, 6 h, 24 h.
     for (const cls of ['forbidden', 'blocked_by_protection', 'auth_required', 'transient'] as const) {
       expect(applyStatusEvent(st('erreur'), { type: 'backoff_elapsed', failureClass: cls, attempt: 0 }, ctx).ok).toBe(false);
     }
@@ -233,7 +230,6 @@ describe('assert_status_transitions', () => {
       [11, 'warning', 'reparation', 'forbidden'],
       [15, 'reparation', 'bloquee', 'forbidden'],
     ]);
-    expect(run(st('sain'), { type: 'run_failed', failureClass: 'robots_disallowed' }).path.map((p) => p[0])).toEqual([10, 15]);
     expect(run(st('warning'), { type: 'run_failed', failureClass: 'auth_required' }).path).toEqual([
       [11, 'warning', 'reparation', 'auth_required'],
       [14, 'reparation', 'action_requise', 'auth_required'],
@@ -288,15 +284,14 @@ describe('assert_status_transitions', () => {
     ]);
   });
 
-  test('erreur répond api_error sans essai, sauf force_investigate ; bloquee ne tourne pas en planifié ; robots_disallowed : 0 requête', () => {
+  test('erreur répond api_error sans essai, sauf force_investigate ; bloquee ne tourne pas en planifié', () => {
     const erreur = st('erreur', { reason: 'repair_budget_exhausted' });
     expect(gateRun(erreur, { trigger: 'on_demand' })).toEqual({ kind: 'api_error', reason: 'repair_budget_exhausted' });
     expect(gateRun(erreur, { trigger: 'on_demand', forceInvestigate: true })).toEqual({ kind: 'run' });
     expect(gateRun(st('bloquee', { reason: 'forbidden' }), { trigger: 'schedule' })).toEqual({ kind: 'skipped_status' });
-    expect(gateRun(st('bloquee', { reason: 'robots_disallowed' }), { trigger: 'on_demand', forceInvestigate: true })).toEqual({
-      kind: 'refused',
-      reason: 'robots_disallowed',
-    });
+    // Ancien arrêt robots_disallowed (avant D-91) : une API bloquée comme une autre, lancée seulement à la demande.
+    expect(gateRun(st('bloquee', { reason: 'robots_disallowed' }), { trigger: 'on_demand' })).toEqual({ kind: 'run' });
+    expect(gateRun(st('bloquee', { reason: 'robots_disallowed' }), { trigger: 'schedule' })).toEqual({ kind: 'skipped_status' });
     expect(gateRun(st('sain'), { trigger: 'schedule' })).toEqual({ kind: 'run' });
   });
 });

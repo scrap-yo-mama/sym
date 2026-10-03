@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Échelle réseau N1 → N2 → N3 (04 §3.2) et politique d'escalade (04 §7, 08 §2, _exclusions X4, INV6).
 // La seule classe qui fait monter l'axe réseau est `network` (géo-restriction, erreur de connexion). Un 401, un 403,
-// un 429, un défi ou `robots_disallowed` ne change JAMAIS de proxy ni d'IP : arrêt, `action_requise` ou
+// un 429 ou un défi ne change JAMAIS de proxy ni d'IP : arrêt, `action_requise` ou
 // ralentissement sur la même IP. Aucune rotation : une montée ne revient jamais en arrière et chaque niveau sert une fois.
 import { MODE_OF_PROXY_TYPE, NetworkConfigError, type NetworkMode, type NetworkPolicy, type ProviderParams, type ProxyDefinition } from './definitions.js';
 
@@ -44,8 +44,6 @@ export type FailureClassName =
   | 'rate_limited'
   | 'forbidden'
   | 'blocked_by_protection'
-  | 'robots_disallowed'
-  | 'robots_unreachable'
   | 'payment_required'
   | 'auth_required'
   | 'account_limit'
@@ -60,7 +58,7 @@ export type FailureClassName =
  * Suite réseau d'un échec :
  * - `escalate` : couple suivant avec un autre N, si autorisé (`network` seulement) ;
  * - `slow_down` : même IP, cadence ralentie (`rate_limited`) ;
- * - `stop` : arrêt de toute escalade (`forbidden`, `blocked_by_protection`, `robots_disallowed`, budgets) ;
+ * - `stop` : arrêt de toute escalade (`forbidden`, `blocked_by_protection`, budgets) ;
  * - `action_required` : la main revient à l'utilisateur (`auth_required`, `payment_required`, `account_limit`) ;
  * - `same_network` : réessai, réparation ou autre E, toujours sur le même N.
  */
@@ -74,7 +72,6 @@ export function networkDecision(failureClass: FailureClassName): NetworkDecision
       return 'slow_down';
     case 'forbidden':
     case 'blocked_by_protection':
-    case 'robots_disallowed':
     case 'run_budget_exceeded':
     case 'budget_exceeded':
       return 'stop';

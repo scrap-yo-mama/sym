@@ -33,8 +33,12 @@ const NETWORKS: readonly Network[] = ['direct', 'dc_proxy', 'res_proxy', 'tunnel
 export const PHASE_MILESTONES = ['access_check', 'reconnaissance', 'awaiting_schema_validation', 'testing'] as const;
 const PHASES: readonly InvestigationPhase[] = [...PHASE_MILESTONES, 'done'];
 const STATUSES: readonly ApiStatus[] = ['enquete', 'sain', 'warning', 'reparation', 'erreur', 'action_requise', 'bloquee'];
-/** Causes d'arrêt volontaire montrées par le panneau « Bloquée » (INV6) ; toute autre cause d'un statut `bloquee` est lue comme la première. */
-export const BLOCK_CAUSES = ['blocked_by_protection', 'forbidden', 'robots_disallowed'] as const;
+/**
+ * Causes d'arrêt volontaire montrées par le panneau « Bloquée » (INV6) ; toute autre cause d'un statut `bloquee` est lue
+ * comme la première. Le robots.txt ne conditionne plus la collecte (D-91) : une ancienne cause `robots_disallowed`
+ * (valeur historique) se lit comme un refus du site (`forbidden`), sans texte sur le robots.txt.
+ */
+export const BLOCK_CAUSES = ['blocked_by_protection', 'forbidden'] as const;
 export type BlockCause = (typeof BLOCK_CAUSES)[number];
 /** Causes d'une action requise (06 § 2). */
 const ACTION_CAUSES = [
@@ -270,8 +274,9 @@ function planOf(value: unknown): PlanStep[] | null {
   return steps;
 }
 
+/** Rapport d'accès d'un événement : `signal` connu suffit ; la section `robots` (historique, D-91) n'est pas exigée. */
 function accessOf(value: unknown): AccessReport | null {
-  if (!isRecord(value) || !isRecord(value.robots) || !oneOf(value.signal, ['allowed', 'review', 'disallowed'] as const)) return null;
+  if (!isRecord(value) || !oneOf(value.signal, ['allowed', 'review', 'disallowed'] as const)) return null;
   return value as unknown as AccessReport;
 }
 
@@ -368,7 +373,7 @@ export function ingestEvent(state: InvestigationState, event: SseEvent, nowMs: n
       if (status === 'bloquee') {
         const reasonCode = state.statusReason?.code ?? null;
         state.blocked = {
-          cause: oneOf(reasonCode, BLOCK_CAUSES) ?? 'blocked_by_protection',
+          cause: reasonCode === 'robots_disallowed' ? 'forbidden' : (oneOf(reasonCode, BLOCK_CAUSES) ?? 'blocked_by_protection'),
           domain: state.domain,
           at: text(data.at),
           attempt: state.attempts.at(-1) ?? null,

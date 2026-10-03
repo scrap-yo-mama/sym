@@ -18,7 +18,7 @@ export type CircuitState = 'closed' | 'open' | 'half_open';
 /** Requête de réservation transmise au magasin : le domaine seul identifie la cadence. */
 export type ReserveRequest = {
   readonly domain: string;
-  /** Délai effectif (API, `Crawl-delay`) de cette requête. */
+  /** Délai effectif (`min_delay_ms` de l'API) de cette requête. */
   readonly minDelayMs: number;
   readonly jitterMs: number;
   readonly maxWaitMs: number;
@@ -75,8 +75,6 @@ export const systemClock: PacingClock = {
 export type AcquireOptions = {
   /** `min_delay_ms` de l'API ; défaut : celui de la politique. */
   readonly minDelayMs?: number;
-  /** `Crawl-delay` de robots.txt en ms (fourni par le module d'accès, 1.11). */
-  readonly crawlDelayMs?: number | null;
   readonly maxWaitMs?: number;
   readonly isRetry?: boolean;
 };
@@ -103,7 +101,7 @@ export class DomainPacer {
    */
   async acquire(target: string, options: AcquireOptions = {}): Promise<Grant | Refusal> {
     const domain = registrableDomain(target);
-    const minDelayMs = effectiveMinDelayMs(options.minDelayMs ?? this.policy.minDelayMs, options.crawlDelayMs);
+    const minDelayMs = effectiveMinDelayMs(options.minDelayMs ?? this.policy.minDelayMs);
     const reservation = await this.#store.reserve({
       domain,
       minDelayMs,

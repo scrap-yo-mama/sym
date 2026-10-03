@@ -9,24 +9,25 @@
 // stratégie ; les sous-ressources tierces du site coupées ne changent jamais la classe d'un échec.
 // Contrôle optionnel des requêtes autorisées (`admit`, E3 en script) : cadence par domaine (1.9), plafond
 // `max_requests_per_run`, actions d'écriture (`allow_write_actions`) ; un refus coupe la requête sans connexion.
-// robots.txt (1.11, INV11) à CHAQUE saut (`checkRequest`) : `context.route` ne voit que la première URL d'une chaîne de
-// redirections ; chaque requête que Chromium s'apprête à envoyer, saut compris, passe par le contrôle CDP de
-// `request-guard.ts` (page du run et cadres hors processus) ; la poignée de main d'un WebSocket aussi. Les requêtes d'une
+// Verrou de domaines à CHAQUE saut : `context.route` ne voit que la première URL d'une chaîne de redirections ; chaque
+// requête que Chromium s'apprête à envoyer, saut compris, passe par le contrôle CDP de `request-guard.ts` (page du run et
+// cadres hors processus), avec le contrôle optionnel de l'appelant (`checkRequest` : relevé des écritures de l'agent) ;
+// la poignée de main d'un WebSocket aussi. Les requêtes d'une
 // autre page du contexte (fenêtre surgissante, fermée aussitôt) sont coupées : elles échapperaient à ce contrôle.
 // SharedWorker et service workers (revues de 1.11 et de fix-inv11-agent, F-20261001-07) : leurs requêtes échappent à
 // `context.route` ET au contrôle CDP de la page, et `serviceWorkers: 'block'` ne couvre pas
 // `ServiceWorkerContainer.prototype.register`. Une interception CDP au niveau du NAVIGATEUR, posée avant le contexte, coupe
 // toute requête de leurs cibles (script principal d'un service worker compris : il n'est jamais enregistré) et les ferme
 // (`blockBackgroundWorkers`, request-guard.ts) ; la garde des documents fige `register` (prototype et instance) et refuse
-// les SharedWorker blob: et data:. Dans tous les modes, contrôle robots ou non.
+// les SharedWorker blob: et data:. Dans tous les modes.
 // Workers dédiés (revue de 1.11) : `routeWebSocket` ne voit pas leurs WebSocket ; le contrôle CDP pose sur le script de
 // tout worker http(s) une CSP sans WebSocket (request-guard.ts), et la garde des documents (`installPageGuard`,
 // page-guard.ts) refuse les workers blob: et data: ; WebSocketStream, que `routeWebSocket` ne voit pas non plus, est coupé
 // au lancement (launch.ts).
 // Règles de spéculation (revue de 1.11) : leur préchargement part du navigateur, hors de toute interception ; la garde des
 // documents les retire, le contrôle CDP coupe celles de l'en-tête `Speculation-Rules`, le prérendu est coupé au lancement.
-// Garde OBLIGATOIRE (correctif fix-inv11-agent) : `checkRequest` est exigé par le type et toute la garde ci-dessus est posée
-// sans condition, pour TOUT contexte Chromium d'un run — E1-E3 et E4 par le navigateur et les rejeux E5 (pool), comme le
+// Garde OBLIGATOIRE (correctif fix-inv11-agent) : toute la garde ci-dessus est posée sans condition, pour TOUT contexte
+// Chromium d'un run — E1-E3 et E4 par le navigateur et les rejeux E5 (pool), comme le
 // Chromium dédié des essais agentiques E5-E6 piloté par Stagehand (`dedicated`, agent-browser.ts). Ce module est le seul à
 // créer un contexte ou une page de run (`newContext`, `newPage`) : `assert_all_browser_contexts_guarded`
 // (browser/guarded-contexts.unit.test.ts) échoue sur tout autre appel du code du worker et du paquet agent.
@@ -36,8 +37,6 @@ import { browserEngineIdentity } from './engine-identity.js';
 import { installPageGuard } from './page-guard.js';
 import { blockBackgroundWorkers, installRequestGuard, type RequestCheck } from './request-guard.js';
 import { engineUserAgentMetadata, installUserAgentOverride, NO_MEDIA_EMULATION } from './user-agent-override.js';
-
-export type { BrowserRequestCheck } from './request-guard.js';
 
 export type RunContextOptions = {
   /** `BrowserEgress.server` de l'essai (http://127.0.0.1:PORT). */
@@ -51,13 +50,14 @@ export type RunContextOptions = {
    * un WebSocket) : E3 en script tue alors l'enfant du bac à sable si la requête lui est imputable.
    */
   readonly onViolation?: (host: string, request?: Request) => void;
-  /** Requête d'un domaine autorisé : `false` la coupe (cadence refusée, plafond atteint, robots.txt, action d'écriture). */
+  /** Requête d'un domaine autorisé : `false` la coupe (cadence refusée, plafond atteint, action d'écriture). */
   readonly admit?: (request: Request) => Promise<boolean>;
   /**
-   * Contrôle de CHAQUE requête http(s) d'un domaine de l'API que Chromium envoie, sauts de redirection compris, et de la
-   * poignée de main de chaque WebSocket (robots.txt, 1.11) : `false` la coupe avant toute connexion.
+   * Contrôle optionnel de CHAQUE requête http(s) d'un domaine de l'API que Chromium envoie, sauts de redirection compris,
+   * et de la poignée de main de chaque WebSocket : `false` la coupe avant toute connexion. Absent : tout est admis (le
+   * verrou de domaines, lui, s'applique toujours).
    */
-  readonly checkRequest: RequestCheck;
+  readonly checkRequest?: RequestCheck;
   /**
    * User-Agent du robot de ce run (`buildUserAgent`, tâche 1.11, 17 §5) : la chaîne du moteur, avec le jeton si
    * `identify_instance` est activé ; sans elle, la chaîne exacte du moteur de `browser.version()`. Posée par
@@ -123,8 +123,7 @@ export function hostAllowed(url: string, allowedHosts: readonly string[], suffix
 }
 
 export async function openRunContext(browser: Browser, options: RunContextOptions): Promise<RunContext> {
-  // Échec fermé : sans contrôle de chaque requête, aucun contexte de run (appel non typé compris), rien n'est ouvert.
-  if (typeof options.checkRequest !== 'function') throw new Error('contexte de run sans contrôle robots.txt (INV11) : refusé');
+  const checkRequest: RequestCheck = options.checkRequest ?? (async () => true);
   const violations: string[] = [];
   const note = (url: string, request?: Request) => {
     let host = '?';
@@ -206,12 +205,12 @@ export async function openRunContext(browser: Browser, options: RunContextOption
         await ws.close({ code: 1008, reason: 'domain_not_allowed' });
         return;
       }
-      // Poignée de main = GET http sur le chemin : robots.txt d'abord (1.11).
+      // Poignée de main = GET http sur le chemin : contrôle de l'appelant d'abord.
       const handshake = websocketHandshakeUrl(ws.url());
       const allowed =
-        handshake !== undefined && (await options.checkRequest({ url: handshake, redirect: false, rootUrl: handshake, resourceType: 'WebSocket', mainFrame: false, method: 'GET' }).catch(() => false));
+        handshake !== undefined && (await checkRequest({ url: handshake, redirect: false, rootUrl: handshake, resourceType: 'WebSocket', mainFrame: false, method: 'GET' }).catch(() => false));
       if (!allowed) {
-        await ws.close({ code: 1008, reason: 'robots_disallowed' });
+        await ws.close({ code: 1008, reason: 'request_refused' });
         return;
       }
       ws.connectToServer();
@@ -225,7 +224,7 @@ export async function openRunContext(browser: Browser, options: RunContextOption
     if (metadata !== undefined) await installUserAgentOverride(context, page, userAgent, metadata);
     // La session du contrôle n'est jamais détachée avant la fermeture du contexte : détachée, elle laisserait repartir
     // les requêtes encore suspendues.
-    await installRequestGuard(context, page, (url) => hostAllowed(url, options.allowedHosts, options.allowedHostSuffixes), options.checkRequest);
+    await installRequestGuard(context, page, (url) => hostAllowed(url, options.allowedHosts, options.allowedHostSuffixes), checkRequest);
     context.on('page', (other) => {
       if (other !== page) void other.close().catch(() => undefined);
     });
