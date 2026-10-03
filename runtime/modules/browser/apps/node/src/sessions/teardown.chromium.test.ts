@@ -30,7 +30,7 @@ beforeAll(async () => {
   proxy = await startClosedLaunchProxy();
 });
 /** Montages ouverts par les tests : refermés même quand un test échoue, pour qu'un échec ne laisse ni Chromium ni fichier de Playwright aux tests suivants. */
-const opened: Setup[] = [];
+const opened: { pool: BrowserPool }[] = [];
 afterEach(async () => {
   for (const s of opened.splice(0)) await s.pool.close().catch(() => undefined);
 });
