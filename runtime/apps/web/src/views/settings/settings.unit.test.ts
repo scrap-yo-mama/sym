@@ -191,6 +191,18 @@ describe('Réglages > Modèles IA', () => {
       expect(sent.providers[0]!.models['claude-opus-4-8']).toEqual({ profile, extra_body: { zz: 1 }, price: { in: 4.5, out: 25 } });
     });
 
+    test('UX-17 — vider l’entrée et la sortie d’un modèle déjà prisé envoie price: null (retrait explicite) ; un modèle jamais prisé n’envoie rien', async () => {
+      const body = { ...anthropic, providers: [{ ...anthropic.providers[0], models: { 'claude-opus-4-8': { price: { in: 5, out: 25 } } } }] };
+      const calls = installFakeServer({ 'GET /api/settings/llm': () => json(200, body), 'PUT /api/settings/llm': () => json(200, body) });
+      const settings = useLlmSettings();
+      await settings.load();
+      settings.setModelPrice(0, 'claude-opus-4-8', 'in', '');
+      settings.setModelPrice(0, 'claude-opus-4-8', 'out', '');
+      await settings.save();
+      const sent = calls.find((c) => c.method === 'PUT')?.body as { providers: { models: Record<string, unknown> }[] };
+      expect(sent.providers[0]!.models).toEqual({ 'claude-opus-4-8': { price: null } });
+    });
+
     test('un prix incomplet (entrée sans sortie), négatif ou illisible n’est jamais envoyé : l’enregistrement s’arrête avec un message', async () => {
       const calls = installFakeServer({ 'GET /api/settings/llm': () => json(200, anthropic), 'PUT /api/settings/llm': () => json(200, anthropic) });
       const settings = useLlmSettings();

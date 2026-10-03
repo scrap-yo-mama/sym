@@ -1551,6 +1551,29 @@ describe('réglages de l’admin (08 § 1, § 2, § 7) : secrets en écriture se
     expect((await api(a, 'GET', '/api/settings/llm', '/api/settings/llm')).status).toBe(403);
   });
 
+  test('UX-17 — le prix d’un modèle survit à toute écriture de settings.llm qui ne le mentionne pas ; seul price: null le retire', async () => {
+    const price = { in: 5, out: 25, in_cached: 0.5 };
+    const profile = { tools: true, tool_choice: ['auto'], structured: 'json_schema', cache: false };
+    const provider = { id: 'zz-price', preset: 'custom', base_url: 'http://127.0.0.1:9/v1', api_key: 'zz_test_llm_key_price_0123456789' };
+    const modelsOf = async () => ((await api(admin, 'GET', '/api/settings/llm', '/api/settings/llm')).body['providers'] as { id: string; models: Record<string, Record<string, unknown>> }[]).find((p) => p.id === 'zz-price')?.models;
+    expect((await api(admin, 'PUT', '/api/settings/llm', '/api/settings/llm', { providers: [{ ...provider, models: { 'claude-opus-4-8': { price } } }] })).status).toBe(200);
+    expect(await modelsOf()).toEqual({ 'claude-opus-4-8': { price } });
+    // Console au GET périmé, ou script qui ne pose que le profil : la requête ne parle pas du prix, le prix reste.
+    const { api_key: _key, ...keep } = provider;
+    expect((await api(admin, 'PUT', '/api/settings/llm', '/api/settings/llm', { providers: [{ ...keep, models: { 'claude-opus-4-8': { profile } } }] })).status).toBe(200);
+    expect(await modelsOf()).toEqual({ 'claude-opus-4-8': { price, profile } });
+    // Une requête sans `models` ne touche à rien (déjà le cas) ; une requête qui change le prix le remplace.
+    expect((await api(admin, 'PUT', '/api/settings/llm', '/api/settings/llm', { providers: [keep] })).status).toBe(200);
+    expect(await modelsOf()).toEqual({ 'claude-opus-4-8': { price, profile } });
+    expect((await api(admin, 'PUT', '/api/settings/llm', '/api/settings/llm', { providers: [{ ...keep, models: { 'claude-opus-4-8': { price: { in: 4, out: 20 } } } }] })).status).toBe(200);
+    expect(await modelsOf()).toEqual({ 'claude-opus-4-8': { price: { in: 4, out: 20 }, profile } });
+    // Retrait explicite.
+    expect((await api(admin, 'PUT', '/api/settings/llm', '/api/settings/llm', { providers: [{ ...keep, models: { 'claude-opus-4-8': { price: null } } }] })).status).toBe(200);
+    expect(await modelsOf()).toEqual({ 'claude-opus-4-8': { profile } });
+    // Restaure l'état attendu par les tests suivants (aucun fournisseur de ce test).
+    await api(admin, 'PUT', '/api/settings/llm', '/api/settings/llm', { providers: [] });
+  });
+
   test('sonde « Tester » LLM pendant un changement de fournisseur : le profil relevé n’écrase jamais la nouvelle destination ni sa clé', async () => {
     // Fournisseur lent : la première requête de la sonde attend qu'on la libère ; chaque réponse est un 400 (paramètre non
     // supporté), donc la sonde aboutit et veut écrire son profil.

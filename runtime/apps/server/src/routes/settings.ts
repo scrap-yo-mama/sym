@@ -15,6 +15,7 @@ import { KNOWN_PRICES, LlmError, OpenAICompatTransport, probeCapabilities } from
 import type { FastifyInstance, FastifyReply } from 'fastify';
 import type { ServerContext } from '../context.js';
 import { reasonMessage } from '../rest/shared.js';
+import { mergeModels } from '../llm-models.js';
 import { readValidatedModels } from '../validated-models.js';
 import { iso, UUID } from './account-helpers.js';
 import { audit, notFound, sendError } from './guard.js';
@@ -294,7 +295,7 @@ export function settingsRoutes(app: FastifyInstance, ctx: ServerContext): void {
           base_url: p.base_url,
           ...(p.timeout_ms === undefined ? {} : { timeout_ms: p.timeout_ms }),
           ...(p.max_retries === undefined ? {} : { max_retries: p.max_retries }),
-          models: p.models ?? old?.models ?? {},
+          models: mergeModels(old?.models, p.models),
           api_key_secret_id: keyId!,
           ...(headersId === undefined ? {} : { headers_secret_id: headersId }),
         });
@@ -362,8 +363,8 @@ export function settingsRoutes(app: FastifyInstance, ctx: ServerContext): void {
         await updateSetting<StoredLlm>(ctx, 'llm', (current) => {
           const now = current?.providers.find((x) => x.id === provider.id);
           if (current === null || now === undefined || now.base_url !== provider.base_url || now.api_key_secret_id !== provider.api_key_secret_id) return undefined;
-          const models = { ...(now.models ?? {}) };
-          models[request.body.model] = { ...(models[request.body.model] ?? {}), profile: { ...profile, probed_at: p.probed_at } };
+          // Fusion (UX-17) : le profil relevé s'ajoute au modèle ; son prix et ses autres réglages restent.
+          const models = mergeModels(now.models, { [request.body.model]: { profile: { ...profile, probed_at: p.probed_at } } });
           return { ...current, providers: current.providers.map((x) => (x.id === provider.id ? { ...x, models } : x)) };
         });
         result = { ok: true, tested_at: testedAt, error: null, profile };

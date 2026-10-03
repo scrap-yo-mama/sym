@@ -148,8 +148,8 @@ export function useLlmSettings() {
       if (!(model in models) && inputs.in.trim() === '' && inputs.out.trim() === '') continue;
       const { price: previous, ...rest } = models[model] ?? {};
       if (inputs.in.trim() === '' && inputs.out.trim() === '') {
-        if (Object.keys(rest).length > 0) models[model] = rest;
-        else delete models[model];
+        // Retrait explicite (UX-17) : le serveur fusionne `models[m]` et ne retire un prix que s'il reçoit `price: null`.
+        if (previous) models[model] = { ...rest, price: null };
         continue;
       }
       const price: NonNullable<Schemas['LlmModel']['price']> = { ...(previous ?? {}), in: parsePrice(inputs.in)!, out: parsePrice(inputs.out)! };
