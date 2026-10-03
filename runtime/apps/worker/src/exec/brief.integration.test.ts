@@ -7,6 +7,7 @@
 import { randomUUID } from 'node:crypto';
 import { DomainPacer, generateMasterKey, MasterKey, Secret, type RunExecutor } from '@runtime/core';
 import { normalizeBrief, type InvestigationBrief } from '@runtime/core';
+import { RobotsCache } from '@runtime/core/access';
 import * as net from '@runtime/core/net';
 import { createRun, keyCheck, migrateUp, PgBossJobQueue, PgPacingStore, readBriefForApi, readRun, runQueueDefinition, startInvestigation, storeBrief, withActor } from '@runtime/db';
 import { createLlmClient, type LlmConfig } from '@runtime/llm';
@@ -37,6 +38,13 @@ let client: Client;
 let worker: Worker;
 let fake: FakeProvider;
 let briefReads = 0;
+// Cache robots.txt partagé par le worker de test, vidé avec les compteurs du harnais : chaque bras relit robots.txt
+// (sinon le second bras réutiliserait la lecture du premier et la preuve « robots.txt lu » ne serait pas observable).
+const robotsCache = new RobotsCache();
+const resetFixtures = async () => {
+  await client.reset();
+  robotsCache.clear();
+};
 
 const base = (host: string) => `http://${host}:${client.server.port}`;
 
@@ -109,11 +117,12 @@ beforeAll(async () => {
   const pacer = new DomainPacer(new PgPacingStore(pool));
   const llm = { config: async () => llmConfig(), client: (config: LlmConfig) => createLlmClient(config) };
   const quality = { judgeEnabled: async () => false };
-  const strategy = createStrategyRuntime({ pool, guard, pacer, browsers: null, instanceContact: async () => 'mailto:ops@zz-test.example', version: '9.9.9', quality });
+  const strategy = createStrategyRuntime({ pool, guard, pacer, browsers: null, robotsCache, instanceContact: async () => 'mailto:ops@zz-test.example', version: '9.9.9', quality });
   const investigation = createInvestigationExecutor({
     pool,
     guard,
     pacer,
+    robotsCache,
     browsers: null,
     strategy,
     llm,
@@ -146,7 +155,7 @@ afterAll(async () => {
 
 beforeEach(async () => {
   fake.reset();
-  await client.reset();
+  await resetFixtures();
   resolverLog.length = 0;
   briefReads = 0;
 });
@@ -159,7 +168,7 @@ describe('dossier d’enquête dans l’enquête (2.14)', () => {
     const runPlain = await investigate(plain);
     expect(runPlain).toMatchObject({ state: 'succeeded', strategy_version: 1 });
     const reconPlain = (await events(runPlain.id)).find((e) => e.kind === 'reconnaissance.finished')!.payload;
-    await client.reset();
+    await resetFixtures();
     fake.reset();
     resolverLog.length = 0;
     briefReads = 0;
