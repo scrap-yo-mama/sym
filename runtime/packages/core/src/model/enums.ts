@@ -18,7 +18,8 @@ export type Execution = (typeof EXECUTIONS)[number];
 export const NETWORKS = ['direct', 'dc_proxy', 'res_proxy', 'tunnel'] as const;
 export type Network = (typeof NETWORKS)[number];
 
-export const STRATEGY_CREATORS = ['investigation', 'repair', 'user', 'revert', 'import'] as const;
+/** `recompile` : recompilation à la demande après la modification d'une règle (18 §4.8, tâche 2.10). */
+export const STRATEGY_CREATORS = ['investigation', 'repair', 'user', 'revert', 'import', 'recompile'] as const;
 export type StrategyCreator = (typeof STRATEGY_CREATORS)[number];
 
 /** Une trace E6 est-elle compilable en E5 (tâche 2.13, 19b §1) ? `no` : seul l'agent instruit (opt-in) la rejoue. */

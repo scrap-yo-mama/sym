@@ -22,7 +22,7 @@ export type RunTarget = {
     readonly requires: { readonly session_domain?: string | null; readonly tunnel?: boolean };
     /** `apis.requires_session` : l'API exige la session (l'identité) de l'utilisateur (C2, 04 §3.2). */
     readonly requiresSession: boolean;
-    /** `apis.instructed_mode` (2.13) : opt-in explicite de l'agent instruit (étapes confirmées, déclencheur de 0019). */
+    /** `apis.instructed_mode` (2.13) : opt-in explicite de l'agent instruit (étapes confirmées, déclencheur de 0021). */
     readonly instructedMode: boolean;
     /** `apis.description` : demande du propriétaire, source de la stratégie pour la réparation (04 §5 étape 1). */
     readonly description: string;

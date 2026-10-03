@@ -42,6 +42,7 @@ import {
   type AgentRunResult,
   type AgentTraceStep,
   type AgentSpec,
+  type AgentTaskRules,
   type HybridSpec,
   type ItemPolicy,
 } from '@runtime/core';
@@ -240,6 +241,11 @@ export type AgentFetchOptions = {
   readonly cost?: AttemptCost;
   /** robots.txt (1.11, INV11) : chaque requête du navigateur (`fetch_in_page`) ; la session réseau a le sien (`checkUrl`). */
   readonly access: AccessCheck;
+  /**
+   * Règles embarquées (tâche 2.10, 18 §4.5) : texte reconstruit par l'appelant depuis les références de `spec.rules`
+   * (`rule_file_versions` du propriétaire, empreintes vérifiées) ; absent, aucune règle injectée.
+   */
+  readonly rulesText?: string;
 };
 
 async function fetchPage(options: AgentFetchOptions): Promise<HttpExchange> {
@@ -309,6 +315,7 @@ export async function runAgentFetchExecutor(options: AgentFetchOptions): Promise
   try {
     const out = await extractRecordsWithLlm(options.llm, {
       instruction: options.spec.instruction,
+      ...(options.rulesText === undefined || options.rulesText === '' ? {} : { rules: options.rulesText }),
       pageText: text,
       pageUrl: exchange.url,
       truncated,
@@ -699,6 +706,11 @@ export type AgentOptions = {
    * (`instructed_compile_deferred`). Défaut : vrai (essai de compilation de chaque E6 réussi, 2.4).
    */
   readonly compile?: boolean;
+  /**
+   * Règles embarquées (tâche 2.10, 18 §4.5) : `systemPrompt` reconstruit par l'appelant depuis les références de
+   * `spec.rules` (empreintes vérifiées) et `read_skill` sur les seuls skills référencés, à leur version épinglée.
+   */
+  readonly rules?: AgentTaskRules;
 };
 
 function agentFailure(run: AgentRunResult, cost?: AttemptCost): ExecFailure {
@@ -811,6 +823,9 @@ async function runAgentInSlot(options: AgentOptions, lease: SlotLease): Promise<
         outputSchema: recordsSchema(options.outputSchema) as unknown as Record<string, unknown>,
         allowWriteActions: options.allowWriteActions,
         limits: { maxSteps: options.spec.limits.max_steps, maxDurationMs: options.spec.limits.timeout_ms, maxCostUsd: budget.limitUsd },
+        // Règles embarquées (tâche 2.10, 18 §4.5) : `systemPrompt` de Stagehand ; `read_skill` ne sert que les skills
+        // référencés par la stratégie (version épinglée, empreinte vérifiée), sinon `skill_not_found`.
+        ...(options.rules === undefined ? {} : { rules: options.rules }),
       },
       { model: { modelId, temperature: 0, promptVersion }, signal: AbortSignal.any([options.signal, stop.signal]) },
     );

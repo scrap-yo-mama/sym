@@ -6,7 +6,7 @@ import pg from 'pg';
 import { pino } from 'pino';
 import { describe, expect, test } from 'vitest';
 import { loadWorkerConfig } from '../config.js';
-import { productionExecutorFactory } from './factory.js';
+import { INVESTIGATION_LLM_ROLES, productionExecutorFactory } from './factory.js';
 
 const logger = pino({ level: 'silent' });
 const checked = { status: 'ok' as const, version: 1, fingerprint: 'zz_test' };
@@ -147,5 +147,9 @@ describe('productionExecutorFactory', () => {
 
   test('DISABLE_BROWSER invalide → configuration refusée', () => {
     expect(() => loadWorkerConfig(env({ DISABLE_BROWSER: 'peut-être' }))).toThrow(/DISABLE_BROWSER/);
+  });
+
+  test('rôles de l’enquête : sans `judge` (résolu à part, erreurs ignorées) — un rôle judge illisible ne fait jamais échouer l’enquête', () => {
+    expect([...INVESTIGATION_LLM_ROLES]).toEqual(['investigate', 'extract', 'agent']);
   });
 });

@@ -16,11 +16,12 @@ import { useI18n } from 'vue-i18n';
 import { RouterLink } from 'vue-router';
 import LaunchForm from '@/components/api/LaunchForm.vue';
 import RunRepairsPanel from '@/components/api/RunRepairsPanel.vue';
+import RunQualityCard from '@/components/runs/RunQualityCard.vue';
 import ErrorState from '@/components/ErrorState.vue';
 import LoadingState from '@/components/LoadingState.vue';
 import { Button } from '@/components/ui/button';
 import { useApiActions } from '@/composables/useApiActions';
-import { datasetExportUrl, useApiRuns, type RunSummary } from '@/composables/useApiRuns';
+import { datasetExportUrl, useApiRuns, type RunDetail, type RunSummary } from '@/composables/useApiRuns';
 import type { ApiDetail } from '@/composables/useApiDetail';
 import { formatDate, formatDateTime, formatDuration, formatUsd } from '@/lib/display-format';
 import { describeFailureClass, describeReasonCode } from '@/lib/reasons';
@@ -99,6 +100,19 @@ async function showRepairs(run: RunSummary): Promise<void> {
 
 const instructedRunUsd = computed(() => (props.detail.instructed_mode === true ? (props.detail.instructed?.estimated_run_usd ?? null) : undefined));
 
+// Fiche qualité du run et avis consultatif du juge (2.12) : runs de l'appelant seulement.
+const qualityRun = ref<{ run: RunSummary; detail: Pick<RunDetail, 'quality' | 'judge'> } | null>(null);
+const qualityError = ref(false);
+async function showQuality(run: RunSummary): Promise<void> {
+  qualityError.value = false;
+  try {
+    const detail = await runs.quality(run);
+    qualityRun.value = detail === null ? null : { run, detail };
+  } catch {
+    qualityError.value = true;
+  }
+}
+
 const canRelaunch = computed(() => props.detail.status !== 'bloquee' && !props.detail.metadata_only);
 </script>
 
@@ -150,6 +164,7 @@ const canRelaunch = computed(() => props.detail.status !== 'bloquee' && !props.d
                   </template>
                   <Button v-if="canRelaunch && runs.isOwn(run)" variant="outline" size="xs" @click="startRelaunch(run)">{{ t('actions.relaunch') }}</Button>
                   <Button v-if="!detail.metadata_only && runs.isOwn(run)" variant="outline" size="xs" data-testid="show-repairs" @click="showRepairs(run)">{{ t('repairs.show') }}</Button>
+                  <Button v-if="!detail.metadata_only && runs.isOwn(run) && run.state === 'succeeded'" variant="outline" size="xs" data-testid="show-quality" @click="showQuality(run)">{{ t('quality.show') }}</Button>
                 </div>
               </td>
             </tr>
@@ -162,6 +177,9 @@ const canRelaunch = computed(() => props.detail.status !== 'bloquee' && !props.d
         {{ t('launch.started') }} <RouterLink :to="`/runs/${relaunchedRun}`" class="underline underline-offset-4">{{ t('launch.followRun') }}</RouterLink>
       </p>
     </section>
+
+    <p v-if="qualityError" role="alert" class="sym-error">{{ t('quality.empty') }}</p>
+    <RunQualityCard v-if="qualityRun" :quality="qualityRun.detail.quality ?? null" :judge="qualityRun.detail.judge ?? null" :degraded-reasons="qualityRun.run.degraded_reasons" />
 
     <section v-if="relaunch" aria-labelledby="runs-relaunch" class="rounded-lg border p-4">
       <h2 id="runs-relaunch" class="sr-only">{{ t('launch.relaunchTitle') }}</h2>

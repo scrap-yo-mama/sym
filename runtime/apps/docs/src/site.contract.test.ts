@@ -63,7 +63,9 @@ describe('assert_docs_site_builds : le site se construit et passe ses contrôles
 
   test('la référence REST construite liste les opérations disponibles et en préparation', () => {
     const html = readFileSync(join(dist, 'reference/rest.html'), 'utf8');
-    expect(html).toContain('en préparation (3.12)');
+    // 3.12 a livré les dernières opérations en préparation (export, import, OpenAPI par API).
+    expect(html).not.toContain('en préparation (3.12)');
+    expect(html).toContain('op-exportapi');
     expect(html).toContain('disponible');
   });
 });

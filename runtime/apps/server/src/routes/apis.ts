@@ -22,6 +22,7 @@ import {
   createRun,
   InvestigationStateError,
   removeScheduleMirror,
+  resolvedRulesPreview,
   StorageFullError,
   startInvestigation,
   validateInvestigationSchema,
@@ -164,7 +165,7 @@ const listQuery = {
 const pageQuery = { type: 'object', properties: { cursor: { type: 'string', maxLength: 512 }, limit: { type: 'integer', minimum: 1, maximum: 200 } } } as const;
 
 /** Erreur d'état d'enquête → code HTTP (05 § 4.3). */
-function investigationError(reply: FastifyReply, error: InvestigationStateError): FastifyReply {
+export function investigationError(reply: FastifyReply, error: InvestigationStateError): FastifyReply {
   const status = error.code === 'api_not_found' ? 404 : error.code === 'invalid_request' || error.code === 'invalid_schema' ? 400 : 409;
   return error.code === 'api_not_found' ? notFound(reply) : sendError(reply, status, error.code, error.message);
 }
@@ -194,7 +195,7 @@ async function investigationOf(ctx: ServerContext, actor: Actor, apiId: string):
 }
 
 /** Corps de `ApiCreated` (05 § 4.1) : phase, schéma proposé et échantillon (propriétaire), rapport d'accès, run. */
-async function createdView(ctx: ServerContext, actor: Actor, apiId: string, runId: string) {
+export async function createdView(ctx: ServerContext, actor: Actor, apiId: string, runId: string) {
   return withActor(ctx.pool, actor, async (db) => {
     const api = await readApiById(db, apiId);
     const proposal = await latestProposal(db, apiId);
@@ -605,6 +606,19 @@ export function apiRoutes(app: FastifyInstance, ctx: ServerContext): void {
         throw error;
       }
       return runResponse(ctx, request, reply, actor, runId, waitSecondsOf(ctx, request.query.wait));
+    },
+  );
+
+  // ——— Règles résolues (tâche 2.10, 19 § 2, 19b § 2) ———
+  // Ensemble résolu au plafond du rôle (`investigate`, `repair` : 3 000 jetons ; `embedded` : 1 000), noms, versions,
+  // empreintes, jetons et retraits ; jamais le contenu. Propriétaire de l'API seul : 404 uniforme sinon (INV12), même
+  // pour un membre qui voit une API partagée d'instance.
+  app.get<{ Params: { slug: string }; Querystring: { role?: 'investigate' | 'repair' | 'embedded' } }>(
+    '/api/apis/:slug/resolved-rules',
+    { schema: { querystring: { type: 'object', additionalProperties: false, properties: { role: { type: 'string', enum: ['investigate', 'repair', 'embedded'] } } } } },
+    async (request, reply) => {
+      const view = await resolvedRulesPreview(ctx.pool, { userId: request.actor!.userId, slug: request.params.slug, role: request.query.role ?? 'investigate' });
+      return view === null ? notFound(reply) : view;
     },
   );
 

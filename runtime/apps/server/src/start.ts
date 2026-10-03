@@ -28,6 +28,7 @@ import {
 import type { FastifyBaseLogger, FastifyInstance } from 'fastify';
 import pg from 'pg';
 import { buildServer } from './app.js';
+import { createMcpRuntime, type McpListenTuning } from './mcp/runtime.js';
 import { createAuth } from './auth/better-auth.js';
 import { readSecuritySettings } from './auth/security-settings.js';
 import { loadServerConfig, type ServerConfig } from './config.js';
@@ -58,6 +59,10 @@ export type PrepareOptions = {
   tunnel?: { pollMs?: number; revalidateMs?: number; idleMs?: number };
   /** API REST : relecture des attentes et du flux SSE, ping, plafond de flux (tests ; défauts de production). */
   rest?: { pollMs?: number; pingMs?: number; maxStreamsPerUser?: number; revalidateMs?: number };
+  /** Serveur MCP : relecture et plafonds des flux subscriptions/listen (tests ; défauts de production). */
+  mcp?: McpListenTuning;
+  /** Statut « modèle validé » : autre fichier que eval/validated-models.json (tests). */
+  validatedModelsFile?: URL | string;
 };
 
 /** Files que le `server` alimente (runs, planifications, livraisons de webhooks, alertes) : créées si elles manquent. */
@@ -201,8 +206,10 @@ export async function prepareServer(env: NodeJS.ProcessEnv = process.env, option
         maxActiveRunsPerUser: config.rest.maxActiveRunsPerUser,
         maxRunsPerKeyPerMinute: config.rest.maxRunsPerKeyPerMinute,
       },
+      mcp: config.mcp.disabled ? null : createMcpRuntime(pool, config.mcp, options.mcp),
       ...(options.extraCa ? { extraCa: options.extraCa } : {}),
       ...(options.oidcAllowHttp ? { oidcAllowHttp: true } : {}),
+      ...(options.validatedModelsFile === undefined ? {} : { validatedModelsFile: options.validatedModelsFile }),
       // Passerelle tunnel WSS (07 § 6) : LISTEN sur le canal de cette instance, démarrée avant l'écoute HTTP.
       tunnel: config.tunnel.disabled
         ? null

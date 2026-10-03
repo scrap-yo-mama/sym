@@ -205,6 +205,12 @@ export async function runDeclarative(options: DeclarativeRunOptions): Promise<De
     /** `infinite_scroll` : la prochaine « page » est un défilement de la page chargée, pas une requête de plus. */
     let scrolling = false;
     const scrollSeen = new ScrollTracker();
+    /**
+     * Pagination par paramètre (`page_param`, `offset`) : contenu de la page précédente. Une page identique à la précédente
+     * veut dire que le site ignore le paramètre (pagination changée côté site) : casse `extraction` (réparation), jamais une
+     * sortie pleine de doublons jusqu'au plafond dur rendue comme un succès (faux succès, 15 §11).
+     */
+    let previousPage: string | undefined;
     const scrollVia: Transport | undefined = options.scroll === undefined ? undefined : (_request, sig) => options.scroll!(sig);
     /** Preuve d'une sortie réussie : première page aux enregistrements écartés, sinon la dernière page lue. */
     let rejectedPage: HttpExchange | undefined;
@@ -239,6 +245,11 @@ export async function runDeclarative(options: DeclarativeRunOptions): Promise<De
       }
       // Le DOM d'un flux à défilement est cumulatif : seuls les enregistrements jamais vus sont de cette « page ».
       const got = out.ok ? (pagination?.type === 'infinite_scroll' ? scrollSeen.fresh(out.records) : out.records) : [];
+      if ((pagination?.type === 'page_param' || pagination?.type === 'offset') && got.length > 0) {
+        const content = JSON.stringify(got);
+        if (content === previousPage) return failed({ failure_class: 'extraction', retryable: false, detail: 'pagination_repeated_page' });
+        previousPage = content;
+      }
       escalated ||= out.ok && out.escalated;
       if (rejectedPage === undefined && out.ok && out.attempts[out.source_index]?.problems.some((p) => p.record !== null) === true) rejectedPage = exchange;
       for (const r of got) records.push(r);

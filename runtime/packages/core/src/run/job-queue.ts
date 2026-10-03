@@ -107,6 +107,8 @@ export type AttemptRecord = {
   engine?: string | null;
   /** Essai d'une reprise par étape (2.13, 19 §4) : étape, niveau (1 à 3), issue ; jetons et coût de l'essai. */
   step?: { id: string; level: 1 | 2 | 3 | null; outcome: StepOutcome };
+  /** `nom@version` des règles qui ont placé l'essai (18 §4.6, tâche 2.10). */
+  rule_refs?: readonly string[];
 };
 
 /** Fin d'un run décidée par l'exécuteur. */

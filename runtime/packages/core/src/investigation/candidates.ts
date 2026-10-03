@@ -92,3 +92,29 @@ export function retainedStrategy(entry: Pick<PlanEntry, 'execution' | 'network' 
   if (compiled === undefined || compiled === null) return { ok: false, reason: 'not_compilable' };
   return { ok: true, execution: 'hybrid', network: entry.network, spec: compiled, estCostUsd: measuredUsd };
 }
+
+/** Octets supposés d'une page de données importée (aucune reconnaissance n'a mesuré la réponse) : chiffre les proxys. */
+const IMPORTED_BYTES_ESTIMATE = 200_000;
+
+/**
+ * Plan d'essai d'une stratégie IMPORTÉE (tâche 3.12, 16 § 6) : son niveau d'exécution, croisé avec les réseaux AUTORISÉS
+ * par la politique de l'API importée (jamais élargis), chiffré et trié par coût croissant (INV2). JAMAIS le tunnel, même
+ * si la politique l'admet : la spécification (URL, en-têtes, paramètres) vient d'un fichier écrit par un tiers, et le
+ * tunnel la jouerait avec les cookies et l'identité de l'utilisateur (INV5). Sans Chromium, E2 et E3 n'ont donc aucun
+ * essai. Source `import`.
+ */
+export function buildImportedPlan(input: { readonly execution: Execution; readonly spec: Record<string, unknown>; readonly networks: readonly PlanNetwork[]; readonly browser: boolean }): PlanEntry[] {
+  const pagination = input.spec['pagination'];
+  const paginated = typeof pagination === 'object' && pagination !== null && (pagination as { type?: unknown }).type !== 'none';
+  const entries: PlanEntry[] = input.networks
+    .filter((n) => n.mode !== 'tunnel' && (input.execution === 'fetch' || input.browser))
+    .map((n) => ({
+      execution: input.execution,
+      network: n.mode,
+      source: 'import',
+      est_cost_usd: estimateCostUsd(input.execution, n.mode, { bytes: IMPORTED_BYTES_ESTIMATE, pages: 1, perGbUsd: n.perGbUsd, llmPrice: null }),
+      spec: input.spec,
+      paginated,
+    }));
+  return orderTrials(entries, ['import']) as PlanEntry[];
+}

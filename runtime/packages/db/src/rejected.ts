@@ -7,9 +7,10 @@
 // - sorties saines récentes (items livrés des derniers runs réussis) : référence de la réparation (04 §5 étape 2) ;
 // - historique de volume (items EXTRAITS = livrés + écartés) pour `volume_anomaly` (04 §6) ;
 // - version vN+1 issue d'une réparation (`created_by = repair`, patch et version parente).
-import type { Execution, Network, QuarantineSummary, RejectionReason } from '@runtime/core';
+import type { Execution, Network, QuarantineSummary, RejectionReason, StrategyRuleRow, StrategySource } from '@runtime/core';
 import type pg from 'pg';
 import { withActor, type DbActor } from './rls.js';
+import { recordStrategySource } from './rules.js';
 
 type Queryable = Pick<pg.ClientBase, 'query'>;
 
@@ -121,7 +122,19 @@ export async function readVolumeHistory(pool: pg.Pool, args: { apiId: string; ow
  */
 export async function saveRepairedStrategy(
   pool: pg.Pool,
-  args: { apiId: string; ownerId: string; parentVersion: number; execution: Execution; network: Network; spec: unknown; patch: unknown[] | null; estCostUsd: number | null },
+  args: {
+    apiId: string;
+    ownerId: string;
+    parentVersion: number;
+    execution: Execution;
+    network: Network;
+    spec: unknown;
+    patch: unknown[] | null;
+    estCostUsd: number | null;
+    /** Source de vN+1 (tâche 2.10, 18 §4.6) : règles À JOUR injectées dans le prompt de réparation. */
+    source?: StrategySource;
+    rules?: readonly StrategyRuleRow[];
+  },
 ): Promise<{ version: number; promoted: boolean }> {
   return withActor(pool, { userId: args.ownerId, role: 'member' }, async (tx) => {
     const locked = await tx.query<{ current_strategy_version: number | null; project_id: string }>('SELECT current_strategy_version, project_id FROM apis WHERE id = $1 AND owner_id = $2 FOR UPDATE', [
@@ -137,6 +150,7 @@ export async function saveRepairedStrategy(
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'repair', $9, $10::jsonb)`,
       [args.apiId, version, args.ownerId, current.project_id, args.execution, args.network, JSON.stringify(args.spec), args.estCostUsd, args.parentVersion, args.patch === null ? null : JSON.stringify(args.patch)],
     );
+    if (args.source !== undefined) await recordStrategySource(tx, { apiId: args.apiId, ownerId: args.ownerId, version, source: args.source, rules: args.rules ?? [] });
     const promoted = current.current_strategy_version === args.parentVersion;
     // Une version compilée (rejouée sans LLM) devient courante : le mode « agent instruit » n'a plus lieu d'être (2.13).
     if (promoted) await tx.query('UPDATE apis SET current_strategy_version = $2, instructed_mode = false WHERE id = $1', [args.apiId, version]);

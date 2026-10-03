@@ -57,3 +57,15 @@ test('key-check avec une MASTER_KEY de 31 octets : refus nommant keygen, sans la
   expect(res.out).toMatch(/Refus de démarrer : MASTER_KEY invalide.*runtime keygen/);
   expect(res.out).not.toContain(value);
 });
+
+test('reset-link : PUBLIC_URL avec identifiants, chemin ou requête refusée (code 2) avant toute connexion, sans divulguer la valeur (F-20261002-12)', async () => {
+  for (const bad of ['https://u:zz-secret@runtime.example.test', 'https://runtime.example.test/zz-secret', 'https://runtime.example.test/.', 'https://runtime.example.test/?k=zz-secret']) {
+    const res = await run(['owner:reset-link'], {
+      env: { DATABASE_URL: 'postgres://u:p@db.example:5432/x', PUBLIC_URL: bad },
+      probe: () => Promise.reject(new Error('la sonde ne doit pas être appelée')),
+    });
+    expect(res.code, bad).toBe(2);
+    expect(res.out, bad).toMatch(/^Refus : PUBLIC_URL invalide/);
+    expect(res.out, bad).not.toContain('zz-secret');
+  }
+});

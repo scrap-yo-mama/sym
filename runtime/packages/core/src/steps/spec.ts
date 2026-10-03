@@ -41,7 +41,7 @@ export const STEP_REPAIR_DEFAULTS = Object.freeze({
 export type StepAlternate = { readonly role: StepRole; readonly name: string } | { readonly text: string };
 export type StepTarget = ({ readonly role: StepRole; readonly name: string } | { readonly text: string }) & { readonly alternates: readonly StepAlternate[] };
 export type StepAgentBudget = { readonly max_steps: number; readonly max_usd: number };
-export type CompiledWith = { readonly rules: readonly string[]; readonly model_id: string | null; readonly at: string | null };
+export type StepsCompiledWith = { readonly rules: readonly string[]; readonly model_id: string | null; readonly at: string | null };
 
 export type StepDef = {
   readonly id: string;
@@ -60,7 +60,7 @@ export type StepDef = {
   readonly side_effect: StepSideEffect;
   readonly params: readonly string[];
   readonly agent_budget: StepAgentBudget;
-  readonly compiled_with: CompiledWith;
+  readonly compiled_with: StepsCompiledWith;
 };
 
 export type StepsSpec = {
@@ -200,7 +200,7 @@ function checkBudget(c: Checker, v: unknown, path: string): StepAgentBudget {
   };
 }
 
-function checkCompiledWith(c: Checker, v: unknown, path: string): CompiledWith {
+function checkCompiledWith(c: Checker, v: unknown, path: string): StepsCompiledWith {
   if (v === undefined || v === null) return { rules: [], model_id: null, at: null };
   const w = isRecord(v) ? v : {};
   c.keys(w, path, ['rules', 'model_id', 'at']);

@@ -134,6 +134,107 @@
         "scripts/**/*.ts",
         "content/.vitepress/**/*.ts"
       ]
+    },
+    "modules/browser": {
+      "entry": [
+        "scripts/*.ts",
+        "bench/measure.ts",
+        "bench/report.ts",
+        "tests/**/*.test.ts",
+        "fixtures/**/*.test.ts"
+      ],
+      "project": [
+        "scripts/**/*.ts",
+        "bench/**/*.ts",
+        "fixtures/**/*.ts",
+        "tests/**/*.ts"
+      ]
+    },
+    "modules/browser/apps/gateway": {
+      "entry": [
+        "src/main.ts",
+        "src/**/*.test.ts",
+        "test/**/*.ts"
+      ],
+      "project": [
+        "src/**/*.ts",
+        "test/**/*.ts"
+      ],
+      "ignoreIssues": {
+        "src/**/index.ts": [
+          "exports",
+          "types"
+        ]
+      }
+    },
+    "modules/browser/apps/node": {
+      "entry": [
+        "src/main.ts",
+        "src/**/*.test.ts",
+        "src/testing/*.ts"
+      ],
+      "project": [
+        "src/**/*.ts"
+      ],
+      "ignoreIssues": {
+        "src/**/index.ts": [
+          "exports",
+          "types"
+        ]
+      }
+    },
+    "modules/browser/apps/console": {
+      "entry": [
+        "src/**/*.test.ts",
+        "e2e/*.e2e.ts"
+      ],
+      "project": [
+        "src/**/*.{ts,vue}",
+        "e2e/**/*.ts",
+        "*.ts"
+      ],
+      "ignoreDependencies": [
+        "tailwindcss"
+      ]
+    },
+    "modules/browser/packages/core": {
+      "entry": [
+        "src/bin.ts",
+        "src/**/*.test.ts",
+        "src/**/*.testkit.ts"
+      ],
+      "project": [
+        "src/**/*.ts"
+      ],
+      "ignoreIssues": {
+        "src/**/index.ts": [
+          "exports",
+          "types"
+        ]
+      }
+    },
+    "modules/browser/packages/db": {
+      "entry": [
+        "src/**/*.test.ts"
+      ],
+      "project": [
+        "src/**/*.ts"
+      ]
+    },
+    "modules/browser/packages/sdk": {
+      "entry": [
+        "src/**/*.test.ts",
+        "src/testing/*.ts"
+      ],
+      "project": [
+        "src/**/*.ts"
+      ],
+      "ignoreIssues": {
+        "src/**/index.ts": [
+          "exports",
+          "types"
+        ]
+      }
     }
   }
 }

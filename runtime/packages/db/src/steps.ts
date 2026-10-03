@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// Reprise par étape et agent instruit (tâche 2.13, migration 0019, 19 §4, 19b §1) : écritures et lectures comme le
+// Reprise par étape et agent instruit (tâche 2.13, migration 0021, 19 §4, 19b §1) : écritures et lectures comme le
 // PROPRIÉTAIRE de l'API (RLS, INV12).
 // - vN+1 d'une reprise par étape : courante seulement si les portes V0 à V5 passent ; sinon archivée non courante
 //   (`archive_reason = repair_not_validated`), la version courante est gardée ;
 // - `instructed_mode` : opt-in explicite, jamais vrai sans étapes instruites confirmées par un humain sur leur empreinte
-//   exacte (le déclencheur de 0019 le refuse aussi) ; une confirmation porte l'empreinte des étapes AFFICHÉES ;
+//   exacte (le déclencheur de 0021 le refuse aussi) ; une confirmation porte l'empreinte des étapes AFFICHÉES ;
 // - journal par étape (`run_attempts.step_*`) pour le panneau « Reprises ».
 import { canActivateInstructedMode, estimateInstructedRunUsd, instructedStepsSha256, validateInstructedSteps, type InstructedActivation, type InstructedStep, type Network, type StepOutcome, type StrategyCompilable } from '@runtime/core';
 import type pg from 'pg';

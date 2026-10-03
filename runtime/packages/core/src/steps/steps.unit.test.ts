@@ -5,7 +5,7 @@
 import { describe, expect, test } from 'vitest';
 import {
   agentToolRegistry,
-  AGENT_PHASES,
+  AGENT_REGISTRY_PHASES,
   canActivateInstructedMode,
   checkElementIdentity,
   checkPost,
@@ -373,7 +373,7 @@ describe('assert_instructed_mode_explicit : agent instruit', () => {
 
 describe('assert_rule_of_two_by_phase (partie agent) et assert_mcp_off_with_session / assert_mcp_off_in_instructed_mode', () => {
   test('registre construit par le code : jamais A, B et C complets ; aucun pont MCP en V1', () => {
-    for (const phase of AGENT_PHASES) {
+    for (const phase of AGENT_REGISTRY_PHASES) {
       const reg = agentToolRegistry(phase);
       expect(ruleOfTwoHolds(reg), phase).toBe(true);
       expect(reg.mcp, phase).toBe(false);

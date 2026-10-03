@@ -248,7 +248,14 @@
     "volume_anomaly": "Volume inhabituel",
     "pagination_short": "Pagination interrompue",
     "slow": "Lent",
-    "cost_anomaly": "Coût inhabituel"
+    "cost_anomaly": "Coût inhabituel",
+    "field_constant": "valeur constante",
+    "pattern_shift": "format changé",
+    "sentinel_values": "valeurs vides",
+    "duplicate_items": "doublons",
+    "new_enum_value": "nouvelle valeur",
+    "prior_refusal": "refus antérieur du domaine",
+    "judge_flag": "avis du juge (consultatif)"
   },
   "failure": {
     "transient": "Problème temporaire",
@@ -300,7 +307,8 @@
     "submitting": "Lancement…",
     "countryInvalid": "Saisis un code pays de 2 lettres, par exemple fr.",
     "descriptionRequired": "Décris ce que l'API doit renvoyer.",
-    "accountRequired": "Confirme l'avertissement ci-dessus pour continuer."
+    "accountRequired": "Confirme l'avertissement ci-dessus pour continuer.",
+    "providerNoticeMany": "{providers} recevront des extraits de trafic nettoyés."
   },
   "investigation": {
     "title": "Enquête sur {domain}",
@@ -614,6 +622,11 @@
         "qwen": "Qwen",
         "openai": "OpenAI",
         "custom": "Personnalisé"
+      },
+      "validation": {
+        "validated": "Modèle validé (banc N2, {date})",
+        "notValidated": "Non validé",
+        "hint": "Mesuré par le banc d’évaluation ; en lecture seule."
       }
     },
     "proxies": {
@@ -775,7 +788,14 @@
     "write_step_broken": "Une étape qui agit sur le site a cassé ; rien n'est réparé seul.",
     "step_cascade": "{n} étapes cassées : une nouvelle enquête est nécessaire.",
     "not_compilable": "Aucune stratégie rejouable sans agent. Le mode « agent instruit » existe, avec un coût à chaque run.",
-    "session_step_broken": "Une étape a cassé sur une page connectée ; aucun agent n'y agit seul."
+    "session_step_broken": "Une étape a cassé sur une page connectée ; aucun agent n'y agit seul.",
+    "field_constant": "Le champ {field} a la même valeur sur tous les items.",
+    "pattern_shift": "Le format du champ {field} a changé ({p} % des items).",
+    "sentinel_values": "{p} % des valeurs de {field} sont vides ou de remplissage.",
+    "duplicate_items": "{p} % des items sont des doublons.",
+    "new_enum_value": "Nouvelle valeur pour {field} : à vérifier.",
+    "prior_refusal": "Ce domaine a déjà refusé l'accès le {date}. Scrapyomama s'arrête.",
+    "judge_flag": "Avis consultatif du juge : {field} paraît faux."
   },
   "reasonLabel": {
     "retried": "Essais répétés",
@@ -1827,6 +1847,41 @@
       "removeGroup": "Retirer le groupe {group}",
       "save": "Enregistrer",
       "notConfigured": "Le SSO n'est pas encore configuré."
+    }
+  },
+  "quality": {
+    "title": "Fiche qualité du run",
+    "summary": "{n} items, {d} doublons",
+    "caption": "Profil de chaque champ, calculé par le code sans IA",
+    "columns": {
+      "field": "Champ",
+      "type": "Type",
+      "fill": "Remplissage",
+      "sentinels": "Vides ou remplissage",
+      "pattern": "Format dominant",
+      "unique": "Valeurs distinctes",
+      "range": "Min – max"
+    },
+    "personal": "personnel : formes seulement",
+    "suspected": "personnel probable : formes seulement",
+    "signals": "Signaux du run",
+    "show": "Voir la fiche qualité",
+    "loading": "Chargement de la fiche qualité…",
+    "empty": "Aucune fiche qualité pour ce run.",
+    "judge": {
+      "title": "Avis du juge",
+      "advisory": "Avis consultatif : le juge n'est pas étalonné.",
+      "unchanged": "Cet avis ne change ni le statut de l'API ni sa version.",
+      "trigger": {
+        "investigation": "à l'enquête",
+        "repair": "à la réparation",
+        "anomaly": "sur anomalie du profil"
+      },
+      "verdict": {
+        "ok": "correct",
+        "wrong": "paraît faux",
+        "unsure": "incertain"
+      }
     }
   }
 }

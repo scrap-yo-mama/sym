@@ -255,7 +255,21 @@ export function checkImageNonRoot(label: string, dockerfile: string, entrypoint?
   return problem === undefined ? [] : [`${root} : deploy/entrypoint.sh, ${problem}`];
 }
 
-/** Garde réelle : tous les workflows, le workflow de release s'il existe, le Dockerfile. */
+/**
+ * Images des modules (ADR 23 ; `modules/<nom>/Dockerfile`, SYM Browser d'abord) : même porte que l'image de SYM, sans
+ * l'exception du point d'entrée root (aucun module ne descend d'uid au démarrage).
+ */
+export function checkModuleImages(root: string): string[] {
+  const modules = join(root, 'modules');
+  if (!existsSync(modules)) return [];
+  return readdirSync(modules, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory() && existsSync(join(modules, entry.name, 'Dockerfile')))
+    .map((entry) => entry.name)
+    .sort()
+    .flatMap((name) => checkImageNonRoot(`modules/${name}/Dockerfile`, readFileSync(join(modules, name, 'Dockerfile'), 'utf8')));
+}
+
+/** Garde réelle : tous les workflows, le workflow de release s'il existe, le Dockerfile de SYM et ceux des modules. */
 export function checkRepo(root: string): string[] {
   const repo = join(root, '..');
   const dir = join(repo, '.github/workflows');
@@ -271,6 +285,7 @@ export function checkRepo(root: string): string[] {
   if (!existsSync(join(dir, 'ci.yml'))) problems.push('.github/workflows/ci.yml : workflow de CI absent');
   problems.push(...checkReleasePleaseConfigs(repo));
   problems.push(...checkImageNonRoot('deploy/Dockerfile', readFileSync(join(root, 'deploy/Dockerfile'), 'utf8'), readFileSync(join(root, 'deploy/entrypoint.sh'), 'utf8')));
+  problems.push(...checkModuleImages(root));
   return problems;
 }
 

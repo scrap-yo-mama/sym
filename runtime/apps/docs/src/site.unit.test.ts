@@ -168,7 +168,10 @@ describe('assert_docs_rest_reference_generated : référence REST depuis l\'Open
 
   test('la page déclare les modes d\'authentification ; une route d\'administration livrée n\'accepte pas de clé d\'API ; une route en préparation est dite « prévue »', () => {
     expect(page).toContain('jamais de scope d\'administration');
-    expect(page).toContain('(prévue)');
+    // La liste d'attente `x-pending` est vide depuis 3.12 : le rendu « prévue » reste éprouvé sur une opération en préparation.
+    const pending = { ...openapi, paths: { '/api/zz-test': { get: { operationId: 'zzTest', tags: ['apis'], summary: 'zz', 'x-pending': '9.9', responses: {} } } } } as unknown as OpenApiDocument;
+    expect(renderRestReference(pending)).toContain('(prévue)');
+    expect(renderRestReference(pending)).toContain('en préparation (9.9)');
     for (const entry of listOperations(openapi).filter((e) => !e.op['x-pending'])) {
       if (entry.path.startsWith('/api/admin/') || entry.path.startsWith('/api/users')) {
         const auth = entry.op.security ?? openapi.security ?? [];

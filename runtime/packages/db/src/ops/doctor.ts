@@ -5,7 +5,7 @@
 // Code de sortie : 0 tout va bien, 1 avertissement, 2 erreur.
 // Limite connue : la compatibilité code / base se réduit à l'écart de version de schéma ; le rapport de compatibilité
 // avant une montée majeure (14 § 6) est reporté à 4.9 (docs/exploitation.md, « Décisions et limites de 4.6 »).
-import { loadKeyring, MasterKeyError, verifyKeyCheck, type KeyCheckRecord } from '@runtime/core';
+import { loadKeyring, MasterKeyError, normalizePublicUrl, PublicUrlError, verifyKeyCheck, type KeyCheckRecord } from '@runtime/core';
 import pg from 'pg';
 import { readBackupDeclaration } from './backup.js';
 import { connectionBudget } from './budget.js';
@@ -83,11 +83,13 @@ const isLoopback = (host: string) => host === 'localhost' || host === '127.0.0.1
 function publicUrlCheck(env: NodeJS.ProcessEnv): DoctorCheck {
   const raw = env['PUBLIC_URL'];
   if (!raw) return check('public_url', 'warn', 'public_url_missing', 'PUBLIC_URL absente de cet environnement : l’extension, le MCP et les cookies `Secure` en dépendent.');
+  // Même jugement qu'au démarrage du serveur : une valeur que loadServerConfig refuse est une erreur ici aussi.
   let url: URL;
   try {
-    url = new URL(raw);
-  } catch {
-    return check('public_url', 'error', 'public_url_invalid', 'PUBLIC_URL illisible : URL http(s) de l’instance attendue (ex. https://runtime.example.org).');
+    url = new URL(normalizePublicUrl(raw));
+  } catch (error) {
+    const message = error instanceof PublicUrlError ? error.message : 'PUBLIC_URL illisible : URL http(s) de l’instance attendue (ex. https://runtime.example.org).';
+    return check('public_url', 'error', 'public_url_invalid', message);
   }
   if (url.protocol === 'https:') return check('public_url', 'ok', 'public_url_https', 'PUBLIC_URL en HTTPS.');
   if (url.protocol === 'http:' && isLoopback(url.hostname)) return check('public_url', 'ok', 'public_url_loopback', 'PUBLIC_URL en HTTP sur la boucle locale (essai en local).');

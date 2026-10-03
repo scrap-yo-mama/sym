@@ -24,8 +24,8 @@ export function reasonMessage(code: string | null | undefined): { code: string; 
 
 export const iso = (d: Date | string | null | undefined): string | null => (d === null || d === undefined ? null : new Date(d).toISOString());
 
-/** Déclencheur d'un run créé par l'API : `ui` pour la console (session), `rest` pour une clé d'API. */
-export const triggerOf = (actor: Actor): RunTrigger => (actor.via === 'ui' ? 'ui' : 'rest');
+/** Déclencheur d'un run créé par l'API : `ui` pour la console (session), `mcp` pour le serveur MCP, `rest` pour une clé d'API. */
+export const triggerOf = (actor: Actor): RunTrigger => (actor.via === 'ui' ? 'ui' : actor.channel === 'mcp' ? 'mcp' : 'rest');
 
 /** Fenêtre de la limite par clé d'API (08b § 3). */
 const KEY_WINDOW_SECONDS = 60;
@@ -101,7 +101,7 @@ export function waitSecondsOf(ctx: ServerContext, ...candidates: (number | undef
 export const RESPONSIBLE_USE_VERSION = '2026-10-01';
 
 /** L'utilisateur a coché « j'ai lu » pour la version courante de la page « Usage responsable ». */
-async function responsibleUseAcked(ctx: ServerContext, userId: string): Promise<boolean> {
+export async function responsibleUseAcked(ctx: ServerContext, userId: string): Promise<boolean> {
   const { rowCount } = await ctx.pool.query('SELECT 1 FROM responsible_use_acks WHERE user_id = $1 AND version = $2', [userId, RESPONSIBLE_USE_VERSION]);
   return (rowCount ?? 0) > 0;
 }

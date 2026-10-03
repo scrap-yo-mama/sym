@@ -19,6 +19,8 @@ Un seul point d'entrée, `exports["."]` = `dist/index.js` (types `dist/index.d.t
 - Garde-fous : `assertStagehandLocalOnly`, `STAGEHAND_EXCLUDED_TOOLS`, `toolsOutsideClosedList`, `AgentToolsetNotClosedError`.
 - Extraction et enquête : `extractRecordsWithLlm`, `runHybridSteps`, `proposeInvestigation`, `installSemanticRecorder`,
   `sanitizeModelPrompt`, versions de prompts (`*PromptVersion`).
+- Règles Markdown (tâche 2.10) : `readSkillsPhase` et `renderSkillBodies` (outil `read_skill` de nos prompts),
+  `stagehandAgentConfig` (`systemPrompt`, `tools: { read_skill }`, aucune intégration MCP).
 
 Les cassettes d'enregistrement (`cassettes/`) servent aux tests de contrat, jamais à un appel LLM réel.
 
@@ -50,5 +52,6 @@ Tests nommés présents dans ce dossier (table : `runtime/tests/invariants.json`
 - `assert_llm_redaction`, `assert_llm_prompts_not_logged` : aucun secret ni prompt dans les journaux.
 - `assert_e4_irregular_html` : l'extraction E4 tient sur du HTML irrégulier.
 - `assert_stagehand_selfheal_off`, `assert_step_agent_budget`, `assert_step_intent_untrusted` : reprise par étape (2.13).
+- `assert_stagehand_no_integrations` : Stagehand reçoit les règles en `systemPrompt`, `read_skill` en outil, jamais de client MCP.
 
 E6 (`agent`) est limité au serveur : jamais en tunnel.

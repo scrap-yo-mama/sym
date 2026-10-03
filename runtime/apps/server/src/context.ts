@@ -5,6 +5,7 @@ import type { SsrfGuard } from '@runtime/core/net';
 import type { KeyCheckResult, SecretStore } from '@runtime/db';
 import type pg from 'pg';
 import type { Auth } from './auth/better-auth.js';
+import type { McpRuntime } from './mcp/runtime.js';
 import type { MetricsCollector } from './metrics.js';
 import type { TunnelGateway } from './tunnel/gateway.js';
 
@@ -61,6 +62,10 @@ export type ServerContext = {
   jobs: () => Promise<JobQueue>;
   /** Bornes de l'API REST (05 § 2) et du flux SSE (06 § 3). */
   rest: RestLimits;
+  /** Serveur MCP (tâche 3.2) ; null : `DISABLE_MCP` (aucune route /mcp). */
+  mcp: McpRuntime | null;
+  /** Fichier du statut « modèle validé » (eval/validated-models.json, 15 § 11) ; tests : un autre fichier. */
+  validatedModelsFile?: URL | string;
 };
 
 type RestLimits = {
