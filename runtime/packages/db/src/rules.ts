@@ -492,7 +492,7 @@ export async function requestRecompile(
 export async function readSourceBase(
   pool: pg.Pool,
   args: { readonly apiId: string; readonly ownerId: string; readonly version: number },
-): Promise<{ readonly request: StrategySource['request']; readonly decisions: readonly string[]; readonly investigation_id: string | null } | null> {
+): Promise<{ readonly request: StrategySource['request']; readonly decisions: readonly string[]; readonly investigation_id: string | null; readonly brief?: StrategySource['brief'] } | null> {
   return withActor(pool, { userId: args.ownerId, role: 'member' }, async (tx) => {
     const { rows } = await tx.query<{ source: StrategySource | null; investigation: Partial<InvestigationState> | null }>(
       'SELECT s.source, a.investigation FROM apis a LEFT JOIN strategy_versions s ON s.api_id = a.id AND s.version = $3 WHERE a.id = $1 AND a.owner_id = $2',
@@ -500,7 +500,8 @@ export async function readSourceBase(
     );
     const row = rows[0];
     if (row === undefined) return null;
-    if (row.source !== null) return { request: row.source.request, decisions: row.source.decisions, investigation_id: row.source.investigation_id };
+    // Dossier d'enquête (2.14, 19c § 4) : la réparation et la recompilation reprennent la version consultée par vN.
+    if (row.source !== null) return { request: row.source.request, decisions: row.source.decisions, investigation_id: row.source.investigation_id, ...(row.source.brief === undefined ? {} : { brief: row.source.brief }) };
     const request = row.investigation?.request;
     if (request === undefined) return null;
     return { request: { description: request.description, url: request.url, example_output_ref: null }, decisions: [], investigation_id: null };
@@ -517,6 +518,8 @@ export function buildStrategySource(args: {
   readonly decisions?: readonly string[];
   readonly rows: readonly StrategyRuleRow[];
   readonly exampleOutputRef?: string | null;
+  /** Dossier d'enquête consulté (19c § 4) ; absent : la version n'en a lu aucun. */
+  readonly brief?: StrategySource['brief'];
 }): StrategySource {
   return {
     request: { description: args.description, url: args.url, example_output_ref: args.exampleOutputRef ?? null },
@@ -525,6 +528,7 @@ export function buildStrategySource(args: {
     decisions: [...(args.decisions ?? [])],
     rules: sourceRules(args.rows),
     reason: args.reason,
+    ...(args.brief === undefined ? {} : { brief: args.brief }),
   };
 }
 

@@ -85,6 +85,11 @@ export type RepairArgs = {
   /** Règles résolues et liste des skills (`renderRulesPrompt`), puis skills lus (`renderSkillBodies`). */
   readonly rules?: string;
   readonly skills?: string;
+  /**
+   * Dossier d'enquête de l'IA de l'utilisateur (tâche 2.14, 19c § 4) déjà rendu (`renderAgentBrief`) : la réparation
+   * recompile depuis la source, dossier compris ; place fixe juste avant la mémoire du catalogue.
+   */
+  readonly agentBrief?: string;
   /** Dossier de mémoire du catalogue (tâche 2.12) déjà rendu : place fixe, avant les preuves (la page). */
   readonly catalogMemory?: string;
   /** Registre des valeurs `x-personal` de l'appel (couche 1 sur le texte libre), quand l'appelant en a un. */
@@ -121,6 +126,7 @@ export function repairMessages(args: RepairArgs, token = randomBytes(12).toStrin
     `FAILURE: ${JSON.stringify({ class: args.failure.failure_class, code: args.failure.detail })}`,
     `PREVIOUS PROPOSALS REFUSED: ${JSON.stringify(args.refused.slice(0, 10))}`,
     `TOKEN: ${token}`,
+    ...(args.agentBrief === undefined || args.agentBrief === '' ? [] : [args.agentBrief.replace(/untrusted_evidence/gi, 'untrusted-evidence')]),
     ...(args.catalogMemory === undefined || args.catalogMemory === '' ? [] : [args.catalogMemory.replace(/untrusted_evidence/gi, 'untrusted-evidence')]),
     `<${tag}>`,
     ...observed,

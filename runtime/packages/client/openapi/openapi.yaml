@@ -950,6 +950,26 @@ paths:
           $ref: '#/components/responses/Error'
         '404':
           $ref: '#/components/responses/Error'
+  /api/apis/{slug}/brief:
+    get:
+      operationId: getApiBrief
+      tags: [apis]
+      summary: Indices du dossier d'enquête de l'API (état, raison, coût, version ; 19c § 7) ; propriétaire seulement, aucun texte du dossier
+      parameters:
+        - $ref: '#/components/parameters/Slug'
+      responses:
+        '200':
+          description: Dernière version du dossier (comptes), faits du code par indice, version du dossier lue par chaque version de stratégie.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiBriefView'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
   /api/apis/{slug}/status-events:
     get:
       operationId: listStatusEvents
@@ -3876,6 +3896,179 @@ components:
         account_site_acknowledged:
           description: Avertissement A11 confirmé (site à compte, 06 § 2).
           type: boolean
+        brief:
+          $ref: '#/components/schemas/InvestigationBrief'
+    InvestigationBrief:
+      description: >-
+        Dossier d'enquête facultatif (19c § 9.1, objet fermé) : indices typés avec provenance, essais, notes, questions.
+        SYM vérifie chaque indice et peut l'ignorer ; il n'élargit jamais l'accès ni les budgets. 16 000 octets au plus,
+        jamais tronqué (400 brief_too_large) ; clé inconnue : 400 invalid_brief ; cookie, jeton ou URL signée : 400 secret_in_brief.
+      type: object
+      additionalProperties: false
+      properties:
+        v:
+          const: 1
+        notes:
+          type: string
+          maxLength: 2000
+        hints:
+          type: array
+          maxItems: 20
+          items:
+            type: object
+            additionalProperties: false
+            required: [id, kind, value]
+            properties:
+              id:
+                type: string
+                pattern: '^[a-z0-9_-]{1,16}$'
+              kind:
+                type: string
+                enum: [endpoint, embedded_data, selector, pagination, example_url, pitfall]
+              value:
+                type: string
+                maxLength: 300
+              seen:
+                type: string
+                enum: [http_response, network_log, dom, user_said, guess]
+              seen_on:
+                type: string
+                format: uri
+                maxLength: 300
+              seen_at:
+                type: string
+                format: date-time
+              confidence:
+                type: string
+                enum: [high, medium, low]
+              sample:
+                type: string
+                maxLength: 300
+        tried:
+          type: array
+          maxItems: 10
+          items:
+            type: object
+            additionalProperties: false
+            required: [approach, outcome]
+            properties:
+              approach:
+                type: string
+                enum: [fetch_json, fetch_html, embedded_data, dom_selector, browser, other]
+              target:
+                type: string
+                maxLength: 300
+              outcome:
+                type: string
+                enum: [ok, empty, wrong_data, error, refused, unknown]
+              note:
+                type: string
+                maxLength: 200
+        open_questions:
+          type: array
+          maxItems: 5
+          items:
+            type: string
+            maxLength: 200
+    BriefReportEntry:
+      description: Fait du code sur un indice (19c § 7) ; jamais le texte du dossier (gabarit reconstruit par le code).
+      type: object
+      additionalProperties: false
+      required: [id, kind, state, reason, provenance, template, stale, cost_usd]
+      properties:
+        id:
+          type: string
+        kind:
+          type: string
+          enum: [endpoint, embedded_data, selector, pagination, example_url, pitfall]
+        state:
+          type: string
+          enum: [used, verified_unused, probe_failed, ignored, unverified]
+        reason:
+          type: [string, 'null']
+        provenance:
+          type: [string, 'null']
+          enum: [probe, traffic, dom, null]
+        template:
+          type: [string, 'null']
+        stale:
+          type: boolean
+        cost_usd:
+          type: [number, 'null']
+    ApiBriefView:
+      type: object
+      additionalProperties: false
+      required: [latest, hints, versions, report]
+      properties:
+        latest:
+          oneOf:
+            - type: object
+              additionalProperties: false
+              required: [version, created_at, hints, tried, open_questions, erased]
+              properties:
+                version:
+                  type: integer
+                created_at:
+                  type: string
+                  format: date-time
+                hints:
+                  type: integer
+                tried:
+                  type: integer
+                open_questions:
+                  type: integer
+                erased:
+                  type: boolean
+            - type: 'null'
+        hints:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [identity_key, hint_id, kind, state, reason, cost_usd, brief_version, stale, probed_at, last_ok_at]
+            properties:
+              identity_key:
+                type: string
+              hint_id:
+                type: string
+              kind:
+                type: string
+              state:
+                type: string
+                enum: [used, verified_unused, probe_failed, ignored]
+              reason:
+                type: [string, 'null']
+              cost_usd:
+                type: [number, 'null']
+              brief_version:
+                type: integer
+              stale:
+                type: boolean
+              probed_at:
+                type: [string, 'null']
+                format: date-time
+              last_ok_at:
+                type: [string, 'null']
+                format: date-time
+        versions:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [strategy_version, brief_version, used, ignored]
+            properties:
+              strategy_version:
+                type: integer
+              brief_version:
+                type: [integer, 'null']
+              used:
+                type: integer
+              ignored:
+                type: integer
+        report:
+          type: array
+          items:
+            $ref: '#/components/schemas/BriefReportEntry'
     ApiCreated:
       type: object
       additionalProperties: false
@@ -3905,6 +4098,18 @@ components:
         run_id:
           type: [string, 'null']
           format: uuid
+        brief_version:
+          description: Version du dossier d'enquête enregistrée avec l'API (19c § 4).
+          type: integer
+        brief_report:
+          type: array
+          items:
+            $ref: '#/components/schemas/BriefReportEntry'
+        brief_narrative:
+          description: Récit du dossier en gabarits fermés (narrative.brief.*), sans texte du dossier.
+          type: array
+          items:
+            type: string
     ApiPatch:
       description: >-
         Champs modifiables. Un schéma (`output_schema`, `input_schema`) ne change que par un brouillon puis une promotion

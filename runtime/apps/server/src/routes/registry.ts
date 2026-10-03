@@ -163,6 +163,7 @@ export const ROUTES: readonly RouteSpec[] = [
   // Aperçu des règles résolues (tâche 2.10, 19 § 2) : propriétaire seul, 404 uniforme pour tout autre, API partagée comprise.
   { method: 'GET', url: '/api/apis/:slug/resolved-rules', auth: 'session_or_key', scope: 'apis:read', permission: 'apis:read', resource: { type: 'api', kind: 'item' } },
   { method: 'POST', url: '/api/apis/:slug/versions/:version/revert', auth: 'session_or_key', scope: 'apis:write', permission: 'apis:update', resource: { type: 'api', kind: 'item' } },
+  { method: 'GET', url: '/api/apis/:slug/brief', auth: 'session_or_key', scope: 'apis:read', permission: 'apis:read', resource: { type: 'api', kind: 'item' } },
   { method: 'GET', url: '/api/apis/:slug/status-events', auth: 'session_or_key', scope: 'apis:read', permission: 'apis:read', resource: { type: 'api', kind: 'item' } },
   // Portabilité (tâche 3.12, 16 § 6) : export (propriétaire seulement), import (repasse par l'enquête), OpenAPI par API.
   { method: 'GET', url: '/api/apis/:slug/export', auth: 'session_or_key', scope: 'apis:read', permission: 'apis:read', resource: { type: 'api', kind: 'item' } },

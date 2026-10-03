@@ -72,8 +72,10 @@ const apiJson: SiteFactory = (env) => {
   return {
     id: 'api_json',
     lot: 'base',
-    description: 'API JSON paginée de 500 contacts factices, avec les 6 mutations du banc de réparation',
+    description:
+      'API JSON paginée de 500 contacts factices, avec les 6 mutations du banc de réparation ; robots.txt interdit /private-api/ (qui sert pourtant les mêmes contacts) et /api/missing répond 404 (dossier d’enquête, 2.14)',
     hosts: ['zz_test_api_json.localhost'],
+    ownsRobots: true,
     smoke: { path: '/api/contacts', status: 200 },
     handle(req) {
       const listPath = mutation === 'move_endpoint' ? '/api/v2/contacts' : '/api/contacts';
@@ -86,6 +88,9 @@ const apiJson: SiteFactory = (env) => {
           ),
         );
       }
+      // Dossier d'enquête (2.14, recette 12i) : un Disallow dédié (aucune requête n'y est attendue) et un point d'accès inexistant.
+      if (req.path === '/robots.txt') return { status: 200, headers: { 'content-type': 'text/plain; charset=utf-8' }, body: 'User-agent: *\nDisallow: /private-api/\n' };
+      if (req.path === '/private-api/contacts') return list(req);
       if (req.path === listPath) return list(req);
       return notFound();
     },

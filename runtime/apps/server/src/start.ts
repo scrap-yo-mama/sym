@@ -207,6 +207,7 @@ export async function prepareServer(env: NodeJS.ProcessEnv = process.env, option
         maxRunsPerKeyPerMinute: config.rest.maxRunsPerKeyPerMinute,
       },
       mcp: config.mcp.disabled ? null : createMcpRuntime(pool, config.mcp, options.mcp),
+      ...(config.brief === undefined ? {} : { brief: config.brief }),
       ...(options.extraCa ? { extraCa: options.extraCa } : {}),
       ...(options.oidcAllowHttp ? { oidcAllowHttp: true } : {}),
       ...(options.validatedModelsFile === undefined ? {} : { validatedModelsFile: options.validatedModelsFile }),

@@ -1799,5 +1799,57 @@
         "unsure": "unsure"
       }
     }
+  },
+  "brief": {
+    "title": "Your AI’s investigation brief",
+    "intro": "What your AI had already found before creating the API. SYM checks every hint before relying on it; the brief never widens access or budget.",
+    "empty": "No brief for this API.",
+    "latest": "Brief version {version}: {hints} hints, {tried} tries, {questions} open questions",
+    "erased": "A person asked to be erased: this version was rewritten without them.",
+    "hintsHeading": "Hints checked by SYM",
+    "noFacts": "No hint checked yet.",
+    "columns": {
+      "hint": "Hint",
+      "kind": "Kind",
+      "state": "State",
+      "reason": "Reason",
+      "cost": "Cost",
+      "version": "Brief version"
+    },
+    "stale": "old",
+    "versionsHeading": "Brief read by each strategy version",
+    "versionUsed": "v{strategy}: brief v{brief} ({used} used, {ignored} set aside)",
+    "versionNone": "v{strategy}: no brief",
+    "kind": {
+      "endpoint": "endpoint",
+      "embedded_data": "embedded data",
+      "selector": "selector",
+      "pagination": "pagination",
+      "example_url": "example URL",
+      "pitfall": "pitfall"
+    },
+    "state": {
+      "used": "used",
+      "verified_unused": "checked, not kept",
+      "probe_failed": "check failed",
+      "ignored": "set aside",
+      "unverified": "not checked"
+    },
+    "reason": {
+      "brief_used": "checked and used",
+      "brief_verified_unused": "checked, a cheaper strategy was kept",
+      "brief_probe_failed": "check failed",
+      "brief_stale": "old, not checked",
+      "brief_unverifiable": "pointer that cannot be checked",
+      "brief_host_ignored": "another site than the API: ignored",
+      "brief_robots_skipped": "path disallowed by robots.txt: no request",
+      "brief_duplicate": "duplicate of another hint",
+      "brief_invalid_item": "value outside the format of its kind",
+      "brief_over_budget": "beyond the check limit",
+      "brief_widening_ignored": "no effect: access rules stay fixed in the code",
+      "brief_breaker_open": "two hints failed: investigation went on without the brief",
+      "brief_subject_excluded": "about a person who asked to be erased"
+    },
+    "unavailable": "The investigation brief is unavailable for now."
   }
 }

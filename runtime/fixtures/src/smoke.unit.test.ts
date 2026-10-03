@@ -132,3 +132,35 @@ describe('banc 2.8 : corpus d’injection et mutations par étape (fumée)', () 
     expect(marker.mutated(String(after.body)), `${mutation} : effet absent`).toBe(true);
   });
 });
+
+describe('dossier d’enquête 2.14 (recette 12i) : fixtures servies (fumée)', () => {
+  const API = 'zz_test_api_json.localhost';
+  const LOGIN = 'zz_test_login.localhost';
+
+  it('zz_test_api_json : robots.txt interdit /private-api/ (qui sert pourtant des contacts), /api/missing répond 404', async () => {
+    const robots = await fx.get(API, '/robots.txt');
+    expect(robots.status).toBe(200);
+    expect(String(robots.body)).toContain('Disallow: /private-api/');
+    expect((await fx.get(API, '/private-api/contacts')).status).toBe(200);
+    expect((await fx.get(API, '/api/missing')).status).toBe(404);
+    expect((await fx.get(API, '/api/contacts')).status).toBe(200);
+  });
+
+  it('zz_test_api_json : la mutation rename_field (réparation de la deuxième API de 12i) renomme name en full_name', async () => {
+    expect((await fx.control({ op: 'site', site: 'api_json', mutation: 'rename_field' })).status).toBe(200);
+    const body = JSON.parse(String((await fx.get(API, '/api/contacts')).body)) as { items: Record<string, unknown>[] };
+    expect(body.items[0]).toHaveProperty('full_name');
+    expect(body.items[0]).not.toHaveProperty('name');
+  });
+
+  it('zz_test_login : la page « derrière connexion » porte un lien /logout à effet de bord (GET qui ferme la session)', async () => {
+    const login = await fx.call(LOGIN, 'POST', '/login', { headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: 'username=zz_test_user&password=zz_test_pass' });
+    expect(login.status).toBe(302);
+    const cookie = String(login.headers['set-cookie'] ?? '').split(';')[0]!;
+    const account = await fx.get(LOGIN, '/account', { cookie });
+    expect(account.status).toBe(200);
+    expect(String(account.body)).toContain('href="/logout"');
+    expect((await fx.get(LOGIN, '/logout', { cookie })).status).toBe(302);
+    expect((await fx.get(LOGIN, '/account', { cookie })).status).toBe(302);
+  });
+});

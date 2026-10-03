@@ -17,7 +17,8 @@
 //  - dedup_keys : clés dont `key_hash` = `dedupKeyHash` d'une valeur demandée ou de la clé d'un item supprimé ;
 //  - run_logs, runs (input, error_detail), investigation_events (dont les échantillons), run_rejected_items (échantillon
 //    de la quarantaine, D-49), status_events, tunnel_jobs,
-//    schedules (input) : valeur remplacée par `[erased]` (motif borné aux limites de mot) ;
+//    schedules (input), api_briefs (contenu du dossier d'enquête : empreinte recalculée, version marquée `erased`) et
+//    brief_hint_outcomes (2.14) : valeur remplacée par `[erased]` (motif borné aux limites de mot) ;
 //  - run_artifacts (chiffrés, donc illisibles) : supprimés pour tout run lié au sujet ;
 //  - subject_exclusions : HMAC-SHA256 de chaque valeur normalisée (téléphones en E.164), clé des sujets de l'instance ;
 //  - vérification : balayage SQL brut des tables de contenu (et des charges pg-boss) ; un résidu annule la transaction.
@@ -34,6 +35,7 @@ import {
   subjectSearchRegex,
 } from '@runtime/core';
 import type pg from 'pg';
+import { briefSha256, type InvestigationBrief } from '@runtime/core';
 import { appendAudit } from '../audit.js';
 import { countQueuePayloadMatches } from '../queue.js';
 
@@ -138,7 +140,7 @@ export async function isSubjectExcluded(db: Queryable, key: Buffer, value: strin
  * Tables balayées par l'outil (liste fermée). Jamais `users`, `auth_*`, `verifications`, `api_keys`, `secrets`,
  * `invitations` ni `audit_events` : ni compte ni contenu n'en sort, même agrégé (pas d'oracle de sous-chaîne).
  */
-export const SUBJECT_CONTENT_TABLES = ['dataset_items', 'runs', 'run_logs', 'investigation_events', 'run_rejected_items', 'run_profiles', 'status_events', 'tunnel_jobs', 'schedules'] as const;
+export const SUBJECT_CONTENT_TABLES = ['dataset_items', 'runs', 'run_logs', 'investigation_events', 'run_rejected_items', 'run_profiles', 'status_events', 'tunnel_jobs', 'schedules', 'api_briefs', 'brief_hint_outcomes'] as const;
 
 /**
  * Nombre de lignes des tables de contenu contenant une valeur du sujet (SQL brut sur `to_jsonb(ligne)`, motif borné aux
@@ -176,7 +178,7 @@ export function scrubSubject(value: unknown, values: readonly string[]): unknown
 }
 
 type ScrubTarget = { table: string; pk: string[]; json: string[]; text: string[] };
-const SCRUB_TARGETS: Record<'run_logs' | 'runs' | 'investigation_events' | 'run_rejected_items' | 'run_profiles' | 'status_events' | 'tunnel_jobs' | 'schedules', ScrubTarget> = {
+const SCRUB_TARGETS: Record<'run_logs' | 'runs' | 'investigation_events' | 'run_rejected_items' | 'run_profiles' | 'status_events' | 'tunnel_jobs' | 'schedules' | 'api_briefs' | 'brief_hint_outcomes', ScrubTarget> = {
   run_logs: { table: 'run_logs', pk: ['run_id', 'seq'], json: ['data'], text: ['event'] },
   // 2.12 : fiche de qualité (top-k des champs non annotés x-personal) et avis du juge (raison en texte libre du LLM).
   runs: { table: 'runs', pk: ['id'], json: ['input', 'quality', 'judge'], text: ['error_detail'] },
@@ -188,6 +190,10 @@ const SCRUB_TARGETS: Record<'run_logs' | 'runs' | 'investigation_events' | 'run_
   status_events: { table: 'status_events', pk: ['id'], json: [], text: ['reason'] },
   tunnel_jobs: { table: 'tunnel_jobs', pk: ['job_id'], json: ['payload', 'trace'], text: [] },
   schedules: { table: 'schedules', pk: ['id'], json: ['input'], text: [] },
+  // Dossier d'enquête (2.14, 0021) : l'effacement l'emporte sur l'immuabilité (contenu réécrit sans la personne, empreinte
+  // recalculée, version marquée `erased`, 19c § 4) ; faits du code : raison et sonde (codes, jamais de corps).
+  api_briefs: { table: 'api_briefs', pk: ['id'], json: ['content'], text: [] },
+  brief_hint_outcomes: { table: 'brief_hint_outcomes', pk: ['api_id', 'identity_key'], json: ['probe'], text: ['reason'] },
 };
 
 function matchClause(t: ScrubTarget, param: string): string {
@@ -311,6 +317,10 @@ export type SubjectExport = {
   run_logs: { run_id: string; seq: number; ts: string; level: string; event?: string; data?: unknown }[];
   investigation_events: { run_id: string; seq: number; kind: string; at: string; payload?: unknown }[];
   run_artifacts: { id: string; run_id: string; kind: string; bytes: number; created_at: string }[];
+  /** Versions du dossier d'enquête qui citent le sujet (2.14) : contenu masqué au propriétaire seulement. */
+  api_briefs: { api_id: string; owner_id: string; brief_version: number; created_at: string; erased: boolean; content?: unknown }[];
+  /** Faits du code sur les indices (codes et sonde) qui citent le sujet (2.14). */
+  brief_hint_outcomes: { api_id: string; owner_id: string; hint_id: string; state: string; reason?: string | null }[];
 };
 
 /**
@@ -332,6 +342,10 @@ export async function exportSubject(pool: pg.Pool, req: SubjectRequest, now: Dat
     pool, SCRUB_TARGETS.run_logs, ['run_id', 'seq', 'ts', 'level', 'event', 'data'], pattern, req.scope, ' ORDER BY ts');
   const events = await matchingRows<{ run_id: string; seq: number; kind: string; at: Date; payload: unknown }>(
     pool, SCRUB_TARGETS.investigation_events, ['run_id', 'seq', 'kind', 'at', 'payload'], pattern, req.scope, ' ORDER BY at');
+  const briefs = await matchingRows<{ api_id: string; owner_id: string; brief_version: number; created_at: Date; erased_at: Date | null; content: unknown }>(
+    pool, SCRUB_TARGETS.api_briefs, ['api_id', 'owner_id', 'brief_version', 'created_at', 'erased_at', 'content'], pattern, req.scope, ' ORDER BY created_at');
+  const hintFacts = await matchingRows<{ api_id: string; owner_id: string; hint_id: string; state: string; reason: string | null }>(
+    pool, SCRUB_TARGETS.brief_hint_outcomes, ['api_id', 'owner_id', 'hint_id', 'state', 'reason'], pattern, req.scope, ' ORDER BY hint_id');
   const runIds = await relatedRunIds(pool, req, pattern, items);
   const f = ownerFilter(req.scope, 2);
   const artifacts = (
@@ -367,6 +381,8 @@ export async function exportSubject(pool: pg.Pool, req: SubjectRequest, now: Dat
     run_logs: logs.map((r) => ({ run_id: r.run_id, seq: r.seq, ts: iso(r.ts), level: r.level, ...(content ? { event: r.event, data: r.data } : {}) })),
     investigation_events: events.map((r) => ({ run_id: r.run_id, seq: r.seq, kind: r.kind, at: iso(r.at), ...(content ? { payload: r.payload } : {}) })),
     run_artifacts: artifacts.map((r) => ({ ...r, created_at: iso(r.created_at) })),
+    api_briefs: briefs.map((r) => ({ api_id: r.api_id, owner_id: r.owner_id, brief_version: r.brief_version, created_at: iso(r.created_at), erased: r.erased_at !== null, ...(content ? { content: r.content } : {}) })),
+    brief_hint_outcomes: hintFacts.map((r) => ({ api_id: r.api_id, owner_id: r.owner_id, hint_id: r.hint_id, state: r.state, ...(content ? { reason: r.reason } : {}) })),
   };
   await appendAudit(pool, {
     actorUserId: req.actor.userId,
@@ -385,6 +401,8 @@ export async function exportSubject(pool: pg.Pool, req: SubjectRequest, now: Dat
       run_logs: out.run_logs.length,
       investigation_events: out.investigation_events.length,
       run_artifacts: out.run_artifacts.length,
+      api_briefs: out.api_briefs.length,
+      brief_hint_outcomes: out.brief_hint_outcomes.length,
     },
   });
   return out;
@@ -518,6 +536,12 @@ async function scrubTable(db: Queryable, t: ScrubTarget, pattern: string, req: S
       sets.push(`${c} = $${params.length}`);
     }
     if (sets.length === 0) continue;
+    if (t.table === 'api_briefs') {
+      // Version réécrite sans la personne : empreinte et taille recalculées, version marquée `erased` (19c § 4).
+      const scrubbed = scrubSubject(row['content'], req.values) as InvestigationBrief;
+      params.push(briefSha256(scrubbed), Buffer.byteLength(JSON.stringify(scrubbed), 'utf8'));
+      sets.push(`content_sha256 = $${params.length - 1}`, `size_bytes = $${params.length}`, 'erased_at = now()');
+    }
     const where = t.pk.map((c) => {
       params.push(row[c]);
       return `${c} = $${params.length}`;

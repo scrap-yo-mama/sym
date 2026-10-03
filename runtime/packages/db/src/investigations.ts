@@ -62,6 +62,11 @@ export type InvestigationState = {
    * dossier, jamais son contenu ; écrite dans `strategy_version_memory_refs` quand la version est retenue.
    */
   readonly memory?: { readonly sha256: string; readonly refs: readonly MemoryRef[] };
+  /**
+   * Dossier d'enquête lu (tâche 2.14, 19c § 4) : version et empreinte (jamais le contenu), identifiants des indices confirmés
+   * par la sonde au premier run (relus comme gabarits déclarés au run des essais).
+   */
+  readonly brief?: { readonly version: number; readonly sha256: string; readonly confirmed: readonly string[] };
   /** Niveaux d'exécution retirés du plan d'essais par l'appelant (`exclude_executions`, 06 § 2, 3.1) : jamais un ajout. */
   readonly excluded_executions?: readonly Execution[];
 };

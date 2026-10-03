@@ -23,6 +23,7 @@ import {
   boolean,
   check,
   customType,
+  date,
   foreignKey,
   index,
   integer,
@@ -706,6 +707,56 @@ export const strategyVersionMemoryRefs = pgTable(
     foreignKey({ columns: [t.apiId, t.strategyVersion], foreignColumns: [strategyVersions.apiId, strategyVersions.version] }).onDelete('cascade'),
     index('strategy_version_memory_refs_owner_id_idx').on(t.ownerId),
   ],
+);
+
+// 0021_investigation_briefs (2.14) : versions du dossier d'enquête (contenu masqué, immuable sauf effacement) et faits du
+// code par indice (clé d'identité), sous RLS owner_id, purgés avec l'API.
+export const apiBriefs = pgTable(
+  'api_briefs',
+  {
+    id: bigint('id', { mode: 'number' }).primaryKey().generatedAlwaysAsIdentity(),
+    apiId: uuid('api_id')
+      .notNull()
+      .references(() => apis.id, { onDelete: 'cascade' }),
+    ownerId: ownerId(),
+    projectId: projectId(),
+    briefVersion: integer('brief_version').notNull(),
+    content: jsonb('content').notNull(),
+    contentSha256: text('content_sha256').notNull(),
+    sizeBytes: integer('size_bytes').notNull(),
+    subjectExcluded: text('subject_excluded').array().notNull().default(sql`'{}'`),
+    authorId: uuid('author_id').references(() => users.id, { onDelete: 'set null' }),
+    via: text('via').notNull(),
+    erasedAt: tstz('erased_at'),
+    samplesPurgedAt: tstz('samples_purged_at'),
+    createdAt: createdAt(),
+  },
+  (t) => [unique().on(t.apiId, t.briefVersion), index('api_briefs_owner_id_idx').on(t.ownerId)],
+);
+
+export const briefHintOutcomes = pgTable(
+  'brief_hint_outcomes',
+  {
+    apiId: uuid('api_id')
+      .notNull()
+      .references(() => apis.id, { onDelete: 'cascade' }),
+    ownerId: ownerId(),
+    projectId: projectId(),
+    identityKey: text('identity_key').notNull(),
+    briefVersion: integer('brief_version').notNull(),
+    hintId: text('hint_id').notNull(),
+    kind: text('kind').notNull(),
+    state: text('state').notNull(),
+    reason: text('reason'),
+    probe: jsonb('probe'),
+    stale: boolean('stale').notNull().default(false),
+    expiresAt: tstz('expires_at'),
+    probedAt: tstz('probed_at'),
+    lastOkAt: tstz('last_ok_at'),
+    verifiedEventDay: date('verified_event_day'),
+    updatedAt: updatedAt(),
+  },
+  (t) => [primaryKey({ columns: [t.apiId, t.identityKey] }), index('brief_hint_outcomes_owner_id_idx').on(t.ownerId)],
 );
 
 export const statusEvents = pgTable(

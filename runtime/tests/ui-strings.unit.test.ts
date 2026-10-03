@@ -10,7 +10,8 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { describe, expect, test } from 'vitest';
-import { apiToolDescription, BRIEF_SCHEMA, GENERIC_TOOLS, MCP_INSTRUCTIONS } from '../apps/server/src/mcp/tools.js';
+import { apiToolDescription, BRIEF_SCHEMA, GENERIC_TOOLS, MCP_INSTRUCTIONS, NEW_API_BRIEF_PROMPT } from '../apps/server/src/mcp/tools.js';
+import { BRIEF_ERROR_CODES, BRIEF_NARRATIVE, briefWhatToDo } from '../packages/core/src/brief/index.js';
 
 const root = new URL('..', import.meta.url).pathname;
 
@@ -129,9 +130,19 @@ describe('assert_ui_strings_no_forbidden_words', () => {
       ['MCP_INSTRUCTIONS', MCP_INSTRUCTIONS],
       ['apiToolDescription', apiToolDescription('zz-test')],
       ['BRIEF_SCHEMA', JSON.stringify(BRIEF_SCHEMA)],
+      ['NEW_API_BRIEF_PROMPT', NEW_API_BRIEF_PROMPT],
       ...GENERIC_TOOLS.map((tool): [string, string] => [tool.name, JSON.stringify({ description: tool.description, inputSchema: tool.inputSchema, outputSchema: tool.outputSchema })]),
     ];
     expect(texts.length).toBeGreaterThan(10);
+    for (const [where, text] of texts) expect(forbiddenIn(text), where).toEqual([]);
+  });
+
+  test('dossier d’enquête (2.14) : gabarits narrative.brief.* (en, fr), raisons brief_* et conduites des erreurs de dossier : 0 mot interdit', () => {
+    const texts: [string, string][] = [
+      ...Object.entries(BRIEF_NARRATIVE).flatMap(([locale, entries]) => Object.entries(entries).map(([key, text]): [string, string] => [`${locale}:${key}`, text])),
+      ...BRIEF_ERROR_CODES.map((code): [string, string] => [code, briefWhatToDo(code)]),
+    ];
+    expect(texts.length).toBeGreaterThan(50);
     for (const [where, text] of texts) expect(forbiddenIn(text), where).toEqual([]);
   });
 

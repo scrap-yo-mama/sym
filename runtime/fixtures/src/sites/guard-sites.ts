@@ -37,7 +37,7 @@ const login: SiteFactory = (env) => {
   return {
     id: 'login',
     lot: 'base',
-    description: 'Site derrière connexion : cookie de session, 302 vers /login, 401 JSON sur /api/orders, expiration pilotable',
+    description: 'Site derrière connexion : cookie de session, 302 vers /login, 401 JSON sur /api/orders, expiration pilotable ; /account porte un lien /logout à effet de bord (GET qui ferme la session, dossier d’enquête 2.14)',
     hosts: ['zz_test_login.localhost'],
     smoke: { path: '/login', status: 200 },
     handle(req) {
@@ -59,7 +59,13 @@ const login: SiteFactory = (env) => {
           if (auth === 'none') return redirect(302, '/login');
           if (auth === 'expired') return redirect(302, '/login?expired=1');
           const rows = orders.map((o) => `<tr class="order"><td>${o.id}</td><td>${esc(o.customer)}</td><td>${esc(o.item)}</td><td>${formatEuro(o.total_cents)}</td></tr>`).join('');
-          return html(200, page('Mes commandes', `<h1>Mes commandes</h1><table>${rows}</table>`));
+          return html(200, page('Mes commandes', `<h1>Mes commandes</h1><a href="/logout">Se déconnecter</a><table>${rows}</table>`));
+        }
+        case '/logout': {
+          // GET à effet de bord (19c § 3) : ferme la session de l'utilisateur. Jamais rejoué depuis un dossier d'enquête.
+          const token = cookieOf(req, 'zz_test_session');
+          if (token !== undefined) sessions.delete(token);
+          return redirect(302, '/login', { 'set-cookie': 'zz_test_session=; Path=/; Max-Age=0' });
         }
         case '/api/orders':
           if (auth !== 'valid') {

@@ -369,7 +369,34 @@ describe('catalogue (05 § 4.2) : création, liste, fiche, modification, suppres
     expect(await count('SELECT count(*) FROM runs WHERE api_id = $1', [api1.id])).toBe(before);
   });
 
-  test.todo('assert_brief_optional (REST) : `POST /api/apis` accepte `brief` (05 § 4.2, 19c) ; branché sur le service de 2.14 quand elle sera fusionnée (aujourd’hui `brief` → 400, schéma fermé)');
+  test('assert_brief_optional (REST) : `POST /api/apis` accepte `brief` (05 § 4.2, 19c) ; sans dossier, aucune clé de dossier dans la réponse', async () => {
+    const without = await api(a, 'POST', '/api/apis?wait=0', '/api/apis', { description: 'zz_test sans dossier', url: 'https://zz-test-nobrief.example/' });
+    expect(without.status).toBe(201);
+    expect(without.body).not.toHaveProperty('brief_report');
+    expect(await count('SELECT count(*) FROM api_briefs WHERE api_id = $1', [without.body.api_id])).toBe(0);
+    const brief = { v: 1, hints: [{ id: 'h1', kind: 'endpoint', value: 'GET https://zz-test-brief-rest.example/api/items', confidence: 'high' }], tried: [{ approach: 'fetch_html', outcome: 'empty' }] };
+    const withBrief = await api(a, 'POST', '/api/apis?wait=0', '/api/apis', { description: 'zz_test avec dossier', url: 'https://zz-test-brief-rest.example/', brief });
+    expect(withBrief.status).toBe(201);
+    expect(withBrief.body).toMatchObject({ brief_version: 1, brief_report: [{ id: 'h1', kind: 'endpoint', state: 'unverified', template: 'zz-test-brief-rest.example/api/items' }] });
+    // Session console : `via = console` (une clé d'API : `rest`, MCP : `mcp`).
+    expect(await count('SELECT count(*) FROM api_briefs WHERE api_id = $1 AND via = $2', [withBrief.body.api_id, 'console'])).toBe(1);
+  });
+
+  test('assert_authz_matrix (dossier d’enquête) : GET /api/apis/{slug}/brief au propriétaire ; 404 uniforme pour un membre, même sur une API partagée d’instance', async () => {
+    const created = await api(a, 'POST', '/api/apis?wait=0', '/api/apis', { description: 'zz_test dossier partagé', url: 'https://zz-test-brief-shared.example/', visibility: 'instance', brief: { v: 1, notes: 'zz_test_brief_note_of_a', hints: [{ id: 'h1', kind: 'pitfall', value: 'zz_test_brief_value_of_a' }] } });
+    expect(created.status).toBe(201);
+    const slug = created.body.slug as string;
+    const mine = await api(a, 'GET', `/api/apis/${slug}/brief`, '/api/apis/{slug}/brief');
+    expect(mine.status).toBe(200);
+    expect(mine.body).toMatchObject({ latest: { version: 1, hints: 1, tried: 0, open_questions: 0, erased: false }, report: [{ id: 'h1', kind: 'pitfall' }] });
+    expect(JSON.stringify(mine.body)).not.toMatch(/zz_test_brief_(note|value)_of_a/);
+    for (const party of [b, admin]) {
+      const other = await api(party, 'GET', `/api/apis/${slug}/brief`, '/api/apis/{slug}/brief');
+      expect(other.status).toBe(404);
+      expect(other.body).toEqual({ error: { code: 'not_found', message: 'ressource introuvable' } });
+    }
+    expect((await api(b, 'GET', '/api/apis/zz-test-does-not-exist/brief', '/api/apis/{slug}/brief')).body).toEqual({ error: { code: 'not_found', message: 'ressource introuvable' } });
+  });
 
   test('admin et owner : métadonnées seules d’une API à session d’autrui ; un membre reçoit 404', async () => {
     const session = await seedApi(srv.db.url, a.user.id, { requiresSession: true });

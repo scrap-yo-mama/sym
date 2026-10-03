@@ -28,6 +28,10 @@
 // cet ensemble (`applyRulePlan` : `pruned_by_rule`, `rule_widening_ignored`), puis le rattrapage du moins cher (code). La
 // version retenue enregistre sa source (`source.rules`, `strategy_version_rules`) ; une recompilation (`reason: recompile`)
 // garde le schéma de sortie et crée une version `created_by = recompile`.
+// Dossier d'enquête (tâche 2.14, 19c § 3) : lu APRÈS les refus passés, filtré sur le propriétaire ; digest du code, sonde GET
+// par le pipeline d'accès (5 indices, 25 % du budget, coupe-circuit, jamais avec session ni en tunnel), réponses confirmées
+// versées à la reconnaissance (réduite à ce qui manque), section <untrusted_agent_brief> du prompt, sources confirmées en
+// tête du plan DANS l'ensemble autorisé (rattrapage du moins cher), `source.brief` et faits du code sur la version retenue.
 // Plafonds : `investigation_budget_usd` (coût imputé de tout le run d'enquête, cumulé sur ses runs ; chaque exécution
 // d'un couple sous le plus petit de `max_cost_usd` et du budget restant) et `investigation_timeout_s` (échéance de chaque
 // phase : étape 0, reconnaissance, appel LLM, essais), nombre d'essais. Rien ne s'élargit : réseaux de la politique de
@@ -129,10 +133,35 @@ import {
   type SkillRead,
   type StrategyRuleRow,
 } from '@runtime/core';
+import {
+  briefLogPayload,
+  briefPreferredSources,
+  buildBriefDigest,
+  DEFAULT_BRIEF_CONFIG,
+  finalizeBriefHints,
+  hintIdentityKey,
+  matchBriefHints,
+  matchTemplate,
+  orderWithBrief,
+  renderAgentBrief,
+  runBriefProbes,
+  sourceBriefOf,
+  verifiedForPromotion,
+  type BriefConfig,
+  type BriefDigest,
+  type BriefMatch,
+  type BriefProbePorts,
+  type HintOutcomeFact,
+  type ProbeRun,
+} from '@runtime/core';
 import { investigateCallCeilingUsd, investigateMessages, investigatePromptVersion, proposeInvestigation, readSkillsPhase, renderSkillBodies } from '@runtime/agent';
 import {
   appendInvestigationEvent,
   buildStrategySource,
+  claimHintVerifiedEvent,
+  readBriefForApi,
+  saveHintOutcomes,
+  type StoredBrief,
   inputHash,
   loadInvestigation,
   loadRunTarget,
@@ -207,6 +236,13 @@ export type InvestigationExecutorDeps = {
    * inconnu, clé illisible) est ignorée et l'enquête se fait sans avis. Absent : rôle `judge` de la configuration `llm`.
    */
   readonly judgeLlm?: InvestigationLlmPorts;
+  /**
+   * Dossier d'enquête (tâche 2.14, 19c § 3) : lu APRÈS les refus passés, filtré sur le propriétaire de l'API (même par le
+   * rôle de service). Défaut : `readBriefForApi` (dernière version, ou celle de la source de la version courante).
+   */
+  readonly briefs?: { readonly read: (args: { apiId: string; ownerId: string; preferVersion: number | null }) => Promise<{ brief: StoredBrief; outcomes: Map<string, HintOutcomeFact> } | null> };
+  /** Bornes `BRIEF_*` (défaut : 19c § 9.2). */
+  readonly briefConfig?: BriefConfig;
 };
 
 const round6 = (v: number): number => Math.round(v * 1e6) / 1e6;
@@ -380,6 +416,19 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
     // de réseau (premier réseau de la politique, jamais le tunnel ni un proxy de plus).
     const confirmOnce = refusal.action === 'confirm_once';
     if (confirmOnce) await ctx.log('info', 'prior_refusal_confirmation', { domain, at: refusal.refusal.at });
+    // --- dossier d'enquête (2.14, 19c § 3) : lu APRÈS les refus passés (un domaine refusé s'arrête plus haut sans le lire) ;
+    // jamais pour un import (stratégie du fichier) ni pour la confirmation unique d'un refus. Filtré sur le propriétaire.
+    const briefConfig = deps.briefConfig ?? DEFAULT_BRIEF_CONFIG;
+    const briefRead =
+      confirmOnce || state.imported !== undefined
+        ? null
+        : await (deps.briefs?.read ?? ((a) => readBriefForApi(deps.pool, a)))({ apiId: ctx.apiId, ownerId: ctx.ownerId, preferVersion: state.brief?.version ?? null }).catch(() => null);
+    let briefDigest: BriefDigest | null = null;
+    let briefProbes: ProbeRun | null = null;
+    let briefMatch: BriefMatch = { confirmed: new Map() };
+    let briefPreferred = new Set<string>();
+    /** Run des essais : indices non confirmés au premier run, écartés sans nouvelle sonde ; leurs faits du premier run restent. */
+    const briefCarried = new Set<string>();
     let dossier: CatalogDossier | null = null;
     /** HTML de la page vue à la reconnaissance de ce passage (signature de la version retenue) ; null sinon. */
     let reconHtml: string | null = null;
@@ -568,20 +617,89 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
           await save('reconnaissance');
           await event(EV.phase, { phase: 'reconnaissance', budget: budgetView() });
         }
+        // Dossier d'enquête (19c § 3) : digest du code, puis sonde GET par le pipeline d'accès (robots.txt, garde SSRF,
+        // cadence, classifieur, coût imputé au budget d'enquête), jamais en tunnel ni avec session. Un refus pendant une sonde
+        // arrête l'enquête par la classe (aucune escalade) ; deux sondes en échec : l'enquête continue sans le dossier.
+        let briefExchanges: CapturedExchange[] = [];
+        if (briefRead !== null) {
+          const sessionOrTunnel = ports.mode === 'tunnel' || sessionRequired;
+          briefDigest = buildBriefDigest(briefRead.brief.content, { pageUrl, scope, now: new Date(now()), sessionOrTunnel, outcomes: briefRead.outcomes, subjectExcluded: briefRead.brief.subject_excluded, config: briefConfig });
+          await event('brief.read', briefLogPayload({
+            sha256: briefRead.brief.sha256,
+            bytes: briefRead.brief.size_bytes,
+            version: briefRead.brief.version,
+            hints: briefDigest.hints.map((h) => ({ id: h.id, kind: h.kind, state: h.decision, reason: h.reason })),
+            tried: briefDigest.tried,
+            open_questions: briefDigest.open_questions,
+          }));
+          if (briefDigest.widening.length > 0 || briefDigest.hints.some((h) => h.widening.length > 0)) {
+            await ctx.log('warn', 'brief_widening_ignored', { guards: [...new Set([...briefDigest.widening, ...briefDigest.hints.flatMap((h) => h.widening)])] });
+          }
+          if (ports.mode === 'server') {
+            const probePorts = briefProbePorts(ports, robots, pacer, signal, now);
+            // Run des essais (après validate_schema) : les indices confirmés au premier run deviennent des gabarits déclarés,
+            // relus par le même pipeline ; aucune nouvelle sonde.
+            const digestForRun: BriefDigest = firstRun
+              ? briefDigest
+              : {
+                  ...briefDigest,
+                  hints: briefDigest.hints.map((h) => {
+                    if (h.decision !== 'probe' || (state.brief?.confirmed ?? []).includes(h.id)) return h;
+                    briefCarried.add(h.id);
+                    const fact = briefRead.outcomes.get(h.identity_key);
+                    return { ...h, decision: 'ignored' as const, reason: fact?.state === 'probe_failed' ? ('brief_probe_failed' as const) : ('brief_unverifiable' as const) };
+                  }),
+                };
+            briefDigest = digestForRun;
+            briefProbes = await runBriefProbes(digestForRun, probePorts, { budgetUsd: request.budget_usd, config: firstRun ? briefConfig : { ...briefConfig, probeBudgetShare: 1 } });
+            await event('brief.probes', {
+              requests: briefProbes.requests,
+              breaker_open: briefProbes.breakerOpen,
+              results: briefProbes.results.map((r) => ({ id: r.id, outcome: r.outcome, reason: r.reason, http_class: r.probe?.http_class ?? null, items: r.probe?.items_conform ?? null, cost_usd: r.probe?.cost_usd ?? null })),
+            });
+            if (firstRun) {
+              const failed = finalizeBriefHints(briefDigest, briefProbes, { confirmed: new Map() }, null).filter((h) => h.state === 'probe_failed');
+              if (failed.length > 0) await saveHintOutcomes(deps.pool, { apiId: ctx.apiId, ownerId: ctx.ownerId, version: briefRead.brief.version, hints: failed, now: new Date(now()) });
+            }
+            if (briefProbes.blocking !== null) {
+              await charge(ctx, ports.proxyUsd());
+              spent = round6(spent + ports.proxyUsd());
+              return await finishFailed(briefProbes.blocking, 'brief_probe');
+            }
+            briefExchanges = briefProbes.results.flatMap((r) => (r.outcome === 'verified' && r.exchange !== null ? [briefCaptured(r.exchange)] : []));
+          }
+        }
         const recon =
           ports.mode === 'tunnel'
             ? await staticRecon(ports.reconProbe, { url: pageUrl, allowHost: (h) => withinSiteScope(h, scope) && hostWithinDomain(h, ports.tunnel!.domain), signal, robots, mode: 'tunnel', ...(pacer === undefined ? {} : { pacer }) })
             : deps.browsers !== null
               ? await browserRecon(deps, { url: pageUrl, host, scope, signal, robots, userAgent, sessionBase: ports.server!.sessionBase, ceiling: ports.server!.ceiling, otherUsd: ports.proxyUsd, ...(pacer === undefined ? {} : { pacer }) })
-              : await staticRecon(ports.reconProbe, { url: pageUrl, allowHost: (h) => withinSiteScope(h, scope), signal, robots, mode: 'static', ...(pacer === undefined ? {} : { pacer }) });
+              : await staticRecon(ports.reconProbe, { url: pageUrl, allowHost: (h) => withinSiteScope(h, scope), signal, robots, mode: 'static', skipDiscovery: briefExchanges.length > 0, ...(pacer === undefined ? {} : { pacer }) });
         await charge(ctx, ports.proxyUsd() + recon.proxyUsd);
         spent = round6(spent + ports.proxyUsd() + recon.proxyUsd);
         const stopped1 = await tunnelOutcome('reconnaissance');
         if (stopped1 !== null) return stopped1;
-        const capture: ReconCapture = recon.capture;
+        // Réponses des indices confirmés par le code : gabarits déclarés, ajoutés à ce que la reconnaissance a vu (19c § 3).
+        const capture: ReconCapture =
+          briefExchanges.length === 0 ? recon.capture : { ...recon.capture, exchanges: [...briefExchanges, ...recon.capture.exchanges], totalBytes: recon.capture.totalBytes + briefExchanges.reduce((n, e) => n + e.bytes, 0) };
         reconHtml = capture.document?.renderedHtml ?? capture.document?.html ?? null;
         const fresh = recon.failure === null ? analyzeCapture(capture, apiHostsOf(capture, host, scope)) : [];
         const candidates: readonly DataCandidate[] = firstRun ? fresh : rematchCandidates(state.candidates ?? [], fresh);
+        if (briefDigest !== null) {
+          briefMatch = matchBriefHints(briefDigest, briefProbes, {
+            candidates: candidates.map((c) => ({ id: c.id, from: c.from, method: c.request.method, url: c.request.url, locator: c.locator?.kind ?? null })),
+            exchanges: capture.exchanges.map((e) => ({ url: e.url, method: e.method })),
+            html: capture.document?.renderedHtml ?? capture.document?.html ?? null,
+          });
+          briefPreferred = briefPreferredSources(briefMatch);
+          await event('brief.checked', {
+            hints: finalizeBriefHints(briefDigest, briefProbes, briefMatch, null).map((h) => ({ id: h.id, kind: h.kind, state: h.state, reason: h.reason, provenance: h.provenance })),
+            preferred: [...briefPreferred],
+          });
+          if (firstRun && briefRead !== null) {
+            await save(phase, { brief: { version: briefRead.brief.version, sha256: briefRead.brief.sha256, confirmed: (briefProbes?.results ?? []).filter((r) => r.outcome === 'verified').map((r) => r.id) } });
+          }
+        }
         await event(EV.reconnaissance, {
           mode: capture.mode,
           ...(recon.failure === null ? {} : { failure_class: recon.failure.failure_class, detail: recon.failure.detail }),
@@ -598,6 +716,7 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
           })),
           document_bytes: capture.document?.bytes ?? 0,
           total_bytes: capture.totalBytes,
+          ...(recon.requests === undefined ? {} : { requests: recon.requests }),
           budget: budgetView(),
         });
         if (recon.failure !== null) return await finishFailed(recon.failure, 'reconnaissance');
@@ -646,6 +765,20 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
             ...(fixed === undefined ? {} : { fixedSchema: fixed }),
             rules: renderRulesPrompt(ruled.resolved),
             ...(catalogMemory === '' ? {} : { catalogMemory }),
+            ...(briefRead === null || briefDigest === null ? {} : (() => {
+              const memoryKeys = new Set<string>();
+              for (const e of [...(dossier.same_api === null ? [] : [dossier.same_api]), ...dossier.similar]) {
+                const endpoint = (e as { endpoint?: unknown }).endpoint;
+                if (typeof endpoint !== 'string') continue;
+                try {
+                  memoryKeys.add(hintIdentityKey('endpoint', `GET ${matchTemplate(new URL(endpoint.replace(/\{(\w+)\}/g, '%7B$1%7D')))}`));
+                } catch {
+                  // gabarit illisible : aucune ligne commune
+                }
+              }
+              const rendered = renderAgentBrief({ brief: briefRead.brief.content, digest: briefDigest, states: finalizeBriefHints(briefDigest, briefProbes, briefMatch, null), receivedAt: briefRead.brief.created_at, memoryKeys, maxTokens: briefConfig.maxTokens });
+              return rendered.text === '' ? {} : { agentBrief: rendered.text };
+            })()),
             allowedCouples: previewCouples({ networks, browser: deps.browsers !== null, agentic: deps.agentic === true ? agenticPrices(config) : {}, candidates, documentBytes: state.page?.document_bytes ?? capture.document?.bytes ?? 0, totalBytes: state.page?.total_bytes ?? capture.totalBytes }),
           };
           // Coût d'un appel borné AVANT l'envoi (sortie plafonnée, entrée estimée par excès) : jamais un appel qui
@@ -780,10 +913,12 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
       for (const { pair, rule_refs } of guided.prunedByRule) {
         await decide(EV.attemptPruned, { by: null, reason: 'pruned_by_rule', rule_refs, pruned: [{ execution: pair.execution, network: pair.network, source: pair.source, est_cost_usd: pair.est_cost_usd }] });
       }
-      const ordered = guided.ordered;
+      // Dossier d'enquête (19c § 3) : les couples des sources confirmées par le code d'abord, DANS l'ensemble autorisé
+      // (permutation du plan) ; le rattrapage du moins cher garde la stratégie retenue (INV2).
+      const ordered = orderWithBrief(guided.ordered, briefPreferred);
       await event(EV.phase, {
         phase: 'testing',
-        plan: ordered.map((p) => ({ execution: p.execution, network: p.network, source: p.source, est_cost_usd: p.est_cost_usd, ...(guided.placed.has(p) ? { rule_refs: guided.placed.get(p) } : {}) })),
+        plan: ordered.map((p) => ({ execution: p.execution, network: p.network, source: p.source, est_cost_usd: p.est_cost_usd, ...(guided.placed.has(p) ? { rule_refs: guided.placed.get(p) } : {}), ...(briefPreferred.has(p.source) ? { brief: true } : {}) })),
         budget: budgetView(),
       });
       const entries = new Map<TrialPair, PlanEntry>(ordered.map((p) => [p, p]));
@@ -923,6 +1058,9 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
           for (const extra of agentic ? [...agentReads, ...embeddedRows] : []) if (!known(rows, extra.rule_file_id)) rows.push(extra);
           const spec = kept.execution === 'hybrid' ? withCompiledWith(kept.spec, compiledWithRules(agentic ? [...embeddedRows, ...agentReads] : rows), spend.get(pair)?.model ?? null, now()) : kept.spec;
           const recompile = state.reason === 'recompile';
+          // Dossier : états finaux (used si la source retenue est celle d'un indice confirmé), source de la version.
+          const briefFinals = briefDigest === null ? null : finalizeBriefHints(briefDigest, briefProbes, briefMatch, entry.source);
+          const briefRef = briefRead === null ? null : { version: briefRead.brief.version, sha256: briefRead.brief.sha256 };
           const saved = await saveInvestigationStrategy(deps.pool, {
             apiId: ctx.apiId,
             ownerId: ctx.ownerId,
@@ -944,9 +1082,11 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
               investigationId: ctx.runId,
               decisions,
               rows,
+              ...(briefRef === null || briefFinals === null ? {} : { brief: sourceBriefOf(briefRef, briefFinals) }),
             }),
             rules: rows,
           });
+          if (briefRef !== null && briefFinals !== null) await recordBriefOutcome(deps.pool, ctx, briefRef.version, briefFinals.filter((h) => !briefCarried.has(h.id)), now, event);
           phase = 'done';
           // Signature calculée par le code (r1 R10) et entrées de mémoire consultées (sha256 du dossier) sur la version.
           const keptSpec = kept.spec as { request?: { url?: unknown }; pagination?: { type?: unknown } };
@@ -1122,7 +1262,8 @@ function tunnelProbe(session: TunnelSession, maxBytes: number): AccessProbe {
   return (url, signal) => transport({ method: 'GET', url, headers: {} }, signal);
 }
 
-type ReconOutcome = { readonly capture: ReconCapture; readonly failure: ExecFailure | null; readonly proxyUsd: number };
+/** `requests` : requêtes de contenu de la passe statique (page et URL de données), base du critère « reconnaissance réduite ». */
+type ReconOutcome = { readonly capture: ReconCapture; readonly failure: ExecFailure | null; readonly proxyUsd: number; readonly requests?: number };
 
 /** Reconnaissance par Chromium : passe E3 sur le premier réseau autorisé, proxy d'egress propre à la passe. */
 async function browserRecon(
@@ -1174,11 +1315,13 @@ async function browserRecon(
  */
 async function staticRecon(
   probe: AccessProbe,
-  args: { url: string; allowHost: (host: string) => boolean; signal: AbortSignal; robots: RobotsGate; mode: 'static' | 'tunnel'; pacer?: RequestPacer },
+  args: { url: string; allowHost: (host: string) => boolean; signal: AbortSignal; robots: RobotsGate; mode: 'static' | 'tunnel'; pacer?: RequestPacer; skipDiscovery?: boolean },
 ): Promise<ReconOutcome> {
   const empty = (failure: ExecFailure | null): ReconOutcome => ({ capture: { mode: args.mode, pageUrl: args.url, document: null, exchanges: [], totalBytes: 0 }, failure, proxyUsd: 0 });
   type Got = { readonly kind: 'failed'; readonly failure: ExecFailure } | { readonly kind: 'got'; readonly exchange: HttpExchange; readonly refused: ExecFailure | null };
+  let requests = 0;
   const get = async (url: string): Promise<Got> => {
+    requests += 1;
     if (args.pacer !== undefined) {
       const slot = await args.pacer.acquire(url);
       if (!slot.granted) return { kind: 'failed', failure: { failure_class: 'rate_limited', retryable: true, detail: `pacing_${slot.reason}` } };
@@ -1201,7 +1344,9 @@ async function staticRecon(
   if (page.refused !== null) return empty(page.refused);
   const html = page.exchange.body;
   const exchanges: CapturedExchange[] = [];
-  for (const url of discoverScriptEndpoints(html, page.exchange.url, STATIC_MAX_ENDPOINTS)) {
+  // Un point d'accès confirmé par le code (dossier d'enquête, 19c § 3) : la reconnaissance se réduit à ce qui manque (la page et
+  // ses blobs), sans relire les URL de données des scripts.
+  for (const url of args.skipDiscovery === true ? [] : discoverScriptEndpoints(html, page.exchange.url, STATIC_MAX_ENDPOINTS)) {
     // Domaines de l'API (et, en tunnel, du site connecté dans l'extension) seulement.
     if (!args.allowHost(new URL(url).hostname)) continue;
     // En tunnel, la requête part avec les cookies de session de l'utilisateur : une URL d'action trouvée dans un script
@@ -1242,7 +1387,82 @@ async function staticRecon(
     failure: null,
     // Session partagée avec l'étape 0 : son coût est compté une fois, par l'appelant.
     proxyUsd: 0,
+    requests,
   };
+}
+
+/**
+ * Ports de la sonde du dossier (19c § 3) : robots.txt et portée (`RobotsGate.check`, hôtes de l'API), puis GET par la session
+ * réseau de l'enquête (garde SSRF, robots à chaque saut, plafond de coût, User-Agent du robot), cadencé comme la
+ * reconnaissance ; classifieur de 04 § 7. Coût : différence d'usage de la session (imputé au budget d'enquête).
+ */
+function briefProbePorts(ports: AccessPorts, robots: RobotsGate, pacer: RequestPacer | undefined, signal: AbortSignal, now: () => number): BriefProbePorts {
+  return {
+    now,
+    check: async (url) => {
+      const decision = await robots.check(url);
+      return decision.allowed ? { allowed: true } : { allowed: false, failure: decision.failure };
+    },
+    get: async (url) => {
+      const before = ports.proxyUsd();
+      const started = now();
+      if (pacer !== undefined) {
+        const slot = await pacer.acquire(url);
+        if (!slot.granted) return { failure: { failure_class: 'rate_limited', retryable: true, detail: `pacing_${slot.reason}` }, costUsd: 0, ms: 0 };
+      }
+      try {
+        const exchange = await ports.probe(url, signal);
+        const refused = classifyExchange(exchange, { requestUrl: url });
+        await pacer?.report(url, { status: exchange.status, retryAfter: exchange.headers['retry-after'] ?? null, failureClass: refused?.failure_class ?? null }).catch(() => undefined);
+        return { exchange, costUsd: round6(Math.max(0, ports.proxyUsd() - before)), ms: Math.max(0, now() - started) };
+      } catch (error) {
+        signal.throwIfAborted();
+        return { failure: classifyTransportError(error), costUsd: round6(Math.max(0, ports.proxyUsd() - before)), ms: Math.max(0, now() - started) };
+      }
+    },
+    classify: (exchange, url) => classifyExchange(exchange, { requestUrl: url }),
+    records: (exchange, url) => {
+      const host = (() => {
+        try {
+          return new URL(url).hostname.toLowerCase();
+        } catch {
+          return '';
+        }
+      })();
+      const found = analyzeCapture({ mode: 'static', pageUrl: url, document: null, exchanges: [briefCaptured({ ...exchange, url })], totalBytes: 0 }, [host]);
+      const best = found.filter((c) => c.unsupported === undefined).sort((a, b) => b.count - a.count)[0];
+      return best === undefined ? null : best.count;
+    },
+  };
+}
+
+/** Réponse d'un indice vérifié : échange capturé (gabarit déclaré par le code), sans en-tête d'authentification ni cookie. */
+function briefCaptured(exchange: HttpExchange): CapturedExchange {
+  return { url: exchange.url, method: 'GET', requestBody: null, requestContentType: null, status: exchange.status, contentType: exchange.headers['content-type'] ?? '', body: exchange.body, bytes: Buffer.byteLength(exchange.body) };
+}
+
+/**
+ * Faits du code après une enquête conforme (19c § 4, § 6) : `brief_hint_outcomes`, récit en codes (`brief.report`) et, pour
+ * chaque indice utilisé et vérifié d'un type éligible, l'événement de preuve `brief_hint_verified` (un par clé et par jour,
+ * run réel seulement) pour le moteur de propositions de 2.11.
+ */
+async function recordBriefOutcome(
+  pool: pg.Pool,
+  ctx: RunCtx,
+  version: number,
+  finals: ReturnType<typeof finalizeBriefHints>,
+  now: () => number,
+  event: (kind: string, payload?: Record<string, unknown>) => Promise<unknown>,
+): Promise<void> {
+  const at = new Date(now());
+  await saveHintOutcomes(pool, { apiId: ctx.apiId, ownerId: ctx.ownerId, version, hints: finals, now: at });
+  await event('brief.report', { version, hints: finals.map((h) => ({ id: h.id, kind: h.kind, state: h.state, reason: h.reason, provenance: h.provenance })) });
+  const day = at.toISOString().slice(0, 10);
+  for (const h of verifiedForPromotion(finals)) {
+    if (await claimHintVerifiedEvent(pool, { apiId: ctx.apiId, ownerId: ctx.ownerId, identityKey: h.identity_key, day })) {
+      await event('brief_hint_verified', { identity_key: h.identity_key, hint_id: h.id, kind: h.kind, provenance: h.provenance, items: h.probe?.items_conform ?? null });
+    }
+  }
 }
 
 /**

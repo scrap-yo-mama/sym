@@ -13,10 +13,19 @@ type NetModule<G, P> = {
   createSsrfPolicy: (input: { allowedPorts: number[]; testAllowPrivate: boolean }) => P;
 };
 
-/** Résolveur qui ne connaît que `hosts` (vers 127.0.0.1). */
+/**
+ * Hôte piège du dossier d'enquête (2.14, recette 12i) : le résolveur du harnais le résout vers une adresse PRIVÉE. Un indice
+ * qui le vise doit être écarté AVANT toute résolution (`brief_host_ignored`) : `resolverLog` le prouve (aucune entrée).
+ */
+export const EVIL_EXAMPLE = 'evil.example';
+export const resolverLog: string[] = [];
+
+/** Résolveur qui ne connaît que `hosts` (vers 127.0.0.1) ; `evil.example` vers une adresse privée jamais contactée. */
 function fixtureResolver(hosts: readonly string[]): Resolver {
   const known = new Set(hosts);
   return async (hostname) => {
+    resolverLog.push(hostname);
+    if (hostname === EVIL_EXAMPLE) return [{ address: '10.255.255.66', family: 4 }];
     if (known.has(hostname)) return [{ address: '127.0.0.1', family: 4 }];
     throw new Error(`zz_test : résolution refusée pour ${hostname}`);
   };

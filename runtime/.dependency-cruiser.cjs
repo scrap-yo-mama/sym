@@ -49,6 +49,14 @@ module.exports = {
       to: { path: any('db', 'agent', 'llm', 'client', 'ui', 'schemas', 'server', 'worker', 'cli', 'web', 'docs', 'extension') },
     },
     {
+      name: 'politique-sans-dossier',
+      comment:
+        "Dossier d'enquête (2.14, 19c § 3) : les modules de politique et de garde (accès, réseau, cadence, classifieur, plan d'essais, règles) n'importent jamais le module du dossier ; bloquant par assert_policy_module_no_brief_import (test:fast).",
+      severity: 'warn',
+      from: { path: '(^|/)packages/core/src/(access|net|pacing|exec|investigation|rules)/', pathNot: NOT_SHIPPED },
+      to: { path: '(^|/)packages/core/src/(brief/|index\\.ts$)' },
+    },
+    {
       name: 'paquets-sans-application',
       comment: "Un paquet (packages/*) n'importe jamais une application (apps/*).",
       severity: 'warn',

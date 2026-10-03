@@ -8,7 +8,7 @@ import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import { createTestDatabase, type TestDatabase } from '../../../tests/helpers/pg.js';
 import { readCatalogMemory, readMemoryRefs, recordMemoryRefs, saveStrategySignature } from './memory.js';
-import { migrateDown, migrateUp } from './migrate.js';
+import { loadMigrations, migrateDown, migrateUp } from './migrate.js';
 import { excludeFromBaseline, judgeQueueDefinition, readBaselineItem, readValidatedBaseline, saveRunJudge, saveRunProfile, scheduleRunJudge, validateBaseline } from './quality.js';
 import { PgBossJobQueue } from './queue.js';
 import { eraseSubject } from './retention/index.js';
@@ -226,7 +226,8 @@ describe('run_profiles et baseline (0020)', () => {
   });
 
   test('migration 0020 réversible', async () => {
-    await migrateDown({ connectionString: tdb.url, steps: 1 });
+    // Les migrations suivantes (0021…) d'abord : autant de pas qu'il en faut pour retirer 0020.
+    await migrateDown({ connectionString: tdb.url, steps: loadMigrations().length - 19 });
     expect((await pool.query("SELECT to_regclass('run_profiles') AS t")).rows[0].t).toBeNull();
     await migrateUp({ connectionString: tdb.url });
     expect((await pool.query("SELECT to_regclass('run_profiles') AS t")).rows[0].t).toBe('run_profiles');

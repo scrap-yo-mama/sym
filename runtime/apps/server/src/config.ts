@@ -14,6 +14,7 @@ import {
   type MfaEnforced,
   type ObservabilityConfig,
 } from '@runtime/core';
+import { briefConfigFromEnv, type BriefConfig } from '@runtime/core';
 import { ssrfPolicyFromEnv, type SsrfPolicy } from '@runtime/core/net';
 import type { McpConfig } from './mcp/runtime.js';
 import { TOOL_EXPOSURES, type ToolExposure } from './mcp/tools.js';
@@ -55,6 +56,8 @@ export type ServerConfig = {
   rest: RestConfig;
   /** Serveur MCP (tâche 3.2, 05 § 1 et § 3). */
   mcp: McpConfig;
+  /** Dossier d'enquête (tâche 2.14, 19c § 9.2) : variables `BRIEF_*` bornées. */
+  brief?: BriefConfig;
 };
 
 const HOSTNAME = /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*|\[[0-9a-f:.]+\])$/;
@@ -282,5 +285,6 @@ export function loadServerConfig(env: NodeJS.ProcessEnv = process.env): ServerCo
       maxRunsPerKeyPerMinute: positiveInteger(env, 'MAX_RUNS_PER_KEY_PER_MINUTE', 60, 100_000),
     },
     mcp: loadMcpConfig(env, publicUrl),
+    brief: briefConfigFromEnv(env),
   };
 }

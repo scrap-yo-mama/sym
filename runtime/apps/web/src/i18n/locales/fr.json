@@ -1799,5 +1799,57 @@
         "unsure": "incertain"
       }
     }
+  },
+  "brief": {
+    "title": "Dossier d’enquête de ton IA",
+    "intro": "Ce que ton IA avait déjà trouvé avant de créer l’API. SYM vérifie chaque indice avant de s’y fier ; le dossier n’élargit jamais l’accès ni le budget.",
+    "empty": "Aucun dossier pour cette API.",
+    "latest": "Version {version} du dossier : {hints} indices, {tried} essais, {questions} questions ouvertes",
+    "erased": "Une personne a demandé l’effacement : cette version a été réécrite sans elle.",
+    "hintsHeading": "Indices vérifiés par SYM",
+    "noFacts": "Aucun indice vérifié pour l’instant.",
+    "columns": {
+      "hint": "Indice",
+      "kind": "Type",
+      "state": "État",
+      "reason": "Raison",
+      "cost": "Coût",
+      "version": "Version du dossier"
+    },
+    "stale": "ancien",
+    "versionsHeading": "Dossier lu par chaque version de stratégie",
+    "versionUsed": "v{strategy} : dossier v{brief} ({used} utilisés, {ignored} écartés)",
+    "versionNone": "v{strategy} : aucun dossier",
+    "kind": {
+      "endpoint": "point d’accès",
+      "embedded_data": "données embarquées",
+      "selector": "sélecteur",
+      "pagination": "pagination",
+      "example_url": "URL d’exemple",
+      "pitfall": "piège"
+    },
+    "state": {
+      "used": "utilisé",
+      "verified_unused": "vérifié, non retenu",
+      "probe_failed": "vérification en échec",
+      "ignored": "écarté",
+      "unverified": "non vérifié"
+    },
+    "reason": {
+      "brief_used": "vérifié et utilisé",
+      "brief_verified_unused": "vérifié, une stratégie moins chère a été retenue",
+      "brief_probe_failed": "vérification en échec",
+      "brief_stale": "ancien, non vérifié",
+      "brief_unverifiable": "indication non vérifiable",
+      "brief_host_ignored": "autre site que l’API : ignoré",
+      "brief_robots_skipped": "chemin interdit par robots.txt : aucune requête",
+      "brief_duplicate": "doublon d’un autre indice",
+      "brief_invalid_item": "valeur hors du format de son type",
+      "brief_over_budget": "au-delà du plafond de vérification",
+      "brief_widening_ignored": "consigne sans effet : les règles d’accès restent fixées dans le code",
+      "brief_breaker_open": "deux indices ont échoué : enquête poursuivie sans le dossier",
+      "brief_subject_excluded": "concerne une personne qui a demandé l’effacement"
+    },
+    "unavailable": "Le dossier d’enquête est indisponible pour l’instant."
   }
 }
