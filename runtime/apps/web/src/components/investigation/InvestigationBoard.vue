@@ -221,7 +221,7 @@ function viewTrials(): void {
 
         <section aria-labelledby="col-doing" class="flex flex-col gap-2" data-testid="column-doing">
           <h2 id="col-doing" class="text-lg font-semibold">{{ t('investigation.columns.doing') }}</h2>
-          <AttemptLog :attempts="shownAttempts" :access="state.access" :live="!suspended" />
+          <AttemptLog :attempts="shownAttempts" :access="state.access" :compiled="state.compiled" :live="!suspended" />
           <div>
             <Button type="button" variant="outline" size="sm" data-testid="follow-toggle" @click="toggleFollow">
               {{ suspended ? t('investigation.controls.resumeFollow') : t('investigation.controls.suspendFollow') }}

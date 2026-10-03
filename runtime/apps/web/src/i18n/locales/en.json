@@ -376,7 +376,9 @@
       "failed": "failed ({reason})",
       "pruned": "not run: {reason}",
       "prunedNoReason": "not run",
-      "why": "Why: {reason}"
+      "why": "Why: {reason}",
+      "compiled": "Strategy compiled: replay without AI",
+      "compileKept": "Compilation not kept: AI formatting remains the strategy"
     },
     "plan": {
       "title": "The trial plan",

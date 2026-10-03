@@ -376,7 +376,9 @@
       "failed": "en échec ({reason})",
       "pruned": "non lancé : {reason}",
       "prunedNoReason": "non lancé",
-      "why": "Pourquoi : {reason}"
+      "why": "Pourquoi : {reason}",
+      "compiled": "Stratégie compilée : rejeu sans IA",
+      "compileKept": "Compilation non retenue : la mise en forme par l'IA reste la stratégie"
     },
     "plan": {
       "title": "Le plan d'essais",

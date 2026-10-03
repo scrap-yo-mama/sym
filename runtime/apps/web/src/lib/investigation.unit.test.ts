@@ -31,6 +31,14 @@ function following(): InvestigationState {
 }
 
 describe('ingestEvent', () => {
+  test('strategy.compiled : compilation E4 retenue (rejeu sans IA) ou non retenue, avec sa raison', () => {
+    const state = following();
+    expect(ingestEvent(state, frame('90', 'strategy.compiled', { run_id: RUN, from: 'agent_fetch', to: 'fetch', ok: false, reason: 'values' }), Date.now())).toBe(true);
+    expect(state.compiled).toEqual({ ok: false, reason: 'values' });
+    ingestEvent(state, frame('91', 'strategy.compiled', { run_id: RUN, from: 'agent_fetch', to: 'fetch', ok: true, proposals: 1, ratio: 1 }), Date.now());
+    expect(state.compiled).toEqual({ ok: true, reason: null });
+  });
+
   test('un essai terminé est visible dès la trame reçue : traitement synchrone, sans file ni temporisation', () => {
     const state = following();
     const start = Date.now();
