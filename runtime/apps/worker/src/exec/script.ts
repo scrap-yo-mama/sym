@@ -29,6 +29,7 @@ import type { ElementHandle, Page } from 'playwright-core';
 import { boundedContent, parseBounded, TOO_LARGE } from '../browser/bounded.js';
 import { isMainNavigation, type StrategyRequests } from '../browser/run-context.js';
 import { domainAllowed, normalizeDomain, SandboxBridgeError } from '../sandbox/bridges.js';
+import type { StepPageTools, StepsHost } from './steps-host.js';
 
 /** Opérations `ctx.page.*` (liste fermée, figée par la tâche 1.6). */
 export const PAGE_OPERATIONS = Object.freeze(['goto', 'url', 'waitForSelector', 'content', 'textAll', 'attrAll', 'click', 'evaluate'] as const);
@@ -203,6 +204,16 @@ export type PageBridgeOptions = {
   readonly accessGuard?: () => Promise<void>;
   /** Requêtes de la stratégie (`ctx.page.goto` en est une). */
   readonly strategy?: StrategyRequests;
+  /**
+   * Stratégie `steps` (tâche 2.13) : hôte des étapes. Présent, l'opération `step` (`ctx.steps.run`) est servie ;
+   * absent (script E3), elle est refusée comme toute opération hors liste.
+   */
+  readonly steps?: StepsHost;
+  /**
+   * Arrêt de l'essai (annulation du run, ou refus retenu par la garde de classification) : remis à l'agent d'étape avec
+   * les outils de l'hôte, pour que sa boucle s'arrête au premier refus (2.13, 19 §4).
+   */
+  readonly stopSignal?: AbortSignal;
 };
 
 /** Code rendu au script quand une réponse a été refusée par la garde de classification (l'enfant est arrêté). */
@@ -212,7 +223,7 @@ function bad(detail: string): never {
   throw new SandboxBridgeError('invalid_bridge_call', true, detail);
 }
 
-function parseRequest(raw: unknown): { op: PageOperation; args: Record<string, unknown> } {
+function parseRequest(raw: unknown, allowStep = false): { op: PageOperation | 'step'; args: Record<string, unknown> } {
   if (typeof raw !== 'string' || Buffer.byteLength(raw) > MAX_SOURCE_BYTES + MAX_ARG_BYTES + 1024) bad('page : demande');
   let value: unknown;
   try {
@@ -222,9 +233,10 @@ function parseRequest(raw: unknown): { op: PageOperation; args: Record<string, u
   }
   if (typeof value !== 'object' || value === null || Array.isArray(value)) bad('page : objet attendu');
   const { op, args } = value as { op?: unknown; args?: unknown };
-  if (typeof op !== 'string' || !(PAGE_OPERATIONS as readonly string[]).includes(op)) bad('page : opération');
+  // Stratégie `steps` : seule l'opération `step` ; script E3 : la liste fermée de 1.6, jamais `step`.
+  if (typeof op !== 'string' || (allowStep ? op !== 'step' : !(PAGE_OPERATIONS as readonly string[]).includes(op))) bad('page : opération');
   if (typeof args !== 'object' || args === null || Array.isArray(args)) bad('page : arguments');
-  return { op: op as PageOperation, args: args as Record<string, unknown> };
+  return { op: op as PageOperation | 'step', args: args as Record<string, unknown> };
 }
 
 const text = (v: unknown, name: string, max: number): string => {
@@ -256,7 +268,7 @@ const tooLarge = (): never => {
  * Pont `ctx.page.*` d'un essai E3. Chaque refus de domaine est une violation (l'enfant est tué). Une erreur de
  * Playwright (sélecteur absent, délai) est rendue au script sous un code stable (`page_failed`), sans message.
  */
-export function createPageBridge(options: PageBridgeOptions): NonNullable<SandboxBridges['page']> {
+export function createPageBridge(options: PageBridgeOptions): NonNullable<SandboxBridges['page']> & { readonly stepTools: StepPageTools } {
   const allowed = options.allowedHosts.map(normalizeDomain);
   const { page, watch, maxResponseBytes: max } = options;
   const accessGuard = options.accessGuard ?? (() => Promise.resolve());
@@ -313,11 +325,51 @@ export function createPageBridge(options: PageBridgeOptions): NonNullable<Sandbo
       return c.tagName !== 'BUTTON' || c.type === 'submit';
     });
 
-  return async (raw) => {
-    const { op, args } = parseRequest(raw);
+  /** Navigation demandée par le script (ou par une étape `goto`) : requête de la stratégie, domaine contrôlé avant. */
+  const navigate = async (rawUrl: string) => {
+    const url = checkUrl(text(rawUrl, 'url', MAX_URL));
+    const go = () => guardedGoto(page, url, options.guard, { waitUntil: 'load' as const, timeout: options.timeoutMs });
+    // Navigation demandée par le script : requête de la stratégie (une redirection hors API est sa faute).
+    return options.strategy === undefined ? go() : options.strategy.during(isMainNavigation(page), go);
+  };
+  /** Clic de l'hôte sur un élément trouvé (contrôles d'actionnabilité SANS navigation attendue, puis dispatch attendu). */
+  const clickElement = async (element: ElementHandle, timeout: number) => {
+    if (!options.allowWriteActions && (await isSubmitControl(element))) {
+      options.steps?.noteBlockedWrite();
+      throw new SandboxBridgeError('write_action_blocked', true, 'submit');
+    }
+    await element.click({ timeout, trial: true });
+    // Navigation lancée par le dispatch du clic : la seule attendue, requête de la stratégie comme `ctx.page.goto`.
+    // L'élément vient de passer les contrôles ; un document remplacé entre-temps le détache et le clic échoue
+    // sans dispatch. Le délai couvre aussi l'attente de la navigation lancée (classement du document courant).
+    watch.expectNavigation();
+    const click = () => element.click({ timeout });
+    await (options.strategy === undefined ? click() : options.strategy.during(isMainNavigation(page), click));
+  };
+  const stepTools: StepPageTools = {
+    page,
+    timeoutMs: options.timeoutMs,
+    goto: async (url) => {
+      watch.expectNavigation();
+      await navigate(url);
+    },
+    click: async (locator) => {
+      const element = await locator.elementHandle({ timeout: options.timeoutMs });
+      if (element === null) throw new SandboxBridgeError('page_failed', false, 'click');
+      try {
+        await clickElement(element, options.timeoutMs);
+      } finally {
+        void element.dispose().catch(() => undefined);
+      }
+    },
+  };
+
+  const handler: NonNullable<SandboxBridges['page']> = async (raw) => {
+    const { op, args } = parseRequest(raw, options.steps !== undefined);
     const before = watch.imputed();
     const isEvaluate = op === 'evaluate';
-    const hostOp = op === 'goto' || op === 'click';
+    const stepNav = op === 'step' ? (options.steps?.navigates(args) ?? null) : null;
+    const hostOp = op === 'goto' || op === 'click' || stepNav !== null;
     if (isEvaluate) watch.beginEvaluate();
     if (hostOp) watch.beginHostOp();
     // `goto` : sa navigation part aussitôt. Un clic attend d'abord son élément SANS navigation attendue (plus bas).
@@ -327,12 +379,11 @@ export function createPageBridge(options: PageBridgeOptions): NonNullable<Sandbo
     const perform = async (): Promise<unknown> => {
       switch (op) {
         case 'goto': {
-          const url = checkUrl(text(args['url'], 'url', MAX_URL));
-          const go = () => guardedGoto(page, url, options.guard, { waitUntil: 'load' as const, timeout: options.timeoutMs });
-          // Navigation demandée par le script : requête de la stratégie (une redirection hors API est sa faute).
-          const response = await (options.strategy === undefined ? go() : options.strategy.during(isMainNavigation(page), go));
+          const response = await navigate(args['url'] as string);
           return check({ status: response?.status() ?? 0, url: page.url() });
         }
+        case 'step':
+          return options.steps!.handle(args, stepTools);
         case 'url':
           return check({ url: page.url() });
         case 'waitForSelector': {
@@ -363,16 +414,7 @@ export function createPageBridge(options: PageBridgeOptions): NonNullable<Sandbo
           const element = await page.waitForSelector(selector, { state: 'attached', timeout });
           if (element === null) throw new SandboxBridgeError('page_failed', false, op);
           try {
-            if (!options.allowWriteActions && (await isSubmitControl(element))) {
-              throw new SandboxBridgeError('write_action_blocked', true, 'submit');
-            }
-            await element.click({ timeout, trial: true });
-            // Navigation lancée par le dispatch du clic : la seule attendue, requête de la stratégie comme `ctx.page.goto`.
-            // L'élément vient de passer les contrôles ; un document remplacé entre-temps le détache et le clic échoue
-            // sans dispatch. Le délai couvre aussi l'attente de la navigation lancée (classement du document courant).
-            watch.expectNavigation();
-            const click = () => element.click({ timeout });
-            await (options.strategy === undefined ? click() : options.strategy.during(isMainNavigation(page), click));
+            await clickElement(element, timeout);
           } finally {
             void element.dispose().catch(() => undefined);
           }
@@ -435,4 +477,32 @@ export function createPageBridge(options: PageBridgeOptions): NonNullable<Sandbo
       }
     }
   };
+  /**
+   * Actions de l'hôte HORS d'un appel de l'isolat (agent d'étape après l'arrêt de l'interpréteur, 2.13) : mêmes gardes
+   * que le pont (classification avant et après, navigation attendue, imputation au guet).
+   */
+  const withGuards = async <T>(navigates: boolean, fn: () => Promise<T>): Promise<T> => {
+    if (navigates) watch.beginHostOp();
+    try {
+      await accessGuard();
+      const value = await fn();
+      await accessGuard();
+      return value;
+    } finally {
+      if (navigates) {
+        watch.settleNavigation();
+        watch.endHostOp();
+      }
+    }
+  };
+  const guardedTools: StepPageTools = {
+    page,
+    timeoutMs: options.timeoutMs,
+    goto: (url) => withGuards(true, () => stepTools.goto(url)),
+    click: (locator) => withGuards(true, () => stepTools.click(locator)),
+    // Garde seule (observation, saisie, défilement de l'agent d'étape) : classements terminés, document courant classé.
+    guard: () => accessGuard(),
+    ...(options.stopSignal === undefined ? {} : { signal: options.stopSignal }),
+  };
+  return Object.assign(handler, { stepTools: guardedTools });
 }

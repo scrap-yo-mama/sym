@@ -4,14 +4,16 @@
 
 Moteur agentique serveur : boucle maison (`HomeLoopEngine`), moteur Stagehand 3.7.3 en mode `dom` local seulement
 (ADR 0001, `runtime/docs/adr/0001-agent-engine.md`), canaux `agent_step` Playwright et tunnel, extraction E4, interpréteur E5
-(`hybrid`) et rôle `investigate`. Il appartient au module **Brain** (`docs/modules.md` du dépôt de travail, non publié) : il implémente l'interface `AgentEngine`
+(`hybrid`), rôle `investigate` et agent d'étape de la reprise par étape (tâche 2.13). Il appartient au module **Brain** (`docs/modules.md` du dépôt de travail, non publié) : il implémente l'interface `AgentEngine`
 définie dans `@runtime/core`.
 
 ## Ce qu'il expose
 
 Un seul point d'entrée, `exports["."]` = `dist/index.js` (types `dist/index.d.ts`), construit par `tsc -b`. `src/index.ts` exporte :
 
-- Boucle et moteurs : `HomeLoopEngine`, `StagehandEngine`, `STAGEHAND_VERSION`, `jsonSchemaToZod`.
+- Boucle et moteurs : `HomeLoopEngine`, `StagehandEngine`, `stagehandConstructorOptions` (`selfHeal: false`, sans `cacheDir`),
+  `STAGEHAND_VERSION`, `jsonSchemaToZod`.
+- Agent d'étape (2.13) : `runStepAgent` (outils fermés `click`, `type` sur entrées du run, `scroll`, `read_skill`, `done`).
 - Canaux : `PlaywrightStepChannel`, `installDomainGuard`, `newAgentContext`, `TunnelStepChannel`, `runAgentInTunnel`,
   `assertTunnelEngine`, `ThirdPartyEngineNotViaTunnelError`.
 - Garde-fous : `assertStagehandLocalOnly`, `STAGEHAND_EXCLUDED_TOOLS`, `toolsOutsideClosedList`, `AgentToolsetNotClosedError`.
@@ -49,6 +51,7 @@ Tests nommés présents dans ce dossier (table : `runtime/tests/invariants.json`
 - `assert_prompt_injection_no_trap_request` : une page piégée n'obtient ni requête ni outil (extraction E4).
 - `assert_llm_redaction`, `assert_llm_prompts_not_logged` : aucun secret ni prompt dans les journaux.
 - `assert_e4_irregular_html` : l'extraction E4 tient sur du HTML irrégulier.
+- `assert_stagehand_selfheal_off`, `assert_step_agent_budget`, `assert_step_intent_untrusted` : reprise par étape (2.13).
 - `assert_stagehand_no_integrations` : Stagehand reçoit les règles en `systemPrompt`, `read_skill` en outil, jamais de client MCP.
 
 E6 (`agent`) est limité au serveur : jamais en tunnel.

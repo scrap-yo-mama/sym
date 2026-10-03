@@ -13,6 +13,9 @@ import {
   RUN_OUTCOMES,
   RUN_STATES,
   RUN_TRIGGERS,
+  STEP_OUTCOMES,
+  STRATEGY_ARCHIVE_REASONS,
+  STRATEGY_COMPILABLE,
   STRATEGY_CREATORS,
   VISIBILITIES,
 } from '@runtime/core';
@@ -70,8 +73,20 @@ describe('énumérations TS = CHECK SQL', () => {
     ['runs', 'kind', RUN_KINDS],
     ['run_attempts', 'execution', EXECUTIONS],
     ['run_attempts', 'network', NETWORKS],
+    // 0023_step_repair (2.13).
+    ['strategy_versions', 'compilable', STRATEGY_COMPILABLE],
+    ['run_attempts', 'step_outcome', STEP_OUTCOMES],
   ] as const)('%s.%s', async (table, column, values) => {
     expect(sorted(await checkValues(table, column))).toEqual(sorted(values));
+  });
+
+  test('strategy_versions.archive_reason : valeur unique (2.13), CHECK identique', async () => {
+    const { rows } = await client.query<{ def: string }>(
+      `SELECT pg_get_constraintdef(k.oid) AS def FROM pg_constraint k JOIN pg_class c ON c.oid = k.conrelid
+        WHERE c.relname = 'strategy_versions' AND k.contype = 'c' AND pg_get_constraintdef(k.oid) LIKE '%archive_reason%'`,
+    );
+    expect(rows).toHaveLength(1);
+    expect([...(rows[0] as { def: string }).def.matchAll(/'([^']+)'::text/g)].map((m) => m[1])).toEqual([...STRATEGY_ARCHIVE_REASONS]);
   });
 
   // Valeurs historiques (D-91) : plus produites, toujours admises par la base pour que les lignes anciennes restent lisibles.

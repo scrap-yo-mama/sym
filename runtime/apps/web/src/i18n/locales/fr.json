@@ -896,6 +896,11 @@
     "proxy_not_configured": "Un proxy est requis pour {country}.",
     "tunnel_offline": "Ton ordinateur n'est pas connecté.",
     "not_found": "La page n'existe plus (404 ou 410).",
+    "repair_not_validated": "Réparation conforme mais non validée sans agent ; v{a} gardée.",
+    "write_step_broken": "Une étape qui agit sur le site a cassé ; rien n'est réparé seul.",
+    "step_cascade": "{n} étapes cassées : une nouvelle enquête est nécessaire.",
+    "not_compilable": "Aucune stratégie rejouable sans agent. Le mode « agent instruit » existe, avec un coût à chaque run.",
+    "session_step_broken": "Une étape a cassé sur une page connectée ; aucun agent n'y agit seul.",
     "field_constant": "Le champ {field} a la même valeur sur tous les items.",
     "pattern_shift": "Le format du champ {field} a changé ({p} % des items).",
     "sentinel_values": "{p} % des valeurs de {field} sont vides ou de remplissage.",
@@ -931,7 +936,19 @@
     "secret_unreadable": "Clé illisible",
     "account_limit": "Limite de compte",
     "session_owner_required": "Session du propriétaire requise",
-    "llm_refused": "Demande refusée par le modèle"
+    "llm_refused": "Demande refusée par le modèle",
+    "repair_not_validated": "Réparation non validée",
+    "write_step_broken": "Étape à effet cassée",
+    "step_cascade": "Plusieurs étapes cassées",
+    "not_compilable": "Aucune stratégie rejouable",
+    "session_step_broken": "Étape cassée sur une page connectée"
+  },
+  "reasonAction": {
+    "repair_not_validated": "Voir la reprise",
+    "write_step_broken": "Ouvrir le brouillon",
+    "step_cascade": "Ré-enquêter",
+    "not_compilable": "Voir le mode agent instruit",
+    "session_step_broken": "Ouvrir le brouillon"
   },
   "failureClass": {
     "transient": "Erreur passagère",
@@ -977,7 +994,12 @@
     "forbidden": "Tu n'as pas les droits pour cette action.",
     "conflict": "Cette action n'est pas possible dans l'état actuel de l'API.",
     "invalid_input": "Les valeurs saisies ne correspondent pas au schéma d'entrée.",
-    "queue_full": "La file d'attente est pleine. Réessaie dans un instant."
+    "queue_full": "La file d'attente est pleine. Réessaie dans un instant.",
+    "human_confirmation_required": "Cette confirmation se fait depuis la console, par une personne.",
+    "sha_mismatch": "Les étapes ont changé depuis leur affichage. Relis-les avant de confirmer.",
+    "instructed_steps_unconfirmed": "Confirme d'abord les étapes instruites : l'agent instruit reste désactivé.",
+    "compilable": "Une stratégie rejouable sans agent existe : l'agent instruit reste désactivé.",
+    "no_instructed_steps": "Cette API n'a pas d'étapes instruites : l'agent instruit reste désactivé."
   },
   "actions": {
     "launch": "Lancer",
@@ -1220,7 +1242,9 @@
       "unknown": "Coût non estimé."
     },
     "started": "Run lancé.",
-    "followRun": "Suivre le run"
+    "followRun": "Suivre le run",
+    "instructed": "Agent instruit : un agent travaille à chaque run. Coût estimé de ce run : {cost} au plus.",
+    "instructedUnknown": "Agent instruit : un agent travaille à chaque run. Coût de ce run non estimé."
   },
   "schemas": {
     "input": "Schéma d'entrée",
@@ -1344,6 +1368,66 @@
     "noItems": "Aucun item.",
     "absent": "absent",
     "relaunchUnavailable": "Impossible de relire l'entrée de ce run. Lance l'API depuis la vue d'ensemble."
+  },
+  "repairs": {
+    "show": "Reprises",
+    "runTitle": "Reprises du run du {date}",
+    "title": "Reprises",
+    "caption": "Reprises par étape : étape, niveau, issue, coût, jetons et diff de l’étape",
+    "autoRepaired": "Réparée automatiquement",
+    "empty": "Aucune reprise d’étape dans ce run.",
+    "total": "{n} reprise, coût total {cost} | {n} reprises, coût total {cost}",
+    "noDiff": "Aucun changement",
+    "tokens": "{in} en entrée, {out} en sortie",
+    "tokensEstimated": "~{in} en entrée, ~{out} en sortie",
+    "columns": {
+      "step": "Étape",
+      "level": "Niveau",
+      "outcome": "Issue",
+      "cost": "Coût",
+      "tokens": "Jetons",
+      "diff": "Diff de l’étape"
+    },
+    "level": {
+      "1": "Niveau 1 : localisateurs enregistrés, sans IA",
+      "2": "Niveau 2 : agent sur l’étape",
+      "3": "Niveau 3 : segment d’étapes"
+    },
+    "outcome": {
+      "replayed": "Rejouée telle quelle",
+      "alternate": "Localisateur de secours",
+      "agent_repaired": "Réparée par l’agent",
+      "failed": "Échec"
+    },
+    "op": {
+      "add": "Ajout",
+      "remove": "Retrait",
+      "replace": "Remplacement"
+    }
+  },
+  "instructed": {
+    "title": "Agent instruit",
+    "intro": "Aucune stratégie de cette API ne se rejoue sans agent. En mode « agent instruit », un agent suit les étapes ci-dessous à chaque run, avec un coût à chaque run. Ce mode ne s’active jamais seul.",
+    "cost": "Coût estimé : {cost} par run, au plus.",
+    "costUnknown": "Coût par run non estimé.",
+    "stepsTitle": "Étapes instruites",
+    "untrusted": "Ces intentions ont été écrites par l’IA à partir des pages lues : vérifie-les avant de les confirmer.",
+    "noPost": "Aucune condition de sortie.",
+    "post": {
+      "url_changed": "L’adresse change",
+      "url_contains": "L’adresse contient",
+      "element_present": "Élément présent",
+      "element_absent": "Élément absent",
+      "text_present": "Texte présent"
+    },
+    "confirmHint": "Le mode ne peut s’activer qu’après ta confirmation de ces étapes exactes.",
+    "confirm": "Confirmer ces étapes",
+    "confirmedAt": "Étapes confirmées le {date}.",
+    "enable": "Activer l’agent instruit",
+    "on": "Activé",
+    "off": "Désactivé",
+    "label": "Agent instruit · {cost} par run",
+    "labelUnknown": "Agent instruit · coût par run non estimé"
   },
   "statusTab": {
     "timeline": "Chronologie du statut",

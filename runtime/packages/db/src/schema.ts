@@ -11,6 +11,9 @@ import {
   RUN_OUTCOMES,
   RUN_STATES,
   RUN_TRIGGERS,
+  STEP_OUTCOMES,
+  STRATEGY_ARCHIVE_REASONS,
+  STRATEGY_COMPILABLE,
   STRATEGY_CREATORS,
   VISIBILITIES,
   type AttemptResult,
@@ -382,6 +385,8 @@ export const apis = pgTable(
     // 0021_persistence_mode (2.16, D-49) : mode « SYM ne lâche pas », opt-in ; plafond propre (NULL = défaut d'instance).
     persistenceMode: boolean('persistence_mode').notNull().default(false),
     persistenceBudgetUsd: usd('persistence_budget_usd'),
+    // 0023_step_repair (2.13) : mode « agent instruit », opt-in explicite (déclencheur apis_instructed_mode_guard).
+    instructedMode: boolean('instructed_mode').notNull().default(false),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
@@ -446,6 +451,13 @@ export const strategyVersions = pgTable(
     createdBy: text('created_by', { enum: STRATEGY_CREATORS }).notNull(),
     parentVersion: integer('parent_version'),
     patch: jsonb('patch'),
+    // 0023_step_repair (2.13) : compilable en E5, étapes instruites (non fiables tant que non confirmées), archivage.
+    compilable: text('compilable', { enum: STRATEGY_COMPILABLE }).notNull().default('unknown'),
+    instructedSteps: jsonb('instructed_steps'),
+    instructedStepsSha256: text('instructed_steps_sha256'),
+    instructedStepsConfirmed: jsonb('instructed_steps_confirmed'),
+    archiveReason: text('archive_reason', { enum: STRATEGY_ARCHIVE_REASONS }),
+    sourceSteps: jsonb('source_steps'),
     // 0017_rest_api (3.1) : la version a été courante au moins une fois (déclencheur sur apis) ; seule une telle version se rétablit.
     wasCurrent: boolean('was_current').notNull().default(false),
     createdAt: createdAt(),
@@ -605,6 +617,12 @@ export const runAttempts = pgTable(
     modelId: text('model_id'),
     promptVersion: text('prompt_version'),
     engine: text('engine'),
+    // 0023_step_repair (2.13) : journal par étape (jetons et coût par étape, `cost_usd`).
+    stepId: text('step_id'),
+    stepLevel: smallint('step_level'),
+    stepOutcome: text('step_outcome', { enum: STEP_OUTCOMES }),
+    tokensIn: bigint('tokens_in', { mode: 'number' }).notNull().default(0),
+    tokensOut: bigint('tokens_out', { mode: 'number' }).notNull().default(0),
     createdAt: createdAt(),
     // 0019 : règles qui ont placé l'essai (`nom@version`, 18 §4.6).
     ruleRefs: text('rule_refs').array().notNull().default(sql`'{}'`),

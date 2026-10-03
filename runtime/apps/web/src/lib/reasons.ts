@@ -50,12 +50,36 @@ export const SPEC_REASON_CODES = [
 export const EXTRA_REASON_CODES = ['investigating', 'healthy', 'repairing', 'repair_exhausted', 'proxy_not_configured', 'tunnel_offline', 'not_found'] as const;
 
 /**
+ * Codes de la reprise par étape et de l'agent instruit (19b § 3, tâche 2.13), ajoutés à la table de 06 § 4.2 par 19b
+ * (mêmes règles de parité et de test de chaîne), dans l'ordre de 19b.
+ */
+export const STEP_REASON_CODES = ['repair_not_validated', 'write_step_broken', 'step_cascade', 'not_compilable', 'session_step_broken'] as const;
+export type StepReasonCode = (typeof STEP_REASON_CODES)[number];
+
+/**
  * Codes de 19b § 3 livrés par la tâche 2.12 (mémoire du catalogue, profil des sorties, juge consultatif), ajoutés à la
  * table de 06 § 4.2 : motifs de run dégradé, refus passé du domaine, avis consultatif du juge.
  */
 const QUALITY_REASON_CODES = ['field_constant', 'pattern_shift', 'sentinel_values', 'duplicate_items', 'new_enum_value', 'prior_refusal', 'judge_flag'] as const;
 
-export const REASON_CODES: readonly string[] = [...SPEC_REASON_CODES, ...EXTRA_REASON_CODES, ...QUALITY_REASON_CODES];
+export const REASON_CODES: readonly string[] = [...SPEC_REASON_CODES, ...EXTRA_REASON_CODES, ...STEP_REASON_CODES, ...QUALITY_REASON_CODES];
+
+/**
+ * Action proposée par un code de 19b § 3 (`reasonAction.<code>`) et l'onglet de la fiche qui la porte. « Ouvrir le
+ * brouillon » mène à l'onglet Stratégie (les brouillons y vivront avec 3.14) ; « Voir le mode agent instruit » à la section
+ * de la vue d'ensemble, jamais à une activation directe ; « Ré-enquêter » est le bouton de l'en-tête (aucun lien en plus).
+ */
+export const STEP_REASON_ACTIONS: Record<StepReasonCode, { tab: 'runs' | 'strategy' | 'overview'; hash?: string } | 'reinvestigate'> = {
+  repair_not_validated: { tab: 'runs' },
+  write_step_broken: { tab: 'strategy' },
+  step_cascade: 'reinvestigate',
+  not_compilable: { tab: 'overview', hash: '#instructed' },
+  session_step_broken: { tab: 'strategy' },
+};
+
+export function isStepReasonCode(code: string | null | undefined): code is StepReasonCode {
+  return (STEP_REASON_CODES as readonly string[]).includes(code ?? '');
+}
 
 /** Codes de phrase de diff (`StrategyDiff.summary`, 06 § 2 niveau 1), traduits par `diffSummary.<code>`. */
 export const DIFF_SUMMARY_CODES = ['selector_changed', 'pagination_changed', 'execution_changed', 'network_changed', 'fields_changed', 'script_changed', 'no_change'] as const;

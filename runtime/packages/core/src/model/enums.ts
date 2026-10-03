@@ -22,6 +22,18 @@ export type Network = (typeof NETWORKS)[number];
 export const STRATEGY_CREATORS = ['investigation', 'repair', 'user', 'revert', 'import', 'recompile'] as const;
 export type StrategyCreator = (typeof STRATEGY_CREATORS)[number];
 
+/** Une trace E6 est-elle compilable en E5 (tâche 2.13, 19b §1) ? `no` : seul l'agent instruit (opt-in) la rejoue. */
+export const STRATEGY_COMPILABLE = ['yes', 'unknown', 'no'] as const;
+export type StrategyCompilable = (typeof STRATEGY_COMPILABLE)[number];
+
+/** Raison d'archivage d'une version non courante (2.13 : vN+1 conforme mais non validée sans agent ; le reste avec 3.14). */
+export const STRATEGY_ARCHIVE_REASONS = ['repair_not_validated'] as const;
+export type StrategyArchiveReason = (typeof STRATEGY_ARCHIVE_REASONS)[number];
+
+/** Issue d'une étape dans le journal de reprise (`run_attempts.step_outcome`, 19 §4). */
+export const STEP_OUTCOMES = ['replayed', 'alternate', 'agent_repaired', 'failed'] as const;
+export type StepOutcome = (typeof STEP_OUTCOMES)[number];
+
 export const RUN_TRIGGERS = ['mcp', 'rest', 'schedule', 'ui', 'canary'] as const;
 export type RunTrigger = (typeof RUN_TRIGGERS)[number];
 

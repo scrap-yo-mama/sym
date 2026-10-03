@@ -68,6 +68,12 @@ const GUEST_BOOTSTRAP = String.raw`(function (send, inputJson) {
         },
       });
     })(),
+    // ctx.steps.run(action, index) (format « steps », tâche 2.13) : l'interpréteur des étapes demande l'action de l'étape
+    // « index » au parent, qui la contrôle contre SA copie de la stratégie (opération, cible, entrée du run) et l'exécute
+    // avec les gardes du run. Hors d'un run « steps », le parent refuse (invalid_bridge_call, violation).
+    steps: Object.freeze({
+      run: async (action, index) => JSON.parse(await call('page', toJson({ op: 'step', args: { action: String(action), index: Number(index) } }, 'ctx.steps.run'))),
+    }),
     log: (...args) => { send('log', 0, '', toJson(args.map(text), 'ctx.log')); },
     emit: (item) => { send('emit', 0, '', toJson(item, 'ctx.emit')); },
   });
