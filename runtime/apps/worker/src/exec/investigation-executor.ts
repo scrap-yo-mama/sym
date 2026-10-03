@@ -91,6 +91,7 @@ import {
   type PlanEntry,
   type PlanNetwork,
   type ReconCapture,
+  type StepsCompileContext,
   type TokenPrice,
   type TrialExecution,
   type TrialPair,
@@ -317,6 +318,18 @@ async function closeInvestigation(deps: InvestigationExecutorDeps, ctx: RunCtx, 
 }
 
 /**
+ * Événement de statut d'une fin d'enquête en échec (04 §6) : refus et défis (4), connexion, paiement, limite de compte (3)
+ * par `run_failed` ; seule une trace E6 non compilable en E5 conforme, sans `instructed_mode`
+ * (2.13, 19 §4) : `not_compilable` (2, ou 21 pour une ré-enquête) ; tout le reste : budget épuisé (2 ou 21).
+ */
+export function investigationFailureEvent(failure: ExecFailure): StatusEventInput {
+  const cls = failure.failure_class;
+  if (BLOCKING.has(cls) || ACTION.has(cls)) return { type: 'run_failed', failureClass: cls, ...(failure.status === undefined ? {} : { httpStatus: failure.status }) };
+  if (failure.detail === 'not_compilable') return { type: 'investigation_failed', cause: 'not_compilable' };
+  return { type: 'investigation_failed', cause: 'budget_exhausted' };
+}
+
+/**
  * Exécuteur d'enquête. Une enquête finit TOUJOURS dans un état terminal avec une cause (INV3, UX-24) : toute exception qui
  * échappe aux fins prévues passe par `closeInvestigation`. Seul un run interrompu (bail perdu, arrêt, échéance du job)
  * laisse l'exception au worker, qui le remet en file ou le clôt.
@@ -405,9 +418,7 @@ function investigationRun(deps: InvestigationExecutorDeps): RunExecutor {
      */
     const finishFailed = async (failure: ExecFailure, at: string): Promise<RunResult> => {
       const cls = failure.failure_class;
-      let statusEvent: StatusEventInput;
-      if (BLOCKING.has(cls) || ACTION.has(cls)) statusEvent = { type: 'run_failed', failureClass: cls, ...(failure.status === undefined ? {} : { httpStatus: failure.status }) };
-      else statusEvent = { type: 'investigation_failed', cause: 'budget_exhausted' };
+      const statusEvent = investigationFailureEvent(failure);
       await save('done');
       if (ACTION.has(cls)) await event(EV.actionRequired, { cause: cls, domain: host });
       await applyStatus(statusEvent);
@@ -884,6 +895,8 @@ function investigationRun(deps: InvestigationExecutorDeps): RunExecutor {
       const sampleOutputs = new Map<TrialPair, Record<string, unknown>[][]>();
       /** Trace E6 compilée en E5 par la dernière exécution conforme du couple (04 §3.1). */
       const compiledFor = new Map<TrialPair, unknown>();
+      /** Contexte de la compilation au grain de l'étape (2.13) : trace de l'E6 conforme, modèle, date. */
+      const compileContextFor = new Map<TrialPair, StepsCompileContext>();
       const spend = new Map<TrialPair, { proxy: number; llm: number | null; tokens: { in: number; cached: number; out: number; reasoning: number; estimated: boolean }; model: string | null; prompt: string | null; engine: string | null }>();
       const spentBeforeTrials = spent;
       let trialsUsd = 0;
@@ -897,7 +910,7 @@ function investigationRun(deps: InvestigationExecutorDeps): RunExecutor {
               const entry = entries.get(pair)!;
               const trialTarget: RunTarget = {
                 api: { ...target.api, outputSchema, maxCostUsd: limits.ceilingUsd },
-                strategy: { version: 0, execution: entry.execution, network: entry.network, spec: entry.spec, scriptRef: null, estCostUsd: entry.est_cost_usd },
+                strategy: { version: 0, execution: entry.execution, network: entry.network, spec: entry.spec, scriptRef: null, estCostUsd: entry.est_cost_usd, compilable: 'unknown', sourceSteps: null, instructedSteps: null, instructedConfirmation: null },
               };
               // Rôle agentique sans prix (E4 : `extract`, E6 : `agent`) : aucun essai, une raison par cause (UX-12).
               const roleOfEntry = entry.execution === 'agent_fetch' ? 'extract' : entry.execution === 'agent' ? 'agent' : null;
@@ -953,6 +966,8 @@ function investigationRun(deps: InvestigationExecutorDeps): RunExecutor {
                 const compiled = trial.outcome.agent?.compiled;
                 if (compiled === undefined) return execution(false, 'extraction', 'not_compilable', r.pages, cost, trial.ms, null);
                 compiledFor.set(pair, compiled);
+                const trace = trial.outcome.agent?.trace;
+                compileContextFor.set(pair, { modelId: trial.llm?.modelId ?? null, at: new Date(now()).toISOString(), ...(trace === undefined ? {} : { trace }) });
               }
               lastRecords.set(pair, r.records);
               if (purpose === 'sample') sampleOutputs.set(pair, [...(sampleOutputs.get(pair) ?? []), r.records]);
@@ -1015,7 +1030,7 @@ function investigationRun(deps: InvestigationExecutorDeps): RunExecutor {
           const entry = entries.get(pair)!;
           const records = lastRecords.get(pair) ?? [];
           const runs = Math.max(1, outcome.outcome.executions.length);
-          const kept = retainedStrategy(entry, compiledFor.get(pair), round6((spend.get(pair)?.proxy ?? 0) / runs));
+          const kept = retainedStrategy(entry, compiledFor.get(pair), round6((spend.get(pair)?.proxy ?? 0) / runs), compileContextFor.get(pair));
           if (!kept.ok) return await finishFailed({ failure_class: 'extraction', retryable: false, detail: kept.reason }, 'testing');
           // Source (18 §4.6) : règles injectées et skills lus ; règles embarquées si le compilé porte un prompt (E4) ou vient
           // d'une trace E6 (E5 : `compiled_with` par étape, 19 §4).
@@ -1034,6 +1049,8 @@ function investigationRun(deps: InvestigationExecutorDeps): RunExecutor {
             network: kept.network,
             spec,
             estCostUsd: kept.estCostUsd,
+            ...(kept.compilable === undefined ? {} : { compilable: kept.compilable }),
+            ...(kept.sourceSteps === undefined ? {} : { sourceSteps: kept.sourceSteps }),
             outputSchema,
             ...(state.validated_columns === undefined ? {} : { outputColumns: state.validated_columns }),
             // Import : le schéma d'entrée du fichier (contrôlé à l'import) ; sinon celui que propose l'enquête (2.2).

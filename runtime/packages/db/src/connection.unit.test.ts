@@ -67,7 +67,7 @@ test('migrations : numérotées sans trou, up et down présents', () => {
   }
 });
 
-test('migrations : noms uniques ; i18n (3.20) numérotée après run_rejected_items (2.3), rule_files (2.10), catalog_memory_quality (2.12), persistence_mode (2.16) et robots_not_read (D-91), fusionnées avant', () => {
+test('migrations : noms uniques ; i18n (3.20) numérotée après run_rejected_items (2.3), rule_files (2.10), catalog_memory_quality (2.12), persistence_mode (2.16), robots_not_read (D-91) et step_repair (2.13), fusionnées avant', () => {
   const migrations = loadMigrations();
   expect(new Set(migrations.map((m) => m.name)).size).toBe(migrations.length);
   const byName = new Map(migrations.map((m) => [m.name, m.version]));
@@ -76,5 +76,6 @@ test('migrations : noms uniques ; i18n (3.20) numérotée après run_rejected_it
   expect(byName.get('catalog_memory_quality')).toBe(20);
   expect(byName.get('persistence_mode')).toBe(21);
   expect(byName.get('robots_not_read')).toBe(22);
-  expect(byName.get('i18n')).toBe(23);
+  expect(byName.get('step_repair')).toBe(23);
+  expect(byName.get('i18n')).toBe(24);
 });

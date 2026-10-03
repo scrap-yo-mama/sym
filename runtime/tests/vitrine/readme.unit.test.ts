@@ -9,7 +9,7 @@ import { identityOf, publicRepository, verifyBlock } from '../../scripts/vitrine
 import { findEntries, loadList, normalize, parseList } from '../../scripts/vitrine/lib/text.ts';
 import {
   altProblems, badgeProblems, badgeKind, badges, bannerAltProblems, bannerTexts, claimsProblems, codeBlocks, copyProblems, headings, imageResolveProblems, images, lengthProblems, loadBudgets, marksProblems,
-  parityProblems, pictureProblems, quickstartProblems, readReadme, repoLinkProblems, sectionProblems, unregisteredFactsProblems, verifyBlockProblems, whatItDoes, type Lang,
+  parityProblems, pictureProblems, proseSentences, quickstartProblems, readReadme, repoLinkProblems, sectionProblems, unregisteredFactsProblems, verifyBlockProblems, whatItDoes, type Lang,
 } from '../../scripts/vitrine/lib/readme.ts';
 import { loadThirdPartyRepos, ownerReferenceFiles, ownerReferenceProblems } from '../../scripts/vitrine/lib/owners.ts';
 import { runtimeDir } from '../../scripts/vitrine/lib/paths.ts';
@@ -23,11 +23,12 @@ const LANGS: Lang[] = ['en', 'fr'];
 const homonym = identityOf(`${identity.owner}-homonyme/${identity.name}`);
 const lineCount = (text: string): number => text.split('\n').length - (text.endsWith('\n') ? 1 : 0);
 
-describe('assert_readme_length_budget : 90 à 150 lignes, ≤ 12 Ko, commande avant la ligne 40', () => {
+describe('assert_readme_length_budget : 50 à 150 lignes (planche de 4.12b), ≤ 12 Ko, commande avant la ligne 40', () => {
   test('les deux README respectent le budget', () => {
     for (const lang of LANGS) {
       expect(lengthProblems(README[lang], budgets), lang).toEqual([]);
-      expect(lineCount(README[lang])).toBeGreaterThanOrEqual(90);
+      expect(lineCount(README[lang])).toBeGreaterThanOrEqual(budgets.readme.minLines);
+      expect(budgets.readme.minLines).toBe(50);
       expect(lineCount(README[lang])).toBeLessThanOrEqual(150);
     }
   });
@@ -49,15 +50,15 @@ describe('assert_readme_i18n_parity : mêmes titres, mêmes blocs de code, même
   });
 
   test('cas négatifs : un titre en moins, un bloc de code modifié, une image changée, sélecteur absent', () => {
-    expect(parityProblems(README.en, README.fr.replace(/^## Contribuer$/m, '')).join()).toMatch(/titres/);
+    expect(parityProblems(README.en, README.fr.replace(/^## Démarrage rapide$/m, '')).join()).toMatch(/titres/);
     expect(parityProblems(README.en, README.fr.replace('docker compose up --build', 'docker compose up')).join()).toMatch(/bloc de code/);
     expect(parityProblems(README.en, README.fr.replace('banner-dark.png', 'banner-other.png')).join()).toMatch(/images/);
     expect(parityProblems(README.en, `texte\n${README.fr}`).join()).toMatch(/première ligne/);
   });
 });
 
-describe('assert_readme_sections_present : les 11 blocs de 22 §3.1, dans l\'ordre, sans autre titre ##', () => {
-  test('titres, ordre, un seul lien « Responsible use » dans le bloc des licences, tableau de 3 lignes', () => {
+describe('assert_readme_sections_present : les blocs de la planche (D-60), dans l\'ordre, sans autre titre ##', () => {
+  test('titres, ordre, un seul lien « Responsible use » dans le paragraphe de mentions, licences nommées', () => {
     for (const lang of LANGS) expect(sectionProblems(README[lang], lang), lang).toEqual([]);
   });
 
@@ -65,29 +66,28 @@ describe('assert_readme_sections_present : les 11 blocs de 22 §3.1, dans l\'ord
     for (const lang of LANGS) {
       const text = README[lang];
       expect(text, lang).toMatch(/<picture>/);
-      expect(text, lang).toMatch(/Docs<\/a>/);
-      expect(text, lang).toMatch(/Quickstart<\/a>/);
-      expect(text, lang).toMatch(/Discussions<\/a>/);
-      expect(text, lang).toMatch(/<details>/);
+      expect(text, lang).toMatch(/\[!WARNING\]/);
+      expect(text, lang).toMatch(/<table>/);
+      expect(text, lang).toMatch(/Deploy to Render/);
     }
   });
 
-  // Écart assumé au titre du bloc 6 (22 §3.1 : « Try it in two minutes (no key) ») : la première construction de l'image prend
-  // plusieurs minutes, et le quickstart crée deux secrets d'instance : le README dit « Try it (no model key) » / « Essaie (sans
-  // clé de modèle) » (voir SECTION_TITLES dans lib/readme.ts).
-  test.todo('bloc 2 : lien vers la landing (4.11) à côté de Docs, Quickstart et Discussions, une fois la landing en ligne');
-  test.todo('bloc 4 : vignette de démo fr et en (PNG ≤ 150 Ko) cliquable vers la vidéo, ajoutée avec le GIF par 3.11');
+  // 4.12b (D-60) : la planche Readme.dc.html n'a ni le bloc 2 de 22 §3.1 (liens Docs, Quickstart, Discussions et landing) ni le bloc 4
+  // (vignette de démo). Ils sont retirés du README avec la planche ; leur retour attend 4.11 (landing en ligne, dont dépend 4.5) et
+  // 3.11 (démo), et l'arbitrage de leur place dans la planche : le CDC (22 §3.1, 22b, 16) est à mettre à jour à la structure de D-60.
+  test.todo('bloc 2 de 22 §3.1 : lien vers la landing (4.11), absent de la planche (D-60) ; à rétablir à la mise en ligne de la landing (4.5 attend un README qui pointe vers elle), à la place que l\'arbitrage lui donne dans la planche');
+  test.todo('bloc 4 de 22 §3.1 : vignette de démo fr et en (PNG ≤ 150 Ko) cliquable vers la vidéo, absente de la planche (D-60) ; revient avec le GIF de 3.11 si l\'arbitrage la garde');
 
-  test('cas négatifs : titre ajouté, sections permutées, deuxième lien « Responsible use », lien hors du bloc des licences', () => {
+  test('cas négatifs : titre ajouté, sections permutées, deuxième lien « Responsible use », lien hors du paragraphe de mentions', () => {
     expect(sectionProblems(`${README.en}\n## Extra\n`, 'en').join()).toMatch(/titres/);
-    expect(sectionProblems(README.en.replace('## Licenses', '## Contribute-x').replace('## Contribute\n', '## Licenses\n'), 'en').join()).toMatch(/titres/);
+    expect(sectionProblems(README.en.replace('## Quickstart', '## Verify-x').replace('## Verify what you run', '## Quickstart').replace('## Verify-x', '## Verify what you run'), 'en').join()).toMatch(/titres/);
     expect(sectionProblems(`${README.en}\n[Responsible use](${identity.url}/blob/main/LICENSE)\n`, 'en').join()).toMatch(/liens « Responsible use/);
-    const moved = `${README.en.replace(/\n\[Responsible use\][^\n]*\n/, '\n')}\n[Responsible use](${identity.url}/blob/main/runtime/NOTICE)\n`;
-    expect(sectionProblems(moved, 'en').join()).toMatch(/pas dans le bloc des licences/);
+    const moved = README.en.replace(/\[Responsible use\]\([^)]*\)/, 'Responsible use').replace('## How it feels', `[Responsible use](${identity.url}/blob/main/runtime/NOTICE)\n\n## How it feels`);
+    expect(sectionProblems(moved, 'en').join()).toMatch(/pas dans le paragraphe de mentions/);
   });
 });
 
-describe('assert_readme_badges_budget : 5 badges au plus, tous de la liste autorisée', () => {
+describe('assert_readme_badges_budget : 5 badges colorés au plus (planche, D-60), tous de la liste autorisée', () => {
   test('les README portent au plus 5 badges, servis par le seul service autorisé', () => {
     for (const lang of LANGS) {
       expect(badgeProblems(README[lang], budgets), lang).toEqual([]);
@@ -96,12 +96,12 @@ describe('assert_readme_badges_budget : 5 badges au plus, tous de la liste autor
     }
   });
 
-  test('V1 : licence, dernière version et CI seulement (22 §3.1, bloc 3) ; une étoile ou un compteur de téléchargements est refusé', () => {
+  test('D-60 : licence, statut, protocole, déploiement et versions, aux couleurs de la planche ; une étoile ou un compteur de téléchargements est refusé', () => {
     for (const lang of LANGS) {
       expect(badges(README[lang], budgets).map((badge) => badgeKind(badge.src, budgets)), lang).toEqual(budgets.badges.allowedPaths);
     }
-    expect(budgets.badges.allowedPaths).toEqual(['/github/license/', '/github/v/release/', '/github/actions/workflow/status/']);
-    for (const kind of ['github/stars', 'github/downloads', 'github/forks', 'badge/build-passing-green']) {
+    expect(budgets.badges.allowedPaths).toEqual(['/badge/license-', '/badge/status-', '/badge/protocol-', '/badge/deploy-', '/badge/releases-']);
+    for (const kind of ['github/stars', 'github/downloads', 'github/forks', 'badge/build-passing-green', 'github/license']) {
       const extra = `${README.en}\n![x](https://img.shields.io/${kind}/${identity.repository})\n`;
       expect(badgeProblems(extra, budgets).join(), kind).toMatch(/hors de la liste autorisée/);
     }
@@ -114,49 +114,77 @@ describe('assert_readme_badges_budget : 5 badges au plus, tous de la liste autor
   });
 });
 
-describe('assert_readme_claims_registered : chaque puce de « What it does » a son entrée relue du registre', () => {
+describe('assert_readme_claims_registered : chaque puce de « What SYM does » et « What SYM can handle » a son entrée relue du registre', () => {
   test('les 5 puces de chaque langue ont leur entrée « relu » ; aucune entrée non relue n\'est affichée', () => {
     for (const lang of LANGS) {
-      expect(whatItDoes(README[lang], lang)).toHaveLength(5);
+      expect(whatItDoes(README[lang], lang)).toHaveLength(10);
       expect(claimsProblems(README[lang], lang, claims), lang).toEqual([]);
     }
   });
 
   test('cas négatifs : puce sans entrée, entrée « à relire » ou « bloqué »', () => {
-    const edited = README.en.replace('- **Guard rails.**', '- **Guard rails, now stronger.**');
+    const edited = README.en.replace('- Picks the cheapest method that works', '- Picks the cheapest method that works, always');
     expect(claimsProblems(edited, 'en', claims).join()).toMatch(/n'a pas d'entrée/);
-    const stale: ClaimsFile = { ...claims, claims: claims.claims.map((c) => (c.id === 'guard-rails' ? { ...c, status: 'à relire' as const } : c)) };
+    const stale: ClaimsFile = { ...claims, claims: claims.claims.map((c) => (c.id === 'does-cheapest' ? { ...c, status: 'à relire' as const } : c)) };
     expect(claimsProblems(README.en, 'en', stale).join()).toMatch(/à relire/);
-    const blocked: ClaimsFile = { ...claims, claims: claims.claims.map((c) => (c.id === 'guard-rails' ? { ...c, status: 'bloqué' as const } : c)) };
+    const blocked: ClaimsFile = { ...claims, claims: claims.claims.map((c) => (c.id === 'does-cheapest' ? { ...c, status: 'bloqué' as const } : c)) };
     expect(claimsProblems(README.fr, 'fr', blocked).join()).toMatch(/bloqué/);
   });
 
-  test('hors des puces : un chiffre avec unité, ou le rejeu par la CI dans « Try it », ne s\'affiche que si la phrase est au registre (22 §3.2)', () => {
-    for (const lang of LANGS) expect(unregisteredFactsProblems(README[lang], lang, claims), lang).toEqual([]);
-    const replay = claims.claims.find((c) => c.id === 'quickstart-replayed-by-ci');
-    expect(replay?.status).toBe('relu');
-    expect(replay?.surfaces).toContain('readme');
-    for (const lang of LANGS) expect(README[lang], lang).toContain(replay?.[lang] ?? '\0');
+  test('hors des puces : un chiffre avec unité, ou le rejeu par la CI dans « Quickstart », ne s\'affiche que si la phrase est au registre (22 §3.2) ; aucun montant (ni la planche : 0 « $ », 38 « $ » par mois, sans mesure)', () => {
+    for (const lang of LANGS) {
+      expect(unregisteredFactsProblems(README[lang], lang, claims), lang).toEqual([]);
+      expect(README[lang], lang).not.toMatch(/\d+\s*(USD|US\$|\$|€|EUR)\B|\$\s*\d+/i);
+    }
+  });
+
+  test('une seule vérité (22 §1) : chaque phrase de l\'accroche, de l\'alerte, de la transcription, de la légende « Deploy to Render », de la note « Verify » et des mentions vient d\'une entrée relue', () => {
+    for (const lang of LANGS) {
+      expect(proseSentences(README[lang]).length, lang).toBeGreaterThanOrEqual(17);
+      expect(unregisteredFactsProblems(README[lang], lang, claims), lang).toEqual([]);
+    }
+    expect(proseSentences(README.en)).toEqual(expect.arrayContaining([
+      'You ask your AI for data.',
+      'Then it compiles an API that replays without an LLM when the strategy allows, and repairs itself when the site changes.',
+      'SYM 👻: Done. 20 books, no model cost per replay.',
+      'Security: private vulnerability reporting is on.',
+      'Built with AI assistance, reviewed by humans.',
+    ]));
+    expect(proseSentences(README.fr)).toEqual(expect.arrayContaining(['Tu demandes des données à ton IA.', 'Fait avec l\'aide d\'une IA, relu par des humains.']));
+    for (const lang of LANGS) expect(proseSentences(README[lang]).join('\n'), lang).not.toMatch(/Lire en|English|Français|WARNING/);
+  });
+
+  test('cas négatifs : phrase ajoutée à l\'accroche, à la transcription ou aux mentions ; entrée de l\'accroche à relire', () => {
+    const hero = README.en.replace('Your server, your database, your model.', 'Your server, your database, your model. It never breaks.');
+    expect(unregisteredFactsProblems(hero, 'en', claims).join()).toMatch(/hors registre.*It never breaks/);
+    const transcript = README.fr.replace('20 livres', '500 livres');
+    expect(transcript).not.toBe(README.fr);
+    expect(unregisteredFactsProblems(transcript, 'fr', claims).join()).toMatch(/500 livres/);
+    const mentions = README.en.replace('Built with AI assistance, reviewed by humans.', 'Built by humans only.');
+    expect(mentions).not.toBe(README.en);
+    expect(unregisteredFactsProblems(mentions, 'en', claims).join()).toMatch(/Built by humans only/);
+    const owner = claims.claims.find((c) => c.surfaces.includes('readme') && c.en.includes('You ask your AI for data.'));
+    expect(owner).toBeDefined();
+    const stale: ClaimsFile = { ...claims, claims: claims.claims.map((c) => (c.id === owner?.id ? { ...c, status: 'à relire' as const } : c)) };
+    expect(unregisteredFactsProblems(README.fr, 'fr', stale).join()).toMatch(/à relire/);
   });
 
   test('cas négatifs : chiffre sans mesure (« about 4 GB of memory »), rejeu par la CI reformulé hors registre, durée annoncée', () => {
-    const memory = README.en.replace('You need Docker with Compose.', 'You need Docker with Compose and about 4 GB of memory.');
+    const memory = README.en.replace('## Quickstart\n', '## Quickstart\n\nYou need about 4 GB of memory.\n');
     expect(memory).not.toBe(README.en);
     expect(unregisteredFactsProblems(memory, 'en', claims).join()).toMatch(/4 GB/);
-    const memoryFr = README.fr.replace('Il te faut Docker avec Compose.', 'Il te faut Docker avec Compose et environ 4 Go de mémoire.');
+    const memoryFr = README.fr.replace('## Démarrage rapide\n', '## Démarrage rapide\n\nIl faut environ 4 Go de mémoire.\n');
     expect(memoryFr).not.toBe(README.fr);
     expect(unregisteredFactsProblems(memoryFr, 'fr', claims).join()).toMatch(/4 Go/);
-    const replay = claims.claims.find((c) => c.id === 'quickstart-replayed-by-ci')?.en ?? '\0';
-    const ci = README.en.replace(replay, 'The CI replays these commands on every commit.');
-    expect(ci).not.toBe(README.en);
+    const ci = README.en.replace('## Verify what you run', 'The CI replays these commands on every commit.\n\n## Verify what you run');
     expect(unregisteredFactsProblems(ci, 'en', claims).join()).toMatch(/CI replays/);
     expect(unregisteredFactsProblems(`${README.en}\nIt starts in 2 minutes.\n`, 'en', claims).join()).toMatch(/2 minutes/);
   });
 
-  test('« Try it » dit quelle clé il ne demande pas : aucune clé de modèle (le mode démo sans aucune clé arrive avec la première version)', () => {
-    expect(headings(README.en)).toContain('Try it (no model key)');
-    expect(headings(README.fr)).toContain('Essaie (sans clé de modèle)');
-    for (const lang of LANGS) expect(sectionProblems(README[lang].replace(/^## (Try it|Essaie) \(.*\)$/m, '## $1 (no key)'), lang).join(), lang).toMatch(/titres/);
+  test('le quickstart garde son titre et la commande réelle (aucune clé de modèle n\'y est demandée)', () => {
+    expect(headings(README.en)).toContain('Quickstart');
+    expect(headings(README.fr)).toContain('Démarrage rapide');
+    for (const lang of LANGS) expect(sectionProblems(README[lang].replace(/^## (Quickstart|Démarrage rapide)$/m, '## Try it'), lang).join(), lang).toMatch(/titres/);
   });
 });
 
@@ -220,6 +248,14 @@ describe('assert_readme_no_bypass_copy : 0 mot de P (hors registre) et 0 mot de 
     }
   });
 
+  test('un libellé de cellule du comparatif (landing-compare) n\'est une copie que s\'il occupe toute une ligne : « when the site changes » au milieu d\'une phrase n\'en est pas une (4.12b)', () => {
+    const label = claims.claims.find((c) => c.id === 'compare.row.repair')!;
+    expect(foreignClaimsDisplayed(claims, `It repairs itself ${label.en.toLowerCase()}, and more.\n`, 'readme')).toEqual([]);
+    expect(foreignClaimsDisplayed(claims, `Il se répare ${label.fr.toLowerCase()}.\n`, 'readme')).toEqual([]);
+    expect(foreignClaimsDisplayed(claims, `intro\n${label.en}\n`, 'readme').join()).toMatch(/compare\.row\.repair/);
+    expect(foreignClaimsDisplayed(claims, `intro\n| ${label.fr} |\n`, 'readme').join()).toMatch(/compare\.row\.repair/);
+  });
+
   test('un mot de P ne passe que dans une phrase du registre', () => {
     const p = loadList('forbidden-p.txt');
     const withP = claims.claims.find((c) => findEntries(c.en, p).length > 0) ?? { en: 'Stealth mode', id: 'fixture' };
@@ -250,7 +286,7 @@ describe('assert_readme_quickstart_matches_ci : « Try it » reprend les command
   test('cas négatifs : une commande modifiée, une commande en moins', () => {
     expect(quickstartProblems(README.en.replace('docker compose up --build', 'docker compose up -d')).join()).toMatch(/pas celles du quickstart/);
     expect(quickstartProblems(README.en.replace('  set -C\n', '')).join()).toMatch(/pas celles du quickstart/);
-    expect(codeBlocks(README.en)[0]?.body).toContain('docker compose up --build');
+    expect(codeBlocks(README.en).find((b) => b.lang === 'bash')?.body).toContain('docker compose up --build');
   });
 });
 
@@ -272,10 +308,12 @@ describe('assert_readme_images_resolve, assert_readme_alt_text, assert_readme_pi
 
   test('l\'alt du bandeau décrit ce que montre le bandeau (ses textes), sans accroche ni phrase absente de l\'image', () => {
     const texts = bannerTexts();
-    expect(texts).toEqual(['Scrapyomama', 'SYM'].filter((t) => texts.includes(t)));
+    expect(texts).toHaveLength(3);
+    // La signature du bandeau est le texte « SYM » et l'icône sym-ghost.svg tracée, jamais l'emoji (20 §2.3, svgEmojiProblems).
+    expect(texts[0]).toBe('SYM');
     for (const lang of LANGS) expect(bannerAltProblems(README[lang], texts), lang).toEqual([]);
-    expect(bannerAltProblems(README.en.replace(/(<picture>[\s\S]*?<img alt=")[^"]*"/, '$1Scrapyomama (SYM): describe the data, get an API."'), texts).join()).toMatch(/accroche|phrase/);
-    expect(bannerAltProblems(README.en.replace(/(<picture>[\s\S]*?<img alt=")[^"]*"/, '$1Ghost logo"'), texts).join()).toMatch(/Scrapyomama/);
+    expect(bannerAltProblems(README.en.replace(/(<picture>[\s\S]*?<img alt=")[^"]*"/, `$1${texts.join(' ').replace(/"/g, '&quot;')} Describe the data: get an API."`), texts).join()).toMatch(/accroche|phrase/);
+    expect(bannerAltProblems(README.en.replace(/(<picture>[\s\S]*?<img alt=")[^"]*"/, '$1Ghost logo"'), texts).join()).toMatch(/SYM/);
   });
 
   test('chaque <picture> a ses sources dark et light, un <img> de repli avec alt, et ses fichiers', () => {
@@ -294,9 +332,18 @@ describe('identité : liens du README et bloc « Verify » dérivés de PUBLIC_R
   });
 
   test('cas négatifs : autre propriétaire, chemin absent, image GHCR d\'une organisation homonyme', () => {
-    expect(repoLinkProblems(README.en.replace(`${identity.repository}/discussions`, `${homonym.repository}/discussions`), identity).join()).toMatch(/autre dépôt/);
+    expect(repoLinkProblems(README.en.replace(`${identity.repository}/blob/main/LICENSE`, `${homonym.repository}/blob/main/LICENSE`), identity).join()).toMatch(/autre dépôt/);
     expect(repoLinkProblems(README.en.replace('runtime/SECURITY.md', 'runtime/ABSENT.md'), identity).join()).toMatch(/introuvable/);
     expect(repoLinkProblems(README.en.replace(identity.image, homonym.image), identity).join()).toMatch(/GHCR/);
+  });
+
+  test('« Verify » : sous le bloc, une ligne dit de remplacer X.Y.Z et que rien n\'est publié avant la première version (4.12b)', () => {
+    const note = { en: /^Replace `X\.Y\.Z` [^\n]*nothing is published before the first release\.$/, fr: /^Remplace `X\.Y\.Z` [^\n]*rien n'est publié avant la première version\.$/ };
+    for (const lang of LANGS) {
+      const after = README[lang].slice(README[lang].indexOf(verifyBlock(identity)) + verifyBlock(identity).length).replace(/^\n```\n+/, '');
+      expect(after.split('\n')[0], lang).toMatch(note[lang]);
+    }
+    expect(codeBlocks(README.en).some((b) => b.body === verifyBlock(identity) && b.body.includes('X.Y.Z'))).toBe(true);
   });
 
   test('le bloc « Verify » est celui que dérive l\'identité (octet pour octet, en et fr)', () => {
@@ -329,15 +376,9 @@ describe('assert_verify_snippet_works : garde d\'organisation homonyme sur le te
     expect(clone).not.toBe(README.en);
     expect(repoLinkProblems(clone, identity)).toEqual([]);
     expect(at(clone)).toMatch(/autre dépôt/);
-    const license = README.en.replace(`img.shields.io/github/license/${identity.repository}`, `img.shields.io/github/license/${refused.repository}`);
+    const license = README.en.replace(`${identity.url}/blob/main/LICENSE`, `${refused.url}/blob/main/LICENSE`);
     expect(license).not.toBe(README.en);
-    expect(at(license)).toMatch(/badge/);
-    const release = README.fr.replace(`img.shields.io/github/v/release/${identity.repository}`, `img.shields.io/github/v/release/${homonym.repository}`);
-    expect(release).not.toBe(README.fr);
-    expect(at(release)).toMatch(/badge/);
-    const ci = README.en.replace(`img.shields.io/github/actions/workflow/status/${identity.repository}/`, `img.shields.io/github/actions/workflow/status/${homonym.repository}/`);
-    expect(ci).not.toBe(README.en);
-    expect(at(ci)).toMatch(/badge/);
+    expect(at(license)).toMatch(/autre dépôt/);
     const attestation = README.en.replace(`-R ${identity.repository}`, `-R ${homonym.repository}`);
     expect(attestation).not.toBe(README.en);
     expect(at(attestation)).toMatch(/-R/);

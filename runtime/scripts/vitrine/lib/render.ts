@@ -9,7 +9,9 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { assetsDir, runtimeDir } from './paths.ts';
 
-export type RenderJob = { source: string; output: string; width: number; height: number; background: string; replace?: Record<string, string> };
+export type RenderJob = { source: string; output: string; width: number; height: number; background: string; replace?: Record<string, string>;
+  /** Coins arrondis du bandeau (planche, 4.12b) : fond transparent hors du cadre. */
+  transparent?: boolean };
 
 /** Phrases localisées de l'aperçu social et des images OG (même source SVG, texte seul remplacé). */
 const OG_TEXT = {
@@ -18,8 +20,8 @@ const OG_TEXT = {
 } as const;
 
 export const RENDER_JOBS: RenderJob[] = [
-  { source: 'src/banner-light.svg', output: 'brand/banner-light.png', width: 1600, height: 400, background: '#F3EEE6' },
-  { source: 'src/banner-dark.svg', output: 'brand/banner-dark.png', width: 1600, height: 400, background: '#24252D' },
+  { source: 'src/banner-light.svg', output: 'brand/banner-light.png', width: 1600, height: 400, background: '#24252D', transparent: true },
+  { source: 'src/banner-dark.svg', output: 'brand/banner-dark.png', width: 1600, height: 400, background: '#24252D', transparent: true },
   { source: 'src/social-preview.svg', output: 'brand/social-preview.png', width: 1280, height: 640, background: '#FBF8F3' },
   { source: 'src/social-preview.svg', output: 'brand/og-en.png', width: 1200, height: 630, background: '#FBF8F3', replace: OG_TEXT.en },
   { source: 'src/social-preview.svg', output: 'brand/og-fr.png', width: 1200, height: 630, background: '#FBF8F3', replace: OG_TEXT.fr },
@@ -56,17 +58,17 @@ export async function renderAssets(jobs: readonly RenderJob[] = RENDER_JOBS): Pr
         return `<svg${cleaned} width="${job.width}" height="${job.height}" preserveAspectRatio="xMidYMid meet">`;
       });
       const page = join(dir, 'page.html');
-      writeFileSync(page, `<!doctype html><meta charset="utf-8"><style>${faces}\nhtml,body{margin:0;background:${job.background};}svg{display:block;}</style>${svg}`);
+      writeFileSync(page, `<!doctype html><meta charset="utf-8"><style>${faces}\nhtml,body{margin:0;background:${job.transparent ? 'transparent' : job.background};}svg{display:block;}</style>${svg}`);
       const context = await browser.newContext({ viewport: { width: job.width, height: job.height }, deviceScaleFactor: 1 });
       const tab = await context.newPage();
       await tab.goto(pathToFileURL(page).href);
       // Expressions en chaîne : ce script Node n'a pas les types du DOM.
-      await tab.evaluate('Promise.all([document.fonts.load(\'800 20px "Bricolage Grotesque"\'), document.fonts.load(\'600 20px "JetBrains Mono"\')]).then(() => document.fonts.ready).then(() => 0)');
-      const fontsReady = await tab.evaluate('document.fonts.check(\'800 20px "Bricolage Grotesque"\') && document.fonts.check(\'600 20px "JetBrains Mono"\')');
+      await tab.evaluate('Promise.all([document.fonts.load(\'800 20px "Bricolage Grotesque"\'), document.fonts.load(\'600 20px "JetBrains Mono"\'), document.fonts.load(\'400 20px "DM Sans"\')]).then(() => document.fonts.ready).then(() => 0)');
+      const fontsReady = await tab.evaluate('document.fonts.check(\'800 20px "Bricolage Grotesque"\') && document.fonts.check(\'600 20px "JetBrains Mono"\') && document.fonts.check(\'400 20px "DM Sans"\')');
       if (!fontsReady) throw new Error(`polices non chargées pour ${job.output}`);
       const target = join(assetsDir, job.output);
       mkdirSync(join(target, '..'), { recursive: true });
-      await tab.screenshot({ path: target, type: 'png', clip: { x: 0, y: 0, width: job.width, height: job.height } });
+      await tab.screenshot({ path: target, type: 'png', omitBackground: job.transparent === true, clip: { x: 0, y: 0, width: job.width, height: job.height } });
       await context.close();
       written.push(job.output);
     }

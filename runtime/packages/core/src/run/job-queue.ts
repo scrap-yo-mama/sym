@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Interface de file (T2 R1) : le code métier ne voit que `JobQueue`. L'adaptateur pg-boss 12 (`@runtime/db`) est le
 // seul endroit où pg-boss est importé et le seul à toucher le schéma `pgboss` (SQL brut interdit ailleurs).
-import type { Execution, FailureClass, Network, RunKind, RunOutcome } from '../model/enums.js';
+import type { Execution, FailureClass, Network, RunKind, RunOutcome, StepOutcome } from '../model/enums.js';
 import type { LogLevel } from '../observability/config.js';
 import type { PersonalValueRegistry } from '../privacy/mask.js';
 import type { ActionReason, StatusEventInput } from '../status/types.js';
@@ -105,6 +105,8 @@ export type AttemptRecord = {
   model_id?: string | null;
   prompt_version?: string | null;
   engine?: string | null;
+  /** Essai d'une reprise par étape (2.13, 19 §4) : étape, niveau (1 à 3), issue ; jetons et coût de l'essai. */
+  step?: { id: string; level: 1 | 2 | 3 | null; outcome: StepOutcome };
   /** `nom@version` des règles qui ont placé l'essai (18 §4.6, tâche 2.10). */
   rule_refs?: readonly string[];
 };

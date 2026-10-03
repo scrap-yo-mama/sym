@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// Multilingue côté base (tâche 3.20, 21b § 1) sur base réelle : migration 0023 (aller-retour compris), `runs.locale` posée par
+// Multilingue côté base (tâche 3.20, 21b § 1) sur base réelle : migration 0024 (aller-retour compris), `runs.locale` posée par
 // le déclencheur (le rôle applicatif ne lit pas `users`), événements et audit en codes seulement, RGPD des champs de langue
 // et de fuseau (`users.locale`, `users.timezone`, `invitations.locale`, 17 § 6 : export, effacement, `assert_erasure_complete`).
 import { randomBytes, randomUUID } from 'node:crypto';
@@ -46,7 +46,7 @@ afterAll(async () => {
 
 const localeOf = async (runId: string) => (await pool.query<{ locale: string }>('SELECT locale FROM runs WHERE id = $1', [runId])).rows[0]?.locale;
 
-describe('migration 0023_i18n', () => {
+describe('migration 0024_i18n', () => {
   test('colonnes, formats et valeurs par défaut', async () => {
     const cols = await pool.query<{ table_name: string; column_name: string; is_nullable: string }>(
       "SELECT table_name, column_name, is_nullable FROM information_schema.columns WHERE (table_name, column_name) IN (('users','timezone'),('invitations','locale'),('runs','locale'))",

@@ -568,6 +568,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/apis/{slug}/instructed-steps/confirm": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Confirme les étapes instruites affichées (acte humain, session console seulement)
+         * @description Confirme les étapes instruites de la version `version` dont l'empreinte est `sha256` (celles que la console a affichées). Hors session de console (clé d'API, outil MCP) : `403 human_confirmation_required`. Étapes changées depuis l'affichage : `409 sha_mismatch`. Version sans étapes instruites : `409 no_instructed_steps`.
+         */
+        post: operations["confirmInstructedSteps"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/apis/{slug}/instructed-mode": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Active ou désactive le mode « agent instruit » (opt-in explicite, jamais par défaut)
+         * @description L'activation exige une API non compilable dont les étapes instruites EXACTES sont confirmées ; sinon `409` et `instructed_mode` reste faux : `instructed_steps_unconfirmed`, `compilable` (une stratégie rejouable sans agent existe) ou `no_instructed_steps`. La désactivation est toujours acceptée.
+         */
+        put: operations["setInstructedMode"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/apis/{slug}/resolved-rules": {
         parameters: {
             query?: never;
@@ -1936,7 +1976,7 @@ export interface components {
         RunOutcome: "clean" | "degraded" | "failed";
         /** @description Classe d'échec fermée (04b § 1), ou famille `llm_*` (08 § 1). Code stable, jamais localisé. `robots_disallowed` et `robots_unreachable` sont des valeurs historiques (D-91) : plus produites, encore lisibles sur les runs anciens. */
         FailureClass: string;
-        /** @description Code de raison stable (06 § 4.2 : `retried`, `escalated`, `repaired`, `stale`, `reverted`, `cookie_expired`…), traduit par la console ; jamais une phrase. */
+        /** @description Code de raison stable (06 § 4.2 : `retried`, `escalated`, `repaired`, `stale`, `reverted`, `cookie_expired`… ; reprise par étape, 19b § 3 : `repair_not_validated`, `write_step_broken`, `step_cascade`, `not_compilable`, `session_step_broken`), traduit par la console ; jamais une phrase. */
         ReasonCode: string;
         /** @description Phrase générée côté serveur, transmise en code et paramètres (traduite par la console, 06 § 4.1). */
         ReasonMessage: {
@@ -2117,9 +2157,49 @@ export interface components {
                 display_name: string;
             } | null;
             recent_runs?: components["schemas"]["RunSummary"][];
+            /** @description Mode « agent instruit » (19 § 4, tâche 2.13) : opt-in explicite par API, jamais par défaut, jamais vrai sans étapes instruites confirmées par un humain. Un agent travaille à chaque run (coût affiché avant chaque lancement). Absent : faux. */
+            instructed_mode?: boolean;
+            /** @description Étapes instruites de la version courante ; null quand la version n'en a pas. */
+            instructed?: components["schemas"]["InstructedSteps"] | null;
             retention_days?: number | null;
             /** Format: date-time */
             created_at?: string;
+        };
+        /** @description Étapes instruites de la version courante (19 § 4, 19b § 1) : intentions et `post`, sans cible. Les `intent` sont du contenu NON FIABLE (écrit par un LLM qui a lu des pages) : affichés comme texte brut, jamais interprétés. La confirmation humaine porte `version` et `sha256` (empreinte des étapes affichées). */
+        InstructedSteps: {
+            version: number;
+            /** @enum {string} */
+            compilable: "yes" | "unknown" | "no";
+            steps: components["schemas"]["InstructedStep"][];
+            sha256: string;
+            /** Format: uuid */
+            confirmed_by: string | null;
+            /** Format: date-time */
+            confirmed_at: string | null;
+            /** @description Coût estimé d'un run instruit (somme des budgets d'étape, plafond) ; null si inconnu. */
+            estimated_run_usd: number | null;
+        };
+        InstructedStep: {
+            id: string;
+            /** @description Intention nettoyée (200 caractères au plus), non fiable. */
+            intent: string;
+            post: components["schemas"]["StepPost"][];
+        };
+        /** @description Condition de sortie d'une étape (liste fermée, 19 § 4) ; immuable en réparation. */
+        StepPost: {
+            /** @enum {string} */
+            kind: "url_changed" | "url_contains" | "element_present" | "element_absent" | "text_present";
+            value?: string;
+            role?: string;
+            name?: string;
+        };
+        /** @description Confirmation humaine des étapes instruites affichées (version et empreinte reçues de la fiche). */
+        InstructedStepsConfirm: {
+            version: number;
+            sha256: string;
+        };
+        InstructedModeWrite: {
+            enabled: boolean;
         };
         /** @description Entrée de create_api (05 § 4.1). */
         ApiCreate: {
@@ -2496,12 +2576,33 @@ export interface components {
             tokens?: components["schemas"]["Tokens"];
             /** @description Onglet Erreur (Où, Quoi, Pourquoi, Que faire) en codes stables ; absent pour l'admin sur un run d'autrui. */
             error?: components["schemas"]["ReasonMessage"] | null;
+            /** @description Étape reprise (`s3`…) ; null pour un essai de la cascade hors reprise par étape. */
+            step_id?: string | null;
+            /** @description Niveau de la reprise (1 localisateurs enregistrés sans LLM, 2 agent borné sur l'étape, 3 segment d'étapes). */
+            step_level?: (1 | 2 | 3) | null;
+            step_outcome?: components["schemas"]["StepOutcome"] | null;
+            /** @description Diff de l'étape (patch RFC 6902 borné à `/steps/i/target`, `/steps/i/target/alternates` ou l'insertion d'une étape) ; null sans changement. */
+            step_patch?: components["schemas"]["StepPatchOperation"][] | null;
+        };
+        /**
+         * @description Issue d'une reprise d'étape (19 § 4, `run_attempts.step_outcome`).
+         * @enum {string}
+         */
+        StepOutcome: "replayed" | "alternate" | "agent_repaired" | "failed";
+        /** @description Opération RFC 6902 d'un patch d'étape ; `value` absent pour `remove`. */
+        StepPatchOperation: {
+            /** @enum {string} */
+            op: "add" | "replace" | "remove";
+            path: string;
+            value?: unknown;
         };
         /** @description Détail d'un run (entité Run de 04b § 1) ; `metadata_only` pour l'admin face au run avec session d'autrui. */
         Run: components["schemas"]["RunSummary"] & {
             metadata_only: boolean;
             attempts: components["schemas"]["RunAttempt"][];
             tokens: components["schemas"]["Tokens"];
+            /** @description Le run a été réparé seul par la reprise par étape (badge « réparée automatiquement », 19 § 4). */
+            repaired_automatically?: boolean;
             trace_id?: string | null;
             /**
              * Format: date-time
@@ -4574,6 +4675,92 @@ export interface operations {
             403: components["responses"]["Error"];
             404: components["responses"]["Error"];
             409: components["responses"]["Error"];
+        };
+    };
+    confirmInstructedSteps: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                slug: components["parameters"]["Slug"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["InstructedStepsConfirm"];
+            };
+        };
+        responses: {
+            /** @description Fiche à jour (`instructed.confirmed_by` et `confirmed_at` remplis). */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiDetail"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            /** @description `human_confirmation_required` : la confirmation est un acte humain, depuis la console. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            404: components["responses"]["Error"];
+            /** @description `sha_mismatch` (étapes changées depuis l'affichage) ou `no_instructed_steps`. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+        };
+    };
+    setInstructedMode: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                slug: components["parameters"]["Slug"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["InstructedModeWrite"];
+            };
+        };
+        responses: {
+            /** @description Fiche à jour. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiDetail"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            /** @description `instructed_steps_unconfirmed`, `compilable` ou `no_instructed_steps` : le mode ne s'active pas. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
         };
     };
     getResolvedRules: {

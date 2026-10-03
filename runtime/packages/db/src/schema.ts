@@ -11,6 +11,9 @@ import {
   RUN_OUTCOMES,
   RUN_STATES,
   RUN_TRIGGERS,
+  STEP_OUTCOMES,
+  STRATEGY_ARCHIVE_REASONS,
+  STRATEGY_COMPILABLE,
   STRATEGY_CREATORS,
   VISIBILITIES,
   type AttemptResult,
@@ -83,7 +86,7 @@ export const users = pgTable(
     image: text('image'),
     role: text('role', { enum: ['owner', 'admin', 'member'] }).notNull().default('member'),
     status: text('status', { enum: ['invited', 'active', 'disabled'] }).notNull().default('invited'),
-    // Migration 0023_i18n : le registre des langues (`@runtime/i18n`) valide ; la CHECK n'impose que la forme.
+    // Migration 0024_i18n : le registre des langues (`@runtime/i18n`) valide ; la CHECK n'impose que la forme.
     locale: text('locale').notNull().default('en'),
     theme: text('theme', { enum: ['light', 'dark', 'system'] }).notNull().default('system'),
     twoFactorEnabled: boolean('two_factor_enabled').notNull().default(false),
@@ -93,9 +96,9 @@ export const users = pgTable(
     lastLoginAt: tstz('last_login_at'),
     // Migration 0012_accounts_advanced (tâche 3.7) : compte supprimé et anonymisé.
     deletedAt: tstz('deleted_at'),
-    // Migration 0023_i18n : fuseau IANA (indice de localisation : donnée personnelle, 17 § 6), nullable.
+    // Migration 0024_i18n : fuseau IANA (indice de localisation : donnée personnelle, 17 § 6), nullable.
     timezone: text('timezone'),
-    // Migration 0023_i18n : fuseau déjà initialisé (toute écriture, même null) ; la console ne le pose qu'à la première connexion.
+    // Migration 0024_i18n : fuseau déjà initialisé (toute écriture, même null) ; la console ne le pose qu'à la première connexion.
     timezoneInitialized: boolean('timezone_initialized').notNull().default(false),
   },
   (t) => [uniqueIndex('users_single_owner').on(t.role).where(sql`role = 'owner'`)],
@@ -191,7 +194,7 @@ export const invitations = pgTable(
     createdAt: createdAt(),
     // Migration 0012_accounts_advanced : échéance ≤ dernier envoi + 48 h (CHECK invitations_ttl).
     sentAt: tstz('sent_at').notNull().defaultNow(),
-    // Migration 0023_i18n : langue choisie par l'invitant, copiée dans users.locale à l'acceptation.
+    // Migration 0024_i18n : langue choisie par l'invitant, copiée dans users.locale à l'acceptation.
     locale: text('locale').notNull().default('en'),
   },
   (t) => [index('invitations_email_idx').on(t.email)],
@@ -389,6 +392,8 @@ export const apis = pgTable(
     // 0021_persistence_mode (2.16, D-49) : mode « SYM ne lâche pas », opt-in ; plafond propre (NULL = défaut d'instance).
     persistenceMode: boolean('persistence_mode').notNull().default(false),
     persistenceBudgetUsd: usd('persistence_budget_usd'),
+    // 0023_step_repair (2.13) : mode « agent instruit », opt-in explicite (déclencheur apis_instructed_mode_guard).
+    instructedMode: boolean('instructed_mode').notNull().default(false),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
@@ -453,6 +458,13 @@ export const strategyVersions = pgTable(
     createdBy: text('created_by', { enum: STRATEGY_CREATORS }).notNull(),
     parentVersion: integer('parent_version'),
     patch: jsonb('patch'),
+    // 0023_step_repair (2.13) : compilable en E5, étapes instruites (non fiables tant que non confirmées), archivage.
+    compilable: text('compilable', { enum: STRATEGY_COMPILABLE }).notNull().default('unknown'),
+    instructedSteps: jsonb('instructed_steps'),
+    instructedStepsSha256: text('instructed_steps_sha256'),
+    instructedStepsConfirmed: jsonb('instructed_steps_confirmed'),
+    archiveReason: text('archive_reason', { enum: STRATEGY_ARCHIVE_REASONS }),
+    sourceSteps: jsonb('source_steps'),
     // 0017_rest_api (3.1) : la version a été courante au moins une fois (déclencheur sur apis) ; seule une telle version se rétablit.
     wasCurrent: boolean('was_current').notNull().default(false),
     createdAt: createdAt(),
@@ -581,7 +593,7 @@ export const runs = pgTable(
     kind: text('kind', { enum: RUN_KINDS }).notNull().default('run'),
     // 0017_rest_api (3.1) : pause demandée par l'utilisateur (run `queued` sans job), reprise par `resume`.
     pausedAt: tstz('paused_at'),
-    // Migration 0023_i18n : langue du demandeur au lancement (déclencheur `runs_set_locale`) ; prose du LLM seulement.
+    // Migration 0024_i18n : langue du demandeur au lancement (déclencheur `runs_set_locale`) ; prose du LLM seulement.
     locale: text('locale').notNull(),
     // 0018_run_rejected_items (2.3, D-49) : items extraits non conformes, jamais livrés.
     itemsRejected: integer('items_rejected').notNull().default(0),
@@ -614,6 +626,12 @@ export const runAttempts = pgTable(
     modelId: text('model_id'),
     promptVersion: text('prompt_version'),
     engine: text('engine'),
+    // 0023_step_repair (2.13) : journal par étape (jetons et coût par étape, `cost_usd`).
+    stepId: text('step_id'),
+    stepLevel: smallint('step_level'),
+    stepOutcome: text('step_outcome', { enum: STEP_OUTCOMES }),
+    tokensIn: bigint('tokens_in', { mode: 'number' }).notNull().default(0),
+    tokensOut: bigint('tokens_out', { mode: 'number' }).notNull().default(0),
     createdAt: createdAt(),
     // 0019 : règles qui ont placé l'essai (`nom@version`, 18 §4.6).
     ruleRefs: text('rule_refs').array().notNull().default(sql`'{}'`),

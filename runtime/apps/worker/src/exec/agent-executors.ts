@@ -38,6 +38,7 @@ import {
   type AgentEngine,
   type AgentFetchSpec,
   type AgentRunResult,
+  type AgentTraceStep,
   type AgentSpec,
   type AgentTaskRules,
   type HybridSpec,
@@ -87,6 +88,8 @@ export type AgentOutcome = {
   readonly llm: LlmSpend | null;
   /** Stratégie E5 compilée depuis la trace E6 réussie, vérifiée par rejeu sans LLM. */
   readonly compiled?: HybridSpec;
+  /** Trace E6 de la compilation (cibles sémantiques et URL, jamais de texte saisi) : `post` des étapes compilées (2.13). */
+  readonly trace?: readonly AgentTraceStep[];
   /** Pourquoi la compilation n'a pas abouti (code stable). */
   readonly compileFailure?: string;
   /** Navigations ou requêtes de l'agent coupées par le verrou de domaines (hôtes, jamais d'URL). */
@@ -637,6 +640,11 @@ export type AgentOptions = {
   /** Garde de classification (1.7) sur chaque document du cadre principal ; défaut : `classifyExchange`. */
   readonly classify?: ClassifyFn;
   /**
+   * Agent instruit (2.13, 19 §4) : faux tant que K runs instruits n'ont pas réussi, la compilation n'est pas tentée
+   * (`instructed_compile_deferred`). Défaut : vrai (essai de compilation de chaque E6 réussi, 2.4).
+   */
+  readonly compile?: boolean;
+  /**
    * Règles embarquées (tâche 2.10, 18 §4.5) : `systemPrompt` reconstruit par l'appelant depuis les références de
    * `spec.rules` (empreintes vérifiées) et `read_skill` sur les seuls skills référencés, à leur version épinglée.
    */
@@ -792,10 +800,11 @@ async function runAgentInSlot(options: AgentOptions, lease: SlotLease): Promise<
   const items = (run.output as { items?: unknown } | null)?.items;
   const result = conformRecords(Array.isArray(items) ? items : [], options.outputSchema, 1, options.itemPolicy);
   if (!result.ok) return { result, llm: spend, domainBlocked };
+  if (options.compile === false) return { result, llm: spend, compileFailure: 'instructed_compile_deferred', domainBlocked };
   // La compilation E6 → E5 ne part que d'une sortie entièrement CONFORME (quarantaine : les non conformes sont encore dans
   // `result.records`) ; une sortie dont un item est écarté n'est pas compilée (une liste réduite à un item conforme
   // passerait pour une fiche).
   if (options.itemPolicy === 'quarantine' && partitionItems(options.outputSchema, result.records).rejected.length > 0) return { result, llm: spend, compileFailure: 'items_rejected', domainBlocked };
   const compiled = await compileAndVerify(options, lease, run, result.records, `${made.engine.id}@${made.engine.version}`, writesBlocked);
-  return 'spec' in compiled ? { result, llm: spend, compiled: compiled.spec, domainBlocked } : { result, llm: spend, compileFailure: compiled.failure, domainBlocked };
+  return 'spec' in compiled ? { result, llm: spend, compiled: compiled.spec, trace: run.steps, domainBlocked } : { result, llm: spend, compileFailure: compiled.failure, domainBlocked };
 }

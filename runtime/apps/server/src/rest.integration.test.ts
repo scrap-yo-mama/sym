@@ -9,7 +9,7 @@ import { readFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import { createServer as createTcpServer, type AddressInfo } from 'node:net';
 import { createConfig, lintFromString } from '@redocly/openapi-core';
-import { buildInputSchema } from '@runtime/core';
+import { buildInputSchema, instructedStepsSha256, validateInstructedSteps } from '@runtime/core';
 import { saveInvestigationStrategy, sweepOrphans, type InvestigationState } from '@runtime/db';
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import { OpenApiContract } from '../../../tests/helpers/openapi-contract.js';
@@ -1811,6 +1811,51 @@ describe('portabilité (3.12) : export, aperçu d’import, OpenAPI par API au c
     expect(preview).toMatchObject({ status: 200, body: { preview: true, ignored_fields: [] } });
     expect(await count('SELECT count(*) FROM apis')).toBe(apis);
     expect((await api(a, 'GET', `/api/apis/${seeded.slug}/openapi.json`, '/api/apis/{slug}/openapi.json')).status).toBe(200);
+  });
+});
+
+describe('agent instruit (2.13, 19 § 4) : confirmation humaine des étapes instruites, opt-in explicite — assert_instructed_mode_explicit', () => {
+  test('fiche : étapes instruites et empreinte ; activation sans confirmation → 409 ; clé d’API → 403 human_confirmation_required ; empreinte changée → 409 ; confirmé depuis la console → activable, puis désactivable', async () => {
+    const seeded = await seedApi(srv.db.url, a.user.id);
+    const steps = [{ id: 's1', intent: 'Ouvrir la liste des vélos', post: [{ kind: 'url_changed' }] }];
+    const checked = validateInstructedSteps(steps);
+    if (!checked.ok) throw new Error('étapes instruites invalides');
+    const sha = instructedStepsSha256(checked.steps);
+    await withClient(srv.db.url, (c) =>
+      c.query("UPDATE strategy_versions SET compilable = 'no', instructed_steps = $2::jsonb, instructed_steps_sha256 = $3 WHERE api_id = $1 AND version = 1", [seeded.id, JSON.stringify(steps), sha]),
+    );
+    const detail = await api(a, 'GET', `/api/apis/${seeded.slug}`, '/api/apis/{slug}');
+    expect(detail.body).toMatchObject({ instructed_mode: false, instructed: { version: 1, compilable: 'no', sha256: sha, confirmed_by: null, steps: [{ id: 's1', intent: 'Ouvrir la liste des vélos' }] } });
+    // Un membre qui lit l'API instance d'autrui ne reçoit jamais les étapes instruites (propriétaire seul).
+    const shared = await seedApi(srv.db.url, a.user.id, { visibility: 'instance' });
+    const seen = await api(b, 'GET', `/api/apis/${shared.slug}`, '/api/apis/{slug}');
+    expect(seen.body).not.toHaveProperty('instructed');
+
+    const unconfirmed = await api(a, 'PUT', `/api/apis/${seeded.slug}/instructed-mode`, '/api/apis/{slug}/instructed-mode', { enabled: true });
+    expect(unconfirmed).toMatchObject({ status: 409, body: { error: { code: 'instructed_steps_unconfirmed' } } });
+
+    const key = (await srv.app.inject({ method: 'POST', url: '/api/api-keys', headers: { cookie: a.cookie, origin: PUBLIC_URL }, payload: { label: 'zz instruit', scopes: ['apis:read', 'apis:write'], currentPassword: a.user.password } })).json<{ key: string }>().key;
+    const viaKey = await srv.app.inject({ method: 'POST', url: `/api/apis/${seeded.slug}/instructed-steps/confirm`, headers: { authorization: `Bearer ${key}` }, payload: { version: 1, sha256: sha } });
+    expect(viaKey.statusCode).toBe(403);
+    expect(contract.check('POST', '/api/apis/{slug}/instructed-steps/confirm', 403, viaKey.json())).toEqual([]);
+    expect(viaKey.json()).toMatchObject({ error: { code: 'human_confirmation_required' } });
+
+    const stale = await api(a, 'POST', `/api/apis/${seeded.slug}/instructed-steps/confirm`, '/api/apis/{slug}/instructed-steps/confirm', { version: 1, sha256: 'a'.repeat(64) });
+    expect(stale).toMatchObject({ status: 409, body: { error: { code: 'sha_mismatch' } } });
+    expect(await count("SELECT count(*) FROM strategy_versions WHERE api_id = $1 AND instructed_steps_confirmed IS NOT NULL", [seeded.id])).toBe(0);
+
+    const confirmed = await api(a, 'POST', `/api/apis/${seeded.slug}/instructed-steps/confirm`, '/api/apis/{slug}/instructed-steps/confirm', { version: 1, sha256: sha });
+    expect(confirmed).toMatchObject({ status: 200, body: { instructed_mode: false, instructed: { confirmed_by: a.user.id } } });
+    const enabled = await api(a, 'PUT', `/api/apis/${seeded.slug}/instructed-mode`, '/api/apis/{slug}/instructed-mode', { enabled: true });
+    expect(enabled).toMatchObject({ status: 200, body: { instructed_mode: true } });
+    const disabled = await api(a, 'PUT', `/api/apis/${seeded.slug}/instructed-mode`, '/api/apis/{slug}/instructed-mode', { enabled: false });
+    expect(disabled).toMatchObject({ status: 200, body: { instructed_mode: false } });
+
+    // API compilable (une stratégie rejouable sans agent existe) : jamais activable.
+    const compilable = await seedApi(srv.db.url, a.user.id);
+    const refused = await api(a, 'PUT', `/api/apis/${compilable.slug}/instructed-mode`, '/api/apis/{slug}/instructed-mode', { enabled: true });
+    expect(refused.status).toBe(409);
+    expect(await count('SELECT count(*) FROM apis WHERE id = $1 AND instructed_mode', [compilable.id])).toBe(0);
   });
 });
 

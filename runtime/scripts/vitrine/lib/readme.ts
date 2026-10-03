@@ -25,16 +25,16 @@ export const README_FILES: Record<Lang, string> = { en: 'README.md', fr: 'README
 export const readReadme = (lang: Lang): string => readFileSync(join(githubDir, README_FILES[lang]), 'utf8');
 
 /**
- * Titres `##` attendus, dans l'ordre (22 §3.1, blocs 5 à 11 ; les blocs 1 à 4 n'ont pas de titre).
- * Écart assumé (tâche 4.12, à reporter au CDC) : le bloc 6 s'intitule « Try it (no model key) » / « Essaie (sans clé de
- * modèle) » et non « Try it in two minutes (no key) » : la première construction de l'image prend plusieurs minutes, « deux
- * minutes » serait une allégation sans mesure (22 §3.2) ; et le quickstart crée deux secrets d'instance (MASTER_KEY, jeton
- * d'amorçage) : la seule clé qu'il ne demande pas est celle d'un modèle (le mode démo sans aucune clé arrive avec 3.11). Le lien vers la landing (bloc 2, 4.11) et la vignette de démo (bloc 4, 3.11) sont
- * des test.todo de tests/vitrine/readme.unit.test.ts tant que la landing et l'enregistrement n'existent pas.
+ * Titres `##` attendus, dans l'ordre : ceux de la planche Readme.dc.html (tâche 4.12b, D-60), qui remplace les blocs 5 à 11 de
+ * 22 §3.1. Bandeau, badges, accroche, alerte de pré-version et mentions finales n'ont pas de titre. Écarts assumés (à reporter au CDC) :
+ * le sélecteur de langue en première ligne reste (22 §3.1, u8 R2) ; le bloc « Verify » est celui que dérive l'identité publique et non
+ * l'abrégé de la planche ; les commandes du « Quickstart » sont celles du quickstart rejoué en CI ; aucun montant (22 §3.2). Le titre
+ * français de « Quickstart » est « Démarrage rapide ». « What SYM does » et « What SYM can handle » portent 5 puces chacune, au registre.
+ * tests/vitrine/readme-maquette.unit.test.ts compare le README à la planche et liste chaque écart.
  */
 const SECTION_TITLES: Record<Lang, string[]> = {
-  en: ['What it does', 'Try it (no model key)', 'Connect your AI chat (MCP)', 'Verify what you download', "How it's built", 'Licenses', 'Contribute'],
-  fr: ['Ce que ça fait', 'Essaie (sans clé de modèle)', 'Branche ton chat IA (MCP)', 'Vérifie ce que tu télécharges', "Comment c'est construit", 'Licences', 'Contribuer'],
+  en: ['How it feels', 'What SYM does', 'What SYM can handle', 'Quickstart', 'Verify what you run'],
+  fr: ['Ce que ça donne', 'Ce que SYM fait', 'Ce que SYM sait gérer', 'Démarrage rapide', 'Vérifie ce que tu lances'],
 };
 
 export type CodeBlock = { lang: string; body: string; line: number };
@@ -104,8 +104,10 @@ export function lengthProblems(text: string, budgets: Budgets): string[] {
 export function parityProblems(en: string, fr: string): string[] {
   const problems: string[] = [];
   if (headings(en).length !== headings(fr).length) problems.push(`${headings(en).length} titres ## en contre ${headings(fr).length} en fr`);
-  const a = codeBlocks(en);
-  const b = codeBlocks(fr);
+  // Les blocs `text` sont la transcription de « How it feels » : elle est traduite (voix de SYM), les autres blocs sont des commandes.
+  const commands = (text: string): CodeBlock[] => codeBlocks(text).filter((block) => block.lang !== 'text');
+  const a = commands(en);
+  const b = commands(fr);
   if (a.length !== b.length) problems.push(`${a.length} blocs de code en contre ${b.length} en fr`);
   a.forEach((block, i) => {
     if (b[i] && (block.body !== b[i]?.body || block.lang !== b[i]?.lang)) problems.push(`le bloc de code ${i + 1} diffère entre en et fr`);
@@ -121,17 +123,19 @@ export function parityProblems(en: string, fr: string): string[] {
   return problems;
 }
 
+/** Dernier paragraphe : les mentions (licences, usage responsable, signalement, assistance IA, autre langue). */
+const mentions = (text: string): string => text.trimEnd().split('\n\n').pop() ?? '';
+
 export function sectionProblems(text: string, lang: Lang): string[] {
   const problems: string[] = [];
   const found = headings(text);
   const expected = SECTION_TITLES[lang];
   if (found.join('|') !== expected.join('|')) problems.push(`${lang} : titres ## ${JSON.stringify(found)}, attendu ${JSON.stringify(expected)} (dans l'ordre, sans autre titre)`);
-  const license = text.slice(text.indexOf(`## ${expected[5]}`), text.indexOf(`## ${expected[6]}`));
+  const closing = mentions(text);
   const responsible = links(text).filter((l) => /responsible use|usage responsable/i.test(l.text));
   if (responsible.length !== 1) problems.push(`${lang} : ${responsible.length} liens « Responsible use / Usage responsable » (un seul)`);
-  else if (!license.includes(responsible[0]?.href ?? '\0')) problems.push(`${lang} : le lien « Usage responsable » n'est pas dans le bloc des licences`);
-  const table = license.split('\n').filter((line) => /^\|(?!\s*-)/.test(line) && !/^\|\s*(What|Quoi)\b/.test(line));
-  if (table.length !== 3) problems.push(`${lang} : le tableau des licences a ${table.length} lignes (3 attendues)`);
+  else if (!closing.includes(responsible[0]?.href ?? '\0')) problems.push(`${lang} : le lien « Usage responsable » n'est pas dans le paragraphe de mentions`);
+  if (!/AGPL-3\.0/.test(closing) || !/\bMIT\b/.test(closing)) problems.push(`${lang} : le paragraphe de mentions ne nomme pas les licences AGPL-3.0 et MIT`);
   return problems;
 }
 
@@ -153,18 +157,20 @@ export function badgeProblems(text: string, budgets: Budgets): string[] {
   return problems;
 }
 
-/** Puces de « What it does » rendues en texte simple. */
+/** Puces de « What SYM does » puis de « What SYM can handle », rendues en texte simple. */
 export function whatItDoes(text: string, lang: Lang): string[] {
-  const title = SECTION_TITLES[lang][0] as string;
-  const start = text.indexOf(`## ${title}`);
-  const body = text.slice(start).split(/\n## /)[0] ?? '';
-  return body.split('\n').filter((line) => line.startsWith('- ')).map(plainBullet);
+  return [1, 2].flatMap((index) => {
+    const title = SECTION_TITLES[lang][index] as string;
+    const start = text.indexOf(`## ${title}`);
+    const body = text.slice(start).split(/\n## /)[0] ?? '';
+    return body.split('\n').filter((line) => line.startsWith('- ')).map(plainBullet);
+  });
 }
 
 export function claimsProblems(text: string, lang: Lang, file: ClaimsFile): string[] {
   const problems: string[] = [];
   const bullets = whatItDoes(text, lang);
-  if (bullets.length !== 5) problems.push(`${lang} : ${bullets.length} puces dans « ${SECTION_TITLES[lang][0]} » (5 attendues)`);
+  if (bullets.length !== 10) problems.push(`${lang} : ${bullets.length} puces dans « ${SECTION_TITLES[lang][1]} » et « ${SECTION_TITLES[lang][2]} » (10 attendues)`);
   for (const bullet of bullets) {
     const claim = file.claims.find((c) => c[lang] === bullet && c.surfaces.includes('readme'));
     if (!claim) problems.push(`${lang} : la puce « ${bullet.slice(0, 50)}… » n'a pas d'entrée dans claims.json (surface readme)`);
@@ -175,7 +181,7 @@ export function claimsProblems(text: string, lang: Lang, file: ClaimsFile): stri
 
 /** Chiffre avec unité (mémoire, poids, durée, pourcentage, facteur) : un chiffre sans mesure est interdit (22 §3.2). */
 const NUMBER_WITH_UNIT = /(?<![\p{L}\d.])\d+(?:[.,]\d+)?\s?(?:%|[kmgt]i?b|[kmgt]o|min(?:ute)?s?|secondes?|seconds?|sec|s|ms|h|hours?|heures?|days?|jours?|x|×|times|fois)(?![\p{L}\d])/iu;
-/** Rejeu par la CI : une phrase de « Try it » qui l'affirme cite une preuve (le quickstart rejoué en CI). */
+/** Rejeu par la CI : une phrase de « Quickstart » qui l'affirme cite une preuve (le quickstart rejoué en CI). */
 const CI_CLAIM = /\bCI\b/;
 
 /** Texte courant du README : sans blocs de code, commentaires, balises HTML ni cibles de liens. */
@@ -191,18 +197,44 @@ function prose(text: string): string {
 const sentences = (text: string): string[] => text.split(/(?<=[.!?])\s+|\n+/).map((part) => part.replace(/^[>|#\-*\s]+/, '').trim()).filter((part) => part !== '');
 
 /**
- * Phrases factuelles hors puces (22 §3.2) : une phrase du README qui porte un chiffre avec unité, ou qui affirme dans
- * « Try it » que la CI rejoue les commandes, s'affiche seulement si elle fait partie d'une entrée du registre (surface readme).
+ * Phrases de prose du README hors puces (vérifiées par `claimsProblems`), titres, commandes, images et liens de langue :
+ * accroche, alerte de pré-version, transcription de « How it feels » (ligne par ligne), légende de « Deploy to Render », note de
+ * « Verify » et mentions. Gras et crochets de liens retirés.
+ */
+export function proseSentences(text: string): string[] {
+  const transcript = codeBlocks(text).filter((block) => block.lang === 'text').flatMap((block) => block.body.split('\n'));
+  const body = text
+    .replace(/^.*href="README\.fr\.md".*$/m, '\n')
+    .replace(/^#{1,6} .*$/gm, '\n')
+    .replace(/^- .*$/gm, '\n')
+    .replace(/^> \[!\w+\]$/gm, '\n')
+    .replace(/\[[^\]]*\]\(README(\.fr)?\.md\)\.?/g, ' ');
+  return [...sentences(prose(body)), ...transcript]
+    .map((sentence) => sentence.replace(/\*\*/g, '').replace(/[[\]]/g, '').replace(/\s+/g, ' ').trim())
+    .filter((sentence) => sentence !== '');
+}
+
+/**
+ * Une seule vérité (22 §1, §3.2) : chaque phrase de prose du README (`proseSentences`) fait partie d'une entrée RELUE du registre
+ * (surface readme). En particulier, une phrase qui porte un chiffre avec unité, ou qui affirme dans « Quickstart » que la CI
+ * rejoue les commandes, ne s'affiche que si elle est au registre.
  */
 export function unregisteredFactsProblems(text: string, lang: Lang, file: ClaimsFile): string[] {
-  const registered = file.claims.filter((claim) => claim.surfaces.includes('readme')).map((claim) => normalize(claim[lang]));
+  const readme = file.claims.filter((claim) => claim.surfaces.includes('readme'));
+  const registered = readme.map((claim) => normalize(claim[lang]));
   const isRegistered = (sentence: string): boolean => registered.some((phrase) => phrase.includes(normalize(sentence.replace(/\*\*/g, ''))));
   const problems: string[] = [];
+  for (const sentence of proseSentences(text)) {
+    const holds = (claim: ClaimsFile['claims'][number]): boolean => normalize(claim[lang]).includes(normalize(sentence));
+    const owner = readme.find((claim) => claim.status === 'relu' && holds(claim)) ?? readme.find(holds);
+    if (!owner) problems.push(`${lang} : phrase hors registre (claims.json, surface readme) : « ${sentence} »`);
+    else if (owner.status !== 'relu') problems.push(`${lang} : « ${sentence} » vient de l'entrée « ${owner.id} », ${owner.status}`);
+  }
   for (const sentence of sentences(prose(text))) {
     const number = NUMBER_WITH_UNIT.exec(sentence);
     if (number && !isRegistered(sentence)) problems.push(`${lang} : chiffre sans mesure au registre (« ${number[0]} ») : « ${sentence} »`);
   }
-  const title = SECTION_TITLES[lang][1] as string;
+  const title = SECTION_TITLES[lang][3] as string;
   const start = text.indexOf(`## ${title}`);
   const tryIt = start === -1 ? '' : (text.slice(start + title.length + 3).split(/\n## /)[0] ?? '');
   for (const sentence of sentences(prose(tryIt))) {
@@ -267,13 +299,16 @@ export function altProblems(text: string, decorative: readonly string[] = []): s
   return problems;
 }
 
+/** Entités XML et HTML des textes du bandeau et de son alt. */
+const entities = (s: string): string => s.replace(/&quot;/g, '"').replace(/&#39;|&apos;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
+
 /** Textes du bandeau (balises <text> de ses sources SVG claire et sombre), dans l'ordre, sans doublon. */
 export function bannerTexts(): string[] {
   const out: string[] = [];
   for (const variant of ['light', 'dark']) {
     const svg = readFileSync(join(githubDir, 'assets/src', `banner-${variant}.svg`), 'utf8');
-    for (const m of svg.matchAll(/<text\b[^>]*>([^<]*)<\/text>/g)) {
-      const value = (m[1] ?? '').trim();
+    for (const m of svg.matchAll(/<text\b[^>]*>([\s\S]*?)<\/text>/g)) {
+      const value = entities((m[1] ?? '').replace(/<[^>]+>/g, '')).replace(/\s+/g, ' ').trim();
       if (value && !out.includes(value)) out.push(value);
     }
   }
@@ -282,16 +317,19 @@ export function bannerTexts(): string[] {
 
 /**
  * L'alt du bandeau décrit l'image : il cite chacun de ses textes et ne porte ni accroche ni phrase absente de l'image
- * (pas de deux-points, pas de point final). L'accroche est écrite en vrai texte sous l'image (22 §3.1, bloc 1).
+ * (hors les textes cités, pas de deux-points ni de point final). L'accroche est écrite en vrai texte sous l'image (22 §3.1, bloc 1).
  */
 export function bannerAltProblems(text: string, texts: readonly string[]): string[] {
   const picture = pictures(text)[0];
   if (!picture) return ['aucun bandeau <picture>'];
-  const alt = /<img\b[^>]*\salt="([^"]*)"/i.exec(picture)?.[1];
-  if (!alt) return ['bandeau sans alt'];
+  const raw = /<img\b[^>]*\salt="([^"]*)"/i.exec(picture)?.[1];
+  if (!raw) return ['bandeau sans alt'];
+  const alt = entities(raw);
   const problems: string[] = [];
   for (const value of texts) if (!alt.includes(value)) problems.push(`l'alt du bandeau ne cite pas « ${value} », texte du bandeau`);
-  if (/[:.!?]/.test(alt)) problems.push(`l'alt du bandeau porte une accroche ou une phrase absente de l'image : « ${alt} »`);
+  // Les textes de l'image, cités mot pour mot, gardent leur ponctuation (« Too late, it's done. ») ; le reste de l'alt n'en porte pas.
+  const rest = texts.reduce((acc, value) => acc.split(value).join(' '), alt);
+  if (/[:.!?]/.test(rest)) problems.push(`l'alt du bandeau porte une accroche ou une phrase absente de l'image : « ${alt} »`);
   return problems;
 }
 
@@ -338,7 +376,7 @@ export function verifyBlockProblems(text: string, identity: PublicIdentity): str
   return codeBlocks(text).some((block) => block.body === expected) ? [] : [`le bloc « Verify » n'est pas celui dérivé de l'identité publique ${identity.repository}`];
 }
 
-/** Commandes de « Try it » : celles du quickstart rejoué en CI (étapes `secrets` et `start`), hors le clonage. */
+/** Commandes de « Quickstart » : celles du quickstart rejoué en CI (étapes `secrets` et `start`), hors le clonage. */
 export function quickstartProblems(text: string): string[] {
   const quickstart = readFileSync(join(repoRoot, 'runtime/apps/docs/content/tutoriels/quickstart.md'), 'utf8');
   const steps = parseQuickstart(quickstart);
@@ -347,6 +385,6 @@ export function quickstartProblems(text: string): string[] {
   const block = codeBlocks(text).find((b) => b.lang === 'bash' && b.body.includes('docker compose up'));
   if (!block) return ['aucun bloc de commande « docker compose up »'];
   const commands = block.body.split('\n').filter((line) => !/^git clone\b/.test(line)).join('\n');
-  return commands === wanted.join('\n') ? [] : ['les commandes de « Try it » ne sont pas celles du quickstart rejoué en CI (étapes secrets et start)'];
+  return commands === wanted.join('\n') ? [] : ['les commandes de « Quickstart » ne sont pas celles du quickstart rejoué en CI (étapes secrets et start)'];
 }
 

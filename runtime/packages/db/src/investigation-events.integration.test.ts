@@ -7,7 +7,7 @@ import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import { createTestDatabase, type TestDatabase } from '../../../tests/helpers/pg.js';
 import { AccessReportFirstError, appendInvestigationEvent, listInvestigationEvents, recordAccessReport } from './investigation-events.js';
-import { migrateDown, migrateUp } from './migrate.js';
+import { loadMigrations, migrateDown, migrateUp } from './migrate.js';
 import { withActor } from './rls.js';
 import { applyStatusTransition } from './status.js';
 
@@ -148,7 +148,7 @@ describe('classes du module d’accès → statut (transitions existantes, toujo
     const { apiId } = await newInvestigation();
     const constraints = async () => (await pool.query("SELECT 1 FROM pg_constraint WHERE conname = 'apis_access_policy_robots'")).rowCount;
     expect(await constraints()).toBe(0);
-    await migrateDown({ connectionString: tdb.url, steps: 1 });
+    await migrateDown({ connectionString: tdb.url, steps: loadMigrations().filter((m) => m.version >= 22).length });
     expect(await constraints()).toBe(1);
     expect((await pool.query<{ r: string }>("SELECT access_policy ->> 'robots' AS r FROM apis WHERE id = $1", [apiId])).rows[0]!.r).toBe('respect');
     await migrateUp({ connectionString: tdb.url });

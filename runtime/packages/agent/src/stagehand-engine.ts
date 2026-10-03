@@ -22,9 +22,6 @@
 // garde son prompt système (mesuré tel quel au spike), auquel s'ajoutent les règles Markdown (tâche 2.10, 18 §4.5) :
 // `systemPrompt` = <trusted_rules> et liste des skills (inséré par Stagehand dans <customInstructions>), `tools` =
 // { read_skill } exécuté dans notre processus, `integrations` (clients MCP) TOUJOURS vide en V1 (18 §5).
-import { mkdtemp, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import { Stagehand, type ModelConfiguration } from '@browserbasehq/stagehand';
 import { READ_SKILL_TOOL, type AgentEngine, type AgentRunContext, type AgentRunResult, type AgentRunStatus, type AgentTask, type AgentTraceStep } from '@runtime/core';
 import { computeUsage, createRedactor, type CapabilityProfile, type ModelPrice, type RawUsage, type RedactConfig } from '@runtime/llm';
@@ -37,6 +34,32 @@ import { adaptSampling, generateWithSamplingRetry } from './stagehand-sampling.j
 export const STAGEHAND_VERSION = '3.7.3';
 
 type Middleware = NonNullable<Extract<ModelConfiguration, { modelName: unknown }>['middleware']>;
+
+/**
+ * Options du constructeur Stagehand (pures, testées par `assert_stagehand_selfheal_off`, tâche 2.13, 19 §4) : mode local
+ * seulement (X1), `selfHeal: false` EXPLICITE (défaut de 3.7.3 : vrai) et AUCUN `cacheDir` : ni reprise silencieuse d'une
+ * action par Stagehand, ni cache d'actions rejouées hors de notre compilation E6 → E5 (la reprise est celle de 19 §4).
+ */
+export function stagehandConstructorOptions(args: { modelId: string; baseURL: string; apiKey: string; cdpUrl: string; middleware: Middleware }): ConstructorParameters<typeof Stagehand>[0] {
+  return {
+    env: 'LOCAL',
+    model: {
+      modelName: `openai/${args.modelId}`,
+      baseURL: args.baseURL,
+      apiKey: args.apiKey,
+      openaiEndpointFormat: 'chat',
+      middleware: args.middleware,
+    } as ModelConfiguration,
+    localBrowserLaunchOptions: { cdpUrl: args.cdpUrl },
+    disableAPI: true,
+    // Exigé par Stagehand 3.7.3 pour `output`, `excludeTools`, `signal` et les rappels d'agent.
+    experimental: true,
+    disablePino: true,
+    verbose: 0,
+    logger: () => undefined,
+    selfHeal: false,
+  };
+}
 
 /**
  * Un appel LLM vu par le middleware : usage brut du fournisseur (coût), tailles de la requête et de la réponse (estimation
@@ -380,25 +403,7 @@ export class StagehandEngine implements AgentEngine {
       },
     };
 
-    const cacheDir = await mkdtemp(join(tmpdir(), 'zz_stagehand_cache_'));
-    const stagehandOptions: ConstructorParameters<typeof Stagehand>[0] = {
-      env: 'LOCAL',
-      model: {
-        modelName: `openai/${context.model.modelId}`,
-        baseURL: this.#opts.baseURL,
-        apiKey: this.#opts.apiKey(),
-        openaiEndpointFormat: 'chat',
-        middleware,
-      } as ModelConfiguration,
-      localBrowserLaunchOptions: { cdpUrl: this.#opts.cdpUrl },
-      disableAPI: true,
-      // Exigé par Stagehand 3.7.3 pour `output`, `excludeTools`, `signal` et les rappels d'agent.
-      experimental: true,
-      disablePino: true,
-      verbose: 0,
-      logger: () => undefined,
-      cacheDir,
-    };
+    const stagehandOptions = stagehandConstructorOptions({ modelId: context.model.modelId, baseURL: this.#opts.baseURL, apiKey: this.#opts.apiKey(), cdpUrl: this.#opts.cdpUrl, middleware });
     // Mode local seulement (X1) : refus avant toute construction si une option ou une variable ouvre Browserbase.
     assertStagehandLocalOnly(stagehandOptions as unknown as Record<string, unknown>, this.#opts.env);
     const stagehand = new Stagehand(stagehandOptions);
@@ -477,7 +482,6 @@ export class StagehandEngine implements AgentEngine {
     } finally {
       clearTimeout(timer);
       await stagehand.close().catch(() => undefined);
-      await rm(cacheDir, { recursive: true, force: true }).catch(() => undefined);
     }
     const { usd, usage } = cost();
     return {

@@ -1,32 +1,56 @@
 <a href="README.md">English</a> · <a href="README.fr.md">Français</a>
 
-<p align="center"><picture>
+<p><picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/brand/banner-dark.png">
   <source media="(prefers-color-scheme: light)" srcset="assets/brand/banner-light.png">
-  <img alt="Scrapyomama et SYM à côté du logo fantôme de SYM" src="assets/brand/banner-light.png" width="800"></picture></p>
+  <img alt="SYM 👻 &quot;I won't do that.&quot; Too late, it's done. scrapyomama · open source · self-hosted" src="assets/brand/banner-light.png" width="100%"></picture></p>
 
-<p align="center"><b>Décris les données. SYM 👻 s'occupe du reste.</b><br>Libre et auto-hébergé : rien à quoi t'inscrire.</p>
+<p><a href="https://github.com/scrap-yo-mama/sym/blob/main/LICENSE"><img alt="licence : AGPL-3.0" src="https://img.shields.io/badge/license-AGPL--3.0-3A33F0?labelColor=24252D"></a> <img alt="statut : pré-version" src="https://img.shields.io/badge/status-pre--release-FFC727?labelColor=24252D"> <img alt="protocole : MCP" src="https://img.shields.io/badge/protocol-MCP-D8BDF7?labelColor=24252D"> <img alt="déploiement : auto-hébergé" src="https://img.shields.io/badge/deploy-self--hosted-A8E3EA?labelColor=24252D"> <img alt="versions : signées" src="https://img.shields.io/badge/releases-signed-FF5A1F?labelColor=24252D"></p>
 
-<p align="center"><a href="https://github.com/scrap-yo-mama/sym/blob/main/runtime/apps/docs/content/index.md">Docs</a> · <a href="https://github.com/scrap-yo-mama/sym/blob/main/runtime/apps/docs/content/tutoriels/quickstart.md">Quickstart</a> · <a href="https://github.com/scrap-yo-mama/sym/discussions">Discussions</a><br>
-<a href="https://github.com/scrap-yo-mama/sym/blob/main/LICENSE"><img alt="Licence : AGPL-3.0" src="https://img.shields.io/github/license/scrap-yo-mama/sym"></a> <a href="https://github.com/scrap-yo-mama/sym/releases"><img alt="Dernière version" src="https://img.shields.io/github/v/release/scrap-yo-mama/sym?include_prereleases"></a> <a href="https://github.com/scrap-yo-mama/sym/actions/workflows/ci.yml"><img alt="État de la CI" src="https://img.shields.io/github/actions/workflow/status/scrap-yo-mama/sym/ci.yml?branch=main"></a></p>
+Tu demandes des données à ton IA. **SYM 👻** enquête sur le site en commençant par le moins cher (requête simple, puis navigateur, puis agent), te montre le schéma et attend ton OK. Ensuite il compile une API qui rejoue **sans LLM** quand la stratégie le permet, et se répare quand le site change. Ton serveur, ta base, ton modèle.
 
 > [!WARNING]
-> **Pré-version, pas prête pour la production.** Il n'y a pas encore de version stable et les interfaces vont changer.
-> **Pas encore livré :** la réparation, l'API REST des API et des runs, et le serveur MCP. Tant qu'ils ne sont pas là, tu ne peux pas demander de données à ton IA via SYM.
+> **Pré-version.** SYM est en plein développement et n'est pas encore prêt pour la production. Suis le dépôt pour la première version.
+>
+> **Pas encore livré :** la réparation étape par étape. D'ici là, une réparation corrige la stratégie, pas une étape seule.
 
-<!-- demo: the terminal GIF (assets/demo/quickstart-en.gif) is added by task 3.11 -->
+## Ce que ça donne
 
-## Ce que ça fait
+```text
+toi> Récupère les livres de books.toscrape.com avec titre et prix.
+SYM 👻 : OK, je m'en occupe.
+1/4 décrire · 2/4 enquête (accès ok) · 3/4 schéma · 4/4 essai : fetch direct, ok
+SYM 👻 : C'est fait. 20 livres, aucun coût de modèle par rejeu.
+```
 
-- **Reste chez toi.** Auto-hébergé, ton propre modèle, et rien ne part chez nous par défaut.
-- **La route la moins chère d'abord.** SYM essaie d'abord l'exécuteur le moins cher (HTTP simple, puis un vrai navigateur, puis un modèle ou un agent) et journalise chaque tentative.
-- **Six exécuteurs.** Requête HTTP, page d'un vrai navigateur, scripts en bac à sable, extraction par modèle, étapes script plus agent et agent complet ; un run d'agent réussi se compile en stratégie rejouable.
-- **Des garde-fous.** Le code d'une stratégie tourne dans un bac à sable, les requêtes sortantes passent par une garde SSRF, et les requêtes vers chaque domaine sont espacées.
-- **Ta session, avec ton accord.** Pour les sites derrière une connexion, une extension de navigateur exécute des étapes avec ta propre session, domaine par domaine, seulement après ton accord.
+<table>
+<tr>
+<td valign="top" width="50%">
 
-## Essaie (sans clé de modèle)
+## Ce que SYM fait
 
-SYM 👻 : OK, je m'en occupe. Il te faut Docker avec Compose. Les commandes sont celles que la CI rejoue sur une instance vierge.
+- Transforme une demande en schéma que tu valides d'abord
+- Choisit la méthode la moins chère qui marche
+- Rejoue sans LLM quand la stratégie le permet, se répare
+- Utilise ta propre session de navigateur quand tu l'autorises
+- Parle MCP et REST, et a une console
+
+</td>
+<td valign="top" width="50%">
+
+## Ce que SYM sait gérer
+
+- Les pages lourdes en JavaScript, avec un vrai navigateur
+- Les sites à compte, avec ta propre session (extension Chrome)
+- Les sites retors : un agent se débrouille, puis ça se compile
+- Les sites qui changent : l'API se répare
+- Pagination, planifications, webhooks
+
+</td>
+</tr>
+</table>
+
+## Démarrage rapide
 
 ```bash
 git clone https://github.com/scrap-yo-mama/sym && cd sym/runtime
@@ -41,25 +65,9 @@ git clone https://github.com/scrap-yo-mama/sym && cd sym/runtime
 docker compose up --build
 ```
 
-Le premier démarrage construit l'image : compte plusieurs minutes. Le [quickstart](https://github.com/scrap-yo-mama/sym/blob/main/runtime/apps/docs/content/tutoriels/quickstart.md) continue à partir de là (compte propriétaire, clé d'API). Le mode démo sans clé arrive avec la première version.
+<img alt="Deploy to Render" src="assets/brand/button-deploy-render.svg" height="32" align="middle"> <sub>arrive avec la première version · compte Render requis</sub>
 
-Déployer pour de bon : [guides Render et Docker Compose](https://github.com/scrap-yo-mama/sym/blob/main/runtime/apps/docs/content/guides/deploiement.md).
-
-## Branche ton chat IA (MCP)
-
-Pas encore branché : le serveur MCP arrive avec la première version. Voici la forme de la configuration qu'il utilisera, pour tout client MCP qui parle HTTP.
-
-```json
-{ "mcpServers": { "sym": { "url": "https://YOUR-INSTANCE/mcp",
-  "headers": { "Authorization": "Bearer YOUR-KEY" } } } }
-```
-
-## Vérifie ce que tu télécharges
-
-<details>
-<summary>Signature, provenance, sommes de contrôle</summary>
-
-Rien n'est publié pour l'instant : il n'y a ni version ni image à vérifier avant la première version. Voici le contrôle que tu feras, avec la version à la place de `X.Y.Z`.
+## Vérifie ce que tu lances
 
 ```bash
 cosign verify ghcr.io/scrap-yo-mama/sym:X.Y.Z \
@@ -69,23 +77,6 @@ gh attestation verify oci://ghcr.io/scrap-yo-mama/sym:X.Y.Z -R scrap-yo-mama/sym
 sha256sum -c SHA256SUMS
 ```
 
-Les images seront épinglées à `X.Y.Z`, sans `latest` flottant.
-</details>
+Remplace `X.Y.Z` par une version publiée : rien n'est publié avant la première version.
 
-## Comment c'est construit
-
-Une grande partie du code et de la documentation a été écrite avec l'aide d'une IA, puis relue, testée et passée en CI. Si quelque chose cloche, dis-le.
-
-## Licences
-
-| Quoi | Licence |
-|---|---|
-| Serveur, worker, console, extension, ligne de commande | [AGPL-3.0](https://github.com/scrap-yo-mama/sym/blob/main/LICENSE) |
-| `runtime/packages/client`, `runtime/packages/schemas` | MIT |
-| Nom et logo | [Politique de marque](https://github.com/scrap-yo-mama/sym/blob/main/runtime/TRADEMARK.md) |
-
-[Usage responsable](https://github.com/scrap-yo-mama/sym/blob/main/runtime/apps/docs/content/explications/usage-responsable.md).
-
-## Contribuer
-
-Lis [CONTRIBUTING.md](https://github.com/scrap-yo-mama/sym/blob/main/runtime/CONTRIBUTING.md). Signale une faille en privé via [SECURITY.md](https://github.com/scrap-yo-mama/sym/blob/main/runtime/SECURITY.md), jamais dans une issue publique. Questions et idées : [Discussions](https://github.com/scrap-yo-mama/sym/discussions).
+Le [cœur](https://github.com/scrap-yo-mama/sym/blob/main/runtime/TRADEMARK.md) est sous [AGPL-3.0](https://github.com/scrap-yo-mama/sym/blob/main/LICENSE), le client et les schémas sous MIT. [Usage responsable](https://github.com/scrap-yo-mama/sym/blob/main/runtime/apps/docs/content/explications/usage-responsable.md) : voir la [doc](https://github.com/scrap-yo-mama/sym/blob/main/runtime/apps/docs/content/index.md). Sécurité : le [signalement privé des failles](https://github.com/scrap-yo-mama/sym/blob/main/runtime/SECURITY.md) est activé. Fait avec l'aide d'une IA, relu par des humains. [Lire en anglais](README.md).
