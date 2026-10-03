@@ -393,6 +393,18 @@ describe('assert_persistence_schedule_and_caps', () => {
     expect((await hooks(old, 'api.persistence_attempt')).at(-1)).toMatchObject({ attempt: 0, outcome: 'exhausted', ended: 'exhausted' });
   });
 
+  test('budget du jour de l’utilisateur (USER_BUDGET_DAILY_USD, PA-02) : épuisé par ses autres API, la tentative n’a pas lieu (persistence_exhausted)', async () => {
+    const api = await newApi({ dailyBudget: 50 });
+    await enable(api);
+    await breakApi(api);
+    const other = await newApi();
+    await pool.query("INSERT INTO runs (api_id, owner_id, api_owner_id, trigger, state, cost_llm_usd, created_at, finished_at) VALUES ($1, $2, $2, 'ui', 'succeeded', 0.3, $3, $3)", [other, A, now()]);
+    clock += HOUR;
+    const capped: PersistenceContext = { ...ctx, costCaps: { userBudgetDailyUsd: 0.2, maxCostUsdPerRun: 10 } };
+    expect(await runPersistenceAttempt(pool, capped, api)).toMatchObject({ kind: 'ended', ended: 'exhausted', reason: 'daily_budget' });
+    expect(await attemptRuns(api)).toBe(0);
+  });
+
   test('disjoncteur ouvert puis Retry-After : tentative reportée, compteur `attempt` inchangé, aucun run', async () => {
     const host = `zz-test-${randomUUID().slice(0, 8)}.example`;
     const api = await newApi({ host });

@@ -42,6 +42,7 @@ import {
   registrableDomain,
   renderCatalogMemory,
   type CatalogDossier,
+  type CostCaps,
   type FailureClass,
   type InvestigationPhase,
   type RunContext as RunCtx,
@@ -209,6 +210,8 @@ export type InvestigationExecutorDeps = {
    * inconnu, clé illisible) est ignorée et l'enquête se fait sans avis. Absent : rôle `judge` de la configuration `llm`.
    */
   readonly judgeLlm?: InvestigationLlmPorts;
+  /** Plafonds d'instance (PA-02) : `MAX_COST_USD_PER_RUN` borne le coût d'un essai, `USER_BUDGET_DAILY_USD` le budget de l'enquête. */
+  readonly costCaps?: CostCaps;
 };
 
 const round6 = (v: number): number => Math.round(v * 1e6) / 1e6;
@@ -263,7 +266,7 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
   return async (ctx: RunCtx): Promise<RunResult> => {
     const started = now();
     const inv = await loadInvestigation(deps.pool, { apiId: ctx.apiId, ownerId: ctx.ownerId });
-    const target = await loadRunTarget(deps.pool, { apiId: ctx.apiId, ownerId: ctx.ownerId, version: null });
+    const target = await loadRunTarget(deps.pool, { apiId: ctx.apiId, ownerId: ctx.ownerId, version: null, ...(deps.costCaps === undefined ? {} : { caps: deps.costCaps }) });
     if (inv === null || target === null) return { state: 'failed', failure_class: 'code_error', retryable: false, error_detail: 'api_not_found' };
     if (inv.state === null) return { state: 'failed', failure_class: 'code_error', retryable: false, error_detail: 'investigation_not_started' };
     let state: InvestigationState = inv.state;
@@ -271,7 +274,7 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
     const request = state.request;
     // `investigation_budget_usd` ; une tentative du mode « SYM ne lâche pas » (2.16) le borne encore au reste de son
     // plafond et du budget du jour (`budget_cap_usd`) : le plafond annoncé est strict.
-    const budgetUsd = Math.min(request.budget_usd, state.budget_cap_usd ?? Number.POSITIVE_INFINITY);
+    const budgetUsd = Math.min(request.budget_usd, state.budget_cap_usd ?? Number.POSITIVE_INFINITY, deps.costCaps?.userBudgetDailyUsd ?? Number.POSITIVE_INFINITY);
     const pageUrl = new URL(request.url).href;
     const host = new URL(pageUrl).hostname.toLowerCase();
     // Domaines de l'API (04b §2) : la page et ses sous-domaines (ou ceux du domaine sans `www.`), jamais un voisin.

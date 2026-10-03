@@ -316,7 +316,7 @@ export function apiRoutes(app: FastifyInstance, ctx: ServerContext): void {
       const slug = await freeSlug(ctx, body.description, body.url);
       const queue = await ctx.jobs();
       created = await withActor(ctx.pool, actor, async (tx) => {
-        await reserveRunSlot(tx, ctx);
+        await reserveRunSlot(tx, ctx, { kind: 'investigation' });
         const apiId = await insertApi(tx, actor, { slug, description: body.description.trim(), visibility: body.visibility ?? 'private', networkPolicy: policy });
         const { runId } = await startInvestigation(tx, queue, {
           apiId,
@@ -379,6 +379,9 @@ export function apiRoutes(app: FastifyInstance, ctx: ServerContext): void {
       return sendError(reply, 409, 'draft_required', 'un schéma se modifie par un brouillon puis une promotion (itération), jamais en place');
     }
     if (body.visibility === 'instance' && api.requires_session) return sendError(reply, 400, 'session_api_private', 'une API à session reste privée');
+    // Plafonds d'instance (08b § 3, PA-02) : le membre ne les dépasse pas en fixant les siens.
+    if ((body.max_cost_usd ?? 0) > ctx.rest.maxCostUsdPerRun) return sendError(reply, 400, 'cost_cap_exceeded', `max_cost_usd dépasse le plafond de l’instance (${ctx.rest.maxCostUsdPerRun} $ par run)`);
+    if ((body.budget_daily_usd ?? 0) > ctx.rest.userBudgetDailyUsd) return sendError(reply, 400, 'cost_cap_exceeded', `budget_daily_usd dépasse le plafond de l’instance (${ctx.rest.userBudgetDailyUsd} $ par jour)`);
     let policy: Record<string, unknown> | undefined;
     try {
       if (body.network_policy) policy = await checkNetworkPolicy(ctx, body.network_policy);
@@ -509,7 +512,7 @@ export function apiRoutes(app: FastifyInstance, ctx: ServerContext): void {
       try {
         const queue = await ctx.jobs();
         ({ runId } = await withActor(ctx.pool, actor, async (tx) => {
-          await reserveRunSlot(tx, ctx);
+          await reserveRunSlot(tx, ctx, { kind: 'investigation', apiId: api.id });
           return validateInvestigationSchema(tx, queue, {
             apiId: api.id,
             ownerId: actor.userId,
@@ -548,7 +551,7 @@ export function apiRoutes(app: FastifyInstance, ctx: ServerContext): void {
     if (await rejectIfKeyRateLimited(ctx, reply, actor)) return reply;
     const queue = await ctx.jobs();
     const launch = async (tx: Parameters<typeof startInvestigation>[0]) => {
-      await reserveRunSlot(tx, ctx);
+      await reserveRunSlot(tx, ctx, { kind: 'investigation', apiId: api.id });
       return startInvestigation(tx, queue, {
         apiId: api.id,
         ownerId: actor.userId,
@@ -640,7 +643,7 @@ export function apiRoutes(app: FastifyInstance, ctx: ServerContext): void {
       try {
         const queue = await ctx.jobs();
         ({ runId } = await withActor(ctx.pool, actor, async (tx) => {
-          await reserveRunSlot(tx, ctx);
+          await reserveRunSlot(tx, ctx, { kind: 'run', apiId: api.id });
           const made = await createRun(tx, queue, { apiId: api.id, ownerId: actor.userId, trigger: triggerOf(actor), input: body.input });
           if (body.strategy_version !== undefined) await tx.query('UPDATE runs SET strategy_version = $2 WHERE id = $1', [made.runId, body.strategy_version]);
           return made;

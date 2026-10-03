@@ -40,7 +40,7 @@ import type pg from 'pg';
 import { appendAudit } from './audit.js';
 import { notifyStatusChange, toStatusTransitions } from './notify.js';
 import { withActor } from './rls.js';
-import { createRun } from './runs.js';
+import { createRun, userBudgetCommittedUsd, type BudgetCaps } from './runs.js';
 import { applyStatusTransitionInTx } from './status.js';
 import { emitWebhookEvent } from './webhooks.js';
 
@@ -73,6 +73,8 @@ export type PersistenceContext = {
   policy?: PersistencePolicy;
   random?: () => number;
   negativeMemory?: NegativeMemory;
+  /** Plafonds d'instance (`USER_BUDGET_DAILY_USD`, `MAX_COST_USD_PER_RUN`, 08b § 3) : le budget du jour de l'utilisateur borne aussi les tentatives. */
+  costCaps?: BudgetCaps;
 };
 
 type Resolved = { queue: JobQueue; now: Date; policy: PersistencePolicy; random: () => number; memory: NegativeMemory };
@@ -464,14 +466,20 @@ export async function runPersistenceAttempt(pool: pg.Pool, ctx: PersistenceConte
     }
     const spent = usd(cycle.spent_usd);
     const modeBudgetUsd = effectivePersistenceBudgetUsd(r.policy, api.persistence_budget_usd === null ? null : Number(api.persistence_budget_usd));
-    const dailySpent = await dailySpentUsd(tx, apiId, r.now);
+    const apiDailySpent = await dailySpentUsd(tx, apiId, r.now);
+    // Budget USD du jour de l'UTILISATEUR (08b § 3, PA-02) : la tentative n'ouvre rien au-delà de ce qui lui reste (dépense du
+    // jour et enveloppes des runs actifs déduites), toutes ses API confondues ; épuisé, le mode s'arrête (`exhausted`).
+    const userRemaining = ctx.costCaps === undefined ? Number.POSITIVE_INFINITY : ctx.costCaps.userBudgetDailyUsd - (await userBudgetCommittedUsd(tx, api.owner_id, ctx.costCaps, r.now));
+    const apiDailyBudget = Number(api.budget_daily_usd);
+    const dailyBudgetUsd = apiDailySpent + Math.min(apiDailyBudget - apiDailySpent, userRemaining);
+    const dailySpent = apiDailySpent;
     const cap = persistenceCapReached({
       now: r.now,
       enteredErrorAt: cycle.entered_error_at,
       spentUsd: spent,
       budgetUsd: modeBudgetUsd,
       dailySpentUsd: dailySpent,
-      budgetDailyUsd: Number(api.budget_daily_usd),
+      budgetDailyUsd: dailyBudgetUsd,
       maxDays: r.policy.maxDays,
     });
     if (cap !== null) {
@@ -544,7 +552,7 @@ export async function runPersistenceAttempt(pool: pg.Pool, ctx: PersistenceConte
     // une validation automatique qu'il n'a pas choisie (19 § 6) ; avec `validated_schema` posé, l'exécuteur ne propose
     // aucun schéma. Plafond STRICT de la tentative (`budget_cap_usd`, lu par l'exécuteur) : la demande, le reste du
     // plafond du mode et le reste du budget du jour, jamais au-delà ; une nouvelle enquête repart sans lui.
-    const budgetCapUsd = usd(Math.max(0, Math.min(Number(state?.request?.['budget_usd'] ?? Number.POSITIVE_INFINITY), modeBudgetUsd - spent, Number(api.budget_daily_usd) - dailySpent)));
+    const budgetCapUsd = usd(Math.max(0, Math.min(Number(state?.request?.['budget_usd'] ?? Number.POSITIVE_INFINITY), modeBudgetUsd - spent, dailyBudgetUsd - dailySpent)));
     const next = { ...(state ?? {}), validated_schema: api.output_schema, spent_usd: 0, elapsed_ms: 0, budget_cap_usd: budgetCapUsd };
     await tx.query("UPDATE apis SET investigation = $2::jsonb, investigation_phase = 'testing', updated_at = now() WHERE id = $1", [apiId, JSON.stringify(next)]);
     const { runId } = await createRun(tx, r.queue, { apiId, ownerId: api.owner_id, trigger: 'schedule', kind: 'investigation' });

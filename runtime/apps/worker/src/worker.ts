@@ -212,6 +212,8 @@ export async function startWorker(options: StartWorkerOptions): Promise<Worker> 
       warningCheckSeconds: config.warningCheckSeconds,
       pollingIntervalSeconds: config.queuePollingSeconds,
       persistence: config.persistence,
+      userBudgetDailyUsd: config.userBudgetDailyUsd,
+      maxCostUsdPerRun: config.maxCostUsdPerRun,
       ...(options.scheduling?.smtpCa ? { smtpCa: options.scheduling.smtpCa } : {}),
     });
     log.info({ workerId, key: checked.fingerprint, concurrency: config.concurrency }, 'worker démarré');
