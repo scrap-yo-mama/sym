@@ -35,6 +35,9 @@ const STEPS: Step[] = [
   // Étage E2 : extension construite dans Chromium contre une instance réelle (tâche 2.6, PG 16), puis gate d'accessibilité
   // de la console (tâche 3.9) : axe, parcours au clavier seul, live regions, sur la console construite et servie en local.
   { job: 'e2e', name: 'e2e extension et console (Playwright, Chromium)', cmd: ['pnpm', 'test:e2e'] },
+  // Régression visuelle par langue sous linux (3.17, part de 3.6) : dans l'image Playwright épinglée de deploy/Dockerfile,
+  // comparée aux instantanés de apps/web/e2e/__visual__/linux (ceux de darwin sont comparés par l'étape précédente).
+  { job: 'e2e', name: 'régression visuelle linux (image Playwright épinglée)', cmd: ['pnpm', 'visual:image'] },
   // Matrice PostgreSQL 16, 17, 18 jouée l'une après l'autre (Testcontainers, PG_VERSIONS surchargeable).
   { job: 'integration', name: 'integration (PG ' + (process.env.PG_VERSIONS ?? '16,17,18') + ')', cmd: ['pnpm', 'test:integration'] },
   { job: 'integration', name: 'contract', cmd: ['pnpm', 'vitest', 'run', '--project', 'contract'] },

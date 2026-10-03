@@ -76,6 +76,7 @@ import {
   INVESTIGATION_DEFAULTS,
   INVESTIGATION_EVENTS as EV,
   isActionUrl,
+  milestoneLogEntry,
   narrativeUrl,
   PROPOSAL_HARD_MAX_PAGES,
   rematchCandidates,
@@ -87,6 +88,7 @@ import {
   type BuiltStrategy,
   type CapturedExchange,
   type DataCandidate,
+  type InvestigationMilestone,
   type PairOutcome,
   type PlanEntry,
   type PlanNetwork,
@@ -281,6 +283,9 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
     const budgetView = () => ({ spent_usd: spent, max_usd: request.budget_usd, elapsed_s: Math.round((baseElapsed + now() - started) / 1000), timeout_s: request.timeout_s });
     const event = (kind: string, payload: Record<string, unknown> = {}) =>
       appendInvestigationEvent(deps.pool, { runId: ctx.runId, ownerId: ctx.ownerId, kind, payload: { run_id: ctx.runId, ...payload } });
+    /** Jalon atteint, écrit dans les journaux du run avec la clé et l'intitulé du noyau (`assert_milestones_same_labels`). */
+    const milestone = (key: InvestigationMilestone) => ctx.log('info', 'milestone', milestoneLogEntry(key));
+    const planView = (entries: readonly PlanEntry[]) => entries.map((p) => ({ execution: p.execution, network: p.network, source: p.source, est_cost_usd: p.est_cost_usd }));
     /** Décisions de l'enquête (source de la version, 18 §4.6) : événements qui les portent, `run:seq`. */
     const decisions: string[] = [];
     const decide = async (kind: string, payload: Record<string, unknown> = {}) => {
@@ -552,6 +557,25 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
           return await finishFailed({ failure_class: 'code_error', retryable: false, detail: 'imported_hosts_out_of_scope' }, 'setup');
         }
       }
+      // Plan restreint par l'appelant (`exclude_executions`, 06 § 2) : des niveaux retirés, jamais ajoutés.
+      const excluded = new Set<string>(state.excluded_executions ?? []);
+      /** Plan d'essais chiffré (pur, sans requête) : annoncé AVEC la porte du schéma (20 § 5.3), puis rejoué tel quel au lancement des essais. */
+      const planFor = (strategies: readonly BuiltStrategy[]): PlanEntry[] =>
+      (
+        imported !== undefined
+          ? buildImportedPlan({ execution: imported.execution, spec: imported.spec, networks, browser: deps.browsers !== null })
+          : buildTrialPlan({
+              strategies,
+              networks,
+              browser: deps.browsers !== null,
+              agentic: deps.agentic === true ? { ...(rolePrice(config, 'extract') === undefined ? {} : { extract: rolePrice(config, 'extract')! }), ...(rolePrice(config, 'agent') === undefined ? {} : { agent: rolePrice(config, 'agent')! }) } : {},
+              pageUrl,
+              pageHost: host,
+              instruction: request.description,
+              documentBytes: state.page?.document_bytes ?? 0,
+              totalBytes: state.page?.total_bytes ?? 0,
+            })
+      ).filter((p) => !excluded.has(p.execution));
       let config: LlmConfig | null = null;
       let builtStrategies: readonly BuiltStrategy[] = [];
       let proposal = state.proposal;
@@ -566,6 +590,7 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
         const firstRun = state.validated_schema === undefined || state.candidates === undefined;
         if (firstRun) {
           await save('reconnaissance');
+          await milestone('reconnaissance');
           await event(EV.phase, { phase: 'reconnaissance', budget: budgetView() });
         }
         const recon =
@@ -702,6 +727,7 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
           await event(EV.schemaProposed, { ok: false, reason: built.reason, rejected: built.rejected, budget: budgetView() });
           return await finishFailed({ failure_class: 'extraction', retryable: false, detail: built.reason }, 'schema');
         }
+        const gatePlan = planFor(built.strategies);
         if (fixed === undefined) {
           // Échantillon : données de l'utilisateur, inscrites au registre de masquage du run, puis passées par la liste
           // d'exclusion des personnes effacées AVANT toute écriture (17 §6, assert_erasure_complete) : une personne effacée
@@ -721,9 +747,13 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
           if (spent >= request.budget_usd) return await budgetExhausted('investigation_budget_usd');
           if (!request.auto_validate) {
             await save('awaiting_schema_validation', { proposal: proposal!, proposed_schema: built.outputSchema, proposed_columns: schemaColumns(built.outputSchema), ...(rulesUsed === undefined ? {} : { rules: rulesUsed }) });
-            await event(EV.phase, { phase: 'awaiting_schema_validation', budget: budgetView() });
+            await milestone('schema');
+            // Coût d'un rejeu estimé : celui de la méthode la moins chère du plan (ce que retiendrait un premier essai conforme).
+            const cheapest = gatePlan.reduce<number | null>((min, p) => (p.est_cost_usd !== null && (min === null || p.est_cost_usd < min) ? p.est_cost_usd : min), null);
+            await event(EV.phase, { phase: 'awaiting_schema_validation', plan: planView(gatePlan), budget: { ...budgetView(), ...(cheapest === null ? {} : { retained_est_usd: cheapest }) } });
             return { state: 'succeeded', outcome: 'clean', degraded_reasons: [], items: 0 };
           }
+          await milestone('schema');
           const columns = schemaColumns(built.outputSchema);
           await save('testing', { proposal: proposal!, proposed_schema: built.outputSchema, validated_schema: built.outputSchema, proposed_columns: columns, validated_columns: columns, validated_by: 'auto', ...(rulesUsed === undefined ? {} : { rules: rulesUsed }) });
           await decide(EV.schemaValidated, { by: 'auto' });
@@ -739,24 +769,9 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
 
       // --- 3. Essais du moins cher au plus cher --------------------------------------------------------------------
       await save('testing');
-      // Plan restreint par l'appelant (`exclude_executions`, 06 § 2) : des niveaux retirés, jamais ajoutés.
-      const excluded = new Set<string>(state.excluded_executions ?? []);
-      const fullPlan = (
-        imported !== undefined
-          ? buildImportedPlan({ execution: imported.execution, spec: imported.spec, networks, browser: deps.browsers !== null })
-          : buildTrialPlan({
-              strategies: builtStrategies,
-              networks,
-              browser: deps.browsers !== null,
-              agentic: deps.agentic === true ? { ...(rolePrice(config, 'extract') === undefined ? {} : { extract: rolePrice(config, 'extract')! }), ...(rolePrice(config, 'agent') === undefined ? {} : { agent: rolePrice(config, 'agent')! }) } : {},
-              pageUrl,
-              pageHost: host,
-              instruction: request.description,
-              documentBytes: state.page?.document_bytes ?? 0,
-              totalBytes: state.page?.total_bytes ?? 0,
-            })
-      ).filter((p) => !excluded.has(p.execution));
+      await milestone('trials');
       // Confirmation d'un refus passé : le couple le moins cher seulement (le plan est déjà trié par coût croissant).
+      const fullPlan = planFor(builtStrategies);
       const plan = confirmOnce ? fullPlan.slice(0, 1) : fullPlan;
       // Règles embarquées dans les prompts figés E4-E6 (18 §4.5, RULES_MAX_TOKENS de 1 000) : la spec ne porte que leurs
       // RÉFÉRENCES (`nom@version#sha256`, jamais le texte : INV12, spec lisible des membres d'une API partagée) ; l'essai et

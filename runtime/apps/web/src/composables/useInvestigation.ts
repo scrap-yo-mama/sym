@@ -104,7 +104,7 @@ export function useInvestigation(options: InvestigationOptions = {}) {
     failure.value = null;
     waitingForRun = true;
     buffer.length = 0;
-    Object.assign(state, emptyInvestigation(), { domain: hostOf(body.url) });
+    Object.assign(state, emptyInvestigation(), { domain: hostOf(body.url), description: body.description.trim() || null });
     const result = await call<unknown>(() => getApi().POST('/api/apis', { params: { query: { wait: 0 } }, body }));
     busy.value = null;
     if (!result.ok) {
@@ -214,7 +214,7 @@ export function useInvestigation(options: InvestigationOptions = {}) {
     return true;
   }
 
-  /** « Ré-enquêter » (seule reprise offerte à une API bloquée, transition 18) : action manuelle de l'utilisateur. */
+  /** « Ré-enquêter » (seule reprise offerte à une API bloquée, transition 18) : action manuelle de l'utilisateur, corps vide (InvestigateRequest). */
   async function reinvestigate(): Promise<boolean> {
     const slug = state.slug;
     if (!slug || busy.value) return false;
