@@ -1,12 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Briques communes de l'API REST (tâche 3.1, 05 § 2 et § 4.3), réutilisables par le serveur MCP (3.2) : montants,
 // codes de raison, file pleine, attente synchrone bornée, déclencheur, case « j'ai lu » (17 § 11).
-<<<<<<< HEAD
-import { ACTIVE_RUN_STATES, schemaHasPersonalFields, type RunKind, type RunTrigger } from '@runtime/core';
+import { ACTIVE_RUN_STATES, personalFieldPaths, schemaHasPersonalFields, type RunKind, type RunTrigger } from '@runtime/core';
 import { runEnvelopeUsd, userBudgetCommittedUsd } from '@runtime/db';
-=======
-import { ACTIVE_RUN_STATES, personalFieldPaths, schemaHasPersonalFields, type RunTrigger } from '@runtime/core';
->>>>>>> aaf0bd5 (UX-19 — Refus responsible_use_ack_required : le message nomme les champs x-personal)
 import type { FastifyReply } from 'fastify';
 import type pg from 'pg';
 import type { ServerContext } from '../context.js';

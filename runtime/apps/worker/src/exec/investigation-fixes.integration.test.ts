@@ -12,7 +12,7 @@
 // - sujet effacé : jamais réécrit dans le récit par l'échantillon d'une nouvelle enquête (17 §6) ;
 // - une seule enquête à la fois par API.
 import { randomUUID } from 'node:crypto';
-import { DomainPacer, generateMasterKey, MasterKey, PersonalValueRegistry, Secret, type RunExecutor } from '@runtime/core';
+import { DomainPacer, DslError, generateMasterKey, MasterKey, PersonalValueRegistry, Secret, type RunExecutor } from '@runtime/core';
 import { attemptsFollowPlan, firstCostInversion, type TrialPair } from '@runtime/core/investigation';
 import * as net from '@runtime/core/net';
 import {
@@ -23,6 +23,7 @@ import {
   listInvestigationEvents,
   loadSubjectKey,
   migrateUp,
+  readCatalogMemory,
   PgBossJobQueue,
   PgPacingStore,
   readRun,
@@ -68,6 +69,8 @@ let fake: FakeProvider;
 let masterKey: string;
 let withExtract = false;
 let price = { in: 1, out: 1 };
+/** Panne inattendue au départ de l'enquête (UX-24) : exception hors des fins prévues par l'exécuteur. */
+let crash: Error | null = null;
 
 const products = (n: number, withTitle = true) => ({
   items: Array.from({ length: n }, (_, i) => ({ id: `zz_test_p${String(i + 1).padStart(3, '0')}`, ...(withTitle ? { title: `Produit Zztest ${i + 1}` } : {}), price_cents: 100 * (i + 1) })),
@@ -228,6 +231,12 @@ beforeAll(async () => {
     agentic: true,
     instanceContact: async () => 'mailto:ops@zz-test.example',
     version: '9.9.9',
+    memory: {
+      read: async (args) => {
+        if (crash !== null) throw crash;
+        return readCatalogMemory(pool, args);
+      },
+    },
   });
   const executor: RunExecutor = dispatchByKind({ run: strategy.executor, investigation });
   worker = await startWorker({
@@ -253,6 +262,7 @@ beforeEach(() => {
   tunnel.sent.length = 0;
   withExtract = false;
   price = { in: 1, out: 1 };
+  crash = null;
 });
 
 describe('enquête en tunnel (04 §4 : reconnaissance « en tunnel si la session est requise »)', () => {
@@ -355,6 +365,20 @@ describe('fins d’enquête : phase close et récit fermé', () => {
     await apiStatusSettled(apiId, { status: 'action_requise', status_reason: 'proxy_not_configured', investigation_phase: 'done' });
     expect((await eventsOf(run.id)).map((e) => e.kind).at(-1)).toBe('investigation.finished');
     expect(site.hits).toEqual([]);
+  });
+
+  test('enquête toujours close (INV3, UX-24) — exception inattendue : statut quitté (erreur), phase done, investigation.finished avec la cause, error_detail lisible', async () => {
+    crash = new DslError('value_too_large', 'texte extrait trop long');
+    const apiId = await insertApi('zz_test_fix_crash');
+    const run = await investigate(apiId, { url: site.url(SIB, '/'), description: 'liste', auto_validate: true });
+    expect(run).toMatchObject({ state: 'failed', failure_class: 'code_error' });
+    expect((await runRow(run.id)).error_detail).toBe('internal_error:DslError:value_too_large');
+    await apiStatusSettled(apiId, { status: 'erreur', investigation_phase: 'done' });
+    const events = await eventsOf(run.id);
+    expect(events.map((e) => e.kind).at(-1)).toBe('investigation.finished');
+    expect(events.at(-1)!.payload).toMatchObject({ outcome: 'failed', failure_class: 'code_error', detail: 'internal_error:DslError:value_too_large' });
+    expect(events.map((e) => e.kind)).toContain('status.changed');
+    expect(fake.requests).toBe(0);
   });
 
   test('investigation_timeout_s tenu dès l’étape 0 (page lente) : erreur, investigation_timeout_s, sans attendre la page ni appeler le LLM', async () => {
