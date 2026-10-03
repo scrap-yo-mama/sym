@@ -7,13 +7,13 @@
 // L'egress réel est la tâche 1.5 : un egress témoin enregistre ses deux étapes (fermeture, arrêt) et l'état du processus.
 // Utilisateur non root exigé. Sécurité des tests : seul le processus principal d'un Chromium lancé ici est signalé, par son
 // pid exact (plantage simulé) ; les groupes sont tués par OwnedProcessGroups (groupes enregistrés au lancement seulement).
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, rmSync, writeFileSync } from 'node:fs';
 import { connect as netConnect } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createMemorySessionStore, type MemorySessionStore } from '@sym-browser/core';
 import { chromium, type Browser, type BrowserContext, type Page } from 'playwright-core';
-import { afterAll, beforeAll, describe, expect, test } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, test } from 'vitest';
 import { dedicatedLauncher } from '../dedicated/dedicated.js';
 import { BrowserPool, OwnedProcessGroups, PROVISIONAL_CAPACITY, playwrightLauncher, readProcessTable, startClosedLaunchProxy, type BrowserLauncher, type ClosedLaunchProxy, type LaunchedBrowser } from '../pool/index.js';
 import { SessionHost, type HostLease, type SessionEgress } from './host.js';
@@ -28,6 +28,11 @@ const tmpBefore = new Set(readdirSync(tmpdir()));
 beforeAll(async () => {
   if (isRoot) throw new Error('tests Chromium : lance-les sous un utilisateur non root (le bac à sable de Chromium refuse root, 03 § 7).');
   proxy = await startClosedLaunchProxy();
+});
+/** Montages ouverts par les tests : refermés même quand un test échoue, pour qu'un échec ne laisse ni Chromium ni fichier de Playwright aux tests suivants. */
+const opened: { pool: BrowserPool }[] = [];
+afterEach(async () => {
+  for (const s of opened.splice(0)) await s.pool.close().catch(() => undefined);
 });
 afterAll(async () => {
   await proxy?.close();
@@ -46,6 +51,44 @@ function refused(port: number): Promise<boolean> {
     });
     socket.once('error', () => resolve(true));
   });
+}
+
+/** Écouteur TCP local sur ce port (Linux : /proc/net/tcp*, puis descripteurs des processus) ; sert au message d'échec. */
+function listenerOf(port: number): string {
+  const hex = port.toString(16).toUpperCase().padStart(4, '0');
+  const inodes = new Set<string>();
+  for (const file of ['/proc/net/tcp', '/proc/net/tcp6']) {
+    try {
+      for (const line of readFileSync(file, 'utf8').split('\n').slice(1)) {
+        const cols = line.trim().split(/\s+/);
+        if (cols[3] === '0A' && cols[1]?.endsWith(`:${hex}`) && cols[9] !== undefined) inodes.add(cols[9]);
+      }
+    } catch {
+      /* hors Linux */
+    }
+  }
+  const holders: string[] = [];
+  for (const p of readProcessTable()) {
+    try {
+      for (const fd of readdirSync(`/proc/${p.pid}/fd`)) {
+        const link = readlinkSync(`/proc/${p.pid}/fd/${fd}`);
+        const m = /^socket:\[(\d+)\]$/.exec(link);
+        if (m && inodes.has(m[1]!)) holders.push(`${p.pid}(${p.comm}, pgid ${p.pgid}, état ${p.state})`);
+      }
+    } catch {
+      /* processus disparu ou illisible */
+    }
+  }
+  return inodes.size === 0 ? 'aucun écouteur' : `écouteur(s) : ${holders.join(', ') || 'propriétaire inconnu'}`;
+}
+
+/** Port fermé dans un délai borné (le noyau d'un runner chargé peut tarder à rendre un port après SIGKILL) ; sinon, l'écouteur est nommé. */
+async function expectPortClosed(port: number, label: string, ms = 5_000): Promise<void> {
+  const deadline = Date.now() + ms;
+  while (!(await refused(port))) {
+    if (Date.now() > deadline) expect.fail(`${label} : port CDP ${port} encore ouvert après ${ms} ms, ${listenerOf(port)}`);
+    await new Promise((r) => setTimeout(r, 50));
+  }
 }
 
 async function waitFor(check: () => boolean, ms = 15_000): Promise<void> {
@@ -109,7 +152,9 @@ function setup(slotsTotal = 6) {
   const store = createMemorySessionStore();
   const errors: unknown[] = [];
   const supervisor = new SessionSupervisor({ nodeId: 'node-1-7', pool: host, store, onError: (e) => errors.push(e), watchdogGraceMs: 60_000 });
-  return { groups, dataDir, browsers, pool, host, store, supervisor, egress, leases, errors };
+  const made = { groups, dataDir, browsers, pool, host, store, supervisor, egress, leases, errors };
+  opened.push(made);
+  return made;
 }
 
 type Setup = ReturnType<typeof setup>;
@@ -155,7 +200,7 @@ async function expectTornDown(s: Setup, sessionId: string, opts: { egressBeforeK
   if (lease.type === 'dedicated') {
     const pid = s.browsers.get(lease.browserId)!.pid!;
     expect(alive(pid), `${sessionId} : processus du Chromium dédié`).toEqual([]);
-    expect(await refused(Number(new URL(lease.cdpEndpoint!).port)), `${sessionId} : port CDP`).toBe(true);
+    await expectPortClosed(Number(new URL(lease.cdpEndpoint!).port), sessionId);
     if (opts.egressBeforeKill ?? true) expect(rec.closedWhileRunning, `${sessionId} : egress fermé avant SIGKILL`).toBe(true);
   }
 }
