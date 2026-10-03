@@ -206,9 +206,6 @@ beforeEach(async () => {
 
 describe('mémoire du catalogue dans l’enquête (2.12)', () => {
   test('assert_no_cross_domain_values_in_context, assert_catalog_memory_untrusted, assert_catalog_memory_owner_scoped, assert_memory_refs_recorded — prompt réel de l’enquête', async () => {
-    // Même propriétaire, même domaine : valeurs admises (masquées) ; un item stocké porte une injection.
-    const same = await insertApi(A, 'zz_test_mem_same', API_HOST, { status: 'sain', reason: 'strategy_conform', withVersion: true });
-    await pastRun(same, A, [{ id: 'ZZ-SAME-VALUE', name: 'zz personne', note: `${INJECTION} ${'Z'.repeat(300)}` }]);
     // API avec session du même domaine : aucune valeur.
     const session = await insertApi(A, 'zz_test_mem_session', API_HOST, { status: 'sain', session: true, withVersion: true });
     await pastRun(session, A, [{ id: 'ZZ-SESSION-CANARY' }]);
@@ -218,6 +215,10 @@ describe('mémoire du catalogue dans l’enquête (2.12)', () => {
     // `requires.session_domain` seul : aucune valeur.
     const sessionDomain = await insertApi(A, 'zz_test_mem_session_domain', API_HOST, { status: 'sain', withVersion: true, requires: { session_domain: 'zz_test_api_json.localhost' } });
     await pastRun(sessionDomain, A, [{ id: 'ZZ-SESSION-DOMAIN-CANARY' }]);
+    // Même propriétaire, même domaine : valeurs admises (masquées) ; un item stocké porte une injection. Créée APRÈS les
+    // API avec session ou tunnel du même domaine : la plus récente, elle reste dans les 3 entrées de l’étage 1.
+    const same = await insertApi(A, 'zz_test_mem_same', API_HOST, { status: 'sain', reason: 'strategy_conform', withVersion: true });
+    await pastRun(same, A, [{ id: 'ZZ-SAME-VALUE', name: 'zz personne', note: `${INJECTION} ${'Z'.repeat(300)}` }]);
     // Autre domaine : un retour piégé dans la source, des items ; ni valeur ni texte.
     const other = await insertApi(A, 'zz_test_mem_other', NEXT_HOST, { status: 'sain', withVersion: true });
     await pastRun(other, A, [{ id: 'ZZ-OTHER-DOMAIN-CANARY' }]);
