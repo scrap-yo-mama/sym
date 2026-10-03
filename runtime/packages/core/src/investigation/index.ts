@@ -8,3 +8,4 @@ export * from './proposal.js';
 export * from './candidates.js';
 export * from './trials.js';
 export * from './events.js';
+export * from './milestones.js';

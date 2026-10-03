@@ -22,3 +22,8 @@
   display: table;
   width: 100%;
 }
+
+/* Remplace l'attribut style="position:relative" que <Content> posait lui-même (CSP de la landing, sans style en ligne). */
+.vp-content-root {
+  position: relative;
+}

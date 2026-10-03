@@ -1,0 +1,47 @@
+# Liste noire des marques de tiers (22 § 2.5, 22b § 1) : fournisseurs de modèles, clients MCP, outils de scraping, réseaux
+# sociaux, sites cibles. Aucune n'apparaît sur la landing ; « Claude » seulement dans l'accroche D-46 (phrase égale mot pour mot
+# à son entrée du registre). Les exceptions descriptives (GitHub, Docker, Render, Railway, Chrome Web Store, books.toscrape.com,
+# Model Context Protocol) sont dans exceptions.txt : elles ne sont pas des marques bannies.
+openai
+anthropic
+claude
+chatgpt
+gemini
+mistral
+llama
+cohere
+cursor
+copilot
+windsurf
+perplexity
+apify
+firecrawl
+bright data
+brightdata
+oxylabs
+scrapingbee
+zyte
+scrapy
+octoparse
+diffbot
+browserbase
+stagehand
+puppeteer
+selenium
+linkedin
+twitter
+facebook
+instagram
+tiktok
+reddit
+youtube
+amazon
+google
+gmail
+notion
+n8n
+zapier
+supabase
+vercel
+netlify
+cloudflare

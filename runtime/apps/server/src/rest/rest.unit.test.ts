@@ -7,6 +7,7 @@ import { abortableSleep, decodeFeedCursor, waitDrain } from './events.js';
 import { csvCell, csvLine, projectItem } from './export.js';
 import { decodeItemsCursor, itemsCursor } from './runs.js';
 import { reasonMessage } from './shared.js';
+import { apiSummary, type ApiRow } from './apis.js';
 
 describe('assert_csv_formula_neutralized : cellules CSV (08b § 2)', () => {
   test.each([
@@ -125,5 +126,35 @@ describe('flux SSE : attentes sans fuite d’écouteurs (un tour toutes les poll
     controller.abort();
     await pending;
     expect(out.listenerCount('drain')).toBe(0);
+  });
+});
+
+describe('assert_catalog_summary_domain : la ligne du catalogue porte le domaine de la page enquêtée (20 § 5.2, « nom et domaine »)', () => {
+  const row = (startUrl: string | null) =>
+    ({
+      id: '00000000-0000-4000-8000-000000000001',
+      slug: 'zz-livres-abc123',
+      description: 'zz_test livres',
+      status: 'sain',
+      status_reason: null,
+      stale: false,
+      execution: 'fetch',
+      network: 'direct',
+      requires: {},
+      avg_cost_usd: null,
+      last_run_at: null,
+      runs_30d: 0,
+      succeeded_30d: 0,
+      visibility: 'private',
+      owner_id: '00000000-0000-4000-8000-000000000002',
+      pinned: false,
+      mcp_exposed: true,
+      start_url: startUrl,
+    }) as unknown as ApiRow;
+
+  test('hôte de l’URL de départ, en minuscules, sans port ni chemin ; null sans URL connue ou illisible', () => {
+    expect(apiSummary(row('https://Livres.ZZ-Test.example:8443/catalogue?page=2')).domain).toBe('livres.zz-test.example');
+    expect(apiSummary(row(null)).domain).toBeNull();
+    expect(apiSummary(row('pas une url')).domain).toBeNull();
   });
 });

@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Schemathesis (tâche 2.2) : une réponse 5xx est une erreur serveur, sauf les deux que le contrat déclare (04 § 6) :
+# 502 proxy_unreachable et 503 no_node (région sans nœud prêt, Retry-After). Une 500 reste toujours un échec.
+[checks.not_a_server_error]
+expected-statuses = ["1XX", "2XX", "3XX", "4XX", "502", "503"]

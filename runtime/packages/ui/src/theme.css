@@ -37,6 +37,17 @@
   --sym-ink-todo: #9C978D;
   --sym-lilac-deep: #4B3F72;
 
+  /* Planche Catalogue (D-60, latest/project/Catalogue.dc.html) : segments de la barre de santé (vert, violet) et badges doux
+     des statuts sain, warning et réparation (surface claire, texte foncé de la même famille). */
+  --sym-green: #1F8A70;
+  --sym-violet: #9B6BE0;
+  --sym-mint: #D7F2EA;
+  --sym-green-ink: #0E5A46;
+  --sym-yellow-soft: #FFF0BF;
+  --sym-yellow-ink: #6B4E00;
+  --sym-violet-soft: #EDE2FB;
+  --sym-violet-ink: #4B2490;
+
   /* Teintes douces des lignes de comparaison (clair, puis sombre). */
   --sym-diff-added-soft: #D5EEF1;
   --sym-diff-removed-soft: #FFD9C9;
@@ -101,6 +112,16 @@
   --status-bloquee-foreground: var(--sym-paper);
   --status-border: var(--sym-ink);
 
+  /* Barre de santé et badges du catalogue, aux couleurs de la planche (D-60). Segments à 3:1 au moins sur la carte. */
+  --status-sain-bar: var(--sym-green);
+  --status-reparation-bar: var(--sym-violet);
+  --status-sain-badge: var(--sym-mint);
+  --status-sain-badge-foreground: var(--sym-green-ink);
+  --status-warning-badge: var(--sym-yellow-soft);
+  --status-warning-badge-foreground: var(--sym-yellow-ink);
+  --status-reparation-badge: var(--sym-violet-soft);
+  --status-reparation-badge-foreground: var(--sym-violet-ink);
+
   /* Lignes de comparaison de stratégies. */
   --diff-added: var(--sym-diff-added-soft);
   --diff-removed: var(--sym-diff-removed-soft);
@@ -154,6 +175,16 @@
   --status-bloquee: var(--sym-ink);
   --status-bloquee-foreground: var(--sym-paper);
   --status-border: var(--sym-paper);
+
+  /* Sans planche sombre : mêmes segments (3:1 sur la carte relevée), badges des familles sombres de statut. */
+  --status-sain-bar: var(--sym-green);
+  --status-reparation-bar: var(--sym-violet);
+  --status-sain-badge: var(--sym-aqua);
+  --status-sain-badge-foreground: var(--sym-ink);
+  --status-warning-badge: var(--sym-yellow);
+  --status-warning-badge-foreground: var(--sym-ink);
+  --status-reparation-badge: var(--sym-lilac-deep);
+  --status-reparation-badge-foreground: var(--sym-paper);
 
   --diff-added: var(--sym-diff-added-deep);
   --diff-removed: var(--sym-diff-removed-deep);

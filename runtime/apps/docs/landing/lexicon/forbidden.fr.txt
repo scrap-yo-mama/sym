@@ -1,0 +1,41 @@
+# Lexique interdit, français (20 § 2.2, 22b § 1). Un terme par ligne ; « [P] » promesses, « [L] » termes de limite ; un terme qui
+# finit par « - » est une racine (préfixe). Normalisation avant comparaison : casse, accents, traits d'union, espaces insécables.
+# Provisoire : 3.19 range les listes complètes dans packages/i18n (forbidden.<langue>.txt) ; la landing en prendra alors l'union.
+[P]
+indétectable
+contourn-
+débloqu-
+furtiv-
+passe-partout
+invisible aux anti-bots
+invisible pour les anti-bots
+déjou-
+franchir une protection
+franchir un défi
+franchis une protection
+franchis un défi
+résoudre les captchas
+résous les captchas
+comme un humain
+jamais bloqué
+jamais bloquée
+sans limite
+plus de 403
+mode fantôme
+comme un fantôme
+passe à travers les murs
+sans laisser de trace
+sous les radars
+ni vu ni connu
+incognito
+invisible
+personne ne te verra
+discrètement
+[L]
+captcha
+anti-bot
+empreinte
+rotation
+résidentiel
+résidentiels
+résidentielle

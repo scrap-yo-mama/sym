@@ -1,0 +1,75 @@
+# Contrôles hebdomadaires de la landing EN PRODUCTION (22 § 2.9, 22b § 5) : cookie, requêtes tierces, traceurs et CSP rejoués sur
+# l'adresse publique, liens externes en 200, résultat daté archivé (celui que cite « #preuves »). Échec = issue automatique.
+# Créé mais DÉSACTIVÉ : déclencheur manuel seul. Pour l'activer après la mise en ligne (⚠️ GO) : renseigner la variable de dépôt
+# LANDING_URL (adresse avec son chemin de base, ex. https://<organisation>.github.io/<dépôt>/) et ajouter le déclencheur `schedule`
+# ci-dessous. Avant le GO, les mêmes contrôles tournent sur la préproduction (job `vitrine` de ci.yml, et pages.yml au moment de la
+# mise en ligne) ; l'archivage du trafic GitHub (22 § 2.10) a son propre workflow, traffic-archive.yml, au même déclencheur.
+# Droits : le job « production » lance du code tiers (installation, build, Chromium sur la page publique, liens sortants) et reste en
+# lecture seule. Le droit d'écrire des issues appartient au seul job « report », lancé après un échec, sans checkout ni installation ni
+# action tierce : une commande gh. Masquer le jeton aux étapes d'un même job ne suffirait pas (le processus du runner le détient).
+name: landing-production
+
+on:
+  workflow_dispatch:
+  # schedule:
+  #   - cron: '17 6 * * 1'
+
+permissions:
+  contents: read
+
+jobs:
+  production:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: runtime
+    env:
+      LANDING_URL: ${{ vars.LANDING_URL }}
+      PUBLIC_REPOSITORY: ${{ vars.PUBLIC_REPOSITORY }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          package_json_file: runtime/package.json
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: runtime/.node-version
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - name: Chromium de Playwright
+        run: pnpm exec playwright install --with-deps chromium
+      - name: Sonde de production (cookie, tiers, traceurs, CSP, formulaire)
+        id: probe
+        run: pnpm --filter @runtime/docs landing:probe "$LANDING_URL" --out ../../landing-probe-production.json
+      - name: Origine partagée (CSP self), aucun autre site Pages du propriétaire sur la même origine
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: pnpm --filter @runtime/docs landing:pages-origin
+      - name: Liens externes du site construit sur ce commit (200, hors exceptions documentées)
+        run: |
+          pnpm docs:build
+          pnpm --filter @runtime/docs landing:links
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: landing-probe-production
+          path: runtime/landing-probe-production.json
+          if-no-files-found: ignore
+          retention-days: 90
+
+  report:
+    needs: production
+    if: failure()
+    runs-on: ubuntu-24.04
+    permissions:
+      issues: write
+    steps:
+      - name: Issue automatique en cas d'échec
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          gh issue create --repo "$GITHUB_REPOSITORY" --title "Contrôle hebdomadaire de la landing en échec" --body "Le contrôle de production de la landing a échoué : voir l'exécution $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
