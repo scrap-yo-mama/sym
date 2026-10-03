@@ -98,3 +98,20 @@ test('MCP : hôtes et origines admis dérivés de la PUBLIC_URL normalisée (poi
   expect(mcp.allowedHosts).not.toContain('scrapyomama-runtime.onrender.com.');
   expect(mcp.allowedOrigins[0]).toBe('https://scrapyomama-runtime.onrender.com');
 });
+
+test('PUBLIC_URL en http:// : démarrage refusé en production (08b § 2), sauf boucle locale ; développement et test inchangés', () => {
+  const http = 'http://runtime.zz-test.example';
+  expect(() => loadServerConfig({ ...base(), NODE_ENV: 'production', PUBLIC_URL: http })).toThrow(ConfigError);
+  expect(() => loadServerConfig({ ...base(), NODE_ENV: 'production', PUBLIC_URL: http })).toThrow(/PUBLIC_URL.*HTTPS/);
+  // Le message ne recopie jamais la valeur.
+  expect(() => loadServerConfig({ ...base(), NODE_ENV: 'production', PUBLIC_URL: http })).not.toThrow(/zz-test\.example/);
+  expect(() => loadServerConfig({ ...base(), NODE_ENV: 'production', PUBLIC_URL: 'https://runtime.zz-test.example' })).not.toThrow();
+  // Boucle locale (docker-compose de développement lié à 127.0.0.1, 08b § 2) : acceptée même avec l'image de production.
+  for (const local of ['http://localhost:3100', 'http://127.0.0.1:3100', 'http://[::1]:3100']) {
+    expect(() => loadServerConfig({ ...base(), NODE_ENV: 'production', PUBLIC_URL: local }), local).not.toThrow();
+  }
+  // Hors production (développement, test) : http accepté.
+  expect(() => loadServerConfig({ ...base(), NODE_ENV: 'development', PUBLIC_URL: http })).not.toThrow();
+  expect(() => loadServerConfig({ ...base(), NODE_ENV: 'test', PUBLIC_URL: http })).not.toThrow();
+  expect(() => loadServerConfig({ ...base(), PUBLIC_URL: http })).not.toThrow();
+});

@@ -2,6 +2,7 @@
 // Configuration de `server` (14 § 3) : lue une fois au démarrage, variables sensibles retirées de l'environnement.
 import { readFileSync } from 'node:fs';
 import {
+  costCapsFromEnv,
   loadKeyring,
   loadObservabilityConfig,
   parseMfaEnforced,
@@ -11,6 +12,7 @@ import {
   unknownReservedVariablesWarning,
   Secret,
   secretValues,
+  type CostCaps,
   type Keyring,
   type MfaEnforced,
   type ObservabilityConfig,
@@ -133,6 +135,10 @@ type RestConfig = {
   maxActiveRunsPerUser: number;
   /** `MAX_RUNS_PER_KEY_PER_MINUTE` (défaut 60, à valider) : créations de run par clé d'API et par minute (429 `key_rate_limited`). */
   maxRunsPerKeyPerMinute: number;
+  /** `USER_BUDGET_DAILY_USD` (défaut 50, à valider) : budget USD par utilisateur et par jour (429 `budget_exceeded`, 08b § 3). */
+  userBudgetDailyUsd: number;
+  /** `MAX_COST_USD_PER_RUN` (défaut 10, à valider) : plafond d'instance du `max_cost_usd` d'une API (400 `cost_cap_exceeded`). */
+  maxCostUsdPerRun: number;
 };
 
 function positiveInteger(env: NodeJS.ProcessEnv, name: string, fallback: number, max: number): number {
@@ -223,6 +229,9 @@ function parseTrustProxy(value: string | undefined): boolean | number | string {
   throw new ConfigError(`TRUST_PROXY invalide : true, false, un nombre de sauts ou une liste d’IP/CIDR.`);
 }
 
+/** Hôtes de boucle locale admis en http:// même en production (08b § 2). */
+const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
+
 export function loadServerConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
   // Better Auth lit process.env quel que soit `env` : les deux sont nettoyés.
   const removed = TELEMETRY_VARIABLES.filter((name) => env[name] !== undefined || process.env[name] !== undefined);
@@ -237,6 +246,18 @@ export function loadServerConfig(env: NodeJS.ProcessEnv = process.env): ServerCo
   let publicUrl: string;
   try {
     publicUrl = normalizePublicUrl(env['PUBLIC_URL']); // origine pure : point final retiré, chemin/requête/fragment/identifiants refusés
+  } catch (error) {
+    throw new ConfigError((error as Error).message);
+  }
+  // 08b § 2 : en production, PUBLIC_URL en http:// ferait voyager le jeton de session en clair (cookie sans __Host- ni Secure,
+  // pas de HSTS). Seule la boucle locale reste admise (docker-compose de développement lié à 127.0.0.1) ; hors production
+  // (NODE_ENV différent de production : développement, test), rien ne change. Le message ne recopie pas la valeur.
+  if (env["NODE_ENV"] === "production" && publicUrl.startsWith("http://") && !LOOPBACK_HOSTS.has(new URL(publicUrl).hostname)) {
+    throw new ConfigError("PUBLIC_URL doit être en HTTPS en production (08b § 2) : le cookie de session et HSTS l’exigent. Seuls localhost, 127.0.0.1 et [::1] restent admis en http.");
+  }
+  let costCaps: CostCaps;
+  try {
+    costCaps = costCapsFromEnv(env);
   } catch (error) {
     throw new ConfigError((error as Error).message);
   }
@@ -294,6 +315,7 @@ export function loadServerConfig(env: NodeJS.ProcessEnv = process.env): ServerCo
       maxConcurrentRuns: positiveInteger(env, 'MAX_CONCURRENT_RUNS', 50, 100_000),
       maxActiveRunsPerUser: positiveInteger(env, 'MAX_ACTIVE_RUNS_PER_USER', 20, 100_000),
       maxRunsPerKeyPerMinute: positiveInteger(env, 'MAX_RUNS_PER_KEY_PER_MINUTE', 60, 100_000),
+      ...costCaps,
     },
     mcp: loadMcpConfig(env, publicUrl),
   };
