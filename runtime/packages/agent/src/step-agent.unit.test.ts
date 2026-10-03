@@ -64,7 +64,7 @@ function client(price = { in: 1, out: 2 }): LlmClient {
 const act = (a: Record<string, unknown>): ScriptedStep => scripted.json({ tool: 'scroll', role: null, name: null, input: null, direction: null, skill: null, ...a });
 const BUDGET: StepAgentBudget = { max_steps: 6, max_usd: 0.02 };
 
-async function run(steps: ScriptedStep[], over: { budget?: StepAgentBudget; price?: { in: number; out: number }; intent?: string; inputs?: Record<string, string> } = {}) {
+async function run(steps: ScriptedStep[], over: { budget?: StepAgentBudget; price?: { in: number; out: number }; intent?: string; inputs?: Record<string, string>; phaseTools?: readonly string[] } = {}) {
   fake.reset();
   fake.setScenario(MODEL, steps);
   const page = new FakePage();
@@ -78,6 +78,7 @@ async function run(steps: ScriptedStep[], over: { budget?: StepAgentBudget; pric
     budget: over.budget ?? BUDGET,
     price: over.price ?? { in: 1, out: 2 },
     rules: [],
+    ...(over.phaseTools === undefined ? {} : { phaseTools: over.phaseTools }),
   });
   return { out, page };
 }
@@ -149,6 +150,24 @@ describe('agent d’étape', () => {
     expect(page.actions).toEqual(['type:Recherche:vélo']);
     const sent = JSON.stringify(fake.calls.map((c) => c.body));
     expect(sent).not.toContain('vélo');
+  });
+
+  test('assert_rule_of_two_by_phase (agent d’étape) : un outil hors du registre de la phase est refusé sans exécution (tool_not_in_phase)', async () => {
+    const { out, page } = await run(
+      [
+        act({ tool: 'type', role: 'searchbox', name: 'Recherche', input: 'q' }),
+        act({ tool: 'click', role: 'link', name: 'Suivant' }),
+        act({ tool: 'done', role: 'link', name: 'Suivant' }),
+      ],
+      { phaseTools: ['click', 'finish'] },
+    );
+    expect(out.refused).toContain('tool_not_in_phase');
+    expect(page.actions).toEqual(['click:link:Suivant']);
+    expect(out.status).toBe('done');
+    // Phase sans aucun outil : rien n'est exécuté, pas même `done`.
+    const none = await run([act({ tool: 'click', role: 'link', name: 'Suivant' }), act({ tool: 'done', role: 'link', name: 'Suivant' })], { phaseTools: [], budget: { max_steps: 2, max_usd: 1 } });
+    expect(none.page.actions).toEqual([]);
+    expect(none.out.status).not.toBe('done');
   });
 
   test('assert_step_agent_budget : un agent en boucle s’arrête à max_steps', async () => {

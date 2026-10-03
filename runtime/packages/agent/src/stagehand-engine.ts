@@ -23,7 +23,7 @@
 // `systemPrompt` = <trusted_rules> et liste des skills (inséré par Stagehand dans <customInstructions>), `tools` =
 // { read_skill } exécuté dans notre processus, `integrations` (clients MCP) TOUJOURS vide en V1 (18 §5).
 import { Stagehand, type ModelConfiguration } from '@browserbasehq/stagehand';
-import { READ_SKILL_TOOL, type AgentEngine, type AgentRunContext, type AgentRunResult, type AgentRunStatus, type AgentTask, type AgentTraceStep } from '@runtime/core';
+import { READ_SKILL_TOOL, toolRegistryForPhase, type AgentEngine, type AgentPhase, type AgentRunContext, type AgentRunResult, type AgentRunStatus, type AgentTask, type AgentTraceStep } from '@runtime/core';
 import { computeUsage, createRedactor, type CapabilityProfile, type ModelPrice, type RawUsage, type RedactConfig } from '@runtime/llm';
 import { z } from 'zod';
 import type { SemanticClick, SemanticRecorder } from './semantic-recorder.js';
@@ -106,6 +106,8 @@ export interface StagehandEngineOptions extends StagehandEngineHooks {
   readonly onSamplingDropped?: (param: 'temperature' | 'top_p') => void;
   /** Profil sans mesure : le fournisseur a répondu 400 en nommant le paramètre, un nouvel essai sans lui a suivi (une fois par run et par paramètre). */
   readonly onSamplingRejected?: (param: 'temperature' | 'top_p') => void;
+  /** Phase de l'agent (19 §7) : le registre de la phase (`toolRegistryForPhase`) borne les outils proposés au modèle ; défaut : `e5_e6`. */
+  readonly phase?: AgentPhase;
 }
 
 /** JSON Schema (sous-ensemble) vers Zod : `execute({ output })` attend un objet Zod. Ajv revalide hors du moteur (INV1). */
@@ -353,7 +355,7 @@ export class StagehandEngine implements AgentEngine {
         }
         if (overBudget()) throw stopForBudget();
         const names = (params.tools ?? []).map((t) => t.name);
-        const outside = toolsOutsideClosedList(names);
+        const outside = toolsOutsideClosedList(names, toolRegistryForPhase(this.#opts.phase ?? 'e5_e6').tools);
         if (outside.length > 0) {
           toolsetViolation = new AgentToolsetNotClosedError(outside);
           controller.abort(toolsetViolation);

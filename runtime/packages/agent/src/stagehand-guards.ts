@@ -6,7 +6,7 @@
 // - outils de l'agent en liste FERMÉE : chaque outil que Stagehand propose au modèle doit correspondre à une action de
 //   `AGENT_TOOLS` (navigation dans les domaines, clic, saisie, défilement, attente, instantané, extraction, fin). Tout
 //   autre outil (recherche web, outil ajouté par une version future) arrête le run avant l'appel au modèle.
-import type { AgentToolName } from '@runtime/core';
+import { AGENT_TOOLS, type AgentToolName } from '@runtime/core';
 
 /** Variables qui activent un service Browserbase ou la recherche Brave : refus de construire Stagehand. */
 const FORBIDDEN_ENV = [
@@ -92,6 +92,10 @@ export class AgentToolsetNotClosedError extends Error {
 const STAGEHAND_OWN_TOOLS: readonly string[] = Object.freeze(['read_skill']);
 
 /** Outils proposés hors de la liste fermée (vide si la liste est tenue). */
-export function toolsOutsideClosedList(names: readonly string[]): string[] {
-  return names.filter((n) => !Object.hasOwn(STAGEHAND_TOOL_ACTIONS, n) && !STAGEHAND_OWN_TOOLS.includes(n));
+export function toolsOutsideClosedList(names: readonly string[], phaseTools: readonly string[] = AGENT_TOOLS): string[] {
+  // Registre de la phase (19 §7, `toolRegistryForPhase`) : un outil dont l'action n'y figure pas est refusé ; sans outil de phase, `read_skill` non plus.
+  return names.filter((n) => {
+    if (STAGEHAND_OWN_TOOLS.includes(n)) return phaseTools.length === 0;
+    return !Object.hasOwn(STAGEHAND_TOOL_ACTIONS, n) || !phaseTools.includes(STAGEHAND_TOOL_ACTIONS[n]!);
+  });
 }
