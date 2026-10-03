@@ -11,10 +11,11 @@ import { connect } from 'node:net';
 import { Secret } from '@runtime/core';
 import { createOperatorConfigDispatcher, findSsrfBlocked, operatorConfigFetch, parseProxyDefinitions } from '@runtime/core/net';
 import { AlertConfigError, saveSmtpSettings, testSmtp, type SecretStore, type SmtpSettings } from '@runtime/db';
-import { LlmError, OpenAICompatTransport, probeCapabilities } from '@runtime/llm';
+import { KNOWN_PRICES, LlmError, OpenAICompatTransport, probeCapabilities } from '@runtime/llm';
 import type { FastifyInstance, FastifyReply } from 'fastify';
 import type { ServerContext } from '../context.js';
 import { reasonMessage } from '../rest/shared.js';
+import { mergeModels } from '../llm-models.js';
 import { readValidatedModels } from '../validated-models.js';
 import { iso, UUID } from './account-helpers.js';
 import { audit, notFound, sendError } from './guard.js';
@@ -85,6 +86,22 @@ const roleSchema = {
     provider_routing: { type: 'object' },
   },
 } as const;
+/** Prix en USD par million de jetons : nombres positifs ou nuls, `in` et `out` obligatoires (un prix négatif annulerait le plafond d'enquête). */
+const priceSchema = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['in', 'out'],
+  properties: {
+    in: { type: 'number', minimum: 0 },
+    out: { type: 'number', minimum: 0 },
+    in_cached: { type: 'number', minimum: 0 },
+    in_cache_write: { type: 'number', minimum: 0 },
+    windows: { type: 'array', maxItems: 20, items: { type: 'object', additionalProperties: true } },
+    as_of: { type: 'string', maxLength: 32 },
+  },
+} as const;
+
+const MAX_MODELS = 50;
 const llmWriteSchema = {
   type: 'object',
   additionalProperties: false,
@@ -103,7 +120,7 @@ const llmWriteSchema = {
           base_url: { type: 'string', minLength: 1, maxLength: 2048 },
           timeout_ms: { type: 'integer', minimum: 1000, maximum: 600000 },
           max_retries: { type: 'integer', minimum: 0, maximum: 3 },
-          models: { type: 'object', maxProperties: 50, additionalProperties: { type: 'object', additionalProperties: false, properties: { profile: { type: ['object', 'null'] }, price: { type: ['object', 'null'] }, extra_body: { type: 'object' } } } },
+          models: { type: 'object', maxProperties: MAX_MODELS, additionalProperties: { type: ['object', 'null'], additionalProperties: false, properties: { profile: { type: ['object', 'null'] }, price: { oneOf: [priceSchema, { type: 'null' }] }, extra_body: { type: 'object' } } } },
           api_key: { type: 'string', minLength: 1, maxLength: 4096 },
           headers: { type: 'object', maxProperties: 20, additionalProperties: { type: 'string', maxLength: 4096 } },
         },
@@ -116,7 +133,7 @@ const llmWriteSchema = {
 } as const;
 
 type LlmWrite = {
-  providers: (Omit<StoredProvider, 'api_key_secret_id' | 'headers_secret_id'> & { api_key?: string; headers?: Record<string, string> })[];
+  providers: (Omit<StoredProvider, 'api_key_secret_id' | 'headers_secret_id' | 'models'> & { api_key?: string; headers?: Record<string, string>; models?: Record<string, Record<string, unknown> | null> })[];
   roles?: Record<string, { provider: string; model: string; fallback?: { provider: string; model: string } | null }>;
   redact?: unknown;
   log_prompts?: unknown;
@@ -160,6 +177,8 @@ async function llmView(ctx: ServerContext) {
     })),
     // Statut « modèle validé » du banc (15 § 11), lecture seule : dernière mesure N2 de chaque modèle.
     validated_models: readValidatedModels(ctx.validatedModelsFile),
+    // Prix connus (UX-11), lecture seule : pré-remplissent le prix d'un modèle reconnu par son nom ; `price` du réglage fait foi.
+    known_prices: KNOWN_PRICES.map((entry) => ({ ...entry, price: entry.price === null ? null : { ...entry.price } })),
   };
 }
 
@@ -245,6 +264,12 @@ export function settingsRoutes(app: FastifyInstance, ctx: ServerContext): void {
         this.code = code;
       }
     }
+    /** Fusion (UX-17) bornée : la table stockée ne dépasse jamais les 50 modèles de la requête. */
+    const mergedModels = (id: string, old: StoredProvider['models'], incoming: Record<string, Record<string, unknown> | null> | undefined) => {
+      const merged = mergeModels(old, incoming);
+      if (Object.keys(merged).length > MAX_MODELS) throw new Refused('too_many_models', `fournisseur ${id} : au plus ${MAX_MODELS} modèles (retirez-en avec models[modèle]: null)`);
+      return merged;
+    };
     const created: string[] = [];
     const client = await ctx.pool.connect();
     try {
@@ -292,7 +317,7 @@ export function settingsRoutes(app: FastifyInstance, ctx: ServerContext): void {
           base_url: p.base_url,
           ...(p.timeout_ms === undefined ? {} : { timeout_ms: p.timeout_ms }),
           ...(p.max_retries === undefined ? {} : { max_retries: p.max_retries }),
-          models: p.models ?? old?.models ?? {},
+          models: mergedModels(p.id, old?.models, p.models),
           api_key_secret_id: keyId!,
           ...(headersId === undefined ? {} : { headers_secret_id: headersId }),
         });
@@ -360,8 +385,8 @@ export function settingsRoutes(app: FastifyInstance, ctx: ServerContext): void {
         await updateSetting<StoredLlm>(ctx, 'llm', (current) => {
           const now = current?.providers.find((x) => x.id === provider.id);
           if (current === null || now === undefined || now.base_url !== provider.base_url || now.api_key_secret_id !== provider.api_key_secret_id) return undefined;
-          const models = { ...(now.models ?? {}) };
-          models[request.body.model] = { ...(models[request.body.model] ?? {}), profile: { ...profile, probed_at: p.probed_at } };
+          // Fusion (UX-17) : le profil relevé s'ajoute au modèle ; son prix et ses autres réglages restent.
+          const models = mergeModels(now.models, { [request.body.model]: { profile: { ...profile, probed_at: p.probed_at } } });
           return { ...current, providers: current.providers.map((x) => (x.id === provider.id ? { ...x, models } : x)) };
         });
         result = { ok: true, tested_at: testedAt, error: null, profile };

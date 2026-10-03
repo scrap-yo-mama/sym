@@ -32,7 +32,7 @@ type ModelState = { status: Status; reason: string | null; streak: number; prev:
 type Expected = { ids: number[]; next: ModelState };
 
 const BLOCK = new Set(['blocked_by_protection', 'forbidden', 'robots_disallowed']);
-const ACTION_INVESTIGATION = new Set(['auth_required', 'payment_required', 'account_limit', 'proxy_not_configured', 'tunnel_offline']);
+const ACTION_INVESTIGATION = new Set(['auth_required', 'payment_required', 'account_limit', 'proxy_not_configured', 'tunnel_offline', 'instance_contact_missing', 'llm_price_missing']);
 const ACTION_REPAIR = new Set(['auth_required', 'payment_required', 'account_limit', 'challenge_in_tunnel']);
 const REPAIRABLE = new Set(['extraction', 'code_error', 'network', 'not_found']);
 const BACKOFF_OK = new Set(['extraction', 'code_error', 'network', 'robots_unreachable']);
@@ -214,7 +214,7 @@ const failureArb = fc.constantFrom<FailureClass>(
   'payment_required', 'account_limit', 'rate_limited', 'not_found', 'robots_unreachable', 'run_budget_exceeded', 'budget_exceeded',
   'llm_refused',
 );
-const reasonArb = fc.constantFrom<ActionReason>('challenge_in_tunnel', 'proxy_not_configured', 'tunnel_offline');
+const reasonArb = fc.constantFrom<ActionReason>('challenge_in_tunnel', 'proxy_not_configured', 'tunnel_offline', 'instance_contact_missing', 'llm_price_missing');
 const httpArb = fc.constantFrom<number | undefined>(undefined, undefined, 401, 403, 429, 451, 500);
 const triggerArb = fc.constantFrom<'schedule' | 'on_demand'>('schedule', 'on_demand');
 /** Run en échec : avec une classe (`run_failed`) ou arrêté pour une raison sans classe (`run_stopped`). */

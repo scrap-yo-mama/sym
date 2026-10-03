@@ -67,7 +67,13 @@ let worker: Worker;
 let fake: FakeProvider;
 let masterKey: string;
 let withExtract = false;
-let price = { in: 1, out: 1 };
+let price: { in: number; out: number } | undefined = { in: 1, out: 1 };
+let extractPrice: { in: number; out: number } | undefined = { in: 1, out: 1 };
+/** Repli du rôle `investigate` : un modèle SANS prix (revue fix-ux-11, point 9). */
+let unpricedFallback = false;
+const FALLBACK_MODEL = 'zz_fallback_unpriced';
+/** Contact d'instance lu par les exécuteurs ; `null` : aucun (UX-04). */
+let instanceContact: string | null = 'mailto:ops@zz-test.example';
 
 const products = (n: number, withTitle = true) => ({
   items: Array.from({ length: n }, (_, i) => ({ id: `zz_test_p${String(i + 1).padStart(3, '0')}`, ...(withTitle ? { title: `Produit Zztest ${i + 1}` } : {}), price_cents: 100 * (i + 1) })),
@@ -79,9 +85,9 @@ const page = (script: string) => ({ body: `<html><body><h1>Catalogue</h1><ul><li
 function llmConfig(): LlmConfig {
   return {
     providers: [
-      { id: 'fake', baseUrl: fake.baseUrl, apiKey: new Secret('zz-test-key-0000'), models: [{ id: MODEL, price: { ...price } }, { id: EXTRACT_MODEL, price: { in: 1, out: 1 } }] },
+      { id: 'fake', baseUrl: fake.baseUrl, apiKey: new Secret('zz-test-key-0000'), models: [{ id: MODEL, ...(price === undefined ? {} : { price: { ...price } }) }, { id: EXTRACT_MODEL, ...(extractPrice === undefined ? {} : { price: { ...extractPrice } }) }, { id: FALLBACK_MODEL }] },
     ],
-    roles: { investigate: { provider: 'fake', model: MODEL }, ...(withExtract ? { extract: { provider: 'fake', model: EXTRACT_MODEL } } : {}) },
+    roles: { investigate: { provider: 'fake', model: MODEL, ...(unpricedFallback ? { fallback: { provider: 'fake', model: FALLBACK_MODEL } } : {}) }, ...(withExtract ? { extract: { provider: 'fake', model: EXTRACT_MODEL } } : {}) },
   };
 }
 
@@ -216,7 +222,7 @@ beforeAll(async () => {
       throw new Error('zz_test : aucun navigateur');
     },
   };
-  const strategy = createStrategyRuntime({ pool, guard, pacer, browsers: null, agent, tunnel, instanceContact: async () => 'mailto:ops@zz-test.example', version: '9.9.9' });
+  const strategy = createStrategyRuntime({ pool, guard, pacer, browsers: null, agent, tunnel, instanceContact: async () => instanceContact, version: '9.9.9' });
   const investigation = createInvestigationExecutor({
     pool,
     guard,
@@ -226,7 +232,7 @@ beforeAll(async () => {
     tunnel,
     llm: { config: async () => llmConfig(), client: (config) => createLlmClient(config) },
     agentic: true,
-    instanceContact: async () => 'mailto:ops@zz-test.example',
+    instanceContact: async () => instanceContact,
     version: '9.9.9',
   });
   const executor: RunExecutor = dispatchByKind({ run: strategy.executor, investigation });
@@ -253,6 +259,8 @@ beforeEach(() => {
   tunnel.sent.length = 0;
   withExtract = false;
   price = { in: 1, out: 1 };
+  extractPrice = { in: 1, out: 1 };
+  unpricedFallback = false;
 });
 
 describe('enquête en tunnel (04 §4 : reconnaissance « en tunnel si la session est requise »)', () => {
@@ -328,7 +336,7 @@ describe('enquête en tunnel (04 §4 : reconnaissance « en tunnel si la session
   test('aucun client du tunnel dans ce worker → action_requise (tunnel manquant), phase close', async () => {
     const apiId = await insertApi('zz_test_fix_no_tunnel', { networkPolicy: { allow: ['tunnel'] } });
     await pool.query('UPDATE apis SET investigation = $2 WHERE id = $1', [apiId, JSON.stringify({ request: { url: site.url(TUN, '/'), description: 'x', auto_validate: true, budget_usd: 1, timeout_s: 60 }, spent_usd: 0, elapsed_ms: 0 })]);
-    const executor = createInvestigationExecutor({ pool, guard: fixtureGuard(site.port, HOSTS, net), browsers: null, strategy: createStrategyRuntime({ pool, guard: fixtureGuard(site.port, HOSTS, net), browsers: null }), instanceContact: async () => 'mailto:ops@zz-test.example' });
+    const executor = createInvestigationExecutor({ pool, guard: fixtureGuard(site.port, HOSTS, net), browsers: null, strategy: createStrategyRuntime({ pool, guard: fixtureGuard(site.port, HOSTS, net), browsers: null }), instanceContact: async () => instanceContact });
     const runId = (await pool.query<{ id: string }>("INSERT INTO runs (api_id, owner_id, api_owner_id, trigger, kind, state) VALUES ($1, $2, $2, 'rest', 'investigation', 'running') RETURNING id", [apiId, A])).rows[0]!.id;
     const result = await executor(directCtx(apiId, runId));
     expect((await eventsOf(runId)).map((e) => e.kind)).toEqual(['action.required', 'investigation.finished']);
@@ -355,6 +363,61 @@ describe('fins d’enquête : phase close et récit fermé', () => {
     await apiStatusSettled(apiId, { status: 'action_requise', status_reason: 'proxy_not_configured', investigation_phase: 'done' });
     expect((await eventsOf(run.id)).map((e) => e.kind).at(-1)).toBe('investigation.finished');
     expect(site.hits).toEqual([]);
+  });
+
+  test('UX-04/UX-05 — contact d’instance absent → action_requise (instance_contact_missing), jamais « budget épuisé » : 0 requête, 0 €, phase done', async () => {
+    instanceContact = null;
+    try {
+      const apiId = await insertApi('zz_test_fix_no_contact');
+      const run = await investigate(apiId, { url: site.url(TUN, '/'), description: 'liste', auto_validate: true });
+      expect(await runRow(run.id)).toMatchObject({ state: 'failed', failure_class: null, error_detail: 'instance_contact_missing' });
+      await apiStatusSettled(apiId, { status: 'action_requise', status_reason: 'instance_contact_missing', investigation_phase: 'done' });
+      expect((await eventsOf(run.id)).map((e) => e.kind).at(-1)).toBe('investigation.finished');
+      expect(site.hits).toEqual([]);
+      expect(fake.requests).toBe(0);
+    } finally {
+      instanceContact = 'mailto:ops@zz-test.example';
+    }
+  });
+
+  test('UX-11 — prix du modèle d’enquête absent → action_requise (llm_price_missing), jamais « budget épuisé » : le modèle est nommé, aucun appel LLM, 0 €', async () => {
+    price = undefined;
+    fake.setScenario(MODEL, [scripted.json(PRODUCTS_PROPOSAL)]);
+    const apiId = await insertApi('zz_test_fix_no_price');
+    const run = await investigate(apiId, { url: site.url(TUN, '/'), description: 'liste', auto_validate: true });
+    expect(await runRow(run.id)).toMatchObject({ state: 'failed', failure_class: null, error_detail: `llm_price_missing:${MODEL}` });
+    await apiStatusSettled(apiId, { status: 'action_requise', status_reason: 'llm_price_missing', investigation_phase: 'done' });
+    const events = await eventsOf(run.id);
+    expect(events.map((e) => e.kind).at(-1)).toBe('investigation.finished');
+    expect(events.find((e) => e.kind === 'action.required')!.payload).toMatchObject({ cause: 'llm_price_missing', model: MODEL });
+    expect(fake.requests).toBe(0);
+  });
+
+  test('revue fix-ux-11 (9) — repli du rôle investigate sans prix : arrêt AVANT l’appel, le repli est nommé, aucun appel LLM', async () => {
+    unpricedFallback = true;
+    fake.setScenario(MODEL, [scripted.json(PRODUCTS_PROPOSAL)]);
+    const apiId = await insertApi('zz_test_fix_fallback_price');
+    const run = await investigate(apiId, { url: site.url(TUN, '/'), description: 'liste', auto_validate: true });
+    expect(await runRow(run.id)).toMatchObject({ state: 'failed', failure_class: null, error_detail: `llm_price_missing:${FALLBACK_MODEL}` });
+    await apiStatusSettled(apiId, { status: 'action_requise', status_reason: 'llm_price_missing', investigation_phase: 'done' });
+    expect((await eventsOf(run.id)).find((e) => e.kind === 'action.required')!.payload).toMatchObject({ cause: 'llm_price_missing', model: FALLBACK_MODEL });
+    expect(fake.requests).toBe(0);
+  });
+
+  test('revue fix-ux-11 (3) — prix du rôle extract absent : l’essai E4 n’a pas lieu, action_requise llm_price_missing nomme le modèle extract (pas « budget »)', async () => {
+    withExtract = true;
+    extractPrice = undefined;
+    fake.setScenario(MODEL, [scripted.json(PRODUCTS_PROPOSAL)]);
+    fake.setScenario(EXTRACT_MODEL, [scripted.json({ items: [] })]);
+    const apiId = await insertApi('zz_test_fix_extract_price', { networkPolicy: { allow: ['direct', 'dc_proxy'], proxy_ids: { dc_proxy: 'zz_test_dc' } } });
+    const run = await investigate(apiId, { url: site.url(FLAKY, '/'), description: 'liste des produits', auto_validate: true });
+    expect(await runRow(run.id)).toMatchObject({ state: 'failed', failure_class: null, error_detail: `llm_price_missing:${EXTRACT_MODEL}` });
+    await apiStatusSettled(apiId, { status: 'action_requise', status_reason: 'llm_price_missing', investigation_phase: 'done' });
+    const events = await eventsOf(run.id);
+    expect(events.find((e) => e.kind === 'action.required')!.payload).toMatchObject({ cause: 'llm_price_missing', model: EXTRACT_MODEL });
+    expect(events.map((e) => e.kind).at(-1)).toBe('investigation.finished');
+    // Un seul appel LLM : la proposition du rôle investigate ; aucun appel du modèle extract.
+    expect(fake.requests).toBe(1);
   });
 
   test('investigation_timeout_s tenu dès l’étape 0 (page lente) : erreur, investigation_timeout_s, sans attendre la page ni appeler le LLM', async () => {

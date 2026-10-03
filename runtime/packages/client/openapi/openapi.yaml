@@ -4004,6 +4004,14 @@ components:
         run_id:
           type: [string, 'null']
           format: uuid
+        run_state:
+          description: >-
+            État réel du run d'enquête à la réponse (UX-07) : en cours, ou terminé (`failed` avec `error`).
+          $ref: '#/components/schemas/RunState'
+        status:
+          $ref: '#/components/schemas/ApiStatus'
+        error:
+          $ref: '#/components/schemas/RunError'
     ApiPatch:
       description: >-
         Champs modifiables. Un schéma (`output_schema`, `input_schema`) ne change que par un brouillon puis une promotion
@@ -4513,6 +4521,22 @@ components:
           $ref: '#/components/schemas/RunState'
         poll_after_seconds:
           type: [integer, 'null']
+    RunError:
+      description: >-
+        Cause nommée d'un run arrêté ou en échec (UX-04) : code stable (`instance_contact_missing`…), message lisible, marche à
+        suivre pour l'agent (en anglais) et `retryable`. Absente quand la cause n'est pas nommée.
+      type: object
+      additionalProperties: false
+      required: [code, message, what_to_do, retryable]
+      properties:
+        code:
+          $ref: '#/components/schemas/ReasonCode'
+        message:
+          type: string
+        what_to_do:
+          type: string
+        retryable:
+          type: boolean
     RunResult:
       description: Enveloppe commune des sorties d'exécution (05 § 4.1), identique en MCP et en REST.
       type: object
@@ -4547,6 +4571,8 @@ components:
             $ref: '#/components/schemas/ReasonCode'
         message:
           type: string
+        error:
+          $ref: '#/components/schemas/RunError'
         next_action:
           oneOf:
             - $ref: '#/components/schemas/NextAction'
@@ -4610,6 +4636,8 @@ components:
             - type: 'null'
         retryable:
           type: boolean
+        error:
+          $ref: '#/components/schemas/RunError'
         created_at:
           type: string
           format: date-time
@@ -5334,17 +5362,23 @@ components:
             top_p:
               type: boolean
     LlmPrice:
+      description: USD par million de jetons ; nombres positifs ou nuls, `in` et `out` obligatoires (un prix négatif est refusé).
       type: object
       additionalProperties: false
+      required: [in, out]
       properties:
         in:
           type: number
+          minimum: 0
         in_cached:
           type: number
+          minimum: 0
         in_cache_write:
           type: number
+          minimum: 0
         out:
           type: number
+          minimum: 0
         windows:
           type: array
           items:
@@ -5429,9 +5463,18 @@ components:
           minimum: 0
           maximum: 3
         models:
+          description: >-
+            Modèles du fournisseur (au plus 50), indexés par identifiant. En écriture (`PUT /api/settings/llm`), la requête est
+            FUSIONNÉE avec la table enregistrée, modèle par modèle puis clé par clé : un modèle ou une clé absents de la requête
+            sont gardés (le prix survit à toute écriture qui ne le mentionne pas) ; `models[m].price: null` (ou `profile`,
+            `extra_body`) retire cette clé ; `models[m]: null` retire le modèle entier. La table fusionnée est bornée à 50 modèles
+            (sinon `too_many_models`, 400).
           type: object
+          maxProperties: 50
           additionalProperties:
-            $ref: '#/components/schemas/LlmModel'
+            oneOf:
+              - $ref: '#/components/schemas/LlmModel'
+              - type: 'null'
     LlmProvider:
       allOf:
         - $ref: '#/components/schemas/LlmProviderBase'
@@ -5519,6 +5562,44 @@ components:
               readOnly: true
               items:
                 $ref: '#/components/schemas/ValidatedModel'
+            known_prices:
+              description: >-
+                Prix connus (UX-11), en lecture seule : table versionnée de la couche LLM (USD par million de jetons) qui
+                pré-remplit le prix d'un modèle reconnu par son nom. Le prix saisi dans `providers[].models[m].price` fait foi.
+              type: array
+              readOnly: true
+              items:
+                $ref: '#/components/schemas/KnownModelPrice'
+    KnownModelPrice:
+      type: object
+      additionalProperties: false
+      required: [model, provider, status, price, source]
+      properties:
+        model:
+          type: string
+        provider:
+          type: string
+        status:
+          description: '`verified` : prix relevé dans le dépôt ; `to_validate` : aucun prix relevé, à saisir.'
+          type: string
+          enum: [verified, to_validate]
+        price:
+          oneOf:
+            - type: object
+              additionalProperties: false
+              required: [in, out]
+              properties:
+                in:
+                  type: number
+                out:
+                  type: number
+                in_cached:
+                  type: number
+            - type: 'null'
+        source:
+          type: string
+        as_of:
+          type: string
     ValidatedModel:
       type: object
       additionalProperties: false

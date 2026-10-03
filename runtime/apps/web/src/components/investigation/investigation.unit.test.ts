@@ -257,6 +257,18 @@ describe('bandeau « Action requise »', () => {
     expect(html).not.toMatch(/take control|prendre la main|takeover/i);
   });
 
+  test('UX-11 — llm_price_missing : le modèle est nommé, le bouton mène à Réglages > Modèles IA, aucune mention de budget', async () => {
+    const state = running();
+    state.action = { cause: 'llm_price_missing', domain: 'exemple.test', platform: null, offer: null, model: 'claude-opus-4-8', resuming: false };
+    const html = await render(InvestigationBoard, props(state));
+    expect(html).toContain('Enter the price of model claude-opus-4-8 in Settings &gt; AI models');
+    expect(html).toContain('href="/settings/models"');
+    const banner = html.slice(html.indexOf('data-testid="action-banner"'), html.indexOf('<ol', html.indexOf('data-testid="action-banner"')));
+    expect(banner).not.toMatch(/budget/i);
+    state.action = { cause: 'llm_price_missing', domain: 'exemple.test', platform: null, offer: null, model: null, resuming: false };
+    expect(await render(InvestigationBoard, props(state))).toContain('Enter the price of model used in Settings &gt; AI models');
+  });
+
   test('payment_required et account_limit : texte seul, sans bouton', async () => {
     for (const cause of ['payment_required', 'account_limit'] as const) {
       const state = running();

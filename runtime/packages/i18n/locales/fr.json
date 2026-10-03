@@ -570,6 +570,16 @@
       "body": "Le run est arrêté : {domain} affiche une vérification dans ton navigateur. Rien n'a été envoyé sur cette page et rien n'y sera envoyé. Tu peux relancer un run plus tard ; Scrapyomama ne répond jamais à une vérification.",
       "button": "Ré-enquêter"
     },
+    "instance_contact_missing": {
+      "title": "Renseigne le contact du robot",
+      "body": "Le contact de l'opérateur est requis avant la première enquête. Renseigne-le dans Réglages > Identité du robot, ou via la variable INSTANCE_CONTACT, puis relance l'enquête.",
+      "button": "Ouvrir Réglages > Identité du robot"
+    },
+    "llm_price_missing": {
+      "title": "Renseigne le prix du modèle {model} dans Réglages > Modèles IA",
+      "body": "L'enquête est arrêtée : aucun prix n'est connu pour le modèle {model}, il n'a donc pas été appelé et rien n'a été dépensé. Renseigne son prix par million de jetons dans Réglages > Modèles IA, puis relance l'enquête.",
+      "button": "Ouvrir Réglages > Modèles IA"
+    },
     "secret_unreadable": {
       "title": "Une clé enregistrée est illisible",
       "body": "Ressaisis la clé dans les réglages, puis teste-la.",
@@ -583,7 +593,8 @@
       "title": "{platform} a signalé une limite sur ton compte",
       "body": "{platform} a signalé une limite ou une restriction. Le run est arrêté, aucune relance n'est prévue. Consulte les messages de la plateforme. Seule la plateforme décide d'une restriction. Rappel : l'extraction automatisée peut être interdite par ses conditions, même avec un seul compte ; tu en restes responsable."
     },
-    "resuming": "Reprise de l'enquête…"
+    "resuming": "Reprise de l'enquête…",
+    "modelUnnamed": "utilisé"
   },
   "runs": {
     "title": "Tous les runs",
@@ -722,6 +733,21 @@
         "validated": "Modèle validé (banc N2, {date})",
         "notValidated": "Non validé",
         "hint": "Mesuré par le banc d’évaluation ; en lecture seule."
+      },
+      "price": {
+        "title": "Prix des modèles",
+        "intro": "Sans prix, un modèle n'est jamais appelé : rien n'est deviné et rien n'est compté pour 0. Saisis le prix du fournisseur par million de jetons.",
+        "none": "Aucun modèle utilisé pour l’instant : choisis-en un dans « Modèle par rôle » plus bas.",
+        "in": "Prix en entrée",
+        "out": "Prix en sortie",
+        "cached": "Prix en entrée mise en cache (facultatif)",
+        "unit": "USD par million de jetons.",
+        "known": "Prix connu (relevé du {date}) ; tu peux le modifier.",
+        "toValidate": "Prix à valider : aucun n'est connu pour ce modèle, saisis-le toi-même.",
+        "incomplete": "Renseigne le prix en entrée et le prix en sortie d’un modèle, ou laisse les deux vides.",
+        "invalid": "Un prix est un nombre, zéro ou plus.",
+        "roleMissing": "Renseigne le prix du modèle {model} dans le tableau ci-dessus : sans lui, aucune enquête ne peut tourner.",
+        "testMissing": "Le test a abouti, mais le modèle {model} n’a pas de prix : il ne sera pas appelé tant que tu ne l’as pas renseigné dans le tableau ci-dessus."
       }
     },
     "proxies": {
@@ -869,6 +895,8 @@
     "session_device_bound": "La session de {domain} est liée à ton appareil et ne peut pas être copiée sur le serveur.",
     "challenge_in_tunnel": "Une vérification est apparue dans ton navigateur. Le run est en pause.",
     "secret_unreadable": "Une clé enregistrée est illisible.",
+    "instance_contact_missing": "Le contact du robot n'est pas renseigné : il est requis avant la première enquête.",
+    "llm_price_missing": "Le prix du modèle n’est pas renseigné : renseigne-le dans Réglages > Modèles IA.",
     "account_limit": "La plateforme a signalé une limite sur ton compte. Aucune relance.",
     "session_owner_required": "Cette API utilise la session de son propriétaire.",
     "llm_refused": "Le modèle a refusé la demande ; aucun repli automatique.",
@@ -911,6 +939,8 @@
     "cookie_expired": "Session expirée",
     "session_device_bound": "Session liée à l'appareil",
     "challenge_in_tunnel": "Vérification dans le navigateur",
+    "instance_contact_missing": "Contact du robot manquant",
+    "llm_price_missing": "Prix du modèle manquant",
     "secret_unreadable": "Clé illisible",
     "account_limit": "Limite de compte",
     "session_owner_required": "Session du propriétaire requise",
@@ -1115,6 +1145,11 @@
     },
     "whyStop": "Pourquoi cet arrêt ?"
   },
+  "instanceContactBanner": {
+    "title": "Renseigne le contact du robot avant ta première API",
+    "text": "Le contact de l'opérateur est requis avant la première enquête : sans lui, une enquête s'arrête aussitôt. Une adresse web (https://…) ou une adresse e-mail suffit, ou la variable INSTANCE_CONTACT du serveur.",
+    "link": "Ouvrir Réglages > Identité du robot"
+  },
   "actionRequired": {
     "resuming": "Reprise de l'enquête…",
     "connect": {
@@ -1142,6 +1177,16 @@
       "text": "Rien n'a été envoyé sur cette page et rien n'y sera envoyé. Tu peux relancer un run plus tard ; Scrapyomama ne répond jamais à une vérification.",
       "button": "Réessayer plus tard (nouveau run)",
       "verify": "Aucune reprise automatique : seule une nouvelle action de ta part relance un run."
+    },
+    "instanceContact": {
+      "title": "Renseigne le contact du robot",
+      "button": "Ouvrir Réglages > Identité du robot",
+      "verify": "Dès que le contact est enregistré, relance l'enquête : rien n'a été envoyé et rien n'a été dépensé."
+    },
+    "llmPrice": {
+      "title": "Renseigne le prix du modèle dans Réglages > Modèles IA",
+      "button": "Ouvrir Réglages > Modèles IA",
+      "verify": "Dès que le prix est enregistré, relance l'enquête : aucun modèle n'a été appelé et rien n'a été dépensé."
     },
     "secret": {
       "title": "Une clé enregistrée est illisible",
@@ -1473,7 +1518,7 @@
       "later": "Aller à la console"
     },
     "contact": "Contact de l'opérateur",
-    "contactHint": "Facultatif ici, mais requis avant la première enquête. Une adresse web (https://…) ou une adresse e-mail. Le robot ne l'annonce que si tu actives l'identification dans les réglages. Tu pourras le modifier là-bas."
+    "contactHint": "Requis avant la première enquête ; tu peux le saisir plus tard dans Réglages > Identité du robot. Une adresse web (https://…) ou une adresse e-mail. Le robot ne l'annonce que si tu actives l'identification dans les réglages. Tu pourras le modifier là-bas."
   },
   "account": {
     "title": "Mon compte",

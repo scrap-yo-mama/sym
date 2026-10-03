@@ -231,6 +231,20 @@ function rolePrice(config: LlmConfig | null, role: 'extract' | 'agent' | 'invest
 }
 
 /**
+ * Premier modèle SANS prix du rôle : le titulaire, puis son repli (LlmClient#resolve l'appelle quand le titulaire échoue :
+ * un repli sans prix rendrait le coût d'un appel réel inconnu). `null` : tous ont un prix, ou le rôle n'est pas configuré.
+ */
+function unpricedModel(config: LlmConfig | null, role: 'extract' | 'agent' | 'investigate'): string | null {
+  const configured = config?.roles[role];
+  if (config === null || configured === undefined) return null;
+  for (const target of [configured, ...(configured.fallback === undefined ? [] : [configured.fallback])]) {
+    const model = config.providers.find((p) => p.id === target.provider)?.models.find((m) => m.id === target.model);
+    if (model === undefined || model.price === undefined) return target.model;
+  }
+  return null;
+}
+
+/**
  * Entrée d'une exécution d'essai : les N exécutions d'échantillon lisent au plus 2 pages (la page 2 est exigée, 04 §4) ;
  * l'exécution de vérification de la règle d'arrêt va jusqu'au plafond dur de pages (tâche 2.2).
  */
@@ -340,9 +354,9 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
      * Arrêt sans classe d'échec (04 §6, transition 3) : proxy requis non configuré, extension hors ligne. Phase close, récit
      * fermé ; le worker applique `run_stopped` (→ `action_requise`).
      */
-    const finishStopped = async (reason: 'proxy_not_configured' | 'tunnel_offline', detail: string, at: string): Promise<RunResult> => {
+    const finishStopped = async (reason: 'proxy_not_configured' | 'tunnel_offline' | 'instance_contact_missing' | 'llm_price_missing', detail: string, at: string, model?: string): Promise<RunResult> => {
       await save('done');
-      await event(EV.actionRequired, { cause: reason, domain: host });
+      await event(EV.actionRequired, { cause: reason, domain: host, ...(model === undefined ? {} : { model }) });
       await event(EV.finished, { outcome: 'stopped', stop_reason: reason, detail, at, budget: budgetView() });
       return { state: 'failed', failure_class: null, stop_reason: reason, retryable: false, error_detail: detail };
     };
@@ -438,6 +452,8 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
         warn: () => undefined,
       })());
     } catch (error) {
+      // Contact absent : une tâche pour l'opérateur (transition 3, `action_requise`), jamais un échec ni un budget épuisé.
+      if (error instanceof InstanceContactError && error.code === 'instance_contact_missing') return await finishStopped('instance_contact_missing', error.code, 'setup');
       if (error instanceof InstanceContactError) return await finishFailed({ failure_class: 'code_error', retryable: false, detail: error.code }, 'setup');
       throw error;
     }
@@ -693,9 +709,11 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
           // Coût d'un appel borné AVANT l'envoi (sortie plafonnée, entrée estimée par excès) : jamais un appel qui
           // ferait dépasser `investigation_budget_usd` ; prix inconnu → aucun appel (08 §1, jamais 0).
           const price = rolePrice(config, 'investigate');
-          if (price === null || price === undefined) {
-            await ctx.log('warn', 'llm_price_missing', { model, role: 'investigate' });
-            return await finishFailed({ failure_class: 'run_budget_exceeded', retryable: false, detail: 'llm_price_missing' }, 'schema');
+          // Le repli est appelé quand le titulaire échoue : son prix compte avant l'envoi, et c'est lui que le détail nomme.
+          const unpriced = price === null || price === undefined ? model : unpricedModel(config, 'investigate');
+          if (price === null || price === undefined || unpriced !== null) {
+            await ctx.log('warn', 'llm_price_missing', { model: unpriced ?? model, role: 'investigate' });
+            return await finishStopped('llm_price_missing', `llm_price_missing:${unpriced ?? model}`, 'schema', unpriced ?? model);
           }
           let callCeiling = investigateCallCeilingUsd(args, price);
           const beforeCall = () => {
@@ -724,8 +742,9 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
           const usage = client.meter.snapshot();
           await charge(ctx, 0, usage.cost_usd, { in: usage.tokens_in, cached: usage.tokens_cached, out: usage.tokens_out, reasoning: usage.tokens_reasoning, estimated: usage.usage_estimated });
           if (usage.cost_usd === null) {
-            await ctx.log('warn', 'llm_price_missing', { model, role: 'investigate' });
-            return await finishFailed({ failure_class: 'run_budget_exceeded', retryable: false, detail: 'llm_price_missing' }, 'schema');
+            // Après l'appel : le modèle a été appelé, son coût est inconnu (null). Détail SANS modèle : jamais « aucun appel ».
+            await ctx.log('warn', 'llm_price_missing', { role: 'investigate', after_call: true });
+            return await finishStopped('llm_price_missing', 'llm_price_missing', 'schema');
           }
           spent = round6(spent + usage.cost_usd);
           if (llmFailure !== null) {
@@ -839,6 +858,10 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
                 api: { ...target.api, outputSchema, maxCostUsd: limits.ceilingUsd },
                 strategy: { version: 0, execution: entry.execution, network: entry.network, spec: entry.spec, scriptRef: null, estCostUsd: entry.est_cost_usd },
               };
+              // Rôle agentique sans prix (E4 : `extract`, E6 : `agent`) : aucun essai, une raison par cause (UX-12).
+              const roleOfEntry = entry.execution === 'agent_fetch' ? 'extract' : entry.execution === 'agent' ? 'agent' : null;
+              const unpricedRole = roleOfEntry === null ? null : unpricedModel(config, roleOfEntry);
+              if (unpricedRole !== null) throw new LlmPriceStop(unpricedRole);
               const timeout = AbortSignal.timeout(Math.max(1, limits.deadlineMs - now()));
               const trialCtx: RunCtx = { ...ctx, signal: AbortSignal.any([ctx.signal, timeout]), input: trialInput(entry.paginated, purpose) };
               let trial: StrategyTrial;
@@ -930,6 +953,11 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
           { ...(deps.samples === undefined ? {} : { samples: deps.samples }), paginated: (p) => entries.get(p)?.paginated === true, catchUp: true },
         );
       } catch (error) {
+        if (error instanceof LlmPriceStop) {
+          spent = round6(spentBeforeTrials + trialsUsd);
+          await ctx.log('warn', 'llm_price_missing', { model: error.model, role: 'trial' });
+          return await finishStopped('llm_price_missing', `llm_price_missing:${error.model}`, 'testing', error.model);
+        }
         if (!(error instanceof TunnelOfflineStop)) throw error;
         spent = round6(spentBeforeTrials + trialsUsd);
         await ctx.log('warn', 'tunnel_offline', { network: 'tunnel' });
@@ -1116,6 +1144,16 @@ class BudgetGuardError extends Error {
 /** Extension hors ligne pendant un essai : arrêt des essais sans classe d'échec. */
 class TunnelOfflineStop extends Error {
   override name = 'TunnelOfflineStop';
+}
+
+/** Prix du modèle d'un rôle agentique absent au moment d'un essai : arrêt des essais, `action_requise` (llm_price_missing). */
+class LlmPriceStop extends Error {
+  override name = 'LlmPriceStop';
+  readonly model: string;
+  constructor(model: string) {
+    super('llm_price_missing');
+    this.model = model;
+  }
 }
 
 /** Exécution d'un couple (forme de `TrialExecution`). */

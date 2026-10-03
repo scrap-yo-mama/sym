@@ -3,7 +3,7 @@
 // écriture seule : la console ne les relit jamais (le serveur ne les renvoie pas, INV8) et vide le champ dès l'envoi. Les droits
 // sont ceux du serveur : un 403 devient un message, jamais une décision locale (06 § 4.1).
 import type { components } from '@runtime/client';
-import { computed, nextTick, reactive, ref } from 'vue';
+import { computed, nextTick, reactive, ref, watch } from 'vue';
 import { call, type CallResult } from '@/lib/api-call';
 import { getApi } from '@/lib/api';
 import { useResource, useTester } from '@/composables/useResource';
@@ -34,6 +34,12 @@ const LLM_PRESET_BASE_URLS = {
 } as const satisfies Record<LlmPreset, string>;
 export const LLM_PRESETS = Object.keys(LLM_PRESET_BASE_URLS) as readonly LlmPreset[];
 
+/** Champs d'un prix de modèle (USD par million de jetons) : entrée, sortie, entrée mise en cache (facultative). */
+export type PriceField = 'in' | 'out' | 'in_cached';
+/** Saisie brute d'un prix (texte des champs) : le serveur ne reçoit un nombre qu'après validation à l'enregistrement. */
+type PriceInputs = Record<PriceField, string>;
+export type KnownModelPrice = Schemas['KnownModelPrice'];
+
 /** Fournisseur en cours d'édition ; `newApiKey` est le seul endroit où une clé vit, et seulement le temps de la saisie. */
 export interface ProviderDraft {
   id: string;
@@ -45,6 +51,15 @@ export interface ProviderDraft {
   apiKeySet: boolean;
   apiKeyUnreadable: boolean;
   newApiKey: string;
+  /** Saisie des prix par modèle (UX-11) : une entrée par modèle utilisé, pré-remplie par le prix enregistré ou, à défaut, le prix connu. */
+  priceInputs: Record<string, PriceInputs>;
+}
+
+const text = (n: number | undefined): string => (n === undefined ? '' : String(n));
+/** Nombre saisi (virgule ou point) ; null si illisible ou négatif. */
+function parsePrice(raw: string): number | null {
+  const value = Number(raw.trim().replace(',', '.'));
+  return raw.trim() !== '' && Number.isFinite(value) && value >= 0 ? value : null;
 }
 
 export function useLlmSettings() {
@@ -53,6 +68,8 @@ export function useLlmSettings() {
   const roles = reactive<Partial<Record<LlmRoleName, { provider: string; model: string }>>>({});
   /** Statut du banc (lecture seule, 15 § 11) : jamais renvoyé au serveur. */
   const validatedModels = ref<Schemas['ValidatedModel'][]>([]);
+  /** Prix connus du serveur (table versionnée de @runtime/llm, lecture seule) : pré-remplissent le prix d'un modèle reconnu. */
+  const knownPrices = ref<KnownModelPrice[]>([]);
   const saving = ref(false);
   const saveFailure = ref<string | null>(null);
   const saved = ref(false);
@@ -62,6 +79,7 @@ export function useLlmSettings() {
   function adopt(settings: LlmSettings): void {
     loaded = settings;
     validatedModels.value = settings.validated_models ?? [];
+    knownPrices.value = settings.known_prices ?? [];
     providers.value = settings.providers.map((provider) => ({
       id: provider.id,
       preset: provider.preset,
@@ -72,20 +90,75 @@ export function useLlmSettings() {
       apiKeySet: provider.api_key_set,
       apiKeyUnreadable: provider.api_key_unreadable === true,
       newApiKey: '',
+      priceInputs: {},
     }));
     for (const name of LLM_ROLES) {
       const role = settings.roles?.[name];
       if (role) roles[name] = { provider: role.provider, model: role.model };
       else delete roles[name];
     }
+    syncPriceRows();
   }
+
+  /** Prix connu (avec chiffres) d'un modèle reconnu par son nom, ou null. */
+  function knownPrice(model: string): KnownModelPrice | null {
+    const wanted = model.trim().toLowerCase();
+    return knownPrices.value.find((entry) => entry.model.toLowerCase() === wanted) ?? null;
+  }
+
+  /** Modèles utilisés d'un fournisseur : ceux des rôles qui le choisissent, puis ceux déjà déclarés dans ses réglages. */
+  function modelRows(provider: ProviderDraft): string[] {
+    const id = provider.id.trim();
+    const names: string[] = [];
+    if (id !== '') for (const name of LLM_ROLES) if (roles[name]?.provider === id && roles[name]!.model.trim() !== '') names.push(roles[name]!.model.trim());
+    names.push(...Object.keys(provider.models ?? {}));
+    return [...new Set(names)];
+  }
+
+  /** Crée la saisie d'un modèle utilisé qui n'en a pas : prix enregistré, sinon prix connu, sinon champs vides (jamais 0). */
+  function syncPriceRows(): void {
+    for (const provider of providers.value) {
+      for (const model of modelRows(provider)) {
+        if (provider.priceInputs[model] !== undefined) continue;
+        const saved = provider.models?.[model]?.price;
+        const known = saved ? null : knownPrice(model)?.price ?? null;
+        const source = saved ?? known;
+        provider.priceInputs[model] = { in: text(source?.in), out: text(source?.out), in_cached: text(source?.in_cached) };
+      }
+    }
+  }
+
+  function setModelPrice(providerIndex: number, model: string, field: PriceField, raw: string): void {
+    const provider = providers.value[providerIndex];
+    if (!provider) return;
+    syncPriceRows();
+    const inputs = provider.priceInputs[model] ?? { in: '', out: '', in_cached: '' };
+    provider.priceInputs[model] = { ...inputs, [field]: raw };
+  }
+
+  /** Un modèle de rôle sans prix complet : le worker refuserait de l'appeler (`llm_price_missing`). */
+  function priceMissing(roleName: LlmRoleName): boolean {
+    const choice = roles[roleName];
+    const provider = choice ? providers.value.find((p) => p.id.trim() === choice.provider) : undefined;
+    const model = choice?.model.trim() ?? '';
+    if (!choice || !provider || model === '') return false;
+    const inputs = provider.priceInputs[model];
+    return !inputs || parsePrice(inputs.in) === null || parsePrice(inputs.out) === null;
+  }
+
+  /** Tester a abouti pour un rôle dont le modèle n'a pas de prix : le résultat doit le dire (UX-11), le worker ne l'appellerait pas. */
+  function testPriceWarning(roleName: LlmRoleName): boolean {
+    return tester.outcomes.value[roleName]?.state === 'done' && priceMissing(roleName);
+  }
+
+  watch([providers, roles], syncPriceRows, { deep: true });
 
   async function load(): Promise<void> {
     if (await resource.reload()) adopt(resource.data.value as LlmSettings);
   }
 
   function addProvider(): void {
-    providers.value = [...providers.value, { id: '', preset: 'custom', base_url: '', apiKeySet: false, apiKeyUnreadable: false, newApiKey: '' }];
+    providers.value = [...providers.value, { id: '', preset: 'custom', base_url: '', apiKeySet: false, apiKeyUnreadable: false, newApiKey: '', priceInputs: {} }];
   }
 
   /**
@@ -104,6 +177,38 @@ export function useLlmSettings() {
     providers.value = providers.value.filter((_, at) => at !== index);
   }
 
+  /** Modèles du fournisseur avec les prix saisis (profil, `extra_body` et autres champs du prix conservés) ; null si aucun. */
+  function modelsOf(provider: ProviderDraft): Schemas['LlmProviderBase']['models'] | undefined {
+    const models: NonNullable<Schemas['LlmProviderBase']['models']> = { ...(provider.models ?? {}) };
+    for (const [model, inputs] of Object.entries(provider.priceInputs)) {
+      if (!(model in models) && inputs.in.trim() === '' && inputs.out.trim() === '') continue;
+      const { price: previous, ...rest } = models[model] ?? {};
+      if (inputs.in.trim() === '' && inputs.out.trim() === '') {
+        // Retrait explicite (UX-17) : le serveur fusionne `models[m]` et ne retire un prix que s'il reçoit `price: null`.
+        if (previous) models[model] = { ...rest, price: null };
+        continue;
+      }
+      const price: NonNullable<Schemas['LlmModel']['price']> = { ...(previous ?? {}), in: parsePrice(inputs.in)!, out: parsePrice(inputs.out)! };
+      const cached = parsePrice(inputs.in_cached);
+      if (cached === null) delete price.in_cached;
+      else price.in_cached = cached;
+      models[model] = { ...rest, price };
+    }
+    return Object.keys(models).length > 0 || provider.models ? models : undefined;
+  }
+
+  /** Clé de message du premier prix saisi illisible ou incomplet, ou null : un prix partiel n'est jamais envoyé. */
+  function priceProblem(): string | null {
+    for (const provider of providers.value) {
+      for (const inputs of Object.values(provider.priceInputs)) {
+        const filled = (['in', 'out', 'in_cached'] as const).filter((field) => inputs[field].trim() !== '');
+        if (filled.some((field) => parsePrice(inputs[field]) === null)) return 'settings.models.price.invalid';
+        if (filled.length > 0 && (inputs.in.trim() === '' || inputs.out.trim() === '')) return 'settings.models.price.incomplete';
+      }
+    }
+    return null;
+  }
+
   /** Corps du PUT : une clé n'est envoyée que si elle vient d'être saisie, sinon l'ancienne est conservée côté serveur. */
   function payload(): Schemas['LlmSettingsWrite'] {
     const body: Schemas['LlmSettingsWrite'] = {
@@ -111,7 +216,8 @@ export function useLlmSettings() {
         const entry: Schemas['LlmProviderWrite'] = { id: provider.id.trim(), preset: provider.preset, base_url: provider.base_url.trim() };
         if (provider.timeout_ms !== undefined) entry.timeout_ms = provider.timeout_ms;
         if (provider.max_retries !== undefined) entry.max_retries = provider.max_retries;
-        if (provider.models) entry.models = provider.models;
+        const models = modelsOf(provider);
+        if (models) entry.models = models;
         if (provider.newApiKey !== '') entry.api_key = provider.newApiKey;
         return entry;
       }),
@@ -134,6 +240,13 @@ export function useLlmSettings() {
   }
 
   async function save(): Promise<boolean> {
+    syncPriceRows();
+    const problem = priceProblem();
+    if (problem !== null) {
+      saveFailure.value = problem;
+      saved.value = false;
+      return false;
+    }
     saving.value = true;
     saveFailure.value = null;
     saved.value = false;
@@ -157,7 +270,7 @@ export function useLlmSettings() {
     return tester.run(role, () => call(() => getApi().POST('/api/settings/llm/test', { body: { provider: choice.provider, model: choice.model } })));
   }
 
-  return { ...resource, providers, roles, validatedModels, saving, saveFailure, saved, outcomes: tester.outcomes, load, addProvider, removeProvider, setPreset, save, test };
+  return { ...resource, providers, roles, validatedModels, knownPrices, saving, saveFailure, saved, outcomes: tester.outcomes, load, addProvider, removeProvider, setPreset, save, test, modelRows, knownPrice, setModelPrice, priceMissing, testPriceWarning };
 }
 
 export type ProxyWrite = Schemas['ProxyWrite'];

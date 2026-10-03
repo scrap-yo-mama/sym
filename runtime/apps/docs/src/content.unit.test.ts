@@ -316,7 +316,7 @@ describe('quickstart : structure du tutoriel rejoué', () => {
   const steps = parseQuickstart(readSource('tutoriels/quickstart'));
 
   test('les étapes du tutoriel se suivent dans l\'ordre du parcours', () => {
-    expect(steps.map((s) => s.id)).toEqual(['secrets', 'start', 'ready', 'owner-variables', 'setup', 'login', 'whoami', 'api-key', 'version', 'd0', 'first-api']);
+    expect(steps.map((s) => s.id)).toEqual(['secrets', 'start', 'ready', 'owner-variables', 'setup', 'login', 'whoami', 'api-key', 'version', 'd0', 'robot-contact', 'first-api']);
   });
 
   test('les étapes rejouées visent l\'instance locale du tutoriel, avec curl en mode strict', () => {

@@ -40,13 +40,17 @@ function profileOf(model: string, raw: unknown): CapabilityProfile | undefined {
   };
 }
 
+/** Un prix valide : nombres finis et positifs ou nuls. Un prix négatif ou non fini est un prix ABSENT (jamais 0, 08 §1). */
+const validRate = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v) && v >= 0;
+
 function priceOf(raw: unknown): ModelPrice | undefined {
-  if (!isRecord(raw) || typeof raw['in'] !== 'number' || typeof raw['out'] !== 'number') return undefined;
+  if (!isRecord(raw) || !validRate(raw['in']) || !validRate(raw['out'])) return undefined;
+  for (const key of ['in_cached', 'in_cache_write']) if (raw[key] !== undefined && raw[key] !== null && !validRate(raw[key])) return undefined;
   return {
     in: raw['in'],
     out: raw['out'],
-    ...(typeof raw['in_cached'] === 'number' ? { in_cached: raw['in_cached'] } : {}),
-    ...(typeof raw['in_cache_write'] === 'number' ? { in_cache_write: raw['in_cache_write'] } : {}),
+    ...(validRate(raw['in_cached']) ? { in_cached: raw['in_cached'] } : {}),
+    ...(validRate(raw['in_cache_write']) ? { in_cache_write: raw['in_cache_write'] } : {}),
   };
 }
 
