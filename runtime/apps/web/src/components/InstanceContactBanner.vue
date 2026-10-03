@@ -18,7 +18,7 @@ onServerPrefetch(() => load());
 </script>
 
 <template>
-  <div role="status" aria-live="polite" data-testid="instance-contact-status">
+  <div role="status" aria-live="polite" class="contents" data-testid="instance-contact-status">
     <div v-if="missing" class="flex flex-col gap-2 rounded-xl border-2 border-foreground bg-card p-4" data-testid="instance-contact-banner">
       <p class="font-medium">{{ t('instanceContactBanner.title') }}</p>
       <p class="text-sm">{{ t('instanceContactBanner.text') }}</p>
