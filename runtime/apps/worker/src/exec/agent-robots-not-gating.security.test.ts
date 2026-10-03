@@ -91,6 +91,17 @@ const privateHits = async (host = ROBOTS) =>
     .filter(([p]) => p.startsWith('/prive/'))
     .reduce((n, [, c]) => n + c, 0);
 
+/** Les fetch de la page partent au chargement, sans être attendus : l'extraction peut finir avant que le dernier arrive. On attend (5 s au plus) le compte voulu. */
+const privateHitsAtLeast = async (min: number, host = ROBOTS): Promise<number> => {
+  const deadline = Date.now() + 5_000;
+  let n = await privateHits(host);
+  while (n < min && Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 100));
+    n = await privateHits(host);
+  }
+  return n;
+};
+
 /** E4 par le navigateur (`fetch_in_page`). */
 const e4 = (path: string) => ({
   execution: 'agent_fetch',
@@ -183,7 +194,7 @@ describe('assert_robots_not_gating — E4, E5 et E6 sur un site dont robots.txt 
   test('E4 par le navigateur (fetch_in_page) : page extraite, fetch de la page vers /prive/ servi, robots.txt jamais demandé', async () => {
     const run = await runOf(await insertApi(e4('/page-fetch')));
     expect(run).toMatchObject({ state: 'succeeded', items: 1 });
-    expect(await privateHits()).toBeGreaterThanOrEqual(1);
+    expect(await privateHitsAtLeast(1)).toBeGreaterThanOrEqual(1);
     expect((await paths())['/robots.txt']).toBeUndefined();
   }, 120_000);
 
@@ -194,7 +205,7 @@ describe('assert_robots_not_gating — E4, E5 et E6 sur un site dont robots.txt 
     const compiled = (await pool.query<{ data: Record<string, unknown> }>("SELECT data FROM run_logs WHERE run_id = $1 AND event = 'strategy_compiled'", [run.id])).rows;
     expect(compiled).toEqual([expect.objectContaining({ data: expect.objectContaining({ promoted: true }) })]);
     expect((await paths())['/page-fetch']).toBe(3);
-    expect(await privateHits()).toBeGreaterThanOrEqual(3);
+    expect(await privateHitsAtLeast(3)).toBeGreaterThanOrEqual(3);
     expect((await paths())['/robots.txt']).toBeUndefined();
   }, 180_000);
 
@@ -209,7 +220,7 @@ describe('assert_robots_not_gating — E4, E5 et E6 sur un site dont robots.txt 
   test('E5 sans LLM (contexte du pool) : page redirigée par /depart vers /prive/x suivie ; /page-fetch extraite', async () => {
     const run = await runOf(await insertApi(e5('/page-fetch')));
     expect(run).toMatchObject({ state: 'succeeded', items: 1 });
-    expect(await privateHits()).toBeGreaterThanOrEqual(1);
+    expect(await privateHitsAtLeast(1)).toBeGreaterThanOrEqual(1);
     expect((await paths())['/robots.txt']).toBeUndefined();
   }, 120_000);
 });
