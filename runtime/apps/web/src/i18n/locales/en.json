@@ -705,6 +705,11 @@
         "qwen": "Qwen",
         "openai": "OpenAI",
         "custom": "Custom"
+      },
+      "validation": {
+        "validated": "Validated model (bench N2, {date})",
+        "notValidated": "Not validated",
+        "hint": "Measured by the evaluation bench; read-only."
       }
     },
     "proxies": {

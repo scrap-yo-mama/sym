@@ -52,7 +52,8 @@ export type ActionReason = (typeof ACTION_REASONS)[number];
 /** Classes pour lesquelles le backoff automatique de `erreur` est permis (transition 16). */
 export const BACKOFF_CLASSES = ['extraction', 'code_error', 'network', 'robots_unreachable'] as const satisfies readonly FailureClass[];
 
-export type ReinvestigationTrigger = 'manual' | 'schema_changed' | 'force_investigate';
+/** `rules_changed` : recompilation à la demande (18 §4.8), depuis `sain` ou `warning` seulement (19, 20). */
+export type ReinvestigationTrigger = 'manual' | 'schema_changed' | 'force_investigate' | 'rules_changed';
 
 /** État persistant de la machine. `previousStatus` n'a de sens qu'en `enquete` (transition 21). */
 export type ApiStatusState = {

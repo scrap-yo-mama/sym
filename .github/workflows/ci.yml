@@ -178,6 +178,39 @@ jobs:
         if: matrix.pg == '16'
         run: pnpm vitest run --project contract
 
+  eval:
+    # Banc d'évaluation de l'agent, niveau N0 (tâche 2.8, 15 §11) : faux fournisseur scripté, fixtures locales, PostgreSQL
+    # jetable (Testcontainers), worker réel ; gratuit et bloquant à chaque PR. Rapport par modèle (réussite d'enquête, « moins
+    # cher atteint », pass^3, fausses réparations) publié dans le résumé du job et en artefact ; aucune connexion hors de
+    # l'instance. N1 (PR touchant prompts, rôles, classifieur) et N2 (nuit) exigent une clé BYO réelle (« demander d'abord ») :
+    # NON branchés en CI à la livraison de 2.8, lancés à la main (`pnpm eval --level N1|N2`, runtime/eval/README.md
+    # « Branchement CI ») sur un exécuteur Linux ou Docker Desktop. Report consigné ; nightly.yml ne les joue pas encore.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          package_json_file: runtime/package.json
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: runtime/.node-version
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - name: Banc N0 (pnpm eval)
+        run: pnpm eval
+      - name: Rapport du banc dans le résumé du job
+        if: always()
+        run: cat eval/results/n0/report.md >> "$GITHUB_STEP_SUMMARY" || true
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: eval-n0
+          path: runtime/eval/results/n0/
+          if-no-files-found: warn
+          retention-days: 14
+
   api-contract:
     runs-on: ubuntu-24.04
     steps:

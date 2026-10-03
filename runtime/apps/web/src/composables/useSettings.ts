@@ -32,6 +32,8 @@ export function useLlmSettings() {
   const resource = useResource<LlmSettings>(() => call(() => getApi().GET('/api/settings/llm')));
   const providers = ref<ProviderDraft[]>([]);
   const roles = reactive<Partial<Record<LlmRoleName, { provider: string; model: string }>>>({});
+  /** Statut du banc (lecture seule, 15 § 11) : jamais renvoyé au serveur. */
+  const validatedModels = ref<Schemas['ValidatedModel'][]>([]);
   const saving = ref(false);
   const saveFailure = ref<string | null>(null);
   const saved = ref(false);
@@ -40,6 +42,7 @@ export function useLlmSettings() {
 
   function adopt(settings: LlmSettings): void {
     loaded = settings;
+    validatedModels.value = settings.validated_models ?? [];
     providers.value = settings.providers.map((provider) => ({
       id: provider.id,
       preset: provider.preset,
@@ -117,7 +120,7 @@ export function useLlmSettings() {
     return tester.run(role, () => call(() => getApi().POST('/api/settings/llm/test', { body: { provider: choice.provider, model: choice.model } })));
   }
 
-  return { ...resource, providers, roles, saving, saveFailure, saved, outcomes: tester.outcomes, load, addProvider, removeProvider, save, test };
+  return { ...resource, providers, roles, validatedModels, saving, saveFailure, saved, outcomes: tester.outcomes, load, addProvider, removeProvider, save, test };
 }
 
 export type ProxyWrite = Schemas['ProxyWrite'];

@@ -98,6 +98,23 @@ describe('runDeclarative', () => {
     expect(t.seen.map((r) => new URL(r.url).searchParams.get('page'))).toEqual(['1', '2', '3']);
   });
 
+  it('page répétée (paramètre de pagination ignoré par le site) : casse `extraction`, jamais un succès plein de doublons', async () => {
+    // Le site ne lit plus le paramètre (page → offset) : chaque requête rend la même page, `has_more` reste vrai.
+    const same = json(200, { items: [{ name: 'a' }, { name: 'b' }], has_more: true });
+    for (const pagination of [
+      { type: 'page_param', param: 'url.query.page', start: 1, stop: [{ when: 'path_equals', path: '$.has_more', value: false }], limits: { hard_max_pages: 50 } },
+      { type: 'offset', param: 'url.query.page', start: 0, step: 'items_received', stop: [{ when: 'records_empty' }], limits: { hard_max_pages: 50 } },
+    ]) {
+      const seen: RenderedRequest[] = [];
+      const out = await runDeclarative({ spec: spec({ pagination }), input: {}, outputSchema: SCHEMA, signal, transport: async (r) => (seen.push(r), same) });
+      expect(out, pagination.type).toMatchObject({ ok: false, failure: { failure_class: 'extraction', retryable: false, detail: 'pagination_repeated_page' }, pages: 2, requests: 2 });
+      expect(seen).toHaveLength(2);
+    }
+    // Deux pages de contenus différents puis la fin : aucune casse.
+    const t = scripted({ '1': json(200, { items: [{ name: 'a' }] }), '2': json(200, { items: [{ name: 'b' }] }) });
+    expect(await runDeclarative({ spec: spec(), input: {}, outputSchema: SCHEMA, transport: t.transport, signal })).toMatchObject({ ok: true, pages: 3, stop: 'records_empty' });
+  });
+
   it('une réponse refusée (401, 403, 429) n’est jamais extraite : classe rendue, aucun enregistrement', async () => {
     for (const [status, cls] of [[401, 'auth_required'], [403, 'forbidden'], [429, 'rate_limited']] as const) {
       const t = scripted({ '1': json(status, { items: [{ name: 'piège' }] }) });

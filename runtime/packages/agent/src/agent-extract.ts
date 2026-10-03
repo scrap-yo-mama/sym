@@ -34,7 +34,7 @@ export function sourceLabel(url: string): string {
 }
 
 /** Messages d'extraction : consigne de l'API, puis texte non fiable encadré par un jeton imprévisible. */
-export function extractMessages(args: { instruction: string; pageText: string; pageUrl: string; truncated: boolean }, token = randomBytes(12).toString('hex')): ChatMessage[] {
+export function extractMessages(args: { instruction: string; pageText: string; pageUrl: string; truncated: boolean; rules?: string }, token = randomBytes(12).toString('hex')): ChatMessage[] {
   const tag = `untrusted_page_${token}`;
   // La page ne peut ni fermer la balise ni en imiter une autre : le motif est neutralisé dans son texte.
   const safe = args.pageText.replace(/untrusted_page/gi, 'untrusted-page');
@@ -50,7 +50,8 @@ export function extractMessages(args: { instruction: string; pageText: string; p
     .filter((line) => line !== '')
     .join('\n');
   return [
-    { role: 'system', content: EXTRACT_SYSTEM_PROMPT },
+    // Règles embarquées à la compilation (tâche 2.10, 18 §4.5) : préfixe de confiance, jamais le texte de la page.
+    { role: 'system', content: args.rules === undefined || args.rules === '' ? EXTRACT_SYSTEM_PROMPT : `${EXTRACT_SYSTEM_PROMPT}\n${args.rules}` },
     { role: 'user', content: user },
   ];
 }
@@ -73,6 +74,8 @@ export async function extractRecordsWithLlm(
     pageUrl: string;
     truncated: boolean;
     itemSchema: unknown;
+    /** Règles embarquées dans la stratégie E4 : texte reconstruit depuis les références épinglées de `spec.rules`. */
+    rules?: string;
     signal?: AbortSignal;
     /** Garde avant chaque envoi (plafond de coût de l'essai) : voir `ChatCall.beforeCall`. */
     beforeCall?: () => void;
