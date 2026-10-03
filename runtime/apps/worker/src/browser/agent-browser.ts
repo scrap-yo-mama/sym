@@ -29,7 +29,7 @@
 // Ce Chromium est lancé DANS un slot du pool (`BrowserPool.hold`, appelé par les exécuteurs E5 et E6) : le Chromium
 // partagé du slot est fermé avant, `BROWSER_CONCURRENCY` borne donc aussi les essais agentiques (14 §11).
 import { spawn, type ChildProcess } from 'node:child_process';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { installDomainGuard, installSemanticRecorder, type DomainGuard, type SemanticRecorder } from '@runtime/agent';
@@ -175,8 +175,33 @@ function settle(step: Promise<unknown>, ms = 5000): Promise<void> {
   });
 }
 
-async function waitForFile(path: string, timeoutMs: number, child: ChildProcess): Promise<string> {
+/** Fin de la sortie d'erreur de Chromium gardée pour dire la cause d'un lancement raté (bornée, sans le bruit D-Bus). */
+const STDERR_TAIL_CHARS = 4000;
+
+/** Sortie d'erreur du Chromium lue en continu (le tube ne se remplit jamais) ; seule sa fin est gardée. */
+function stderrTail(child: ChildProcess): () => string {
+  let tail = '';
+  child.stderr?.setEncoding('utf8');
+  child.stderr?.on('data', (chunk: string) => {
+    tail = (tail + chunk).slice(-STDERR_TAIL_CHARS);
+  });
+  return () =>
+    tail
+      .split('\n')
+      .filter((line) => line.trim() !== '' && !/dbus|OOM score/i.test(line))
+      .join(' | ')
+      .replace(/[^\x20-\x7e]/g, '?')
+      .slice(-300);
+}
+
+/**
+ * Attend le port CDP du Chromium dédié. Un Chromium arrêté au lancement (code de sortie, SIGNAL : un CHECK de Chromium ou
+ * de crashpad finit en SIGTRAP, `exitCode` reste alors null) ou jamais lancé (binaire absent) échoue AUSSITÔT, avec sa
+ * cause et la fin de sa sortie d'erreur (UX-23), au lieu d'attendre tout le délai de lancement.
+ */
+async function waitForFile(path: string, timeoutMs: number, child: ChildProcess, spawnError: () => Error | undefined, stderr: () => string): Promise<string> {
   const end = Date.now() + timeoutMs;
+  const why = () => (stderr() === '' ? '' : ` : ${stderr()}`);
   for (;;) {
     try {
       const text = await readFile(path, 'utf8');
@@ -184,8 +209,11 @@ async function waitForFile(path: string, timeoutMs: number, child: ChildProcess)
     } catch {
       // pas encore écrit
     }
-    if (child.exitCode !== null) throw new Error(`Chromium s'est arrêté au lancement (code ${child.exitCode})`);
-    if (Date.now() > end) throw new Error(`Chromium : port CDP absent après ${timeoutMs} ms`);
+    const failed = spawnError();
+    if (failed !== undefined) throw new Error(`Chromium non lancé (${(failed as NodeJS.ErrnoException).code ?? failed.name})`);
+    if (child.exitCode !== null) throw new Error(`Chromium s'est arrêté au lancement (code ${child.exitCode})${why()}`);
+    if (child.signalCode !== null) throw new Error(`Chromium s'est arrêté au lancement (signal ${child.signalCode})${why()}`);
+    if (Date.now() > end) throw new Error(`Chromium : port CDP absent après ${timeoutMs} ms${why()}`);
     await new Promise((r) => setTimeout(r, 50));
   }
 }
@@ -261,15 +289,25 @@ export async function launchAgentBrowser(options: AgentBrowserOptions): Promise<
   if (typeof check !== 'function') throw new Error('Chromium agentique sans contrôle robots.txt (INV11) : refusé');
   const env = options.env ?? process.env;
   const profile = await mkdtemp(join(tmpdir(), 'zz_agent_chromium_'));
+  // HOME à lui, dans le profil jetable (UX-23) : le HOME hérité du worker peut être illisible (Render : le conteneur part
+  // en root, HOME=/root, et le point d'entrée descend sur pwuser sans le changer) ; Chromium complet et son gestionnaire
+  // crashpad s'y arrêtent alors en SIGTRAP. Le Chromium du pool (headless shell) n'en dépend pas.
+  const home = join(profile, 'home');
+  await mkdir(home, { mode: 0o700 });
   const child = spawn(options.executablePath ?? chromium.executablePath(), agentChromiumArgs(options.egressServer, profile, options.userAgent ?? buildUserAgent({ engine: installedEngineIdentity() }), env), {
-    stdio: 'ignore',
-    env: chromiumEnv(env),
+    stdio: ['ignore', 'ignore', 'pipe'],
+    env: { ...chromiumEnv(env), HOME: home, XDG_CONFIG_HOME: join(home, '.config'), XDG_CACHE_HOME: join(home, '.cache') },
   });
+  let spawnError: Error | undefined;
+  child.once('error', (error) => {
+    spawnError = error;
+  });
+  const stderr = stderrTail(child);
   let browser: Browser | undefined;
   let rc: RunContext | undefined;
   /** Processus tué et attendu : plus rien ne part, aucune requête suspendue par une interception ne peut repartir. */
   const kill = async () => {
-    if (child.exitCode === null && child.signalCode === null) {
+    if (spawnError === undefined && child.exitCode === null && child.signalCode === null) {
       const exited = new Promise<void>((resolve) => child.once('exit', () => resolve()));
       child.kill('SIGKILL');
       await Promise.race([exited, new Promise((resolve) => setTimeout(resolve, 5000))]);
@@ -277,7 +315,7 @@ export async function launchAgentBrowser(options: AgentBrowserOptions): Promise<
     await rm(profile, { recursive: true, force: true }).catch(() => undefined);
   };
   try {
-    const [port, path] = (await waitForFile(join(profile, 'DevToolsActivePort'), options.launchTimeoutMs ?? CHROMIUM_LAUNCH_TIMEOUT_MS, child)).trim().split('\n');
+    const [port, path] = (await waitForFile(join(profile, 'DevToolsActivePort'), options.launchTimeoutMs ?? CHROMIUM_LAUNCH_TIMEOUT_MS, child, () => spawnError, stderr)).trim().split('\n');
     const cdpUrl = `ws://127.0.0.1:${Number(port)}${path ?? ''}`;
     browser = await chromium.connectOverCDP(cdpUrl);
     const context = browser.contexts()[0];
