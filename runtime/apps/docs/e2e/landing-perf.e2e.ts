@@ -76,63 +76,98 @@ for (const lang of LANGS_UNDER_TEST) {
   });
 }
 
-// CLS à la source : au remplacement de police (font-display swap), une ligne de plus ou de moins décale tout ce qui suit. La disposition
-// est comparée entre les polices web et le repli local affiché avant leur arrivée, de 320 px au bureau, dont 390 px (budget de
-// laboratoire) et 412 px (écran mobile de Lighthouse) :
-// - l'en-tête précède tout le contenu : sa hauteur et la ligne de chaque lien et de chaque outil sont identiques (à 412 px, la
-//   navigation anglaise tenait sur une ligne à un pixel près avec DM Sans et pas avec le repli) ;
-// - au-dessus de la ligne de flottaison : le haut de chaque bloc du hero (surtitre, titre, définition, appels à l'action, commande,
-//   liens) et de chaque section visible est identique. Un bloc qui grandit sous la ligne de flottaison ne décale rien de visible.
+// CLS au remplacement de police (font-display swap) : le pire cas pour l'utilisateur est une police web qui arrive APRÈS le premier rendu
+// avec le repli local. Le test retient les polices web (woff2) jusqu'à ce que la page soit peinte avec le repli, les relâche une à une,
+// et additionne les décalages de mise en page (PerformanceObserver layout-shift, hors interaction) de tout le chargement : c'est la
+// mesure du CLS, qui ne compte que ce qui bouge DANS la fenêtre, pondéré par la surface et la distance, et non une égalité au pixel des
+// positions, qui dépend des métriques de la police locale de l'exécuteur (Liberation Sans sous Linux : une ligne de plus ou de moins
+// dans un paragraphe du hero, sans décalage notable). De 320 px au bureau, dont 390 px (budget de laboratoire) et 412 px (écran mobile
+// de Lighthouse), en et fr ; seuil : le CLS du budget (budgets().cls), à CHAQUE largeur. Un en-tête qui change de hauteur au
+// remplacement (la navigation anglaise passait à la ligne avec le repli à 412 px : CLS 0,345 sous Lighthouse) décale tout <main> et
+// dépasse le seuil (jusqu'à 0,78 mesuré sur la feuille de style d'avant la grille de l'en-tête).
 const LAYOUT_WIDTHS = [320, 360, 375, 390, 412, 430, 480, 540, 600, 700, 768, 820, 900, 1024, 1280, 1440];
 const LAYOUT_HEIGHT = 823;
 
-type AboveFold = { header: string; blocks: { name: string; top: number }[] };
+type Shift = { value: number; at: number; sources: string[] };
+type FontSwap = { cls: number; beforeSwap: number; shifts: Shift[] };
 
-async function layoutWithFonts(browser: Browser, url: string, width: number, webFonts: boolean): Promise<AboveFold> {
+async function shiftsWhenFontsArriveLate(browser: Browser, url: string, width: number): Promise<FontSwap> {
   const context = await browser.newContext({ viewport: { width, height: LAYOUT_HEIGHT }, reducedMotion: 'reduce' });
-  if (!webFonts) await context.route('**/*.woff2', (route) => route.abort());
-  const page = await context.newPage();
-  await page.goto(url, { waitUntil: 'networkidle' });
-  const layout = await page.evaluate(async (): Promise<AboveFold> => {
-    await document.fonts.ready;
-    const box = (el: Element): DOMRect => el.getBoundingClientRect();
-    const header = document.querySelector('.lp-header');
-    if (!header) return { header: 'en-tête absent', blocks: [] };
-    const rows = [...header.querySelectorAll('.lp-brand, .lp-nav li, .lp-tools > *')].map((el) => `${(el.textContent ?? '').trim().slice(0, 12) || el.className}@${Math.round(box(el).top)}`);
-    const blocks = [
-      ...[...document.querySelectorAll('.lp-hero__text > *')].map((el, index) => ({ name: `hero ${index + 1} (${el.tagName.toLowerCase()}${el.className ? `.${el.className.split(' ')[0]}` : ''})`, top: Math.round(box(el).top) })),
-      ...[...document.querySelectorAll('main > section')].map((el) => ({ name: `section #${el.id}`, top: Math.round(box(el).top) })),
-    ];
-    return { header: `hauteur ${Math.round(box(header).height)} ; ${rows.join(' ')}`, blocks };
+  // Polices web retenues : chaque requête attend que le test la relâche ; après la libération générale, elles passent directement.
+  const held: (() => void)[] = [];
+  let released = false;
+  await context.route('**/*.woff2', async (route) => {
+    if (!released) await new Promise<void>((resolve) => held.push(resolve));
+    await route.continue();
   });
-  const fonts = await page.evaluate(() => [...document.fonts].filter((font) => font.status === 'loaded').map((font) => font.family).join(','));
-  await context.close();
-  if (webFonts && !fonts.includes('DM Sans')) throw new Error(`polices web non chargées à ${width} px : ${fonts}`);
-  return layout;
-}
-
-/** Écarts de disposition entre polices web et repli : en-tête entier, puis blocs dont le haut est visible dans l'une des deux. */
-function layoutDifferences(web: AboveFold, fallback: AboveFold, fold: number): string[] {
-  const differences = web.header === fallback.header ? [] : [`en-tête\n      polices web : ${web.header}\n      repli       : ${fallback.header}`];
-  for (const block of web.blocks) {
-    const other = fallback.blocks.find((candidate) => candidate.name === block.name);
-    if (!other) differences.push(`${block.name} absent avec le repli`);
-    else if ((block.top < fold || other.top < fold) && block.top !== other.top) differences.push(`${block.name} : haut à ${block.top} px avec les polices web, ${other.top} px avec le repli`);
+  await context.addInitScript(() => {
+    const scope = globalThis as unknown as { __shifts: Shift[] };
+    scope.__shifts = [];
+    const name = (node: Node | null): string => {
+      if (!node) return '?';
+      const el = node instanceof Element ? node : node.parentElement;
+      if (!el) return node.nodeName;
+      return `${el.tagName.toLowerCase()}${el.id ? `#${el.id}` : ''}${el.classList.length > 0 ? `.${[...el.classList].join('.')}` : ''}`;
+    };
+    type LayoutShiftSource = { node: Node | null; previousRect: DOMRectReadOnly; currentRect: DOMRectReadOnly };
+    new PerformanceObserver((list) => {
+      for (const entry of list.getEntries() as unknown as { value: number; startTime: number; hadRecentInput: boolean; sources: LayoutShiftSource[] }[]) {
+        if (entry.hadRecentInput) continue;
+        scope.__shifts.push({
+          value: entry.value,
+          at: Math.round(entry.startTime),
+          sources: entry.sources.map((source) => `${name(source.node)} ${Math.round(source.previousRect.top)}→${Math.round(source.currentRect.top)} px (h ${Math.round(source.previousRect.height)}→${Math.round(source.currentRect.height)})`),
+        });
+      }
+    }).observe({ type: 'layout-shift', buffered: true });
+  });
+  const page = await context.newPage();
+  const twoFrames = (): Promise<void> => page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+  await page.goto(url, { waitUntil: 'domcontentloaded' });
+  // Premier rendu avec le repli : les polices web sont demandées et retenues, la page est peinte, aucune n'est chargée.
+  await expect.poll(() => held.length, { message: `aucune police web demandée à ${width} px` }).toBeGreaterThan(0);
+  await twoFrames();
+  await page.waitForTimeout(400);
+  const before = await page.evaluate(() => ({
+    painted: performance.getEntriesByType('paint').some((entry) => entry.name === 'first-contentful-paint'),
+    webFonts: [...document.fonts].filter((font) => font.status === 'loaded' && !font.family.includes('Repli')).map((font) => font.family),
+    shifts: (globalThis as unknown as { __shifts: Shift[] }).__shifts.length,
+  }));
+  if (!before.painted || before.webFonts.length > 0) throw new Error(`repli non peint seul à ${width} px : ${JSON.stringify(before)}`);
+  // Les polices arrivent l'une après l'autre (comme sur un réseau lent), puis toutes celles demandées ensuite.
+  for (const resume of held.splice(0)) {
+    resume();
+    await page.waitForTimeout(150);
   }
-  return differences;
+  released = true;
+  for (const resume of held.splice(0)) resume();
+  const loaded = await page.evaluate(async () => {
+    await document.fonts.ready;
+    return [...document.fonts].filter((font) => font.status === 'loaded').map((font) => font.family).join(',');
+  });
+  await twoFrames();
+  await page.waitForTimeout(300);
+  const shifts = await page.evaluate(() => (globalThis as unknown as { __shifts: Shift[] }).__shifts);
+  await context.close();
+  if (!loaded.includes('DM Sans')) throw new Error(`polices web non chargées à ${width} px : ${loaded}`);
+  const sum = (list: Shift[]): number => list.reduce((total, shift) => total + shift.value, 0);
+  return { cls: sum(shifts), beforeSwap: sum(shifts.slice(0, before.shifts)), shifts };
 }
 
 for (const lang of LANGS_UNDER_TEST) {
-  test(`assert_landing_perf_budget : disposition de l'en-tête et du dessus de la ligne de flottaison indépendante des polices web (CLS), ${lang}`, async ({ browser }) => {
+  test(`assert_landing_perf_budget : remplacement des polices web arrivées après le repli sans décalage visible (CLS), ${lang}`, async ({ browser }) => {
     test.setTimeout(300_000);
-    const differences: string[] = [];
+    const limit = budgets().cls;
+    const failures: string[] = [];
+    const report: string[] = [];
     for (const width of LAYOUT_WIDTHS) {
-      const web = await layoutWithFonts(browser, homeUrl(lang), width, true);
-      const fallback = await layoutWithFonts(browser, homeUrl(lang), width, false);
-      const found = layoutDifferences(web, fallback, LAYOUT_HEIGHT);
-      if (found.length > 0) differences.push(`${width} px\n    ${found.join('\n    ')}`);
+      const swap = await shiftsWhenFontsArriveLate(browser, homeUrl(lang), width);
+      const detail = swap.shifts.map((shift) => `      ${shift.value.toFixed(4)} à ${shift.at} ms : ${shift.sources.join(' ; ')}`).join('\n');
+      report.push(`${width} px : CLS ${swap.cls.toFixed(4)} (avant les polices web ${swap.beforeSwap.toFixed(4)})`);
+      if (swap.cls > limit) failures.push(`${width} px : CLS ${swap.cls.toFixed(4)} > ${limit}\n${detail}`);
     }
-    expect(differences, differences.join('\n')).toEqual([]);
+    console.log(`remplacement des polices ${lang} (seuil ${limit}) :\n  ${report.join('\n  ')}`);
+    expect(failures, failures.join('\n')).toEqual([]);
   });
 }
 
