@@ -35,6 +35,7 @@
 // dans un prompt.
 import {
   buildCatalogDossier,
+  DslError,
   computeSignature,
   minimalContentCheck,
   priorRefusalDecision,
@@ -159,6 +160,7 @@ import {
 import { LlmError, roleTarget, toFailureClass, type LlmClient, type LlmConfig } from '@runtime/llm';
 import type pg from 'pg';
 import { pino, type Logger } from 'pino';
+import { ChromiumLaunchError } from '../browser/agent-browser.js';
 import type { BrowserPool } from '../browser/pool.js';
 import type { TunnelPort } from '../tunnel/client.js';
 import { runReconnaissancePass } from './browser-executors.js';
@@ -271,7 +273,76 @@ type AccessPorts = {
 
 type SessionBase = Omit<Parameters<typeof openNetworkSession>[0], 'allowedHosts' | 'allowedHostSuffixes' | 'costCeiling' | 'checkUrl'>;
 
+/**
+ * Cause lisible d'une exception inattendue de l'enquête : la classe de l'erreur et son code, jamais son message (il peut
+ * porter une valeur du site ou un secret).
+ */
+function internalErrorDetail(error: unknown): string {
+  if (!(error instanceof Error)) return 'internal_error';
+  const name = /^[A-Za-z][A-Za-z0-9_]{0,40}$/.test(error.name) ? error.name : 'Error';
+  const code = error instanceof DslError ? error.code : (error as { code?: unknown }).code;
+  return typeof code === 'string' && /^[a-z0-9_]{1,40}$/i.test(code) ? `internal_error:${name}:${code}` : `internal_error:${name}`;
+}
+
+/** Champs du journal d'un essai en erreur : classe, code borné, et pour un lancement Chromium raté son code fermé et la fin du stderr. */
+function trialErrorLog(runId: string, execution: string, error: unknown): Record<string, unknown> {
+  if (error instanceof ChromiumLaunchError) return { runId, execution, err: error.name, detail: error.message, stderr: error.stderr };
+  return { runId, execution, err: internalErrorDetail(error) };
+}
+
+/**
+ * Fin d'échec d'une enquête sortie hors des fins prévues (exception inattendue, état d'enquête absent : UX-24). Même issue
+ * que `finishFailed` pour `code_error` : phase close, `investigation_failed` (`erreur`, ou le statut d'avant une
+ * ré-enquête), récit fermé avec la cause. Chaque étape est au mieux : une base indisponible ne masque pas la cause du run.
+ */
+async function closeInvestigation(deps: InvestigationExecutorDeps, ctx: RunCtx, logger: Logger, detail: string): Promise<RunResult> {
+  const ids = { apiId: ctx.apiId, ownerId: ctx.ownerId };
+  let at: string = 'setup';
+  await ctx.log('error', 'investigation_internal_error', { detail }).catch(() => undefined);
+  try {
+    const inv = await loadInvestigation(deps.pool, ids);
+    if (inv !== null && inv.state !== null) {
+      at = inv.phase ?? 'setup';
+      if (inv.phase !== 'done') await saveInvestigationState(deps.pool, { ...ids, state: inv.state, phase: 'done' });
+    }
+  } catch (error) {
+    logger.warn({ runId: ctx.runId, err: internalErrorDetail(error) }, 'enquête : phase non close');
+  }
+  try {
+    const step = (await ctx.applyStatus?.({ type: 'investigation_failed', cause: 'budget_exhausted' })) ?? null;
+    if (step?.ok === true) await appendInvestigationEvent(deps.pool, { runId: ctx.runId, ownerId: ctx.ownerId, kind: EV.statusChanged, payload: { run_id: ctx.runId, status: step.status, status_reason: step.reason } });
+  } catch (error) {
+    logger.warn({ runId: ctx.runId, err: internalErrorDetail(error) }, 'enquête : statut non appliqué');
+  }
+  try {
+    await appendInvestigationEvent(deps.pool, { runId: ctx.runId, ownerId: ctx.ownerId, kind: EV.finished, payload: { run_id: ctx.runId, outcome: 'failed', failure_class: 'code_error', detail, at } });
+  } catch (error) {
+    logger.warn({ runId: ctx.runId, err: internalErrorDetail(error) }, 'enquête : récit non fermé');
+  }
+  return { state: 'failed', failure_class: 'code_error', retryable: false, error_detail: detail };
+}
+
+/**
+ * Exécuteur d'enquête. Une enquête finit TOUJOURS dans un état terminal avec une cause (INV3, UX-24) : toute exception qui
+ * échappe aux fins prévues passe par `closeInvestigation`. Seul un run interrompu (bail perdu, arrêt, échéance du job)
+ * laisse l'exception au worker, qui le remet en file ou le clôt.
+ */
 export function createInvestigationExecutor(deps: InvestigationExecutorDeps): RunExecutor {
+  const logger = deps.logger ?? pino({ enabled: false });
+  const investigate = investigationRun(deps);
+  return async (ctx: RunCtx): Promise<RunResult> => {
+    try {
+      return await investigate(ctx);
+    } catch (error) {
+      if (ctx.signal.aborted) throw error;
+      const detail = internalErrorDetail(error);
+      logger.error({ runId: ctx.runId, err: detail }, 'enquête : erreur interne');
+      return closeInvestigation(deps, ctx, logger, detail);
+    }
+  };
+}
+
+function investigationRun(deps: InvestigationExecutorDeps): RunExecutor {
   const now = deps.now ?? Date.now;
   const robotsCache = deps.robotsCache ?? new RobotsCache();
   const logger = deps.logger ?? pino({ enabled: false });
@@ -281,8 +352,9 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
     const started = now();
     const inv = await loadInvestigation(deps.pool, { apiId: ctx.apiId, ownerId: ctx.ownerId });
     const target = await loadRunTarget(deps.pool, { apiId: ctx.apiId, ownerId: ctx.ownerId, version: null, ...(deps.costCaps === undefined ? {} : { caps: deps.costCaps }) });
-    if (inv === null || target === null) return { state: 'failed', failure_class: 'code_error', retryable: false, error_detail: 'api_not_found' };
-    if (inv.state === null) return { state: 'failed', failure_class: 'code_error', retryable: false, error_detail: 'investigation_not_started' };
+    // Sorties précoces : même fin d'échec que les autres (statut quitté, récit fermé avec la cause), jamais un run muet.
+    if (inv === null || target === null) return closeInvestigation(deps, ctx, logger, 'api_not_found');
+    if (inv.state === null) return closeInvestigation(deps, ctx, logger, 'investigation_not_started');
     let state: InvestigationState = inv.state;
     let phase: InvestigationPhase | null = inv.phase;
     const request = state.request;
@@ -859,7 +931,10 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
               } catch (error) {
                 if (ctx.signal.aborted) throw error;
                 if (timeout.aborted) return execution(false, 'run_budget_exceeded', 'investigation_timeout_s', 0, null, 0, null);
-                logger.warn({ runId: ctx.runId, err: error instanceof Error ? error.name : 'error' }, 'enquête : essai en erreur');
+                // Journal de l'opérateur : la classe et un code borné, JAMAIS le message (valeur du site ou personnelle : le logger ne
+                // masque que les secrets, INV8, pas le registre des valeurs personnelles du run). Seul un lancement Chromium raté
+                // (messages construits par agent-browser.ts : code fermé, stderr de Chromium) garde son diagnostic (UX-23).
+                logger.warn(trialErrorLog(ctx.runId, entry.execution, error), 'enquête : essai en erreur');
                 return execution(false, 'code_error', 'trial_error', 0, 0, 0, null);
               }
               const acc = spend.get(pair) ?? { proxy: 0, llm: 0, tokens: { in: 0, cached: 0, out: 0, reasoning: 0, estimated: false }, model: null, prompt: null, engine: null };

@@ -75,6 +75,34 @@ export function extractSubjectIdentifiers(outputSchema: unknown, item: unknown):
   return [...new Set(out)].filter(isUsableSubjectValue);
 }
 
+/** Champs nommés au plus dans un message (le reste est compté). */
+const MAX_NAMED_FIELDS = 20;
+
+/**
+ * Chemins des champs `x-personal` d'un schéma de sortie, dans l'ordre du schéma : `email`, `author.name`, `phones[]`,
+ * `[].author` (items d'un tableau racine). Pour dire à l'appelant QUEL champ demande la case « Usage responsable » (UX-19).
+ */
+export function personalFieldPaths(schema: unknown): string[] {
+  const out: string[] = [];
+  const visit = (node: unknown, path: string, depth: number): void => {
+    if (depth > MAX_DEPTH || out.length >= MAX_NAMED_FIELDS || !isRecord(node)) return;
+    if (personalKind(node) !== null && path !== '') {
+      out.push(path);
+      return;
+    }
+    const properties = node['properties'];
+    if (isRecord(properties)) for (const [name, child] of Object.entries(properties)) visit(child, path === '' ? name : `${path}.${name}`, depth + 1);
+    const items = node['items'];
+    if (isRecord(items)) visit(items, `${path}[]`, depth + 1);
+    for (const key of COMBINATORS) {
+      const list = node[key];
+      if (Array.isArray(list)) for (const child of list) visit(child, path, depth + 1);
+    }
+  };
+  visit(schema, '', 0);
+  return [...new Set(out)];
+}
+
 /** Le schéma déclare-t-il au moins un champ `x-personal` ? */
 export function schemaHasPersonalFields(schema: unknown, depth = 0): boolean {
   if (depth > MAX_DEPTH) return false;

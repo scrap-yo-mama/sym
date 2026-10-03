@@ -521,6 +521,8 @@ describe('validation du schéma : case « j’ai lu » non contournable, ordre d
     const res = await api(c, 'POST', `/api/apis/${apiId}/validate-schema`, '/api/apis/{id}/validate-schema', { output_schema: stripped });
     expect(res.status).toBe(403);
     expect(res.body).toMatchObject({ error: { code: 'responsible_use_ack_required' } });
+    // UX-19 : le message nomme le champ marqué (celui du schéma PROPOSÉ), jamais un champ non marqué.
+    expect((res.body['error'] as { message: string }).message).toMatch(/x-personal : name \(/);
     expect(await count("SELECT count(*) FROM apis WHERE id = $1 AND investigation_phase = 'awaiting_schema_validation'", [apiId])).toBe(1);
     // Case cochée : la correction passe.
     await api(c, 'POST', '/api/me/responsible-use', '/api/me/responsible-use', { version: '2026-10-01' });

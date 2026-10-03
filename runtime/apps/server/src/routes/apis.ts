@@ -518,8 +518,9 @@ export function apiRoutes(app: FastifyInstance, ctx: ServerContext): void {
       // proposé sans ses marques `x-personal` ne contourne pas la case.
       const proposed = state?.proposed_schema ?? {};
       const corrected = request.body.output_schema;
-      const personal = schemaHasPersonalFields(proposed) ? proposed : corrected !== undefined && schemaHasPersonalFields(corrected) ? corrected : {};
-      if (await rejectWithoutAck(ctx, reply, actor, personal)) return reply;
+      const fromProposed = schemaHasPersonalFields(proposed);
+      const personal = fromProposed ? proposed : corrected !== undefined && schemaHasPersonalFields(corrected) ? corrected : {};
+      if (await rejectWithoutAck(ctx, reply, actor, personal, fromProposed ? 'proposed' : 'corrected')) return reply;
       if (await rejectIfKeyRateLimited(ctx, reply, actor)) return reply;
       let runId: string;
       try {
