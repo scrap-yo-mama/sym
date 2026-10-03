@@ -49,6 +49,7 @@ import { DomainNotAllowedError, guardedGoto, type BrowserEgress, type NetworkSes
 import type { Logger } from 'pino';
 import type { CDPSession, Request, Response } from 'playwright-core';
 import { boundedContent, boundedDocumentBody, TOO_LARGE, trackDecodedSizes, type DecodedSizes } from '../browser/bounded.js';
+import type { AgentRequestGate } from '../browser/agent-request-gate.js';
 import type { BrowserPool } from '../browser/pool.js';
 import { chainRoot, hostAllowed, isMainNavigation, openRunContext, trackStrategyRequests } from '../browser/run-context.js';
 import { DEFAULT_SANDBOX_LIMITS } from '../sandbox/engine.js';
@@ -128,9 +129,11 @@ export type ScriptExecutorOptions = {
   /**
    * Stratégie `steps` (tâche 2.13) : hôte des étapes (pont `ctx.steps`, effet observé de chaque étape). `afterPause` :
    * appelé quand l'interpréteur s'est arrêté avant l'étape `stopBefore` (agent d'étape), page du run encore ouverte et
-   * gardée ; l'agent n'y agit que par la vue de l'hôte (`StepsHost.agentPage`).
+   * gardée ; l'agent n'y agit que par la vue de l'hôte (`StepsHost.agentPage`). `gate` : politique de requêtes de l'agent
+   * (19 §7, PA-01), appliquée aux requêtes de la page PENDANT la phase de l'agent seulement (`isAgentActive`) ; le rejeu
+   * des étapes de la stratégie garde son régime.
    */
-  readonly steps?: { readonly host: StepsHost; readonly afterPause?: (tools: StepPageTools) => Promise<void> };
+  readonly steps?: { readonly host: StepsHost; readonly gate?: AgentRequestGate; readonly afterPause?: (tools: StepPageTools) => Promise<void> };
 };
 
 export type ScriptRunOutcome = {
@@ -331,6 +334,7 @@ export function runScriptExecutor(options: ScriptExecutorOptions): Promise<Scrip
       egressServer: options.egress.server,
       allowedHosts: options.allowedHosts,
       ...(options.userAgent === undefined ? {} : { userAgent: options.userAgent }),
+      ...(options.steps?.gate === undefined ? {} : { checkRequest: (hop) => (options.steps!.gate!.isAgentActive() ? options.steps!.gate!.check(hop) : Promise.resolve(true)) }),
       onViolation: (h, request) => {
         const state = request === undefined ? undefined : issuedState(request);
         // Pendant un `evaluate`, une requête vers un hôte que le site n'a jamais contacté peut être une tentative du code
@@ -390,6 +394,7 @@ export function runScriptExecutor(options: ScriptExecutorOptions): Promise<Scrip
         return true;
       },
     });
+    options.steps?.gate?.attach(rc.page);
     const strategy = trackStrategyRequests(rc.context, options.allowedHosts);
     rc.context.on('request', (request) => {
       const root = chainRoot(request);

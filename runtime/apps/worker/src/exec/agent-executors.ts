@@ -108,11 +108,13 @@ type AgentPolicyOptions = {
 };
 
 /**
- * Écritures coupées par la garde d'écriture du contexte (consultée AVANT le contrôle de requêtes) : même refus, même code
- * (`method_not_allowed`), pour que le journal porte tous les refus de la politique.
+ * Écritures coupées avant le contrôle de requêtes (garde d'écriture du contexte, consultée AVANT lui) : même refus, même code
+ * (`method_not_allowed`), pour que le journal porte tous les refus de la politique. Le verdict de la garde sur la DERNIÈRE
+ * écriture arrive après la fin du run (course constatée sous charge) : le compte est le maximum de celui de la garde et de celui
+ * des écritures lancées (`settleWrites`), jamais le seul premier. Le journal est complété de l'écart, sans double compte.
  */
-const noteWriteRefusals = (gate: AgentRequestGate, ab: AgentBrowser): void => {
-  for (const b of ab.guard.blocked) if (b.reason === 'write') gate.record('method_not_allowed');
+const noteWriteRefusals = (gate: AgentRequestGate, ab: AgentBrowser, launchedWrites: number): void => {
+  gate.ensureWriteRefusals(Math.max(ab.guard.blocked.filter((b) => b.reason === 'write').length, launchedWrites));
 };
 
 /** Résumé du relevé d'une garde, ou rien si aucune requête n'a été refusée. */
@@ -251,8 +253,9 @@ async function fetchPage(options: AgentFetchOptions, gate: AgentRequestGate): Pr
   const b = options.browser;
   if (b === undefined) throw new Error('navigateur absent');
   return b.pool.run(options.signal, async (browser) => {
-    const rc = await openRunContext(browser, { egressServer: b.egress.server, allowedHosts: options.spec.request.allowed_hosts, checkRequest: gate.check, ...(b.userAgent === undefined ? {} : { userAgent: b.userAgent }) });
-    gate.attach(rc.page);
+    // E4 n'a ni agent ni outil : seule la requête DÉCLARÉE est contrôlée (ci-dessus). Le trafic de la page (POST, navigation par
+    // script, XHR) garde le régime d'avant la garde ; le verrou de domaines du contexte le borne toujours.
+    const rc = await openRunContext(browser, { egressServer: b.egress.server, allowedHosts: options.spec.request.allowed_hosts, ...(b.userAgent === undefined ? {} : { userAgent: b.userAgent }) });
     const strategy = trackStrategyRequests(rc.context, options.spec.request.allowed_hosts);
     try {
       const response = await strategy
@@ -546,6 +549,8 @@ export async function runHybridExecutor(options: HybridOptions): Promise<AgentOu
     startUrl: spec.start_url,
     templates: spec.steps.flatMap((s) => (s.op === 'goto' ? [s.url] : [])),
     allowWriteActions: options.allowWriteActions,
+    // Les étapes code (goto, clic, attente) sont celles du propriétaire : l'agent ne pilote la page que pendant une étape `agent`.
+    agentActive: false,
     trustedText: [...spec.steps.flatMap((s) => (s.op === 'agent' ? [s.instruction] : [])), spec.extract.mode === 'agent' ? spec.extract.instruction : ''].join(' '),
     ...(options.sensitiveValues === undefined ? {} : { sensitiveValues: options.sensitiveValues }),
     ...(options.runInputs === undefined ? {} : { runInputs: options.runInputs }),
@@ -595,6 +600,7 @@ async function runHybridDelegated(options: HybridOptions, agentBrowser: NonNulla
       current = budget;
       let run: AgentRunResult;
       try {
+        gate.setAgentActive(true);
         run = await made!.engine.run(
           {
             taskId: 'hybrid_step',
@@ -608,6 +614,7 @@ async function runHybridDelegated(options: HybridOptions, agentBrowser: NonNulla
           { model: { modelId: made!.modelId, temperature: 0, promptVersion: made!.promptVersion }, signal: AbortSignal.any([signal, deadline]) },
         );
       } finally {
+        gate.setAgentActive(false);
         current = undefined;
       }
       budget.report(run.costUsd);
@@ -666,7 +673,8 @@ async function runHybridDelegated(options: HybridOptions, agentBrowser: NonNulla
     }
   } finally {
     watch.dispose();
-    noteWriteRefusals(gate, ab);
+    // Verdict tardif de la garde sur la dernière écriture de l'agent : barrière des écritures lancées (comme en E6).
+    noteWriteRefusals(gate, ab, options.allowWriteActions ? 0 : await ab.settleWrites(WRITE_BARRIER_TIMEOUT_MS).catch(() => 0));
     await ab.close();
   }
 }
@@ -815,6 +823,7 @@ async function runAgentInSlot(options: AgentOptions, lease: SlotLease, gate: Age
   let made: ReturnType<EngineFactory>;
   let domainBlocked: number;
   let writesBlocked: number;
+  let launchedWrites = 0;
   // Refus vu sur un document (401, 403, 429, défi…) : l'agent est arrêté aussitôt, sans autre action (INV6).
   const stop = new AbortController();
   const watch = watchDocuments(ab.context, options.classify, () => stop.abort(), await decodedSizes(ab.context, ab.page));
@@ -864,12 +873,12 @@ async function runAgentInSlot(options: AgentOptions, lease: SlotLease, gate: Age
     // et une écriture coupée par la route des domaines ne l'atteint jamais. Sans
     // `allow_write_actions`, toute écriture LANCÉE est coupée : c'est elle qui est comptée, quel que soit son verdict
     // (`settleWrites`, toutes cibles). Les deux comptes sont des minorants des mêmes écritures.
-    const launchedWrites = options.allowWriteActions ? 0 : await ab.settleWrites(WRITE_BARRIER_TIMEOUT_MS);
+    launchedWrites = options.allowWriteActions ? 0 : await ab.settleWrites(WRITE_BARRIER_TIMEOUT_MS);
     domainBlocked = ab.guard.blocked.filter((b) => b.reason === 'domain').length + ab.violations() + options.egress.domainBlockedCount();
     writesBlocked = Math.max(ab.guard.blocked.filter((b) => b.reason === 'write').length, launchedWrites);
   } finally {
     watch.dispose();
-    noteWriteRefusals(gate, ab);
+    noteWriteRefusals(gate, ab, launchedWrites);
     await ab.close();
   }
   const spend = spendFromAgent(run, made.modelId, made.promptVersion, `${made.engine.id}@${made.engine.version}`);

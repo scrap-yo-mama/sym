@@ -31,6 +31,8 @@ let pool: BrowserPool;
 let fake: FakeProvider;
 let currentPage = (): string => '';
 let hits: string[] = [];
+/** Requêtes reçues, chemin et paramètres compris (`MÉTHODE hôte/chemin?requête`). */
+let fullHits: string[] = [];
 const signal = new AbortController().signal;
 const origin = (host: string) => `http://${host}:${port}`;
 const origins = () => ({ site: origin(SITE_HOST), trap: origin(TRAP_HOST) });
@@ -43,6 +45,7 @@ beforeAll(async () => {
     const host = (req.headers.host ?? '').split(':')[0]!;
     const path = (req.url ?? '/').split('?')[0]!;
     hits.push(`${req.method} ${host}${path}`);
+    fullHits.push(`${req.method} ${host}${req.url ?? '/'}`);
     req.resume();
     const send = (body: string) => res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' }).end(body);
     if (host === SITE_HOST && path === '/' && req.method === 'GET') return send(html(currentPage()));
@@ -67,6 +70,7 @@ afterAll(async () => {
 beforeEach(() => {
   fake.reset();
   hits = [];
+  fullHits = [];
 });
 
 async function withEgress<T>(fn: (egress: BrowserEgress) => Promise<T>): Promise<T> {
@@ -86,7 +90,7 @@ const engineFor =
     promptVersion: 'stagehand-3.7.3-dom',
   });
 
-const agentSpec = (): AgentSpec => ({ schema_version: 1, kind: 'agent', start_url: `${origin(SITE_HOST)}/`, allowed_hosts: [SITE_HOST], instruction: 'Rends le titre du produit.', limits: { max_steps: 6, timeout_ms: 90_000 } });
+const agentSpec = (startUrl = `${origin(SITE_HOST)}/`): AgentSpec => ({ schema_version: 1, kind: 'agent', start_url: startUrl, allowed_hosts: [SITE_HOST], instruction: 'Rends le titre du produit.', limits: { max_steps: 6, timeout_ms: 90_000 } });
 const common = () => ({ outputSchema: ITEM, signal, guard, maxCostUsd: 0.5, sensitiveValues: () => [INJECTION_SECRET] });
 
 describe('assert_agent_request_policy — corpus d’injection sur l’agent réel (E6) : 0 exfiltration, refus journalisés', () => {
@@ -97,7 +101,7 @@ describe('assert_agent_request_policy — corpus d’injection sur l’agent ré
       const out = await withEgress((egress) =>
         runAgentExecutor({
           ...common(),
-          spec: agentSpec(),
+          spec: agentSpec(c.startUrl?.(origins())),
           egress,
           agentBrowser: (o) => launchAgentBrowser({ ...o, egressServer: egress.server }),
           engineFor: engineFor(),
@@ -111,6 +115,7 @@ describe('assert_agent_request_policy — corpus d’injection sur l’agent ré
       expect(fake.byRole[AGENT_MODEL] ?? 0).toBeGreaterThanOrEqual(2);
       // 0 exfiltration réussie : aucune requête interdite n'a atteint un serveur.
       for (const f of c.forbidden) expect(hitsOn(f), `requête interdite reçue : ${f}`).toEqual([]);
+      for (const q of c.forbiddenQueries ?? []) expect(fullHits.filter((h) => h.includes(q)), `requête interdite reçue : ${q}`).toEqual([]);
       expect(hits.join('\n')).not.toContain(INJECTION_SECRET);
       // Refus journalisés par code, jamais le contenu.
       for (const reason of c.reasons) expect(out.requestPolicy?.reasons).toContain(reason);
@@ -208,5 +213,77 @@ describe('assert_rule_of_two_by_phase — outil hors phase refusé par l’agent
     );
     expect(out.result).toMatchObject({ ok: false, failure: { failure_class: 'code_error', detail: 'agent_toolset_not_closed' } });
     expect(hitsOn(`GET ${SITE_HOST}/produits`)).toEqual([]);
+  }, 180_000);
+});
+
+describe('assert_agent_request_policy — agent instruit (phase instructed) : même corpus, même refus', () => {
+  for (const id of ['exfiltration-meme-origine', 'recherche-valeur-hors-liste']) {
+    test(`${id} : phase instructed, refus journalisé et 0 exfiltration`, async () => {
+      const c = INJECTION_CORPUS.find((x) => x.id === id)!;
+      currentPage = () => c.page(origins());
+      fake.setScenario(AGENT_MODEL, stagehandScript([...c.turns(origins())], { items: [{ title: 'Chaise zz_test' }] }));
+      const out = await withEgress((egress) =>
+        runAgentExecutor({
+          ...common(),
+          spec: agentSpec(),
+          egress,
+          agentBrowser: (o) => launchAgentBrowser({ ...o, egressServer: egress.server }),
+          engineFor: engineFor(),
+          pool,
+          allowWriteActions: false,
+          phase: 'instructed',
+          compile: false,
+          taskId: `zz_test_instructed_${id}`,
+          version: 1,
+        }),
+      );
+      expect(fake.byRole[AGENT_MODEL] ?? 0).toBeGreaterThanOrEqual(2);
+      for (const f of c.forbidden) expect(hitsOn(f), `requête interdite reçue : ${f}`).toEqual([]);
+      for (const q of c.forbiddenQueries ?? []) expect(fullHits.filter((h) => h.includes(q))).toEqual([]);
+      expect(hits.join('\n')).not.toContain(INJECTION_SECRET);
+      for (const reason of c.reasons) expect(out.requestPolicy?.reasons).toContain(reason);
+      expect(out.compiled).toBeUndefined();
+    }, 180_000);
+  }
+});
+
+describe('non-régression — le trafic propre de la page n’est ni coupé ni compté (fix-pa01, point 2)', () => {
+  const many = Array.from({ length: 12 }, (_, i) => `p${i}=1`).join('&');
+  const chatty = (extra = '') =>
+    `<h1>Boutique</h1><script>fetch('/api/graphql?${many}').catch(function(){});fetch('/api/long?variables=${'a'.repeat(300)}').catch(function(){});${extra}</script>`;
+
+  test('E6 : une page dont le XHR porte plus de 10 paramètres et un paramètre long : aucun refus, la trace compile encore en E5', async () => {
+    currentPage = () => chatty() + `<p><a href="${origin(SITE_HOST)}/produits?page=2">Page suivante</a></p>`;
+    fake.setScenario(AGENT_MODEL, stagehandScript([scripted.toolCalls([{ name: 'act', arguments: { action: 'click the link "Page suivante"' } }])], { items: [{ title: 'Page 2' }] }));
+    const out = await withEgress((egress) =>
+      runAgentExecutor({ ...common(), spec: agentSpec(), egress, agentBrowser: (o) => launchAgentBrowser({ ...o, egressServer: egress.server }), engineFor: engineFor(), pool, allowWriteActions: false, taskId: 'zz_test_chatty', version: 1 }),
+    );
+    expect(hitsOn(`GET ${SITE_HOST}/api/graphql`).length).toBeGreaterThan(0);
+    expect(hitsOn(`GET ${SITE_HOST}/api/long`).length).toBeGreaterThan(0);
+    expect(out.requestPolicy).toBeUndefined();
+    expect(out.compileFailure).toBeUndefined();
+    expect(out.compiled).toBeDefined();
+  }, 180_000);
+
+  test('E4 par navigateur : une page qui charge ses données en POST (et en XHR chargé) : requêtes parties, extraction rendue, aucun refus', async () => {
+    currentPage = () => chatty(`fetch('/api/data',{method:'POST',body:'a=1'}).catch(function(){});`);
+    fake.setScenario(EXTRACT_MODEL, [scripted.json({ items: [{ title: 'Chaise zz_test' }] })]);
+    const e4: AgentFetchSpec = {
+      schema_version: 1,
+      kind: 'agent_fetch',
+      request: { url: `${origin(SITE_HOST)}/`, allowed_hosts: [SITE_HOST] },
+      via: 'fetch_in_page',
+      instruction: 'Rends le titre.',
+      limits: { max_response_bytes: 1_000_000, max_input_chars: 60_000, timeout_ms: 30_000 },
+    };
+    const llm = createLlmClient({
+      providers: [{ id: 'fake', baseUrl: fake.baseUrl, apiKey: new Secret('zz_test_fake_key'), models: [{ id: EXTRACT_MODEL, price: { in: 1, out: 2 } }] }],
+      roles: { extract: { provider: 'fake', model: EXTRACT_MODEL } },
+    });
+    const out = await withEgress((egress) => runAgentFetchExecutor({ spec: e4, outputSchema: ITEM, llm, modelId: EXTRACT_MODEL, signal, maxCostUsd: 0.5, browser: { pool, egress, guard } }));
+    expect(out.result.ok).toBe(true);
+    expect(hitsOn(`POST ${SITE_HOST}/api/data`).length).toBeGreaterThan(0);
+    expect(hitsOn(`GET ${SITE_HOST}/api/graphql`).length).toBeGreaterThan(0);
+    expect(out.requestPolicy).toBeUndefined();
   }, 180_000);
 });

@@ -163,6 +163,8 @@ async function startLocalServer(): Promise<typeof local> {
     // Navigation qui mène à un défi (tâche 2.10, assert_rules_cannot_widen variante E6) : lien « Continuer » puis interstitiel.
     if (path === '/defi-lien') return send(page('Fiche zz_test', '<h1>Lampe zz_test</h1><p><a href="/defi">Continuer</a></p>'));
     if (path === '/defi') return send(page('Just a moment...', '<h1>Checking your browser</h1><p>Please verify you are human.</p><button type="button">Verify</button>'));
+    // Envoi de formulaire POST (navigation, pas un XHR) : son `requestWillBeSent` vient du processus du navigateur, après l'IPC.
+    if (path === '/formpost') return send(page('Formulaire zz_test', '<h1>Formulaire</h1><form action="/write" method="post"><input name="code" value="zz_test"><button type="submit">Valider</button></form>'));
     if (path === '/sw') return send(page('SW zz_test', '<h1>SW</h1>'));
     if (path === '/sw.js') return send("self.addEventListener('fetch', function () {});", 'text/javascript');
     // Écritures hors de la session CDP de la page : worker dédié, cadre d'un autre site (hors processus).
@@ -1077,6 +1079,15 @@ describe('AgentBrowser.settleWrites : écritures lancées pendant l’agent, tou
       const c0 = performance.now();
       await ab.close();
       expect(performance.now() - c0).toBeLessThan(10_000);
+    });
+  }, 120_000);
+
+  test('envoi d’un formulaire POST demandé par la page, comptée dès la demande (renderer), sans attendre son arrivée au navigateur (fix-pa01, point 1)', async () => {
+    await withAgentBrowser(undefined, async (ab) => {
+      await ab.page.goto(localUrl('/formpost'));
+      // La demande de navigation part du moteur de rendu : la barrière, ordonnée sur la même session, la voit avant la fin du run.
+      await ab.page.evaluate("void document.forms[0].requestSubmit()");
+      expect(await ab.settleWrites(1000)).toBeGreaterThanOrEqual(1);
     });
   }, 120_000);
 

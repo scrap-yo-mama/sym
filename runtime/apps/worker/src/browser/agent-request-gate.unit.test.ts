@@ -60,3 +60,71 @@ describe('assert_agent_request_policy : garde du navigateur agentique', () => {
     expect(await g.check(hop({ url: `https://${HOST}/x?d=ZZ-SECRET-HEADER-VALUE`, redirect: true, rootUrl: `https://${HOST}/produits?page=2` }))).toBe(false);
   });
 });
+
+describe('assert_agent_request_policy : trafic de la page, E4/E5 sans agent, formulaires, départ à paramètres (fix-pa01)', () => {
+  const many = Array.from({ length: 12 }, (_, i) => `p${i}=1`).join('&');
+
+  test('point 2 : le XHR propre de la page (plus de 10 paramètres, paramètre long) n’est ni coupé ni compté ; seule une valeur sensible l’est', async () => {
+    const g = gate();
+    expect(await g.check(hop({ url: `https://${HOST}/graphql?${many}`, resourceType: 'XHR', mainFrame: false }))).toBe(true);
+    expect(await g.check(hop({ url: `https://${HOST}/graphql?variables=${'a'.repeat(400)}`, resourceType: 'Fetch', mainFrame: false }))).toBe(true);
+    expect(await g.check(hop({ url: `https://${HOST}/api/items?page=2`, redirect: true, rootUrl: `https://${HOST}/api/items?page=1`, resourceType: 'XHR', mainFrame: false }))).toBe(true);
+    expect(g.summary()).toEqual({ blocked: 0, reasons: [] });
+    expect(await g.check(hop({ url: `https://${HOST}/m?d=ZZ-SECRET-HEADER-VALUE`, resourceType: 'XHR', mainFrame: false }))).toBe(false);
+    expect(g.summary().reasons).toEqual(['sensitive_value']);
+  });
+
+  test('point 2 : sans geste d’agent (E4 par navigateur, étapes code de E5), la navigation et l’écriture de la page ne changent pas de régime', async () => {
+    const g = gate({ phase: 'e4_extract', agentActive: false, allowWriteActions: true });
+    expect(await g.check(hop({ url: `https://${HOST}/liste?x=1` }))).toBe(true);
+    expect(await g.check(hop({ url: `https://${HOST}/api/save`, method: 'POST', resourceType: 'XHR', mainFrame: false }))).toBe(true);
+    expect(g.summary().blocked).toBe(0);
+    const act = gate({ agentActive: false });
+    expect(act.isAgentActive()).toBe(false);
+    expect(await act.check(hop({ url: `https://${HOST}/hors-page` }))).toBe(true);
+    act.setAgentActive(true);
+    expect(await act.check(hop({ url: `https://${HOST}/hors-page-2` }))).toBe(false);
+    expect(act.summary().reasons).toEqual(['url_not_from_page']);
+  });
+
+  test('point 3 : un document de cadre enfant (formulaire target=iframe) subit la politique complète ; une valeur tapée hors liste est refusée', async () => {
+    const g = gate({ domUrls: async () => [`https://${HOST}/search?q=`] });
+    expect(await g.check(hop({ url: `https://${HOST}/search?q=donnee-hors-liste-42x`, mainFrame: false }))).toBe(false);
+    expect(g.summary().reasons).toEqual(['param_value_untrusted']);
+    expect(await g.check(hop({ url: `https://${HOST}/search?q=`, mainFrame: false }))).toBe(true);
+  });
+
+  test('point 9 : URL de départ à paramètres = URL connue ; une valeur libre sur ses clés par goto est refusée, la pagination reste permise', async () => {
+    const g = gate({ startUrl: `https://${HOST}/search?q=chaise&page=1`, domUrls: async () => [] });
+    expect(await g.check(hop({ url: `https://${HOST}/search?q=chaise&page=1` }))).toBe(true);
+    expect(await g.check(hop({ url: `https://${HOST}/search?q=chaise&page=2` }))).toBe(true);
+    expect(await g.check(hop({ url: `https://${HOST}/search?q=item-d-une-autre-api` }))).toBe(false);
+    expect(g.summary().reasons).toEqual(['param_value_untrusted']);
+  });
+
+  test('points 9 et 6 : goto littéral = URL connue ; vrai gabarit {param} = valeurs contrôlées (entrée du run ou nombre)', async () => {
+    const g = gate({ startUrl: `https://${HOST}/`, domUrls: async () => [], templates: [`https://${HOST}/fiche?id=7`, `https://${HOST}/search?q={q}`], runInputs: { q: 'chaise' } });
+    expect(await g.check(hop({ url: `https://${HOST}/fiche?id=7` }))).toBe(true);
+    expect(await g.check(hop({ url: `https://${HOST}/fiche?id=autre-valeur` }))).toBe(false);
+    expect(await g.check(hop({ url: `https://${HOST}/search?q=chaise` }))).toBe(true);
+    expect(await g.check(hop({ url: `https://${HOST}/search?q=item-d-une-autre-api` }))).toBe(false);
+  });
+
+  test('point 10 : le corps d’une écriture autorisée est contrôlé (valeur sensible refusée, corps ordinaire permis)', async () => {
+    const g = gate({ allowWriteActions: true });
+    expect(await g.check(hop({ url: `https://${HOST}/api/save`, method: 'POST', resourceType: 'XHR', mainFrame: false, body: 'a=1&b=ok' }))).toBe(true);
+    expect(await g.check(hop({ url: `https://${HOST}/api/save`, method: 'POST', resourceType: 'XHR', mainFrame: false, body: '{"k":"ZZ-SECRET-HEADER-VALUE"}' }))).toBe(false);
+    expect(g.summary().reasons).toEqual(['sensitive_value']);
+  });
+
+  test('point 1 : le journal porte au moins autant de refus d’écriture que la barrière en a vu, sans double compte', async () => {
+    const g = gate();
+    g.ensureWriteRefusals(1);
+    expect(g.summary()).toEqual({ blocked: 1, reasons: ['method_not_allowed'] });
+    g.ensureWriteRefusals(1);
+    expect(g.summary().blocked).toBe(1);
+    expect(await g.check(hop({ url: `https://${HOST}/submit`, method: 'POST' }))).toBe(false);
+    g.ensureWriteRefusals(2);
+    expect(g.summary()).toEqual({ blocked: 2, reasons: ['method_not_allowed', 'method_not_allowed'] });
+  });
+});
