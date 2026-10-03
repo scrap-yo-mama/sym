@@ -137,6 +137,17 @@ Demandez ensuite à votre IA : « Récupère les livres de books.toscrape.com, a
 
 ## 9. Créer votre première API
 
+Avant la première enquête, l'instance doit connaître le **contact de son opérateur** (vous) : le robot l'annonce aux sites qu'il consulte. Sans lui, la création d'une API est refusée (`409 instance_contact_missing`). Vous pouvez aussi le saisir dans **Réglages > Identité du robot** de la console.
+
+<!-- quickstart {"id":"robot-contact","mode":"run","expect":"instance_contact"} -->
+```bash
+curl -fsS -b cookies.txt -X PUT http://localhost:3100/api/settings/identity \
+  -H 'content-type: application/json' -H 'origin: http://localhost:3100' \
+  -d '{"instance_contact":"mailto:operateur@example.org"}'
+```
+
+Puis la création de l'API :
+
 <!-- quickstart {"id":"first-api","mode":"run","expect":"api_id"} -->
 ```bash
 curl -fsS -b cookies.txt -X POST http://localhost:3100/api/apis \
