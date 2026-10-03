@@ -6,8 +6,9 @@
 // `instance_read`). L'état d'enquête (`apis.investigation`) n'entre dans AUCUNE vue ; la phase seule est servie. L'admin
 // lit les métadonnées d'une API à session d'autrui (`metadata_only`), jamais ses schémas, son échantillon ni sa stratégie.
 import { randomBytes } from 'node:crypto';
+import type { PersistencePolicy } from '@runtime/core';
 import { parseNetworkPolicy, NetworkConfigError } from '@runtime/core/net';
-import { withActor } from '@runtime/db';
+import { persistenceStateOf, withActor } from '@runtime/db';
 import type pg from 'pg';
 import type { ServerContext } from '../context.js';
 import type { Actor } from '../routes/guard.js';
@@ -171,7 +172,7 @@ export const versionSummary = (v: VersionRow) => ({
  * Fiche d'une API visible de l'acteur (`ApiDetail`). Le rapport d'accès et les runs récents sont ceux de l'acteur ; la
  * politique du propriétaire (projet, finalité, base légale, budgets, rythme, proxys) n'est servie qu'à lui (constat B5).
  */
-export async function apiDetail(db: Queryable, actor: Actor, r: ApiRow) {
+export async function apiDetail(db: Queryable, actor: Actor, r: ApiRow, persistencePolicy: PersistencePolicy) {
   const current =
     r.current_strategy_version === null
       ? null
@@ -203,6 +204,8 @@ export async function apiDetail(db: Queryable, actor: Actor, r: ApiRow) {
         max_cost_usd: usd(r.max_cost_usd),
         budget_daily_usd: usd(r.budget_daily_usd),
         domain_pacing: r.domain_pacing,
+        // Mode « SYM ne lâche pas » (2.16, D-49) : interrupteur, plafond effectif, prochain essai et dépense du cycle.
+        persistence: await persistenceStateOf(db, { apiId: r.id, userId: actor.userId }, persistencePolicy),
       }
     : {};
   return {

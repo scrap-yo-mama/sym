@@ -140,7 +140,11 @@ beforeAll(async () => {
   await new Promise<void>((resolve) => hook.listen(0, '127.0.0.1', resolve));
   hookPort = (hook.address() as AddressInfo).port;
   // Cibles locales des tests (webhook) : drapeau réservé aux tests (NODE_ENV=test) et port de la cible seulement.
-  srv = await startTestServer('rest', { RUNTIME_TEST_ALLOW_PRIVATE: '1', NODE_ENV: 'test', ALLOWED_EGRESS_PORTS: String(hookPort), MAX_CONCURRENT_RUNS: '1000', MAX_ACTIVE_RUNS_PER_USER: '1000' }, { rest: { pollMs: 40, pingMs: 300, maxStreamsPerUser: 3, revalidateMs: 100 } });
+  srv = await startTestServer('rest', { RUNTIME_TEST_ALLOW_PRIVATE: '1', NODE_ENV: 'test', ALLOWED_EGRESS_PORTS: String(hookPort), MAX_CONCURRENT_RUNS: '1000', MAX_ACTIVE_RUNS_PER_USER: '1000' }, {
+    rest: { pollMs: 40, pingMs: 300, maxStreamsPerUser: 3, revalidateMs: 100 },
+    // Mémoire négative (2.12) simulée en service : sans elle, toute activation du mode répond 409 (défaut du dépôt).
+    persistence: { negativeMemory: { available: true, priorRefusal: async () => false } },
+  });
   const o = await runSetup(srv);
   const party = async (user: TestUser): Promise<Party> => ({ user, cookie: await signIn(srv, user) });
   owner = await party(o);
@@ -381,6 +385,62 @@ describe('catalogue (05 § 4.2) : création, liste, fiche, modification, suppres
       expect(res.body).not.toHaveProperty('input_schema');
     }
     expect((await api(b, 'GET', `/api/apis/${session.slug}`, '/api/apis/{slug}')).status).toBe(404);
+  });
+});
+
+describe('assert_persistence_opt_in_only : PATCH /api/apis/{slug} (D-49, mode « SYM ne lâche pas »)', () => {
+  test('clé d’API : 403 human_confirmation_required sans rien écrire ; session : activé, audité, état Api.persistence ; désactivation par clé permise ; 409 sans version courante', async () => {
+    const seeded = await seedApi(srv.db.url, a.user.id);
+    const path = `/api/apis/${seeded.slug}`;
+    const key = (await srv.app.inject({ method: 'POST', url: '/api/api-keys', headers: { cookie: a.cookie, origin: PUBLIC_URL }, payload: { label: 'zz persistence', scopes: ['apis:read', 'apis:write'], currentPassword: a.user.password } })).json<{ key: string }>().key;
+    const bearer = { authorization: `Bearer ${key}` };
+    const mode = async () => withClient(srv.db.url, async (c) => (await c.query<{ persistence_mode: boolean; persistence_budget_usd: string | null }>('SELECT persistence_mode, persistence_budget_usd::text FROM apis WHERE id = $1', [seeded.id])).rows[0]!);
+    const audits = async () =>
+      withClient(srv.db.url, async (c) => (await c.query<{ action: string; actor_via: string; outcome: string }>("SELECT action, actor_via, outcome FROM audit_events WHERE target_id = $1 AND action LIKE 'api.persistence%' ORDER BY at, id", [seeded.id])).rows);
+
+    // Fiche : le mode est désactivé par défaut et son état est exposé au propriétaire.
+    const before = await api(a, 'GET', path, '/api/apis/{slug}');
+    expect(before.status).toBe(200);
+    expect(before.body['persistence']).toMatchObject({ enabled: false, budget_usd: 1, attempt: 0, next_at: null, spent_usd: 0, in_progress: false, ended: null });
+
+    // Clé d’API (même avec apis:write) : 403 et rien n’est écrit (ni le mode, ni un autre champ de la même requête).
+    const denied = await api(null, 'PATCH', path, '/api/apis/{slug}', { persistence_mode: true, description: 'zz_test ne doit pas changer' }, bearer);
+    expect(denied.status).toBe(403);
+    expect(denied.body).toMatchObject({ error: { code: 'human_confirmation_required', what_to_do: expect.any(String) } });
+    expect(await mode()).toEqual({ persistence_mode: false, persistence_budget_usd: null });
+    expect(await count('SELECT count(*) FROM apis WHERE id = $1 AND description = $2', [seeded.id, 'zz_test ne doit pas changer'])).toBe(0);
+
+    // Session console : activé avec un plafond propre, audité avec l’acteur, état rendu par la fiche.
+    const enabled = await api(a, 'PATCH', path, '/api/apis/{slug}', { persistence_mode: true, persistence_budget_usd: 2 });
+    expect(enabled.status).toBe(200);
+    expect(enabled.body['persistence']).toMatchObject({ enabled: true, budget_usd: 2 });
+    expect(await mode()).toEqual({ persistence_mode: true, persistence_budget_usd: '2.000000' });
+    expect((await api(a, 'GET', path, '/api/apis/{slug}')).body['persistence']).toMatchObject({ enabled: true, budget_usd: 2 });
+
+    // Changer le plafond d’un mode actif est aussi un acte coûteux : 403 par clé.
+    expect((await api(null, 'PATCH', path, '/api/apis/{slug}', { persistence_budget_usd: 50 }, bearer)).status).toBe(403);
+    // Désactiver reste permis à toute clé du scope.
+    const off = await api(null, 'PATCH', path, '/api/apis/{slug}', { persistence_mode: false }, bearer);
+    expect(off.status).toBe(200);
+    expect(off.body['persistence']).toMatchObject({ enabled: false });
+    expect(await audits()).toEqual([
+      { action: 'api.persistence_enable', actor_via: 'apikey', outcome: 'denied' },
+      { action: 'api.persistence_enable', actor_via: 'ui', outcome: 'success' },
+      { action: 'api.persistence_enable', actor_via: 'apikey', outcome: 'denied' },
+      { action: 'api.persistence_disable', actor_via: 'apikey', outcome: 'success' },
+    ]);
+
+    // 409 persistence_not_eligible : API sans version courante (jamais validée), raison et marche à suivre.
+    const fresh = await seedApi(srv.db.url, a.user.id, { strategy: false, status: 'erreur' });
+    const refused = await api(a, 'PATCH', `/api/apis/${fresh.slug}`, '/api/apis/{slug}', { persistence_mode: true });
+    expect(refused.status).toBe(409);
+    expect(refused.body).toMatchObject({ error: { code: 'persistence_not_eligible', reason: 'no_current_version', what_to_do: expect.any(String) } });
+    // Plafond propre nul : 409 aussi (jamais un 400 de forme, jamais « illimité »).
+    expect((await api(a, 'PATCH', path, '/api/apis/{slug}', { persistence_mode: true, persistence_budget_usd: 0 })).body).toMatchObject({ error: { code: 'persistence_not_eligible', reason: 'budget_not_positive' } });
+
+    // Un autre membre ne voit jamais l’état du mode d’une API qui n’est pas la sienne.
+    await withClient(srv.db.url, (c) => c.query("UPDATE apis SET visibility = 'instance' WHERE id = $1", [seeded.id]));
+    expect((await api(b, 'GET', path, '/api/apis/{slug}')).body['persistence']).toBeUndefined();
   });
 });
 

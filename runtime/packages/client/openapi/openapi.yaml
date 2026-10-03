@@ -654,6 +654,11 @@ paths:
       operationId: updateApi
       tags: [apis]
       summary: Modifie description, politiques, schémas (→ ré-enquête), exposition MCP ; aucun réglage robots.txt (INV11)
+      description: >-
+        Mode « SYM ne lâche pas » (`persistence_mode`, `persistence_budget_usd`, D-49) : décidé avant tout autre champ ;
+        refusé, rien n'est écrit. Activer (ou changer le plafond d'un mode actif) par une clé d'API :
+        `403 human_confirmation_required` ; API sans version courante, mémoire des refus absente ou plafond effectif ≤ 0 :
+        `409 persistence_not_eligible` (`reason`) ; les deux avec `what_to_do`. Désactiver est permis à toute clé.
       parameters:
         - $ref: '#/components/parameters/Slug'
       requestBody:
@@ -676,7 +681,13 @@ paths:
         '401':
           $ref: '#/components/responses/Error'
         '403':
-          $ref: '#/components/responses/Error'
+          description: >-
+            `human_confirmation_required` : activation du mode « SYM ne lâche pas » (ou changement de son plafond) hors de
+            la console, par une clé d'API, avec `what_to_do` ; `insufficient_scope` : clé sans `apis:write`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
         '404':
           $ref: '#/components/responses/Error'
     delete:
@@ -3163,6 +3174,12 @@ components:
               type: string
             message:
               type: string
+            reason:
+              description: Raison stable d'un refus quand le code en a plusieurs (ex. `persistence_not_eligible`).
+              type: string
+            what_to_do:
+              description: Marche à suivre, en anglais (05 § 1).
+              type: string
     AuthError:
       description: Erreur de la bibliothèque d'authentification (format à plat, sans enveloppe `error`).
       type: object
@@ -3815,6 +3832,11 @@ components:
               type: [number, 'null']
             domain_pacing:
               $ref: '#/components/schemas/DomainPacing'
+            persistence:
+              description: Mode « SYM ne lâche pas » (D-49) ; propriétaire seulement.
+              oneOf:
+                - $ref: '#/components/schemas/ApiPersistence'
+                - type: 'null'
             cost_estimate:
               description: Coût estimé avant lancement (« ~0,002 $, médiane de 10 runs » ou « non estimé »).
               type: object
@@ -3956,6 +3978,51 @@ components:
           description: Budget quotidien de l'API ; `null` revient au défaut de l'instance (5 $).
           type: [number, 'null']
           minimum: 0
+        persistence_mode:
+          description: >-
+            Mode « SYM ne lâche pas » (D-49, 04 § 6), désactivé par défaut. L'activer est un acte humain : session de la
+            console seulement (`403 human_confirmation_required` par une clé d'API) ; le désactiver est permis à toute clé
+            du scope `apis:write`. Chaque bascule est auditée avec son acteur.
+          type: boolean
+        persistence_budget_usd:
+          description: >-
+            Plafond propre du mode, cumulé depuis l'entrée en `erreur` ; `null` revient à
+            `PERSISTENCE_BUDGET_USD_DEFAULT` (jamais illimité). Le changer sur un mode actif exige la console ; un plafond
+            effectif ≤ 0 répond `409 persistence_not_eligible`.
+          type: [number, 'null']
+          maximum: 1000
+    ApiPersistence:
+      description: >-
+        État du mode « SYM ne lâche pas » (D-49), propriétaire seulement : interrupteur, plafond effectif (jamais
+        illimité), tentatives du cycle en cours, prochain essai, dépense, tentative en cours, fin du mode et sa raison.
+      type: object
+      additionalProperties: false
+      required: [enabled, budget_usd, attempt, next_at, spent_usd, in_progress, entered_error_at, ended, ended_reason]
+      properties:
+        enabled:
+          type: boolean
+        budget_usd:
+          type: number
+        attempt:
+          type: integer
+          minimum: 0
+        next_at:
+          type: [string, 'null']
+          format: date-time
+        spent_usd:
+          type: number
+        in_progress:
+          type: boolean
+        entered_error_at:
+          type: [string, 'null']
+          format: date-time
+        ended:
+          oneOf:
+            - type: string
+              enum: [refused, ineligible, exhausted]
+            - type: 'null'
+        ended_reason:
+          type: [string, 'null']
     ApiExport:
       description: >-
         Export portable d'une API (16 § 6, tâche 3.12), format `scrapyomama.api` 1.0, clés triées. AUCUN champ pour une
@@ -5034,7 +5101,7 @@ components:
     # ——— Webhooks (Standard Webhooks, 08 § 5) ———
     WebhookEvent:
       type: string
-      enum: [run.succeeded, run.failed, api.status_changed, items.new]
+      enum: [run.succeeded, run.failed, api.status_changed, items.new, api.persistence_attempt]
     WebhookDelivery:
       type: object
       additionalProperties: false

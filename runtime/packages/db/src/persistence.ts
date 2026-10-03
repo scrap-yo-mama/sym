@@ -352,38 +352,44 @@ export type ApiPersistenceState = {
   ended_reason: string | null;
 };
 
-/** État `Api.persistence` (fiche API : prochain essai, dépense), lu comme le propriétaire. `null` : API introuvable pour lui. */
+/**
+ * État `Api.persistence` (fiche API : prochain essai, dépense) dans la transaction de l'appelant, lu comme le propriétaire
+ * (RLS : `api_persistence` n'est lisible que de lui). `null` : API introuvable pour lui.
+ */
+export async function persistenceStateOf(db: Queryable, input: { apiId: string; userId: string }, policy: PersistencePolicy = PERSISTENCE_DEFAULTS): Promise<ApiPersistenceState | null> {
+  const { rows } = await db.query<{
+    persistence_mode: boolean;
+    persistence_budget_usd: string | null;
+    attempt: number | null;
+    next_at: Date | null;
+    spent_usd: string | null;
+    run_id: string | null;
+    entered_error_at: Date | null;
+    ended: PersistenceEnded | null;
+    ended_reason: string | null;
+  }>(
+    `SELECT a.persistence_mode, a.persistence_budget_usd::text, p.attempt, p.next_at, p.spent_usd::text, p.run_id, p.entered_error_at, p.ended, p.ended_reason
+     FROM apis a LEFT JOIN api_persistence p ON p.api_id = a.id WHERE a.id = $1 AND a.owner_id = $2`,
+    [input.apiId, input.userId],
+  );
+  const row = rows[0];
+  if (row === undefined) return null;
+  return {
+    enabled: row.persistence_mode,
+    budget_usd: effectivePersistenceBudgetUsd(policy, row.persistence_budget_usd === null ? null : Number(row.persistence_budget_usd)),
+    attempt: row.attempt ?? 0,
+    next_at: row.next_at?.toISOString() ?? null,
+    spent_usd: usd(row.spent_usd),
+    in_progress: row.run_id !== null,
+    entered_error_at: row.entered_error_at?.toISOString() ?? null,
+    ended: row.ended,
+    ended_reason: row.ended_reason,
+  };
+}
+
+/** `persistenceStateOf` dans sa propre transaction, comme le propriétaire. */
 export async function readPersistenceState(pool: pg.Pool, input: { apiId: string; userId: string }, policy: PersistencePolicy = PERSISTENCE_DEFAULTS): Promise<ApiPersistenceState | null> {
-  return withActor(pool, { userId: input.userId, role: 'member' }, async (tx) => {
-    const { rows } = await tx.query<{
-      persistence_mode: boolean;
-      persistence_budget_usd: string | null;
-      attempt: number | null;
-      next_at: Date | null;
-      spent_usd: string | null;
-      run_id: string | null;
-      entered_error_at: Date | null;
-      ended: PersistenceEnded | null;
-      ended_reason: string | null;
-    }>(
-      `SELECT a.persistence_mode, a.persistence_budget_usd::text, p.attempt, p.next_at, p.spent_usd::text, p.run_id, p.entered_error_at, p.ended, p.ended_reason
-       FROM apis a LEFT JOIN api_persistence p ON p.api_id = a.id WHERE a.id = $1 AND a.owner_id = $2`,
-      [input.apiId, input.userId],
-    );
-    const row = rows[0];
-    if (row === undefined) return null;
-    return {
-      enabled: row.persistence_mode,
-      budget_usd: effectivePersistenceBudgetUsd(policy, row.persistence_budget_usd === null ? null : Number(row.persistence_budget_usd)),
-      attempt: row.attempt ?? 0,
-      next_at: row.next_at?.toISOString() ?? null,
-      spent_usd: usd(row.spent_usd),
-      in_progress: row.run_id !== null,
-      entered_error_at: row.entered_error_at?.toISOString() ?? null,
-      ended: row.ended,
-      ended_reason: row.ended_reason,
-    };
-  });
+  return withActor(pool, { userId: input.userId, role: 'member' }, (tx) => persistenceStateOf(tx, input, policy));
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -445,18 +451,26 @@ export async function runPersistenceAttempt(pool: pg.Pool, ctx: PersistenceConte
     const api = await loadApi(tx, apiId, true);
     if (api === null || !api.persistence_mode) return { kind: 'idle', reason: 'mode_disabled' };
     if (api.status !== 'erreur') return { kind: 'idle', reason: `status_${api.status}` };
+    // Propriétaire désactivé ou supprimé (SQL, CLI, admin) : plus rien en son nom — ni trafic, ni dépense (13 § 6).
+    const owner = (await tx.query<{ status: string }>('SELECT status FROM users WHERE id = $1', [api.owner_id])).rows[0];
+    if (owner?.status !== 'active') {
+      await endCycle(tx, r, api, cycle, 'ineligible', 'owner_inactive', usd(cycle.spent_usd));
+      return { kind: 'ended', ended: 'ineligible', reason: 'owner_inactive' };
+    }
     const nextAt = cycle.next_at ?? new Date(cycle.entered_error_at.getTime() + persistenceDelayMs(r.policy, cycle.attempt, r.random));
     if (r.now.getTime() < nextAt.getTime()) {
       await wake(tx, r, apiId, nextAt);
       return { kind: 'not_due', nextAt };
     }
     const spent = usd(cycle.spent_usd);
+    const modeBudgetUsd = effectivePersistenceBudgetUsd(r.policy, api.persistence_budget_usd === null ? null : Number(api.persistence_budget_usd));
+    const dailySpent = await dailySpentUsd(tx, apiId, r.now);
     const cap = persistenceCapReached({
       now: r.now,
       enteredErrorAt: cycle.entered_error_at,
       spentUsd: spent,
-      budgetUsd: effectivePersistenceBudgetUsd(r.policy, api.persistence_budget_usd === null ? null : Number(api.persistence_budget_usd)),
-      dailySpentUsd: await dailySpentUsd(tx, apiId, r.now),
+      budgetUsd: modeBudgetUsd,
+      dailySpentUsd: dailySpent,
       budgetDailyUsd: Number(api.budget_daily_usd),
       maxDays: r.policy.maxDays,
     });
@@ -525,9 +539,13 @@ export async function runPersistenceAttempt(pool: pg.Pool, ctx: PersistenceConte
       },
     });
     if (!step.ok) throw new Error(`tentative de persistance refusée par la machine à états : ${step.rejected}`);
-    // Ré-enquête sur le schéma VALIDÉ : le contrat ne change jamais par une tentative (INV1) ; validation automatique.
-    const request = { ...(state?.request ?? {}), auto_validate: true };
-    const next = { ...(state ?? {}), request, validated_schema: api.output_schema, validated_by: state?.['validated_by'] ?? 'user', spent_usd: 0, elapsed_ms: 0 };
+    // Ré-enquête sur le schéma VALIDÉ : le contrat ne change jamais par une tentative (INV1). La demande enregistrée
+    // (`request`, dont `auto_validate`) reste celle du propriétaire : une ré-enquête ultérieure la réutilise, jamais avec
+    // une validation automatique qu'il n'a pas choisie (19 § 6) ; avec `validated_schema` posé, l'exécuteur ne propose
+    // aucun schéma. Plafond STRICT de la tentative (`budget_cap_usd`, lu par l'exécuteur) : la demande, le reste du
+    // plafond du mode et le reste du budget du jour, jamais au-delà ; une nouvelle enquête repart sans lui.
+    const budgetCapUsd = usd(Math.max(0, Math.min(Number(state?.request?.['budget_usd'] ?? Number.POSITIVE_INFINITY), modeBudgetUsd - spent, Number(api.budget_daily_usd) - dailySpent)));
+    const next = { ...(state ?? {}), validated_schema: api.output_schema, spent_usd: 0, elapsed_ms: 0, budget_cap_usd: budgetCapUsd };
     await tx.query("UPDATE apis SET investigation = $2::jsonb, investigation_phase = 'testing', updated_at = now() WHERE id = $1", [apiId, JSON.stringify(next)]);
     const { runId } = await createRun(tx, r.queue, { apiId, ownerId: api.owner_id, trigger: 'schedule', kind: 'investigation' });
     await tx.query(

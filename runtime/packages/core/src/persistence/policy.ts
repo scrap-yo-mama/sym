@@ -8,6 +8,7 @@
 // - créneaux : 1 h, 6 h, 24 h puis chaque jour (`PERSISTENCE_SCHEDULE`, à valider), jitter ±20 % ;
 // - reports SANS compter la tentative : disjoncteur du domaine ouvert, `Retry-After` en cours, bail de réparation tenu,
 //   créneau du domaine pris par une autre API.
+import { isGeoRestrictionDetail } from '../exec/classify.js';
 import type { FailureClass } from '../model/enums.js';
 import { BACKOFF_CLASSES, BLOCKING_CLASSES, INVESTIGATION_ACTION_CLASSES } from '../status/types.js';
 
@@ -125,9 +126,12 @@ export type PersistenceFailure = {
   httpStatus?: number | null;
 };
 
-/** 451 ou géo-restriction (`network`, code de journal `geo_restriction` / `geo_restricted`, 04 §7) : un « non » légal ou géographique. */
+/**
+ * 451 ou géo-restriction (`network`, tout code de journal `geo_*` du classifieur : `geo_restriction`, `geo_redirect`
+ * — redirection de pays —, 04 §7) : un « non » légal ou géographique.
+ */
 export function isGeoRestriction(failure: PersistenceFailure): boolean {
-  return failure.httpStatus === 451 || (failure.failureClass === 'network' && /^geo_restrict(?:ion|ed)$/.test(failure.detail ?? ''));
+  return failure.httpStatus === 451 || (failure.failureClass === 'network' && isGeoRestrictionDetail(failure.detail));
 }
 
 const includes = (list: readonly string[], value: string | null): boolean => value !== null && list.includes(value);

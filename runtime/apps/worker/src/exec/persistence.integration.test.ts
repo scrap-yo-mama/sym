@@ -130,30 +130,48 @@ afterAll(async () => {
   await client?.close();
 });
 
+/**
+ * API saine (enquête réelle, validation automatique demandée à la création), puis cassée (rejeu en extraction,
+ * réparation abandonnée : 11 puis 13) avec le mode activé en console. `startAt` : horloge simulée du mode.
+ */
+async function healthyThenBroken(slug: string, startAt: number, budgetUsd?: number) {
+  fake.setScenario(MODEL, [scripted.json(PROPOSAL)]);
+  const apiId = (await pool.query<{ id: string }>("INSERT INTO apis (slug, owner_id, domain_pacing) VALUES ($2, $1, '{\"min_delay_ms\": 5, \"max_requests_per_run\": 200, \"max_wait_ms\": 60000}') RETURNING id", [A, slug])).rows[0]!.id;
+  const { runId: first } = await withActor(pool, actorA, (tx) => startInvestigation(tx, queue, { apiId, ownerId: A, trigger: 'rest', request: { url: `http://${API_HOST}:${client.server.port}/`, description: 'liste des contacts', auto_validate: true } }));
+  expect(await waitRun(first)).toMatchObject({ state: 'succeeded', strategy_version: 1 });
+  // La validation automatique de la création n'est pas celle d'une ré-enquête ultérieure : le propriétaire la coupe.
+  await pool.query("UPDATE apis SET investigation = jsonb_set(investigation, '{request,auto_validate}', 'false') WHERE id = $1", [apiId]);
+  const clock = { at: startAt };
+  const ctx: PersistenceContext = { queue, now: () => new Date(clock.at), random: () => 0.5, negativeMemory: { available: true, priorRefusal: async () => false } };
+  expect(await setPersistenceMode(pool, ctx, { apiId, actor: { userId: A, via: 'ui' }, enable: true, ...(budgetUsd === undefined ? {} : { budgetUsd }) })).toEqual({ ok: true });
+  const replay = (await pool.query<{ id: string }>("INSERT INTO runs (api_id, owner_id, api_owner_id, trigger, state, failure_class, finished_at) VALUES ($1, $2, $2, 'ui', 'failed', 'extraction', now()) RETURNING id", [apiId, A])).rows[0]!.id;
+  for (const event of [{ type: 'run_failed', failureClass: 'extraction' }, { type: 'repair_failed', cause: 'budget_exhausted' }] as const) {
+    expect((await applyStatusAndNotify(pool, queue, { apiId, runId: replay, event, clock: { now: () => new Date(clock.at) } }, { now: () => new Date(clock.at), persistence: ctx })).ok).toBe(true);
+  }
+  expect(await readPersistenceState(pool, { apiId, userId: A })).toMatchObject({ enabled: true, attempt: 0, next_at: new Date(clock.at + 3_600_000).toISOString() });
+  return { apiId, ctx, clock };
+}
+
+const finishedEvent = async (runId: string) =>
+  (await pool.query<{ payload: { outcome: string; failure_class?: string; detail?: string; budget: { max_usd: number } } }>(
+    "SELECT payload FROM investigation_events WHERE run_id = $1 AND kind = 'investigation.finished' ORDER BY seq DESC LIMIT 1",
+    [runId],
+  )).rows[0]?.payload;
+
 describe('assert_persistence_schedule_and_caps (worker réel)', () => {
   test('tentative due : 16, ré-enquête sur le schéma validé sans appel LLM, retour à sain par la 1, cycle clos, bail rendu', async () => {
-    fake.setScenario(MODEL, [scripted.json(PROPOSAL)]);
-    const apiId = (await pool.query<{ id: string }>("INSERT INTO apis (slug, owner_id, domain_pacing) VALUES ('zz_test_persist', $1, '{\"min_delay_ms\": 5, \"max_requests_per_run\": 200, \"max_wait_ms\": 60000}') RETURNING id", [A])).rows[0]!.id;
-    const { runId: first } = await withActor(pool, actorA, (tx) => startInvestigation(tx, queue, { apiId, ownerId: A, trigger: 'rest', request: { url: `http://${API_HOST}:${client.server.port}/`, description: 'liste des contacts', auto_validate: true } }));
-    expect(await waitRun(first)).toMatchObject({ state: 'succeeded', strategy_version: 1 });
+    const { apiId, ctx, clock: c } = await healthyThenBroken('zz_test_persist', Date.now(), 0.4);
     const contract = (await pool.query<{ output_schema: unknown }>('SELECT output_schema FROM apis WHERE id = $1', [apiId])).rows[0]!.output_schema;
     const llmCalls = fake.requests;
-
-    // L'API casse (rejeu en extraction, réparation abandonnée) : 11 puis 13, le mode était activé en console.
-    let clock = Date.now();
-    const ctx: PersistenceContext = { queue, now: () => new Date(clock), random: () => 0.5, negativeMemory: { available: true, priorRefusal: async () => false } };
-    expect(await setPersistenceMode(pool, ctx, { apiId, actor: { userId: A, via: 'ui' }, enable: true })).toEqual({ ok: true });
-    const replay = (await pool.query<{ id: string }>("INSERT INTO runs (api_id, owner_id, api_owner_id, trigger, state, failure_class, finished_at) VALUES ($1, $2, $2, 'ui', 'failed', 'extraction', now()) RETURNING id", [apiId, A])).rows[0]!.id;
-    for (const event of [{ type: 'run_failed', failureClass: 'extraction' }, { type: 'repair_failed', cause: 'budget_exhausted' }] as const) {
-      expect((await applyStatusAndNotify(pool, queue, { apiId, runId: replay, event, clock: { now: () => new Date(clock) } }, { now: () => new Date(clock), persistence: ctx })).ok).toBe(true);
-    }
-    expect(await readPersistenceState(pool, { apiId, userId: A })).toMatchObject({ enabled: true, attempt: 0, next_at: new Date(clock + 3_600_000).toISOString() });
-
-    clock += 3_600_000;
+    c.at += 3_600_000;
     const tick = await runPersistenceAttempt(pool, ctx, apiId);
     expect(tick).toMatchObject({ kind: 'launched', attempt: 1 });
     const attempt = await waitRun((tick as { runId: string }).runId);
     expect(attempt).toMatchObject({ state: 'succeeded', strategy_version: 2 });
+    // Plafond strict : l'enquête de la tentative est bornée par le plafond du mode (0,4 $), pas par sa demande (1 $).
+    expect((await finishedEvent((tick as { runId: string }).runId))?.budget.max_usd).toBe(0.4);
+    // La demande du propriétaire reste sans validation automatique.
+    expect((await pool.query<{ v: boolean }>("SELECT (investigation -> 'request' ->> 'auto_validate')::boolean AS v FROM apis WHERE id = $1", [apiId])).rows[0]!.v).toBe(false);
 
     const api = (await pool.query<{ status: string; output_schema: unknown; repair_lease_owner: string | null; current_strategy_version: number }>(
       'SELECT status, output_schema, repair_lease_owner, current_strategy_version FROM apis WHERE id = $1',
@@ -166,5 +184,36 @@ describe('assert_persistence_schedule_and_caps (worker réel)', () => {
     const transitions = (await pool.query<{ from_status: string; to_status: string; reason: string }>('SELECT from_status, to_status, reason FROM status_events WHERE api_id = $1 ORDER BY id', [apiId])).rows.map((r) => `${r.from_status}>${r.to_status}:${r.reason}`);
     expect(transitions.slice(-3)).toEqual(['reparation>erreur:repair_budget_exhausted', 'erreur>enquete:persistence_attempt', 'enquete>sain:strategy_conform']);
     expect(await readPersistenceState(pool, { apiId, userId: A })).toMatchObject({ enabled: true, attempt: 0, next_at: null, in_progress: false });
+  }, 120_000);
+});
+
+describe('assert_persistence_never_on_refusal (worker réel)', () => {
+  // La page répond, la source de données répond 451 : à la reconnaissance (première page), ou pendant les essais seulement
+  // (page 2 : tous les couples épuisés, le dernier sur un 451). Dans les deux cas, le run garde `network/geo_restriction`,
+  // le mode s'arrête (refused) et plus aucune tentative ne part. Horloges du mode décalées : le créneau du domaine pris
+  // par un test précédent est passé.
+  test.each([
+    ['data_451', 3, 'reconnaissance'],
+    ['data_451_page_2', 6, 'testing'],
+  ] as const)('451 de la source de données (%s) pendant une tentative : run network/geo_restriction, fin du mode (refused), 0 tentative ensuite', async (mutation, offsetDays, at) => {
+    const { apiId, ctx, clock: c } = await healthyThenBroken(`zz_test_persist_${mutation}`, Date.now() + offsetDays * 86_400_000);
+    await client.control({ op: 'site', site: 'api_json', mutation });
+    try {
+      c.at += 3_600_000;
+      const tick = await runPersistenceAttempt(pool, ctx, apiId);
+      expect(tick).toMatchObject({ kind: 'launched', attempt: 1 });
+      const runId = (tick as { runId: string }).runId;
+      expect(await waitRun(runId)).toMatchObject({ state: 'failed', failure_class: 'network' });
+      expect((await pool.query<{ error_detail: string }>('SELECT error_detail FROM runs WHERE id = $1', [runId])).rows[0]!.error_detail).toBe('geo_restriction');
+      expect(await finishedEvent(runId)).toMatchObject({ outcome: 'failed', failure_class: 'network', detail: 'geo_restriction', at });
+      await vi.waitFor(async () => expect(await readPersistenceState(pool, { apiId, userId: A })).toMatchObject({ ended: 'refused', ended_reason: 'geo_restricted', next_at: null }), { timeout: 10_000, interval: 100 });
+      for (const days of [1, 2, 5]) {
+        c.at += days * 86_400_000;
+        expect((await runPersistenceAttempt(pool, ctx, apiId)).kind).toBe('idle');
+      }
+      expect((await pool.query<{ n: number }>("SELECT count(*)::int AS n FROM runs WHERE api_id = $1 AND kind = 'investigation'", [apiId])).rows[0]!.n).toBe(2);
+    } finally {
+      await client.control({ op: 'site', site: 'api_json', mutation: 'none' });
+    }
   }, 120_000);
 });

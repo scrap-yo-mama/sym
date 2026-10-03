@@ -14,6 +14,8 @@ import {
   schemaHasPersonalFields,
   type Execution,
   validateOutput,
+  type PersistenceActivationDecision,
+  type PersistenceNotEligibleReason,
   type StatusEventInput,
 } from '@runtime/core';
 import {
@@ -21,8 +23,10 @@ import {
   asActorInTransaction,
   createRun,
   InvestigationStateError,
+  PersistenceApiNotFoundError,
   removeScheduleMirror,
   resolvedRulesPreview,
+  setPersistenceMode,
   StorageFullError,
   startInvestigation,
   validateInvestigationSchema,
@@ -115,6 +119,9 @@ const patchSchema = {
     contains_personal_data: { type: 'boolean' },
     max_cost_usd: { type: ['number', 'null'], minimum: 0, maximum: 1000 },
     budget_daily_usd: { type: ['number', 'null'], minimum: 0, maximum: 100000 },
+    // Mode « SYM ne lâche pas » (2.16, D-49) : un plafond ≤ 0 répond 409 persistence_not_eligible (jamais « illimité »).
+    persistence_mode: { type: 'boolean' },
+    persistence_budget_usd: { type: ['number', 'null'], maximum: 1000 },
   },
 } as const;
 
@@ -132,6 +139,22 @@ type PatchBody = {
   contains_personal_data?: boolean;
   max_cost_usd?: number | null;
   budget_daily_usd?: number | null;
+  persistence_mode?: boolean;
+  persistence_budget_usd?: number | null;
+};
+
+/** Marche à suivre d'une activation refusée du mode « SYM ne lâche pas » (05 § 4.3 ; `what_to_do` en anglais, 05 § 1). */
+const PERSISTENCE_WHAT_TO_DO: Record<PersistenceNotEligibleReason | 'human_confirmation_required', string> = {
+  human_confirmation_required: 'Turn on "SYM never gives up" in the console, on the API page: it is a human decision. An API key can only turn it off.',
+  no_current_version: 'Wait until the API has a validated strategy (a successful investigation), then turn the mode on in the console.',
+  negative_memory_unavailable: 'The refusal memory is not available on this instance yet: the mode cannot be turned on. Use "Investigate again" instead.',
+  budget_not_positive: 'Set persistence_budget_usd above 0, or leave it null to use PERSISTENCE_BUDGET_USD_DEFAULT (which must be above 0).',
+};
+const PERSISTENCE_MESSAGE: Record<PersistenceNotEligibleReason | 'human_confirmation_required', string> = {
+  human_confirmation_required: 'activer « SYM ne lâche pas » est un acte humain : dans la console seulement, jamais par une clé d’API (une clé peut le désactiver)',
+  no_current_version: 'mode « SYM ne lâche pas » impossible : l’API n’a aucune version de stratégie validée',
+  negative_memory_unavailable: 'mode « SYM ne lâche pas » impossible : la mémoire des refus n’est pas en service sur cette instance',
+  budget_not_positive: 'mode « SYM ne lâche pas » impossible : plafond effectif nul ou négatif (jamais illimité)',
 };
 
 const validateSchemaBody = {
@@ -335,7 +358,7 @@ export function apiRoutes(app: FastifyInstance, ctx: ServerContext): void {
       const actor = request.actor!;
       const view = await withActor(ctx.pool, actor, async (db) => {
         const row = await readApiBySlug(db, request.params.slug);
-        return row === null ? null : apiDetail(db, actor, row);
+        return row === null ? null : apiDetail(db, actor, row, ctx.persistence.policy);
       });
       if (view !== null) return view;
       // Admin et owner : métadonnées d'une API à session d'autrui (13 § 2), audité ; sinon 404 uniforme.
@@ -363,6 +386,28 @@ export function apiRoutes(app: FastifyInstance, ctx: ServerContext): void {
       if (error instanceof ApiInputError) return sendError(reply, 400, error.code, error.message);
       throw error;
     }
+    // Mode « SYM ne lâche pas » (D-49) : décidé AVANT tout autre champ ; refusé (403 hors console, 409 inéligible), rien
+    // n'est écrit — ni le mode, ni un autre champ de la requête ; la bascule, refusée ou non, est auditée avec son acteur.
+    if (body.persistence_mode !== undefined || body.persistence_budget_usd !== undefined) {
+      let decision: PersistenceActivationDecision;
+      try {
+        decision = await setPersistenceMode(ctx.pool, { queue: await ctx.jobs(), policy: ctx.persistence.policy, ...(ctx.persistence.negativeMemory === undefined ? {} : { negativeMemory: ctx.persistence.negativeMemory }) }, {
+          apiId: api.id,
+          actor: { userId: actor.userId, via: actor.via === 'ui' ? 'ui' : 'apikey', ref: actor.apiKey?.prefix ?? null, role: actor.role },
+          ...(body.persistence_mode === undefined ? {} : { enable: body.persistence_mode }),
+          ...(body.persistence_budget_usd === undefined ? {} : { budgetUsd: body.persistence_budget_usd }),
+        });
+      } catch (error) {
+        if (error instanceof PersistenceApiNotFoundError) return notFound(reply);
+        throw error;
+      }
+      if (!decision.ok) {
+        const key = decision.code === 'human_confirmation_required' ? decision.code : decision.reason;
+        return reply.code(decision.status).send({
+          error: { code: decision.code, message: PERSISTENCE_MESSAGE[key], ...(decision.code === 'persistence_not_eligible' ? { reason: decision.reason } : {}), what_to_do: PERSISTENCE_WHAT_TO_DO[key] },
+        });
+      }
+    }
     const sets: string[] = [];
     const params: unknown[] = [api.id, actor.userId];
     const set = (column: string, value: unknown, cast = '') => {
@@ -386,7 +431,7 @@ export function apiRoutes(app: FastifyInstance, ctx: ServerContext): void {
     const view = await withActor(ctx.pool, actor, async (db) => {
       if (sets.length > 0) await db.query(`UPDATE apis SET ${sets.join(', ')}, updated_at = now() WHERE id = $1 AND owner_id = $2`, params);
       const row = await readApiById(db, api.id);
-      return row === null ? null : apiDetail(db, actor, row);
+      return row === null ? null : apiDetail(db, actor, row, ctx.persistence.policy);
     });
     if (view === null) return notFound(reply);
     await audit(ctx, request, actor, { action: 'api.updated', targetType: 'api', targetId: api.id, outcome: 'success', meta: { fields: Object.keys(body) } });
@@ -725,7 +770,7 @@ export function apiRoutes(app: FastifyInstance, ctx: ServerContext): void {
     await audit(ctx, request, actor, { action: 'api.reverted', targetType: 'api', targetId: api.id, outcome: 'success', meta: { to_version: v.version } });
     const view = await withActor(ctx.pool, actor, async (db) => {
       const row = await readApiById(db, api.id);
-      return row === null ? null : apiDetail(db, actor, row);
+      return row === null ? null : apiDetail(db, actor, row, ctx.persistence.policy);
     });
     return view ?? notFound(reply);
   });

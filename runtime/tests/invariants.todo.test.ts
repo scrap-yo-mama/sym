@@ -99,8 +99,8 @@ describe("invariants (à implémenter)", () => {
   test.todo("assert_budget_and_stop_controls — Chromium (Playwright) : attempt.finished émis → [data-testid=attempt] visible en moins de 2 s"); // 06 § 4.3, tâche(s) 3.6 (3.5 : rendu SSR, sans navigateur)
   test.todo("assert_run_detail_error_open"); // 06 § 4.3 : écran Détail d'un run, confié à aucune tâche (ADR 0003 : 3.4 ou tâche nouvelle), E2E 3.6
   // 2.16 (D-49, mode « SYM ne lâche pas ») : décisions pures dans packages/core/src/persistence/persistence.unit.test.ts, base et
-  // horloge simulée dans packages/db/src/persistence.integration.test.ts, modèle de la machine dans machine.prop.test.ts. Restent :
-  test.todo("assert_persistence_opt_in_only — route PATCH /api/apis/{slug} (scope apis:write) branchée sur setPersistenceMode : clé hors console → 403 human_confirmation_required, 409 persistence_not_eligible avec what_to_do"); // D-49, tâche(s) 3.1 (route REST), joué en 4.2
+  // horloge simulée dans packages/db/src/persistence.integration.test.ts, modèle de la machine dans machine.prop.test.ts, route
+  // PATCH /api/apis/{slug} et état Api.persistence dans apps/server/src/rest.integration.test.ts. Reste le volet console :
   test.todo("assert_persistence_schedule_and_caps — volet console : interrupteur (libellé PERSISTENCE_SWITCH_COPY) et état Api.persistence (prochain essai, dépense) sur la fiche API, récit narrative.persistence.*"); // D-49, tâche(s) 3.5 + 3.17 (3.17 non fusionnée), joué en 4.2
   // 3.9 : assert_a11y_axe_clean, assert_keyboard_only_path, assert_live_regions_plan sont jugés en Chromium (apps/web/e2e/*.e2e.ts,
   // pnpm test:e2e) et leur couverture est gardée par apps/web/src/a11y.unit.test.ts ; 3.6 les rejoue sur l'instance réelle.

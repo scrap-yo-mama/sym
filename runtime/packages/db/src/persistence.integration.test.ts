@@ -12,6 +12,7 @@ import pg from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'vitest';
 import { createTestDatabase, type TestDatabase } from '../../../tests/helpers/pg.js';
 import { loadMigrations, migrateDown, migrateUp } from './migrate.js';
+import { deactivateUser, deleteOrAnonymizeUser, transferApisWithoutSession } from './accounts.js';
 import { applyStatusAndNotify, finishRunAndNotify } from './notify.js';
 import {
   PERSISTENCE_QUEUE,
@@ -113,7 +114,7 @@ async function newApi(opts: ApiOpts = {}): Promise<string> {
   return rows[0]!.id;
 }
 
-const consoleActor = (userId = A) => ({ userId, via: 'ui' as const });
+const consoleActor = (userId: string = A) => ({ userId, via: 'ui' as const });
 const keyActor = (userId = A) => ({ userId, via: 'apikey' as const, ref: 'sy_live_zz01' });
 const enable = (apiId: string, actor: PersistenceToggle['actor'] = consoleActor()) => setPersistenceMode(pool, ctx, { apiId, actor, enable: true });
 
@@ -209,6 +210,74 @@ describe('assert_persistence_opt_in_only', () => {
     expect(await attemptRuns(api)).toBe(0);
     expect(await hooks(api, 'api.persistence_attempt')).toEqual([]);
   });
+
+  /** Compte propre au test (désactivé, supprimé ou vidé par un transfert) ; abonné aux webhooks du mode. */
+  async function newUser(label: string): Promise<string> {
+    const id = randomUUID();
+    await pool.query("INSERT INTO users (id, email, status) VALUES ($1, $2, 'active')", [id, `zz_test_${label}_${id.slice(0, 8)}@example.test`]);
+    return id;
+  }
+  const modeOf = async (apiId: string) =>
+    (await pool.query<{ persistence_mode: boolean; persistence_budget_usd: string | null; cycles: number }>(
+      'SELECT persistence_mode, persistence_budget_usd::text, (SELECT count(*)::int FROM api_persistence WHERE api_id = $1) AS cycles FROM apis WHERE id = $1',
+      [apiId],
+    )).rows[0]!;
+  async function inTx<T>(fn: (client: pg.PoolClient) => Promise<T>): Promise<T> {
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      const out = await fn(client);
+      await client.query('COMMIT');
+      return out;
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  test('compte désactivé ou supprimé : le mode s’arrête (persistence_mode coupé, cycle retiré), aucune tentative en son nom', async () => {
+    const closers: ((c: pg.PoolClient, u: string) => Promise<unknown>)[] = [(c, u) => deactivateUser(c, u, null), (c, u) => deleteOrAnonymizeUser(c, u, A)];
+    for (const close of closers) {
+      const owner = await newUser('closed');
+      const api = await newApi({ owner, budget: 0.5 });
+      expect(await enable(api, consoleActor(owner))).toEqual({ ok: true });
+      await breakApi(api);
+      expect(await modeOf(api)).toMatchObject({ persistence_mode: true, cycles: 1 });
+      await inTx((c) => close(c, owner));
+      expect(await modeOf(api)).toMatchObject({ persistence_mode: false, cycles: 0 });
+      clock += HOUR;
+      expect(await runPersistenceAttempt(pool, ctx, api)).toMatchObject({ kind: 'idle' });
+      expect(await attemptRuns(api)).toBe(0);
+    }
+  });
+
+  test('propriétaire inactif hors des chemins prévus (SQL, CLI) : le cycle finit (ineligible, owner_inactive) sans tentative', async () => {
+    const owner = await newUser('inactive');
+    const api = await newApi({ owner });
+    await enable(api, consoleActor(owner));
+    await breakApi(api);
+    await pool.query("UPDATE users SET status = 'disabled', disabled_at = now() WHERE id = $1", [owner]);
+    clock += HOUR;
+    expect(await runPersistenceAttempt(pool, ctx, api)).toEqual({ kind: 'ended', ended: 'ineligible', reason: 'owner_inactive' });
+    expect(await attemptRuns(api)).toBe(0);
+    expect(await statusOf(api)).toMatchObject({ status: 'erreur' });
+  });
+
+  test('transfert d’API par un admin : le mode ne suit jamais l’API (acte humain du nouveau propriétaire exigé)', async () => {
+    const from = await newUser('from');
+    const to = await newUser('to');
+    const api = await newApi({ owner: from, budget: 3 });
+    await enable(api, consoleActor(from));
+    await breakApi(api);
+    expect(await modeOf(api)).toMatchObject({ persistence_mode: true, persistence_budget_usd: '3.000000', cycles: 1 });
+    await inTx((c) => transferApisWithoutSession(c, from, to));
+    expect(await modeOf(api)).toEqual({ persistence_mode: false, persistence_budget_usd: null, cycles: 0 });
+    clock += HOUR;
+    expect(await runPersistenceAttempt(pool, ctx, api)).toMatchObject({ kind: 'idle' });
+    expect(await attemptRuns(api)).toBe(0);
+  });
 });
 
 describe('assert_persistence_schedule_and_caps', () => {
@@ -277,7 +346,13 @@ describe('assert_persistence_schedule_and_caps', () => {
     expect(inv.investigation.validated_schema).toEqual(inv.output_schema);
     expect(inv.investigation.spent_usd).toBe(0);
     expect(inv.investigation_phase).toBe('testing');
+    // La demande enregistrée reste celle du propriétaire : jamais de validation automatique posée par le mode (une
+    // ré-enquête ultérieure, ou force_investigate par clé, la réutilise ; INV1, 19 §6).
+    expect(inv.investigation.request.auto_validate).toBe(false);
     await failedAttempt(api, runId);
+    const after = (await pool.query<{ investigation: { request: { auto_validate: boolean }; validated_by?: string } }>('SELECT investigation FROM apis WHERE id = $1', [api])).rows[0]!.investigation;
+    expect(after.request.auto_validate).toBe(false);
+    expect(after.validated_by).toBe('user');
     expect(new Set(sent.filter((s) => s.data.api_id === api).map((s) => s.singletonKey))).toEqual(new Set([`persistence:${api}`]));
   });
 
@@ -398,6 +473,41 @@ describe('assert_persistence_schedule_and_caps', () => {
     expect((await tickLaunched(apis[1]!)).attempt).toBe(1);
     expect(await runPersistenceAttempt(pool, ctx, apis[2]!)).toMatchObject({ kind: 'deferred', reason: 'domain_slot' });
   });
+
+  test('validation d’origine inconnue : jamais attribuée à l’utilisateur par une tentative', async () => {
+    const api = await newApi();
+    await pool.query("UPDATE apis SET investigation = investigation - 'validated_by' WHERE id = $1", [api]);
+    await enable(api);
+    await breakApi(api);
+    clock += HOUR;
+    await tickLaunched(api);
+    const inv = (await pool.query<{ investigation: Record<string, unknown> }>('SELECT investigation FROM apis WHERE id = $1', [api])).rows[0]!.investigation;
+    expect(inv['validated_by']).toBeUndefined();
+  });
+
+  test('plafond strict : le budget d’une tentative ne dépasse ni le reste de persistence_budget_usd, ni le reste du budget du jour', async () => {
+    type Inv = { budget_cap_usd?: number; request: { budget_usd: number } };
+    const capOf = async (apiId: string) => (await pool.query<{ investigation: Inv }>('SELECT investigation FROM apis WHERE id = $1', [apiId])).rows[0]!.investigation;
+    // Mode : 0,05 $ ; demande d’enquête : 0,5 $. Première tentative : 0,05 $ au plus ; après 0,02 $ dépensés, 0,03 $.
+    const api = await newApi({ budget: 0.05 });
+    await enable(api);
+    await breakApi(api);
+    clock += HOUR;
+    const first = await tickLaunched(api);
+    expect(await capOf(api)).toMatchObject({ budget_cap_usd: 0.05, request: { budget_usd: 0.5 } });
+    await failedAttempt(api, first.runId);
+    clock += 6 * HOUR;
+    await tickLaunched(api);
+    expect((await capOf(api)).budget_cap_usd).toBeCloseTo(0.03, 6);
+    // Budget du jour : 0,04 $, dont 0,01 $ déjà dépensé aujourd’hui → 0,03 $ au plus.
+    const daily = await newApi({ dailyBudget: 0.04 });
+    await enable(daily);
+    await breakApi(daily);
+    clock += HOUR;
+    await pool.query("INSERT INTO runs (api_id, owner_id, api_owner_id, trigger, state, cost_llm_usd, created_at, finished_at) VALUES ($1, $2, $2, 'ui', 'succeeded', 0.01, $3, $3)", [daily, A, now()]);
+    await tickLaunched(daily);
+    expect((await capOf(daily)).budget_cap_usd).toBeCloseTo(0.03, 6);
+  });
 });
 
 describe('migration 0021_persistence_mode', () => {
@@ -440,6 +550,8 @@ describe('assert_persistence_never_on_refusal', () => {
       [{ type: 'run_failed', failureClass: 'robots_disallowed' }, { state: 'failed', failure_class: 'robots_disallowed', retryable: false, error_detail: 'robots' }, 'bloquee', 'refused'],
       [{ type: 'run_failed', failureClass: 'blocked_by_protection' }, { state: 'failed', failure_class: 'blocked_by_protection', retryable: false, error_detail: 'challenge' }, 'bloquee', 'refused'],
       [{ type: 'investigation_failed', cause: 'budget_exhausted' }, { state: 'failed', failure_class: 'network', retryable: false, error_detail: 'geo_restriction' }, 'erreur', 'refused'],
+      // Redirection de pays (classify : network/geo_redirect) : une géo-restriction, jamais réessayée.
+      [{ type: 'investigation_failed', cause: 'budget_exhausted' }, { state: 'failed', failure_class: 'network', retryable: false, error_detail: 'geo_redirect' }, 'erreur', 'refused'],
       [{ type: 'investigation_failed', cause: 'budget_exhausted' }, { state: 'failed', failure_class: 'llm_refused', retryable: false, error_detail: 'llm_refused' }, 'erreur', 'refused'],
       [{ type: 'investigation_failed', cause: 'budget_exhausted' }, { state: 'failed', failure_class: 'llm_auth', retryable: false, error_detail: 'llm_auth' }, 'erreur', 'ineligible'],
       [{ type: 'investigation_failed', cause: 'budget_exhausted' }, { state: 'failed', failure_class: 'llm_quota_exhausted', retryable: false, error_detail: 'quota' }, 'erreur', 'ineligible'],
@@ -472,7 +584,7 @@ describe('assert_persistence_never_on_refusal', () => {
       expect((await runPersistenceAttempt(pool, ctx, api)).kind).toBe('idle');
       expect(await attemptRuns(api)).toBe(0);
     }
-    for (const failure of [{ failureClass: 'network', detail: 'geo_restriction' }, { failureClass: 'extraction', detail: 'not_compilable' }, { failureClass: 'not_found' }] as const) {
+    for (const failure of [{ failureClass: 'network', detail: 'geo_restriction' }, { failureClass: 'network', detail: 'geo_redirect' }, { failureClass: 'extraction', detail: 'not_compilable' }, { failureClass: 'not_found' }] as const) {
       const api = await newApi();
       await enable(api);
       await breakApi(api, failure);
