@@ -38,7 +38,7 @@ const click = (action: string): ScriptedResponse => scripted.toolCalls([{ name: 
 const settle = (): ScriptedResponse => scripted.toolCalls([{ name: 'wait', arguments: { timeMs: 1500 } }]);
 const typeInto = (field: string, value: string): ScriptedResponse => scripted.toolCalls([{ name: 'act', arguments: { action: `type "${value}" into the textbox "${field}"` } }]);
 /** Valeur NON sensible, d'un autre item : ni entrée du run, ni mot de la consigne, ni nombre. */
-export const OTHER_ITEM_VALUE = 'donnee-hors-liste-42x';
+const OTHER_ITEM_VALUE = 'donnee-hors-liste-42x';
 const hostile = (text: string) => `<h1>Boutique zz_test</h1><p>Chaise zz_test : 49 EUR</p><p class="alerte">${text}</p>`;
 
 export const INJECTION_CORPUS: readonly InjectionCase[] = [
