@@ -178,6 +178,21 @@ function settle(step: Promise<unknown>, ms = 5000): Promise<void> {
 /** Fin de la sortie d'erreur de Chromium gardée pour dire la cause d'un lancement raté (bornée, sans le bruit D-Bus). */
 const STDERR_TAIL_CHARS = 4000;
 
+/**
+ * Lancement raté du Chromium agentique. Le message est un CODE FERMÉ (`chromium_launch_signal:SIGTRAP`,
+ * `chromium_launch_exit:3`, `chromium_launch_timeout`, `chromium_not_started:ENOENT`) : il remonte jusqu'à `error_detail`,
+ * lisible par le propriétaire du run. La fin du stderr de Chromium (chemins, arguments, port du proxy d'egress) reste sur
+ * `stderr`, pour le journal de l'opérateur seulement.
+ */
+export class ChromiumLaunchError extends Error {
+  readonly stderr: string;
+  constructor(message: string, stderr = '') {
+    super(message);
+    this.name = 'ChromiumLaunchError';
+    this.stderr = stderr;
+  }
+}
+
 /** Sortie d'erreur du Chromium lue en continu (le tube ne se remplit jamais) ; seule sa fin est gardée. */
 function stderrTail(child: ChildProcess): () => string {
   let tail = '';
@@ -194,14 +209,16 @@ function stderrTail(child: ChildProcess): () => string {
       .slice(-300);
 }
 
+/** Code système (ENOENT, SIGTRAP) restreint à des majuscules, chiffres et tiret bas : jamais un texte libre. */
+const closedCode = (value: string): string => (/^[A-Z0-9_]{1,20}$/.test(value) ? value : 'UNKNOWN');
+
 /**
  * Attend le port CDP du Chromium dédié. Un Chromium arrêté au lancement (code de sortie, SIGNAL : un CHECK de Chromium ou
- * de crashpad finit en SIGTRAP, `exitCode` reste alors null) ou jamais lancé (binaire absent) échoue AUSSITÔT, avec sa
- * cause et la fin de sa sortie d'erreur (UX-23), au lieu d'attendre tout le délai de lancement.
+ * de crashpad finit en SIGTRAP, `exitCode` reste alors null) ou jamais lancé (binaire absent) échoue AUSSITÔT, avec un
+ * code fermé (UX-23 ; la fin du stderr reste sur l'erreur pour l'opérateur), au lieu d'attendre tout le délai de lancement.
  */
 async function waitForFile(path: string, timeoutMs: number, child: ChildProcess, spawnError: () => Error | undefined, stderr: () => string): Promise<string> {
   const end = Date.now() + timeoutMs;
-  const why = () => (stderr() === '' ? '' : ` : ${stderr()}`);
   for (;;) {
     try {
       const text = await readFile(path, 'utf8');
@@ -210,10 +227,10 @@ async function waitForFile(path: string, timeoutMs: number, child: ChildProcess,
       // pas encore écrit
     }
     const failed = spawnError();
-    if (failed !== undefined) throw new Error(`Chromium non lancé (${(failed as NodeJS.ErrnoException).code ?? failed.name})`);
-    if (child.exitCode !== null) throw new Error(`Chromium s'est arrêté au lancement (code ${child.exitCode})${why()}`);
-    if (child.signalCode !== null) throw new Error(`Chromium s'est arrêté au lancement (signal ${child.signalCode})${why()}`);
-    if (Date.now() > end) throw new Error(`Chromium : port CDP absent après ${timeoutMs} ms${why()}`);
+    if (failed !== undefined) throw new ChromiumLaunchError(`chromium_not_started:${closedCode((failed as NodeJS.ErrnoException).code ?? failed.name)}`, stderr());
+    if (child.exitCode !== null) throw new ChromiumLaunchError(`chromium_launch_exit:${child.exitCode}`, stderr());
+    if (child.signalCode !== null) throw new ChromiumLaunchError(`chromium_launch_signal:${closedCode(child.signalCode)}`, stderr());
+    if (Date.now() > end) throw new ChromiumLaunchError('chromium_launch_timeout', stderr());
     await new Promise((r) => setTimeout(r, 50));
   }
 }

@@ -139,4 +139,20 @@ describe('rapport d’accès : la lecture de la page est au mieux, jamais une ex
     const report = await buildAccessReport({ url: 'https://zz-test.example/annonces', gate: gate(), probe: page(body), signal: new AbortController().signal, probeLlmsTxt: false });
     expect(report.verdict).toEqual({ proceed: true });
   });
+
+  it('plus de 500 liens : la CGU du pied de page est trouvée (toute la liste bornée est parcourue)', async () => {
+    const body = `<html><body>${Array.from({ length: 600 }, (_, i) => `<a href="/p/${i}">${i}</a>`).join('')}<a href="/mentions-legales">Mentions légales</a></body></html>`;
+    const report = await buildAccessReport({ url: 'https://zz-test.example/annonces', gate: gate(), probe: page(body), signal: new AbortController().signal, probeLlmsTxt: false });
+    expect(report.terms_url).toBe('https://zz-test.example/mentions-legales');
+  });
+
+  it('plus de 20 liens alternate typés et plus de 5 liens api : rapport rendu, flux et API lus au mieux', async () => {
+    const alternates = Array.from({ length: 30 }, (_, i) => `<link rel="alternate" type="application/rss+xml" href="/feed/${i}.xml">`).join('');
+    const apis = Array.from({ length: 8 }, (_, i) => `<link rel="api" href="/api/v${i}">`).join('');
+    const body = `<html><head>${alternates}${apis}</head><body><a href="/x">x</a></body></html>`;
+    const report = await buildAccessReport({ url: 'https://zz-test.example/annonces', gate: gate(), probe: page(body), signal: new AbortController().signal, probeLlmsTxt: false });
+    expect(report.verdict).toEqual({ proceed: true });
+    expect(report.declared.feeds).toHaveLength(5);
+    expect(report.declared.official_api_url).toBe('https://zz-test.example/api/v0');
+  });
 });

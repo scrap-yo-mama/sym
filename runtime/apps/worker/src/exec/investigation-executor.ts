@@ -160,6 +160,7 @@ import {
 import { LlmError, roleTarget, toFailureClass, type LlmClient, type LlmConfig } from '@runtime/llm';
 import type pg from 'pg';
 import { pino, type Logger } from 'pino';
+import { ChromiumLaunchError } from '../browser/agent-browser.js';
 import type { BrowserPool } from '../browser/pool.js';
 import type { TunnelPort } from '../tunnel/client.js';
 import { runReconnaissancePass } from './browser-executors.js';
@@ -267,6 +268,12 @@ function internalErrorDetail(error: unknown): string {
   const name = /^[A-Za-z][A-Za-z0-9_]{0,40}$/.test(error.name) ? error.name : 'Error';
   const code = error instanceof DslError ? error.code : (error as { code?: unknown }).code;
   return typeof code === 'string' && /^[a-z0-9_]{1,40}$/i.test(code) ? `internal_error:${name}:${code}` : `internal_error:${name}`;
+}
+
+/** Champs du journal d'un essai en erreur : classe, code borné, et pour un lancement Chromium raté son code fermé et la fin du stderr. */
+function trialErrorLog(runId: string, execution: string, error: unknown): Record<string, unknown> {
+  if (error instanceof ChromiumLaunchError) return { runId, execution, err: error.name, detail: error.message, stderr: error.stderr };
+  return { runId, execution, err: internalErrorDetail(error) };
 }
 
 /**
@@ -901,8 +908,10 @@ function investigationRun(deps: InvestigationExecutorDeps): RunExecutor {
               } catch (error) {
                 if (ctx.signal.aborted) throw error;
                 if (timeout.aborted) return execution(false, 'run_budget_exceeded', 'investigation_timeout_s', 0, null, 0, null);
-                // Classe ET message (UX-23 : « Error » seul ne disait pas que Chromium s'arrêtait au lancement) ; journal de l'opérateur, masqué (INV8).
-                logger.warn({ runId: ctx.runId, execution: entry.execution, err: error instanceof Error ? error.name : 'error', detail: error instanceof Error ? error.message.slice(0, 300) : undefined }, 'enquête : essai en erreur');
+                // Journal de l'opérateur : la classe et un code borné, JAMAIS le message (valeur du site ou personnelle : le logger ne
+                // masque que les secrets, INV8, pas le registre des valeurs personnelles du run). Seul un lancement Chromium raté
+                // (messages construits par agent-browser.ts : code fermé, stderr de Chromium) garde son diagnostic (UX-23).
+                logger.warn(trialErrorLog(ctx.runId, entry.execution, error), 'enquête : essai en erreur');
                 return execution(false, 'code_error', 'trial_error', 0, 0, 0, null);
               }
               const acc = spend.get(pair) ?? { proxy: 0, llm: 0, tokens: { in: 0, cached: 0, out: 0, reasoning: 0, estimated: false }, model: null, prompt: null, engine: null };

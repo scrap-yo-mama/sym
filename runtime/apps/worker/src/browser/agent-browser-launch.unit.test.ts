@@ -6,7 +6,7 @@ import { mkdtemp, readFile, rm, writeFile, chmod } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { launchAgentBrowser } from './agent-browser.js';
+import { ChromiumLaunchError, launchAgentBrowser } from './agent-browser.js';
 
 let dir: string;
 const base = { egressServer: 'http://127.0.0.1:9', allowedHosts: ['zz-test.example'], allowWriteActions: false, checkRequest: async () => true } as const;
@@ -35,16 +35,24 @@ describe('Chromium agentique : lancement (UX-23)', () => {
     const t0 = Date.now();
     const error = await launchAgentBrowser({ ...base, executablePath: exe, launchTimeoutMs: 20_000, env: { PATH: process.env['PATH'] ?? '' } }).catch((e: unknown) => e);
     expect(error).toBeInstanceOf(Error);
-    expect((error as Error).message).toMatch(/SIGTRAP/);
-    expect((error as Error).message).toMatch(/--database is required/);
+    // Le message (error_detail du run, lisible par son propriétaire) ne porte qu'un code fermé ; le stderr reste sur l'erreur, pour le journal de l'opérateur.
+    expect((error as Error).message).toBe('chromium_launch_signal:SIGTRAP');
+    expect((error as Error).message).not.toMatch(/--database/);
+    expect(error).toBeInstanceOf(ChromiumLaunchError);
+    expect((error as ChromiumLaunchError).stderr).toMatch(/--database is required/);
     expect(Date.now() - t0).toBeLessThan(10_000);
+  });
+
+  it('binaire absent : code fermé chromium_not_started:ENOENT', async () => {
+    const error = await launchAgentBrowser({ ...base, executablePath: join(dir, 'absent'), launchTimeoutMs: 20_000, env: { PATH: process.env['PATH'] ?? '' } }).catch((e: unknown) => e);
+    expect((error as Error).message).toBe('chromium_not_started:ENOENT');
   });
 
   it('HOME du Chromium : un répertoire à lui sous le profil, jamais le HOME du worker (/root illisible sur Render)', async () => {
     const out = join(dir, 'home.txt');
     const exe = await fakeChromium('home.js', `require('node:fs').writeFileSync(${JSON.stringify(out)}, String(process.env.HOME));\nprocess.exit(3);`);
     const error = await launchAgentBrowser({ ...base, executablePath: exe, launchTimeoutMs: 20_000, env: { PATH: process.env['PATH'] ?? '', HOME: '/zz-test-unreadable-home' } }).catch((e: unknown) => e);
-    expect((error as Error).message).toMatch(/code 3/);
+    expect((error as Error).message).toBe('chromium_launch_exit:3');
     const home = await readFile(out, 'utf8');
     expect(home).not.toBe('/zz-test-unreadable-home');
     expect(home.startsWith(join(tmpdir(), 'zz_agent_chromium_'))).toBe(true);

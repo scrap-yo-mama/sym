@@ -127,11 +127,13 @@ export async function responsibleUseAcked(ctx: ServerContext, userId: string): P
  * Message du refus `responsible_use_ack_required` (UX-19) : il nomme les champs `x-personal` du schéma retenu (le schéma
  * PROPOSÉ par l'enquête s'il en porte : retirer la marque dans une correction ne contourne pas la case).
  */
-export function responsibleUseMessage(schema: unknown | true): string {
+export function responsibleUseMessage(schema: unknown | true, origin: 'proposed' | 'corrected' = 'corrected'): string {
   const base = 'lisez la page « Usage responsable » et cochez « j’ai lu » avant une API à données personnelles';
   const fields = schema === true ? [] : personalFieldPaths(schema);
   if (fields.length === 0) return base;
-  return `${base} : champ(s) marqué(s) x-personal : ${fields.join(', ')} (la marque du schéma proposé par l’enquête compte : la retirer dans une correction ne suffit pas)`;
+  const named = `${base} : champ(s) marqué(s) x-personal : ${fields.join(', ')}`;
+  // La phrase sur le schéma proposé n'est vraie que si les champs viennent de lui.
+  return origin === 'proposed' ? `${named} (la marque du schéma proposé par l’enquête compte : la retirer dans une correction ne suffit pas)` : named;
 }
 
 /**
@@ -139,10 +141,10 @@ export function responsibleUseMessage(schema: unknown | true): string {
  * `responsible_use_ack_required`). `schema` : schéma retenu ; `true` : le schéma n'est pas encore connu (validation
  * automatique d'une enquête), refusé de même. Renvoie true si la réponse est partie.
  */
-export async function rejectWithoutAck(ctx: ServerContext, reply: FastifyReply, actor: Actor, schema: unknown | true): Promise<boolean> {
+export async function rejectWithoutAck(ctx: ServerContext, reply: FastifyReply, actor: Actor, schema: unknown | true, origin: 'proposed' | 'corrected' = 'corrected'): Promise<boolean> {
   if (schema !== true && !schemaHasPersonalFields(schema)) return false;
   if (await responsibleUseAcked(ctx, actor.userId)) return false;
-  await sendError(reply, 403, 'responsible_use_ack_required', responsibleUseMessage(schema));
+  await sendError(reply, 403, 'responsible_use_ack_required', responsibleUseMessage(schema, origin));
   return true;
 }
 

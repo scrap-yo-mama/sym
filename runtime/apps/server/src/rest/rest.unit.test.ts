@@ -162,11 +162,18 @@ describe('assert_catalog_summary_domain : la ligne du catalogue porte le domaine
 describe('responsible_use_ack_required : le message nomme les champs x-personal (UX-19)', () => {
   test('schéma connu : champs nommés, et la correction qui retire la marque ne suffit pas', () => {
     const proposed = { type: 'array', items: { type: 'object', properties: { author: { type: 'string', 'x-personal': 'identifier' }, text: { type: 'string' } } } };
-    const message = responsibleUseMessage(proposed);
+    const message = responsibleUseMessage(proposed, 'proposed');
     expect(message).toContain('[].author');
     expect(message).toMatch(/x-personal/);
     expect(message).toMatch(/proposé/);
     expect(message).not.toContain('text');
+  });
+
+  test('marque portée par le seul schéma corrigé : aucune phrase sur le schéma proposé', () => {
+    const corrected = { type: 'object', properties: { email: { type: 'string', 'x-personal': 'identifier' } } };
+    const message = responsibleUseMessage(corrected, 'corrected');
+    expect(message).toContain('email');
+    expect(message).not.toMatch(/proposé/);
   });
 
   test('schéma pas encore connu (auto_validate) : message sans champ', () => {

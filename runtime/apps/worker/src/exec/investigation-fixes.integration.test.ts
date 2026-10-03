@@ -17,6 +17,7 @@ import { attemptsFollowPlan, firstCostInversion, type TrialPair } from '@runtime
 import * as net from '@runtime/core/net';
 import {
   cloneApi,
+  createRun,
   countSubjectOccurrences,
   eraseSubject,
   keyCheck,
@@ -35,10 +36,12 @@ import {
 import { createLlmClient, type LlmConfig } from '@runtime/llm';
 import { createFakeProvider, scripted, type FakeProvider } from '@runtime/llm/testing';
 import pg from 'pg';
+import { Writable } from 'node:stream';
 import { pino } from 'pino';
 import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from 'vitest';
 import { fixtureGuard } from '../../../../tests/helpers/fixture-net.ts';
 import { createTestDatabase, type TestDatabase } from '../../../../tests/helpers/pg.js';
+import { ChromiumLaunchError } from '../browser/agent-browser.js';
 import { loadWorkerConfig } from '../config.js';
 import { miniTunnel, startMiniSite, type MiniSite } from '../testing/mini-site.testkit.js';
 import { startWorker, type Worker } from '../worker.js';
@@ -71,6 +74,9 @@ let withExtract = false;
 let price = { in: 1, out: 1 };
 /** Panne inattendue au départ de l'enquête (UX-24) : exception hors des fins prévues par l'exécuteur. */
 let crash: Error | null = null;
+/** Exception d'un essai de stratégie (UX-24, journal de l'opérateur) et lignes écrites par le journal de l'exécuteur d'enquête. */
+let trialCrash: Error | null = null;
+const logLines: string[] = [];
 
 const products = (n: number, withTitle = true) => ({
   items: Array.from({ length: n }, (_, i) => ({ id: `zz_test_p${String(i + 1).padStart(3, '0')}`, ...(withTitle ? { title: `Produit Zztest ${i + 1}` } : {}), price_cents: 100 * (i + 1) })),
@@ -225,7 +231,14 @@ beforeAll(async () => {
     guard,
     pacer,
     browsers: null,
-    strategy,
+    strategy: {
+      ...strategy,
+      trial: async (...args: Parameters<typeof strategy.trial>) => {
+        if (trialCrash !== null) throw trialCrash;
+        return strategy.trial(...args);
+      },
+    },
+    logger: pino({ level: 'info' }, new Writable({ write: (chunk, _enc, done) => (logLines.push(String(chunk)), done()) })),
     tunnel,
     llm: { config: async () => llmConfig(), client: (config) => createLlmClient(config) },
     agentic: true,
@@ -263,6 +276,8 @@ beforeEach(() => {
   withExtract = false;
   price = { in: 1, out: 1 };
   crash = null;
+  trialCrash = null;
+  logLines.length = 0;
 });
 
 describe('enquête en tunnel (04 §4 : reconnaissance « en tunnel si la session est requise »)', () => {
@@ -379,6 +394,40 @@ describe('fins d’enquête : phase close et récit fermé', () => {
     expect(events.at(-1)!.payload).toMatchObject({ outcome: 'failed', failure_class: 'code_error', detail: 'internal_error:DslError:value_too_large' });
     expect(events.map((e) => e.kind)).toContain('status.changed');
     expect(fake.requests).toBe(0);
+  });
+
+  test('API en enquête sans état d’enquête (investigation_not_started, UX-24) : run code_error, statut erreur, investigation.finished présent', async () => {
+    const apiId = await insertApi('zz_test_fix_not_started');
+    const { runId } = await withActor(pool, actorA, (tx) => createRun(tx, queue, { apiId, ownerId: A, trigger: 'rest', kind: 'investigation' }));
+    const run = await waitRun(runId);
+    expect(run).toMatchObject({ state: 'failed', failure_class: 'code_error' });
+    expect((await runRow(runId)).error_detail).toBe('investigation_not_started');
+    await apiStatusSettled(apiId, { status: 'erreur' });
+    const events = await eventsOf(runId);
+    expect(events.map((e) => e.kind).at(-1)).toBe('investigation.finished');
+    expect(events.at(-1)!.payload).toMatchObject({ outcome: 'failed', failure_class: 'code_error', detail: 'investigation_not_started' });
+  });
+
+  test('journal de l’opérateur : un essai en erreur n’écrit jamais le message (valeur du site ou personnelle), seulement la classe et le code', async () => {
+    fake.setScenario(MODEL, [scripted.json(PRODUCTS_PROPOSAL)]);
+    trialCrash = new Error('navigation vers https://zz-test.example/?q=zz_test_valeur_personnelle_7');
+    const apiId = await insertApi('zz_test_fix_trial_log');
+    await investigate(apiId, { url: site.url(SIB, '/'), description: 'liste', auto_validate: true });
+    const joined = logLines.join('');
+    expect(joined).toContain('enquête : essai en erreur');
+    expect(joined).not.toContain('zz_test_valeur_personnelle_7');
+  });
+
+  test('journal de l’opérateur : un lancement Chromium raté y garde le code et la fin de stderr ; l’événement et error_detail restent sans stderr', async () => {
+    fake.setScenario(MODEL, [scripted.json(PRODUCTS_PROPOSAL)]);
+    trialCrash = new ChromiumLaunchError('chromium_launch_signal:SIGTRAP', 'zz_stderr_marker : /home/pwuser/.config');
+    const apiId = await insertApi('zz_test_fix_launch_log');
+    const run = await investigate(apiId, { url: site.url(SIB, '/'), description: 'liste', auto_validate: true });
+    const joined = logLines.join('');
+    expect(joined).toContain('chromium_launch_signal:SIGTRAP');
+    expect(joined).toContain('zz_stderr_marker');
+    expect(JSON.stringify(await eventsOf(run.id))).not.toContain('zz_stderr_marker');
+    expect((await runRow(run.id)).error_detail ?? '').not.toContain('zz_stderr_marker');
   });
 
   test('investigation_timeout_s tenu dès l’étape 0 (page lente) : erreur, investigation_timeout_s, sans attendre la page ni appeler le LLM', async () => {

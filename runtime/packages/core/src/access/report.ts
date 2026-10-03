@@ -116,6 +116,15 @@ function linkText(a: Parameters<typeof elementText>[0]): string {
   }
 }
 
+/** Éléments du sélecteur, au plus MAX_SCANNED_LINKS ; une page qui en compte plus, ou un sélecteur en échec, donne une liste vide (jamais une exception). */
+function linksBestEffort(selector: string, doc: Parameters<typeof selectElements>[1]): ReturnType<typeof selectElements> {
+  try {
+    return selectElements(selector, doc, MAX_SCANNED_LINKS);
+  } catch {
+    return [];
+  }
+}
+
 /** Voies déclarées et CGU lues dans la tête de la page (sans interprétation). */
 function readPage(exchange: HttpExchange): { terms: string | null; feeds: string[]; officialApi: string | null } {
   const out = { terms: null as string | null, feeds: [] as string[], officialApi: null as string | null };
@@ -126,13 +135,13 @@ function readPage(exchange: HttpExchange): { terms: string | null; feeds: string
   } catch {
     return out;
   }
-  for (const link of selectElements('link[rel~="alternate"][type]', doc, 20)) {
+  for (const link of linksBestEffort('link[rel~="alternate"][type]', doc).slice(0, 20)) {
     const type = (elementAttribute(link, 'type') ?? '').toLowerCase();
     if (!/rss|atom|feed\+json/.test(type)) continue;
     const href = absoluteLink(elementAttribute(link, 'href'), exchange.url);
     if (href !== null && out.feeds.length < 5 && !out.feeds.includes(href)) out.feeds.push(href);
   }
-  for (const link of selectElements('link[rel~="api"], link[rel~="service-desc"]', doc, 5)) {
+  for (const link of linksBestEffort('link[rel~="api"], link[rel~="service-desc"]', doc).slice(0, 5)) {
     const href = absoluteLink(elementAttribute(link, 'href'), exchange.url);
     if (href !== null) {
       out.officialApi = href;
@@ -141,13 +150,9 @@ function readPage(exchange: HttpExchange): { terms: string | null; feeds: string
   }
   // Lecture au mieux (UX-24) : une page aux milliers de liens ou aux cartes d'annonce cliquables (texte de plus de 200
   // caractères) ne fait jamais échouer l'étape 0 ; on garde ce qui a été lu.
-  let anchors: ReturnType<typeof selectElements>;
-  try {
-    anchors = selectElements('a[href]', doc, MAX_SCANNED_LINKS);
-  } catch {
-    return out;
-  }
-  for (const a of anchors.slice(0, 500)) {
+  // Toute la liste bornée (MAX_SCANNED_LINKS) est parcourue : le lien de CGU d'un pied de page vient après des centaines de liens.
+  const anchors = linksBestEffort('a[href]', doc);
+  for (const a of anchors) {
     const raw = elementAttribute(a, 'href');
     const href = absoluteLink(raw, exchange.url);
     if (href === null) continue;
