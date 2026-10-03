@@ -9,7 +9,7 @@
 // L'URL de la demande n'admet aucun paramètre secret (jeton, clé, session, signature). La colonne `investigation` reste
 // lisible des membres par `instance_read` (visibilité instance, sans session) : elle ne doit figurer dans AUCUNE projection
 // servie à un non-propriétaire (REST, MCP, console : 3.x), seulement dans celles du propriétaire.
-import { assertInputSchema, assertSchemaAcceptable, EXECUTIONS, SchemaError, type Execution, type InvestigationPhase, type JobQueue, type Network, type RunTrigger, type StrategyRuleRow, type StrategySource } from '@runtime/core';
+import { assertInputSchema, assertSchemaAcceptable, EXECUTIONS, SchemaError, type MemoryRef, type Execution, type InvestigationPhase, type JobQueue, type Network, type RunTrigger, type StrategyRuleRow, type StrategySource } from '@runtime/core';
 import type { InvestigationProposal, StoredCandidate } from '@runtime/core/investigation';
 import { INVESTIGATION_DEFAULTS } from '@runtime/core/investigation';
 import type pg from 'pg';
@@ -57,6 +57,11 @@ export type InvestigationState = {
   readonly spent_usd: number;
   /** Durée active cumulée (hors attente de la validation). */
   readonly elapsed_ms: number;
+  /**
+   * Mémoire du catalogue consultée par l'appel `investigate` (tâche 2.12) : identifiants des entrées, étage et sha256 du
+   * dossier, jamais son contenu ; écrite dans `strategy_version_memory_refs` quand la version est retenue.
+   */
+  readonly memory?: { readonly sha256: string; readonly refs: readonly MemoryRef[] };
   /** Niveaux d'exécution retirés du plan d'essais par l'appelant (`exclude_executions`, 06 § 2, 3.1) : jamais un ajout. */
   readonly excluded_executions?: readonly Execution[];
 };

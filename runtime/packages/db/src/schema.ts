@@ -30,6 +30,7 @@ import {
   numeric,
   pgTable,
   primaryKey,
+  smallint,
   text,
   timestamp,
   unique,
@@ -413,6 +414,8 @@ export const strategyVersions = pgTable(
     createdAt: createdAt(),
     // 0019 : source de la version (demande, schéma, décisions, règles ; 18 §4.6).
     source: jsonb('source'),
+    // 0020_catalog_memory_quality (2.12) : signature calculée par le code.
+    signature: jsonb('signature'),
   },
   (t) => [primaryKey({ columns: [t.apiId, t.version] }), index('strategy_versions_owner_id_idx').on(t.ownerId)],
 );
@@ -536,6 +539,9 @@ export const runs = pgTable(
     pausedAt: tstz('paused_at'),
     // 0018_run_rejected_items (2.3, D-49) : items extraits non conformes, jamais livrés.
     itemsRejected: integer('items_rejected').notNull().default(0),
+    // 0020_catalog_memory_quality (2.12) : fiche de qualité et avis consultatif du juge.
+    quality: jsonb('quality'),
+    judge: jsonb('judge'),
     createdAt: createdAt(),
     startedAt: tstz('started_at'),
     finishedAt: tstz('finished_at'),
@@ -652,6 +658,53 @@ export const runRejectedItems = pgTable(
     index('run_rejected_items_owner_id_idx').on(t.ownerId),
     index('run_rejected_items_api_id_idx').on(t.apiId),
     index('run_rejected_items_created_at_idx').on(t.createdAt),
+  ],
+);
+
+// 0020_catalog_memory_quality (2.12) : profil de chaque run (après Ajv et la garde de classification) et baseline validée.
+export const runProfiles = pgTable(
+  'run_profiles',
+  {
+    id: bigint('id', { mode: 'number' }).primaryKey().generatedAlwaysAsIdentity(),
+    runId: uuid('run_id')
+      .unique()
+      .references(() => runs.id, { onDelete: 'set null' }),
+    apiId: uuid('api_id')
+      .notNull()
+      .references(() => apis.id, { onDelete: 'cascade' }),
+    ownerId: ownerId(),
+    projectId: projectId(),
+    strategyVersion: integer('strategy_version'),
+    inputHash: text('input_hash').notNull(),
+    profile: jsonb('profile').notNull(),
+    baseline: boolean('baseline').notNull().default(false),
+    validatedBy: uuid('validated_by').references(() => users.id),
+    validatedAt: tstz('validated_at'),
+    createdAt: createdAt(),
+  },
+  (t) => [index('run_profiles_owner_id_idx').on(t.ownerId), index('run_profiles_api_input_idx').on(t.apiId, t.inputHash, t.createdAt.desc())],
+);
+
+// 0020_catalog_memory_quality (2.12) : entrées de mémoire consultées par une version (sha256 du dossier).
+export const strategyVersionMemoryRefs = pgTable(
+  'strategy_version_memory_refs',
+  {
+    apiId: uuid('api_id').notNull(),
+    strategyVersion: integer('strategy_version').notNull(),
+    ownerId: ownerId(),
+    projectId: projectId(),
+    refApiId: uuid('ref_api_id')
+      .notNull()
+      .references(() => apis.id, { onDelete: 'cascade' }),
+    refVersion: integer('ref_version'),
+    tier: smallint('tier').notNull(),
+    dossierSha256: text('dossier_sha256').notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.apiId, t.strategyVersion, t.refApiId] }),
+    foreignKey({ columns: [t.apiId, t.strategyVersion], foreignColumns: [strategyVersions.apiId, strategyVersions.version] }).onDelete('cascade'),
+    index('strategy_version_memory_refs_owner_id_idx').on(t.ownerId),
   ],
 );
 

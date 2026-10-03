@@ -98,8 +98,10 @@ import {
   type SecretReader,
   type SsrfGuard,
 } from '@runtime/core/net';
-import { deleteRejectedItems, loadRunTarget, readEmbeddedFiles, readProxySettings, readVolumeHistory, saveCompiledStrategy, saveRejectedItems, saveRepairedStrategy, saveRunDataset, type RunTarget } from '@runtime/db';
+import { deleteRejectedItems, inputHash, loadRunTarget, readEmbeddedFiles, readValidatedBaseline, saveRunProfile, readProxySettings, readVolumeHistory, saveCompiledStrategy, saveRejectedItems, saveRepairedStrategy, saveRunDataset, type RunTarget } from '@runtime/db';
 import type { LlmClient, LlmConfig } from '@runtime/llm';
+import { degradedQualitySignals, profileItems } from '@runtime/core';
+import type { QualityPorts } from './quality-job.js';
 import type pg from 'pg';
 import { pino, type Logger } from 'pino';
 import type { BrowserPool } from '../browser/pool.js';
@@ -164,6 +166,12 @@ export type StrategyExecutorDeps = {
   readonly identifyInstance?: () => Promise<boolean>;
   /** Version annoncée dans le jeton du User-Agent (`RUNTIME_VERSION`). */
   readonly version?: string;
+  /**
+   * Profil des sorties et juge consultatif (tâche 2.12, 19 §3). Le profil est calculé par le code sur chaque sortie
+   * livrée (après Ajv et la garde de classification), sans LLM ; un motif dégradé planifie, si le juge est activé, un
+   * jugement SÉPARÉ après le run (`scheduleJudge`) : le rejeu lui-même ne fait aucun appel LLM et ne lit aucune mémoire.
+   */
+  readonly quality?: QualityPorts;
 };
 
 /** Stratégie figée d'un run (version, exécution, réseau, spécification). */
@@ -934,6 +942,29 @@ export function createStrategyRuntime(deps: StrategyExecutorDeps): StrategyRunti
     }
   };
 
+  /** Profil du run et motifs dégradés (19 §3) ; une erreur ici n'empêche jamais la livraison (signal informatif). */
+  const qualitySignals = async (ctx: RunCtx, target: RunTarget, version: number, items: readonly Record<string, unknown>[]): Promise<DegradedSignal[]> => {
+    try {
+      const profile = profileItems(items, target.api.outputSchema);
+      const hash = inputHash(ctx.input);
+      await saveRunProfile(deps.pool, { runId: ctx.runId, apiId: ctx.apiId, ownerId: ctx.ownerId, strategyVersion: version, inputHash: hash, profile });
+      const baseline = await readValidatedBaseline(deps.pool, { apiId: ctx.apiId, ownerId: ctx.ownerId, inputHash: hash });
+      const found = degradedQualitySignals(profile, baseline, target.api.outputSchema);
+      if (found.length > 0) {
+        await ctx.log('info', 'quality_signals', { signals: found, baseline: baseline !== null });
+        // Jugement sur anomalie : job pg-boss séparé (`quality-judge`, un par run), traité après le run (au plus un par
+        // API et par jour, décidé par le job) ; une file indisponible n'empêche jamais la livraison.
+        if (deps.quality?.scheduleJudge !== undefined && (await deps.quality.judgeEnabled().catch(() => false))) {
+          await Promise.resolve(deps.quality.scheduleJudge({ runId: ctx.runId, ownerId: ctx.ownerId })).catch(() => ctx.log('warn', 'judge_schedule_failed', {}));
+        }
+      }
+      return found;
+    } catch (error) {
+      logger.warn({ runId: ctx.runId, err: error instanceof Error ? error.name : 'error' }, 'profil du run non écrit');
+      return [];
+    }
+  };
+
   /** Livraison d'une sortie conforme : dataset (items conformes seuls), quarantaine, signaux et statut (5, 8, 9, 12). */
   const deliver = async (
     ctx: RunCtx,
@@ -944,12 +975,16 @@ export function createStrategyRuntime(deps: StrategyExecutorDeps): StrategyRunti
     await quarantine(ctx, target, partition, verdict);
     const saved = await saveRunDataset(deps.pool, { runId: ctx.runId, apiId: ctx.apiId, ownerId: ctx.ownerId, projectId: target.api.projectId, items: partition.conform });
     const volume = await volumeSignal(ctx, partition.conform.length + partition.rejected.length);
+    // Profil (2.12) : seulement ici, sur une sortie qui a passé la garde de classification et Ajv (jamais sur une page de
+    // défi servie en 200, qui n'arrive jamais à la livraison). Motifs comparatifs contre la baseline VALIDÉE seulement.
+    const quality = await qualitySignals(ctx, target, args.version, partition.conform);
     const signals: DegradedSignal[] = [];
     if (args.repaired) signals.push('repaired');
     if (args.escalated) signals.push('escalated');
     if (args.truncated) signals.push('pagination_short');
     if (partition.rejected.length > 0) signals.push('items_rejected');
     if (volume) signals.push('volume_anomaly');
+    signals.push(...quality);
     // Réparation conforme : transition 12 (le signal `repaired` est sa raison) ; sinon run réussi (5, 8 ou 9).
     if (args.repaired) {
       if (args.entered) await applyStatus(ctx, { type: 'repair_succeeded' });

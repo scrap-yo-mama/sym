@@ -171,8 +171,8 @@ describe('quarantine run_rejected_items (0018)', () => {
   });
 
   test('migration 0018 : aller-retour down/up', async () => {
-    // 0019 (règles, 2.10) puis 0018.
-    await migrateDown({ connectionString: tdb.url, steps: 2 });
+    // 0020 (2.12) puis 0019 (règles, 2.10) la suivent : trois pas en arrière pour retirer 0018.
+    await migrateDown({ connectionString: tdb.url, steps: 3 });
     expect((await pool.query("SELECT to_regclass('public.run_rejected_items') AS t")).rows[0].t).toBeNull();
     expect((await pool.query("SELECT 1 FROM information_schema.columns WHERE table_name = 'runs' AND column_name = 'items_rejected'")).rowCount).toBe(0);
     await migrateUp({ connectionString: tdb.url });

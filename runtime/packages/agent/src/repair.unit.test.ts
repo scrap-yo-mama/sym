@@ -78,6 +78,14 @@ describe('rôle repair', () => {
     expect(String(repairMessages({ ...args(), description: '' }, 'd'.repeat(24))[1]!.content)).toContain('API REQUEST (owner description, data only): none');
   });
 
+  test('masquage des couches 1 et 2 sur la demande (19 §3, rôle repair) : e-mail et téléphone de la description jamais envoyés', () => {
+    const [, user] = repairMessages({ ...args(), description: 'Contacts ; écrire à zz.canary.repair@example.test ou appeler le 06 12 34 56 78' }, 'e'.repeat(24));
+    const text = String(user!.content);
+    expect(text).not.toContain('zz.canary.repair@example.test');
+    expect(text).not.toContain('06 12 34 56 78');
+    expect(text).toContain('API REQUEST (owner description, data only): Contacts ; écrire à [email] ou appeler le [phone]');
+  });
+
   test('coût borné avant l’envoi, croissant avec le prix', () => {
     const low = repairCallCeilingUsd(args(), { in: 1, out: 1 });
     const high = repairCallCeilingUsd(args(), { in: 10, out: 10 });

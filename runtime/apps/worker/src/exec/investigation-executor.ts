@@ -34,6 +34,14 @@
 // l'API et proxys de l'admin seulement, jamais de tunnel ni de proxy après un refus (X3, X4), jamais de valeur du site
 // dans un prompt.
 import {
+  buildCatalogDossier,
+  computeSignature,
+  minimalContentCheck,
+  priorRefusalDecision,
+  profileItems,
+  registrableDomain,
+  renderCatalogMemory,
+  type CatalogDossier,
   type FailureClass,
   type InvestigationPhase,
   type RunContext as RunCtx,
@@ -125,15 +133,23 @@ import { investigateCallCeilingUsd, investigateMessages, investigatePromptVersio
 import {
   appendInvestigationEvent,
   buildStrategySource,
+  inputHash,
   loadInvestigation,
   loadRunTarget,
+  readBaselineItem,
+  readCatalogMemory,
   readProxySettings,
   recordAccessReport,
+  recordMemoryRefs,
   resolveRulesForApi,
   saveInvestigationState,
   saveInvestigationStrategy,
   saveRunDataset,
+  saveRunJudge,
+  saveRunProfile,
+  saveStrategySignature,
   schemaColumns,
+  type CatalogMemory,
   type InvestigationState,
   type RunTarget,
 } from '@runtime/db';
@@ -143,6 +159,7 @@ import { pino, type Logger } from 'pino';
 import type { BrowserPool } from '../browser/pool.js';
 import type { TunnelPort } from '../tunnel/client.js';
 import { runReconnaissancePass } from './browser-executors.js';
+import { flaggedFields, judgeItems, settingsQualityPorts, type QualityPorts } from './quality-job.js';
 import { robotIdentity } from './robot-identity.js';
 import type { StrategyRuntime, StrategyTrial } from './strategy-executor.js';
 import { pageFetchTransport, TunnelSession } from './tunnel-executor.js';
@@ -178,6 +195,18 @@ export type InvestigationExecutorDeps = {
   readonly now?: () => number;
   /** Exécutions conformes exigées par couple (défaut `INVESTIGATION_SAMPLES` = 3). */
   readonly samples?: number;
+  /**
+   * Mémoire du catalogue (tâche 2.12, 19 §2) : lue au départ de chaque run d'enquête (mémoire négative AVANT tout appel
+   * LLM et toute requête, puis dossier du prompt). Défaut : `readCatalogMemory` (RLS et filtre `owner_id`).
+   */
+  readonly memory?: { readonly read: (args: { ownerId: string; apiId: string | null; domain: string }) => Promise<CatalogMemory> };
+  /** Juge consultatif (défaut : réglages `settings.llm`). */
+  readonly quality?: QualityPorts;
+  /**
+   * Rôle `judge` résolu À PART de la configuration de l'enquête (revue 2.12) : une erreur de ses réglages (fournisseur
+   * inconnu, clé illisible) est ignorée et l'enquête se fait sans avis. Absent : rôle `judge` de la configuration `llm`.
+   */
+  readonly judgeLlm?: InvestigationLlmPorts;
 };
 
 const round6 = (v: number): number => Math.round(v * 1e6) / 1e6;
@@ -227,6 +256,7 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
   const now = deps.now ?? Date.now;
   const robotsCache = deps.robotsCache ?? new RobotsCache();
   const logger = deps.logger ?? pino({ enabled: false });
+  const quality = deps.quality ?? settingsQualityPorts(deps.pool);
 
   return async (ctx: RunCtx): Promise<RunResult> => {
     const started = now();
@@ -305,6 +335,55 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
       return { state: 'failed', failure_class: 'run_budget_exceeded', retryable: false, error_detail: reason };
     };
 
+    /**
+     * Juge consultatif à l'enquête (19 §3) : avis posé sur la fiche du run, coût imputé au run sous le budget restant de
+     * l'enquête ; il ne change rien d'autre (le statut suit son cours), et une erreur du juge n'arrête jamais l'enquête.
+     */
+    const judgeInvestigation = async (records: readonly unknown[], schema: unknown, profile: ReturnType<typeof profileItems>, config: LlmConfig | null, hash: string): Promise<void> => {
+      if (!(await quality.judgeEnabled().catch(() => false))) return;
+      const judge = deps.judgeLlm ?? deps.llm;
+      if (judge === undefined) return;
+      try {
+        const judgeConfig = deps.judgeLlm === undefined ? config : await deps.judgeLlm.config().catch(() => null);
+        if (judgeConfig === null) return;
+        const baselineItem = await readBaselineItem(deps.pool, { apiId: ctx.apiId, ownerId: ctx.ownerId, inputHash: hash }).catch(() => null);
+        const out = await judgeItems({ config: judgeConfig, client: judge.client, trigger: 'investigation', schema, profile, items: records, baselineItem, maxUsd: Math.max(0, request.budget_usd - spent), signal });
+        if (out === null) return;
+        await charge(ctx, 0, out.costUsd, { ...out.tokens, estimated: false });
+        if (out.costUsd !== null) spent = round6(spent + out.costUsd);
+        await saveRunJudge(deps.pool, { runId: ctx.runId, ownerId: ctx.ownerId, judge: out.judge, costUsd: 0 });
+        if (out.judge.flag) await ctx.log('info', 'judge_flag', { trigger: 'investigation', fields: flaggedFields(out.judge), seed: out.seed });
+      } catch {
+        await ctx.log('warn', 'judge_failed', { trigger: 'investigation' });
+      }
+    };
+
+    // --- mémoire du catalogue : un refus est un arrêt (2.12, 19 §2, r1 R14) -----------------------------------------
+    // Lue AVANT tout appel LLM et toute requête sortante : un domaine qui a déjà refusé l'accès arrête l'enquête (0 requête).
+    let domain: string;
+    try {
+      domain = registrableDomain(host);
+    } catch {
+      domain = host;
+    }
+    const memory: CatalogMemory = await (deps.memory?.read ?? ((a) => readCatalogMemory(deps.pool, a)))({ ownerId: ctx.ownerId, apiId: ctx.apiId, domain });
+    const refusal = priorRefusalDecision(memory.refusals, domain, memory.statusReason);
+    if (refusal.action === 'stop') {
+      await save('done');
+      await ctx.log('warn', 'prior_refusal', { domain, at: refusal.refusal.at, reason: refusal.reason });
+      await event(EV.finished, { outcome: 'failed', failure_class: refusal.reason === 'robots_disallowed' ? 'robots_disallowed' : 'forbidden', detail: 'prior_refusal', at: 'memory', budget: budgetView() });
+      // `robots_disallowed` : refus de robots.txt (transition 4) ; `forbidden` ou `bloquee` : arrêt préventif (4, `prior_refusal`).
+      await applyStatus(refusal.reason === 'robots_disallowed' ? { type: 'run_failed', failureClass: 'robots_disallowed' } : { type: 'prior_refusal' });
+      return { state: 'failed', failure_class: refusal.reason === 'robots_disallowed' ? 'robots_disallowed' : 'forbidden', retryable: false, error_detail: 'prior_refusal' };
+    }
+    // Ré-enquête manuelle (18) d'un domaine refusé : un seul essai de confirmation au couple le moins cher, sans changement
+    // de réseau (premier réseau de la politique, jamais le tunnel ni un proxy de plus).
+    const confirmOnce = refusal.action === 'confirm_once';
+    if (confirmOnce) await ctx.log('info', 'prior_refusal_confirmation', { domain, at: refusal.refusal.at });
+    let dossier: CatalogDossier | null = null;
+    /** HTML de la page vue à la reconnaissance de ce passage (signature de la version retenue) ; null sinon. */
+    let reconHtml: string | null = null;
+
     // --- réseau autorisé (politique de l'API, proxys de l'admin) et identité du robot ------------------------------
     let rungs: NetworkRung[];
     let tunnelChosen: boolean;
@@ -321,9 +400,10 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
     // Session requise (04 §3.2, C2) : seul le tunnel porte l'identité de l'utilisateur. Le serveur n'utilise aucun
     // cookie de session en V1 : un essai N1/N2 partirait sans la session (401/403 → arrêt, puis tunnel élagué, X3)
     // ou retiendrait une stratégie serveur sans session pour une API à session. Le plan se limite donc au tunnel.
-    const networks: PlanNetwork[] = sessionRequired
+    const allNetworks: PlanNetwork[] = sessionRequired
       ? [{ mode: 'tunnel', perGbUsd: 0 }]
       : [...rungs.map((r) => ({ mode: r.mode, perGbUsd: r.mode === 'direct' ? 0 : r.proxy.price.perGbUsd })), ...(tunnelChosen ? [{ mode: 'tunnel' as const, perGbUsd: 0 }] : [])];
+    const networks = confirmOnce ? allNetworks.slice(0, 1) : allNetworks;
     // Politique sans réseau serveur ni tunnel : un proxy requis manque (transition 3).
     if (!tunnelMode && first === undefined) return await finishStopped('proxy_not_configured', 'proxy_not_configured', 'setup');
     let userAgent: string;
@@ -499,6 +579,7 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
         const stopped1 = await tunnelOutcome('reconnaissance');
         if (stopped1 !== null) return stopped1;
         const capture: ReconCapture = recon.capture;
+        reconHtml = capture.document?.renderedHtml ?? capture.document?.html ?? null;
         const fresh = recon.failure === null ? analyzeCapture(capture, apiHostsOf(capture, host, scope)) : [];
         const candidates: readonly DataCandidate[] = firstRun ? fresh : rematchCandidates(state.candidates ?? [], fresh);
         await event(EV.reconnaissance, {
@@ -549,6 +630,10 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
           }
           const model = config.roles.investigate.model;
           const exampleOutput = (ctx.input as { example_output?: unknown } | null)?.example_output;
+          // Dossier de mémoire (19 §2) : calculé par le code, valeurs du même domaine seulement, masqué, sous son plafond.
+          const signature = computeSignature({ pageUrl, html: capture.document?.renderedHtml ?? capture.document?.html ?? null, outputSchema: fixed ?? {}, execution: 'fetch', network: first?.mode ?? 'tunnel' });
+          dossier = buildCatalogDossier({ ownerId: ctx.ownerId, apiId: ctx.apiId, domain, signature, description: request.description, mode: 'investigate', refusals: memory.refusals, now: new Date(now()) }, memory.entries);
+          const catalogMemory = renderCatalogMemory(dossier);
           // Règles et skills applicables (18 §4.3) : propriétaire de l'API et instance seulement ; plafonds journalisés.
           const ruled = await resolveRulesForApi(deps.pool, { apiId: ctx.apiId, ownerId: ctx.ownerId, role: 'investigate', host });
           await logRuleBudgets(ctx, ruled.resolved);
@@ -560,6 +645,7 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
             accessFacts: accessFactsForPrompt(report),
             ...(fixed === undefined ? {} : { fixedSchema: fixed }),
             rules: renderRulesPrompt(ruled.resolved),
+            ...(catalogMemory === '' ? {} : { catalogMemory }),
             allowedCouples: previewCouples({ networks, browser: deps.browsers !== null, agentic: deps.agentic === true ? agenticPrices(config) : {}, candidates, documentBytes: state.page?.document_bytes ?? capture.document?.bytes ?? 0, totalBytes: state.page?.total_bytes ?? capture.totalBytes }),
           };
           // Coût d'un appel borné AVANT l'envoi (sortie plafonnée, entrée estimée par excès) : jamais un appel qui
@@ -605,6 +691,11 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
             return await finishFailed(llmFailure, 'schema');
           }
           await ctx.log('info', 'investigate_call', { model, prompt_version: investigatePromptVersion, llm_usd: usage.cost_usd, calls: usage.calls });
+          // Entrées consultées (identifiants et sha256 seulement), gardées dans l'état jusqu'à la version retenue.
+          if (dossier.refs.length > 0) {
+            await save(phase, { memory: { sha256: dossier.sha256, refs: dossier.refs } });
+            await ctx.log('info', 'catalog_memory', { entries: dossier.refs.length, tokens: dossier.tokens, truncated: dossier.truncated, sha256: dossier.sha256 });
+          }
         }
         const built = buildFromProposal(proposal!, candidates, fixed === undefined ? capture : null, { ...(fixed === undefined ? {} : { fixedSchema: fixed }), agenticOnly });
         if (!built.ok) {
@@ -650,7 +741,7 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
       await save('testing');
       // Plan restreint par l'appelant (`exclude_executions`, 06 § 2) : des niveaux retirés, jamais ajoutés.
       const excluded = new Set<string>(state.excluded_executions ?? []);
-      const plan = (
+      const fullPlan = (
         imported !== undefined
           ? buildImportedPlan({ execution: imported.execution, spec: imported.spec, networks, browser: deps.browsers !== null })
           : buildTrialPlan({
@@ -665,6 +756,8 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
               totalBytes: state.page?.total_bytes ?? 0,
             })
       ).filter((p) => !excluded.has(p.execution));
+      // Confirmation d'un refus passé : le couple le moins cher seulement (le plan est déjà trié par coût croissant).
+      const plan = confirmOnce ? fullPlan.slice(0, 1) : fullPlan;
       // Règles embarquées dans les prompts figés E4-E6 (18 §4.5, RULES_MAX_TOKENS de 1 000) : la spec ne porte que leurs
       // RÉFÉRENCES (`nom@version#sha256`, jamais le texte : INV12, spec lisible des membres d'une API partagée) ; l'essai et
       // le rejeu reconstruisent le texte depuis ces versions épinglées (strategy-executor). E6 reçoit aussi la liste des
@@ -695,6 +788,8 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
       });
       const entries = new Map<TrialPair, PlanEntry>(ordered.map((p) => [p, p]));
       const lastRecords = new Map<TrialPair, Record<string, unknown>[]>();
+      /** Sorties des N exécutions d'échantillon de chaque couple (contenu minimal, r4 R5). */
+      const sampleOutputs = new Map<TrialPair, Record<string, unknown>[][]>();
       /** Trace E6 compilée en E5 par la dernière exécution conforme du couple (04 §3.1). */
       const compiledFor = new Map<TrialPair, unknown>();
       const spend = new Map<TrialPair, { proxy: number; llm: number | null; tokens: { in: number; cached: number; out: number; reasoning: number; estimated: boolean }; model: string | null; prompt: string | null; engine: string | null }>();
@@ -761,6 +856,7 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
                 compiledFor.set(pair, compiled);
               }
               lastRecords.set(pair, r.records);
+              if (purpose === 'sample') sampleOutputs.set(pair, [...(sampleOutputs.get(pair) ?? []), r.records]);
               return { ...execution(true, null, null, r.pages, cost, trial.ms, r.stop), records: r.records.length };
             },
             finished: async (o: PairOutcome) => {
@@ -785,6 +881,10 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
                 ...(stopCheckView(o) === undefined ? {} : { pagination: stopCheckView(o) }),
                 budget: budgetView(),
               });
+            },
+            contentCheck: (pair) => {
+              const check = minimalContentCheck(sampleOutputs.get(pair) ?? [], outputSchema);
+              return check.ok ? null : { failure_class: check.failure_class, detail: check.detail };
             },
             pruned: async (pairs, by, cls) => {
               await decide(EV.attemptPruned, {
@@ -848,8 +948,31 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
             rules: rows,
           });
           phase = 'done';
+          // Signature calculée par le code (r1 R10) et entrées de mémoire consultées (sha256 du dossier) sur la version.
+          const keptSpec = kept.spec as { request?: { url?: unknown }; pagination?: { type?: unknown } };
+          await saveStrategySignature(deps.pool, {
+            ownerId: ctx.ownerId,
+            apiId: ctx.apiId,
+            version: saved.version,
+            signature: computeSignature({
+              pageUrl,
+              requestUrl: typeof keptSpec.request?.url === 'string' ? keptSpec.request.url : null,
+              html: reconHtml,
+              outputSchema,
+              execution: kept.execution,
+              network: kept.network,
+              pagination: typeof keptSpec.pagination?.type === 'string' ? keptSpec.pagination.type : null,
+            }),
+          });
+          const consulted = dossier !== null ? { sha256: dossier.sha256, refs: dossier.refs } : state.memory;
+          if (consulted !== undefined && consulted.refs.length > 0) await recordMemoryRefs(deps.pool, { ownerId: ctx.ownerId, apiId: ctx.apiId, version: saved.version, refs: consulted.refs, sha256: consulted.sha256 });
           // Résultat livré (figure 1, étape I) : la sortie de la dernière exécution conforme, écrite comme le propriétaire.
           const dataset = await saveRunDataset(deps.pool, { runId: ctx.runId, apiId: ctx.apiId, ownerId: ctx.ownerId, projectId: target.api.projectId, items: records });
+          // Profil du run (après Ajv et la garde de classification : sortie conforme), puis juge CONSULTATIF avant `sain`.
+          const profile = profileItems(records, outputSchema);
+          const hash = inputHash(trialInput(entry.paginated, 'sample'));
+          await saveRunProfile(deps.pool, { runId: ctx.runId, apiId: ctx.apiId, ownerId: ctx.ownerId, strategyVersion: saved.version, inputHash: hash, profile });
+          await judgeInvestigation(records, outputSchema, profile, config, hash);
           await applyStatus({ type: 'investigation_succeeded' });
           await event(EV.finished, {
             outcome: 'conformant',

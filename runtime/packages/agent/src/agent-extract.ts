@@ -3,12 +3,13 @@
 // 04 §3.1 ; 08 §4). Garde-fous d'injection :
 // 1. le texte de la page est une DONNÉE NON FIABLE, encadré par des balises à jeton aléatoire que la page ne peut pas
 //    fermer (toute occurrence du nom de balise est neutralisée) ; le prompt système dit qu'aucune instruction n'y vaut ;
-// 2. aucun outil n'est offert au modèle : il ne peut que rendre des enregistrements (sortie structurée S1-S4, puis Ajv
+// 2. aucun outil n'est offert au modèle (pas même l'outil de soumission de S2, tâche 2.12) : il ne peut que rendre des enregistrements (sortie structurée S1-S4, puis Ajv
 //    contre le schéma d'ORIGINE de l'API, INV1) ; il ne navigue pas, ne saisit rien, ne change pas de tâche ;
 // 3. aucun cookie, en-tête, jeton d'URL ni attribut n'entre dans le prompt : texte visible seulement (page-text.ts),
 //    source réduite à l'origine et au chemin ; le masquage `llm.redact` s'applique dans le client ;
 // 4. le prompt et la réponse ne sont jamais journalisés (`assert_llm_prompts_not_logged`).
 import { createHash, randomBytes } from 'node:crypto';
+import { toolRegistryForPhase } from '@runtime/core';
 import type { ChatMessage, JsonSchema, LlmClient, LlmCallResult } from '@runtime/llm';
 
 export const EXTRACT_SYSTEM_PROMPT = [
@@ -85,6 +86,8 @@ export async function extractRecordsWithLlm(
     messages: extractMessages(args),
     schema: recordsSchema(args.itemSchema),
     name: 'records',
+    // E4 sans outil (19 §7, `assert_e4_no_tools`, retouche de 2.4) : ni l'outil de soumission de S2.
+    noTools: toolRegistryForPhase('e4_extract').tools.length === 0,
     ...(args.signal === undefined ? {} : { signal: args.signal }),
     ...(args.beforeCall === undefined ? {} : { beforeCall: args.beforeCall }),
   });
