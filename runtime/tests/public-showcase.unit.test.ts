@@ -152,10 +152,15 @@ describe('README public : ce qui marche aujourd\'hui, distingué de ce qui est p
     expect(honestyProblems(named('en', '**Not delivered yet:** repair and the MCP server.'), 'en', { ...all, repair: false }).join()).toMatch(/nomme mcp, pourtant livré/);
     expect(honestyProblems(named('en', '**Not delivered yet:** the MCP server.'), 'en', all).join()).toMatch(/doit disparaître/);
     expect(honestyProblems(named('en', '**Not delivered yet:** repair.'), 'en', none).join()).toMatch(/ne nomme pas mcp/);
+    // README d'avant 2.13 (puces reformulées « repairs itself ») : base des cas où la reprise par étape n'est pas encore livrée.
+    const unstepped = (lang: Lang, line: string) =>
+      lang === 'en'
+        ? named(lang, line).replace('repairs step by step', 'repairs itself').replace('it repairs the step that broke', 'the API repairs itself')
+        : named(lang, line).replace('répare étape par étape', 'se répare').replace("il répare l'étape qui a cassé", "l'API se répare");
     // 2.13 : la reprise par étape se nomme seule ; « a repair » dans la phrase suivante ne nomme pas la réparation livrée.
     expect(honestyProblems(bare('en'), 'en', { ...all, stepRepair: false }).join()).toMatch(/stepRepair non livré/);
-    expect(honestyProblems(named('en', '**Not delivered yet:** step-by-step repair. Until then, a repair patches the strategy.'), 'en', { ...all, stepRepair: false })).toEqual([]);
-    expect(honestyProblems(named('fr', '**Pas encore livré :** la réparation étape par étape. D\'ici là, une réparation corrige la stratégie.'), 'fr', { ...all, stepRepair: false })).toEqual([]);
+    expect(honestyProblems(unstepped('en', '**Not delivered yet:** step-by-step repair. Until then, a repair patches the strategy.'), 'en', { ...all, stepRepair: false })).toEqual([]);
+    expect(honestyProblems(unstepped('fr', '**Pas encore livré :** la réparation étape par étape. D\'ici là, une réparation corrige la stratégie.'), 'fr', { ...all, stepRepair: false })).toEqual([]);
     expect(honestyProblems(named('en', '**Not delivered yet:** step-by-step repair.'), 'en', all).join()).toMatch(/doit disparaître|nomme stepRepair/);
     expect(honestyProblems(bare('en'), 'en', { ...all, investigation: false }).join()).toMatch(/SYM \(investigates.*investigation non livré/);
   });

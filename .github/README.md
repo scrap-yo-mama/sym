@@ -11,8 +11,6 @@ You ask your AI for data. **SYM 👻** investigates the site cheapest-first (pla
 
 > [!WARNING]
 > **Pre-release.** SYM is under active development and not production-ready yet. Watch the repo for the first release.
->
-> **Not delivered yet:** step-by-step repair. Until it lands, a repair patches the strategy, not a single step.
 
 ## How it feels
 
@@ -31,7 +29,7 @@ SYM 👻: Done. 20 books, no model cost per replay.
 
 - Turns a request into a schema you validate first
 - Picks the cheapest method that works
-- Replays without an LLM when the strategy allows, repairs itself
+- Replays without an LLM when the strategy allows, repairs step by step
 - Uses your own browser session when you allow it
 - Speaks MCP, REST, and has a console
 
@@ -43,7 +41,7 @@ SYM 👻: Done. 20 books, no model cost per replay.
 - JavaScript-heavy pages, with a real browser
 - Account sites, through your own session (Chrome extension)
 - Tricky sites: an agent figures it out, then it compiles
-- Sites that change: the API repairs itself
+- Sites that change: it repairs the step that broke
 - Pagination, schedules, webhooks
 
 </td>

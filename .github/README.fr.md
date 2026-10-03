@@ -11,8 +11,6 @@ Tu demandes des données à ton IA. **SYM 👻** enquête sur le site en commen�
 
 > [!WARNING]
 > **Pré-version.** SYM est en plein développement et n'est pas encore prêt pour la production. Suis le dépôt pour la première version.
->
-> **Pas encore livré :** la réparation étape par étape. D'ici là, une réparation corrige la stratégie, pas une étape seule.
 
 ## Ce que ça donne
 
@@ -31,7 +29,7 @@ SYM 👻 : C'est fait. 20 livres, aucun coût de modèle par rejeu.
 
 - Transforme une demande en schéma que tu valides d'abord
 - Choisit la méthode la moins chère qui marche
-- Rejoue sans LLM quand la stratégie le permet, se répare
+- Rejoue sans LLM quand la stratégie le permet, répare étape par étape
 - Utilise ta propre session de navigateur quand tu l'autorises
 - Parle MCP et REST, et a une console
 
@@ -43,7 +41,7 @@ SYM 👻 : C'est fait. 20 livres, aucun coût de modèle par rejeu.
 - Les pages lourdes en JavaScript, avec un vrai navigateur
 - Les sites à compte, avec ta propre session (extension Chrome)
 - Les sites retors : un agent se débrouille, puis ça se compile
-- Les sites qui changent : l'API se répare
+- Les sites qui changent : il répare l'étape qui a cassé
 - Pagination, planifications, webhooks
 
 </td>

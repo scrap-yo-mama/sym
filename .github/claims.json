@@ -1280,17 +1280,19 @@
       "surfaces": [
         "readme"
       ],
-      "en": "Replays without an LLM when the strategy allows, repairs itself",
-      "fr": "Rejoue sans LLM quand la stratégie le permet, se répare",
+      "en": "Replays without an LLM when the strategy allows, repairs step by step",
+      "fr": "Rejoue sans LLM quand la stratégie le permet, répare étape par étape",
       "proof": [
         "test:assert_e5_replay_without_llm",
         "file:runtime/apps/worker/src/exec/repair.integration.test.ts",
-        "test:assert_output_schema_enforced"
+        "test:assert_output_schema_enforced",
+        "test:assert_step_patch_bounded",
+        "test:assert_step_classification_guard"
       ],
       "reviewed": "2026-10-03",
       "status": "relu",
       "task": "2.13",
-      "note": "Puce de la planche (D-60) avec deux écarts listés par assert_readme_matches_maquette : la réserve « when the strategy allows » imposée par 22 §3.2 (E4 à E6 et une API not_compilable rejouent avec un modèle, 04 §2), et « repairs itself » au lieu de « repairs step by step » tant que la reprise par étape (2.13, 19 §4) n'est pas livrée : la réparation livrée (2.3) corrige la stratégie. À la livraison de 2.13, l'entrée repasse à relire et reprend les mots de la planche avec un assert de 19 §4 en preuve.",
+      "note": "Puce de la planche (D-60) avec un écart listé par assert_readme_matches_maquette : la réserve « when the strategy allows » imposée par 22 §3.2 (E4 à E6 et une API not_compilable rejouent avec un modèle, 04 §2). Reprise par étape livrée (2.13, 19 §4) : les mots de la planche, « repairs step by step », avec les asserts de 19 §4 en preuve.",
       "reviewer": "agent"
     },
     {
@@ -1374,16 +1376,18 @@
       "surfaces": [
         "readme"
       ],
-      "en": "Sites that change: the API repairs itself",
-      "fr": "Les sites qui changent : l'API se répare",
+      "en": "Sites that change: it repairs the step that broke",
+      "fr": "Les sites qui changent : il répare l'étape qui a cassé",
       "proof": [
         "file:runtime/apps/worker/src/exec/repair.integration.test.ts",
-        "file:runtime/apps/worker/src/exec/classification-guard.integration.test.ts"
+        "file:runtime/apps/worker/src/exec/classification-guard.integration.test.ts",
+        "test:assert_step_patch_bounded",
+        "test:assert_step_classification_guard"
       ],
       "reviewed": "2026-10-03",
       "status": "relu",
       "task": "2.13",
-      "note": "Puce de la planche (D-60) reformulée (écart listé par assert_readme_matches_maquette) : « it repairs the step that broke » attend la reprise par étape (2.13, 19 §4), non livrée ; la réparation livrée (2.3, patch borné sur la stratégie) est prouvée. À la livraison de 2.13, l'entrée repasse à relire et reprend les mots de la planche avec un assert de 19 §4 en preuve.",
+      "note": "Puce de la planche (D-60), mots de la planche depuis la livraison de la reprise par étape (2.13, 19 §4) : asserts de 19 §4 en preuve, la réparation de la stratégie (2.3) restant prouvée.",
       "reviewer": "agent"
     },
     {
@@ -1437,23 +1441,6 @@
       "reviewed": "2026-10-03",
       "status": "relu",
       "note": "Aucune étiquette v* ni image publiée : la version du paquet racine est 0.0.0 ; la première release est un GO (4.5).",
-      "reviewer": "agent"
-    },
-    {
-      "id": "readme-not-delivered-step-repair",
-      "surfaces": [
-        "readme"
-      ],
-      "en": "Not delivered yet: step-by-step repair. Until it lands, a repair patches the strategy, not a single step.",
-      "fr": "Pas encore livré : la réparation étape par étape. D'ici là, une réparation corrige la stratégie, pas une étape seule.",
-      "proof": [
-        "file:runtime/apps/worker/src/exec/repair.integration.test.ts",
-        "file:runtime/tests/public-showcase.unit.test.ts"
-      ],
-      "reviewed": "2026-10-03",
-      "status": "relu",
-      "task": "2.13",
-      "note": "Ligne de l'alerte, hors planche (écart listé par assert_readme_matches_maquette) : à retirer à la livraison de 2.13, que tests/public-showcase.unit.test.ts exige alors.",
       "reviewer": "agent"
     },
     {

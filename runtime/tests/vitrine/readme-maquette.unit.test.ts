@@ -30,11 +30,8 @@ const spans = (style: string): string[] => [...html.matchAll(new RegExp(`<span s
  *  - verify : la planche abrège le bloc par « … » et un `--certificate-identity-regexp` : le bloc est celui que dérive l'identité publique
  *    (assert_verify_snippet_works) ;
  *  - selector : le sélecteur de langue en première ligne est exigé par 22 §3.1 (u8 R2) en plus du lien final « Lire en français » ;
- *  - alert : une ligne « Not delivered yet » nomme ce qui manque encore (la reprise étape par étape de 2.13) et disparaît à sa
- *    livraison (tests/public-showcase : les promesses restent vraies) ;
- *  - step : jusqu'à la livraison de 2.13 (reprise par étape, 19 §4), « repairs step by step » devient « repairs itself » et « it repairs
- *    the step that broke » devient « the API repairs itself » : aucune affirmation au présent d'une fonction non livrée, même nommée
- *    par l'alerte (D-46, 22 §3.2) ; une réparation livrée (2.3) corrige la stratégie, pas une étape ;
+ *  - alert, step : retirés à la livraison de 2.13 (reprise par étape, 19 §4) : plus de ligne « Not delivered yet », les puces de la
+ *    réparation reprennent les mots de la planche (tests/public-showcase : les promesses restent vraies) ;
  *  - llm : « without an LLM » porte la réserve imposée par 22 §3.2, « when the strategy allows » : les stratégies E4 à E6 et une API
  *    not_compilable rejouent avec un modèle (04 §2) ;
  *  - ghost : le bandeau écrit « SYM » et trace l'icône SVG de packages/ui (sym-ghost.svg) au lieu de l'emoji 👻 de la planche : un emoji
@@ -52,7 +49,7 @@ const EXPLAINED = {
   cost: [', $0.0004 per replay', ', no model cost per replay'],
   render: [', about $38/month', ''],
   llm: [['replays without an LLM and', 'replays without an LLM when the strategy allows, and'], ['Replays without an LLM,', 'Replays without an LLM when the strategy allows,']],
-  step: [['repairs step by step', 'repairs itself'], ['it repairs the step that broke', 'the API repairs itself']],
+  step: [] as [string, string][],
   ghost: [' 👻', ''],
   /** Écarts de rendu propres à GitHub (aucun n'est dans le texte du README) et écart de langue de la doc. */
   github: [
