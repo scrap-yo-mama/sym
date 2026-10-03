@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { describe, expect, test } from 'vitest';
 import { MODULE_ROOT } from '../eslint.boundaries.mjs';
 
-type Entry = { test: string; invariant: string; tasks: string[]; stage: string };
+type Entry = { test: string; invariant: string; tasks: string[]; stage: string; note: string };
 const SKIP = new Set(['node_modules', 'dist', '.vite', 'coverage']);
 
 function testFiles(dir: string): string[] {
@@ -37,5 +37,17 @@ describe('registre tests/invariants.json', () => {
 
   test('chaque test nommé existe dans un fichier de test du module', () => {
     for (const e of entries) expect(sources.some((s) => s.includes(e.test)), e.test).toBe(true);
+  });
+
+  // Revue de browser-v1 (point 5) : une note par entrée, à jour, jamais une concaténation de fusions (« … | … ») qui répète
+  // une phrase ou garde un « Reste(nt) : » d'une tâche déjà couverte.
+  test('une note unique par entrée : ni concaténation de fusion, ni phrase répétée, ni tâche citée dans « Restent »', () => {
+    for (const e of entries) {
+      expect(e.note, e.test).not.toMatch(/ \| /);
+      const sentences = e.note.split(/(?<=\.) /).map((x) => x.trim()).filter((x) => x.length > 20);
+      expect(sentences.length - new Set(sentences).size, e.test).toBe(0);
+      const remaining = /Rest(?:e|ent) ?: ([^.]*)/.exec(e.note)?.[1] ?? '';
+      for (const task of e.tasks) expect(remaining.includes(task), `${e.test} : tâche ${task} encore dans « Restent »`).toBe(false);
+    }
   });
 });

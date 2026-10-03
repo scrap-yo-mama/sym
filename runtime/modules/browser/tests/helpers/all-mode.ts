@@ -7,7 +7,8 @@
 //     superviseur des sessions sur la base (1.2), egress par session (1.5), relais interne (2.3) ;
 //   - le lanceur du mode `all` relie la passerelle au superviseur du nœud dans le processus (types.ts de la passerelle).
 // Authentification : vraies clés argon2id et jetons HMAC de la tâche 2.1 (branchés à l'intégration).
-// Le binaire `SYMB_MODE=all` ne sert pas encore l'API (aucune tâche fusionnée ne l'a câblé) : ce banc en est l'assemblage.
+// Le binaire `SYMB_MODE=all` sert la même chose (apps/gateway/src/runtime, F-20261002-01) et il est éprouvé sur l'image par
+// tests/deploy.e2e.test.ts ; ce banc garde l'assemblage en processus pour les tests Chromium sans image (site sur 127.0.0.1).
 // Destination : le site de test de la tâche 0.5 sur 127.0.0.1, nommé `site-a.test` (résolveur et hôte privé admis du
 // banc, comme tests/cdp-compat.chromium.test.ts). Prérequis : Docker, utilisateur non root, Chromium de Playwright 1.63.
 // Sécurité : les Chromium sont arrêtés par le pool (groupes de processus enregistrés à leur lancement), jamais par un

@@ -415,9 +415,9 @@ jobs:
 
   gate:
     # Seul check à exiger (ADR 23 § 6) : échoue si un job a échoué ou a été annulé. Un job de module sauté (module non touché)
-    # passe. `nightly` n'en fait pas partie (planifié seulement).
+    # passe. `nightly` n’en fait pas partie (planifié seulement) ; tous les autres jobs y sont (tests/ci-detect.unit.test.ts).
     if: always()
-    needs: [quality, docs, unit, integration, api-contract, e2e, security, image, detect, browser]
+    needs: [quality, docs, vitrine, unit, integration, api-contract, e2e, security, image, detect, browser]
     runs-on: ubuntu-24.04
     # Pas de checkout : le dossier `runtime` du défaut du workflow n'existe pas ici.
     defaults:

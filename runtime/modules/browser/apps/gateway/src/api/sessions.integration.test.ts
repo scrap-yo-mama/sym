@@ -58,7 +58,8 @@ describe('session_default_dedicated (F1, F9)', () => {
       contract: BROWSER_PROTOCOL_VERSION,
       playwright: BROWSER_ENGINE.playwright,
       chromium: BROWSER_ENGINE.chromium,
-      platform: 'linux',
+      // Plateforme du processus qui sert (`process.platform` par défaut) : linux dans l'image, darwin sur un poste macOS.
+      platform: process.platform,
       minSdk: '1.0.0',
     });
   });

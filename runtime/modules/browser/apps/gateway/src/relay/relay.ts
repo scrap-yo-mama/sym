@@ -49,7 +49,7 @@ export type RelayOptions = {
   /** Taille maximale d'un message relayé (`SYMB_CDP_MAX_MESSAGE_BYTES`, 100 Mio). */
   cdpMaxMessageBytes?: number;
   /** Point WebSocket CDP public d'une session, à jeton neuf (`json/version`) ; absent : découverte non servie. */
-  cdpWebSocketUrl?: (sessionId: string, notAfter?: Date) => string | Promise<string>;
+  cdpWebSocketUrl?: (sessionId: string, notAfter: Date | undefined, request: FastifyRequest) => string | Promise<string>;
   onError?: (error: unknown) => void;
 };
 
@@ -122,7 +122,7 @@ export async function registerRelay(app: FastifyInstance, options: RelayOptions)
       const raw = (await response.json().catch(() => ({}))) as Record<string, unknown>;
       const fields = Object.fromEntries(VERSION_FIELDS.filter((k) => typeof raw[k] === 'string').map((k) => [k, raw[k]]));
       reply.header('x-request-id', request.id).header('cache-control', 'no-store');
-      return { ...fields, webSocketDebuggerUrl: await cdpWebSocketUrl(decision.sessionId, decision.notAfter) };
+      return { ...fields, webSocketDebuggerUrl: await cdpWebSocketUrl(decision.sessionId, decision.notAfter, request) };
     });
   }
 

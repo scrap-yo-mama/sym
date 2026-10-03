@@ -18,6 +18,12 @@
 //   - navigation pilotée (`Page.navigate`, `Target.createTarget`, `goto`) vers un autre schéma que http(s), about:, data:,
 //     blob: (ni `file://` ni pages internes de Chromium) ;
 //   - téléchargements : `allowAndName` (Page : `allow`) vers le dossier de la session, événements actifs, ou `deny`.
+// Relecture de browser-v1 (docs/audit-securite.md § 9, S18 à S20) :
+//   - Playwright `saveAs` (copie d'un artefact vers un chemin du NŒUD : écriture arbitraire) et `pathAfterFinished` (chemin
+//     local) refusés ; un client distant utilise `saveAsStream` ;
+//   - CDP `Target.sendMessageToTarget` refusé : son message imbriqué atteindrait la cible sans passer par ces réécritures
+//     (les clients du marché utilisent le mode aplati, `flatten: true`) ;
+//   - CDP `Input.dispatchDragEvent` : `data.files` soumis à la même règle que `DOM.setFileInputFiles`.
 import { normalize } from 'node:path';
 
 export type RewriteContext = { egressProxyUrl: string | null; downloadsDir: string | null };
@@ -30,8 +36,8 @@ export type RewriteResult =
 const LOOPBACK_ONLY = '<-loopback>';
 const DOWNLOAD_METHODS = new Set(['Browser.setDownloadBehavior', 'Page.setDownloadBehavior']);
 const PLAYWRIGHT_CONTEXT_METHODS = new Set(['newContext', 'newContextForReuse']);
-const DENIED_CDP_METHODS = new Set(['Tethering.bind', 'Tethering.unbind', 'Target.exposeDevToolsProtocol', 'Browser.crash', 'Browser.crashGpuProcess']);
-const DENIED_PLAYWRIGHT_METHODS = new Set(['newCDPSession', 'newBrowserCDPSession', 'launch', 'launchPersistentContext', 'launchServer', 'connectOverCDP', 'connect']);
+const DENIED_CDP_METHODS = new Set(['Tethering.bind', 'Tethering.unbind', 'Target.exposeDevToolsProtocol', 'Target.sendMessageToTarget', 'Browser.crash', 'Browser.crashGpuProcess']);
+const DENIED_PLAYWRIGHT_METHODS = new Set(['newCDPSession', 'newBrowserCDPSession', 'launch', 'launchPersistentContext', 'launchServer', 'connectOverCDP', 'connect', 'saveAs', 'pathAfterFinished']);
 const NAVIGATION_SCHEMES = new Set(['http:', 'https:', 'about:', 'data:', 'blob:']);
 const CDP_NAVIGATIONS = new Set(['Page.navigate', 'Target.createTarget']);
 
@@ -81,6 +87,16 @@ export function rewriteCdpMessage(text: string, ctx: RewriteContext): RewriteRes
   if (typeof method === 'string' && CDP_NAVIGATIONS.has(method) && !navigable(paramsOf(message)['url'])) return cdpError(message, 'schéma de navigation refusé par SYM Browser');
   if (method === 'DOM.setFileInputFiles') {
     const files = paramsOf(message)['files'];
+    const downloadsDir = ctx.downloadsDir;
+    if (!downloadsDir || !Array.isArray(files) || !files.every((file) => insideUploads(file, downloadsDir))) {
+      return cdpError(message, 'fichiers hors des envois de la session (POST /v1/sessions/{id}/uploads)');
+    }
+    return { kind: 'forward', text: JSON.stringify(message) };
+  }
+  if (method === 'Input.dispatchDragEvent') {
+    const data = paramsOf(message)['data'];
+    const files = data !== null && typeof data === 'object' && !Array.isArray(data) ? (data as Record<string, unknown>)['files'] : undefined;
+    if (files === undefined) return { kind: 'forward', text: JSON.stringify(message) };
     const downloadsDir = ctx.downloadsDir;
     if (!downloadsDir || !Array.isArray(files) || !files.every((file) => insideUploads(file, downloadsDir))) {
       return cdpError(message, 'fichiers hors des envois de la session (POST /v1/sessions/{id}/uploads)');

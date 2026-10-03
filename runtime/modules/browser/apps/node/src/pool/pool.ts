@@ -169,6 +169,8 @@ type LeaseState = {
 export type PoolStats = {
   slotsTotal: number;
   slotsFree: number;
+  /** Slots libres, fraction comprise (une session shared réserve une fraction de slot) : base du battement (2.4). */
+  slotsFreeExact: number;
   sessions: Record<SessionType, number>;
   browsers: { warm: number; shared: number; dedicated: number };
   recycles: Record<RecycleReason, number>;
@@ -240,7 +242,7 @@ export class BrowserPool {
       else if (entry.tenantId === null) browsers.warm += 1;
       else browsers.shared += 1;
     }
-    return { slotsTotal: this.slotsTotal, slotsFree: Math.floor((this.slotsTotal * SLOT_UNITS - this.#usedUnits) / SLOT_UNITS), sessions, browsers, recycles: { ...this.#recycles } };
+    return { slotsTotal: this.slotsTotal, slotsFree: Math.floor((this.slotsTotal * SLOT_UNITS - this.#usedUnits) / SLOT_UNITS), slotsFreeExact: (this.slotsTotal * SLOT_UNITS - this.#usedUnits) / SLOT_UNITS, sessions, browsers, recycles: { ...this.#recycles } };
   }
 
   async acquire(request: AcquireRequest): Promise<PoolLease> {

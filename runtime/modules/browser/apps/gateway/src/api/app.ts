@@ -113,7 +113,7 @@ function decodeCursor(cursor: string): SessionView['position'] {
 export async function createGatewayApi(deps: GatewayDeps): Promise<FastifyInstance> {
   const queueTimeoutMs = deps.queueTimeoutMs ?? 30_000;
   const defaults = { ...SESSION_DEFAULTS, ...deps.defaults };
-  const wsBase = deps.publicUrl.replace(/\/+$/, '').replace(/^http/, 'ws');
+  const publicUrlOf = (request: FastifyRequest): string => (typeof deps.publicUrl === 'string' ? deps.publicUrl : deps.publicUrl(request)).replace(/\/+$/, '');
   const onError = deps.onError ?? (() => undefined);
   const version: VersionInfo = {
     product: BROWSER_PRODUCT,
@@ -222,7 +222,8 @@ export async function createGatewayApi(deps: GatewayDeps): Promise<FastifyInstan
     return request.principal;
   };
 
-  const connectUrls = async (sessionId: string, type: SessionType, notAfter?: Date): Promise<ConnectUrls> => {
+  const connectUrls = async (request: FastifyRequest, sessionId: string, type: SessionType, notAfter?: Date): Promise<ConnectUrls> => {
+    const wsBase = publicUrlOf(request).replace(/^http/, 'ws');
     const url = async (protocol: 'playwright' | 'cdp') =>
       `${wsBase}/v1/sessions/${sessionId}/${protocol}?token=${encodeURIComponent(await deps.tokens.issue({ sessionId, protocol, ttlSeconds: CONNECT_TOKEN_TTL_SECONDS, ...(notAfter === undefined ? {} : { notAfter }) }))}`;
     return { cdp: type === 'dedicated' ? await url('cdp') : null, playwright: await url('playwright'), bidi: null };
@@ -232,14 +233,14 @@ export async function createGatewayApi(deps: GatewayDeps): Promise<FastifyInstan
    * Réponse `Session` (04 § 4) : `connectUrls` à jeton neuf pour une session `running` seulement, et seulement pour qui peut
    * la piloter (`sessions:write`, audit 5.3 S09 : une clé de lecture ne reçoit aucun jeton de pilotage).
    */
-  const present = async (view: SessionView, canDrive = true): Promise<Session> => ({
+  const present = async (request: FastifyRequest, view: SessionView, canDrive = true): Promise<Session> => ({
     id: view.id,
     state: view.state,
     type: view.type,
     ...(view.nodeRegion === null ? {} : { nodeRegion: view.nodeRegion }),
-    ...(view.state === 'running' && canDrive ? { connectUrls: await connectUrls(view.id, view.type) } : {}),
+    ...(view.state === 'running' && canDrive ? { connectUrls: await connectUrls(request, view.id, view.type) } : {}),
     // Vue en direct (04d § 1.1) : page de la console, jeton de lecture seule de 15 min ; `rw` par la route dédiée (contrat).
-    ...(view.state === 'running' && deps.relay?.liveTokens !== undefined ? { liveViewUrl: liveViewUrl(deps.publicUrl, view.id, deps.relay.liveTokens.issue({ sessionId: view.id, mode: 'ro' }).token) } : {}),
+    ...(view.state === 'running' && deps.relay?.liveTokens !== undefined ? { liveViewUrl: liveViewUrl(publicUrlOf(request), view.id, deps.relay.liveTokens.issue({ sessionId: view.id, mode: 'ro' }).token) } : {}),
     expiresAt: view.expiresAt.toISOString(),
     createdAt: view.createdAt.toISOString(),
     ...(view.endReason === null ? {} : { endReason: view.endReason }),
@@ -284,7 +285,7 @@ export async function createGatewayApi(deps: GatewayDeps): Promise<FastifyInstan
       // Audit 5.3 S10 : la réponse gardée n'a aucun jeton ; le rejeu relit la session et émet des jetons neufs.
       const stored = claim.body as Partial<Session>;
       const view = typeof stored.id === 'string' ? await getSessionView(deps.db, { tenantId: scope.tenantId, sessionId: stored.id }) : null;
-      return reply.code(claim.status).header('idempotent-replayed', 'true').send(view ? await present(view) : claim.body);
+      return reply.code(claim.status).header('idempotent-replayed', 'true').send(view ? await present(request, view) : claim.body);
     }
     try {
       const result = await run();
@@ -310,7 +311,7 @@ export async function createGatewayApi(deps: GatewayDeps): Promise<FastifyInstan
       ...(deps.relay.cdpMaxMessageBytes === undefined ? {} : { cdpMaxMessageBytes: deps.relay.cdpMaxMessageBytes }),
       // Découverte json/version (tâche 2.8) : même URL que `connectUrls.cdp`, jeton neuf.
       // Ouverte par un jeton : jamais au-delà de son échéance (audit 5.3 S14).
-      cdpWebSocketUrl: async (sessionId, notAfter) => (await connectUrls(sessionId, 'dedicated', notAfter)).cdp ?? '',
+      cdpWebSocketUrl: async (sessionId, notAfter, request) => (await connectUrls(request, sessionId, 'dedicated', notAfter)).cdp ?? '',
       onError,
     });
   }
@@ -450,7 +451,7 @@ export async function createGatewayApi(deps: GatewayDeps): Promise<FastifyInstan
           })
           .catch(onError)
           .finally(() => void admission.pump());
-        return { status: 202, body: await present(session) };
+        return { status: 202, body: await present(request, session) };
       }
 
       const result = await start().finally(() => void admission.pump());
@@ -463,7 +464,7 @@ export async function createGatewayApi(deps: GatewayDeps): Promise<FastifyInstan
         throw new ApiProblem('no_node', LAUNCH_FAILED, { retryAfter: RETRY_AFTER_SECONDS });
       }
       const started = (await getSessionView(deps.db, { tenantId: principal.tenantId, sessionId: session.id })) ?? session;
-      return { status: 201, body: await present(started) };
+      return { status: 201, body: await present(request, started) };
     }
   });
 
@@ -511,16 +512,16 @@ export async function createGatewayApi(deps: GatewayDeps): Promise<FastifyInstan
     });
     const last = page.data.at(-1);
     const canDrive = principalOf(request).scopes.includes('sessions:write');
-    return { data: await Promise.all(page.data.map((view) => present(view, canDrive))), nextCursor: page.hasMore && last ? encodeCursor(last.position) : null };
+    return { data: await Promise.all(page.data.map((view) => present(request, view, canDrive))), nextCursor: page.hasMore && last ? encodeCursor(last.position) : null };
   });
 
   app.get('/v1/sessions/:id', { preHandler: authorize('sessions:read') }, async (request) =>
-    present(await loadSession(request, (request.params as { id: string }).id), principalOf(request).scopes.includes('sessions:write')),
+    present(request, await loadSession(request, (request.params as { id: string }).id), principalOf(request).scopes.includes('sessions:write')),
   );
 
   app.delete('/v1/sessions/:id', { preHandler: authorize('sessions:write') }, async (request) => {
     const view = await loadSession(request, (request.params as { id: string }).id);
-    if (isTerminal(view.state)) return present(view);
+    if (isTerminal(view.state)) return present(request, view);
     // Libération : le nœud qui tient la session la détruit puis écrit `ended` (04c § 3.2) ; sinon la passerelle l'écrit.
     if ((await deps.launcher.release(view.id)) === 'not_held') {
       const to = endStateFor(view.state, 'released');
@@ -528,7 +529,7 @@ export async function createGatewayApi(deps: GatewayDeps): Promise<FastifyInstan
     }
     // Des unités se sont libérées : la file est servie sans attendre le passage périodique.
     void admission.pump();
-    return present((await getSessionView(deps.db, { tenantId: view.tenantId, sessionId: view.id })) ?? view);
+    return present(request, (await getSessionView(deps.db, { tenantId: view.tenantId, sessionId: view.id })) ?? view);
   });
 
   app.post('/v1/sessions/:id/extend', { preHandler: authorize('sessions:write') }, async (request, reply) => {
@@ -543,7 +544,7 @@ export async function createGatewayApi(deps: GatewayDeps): Promise<FastifyInstan
         if (!outcome.ok) throw outcome.code === 'not_found' ? sessionNotFound() : finished;
       }
       const updated = (await getSessionView(deps.db, { tenantId: view.tenantId, sessionId: view.id })) ?? view;
-      return { status: 200, body: await present(updated) };
+      return { status: 200, body: await present(request, updated) };
     });
   });
 

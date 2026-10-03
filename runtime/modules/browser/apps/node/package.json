@@ -12,6 +12,10 @@
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     },
+    "./dedicated": {
+      "types": "./dist/dedicated/index.d.ts",
+      "default": "./dist/dedicated/index.js"
+    },
     "./egress": {
       "types": "./dist/egress/index.d.ts",
       "default": "./dist/egress/index.js"
@@ -20,9 +24,17 @@
       "types": "./dist/events/index.d.ts",
       "default": "./dist/events/index.js"
     },
+    "./relay": {
+      "types": "./dist/relay/index.d.ts",
+      "default": "./dist/relay/index.js"
+    },
     "./sessions": {
       "types": "./dist/sessions/index.d.ts",
       "default": "./dist/sessions/index.js"
+    },
+    "./upstream": {
+      "types": "./dist/egress/upstream/index.d.ts",
+      "default": "./dist/egress/upstream/index.js"
     },
     "./usage": {
       "types": "./dist/usage/index.d.ts",

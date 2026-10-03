@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Hôte de service de SYM Browser (04d § 3.3 santé, 04b § 9 drainage) : `/healthz`, `/readyz`, arrêt, refus de démarrer.
 import { randomBytes } from 'node:crypto';
+import { connect } from 'node:net';
 import { afterEach, describe, expect, test } from 'vitest';
 import { loadConfig, runService, SHUTDOWN_TEARDOWN_MS, startService, type ReadinessCheck, type ServiceHandle } from '../index.js';
 
@@ -226,6 +227,39 @@ describe('runService : préparation des rôles (tâche 5.1)', () => {
     expect(await get(service!, '/readyz')).toMatchObject({ status: 503, body: { checks: { master_key: 'ok', database: 'ok', nodes: 'aucun nœud' } } });
     await service!.shutdown();
     expect(calls).toEqual(['prepare', 'drain', 'close']);
+  });
+
+  test('F-20261002-01 : les routes applicatives du rôle (http) reçoivent les autres chemins et les upgrades ; santé inchangée', async () => {
+    const seen: string[] = [];
+    const service = await runService({
+      env: env(),
+      handleSignals: false,
+      stdout: () => undefined,
+      prepare: async () => ({
+        http: {
+          request: (request, response) => {
+            seen.push(`${request.method} ${request.url}`);
+            response.writeHead(200, { 'content-type': 'application/json' }).end('{"api":true}');
+          },
+          upgrade: (request, socket) => {
+            seen.push(`upgrade ${request.url}`);
+            socket.end('HTTP/1.1 418 I\'m a teapot\r\nConnection: close\r\nContent-Length: 0\r\n\r\n');
+          },
+        },
+      }),
+    });
+    running.push(service!);
+    expect(await get(service!, '/v1/version')).toMatchObject({ status: 200, body: { api: true } });
+    expect((await get(service!, '/healthz')).body).toEqual({ status: 'ok' });
+    const upgraded = await new Promise<string>((resolve, reject) => {
+      const socket = connect(service!.port, '127.0.0.1', () => socket.write('GET /v1/sessions/x/cdp HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n'));
+      let data = '';
+      socket.on('data', (chunk: Buffer) => (data += chunk.toString()));
+      socket.on('close', () => resolve(data));
+      socket.on('error', reject);
+    });
+    expect(upgraded).toMatch(/^HTTP\/1\.1 418/);
+    expect(seen).toEqual(['GET /v1/version', 'upgrade /v1/sessions/x/cdp']);
   });
 
   test('prepare n’est pas appelé par --check-config ni sur configuration invalide', async () => {

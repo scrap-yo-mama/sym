@@ -6,10 +6,9 @@
 //   - nœud : relais interne (`createNodeRelay`, 2.3, NODE_TOKEN), pool de Chromium (1.1) et Chromium dédiés (1.4) lancés sur
 //     l'egress propre à chaque session (1.5), qui applique la politique `egress` de la requête de création ;
 //   - un nœud enregistré par battement en base (table de routage), comme le ferait le nœud en mode `all`.
-// À REMPLACER par le binaire réel quand l'assemblage `SYMB_MODE=all` (passerelle + nœud dans un process, 03 § 4) existera :
-// il n'existe pas encore dans le module (apps/gateway ne sert que /healthz et /readyz). Doublures restantes, signalées dans
-// le rapport de la 3.8 : la vérification argon2id des clés d'API (tâche 2.1 ; ici une clé de test en mémoire, dont la ligne
-// existe en base) et le choix du nœud (2.4 ; un seul nœud). Sessions `dedicated` seulement (type par défaut du quickstart).
+// Le binaire `SYMB_MODE=all` (apps/gateway/src/runtime, F-20261002-01) rejoue le quickstart complet, étape 1 comprise, sur
+// l'image construite (tests/deploy.e2e.test.ts, quickstart_replayed_on_image) ; ce banc rejoue les étapes 3 à 5 sans image.
+// Simplification restante : un seul nœud. Sessions `dedicated` seulement (type par défaut du quickstart).
 import { randomBytes } from 'node:crypto';
 import { mkdtemp, readdir, rm } from 'node:fs/promises';
 import { createServer, type Server } from 'node:http';

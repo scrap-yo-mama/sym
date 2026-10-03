@@ -4,7 +4,7 @@ SYM 👻 : Dix minutes, trois commandes et un script. À la fin, tu auras ouver
 
 Il te faut Docker, OpenSSL et Node.js 24 (ou 22). La session ci-dessous est de type `dedicated` (le défaut) : un Chromium à elle seule, piloté en CDP.
 
-<!-- L'étape 1 est la seule que la CI ne rejoue pas : l'image publique et l'assemblage `SYMB_MODE=all` arrivent avec la tâche 5.1. Les étapes 3 à 5 sont extraites de cette page (code identique à la version anglaise) et exécutées telles quelles par tests/docs-quickstart.chromium.test.ts. -->
+<!-- La CI rejoue cette page de bout en bout sur l'image construite : l'étape 1 (les commandes ci-dessous, avec l'image locale, des noms et des ports uniques) puis les étapes 3 à 5 extraites de cette page (code identique à la version anglaise) et exécutées telles quelles (tests/deploy.e2e.test.ts, quickstart_replayed_on_image). tests/docs-quickstart.chromium.test.ts rejoue aussi les étapes 3 à 5 sur un assemblage dans le processus des tests. -->
 
 ## 1. Démarre SYM Browser
 
@@ -12,7 +12,7 @@ SYM Browser a besoin de PostgreSQL, d'une clé maîtresse et d'une première cl�
 
 ```bash
 export MASTER_KEY="$(openssl rand -base64 32)"   # sauvegarde-la dans ton gestionnaire de mots de passe
-export SYMB_API_KEY="symb_$(openssl rand -hex 24)"
+export SYMB_API_KEY="symb_$(openssl rand -hex 6)_$(openssl rand -base64 32 | tr '+/' '-_' | tr -d '=')"
 curl -fsSLO https://raw.githubusercontent.com/scrap-yo-mama/sym-browser/main/deploy/seccomp-chromium.json
 
 docker network create symb
@@ -21,13 +21,14 @@ docker run -d --name symb-db --network symb \
   postgres:16
 docker run -d --name sym-browser --network symb -p 127.0.0.1:3000:3000 \
   --security-opt seccomp=seccomp-chromium.json --security-opt no-new-privileges --cap-drop ALL \
+  --cap-add SYS_CHROOT --shm-size 1g \
   -e SYMB_MODE=all \
   -e DATABASE_URL=postgres://postgres:symb@symb-db:5432/sym_browser \
   -e MASTER_KEY -e SYMB_BOOTSTRAP_API_KEY="$SYMB_API_KEY" \
   ghcr.io/scrap-yo-mama/sym-browser:1
 
 export SYMB_URL=http://localhost:3000
-curl -fsS "$SYMB_URL/readyz"
+until curl -fsS "$SYMB_URL/readyz"; do sleep 2; done   # répond 200 quand l’instance est prête
 ```
 
 `/readyz` répond `200` quand l'instance est prête. `SYMB_BOOTSTRAP_API_KEY` crée la première clé d'API (scopes `sessions:write` et `sessions:read`) si la table des clés est vide.

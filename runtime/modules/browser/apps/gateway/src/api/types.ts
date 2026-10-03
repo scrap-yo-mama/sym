@@ -7,6 +7,7 @@
 //     sessions du nœud dans le même processus (tâche 1.2) ; modes séparés : `POST /internal/sessions` du nœud (04b § 8),
 //     choix du nœud et file (tâche 2.4 : la passerelle place la session sur un nœud avant de la lancer).
 import type { ApiKeyAuthenticator, ApiScope, BrowserMetrics, ConnectTokens, EgressGuard, Keys, MetricsRegistry, Principal, Secret } from '@sym-browser/core';
+import type { FastifyRequest } from 'fastify';
 import type pg from 'pg';
 import type { LiveTokens, UsageClosure } from '@sym-browser/core';
 import type { UsageReconciliation } from '@sym-browser/db';
@@ -45,8 +46,11 @@ export type GatewayDeps = {
   /** Jetons de connexion (`new ConnectTokens(keyring)`, tâche 2.1) : émis pour les `connectUrls`, vérifiés par le relais. */
   tokens: Pick<ConnectTokens, 'issue' | 'verify'>;
   launcher: SessionLauncher;
-  /** URL publique de la passerelle (`https://hôte`) : base des `connectUrls` (`wss://hôte/v1/sessions/{id}/…`). */
-  publicUrl: string;
+  /**
+   * URL publique de la passerelle (`https://hôte`) : base des `connectUrls` (`wss://hôte/v1/sessions/{id}/…`). Fonction :
+   * base lue sur chaque demande (`{hôte}` de 04 § 8, mode `all` derrière un port publié ou un reverse proxy, tâche 5.1).
+   */
+  publicUrl: string | ((request: FastifyRequest) => string);
   /** Attente maximale d'un démarrage, file comprise (`QUEUE_TIMEOUT_MS`, défaut 30 000). */
   queueTimeoutMs?: number;
   /** Bornes de la file (`QUEUE_MAX`, `QUEUE_MAX_PER_TENANT` ; défauts 50 et 10). */

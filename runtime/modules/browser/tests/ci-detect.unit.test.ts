@@ -7,6 +7,7 @@ import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync 
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, describe, expect, test } from 'vitest';
+import { parse } from 'yaml';
 import { MODULE_ROOT } from '../eslint.boundaries.mjs';
 
 const workflow = readFileSync(join(MODULE_ROOT, '../../../.github/workflows/ci.yml'), 'utf8');
@@ -182,5 +183,17 @@ describe('job gate de ci.yml', () => {
     expect(verdict('success skipped success')).toContain('gate : vert.');
     expect(verdict('success failure')).toMatch(/^échec : .*au moins un job a échoué/s);
     expect(verdict('cancelled success')).toMatch(/^échec : /);
+  });
+
+  // ADR 23 § 6, critère A6 : `gate` est le seul check exigé ; un job absent de ses `needs` (vitrine, par exemple) pourrait
+  // échouer sans bloquer la fusion. Seul `nightly` (planifié, jamais exécuté par ce workflow) en est exclu.
+  test('needs couvre tous les jobs du workflow sauf nightly', () => {
+    const jobs = (parse(workflow) as { jobs: Record<string, { needs?: string | string[] }> }).jobs;
+    const needs = jobs['gate']?.needs;
+    const listed = new Set(Array.isArray(needs) ? needs : needs === undefined ? [] : [needs]);
+    const expected = Object.keys(jobs).filter((name) => name !== 'gate' && name !== 'nightly');
+    expect(expected.length).toBeGreaterThan(5);
+    expect(expected.filter((name) => !listed.has(name)), 'jobs absents de gate.needs').toEqual([]);
+    expect([...listed].filter((name) => !(name in jobs)), 'needs vers un job inconnu').toEqual([]);
   });
 });

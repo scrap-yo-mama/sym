@@ -75,6 +75,16 @@ async function chooseOption(page: Page, selector: string, value: string): Promis
     }
   }
   if ((await page.locator(selector).inputValue()) === value) return;
+  // Chromium sur macOS : les flèches ouvrent la liste native, hors d'atteinte des touches simulées ; la recherche par
+  // première lettre (répétée, elle passe d'une option à la suivante de même initiale) reste au clavier.
+  const label = ((await page.locator(selector).locator(`option[value="${value}"]`).textContent()) ?? '').trim();
+  const initial = label.charAt(0).toLowerCase();
+  if (initial !== '') {
+    for (let i = 0; i < 30; i += 1) {
+      await page.keyboard.press(initial);
+      if ((await page.locator(selector).inputValue()) === value) return;
+    }
+  }
   throw new Error(`${selector} : option ${value} non atteinte`);
 }
 
@@ -125,9 +135,9 @@ test.describe('parcours au clavier seul (fr)', () => {
     await tabTo(page, '#filter-apply');
     await page.keyboard.press('Enter');
     await expect(page).toHaveURL(/state=failed/);
-    const statuses = page.locator('tbody [data-status]');
-    await expect(statuses.first()).toBeVisible();
-    for (const status of await statuses.evaluateAll((els) => els.map((el) => el.getAttribute('data-status')))) expect(status).toBe('failed');
+    // Assertion réessayée : l'URL change avant que le tableau filtré remplace l'ancien (lecture unique instable).
+    await expect(page.locator('tbody [data-status]:not([data-status="failed"])')).toHaveCount(0);
+    await expect(page.locator('tbody [data-status="failed"]').first()).toBeVisible();
 
     await chooseOption(page, '#filter-state', '');
     await tabTo(page, '#filter-apply');

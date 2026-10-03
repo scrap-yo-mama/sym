@@ -4,7 +4,7 @@ SYM 👻: Ten minutes, three commands and one script. At the end you will have o
 
 You need Docker, OpenSSL and Node.js 24 (or 22). The session below is of type `dedicated` (the default): a Chromium of its own, driven over CDP.
 
-<!-- Step 1 is the only one CI does not replay: the public image and the `SYMB_MODE=all` assembly come with task 5.1. Steps 3 to 5 are extracted from this page and run as is by tests/docs-quickstart.chromium.test.ts. -->
+<!-- CI replays this page end to end on the built image: step 1 (the commands below, with the local image, unique names and ports) then steps 3 to 5 extracted from this page and run as is (tests/deploy.e2e.test.ts, quickstart_replayed_on_image). tests/docs-quickstart.chromium.test.ts also runs steps 3 to 5 against an in-process assembly. -->
 
 ## 1. Start SYM Browser
 
@@ -12,7 +12,7 @@ SYM Browser needs PostgreSQL, a master key and a first API key. The master key e
 
 ```bash
 export MASTER_KEY="$(openssl rand -base64 32)"   # save it in your password manager
-export SYMB_API_KEY="symb_$(openssl rand -hex 24)"
+export SYMB_API_KEY="symb_$(openssl rand -hex 6)_$(openssl rand -base64 32 | tr '+/' '-_' | tr -d '=')"
 curl -fsSLO https://raw.githubusercontent.com/scrap-yo-mama/sym-browser/main/deploy/seccomp-chromium.json
 
 docker network create symb
@@ -21,13 +21,14 @@ docker run -d --name symb-db --network symb \
   postgres:16
 docker run -d --name sym-browser --network symb -p 127.0.0.1:3000:3000 \
   --security-opt seccomp=seccomp-chromium.json --security-opt no-new-privileges --cap-drop ALL \
+  --cap-add SYS_CHROOT --shm-size 1g \
   -e SYMB_MODE=all \
   -e DATABASE_URL=postgres://postgres:symb@symb-db:5432/sym_browser \
   -e MASTER_KEY -e SYMB_BOOTSTRAP_API_KEY="$SYMB_API_KEY" \
   ghcr.io/scrap-yo-mama/sym-browser:1
 
 export SYMB_URL=http://localhost:3000
-curl -fsS "$SYMB_URL/readyz"
+until curl -fsS "$SYMB_URL/readyz"; do sleep 2; done   # answers 200 once the instance is ready
 ```
 
 `/readyz` answers `200` once the instance is ready. `SYMB_BOOTSTRAP_API_KEY` creates the first API key (scopes `sessions:write` and `sessions:read`) when the key table is empty.

@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Hôte de service commun à la passerelle, au nœud et au mode `all` (03 § 4, 04d § 3.3, 04b § 9) : `/healthz`, `/readyz`,
 // `/metrics` sous jeton (04d § 3.1, tâche 3.7), drainage sur SIGTERM, refus de démarrer sur configuration invalide.
-// Journaux : pino masqué (04d § 3.2, observability/logger.ts). Serveur `node:http` volontairement sans dépendance :
-// Fastify (03 § 1) arrive avec la première route applicative (REST `/v1`, tâche 2.x) et reprend ces deux routes.
+// Journaux : pino masqué (04d § 3.2, observability/logger.ts). Serveur `node:http` sans dépendance : les routes
+// applicatives du rôle (Fastify de la passerelle, relais du nœud) s'y montent par `http` (HttpMount, mode `all`).
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
+import type { Duplex } from 'node:stream';
 import { describeConfig, LOG_LEVELS, loadConfig, type BrowserConfig, type LogLevel } from '../config/load.js';
 import { ConfigError } from '../config/reader.js';
 import type { ServiceMode } from '../config/env-catalog.js';
@@ -32,8 +33,19 @@ export function createLogger(threshold: LogLevel, write: (line: string) => void 
 /** Vérification de `/readyz` : retourne `ok` ou un motif court (sans secret). Les tâches suivantes en ajoutent : base, migrations, Chromium, nœuds. */
 export type ReadinessCheck = { name: string; run: () => string | Promise<string> };
 
+/**
+ * Routes applicatives du rôle (mode `all` : API REST `/v1`, relais WSS public et relais interne du nœud, tâche 5.1) : tout
+ * chemin autre que `/healthz`, `/readyz` et `/metrics`, et toute demande d'upgrade WebSocket, leur sont confiés.
+ */
+export type HttpMount = {
+  request(request: IncomingMessage, response: ServerResponse): void;
+  upgrade(request: IncomingMessage, socket: Duplex, head: Buffer): void;
+};
+
 export type ServiceOptions = {
   checks?: readonly ReadinessCheck[];
+  /** Routes applicatives montées sur le même port ; absentes : 404 hors des routes du service, upgrade refusé. */
+  http?: HttpMount;
   /**
    * Crochets de drainage : attendus avant la fermeture (fin des sessions en cours), au plus `SHUTDOWN_GRACE_SECONDS` plus
    * la fenêtre de destruction `teardownMs` : à l'échéance de la grâce, le crochet du nœud détruit encore les sessions
@@ -92,7 +104,7 @@ export async function startService(config: BrowserConfig, options: ServiceOption
   const server: Server = createServer((request, response) => {
     const path = (request.url ?? '/').split('?', 1)[0];
     const known = path === '/healthz' || path === '/readyz' || path === '/metrics';
-    if (!known) return send(request, response, 404, { error: 'not_found' });
+    if (!known) return options.http ? options.http.request(request, response) : send(request, response, 404, { error: 'not_found' });
     if (request.method !== 'GET' && request.method !== 'HEAD') return send(request, response, 405, { error: 'method_not_allowed' }, { allow: 'GET, HEAD' });
     if (path === '/healthz') return send(request, response, 200, { status: 'ok' });
     if (path === '/metrics') {
@@ -109,6 +121,11 @@ export async function startService(config: BrowserConfig, options: ServiceOption
       ({ status, body }) => send(request, response, status, body),
       () => send(request, response, 500, { error: 'internal_error' }),
     );
+  });
+
+  server.on('upgrade', (request: IncomingMessage, socket: Duplex, head: Buffer) => {
+    if (options.http) return options.http.upgrade(request, socket, head);
+    socket.destroy();
   });
 
   async function readiness(): Promise<{ status: number; body: unknown }> {
@@ -228,8 +245,9 @@ export async function runService(options: RunOptions = {}): Promise<ServiceHandl
     try {
       prepared = await options.prepare(config, log);
     } catch (error) {
-      // Le message peut contenir une URL de base : seul le nom de l'erreur sort.
-      stderr(`Démarrage impossible : échec de la préparation du rôle ${config.mode} (${(error as Error).name ?? 'erreur'}).`);
+      // Le message peut contenir une URL de base : seul le nom de l'erreur sort, sauf une ConfigError (message sans secret
+      // qui nomme la variable en cause, comme au chargement de la configuration).
+      stderr(error instanceof ConfigError ? `Démarrage impossible : ${error.message}` : `Démarrage impossible : échec de la préparation du rôle ${config.mode} (${(error as Error).name ?? 'erreur'}).`);
       exit(1);
       return undefined;
     }
@@ -243,6 +261,8 @@ export async function runService(options: RunOptions = {}): Promise<ServiceHandl
       log,
       checks: [...(options.checks ?? []), ...(prepared.checks ?? [])],
       onDrain: [...(options.onDrain ?? []), ...(prepared.onDrain ?? [])],
+      ...(prepared.http ?? options.http ? { http: prepared.http ?? options.http } : {}),
+      ...(prepared.metrics ?? options.metrics ? { metrics: prepared.metrics ?? options.metrics } : {}),
     });
   } catch (error) {
     await releaseResources().catch(() => undefined);

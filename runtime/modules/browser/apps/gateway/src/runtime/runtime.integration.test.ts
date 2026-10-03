@@ -5,6 +5,10 @@
 // (`cold_install_two_nodes`, partie processus ; la partie conteneurs est dans tests/deploy.e2e.test.ts), drainage.
 // Chromium est remplacé par un lanceur factice : le vrai est exercé dans l'image (tests/deploy.e2e.test.ts).
 import { randomBytes } from 'node:crypto';
+import { mkdtemp, readdir, rm } from 'node:fs/promises';
+import { request as httpRequest } from 'node:http';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { generateApiKey, runService, type RunOptions, type ServiceHandle } from '@sym-browser/core';
 import { expectedSchemaVersion } from '@sym-browser/db';
 import type { BrowserLauncher, LaunchedBrowser } from '@sym-browser/node';
@@ -53,17 +57,26 @@ function fakeLauncher(state: { launched: number; fail: boolean }): BrowserLaunch
 
 const running: ServiceHandle[] = [];
 const databases: Db[] = [];
+const cleanupDirs: string[] = [];
 afterEach(async () => {
   await Promise.all(running.splice(0).map((s) => s.close()));
   await Promise.all(databases.splice(0).map((d) => d.drop()));
+  await Promise.all(cleanupDirs.splice(0).map((d) => rm(d, { recursive: true, force: true })));
 });
 
 const NODE_TOKEN = 't'.repeat(40);
 
+/** `SYMB_DATA_DIR` jetable (sessions, usage.wal), supprimé après le test. */
+async function scratchDir(): Promise<string> {
+  const dir = await mkdtemp(join(tmpdir(), 'zz_symb_rt_'));
+  cleanupDirs.push(dir);
+  return dir;
+}
+
 async function boot(db: Db, extra: Record<string, string>, deps: Partial<RuntimeDeps> = {}, chromium = { launched: 0, fail: false }): Promise<ServiceHandle> {
   const lines: string[] = [];
   const options: RunOptions = {
-    env: { MASTER_KEY: randomBytes(32).toString('base64'), DATABASE_URL: db.url, PORT: '0', HEARTBEAT_MS: '100', WARM_BROWSERS: '1', MAX_SESSIONS: '2', ...extra },
+    env: { MASTER_KEY: randomBytes(32).toString('base64'), DATABASE_URL: db.url, PORT: '0', HEARTBEAT_MS: '100', WARM_BROWSERS: '1', MAX_SESSIONS: '2', SYMB_DATA_DIR: await scratchDir(), ...extra },
     handleSignals: false,
     stdout: (line) => lines.push(line),
     stderr: (line) => lines.push(line),
@@ -114,7 +127,7 @@ describe('mode all (une machine)', () => {
     expect(chromium.launched).toBeGreaterThanOrEqual(1);
     const [version] = await query<{ v: number }>(db, 'SELECT max(version)::int AS v FROM symb_schema_migrations');
     expect(version?.v).toBe(expectedSchemaVersion());
-    expect(await query(db, 'SELECT id, url, state, slots_total FROM nodes')).toEqual([{ id: 'all-1', url: `http://127.0.0.1:${service.port}`, state: 'ready', slots_total: 2 }]);
+    expect(await query(db, 'SELECT id, url, state, slots_total FROM nodes')).toEqual([{ id: 'all-1', url: `http://127.0.0.1:${service.port}`, state: 'ready', slots_total: 2 * 4 }]);
     expect(await query(db, 'SELECT t.name FROM api_keys k JOIN tenants t ON t.id = k.tenant_id')).toEqual([{ name: 'sym' }]);
   });
 
@@ -225,5 +238,88 @@ describe('drainage (point d’accroche de la tâche 2.7)', () => {
     await stopping;
     expect(seen).toEqual(['drain:true', 'state:draining']);
     expect(await query(db, "SELECT state FROM nodes WHERE id = 'drain-1'")).toEqual([{ state: 'down' }]);
+  });
+});
+
+describe('mode all : API /v1, relais et superviseur montés dans le binaire (F-20261002-01, R1 de l’audit 5.3)', () => {
+  /** Lanceur dedicated factice : retient l'URL de proxy imposée à chaque session (egress de la session, 04c § 1.1). */
+  function dedicatedProbe(seen: Array<{ sessionId: string | undefined; launchProxyUrl: string; killed: boolean }>): NonNullable<RuntimeDeps['dedicatedLauncher']> {
+    return (launchProxyUrl) => async (purpose) => {
+      const entry = { sessionId: purpose.sessionId, launchProxyUrl, killed: false };
+      seen.push(entry);
+      let connected = true;
+      return {
+        id: `dedicated-${seen.length}`,
+        pid: undefined,
+        wsEndpoint: 'ws://127.0.0.1:1/fake',
+        cdpEndpoint: 'ws://127.0.0.1:1/devtools/browser/fake',
+        browser: {} as LaunchedBrowser['browser'],
+        isConnected: () => connected,
+        onDisconnected: () => undefined,
+        close: async () => void ((connected = false), (entry.killed = true)),
+        kill: async () => void ((connected = false), (entry.killed = true)),
+      };
+    };
+  }
+
+  /** Requête HTTP au travers du proxy egress de la session : statut rendu par l'egress pour une cible donnée. */
+  const throughProxy = (proxyUrl: string, target: string): Promise<number> =>
+    new Promise((resolve, reject) => {
+      const proxy = new URL(proxyUrl);
+      const req = httpRequest({ host: proxy.hostname, port: Number(proxy.port), method: 'GET', path: target, headers: { host: new URL(target).host } }, (res) => {
+        res.resume();
+        resolve(res.statusCode ?? 0);
+      });
+      req.on('error', reject);
+      req.end();
+    });
+
+  test('POST /v1/sessions sur le binaire : session dedicated running sur l’egress imposé, connectUrls à l’hôte de la demande, puis ended', async () => {
+    const db = await freshDatabase();
+    databases.push(db);
+    const dataDir = await scratchDir();
+    const key = generateApiKey().key.reveal();
+    const launched: Array<{ sessionId: string | undefined; launchProxyUrl: string; killed: boolean }> = [];
+    const service = await boot(db, { SYMB_BOOTSTRAP_API_KEY: key, NODE_ID: 'all-api', SYMB_DATA_DIR: dataDir }, { dedicatedLauncher: dedicatedProbe(launched) });
+    await until(service, (r) => r.status === 200);
+    const base = `http://127.0.0.1:${service.port}`;
+
+    const version = await fetch(`${base}/v1/version`);
+    expect(version.status).toBe(200);
+    expect(await version.json()).toMatchObject({ playwright: '1.63.0' });
+    expect((await fetch(`${base}/v1/sessions`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })).status).toBe(401);
+
+    const auth = { authorization: `Bearer ${key}`, 'content-type': 'application/json' };
+    const created = await fetch(`${base}/v1/sessions`, { method: 'POST', headers: auth, body: JSON.stringify({ type: 'dedicated', timeoutSeconds: 120, egress: { allowedHosts: ['allowed.example'], ports: [80] } }) });
+    const session = (await created.json()) as { id: string; state: string; connectUrls?: { cdp: string; playwright: string } };
+    expect(created.status, JSON.stringify(session)).toBe(201);
+    expect(session.state).toBe('running');
+    expect(session.connectUrls?.cdp.startsWith(`ws://127.0.0.1:${service.port}/v1/sessions/${session.id}/cdp?token=symt_`)).toBe(true);
+    // Hôte de la demande (port publié par Docker, reverse proxy) : repris dans les connectUrls.
+    // (fetch impose son propre Host : requête node:http.)
+    const viaProxy = await new Promise<string>((resolve, reject) => {
+      const req = httpRequest({ host: '127.0.0.1', port: service.port, path: `/v1/sessions/${session.id}`, headers: { authorization: `Bearer ${key}`, host: 'browser.example.com', 'x-forwarded-proto': 'https' } }, (res) => {
+        let body = '';
+        res.on('data', (chunk: Buffer) => (body += chunk.toString()));
+        res.on('end', () => resolve(body));
+      });
+      req.on('error', reject);
+      req.end();
+    });
+    expect((JSON.parse(viaProxy) as { connectUrls: { cdp: string } }).connectUrls.cdp.startsWith(`wss://browser.example.com/v1/sessions/${session.id}/cdp?token=`)).toBe(true);
+
+    // Egress de la session imposé au Chromium dedicated : sa politique s'applique (hôte hors liste refusé, 403).
+    const mine = launched.find((l) => l.sessionId === session.id);
+    expect(mine?.launchProxyUrl).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
+    expect(await throughProxy(mine!.launchProxyUrl, 'http://denied.example/')).toBe(403);
+    expect(await query(db, `SELECT state, node_id FROM sessions WHERE id = '${session.id}'`)).toEqual([{ state: 'running', node_id: 'all-api' }]);
+
+    // Relais WSS public monté : un jeton faux est refusé avant tout contact avec le nœud (401, pas 404).
+    expect((await fetch(`${base}/v1/sessions/${session.id}/cdp/json/version?token=symt_faux`)).status).toBe(401);
+
+    const released = await fetch(`${base}/v1/sessions/${session.id}`, { method: 'DELETE', headers: { authorization: `Bearer ${key}` } });
+    expect(await released.json()).toMatchObject({ id: session.id, state: 'ended', endReason: 'released' });
+    expect(mine?.killed).toBe(true);
+    expect(await readdir(join(dataDir, 'sessions')).catch(() => [])).toEqual([]);
   });
 });

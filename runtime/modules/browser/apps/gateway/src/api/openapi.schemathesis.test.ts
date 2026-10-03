@@ -5,6 +5,8 @@
 // Vérifications : aucune erreur serveur, statuts déclarés, types de contenu et corps conformes au schéma, données invalides
 // refusées (4xx), authentification exigée (401 sans clé). `positive_data_acceptance` est exclue : une requête valide au
 // schéma peut être refusée à bon droit par l'état du système (région sans nœud 503, id déjà pris 409).
+// Docker Desktop (macOS, Windows) n'expose pas la boucle locale de l'hôte au réseau `host` des conteneurs : Schemathesis y
+// joint la passerelle par `host.docker.internal` (redirigé vers la boucle locale de l'hôte), sans réseau `host`.
 // Sécurité : seul le conteneur lancé ici est arrêté, par son nom unique (`docker rm -f <nom>`), jamais par pid.
 import { spawn, spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
@@ -27,6 +29,9 @@ const CHECKS = [
 /** Statuts 5xx admis : ceux que le contrat déclare (502, 503), voir schemathesis.toml. */
 const CONFIG = fileURLToPath(new URL('../../schemathesis.toml', import.meta.url));
 
+/** Docker Desktop : boucle locale de l'hôte joignable par `host.docker.internal` seulement. */
+const DOCKER_DESKTOP = /Docker Desktop/i.test(spawnSync('docker', ['info', '--format', '{{.OperatingSystem}}'], { encoding: 'utf8' }).stdout ?? '');
+
 let h: Harness;
 let base: string;
 beforeAll(async () => {
@@ -40,11 +45,12 @@ afterAll(async () => {
 
 test('Schemathesis (A1) : 0 écart entre l’OpenAPI publiée et les réponses réelles', async () => {
   const name = `symb-schemathesis-${randomBytes(4).toString('hex')}`;
+  const target = DOCKER_DESKTOP ? base.replace('127.0.0.1', 'host.docker.internal') : base;
   const args = [
-    'run', '--rm', '--name', name, '--network', 'host', '-v', `${CONFIG}:/config/schemathesis.toml:ro`, SCHEMATHESIS_IMAGE,
+    'run', '--rm', '--name', name, ...(DOCKER_DESKTOP ? [] : ['--network', 'host']), '-v', `${CONFIG}:/config/schemathesis.toml:ro`, SCHEMATHESIS_IMAGE,
     '--config-file', '/config/schemathesis.toml',
-    'run', `${base}/v1/openapi.json`,
-    '--url', `${base}/v1`,
+    'run', `${target}/v1/openapi.json`,
+    '--url', `${target}/v1`,
     '--header', `Authorization: Bearer ${h.keys.a}`,
     '--checks', CHECKS,
     '--max-examples', process.env.SCHEMATHESIS_MAX_EXAMPLES ?? '40',

@@ -3,8 +3,9 @@
 // française porte le même code, tests/docs.unit.test.ts) est extrait du Markdown et exécuté TEL QUEL par `node`, comme un
 // lecteur qui le copie, contre une instance SYM Browser : API REST de la passerelle (2.2) sur PostgreSQL migré, jetons de
 // connexion HMAC, relais WSS public puis relais du nœud (2.3), Chromium dédié du pool (1.1, 1.4) sur l'egress de sa session
-// (1.5), site de test de la tâche 0.5 comme destination. Seule l'étape « démarrer SYM Browser » n'est pas rejouée : le binaire
-// qui assemble ces briques derrière `SYMB_MODE=all` n'existe pas encore (tests/helpers/quickstart-instance.ts les assemble).
+// (1.5), site de test de la tâche 0.5 comme destination. L'étape « démarrer SYM Browser » est rejouée sur l'image construite
+// par tests/deploy.e2e.test.ts (quickstart_replayed_on_image) ; ici, les étapes 3 à 5 tournent sans image, sur le banc
+// tests/helpers/quickstart-instance.ts.
 // Prérequis : utilisateur non root (bac à sable de Chromium), `playwright install chromium`, Docker ou SYMB_TEST_PG_URL.
 // Sécurité : le seul processus lancé ici est `node` sur le script du quickstart (enfant direct, arrêté par `timeout` du
 // spawn) ; Chromium est arrêté par le pool (groupe de processus enregistré à son lancement).

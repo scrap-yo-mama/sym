@@ -20,7 +20,46 @@ export function dockerAvailable(): boolean {
   return docker(['version', '--format', '{{.Server.Version}}']).status === 0;
 }
 
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+
+/** Sondes de l'attente (injectables : les tests unitaires simulent l'horloge et le serveur). */
+export type MinioProbe = {
+  now: () => number;
+  sleep: (ms: number) => Promise<void>;
+  /** `GET /minio/health/live` répond 2xx. */
+  healthy: () => Promise<boolean>;
+  /** Journaux du conteneur (`docker logs`), lus au plus toutes les `logEveryMs`. */
+  logs: () => string;
+};
+
+/** Durée de santé ininterrompue exigée : le serveur provisoire de l'image Bitnami répond environ 5 s puis s'arrête. */
+const STABLE_HEALTH_MS = 8_000;
+const SETUP_FINISHED = /MinIO setup finished/;
+
+/**
+ * Attend le serveur MinIO définitif : santé HTTP tenue `STABLE_HEALTH_MS` sans interruption, ou ligne de fin de configuration
+ * de l'image avec un serveur sain. Rend l'instant où il est prêt ; échoue à l'échéance (300 s par défaut : sous contention
+ * Docker, la configuration a déjà dépassé 120 s).
+ */
+export async function waitMinioReady(probe: MinioProbe, options: { deadlineMs?: number; pollMs?: number; logEveryMs?: number } = {}): Promise<number> {
+  const deadlineMs = options.deadlineMs ?? 300_000;
+  const pollMs = options.pollMs ?? 250;
+  const logEveryMs = options.logEveryMs ?? 2_000;
+  const deadline = probe.now() + deadlineMs;
+  let healthySince: number | undefined;
+  let lastLogs = -Infinity;
+  while (probe.now() <= deadline) {
+    const healthy = await probe.healthy();
+    healthySince = healthy ? (healthySince ?? probe.now()) : undefined;
+    if (healthySince !== undefined && probe.now() - healthySince >= STABLE_HEALTH_MS) return probe.now();
+    if (healthy && probe.now() - lastLogs >= logEveryMs) {
+      lastLogs = probe.now();
+      if (SETUP_FINISHED.test(probe.logs())) return probe.now();
+    }
+    await probe.sleep(pollMs);
+  }
+  throw new Error(`MinIO : serveur non prêt dans les ${Math.round(deadlineMs / 1000)} s`);
+}
 
 export async function startS3(): Promise<S3Fixture> {
   const external = process.env.SYMB_TEST_S3_ENDPOINT;
@@ -44,15 +83,25 @@ export async function startS3(): Promise<S3Fixture> {
     docker(['rm', '-f', id]);
   };
   try {
-    // L'image Bitnami lance un serveur provisoire (~5 s), le configure, l'arrête, puis lance le vrai : on attend ce dernier.
-    const deadline = Date.now() + 120_000;
-    while (!/MinIO setup finished/.test(docker(['logs', id]).stdout + docker(['logs', id]).stderr)) {
-      if (Date.now() > deadline) throw new Error('MinIO : configuration non terminée dans les 120 s');
-      await sleep(250);
-    }
-    const port = docker(['port', id, '9000/tcp']).stdout.trim().split('\n')[0]?.split(':').at(-1);
-    if (!port) throw new Error('MinIO : port publié introuvable');
-    const endpoint = `http://127.0.0.1:${port}`;
+    // Port publié lu dans la boucle d'attente : sous contention Docker, il n'est pas encore attribué juste après `docker run`.
+    let port: string | undefined;
+    const publishedPort = (): string | undefined => (port ??= docker(['port', id, '9000/tcp']).stdout.trim().split('\n')[0]?.split(':').at(-1) || undefined);
+    // L'image Bitnami lance un serveur provisoire (~5 s), le configure, l'arrête, puis lance le vrai : on attend ce dernier
+    // par sa santé HTTP (la ligne de journal seule arrivait après l'échéance sous contention Docker).
+    await waitMinioReady({
+      now: Date.now,
+      sleep,
+      healthy: async () => {
+        const published = publishedPort();
+        if (published === undefined) return false;
+        return fetch(`http://127.0.0.1:${published}/minio/health/live`, { signal: AbortSignal.timeout(2_000) }).then((r) => r.ok, () => false);
+      },
+      logs: () => {
+        const out = docker(['logs', id]);
+        return `${out.stdout}${out.stderr}`;
+      },
+    });
+    const endpoint = `http://127.0.0.1:${publishedPort() ?? ''}`;
     const options = (bucket: string): S3Options => ({ endpoint, bucket, region: 'us-east-1', credentials: { accessKeyId, secretAccessKey: new Secret(secret) } });
     return { options, stop };
   } catch (error) {

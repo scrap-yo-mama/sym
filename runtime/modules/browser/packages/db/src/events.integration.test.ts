@@ -173,7 +173,9 @@ describe(`événements de session et webhooks sur PostgreSQL ${inject('pgVersion
     expect(delivery).toMatchObject({ type: 'session.ended', tenantId: tenantA, attempts: 1, event: { type: 'state', data: { state: 'failed', endReason: 'crash' } } });
     // Réservée : invisible aux autres jusqu'à la fin du bail.
     expect((await claimWebhookDeliveries(pool, { limit: 50, lockMs: 30_000 })).filter((d) => d.sessionId === s)).toEqual([]);
-    await completeWebhookDelivery(pool, { id: delivery.id, outcome: { kind: 'retry', at: new Date(Date.now() - 1), httpStatus: 500, error: 'http_500' } });
+    // Relance déjà due : 60 s dans le passé, car l'horloge du conteneur PostgreSQL (clock_timestamp) peut retarder de
+    // quelques millisecondes sur celle de l'hôte (VM de Docker Desktop) ; à 1 ms, la livraison n'était parfois pas due.
+    await completeWebhookDelivery(pool, { id: delivery.id, outcome: { kind: 'retry', at: new Date(Date.now() - 60_000), httpStatus: 500, error: 'http_500' } });
     const again = (await claimWebhookDeliveries(pool, { limit: 50, lockMs: 30_000 })).filter((d) => d.sessionId === s);
     expect(again.map((d) => d.attempts)).toEqual([2]);
     await completeWebhookDelivery(pool, { id: delivery.id, outcome: { kind: 'delivered', httpStatus: 204 } });

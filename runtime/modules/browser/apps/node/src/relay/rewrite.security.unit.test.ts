@@ -102,3 +102,27 @@ describe('audit 5.3 S05 : méthodes CDP dangereuses refusées', () => {
     refused(cdp(method, { port: 9222 }));
   });
 });
+
+// Relecture de sécurité de browser-v1 (revue, point 7 ; docs/audit-securite.md § 9) : contournements des réécritures.
+describe('relecture browser-v1 S18 à S20 : rien ne contourne les réécritures du relais', () => {
+  test('S18 : Playwright Artifact.saveAs (copie d’un téléchargement vers un chemin du nœud) refusé ; saveAsStream transmis', () => {
+    refused(pw('saveAs', { path: '/data/usage/node-1.wal' }));
+    refused(pw('pathAfterFinished'));
+    expect(forwarded(pw('saveAsStream')).method).toBe('saveAsStream');
+  });
+
+  test('S19 : CDP Target.sendMessageToTarget (message imbriqué, mode non aplati) refusé : il passerait sans réécriture', () => {
+    const nested = JSON.stringify({ id: 1, method: 'Page.navigate', params: { url: 'file:///proc/self/environ' } });
+    refused(cdp('Target.sendMessageToTarget', { sessionId: 'S', message: nested }));
+  });
+
+  test('S20 : CDP Input.dispatchDragEvent : fichiers déposés seulement depuis les envois de la session', () => {
+    const ok = `${ROOT}/uploads/0b8f6a3c-1111-4000-8000-000000000002`;
+    const drag = (files?: unknown) => cdp('Input.dispatchDragEvent', { type: 'drop', x: 1, y: 1, data: { items: [], dragOperationsMask: 1, ...(files === undefined ? {} : { files }) } });
+    refused(drag(['/proc/self/environ']));
+    refused(drag([ok, '/etc/passwd']));
+    expect((forwarded(drag([ok])).params as { data: { files: string[] } }).data.files).toEqual([ok]);
+    expect(forwarded(drag()).method).toBe('Input.dispatchDragEvent');
+    refused(rewriteCdpMessage(JSON.stringify({ id: 1, method: 'Input.dispatchDragEvent', params: { type: 'drop', x: 0, y: 0, data: { items: [], dragOperationsMask: 1, files: [ok] } } }), { egressProxyUrl: null, downloadsDir: null }));
+  });
+});

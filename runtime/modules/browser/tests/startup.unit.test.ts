@@ -5,6 +5,8 @@
 // Sécurité : seuls les enfants créés ici sont signalés, par leur objet ChildProcess (jamais par pid ni par nom).
 import { execFileSync, spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
@@ -13,8 +15,11 @@ const RUNTIME = join(dirname(fileURLToPath(import.meta.url)), '../../..');
 const GATEWAY_MAIN = 'modules/browser/apps/gateway/dist/main.js';
 const NODE_MAIN = 'modules/browser/apps/node/dist/main.js';
 
+// Répertoire de travail du service (l'image fournit /data) : le mode all y ouvre son journal de comptage (usage.wal, 2.6).
+const DATA_DIR = mkdtempSync(join(tmpdir(), 'symb-startup-'));
 const validEnv = (extra: Record<string, string> = {}): Record<string, string> => ({
   PATH: process.env['PATH'] ?? '',
+  SYMB_DATA_DIR: DATA_DIR,
   MASTER_KEY: randomBytes(32).toString('base64'),
   DATABASE_URL: 'postgres://symb:secret@db.invalid:5432/symb',
   PORT: '0',
@@ -66,6 +71,7 @@ beforeAll(() => {
 
 afterAll(() => {
   for (const child of children) if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+  rmSync(DATA_DIR, { recursive: true, force: true });
 });
 
 describe('Given chaque mode / When démarrage / Then /readyz 200 (tâche 0.4)', () => {
@@ -112,6 +118,18 @@ describe('Given MASTER_KEY invalide / Then sortie code ≠ 0 et message nommant 
     const result = spawnSync('node', [GATEWAY_MAIN], { cwd: RUNTIME, env, encoding: 'utf8', timeout: 20_000 });
     expect(result.status).toBe(1);
     expect(result.stderr).toMatch(/MASTER_KEY obligatoire/);
+  });
+
+  // Revue de browser-v1 : le mode all ouvre son journal de comptage au démarrage ; un SYMB_DATA_DIR inutilisable arrête le
+  // service (code 1) avec un message qui nomme la variable et le code système, jamais un « (Error) » muet.
+  test('mode all : SYMB_DATA_DIR inutilisable, code 1 et message nommant la variable et le code système', () => {
+    const file = join(DATA_DIR, 'pas-un-repertoire');
+    writeFileSync(file, '');
+    const result = spawnSync('node', [GATEWAY_MAIN], { cwd: RUNTIME, env: validEnv({ SYMB_DATA_DIR: join(file, 'data') }), encoding: 'utf8', timeout: 20_000 });
+    expect(result.status).toBe(1);
+    expect(result.stderr).toMatch(/SYMB_DATA_DIR/);
+    expect(result.stderr).toMatch(/ENOTDIR/);
+    expect(result.stderr).not.toContain('db.invalid');
   });
 
   test('--check-config : code 0 et résumé sans secret avec une configuration valide', () => {

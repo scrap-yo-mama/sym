@@ -10,9 +10,9 @@ majeur ouvert, chaque invariant rejoué.
 | Gravité | Constats | Corrigés | Ouverts |
 |---|---|---|---|
 | Bloquant | 1 | 1 (S01) | 0 |
-| Majeur | 10 | 10 (S02, S03, S04, S08, S09, S10, S11, S13, S14, S15) | 0 |
-| Mineur | 15 | 6 (S05, S06, S07, S12, S16, S17) | 9, acceptés et documentés (§ 4) |
-| Hors sécurité, bloquant pour la recette | 1 | 0 | 1 (R1 : rôles de production non câblés, § 5) |
+| Majeur | 13 | 13 (S02, S03, S04, S08, S09, S10, S11, S13, S14, S15 ; relecture § 9 : S18, S19, S20) | 0 |
+| Mineur | 16 | 6 (S05, S06, S07, S12, S16, S17) | 10, acceptés et documentés (§ 4, A11 ajouté par la relecture § 9) |
+| Hors sécurité, bloquant pour la recette | 1 | 1 en mode `all` (R1, § 5) | modes séparés : F-20261002-03 du journal |
 
 Chaque correctif a commencé par un test rouge, nommé `audit 5.3 Snn` dans le code de test. Aucun test existant n'a été
 désactivé ; trois tests ont été alignés sur un comportement volontairement durci (S04, S10, `authorizeConnection`).
@@ -63,17 +63,28 @@ désactivé ; trois tests ont été alignés sur un comportement volontairement 
 | A7 | Identifiant de session fourni par le client : 409 `session_id_taken` révèle l'existence d'un UUID d'un autre client. | UUID imprévisibles ; clé `(tenant_id, id)` envisageable au prochain changement de schéma. |
 | A8 | Webhooks : tout port accepté (la garde SSRF s'applique : adresses privées, métadonnées, rebinding). | Restreindre à 80/443/8443 si un abus apparaît. |
 | A9 | `idempotency_keys` purgée seulement au réemploi d'une clé ; file globale partagée entre clients. | Croissance bornée par les quotas ; à revoir avec 5.2. |
+| A11 | Mode `all` (relecture § 9) : les `connectUrls` reprennent l'en-tête `Host` de la demande et `X-Forwarded-Proto` (`https` seul retenu ; `Host` hors forme ignoré). | L'URL revient au seul client qui a envoyé ces en-têtes, en `no-store` ; aucune autre réponse ne la réutilise. Un reverse proxy doit transmettre l'hôte public (comportement par défaut de Caddy, Traefik, nginx avec `proxy_set_header Host`). |
 | A10 | 2.6 : `POST /v1/admin/usage/reconcile` (scope `admin` d'un client) lance la réconciliation de toute l'instance et renvoie ses totaux agrégés (écarts, sessions corrigées), tous clients confondus. Lecture `GET /v1/usage` et CSV : bornées au client, et à la clé sans `admin` (vérifié). | Conforme à 04d § 4.4 (instance auto-hébergée, exploitant = client admin) ; aucun identifiant d'un autre client exposé. Scope d'exploitant distinct à prévoir pour le mode multi-clients. |
 
 ## 5. Constat hors sécurité bloquant pour la recette
 
-**R1 — rôles de production non câblés.** `apps/gateway/src/runtime/runtime.ts` (tâche 5.1) assemble base, migrations,
+**R1 — rôles de production non câblés. Corrigé en mode `all` (revue de browser-v1, 2026-10-02).** Constat d'origine : `apps/gateway/src/runtime/runtime.ts` (tâche 5.1) assemble base, migrations,
 première clé, pool Chromium, battement et `/readyz`, mais ne monte ni l'API REST `/v1` (2.2), ni le relais WSS (2.3), ni le
 superviseur des sessions (1.2) : l'image ne sert que `/healthz`, `/readyz` et `/metrics`. Aucun chemin de production ne
 lance donc de session (rien d'exploitable, mais BINV2 n'est tenu que par les appelants des bancs : `tests/helpers/all-mode.ts`,
 `quickstart-instance.ts`). Tâche à ouvrir : brancher `createGatewayApi`, `registerRelay`, `SessionSupervisor` et
 `createNodeRelay` dans `prepareRuntime` (mode `all` d'abord, puis `POST /internal/sessions` pour les modes séparés), en
 imposant l'egress de session au lanceur dedicated.
+
+Correctif : `prepareRuntime` monte en mode `all` l'API REST `/v1`, le relais WSS public et le relais interne du nœud sur le
+port du service (`HttpMount` de l'hôte de service), le superviseur et l'hôte des sessions, l'egress de chaque session et le
+comptage (`apps/gateway/src/runtime/sessions.ts`). Le lanceur dedicated du pool ne lance un Chromium que sur l'egress de SA
+session (sinon refus) : BINV2 est tenu par le chemin de production. Le relais interne n'accepte que la boucle locale et un
+`NODE_TOKEN` tiré au démarrage. Tests : `apps/gateway/src/runtime/runtime.integration.test.ts` (rouge puis vert : 404, puis
+session running sur l'egress imposé, hôte refusé 403, ended), `tests/deploy.e2e.test.ts` sur l'image (F8 dans le réseau
+fermé, SDK et CDP brut depuis l'hôte, quickstart rejoué étape 1 comprise). Restent hors de ce chemin (journal,
+F-20261002-03) : modes séparés (`POST /internal/sessions`), profils persistants, enregistrements, vue en direct, fichiers,
+webhooks, profils de proxy nommés ; une session qui les demande échoue au lieu de démarrer sans eux.
 
 ## 6. Invariants rejoués
 
@@ -101,3 +112,28 @@ imposant l'egress de session au lanceur dedicated.
 
 - Tests réseau IPv6 (`::1`) : non exécutables dans l'environnement d'audit (cloud sans IPv6), ni modifiés.
 - Recette 24 (Render réel) et 25 (hôte distinct) hors périmètre ; charge (5.2) non mesurée.
+
+## 9. Relecture de la branche integ-browser-v1 (revue, 2026-10-02)
+
+Relecture demandée par la revue de fusion (point 7) : code du relais du nœud (`apps/node/src/relay/rewrite.ts`,
+`node-relay.ts`), passerelle (`relay/resolver.ts`, `api/app.ts`, décision d'accès `packages/core/src/auth/access.ts`), garde
+d'egress (`egressGuardFromConfig`) et le nouveau chemin de production du mode `all` (`apps/gateway/src/runtime/`), avec la
+surface du protocole Playwright 1.63 servie en mode `launchServer` (dispatchers de playwright-core : `denyLaunch`,
+`isServer`). Trois contournements des réécritures du relais, corrigés avec test rouge puis vert
+(`apps/node/src/relay/rewrite.security.unit.test.ts`, « relecture browser-v1 S18 à S20 ») :
+
+| ID | Gravité | Invariant | Constat | Correctif |
+|---|---|---|---|---|
+| S18 | Majeur | BINV1, BINV3 | Protocole Playwright : `Artifact.saveAs {path}` copie un téléchargement (contenu choisi par la page) vers un chemin quelconque du NŒUD, sous l'uid du service : écriture arbitraire (journal `usage.wal`, répertoires d'autres sessions). `pathAfterFinished` révèle un chemin local. | Les deux méthodes sont refusées ; un client distant utilise `saveAsStream`. |
+| S19 | Majeur | BINV2, BINV6 | CDP `Target.sendMessageToTarget` (mode non aplati) : le message imbriqué atteint la cible sans passer par les réécritures (navigation `file://`, champs fichiers). Exploitation non rejouée sur Chromium 153 : refus préventif. | Méthode refusée (les clients du marché utilisent `flatten: true`). |
+| S20 | Majeur | BINV1, BINV6 | CDP `Input.dispatchDragEvent` : `data.files` dépose n'importe quel fichier du nœud dans la page (même effet que `DOM.setFileInputFiles`, corrigé en S02). | Même règle que S02 : fichiers sous `sessions/{id}/uploads/` seulement, refus sans dossier de session. |
+
+Vérifié sans constat : décision d'accès (clé en en-tête seulement, jeton lié à la session et au protocole, session d'un autre
+client = inconnue, `running` exigé) ; `newRequest`, `launch*`, Android et Electron refusés par playwright-core en mode
+`launchServer` (`denyLaunch`) ; `LocalUtils` (`zip`, `harOpen`) non exposé (`isServer`) ; `recordVideo.dir` vidé par le
+serveur. Accepté : A11 (§ 4).
+
+Limites de cette relecture : approche par liste de refus (une méthode CDP nouvelle, dangereuse et non listée passerait) ; une
+liste d'autorisation des domaines CDP serait plus sûre et reste à arbitrer (compatibilité des clients de 04f § 7). Fichiers,
+profils persistants et enregistrements ne sont pas montés dans le chemin de production : leur exposition sera relue avec
+leur câblage (F-20261002-03).

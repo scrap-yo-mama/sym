@@ -3,11 +3,13 @@
 // SYM ou isolée), un guide par client CDP de 04f § 7, référence générée (API depuis l'OpenAPI du contrat, configuration
 // depuis le catalogue d'environnement). Français au tutoiement et anglais, mêmes pages dans les deux langues, voix SYM.
 // Le quickstart lui-même est rejoué de bout en bout par tests/docs-quickstart.chromium.test.ts.
+import { execFileSync } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
 import { browserOpenApi } from '@sym/contracts/browser';
 import { describe, expect, test } from 'vitest';
 import { MODULE_ROOT } from '../eslint.boundaries.mjs';
+import { apiKeyPrefixOf } from '../packages/core/src/auth/api-key.ts';
 import { BROWSER_ENV_CATALOG } from '../packages/core/src/config/env-catalog.ts';
 import { DOC_LOCALES, DOC_PAGES, codeBlocks, extractQuickstart, proseOf } from '../scripts/docs-lib.ts';
 import { ENV_DESCRIPTIONS_EN, REFERENCE_PAGES, renderReference } from '../scripts/docs-reference.ts';
@@ -142,6 +144,22 @@ describe('quickstart', () => {
       }
     }
     expect(codeBlocks(read('en/quickstart.md')).some((b) => /\bdocker run\b/.test(b.code))).toBe(true);
+  });
+
+  // Revue de browser-v1 (point 2) : la commande de l'étape 1 doit produire une clé que l'instance accepte
+  // (`SYMB_BOOTSTRAP_API_KEY` : symb_<12>_<43>), sinon le conteneur refuse de démarrer ; et attendre /readyz.
+  test('étape 1 : la clé d’API générée par la commande de la page est acceptée par la configuration ; /readyz attendu', () => {
+    for (const locale of DOC_LOCALES) {
+      const step1 = codeBlocks(read(join(locale, 'quickstart.md'))).find((b) => b.code.includes('docker network create'))?.code ?? '';
+      const line = step1.split('\n').find((l) => l.startsWith('export SYMB_API_KEY='));
+      expect(line, locale).toBeDefined();
+      for (let i = 0; i < 5; i += 1) {
+        const key = execFileSync('bash', ['-e', '-c', `${line!}\nprintf %s "$SYMB_API_KEY"`], { encoding: 'utf8' });
+        expect(apiKeyPrefixOf(key), `${locale} : ${key.slice(0, 18)}…`).not.toBeNull();
+      }
+      expect(step1, locale).toMatch(/until curl -fsS "\$SYMB_URL\/readyz"; do sleep 2; done/);
+      expect(step1, locale).toContain('--cap-add SYS_CHROOT');
+    }
   });
 });
 
