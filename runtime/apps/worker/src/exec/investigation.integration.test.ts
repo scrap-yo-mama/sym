@@ -12,6 +12,7 @@ import { DomainPacer, generateMasterKey, inputSchemaIssues, MasterKey, Secret, v
 import { firstCostInversion, milestoneHeading, type InvestigationMilestone } from '@runtime/core/investigation';
 import * as net from '@runtime/core/net';
 import {
+  createRun,
   keyCheck,
   listInvestigationEvents,
   migrateUp,
@@ -415,6 +416,85 @@ describe('enquête (tâche 2.1)', () => {
     // N = 3 : trois mises en forme par le rôle extract ; le coût LLM des essais est imputé à l'essai.
     expect(fake.byRole[EXTRACT_MODEL]).toBe(3);
     expect(run.attempts[0]!.cost_usd).toBeGreaterThan(0);
+  });
+
+  test('assert_html_replay_no_llm — page HTML statique : l’essai E4 conforme est compilé en déclaratif html (vérifié sans LLM), E4 gardé en repli, puis le rejeu compte 0 appel LLM', async () => {
+    withExtract = true;
+    // Éléments que l'agent lit sur la page 1 (texte visible), relevés sur la fixture : 20 cartes produit.
+    const served = (await client.get(SSR_HOST, '/')).body;
+    const items = [...served.matchAll(/<h2 class="title"><a [^>]*>([^<]+)<\/a><\/h2><span class="price">([0-9]+),([0-9]{2})/g)].map((m) => ({ title: m[1]!, price: Number(`${m[2]}.${m[3]}`) }));
+    expect(items).toHaveLength(20);
+    const op = (name: string, decimal: string | null = null) => ({ op: name, pattern: null, group: null, decimal, format: null });
+    fake.setScenario(MODEL, [
+      scripted.json({
+        fields: [
+          { name: 'title', type: 'string', required: true, personal: false, description: 'Titre' },
+          { name: 'price', type: 'number', required: true, personal: false, description: 'Prix en euros' },
+        ],
+        sources: [],
+      }),
+      // Compilation (rôle investigate) : sélecteurs et opérateurs de la liste fermée, rien d'autre.
+      scripted.json({ records: 'article.product', fields: [{ field: 'title', css: 'h2.title a', attr: null, ops: [op('trim')] }, { field: 'price', css: '.price', attr: null, ops: [op('to_number', ',')] }] }),
+    ]);
+    fake.setScenario(EXTRACT_MODEL, [scripted.json({ items }), scripted.json({ items }), scripted.json({ items })]);
+    const apiId = await insertApi('zz_test_inv_html_replay');
+    const run = await investigate(apiId, { url: `${base(SSR_HOST)}/`, description: 'liste des produits du catalogue', auto_validate: true });
+    expect(run).toMatchObject({ state: 'succeeded', items: 20, strategy_version: 2 });
+    // E4 essayé et conforme (N = 3), puis UNE compilation : 2 appels du rôle investigate, 3 du rôle extract.
+    expect(fake.byRole[MODEL]).toBe(2);
+    expect(fake.byRole[EXTRACT_MODEL]).toBe(3);
+    const versions = (
+      await pool.query<{ version: number; execution: string; parent_version: number | null; was_current: boolean; spec: { sources?: { from: string }[]; request?: { allowed_hosts: string[] } } }>(
+        'SELECT version, execution, parent_version, was_current, spec FROM strategy_versions WHERE api_id = $1 ORDER BY version',
+        [apiId],
+      )
+    ).rows;
+    expect(versions.map((v) => [v.version, v.execution, v.parent_version, v.was_current])).toEqual([
+      [1, 'agent_fetch', null, true],
+      [2, 'fetch', 1, true],
+    ]);
+    expect(versions[1]!.spec.sources).toEqual([{ id: 'page', from: 'html', records: 'article.product' }]);
+    expect(versions[1]!.spec.request!.allowed_hosts).toEqual([SSR_HOST]);
+    expect((await apiRow(apiId)).current_strategy_version).toBe(2);
+    const events = await eventsOf(run.id);
+    const compiled = events.find((e) => e.kind === 'strategy.compiled')!.payload as Record<string, unknown>;
+    expect(compiled).toMatchObject({ from: 'agent_fetch', to: 'fetch', ok: true, proposals: 1, records: 20, ratio: 1 });
+    expect(compiled['cost_usd']).toEqual(expect.any(Number));
+    expect(compiled['cost_usd']).toBeGreaterThan(0);
+    const finished = events.find((e) => e.kind === 'investigation.finished')!.payload as { strategy: Record<string, unknown> };
+    expect(finished.strategy).toMatchObject({ version: 2, execution: 'fetch', compiled_from: 'agent_fetch', fallback_version: 1 });
+    // Coût de la compilation imputé au run d'enquête (en plus des essais).
+    const attemptsUsd = run.attempts.reduce((s, a) => s + (a.cost_usd ?? 0), 0);
+    expect(run.cost.total_usd).toBeGreaterThan(attemptsUsd);
+
+    // Rejeu : stratégie html déclarative, E1, AUCUN appel LLM.
+    fake.reset();
+    const { runId } = await withActor(pool, actorA, (tx) => createRun(tx, queue, { apiId, ownerId: A, trigger: 'rest' }));
+    const replay = await waitRun(runId);
+    expect(replay).toMatchObject({ state: 'succeeded', items: 20, strategy_version: 2 });
+    expect(fake.requests).toBe(0);
+    const delivered = (await pool.query<{ item: unknown }>('SELECT item FROM dataset_items WHERE run_id = $1 ORDER BY seq', [runId])).rows.map((r) => r.item);
+    expect(delivered).toEqual(items);
+  });
+
+  test('page HTML statique, compilation refusée (valeurs divergentes deux fois) : E4 gardé tel quel, raison dans le récit', async () => {
+    withExtract = true;
+    const op = (name: string) => ({ op: name, pattern: null, group: null, decimal: null, format: null });
+    const wrong = { records: 'article.product', fields: [{ field: 'title', css: 'span.stock', attr: null, ops: [op('trim')] }, { field: 'price', css: '.price', attr: null, ops: [op('to_number')] }] };
+    fake.setScenario(MODEL, [
+      scripted.json({ fields: [{ name: 'title', type: 'string', required: true, personal: false, description: 'Titre' }], sources: [] }),
+      scripted.json(wrong),
+      scripted.json(wrong),
+    ]);
+    const items = { items: [{ title: 'Lampe Zztest 0001' }, { title: 'Table Zztest 0002' }] };
+    fake.setScenario(EXTRACT_MODEL, [scripted.json(items), scripted.json(items), scripted.json(items)]);
+    const apiId = await insertApi('zz_test_inv_html_refused');
+    const run = await investigate(apiId, { url: `${base(SSR_HOST)}/`, description: 'liste des produits du catalogue', auto_validate: true });
+    expect(run).toMatchObject({ state: 'succeeded', items: 2, strategy_version: 1 });
+    expect((await pool.query<{ execution: string }>('SELECT execution FROM strategy_versions WHERE api_id = $1', [apiId])).rows).toEqual([{ execution: 'agent_fetch' }]);
+    const compiled = (await eventsOf(run.id)).find((e) => e.kind === 'strategy.compiled')!.payload as Record<string, unknown>;
+    expect(compiled).toMatchObject({ ok: false, proposals: 2, reason: expect.stringMatching(/^(count|values|extraction|invalid_spec)$/) });
+    expect(fake.byRole[MODEL]).toBe(3);
   });
 
   test('défi servi en HTTP 200 : arrêt à l’étape 0 (INV6), bloquee, aucun essai, aucun appel au LLM', async () => {

@@ -19,7 +19,9 @@
 //    conformes dont une en page 2 si la stratégie pagine ; chaque exécution passe par l'exécuteur de stratégie et TOUTES
 //    ses gardes (robots, SSRF, verrou de domaines, cadence, plafonds, classification avant extraction). Un couple = un
 //    essai journalisé (`run_attempts`, INV2, INV4) et un `attempt.finished` ; un élagage = un `attempt.pruned`.
-// 4. Fin : stratégie v1 (`created_by = investigation` ; une trace E6 n'est gardée que compilée en E5, 04 §3.1), schéma de
+// 4. Fin : stratégie v1 (`created_by = investigation` ; une trace E6 n'est gardée que compilée en E5, 04 §3.1) ; un essai E4
+//    conforme est compilé en déclaratif `html` vérifié sans LLM (UX-20, 04b §2) : retenu, il devient la version courante et
+//    la version E4 reste le repli ; sinon E4 est retenu, avec la raison au récit (`strategy.compiled`). Schéma de
 //    sortie validé et schéma d'entrée proposé posés sur l'API, résultat livré (dataset du run), statut `sain` (1) ; sinon
 //    `bloquee`, `action_requise` ou `erreur` (2, 3, 21). Toute fin ferme la phase et le récit.
 // Règles Markdown (tâche 2.10, 18 §4) : résolues pour l'API (propriétaire et instance seulement), injectées dans le préfixe
@@ -35,6 +37,7 @@
 // dans un prompt.
 import {
   buildCatalogDossier,
+  validateAgentFetchSpec,
   computeSignature,
   minimalContentCheck,
   priorRefusalDecision,
@@ -131,7 +134,17 @@ import {
   type SkillRead,
   type StrategyRuleRow,
 } from '@runtime/core';
-import { investigateCallCeilingUsd, investigateMessages, investigatePromptVersion, proposeInvestigation, readSkillsPhase, renderSkillBodies } from '@runtime/agent';
+import {
+  compileHtmlStrategy,
+  htmlCompilePromptVersion,
+  investigateCallCeilingUsd,
+  investigateMessages,
+  investigatePromptVersion,
+  proposeInvestigation,
+  readSkillsPhase,
+  renderSkillBodies,
+  type HtmlCompileOutcome,
+} from '@runtime/agent';
 import {
   appendInvestigationEvent,
   buildStrategySource,
@@ -810,6 +823,8 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
       const sampleOutputs = new Map<TrialPair, Record<string, unknown>[][]>();
       /** Trace E6 compilée en E5 par la dernière exécution conforme du couple (04 §3.1). */
       const compiledFor = new Map<TrialPair, unknown>();
+      /** Dernière page servie à un essai E4 réussi et ses éléments : source de la compilation en déclaratif `html`. */
+      const pageFor = new Map<TrialPair, { html: string; url: string; items: readonly unknown[] }>();
       const spend = new Map<TrialPair, { proxy: number; llm: number | null; tokens: { in: number; cached: number; out: number; reasoning: number; estimated: boolean }; model: string | null; prompt: string | null; engine: string | null }>();
       const spentBeforeTrials = spent;
       let trialsUsd = 0;
@@ -873,6 +888,12 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
                 if (compiled === undefined) return execution(false, 'extraction', 'not_compilable', r.pages, cost, trial.ms, null);
                 compiledFor.set(pair, compiled);
               }
+              // E4 réussi : page servie et éléments de l'agent (avant la liste d'exclusion, comme le rejeu du HTML), gardés en
+              // mémoire pour la compilation en déclaratif `html` (constat UX-20). Jamais écrits ni journalisés.
+              const page = trial.outcome.agent?.page;
+              if (entry.execution === 'agent_fetch' && purpose === 'sample' && page !== undefined) {
+                pageFor.set(pair, { html: page.html, url: page.url, items: trial.outcome.result.ok ? trial.outcome.result.records : r.records });
+              }
               lastRecords.set(pair, r.records);
               if (purpose === 'sample') sampleOutputs.set(pair, [...(sampleOutputs.get(pair) ?? []), r.records]);
               return { ...execution(true, null, null, r.pages, cost, trial.ms, r.stop), records: r.records.length };
@@ -923,6 +944,85 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
       }
       spent = outcome.spentUsd;
 
+      /**
+       * Compilation de l'essai E4 conforme en stratégie déclarative `html` (constat UX-20, 04b §2, 19 §1 « Rejeu E1-E3 :
+       * 0 LLM »), sur le modèle de E6 → E5 : un appel du rôle `investigate` sur le HTML capturé et les éléments de l'agent
+       * (données non fiables), plafonné AVANT l'envoi par le budget d'enquête ; vérification SANS LLM sur le même HTML ;
+       * une nouvelle tentative au plus. Coût imputé au run d'enquête ; prix inconnu : aucun appel (jamais 0, 08 §1). Le
+       * récit dit l'issue (`strategy.compiled`) ; un refus garde E4, avec sa raison.
+       */
+      const compileHtml = async (pair: TrialPair, entry: PlanEntry): Promise<{ spec: unknown; estCostUsd: number | null } | null> => {
+        const refuse = async (reason: string, extra: Record<string, unknown> = {}) => {
+          await decide(EV.strategyCompiled, { from: 'agent_fetch', to: 'fetch', ok: false, reason, ...extra, budget: budgetView() });
+          await ctx.log('info', 'html_compile_skipped', { reason });
+          return null;
+        };
+        const page = pageFor.get(pair);
+        if (page === undefined) return refuse('no_page');
+        config ??= deps.llm === undefined ? null : await deps.llm.config().catch(() => null);
+        const role = config?.roles.investigate;
+        if (deps.llm === undefined || config === null || role === undefined) return refuse('llm_not_configured');
+        const price = rolePrice(config, 'investigate');
+        if (price === null || price === undefined) {
+          await ctx.log('warn', 'llm_price_missing', { model: role.model, role: 'investigate' });
+          return refuse('llm_price_missing');
+        }
+        if (spent >= budgetUsd) return refuse('investigation_budget_usd');
+        if (timedOut()) return refuse('investigation_timeout_s');
+        let client: LlmClient;
+        try {
+          client = deps.llm.client({ ...config, roles: { investigate: role } });
+        } catch {
+          return refuse('llm_not_configured');
+        }
+        // Spec E4 de l'essai (défauts posés par la validation) : page, hôtes et limite d'entrée de la compilation.
+        const e4 = validateAgentFetchSpec(entry.spec);
+        if (!e4.ok) return refuse('invalid_agent_fetch_spec');
+        let out: HtmlCompileOutcome | null = null;
+        let failure: string | null = null;
+        try {
+          out = await compileHtmlStrategy(client, {
+            description: request.description,
+            outputSchema,
+            html: page.html,
+            pageUrl: e4.spec.request.url,
+            allowedHosts: e4.spec.request.allowed_hosts,
+            items: page.items,
+            maxInputChars: e4.spec.limits.max_input_chars,
+            price,
+            signal,
+            beforeCall: (ceiling) => {
+              if (spent + (client.meter.snapshot().cost_usd_known ?? 0) + ceiling > budgetUsd) throw new BudgetGuardError();
+            },
+          });
+        } catch (error) {
+          if (ctx.signal.aborted) throw error;
+          if (timedOut()) failure = 'investigation_timeout_s';
+          else if (error instanceof BudgetGuardError) failure = 'investigation_budget_usd';
+          else if (error instanceof LlmError) failure = `llm_${error.class}`;
+          else failure = 'proposal_unreadable';
+        }
+        // Coût de la compilation (tentatives échouées comprises), imputé au run d'enquête : inconnu si le prix manque.
+        const usage = client.meter.snapshot();
+        await charge(ctx, 0, usage.cost_usd, { in: usage.tokens_in, cached: usage.tokens_cached, out: usage.tokens_out, reasoning: usage.tokens_reasoning, estimated: usage.usage_estimated });
+        await ctx.log('info', 'html_compile_call', { model: role.model, prompt_version: htmlCompilePromptVersion, llm_usd: usage.cost_usd, calls: usage.calls });
+        if (usage.cost_usd === null) {
+          await ctx.log('warn', 'llm_price_missing', { model: role.model, role: 'investigate' });
+          return refuse('llm_price_missing', { cost_usd: null });
+        }
+        spent = round6(spent + usage.cost_usd);
+        if (out === null) return refuse(failure ?? 'proposal_unreadable', { cost_usd: usage.cost_usd });
+        if (!out.ok) {
+          return refuse(out.reason, { proposals: out.proposals, cost_usd: usage.cost_usd, ...(out.diff === null ? {} : { expected: out.diff.expected, got: out.diff.got, ratio: out.diff.ratio }) });
+        }
+        // Coût d'un rejeu : E1 sans LLM (octets de la page au prix du réseau du couple, calcul).
+        const perGbUsd = networks.find((n) => n.mode === entry.network)?.perGbUsd ?? 0;
+        const estCostUsd = estimateCostUsd('fetch', entry.network, { bytes: Buffer.byteLength(page.html), pages: 1, perGbUsd, llmPrice: null });
+        await decide(EV.strategyCompiled, { from: 'agent_fetch', to: 'fetch', ok: true, proposals: out.proposals, records: out.diff.got, ratio: out.diff.ratio, cost_usd: usage.cost_usd, est_cost_usd: estCostUsd, budget: budgetView() });
+        await ctx.log('info', 'html_strategy_compiled', { proposals: out.proposals, records: out.diff.got, ratio: out.diff.ratio, llm_usd: usage.cost_usd });
+        return { spec: out.spec, estCostUsd };
+      };
+
       switch (outcome.kind) {
         case 'conformant': {
           const pair = outcome.outcome.pair;
@@ -931,6 +1031,10 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
           const runs = Math.max(1, outcome.outcome.executions.length);
           const kept = retainedStrategy(entry, compiledFor.get(pair), round6((spend.get(pair)?.proxy ?? 0) / runs));
           if (!kept.ok) return await finishFailed({ failure_class: 'extraction', retryable: false, detail: kept.reason }, 'testing');
+          // Essai E4 conforme : compilé en déclaratif `html` rejoué sans LLM si la vérification passe ; E4 reste la version de
+          // repli (écrite avant la compilée, retour de version). Sinon E4 est retenu tel quel (UX-20).
+          const html = entry.execution === 'agent_fetch' ? await compileHtml(pair, entry) : null;
+          const retained = html === null ? { execution: kept.execution, network: kept.network, spec: kept.spec, estCostUsd: kept.estCostUsd } : { execution: 'fetch' as const, network: kept.network, spec: html.spec, estCostUsd: html.estCostUsd };
           // Source (18 §4.6) : règles injectées et skills lus ; règles embarquées si le compilé porte un prompt (E4) ou vient
           // d'une trace E6 (E5 : `compiled_with` par étape, 19 §4).
           const agentic = entry.execution === 'agent_fetch' || entry.execution === 'agent';
@@ -964,10 +1068,11 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
               rows,
             }),
             rules: rows,
+            ...(html === null ? {} : { compiled: { execution: retained.execution, spec: retained.spec, estCostUsd: retained.estCostUsd } }),
           });
           phase = 'done';
           // Signature calculée par le code (r1 R10) et entrées de mémoire consultées (sha256 du dossier) sur la version.
-          const keptSpec = kept.spec as { request?: { url?: unknown }; pagination?: { type?: unknown } };
+          const keptSpec = retained.spec as { request?: { url?: unknown }; pagination?: { type?: unknown } };
           await saveStrategySignature(deps.pool, {
             ownerId: ctx.ownerId,
             apiId: ctx.apiId,
@@ -977,8 +1082,8 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
               requestUrl: typeof keptSpec.request?.url === 'string' ? keptSpec.request.url : null,
               html: reconHtml,
               outputSchema,
-              execution: kept.execution,
-              network: kept.network,
+              execution: retained.execution,
+              network: retained.network,
               pagination: typeof keptSpec.pagination?.type === 'string' ? keptSpec.pagination.type : null,
             }),
           });
@@ -994,7 +1099,15 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
           await applyStatus({ type: 'investigation_succeeded' });
           await event(EV.finished, {
             outcome: 'conformant',
-            strategy: { version: saved.version, execution: kept.execution, network: kept.network, source: entry.source, est_cost_usd: kept.estCostUsd, ...(kept.execution !== entry.execution ? { compiled_from: entry.execution } : {}) },
+            strategy: {
+              version: saved.version,
+              execution: retained.execution,
+              network: retained.network,
+              source: entry.source,
+              est_cost_usd: retained.estCostUsd,
+              ...(retained.execution !== entry.execution ? { compiled_from: entry.execution } : {}),
+              ...(saved.fallbackVersion === undefined ? {} : { fallback_version: saved.fallbackVersion }),
+            },
             items: records.length,
             ...(stopCheckView(outcome.outcome) === undefined ? {} : { pagination: stopCheckView(outcome.outcome) }),
             budget: budgetView(),
