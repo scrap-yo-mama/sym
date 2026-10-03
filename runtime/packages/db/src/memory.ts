@@ -38,8 +38,9 @@ function sessionApi(a: { requires_session: boolean; requires: Record<string, unk
 }
 
 /**
- * Refus du propriétaire pour un domaine (r1 R14) : API `bloquee`, ou dernier run clos en `robots_disallowed` ou
- * `forbidden`. Aucune limite ; le domaine (enregistrable) est recalculé par le code après un pré-filtre SQL sur l'hôte.
+ * Refus du propriétaire pour un domaine (r1 R14) : API `bloquee`, ou dernier run clos en `forbidden`. Un ancien arrêt
+ * `robots_disallowed` (avant D-91, valeur historique) n'est pas un refus du domaine. Aucune limite ; le domaine
+ * (enregistrable) est recalculé par le code après un pré-filtre SQL sur l'hôte.
  */
 async function readRefusals(tx: pg.PoolClient, ownerId: string, domain: string): Promise<PriorRefusal[]> {
   if (domain === '') return [];
@@ -51,7 +52,7 @@ async function readRefusals(tx: pg.PoolClient, ownerId: string, domain: string):
      LEFT JOIN LATERAL (SELECT failure_class, finished_at FROM runs r WHERE r.api_id = a.id AND r.owner_id = $1 AND r.state IN ('succeeded', 'failed')
                         ORDER BY coalesce(finished_at, created_at) DESC LIMIT 1) l ON true
      WHERE a.owner_id = $1
-       AND (a.status = 'bloquee' OR l.failure_class IN ('robots_disallowed', 'forbidden'))
+       AND ((a.status = 'bloquee' AND a.status_reason IS DISTINCT FROM 'robots_disallowed') OR l.failure_class = 'forbidden')
        AND (strpos(lower(coalesce(a.investigation #>> '{request,url}', '')), lower($2)) > 0
             OR strpos(lower(coalesce(v.spec #>> '{request,url}', '')), lower($2)) > 0
             OR v.signature ->> 'registrable_domain' = $2)`,
@@ -60,8 +61,8 @@ async function readRefusals(tx: pg.PoolClient, ownerId: string, domain: string):
   const out: PriorRefusal[] = [];
   for (const r of rows) {
     if (domainOf(r.signature, r.url ?? r.spec_url) !== domain) continue;
-    if (r.status === 'bloquee') out.push({ domain, at: iso(r.updated_at)!, class: r.status_reason === 'robots_disallowed' ? 'robots_disallowed' : 'bloquee' });
-    else if (r.refused_class === 'robots_disallowed' || r.refused_class === 'forbidden') out.push({ domain, at: iso(r.refused_at ?? r.updated_at)!, class: r.refused_class });
+    if (r.status === 'bloquee' && r.status_reason !== 'robots_disallowed') out.push({ domain, at: iso(r.updated_at)!, class: 'bloquee' });
+    else if (r.refused_class === 'forbidden') out.push({ domain, at: iso(r.refused_at ?? r.updated_at)!, class: 'forbidden' });
   }
   return out;
 }
@@ -116,7 +117,7 @@ export async function readCatalogMemory(pool: pg.Pool, args: { ownerId: string; 
                             FROM runs r WHERE r.api_id = a.id AND r.owner_id = $1 AND r.state = 'succeeded' AND r.dataset_id IS NOT NULL
                             ORDER BY r.finished_at DESC NULLS LAST LIMIT 1) d ON true
          LEFT JOIN LATERAL (SELECT failure_class, finished_at FROM runs r WHERE r.api_id = a.id AND r.owner_id = $1 AND r.state IN ('succeeded', 'failed')
-                            ORDER BY coalesce(finished_at, created_at) DESC LIMIT 1) l ON l.failure_class IN ('robots_disallowed', 'forbidden')
+                            ORDER BY coalesce(finished_at, created_at) DESC LIMIT 1) l ON l.failure_class = 'forbidden'
          WHERE a.owner_id = $1 AND a.id = ANY($2::uuid[])`,
         [args.ownerId, ids],
       )
@@ -154,8 +155,9 @@ export async function readCatalogMemory(pool: pg.Pool, args: { ownerId: string; 
         : [];
       const steps = Array.isArray(source['steps']) ? (source['steps'] as unknown[]).filter(isRecord).map((s) => String(s['intent'] ?? '')).filter((s) => s !== '') : [];
       let refusal: MemoryEntry['refusal'] = null;
-      if (a.status === 'bloquee') refusal = { class: a.status_reason === 'robots_disallowed' ? 'robots_disallowed' : 'bloquee', at: iso(a.updated_at)! };
-      else if (run?.refused_class === 'robots_disallowed' || run?.refused_class === 'forbidden') refusal = { class: run.refused_class, at: iso(run.refused_at ?? a.updated_at)! };
+      // Ancien arrêt `robots_disallowed` (avant D-91) : pas un refus du domaine.
+      if (a.status === 'bloquee' && a.status_reason !== 'robots_disallowed') refusal = { class: 'bloquee', at: iso(a.updated_at)! };
+      else if (run?.refused_class === 'forbidden') refusal = { class: 'forbidden', at: iso(run.refused_at ?? a.updated_at)! };
       // Valeurs : même domaine enregistrable, hors session, hors domaine refusé.
       let sample: unknown[] = [];
       if (domain === args.domain && !session && refusal === null && run?.dataset_tunnel !== true && run?.dataset_id !== null && run?.dataset_id !== undefined) {

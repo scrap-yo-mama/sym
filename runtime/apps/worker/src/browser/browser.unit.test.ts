@@ -86,7 +86,7 @@ describe('lancement de Chromium (options figées)', () => {
     expect(() => chromiumLaunchOptions('http://127.0.0.1:1', { PLAYWRIGHT_DISABLE_FORCED_CHROMIUM_PROXIED_LOOPBACK: '1' })).toThrow();
   });
 
-  // Revue de 1.11 (INV11) : le prérendu, le préchargement qui le précède et WebSocketStream échappent à tout contrôle ; ils
+  // Revue de 1.11 : le prérendu, le préchargement qui le précède et WebSocketStream échappent à tout contrôle ; ils
   // sont coupés au lancement. Un second --disable-features remplace celui de Playwright (dernier gagnant côté Chromium) :
   // le nôtre, unique, reprend toute la liste de Playwright, lue dans le paquet installé (une montée de version qui la
   // change fait échouer ce test).
@@ -376,7 +376,7 @@ describe('boundedDocumentBody : corps brut d’un document lu seulement si sa ta
   });
 });
 
-// Revue de 1.11 (INV11) : verdict du contrôle CDP de chaque requête.
+// Revue de 1.11 : verdict du contrôle CDP de chaque requête.
 describe('contrôle CDP : verdict d\'une requête', () => {
   const hop = { redirect: false, rootUrl: 'http://zz-test.example/', resourceType: 'Document', mainFrame: true, method: 'GET' };
   const inScope = () => true;
@@ -393,6 +393,6 @@ describe('contrôle CDP : verdict d\'une requête', () => {
     expect(await requestVerdict('https://zz-test.example/ok', inScope, check, hop)).toBe(true);
     expect(await requestVerdict('data:text/plain,x', inScope, check, hop)).toBe(true);
     expect(await requestVerdict('https://ailleurs.example/prive/x', () => false, check, hop)).toBe(true);
-    expect(await requestVerdict('https://zz-test.example/x', inScope, async () => Promise.reject(new Error('robots')), hop)).toBe(false);
+    expect(await requestVerdict('https://zz-test.example/x', inScope, async () => Promise.reject(new Error('zz_test')), hop)).toBe(false);
   });
 });

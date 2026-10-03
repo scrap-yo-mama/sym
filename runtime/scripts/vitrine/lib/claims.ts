@@ -10,7 +10,7 @@ import { normalize } from './text.ts';
 
 const STATUSES = ['relu', 'à relire', 'bloqué'] as const;
 type ClaimStatus = (typeof STATUSES)[number];
-const SURFACES = ['readme', 'landing', 'landing-compare', 'responsible-use', 'repo'] as const;
+const SURFACES = ['readme', 'landing', 'landing-compare', 'responsible-use', 'repo', 'reserve'] as const;
 export type Surface = (typeof SURFACES)[number];
 
 type Claim = {
@@ -55,6 +55,43 @@ export type ProofContext = {
   taskDeliveredOn?: ((task: string) => string | undefined) | undefined;
   today: string;
 };
+
+/**
+ * Une entrée relue qui affirme une fonction cite une preuve de CETTE fonction (22 §3.2 : affichée seulement une fois prouvée et
+ * relue) : la réparation par un test de réparation, la reprise par étape par un assert de 19 §4, le serveur MCP par un test du
+ * serveur MCP. Une preuve voisine (la garde de classification pour la réparation, la réparation de la stratégie pour la reprise par
+ * étape, l'OpenAPI pour MCP) ne suffit pas, et une note qui reporte la preuve à la livraison non plus.
+ */
+const CAPABILITY_PROOFS: readonly { name: string; claim: RegExp; proof: RegExp }[] = [
+  { name: 'la réparation', claim: /\brepair|répar/i, proof: /repair/i },
+  // La reprise par étape (2.13, 19 §4 : « repairs step by step », « it repairs the step that broke ») : un assert de 19 §4, jamais la
+  // réparation de la stratégie (2.3), preuve voisine. Seule une affirmation est visée (« Not delivered yet: step-by-step repair » non).
+  {
+    name: 'la reprise par étape',
+    claim: /\brepairs? (step by step|the step)\b|\brépare (étape par étape|l['’]étape)/i,
+    proof: /^(test:)?assert_(step_classification_guard|step_patch_bounded|side_effect_computed_by_code)$/,
+  },
+  { name: 'le serveur MCP', claim: /\bMCP\b/, proof: /mcp|assert_tool_definitions_budget/i },
+];
+const DEFERRED_PROOF = /s'ajoute à (sa|leur) livraison|added when .* deliver/i;
+
+/**
+ * Formulation prudente imposée (22 §3.2) : « tourne sans LLM **quand la stratégie le permet** ». Les stratégies E4 à E6 et une API
+ * `not_compilable` rejouent avec un modèle (04 §2) : « without an LLM » / « sans LLM » est toujours suivi de la réserve. Gras ignoré.
+ */
+const CAUTIOUS: Record<'en' | 'fr', { claim: RegExp; caution: string }> = {
+  en: { claim: /\b(without (an? )?LLMs?|no LLMs?)\b/gi, caution: ' when the strategy allows' },
+  fr: { claim: /\bsans (un )?LLM\b/gi, caution: ' quand la stratégie le permet' },
+};
+
+/** Problèmes de formulation prudente d'un texte (liste vide : conforme). */
+export function cautiousWordingProblems(text: string, lang: 'en' | 'fr'): string[] {
+  const plain = text.replace(/\*\*/g, '');
+  const { claim, caution } = CAUTIOUS[lang];
+  return [...plain.matchAll(claim)]
+    .filter((m) => !plain.slice((m.index ?? 0) + m[0].length).startsWith(caution))
+    .map((m) => `« ${m[0]} » sans la formulation prudente imposée (22 §3.2 : « ${m[0]}${caution} »)`);
+}
 
 /** Problèmes du registre (liste vide : conforme). */
 export function claimProblems(file: ClaimsFile, context: ProofContext): string[] {
@@ -105,7 +142,18 @@ export function claimProblems(file: ClaimsFile, context: ProofContext): string[]
         if (!new RegExp(`(?<![a-z0-9_])${proof}(?![a-z0-9_])`).test(context.testCorpus)) problems.push(`${at} : test ${proof} introuvable (aucun test réel, test.todo exclu)`);
       } else if (!context.exists(proof)) problems.push(`${at} : preuve ${proof} introuvable`);
     }
+    for (const lang of ['en', 'fr'] as const) for (const problem of cautiousWordingProblems(claim[lang] ?? '', lang)) problems.push(`${at} (${lang}) : ${problem}`);
     if (claim.status === 'bloqué' && !claim.note) problems.push(`${at} : une entrée bloquée dit pourquoi (note)`);
+    // Les preuves propres visent les surfaces du dépôt (README, dépôt) ; celles de la landing relèvent de la porte du GO (4.11, check:landing-go).
+    if (claim.status === 'relu') {
+      const ownProofs = claim.surfaces.some((surface) => surface === 'readme' || surface === 'repo' || surface === 'responsible-use' || surface === 'reserve');
+      for (const capability of ownProofs ? CAPABILITY_PROOFS : []) {
+        if ((capability.claim.test(claim.en) || capability.claim.test(claim.fr)) && !claim.proof.some((proof) => capability.proof.test(proof))) {
+          problems.push(`${at} : affirme ${capability.name} sans preuve propre (relue, elle s'affiche)`);
+        }
+      }
+      if (claim.note && DEFERRED_PROOF.test(claim.note)) problems.push(`${at} : relue alors que sa note reporte la preuve à une livraison`);
+    }
   }
   return problems;
 }
@@ -127,8 +175,11 @@ export function unreviewedDisplayed(file: ClaimsFile, surfaceText: string): stri
  */
 export function foreignClaimsDisplayed(file: ClaimsFile, surfaceText: string, surface: Surface): string[] {
   const haystack = normalize(surfaceText);
+  // Un libellé de cellule du comparatif n'est pas une phrase : il n'est une copie que s'il occupe toute une ligne ou une cellule de tableau.
+  const cells = new Set(surfaceText.split('\n').flatMap((line) => line.split('|')).map((cell) => normalize(cell)));
+  const shown = (claim: Claim, text: string): boolean => (claim.surfaces.every((s) => s === 'landing-compare') ? cells.has(normalize(text)) : haystack.includes(normalize(text)));
   return file.claims
-    .filter((claim) => !claim.surfaces.includes(surface) && [claim.en, claim.fr].some((text) => text.trim().length >= 12 && haystack.includes(normalize(text))))
+    .filter((claim) => !claim.surfaces.includes(surface) && [claim.en, claim.fr].some((text) => text.trim().length >= 12 && shown(claim, text)))
     .map((claim) => `« ${claim.id} » (surfaces ${claim.surfaces.join(', ')}) est affichée sur la surface ${surface}`);
 }
 

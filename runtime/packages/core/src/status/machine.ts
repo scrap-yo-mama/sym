@@ -40,6 +40,14 @@ function apply(state: ApiStatusState, ctx: MachineContext, hops: readonly Hop[])
   return { ok: true, state: current, transitions };
 }
 
+/** Raison de la transition 13 selon la cause de l'échec de la réparation (2.13 : cascade d'étapes, agent seul possible). */
+const REPAIR_FAILED_REASON = {
+  budget_exhausted: 'repair_budget_exhausted',
+  repeated_patch: 'repair_repeated_patch',
+  step_cascade: 'step_cascade',
+  not_compilable: 'not_compilable',
+} as const;
+
 const reject = (state: ApiStatusState, rejected: string): StatusStep => ({ ok: false, state, transitions: [], rejected });
 const unchanged = (state: ApiStatusState, patch: Partial<ApiStatusState> = {}): StatusStep => ({
   ok: true,
@@ -65,15 +73,16 @@ export function applyStatusEvent(state: ApiStatusState, event: StatusEventInput,
     case 'investigation_failed':
       if (status !== 'enquete') return reject(state, 'not_investigating');
       // Tentative de persistance (D-49) : tout échec repasse par la 21 vers `erreur`, jamais par la 2 (robots.txt compris).
-      if ((event.cause === 'budget_exhausted' && state.previousStatus !== null) || state.previousStatus === 'erreur') {
+      if (((event.cause === 'budget_exhausted' || event.cause === 'not_compilable') && state.previousStatus !== null) || state.previousStatus === 'erreur') {
         // 21 : ré-enquête d'une API existante sans stratégie conforme, ancienne version gardée.
-        return apply(state, ctx, [{ id: 21, to: state.previousStatus, reason: 'reinvestigation_failed', patch: { previousStatus: null } }]);
+        const reason = event.cause === 'not_compilable' ? 'not_compilable' : 'reinvestigation_failed';
+        return apply(state, ctx, [{ id: 21, to: state.previousStatus, reason, patch: { previousStatus: null } }]);
       }
       return apply(state, ctx, [
         {
           id: 2,
           to: 'erreur',
-          reason: event.cause === 'robots_unreachable' ? 'robots_unreachable' : 'investigation_budget_exhausted',
+          reason: event.cause === 'not_compilable' ? 'not_compilable' : 'investigation_budget_exhausted',
           patch: { previousStatus: null },
         },
       ]);
@@ -99,12 +108,12 @@ export function applyStatusEvent(state: ApiStatusState, event: StatusEventInput,
 
     case 'repair_succeeded':
       if (status !== 'reparation') return reject(state, 'not_repairing');
-      return apply(state, ctx, [{ id: 12, to: 'warning', reason: 'repaired', patch: signalPatch(now, true) }]);
+      return apply(state, ctx, [{ id: 12, to: 'warning', reason: event.validated === false ? 'repair_not_validated' : 'repaired', patch: signalPatch(now, true) }]);
 
     case 'repair_failed':
       if (status !== 'reparation') return reject(state, 'not_repairing');
       return apply(state, ctx, [
-        { id: 13, to: 'erreur', reason: event.cause === 'repeated_patch' ? 'repair_repeated_patch' : 'repair_budget_exhausted' },
+        { id: 13, to: 'erreur', reason: REPAIR_FAILED_REASON[event.cause] },
       ]);
 
     case 'reinvestigate': {
@@ -192,7 +201,7 @@ function onRunFailed(
     if (repairAction) return apply(state, ctx, [into, { id: 14, to: 'action_requise', reason: cls }]);
     return apply(state, ctx, [into]);
   }
-  // rate_limited (ralentir, disjoncteur), llm_*, robots_unreachable (abstention), run_budget_exceeded, budget_exceeded,
+  // rate_limited (ralentir, disjoncteur), llm_*, run_budget_exceeded, budget_exceeded,
   // et les raisons tunnel_offline, proxy_not_configured hors enquête : aucune transition dans les 21.
   return unchanged(state);
 }
@@ -225,16 +234,11 @@ export type RunGate =
   /** `erreur` : réponse immédiate `api_error` avec la dernière raison, aucun essai. Exception : `force_investigate`. */
   | { kind: 'api_error'; reason: string | null }
   /** `bloquee` : aucun run planifié (`skip_if_status_in` contient `bloquee`). */
-  | { kind: 'skipped_status' }
-  /** `robots_disallowed` : 0 requête sur le chemin (INV11). */
-  | { kind: 'refused'; reason: 'robots_disallowed' };
+  | { kind: 'skipped_status' };
 
 export function gateRun(state: ApiStatusState, opts: { trigger: 'schedule' | 'on_demand'; forceInvestigate?: boolean }): RunGate {
   if (state.status === 'erreur' && opts.forceInvestigate !== true) return { kind: 'api_error', reason: state.reason };
-  if (state.status === 'bloquee') {
-    if (state.reason === 'robots_disallowed') return { kind: 'refused', reason: 'robots_disallowed' };
-    if (opts.trigger === 'schedule') return { kind: 'skipped_status' };
-  }
+  if (state.status === 'bloquee' && opts.trigger === 'schedule') return { kind: 'skipped_status' };
   return { kind: 'run' };
 }
 

@@ -4,7 +4,7 @@
 // (= run_api), ré-enquête manuelle, versions de stratégie (liste, détail, diff, retour), chronologie des statuts.
 //
 // Droits : lectures sous `withActor` (RLS : siennes + `instance` sans session) ; écritures réservées au propriétaire (404
-// uniforme pour l'API d'autrui, même visible) ; codes d'erreur de 05 § 4.3. Aucun réglage robots.txt n'existe (INV11).
+// uniforme pour l'API d'autrui, même visible) ; codes d'erreur de 05 § 4.3.
 import {
   API_STATUSES,
   EXECUTIONS,
@@ -22,11 +22,13 @@ import {
   applyStatusAndNotify,
   asActorInTransaction,
   briefHintsView,
+  confirmInstructedSteps,
   createRun,
   InvestigationStateError,
   PersistenceApiNotFoundError,
   removeScheduleMirror,
   resolvedRulesPreview,
+  setInstructedMode,
   setPersistenceMode,
   StorageFullError,
   startInvestigation,
@@ -56,10 +58,21 @@ import {
   type ApiRow,
 } from '../rest/apis.js';
 import { briefViewOf, prepareBrief, rejectBrief, saveBrief } from '../rest/briefs.js';
+import { runErrorFor, runErrorOf } from '../rest/run-error.js';
 import { buildRunResult, readRunRow, waitForRun } from '../rest/runs.js';
 import { BLOCKING_STATUS, rejectIfKeyRateLimited, rejectWithoutAck, reasonMessage, reserveRunSlot, RunSlotError, sendRunSlotError, triggerOf, waitSecondsOf } from '../rest/shared.js';
 import { CURSOR_TIME, decodeCursor, encodeCursor, INT4_MAX, UUID } from './account-helpers.js';
 import { audit, notFound, sendError, type Actor } from './guard.js';
+import { instanceContactMissing } from './identity.js';
+
+/** Confirmation des étapes instruites affichées (version et empreinte reçues de la fiche, 2.13). */
+const instructedConfirmSchema = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['version', 'sha256'],
+  properties: { version: { type: 'integer', minimum: 1, maximum: INT4_MAX }, sha256: { type: 'string', pattern: '^[0-9a-f]{64}$' } },
+} as const;
+const instructedModeSchema = { type: 'object', additionalProperties: false, required: ['enabled'], properties: { enabled: { type: 'boolean' } } } as const;
 
 const executionList = { type: 'array', uniqueItems: true, maxItems: 6, items: { type: 'string', enum: [...EXECUTIONS] } } as const;
 
@@ -242,6 +255,9 @@ export async function createdView(ctx: ServerContext, actor: Actor, apiId: strin
     const proposal = await latestProposal(db, apiId);
     // Dossier d'enquête (19c § 7) : rapport et récit du code, propriétaire seulement (lecture filtrée par owner_id).
     const brief = api !== null && api.owner_id === actor.userId ? await briefViewOf(db, { apiId, ownerId: actor.userId, pageUrl: await investigationUrlOf(db, apiId, actor.userId) }) : null;
+    // UX-07 : l'état réel de l'enquête (en cours, ou échec avec sa cause), pour que la phase, le schéma et la phrase ne se contredisent pas.
+    const run = await readRunRow(db, runId);
+    const error = run === null ? null : runErrorOf(run);
     return {
       ...(brief === null ? {} : { brief_version: brief.brief_version, brief_report: brief.brief_report, brief_narrative: brief.narrative }),
       api_id: apiId,
@@ -251,6 +267,9 @@ export async function createdView(ctx: ServerContext, actor: Actor, apiId: strin
       sample: proposal.sample,
       access_report: await latestAccessReport(db, apiId),
       run_id: runId,
+      ...(run === null ? {} : { run_state: run.state }),
+      ...(api === null ? {} : { status: api.status }),
+      ...(error === null ? {} : { error }),
     };
   });
 }
@@ -321,6 +340,11 @@ export function apiRoutes(app: FastifyInstance, ctx: ServerContext): void {
     const actor = request.actor!;
     const body = request.body;
     if (await rejectIfKeyRateLimited(ctx, reply, actor)) return reply;
+    // UX-04 : sans contact d'instance, l'enquête échouerait aussitôt (17 § 5) : refus AVANT de créer l'API ou le run.
+    if (await instanceContactMissing(ctx)) {
+      const missing = runErrorFor('instance_contact_missing');
+      return sendError(reply, 409, missing.code, missing.message);
+    }
     // Validation automatique : le schéma proposé n'est pas encore connu ; s'il porte `x-personal`, la case est exigée.
     if (body.auto_validate === true && (await rejectWithoutAck(ctx, reply, actor, true))) return reply;
     let policy: Record<string, unknown> | null = null;
@@ -541,8 +565,9 @@ export function apiRoutes(app: FastifyInstance, ctx: ServerContext): void {
       // proposé sans ses marques `x-personal` ne contourne pas la case.
       const proposed = state?.proposed_schema ?? {};
       const corrected = request.body.output_schema;
-      const personal = schemaHasPersonalFields(proposed) ? proposed : corrected !== undefined && schemaHasPersonalFields(corrected) ? corrected : {};
-      if (await rejectWithoutAck(ctx, reply, actor, personal)) return reply;
+      const fromProposed = schemaHasPersonalFields(proposed);
+      const personal = fromProposed ? proposed : corrected !== undefined && schemaHasPersonalFields(corrected) ? corrected : {};
+      if (await rejectWithoutAck(ctx, reply, actor, personal, fromProposed ? 'proposed' : 'corrected')) return reply;
       if (await rejectIfKeyRateLimited(ctx, reply, actor)) return reply;
       let runId: string;
       try {
@@ -812,6 +837,47 @@ export function apiRoutes(app: FastifyInstance, ctx: ServerContext): void {
       return row === null ? null : apiDetail(db, actor, row, ctx.persistence.policy);
     });
     return view ?? notFound(reply);
+  });
+
+  // ——— Agent instruit (tâche 2.13, 19 § 4) : confirmation humaine des étapes instruites, opt-in explicite ———
+  const detailAfterWrite = (actor: Actor, apiId: string) =>
+    withActor(ctx.pool, actor, async (db) => {
+      const row = await readApiById(db, apiId);
+      return row === null ? null : apiDetail(db, actor, row, ctx.persistence.policy);
+    });
+
+  app.post<{ Params: { slug: string }; Body: { version: number; sha256: string } }>(
+    '/api/apis/:slug/instructed-steps/confirm',
+    { schema: { body: instructedConfirmSchema } },
+    async (request, reply) => {
+      const actor = request.actor!;
+      // Acte HUMAIN, depuis la console : une clé d'API (outil MCP compris) ne confirme jamais, avant toute lecture de l'API.
+      if (actor.via !== 'ui') return sendError(reply, 403, 'human_confirmation_required', 'la confirmation des étapes instruites se fait depuis la console');
+      const api = await readOwnApi(ctx, actor, request.params.slug);
+      if (api === null) return notFound(reply);
+      const done = await confirmInstructedSteps(ctx.pool, { apiId: api.id, ownerId: actor.userId, userId: actor.userId, version: request.body.version, sha256: request.body.sha256 });
+      if (!done.ok) {
+        if (done.reason === 'not_found') return notFound(reply);
+        return sendError(reply, 409, done.reason, done.reason === 'sha_mismatch' ? 'les étapes ont changé depuis leur affichage' : 'cette version n’a pas d’étapes instruites');
+      }
+      await audit(ctx, request, actor, { action: 'api.instructed_steps_confirmed', targetType: 'api', targetId: api.id, outcome: 'success', meta: { version: request.body.version } });
+      return (await detailAfterWrite(actor, api.id)) ?? notFound(reply);
+    },
+  );
+
+  app.put<{ Params: { slug: string }; Body: { enabled: boolean } }>('/api/apis/:slug/instructed-mode', { schema: { body: instructedModeSchema } }, async (request, reply) => {
+    const actor = request.actor!;
+    const api = await readOwnApi(ctx, actor, request.params.slug);
+    if (api === null) return notFound(reply);
+    // Activation : API non compilable, étapes instruites EXACTES confirmées par un humain (code ET déclencheur de 0021) ;
+    // sinon 409 et `instructed_mode` reste faux. La désactivation est toujours acceptée.
+    const done = await setInstructedMode(ctx.pool, { apiId: api.id, ownerId: actor.userId, enabled: request.body.enabled });
+    if (!done.ok) {
+      if (done.reason === 'not_found') return notFound(reply);
+      return sendError(reply, 409, done.reason, 'le mode « agent instruit » ne s’active pas');
+    }
+    await audit(ctx, request, actor, { action: 'api.instructed_mode_set', targetType: 'api', targetId: api.id, outcome: 'success', meta: { enabled: request.body.enabled } });
+    return (await detailAfterWrite(actor, api.id)) ?? notFound(reply);
   });
 
   // ——— Chronologie des statuts (06 § 2, « Bugs & statut ») ———

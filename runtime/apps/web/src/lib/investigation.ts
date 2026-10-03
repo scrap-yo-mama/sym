@@ -16,7 +16,7 @@
 //   { request: { method, url }, response?: { status?, content_type?, bytes? } } — jamais d'en-tête ni de corps (INV8) ; la
 //   console ne garde de l'URL que l'origine et le chemin (ni requête ni fragment), et ignore une méthode ou un schéma inattendus.
 //   status.changed         { run_id?, api_id?, api_slug?, status, status_reason?, domain?, at?, strategy?, input_schema?, budget? }
-//   action.required        { run_id?, api_id?, api_slug?, cause, domain?, platform?, offer? }
+//   action.required        { run_id?, api_id?, api_slug?, cause, domain?, platform?, offer?, model? }
 // `budget` : { spent_usd, max_usd, elapsed_s, timeout_s, retained_est_usd?, full_agent_est_usd? }. Toute charge est lue avec
 // des gardes de type : une charge inattendue est ignorée, jamais rendue telle quelle (aucun HTML, texte seul).
 import type { components } from '@runtime/client';
@@ -35,8 +35,12 @@ const EXECUTIONS: readonly Execution[] = ['fetch', 'fetch_in_page', 'playwright'
 const NETWORKS: readonly Network[] = ['direct', 'dc_proxy', 'res_proxy', 'tunnel'];
 const PHASES: readonly InvestigationPhase[] = ['access_check', 'reconnaissance', 'awaiting_schema_validation', 'testing', 'done'];
 const STATUSES: readonly ApiStatus[] = ['enquete', 'sain', 'warning', 'reparation', 'erreur', 'action_requise', 'bloquee'];
-/** Causes d'arrêt volontaire montrées par le panneau « Bloquée » (INV6) ; toute autre cause d'un statut `bloquee` est lue comme la première. */
-export const BLOCK_CAUSES = ['blocked_by_protection', 'forbidden', 'robots_disallowed'] as const;
+/**
+ * Causes d'arrêt volontaire montrées par le panneau « Bloquée » (INV6) ; toute autre cause d'un statut `bloquee` est lue
+ * comme la première. Le robots.txt ne conditionne plus la collecte (D-91) : une ancienne cause `robots_disallowed`
+ * (valeur historique) se lit comme un refus du site (`forbidden`), sans texte sur le robots.txt.
+ */
+export const BLOCK_CAUSES = ['blocked_by_protection', 'forbidden'] as const;
 export type BlockCause = (typeof BLOCK_CAUSES)[number];
 /** Causes d'une action requise (06 § 2). */
 const ACTION_CAUSES = [
@@ -45,6 +49,8 @@ const ACTION_CAUSES = [
   'session_device_bound',
   'proxy_required',
   'tunnel_offline',
+  'instance_contact_missing',
+  'llm_price_missing',
   'challenge_in_tunnel',
   'secret_unreadable',
   'payment_required',
@@ -134,6 +140,8 @@ export interface ActionView {
   domain: string | null;
   platform: string | null;
   offer: string | null;
+  /** Modèle sans prix (`llm_price_missing`) : celui que l'enquête allait appeler. */
+  model?: string | null;
   /** Transition 17 : l'utilisateur a agi, l'enquête reprend (« Reprise de l'enquête… »). */
   resuming: boolean;
 }
@@ -308,8 +316,9 @@ function prunedOf(data: Json): PrunedStep[] {
   return steps.map((step) => ({ execution: step.execution, network: step.network, estCostUsd: step.estCostUsd, source: step.source ?? null, reason }));
 }
 
+/** Rapport d'accès d'un événement : `signal` connu suffit ; la section `robots` (historique, D-91) n'est pas exigée. */
 function accessOf(value: unknown): AccessReport | null {
-  if (!isRecord(value) || !isRecord(value.robots) || !oneOf(value.signal, ['allowed', 'review', 'disallowed'] as const)) return null;
+  if (!isRecord(value) || !oneOf(value.signal, ['allowed', 'review', 'disallowed'] as const)) return null;
   return value as unknown as AccessReport;
 }
 
@@ -423,7 +432,7 @@ export function ingestEvent(state: InvestigationState, event: SseEvent, nowMs: n
       if (status === 'bloquee') {
         const reasonCode = state.statusReason?.code ?? null;
         state.blocked = {
-          cause: oneOf(reasonCode, BLOCK_CAUSES) ?? 'blocked_by_protection',
+          cause: reasonCode === 'robots_disallowed' ? 'forbidden' : (oneOf(reasonCode, BLOCK_CAUSES) ?? 'blocked_by_protection'),
           domain: state.domain,
           at: text(data.at),
           attempt: state.attempts.at(-1) ?? null,
@@ -443,7 +452,7 @@ export function ingestEvent(state: InvestigationState, event: SseEvent, nowMs: n
     }
     case 'action.required': {
       const cause = oneOf(data.cause, ACTION_CAUSES);
-      if (cause) state.action = { cause, domain: state.domain, platform: text(data.platform), offer: text(data.offer), resuming: false };
+      if (cause) state.action = { cause, domain: state.domain, platform: text(data.platform), offer: text(data.offer), model: text(data.model), resuming: false };
       break;
     }
     default:

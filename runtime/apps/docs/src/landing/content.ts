@@ -130,7 +130,7 @@ export function buildLanding(lang: Lang, inputs: BuildInputs): LandingData {
     { from: 'user', signature: false, text: L('Build me an API of the books on books.toscrape.com, with pagination: title, price, availability.', 'Fais-moi une API des livres de books.toscrape.com, avec la pagination : titre, prix, disponibilité.') },
     // Bulles de SYM : entrées du registre (22 § 2.4 et § 3.2), relues au GO contre le scénario de la démo sans clé ; replay écrit à la main en V1.
     { from: 'sym', signature: true, text: claim('demo.sym.ack') },
-    { from: 'sym', signature: false, text: claim('demo.sym.robots') },
+    { from: 'sym', signature: false, text: claim('demo.sym.access') },
     { from: 'sym', signature: false, text: claim('demo.sym.schema') },
     { from: 'user', signature: false, text: L('OK.', 'OK.') },
     { from: 'sym', signature: true, text: claim('demo.sym.done') },

@@ -2,19 +2,18 @@
 // Tâche 2.2 (10-taches), volet Chromium : « `max_pages = 3` → exactement 3 pages. Règle d'arrêt vérifiée sur la dernière
 // page. » pour `infinite_scroll` (flux de la fixture `scroll` : 10 éléments dans le HTML, 10 de plus à chaque
 // défilement jusqu'au bout du flux) et `next_link` en E3 (liens rel=next lus dans le DOM rendu). Étage S : vrai Chromium
-// lancé par le pool du worker, proxy d'egress par essai (garde SSRF), contexte de run gardé (robots.txt à chaque requête,
-// navigations de la page coupées). Chaque défilement est une requête pour la cadence et le contrôle d'accès.
+// lancé par le pool du worker, proxy d'egress par essai (garde SSRF), contexte de run gardé (verrou de domaines à chaque
+// requête, navigations de la page coupées). Chaque défilement est une requête pour la cadence.
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'vitest';
 import { BrowserPool, playwrightLauncher } from '../../apps/worker/src/browser/pool.ts';
 import { scrollStep } from '../../apps/worker/src/browser/bounded.ts';
 import { runPlaywrightExecutor } from '../../apps/worker/src/exec/browser-executors.ts';
 import { startClient, type Client } from '../../fixtures/src/test-helpers.ts';
 import { validateDeclarativeSpec, type DeclarativeSpec } from '@runtime/core';
-import type { AccessCheck, DeclarativeRunResult, RequestPacer } from '@runtime/core/exec';
+import type { DeclarativeRunResult, RequestPacer } from '@runtime/core/exec';
 import * as net from '@runtime/core/net';
 import { openBrowserEgress, startEgressProxy, type BrowserEgress, type EgressProxy, type SsrfGuard } from '@runtime/core/net';
 import { fixtureGuard, ssrSpecInput } from '../helpers/fixture-net.ts';
-import { allowAllRobots } from '../helpers/robots-allow.ts';
 
 const SCROLL = 'zz_test_scroll.localhost';
 const SSR = 'zz_test_ssr.localhost';
@@ -68,8 +67,8 @@ const feedSpec = (): DeclarativeSpec =>
     pagination: { type: 'infinite_scroll', stop: [{ when: 'records_empty' }], limits: { max_pages_input: 'input.max_pages', hard_max_pages: 50 } },
   });
 
-const run = (spec: DeclarativeSpec, input: unknown, extra: { access?: AccessCheck; pacer?: RequestPacer } = {}): Promise<DeclarativeRunResult> =>
-  withEgress((egress) => runPlaywrightExecutor({ access: allowAllRobots, pool, egress, guard, spec, input, signal, renderWaitMs: 4_000, scrollWaitMs: 1_500, ...extra }));
+const run = (spec: DeclarativeSpec, input: unknown, extra: { pacer?: RequestPacer } = {}): Promise<DeclarativeRunResult> =>
+  withEgress((egress) => runPlaywrightExecutor({ pool, egress, guard, spec, input, signal, renderWaitMs: 4_000, scrollWaitMs: 1_500, ...extra }));
 
 describe('infinite_scroll en E3 (Chromium)', () => {
   test('assert_infinite_scroll_paginated — max_pages = 3 : chargement initial + 2 défilements = exactement 3 pages, 30 éléments distincts, le serveur ne voit que 2 lots', async () => {
@@ -91,13 +90,8 @@ describe('infinite_scroll en E3 (Chromium)', () => {
     expect((await client.stats()).hosts[SCROLL]?.paths['/api/feed']).toBe(5);
   }, 60_000);
 
-  test('chaque défilement passe par le contrôle d’accès et la cadence, comme une requête de la stratégie', async () => {
-    const checked: string[] = [];
+  test('chaque défilement passe par la cadence, comme une requête de la stratégie', async () => {
     const slots: string[] = [];
-    const access: AccessCheck = async (url) => {
-      checked.push(url);
-      return { allowed: true, crawlDelayMs: null };
-    };
     const pacer: RequestPacer = {
       acquire: async (url) => {
         slots.push(url);
@@ -105,15 +99,14 @@ describe('infinite_scroll en E3 (Chromium)', () => {
       },
       report: async () => undefined,
     };
-    const out = await run(feedSpec(), { max_pages: 3 }, { access, pacer });
+    const out = await run(feedSpec(), { max_pages: 3 }, { pacer });
     expect(out).toMatchObject({ ok: true, pages: 3, requests: 3 });
-    // Une réservation de créneau par page (chargement + 2 défilements) ; robots.txt contrôlé pour la page (et ses sous-requêtes).
+    // Une réservation de créneau par page (chargement + 2 défilements).
     expect(slots).toHaveLength(3);
-    expect(checked.filter((u) => u === `${base(SCROLL)}/`).length).toBeGreaterThanOrEqual(3);
   }, 60_000);
 
   test('une limite de requêtes par run tronque le défilement : sortie partielle livrée, signalée tronquée', async () => {
-    const out = await withEgress((egress) => runPlaywrightExecutor({ access: allowAllRobots, pool, egress, guard, spec: feedSpec(), input: {}, signal, maxRequests: 2, renderWaitMs: 4_000, scrollWaitMs: 1_500 }));
+    const out = await withEgress((egress) => runPlaywrightExecutor({ pool, egress, guard, spec: feedSpec(), input: {}, signal, maxRequests: 2, renderWaitMs: 4_000, scrollWaitMs: 1_500 }));
     expect(out).toMatchObject({ ok: true, pages: 2, stop: 'max_requests_per_run', truncated: true });
     if (out.ok) expect(out.records).toHaveLength(20);
   }, 60_000);

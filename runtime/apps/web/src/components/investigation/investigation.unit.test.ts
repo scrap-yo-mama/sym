@@ -17,7 +17,7 @@ function running(): InvestigationState {
   state.domain = 'exemple.test';
   state.phase = 'testing';
   state.status = 'enquete';
-  state.access = { id: 'ar', checked_at: '2026-10-01T10:00:00Z', signal: 'allowed', robots: { status: 'allowed' }, usage_signals: [{ kind: 'ai-preference', value: 'train-ai=n' }], llms_txt: true, official_api_url: null };
+  state.access = { id: 'ar', checked_at: '2026-10-01T10:00:00Z', signal: 'allowed', usage_signals: [{ kind: 'ai-preference', value: 'train-ai=n' }], llms_txt: true, official_api_url: null };
   state.budget = { spentUsd: 0.012, maxUsd: 0.5, elapsedS: 12, timeoutS: 300, retainedEstUsd: 0.002, fullAgentEstUsd: 0.09, receivedAtMs: 0 };
   state.attempts = [
     { index: 0, execution: 'fetch', network: 'direct', state: 'done', result: 'extraction', costUsd: 0.0004, estCostUsd: 0.0004, ms: 240, prunedReason: null, why: { code: 'escalated', params: {} }, error: null },
@@ -104,11 +104,13 @@ describe('assert_budget_and_stop_controls : compteur de budget, Pause et Arrête
 });
 
 describe('journal d’enquête', () => {
-  test('première ligne « robots.txt lu : chemin autorisé », signaux d’usage, puis les essais avec leur « pourquoi » et leur raison', async () => {
+  test('première ligne « Rapport d’accès : page sondée », signaux d’usage, puis les essais avec leur « pourquoi » et leur raison', async () => {
     const html = await render(InvestigationBoard, props(running()));
     const log = html.slice(html.indexOf('data-testid="attempt-log"'));
-    expect(log.indexOf('robots.txt read: path allowed')).toBeGreaterThan(-1);
-    expect(log.indexOf('robots.txt read: path allowed')).toBeLessThan(log.indexOf('Trial 1: fetch only, direct'));
+    expect(log.indexOf('Access report: page probed')).toBeGreaterThan(-1);
+    expect(log.indexOf('Access report: page probed')).toBeLessThan(log.indexOf('Trial 1: fetch only, direct'));
+    // Le robots.txt ne conditionne pas la collecte (D-91) : le journal ne le présente ni comme lu ni comme une règle.
+    expect(log).not.toMatch(/robots/i);
     expect(log).toContain('Usage signal ai-preference: train-ai=n');
     expect(log).toContain('llms.txt found');
     expect(log).toContain('Trial 1: fetch only, direct');
@@ -138,7 +140,7 @@ describe('journal d’enquête', () => {
 
   test('rendu français du journal', async () => {
     const html = await render(InvestigationBoard, props(running()), { locale: 'fr' });
-    expect(html).toContain('robots.txt lu : chemin autorisé');
+    expect(html).toContain('Rapport d&#39;accès : page sondée');
     expect(html).toContain('Essai 1 : fetch seul, direct');
     expect(html).toContain('en échec (Extraction en échec)');
     expect(html).toContain('Pourquoi : Une méthode plus chère que d&#39;habitude a été nécessaire.');
@@ -255,6 +257,18 @@ describe('bandeau « Action requise »', () => {
     expect(html).toContain('Nothing was sent on this page and nothing will be.');
     expect(html).toContain('Scrapyomama never answers a verification.');
     expect(html).not.toMatch(/take control|prendre la main|takeover/i);
+  });
+
+  test('UX-11 — llm_price_missing : le modèle est nommé, le bouton mène à Réglages > Modèles IA, aucune mention de budget', async () => {
+    const state = running();
+    state.action = { cause: 'llm_price_missing', domain: 'exemple.test', platform: null, offer: null, model: 'claude-opus-4-8', resuming: false };
+    const html = await render(InvestigationBoard, props(state));
+    expect(html).toContain('Enter the price of model claude-opus-4-8 in Settings &gt; AI models');
+    expect(html).toContain('href="/settings/models"');
+    const banner = html.slice(html.indexOf('data-testid="action-banner"'), html.indexOf('<ol', html.indexOf('data-testid="action-banner"')));
+    expect(banner).not.toMatch(/budget/i);
+    state.action = { cause: 'llm_price_missing', domain: 'exemple.test', platform: null, offer: null, model: null, resuming: false };
+    expect(await render(InvestigationBoard, props(state))).toContain('Enter the price of model used in Settings &gt; AI models');
   });
 
   test('payment_required et account_limit : texte seul, sans bouton', async () => {

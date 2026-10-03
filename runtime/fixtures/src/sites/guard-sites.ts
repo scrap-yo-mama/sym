@@ -5,7 +5,7 @@
 import { createHash } from 'node:crypto';
 import { gzipSync } from 'node:zlib';
 import { ControlError, type FxResponse, type SiteFactory } from '../core.ts';
-import { formatEuro, makePeople, makeProducts, pad } from '../data.ts';
+import { formatEuro, makeContacts, makePeople, makeProducts, pad, slicePage } from '../data.ts';
 import { cookieOf, esc, headerOf, html, intParam, json, page, redirect, sleep, text } from '../res.ts';
 
 // ---------------------------------------------------------------- 4. Derrière connexion
@@ -17,6 +17,16 @@ const login: SiteFactory = (env) => {
     customer: person.name,
     item: (products[i] as { title: string }).title,
     total_cents: (products[i] as { price_cents: number }).price_cents,
+  }));
+  // Cas C3 et C2 de la gate M2 (tests/cases) : page « mes contacts » (30 contacts, 20 par page) et commentaires d'un post
+  // (25, 10 par page), derrière la même session. Pages HTML : 302 vers /login sans session ; API : 401 JSON.
+  const contacts = makeContacts(env.seed, 'login_contacts', 30).map(({ id, name, email, city }) => ({ id, name, email, city }));
+  const POST = 'zz_test_post_0001';
+  const comments = makePeople(env.seed, 'login_comments', 25).map((person, i) => ({
+    id: `zz_test_comment_${pad(i + 1, 4)}`,
+    author: person.name,
+    profile_url: `/in/${person.id}`,
+    text: `Commentaire Zztest ${pad(i + 1, 4)}`,
   }));
   const sessions = new Map<string, number>();
   const ttlMs = 3_600_000;
@@ -37,7 +47,8 @@ const login: SiteFactory = (env) => {
   return {
     id: 'login',
     lot: 'base',
-    description: 'Site derrière connexion : cookie de session, 302 vers /login, 401 JSON sur /api/orders, expiration pilotable ; /account porte un lien /logout à effet de bord (GET qui ferme la session, dossier d’enquête 2.14)',
+    description:
+      'Site derrière connexion : cookie de session, 302 vers /login, 401 JSON sur /api/orders, expiration pilotable ; cas C3 (/contacts, /api/contacts : 30 contacts, 20 par page) et C2 (/post/zz_test_post_0001, /api/posts/zz_test_post_0001/comments : 25 commentaires, 10 par page) ; /account porte un lien /logout à effet de bord (GET qui ferme la session, dossier d’enquête 2.14)',
     hosts: ['zz_test_login.localhost'],
     smoke: { path: '/login', status: 200 },
     handle(req) {
@@ -66,6 +77,25 @@ const login: SiteFactory = (env) => {
           const token = cookieOf(req, 'zz_test_session');
           if (token !== undefined) sessions.delete(token);
           return redirect(302, '/login', { 'set-cookie': 'zz_test_session=; Path=/; Max-Age=0' });
+        }
+        case '/contacts':
+        case `/post/${POST}`: {
+          if (auth === 'none') return redirect(302, '/login');
+          if (auth === 'expired') return redirect(302, '/login?expired=1');
+          const api = req.path === '/contacts' ? '/api/contacts?page=1' : `/api/posts/${POST}/comments?page=1`;
+          const key = req.path === '/contacts' ? 'items' : 'comments';
+          const title = req.path === '/contacts' ? 'Mes contacts' : 'Publication';
+          return html(200, page(title, `<h1>${title}</h1><ul id="list"></ul><script>fetch("${api}").then(r=>r.json()).then(d=>{const ul=document.getElementById("list");for(const x of d.${key}){const li=document.createElement("li");li.textContent=x.id;ul.appendChild(li)}})</script>`));
+        }
+        case '/api/contacts':
+        case `/api/posts/${POST}/comments`: {
+          if (auth !== 'valid') return json(401, { error: auth === 'expired' ? 'session_expired' : 'auth_required' }, { 'www-authenticate': 'Cookie realm="zz_test"' });
+          const pageNo = intParam(req, 'page', 1, 1, 1000);
+          if (req.path === '/api/contacts') {
+            const perPage = intParam(req, 'per_page', 20, 1, 50);
+            return json(200, { items: slicePage(contacts, pageNo, perPage), page: pageNo, per_page: perPage, total: contacts.length, has_more: pageNo * perPage < contacts.length });
+          }
+          return json(200, { comments: slicePage(comments, pageNo, 10), page: pageNo, has_more: pageNo * 10 < comments.length });
         }
         case '/api/orders':
           if (auth !== 'valid') {

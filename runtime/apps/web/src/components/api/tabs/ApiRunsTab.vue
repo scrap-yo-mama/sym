@@ -7,6 +7,7 @@
  * (flux du serveur, cellules neutralisées, 08b). Relancer ouvre le formulaire pré-rempli, avec le choix de la version et
  * un avertissement sur les effets de bord. Métadonnées seules pour l'admin sur un run avec session d'autrui, et pour tout run d'un
  * autre membre (état, coût, durée) : ni items, ni export, ni relance, son contenu n'est jamais lu (`assert_admin_metadata_only`).
+ * « Reprises » (tâche 2.13) ouvre le panneau des reprises par étape d'un run de l'appelant (consultation seule).
  * @component
  * @example <ApiRunsTab :detail="detail" slug="zz-books" />
  */
@@ -14,6 +15,7 @@ import { computed, onServerPrefetch, ref } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { RouterLink } from 'vue-router';
 import LaunchForm from '@/components/api/LaunchForm.vue';
+import RunRepairsPanel from '@/components/api/RunRepairsPanel.vue';
 import RunQualityCard from '@/components/runs/RunQualityCard.vue';
 import ErrorState from '@/components/ErrorState.vue';
 import LoadingState from '@/components/LoadingState.vue';
@@ -89,6 +91,15 @@ async function submitRelaunch(input: Record<string, unknown>, version: number | 
   }
 }
 
+const repairsFor = ref<RunSummary | null>(null);
+async function showRepairs(run: RunSummary): Promise<void> {
+  if (!runs.isOwn(run)) return;
+  repairsFor.value = run;
+  await runs.showRepairs(run);
+}
+
+const instructedRunUsd = computed(() => (props.detail.instructed_mode === true ? (props.detail.instructed?.estimated_run_usd ?? null) : undefined));
+
 // Fiche qualité du run et avis consultatif du juge (2.12) : runs de l'appelant seulement.
 const qualityRun = ref<{ run: RunSummary; detail: Pick<RunDetail, 'quality' | 'judge'> } | null>(null);
 const qualityError = ref(false);
@@ -152,6 +163,7 @@ const canRelaunch = computed(() => props.detail.status !== 'bloquee' && !props.d
                     <Button variant="outline" size="xs" as-child><a :href="datasetExportUrl(run.dataset_id, 'csv')" download>{{ t('runsTab.exportCsv') }}</a></Button>
                   </template>
                   <Button v-if="canRelaunch && runs.isOwn(run)" variant="outline" size="xs" @click="startRelaunch(run)">{{ t('actions.relaunch') }}</Button>
+                  <Button v-if="!detail.metadata_only && runs.isOwn(run)" variant="outline" size="xs" data-testid="show-repairs" @click="showRepairs(run)">{{ t('repairs.show') }}</Button>
                   <Button v-if="!detail.metadata_only && runs.isOwn(run) && run.state === 'succeeded'" variant="outline" size="xs" data-testid="show-quality" @click="showQuality(run)">{{ t('quality.show') }}</Button>
                 </div>
               </td>
@@ -171,7 +183,14 @@ const canRelaunch = computed(() => props.detail.status !== 'bloquee' && !props.d
 
     <section v-if="relaunch" aria-labelledby="runs-relaunch" class="rounded-lg border p-4">
       <h2 id="runs-relaunch" class="sr-only">{{ t('launch.relaunchTitle') }}</h2>
-      <LaunchForm :schema="detail.input_schema" :estimate="detail.cost_estimate" :initial-input="relaunch.input" :versions="versions ?? [{ version: detail.current_strategy_version ?? 1, current: true }]" :pending="actions.pending.value === 'launch'" :error="actions.error.value" @submit="submitRelaunch" />
+      <LaunchForm :schema="detail.input_schema" :estimate="detail.cost_estimate" :initial-input="relaunch.input" :instructed-run-usd="instructedRunUsd" :versions="versions ?? [{ version: detail.current_strategy_version ?? 1, current: true }]" :pending="actions.pending.value === 'launch'" :error="actions.error.value" @submit="submitRelaunch" />
+    </section>
+
+    <section v-if="repairsFor" aria-labelledby="runs-repairs" class="flex flex-col gap-3">
+      <h2 id="runs-repairs" class="text-lg font-semibold">{{ t('repairs.runTitle', { date: formatDateTime(repairsFor.created_at, locale) }) }}</h2>
+      <LoadingState v-if="runs.repairsLoading.value && !runs.repairsRun.value" />
+      <ErrorState v-else-if="runs.repairsError.value" :error="runs.repairsError.value" @retry="repairsFor && showRepairs(repairsFor)" />
+      <RunRepairsPanel v-else-if="runs.repairsRun.value" :run="runs.repairsRun.value" />
     </section>
 
     <section v-if="openDataset" aria-labelledby="runs-items" class="flex flex-col gap-3">

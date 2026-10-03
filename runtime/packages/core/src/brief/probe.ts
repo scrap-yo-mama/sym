@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Sonde du code (tâche 2.14, 19c § 3, r7 R4) : chaque indice vérifiable est vérifié SANS LLM avant que l'agent s'y fie.
 // `endpoint` et `example_url` : une requête GET chacun, jamais avec la méthode déclarée, par le PIPELINE D'ACCÈS de l'API
-// (port `check` = robots.txt et portée, puis port `get` = session réseau gardée : SSRF, robots à chaque saut, cadence,
-// plafond de coût ; classifieur de 04 § 7). Au plus `BRIEF_PROBE_MAX` sondes et `BRIEF_PROBE_BUDGET_SHARE` du budget
+// (port `check` = portée de l'API, puis port `get` = session réseau gardée : SSRF à chaque saut, cadence, plafond de
+// coût ; classifieur de 04 § 7). Le robots.txt n'est jamais lu par la sonde (D-91). Au plus `BRIEF_PROBE_MAX` sondes et `BRIEF_PROBE_BUDGET_SHARE` du budget
 // d'enquête ; coupe-circuit après deux sondes en échec : l'enquête continue sans le dossier. Un refus ou un défi pendant une
 // sonde arrête tout (`blocking`) : l'exécuteur applique la classe (`bloquee`), aucune escalade. Une sonde ne lit jamais
 // `seen_on`, `tried.target` ni `sample` : seuls `endpoint` et `example_url` peuvent produire une requête.
@@ -12,7 +12,7 @@ import { BRIEF_DEFAULTS, DEFAULT_BRIEF_CONFIG, type BriefConfig, type BriefReaso
 import { probeOrder, type BriefDigest, type DigestHint } from './digest.js';
 
 export type BriefProbePorts = {
-  /** Verdict robots.txt et portée de l'API AVANT toute requête (`RobotsGate.check`). */
+  /** Portée de l'API (hôtes, http ou https) AVANT toute requête. */
   readonly check: (url: string) => Promise<{ readonly allowed: true } | { readonly allowed: false; readonly failure: ExecFailure }>;
   /** GET par le pipeline d'accès de l'API ; `failure` : erreur de transport ou refus de garde déjà classé. */
   readonly get: (url: string) => Promise<{ readonly exchange: HttpExchange; readonly costUsd: number; readonly ms: number } | { readonly failure: ExecFailure; readonly costUsd: number; readonly ms: number }>;
@@ -46,7 +46,7 @@ export type ProbeRun = {
 };
 
 /** Classes qui arrêtent la sonde ET l'enquête (refus, défi, connexion, paiement, cadence). */
-const BLOCKING = new Set<FailureClass>(['blocked_by_protection', 'forbidden', 'robots_disallowed', 'auth_required', 'payment_required', 'account_limit', 'rate_limited']);
+const BLOCKING = new Set<FailureClass>(['blocked_by_protection', 'forbidden', 'auth_required', 'payment_required', 'account_limit', 'rate_limited']);
 
 const httpClass = (status: number) => (status >= 200 && status < 300 ? '2xx' : status >= 300 && status < 400 ? '3xx' : status >= 400 && status < 500 ? '4xx' : status >= 500 ? '5xx' : 'other');
 
@@ -61,7 +61,7 @@ function probeUrl(hint: DigestHint): string | null {
  * Sondes d'un dossier. `budgetUsd` : budget d'enquête (`investigation_budget_usd`) ; la sonde n'en consomme au plus que
  * `BRIEF_PROBE_BUDGET_SHARE`. Rend, par indice sondé, `verified` (réponse conforme : 2xx non classée en refus, données
  * reconnues pour un `endpoint`), `probe_failed` (jamais « vérifié », quelle que soit la confiance déclarée) ou `skipped`
- * (robots.txt, plafond, coupe-circuit).
+ * (portée, plafond, coupe-circuit).
  */
 export async function runBriefProbes(digest: BriefDigest, ports: BriefProbePorts, limits: { readonly budgetUsd: number; readonly config?: BriefConfig }): Promise<ProbeRun> {
   const config = limits.config ?? DEFAULT_BRIEF_CONFIG;
@@ -88,12 +88,11 @@ export async function runBriefProbes(digest: BriefDigest, ports: BriefProbePorts
       skip(hint, url, 'brief_over_budget');
       continue;
     }
-    // robots.txt et portée AVANT la requête : un chemin interdit ne produit aucune requête, l'enquête continue (INV11).
+    // Portée AVANT la requête : un hôte hors de l'API ne produit aucune requête, l'enquête continue.
     const decision = await ports.check(url);
     if (!decision.allowed) {
       const cls = decision.failure.failure_class;
-      if (cls === 'robots_disallowed') skip(hint, url, 'brief_robots_skipped');
-      else if (decision.failure.detail === 'domain_not_allowed') skip(hint, url, 'brief_host_ignored');
+      if (decision.failure.detail === 'domain_not_allowed') skip(hint, url, 'brief_host_ignored');
       else if (BLOCKING.has(cls)) {
         blocking = decision.failure;
         skip(hint, url, 'brief_breaker_open');

@@ -29,8 +29,6 @@ export interface NetworkPolicy {
 }
 
 export interface AccessPolicy {
-  /** Une seule valeur (INV11). */
-  robots: 'respect';
   report_id?: string;
   user_agent_contact?: string;
   [key: string]: unknown;

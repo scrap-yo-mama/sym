@@ -16,6 +16,7 @@ import ApiCatalogTable from '@/components/catalog/ApiCatalogTable.vue';
 import CatalogHealth from '@/components/catalog/CatalogHealth.vue';
 import CatalogPills from '@/components/catalog/CatalogPills.vue';
 import EmptyState from '@/components/EmptyState.vue';
+import InstanceContactBanner from '@/components/InstanceContactBanner.vue';
 import ErrorState from '@/components/ErrorState.vue';
 import LoadingState from '@/components/LoadingState.vue';
 import { Button } from '@/components/ui/button';
@@ -72,6 +73,8 @@ const selectClass = 'h-11 rounded-md border-[1.5px] border-foreground bg-card px
         <Input id="catalog-search" v-model="filters.q" type="search" class="h-11 w-[280px] max-w-full border-[1.5px] border-foreground bg-card px-3.5 text-[15px]" :placeholder="t('catalog.filters.searchPlaceholder')" />
       </form>
     </header>
+
+    <InstanceContactBanner />
 
     <CatalogHealth v-if="health && health.total > 0" :health="health" :partial="overview.snapshot.value?.truncated ?? false" />
 

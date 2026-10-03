@@ -36,6 +36,8 @@ const TARGETS: Record<ActionCause, string | null> = {
   session_device_bound: '/settings/extension',
   proxy_required: '/settings/proxies',
   tunnel_offline: '/settings/extension',
+  instance_contact_missing: '/settings/robot',
+  llm_price_missing: '/settings/models',
   challenge_in_tunnel: null,
   secret_unreadable: '/settings/models',
   payment_required: null,
@@ -47,6 +49,7 @@ const params = computed(() => ({
   domain: props.action.domain ?? t('blocked.unknownDomain'),
   platform: props.action.platform ?? props.action.domain ?? t('blocked.unknownDomain'),
   offer: props.action.offer ?? '—',
+  model: props.action.model ?? t('action.modelUnnamed'),
 }));
 const hasButton = computed(() => te(`action.${props.action.cause}.button`));
 </script>

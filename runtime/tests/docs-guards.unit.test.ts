@@ -49,10 +49,10 @@ type PendingFeature = { pages: string[]; feature: string; mention: RegExp; task:
 const PENDING: PendingFeature[] = [
   {
     pages: ['explications/robot', 'explications/usage-responsable'],
-    feature: 'lecture de robots.txt, rapport d\'accès et User-Agent avec contact (module d\'accès)',
-    mention: /robots\.txt/,
+    feature: 'rapport d\'accès et User-Agent réel du moteur, identification de l\'instance en option (module d\'accès)',
+    mention: /rapport d'accès/,
     task: '1.11',
-    delivered: () => !stillTodo('assert_robots_respected'),
+    delivered: () => !stillTodo('assert_access_report_first') && !stillTodo('assert_user_agent_engine_real'),
   },
   {
     pages: ['explications/usage-responsable'],

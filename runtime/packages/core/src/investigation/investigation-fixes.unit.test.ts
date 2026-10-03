@@ -23,6 +23,8 @@ import {
   withinSiteScope,
   type ReconCapture,
 } from './recon.js';
+import type { AgentTraceStep } from '../agent/engine.js';
+import { validateHybridSpec } from '../agent/specs.js';
 import { retainedStrategy } from './candidates.js';
 
 const PAGE = 'http://www.zz_test_sib.localhost:4010/';
@@ -154,9 +156,38 @@ describe('E6 conforme : version gardée (04 §3.1)', () => {
 
   test('E6 avec trace compilée → E5 `hybrid` (spec compilée, coût mesuré sans LLM) ; sans compilation → not_compilable, jamais E6', () => {
     const compiled = { schema_version: 1, kind: 'hybrid', steps: [] };
-    expect(retainedStrategy(entry('agent'), compiled, 0.002)).toEqual({ ok: true, execution: 'hybrid', network: 'direct', spec: compiled, estCostUsd: 0.002 });
+    expect(retainedStrategy(entry('agent'), compiled, 0.002)).toEqual({ ok: true, execution: 'hybrid', network: 'direct', spec: compiled, estCostUsd: 0.002, compilable: 'yes' });
     expect(retainedStrategy(entry('agent'), undefined, 0.002)).toEqual({ ok: false, reason: 'not_compilable' });
     // Les autres niveaux sont gardés tels quels.
     expect(retainedStrategy(entry('fetch'), undefined, 0.001)).toEqual({ ok: true, execution: 'fetch', network: 'direct', spec: { kind: 'fetch' }, estCostUsd: 0.5 });
+  });
+
+  test('2.13 (19 §4) : trace E6 compilable en E5 → version retenue au format `steps`, avec sa source et compilable = yes ; repli sur le hybride si la conversion échoue', () => {
+    const host = 'zz-test.example';
+    const checked = validateHybridSpec({
+      schema_version: 1,
+      kind: 'hybrid',
+      start_url: `https://${host}/`,
+      allowed_hosts: [host],
+      steps: [{ op: 'click', target: { role: 'link', name: 'Page suivante' } }],
+      extract: { mode: 'labels', fields: { titre: { label: 'Titre', ops: [] } } },
+      compiled_from: { execution: 'agent', version: 1, engine: 'stagehand@3.7.3' },
+    });
+    if (!checked.ok) throw new Error(checked.errors.join(';'));
+    const trace: AgentTraceStep[] = [
+      { index: 0, action: 'click', semanticTarget: { role: 'link', name: 'Page suivante' }, url: `https://${host}/`, executed: true, durationMs: 1 },
+      { index: 1, action: 'done', url: `https://${host}/p2`, executed: true, durationMs: 1 },
+    ];
+    const kept = retainedStrategy(entry('agent'), checked.spec, 0.002, { modelId: 'zz-agent', at: '2026-10-02T10:00:00Z', trace });
+    expect(kept).toMatchObject({ ok: true, execution: 'hybrid', network: 'direct', estCostUsd: 0.002, compilable: 'yes' });
+    if (!kept.ok) return;
+    expect((kept.spec as { kind: string }).kind).toBe('steps');
+    expect(kept.sourceSteps?.[0]).toMatchObject({ id: 's1', post: [{ kind: 'url_changed' }] });
+    // Conversion impossible (extraction déléguée à l'agent) : repli sur le hybride compilé, sans source d'étapes.
+    const delegated = validateHybridSpec({ ...checked.spec, extract: { mode: 'agent', instruction: 'lire' } });
+    if (!delegated.ok) throw new Error(delegated.errors.join(';'));
+    const fallback = retainedStrategy(entry('agent'), delegated.spec, 0.002, { modelId: null, at: '2026-10-02T10:00:00Z' });
+    expect(fallback).toMatchObject({ ok: true, execution: 'hybrid', spec: delegated.spec, compilable: 'yes' });
+    expect(fallback.ok && fallback.sourceSteps).toBeUndefined();
   });
 });

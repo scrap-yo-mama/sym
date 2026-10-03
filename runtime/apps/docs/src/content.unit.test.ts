@@ -164,9 +164,9 @@ describe('assert_out_of_scope_cites_x1_x6 : « Hors périmètre » (16 § 2, _ex
     expect(normalize(answer.exec(page)?.[1] ?? 'absente')).toBe(normalize(answer.exec(sibling)?.[1] ?? 'absente'));
   });
 
-  test('l\'exclusion de robots.txt, du tunnel après blocage et de l\'identité sont dites', () => {
+  test('robots.txt comme simple information (D-91), l\'IP inchangée après un refus et l\'avocat sont dits', () => {
     const text = page.replace(/<!--[\s\S]*?-->/g, '');
-    expect(text).toMatch(/robots\.txt/);
+    expect(text).toMatch(/robots\.txt[^\n]*ne conditionne pas la collecte/);
     expect(text).toMatch(/ne change jamais d'IP|jamais de changement d'IP/i);
     expect(text).toMatch(/à valider par un avocat/i);
   });
@@ -175,12 +175,6 @@ describe('assert_out_of_scope_cites_x1_x6 : « Hors périmètre » (16 § 2, _ex
     for (const p of PAGES) {
       if (p.generated) continue;
       expect(readSource(p), p.path).not.toMatch(PROTECTION_NAMES);
-    }
-  });
-
-  test('aucune page ne décrit une option pour ignorer robots.txt', () => {
-    for (const p of handWritten) {
-      expect(readSource(p), p.path).not.toMatch(/IGNORE_ROBOTS|ignore_robots|respect_robots\s*[:=]\s*false|robots\s*[:=]\s*['"]?(?:ignore|off)/i);
     }
   });
 });
@@ -316,7 +310,7 @@ describe('quickstart : structure du tutoriel rejoué', () => {
   const steps = parseQuickstart(readSource('tutoriels/quickstart'));
 
   test('les étapes du tutoriel se suivent dans l\'ordre du parcours', () => {
-    expect(steps.map((s) => s.id)).toEqual(['secrets', 'start', 'ready', 'owner-variables', 'setup', 'login', 'whoami', 'api-key', 'version', 'd0', 'first-api']);
+    expect(steps.map((s) => s.id)).toEqual(['secrets', 'start', 'ready', 'owner-variables', 'setup', 'login', 'whoami', 'api-key', 'version', 'd0', 'robot-contact', 'first-api']);
   });
 
   test('les étapes rejouées visent l\'instance locale du tutoriel, avec curl en mode strict', () => {

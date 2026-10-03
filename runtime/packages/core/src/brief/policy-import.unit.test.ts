@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // assert_policy_module_no_brief_import (tâche 2.14, 19c § 3, deuxième couche de la garantie) : les modules qui calculent la
-// politique effective d'une API et les décisions de ses gardes (robots.txt et rapport d'accès, réseau et garde SSRF, verrou
+// politique effective d'une API et les décisions de ses gardes (rapport d'accès, réseau et garde SSRF, verrou
 // de domaines, cadence, classifieur, plan d'essais et règles) n'importent JAMAIS le module du dossier d'enquête, ni
 // directement ni par un import transitif. Le graphe est relu depuis les sources (imports relatifs et `@runtime/core/*`).
 import { existsSync, readdirSync, readFileSync } from 'node:fs';

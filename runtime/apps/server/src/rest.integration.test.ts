@@ -9,7 +9,7 @@ import { readFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import { createServer as createTcpServer, type AddressInfo } from 'node:net';
 import { createConfig, lintFromString } from '@redocly/openapi-core';
-import { buildInputSchema } from '@runtime/core';
+import { buildInputSchema, instructedStepsSha256, validateInstructedSteps } from '@runtime/core';
 import { saveInvestigationStrategy, sweepOrphans, type InvestigationState } from '@runtime/db';
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import { OpenApiContract } from '../../../tests/helpers/openapi-contract.js';
@@ -213,7 +213,8 @@ describe('catalogue (05 § 4.2) : création, liste, fiche, modification, suppres
     expect(second.body['slug']).not.toBe(created.body['slug']);
 
     const detail = await api(a, 'GET', `/api/apis/${created.body['slug']}`, '/api/apis/{slug}');
-    expect(detail.body).toMatchObject({ status: 'enquete', metadata_only: false, access_policy: { robots: 'respect' }, owner_id: a.user.id });
+    expect(detail.body).toMatchObject({ status: 'enquete', metadata_only: false, access_policy: { report_id: null }, owner_id: a.user.id });
+    expect(detail.body.access_policy).not.toHaveProperty('robots');
     expect(JSON.stringify(detail.body)).not.toContain('"investigation"');
 
     const list = await api(a, 'GET', '/api/apis?limit=1', '/api/apis');
@@ -258,7 +259,7 @@ describe('catalogue (05 § 4.2) : création, liste, fiche, modification, suppres
   test('POST /api/apis refuse : URL à jeton, politique réseau inconnue, corps hors schéma (400) ; validation automatique sans « j’ai lu » (403)', async () => {
     expect((await api(a, 'POST', '/api/apis', '/api/apis', { description: 'zz', url: 'https://zz-test.example/?token=abc' })).body).toMatchObject({ error: { code: 'invalid_request' } });
     expect((await api(a, 'POST', '/api/apis', '/api/apis', { description: 'zz', url: 'https://zz-test.example/', network_policy: { allow: ['dc_proxy'], proxy_ids: { dc_proxy: 'zz-unknown' } } })).body).toMatchObject({ error: { code: 'invalid_network_policy' } });
-    expect((await api(a, 'POST', '/api/apis', '/api/apis', { description: 'zz', url: 'https://zz-test.example/', robots: 'ignore' })).status).toBe(400);
+    expect((await api(a, 'POST', '/api/apis', '/api/apis', { description: 'zz', url: 'https://zz-test.example/', zz_unknown: true })).status).toBe(400);
     expect((await api(b, 'POST', '/api/apis', '/api/apis', { description: 'zz', url: 'https://zz-test.example/', auto_validate: true })).body).toMatchObject({ error: { code: 'responsible_use_ack_required' } });
   });
 
@@ -548,6 +549,8 @@ describe('validation du schéma : case « j’ai lu » non contournable, ordre d
     const res = await api(c, 'POST', `/api/apis/${apiId}/validate-schema`, '/api/apis/{id}/validate-schema', { output_schema: stripped });
     expect(res.status).toBe(403);
     expect(res.body).toMatchObject({ error: { code: 'responsible_use_ack_required' } });
+    // UX-19 : le message nomme le champ marqué (celui du schéma PROPOSÉ), jamais un champ non marqué.
+    expect((res.body['error'] as { message: string }).message).toMatch(/x-personal : name \(/);
     expect(await count("SELECT count(*) FROM apis WHERE id = $1 AND investigation_phase = 'awaiting_schema_validation'", [apiId])).toBe(1);
     // Case cochée : la correction passe.
     await api(c, 'POST', '/api/me/responsible-use', '/api/me/responsible-use', { version: '2026-10-01' });
@@ -1578,6 +1581,66 @@ describe('réglages de l’admin (08 § 1, § 2, § 7) : secrets en écriture se
     expect((await api(a, 'GET', '/api/settings/llm', '/api/settings/llm')).status).toBe(403);
   });
 
+  test('UX-17 — le prix d’un modèle survit à toute écriture de settings.llm qui ne le mentionne pas ; seul price: null le retire', async () => {
+    const price = { in: 5, out: 25, in_cached: 0.5 };
+    const profile = { tools: true, tool_choice: ['auto'], structured: 'json_schema', cache: false };
+    const provider = { id: 'zz-price', preset: 'custom', base_url: 'http://127.0.0.1:9/v1', api_key: 'zz_test_llm_key_price_0123456789' };
+    const modelsOf = async () => ((await api(admin, 'GET', '/api/settings/llm', '/api/settings/llm')).body['providers'] as { id: string; models: Record<string, Record<string, unknown>> }[]).find((p) => p.id === 'zz-price')?.models;
+    expect((await api(admin, 'PUT', '/api/settings/llm', '/api/settings/llm', { providers: [{ ...provider, models: { 'claude-opus-4-8': { price } } }] })).status).toBe(200);
+    expect(await modelsOf()).toEqual({ 'claude-opus-4-8': { price } });
+    // Console au GET périmé, ou script qui ne pose que le profil : la requête ne parle pas du prix, le prix reste.
+    const { api_key: _key, ...keep } = provider;
+    expect((await api(admin, 'PUT', '/api/settings/llm', '/api/settings/llm', { providers: [{ ...keep, models: { 'claude-opus-4-8': { profile } } }] })).status).toBe(200);
+    expect(await modelsOf()).toEqual({ 'claude-opus-4-8': { price, profile } });
+    // Une requête sans `models` ne touche à rien (déjà le cas) ; une requête qui change le prix le remplace.
+    expect((await api(admin, 'PUT', '/api/settings/llm', '/api/settings/llm', { providers: [keep] })).status).toBe(200);
+    expect(await modelsOf()).toEqual({ 'claude-opus-4-8': { price, profile } });
+    expect((await api(admin, 'PUT', '/api/settings/llm', '/api/settings/llm', { providers: [{ ...keep, models: { 'claude-opus-4-8': { price: { in: 4, out: 20 } } } }] })).status).toBe(200);
+    expect(await modelsOf()).toEqual({ 'claude-opus-4-8': { price: { in: 4, out: 20 }, profile } });
+    // Retrait explicite.
+    expect((await api(admin, 'PUT', '/api/settings/llm', '/api/settings/llm', { providers: [{ ...keep, models: { 'claude-opus-4-8': { price: null } } }] })).status).toBe(200);
+    expect(await modelsOf()).toEqual({ 'claude-opus-4-8': { profile } });
+    // Restaure l'état attendu par les tests suivants (aucun fournisseur de ce test).
+    await api(admin, 'PUT', '/api/settings/llm', '/api/settings/llm', { providers: [] });
+  });
+
+  test('revue fix-ux-11 — known_prices en lecture seule (forme KnownModelPrice) ; prix fermé (>= 0) ; models[m]: null retire ; table bornée à 50', async () => {
+    const got = await api(admin, 'GET', '/api/settings/llm', '/api/settings/llm');
+    expect(got.status).toBe(200);
+    const known = got.body['known_prices'] as { model: string; provider: string; status: string; price: { in: number; out: number; in_cached?: number } | null; source: string }[];
+    expect(known.length).toBeGreaterThan(0);
+    for (const entry of known) {
+      expect(['verified', 'to_validate']).toContain(entry.status);
+      expect(typeof entry.model).toBe('string');
+      expect(typeof entry.source).toBe('string');
+      if (entry.status === 'verified') expect(entry.price).toMatchObject({ in: expect.any(Number), out: expect.any(Number) });
+      else expect(entry.price).toBeNull();
+    }
+    // Lecture seule : une écriture qui renvoie known_prices est refusée.
+    expect((await api(admin, 'PUT', '/api/settings/llm', '/api/settings/llm', { providers: [], known_prices: [] })).status).toBe(400);
+    const provider = { id: 'zz-closed', preset: 'custom', base_url: 'http://127.0.0.1:9/v1', api_key: 'zz_test_llm_key_closed_0123456789' };
+    const put = (models: Record<string, unknown>, withKey = true) => {
+      const { api_key: _key, ...keep } = provider;
+      return api(admin, 'PUT', '/api/settings/llm', '/api/settings/llm', { providers: [{ ...(withKey ? provider : keep), models }] });
+    };
+    const modelsOf = async () => ((await api(admin, 'GET', '/api/settings/llm', '/api/settings/llm')).body['providers'] as { id: string; models: Record<string, unknown> }[]).find((p) => p.id === 'zz-closed')?.models ?? {};
+    // Prix fermé : négatif, sans `out`, clé inconnue.
+    expect((await put({ m: { price: { in: -1, out: 2 } } })).status).toBe(400);
+    expect((await put({ m: { price: { in: 1 } } })).status).toBe(400);
+    expect((await put({ m: { price: { in: 1, out: 2, zz: 1 } } })).status).toBe(400);
+    expect((await put({ m: { price: { in: 0, out: 0 } } })).status).toBe(200);
+    // Retrait d'un modèle entier.
+    expect((await put({ n: { price: { in: 1, out: 2 } } }, false)).status).toBe(200);
+    expect(Object.keys(await modelsOf()).sort()).toEqual(['m', 'n']);
+    expect((await put({ m: null }, false)).status).toBe(200);
+    expect(Object.keys(await modelsOf())).toEqual(['n']);
+    // La table fusionnée reste bornée à 50.
+    const fifty = Object.fromEntries(Array.from({ length: 50 }, (_, i) => [`zz-m${i}`, { price: { in: 1, out: 2 } }]));
+    expect((await put(fifty, false)).status).toBe(400);
+    expect(Object.keys(await modelsOf())).toEqual(['n']);
+    await api(admin, 'PUT', '/api/settings/llm', '/api/settings/llm', { providers: [] });
+  });
+
   test('sonde « Tester » LLM pendant un changement de fournisseur : le profil relevé n’écrase jamais la nouvelle destination ni sa clé', async () => {
     // Fournisseur lent : la première requête de la sonde attend qu'on la libère ; chaque réponse est un 400 (paramètre non
     // supporté), donc la sonde aboutit et veut écrire son profil.
@@ -1766,6 +1829,51 @@ describe('portabilité (3.12) : export, aperçu d’import, OpenAPI par API au c
     expect(preview).toMatchObject({ status: 200, body: { preview: true, ignored_fields: [] } });
     expect(await count('SELECT count(*) FROM apis')).toBe(apis);
     expect((await api(a, 'GET', `/api/apis/${seeded.slug}/openapi.json`, '/api/apis/{slug}/openapi.json')).status).toBe(200);
+  });
+});
+
+describe('agent instruit (2.13, 19 § 4) : confirmation humaine des étapes instruites, opt-in explicite — assert_instructed_mode_explicit', () => {
+  test('fiche : étapes instruites et empreinte ; activation sans confirmation → 409 ; clé d’API → 403 human_confirmation_required ; empreinte changée → 409 ; confirmé depuis la console → activable, puis désactivable', async () => {
+    const seeded = await seedApi(srv.db.url, a.user.id);
+    const steps = [{ id: 's1', intent: 'Ouvrir la liste des vélos', post: [{ kind: 'url_changed' }] }];
+    const checked = validateInstructedSteps(steps);
+    if (!checked.ok) throw new Error('étapes instruites invalides');
+    const sha = instructedStepsSha256(checked.steps);
+    await withClient(srv.db.url, (c) =>
+      c.query("UPDATE strategy_versions SET compilable = 'no', instructed_steps = $2::jsonb, instructed_steps_sha256 = $3 WHERE api_id = $1 AND version = 1", [seeded.id, JSON.stringify(steps), sha]),
+    );
+    const detail = await api(a, 'GET', `/api/apis/${seeded.slug}`, '/api/apis/{slug}');
+    expect(detail.body).toMatchObject({ instructed_mode: false, instructed: { version: 1, compilable: 'no', sha256: sha, confirmed_by: null, steps: [{ id: 's1', intent: 'Ouvrir la liste des vélos' }] } });
+    // Un membre qui lit l'API instance d'autrui ne reçoit jamais les étapes instruites (propriétaire seul).
+    const shared = await seedApi(srv.db.url, a.user.id, { visibility: 'instance' });
+    const seen = await api(b, 'GET', `/api/apis/${shared.slug}`, '/api/apis/{slug}');
+    expect(seen.body).not.toHaveProperty('instructed');
+
+    const unconfirmed = await api(a, 'PUT', `/api/apis/${seeded.slug}/instructed-mode`, '/api/apis/{slug}/instructed-mode', { enabled: true });
+    expect(unconfirmed).toMatchObject({ status: 409, body: { error: { code: 'instructed_steps_unconfirmed' } } });
+
+    const key = (await srv.app.inject({ method: 'POST', url: '/api/api-keys', headers: { cookie: a.cookie, origin: PUBLIC_URL }, payload: { label: 'zz instruit', scopes: ['apis:read', 'apis:write'], currentPassword: a.user.password } })).json<{ key: string }>().key;
+    const viaKey = await srv.app.inject({ method: 'POST', url: `/api/apis/${seeded.slug}/instructed-steps/confirm`, headers: { authorization: `Bearer ${key}` }, payload: { version: 1, sha256: sha } });
+    expect(viaKey.statusCode).toBe(403);
+    expect(contract.check('POST', '/api/apis/{slug}/instructed-steps/confirm', 403, viaKey.json())).toEqual([]);
+    expect(viaKey.json()).toMatchObject({ error: { code: 'human_confirmation_required' } });
+
+    const stale = await api(a, 'POST', `/api/apis/${seeded.slug}/instructed-steps/confirm`, '/api/apis/{slug}/instructed-steps/confirm', { version: 1, sha256: 'a'.repeat(64) });
+    expect(stale).toMatchObject({ status: 409, body: { error: { code: 'sha_mismatch' } } });
+    expect(await count("SELECT count(*) FROM strategy_versions WHERE api_id = $1 AND instructed_steps_confirmed IS NOT NULL", [seeded.id])).toBe(0);
+
+    const confirmed = await api(a, 'POST', `/api/apis/${seeded.slug}/instructed-steps/confirm`, '/api/apis/{slug}/instructed-steps/confirm', { version: 1, sha256: sha });
+    expect(confirmed).toMatchObject({ status: 200, body: { instructed_mode: false, instructed: { confirmed_by: a.user.id } } });
+    const enabled = await api(a, 'PUT', `/api/apis/${seeded.slug}/instructed-mode`, '/api/apis/{slug}/instructed-mode', { enabled: true });
+    expect(enabled).toMatchObject({ status: 200, body: { instructed_mode: true } });
+    const disabled = await api(a, 'PUT', `/api/apis/${seeded.slug}/instructed-mode`, '/api/apis/{slug}/instructed-mode', { enabled: false });
+    expect(disabled).toMatchObject({ status: 200, body: { instructed_mode: false } });
+
+    // API compilable (une stratégie rejouable sans agent existe) : jamais activable.
+    const compilable = await seedApi(srv.db.url, a.user.id);
+    const refused = await api(a, 'PUT', `/api/apis/${compilable.slug}/instructed-mode`, '/api/apis/{slug}/instructed-mode', { enabled: true });
+    expect(refused.status).toBe(409);
+    expect(await count('SELECT count(*) FROM apis WHERE id = $1 AND instructed_mode', [compilable.id])).toBe(0);
   });
 });
 

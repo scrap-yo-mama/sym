@@ -16,14 +16,14 @@
 // l'appeler répond 403 `insufficient_scope` avec le défi de scope, 05 § 4.4) ; les outils par API ne viennent que des API
 // de l'appelant (jamais une API partagée d'un autre membre, joignable par `list_apis` et `run_api`).
 import { randomUUID } from 'node:crypto';
-import { can, formatIssues, validateOutput, type Permission } from '@runtime/core';
-import { briefWhatToDo, checkBrief as checkBriefInput } from '@runtime/core';
+import { briefWhatToDo, can, checkBrief as checkBriefInput, formatIssues, isTerminalRunState, validateOutput, type Permission, type RunState } from '@runtime/core';
 import { withActor } from '@runtime/db';
 import { fromJsonSchema, McpServer, ProtocolError, ProtocolErrorCode, requireScopes, type CallToolResult, type jsonSchemaValidator, type ListToolsResult } from '@modelcontextprotocol/server';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import type { ServerContext } from '../context.js';
 import { readApiById, readApiBySlug } from '../rest/apis.js';
 import { datasetItems } from '../rest/export.js';
+import { runErrorFor } from '../rest/run-error.js';
 import { buildRunResult, decodeItemsCursor, itemsCursor, readRunRow, runMetadataForAdmin } from '../rest/runs.js';
 import { waitSecondsOf } from '../rest/shared.js';
 import { UUID } from '../routes/account-helpers.js';
@@ -82,6 +82,8 @@ const GUIDES: Record<string, ErrorGuide> = {
   invalid_brief: { what_to_do: briefWhatToDo('invalid_brief'), retryable: true },
   brief_too_large: { what_to_do: briefWhatToDo('brief_too_large', BRIEF_MAX_BYTES), retryable: true },
   secret_in_brief: { what_to_do: briefWhatToDo('secret_in_brief'), retryable: true },
+  // UX-04 : prérequis de l'instance, une tâche pour l'utilisateur ; l'appel peut être refait dès que le contact est posé.
+  instance_contact_missing: { what_to_do: runErrorFor('instance_contact_missing').what_to_do, retryable: runErrorFor('instance_contact_missing').retryable },
   internal: { what_to_do: 'The instance hit an internal error: call again in a moment; if it persists, tell the user to check the instance logs.', retryable: true },
 };
 
@@ -202,6 +204,27 @@ function checkBrief(ctx: ServerContext, brief: unknown): CallToolResult | null {
   return out.ok ? null : toolError(out.code, out.message);
 }
 
+/**
+ * Phrase de `create_api` selon l'état RÉEL de l'enquête (UX-07) : schéma à valider, échec avec sa cause, fin sans schéma, ou en
+ * cours. Jamais « running » quand le run est terminé, ni « done » sans dire ce qui s'est passé.
+ */
+function createdSummary(created: Json): string {
+  const slug = String(created['slug']);
+  const phase = created['investigation_phase'];
+  const runState = created['run_state'];
+  const status = typeof created['status'] === 'string' ? created['status'] : null;
+  const error = created['error'] as { code?: unknown; message?: unknown } | undefined;
+  if (phase === 'awaiting_schema_validation') return `API ${slug} created. Proposed output schema below: show it to the user, then call validate_schema with api_id.`;
+  if (runState === 'failed') {
+    const cause = typeof error?.code === 'string' ? ` (${error.code}): ${String(error.message ?? '')}` : '; read get_run with run_id for the cause.';
+    return `API ${slug} created, but the investigation failed${cause}${status === null ? '' : ` The API is now ${status}.`}`;
+  }
+  if (typeof runState === 'string' && isTerminalRunState(runState as RunState)) {
+    return `API ${slug} created; the investigation ended (${runState})${status === null ? '' : `, the API is now ${status}`}: read get_run with run_id.`;
+  }
+  return `API ${slug} created; the investigation is running: poll get_run with run_id, then validate the proposed schema.`;
+}
+
 type Handler = (args: Json, caller: McpCaller) => Promise<CallToolResult>;
 
 function handlers(ctx: ServerContext): Record<GenericToolName, Handler> {
@@ -224,15 +247,11 @@ function handlers(ctx: ServerContext): Record<GenericToolName, Handler> {
       const answer = await rest(ctx, caller, 'POST', `/api/apis${query({ wait: wait(args) })}`, body);
       if (answer.status !== 201) return restError(answer);
       if (typeof answer.body['run_id'] === 'string' && Array.isArray(answer.body['items'])) return runResultAnswer(answer.body);
-      const phase = answer.body['investigation_phase'];
-      const summary =
-        phase === 'awaiting_schema_validation'
-          ? `API ${String(answer.body['slug'])} created. Proposed output schema below: show it to the user, then call validate_schema with api_id.`
-          : `API ${String(answer.body['slug'])} created; the investigation is running: poll get_run with run_id, then validate the proposed schema.`;
       // Récit du dossier (19c § 7) : gabarits fermés du code en tête du texte, `brief_report[]` dans structuredContent ;
-      // aucun texte du dossier. Sans dossier, aucune ligne de plus.
+      // aucun texte du dossier. Sans dossier, aucune ligne de plus. Phrase selon l'état réel de l'enquête (UX-07).
       const { brief_narrative: narrative, ...structured } = answer.body;
       const lines = Array.isArray(narrative) ? narrative.filter((l): l is string => typeof l === 'string') : [];
+      const summary = createdSummary(structured);
       return success(lines.length === 0 ? summary : `${lines.join('\n')}\n${summary}`, structured);
     },
 

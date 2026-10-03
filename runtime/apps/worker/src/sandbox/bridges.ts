@@ -15,8 +15,8 @@ import { findSsrfBlocked, guardedFetch, normalizeHostname, type SsrfGuard } from
 
 /** Refus d'un pont. `code` est relayé au script ; `violation` : à journaliser comme `sandbox_violation`. */
 export class SandboxBridgeError extends Error {
-  /** `rate_limited` : cadence du domaine refusée (1.9) ; `request_cap` : `max_requests_per_run` atteint. */
-  readonly code: SandboxViolationReason | 'fetch_failed' | 'page_failed' | 'page_unavailable' | 'rate_limited' | 'request_cap' | 'access_refused';
+  /** `rate_limited` : cadence du domaine refusée (1.9) ; `request_cap` : `max_requests_per_run` atteint ; `step_failed` : étape d'une stratégie `steps` en échec (2.13). */
+  readonly code: SandboxViolationReason | 'fetch_failed' | 'page_failed' | 'page_unavailable' | 'rate_limited' | 'request_cap' | 'access_refused' | 'step_failed';
   readonly violation: boolean;
   readonly detail?: string;
   constructor(code: SandboxBridgeError['code'], violation: boolean, detail?: string) {

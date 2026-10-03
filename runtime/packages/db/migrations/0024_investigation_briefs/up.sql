@@ -1,5 +1,5 @@
 -- SPDX-License-Identifier: AGPL-3.0-only
--- 0022_investigation_briefs (tâche 2.14, 19c § 4 et § 9.2 ; migration couverte par D-48, garde-fou de 10) :
+-- 0024_investigation_briefs (tâche 2.14, 19c § 4 et § 9.2 ; migration couverte par D-48, garde-fou de 10) :
 --   api_briefs           historique des versions du dossier d'enquête d'une API : contenu MASQUÉ et normalisé, empreinte,
 --                        taille ; immuable, sauf effacement d'une personne (erased_at : contenu réécrit sans elle,
 --                        empreinte recalculée) et réduction des échantillons à leur empreinte (samples_purged_at,

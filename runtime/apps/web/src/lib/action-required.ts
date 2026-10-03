@@ -24,6 +24,8 @@ const CAUSES: ActionCause[] = [
   { code: 'cookie_expired', cause: 'connect', primary: { kind: 'route', to: '/settings/extension' }, verified: true },
   { code: 'session_device_bound', cause: 'deviceBound', primary: { kind: 'route', to: '/settings/extension' }, verified: true },
   { code: 'proxy_not_configured', cause: 'proxy', primary: { kind: 'route', to: '/settings/proxies' }, verified: true },
+  { code: 'instance_contact_missing', cause: 'instanceContact', primary: { kind: 'route', to: '/settings/robot' }, verified: true },
+  { code: 'llm_price_missing', cause: 'llmPrice', primary: { kind: 'route', to: '/settings/models' }, verified: false },
   { code: 'tunnel_offline', cause: 'tunnelOffline', primary: { kind: 'route', to: '/settings/extension' }, verified: true },
   { code: 'challenge_in_tunnel', cause: 'challenge', primary: { kind: 'hash', hash: '#launch' }, verified: false },
   { code: 'secret_unreadable', cause: 'secret', primary: { kind: 'route', to: '/settings/models' }, verified: true },

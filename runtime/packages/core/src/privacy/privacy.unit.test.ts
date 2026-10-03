@@ -13,6 +13,7 @@ import {
   normalizeSubjectValue,
   PERSONAL_MASK,
   PersonalValueRegistry,
+  personalFieldPaths,
   schemaHasPersonalFields,
   subjectHash,
   subjectSearchRegex,
@@ -35,6 +36,13 @@ describe('valeurs x-personal', () => {
     expect(extractPersonalValues(schema, { title: 'x' })).toEqual([]);
     expect(schemaHasPersonalFields(schema)).toBe(true);
     expect(schemaHasPersonalFields({ type: 'object', properties: { a: { type: 'string' } } })).toBe(false);
+  });
+
+  test('champs nommés (UX-19) : chemins des champs x-personal, imbriqués et en tableau, dans l’ordre du schéma', () => {
+    expect(personalFieldPaths(schema)).toEqual(['email', 'author.name', 'phones[]']);
+    expect(personalFieldPaths({ type: 'array', items: { type: 'object', properties: { author: { type: 'string', 'x-personal': true }, quote: { type: 'string' } } } })).toEqual(['[].author']);
+    expect(personalFieldPaths({ type: 'object', properties: { a: { type: 'string', 'x-personal': 'false' } } })).toEqual([]);
+    expect(personalFieldPaths(null)).toEqual([]);
   });
 
   test('normalisation : casse, espaces, téléphone en E.164', () => {

@@ -1,29 +1,23 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// Module d'accès (tâche 1.11) contre les fixtures d'accès O8 (0.5), par la vraie couche réseau (garde SSRF, session N1) :
-// robots.txt (Disallow, 4xx, 5xx, coupure, redirections, boucle, plus de 500 Kio, Crawl-delay, Content-Signal), 402 avec
-// `crawler-price`. Le compteur `GET /__stats` des fixtures dit si un chemin a reçu une requête : 0 sur tout chemin
-// interdit (INV11), dans l'exécuteur E1 comme pour une URL saisie à la main et sur un saut de redirection.
+// Module d'accès (tâche 1.11, D-91) contre les fixtures d'accès O8 (0.5), par la vraie couche réseau (garde SSRF,
+// session N1) : un robots.txt publié par le site (Disallow, 5xx, redirections…) ne conditionne aucune requête et n'est
+// jamais lu de lui-même ; rapport d'accès (signaux des en-têtes, sitemap et llms.txt en sondes passives), 402 avec
+// `crawler-price`. Le compteur `GET /__stats` des fixtures dit quels chemins ont reçu une requête.
 import { createServer, type Server } from 'node:http';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { startClient, type Client } from '../../../../fixtures/src/test-helpers.ts';
 import { fixtureGuard } from '../../../../tests/helpers/fixture-net.ts';
 import { validateDeclarativeSpec, type DeclarativeSpec } from '../dsl/spec.js';
-import { domainRequestPacer } from '../exec/pacer.js';
 import { runFetchExecutor } from '../exec/fetch.js';
 import { failureRoute } from '../exec/guard.js';
 import { openNetworkSession, type NetworkSession } from '../net/modes/session.js';
-import type { DomainPacer } from '../pacing/pacer.js';
-import { RobotsCache, RobotsGate, sessionRobotsFetcher } from './gate.js';
 import { buildUserAgent } from './identity.js';
-import { accessFactsForPrompt, accessReportView, buildAccessReport, BLOCKED_NEXT_STEPS, sessionAccessProbe } from './report.js';
+import { accessFactsForPrompt, accessReportView, buildAccessReport, sessionAccessProbe } from './report.js';
 
 const HOSTS = [
   'zz_test_robots.localhost',
-  'zz_test_robots_4xx.localhost',
   'zz_test_robots_5xx.localhost',
   'zz_test_robots_redirect.localhost',
-  'zz_test_robots_big.localhost',
-  'zz_test_robots_crawl_delay.localhost',
   'zz_test_content_signal.localhost',
   'zz_test_payment_402.localhost',
 ];
@@ -33,31 +27,23 @@ const signal = new AbortController().signal;
 
 let client: Client;
 let port: number;
-let robotsSession: NetworkSession;
+let session: NetworkSession;
 const base = (host: string) => `http://${host}:${port}`;
 
 beforeAll(async () => {
   client = await startClient();
   port = client.server.port;
-  robotsSession = openNetworkSession({ rung: { mode: 'direct' }, guard: fixtureGuard(port, HOSTS), userAgent: UA });
 });
 afterAll(async () => {
-  await robotsSession.close();
   await client.close();
 });
 beforeEach(async () => {
   await client.reset();
+  await session?.close();
+  session = openNetworkSession({ rung: { mode: 'direct' }, guard: fixtureGuard(port, HOSTS), userAgent: UA });
 });
 
-/** Garde robots d'un essai et sa session de contenu (contrôle robots à chaque saut). */
-function trial(options: { cache?: RobotsCache; pacer?: ReturnType<typeof domainRequestPacer> } = {}) {
-  const gate = new RobotsGate({ fetch: sessionRobotsFetcher(robotsSession), ...(options.cache ? { cache: options.cache } : {}), ...(options.pacer ? { pacer: options.pacer } : {}) });
-  const session = openNetworkSession({ rung: { mode: 'direct' }, guard: fixtureGuard(port, HOSTS), checkUrl: gate.checkUrl, userAgent: UA });
-  return { gate, session };
-}
-
 const paths = async (host: string): Promise<Record<string, number>> => (await client.stats()).hosts[host]?.paths ?? {};
-const contentRequests = async (host: string): Promise<number> => Object.entries(await paths(host)).filter(([p]) => !/^\/robots/.test(p)).reduce((n, [, c]) => n + c, 0);
 
 function spec(host: string, path: string): DeclarativeSpec {
   const check = validateDeclarativeSpec({
@@ -71,104 +57,98 @@ function spec(host: string, path: string): DeclarativeSpec {
   return check.spec;
 }
 
-describe('assert_robots_respected : 0 requête sur un chemin interdit (INV11), robots_disallowed → bloquee', () => {
-  it('E1 : chemin interdit → robots_disallowed, statut visé bloquee, aucun agent, 0 requête sur le chemin', async () => {
+describe('assert_robots_not_gating : un robots.txt qui interdit le chemin ne bloque rien (D-91)', () => {
+  it('E1 sur un chemin que robots.txt interdit : collecte normale, robots.txt jamais demandé', async () => {
     const host = 'zz_test_robots.localhost';
-    const { gate, session } = trial();
-    try {
-      const out = await runFetchExecutor(session, { spec: spec(host, '/prive/liste'), input: {}, signal, access: gate.access });
-      expect(out).toMatchObject({ ok: false, requests: 0, failure: { failure_class: 'robots_disallowed', retryable: false } });
-      if (!out.ok) {
-        const route = failureRoute(out.failure.failure_class);
-        expect(route).toMatchObject({ next: 'stop', agent: false, status: 'bloquee' });
-      }
-      const seen = await paths(host);
-      expect(seen['/prive/liste']).toBeUndefined();
-      expect(seen['/robots.txt']).toBe(1);
-    } finally {
-      await session.close();
-    }
+    const out = await runFetchExecutor(session, { spec: spec(host, '/prive/liste'), input: {}, signal });
+    expect(out).toMatchObject({ ok: true, pages: 1, requests: 1 });
+    const seen = await paths(host);
+    expect(seen['/prive/liste']).toBe(1);
+    expect(seen['/robots.txt']).toBeUndefined();
   });
 
-  it('E1 : Allow plus long (/prive/ouvert) → collecte normale', async () => {
-    const host = 'zz_test_robots.localhost';
-    const { gate, session } = trial();
-    try {
-      const out = await runFetchExecutor(session, { spec: spec(host, '/prive/ouvert'), input: {}, signal, access: gate.access });
-      expect(out).toMatchObject({ ok: true, pages: 1 });
-      expect((await paths(host))['/prive/ouvert']).toBe(1);
-    } finally {
-      await session.close();
-    }
+  it('robots.txt injoignable (5xx, coupure) ou redirigé : sans effet sur la collecte', async () => {
+    const out = await runFetchExecutor(session, { spec: spec('zz_test_robots_5xx.localhost', '/liste'), input: {}, signal });
+    expect(out).toMatchObject({ ok: true, pages: 1 });
+    await client.control({ op: 'site', site: 'robots_redirect', loop: true });
+    const redirected = await runFetchExecutor(session, { spec: spec('zz_test_robots_redirect.localhost', '/prive/x'), input: {}, signal });
+    expect(redirected).toMatchObject({ ok: true, pages: 1 });
+    expect((await paths('zz_test_robots_5xx.localhost'))['/robots.txt']).toBeUndefined();
+    expect((await paths('zz_test_robots_redirect.localhost'))['/robots.txt']).toBeUndefined();
   });
 
-  it('URL saisie à la main (session seule, sans exécuteur) : même refus, 0 requête, classe robots_disallowed', async () => {
-    const host = 'zz_test_robots.localhost';
-    const { session } = trial();
-    try {
-      await expect(session.fetch(`${base(host)}/prive/manuel`)).rejects.toMatchObject({ name: 'AccessRefusedError', failureClass: 'robots_disallowed' });
-      expect((await paths(host))['/prive/manuel']).toBeUndefined();
-    } finally {
-      await session.close();
-    }
-  });
-
-  it('saut de redirection vers un chemin interdit : refusé avant connexion (0 requête sur le chemin)', async () => {
-    // Serveur local de test : /depart redirige vers /prive/cible ; robots.txt interdit /prive/.
+  it('URL saisie à la main et saut de redirection vers un chemin interdit par robots.txt : suivis, même User-Agent', async () => {
     const hits: string[] = [];
     const agents: string[] = [];
     const server: Server = createServer((req, res) => {
       hits.push(req.url ?? '');
       agents.push(String(req.headers['user-agent'] ?? ''));
-      if (req.url === '/robots.txt') return void res.writeHead(200, { 'content-type': 'text/plain' }).end('User-agent: *\nDisallow: /prive/\n');
+      if (req.url === '/robots.txt') return void res.writeHead(200, { 'content-type': 'text/plain' }).end('User-agent: *\nDisallow: /\n');
       if (req.url === '/depart') return void res.writeHead(302, { location: '/prive/cible' }).end();
       res.writeHead(200, { 'content-type': 'application/json' }).end('{"items":[]}');
     });
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
     const local = (server.address() as { port: number }).port;
-    const guard = fixtureGuard(local, ['zz_test_redirect_local.localhost']);
-    const robots = openNetworkSession({ rung: { mode: 'direct' }, guard, userAgent: UA });
-    const gate = new RobotsGate({ fetch: sessionRobotsFetcher(robots) });
-    const session = openNetworkSession({ rung: { mode: 'direct' }, guard, checkUrl: gate.checkUrl, userAgent: UA });
+    const own = openNetworkSession({ rung: { mode: 'direct' }, guard: fixtureGuard(local, ['zz_test_redirect_local.localhost']), userAgent: UA });
     try {
-      const url = `http://zz_test_redirect_local.localhost:${local}/depart`;
-      await expect(session.fetch(url)).rejects.toMatchObject({ failureClass: 'robots_disallowed' });
-      expect(hits).toEqual(['/robots.txt', '/depart']);
-      // Même User-Agent (moteur et jeton de l'instance) sur robots.txt comme sur le contenu.
+      const origin = `http://zz_test_redirect_local.localhost:${local}`;
+      expect((await own.fetch(`${origin}/depart`)).status).toBe(200);
+      expect((await own.fetch(`${origin}/prive/manuel`)).status).toBe(200);
+      expect(hits).toEqual(['/depart', '/prive/cible', '/prive/manuel']);
       expect(new Set(agents)).toEqual(new Set([UA]));
       expect(UA).toBe('Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36 (compatible; Scrapyomama/1.2.3; +mailto:ops@zz-test.example)');
     } finally {
-      await session.close();
-      await robots.close();
+      await own.close();
       await new Promise<void>((resolve) => server.close(() => resolve()));
     }
   });
 
-  it('groupe Scrapyomama seul, ou groupe * seul, interdit /prive ; identify_instance désactivé (aucun jeton envoyé) : robots_disallowed, 0 requête de contenu', async () => {
-    const engineOnly = buildUserAgent({ engine: { version: '153.0.8010.12', platform: 'linux' } });
-    expect(engineOnly).not.toContain('Scrapyomama');
-    for (const robotsTxt of ['User-agent: Scrapyomama\nDisallow: /prive\n', 'User-agent: *\nDisallow: /prive\n', 'User-agent: *\nAllow: /\n\nUser-agent: Scrapyomama\nDisallow: /prive\n', 'User-agent: *\nDisallow: /prive\n\nUser-agent: Scrapyomama\nAllow: /\n']) {
+  it('rapport d’accès sur un chemin que robots.txt interdit : la suite est permise, aucune section robots, robots.txt jamais demandé', async () => {
+    const host = 'zz_test_robots.localhost';
+    const report = await buildAccessReport({ url: `${base(host)}/prive/page`, probe: sessionAccessProbe(session), signal });
+    expect(report.verdict).toEqual({ proceed: true });
+    expect(report).not.toHaveProperty('robots');
+    const view = accessReportView(report);
+    expect(view).not.toHaveProperty('robots');
+    expect(view.signal).toBe('allowed');
+    expect(accessFactsForPrompt(report)).not.toHaveProperty('robots');
+    const seen = await paths(host);
+    expect(seen['/prive/page']).toBe(1);
+    expect(seen['/robots.txt']).toBeUndefined();
+  });
+});
+
+describe('rapport d’accès : sondes, signaux, sitemap (D-91 : découverte directe par /sitemap.xml)', () => {
+  it('sitemap.xml servi en XML : déclaré ; page HTML de repli ou JSON : aucun sitemap ; llms.txt lu en sonde passive', async () => {
+    for (const [body, type, expected] of [
+      ['<?xml version="1.0"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"><url><loc>/a</loc></url></urlset>', 'application/xml', true],
+      ['<sitemapindex><sitemap><loc>/s.xml</loc></sitemap></sitemapindex>', 'text/xml', true],
+      ['<!doctype html><html><body>accueil</body></html>', 'text/html', false],
+      ['{"items":[]}', 'application/json', false],
+    ] as const) {
       const hits: string[] = [];
       const server: Server = createServer((req, res) => {
         hits.push(req.url ?? '');
-        if (req.url === '/robots.txt') return void res.writeHead(200, { 'content-type': 'text/plain' }).end(robotsTxt);
-        res.writeHead(200, { 'content-type': 'application/json' }).end('{"items":[]}');
+        if (req.url === '/sitemap.xml') return void res.writeHead(200, { 'content-type': type }).end(body);
+        if (req.url === '/llms.txt') return void res.writeHead(200, { 'content-type': 'text/plain' }).end('# zz_test\n');
+        res.writeHead(200, { 'content-type': 'text/html' }).end('<!doctype html><title>zz</title><p>page</p>');
       });
       await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
       const local = (server.address() as { port: number }).port;
-      const guard = fixtureGuard(local, ['zz_test_groups.localhost']);
-      const robots = openNetworkSession({ rung: { mode: 'direct' }, guard, userAgent: engineOnly });
-      const gate = new RobotsGate({ fetch: sessionRobotsFetcher(robots) });
-      const session = openNetworkSession({ rung: { mode: 'direct' }, guard, checkUrl: gate.checkUrl, userAgent: engineOnly });
+      const own = openNetworkSession({ rung: { mode: 'direct' }, guard: fixtureGuard(local, ['zz_test_sitemap.localhost']), userAgent: UA });
       try {
-        const origin = `http://zz_test_groups.localhost:${local}`;
-        await expect(session.fetch(`${origin}/prive/liste`), robotsTxt).rejects.toMatchObject({ failureClass: 'robots_disallowed' });
-        expect(hits, robotsTxt).toEqual(['/robots.txt']);
-        // Un chemin que ni l'un ni l'autre groupe n'interdit reste servi.
-        expect((await session.fetch(`${origin}/public`)).status).toBe(200);
+        const origin = `http://zz_test_sitemap.localhost:${local}`;
+        const report = await buildAccessReport({ url: `${origin}/liste`, probe: sessionAccessProbe(own), signal });
+        expect(report.declared.sitemaps, type).toEqual(expected ? [`${origin}/sitemap.xml`] : []);
+        expect(report.declared.llms_txt).toBe(true);
+        expect(accessFactsForPrompt(report).sitemap_declared).toBe(expected);
+        expect(hits).toEqual(['/liste', '/llms.txt', '/sitemap.xml']);
+        // Sondes coupées : seule la page est demandée.
+        hits.length = 0;
+        await buildAccessReport({ url: `${origin}/liste`, probe: sessionAccessProbe(own), signal, probeLlmsTxt: false, probeSitemap: false });
+        expect(hits).toEqual(['/liste']);
       } finally {
-        await session.close();
-        await robots.close();
+        await own.close();
         await new Promise<void>((resolve) => server.close(() => resolve()));
       }
     }
@@ -182,219 +162,46 @@ describe('assert_robots_respected : 0 requête sur un chemin interdit (INV11), r
     });
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
     const local = (server.address() as { port: number }).port;
-    const session = openNetworkSession({ rung: { mode: 'direct' }, guard: fixtureGuard(local, ['zz_test_ua.localhost']), userAgent: UA });
+    const own = openNetworkSession({ rung: { mode: 'direct' }, guard: fixtureGuard(local, ['zz_test_ua.localhost']), userAgent: UA });
     try {
-      await session.fetch(`http://zz_test_ua.localhost:${local}/x`, { headers: { 'user-agent': 'Mozilla/5.0 (Windows NT 10.0) Chrome/130' } });
+      await own.fetch(`http://zz_test_ua.localhost:${local}/x`, { headers: { 'user-agent': 'Mozilla/5.0 (Windows NT 10.0) Chrome/130' } });
       expect(agents).toEqual([UA]);
     } finally {
-      await session.close();
+      await own.close();
       await new Promise<void>((resolve) => server.close(() => resolve()));
     }
   });
 
-  it('rapport d’accès sur un chemin interdit : bloquee, texte dédié, suites sans tunnel ni « ignorer », 0 requête de contenu', async () => {
-    const host = 'zz_test_robots.localhost';
-    const { gate, session } = trial();
-    try {
-      const report = await buildAccessReport({ url: `${base(host)}/prive/page`, gate, probe: sessionAccessProbe(session), signal });
-      expect(report.robots).toMatchObject({ status: 'disallowed', rule: 'Disallow: /prive/', http_status: 200 });
-      expect(report.verdict).toMatchObject({ proceed: false, status: 'bloquee', failure: { failure_class: 'robots_disallowed' } });
-      if (!report.verdict.proceed) {
-        expect(report.verdict.message).toBe("Ce site demande aux robots de ne pas visiter cette page. Scrapyomama respecte cette règle. Options : utiliser l'API officielle, contacter l'éditeur.");
-        expect(report.verdict.what_to_do).toEqual([...BLOCKED_NEXT_STEPS]);
-        expect(JSON.stringify(report.verdict)).not.toMatch(/tunnel|ignore|ignorer|override/i);
-      }
-      expect(accessReportView(report)).toMatchObject({ signal: 'disallowed', robots: { status: 'disallowed' } });
-      expect(await contentRequests(host)).toBe(0);
-    } finally {
-      await session.close();
-    }
-  });
-});
-
-describe('module d’accès : statuts de robots.txt (RFC 9309) sur les fixtures O8', () => {
-  it('robots.txt en 4xx (404, 401, 403, 410) : aucune règle, chemin autorisé, rapport affiché', async () => {
-    const host = 'zz_test_robots_4xx.localhost';
-    for (const status of [404, 401, 403, 410]) {
-      await client.reset();
-      if (status !== 404) expect((await client.control({ op: 'site', site: 'robots_4xx', status })).status).toBe(200);
-      const { gate, session } = trial();
-      try {
-        const report = await buildAccessReport({ url: `${base(host)}/liste`, gate, probe: sessionAccessProbe(session), signal, probeLlmsTxt: false });
-        expect(report.robots, String(status)).toMatchObject({ status: 'absent', http_status: status });
-        expect(report.verdict.proceed).toBe(true);
-        expect((await paths(host))['/liste']).toBe(1);
-      } finally {
-        await session.close();
-      }
-    }
-  });
-
-  // Revue de 1.11 : 17 §2 dit « 4xx = aucune règle », 429 compris (RFC 9309 §2.3.1.3). Un 429 n'est pas mis en cache :
-  // l'essai suivant relit robots.txt (le site a pu publier ses règles entre-temps).
-  it('robots.txt en 429 : aucune règle (4xx), chemin autorisé ; jamais mis en cache', async () => {
-    const host = 'zz_test_robots_4xx.localhost';
-    expect((await client.control({ op: 'site', site: 'robots_4xx', status: 429 })).status).toBe(200);
-    const cache = new RobotsCache();
-    for (let i = 0; i < 2; i++) {
-      const { gate, session } = trial({ cache });
-      try {
-        expect(await gate.check(`${base(host)}/liste`)).toMatchObject({ allowed: true, state: { kind: 'absent', status: 429 } });
-      } finally {
-        await session.close();
-      }
-    }
-    expect((await paths(host))['/robots.txt']).toBe(2);
-  });
-
-  it('origine hors des domaines de l’API : refusée sans lire son robots.txt (aucune requête)', async () => {
-    const gate = new RobotsGate({ fetch: sessionRobotsFetcher(robotsSession), allowedHosts: ['zz_test_robots.localhost'] });
-    expect(await gate.check(`${base('zz_test_robots_4xx.localhost')}/liste`)).toMatchObject({ allowed: false, failure: { failure_class: 'code_error', detail: 'domain_not_allowed' } });
-    expect(await paths('zz_test_robots_4xx.localhost')).toEqual({});
-  });
-
-  it('robots.txt redirigé vers un autre hôte (CDN, apex → www) : suivi (RFC 9309), ses règles s’appliquent', async () => {
-    const host = 'zz_test_robots_redirect.localhost';
-    await client.control({ op: 'site', site: 'robots_redirect', cross: true });
-    // Session de lecture SANS verrou de domaines (seule la garde SSRF s'applique), comme celle du worker.
-    const gate = new RobotsGate({ fetch: sessionRobotsFetcher(robotsSession), allowedHosts: [host] });
-    expect(await gate.check(`${base(host)}/prive/x`)).toMatchObject({ allowed: false, failure: { failure_class: 'robots_disallowed' } });
-    expect(await gate.check(`${base(host)}/liste`)).toMatchObject({ allowed: true });
-    expect((await paths('zz_test_robots.localhost'))['/robots.txt']).toBe(1);
-    expect(await contentRequests(host)).toBe(0);
-  });
-
-  it('robots.txt en 5xx persistant ou connexion coupée : robots_unreachable, erreur, 0 collecte', async () => {
-    const host = 'zz_test_robots_5xx.localhost';
-    for (const mode of [503, 500, 502, 'drop'] as const) {
-      await client.reset();
-      if (mode !== 503) expect((await client.control({ op: 'site', site: 'robots_5xx', mode })).status).toBe(200);
-      const { gate, session } = trial();
-      try {
-        const report = await buildAccessReport({ url: `${base(host)}/liste`, gate, probe: sessionAccessProbe(session), signal });
-        expect(report.robots.status, String(mode)).toBe('unreachable');
-        expect(report.verdict).toMatchObject({ proceed: false, status: 'erreur', failure: { failure_class: 'robots_unreachable', retryable: true } });
-        if (!report.verdict.proceed) expect(report.verdict.message).toBe('robots.txt injoignable : par précaution rien n\'est collecté');
-        const out = await runFetchExecutor(session, { spec: spec(host, '/liste'), input: {}, signal, access: gate.access });
-        expect(out).toMatchObject({ ok: false, requests: 0, failure: { failure_class: 'robots_unreachable' } });
-        expect(await contentRequests(host)).toBe(0);
-      } finally {
-        await session.close();
-      }
-    }
-  });
-
-  it('robots.txt derrière des redirections : suivies jusqu’à 5 ; au-delà ou en boucle, injoignable', async () => {
-    const host = 'zz_test_robots_redirect.localhost';
-    const run = async () => {
-      const { gate, session } = trial();
-      try {
-        return await gate.check(`${base(host)}/prive/x`);
-      } finally {
-        await session.close();
-      }
-    };
-    expect(await run()).toMatchObject({ allowed: false, failure: { failure_class: 'robots_disallowed' } });
-    await client.control({ op: 'site', site: 'robots_redirect', hops: 5 });
-    expect(await run()).toMatchObject({ allowed: false, failure: { failure_class: 'robots_disallowed' } });
-    await client.control({ op: 'site', site: 'robots_redirect', hops: 6 });
-    expect(await run()).toMatchObject({ allowed: false, failure: { failure_class: 'robots_unreachable', detail: 'robots_too_many_redirects' } });
-    await client.control({ op: 'site', site: 'robots_redirect', loop: true });
-    expect(await run()).toMatchObject({ allowed: false, failure: { failure_class: 'robots_unreachable' } });
-    expect(await contentRequests(host)).toBe(0);
-  });
-
-  it('robots.txt de plus de 500 Kio : les 500 premiers Kio s’appliquent, le reste est ignoré', async () => {
-    const host = 'zz_test_robots_big.localhost';
-    const { gate, session } = trial();
-    try {
-      expect(await gate.check(`${base(host)}/early/x`)).toMatchObject({ allowed: false, rule: 'Disallow: /early/' });
-      expect(await gate.check(`${base(host)}/late/x`)).toMatchObject({ allowed: true });
-      const state = await gate.state(`${base(host)}/`);
-      expect(state).toMatchObject({ kind: 'rules', truncated: true });
-    } finally {
-      await session.close();
-    }
-  });
-
-  it('Crawl-delay devient un plancher de cadence (passé à la cadence par domaine)', async () => {
-    const host = 'zz_test_robots_crawl_delay.localhost';
-    const calls: { url: string; crawlDelayMs: number | null | undefined }[] = [];
-    const fake = {
-      acquire: async (url: string, opts: { crawlDelayMs?: number | null } = {}) => {
-        calls.push({ url, crawlDelayMs: opts.crawlDelayMs });
-        return { granted: true, domain: 'x', waitedMs: 0, probe: false };
-      },
-      report: async () => ({ circuit: 'closed', opened: false, consecutiveFailures: 0, penaltyUntil: null, adaptiveDelayMs: 0 }),
-    } as unknown as DomainPacer;
-    const ref: { gate?: RobotsGate } = {};
-    const pacer = domainRequestPacer(fake, { minDelayMs: 0, crawlDelayMs: (url) => ref.gate?.crawlDelayMs(url) ?? null });
-    const { gate, session } = trial({ pacer });
-    ref.gate = gate;
-    try {
-      const out = await runFetchExecutor(session, { spec: spec(host, '/liste'), input: {}, signal, access: gate.access, pacer });
-      expect(out.ok).toBe(true);
-      // Première réservation : robots.txt lui-même (délai encore inconnu) ; puis la requête de contenu, au plancher de 5 s.
-      expect(calls[0]).toMatchObject({ url: `${base(host)}/robots.txt` });
-      expect(calls.at(-1)).toMatchObject({ url: `${base(host)}/liste`, crawlDelayMs: 5000 });
-    } finally {
-      await session.close();
-    }
-  });
-
-  it('Content-Signal ai-train=no : affiché dans le rapport, n’arrête rien, n’atteint jamais un prompt', async () => {
+  it('Content-Signal ai-train=no (en-têtes) : affiché dans le rapport, n’arrête rien, n’atteint jamais un prompt', async () => {
     const host = 'zz_test_content_signal.localhost';
-    const { gate, session } = trial();
-    try {
-      const report = await buildAccessReport({ url: `${base(host)}/liste`, gate, probe: sessionAccessProbe(session), signal });
-      expect(report.verdict.proceed).toBe(true);
-      expect(report.signals).toEqual(
-        expect.arrayContaining([
-          { kind: 'content_signal', value: 'ai-train=no, search=yes, ai-input=no', source: 'robots' },
-          { kind: 'content_signal', value: 'ai-train=no, search=yes, ai-input=no', source: 'header' },
-          { kind: 'content_usage', value: 'train-ai=n', source: 'header' },
-          { kind: 'tdm_reservation', value: '1', source: 'header' },
-        ]),
-      );
-      expect(accessReportView(report).signal).toBe('review');
-      const facts = JSON.stringify(accessFactsForPrompt(report));
-      expect(facts).not.toMatch(/ai-train|train-ai|search=yes|tdm/);
-      expect(accessFactsForPrompt(report).usage_signals_present).toBe(true);
-      // Le signal ne bloque pas : la collecte se fait.
-      const out = await runFetchExecutor(session, { spec: spec(host, '/liste'), input: {}, signal, access: gate.access });
-      expect(out.ok).toBe(true);
-    } finally {
-      await session.close();
-    }
+    const report = await buildAccessReport({ url: `${base(host)}/liste`, probe: sessionAccessProbe(session), signal });
+    expect(report.verdict.proceed).toBe(true);
+    expect(report.signals).toEqual([
+      { kind: 'content_signal', value: 'ai-train=no, search=yes, ai-input=no', source: 'header' },
+      { kind: 'content_usage', value: 'train-ai=n', source: 'header' },
+      { kind: 'tdm_reservation', value: '1', source: 'header' },
+    ]);
+    expect(accessReportView(report).signal).toBe('review');
+    const facts = JSON.stringify(accessFactsForPrompt(report));
+    expect(facts).not.toMatch(/ai-train|train-ai|search=yes|tdm/);
+    expect(accessFactsForPrompt(report).usage_signals_present).toBe(true);
+    // Le signal ne bloque pas : la collecte se fait.
+    const out = await runFetchExecutor(session, { spec: spec(host, '/liste'), input: {}, signal });
+    expect(out.ok).toBe(true);
+    expect((await paths(host))['/robots.txt']).toBeUndefined();
   });
 
   it('réponse 402 avec crawler-price : payment_required, action_requise, prix affiché, aucun paiement', async () => {
     const host = 'zz_test_payment_402.localhost';
-    const { gate, session } = trial();
-    try {
-      const report = await buildAccessReport({ url: `${base(host)}/catalogue`, gate, probe: sessionAccessProbe(session), signal });
-      expect(report.payment).toEqual({ required: true, offer: 'USD 0.01' });
-      expect(report.verdict).toMatchObject({ proceed: false, status: 'action_requise', failure: { failure_class: 'payment_required', retryable: false } });
-      if (!report.verdict.proceed) expect(report.verdict.message).toContain('prix USD 0.01');
-      expect(accessReportView(report)).toMatchObject({ payment_offer: 'USD 0.01', signal: 'review' });
-      // Une seule requête vers la page payante (la sonde du rapport), aucune autre tentative, aucun paiement.
-      expect((await paths(host))['/catalogue']).toBe(1);
-      const out = await runFetchExecutor(session, { spec: spec(host, '/catalogue'), input: {}, signal, access: gate.access });
-      expect(out).toMatchObject({ ok: false, failure: { failure_class: 'payment_required' } });
-      if (!out.ok) expect(failureRoute(out.failure.failure_class)).toMatchObject({ next: 'action_required', agent: false, status: 'action_requise' });
-    } finally {
-      await session.close();
-    }
-  });
-
-  it('cache par origine partagé entre essais (24 h au plus) : robots.txt lu une fois', async () => {
-    const host = 'zz_test_robots.localhost';
-    const cache = new RobotsCache();
-    for (let i = 0; i < 3; i++) {
-      const { gate, session } = trial({ cache });
-      expect((await gate.check(`${base(host)}/prive/x`)).allowed).toBe(false);
-      await session.close();
-    }
-    expect((await paths(host))['/robots.txt']).toBe(1);
+    const report = await buildAccessReport({ url: `${base(host)}/catalogue`, probe: sessionAccessProbe(session), signal });
+    expect(report.payment).toEqual({ required: true, offer: 'USD 0.01' });
+    expect(report.verdict).toMatchObject({ proceed: false, status: 'action_requise', failure: { failure_class: 'payment_required', retryable: false } });
+    if (!report.verdict.proceed) expect(report.verdict.message).toContain('prix USD 0.01');
+    expect(accessReportView(report)).toMatchObject({ payment_offer: 'USD 0.01', signal: 'review' });
+    // Une seule requête vers la page payante (la sonde du rapport), aucune autre tentative, aucun paiement.
+    expect((await paths(host))['/catalogue']).toBe(1);
+    const out = await runFetchExecutor(session, { spec: spec(host, '/catalogue'), input: {}, signal });
+    expect(out).toMatchObject({ ok: false, failure: { failure_class: 'payment_required' } });
+    if (!out.ok) expect(failureRoute(out.failure.failure_class)).toMatchObject({ next: 'action_required', agent: false, status: 'action_requise' });
   });
 });

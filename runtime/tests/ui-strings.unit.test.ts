@@ -156,7 +156,7 @@ describe('assert_ui_strings_no_forbidden_words', () => {
   test('les textes du panneau « Bloquée » et du bandeau « Action requise » sont couverts (clés présentes dans les deux langues)', () => {
     for (const entries of Object.values(locales)) {
       const keys = new Set(entries.map(([key]) => key));
-      for (const key of ['blocked.title', 'blocked.what.protection', 'blocked.why.protection', 'blocked.todo.heading', 'action.challenge_in_tunnel.body', 'action.account_limit.body', 'reason.blocked_by_protection', 'reason.forbidden', 'reason.robots_disallowed']) {
+      for (const key of ['blocked.title', 'blocked.what.protection', 'blocked.why.protection', 'blocked.todo.heading', 'action.challenge_in_tunnel.body', 'action.account_limit.body', 'reason.blocked_by_protection', 'reason.forbidden', 'blockedPanel.why.forbidden']) {
         expect(keys.has(key), key).toBe(true);
       }
     }

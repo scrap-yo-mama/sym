@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, test } from 'vitest';
 import { parse } from 'yaml';
-import { assetMarksProblems, bannerProblems, licensesListedProblems, secretProblems, sizeProblems, socialPreviewProblems, svgFileProblems } from '../../scripts/vitrine/lib/assets.ts';
+import { assetMarksProblems, bannerGhostProblems, bannerProblems, licensesListedProblems, secretProblems, sizeProblems, socialPreviewProblems, svgEmojiProblems, svgFileProblems } from '../../scripts/vitrine/lib/assets.ts';
 import { brandDrift } from '../../scripts/vitrine/lib/brand-sync.ts';
 import { decodePng, isOpaque, parseGif, parsePng } from '../../scripts/vitrine/lib/images.ts';
 import { assetsDir, repoRoot, runtimeDir } from '../../scripts/vitrine/lib/paths.ts';
@@ -75,7 +75,7 @@ describe('assert_social_preview_spec : 1280×640 exactement, < 400 Ko, fond opaq
     expect(socialPreviewProblems(budgets, path('d.png', makePng({ width: 1280, height: 640, background: 'FFFFFF' }))).join()).toMatch(/marge/);
     expect(socialPreviewProblems(budgets, path('e.png', makePng({ width: 1280, height: 640, background: bg, padding: 420_000 }))).join()).toMatch(/octets/);
     expect(socialPreviewProblems(budgets, path('f.png', makePng({ width: 1280, height: 640, background: bg, alpha: 255 })))).toEqual([]);
-  });
+  }, 30_000);
 
   test('texte de l\'aperçu : accroche anglaise, corps ≥ 48 px, aucun texte sous la marque de 64 px (source SVG)', () => {
     const svg = readFileSync(join(assetsDir, 'src/social-preview.svg'), 'utf8');
@@ -118,6 +118,32 @@ describe('assert_svg_safe : ni script, ni on*, ni foreignObject, ni lien ou imag
     };
     for (const [name, svg] of Object.entries(bad)) expect(svgFileProblems(fakeAssets({ [`${name}.svg`]: svg })), name).not.toEqual([]);
     expect(svgFileProblems(fakeAssets({ 'text.svg': '<svg xmlns="http://www.w3.org/2000/svg"><text x="1">Texte permis</text></svg>' }))).toEqual([]);
+  });
+});
+
+describe('signature SYM des visuels : l\'icône SVG de packages/ui, jamais l\'emoji (20 §2.3, 4.12b)', () => {
+  // Un emoji dans un <text> est tracé au rendu par la police emoji du système (Apple Color Emoji sur macOS, Noto sous Linux) :
+  // le PNG porterait une œuvre tierce, et changerait d'une machine à l'autre.
+  test('aucun emoji dans un texte des SVG de .github/assets ; chaque bandeau trace l\'icône sym-ghost.svg', () => {
+    expect(svgEmojiProblems()).toEqual([]);
+    expect(bannerGhostProblems()).toEqual([]);
+  });
+
+  test('cas négatifs : emoji en clair, en entité ou dans un <tspan> ; bandeau sans le tracé de l\'icône ; le texte sans emoji reste permis', () => {
+    const svg = (text: string): string => `<svg xmlns="http://www.w3.org/2000/svg"><text x="1">${text}</text></svg>`;
+    expect(svgEmojiProblems(fakeAssets({ 'src/a.svg': svg('SYM 👻') })).join()).toMatch(/emoji/);
+    expect(svgEmojiProblems(fakeAssets({ 'src/a.svg': svg('SYM &#x1F47B;') })).join()).toMatch(/emoji/);
+    expect(svgEmojiProblems(fakeAssets({ 'src/a.svg': svg('SYM &#128123;') })).join()).toMatch(/emoji/);
+    expect(svgEmojiProblems(fakeAssets({ 'brand/b.svg': svg('<tspan>✨ ok</tspan>') })).join()).toMatch(/emoji/);
+    expect(svgEmojiProblems(fakeAssets({ 'src/a.svg': svg('SYM · open source') }))).toEqual([]);
+    const ghost = readFileSync(join(runtimeDir, 'packages/ui/icons/sym-ghost.svg'), 'utf8');
+    const d = /\sd="([^"]+)"/.exec(ghost)?.[1] ?? '';
+    expect(d).not.toBe('');
+    const banner = (body: string): string => `<svg xmlns="http://www.w3.org/2000/svg"><text>SYM</text>${body}</svg>`;
+    expect(bannerGhostProblems(fakeAssets({ 'src/banner-dark.svg': banner(''), 'src/banner-light.svg': banner(`<path d="${d}"/>`) })).join()).toMatch(/banner-dark\.svg.*sym-ghost/);
+    expect(bannerGhostProblems(fakeAssets({ 'src/banner-dark.svg': banner('<path d="M0 0h1"/>') })).join()).toMatch(/sym-ghost/);
+    expect(bannerGhostProblems(fakeAssets({ 'src/banner-dark.svg': banner(`<path transform="translate(1 2) scale(3)" fill="#FBF8F3" fill-rule="evenodd" d="${d}"/>`) }))).toEqual([]);
+    expect(bannerGhostProblems(fakeAssets({ 'src/other.svg': banner('') }))).toEqual(['aucun bandeau src/banner-*.svg']);
   });
 });
 

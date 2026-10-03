@@ -228,8 +228,6 @@
     "geo_restriction": "Content unavailable from this country; trying the proxy of the country allowed by the API.",
     "blocked_by_protection": "The site refuses automated access. Scrapyomama stops.",
     "forbidden": "The site refuses access to this address. The IP address does not change.",
-    "robots_disallowed": "The site asks robots not to visit this page.",
-    "robots_unreachable": "robots.txt cannot be reached: to be safe, nothing is collected.",
     "payment_required": "The site asks for a payment: {offre}.",
     "auth_required": "{domaine} asks for a sign-in.",
     "cookie_expired": "The session of {domaine} has expired.",
@@ -263,8 +261,6 @@
     "rate_limited": "Site asked to slow down",
     "forbidden": "Access refused",
     "blocked_by_protection": "Automated access refused",
-    "robots_disallowed": "Disallowed by robots.txt",
-    "robots_unreachable": "robots.txt unreachable",
     "payment_required": "Payment required",
     "auth_required": "Sign-in required",
     "account_limit": "Account limit",
@@ -363,10 +359,7 @@
     "log": {
       "title": "Trials",
       "empty": "No trial yet.",
-      "robotsAllowed": "robots.txt read: path allowed",
-      "robotsDisallowed": "robots.txt read: path disallowed",
-      "robotsAbsent": "robots.txt not found: no rule applies",
-      "robotsUnreachable": "robots.txt unreachable: to be safe, nothing is collected",
+      "accessProbed": "Access report: page probed",
       "signal": "Usage signal {kind}: {value}",
       "llmsTxt": "llms.txt found",
       "officialApi": "Official route found: {url}",
@@ -512,14 +505,12 @@
       "heading": "What happened",
       "protection": "On {date}, trial {n} (“{execution}”, {network}), {domain} answered with a verification page. No other trial was started. Investigation cost: {cost}.",
       "forbidden": "On {date}, trial {n} (“{execution}”, {network}), {domain} answered with an access refusal. No other trial was started. Investigation cost: {cost}.",
-      "robots": "{domain} asks robots not to visit this page. No request was sent to this path. Investigation cost: {cost}.",
       "generic": "{domain} refused access. No other trial was started. Investigation cost: {cost}."
     },
     "why": {
       "heading": "Why we stop",
       "protection": "This is the decision of the site. Scrapyomama does not answer in place of a person and does not change IP address after a refusal.",
-      "forbidden": "The site refuses access to this address. The IP address does not change after a refusal. Check your access rights or contact the publisher.",
-      "robots": "This site asks robots not to visit this page. Scrapyomama respects this rule."
+      "forbidden": "The site refuses access to this address. The IP address does not change after a refusal. Check your access rights or contact the publisher."
     },
     "todo": {
       "heading": "What you can do",
@@ -570,6 +561,16 @@
       "body": "The run is stopped: {domain} shows a verification in your browser. Nothing was sent on this page and nothing will be. You can start a new run later; Scrapyomama never answers a verification.",
       "button": "Investigate again"
     },
+    "instance_contact_missing": {
+      "title": "Set the robot contact",
+      "body": "The operator contact is required before the first investigation. Set it in Settings > Robot identity, or with the INSTANCE_CONTACT variable, then investigate again.",
+      "button": "Open Settings > Robot identity"
+    },
+    "llm_price_missing": {
+      "title": "Enter the price of model {model} in Settings > AI models",
+      "body": "The investigation is stopped: no price is known for model {model}, so it was not called and nothing was spent. Enter its price per million tokens in Settings > AI models, then investigate again.",
+      "button": "Open Settings > AI models"
+    },
     "secret_unreadable": {
       "title": "A saved key is unreadable",
       "body": "Enter the key again in the settings, then test it.",
@@ -583,7 +584,8 @@
       "title": "{platform} flagged a limit on your account",
       "body": "{platform} flagged a limit or a restriction. The run is stopped and no retry is planned. Read the messages of the platform. Only the platform decides on a restriction. Reminder: automated extraction may be forbidden by its terms, even with a single account; you remain responsible."
     },
-    "resuming": "Resuming the investigation…"
+    "resuming": "Resuming the investigation…",
+    "modelUnnamed": "used"
   },
   "runs": {
     "title": "All runs",
@@ -722,6 +724,21 @@
         "validated": "Validated model (bench N2, {date})",
         "notValidated": "Not validated",
         "hint": "Measured by the evaluation bench; read-only."
+      },
+      "price": {
+        "title": "Model prices",
+        "intro": "Without a price, a model is never called: nothing is guessed and nothing is counted as 0. Enter the provider price per million tokens.",
+        "none": "No model in use yet: choose one in \"Model per role\" below.",
+        "in": "Input price",
+        "out": "Output price",
+        "cached": "Cached input price (optional)",
+        "unit": "USD per million tokens.",
+        "known": "Known price (source noted {date}); you can change it.",
+        "toValidate": "Price to validate: none is known for this model, enter it yourself.",
+        "incomplete": "Enter both the input and the output price of a model, or leave both empty.",
+        "invalid": "A price must be a number, zero or more.",
+        "roleMissing": "Enter the price of model {model} in the table above: without it no investigation can run.",
+        "testMissing": "The test passed, but model {model} has no price: it cannot be called until you enter it in the table above."
       }
     },
     "proxies": {
@@ -838,9 +855,9 @@
   },
   "access": {
     "signal": {
-      "allowed": "Access allowed",
+      "allowed": "Nothing to report",
       "review": "To review",
-      "disallowed": "Access disallowed",
+      "disallowed": "Refusal reported (older report)",
       "unknown": "Access not checked"
     }
   },
@@ -861,14 +878,14 @@
     "geo_restriction": "Content unavailable from this country; trying with the proxy of the country allowed by the API.",
     "blocked_by_protection": "The site refuses automated access. Scrapyomama stops.",
     "forbidden": "The site refuses access to this address. The IP address does not change.",
-    "robots_disallowed": "The site asks robots not to visit this page.",
-    "robots_unreachable": "robots.txt is unreachable: as a precaution, nothing is collected.",
     "payment_required": "The site asks for a payment: {offer}.",
     "auth_required": "{domain} asks you to sign in.",
     "cookie_expired": "The session on {domain} has expired.",
     "session_device_bound": "The session on {domain} is tied to your device and cannot be copied to the server.",
     "challenge_in_tunnel": "A check appeared in your browser. The run is paused.",
     "secret_unreadable": "A stored key is unreadable.",
+    "instance_contact_missing": "The robot contact is not set: it is required before the first investigation.",
+    "llm_price_missing": "The price of the model is not set: enter it in Settings > AI models.",
     "account_limit": "The platform flagged a limit on your account. No automatic retry.",
     "session_owner_required": "This API uses its owner's session.",
     "llm_refused": "The model refused the request; no automatic fallback.",
@@ -879,6 +896,11 @@
     "proxy_not_configured": "A proxy is required for {country}.",
     "tunnel_offline": "Your computer is not connected.",
     "not_found": "The page no longer exists (404 or 410).",
+    "repair_not_validated": "Repair conforms but was not validated without an agent; v{a} kept.",
+    "write_step_broken": "A step that acts on the site broke; nothing is repaired on its own.",
+    "step_cascade": "{n} steps broke: a new investigation is needed.",
+    "not_compilable": "No strategy replays without an agent. The “instructed agent” mode exists, with a cost on every run.",
+    "session_step_broken": "A step broke on a signed-in page; no agent acts there on its own.",
     "field_constant": "Field {field} has the same value on every item.",
     "pattern_shift": "The format of field {field} changed ({p} % of items).",
     "sentinel_values": "{p} % of the values of {field} are empty or placeholders.",
@@ -904,17 +926,29 @@
     "geo_restriction": "Geographic restriction",
     "blocked_by_protection": "Automated access refused",
     "forbidden": "Access refused",
-    "robots_disallowed": "Page disallowed by robots.txt",
-    "robots_unreachable": "robots.txt unreachable",
     "payment_required": "Payment requested",
     "auth_required": "Sign-in required",
     "cookie_expired": "Session expired",
     "session_device_bound": "Session tied to the device",
     "challenge_in_tunnel": "Check shown in the browser",
+    "instance_contact_missing": "Robot contact missing",
+    "llm_price_missing": "Model price missing",
     "secret_unreadable": "Key unreadable",
     "account_limit": "Account limit",
     "session_owner_required": "Owner session required",
-    "llm_refused": "Request refused by the model"
+    "llm_refused": "Request refused by the model",
+    "repair_not_validated": "Repair not validated",
+    "write_step_broken": "Acting step broken",
+    "step_cascade": "Several steps broken",
+    "not_compilable": "No replayable strategy",
+    "session_step_broken": "Step broken on a signed-in page"
+  },
+  "reasonAction": {
+    "repair_not_validated": "See the repair",
+    "write_step_broken": "Open the draft",
+    "step_cascade": "Investigate again",
+    "not_compilable": "See the instructed agent mode",
+    "session_step_broken": "Open the draft"
   },
   "failureClass": {
     "transient": "Temporary error",
@@ -922,8 +956,6 @@
     "rate_limited": "Site rate limit",
     "forbidden": "Access refused",
     "blocked_by_protection": "Automated access refused",
-    "robots_disallowed": "Page disallowed by robots.txt",
-    "robots_unreachable": "robots.txt unreachable",
     "payment_required": "Payment requested",
     "auth_required": "Sign-in required",
     "account_limit": "Account limit",
@@ -962,7 +994,12 @@
     "forbidden": "You do not have the rights for this action.",
     "conflict": "This action is not possible in the current state of the API.",
     "invalid_input": "The values entered do not match the input schema.",
-    "queue_full": "The queue is full. Try again in a moment."
+    "queue_full": "The queue is full. Try again in a moment.",
+    "human_confirmation_required": "This confirmation is made from the console, by a person.",
+    "sha_mismatch": "The steps changed since they were shown. Read them again before confirming.",
+    "instructed_steps_unconfirmed": "Confirm the instructed steps first: the instructed agent stays off.",
+    "compilable": "A strategy that replays without an agent exists: the instructed agent stays off.",
+    "no_instructed_steps": "This API has no instructed steps: the instructed agent stays off."
   },
   "actions": {
     "launch": "Run",
@@ -1085,7 +1122,6 @@
       "title": "What happened",
       "attempt": "On {date}, attempt {n} (“{execution}”, {network}), {domain} answered with {answer}.",
       "generic": "{domain} answered with {answer}.",
-      "robots": "This site asks robots not to visit this page. Scrapyomama respects this rule.",
       "forbidden": "The site refuses access to this address. The IP address does not change after a refusal. Check your access rights or contact the publisher."
     },
     "answer": {
@@ -1097,7 +1133,6 @@
     "why": {
       "title": "Why we stop",
       "protection": "This is the site's decision. Scrapyomama does not answer in place of a person and does not change IP address after a refusal.",
-      "robots": "This is the rule the site declares in its robots.txt file. Scrapyomama always respects it.",
       "forbidden": "This is the site's decision. Scrapyomama does not change IP address after a refusal."
     },
     "todo": {
@@ -1114,6 +1149,11 @@
       "template": "Hello,\n\nI would like to access the data of {domain} in an automated way, while respecting your access rules. Is there an official API, an export or a partnership agreement?\n\nThank you in advance."
     },
     "whyStop": "Why this stop?"
+  },
+  "instanceContactBanner": {
+    "title": "Set the robot contact before your first API",
+    "text": "The operator contact is required before the first investigation: without it an investigation stops at once. A web address (https://…) or an e-mail address is enough, or the INSTANCE_CONTACT variable of the server.",
+    "link": "Open Settings > Robot identity"
   },
   "actionRequired": {
     "resuming": "Resuming the investigation…",
@@ -1142,6 +1182,16 @@
       "text": "Nothing was sent on this page and nothing will be. You can run again later; Scrapyomama never answers a verification.",
       "button": "Try again later (new run)",
       "verify": "No automatic resume: only a new action from you starts a run."
+    },
+    "instanceContact": {
+      "title": "Set the robot contact",
+      "button": "Open Settings > Robot identity",
+      "verify": "Once the contact is saved, investigate again: nothing was sent and nothing was spent."
+    },
+    "llmPrice": {
+      "title": "Enter the model price in Settings > AI models",
+      "button": "Open Settings > AI models",
+      "verify": "Once the price is saved, investigate again: no model was called and nothing was spent."
     },
     "secret": {
       "title": "A stored key is unreadable",
@@ -1192,7 +1242,9 @@
       "unknown": "Cost not estimated."
     },
     "started": "Run started.",
-    "followRun": "Follow the run"
+    "followRun": "Follow the run",
+    "instructed": "Instructed agent: an agent works on every run. Estimated cost of this run: {cost} at most.",
+    "instructedUnknown": "Instructed agent: an agent works on every run. Cost of this run not estimated."
   },
   "schemas": {
     "input": "Input schema",
@@ -1317,6 +1369,66 @@
     "absent": "absent",
     "relaunchUnavailable": "The input of this run cannot be read again. Run the API from the overview."
   },
+  "repairs": {
+    "show": "Repairs",
+    "runTitle": "Repairs of the run of {date}",
+    "title": "Repairs",
+    "caption": "Step repairs: step, level, outcome, cost, tokens and step diff",
+    "autoRepaired": "Repaired automatically",
+    "empty": "No step repair in this run.",
+    "total": "{n} repair, total cost {cost} | {n} repairs, total cost {cost}",
+    "noDiff": "No change",
+    "tokens": "{in} in, {out} out",
+    "tokensEstimated": "~{in} in, ~{out} out",
+    "columns": {
+      "step": "Step",
+      "level": "Level",
+      "outcome": "Outcome",
+      "cost": "Cost",
+      "tokens": "Tokens",
+      "diff": "Step diff"
+    },
+    "level": {
+      "1": "Level 1: recorded locators, no AI",
+      "2": "Level 2: agent on the step",
+      "3": "Level 3: step segment"
+    },
+    "outcome": {
+      "replayed": "Replayed as is",
+      "alternate": "Fallback locator",
+      "agent_repaired": "Repaired by the agent",
+      "failed": "Failed"
+    },
+    "op": {
+      "add": "Added",
+      "remove": "Removed",
+      "replace": "Replaced"
+    }
+  },
+  "instructed": {
+    "title": "Instructed agent",
+    "intro": "No strategy of this API replays without an agent. In “instructed agent” mode, an agent follows the steps below on every run, with a cost on every run. This mode never turns on by itself.",
+    "cost": "Estimated cost: {cost} per run, at most.",
+    "costUnknown": "Cost per run not estimated.",
+    "stepsTitle": "Instructed steps",
+    "untrusted": "These intents were written by the AI from the pages it read: check them before confirming.",
+    "noPost": "No exit condition.",
+    "post": {
+      "url_changed": "The address changes",
+      "url_contains": "The address contains",
+      "element_present": "Element present",
+      "element_absent": "Element absent",
+      "text_present": "Text present"
+    },
+    "confirmHint": "The mode can only turn on after you confirm these exact steps.",
+    "confirm": "Confirm these steps",
+    "confirmedAt": "Steps confirmed on {date}.",
+    "enable": "Turn on the instructed agent",
+    "on": "On",
+    "off": "Off",
+    "label": "Instructed agent · {cost} per run",
+    "labelUnknown": "Instructed agent · cost per run not estimated"
+  },
   "statusTab": {
     "timeline": "Status timeline",
     "empty": "No transition yet.",
@@ -1365,17 +1477,6 @@
     "noReport": "No access report for this API yet.",
     "summary": "Summary",
     "checkedAt": "Checked on {date}",
-    "robots": "robots.txt",
-    "robotsStatus": "Status",
-    "robotsFetched": "Read on",
-    "robotsRule": "Rule applied",
-    "robotsStatuses": {
-      "allowed": "Allows the path",
-      "disallowed": "Disallows the path",
-      "absent": "Absent (no rule)",
-      "unreachable": "Unreachable (as a precaution, nothing is collected)"
-    },
-    "robotsAlways": "robots.txt is always respected: no setting can ignore it.",
     "signals": "Usage signals",
     "signalsHint": "These signals are shown as data: they block nothing and are never passed to the model as instructions.",
     "noSignals": "No signal detected.",
@@ -1425,7 +1526,7 @@
     "kinds": {
       "investigation_started": "Investigation started.",
       "phase_started": "Phase: {phase}.",
-      "access_report": "Access report: robots.txt, {robots}.",
+      "access_report": "Access report: page probed.",
       "schema_proposed": "Output schema proposed.",
       "attempt_finished": "Attempt {n} finished: {execution}, {network}, result {result}.",
       "status_changed": "Status: {to}.",
@@ -1470,7 +1571,7 @@
       "later": "Go to the console"
     },
     "contact": "Operator contact",
-    "contactHint": "Optional here, needed before the first investigation. A web address (https://…) or an e-mail address. The robot announces it only if you turn on identification in Settings. You can change it there later."
+    "contactHint": "Required before the first investigation; you can enter it later in Settings > Robot identity. A web address (https://…) or an e-mail address. The robot announces it only if you turn on identification in Settings. You can change it there later."
   },
   "account": {
     "title": "My account",
@@ -1983,7 +2084,6 @@
       "brief_stale": "old, not checked",
       "brief_unverifiable": "pointer that cannot be checked",
       "brief_host_ignored": "another site than the API: ignored",
-      "brief_robots_skipped": "path disallowed by robots.txt: no request",
       "brief_duplicate": "duplicate of another hint",
       "brief_invalid_item": "value outside the format of its kind",
       "brief_over_budget": "beyond the check limit",

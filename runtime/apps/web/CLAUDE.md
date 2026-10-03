@@ -41,7 +41,7 @@ Tests nommés présents dans ce dossier (table : `runtime/tests/invariants.json`
 - Contenu et i18n : `assert_i18n_key_parity`, `assert_i18n_fallback_english`, `assert_ui_strings_no_forbidden_words`,
   `assert_reason_codes_stable`, `assert_reason_visible_without_hover`.
 - Sécurité et comptes : `assert_no_csp_violation`, `assert_secret_masked`, `assert_mfa_enforced`, `assert_password_change_reauth`,
-  `assert_invitation_single_use`, `assert_no_impersonation`, `assert_admin_metadata_only`, `assert_no_robots_override_ui`,
+  `assert_invitation_single_use`, `assert_no_impersonation`, `assert_admin_metadata_only`, `assert_robots_not_gating`,
   `assert_blocked_panel_no_tunnel_link`, `assert_fonts_self_hosted`.
 - Parcours : `assert_cost_estimate_before_run`, `assert_budget_and_stop_controls`, `assert_diff_three_levels`,
   `assert_revert_shows_preview`, `assert_sse_banner_and_resume_last_event_id`, `assert_stale_is_flag`.

@@ -172,7 +172,6 @@ export const BRIEF_REASONS = [
   'brief_stale',
   'brief_unverifiable',
   'brief_host_ignored',
-  'brief_robots_skipped',
   'brief_duplicate',
   'brief_invalid_item',
   'brief_over_budget',

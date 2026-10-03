@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Récit d'une enquête (`investigation_events`, 03 : source unique du SSE, de la progression MCP et du replay), écrit
 // comme le propriétaire (RLS, INV12). Étape 0 (tâche 1.11, migration 0015) : l'événement `access_report` précède tout
-// essai, et un rapport qui arrête l'enquête (robots.txt interdit ou injoignable, 402) interdit tout essai ensuite ;
+// essai, et un rapport qui arrête l'enquête (refus du site, 402) interdit tout essai ensuite ;
 // la base le refuse (`AccessReportFirstError`), quel que soit l'appelant (`assert_access_report_first`).
 import type pg from 'pg';
 import { withActor } from './rls.js';

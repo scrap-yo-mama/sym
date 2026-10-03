@@ -374,7 +374,7 @@ export interface paths {
         put?: never;
         /**
          * Importe une API exportée (16 § 6) ; aperçu sans écriture, puis confirm=true ; repasse toujours par l'enquête
-         * @description Sans `confirm=true` : aperçu (200), rien n'est écrit. Avec `confirm=true` : nouvelle API privée en `enquete`, enquête en file au stade `access_check` (rapport d'accès, robots.txt) puis `testing` de la stratégie importée (`created_by: import`) ; planifications recréées désactivées, cibles d'alerte à configurer. Les champs inconnus sont ignorés (`ignored_fields`) ; un `$ref` distant (400 `remote_ref`), une empreinte fausse (400 `integrity_mismatch`) ou une version de format d'une autre majeure (400 `unsupported_format`) sont refusés. Un `max_cost_usd` ou un `budget_daily_usd` du fichier au-dessus des plafonds de l'instance (`MAX_COST_USD_PER_RUN`, `USER_BUDGET_DAILY_USD`) est refusé de même (400 `cost_cap_exceeded`), aperçu compris.
+         * @description Sans `confirm=true` : aperçu (200), rien n'est écrit. Avec `confirm=true` : nouvelle API privée en `enquete`, enquête en file au stade `access_check` (rapport d'accès) puis `testing` de la stratégie importée (`created_by: import`) ; planifications recréées désactivées, cibles d'alerte à configurer. Les champs inconnus sont ignorés (`ignored_fields`) ; un `$ref` distant (400 `remote_ref`), une empreinte fausse (400 `integrity_mismatch`) ou une version de format d'une autre majeure (400 `unsupported_format`) sont refusés. Un `max_cost_usd` ou un `budget_daily_usd` du fichier au-dessus des plafonds de l'instance (`MAX_COST_USD_PER_RUN`, `USER_BUDGET_DAILY_USD`) est refusé de même (400 `cost_cap_exceeded`), aperçu compris.
          */
         post: operations["importApi"];
         delete?: never;
@@ -419,7 +419,7 @@ export interface paths {
         options?: never;
         head?: never;
         /**
-         * Modifie description, politiques, schémas (→ ré-enquête), exposition MCP ; aucun réglage robots.txt (INV11)
+         * Modifie description, politiques, schémas (→ ré-enquête), exposition MCP
          * @description Mode « SYM ne lâche pas » (`persistence_mode`, `persistence_budget_usd`, D-49) : décidé avant tout autre champ ; refusé, rien n'est écrit. Activer (ou changer le plafond d'un mode actif) par une clé d'API : `403 human_confirmation_required` ; API sans version courante, mémoire des refus absente ou plafond effectif ≤ 0 : `409 persistence_not_eligible` (`reason`) ; les deux avec `what_to_do`. Désactiver est permis à toute clé. Un `max_cost_usd` ou un `budget_daily_usd` au-dessus des plafonds de l'instance (`MAX_COST_USD_PER_RUN`, `USER_BUDGET_DAILY_USD`) : `400 cost_cap_exceeded`.
          */
         patch: operations["updateApi"];
@@ -561,6 +561,46 @@ export interface paths {
          * @description Seule une version qui a été courante se rétablit (400 `version_not_revertable`) ; version courante et transition sont écrites dans la même transaction (INV3).
          */
         post: operations["revertStrategyVersion"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/apis/{slug}/instructed-steps/confirm": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Confirme les étapes instruites affichées (acte humain, session console seulement)
+         * @description Confirme les étapes instruites de la version `version` dont l'empreinte est `sha256` (celles que la console a affichées). Hors session de console (clé d'API, outil MCP) : `403 human_confirmation_required`. Étapes changées depuis l'affichage : `409 sha_mismatch`. Version sans étapes instruites : `409 no_instructed_steps`.
+         */
+        post: operations["confirmInstructedSteps"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/apis/{slug}/instructed-mode": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Active ou désactive le mode « agent instruit » (opt-in explicite, jamais par défaut)
+         * @description L'activation exige une API non compilable dont les étapes instruites EXACTES sont confirmées ; sinon `409` et `instructed_mode` reste faux : `instructed_steps_unconfirmed`, `compilable` (une stratégie rejouable sans agent existe) ou `no_instructed_steps`. La désactivation est toujours acceptée.
+         */
+        put: operations["setInstructedMode"];
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -1939,9 +1979,9 @@ export interface components {
         RunState: "queued" | "running" | "waiting_tunnel" | "succeeded" | "failed" | "cancelled" | "skipped_tunnel_offline" | "skipped_window" | "skipped_quota" | "skipped_status" | "skipped_overlap";
         /** @enum {string} */
         RunOutcome: "clean" | "degraded" | "failed";
-        /** @description Classe d'échec fermée (04b § 1), ou famille `llm_*` (08 § 1). Code stable, jamais localisé. */
+        /** @description Classe d'échec fermée (04b § 1), ou famille `llm_*` (08 § 1). Code stable, jamais localisé. `robots_disallowed` et `robots_unreachable` sont des valeurs historiques (D-91) : plus produites, encore lisibles sur les runs anciens. */
         FailureClass: string;
-        /** @description Code de raison stable (06 § 4.2 : `retried`, `escalated`, `repaired`, `stale`, `reverted`, `cookie_expired`…), traduit par la console ; jamais une phrase. */
+        /** @description Code de raison stable (06 § 4.2 : `retried`, `escalated`, `repaired`, `stale`, `reverted`, `cookie_expired`… ; reprise par étape, 19b § 3 : `repair_not_validated`, `write_step_broken`, `step_cascade`, `not_compilable`, `session_step_broken`), traduit par la console ; jamais une phrase. */
         ReasonCode: string;
         /** @description Phrase générée côté serveur, transmise en code et paramètres (traduite par la console, 06 § 4.1). */
         ReasonMessage: {
@@ -1989,10 +2029,12 @@ export interface components {
                 country?: string;
             };
         };
-        /** @description `robots` n'a qu'une valeur (INV11) : aucun réglage ne l'ignore. */
         AccessPolicy: {
-            /** @constant */
-            robots: "respect";
+            /**
+             * @deprecated
+             * @description Champ retiré (D-91), toléré et ignoré ; présent seulement sur les politiques écrites avant.
+             */
+            robots?: unknown;
             /** Format: uuid */
             report_id?: string | null;
             user_agent_contact?: string;
@@ -2009,11 +2051,15 @@ export interface components {
             /** Format: date-time */
             checked_at: string;
             /**
-             * @description Pastille Accès du catalogue (vert, orange, rouge).
+             * @description Pastille Accès du catalogue (vert, orange). `disallowed` est une valeur historique (D-91), sur les rapports anciens.
              * @enum {string}
              */
             signal: "allowed" | "review" | "disallowed";
-            robots: {
+            /**
+             * @deprecated
+             * @description Section historique (D-91), présente seulement sur les rapports produits avant ; plus produite.
+             */
+            robots?: {
                 /** @enum {string} */
                 status: "allowed" | "disallowed" | "absent" | "unreachable";
                 /** Format: date-time */
@@ -2109,9 +2155,49 @@ export interface components {
                 display_name: string;
             } | null;
             recent_runs?: components["schemas"]["RunSummary"][];
+            /** @description Mode « agent instruit » (19 § 4, tâche 2.13) : opt-in explicite par API, jamais par défaut, jamais vrai sans étapes instruites confirmées par un humain. Un agent travaille à chaque run (coût affiché avant chaque lancement). Absent : faux. */
+            instructed_mode?: boolean;
+            /** @description Étapes instruites de la version courante ; null quand la version n'en a pas. */
+            instructed?: components["schemas"]["InstructedSteps"] | null;
             retention_days?: number | null;
             /** Format: date-time */
             created_at?: string;
+        };
+        /** @description Étapes instruites de la version courante (19 § 4, 19b § 1) : intentions et `post`, sans cible. Les `intent` sont du contenu NON FIABLE (écrit par un LLM qui a lu des pages) : affichés comme texte brut, jamais interprétés. La confirmation humaine porte `version` et `sha256` (empreinte des étapes affichées). */
+        InstructedSteps: {
+            version: number;
+            /** @enum {string} */
+            compilable: "yes" | "unknown" | "no";
+            steps: components["schemas"]["InstructedStep"][];
+            sha256: string;
+            /** Format: uuid */
+            confirmed_by: string | null;
+            /** Format: date-time */
+            confirmed_at: string | null;
+            /** @description Coût estimé d'un run instruit (somme des budgets d'étape, plafond) ; null si inconnu. */
+            estimated_run_usd: number | null;
+        };
+        InstructedStep: {
+            id: string;
+            /** @description Intention nettoyée (200 caractères au plus), non fiable. */
+            intent: string;
+            post: components["schemas"]["StepPost"][];
+        };
+        /** @description Condition de sortie d'une étape (liste fermée, 19 § 4) ; immuable en réparation. */
+        StepPost: {
+            /** @enum {string} */
+            kind: "url_changed" | "url_contains" | "element_present" | "element_absent" | "text_present";
+            value?: string;
+            role?: string;
+            name?: string;
+        };
+        /** @description Confirmation humaine des étapes instruites affichées (version et empreinte reçues de la fiche). */
+        InstructedStepsConfirm: {
+            version: number;
+            sha256: string;
+        };
+        InstructedModeWrite: {
+            enabled: boolean;
         };
         /** @description Entrée de create_api (05 § 4.1). */
         ApiCreate: {
@@ -2224,6 +2310,10 @@ export interface components {
             brief_report?: components["schemas"]["BriefReportEntry"][];
             /** @description Récit du dossier en gabarits fermés (narrative.brief.*), sans texte du dossier. */
             brief_narrative?: string[];
+            /** @description État réel du run d'enquête à la réponse (UX-07) : en cours, ou terminé (`failed` avec `error`). */
+            run_state?: components["schemas"]["RunState"];
+            status?: components["schemas"]["ApiStatus"];
+            error?: components["schemas"]["RunError"];
         };
         /** @description Champs modifiables. Un schéma (`output_schema`, `input_schema`) ne change que par un brouillon puis une promotion (19 § 6, itération) : en place, 409 `draft_required`. `access_policy` n'est pas modifiable (INV11) ; une API avec session reste `private` (400 `session_api_private`). */
         ApiPatch: {
@@ -2298,7 +2388,7 @@ export interface components {
         ApiExportApi: {
             slug?: string;
             description: string;
-            /** @description Page de la demande d'enquête, rejouée à l'import (rapport d'accès, robots.txt). */
+            /** @description Page de la demande d'enquête, rejouée à l'import (rapport d'accès). */
             source_url: string;
             input_schema: {
                 [key: string]: unknown;
@@ -2474,6 +2564,13 @@ export interface components {
             state: components["schemas"]["RunState"];
             poll_after_seconds?: number | null;
         };
+        /** @description Cause nommée d'un run arrêté ou en échec (UX-04) : code stable (`instance_contact_missing`…), message lisible, marche à suivre pour l'agent (en anglais) et `retryable`. Absente quand la cause n'est pas nommée. */
+        RunError: {
+            code: components["schemas"]["ReasonCode"];
+            message: string;
+            what_to_do: string;
+            retryable: boolean;
+        };
         /** @description Enveloppe commune des sorties d'exécution (05 § 4.1), identique en MCP et en REST. */
         RunResult: {
             /** Format: uuid */
@@ -2490,6 +2587,7 @@ export interface components {
             next_cursor: string | null;
             degraded_reasons: components["schemas"]["ReasonCode"][];
             message: string;
+            error?: components["schemas"]["RunError"];
             next_action: components["schemas"]["NextAction"] | null;
             poll_after_seconds: number | null;
             timeline: {
@@ -2521,6 +2619,7 @@ export interface components {
             degraded_reasons: components["schemas"]["ReasonCode"][];
             failure_class: components["schemas"]["FailureClass"] | null;
             retryable?: boolean;
+            error?: components["schemas"]["RunError"];
             /** Format: date-time */
             created_at: string;
             /** Format: date-time */
@@ -2558,12 +2657,33 @@ export interface components {
             tokens?: components["schemas"]["Tokens"];
             /** @description Onglet Erreur (Où, Quoi, Pourquoi, Que faire) en codes stables ; absent pour l'admin sur un run d'autrui. */
             error?: components["schemas"]["ReasonMessage"] | null;
+            /** @description Étape reprise (`s3`…) ; null pour un essai de la cascade hors reprise par étape. */
+            step_id?: string | null;
+            /** @description Niveau de la reprise (1 localisateurs enregistrés sans LLM, 2 agent borné sur l'étape, 3 segment d'étapes). */
+            step_level?: (1 | 2 | 3) | null;
+            step_outcome?: components["schemas"]["StepOutcome"] | null;
+            /** @description Diff de l'étape (patch RFC 6902 borné à `/steps/i/target`, `/steps/i/target/alternates` ou l'insertion d'une étape) ; null sans changement. */
+            step_patch?: components["schemas"]["StepPatchOperation"][] | null;
+        };
+        /**
+         * @description Issue d'une reprise d'étape (19 § 4, `run_attempts.step_outcome`).
+         * @enum {string}
+         */
+        StepOutcome: "replayed" | "alternate" | "agent_repaired" | "failed";
+        /** @description Opération RFC 6902 d'un patch d'étape ; `value` absent pour `remove`. */
+        StepPatchOperation: {
+            /** @enum {string} */
+            op: "add" | "replace" | "remove";
+            path: string;
+            value?: unknown;
         };
         /** @description Détail d'un run (entité Run de 04b § 1) ; `metadata_only` pour l'admin face au run avec session d'autrui. */
         Run: components["schemas"]["RunSummary"] & {
             metadata_only: boolean;
             attempts: components["schemas"]["RunAttempt"][];
             tokens: components["schemas"]["Tokens"];
+            /** @description Le run a été réparé seul par la reprise par étape (badge « réparée automatiquement », 19 § 4). */
+            repaired_automatically?: boolean;
             trace_id?: string | null;
             /**
              * Format: date-time
@@ -2891,11 +3011,12 @@ export interface components {
                 top_p?: boolean;
             };
         };
+        /** @description USD par million de jetons ; nombres positifs ou nuls, `in` et `out` obligatoires (un prix négatif est refusé). */
         LlmPrice: {
-            in?: number;
+            in: number;
             in_cached?: number;
             in_cache_write?: number;
-            out?: number;
+            out: number;
             windows?: {
                 [key: string]: unknown;
             }[];
@@ -2937,8 +3058,9 @@ export interface components {
             base_url: string;
             timeout_ms?: number;
             max_retries?: number;
+            /** @description Modèles du fournisseur (au plus 50), indexés par identifiant. En écriture (`PUT /api/settings/llm`), la requête est FUSIONNÉE avec la table enregistrée, modèle par modèle puis clé par clé : un modèle ou une clé absents de la requête sont gardés (le prix survit à toute écriture qui ne le mentionne pas) ; `models[m].price: null` (ou `profile`, `extra_body`) retire cette clé ; `models[m]: null` retire le modèle entier. La table fusionnée est bornée à 50 modèles (sinon `too_many_models`, 400). */
             models?: {
-                [key: string]: components["schemas"]["LlmModel"];
+                [key: string]: components["schemas"]["LlmModel"] | null;
             };
         };
         LlmProvider: components["schemas"]["LlmProviderBase"] & {
@@ -2978,6 +3100,24 @@ export interface components {
             providers: components["schemas"]["LlmProvider"][];
             /** @description Statut « modèle validé » du banc d'évaluation (15 § 11), en lecture seule : copie de eval/validated-models.json (produit par `pnpm eval --level N2`). Un modèle configuré absent de la liste n'a jamais été mesuré : « non validé ». */
             readonly validated_models?: components["schemas"]["ValidatedModel"][];
+            /** @description Prix connus (UX-11), en lecture seule : table versionnée de la couche LLM (USD par million de jetons) qui pré-remplit le prix d'un modèle reconnu par son nom. Le prix saisi dans `providers[].models[m].price` fait foi. */
+            readonly known_prices?: components["schemas"]["KnownModelPrice"][];
+        };
+        KnownModelPrice: {
+            model: string;
+            provider: string;
+            /**
+             * @description `verified` : prix relevé dans le dépôt ; `to_validate` : aucun prix relevé, à saisir.
+             * @enum {string}
+             */
+            status: "verified" | "to_validate";
+            price: {
+                in: number;
+                out: number;
+                in_cached?: number;
+            } | null;
+            source: string;
+            as_of?: string;
         };
         ValidatedModel: {
             model_id: string;
@@ -4585,6 +4725,92 @@ export interface operations {
             403: components["responses"]["Error"];
             404: components["responses"]["Error"];
             409: components["responses"]["Error"];
+        };
+    };
+    confirmInstructedSteps: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                slug: components["parameters"]["Slug"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["InstructedStepsConfirm"];
+            };
+        };
+        responses: {
+            /** @description Fiche à jour (`instructed.confirmed_by` et `confirmed_at` remplis). */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiDetail"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            /** @description `human_confirmation_required` : la confirmation est un acte humain, depuis la console. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            404: components["responses"]["Error"];
+            /** @description `sha_mismatch` (étapes changées depuis l'affichage) ou `no_instructed_steps`. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+        };
+    };
+    setInstructedMode: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                slug: components["parameters"]["Slug"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["InstructedModeWrite"];
+            };
+        };
+        responses: {
+            /** @description Fiche à jour. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiDetail"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            /** @description `instructed_steps_unconfirmed`, `compilable` ou `no_instructed_steps` : le mode ne s'active pas. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
         };
     };
     getResolvedRules: {

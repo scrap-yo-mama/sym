@@ -52,11 +52,11 @@ describe('création', () => {
     const investigation = useInvestigation();
     installFakeServer({
       'POST /api/apis': () =>
-        json(201, { api_id: API, slug: 'annonces', run_id: RUN, investigation_phase: 'awaiting_schema_validation', proposed_output_schema: { type: 'object' }, sample: [{ titre: 'a' }], access_report: { id: 'r', checked_at: '2026-10-01T10:00:00Z', signal: 'allowed', robots: { status: 'allowed' } } }),
+        json(201, { api_id: API, slug: 'annonces', run_id: RUN, investigation_phase: 'awaiting_schema_validation', proposed_output_schema: { type: 'object' }, sample: [{ titre: 'a' }], access_report: { id: 'r', checked_at: '2026-10-01T10:00:00Z', signal: 'allowed', usage_signals: [] } }),
     });
     await investigation.create(form);
     expect(investigation.state).toMatchObject({ apiId: API, slug: 'annonces', phase: 'awaiting_schema_validation', outputSchema: { type: 'object' } });
-    expect(investigation.state.access?.robots.status).toBe('allowed');
+    expect(investigation.state.access?.signal).toBe('allowed');
     investigation.dispose();
   });
 

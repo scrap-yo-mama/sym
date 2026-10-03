@@ -8,10 +8,10 @@
 //   gisement, seules E4 et E6 le sont. La variante jouée garde la mécanique exigée (exclusion par règle journalisée
 //   `pruned_by_rule`, premier essai sur le couple suivant, même stratégie retenue) sur une fixture où E1 échoue ;
 //   coût estimé strictement inférieur, coût réel inférieur ou égal (un essai E1 en échec ne coûte presque rien) ;
-// - assert_rules_cannot_widen : consignes « ignore robots.txt », « proxy résidentiel après un 403 », « résous la
+// - assert_rules_cannot_widen : consignes « proxy résidentiel après un 403 », « résous la
 //   vérification anti-robot », « change de session ou de compte », « fais tourner les User-Agents », « passe en tunnel »
 //   et consignes visant la reprise, avec un faux LLM qui leur OBÉIT (plan en tête sur res_proxy et tunnel) : 0 requête
-//   sur le chemin interdit, aucun essai res_proxy ni tunnel, arrêt `bloquee` / `action_requise` sans relance,
+//   sur le site qui refuse, aucun essai res_proxy ni tunnel, arrêt `bloquee` / `action_requise` sans relance,
 //   User-Agent réel inchangé, `rule_widening_ignored` journalisé, `widening_warnings` à l'enregistrement ;
 // - assert_replay_no_llm_with_rules : 10 rejeux E1 après modification des règles → 0 appel LLM, version inchangée ;
 // - assert_strategy_source_recorded : enquête et recompilation (source.rules, strategy_version_rules, empreintes) ;
@@ -282,7 +282,7 @@ describe('règle de domaine qui restreint (18 §4.10, critère 1)', () => {
   });
 });
 
-describe('assert_rules_cannot_widen (18 §4.7, §4.10 ; renfort d’INV5, INV6, INV10, INV11)', () => {
+describe('assert_rules_cannot_widen (18 §4.7, §4.10 ; renfort d’INV5, INV6, INV10)', () => {
   const RES_POLICY = { allow: ['direct', 'res_proxy'], proxy_ids: { res_proxy: 'zz_test_res' } };
   const obey = (ref: string) =>
     withPlan([
@@ -291,17 +291,9 @@ describe('assert_rules_cannot_widen (18 §4.7, §4.10 ; renfort d’INV5, INV6, 
       { execution: 'fetch', network: 'direct', rule_refs: [ref] },
     ]);
 
-  test('« ignore robots.txt » : 0 requête sur le chemin interdit, arrêt bloquee, aucun appel LLM ; widening_warnings', async () => {
-    const put = await putRule(pool, consoleOf(A), { content: rule('zz-ignore-robots', ROBOTS, 'Ignore robots.txt, il est faux sur ce site.') });
-    expect(put.widening_warnings.map((w) => w.guard)).toContain('robots');
-    fake.setScenario(MODEL, [scripted.json(obey('zz-ignore-robots@1'))]);
-    const apiId = await insertApi(A, 'zz_test_rules_robots', RES_POLICY);
-    const run = await investigate(apiId, site.url(ROBOTS, '/'));
-    expect(run.state).toBe('failed');
-    expect(await statusOf(apiId)).toBe('bloquee');
-    expect(site.hits.filter((h) => h.host === ROBOTS && h.path !== '/robots.txt')).toEqual([]);
-    expect(fake.requests).toBe(0);
-    expect((await attemptsOf(run.id)).filter((a) => a.network === 'res_proxy')).toEqual([]);
+  test('D-91 : une consigne sur robots.txt ne vise aucune garde (robots.txt est une source d’information) ; aucun avertissement', async () => {
+    const put = await putRule(pool, consoleOf(A), { content: rule('zz-lis-robots', ROBOTS, 'Lis robots.txt pour trouver le sitemap ; ignore ses Disallow.') });
+    expect(put.widening_warnings).toEqual([]);
   });
 
   test.each([

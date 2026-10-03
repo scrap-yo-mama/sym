@@ -189,6 +189,8 @@ const VALID_BODIES: Record<string, (party: Party) => Record<string, unknown>> = 
   // Portabilité (3.12) : un modèle de templates/ (aperçu, sans `confirm`).
   'POST /api/apis/import': () => JSON.parse(readFileSync(new URL('../../../templates/livres-demo.api.json', import.meta.url), 'utf8')) as Record<string, unknown>,
   'POST /api/apis/:slug/versions/:version/revert': () => ({}),
+  'POST /api/apis/:slug/instructed-steps/confirm': () => ({ version: 1, sha256: '0'.repeat(64) }),
+  'PUT /api/apis/:slug/instructed-mode': () => ({ enabled: false }),
   'POST /api/apis/:slug/schedules': () => ({ cron: '0 3 * * *', timezone: 'UTC', input: {} }),
   'PATCH /api/apis/:slug/schedules/:id': () => ({ enabled: false }),
   'POST /api/runs/:id/cancel': () => ({}),

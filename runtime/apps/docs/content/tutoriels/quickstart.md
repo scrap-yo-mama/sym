@@ -137,6 +137,17 @@ Demandez ensuite à votre IA : « Récupère les livres de books.toscrape.com, a
 
 ## 9. Créer votre première API
 
+Avant la première enquête, l'instance doit connaître le **contact de son opérateur** (vous) : le robot l'annonce aux sites qu'il consulte. Sans lui, la création d'une API est refusée (`409 instance_contact_missing`). Vous pouvez aussi le saisir dans **Réglages > Identité du robot** de la console.
+
+<!-- quickstart {"id":"robot-contact","mode":"run","expect":"instance_contact"} -->
+```bash
+curl -fsS -b cookies.txt -X PUT http://localhost:3100/api/settings/identity \
+  -H 'content-type: application/json' -H 'origin: http://localhost:3100' \
+  -d '{"instance_contact":"mailto:operateur@example.org"}'
+```
+
+Puis la création de l'API :
+
 <!-- quickstart {"id":"first-api","mode":"run","expect":"api_id"} -->
 ```bash
 curl -fsS -b cookies.txt -X POST http://localhost:3100/api/apis \
@@ -144,7 +155,7 @@ curl -fsS -b cookies.txt -X POST http://localhost:3100/api/apis \
   -d '{"description":"Les produits du catalogue, avec titre et prix","url":"http://zz_test_ssr.localhost:4010/"}'
 ```
 
-L'agent enquête d'abord par un rapport d'accès (`robots.txt`, signaux d'usage, conditions du site), puis essaie les méthodes de la moins chère à la plus chère, et propose un schéma de sortie à valider. Une fois validé, l'API entre au catalogue et se rejoue à coût de code. Voir [Architecture](../explications/architecture.md).
+L'agent enquête d'abord par un rapport d'accès (signaux d'usage, conditions du site), puis essaie les méthodes de la moins chère à la plus chère, et propose un schéma de sortie à valider. Une fois validé, l'API entre au catalogue et se rejoue à coût de code. Voir [Architecture](../explications/architecture.md).
 
 La réponse (`201`) donne l'identifiant de l'API (`api_id`), son `slug` et le run de l'enquête (`run_id`) ; l'enquête se suit par `GET /api/runs/{run_id}` ou le flux `GET /api/events`, et le schéma proposé se valide par `POST /api/apis/{api_id}/validate-schema`.
 

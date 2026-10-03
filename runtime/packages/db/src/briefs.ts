@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// Dossier d'enquête en base (tâche 2.14, 19c § 4, migration 0022) : versions immuables du dossier MASQUÉ (`api_briefs`,
+// Dossier d'enquête en base (tâche 2.14, 19c § 4, migration 0024) : versions immuables du dossier MASQUÉ (`api_briefs`,
 // versionné par remplacement : même contenu renvoyé, pas de nouvelle version ; au plus `BRIEF_VERSIONS_KEEP`) et faits
 // du code par indice (`brief_hint_outcomes`, clé d'identité, survivent au remplacement). Toute lecture filtre
 // EXPLICITEMENT `owner_id` (en plus de la RLS) : le worker, même sous le rôle de service, ne lit jamais le dossier d'un

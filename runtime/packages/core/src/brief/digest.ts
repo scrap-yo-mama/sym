@@ -3,7 +3,7 @@
 // indice reçoit une décision (sonde GET par le pipeline d'accès, rapprochement avec la reconnaissance, non vérifiable,
 // ignoré) et, s'il est écarté, une raison fermée. Le statut « vérifié » n'est jamais lu dans le dossier : il est posé après
 // la sonde. Les décisions de garde ne viennent pas d'ici : l'hôte hors portée est écarté AVANT toute requête, mais la sonde
-// elle-même repasse par robots.txt, la garde SSRF, la cadence et le classifieur de l'API.
+// elle-même repasse par la portée de l'API, la garde SSRF, la cadence et le classifieur de l'API.
 import { createHash } from 'node:crypto';
 import { wideningWarnings, type WideningGuard } from '../rules/widening.js';
 import { BRIEF_DEFAULTS, BRIEF_STALE_DAYS, DEFAULT_BRIEF_CONFIG, type BriefConfig, type BriefHint, type BriefHintKind, type BriefHintState, type BriefReason, type InvestigationBrief } from './schema.js';

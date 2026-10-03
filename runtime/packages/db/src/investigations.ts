@@ -354,6 +354,10 @@ export async function saveInvestigationStrategy(
     network: Network;
     spec: unknown;
     estCostUsd: number | null;
+    /** E5 compilée d'une trace E6 (2.13) : `compilable = yes` (défaut de la colonne : `unknown`). */
+    compilable?: 'yes';
+    /** Source des étapes (intent, pre, post) d'une E5 au format `steps` (2.13, 19 §4). */
+    sourceSteps?: unknown;
     outputSchema: unknown;
     /** Ordre déclaré des colonnes (`validated_columns`) ; à défaut, celui des clés de `outputSchema`. */
     outputColumns?: readonly string[];
@@ -383,9 +387,22 @@ export async function saveInvestigationStrategy(
     const next = await tx.query<{ v: number }>('SELECT COALESCE(MAX(version), 0) + 1 AS v FROM strategy_versions WHERE api_id = $1', [args.apiId]);
     const version = next.rows[0]!.v;
     await tx.query(
-      `INSERT INTO strategy_versions (api_id, version, owner_id, project_id, execution, network, spec, est_cost_usd, created_by, parent_version)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $10, $9)`,
-      [args.apiId, version, args.ownerId, api.project_id, args.execution, args.network, JSON.stringify(args.spec), args.estCostUsd, api.current_strategy_version, args.createdBy ?? 'investigation'],
+      `INSERT INTO strategy_versions (api_id, version, owner_id, project_id, execution, network, spec, est_cost_usd, created_by, parent_version, compilable, source_steps)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $10, $9, $11, $12)`,
+      [
+        args.apiId,
+        version,
+        args.ownerId,
+        api.project_id,
+        args.execution,
+        args.network,
+        JSON.stringify(args.spec),
+        args.estCostUsd,
+        api.current_strategy_version,
+        args.createdBy ?? 'investigation',
+        args.compilable ?? 'unknown',
+        args.sourceSteps === undefined ? null : JSON.stringify(args.sourceSteps),
+      ],
     );
     if (args.source !== undefined) await recordStrategySource(tx, { apiId: args.apiId, ownerId: args.ownerId, version, source: args.source, rules: args.rules ?? [] });
     await tx.query(

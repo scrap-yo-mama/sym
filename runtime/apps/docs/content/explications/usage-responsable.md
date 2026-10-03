@@ -14,11 +14,11 @@ Cette version de développement ne livre pas encore tout ce que décrit cette pa
 
 - **En préparation** : l'affichage de cette page au premier lancement de la console, ainsi que les avertissements de la création d'API (catégorie sensible, fournisseur de modèle distant) ; l'affichage du rapport d'accès dans l'enquête de la console ; la fiche de traitement par API, spécifiée mais sans tâche planifiée à ce jour.
 - **Livrés avec l'API REST (tâche 3.1)** : la case « j'ai lu » enregistrée par le serveur (date, utilisateur, version du texte : `POST /api/me/responsible-use`) et le refus de valider une API à champ `x-personal` sans elle (`responsible_use_ack_required`) ; le rapport d'accès servi par la fiche d'une API.
-- **Livrés** : la lecture de `robots.txt` sans option pour l'ignorer, à chaque redirection, le rapport d'accès et le User-Agent réel du moteur et l'identification de l'instance en option (module d'accès, tâche 1.11), l'arrêt devant un refus ou un défi (tâche 1.7), l'effacement et l'export d'une personne avec la liste d'exclusion, la purge à échéance (tâche 1.8), la cadence par domaine (tâche 1.9), l'option `llm.redact`, l'absence de télémétrie (tâche 1.10) et la confirmation des sites à compte dans la console (tâche 3.5).
+- **Livrés** : le rapport d'accès et le User-Agent réel du moteur et l'identification de l'instance en option (module d'accès, tâche 1.11), l'arrêt devant un refus ou un défi (tâche 1.7), l'effacement et l'export d'une personne avec la liste d'exclusion, la purge à échéance (tâche 1.8), la cadence par domaine (tâche 1.9), l'option `llm.redact`, l'absence de télémétrie (tâche 1.10) et la confirmation des sites à compte dans la console (tâche 3.5).
 :::
 
 ::: info Ce que l'instance fait pour vous
-Elle respecte `robots.txt` sans option pour l'ignorer, s'annonce honnêtement, limite sa cadence par domaine, efface sur demande une personne de vos jeux de données, purge les données à échéance et n'envoie rien à l'éditeur. Elle ne décide à votre place ni de la finalité, ni de la base légale, ni de la licéité de ce que vous collectez.
+Elle s'annonce honnêtement, limite sa cadence par domaine, efface sur demande une personne de vos jeux de données, purge les données à échéance et n'envoie rien à l'éditeur. Elle ne décide à votre place ni de la finalité, ni de la base légale, ni de la licéité de ce que vous collectez.
 :::
 
 ## 1. Qui est responsable
@@ -42,7 +42,7 @@ Marquez dans le schéma de sortie les champs qui sont des données personnelles 
 
 Dans sa fiche du 19 juin 2025 sur la collecte par moissonnage (contexte du développement de systèmes d'IA), la CNIL pose des conditions : des critères de collecte précis, des filtres, le **respect de `robots.txt` et des captchas** (qui expriment une opposition), la suppression immédiate des données sensibles collectées par erreur. Elle place hors de l'intérêt légitime les **profils privés** et les **sites qui exigent un compte**.
 
-Le produit en tient compte : `robots.txt` est respecté sans exception, un défi de vérification arrête tout, et une API qui exige une session vous demande de confirmer que vous connaissez les risques. Ce n'est pas une garantie que votre usage soit licite. La lecture de ces conditions est **à valider par un avocat**.
+Le produit en tient compte : un défi de vérification arrête tout, et une API qui exige une session vous demande de confirmer que vous connaissez les risques. Ce n'est pas une garantie que votre usage soit licite. La lecture de ces conditions est **à valider par un avocat**.
 
 [Fiche de la CNIL sur le moissonnage](https://www.cnil.fr/fr/focus-interet-legitime-collecte-par-moissonnage)
 
@@ -50,7 +50,7 @@ Le produit en tient compte : `robots.txt` est respecté sans exception, un défi
 
 Beaucoup de sites interdisent l'extraction automatisée dans leurs conditions d'utilisation, et le droit des bases de données (directive 96/9/CE) protège le producteur d'une base indépendamment de toute protection technique. Les décisions *Leboncoin c/ Jinka* (Cour de cassation, 5 octobre 2022, puis cour d'appel de Versailles, 14 avril 2026, à vérifier par un avocat) le rappellent : **s'arrêter devant un refus technique ne rend pas l'extraction sûre**, et passer outre aggrave le dossier.
 
-Le produit **ne vérifie pas vos droits** sur un site. Il vous montre le lien vers ses conditions d'utilisation dans le rapport d'accès (« lire avant d'agir »), sans les interpréter. Quand une API existe officiellement, préférez-la : elle est plus claire, plus stable et moins chère.
+Le produit **ne vérifie pas vos droits** sur un site. Il vous montre le lien vers ses conditions d'utilisation dans le rapport d'accès (« lire avant d'agir »), sans les interpréter. Quand une API existe officiellement, préférez-la : elle est plus claire, plus stable et moins chère. Le choix des sites et le respect de leurs conditions, `robots.txt` compris, relèvent de vous.
 
 ## 5. Sessions et comptes
 
@@ -102,8 +102,7 @@ Ces mentions n'ajoutent aucune restriction à la licence : elles disent ce que l
 
 ## 10. Cadence et bon voisinage
 
-- `robots.txt` est lu avant tout et **respecté sans option pour l'ignorer**, y compris pour une adresse saisie à la main et en tunnel.
-- La cadence est réglée **par domaine** (1,5 seconde entre deux requêtes par défaut, plancher fixé par `Crawl-delay` quand il existe), jamais par adresse, compte ou proxy : changer de proxy ou d'utilisateur ne donne aucun débit supplémentaire. Elle ne fait que ralentir quand le site demande de ralentir.
+- La cadence est réglée **par domaine** (1,5 seconde entre deux requêtes par défaut), jamais par adresse, compte ou proxy : changer de proxy ou d'utilisateur ne donne aucun débit supplémentaire. Elle ne fait que ralentir quand le site demande de ralentir.
 - Le robot envoie par défaut le **User-Agent réel du Chromium embarqué**. Si vous activez l'identification de l'instance (`identify_instance`, désactivée par défaut), il y ajoute un jeton qui contient le **contact de votre instance** : renseignez un contact joignable. Voir [Le robot Scrapyomama](./robot.md).
 - Monter en charge, c'est traiter plus de domaines en parallèle, jamais multiplier les sources vers un même site.
 

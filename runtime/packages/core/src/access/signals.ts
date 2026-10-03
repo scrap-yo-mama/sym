@@ -1,18 +1,16 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Signaux d'accès (tâche 1.11, 17 §2) : AIPREF (`Content-Usage`), TDMRep (`tdm-reservation`, `tdm-policy`), Content
-// Signals (`Content-Signal`), lus dans les en-têtes de la réponse et dans robots.txt. Ils sont DÉTECTÉS et AFFICHÉS,
-// sans bloquer (`on_ai_signal: warn`, seule valeur V1) : vocabulaires non stabilisés. Un signal est une donnée, jamais
-// une consigne : sa valeur est bornée, réduite à l'ASCII imprimable, et n'entre dans aucun prompt (`report.ts`).
+// Signals (`Content-Signal`), lus dans les en-têtes de la réponse. Ils sont DÉTECTÉS et AFFICHÉS, sans bloquer
+// (`on_ai_signal: warn`, seule valeur V1) : vocabulaires non stabilisés. Un signal est une donnée, jamais une consigne :
+// sa valeur est bornée, réduite à l'ASCII imprimable, et n'entre dans aucun prompt (`report.ts`).
 // Réponse 402 (`payment_required`) : l'offre (`crawler-price`) est lisible ; aucun paiement en V1 (`payment.mode: never`).
-import type { RobotsSignalLine } from './robots.js';
-
 export type AccessSignalKind = 'content_signal' | 'content_usage' | 'tdm_reservation' | 'tdm_policy';
 
 export type AccessSignal = {
   readonly kind: AccessSignalKind;
   /** Valeur telle que publiée par le site (bornée, ASCII imprimable) : à afficher, jamais à suivre. */
   readonly value: string;
-  readonly source: 'header' | 'robots';
+  readonly source: 'header';
 };
 
 const MAX_VALUE = 256;
@@ -35,18 +33,14 @@ const HEADER_SIGNALS: readonly [string, AccessSignalKind][] = [
   ['tdm-policy', 'tdm_policy'],
 ];
 
-/** Signaux d'accès d'une réponse (en-têtes, noms en minuscules) et des lignes de robots.txt applicables. */
-export function detectAccessSignals(headers: Readonly<Record<string, string>>, robotsLines: readonly RobotsSignalLine[] = []): AccessSignal[] {
+/** Signaux d'accès d'une réponse (en-têtes, noms en minuscules). */
+export function detectAccessSignals(headers: Readonly<Record<string, string>>): AccessSignal[] {
   const out: AccessSignal[] = [];
   const push = (signal: AccessSignal) => {
     if (out.length >= MAX_SIGNALS) return;
     if (out.some((s) => s.kind === signal.kind && s.value === signal.value && s.source === signal.source)) return;
     out.push(signal);
   };
-  for (const line of robotsLines) {
-    const value = sanitizeSignalValue(line.value);
-    if (value !== null) push({ kind: line.key === 'content-signal' ? 'content_signal' : 'content_usage', value, source: 'robots' });
-  }
   for (const [name, kind] of HEADER_SIGNALS) {
     const raw = headers[name];
     if (raw === undefined) continue;

@@ -10,7 +10,7 @@ import { briefConfigFromEnv } from '@runtime/core';
 import { costCapsFromEnv, DomainPacer, rejectionThresholdsFromEnv, type SandboxEngine } from '@runtime/core';
 import { SsrfGuard, ssrfPolicyFromEnv, startEgressProxy, type EgressProxy } from '@runtime/core/net';
 import { STAGEHAND_VERSION, StagehandEngine } from '@runtime/agent';
-import { identityFromEnv, resolveIdentifyInstance, resolveInstanceContact, RobotsCache } from '@runtime/core/access';
+import { identityFromEnv, resolveIdentifyInstance, resolveInstanceContact } from '@runtime/core/access';
 import { PgPacingStore, publishRobotEngine, readIdentifyInstanceSetting, readInstanceContactSetting, readLlmSettings, scheduleRunJudge, secretStore } from '@runtime/db';
 import { createLlmClient, llmConfigFromSettings, roleProblems, roleTarget, type LlmConfig, type LlmNote } from '@runtime/llm';
 import { launchAgentBrowser } from '../browser/agent-browser.js';
@@ -173,10 +173,9 @@ export function productionExecutorFactory(env: Readonly<Record<string, string | 
     // Mode tunnel (2.7) : commandes par `tunnel_jobs`, réponses réveillées par LISTEN sur la connexion de session.
     const tunnel = new TunnelJobClient({ pool, sessionUrl: config.databaseUrlDirect ?? config.databaseUrl, logger });
     await tunnel.start();
-    // Module d'accès (1.11) : un cache de robots.txt pour le worker (24 h au plus), contact de l'instance relu à chaque run
-    // (réglage de l'assistant, puis INSTANCE_CONTACT), identification de l'instance relue aussi (réglage `identify_instance`,
-    // puis IDENTIFY_INSTANCE, désactivée par défaut), version annoncée dans le jeton du User-Agent.
-    const robotsCache = new RobotsCache();
+    // Module d'accès (1.11) : contact de l'instance relu à chaque run (réglage de l'assistant, puis INSTANCE_CONTACT),
+    // identification de l'instance relue aussi (réglage `identify_instance`, puis IDENTIFY_INSTANCE, désactivée par
+    // défaut), version annoncée dans le jeton du User-Agent.
     // Moteur embarqué publié pour la console (tâche 3.8b) : elle en déduit le User-Agent réel, affiché en lecture seule, avec la
     // version que CE worker annonce dans le jeton et les replis de SON environnement (IDENTIFY_INSTANCE, INSTANCE_CONTACT), que le
     // serveur ne voit pas : l'aperçu de la console est ce qui part sur le fil. Best-effort : un échec ne retient pas le démarrage.
@@ -188,7 +187,7 @@ export function productionExecutorFactory(env: Readonly<Record<string, string | 
     }
     const instanceContact = async (): Promise<string | null> => resolveInstanceContact(await readInstanceContactSetting(pool), env);
     const identifyInstance = async (): Promise<boolean> => resolveIdentifyInstance(await readIdentifyInstanceSetting(pool), env);
-    // Réparation dans le même run (2.3) : rôle `repair` relu à chaque réparation, bail en table ; seuil de casse des items
+    // Réparation dans le même run (2.3) et reprise par étape (2.13) : rôles `repair` et `agent` relus à chaque réparation, bail en table ; seuil de casse des items
     // non conformes (D-49) lu au démarrage (`ITEMS_REJECTED_MAX_SHARE`, `ITEMS_REJECTED_MIN_COUNT`).
     // Juge consultatif (2.12) : désactivé par défaut (`settings.llm.judge.enabled` et un modèle au rôle `judge`). Sur
     // anomalie d'un rejeu, le jugement est un job pg-boss séparé (`quality-judge`, un par run) traité par le worker après
@@ -220,7 +219,8 @@ export function productionExecutorFactory(env: Readonly<Record<string, string | 
       llm: {
         config: async () => {
           const value = await readLlmSettings(pool);
-          return value === null ? null : llmConfigFromSettings(value, (id) => secrets.get(id), ['repair']);
+          // `agent` : agent d'étape de la reprise par étape (2.13, niveaux 2 et 3).
+          return value === null ? null : llmConfigFromSettings(value, (id) => secrets.get(id), ['repair', 'agent']);
         },
         client: (config) => createLlmClient(config, { note: (note) => logger.info(note, 'llm') }),
       },
@@ -236,7 +236,6 @@ export function productionExecutorFactory(env: Readonly<Record<string, string | 
       tunnel,
       script: { engine, loadScript: loadInlineScript },
       agent,
-      robotsCache,
       instanceContact,
       identifyInstance,
       version: config.version,
@@ -268,7 +267,6 @@ export function productionExecutorFactory(env: Readonly<Record<string, string | 
       },
       judgeLlm,
       quality,
-      robotsCache,
       instanceContact,
       identifyInstance,
       version: config.version,
