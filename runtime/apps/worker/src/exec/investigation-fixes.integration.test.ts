@@ -67,7 +67,7 @@ let worker: Worker;
 let fake: FakeProvider;
 let masterKey: string;
 let withExtract = false;
-let price = { in: 1, out: 1 };
+let price: { in: number; out: number } | undefined = { in: 1, out: 1 };
 /** Contact d'instance lu par les exécuteurs ; `null` : aucun (UX-04). */
 let instanceContact: string | null = 'mailto:ops@zz-test.example';
 
@@ -81,7 +81,7 @@ const page = (script: string) => ({ body: `<html><body><h1>Catalogue</h1><ul><li
 function llmConfig(): LlmConfig {
   return {
     providers: [
-      { id: 'fake', baseUrl: fake.baseUrl, apiKey: new Secret('zz-test-key-0000'), models: [{ id: MODEL, price: { ...price } }, { id: EXTRACT_MODEL, price: { in: 1, out: 1 } }] },
+      { id: 'fake', baseUrl: fake.baseUrl, apiKey: new Secret('zz-test-key-0000'), models: [{ id: MODEL, ...(price === undefined ? {} : { price: { ...price } }) }, { id: EXTRACT_MODEL, price: { in: 1, out: 1 } }] },
     ],
     roles: { investigate: { provider: 'fake', model: MODEL }, ...(withExtract ? { extract: { provider: 'fake', model: EXTRACT_MODEL } } : {}) },
   };
@@ -372,6 +372,19 @@ describe('fins d’enquête : phase close et récit fermé', () => {
     } finally {
       instanceContact = 'mailto:ops@zz-test.example';
     }
+  });
+
+  test('UX-11 — prix du modèle d’enquête absent → action_requise (llm_price_missing), jamais « budget épuisé » : le modèle est nommé, aucun appel LLM, 0 €', async () => {
+    price = undefined;
+    fake.setScenario(MODEL, [scripted.json(PRODUCTS_PROPOSAL)]);
+    const apiId = await insertApi('zz_test_fix_no_price');
+    const run = await investigate(apiId, { url: site.url(TUN, '/'), description: 'liste', auto_validate: true });
+    expect(await runRow(run.id)).toMatchObject({ state: 'failed', failure_class: null, error_detail: `llm_price_missing:${MODEL}` });
+    await apiStatusSettled(apiId, { status: 'action_requise', status_reason: 'llm_price_missing', investigation_phase: 'done' });
+    const events = await eventsOf(run.id);
+    expect(events.map((e) => e.kind).at(-1)).toBe('investigation.finished');
+    expect(events.find((e) => e.kind === 'action.required')!.payload).toMatchObject({ cause: 'llm_price_missing', model: MODEL });
+    expect(fake.requests).toBe(0);
   });
 
   test('investigation_timeout_s tenu dès l’étape 0 (page lente) : erreur, investigation_timeout_s, sans attendre la page ni appeler le LLM', async () => {

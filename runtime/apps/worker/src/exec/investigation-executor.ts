@@ -329,9 +329,9 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
      * Arrêt sans classe d'échec (04 §6, transition 3) : proxy requis non configuré, extension hors ligne. Phase close, récit
      * fermé ; le worker applique `run_stopped` (→ `action_requise`).
      */
-    const finishStopped = async (reason: 'proxy_not_configured' | 'tunnel_offline' | 'instance_contact_missing', detail: string, at: string): Promise<RunResult> => {
+    const finishStopped = async (reason: 'proxy_not_configured' | 'tunnel_offline' | 'instance_contact_missing' | 'llm_price_missing', detail: string, at: string, model?: string): Promise<RunResult> => {
       await save('done');
-      await event(EV.actionRequired, { cause: reason, domain: host });
+      await event(EV.actionRequired, { cause: reason, domain: host, ...(model === undefined ? {} : { model }) });
       await event(EV.finished, { outcome: 'stopped', stop_reason: reason, detail, at, budget: budgetView() });
       return { state: 'failed', failure_class: null, stop_reason: reason, retryable: false, error_detail: detail };
     };
@@ -683,7 +683,7 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
           const price = rolePrice(config, 'investigate');
           if (price === null || price === undefined) {
             await ctx.log('warn', 'llm_price_missing', { model, role: 'investigate' });
-            return await finishFailed({ failure_class: 'run_budget_exceeded', retryable: false, detail: 'llm_price_missing' }, 'schema');
+            return await finishStopped('llm_price_missing', `llm_price_missing:${model}`, 'schema', model);
           }
           let callCeiling = investigateCallCeilingUsd(args, price);
           const beforeCall = () => {
@@ -713,7 +713,7 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
           await charge(ctx, 0, usage.cost_usd, { in: usage.tokens_in, cached: usage.tokens_cached, out: usage.tokens_out, reasoning: usage.tokens_reasoning, estimated: usage.usage_estimated });
           if (usage.cost_usd === null) {
             await ctx.log('warn', 'llm_price_missing', { model, role: 'investigate' });
-            return await finishFailed({ failure_class: 'run_budget_exceeded', retryable: false, detail: 'llm_price_missing' }, 'schema');
+            return await finishStopped('llm_price_missing', `llm_price_missing:${model}`, 'schema', model);
           }
           spent = round6(spent + usage.cost_usd);
           if (llmFailure !== null) {
