@@ -4,7 +4,6 @@ import { describe, expect, it } from 'vitest';
 import { AccessPolicyError, DEFAULT_ACCESS_POLICY, parseAccessPolicy } from './policy.js';
 import { buildUserAgent, EngineUserAgentError, identityFromEnv, InstanceContactError, normalizeInstanceContact, requireInstanceContact, resolveIdentifyInstance, resolveInstanceContact, robotFrom } from './identity.js';
 import { detectAccessSignals, parsePaymentOffer, sanitizeSignalValue } from './signals.js';
-import { RobotsGate } from './gate.js';
 import { buildAccessReport } from './report.js';
 
 describe('access_policy : champs réservés refusés en V1, champ retiré robots toléré (D-91)', () => {
@@ -123,26 +122,25 @@ describe('signaux d’accès et offre 402 : des données bornées, jamais des co
 });
 
 describe('rapport d’accès : la lecture de la page est au mieux, jamais une exception (UX-24)', () => {
-  const gate = () => new RobotsGate({ fetch: async () => ({ status: 404, location: null, body: '', truncated: false }) });
   const page = (body: string) => async (url: string) => ({ status: 200, headers: { 'content-type': 'text/html' }, body, url });
   const card = `<a href="/bien/1"><h3>Maison de village</h3><p>${'Belle maison provençale avec jardin, piscine et vue dégagée. '.repeat(8)}</p></a>`;
 
   it('lien au texte de plus de 200 caractères (carte d’annonce) : rapport rendu, CGU trouvées après la carte', async () => {
     const body = `<html><body>${card}<a href="/mentions-legales">Mentions légales</a></body></html>`;
-    const report = await buildAccessReport({ url: 'https://zz-test.example/annonces', gate: gate(), probe: page(body), signal: new AbortController().signal, probeLlmsTxt: false });
+    const report = await buildAccessReport({ url: 'https://zz-test.example/annonces', probe: page(body), signal: new AbortController().signal, probeLlmsTxt: false });
     expect(report.verdict).toEqual({ proceed: true });
     expect(report.terms_url).toBe('https://zz-test.example/mentions-legales');
   });
 
   it('plus de 500 liens : rapport rendu (voies déclarées lues au mieux)', async () => {
     const body = `<html><body>${Array.from({ length: 600 }, (_, i) => `<a href="/p/${i}">${i}</a>`).join('')}</body></html>`;
-    const report = await buildAccessReport({ url: 'https://zz-test.example/annonces', gate: gate(), probe: page(body), signal: new AbortController().signal, probeLlmsTxt: false });
+    const report = await buildAccessReport({ url: 'https://zz-test.example/annonces', probe: page(body), signal: new AbortController().signal, probeLlmsTxt: false });
     expect(report.verdict).toEqual({ proceed: true });
   });
 
   it('plus de 500 liens : la CGU du pied de page est trouvée (toute la liste bornée est parcourue)', async () => {
     const body = `<html><body>${Array.from({ length: 600 }, (_, i) => `<a href="/p/${i}">${i}</a>`).join('')}<a href="/mentions-legales">Mentions légales</a></body></html>`;
-    const report = await buildAccessReport({ url: 'https://zz-test.example/annonces', gate: gate(), probe: page(body), signal: new AbortController().signal, probeLlmsTxt: false });
+    const report = await buildAccessReport({ url: 'https://zz-test.example/annonces', probe: page(body), signal: new AbortController().signal, probeLlmsTxt: false });
     expect(report.terms_url).toBe('https://zz-test.example/mentions-legales');
   });
 
@@ -150,7 +148,7 @@ describe('rapport d’accès : la lecture de la page est au mieux, jamais une ex
     const alternates = Array.from({ length: 30 }, (_, i) => `<link rel="alternate" type="application/rss+xml" href="/feed/${i}.xml">`).join('');
     const apis = Array.from({ length: 8 }, (_, i) => `<link rel="api" href="/api/v${i}">`).join('');
     const body = `<html><head>${alternates}${apis}</head><body><a href="/x">x</a></body></html>`;
-    const report = await buildAccessReport({ url: 'https://zz-test.example/annonces', gate: gate(), probe: page(body), signal: new AbortController().signal, probeLlmsTxt: false });
+    const report = await buildAccessReport({ url: 'https://zz-test.example/annonces', probe: page(body), signal: new AbortController().signal, probeLlmsTxt: false });
     expect(report.verdict).toEqual({ proceed: true });
     expect(report.declared.feeds).toHaveLength(5);
     expect(report.declared.official_api_url).toBe('https://zz-test.example/api/v0');
