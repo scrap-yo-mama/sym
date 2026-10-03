@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Concordance schéma Drizzle ↔ base migrée (colonnes, types, nullabilité, ensemble des tables),
-// owner_id NOT NULL indexé sur les tables métier, contraintes structurelles (INV5, INV11, 13 § 2 et § 8).
+// owner_id NOT NULL indexé sur les tables métier, contraintes structurelles (INV5, 13 § 2 et § 8).
 import { eq, getTableName, is } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import { getTableConfig, PgTable } from 'drizzle-orm/pg-core';
@@ -31,7 +31,7 @@ const norm = (type: string) => type.replace(/,\s+/g, ',');
 const BUSINESS_TABLES = [
   'apis', 'strategy_versions', 'runs', 'run_attempts', 'run_logs', 'run_artifacts', 'investigation_events',
   'status_events', 'datasets', 'dataset_items', 'dedup_keys', 'schedules', 'site_sessions', 'tunnels', 'tunnel_jobs',
-  'webhook_subscriptions', 'webhook_deliveries', 'run_rejected_items',
+  'webhook_subscriptions', 'webhook_deliveries', 'run_rejected_items', 'run_profiles', 'strategy_version_memory_refs',
 ];
 
 async function expectRejected(sql: string, params: unknown[] = []): Promise<void> {
@@ -99,8 +99,6 @@ describe(`schéma sur PostgreSQL ${inject('pgVersion')}`, () => {
       const ownerId = rows[0]?.id;
       // Un seul owner.
       await expectRejected("INSERT INTO users (email, role) VALUES ('second@example.test', 'owner')");
-      // INV11 : robots n'a qu'une valeur.
-      await expectRejected(`INSERT INTO apis (slug, owner_id, access_policy) VALUES ('x', $1, '{"robots": "ignore"}')`, [ownerId]);
       // API à session : privée seulement.
       await expectRejected("INSERT INTO apis (slug, owner_id, requires_session, visibility) VALUES ('y', $1, true, 'instance')", [ownerId]);
       // Scope jamais accordable.

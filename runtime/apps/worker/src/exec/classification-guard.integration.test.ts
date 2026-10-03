@@ -84,7 +84,7 @@ const runOf = async (apiId: string) => {
   return (await withActor(pool, actorA, (tx) => readRun(tx, runId)))!;
 };
 
-/** Requêtes de contenu reçues par un hôte : hors `/robots.txt`, lu d'abord par le module d'accès (1.11). */
+/** Requêtes de contenu reçues par un hôte (hors `/robots.txt`, que le site sert mais qu'aucun run ne demande). */
 const contentTotal = async (host: string): Promise<number> =>
   Object.entries((await client.stats()).hosts[host]?.paths ?? {})
     .filter(([path]) => path !== '/robots.txt')

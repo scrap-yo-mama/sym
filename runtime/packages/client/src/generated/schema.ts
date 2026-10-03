@@ -374,7 +374,7 @@ export interface paths {
         put?: never;
         /**
          * Importe une API exportée (16 § 6) ; aperçu sans écriture, puis confirm=true ; repasse toujours par l'enquête
-         * @description Sans `confirm=true` : aperçu (200), rien n'est écrit. Avec `confirm=true` : nouvelle API privée en `enquete`, enquête en file au stade `access_check` (rapport d'accès, robots.txt) puis `testing` de la stratégie importée (`created_by: import`) ; planifications recréées désactivées, cibles d'alerte à configurer. Les champs inconnus sont ignorés (`ignored_fields`) ; un `$ref` distant (400 `remote_ref`), une empreinte fausse (400 `integrity_mismatch`) ou une version de format d'une autre majeure (400 `unsupported_format`) sont refusés.
+         * @description Sans `confirm=true` : aperçu (200), rien n'est écrit. Avec `confirm=true` : nouvelle API privée en `enquete`, enquête en file au stade `access_check` (rapport d'accès) puis `testing` de la stratégie importée (`created_by: import`) ; planifications recréées désactivées, cibles d'alerte à configurer. Les champs inconnus sont ignorés (`ignored_fields`) ; un `$ref` distant (400 `remote_ref`), une empreinte fausse (400 `integrity_mismatch`) ou une version de format d'une autre majeure (400 `unsupported_format`) sont refusés. Un `max_cost_usd` ou un `budget_daily_usd` du fichier au-dessus des plafonds de l'instance (`MAX_COST_USD_PER_RUN`, `USER_BUDGET_DAILY_USD`) est refusé de même (400 `cost_cap_exceeded`), aperçu compris.
          */
         post: operations["importApi"];
         delete?: never;
@@ -418,7 +418,10 @@ export interface paths {
         delete: operations["deleteApi"];
         options?: never;
         head?: never;
-        /** Modifie description, politiques, schémas (→ ré-enquête), exposition MCP ; aucun réglage robots.txt (INV11) */
+        /**
+         * Modifie description, politiques, schémas (→ ré-enquête), exposition MCP
+         * @description Mode « SYM ne lâche pas » (`persistence_mode`, `persistence_budget_usd`, D-49) : décidé avant tout autre champ ; refusé, rien n'est écrit. Activer (ou changer le plafond d'un mode actif) par une clé d'API : `403 human_confirmation_required` ; API sans version courante, mémoire des refus absente ou plafond effectif ≤ 0 : `409 persistence_not_eligible` (`reason`) ; les deux avec `what_to_do`. Désactiver est permis à toute clé. Un `max_cost_usd` ou un `budget_daily_usd` au-dessus des plafonds de l'instance (`MAX_COST_USD_PER_RUN`, `USER_BUDGET_DAILY_USD`) : `400 cost_cap_exceeded`.
+         */
         patch: operations["updateApi"];
         trace?: never;
     };
@@ -1767,6 +1770,10 @@ export interface components {
             error: {
                 code: string;
                 message: string;
+                /** @description Raison stable d'un refus quand le code en a plusieurs (ex. `persistence_not_eligible`). */
+                reason?: string;
+                /** @description Marche à suivre, en anglais (05 § 1). */
+                what_to_do?: string;
             };
         };
         /** @description Erreur de la bibliothèque d'authentification (format à plat, sans enveloppe `error`). */
@@ -1915,7 +1922,7 @@ export interface components {
         RunState: "queued" | "running" | "waiting_tunnel" | "succeeded" | "failed" | "cancelled" | "skipped_tunnel_offline" | "skipped_window" | "skipped_quota" | "skipped_status" | "skipped_overlap";
         /** @enum {string} */
         RunOutcome: "clean" | "degraded" | "failed";
-        /** @description Classe d'échec fermée (04b § 1), ou famille `llm_*` (08 § 1). Code stable, jamais localisé. */
+        /** @description Classe d'échec fermée (04b § 1), ou famille `llm_*` (08 § 1). Code stable, jamais localisé. `robots_disallowed` et `robots_unreachable` sont des valeurs historiques (D-91) : plus produites, encore lisibles sur les runs anciens. */
         FailureClass: string;
         /** @description Code de raison stable (06 § 4.2 : `retried`, `escalated`, `repaired`, `stale`, `reverted`, `cookie_expired`…), traduit par la console ; jamais une phrase. */
         ReasonCode: string;
@@ -1965,10 +1972,12 @@ export interface components {
                 country?: string;
             };
         };
-        /** @description `robots` n'a qu'une valeur (INV11) : aucun réglage ne l'ignore. */
         AccessPolicy: {
-            /** @constant */
-            robots: "respect";
+            /**
+             * @deprecated
+             * @description Champ retiré (D-91), toléré et ignoré ; présent seulement sur les politiques écrites avant.
+             */
+            robots?: unknown;
             /** Format: uuid */
             report_id?: string | null;
             user_agent_contact?: string;
@@ -1985,11 +1994,15 @@ export interface components {
             /** Format: date-time */
             checked_at: string;
             /**
-             * @description Pastille Accès du catalogue (vert, orange, rouge).
+             * @description Pastille Accès du catalogue (vert, orange). `disallowed` est une valeur historique (D-91), sur les rapports anciens.
              * @enum {string}
              */
             signal: "allowed" | "review" | "disallowed";
-            robots: {
+            /**
+             * @deprecated
+             * @description Section historique (D-91), présente seulement sur les rapports produits avant ; plus produite.
+             */
+            robots?: {
                 /** @enum {string} */
                 status: "allowed" | "disallowed" | "absent" | "unreachable";
                 /** Format: date-time */
@@ -2016,6 +2029,8 @@ export interface components {
             id: string;
             slug: string;
             description: string;
+            /** @description Domaine de la page enquêtée (hôte de l'URL de départ, en minuscules), affiché sous le nom dans le catalogue (20 § 5.2) ; null s'il n'est pas connu. */
+            domain?: string | null;
             status: components["schemas"]["ApiStatus"];
             status_reason: components["schemas"]["ReasonMessage"] | null;
             stale: boolean;
@@ -2069,6 +2084,8 @@ export interface components {
             max_cost_usd?: number | null;
             budget_daily_usd?: number | null;
             domain_pacing?: components["schemas"]["DomainPacing"];
+            /** @description Mode « SYM ne lâche pas » (D-49) ; propriétaire seulement. */
+            persistence?: components["schemas"]["ApiPersistence"] | null;
             /** @description Coût estimé avant lancement (« ~0,002 $, médiane de 10 runs » ou « non estimé »). */
             cost_estimate?: {
                 median_usd: number | null;
@@ -2113,6 +2130,10 @@ export interface components {
             access_report: components["schemas"]["AccessReport"] | null;
             /** Format: uuid */
             run_id?: string | null;
+            /** @description État réel du run d'enquête à la réponse (UX-07) : en cours, ou terminé (`failed` avec `error`). */
+            run_state?: components["schemas"]["RunState"];
+            status?: components["schemas"]["ApiStatus"];
+            error?: components["schemas"]["RunError"];
         };
         /** @description Champs modifiables. Un schéma (`output_schema`, `input_schema`) ne change que par un brouillon puis une promotion (19 § 6, itération) : en place, 409 `draft_required`. `access_policy` n'est pas modifiable (INV11) ; une API avec session reste `private` (400 `session_api_private`). */
         ApiPatch: {
@@ -2137,6 +2158,24 @@ export interface components {
             max_cost_usd?: number | null;
             /** @description Budget quotidien de l'API ; `null` revient au défaut de l'instance (5 $). */
             budget_daily_usd?: number | null;
+            /** @description Mode « SYM ne lâche pas » (D-49, 04 § 6), désactivé par défaut. L'activer est un acte humain : session de la console seulement (`403 human_confirmation_required` par une clé d'API) ; le désactiver est permis à toute clé du scope `apis:write`. Chaque bascule est auditée avec son acteur. */
+            persistence_mode?: boolean;
+            /** @description Plafond propre du mode, cumulé depuis l'entrée en `erreur` ; `null` revient à `PERSISTENCE_BUDGET_USD_DEFAULT` (jamais illimité). Le changer sur un mode actif exige la console ; un plafond effectif ≤ 0 répond `409 persistence_not_eligible`. */
+            persistence_budget_usd?: number | null;
+        };
+        /** @description État du mode « SYM ne lâche pas » (D-49), propriétaire seulement : interrupteur, plafond effectif (jamais illimité), tentatives du cycle en cours, prochain essai, dépense, tentative en cours, fin du mode et sa raison. */
+        ApiPersistence: {
+            enabled: boolean;
+            budget_usd: number;
+            attempt: number;
+            /** Format: date-time */
+            next_at: string | null;
+            spent_usd: number;
+            in_progress: boolean;
+            /** Format: date-time */
+            entered_error_at: string | null;
+            ended: ("refused" | "ineligible" | "exhausted") | null;
+            ended_reason: string | null;
         };
         /** @description Export portable d'une API (16 § 6, tâche 3.12), format `scrapyomama.api` 1.0, clés triées. AUCUN champ pour une session, un cookie, une clé LLM, un identifiant de proxy, un secret ou une URL de webhook, ni pour une donnée de run (cibles d'alerte en référence `$ALERT_WEBHOOK_1`). Stratégie déclarative seulement (E1-E3, hors tunnel). `integrity.sha256` : empreinte du JSON canonique (clés triées) de l'enveloppe sans `integrity`. À l'import, les champs inconnus sont ignorés (contrôle complet : `parseApiExport` du cœur). */
         ApiExport: {
@@ -2169,7 +2208,7 @@ export interface components {
         ApiExportApi: {
             slug?: string;
             description: string;
-            /** @description Page de la demande d'enquête, rejouée à l'import (rapport d'accès, robots.txt). */
+            /** @description Page de la demande d'enquête, rejouée à l'import (rapport d'accès). */
             source_url: string;
             input_schema: {
                 [key: string]: unknown;
@@ -2345,6 +2384,13 @@ export interface components {
             state: components["schemas"]["RunState"];
             poll_after_seconds?: number | null;
         };
+        /** @description Cause nommée d'un run arrêté ou en échec (UX-04) : code stable (`instance_contact_missing`…), message lisible, marche à suivre pour l'agent (en anglais) et `retryable`. Absente quand la cause n'est pas nommée. */
+        RunError: {
+            code: components["schemas"]["ReasonCode"];
+            message: string;
+            what_to_do: string;
+            retryable: boolean;
+        };
         /** @description Enveloppe commune des sorties d'exécution (05 § 4.1), identique en MCP et en REST. */
         RunResult: {
             /** Format: uuid */
@@ -2361,6 +2407,7 @@ export interface components {
             next_cursor: string | null;
             degraded_reasons: components["schemas"]["ReasonCode"][];
             message: string;
+            error?: components["schemas"]["RunError"];
             next_action: components["schemas"]["NextAction"] | null;
             poll_after_seconds: number | null;
             timeline: {
@@ -2392,6 +2439,7 @@ export interface components {
             degraded_reasons: components["schemas"]["ReasonCode"][];
             failure_class: components["schemas"]["FailureClass"] | null;
             retryable?: boolean;
+            error?: components["schemas"]["RunError"];
             /** Format: date-time */
             created_at: string;
             /** Format: date-time */
@@ -2445,6 +2493,55 @@ export interface components {
             input?: {
                 [key: string]: unknown;
             };
+            /** @description Fiche de qualité du run (tâche 2.12, 19 § 3) : profil calculé par le code après la garde de classification et Ajv ; un champ `x-personal` n'a que des formes. Absente pour l'admin sur un run d'autrui. */
+            quality?: components["schemas"]["RunQuality"] | null;
+            /** @description Avis CONSULTATIF du juge (19 § 3) ; il ne change jamais le statut ni la version. */
+            judge?: components["schemas"]["RunJudge"] | null;
+        };
+        RunQuality: {
+            items: number;
+            duplicates: number;
+            duplicate_rate: number;
+            fields: {
+                [key: string]: components["schemas"]["FieldQuality"];
+            };
+        };
+        FieldQuality: {
+            type: string;
+            personal: boolean;
+            suspected_personal: boolean;
+            fill_rate: number;
+            sentinel_rate: number;
+            top_pattern: string | null;
+            patterns?: {
+                [key: string]: number;
+            };
+            unique_rate: number;
+            distinct?: number;
+            constant: boolean;
+            length: {
+                min: number;
+                max: number;
+                mean: number;
+            };
+            /** @description Champs non personnels seulement. */
+            min?: number;
+            /** @description Champs non personnels seulement. */
+            max?: number;
+        };
+        RunJudge: {
+            flag: boolean;
+            /** @enum {string} */
+            trigger: "investigation" | "repair" | "anomaly";
+            /** Format: date-time */
+            at?: string;
+            verdicts: {
+                field: string;
+                /** @enum {string} */
+                verdict: "ok" | "wrong" | "unsure";
+                indices: number[];
+                reason: string;
+            }[];
         };
         RunLogLine: {
             seq: number;
@@ -2639,7 +2736,7 @@ export interface components {
             schedules: components["schemas"]["Schedule"][];
         };
         /** @enum {string} */
-        WebhookEvent: "run.succeeded" | "run.failed" | "api.status_changed" | "items.new";
+        WebhookEvent: "run.succeeded" | "run.failed" | "api.status_changed" | "items.new" | "api.persistence_attempt";
         WebhookDelivery: {
             id: string;
             /** Format: date-time */
@@ -2697,7 +2794,7 @@ export interface components {
             error?: components["schemas"]["ReasonMessage"] | null;
         };
         /** @enum {string} */
-        LlmPreset: "zai" | "openrouter" | "vllm" | "ollama" | "deepseek" | "qwen" | "openai" | "custom";
+        LlmPreset: "zai" | "openrouter" | "vllm" | "ollama" | "deepseek" | "qwen" | "openai" | "anthropic" | "gemini" | "mistral" | "groq" | "custom";
         LlmProfile: {
             tools?: boolean;
             tool_choice?: string[];
@@ -2713,11 +2810,12 @@ export interface components {
                 top_p?: boolean;
             };
         };
+        /** @description USD par million de jetons ; nombres positifs ou nuls, `in` et `out` obligatoires (un prix négatif est refusé). */
         LlmPrice: {
-            in?: number;
+            in: number;
             in_cached?: number;
             in_cache_write?: number;
-            out?: number;
+            out: number;
             windows?: {
                 [key: string]: unknown;
             }[];
@@ -2746,6 +2844,12 @@ export interface components {
             repair?: components["schemas"]["LlmRole"];
             extract?: components["schemas"]["LlmRole"];
             agent?: components["schemas"]["LlmRole"];
+            /** @description Juge de qualité consultatif (tâche 2.12, 19 § 3), actif seulement avec `judge.enabled`. */
+            judge?: components["schemas"]["LlmRole"];
+            /** @description Propositions de règles, toujours validées par un humain (19 § 5). */
+            reflect?: components["schemas"]["LlmRole"];
+            /** @description Embeddings de l'étage 4 de la mémoire du catalogue (option désactivée, `catalog_memory.embeddings`). */
+            embed?: components["schemas"]["LlmRole"];
         };
         LlmProviderBase: {
             id: string;
@@ -2753,8 +2857,9 @@ export interface components {
             base_url: string;
             timeout_ms?: number;
             max_retries?: number;
+            /** @description Modèles du fournisseur (au plus 50), indexés par identifiant. En écriture (`PUT /api/settings/llm`), la requête est FUSIONNÉE avec la table enregistrée, modèle par modèle puis clé par clé : un modèle ou une clé absents de la requête sont gardés (le prix survit à toute écriture qui ne le mentionne pas) ; `models[m].price: null` (ou `profile`, `extra_body`) retire cette clé ; `models[m]: null` retire le modèle entier. La table fusionnée est bornée à 50 modèles (sinon `too_many_models`, 400). */
             models?: {
-                [key: string]: components["schemas"]["LlmModel"];
+                [key: string]: components["schemas"]["LlmModel"] | null;
             };
         };
         LlmProvider: components["schemas"]["LlmProviderBase"] & {
@@ -2781,11 +2886,37 @@ export interface components {
                 enabled?: boolean;
                 retention_days?: number;
             };
+            /** @description Juge consultatif (tâche 2.12, 19 § 3) : désactivé par défaut, activé par l'admin avec l'avertissement « juge non étalonné, avis consultatif » ; son fournisseur s'ajoute à la mention fournisseur. */
+            judge?: {
+                enabled?: boolean;
+            };
+            /** @description Mémoire du catalogue (19 § 2) ; l'étage 4 par embeddings est une option désactivée (pgvector requis). */
+            catalog_memory?: {
+                embeddings?: boolean;
+            };
         };
         LlmSettings: components["schemas"]["LlmSettingsCommon"] & {
             providers: components["schemas"]["LlmProvider"][];
             /** @description Statut « modèle validé » du banc d'évaluation (15 § 11), en lecture seule : copie de eval/validated-models.json (produit par `pnpm eval --level N2`). Un modèle configuré absent de la liste n'a jamais été mesuré : « non validé ». */
             readonly validated_models?: components["schemas"]["ValidatedModel"][];
+            /** @description Prix connus (UX-11), en lecture seule : table versionnée de la couche LLM (USD par million de jetons) qui pré-remplit le prix d'un modèle reconnu par son nom. Le prix saisi dans `providers[].models[m].price` fait foi. */
+            readonly known_prices?: components["schemas"]["KnownModelPrice"][];
+        };
+        KnownModelPrice: {
+            model: string;
+            provider: string;
+            /**
+             * @description `verified` : prix relevé dans le dépôt ; `to_validate` : aucun prix relevé, à saisir.
+             * @enum {string}
+             */
+            status: "verified" | "to_validate";
+            price: {
+                in: number;
+                out: number;
+                in_cached?: number;
+            } | null;
+            source: string;
+            as_of?: string;
         };
         ValidatedModel: {
             model_id: string;
@@ -3364,7 +3495,7 @@ export interface components {
                 "application/json": components["schemas"]["RunAccepted"];
             };
         };
-        /** @description File pleine (08b § 3) ; `queue_full` au-delà de `MAX_CONCURRENT_RUNS` runs actifs sur l'instance, `user_queue_full` au-delà de `MAX_ACTIVE_RUNS_PER_USER` pour l'appelant, `key_rate_limited` au-delà de `MAX_RUNS_PER_KEY_PER_MINUTE` créations par clé d'API ; réessayer après `Retry-After`. */
+        /** @description File pleine (08b § 3) ; `queue_full` au-delà de `MAX_CONCURRENT_RUNS` runs actifs sur l'instance, `user_queue_full` au-delà de `MAX_ACTIVE_RUNS_PER_USER` pour l'appelant, `key_rate_limited` au-delà de `MAX_RUNS_PER_KEY_PER_MINUTE` créations par clé d'API ; réessayer après `Retry-After`. Exception : `budget_exceeded` (budget USD du jour de l'appelant, `USER_BUDGET_DAILY_USD` : dépense du jour, enveloppes maximales des runs actifs et enveloppe du nouveau run, 08b § 3) n'a PAS de `Retry-After` et n'est pas réessayable avant minuit UTC. */
         QueueFull: {
             headers: {
                 "Retry-After"?: number;
@@ -4146,7 +4277,15 @@ export interface operations {
             };
             400: components["responses"]["Error"];
             401: components["responses"]["Error"];
-            403: components["responses"]["Error"];
+            /** @description `human_confirmation_required` : activation du mode « SYM ne lâche pas » (ou changement de son plafond) hors de la console, par une clé d'API, avec `what_to_do` ; `insufficient_scope` : clé sans `apis:write`. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
             404: components["responses"]["Error"];
             409: components["responses"]["Error"];
         };

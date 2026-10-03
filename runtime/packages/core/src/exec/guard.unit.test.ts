@@ -31,7 +31,7 @@ const NORMAL: HttpExchange = { status: 200, headers: { 'content-type': 'applicat
 
 describe('assert_no_circumvention : suite de chaque classe (04 §7)', () => {
   it('refus et défis : arrêt, aucun agent, aucun changement de réseau, statut bloquee', () => {
-    for (const cls of ['blocked_by_protection', 'forbidden', 'robots_disallowed'] as const) {
+    for (const cls of ['blocked_by_protection', 'forbidden'] as const) {
       expect(failureRoute(cls), cls).toEqual({ next: 'stop', agent: false, network: 'stop', status: 'bloquee' });
     }
   });
@@ -46,7 +46,6 @@ describe('assert_no_circumvention : suite de chaque classe (04 §7)', () => {
     expect(failureRoute('rate_limited')).toMatchObject({ next: 'slow_down', agent: false, network: 'slow_down' });
     expect(failureRoute('transient')).toMatchObject({ next: 'retry', agent: false, network: 'same_network', status: 'warning' });
     expect(failureRoute('network')).toMatchObject({ next: 'next_network', agent: false, network: 'escalate' });
-    expect(failureRoute('robots_unreachable')).toMatchObject({ next: 'abstain', agent: false, status: 'erreur' });
   });
 
   it('seules extraction, code_error et not_found ouvrent la réparation (agent)', () => {

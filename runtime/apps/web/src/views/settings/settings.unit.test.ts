@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Réglages BYO (06 § 2, 08 § 7, tâche 3.5). `assert_secret_masked` : la clé d'un fournisseur n'apparaît jamais en clair dans le DOM
 // rendu, n'est jamais relue, et le champ est vidé dès l'envoi. Les réponses réseau sont vérifiées côté serveur (08b) et en E2E (3.6).
+import { readFileSync } from 'node:fs';
 import type { components } from '@runtime/client';
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
 import { nextTick, watch } from 'vue';
 import TestOutcome from '@/components/settings/TestOutcome.vue';
 import { resetSession } from '@/composables/useSession';
-import { useExtensionSettings, useLlmSettings, useProxies, useSmtp, useWebhooks } from '@/composables/useSettings';
+import { LLM_PRESETS, useExtensionSettings, useLlmSettings, useProxies, useSmtp, useWebhooks } from '@/composables/useSettings';
 import en from '@/i18n/locales/en.json';
 import { setApi } from '@/lib/api';
 import { collectDiagnostic } from '@/lib/diagnostic';
@@ -130,6 +131,114 @@ describe('Réglages > Modèles IA', () => {
     const bare = await view(ModelsSettingsView);
     expect((bare.match(/data-testid="model-validation"/g) ?? []).length).toBe(2);
     expect(bare).not.toContain(en.settings.models.validation.validated.replace('{date}', '2026-09-30'));
+  });
+
+  describe('UX-11 — prix des modèles (USD par million de jetons)', () => {
+    const known_prices = [
+      { model: 'claude-opus-4-8', provider: 'anthropic', status: 'verified', price: { in: 5, out: 25, in_cached: 0.5 }, source: 'tests/agent/agent-live.security.test.ts', as_of: '2026-10-01' },
+      { model: 'claude-sonnet-5-5', provider: 'anthropic', status: 'to_validate', price: null, source: 'aucun prix relevé dans le dépôt' },
+    ];
+    const anthropic = {
+      providers: [{ id: 'anthropic', preset: 'custom', base_url: 'https://api.anthropic.com/v1', api_key_set: true, headers_set: false }],
+      roles: { investigate: { provider: 'anthropic', model: 'claude-opus-4-8' }, extract: { provider: 'anthropic', model: 'claude-sonnet-5-5' } },
+      known_prices,
+    };
+
+    test('chaque fournisseur liste ses modèles utilisés, prix en entrée, en sortie et en cache ; le nom connu pré-remplit, « à valider » ne remplit rien', async () => {
+      installFakeServer({ ...sessionRoutes, 'GET /api/settings/llm': () => json(200, anthropic) });
+      const html = await view(ModelsSettingsView);
+      const rows = [...html.matchAll(/data-testid="model-price-row"[^>]*data-model="([^"]+)"/g)].map((m) => m[1]);
+      expect(rows).toEqual(['claude-opus-4-8', 'claude-sonnet-5-5']);
+      const input = (id: string) => new RegExp(`<input[^>]*id="${id}"[^>]*>`).exec(html)?.[0] ?? '';
+      expect(input('price-in-0-0')).toMatch(/value="5"/);
+      expect(input('price-out-0-0')).toMatch(/value="25"/);
+      expect(input('price-cached-0-0')).toMatch(/value="0.5"/);
+      expect(input('price-in-0-1')).not.toMatch(/value=/);
+      expect(html).toContain(en.settings.models.price.toValidate);
+      expect(html).toContain(en.settings.models.price.unit);
+    });
+
+    test('un rôle dont le modèle n’a pas de prix est signalé', async () => {
+      installFakeServer({ ...sessionRoutes, 'GET /api/settings/llm': () => json(200, anthropic) });
+      const html = await view(ModelsSettingsView);
+      expect((html.match(/data-testid="role-price-missing"/g) ?? []).length).toBe(1);
+      expect(html).toContain(en.settings.models.price.roleMissing.replace('{model}', 'claude-sonnet-5-5'));
+    });
+
+    test('revue fix-ux-11 (4) — le signalement d’un rôle sans prix est EN ROUGE (sym-error) ; le résultat de Tester le répète', async () => {
+      const calls = installFakeServer({
+        ...sessionRoutes,
+        'GET /api/settings/llm': () => json(200, anthropic),
+        'POST /api/settings/llm/test': () => json(200, { ok: true, tested_at: '2026-10-03T10:00:00Z', error: null, profile: {} }),
+      });
+      const html = await view(ModelsSettingsView);
+      const missing = /<p[^>]*data-testid="role-price-missing"[^>]*>/.exec(html)?.[0] ?? '';
+      expect(missing).toMatch(/class="[^"]*\bsym-error\b/);
+      // Avant tout test : pas d'avertissement de test ; après Tester sur le rôle sans prix : avertissement ; rôle prisé : aucun.
+      const settings = useLlmSettings();
+      await settings.load();
+      expect(settings.testPriceWarning('extract')).toBe(false);
+      await settings.test('extract');
+      await settings.test('investigate');
+      expect(calls.filter((c) => c.path === '/api/settings/llm/test')).toHaveLength(2);
+      expect(settings.testPriceWarning('extract')).toBe(true);
+      expect(settings.testPriceWarning('investigate')).toBe(false);
+      settings.setModelPrice(0, 'claude-sonnet-5-5', 'in', '3');
+      settings.setModelPrice(0, 'claude-sonnet-5-5', 'out', '15');
+      expect(settings.testPriceWarning('extract')).toBe(false);
+    });
+
+    test('enregistrer : le prix connu et le prix saisi partent dans providers[].models[m].price du PUT existant', async () => {
+      const calls = installFakeServer({ 'GET /api/settings/llm': () => json(200, anthropic), 'PUT /api/settings/llm': () => json(200, anthropic) });
+      const settings = useLlmSettings();
+      await settings.load();
+      settings.setModelPrice(0, 'claude-sonnet-5-5', 'in', '3');
+      settings.setModelPrice(0, 'claude-sonnet-5-5', 'out', '15');
+      expect(await settings.save()).toBe(true);
+      const sent = calls.find((c) => c.method === 'PUT')?.body as { providers: { models: Record<string, { price?: unknown }> }[] };
+      expect(sent.providers[0]!.models).toEqual({
+        'claude-opus-4-8': { price: { in: 5, out: 25, in_cached: 0.5 } },
+        'claude-sonnet-5-5': { price: { in: 3, out: 15 } },
+      });
+    });
+
+    test('le prix pré-rempli reste modifiable ; vider l’entrée en cache la retire ; le profil et les autres champs du modèle sont conservés', async () => {
+      const profile = { tools: true, tool_choice: ['auto'], structured: 'json_schema', cache: false };
+      const body = { ...anthropic, providers: [{ ...anthropic.providers[0], models: { 'claude-opus-4-8': { profile, extra_body: { zz: 1 } } } }] };
+      const calls = installFakeServer({ 'GET /api/settings/llm': () => json(200, body), 'PUT /api/settings/llm': () => json(200, body) });
+      const settings = useLlmSettings();
+      await settings.load();
+      settings.setModelPrice(0, 'claude-opus-4-8', 'in', '4.5');
+      settings.setModelPrice(0, 'claude-opus-4-8', 'in_cached', '');
+      await settings.save();
+      const sent = calls.find((c) => c.method === 'PUT')?.body as { providers: { models: Record<string, unknown> }[] };
+      expect(sent.providers[0]!.models['claude-opus-4-8']).toEqual({ profile, extra_body: { zz: 1 }, price: { in: 4.5, out: 25 } });
+    });
+
+    test('UX-17 — vider l’entrée et la sortie d’un modèle déjà prisé envoie price: null (retrait explicite) ; un modèle jamais prisé n’envoie rien', async () => {
+      const body = { ...anthropic, providers: [{ ...anthropic.providers[0], models: { 'claude-opus-4-8': { price: { in: 5, out: 25 } } } }] };
+      const calls = installFakeServer({ 'GET /api/settings/llm': () => json(200, body), 'PUT /api/settings/llm': () => json(200, body) });
+      const settings = useLlmSettings();
+      await settings.load();
+      settings.setModelPrice(0, 'claude-opus-4-8', 'in', '');
+      settings.setModelPrice(0, 'claude-opus-4-8', 'out', '');
+      await settings.save();
+      const sent = calls.find((c) => c.method === 'PUT')?.body as { providers: { models: Record<string, unknown> }[] };
+      expect(sent.providers[0]!.models).toEqual({ 'claude-opus-4-8': { price: null } });
+    });
+
+    test('un prix incomplet (entrée sans sortie), négatif ou illisible n’est jamais envoyé : l’enregistrement s’arrête avec un message', async () => {
+      const calls = installFakeServer({ 'GET /api/settings/llm': () => json(200, anthropic), 'PUT /api/settings/llm': () => json(200, anthropic) });
+      const settings = useLlmSettings();
+      await settings.load();
+      settings.setModelPrice(0, 'claude-sonnet-5-5', 'in', '3');
+      expect(await settings.save()).toBe(false);
+      expect(settings.saveFailure.value).toBe('settings.models.price.incomplete');
+      settings.setModelPrice(0, 'claude-sonnet-5-5', 'out', '-1');
+      expect(await settings.save()).toBe(false);
+      expect(settings.saveFailure.value).toBe('settings.models.price.invalid');
+      expect(calls.filter((c) => c.method === 'PUT')).toHaveLength(0);
+    });
   });
 
   test('un non-admin (403) lit un message clair, pas une panne', async () => {
@@ -393,5 +502,68 @@ describe('Diagnostic local', () => {
   test('une route qui échoue laisse le champ à null : le diagnostic reste exportable', async () => {
     const api = buildApi({ baseUrl: 'http://console.test', fetch: async () => { throw new TypeError('fetch failed'); } });
     expect(await collectDiagnostic(api, 'en', new Date('2026-10-01T10:00:00Z'))).toEqual({ generated_at: '2026-10-01T10:00:00.000Z', console_locale: 'en', instance: { server: null, schema: null, min_extension: null, mcp_spec: null }, readiness: { ok: null } });
+  });
+});
+
+describe('Réglages > Modèles IA : préréglages de fournisseurs (UX-01)', () => {
+  test('Anthropic est proposé, libellé « Anthropic », avec les autres fournisseurs compatibles OpenAI', async () => {
+    installFakeServer({ ...sessionRoutes, 'GET /api/settings/llm': () => json(200, llmSettings) });
+    const html = await view(ModelsSettingsView);
+    for (const preset of ['anthropic', 'gemini', 'mistral', 'groq']) {
+      expect(html).toContain(`<option value="${preset}">${en.settings.models.presets[preset as 'anthropic']}</option>`);
+    }
+    expect(en.settings.models.presets.anthropic).toBe('Anthropic');
+  });
+
+  test('choisir Anthropic pré-remplit l’URL de base ; une URL saisie à la main n’est pas écrasée', async () => {
+    installFakeServer({ ...sessionRoutes, 'GET /api/settings/llm': () => json(200, llmSettings) });
+    const settings = useLlmSettings();
+    settings.addProvider();
+    const draft = (): NonNullable<(typeof settings.providers.value)[number]> => settings.providers.value[0] as never;
+    settings.setPreset(0, 'anthropic');
+    expect(draft().preset).toBe('anthropic');
+    expect(draft().base_url).toBe('https://api.anthropic.com/v1');
+    settings.setPreset(0, 'mistral');
+    expect(draft().base_url).toBe('https://api.mistral.ai/v1');
+    settings.providers.value[0]!.base_url = 'https://proxy.interne.test/v1';
+    settings.setPreset(0, 'groq');
+    expect(draft().base_url).toBe('https://proxy.interne.test/v1');
+    settings.setPreset(0, 'custom');
+    expect(draft().base_url).toBe('https://proxy.interne.test/v1');
+  });
+
+  test('Z.ai, DeepSeek et Qwen pré-remplissent aussi leur URL de base', () => {
+    installFakeServer({ ...sessionRoutes, 'GET /api/settings/llm': () => json(200, llmSettings) });
+    const settings = useLlmSettings();
+    settings.addProvider();
+    const draft = (): NonNullable<(typeof settings.providers.value)[number]> => settings.providers.value[0] as never;
+    settings.setPreset(0, 'zai');
+    expect(draft().base_url).toBe('https://api.z.ai/api/paas/v4');
+    settings.setPreset(0, 'deepseek');
+    expect(draft().base_url).toBe('https://api.deepseek.com/v1');
+    settings.setPreset(0, 'qwen');
+    expect(draft().base_url).toBe('https://dashscope-intl.aliyuncs.com/compatible-mode/v1');
+  });
+
+  test('passer d’un préréglage pré-rempli à ollama, vllm ou custom vide l’URL de l’ancien fournisseur', () => {
+    installFakeServer({ ...sessionRoutes, 'GET /api/settings/llm': () => json(200, llmSettings) });
+    const settings = useLlmSettings();
+    settings.addProvider();
+    const draft = (): NonNullable<(typeof settings.providers.value)[number]> => settings.providers.value[0] as never;
+    for (const target of ['ollama', 'vllm', 'custom'] as const) {
+      settings.setPreset(0, 'anthropic');
+      expect(draft().base_url).toBe('https://api.anthropic.com/v1');
+      settings.setPreset(0, target);
+      expect(draft().preset).toBe(target);
+      expect(draft().base_url).toBe('');
+    }
+  });
+
+  test('la liste déroulante couvre tout l’enum LlmPreset du contrat OpenAPI', () => {
+    const spec = readFileSync(new URL('../../../../../packages/client/openapi/openapi.yaml', import.meta.url), 'utf8');
+    const line = /\n {4}LlmPreset:\n {6}type: string\n {6}enum: \[([^\]]+)\]/.exec(spec);
+    expect(line).not.toBeNull();
+    const contract = (line?.[1] ?? '').split(',').map((value) => value.trim());
+    expect([...LLM_PRESETS].sort()).toEqual([...contract].sort());
   });
 });

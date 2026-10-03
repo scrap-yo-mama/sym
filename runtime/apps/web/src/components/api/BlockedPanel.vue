@@ -22,10 +22,14 @@ const props = defineProps<{ detail: ApiDetail; pending?: boolean }>();
 defineEmits<{ reinvestigate: [] }>();
 const { t, te, locale } = useI18n();
 
-type Variant = 'blocked_by_protection' | 'robots_disallowed' | 'forbidden';
+/**
+ * Deux variantes : protection et refus d'accès. Le robots.txt ne conditionne pas la collecte (D-91) : une ancienne API
+ * arrêtée avec la raison historique `robots_disallowed` s'affiche comme un refus du site, sans texte sur le robots.txt.
+ */
+type Variant = 'blocked_by_protection' | 'forbidden';
 const variant = computed<Variant>(() => {
   const code = props.detail.status_reason?.code;
-  return code === 'robots_disallowed' || code === 'forbidden' ? code : 'blocked_by_protection';
+  return code === 'forbidden' || code === 'robots_disallowed' ? 'forbidden' : 'blocked_by_protection';
 });
 
 const params = computed(() => props.detail.status_reason?.params ?? {});
@@ -40,7 +44,6 @@ function labelled(prefix: 'execution' | 'network', value: unknown): string | nul
 
 /** Phrase « ce qui s'est passé » : l'essai déclencheur quand le serveur le décrit, sinon la réponse seule. */
 const what = computed(() => {
-  if (variant.value === 'robots_disallowed') return t('blockedPanel.what.robots');
   if (variant.value === 'forbidden') return t('blockedPanel.what.forbidden');
   const answer = t(params.value.kind === 'challenge' ? 'blockedPanel.answer.challenge' : 'blockedPanel.answer.refusal');
   const date = typeof params.value.at === 'string' ? formatDateTime(params.value.at, locale.value) : null;
@@ -53,7 +56,7 @@ const what = computed(() => {
   return t('blockedPanel.what.generic', { domain: domain.value, answer });
 });
 
-const why = computed(() => t(variant.value === 'robots_disallowed' ? 'blockedPanel.why.robots' : variant.value === 'forbidden' ? 'blockedPanel.why.forbidden' : 'blockedPanel.why.protection'));
+const why = computed(() => t(variant.value === 'forbidden' ? 'blockedPanel.why.forbidden' : 'blockedPanel.why.protection'));
 
 const cost = computed(() => (typeof params.value.cost_usd === 'number' ? formatUsd(params.value.cost_usd, locale.value, true) : null));
 const officialApi = computed(() => safeHref(props.detail.access_report?.official_api_url));
@@ -77,7 +80,7 @@ async function copyTemplate(): Promise<void> {
 </script>
 
 <template>
-  <section class="flex flex-col gap-4 rounded-xl border-2 border-foreground bg-card p-6" aria-labelledby="blocked-title" data-testid="blocked-panel" :data-variant="variant">
+  <section id="blocked-panel" class="flex flex-col gap-4 rounded-xl border-2 border-foreground bg-card p-6" aria-labelledby="blocked-title" data-testid="blocked-panel" :data-variant="variant">
     <h2 id="blocked-title" class="text-2xl font-extrabold">{{ t('blockedPanel.title', { domain }) }}</h2>
 
     <div data-testid="blocked-what">

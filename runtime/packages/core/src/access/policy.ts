@@ -1,12 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // `apis.access_policy` (tâche 1.11, 17 §4, 04b §1) : politique d'accès d'une API, à côté de `network_policy`.
-// `robots` n'a VOLONTAIREMENT qu'une valeur (`respect`) : un outil respectueux par conception n'expose aucun
-// interrupteur d'ignorance (INV11). Les champs réservés existent pour ne pas casser le schéma en V2 ; toute valeur
-// réservée est refusée en V1 (`enforce`, `train`, `ask`, `auto_under_cap`). La base porte les mêmes contraintes (CHECK
-// `apis_access_policy_robots`, `apis_access_policy_payment`).
+// Les champs réservés existent pour ne pas casser le schéma en V2 ; toute valeur réservée est refusée en V1 (`enforce`,
+// `train`, `ask`, `auto_under_cap`). La base porte la même contrainte de paiement (CHECK `apis_access_policy_payment`).
+// Champ retiré (D-91) : `robots`. Une politique écrite avant D-91 le porte encore (`"robots": "respect"`) : il est toléré
+// et ignoré, à la lecture comme à l'écriture ; il n'est plus jamais produit (migration 0021).
 
 export type AccessPolicy = {
-  readonly robots: 'respect';
   readonly on_ai_signal: 'warn';
   readonly intended_use: 'context';
   readonly prefer_official: boolean;
@@ -18,7 +17,6 @@ export type AccessPolicy = {
 };
 
 export const DEFAULT_ACCESS_POLICY: AccessPolicy = Object.freeze({
-  robots: 'respect',
   on_ai_signal: 'warn',
   intended_use: 'context',
   prefer_official: true,
@@ -36,23 +34,22 @@ export class AccessPolicyError extends Error {
   }
 }
 
-const KEYS = new Set(['robots', 'on_ai_signal', 'intended_use', 'prefer_official', 'payment', 'report_id', 'user_agent_contact']);
+/** `robots` : champ retiré par D-91, toléré et ignoré (politiques écrites avant). */
+const RETIRED_KEYS = new Set(['robots']);
+const KEYS = new Set(['on_ai_signal', 'intended_use', 'prefer_official', 'payment', 'report_id', 'user_agent_contact']);
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 
 /**
  * Politique d'accès validée, défauts appliqués. Lève `AccessPolicyError` sur tout champ inconnu ou toute valeur hors
- * V1 : en particulier `robots` autre que `respect` (il n'existe aucun moyen de l'ignorer, ni par API ni en base).
+ * V1. Le champ retiré `robots` est ignoré.
  */
 export function parseAccessPolicy(raw: unknown): AccessPolicy {
   if (raw === undefined || raw === null) return DEFAULT_ACCESS_POLICY;
   if (!isRecord(raw)) throw new AccessPolicyError('invalid_access_policy', 'access_policy : objet attendu');
   for (const key of Object.keys(raw)) {
-    if (!KEYS.has(key)) throw new AccessPolicyError('invalid_access_policy', `access_policy : champ inconnu « ${key.slice(0, 64)} »`);
-  }
-  if (raw['robots'] !== undefined && raw['robots'] !== 'respect') {
-    throw new AccessPolicyError('robots_respect_only', "access_policy.robots : seule la valeur « respect » existe (INV11)");
+    if (!KEYS.has(key) && !RETIRED_KEYS.has(key)) throw new AccessPolicyError('invalid_access_policy', `access_policy : champ inconnu « ${key.slice(0, 64)} »`);
   }
   if (raw['on_ai_signal'] !== undefined && raw['on_ai_signal'] !== 'warn') {
     throw new AccessPolicyError('reserved_value', "access_policy.on_ai_signal : « warn » seul en V1 (« enforce » réservé à la V2)");

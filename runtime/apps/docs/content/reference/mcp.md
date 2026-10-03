@@ -80,11 +80,13 @@ Un admin ou l'owner qui lit par `get_run` le run d'un autre utilisateur reçoit 
 
 Pendant une enquête, le texte de la réponse raconte ce qui s'est passé, parce que c'est le seul canal que tous les clients affichent. Une première API se crée en deux réponses, chacune avec le coût de son propre run.
 
-`create_api` rend le rapport d'accès, la reconnaissance et le schéma proposé, à montrer à la personne :
+`create_api` ouvre sa réponse par une phrase pour l'IA qui dit l'état réel de l'enquête (schéma à valider, en cours, ou échec avec sa cause), puis rend le rapport d'accès, la reconnaissance et le schéma proposé, à montrer à la personne :
 
 ```text
+API zz-books created. Proposed output schema below: show it to the user, then call validate_schema with api_id.
+
 Investigation zz-books · books.toscrape.com · awaiting_schema_validation
-1. Access report: robots.txt allows this page [0.2 s, $0]
+1. Access report: no signal to review [0.2 s, $0]
 2. Reconnaissance: 1 candidate data source (browser) [3.1 s, $0.002]
    Output schema proposed: 2 fields
 Cost: $0.002
@@ -103,7 +105,7 @@ Puis `validate_schema` lance un second run, qui refait le rapport d'accès et la
 
 ```text
 Investigation zz-books · books.toscrape.com · done
-1. Access report: robots.txt allows this page [0.2 s, $0]
+1. Access report: no signal to review [0.2 s, $0]
 2. Reconnaissance: 1 candidate data source (browser) [3.1 s, $0]
 3. Trial fetch/direct: conformant, 20 items, 2 pages [0.4 s, $0.0001]
 Strategy kept: fetch/direct (E1, $0.0001 per run)
@@ -112,7 +114,9 @@ Next step: call api_zz_books with its input, or run_api. If the tool does not ap
 Console: https://<instance>/apis/zz-books
 ```
 
-Le récit suit la langue du compte (`en` ou `fr`), que `?lang=` remplace. Les mêmes faits sont dans `structuredContent` : `timeline` (une entrée par étape et par jalon), `attempts` (les essais), `cost` et `console_url`. Les deux viennent du même journal d'enquête : le texte et la structure citent les mêmes essais, les mêmes durées et les mêmes coûts. Le **rapport d'accès** (`robots.txt`, signaux d'usage, conditions du site) est toujours la première étape : voir [Usage responsable](../explications/usage-responsable.md). Le récit n'affiche jamais un texte du site : des codes, des comptes, des durées et des coûts.
+Le récit suit la langue du compte (`en` ou `fr`), que `?lang=` remplace. Les mêmes faits sont dans `structuredContent` : `timeline` (une entrée par étape et par jalon), `attempts` (les essais), `cost` et `console_url`. Les deux viennent du même journal d'enquête : le texte et la structure citent les mêmes essais, les mêmes durées et les mêmes coûts. Le **rapport d'accès** (signaux d'usage, conditions du site) est toujours la première étape : voir [Usage responsable](../explications/usage-responsable.md). Le récit n'affiche jamais un texte du site : des codes, des comptes, des durées et des coûts.
+
+Un run arrêté par une cause connue (contact du robot ou prix du modèle absent, par exemple) la porte dans `error` (`code`, `message`, `what_to_do`, `retryable`). Le texte commence alors par la phrase qui la nomme (« The run could not start (instance_contact_missing): … »), et le récit dit la tâche à faire avec le gabarit de la cause, sans recopier aucun autre détail.
 
 Un client qui n'affiche rien d'autre que le texte a tout ce qu'il faut : phases, essais, coût, stratégie retenue, prochaine action avec ses identifiants (`api_id`, `run_id`, curseur), lien de la console et, à la création, le schéma à montrer à la personne. `get_run` rend le même récit à tout moment.
 
@@ -137,7 +141,7 @@ Une erreur est un texte JSON avec `isError`, jamais une exception muette :
 
 Un outil inconnu, ou retiré depuis la dernière liste du client, répond `not_found` avec `list_apis` pour prochaine action ; une erreur interne de l'instance répond `internal`, sans son détail (journalisé côté serveur).
 
-Une API **`bloquee`** répond `retryable: false`, et l'instruction du serveur dit explicitement de **ne jamais réessayer en boucle**. Son `message` est un gabarit fermé choisi par la raison de l'arrêt (le site refuse l'accès automatisé, `robots.txt` le demande, l'adresse est refusée), dans la langue du compte, avec au moins une alternative honnête : une API officielle, un export, une autre source, une demande d'accès à l'éditeur. Les gabarits ne proposent jamais de moyen de passer outre un refus : aucun outil ne propose de changer de réseau ou de basculer sur le tunnel à cause d'un blocage. Une API en `action_requise` suit le même principe, avec le gabarit de sa cause.
+Une API **`bloquee`** répond `retryable: false`, et l'instruction du serveur dit explicitement de **ne jamais réessayer en boucle**. Son `message` est un gabarit fermé choisi par la raison de l'arrêt (le site refuse l'accès automatisé, l'adresse est refusée), dans la langue du compte, avec au moins une alternative honnête : une API officielle, un export, une autre source, une demande d'accès à l'éditeur. Les gabarits ne proposent jamais de moyen de passer outre un refus : aucun outil ne propose de changer de réseau ou de basculer sur le tunnel à cause d'un blocage. Une API en `action_requise` suit le même principe, avec le gabarit de sa cause.
 
 ## Prompts et élicitation
 

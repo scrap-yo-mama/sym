@@ -45,7 +45,8 @@ export const EXECUTION_CODE: Readonly<Record<string, string>> = Object.freeze({ 
 
 type NarrativeCatalog = {
   title: (slug: string, domain: string | null, phase: string) => string;
-  access: { allowed: string; review: string; disallowed: string; unknown: string };
+  /** Pastille du rapport d'accès (D-91 : plus de section robots.txt, `allowed` ou `review`). */
+  access: { allowed: string; review: string; unknown: string };
   recon: (sources: number, mode: string | null) => string;
   reconFailed: (failureClass: string) => string;
   trial: (label: string, ok: boolean, result: string, records: number | null, pages: number | null) => string;
@@ -53,6 +54,8 @@ type NarrativeCatalog = {
   pruned: (label: string | null, reason: string | null, count: number) => string;
   strategy: (label: string, code: string, perRun: string) => string;
   stopped: (cause: string | null) => string;
+  /** Arrêt pour une cause d'action requise (contact du robot, prix du modèle…) : une tâche, pas un refus du site. */
+  stoppedAction: (cause: string) => string;
   failed: (failureClass: string | null) => string;
   budget: string;
   running: string;
@@ -81,9 +84,8 @@ type BriefCatalog = {
 const EN: NarrativeCatalog = {
   title: (slug, domain, phase) => `Investigation ${slug}${domain === null ? '' : ` · ${domain}`} · ${phase}`,
   access: {
-    allowed: 'robots.txt allows this page',
-    review: 'robots.txt allows this page, usage signals to review',
-    disallowed: 'robots.txt asks robots not to visit this page',
+    allowed: 'no signal to review',
+    review: 'usage signals to review',
     unknown: 'access report recorded',
   },
   recon: (n, mode) => (n === 0 ? `no data source found${mode === null ? '' : ` (${mode})`}` : `${n} candidate data source${n === 1 ? '' : 's'}${mode === null ? '' : ` (${mode})`}`),
@@ -94,6 +96,7 @@ const EN: NarrativeCatalog = {
   pruned: (label, reason, count) => `Skipped ${count} more expensive trial${count === 1 ? '' : 's'}${label === null ? '' : ` after ${label}`}${reason === null ? '' : ` (${reason})`}`,
   strategy: (label, code, perRun) => `Strategy kept: ${label} (${code}, ${perRun} per run)`,
   stopped: (cause) => `The investigation stopped${cause === null ? '' : ` (${cause})`}: SYM does not try other ways to reach the site.`,
+  stoppedAction: (cause) => `The investigation stopped (${cause}): an action is needed before it can resume.`,
   failed: (c) => `The investigation failed${c === null ? '' : ` (${c})`}.`,
   budget: 'The investigation budget ran out before a conformant strategy was found.',
   running: 'The investigation is running.',
@@ -125,9 +128,8 @@ const EN: NarrativeCatalog = {
 const FR: NarrativeCatalog = {
   title: (slug, domain, phase) => `Enquête ${slug}${domain === null ? '' : ` · ${domain}`} · ${phase}`,
   access: {
-    allowed: 'robots.txt autorise cette page',
-    review: 'robots.txt autorise cette page, signaux d’usage à examiner',
-    disallowed: 'robots.txt demande aux robots de ne pas visiter cette page',
+    allowed: 'aucun signal à examiner',
+    review: 'signaux d’usage à examiner',
     unknown: 'rapport d’accès enregistré',
   },
   recon: (n, mode) => (n === 0 ? `aucune source de données trouvée${mode === null ? '' : ` (${mode})`}` : `${n} source${n === 1 ? '' : 's'} de données candidate${n === 1 ? '' : 's'}${mode === null ? '' : ` (${mode})`}`),
@@ -138,6 +140,7 @@ const FR: NarrativeCatalog = {
   pruned: (label, reason, count) => `${count} essai${count === 1 ? '' : 's'} plus coûteux écarté${count === 1 ? '' : 's'}${label === null ? '' : ` après ${label}`}${reason === null ? '' : ` (${reason})`}`,
   strategy: (label, code, perRun) => `Stratégie retenue : ${label} (${code}, ${perRun} par run)`,
   stopped: (cause) => `L’enquête s’est arrêtée${cause === null ? '' : ` (${cause})`} : SYM n’essaie pas d’autre voie pour atteindre le site.`,
+  stoppedAction: (cause) => `L’enquête s’est arrêtée (${cause}) : une action est attendue avant de reprendre.`,
   failed: (c) => `L’enquête a échoué${c === null ? '' : ` (${c})`}.`,
   budget: 'Le budget d’enquête est épuisé avant qu’une stratégie conforme soit trouvée.',
   running: 'L’enquête est en cours.',
@@ -241,23 +244,30 @@ export const answerIn = (locale: McpLocale): string => (locale === 'fr' ? 'Answe
 // Gabarits fermés `bloquee` et `action_requise` (06) : jamais de verbe de contournement, jamais un texte du site
 // ---------------------------------------------------------------------------------------------------------------
 
-/** Causes de blocage (06 « Panneau Bloquée ») : le site décide, SYM s'arrête. */
-export const BLOCKED_CAUSES = ['blocked_by_protection', 'forbidden', 'robots_disallowed'] as const;
+/**
+ * Causes de blocage (06 « Panneau Bloquée ») : le site décide, SYM s'arrête. D-91 : `robots_disallowed` n'est plus produit
+ * (le robots.txt n'est plus lu automatiquement) ; une API restée bloquée pour cette raison reçoit le gabarit par défaut.
+ */
+export const BLOCKED_CAUSES = ['blocked_by_protection', 'forbidden'] as const;
 
-/** Causes d'action requise (06 « Action requise ») couvertes par un gabarit fermé. */
+/**
+ * Causes d'action requise (06 « Action requise », 06 § 4.2) couvertes par un gabarit fermé. D-91 : `robots_unreachable`
+ * n'est plus produit (gabarit par défaut pour une ligne ancienne). UX-04 et UX-11 : contact du robot et prix du modèle.
+ */
 export const ACTION_CAUSES = [
   'cost_anomaly',
   'stale',
   'unavailable',
   'reinvestigation_failed',
   'rate_limited',
-  'robots_unreachable',
   'payment_required',
   'auth_required',
   'cookie_expired',
   'session_device_bound',
   'challenge_in_tunnel',
   'secret_unreadable',
+  'instance_contact_missing',
+  'llm_price_missing',
   'account_limit',
   'session_owner_required',
   'llm_refused',
@@ -274,8 +284,6 @@ const TEMPLATES: Record<McpLocale, TemplateSet> = {
         'This site refuses automated access, so SYM stops here without insisting. It is the site’s decision. What can be done instead: look for an official API, an export or a partnership; use another source; write to the site’s publisher to ask for access; investigate again later, if the site has changed.',
       forbidden:
         'The site refuses access to this address, and SYM stops there. The IP address does not change after a refusal. What can be done instead: check your access rights, contact the publisher, or look for an official API or an export.',
-      robots_disallowed:
-        'This site asks robots not to visit this page, and SYM respects that rule. What can be done instead: look for an official API or an export, or contact the publisher to ask for access.',
     },
     action: {
       default: 'An action is needed in the console before this API can run again.',
@@ -284,13 +292,14 @@ const TEMPLATES: Record<McpLocale, TemplateSet> = {
       unavailable: 'The site does not answer. This is not a breakage: try again later.',
       reinvestigation_failed: 'The new investigation found nothing conformant; the previous version is kept. See the trials in the console.',
       rate_limited: 'The site asks to slow down (429). The pace was reduced and the address is unchanged.',
-      robots_unreachable: 'robots.txt cannot be reached: to be safe, nothing is collected. Try again later.',
       payment_required: 'The site asks for a payment. Open the publisher’s site to see the offer.',
       auth_required: 'The site asks for a login. Connect the site in the console, with the browser extension.',
       cookie_expired: 'The session of this site has expired. Connect the site again in the console.',
       session_device_bound: 'The session of this site is tied to the user’s device and cannot be copied to the server. Run it from the user’s browser.',
       challenge_in_tunnel: 'A verification appeared in the user’s browser and the run is paused. The user handles it, then resumes the run.',
       secret_unreadable: 'A stored key is unreadable. Enter it again in the console.',
+      instance_contact_missing: 'The robot contact is not set: it is required before the first investigation. Set it in the console, Settings > Robot identity; nothing was fetched and nothing was spent.',
+      llm_price_missing: 'The model price is not set: enter it in the console, Settings > AI models.',
       account_limit: 'The platform flagged a limit on the account. No retry is made. Read the platform’s message.',
       session_owner_required: 'This API uses its owner’s session. Ask the owner, or create your own API.',
       llm_refused: 'The model refused the request; there is no automatic fallback. See the trial in the console.',
@@ -304,8 +313,6 @@ const TEMPLATES: Record<McpLocale, TemplateSet> = {
         'Ce site refuse l’accès automatisé : SYM s’arrête là, sans insister. C’est la décision du site. Ce qui peut se faire à la place : chercher une API officielle, un export ou un partenariat ; utiliser une autre source ; écrire à l’éditeur du site pour demander l’accès ; ré-enquêter plus tard, si le site a changé.',
       forbidden:
         'Le site refuse l’accès à cette adresse, et SYM s’arrête là. L’adresse IP ne change pas après un refus. Ce qui peut se faire à la place : vérifier tes droits d’accès, contacter l’éditeur, ou chercher une API officielle ou un export.',
-      robots_disallowed:
-        'Ce site demande aux robots de ne pas visiter cette page, et SYM respecte cette règle. Ce qui peut se faire à la place : chercher une API officielle ou un export, ou contacter l’éditeur pour demander l’accès.',
     },
     action: {
       default: 'Une action est attendue dans la console avant que cette API puisse tourner de nouveau.',
@@ -314,13 +321,14 @@ const TEMPLATES: Record<McpLocale, TemplateSet> = {
       unavailable: 'Le site ne répond pas. Ce n’est pas une casse : réessaie plus tard.',
       reinvestigation_failed: 'La ré-enquête n’a rien trouvé de conforme ; l’ancienne version est gardée. Vois les essais dans la console.',
       rate_limited: 'Le site demande de ralentir (429). La cadence a été réduite, l’adresse est inchangée.',
-      robots_unreachable: 'robots.txt est injoignable : par prudence, rien n’est collecté. Réessaie plus tard.',
       payment_required: 'Le site demande un paiement. Ouvre le site de l’éditeur pour voir l’offre.',
       auth_required: 'Le site demande une connexion. Connecte le site dans la console, avec l’extension du navigateur.',
       cookie_expired: 'La session de ce site a expiré. Connecte de nouveau le site dans la console.',
       session_device_bound: 'La session de ce site est liée à l’appareil de l’utilisateur et ne peut pas être copiée sur le serveur. Lance-la depuis son navigateur.',
       challenge_in_tunnel: 'Une vérification est apparue dans le navigateur de l’utilisateur et le run est en pause. Il s’en occupe, puis reprend le run.',
       secret_unreadable: 'Une clé enregistrée est illisible. Ressaisis-la dans la console.',
+      instance_contact_missing: 'Le contact du robot n’est pas renseigné : il est requis avant la première enquête. Renseigne-le dans Réglages > Identité du robot ; rien n’a été envoyé ni dépensé.',
+      llm_price_missing: 'Le prix du modèle n’est pas renseigné : renseigne-le dans Réglages > Modèles IA.',
       account_limit: 'La plateforme a signalé une limite sur le compte. Aucune relance. Lis le message de la plateforme.',
       session_owner_required: 'Cette API utilise la session de son propriétaire. Demande au propriétaire, ou crée ta propre API.',
       llm_refused: 'Le modèle a refusé la demande ; aucun repli automatique. Vois l’essai dans la console.',

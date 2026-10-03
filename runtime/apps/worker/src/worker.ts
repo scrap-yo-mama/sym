@@ -46,6 +46,8 @@ import {
   finishRunAndNotify,
   heartbeatRun,
   holdSecretsLock,
+  JUDGE_QUEUE,
+  judgeQueueDefinition,
   keyCheck,
   loadSubjectExclusions,
   loadSubjectKey,
@@ -62,6 +64,7 @@ import {
   sweepOrphans,
   withActor,
   type KeyCheckResult,
+  type RunJudgeJob,
   type SweepResult,
 } from '@runtime/db';
 import { SsrfGuard } from '@runtime/core/net';
@@ -102,9 +105,18 @@ type ExecutorHandle = {
   browserContexts?: () => number;
   /** Libère les ressources (pool Chromium, proxy de lancement) à l'arrêt, après les runs. */
   close?: () => Promise<void>;
+  /** Jugement sur anomalie d'un rejeu (2.12, 19 §3) : file pg-boss `quality-judge`, consommée par ce worker. */
+  judge?: (job: RunJudgeJob) => Promise<void>;
 };
 
-export type ExecutorFactory = (deps: { pool: pg.Pool; config: WorkerConfig; checked: KeyCheckResult; logger: Logger }) => Promise<ExecutorHandle>;
+export type ExecutorFactory = (deps: {
+  pool: pg.Pool;
+  config: WorkerConfig;
+  checked: KeyCheckResult;
+  logger: Logger;
+  /** File du worker, disponible une fois démarrée (avant la prise du premier job) : planification des jobs annexes. */
+  queue?: () => PgBossJobQueue | undefined;
+}) => Promise<ExecutorHandle>;
 
 export type StartWorkerOptions = {
   config: WorkerConfig;
@@ -174,7 +186,7 @@ export async function startWorker(options: StartWorkerOptions): Promise<Worker> 
     releaseLock = await holdSecretsLock(lockClient);
     // D-12 : clé différente → KeyCheckError ici, avant pg-boss, avant toute prise de job.
     const checked = await keyCheck(pool, config.keyring);
-    if (options.executorFactory !== undefined) handle = await options.executorFactory({ pool, config, checked, logger: log });
+    if (options.executorFactory !== undefined) handle = await options.executorFactory({ pool, config, checked, logger: log, queue: () => queue });
     subjectKey = await loadSubjectKey(pool, config.keyring, checked);
     queue = new PgBossJobQueue({
       connectionString: sessionUrl,
@@ -188,6 +200,7 @@ export async function startWorker(options: StartWorkerOptions): Promise<Worker> 
     });
     await queue.start();
     await queue.createQueue(runQueueDefinition(config.runBudgetSeconds));
+    if (handle.judge !== undefined) await queue.createQueue(judgeQueueDefinition());
     await beatWorker(pool, { workerId, version: config.version });
     scheduling = await startScheduling({
       pool,
@@ -198,6 +211,9 @@ export async function startWorker(options: StartWorkerOptions): Promise<Worker> 
       now: options.scheduling?.now ?? (() => new Date()),
       warningCheckSeconds: config.warningCheckSeconds,
       pollingIntervalSeconds: config.queuePollingSeconds,
+      persistence: config.persistence,
+      userBudgetDailyUsd: config.userBudgetDailyUsd,
+      maxCostUsdPerRun: config.maxCostUsdPerRun,
       ...(options.scheduling?.smtpCa ? { smtpCa: options.scheduling.smtpCa } : {}),
     });
     log.info({ workerId, key: checked.fingerprint, concurrency: config.concurrency }, 'worker démarré');
@@ -327,7 +343,7 @@ export async function startWorker(options: StartWorkerOptions): Promise<Worker> 
           // Machine à états (04 §6) : une enquête mène son API à `sain`, `bloquee`, `action_requise` ou `erreur`
           // (transitions 1 à 4, 21) ; status_events, webhooks et alertes dans la même transaction.
           applyStatus: async (event) => {
-            const step = await applyStatusAndNotify(pool, q, { apiId: claim.apiId, runId, event, clock: { now: () => new Date() } });
+            const step = await applyStatusAndNotify(pool, q, { apiId: claim.apiId, runId, event, clock: { now: () => new Date() } }, { persistence: { policy: config.persistence } });
             await runLog.log('info', 'status_event', { event: event.type, applied: step.ok });
             return { ok: step.ok, status: step.state.status, reason: step.state.reason };
           },
@@ -344,7 +360,7 @@ export async function startWorker(options: StartWorkerOptions): Promise<Worker> 
       }
       // Bail perdu ou arrêt : le run a déjà été annulé, repris ou remis en file ; rien n'est écrit.
       if (entry.cause === 'lease_lost' || entry.cause === 'shutdown') return;
-      const closed = await finishRunAndNotify(pool, q, { runId, jobId, result }, { personal, subjectKey: subjects });
+      const closed = await finishRunAndNotify(pool, q, { runId, jobId, result }, { personal, subjectKey: subjects, persistence: { policy: config.persistence } });
       if (result.state === 'failed') span.fail(result.failure_class ?? result.stop_reason);
       if (result.state === 'skipped_tunnel_offline') span.fail(result.stop_reason);
       // Run arrêté sans classe d'échec (défi en tunnel, extension hors ligne) : événement `run_stopped` de la machine à
@@ -385,6 +401,18 @@ export async function startWorker(options: StartWorkerOptions): Promise<Worker> 
     await execute(runId, job.id, job.signal, typeof job.data._trace === 'string' ? job.data._trace : undefined);
   });
 
+  // Jugement sur anomalie (2.12) : un job par run, traité après sa clôture ; aucune transition, aucune version.
+  const judge = handle.judge;
+  if (judge !== undefined) {
+    await q.work<RunJudgeJob>(JUDGE_QUEUE, { concurrency: 1, pollingIntervalSeconds: config.queuePollingSeconds }, async (job) => {
+      if (typeof job.data?.run_id !== 'string' || typeof job.data.owner_id !== 'string') {
+        log.error({ jobId: job.id }, 'job de jugement sans run_id : ignoré');
+        return;
+      }
+      await judge(job.data);
+    });
+  }
+
   let stopping: Promise<void> | undefined;
   const stop = () =>
     (stopping ??= (async () => {
@@ -394,6 +422,7 @@ export async function startWorker(options: StartWorkerOptions): Promise<Worker> 
       await scheduling?.stop();
       clearInterval(retentionTimer);
       await q.offWork(RUN_QUEUE).catch((error: unknown) => log.warn({ err: errorDetail(error) }, 'arrêt : offWork'));
+      if (judge !== undefined) await q.offWork(JUDGE_QUEUE).catch((error: unknown) => log.warn({ err: errorDetail(error) }, 'arrêt : offWork'));
       await beat();
       const all = () => Promise.all([...running.values()].map((r) => r.done));
       let timer: NodeJS.Timeout | undefined;

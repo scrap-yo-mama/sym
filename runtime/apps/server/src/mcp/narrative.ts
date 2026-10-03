@@ -6,6 +6,11 @@
 //
 // Gabarits fermés (texts.ts) : jamais un texte du site ni du dossier d'enquête. Le dossier (19c § 7) n'entre que par des
 // identifiants validés (`h1`), des types et des états du code ; huit lignes d'indices au plus.
+//
+// Cause nommée (UX-04) : un run arrêté par une cause connue (`instance_contact_missing`, `llm_price_missing`…) la porte dans
+// `error` de l'enveloppe (`error_detail` du run), pas dans `failure_class` (NULL). Le récit la reçoit en entrée et la dit,
+// avec son gabarit fermé, même quand la chronologie n'a ni action requise ni événement de fin.
+import { isTerminalRunState, type RunState } from '@runtime/core';
 import { codeOf, codeOrNull, hostOrNull, type TimelineAccess, type TimelineAttempt, type TimelineEntry, type TimelineFinished, type TimelineRecon } from '../rest/timeline.js';
 import {
   ACTION_CAUSES,
@@ -38,6 +43,8 @@ export type NarrativeInput = {
   brief?: BriefNarrative;
   /** Remarque de la personne après une élicitation « modifier » : le récit propose d'ajuster le schéma. */
   schemaRemark?: boolean;
+  /** Cause nommée d'un run arrêté (`error` de l'enveloppe RunResult ou de `ApiCreated`, UX-04) : seul son code est lu. */
+  error?: { code?: unknown } | null;
 };
 
 const BRIEF_KINDS = ['endpoint', 'embedded_data', 'selector', 'pagination', 'example_url', 'pitfall'];
@@ -55,8 +62,19 @@ const ACTIVE = new Set(['queued', 'running', 'waiting_tunnel']);
  */
 const pathLabel = (e: { execution: string; network: string }) => `${codeOf(e.execution)}/${codeOf(e.network)}`;
 
-/** Texte d'une étape ou d'un jalon, sans numéro (le récit le numérote ; la progression MCP l'utilise telle quelle). */
-export function entryText(entry: TimelineEntry, locale: McpLocale): string | null {
+/** Code de la cause nommée (UX-04) s'il a la forme d'un code, sinon null : une valeur reçue n'est jamais recopiée. */
+const causeOf = (error: NarrativeInput['error']): string | null => {
+  const code = error?.code;
+  return typeof code === 'string' && REASON_CODE.test(code) ? code : null;
+};
+
+const isAction = (cause: string | null): cause is string => cause !== null && (ACTION_CAUSES as readonly string[]).includes(cause);
+
+/**
+ * Texte d'une étape ou d'un jalon, sans numéro (le récit le numérote ; la progression MCP l'utilise telle quelle). `cause` :
+ * la cause nommée du run (UX-04), dite par la fin d'enquête quand elle ne porte ni classe d'échec ni raison d'arrêt.
+ */
+export function entryText(entry: TimelineEntry, locale: McpLocale, cause: string | null = null): string | null {
   const c = narrativeCatalog(locale);
   const cost = (e: { cost_usd: number; ms: number | null }) => `[${fmtSeconds(e.ms, locale)}, ${fmtUsd(e.cost_usd, locale)}]`;
   const space = locale === 'fr' ? ' : ' : ': ';
@@ -85,10 +103,13 @@ export function entryText(entry: TimelineEntry, locale: McpLocale): string | nul
         const code = EXECUTION_CODE[e.strategy.execution] ?? '';
         return c.strategy(pathLabel(e.strategy), code, fmtUsd(e.strategy.est_cost_usd, locale));
       }
-      if (e.outcome === 'stopped') return c.stopped(codeOrNull(e.stop_reason));
+      if (e.outcome === 'stopped') {
+        const reason = codeOrNull(e.stop_reason) ?? cause;
+        return isAction(reason) ? c.stoppedAction(reason) : c.stopped(reason);
+      }
       if (e.outcome === 'budget_exhausted') return c.budget;
       if (e.outcome === 'cancelled') return c.cancelled;
-      return c.failed(codeOrNull(e.failure_class));
+      return c.failed(codeOrNull(e.failure_class) ?? cause);
     }
     default:
       return null;
@@ -111,11 +132,12 @@ export function renderNarrative(input: NarrativeInput, locale: McpLocale): strin
   const c = narrativeCatalog(locale);
   const start = input.timeline.find((e) => e.kind === 'investigation');
   const lines: string[] = [];
+  const cause = causeOf(input.error);
   const brief = input.brief === undefined ? null : briefLines(input.brief, locale);
   if (brief !== null) lines.push(brief.head);
   if (start !== undefined && start.kind === 'investigation') lines.push(c.title(start.slug, hostOrNull(start.domain), codeOf(start.phase)));
   for (const entry of input.timeline) {
-    const text = entryText(entry, locale);
+    const text = entryText(entry, locale, cause);
     if (text === null) continue;
     if (entry.step !== null && entry.step > 0) lines.push(`${entry.step}. ${text}`);
     else lines.push(entry.kind === 'schema' || entry.kind === 'pruned' ? `   ${text}` : text);
@@ -123,7 +145,11 @@ export function renderNarrative(input: NarrativeInput, locale: McpLocale): strin
     if (entry.kind === 'access_report' && brief !== null) lines.push(...brief.body);
   }
   const finished = input.timeline.some((e) => e.kind === 'finished');
-  if (!finished && ACTIVE.has(input.state)) lines.push(c.running);
+  // Cause nommée sans événement de fin (run arrêté avant l'étape 0, ou fin non journalisée) : l'échec et sa cause.
+  if (cause !== null && !finished) lines.push(c.failed(cause));
+  // Son gabarit fermé, s'il n'a pas déjà été dit par l'action requise de la chronologie.
+  if (isAction(cause) && !input.timeline.some((e) => e.kind === 'action_required' && e.cause === cause)) lines.push(actionTemplate(locale, cause));
+  if (!finished && cause === null && ACTIVE.has(input.state)) lines.push(c.running);
   lines.push(`${c.costWord}${locale === 'fr' ? ' : ' : ': '}${fmtUsd(input.totalUsd, locale)}`);
   lines.push(nextLine(input, locale));
   lines.push(`${c.console}${locale === 'fr' ? ' : ' : ': '}${input.consoleUrl}`);
@@ -165,6 +191,28 @@ function nextLine(input: NarrativeInput, locale: McpLocale): string {
   const done = input.timeline.some((e) => e.kind === 'finished' && e.outcome === 'conformant');
   if (done && start?.kind === 'investigation') return `${c.run(apiToolName(start.slug) ?? 'run_api')} ${narrativeCatalog(locale).header.restart}`;
   return c.none;
+}
+
+/**
+ * Phrase de `create_api` selon l'état RÉEL de l'enquête (UX-07), pour le modèle (en anglais, 21 § 4.3) : schéma à valider,
+ * échec avec sa cause nommée (UX-04), fin sans schéma, ou en cours. Jamais « running » quand le run est terminé, ni « done »
+ * sans dire ce qui s'est passé. Elle ouvre le texte de `create_api`, avant le récit.
+ */
+export function createdSummary(created: Record<string, unknown>): string {
+  const slug = String(created['slug']);
+  const phase = created['investigation_phase'];
+  const runState = created['run_state'];
+  const status = typeof created['status'] === 'string' ? created['status'] : null;
+  const error = created['error'] as { code?: unknown; message?: unknown } | undefined;
+  if (phase === 'awaiting_schema_validation') return `API ${slug} created. Proposed output schema below: show it to the user, then call validate_schema with api_id.`;
+  if (runState === 'failed') {
+    const cause = typeof error?.code === 'string' ? ` (${error.code}): ${String(error.message ?? '')}` : '; read get_run with run_id for the cause.';
+    return `API ${slug} created, but the investigation failed${cause}${status === null ? '' : ` The API is now ${status}.`}`;
+  }
+  if (typeof runState === 'string' && isTerminalRunState(runState as RunState)) {
+    return `API ${slug} created; the investigation ended (${runState})${status === null ? '' : `, the API is now ${status}`}: read get_run with run_id.`;
+  }
+  return `API ${slug} created; the investigation is running: poll get_run with run_id, then validate the proposed schema.`;
 }
 
 /** `attempts[]` de `structuredContent` : les essais de la chronologie, mêmes valeurs que le récit. */

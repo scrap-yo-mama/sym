@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { generateMasterKey } from '@runtime/core';
+import type { Db } from '@runtime/db';
+import pg from 'pg';
 import { afterEach, expect, test } from 'vitest';
+import { createAuth } from './auth/better-auth.js';
 import { ConfigError, loadServerConfig, PUBLISHED_EXTENSION_IDS, TELEMETRY_VARIABLES } from './config.js';
 
 const base = () => ({ DATABASE_URL: 'postgres://u@localhost/db', PUBLIC_URL: 'https://runtime.zz-test.example/', MASTER_KEY: generateMasterKey() });
@@ -59,4 +62,60 @@ test('MCP : origines admises comparées en entier (schéma, hôte, port) ; MCP_A
   for (const bad of ['https://claude.zz-test.example/path', 'ftp://claude.zz-test.example', 'claude.zz-test.example:8443', 'https://u:p@claude.zz-test.example']) {
     expect(() => loadServerConfig({ ...base(), MCP_ALLOWED_ORIGINS: bad }), bad).toThrow(/MCP_ALLOWED_ORIGINS/);
   }
+});
+
+test('PUBLIC_URL normalisée : point final de l’hôte retiré, « / » final sans effet (F-20261002-12)', () => {
+  const origin = (publicUrl: string) => loadServerConfig({ ...base(), PUBLIC_URL: publicUrl }).publicUrl;
+  expect(origin('https://scrapyomama-runtime.onrender.com.')).toBe('https://scrapyomama-runtime.onrender.com');
+  expect(origin('https://scrapyomama-runtime.onrender.com./')).toBe('https://scrapyomama-runtime.onrender.com');
+  expect(origin('https://scrapyomama-runtime.onrender.com/')).toBe('https://scrapyomama-runtime.onrender.com');
+  expect(origin('https://runtime.zz-test.example.:8443')).toBe('https://runtime.zz-test.example:8443');
+  expect(origin('  HTTPS://Runtime.ZZ-Test.example.  ')).toBe('https://runtime.zz-test.example');
+});
+
+test('PUBLIC_URL avec chemin, requête, fragment ou identifiants : refusée au démarrage (ConfigError)', () => {
+  for (const bad of ['https://runtime.zz-test.example/console', 'https://runtime.zz-test.example/?a=1', 'https://runtime.zz-test.example?a=1', 'https://runtime.zz-test.example/#x', 'https://u:p@runtime.zz-test.example', 'https://u@runtime.zz-test.example']) {
+    expect(() => loadServerConfig({ ...base(), PUBLIC_URL: bad }), bad).toThrow(ConfigError);
+  }
+  expect(() => loadServerConfig({ ...base(), PUBLIC_URL: 'https://u:secret@runtime.zz-test.example' })).not.toThrow(/secret/);
+});
+
+test('la PUBLIC_URL normalisée atterrit dans la configuration de Better Auth (baseURL, trustedOrigins)', () => {
+  const config = loadServerConfig({ ...base(), PUBLIC_URL: 'https://scrapyomama-runtime.onrender.com.' });
+  const pool = new pg.Pool({ connectionString: config.databaseUrl });
+  try {
+    const auth = createAuth({ db: {} as Db, pool, secret: 'zz-test-secret-' + 'k'.repeat(32), publicUrl: config.publicUrl });
+    expect(auth.options.baseURL).toBe('https://scrapyomama-runtime.onrender.com');
+    expect(auth.options.trustedOrigins).toEqual(['https://scrapyomama-runtime.onrender.com']);
+  } finally {
+    void pool.end();
+  }
+});
+
+test('MCP : hôtes et origines admis dérivés de la PUBLIC_URL normalisée (point final retiré, F-20261002-12)', () => {
+  const mcp = loadServerConfig({ ...base(), PUBLIC_URL: 'https://scrapyomama-runtime.onrender.com.' }).mcp;
+  expect(mcp.allowedHosts).toContain('scrapyomama-runtime.onrender.com');
+  expect(mcp.allowedHosts).not.toContain('scrapyomama-runtime.onrender.com.');
+  expect(mcp.allowedOrigins[0]).toBe('https://scrapyomama-runtime.onrender.com');
+});
+
+test('PUBLIC_URL en http:// : démarrage refusé en production (08b § 2), sauf boucle locale ; développement et test inchangés', () => {
+  const http = 'http://runtime.zz-test.example';
+  expect(() => loadServerConfig({ ...base(), NODE_ENV: 'production', PUBLIC_URL: http })).toThrow(ConfigError);
+  expect(() => loadServerConfig({ ...base(), NODE_ENV: 'production', PUBLIC_URL: http })).toThrow(/PUBLIC_URL.*HTTPS/);
+  // Le message ne recopie jamais la valeur.
+  expect(() => loadServerConfig({ ...base(), NODE_ENV: 'production', PUBLIC_URL: http })).not.toThrow(/zz-test\.example/);
+  expect(() => loadServerConfig({ ...base(), NODE_ENV: 'production', PUBLIC_URL: 'https://runtime.zz-test.example' })).not.toThrow();
+  // Boucle locale (docker-compose de développement lié à 127.0.0.1, 08b § 2) : acceptée même avec l'image de production.
+  for (const local of ['http://localhost:3100', 'http://127.0.0.1:3100', 'http://[::1]:3100']) {
+    expect(() => loadServerConfig({ ...base(), NODE_ENV: 'production', PUBLIC_URL: local }), local).not.toThrow();
+  }
+  // Hors production (développement, test) : http accepté.
+  expect(() => loadServerConfig({ ...base(), NODE_ENV: 'development', PUBLIC_URL: http })).not.toThrow();
+  expect(() => loadServerConfig({ ...base(), NODE_ENV: 'test', PUBLIC_URL: http })).not.toThrow();
+  // NODE_ENV absent ou écrasé : refus par défaut (PA-03, D-PA03-2) ; seul un drapeau documenté l'autorise.
+  expect(() => loadServerConfig({ ...base(), PUBLIC_URL: http })).toThrow(ConfigError);
+  expect(() => loadServerConfig({ ...base(), NODE_ENV: 'staging', PUBLIC_URL: http })).toThrow(ConfigError);
+  expect(() => loadServerConfig({ ...base(), PUBLIC_URL: http, ALLOW_INSECURE_PUBLIC_URL: 'true' })).not.toThrow();
+  expect(() => loadServerConfig({ ...base(), NODE_ENV: 'production', PUBLIC_URL: http, ALLOW_INSECURE_PUBLIC_URL: 'false' })).toThrow(ConfigError);
 });

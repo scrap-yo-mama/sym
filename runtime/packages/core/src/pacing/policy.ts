@@ -18,7 +18,7 @@ export type PacingPolicy = {
   /** Plafond du ralentissement adaptatif (le délai double à chaque refus, à sens unique). */
   readonly adaptiveCapMs: number;
   /** Décroissance : après N succès consécutifs, ou après `adaptiveCalmMs` sans refus, le ralentissement est divisé par 2
-   * (ramené à 0 quand il passe sous le délai effectif : jamais sous `min_delay_ms` ni `Crawl-delay`). */
+   * (ramené à 0 quand il passe sous le délai effectif : jamais sous `min_delay_ms`). */
   readonly adaptiveDecaySuccesses: number;
   readonly adaptiveCalmMs: number;
   /** Part des réessais dans les requêtes du domaine sur la fenêtre (04 § 7 : 10 %). */
@@ -47,14 +47,10 @@ export const DEFAULT_PACING_POLICY: PacingPolicy = Object.freeze({
   maxRetryAfterMs: 3_600_000,
 });
 
-/**
- * Délai effectif : le plus grand du réglage de l'API et du `Crawl-delay` de robots.txt (plancher non normatif mais
- * respecté, 17). Le module d'accès (1.11) fournit `crawlDelayMs`.
- */
-export function effectiveMinDelayMs(apiMinDelayMs: number, crawlDelayMs?: number | null): number {
-  const values = [apiMinDelayMs, crawlDelayMs ?? 0];
-  for (const v of values) if (!Number.isFinite(v) || v < 0) throw new RangeError(`cadence : délai invalide (${String(v)})`);
-  return Math.ceil(Math.max(...values));
+/** Délai effectif : le réglage `min_delay_ms` de l'API (entier, positif ou nul). */
+export function effectiveMinDelayMs(apiMinDelayMs: number): number {
+  if (!Number.isFinite(apiMinDelayMs) || apiMinDelayMs < 0) throw new RangeError(`cadence : délai invalide (${String(apiMinDelayMs)})`);
+  return Math.ceil(apiMinDelayMs);
 }
 
 /** Gigue entière en ms, de 0 à ratio × délai. `random` doit renvoyer une valeur dans [0, 1). */

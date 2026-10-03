@@ -1,5 +1,5 @@
 {
-  "$comment": "Codes de la table de cdc/scrapyomama-runtime/06-specs-interface.md § 4.2 (première colonne, ordre de la table), figés le 2026-10-01. Le CDC n’est pas versionné avec le code : mettre à jour cette liste et SPEC_REASON_CODES ensemble quand la table change.",
+  "$comment": "Codes de la table de cdc/scrapyomama-runtime/06-specs-interface.md § 4.2 (première colonne, ordre de la table), figés le 2026-10-01, sans robots_disallowed ni robots_unreachable depuis D-91 (2026-10-03). Le CDC n’est pas versionné avec le code : mettre à jour cette liste et SPEC_REASON_CODES ensemble quand la table change.",
   "codes": [
     "retried",
     "escalated",
@@ -17,14 +17,14 @@
     "geo_restriction",
     "blocked_by_protection",
     "forbidden",
-    "robots_disallowed",
-    "robots_unreachable",
     "payment_required",
     "auth_required",
     "cookie_expired",
     "session_device_bound",
     "challenge_in_tunnel",
     "secret_unreadable",
+    "instance_contact_missing",
+    "llm_price_missing",
     "account_limit",
     "session_owner_required",
     "llm_refused"

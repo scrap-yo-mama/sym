@@ -74,14 +74,17 @@ async function emit(runId: string, kind: string, payload: Record<string, unknown
   });
 }
 
-/** Premier run d'enquête en file de l'utilisateur (créé par l'appel MCP en cours) : marqué `running` pour n'être pris qu'une fois. */
-async function nextInvestigation(owner: Party, timeoutMs = 10_000): Promise<{ runId: string; apiId: string }> {
+/**
+ * Premier run d'enquête en file de l'utilisateur (créé par l'appel MCP en cours) : marqué `running` pour n'être pris qu'une fois.
+ * `before` : runs déjà en file avant l'appel (laissés par un test précédent sans worker), jamais pris.
+ */
+async function nextInvestigation(owner: Party, timeoutMs = 10_000, before: readonly string[] = []): Promise<{ runId: string; apiId: string }> {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
     const row = await withClient(srv.db.url, async (c) => {
       const { rows } = await c.query<{ id: string; api_id: string }>(
-        "UPDATE runs SET state = 'running', started_at = now() WHERE id = (SELECT id FROM runs WHERE owner_id = $1 AND kind = 'investigation' AND state = 'queued' ORDER BY created_at DESC LIMIT 1 FOR UPDATE SKIP LOCKED) RETURNING id, api_id",
-        [owner.user.id],
+        "UPDATE runs SET state = 'running', started_at = now() WHERE id = (SELECT id FROM runs WHERE owner_id = $1 AND kind = 'investigation' AND state = 'queued' AND NOT (id = ANY($2::uuid[])) ORDER BY created_at DESC LIMIT 1 FOR UPDATE SKIP LOCKED) RETURNING id, api_id",
+        [owner.user.id, before],
       );
       return rows[0];
     });
@@ -93,14 +96,14 @@ async function nextInvestigation(owner: Party, timeoutMs = 10_000): Promise<{ ru
 
 const SCHEMA = { type: 'object', additionalProperties: false, required: ['title'], properties: { title: { type: 'string' }, price: { type: 'number' } } };
 const BUDGET = (spent: number, elapsed = 0) => ({ spent_usd: spent, max_usd: 0.5, elapsed_s: elapsed, timeout_s: 120 });
-const ACCESS_VIEW = { id: '00000000-0000-0000-0000-0000000000a1', checked_at: new Date().toISOString(), signal: 'allowed', robots: { status: 'allowed', fetched_at: null, rule: null }, usage_signals: [], llms_txt: false, payment_offer: null, official_api_url: null };
+const ACCESS_VIEW = { id: '00000000-0000-0000-0000-0000000000a1', checked_at: new Date().toISOString(), signal: 'allowed', usage_signals: [], llms_txt: false, payment_offer: null, official_api_url: null };
 
 /**
  * Worker simulé, première enquête : rapport d'accès, reconnaissance, schéma proposé ; puis l'API attend la validation du
  * schéma et le run se termine (`succeeded`), comme à la fin d'une enquête sans `auto_validate`.
  */
-async function simulateFirstInvestigation(owner: Party, gapMs = 120): Promise<{ runId: string; apiId: string }> {
-  const { runId, apiId } = await nextInvestigation(owner);
+async function simulateFirstInvestigation(owner: Party, gapMs = 120, before: readonly string[] = []): Promise<{ runId: string; apiId: string }> {
+  const { runId, apiId } = await nextInvestigation(owner, 10_000, before);
   await emit(runId, 'investigation.started', { phase: 'access_report', url: 'https://zz-books.example/catalogue/', domain: 'zz-books.example', network: 'direct', budget: BUDGET(0) });
   await sleep(gapMs);
   await emit(runId, 'access_report', { id: ACCESS_VIEW.id, view: ACCESS_VIEW, verdict: { proceed: true } });
@@ -145,6 +148,29 @@ async function simulateTrials(owner: Party, gapMs = 100): Promise<string> {
     await c.query("UPDATE runs SET state = 'succeeded', outcome = 'clean', finished_at = now(), duration_ms = 4000, cost_llm_usd = 0.002, cost_proxy_usd = 0.0001 WHERE id = $1", [runId]);
   });
   return runId;
+}
+
+/** Enquêtes déjà en file de l'utilisateur (aucun worker) : à exclure de la simulation de l'appel suivant. */
+const queuedInvestigations = async (owner: Party): Promise<string[]> =>
+  withClient(srv.db.url, async (c) => (await c.query<{ id: string }>("SELECT id FROM runs WHERE owner_id = $1 AND kind = 'investigation' AND state = 'queued'", [owner.user.id])).rows.map((r) => r.id));
+
+/**
+ * Worker simulé, enquête arrêtée pour une cause nommée (UX-04 : contact du robot ou prix du modèle absent) : comme
+ * `finishStopped` du vrai worker, l'action requise puis la fin `stopped`, sans classe d'échec ; la cause vit dans
+ * `error_detail` du run, l'API passe en `action_requise`.
+ */
+async function stopRun(runId: string, apiId: string, cause: 'instance_contact_missing' | 'llm_price_missing', detail: string, opts: { access?: boolean } = {}): Promise<void> {
+  await emit(runId, 'investigation.started', { phase: 'access_report', url: 'https://zz-books.example/catalogue/', domain: 'zz-books.example', network: 'direct', budget: BUDGET(0) });
+  if (opts.access === true) {
+    await emit(runId, 'access_report', { id: ACCESS_VIEW.id, view: ACCESS_VIEW, verdict: { proceed: true } });
+    await emit(runId, 'reconnaissance.finished', { mode: 'browser', candidates: [{ id: 'c1' }], document_bytes: 100, total_bytes: 200, budget: BUDGET(0) });
+  }
+  await emit(runId, 'action.required', { cause, domain: 'zz-books.example', ...(detail.includes(':') ? { model: detail.split(':')[1] } : {}) });
+  await emit(runId, 'investigation.finished', { outcome: 'stopped', stop_reason: cause, detail, budget: BUDGET(0) });
+  await withClient(srv.db.url, async (c) => {
+    await c.query("UPDATE runs SET state = 'failed', outcome = 'failed', failure_class = NULL, retryable = false, error_detail = $2, started_at = coalesce(started_at, now()), finished_at = now(), duration_ms = 5 WHERE id = $1", [runId, detail]);
+    await c.query("UPDATE apis SET status = 'action_requise', status_reason = $2, investigation_phase = 'done' WHERE id = $1", [apiId, cause]);
+  });
 }
 
 beforeAll(async () => {
@@ -228,7 +254,7 @@ describe('récit et timeline (05 § 1.2)', () => {
     expect(first).toContain(`"run_id":"${simulated.runId}"`);
     // Phases, étapes numérotées, coût en tête de ligne, prochaine action et lien console, schéma à montrer à la personne.
     expect(first).toMatch(/^Investigation [a-z0-9-]+ · zz-books\.example · awaiting_schema_validation/m);
-    expect(first).toMatch(/^1\. Access report: robots\.txt allows this page \[\d+\.\d s, \$0\]/m);
+    expect(first).toMatch(/^1\. Access report: no signal to review \[\d+\.\d s, \$0\]/m);
     expect(first).toMatch(/^2\. Reconnaissance: 2 candidate data sources \(browser\) \[\d+\.\d s, \$0\.002\]/m);
     expect(first).toContain('Output schema proposed: 2 fields');
     expect(first).toMatch(/Cost: \$0\.002/);
@@ -243,7 +269,7 @@ describe('récit et timeline (05 § 1.2)', () => {
     await trials;
     const second = text(validated);
     expect(second).toMatch(/^Investigation .* · done/m);
-    expect(second).toMatch(/^1\. Access report: robots\.txt allows this page \[\d+\.\d s, \$0\]/m);
+    expect(second).toMatch(/^1\. Access report: no signal to review \[\d+\.\d s, \$0\]/m);
     expect(second).toMatch(/^2\. Reconnaissance: 2 candidate data sources \(browser\) \[\d+\.\d s, \$0\]/m);
     expect(second).toMatch(/^3\. Trial fetch\/direct: conformant, 20 items, 2 pages \[0\.4 s, \$0\.0001\]/m);
     expect(second).toContain('Strategy kept: fetch/direct (E1, $0.0001 per run)');
@@ -294,7 +320,7 @@ describe('récit et timeline (05 § 1.2)', () => {
     await sim;
     const body = text(created);
     expect(body).toMatch(/^Enquête /m);
-    expect(body).toMatch(/^1\. Rapport d’accès : robots\.txt autorise cette page \[\d+,\d s, 0 \$\]/m);
+    expect(body).toMatch(/^1\. Rapport d’accès : aucun signal à examiner \[\d+,\d s, 0 \$\]/m);
     expect(body).toContain('Prochaine étape : montre le schéma proposé');
     expect(created.structuredContent).toMatchObject({ message_locale: 'fr', investigation_phase: 'awaiting_schema_validation' });
   });
@@ -458,6 +484,55 @@ describe('élicitation de la validation du schéma (05 § 1.3) : question plate,
   });
 });
 
+describe('UX-04 / UX-07 : le récit porte la cause nommée d’un run arrêté (envelope.error)', () => {
+  test('get_run d’une enquête arrêtée (contact du robot absent, failure_class NULL) : la phrase d’UX-04, le gabarit fermé de la cause et la marche à suivre dans le texte', async () => {
+    for (const [party, locale] of [[a, 'en'], [frAccount, 'fr']] as const) {
+      const api = await seedApi(srv.db.url, party.user.id, { status: 'action_requise', strategy: false });
+      const { runId } = await seedRun(srv.db.url, { apiId: api.id, ownerId: party.user.id, state: 'running', kind: 'investigation' });
+      await stopRun(runId, api.id, 'instance_contact_missing', 'instance_contact_missing');
+      const result = await call(await connect(party.key), 'get_run', { run_id: runId });
+      const body = text(result);
+      expect(result.structuredContent).toMatchObject({ state: 'failed', status: 'action_requise', error: { code: 'instance_contact_missing', retryable: true } });
+      expect(body).toContain('The run could not start (instance_contact_missing)');
+      expect(body).toContain(actionTemplate(locale, 'instance_contact_missing'));
+      expect(body).toContain('/settings/robot');
+      expect(body).not.toMatch(/The investigation failed\.$|L’enquête a échoué\.$/m);
+    }
+  });
+
+  test('create_api : enquête arrêtée pendant l’attente, le texte commence par l’état réel (UX-07) et le récit dit la cause dans la langue du compte', async () => {
+    const client = await connect(frAccount.key);
+    const before = await queuedInvestigations(frAccount);
+    const pending = call(client, 'create_api', { description: 'zz_test contact absent', url: 'https://zz-books.example/catalogue/', wait_seconds: 5 });
+    const { runId, apiId } = await nextInvestigation(frAccount, 10_000, before);
+    await stopRun(runId, apiId, 'instance_contact_missing', 'instance_contact_missing');
+    const result = await pending;
+    const body = text(result);
+    expect(result.structuredContent).toMatchObject({ run_state: 'failed', status: 'action_requise', error: { code: 'instance_contact_missing' } });
+    expect(body).toMatch(/^API [a-z0-9-]+ created, but the investigation failed \(instance_contact_missing\): /);
+    expect(body).not.toContain('the investigation is running');
+    expect(body).toContain(actionTemplate('fr', 'instance_contact_missing'));
+    expect(body).toContain('/settings/robot');
+  });
+
+  test('validate_schema : essais arrêtés faute de prix du modèle (llm_price_missing:<modèle>) : la cause, le modèle et le gabarit dans le texte, aucune stratégie annoncée', async () => {
+    const client = await connect(a.key);
+    const before = await queuedInvestigations(a);
+    const sim = simulateFirstInvestigation(a, 30, before);
+    await call(client, 'create_api', { description: 'zz_test prix absent', url: 'https://zz-books.example/catalogue/', wait_seconds: 5 });
+    const { apiId } = await sim;
+    const pending = call(client, 'validate_schema', { api_id: apiId, wait_seconds: 5 });
+    const trial = await nextInvestigation(a, 10_000, before);
+    await stopRun(trial.runId, trial.apiId, 'llm_price_missing', 'llm_price_missing:zz-model', { access: true });
+    const body = text(await pending);
+    expect(body).toContain('The run could not start (llm_price_missing)');
+    expect(body).toContain('zz-model');
+    expect(body).toContain(actionTemplate('en', 'llm_price_missing'));
+    expect(body).toContain('/settings/models');
+    expect(body).not.toMatch(/Strategy kept|Next step: call api_/);
+  });
+});
+
 describe('cancel_run et report_problem (05 § 4.1, § 4.4)', () => {
   test('cancel_run sur une enquête en cours : état cancelled sous 5 s, coûts engagés imputés', async () => {
     const api = await seedApi(srv.db.url, a.user.id);
@@ -483,7 +558,8 @@ describe('assert_blocked_message_templates : messages fermés des statuts bloque
   const reasonOf = async (slug: string, reason: string) => withClient(srv.db.url, async (c) => void (await c.query('UPDATE apis SET status_reason = $2 WHERE slug = $1', [slug, reason])));
 
   test('API bloquée : le message est le gabarit fermé de sa raison, dans la langue de la personne, sans verbe de contournement', async () => {
-    for (const reason of ['robots_disallowed', 'forbidden', 'blocked_by_protection']) {
+    // D-91 : robots_disallowed n'est plus produit ; une API restée bloquée pour cette raison reçoit le gabarit par défaut.
+    for (const reason of ['forbidden', 'blocked_by_protection', 'robots_disallowed']) {
       const api = await seedApi(srv.db.url, a.user.id, { status: 'bloquee' });
       await reasonOf(api.slug, reason);
       for (const lang of ['en', 'fr'] as const) {
@@ -492,6 +568,7 @@ describe('assert_blocked_message_templates : messages fermés des statuts bloque
         expect(result).not.toHaveProperty('structuredContent');
         const err = JSON.parse(text(result)) as { code: string; message: string; what_to_do: string; retryable: boolean; next_action: unknown };
         expect(err).toMatchObject({ code: 'blocked', retryable: false, next_action: null, message: blockedTemplate(lang, reason) });
+        expect(err.message).not.toMatch(/robots/i);
         expect(`${err.message} ${err.what_to_do}`).not.toMatch(BYPASS);
         expect(err.what_to_do).toMatch(/Do not retry/);
         expect(err.what_to_do).toMatch(/official API/);

@@ -228,8 +228,6 @@
     "geo_restriction": "Contenu indisponible depuis ce pays ; essai avec le proxy du pays autorisé par l'API.",
     "blocked_by_protection": "Le site refuse l'accès automatisé. Scrapyomama s'arrête.",
     "forbidden": "Le site refuse l'accès à cette adresse. L'adresse IP ne change pas.",
-    "robots_disallowed": "Le site demande aux robots de ne pas visiter cette page.",
-    "robots_unreachable": "robots.txt est injoignable : par prudence, rien n'est collecté.",
     "payment_required": "Le site demande un paiement : {offre}.",
     "auth_required": "{domaine} demande une connexion.",
     "cookie_expired": "La session de {domaine} a expiré.",
@@ -248,7 +246,14 @@
     "volume_anomaly": "Volume inhabituel",
     "pagination_short": "Pagination interrompue",
     "slow": "Lent",
-    "cost_anomaly": "Coût inhabituel"
+    "cost_anomaly": "Coût inhabituel",
+    "field_constant": "valeur constante",
+    "pattern_shift": "format changé",
+    "sentinel_values": "valeurs vides",
+    "duplicate_items": "doublons",
+    "new_enum_value": "nouvelle valeur",
+    "prior_refusal": "refus antérieur du domaine",
+    "judge_flag": "avis du juge (consultatif)"
   },
   "failure": {
     "transient": "Problème temporaire",
@@ -256,8 +261,6 @@
     "rate_limited": "Le site demande de ralentir",
     "forbidden": "Accès refusé",
     "blocked_by_protection": "Accès automatisé refusé",
-    "robots_disallowed": "Interdit par robots.txt",
-    "robots_unreachable": "robots.txt injoignable",
     "payment_required": "Paiement requis",
     "auth_required": "Connexion requise",
     "account_limit": "Limite de compte",
@@ -300,7 +303,9 @@
     "submitting": "Lancement…",
     "countryInvalid": "Saisis un code pays de 2 lettres, par exemple fr.",
     "descriptionRequired": "Décris ce que l'API doit renvoyer.",
-    "accountRequired": "Confirme l'avertissement ci-dessus pour continuer."
+    "accountRequired": "Confirme l'avertissement ci-dessus pour continuer.",
+    "providerNoticeMany": "{providers} recevront des extraits de trafic nettoyés.",
+    "descriptionTemplate": "Une bonne demande se lit : « Je veux [quoi] depuis [où] pour [quoi en faire]. »"
   },
   "investigation": {
     "title": "Enquête sur {domain}",
@@ -345,25 +350,16 @@
       "followSuspended": "Suivi suspendu. Les nouveaux essais ne sont ni affichés ni annoncés."
     },
     "phase": {
-      "label": "Étapes de l'enquête",
       "announce": "Étape : {phase}.",
-      "access_check": "Vérification de l'accès",
-      "reconnaissance": "Reconnaissance",
-      "awaiting_schema_validation": "Schéma de sortie",
-      "testing": "Essais",
-      "state": {
-        "done": "terminée",
-        "current": "en cours",
-        "upcoming": "à venir"
-      }
+      "access_check": "Reconnaître",
+      "reconnaissance": "Reconnaître",
+      "awaiting_schema_validation": "Valider le schéma",
+      "testing": "Essayer"
     },
     "log": {
       "title": "Essais",
       "empty": "Aucun essai pour l'instant.",
-      "robotsAllowed": "robots.txt lu : chemin autorisé",
-      "robotsDisallowed": "robots.txt lu : chemin interdit",
-      "robotsAbsent": "robots.txt introuvable : aucune règle ne s'applique",
-      "robotsUnreachable": "robots.txt injoignable : par prudence, rien n'est collecté",
+      "accessProbed": "Rapport d'accès : page sondée",
       "signal": "Signal d'usage {kind} : {value}",
       "llmsTxt": "llms.txt trouvé",
       "officialApi": "Voie officielle trouvée : {url}",
@@ -376,10 +372,52 @@
       "why": "Pourquoi : {reason}"
     },
     "plan": {
-      "title": "Plan d'essais",
-      "hint": "Du moins cher au plus cher. Tu peux retirer des méthodes avant le début des essais, jamais en ajouter.",
-      "estimate": "estimé {cost}",
-      "atLeastOne": "Au moins une méthode doit rester cochée."
+      "title": "Le plan d'essais",
+      "hint": "Du moins cher au plus cher. SYM s'arrête au premier qui marche.",
+      "atLeastOne": "Au moins une méthode doit rester cochée.",
+      "empty": "Le plan d’essais s’affiche ici dès que le serveur l’annonce.",
+      "state": {
+        "planned": "à essayer",
+        "running": "en cours",
+        "succeeded": "réussi",
+        "failed": "échoué",
+        "pruned": "non lancé",
+        "excluded": "exclu"
+      },
+      "prunedReason": "Écarté : {reason}",
+      "failedReason": "Échec : {reason}",
+      "include": "Essayer cette méthode",
+      "stop": {
+        "title": "Arrêt volontaire",
+        "text": "Si le site refuse l’accès, affiche une vérification ou demande aux robots de ne pas venir, SYM s’arrête là. Rien d’autre n’est essayé."
+      },
+      "footer": "Estimations · règle appliquée : {rule}",
+      "card": {
+        "fetch": {
+          "title": "Fetch direct",
+          "text": "HTML de la page, sans navigateur"
+        },
+        "fetch_in_page": {
+          "title": "Fetch dans la page",
+          "text": "les requêtes de la page, depuis un navigateur"
+        },
+        "playwright": {
+          "title": "Navigateur",
+          "text": "si la page se construit en JavaScript"
+        },
+        "agent_fetch": {
+          "title": "Agent + fetch",
+          "text": "l'IA lit le HTML à chaque run"
+        },
+        "hybrid": {
+          "title": "Script + agent",
+          "text": "un script, et l'agent quand il bute"
+        },
+        "agent": {
+          "title": "Agent",
+          "text": "en dernier recours, puis compilé"
+        }
+      }
     },
     "schema": {
       "title": "Schéma de sortie",
@@ -396,7 +434,32 @@
       "input": "Schéma d'entrée",
       "strategy": "Stratégie retenue : {execution}, {network}, version {version}",
       "tunnelNote": "Ne marche que si ton ordinateur est allumé.",
-      "empty": "Le schéma apparaîtra ici une fois la reconnaissance terminée."
+      "empty": "Le schéma apparaîtra ici une fois la reconnaissance terminée.",
+      "gateTitle": "Voici ce que tu vas récupérer",
+      "fieldsCaption": "Champs du schéma de sortie : nom, type et un exemple réel tiré de l’échantillon",
+      "columns": {
+        "field": "Champ",
+        "type": "Type",
+        "example": "Exemple réel"
+      },
+      "noExample": "Aucun exemple dans l’échantillon",
+      "personal": "Donnée personnelle : exemple masqué",
+      "types": {
+        "string": "texte",
+        "number": "nombre",
+        "integer": "nombre entier",
+        "boolean": "oui / non",
+        "array": "liste",
+        "object": "objet",
+        "null": "vide"
+      },
+      "remark": "Une remarque pour SYM ?",
+      "remarkHint": "Facultatif. Ta remarque reste sur cet écran, elle ne part nulle part : pour changer un champ, utilise « Modifier le schéma ».",
+      "noFields": "Le schéma n’a aucun champ à montrer.",
+      "remarkPlaceholder": "ex. le prix en euros, ajoute l'URL du livre",
+      "range": "{min} à {max}",
+      "quoteOpen": "« ",
+      "quoteClose": " »"
     },
     "result": {
       "sain": "L'enquête a réussi. Ton API est prête.",
@@ -404,7 +467,36 @@
       "erreur": "L'enquête s'est terminée en erreur. La liste des essais montre pourquoi.",
       "bloquee": "L'enquête s'est arrêtée : le site refuse l'accès automatisé."
     },
-    "resuming": "Reprise de l'enquête…"
+    "resuming": "Reprise de l'enquête…",
+    "milestones": {
+      "label": "Jalons de l’enquête",
+      "describe": "Décrire",
+      "reconnaissance": "Reconnaître",
+      "schema": "Valider le schéma",
+      "trials": "Essayer",
+      "state": {
+        "todo": "à faire",
+        "current": "en cours",
+        "done": "fait",
+        "stopped": "arrêté"
+      },
+      "step": "{n} · {label}"
+    },
+    "gate": {
+      "title": "J'ai trouvé {what}. On valide ce schéma ?",
+      "noTrial": "Aucun essai ne démarre avant ton accord.",
+      "spent": "Déjà dépensé pour la reconnaissance : {cost}.",
+      "spentUnknown": "Déjà dépensé pour la reconnaissance : pas encore disponible.",
+      "budget": "Budget max de l'enquête",
+      "replay": "Rejeu ensuite : environ {cost}, sans IA.",
+      "validate": "Valider et lancer les essais · ~{max}",
+      "validateNoMax": "Valider et lancer les essais",
+      "edit": "Modifier le schéma",
+      "auto": "Schéma validé automatiquement, à ta demande.",
+      "what": "les données de {domain}",
+      "whatUnknown": "les données",
+      "replayWithAi": "Rejeu ensuite : environ {cost}, avec l'IA à chaque run."
+    }
   },
   "blocked": {
     "title": "Bloquée : {domain} refuse l'accès automatisé",
@@ -413,14 +505,12 @@
       "heading": "Ce qui est arrivé",
       "protection": "Le {date}, essai {n} (« {execution} », {network}), {domain} a répondu par une page de vérification. Aucun autre essai n'a été lancé. Coût de l'enquête : {cost}.",
       "forbidden": "Le {date}, essai {n} (« {execution} », {network}), {domain} a répondu par un refus d'accès. Aucun autre essai n'a été lancé. Coût de l'enquête : {cost}.",
-      "robots": "{domain} demande aux robots de ne pas visiter cette page. Aucune requête n'a été envoyée sur ce chemin. Coût de l'enquête : {cost}.",
       "generic": "{domain} a refusé l'accès. Aucun autre essai n'a été lancé. Coût de l'enquête : {cost}."
     },
     "why": {
       "heading": "Pourquoi on s'arrête",
       "protection": "C'est la décision du site. Scrapyomama n'y répond pas à la place d'une personne et ne change pas d'adresse IP après un refus.",
-      "forbidden": "Le site refuse l'accès à cette adresse. L'adresse IP ne change pas après un refus. Vérifie tes droits d'accès ou contacte l'éditeur.",
-      "robots": "Ce site demande aux robots de ne pas visiter cette page. Scrapyomama respecte cette règle."
+      "forbidden": "Le site refuse l'accès à cette adresse. L'adresse IP ne change pas après un refus. Vérifie tes droits d'accès ou contacte l'éditeur."
     },
     "todo": {
       "heading": "Ce que tu peux faire",
@@ -471,6 +561,16 @@
       "body": "Le run est arrêté : {domain} affiche une vérification dans ton navigateur. Rien n'a été envoyé sur cette page et rien n'y sera envoyé. Tu peux relancer un run plus tard ; Scrapyomama ne répond jamais à une vérification.",
       "button": "Ré-enquêter"
     },
+    "instance_contact_missing": {
+      "title": "Renseigne le contact du robot",
+      "body": "Le contact de l'opérateur est requis avant la première enquête. Renseigne-le dans Réglages > Identité du robot, ou via la variable INSTANCE_CONTACT, puis relance l'enquête.",
+      "button": "Ouvrir Réglages > Identité du robot"
+    },
+    "llm_price_missing": {
+      "title": "Renseigne le prix du modèle {model} dans Réglages > Modèles IA",
+      "body": "L'enquête est arrêtée : aucun prix n'est connu pour le modèle {model}, il n'a donc pas été appelé et rien n'a été dépensé. Renseigne son prix par million de jetons dans Réglages > Modèles IA, puis relance l'enquête.",
+      "button": "Ouvrir Réglages > Modèles IA"
+    },
     "secret_unreadable": {
       "title": "Une clé enregistrée est illisible",
       "body": "Ressaisis la clé dans les réglages, puis teste-la.",
@@ -484,7 +584,8 @@
       "title": "{platform} a signalé une limite sur ton compte",
       "body": "{platform} a signalé une limite ou une restriction. Le run est arrêté, aucune relance n'est prévue. Consulte les messages de la plateforme. Seule la plateforme décide d'une restriction. Rappel : l'extraction automatisée peut être interdite par ses conditions, même avec un seul compte ; tu en restes responsable."
     },
-    "resuming": "Reprise de l'enquête…"
+    "resuming": "Reprise de l'enquête…",
+    "modelUnnamed": "utilisé"
   },
   "runs": {
     "title": "Tous les runs",
@@ -613,12 +714,31 @@
         "deepseek": "DeepSeek",
         "qwen": "Qwen",
         "openai": "OpenAI",
+        "anthropic": "Anthropic",
+        "gemini": "Google Gemini",
+        "mistral": "Mistral",
+        "groq": "Groq",
         "custom": "Personnalisé"
       },
       "validation": {
         "validated": "Modèle validé (banc N2, {date})",
         "notValidated": "Non validé",
         "hint": "Mesuré par le banc d’évaluation ; en lecture seule."
+      },
+      "price": {
+        "title": "Prix des modèles",
+        "intro": "Sans prix, un modèle n'est jamais appelé : rien n'est deviné et rien n'est compté pour 0. Saisis le prix du fournisseur par million de jetons.",
+        "none": "Aucun modèle utilisé pour l’instant : choisis-en un dans « Modèle par rôle » plus bas.",
+        "in": "Prix en entrée",
+        "out": "Prix en sortie",
+        "cached": "Prix en entrée mise en cache (facultatif)",
+        "unit": "USD par million de jetons.",
+        "known": "Prix connu (relevé du {date}) ; tu peux le modifier.",
+        "toValidate": "Prix à valider : aucun n'est connu pour ce modèle, saisis-le toi-même.",
+        "incomplete": "Renseigne le prix en entrée et le prix en sortie d’un modèle, ou laisse les deux vides.",
+        "invalid": "Un prix est un nombre, zéro ou plus.",
+        "roleMissing": "Renseigne le prix du modèle {model} dans le tableau ci-dessus : sans lui, aucune enquête ne peut tourner.",
+        "testMissing": "Le test a abouti, mais le modèle {model} n’a pas de prix : il ne sera pas appelé tant que tu ne l’as pas renseigné dans le tableau ci-dessus."
       }
     },
     "proxies": {
@@ -735,9 +855,9 @@
   },
   "access": {
     "signal": {
-      "allowed": "Accès autorisé",
+      "allowed": "Rien à signaler",
       "review": "À examiner",
-      "disallowed": "Accès interdit",
+      "disallowed": "Refus signalé (ancien rapport)",
       "unknown": "Accès non vérifié"
     }
   },
@@ -758,14 +878,14 @@
     "geo_restriction": "Contenu indisponible depuis ce pays ; essai avec le proxy du pays autorisé par l'API.",
     "blocked_by_protection": "Le site refuse l'accès automatisé. Scrapyomama s'arrête.",
     "forbidden": "Le site refuse l'accès à cette adresse. L'adresse IP ne change pas.",
-    "robots_disallowed": "Le site demande aux robots de ne pas visiter cette page.",
-    "robots_unreachable": "robots.txt est injoignable : par prudence, rien n'est collecté.",
     "payment_required": "Le site demande un paiement : {offer}.",
     "auth_required": "{domain} demande une connexion.",
     "cookie_expired": "La session de {domain} a expiré.",
     "session_device_bound": "La session de {domain} est liée à ton appareil et ne peut pas être copiée sur le serveur.",
     "challenge_in_tunnel": "Une vérification est apparue dans ton navigateur. Le run est en pause.",
     "secret_unreadable": "Une clé enregistrée est illisible.",
+    "instance_contact_missing": "Le contact du robot n'est pas renseigné : il est requis avant la première enquête.",
+    "llm_price_missing": "Le prix du modèle n’est pas renseigné : renseigne-le dans Réglages > Modèles IA.",
     "account_limit": "La plateforme a signalé une limite sur ton compte. Aucune relance.",
     "session_owner_required": "Cette API utilise la session de son propriétaire.",
     "llm_refused": "Le modèle a refusé la demande ; aucun repli automatique.",
@@ -775,7 +895,14 @@
     "repair_exhausted": "Budget de réparation épuisé ; version v{a} conservée.",
     "proxy_not_configured": "Un proxy est requis pour {country}.",
     "tunnel_offline": "Ton ordinateur n'est pas connecté.",
-    "not_found": "La page n'existe plus (404 ou 410)."
+    "not_found": "La page n'existe plus (404 ou 410).",
+    "field_constant": "Le champ {field} a la même valeur sur tous les items.",
+    "pattern_shift": "Le format du champ {field} a changé ({p} % des items).",
+    "sentinel_values": "{p} % des valeurs de {field} sont vides ou de remplissage.",
+    "duplicate_items": "{p} % des items sont des doublons.",
+    "new_enum_value": "Nouvelle valeur pour {field} : à vérifier.",
+    "prior_refusal": "Ce domaine a déjà refusé l'accès le {date}. Scrapyomama s'arrête.",
+    "judge_flag": "Avis consultatif du juge : {field} paraît faux."
   },
   "reasonLabel": {
     "retried": "Essais répétés",
@@ -794,13 +921,13 @@
     "geo_restriction": "Restriction géographique",
     "blocked_by_protection": "Accès automatisé refusé",
     "forbidden": "Accès refusé",
-    "robots_disallowed": "Page interdite par robots.txt",
-    "robots_unreachable": "robots.txt injoignable",
     "payment_required": "Paiement demandé",
     "auth_required": "Connexion requise",
     "cookie_expired": "Session expirée",
     "session_device_bound": "Session liée à l'appareil",
     "challenge_in_tunnel": "Vérification dans le navigateur",
+    "instance_contact_missing": "Contact du robot manquant",
+    "llm_price_missing": "Prix du modèle manquant",
     "secret_unreadable": "Clé illisible",
     "account_limit": "Limite de compte",
     "session_owner_required": "Session du propriétaire requise",
@@ -812,8 +939,6 @@
     "rate_limited": "Limite de cadence du site",
     "forbidden": "Accès refusé",
     "blocked_by_protection": "Accès automatisé refusé",
-    "robots_disallowed": "Page interdite par robots.txt",
-    "robots_unreachable": "robots.txt injoignable",
     "payment_required": "Paiement demandé",
     "auth_required": "Connexion requise",
     "account_limit": "Limite de compte",
@@ -860,7 +985,7 @@
     "relaunch": "Relancer"
   },
   "catalog": {
-    "title": "Catalogue",
+    "title": "Ton catalogue",
     "follow": {
       "suspend": "Suspendre le suivi",
       "resume": "Reprendre le suivi",
@@ -869,24 +994,25 @@
     "newApi": "Nouvelle API",
     "caption": "Catalogue des API : nom, exécution, réseau, statut et raison, dernier run, coût moyen, taux de succès et accès",
     "columns": {
-      "name": "Nom",
-      "execution": "Exécution",
-      "network": "Réseau",
-      "status": "Statut et raison",
+      "name": "API",
+      "status": "Statut",
       "lastRun": "Dernier run",
-      "cost": "Coût moyen",
+      "cost": "Coût / run",
       "success": "Succès (30 j)",
-      "access": "Accès"
+      "access": "Accès",
+      "action": "Action",
+      "mode": "Mode · réseau"
     },
     "computerRequired": "Ordinateur requis",
     "filters": {
       "label": "Filtres du catalogue",
-      "search": "Recherche",
-      "searchPlaceholder": "Nom ou description",
+      "search": "Rechercher",
+      "searchPlaceholder": "nom, domaine…",
       "status": "Statut",
       "execution": "Exécution",
       "network": "Réseau",
-      "all": "Tous"
+      "all": "Tous",
+      "searchLabel": "Rechercher dans le catalogue"
     },
     "empty": {
       "title": "Ton catalogue est prêt à se remplir",
@@ -894,8 +1020,7 @@
     },
     "noMatch": {
       "title": "Aucune API ne correspond",
-      "description": "Change ou retire des filtres pour voir plus de résultats.",
-      "reset": "Réinitialiser les filtres"
+      "description": "Change ou retire des filtres pour voir plus de résultats."
     },
     "pagination": {
       "label": "Pagination du catalogue",
@@ -903,7 +1028,53 @@
       "next": "Suivant",
       "page": "Page {n}"
     },
-    "statusChanged": "{slug} : {status}."
+    "statusChanged": "{slug} : {status}.",
+    "summary": {
+      "service": "Aucune API en service | 1 API en service | {n} API en service",
+      "stopped": "Aucune arrêtée | {n} arrêtée | {n} arrêtées",
+      "attention": "Rien ne demande ton attention. | Une API demande ton attention. | {count} demandent ton attention.",
+      "words": {
+        "n2": "Deux",
+        "n3": "Trois",
+        "n4": "Quatre",
+        "n5": "Cinq",
+        "n6": "Six",
+        "n7": "Sept",
+        "n8": "Huit",
+        "n9": "Neuf",
+        "n10": "Dix"
+      }
+    },
+    "health": {
+      "title": "Santé du catalogue",
+      "ratio": "{healthy} sur {total} saines",
+      "noneInService": "Aucune API en service",
+      "stopped": "Aucun arrêt volontaire | {n} arrêt volontaire | {n} arrêts volontaires",
+      "partial": "Comptes partiels : seules les {n} premières API sont comptées.",
+      "legend": {
+        "sain": "{n} saine | {n} saines",
+        "warning": "{n} à surveiller",
+        "enquete": "{n} en enquête",
+        "reparation": "{n} en réparation",
+        "erreur": "{n} en erreur",
+        "action_requise": "{n} attend ton action | {n} attendent ton action"
+      },
+      "legendLabel": "Nombre par statut"
+    },
+    "pills": {
+      "label": "Filtres rapides",
+      "all": "Tout",
+      "attention": "À traiter",
+      "healthy": "Saines",
+      "stopped": "Arrêtées",
+      "withCount": "{label} · {n}",
+      "changed": "{label} : {n}."
+    },
+    "rowAction": {
+      "alternatives": "Voir les alternatives",
+      "openTask": "Voir la tâche"
+    },
+    "attentionPartial": "Liste partielle : seules les {n} premières API à traiter sont affichées."
   },
   "detail": {
     "title": "Fiche API",
@@ -929,7 +1100,6 @@
       "title": "Ce qui s'est produit",
       "attempt": "Le {date}, essai {n} (« {execution} », {network}), {domain} a répondu par {answer}.",
       "generic": "{domain} a répondu par {answer}.",
-      "robots": "Ce site demande aux robots de ne pas visiter cette page. Scrapyomama respecte cette règle.",
       "forbidden": "Le site refuse l'accès à cette adresse. L'adresse IP ne change pas après un refus. Vérifie tes droits d'accès ou contacte l'éditeur."
     },
     "answer": {
@@ -941,7 +1111,6 @@
     "why": {
       "title": "Pourquoi on s'arrête",
       "protection": "C'est la décision du site. Scrapyomama n'y répond pas à la place d'une personne et ne change pas d'adresse IP après un refus.",
-      "robots": "C'est la règle que le site déclare dans son fichier robots.txt. Scrapyomama la respecte toujours.",
       "forbidden": "C'est la décision du site. Scrapyomama ne change pas d'adresse IP après un refus."
     },
     "todo": {
@@ -959,11 +1128,16 @@
     },
     "whyStop": "Pourquoi cet arrêt ?"
   },
+  "instanceContactBanner": {
+    "title": "Renseigne le contact du robot avant ta première API",
+    "text": "Le contact de l'opérateur est requis avant la première enquête : sans lui, une enquête s'arrête aussitôt. Une adresse web (https://…) ou une adresse e-mail suffit, ou la variable INSTANCE_CONTACT du serveur.",
+    "link": "Ouvrir Réglages > Identité du robot"
+  },
   "actionRequired": {
     "resuming": "Reprise de l'enquête…",
     "connect": {
       "title": "Connecte {domain}",
-      "button": "Connecter dans l'extension",
+      "button": "Connecter ma session",
       "verify": "La session apparaît ici dès que l'extension la transmet (mise à jour en direct)."
     },
     "deviceBound": {
@@ -986,6 +1160,16 @@
       "text": "Rien n'a été envoyé sur cette page et rien n'y sera envoyé. Tu peux relancer un run plus tard ; Scrapyomama ne répond jamais à une vérification.",
       "button": "Réessayer plus tard (nouveau run)",
       "verify": "Aucune reprise automatique : seule une nouvelle action de ta part relance un run."
+    },
+    "instanceContact": {
+      "title": "Renseigne le contact du robot",
+      "button": "Ouvrir Réglages > Identité du robot",
+      "verify": "Dès que le contact est enregistré, relance l'enquête : rien n'a été envoyé et rien n'a été dépensé."
+    },
+    "llmPrice": {
+      "title": "Renseigne le prix du modèle dans Réglages > Modèles IA",
+      "button": "Ouvrir Réglages > Modèles IA",
+      "verify": "Dès que le prix est enregistré, relance l'enquête : aucun modèle n'a été appelé et rien n'a été dépensé."
     },
     "secret": {
       "title": "Une clé enregistrée est illisible",
@@ -1209,17 +1393,6 @@
     "noReport": "Aucun rapport d'accès pour cette API pour l'instant.",
     "summary": "Résumé",
     "checkedAt": "Vérifié le {date}",
-    "robots": "robots.txt",
-    "robotsStatus": "Statut",
-    "robotsFetched": "Lu le",
-    "robotsRule": "Règle appliquée",
-    "robotsStatuses": {
-      "allowed": "Autorise le chemin",
-      "disallowed": "Interdit le chemin",
-      "absent": "Absent (aucune règle)",
-      "unreachable": "Injoignable (par prudence, rien n'est collecté)"
-    },
-    "robotsAlways": "robots.txt est toujours respecté : aucun réglage ne permet de l'ignorer.",
     "signals": "Signaux d'usage",
     "signalsHint": "Ces signaux sont affichés comme des données : ils ne bloquent rien et ne sont jamais transmis comme des consignes au modèle.",
     "noSignals": "Aucun signal détecté.",
@@ -1269,7 +1442,7 @@
     "kinds": {
       "investigation_started": "Enquête démarrée.",
       "phase_started": "Phase : {phase}.",
-      "access_report": "Rapport d'accès : robots.txt, {robots}.",
+      "access_report": "Rapport d'accès : page sondée.",
       "schema_proposed": "Schéma de sortie proposé.",
       "attempt_finished": "Essai {n} terminé : {execution}, {network}, résultat {result}.",
       "status_changed": "Statut : {to}.",
@@ -1314,7 +1487,7 @@
       "later": "Aller à la console"
     },
     "contact": "Contact de l'opérateur",
-    "contactHint": "Facultatif ici, mais requis avant la première enquête. Une adresse web (https://…) ou une adresse e-mail. Le robot ne l'annonce que si tu actives l'identification dans les réglages. Tu pourras le modifier là-bas."
+    "contactHint": "Requis avant la première enquête ; tu peux le saisir plus tard dans Réglages > Identité du robot. Une adresse web (https://…) ou une adresse e-mail. Le robot ne l'annonce que si tu actives l'identification dans les réglages. Tu pourras le modifier là-bas."
   },
   "account": {
     "title": "Mon compte",
@@ -1748,6 +1921,41 @@
       "removeGroup": "Retirer le groupe {group}",
       "save": "Enregistrer",
       "notConfigured": "Le SSO n'est pas encore configuré."
+    }
+  },
+  "quality": {
+    "title": "Fiche qualité du run",
+    "summary": "{n} items, {d} doublons",
+    "caption": "Profil de chaque champ, calculé par le code sans IA",
+    "columns": {
+      "field": "Champ",
+      "type": "Type",
+      "fill": "Remplissage",
+      "sentinels": "Vides ou remplissage",
+      "pattern": "Format dominant",
+      "unique": "Valeurs distinctes",
+      "range": "Min – max"
+    },
+    "personal": "personnel : formes seulement",
+    "suspected": "personnel probable : formes seulement",
+    "signals": "Signaux du run",
+    "show": "Voir la fiche qualité",
+    "loading": "Chargement de la fiche qualité…",
+    "empty": "Aucune fiche qualité pour ce run.",
+    "judge": {
+      "title": "Avis du juge",
+      "advisory": "Avis consultatif : le juge n'est pas étalonné.",
+      "unchanged": "Cet avis ne change ni le statut de l'API ni sa version.",
+      "trigger": {
+        "investigation": "à l'enquête",
+        "repair": "à la réparation",
+        "anomaly": "sur anomalie du profil"
+      },
+      "verdict": {
+        "ok": "correct",
+        "wrong": "paraît faux",
+        "unsure": "incertain"
+      }
     }
   }
 }

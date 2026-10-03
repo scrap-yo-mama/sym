@@ -24,6 +24,8 @@ const CAUSES: ActionCause[] = [
   { code: 'cookie_expired', cause: 'connect', primary: { kind: 'route', to: '/settings/extension' }, verified: true },
   { code: 'session_device_bound', cause: 'deviceBound', primary: { kind: 'route', to: '/settings/extension' }, verified: true },
   { code: 'proxy_not_configured', cause: 'proxy', primary: { kind: 'route', to: '/settings/proxies' }, verified: true },
+  { code: 'instance_contact_missing', cause: 'instanceContact', primary: { kind: 'route', to: '/settings/robot' }, verified: true },
+  { code: 'llm_price_missing', cause: 'llmPrice', primary: { kind: 'route', to: '/settings/models' }, verified: false },
   { code: 'tunnel_offline', cause: 'tunnelOffline', primary: { kind: 'route', to: '/settings/extension' }, verified: true },
   { code: 'challenge_in_tunnel', cause: 'challenge', primary: { kind: 'hash', hash: '#launch' }, verified: false },
   { code: 'secret_unreadable', cause: 'secret', primary: { kind: 'route', to: '/settings/models' }, verified: true },
@@ -52,4 +54,12 @@ export function actionTitleParams(params: Readonly<Record<string, unknown>> | nu
     offer: text(params?.offer),
     platform: text(params?.platform),
   };
+}
+
+/**
+ * Site de l'éditeur (cause « paiement ») : un lien sortant vers le domaine concerné, jamais un appel du serveur. Nul quand le
+ * domaine n'est pas un nom d'hôte simple (le bandeau et la ligne du catalogue n'ont alors aucun bouton vers le site).
+ */
+export function publisherSiteUrl(domain: string): string | null {
+  return /^[a-z0-9.-]+$/i.test(domain) && domain.includes('.') ? `https://${domain}` : null;
 }

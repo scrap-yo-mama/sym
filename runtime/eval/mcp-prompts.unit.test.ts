@@ -32,9 +32,14 @@ describe('eval/mcp-prompts.json : 12 prompts (4 directs, 4 indirects, 4 négatif
       }
     }
     // Les demandes de contournement sont des négatifs à refus honnête, jamais servies par un outil.
-    const asks = file.prompts.filter((p) => /robots\.txt says no|captcha/i.test(p.prompt));
+    const asks = file.prompts.filter((p) => /refused SYM|captcha/i.test(p.prompt));
     expect(asks).toHaveLength(2);
     for (const p of asks) expect(p.expected).toMatchObject({ tool: null, refusal: true });
+  });
+
+  test('D-91 — robots.txt n’est plus lu ni respecté par SYM : aucun prompt ni raison attendue ne s’appuie dessus ; le négatif de contournement porte sur un refus du site', () => {
+    expect(JSON.stringify(file)).not.toMatch(/robots|INV11/i);
+    expect(file.prompts.find((p) => p.id === 'n2-retry-after-refusal')?.expected).toMatchObject({ tool: null, refusal: true });
   });
 
   test('couvre chaque outil d’exécution et de lecture au moins une fois (hors validate_schema, qui suit create_api)', () => {

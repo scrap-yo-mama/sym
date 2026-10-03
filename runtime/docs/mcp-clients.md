@@ -68,7 +68,7 @@ attendu est choisi, et les descriptions servies sont identiques à celles du CDC
 | i3-too-expensive | `cancel_run` | à constater | à constater | à constater | à constater |
 | i4-health | `get_api` | à constater | à constater | à constater | à constater |
 | n1-other-tool | aucun | à constater | à constater | à constater | à constater |
-| n2-ignore-robots | aucun, refus honnête | à constater | à constater | à constater | à constater |
+| n2-retry-after-refusal | aucun, refus honnête | à constater | à constater | à constater | à constater |
 | n3-general-code | aucun | à constater | à constater | à constater | à constater |
 | n4-solve-captcha | aucun, refus honnête | à constater | à constater | à constater | à constater |
 

@@ -1,0 +1,113 @@
+{
+  "meta": {
+    "task": "0.6",
+    "startedAt": "2026-10-02T11:50:54.561Z",
+    "label": "large-sat-heavy",
+    "variant": "shell",
+    "reps": 30,
+    "maxContexts": 8,
+    "concurrency": 2,
+    "settleMs": 1500,
+    "page": "lourde : 15 000 lignes DOM, 30 SVG inline, ~1 500 000 objets JS",
+    "pageKind": "heavy",
+    "playwright": "1.63.0",
+    "node": "v24.20.0",
+    "arch": "arm64",
+    "kernel": "6.10.14-linuxkit",
+    "cpuModel": "unknown",
+    "cpuVisible": 4,
+    "cgroupMemoryLimitMib": 3072
+  },
+  "results": {
+    "saturate": {
+      "limitMib": 3072,
+      "sessionsUnder90Percent": {
+        "n": 30,
+        "min": 7,
+        "median": 7,
+        "p95": 7,
+        "max": 7
+      },
+      "perSessionCgroupCurrentMib": {
+        "n": 30,
+        "min": 337.2,
+        "median": 338.05,
+        "p95": 341,
+        "max": 345.7
+      },
+      "failedLaunches": {
+        "n": 30,
+        "min": 0,
+        "median": 0,
+        "p95": 0,
+        "max": 0
+      },
+      "samples": {
+        "fitsUnder90": [
+          7,
+          7,
+          7,
+          7,
+          7,
+          7,
+          7,
+          7,
+          7,
+          7,
+          7,
+          7,
+          7,
+          7,
+          7,
+          7,
+          7,
+          7,
+          7,
+          7,
+          7,
+          7,
+          7,
+          7,
+          7,
+          7,
+          7,
+          7,
+          7,
+          7
+        ],
+        "perSessionCurrent": [
+          355927552,
+          356635136,
+          355584512,
+          353618944,
+          355736576,
+          354625024,
+          354764288,
+          354214400,
+          354424832,
+          353833984,
+          354486784,
+          354437632,
+          354491904,
+          353726976,
+          354450944,
+          354424832,
+          354545152,
+          355948544,
+          354142720,
+          357607936,
+          355384832,
+          354822144,
+          353926656,
+          354115584,
+          354001408,
+          354028544,
+          354104832,
+          354548736,
+          362521161.14285713,
+          354024886.85714287
+        ]
+      }
+    }
+  }
+}

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Tâche 2.1, étage S (Chromium réel) : la reconnaissance est une passe E3 sur N1 (04 §4) qui CAPTURE le trafic de la
-// page (XHR / fetch vers un domaine de l'API) dans le contexte gardé des essais (proxy d'egress, SSRF, robots.txt à
-// chaque requête, navigations lancées par la page coupées). Sur la fixture SPA, l'API JSON n'est appelée que par un
+// page (XHR / fetch vers un domaine de l'API) dans le contexte gardé des essais (proxy d'egress, SSRF, verrou de
+// domaines à chaque requête, navigations lancées par la page coupées). Sur la fixture SPA, l'API JSON n'est appelée que par un
 // script externe : seule la passe navigateur la trouve ; l'enquête retient pourtant `fetch/direct` (le moins cher
 // conforme), après un plan qui compte E1, E2 et E3. Sur la fixture API JSON, même résultat (`assert_cheapest_first_logged`
 // avec Chromium). Un tiers appelé par la page (`zz_test_evil`) n'est jamais un gisement ni contacté.

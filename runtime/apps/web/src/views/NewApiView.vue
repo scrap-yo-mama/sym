@@ -8,11 +8,14 @@
  * (le journal se rejoue depuis le début).
  * @page
  */
+import { providersReceiving, type ProviderNoticeSettings } from '@/lib/provider-notice';
 import { computed, nextTick, onMounted, onServerPrefetch, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { useRoute, useRouter } from 'vue-router';
+import InstanceContactBanner from '@/components/InstanceContactBanner.vue';
 import AccountSiteWarning from '@/components/investigation/AccountSiteWarning.vue';
 import InvestigationBoard from '@/components/investigation/InvestigationBoard.vue';
+import PhaseTimeline from '@/components/investigation/PhaseTimeline.vue';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader } from '@/components/ui/card';
@@ -21,6 +24,7 @@ import { Label } from '@/components/ui/label';
 import { useInvestigation } from '@/composables/useInvestigation';
 import { useLlmSettings } from '@/composables/useSettings';
 import { useNewApiForm } from '@/composables/useNewApiForm';
+import { emptyInvestigation, milestoneView } from '@/lib/investigation';
 import { focusRouteHeading } from '@/router';
 
 const { t } = useI18n();
@@ -38,13 +42,17 @@ const showBoard = computed(() => state.runId !== null || state.apiId !== null ||
 const llm = useLlmSettings();
 onMounted(() => void llm.load());
 onServerPrefetch(() => llm.load());
+// Mention étendue (2.12) : `judge` s'il est activé, `reflect`, et `embed` si l'étage 4 de la mémoire l'est.
 const providerNotice = computed(() => {
-  const roleProvider = llm.roles.investigate?.provider;
+  const receiving = providersReceiving(llm.data.value as ProviderNoticeSettings | null);
+  if (receiving.length > 1) return t('newApi.providerNoticeMany', { providers: receiving.join(', ') });
+  const roleProvider = receiving[0] ?? llm.roles.investigate?.provider;
   const named = llm.providers.value.find((provider) => provider.id === roleProvider) ?? llm.providers.value[0];
   return named ? t('newApi.providerNotice', { provider: named.id }) : t('newApi.providerNoticeGeneric');
 });
 
 const submitting = computed(() => busy.value === 'create');
+const formMilestones = milestoneView(emptyInvestigation(), { created: false });
 const submitError = ref<string | null>(null);
 
 async function openFromRoute(): Promise<void> {
@@ -92,9 +100,12 @@ const inputError = 'sym-error';
     @resume="investigation.resume()"
     @cancel="investigation.cancel()"
     @validate="(payload) => investigation.validate(payload)"
-    @reinvestigate="reinvestigate"
+    @reinvestigate="reinvestigate()"
   />
   <section v-else class="mx-auto flex max-w-2xl flex-col gap-6 py-10">
+    <!-- Jalon 1 « Décrire » en cours : la frise est la même que pendant l'enquête (20 § 5.3). -->
+    <PhaseTimeline :states="formMilestones" />
+    <InstanceContactBanner />
     <Card>
       <CardHeader>
         <h1 data-route-heading tabindex="-1" class="text-2xl leading-none font-semibold tracking-tight">{{ t('newApi.title') }}</h1>
@@ -118,7 +129,7 @@ const inputError = 'sym-error';
               :aria-invalid="errors.description === true"
               :aria-describedby="errors.description ? 'api-description-hint api-description-error' : 'api-description-hint'"
             />
-            <p id="api-description-hint" class="text-sm text-muted-foreground">{{ t('newApi.descriptionHint') }}</p>
+            <p id="api-description-hint" class="text-sm text-muted-foreground">{{ t('newApi.descriptionHint') }} {{ t('newApi.descriptionTemplate') }}</p>
             <p v-if="errors.description" id="api-description-error" :class="inputError" role="alert">{{ t('newApi.descriptionRequired') }}</p>
           </div>
 

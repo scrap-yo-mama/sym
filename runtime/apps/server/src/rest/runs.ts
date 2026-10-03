@@ -10,6 +10,7 @@ import { withActor } from '@runtime/db';
 import type pg from 'pg';
 import type { ServerContext } from '../context.js';
 import type { Actor } from '../routes/guard.js';
+import { runErrorOf, runNotStarted } from './run-error.js';
 import { iso, reasonMessage, usd, usdOrNull } from './shared.js';
 import { investigationTimeline } from './timeline.js';
 
@@ -33,6 +34,8 @@ export type RunRow = {
   degraded_reasons: string[];
   failure_class: string | null;
   retryable: boolean | null;
+  /** Cause stable d'un échec ou d'un arrêt (`instance_contact_missing`…), masquée à l'écriture (INV8). */
+  error_detail: string | null;
   cost_llm_usd: string | null;
   cost_proxy_usd: string;
   tokens_in: string;
@@ -54,7 +57,7 @@ export type RunRow = {
 };
 
 const RUN_COLUMNS = `r.id, r.api_id, a.slug AS api_slug, r.owner_id, r.kind, r.strategy_version, r.trigger, r.state, r.outcome,
-  r.degraded_reasons, r.failure_class, r.retryable, r.cost_llm_usd, r.cost_proxy_usd, r.tokens_in, r.tokens_cached, r.tokens_out,
+  r.degraded_reasons, r.failure_class, r.retryable, r.error_detail, r.cost_llm_usd, r.cost_proxy_usd, r.tokens_in, r.tokens_cached, r.tokens_out,
   r.tokens_reasoning, r.usage_estimated, r.items, r.dataset_id, r.duration_ms, r.trace_id, r.input, r.paused_at, r.created_at, r.created_at::text AS created_text,
   r.started_at, r.finished_at, d.expires_at AS retention_until`;
 
@@ -79,6 +82,12 @@ const cost = (r: Pick<RunRow, 'cost_llm_usd' | 'cost_proxy_usd' | 'usage_estimat
   return { llm_usd: llm, proxy_usd: proxy, total_usd: llm === null ? null : Math.round((llm + proxy) * 1e6) / 1e6, estimated: r.usage_estimated };
 };
 
+/** `error` : la cause nommée d'un run en échec (UX-04), absente sinon. */
+const errorField = (r: Pick<RunRow, 'state' | 'error_detail'>) => {
+  const error = runErrorOf(r);
+  return error === null ? {} : { error };
+};
+
 /** `RunSummary` (05 § 4.2, 06 § 2) : métadonnées, jamais d'items. */
 export function runSummary(r: RunRow) {
   return {
@@ -93,6 +102,7 @@ export function runSummary(r: RunRow) {
     degraded_reasons: r.degraded_reasons,
     failure_class: r.failure_class,
     ...(r.retryable === null ? {} : { retryable: r.retryable }),
+    ...errorField(r),
     created_at: r.created_at.toISOString(),
     started_at: iso(r.started_at),
     finished_at: iso(r.finished_at),
@@ -231,7 +241,12 @@ function messageOf(r: RunRow, status: string, total: number, awaitingSchema: boo
   }
   if (r.state === 'cancelled') return 'The run was cancelled; incurred costs remain charged.';
   if (r.state.startsWith('skipped_')) return `The run was skipped (${r.state}).`;
-  if (r.state === 'failed') return `The run failed (${r.failure_class ?? 'unknown'}); the API is now ${status}.`;
+  if (r.state === 'failed') {
+    // Cause nommée (UX-04) : la phrase la dit, au lieu de la seule classe d'échec.
+    const error = runErrorOf(r);
+    if (error !== null) return `The run ${runNotStarted(r) ? 'could not start' : 'ended without a known cost'} (${error.code}): ${error.message} The API is now ${status}.`;
+    return `The run failed (${r.failure_class ?? 'unknown'}); the API is now ${status}.`;
+  }
   if (awaitingSchema) return 'The investigation proposed an output schema: validate it (validate_schema) to start the trials.';
   if (r.kind === 'investigation') return `The investigation finished; the API is now ${status}.`;
   if (r.outcome === 'degraded') return `The run succeeded with warnings (${r.degraded_reasons.join(', ') || 'degraded'}): ${total} items. Mention it to the user.`;
@@ -291,6 +306,7 @@ export async function buildRunResult(ctx: ServerContext, actor: Actor, r: RunRow
     next_cursor: nextCursor,
     degraded_reasons: r.degraded_reasons,
     message: messageOf(r, status, total, awaitingSchema),
+    ...errorField(r),
     next_action: nextAction,
     poll_after_seconds: active && r.paused_at === null ? 5 : null,
     // Chronologie d'une enquête (05 § 1.2, tâche 3.10) : dérivée de `investigation_events`, la source unique du récit.

@@ -107,15 +107,17 @@ describe('ingestEvent', () => {
 
   test('frise : les phases avancent, le plan d’essais est lu après la reconnaissance', () => {
     const state = following();
-    ingestEvent(state, frame('1', 'investigation.started', { run_id: RUN, access_report: { id: 'r', checked_at: '2026-10-01T10:00:00Z', signal: 'allowed', robots: { status: 'allowed' } } }), 0);
+    ingestEvent(state, frame('1', 'investigation.started', { run_id: RUN, access_report: { id: 'r', checked_at: '2026-10-01T10:00:00Z', signal: 'allowed', llms_txt: true } }), 0);
     expect(state.phase).toBe('access_check');
-    expect(state.access?.robots.status).toBe('allowed');
+    // Un rapport sans section robots est valide (D-91) : la pastille et les autres champs suffisent.
+    expect(state.access).toMatchObject({ signal: 'allowed', llms_txt: true });
+    expect(state.access).not.toHaveProperty('robots');
     ingestEvent(state, frame('2', 'phase.started', { run_id: RUN, phase: 'reconnaissance' }), 0);
     ingestEvent(state, frame('3', 'phase.started', { run_id: RUN, phase: 'awaiting_schema_validation', plan: [{ execution: 'fetch', network: 'direct', est_cost_usd: 0.0004 }, { execution: 'agent' }, { execution: 'inconnue' }] }), 0);
     expect(state.phase).toBe('awaiting_schema_validation');
     expect(state.plan).toEqual([
-      { execution: 'fetch', network: 'direct', estCostUsd: 0.0004 },
-      { execution: 'agent', network: null, estCostUsd: null },
+      { execution: 'fetch', network: 'direct', estCostUsd: 0.0004, source: null, rule: null },
+      { execution: 'agent', network: null, estCostUsd: null, source: null, rule: null },
     ]);
   });
 
@@ -134,8 +136,9 @@ describe('ingestEvent', () => {
     expect(state.blocked).toMatchObject({ cause: 'blocked_by_protection', domain: 'exemple.test', at: '2026-10-01T10:05:00Z', costUsd: 0.004 });
     expect(state.blocked?.attempt?.index).toBe(0);
     expect(state.terminal).toBe(true);
+    // Raison historique `robots_disallowed` (plus produite, D-91) : lue comme un refus du site, sans variante robots.
     ingestEvent(state, frame('3', 'status.changed', { run_id: RUN, status: 'bloquee', status_reason: { code: 'robots_disallowed', params: {} } }), 0);
-    expect(state.blocked?.cause).toBe('robots_disallowed');
+    expect(state.blocked?.cause).toBe('forbidden');
     ingestEvent(state, frame('4', 'status.changed', { run_id: RUN, status: 'enquete' }), 0);
     expect(state.blocked).toBeNull();
   });

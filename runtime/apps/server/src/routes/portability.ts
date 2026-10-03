@@ -6,7 +6,7 @@
 // (`assert_export_no_secret`). Import : relu par `parseApiExport` (champs inconnus ignorés, tunnel écarté de la politique,
 // `$ref` distant refusé, INV1),
 // aperçu sans écriture, puis `confirm=true` : API privée en `enquete`, enquête en file au stade `access_check` (rapport
-// d'accès, robots.txt, INV11) puis `testing` de la stratégie importée — aucun nouvel état (INV3). Le journal et l'audit ne
+// d'accès) puis `testing` de la stratégie importée — aucun nouvel état (INV3). Le journal et l'audit ne
 // reçoivent que des compteurs et des codes, jamais le contenu du fichier.
 import { formatExport, parseApiExport, schemaHasPersonalFields, type ApiExport } from '@runtime/core';
 import { exportApi, importApi, InvestigationStateError, PortabilityError, schemaColumns, StorageFullError, withActor } from '@runtime/db';
@@ -53,6 +53,10 @@ export function portabilityRoutes(app: FastifyInstance, ctx: ServerContext): voi
       const parsed = parseApiExport(request.body, { runtimeVersion: ctx.appVersion });
       if (!parsed.ok) return sendError(reply, 400, parsed.code, parsed.message);
       const doc = parsed.export;
+      // PA-02 : les plafonds d'instance valent aussi pour un fichier (un membre édite son export, puis le réimporte) ; refus
+      // AVANT toute écriture, aperçu compris. Le worker borne de plus ce qu'il lit en base.
+      if ((doc.api.max_cost_usd ?? 0) > ctx.rest.maxCostUsdPerRun) return sendError(reply, 400, 'cost_cap_exceeded', `api.max_cost_usd dépasse le plafond de l’instance (${ctx.rest.maxCostUsdPerRun} $ par run)`);
+      if ((doc.api.budget_daily_usd ?? 0) > ctx.rest.userBudgetDailyUsd) return sendError(reply, 400, 'cost_cap_exceeded', `api.budget_daily_usd dépasse le plafond de l’instance (${ctx.rest.userBudgetDailyUsd} $ par jour)`);
       const personal = personalOf(doc);
       let policy: Record<string, unknown>;
       try {
@@ -85,7 +89,7 @@ export function portabilityRoutes(app: FastifyInstance, ctx: ServerContext): voi
         const slug = await freeSlug(ctx, doc.api.description, doc.api.source_url);
         const queue = await ctx.jobs();
         created = await withActor(ctx.pool, actor, async (tx) => {
-          await reserveRunSlot(tx, ctx);
+          await reserveRunSlot(tx, ctx, { kind: 'investigation' });
           return importApi(tx, queue, { ownerId: actor.userId, slug, trigger: triggerOf(actor), export: doc, networkPolicy: policy });
         });
       } catch (error) {

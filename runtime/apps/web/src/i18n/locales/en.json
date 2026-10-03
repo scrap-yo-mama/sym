@@ -228,8 +228,6 @@
     "geo_restriction": "Content unavailable from this country; trying the proxy of the country allowed by the API.",
     "blocked_by_protection": "The site refuses automated access. Scrapyomama stops.",
     "forbidden": "The site refuses access to this address. The IP address does not change.",
-    "robots_disallowed": "The site asks robots not to visit this page.",
-    "robots_unreachable": "robots.txt cannot be reached: to be safe, nothing is collected.",
     "payment_required": "The site asks for a payment: {offre}.",
     "auth_required": "{domaine} asks for a sign-in.",
     "cookie_expired": "The session of {domaine} has expired.",
@@ -248,7 +246,14 @@
     "volume_anomaly": "Unusual volume",
     "pagination_short": "Pagination cut short",
     "slow": "Slow",
-    "cost_anomaly": "Unusual cost"
+    "cost_anomaly": "Unusual cost",
+    "field_constant": "constant value",
+    "pattern_shift": "format changed",
+    "sentinel_values": "empty values",
+    "duplicate_items": "duplicates",
+    "new_enum_value": "new value",
+    "prior_refusal": "domain refused before",
+    "judge_flag": "judge opinion (advisory)"
   },
   "failure": {
     "transient": "Temporary problem",
@@ -256,8 +261,6 @@
     "rate_limited": "Site asked to slow down",
     "forbidden": "Access refused",
     "blocked_by_protection": "Automated access refused",
-    "robots_disallowed": "Disallowed by robots.txt",
-    "robots_unreachable": "robots.txt unreachable",
     "payment_required": "Payment required",
     "auth_required": "Sign-in required",
     "account_limit": "Account limit",
@@ -300,7 +303,9 @@
     "submitting": "Starting…",
     "countryInvalid": "Enter a country code of 2 letters, for example fr.",
     "descriptionRequired": "Describe what the API should return.",
-    "accountRequired": "Confirm the notice above to continue."
+    "accountRequired": "Confirm the notice above to continue.",
+    "providerNoticeMany": "{providers} will receive cleaned traffic excerpts.",
+    "descriptionTemplate": "A good request reads: “I want [what] from [where] to [what for].”"
   },
   "investigation": {
     "title": "Investigation of {domain}",
@@ -345,25 +350,16 @@
       "followSuspended": "Live updates suspended. New trials are not shown or announced."
     },
     "phase": {
-      "label": "Investigation steps",
       "announce": "Step: {phase}.",
-      "access_check": "Access check",
-      "reconnaissance": "Reconnaissance",
-      "awaiting_schema_validation": "Output schema",
-      "testing": "Trials",
-      "state": {
-        "done": "done",
-        "current": "in progress",
-        "upcoming": "upcoming"
-      }
+      "access_check": "Explore",
+      "reconnaissance": "Explore",
+      "awaiting_schema_validation": "Validate the schema",
+      "testing": "Try"
     },
     "log": {
       "title": "Trials",
       "empty": "No trial yet.",
-      "robotsAllowed": "robots.txt read: path allowed",
-      "robotsDisallowed": "robots.txt read: path disallowed",
-      "robotsAbsent": "robots.txt not found: no rule applies",
-      "robotsUnreachable": "robots.txt unreachable: to be safe, nothing is collected",
+      "accessProbed": "Access report: page probed",
       "signal": "Usage signal {kind}: {value}",
       "llmsTxt": "llms.txt found",
       "officialApi": "Official route found: {url}",
@@ -376,10 +372,52 @@
       "why": "Why: {reason}"
     },
     "plan": {
-      "title": "Trial plan",
-      "hint": "Cheapest first. You can remove methods before the trials start, never add any.",
-      "estimate": "estimated {cost}",
-      "atLeastOne": "At least one method must stay selected."
+      "title": "The trial plan",
+      "hint": "Cheapest first. SYM stops at the first one that works.",
+      "atLeastOne": "At least one method must stay selected.",
+      "empty": "The trial plan appears here as soon as the server announces it.",
+      "state": {
+        "planned": "to try",
+        "running": "running",
+        "succeeded": "succeeded",
+        "failed": "failed",
+        "pruned": "not run",
+        "excluded": "excluded"
+      },
+      "prunedReason": "Skipped: {reason}",
+      "failedReason": "Failed: {reason}",
+      "include": "Try this method",
+      "stop": {
+        "title": "Intentional stop",
+        "text": "If the site refuses access, shows a verification or asks robots to stay away, SYM stops here. Nothing else is tried."
+      },
+      "footer": "Estimates · rule applied: {rule}",
+      "card": {
+        "fetch": {
+          "title": "Direct fetch",
+          "text": "the page HTML, no browser"
+        },
+        "fetch_in_page": {
+          "title": "In-page fetch",
+          "text": "the page's own requests, from a browser"
+        },
+        "playwright": {
+          "title": "Browser",
+          "text": "if the page is built with JavaScript"
+        },
+        "agent_fetch": {
+          "title": "Agent + fetch",
+          "text": "the AI reads the HTML on every run"
+        },
+        "hybrid": {
+          "title": "Script + agent",
+          "text": "a script, and the agent when it gets stuck"
+        },
+        "agent": {
+          "title": "Agent",
+          "text": "as a last resort, then compiled"
+        }
+      }
     },
     "schema": {
       "title": "Output schema",
@@ -396,7 +434,32 @@
       "input": "Input schema",
       "strategy": "Chosen strategy: {execution}, {network}, version {version}",
       "tunnelNote": "Works only while your computer is on.",
-      "empty": "The schema will appear here once the reconnaissance is done."
+      "empty": "The schema will appear here once the reconnaissance is done.",
+      "gateTitle": "Here is what you are going to get",
+      "fieldsCaption": "Fields of the output schema: name, type and a real example from the sample",
+      "columns": {
+        "field": "Field",
+        "type": "Type",
+        "example": "Real example"
+      },
+      "noExample": "No example in the sample",
+      "personal": "Personal data: example hidden",
+      "types": {
+        "string": "text",
+        "number": "number",
+        "integer": "whole number",
+        "boolean": "yes / no",
+        "array": "list",
+        "object": "object",
+        "null": "empty"
+      },
+      "remark": "A note for SYM?",
+      "remarkHint": "Optional. Your note stays on this screen and goes nowhere: to change a field, use “Edit the schema”.",
+      "noFields": "The schema has no field to show.",
+      "remarkPlaceholder": "e.g. the price in euros, add the book's URL",
+      "range": "{min} to {max}",
+      "quoteOpen": "“",
+      "quoteClose": "”"
     },
     "result": {
       "sain": "The investigation succeeded. Your API is ready.",
@@ -404,7 +467,36 @@
       "erreur": "The investigation ended in error. The trial list shows why.",
       "bloquee": "The investigation stopped: the site refuses automated access."
     },
-    "resuming": "Resuming the investigation…"
+    "resuming": "Resuming the investigation…",
+    "milestones": {
+      "label": "Investigation milestones",
+      "describe": "Describe",
+      "reconnaissance": "Explore",
+      "schema": "Validate the schema",
+      "trials": "Try",
+      "state": {
+        "todo": "to do",
+        "current": "in progress",
+        "done": "done",
+        "stopped": "stopped"
+      },
+      "step": "{n} · {label}"
+    },
+    "gate": {
+      "title": "I found {what}. Shall we validate this schema?",
+      "noTrial": "No trial starts before your approval.",
+      "spent": "Already spent on the reconnaissance: {cost}.",
+      "spentUnknown": "Already spent on the reconnaissance: not available yet.",
+      "budget": "Max budget for the investigation",
+      "replay": "Replays after that: about {cost}, no AI.",
+      "validate": "Validate and start the trials · ~{max}",
+      "validateNoMax": "Validate and start the trials",
+      "edit": "Edit the schema",
+      "auto": "Schema validated automatically, as you asked.",
+      "what": "the data from {domain}",
+      "whatUnknown": "the data",
+      "replayWithAi": "Replays after that: about {cost}, with the AI on every run."
+    }
   },
   "blocked": {
     "title": "Blocked: {domain} refuses automated access",
@@ -413,14 +505,12 @@
       "heading": "What happened",
       "protection": "On {date}, trial {n} (“{execution}”, {network}), {domain} answered with a verification page. No other trial was started. Investigation cost: {cost}.",
       "forbidden": "On {date}, trial {n} (“{execution}”, {network}), {domain} answered with an access refusal. No other trial was started. Investigation cost: {cost}.",
-      "robots": "{domain} asks robots not to visit this page. No request was sent to this path. Investigation cost: {cost}.",
       "generic": "{domain} refused access. No other trial was started. Investigation cost: {cost}."
     },
     "why": {
       "heading": "Why we stop",
       "protection": "This is the decision of the site. Scrapyomama does not answer in place of a person and does not change IP address after a refusal.",
-      "forbidden": "The site refuses access to this address. The IP address does not change after a refusal. Check your access rights or contact the publisher.",
-      "robots": "This site asks robots not to visit this page. Scrapyomama respects this rule."
+      "forbidden": "The site refuses access to this address. The IP address does not change after a refusal. Check your access rights or contact the publisher."
     },
     "todo": {
       "heading": "What you can do",
@@ -471,6 +561,16 @@
       "body": "The run is stopped: {domain} shows a verification in your browser. Nothing was sent on this page and nothing will be. You can start a new run later; Scrapyomama never answers a verification.",
       "button": "Investigate again"
     },
+    "instance_contact_missing": {
+      "title": "Set the robot contact",
+      "body": "The operator contact is required before the first investigation. Set it in Settings > Robot identity, or with the INSTANCE_CONTACT variable, then investigate again.",
+      "button": "Open Settings > Robot identity"
+    },
+    "llm_price_missing": {
+      "title": "Enter the price of model {model} in Settings > AI models",
+      "body": "The investigation is stopped: no price is known for model {model}, so it was not called and nothing was spent. Enter its price per million tokens in Settings > AI models, then investigate again.",
+      "button": "Open Settings > AI models"
+    },
     "secret_unreadable": {
       "title": "A saved key is unreadable",
       "body": "Enter the key again in the settings, then test it.",
@@ -484,7 +584,8 @@
       "title": "{platform} flagged a limit on your account",
       "body": "{platform} flagged a limit or a restriction. The run is stopped and no retry is planned. Read the messages of the platform. Only the platform decides on a restriction. Reminder: automated extraction may be forbidden by its terms, even with a single account; you remain responsible."
     },
-    "resuming": "Resuming the investigation…"
+    "resuming": "Resuming the investigation…",
+    "modelUnnamed": "used"
   },
   "runs": {
     "title": "All runs",
@@ -613,12 +714,31 @@
         "deepseek": "DeepSeek",
         "qwen": "Qwen",
         "openai": "OpenAI",
+        "anthropic": "Anthropic",
+        "gemini": "Google Gemini",
+        "mistral": "Mistral",
+        "groq": "Groq",
         "custom": "Custom"
       },
       "validation": {
         "validated": "Validated model (bench N2, {date})",
         "notValidated": "Not validated",
         "hint": "Measured by the evaluation bench; read-only."
+      },
+      "price": {
+        "title": "Model prices",
+        "intro": "Without a price, a model is never called: nothing is guessed and nothing is counted as 0. Enter the provider price per million tokens.",
+        "none": "No model in use yet: choose one in \"Model per role\" below.",
+        "in": "Input price",
+        "out": "Output price",
+        "cached": "Cached input price (optional)",
+        "unit": "USD per million tokens.",
+        "known": "Known price (source noted {date}); you can change it.",
+        "toValidate": "Price to validate: none is known for this model, enter it yourself.",
+        "incomplete": "Enter both the input and the output price of a model, or leave both empty.",
+        "invalid": "A price must be a number, zero or more.",
+        "roleMissing": "Enter the price of model {model} in the table above: without it no investigation can run.",
+        "testMissing": "The test passed, but model {model} has no price: it cannot be called until you enter it in the table above."
       }
     },
     "proxies": {
@@ -735,9 +855,9 @@
   },
   "access": {
     "signal": {
-      "allowed": "Access allowed",
+      "allowed": "Nothing to report",
       "review": "To review",
-      "disallowed": "Access disallowed",
+      "disallowed": "Refusal reported (older report)",
       "unknown": "Access not checked"
     }
   },
@@ -758,14 +878,14 @@
     "geo_restriction": "Content unavailable from this country; trying with the proxy of the country allowed by the API.",
     "blocked_by_protection": "The site refuses automated access. Scrapyomama stops.",
     "forbidden": "The site refuses access to this address. The IP address does not change.",
-    "robots_disallowed": "The site asks robots not to visit this page.",
-    "robots_unreachable": "robots.txt is unreachable: as a precaution, nothing is collected.",
     "payment_required": "The site asks for a payment: {offer}.",
     "auth_required": "{domain} asks you to sign in.",
     "cookie_expired": "The session on {domain} has expired.",
     "session_device_bound": "The session on {domain} is tied to your device and cannot be copied to the server.",
     "challenge_in_tunnel": "A check appeared in your browser. The run is paused.",
     "secret_unreadable": "A stored key is unreadable.",
+    "instance_contact_missing": "The robot contact is not set: it is required before the first investigation.",
+    "llm_price_missing": "The price of the model is not set: enter it in Settings > AI models.",
     "account_limit": "The platform flagged a limit on your account. No automatic retry.",
     "session_owner_required": "This API uses its owner's session.",
     "llm_refused": "The model refused the request; no automatic fallback.",
@@ -775,7 +895,14 @@
     "repair_exhausted": "Repair budget exhausted; version v{a} kept.",
     "proxy_not_configured": "A proxy is required for {country}.",
     "tunnel_offline": "Your computer is not connected.",
-    "not_found": "The page no longer exists (404 or 410)."
+    "not_found": "The page no longer exists (404 or 410).",
+    "field_constant": "Field {field} has the same value on every item.",
+    "pattern_shift": "The format of field {field} changed ({p} % of items).",
+    "sentinel_values": "{p} % of the values of {field} are empty or placeholders.",
+    "duplicate_items": "{p} % of the items are duplicates.",
+    "new_enum_value": "New value for {field}: to check.",
+    "prior_refusal": "This domain already refused access on {date}. Scrapyomama stops.",
+    "judge_flag": "Advisory opinion of the judge: {field} looks wrong."
   },
   "reasonLabel": {
     "retried": "Retries needed",
@@ -794,13 +921,13 @@
     "geo_restriction": "Geographic restriction",
     "blocked_by_protection": "Automated access refused",
     "forbidden": "Access refused",
-    "robots_disallowed": "Page disallowed by robots.txt",
-    "robots_unreachable": "robots.txt unreachable",
     "payment_required": "Payment requested",
     "auth_required": "Sign-in required",
     "cookie_expired": "Session expired",
     "session_device_bound": "Session tied to the device",
     "challenge_in_tunnel": "Check shown in the browser",
+    "instance_contact_missing": "Robot contact missing",
+    "llm_price_missing": "Model price missing",
     "secret_unreadable": "Key unreadable",
     "account_limit": "Account limit",
     "session_owner_required": "Owner session required",
@@ -812,8 +939,6 @@
     "rate_limited": "Site rate limit",
     "forbidden": "Access refused",
     "blocked_by_protection": "Automated access refused",
-    "robots_disallowed": "Page disallowed by robots.txt",
-    "robots_unreachable": "robots.txt unreachable",
     "payment_required": "Payment requested",
     "auth_required": "Sign-in required",
     "account_limit": "Account limit",
@@ -860,7 +985,7 @@
     "relaunch": "Run again"
   },
   "catalog": {
-    "title": "Catalog",
+    "title": "Your catalog",
     "follow": {
       "suspend": "Suspend live updates",
       "resume": "Resume live updates",
@@ -869,24 +994,25 @@
     "newApi": "New API",
     "caption": "API catalog: name, execution, network, status and reason, last run, average cost, success rate and access",
     "columns": {
-      "name": "Name",
-      "execution": "Execution",
-      "network": "Network",
-      "status": "Status and reason",
+      "name": "API",
+      "status": "Status",
       "lastRun": "Last run",
-      "cost": "Average cost",
+      "cost": "Cost / run",
       "success": "Success (30 d)",
-      "access": "Access"
+      "access": "Access",
+      "action": "Action",
+      "mode": "Mode · network"
     },
     "computerRequired": "Computer required",
     "filters": {
       "label": "Catalog filters",
       "search": "Search",
-      "searchPlaceholder": "Name or description",
+      "searchPlaceholder": "name, domain…",
       "status": "Status",
       "execution": "Execution",
       "network": "Network",
-      "all": "All"
+      "all": "All",
+      "searchLabel": "Search the catalog"
     },
     "empty": {
       "title": "Your catalog is ready to fill up",
@@ -894,8 +1020,7 @@
     },
     "noMatch": {
       "title": "No API matches",
-      "description": "Change or remove filters to see more results.",
-      "reset": "Reset filters"
+      "description": "Change or remove filters to see more results."
     },
     "pagination": {
       "label": "Catalog pagination",
@@ -903,7 +1028,53 @@
       "next": "Next",
       "page": "Page {n}"
     },
-    "statusChanged": "{slug}: {status}."
+    "statusChanged": "{slug}: {status}.",
+    "summary": {
+      "service": "No API in service | 1 API in service | {n} APIs in service",
+      "stopped": "None stopped | {n} stopped | {n} stopped",
+      "attention": "Nothing needs your attention. | One needs your attention. | {count} need your attention.",
+      "words": {
+        "n2": "Two",
+        "n3": "Three",
+        "n4": "Four",
+        "n5": "Five",
+        "n6": "Six",
+        "n7": "Seven",
+        "n8": "Eight",
+        "n9": "Nine",
+        "n10": "Ten"
+      }
+    },
+    "health": {
+      "title": "Catalog health",
+      "ratio": "{healthy} of {total} healthy",
+      "noneInService": "No API in service",
+      "stopped": "No intentional stop | {n} intentional stop | {n} intentional stops",
+      "partial": "Partial counts: only the first {n} APIs are counted.",
+      "legend": {
+        "sain": "{n} healthy | {n} healthy",
+        "warning": "{n} to watch",
+        "enquete": "{n} investigating",
+        "reparation": "{n} repairing",
+        "erreur": "{n} in error",
+        "action_requise": "{n} needs you | {n} need you"
+      },
+      "legendLabel": "Count by status"
+    },
+    "pills": {
+      "label": "Quick filters",
+      "all": "All",
+      "attention": "To handle",
+      "healthy": "Healthy",
+      "stopped": "Stopped",
+      "withCount": "{label} · {n}",
+      "changed": "{label}: {n}."
+    },
+    "rowAction": {
+      "alternatives": "See alternatives",
+      "openTask": "See the task"
+    },
+    "attentionPartial": "Partial list: only the first {n} APIs to handle are shown."
   },
   "detail": {
     "title": "API page",
@@ -929,7 +1100,6 @@
       "title": "What happened",
       "attempt": "On {date}, attempt {n} (“{execution}”, {network}), {domain} answered with {answer}.",
       "generic": "{domain} answered with {answer}.",
-      "robots": "This site asks robots not to visit this page. Scrapyomama respects this rule.",
       "forbidden": "The site refuses access to this address. The IP address does not change after a refusal. Check your access rights or contact the publisher."
     },
     "answer": {
@@ -941,7 +1111,6 @@
     "why": {
       "title": "Why we stop",
       "protection": "This is the site's decision. Scrapyomama does not answer in place of a person and does not change IP address after a refusal.",
-      "robots": "This is the rule the site declares in its robots.txt file. Scrapyomama always respects it.",
       "forbidden": "This is the site's decision. Scrapyomama does not change IP address after a refusal."
     },
     "todo": {
@@ -959,11 +1128,16 @@
     },
     "whyStop": "Why this stop?"
   },
+  "instanceContactBanner": {
+    "title": "Set the robot contact before your first API",
+    "text": "The operator contact is required before the first investigation: without it an investigation stops at once. A web address (https://…) or an e-mail address is enough, or the INSTANCE_CONTACT variable of the server.",
+    "link": "Open Settings > Robot identity"
+  },
   "actionRequired": {
     "resuming": "Resuming the investigation…",
     "connect": {
       "title": "Connect {domain}",
-      "button": "Connect in the extension",
+      "button": "Connect my session",
       "verify": "The session shows up here as soon as the extension sends it (live update)."
     },
     "deviceBound": {
@@ -986,6 +1160,16 @@
       "text": "Nothing was sent on this page and nothing will be. You can run again later; Scrapyomama never answers a verification.",
       "button": "Try again later (new run)",
       "verify": "No automatic resume: only a new action from you starts a run."
+    },
+    "instanceContact": {
+      "title": "Set the robot contact",
+      "button": "Open Settings > Robot identity",
+      "verify": "Once the contact is saved, investigate again: nothing was sent and nothing was spent."
+    },
+    "llmPrice": {
+      "title": "Enter the model price in Settings > AI models",
+      "button": "Open Settings > AI models",
+      "verify": "Once the price is saved, investigate again: no model was called and nothing was spent."
     },
     "secret": {
       "title": "A stored key is unreadable",
@@ -1209,17 +1393,6 @@
     "noReport": "No access report for this API yet.",
     "summary": "Summary",
     "checkedAt": "Checked on {date}",
-    "robots": "robots.txt",
-    "robotsStatus": "Status",
-    "robotsFetched": "Read on",
-    "robotsRule": "Rule applied",
-    "robotsStatuses": {
-      "allowed": "Allows the path",
-      "disallowed": "Disallows the path",
-      "absent": "Absent (no rule)",
-      "unreachable": "Unreachable (as a precaution, nothing is collected)"
-    },
-    "robotsAlways": "robots.txt is always respected: no setting can ignore it.",
     "signals": "Usage signals",
     "signalsHint": "These signals are shown as data: they block nothing and are never passed to the model as instructions.",
     "noSignals": "No signal detected.",
@@ -1269,7 +1442,7 @@
     "kinds": {
       "investigation_started": "Investigation started.",
       "phase_started": "Phase: {phase}.",
-      "access_report": "Access report: robots.txt, {robots}.",
+      "access_report": "Access report: page probed.",
       "schema_proposed": "Output schema proposed.",
       "attempt_finished": "Attempt {n} finished: {execution}, {network}, result {result}.",
       "status_changed": "Status: {to}.",
@@ -1314,7 +1487,7 @@
       "later": "Go to the console"
     },
     "contact": "Operator contact",
-    "contactHint": "Optional here, needed before the first investigation. A web address (https://…) or an e-mail address. The robot announces it only if you turn on identification in Settings. You can change it there later."
+    "contactHint": "Required before the first investigation; you can enter it later in Settings > Robot identity. A web address (https://…) or an e-mail address. The robot announces it only if you turn on identification in Settings. You can change it there later."
   },
   "account": {
     "title": "My account",
@@ -1748,6 +1921,41 @@
       "removeGroup": "Remove group {group}",
       "save": "Save",
       "notConfigured": "SSO is not configured yet."
+    }
+  },
+  "quality": {
+    "title": "Run quality sheet",
+    "summary": "{n} items, {d} duplicates",
+    "caption": "Profile of each field, computed by code without AI",
+    "columns": {
+      "field": "Field",
+      "type": "Type",
+      "fill": "Filled",
+      "sentinels": "Empty or placeholder",
+      "pattern": "Main format",
+      "unique": "Distinct values",
+      "range": "Min – max"
+    },
+    "personal": "personal: shapes only",
+    "suspected": "likely personal: shapes only",
+    "signals": "Run signals",
+    "show": "Show the quality sheet",
+    "loading": "Loading the quality sheet…",
+    "empty": "No quality sheet for this run.",
+    "judge": {
+      "title": "Judge opinion",
+      "advisory": "Advisory opinion: the judge is not calibrated.",
+      "unchanged": "This opinion changes neither the API status nor its version.",
+      "trigger": {
+        "investigation": "at investigation",
+        "repair": "at repair",
+        "anomaly": "on a profile anomaly"
+      },
+      "verdict": {
+        "ok": "correct",
+        "wrong": "looks wrong",
+        "unsure": "unsure"
+      }
     }
   }
 }

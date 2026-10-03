@@ -24,11 +24,9 @@
 // - le Chromium dédié (E5 à étapes déléguées, E6) est lancé DANS un slot du pool (`BrowserPool.hold`), tenu jusqu'à la
 //   fin de l'essai, rejeux de compilation compris (sans redemander de slot) : `BROWSER_CONCURRENCY` borne aussi les
 //   essais agentiques, un Chromium par slot (14 §11) ; sans pool (`DISABLE_BROWSER`) : `browser_disabled`.
-// robots.txt (1.11, INV11 ; correctif fix-inv11-agent) : `access` est exigé et chaque Chromium de ces exécuteurs — contexte
-// du pool (E4 par le navigateur, E5 sans délégation, rejeux de compilation E6) comme Chromium dédié piloté par Stagehand
-// (E5 délégué, E6) — reçoit la garde des contextes de run d'E1-E3 (`checkRequest` : chaque requête, saut compris, et chaque
-// WebSocket). Une navigation du cadre principal refusée arrête l'essai avec sa classe (`robots_disallowed`, ou
-// `robots_unreachable`), comme un document refusé (INV6) ; une sous-ressource refusée est seulement coupée.
+// Garde des contextes de run : chaque Chromium de ces exécuteurs — contexte du pool (E4 par le navigateur, E5 sans
+// délégation, rejeux de compilation E6) comme Chromium dédié piloté par Stagehand (E5 délégué, E6) — reçoit la garde des
+// contextes de run d'E1-E3 (`openRunContext` : verrou de domaines à chaque saut, WebSocket, workers).
 import {
   compileAgentTrace,
   hybridUsesLlm,
@@ -60,8 +58,6 @@ import {
   classifyExchange,
   classifyTransportError,
   fetchTransport,
-  type AccessCheck,
-  type AccessDecision,
   type ClassifyContext,
   type DeclarativeRunResult,
   type ExecFailure,
@@ -74,7 +70,7 @@ import type { Browser, BrowserContext, Page, Request, Response } from 'playwrigh
 import { boundedContent, boundedDocumentBody, TOO_LARGE, trackDecodedSizes, type DecodedSizes } from '../browser/bounded.js';
 import type { AgentBrowser, AgentBrowserOptions } from '../browser/agent-browser.js';
 import type { BrowserPool, SlotLease } from '../browser/pool.js';
-import { hostAllowed, isMainNavigation, openRunContext, trackStrategyRequests, type BrowserRequestCheck } from '../browser/run-context.js';
+import { hostAllowed, isMainNavigation, openRunContext, trackStrategyRequests } from '../browser/run-context.js';
 import { AttemptBudgetExceededError, AttemptCost, type RunBudget } from './attempt-cost.js';
 
 /** Coût et traçabilité LLM d'un essai (`run_attempts`). `usd = null` si un prix manque (jamais 0, 08 §1). */
@@ -156,36 +152,6 @@ const budgetOf = (cost: AttemptCost): ExecFailure => budgetFailure(cost.llmUsd()
 /** Erreur portant sa classe d'essai (levée dans une étape, lue par `stepError`). */
 const withFailure = (failure: ExecFailure): Error => Object.assign(new Error(failure.detail), { execFailure: failure });
 
-/** Contrôle robots.txt d'un essai agentique (`checkRequest` de son Chromium) et premier refus du cadre principal. */
-type RobotsGuard = {
-  readonly check: (hop: BrowserRequestCheck) => Promise<boolean>;
-  refusal(): ExecFailure | undefined;
-  /** Refus du cadre principal transmis à la garde de classification (arrêt de l'agent ou du script, INV6). */
-  bind(watch: DocumentWatch): void;
-};
-
-function robotsGuard(access: AccessCheck): RobotsGuard {
-  let first: ExecFailure | undefined;
-  let sink: ((failure: ExecFailure) => void) | undefined;
-  return {
-    check: async (hop) => {
-      // Lecture en échec inattendu : injoignable, on s'abstient (même verdict qu'E1-E3).
-      const decision = await access(hop.url).catch((): AccessDecision => ({ allowed: false, failure: { failure_class: 'robots_unreachable', retryable: true, detail: 'robots_check_failed' } }));
-      if (decision.allowed) return true;
-      if (hop.mainFrame) {
-        first ??= decision.failure;
-        sink?.(decision.failure);
-      }
-      return false;
-    },
-    refusal: () => first,
-    bind(watch) {
-      sink = (failure) => watch.refuse(failure);
-      if (first !== undefined) watch.refuse(first);
-    },
-  };
-}
-
 /** Erreur du client LLM → classe `llm_*` (08 §1) ; plafond de l'essai → `run_budget_exceeded` ; sinon, transport. */
 function llmFailure(error: unknown): ExecFailure {
   if (error instanceof AttemptBudgetExceededError) return budgetFailure(error.unpriced);
@@ -236,8 +202,6 @@ export type AgentFetchOptions = {
   readonly maxCostUsd: number;
   /** Compteur partagé de l'essai (l'exécuteur de stratégie y branche le proxy) ; défaut : un compteur propre. */
   readonly cost?: AttemptCost;
-  /** robots.txt (1.11, INV11) : chaque requête du navigateur (`fetch_in_page`) ; la session réseau a le sien (`checkUrl`). */
-  readonly access: AccessCheck;
   /**
    * Règles embarquées (tâche 2.10, 18 §4.5) : texte reconstruit par l'appelant depuis les références de `spec.rules`
    * (`rule_file_versions` du propriétaire, empreintes vérifiées) ; absent, aucune règle injectée.
@@ -255,22 +219,11 @@ async function fetchPage(options: AgentFetchOptions): Promise<HttpExchange> {
   const b = options.browser;
   if (b === undefined) throw new Error('navigateur absent');
   return b.pool.run(options.signal, async (browser) => {
-    const robots = robotsGuard(options.access);
-    const rc = await openRunContext(browser, { egressServer: b.egress.server, allowedHosts: options.spec.request.allowed_hosts, checkRequest: robots.check, ...(b.userAgent === undefined ? {} : { userAgent: b.userAgent }) });
+    const rc = await openRunContext(browser, { egressServer: b.egress.server, allowedHosts: options.spec.request.allowed_hosts, ...(b.userAgent === undefined ? {} : { userAgent: b.userAgent }) });
     const strategy = trackStrategyRequests(rc.context, options.spec.request.allowed_hosts);
-    /** Navigation du cadre principal refusée par robots.txt (saut compris) : la classe de l'essai. */
-    const refused = () => {
-      const failure = robots.refusal();
-      if (failure !== undefined) throw withFailure(failure);
-    };
     try {
       const response = await strategy
-        .during(isMainNavigation(rc.page), () => guardedGoto(rc.page, url, b.guard, { waitUntil: 'load' as const, timeout: NAVIGATION_TIMEOUT_MS }))
-        .catch((error: unknown) => {
-          refused();
-          throw error;
-        });
-      refused();
+        .during(isMainNavigation(rc.page), () => guardedGoto(rc.page, url, b.guard, { waitUntil: 'load' as const, timeout: NAVIGATION_TIMEOUT_MS }));
       if (response === null) throw new Error('navigation sans réponse');
       if (!hostAllowed(response.url(), options.spec.request.allowed_hosts) || strategy.cut()) throw new DomainNotAllowedError(new URL(response.url()).hostname);
       const body = await boundedContent(rc.page, options.spec.limits.max_response_bytes);
@@ -357,14 +310,12 @@ export type HybridOptions = {
   readonly cost?: AttemptCost;
   /** Garde de classification (1.7) appliquée à chaque document du cadre principal ; défaut : `classifyExchange`. */
   readonly classify?: ClassifyFn;
-  /** robots.txt (1.11, INV11) : chaque requête de chaque Chromium de l'essai (pool et Chromium dédié). */
-  readonly access: AccessCheck;
 };
 
 /** Méthodes de lecture (même verdict que `installDomainGuard`, playwright-channel.ts). */
 const READ_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
 /** Classes qui arrêtent l'agent ou le script (INV6, 04 §3.3) ; un 404 ou un 5xx n'arrête pas : l'agent peut revenir. */
-const STOP_CLASSES: ReadonlySet<string> = new Set(['blocked_by_protection', 'forbidden', 'rate_limited', 'robots_disallowed', 'auth_required', 'payment_required', 'account_limit']);
+const STOP_CLASSES: ReadonlySet<string> = new Set(['blocked_by_protection', 'forbidden', 'rate_limited', 'auth_required', 'payment_required', 'account_limit']);
 const MAX_CLASSIFIED_BODY = 5_000_000;
 /**
  * Échéance de la barrière qui précède le compte des écritures lancées pendant l'agent (`settleWrites`) : une page qui
@@ -381,8 +332,6 @@ type DocumentWatch = {
   refusal(): ExecFailure | undefined;
   /** Attend les classements en cours, puis lève (`execFailure`) si un document a été refusé. */
   gate(): Promise<void>;
-  /** Refus venu d'ailleurs (navigation du cadre principal coupée par robots.txt) : traité comme un document refusé. */
-  refuse(failure: ExecFailure): void;
   dispose(): void;
 };
 
@@ -435,10 +384,6 @@ function watchDocuments(context: BrowserContext, classify: ClassifyFn | undefine
     gate: async () => {
       await settled();
       if (first !== undefined) throw withFailure(first);
-    },
-    refuse: (failure) => {
-      first ??= failure;
-      onRefused(failure);
     },
     dispose: () => context.off('response', handler),
   };
@@ -507,12 +452,10 @@ async function runHybridWithoutLlm(options: HybridOptions, onPage?: (page: Page)
   const spec = options.spec;
   const borrow = <T>(fn: (browser: Browser) => Promise<T>): Promise<T> => (lease !== undefined ? lease.run(fn) : pool!.run(options.signal, fn));
   return borrow(async (browser) => {
-    const robots = robotsGuard(options.access);
-    const rc = await openRunContext(browser, { egressServer: options.egress.server, allowedHosts: spec.allowed_hosts, admit: navigationAdmission(options), checkRequest: robots.check, ...(options.userAgent === undefined ? {} : { userAgent: options.userAgent }) });
+    const rc = await openRunContext(browser, { egressServer: options.egress.server, allowedHosts: spec.allowed_hosts, admit: navigationAdmission(options), ...(options.userAgent === undefined ? {} : { userAgent: options.userAgent }) });
     const strategy = trackStrategyRequests(rc.context, spec.allowed_hosts);
     const stop = new AbortController();
     const watch = watchDocuments(rc.context, options.classify, () => stop.abort(), await decodedSizes(rc.context, rc.page));
-    robots.bind(watch);
     try {
       const goto = gotoFor(rc.page, options.guard, spec.allowed_hosts, watch, options.classify);
       let failure: HybridFailure | null;
@@ -561,12 +504,10 @@ async function runHybridDelegated(options: HybridOptions, agentBrowser: NonNulla
   if (extractLlm !== null) cost.addLlm(() => extractLlm.usage().cost_usd);
   // Une seule échéance pour tout l'essai : étapes, étapes déléguées et extraction (timeout_ms, comme E4).
   const deadline = AbortSignal.timeout(spec.limits.timeout_ms);
-  const robots = robotsGuard(options.access);
   const ab = await lease.dedicated(() =>
     agentBrowser({
       allowedHosts: spec.allowed_hosts,
       allowWriteActions: options.allowWriteActions,
-      checkRequest: robots.check,
       ...(options.pacer === undefined ? {} : { pacer: options.pacer }),
       ...(options.maxRequests === undefined ? {} : { maxRequests: options.maxRequests }),
     }),
@@ -574,7 +515,6 @@ async function runHybridDelegated(options: HybridOptions, agentBrowser: NonNulla
   let spend: LlmSpend | null = null;
   const stop = new AbortController();
   const watch = watchDocuments(ab.context, options.classify, () => stop.abort(), await decodedSizes(ab.context, ab.page));
-  robots.bind(watch);
   const signal = AbortSignal.any([options.signal, stop.signal]);
   /** Run de moteur en cours (étape `agent`) : reliquat et dépense de l'essai faite ailleurs. */
   let current: RunBudget | undefined;
@@ -696,8 +636,6 @@ export type AgentOptions = {
   readonly version: number | null;
   /** Garde de classification (1.7) sur chaque document du cadre principal ; défaut : `classifyExchange`. */
   readonly classify?: ClassifyFn;
-  /** robots.txt (1.11, INV11) : chaque requête du Chromium dédié et des rejeux de compilation. */
-  readonly access: AccessCheck;
   /**
    * Règles embarquées (tâche 2.10, 18 §4.5) : `systemPrompt` reconstruit par l'appelant depuis les références de
    * `spec.rules` (empreintes vérifiées) et `read_skill` sur les seuls skills référencés, à leur version épinglée.
@@ -778,12 +716,10 @@ export async function runAgentExecutor(options: AgentOptions): Promise<AgentOutc
 
 async function runAgentInSlot(options: AgentOptions, lease: SlotLease): Promise<AgentOutcome> {
   const cost = options.cost ?? new AttemptCost(options.maxCostUsd);
-  const robots = robotsGuard(options.access);
   const ab = await lease.dedicated(() =>
     options.agentBrowser({
       allowedHosts: options.spec.allowed_hosts,
       allowWriteActions: options.allowWriteActions,
-      checkRequest: robots.check,
       ...(options.pacer === undefined ? {} : { pacer: options.pacer }),
       ...(options.maxRequests === undefined ? {} : { maxRequests: options.maxRequests }),
     }),
@@ -795,7 +731,6 @@ async function runAgentInSlot(options: AgentOptions, lease: SlotLease): Promise<
   // Refus vu sur un document (401, 403, 429, défi…) : l'agent est arrêté aussitôt, sans autre action (INV6).
   const stop = new AbortController();
   const watch = watchDocuments(ab.context, options.classify, () => stop.abort(), await decodedSizes(ab.context, ab.page));
-  robots.bind(watch);
   // Le run reçoit le reliquat de l'essai ; la dépense faite ailleurs (proxy) est relue à chaque appel.
   const budget = cost.openRun();
   try {
@@ -825,7 +760,7 @@ async function runAgentInSlot(options: AgentOptions, lease: SlotLease): Promise<
       run = await runTask();
     } catch (error) {
       if (options.signal.aborted) throw error;
-      // Navigation refusée (robots.txt, document refusé) qui a fait échouer le moteur : la classe du refus.
+      // Navigation refusée (document refusé) qui a fait échouer le moteur : la classe du refus.
       await watch.settled();
       const refused = watch.refusal();
       if (refused !== undefined) return { result: fail(refused, 1), llm: null };
@@ -837,8 +772,8 @@ async function runAgentInSlot(options: AgentOptions, lease: SlotLease): Promise<
     // Une coupure n'est comptée que par la couche qui la fait (sans double compte, voir `dedicated` dans run-context.ts) :
     // route du contexte de run (requêtes initiales, WebSocket), interception du verrou (sauts de redirection), proxy d'egress.
     // Écritures : le verdict de la garde sur celles du dernier geste de l'agent arrive APRÈS la fin du run quand une couche
-    // consultée avant elle tarde (robots.txt, cadence ; course constatée sous charge, le clic d'écriture était alors compilé
-    // en E5), et une écriture coupée par robots.txt ou par la route des domaines ne l'atteint jamais. Sans
+    // consultée avant elle tarde (cadence ; course constatée sous charge, le clic d'écriture était alors compilé en E5),
+    // et une écriture coupée par la route des domaines ne l'atteint jamais. Sans
     // `allow_write_actions`, toute écriture LANCÉE est coupée : c'est elle qui est comptée, quel que soit son verdict
     // (`settleWrites`, toutes cibles). Les deux comptes sont des minorants des mêmes écritures.
     const launchedWrites = options.allowWriteActions ? 0 : await ab.settleWrites(WRITE_BARRIER_TIMEOUT_MS);

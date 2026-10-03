@@ -58,7 +58,7 @@ export function loadThirdPartyRepos(): string[] {
 }
 
 const OWNER = '[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?';
-const REFERENCE = new RegExp(`\\b(github\\.com|ghcr\\.io)/(${OWNER})/([A-Za-z0-9._-]+)`, 'g');
+const REFERENCE = new RegExp(`(?<![\\w.-])(github\\.com|ghcr\\.io)/(${OWNER})/([A-Za-z0-9._-]+)`, 'g');
 /** Badge shields d'un dépôt GitHub : le propriétaire et le dépôt sont deux segments consécutifs du chemin (sa place varie). */
 const SHIELDS = /\bimg\.shields\.io\/github\/([^\s"'<>()?#]+)/g;
 /** `gh … -R propriétaire/dépôt` ou `--repo propriétaire/dépôt`. */

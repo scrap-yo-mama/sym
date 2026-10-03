@@ -30,6 +30,7 @@ import {
   numeric,
   pgTable,
   primaryKey,
+  smallint,
   text,
   timestamp,
   unique,
@@ -326,9 +327,8 @@ export const secrets = pgTable(
 export { API_STATUSES, EXECUTIONS, FAILURE_CLASSES, NETWORKS, RUN_STATES };
 export type { FailureClass };
 
-/** access_policy par défaut (17 § 4) : `robots` n'a qu'une valeur (INV11), paiement jamais en V1. */
+/** access_policy par défaut (17 § 4) : paiement jamais en V1 ; sans `robots`, champ retiré par D-91 (migration 0021). */
 export const DEFAULT_ACCESS_POLICY = {
-  robots: 'respect',
   on_ai_signal: 'warn',
   intended_use: 'context',
   prefer_official: true,
@@ -379,6 +379,9 @@ export const apis = pgTable(
     warningAlertedAt: tstz('warning_alerted_at'),
     // 0016_investigation (2.1) : état de l'enquête entre deux runs (demande, gisements, proposition, schéma validé).
     investigation: jsonb('investigation'),
+    // 0021_persistence_mode (2.16, D-49) : mode « SYM ne lâche pas », opt-in ; plafond propre (NULL = défaut d'instance).
+    persistenceMode: boolean('persistence_mode').notNull().default(false),
+    persistenceBudgetUsd: usd('persistence_budget_usd'),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
@@ -386,10 +389,45 @@ export const apis = pgTable(
     unique('apis_project_slug_key').on(t.projectId, t.slug),
     index('apis_owner_id_idx').on(t.ownerId),
     check('apis_session_private', sql`NOT ${t.requiresSession} OR ${t.visibility} = 'private'`),
-    check('apis_access_policy_robots', sql`${t.accessPolicy} ->> 'robots' = 'respect'`),
     check('apis_access_policy_payment', sql`coalesce(${t.accessPolicy} #>> '{payment,mode}', 'never') = 'never'`),
+    check('apis_persistence_budget_usd_check', sql`${t.persistenceBudgetUsd} IS NULL OR ${t.persistenceBudgetUsd} > 0`),
   ],
 );
+
+// 0021_persistence_mode (2.16, D-49) : cycle du mode « SYM ne lâche pas » d'une API en `erreur` (aucune valeur du site).
+export const apiPersistence = pgTable(
+  'api_persistence',
+  {
+    apiId: uuid('api_id')
+      .primaryKey()
+      .references(() => apis.id, { onDelete: 'cascade' }),
+    domain: text('domain').notNull(),
+    enteredErrorAt: tstz('entered_error_at').notNull(),
+    failureClass: text('failure_class'),
+    attempt: integer('attempt').notNull().default(0),
+    nextAt: tstz('next_at'),
+    runId: uuid('run_id').references(() => runs.id, { onDelete: 'set null' }),
+    lastAttemptAt: tstz('last_attempt_at'),
+    spentUsd: usd('spent_usd').notNull().default('0'),
+    lastOutcome: text('last_outcome'),
+    ended: text('ended', { enum: ['refused', 'ineligible', 'exhausted'] }),
+    endedReason: text('ended_reason'),
+    updatedAt: updatedAt(),
+  },
+  (t) => [
+    index('api_persistence_domain_idx').on(t.domain).where(sql`${t.ended} IS NULL`),
+    index('api_persistence_due_idx').on(t.nextAt).where(sql`${t.ended} IS NULL AND ${t.runId} IS NULL`),
+    check('api_persistence_ended_idle', sql`${t.ended} IS NULL OR (${t.nextAt} IS NULL AND ${t.runId} IS NULL)`),
+  ],
+);
+
+// Une tentative par domaine enregistrable et par créneau (clé = domaine seul) ; identité système seulement.
+export const persistenceDomainSlots = pgTable('persistence_domain_slots', {
+  domain: text('domain').primaryKey(),
+  apiId: uuid('api_id').references(() => apis.id, { onDelete: 'set null' }),
+  runId: uuid('run_id').references(() => runs.id, { onDelete: 'set null' }),
+  slotUntil: tstz('slot_until').notNull(),
+});
 
 export const strategyVersions = pgTable(
   'strategy_versions',
@@ -413,6 +451,8 @@ export const strategyVersions = pgTable(
     createdAt: createdAt(),
     // 0019 : source de la version (demande, schéma, décisions, règles ; 18 §4.6).
     source: jsonb('source'),
+    // 0020_catalog_memory_quality (2.12) : signature calculée par le code.
+    signature: jsonb('signature'),
   },
   (t) => [primaryKey({ columns: [t.apiId, t.version] }), index('strategy_versions_owner_id_idx').on(t.ownerId)],
 );
@@ -536,6 +576,9 @@ export const runs = pgTable(
     pausedAt: tstz('paused_at'),
     // 0018_run_rejected_items (2.3, D-49) : items extraits non conformes, jamais livrés.
     itemsRejected: integer('items_rejected').notNull().default(0),
+    // 0020_catalog_memory_quality (2.12) : fiche de qualité et avis consultatif du juge.
+    quality: jsonb('quality'),
+    judge: jsonb('judge'),
     createdAt: createdAt(),
     startedAt: tstz('started_at'),
     finishedAt: tstz('finished_at'),
@@ -652,6 +695,53 @@ export const runRejectedItems = pgTable(
     index('run_rejected_items_owner_id_idx').on(t.ownerId),
     index('run_rejected_items_api_id_idx').on(t.apiId),
     index('run_rejected_items_created_at_idx').on(t.createdAt),
+  ],
+);
+
+// 0020_catalog_memory_quality (2.12) : profil de chaque run (après Ajv et la garde de classification) et baseline validée.
+export const runProfiles = pgTable(
+  'run_profiles',
+  {
+    id: bigint('id', { mode: 'number' }).primaryKey().generatedAlwaysAsIdentity(),
+    runId: uuid('run_id')
+      .unique()
+      .references(() => runs.id, { onDelete: 'set null' }),
+    apiId: uuid('api_id')
+      .notNull()
+      .references(() => apis.id, { onDelete: 'cascade' }),
+    ownerId: ownerId(),
+    projectId: projectId(),
+    strategyVersion: integer('strategy_version'),
+    inputHash: text('input_hash').notNull(),
+    profile: jsonb('profile').notNull(),
+    baseline: boolean('baseline').notNull().default(false),
+    validatedBy: uuid('validated_by').references(() => users.id),
+    validatedAt: tstz('validated_at'),
+    createdAt: createdAt(),
+  },
+  (t) => [index('run_profiles_owner_id_idx').on(t.ownerId), index('run_profiles_api_input_idx').on(t.apiId, t.inputHash, t.createdAt.desc())],
+);
+
+// 0020_catalog_memory_quality (2.12) : entrées de mémoire consultées par une version (sha256 du dossier).
+export const strategyVersionMemoryRefs = pgTable(
+  'strategy_version_memory_refs',
+  {
+    apiId: uuid('api_id').notNull(),
+    strategyVersion: integer('strategy_version').notNull(),
+    ownerId: ownerId(),
+    projectId: projectId(),
+    refApiId: uuid('ref_api_id')
+      .notNull()
+      .references(() => apis.id, { onDelete: 'cascade' }),
+    refVersion: integer('ref_version'),
+    tier: smallint('tier').notNull(),
+    dossierSha256: text('dossier_sha256').notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.apiId, t.strategyVersion, t.refApiId] }),
+    foreignKey({ columns: [t.apiId, t.strategyVersion], foreignColumns: [strategyVersions.apiId, strategyVersions.version] }).onDelete('cascade'),
+    index('strategy_version_memory_refs_owner_id_idx').on(t.ownerId),
   ],
 );
 

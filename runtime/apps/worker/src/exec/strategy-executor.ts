@@ -20,13 +20,8 @@
 //    page : seulement les preuves que la garde laisse passer, MINIMISÉES (squelette HTML ou JSON, valeurs retirées,
 //    masquage par le registre du run ; 04 §5, 17 §6). Câblage run échoué → statut (`sain → reparation → bloquee`,
 //    transitions 10 et 15) : tâche 2.3, avec la réparation ; en 1.7 le run rend la classe, la machine à états l'applique.
-// 7. module d'accès (1.11, INV11) : robots.txt relu (cache de 24 h au plus) AVANT toute requête de contenu, dans TOUS
-//    les modes, sans option pour l'ignorer : requête de la stratégie (E1-E3, pagination comprise), chaque saut de la
-//    session réseau (E1, `ctx.fetch`), chaque requête du contexte Chromium (E2, E3, page de départ d'un script), saut de
-//    redirection compris (contrôle CDP, `browser/request-guard.ts`), et chaque poignée de main WebSocket. Un chemin
-//    interdit → `robots_disallowed` sans aucune requête vers lui ; robots.txt injoignable → `robots_unreachable`, rien
-//    n'est collecté. `Crawl-delay` est un plancher de la cadence. User-Agent réel du moteur embarqué (sans `HeadlessChrome`),
-//    imposé à chaque requête (une stratégie ne le remplace pas), le même pour le client HTTP et pour Chromium ; avec
+// 7. identité du robot (1.11, 17 §5) : User-Agent réel du moteur embarqué (sans `HeadlessChrome`), imposé à chaque
+//    requête (une stratégie ne le remplace pas), le même pour le client HTTP et pour Chromium ; avec
 //    `identify_instance` (désactivé par défaut), le jeton `compatible; Scrapyomama/<version>; +<contact>` s'y ajoute.
 // 8. enquête (2.1) : `createStrategyRuntime(...).trial` exécute une stratégie CANDIDATE avec toutes ces gardes, sans
 //    journaliser d'essai ni écrire de dataset (l'exécuteur d'enquête journalise un essai par couple).
@@ -78,7 +73,7 @@ import {
   type RequestPacer,
 } from '@runtime/core/exec';
 import { embeddedRefs, pinnedSkillReader, renderEmbeddedRules, type DomainPacer, type EmbeddedRules, type SkillRead, type StrategyRuleRow, type StrategySource } from '@runtime/core';
-import { InstanceContactError, RobotsCache, RobotsGate, sessionRobotsFetcher } from '@runtime/core/access';
+import { InstanceContactError } from '@runtime/core/access';
 import {
   buildNetworkRungs,
   checkSiteDomain,
@@ -98,8 +93,10 @@ import {
   type SecretReader,
   type SsrfGuard,
 } from '@runtime/core/net';
-import { deleteRejectedItems, loadRunTarget, readEmbeddedFiles, readProxySettings, readVolumeHistory, saveCompiledStrategy, saveRejectedItems, saveRepairedStrategy, saveRunDataset, type RunTarget } from '@runtime/db';
+import { deleteRejectedItems, inputHash, loadRunTarget, readEmbeddedFiles, readValidatedBaseline, saveRunProfile, readProxySettings, readVolumeHistory, saveCompiledStrategy, saveRejectedItems, saveRepairedStrategy, saveRunDataset, type RunTarget } from '@runtime/db';
 import type { LlmClient, LlmConfig } from '@runtime/llm';
+import { degradedQualitySignals, profileItems, type CostCaps } from '@runtime/core';
+import type { QualityPorts } from './quality-job.js';
 import type pg from 'pg';
 import { pino, type Logger } from 'pino';
 import type { BrowserPool } from '../browser/pool.js';
@@ -156,14 +153,20 @@ export type StrategyExecutorDeps = {
   /** Journal du worker (violations du bac à sable, détail admin). */
   readonly logger?: Logger;
   readonly now?: () => number;
-  /** Cache des robots.txt du worker (24 h au plus) ; défaut : un cache propre à cet exécuteur. */
-  readonly robotsCache?: RobotsCache;
   /** Contact de l'instance (réglage `instance_contact`, puis `INSTANCE_CONTACT`) pour le jeton et `From` ; `null` : aucun. */
   readonly instanceContact?: () => Promise<string | null>;
   /** Réglage `identify_instance` (relu à chaque run) : ajoute le jeton au User-Agent et `From` ; défaut : désactivé. */
   readonly identifyInstance?: () => Promise<boolean>;
   /** Version annoncée dans le jeton du User-Agent (`RUNTIME_VERSION`). */
   readonly version?: string;
+  /**
+   * Profil des sorties et juge consultatif (tâche 2.12, 19 §3). Le profil est calculé par le code sur chaque sortie
+   * livrée (après Ajv et la garde de classification), sans LLM ; un motif dégradé planifie, si le juge est activé, un
+   * jugement SÉPARÉ après le run (`scheduleJudge`) : le rejeu lui-même ne fait aucun appel LLM et ne lit aucune mémoire.
+   */
+  readonly quality?: QualityPorts;
+  /** Plafonds d'instance (`MAX_COST_USD_PER_RUN`, PA-02) : bornent le `max_cost_usd` lu en base, importé ou antérieur. */
+  readonly costCaps?: Pick<CostCaps, 'maxCostUsdPerRun'>;
 };
 
 /** Stratégie figée d'un run (version, exécution, réseau, spécification). */
@@ -379,16 +382,13 @@ export function createStrategyRuntime(deps: StrategyExecutorDeps): StrategyRunti
     return credentials === undefined ? { rung } : { rung, credentials };
   };
 
-  const pacerFor = (target: RunTarget, robots?: RobotsGate): RequestPacer | undefined =>
+  const pacerFor = (target: RunTarget): RequestPacer | undefined =>
     deps.pacer === undefined
       ? undefined
       : domainRequestPacer(deps.pacer, {
           ...(target.api.domainPacing.min_delay_ms === undefined ? {} : { minDelayMs: target.api.domainPacing.min_delay_ms }),
           ...(target.api.domainPacing.max_wait_ms === undefined ? {} : { maxWaitMs: target.api.domainPacing.max_wait_ms }),
-          // `Crawl-delay` de robots.txt : plancher de la cadence (17 §2), lu à chaque réservation.
-          ...(robots === undefined ? {} : { crawlDelayMs: robots.crawlDelayMs }),
         });
-  const robotsCache = deps.robotsCache ?? new RobotsCache();
 
   const logger = deps.logger ?? pino({ enabled: false });
 
@@ -427,7 +427,7 @@ export function createStrategyRuntime(deps: StrategyExecutorDeps): StrategyRunti
     ctx: RunCtx,
     target: RunTarget,
     scriptRef: string,
-    base: { pool: BrowserPool; egress: BrowserEgress; session: NetworkSession; pacer?: RequestPacer; allowedHosts: readonly string[]; startUrl: string; robots: RobotsGate; userAgent: string; itemPolicy: ItemPolicy },
+    base: { pool: BrowserPool; egress: BrowserEgress; session: NetworkSession; pacer?: RequestPacer; allowedHosts: readonly string[]; startUrl: string; userAgent: string; itemPolicy: ItemPolicy },
   ): Promise<Outcome> => {
     const port = deps.script;
     if (port === undefined) return { result: { ok: false, failure: { failure_class: 'code_error', retryable: false, detail: 'sandbox_unavailable' }, pages: 0, requests: 0 }, usage: null };
@@ -454,7 +454,6 @@ export function createStrategyRuntime(deps: StrategyExecutorDeps): StrategyRunti
       ...(target.api.domainPacing.max_requests_per_run === undefined ? {} : { maxRequests: target.api.domainPacing.max_requests_per_run }),
       allowWriteActions: target.api.allowWriteActions,
       ...(deps.classify === undefined ? {} : { classify: deps.classify }),
-      robots: base.robots.access,
       userAgent: base.userAgent,
     });
     let result = run.result;
@@ -541,28 +540,6 @@ export function createStrategyRuntime(deps: StrategyExecutorDeps): StrategyRunti
     let otherUsd: { egress: () => number; session: () => number } = { egress: () => 0, session: () => 0 };
     let llmSpent: () => number | null = () => 0;
     const llmForCeiling = (): number => llmSpent() ?? target.api.maxCostUsd;
-    // Lecture de robots.txt : session du même barreau, SANS contrôle robots (pas de récursion), même User-Agent. Sans
-    // verrou de domaines : RFC 9309 suit les redirections de robots.txt quel que soit l'hôte (CDN, apex → www), sous la
-    // garde SSRF ; la garde ne lit que l'origine d'un domaine de l'API (`allowedHosts` du `RobotsGate`). Plafond de coût
-    // partagé (revue de 1.11) : sur un barreau payant, sa lecture est coupée avant que l'essai ne dépasse `max_cost_usd`
-    // (robots.txt alors injoignable : refus, échec fermé).
-    const robotsSession = openNetworkSession({
-      rung,
-      guard: deps.guard,
-      ...(credentials === undefined ? {} : { credentials }),
-      ...(deps.proxyResolver === undefined ? {} : { proxyResolver: deps.proxyResolver }),
-      costCeiling: { maxUsd: target.api.maxCostUsd, otherUsd: () => otherUsd.egress() + otherUsd.session() + llmForCeiling() },
-      userAgent,
-      ...(from === null ? {} : { from }),
-    });
-    const robotsPacer = pacerFor(target);
-    const robots = new RobotsGate({
-      fetch: sessionRobotsFetcher(robotsSession),
-      cache: robotsCache,
-      signal: ctx.signal,
-      allowedHosts: script?.allowedHosts ?? spec?.request.allowed_hosts ?? agentic?.hosts ?? [],
-      ...(robotsPacer === undefined ? {} : { pacer: robotsPacer }),
-    });
     const sessionOptions = (side: 'egress' | 'session'): NetworkSessionOptions => ({
       rung,
       guard: deps.guard,
@@ -571,41 +548,33 @@ export function createStrategyRuntime(deps: StrategyExecutorDeps): StrategyRunti
       allowedHosts: script?.allowedHosts ?? spec?.request.allowed_hosts ?? agentic?.hosts ?? [],
       costCeiling: {
         maxUsd: target.api.maxCostUsd,
-        otherUsd: () => (side === 'egress' ? otherUsd.session() : otherUsd.egress()) + llmForCeiling() + robotsSession.usage().costUsd,
+        otherUsd: () => (side === 'egress' ? otherUsd.session() : otherUsd.egress()) + llmForCeiling(),
       },
-      checkUrl: robots.checkUrl,
       userAgent,
       ...(from === null ? {} : { from }),
     });
-    const pacer = pacerFor(target, robots);
+    const pacer = pacerFor(target);
     const common = {
       input: ctx.input,
       outputSchema: target.api.outputSchema,
       itemPolicy,
       signal: ctx.signal,
-      access: robots.access,
       ...(pacer === undefined ? {} : { pacer }),
       ...(target.api.domainPacing.max_requests_per_run === undefined ? {} : { maxRequests: target.api.domainPacing.max_requests_per_run }),
       ...(deps.classify === undefined ? {} : { classify: deps.classify }),
     };
-    try {
-      const outcome = await executeOn(strategy, { spec, script, agentic, setLlmSpent: (f) => (llmSpent = f), sessionOptions, common, pacer, robots, userAgent, ctx, target, setOther: (o) => (otherUsd = { ...otherUsd, ...o }) });
-      return { ...outcome, usage: outcome.usage === null ? null : addUsage(outcome.usage, robotsSession.usage()) };
-    } finally {
-      await robotsSession.close().catch(() => undefined);
-    }
+    return executeOn(strategy, { spec, script, agentic, setLlmSpent: (f) => (llmSpent = f), sessionOptions, common, pacer, userAgent, ctx, target, setOther: (o) => (otherUsd = { ...otherUsd, ...o }) });
   };
 
   type ExecuteArgs = {
     spec: DeclarativeSpec | undefined;
     script: { allowedHosts: string[]; startUrl: string } | undefined;
     agentic: AgenticSpec | undefined;
-    /** Coût LLM de l'essai agentique, compté sous `max_cost_usd` avec le proxy (egress, session, robots.txt). */
+    /** Coût LLM de l'essai agentique, compté sous `max_cost_usd` avec le proxy (egress, session). */
     setLlmSpent: (spent: () => number | null) => void;
     sessionOptions: (side: 'egress' | 'session') => NetworkSessionOptions;
     common: Omit<Parameters<typeof runFetchExecutor>[1], 'spec'>;
     pacer: RequestPacer | undefined;
-    robots: RobotsGate;
     userAgent: string;
     ctx: RunCtx;
     target: RunTarget;
@@ -613,7 +582,7 @@ export function createStrategyRuntime(deps: StrategyExecutorDeps): StrategyRunti
   };
 
   const executeOn = async (strategy: NonNullable<RunTarget['strategy']>, args: ExecuteArgs): Promise<Outcome> => {
-    const { spec, script, agentic, sessionOptions, common, pacer, robots, userAgent, ctx, target } = args;
+    const { spec, script, agentic, sessionOptions, common, pacer, userAgent, ctx, target } = args;
     switch (strategy.execution) {
       case 'fetch': {
         const session = openNetworkSession(sessionOptions('session'));
@@ -634,14 +603,14 @@ export function createStrategyRuntime(deps: StrategyExecutorDeps): StrategyRunti
             const session = openNetworkSession(sessionOptions('session'));
             args.setOther({ session: () => session.usage().costUsd });
             try {
-              const out = await runScript(ctx, target, strategy.scriptRef!, { pool: deps.browsers, egress, session, ...(pacer === undefined ? {} : { pacer }), ...script, robots, userAgent, itemPolicy: common.itemPolicy ?? 'strict' });
+              const out = await runScript(ctx, target, strategy.scriptRef!, { pool: deps.browsers, egress, session, ...(pacer === undefined ? {} : { pacer }), ...script, userAgent, itemPolicy: common.itemPolicy ?? 'strict' });
               const exceeded = egress.budgetExceeded() || session.budgetExceeded();
               return { ...out, result: budgetChecked(refineEgress(out.result, egress), exceeded), usage: addUsage(egress.usage(), session.usage()) };
             } finally {
               await session.close().catch(() => undefined);
             }
           }
-          const base = { ...common, access: robots.access, pool: deps.browsers, egress, guard: deps.guard, spec: spec!, userAgent };
+          const base = { ...common, pool: deps.browsers, egress, guard: deps.guard, spec: spec!, userAgent };
           const result = strategy.execution === 'fetch_in_page' ? await runFetchInPageExecutor(base) : await runPlaywrightExecutor(base);
           return { result: budgetChecked(result, egress.budgetExceeded()), usage: egress.usage() };
         } finally {
@@ -691,8 +660,6 @@ export function createStrategyRuntime(deps: StrategyExecutorDeps): StrategyRunti
           signal: ctx.signal,
           maxCostUsd: target.api.maxCostUsd,
           cost,
-          // robots.txt (1.11, INV11) : chaque requête de chaque Chromium de l'essai agentique (pool et Chromium dédié).
-          access: robots.access,
           ...(pacer === undefined ? {} : { pacer }),
           ...(maxRequests === undefined ? {} : { maxRequests }),
           ...(deps.classify === undefined ? {} : { classify: deps.classify }),
@@ -766,8 +733,8 @@ export function createStrategyRuntime(deps: StrategyExecutorDeps): StrategyRunti
   };
 
   /**
-   * Un essai d'une stratégie (figée ou candidate d'une enquête) avec TOUTES les gardes de l'exécution : robots.txt,
-   * SSRF, verrou de domaines, cadence, plafond de coût, bac à sable, classification avant extraction (INV6), registre
+   * Un essai d'une stratégie (figée ou candidate d'une enquête) avec TOUTES les gardes de l'exécution : SSRF,
+   * verrou de domaines, cadence, plafond de coût, bac à sable, classification avant extraction (INV6), registre
    * de masquage et liste d'exclusion (D-28). Rien n'est journalisé dans `run_attempts` ni écrit en dataset ici.
    */
   const runTrial = async (ctx: RunCtx, target: RunTarget, strategy: NonNullable<RunTarget['strategy']>, started = now(), itemPolicy: ItemPolicy = 'strict'): Promise<StrategyTrial> => {
@@ -934,6 +901,29 @@ export function createStrategyRuntime(deps: StrategyExecutorDeps): StrategyRunti
     }
   };
 
+  /** Profil du run et motifs dégradés (19 §3) ; une erreur ici n'empêche jamais la livraison (signal informatif). */
+  const qualitySignals = async (ctx: RunCtx, target: RunTarget, version: number, items: readonly Record<string, unknown>[]): Promise<DegradedSignal[]> => {
+    try {
+      const profile = profileItems(items, target.api.outputSchema);
+      const hash = inputHash(ctx.input);
+      await saveRunProfile(deps.pool, { runId: ctx.runId, apiId: ctx.apiId, ownerId: ctx.ownerId, strategyVersion: version, inputHash: hash, profile });
+      const baseline = await readValidatedBaseline(deps.pool, { apiId: ctx.apiId, ownerId: ctx.ownerId, inputHash: hash });
+      const found = degradedQualitySignals(profile, baseline, target.api.outputSchema);
+      if (found.length > 0) {
+        await ctx.log('info', 'quality_signals', { signals: found, baseline: baseline !== null });
+        // Jugement sur anomalie : job pg-boss séparé (`quality-judge`, un par run), traité après le run (au plus un par
+        // API et par jour, décidé par le job) ; une file indisponible n'empêche jamais la livraison.
+        if (deps.quality?.scheduleJudge !== undefined && (await deps.quality.judgeEnabled().catch(() => false))) {
+          await Promise.resolve(deps.quality.scheduleJudge({ runId: ctx.runId, ownerId: ctx.ownerId })).catch(() => ctx.log('warn', 'judge_schedule_failed', {}));
+        }
+      }
+      return found;
+    } catch (error) {
+      logger.warn({ runId: ctx.runId, err: error instanceof Error ? error.name : 'error' }, 'profil du run non écrit');
+      return [];
+    }
+  };
+
   /** Livraison d'une sortie conforme : dataset (items conformes seuls), quarantaine, signaux et statut (5, 8, 9, 12). */
   const deliver = async (
     ctx: RunCtx,
@@ -944,12 +934,16 @@ export function createStrategyRuntime(deps: StrategyExecutorDeps): StrategyRunti
     await quarantine(ctx, target, partition, verdict);
     const saved = await saveRunDataset(deps.pool, { runId: ctx.runId, apiId: ctx.apiId, ownerId: ctx.ownerId, projectId: target.api.projectId, items: partition.conform });
     const volume = await volumeSignal(ctx, partition.conform.length + partition.rejected.length);
+    // Profil (2.12) : seulement ici, sur une sortie qui a passé la garde de classification et Ajv (jamais sur une page de
+    // défi servie en 200, qui n'arrive jamais à la livraison). Motifs comparatifs contre la baseline VALIDÉE seulement.
+    const quality = await qualitySignals(ctx, target, args.version, partition.conform);
     const signals: DegradedSignal[] = [];
     if (args.repaired) signals.push('repaired');
     if (args.escalated) signals.push('escalated');
     if (args.truncated) signals.push('pagination_short');
     if (partition.rejected.length > 0) signals.push('items_rejected');
     if (volume) signals.push('volume_anomaly');
+    signals.push(...quality);
     // Réparation conforme : transition 12 (le signal `repaired` est sa raison) ; sinon run réussi (5, 8 ou 9).
     if (args.repaired) {
       if (args.entered) await applyStatus(ctx, { type: 'repair_succeeded' });
@@ -1057,7 +1051,7 @@ export function createStrategyRuntime(deps: StrategyExecutorDeps): StrategyRunti
       }
       case 'superseded': {
         // Une autre réparation a produit vN+1 pendant l'attente du bail : le run la rejoue, sans nouvelle réparation.
-        const next = await loadRunTarget(deps.pool, { apiId: ctx.apiId, ownerId: ctx.ownerId, version: out.version });
+        const next = await loadRunTarget(deps.pool, { apiId: ctx.apiId, ownerId: ctx.ownerId, version: out.version, ...(deps.costCaps === undefined ? {} : { caps: deps.costCaps }) });
         if (next === null || next.strategy === null) return failed(failure);
         const trial = await runTrial(ctx, next, next.strategy, now(), 'quarantine');
         const sorted = sortItems(next, trial);
@@ -1074,7 +1068,7 @@ export function createStrategyRuntime(deps: StrategyExecutorDeps): StrategyRunti
 
   const executeRun = async (ctx: RunCtx): Promise<RunResult> => {
     const started = now();
-    const target = await loadRunTarget(deps.pool, { apiId: ctx.apiId, ownerId: ctx.ownerId, version: ctx.strategyVersion });
+    const target = await loadRunTarget(deps.pool, { apiId: ctx.apiId, ownerId: ctx.ownerId, version: ctx.strategyVersion, ...(deps.costCaps === undefined ? {} : { caps: deps.costCaps }) });
     if (target === null) return { state: 'failed', failure_class: 'code_error', retryable: false, error_detail: 'api_not_found' };
     const strategy = target.strategy;
     if (strategy === null) return { state: 'failed', failure_class: 'code_error', retryable: false, error_detail: 'no_strategy_version' };

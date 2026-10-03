@@ -14,7 +14,7 @@ export class LlmSettingsError extends Error {
 }
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
-const ROLES: readonly LlmRole[] = ['investigate', 'repair', 'extract', 'agent'];
+const ROLES: readonly LlmRole[] = ['investigate', 'repair', 'extract', 'agent', 'judge', 'reflect', 'embed'];
 const STRUCTURED: readonly StructuredMode[] = ['json_schema', 'tool_forced', 'json_object'];
 const CHOICES: readonly ToolChoiceMode[] = ['auto', 'required', 'named'];
 
@@ -40,13 +40,17 @@ function profileOf(model: string, raw: unknown): CapabilityProfile | undefined {
   };
 }
 
+/** Un prix valide : nombres finis et positifs ou nuls. Un prix négatif ou non fini est un prix ABSENT (jamais 0, 08 §1). */
+const validRate = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v) && v >= 0;
+
 function priceOf(raw: unknown): ModelPrice | undefined {
-  if (!isRecord(raw) || typeof raw['in'] !== 'number' || typeof raw['out'] !== 'number') return undefined;
+  if (!isRecord(raw) || !validRate(raw['in']) || !validRate(raw['out'])) return undefined;
+  for (const key of ['in_cached', 'in_cache_write']) if (raw[key] !== undefined && raw[key] !== null && !validRate(raw[key])) return undefined;
   return {
     in: raw['in'],
     out: raw['out'],
-    ...(typeof raw['in_cached'] === 'number' ? { in_cached: raw['in_cached'] } : {}),
-    ...(typeof raw['in_cache_write'] === 'number' ? { in_cache_write: raw['in_cache_write'] } : {}),
+    ...(validRate(raw['in_cached']) ? { in_cached: raw['in_cached'] } : {}),
+    ...(validRate(raw['in_cache_write']) ? { in_cache_write: raw['in_cache_write'] } : {}),
   };
 }
 
@@ -136,4 +140,37 @@ export function roleTarget(config: LlmConfig, role: LlmRole): { provider: Provid
   const provider = config.providers.find((p) => p.id === r.provider);
   if (provider === undefined) return undefined;
   return { provider, model: provider.models.find((m) => m.id === r.model) ?? { id: r.model } };
+}
+
+/** Réglages du juge et de la mémoire lus dans `settings.llm` (tâche 2.12) : tout est désactivé par défaut. */
+export type QualitySettings = { readonly judgeEnabled: boolean; readonly embeddingsEnabled: boolean };
+
+/**
+ * `settings.llm.judge.enabled` (activé par l'admin, avec l'avertissement « juge non étalonné, avis consultatif ») et
+ * `settings.llm.catalog_memory.embeddings` (étage 4, option désactivée : sans `pgvector`, elle reste grisée). Le juge
+ * exige aussi un modèle affecté au rôle `judge`.
+ */
+export function qualitySettings(value: unknown): QualitySettings {
+  if (!isRecord(value)) return { judgeEnabled: false, embeddingsEnabled: false };
+  const roles = isRecord(value['roles']) ? value['roles'] : {};
+  const judge = isRecord(value['judge']) ? value['judge'] : {};
+  const memory = isRecord(value['catalog_memory']) ? value['catalog_memory'] : {};
+  return { judgeEnabled: judge['enabled'] === true && isRecord(roles['judge']), embeddingsEnabled: memory['embeddings'] === true && isRecord(roles['embed']) };
+}
+
+/**
+ * Mention fournisseur (08 §4 point 5, 19 §3) : fournisseurs qui recevront des extraits d'une API — rôles d'enquête,
+ * réparation, extraction, agent, et `reflect` s'il est affecté ; `judge` s'il est activé ; `embed` si l'étage 4 l'est.
+ */
+export function providersReceiving(value: unknown): string[] {
+  if (!isRecord(value)) return [];
+  const roles = isRecord(value['roles']) ? value['roles'] : {};
+  const q = qualitySettings(value);
+  const order: LlmRole[] = ['investigate', 'repair', 'extract', 'agent', ...(q.judgeEnabled ? (['judge'] as const) : []), 'reflect', ...(q.embeddingsEnabled ? (['embed'] as const) : [])];
+  const out: string[] = [];
+  for (const role of order) {
+    const r = roles[role];
+    if (isRecord(r) && typeof r['provider'] === 'string' && !out.includes(r['provider'])) out.push(r['provider']);
+  }
+  return out;
 }

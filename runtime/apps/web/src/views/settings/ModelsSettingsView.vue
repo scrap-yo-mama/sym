@@ -3,7 +3,7 @@
 /**
  * @file ModelsSettingsView.vue
  * @description Réglages > Modèles IA (06 § 2, 08 § 7) : fournisseurs (URL de base, clé), modèle par rôle, bouton **Tester**
- * avec échec lisible. La clé est en écriture seule : jamais relue, jamais affichée, champ vidé dès l'envoi (INV8,
+ * avec échec lisible, et le prix de chaque modèle utilisé (UX-11 : sans prix, le worker n'appelle jamais le modèle). La clé est en écriture seule : jamais relue, jamais affichée, champ vidé dès l'envoi (INV8,
  * `assert_secret_masked`). Aucun repli automatique de modèle.
  * @page
  */
@@ -66,7 +66,7 @@ function setRole(name: (typeof LLM_ROLES)[number], field: 'provider' | 'model', 
             </div>
             <div class="flex flex-col gap-1">
               <Label :for="`provider-preset-${at}`">{{ t('settings.models.preset') }}</Label>
-              <select :id="`provider-preset-${at}`" v-model="provider.preset" :class="selectClass">
+              <select :id="`provider-preset-${at}`" :value="provider.preset" :class="selectClass" @change="settings.setPreset(at, ($event.target as HTMLSelectElement).value as LlmPreset)">
                 <option v-for="preset in LLM_PRESETS" :key="preset" :value="preset as LlmPreset">{{ t(`settings.models.presets.${preset}`) }}</option>
               </select>
             </div>
@@ -87,6 +87,68 @@ function setRole(name: (typeof LLM_ROLES)[number], field: 'provider' | 'model', 
               />
               <p :id="`provider-key-hint-${at}`" class="text-sm text-muted-foreground" data-testid="secret-hint">
                 {{ provider.apiKeyUnreadable ? t('settings.secret.unreadable') : provider.apiKeySet ? t('settings.secret.set') : t('settings.secret.unset') }}
+              </p>
+            </div>
+          </div>
+          <div class="flex flex-col gap-2" data-testid="model-prices">
+            <h3 class="text-sm font-medium">{{ t('settings.models.price.title') }}</h3>
+            <p class="text-sm text-muted-foreground">{{ t('settings.models.price.intro') }}</p>
+            <p v-if="settings.modelRows(provider).length === 0" class="text-sm text-muted-foreground">{{ t('settings.models.price.none') }}</p>
+            <div
+              v-for="(model, m) in settings.modelRows(provider)"
+              :key="model"
+              class="grid items-end gap-3 rounded-md border p-3 sm:grid-cols-3"
+              data-testid="model-price-row"
+              :data-model="model"
+            >
+              <p class="break-all text-sm font-medium sm:col-span-3">{{ model }}</p>
+              <div class="flex flex-col gap-1">
+                <Label :for="`price-in-${at}-${m}`">{{ t('settings.models.price.in') }}</Label>
+                <Input
+                  :id="`price-in-${at}-${m}`"
+                  type="number"
+                  min="0"
+                  step="any"
+                  inputmode="decimal"
+                  autocomplete="off"
+                  :model-value="provider.priceInputs[model]?.in ?? ''"
+                  @update:model-value="(value: string | number) => settings.setModelPrice(at, model, 'in', String(value))"
+                />
+              </div>
+              <div class="flex flex-col gap-1">
+                <Label :for="`price-out-${at}-${m}`">{{ t('settings.models.price.out') }}</Label>
+                <Input
+                  :id="`price-out-${at}-${m}`"
+                  type="number"
+                  min="0"
+                  step="any"
+                  inputmode="decimal"
+                  autocomplete="off"
+                  :model-value="provider.priceInputs[model]?.out ?? ''"
+                  @update:model-value="(value: string | number) => settings.setModelPrice(at, model, 'out', String(value))"
+                />
+              </div>
+              <div class="flex flex-col gap-1">
+                <Label :for="`price-cached-${at}-${m}`">{{ t('settings.models.price.cached') }}</Label>
+                <Input
+                  :id="`price-cached-${at}-${m}`"
+                  type="number"
+                  min="0"
+                  step="any"
+                  inputmode="decimal"
+                  autocomplete="off"
+                  :model-value="provider.priceInputs[model]?.in_cached ?? ''"
+                  @update:model-value="(value: string | number) => settings.setModelPrice(at, model, 'in_cached', String(value))"
+                />
+              </div>
+              <p class="text-sm text-muted-foreground sm:col-span-3">
+                {{ t('settings.models.price.unit') }}
+                <template v-if="settings.knownPrice(model)?.status === 'to_validate' && !provider.priceInputs[model]?.in">
+                  {{ ' ' + t('settings.models.price.toValidate') }}
+                </template>
+                <template v-else-if="settings.knownPrice(model)?.status === 'verified'">
+                  {{ ' ' + t('settings.models.price.known', { date: settings.knownPrice(model)?.as_of ?? '' }) }}
+                </template>
               </p>
             </div>
           </div>
@@ -116,6 +178,9 @@ function setRole(name: (typeof LLM_ROLES)[number], field: 'provider' | 'model', 
             <Input :id="`role-model-${role}`" autocomplete="off" :model-value="roles[role]?.model ?? ''" @update:model-value="(value: string | number) => setRole(role, 'model', String(value))" />
           </div>
           <Button type="button" variant="outline" :disabled="!roles[role]?.provider || !roles[role]?.model" @click="settings.test(role)">{{ t('settings.test') }}</Button>
+          <p v-if="settings.priceMissing(role)" class="text-sm font-medium sym-error sm:col-span-4" role="status" data-testid="role-price-missing">
+            {{ t('settings.models.price.roleMissing', { model: roles[role]!.model.trim() }) }}
+          </p>
           <p
             v-if="roles[role]?.model?.trim()"
             class="text-sm sm:col-span-4"
@@ -126,6 +191,9 @@ function setRole(name: (typeof LLM_ROLES)[number], field: 'provider' | 'model', 
 {{ validationLabel(roles[role]!.model) }}
 </p>
           <div class="sm:col-span-4"><TestOutcome :outcome="outcomes[role]" /></div>
+          <p v-if="settings.testPriceWarning(role)" class="text-sm font-medium sym-error sm:col-span-4" role="status" data-testid="role-test-price-missing">
+            {{ t('settings.models.price.testMissing', { model: roles[role]!.model.trim() }) }}
+          </p>
         </div>
       </div>
 

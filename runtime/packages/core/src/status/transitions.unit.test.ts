@@ -47,9 +47,6 @@ describe('assert_status_transitions', () => {
     expect(run(st('enquete'), { type: 'investigation_failed', cause: 'budget_exhausted' }).path).toEqual([
       [2, 'enquete', 'erreur', 'investigation_budget_exhausted'],
     ]);
-    expect(run(st('enquete'), { type: 'investigation_failed', cause: 'robots_unreachable' }).path).toEqual([
-      [2, 'enquete', 'erreur', 'robots_unreachable'],
-    ]);
   });
 
   test('transition_03_enquete_to_action_requise', () => {
@@ -57,13 +54,13 @@ describe('assert_status_transitions', () => {
       expect(run(st('enquete'), { type: 'run_failed', failureClass: cls }).path).toEqual([[3, 'enquete', 'action_requise', cls]]);
     }
     // Proxy requis non configuré, tunnel hors ligne : codes de raison, pas des failure_class.
-    for (const reason of ['proxy_not_configured', 'tunnel_offline'] as const) {
+    for (const reason of ['proxy_not_configured', 'tunnel_offline', 'instance_contact_missing', 'llm_price_missing'] as const) {
       expect(run(st('enquete'), { type: 'run_stopped', reason }).path).toEqual([[3, 'enquete', 'action_requise', reason]]);
     }
   });
 
   test('transition_04_enquete_to_bloquee', () => {
-    for (const cls of ['blocked_by_protection', 'forbidden', 'robots_disallowed'] as const) {
+    for (const cls of ['blocked_by_protection', 'forbidden'] as const) {
       expect(run(st('enquete'), { type: 'run_failed', failureClass: cls }).path).toEqual([[4, 'enquete', 'bloquee', cls]]);
     }
   });
@@ -146,17 +143,17 @@ describe('assert_status_transitions', () => {
   });
 
   test('transition_15_reparation_to_bloquee', () => {
-    for (const cls of ['blocked_by_protection', 'forbidden', 'robots_disallowed'] as const) {
+    for (const cls of ['blocked_by_protection', 'forbidden'] as const) {
       expect(run(st('reparation'), { type: 'run_failed', failureClass: cls }).path).toEqual([[15, 'reparation', 'bloquee', cls]]);
     }
   });
 
   test('transition_16_erreur_to_enquete', () => {
-    for (const cls of ['extraction', 'code_error', 'network', 'robots_unreachable'] as const) {
+    for (const cls of ['extraction', 'code_error', 'network'] as const) {
       expect(run(st('erreur'), { type: 'backoff_elapsed', failureClass: cls, attempt: 0 }).path).toEqual([[16, 'erreur', 'enquete', 'backoff']]);
     }
     expect(run(st('erreur'), { type: 'reinvestigate', trigger: 'manual' }).path).toEqual([[16, 'erreur', 'enquete', 'reinvestigate_manual']]);
-    // Le backoff est réservé à quatre classes et s'arrête après 1 h, 6 h, 24 h.
+    // Le backoff est réservé à trois classes et s'arrête après 1 h, 6 h, 24 h.
     for (const cls of ['forbidden', 'blocked_by_protection', 'auth_required', 'transient'] as const) {
       expect(applyStatusEvent(st('erreur'), { type: 'backoff_elapsed', failureClass: cls, attempt: 0 }, ctx).ok).toBe(false);
     }
@@ -233,7 +230,6 @@ describe('assert_status_transitions', () => {
       [11, 'warning', 'reparation', 'forbidden'],
       [15, 'reparation', 'bloquee', 'forbidden'],
     ]);
-    expect(run(st('sain'), { type: 'run_failed', failureClass: 'robots_disallowed' }).path.map((p) => p[0])).toEqual([10, 15]);
     expect(run(st('warning'), { type: 'run_failed', failureClass: 'auth_required' }).path).toEqual([
       [11, 'warning', 'reparation', 'auth_required'],
       [14, 'reparation', 'action_requise', 'auth_required'],
@@ -288,15 +284,14 @@ describe('assert_status_transitions', () => {
     ]);
   });
 
-  test('erreur répond api_error sans essai, sauf force_investigate ; bloquee ne tourne pas en planifié ; robots_disallowed : 0 requête', () => {
+  test('erreur répond api_error sans essai, sauf force_investigate ; bloquee ne tourne pas en planifié', () => {
     const erreur = st('erreur', { reason: 'repair_budget_exhausted' });
     expect(gateRun(erreur, { trigger: 'on_demand' })).toEqual({ kind: 'api_error', reason: 'repair_budget_exhausted' });
     expect(gateRun(erreur, { trigger: 'on_demand', forceInvestigate: true })).toEqual({ kind: 'run' });
     expect(gateRun(st('bloquee', { reason: 'forbidden' }), { trigger: 'schedule' })).toEqual({ kind: 'skipped_status' });
-    expect(gateRun(st('bloquee', { reason: 'robots_disallowed' }), { trigger: 'on_demand', forceInvestigate: true })).toEqual({
-      kind: 'refused',
-      reason: 'robots_disallowed',
-    });
+    // Ancien arrêt robots_disallowed (avant D-91) : une API bloquée comme une autre, lancée seulement à la demande.
+    expect(gateRun(st('bloquee', { reason: 'robots_disallowed' }), { trigger: 'on_demand' })).toEqual({ kind: 'run' });
+    expect(gateRun(st('bloquee', { reason: 'robots_disallowed' }), { trigger: 'schedule' })).toEqual({ kind: 'skipped_status' });
     expect(gateRun(st('sain'), { trigger: 'schedule' })).toEqual({ kind: 'run' });
   });
 });
@@ -348,6 +343,33 @@ describe('seuils', () => {
   test('cost_anomaly : > 3 × coût médian', () => {
     expect(costAnomaly(0.031, 0.01)).toBe(true);
     expect(costAnomaly(0.03, 0.01)).toBe(false);
+  });
+
+  test('tentative de persistance (D-49, 2.16) : 16 puis 1 ou 21, 4 ou 3 sur un refus, aucune transition nouvelle', () => {
+    const attempt = (cls: 'extraction' | 'code_error' | 'network' = 'extraction') => run(st('erreur', { reason: 'repair_budget_exhausted' }), { type: 'persistence_attempt', failureClass: cls });
+    for (const cls of ['extraction', 'code_error', 'network'] as const) {
+      expect(attempt(cls).path).toEqual([[16, 'erreur', 'enquete', 'persistence_attempt']]);
+    }
+    expect(attempt().state.previousStatus).toBe('erreur');
+    // Échec (budget d'enquête épuisé, 451) : 21, retour à `erreur`, jamais la 2.
+    for (const cause of ['budget_exhausted'] as const) {
+      const failed = run(attempt().state, { type: 'investigation_failed', cause });
+      expect(failed.path).toEqual([[21, 'enquete', 'erreur', 'reinvestigation_failed']]);
+      expect(failed.state).toMatchObject({ status: 'erreur', previousStatus: null });
+    }
+    expect(run(attempt().state, { type: 'investigation_succeeded' }).path).toEqual([[1, 'enquete', 'sain', 'strategy_conform']]);
+    expect(run(attempt().state, { type: 'run_failed', failureClass: 'forbidden', httpStatus: 403 }).path).toEqual([[4, 'enquete', 'bloquee', 'forbidden']]);
+    expect(run(attempt().state, { type: 'run_failed', failureClass: 'auth_required', httpStatus: 401 }).path).toEqual([[3, 'enquete', 'action_requise', 'auth_required']]);
+    // Jamais depuis `bloquee`, `action_requise`, ni hors `erreur` ; jamais pour une classe hors de la transition 16.
+    for (const status of ['bloquee', 'action_requise', 'sain', 'warning', 'reparation', 'enquete'] as const) {
+      expect(applyStatusEvent(st(status), { type: 'persistence_attempt', failureClass: 'extraction' }, ctx).ok).toBe(false);
+    }
+    for (const cls of ['forbidden', 'blocked_by_protection', 'auth_required', 'not_found', 'llm_refused', 'transient'] as const) {
+      expect(applyStatusEvent(st('erreur'), { type: 'persistence_attempt', failureClass: cls }, ctx).ok).toBe(false);
+    }
+    // 16 garde ses raisons : la tentative en est une de plus, la table reste à 21 transitions (22 avec 3.14).
+    expect(TRANSITIONS.find((t) => t.id === 16)?.reasons).toContain('persistence_attempt');
+    expect(TRANSITIONS).toHaveLength(21);
   });
 
   test('backoff 1 h, 6 h, 24 h avec jitter ±20 %, puis arrêt', () => {

@@ -62,6 +62,12 @@ const contracts: Record<string, Contract> = {
     await setSite('api_json', { mutation: 'bad_page_2' });
     expect(items(obj(await fx.get(H('api_json'), '/api/contacts?per_page=50&page=2'))).every((c) => c['score'] === 'N/A')).toBe(true);
     expect(items(obj(await fx.get(H('api_json'), '/api/contacts?per_page=50&page=3'))).some((c) => c['score'] === 'N/A')).toBe(false);
+    await setSite('api_json', { mutation: 'data_451' });
+    expect((await fx.get(H('api_json'), '/')).status).toBe(200);
+    expect((await fx.get(H('api_json'), '/api/contacts?page=1&per_page=20')).status).toBe(451);
+    await setSite('api_json', { mutation: 'data_451_page_2' });
+    expect((await fx.get(H('api_json'), '/api/contacts?page=1&per_page=20')).status).toBe(200);
+    expect((await fx.get(H('api_json'), '/api/contacts?page=2&per_page=20')).status).toBe(451);
     await setSite('api_json', { mutation: 'empty' });
     expect(obj(await fx.get(H('api_json'), '/api/contacts'))['total']).toBe(0);
     expect((await setSite('api_json', { mutation: 'inconnue' })).status).toBe(400);
@@ -100,6 +106,23 @@ const contracts: Record<string, Contract> = {
     expect(cookie).toMatch(/^zz_test_session=zz_test_sess_\d{4}$/);
     expect(items(body(await fx.get(host, '/api/orders', { cookie })))).toHaveLength(12);
     expect((await fx.get(host, '/account', { cookie })).body).toContain('class="order"');
+    // Cas C3 et C2 (gate M2, tests/cases) : page « mes contacts » et commentaires d'un post, derrière la même session.
+    expect((await fx.get(host, '/contacts')).headers['location']).toBe('/login');
+    expect((await fx.get(host, '/post/zz_test_post_0001')).headers['location']).toBe('/login');
+    expect((await fx.get(host, '/api/contacts')).status).toBe(401);
+    expect((await fx.get(host, '/api/posts/zz_test_post_0001/comments')).status).toBe(401);
+    expect((await fx.get(host, '/contacts', { cookie })).body).toContain('/api/contacts?page=1');
+    expect((await fx.get(host, '/post/zz_test_post_0001', { cookie })).body).toContain('/api/posts/zz_test_post_0001/comments?page=1');
+    const c1 = obj(await fx.get(host, '/api/contacts?page=1', { cookie }));
+    expect(items(c1)).toHaveLength(20);
+    expect(c1['has_more']).toBe(true);
+    const c2 = obj(await fx.get(host, '/api/contacts?page=2', { cookie }));
+    expect(items(c2)).toHaveLength(10);
+    expect(c2['has_more']).toBe(false);
+    const pages = [1, 2, 3].map(async (n) => obj(await fx.get(host, `/api/posts/zz_test_post_0001/comments?page=${n}`, { cookie })));
+    const got = await Promise.all(pages);
+    expect(got.map((g) => (g['comments'] as unknown[]).length)).toEqual([10, 10, 5]);
+    expect(got.map((g) => g['has_more'])).toEqual([true, true, false]);
     await setSite('login', { action: 'expire_sessions' });
     const expired = await fx.get(host, '/api/orders', { cookie });
     expect(expired.status).toBe(401);
@@ -656,6 +679,39 @@ const contracts: Record<string, Contract> = {
     expect(await count(host, '/confirm')).toBe(1);
     expect((await setSite('bench_steps', { mutation: 'inconnue' })).status).toBe(400);
     expect([...STEP_MUTATIONS]).toHaveLength(10);
+  },
+
+  // ------------------------------------------------------------------ cas de référence (gate M2, tests/cases)
+  async books() {
+    const host = H('books');
+    const first = await fx.get(host, '/');
+    expect(first.status).toBe(200);
+    type Book = { sku: string; title: string; price: number };
+    const books = (html: string): Book[] => (JSON.parse(blob(html, /<script id="__NEXT_DATA__" type="application\/json">([^<]+)<\/script>/)) as { props: { pageProps: { books: Book[] } } }).props.pageProps.books;
+    expect(books(first.body)).toHaveLength(20);
+    expect(first.body).toContain('rel="next" href="/catalogue/page-2.html"');
+    const second = (await fx.get(host, '/catalogue/page-2.html')).body;
+    expect(second).toContain('href="/catalogue/page-3.html"');
+    const last = (await fx.get(host, '/catalogue/page-3.html')).body;
+    expect(books(last)).toHaveLength(20);
+    expect(last).not.toContain('rel="next"');
+    expect(new Set([first.body, second, last].flatMap((h) => books(h).map((b) => b.sku))).size).toBe(60);
+    expect(typeof books(first.body)[0]!.price).toBe('number');
+    expect((await fx.get(host, '/catalogue/page-4.html')).status).toBe(404);
+  },
+
+  async search_guarded() {
+    const host = H('search_guarded');
+    expect((await fx.get(host, '/recherche?q=lampe')).body).toContain('/api/search?q=lampe&page=1');
+    const page1 = obj(await fx.get(host, '/api/search?q=lampe&page=1'));
+    expect((page1['ads'] as unknown[]).length).toBe(20);
+    expect(page1['has_more']).toBe(true);
+    const challenged = await fx.get(host, '/api/search?q=lampe&page=2');
+    expect(challenged.status).toBe(403);
+    expect(challenged.headers['x-zz-test-shield']).toBe('challenge');
+    expect(challenged.body).toContain('zz-test-challenge');
+    const hits = obj(await setSite('search_guarded', { action: 'page_hits' }));
+    expect(hits['result']).toEqual({ '1': 1, '2': 1 });
   },
 };
 

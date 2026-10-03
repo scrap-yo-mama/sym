@@ -45,7 +45,7 @@ Nous n'acceptons pas de contribution (code, dépendance, documentation, extrait 
 
 Ces sujets sont exclus par conception : voir la page [Hors périmètre](docs/hors-perimetre.md). Une pull request de ce type est fermée sans revue technique (label `out-of-scope`) et le débat ne se rouvre pas. Merci de ne pas publier ce type de code dans les issues. En CI, une contribution externe passe aussi `assert_no_circumvention` et la garde X6.
 
-Reste bienvenu : respect de `robots.txt` et des conditions d'usage, limitation de cadence, API officielles, meilleur diagnostic des blocages, documentation des cas où le produit s'arrête.
+Reste bienvenu : respect des conditions d'usage, limitation de cadence, API officielles, meilleur diagnostic des blocages, documentation des cas où le produit s'arrête.
 
 En ouvrant une pull request, vous certifiez (DCO) avoir le droit de soumettre votre code et qu'il ne relève pas de la liste ci-dessus.
 

@@ -41,13 +41,14 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 import type { ServerContext } from '../context.js';
 import { readApiById, readApiBySlug } from '../rest/apis.js';
 import { datasetItems } from '../rest/export.js';
+import { runErrorFor } from '../rest/run-error.js';
 import { buildRunResult, decodeItemsCursor, itemsCursor, readRunRow, runMetadataForAdmin } from '../rest/runs.js';
 import { investigationProgressOf, type TimelineEntry } from '../rest/timeline.js';
 import { waitSecondsOf } from '../rest/shared.js';
 import { UUID } from '../routes/account-helpers.js';
 import { createdView } from '../routes/apis.js';
 import { audit, MCP_CHANNEL_HEADER, type Actor } from '../routes/guard.js';
-import { attemptsOf, renderNarrative } from './narrative.js';
+import { attemptsOf, createdSummary, renderNarrative } from './narrative.js';
 import { createProgressSink, progressMessage, type ProgressSink } from './progress.js';
 import { promptBody, PROMPT_ARG_SCHEMAS } from './prompts.js';
 import { actionTemplate, blockedTemplate, elicitationCatalog, parseLang, PROMPT_ARGS, PROMPT_MENU, PROMPT_NAMES, type McpLocale } from './texts.js';
@@ -101,6 +102,7 @@ const GUIDES: Record<string, ErrorGuide> = {
   not_awaiting_validation: { what_to_do: 'This API is not waiting for a schema validation: read its state with get_api.', retryable: false },
   queue_full: { what_to_do: 'The instance queue is full: wait about 30 seconds, then call again.', retryable: true },
   user_queue_full: { what_to_do: 'Too many of your runs are active: wait for them (get_run) or cancel one (cancel_run), then call again.', retryable: true },
+  budget_exceeded: { what_to_do: 'The daily USD budget of this account is spent (LLM and proxy costs): do not retry today; tell the user it resets at 00:00 UTC.', retryable: false },
   key_rate_limited: { what_to_do: 'Too many runs started with this key in the last minute: wait one minute, then call again.', retryable: true },
   responsible_use_ack_required: { what_to_do: 'Ask the user to read the Responsible use page in the console and tick that they read it, then call again.', retryable: false },
   run_not_active: { what_to_do: 'This run is already finished: read its result with get_run.', retryable: false },
@@ -109,6 +111,8 @@ const GUIDES: Record<string, ErrorGuide> = {
   invalid_brief: { what_to_do: 'Remove or fix the named brief field (closed schema), or call create_api again without brief.', retryable: true },
   brief_too_large: { what_to_do: `Keep the highest-confidence hints and drop notes; resend under ${Math.floor(BRIEF_MAX_BYTES / 1000)} KB.`, retryable: true },
   brief_unavailable: { what_to_do: 'Call create_api again without brief: this instance does not read investigation briefs yet, and nothing was created.', retryable: true },
+  // UX-04 : prérequis de l'instance, une tâche pour l'utilisateur ; l'appel peut être refait dès que le contact est posé.
+  instance_contact_missing: { what_to_do: runErrorFor('instance_contact_missing').what_to_do, retryable: runErrorFor('instance_contact_missing').retryable },
   internal: { what_to_do: 'The instance hit an internal error: call again in a moment; if it persists, tell the user to check the instance logs.', retryable: true },
 };
 
@@ -181,11 +185,13 @@ function narrativeAnswer(envelope: Json, call: Call, extra?: { consoleUrl?: stri
   const timeline = envelope['timeline'] as TimelineEntry[];
   const structured: Json = { ...envelope, attempts: attemptsOf(timeline), message_locale: call.locale };
   const cost = envelope['cost'] as { total_usd?: number | null } | undefined;
-  const text = renderNarrative(
+  const error = errorOf(envelope);
+  const narrative = renderNarrative(
     {
       timeline,
       totalUsd: cost?.total_usd ?? null,
       state: String(envelope['state'] ?? ''),
+      error,
       consoleUrl: extra?.consoleUrl ?? String(envelope['console_url'] ?? ''),
       nextAction: (envelope['next_action'] as { tool: string } | null) ?? null,
       pollAfterSeconds: typeof envelope['poll_after_seconds'] === 'number' ? envelope['poll_after_seconds'] : null,
@@ -193,12 +199,20 @@ function narrativeAnswer(envelope: Json, call: Call, extra?: { consoleUrl?: stri
     },
     call.locale,
   );
+  // Cause nommée (UX-04) : la phrase de l'enveloppe (« The run could not start (code): … ») ouvre le texte, pour le modèle.
+  const text = error === null ? narrative : `${String(envelope['message'] ?? '')}\n\n${narrative}`;
   const { timeline: _t, attempts: _a, ...rest } = structured;
   // Le run_id et la prochaine action restent dans le texte même sans items : le client qui n'affiche que `content` suit le run.
   const itemsPart = Array.isArray(rest['items']) && (rest['items'] as unknown[]).length > 0
     ? `\n\n${JSON.stringify({ items: rest['items'], total: rest['total'], next_cursor: rest['next_cursor'], run_id: rest['run_id'], status: rest['status'], degraded_reasons: rest['degraded_reasons'] })}`
-    : `\n\n${JSON.stringify({ run_id: rest['run_id'], status: rest['status'], next_action: rest['next_action'] ?? null })}`;
+    : `\n\n${JSON.stringify({ run_id: rest['run_id'], status: rest['status'], next_action: rest['next_action'] ?? null, ...(error === null ? {} : { error }) })}`;
   return { content: [{ type: 'text', text: `${text}${itemsPart}` }], structuredContent: structured };
+}
+
+/** Cause nommée d'un run (`error` de l'enveloppe ou de `ApiCreated`, UX-04 : `{ code, message, what_to_do, retryable }`), ou null. */
+function errorOf(body: Json): Json | null {
+  const error = body['error'];
+  return typeof error === 'object' && error !== null && typeof (error as Json)['code'] === 'string' ? (error as Json) : null;
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -394,6 +408,7 @@ function handlers(ctx: ServerContext): Record<GenericToolName, Handler> {
     const timeline = envelope['timeline'] as TimelineEntry[];
     const consoleUrl = `${ctx.publicUrl}/apis/${String(view['slug'])}`;
     const cost = envelope['cost'] as { total_usd?: number | null };
+    const error = errorOf(view) ?? errorOf(envelope);
     const structured: Json = {
       ...view,
       timeline,
@@ -409,6 +424,7 @@ function handlers(ctx: ServerContext): Record<GenericToolName, Handler> {
         timeline,
         totalUsd: cost?.total_usd ?? null,
         state: String(envelope['state'] ?? ''),
+        error,
         consoleUrl,
         nextAction: (envelope['next_action'] as { tool: string } | null) ?? null,
         pollAfterSeconds: typeof envelope['poll_after_seconds'] === 'number' ? envelope['poll_after_seconds'] : null,
@@ -417,8 +433,10 @@ function handlers(ctx: ServerContext): Record<GenericToolName, Handler> {
       call.locale,
     );
     // Identifiants dans le texte (assert_text_only_sufficient) : un client qui n'affiche que `content` appelle la suite avec eux.
-    const ids = JSON.stringify({ api_id: view['api_id'], run_id: view['run_id'], slug: view['slug'], next_action: structured['next_action'] });
-    return { content: [{ type: 'text', text: `${extra.note === undefined ? '' : `${extra.note}\n\n`}${narrative}\n\n${ids}${schemaSection(view)}` }], structuredContent: structured };
+    const ids = JSON.stringify({ api_id: view['api_id'], run_id: view['run_id'], slug: view['slug'], next_action: structured['next_action'], ...(error === null ? {} : { error }) });
+    // État réel de l'enquête (UX-07) en tête, pour le modèle ; puis le récit, dans la langue de la personne.
+    const headline = createdSummary(view);
+    return { content: [{ type: 'text', text: `${extra.note === undefined ? '' : `${extra.note}\n\n`}${headline}\n\n${narrative}\n\n${ids}${schemaSection(view)}` }], structuredContent: structured };
   };
 
   /** Tour suivant d'une élicitation : valider (essais lancés), modifier (rien lancé), refuser ou annuler (rien lancé). */
@@ -476,7 +494,7 @@ function handlers(ctx: ServerContext): Record<GenericToolName, Handler> {
       }
       const view = (await createdView(ctx, caller.actor, apiId, runId)) as unknown as Json;
       const envelope = await runResultOf(ctx, caller.actor, runId);
-      if (envelope === null) return success(`API ${String(view['slug'])} created; the investigation is running: poll get_run with run_id.`, view);
+      if (envelope === null) return success(createdSummary(view), view);
       if (terminal && args['auto_validate'] !== true && view['investigation_phase'] === 'awaiting_schema_validation' && view['proposed_output_schema'] !== null && view['proposed_output_schema'] !== undefined && call.canElicit) {
         return inputRequired({ inputRequests: { validate_schema: schemaElicitation(view, call.locale) }, requestState: encodeState(apiId, runId) });
       }

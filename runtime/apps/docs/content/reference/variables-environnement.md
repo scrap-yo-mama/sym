@@ -76,6 +76,9 @@ Pour l'instant, le TLS vers la base se règle par `sslmode` dans `DATABASE_URL` 
 | `WARNING_CHECK_SECONDS` | 900 | worker | contrôle des API « À surveiller » qui durent | lue |
 | `ITEMS_REJECTED_MAX_SHARE` | 0.2 | worker | part d’items non conformes au-delà de laquelle un run casse (avec `ITEMS_REJECTED_MIN_COUNT`) ; en dessous, les items non conformes sont écartés et le reste est livré (à valider) | lue |
 | `ITEMS_REJECTED_MIN_COUNT` | 5 | worker | nombre minimal d’items non conformes pour qu’un run casse (à valider) | lue |
+| `PERSISTENCE_SCHEDULE` | `1h,6h,24h` | server, worker | délais du mode « SYM ne lâche pas » entre deux ré-enquêtes d’une API en erreur (s, m, h, d) ; le dernier se répète chaque jour, jitter ±20 % (à valider) | lue |
+| `PERSISTENCE_BUDGET_USD_DEFAULT` | 1 | server, worker | plafond de dépense du mode « SYM ne lâche pas » quand l’API n’en fixe pas, cumulé depuis l’entrée en erreur ; jamais illimité, 0 refuse l’activation (à valider) | lue |
+| `PERSISTENCE_MAX_DAYS` | 30 | server, worker | durée maximale en erreur avec ce mode, puis plus aucun essai automatique (à valider) | lue |
 | `AUTO_MIGRATE` | `false` dans les modèles | — | migrer au démarrage du serveur | prévue |
 
 ## Sécurité réseau et bac à sable
@@ -101,6 +104,7 @@ cinq premières est posée. Pour PostgreSQL, passez la CA par `sslrootcert` dans
 | `RETENTION_DATASETS_DAYS` | 90 | worker | durée de conservation des jeux de données | lue |
 | `RETENTION_DATASETS_MAX_DAYS` | 3650 | worker | plafond d'instance ; la durée réglée par API ne peut pas le dépasser | lue |
 | `RETENTION_SAMPLES_DAYS` | 14 | worker | échantillons d'enquête, détails d'erreur, entrées de run | lue |
+| `RETENTION_PROFILES_DAYS` | 90 | worker | profils de qualité des runs, hors baseline validée (gardée avec sa version) | lue |
 | `RUN_LOG_RETENTION_DAYS` | 30 | server, worker | journaux de run | lue |
 | `ARTIFACT_RETENTION_DAYS` | 7 | server, worker | artefacts de run (captures, traces) | lue |
 | `RETENTION_TICK_SECONDS` | 300 | worker | période de la passe de rétention | lue |

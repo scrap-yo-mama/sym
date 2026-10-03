@@ -83,6 +83,7 @@ export const RUN_RESULT_SCHEMA: JsonSchema = {
     degraded_reasons: { type: 'array', items: { type: 'string' } },
     rejected: { type: ['object', 'null'] },
     message: { type: 'string' },
+    error: { type: 'object', description: 'Named cause of a failed run: { code, message, what_to_do, retryable }.' },
     next_action: { type: ['object', 'null'] },
     poll_after_seconds: { type: ['integer', 'null'] },
     timeline: { type: 'array' },

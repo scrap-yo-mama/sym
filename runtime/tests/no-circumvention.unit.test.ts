@@ -72,7 +72,7 @@ describe('assert_no_circumvention : aucune suite d’échec ne contourne un refu
       const route = failureRoute(cls);
       expect(JSON.stringify(route), cls).not.toMatch(/tunnel/i);
       if (cls !== 'network') expect(route.network, cls).not.toBe('escalate');
-      if (['blocked_by_protection', 'forbidden', 'robots_disallowed', 'rate_limited', 'auth_required', 'payment_required', 'account_limit'].includes(cls)) {
+      if (['blocked_by_protection', 'forbidden', 'rate_limited', 'auth_required', 'payment_required', 'account_limit'].includes(cls)) {
         expect(route.agent, cls).toBe(false);
       }
     }

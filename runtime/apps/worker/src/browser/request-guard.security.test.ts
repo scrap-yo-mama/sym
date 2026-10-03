@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// assert_robots_respected (INV11, revue de 1.11), étage S : le contrôle CDP de chaque requête (`installRequestGuard`) voit
+// Garde des contextes de run (revue de 1.11), étage S : le contrôle CDP de chaque requête (`installRequestGuard`) voit
 // les sauts de redirection que `context.route` ne voit pas, y compris dans un cadre HORS PROCESSUS (isolation des sites
 // forcée) et dans un worker dédié. Chromium réel, serveur local, deux noms de test résolus vers 127.0.0.1 par Chromium
 // lui-même (aucun site réel). Le refus porte ici sur tout chemin `/prive/` : 0 requête reçue par le serveur.
@@ -8,7 +8,7 @@ import type { AddressInfo } from 'node:net';
 import { chromium, type Browser } from 'playwright-core';
 import { afterAll, beforeAll, expect, test } from 'vitest';
 import { installPageGuard } from './page-guard.js';
-import { INV11_DISABLED_FEATURES, PLAYWRIGHT_DISABLED_FEATURES } from './launch.js';
+import { GUARD_DISABLED_FEATURES, PLAYWRIGHT_DISABLED_FEATURES } from './launch.js';
 import { blockBackgroundWorkers, installRequestGuard, type BrowserRequestCheck } from './request-guard.js';
 
 const A = 'aaa.zz-test';
@@ -94,7 +94,7 @@ beforeAll(async () => {
   port = (server.address() as AddressInfo).port;
   browser = await chromium.launch({
     headless: true,
-    args: [`--host-resolver-rules=MAP *.zz-test 127.0.0.1`, '--site-per-process', `--disable-features=${[...PLAYWRIGHT_DISABLED_FEATURES, ...INV11_DISABLED_FEATURES].join(',')}`],
+    args: [`--host-resolver-rules=MAP *.zz-test 127.0.0.1`, '--site-per-process', `--disable-features=${[...PLAYWRIGHT_DISABLED_FEATURES, ...GUARD_DISABLED_FEATURES].join(',')}`],
   });
 }, 120_000);
 
@@ -292,7 +292,7 @@ async function runLikeContext() {
   const refused = (url: string) => new URL(url).pathname.startsWith('/prive/');
   await context.route('**/*', (route) => route.continue());
   await context.routeWebSocket(/.*/, async (socket) => {
-    if (refused(socket.url())) await socket.close({ code: 1008, reason: 'robots_disallowed' });
+    if (refused(socket.url())) await socket.close({ code: 1008, reason: 'request_refused' });
     else socket.connectToServer();
   });
   await installPageGuard(context);

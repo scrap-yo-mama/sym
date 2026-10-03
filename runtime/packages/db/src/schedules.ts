@@ -26,7 +26,7 @@ import {
   type ScheduleRules,
 } from '@runtime/core';
 import type pg from 'pg';
-import { createRun, recordSkippedRun, type ScheduleOrigin } from './runs.js';
+import { createRun, recordSkippedRun, userSpentTodayUsd, type ScheduleOrigin } from './runs.js';
 
 type Queryable = Pick<pg.ClientBase, 'query'>;
 
@@ -231,6 +231,11 @@ export type HandleScheduledRunInput = {
    * est traité en retard (file chargée, rattrapage `missed: once` après un déploiement). Défaut : `now()`.
    */
   occurredAt?: Date;
+  /**
+   * Budget USD par utilisateur et par jour (`USER_BUDGET_DAILY_USD`, 08b § 3) : dépense du jour du propriétaire atteinte → run
+   * `skipped_quota` (raison `budget_exceeded`), rien n'est lancé. Absent : pas de contrôle (tests de planification).
+   */
+  userBudgetDailyUsd?: number;
 };
 
 /**
@@ -354,6 +359,10 @@ async function handleInTransaction(client: pg.PoolClient, input: HandleScheduled
       return { outcome: 'skipped', runId, state: 'skipped_overlap', reason };
     }
     case 'run': {
+      if (input.userBudgetDailyUsd !== undefined && (await userSpentTodayUsd(client, row.owner_id, now)) >= input.userBudgetDailyUsd) {
+        const runId = await recordSkippedRun(client, { apiId: row.api_id, ownerId: row.owner_id, trigger: 'schedule', state: 'skipped_quota', reason: 'budget_exceeded', schedule: origin });
+        return { outcome: 'skipped', runId, state: 'skipped_quota', reason: 'budget_exceeded' };
+      }
       const { runId } = await createRun(client, queue, {
         apiId: row.api_id,
         ownerId: row.owner_id,

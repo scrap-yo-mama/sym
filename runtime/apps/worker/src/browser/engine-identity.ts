@@ -3,7 +3,7 @@
 // le User-Agent réel (`engineUserAgent`, @runtime/core/access). Deux sources, la même valeur sur une image saine :
 // - `browserEngineIdentity(browser)` : la version lue sur `browser.version()` du Chromium qui va servir (contextes de run) ;
 // - `installedEngineIdentity()` : la version de Chromium épinglée par le Playwright installé (`browsers.json` du paquet),
-//   pour ce qui n'a pas de navigateur sous la main (client HTTP E1, lecture de robots.txt, `--user-agent` du Chromium
+//   pour ce qui n'a pas de navigateur sous la main (client HTTP E1, `--user-agent` du Chromium
 //   agentique). Un test (tests/browser/engine-user-agent.security.test.ts) vérifie qu'elles coïncident avec le vrai moteur.
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';

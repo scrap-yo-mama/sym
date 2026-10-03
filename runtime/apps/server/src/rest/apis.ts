@@ -6,8 +6,9 @@
 // `instance_read`). L'état d'enquête (`apis.investigation`) n'entre dans AUCUNE vue ; la phase seule est servie. L'admin
 // lit les métadonnées d'une API à session d'autrui (`metadata_only`), jamais ses schémas, son échantillon ni sa stratégie.
 import { randomBytes } from 'node:crypto';
+import type { PersistencePolicy } from '@runtime/core';
 import { parseNetworkPolicy, NetworkConfigError } from '@runtime/core/net';
-import { withActor } from '@runtime/db';
+import { persistenceStateOf, withActor } from '@runtime/db';
 import type pg from 'pg';
 import type { ServerContext } from '../context.js';
 import type { Actor } from '../routes/guard.js';
@@ -58,13 +59,16 @@ export type ApiRow = {
   last_run_at: Date | null;
   runs_30d: number;
   succeeded_30d: number;
+  /** URL de départ de l'enquête (`investigation.request.url`), seulement pour en tirer le domaine ; null sans enquête. */
+  start_url: string | null;
 };
 
-/** Colonnes servies (jamais `investigation`, `repair_lease_*`, `warning_alerted_at`). */
+/** Colonnes servies (jamais `investigation` entier, `repair_lease_*`, `warning_alerted_at`) ; de l'enquête, seule l'URL de départ (domaine). */
 const API_COLUMNS = `a.id, a.slug, a.owner_id, a.project_id, a.visibility, a.description, a.input_schema, a.output_schema, a.views, a.status,
   a.investigation_phase, a.status_reason, a.stale, a.clean_streak, a.last_signal_at, a.current_strategy_version, a.requires,
   a.requires_session, a.network_policy, a.access_policy, a.domain_pacing, a.purpose, a.legal_basis, a.contains_personal_data,
   a.allow_write_actions, a.max_cost_usd, a.budget_daily_usd, a.mcp_exposed, a.pinned, a.created_at, a.created_at::text AS created_text, a.updated_at,
+  a.investigation #>> '{request,url}' AS start_url,
   sv.execution, sv.network, st.avg_cost_usd, st.last_run_at, coalesce(st.runs_30d, 0)::int AS runs_30d, coalesce(st.succeeded_30d, 0)::int AS succeeded_30d`;
 
 /** Jointures : stratégie courante et agrégats des runs visibles (sous RLS : ceux de l'acteur). */
@@ -103,12 +107,24 @@ const requiresOf = (r: Pick<ApiRow, 'requires' | 'network'>) => ({
   tunnel: r.requires['tunnel'] === true || r.network === 'tunnel',
 });
 
+/** Domaine d'une URL de départ : son hôte, en minuscules (WHATWG), sans port ni chemin ; null si l'URL est absente ou illisible. */
+function domainOf(url: string | null): string | null {
+  if (url === null) return null;
+  try {
+    return new URL(url).hostname.toLowerCase() || null;
+  } catch {
+    return null;
+  }
+}
+
 /** Ligne du catalogue (`ApiSummary`). `accessSignal` : pastille Accès du dernier rapport (propriétaire seulement). */
 export function apiSummary(r: ApiRow, accessSignal: string | null = null) {
   return {
     id: r.id,
     slug: r.slug,
     description: r.description,
+    // « Nom et domaine » (20 § 5.2) : le domaine de la page enquêtée (`assert_catalog_summary_domain`).
+    domain: domainOf(r.start_url),
     status: r.status,
     status_reason: reasonMessage(r.status_reason),
     stale: r.stale,
@@ -171,7 +187,7 @@ export const versionSummary = (v: VersionRow) => ({
  * Fiche d'une API visible de l'acteur (`ApiDetail`). Le rapport d'accès et les runs récents sont ceux de l'acteur ; la
  * politique du propriétaire (projet, finalité, base légale, budgets, rythme, proxys) n'est servie qu'à lui (constat B5).
  */
-export async function apiDetail(db: Queryable, actor: Actor, r: ApiRow) {
+export async function apiDetail(db: Queryable, actor: Actor, r: ApiRow, persistencePolicy: PersistencePolicy) {
   const current =
     r.current_strategy_version === null
       ? null
@@ -203,6 +219,8 @@ export async function apiDetail(db: Queryable, actor: Actor, r: ApiRow) {
         max_cost_usd: usd(r.max_cost_usd),
         budget_daily_usd: usd(r.budget_daily_usd),
         domain_pacing: r.domain_pacing,
+        // Mode « SYM ne lâche pas » (2.16, D-49) : interrupteur, plafond effectif, prochain essai et dépense du cycle.
+        persistence: await persistenceStateOf(db, { apiId: r.id, userId: actor.userId }, persistencePolicy),
       }
     : {};
   return {
@@ -219,7 +237,7 @@ export async function apiDetail(db: Queryable, actor: Actor, r: ApiRow) {
     network_policy: owner
       ? { allow, ...('proxy_ids' in policy ? { proxy_ids: policy['proxy_ids'] } : {}), ...('res_proxy_params' in policy ? { res_proxy_params: policy['res_proxy_params'] } : {}), ...('dc_proxy_params' in policy ? { dc_proxy_params: policy['dc_proxy_params'] } : {}) }
       : { allow },
-    access_policy: { robots: 'respect' as const, report_id: access?.id ?? null },
+    access_policy: { report_id: access?.id ?? null },
     access_report: access,
     ...ownerPolicy,
     contains_personal_data: r.contains_personal_data,

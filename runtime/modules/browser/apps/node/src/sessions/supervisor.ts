@@ -1,0 +1,308 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Superviseur des sessions du nœud (cdc/sym-browser 04 § 5, 04b § 4 et § 6, 04c § 3.2 ; tâche 1.2). Il relie le pool de
+// Chromium (tâche 1.1, `BrowserPool.acquire` → bail), les délais de session et la persistance des transitions :
+// - démarrage : bail pris sur le pool, puis `pending → running` sur ce nœud (table de routage) ; lancement impossible :
+//   `failed` raison `crash` ; session déjà terminée en base entre-temps : bail rendu, rien n'est écrit ;
+// - délais : total (`expiresAt`, prolongeable) et d'inactivité (chaque message du client repousse) ; le chien de garde du
+//   pool est armé sur la durée maximale du client (plafond des prolongations), plus une marge ;
+// - fins : libération, budget, quota, délais, plantage (signal du pool), arrêt du nœud. Toute fin rend le bail (le pool
+//   arrête et détruit le Chromium s'il le doit) AVANT d'écrire l'état final (04c § 3.2 : l'état public change à la
+//   dernière étape ; BINV3). Une seule fin par session, quel que soit le nombre de déclencheurs concurrents.
+// - drainage (04b § 9, tâche 2.7) : après `drain`, toute nouvelle session est refusée (`draining`) ; `whenEmpty` attend la
+//   fin des sessions en cours, `shutdown` termine les restantes (`node_shutdown`), orchestré par `NodeDrain` (../drain).
+// - nœud isolé (battement perdu, 04b § 6) : sessions locales détruites sans écriture d'état (la passerelle les a
+//   déclarées `failed` raison `node_lost`).
+// - comptage (04d § 4.1, tâche 2.6, BINV5) : la mesure démarre au passage `running` et s'arrête une fois la destruction
+//   faite ; la clôture part dans `usage.wal` (fsync) PUIS dans la même écriture que l'état final. État final refusé ou
+//   nœud isolé : la clôture est écrite seule (elle remplace une valeur reconstruite) ; base injoignable : elle reste dans
+//   le journal, rejoué au redémarrage et lu par la réconciliation.
+import { endStateFor, SessionTimers, systemClock, type Clock, type EndReason, type ExtendOutcome, type SessionStore, type TransitionOutcome, type UsageClosure } from '@sym-browser/core';
+import type { LaunchArg } from '@sym/contracts/browser';
+import type { AcquireRequest, LeaseEndReason, PoolLease, SessionType } from '../pool/index.js';
+import type { UsageMeter, UsageWal } from '../usage/index.js';
+import type { SharedSessionInput } from './options.js';
+
+/** Requête de bail : celle du pool, plus les options de contexte d'une session shared (hôte des sessions, tâche 1.7). */
+export type SessionAcquireRequest = AcquireRequest & { options?: SharedSessionInput };
+/** Pool de Chromium (1.1) ou hôte des sessions (1.7), qui l'enveloppe avec la destruction de 04c § 3.2. */
+export type SessionPool = { acquire(request: SessionAcquireRequest): Promise<Lease> };
+
+/** Marge du chien de garde du pool au-delà de la fin au plus tard : la fin normale vient des délais du superviseur. */
+const WATCHDOG_GRACE_MS = 5_000;
+
+/** Interruption du bail par le pool (`lease.signal.reason`) → raison de fin (04 § 5). */
+const POOL_END_REASONS: Record<LeaseEndReason, ClientEndReason> = { crash: 'crash', timed_out: 'timeout', shutdown: 'node_shutdown' };
+
+/** Ce que le nœud reçoit de la passerelle pour démarrer une session (`POST /internal/sessions`, 04b § 12). Dates en ms. */
+export type StartRequest = {
+  sessionId: string;
+  type: SessionType;
+  tenantId: string;
+  expiresAt: number;
+  /** Création + durée maximale du client : aucune prolongation ne va au-delà. */
+  maxExpiresAt: number;
+  idleTimeoutSeconds: number;
+  /** Liste fermée (04 § 3), sessions dedicated. */
+  launchArgs?: readonly LaunchArg[];
+  /** Options de contexte d'une session shared (04 § 3). */
+  options?: SharedSessionInput;
+};
+
+export type StartOutcome = { ok: true } | { ok: false; code: 'open_failed' | 'already_started' | 'not_found' | 'invalid_transition' | 'draining' };
+export type EndOutcome = TransitionOutcome | { ok: false; code: 'isolated' };
+type ClientEndReason = Extract<EndReason, 'released' | 'budget_exceeded' | 'quota' | 'node_shutdown' | 'timeout' | 'idle' | 'crash'>;
+
+type Lease = Pick<PoolLease, 'signal' | 'release'>;
+type Active = { lease: Lease; timers: SessionTimers; ending: Promise<EndOutcome> | undefined; type: SessionType; runningAt: number };
+
+export type SessionSupervisorOptions = {
+  nodeId: string;
+  pool: SessionPool;
+  store: SessionStore;
+  clock?: Clock;
+  watchdogGraceMs?: number;
+  /** Comptage (tâche 2.6) : compteur du nœud et son journal `usage.wal`. */
+  usage?: { meter: UsageMeter; wal: Pick<UsageWal, 'append'> };
+  /** Erreur hors du chemin de l'appelant (destruction incomplète, écriture refusée) : journal du nœud. */
+  onError?: (error: unknown) => void;
+  /** Démarrage (demande → `running`) et fin (`running` → état final) : métriques du nœud (tâche 3.7). */
+  onLifecycle?: (event: SessionLifecycleEvent) => void;
+};
+
+export type SessionLifecycleEvent =
+  | { kind: 'started'; type: SessionType; startMs: number }
+  | { kind: 'ended'; type: SessionType; reason: ClientEndReason; durationMs: number };
+
+export class SessionSupervisor {
+  readonly #nodeId: string;
+  readonly #pool: SessionPool;
+  readonly #store: SessionStore;
+  readonly #clock: Clock;
+  readonly #watchdogGraceMs: number;
+  readonly #onError: (error: unknown) => void;
+  readonly #onLifecycle: (event: SessionLifecycleEvent) => void;
+  readonly #usage: SessionSupervisorOptions['usage'];
+  readonly #sessions = new Map<string, Active>();
+  readonly #starting = new Set<string>();
+  readonly #inFlight = new Set<Promise<unknown>>();
+  /** Attentes de `whenEmpty`, réveillées à chaque session retirée. */
+  readonly #emptyWaiters = new Set<() => void>();
+  #draining = false;
+
+  constructor(options: SessionSupervisorOptions) {
+    this.#nodeId = options.nodeId;
+    this.#pool = options.pool;
+    this.#store = options.store;
+    this.#clock = options.clock ?? systemClock;
+    this.#watchdogGraceMs = options.watchdogGraceMs ?? WATCHDOG_GRACE_MS;
+    this.#onError = options.onError ?? (() => undefined);
+    this.#onLifecycle = options.onLifecycle ?? (() => undefined);
+    this.#usage = options.usage;
+  }
+
+  #lifecycle(event: SessionLifecycleEvent): void {
+    try {
+      this.#onLifecycle(event);
+    } catch (error) {
+      this.#onError(error);
+    }
+  }
+
+  /** Sessions tenues par ce nœud (y compris celles dont la fin est en cours). */
+  active(): string[] {
+    return [...this.#sessions.keys()];
+  }
+
+  /** Vrai dès `drain()` : plus aucune nouvelle session sur ce nœud (04b § 9). */
+  get draining(): boolean {
+    return this.#draining;
+  }
+
+  /** Arrêt gracieux, étape 1 (04b § 9) : toute nouvelle session est refusée (`draining`) ; celles en cours continuent. */
+  drain(): void {
+    this.#draining = true;
+  }
+
+  /** Rend `true` quand plus aucune session n'est tenue ni en démarrage, `false` si `signal` est interrompu avant. */
+  whenEmpty(signal?: AbortSignal): Promise<boolean> {
+    return new Promise((resolve) => {
+      const done = (empty: boolean): void => {
+        this.#emptyWaiters.delete(check);
+        signal?.removeEventListener('abort', abort);
+        resolve(empty);
+      };
+      const check = (): void => {
+        if (this.#sessions.size === 0 && this.#starting.size === 0) done(true);
+      };
+      const abort = (): void => done(false);
+      if (signal?.aborted) return done(false);
+      signal?.addEventListener('abort', abort, { once: true });
+      this.#emptyWaiters.add(check);
+      check();
+    });
+  }
+
+  async start(request: StartRequest): Promise<StartOutcome> {
+    const { sessionId } = request;
+    if (this.#draining) return { ok: false, code: 'draining' };
+    if (this.#sessions.has(sessionId) || this.#starting.has(sessionId)) return { ok: false, code: 'already_started' };
+    this.#starting.add(sessionId);
+    const requestedAt = this.#clock.now();
+    try {
+      let lease: Lease;
+      try {
+        lease = await this.#pool.acquire({
+          sessionId,
+          type: request.type,
+          tenantId: request.tenantId,
+          watchdogMs: Math.max(0, request.maxExpiresAt - this.#clock.now()) + this.#watchdogGraceMs,
+          ...(request.launchArgs === undefined ? {} : { launchArgs: request.launchArgs }),
+          ...(request.options === undefined ? {} : { options: request.options }),
+        });
+      } catch (error) {
+        // Le pool a déjà rendu le slot réservé ; la session échoue (04 § 5 : `pending → failed`, lancement impossible).
+        this.#onError(error);
+        await this.#write({ sessionId, to: 'failed', reason: 'crash' });
+        return { ok: false, code: 'open_failed' };
+      }
+      const outcome = await this.#write({ sessionId, to: 'running', reason: null, nodeId: this.#nodeId });
+      if (!outcome?.ok) {
+        await this.#release(lease);
+        return { ok: false, code: outcome?.code ?? 'invalid_transition' };
+      }
+      this.#usage?.meter.start(sessionId);
+      const active: Active = {
+        lease,
+        timers: new SessionTimers({
+          clock: this.#clock,
+          expiresAt: request.expiresAt,
+          idleTimeoutMs: request.idleTimeoutSeconds * 1000,
+          onExpire: (reason) => this.#track(this.end(sessionId, reason)),
+        }),
+        ending: undefined,
+        type: request.type,
+        runningAt: this.#clock.now(),
+      };
+      this.#sessions.set(sessionId, active);
+      this.#lifecycle({ kind: 'started', type: request.type, startMs: active.runningAt - requestedAt });
+      const onAbort = (): void => {
+        const reason = lease.signal.reason as LeaseEndReason;
+        this.#track(this.end(sessionId, POOL_END_REASONS[reason] ?? 'crash'));
+      };
+      // Interruption arrivée pendant l'écriture de `running` : traitée tout de suite.
+      if (lease.signal.aborted) onAbort();
+      else lease.signal.addEventListener('abort', onAbort, { once: true });
+      return { ok: true };
+    } finally {
+      this.#starting.delete(sessionId);
+      this.#notifyEmpty();
+    }
+  }
+
+  /** Message Playwright ou CDP du client : le délai d'inactivité repart. */
+  activity(sessionId: string): void {
+    const active = this.#sessions.get(sessionId);
+    if (active && !active.ending) active.timers.touch();
+  }
+
+  async extend(sessionId: string, seconds: number): Promise<ExtendOutcome> {
+    const active = this.#sessions.get(sessionId);
+    if (!active || active.ending) return { ok: false, code: 'not_found' };
+    const outcome = await this.#store.extend({ sessionId, seconds });
+    if (outcome.ok) active.timers.extendTo(outcome.expiresAt);
+    return outcome;
+  }
+
+  /** Fin de session : bail rendu (destruction), puis état final. Idempotent : les déclencheurs suivants reçoivent la même fin. */
+  end(sessionId: string, reason: ClientEndReason): Promise<EndOutcome> {
+    const active = this.#sessions.get(sessionId);
+    if (!active) return Promise.resolve({ ok: false, code: 'not_found' });
+    active.ending ??= (async (): Promise<EndOutcome> => {
+      active.timers.stop();
+      await this.#release(active.lease);
+      const usage = await this.#closeUsage(sessionId);
+      const to = endStateFor('running', reason);
+      const outcome = to === undefined ? undefined : await this.#write({ sessionId, to, reason, ...(usage ? { usage } : {}) });
+      if (usage && !outcome?.ok) await this.#recordUsage(usage);
+      this.#sessions.delete(sessionId);
+      this.#lifecycle({ kind: 'ended', type: active.type, reason, durationMs: this.#clock.now() - active.runningAt });
+      this.#notifyEmpty();
+      return outcome ?? { ok: false, code: 'not_found' };
+    })();
+    return active.ending;
+  }
+
+  /** Arrêt gracieux du nœud : toutes les sessions finissent `ended` raison `node_shutdown`. */
+  async shutdown(): Promise<void> {
+    await Promise.all(this.active().map((sessionId) => this.end(sessionId, 'node_shutdown')));
+  }
+
+  /** Nœud isolé ou déclaré perdu : sessions locales détruites, aucune écriture d'état ; usage clôturé seul. */
+  async isolate(): Promise<void> {
+    await Promise.all(
+      [...this.#sessions].map(([sessionId, active]) => {
+        active.ending ??= (async (): Promise<EndOutcome> => {
+          active.timers.stop();
+          await this.#release(active.lease);
+          const usage = await this.#closeUsage(sessionId);
+          if (usage) await this.#recordUsage(usage);
+          this.#sessions.delete(sessionId);
+          this.#notifyEmpty();
+          return { ok: false, code: 'isolated' };
+        })();
+        return active.ending;
+      }),
+    );
+  }
+
+  /** Attend la fin des fins déclenchées par les délais ou par le pool (tests, arrêt). */
+  async idle(): Promise<void> {
+    while (this.#inFlight.size > 0) await Promise.allSettled([...this.#inFlight]);
+  }
+
+  #notifyEmpty(): void {
+    for (const waiter of [...this.#emptyWaiters]) waiter();
+  }
+
+  #track(promise: Promise<unknown>): void {
+    this.#inFlight.add(promise);
+    void promise.catch((error: unknown) => this.#onError(error)).finally(() => this.#inFlight.delete(promise));
+  }
+
+  async #release(lease: Lease): Promise<void> {
+    try {
+      await lease.release();
+    } catch (error) {
+      this.#onError(error);
+    }
+  }
+
+  /** Destruction faite : mesure arrêtée, clôture journalisée dans usage.wal (fsync) avant toute écriture en base. */
+  async #closeUsage(sessionId: string): Promise<UsageClosure | undefined> {
+    const closure = this.#usage?.meter.stop(sessionId);
+    if (!closure) return undefined;
+    try {
+      await this.#usage?.wal.append(closure);
+    } catch (error) {
+      this.#onError(error);
+    }
+    return closure;
+  }
+
+  async #recordUsage(closure: UsageClosure): Promise<void> {
+    try {
+      await this.#store.recordUsage?.(closure);
+    } catch (error) {
+      this.#onError(error);
+    }
+  }
+
+  async #write(input: Parameters<SessionStore['transition']>[0]): Promise<TransitionOutcome | undefined> {
+    try {
+      return await this.#store.transition(input);
+    } catch (error) {
+      this.#onError(error);
+      return undefined;
+    }
+  }
+}

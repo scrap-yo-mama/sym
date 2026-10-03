@@ -4,7 +4,7 @@
 // (= run_api), ré-enquête manuelle, versions de stratégie (liste, détail, diff, retour), chronologie des statuts.
 //
 // Droits : lectures sous `withActor` (RLS : siennes + `instance` sans session) ; écritures réservées au propriétaire (404
-// uniforme pour l'API d'autrui, même visible) ; codes d'erreur de 05 § 4.3. Aucun réglage robots.txt n'existe (INV11).
+// uniforme pour l'API d'autrui, même visible) ; codes d'erreur de 05 § 4.3.
 import {
   API_STATUSES,
   EXECUTIONS,
@@ -14,6 +14,8 @@ import {
   schemaHasPersonalFields,
   type Execution,
   validateOutput,
+  type PersistenceActivationDecision,
+  type PersistenceNotEligibleReason,
   type StatusEventInput,
 } from '@runtime/core';
 import {
@@ -21,8 +23,10 @@ import {
   asActorInTransaction,
   createRun,
   InvestigationStateError,
+  PersistenceApiNotFoundError,
   removeScheduleMirror,
   resolvedRulesPreview,
+  setPersistenceMode,
   StorageFullError,
   startInvestigation,
   validateInvestigationSchema,
@@ -48,10 +52,12 @@ import {
   versionSummary,
   type ApiRow,
 } from '../rest/apis.js';
+import { runErrorFor, runErrorOf } from '../rest/run-error.js';
 import { buildRunResult, readRunRow, waitForRun } from '../rest/runs.js';
 import { BLOCKING_STATUS, rejectIfKeyRateLimited, rejectWithoutAck, reasonMessage, reserveRunSlot, RunSlotError, sendRunSlotError, triggerOf, waitSecondsOf } from '../rest/shared.js';
 import { CURSOR_TIME, decodeCursor, encodeCursor, INT4_MAX, UUID } from './account-helpers.js';
 import { audit, notFound, sendError, type Actor } from './guard.js';
+import { instanceContactMissing } from './identity.js';
 
 const executionList = { type: 'array', uniqueItems: true, maxItems: 6, items: { type: 'string', enum: [...EXECUTIONS] } } as const;
 
@@ -115,6 +121,9 @@ const patchSchema = {
     contains_personal_data: { type: 'boolean' },
     max_cost_usd: { type: ['number', 'null'], minimum: 0, maximum: 1000 },
     budget_daily_usd: { type: ['number', 'null'], minimum: 0, maximum: 100000 },
+    // Mode « SYM ne lâche pas » (2.16, D-49) : un plafond ≤ 0 répond 409 persistence_not_eligible (jamais « illimité »).
+    persistence_mode: { type: 'boolean' },
+    persistence_budget_usd: { type: ['number', 'null'], maximum: 1000 },
   },
 } as const;
 
@@ -132,6 +141,22 @@ type PatchBody = {
   contains_personal_data?: boolean;
   max_cost_usd?: number | null;
   budget_daily_usd?: number | null;
+  persistence_mode?: boolean;
+  persistence_budget_usd?: number | null;
+};
+
+/** Marche à suivre d'une activation refusée du mode « SYM ne lâche pas » (05 § 4.3 ; `what_to_do` en anglais, 05 § 1). */
+const PERSISTENCE_WHAT_TO_DO: Record<PersistenceNotEligibleReason | 'human_confirmation_required', string> = {
+  human_confirmation_required: 'Turn on "SYM never gives up" in the console, on the API page: it is a human decision. An API key can only turn it off.',
+  no_current_version: 'Wait until the API has a validated strategy (a successful investigation), then turn the mode on in the console.',
+  negative_memory_unavailable: 'The refusal memory is not available on this instance yet: the mode cannot be turned on. Use "Investigate again" instead.',
+  budget_not_positive: 'Set persistence_budget_usd above 0, or leave it null to use PERSISTENCE_BUDGET_USD_DEFAULT (which must be above 0).',
+};
+const PERSISTENCE_MESSAGE: Record<PersistenceNotEligibleReason | 'human_confirmation_required', string> = {
+  human_confirmation_required: 'activer « SYM ne lâche pas » est un acte humain : dans la console seulement, jamais par une clé d’API (une clé peut le désactiver)',
+  no_current_version: 'mode « SYM ne lâche pas » impossible : l’API n’a aucune version de stratégie validée',
+  negative_memory_unavailable: 'mode « SYM ne lâche pas » impossible : la mémoire des refus n’est pas en service sur cette instance',
+  budget_not_positive: 'mode « SYM ne lâche pas » impossible : plafond effectif nul ou négatif (jamais illimité)',
 };
 
 const validateSchemaBody = {
@@ -199,6 +224,9 @@ export async function createdView(ctx: ServerContext, actor: Actor, apiId: strin
   return withActor(ctx.pool, actor, async (db) => {
     const api = await readApiById(db, apiId);
     const proposal = await latestProposal(db, apiId);
+    // UX-07 : l'état réel de l'enquête (en cours, ou échec avec sa cause), pour que la phase, le schéma et la phrase ne se contredisent pas.
+    const run = await readRunRow(db, runId);
+    const error = run === null ? null : runErrorOf(run);
     return {
       api_id: apiId,
       slug: api?.slug ?? '',
@@ -207,6 +235,9 @@ export async function createdView(ctx: ServerContext, actor: Actor, apiId: strin
       sample: proposal.sample,
       access_report: await latestAccessReport(db, apiId),
       run_id: runId,
+      ...(run === null ? {} : { run_state: run.state }),
+      ...(api === null ? {} : { status: api.status }),
+      ...(error === null ? {} : { error }),
     };
   });
 }
@@ -277,6 +308,11 @@ export function apiRoutes(app: FastifyInstance, ctx: ServerContext): void {
     const actor = request.actor!;
     const body = request.body;
     if (await rejectIfKeyRateLimited(ctx, reply, actor)) return reply;
+    // UX-04 : sans contact d'instance, l'enquête échouerait aussitôt (17 § 5) : refus AVANT de créer l'API ou le run.
+    if (await instanceContactMissing(ctx)) {
+      const missing = runErrorFor('instance_contact_missing');
+      return sendError(reply, 409, missing.code, missing.message);
+    }
     // Validation automatique : le schéma proposé n'est pas encore connu ; s'il porte `x-personal`, la case est exigée.
     if (body.auto_validate === true && (await rejectWithoutAck(ctx, reply, actor, true))) return reply;
     let policy: Record<string, unknown> | null = null;
@@ -293,7 +329,7 @@ export function apiRoutes(app: FastifyInstance, ctx: ServerContext): void {
       const slug = await freeSlug(ctx, body.description, body.url);
       const queue = await ctx.jobs();
       created = await withActor(ctx.pool, actor, async (tx) => {
-        await reserveRunSlot(tx, ctx);
+        await reserveRunSlot(tx, ctx, { kind: 'investigation' });
         const apiId = await insertApi(tx, actor, { slug, description: body.description.trim(), visibility: body.visibility ?? 'private', networkPolicy: policy });
         const { runId } = await startInvestigation(tx, queue, {
           apiId,
@@ -335,7 +371,7 @@ export function apiRoutes(app: FastifyInstance, ctx: ServerContext): void {
       const actor = request.actor!;
       const view = await withActor(ctx.pool, actor, async (db) => {
         const row = await readApiBySlug(db, request.params.slug);
-        return row === null ? null : apiDetail(db, actor, row);
+        return row === null ? null : apiDetail(db, actor, row, ctx.persistence.policy);
       });
       if (view !== null) return view;
       // Admin et owner : métadonnées d'une API à session d'autrui (13 § 2), audité ; sinon 404 uniforme.
@@ -356,12 +392,37 @@ export function apiRoutes(app: FastifyInstance, ctx: ServerContext): void {
       return sendError(reply, 409, 'draft_required', 'un schéma se modifie par un brouillon puis une promotion (itération), jamais en place');
     }
     if (body.visibility === 'instance' && api.requires_session) return sendError(reply, 400, 'session_api_private', 'une API à session reste privée');
+    // Plafonds d'instance (08b § 3, PA-02) : le membre ne les dépasse pas en fixant les siens.
+    if ((body.max_cost_usd ?? 0) > ctx.rest.maxCostUsdPerRun) return sendError(reply, 400, 'cost_cap_exceeded', `max_cost_usd dépasse le plafond de l’instance (${ctx.rest.maxCostUsdPerRun} $ par run)`);
+    if ((body.budget_daily_usd ?? 0) > ctx.rest.userBudgetDailyUsd) return sendError(reply, 400, 'cost_cap_exceeded', `budget_daily_usd dépasse le plafond de l’instance (${ctx.rest.userBudgetDailyUsd} $ par jour)`);
     let policy: Record<string, unknown> | undefined;
     try {
       if (body.network_policy) policy = await checkNetworkPolicy(ctx, body.network_policy);
     } catch (error) {
       if (error instanceof ApiInputError) return sendError(reply, 400, error.code, error.message);
       throw error;
+    }
+    // Mode « SYM ne lâche pas » (D-49) : décidé AVANT tout autre champ ; refusé (403 hors console, 409 inéligible), rien
+    // n'est écrit — ni le mode, ni un autre champ de la requête ; la bascule, refusée ou non, est auditée avec son acteur.
+    if (body.persistence_mode !== undefined || body.persistence_budget_usd !== undefined) {
+      let decision: PersistenceActivationDecision;
+      try {
+        decision = await setPersistenceMode(ctx.pool, { queue: await ctx.jobs(), policy: ctx.persistence.policy, ...(ctx.persistence.negativeMemory === undefined ? {} : { negativeMemory: ctx.persistence.negativeMemory }) }, {
+          apiId: api.id,
+          actor: { userId: actor.userId, via: actor.via === 'ui' ? 'ui' : 'apikey', ref: actor.apiKey?.prefix ?? null, role: actor.role },
+          ...(body.persistence_mode === undefined ? {} : { enable: body.persistence_mode }),
+          ...(body.persistence_budget_usd === undefined ? {} : { budgetUsd: body.persistence_budget_usd }),
+        });
+      } catch (error) {
+        if (error instanceof PersistenceApiNotFoundError) return notFound(reply);
+        throw error;
+      }
+      if (!decision.ok) {
+        const key = decision.code === 'human_confirmation_required' ? decision.code : decision.reason;
+        return reply.code(decision.status).send({
+          error: { code: decision.code, message: PERSISTENCE_MESSAGE[key], ...(decision.code === 'persistence_not_eligible' ? { reason: decision.reason } : {}), what_to_do: PERSISTENCE_WHAT_TO_DO[key] },
+        });
+      }
     }
     const sets: string[] = [];
     const params: unknown[] = [api.id, actor.userId];
@@ -386,7 +447,7 @@ export function apiRoutes(app: FastifyInstance, ctx: ServerContext): void {
     const view = await withActor(ctx.pool, actor, async (db) => {
       if (sets.length > 0) await db.query(`UPDATE apis SET ${sets.join(', ')}, updated_at = now() WHERE id = $1 AND owner_id = $2`, params);
       const row = await readApiById(db, api.id);
-      return row === null ? null : apiDetail(db, actor, row);
+      return row === null ? null : apiDetail(db, actor, row, ctx.persistence.policy);
     });
     if (view === null) return notFound(reply);
     await audit(ctx, request, actor, { action: 'api.updated', targetType: 'api', targetId: api.id, outcome: 'success', meta: { fields: Object.keys(body) } });
@@ -457,14 +518,15 @@ export function apiRoutes(app: FastifyInstance, ctx: ServerContext): void {
       // proposé sans ses marques `x-personal` ne contourne pas la case.
       const proposed = state?.proposed_schema ?? {};
       const corrected = request.body.output_schema;
-      const personal = schemaHasPersonalFields(proposed) ? proposed : corrected !== undefined && schemaHasPersonalFields(corrected) ? corrected : {};
-      if (await rejectWithoutAck(ctx, reply, actor, personal)) return reply;
+      const fromProposed = schemaHasPersonalFields(proposed);
+      const personal = fromProposed ? proposed : corrected !== undefined && schemaHasPersonalFields(corrected) ? corrected : {};
+      if (await rejectWithoutAck(ctx, reply, actor, personal, fromProposed ? 'proposed' : 'corrected')) return reply;
       if (await rejectIfKeyRateLimited(ctx, reply, actor)) return reply;
       let runId: string;
       try {
         const queue = await ctx.jobs();
         ({ runId } = await withActor(ctx.pool, actor, async (tx) => {
-          await reserveRunSlot(tx, ctx);
+          await reserveRunSlot(tx, ctx, { kind: 'investigation', apiId: api.id });
           return validateInvestigationSchema(tx, queue, {
             apiId: api.id,
             ownerId: actor.userId,
@@ -503,7 +565,7 @@ export function apiRoutes(app: FastifyInstance, ctx: ServerContext): void {
     if (await rejectIfKeyRateLimited(ctx, reply, actor)) return reply;
     const queue = await ctx.jobs();
     const launch = async (tx: Parameters<typeof startInvestigation>[0]) => {
-      await reserveRunSlot(tx, ctx);
+      await reserveRunSlot(tx, ctx, { kind: 'investigation', apiId: api.id });
       return startInvestigation(tx, queue, {
         apiId: api.id,
         ownerId: actor.userId,
@@ -595,7 +657,7 @@ export function apiRoutes(app: FastifyInstance, ctx: ServerContext): void {
       try {
         const queue = await ctx.jobs();
         ({ runId } = await withActor(ctx.pool, actor, async (tx) => {
-          await reserveRunSlot(tx, ctx);
+          await reserveRunSlot(tx, ctx, { kind: 'run', apiId: api.id });
           const made = await createRun(tx, queue, { apiId: api.id, ownerId: actor.userId, trigger: triggerOf(actor), input: body.input });
           if (body.strategy_version !== undefined) await tx.query('UPDATE runs SET strategy_version = $2 WHERE id = $1', [made.runId, body.strategy_version]);
           return made;
@@ -725,7 +787,7 @@ export function apiRoutes(app: FastifyInstance, ctx: ServerContext): void {
     await audit(ctx, request, actor, { action: 'api.reverted', targetType: 'api', targetId: api.id, outcome: 'success', meta: { to_version: v.version } });
     const view = await withActor(ctx.pool, actor, async (db) => {
       const row = await readApiById(db, api.id);
-      return row === null ? null : apiDetail(db, actor, row);
+      return row === null ? null : apiDetail(db, actor, row, ctx.persistence.policy);
     });
     return view ?? notFound(reply);
   });

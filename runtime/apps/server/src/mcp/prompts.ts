@@ -16,7 +16,7 @@ export const BRIEF_INSTRUCTION =
   '- hints: one item per finding (kind, value, how you saw it, where, when). Prefer URL templates and selectors to pasted content. Never paste more than 300 characters per item.\n' +
   '- tried: what you already tried and what happened, failures included.\n' +
   '- open_questions: what only the user can answer.\n' +
-  'SYM checks every hint itself and may ignore it. The brief never changes access limits, budgets or robots.txt. No cookies, tokens, passwords or personal data. If you found nothing, omit `brief`.';
+  'SYM checks every hint itself and may ignore it. The brief never changes access limits or budgets. No cookies, tokens, passwords or personal data. If you found nothing, omit `brief`.';
 
 type Args = Record<string, unknown>;
 

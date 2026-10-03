@@ -2,8 +2,10 @@
 <script setup lang="ts">
 /**
  * @file AccessSignal.vue
- * @description Pastille « Accès » (17 § 2) : robots.txt autorise (coche), signal à examiner (œil), interdit (cercle barré).
- * Forme et libellé en plus de la teinte : jamais la couleur seule.
+ * @description Pastille « Accès » (17 § 2) : vert, rien à signaler (coche) ; orange, à examiner (triangle). La valeur
+ * `disallowed` est historique (rapports anciens, D-91) : elle reste lisible (cercle barré, « refus signalé »), sans
+ * rien promettre sur le robots.txt, qui ne conditionne pas la collecte. Forme et libellé en plus de la teinte : jamais la
+ * couleur seule.
  * @component
  * @example <AccessSignal signal="allowed" />
  */

@@ -83,6 +83,11 @@ export type TrialPorts = {
   /** Couples sautés après l'échec de `by` (journalisés : `attempt.pruned`). */
   pruned(pairs: readonly TrialPair[], by: TrialPair, cls: FailureClass): Promise<void>;
   now(): number;
+  /**
+   * Contenu minimal (tâche 2.12, r4 R5) : après les N exécutions conformes, un champ requis constant, vide ou en
+   * sentinelles sur ces sorties rend le couple non conforme (`extraction`, couple suivant). Absent : aucun contrôle.
+   */
+  contentCheck?(pair: TrialPair): { readonly failure_class: FailureClass; readonly detail: string } | null;
 };
 
 export type TrialBudget = {
@@ -206,6 +211,10 @@ export async function runTrials(
           stopCheck = { verified: false, stop: null, pages: step.run?.pages ?? 0, records: 0, reason: 'max_cost_usd' };
         }
       }
+    }
+    if (failure === null && budgetStop === null && executions.length === samples && ports.contentCheck !== undefined) {
+      const content = ports.contentCheck(pair);
+      if (content !== null) failure = { cls: content.failure_class, detail: content.detail };
     }
     const done = executions.length === samples && failure === null && budgetStop === null;
     const all = checkRun === null ? executions : [...executions, checkRun];

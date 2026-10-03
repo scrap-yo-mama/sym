@@ -140,7 +140,11 @@ beforeAll(async () => {
   await new Promise<void>((resolve) => hook.listen(0, '127.0.0.1', resolve));
   hookPort = (hook.address() as AddressInfo).port;
   // Cibles locales des tests (webhook) : drapeau réservé aux tests (NODE_ENV=test) et port de la cible seulement.
-  srv = await startTestServer('rest', { RUNTIME_TEST_ALLOW_PRIVATE: '1', NODE_ENV: 'test', ALLOWED_EGRESS_PORTS: String(hookPort), MAX_CONCURRENT_RUNS: '1000', MAX_ACTIVE_RUNS_PER_USER: '1000' }, { rest: { pollMs: 40, pingMs: 300, maxStreamsPerUser: 3, revalidateMs: 100 } });
+  srv = await startTestServer('rest', { RUNTIME_TEST_ALLOW_PRIVATE: '1', NODE_ENV: 'test', ALLOWED_EGRESS_PORTS: String(hookPort), MAX_CONCURRENT_RUNS: '1000', MAX_ACTIVE_RUNS_PER_USER: '1000' }, {
+    rest: { pollMs: 40, pingMs: 300, maxStreamsPerUser: 3, revalidateMs: 100 },
+    // Mémoire négative (2.12) simulée en service : sans elle, toute activation du mode répond 409 (défaut du dépôt).
+    persistence: { negativeMemory: { available: true, priorRefusal: async () => false } },
+  });
   const o = await runSetup(srv);
   const party = async (user: TestUser): Promise<Party> => ({ user, cookie: await signIn(srv, user) });
   owner = await party(o);
@@ -209,7 +213,8 @@ describe('catalogue (05 § 4.2) : création, liste, fiche, modification, suppres
     expect(second.body['slug']).not.toBe(created.body['slug']);
 
     const detail = await api(a, 'GET', `/api/apis/${created.body['slug']}`, '/api/apis/{slug}');
-    expect(detail.body).toMatchObject({ status: 'enquete', metadata_only: false, access_policy: { robots: 'respect' }, owner_id: a.user.id });
+    expect(detail.body).toMatchObject({ status: 'enquete', metadata_only: false, access_policy: { report_id: null }, owner_id: a.user.id });
+    expect(detail.body.access_policy).not.toHaveProperty('robots');
     expect(JSON.stringify(detail.body)).not.toContain('"investigation"');
 
     const list = await api(a, 'GET', '/api/apis?limit=1', '/api/apis');
@@ -230,10 +235,31 @@ describe('catalogue (05 § 4.2) : création, liste, fiche, modification, suppres
     expect((await api(b, 'DELETE', `/api/apis/${shared.slug}`, '/api/apis/{slug}')).status).toBe(404);
   });
 
+  test('assert_catalog_summary_domain : chaque ligne de GET /api/apis (et la fiche) porte le domaine de la page enquêtée, en minuscules ; null sans enquête', async () => {
+    const created = await api(a, 'POST', '/api/apis', '/api/apis', {
+      description: 'Les romans du catalogue zz domaine, avec titre',
+      url: 'https://Romans.ZZ-Test-Domaine.example/liste?page=1',
+      network_policy: { allow: ['direct'] },
+    });
+    expect(created.status).toBe(201);
+    const seeded = await seedApi(srv.db.url, a.user.id);
+    const rows = (await api(a, 'GET', '/api/apis?limit=100', '/api/apis')).body['apis'] as { id: string; domain?: string | null }[];
+    expect(rows.find((row) => row.id === created.body['api_id'])?.domain).toBe('romans.zz-test-domaine.example');
+    // API créée hors enquête : aucun domaine connu, le champ est là et vaut null (jamais la description à la place).
+    const plain = rows.find((row) => row.id === seeded.id);
+    expect(plain).toBeDefined();
+    expect(plain?.domain).toBeNull();
+    const detail = await api(a, 'GET', `/api/apis/${created.body['slug']}`, '/api/apis/{slug}');
+    expect(detail.body['domain']).toBe('romans.zz-test-domaine.example');
+    // Seul le domaine sort de l'état d'enquête : ni l'URL de départ ni l'état ne sont servis.
+    expect(JSON.stringify(detail.body)).not.toContain('/liste?page=1');
+    expect(JSON.stringify(detail.body)).not.toContain('start_url');
+  });
+
   test('POST /api/apis refuse : URL à jeton, politique réseau inconnue, corps hors schéma (400) ; validation automatique sans « j’ai lu » (403)', async () => {
     expect((await api(a, 'POST', '/api/apis', '/api/apis', { description: 'zz', url: 'https://zz-test.example/?token=abc' })).body).toMatchObject({ error: { code: 'invalid_request' } });
     expect((await api(a, 'POST', '/api/apis', '/api/apis', { description: 'zz', url: 'https://zz-test.example/', network_policy: { allow: ['dc_proxy'], proxy_ids: { dc_proxy: 'zz-unknown' } } })).body).toMatchObject({ error: { code: 'invalid_network_policy' } });
-    expect((await api(a, 'POST', '/api/apis', '/api/apis', { description: 'zz', url: 'https://zz-test.example/', robots: 'ignore' })).status).toBe(400);
+    expect((await api(a, 'POST', '/api/apis', '/api/apis', { description: 'zz', url: 'https://zz-test.example/', zz_unknown: true })).status).toBe(400);
     expect((await api(b, 'POST', '/api/apis', '/api/apis', { description: 'zz', url: 'https://zz-test.example/', auto_validate: true })).body).toMatchObject({ error: { code: 'responsible_use_ack_required' } });
   });
 
@@ -384,6 +410,62 @@ describe('catalogue (05 § 4.2) : création, liste, fiche, modification, suppres
   });
 });
 
+describe('assert_persistence_opt_in_only : PATCH /api/apis/{slug} (D-49, mode « SYM ne lâche pas »)', () => {
+  test('clé d’API : 403 human_confirmation_required sans rien écrire ; session : activé, audité, état Api.persistence ; désactivation par clé permise ; 409 sans version courante', async () => {
+    const seeded = await seedApi(srv.db.url, a.user.id);
+    const path = `/api/apis/${seeded.slug}`;
+    const key = (await srv.app.inject({ method: 'POST', url: '/api/api-keys', headers: { cookie: a.cookie, origin: PUBLIC_URL }, payload: { label: 'zz persistence', scopes: ['apis:read', 'apis:write'], currentPassword: a.user.password } })).json<{ key: string }>().key;
+    const bearer = { authorization: `Bearer ${key}` };
+    const mode = async () => withClient(srv.db.url, async (c) => (await c.query<{ persistence_mode: boolean; persistence_budget_usd: string | null }>('SELECT persistence_mode, persistence_budget_usd::text FROM apis WHERE id = $1', [seeded.id])).rows[0]!);
+    const audits = async () =>
+      withClient(srv.db.url, async (c) => (await c.query<{ action: string; actor_via: string; outcome: string }>("SELECT action, actor_via, outcome FROM audit_events WHERE target_id = $1 AND action LIKE 'api.persistence%' ORDER BY at, id", [seeded.id])).rows);
+
+    // Fiche : le mode est désactivé par défaut et son état est exposé au propriétaire.
+    const before = await api(a, 'GET', path, '/api/apis/{slug}');
+    expect(before.status).toBe(200);
+    expect(before.body['persistence']).toMatchObject({ enabled: false, budget_usd: 1, attempt: 0, next_at: null, spent_usd: 0, in_progress: false, ended: null });
+
+    // Clé d’API (même avec apis:write) : 403 et rien n’est écrit (ni le mode, ni un autre champ de la même requête).
+    const denied = await api(null, 'PATCH', path, '/api/apis/{slug}', { persistence_mode: true, description: 'zz_test ne doit pas changer' }, bearer);
+    expect(denied.status).toBe(403);
+    expect(denied.body).toMatchObject({ error: { code: 'human_confirmation_required', what_to_do: expect.any(String) } });
+    expect(await mode()).toEqual({ persistence_mode: false, persistence_budget_usd: null });
+    expect(await count('SELECT count(*) FROM apis WHERE id = $1 AND description = $2', [seeded.id, 'zz_test ne doit pas changer'])).toBe(0);
+
+    // Session console : activé avec un plafond propre, audité avec l’acteur, état rendu par la fiche.
+    const enabled = await api(a, 'PATCH', path, '/api/apis/{slug}', { persistence_mode: true, persistence_budget_usd: 2 });
+    expect(enabled.status).toBe(200);
+    expect(enabled.body['persistence']).toMatchObject({ enabled: true, budget_usd: 2 });
+    expect(await mode()).toEqual({ persistence_mode: true, persistence_budget_usd: '2.000000' });
+    expect((await api(a, 'GET', path, '/api/apis/{slug}')).body['persistence']).toMatchObject({ enabled: true, budget_usd: 2 });
+
+    // Changer le plafond d’un mode actif est aussi un acte coûteux : 403 par clé.
+    expect((await api(null, 'PATCH', path, '/api/apis/{slug}', { persistence_budget_usd: 50 }, bearer)).status).toBe(403);
+    // Désactiver reste permis à toute clé du scope.
+    const off = await api(null, 'PATCH', path, '/api/apis/{slug}', { persistence_mode: false }, bearer);
+    expect(off.status).toBe(200);
+    expect(off.body['persistence']).toMatchObject({ enabled: false });
+    expect(await audits()).toEqual([
+      { action: 'api.persistence_enable', actor_via: 'apikey', outcome: 'denied' },
+      { action: 'api.persistence_enable', actor_via: 'ui', outcome: 'success' },
+      { action: 'api.persistence_enable', actor_via: 'apikey', outcome: 'denied' },
+      { action: 'api.persistence_disable', actor_via: 'apikey', outcome: 'success' },
+    ]);
+
+    // 409 persistence_not_eligible : API sans version courante (jamais validée), raison et marche à suivre.
+    const fresh = await seedApi(srv.db.url, a.user.id, { strategy: false, status: 'erreur' });
+    const refused = await api(a, 'PATCH', `/api/apis/${fresh.slug}`, '/api/apis/{slug}', { persistence_mode: true });
+    expect(refused.status).toBe(409);
+    expect(refused.body).toMatchObject({ error: { code: 'persistence_not_eligible', reason: 'no_current_version', what_to_do: expect.any(String) } });
+    // Plafond propre nul : 409 aussi (jamais un 400 de forme, jamais « illimité »).
+    expect((await api(a, 'PATCH', path, '/api/apis/{slug}', { persistence_mode: true, persistence_budget_usd: 0 })).body).toMatchObject({ error: { code: 'persistence_not_eligible', reason: 'budget_not_positive' } });
+
+    // Un autre membre ne voit jamais l’état du mode d’une API qui n’est pas la sienne.
+    await withClient(srv.db.url, (c) => c.query("UPDATE apis SET visibility = 'instance' WHERE id = $1", [seeded.id]));
+    expect((await api(b, 'GET', path, '/api/apis/{slug}')).body['persistence']).toBeUndefined();
+  });
+});
+
 describe('assert_responsible_use_ack : 17 § 11, case « j’ai lu » et API à données personnelles', () => {
   test('sans la case, la validation d’un schéma `x-personal` est refusée ; cochée, elle passe', async () => {
     const created = await api(b, 'POST', '/api/apis', '/api/apis', { description: 'zz_test annuaire', url: 'https://zz-test-people.example/' });
@@ -440,6 +522,8 @@ describe('validation du schéma : case « j’ai lu » non contournable, ordre d
     const res = await api(c, 'POST', `/api/apis/${apiId}/validate-schema`, '/api/apis/{id}/validate-schema', { output_schema: stripped });
     expect(res.status).toBe(403);
     expect(res.body).toMatchObject({ error: { code: 'responsible_use_ack_required' } });
+    // UX-19 : le message nomme le champ marqué (celui du schéma PROPOSÉ), jamais un champ non marqué.
+    expect((res.body['error'] as { message: string }).message).toMatch(/x-personal : name \(/);
     expect(await count("SELECT count(*) FROM apis WHERE id = $1 AND investigation_phase = 'awaiting_schema_validation'", [apiId])).toBe(1);
     // Case cochée : la correction passe.
     await api(c, 'POST', '/api/me/responsible-use', '/api/me/responsible-use', { version: '2026-10-01' });
@@ -1468,6 +1552,66 @@ describe('réglages de l’admin (08 § 1, § 2, § 7) : secrets en écriture se
     expect(probe.body).toMatchObject({ ok: false, profile: null, error: { code: expect.stringMatching(/^llm_/) } });
     expect((await api(admin, 'POST', '/api/settings/llm/test', '/api/settings/llm/test', { provider: 'zz-absent', model: 'm' })).status).toBe(404);
     expect((await api(a, 'GET', '/api/settings/llm', '/api/settings/llm')).status).toBe(403);
+  });
+
+  test('UX-17 — le prix d’un modèle survit à toute écriture de settings.llm qui ne le mentionne pas ; seul price: null le retire', async () => {
+    const price = { in: 5, out: 25, in_cached: 0.5 };
+    const profile = { tools: true, tool_choice: ['auto'], structured: 'json_schema', cache: false };
+    const provider = { id: 'zz-price', preset: 'custom', base_url: 'http://127.0.0.1:9/v1', api_key: 'zz_test_llm_key_price_0123456789' };
+    const modelsOf = async () => ((await api(admin, 'GET', '/api/settings/llm', '/api/settings/llm')).body['providers'] as { id: string; models: Record<string, Record<string, unknown>> }[]).find((p) => p.id === 'zz-price')?.models;
+    expect((await api(admin, 'PUT', '/api/settings/llm', '/api/settings/llm', { providers: [{ ...provider, models: { 'claude-opus-4-8': { price } } }] })).status).toBe(200);
+    expect(await modelsOf()).toEqual({ 'claude-opus-4-8': { price } });
+    // Console au GET périmé, ou script qui ne pose que le profil : la requête ne parle pas du prix, le prix reste.
+    const { api_key: _key, ...keep } = provider;
+    expect((await api(admin, 'PUT', '/api/settings/llm', '/api/settings/llm', { providers: [{ ...keep, models: { 'claude-opus-4-8': { profile } } }] })).status).toBe(200);
+    expect(await modelsOf()).toEqual({ 'claude-opus-4-8': { price, profile } });
+    // Une requête sans `models` ne touche à rien (déjà le cas) ; une requête qui change le prix le remplace.
+    expect((await api(admin, 'PUT', '/api/settings/llm', '/api/settings/llm', { providers: [keep] })).status).toBe(200);
+    expect(await modelsOf()).toEqual({ 'claude-opus-4-8': { price, profile } });
+    expect((await api(admin, 'PUT', '/api/settings/llm', '/api/settings/llm', { providers: [{ ...keep, models: { 'claude-opus-4-8': { price: { in: 4, out: 20 } } } }] })).status).toBe(200);
+    expect(await modelsOf()).toEqual({ 'claude-opus-4-8': { price: { in: 4, out: 20 }, profile } });
+    // Retrait explicite.
+    expect((await api(admin, 'PUT', '/api/settings/llm', '/api/settings/llm', { providers: [{ ...keep, models: { 'claude-opus-4-8': { price: null } } }] })).status).toBe(200);
+    expect(await modelsOf()).toEqual({ 'claude-opus-4-8': { profile } });
+    // Restaure l'état attendu par les tests suivants (aucun fournisseur de ce test).
+    await api(admin, 'PUT', '/api/settings/llm', '/api/settings/llm', { providers: [] });
+  });
+
+  test('revue fix-ux-11 — known_prices en lecture seule (forme KnownModelPrice) ; prix fermé (>= 0) ; models[m]: null retire ; table bornée à 50', async () => {
+    const got = await api(admin, 'GET', '/api/settings/llm', '/api/settings/llm');
+    expect(got.status).toBe(200);
+    const known = got.body['known_prices'] as { model: string; provider: string; status: string; price: { in: number; out: number; in_cached?: number } | null; source: string }[];
+    expect(known.length).toBeGreaterThan(0);
+    for (const entry of known) {
+      expect(['verified', 'to_validate']).toContain(entry.status);
+      expect(typeof entry.model).toBe('string');
+      expect(typeof entry.source).toBe('string');
+      if (entry.status === 'verified') expect(entry.price).toMatchObject({ in: expect.any(Number), out: expect.any(Number) });
+      else expect(entry.price).toBeNull();
+    }
+    // Lecture seule : une écriture qui renvoie known_prices est refusée.
+    expect((await api(admin, 'PUT', '/api/settings/llm', '/api/settings/llm', { providers: [], known_prices: [] })).status).toBe(400);
+    const provider = { id: 'zz-closed', preset: 'custom', base_url: 'http://127.0.0.1:9/v1', api_key: 'zz_test_llm_key_closed_0123456789' };
+    const put = (models: Record<string, unknown>, withKey = true) => {
+      const { api_key: _key, ...keep } = provider;
+      return api(admin, 'PUT', '/api/settings/llm', '/api/settings/llm', { providers: [{ ...(withKey ? provider : keep), models }] });
+    };
+    const modelsOf = async () => ((await api(admin, 'GET', '/api/settings/llm', '/api/settings/llm')).body['providers'] as { id: string; models: Record<string, unknown> }[]).find((p) => p.id === 'zz-closed')?.models ?? {};
+    // Prix fermé : négatif, sans `out`, clé inconnue.
+    expect((await put({ m: { price: { in: -1, out: 2 } } })).status).toBe(400);
+    expect((await put({ m: { price: { in: 1 } } })).status).toBe(400);
+    expect((await put({ m: { price: { in: 1, out: 2, zz: 1 } } })).status).toBe(400);
+    expect((await put({ m: { price: { in: 0, out: 0 } } })).status).toBe(200);
+    // Retrait d'un modèle entier.
+    expect((await put({ n: { price: { in: 1, out: 2 } } }, false)).status).toBe(200);
+    expect(Object.keys(await modelsOf()).sort()).toEqual(['m', 'n']);
+    expect((await put({ m: null }, false)).status).toBe(200);
+    expect(Object.keys(await modelsOf())).toEqual(['n']);
+    // La table fusionnée reste bornée à 50.
+    const fifty = Object.fromEntries(Array.from({ length: 50 }, (_, i) => [`zz-m${i}`, { price: { in: 1, out: 2 } }]));
+    expect((await put(fifty, false)).status).toBe(400);
+    expect(Object.keys(await modelsOf())).toEqual(['n']);
+    await api(admin, 'PUT', '/api/settings/llm', '/api/settings/llm', { providers: [] });
   });
 
   test('sonde « Tester » LLM pendant un changement de fournisseur : le profil relevé n’écrase jamais la nouvelle destination ni sa clé', async () => {

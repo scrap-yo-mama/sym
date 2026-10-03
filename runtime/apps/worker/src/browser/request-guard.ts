@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// Contrôle de CHAQUE requête réseau de Chromium, sauts de redirection compris (tâche 1.11, revue : INV11 en Chromium).
+// Contrôle de CHAQUE requête réseau de Chromium, sauts de redirection compris (tâche 1.11, revue de 1.11).
 // Playwright n'appelle `context.route` que pour la première URL d'une chaîne de redirections (il poursuit lui-même les
 // sauts suivants), et le proxy d'egress ne voit pas le chemin d'une requête https (CONNECT). Le seul point où Chromium
 // présente chaque saut AVANT de l'envoyer est le domaine CDP `Fetch` au stade Request : ce module l'active sur la page du
@@ -11,7 +11,7 @@
 // session parente, seule voie qu'offre une `CDPSession` de Playwright. Un cadre hors processus dont l'interception ne
 // peut pas être posée reste suspendu (échec fermé) : il ne charge rien.
 //
-// WebSocket des workers dédiés (revue de 1.11, INV11) : la poignée de main d'un WebSocket ouvert depuis un worker (de la
+// WebSocket des workers dédiés (revue de 1.11) : la poignée de main d'un WebSocket ouvert depuis un worker (de la
 // page ou d'un cadre, hors processus ou non, imbriqué ou non) n'est vue ni par `routeWebSocket` (qui ne remplace
 // `WebSocket` que dans les cadres), ni par CDP Fetch (qui n'intercepte pas les WebSocket), ni par le proxy d'egress (un
 // CONNECT sans chemin). Voies écartées, constatées sur Chromium 153 : la suspension du worker au démarrage ne tient pas
@@ -25,7 +25,7 @@
 //   posée est coupée ;
 // - un document ne crée aucun worker blob: ou data: (garde des documents, page-guard.ts) : le code d'un worker vient
 //   toujours d'une réponse http(s) qui passe ici.
-// Les WebSocket de la page et des cadres restent contrôlés par `routeWebSocket` (robots.txt compris).
+// Les WebSocket de la page et des cadres restent contrôlés par `routeWebSocket`.
 // Règles de spéculation (revue de 1.11) : une réponse `application/speculationrules+json` (règles chargées par l'en-tête
 // `Speculation-Rules`) est coupée ; le préchargement qu'elle déclencherait part du navigateur hors de toute interception
 // (voir page-guard.ts).
@@ -173,7 +173,7 @@ async function onResponse(channel: Channel, params: Record<string, unknown>): Pr
 
 /**
  * Verdict d'une requête présentée par CDP : `check` pour toute requête http(s) d'un domaine de l'API ; hors http(s)
- * (data:, blob:) ou hors des domaines (coupée par le verrou de domaines et le proxy d'egress), aucun robots.txt à lire.
+ * (data:, blob:) ou hors des domaines (coupée par le verrou de domaines et le proxy d'egress), rien à contrôler ici.
  * Échec fermé : une URL illisible est coupée, comme un contrôle qui échoue.
  */
 export async function requestVerdict(url: string, inScope: (url: string) => boolean, check: RequestCheck, hop: Omit<BrowserRequestCheck, 'url'>): Promise<boolean> {
@@ -269,7 +269,7 @@ const PAGE_TARGETS: ReadonlySet<string> = new Set(['page', 'iframe', 'worker', '
 const MAX_ORIGINS = 2000;
 
 /**
- * Échec fermé sur les SharedWorker et les service workers (revue de 1.11 et de fix-inv11-agent, INV11 ; F-20261001-07).
+ * Échec fermé sur les SharedWorker et les service workers (revue de 1.11 et de fix-inv11-agent ; F-20261001-07).
  * Leurs requêtes ne passent ni par `context.route` (Playwright ne route pas celles d'un service worker d'un contexte
  * `serviceWorkers: 'block'`, ni jamais celles d'un SharedWorker), ni par le contrôle CDP de la page (cibles hors de son
  * attachement automatique). Les suspendre au démarrage ne tient pas : Playwright relance lui-même chaque service worker
