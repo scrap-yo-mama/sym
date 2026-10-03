@@ -17,6 +17,8 @@ Un seul point d'entrée, `exports["."]` = `dist/index.js` (types `dist/index.d.t
 - Garde-fous : `assertStagehandLocalOnly`, `STAGEHAND_EXCLUDED_TOOLS`, `toolsOutsideClosedList`, `AgentToolsetNotClosedError`.
 - Extraction et enquête : `extractRecordsWithLlm`, `runHybridSteps`, `proposeInvestigation`, `installSemanticRecorder`,
   `sanitizeModelPrompt`, versions de prompts (`*PromptVersion`).
+- Compilation E4 → déclaratif `html` (constat UX-20) : `compileHtmlStrategy` (rôle `investigate`, vérification sans LLM par
+  `verifyHtmlStrategy` de `@runtime/core/investigation`, une nouvelle tentative au plus), `htmlCompileMessages`.
 - Règles Markdown (tâche 2.10) : `readSkillsPhase` et `renderSkillBodies` (outil `read_skill` de nos prompts),
   `stagehandAgentConfig` (`systemPrompt`, `tools: { read_skill }`, aucune intégration MCP).
 
