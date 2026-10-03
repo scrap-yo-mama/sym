@@ -13,6 +13,8 @@ export const INVESTIGATION_EVENTS = Object.freeze({
   schemaValidated: 'schema.validated',
   attemptFinished: 'attempt.finished',
   attemptPruned: 'attempt.pruned',
+  /** Essai E4 conforme compilé (ou non) en stratégie déclarative `html` rejouée sans LLM (constat UX-20). */
+  strategyCompiled: 'strategy.compiled',
   statusChanged: 'status.changed',
   actionRequired: 'action.required',
   finished: 'investigation.finished',

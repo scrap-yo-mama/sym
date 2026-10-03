@@ -154,7 +154,7 @@ export function outputSchemaOf(fields: readonly ProposalField[]): Record<string,
 }
 
 /** Champs requis et types d'un schéma de sortie validé par l'appelant (`validate_schema` avec correction). */
-function schemaFieldTypes(schema: unknown): Map<string, { type: string; required: boolean }> {
+export function schemaFieldTypes(schema: unknown): Map<string, { type: string; required: boolean }> {
   const out = new Map<string, { type: string; required: boolean }>();
   const s = schema as { properties?: Record<string, { type?: unknown }>; required?: unknown };
   const required = new Set(Array.isArray(s?.required) ? s.required.filter((r): r is string => typeof r === 'string') : []);
