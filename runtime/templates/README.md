@@ -4,7 +4,7 @@ Exports d'API d'exemple au format portable `scrapyomama.api` 1.0 (tâche 3.12, C
 neuve sans galerie hébergée. Chaque fichier s'importe tel quel :
 
 ```sh
-# Aperçu (rien n'est écrit), puis confirmation : l'API repasse par l'enquête (rapport d'accès, robots.txt, puis essais).
+# Aperçu (rien n'est écrit), puis confirmation : l'API repasse par l'enquête (rapport d'accès, puis essais).
 curl -sS -H "Authorization: Bearer $SYM_API_KEY" -H 'content-type: application/json' \
   --data @templates/livres-demo.api.json "$PUBLIC_URL/api/apis/import"
 curl -sS -H "Authorization: Bearer $SYM_API_KEY" -H 'content-type: application/json' \
@@ -30,5 +30,5 @@ curl -sS -H "Authorization: Bearer $SYM_API_KEY" -H 'content-type: application/j
 - Fichier **scellé** (`integrity.sha256`, empreinte du JSON canonique sans `integrity`) et écrit à **clés triées** : un
   modèle modifié à la main doit être rescellé (`sealExport` puis `formatExport` de `@runtime/core`), sinon l'import le
   refuse (`integrity_mismatch`) et la CI échoue.
-- Un import ne lance aucune requête par lui-même : l'enquête qui suit respecte robots.txt, la cadence par domaine et le
+- Un import ne lance aucune requête par lui-même : l'enquête qui suit respecte la cadence par domaine et passe par le
   rapport d'accès, comme toute API.

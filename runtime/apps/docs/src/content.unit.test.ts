@@ -164,9 +164,9 @@ describe('assert_out_of_scope_cites_x1_x6 : « Hors périmètre » (16 § 2, _ex
     expect(normalize(answer.exec(page)?.[1] ?? 'absente')).toBe(normalize(answer.exec(sibling)?.[1] ?? 'absente'));
   });
 
-  test('l\'exclusion de robots.txt, du tunnel après blocage et de l\'identité sont dites', () => {
+  test('robots.txt comme simple information (D-91), l\'IP inchangée après un refus et l\'avocat sont dits', () => {
     const text = page.replace(/<!--[\s\S]*?-->/g, '');
-    expect(text).toMatch(/robots\.txt/);
+    expect(text).toMatch(/robots\.txt[^\n]*ne conditionne pas la collecte/);
     expect(text).toMatch(/ne change jamais d'IP|jamais de changement d'IP/i);
     expect(text).toMatch(/à valider par un avocat/i);
   });
@@ -175,12 +175,6 @@ describe('assert_out_of_scope_cites_x1_x6 : « Hors périmètre » (16 § 2, _ex
     for (const p of PAGES) {
       if (p.generated) continue;
       expect(readSource(p), p.path).not.toMatch(PROTECTION_NAMES);
-    }
-  });
-
-  test('aucune page ne décrit une option pour ignorer robots.txt', () => {
-    for (const p of handWritten) {
-      expect(readSource(p), p.path).not.toMatch(/IGNORE_ROBOTS|ignore_robots|respect_robots\s*[:=]\s*false|robots\s*[:=]\s*['"]?(?:ignore|off)/i);
     }
   });
 });

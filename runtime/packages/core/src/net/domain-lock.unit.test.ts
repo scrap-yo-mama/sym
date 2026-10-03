@@ -23,21 +23,3 @@ describe('verrou de domaines', () => {
     expect(lock('autre.test')).toBe(false);
   });
 });
-
-describe('robots.txt de la reconnaissance : mêmes domaines que le verrou', () => {
-  test('portée de site explicite : robots.txt du sous-domaine lu ; autre site refusé sans requête', async () => {
-    const { RobotsGate } = await import('../access/gate.js');
-    const fetched: string[] = [];
-    const gate = new RobotsGate({
-      fetch: async (url) => {
-        fetched.push(url);
-        return { status: 200, location: null, body: 'User-agent: *\nAllow: /\n', truncated: false };
-      },
-      allowedHosts: ['www.exemple.test'],
-      allowedHostSuffixes: ['exemple.test'],
-    });
-    expect((await gate.check('https://api.exemple.test/v1/items')).allowed).toBe(true);
-    expect(await gate.check('https://autre.test/x')).toMatchObject({ allowed: false, failure: { detail: 'domain_not_allowed' } });
-    expect(fetched).toEqual(['https://api.exemple.test/robots.txt']);
-  });
-});

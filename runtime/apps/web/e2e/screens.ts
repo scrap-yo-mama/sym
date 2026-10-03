@@ -107,7 +107,7 @@ const REPLAYED_RUN = UUID(102);
 const replayFrames = [
   { event: 'investigation_started', data: { seq: 1, at: '2026-09-21T10:00:00.000Z', payload: {} } },
   { event: 'phase.started', data: { seq: 2, at: '2026-09-21T10:00:01.000Z', payload: { phase: 'access_check' } } },
-  { event: 'access_report', data: { seq: 3, at: '2026-09-21T10:00:02.000Z', payload: { robots: 'allowed' } } },
+  { event: 'access_report', data: { seq: 3, at: '2026-09-21T10:00:02.000Z', payload: { signal: 'allowed' } } },
   { event: 'phase.started', data: { seq: 4, at: '2026-09-21T10:00:03.000Z', payload: { phase: 'testing' } } },
   { event: 'attempt.finished', data: { seq: 5, at: '2026-09-21T10:00:05.000Z', payload: { n: 1, execution: 'fetch', network: 'direct', result: 'extraction' } } },
   { event: 'schema.proposed', data: { seq: 6, at: '2026-09-21T10:00:06.000Z', payload: {} } },

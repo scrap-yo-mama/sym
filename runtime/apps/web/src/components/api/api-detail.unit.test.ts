@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// Fiche d'une API (06 § 2, critères de 06 § 4.3) : panneau « Bloquée » sans lien vers le tunnel, aucun réglage pour ignorer
-// robots.txt, coût estimé avant le bouton Lancer, diff à trois niveaux. Rendu côté serveur sous Node.
+// Fiche d'une API (06 § 2, critères de 06 § 4.3) : panneau « Bloquée » sans lien vers le tunnel, robots.txt présenté ni comme
+// une règle ni comme un blocage (D-91), coût estimé avant le bouton Lancer, diff à trois niveaux. Rendu côté serveur sous Node.
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, describe, expect, test } from 'vitest';
@@ -57,7 +57,7 @@ describe('panneau « Bloquée »', () => {
   for (const locale of ['fr', 'en'] as const) {
     test(`assert_blocked_panel_no_tunnel_link : trois parties, essai déclencheur, coût, 0 bouton ou lien vers le tunnel (${locale})`, async () => {
       const messages = locale === 'fr' ? fr : en;
-      const report = { id: UUID(5), checked_at: '2026-09-30T10:00:00.000Z', signal: 'review' as const, robots: { status: 'allowed' as const }, official_api_url: 'https://api.monsite.example/docs' };
+      const report = { id: UUID(5), checked_at: '2026-09-30T10:00:00.000Z', signal: 'review' as const, official_api_url: 'https://api.monsite.example/docs' };
       const html = await renderHtml(BlockedPanel, { detail: blockedDetail({ access_report: report }) }, locale);
       for (const part of ['blocked-what', 'blocked-why', 'blocked-todo']) expect(html).toContain(`data-testid="${part}"`);
       const text = textOf(html);
@@ -90,14 +90,17 @@ describe('panneau « Bloquée »', () => {
     expectOnlyAllowedBlockedControls(withRoute, fr);
   });
 
-  test('variantes robots_disallowed et forbidden : textes du CDC, l’API officielle est un lien sûr', async () => {
-    const robots = await renderHtml(BlockedPanel, { detail: blockedDetail({ status_reason: { code: 'robots_disallowed', params: { domain: 'monsite.example' } }, access_report: { id: UUID(5), checked_at: '2026-09-30T10:00:00.000Z', signal: 'disallowed', robots: { status: 'disallowed' }, official_api_url: 'https://api.monsite.example/docs' } }) });
-    expect(textOf(robots)).toContain(fr.blockedPanel.what.robots);
-    expect(robots).toContain('href="https://api.monsite.example/docs"');
-    const forbidden = await renderHtml(BlockedPanel, { detail: blockedDetail({ status_reason: { code: 'forbidden', params: {} } }) });
+  test('variante forbidden et raison historique robots_disallowed (lue comme un refus) : textes du CDC, l’API officielle est un lien sûr', async () => {
+    const forbidden = await renderHtml(BlockedPanel, { detail: blockedDetail({ status_reason: { code: 'forbidden', params: {} }, access_report: { id: UUID(5), checked_at: '2026-09-30T10:00:00.000Z', signal: 'review', official_api_url: 'https://api.monsite.example/docs' } }) });
     expect(textOf(forbidden)).toContain(fr.blockedPanel.what.forbidden);
+    expect(forbidden).toContain('href="https://api.monsite.example/docs"');
+    // Ancienne API arrêtée avec la raison historique `robots_disallowed` (D-91) : variante « refus », même rendu que forbidden.
+    const legacy = await renderHtml(BlockedPanel, { detail: blockedDetail({ status_reason: { code: 'robots_disallowed', params: { domain: 'monsite.example' } } }) });
+    expect(legacy).toContain('data-variant="forbidden"');
+    expect(textOf(legacy)).toContain(fr.blockedPanel.what.forbidden);
+    expect(textOf(legacy)).toContain(fr.blockedPanel.why.forbidden);
     // Une valeur du serveur qui n'est pas un lien http(s) ne devient jamais un lien (javascript:, data:).
-    const hostile = await renderHtml(BlockedPanel, { detail: blockedDetail({ access_report: { id: UUID(5), checked_at: '2026-09-30T10:00:00.000Z', signal: 'review', robots: { status: 'allowed' }, official_api_url: 'javascript:alert(1)' } }) });
+    const hostile = await renderHtml(BlockedPanel, { detail: blockedDetail({ access_report: { id: UUID(5), checked_at: '2026-09-30T10:00:00.000Z', signal: 'review', official_api_url: 'javascript:alert(1)' } }) });
     expect(hostile).not.toContain('javascript:');
   });
 
@@ -120,16 +123,20 @@ describe('panneau « Bloquée »', () => {
 });
 
 describe('onglet Accès', () => {
-  const report = { id: UUID(5), checked_at: '2026-09-30T10:00:00.000Z', signal: 'disallowed' as const, robots: { status: 'disallowed' as const, fetched_at: '2026-09-30T09:59:00.000Z', rule: 'Disallow: /private/' }, usage_signals: [{ kind: 'Content-Signal', value: 'ai-train=no' }], llms_txt: true, payment_offer: null, official_api_url: 'https://api.monsite.example/docs' };
+  const report = { id: UUID(5), checked_at: '2026-09-30T10:00:00.000Z', signal: 'review' as const, usage_signals: [{ kind: 'Content-Signal', value: 'ai-train=no' }], llms_txt: true, payment_offer: '0.01 USD / requête (HTTP 402)', official_api_url: 'https://api.monsite.example/docs' };
+  /** Rapport et politique écrits avant D-91 : section `robots` et clé `access_policy.robots` (valeurs historiques). */
+  const legacyReport = { ...report, signal: 'disallowed' as const, robots: { status: 'disallowed' as const, fetched_at: '2026-09-30T09:59:00.000Z', rule: 'Disallow: /private/' } };
 
-  test('assert_no_robots_override_ui : lecture seule, aucun champ ni bouton, robots.txt toujours respecté', async () => {
-    const html = await renderHtml(ApiAccessTab, { detail: blockedDetail({ access_report: report }) });
+  test('lecture seule : aucun champ ni bouton ; signaux d’usage, llms.txt, offre 402 et voie officielle affichés', async () => {
+    const html = await renderHtml(ApiAccessTab, { detail: blockedDetail({ access_report: report, access_policy: { report_id: UUID(5), user_agent_contact: 'ops@monsite.example' } }) });
     expect(html).not.toMatch(/<input|<select|<textarea|<button|type="checkbox"|role="switch"|role="checkbox"/);
     const text = textOf(html);
-    expect(text).toContain('Disallow: /private/');
     expect(text).toContain('Content-Signal');
-    expect(text).toContain(fr.accessTab.robotsAlways);
-    expect(html).toContain('data-testid="access-policy-robots">respect<');
+    expect(text).toContain(fr.accessTab.signalsHint);
+    expect(html).toContain('data-testid="llms-txt">' + fr.accessTab.found + '<');
+    expect(text).toContain('0.01 USD / requête (HTTP 402)');
+    expect(html).toContain('data-testid="access-policy-contact">ops@monsite.example<');
+    expect(text).toContain(fr.accessTab.policyFixed);
     // « Utiliser l'API officielle » est un lien, pas une action ; il n'existe que si l'API officielle existe.
     expect(html).toContain('data-testid="use-official-api"');
     const none = await renderHtml(ApiAccessTab, { detail: blockedDetail({ access_report: { ...report, official_api_url: null } }) });
@@ -137,7 +144,7 @@ describe('onglet Accès', () => {
     expect(textOf(await renderHtml(ApiAccessTab, { detail: apiDetail({ access_report: null }) }))).toContain(fr.accessTab.noReport);
   });
 
-  test('assert_no_robots_override_ui : aucune option pour ignorer robots.txt dans le code de la console (fiche, réglages, requêtes)', () => {
+  test('lecture seule : aucune requête de la console n’envoie access_policy (politique fixe)', () => {
     const webSrc = new URL('../../', import.meta.url).pathname;
     const files = (dir: string): string[] =>
       readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
@@ -145,15 +152,27 @@ describe('onglet Accès', () => {
         if (entry.isDirectory()) return files(full);
         return /\.(vue|ts)$/.test(entry.name) && !/\.test\.ts$/.test(entry.name) ? [full] : [];
       });
-    const forbidden = /ignore[_ -]?robots|robots[_ -]?(?:override|ignore|bypass|off|disabled?|opt[_ -]?out)|skip[_ -]?robots|(?:override|bypass|disable|ignore)[_ -]?robots|obey[_ -]?robots/i;
-    for (const file of files(webSrc)) {
-      // Les fichiers de langue peuvent dire que robots.txt est « toujours respecté, aucun réglage ne permet de l'ignorer » : ce sont des textes, pas des options.
-      if (file.endsWith('.json')) continue;
-      expect(readFileSync(file, 'utf8'), file).not.toMatch(forbidden);
-    }
-    // Aucune requête de la console n'envoie access_policy (INV11 : non modifiable).
     for (const file of files(webSrc)) expect(readFileSync(file, 'utf8'), file).not.toMatch(/access_policy\s*:/);
   });
+
+  for (const locale of ['fr', 'en'] as const) {
+    test(`assert_robots_not_gating — la console ne présente le robots.txt ni comme une règle ni comme un blocage (${locale})`, async () => {
+      // Onglet Accès : aucune section robots, même pour un rapport ancien qui la porte et une politique écrite avant D-91.
+      for (const access_report of [report, legacyReport]) {
+        const tab = await renderHtml(ApiAccessTab, { detail: blockedDetail({ access_report, access_policy: { robots: 'respect', report_id: UUID(5) } }) }, locale);
+        expect(tab).not.toMatch(/robots/i);
+        expect(tab).not.toContain('Disallow: /private/');
+      }
+      // Panneau « Bloquée » : aucune variante ni texte robots, pour chaque cause, y compris la raison historique.
+      for (const code of ['blocked_by_protection', 'forbidden', 'robots_disallowed']) {
+        const panel = await renderHtml(BlockedPanel, { detail: blockedDetail({ status_reason: { code, params: { domain: 'monsite.example' } }, access_report: legacyReport }) }, locale);
+        expect(panel, code).toContain('data-testid="blocked-panel"');
+        expect(panel, code).not.toMatch(/robots/i);
+      }
+      // Aucun texte de la console ne parle du robots.txt (ni règle respectée, ni lecture, ni blocage).
+      expect(JSON.stringify(locale === 'fr' ? fr : en)).not.toMatch(/robots\.txt/i);
+    });
+  }
 });
 
 describe('formulaire Lancer', () => {

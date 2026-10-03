@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Exécuteur des runs d'enquête (`runs.kind = investigation`, tâche 2.1, 04 §2-§4, figure 1). Une enquête tient en un
 // ou deux runs : premier appel (étape 0, reconnaissance, schéma proposé ; s'arrête en `awaiting_schema_validation` sauf
-// `auto_validate`), puis, après `validate_schema`, les essais. Chaque run refait l'étape 0 (relue au plus toutes les
-// 24 h, cache de robots.txt) : la base refuse tout essai sans rapport d'accès favorable antérieur (0015).
-// 0. Rapport d'accès (1.11) : robots.txt sans option (INV11), signaux, 402 ; contact d'instance exigé (17 §5) ; identité
-//    des runs (D-33) : User-Agent réel du moteur, jeton d'instance et `From` seulement avec `identify_instance`. Refus →
-//    `bloquee` / `action_requise` / `erreur` (transitions 2, 3, 4), aucune autre requête.
+// `auto_validate`), puis, après `validate_schema`, les essais. Chaque run refait l'étape 0 : la base refuse tout essai
+// sans rapport d'accès favorable antérieur (0015).
+// 0. Rapport d'accès (1.11) : sonde de la page (signaux, 402, CGU, voies déclarées), `llms.txt` et `sitemap.xml` en
+//    sondes passives ; le robots.txt n'est pas lu (D-91). Contact d'instance exigé (17 §5) ; identité des runs (D-33) :
+//    User-Agent réel du moteur, jeton d'instance et `From` seulement avec `identify_instance`. Refus → `bloquee` /
+//    `action_requise` (transitions 3, 4), aucune autre requête.
 // 1. Reconnaissance : une passe E3 sur N1 (Chromium : trafic XHR / fetch capturé et classé, document servi et rendu), ou,
 //    sans navigateur, la page et les URL de données que ses scripts en ligne appellent ; EN TUNNEL (page et URL de données
 //    lues par l'extension du propriétaire, `page_fetch`) quand la session est requise ou que la politique réseau n'admet
@@ -17,7 +18,7 @@
 //    l'appelant (`validate_schema`) ou, avec `auto_validate`, par l'agent, journalisé.
 // 3. Essais par coût estimé croissant (`buildTrialPlan`, `runTrials`), élagués par le classifieur, N = 3 exécutions
 //    conformes dont une en page 2 si la stratégie pagine ; chaque exécution passe par l'exécuteur de stratégie et TOUTES
-//    ses gardes (robots, SSRF, verrou de domaines, cadence, plafonds, classification avant extraction). Un couple = un
+//    ses gardes (SSRF, verrou de domaines, cadence, plafonds, classification avant extraction). Un couple = un
 //    essai journalisé (`run_attempts`, INV2, INV4) et un `attempt.finished` ; un élagage = un `attempt.pruned`.
 // 4. Fin : stratégie v1 (`created_by = investigation` ; une trace E6 n'est gardée que compilée en E5, 04 §3.1), schéma de
 //    sortie validé et schéma d'entrée proposé posés sur l'API, résultat livré (dataset du run), statut `sain` (1) ; sinon
@@ -57,14 +58,9 @@ import {
   buildAccessReport,
   InstanceContactError,
   requireInstanceContact,
-  ROBOTS_MAX_BYTES,
-  RobotsCache,
-  RobotsGate,
   sessionAccessProbe,
-  sessionRobotsFetcher,
   type AccessProbe,
   type AccessReport,
-  type RobotsFetcher,
 } from '@runtime/core/access';
 import { classifyExchange, classifyTransportError, domainRequestPacer, failureRoute, isGeoRestrictionDetail, type ExecFailure, type HttpExchange, type RequestPacer } from '@runtime/core/exec';
 import {
@@ -191,7 +187,6 @@ export type InvestigationExecutorDeps = {
   readonly llm?: InvestigationLlmPorts;
   /** Exécuteurs agentiques E4-E6 branchés dans l'exécuteur de stratégie : leurs couples entrent alors dans le plan. */
   readonly agentic?: boolean;
-  readonly robotsCache?: RobotsCache;
   readonly instanceContact?: () => Promise<string | null>;
   /** Réglage `identify_instance` (désactivé par défaut) : jeton d'instance et `From`, comme les runs (D-33, 17 §5). */
   readonly identifyInstance?: () => Promise<boolean>;
@@ -217,7 +212,7 @@ export type InvestigationExecutorDeps = {
 };
 
 const round6 = (v: number): number => Math.round(v * 1e6) / 1e6;
-const BLOCKING = new Set<FailureClass>(['blocked_by_protection', 'forbidden', 'robots_disallowed']);
+const BLOCKING = new Set<FailureClass>(['blocked_by_protection', 'forbidden']);
 const ACTION = new Set<FailureClass>(['auth_required', 'payment_required', 'account_limit']);
 /** Corps d'une page lue par la reconnaissance statique. */
 const STATIC_MAX_BYTES = 5_000_000;
@@ -258,7 +253,6 @@ const stopCheckView = (o: PairOutcome) => (o.stop_check === null ? undefined : {
 /** Transport de l'étape 0 et de la reconnaissance : réseau serveur (N1-N3) ou tunnel de l'extension (session requise). */
 type AccessPorts = {
   readonly mode: 'server' | 'tunnel';
-  readonly robots: RobotsGate;
   readonly probe: AccessProbe;
   /** Sonde de la reconnaissance sans navigateur (corps bornés plus largement). */
   readonly reconProbe: AccessProbe;
@@ -271,7 +265,7 @@ type AccessPorts = {
   close(): Promise<void>;
 };
 
-type SessionBase = Omit<Parameters<typeof openNetworkSession>[0], 'allowedHosts' | 'allowedHostSuffixes' | 'costCeiling' | 'checkUrl'>;
+type SessionBase = Omit<Parameters<typeof openNetworkSession>[0], 'allowedHosts' | 'allowedHostSuffixes' | 'costCeiling'>;
 
 /**
  * Cause lisible d'une exception inattendue de l'enquête : la classe de l'erreur et son code, jamais son message (il peut
@@ -344,7 +338,6 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
 
 function investigationRun(deps: InvestigationExecutorDeps): RunExecutor {
   const now = deps.now ?? Date.now;
-  const robotsCache = deps.robotsCache ?? new RobotsCache();
   const logger = deps.logger ?? pino({ enabled: false });
   const quality = deps.quality ?? settingsQualityPorts(deps.pool);
 
@@ -396,7 +389,7 @@ function investigationRun(deps: InvestigationExecutorDeps): RunExecutor {
     };
     /**
      * Fin d'enquête en échec : statut visé par la classe (04 §6), TOUJOURS phase close et récit fermé. Refus et défis →
-     * `bloquee` (4), connexion, paiement, limite de compte → `action_requise` (3), robots.txt injoignable → `erreur` (2) ;
+     * `bloquee` (4), connexion, paiement, limite de compte → `action_requise` (3) ;
      * toute autre classe (essais épuisés sans conforme quelle que soit la classe du dernier, 429, 5xx persistants, LLM
      * sans repli, configuration) → `investigation_failed` : `erreur` (2), ou le statut d'avant une ré-enquête (21). Aucun
      * worker ne relance une enquête : la laisser ouverte la figerait en `enquete` sans run actif (INV3). La relance est
@@ -406,7 +399,6 @@ function investigationRun(deps: InvestigationExecutorDeps): RunExecutor {
       const cls = failure.failure_class;
       let statusEvent: StatusEventInput;
       if (BLOCKING.has(cls) || ACTION.has(cls)) statusEvent = { type: 'run_failed', failureClass: cls, ...(failure.status === undefined ? {} : { httpStatus: failure.status }) };
-      else if (cls === 'robots_unreachable') statusEvent = { type: 'investigation_failed', cause: 'robots_unreachable' };
       else statusEvent = { type: 'investigation_failed', cause: 'budget_exhausted' };
       await save('done');
       if (ACTION.has(cls)) await event(EV.actionRequired, { cause: cls, domain: host });
@@ -468,10 +460,10 @@ function investigationRun(deps: InvestigationExecutorDeps): RunExecutor {
     if (refusal.action === 'stop') {
       await save('done');
       await ctx.log('warn', 'prior_refusal', { domain, at: refusal.refusal.at, reason: refusal.reason });
-      await event(EV.finished, { outcome: 'failed', failure_class: refusal.reason === 'robots_disallowed' ? 'robots_disallowed' : 'forbidden', detail: 'prior_refusal', at: 'memory', budget: budgetView() });
-      // `robots_disallowed` : refus de robots.txt (transition 4) ; `forbidden` ou `bloquee` : arrêt préventif (4, `prior_refusal`).
-      await applyStatus(refusal.reason === 'robots_disallowed' ? { type: 'run_failed', failureClass: 'robots_disallowed' } : { type: 'prior_refusal' });
-      return { state: 'failed', failure_class: refusal.reason === 'robots_disallowed' ? 'robots_disallowed' : 'forbidden', retryable: false, error_detail: 'prior_refusal' };
+      await event(EV.finished, { outcome: 'failed', failure_class: 'forbidden', detail: 'prior_refusal', at: 'memory', budget: budgetView() });
+      // `forbidden` ou `bloquee` : arrêt préventif (transition 4, `prior_refusal`).
+      await applyStatus({ type: 'prior_refusal' });
+      return { state: 'failed', failure_class: 'forbidden', retryable: false, error_detail: 'prior_refusal' };
     }
     // Ré-enquête manuelle (18) d'un domaine refusé : un seul essai de confirmation au couple le moins cher, sans changement
     // de réseau (premier réseau de la politique, jamais le tunnel ni un proxy de plus).
@@ -521,13 +513,12 @@ function investigationRun(deps: InvestigationExecutorDeps): RunExecutor {
       if (error instanceof InstanceContactError) return await finishFailed({ failure_class: 'code_error', retryable: false, detail: error.code }, 'setup');
       throw error;
     }
-    const pacerFor = (robots?: RobotsGate): RequestPacer | undefined =>
+    const pacer: RequestPacer | undefined =
       deps.pacer === undefined
         ? undefined
         : domainRequestPacer(deps.pacer, {
             ...(target.api.domainPacing.min_delay_ms === undefined ? {} : { minDelayMs: target.api.domainPacing.min_delay_ms }),
             ...(target.api.domainPacing.max_wait_ms === undefined ? {} : { maxWaitMs: target.api.domainPacing.max_wait_ms }),
-            ...(robots === undefined ? {} : { crawlDelayMs: robots.crawlDelayMs }),
           });
 
     let ports: AccessPorts;
@@ -542,21 +533,12 @@ function investigationRun(deps: InvestigationExecutorDeps): RunExecutor {
         signal,
         ctx.waitingTunnel === undefined ? undefined : (waiting) => ctx.waitingTunnel!(waiting),
       );
-      const robots = new RobotsGate({
-        fetch: tunnelRobotsFetcher(tunnel),
-        cache: robotsCache,
-        signal,
-        allowedHosts: [host],
-        allowedHostSuffixes: [scope],
-        ...(pacerFor() === undefined ? {} : { pacer: pacerFor()! }),
-      });
       ports = {
         mode: 'tunnel',
-        robots,
         // Corps borné comme la reconnaissance : en tunnel, une page plus grosse que la borne serait refusée, pas tronquée.
         probe: tunnelProbe(tunnel, STATIC_MAX_BYTES),
         reconProbe: tunnelProbe(tunnel, STATIC_MAX_BYTES),
-        pacer: pacerFor(robots),
+        pacer,
         proxyUsd: () => 0,
         tunnel,
         server: null,
@@ -584,38 +566,25 @@ function investigationRun(deps: InvestigationExecutorDeps): RunExecutor {
         userAgent,
         ...(from === null ? {} : { from }),
       };
-      const robotsSession = openNetworkSession({ ...sessionBase, costCeiling: { maxUsd: ceiling } });
-      const robots = new RobotsGate({
-        fetch: sessionRobotsFetcher(robotsSession),
-        cache: robotsCache,
-        signal,
-        allowedHosts: [host],
-        allowedHostSuffixes: [scope],
-        ...(pacerFor() === undefined ? {} : { pacer: pacerFor()! }),
-      });
       const session: NetworkSession = openNetworkSession({
         ...sessionBase,
         allowedHosts: [host],
         allowedHostSuffixes: [scope],
-        checkUrl: robots.checkUrl,
-        costCeiling: { maxUsd: ceiling, otherUsd: () => robotsSession.usage().costUsd },
+        costCeiling: { maxUsd: ceiling },
       });
       ports = {
         mode: 'server',
-        robots,
         probe: sessionAccessProbe(session),
         reconProbe: sessionAccessProbe(session, STATIC_MAX_BYTES),
-        pacer: pacerFor(robots),
-        proxyUsd: () => robotsSession.usage().costUsd + session.usage().costUsd,
+        pacer,
+        proxyUsd: () => session.usage().costUsd,
         tunnel: null,
         server: { sessionBase, ceiling },
         close: async () => {
           await session.close().catch(() => undefined);
-          await robotsSession.close().catch(() => undefined);
         },
       };
     }
-    const { robots, pacer } = ports;
     /** Arrêt du tunnel (extension hors ligne, défi, site non connecté) : il prime sur l'échec vu par l'étape. */
     const tunnelOutcome = async (at: string): Promise<RunResult | null> => {
       const t = ports.tunnel;
@@ -630,7 +599,7 @@ function investigationRun(deps: InvestigationExecutorDeps): RunExecutor {
       await event(EV.started, { phase, url: narrativeUrl(pageUrl), domain: host, network: ports.mode === 'tunnel' ? 'tunnel' : first?.mode, budget: budgetView() });
 
       // --- 0. Rapport d'accès -------------------------------------------------------------------------------------
-      const report: AccessReport = await buildAccessReport({ url: pageUrl, gate: robots, probe: ports.probe, ...(pacer === undefined ? {} : { pacer }), signal, now });
+      const report: AccessReport = await buildAccessReport({ url: pageUrl, probe: ports.probe, ...(pacer === undefined ? {} : { pacer }), signal, now });
       const stopped0 = await tunnelOutcome('access_check');
       if (stopped0 !== null) return stopped0;
       await recordAccessReport(deps.pool, { runId: ctx.runId, ownerId: ctx.ownerId, payload: accessReportEventPayload(report) });
@@ -689,10 +658,10 @@ function investigationRun(deps: InvestigationExecutorDeps): RunExecutor {
         }
         const recon =
           ports.mode === 'tunnel'
-            ? await staticRecon(ports.reconProbe, { url: pageUrl, allowHost: (h) => withinSiteScope(h, scope) && hostWithinDomain(h, ports.tunnel!.domain), signal, robots, mode: 'tunnel', ...(pacer === undefined ? {} : { pacer }) })
+            ? await staticRecon(ports.reconProbe, { url: pageUrl, allowHost: (h) => withinSiteScope(h, scope) && hostWithinDomain(h, ports.tunnel!.domain), signal, mode: 'tunnel', ...(pacer === undefined ? {} : { pacer }) })
             : deps.browsers !== null
-              ? await browserRecon(deps, { url: pageUrl, host, scope, signal, robots, userAgent, sessionBase: ports.server!.sessionBase, ceiling: ports.server!.ceiling, otherUsd: ports.proxyUsd, ...(pacer === undefined ? {} : { pacer }) })
-              : await staticRecon(ports.reconProbe, { url: pageUrl, allowHost: (h) => withinSiteScope(h, scope), signal, robots, mode: 'static', ...(pacer === undefined ? {} : { pacer }) });
+              ? await browserRecon(deps, { url: pageUrl, host, scope, signal, userAgent, sessionBase: ports.server!.sessionBase, ceiling: ports.server!.ceiling, otherUsd: ports.proxyUsd, ...(pacer === undefined ? {} : { pacer }) })
+              : await staticRecon(ports.reconProbe, { url: pageUrl, allowHost: (h) => withinSiteScope(h, scope), signal, mode: 'static', ...(pacer === undefined ? {} : { pacer }) });
         await charge(ctx, ports.proxyUsd() + recon.proxyUsd);
         spent = round6(spent + ports.proxyUsd() + recon.proxyUsd);
         const stopped1 = await tunnelOutcome('reconnaissance');
@@ -1246,15 +1215,6 @@ function apiHostsOf(capture: ReconCapture, host: string, scope: string): string[
   return [...hosts];
 }
 
-/** Lecture de robots.txt par l'extension (`page_fetch`, redirections suivies par le navigateur), corps borné. */
-function tunnelRobotsFetcher(session: TunnelSession): RobotsFetcher {
-  const transport = pageFetchTransport(session, ROBOTS_MAX_BYTES);
-  return async (url, signal) => {
-    const res = await transport({ method: 'GET', url, headers: { accept: 'text/plain, */*;q=0.1' } }, signal);
-    return { status: res.status, location: null, body: res.status >= 200 && res.status < 300 ? res.body : '', truncated: false };
-  };
-}
-
 /** Sonde par l'extension (`page_fetch` dans un onglet du site) : un défi détecté arrête le tunnel sur-le-champ. */
 function tunnelProbe(session: TunnelSession, maxBytes: number): AccessProbe {
   const transport = pageFetchTransport(session, maxBytes);
@@ -1271,7 +1231,6 @@ async function browserRecon(
     host: string;
     scope: string;
     signal: AbortSignal;
-    robots: RobotsGate;
     userAgent: string;
     sessionBase: SessionBase;
     ceiling: number;
@@ -1283,7 +1242,6 @@ async function browserRecon(
     ...args.sessionBase,
     allowedHosts: [args.host],
     allowedHostSuffixes: [args.scope],
-    checkUrl: args.robots.checkUrl,
     costCeiling: { maxUsd: args.ceiling, otherUsd: args.otherUsd },
   });
   try {
@@ -1295,7 +1253,6 @@ async function browserRecon(
       allowedHosts: [args.host],
       allowedHostSuffixes: [args.scope],
       signal: args.signal,
-      access: args.robots.access,
       userAgent: args.userAgent,
       ...(args.pacer === undefined ? {} : { pacer: args.pacer }),
     });
@@ -1308,12 +1265,12 @@ async function browserRecon(
 /**
  * Reconnaissance sans navigateur (`DISABLE_BROWSER`) ou par l'extension (session requise) : la page (corps borné, classée
  * avant lecture), ses blobs, puis au plus `STATIC_MAX_ENDPOINTS` URL de données appelées par ses scripts en ligne (domaines
- * de l'API), chacune cadencée, contrôlée par robots.txt et classée ; un refus sur l'une arrête la reconnaissance (INV6).
+ * de l'API), chacune cadencée et classée ; un refus sur l'une arrête la reconnaissance (INV6).
  * En tunnel, les URL d'action (`isActionUrl` : déconnexion, suppression, désabonnement…) ne sont jamais rejouées.
  */
 async function staticRecon(
   probe: AccessProbe,
-  args: { url: string; allowHost: (host: string) => boolean; signal: AbortSignal; robots: RobotsGate; mode: 'static' | 'tunnel'; pacer?: RequestPacer },
+  args: { url: string; allowHost: (host: string) => boolean; signal: AbortSignal; mode: 'static' | 'tunnel'; pacer?: RequestPacer },
 ): Promise<ReconOutcome> {
   const empty = (failure: ExecFailure | null): ReconOutcome => ({ capture: { mode: args.mode, pageUrl: args.url, document: null, exchanges: [], totalBytes: 0 }, failure, proxyUsd: 0 });
   type Got = { readonly kind: 'failed'; readonly failure: ExecFailure } | { readonly kind: 'got'; readonly exchange: HttpExchange; readonly refused: ExecFailure | null };
@@ -1332,9 +1289,6 @@ async function staticRecon(
       return { kind: 'failed', failure: classifyTransportError(error) };
     }
   };
-  // La page passe par robots.txt comme ses URL de données (déjà vérifiée par l'étape 0, relue du cache).
-  const pageDecision = await args.robots.check(args.url);
-  if (!pageDecision.allowed) return empty(pageDecision.failure);
   const page = await get(args.url);
   if (page.kind === 'failed') return empty(page.failure);
   if (page.refused !== null) return empty(page.refused);
@@ -1346,13 +1300,8 @@ async function staticRecon(
     // En tunnel, la requête part avec les cookies de session de l'utilisateur : une URL d'action trouvée dans un script
     // (`/logout`, `/unsubscribe`, `/cart/clear`, souvent dans un gestionnaire de clic) n'est jamais rejouée.
     if (args.mode === 'tunnel' && isActionUrl(url)) continue;
-    const decision = await args.robots.check(url);
-    if (!decision.allowed) continue; // chemin interdit : 0 requête, la voie n'existe pas pour nous
     const res = await get(url);
-    if (res.kind === 'failed') {
-      if (res.failure.failure_class === 'robots_disallowed') continue;
-      return empty(res.failure);
-    }
+    if (res.kind === 'failed') return empty(res.failure);
     if (res.refused !== null) {
       // Un refus ou un défi arrête tout (INV6) ; un 404 ou une page sans JSON n'est qu'une voie vide.
       if (!failureRoute(res.refused.failure_class).agent) return empty(res.refused);

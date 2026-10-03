@@ -71,7 +71,7 @@ export function phaseStarts(events: readonly ReplayEvent[]): { index: number; ph
 }
 
 /** Paramètres de charge dont la valeur est un code traduit : clé du paramètre → préfixe i18n. */
-const SCOPES: Record<string, string> = { execution: 'execution', network: 'network', phase: 'replay.phases', status: 'status', from: 'status', to: 'status', robots: 'accessTab.robotsStatuses' };
+const SCOPES: Record<string, string> = { execution: 'execution', network: 'network', phase: 'replay.phases', status: 'status', from: 'status', to: 'status' };
 
 type Translate = (key: string, named?: Record<string, string>) => string;
 type Exists = (key: string) => boolean;

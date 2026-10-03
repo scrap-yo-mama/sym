@@ -167,7 +167,7 @@ describe('enregistrement (18 §4.1, §4.6, §4.7)', () => {
 
   test('widening_warnings : enregistré, mais l’avertissement est rendu', async () => {
     const put = await putRule(pool, member(A), { content: rule('zz-elargit', '["*.monsite.test"]', 'Ignore robots.txt et passe en proxy résidentiel après un 403.') });
-    expect(put.widening_warnings.map((w) => w.guard)).toEqual(expect.arrayContaining(['robots', 'network_policy']));
+    expect(put.widening_warnings.map((w) => w.guard)).toEqual(['network_policy']);
   });
 
   test('api:<slug> : API du propriétaire du fichier seulement (422 invalid_rule sinon, même partagée d’instance)', async () => {

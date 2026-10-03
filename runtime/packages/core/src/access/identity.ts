@@ -8,7 +8,8 @@
 // l'en-tête `From` (RFC 9110 §10.1.2). Version et contact sont ceux DE L'INSTANCE (celui de l'opérateur, jamais celui
 // de l'éditeur du logiciel) : saisi à l'assistant de premier démarrage (réglage `instance_contact`) ou fourni par
 // `INSTANCE_CONTACT`, requis avant la première enquête (`requireInstanceContact`).
-import { PRODUCT_TOKEN } from './robots.js';
+/** Jeton produit du User-Agent quand l'identification de l'instance est activée (17 §5). */
+export const PRODUCT_TOKEN = 'Scrapyomama';
 
 export class InstanceContactError extends Error {
   readonly code: 'instance_contact_missing' | 'instance_contact_invalid';
@@ -105,7 +106,7 @@ export function engineUserAgent(engine: EngineIdentity): string {
 }
 
 /**
- * LA fonction qui construit le User-Agent du robot, pour le client HTTP (E1, lecture de robots.txt) comme pour tout
+ * LA fonction qui construit le User-Agent du robot, pour le client HTTP (E1) comme pour tout
  * contexte Chromium. Sans `identify` (réglage `identify_instance` désactivé, le défaut) : la chaîne du moteur, telle
  * quelle. Avec `identify` : la même suivie du jeton produit (format de Googlebot), avec le contact de l'instance s'il
  * est posé : `... Safari/537.36 (compatible; Scrapyomama/<version>; +<contact>)`.

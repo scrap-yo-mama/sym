@@ -386,7 +386,7 @@ describe('assert_run_cost_capped : max_cost_usd tenu pendant le run (proxy d’e
       }
     });
 
-    // Revue de 1.11 (lecture de robots.txt sous plafond) : coupé dès le PREMIER bloc, le corps restait ouvert et le lecteur
+    // Revue de 1.11 (lecture bornée sous plafond) : coupé dès le PREMIER bloc, le corps restait ouvert et le lecteur
     // attendait son délai (ici aucun : il attendait indéfiniment). Le signal d'abandon de la session le coupe aussitôt.
     test('session réseau : corps coupé dès le premier bloc (budget presque épuisé) → erreur immédiate, coût ≤ plafond', async () => {
       const session = openNetworkSession({

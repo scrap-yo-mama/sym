@@ -168,7 +168,7 @@ describe('reconnaissance E3 (Chromium) : réponses de données classées, sous-d
     const sv = (await pool.query<{ spec: { request: { allowed_hosts: string[] } } }>('SELECT spec FROM strategy_versions WHERE api_id = $1', [apiId])).rows[0]!;
     expect(sv.spec.request.allowed_hosts).toEqual([SIB_API]);
     expect(site.hits.filter((h) => h.host === EVIL)).toEqual([]);
-    // Toutes les requêtes reçues (robots.txt, étape 0, passe Chromium : page, script, XHR ; essais) : UA du moteur, sans From.
+    // Toutes les requêtes reçues (étape 0, passe Chromium : page, script, XHR ; essais) : UA du moteur, sans From.
     const engineUa = buildUserAgent({ engine: installedEngineIdentity() });
     expect(engineUa).not.toMatch(/Scrapyomama|HeadlessChrome/);
     expect(site.hits.some((h) => h.path === '/app.js')).toBe(true);

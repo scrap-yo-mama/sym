@@ -173,7 +173,7 @@ export function persistenceAttemptOutcome(run: {
   if (run.state === 'succeeded') return { kind: 'recovered' };
   const cls = run.failureClass;
   const detail = run.detail ?? null;
-  // Un « non » : refus, défi, robots.txt, 401, 403, connexion ou paiement requis, 451, géo-restriction, refus du LLM.
+  // Un « non » : refus, défi, 401, 403, connexion ou paiement requis, 451, géo-restriction, refus du LLM.
   if (includes(BLOCKING_CLASSES, cls) || includes(INVESTIGATION_ACTION_CLASSES, cls)) return { kind: 'ended', ended: 'refused', reason: cls! };
   if (run.httpStatus === 401 || run.httpStatus === 403) return { kind: 'ended', ended: 'refused', reason: `http_${String(run.httpStatus)}` };
   if (isGeoRestriction(run)) return { kind: 'ended', ended: 'refused', reason: 'geo_restricted' };

@@ -82,7 +82,7 @@ Pendant une enquête, le texte de la réponse raconte ce qui s'est passé, parce
 
 ```text
 Enquête zz-books · books.toscrape.com · testing
-1. Rapport d'accès : robots.txt autorise /catalogue/ [0,2 s, 0 $]
+1. Rapport d'accès : conditions du site signalées, plan du site trouvé [0,2 s, 0 $]
 2. Reconnaissance : pas d'API JSON, pagination ?page= [3,1 s, 0,002 $]
 3. Essai fetch/direct : conforme, 20 items, page 2 OK [0,4 s, 0 $]
 Stratégie retenue : fetch/direct (E1, 0 $ par run)
@@ -90,7 +90,7 @@ Prochaine étape : appelle api_zz_books({ max_pages }) ou run_api.
 Console : https://<instance>/apis/zz-books
 ```
 
-Les mêmes faits sont dans `structuredContent` (`timeline`, `attempts`, `console_url`, `cost`). Le **rapport d'accès** (`robots.txt`, signaux d'usage, conditions du site) est toujours la première ligne : voir [Usage responsable](../explications/usage-responsable.md).
+Les mêmes faits sont dans `structuredContent` (`timeline`, `attempts`, `console_url`, `cost`). Le **rapport d'accès** (signaux d'usage, conditions du site) est toujours la première ligne : voir [Usage responsable](../explications/usage-responsable.md).
 
 ## Runs longs
 

@@ -302,9 +302,8 @@ describe('dossier de mémoire (r1 08)', () => {
 });
 
 describe('mémoire négative (r1 R14)', () => {
-  const refusal = (cls: 'robots_disallowed' | 'forbidden' | 'bloquee') => [{ domain: 'a.fr', at: '2026-09-20' , class: cls }];
-  test('assert_memory_refusal_stops_before_llm — robots_disallowed : arrêt sans requête ; forbidden ou bloquee : arrêt préventif prior_refusal', () => {
-    expect(priorRefusalDecision(refusal('robots_disallowed'), 'a.fr', null)).toMatchObject({ action: 'stop', reason: 'robots_disallowed' });
+  const refusal = (cls: 'forbidden' | 'bloquee') => [{ domain: 'a.fr', at: '2026-09-20' , class: cls }];
+  test('assert_memory_refusal_stops_before_llm — forbidden ou bloquee : arrêt préventif prior_refusal', () => {
     expect(priorRefusalDecision(refusal('forbidden'), 'a.fr', null)).toMatchObject({ action: 'stop', reason: 'prior_refusal' });
     expect(priorRefusalDecision(refusal('bloquee'), 'a.fr', 'reinvestigate_manual')).toMatchObject({ action: 'confirm_once' });
     expect(priorRefusalDecision(refusal('bloquee'), 'a.fr', 'backoff')).toMatchObject({ action: 'stop', reason: 'prior_refusal' });

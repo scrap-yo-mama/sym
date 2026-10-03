@@ -60,10 +60,9 @@ describe('assert_pacing_key_is_domain : clé de cadence', () => {
 });
 
 describe('délai effectif, gigue, Retry-After', () => {
-  test('Crawl-delay prime s’il est plus grand que le réglage de l’API, jamais l’inverse', () => {
-    expect(effectiveMinDelayMs(1500, 10_000)).toBe(10_000);
-    expect(effectiveMinDelayMs(1500, 500)).toBe(1500);
-    expect(effectiveMinDelayMs(1500, null)).toBe(1500);
+  test('le délai effectif est le réglage min_delay_ms de l’API, entier', () => {
+    expect(effectiveMinDelayMs(1500)).toBe(1500);
+    expect(effectiveMinDelayMs(1500.2)).toBe(1501);
     expect(() => effectiveMinDelayMs(-1)).toThrow(RangeError);
   });
 
@@ -117,7 +116,7 @@ describe('DomainPacer', () => {
     expect(sleeps).toEqual([]);
   });
 
-  test('délai effectif = max(API, Crawl-delay) et gigue transmis au magasin ; report lit Retry-After', async () => {
+  test('délai effectif de l’API et gigue transmis au magasin ; report lit Retry-After', async () => {
     const { clock } = fakeClock();
     const reserved: ReserveRequest[] = [];
     const recorded: PacingOutcome[] = [];
@@ -128,7 +127,7 @@ describe('DomainPacer', () => {
       },
       { clock, random: () => 0.5 },
     );
-    await pacer.acquire('https://example.com', { minDelayMs: 1000, crawlDelayMs: 4000, isRetry: true });
+    await pacer.acquire('https://example.com', { minDelayMs: 4000, isRetry: true });
     expect(reserved[0]).toMatchObject({ minDelayMs: 4000, jitterMs: 400, maxWaitMs: DEFAULT_PACING_POLICY.maxWaitMs, isRetry: true });
     await pacer.report('https://www.example.com/x', { kind: 'rate_limited', retryAfter: '7' });
     await pacer.report('https://example.com', { kind: 'ok' });

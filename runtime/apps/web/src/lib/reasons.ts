@@ -8,7 +8,10 @@ import type { ApiStatus } from '@/lib/status';
 
 export type ReasonMessage = components['schemas']['ReasonMessage'];
 
-/** Codes de la table de 06 § 4.2 (le drapeau `stale` compris), dans l'ordre de la table. */
+/**
+ * Codes de la table de 06 § 4.2 (le drapeau `stale` compris), dans l'ordre de la table. `robots_disallowed` et
+ * `robots_unreachable` ne sont plus produits (D-91) : une ligne ancienne qui les porte retombe sur le texte générique du statut.
+ */
 export const SPEC_REASON_CODES = [
   'retried',
   'escalated',
@@ -26,8 +29,6 @@ export const SPEC_REASON_CODES = [
   'geo_restriction',
   'blocked_by_protection',
   'forbidden',
-  'robots_disallowed',
-  'robots_unreachable',
   'payment_required',
   'auth_required',
   'cookie_expired',

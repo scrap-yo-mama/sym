@@ -327,9 +327,8 @@ export const secrets = pgTable(
 export { API_STATUSES, EXECUTIONS, FAILURE_CLASSES, NETWORKS, RUN_STATES };
 export type { FailureClass };
 
-/** access_policy par défaut (17 § 4) : `robots` n'a qu'une valeur (INV11), paiement jamais en V1. */
+/** access_policy par défaut (17 § 4) : paiement jamais en V1 ; sans `robots`, champ retiré par D-91 (migration 0021). */
 export const DEFAULT_ACCESS_POLICY = {
-  robots: 'respect',
   on_ai_signal: 'warn',
   intended_use: 'context',
   prefer_official: true,
@@ -390,7 +389,6 @@ export const apis = pgTable(
     unique('apis_project_slug_key').on(t.projectId, t.slug),
     index('apis_owner_id_idx').on(t.ownerId),
     check('apis_session_private', sql`NOT ${t.requiresSession} OR ${t.visibility} = 'private'`),
-    check('apis_access_policy_robots', sql`${t.accessPolicy} ->> 'robots' = 'respect'`),
     check('apis_access_policy_payment', sql`coalesce(${t.accessPolicy} #>> '{payment,mode}', 'never') = 'never'`),
     check('apis_persistence_budget_usd_check', sql`${t.persistenceBudgetUsd} IS NULL OR ${t.persistenceBudgetUsd} > 0`),
   ],

@@ -50,7 +50,7 @@ Sur un site qui exige un compte, rappelez-vous que ses conditions d'utilisation 
 
 Le worker envoie à l'extension un jeu **fermé** de commandes : une requête lancée depuis une page du site (le mode par défaut), une requête directe pour les API publiques, ou le pilotage d'un onglet en arrière-plan commande par commande (naviguer, attendre, lire, cliquer, taper, défiler). Toute commande hors de la liste est refusée. Aucun code reçu du serveur n'est exécuté dans l'extension.
 
-L'exécution depuis le navigateur reste soumise à la cadence par domaine et à `robots.txt` : une page interdite par `robots.txt` l'est aussi en tunnel.
+L'exécution depuis le navigateur reste soumise à la cadence par domaine.
 
 ::: info Disponibilité
 L'appairage, la capture de session et la révocation sont livrés (routes `/api/extension/*`). Le tunnel d'exécution (passerelle WSS et commandes du worker) est encore « en préparation » dans cette version : voir la [référence REST](../reference/rest.md) pour l'état exact.

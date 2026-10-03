@@ -13,7 +13,7 @@ import type { DeclarativeSpec } from '../dsl/spec.js';
 import { renderRequest, type RenderedRequest, type TemplateContext } from '../dsl/template.js';
 import { classifyExchange, classifyTransportError, TransportRefusal, type ClassifyContext } from './classify.js';
 import { applyParamAt } from './params.js';
-import type { AccessCheck, ExecFailure, HttpExchange, RequestPacer, ScrollTransport, Transport } from './types.js';
+import type { ExecFailure, HttpExchange, RequestPacer, ScrollTransport, Transport } from './types.js';
 
 export type DeclarativeRunOptions = {
   readonly spec: DeclarativeSpec;
@@ -30,11 +30,6 @@ export type DeclarativeRunOptions = {
   /** Garde de classification avant extraction (1.7). Défaut : `classifyExchange` (statut, en-têtes, défi, redirection). */
   readonly classify?: (exchange: HttpExchange, context?: ClassifyContext) => ExecFailure | null;
   readonly limits?: Partial<DslLimits>;
-  /**
-   * Module d'accès (1.11, INV11) : robots.txt contrôlé AVANT chaque requête de la stratégie (pagination comprise), avant
-   * même la cadence ; un refus arrête l'essai sans aucune requête vers le chemin. Le worker le fournit toujours.
-   */
-  readonly access?: AccessCheck;
   /**
    * Suite d'une pagination `infinite_scroll` : fait défiler la page déjà chargée par le transport (E3) et rend son DOM
    * à jour. Absent (E1, E2 : pas de page à faire défiler), la pagination s'arrête après la première page (`unsupported`).
@@ -147,10 +142,6 @@ export async function runDeclarative(options: DeclarativeRunOptions): Promise<De
     last = undefined;
     if (options.maxRequests !== undefined && requests >= options.maxRequests) throw new RequestCapReached();
     signal.throwIfAborted();
-    if (options.access !== undefined) {
-      const decision = await options.access(request.url);
-      if (!decision.allowed) throw new RunFailure(decision.failure);
-    }
     if (pacer !== undefined) {
       const slot = await pacer.acquire(request.url);
       if (!slot.granted) throw new RunFailure({ failure_class: 'rate_limited', retryable: true, detail: `pacing_${slot.reason}` });
