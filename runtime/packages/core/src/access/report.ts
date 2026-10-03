@@ -104,6 +104,18 @@ const TERMS = /(?:^|[^a-z])(?:cgu|cgv|terms|tos|conditions|legal|mentions[-_ ]?l
 const TERMS_TEXT = /conditions (?:g[ée]n[ée]rales|d'utilisation)|terms (?:of (?:use|service)|and conditions)|mentions l[ée]gales|cgu\b/i;
 const API_LINK = /^(?:api|developers?|dev)\.|\/(?:developers?|api[-_]?docs?|docs\/api|api)(?:\/|$)/i;
 
+/** Liens relevés au plus (au-delà, la page n'est pas lue : rapport sans CGU ni API déclarée, jamais une erreur). */
+const MAX_SCANNED_LINKS = 20_000;
+
+/** Texte court d'un lien ; vide s'il dépasse 200 caractères (carte d'annonce, menu englobant : jamais un lien de CGU). */
+function linkText(a: Parameters<typeof elementText>[0]): string {
+  try {
+    return elementText(a, 200);
+  } catch {
+    return '';
+  }
+}
+
 /** Voies déclarées et CGU lues dans la tête de la page (sans interprétation). */
 function readPage(exchange: HttpExchange): { terms: string | null; feeds: string[]; officialApi: string | null } {
   const out = { terms: null as string | null, feeds: [] as string[], officialApi: null as string | null };
@@ -127,11 +139,19 @@ function readPage(exchange: HttpExchange): { terms: string | null; feeds: string
       break;
     }
   }
-  for (const a of selectElements('a[href]', doc, 500)) {
+  // Lecture au mieux (UX-24) : une page aux milliers de liens ou aux cartes d'annonce cliquables (texte de plus de 200
+  // caractères) ne fait jamais échouer l'étape 0 ; on garde ce qui a été lu.
+  let anchors: ReturnType<typeof selectElements>;
+  try {
+    anchors = selectElements('a[href]', doc, MAX_SCANNED_LINKS);
+  } catch {
+    return out;
+  }
+  for (const a of anchors.slice(0, 500)) {
     const raw = elementAttribute(a, 'href');
     const href = absoluteLink(raw, exchange.url);
     if (href === null) continue;
-    const text = elementText(a, 200);
+    const text = linkText(a);
     if (out.terms === null && (TERMS_TEXT.test(text) || TERMS.test(new URL(href).pathname))) out.terms = href;
     if (out.officialApi === null) {
       const u = new URL(href);
