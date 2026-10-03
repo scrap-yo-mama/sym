@@ -53,6 +53,10 @@ export function portabilityRoutes(app: FastifyInstance, ctx: ServerContext): voi
       const parsed = parseApiExport(request.body, { runtimeVersion: ctx.appVersion });
       if (!parsed.ok) return sendError(reply, 400, parsed.code, parsed.message);
       const doc = parsed.export;
+      // PA-02 : les plafonds d'instance valent aussi pour un fichier (un membre édite son export, puis le réimporte) ; refus
+      // AVANT toute écriture, aperçu compris. Le worker borne de plus ce qu'il lit en base.
+      if ((doc.api.max_cost_usd ?? 0) > ctx.rest.maxCostUsdPerRun) return sendError(reply, 400, 'cost_cap_exceeded', `api.max_cost_usd dépasse le plafond de l’instance (${ctx.rest.maxCostUsdPerRun} $ par run)`);
+      if ((doc.api.budget_daily_usd ?? 0) > ctx.rest.userBudgetDailyUsd) return sendError(reply, 400, 'cost_cap_exceeded', `api.budget_daily_usd dépasse le plafond de l’instance (${ctx.rest.userBudgetDailyUsd} $ par jour)`);
       const personal = personalOf(doc);
       let policy: Record<string, unknown>;
       try {
@@ -85,7 +89,7 @@ export function portabilityRoutes(app: FastifyInstance, ctx: ServerContext): voi
         const slug = await freeSlug(ctx, doc.api.description, doc.api.source_url);
         const queue = await ctx.jobs();
         created = await withActor(ctx.pool, actor, async (tx) => {
-          await reserveRunSlot(tx, ctx);
+          await reserveRunSlot(tx, ctx, { kind: 'investigation' });
           return importApi(tx, queue, { ownerId: actor.userId, slug, trigger: triggerOf(actor), export: doc, networkPolicy: policy });
         });
       } catch (error) {

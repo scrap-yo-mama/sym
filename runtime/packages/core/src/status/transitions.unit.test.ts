@@ -350,6 +350,33 @@ describe('seuils', () => {
     expect(costAnomaly(0.03, 0.01)).toBe(false);
   });
 
+  test('tentative de persistance (D-49, 2.16) : 16 puis 1 ou 21, 4 ou 3 sur un refus, aucune transition nouvelle', () => {
+    const attempt = (cls: 'extraction' | 'code_error' | 'network' | 'robots_unreachable' = 'extraction') => run(st('erreur', { reason: 'repair_budget_exhausted' }), { type: 'persistence_attempt', failureClass: cls });
+    for (const cls of ['extraction', 'code_error', 'network', 'robots_unreachable'] as const) {
+      expect(attempt(cls).path).toEqual([[16, 'erreur', 'enquete', 'persistence_attempt']]);
+    }
+    expect(attempt().state.previousStatus).toBe('erreur');
+    // Échec (budget d'enquête épuisé, robots.txt injoignable, 451) : 21, retour à `erreur`, jamais la 2.
+    for (const cause of ['budget_exhausted', 'robots_unreachable'] as const) {
+      const failed = run(attempt().state, { type: 'investigation_failed', cause });
+      expect(failed.path).toEqual([[21, 'enquete', 'erreur', 'reinvestigation_failed']]);
+      expect(failed.state).toMatchObject({ status: 'erreur', previousStatus: null });
+    }
+    expect(run(attempt().state, { type: 'investigation_succeeded' }).path).toEqual([[1, 'enquete', 'sain', 'strategy_conform']]);
+    expect(run(attempt().state, { type: 'run_failed', failureClass: 'forbidden', httpStatus: 403 }).path).toEqual([[4, 'enquete', 'bloquee', 'forbidden']]);
+    expect(run(attempt().state, { type: 'run_failed', failureClass: 'auth_required', httpStatus: 401 }).path).toEqual([[3, 'enquete', 'action_requise', 'auth_required']]);
+    // Jamais depuis `bloquee`, `action_requise`, ni hors `erreur` ; jamais pour une classe hors de la transition 16.
+    for (const status of ['bloquee', 'action_requise', 'sain', 'warning', 'reparation', 'enquete'] as const) {
+      expect(applyStatusEvent(st(status), { type: 'persistence_attempt', failureClass: 'extraction' }, ctx).ok).toBe(false);
+    }
+    for (const cls of ['forbidden', 'blocked_by_protection', 'robots_disallowed', 'auth_required', 'not_found', 'llm_refused', 'transient'] as const) {
+      expect(applyStatusEvent(st('erreur'), { type: 'persistence_attempt', failureClass: cls }, ctx).ok).toBe(false);
+    }
+    // 16 garde ses raisons : la tentative en est une de plus, la table reste à 21 transitions (22 avec 3.14).
+    expect(TRANSITIONS.find((t) => t.id === 16)?.reasons).toContain('persistence_attempt');
+    expect(TRANSITIONS).toHaveLength(21);
+  });
+
   test('backoff 1 h, 6 h, 24 h avec jitter ±20 %, puis arrêt', () => {
     expect(backoffDelayMs(0, () => 0.5)).toBe(3_600_000);
     expect(backoffDelayMs(1, () => 0)).toBe(Math.round(6 * 3_600_000 * 0.8));

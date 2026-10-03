@@ -712,6 +712,10 @@
         "deepseek": "DeepSeek",
         "qwen": "Qwen",
         "openai": "OpenAI",
+        "anthropic": "Anthropic",
+        "gemini": "Google Gemini",
+        "mistral": "Mistral",
+        "groq": "Groq",
         "custom": "Personnalisé"
       },
       "validation": {

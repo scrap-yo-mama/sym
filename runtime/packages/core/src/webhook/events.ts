@@ -4,7 +4,7 @@
 import type { ApiStatus, FailureClass } from '../model/enums.js';
 import { BLOCKING_CLASSES } from '../status/types.js';
 
-export const WEBHOOK_EVENTS = ['run.succeeded', 'run.failed', 'api.status_changed', 'items.new'] as const;
+export const WEBHOOK_EVENTS = ['run.succeeded', 'run.failed', 'api.status_changed', 'items.new', 'api.persistence_attempt'] as const;
 export type WebhookEventName = (typeof WEBHOOK_EVENTS)[number];
 
 export function isWebhookEvent(value: unknown): value is WebhookEventName {
@@ -101,6 +101,42 @@ export function statusChangedPayload(at: Date, input: ApiRef & { from: ApiStatus
       reason: input.reason,
       ...(input.run_id ? { run_id: input.run_id } : {}),
       retryable: input.to !== 'bloquee',
+    },
+  };
+}
+
+/** Issue d'une tentative du mode « SYM ne lâche pas » : `retry` (créneau suivant), `recovered` (retour à `sain`), ou fin du mode. */
+export type PersistenceAttemptWebhookOutcome = 'retry' | 'recovered' | 'refused' | 'ineligible' | 'exhausted';
+
+/**
+ * `api.persistence_attempt` (D-49, 04 §6, 08 § 5) : codes et compteurs, jamais une phrase (le récit est rendu à la lecture).
+ * `attempt` : tentatives comptées (un report n'en est pas une) ; `ended` : fin du mode, `null` tant qu'il continue.
+ */
+export function persistenceAttemptPayload(
+  at: Date,
+  input: ApiRef & {
+    run_id?: string | null;
+    attempt: number;
+    outcome: PersistenceAttemptWebhookOutcome;
+    reason: string | null;
+    next_at: Date | null;
+    spent_usd: number;
+    ended: 'refused' | 'ineligible' | 'exhausted' | null;
+  },
+): WebhookPayload {
+  return {
+    type: 'api.persistence_attempt',
+    timestamp: at.toISOString(),
+    data: {
+      api: input.api,
+      api_id: input.api_id,
+      ...(input.run_id ? { run_id: input.run_id } : {}),
+      attempt: input.attempt,
+      outcome: input.outcome,
+      reason: input.reason,
+      next_at: input.next_at === null ? null : input.next_at.toISOString(),
+      spent_usd: input.spent_usd,
+      ended: input.ended,
     },
   };
 }
