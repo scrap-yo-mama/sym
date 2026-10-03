@@ -5,7 +5,7 @@
 import { createServer } from 'node:net';
 import lighthouse from 'lighthouse';
 import { chromium } from 'playwright-core';
-import type { LighthouseCategories } from './checks.ts';
+import { lighthouseMetrics, type LighthouseCategories, type LighthouseMetrics } from './checks.ts';
 
 const LIGHTHOUSE_CATEGORIES = ['performance', 'accessibility', 'seo'] as const;
 
@@ -14,6 +14,8 @@ export type LighthouseRun = {
   categories: LighthouseCategories;
   formFactor: string;
   throttlingMethod: string;
+  /** CLS et LCP mesurés par Lighthouse (audits), comparés aux budgets en plus des scores. */
+  metrics: LighthouseMetrics;
   /** Audits notés sous 1 qui pèsent dans une catégorie : ce qu'il faut regarder quand un score baisse. */
   weakAudits: string[];
   runtimeError?: string;
@@ -53,6 +55,7 @@ export async function runLighthouse(urls: readonly string[]): Promise<Lighthouse
         categories: Object.fromEntries(Object.entries(lhr.categories).map(([id, category]) => [id, { score: category.score }])),
         formFactor: lhr.configSettings.formFactor,
         throttlingMethod: lhr.configSettings.throttlingMethod,
+        metrics: lighthouseMetrics(lhr.audits),
         weakAudits,
         ...(lhr.runtimeError ? { runtimeError: `${lhr.runtimeError.code} : ${lhr.runtimeError.message}` } : {}),
       });

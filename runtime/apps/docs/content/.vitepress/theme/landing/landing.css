@@ -11,16 +11,30 @@
 /*
  * Repli à métriques ajustées (CLS) : tant que DM Sans et Bricolage Grotesque ne sont pas arrivées (font-display swap, réseau lent),
  * le texte s'affiche dans une police locale dont la largeur et les hauteurs de ligne sont réglées sur celles de la police finale,
- * pour que le remplacement ne déplace rien. Les trois repliers ne chargent rien : local() seulement, aucune requête.
+ * pour que le remplacement ne déplace rien. Les repliers ne chargent rien : local() seulement, aucune requête. Le gras de DM Sans a
+ * son propre repli, le vrai gras d'Arial (sinon le navigateur grossit artificiellement le romain, 5 % plus étroit que DM Sans Bold :
+ * la définition du hero passait d'une ligne à l'autre au remplacement). Réglages : rapport moyen des largeurs du hero (surtitre,
+ * définition, boutons), en et fr ; hauteurs ramenées à celles de DM Sans (ascendante 0,992, descendante 0,31).
  */
 @font-face {
   font-family: 'SYM Repli Sans';
   font-style: normal;
-  font-weight: 400 700;
+  font-weight: 400 600;
   src: local('Arial'), local('Liberation Sans'), local('Arimo'), local('Helvetica');
   size-adjust: 104.3%;
   ascent-override: 95.1%;
   descent-override: 29.7%;
+  line-gap-override: 0%;
+}
+
+@font-face {
+  font-family: 'SYM Repli Sans';
+  font-style: normal;
+  font-weight: 700;
+  src: local('Arial Bold'), local('Arial-BoldMT'), local('Liberation Sans Bold'), local('Arimo Bold'), local('Helvetica Bold');
+  size-adjust: 102.4%;
+  ascent-override: 96.9%;
+  descent-override: 30.3%;
   line-gap-override: 0%;
 }
 
@@ -398,9 +412,14 @@ body:has(.lp) {
   color: var(--muted-foreground);
 }
 
+/*
+ * Appels à l'action l'un sous l'autre à toutes les largeurs : côte à côte, ils tenaient sur une ligne ou deux selon la police (repli
+ * ou police web, à 700 px par exemple), et le bloc de commande qui suit sautait au remplacement (CLS).
+ */
 .lp-cta-row {
   display: flex;
-  flex-wrap: wrap;
+  flex-direction: column;
+  align-items: flex-start;
   gap: 0.75rem;
   margin-block: 1.5rem;
 }

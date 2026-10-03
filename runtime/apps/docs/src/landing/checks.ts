@@ -248,3 +248,28 @@ export function lighthouseFailures(categories: LighthouseCategories, thresholds:
     return value < min ? [`${id} : ${value} < ${min}`] : [];
   });
 }
+
+/** Mesures de Lighthouse en laboratoire (audits `cumulative-layout-shift` et `largest-contentful-paint`) ; null : non mesuré. */
+export type LighthouseMetrics = { cls: number | null; lcpMs: number | null };
+
+/** CLS et LCP (ms) lus dans les audits d'un rapport Lighthouse (`lhr.audits`). */
+export function lighthouseMetrics(audits: Readonly<Record<string, { numericValue?: number } | undefined>>): LighthouseMetrics {
+  const value = (id: string): number | null => {
+    const numeric = audits[id]?.numericValue;
+    return typeof numeric === 'number' && Number.isFinite(numeric) ? numeric : null;
+  };
+  return { cls: value('cumulative-layout-shift'), lcpMs: value('largest-contentful-paint') };
+}
+
+/**
+ * CLS et LCP de Lighthouse au-dessus des budgets (budgets.json) : vérifiés en plus des scores de catégorie, car une performance ≥ 95
+ * tolère un CLS entre 0,1 et environ 0,15, et la mesure Chromium du test de budget peut ne pas voir un décalage que Lighthouse voit.
+ */
+export function lighthouseMetricFailures(metrics: LighthouseMetrics, limits: { cls: number; lcpMs: number }): string[] {
+  const failures: string[] = [];
+  if (metrics.cls === null) failures.push('CLS Lighthouse : non mesuré');
+  else if (metrics.cls > limits.cls) failures.push(`CLS Lighthouse : ${metrics.cls.toFixed(3)} > ${limits.cls}`);
+  if (metrics.lcpMs === null) failures.push('LCP Lighthouse : non mesuré');
+  else if (metrics.lcpMs > limits.lcpMs) failures.push(`LCP Lighthouse : ${Math.round(metrics.lcpMs)} ms > ${limits.lcpMs} ms`);
+  return failures;
+}

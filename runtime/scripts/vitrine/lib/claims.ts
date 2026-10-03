@@ -28,6 +28,11 @@ type Claim = {
   note?: string;
 };
 
+/** Pages du site de doc générées à la construction (apps/docs/scripts/gen-reference.ts), non versionnées : leurs sources (chemins de runtime/). */
+const GENERATED_PAGE_SOURCES: Readonly<Record<string, readonly string[]>> = {
+  'reference/rest': ['packages/client/openapi/openapi.yaml', 'apps/docs/scripts/gen-reference.ts'],
+};
+
 export type ClaimsFile = { version: number; note?: string; claims: Claim[] };
 
 export function loadClaims(path = join(githubDir, 'claims.json')): ClaimsFile {
@@ -86,8 +91,11 @@ export function claimProblems(file: ClaimsFile, context: ProofContext): string[]
           // Un test nommé de la landing peut être encore en test.todo avant le GO : la porte `check:landing-go` (tâche 4.11) l'exige alors vrai ; ici seul le nom est contrôlé.
           if (!/^assert_[a-z0-9_]+$/.test(value)) problems.push(`${at} : nom de test ${value} invalide`);
         } else if (kind === 'page') {
-          // reference/rest.md est généré à la construction du site de doc (ignoré par git) : sa source est la spécification OpenAPI.
-          if (value !== 'reference/rest' && !context.exists(`apps/docs/content/${value}.md`)) problems.push(`${at} : page ${value} introuvable`);
+          // Une page générée à la construction du site de doc (ignorée par git) est prouvée par ses sources : spécification et générateur.
+          const sources = GENERATED_PAGE_SOURCES[value];
+          if (sources) {
+            for (const source of sources) if (!context.exists(source)) problems.push(`${at} : page ${value} : source ${source} introuvable`);
+          } else if (!context.exists(`apps/docs/content/${value}.md`)) problems.push(`${at} : page ${value} introuvable`);
         } else if (kind === 'decision') {
           if (!/^D-\d+$/.test(value)) problems.push(`${at} : décision ${value} invalide`);
         } else if (!context.exists(value)) problems.push(`${at} : preuve ${proof} introuvable`);

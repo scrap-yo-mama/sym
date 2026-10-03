@@ -4,9 +4,10 @@
 //   mobile de Lighthouse, émulé par le protocole DevTools AVANT le chargement : sur la boucle locale sans bridage, un LCP ne prouve
 //   rien) : première vue, JS en gzip, polices, nombre de requêtes, requêtes tierces, LCP, CLS ; le test vérifie d'abord que le
 //   bridage s'applique (le premier octet arrive après un aller-retour réseau émulé) ;
-// - scores Lighthouse mobile (configuration par défaut : mobile, bridage simulé) : performance, accessibilité et SEO ≥ seuils.
+// - scores Lighthouse mobile (configuration par défaut : mobile, bridage simulé) : performance, accessibilité et SEO ≥ seuils, et CLS et
+//   LCP mesurés par Lighthouse (audits) sous les budgets.
 import { expect, test, type Browser } from '@playwright/test';
-import { labNetworkConditions, lighthouseFailures, navigationTtfb } from '../src/landing/checks.ts';
+import { labNetworkConditions, lighthouseFailures, lighthouseMetricFailures, navigationTtfb } from '../src/landing/checks.ts';
 import { runLighthouse } from '../src/landing/lighthouse.ts';
 import { budgets, homeUrl, LANGS_UNDER_TEST } from './pages.ts';
 
@@ -75,24 +76,34 @@ for (const lang of LANGS_UNDER_TEST) {
   });
 }
 
-// CLS à la source : l'en-tête précède tout le contenu, une ligne de plus ou de moins y décale toute la page. Sa disposition (hauteur,
-// ligne de chaque lien et de chaque outil) ne doit dépendre que de la largeur de l'écran, jamais de la police : identique avec les
-// polices web et avec le repli local affiché avant leur arrivée (font-display swap). Largeurs : de 320 px au bureau, dont 412 px
-// (écran mobile de Lighthouse), où la navigation anglaise tenait sur une ligne à un pixel près avec DM Sans et pas avec le repli.
-const HEADER_WIDTHS = [320, 360, 375, 390, 412, 430, 480, 540, 600, 700, 768, 820, 900, 1024, 1280, 1440];
+// CLS à la source : au remplacement de police (font-display swap), une ligne de plus ou de moins décale tout ce qui suit. La disposition
+// est comparée entre les polices web et le repli local affiché avant leur arrivée, de 320 px au bureau, dont 390 px (budget de
+// laboratoire) et 412 px (écran mobile de Lighthouse) :
+// - l'en-tête précède tout le contenu : sa hauteur et la ligne de chaque lien et de chaque outil sont identiques (à 412 px, la
+//   navigation anglaise tenait sur une ligne à un pixel près avec DM Sans et pas avec le repli) ;
+// - au-dessus de la ligne de flottaison : le haut de chaque bloc du hero (surtitre, titre, définition, appels à l'action, commande,
+//   liens) et de chaque section visible est identique. Un bloc qui grandit sous la ligne de flottaison ne décale rien de visible.
+const LAYOUT_WIDTHS = [320, 360, 375, 390, 412, 430, 480, 540, 600, 700, 768, 820, 900, 1024, 1280, 1440];
+const LAYOUT_HEIGHT = 823;
 
-async function headerLayout(browser: Browser, url: string, width: number, webFonts: boolean): Promise<string> {
-  const context = await browser.newContext({ viewport: { width, height: 800 }, reducedMotion: 'reduce' });
+type AboveFold = { header: string; blocks: { name: string; top: number }[] };
+
+async function layoutWithFonts(browser: Browser, url: string, width: number, webFonts: boolean): Promise<AboveFold> {
+  const context = await browser.newContext({ viewport: { width, height: LAYOUT_HEIGHT }, reducedMotion: 'reduce' });
   if (!webFonts) await context.route('**/*.woff2', (route) => route.abort());
   const page = await context.newPage();
   await page.goto(url, { waitUntil: 'networkidle' });
-  const layout = await page.evaluate(async () => {
+  const layout = await page.evaluate(async (): Promise<AboveFold> => {
     await document.fonts.ready;
     const box = (el: Element): DOMRect => el.getBoundingClientRect();
     const header = document.querySelector('.lp-header');
-    if (!header) return 'en-tête absent';
+    if (!header) return { header: 'en-tête absent', blocks: [] };
     const rows = [...header.querySelectorAll('.lp-brand, .lp-nav li, .lp-tools > *')].map((el) => `${(el.textContent ?? '').trim().slice(0, 12) || el.className}@${Math.round(box(el).top)}`);
-    return `hauteur ${Math.round(box(header).height)} ; ${rows.join(' ')}`;
+    const blocks = [
+      ...[...document.querySelectorAll('.lp-hero__text > *')].map((el, index) => ({ name: `hero ${index + 1} (${el.tagName.toLowerCase()}${el.className ? `.${el.className.split(' ')[0]}` : ''})`, top: Math.round(box(el).top) })),
+      ...[...document.querySelectorAll('main > section')].map((el) => ({ name: `section #${el.id}`, top: Math.round(box(el).top) })),
+    ];
+    return { header: `hauteur ${Math.round(box(header).height)} ; ${rows.join(' ')}`, blocks };
   });
   const fonts = await page.evaluate(() => [...document.fonts].filter((font) => font.status === 'loaded').map((font) => font.family).join(','));
   await context.close();
@@ -100,14 +111,26 @@ async function headerLayout(browser: Browser, url: string, width: number, webFon
   return layout;
 }
 
+/** Écarts de disposition entre polices web et repli : en-tête entier, puis blocs dont le haut est visible dans l'une des deux. */
+function layoutDifferences(web: AboveFold, fallback: AboveFold, fold: number): string[] {
+  const differences = web.header === fallback.header ? [] : [`en-tête\n      polices web : ${web.header}\n      repli       : ${fallback.header}`];
+  for (const block of web.blocks) {
+    const other = fallback.blocks.find((candidate) => candidate.name === block.name);
+    if (!other) differences.push(`${block.name} absent avec le repli`);
+    else if ((block.top < fold || other.top < fold) && block.top !== other.top) differences.push(`${block.name} : haut à ${block.top} px avec les polices web, ${other.top} px avec le repli`);
+  }
+  return differences;
+}
+
 for (const lang of LANGS_UNDER_TEST) {
-  test(`assert_landing_perf_budget : disposition de l'en-tête indépendante des polices web (CLS), ${lang}`, async ({ browser }) => {
-    test.setTimeout(240_000);
+  test(`assert_landing_perf_budget : disposition de l'en-tête et du dessus de la ligne de flottaison indépendante des polices web (CLS), ${lang}`, async ({ browser }) => {
+    test.setTimeout(300_000);
     const differences: string[] = [];
-    for (const width of HEADER_WIDTHS) {
-      const web = await headerLayout(browser, homeUrl(lang), width, true);
-      const fallback = await headerLayout(browser, homeUrl(lang), width, false);
-      if (web !== fallback) differences.push(`${width} px\n    polices web : ${web}\n    repli       : ${fallback}`);
+    for (const width of LAYOUT_WIDTHS) {
+      const web = await layoutWithFonts(browser, homeUrl(lang), width, true);
+      const fallback = await layoutWithFonts(browser, homeUrl(lang), width, false);
+      const found = layoutDifferences(web, fallback, LAYOUT_HEIGHT);
+      if (found.length > 0) differences.push(`${width} px\n    ${found.join('\n    ')}`);
     }
     expect(differences, differences.join('\n')).toEqual([]);
   });
@@ -119,9 +142,11 @@ test('assert_landing_perf_budget : Lighthouse mobile, performance, accessibilit�
   const runs = await runLighthouse(LANGS_UNDER_TEST.map(homeUrl));
   for (const run of runs) {
     const scores = Object.entries(run.categories).map(([id, category]) => `${id} ${Math.round((category?.score ?? 0) * 100)}`).join(', ');
-    console.log(`lighthouse ${run.url} (${run.formFactor}, ${run.throttlingMethod}) : ${scores}${run.weakAudits.length > 0 ? `\n  ${run.weakAudits.join('\n  ')}` : ''}`);
+    console.log(`lighthouse ${run.url} (${run.formFactor}, ${run.throttlingMethod}) : ${scores}, CLS ${run.metrics.cls?.toFixed(3) ?? 'non mesuré'}, LCP ${run.metrics.lcpMs?.toFixed(0) ?? 'non mesuré'} ms${run.weakAudits.length > 0 ? `\n  ${run.weakAudits.join('\n  ')}` : ''}`);
     expect(run.runtimeError, run.url).toBeUndefined();
     expect(run.formFactor, run.url).toBe('mobile');
     expect(lighthouseFailures(run.categories, limits.lighthouse), `${run.url} : ${scores}`).toEqual([]);
+    // CLS ≤ 0,1 en laboratoire selon Lighthouse lui-même : une performance ≥ 95 tolère un CLS jusqu'à environ 0,15.
+    expect(lighthouseMetricFailures(run.metrics, { cls: limits.cls, lcpMs: limits.lcpMs }), `${run.url} : ${run.weakAudits.join(' ; ')}`).toEqual([]);
   }
 });

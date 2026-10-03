@@ -382,6 +382,18 @@ describe('registre des allégations : preuve, relecture, statut, CLAIMS.md gén�
     expect(claimProblems({ version: 1, claims: [linked] }, { ...delivered, taskDeliveredOn: () => undefined })).toEqual([]);
   });
 
+  test('preuve « page:reference/rest » (page générée, ignorée par git) : ses sources, spécification OpenAPI et générateur, doivent exister', () => {
+    const page = { ...claims.claims[0]!, proof: ['page:reference/rest'] };
+    const sources = ['packages/client/openapi/openapi.yaml', 'apps/docs/scripts/gen-reference.ts'];
+    expect(claimProblems({ version: 1, claims: [page] }, context)).toEqual([]);
+    for (const missing of sources) {
+      const ctx: ProofContext = { ...context, exists: (path) => path !== missing && context.exists(path) };
+      expect(claimProblems({ version: 1, claims: [page] }, ctx).join(), missing).toMatch(new RegExp(`page reference/rest : source ${missing.replace(/\./g, '\\.')} introuvable`));
+    }
+    const ordinary = { ...page, proof: ['page:reference/absente'] };
+    expect(claimProblems({ version: 1, claims: [ordinary] }, context).join()).toMatch(/page reference\/absente introuvable/);
+  });
+
   test('livraison d\'une tâche : date du dernier commit « <tâche> — » de l\'historique git (4.1 ne prend pas 4.12)', () => {
     const date = taskDeliveryDate('4.12');
     expect(date).toMatch(/^\d{4}-\d{2}-\d{2}$/);

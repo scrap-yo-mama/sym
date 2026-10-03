@@ -2,7 +2,7 @@
 // Contrôles de la landing hors CI de PR (22 § 2.9, 22b § 5) : verdict de la sonde, bloquants du GO, liens externes, étoiles. Sans réseau.
 import { describe, expect, test } from 'vitest';
 import { loadClaims } from './claims.ts';
-import { checkExternalLinks, evaluateProbes, goBlockers, isRealTestIn, labNetworkConditions, lighthouseFailures, navigationTtfb, parseStars, parseStarsFile, probeReport, sharedPagesOrigin } from './checks.ts';
+import { checkExternalLinks, evaluateProbes, goBlockers, isRealTestIn, labNetworkConditions, lighthouseFailures, lighthouseMetricFailures, lighthouseMetrics, navigationTtfb, parseStars, parseStarsFile, probeReport, sharedPagesOrigin } from './checks.ts';
 import { startCommand } from './content.ts';
 import type { PageProbe } from './probe.ts';
 
@@ -188,6 +188,20 @@ describe('assert_landing_perf_budget (Lighthouse mobile) : verdict des scores', 
   test('chaque catégorie au seuil ou au-dessus passe ; en dessous, absente ou non notée, elle échoue', () => {
     expect(lighthouseFailures({ performance: { score: 0.95 }, accessibility: { score: 1 }, seo: { score: 0.98 } }, thresholds)).toEqual([]);
     expect(lighthouseFailures({ performance: { score: 0.94 }, accessibility: { score: null }, seo: undefined }, thresholds)).toEqual(['performance : 94 < 95', 'accessibility : non noté', 'seo : non noté']);
+  });
+});
+
+describe('assert_landing_perf_budget (Lighthouse mobile) : CLS et LCP de Lighthouse sous les budgets, pas seulement les scores', () => {
+  const limits = { cls: 0.1, lcpMs: 2500 };
+  test('les valeurs des audits cumulative-layout-shift et largest-contentful-paint sont relevées ; un audit absent ou sans valeur est « non mesuré »', () => {
+    expect(lighthouseMetrics({ 'cumulative-layout-shift': { numericValue: 0.012 }, 'largest-contentful-paint': { numericValue: 1830.4 } })).toEqual({ cls: 0.012, lcpMs: 1830.4 });
+    expect(lighthouseMetrics({ 'cumulative-layout-shift': {}, 'largest-contentful-paint': undefined })).toEqual({ cls: null, lcpMs: null });
+  });
+  test('un CLS de 0,12 échoue même avec une performance ≥ 95 (régression de la CI Linux : 0,345 vu par Lighthouse) ; au budget, il passe', () => {
+    expect(lighthouseMetricFailures({ cls: 0.1, lcpMs: 2500 }, limits)).toEqual([]);
+    expect(lighthouseMetricFailures({ cls: 0.12, lcpMs: 1800 }, limits)).toEqual(['CLS Lighthouse : 0.120 > 0.1']);
+    expect(lighthouseMetricFailures({ cls: 0.345, lcpMs: 2600 }, limits)).toEqual(['CLS Lighthouse : 0.345 > 0.1', 'LCP Lighthouse : 2600 ms > 2500 ms']);
+    expect(lighthouseMetricFailures({ cls: null, lcpMs: null }, limits)).toEqual(['CLS Lighthouse : non mesuré', 'LCP Lighthouse : non mesuré']);
   });
 });
 
