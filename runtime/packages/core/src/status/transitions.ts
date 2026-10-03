@@ -55,12 +55,13 @@ export const TRANSITIONS: readonly TransitionDef[] = [
     reasons: [...REPAIR_ACTION_CLASSES, ...REPAIR_ACTION_REASONS],
   },
   { id: 15, from: 'reparation', to: 'bloquee', slug: 'reparation_to_bloquee', reasons: BLOCKING },
-  { id: 16, from: 'erreur', to: 'enquete', slug: 'erreur_to_enquete', reasons: ['backoff', 'reinvestigate_manual', 'force_investigate'] },
+  // `persistence_attempt` : tentative du mode « SYM ne lâche pas » (D-49), une raison de plus de la 16, pas une transition.
+  { id: 16, from: 'erreur', to: 'enquete', slug: 'erreur_to_enquete', reasons: ['backoff', 'reinvestigate_manual', 'force_investigate', 'persistence_attempt'] },
   { id: 17, from: 'action_requise', to: 'enquete', slug: 'action_requise_to_enquete', reasons: ['user_acted'] },
   { id: 18, from: 'bloquee', to: 'enquete', slug: 'bloquee_to_enquete_manual_only', reasons: ['reinvestigate_manual'] },
   { id: 19, from: 'sain', to: 'enquete', slug: 'sain_to_enquete', reasons: REINVESTIGATION },
   { id: 20, from: 'warning', to: 'enquete', slug: 'warning_to_enquete', reasons: REINVESTIGATION },
-  // 21 : `to` est le statut précédent (sain ou warning), porté par `previous_status`.
+  // 21 : `to` est le statut précédent (sain ou warning, ou erreur après une tentative de persistance), porté par `previous_status`.
   { id: 21, from: 'enquete', to: 'sain', slug: 'enquete_to_previous_status', reasons: ['reinvestigation_failed', 'not_compilable'] },
 ];
 

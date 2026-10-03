@@ -308,7 +308,8 @@
     "countryInvalid": "Saisis un code pays de 2 lettres, par exemple fr.",
     "descriptionRequired": "Décris ce que l'API doit renvoyer.",
     "accountRequired": "Confirme l'avertissement ci-dessus pour continuer.",
-    "providerNoticeMany": "{providers} recevront des extraits de trafic nettoyés."
+    "providerNoticeMany": "{providers} recevront des extraits de trafic nettoyés.",
+    "descriptionTemplate": "Une bonne demande se lit : « Je veux [quoi] depuis [où] pour [quoi en faire]. »"
   },
   "investigation": {
     "title": "Enquête sur {domain}",
@@ -353,17 +354,11 @@
       "followSuspended": "Suivi suspendu. Les nouveaux essais ne sont ni affichés ni annoncés."
     },
     "phase": {
-      "label": "Étapes de l'enquête",
       "announce": "Étape : {phase}.",
-      "access_check": "Vérification de l'accès",
-      "reconnaissance": "Reconnaissance",
-      "awaiting_schema_validation": "Schéma de sortie",
-      "testing": "Essais",
-      "state": {
-        "done": "terminée",
-        "current": "en cours",
-        "upcoming": "à venir"
-      }
+      "access_check": "Reconnaître",
+      "reconnaissance": "Reconnaître",
+      "awaiting_schema_validation": "Valider le schéma",
+      "testing": "Essayer"
     },
     "log": {
       "title": "Essais",
@@ -384,10 +379,52 @@
       "why": "Pourquoi : {reason}"
     },
     "plan": {
-      "title": "Plan d'essais",
-      "hint": "Du moins cher au plus cher. Tu peux retirer des méthodes avant le début des essais, jamais en ajouter.",
-      "estimate": "estimé {cost}",
-      "atLeastOne": "Au moins une méthode doit rester cochée."
+      "title": "Le plan d'essais",
+      "hint": "Du moins cher au plus cher. SYM s'arrête au premier qui marche.",
+      "atLeastOne": "Au moins une méthode doit rester cochée.",
+      "empty": "Le plan d’essais s’affiche ici dès que le serveur l’annonce.",
+      "state": {
+        "planned": "à essayer",
+        "running": "en cours",
+        "succeeded": "réussi",
+        "failed": "échoué",
+        "pruned": "non lancé",
+        "excluded": "exclu"
+      },
+      "prunedReason": "Écarté : {reason}",
+      "failedReason": "Échec : {reason}",
+      "include": "Essayer cette méthode",
+      "stop": {
+        "title": "Arrêt volontaire",
+        "text": "Si le site refuse l’accès, affiche une vérification ou demande aux robots de ne pas venir, SYM s’arrête là. Rien d’autre n’est essayé."
+      },
+      "footer": "Estimations · règle appliquée : {rule}",
+      "card": {
+        "fetch": {
+          "title": "Fetch direct",
+          "text": "HTML de la page, sans navigateur"
+        },
+        "fetch_in_page": {
+          "title": "Fetch dans la page",
+          "text": "les requêtes de la page, depuis un navigateur"
+        },
+        "playwright": {
+          "title": "Navigateur",
+          "text": "si la page se construit en JavaScript"
+        },
+        "agent_fetch": {
+          "title": "Agent + fetch",
+          "text": "l'IA lit le HTML à chaque run"
+        },
+        "hybrid": {
+          "title": "Script + agent",
+          "text": "un script, et l'agent quand il bute"
+        },
+        "agent": {
+          "title": "Agent",
+          "text": "en dernier recours, puis compilé"
+        }
+      }
     },
     "schema": {
       "title": "Schéma de sortie",
@@ -404,7 +441,32 @@
       "input": "Schéma d'entrée",
       "strategy": "Stratégie retenue : {execution}, {network}, version {version}",
       "tunnelNote": "Ne marche que si ton ordinateur est allumé.",
-      "empty": "Le schéma apparaîtra ici une fois la reconnaissance terminée."
+      "empty": "Le schéma apparaîtra ici une fois la reconnaissance terminée.",
+      "gateTitle": "Voici ce que tu vas récupérer",
+      "fieldsCaption": "Champs du schéma de sortie : nom, type et un exemple réel tiré de l’échantillon",
+      "columns": {
+        "field": "Champ",
+        "type": "Type",
+        "example": "Exemple réel"
+      },
+      "noExample": "Aucun exemple dans l’échantillon",
+      "personal": "Donnée personnelle : exemple masqué",
+      "types": {
+        "string": "texte",
+        "number": "nombre",
+        "integer": "nombre entier",
+        "boolean": "oui / non",
+        "array": "liste",
+        "object": "objet",
+        "null": "vide"
+      },
+      "remark": "Une remarque pour SYM ?",
+      "remarkHint": "Facultatif. Ta remarque reste sur cet écran, elle ne part nulle part : pour changer un champ, utilise « Modifier le schéma ».",
+      "noFields": "Le schéma n’a aucun champ à montrer.",
+      "remarkPlaceholder": "ex. le prix en euros, ajoute l'URL du livre",
+      "range": "{min} à {max}",
+      "quoteOpen": "« ",
+      "quoteClose": " »"
     },
     "result": {
       "sain": "L'enquête a réussi. Ton API est prête.",
@@ -412,7 +474,36 @@
       "erreur": "L'enquête s'est terminée en erreur. La liste des essais montre pourquoi.",
       "bloquee": "L'enquête s'est arrêtée : le site refuse l'accès automatisé."
     },
-    "resuming": "Reprise de l'enquête…"
+    "resuming": "Reprise de l'enquête…",
+    "milestones": {
+      "label": "Jalons de l’enquête",
+      "describe": "Décrire",
+      "reconnaissance": "Reconnaître",
+      "schema": "Valider le schéma",
+      "trials": "Essayer",
+      "state": {
+        "todo": "à faire",
+        "current": "en cours",
+        "done": "fait",
+        "stopped": "arrêté"
+      },
+      "step": "{n} · {label}"
+    },
+    "gate": {
+      "title": "J'ai trouvé {what}. On valide ce schéma ?",
+      "noTrial": "Aucun essai ne démarre avant ton accord.",
+      "spent": "Déjà dépensé pour la reconnaissance : {cost}.",
+      "spentUnknown": "Déjà dépensé pour la reconnaissance : pas encore disponible.",
+      "budget": "Budget max de l'enquête",
+      "replay": "Rejeu ensuite : environ {cost}, sans IA.",
+      "validate": "Valider et lancer les essais · ~{max}",
+      "validateNoMax": "Valider et lancer les essais",
+      "edit": "Modifier le schéma",
+      "auto": "Schéma validé automatiquement, à ta demande.",
+      "what": "les données de {domain}",
+      "whatUnknown": "les données",
+      "replayWithAi": "Rejeu ensuite : environ {cost}, avec l'IA à chaque run."
+    }
   },
   "blocked": {
     "title": "Bloquée : {domain} refuse l'accès automatisé",
@@ -621,6 +712,10 @@
         "deepseek": "DeepSeek",
         "qwen": "Qwen",
         "openai": "OpenAI",
+        "anthropic": "Anthropic",
+        "gemini": "Google Gemini",
+        "mistral": "Mistral",
+        "groq": "Groq",
         "custom": "Personnalisé"
       },
       "validation": {
@@ -897,7 +992,7 @@
     "relaunch": "Relancer"
   },
   "catalog": {
-    "title": "Catalogue",
+    "title": "Ton catalogue",
     "follow": {
       "suspend": "Suspendre le suivi",
       "resume": "Reprendre le suivi",
@@ -906,24 +1001,25 @@
     "newApi": "Nouvelle API",
     "caption": "Catalogue des API : nom, exécution, réseau, statut et raison, dernier run, coût moyen, taux de succès et accès",
     "columns": {
-      "name": "Nom",
-      "execution": "Exécution",
-      "network": "Réseau",
-      "status": "Statut et raison",
+      "name": "API",
+      "status": "Statut",
       "lastRun": "Dernier run",
-      "cost": "Coût moyen",
+      "cost": "Coût / run",
       "success": "Succès (30 j)",
-      "access": "Accès"
+      "access": "Accès",
+      "action": "Action",
+      "mode": "Mode · réseau"
     },
     "computerRequired": "Ordinateur requis",
     "filters": {
       "label": "Filtres du catalogue",
-      "search": "Recherche",
-      "searchPlaceholder": "Nom ou description",
+      "search": "Rechercher",
+      "searchPlaceholder": "nom, domaine…",
       "status": "Statut",
       "execution": "Exécution",
       "network": "Réseau",
-      "all": "Tous"
+      "all": "Tous",
+      "searchLabel": "Rechercher dans le catalogue"
     },
     "empty": {
       "title": "Ton catalogue est prêt à se remplir",
@@ -931,8 +1027,7 @@
     },
     "noMatch": {
       "title": "Aucune API ne correspond",
-      "description": "Change ou retire des filtres pour voir plus de résultats.",
-      "reset": "Réinitialiser les filtres"
+      "description": "Change ou retire des filtres pour voir plus de résultats."
     },
     "pagination": {
       "label": "Pagination du catalogue",
@@ -940,7 +1035,53 @@
       "next": "Suivant",
       "page": "Page {n}"
     },
-    "statusChanged": "{slug} : {status}."
+    "statusChanged": "{slug} : {status}.",
+    "summary": {
+      "service": "Aucune API en service | 1 API en service | {n} API en service",
+      "stopped": "Aucune arrêtée | {n} arrêtée | {n} arrêtées",
+      "attention": "Rien ne demande ton attention. | Une API demande ton attention. | {count} demandent ton attention.",
+      "words": {
+        "n2": "Deux",
+        "n3": "Trois",
+        "n4": "Quatre",
+        "n5": "Cinq",
+        "n6": "Six",
+        "n7": "Sept",
+        "n8": "Huit",
+        "n9": "Neuf",
+        "n10": "Dix"
+      }
+    },
+    "health": {
+      "title": "Santé du catalogue",
+      "ratio": "{healthy} sur {total} saines",
+      "noneInService": "Aucune API en service",
+      "stopped": "Aucun arrêt volontaire | {n} arrêt volontaire | {n} arrêts volontaires",
+      "partial": "Comptes partiels : seules les {n} premières API sont comptées.",
+      "legend": {
+        "sain": "{n} saine | {n} saines",
+        "warning": "{n} à surveiller",
+        "enquete": "{n} en enquête",
+        "reparation": "{n} en réparation",
+        "erreur": "{n} en erreur",
+        "action_requise": "{n} attend ton action | {n} attendent ton action"
+      },
+      "legendLabel": "Nombre par statut"
+    },
+    "pills": {
+      "label": "Filtres rapides",
+      "all": "Tout",
+      "attention": "À traiter",
+      "healthy": "Saines",
+      "stopped": "Arrêtées",
+      "withCount": "{label} · {n}",
+      "changed": "{label} : {n}."
+    },
+    "rowAction": {
+      "alternatives": "Voir les alternatives",
+      "openTask": "Voir la tâche"
+    },
+    "attentionPartial": "Liste partielle : seules les {n} premières API à traiter sont affichées."
   },
   "detail": {
     "title": "Fiche API",
@@ -1000,7 +1141,7 @@
     "resuming": "Reprise de l'enquête…",
     "connect": {
       "title": "Connecte {domain}",
-      "button": "Connecter dans l'extension",
+      "button": "Connecter ma session",
       "verify": "La session apparaît ici dès que l'extension la transmet (mise à jour en direct)."
     },
     "deviceBound": {

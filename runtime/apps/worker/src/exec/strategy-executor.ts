@@ -113,7 +113,7 @@ import {
 } from '@runtime/core/net';
 import { archivedRepairExists, countSucceededRuns, deleteRejectedItems, inputHash, loadRunTarget, markStrategyCompilable, readEmbeddedFiles, readValidatedBaseline, saveRunProfile, readProxySettings, readVolumeHistory, saveCompiledStrategy, saveRejectedItems, saveRepairedStrategy, saveRunDataset, saveStepRepairedStrategy, type RunTarget } from '@runtime/db';
 import type { LlmClient, LlmConfig } from '@runtime/llm';
-import { degradedQualitySignals, profileItems } from '@runtime/core';
+import { degradedQualitySignals, profileItems, type CostCaps } from '@runtime/core';
 import type { QualityPorts } from './quality-job.js';
 import type pg from 'pg';
 import { pino, type Logger } from 'pino';
@@ -187,6 +187,8 @@ export type StrategyExecutorDeps = {
    * jugement SÉPARÉ après le run (`scheduleJudge`) : le rejeu lui-même ne fait aucun appel LLM et ne lit aucune mémoire.
    */
   readonly quality?: QualityPorts;
+  /** Plafonds d'instance (`MAX_COST_USD_PER_RUN`, PA-02) : bornent le `max_cost_usd` lu en base, importé ou antérieur. */
+  readonly costCaps?: Pick<CostCaps, 'maxCostUsdPerRun'>;
 };
 
 /** Stratégie figée d'un run (version, exécution, réseau, spécification). */
@@ -858,7 +860,7 @@ export function createStrategyRuntime(deps: StrategyExecutorDeps): StrategyRunti
             });
           } else {
             if (config === null || config.roles.agent === undefined) return refuse('code_error', 'llm_not_configured');
-            // Agent instruit (2.13, 19 §4) : opt-in explicite, étapes CONFIRMÉES (déclencheur de 0021) rejouées par l'agent à
+            // Agent instruit (2.13, 19 §4) : opt-in explicite, étapes CONFIRMÉES (déclencheur de 0022) rejouées par l'agent à
             // chaque run ; coût estimé journalisé avant le lancement ; compilation tentée après K runs réussis.
             let spec = agentic.spec;
             let compile = true;
@@ -1258,7 +1260,7 @@ export function createStrategyRuntime(deps: StrategyExecutorDeps): StrategyRunti
       }
       case 'superseded': {
         // Une autre réparation a produit vN+1 pendant l'attente du bail : le run la rejoue, sans nouvelle réparation.
-        const next = await loadRunTarget(deps.pool, { apiId: ctx.apiId, ownerId: ctx.ownerId, version: out.version });
+        const next = await loadRunTarget(deps.pool, { apiId: ctx.apiId, ownerId: ctx.ownerId, version: out.version, ...(deps.costCaps === undefined ? {} : { caps: deps.costCaps }) });
         if (next === null || next.strategy === null) return failed(failure);
         const trial = await runTrial(ctx, next, next.strategy, now(), 'quarantine');
         const sorted = sortItems(next, trial);
@@ -1275,7 +1277,7 @@ export function createStrategyRuntime(deps: StrategyExecutorDeps): StrategyRunti
 
   const executeRun = async (ctx: RunCtx): Promise<RunResult> => {
     const started = now();
-    const target = await loadRunTarget(deps.pool, { apiId: ctx.apiId, ownerId: ctx.ownerId, version: ctx.strategyVersion });
+    const target = await loadRunTarget(deps.pool, { apiId: ctx.apiId, ownerId: ctx.ownerId, version: ctx.strategyVersion, ...(deps.costCaps === undefined ? {} : { caps: deps.costCaps }) });
     if (target === null) return { state: 'failed', failure_class: 'code_error', retryable: false, error_detail: 'api_not_found' };
     const strategy = target.strategy;
     if (strategy === null) return { state: 'failed', failure_class: 'code_error', retryable: false, error_detail: 'no_strategy_version' };

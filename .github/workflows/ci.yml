@@ -1,4 +1,4 @@
-# CI de runtime/ : 7 jobs (cdc/scrapyomama-runtime/15-strategie-tests.md §2), plus le job `docs` (tâche 4.8), le job `image` (privilèges du bac à sable sur l'image construite, F-20261001-R01) et le 8e job `vitrine` (tâche 4.12).
+# CI de runtime/ : 7 jobs (cdc/scrapyomama-runtime/15-strategie-tests.md §2), plus le job `docs` (tâche 4.8), le job `image` (privilèges du bac à sable sur l'image construite, F-20261001-R01), le 8e job `vitrine` (tâches 4.12 et 4.11 : vitrine du dépôt puis landing).
 # Aucun filtre de chemin : `quality` ne doit jamais être masqué.
 # Modules (ADR 23 § 6) : le job `detect` liste les paquets touchés et leurs dépendants (`pnpm --filter "...[origin/main]"`), le job
 # `browser` (module SYM Browser) ne tourne que s'ils le concernent, et `gate` agrège le verdict de tous les jobs : c'est le check à exiger.
@@ -97,6 +97,15 @@ jobs:
     # de tests/vitrine (aucun .py, aucun service tiers). Le filtre par chemin est celui de CE job (check.mjs changed), jamais un
     # filtre du workflow : `quality` et les autres jobs ne sont jamais masqués. Rien n'est publié, poussé ni réglé sur GitHub.
     # Cible : moins de 3 minutes (à valider).
+    # Tâche 4.11 (22b § 5) : gates de la landing sur la préproduction, c'est-à-dire le build de production du commit servi par un
+    # serveur statique local qui reproduit GitHub Pages (chemin de base /sym/, aucun en-tête, CSP en balise meta). Rien n'est publié ni
+    # déployé : GitHub Pages n'est touché qu'au GO. Critère de 4.11 : TOUS les assert_landing_* tournent ici, les tests de contenu et du
+    # site construit (vitest, projets unit et contract, apps/docs/src/landing ; le job docs les rejoue avec le reste du site) puis le volet
+    # Chromium : cookie, requêtes tierces, traceurs, CSP vue par le navigateur, axe, mouvement, budgets de poids.
+    # Le volet « liens externes en 200 » de assert_landing_links_resolve (pnpm --filter @runtime/docs landing:links) ouvre des connexions
+    # sortantes vers le dépôt public : il ne tourne pas ici (une PR ne dépend pas de l'état du dépôt public), mais avant le déploiement
+    # dans pages.yml (mise en ligne, GO), dans release.yml avant toute publication, et chaque semaine après (landing-production.yml).
+    # Le volet interne (0 lien mort, fichier et ancre) tourne ici et dans le job docs.
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -124,6 +133,21 @@ jobs:
       - name: Tests nommés de la vitrine (assert_readme_*, assert_social_preview_spec, assert_svg_safe, assert_license_detected_agpl…)
         if: steps.changed.outputs.run == 'true'
         run: pnpm vitest run --project unit tests/vitrine tests/public-showcase.unit.test.ts
+      - run: pnpm build
+      - name: Landing, contenu et site construit (assert_landing_* hors navigateur)
+        run: pnpm vitest run --project unit --project contract apps/docs/src/landing
+      - name: Chromium de Playwright
+        run: pnpm exec playwright install --with-deps chromium
+      - name: Landing, préproduction (build de production servi comme GitHub Pages), gates Chromium
+        run: pnpm --filter @runtime/docs test:e2e
+      - name: Contrôles avant le GO (cookie, tiers, traceurs, CSP, formulaire) rejoués par la sonde, résultat daté archivé
+        run: pnpm --filter @runtime/docs landing:probe --preprod --out ../../landing-probe-preprod.json
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: landing-probe-preprod
+          path: runtime/landing-probe-preprod.json
+          if-no-files-found: error
+          retention-days: 14
 
   unit:
     runs-on: ubuntu-24.04
@@ -229,7 +253,15 @@ jobs:
       - run: 'echo "api-contract : pas encore implémenté (tâches 3.1 et 3.2 : Schemathesis en image Docker, conformité MCP)"'
 
   e2e:
+    # Les suites tournent en parallèle (console en deux moitiés) (une par runner) au lieu de s'enchaîner : ~20 min ramenées à ~10 (D-93).
+    name: e2e (${{ matrix.suite }})
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: [extension, web-1, web-2, instance, visual]
     runs-on: ubuntu-24.04
+    # Borne du job (D-88) : un blocage ne consomme jamais les 6 h du runner.
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -242,10 +274,22 @@ jobs:
           node-version-file: runtime/.node-version
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
-      - name: Chromium de Playwright (extension en contexte persistant, nouveau mode headless)
+      - if: matrix.suite != 'visual'
+        name: Chromium de Playwright (extension en contexte persistant, nouveau mode headless)
         run: pnpm exec playwright install --with-deps chromium
       # E2 extension (tâche 2.6) : PostgreSQL 16 jetable (Testcontainers), sites de fixtures en boucle locale.
-      - run: pnpm test:e2e
+      - if: matrix.suite == 'extension'
+        run: pnpm --filter @runtime/extension test:e2e
+      - if: matrix.suite == 'web-1' || matrix.suite == 'web-2'
+        run: pnpm --filter @runtime/web exec playwright test --shard=${{ matrix.suite == 'web-1' && '1' || '2' }}/2
+      - if: matrix.suite == 'instance'
+        run: pnpm exec playwright test -c tests/e2e/playwright.config.ts
+      # Régression visuelle par langue (3.17, part de 3.6) : la suite visuelle de la console, sautée ci-dessus hors de l'image,
+      # est comparée aux instantanés linux dans l'image Playwright épinglée de deploy/Dockerfile ; une référence absente échoue.
+      # Le conteneur se borne lui-même (SYM_VISUAL_TIMEOUT_MS, 25 min, scripts/visual-image-bound.ts, D-88) ; l'étape en filet.
+      - run: pnpm visual:image
+        timeout-minutes: 30
+        if: matrix.suite == 'visual'
       # Gate d'accessibilité de la console (tâche 3.9) : axe sur chaque écran (clair, sombre, en, fr), parcours au clavier seul, live
       # regions, reflow à 320 px ; la console est construite et servie en local par le test (apps/web/e2e). Parcours d'invitation
       # (tâche 3.8) : la console construite contre une instance réelle (PostgreSQL 16 jetable, serveur en écoute), runtime/tests/e2e. À venir :

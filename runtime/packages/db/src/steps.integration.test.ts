@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// Reprise par étape et agent instruit (tâche 2.13, migration 0021, 19b §1) sur base réelle : journal par étape dans
+// Reprise par étape et agent instruit (tâche 2.13, migration 0022, 19b §1) sur base réelle : journal par étape dans
 // `run_attempts`, vN+1 non validée archivée non courante, `instructed_mode` jamais vrai sans étapes instruites confirmées
 // par un humain (code ET déclencheur), propriétaire seul (RLS).
 import { randomUUID } from 'node:crypto';
@@ -49,7 +49,7 @@ afterAll(async () => {
   await tdb?.drop();
 });
 
-describe('migration 0021 (reprise par étape, agent instruit)', () => {
+describe('migration 0022 (reprise par étape, agent instruit)', () => {
   test('défauts : instructed_mode faux, compilable inconnu, colonnes d’étape nulles', async () => {
     const api = (await pool.query<{ id: string }>("INSERT INTO apis (slug, owner_id, output_schema) VALUES ('zz_test_defaults', $1, '{}'::jsonb) RETURNING id", [A])).rows[0]!.id;
     const { rows } = await pool.query<{ instructed_mode: boolean }>('SELECT instructed_mode FROM apis WHERE id = $1', [api]);

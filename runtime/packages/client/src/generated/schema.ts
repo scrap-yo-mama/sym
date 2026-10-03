@@ -374,7 +374,7 @@ export interface paths {
         put?: never;
         /**
          * Importe une API exportée (16 § 6) ; aperçu sans écriture, puis confirm=true ; repasse toujours par l'enquête
-         * @description Sans `confirm=true` : aperçu (200), rien n'est écrit. Avec `confirm=true` : nouvelle API privée en `enquete`, enquête en file au stade `access_check` (rapport d'accès, robots.txt) puis `testing` de la stratégie importée (`created_by: import`) ; planifications recréées désactivées, cibles d'alerte à configurer. Les champs inconnus sont ignorés (`ignored_fields`) ; un `$ref` distant (400 `remote_ref`), une empreinte fausse (400 `integrity_mismatch`) ou une version de format d'une autre majeure (400 `unsupported_format`) sont refusés.
+         * @description Sans `confirm=true` : aperçu (200), rien n'est écrit. Avec `confirm=true` : nouvelle API privée en `enquete`, enquête en file au stade `access_check` (rapport d'accès, robots.txt) puis `testing` de la stratégie importée (`created_by: import`) ; planifications recréées désactivées, cibles d'alerte à configurer. Les champs inconnus sont ignorés (`ignored_fields`) ; un `$ref` distant (400 `remote_ref`), une empreinte fausse (400 `integrity_mismatch`) ou une version de format d'une autre majeure (400 `unsupported_format`) sont refusés. Un `max_cost_usd` ou un `budget_daily_usd` du fichier au-dessus des plafonds de l'instance (`MAX_COST_USD_PER_RUN`, `USER_BUDGET_DAILY_USD`) est refusé de même (400 `cost_cap_exceeded`), aperçu compris.
          */
         post: operations["importApi"];
         delete?: never;
@@ -418,7 +418,10 @@ export interface paths {
         delete: operations["deleteApi"];
         options?: never;
         head?: never;
-        /** Modifie description, politiques, schémas (→ ré-enquête), exposition MCP ; aucun réglage robots.txt (INV11) */
+        /**
+         * Modifie description, politiques, schémas (→ ré-enquête), exposition MCP ; aucun réglage robots.txt (INV11)
+         * @description Mode « SYM ne lâche pas » (`persistence_mode`, `persistence_budget_usd`, D-49) : décidé avant tout autre champ ; refusé, rien n'est écrit. Activer (ou changer le plafond d'un mode actif) par une clé d'API : `403 human_confirmation_required` ; API sans version courante, mémoire des refus absente ou plafond effectif ≤ 0 : `409 persistence_not_eligible` (`reason`) ; les deux avec `what_to_do`. Désactiver est permis à toute clé. Un `max_cost_usd` ou un `budget_daily_usd` au-dessus des plafonds de l'instance (`MAX_COST_USD_PER_RUN`, `USER_BUDGET_DAILY_USD`) : `400 cost_cap_exceeded`.
+         */
         patch: operations["updateApi"];
         trace?: never;
     };
@@ -1807,6 +1810,10 @@ export interface components {
             error: {
                 code: string;
                 message: string;
+                /** @description Raison stable d'un refus quand le code en a plusieurs (ex. `persistence_not_eligible`). */
+                reason?: string;
+                /** @description Marche à suivre, en anglais (05 § 1). */
+                what_to_do?: string;
             };
         };
         /** @description Erreur de la bibliothèque d'authentification (format à plat, sans enveloppe `error`). */
@@ -2056,6 +2063,8 @@ export interface components {
             id: string;
             slug: string;
             description: string;
+            /** @description Domaine de la page enquêtée (hôte de l'URL de départ, en minuscules), affiché sous le nom dans le catalogue (20 § 5.2) ; null s'il n'est pas connu. */
+            domain?: string | null;
             status: components["schemas"]["ApiStatus"];
             status_reason: components["schemas"]["ReasonMessage"] | null;
             stale: boolean;
@@ -2109,6 +2118,8 @@ export interface components {
             max_cost_usd?: number | null;
             budget_daily_usd?: number | null;
             domain_pacing?: components["schemas"]["DomainPacing"];
+            /** @description Mode « SYM ne lâche pas » (D-49) ; propriétaire seulement. */
+            persistence?: components["schemas"]["ApiPersistence"] | null;
             /** @description Coût estimé avant lancement (« ~0,002 $, médiane de 10 runs » ou « non estimé »). */
             cost_estimate?: {
                 median_usd: number | null;
@@ -2217,6 +2228,24 @@ export interface components {
             max_cost_usd?: number | null;
             /** @description Budget quotidien de l'API ; `null` revient au défaut de l'instance (5 $). */
             budget_daily_usd?: number | null;
+            /** @description Mode « SYM ne lâche pas » (D-49, 04 § 6), désactivé par défaut. L'activer est un acte humain : session de la console seulement (`403 human_confirmation_required` par une clé d'API) ; le désactiver est permis à toute clé du scope `apis:write`. Chaque bascule est auditée avec son acteur. */
+            persistence_mode?: boolean;
+            /** @description Plafond propre du mode, cumulé depuis l'entrée en `erreur` ; `null` revient à `PERSISTENCE_BUDGET_USD_DEFAULT` (jamais illimité). Le changer sur un mode actif exige la console ; un plafond effectif ≤ 0 répond `409 persistence_not_eligible`. */
+            persistence_budget_usd?: number | null;
+        };
+        /** @description État du mode « SYM ne lâche pas » (D-49), propriétaire seulement : interrupteur, plafond effectif (jamais illimité), tentatives du cycle en cours, prochain essai, dépense, tentative en cours, fin du mode et sa raison. */
+        ApiPersistence: {
+            enabled: boolean;
+            budget_usd: number;
+            attempt: number;
+            /** Format: date-time */
+            next_at: string | null;
+            spent_usd: number;
+            in_progress: boolean;
+            /** Format: date-time */
+            entered_error_at: string | null;
+            ended: ("refused" | "ineligible" | "exhausted") | null;
+            ended_reason: string | null;
         };
         /** @description Export portable d'une API (16 § 6, tâche 3.12), format `scrapyomama.api` 1.0, clés triées. AUCUN champ pour une session, un cookie, une clé LLM, un identifiant de proxy, un secret ou une URL de webhook, ni pour une donnée de run (cibles d'alerte en référence `$ALERT_WEBHOOK_1`). Stratégie déclarative seulement (E1-E3, hors tunnel). `integrity.sha256` : empreinte du JSON canonique (clés triées) de l'enveloppe sans `integrity`. À l'import, les champs inconnus sont ignorés (contrôle complet : `parseApiExport` du cœur). */
         ApiExport: {
@@ -2789,7 +2818,7 @@ export interface components {
             schedules: components["schemas"]["Schedule"][];
         };
         /** @enum {string} */
-        WebhookEvent: "run.succeeded" | "run.failed" | "api.status_changed" | "items.new";
+        WebhookEvent: "run.succeeded" | "run.failed" | "api.status_changed" | "items.new" | "api.persistence_attempt";
         WebhookDelivery: {
             id: string;
             /** Format: date-time */
@@ -2847,7 +2876,7 @@ export interface components {
             error?: components["schemas"]["ReasonMessage"] | null;
         };
         /** @enum {string} */
-        LlmPreset: "zai" | "openrouter" | "vllm" | "ollama" | "deepseek" | "qwen" | "openai" | "custom";
+        LlmPreset: "zai" | "openrouter" | "vllm" | "ollama" | "deepseek" | "qwen" | "openai" | "anthropic" | "gemini" | "mistral" | "groq" | "custom";
         LlmProfile: {
             tools?: boolean;
             tool_choice?: string[];
@@ -3528,7 +3557,7 @@ export interface components {
                 "application/json": components["schemas"]["RunAccepted"];
             };
         };
-        /** @description File pleine (08b § 3) ; `queue_full` au-delà de `MAX_CONCURRENT_RUNS` runs actifs sur l'instance, `user_queue_full` au-delà de `MAX_ACTIVE_RUNS_PER_USER` pour l'appelant, `key_rate_limited` au-delà de `MAX_RUNS_PER_KEY_PER_MINUTE` créations par clé d'API ; réessayer après `Retry-After`. */
+        /** @description File pleine (08b § 3) ; `queue_full` au-delà de `MAX_CONCURRENT_RUNS` runs actifs sur l'instance, `user_queue_full` au-delà de `MAX_ACTIVE_RUNS_PER_USER` pour l'appelant, `key_rate_limited` au-delà de `MAX_RUNS_PER_KEY_PER_MINUTE` créations par clé d'API ; réessayer après `Retry-After`. Exception : `budget_exceeded` (budget USD du jour de l'appelant, `USER_BUDGET_DAILY_USD` : dépense du jour, enveloppes maximales des runs actifs et enveloppe du nouveau run, 08b § 3) n'a PAS de `Retry-After` et n'est pas réessayable avant minuit UTC. */
         QueueFull: {
             headers: {
                 "Retry-After"?: number;
@@ -4310,7 +4339,15 @@ export interface operations {
             };
             400: components["responses"]["Error"];
             401: components["responses"]["Error"];
-            403: components["responses"]["Error"];
+            /** @description `human_confirmation_required` : activation du mode « SYM ne lâche pas » (ou changement de son plafond) hors de la console, par une clé d'API, avec `what_to_do` ; `insufficient_scope` : clé sans `apis:write`. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
             404: components["responses"]["Error"];
             409: components["responses"]["Error"];
         };

@@ -114,8 +114,8 @@ describe('ingestEvent', () => {
     ingestEvent(state, frame('3', 'phase.started', { run_id: RUN, phase: 'awaiting_schema_validation', plan: [{ execution: 'fetch', network: 'direct', est_cost_usd: 0.0004 }, { execution: 'agent' }, { execution: 'inconnue' }] }), 0);
     expect(state.phase).toBe('awaiting_schema_validation');
     expect(state.plan).toEqual([
-      { execution: 'fetch', network: 'direct', estCostUsd: 0.0004 },
-      { execution: 'agent', network: null, estCostUsd: null },
+      { execution: 'fetch', network: 'direct', estCostUsd: 0.0004, source: null, rule: null },
+      { execution: 'agent', network: null, estCostUsd: null, source: null, rule: null },
     ]);
   });
 

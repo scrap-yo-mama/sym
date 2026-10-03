@@ -18,7 +18,7 @@ import { INVESTIGATION_DEFAULTS } from '@runtime/core/investigation';
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import { createTestDatabase, type TestDatabase } from '../../../tests/helpers/pg.js';
-import { migrateDown, migrateUp } from './migrate.js';
+import { loadMigrations, migrateDown, migrateUp } from './migrate.js';
 import { PgBossJobQueue } from './queue.js';
 import { withActor } from './rls.js';
 import {
@@ -111,8 +111,8 @@ describe('migration 0019', () => {
     expect(rows).toEqual([{ kind: 'rule', visibility: 'instance', owner_id: null, applies_to: ['*'], origin: 'seed', sha256: DEFAULT_POLICY_SHA256, review_state: 'none' }]);
   });
   test('down puis up : réversible', async () => {
-    // 0020 (2.12) est la dernière : deux pas en arrière pour retirer 0019.
-    await migrateDown({ connectionString: tdb.url, steps: 2 });
+    // 0019 et les migrations venues après elle (0020 de 2.12, 0021 de 2.16…) : la 0019 n'est pas forcément la dernière.
+    await migrateDown({ connectionString: tdb.url, steps: loadMigrations().filter((m) => m.version >= 19).length });
     expect((await pool.query("SELECT to_regclass('rule_files') AS t")).rows[0].t).toBeNull();
     await migrateUp({ connectionString: tdb.url });
     expect((await pool.query("SELECT to_regclass('rule_files') AS t")).rows[0].t).toBe('rule_files');

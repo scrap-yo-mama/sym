@@ -22,7 +22,7 @@ export type RunTarget = {
     readonly requires: { readonly session_domain?: string | null; readonly tunnel?: boolean };
     /** `apis.requires_session` : l'API exige la session (l'identité) de l'utilisateur (C2, 04 §3.2). */
     readonly requiresSession: boolean;
-    /** `apis.instructed_mode` (2.13) : opt-in explicite de l'agent instruit (étapes confirmées, déclencheur de 0021). */
+    /** `apis.instructed_mode` (2.13) : opt-in explicite de l'agent instruit (étapes confirmées, déclencheur de 0022). */
     readonly instructedMode: boolean;
     /** `apis.description` : demande du propriétaire, source de la stratégie pour la réparation (04 §5 étape 1). */
     readonly description: string;
@@ -43,8 +43,12 @@ export type RunTarget = {
   } | null;
 };
 
-/** API et version de stratégie d'un run, lues comme le propriétaire (RLS). `null` : API invisible pour lui. */
-export async function loadRunTarget(pool: pg.Pool, args: { apiId: string; ownerId: string; version: number | null }): Promise<RunTarget | null> {
+/**
+ * API et version de stratégie d'un run, lues comme le propriétaire (RLS). `null` : API invisible pour lui.
+ * `caps.maxCostUsdPerRun` (`MAX_COST_USD_PER_RUN`, PA-02) borne `maxCostUsd` : les lignes déjà en base (importées,
+ * antérieures au plafond, défaut 0,5 au-dessus d'un plafond plus bas) ne dépassent jamais le plafond d'instance.
+ */
+export async function loadRunTarget(pool: pg.Pool, args: { apiId: string; ownerId: string; version: number | null; caps?: { readonly maxCostUsdPerRun: number } }): Promise<RunTarget | null> {
   return withActor(pool, { userId: args.ownerId, role: 'member' }, async (tx) => {
     const { rows } = await tx.query<{
       id: string;
@@ -95,7 +99,7 @@ export async function loadRunTarget(pool: pg.Pool, args: { apiId: string; ownerI
         outputSchema: api.output_schema,
         networkPolicy: api.network_policy,
         domainPacing: api.domain_pacing ?? {},
-        maxCostUsd: Number(api.max_cost_usd),
+        maxCostUsd: Math.min(Number(api.max_cost_usd), args.caps?.maxCostUsdPerRun ?? Number.POSITIVE_INFINITY),
         allowWriteActions: api.allow_write_actions,
         requires: api.requires ?? {},
         requiresSession: api.requires_session,

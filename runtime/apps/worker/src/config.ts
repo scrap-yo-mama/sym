@@ -3,10 +3,13 @@
 import {
   loadKeyring,
   loadObservabilityConfig,
+  costCapsFromEnv,
+  persistencePolicyFromEnv,
   scrubOtelEnvironment,
   subjectPhoneRegion,
   type Keyring,
   type ObservabilityConfig,
+  type PersistencePolicy,
 } from '@runtime/core';
 import { ssrfPolicyFromEnv, type SsrfPolicy } from '@runtime/core/net';
 import { RUN_DEFAULTS, retentionPolicyFromEnv, type RetentionPolicy } from '@runtime/db';
@@ -47,6 +50,12 @@ export type WorkerConfig = {
   retention: RetentionPolicy;
   /** Période de la passe de rétention planifiée (marquage horaire, purge quotidienne ; défaut 300 s). */
   retentionTickSeconds: number;
+  /** Mode « SYM ne lâche pas » (D-49) : `PERSISTENCE_SCHEDULE`, `PERSISTENCE_BUDGET_USD_DEFAULT`, `PERSISTENCE_MAX_DAYS`. */
+  persistence: PersistencePolicy;
+  /** `USER_BUDGET_DAILY_USD` (défaut 50) : budget USD par utilisateur et par jour, appliqué aux runs planifiés (08b § 3). */
+  userBudgetDailyUsd: number;
+  /** `MAX_COST_USD_PER_RUN` (défaut 10) : plafond d'instance du coût d'un run, aussi appliqué à ce que le worker lit en base. */
+  maxCostUsdPerRun: number;
 };
 
 function positive(env: NodeJS.ProcessEnv, name: string, fallback: number, min = 0.1): number {
@@ -74,8 +83,13 @@ export function loadWorkerConfig(env: NodeJS.ProcessEnv = process.env): WorkerCo
   const disable = env['DISABLE_BROWSER'] ?? 'false';
   if (!['true', 'false', '1', '0', ''].includes(disable)) throw new WorkerConfigError('DISABLE_BROWSER invalide : true ou false attendu.');
   let retention: RetentionPolicy;
+  let persistence: PersistencePolicy;
+  let userBudgetDailyUsd: number;
+  let maxCostUsdPerRun: number;
   try {
     retention = retentionPolicyFromEnv(env);
+    persistence = persistencePolicyFromEnv(env);
+    ({ userBudgetDailyUsd, maxCostUsdPerRun } = costCapsFromEnv(env));
     subjectPhoneRegion(env); // PHONE_DEFAULT_REGION : téléphones des sujets en E.164 (D-25), validée au démarrage
   } catch (error) {
     throw new WorkerConfigError((error as Error).message);
@@ -103,5 +117,8 @@ export function loadWorkerConfig(env: NodeJS.ProcessEnv = process.env): WorkerCo
     disableBrowser: disable === 'true' || disable === '1',
     retention,
     retentionTickSeconds: positive(env, 'RETENTION_TICK_SECONDS', 300),
+    persistence,
+    userBudgetDailyUsd,
+    maxCostUsdPerRun,
   };
 }

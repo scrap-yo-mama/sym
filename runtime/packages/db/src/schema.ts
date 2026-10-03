@@ -383,7 +383,10 @@ export const apis = pgTable(
     warningAlertedAt: tstz('warning_alerted_at'),
     // 0016_investigation (2.1) : état de l'enquête entre deux runs (demande, gisements, proposition, schéma validé).
     investigation: jsonb('investigation'),
-    // 0021_step_repair (2.13) : mode « agent instruit », opt-in explicite (déclencheur apis_instructed_mode_guard).
+    // 0021_persistence_mode (2.16, D-49) : mode « SYM ne lâche pas », opt-in ; plafond propre (NULL = défaut d'instance).
+    persistenceMode: boolean('persistence_mode').notNull().default(false),
+    persistenceBudgetUsd: usd('persistence_budget_usd'),
+    // 0022_step_repair (2.13) : mode « agent instruit », opt-in explicite (déclencheur apis_instructed_mode_guard).
     instructedMode: boolean('instructed_mode').notNull().default(false),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
@@ -394,8 +397,44 @@ export const apis = pgTable(
     check('apis_session_private', sql`NOT ${t.requiresSession} OR ${t.visibility} = 'private'`),
     check('apis_access_policy_robots', sql`${t.accessPolicy} ->> 'robots' = 'respect'`),
     check('apis_access_policy_payment', sql`coalesce(${t.accessPolicy} #>> '{payment,mode}', 'never') = 'never'`),
+    check('apis_persistence_budget_usd_check', sql`${t.persistenceBudgetUsd} IS NULL OR ${t.persistenceBudgetUsd} > 0`),
   ],
 );
+
+// 0021_persistence_mode (2.16, D-49) : cycle du mode « SYM ne lâche pas » d'une API en `erreur` (aucune valeur du site).
+export const apiPersistence = pgTable(
+  'api_persistence',
+  {
+    apiId: uuid('api_id')
+      .primaryKey()
+      .references(() => apis.id, { onDelete: 'cascade' }),
+    domain: text('domain').notNull(),
+    enteredErrorAt: tstz('entered_error_at').notNull(),
+    failureClass: text('failure_class'),
+    attempt: integer('attempt').notNull().default(0),
+    nextAt: tstz('next_at'),
+    runId: uuid('run_id').references(() => runs.id, { onDelete: 'set null' }),
+    lastAttemptAt: tstz('last_attempt_at'),
+    spentUsd: usd('spent_usd').notNull().default('0'),
+    lastOutcome: text('last_outcome'),
+    ended: text('ended', { enum: ['refused', 'ineligible', 'exhausted'] }),
+    endedReason: text('ended_reason'),
+    updatedAt: updatedAt(),
+  },
+  (t) => [
+    index('api_persistence_domain_idx').on(t.domain).where(sql`${t.ended} IS NULL`),
+    index('api_persistence_due_idx').on(t.nextAt).where(sql`${t.ended} IS NULL AND ${t.runId} IS NULL`),
+    check('api_persistence_ended_idle', sql`${t.ended} IS NULL OR (${t.nextAt} IS NULL AND ${t.runId} IS NULL)`),
+  ],
+);
+
+// Une tentative par domaine enregistrable et par créneau (clé = domaine seul) ; identité système seulement.
+export const persistenceDomainSlots = pgTable('persistence_domain_slots', {
+  domain: text('domain').primaryKey(),
+  apiId: uuid('api_id').references(() => apis.id, { onDelete: 'set null' }),
+  runId: uuid('run_id').references(() => runs.id, { onDelete: 'set null' }),
+  slotUntil: tstz('slot_until').notNull(),
+});
 
 export const strategyVersions = pgTable(
   'strategy_versions',
@@ -414,7 +453,7 @@ export const strategyVersions = pgTable(
     createdBy: text('created_by', { enum: STRATEGY_CREATORS }).notNull(),
     parentVersion: integer('parent_version'),
     patch: jsonb('patch'),
-    // 0021_step_repair (2.13) : compilable en E5, étapes instruites (non fiables tant que non confirmées), archivage.
+    // 0022_step_repair (2.13) : compilable en E5, étapes instruites (non fiables tant que non confirmées), archivage.
     compilable: text('compilable', { enum: STRATEGY_COMPILABLE }).notNull().default('unknown'),
     instructedSteps: jsonb('instructed_steps'),
     instructedStepsSha256: text('instructed_steps_sha256'),
@@ -580,7 +619,7 @@ export const runAttempts = pgTable(
     modelId: text('model_id'),
     promptVersion: text('prompt_version'),
     engine: text('engine'),
-    // 0021_step_repair (2.13) : journal par étape (jetons et coût par étape, `cost_usd`).
+    // 0022_step_repair (2.13) : journal par étape (jetons et coût par étape, `cost_usd`).
     stepId: text('step_id'),
     stepLevel: smallint('step_level'),
     stepOutcome: text('step_outcome', { enum: STEP_OUTCOMES }),

@@ -72,7 +72,7 @@ describe('énumérations TS = CHECK SQL', () => {
     ['runs', 'kind', RUN_KINDS],
     ['run_attempts', 'execution', EXECUTIONS],
     ['run_attempts', 'network', NETWORKS],
-    // 0021_step_repair (2.13).
+    // 0022_step_repair (2.13).
     ['strategy_versions', 'compilable', STRATEGY_COMPILABLE],
     ['run_attempts', 'step_outcome', STEP_OUTCOMES],
   ] as const)('%s.%s', async (table, column, values) => {
