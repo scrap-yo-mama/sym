@@ -120,6 +120,16 @@ async function identityView(ctx: ServerContext): Promise<IdentityView> {
   };
 }
 
+/**
+ * Le contact d'instance manque-t-il pour la première enquête (17 § 5, UX-04) ? Même résolution que le worker : le réglage, puis
+ * l'environnement que le worker a publié avec son moteur. Tant qu'aucun worker n'a publié, son environnement est inconnu :
+ * le serveur ne devine pas (false) plutôt que de refuser un contact que le worker lirait dans sa variable.
+ */
+export async function instanceContactMissing(ctx: ServerContext): Promise<boolean> {
+  const view = await identityView(ctx);
+  return view.engine !== null && view.instance_contact_effective === null;
+}
+
 export function identityRoutes(app: FastifyInstance, ctx: ServerContext): void {
   app.get('/api/settings/identity', async () => identityView(ctx));
 

@@ -52,10 +52,12 @@ import {
   versionSummary,
   type ApiRow,
 } from '../rest/apis.js';
+import { runErrorFor, runErrorOf } from '../rest/run-error.js';
 import { buildRunResult, readRunRow, waitForRun } from '../rest/runs.js';
 import { BLOCKING_STATUS, rejectIfKeyRateLimited, rejectWithoutAck, reasonMessage, reserveRunSlot, RunSlotError, sendRunSlotError, triggerOf, waitSecondsOf } from '../rest/shared.js';
 import { CURSOR_TIME, decodeCursor, encodeCursor, INT4_MAX, UUID } from './account-helpers.js';
 import { audit, notFound, sendError, type Actor } from './guard.js';
+import { instanceContactMissing } from './identity.js';
 
 const executionList = { type: 'array', uniqueItems: true, maxItems: 6, items: { type: 'string', enum: [...EXECUTIONS] } } as const;
 
@@ -222,6 +224,9 @@ export async function createdView(ctx: ServerContext, actor: Actor, apiId: strin
   return withActor(ctx.pool, actor, async (db) => {
     const api = await readApiById(db, apiId);
     const proposal = await latestProposal(db, apiId);
+    // UX-07 : l'état réel de l'enquête (en cours, ou échec avec sa cause), pour que la phase, le schéma et la phrase ne se contredisent pas.
+    const run = await readRunRow(db, runId);
+    const error = run === null ? null : runErrorOf(run);
     return {
       api_id: apiId,
       slug: api?.slug ?? '',
@@ -230,6 +235,9 @@ export async function createdView(ctx: ServerContext, actor: Actor, apiId: strin
       sample: proposal.sample,
       access_report: await latestAccessReport(db, apiId),
       run_id: runId,
+      ...(run === null ? {} : { run_state: run.state }),
+      ...(api === null ? {} : { status: api.status }),
+      ...(error === null ? {} : { error }),
     };
   });
 }
@@ -300,6 +308,11 @@ export function apiRoutes(app: FastifyInstance, ctx: ServerContext): void {
     const actor = request.actor!;
     const body = request.body;
     if (await rejectIfKeyRateLimited(ctx, reply, actor)) return reply;
+    // UX-04 : sans contact d'instance, l'enquête échouerait aussitôt (17 § 5) : refus AVANT de créer l'API ou le run.
+    if (await instanceContactMissing(ctx)) {
+      const missing = runErrorFor('instance_contact_missing');
+      return sendError(reply, 409, missing.code, missing.message);
+    }
     // Validation automatique : le schéma proposé n'est pas encore connu ; s'il porte `x-personal`, la case est exigée.
     if (body.auto_validate === true && (await rejectWithoutAck(ctx, reply, actor, true))) return reply;
     let policy: Record<string, unknown> | null = null;

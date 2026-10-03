@@ -2124,6 +2124,10 @@ export interface components {
             access_report: components["schemas"]["AccessReport"] | null;
             /** Format: uuid */
             run_id?: string | null;
+            /** @description État réel du run d'enquête à la réponse (UX-07) : en cours, ou terminé (`failed` avec `error`). */
+            run_state?: components["schemas"]["RunState"];
+            status?: components["schemas"]["ApiStatus"];
+            error?: components["schemas"]["RunError"];
         };
         /** @description Champs modifiables. Un schéma (`output_schema`, `input_schema`) ne change que par un brouillon puis une promotion (19 § 6, itération) : en place, 409 `draft_required`. `access_policy` n'est pas modifiable (INV11) ; une API avec session reste `private` (400 `session_api_private`). */
         ApiPatch: {
@@ -2374,6 +2378,13 @@ export interface components {
             state: components["schemas"]["RunState"];
             poll_after_seconds?: number | null;
         };
+        /** @description Cause nommée d'un run arrêté ou en échec (UX-04) : code stable (`instance_contact_missing`…), message lisible, marche à suivre pour l'agent (en anglais) et `retryable`. Absente quand la cause n'est pas nommée. */
+        RunError: {
+            code: components["schemas"]["ReasonCode"];
+            message: string;
+            what_to_do: string;
+            retryable: boolean;
+        };
         /** @description Enveloppe commune des sorties d'exécution (05 § 4.1), identique en MCP et en REST. */
         RunResult: {
             /** Format: uuid */
@@ -2390,6 +2401,7 @@ export interface components {
             next_cursor: string | null;
             degraded_reasons: components["schemas"]["ReasonCode"][];
             message: string;
+            error?: components["schemas"]["RunError"];
             next_action: components["schemas"]["NextAction"] | null;
             poll_after_seconds: number | null;
             timeline: {
@@ -2421,6 +2433,7 @@ export interface components {
             degraded_reasons: components["schemas"]["ReasonCode"][];
             failure_class: components["schemas"]["FailureClass"] | null;
             retryable?: boolean;
+            error?: components["schemas"]["RunError"];
             /** Format: date-time */
             created_at: string;
             /** Format: date-time */

@@ -3932,6 +3932,14 @@ components:
         run_id:
           type: [string, 'null']
           format: uuid
+        run_state:
+          description: >-
+            État réel du run d'enquête à la réponse (UX-07) : en cours, ou terminé (`failed` avec `error`).
+          $ref: '#/components/schemas/RunState'
+        status:
+          $ref: '#/components/schemas/ApiStatus'
+        error:
+          $ref: '#/components/schemas/RunError'
     ApiPatch:
       description: >-
         Champs modifiables. Un schéma (`output_schema`, `input_schema`) ne change que par un brouillon puis une promotion
@@ -4441,6 +4449,22 @@ components:
           $ref: '#/components/schemas/RunState'
         poll_after_seconds:
           type: [integer, 'null']
+    RunError:
+      description: >-
+        Cause nommée d'un run arrêté ou en échec (UX-04) : code stable (`instance_contact_missing`…), message lisible, marche à
+        suivre pour l'agent (en anglais) et `retryable`. Absente quand la cause n'est pas nommée.
+      type: object
+      additionalProperties: false
+      required: [code, message, what_to_do, retryable]
+      properties:
+        code:
+          $ref: '#/components/schemas/ReasonCode'
+        message:
+          type: string
+        what_to_do:
+          type: string
+        retryable:
+          type: boolean
     RunResult:
       description: Enveloppe commune des sorties d'exécution (05 § 4.1), identique en MCP et en REST.
       type: object
@@ -4475,6 +4499,8 @@ components:
             $ref: '#/components/schemas/ReasonCode'
         message:
           type: string
+        error:
+          $ref: '#/components/schemas/RunError'
         next_action:
           oneOf:
             - $ref: '#/components/schemas/NextAction'
@@ -4538,6 +4564,8 @@ components:
             - type: 'null'
         retryable:
           type: boolean
+        error:
+          $ref: '#/components/schemas/RunError'
         created_at:
           type: string
           format: date-time
