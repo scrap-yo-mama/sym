@@ -7,7 +7,14 @@ import { PAGES, QUADRANTS, type PageEntry } from './nav.ts';
 
 export const SITE_TITLE = 'Scrapyomama Runtime';
 export const SITE_SUMMARY =
-  'Un « Apify agentique » open source, appelé en MCP. Un agent enquête pour trouver la méthode la moins chère qui produit la sortie demandée, l’enregistre comme une API du catalogue, la rejoue à coût de code et la répare quand elle casse. Auto-hébergé : PostgreSQL, modèle IA et proxys à vous.';
+  'Un outil open source, appelé en MCP. Un agent enquête pour trouver la méthode la moins chère qui produit la sortie demandée, l’enregistre comme une API du catalogue, la rejoue à coût de code et la répare quand elle casse. Auto-hébergé : PostgreSQL, modèle IA et proxys à vous.';
+
+/** Dossier de sortie sous apps/docs : `DOCS_OUT_DIR` (un nom simple, défaut `dist`). */
+export function outDirName(env: Record<string, string | undefined> = process.env): string {
+  const name = (env['DOCS_OUT_DIR'] ?? 'dist').trim();
+  if (!/^[A-Za-z0-9._-]+$/.test(name) || name === '.' || name === '..') throw new Error(`DOCS_OUT_DIR invalide : « ${name} »`);
+  return name;
+}
 
 export const stripFrontmatter = (markdown: string): string => markdown.replace(/^---\n[\s\S]*?\n---\n/, '');
 
@@ -126,7 +133,13 @@ export function checkSite(distDir: string, base: string): SiteProblem[] {
         problems.push({ page: rel, problem: `ancre introuvable : ${r}` });
       }
     }
-    for (const src of [...attrs(html, 'script', 'src'), ...attrs(html, 'link', 'href')]) {
+    // Une balise <link> canonique ou d'alternative de langue désigne une page (adresse absolue voulue), elle ne charge rien.
+    const resourceLinks = [...html.matchAll(/<link\b[^>]*>/g)].map((m) => m[0]).filter((tag) => !/\brel="(?:canonical|alternate)"/.test(tag));
+    for (const tag of resourceLinks) {
+      const href = /\shref="([^"]*)"/.exec(tag)?.[1] ?? '';
+      if (/^(https?:)?\/\//.test(href)) problems.push({ page: rel, problem: `ressource chargée hors du site : ${href}` });
+    }
+    for (const src of attrs(html, 'script', 'src')) {
       if (/^(https?:)?\/\//.test(src)) problems.push({ page: rel, problem: `ressource chargée hors du site : ${src}` });
     }
     if (rel !== '404.html' && !html.includes('llms.txt')) problems.push({ page: rel, problem: 'aucun lien vers llms.txt' });
@@ -140,7 +153,37 @@ export function checkSite(distDir: string, base: string): SiteProblem[] {
 }
 
 /** Index Pagefind du site construit (statique, sans tiers) : écrit `dist/pagefind/`. */
+/**
+ * Fichiers de l'index Pagefind vides (ou entrée JSON illisible) : `writeFiles` peut rendre la main avant que le moteur ait fini
+ * d'écrire, et `close()` l'arrête alors au milieu (pagefind-entry.json à 0 octet, vu sous charge). L'index est alors reconstruit.
+ */
+export function incompletePagefindFiles(distDir: string): string[] {
+  const dir = join(distDir, 'pagefind');
+  if (!existsSync(dir)) return ['pagefind-entry.json'];
+  const incomplete = readdirSync(dir)
+    .filter((name) => statSync(join(dir, name)).isFile() && statSync(join(dir, name)).size === 0)
+    .sort();
+  const entry = join(dir, 'pagefind-entry.json');
+  if (!incomplete.includes('pagefind-entry.json')) {
+    try {
+      JSON.parse(readFileSync(entry, 'utf8'));
+    } catch {
+      return [...incomplete, 'pagefind-entry.json'].sort();
+    }
+  }
+  return incomplete;
+}
+
 export async function buildSearchIndex(distDir: string): Promise<number> {
+  for (let attempt = 1; ; attempt++) {
+    const pages = await writeSearchIndex(distDir);
+    const incomplete = incompletePagefindFiles(distDir);
+    if (incomplete.length === 0) return pages;
+    if (attempt >= 3) throw new Error(`Pagefind : index incomplet après ${attempt} essais (${incomplete.join(', ')})`);
+  }
+}
+
+async function writeSearchIndex(distDir: string): Promise<number> {
   const pagefind = await import('pagefind');
   const { index, errors: createErrors } = await pagefind.createIndex({ rootSelector: '.vp-doc', forceLanguage: 'fr' });
   if (!index) throw new Error(`Pagefind : index non créé (${createErrors.join('; ')})`);

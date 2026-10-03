@@ -32,8 +32,9 @@ function workspaceDirs(): string[] {
 const PRIVATE = existsSync(join(repoDir, 'docs/modules.md'));
 const ROOT_CLAUDE = join(repoDir, 'CLAUDE.md');
 
+// Dossiers à CLAUDE.md propre : ceux de l'étape 0, plus packages/contracts (contrat de SYM Browser, tâche browser 0.1).
+const STEP0_FOLDERS = ['apps/extension', 'apps/web', 'apps/docs', 'packages/agent', 'packages/llm', 'packages/ui', 'packages/contracts'];
 /** Le CLAUDE.md racine (commandes de runtime/package.json, dépôt de travail seulement) et ceux des dossiers de l'étape 0. */
-const STEP0_FOLDERS = ['apps/extension', 'apps/web', 'apps/docs', 'packages/agent', 'packages/llm', 'packages/ui'];
 const claudeFiles = [
   ...(PRIVATE ? [{ path: ROOT_CLAUDE, pkgDir: runtimeDir }] : []),
   ...STEP0_FOLDERS.map((d) => ({ path: join(runtimeDir, d, 'CLAUDE.md'), pkgDir: join(runtimeDir, d) })),

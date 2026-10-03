@@ -4,6 +4,11 @@ packages:
   - fixtures
   # Paquet d'évaluation isolé du spike 0.6a (protocole §13) : seul endroit où Stagehand est installé.
   - eval/spike
+  # SYM Browser (ADR 23 étape 0 bis ; cdc/sym-browser 03 § 9) : module autonome. `modules/browser` porte les tests de module
+  # (frontière, environnement Claude) et la CI locale du module ; frontière vérifiée par le lint (modules/browser/eslint.boundaries.mjs).
+  - modules/browser
+  - modules/browser/apps/*
+  - modules/browser/packages/*
 
 # Catalogue unique : versions exactes (aucune plage ouverte), une seule source de vérité.
 catalog:
@@ -125,6 +130,9 @@ catalog:
   # (0.1.16, dernière stable du 2026-03-30, s'arrête à 2025-11-25) ; 0.2.0-alpha.11 publiée le 2026-08-07 (alpha.12 du
   # 2026-10-01 < 7 jours). Écarts attendus commentés : tests/mcp-conformance/expected-failures-<révision>.yaml.
   "@modelcontextprotocol/conformance": 0.2.0-alpha.11
+  # Lighthouse mobile de la landing (tâche 4.11, 22b § 1 « Lighthouse CI », 22b § 2 assert_landing_perf_budget) : API Node de Lighthouse
+  # (Apache-2.0), lancée sur le Chromium de Playwright ; 13.5.0 publiée le 2026-09-18 (plus de 7 jours, minimumReleaseAge).
+  lighthouse: 13.5.0
 
 # OTel coupé = aucun module de l'API ni du SDK résolu (14 § 10, assert_otel_off_by_default). Better Auth
 # (@better-auth/core) fait `import("@opentelemetry/api")` à chaque requête d'auth ; drizzle-orm et vitest déclarent le même

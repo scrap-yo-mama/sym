@@ -13,7 +13,7 @@ import { CONSOLE_CSP } from './csp.ts';
 
 type ApiReply = { status?: number; body?: unknown };
 type ApiRequest = { method: string; path: string; params: Record<string, string>; query: URLSearchParams; body: unknown };
-type ApiHandler = (request: ApiRequest) => ApiReply | Promise<ApiReply>;
+export type ApiHandler = (request: ApiRequest) => ApiReply | Promise<ApiReply>;
 /** « MÉTHODE /chemin/:paramètre » → réponse. */
 export type ApiRoutes = Record<string, ApiHandler | ApiReply>;
 

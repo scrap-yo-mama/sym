@@ -53,3 +53,11 @@ export function actionTitleParams(params: Readonly<Record<string, unknown>> | nu
     platform: text(params?.platform),
   };
 }
+
+/**
+ * Site de l'éditeur (cause « paiement ») : un lien sortant vers le domaine concerné, jamais un appel du serveur. Nul quand le
+ * domaine n'est pas un nom d'hôte simple (le bandeau et la ligne du catalogue n'ont alors aucun bouton vers le site).
+ */
+export function publisherSiteUrl(domain: string): string | null {
+  return /^[a-z0-9.-]+$/i.test(domain) && domain.includes('.') ? `https://${domain}` : null;
+}

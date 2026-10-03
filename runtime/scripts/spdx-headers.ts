@@ -8,7 +8,8 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
 export const DEFAULT_LICENSE = 'AGPL-3.0-only';
-export const MIT_PACKAGES = ['packages/client', 'packages/schemas'] as const;
+// Contrat @sym/contracts et SDK de SYM Browser en MIT (ADR 23 § 7, cdc/sym-browser 03 § 1) : un SDK MIT peut en dépendre.
+export const MIT_PACKAGES = ['packages/client', 'packages/schemas', 'packages/contracts', 'modules/browser/packages/sdk'] as const;
 
 /**
  * Code copié d'un projet tiers sous licence MIT : composants shadcn-vue de la console (3.3) et leur utilitaire `cn`.

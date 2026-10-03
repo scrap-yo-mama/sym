@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Planification, webhooks et alertes dans le worker (tâche 2.5, 08 § 5) :
-// - files `scheduled-run` (alimentée par le cron de pg-boss), `scheduled-run-deferred` (`overlap: queue`), `webhook-delivery`
-//   et `alert-email` ; chaque job est traité par la fonction de `@runtime/db` correspondante ;
+// - files `scheduled-run` (alimentée par le cron de pg-boss), `scheduled-run-deferred` (`overlap: queue`), `webhook-delivery`,
+//   `alert-email` et `persistence-attempt` (mode « SYM ne lâche pas », D-49) ; chaque job est traité par la fonction de
+//   `@runtime/db` correspondante ;
 // - miroir pg-boss reconstruit depuis `schedules` au démarrage (source de vérité : la table) ;
 // - contrôle des `warning` qui durent au-delà de D, périodique, atomique entre workers ; au même pas, retrait des secrets
 //   webhook précédents dont la grâce est passée ;
@@ -11,6 +12,7 @@ import {
   SCHEDULED_RUN_QUEUE,
   type ScheduledRunJobData,
 } from '@runtime/core';
+import type { PersistencePolicy } from '@runtime/core';
 import type { SsrfGuard } from '@runtime/core/net';
 import {
   ALERT_QUEUE,
@@ -26,7 +28,14 @@ import {
   SCHEDULED_RUN_DEFERRED_QUEUE,
   WEBHOOK_DELIVERY_QUEUE,
   webhookDeliveryQueueDefinition,
+  NEGATIVE_MEMORY_UNAVAILABLE,
+  PERSISTENCE_QUEUE,
+  persistenceQueueDefinition,
+  runPersistenceAttempt,
+  sweepDuePersistence,
   type AlertJob,
+  type NegativeMemory,
+  type PersistenceJob,
   type PgBossJobQueue,
   type ReconcileResult,
   type SecretStore,
@@ -46,6 +55,10 @@ export type SchedulingOptions = {
   warningCheckSeconds: number;
   pollingIntervalSeconds: number;
   smtpCa?: string[];
+  /** Mode « SYM ne lâche pas » (D-49) : créneaux et plafonds lus au démarrage. */
+  persistence: PersistencePolicy;
+  /** Mémoire négative (2.12) : indisponible tant qu'elle n'est pas branchée, le mode ne tente alors rien. */
+  negativeMemory?: NegativeMemory;
 };
 
 export type Scheduling = {
@@ -59,7 +72,7 @@ const errorText = (error: unknown): string => (error instanceof Error ? `${error
 
 export async function startScheduling(options: SchedulingOptions): Promise<Scheduling> {
   const { pool, queue, store, guard, log, now } = options;
-  for (const definition of [scheduledRunQueueDefinition(), scheduledRunDeferredQueueDefinition(), webhookDeliveryQueueDefinition(), alertQueueDefinition()]) {
+  for (const definition of [scheduledRunQueueDefinition(), scheduledRunDeferredQueueDefinition(), webhookDeliveryQueueDefinition(), alertQueueDefinition(), persistenceQueueDefinition()]) {
     await queue.createQueue(definition);
   }
   // Miroir reconstruit AVANT de consommer : lignes actives → schedule(), clés orphelines → unschedule().
@@ -100,8 +113,18 @@ export async function startScheduling(options: SchedulingOptions): Promise<Sched
     log.info({ apiId: job.data.api_id, cause: job.data.cause, ...result }, 'alerte : traitée');
   });
 
+  // Mode « SYM ne lâche pas » (2.16) : un job par API, qui relit tout en base (créneau, plafonds, refus, reports).
+  const persistence = { queue, now, policy: options.persistence, negativeMemory: options.negativeMemory ?? NEGATIVE_MEMORY_UNAVAILABLE };
+  await queue.work<PersistenceJob>(PERSISTENCE_QUEUE, { concurrency: 1, ...polling }, async (job) => {
+    if (typeof job.data?.api_id !== 'string') return;
+    const tick = await runPersistenceAttempt(pool, persistence, job.data.api_id);
+    log.info({ apiId: job.data.api_id, tick: tick.kind, ...('reason' in tick ? { reason: tick.reason } : {}) }, 'persistance : passage');
+  });
+
   const checkWarnings = async () => {
     const alerted = await checkLongWarnings({ pool, queue, now });
+    // Filet du réveil de la persistance : un job perdu ne fige jamais un cycle.
+    await sweepDuePersistence(pool, persistence);
     const purged = await purgeExpiredWebhookSecrets(pool, now());
     if (purged > 0) log.info({ purged }, 'webhook : secrets précédents expirés supprimés');
     return alerted;
@@ -124,7 +147,7 @@ export async function startScheduling(options: SchedulingOptions): Promise<Sched
     checkWarnings,
     async stop() {
       clearInterval(timer);
-      for (const name of [SCHEDULED_RUN_QUEUE, SCHEDULED_RUN_DEFERRED_QUEUE, WEBHOOK_DELIVERY_QUEUE, ALERT_QUEUE]) {
+      for (const name of [SCHEDULED_RUN_QUEUE, SCHEDULED_RUN_DEFERRED_QUEUE, WEBHOOK_DELIVERY_QUEUE, ALERT_QUEUE, PERSISTENCE_QUEUE]) {
         await queue.offWork(name).catch((error: unknown) => log.warn({ err: errorText(error), queue: name }, 'arrêt : offWork'));
       }
     },

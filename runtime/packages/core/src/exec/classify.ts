@@ -15,6 +15,17 @@ import { UpstreamProxyError } from '../net/modes/upstream.js';
 import { detectChallengePage, protectionSignal, vendorSignature } from './protection.js';
 import type { ExecFailure, HttpExchange } from './types.js';
 
+/**
+ * Codes de journal d'une géo-restriction (04 §7) : 451, redirection vers une page de pays. Un « non » géographique ou
+ * légal : jamais réessayé, jamais contourné (mode « SYM ne lâche pas », D-49). Tout code `geo_*` en est un.
+ */
+const GEO_RESTRICTION_DETAILS = ['geo_restriction', 'geo_redirect'] as const;
+
+/** Vrai pour un code de journal de géo-restriction (`geo_*`, dont ceux de `GEO_RESTRICTION_DETAILS`). */
+export function isGeoRestrictionDetail(detail: string | null | undefined): boolean {
+  return typeof detail === 'string' && ((GEO_RESTRICTION_DETAILS as readonly string[]).includes(detail) || detail.startsWith('geo_'));
+}
+
 const fail = (failure_class: ExecFailure['failure_class'], retryable: boolean, detail: string, status?: number): ExecFailure =>
   status === undefined ? { failure_class, retryable, detail } : { failure_class, retryable, detail, status };
 
@@ -28,7 +39,7 @@ export function classifyStatus(status: number): ExecFailure | null {
   if (status === 407) return fail('code_error', false, 'proxy_auth_failed', status);
   if (status === 408) return fail('transient', true, 'http_408', status);
   if (status === 429) return fail('rate_limited', true, 'http_429', status);
-  if (status === 451) return fail('network', false, 'geo_restriction', status);
+  if (status === 451) return fail('network', false, GEO_RESTRICTION_DETAILS[0], status);
   if (status >= 500 && status < 600) return fail('transient', true, `http_${status}`, status);
   return fail('extraction', false, `http_${status}`, status);
 }
@@ -56,7 +67,7 @@ function redirectTarget(exchange: HttpExchange, context: ClassifyContext): ExecF
   const target = location !== undefined ? pathOf(location, exchange.url) : requested === undefined ? undefined : pathOf(exchange.url);
   if (target === undefined || target === requested) return null;
   if (LOGIN_PATH.test(target) && !(requested !== undefined && LOGIN_PATH.test(requested))) return fail('auth_required', false, 'login_redirect', exchange.status);
-  if (GEO_PATH.test(target)) return fail('network', false, 'geo_redirect', exchange.status);
+  if (GEO_PATH.test(target)) return fail('network', false, GEO_RESTRICTION_DETAILS[1], exchange.status);
   return null;
 }
 

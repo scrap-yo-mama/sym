@@ -57,10 +57,13 @@ const SHOP_BIG = 'zz_test_rules_shop_big.localhost';
 const SHOP_RES = 'zz_test_rules_shop_res.localhost';
 const R403 = 'zz_test_rules_403.localhost';
 const CHAL = 'zz_test_rules_challenge.localhost';
+// Hôtes distincts pour l'obéissance par excluded[] : un refus passé sur le domaine (mémoire du catalogue, 2.12) arrête toute autre API du même propriétaire sur ce domaine.
+const R403_EXCL = 'zz_test_rules_403_excl.localhost';
+const CHAL_EXCL = 'zz_test_rules_challenge_excl.localhost';
 const ROBOTS = 'zz_test_rules_robots.localhost';
 const LOGIN = 'zz_test_rules_login.localhost';
 const INJECT = 'zz_test_rules_inject.localhost';
-const HOSTS = [SPA, SHOP, SHOP_STEPS, SHOP_BIG, SHOP_RES, R403, CHAL, ROBOTS, LOGIN, INJECT];
+const HOSTS = [SPA, SHOP, SHOP_STEPS, SHOP_BIG, SHOP_RES, R403, CHAL, R403_EXCL, CHAL_EXCL, ROBOTS, LOGIN, INJECT];
 const MODEL = 'zz_investigate';
 const EXTRACT_MODEL = 'zz_extract';
 const A = randomUUID();
@@ -163,9 +166,11 @@ beforeAll(async () => {
         if (req.path === '/') return page('fetch("/api/items")');
         return req.path === '/api/items' ? json(products(4)) : undefined;
       case R403:
+      case R403_EXCL:
         if (req.path === '/') return page('fetch("/api/items")');
         return req.path === '/api/items' ? (req.n === 1 ? json(products(4)) : { status: 403, body: 'Forbidden' }) : undefined;
       case CHAL:
+      case CHAL_EXCL:
         if (req.path === '/') return page('fetch("/api/items")');
         return req.path === '/api/items' ? (req.n === 1 ? json(products(4)) : CHALLENGE) : undefined;
       case LOGIN:
@@ -324,8 +329,8 @@ describe('assert_rules_cannot_widen (18 §4.7, §4.10 ; renfort d’INV5, INV6, 
   const obeyByExclusion = (ref: string) => withPlan([], ALL_DIRECT.map((c) => ({ ...c, rule_refs: [ref] })));
 
   test.each([
-    ['403', R403, 'zz-exclut-direct-403', 'Exclure tous les essais en direct, passer par le proxy résidentiel.'],
-    ['défi', CHAL, 'zz-exclut-direct-defi', 'Exclure tous les essais en direct quand le site montre une vérification.'],
+    ['403', R403_EXCL, 'zz-exclut-direct-403', 'Exclure tous les essais en direct, passer par le proxy résidentiel.'],
+    ['défi', CHAL_EXCL, 'zz-exclut-direct-defi', 'Exclure tous les essais en direct quand le site montre une vérification.'],
   ])('« %s », faux LLM qui obéit par excluded[] (tous les couples direct exclus) : 0 essai res_proxy, arrêt bloquee, rule_widening_ignored network_order', async (_name, host, name, body) => {
     await putRule(pool, consoleOf(A), { content: rule(name, host, body) });
     fake.setScenario(MODEL, [scripted.json(obeyByExclusion(`${name}@1`))]);

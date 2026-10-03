@@ -64,7 +64,7 @@ import {
   type AccessReport,
   type RobotsFetcher,
 } from '@runtime/core/access';
-import { classifyExchange, classifyTransportError, domainRequestPacer, failureRoute, type ExecFailure, type HttpExchange, type RequestPacer } from '@runtime/core/exec';
+import { classifyExchange, classifyTransportError, domainRequestPacer, failureRoute, isGeoRestrictionDetail, type ExecFailure, type HttpExchange, type RequestPacer } from '@runtime/core/exec';
 import {
   analyzeCapture,
   buildFromProposal,
@@ -76,6 +76,7 @@ import {
   INVESTIGATION_DEFAULTS,
   INVESTIGATION_EVENTS as EV,
   isActionUrl,
+  milestoneLogEntry,
   narrativeUrl,
   PROPOSAL_HARD_MAX_PAGES,
   rematchCandidates,
@@ -87,6 +88,7 @@ import {
   type BuiltStrategy,
   type CapturedExchange,
   type DataCandidate,
+  type InvestigationMilestone,
   type PairOutcome,
   type PlanEntry,
   type PlanNetwork,
@@ -267,6 +269,9 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
     let state: InvestigationState = inv.state;
     let phase: InvestigationPhase | null = inv.phase;
     const request = state.request;
+    // `investigation_budget_usd` ; une tentative du mode « SYM ne lâche pas » (2.16) le borne encore au reste de son
+    // plafond et du budget du jour (`budget_cap_usd`) : le plafond annoncé est strict.
+    const budgetUsd = Math.min(request.budget_usd, state.budget_cap_usd ?? Number.POSITIVE_INFINITY);
     const pageUrl = new URL(request.url).href;
     const host = new URL(pageUrl).hostname.toLowerCase();
     // Domaines de l'API (04b §2) : la page et ses sous-domaines (ou ceux du domaine sans `www.`), jamais un voisin.
@@ -278,9 +283,12 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
     const signal = AbortSignal.any([ctx.signal, deadline]);
     const timedOut = () => !ctx.signal.aborted && (deadline.aborted || now() >= deadlineMs);
     let spent = state.spent_usd;
-    const budgetView = () => ({ spent_usd: spent, max_usd: request.budget_usd, elapsed_s: Math.round((baseElapsed + now() - started) / 1000), timeout_s: request.timeout_s });
+    const budgetView = () => ({ spent_usd: spent, max_usd: budgetUsd, elapsed_s: Math.round((baseElapsed + now() - started) / 1000), timeout_s: request.timeout_s });
     const event = (kind: string, payload: Record<string, unknown> = {}) =>
       appendInvestigationEvent(deps.pool, { runId: ctx.runId, ownerId: ctx.ownerId, kind, payload: { run_id: ctx.runId, ...payload } });
+    /** Jalon atteint, écrit dans les journaux du run avec la clé et l'intitulé du noyau (`assert_milestones_same_labels`). */
+    const milestone = (key: InvestigationMilestone) => ctx.log('info', 'milestone', milestoneLogEntry(key));
+    const planView = (entries: readonly PlanEntry[]) => entries.map((p) => ({ execution: p.execution, network: p.network, source: p.source, est_cost_usd: p.est_cost_usd }));
     /** Décisions de l'enquête (source de la version, 18 §4.6) : événements qui les portent, `run:seq`. */
     const decisions: string[] = [];
     const decide = async (kind: string, payload: Record<string, unknown> = {}) => {
@@ -347,7 +355,7 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
         const judgeConfig = deps.judgeLlm === undefined ? config : await deps.judgeLlm.config().catch(() => null);
         if (judgeConfig === null) return;
         const baselineItem = await readBaselineItem(deps.pool, { apiId: ctx.apiId, ownerId: ctx.ownerId, inputHash: hash }).catch(() => null);
-        const out = await judgeItems({ config: judgeConfig, client: judge.client, trigger: 'investigation', schema, profile, items: records, baselineItem, maxUsd: Math.max(0, request.budget_usd - spent), signal });
+        const out = await judgeItems({ config: judgeConfig, client: judge.client, trigger: 'investigation', schema, profile, items: records, baselineItem, maxUsd: Math.max(0, budgetUsd - spent), signal });
         if (out === null) return;
         await charge(ctx, 0, out.costUsd, { ...out.tokens, estimated: false });
         if (out.costUsd !== null) spent = round6(spent + out.costUsd);
@@ -476,7 +484,7 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
         }
       }
       // Étape 0 et reconnaissance sous le plus petit de `max_cost_usd` et du budget restant de l'enquête.
-      const ceiling = Math.max(0, Math.min(target.api.maxCostUsd, request.budget_usd - spent));
+      const ceiling = Math.max(0, Math.min(target.api.maxCostUsd, budgetUsd - spent));
       const sessionBase: SessionBase = {
         rung,
         guard: deps.guard,
@@ -552,6 +560,25 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
           return await finishFailed({ failure_class: 'code_error', retryable: false, detail: 'imported_hosts_out_of_scope' }, 'setup');
         }
       }
+      // Plan restreint par l'appelant (`exclude_executions`, 06 § 2) : des niveaux retirés, jamais ajoutés.
+      const excluded = new Set<string>(state.excluded_executions ?? []);
+      /** Plan d'essais chiffré (pur, sans requête) : annoncé AVEC la porte du schéma (20 § 5.3), puis rejoué tel quel au lancement des essais. */
+      const planFor = (strategies: readonly BuiltStrategy[]): PlanEntry[] =>
+      (
+        imported !== undefined
+          ? buildImportedPlan({ execution: imported.execution, spec: imported.spec, networks, browser: deps.browsers !== null })
+          : buildTrialPlan({
+              strategies,
+              networks,
+              browser: deps.browsers !== null,
+              agentic: deps.agentic === true ? { ...(rolePrice(config, 'extract') === undefined ? {} : { extract: rolePrice(config, 'extract')! }), ...(rolePrice(config, 'agent') === undefined ? {} : { agent: rolePrice(config, 'agent')! }) } : {},
+              pageUrl,
+              pageHost: host,
+              instruction: request.description,
+              documentBytes: state.page?.document_bytes ?? 0,
+              totalBytes: state.page?.total_bytes ?? 0,
+            })
+      ).filter((p) => !excluded.has(p.execution));
       let config: LlmConfig | null = null;
       let builtStrategies: readonly BuiltStrategy[] = [];
       let proposal = state.proposal;
@@ -566,6 +593,7 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
         const firstRun = state.validated_schema === undefined || state.candidates === undefined;
         if (firstRun) {
           await save('reconnaissance');
+          await milestone('reconnaissance');
           await event(EV.phase, { phase: 'reconnaissance', budget: budgetView() });
         }
         const recon =
@@ -606,7 +634,7 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
           candidates: firstRun ? fresh.map(storedCandidate) : (state.candidates ?? []),
           page: { url: pageUrl, host, document_bytes: capture.document?.bytes ?? 0, total_bytes: capture.totalBytes, mode: capture.mode },
         });
-        if (spent >= request.budget_usd) return await budgetExhausted('investigation_budget_usd');
+        if (spent >= budgetUsd) return await budgetExhausted('investigation_budget_usd');
         if (timedOut()) return await budgetExhausted('investigation_timeout_s');
 
         // --- 2. Schéma de sortie d'abord ------------------------------------------------------------------------------
@@ -657,7 +685,7 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
           }
           let callCeiling = investigateCallCeilingUsd(args, price);
           const beforeCall = () => {
-            if (spent + (client.meter.snapshot().cost_usd_known ?? 0) + callCeiling > request.budget_usd) throw new BudgetGuardError();
+            if (spent + (client.meter.snapshot().cost_usd_known ?? 0) + callCeiling > budgetUsd) throw new BudgetGuardError();
           };
           let llmFailure: ExecFailure | null = null;
           try {
@@ -702,6 +730,7 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
           await event(EV.schemaProposed, { ok: false, reason: built.reason, rejected: built.rejected, budget: budgetView() });
           return await finishFailed({ failure_class: 'extraction', retryable: false, detail: built.reason }, 'schema');
         }
+        const gatePlan = planFor(built.strategies);
         if (fixed === undefined) {
           // Échantillon : données de l'utilisateur, inscrites au registre de masquage du run, puis passées par la liste
           // d'exclusion des personnes effacées AVANT toute écriture (17 §6, assert_erasure_complete) : une personne effacée
@@ -718,12 +747,16 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
             llm: { prompt_version: investigatePromptVersion },
             budget: budgetView(),
           });
-          if (spent >= request.budget_usd) return await budgetExhausted('investigation_budget_usd');
+          if (spent >= budgetUsd) return await budgetExhausted('investigation_budget_usd');
           if (!request.auto_validate) {
             await save('awaiting_schema_validation', { proposal: proposal!, proposed_schema: built.outputSchema, proposed_columns: schemaColumns(built.outputSchema), ...(rulesUsed === undefined ? {} : { rules: rulesUsed }) });
-            await event(EV.phase, { phase: 'awaiting_schema_validation', budget: budgetView() });
+            await milestone('schema');
+            // Coût d'un rejeu estimé : celui de la méthode la moins chère du plan (ce que retiendrait un premier essai conforme).
+            const cheapest = gatePlan.reduce<number | null>((min, p) => (p.est_cost_usd !== null && (min === null || p.est_cost_usd < min) ? p.est_cost_usd : min), null);
+            await event(EV.phase, { phase: 'awaiting_schema_validation', plan: planView(gatePlan), budget: { ...budgetView(), ...(cheapest === null ? {} : { retained_est_usd: cheapest }) } });
             return { state: 'succeeded', outcome: 'clean', degraded_reasons: [], items: 0 };
           }
+          await milestone('schema');
           const columns = schemaColumns(built.outputSchema);
           await save('testing', { proposal: proposal!, proposed_schema: built.outputSchema, validated_schema: built.outputSchema, proposed_columns: columns, validated_columns: columns, validated_by: 'auto', ...(rulesUsed === undefined ? {} : { rules: rulesUsed }) });
           await decide(EV.schemaValidated, { by: 'auto' });
@@ -734,29 +767,14 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
         builtStrategies = built.strategies;
         outputSchema = built.outputSchema;
       }
-      if (spent >= request.budget_usd) return await budgetExhausted('investigation_budget_usd');
+      if (spent >= budgetUsd) return await budgetExhausted('investigation_budget_usd');
       if (timedOut()) return await budgetExhausted('investigation_timeout_s');
 
       // --- 3. Essais du moins cher au plus cher --------------------------------------------------------------------
       await save('testing');
-      // Plan restreint par l'appelant (`exclude_executions`, 06 § 2) : des niveaux retirés, jamais ajoutés.
-      const excluded = new Set<string>(state.excluded_executions ?? []);
-      const fullPlan = (
-        imported !== undefined
-          ? buildImportedPlan({ execution: imported.execution, spec: imported.spec, networks, browser: deps.browsers !== null })
-          : buildTrialPlan({
-              strategies: builtStrategies,
-              networks,
-              browser: deps.browsers !== null,
-              agentic: deps.agentic === true ? { ...(rolePrice(config, 'extract') === undefined ? {} : { extract: rolePrice(config, 'extract')! }), ...(rolePrice(config, 'agent') === undefined ? {} : { agent: rolePrice(config, 'agent')! }) } : {},
-              pageUrl,
-              pageHost: host,
-              instruction: request.description,
-              documentBytes: state.page?.document_bytes ?? 0,
-              totalBytes: state.page?.total_bytes ?? 0,
-            })
-      ).filter((p) => !excluded.has(p.execution));
+      await milestone('trials');
       // Confirmation d'un refus passé : le couple le moins cher seulement (le plan est déjà trié par coût croissant).
+      const fullPlan = planFor(builtStrategies);
       const plan = confirmOnce ? fullPlan.slice(0, 1) : fullPlan;
       // Règles embarquées dans les prompts figés E4-E6 (18 §4.5, RULES_MAX_TOKENS de 1 000) : la spec ne porte que leurs
       // RÉFÉRENCES (`nom@version#sha256`, jamais le texte : INV12, spec lisible des membres d'une API partagée) ; l'essai et
@@ -894,7 +912,7 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
               });
             },
           },
-          { maxUsd: request.budget_usd, spentUsd: spent, deadlineMs, maxAttempts: INVESTIGATION_DEFAULTS.maxAttempts, maxCostPerRunUsd: target.api.maxCostUsd },
+          { maxUsd: budgetUsd, spentUsd: spent, deadlineMs, maxAttempts: INVESTIGATION_DEFAULTS.maxAttempts, maxCostPerRunUsd: target.api.maxCostUsd },
           { ...(deps.samples === undefined ? {} : { samples: deps.samples }), paginated: (p) => entries.get(p)?.paginated === true, catchUp: true },
         );
       } catch (error) {
@@ -991,6 +1009,11 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
         case 'budget_exhausted':
           return await budgetExhausted(outcome.reason);
         case 'exhausted': {
+          // Une géo-restriction (451, redirection de pays : `geo_*`, 04 §7) rencontrée par un essai est un « non » : elle
+          // reste lisible dans l'issue (`network`, son code), jamais fondue dans `no_conformant_strategy` (D-49 : le mode
+          // « SYM ne lâche pas » s'arrête dessus, sans ré-enquête le lendemain).
+          const geo = outcome.tried.find((t) => t.result === 'network' && isGeoRestrictionDetail(t.detail));
+          if (geo !== undefined) return await finishFailed({ failure_class: 'network', retryable: false, detail: geo.detail! }, 'testing');
           const last = outcome.tried.at(-1);
           const lastClass = last?.result;
           const detail = last?.detail === 'not_compilable' ? 'not_compilable' : 'no_conformant_strategy';

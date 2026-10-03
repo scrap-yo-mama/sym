@@ -1,0 +1,40 @@
+{
+  "name": "@sym-browser/console",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "license": "AGPL-3.0-only",
+  "description": "Console de SYM Browser : Vue 3.5, Reka UI, Tailwind 4, design system SYM (packages/ui), vue-i18n en fr et en. Fondations (tâche 3.5) : connexion admin, premier démarrage, service API typé ; écrans (tâche 3.6) : sessions, détail, nœuds, clés et quotas, profils, consommation.",
+  "scripts": {
+    "dev": "vite",
+    "build": "vue-tsc --noEmit -p tsconfig.json && vite build",
+    "typecheck": "vue-tsc --noEmit -p tsconfig.json",
+    "test": "vitest run",
+    "test:e2e": "playwright test"
+  },
+  "dependencies": {
+    "@runtime/ui": "workspace:*",
+    "@sym/contracts": "workspace:*",
+    "class-variance-authority": "catalog:",
+    "clsx": "catalog:",
+    "reka-ui": "catalog:",
+    "tailwind-merge": "catalog:",
+    "vue": "catalog:",
+    "vue-i18n": "catalog:",
+    "vue-router": "catalog:"
+  },
+  "devDependencies": {
+    "@axe-core/playwright": "catalog:",
+    "@playwright/test": "catalog:",
+    "@tailwindcss/vite": "catalog:",
+    "@types/node": "catalog:",
+    "@types/ws": "catalog:",
+    "@vitejs/plugin-vue": "catalog:",
+    "tailwindcss": "catalog:",
+    "typescript": "catalog:",
+    "vite": "catalog:",
+    "vitest": "catalog:",
+    "vue-tsc": "catalog:",
+    "ws": "catalog:"
+  }
+}

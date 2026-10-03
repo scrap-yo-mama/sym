@@ -2,6 +2,7 @@
 // Copyright (c) shadcn et contributeurs de shadcn-vue (https://github.com/unovue/shadcn-vue), licence MIT
 // Modifié (tâche 3.9, WCAG 1.4.10) : le libellé passe à la ligne (retour à la ligne permis, hauteurs minimales) au lieu de déborder à 320 px.
 // Modifié (tâche 3.15, charte SYM) : jetons de la marque (l'orange est une surface à texte anthracite), cibles de 44 px, sans ombre ni anneau à 50 %.
+// Modifié (tâche 3.17, D-60) : variante `signature`, le bouton jaune des planches.
 import type { VariantProps } from "class-variance-authority"
 import { cva } from "class-variance-authority"
 
@@ -23,6 +24,8 @@ export const buttonVariants = cva(
         ghost:
           "hover:bg-accent hover:text-accent-foreground",
         link: "text-primary underline-offset-4 hover:underline",
+        // Bouton jaune de la planche (« Nouvelle API », « Valider et lancer les essais ») : texte anthracite (20 § 1.2).
+        signature: "bg-signature text-signature-foreground hover:bg-signature/90",
       },
       size: {
         "default": "min-h-11 px-5 py-2 has-[>svg]:px-4",

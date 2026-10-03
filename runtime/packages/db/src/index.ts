@@ -36,6 +36,7 @@ export * from './schedules.js';
 export * from './webhooks.js';
 export * from './alerts.js';
 export * from './notify.js';
+export * from './persistence.js';
 export * from './robot-identity.js';
 export * from './strategies.js';
 export * from './tunnel.js';
