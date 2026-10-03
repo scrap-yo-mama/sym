@@ -437,7 +437,8 @@ describe('bail de réparation (04 §5)', () => {
     expect(currentAtPortReturn.get(apiId)).toEqual([2]);
     for (const run of [a, b]) expect(run).toMatchObject({ state: 'succeeded', items: 500, items_rejected: 0, strategy_version: 2 });
     // Une seule entrée en `reparation` et une seule sortie (12) ; l'autre run a attendu le bail.
-    expect(await transitions(apiId)).toEqual(['sain>reparation:extraction', 'reparation>warning:repaired']);
+    // La sortie (12) est appliquée par le worker APRÈS la fin du run : attendue, pas lue à l'instant (instable sous charge).
+    await vi.waitFor(async () => expect(await transitions(apiId)).toEqual(['sain>reparation:extraction', 'reparation>warning:repaired']), { timeout: 10_000, interval: 50 });
     const waited = [...(await logEvents(a.id)), ...(await logEvents(b.id))].filter((e) => e.event === 'repair_lease_waited');
     expect(waited).toEqual([expect.objectContaining({ data: expect.objectContaining({ from_version: 1, current_version: 2 }) as unknown })]);
     expect((await pool.query<{ owner: string | null }>('SELECT repair_lease_owner AS owner FROM apis WHERE id = $1', [apiId])).rows[0]!.owner).toBeNull();
