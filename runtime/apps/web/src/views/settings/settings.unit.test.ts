@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Réglages BYO (06 § 2, 08 § 7, tâche 3.5). `assert_secret_masked` : la clé d'un fournisseur n'apparaît jamais en clair dans le DOM
 // rendu, n'est jamais relue, et le champ est vidé dès l'envoi. Les réponses réseau sont vérifiées côté serveur (08b) et en E2E (3.6).
+import { readFileSync } from 'node:fs';
 import type { components } from '@runtime/client';
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
 import { nextTick, watch } from 'vue';
 import TestOutcome from '@/components/settings/TestOutcome.vue';
 import { resetSession } from '@/composables/useSession';
-import { useExtensionSettings, useLlmSettings, useProxies, useSmtp, useWebhooks } from '@/composables/useSettings';
+import { LLM_PRESETS, useExtensionSettings, useLlmSettings, useProxies, useSmtp, useWebhooks } from '@/composables/useSettings';
 import en from '@/i18n/locales/en.json';
 import { setApi } from '@/lib/api';
 import { collectDiagnostic } from '@/lib/diagnostic';
@@ -393,5 +394,68 @@ describe('Diagnostic local', () => {
   test('une route qui échoue laisse le champ à null : le diagnostic reste exportable', async () => {
     const api = buildApi({ baseUrl: 'http://console.test', fetch: async () => { throw new TypeError('fetch failed'); } });
     expect(await collectDiagnostic(api, 'en', new Date('2026-10-01T10:00:00Z'))).toEqual({ generated_at: '2026-10-01T10:00:00.000Z', console_locale: 'en', instance: { server: null, schema: null, min_extension: null, mcp_spec: null }, readiness: { ok: null } });
+  });
+});
+
+describe('Réglages > Modèles IA : préréglages de fournisseurs (UX-01)', () => {
+  test('Anthropic est proposé, libellé « Anthropic », avec les autres fournisseurs compatibles OpenAI', async () => {
+    installFakeServer({ ...sessionRoutes, 'GET /api/settings/llm': () => json(200, llmSettings) });
+    const html = await view(ModelsSettingsView);
+    for (const preset of ['anthropic', 'gemini', 'mistral', 'groq']) {
+      expect(html).toContain(`<option value="${preset}">${en.settings.models.presets[preset as 'anthropic']}</option>`);
+    }
+    expect(en.settings.models.presets.anthropic).toBe('Anthropic');
+  });
+
+  test('choisir Anthropic pré-remplit l’URL de base ; une URL saisie à la main n’est pas écrasée', async () => {
+    installFakeServer({ ...sessionRoutes, 'GET /api/settings/llm': () => json(200, llmSettings) });
+    const settings = useLlmSettings();
+    settings.addProvider();
+    const draft = (): NonNullable<(typeof settings.providers.value)[number]> => settings.providers.value[0] as never;
+    settings.setPreset(0, 'anthropic');
+    expect(draft().preset).toBe('anthropic');
+    expect(draft().base_url).toBe('https://api.anthropic.com/v1');
+    settings.setPreset(0, 'mistral');
+    expect(draft().base_url).toBe('https://api.mistral.ai/v1');
+    settings.providers.value[0]!.base_url = 'https://proxy.interne.test/v1';
+    settings.setPreset(0, 'groq');
+    expect(draft().base_url).toBe('https://proxy.interne.test/v1');
+    settings.setPreset(0, 'custom');
+    expect(draft().base_url).toBe('https://proxy.interne.test/v1');
+  });
+
+  test('Z.ai, DeepSeek et Qwen pré-remplissent aussi leur URL de base', () => {
+    installFakeServer({ ...sessionRoutes, 'GET /api/settings/llm': () => json(200, llmSettings) });
+    const settings = useLlmSettings();
+    settings.addProvider();
+    const draft = (): NonNullable<(typeof settings.providers.value)[number]> => settings.providers.value[0] as never;
+    settings.setPreset(0, 'zai');
+    expect(draft().base_url).toBe('https://api.z.ai/api/paas/v4');
+    settings.setPreset(0, 'deepseek');
+    expect(draft().base_url).toBe('https://api.deepseek.com/v1');
+    settings.setPreset(0, 'qwen');
+    expect(draft().base_url).toBe('https://dashscope-intl.aliyuncs.com/compatible-mode/v1');
+  });
+
+  test('passer d’un préréglage pré-rempli à ollama, vllm ou custom vide l’URL de l’ancien fournisseur', () => {
+    installFakeServer({ ...sessionRoutes, 'GET /api/settings/llm': () => json(200, llmSettings) });
+    const settings = useLlmSettings();
+    settings.addProvider();
+    const draft = (): NonNullable<(typeof settings.providers.value)[number]> => settings.providers.value[0] as never;
+    for (const target of ['ollama', 'vllm', 'custom'] as const) {
+      settings.setPreset(0, 'anthropic');
+      expect(draft().base_url).toBe('https://api.anthropic.com/v1');
+      settings.setPreset(0, target);
+      expect(draft().preset).toBe(target);
+      expect(draft().base_url).toBe('');
+    }
+  });
+
+  test('la liste déroulante couvre tout l’enum LlmPreset du contrat OpenAPI', () => {
+    const spec = readFileSync(new URL('../../../../../packages/client/openapi/openapi.yaml', import.meta.url), 'utf8');
+    const line = /\n {4}LlmPreset:\n {6}type: string\n {6}enum: \[([^\]]+)\]/.exec(spec);
+    expect(line).not.toBeNull();
+    const contract = (line?.[1] ?? '').split(',').map((value) => value.trim());
+    expect([...LLM_PRESETS].sort()).toEqual([...contract].sort());
   });
 });

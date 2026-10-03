@@ -69,6 +69,11 @@ export type InvestigationState = {
   readonly brief?: { readonly version: number; readonly sha256: string; readonly confirmed: readonly string[] };
   /** Niveaux d'exécution retirés du plan d'essais par l'appelant (`exclude_executions`, 06 § 2, 3.1) : jamais un ajout. */
   readonly excluded_executions?: readonly Execution[];
+  /**
+   * Tentative du mode « SYM ne lâche pas » (2.16, D-49) : plafond de cette enquête, au plus `request.budget_usd` (reste du
+   * plafond du mode et du budget du jour). Jamais posé par une enquête ordinaire ; une nouvelle enquête repart sans lui.
+   */
+  readonly budget_cap_usd?: number;
 };
 
 /** Stratégie d'un export relu (`@runtime/core` `parseApiExport`) : E1-E3, hors tunnel, sans session. */

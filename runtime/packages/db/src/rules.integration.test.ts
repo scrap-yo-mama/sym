@@ -111,8 +111,8 @@ describe('migration 0019', () => {
     expect(rows).toEqual([{ kind: 'rule', visibility: 'instance', owner_id: null, applies_to: ['*'], origin: 'seed', sha256: DEFAULT_POLICY_SHA256, review_state: 'none' }]);
   });
   test('down puis up : réversible', async () => {
-    // Les migrations suivantes (0020, 0021…) d'abord : autant de pas qu'il en faut pour retirer 0019.
-    await migrateDown({ connectionString: tdb.url, steps: loadMigrations().length - 18 });
+    // 0019 et les migrations venues après elle (0020 de 2.12, 0021 de 2.16…) : la 0019 n'est pas forcément la dernière.
+    await migrateDown({ connectionString: tdb.url, steps: loadMigrations().filter((m) => m.version >= 19).length });
     expect((await pool.query("SELECT to_regclass('rule_files') AS t")).rows[0].t).toBeNull();
     await migrateUp({ connectionString: tdb.url });
     expect((await pool.query("SELECT to_regclass('rule_files') AS t")).rows[0].t).toBe('rule_files');

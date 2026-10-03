@@ -62,6 +62,12 @@ const contracts: Record<string, Contract> = {
     await setSite('api_json', { mutation: 'bad_page_2' });
     expect(items(obj(await fx.get(H('api_json'), '/api/contacts?per_page=50&page=2'))).every((c) => c['score'] === 'N/A')).toBe(true);
     expect(items(obj(await fx.get(H('api_json'), '/api/contacts?per_page=50&page=3'))).some((c) => c['score'] === 'N/A')).toBe(false);
+    await setSite('api_json', { mutation: 'data_451' });
+    expect((await fx.get(H('api_json'), '/')).status).toBe(200);
+    expect((await fx.get(H('api_json'), '/api/contacts?page=1&per_page=20')).status).toBe(451);
+    await setSite('api_json', { mutation: 'data_451_page_2' });
+    expect((await fx.get(H('api_json'), '/api/contacts?page=1&per_page=20')).status).toBe(200);
+    expect((await fx.get(H('api_json'), '/api/contacts?page=2&per_page=20')).status).toBe(451);
     await setSite('api_json', { mutation: 'empty' });
     expect(obj(await fx.get(H('api_json'), '/api/contacts'))['total']).toBe(0);
     expect((await setSite('api_json', { mutation: 'inconnue' })).status).toBe(400);

@@ -30,6 +30,7 @@ export * from './alerts/index.js';
 export * from './observability/index.js';
 export * from './privacy/index.js';
 export * from './repair/index.js';
+export * from './persistence/index.js';
 export * from './rules/index.js';
 export * from './memory/index.js';
 // Dossier d'enquête (2.14) : jamais importé par un module de politique (assert_policy_module_no_brief_import).
@@ -39,5 +40,6 @@ export * from './agent/phases.js';
 export type * from './sandbox/index.js';
 export * from './version.js';
 export * from './portability/index.js';
+export * from './config/budget.js';
 export * from './config/env-catalog.js';
 export * from './config/public-url.js';

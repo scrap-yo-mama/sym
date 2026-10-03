@@ -24,6 +24,11 @@ const MUTATIONS = [
   'bad_items_30pct',
   'trailing_bad_item',
   'bad_page_2',
+  // D-49 (2.16) : la page répond, la source de données répond 451 (géo-restriction légale, 04 §7), un « non » à respecter :
+  // dès la première page (`data_451`), ou à partir de la page 2 seulement (`data_451_page_2` : la reconnaissance, qui ne
+  // lit que la première page, passe ; les essais, qui paginent, rencontrent le 451).
+  'data_451',
+  'data_451_page_2',
 ] as const;
 type Mutation = (typeof MUTATIONS)[number];
 
@@ -91,6 +96,9 @@ const apiJson: SiteFactory = (env) => {
       // Dossier d'enquête (2.14, recette 12i) : un Disallow dédié (aucune requête n'y est attendue) et un point d'accès inexistant.
       if (req.path === '/robots.txt') return { status: 200, headers: { 'content-type': 'text/plain; charset=utf-8' }, body: 'User-agent: *\nDisallow: /private-api/\n' };
       if (req.path === '/private-api/contacts') return list(req);
+      if (req.path === listPath && (mutation === 'data_451' || (mutation === 'data_451_page_2' && intParam(req, 'page', 1, 1, 10_000) >= 2))) {
+        return json(451, { error: 'unavailable_for_legal_reasons' });
+      }
       if (req.path === listPath) return list(req);
       return notFound();
     },

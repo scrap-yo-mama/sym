@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Briques communes de l'API REST (tâche 3.1, 05 § 2 et § 4.3), réutilisables par le serveur MCP (3.2) : montants,
 // codes de raison, file pleine, attente synchrone bornée, déclencheur, case « j'ai lu » (17 § 11).
-import { ACTIVE_RUN_STATES, schemaHasPersonalFields, type RunTrigger } from '@runtime/core';
+import { ACTIVE_RUN_STATES, schemaHasPersonalFields, type RunKind, type RunTrigger } from '@runtime/core';
+import { runEnvelopeUsd, userBudgetCommittedUsd } from '@runtime/db';
 import type { FastifyReply } from 'fastify';
 import type pg from 'pg';
 import type { ServerContext } from '../context.js';
@@ -60,9 +61,9 @@ export async function rejectIfKeyRateLimited(ctx: ServerContext, reply: FastifyR
 /** Plafond atteint à la création d'un run (`reserveRunSlot`) : 429 avec `Retry-After`, aucun run créé. */
 export class RunSlotError extends Error {
   override name = 'RunSlotError';
-  readonly code: 'user_queue_full' | 'queue_full';
+  readonly code: 'user_queue_full' | 'queue_full' | 'budget_exceeded';
 
-  constructor(code: 'user_queue_full' | 'queue_full') {
+  constructor(code: 'user_queue_full' | 'queue_full' | 'budget_exceeded') {
     super(code);
     this.code = code;
   }
@@ -74,17 +75,33 @@ export class RunSlotError extends Error {
  * prend un verrou consultatif de transaction : deux créations simultanées ne voient jamais la même place libre.
  * 1. par utilisateur : `MAX_ACTIVE_RUNS_PER_USER` runs actifs (hors pause) lancés par l'acteur → `user_queue_full` (un
  *    membre ne remplit pas la file des autres) ;
- * 2. par instance : `MAX_CONCURRENT_RUNS` runs actifs (hors pause) → `queue_full`.
+ * 2. par instance : `MAX_CONCURRENT_RUNS` runs actifs (hors pause) → `queue_full` ;
+ * 3. budget USD du jour de l'acteur (`USER_BUDGET_DAILY_USD`, 08b § 3, `assert_budget_usd_daily`) → `budget_exceeded` : la
+ *    dépense du jour (coûts LLM + proxy de tous ses runs depuis minuit UTC), PLUS l'enveloppe maximale encore ouverte des
+ *    runs actifs, PLUS l'enveloppe du run à créer (`target` : `max_cost_usd` de l'API, `budget_usd` de l'enquête, bornés
+ *    par les plafonds d'instance) doivent tenir dans le budget : une rafale de runs ne le dépasse plus. Tous les chemins
+ *    qui créent un run, enquête ou validation passent ici ; le verrou consultatif de `reserve_run_slot` sérialise aussi ce
+ *    contrôle. Le worker borne chaque essai à cette même enveloppe (`AttemptCost`, `investigation_budget_usd`).
  * Lève `RunSlotError` (la transaction est annulée).
  */
-export async function reserveRunSlot(tx: Queryable, ctx: ServerContext): Promise<void> {
+export async function reserveRunSlot(tx: Queryable, ctx: ServerContext, target: { kind: RunKind; apiId?: string; runId?: string }): Promise<void> {
   const { rows } = await tx.query<{ verdict: string }>('SELECT reserve_run_slot($1::text[], $2, $3) AS verdict', [ACTIVE_RUN_STATES, ctx.rest.maxActiveRunsPerUser, ctx.rest.maxConcurrentRuns]);
   const verdict = rows[0]?.verdict;
   if (verdict === 'user_queue_full' || verdict === 'queue_full') throw new RunSlotError(verdict);
+  const { rows: who } = await tx.query<{ id: string }>("SELECT current_setting('app.user_id', true) AS id");
+  const userId = who[0]?.id;
+  // Fermé par défaut : sans acteur dans la transaction, jamais de contrôle sauté en silence.
+  if (!userId) throw new Error('reserveRunSlot : aucun acteur (app.user_id vide) dans la transaction');
+  const caps = { userBudgetDailyUsd: ctx.rest.userBudgetDailyUsd, maxCostUsdPerRun: ctx.rest.maxCostUsdPerRun };
+  const committed = await userBudgetCommittedUsd(tx, userId, caps);
+  const envelope = await runEnvelopeUsd(tx, target, caps);
+  if (committed >= caps.userBudgetDailyUsd || committed + envelope > caps.userBudgetDailyUsd + 1e-9) throw new RunSlotError('budget_exceeded');
 }
 
 /** Réponse 429 d'un plafond atteint (`RunSlotError`). */
 export async function sendRunSlotError(reply: FastifyReply, error: RunSlotError): Promise<FastifyReply> {
+  // Budget du jour : non réessayable avant la réinitialisation (minuit UTC), donc pas de Retry-After.
+  if (error.code === 'budget_exceeded') return sendError(reply, 429, 'budget_exceeded', 'budget du jour atteint pour ce compte (coûts LLM et proxy) : il se réinitialise à minuit UTC');
   reply.header('retry-after', '30');
   return error.code === 'user_queue_full'
     ? sendError(reply, 429, 'user_queue_full', 'trop de runs en cours pour ce compte : réessayez après le délai indiqué (Retry-After)')

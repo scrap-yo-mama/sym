@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// Dossier d'enquête sur base réelle (tâche 2.14, 19c § 4 et § 9.2, migration 0021) : versions par remplacement (même contenu,
+// Dossier d'enquête sur base réelle (tâche 2.14, 19c § 4 et § 9.2, migration 0022) : versions par remplacement (même contenu,
 // pas de nouvelle version ; BRIEF_VERSIONS_KEEP), lectures filtrées par owner_id (aucun dossier d'une autre API ni d'un
 // autre propriétaire), clone et transfert sans dossier, effacement d'une personne (l'effacement l'emporte sur
 // l'immuabilité), rétention des échantillons, faits du code et événement de preuve unique par jour, migration réversible.
@@ -54,7 +54,7 @@ afterAll(async () => {
   await tdb?.drop();
 });
 
-describe('api_briefs et brief_hint_outcomes (0021)', () => {
+describe('api_briefs et brief_hint_outcomes (0022)', () => {
   test('assert_brief_versioning — même contenu : aucune version de plus ; nouveau dossier : nouvelle version ; au plus BRIEF_VERSIONS_KEEP, la version référencée par une stratégie est gardée', async () => {
     const apiId = await api(A, 'zz_test_brief_versions');
     expect(await store(apiId, A, brief(1))).toMatchObject({ version: 1, created: true });
@@ -208,8 +208,8 @@ describe('api_briefs et brief_hint_outcomes (0021)', () => {
     expect((await readBriefForApi(pool, { apiId, ownerId: A }))!.brief.version).toBe(2);
   });
 
-  test('migration 0021 réversible', async () => {
-    await migrateDown({ connectionString: tdb.url, steps: loadMigrations().length - 20 });
+  test('migration 0022 réversible', async () => {
+    await migrateDown({ connectionString: tdb.url, steps: loadMigrations().filter((m) => m.version >= 22).length });
     expect((await pool.query("SELECT to_regclass('api_briefs') AS t")).rows[0].t).toBeNull();
     expect((await pool.query("SELECT to_regclass('brief_hint_outcomes') AS t")).rows[0].t).toBeNull();
     await migrateUp({ connectionString: tdb.url });

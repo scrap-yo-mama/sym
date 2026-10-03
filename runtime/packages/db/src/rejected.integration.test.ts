@@ -171,8 +171,9 @@ describe('quarantine run_rejected_items (0018)', () => {
   });
 
   test('migration 0018 : aller-retour down/up', async () => {
-    // Les migrations suivantes (0019, 0020, 0021…) d'abord : autant de pas qu'il en faut pour retirer 0018.
-    await migrateDown({ connectionString: tdb.url, steps: loadMigrations().length - 17 });
+    // 0018 et toutes les migrations venues après elle (0019 de 2.10, 0020 de 2.12, 0021 de 2.16…) : la 0018 n'est pas
+    // forcément la dernière.
+    await migrateDown({ connectionString: tdb.url, steps: loadMigrations().filter((m) => m.version >= 18).length });
     expect((await pool.query("SELECT to_regclass('public.run_rejected_items') AS t")).rows[0].t).toBeNull();
     expect((await pool.query("SELECT 1 FROM information_schema.columns WHERE table_name = 'runs' AND column_name = 'items_rejected'")).rowCount).toBe(0);
     await migrateUp({ connectionString: tdb.url });

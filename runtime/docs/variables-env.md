@@ -30,7 +30,8 @@ des cinq premières est posée. Une autorité de certification privée pour Post
 
 | Variable | Lue par | Statut | Défaut | Rôle |
 |---|---|---|---|---|
-| `PUBLIC_URL` | server, CLI | obligatoire | aucun | URL publique de l’instance (http ou https), sans chemin : extension, MCP, cookies `Secure`. `runtime doctor` avertit si elle n’est pas en HTTPS. |
+| `PUBLIC_URL` | server, CLI | obligatoire | aucun | URL publique de l’instance, sans chemin : extension, MCP, cookies `Secure`. HTTPS obligatoire : le démarrage est refusé en http://, sauf pour localhost, 127.0.0.1 et [::1] (essai local, docker-compose), ou avec NODE_ENV=development ou test, ou avec `ALLOW_INSECURE_PUBLIC_URL=true`. |
+| `ALLOW_INSECURE_PUBLIC_URL` | server | facultative | false | `true` autorise une PUBLIC_URL en http:// hors boucle locale (essai sur un réseau privé) : le cookie de session voyage alors sans `Secure` ni HSTS. À ne jamais poser en production. |
 | `PORT` | server | facultative | 3000 | Port d’écoute du `server`. Respecte la valeur injectée par la plateforme. |
 | `HOST` | server | facultative | 0.0.0.0 | Adresse d’écoute du `server`. |
 | `TRUST_PROXY` | server | facultative | 0 | Nombre de proxys devant l’instance (1 chez Render, Railway et Heroku), ou liste d’IP et CIDR. Jamais `true` sans proxy : un client choisirait son IP par `X-Forwarded-For`. |
@@ -66,6 +67,8 @@ des cinq premières est posée. Une autorité de certification privée pour Post
 | `MAX_CONCURRENT_RUNS` | server | facultative | 50 | Runs actifs (en file ou en cours) de l’instance au-delà desquels une création de run ou d’API répond 429 `queue_full` avec `Retry-After` (valeur à valider en recette). |
 | `MAX_ACTIVE_RUNS_PER_USER` | server | facultative | 20 | Runs actifs (en file ou en cours, hors pause) d’un même utilisateur au-delà desquels sa création de run ou d’API répond 429 `user_queue_full` avec `Retry-After` : un membre ne remplit pas la file des autres (valeur à valider en recette). |
 | `MAX_RUNS_PER_KEY_PER_MINUTE` | server | facultative | 60 | Créations de run (ou d’API) par clé d’API et par minute au-delà desquelles l’appel répond 429 `key_rate_limited` avec `Retry-After` (compteur du processus ; valeur à valider en recette). |
+| `USER_BUDGET_DAILY_USD` | server, worker | facultative | 50 | Budget en dollars par utilisateur et par jour (UTC) : somme des coûts LLM et proxy de tous ses runs (runs, enquêtes, validations, planifications). Atteint : 429 `budget_exceeded` (non réessayable avant minuit UTC), ou run planifié sauté (`skipped_quota`). Plafonne aussi le `budget_daily_usd` qu’un membre fixe sur une API (valeur à valider en recette). |
+| `MAX_COST_USD_PER_RUN` | server | facultative | 10 | Plafond d’instance du `max_cost_usd` qu’un membre peut fixer sur une API : au-delà, 400 `cost_cap_exceeded` (valeur à valider en recette). |
 | `WORKER_CONCURRENCY` | worker, CLI | facultative | 5 | Jobs sans navigateur en parallèle par worker (inférieur ou égal à `DB_POOL_MAX`). |
 | `BROWSER_CONCURRENCY` | worker | facultative | déduit de la mémoire du conteneur | Runs navigateur simultanés par worker (1 à 32). Dimensionnement : 2 Go de mémoire pour 1 run navigateur, 4 Go pour 2. |
 | `DISABLE_BROWSER` | worker | facultative | false | `true` : aucun Chromium, les exécuteurs navigateur sont refusés. |
@@ -79,6 +82,9 @@ des cinq premières est posée. Une autorité de certification privée pour Post
 | `WARNING_CHECK_SECONDS` | worker | facultative | 900 | Période du contrôle des API en avertissement. |
 | `RETENTION_TICK_SECONDS` | worker | facultative | 300 | Période de la passe de rétention. |
 | `ITEMS_REJECTED_MAX_SHARE` | worker | facultative | 0.2 | Part d’items non conformes au-delà de laquelle un run casse (avec ITEMS_REJECTED_MIN_COUNT) ; en dessous, ils sont écartés et le reste est livré (à valider). |
+| `PERSISTENCE_SCHEDULE` | server, worker | facultative | 1h,6h,24h | Délais du mode « SYM ne lâche pas » entre deux ré-enquêtes d’une API en erreur (s, m, h, d) ; le dernier se répète chaque jour, jitter ±20 % (à valider). |
+| `PERSISTENCE_BUDGET_USD_DEFAULT` | server, worker | facultative | 1 | Plafond de dépense du mode « SYM ne lâche pas » quand persistence_budget_usd vaut null, cumulé depuis l’entrée en erreur ; jamais illimité, 0 refuse l’activation (à valider). |
+| `PERSISTENCE_MAX_DAYS` | server, worker | facultative | 30 | Durée maximale en erreur avec le mode « SYM ne lâche pas », puis persistence_exhausted (à valider). |
 | `ITEMS_REJECTED_MIN_COUNT` | worker | facultative | 5 | Nombre minimal d’items non conformes pour qu’un run casse (plancher absolu du seuil de casse, à valider). |
 
 ## Sortie réseau
