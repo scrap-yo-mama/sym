@@ -17,7 +17,7 @@ Tu demandes des données à ton IA. **SYM 👻** enquête sur le site en commen�
 ```text
 toi> Récupère les livres de books.toscrape.com avec titre et prix.
 SYM 👻 : OK, je m'en occupe.
-1/4 décrire · 2/4 enquête (accès ok) · 3/4 schéma · 4/4 essai : fetch direct, ok
+1/4 décrire · 2/4 enquête (access ok) · 3/4 schéma · 4/4 essai : fetch direct, ok
 SYM 👻 : C'est fait. 20 livres, aucun coût de modèle par rejeu.
 ```
 

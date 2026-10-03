@@ -30,8 +30,6 @@ const spans = (style: string): string[] => [...html.matchAll(new RegExp(`<span s
  *  - verify : la planche abrège le bloc par « … » et un `--certificate-identity-regexp` : le bloc est celui que dérive l'identité publique
  *    (assert_verify_snippet_works) ;
  *  - selector : le sélecteur de langue en première ligne est exigé par 22 §3.1 (u8 R2) en plus du lien final « Lire en français » ;
- *  - alert, step : retirés à la livraison de 2.13 (reprise par étape, 19 §4) : plus de ligne « Not delivered yet », les puces de la
- *    réparation reprennent les mots de la planche (tests/public-showcase : les promesses restent vraies) ;
  *  - llm : « without an LLM » porte la réserve imposée par 22 §3.2, « when the strategy allows » : les stratégies E4 à E6 et une API
  *    not_compilable rejouent avec un modèle (04 §2) ;
  *  - ghost : le bandeau écrit « SYM » et trace l'icône SVG de packages/ui (sym-ghost.svg) au lieu de l'emoji 👻 de la planche : un emoji
@@ -49,7 +47,6 @@ const EXPLAINED = {
   cost: [', $0.0004 per replay', ', no model cost per replay'],
   render: [', about $38/month', ''],
   llm: [['replays without an LLM and', 'replays without an LLM when the strategy allows, and'], ['Replays without an LLM,', 'Replays without an LLM when the strategy allows,']],
-  step: [] as [string, string][],
   ghost: [' 👻', ''],
   /** Écarts de rendu propres à GitHub (aucun n'est dans le texte du README) et écart de langue de la doc. */
   github: [
@@ -59,8 +56,8 @@ const EXPLAINED = {
     'docs en français : « docs » et « Responsible use » renvoient vers du contenu en français, sans la mention « (in French) » de main (texte de la planche)',
   ],
 } as const;
-/** Texte de la planche avec les écarts `llm` et `step` appliqués : ce que le README doit afficher. */
-const explained = (text: string): string => [...EXPLAINED.llm, ...EXPLAINED.step].reduce((acc, [from, to]) => acc.replace(from, to), text);
+/** Texte de la planche avec les écarts `llm` appliqué : ce que le README doit afficher. */
+const explained = (text: string): string => [...EXPLAINED.llm].reduce((acc, [from, to]) => acc.replace(from, to), text);
 
 const claims = loadClaims();
 /** Traduction fr d'un texte en de la planche : l'entrée du registre (surface readme) dont le texte en le contient. */
@@ -92,7 +89,7 @@ function frDrift(fr: string, en: string): string[] {
   if (!captionFr || !fr.includes(`<sub>${captionFr}</sub>`)) problems.push('légende « Deploy to Render » fr : pas la traduction du registre');
   const lines = codeBlocks(fr).find((b) => b.lang === 'text')?.body.split('\n') ?? [];
   const linesEn = codeBlocks(en).find((b) => b.lang === 'text')?.body.split('\n') ?? [];
-  const shape = [/^toi> .*books\.toscrape\.com/, /^SYM 👻 : \S/, /^1\/4 \S.* · 2\/4 \S.* \(accès ok\) · 3\/4 \S.* · 4\/4 \S.*, ok$/, /^SYM 👻 : C'est fait\. /];
+  const shape = [/^toi> .*books\.toscrape\.com/, /^SYM 👻 : \S/, /^1\/4 \S.* · 2\/4 \S.* \(access ok\) · 3\/4 \S.* · 4\/4 \S.*, ok$/, /^SYM 👻 : C'est fait\. /];
   if (lines.length !== 4 || shape.some((re, i) => !re.test(lines[i] ?? ''))) problems.push(`transcription fr : forme ${JSON.stringify(lines)}`);
   const numbers = (l: string[]): string => l.map((x) => (x.match(/\d+/g) ?? []).join(',')).join('|');
   if (numbers(lines) !== numbers(linesEn)) problems.push('transcription fr : nombres différents de l\'anglais');
@@ -148,7 +145,7 @@ describe.skipIf(!present)('assert_readme_matches_maquette : README en fidèle à
     expect(li).toHaveLength(10);
     expect(whatItDoes(en, 'en')).toEqual(li.map(explained));
     const hero = plain(/<p style="margin: 0; font-size: 16px[^>]*>([\s\S]*?)<\/p>/.exec(html)?.[1] ?? '');
-    for (const [from] of [...EXPLAINED.llm, ...EXPLAINED.step]) expect([...li, hero].some((line) => line.includes(from)), `écart sans objet : « ${from} »`).toBe(true);
+    for (const [from] of [...EXPLAINED.llm]) expect([...li, hero].some((line) => line.includes(from)), `écart sans objet : « ${from} »`).toBe(true);
     expect(en.replace(/\*\*/g, '')).toContain(explained(hero));
     expect(hero).toMatch(/^You ask your AI for data\./);
     const alert = plain(/border-left: 4px solid #FFC727[^>]*>([\s\S]*?)<\/div>/.exec(html)?.[1] ?? '');

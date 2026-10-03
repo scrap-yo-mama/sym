@@ -1286,13 +1286,13 @@
         "test:assert_e5_replay_without_llm",
         "file:runtime/apps/worker/src/exec/repair.integration.test.ts",
         "test:assert_output_schema_enforced",
-        "test:assert_step_patch_bounded",
-        "test:assert_step_classification_guard"
+        "test:assert_step_classification_guard",
+        "test:assert_step_patch_bounded"
       ],
       "reviewed": "2026-10-03",
       "status": "relu",
       "task": "2.13",
-      "note": "Puce de la planche (D-60) avec un écart listé par assert_readme_matches_maquette : la réserve « when the strategy allows » imposée par 22 §3.2 (E4 à E6 et une API not_compilable rejouent avec un modèle, 04 §2). Reprise par étape livrée (2.13, 19 §4) : les mots de la planche, « repairs step by step », avec les asserts de 19 §4 en preuve.",
+      "note": "Puce de la planche (D-60) avec un écart listé par assert_readme_matches_maquette : la réserve « when the strategy allows » imposée par 22 §3.2 (E4 à E6 et une API not_compilable rejouent avec un modèle, 04 §2). La reprise par étape (2.13, 19 §4) est livrée : les mots de la planche sont repris.",
       "reviewer": "agent"
     },
     {
@@ -1381,13 +1381,13 @@
       "proof": [
         "file:runtime/apps/worker/src/exec/repair.integration.test.ts",
         "file:runtime/apps/worker/src/exec/classification-guard.integration.test.ts",
-        "test:assert_step_patch_bounded",
-        "test:assert_step_classification_guard"
+        "test:assert_step_classification_guard",
+        "test:assert_step_patch_bounded"
       ],
       "reviewed": "2026-10-03",
       "status": "relu",
       "task": "2.13",
-      "note": "Puce de la planche (D-60), mots de la planche depuis la livraison de la reprise par étape (2.13, 19 §4) : asserts de 19 §4 en preuve, la réparation de la stratégie (2.3) restant prouvée.",
+      "note": "Puce de la planche (D-60), mots de la planche : la reprise par étape (2.13, 19 §4) est livrée, prouvée par les asserts de classification et de patch borné.",
       "reviewer": "agent"
     },
     {
@@ -1449,7 +1449,7 @@
         "readme"
       ],
       "en": "you> Get the books on books.toscrape.com with title and price.\nSYM 👻: On it.\n1/4 describe · 2/4 recon (access ok) · 3/4 schema · 4/4 try: direct fetch, ok\nSYM 👻: Done. 20 books, no model cost per replay.",
-      "fr": "toi> Récupère les livres de books.toscrape.com avec titre et prix.\nSYM 👻 : OK, je m'en occupe.\n1/4 décrire · 2/4 enquête (accès ok) · 3/4 schéma · 4/4 essai : fetch direct, ok\nSYM 👻 : C'est fait. 20 livres, aucun coût de modèle par rejeu.",
+      "fr": "toi> Récupère les livres de books.toscrape.com avec titre et prix.\nSYM 👻 : OK, je m'en occupe.\n1/4 décrire · 2/4 enquête (access ok) · 3/4 schéma · 4/4 essai : fetch direct, ok\nSYM 👻 : C'est fait. 20 livres, aucun coût de modèle par rejeu.",
       "proof": [
         "test:assert_access_report_first",
         "test:assert_robots_respected",
