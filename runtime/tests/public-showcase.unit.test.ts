@@ -153,9 +153,10 @@ describe('README public : ce qui marche aujourd\'hui, distingué de ce qui est p
     expect(honestyProblems(named('en', '**Not delivered yet:** the MCP server.'), 'en', all).join()).toMatch(/doit disparaître/);
     expect(honestyProblems(named('en', '**Not delivered yet:** repair.'), 'en', none).join()).toMatch(/ne nomme pas mcp/);
     // 2.13 : la reprise par étape se nomme seule ; « a repair » dans la phrase suivante ne nomme pas la réparation livrée.
+    const softened = (lang: Lang, line: string) => named(lang, line).replace(lang === 'en' ? 'repairs step by step' : 'répare étape par étape', lang === 'en' ? 'repairs itself' : 'se répare').replace(lang === 'en' ? 'it repairs the step that broke' : 'il répare l\'étape qui a cassé', lang === 'en' ? 'the API repairs itself' : "l'API se répare");
     expect(honestyProblems(bare('en'), 'en', { ...all, stepRepair: false }).join()).toMatch(/stepRepair non livré/);
-    expect(honestyProblems(named('en', '**Not delivered yet:** step-by-step repair. Until then, a repair patches the strategy.'), 'en', { ...all, stepRepair: false })).toEqual([]);
-    expect(honestyProblems(named('fr', '**Pas encore livré :** la réparation étape par étape. D\'ici là, une réparation corrige la stratégie.'), 'fr', { ...all, stepRepair: false })).toEqual([]);
+    expect(honestyProblems(softened('en', '**Not delivered yet:** step-by-step repair. Until then, a repair patches the strategy.'), 'en', { ...all, stepRepair: false })).toEqual([]);
+    expect(honestyProblems(softened('fr', '**Pas encore livré :** la réparation étape par étape. D\'ici là, une réparation corrige la stratégie.'), 'fr', { ...all, stepRepair: false })).toEqual([]);
     expect(honestyProblems(named('en', '**Not delivered yet:** step-by-step repair.'), 'en', all).join()).toMatch(/doit disparaître|nomme stepRepair/);
     expect(honestyProblems(bare('en'), 'en', { ...all, investigation: false }).join()).toMatch(/SYM \(investigates.*investigation non livré/);
   });

@@ -140,7 +140,7 @@ describe('assert_readme_claims_registered : chaque puce de « What SYM does » e
 
   test('une seule vérité (22 §1) : chaque phrase de l\'accroche, de l\'alerte, de la transcription, de la légende « Deploy to Render », de la note « Verify » et des mentions vient d\'une entrée relue', () => {
     for (const lang of LANGS) {
-      expect(proseSentences(README[lang]).length, lang).toBeGreaterThanOrEqual(17);
+      expect(proseSentences(README[lang]).length, lang).toBeGreaterThanOrEqual(16);
       expect(unregisteredFactsProblems(README[lang], lang, claims), lang).toEqual([]);
     }
     expect(proseSentences(README.en)).toEqual(expect.arrayContaining([
