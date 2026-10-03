@@ -1,14 +1,19 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// Cause lisible d'un run arrêté ou en échec (UX-04, 05 § 4.3) : la cause stable (`error_detail` du run, code de raison de
-// 04/06), un message pour l'humain, la marche à suivre pour l'agent (`what_to_do`, en anglais comme le reste du MCP) et
-// `retryable`. Sans cette cause, l'agent ne lisait que « The run failed (code_error) » alors que la tâche à faire (renseigner
-// le contact du robot) est connue. Seules les causes nommées ici sont publiées ; tout autre détail reste hors de la réponse.
+// Cause lisible d'un run arrêté ou en échec (UX-04, 05 § 4.3) : la cause stable (code de raison de 04/06), un message pour
+// l'humain, la marche à suivre pour l'agent (`what_to_do`, en anglais comme le reste du MCP) et `retryable`. Sans cette cause,
+// l'agent ne lisait que « The run failed (code_error) » alors que la tâche à faire (renseigner le contact du robot) est connue.
+// Seules les causes nommées ici sont publiées ; tout autre détail reste hors de la réponse.
 
 export type RunError = { code: string; message: string; what_to_do: string; retryable: boolean };
 
-/** Causes stables dont l'issue est une tâche pour l'opérateur ou l'agent. */
-const RUN_ERRORS: Record<string, Omit<RunError, 'code'>> = {
+/**
+ * Causes stables dont l'issue est une tâche pour l'opérateur ou l'agent, indexées par le détail du run (`error_detail`). Un
+ * contact posé mais illisible (UX-05) porte la même raison que le contact absent : dans les deux cas, aucun contact utilisable ;
+ * seul le message change (« corrige » au lieu de « renseigne »).
+ */
+const RUN_ERRORS: Record<string, Omit<RunError, 'code'> & { code?: string }> = {
   instance_contact_missing: {
+    code: 'instance_contact_missing',
     message: 'Renseigne le contact du robot dans Réglages > Identité du robot, ou la variable INSTANCE_CONTACT.',
     what_to_do:
       'Ask the user to set the robot contact in the console (Settings > Robot identity, /settings/robot) or the INSTANCE_CONTACT variable of the server, then call again: nothing was fetched and nothing was spent.',
@@ -22,7 +27,16 @@ const RUN_ERRORS: Record<string, Omit<RunError, 'code'>> = {
       'Ask the user to enter the price of model {model} (USD per million tokens: input, output, optional cached input) in the console (Settings > AI models, /settings/models), then call again: no model call was made and nothing was spent.',
     retryable: true,
   },
+  instance_contact_invalid: {
+    code: 'instance_contact_missing',
+    message: 'Le contact du robot est invalide : corrige-le dans Réglages > Identité du robot, ou corrige la variable INSTANCE_CONTACT (adresse e-mail ou URL http(s)).',
+    what_to_do:
+      'Ask the user to fix the robot contact (an e-mail address or an http(s) URL) in the console (Settings > Robot identity, /settings/robot) or the INSTANCE_CONTACT variable, then call again: nothing was fetched and nothing was spent.',
+    retryable: true,
+  },
 };
+
+export type RunErrorDetail = 'instance_contact_missing' | 'instance_contact_invalid' | 'llm_price_missing';
 
 /**
  * Détail `llm_price_missing` SANS modèle : le run (hors enquête, ou enquête après l'appel) a appelé le modèle, des jetons ont
@@ -39,14 +53,14 @@ const LLM_PRICE_UNKNOWN_AFTER_CALL: Omit<RunError, 'code'> = {
 const MODEL_NAME = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/;
 
 function describe(code: string, detail: string): RunError | null {
-  const known = RUN_ERRORS[code];
+  const known = Object.hasOwn(RUN_ERRORS, code) ? RUN_ERRORS[code] : undefined;
   if (known === undefined) return null;
   // `llm_price_missing` nu : le modèle a déjà été appelé (cause propre, texte propre).
   if (code === 'llm_price_missing' && detail === code) return { code, ...LLM_PRICE_UNKNOWN_AFTER_CALL };
   const suffix = detail.slice(code.length + 1);
   const model = detail.startsWith(`${code}:`) && MODEL_NAME.test(suffix) && !/^[a-z]+:\/\//i.test(suffix) ? suffix : null;
   const fill = (text: string) => text.replaceAll('{model}', model ?? (text.startsWith('Renseigne') ? 'utilisé' : 'used'));
-  return { code, message: fill(known.message), what_to_do: fill(known.what_to_do), retryable: known.retryable };
+  return { code: known.code ?? code, message: fill(known.message), what_to_do: fill(known.what_to_do), retryable: known.retryable };
 }
 
 /**
@@ -66,6 +80,6 @@ export function runErrorOf(run: { state: string; error_detail?: string | null })
 }
 
 /** Refus de création (`create_api`) quand le prérequis manque : même texte que la cause d'un run. */
-export function runErrorFor(code: keyof typeof RUN_ERRORS): RunError {
+export function runErrorFor(code: RunErrorDetail): RunError {
   return describe(code, code)!;
 }

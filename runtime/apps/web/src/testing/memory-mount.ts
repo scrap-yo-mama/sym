@@ -50,9 +50,20 @@ class MemoryElement {
     walk(this);
     return out;
   }
-  addEventListener(): void {}
-  removeEventListener(): void {}
+  /** Écouteurs posés par les directives (`v-model`) et par les props `on…` : jamais sérialisés, déclenchés par `fire`. */
+  readonly listeners = new Map<string, Set<Listener>>();
+  readonly handlers = new Map<string, unknown>();
+  addEventListener(type: string, listener: Listener): void {
+    const set = this.listeners.get(type) ?? new Set<Listener>();
+    set.add(listener);
+    this.listeners.set(type, set);
+  }
+  removeEventListener(type: string, listener: Listener): void {
+    this.listeners.get(type)?.delete(listener);
+  }
 }
+
+type Listener = (event: unknown) => unknown;
 
 const VOID = new Set(['area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link', 'meta', 'source', 'track', 'wbr']);
 
@@ -114,7 +125,12 @@ const options: RendererOptions<MemoryNode, MemoryElement> = {
   },
   patchProp: (element, key, _previous, next) => {
     // Écouteurs : jamais sérialisés (comme dans le HTML d'un navigateur).
-    if (/^on[A-Z]/.test(key)) return;
+    if (/^on[A-Z]/.test(key)) {
+      const type = key.slice(2).replace(/^./, (letter) => letter.toLowerCase());
+      if (next === null || next === undefined) element.handlers.delete(type);
+      else element.handlers.set(type, next);
+      return;
+    }
     if (key === 'value') {
       element.value = next;
       (element as unknown as { _value: unknown })._value = next;
@@ -137,7 +153,28 @@ async function settle(turns = 10): Promise<void> {
   }
 }
 
-export type MountedHtml = { html: () => string; unmount: () => void };
+/** Cible de `fire` : un attribut et sa valeur (`id`, `data-testid`…). */
+type MemoryTarget = { attr: string; value: string };
+
+export type MountedHtml = {
+  html: () => string;
+  unmount: () => void;
+  /**
+   * Déclenche `type` sur l'élément ciblé (écouteurs de `v-model` et props `on…`), `value` posée avant (saisie), puis laisse
+   * passer les réponses du serveur factice et les rendus.
+   */
+  fire: (target: MemoryTarget, type: string, value?: string) => Promise<void>;
+};
+
+function find(node: MemoryNode, target: MemoryTarget): MemoryElement | null {
+  if (!(node instanceof MemoryElement)) return null;
+  if (node.attrs.get(target.attr) === target.value) return node;
+  for (const child of node.children) {
+    const found = find(child, target);
+    if (found) return found;
+  }
+  return null;
+}
 
 /**
  * Monte `component` côté client dans un arbre en mémoire, avec i18n chargée et le routeur de la console, attend que les
@@ -153,5 +190,15 @@ export async function mountHtml(component: Component, props: Record<string, unkn
   app.use(i18n).use(router);
   app.mount(root);
   await settle();
-  return { html: () => root.children.map(serialize).join(''), unmount: () => app.unmount() };
+  const fire = async (target: MemoryTarget, type: string, value?: string): Promise<void> => {
+    const element = find(root, target);
+    if (!element) throw new Error(`aucun élément [${target.attr}="${target.value}"]`);
+    if (value !== undefined) element.value = value;
+    const event = { type, target: element, currentTarget: element, preventDefault: () => undefined, stopPropagation: () => undefined };
+    for (const listener of [...(element.listeners.get(type) ?? [])]) listener(event);
+    const handler = element.handlers.get(type);
+    for (const one of Array.isArray(handler) ? handler : handler === undefined ? [] : [handler]) if (typeof one === 'function') (one as Listener)(event);
+    await settle();
+  };
+  return { html: () => root.children.map(serialize).join(''), unmount: () => app.unmount(), fire };
 }

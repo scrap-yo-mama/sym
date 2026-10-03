@@ -8,6 +8,7 @@ import type { components } from '@runtime/client';
 import { resetSession, ensureSession } from '@/composables/useSession';
 import { setApi } from '@/lib/api';
 import ApiCatalogView from '@/views/ApiCatalogView.vue';
+import HomeView from '@/views/HomeView.vue';
 import NewApiView from '@/views/NewApiView.vue';
 import { installApi, json, textOf } from '@/testing/console-fixtures';
 import { mountHtml, type MountedHtml } from '@/testing/memory-mount';
@@ -56,7 +57,7 @@ function serve(current: Identity, permissions: readonly string[] = ME.permission
   });
 }
 
-async function open(view: typeof ApiCatalogView | typeof NewApiView): Promise<MountedHtml> {
+async function open(view: typeof ApiCatalogView | typeof NewApiView | typeof HomeView): Promise<MountedHtml> {
   await ensureSession();
   const page = await mountHtml(view, {}, 'fr');
   mounted.push(page);
@@ -73,6 +74,8 @@ afterEach(() => {
 
 describe('bandeau « contact du robot » (UX-06)', () => {
   test.each([
+    // L'accueil (`/`) : là où mène « Aller à la console » à la fin de l'assistant de premier démarrage.
+    ['l’accueil de la console', HomeView],
     ['le catalogue', ApiCatalogView],
     ['Nouvelle API', NewApiView],
   ] as const)('%s : contact absent → bandeau « requis avant la première enquête » et lien vers Réglages > Identité du robot', async (_name, view) => {
@@ -88,7 +91,10 @@ describe('bandeau « contact du robot » (UX-06)', () => {
     serve(identity({ instance_contact: 'mailto:ops@zz-test.example', instance_contact_effective: 'mailto:ops@zz-test.example', instance_contact_source: 'setting' }));
     expect((await open(ApiCatalogView)).html()).not.toContain('instance-contact-banner');
     serve(identity({ instance_contact_effective: 'mailto:env@zz-test.example', instance_contact_source: 'env' }));
-    expect((await open(NewApiView)).html()).not.toContain('instance-contact-banner');
+    const html = (await open(NewApiView)).html();
+    expect(html).not.toContain('instance-contact-banner');
+    // Région vide sans boîte (class contents) : elle reste annonçable sans ajouter d’écart dans la page (régression visuelle).
+    expect(html).toMatch(/<div(?=[^>]*data-testid="instance-contact-status")(?=[^>]*class="contents")[^>]*>/);
   });
 
   test('aucun worker n’a publié son environnement : rien d’inventé, aucun bandeau', async () => {
@@ -110,5 +116,44 @@ describe('bandeau « contact du robot » (UX-06)', () => {
       'GET /api/settings/identity': () => json(403, { error: { code: 'forbidden', message: 'x' } }),
     });
     expect((await open(ApiCatalogView)).html()).not.toContain('instance-contact-banner');
+  });
+});
+
+describe('Nouvelle API : refus 409 instance_contact_missing (UX-04 dans la console)', () => {
+  /** Serveur factice : la création est refusée faute de contact du robot. */
+  function refuse(permissions: readonly string[]): string[] {
+    return installApi({
+      'GET /api/auth/get-session': () => json(200, { session: { id: 's' }, user: { id: ME.id, email: ME.email } }),
+      'GET /api/me': () => json(200, { ...ME, permissions }),
+      'GET /api/settings/identity': () => json(200, identity()),
+      'POST /api/apis': () =>
+        json(409, { error: { code: 'instance_contact_missing', message: 'Renseigne le contact du robot.', what_to_do: 'Ask the user to set the robot contact.', retryable: true } }),
+    });
+  }
+
+  async function submitNewApi(): Promise<string> {
+    const page = await open(NewApiView);
+    await page.fire({ attr: 'id', value: 'api-description' }, 'input', 'zz_test liste des citations');
+    await page.fire({ attr: 'id', value: 'api-url' }, 'input', 'https://zz-test-quotes.example/');
+    await page.fire({ attr: 'data-testid', value: 'new-api-form' }, 'submit');
+    return page.html();
+  }
+
+  test('owner (peut régler l’identité) : message dédié, qui mène à Réglages > Identité du robot, jamais le message générique', async () => {
+    const seen = refuse(ME.permissions);
+    const html = await submitNewApi();
+    expect(seen.some((entry) => entry.startsWith('POST /api/apis'))).toBe(true);
+    expect(html).toContain('data-testid="new-api-error"');
+    const text = textOf(html);
+    expect(text).toContain("Le contact du robot n'est pas renseigné");
+    expect(text).toContain('Réglages > Identité du robot');
+    expect(text).not.toContain("Cette action n'est pas possible dans l'état actuel");
+  });
+
+  test('membre (sans le droit de régler l’identité) : demande à un admin de renseigner le contact', async () => {
+    refuse(ROLE_PERMISSIONS.member);
+    const text = textOf(await submitNewApi());
+    expect(text).toContain('Demande à un admin de renseigner le contact du robot');
+    expect(text).not.toContain("Cette action n'est pas possible dans l'état actuel");
   });
 });
