@@ -5,6 +5,8 @@
  * @description Vue d'ensemble d'une API (06 § 2) : description, stratégie courante (exécution × réseau, version),
  * dépendances (session sur tel domaine, tunnel), coût moyen, exemples d'appel MCP et REST à copier, et le formulaire
  * Lancer avec le coût estimé avant lancement. Aucun bouton Lancer pour une API bloquée (le panneau offre Ré-enquêter).
+ * Section « Agent instruit » (tâche 2.13) pour une API non compilable qui a des étapes instruites, jamais sur une API
+ * bloquée ; mode actif : rappel du coût par run dans le formulaire Lancer.
  * @component
  * @example <ApiOverviewTab :detail="detail" slug="zz-books" />
  */
@@ -13,17 +15,35 @@ import { useI18n } from 'vue-i18n';
 import { RouterLink } from 'vue-router';
 import ExecutionBadge from '@/components/catalog/ExecutionBadge.vue';
 import NetworkBadge from '@/components/catalog/NetworkBadge.vue';
+import InstructedStepsPanel from '@/components/api/InstructedStepsPanel.vue';
 import LaunchForm from '@/components/api/LaunchForm.vue';
 import { Button } from '@/components/ui/button';
 import { useApiActions } from '@/composables/useApiActions';
 import type { ApiDetail } from '@/composables/useApiDetail';
+import { useInstructedMode } from '@/composables/useInstructedMode';
 import { copyText } from '@/lib/clipboard';
 import { formatUsd } from '@/lib/display-format';
 import { buildFormModel, exampleInput } from '@/lib/schema-form';
+import { instructedOffered } from '@/lib/step-repairs';
 
 const props = defineProps<{ detail: ApiDetail; slug: string }>();
+const emit = defineEmits<{ updated: [detail: ApiDetail] }>();
 const { t, locale } = useI18n();
 const actions = useApiActions(() => props.slug);
+const instructed = useInstructedMode(() => props.slug, () => props.detail);
+const showInstructed = computed(() => instructedOffered(props.detail));
+/** Coût par run rappelé avant chaque lancement quand le mode est actif ; undefined sinon. */
+const instructedRunUsd = computed(() => (props.detail.instructed_mode === true ? (props.detail.instructed?.estimated_run_usd ?? null) : undefined));
+
+async function confirmSteps(): Promise<void> {
+  const updated = await instructed.confirm();
+  if (updated) emit('updated', updated);
+}
+
+async function toggleInstructed(on: boolean): Promise<void> {
+  const updated = await instructed.setEnabled(on);
+  if (updated) emit('updated', updated);
+}
 
 const canLaunch = computed(() => props.detail.status !== 'bloquee' && !props.detail.metadata_only);
 const launchedRun = ref<string | null>(null);
@@ -77,12 +97,22 @@ async function copy(kind: 'rest' | 'mcp'): Promise<void> {
 
     <section v-if="canLaunch" aria-labelledby="overview-launch" class="flex flex-col gap-3">
       <h2 id="overview-launch" class="text-lg font-semibold">{{ t('overview.launch') }}</h2>
-      <LaunchForm :schema="detail.input_schema" :estimate="detail.cost_estimate" :pending="actions.pending.value === 'launch'" :error="actions.error.value" @submit="launch" />
+      <LaunchForm :schema="detail.input_schema" :estimate="detail.cost_estimate" :instructed-run-usd="instructedRunUsd" :pending="actions.pending.value === 'launch'" :error="actions.error.value" @submit="launch" />
       <p v-if="launchedRun" role="status" class="text-sm" data-testid="launch-started">
         {{ t('launch.started') }}
         <RouterLink :to="`/runs/${launchedRun}`" class="underline underline-offset-4">{{ t('launch.followRun') }}</RouterLink>
       </p>
     </section>
+
+    <InstructedStepsPanel
+      v-if="showInstructed && detail.instructed"
+      :instructed="detail.instructed"
+      :enabled="instructed.enabled.value"
+      :pending="instructed.pending.value"
+      :error="instructed.error.value"
+      @confirm="confirmSteps"
+      @toggle="toggleInstructed"
+    />
 
     <section aria-labelledby="overview-examples" class="flex flex-col gap-3">
       <h2 id="overview-examples" class="text-lg font-semibold">{{ t('overview.examples') }}</h2>

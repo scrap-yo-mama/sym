@@ -397,6 +397,9 @@ export async function recordAttempt(db: Queryable, runId: string, jobId: string,
     a.prompt_version ?? null,
     ['running', 'waiting_tunnel'],
     a.engine ?? null,
+    a.step?.id ?? null,
+    a.step?.level ?? null,
+    a.step?.outcome ?? null,
     [...(a.rule_refs ?? [])].slice(0, 20),
   ];
   const sql = (leased: boolean) =>
@@ -407,9 +410,9 @@ export async function recordAttempt(db: Queryable, runId: string, jobId: string,
        WHERE id = $1 AND ${leased ? '' : 'NOT '}(job_id IS NOT DISTINCT FROM $2 AND state = ANY($17::text[]))
        RETURNING id, owner_id, project_id)
      INSERT INTO run_attempts (run_id, seq, owner_id, project_id, execution, network, result_class, est_cost_usd, cost_usd, ms,
-       model_id, prompt_version, engine, rule_refs)
+       model_id, prompt_version, engine, tokens_in, tokens_out, step_id, step_level, step_outcome, rule_refs)
      SELECT r.id, coalesce((SELECT max(seq) FROM run_attempts WHERE run_id = r.id), 0) + 1, r.owner_id, r.project_id,
-       $10, $11, $12, $13, $3::numeric + $4::numeric, $14, $15, $16, $18, $19::text[]
+       $10, $11, $12, $13, $3::numeric + $4::numeric, $14, $15, $16, $18, $5, $7, $19, $20, $21, $22::text[]
      FROM r RETURNING seq`;
   const { rows } = await db.query<{ seq: number }>(sql(true), params);
   if (rows[0] === undefined) {

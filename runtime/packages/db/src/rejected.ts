@@ -152,7 +152,8 @@ export async function saveRepairedStrategy(
     );
     if (args.source !== undefined) await recordStrategySource(tx, { apiId: args.apiId, ownerId: args.ownerId, version, source: args.source, rules: args.rules ?? [] });
     const promoted = current.current_strategy_version === args.parentVersion;
-    if (promoted) await tx.query('UPDATE apis SET current_strategy_version = $2 WHERE id = $1', [args.apiId, version]);
+    // Une version compilée (rejouée sans LLM) devient courante : le mode « agent instruit » n'a plus lieu d'être (2.13).
+    if (promoted) await tx.query('UPDATE apis SET current_strategy_version = $2, instructed_mode = false WHERE id = $1', [args.apiId, version]);
     return { version, promoted };
   });
 }

@@ -54,3 +54,4 @@ export function createDb(connectionString: string, max = 5): { db: Db; pool: pg.
   const pool = new pg.Pool({ connectionString, max });
   return { db: drizzle({ client: pool, schema }), pool };
 }
+export * from './steps.js';

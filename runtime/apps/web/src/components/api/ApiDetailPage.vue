@@ -5,9 +5,12 @@
  * @description Contenu de la fiche d'une API (06 § 2), sans accès aux données : en-tête (statut et raison, Lancer,
  * Ré-enquêter), bandeau « Action requise » ou panneau « Bloquée » en tête, puis les huit onglets. La vue
  * `ApiDetailView` lui fournit la fiche lue et les actions ; les tests le rendent avec des fiches de toute forme.
+ * Libellé « Agent instruit » avec le coût estimé par run quand le mode est actif ; action proposée par une raison de la
+ * reprise par étape (19b § 3), jamais sur une API bloquée.
  * @component
  * @example <ApiDetailPage :detail="detail" slug="zz-books" tab="overview" :resuming="false" />
  */
+import { computed } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { RouterLink } from 'vue-router';
 import ActionRequiredBanner from '@/components/api/ActionRequiredBanner.vue';
@@ -25,8 +28,10 @@ import StatusReason from '@/components/catalog/StatusReason.vue';
 import { Button } from '@/components/ui/button';
 import type { ApiDetail } from '@/composables/useApiDetail';
 import { API_TABS, type ApiTab } from '@/lib/api-tabs';
+import { formatUsd } from '@/lib/display-format';
+import { isStepReasonCode, STEP_REASON_ACTIONS } from '@/lib/reasons';
 
-defineProps<{
+const props = defineProps<{
   detail: ApiDetail;
   slug: string;
   tab: ApiTab;
@@ -39,7 +44,23 @@ defineProps<{
   conflict?: boolean;
 }>();
 defineEmits<{ reinvestigate: []; updated: [detail: ApiDetail] }>();
-const { t } = useI18n();
+const { t, locale } = useI18n();
+
+/** Libellé « Agent instruit » (mode actif) : un agent travaille à chaque run, coût estimé par run visible. */
+const instructedLabel = computed(() => {
+  if (props.detail.instructed_mode !== true) return null;
+  const cost = props.detail.instructed?.estimated_run_usd ?? null;
+  return cost === null ? t('instructed.labelUnknown') : t('instructed.label', { cost: formatUsd(cost, locale.value, true) });
+});
+
+/** Lien de l'action proposée par une raison de 19b § 3 (« Ré-enquêter » reste le bouton de l'en-tête). */
+const reasonAction = computed(() => {
+  const code = props.detail.status_reason?.code;
+  if (props.detail.status === 'bloquee' || props.detail.metadata_only || !isStepReasonCode(code)) return null;
+  const action = STEP_REASON_ACTIONS[code];
+  if (action === 'reinvestigate') return null;
+  return { label: t(`reasonAction.${code}`), to: { path: `/apis/${props.slug}/${action.tab}`, ...(action.hash ? { hash: action.hash } : {}) } };
+});
 </script>
 
 <template>
@@ -56,6 +77,8 @@ const { t } = useI18n();
     <div class="flex flex-col gap-1">
       <StatusBadge :status="detail.status" :stale="detail.stale" />
       <StatusReason :status="detail.status" :reason="detail.status_reason" />
+      <p v-if="reasonAction" class="text-sm"><RouterLink :to="reasonAction.to" class="underline underline-offset-4" data-testid="reason-action">{{ reasonAction.label }}</RouterLink></p>
+      <p v-if="instructedLabel" data-testid="instructed-label"><span class="inline-flex items-center rounded-md border border-foreground px-2 py-0.5 text-xs font-medium">{{ instructedLabel }}</span></p>
     </div>
     <p v-if="reinvestigated" role="status" class="text-sm" data-testid="reinvestigation-started">{{ t('detail.reinvestigationStarted') }}</p>
     <p v-if="actionFailed" role="alert" class="sym-error">{{ t(conflict ? 'apiErrors.conflict' : 'apiErrors.generic') }}</p>
@@ -80,7 +103,7 @@ const { t } = useI18n();
     </ul>
   </nav>
 
-  <ApiOverviewTab v-if="tab === 'overview'" :detail="detail" :slug="slug" />
+  <ApiOverviewTab v-if="tab === 'overview'" :detail="detail" :slug="slug" @updated="$emit('updated', $event)" />
   <ApiSchemasTab v-else-if="tab === 'schemas'" :detail="detail" :slug="slug" @updated="$emit('updated', $event)" />
   <ApiStrategyTab v-else-if="tab === 'strategy'" :detail="detail" :slug="slug" @updated="$emit('updated', $event)" />
   <ApiRunsTab v-else-if="tab === 'runs'" :detail="detail" :slug="slug" />
