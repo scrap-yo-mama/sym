@@ -77,7 +77,20 @@ export default defineConfig({
           name: 'image',
           testTimeout: 240_000,
           hookTimeout: 900_000,
-          include: ['tests/**/*.image.test.ts'],
+          // Banc 2.8 : job promptfoo dans son image épinglée, sur un réseau Docker interne (eval/bench).
+          include: ['tests/**/*.image.test.ts', 'eval/**/*.image.test.ts'],
+        },
+      },
+      {
+        test: {
+          // Banc d'évaluation de l'agent (tâche 2.8, 15 §11) : `pnpm eval` (N0 par défaut, faux fournisseur ; N1 à N3 avec le
+          // fournisseur BYO, voir eval/README.md). Même conteneur PostgreSQL que `integration`, un cas après l'autre.
+          name: 'eval',
+          globalSetup: ['tests/setup/postgres.global.ts'],
+          testTimeout: 600_000,
+          hookTimeout: 3_600_000,
+          fileParallelism: false,
+          include: ['eval/**/*.eval.test.ts'],
         },
       },
       {

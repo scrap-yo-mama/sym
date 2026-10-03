@@ -614,6 +614,11 @@
         "qwen": "Qwen",
         "openai": "OpenAI",
         "custom": "Personnalisé"
+      },
+      "validation": {
+        "validated": "Modèle validé (banc N2, {date})",
+        "notValidated": "Non validé",
+        "hint": "Mesuré par le banc d’évaluation ; en lecture seule."
       }
     },
     "proxies": {

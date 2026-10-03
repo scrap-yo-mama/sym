@@ -5242,6 +5242,34 @@ components:
               type: array
               items:
                 $ref: '#/components/schemas/LlmProvider'
+            validated_models:
+              description: >-
+                Statut « modèle validé » du banc d'évaluation (15 § 11), en lecture seule : copie de eval/validated-models.json
+                (produit par `pnpm eval --level N2`). Un modèle configuré absent de la liste n'a jamais été mesuré : « non validé ».
+              type: array
+              readOnly: true
+              items:
+                $ref: '#/components/schemas/ValidatedModel'
+    ValidatedModel:
+      type: object
+      additionalProperties: false
+      required: [model_id, date, status, level]
+      properties:
+        model_id:
+          type: string
+        date:
+          type: string
+          format: date
+        status:
+          type: string
+          enum: [validated, not_validated]
+        level:
+          type: string
+          enum: [N2]
+        blocking_rules:
+          type: array
+          items:
+            type: string
     LlmSettingsWrite:
       allOf:
         - $ref: '#/components/schemas/LlmSettingsCommon'
