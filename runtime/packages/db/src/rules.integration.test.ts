@@ -103,9 +103,9 @@ afterAll(async () => {
 });
 
 describe('migration 0019', () => {
-  test('politique par défaut installée : règle partagée d’instance, origine seed, empreinte du template (version 2 de 0021, D-91)', async () => {
+  test('politique par défaut installée : règle partagée d’instance, origine seed, empreinte du template', async () => {
     const { rows } = await pool.query<{ kind: string; visibility: string; owner_id: string | null; applies_to: string[]; origin: string; sha256: string; review_state: string }>(
-      `SELECT f.kind, f.visibility, f.owner_id, f.applies_to, v.origin, v.sha256, v.review_state FROM rule_files f JOIN rule_file_versions v ON v.rule_file_id = f.id AND v.version = f.current_version WHERE f.name = $1`,
+      `SELECT f.kind, f.visibility, f.owner_id, f.applies_to, v.origin, v.sha256, v.review_state FROM rule_files f JOIN rule_file_versions v ON v.rule_file_id = f.id WHERE f.name = $1`,
       [DEFAULT_POLICY_NAME],
     );
     expect(rows).toEqual([{ kind: 'rule', visibility: 'instance', owner_id: null, applies_to: ['*'], origin: 'seed', sha256: DEFAULT_POLICY_SHA256, review_state: 'none' }]);

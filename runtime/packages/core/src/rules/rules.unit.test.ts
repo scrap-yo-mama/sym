@@ -270,10 +270,9 @@ describe('politique par défaut (18 §4.2)', () => {
     const d = parseRuleFile(DEFAULT_POLICY_MARKDOWN);
     expect(d).toMatchObject({ name: DEFAULT_POLICY_NAME, kind: 'rule', applies_to: ['*'] });
     expect(d.sha256).toBe(DEFAULT_POLICY_SHA256);
-    for (const word of ['est_cost_usd', 'network', 'extraction', 'blocked_by_protection', 'forbidden', 'auth_required', 'payment_required', 'action_requise']) {
+    for (const word of ['est_cost_usd', 'network', 'extraction', 'blocked_by_protection', 'forbidden', 'robots_disallowed', 'auth_required', 'payment_required', 'action_requise']) {
       expect(DEFAULT_POLICY_MARKDOWN).toContain(word);
     }
-    expect(DEFAULT_POLICY_MARKDOWN).not.toContain('robots');
   });
   test('transcription fidèle de 04 §3.3 (18 §4.2) : élagages de 04 §3.3 seulement, aucune heuristique ajoutée', () => {
     const section = DEFAULT_POLICY_MARKDOWN.split('## Élagage après un échec (classe du classifieur)')[1]!.split('## Arrêts')[0]!;
