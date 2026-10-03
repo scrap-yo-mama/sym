@@ -167,3 +167,49 @@ describe('écran Catalogue', () => {
     }
   });
 });
+
+describe('écran Catalogue : états vides, en-tête et nom de ligne de la planche (20 § 5.2, revue de 3.17)', () => {
+  test('catalogue vide : formes plates aria-hidden, titre positif, bouton « Nouvelle API », plus de boîte en pointillés', async () => {
+    serve(() => []);
+    const html = (await open()).html();
+    const empty = /<section[^>]*data-testid="empty-state"[\s\S]*?<\/section>/.exec(html)?.[0] ?? '';
+    expect(empty).not.toBe('');
+    expect(empty).toMatch(/data-testid="empty-shapes"[^>]*aria-hidden="true"|aria-hidden="true"[^>]*data-testid="empty-shapes"/);
+    expect(empty).not.toContain('border-dashed');
+    expect(empty).toContain('href="/apis/new"');
+    expect(textOf(empty)).toContain(fr.catalog.empty.title);
+  });
+
+  test.todo('catalogue vide : lien « Voir un exemple avec la démo » (u3 R5), dès que la démo de 3.16 est fusionnée');
+
+  test('filtre vide : texte seul (ni bouton, ni formes, ni boîte)', async () => {
+    // Vue d'ensemble : une API à traiter (la pastille « À traiter » s'ouvre) ; la lecture filtrée par statut ne rend rien.
+    installApi({
+      'GET /api/apis': (request) => json(200, { apis: new URL(request.url).searchParams.get('status') ? [] : make(['sain', 'warning']), next_cursor: null }),
+    });
+    const html = (await open()).html();
+    const noMatch = /<p[^>]*data-testid="catalog-no-match"[\s\S]*?<\/p>/.exec(html)?.[0] ?? '';
+    expect(noMatch).not.toBe('');
+    expect(textOf(noMatch)).toContain(fr.catalog.noMatch.title);
+    expect(html).not.toContain('data-testid="empty-state"');
+    expect(html).not.toContain('data-testid="empty-shapes"');
+  });
+
+  test('en-tête : aucun second « Nouvelle API » à côté de la recherche, celui de la barre de navigation suffit (3.21, planche)', async () => {
+    serve(() => make(['sain']));
+    const header = /<header[\s\S]*?<\/header>/.exec((await open()).html())?.[0] ?? '';
+    expect(header).toContain('id="catalog-search"');
+    expect(header).not.toContain('href="/apis/new"');
+  });
+
+  test('ligne : la description est le nom (« Livres de l’accueil »), le domaine et le slug en secondaire', async () => {
+    serve(() => [apiSummary({ slug: 'livres-accueil', description: 'Livres de l’accueil', domain: 'books.toscrape.com' })]);
+    const html = (await open()).html();
+    const row = /<tr[^>]*data-testid="catalog-row"[\s\S]*?<\/tr>/.exec(html)?.[0] ?? '';
+    const link = /<a[^>]*href="\/apis\/livres-accueil"[^>]*>([\s\S]*?)<\/a>/.exec(row)?.[1] ?? '';
+    expect(textOf(link)).toBe('Livres de l’accueil');
+    const secondary = /data-testid="row-secondary"[^>]*>([\s\S]*?)<\/p>/.exec(row)?.[1] ?? '';
+    expect(textOf(secondary)).toContain('books.toscrape.com');
+    expect(textOf(secondary)).toContain('livres-accueil');
+  });
+});

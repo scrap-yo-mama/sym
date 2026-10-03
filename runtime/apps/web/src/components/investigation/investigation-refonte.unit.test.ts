@@ -269,6 +269,20 @@ describe('assert_schema_remark_not_sent : « Une remarque pour SYM ? » n’envo
     expect(source).toContain('id="schema-remark"');
   });
 
+  test('l’écart de texte à la planche (D-60) est consigné dans 20 § 5.3, aide mot pour mot ; les écarts de mise en page du Catalogue dans 20 § 5.2', () => {
+    const spec = readFileSync(new URL('../../../../../../cdc/scrapyomama-runtime/20-specs-marque-ux.md', import.meta.url), 'utf8');
+    const section = (title: string): string => {
+      const start = spec.indexOf(title);
+      return start < 0 ? '' : spec.slice(start, spec.indexOf('\n### ', start + title.length));
+    };
+    const newApi = section('### 5.3 Nouvelle API');
+    expect(newApi).toContain(fr.investigation.schema.remarkHint);
+    expect(newApi).toContain('assert_schema_remark_not_sent');
+    expect(newApi).toContain(fr.investigation.plan.include);
+    const catalog = section('### 5.2 Catalogue');
+    for (const words of ['Suspendre le suivi', 'slug', 'Règles & skills', 'Voir un exemple avec la démo']) expect(catalog, words).toContain(words);
+  });
+
   test('la ré-enquête n’envoie jamais de `note` (le corps de POST /api/apis/{slug}/investigate est celui de l’OpenAPI)', () => {
     expect(composable).not.toMatch(/\bnote\b/);
   });

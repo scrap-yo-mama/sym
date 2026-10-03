@@ -781,8 +781,8 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
       // --- 3. Essais du moins cher au plus cher --------------------------------------------------------------------
       await save('testing');
       await milestone('trials');
-      const fullPlan = planFor(builtStrategies);
       // Confirmation d'un refus passé : le couple le moins cher seulement (le plan est déjà trié par coût croissant).
+      const fullPlan = planFor(builtStrategies);
       const plan = confirmOnce ? fullPlan.slice(0, 1) : fullPlan;
       // Règles embarquées dans les prompts figés E4-E6 (18 §4.5, RULES_MAX_TOKENS de 1 000) : la spec ne porte que leurs
       // RÉFÉRENCES (`nom@version#sha256`, jamais le texte : INV12, spec lisible des membres d'une API partagée) ; l'essai et

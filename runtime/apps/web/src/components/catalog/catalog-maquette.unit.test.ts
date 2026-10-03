@@ -85,18 +85,18 @@ describe('fidélité à la planche Catalogue (D-60) : structure et hiérarchie',
     expect(table).toMatch(/class="[^"]*bg-accent[^"]*"[^>]*data-testid="catalog-row"[^>]*data-status="action_requise"/);
   });
 
-  test('ligne : le nom puis le domaine en dessous (« Livres de l’accueil / books.toscrape.com ») ; la description n’apparaît qu’à défaut de domaine', async () => {
+  test('ligne : le nom lisible (la description, « Livres de l’accueil ») puis le domaine en dessous, le slug en secondaire', async () => {
     const [name, domain] = MAQUETTE.row;
-    const html = await renderHtml(ApiCatalogTable, { apis: [apiSummary({ slug: name, domain, description: 'Je veux les livres depuis books.toscrape.com pour suivre les prix' })] }, 'fr');
+    const html = await renderHtml(ApiCatalogTable, { apis: [apiSummary({ slug: 'livres-accueil', domain, description: name })] }, 'fr');
     const cell = /<th scope="row"[\s\S]*?<\/th>/.exec(html)?.[0] ?? '';
-    expect(textOf(cell)).toBe(`${name} ${domain}`);
-    expect(cell).toMatch(/data-testid="row-domain"[^>]*translate="no"|translate="no"[^>]*data-testid="row-domain"/);
+    expect(textOf(cell)).toBe(`${name} ${domain} · livres-accueil`);
+    expect(cell).toMatch(/data-testid="row-secondary"[^>]*translate="no"|translate="no"[^>]*data-testid="row-secondary"/);
     // Domaine connu seulement par la session (action requise) : c'est lui qui s'affiche.
-    const session = await renderHtml(ApiCatalogTable, { apis: [apiSummary({ slug: 'zz-post', domain: null, requires: { session_domain: 'zz-site-a-compte.example', tunnel: true } })] }, 'fr');
-    expect(textOf(/<th scope="row"[\s\S]*?<\/th>/.exec(session)?.[0] ?? '')).toBe('zz-post zz-site-a-compte.example');
-    // Aucun domaine connu : la description (06 § 2, « nom et description ») tient la seconde ligne.
+    const session = await renderHtml(ApiCatalogTable, { apis: [apiSummary({ slug: 'zz-post', description: 'Mes commandes', domain: null, requires: { session_domain: 'zz-site-a-compte.example', tunnel: true } })] }, 'fr');
+    expect(textOf(/<th scope="row"[\s\S]*?<\/th>/.exec(session)?.[0] ?? '')).toBe('Mes commandes zz-site-a-compte.example · zz-post');
+    // Aucun domaine connu : le slug seul en secondaire.
     const none = await renderHtml(ApiCatalogTable, { apis: [apiSummary({ slug: 'zz-books', domain: null })] }, 'fr');
-    expect(textOf(/<th scope="row"[\s\S]*?<\/th>/.exec(none)?.[0] ?? '')).toBe('zz-books Livres de la page d’accueil');
+    expect(textOf(/<th scope="row"[\s\S]*?<\/th>/.exec(none)?.[0] ?? '')).toBe('Livres de la page d’accueil zz-books');
   });
 
   test('dernier run en <time datetime> (20 § 5.2) : une date formatée par Intl est une donnée, pas une chaîne de l’interface', async () => {

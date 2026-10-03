@@ -16,6 +16,14 @@ const ACCENTS: Record<string, string> = {
 export const PSEUDO_OPEN = '⟦';
 export const PSEUDO_CLOSE = '⟧';
 
+/**
+ * Exemptés du contrôle de débordement (`assert_no_text_overflow_pseudo`) : les conteneurs qui défilent ou coupent EXPRÈS
+ * (`data-reflow-exempt`, code `pre`, journaux `role="log"`) et ce qui n'est pas affiché (`.sr-only`, `svg`). Le tableau du
+ * catalogue n'en fait pas partie : son enveloppe défile en largeur (overflow-x: auto, jamais compté comme coupé), ses cellules
+ * sont contrôlées comme le reste.
+ */
+export const OVERFLOW_EXEMPT = '[data-reflow-exempt], pre, [role="log"], .sr-only, svg';
+
 /** Une forme (sans `|`) : lettres accentuées hors des paramètres `{…}` et des liens `@:…`, puis allongement et marques. */
 function pseudoForm(form: string): string {
   const lead = /^\s*/.exec(form)?.[0] ?? '';

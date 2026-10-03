@@ -8,7 +8,7 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { describe, expect, test } from 'vitest';
 import config from '../playwright.config.ts';
 import { visualMode } from '../e2e/visual-policy.ts';
-import { PSEUDO_CLOSE, PSEUDO_OPEN, pseudoMessage, pseudoMessages } from '../e2e/pseudo.ts';
+import { OVERFLOW_EXEMPT, PSEUDO_CLOSE, PSEUDO_OPEN, pseudoMessage, pseudoMessages } from '../e2e/pseudo.ts';
 import en from '@runtime/i18n/locales/en.json';
 
 const VISUAL_DIR = new URL('../e2e/__visual__/', import.meta.url);
@@ -60,6 +60,17 @@ describe('assert_no_hardcoded_strings_pseudo, assert_no_text_overflow_pseudo : l
     }
     expect(pseudoMessage('Search')).toMatch(/^⟦Šéáŕçĥ ·+⟧$/u);
     expect(Array.from(pseudoMessage('Validate the schema')).length).toBeGreaterThan(Array.from('Validate the schema').length * 1.3);
+  });
+
+  test('assert_no_text_overflow_pseudo : le tableau du catalogue est contrôlé ; seuls les conteneurs qui défilent exprès sont exemptés', () => {
+    const exempt = OVERFLOW_EXEMPT.split(',').map((part) => part.trim());
+    expect(exempt).not.toContain('table');
+    expect(exempt.some((part) => /^(td|th|tr|tbody|thead)\b/.test(part)), 'aucune cellule exemptée').toBe(false);
+    expect(exempt).toEqual(expect.arrayContaining(['[data-reflow-exempt]', 'pre', '[role="log"]']));
+    // La suite visuelle lit cette liste (aucune copie locale qui pourrait diverger).
+    const suite = readFileSync(new URL('../e2e/visual.e2e.ts', import.meta.url), 'utf8');
+    expect(suite).toContain('OVERFLOW_EXEMPT');
+    expect(suite).not.toMatch(/closest\('\[data-reflow-exempt\], table/);
   });
 
   test('la syntaxe de vue-i18n est gardée : paramètres, formes plurielles, liens', () => {

@@ -1001,8 +1001,7 @@
     },
     "noMatch": {
       "title": "Aucune API ne correspond",
-      "description": "Change ou retire des filtres pour voir plus de résultats.",
-      "reset": "Réinitialiser les filtres"
+      "description": "Change ou retire des filtres pour voir plus de résultats."
     },
     "pagination": {
       "label": "Pagination du catalogue",

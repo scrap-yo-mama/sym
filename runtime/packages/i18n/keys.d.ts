@@ -437,7 +437,6 @@ export type MessageKey =
   | 'catalog.health.title'
   | 'catalog.newApi'
   | 'catalog.noMatch.description'
-  | 'catalog.noMatch.reset'
   | 'catalog.noMatch.title'
   | 'catalog.pagination.label'
   | 'catalog.pagination.next'
