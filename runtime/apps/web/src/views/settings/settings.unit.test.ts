@@ -132,6 +132,79 @@ describe('Réglages > Modèles IA', () => {
     expect(bare).not.toContain(en.settings.models.validation.validated.replace('{date}', '2026-09-30'));
   });
 
+  describe('UX-11 — prix des modèles (USD par million de jetons)', () => {
+    const known_prices = [
+      { model: 'claude-opus-4-8', provider: 'anthropic', status: 'verified', price: { in: 5, out: 25, in_cached: 0.5 }, source: 'tests/agent/agent-live.security.test.ts', as_of: '2026-10-01' },
+      { model: 'claude-sonnet-5-5', provider: 'anthropic', status: 'to_validate', price: null, source: 'aucun prix relevé dans le dépôt' },
+    ];
+    const anthropic = {
+      providers: [{ id: 'anthropic', preset: 'custom', base_url: 'https://api.anthropic.com/v1', api_key_set: true, headers_set: false }],
+      roles: { investigate: { provider: 'anthropic', model: 'claude-opus-4-8' }, extract: { provider: 'anthropic', model: 'claude-sonnet-5-5' } },
+      known_prices,
+    };
+
+    test('chaque fournisseur liste ses modèles utilisés, prix en entrée, en sortie et en cache ; le nom connu pré-remplit, « à valider » ne remplit rien', async () => {
+      installFakeServer({ ...sessionRoutes, 'GET /api/settings/llm': () => json(200, anthropic) });
+      const html = await view(ModelsSettingsView);
+      const rows = [...html.matchAll(/data-testid="model-price-row"[^>]*data-model="([^"]+)"/g)].map((m) => m[1]);
+      expect(rows).toEqual(['claude-opus-4-8', 'claude-sonnet-5-5']);
+      const input = (id: string) => new RegExp(`<input[^>]*id="${id}"[^>]*>`).exec(html)?.[0] ?? '';
+      expect(input('price-in-0-0')).toMatch(/value="5"/);
+      expect(input('price-out-0-0')).toMatch(/value="25"/);
+      expect(input('price-cached-0-0')).toMatch(/value="0.5"/);
+      expect(input('price-in-0-1')).not.toMatch(/value=/);
+      expect(html).toContain(en.settings.models.price.toValidate);
+      expect(html).toContain(en.settings.models.price.unit);
+    });
+
+    test('un rôle dont le modèle n’a pas de prix est signalé', async () => {
+      installFakeServer({ ...sessionRoutes, 'GET /api/settings/llm': () => json(200, anthropic) });
+      const html = await view(ModelsSettingsView);
+      expect((html.match(/data-testid="role-price-missing"/g) ?? []).length).toBe(1);
+      expect(html).toContain(en.settings.models.price.roleMissing.replace('{model}', 'claude-sonnet-5-5'));
+    });
+
+    test('enregistrer : le prix connu et le prix saisi partent dans providers[].models[m].price du PUT existant', async () => {
+      const calls = installFakeServer({ 'GET /api/settings/llm': () => json(200, anthropic), 'PUT /api/settings/llm': () => json(200, anthropic) });
+      const settings = useLlmSettings();
+      await settings.load();
+      settings.setModelPrice(0, 'claude-sonnet-5-5', 'in', '3');
+      settings.setModelPrice(0, 'claude-sonnet-5-5', 'out', '15');
+      expect(await settings.save()).toBe(true);
+      const sent = calls.find((c) => c.method === 'PUT')?.body as { providers: { models: Record<string, { price?: unknown }> }[] };
+      expect(sent.providers[0]!.models).toEqual({
+        'claude-opus-4-8': { price: { in: 5, out: 25, in_cached: 0.5 } },
+        'claude-sonnet-5-5': { price: { in: 3, out: 15 } },
+      });
+    });
+
+    test('le prix pré-rempli reste modifiable ; vider l’entrée en cache la retire ; le profil et les autres champs du modèle sont conservés', async () => {
+      const profile = { tools: true, tool_choice: ['auto'], structured: 'json_schema', cache: false };
+      const body = { ...anthropic, providers: [{ ...anthropic.providers[0], models: { 'claude-opus-4-8': { profile, extra_body: { zz: 1 } } } }] };
+      const calls = installFakeServer({ 'GET /api/settings/llm': () => json(200, body), 'PUT /api/settings/llm': () => json(200, body) });
+      const settings = useLlmSettings();
+      await settings.load();
+      settings.setModelPrice(0, 'claude-opus-4-8', 'in', '4.5');
+      settings.setModelPrice(0, 'claude-opus-4-8', 'in_cached', '');
+      await settings.save();
+      const sent = calls.find((c) => c.method === 'PUT')?.body as { providers: { models: Record<string, unknown> }[] };
+      expect(sent.providers[0]!.models['claude-opus-4-8']).toEqual({ profile, extra_body: { zz: 1 }, price: { in: 4.5, out: 25 } });
+    });
+
+    test('un prix incomplet (entrée sans sortie), négatif ou illisible n’est jamais envoyé : l’enregistrement s’arrête avec un message', async () => {
+      const calls = installFakeServer({ 'GET /api/settings/llm': () => json(200, anthropic), 'PUT /api/settings/llm': () => json(200, anthropic) });
+      const settings = useLlmSettings();
+      await settings.load();
+      settings.setModelPrice(0, 'claude-sonnet-5-5', 'in', '3');
+      expect(await settings.save()).toBe(false);
+      expect(settings.saveFailure.value).toBe('settings.models.price.incomplete');
+      settings.setModelPrice(0, 'claude-sonnet-5-5', 'out', '-1');
+      expect(await settings.save()).toBe(false);
+      expect(settings.saveFailure.value).toBe('settings.models.price.invalid');
+      expect(calls.filter((c) => c.method === 'PUT')).toHaveLength(0);
+    });
+  });
+
   test('un non-admin (403) lit un message clair, pas une panne', async () => {
     installFakeServer({ ...sessionRoutes, 'GET /api/settings/llm': () => json(403, { error: { code: 'forbidden', message: 'x' } }) });
     const html = await view(ModelsSettingsView);

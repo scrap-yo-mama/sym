@@ -35,6 +35,7 @@ export const SPEC_REASON_CODES = [
   'challenge_in_tunnel',
   'secret_unreadable',
   'instance_contact_missing',
+  'llm_price_missing',
   'account_limit',
   'session_owner_required',
   'llm_refused',

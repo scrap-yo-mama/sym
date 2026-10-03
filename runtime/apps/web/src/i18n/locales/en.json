@@ -575,6 +575,11 @@
       "body": "The operator contact is required before the first investigation. Set it in Settings > Robot identity, or with the INSTANCE_CONTACT variable, then investigate again.",
       "button": "Open Settings > Robot identity"
     },
+    "llm_price_missing": {
+      "title": "Enter the price of model {model} in Settings > AI models",
+      "body": "The investigation is stopped: no price is known for model {model}, so it was not called and nothing was spent. Enter its price per million tokens in Settings > AI models, then investigate again.",
+      "button": "Open Settings > AI models"
+    },
     "secret_unreadable": {
       "title": "A saved key is unreadable",
       "body": "Enter the key again in the settings, then test it.",
@@ -588,7 +593,8 @@
       "title": "{platform} flagged a limit on your account",
       "body": "{platform} flagged a limit or a restriction. The run is stopped and no retry is planned. Read the messages of the platform. Only the platform decides on a restriction. Reminder: automated extraction may be forbidden by its terms, even with a single account; you remain responsible."
     },
-    "resuming": "Resuming the investigation…"
+    "resuming": "Resuming the investigation…",
+    "modelUnnamed": "used"
   },
   "runs": {
     "title": "All runs",
@@ -723,6 +729,20 @@
         "validated": "Validated model (bench N2, {date})",
         "notValidated": "Not validated",
         "hint": "Measured by the evaluation bench; read-only."
+      },
+      "price": {
+        "title": "Model prices",
+        "intro": "Without a price, a model is never called: nothing is guessed and nothing is counted as 0. Enter the provider price per million tokens.",
+        "none": "No model in use yet: choose one in \"Model per role\" below.",
+        "in": "Input price",
+        "out": "Output price",
+        "cached": "Cached input price (optional)",
+        "unit": "USD per million tokens.",
+        "known": "Known price (source noted {date}); you can change it.",
+        "toValidate": "Price to validate: none is known for this model, enter it yourself.",
+        "incomplete": "Enter both the input and the output price of a model, or leave both empty.",
+        "invalid": "A price must be a number, zero or more.",
+        "roleMissing": "Enter the price of model {model} in the table above: without it no investigation can run."
       }
     },
     "proxies": {
@@ -871,6 +891,7 @@
     "challenge_in_tunnel": "A check appeared in your browser. The run is paused.",
     "secret_unreadable": "A stored key is unreadable.",
     "instance_contact_missing": "The robot contact is not set: it is required before the first investigation.",
+    "llm_price_missing": "The price of the model is not set: enter it in Settings > AI models.",
     "account_limit": "The platform flagged a limit on your account. No automatic retry.",
     "session_owner_required": "This API uses its owner's session.",
     "llm_refused": "The model refused the request; no automatic fallback.",
@@ -914,6 +935,7 @@
     "session_device_bound": "Session tied to the device",
     "challenge_in_tunnel": "Check shown in the browser",
     "instance_contact_missing": "Robot contact missing",
+    "llm_price_missing": "Model price missing",
     "secret_unreadable": "Key unreadable",
     "account_limit": "Account limit",
     "session_owner_required": "Owner session required",
@@ -1155,6 +1177,11 @@
       "title": "Set the robot contact",
       "button": "Open Settings > Robot identity",
       "verify": "Once the contact is saved, investigate again: nothing was sent and nothing was spent."
+    },
+    "llmPrice": {
+      "title": "Enter the model price in Settings > AI models",
+      "button": "Open Settings > AI models",
+      "verify": "Once the price is saved, investigate again: no model was called and nothing was spent."
     },
     "secret": {
       "title": "A stored key is unreadable",

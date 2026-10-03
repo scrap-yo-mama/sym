@@ -50,7 +50,7 @@ describe('fichiers de langue', () => {
   });
 
   test('assert_i18n_key_parity : chaque code de 06 § 4.2 a sa phrase (reasons) et son libellé court (reasonLabel) en en et en fr, mêmes variables', () => {
-    expect(SPEC_REASON_CODES.length).toBe(28);
+    expect(SPEC_REASON_CODES.length).toBe(29);
     for (const code of SPEC_REASON_CODES) {
       for (const family of ['reasons', 'reasonLabel']) {
         const key = `${family}.${code}`;

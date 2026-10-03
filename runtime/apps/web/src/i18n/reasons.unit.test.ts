@@ -54,7 +54,7 @@ describe('assert_reason_codes_stable', () => {
 
   test('la liste du code est celle de la table du CDC (06 § 4.2), ni plus ni moins, dans l’ordre de la table', () => {
     const codes = snapshotCodes();
-    expect(codes).toHaveLength(28);
+    expect(codes).toHaveLength(29);
     // `not_found` est défini en 04 § 7 et listé avec les extras ; tous les autres codes de la table sont dans SPEC_REASON_CODES.
     expect([...SPEC_REASON_CODES]).toEqual(codes);
     expect(EXTRA_REASON_CODES).toContain('not_found');
