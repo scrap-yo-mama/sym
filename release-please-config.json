@@ -58,6 +58,11 @@
         },
         {
           "type": "json",
+          "path": "packages/contracts/package.json",
+          "jsonpath": "$.version"
+        },
+        {
+          "type": "json",
           "path": "packages/core/package.json",
           "jsonpath": "$.version"
         },

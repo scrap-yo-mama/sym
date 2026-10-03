@@ -8,6 +8,8 @@ import { defineConfig, globalIgnores } from 'eslint/config';
 import pluginVue from 'eslint-plugin-vue';
 import tseslint from 'typescript-eslint';
 import vueParser from 'vue-eslint-parser';
+// Frontière du module SYM Browser (ADR 23 § 2) : règle locale, versionnée avec le module.
+import { browserBoundaries } from './modules/browser/eslint.boundaries.mjs';
 
 // Langues du produit : `registry.json` est la seule liste (21 § 2) ; aucune langue n'est écrite ici (M14).
 const localeCodes = JSON.parse(readFileSync(new URL('./packages/i18n/locales/registry.json', import.meta.url), 'utf8')).languages.map((l) => l.code);
@@ -15,7 +17,8 @@ const localeCodes = JSON.parse(readFileSync(new URL('./packages/i18n/locales/reg
 export default defineConfig(
   globalIgnores(['**/dist/', '**/.wxt/', '**/.output/', '**/coverage/', '**/blob-report/', '**/test-results/', '**/playwright-report/', '**/node_modules/']),
   {
-    files: ['**/*.ts'],
+    // .mts, .cts, .tsx : analysés en TypeScript (sinon la frontière du module ne les lirait pas).
+    files: ['**/*.{ts,mts,cts,tsx}'],
     extends: [js.configs.recommended, tseslint.configs.recommended],
     rules: {
       '@typescript-eslint/consistent-type-imports': 'error',
@@ -109,4 +112,5 @@ export default defineConfig(
     ],
     rules: { 'no-console': 'error' },
   },
+  browserBoundaries,
 );

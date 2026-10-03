@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="320" viewBox="0 0 1280 320" role="img" aria-label="SYM Browser (SYM 👻): remote browsers on demand, one CDP address per session. Open source, self-hosted.">
+  <title>SYM Browser (SYM 👻)</title>
+  <defs>
+    <clipPath id="card"><rect width="1280" height="320" rx="24"/></clipPath>
+  </defs>
+  <g clip-path="url(#card)">
+    <rect width="1280" height="320" fill="#24252D"/>
+    <circle cx="1210" cy="70" r="170" fill="#FF5A1F"/>
+    <rect x="890" y="200" width="250" height="210" rx="44" transform="rotate(16 1015 305)" fill="#D8BDF7"/>
+    <circle cx="1120" cy="218" r="40" fill="#FFC727"/>
+  </g>
+  <g transform="translate(64 78) scale(7)" fill="#FBF8F3">
+    <path fill-rule="evenodd" d="M12 2.5c-4.14 0-7.5 3.36-7.5 7.5v10.2c0 .92 1.1 1.4 1.77.77l1.93-1.77 2.1 1.9a2.4 2.4 0 0 0 3.4 0l2.1-1.9 1.93 1.77c.67.63 1.77.15 1.77-.77V10c0-4.14-3.36-7.5-7.5-7.5ZM9.25 8.75a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3Zm5.5 0a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3Z"/>
+  </g>
+  <text x="264" y="148" font-family="Inter, 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="78" font-weight="800" fill="#FBF8F3">SYM Browser</text>
+  <text x="268" y="198" font-family="Inter, 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="30" font-weight="700" fill="#FFC727">Ask for a browser. Get a wss:// address.</text>
+  <text x="268" y="240" font-family="'JetBrains Mono', ui-monospace, Menlo, Consolas, monospace" font-size="18" fill="#C9C4BA">CDP · Playwright · Puppeteer · Stagehand · browser-use</text>
+  <text x="268" y="272" font-family="Inter, 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="17" fill="#C9C4BA">scrapyomama · open source · self-hosted</text>
+</svg>

@@ -1,0 +1,82 @@
+# Fixtures de SYM Browser (tâche 0.5 ; cdc/sym-browser 08-recette §2). Réseau 10.88.0.0/24 : le site (10.88.0.10, alias
+# fixtures.local), le proxy HTTP (10.88.0.11) et le proxy SOCKS5 (10.88.0.12) ont chacun une IP distincte ; le site journalise
+# l'IP source de chaque requête (GET /__ips). Ports publiés sur 127.0.0.1 seulement. Identifiants de TEST (zz_test_) uniquement.
+name: sym-browser-fixtures
+
+x-service: &service
+  build:
+    context: .
+    dockerfile: Dockerfile
+  init: true
+  restart: "no"
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  healthcheck:
+    interval: 2s
+    timeout: 3s
+    retries: 30
+
+services:
+  site:
+    <<: *service
+    command: ["site"]
+    environment:
+      PORT: "8080"
+    ports:
+      - "127.0.0.1:${FIXTURES_SITE_PORT:-18080}:8080"
+    networks:
+      fixtures:
+        ipv4_address: 10.88.0.10
+        aliases: [fixtures.local]
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/health"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  proxy-http:
+    <<: *service
+    command: ["http-proxy"]
+    environment:
+      PORT: "3128"
+    ports:
+      - "127.0.0.1:${FIXTURES_HTTP_PROXY_PORT:-18081}:3128"
+    networks:
+      fixtures:
+        ipv4_address: 10.88.0.11
+    healthcheck:
+      test: ["CMD", "nc", "-z", "127.0.0.1", "3128"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    depends_on:
+      site:
+        condition: service_healthy
+
+  proxy-socks5:
+    <<: *service
+    command: ["socks5"]
+    environment:
+      PORT: "1080"
+    ports:
+      - "127.0.0.1:${FIXTURES_SOCKS5_PORT:-18082}:1080"
+    networks:
+      fixtures:
+        ipv4_address: 10.88.0.12
+    healthcheck:
+      test: ["CMD", "nc", "-z", "127.0.0.1", "1080"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    depends_on:
+      site:
+        condition: service_healthy
+
+networks:
+  fixtures:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 10.88.0.0/24
+          gateway: 10.88.0.1
