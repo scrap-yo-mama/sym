@@ -68,6 +68,8 @@ let fake: FakeProvider;
 let masterKey: string;
 let withExtract = false;
 let price = { in: 1, out: 1 };
+/** Contact d'instance lu par les exécuteurs ; `null` : aucun (UX-04). */
+let instanceContact: string | null = 'mailto:ops@zz-test.example';
 
 const products = (n: number, withTitle = true) => ({
   items: Array.from({ length: n }, (_, i) => ({ id: `zz_test_p${String(i + 1).padStart(3, '0')}`, ...(withTitle ? { title: `Produit Zztest ${i + 1}` } : {}), price_cents: 100 * (i + 1) })),
@@ -216,7 +218,7 @@ beforeAll(async () => {
       throw new Error('zz_test : aucun navigateur');
     },
   };
-  const strategy = createStrategyRuntime({ pool, guard, pacer, browsers: null, agent, tunnel, instanceContact: async () => 'mailto:ops@zz-test.example', version: '9.9.9' });
+  const strategy = createStrategyRuntime({ pool, guard, pacer, browsers: null, agent, tunnel, instanceContact: async () => instanceContact, version: '9.9.9' });
   const investigation = createInvestigationExecutor({
     pool,
     guard,
@@ -226,7 +228,7 @@ beforeAll(async () => {
     tunnel,
     llm: { config: async () => llmConfig(), client: (config) => createLlmClient(config) },
     agentic: true,
-    instanceContact: async () => 'mailto:ops@zz-test.example',
+    instanceContact: async () => instanceContact,
     version: '9.9.9',
   });
   const executor: RunExecutor = dispatchByKind({ run: strategy.executor, investigation });
@@ -328,7 +330,7 @@ describe('enquête en tunnel (04 §4 : reconnaissance « en tunnel si la session
   test('aucun client du tunnel dans ce worker → action_requise (tunnel manquant), phase close', async () => {
     const apiId = await insertApi('zz_test_fix_no_tunnel', { networkPolicy: { allow: ['tunnel'] } });
     await pool.query('UPDATE apis SET investigation = $2 WHERE id = $1', [apiId, JSON.stringify({ request: { url: site.url(TUN, '/'), description: 'x', auto_validate: true, budget_usd: 1, timeout_s: 60 }, spent_usd: 0, elapsed_ms: 0 })]);
-    const executor = createInvestigationExecutor({ pool, guard: fixtureGuard(site.port, HOSTS, net), browsers: null, strategy: createStrategyRuntime({ pool, guard: fixtureGuard(site.port, HOSTS, net), browsers: null }), instanceContact: async () => 'mailto:ops@zz-test.example' });
+    const executor = createInvestigationExecutor({ pool, guard: fixtureGuard(site.port, HOSTS, net), browsers: null, strategy: createStrategyRuntime({ pool, guard: fixtureGuard(site.port, HOSTS, net), browsers: null }), instanceContact: async () => instanceContact });
     const runId = (await pool.query<{ id: string }>("INSERT INTO runs (api_id, owner_id, api_owner_id, trigger, kind, state) VALUES ($1, $2, $2, 'rest', 'investigation', 'running') RETURNING id", [apiId, A])).rows[0]!.id;
     const result = await executor(directCtx(apiId, runId));
     expect((await eventsOf(runId)).map((e) => e.kind)).toEqual(['action.required', 'investigation.finished']);
@@ -355,6 +357,21 @@ describe('fins d’enquête : phase close et récit fermé', () => {
     await apiStatusSettled(apiId, { status: 'action_requise', status_reason: 'proxy_not_configured', investigation_phase: 'done' });
     expect((await eventsOf(run.id)).map((e) => e.kind).at(-1)).toBe('investigation.finished');
     expect(site.hits).toEqual([]);
+  });
+
+  test('UX-04/UX-05 — contact d’instance absent → action_requise (instance_contact_missing), jamais « budget épuisé » : 0 requête, 0 €, phase done', async () => {
+    instanceContact = null;
+    try {
+      const apiId = await insertApi('zz_test_fix_no_contact');
+      const run = await investigate(apiId, { url: site.url(TUN, '/'), description: 'liste', auto_validate: true });
+      expect(await runRow(run.id)).toMatchObject({ state: 'failed', failure_class: null, error_detail: 'instance_contact_missing' });
+      await apiStatusSettled(apiId, { status: 'action_requise', status_reason: 'instance_contact_missing', investigation_phase: 'done' });
+      expect((await eventsOf(run.id)).map((e) => e.kind).at(-1)).toBe('investigation.finished');
+      expect(site.hits).toEqual([]);
+      expect(fake.requests).toBe(0);
+    } finally {
+      instanceContact = 'mailto:ops@zz-test.example';
+    }
   });
 
   test('investigation_timeout_s tenu dès l’étape 0 (page lente) : erreur, investigation_timeout_s, sans attendre la page ni appeler le LLM', async () => {

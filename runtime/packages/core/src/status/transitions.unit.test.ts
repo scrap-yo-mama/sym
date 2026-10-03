@@ -57,7 +57,7 @@ describe('assert_status_transitions', () => {
       expect(run(st('enquete'), { type: 'run_failed', failureClass: cls }).path).toEqual([[3, 'enquete', 'action_requise', cls]]);
     }
     // Proxy requis non configuré, tunnel hors ligne : codes de raison, pas des failure_class.
-    for (const reason of ['proxy_not_configured', 'tunnel_offline'] as const) {
+    for (const reason of ['proxy_not_configured', 'tunnel_offline', 'instance_contact_missing'] as const) {
       expect(run(st('enquete'), { type: 'run_stopped', reason }).path).toEqual([[3, 'enquete', 'action_requise', reason]]);
     }
   });

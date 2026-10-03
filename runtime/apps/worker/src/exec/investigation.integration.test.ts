@@ -455,7 +455,7 @@ describe('enquête (tâche 2.1)', () => {
       excludeSubjects: (_s, items) => ({ kept: [...items], dropped: 0 }),
       writeItems: async () => ({ dataset_id: '', written: 0, new_items: null, dropped: 0, skipped: 0 }),
     });
-    expect(result).toMatchObject({ state: 'failed', failure_class: 'code_error', error_detail: 'instance_contact_missing' });
+    expect(result).toMatchObject({ state: 'failed', failure_class: null, stop_reason: 'instance_contact_missing', error_detail: 'instance_contact_missing' });
     // Fin de configuration : phase close et récit fermé (l'API ne reste pas en `enquete` / access_check sans suite).
     expect((await apiRow(apiId)).investigation_phase).toBe('done');
     expect((await eventsOf(runId)).map((e) => e.kind).at(-1)).toBe('investigation.finished');

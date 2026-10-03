@@ -329,7 +329,7 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
      * Arrêt sans classe d'échec (04 §6, transition 3) : proxy requis non configuré, extension hors ligne. Phase close, récit
      * fermé ; le worker applique `run_stopped` (→ `action_requise`).
      */
-    const finishStopped = async (reason: 'proxy_not_configured' | 'tunnel_offline', detail: string, at: string): Promise<RunResult> => {
+    const finishStopped = async (reason: 'proxy_not_configured' | 'tunnel_offline' | 'instance_contact_missing', detail: string, at: string): Promise<RunResult> => {
       await save('done');
       await event(EV.actionRequired, { cause: reason, domain: host });
       await event(EV.finished, { outcome: 'stopped', stop_reason: reason, detail, at, budget: budgetView() });
@@ -427,6 +427,8 @@ export function createInvestigationExecutor(deps: InvestigationExecutorDeps): Ru
         warn: () => undefined,
       })());
     } catch (error) {
+      // Contact absent : une tâche pour l'opérateur (transition 3, `action_requise`), jamais un échec ni un budget épuisé.
+      if (error instanceof InstanceContactError && error.code === 'instance_contact_missing') return await finishStopped('instance_contact_missing', error.code, 'setup');
       if (error instanceof InstanceContactError) return await finishFailed({ failure_class: 'code_error', retryable: false, detail: error.code }, 'setup');
       throw error;
     }
