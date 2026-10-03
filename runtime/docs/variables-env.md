@@ -30,7 +30,8 @@ des cinq premières est posée. Une autorité de certification privée pour Post
 
 | Variable | Lue par | Statut | Défaut | Rôle |
 |---|---|---|---|---|
-| `PUBLIC_URL` | server, CLI | obligatoire | aucun | URL publique de l’instance (http ou https), sans chemin : extension, MCP, cookies `Secure`. `runtime doctor` avertit si elle n’est pas en HTTPS. |
+| `PUBLIC_URL` | server, CLI | obligatoire | aucun | URL publique de l’instance, sans chemin : extension, MCP, cookies `Secure`. HTTPS obligatoire : le démarrage est refusé en http://, sauf pour localhost, 127.0.0.1 et [::1] (essai local, docker-compose), ou avec NODE_ENV=development ou test, ou avec `ALLOW_INSECURE_PUBLIC_URL=true`. |
+| `ALLOW_INSECURE_PUBLIC_URL` | server | facultative | false | `true` autorise une PUBLIC_URL en http:// hors boucle locale (essai sur un réseau privé) : le cookie de session voyage alors sans `Secure` ni HSTS. À ne jamais poser en production. |
 | `PORT` | server | facultative | 3000 | Port d’écoute du `server`. Respecte la valeur injectée par la plateforme. |
 | `HOST` | server | facultative | 0.0.0.0 | Adresse d’écoute du `server`. |
 | `TRUST_PROXY` | server | facultative | 0 | Nombre de proxys devant l’instance (1 chez Render, Railway et Heroku), ou liste d’IP et CIDR. Jamais `true` sans proxy : un client choisirait son IP par `X-Forwarded-For`. |

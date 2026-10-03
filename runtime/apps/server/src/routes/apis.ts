@@ -316,7 +316,7 @@ export function apiRoutes(app: FastifyInstance, ctx: ServerContext): void {
       const slug = await freeSlug(ctx, body.description, body.url);
       const queue = await ctx.jobs();
       created = await withActor(ctx.pool, actor, async (tx) => {
-        await reserveRunSlot(tx, ctx);
+        await reserveRunSlot(tx, ctx, { kind: 'investigation' });
         const apiId = await insertApi(tx, actor, { slug, description: body.description.trim(), visibility: body.visibility ?? 'private', networkPolicy: policy });
         const { runId } = await startInvestigation(tx, queue, {
           apiId,
@@ -512,7 +512,7 @@ export function apiRoutes(app: FastifyInstance, ctx: ServerContext): void {
       try {
         const queue = await ctx.jobs();
         ({ runId } = await withActor(ctx.pool, actor, async (tx) => {
-          await reserveRunSlot(tx, ctx);
+          await reserveRunSlot(tx, ctx, { kind: 'investigation', apiId: api.id });
           return validateInvestigationSchema(tx, queue, {
             apiId: api.id,
             ownerId: actor.userId,
@@ -551,7 +551,7 @@ export function apiRoutes(app: FastifyInstance, ctx: ServerContext): void {
     if (await rejectIfKeyRateLimited(ctx, reply, actor)) return reply;
     const queue = await ctx.jobs();
     const launch = async (tx: Parameters<typeof startInvestigation>[0]) => {
-      await reserveRunSlot(tx, ctx);
+      await reserveRunSlot(tx, ctx, { kind: 'investigation', apiId: api.id });
       return startInvestigation(tx, queue, {
         apiId: api.id,
         ownerId: actor.userId,
@@ -643,7 +643,7 @@ export function apiRoutes(app: FastifyInstance, ctx: ServerContext): void {
       try {
         const queue = await ctx.jobs();
         ({ runId } = await withActor(ctx.pool, actor, async (tx) => {
-          await reserveRunSlot(tx, ctx);
+          await reserveRunSlot(tx, ctx, { kind: 'run', apiId: api.id });
           const made = await createRun(tx, queue, { apiId: api.id, ownerId: actor.userId, trigger: triggerOf(actor), input: body.input });
           if (body.strategy_version !== undefined) await tx.query('UPDATE runs SET strategy_version = $2 WHERE id = $1', [made.runId, body.strategy_version]);
           return made;

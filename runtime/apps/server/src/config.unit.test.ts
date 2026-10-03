@@ -113,5 +113,9 @@ test('PUBLIC_URL en http:// : démarrage refusé en production (08b § 2), sauf 
   // Hors production (développement, test) : http accepté.
   expect(() => loadServerConfig({ ...base(), NODE_ENV: 'development', PUBLIC_URL: http })).not.toThrow();
   expect(() => loadServerConfig({ ...base(), NODE_ENV: 'test', PUBLIC_URL: http })).not.toThrow();
-  expect(() => loadServerConfig({ ...base(), PUBLIC_URL: http })).not.toThrow();
+  // NODE_ENV absent ou écrasé : refus par défaut (PA-03, D-PA03-2) ; seul un drapeau documenté l'autorise.
+  expect(() => loadServerConfig({ ...base(), PUBLIC_URL: http })).toThrow(ConfigError);
+  expect(() => loadServerConfig({ ...base(), NODE_ENV: 'staging', PUBLIC_URL: http })).toThrow(ConfigError);
+  expect(() => loadServerConfig({ ...base(), PUBLIC_URL: http, ALLOW_INSECURE_PUBLIC_URL: 'true' })).not.toThrow();
+  expect(() => loadServerConfig({ ...base(), NODE_ENV: 'production', PUBLIC_URL: http, ALLOW_INSECURE_PUBLIC_URL: 'false' })).toThrow(ConfigError);
 });

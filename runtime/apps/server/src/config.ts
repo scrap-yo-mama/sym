@@ -249,11 +249,12 @@ export function loadServerConfig(env: NodeJS.ProcessEnv = process.env): ServerCo
   } catch (error) {
     throw new ConfigError((error as Error).message);
   }
-  // 08b § 2 : en production, PUBLIC_URL en http:// ferait voyager le jeton de session en clair (cookie sans __Host- ni Secure,
-  // pas de HSTS). Seule la boucle locale reste admise (docker-compose de développement lié à 127.0.0.1) ; hors production
-  // (NODE_ENV différent de production : développement, test), rien ne change. Le message ne recopie pas la valeur.
-  if (env["NODE_ENV"] === "production" && publicUrl.startsWith("http://") && !LOOPBACK_HOSTS.has(new URL(publicUrl).hostname)) {
-    throw new ConfigError("PUBLIC_URL doit être en HTTPS en production (08b § 2) : le cookie de session et HSTS l’exigent. Seuls localhost, 127.0.0.1 et [::1] restent admis en http.");
+  // 08b § 2 : PUBLIC_URL en http:// ferait voyager le jeton de session en clair (cookie sans __Host- ni Secure, pas de
+  // HSTS). Refus PAR DÉFAUT (D-PA03-2) : seuls passent la boucle locale (localhost, 127.0.0.1, [::1] ; D-PA03-1), NODE_ENV
+  // valant development ou test, ou le drapeau explicite ALLOW_INSECURE_PUBLIC_URL=true. Un NODE_ENV absent ou écrasé
+  // chez l’hébergeur ne désarme donc pas le refus. Le message ne recopie pas la valeur.
+  if (publicUrl.startsWith("http://") && !LOOPBACK_HOSTS.has(new URL(publicUrl).hostname) && !["development", "test"].includes(env["NODE_ENV"] ?? "") && env["ALLOW_INSECURE_PUBLIC_URL"] !== "true") {
+    throw new ConfigError("PUBLIC_URL doit être en HTTPS (08b § 2) : le cookie de session et HSTS l’exigent. Seuls localhost, 127.0.0.1 et [::1] restent admis en http ; pour un essai hors production, posez NODE_ENV=development ou ALLOW_INSECURE_PUBLIC_URL=true.");
   }
   let costCaps: CostCaps;
   try {

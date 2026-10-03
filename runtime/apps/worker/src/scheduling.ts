@@ -59,6 +59,8 @@ export type SchedulingOptions = {
   persistence: PersistencePolicy;
   /** `USER_BUDGET_DAILY_USD` : budget USD par utilisateur et par jour, appliqué aux runs planifiés (08b § 3). */
   userBudgetDailyUsd?: number;
+  /** `MAX_COST_USD_PER_RUN` : borne l'enveloppe d'un run dans le budget de l'utilisateur (tentatives du mode « SYM ne lâche pas »). */
+  maxCostUsdPerRun?: number;
   /** Mémoire négative (2.12) : indisponible tant qu'elle n'est pas branchée, le mode ne tente alors rien. */
   negativeMemory?: NegativeMemory;
 };
@@ -116,7 +118,13 @@ export async function startScheduling(options: SchedulingOptions): Promise<Sched
   });
 
   // Mode « SYM ne lâche pas » (2.16) : un job par API, qui relit tout en base (créneau, plafonds, refus, reports).
-  const persistence = { queue, now, policy: options.persistence, negativeMemory: options.negativeMemory ?? NEGATIVE_MEMORY_UNAVAILABLE };
+  const persistence = {
+    queue,
+    now,
+    policy: options.persistence,
+    negativeMemory: options.negativeMemory ?? NEGATIVE_MEMORY_UNAVAILABLE,
+    ...(options.userBudgetDailyUsd === undefined ? {} : { costCaps: { userBudgetDailyUsd: options.userBudgetDailyUsd, maxCostUsdPerRun: options.maxCostUsdPerRun ?? Number.POSITIVE_INFINITY } }),
+  };
   await queue.work<PersistenceJob>(PERSISTENCE_QUEUE, { concurrency: 1, ...polling }, async (job) => {
     if (typeof job.data?.api_id !== 'string') return;
     const tick = await runPersistenceAttempt(pool, persistence, job.data.api_id);

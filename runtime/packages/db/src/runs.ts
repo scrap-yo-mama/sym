@@ -31,6 +31,7 @@ import {
   type RunTrigger,
   type SkippedRunState,
 } from '@runtime/core';
+import { INVESTIGATION_DEFAULTS } from '@runtime/core/investigation';
 import type pg from 'pg';
 import { readRejectedAggregates } from './rejected.js';
 import { assertStorageAvailable, defaultStorageOptions, type StorageOptions } from './retention/storage.js';
@@ -647,17 +648,72 @@ export async function removeWorkerBeat(db: Queryable, workerId: string): Promise
   await db.query('DELETE FROM worker_heartbeats WHERE worker_id = $1', [workerId]);
 }
 
+/** Plafonds d'instance qui bornent l'enveloppe d'un run (`MAX_COST_USD_PER_RUN`, `USER_BUDGET_DAILY_USD`, 08b § 3). */
+export type BudgetCaps = { readonly userBudgetDailyUsd: number; readonly maxCostUsdPerRun: number };
+const NO_CAPS: BudgetCaps = { userBudgetDailyUsd: 1e9, maxCostUsdPerRun: 1e9 };
+
 /**
- * Dépense du jour (UTC) d'un utilisateur : coûts LLM et proxy de TOUS ses runs créés depuis minuit UTC (runs, enquêtes,
- * validations, planifications ; les coûts des essais en cours y sont déjà versés, `recordAttempt`). Base du budget USD
- * par utilisateur et par jour (08b § 3, `assert_budget_usd_daily`). Sous `withActor`, la RLS limite déjà aux runs de
- * l'acteur ; le filtre `owner_id` reste explicite pour la connexion système (planificateur).
+ * Enveloppe maximale d'un run (SQL, alias `r` pour le run et `a` pour son API) : `apis.max_cost_usd` pour un run,
+ * `request.budget_usd` de l'enquête (défaut `INVESTIGATION_DEFAULTS.budgetUsd`) pour une enquête, chacune bornée par le
+ * plafond d'instance. `$1` : budget quotidien, `$2` : plafond par run, `$3` : budget d'enquête par défaut.
  */
-export async function userSpentTodayUsd(tx: Queryable, userId: string, now: Date = new Date()): Promise<number> {
-  const { rows } = await tx.query<{ spent: string }>(
-    `SELECT coalesce(sum(cost_llm_usd + cost_proxy_usd), 0)::text AS spent FROM runs
-     WHERE owner_id = $1 AND created_at >= date_trunc('day', $2::timestamptz AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'`,
-    [userId, now],
+const ENVELOPE_SQL = `CASE WHEN r.kind = 'investigation'
+    THEN least(coalesce((a.investigation->'request'->>'budget_usd')::numeric, $3::numeric), $1::numeric)
+    ELSE least(a.max_cost_usd, $2::numeric) END`;
+
+/**
+ * Chiffres du budget d'un utilisateur : `spent` = dépense du jour (UTC) de TOUS ses runs créés depuis minuit (runs,
+ * enquêtes, validations, planifications ; les coûts des essais en cours y sont déjà versés, `recordAttempt`), un coût LLM
+ * inconnu (NULL) comptant l'enveloppe du run (jamais 0 : il garde au moins son coût proxy connu) ; `reserved` = ce que les
+ * runs actifs (hors pause, créés un autre jour compris) peuvent encore dépenser jusqu'à leur enveloppe maximale.
+ * Sous `withActor`, la RLS limite déjà aux runs de l'acteur ; le filtre `owner_id` reste explicite (planificateur).
+ */
+async function budgetFigures(tx: Queryable, userId: string, now: Date, caps: BudgetCaps): Promise<{ spent: number; reserved: number }> {
+  const { rows } = await tx.query<{ spent: string; reserved: string }>(
+    `WITH figures AS (
+       SELECT r.created_at, r.state, r.paused_at, r.cost_llm_usd, coalesce(r.cost_proxy_usd, 0) AS proxy, coalesce(${ENVELOPE_SQL}, 0) AS envelope
+       FROM runs r LEFT JOIN apis a ON a.id = r.api_id
+       WHERE r.owner_id = $4
+     )
+     SELECT
+       coalesce(sum(CASE WHEN created_at >= date_trunc('day', $5::timestamptz AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'
+                         THEN CASE WHEN cost_llm_usd IS NULL THEN greatest(envelope, proxy) ELSE cost_llm_usd + proxy END ELSE 0 END), 0)::text AS spent,
+       coalesce(sum(CASE WHEN state = ANY($6::text[]) AND paused_at IS NULL AND cost_llm_usd IS NOT NULL
+                         THEN greatest(envelope - cost_llm_usd - proxy, 0) ELSE 0 END), 0)::text AS reserved
+     FROM figures`,
+    [caps.userBudgetDailyUsd, caps.maxCostUsdPerRun, INVESTIGATION_DEFAULTS.budgetUsd, userId, now, [...ACTIVE_RUN_STATES]],
   );
-  return Number(rows[0]?.spent ?? 0);
+  return { spent: Number(rows[0]?.spent ?? 0), reserved: Number(rows[0]?.reserved ?? 0) };
+}
+
+/** Dépense du jour (UTC) d'un utilisateur : base du budget USD par utilisateur et par jour (08b § 3, `assert_budget_usd_daily`). */
+export async function userSpentTodayUsd(tx: Queryable, userId: string, now: Date = new Date(), caps: BudgetCaps = NO_CAPS): Promise<number> {
+  return (await budgetFigures(tx, userId, now, caps)).spent;
+}
+
+/**
+ * Dépense du jour PLUS enveloppes encore ouvertes des runs actifs : ce que l'utilisateur a déjà engagé. Un nouveau run
+ * n'est admis que si cet engagement et sa propre enveloppe tiennent dans le budget (`reserveRunSlot`).
+ */
+export async function userBudgetCommittedUsd(tx: Queryable, userId: string, caps: BudgetCaps, now: Date = new Date()): Promise<number> {
+  const { spent, reserved } = await budgetFigures(tx, userId, now, caps);
+  return spent + reserved;
+}
+
+/**
+ * Enveloppe maximale du run à créer ou à reprendre (même borne que le worker) : `runId` (reprise), `apiId` (l'API
+ * existante) ou rien (API en création : enquête au budget par défaut). API invisible : 0 (la route répond 404 ensuite).
+ */
+export async function runEnvelopeUsd(tx: Queryable, target: { kind: RunKind; apiId?: string; runId?: string }, caps: BudgetCaps): Promise<number> {
+  const params = [caps.userBudgetDailyUsd, caps.maxCostUsdPerRun, INVESTIGATION_DEFAULTS.budgetUsd];
+  if (target.runId !== undefined) {
+    const { rows } = await tx.query<{ envelope: string | null }>(`SELECT ${ENVELOPE_SQL} AS envelope FROM runs r JOIN apis a ON a.id = r.api_id WHERE r.id = $4`, [...params, target.runId]);
+    return Number(rows[0]?.envelope ?? 0);
+  }
+  if (target.apiId === undefined) return target.kind === 'investigation' ? Math.min(INVESTIGATION_DEFAULTS.budgetUsd, caps.userBudgetDailyUsd) : 0;
+  const { rows } = await tx.query<{ envelope: string | null }>(
+    `SELECT ${ENVELOPE_SQL.replace("r.kind = 'investigation'", "$4::text = 'investigation'")} AS envelope FROM apis a WHERE a.id = $5`,
+    [...params, target.kind, target.apiId],
+  );
+  return Number(rows[0]?.envelope ?? 0);
 }

@@ -553,6 +553,8 @@ paths:
         (`created_by: import`) ; planifications recréées désactivées, cibles d'alerte à configurer. Les champs inconnus
         sont ignorés (`ignored_fields`) ; un `$ref` distant (400 `remote_ref`), une empreinte fausse (400
         `integrity_mismatch`) ou une version de format d'une autre majeure (400 `unsupported_format`) sont refusés.
+        Un `max_cost_usd` ou un `budget_daily_usd` du fichier au-dessus des plafonds de l'instance (`MAX_COST_USD_PER_RUN`,
+        `USER_BUDGET_DAILY_USD`) est refusé de même (400 `cost_cap_exceeded`), aperçu compris.
       parameters:
         - name: confirm
           in: query
@@ -659,6 +661,8 @@ paths:
         refusé, rien n'est écrit. Activer (ou changer le plafond d'un mode actif) par une clé d'API :
         `403 human_confirmation_required` ; API sans version courante, mémoire des refus absente ou plafond effectif ≤ 0 :
         `409 persistence_not_eligible` (`reason`) ; les deux avec `what_to_do`. Désactiver est permis à toute clé.
+        Un `max_cost_usd` ou un `budget_daily_usd` au-dessus des plafonds de l'instance (`MAX_COST_USD_PER_RUN`,
+        `USER_BUDGET_DAILY_USD`) : `400 cost_cap_exceeded`.
       parameters:
         - $ref: '#/components/parameters/Slug'
       requestBody:
@@ -3150,7 +3154,13 @@ components:
           schema:
             $ref: '#/components/schemas/RunAccepted'
     QueueFull:
-      description: File pleine (08b § 3) ; `queue_full` au-delà de `MAX_CONCURRENT_RUNS` runs actifs sur l'instance, `user_queue_full` au-delà de `MAX_ACTIVE_RUNS_PER_USER` pour l'appelant, `key_rate_limited` au-delà de `MAX_RUNS_PER_KEY_PER_MINUTE` créations par clé d'API ; réessayer après `Retry-After`.
+      description: >-
+        File pleine (08b § 3) ; `queue_full` au-delà de `MAX_CONCURRENT_RUNS` runs actifs sur l'instance,
+        `user_queue_full` au-delà de `MAX_ACTIVE_RUNS_PER_USER` pour l'appelant, `key_rate_limited` au-delà de
+        `MAX_RUNS_PER_KEY_PER_MINUTE` créations par clé d'API ; réessayer après `Retry-After`. Exception :
+        `budget_exceeded` (budget USD du jour de l'appelant, `USER_BUDGET_DAILY_USD` : dépense du jour,
+        enveloppes maximales des runs actifs et enveloppe du nouveau run, 08b § 3) n'a PAS de `Retry-After` et
+        n'est pas réessayable avant minuit UTC.
       headers:
         Retry-After:
           schema:
