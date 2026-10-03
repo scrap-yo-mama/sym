@@ -52,6 +52,9 @@ function modelStep(m: ModelState, ev: StatusEventInput, now: number): Expected {
       // Tentative de persistance (prev = erreur) : tout échec repasse par la 21, jamais par la 2 (D-49).
       if (m.prev === 'erreur' || (ev.cause === 'budget_exhausted' && m.prev !== null)) return go([21], m.prev!, 'reinvestigation_failed', { prev: null });
       return go([2], 'erreur', ev.cause === 'robots_unreachable' ? 'robots_unreachable' : 'investigation_budget_exhausted', { prev: null });
+    case 'prior_refusal':
+      // Mémoire négative (2.12) : enquête arrêtée par la transition 4.
+      return m.status === 'enquete' ? go([4], 'bloquee', 'prior_refusal', { prev: null }) : same;
     case 'run_failed':
     case 'run_stopped': {
       // Classe d'échec ou code de raison sans classe : même aiguillage, la valeur devient la raison journalisée.
@@ -102,10 +105,10 @@ function modelStep(m: ModelState, ev: StatusEventInput, now: number): Expected {
         ? go([13], 'erreur', ev.cause === 'repeated_patch' ? 'repair_repeated_patch' : 'repair_budget_exhausted')
         : same;
     case 'reinvestigate': {
-      const reason = { manual: 'reinvestigate_manual', schema_changed: 'output_schema_changed', force_investigate: 'force_investigate' }[ev.trigger];
+      const reason = { manual: 'reinvestigate_manual', schema_changed: 'output_schema_changed', force_investigate: 'force_investigate', rules_changed: 'rules_changed' }[ev.trigger];
       if (m.status === 'sain') return go([19], 'enquete', reason, { prev: 'sain' });
       if (m.status === 'warning') return go([20], 'enquete', reason, { prev: 'warning' });
-      if (m.status === 'erreur' && ev.trigger !== 'schema_changed') return go([16], 'enquete', reason, { prev: null });
+      if (m.status === 'erreur' && (ev.trigger === 'manual' || ev.trigger === 'force_investigate')) return go([16], 'enquete', reason, { prev: null });
       if (m.status === 'bloquee' && ev.trigger === 'manual') return go([18], 'enquete', reason, { prev: null });
       return same;
     }
@@ -244,8 +247,9 @@ const commandArbs = [
     { type: 'investigation_succeeded' },
     { type: 'investigation_failed', cause: 'budget_exhausted' },
     { type: 'investigation_failed', cause: 'robots_unreachable' },
+    { type: 'prior_refusal' },
   ).map((e) => cmd(`InvestigationResult(${JSON.stringify(e)})`, (m, r) => drive(m, r, e))),
-  fc.constantFrom<ReinvestigationTrigger>('manual', 'schema_changed', 'force_investigate').map((trigger) =>
+  fc.constantFrom<ReinvestigationTrigger>('manual', 'schema_changed', 'force_investigate', 'rules_changed').map((trigger) =>
     cmd(`Reinvestigate(${trigger})`, (m, r) => drive(m, r, { type: 'reinvestigate', trigger }, { manualReinvestigation: trigger === 'manual' })),
   ),
   fc.constant(cmd('UserActed', (m, r) => drive(m, r, { type: 'user_acted' }))),
@@ -301,7 +305,8 @@ describe('assert_status_transitions (modèle)', () => {
   });
 
   test('couverture : la marche aléatoire atteint les 21 transitions', () => {
-    // Garde-fou du modèle : sans ce test, un modèle qui n'explorerait que quelques états passerait pour vert.
+    // Garde-fou du modèle : sans ce test, un modèle qui n'explorerait que quelques états passerait pour vert. 6 000 marches :
+    // avec la mémoire négative (2.12) et la tentative de persistance (2.16), 3 000 ne suffisent plus à atteindre la 13.
     const seen = new Set<number>();
     fc.assert(
       fc.property(fc.commands(commandArbs, { maxCommands: 10, size: 'max' }), (cmds) => {
@@ -310,7 +315,7 @@ describe('assert_status_transitions (modèle)', () => {
         fc.modelRun(() => ({ model, real }), cmds);
         for (const t of real.log) seen.add(t.transition);
       }),
-      { numRuns: 3000, seed: 42 },
+      { numRuns: 6000, seed: 42 },
     );
     const missing = TRANSITIONS.map((t) => t.id).filter((id) => !seen.has(id));
     if (missing.length > 0) throw new Error(`transitions jamais atteintes par le modèle : ${missing.join(', ')}`);

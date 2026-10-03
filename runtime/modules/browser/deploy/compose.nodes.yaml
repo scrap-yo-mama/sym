@@ -1,0 +1,96 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# SYM Browser en passerelle + nœuds (cdc/sym-browser 03 § 4, 04b § 5 et § 10, tâche 5.1) : une passerelle, node-1, et
+# node-2 ajouté à chaud sans couper la passerelle :
+#   docker compose -f compose.nodes.yaml up -d
+#   docker compose -f compose.nodes.yaml --profile scale up -d node-2
+# Un nœud s'enregistre seul (table `nodes`, battement toutes les 5 s) ; la passerelle l'utilise dès qu'il est `ready`.
+# Un nœud sur une autre machine : même image, SYMB_MODE=node, mêmes DATABASE_URL, MASTER_KEY et NODE_TOKEN, NODE_ID et
+# NODE_PUBLIC_URL propres, joignable par la passerelle sur le réseau privé seulement (guide : README.md, « Plusieurs nœuds »).
+name: sym-browser-nodes
+
+x-image: &image ${SYMB_IMAGE:-ghcr.io/scrap-yo-mama/sym-browser:1}
+
+x-shared-env: &shared-env
+  DATABASE_URL: postgres://symb:${POSTGRES_PASSWORD:?à définir dans .env}@postgres:5432/symb
+  MASTER_KEY: ${MASTER_KEY:?à définir dans .env (pnpm --filter @sym-browser/core keygen)}
+  NODE_TOKEN: ${NODE_TOKEN:?à définir dans .env (openssl rand -base64 32)}
+  SYMB_LOG_LEVEL: ${SYMB_LOG_LEVEL:-info}
+
+x-healthcheck: &healthcheck
+  test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/readyz').then((r) => process.exit(r.ok ? 0 : 1), () => process.exit(1))"]
+  interval: 5s
+  timeout: 4s
+  retries: 3
+  start_period: 120s
+
+x-node: &node
+  image: *image
+  restart: unless-stopped
+  # Chromium : seccomp du module, no-new-privileges, capacités retirées sauf SYS_CHROOT (bac à sable), /dev/shm agrandi.
+  security_opt:
+    - seccomp=seccomp-chromium.json
+    - no-new-privileges:true
+  cap_drop: [ALL]
+  cap_add: [SYS_CHROOT]
+  shm_size: 1gb
+  # Drainage du nœud (04b § 9) : SHUTDOWN_GRACE_SECONDS (270 s) plus la fermeture.
+  stop_grace_period: 300s
+  depends_on:
+    postgres:
+      condition: service_healthy
+  healthcheck: *healthcheck
+
+services:
+  postgres:
+    image: postgres:16.10-alpine@sha256:029660641a0cfc575b14f336ba448fb8a75fd595d42e1fa316b9fb4378742297
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: symb
+      POSTGRES_DB: symb
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?à définir dans .env}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U symb -d symb"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  gateway:
+    image: *image
+    restart: unless-stopped
+    environment:
+      <<: *shared-env
+      SYMB_MODE: gateway
+      SYMB_BOOTSTRAP_API_KEY: ${SYMB_BOOTSTRAP_API_KEY:?à définir dans .env (pnpm --filter @sym-browser/core apikey)}
+    ports:
+      - ${SYMB_BIND:-127.0.0.1:3000}:3000
+    # La passerelle ne lance aucun Chromium : aucune capacité.
+    security_opt:
+      - seccomp=seccomp-chromium.json
+      - no-new-privileges:true
+    cap_drop: [ALL]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck: *healthcheck
+
+  node-1:
+    <<: *node
+    environment:
+      <<: *shared-env
+      SYMB_MODE: node
+      NODE_ID: node-1
+      NODE_PUBLIC_URL: http://node-1:3000
+
+  node-2:
+    <<: *node
+    profiles: [scale]
+    environment:
+      <<: *shared-env
+      SYMB_MODE: node
+      NODE_ID: node-2
+      NODE_PUBLIC_URL: http://node-2:3000
+
+volumes:
+  postgres-data:

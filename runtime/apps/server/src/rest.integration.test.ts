@@ -166,7 +166,8 @@ describe('assert_openapi_served_valid : /api/openapi.json', () => {
     expect(doc.openapi).toBe('3.1.0');
     expect(res.raw.body).not.toContain('x-pending');
     const served = contract.operations();
-    const registered = ROUTES.map((r) => `${r.method} ${r.url.replace(/:(\w+)/g, '{$1}')}`).sort();
+    // Le protocole MCP (JSON-RPC, 3.2) n'est pas une route REST : hors de l'OpenAPI.
+    const registered = ROUTES.filter((r) => !r.mcp).map((r) => `${r.method} ${r.url.replace(/:(\w+)/g, '{$1}')}`).sort();
     expect(served).toEqual(registered);
     const ids = Object.values(doc.paths).flatMap((item) => Object.values(item).map((op) => op.operationId)).filter(Boolean);
     expect(new Set(ids).size).toBe(ids.length);
@@ -818,6 +819,26 @@ describe('assert_run_cancel_pause_resume : annulation, pause, reprise (05 § 4.4
     await withClient(srv.db.url, (c) => c.query("UPDATE apis SET visibility = 'private' WHERE id = $1", [shared.id]));
     expect((await api(b, 'POST', `/api/runs/${bRun}/resume`, '/api/runs/{id}/resume')).status).toBe(404);
     expect(await count('SELECT count(*) FROM runs WHERE id = $1 AND job_id IS NULL AND paused_at IS NOT NULL', [bRun])).toBe(1);
+  });
+});
+
+describe('aperçu des règles résolues (19 § 2, 19b § 2, tâche 2.10)', () => {
+  test('GET /api/apis/{slug}/resolved-rules?role= : A voit son ensemble résolu (budget 3000 ou 1000 selon le rôle), B reçoit le 404 uniforme, même sur une API partagée d’instance', async () => {
+    const own = await seedApi(srv.db.url, a.user.id, { visibility: 'instance' });
+    // Hôte de l'API (demande d'enquête) : la politique par défaut, partagée d'instance (`*`), s'y applique.
+    await withClient(srv.db.url, (c) => c.query(`UPDATE apis SET investigation = '{"request": {"url": "https://zz-test-rules.example/", "description": "zz_test", "auto_validate": true, "budget_usd": 1, "timeout_s": 600}, "spent_usd": 0, "elapsed_ms": 0}' WHERE id = $1`, [own.id]));
+    const path = '/api/apis/{slug}/resolved-rules';
+    const investigate = await api(a, 'GET', `/api/apis/${own.slug}/resolved-rules`, path);
+    expect(investigate.status).toBe(200);
+    expect(investigate.body).toMatchObject({ role: 'investigate', budget_tokens: 3000, skills_listing_truncated: false });
+    expect((investigate.body['rules'] as { name: string; sha256: string }[]).map((r) => r.name)).toContain('escalade-par-defaut');
+    expect(JSON.stringify(investigate.body)).not.toContain('Transcription de 04');
+    expect((await api(a, 'GET', `/api/apis/${own.slug}/resolved-rules?role=repair`, path)).body).toMatchObject({ role: 'repair', budget_tokens: 3000 });
+    expect((await api(a, 'GET', `/api/apis/${own.slug}/resolved-rules?role=embedded`, path)).body).toMatchObject({ role: 'embedded', budget_tokens: 1000 });
+    expect((await api(a, 'GET', `/api/apis/${own.slug}/resolved-rules?role=autre`, path)).status).toBe(400);
+    const other = await api(b, 'GET', `/api/apis/${own.slug}/resolved-rules`, path);
+    expect(other.status).toBe(404);
+    expect((await api(b, 'GET', '/api/apis/zz-inexistante/resolved-rules', path)).body).toEqual(other.body);
   });
 });
 
@@ -1618,12 +1639,34 @@ describe('droits des personnes (17 § 6) et appairage (07 § 1)', () => {
   });
 });
 
+// Portabilité (tâche 3.12) : contrat de l'export, de l'aperçu d'import et de l'OpenAPI par API. Les cas détaillés
+// (assert_export_no_secret, import par l'enquête, modèles) sont dans portability.integration.test.ts.
+describe('portabilité (3.12) : export, aperçu d’import, OpenAPI par API au contrat', () => {
+  test('GET export → POST import (aperçu, rien d’écrit) → GET openapi.json', async () => {
+    const seeded = await seedApi(srv.db.url, a.user.id);
+    await withClient(srv.db.url, (c) =>
+      c.query('UPDATE apis SET investigation = $2::jsonb, input_schema = $3::jsonb WHERE id = $1', [
+        seeded.id,
+        JSON.stringify({ request: { url: 'https://zz-test-port.example/liste', description: 'zz_test liste', auto_validate: false, budget_usd: 1, timeout_s: 600 }, spent_usd: 0, elapsed_ms: 0 }),
+        JSON.stringify({ type: 'object', additionalProperties: false, properties: {} }),
+      ]),
+    );
+    const exported = await api(a, 'GET', `/api/apis/${seeded.slug}/export`, '/api/apis/{slug}/export');
+    expect(exported.status).toBe(200);
+    const apis = await count('SELECT count(*) FROM apis');
+    const preview = await api(a, 'POST', '/api/apis/import', '/api/apis/import', exported.body);
+    expect(preview).toMatchObject({ status: 200, body: { preview: true, ignored_fields: [] } });
+    expect(await count('SELECT count(*) FROM apis')).toBe(apis);
+    expect((await api(a, 'GET', `/api/apis/${seeded.slug}/openapi.json`, '/api/apis/{slug}/openapi.json')).status).toBe(200);
+  });
+});
+
 describe('assert_rest_endpoints_contract : chaque endpoint livré par 3.1 a des réponses contrôlées au contrat', () => {
   test('couverture', () => {
     // Routes livrées par 3.1 : le bloc du registre qui commence à GET /api/openapi.json (aucune liste à tenir à la main).
     const first = ROUTES.findIndex((r) => r.method === 'GET' && r.url === '/api/openapi.json');
     expect(first).toBeGreaterThan(0);
-    const delivered31 = ROUTES.slice(first).map((r) => `${r.method} ${r.url.replace(/:(\w+)/g, '{$1}')}`);
+    const delivered31 = ROUTES.slice(first).filter((r) => !r.mcp).map((r) => `${r.method} ${r.url.replace(/:(\w+)/g, '{$1}')}`);
     expect(delivered31).toEqual(expect.arrayContaining(['GET /api/events', 'GET /api/runs/{id}/events', 'POST /api/me/responsible-use']));
     const covered = [...contract.covered].map((c) => c.split(' ').slice(0, 2).join(' '));
     const successes = [...contract.covered].filter((c) => /\s2\d\d$/.test(c)).map((c) => c.split(' ').slice(0, 2).join(' '));
@@ -1632,7 +1675,7 @@ describe('assert_rest_endpoints_contract : chaque endpoint livré par 3.1 a des 
   });
 
   test('chaque route que la garde peut refuser (session seule, scope, permission) déclare 403 dans l’OpenAPI servie', () => {
-    const missing = ROUTES.filter((r) => r.auth !== 'public' && !r.library && (r.auth === 'session' || r.auth === 'extension' || r.scope !== undefined || r.permission !== undefined))
+    const missing = ROUTES.filter((r) => r.auth !== 'public' && !r.library && !r.mcp && (r.auth === 'session' || r.auth === 'extension' || r.scope !== undefined || r.permission !== undefined))
       .map((r) => `${r.method} ${r.url.replace(/:(\w+)/g, '{$1}')}`)
       .filter((op) => {
         const [method, path] = op.split(' ');

@@ -38,6 +38,10 @@ des cinq premières est posée. Une autorité de certification privée pour Post
 | `GATEWAY_INSTANCE` | server | facultative | hôte + pid + aléa | Identifiant de cette instance pour la passerelle du tunnel (canal de notification PostgreSQL de ses commandes) ; à fixer si plusieurs instances partagent la base. |
 | `TUNNEL_EXTENSION_IDS` | server | facultative | aucun | Identifiants (32 lettres a à p), séparés par des virgules, des extensions autorisées à ouvrir le tunnel : l’origine `chrome-extension://<id>` est vérifiée à l’ouverture. Tant que l’extension n’est pas publiée au Chrome Web Store, posez celui de votre extension empaquetée, sinon aucune extension n’est acceptée. |
 | `TUNNEL_ALLOW_ANY_EXTENSION` | server | facultative | false | `true` accepte toute extension (développement, extension décompressée) ; à ne pas poser en production. |
+| `DISABLE_MCP` | server | facultative | false | `true` : aucune route `/mcp` (serveur MCP coupé) ; l’API REST et la console restent servies. |
+| `MCP_TOOL_EXPOSURE` | server | facultative | pinned | Outils par API du serveur MCP : `generic` (aucun, tout passe par `run_api` et `list_apis`), `pinned` (les API épinglées pour le MCP, 20 au plus) ou `all` (toutes, 20 au plus ; au-delà de 30 API, `pinned` est conseillé). |
+| `MCP_ALLOWED_HOSTS` | server | facultative | l’hôte de `PUBLIC_URL` | Noms d’hôte supplémentaires (sans port), séparés par des virgules, admis dans l’en-tête `Host` d’une requête MCP (réseau interne, autre nom de l’instance) ; tout autre hôte reçoit 403. |
+| `MCP_ALLOWED_ORIGINS` | server | facultative | l’origine de `PUBLIC_URL` | Origines supplémentaires admises dans l’en-tête `Origin` d’une requête MCP, séparées par des virgules : origine complète (`https://hote:port`, comparée en entier : schéma, hôte et port, comme celle de `PUBLIC_URL`) ou, plus lâche, nom d’hôte seul (tout schéma et tout port de cet hôte) ; une origine présente et non admise reçoit 403, une requête sans `Origin` (client MCP hors navigateur) est acceptée. |
 
 ## Accès
 
@@ -117,6 +121,7 @@ des cinq premières est posée. Une autorité de certification privée pour Post
 | `RETENTION_DATASETS_DAYS` | worker, CLI | facultative | 90 | Conservation des jeux de données (valeur initiale, modifiable dans Réglages). |
 | `RETENTION_DATASETS_MAX_DAYS` | worker, CLI | facultative | 3650 | Plafond de conservation des jeux de données. |
 | `RETENTION_SAMPLES_DAYS` | worker, CLI | facultative | 14 | Conservation des échantillons d’enquête. |
+| `RETENTION_PROFILES_DAYS` | worker, CLI | facultative | 90 | Conservation des profils de qualité des runs (hors baseline validée, gardée avec sa version). |
 | `RUN_LOG_RETENTION_DAYS` | server, worker, CLI | facultative | 30 | Conservation des journaux de run. |
 | `STORAGE_PLAN_GB` | server, worker, CLI | facultative | aucun | Taille de la base de votre offre, en Go. Sans elle, pas de garde disque ; à 95 %, un nouveau run est refusé (`storage_full`). |
 | `PHONE_DEFAULT_REGION` | worker, CLI | facultative | FR | Région ISO 3166-1 des numéros de téléphone nationaux des personnes concernées (droit à l’effacement). |

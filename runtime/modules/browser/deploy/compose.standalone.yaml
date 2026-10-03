@@ -1,0 +1,50 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Preuve d'autonomie (cdc/sym-browser 04f § 8, F8 `assert_standalone_instance`, recette 08 étape 25) : SYM Browser seul,
+# sans aucun service ni variable de SYM, sur un réseau Docker interne sans sortie vers Internet. Ses seules dépendances :
+# sa base PostgreSQL et sa MASTER_KEY (le stockage d'objets `disk` est dans le conteneur). Rien n'est publié.
+#   docker compose -f compose.standalone.yaml up -d
+#   docker compose -f compose.standalone.yaml exec sym-browser node -e "fetch('http://127.0.0.1:3000/readyz').then(r=>r.text()).then(console.log)"
+name: sym-browser-standalone
+
+networks:
+  isolated:
+    internal: true
+
+services:
+  postgres:
+    image: postgres:16.10-alpine@sha256:029660641a0cfc575b14f336ba448fb8a75fd595d42e1fa316b9fb4378742297
+    environment:
+      POSTGRES_USER: symb
+      POSTGRES_DB: symb
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?à définir dans .env}
+    networks: [isolated]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U symb -d symb"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  sym-browser:
+    image: ${SYMB_IMAGE:-ghcr.io/scrap-yo-mama/sym-browser:1}
+    environment:
+      SYMB_MODE: all
+      DATABASE_URL: postgres://symb:${POSTGRES_PASSWORD:?à définir dans .env}@postgres:5432/symb
+      MASTER_KEY: ${MASTER_KEY:?à définir dans .env (pnpm --filter @sym-browser/core keygen)}
+      SYMB_BOOTSTRAP_API_KEY: ${SYMB_BOOTSTRAP_API_KEY:?à définir dans .env (pnpm --filter @sym-browser/core apikey)}
+    networks: [isolated]
+    security_opt:
+      - seccomp=seccomp-chromium.json
+      - no-new-privileges:true
+    cap_drop: [ALL]
+    cap_add: [SYS_CHROOT]
+    shm_size: 1gb
+    stop_grace_period: 300s
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/readyz').then((r) => process.exit(r.ok ? 0 : 1), () => process.exit(1))"]
+      interval: 5s
+      timeout: 4s
+      retries: 3
+      start_period: 120s

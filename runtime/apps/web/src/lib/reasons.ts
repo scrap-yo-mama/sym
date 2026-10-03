@@ -46,7 +46,13 @@ export const SPEC_REASON_CODES = [
  */
 export const EXTRA_REASON_CODES = ['investigating', 'healthy', 'repairing', 'repair_exhausted', 'proxy_not_configured', 'tunnel_offline', 'not_found'] as const;
 
-export const REASON_CODES: readonly string[] = [...SPEC_REASON_CODES, ...EXTRA_REASON_CODES];
+/**
+ * Codes de 19b § 3 livrés par la tâche 2.12 (mémoire du catalogue, profil des sorties, juge consultatif), ajoutés à la
+ * table de 06 § 4.2 : motifs de run dégradé, refus passé du domaine, avis consultatif du juge.
+ */
+const QUALITY_REASON_CODES = ['field_constant', 'pattern_shift', 'sentinel_values', 'duplicate_items', 'new_enum_value', 'prior_refusal', 'judge_flag'] as const;
+
+export const REASON_CODES: readonly string[] = [...SPEC_REASON_CODES, ...EXTRA_REASON_CODES, ...QUALITY_REASON_CODES];
 
 /** Codes de phrase de diff (`StrategyDiff.summary`, 06 § 2 niveau 1), traduits par `diffSummary.<code>`. */
 export const DIFF_SUMMARY_CODES = ['selector_changed', 'pagination_changed', 'execution_changed', 'network_changed', 'fields_changed', 'script_changed', 'no_change'] as const;

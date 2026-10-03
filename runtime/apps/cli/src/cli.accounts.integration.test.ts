@@ -67,4 +67,17 @@ describe(`runtime user:reset-link / owner:reset-link (PostgreSQL ${inject('pgVer
     expect(noUrl.code).toBe(2);
     expect(noUrl.out).toContain('PUBLIC_URL');
   });
+
+  test('PUBLIC_URL normalisée : point final retiré dans le lien émis, chemin refusé (code 2) sans lien émis (F-20261002-12)', async () => {
+    const dotted = await run(['owner:reset-link'], { env: env({ PUBLIC_URL: `${PUBLIC_URL}.` }), log });
+    expect(dotted.code, dotted.out).toBe(0);
+    expect(dotted.out).toMatch(new RegExp(`(^|\\s)${PUBLIC_URL}/reset-password/[A-Za-z0-9_-]{43}`));
+    expect(dotted.out).not.toContain(`${PUBLIC_URL}./`);
+    const before = await rows<{ n: number }>("SELECT count(*)::int AS n FROM verifications WHERE identifier LIKE 'reset-cli:%'");
+    const withPath = await run(['owner:reset-link'], { env: env({ PUBLIC_URL: `${PUBLIC_URL}/console` }), log });
+    expect(withPath.code).toBe(2);
+    expect(withPath.out).toMatch(/PUBLIC_URL invalide : chemin interdit/);
+    expect(withPath.out).not.toContain('/console');
+    expect(await rows("SELECT count(*)::int AS n FROM verifications WHERE identifier LIKE 'reset-cli:%'")).toEqual(before);
+  });
 });

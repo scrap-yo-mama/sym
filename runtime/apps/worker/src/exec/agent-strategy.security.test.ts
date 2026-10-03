@@ -7,9 +7,9 @@
 // PostgreSQL : un conteneur propre à ce fichier (le job security n'a pas le globalSetup du projet integration).
 import { randomUUID } from 'node:crypto';
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from '@testcontainers/postgresql';
-import { DomainPacer, generateMasterKey, MasterKey, Secret, validateOutput } from '@runtime/core';
+import { DomainPacer, generateMasterKey, MasterKey, PersonalValueRegistry, ruleSha256, Secret, validateOutput, type RunContext } from '@runtime/core';
 import * as net from '@runtime/core/net';
-import { createRun, keyCheck, migrateUp, PgBossJobQueue, PgPacingStore, readRun, runQueueDefinition, withActor } from '@runtime/db';
+import { createRun, keyCheck, loadRunTarget, migrateUp, PgBossJobQueue, PgPacingStore, putRule, readRun, runQueueDefinition, withActor } from '@runtime/db';
 import { createLlmClient, type CapabilityProfile, type LlmConfig } from '@runtime/llm';
 import { createFakeProvider, scripted, type FakeProvider } from '@runtime/llm/testing';
 import pg from 'pg';
@@ -20,12 +20,12 @@ import { BrowserPool, playwrightLauncher } from '../browser/pool.js';
 import { loadWorkerConfig } from '../config.js';
 import { startWorker, type Worker } from '../worker.js';
 import { stagehandEngineFor } from './factory.js';
-import { createStrategyExecutor } from './strategy-executor.js';
+import { createStrategyRuntime, type StrategyRuntime } from './strategy-executor.js';
 import { AGENT_HOSTS } from '../../../../fixtures/src/sites/agent-sites.ts';
 import { agentReference, agentTasks, type AgentFixtureKey } from '../../../../fixtures/src/agent-tasks.ts';
 import { startClient, type Client } from '../../../../fixtures/src/test-helpers.ts';
 import { fixtureGuard } from '../../../../tests/helpers/fixture-net.ts';
-import { stagehandScript } from '../../../../tests/helpers/stagehand-script.ts';
+import { stagehandScript, textOf } from '../../../../tests/helpers/stagehand-script.ts';
 
 const A = randomUUID();
 /** Profil sondé du modèle du rôle agent (08 §1 : sans profil à appel d'outils, le rôle est refusé). */
@@ -54,6 +54,7 @@ let browsers: BrowserPool;
 let launchProxy: net.EgressProxy;
 let fake: FakeProvider;
 let llmConfig: LlmConfig;
+let runtime: StrategyRuntime;
 
 const task = (key: AgentFixtureKey) => agentTasks().find((t) => t.key === key)!;
 const itemSchema = (key: AgentFixtureKey): Record<string, unknown> => {
@@ -123,7 +124,7 @@ beforeAll(async () => {
     ],
     roles: { extract: { provider: 'fake', model: 'zz-extract' }, agent: { provider: 'fake', model: 'zz-agent' } },
   };
-  const executor = createStrategyExecutor({
+  runtime = createStrategyRuntime({
     pool,
     guard,
     pacer: new DomainPacer(new PgPacingStore(pool)),
@@ -139,7 +140,7 @@ beforeAll(async () => {
   });
   worker = await startWorker({
     config: loadWorkerConfig({ DATABASE_URL: dbUrl, MASTER_KEY: masterKey, QUEUE_POLLING_SECONDS: '0.5', RUN_HEARTBEAT_SECONDS: '0.5', RUN_STALE_SECONDS: '30', BROWSER_CONCURRENCY: '1' }),
-    executor,
+    executor: runtime.executor,
     logger: pino({ level: 'silent' }),
   });
 }, 240_000);
@@ -273,4 +274,71 @@ describe('exécuteurs agentiques branchés sur le worker (base réelle, Chromium
     expect(stats.hosts[AGENT_HOSTS.e4]?.total ?? 0).toBe(0);
     expect(stats.hosts[AGENT_HOSTS.e6]?.total ?? 0).toBe(0);
   }, 120_000);
+});
+
+describe('read_skill dans Stagehand (tâche 2.10, 18 §4.4, §4.5) : skills référencés par la stratégie, versions épinglées', () => {
+  const skillDoc = (name: string, canary: string) => `---\nname: ${name}\ndescription: Lire la fiche produit ${name}.\nkind: skill\napplies_to: ["${AGENT_HOSTS.e6}"]\n---\nCorps du skill : ${canary}.\n`;
+  /** Résultats d'outils renvoyés au modèle (messages `tool`) au fil des appels. */
+  const toolResults = () => fake.calls.flatMap((c) => ((c.body['messages'] ?? []) as { role: string; content: unknown }[]).filter((m) => m.role === 'tool').map((m) => (typeof m.content === 'string' ? m.content : JSON.stringify(m.content))));
+  const script = () => {
+    const ref = agentReference('F-E6') as { title: string };
+    return stagehandScript(
+      [
+        scripted.toolCalls([{ name: 'read_skill', arguments: { name: 'zz-e6-skill' } }]),
+        scripted.toolCalls([{ name: 'read_skill', arguments: { name: 'zz-e6-autre' } }]),
+        scripted.toolCalls([{ name: 'act', arguments: { action: `click the link "${ref.title}"` } }]),
+      ],
+      { items: [ref] },
+    );
+  };
+
+  test('à l’enquête le corps est servi et rendu dans skillReads ; au rejeu seul le skill épinglé est servi, à sa version épinglée même modifié depuis', async () => {
+    const v1 = skillDoc('zz-e6-skill', 'zz_canari_skill_v1');
+    await putRule(pool, { userId: A, role: 'member', via: 'console' }, { content: v1 });
+    await putRule(pool, { userId: A, role: 'member', via: 'console' }, { content: skillDoc('zz-e6-autre', 'zz_canari_autre') });
+    const rules = { rules: [], skills: [{ ref: `zz-e6-skill@1#${ruleSha256(v1)}`, described: true }] };
+    const spec = { schema_version: 1, kind: 'agent', start_url: url(AGENT_HOSTS.e6), allowed_hosts: [AGENT_HOSTS.e6], instruction: task('F-E6').instruction, limits: { max_steps: 10 }, rules };
+    const apiId = await insertApi('zz_test_e6_skills', { execution: 'agent', network: 'direct', spec }, itemSchema('F-E6'));
+
+    // Essai d'enquête (candidat en version 0, comme l'exécuteur d'enquête) : le skill de l'ensemble résolu est servi.
+    fake.setScenario('zz-agent', script());
+    const target = (await loadRunTarget(pool, { apiId, ownerId: A, version: null }))!;
+    const logs: { event: string; data: unknown }[] = [];
+    const ctx: RunContext = {
+      runId: randomUUID(),
+      apiId,
+      ownerId: A,
+      strategyVersion: null,
+      input: null,
+      signal: new AbortController().signal,
+      recordAttempt: async () => undefined,
+      log: async (_level, event, data) => void logs.push({ event, data }),
+      personal: new PersonalValueRegistry(),
+      excludeSubjects: (_schema, items) => ({ kept: [...items], dropped: 0 }),
+      writeItems: async () => {
+        throw new Error('zz_test : aucune écriture pendant un essai');
+      },
+    };
+    const trial = await runtime.trial(ctx, target, { version: 0, execution: 'agent', network: 'direct', spec, scriptRef: null, estCostUsd: null });
+    expect(trial.outcome.skillReads?.map((r) => r.ref)).toEqual(['zz-e6-skill@1']);
+    expect(toolResults().some((t) => t.includes('zz_canari_skill_v1'))).toBe(true);
+    // Un skill non référencé par la stratégie (même applicable au domaine) n'est jamais servi.
+    expect(toolResults().some((t) => t.includes('zz_canari_autre'))).toBe(false);
+    expect(toolResults().some((t) => t.includes('skill_not_found'))).toBe(true);
+    // Le prompt système de Stagehand liste le skill (nom, description), jamais son corps avant read_skill.
+    expect(textOf((fake.calls[0]!.body['messages'] as { content: unknown }[])[0]?.content)).toContain('zz-e6-skill');
+    expect(textOf((fake.calls[0]!.body['messages'] as { content: unknown }[])[0]?.content)).not.toContain('zz_canari_skill_v1');
+    expect(logs.filter((l) => l.event === 'skill_read')).toEqual([{ event: 'skill_read', data: { ref: 'zz-e6-skill@1', sha256: ruleSha256(v1) } }]);
+
+    // Le skill change après la compilation : le rejeu sert la version ÉPINGLÉE, jamais la courante.
+    await putRule(pool, { userId: A, role: 'member', via: 'console' }, { content: skillDoc('zz-e6-skill', 'zz_canari_skill_v2') });
+    fake.reset();
+    fake.setScenario('zz-agent', script());
+    const { runId } = await runOf(apiId);
+    const tools = toolResults();
+    expect(tools.some((t) => t.includes('zz_canari_skill_v1'))).toBe(true);
+    expect(tools.some((t) => t.includes('zz_canari_skill_v2'))).toBe(false);
+    expect(tools.some((t) => t.includes('zz_canari_autre'))).toBe(false);
+    expect((await logsOf(runId)).filter((l) => l.event === 'skill_read').map((l) => (l.data as { ref: string }).ref)).toEqual(['zz-e6-skill@1']);
+  }, 240_000);
 });

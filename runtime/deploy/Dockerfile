@@ -106,6 +106,9 @@ COPY --from=build /app/apps/server/dist apps/server/dist
 COPY --from=build /app/apps/web/dist apps/web/dist
 COPY --from=build /app/apps/worker/dist apps/worker/dist
 COPY --from=build /app/apps/cli/dist apps/cli/dist
+# Statut « modèle validé » du banc (15 § 11, tâche 2.8), servi en lecture seule par GET /api/settings/llm
+# (DEFAULT_VALIDATED_MODELS_FILE, apps/server/src/validated-models.ts : <racine>/eval/validated-models.json).
+COPY eval/validated-models.json eval/validated-models.json
 COPY deploy/entrypoint.sh /usr/local/bin/entrypoint.sh
 COPY --from=seccomp /src/sandbox-seccomp /usr/local/libexec/sandbox-seccomp
 # Commande `runtime` (CLI : migrate, keygen, doctor…) dans le PATH : champ « pré-déploiement » des hébergeurs,

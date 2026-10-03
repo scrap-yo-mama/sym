@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Surcouche de test de deploy/compose.yaml (tests/deploy.e2e.test.ts, sdk_and_cdp_on_image) : site de test sur le réseau
+# Compose, nommé `site-a.test`, servi par le Node de l'image elle-même (aucune autre image) ; l'egress des sessions le joint
+# parce qu'il est déclaré dans SYMB_PRIVATE_HOSTS (04c § 1.2). Jamais utilisée hors des tests.
+services:
+  sym-browser:
+    environment:
+      SYMB_PRIVATE_HOSTS: site-a.test
+
+  site:
+    image: ${SYMB_IMAGE:?image construite à tester}
+    command:
+      - node
+      - -e
+      - "require('node:http').createServer((q, s) => s.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }).end('<!doctype html><title>SYM Browser fixtures</title><h1>site-a</h1>')).listen(8080)"
+    networks:
+      default:
+        aliases: [site-a.test]

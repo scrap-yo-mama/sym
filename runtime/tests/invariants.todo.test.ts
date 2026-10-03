@@ -66,8 +66,9 @@ describe("invariants (à implémenter)", () => {
   // remplace ce test.todo par le vrai test ; il ne se retire qu'avec lui.
   test.todo("assert_robots_respected — volet tunnel et extension : 0 requête sur un chemin interdit en mode tunnel, à chaque saut"); // INV11, tâche(s) 2.7b (D-33)
   // 4.8 livrée partiellement (16 § 8, 17 § 11) : la première API est rejouée par le quickstart depuis 3.1 (étape first-api) ; D0
-  // reste décrit (mode pending) et gardé par assert_quickstart_pending_steps_declared, qui échoue à la livraison de /mcp (3.2).
-  test.todo("assert_quickstart_d0_first_api"); // 16 § 8, reprise : 3.1 (première API sur fixture), 3.2 (D0 en MCP), vérifié en 4.4
+  // reste décrit (mode pending) et gardé par assert_quickstart_pending_steps_declared ; /mcp est livré (3.2), il échoue à la
+  // livraison des prompts MCP et du mode démo (3.10).
+  test.todo("assert_quickstart_d0_first_api"); // 16 § 8, reprise : 3.1 (première API sur fixture), 3.2 (serveur MCP), 3.10 (D0 en mode démo), vérifié en 4.4
   // Case « j'ai lu » (responsible_use_acks) et refus d'une API x-personal sans elle : livrés par 3.1 (assert_responsible_use_ack,
   // apps/server/src/rest.integration.test.ts). L'affichage de la page au premier lancement de la console reste à faire (console).
   // INV6 (revue de 1.7), câblage livré par 2.3 : le worker porte le run échoué au statut de l'API (10 puis 15 dans le même
@@ -76,6 +77,13 @@ describe("invariants (à implémenter)", () => {
   // D-49 (2.3) : la quarantaine et l'enveloppe `RunResult.rejected` sont livrées (packages/db/src/rejected.ts) ; leur
   // exposition REST et MCP (3.1 et 3.2 non fusionnées au moment de 2.3) se joue en 4.2.
   test.todo("assert_rejected_items_quarantined — exposition REST et MCP : RunResult.rejected sur get_run et run_api, get_items(rejected: true) à l'appelant du run seul, 404 au propriétaire d'une API instance (05 §4.1)"); // D-49, tâche(s) 4.2 (après 3.1, 3.2)
+  // 2.12 (mémoire, profil, juge) : le banc A/B est livré par 2.8, non fusionnée au moment de 2.12 ; les bras « mémoire »
+  // et « ablation de la fiche » et la détection des défauts silencieux se jouent en 4.2.
+  test.todo("assert_silent_defects_detected — banc 2.8 : défauts silencieux (constante, sentinelles, motif, doublons, valeur d'énumération) détectés par le profil"); // 2.12, joué en 4.2
+  test.todo("bras « mémoire » du banc A/B (r1 R18) et ablation du contenu de la fiche (r4 R10) avant de figer run_profiles"); // 2.12, après 2.8, joué en 4.2
+  // 2.12 (revue) : validateBaseline et excludeFromBaseline (packages/db/src/quality.ts) n'ont pas encore d'appelant ; tant
+  // qu'aucune baseline n'est validée, les motifs comparatifs (pattern_shift, new_enum_value) restent inactifs.
+  test.todo("baseline validée par promote_api / test_api (3.14), sortie de baseline sur un retour « ce champ est faux » : motifs pattern_shift et new_enum_value actifs"); // 2.12, après 3.14, joué en 4.2
   // RGPD (1.8) : assert_retention_purge, assert_erasure_complete et assert_no_personal_data_in_logs sont dans
   // packages/db/src/retention/retention.integration.test.ts ; câblage worker (RunContext.personal, RunContext.excludeSubjects,
   // rekey) dans apps/worker/src/worker.integration.test.ts. Câblage par l'exécuteur réel (D-28, tâche 1.6) : items extraits
@@ -86,7 +94,8 @@ describe("invariants (à implémenter)", () => {
   // déduplication, qui naît avec `dedup_key` / `diff` des planifications (08 §5, tâche 2.5) :
   test.todo("assert_erasure_complete — dedup_keys.key_hash = dedupKeyHash(clé des sujets, dedup_key) à l'écriture des clés"); // RGPD, tâche(s) 2.5
   test.todo("assert_pacing_key_is_domain"); // politesse, tâche(s) 1.9
-  test.todo("assert_export_no_secret"); // INV5, INV8, tâche(s) 3.12
+  // 3.12 : assert_export_no_secret (INV5, INV8 : fichier, journal du serveur, audit, import sans session ni secret) est dans
+  // apps/server/src/portability.integration.test.ts.
   test.todo("assert_budget_and_stop_controls — Chromium (Playwright) : attempt.finished émis → [data-testid=attempt] visible en moins de 2 s"); // 06 § 4.3, tâche(s) 3.6 (3.5 : rendu SSR, sans navigateur)
   test.todo("assert_run_detail_error_open"); // 06 § 4.3 : écran Détail d'un run, confié à aucune tâche (ADR 0003 : 3.4 ou tâche nouvelle), E2E 3.6
   // 2.16 (D-49, mode « SYM ne lâche pas ») : décisions pures dans packages/core/src/persistence/persistence.unit.test.ts, base et

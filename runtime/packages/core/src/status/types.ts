@@ -22,6 +22,12 @@ export const DEGRADED_SIGNALS = [
   'pagination_short',
   'slow',
   'cost_anomaly',
+  /** Motifs du profil des sorties (tâche 2.12, 19 §3, r4 R4) : informatifs, transitions 5 et 8 existantes. */
+  'field_constant',
+  'pattern_shift',
+  'sentinel_values',
+  'duplicate_items',
+  'new_enum_value',
 ] as const;
 export type DegradedSignal = (typeof DEGRADED_SIGNALS)[number];
 
@@ -52,7 +58,8 @@ export type ActionReason = (typeof ACTION_REASONS)[number];
 /** Classes pour lesquelles le backoff automatique de `erreur` est permis (transition 16). */
 export const BACKOFF_CLASSES = ['extraction', 'code_error', 'network', 'robots_unreachable'] as const satisfies readonly FailureClass[];
 
-export type ReinvestigationTrigger = 'manual' | 'schema_changed' | 'force_investigate';
+/** `rules_changed` : recompilation à la demande (18 §4.8), depuis `sain` ou `warning` seulement (19, 20). */
+export type ReinvestigationTrigger = 'manual' | 'schema_changed' | 'force_investigate' | 'rules_changed';
 
 /** État persistant de la machine. `previousStatus` n'a de sens qu'en `enquete` (transition 21) : `sain`, `warning`, ou `erreur` pendant une tentative de persistance. */
 export type ApiStatusState = {
@@ -90,6 +97,11 @@ export type StatusEventInput =
    * `erreur` devient le statut précédent, de sorte qu'un échec repasse par la 21 (jamais la 2) et un succès par la 1.
    */
   | { type: 'persistence_attempt'; failureClass: FailureClass }
+  /**
+   * Mémoire négative (tâche 2.12, 19 §2, r1 R14) : le domaine a déjà refusé l'accès (`forbidden`, `bloquee`) ; arrêt
+   * préventif AVANT tout appel LLM et toute requête, par la transition 4 existante, raison `prior_refusal`.
+   */
+  | { type: 'prior_refusal' }
   /** L'utilisateur a agi : connexion, proxy, paiement, tunnel (17). */
   | { type: 'user_acted' };
 

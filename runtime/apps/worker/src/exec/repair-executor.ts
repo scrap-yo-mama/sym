@@ -16,11 +16,22 @@
 //    d'extraction ne change jamais d'IP). Une issue qui exigerait un agent à chaque run n'est pas retenue (`instructed_mode`
 //    n'existe pas avant 2.13 : traité comme faux).
 // Le prompt ne reçoit que des squelettes (preuves minimisées) et des raisons sans valeur ; il n'est jamais journalisé.
+// Règles Markdown (tâche 2.10, 18 §2) : réparer, c'est recompiler depuis la source À JOUR : les règles résolues de l'API
+// (propriétaire et instance) sont injectées dans le préfixe du prompt `repair`, les skills lus par `read_skill` ; vN+1
+// enregistre sa source (`source.rules`, `strategy_version_rules`).
+// Tâche 2.12 : le dossier de mémoire du catalogue (19 §2, valeurs du même domaine seulement, masqué) entre dans le prompt
+// à sa place fixe, avant les preuves ; le juge consultatif donne son avis avant que vN+1 devienne courante, sans rien
+// bloquer (19 §3).
 import { setTimeout as sleep } from 'node:timers/promises';
 import {
+  buildCatalogDossier,
   checkAgainstHealthy,
   escalationExecutions,
+  profileItems,
+  registrableDomain,
+  renderCatalogMemory,
   healthyProfile,
+  maskTextForLlm,
   patchKey,
   RepairLedger,
   validateDeclarativeSpec,
@@ -30,13 +41,19 @@ import {
   type JsonPatchOperation,
   type RepairStopCause,
   type RunContext as RunCtx,
+  jsonSha256,
+  renderRulesPrompt,
+  SkillReader,
+  sourceRuleRows,
+  type ResolvedRules,
 } from '@runtime/core';
 import { assertPromptSafe, ClassificationGuardError, type AgentEvidence, type ExecFailure } from '@runtime/core/exec';
-import { proposeRepair, repairCallCeilingUsd, repairPromptVersion } from '@runtime/agent';
-import { acquireRepairLease, readCurrentStrategyVersion, readHealthyItems, releaseRepairLease, renewRepairLease } from '@runtime/db';
+import { proposeRepair, readSkillsPhase, renderSkillBodies, repairCallCeilingUsd, repairMessages, repairPromptVersion } from '@runtime/agent';
+import { acquireRepairLease, buildStrategySource, inputHash, readBaselineItem, readCatalogMemory, readCurrentStrategyVersion, readHealthyItems, readSourceBase, releaseRepairLease, renewRepairLease, resolveRulesForApi, saveRunJudge, type CatalogMemory } from '@runtime/db';
 import { LlmError, roleTarget, toFailureClass, type LlmClient, type LlmConfig } from '@runtime/llm';
 import type pg from 'pg';
 import { pino, type Logger } from 'pino';
+import { flaggedFields, judgeItems, settingsQualityPorts, type QualityPorts } from './quality-job.js';
 import type { CandidateCheck, RepairedStrategy, RepairOutcome, RepairPort } from './strategy-executor.js';
 
 export type RepairEngineDeps = {
@@ -52,6 +69,11 @@ export type RepairEngineDeps = {
   readonly leaseWaitMs?: number;
   readonly leaseTtlSeconds?: number;
   readonly logger?: Logger;
+  /** Mémoire du catalogue (2.12) ; défaut : `readCatalogMemory`. */
+  readonly memory?: { readonly read: (args: { ownerId: string; apiId: string | null; domain: string }) => Promise<CatalogMemory> };
+  /** Juge consultatif (2.12) ; défaut : réglages `settings.llm`. Configuration du rôle `judge` : `judgeLlm`. */
+  readonly quality?: QualityPorts;
+  readonly judgeLlm?: { readonly config: () => Promise<LlmConfig | null>; readonly client: (config: LlmConfig) => LlmClient };
 };
 
 const DECLARATIVE = new Set(['fetch', 'fetch_in_page', 'playwright']);
@@ -75,6 +97,46 @@ export function createRepairPort(deps: RepairEngineDeps): RepairPort {
   const logger = deps.logger ?? pino({ enabled: false });
   const leaseTtl = deps.leaseTtlSeconds ?? 90;
   const leaseWaitMs = deps.leaseWaitMs ?? 60_000;
+  const quality = deps.quality ?? settingsQualityPorts(deps.pool);
+
+  /**
+   * Avis consultatif sur la sortie réparée, avant que vN+1 devienne courante : il ne bloque rien (19 §3). Plafond : le
+   * budget de réparation restant (`repair_budget_usd`) ; échantillon avec un item de la baseline validée s'il y en a une.
+   * Rend le coût du jugement (imputé au run), `0` sans jugement.
+   */
+  const judgeRepair = async (ctx: RunCtx, schema: unknown, items: readonly unknown[], maxUsd: number): Promise<number | null> => {
+    if (deps.judgeLlm === undefined || !(await quality.judgeEnabled().catch(() => false))) return 0;
+    try {
+      const config = await deps.judgeLlm.config().catch(() => null);
+      if (config === null) return 0;
+      const baselineItem = await readBaselineItem(deps.pool, { apiId: ctx.apiId, ownerId: ctx.ownerId, inputHash: inputHash(ctx.input) }).catch(() => null);
+      const out = await judgeItems({ config, client: deps.judgeLlm.client, trigger: 'repair', schema, profile: profileItems(items, schema), items, baselineItem, maxUsd, signal: ctx.signal });
+      if (out === null) return 0;
+      await ctx.chargeCost?.({ llm_usd: out.costUsd, tokens: { ...out.tokens, estimated: false } });
+      await saveRunJudge(deps.pool, { runId: ctx.runId, ownerId: ctx.ownerId, judge: out.judge, costUsd: 0 });
+      if (out.judge.flag) await ctx.log('info', 'judge_flag', { trigger: 'repair', fields: flaggedFields(out.judge), seed: out.seed });
+      return out.costUsd;
+    } catch {
+      await ctx.log('warn', 'judge_failed', { trigger: 'repair' });
+      return 0;
+    }
+  };
+
+  /**
+   * Dossier de mémoire de la réparation (même propriétaire, structurel) ; `description` : la demande DÉJÀ masquée
+   * (couches 1 et 2), qui sert à l'étage 3 (plein texte).
+   */
+  const repairMemory = async (ctx: RunCtx, spec: DeclarativeSpec, description: string): Promise<string> => {
+    try {
+      const domain = registrableDomain(spec.request.url);
+      const memory = await (deps.memory?.read ?? ((a) => readCatalogMemory(deps.pool, a)))({ ownerId: ctx.ownerId, apiId: ctx.apiId, domain });
+      const dossier = buildCatalogDossier({ ownerId: ctx.ownerId, apiId: ctx.apiId, domain, description, mode: 'repair', refusals: memory.refusals, now: new Date() }, memory.entries);
+      if (dossier.refs.length > 0) await ctx.log('info', 'catalog_memory', { entries: dossier.refs.length, tokens: dossier.tokens, truncated: dossier.truncated, sha256: dossier.sha256 });
+      return renderCatalogMemory(dossier);
+    } catch {
+      return '';
+    }
+  };
 
   /** Attente du bail d'une autre réparation : vN+1 si elle a abouti, sinon échec (la stratégie reste celle du run). */
   const waitForOtherRepair = async (ctx: RunCtx, strategyVersion: number): Promise<RepairOutcome> => {
@@ -134,9 +196,46 @@ export function createRepairPort(deps: RepairEngineDeps): RepairPort {
       return waitForOtherRepair(ctx, strategy.version);
     };
     /** vN+1 enregistrée SOUS le bail (vérifié et prolongé juste avant), avant sa libération. */
+    // Règles à jour de l'API (18 §4.3) : résolues comme son propriétaire ; plafonds journalisés.
+    let resolved: ResolvedRules | null = null;
+    try {
+      resolved = (await resolveRulesForApi(deps.pool, { apiId: ctx.apiId, ownerId: ctx.ownerId, role: 'repair' })).resolved;
+    } catch (error) {
+      logger.warn({ runId: ctx.runId, err: error instanceof Error ? error.name : 'error' }, 'réparation : règles illisibles');
+    }
+    if (resolved !== null && resolved.truncated.length > 0) await ctx.log('warn', 'rules_truncated', { removed: resolved.truncated.map((r) => r.ref), budget_tokens: resolved.budget.rules });
+    if (resolved !== null && resolved.skillsListingTruncated) await ctx.log('warn', 'skills_listing_truncated', { without_description: resolved.skillsWithoutDescription, budget_tokens: resolved.budget.skills });
+    const reader = new SkillReader(resolved?.skills ?? []);
+    const rulesPrompt = resolved === null ? '' : renderRulesPrompt(resolved);
+    let skillsPrompt = '';
+    let skillsRead = false;
+    // Source de vN+1 (18 §2, §4.6) : demande et décisions reprises de la source de vN (ou de la demande d'enquête de
+    // l'API) ; seules les règles et la raison changent.
+    const base = await readSourceBase(deps.pool, { apiId: ctx.apiId, ownerId: ctx.ownerId, version: strategy.version }).catch(() => null);
+    const sourceOf = (): Pick<RepairedStrategy, 'source' | 'rules'> => {
+      if (resolved === null) return {};
+      const rows = sourceRuleRows(resolved, reader.reads);
+      const spec = strategy.spec as { request?: { url?: unknown }; start_url?: unknown } | null;
+      const specUrl = typeof spec?.request?.url === 'string' ? spec.request.url : typeof spec?.start_url === 'string' ? spec.start_url : '';
+      return {
+        source: buildStrategySource({
+          reason: 'repair',
+          description: base?.request.description ?? '',
+          url: base?.request.url ?? specUrl,
+          exampleOutputRef: base?.request.example_output_ref ?? null,
+          outputSchemaSha256: jsonSha256(target.api.outputSchema),
+          investigationId: base?.investigation_id ?? null,
+          decisions: base?.decisions ?? [],
+          rows,
+        }),
+        rules: rows,
+      };
+    };
     const committed = async (repaired: RepairedStrategy, check: CandidateCheck): Promise<RepairOutcome> => {
       if (!(await holds())) return leaseLost();
-      const saved = await request.commit(repaired);
+      const judgeUsd = await judgeRepair(ctx, target.api.outputSchema, check.partition.conform, ledger.remainingUsd);
+      if (judgeUsd !== 0) ledger.spend(judgeUsd);
+      const saved = await request.commit({ ...repaired, ...sourceOf() });
       return { kind: 'repaired', strategy: repaired, check, saved };
     };
     const ledger = new RepairLedger({ ...(deps.maxAttempts === undefined ? {} : { maxAttempts: deps.maxAttempts }), ...(deps.budgetUsd === undefined ? {} : { budgetUsd: deps.budgetUsd }) });
@@ -178,22 +277,30 @@ export function createRepairPort(deps: RepairEngineDeps): RepairPort {
     if (deps.llm !== undefined && config !== null && price !== null && price !== undefined) {
       const client = deps.llm.client({ ...config, roles: { repair: config.roles.repair! } });
       const model = config.roles.repair?.model ?? null;
+      // Masquage des couches 1 et 2 (19 §3, rôle `repair`) : la demande ne part jamais en clair, ni au prompt ni à l'étage 3.
+      const description = maskTextForLlm(target.api.description ?? '');
+      const catalogMemory = await repairMemory(ctx, spec, description);
       for (;;) {
         if (!(await holds())) return leaseLost();
-        const args = { description: target.api.description, spec, outputSchema: target.api.outputSchema, failure, evidence, healthy, reasons: request.reasons, refused };
+        const base = { description, spec, outputSchema: target.api.outputSchema, failure, evidence, healthy, reasons: request.reasons, refused, rules: rulesPrompt, ...(catalogMemory === '' ? {} : { catalogMemory }) };
+        const args = skillsPrompt === '' ? base : { ...base, skills: skillsPrompt };
         const ceiling = repairCallCeilingUsd(args, price);
         if (!ledger.canPropose(ceiling)) break;
         const before = client.meter.snapshot().cost_usd_known ?? 0;
         let patch: JsonPatchOperation[] | null = null;
         let llmFailure: ExecFailure | null = null;
+        const beforeCall = () => {
+          if ((client.meter.snapshot().cost_usd_known ?? 0) - before + ceiling > ledger.remainingUsd + 1e-9) throw new RepairBudgetGuard();
+        };
         try {
-          const out = await proposeRepair(client, {
-            ...args,
-            signal: ctx.signal,
-            beforeCall: () => {
-              if ((client.meter.snapshot().cost_usd_known ?? 0) - before + ceiling > ledger.remainingUsd + 1e-9) throw new RepairBudgetGuard();
-            },
-          });
+          // Chargement progressif des skills (18 §4.4), une fois par réparation.
+          if (!skillsRead) {
+            skillsRead = true;
+            const bodies = await readSkillsPhase(client, 'repair', { messages: repairMessages(args), reader, signal: ctx.signal, beforeCall });
+            for (const read of reader.reads) await ctx.log('info', 'skill_read', { ref: read.ref, sha256: read.sha256 });
+            if (bodies.length > 0) skillsPrompt = renderSkillBodies(bodies);
+          }
+          const out = await proposeRepair(client, { ...args, ...(skillsPrompt === '' ? {} : { skills: skillsPrompt }), signal: ctx.signal, beforeCall });
           patch = out.patch;
         } catch (error) {
           if (ctx.signal.aborted) throw error;

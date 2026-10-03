@@ -176,6 +176,7 @@ describe('assert_status_transitions', () => {
       { type: 'backoff_elapsed', failureClass: 'extraction', attempt: 0 },
       { type: 'reinvestigate', trigger: 'schema_changed' },
       { type: 'reinvestigate', trigger: 'force_investigate' },
+      { type: 'reinvestigate', trigger: 'rules_changed' },
       { type: 'user_acted' },
     ];
     for (const event of events) {
@@ -190,6 +191,7 @@ describe('assert_status_transitions', () => {
       ['manual', 'reinvestigate_manual'],
       ['schema_changed', 'output_schema_changed'],
       ['force_investigate', 'force_investigate'],
+      ['rules_changed', 'rules_changed'],
     ] as const) {
       const r = run(st('sain'), { type: 'reinvestigate', trigger });
       expect(r.path).toEqual([[19, 'sain', 'enquete', reason]]);

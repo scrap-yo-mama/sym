@@ -1,0 +1,14 @@
+{
+  "has_next": false,
+  "page": 1,
+  "quotes": [
+    {
+      "tags": ["zz", "exemple"],
+      "text": "  Zz : une citation synthétique pour les tests.  "
+    },
+    {
+      "tags": [],
+      "text": "Zz : une seconde citation, sans auteur ni donnée réelle."
+    }
+  ]
+}

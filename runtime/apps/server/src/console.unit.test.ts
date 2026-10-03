@@ -24,7 +24,7 @@ let consoleDir = '';
 const apps: FastifyInstance[] = [];
 
 /** Contexte minimal : une requête hors registre ne touche ni la base ni l'authentification (garde : chemin inconnu). */
-const fakeCtx = (publicUrl: string) => ({ publicUrl, tunnel: null }) as unknown as ServerContext;
+const fakeCtx = (publicUrl: string) => ({ publicUrl, tunnel: null, mcp: null }) as unknown as ServerContext;
 
 async function server(options: { publicUrl?: string; consoleDir?: string | null } = {}): Promise<FastifyInstance> {
   const app = buildServer(fakeCtx(options.publicUrl ?? 'http://localhost:3000'), { consoleDir: options.consoleDir === undefined ? consoleDir : options.consoleDir });

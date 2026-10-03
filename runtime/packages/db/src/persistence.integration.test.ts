@@ -400,10 +400,10 @@ describe('assert_persistence_schedule_and_caps', () => {
   });
 });
 
-describe('migration 0019_persistence_mode', () => {
+describe('migration 0021_persistence_mode', () => {
   test('aller-retour down/up : colonnes et tables retirées puis rendues', async () => {
     const has = async () => (await pool.query("SELECT to_regclass('public.api_persistence') AS p, to_regclass('public.persistence_domain_slots') AS d")).rows[0];
-    await migrateDown({ connectionString: tdb.url, steps: loadMigrations().filter((m) => m.version >= 19).length });
+    await migrateDown({ connectionString: tdb.url, steps: loadMigrations().filter((m) => m.version >= 21).length });
     expect(await has()).toEqual({ p: null, d: null });
     expect((await pool.query("SELECT 1 FROM information_schema.columns WHERE table_name = 'apis' AND column_name IN ('persistence_mode', 'persistence_budget_usd')")).rowCount).toBe(0);
     await migrateUp({ connectionString: tdb.url });

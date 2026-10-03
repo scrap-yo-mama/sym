@@ -2,6 +2,7 @@
 // INV12 et INV5 sur les routes existantes (tâche 0.3b) : harnais paramétré par le registre des routes.
 // Toute nouvelle route rejoint routes/registry.ts ; si elle porte une ressource, RESOURCE_CASES doit savoir créer un
 // objet de A (sinon le test échoue), et si elle prend un corps, VALID_BODIES doit en fournir un.
+import { readFileSync } from 'node:fs';
 import { can, GRANTABLE_SCOPES } from '@runtime/core';
 import { withActor } from '@runtime/db';
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
@@ -185,6 +186,8 @@ const VALID_BODIES: Record<string, (party: Party) => Record<string, unknown>> = 
   'PATCH /api/apis/:slug': () => ({ description: 'zz_test authz' }),
   'POST /api/apis/:slug/runs': () => ({ input: {} }),
   'POST /api/apis/:slug/investigate': () => ({}),
+  // Portabilité (3.12) : un modèle de templates/ (aperçu, sans `confirm`).
+  'POST /api/apis/import': () => JSON.parse(readFileSync(new URL('../../../templates/livres-demo.api.json', import.meta.url), 'utf8')) as Record<string, unknown>,
   'POST /api/apis/:slug/versions/:version/revert': () => ({}),
   'POST /api/apis/:slug/schedules': () => ({ cron: '0 3 * * *', timezone: 'UTC', input: {} }),
   'PATCH /api/apis/:slug/schedules/:id': () => ({ enabled: false }),
@@ -205,9 +208,18 @@ const VALID_BODIES: Record<string, (party: Party) => Record<string, unknown>> = 
   'POST /api/subjects/erase': () => ({ identifier: 'zz_test_person@example.test', dry_run: true }),
   'POST /api/tunnel/pairing-code': (p) => ({ current_password: p.user.password }),
   'POST /api/me/responsible-use': () => ({ version: '2026-10-01' }),
+  // Serveur MCP (3.2) : message JSON-RPC ; ses outils ont leur propre test B contre A (mcp.integration.test.ts).
+  'POST /mcp': () => ({ jsonrpc: '2.0', id: 1, method: 'tools/list', params: {} }),
 };
 
 const ZERO_UUID = '00000000-0000-4000-8000-000000000000';
+
+/** Clé d'API d'un acteur (routes `auth: key`, serveur MCP), créée une fois. */
+const keys = new Map<string, string>();
+async function partyKey(party: Party): Promise<string> {
+  if (!keys.has(party.user.id)) keys.set(party.user.id, (await createKey(srv, party.cookie, party.user, ['apis:read'])).key);
+  return keys.get(party.user.id)!;
+}
 const keyOf = (r: RouteSpec) => `${r.method} ${r.url}`;
 const hasBody = (r: RouteSpec) => r.method === 'POST' || r.method === 'PUT' || r.method === 'PATCH';
 
@@ -395,7 +407,8 @@ describe('assert_authz_matrix (squelette, 08b § 4) : paramétré sur le registr
       // Route d'administration : l'owner (un membre serait refusé avant la lecture du corps).
       const party = route.permission && !can('member', route.permission) ? owner : b;
       for (const extra of [{ owner_id: a.user.id }, { user_id: a.user.id }, { status: 'active' }, { server_use_allowed: true }]) {
-        const headers: Record<string, string> = route.auth === 'extension' ? { authorization: `Bearer ${party.ext}` } : { cookie: party.cookie };
+        const headers: Record<string, string> =
+          route.auth === 'extension' ? { authorization: `Bearer ${party.ext}` } : route.auth === 'key' ? { authorization: `Bearer ${await partyKey(party)}` } : { cookie: party.cookie };
         const res = await call(route, headers, ZERO_UUID, { ...VALID_BODIES[keyOf(route)]!(party), ...extra });
         // 400 (additionalProperties: false) ; 404 pour l'assistant, clos après l'owner.
         expect([400, 404], `${keyOf(route)} ${Object.keys(extra)[0]}`).toContain(res.statusCode);
