@@ -4,7 +4,7 @@ import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { svgProblems as svgSafetyProblems } from '../../../packages/ui/src/testing/svg-safe.ts';
 import { isOpaque, marginViolations, parseGif, parsePng } from './images.ts';
-import { assetsDir } from './paths.ts';
+import { assetsDir, runtimeDir } from './paths.ts';
 import { marksProblems, type Budgets } from './readme.ts';
 
 function assetFiles(dir = assetsDir): string[] {
@@ -81,6 +81,35 @@ export function svgFileProblems(dir = assetsDir): string[] {
   return assetFiles(dir)
     .filter((file) => file.endsWith('.svg'))
     .flatMap((file) => svgSafetyProblems(readFileSync(file, 'utf8'), { noText: false }).map((reason) => `${rel(file, dir)} : ${reason}`));
+}
+
+/** Texte d'un SVG : contenu des éléments `<text>` (balises internes retirées, entités numériques décodées). */
+function svgTexts(svg: string): string[] {
+  return [...svg.matchAll(/<text\b[^>]*>([\s\S]*?)<\/text>/g)].map((m) =>
+    (m[1] ?? '').replace(/<[^>]+>/g, '').replace(/&#x([0-9a-f]+);/gi, (_s, hex: string) => String.fromCodePoint(parseInt(hex, 16))).replace(/&#(\d+);/g, (_s, dec: string) => String.fromCodePoint(Number(dec))));
+}
+
+/**
+ * Aucun emoji dans un texte des SVG de `.github/assets/` (20 §2.3, 4.12b) : au rendu, l'emoji est tracé par la police emoji du
+ * système (œuvre tierce, différente d'une machine à l'autre) ; la signature d'une image est l'icône SVG de packages/ui.
+ */
+export function svgEmojiProblems(dir = assetsDir): string[] {
+  return assetFiles(dir)
+    .filter((file) => file.endsWith('.svg'))
+    .flatMap((file) => svgTexts(readFileSync(file, 'utf8')).filter((text) => /\p{Extended_Pictographic}/u.test(text)).map((text) => `${rel(file, dir)} : emoji dans un texte (« ${text.trim()} »), tracer l'icône de packages/ui à la place`));
+}
+
+const GHOST_ICON = join(runtimeDir, 'packages', 'ui', 'icons', 'sym-ghost.svg');
+
+/** Chaque bandeau (`src/banner-*.svg`) trace l'icône SYM de packages/ui (même tracé `d` que `sym-ghost.svg`) à côté du texte « SYM ». */
+export function bannerGhostProblems(dir = assetsDir): string[] {
+  const d = /\sd="([^"]+)"/.exec(readFileSync(GHOST_ICON, 'utf8'))?.[1];
+  if (!d) return ['packages/ui/icons/sym-ghost.svg sans tracé'];
+  const banners = assetFiles(dir).filter((file) => /^src\/banner-[^/]*\.svg$/.test(rel(file, dir)));
+  if (banners.length === 0) return ['aucun bandeau src/banner-*.svg'];
+  return banners
+    .filter((file) => ![...readFileSync(file, 'utf8').matchAll(/<path\b[^>]*\sd="([^"]+)"/g)].some((m) => m[1] === d))
+    .map((file) => `${rel(file, dir)} : ne trace pas l'icône sym-ghost.svg de packages/ui`);
 }
 
 /** Chaque fichier de `.github/assets/` figure dans `ASSETS-LICENSES.md` (auteur, licence, date). */

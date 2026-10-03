@@ -7,3 +7,5 @@ chrome web store
 books.toscrape.com
 model context protocol
 MCP
+Chrome extension
+extension Chrome

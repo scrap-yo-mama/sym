@@ -7,6 +7,7 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, test } from 'vitest';
 import { parse } from 'yaml';
+import { cautiousWordingProblems, taskDeliveryDate } from '../scripts/vitrine/lib/claims.ts';
 
 const runtimeDir = new URL('..', import.meta.url).pathname;
 const repoRoot = join(runtimeDir, '..');
@@ -27,21 +28,81 @@ function manifests(): Record<string, unknown>[] {
 const dependsOn = (name: string): boolean =>
   manifests().some((m) => ['dependencies', 'devDependencies'].some((k) => Object.keys((m[k] as Record<string, string> | undefined) ?? {}).includes(name)));
 
-/** Le serveur MCP (tâche 3.2) n'existe que si le SDK MCP est une dépendance ; l'API REST des API (3.1) que si une route `apis` existe. */
-const MCP_DELIVERED = dependsOn('@modelcontextprotocol/sdk');
-const REST_APIS_DELIVERED = readdirSync(join(runtimeDir, 'apps/server/src/routes')).some((f) => /^(apis|runs)\.ts$/.test(f));
-
-/** Affirmations au présent du parcours cible (2.1, 2.3, 3.1, 3.2), interdites tant qu'il n'est pas livré. */
-const PRESENT_CLAIMS = {
-  en: [/Speaks MCP and REST/i, /Repairs itself/i, /\bSYM (investigates|compiles|repairs|looks for)\b/, /\byou ask your AI, over MCP\b/i],
-  fr: [/Parle MCP et REST/i, /Se répare toute seule/i, /\bSYM (enquête|compile|répare|cherche)(?=[\s,.;:])/, /\btu demandes à ton IA, via MCP\b/i],
+/**
+ * Parcours cible, livré tâche par tâche : le serveur MCP (3.2) existe si son SDK serveur est une dépendance, l'API REST des API
+ * (3.1) si une route `apis` existe, la réparation (2.3) si un fichier de ce nom est dans le worker ou l'agent, l'enquête (2.1)
+ * si l'agent porte son rôle `investigate`. La reprise par étape (2.13, 19 §4 : « repairs step by step », « it repairs the step
+ * that broke ») se lit dans l'historique : un commit de livraison « 2.13 — » (même source que le registre des allégations).
+ */
+const DELIVERED = {
+  mcp: dependsOn('@modelcontextprotocol/server'),
+  rest: readdirSync(join(runtimeDir, 'apps/server/src/routes')).some((f) => /^(apis|runs)\.ts$/.test(f)),
+  repair: ['apps/worker/src', 'packages/agent/src'].some((dir) => existsSync(join(runtimeDir, dir)) && readdirSync(join(runtimeDir, dir), { recursive: true }).some((f) => /(^|[\\/])repair[^\\/]*\.ts$/.test(String(f)))),
+  investigation: existsSync(join(runtimeDir, 'packages/agent/src/investigate.ts')),
+  stepRepair: taskDeliveryDate('2.13') !== undefined,
 };
+type Feature = keyof typeof DELIVERED;
+type Lang = 'en' | 'fr';
+
+/**
+ * Affirmations au présent du parcours cible, dans les mots de la planche (D-60), par fonction : chacune n'est admise que si sa
+ * tâche est livrée. La nommer dans la ligne « Not delivered yet » / « Pas encore livré » de l'alerte ne suffit pas : le README se
+ * contredirait entre ses puces et son alerte (D-46, 22 §3.2). Le gras et l'emoji de la signature (`**SYM 👻**`) sont retirés
+ * avant la lecture.
+ */
+const PRESENT_CLAIMS: Record<Lang, [Feature, RegExp][]> = {
+  en: [
+    ['mcp', /\bSpeaks MCP\b/i],
+    ['mcp', /\byou ask your AI\b/i],
+    ['rest', /\bSpeaks MCP,? (and )?REST\b/i],
+    ['repair', /\brepairs itself\b/i],
+    ['stepRepair', /\brepairs (step by step|the step)\b/i],
+    ['investigation', /\bSYM (investigates|compiles|repairs|looks for)\b/],
+  ],
+  fr: [
+    ['mcp', /\bParle MCP\b/i],
+    ['mcp', /\btu demandes (des données )?à ton IA\b/i],
+    ['rest', /\bParle MCP,? (et )?REST\b/i],
+    ['repair', /\bse répare\b/i],
+    ['stepRepair', /\brépare (étape par étape|l['’]étape)/i],
+    ['investigation', /\bSYM (enquête|compile|répare|cherche)(?=[\s,.;:])/],
+  ],
+};
+/** Nom de chaque fonction sur la ligne « Not delivered yet » / « Pas encore livré ». */
+const NAMED: Record<Lang, Record<Feature, RegExp>> = {
+  en: { mcp: /MCP server/, rest: /REST API/, repair: /(?<!step-by-step )\brepair\b/, investigation: /investigation/, stepRepair: /step-by-step repair/ },
+  fr: { mcp: /serveur MCP/, rest: /API REST/, repair: /réparation(?! étape)/, investigation: /enquête/, stepRepair: /réparation étape par étape/ },
+};
+/** Première phrase de la ligne « Not delivered yet » : la liste de ce qui manque (la phrase suivante dit ce qui marche d'ici là). */
+const ALERT_LINE: Record<Lang, RegExp> = { en: /\*\*Not delivered yet:\*\*[^.\n]*/, fr: /\*\*Pas encore livré\s*:\*\*[^.\n]*/ };
+/** Texte lu par la garde : sans gras ni emoji de signature (« **SYM 👻** investigates » → « SYM investigates »). */
+const readable = (text: string): string => text.replace(/\*\*/g, '').replace(/\s*👻/gu, '');
+
+/**
+ * Les promesses restent vraies (D-46) : aucune affirmation au présent d'une fonction non livrée, même nommée par l'alerte ; la
+ * ligne « Not delivered yet » nomme chaque fonction non livrée, et aucune fonction livrée. Liste vide : conforme.
+ */
+function honestyProblems(text: string, lang: Lang, delivered: Record<Feature, boolean>): string[] {
+  const problems: string[] = [];
+  const alert = ALERT_LINE[lang].exec(text)?.[0] ?? '';
+  const missing = (Object.keys(delivered) as Feature[]).filter((f) => !delivered[f]);
+  for (const [feature, claim] of PRESENT_CLAIMS[lang]) {
+    if (!delivered[feature] && claim.test(readable(text))) problems.push(`${lang} : « ${claim.source} » au présent, ${feature} non livré (l'alerte ne suffit pas)`);
+  }
+  if (missing.length > 0 && alert === '') problems.push(`${lang} : ${missing.join(', ')} non livré(s), sans ligne « Not delivered yet »`);
+  for (const feature of missing) if (alert !== '' && !NAMED[lang][feature].test(alert)) problems.push(`${lang} : la ligne « Not delivered yet » ne nomme pas ${feature}`);
+  for (const feature of Object.keys(delivered) as Feature[]) {
+    if (delivered[feature] && NAMED[lang][feature].test(alert)) problems.push(`${lang} : la ligne « Not delivered yet » nomme ${feature}, pourtant livré`);
+  }
+  if (missing.length === 0 && alert !== '') problems.push(`${lang} : tout est livré, la ligne « Not delivered yet » doit disparaître`);
+  return problems;
+}
 
 describe('README public : ce qui marche aujourd\'hui, distingué de ce qui est prévu', () => {
-  // 4.12 : la vitrine suit les 11 blocs de 22 §3.1 (sans titre « What works today ») ; l'honnêteté de la pré-version tient dans
-  // l'alerte `[!WARNING]` qui précède « What it does », dont les puces ne décrivent que ce qui existe (registre claims.json).
-  test('alerte de pré-version avant « What it does » / « Ce que ça fait »', () => {
-    for (const [lang, heading] of [['en', '## What it does'], ['fr', '## Ce que ça fait']] as const) {
+  // 4.12b : la vitrine suit la planche (D-60, sans titre « What works today ») ; l'honnêteté de la pré-version tient dans l'alerte
+  // `[!WARNING]` qui précède toutes les sections (registre claims.json pour les puces).
+  test('alerte de pré-version avant « How it feels » / « Ce que ça donne »', () => {
+    for (const [lang, heading] of [['en', '## How it feels'], ['fr', '## Ce que ça donne']] as const) {
       const text = README[lang];
       expect(text, lang).toContain(heading);
       expect(text.indexOf('[!WARNING]'), lang).toBeGreaterThan(-1);
@@ -49,15 +110,54 @@ describe('README public : ce qui marche aujourd\'hui, distingué de ce qui est p
     }
   });
 
-  test.skipIf(MCP_DELIVERED && REST_APIS_DELIVERED)('parcours non livré : aucune affirmation au présent, et le README dit ce qui manque', () => {
+  test('la garde lit les mots de la planche : chaque affirmation au présent du README est reconnue (gras et emoji compris)', () => {
     for (const lang of ['en', 'fr'] as const) {
-      for (const claim of PRESENT_CLAIMS[lang]) expect(README[lang], `${lang} : ${claim}`).not.toMatch(claim);
+      const seen = new Set(PRESENT_CLAIMS[lang].filter(([, claim]) => claim.test(readable(README[lang]))).map(([feature]) => feature));
+      // Jusqu'à 2.13, les puces de la planche sur la reprise par étape sont reformulées (« repairs itself ») : écart listé par
+      // assert_readme_matches_maquette.
+      const wanted = ['investigation', 'mcp', 'repair', 'rest', 'stepRepair'].filter((f) => f !== 'stepRepair' || DELIVERED.stepRepair);
+      expect([...seen].sort(), lang).toEqual(wanted);
     }
-    const missing = {
-      en: /\*\*Not delivered yet:\*\*[^\n]*repair[^\n]*REST API[^\n]*MCP server/,
-      fr: /\*\*Pas encore livré\s*:\*\*[^\n]*réparation[^\n]*API REST[^\n]*serveur MCP/,
-    };
-    for (const lang of ['en', 'fr'] as const) expect(README[lang], lang).toMatch(missing[lang]);
+    // Les mots de la planche pour la reprise par étape sont reconnus.
+    const planche = { en: ['Replays without an LLM, repairs step by step', 'Sites that change: it repairs the step that broke'], fr: ['Rejoue sans LLM, répare étape par étape', 'Les sites qui changent : il répare l\'étape qui a cassé'] };
+    for (const lang of ['en', 'fr'] as const) {
+      for (const line of planche[lang]) expect(PRESENT_CLAIMS[lang].some(([feature, claim]) => feature === 'stepRepair' && claim.test(line)), line).toBe(true);
+    }
+  });
+
+  test('formulation prudente imposée (22 §3.2) : « without an LLM » / « sans LLM » suivi de « when the strategy allows » / « quand la stratégie le permet »', () => {
+    for (const lang of ['en', 'fr'] as const) expect(cautiousWordingProblems(README[lang], lang), lang).toEqual([]);
+    expect(README.en.replace(/\*\*/g, '')).toMatch(/without an LLM when the strategy allows/);
+    expect(README.fr.replace(/\*\*/g, '')).toMatch(/sans LLM quand la stratégie le permet/);
+  });
+
+  test('parcours : chaque fonction non livrée est nommée par l\'alerte, aucune fonction livrée ne l\'est, une affirmation au présent attend sa livraison', () => {
+    for (const lang of ['en', 'fr'] as const) expect(honestyProblems(README[lang], lang, DELIVERED), lang).toEqual([]);
+  });
+
+  test('cas négatifs : affirmation d\'une fonction non livrée sans alerte, fonction livrée encore nommée, ligne restée après livraison', () => {
+    const none = { mcp: false, rest: false, repair: false, investigation: false, stepRepair: false };
+    const all = { mcp: true, rest: true, repair: true, investigation: true, stepRepair: true };
+    const bare = (lang: Lang) => README[lang].replace(new RegExp(`\\n>\\n> ${ALERT_LINE[lang].source}[^\\n]*`), '');
+    expect(honestyProblems(bare('en'), 'en', { ...all, repair: false }).join()).toMatch(/repair.*non livré/);
+    expect(honestyProblems(bare('fr'), 'fr', { ...all, mcp: false }).join()).toMatch(/mcp/);
+    const named = (lang: Lang, line: string) => bare(lang).replace(/(\[!WARNING\]\n> [^\n]*)/, `$1\n>\n> ${line}`);
+    // Nommer la fonction dans l'alerte ne rend pas son affirmation au présent admissible.
+    expect(honestyProblems(named('en', '**Not delivered yet:** repair.'), 'en', { ...all, repair: false }).join()).toMatch(/repairs itself.*repair non livré/);
+    expect(honestyProblems(named('fr', '**Pas encore livré :** la réparation.'), 'fr', { ...all, repair: false }).join()).toMatch(/se répare.*repair non livré/);
+    const stepped = (lang: Lang, line: string) => named(lang, line).replace(lang === 'en' ? 'repairs itself' : 'se répare', lang === 'en' ? 'repairs step by step' : 'répare étape par étape');
+    expect(honestyProblems(stepped('en', '**Not delivered yet:** step-by-step repair.'), 'en', { ...all, stepRepair: false }).join()).toMatch(/stepRepair non livré/);
+    expect(honestyProblems(stepped('fr', '**Pas encore livré :** la réparation étape par étape.'), 'fr', { ...all, stepRepair: false }).join()).toMatch(/stepRepair non livré/);
+    expect(honestyProblems(stepped('en', '**Not delivered yet:** step-by-step repair.'), 'en', all).join()).toMatch(/nomme stepRepair|doit disparaître/);
+    expect(honestyProblems(named('en', '**Not delivered yet:** repair and the MCP server.'), 'en', { ...all, repair: false }).join()).toMatch(/nomme mcp, pourtant livré/);
+    expect(honestyProblems(named('en', '**Not delivered yet:** the MCP server.'), 'en', all).join()).toMatch(/doit disparaître/);
+    expect(honestyProblems(named('en', '**Not delivered yet:** repair.'), 'en', none).join()).toMatch(/ne nomme pas mcp/);
+    // 2.13 : la reprise par étape se nomme seule ; « a repair » dans la phrase suivante ne nomme pas la réparation livrée.
+    expect(honestyProblems(bare('en'), 'en', { ...all, stepRepair: false }).join()).toMatch(/stepRepair non livré/);
+    expect(honestyProblems(named('en', '**Not delivered yet:** step-by-step repair. Until then, a repair patches the strategy.'), 'en', { ...all, stepRepair: false })).toEqual([]);
+    expect(honestyProblems(named('fr', '**Pas encore livré :** la réparation étape par étape. D\'ici là, une réparation corrige la stratégie.'), 'fr', { ...all, stepRepair: false })).toEqual([]);
+    expect(honestyProblems(named('en', '**Not delivered yet:** step-by-step repair.'), 'en', all).join()).toMatch(/doit disparaître|nomme stepRepair/);
+    expect(honestyProblems(bare('en'), 'en', { ...all, investigation: false }).join()).toMatch(/SYM \(investigates.*investigation non livré/);
   });
 
   test('parité en / fr : mêmes titres de section, même nombre de puces et d\'étapes', () => {
