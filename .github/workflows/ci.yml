@@ -1,4 +1,4 @@
-# CI de runtime/ : 7 jobs (cdc/scrapyomama-runtime/15-strategie-tests.md §2), plus le job `docs` (tâche 4.8), le job `image` (privilèges du bac à sable sur l'image construite, F-20261001-R01) et le 8e job `vitrine` (tâche 4.12).
+# CI de runtime/ : 7 jobs (cdc/scrapyomama-runtime/15-strategie-tests.md §2), plus le job `docs` (tâche 4.8), le job `image` (privilèges du bac à sable sur l'image construite, F-20261001-R01), le 8e job `vitrine` (tâches 4.12 et 4.11 : vitrine du dépôt puis landing).
 # Aucun filtre de chemin : `quality` ne doit jamais être masqué.
 # Modules (ADR 23 § 6) : le job `detect` liste les paquets touchés et leurs dépendants (`pnpm --filter "...[origin/main]"`), le job
 # `browser` (module SYM Browser) ne tourne que s'ils le concernent, et `gate` agrège le verdict de tous les jobs : c'est le check à exiger.
@@ -99,6 +99,15 @@ jobs:
     # de tests/vitrine (aucun .py, aucun service tiers). Le filtre par chemin est celui de CE job (check.mjs changed), jamais un
     # filtre du workflow : `quality` et les autres jobs ne sont jamais masqués. Rien n'est publié, poussé ni réglé sur GitHub.
     # Cible : moins de 3 minutes (à valider).
+    # Tâche 4.11 (22b § 5) : gates de la landing sur la préproduction, c'est-à-dire le build de production du commit servi par un
+    # serveur statique local qui reproduit GitHub Pages (chemin de base /sym/, aucun en-tête, CSP en balise meta). Rien n'est publié ni
+    # déployé : GitHub Pages n'est touché qu'au GO. Critère de 4.11 : TOUS les assert_landing_* tournent ici, les tests de contenu et du
+    # site construit (vitest, projets unit et contract, apps/docs/src/landing ; le job docs les rejoue avec le reste du site) puis le volet
+    # Chromium : cookie, requêtes tierces, traceurs, CSP vue par le navigateur, axe, mouvement, budgets de poids.
+    # Le volet « liens externes en 200 » de assert_landing_links_resolve (pnpm --filter @runtime/docs landing:links) ouvre des connexions
+    # sortantes vers le dépôt public : il ne tourne pas ici (une PR ne dépend pas de l'état du dépôt public), mais avant le déploiement
+    # dans pages.yml (mise en ligne, GO), dans release.yml avant toute publication, et chaque semaine après (landing-production.yml).
+    # Le volet interne (0 lien mort, fichier et ancre) tourne ici et dans le job docs.
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -126,6 +135,21 @@ jobs:
       - name: Tests nommés de la vitrine (assert_readme_*, assert_social_preview_spec, assert_svg_safe, assert_license_detected_agpl…)
         if: steps.changed.outputs.run == 'true'
         run: pnpm vitest run --project unit tests/vitrine tests/public-showcase.unit.test.ts
+      - run: pnpm build
+      - name: Landing, contenu et site construit (assert_landing_* hors navigateur)
+        run: pnpm vitest run --project unit --project contract apps/docs/src/landing
+      - name: Chromium de Playwright
+        run: pnpm exec playwright install --with-deps chromium
+      - name: Landing, préproduction (build de production servi comme GitHub Pages), gates Chromium
+        run: pnpm --filter @runtime/docs test:e2e
+      - name: Contrôles avant le GO (cookie, tiers, traceurs, CSP, formulaire) rejoués par la sonde, résultat daté archivé
+        run: pnpm --filter @runtime/docs landing:probe --preprod --out ../../landing-probe-preprod.json
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: landing-probe-preprod
+          path: runtime/landing-probe-preprod.json
+          if-no-files-found: error
+          retention-days: 14
 
   unit:
     runs-on: ubuntu-24.04

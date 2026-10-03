@@ -303,11 +303,15 @@ describe('M14 : 3e langue sans modification de code', () => {
 
   test('assert_third_locale_no_code_change : aucune liste de langues codée en dur dans les sources (hors tests)', () => {
     const root = new URL('../../../', import.meta.url).pathname;
+    // Landing (4.11, hors de 3.20 : 21b § 6) : ses langues sont celles de son contenu écrit à la main (transcréation, pages
+    // juridiques traduites fidèlement, 21 § 7-8), comme le site de doc de 4.8 ; une 3e langue y passe par 4.8 / 4.11 (M17).
+    const OUT_OF_SCOPE = new Set(['apps/docs/src/landing']);
     const offenders: string[] = [];
     const walk = (dir: string) => {
       for (const name of readdirSync(dir)) {
         if (['node_modules', 'dist', '.wxt', 'generated', 'e2e', 'eval', '.output'].includes(name)) continue;
         const full = join(dir, name);
+        if (OUT_OF_SCOPE.has(full.slice(root.length))) continue;
         if (statSync(full).isDirectory()) walk(full);
         else if (/\.(ts|vue)$/.test(name) && !/\.(test|e2e)\.ts$/.test(name) && !/\.d\.ts$/.test(name)) {
           const text = readFileSync(full, 'utf8');
