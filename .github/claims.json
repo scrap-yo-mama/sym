@@ -303,7 +303,7 @@
       "proof": [
         "inv:INV1",
         "test:assert_output_schema_enforced",
-        "assert_step_patch_bounded"
+        "test:assert_step_patch_bounded"
       ],
       "reviewed": "2026-10-02",
       "status": "relu",
@@ -747,7 +747,7 @@
       "fr": "Il reprend à l'étape qui casse et répare tout seul.",
       "en": "It resumes at the step that broke and repairs it on its own.",
       "proof": [
-        "assert_step_patch_bounded"
+        "test:assert_step_patch_bounded"
       ],
       "reviewed": "2026-10-02",
       "status": "relu",
@@ -1169,7 +1169,7 @@
       "fr": "Réparation pas à pas, bornée par le schéma validé",
       "en": "Step-by-step repair, bounded by the approved schema",
       "proof": [
-        "assert_step_patch_bounded"
+        "test:assert_step_patch_bounded"
       ],
       "reviewed": "2026-10-02",
       "status": "à relire",
@@ -1286,8 +1286,8 @@
         "test:assert_e5_replay_without_llm",
         "file:runtime/apps/worker/src/exec/repair.integration.test.ts",
         "test:assert_output_schema_enforced",
-        "assert_step_classification_guard",
-        "assert_step_patch_bounded"
+        "test:assert_step_classification_guard",
+        "test:assert_step_patch_bounded"
       ],
       "reviewed": "2026-10-03",
       "status": "relu",
@@ -1381,8 +1381,8 @@
       "proof": [
         "file:runtime/apps/worker/src/exec/repair.integration.test.ts",
         "file:runtime/apps/worker/src/exec/classification-guard.integration.test.ts",
-        "assert_step_classification_guard",
-        "assert_step_patch_bounded"
+        "test:assert_step_classification_guard",
+        "test:assert_step_patch_bounded"
       ],
       "reviewed": "2026-10-03",
       "status": "relu",
