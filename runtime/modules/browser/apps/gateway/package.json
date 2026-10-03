@@ -1,0 +1,38 @@
+{
+  "name": "@sym-browser/gateway",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "license": "AGPL-3.0-only",
+  "description": "SYM Browser : passerelle (REST /v1 et OpenAPI 3.1 des sessions, tâche 2.2 ; flux SSE et webhooks signés, tâche 2.5 ; relais WSS à venir).",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc -p tsconfig.check.json",
+    "test": "vitest run",
+    "test:schemathesis": "vitest run --config vitest.schemathesis.config.ts",
+    "start": "node dist/main.js"
+  },
+  "dependencies": {
+    "@fastify/websocket": "catalog:",
+    "@sym-browser/core": "workspace:*",
+    "@sym-browser/db": "workspace:*",
+    "@sym-browser/node": "workspace:*",
+    "@sym/contracts": "workspace:*",
+    "ajv": "catalog:",
+    "fastify": "catalog:",
+    "pg": "catalog:",
+    "ws": "catalog:"
+  },
+  "devDependencies": {
+    "@testcontainers/postgresql": "catalog:",
+    "@types/node": "catalog:",
+    "@types/pg": "catalog:",
+    "@types/ws": "catalog:",
+    "standardwebhooks": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}

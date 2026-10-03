@@ -1,0 +1,10 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "allowImportingTsExtensions": true,
+    "allowJs": true,
+    "checkJs": false
+  },
+  "include": ["tests/**/*.ts", "fixtures/**/*.ts", "scripts/**/*.ts", "bench/**/*.ts", "vitest.config.ts", "vitest.chromium.config.ts", "vitest.quickstart.config.ts"]
+}

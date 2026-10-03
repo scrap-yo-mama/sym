@@ -659,6 +659,282 @@ importers:
         specifier: 'catalog:'
         version: 5.0.1(@types/node@24.13.6)(@vitest/coverage-v8@5.0.1)(msw@2.15.0(@types/node@24.13.6)(typescript@5.9.3))(vite@8.3.0(@types/node@24.13.6)(jiti@2.7.0)(yaml@2.9.1))
 
+  modules/browser:
+    devDependencies:
+      '@browserbasehq/stagehand':
+        specifier: 'catalog:'
+        version: 3.7.3(playwright-core@1.63.0)(supports-color@10.2.2)(zod@4.3.6)
+      '@sym/contracts':
+        specifier: workspace:*
+        version: link:../../packages/contracts
+      '@testcontainers/postgresql':
+        specifier: 'catalog:'
+        version: 12.1.0(supports-color@10.2.2)
+      '@types/node':
+        specifier: 'catalog:'
+        version: 24.13.6
+      '@types/pg':
+        specifier: 'catalog:'
+        version: 8.23.1
+      '@types/ws':
+        specifier: 'catalog:'
+        version: 8.18.1
+      eslint:
+        specifier: 'catalog:'
+        version: 10.11.0(jiti@2.7.0)
+      fastify:
+        specifier: 'catalog:'
+        version: 5.12.5
+      pg:
+        specifier: 'catalog:'
+        version: 8.23.0
+      playwright-core:
+        specifier: 'catalog:'
+        version: 1.63.0
+      typescript:
+        specifier: 'catalog:'
+        version: 5.9.3
+      vitest:
+        specifier: 'catalog:'
+        version: 5.0.1(@types/node@24.13.6)(@vitest/coverage-v8@5.0.1)(msw@2.15.0(@types/node@24.13.6)(typescript@5.9.3))(vite@8.3.0(@types/node@24.13.6)(jiti@2.7.0)(yaml@2.9.1))
+      ws:
+        specifier: 'catalog:'
+        version: 8.21.3
+      yaml:
+        specifier: 'catalog:'
+        version: 2.9.1
+      zod:
+        specifier: 'catalog:'
+        version: 4.3.6
+
+  modules/browser/apps/console:
+    dependencies:
+      '@runtime/ui':
+        specifier: workspace:*
+        version: link:../../../../packages/ui
+      '@sym/contracts':
+        specifier: workspace:*
+        version: link:../../../../packages/contracts
+      class-variance-authority:
+        specifier: 'catalog:'
+        version: 0.7.1
+      clsx:
+        specifier: 'catalog:'
+        version: 2.1.1
+      reka-ui:
+        specifier: 'catalog:'
+        version: 2.10.5(vue@3.5.43(typescript@5.9.3))
+      tailwind-merge:
+        specifier: 'catalog:'
+        version: 3.7.0
+      vue:
+        specifier: 'catalog:'
+        version: 3.5.43(typescript@5.9.3)
+      vue-i18n:
+        specifier: 'catalog:'
+        version: 11.4.12(vue@3.5.43(typescript@5.9.3))
+      vue-router:
+        specifier: 'catalog:'
+        version: 5.3.1(@vue/compiler-sfc@3.5.43)(rolldown@1.2.10)(vite@8.3.0(@types/node@24.13.6)(jiti@2.7.0)(yaml@2.9.1))(vue@3.5.43(typescript@5.9.3))
+    devDependencies:
+      '@axe-core/playwright':
+        specifier: 'catalog:'
+        version: 4.13.0(playwright-core@1.63.0)
+      '@playwright/test':
+        specifier: 'catalog:'
+        version: 1.63.0
+      '@tailwindcss/vite':
+        specifier: 'catalog:'
+        version: 4.3.3(vite@8.3.0(@types/node@24.13.6)(jiti@2.7.0)(yaml@2.9.1))
+      '@types/node':
+        specifier: 'catalog:'
+        version: 24.13.6
+      '@types/ws':
+        specifier: 'catalog:'
+        version: 8.18.1
+      '@vitejs/plugin-vue':
+        specifier: 'catalog:'
+        version: 6.0.9(vite@8.3.0(@types/node@24.13.6)(jiti@2.7.0)(yaml@2.9.1))(vue@3.5.43(typescript@5.9.3))
+      tailwindcss:
+        specifier: 'catalog:'
+        version: 4.3.3
+      typescript:
+        specifier: 'catalog:'
+        version: 5.9.3
+      vite:
+        specifier: 'catalog:'
+        version: 8.3.0(@types/node@24.13.6)(jiti@2.7.0)(yaml@2.9.1)
+      vitest:
+        specifier: 'catalog:'
+        version: 5.0.1(@types/node@24.13.6)(@vitest/coverage-v8@5.0.1)(msw@2.15.0(@types/node@24.13.6)(typescript@5.9.3))(vite@8.3.0(@types/node@24.13.6)(jiti@2.7.0)(yaml@2.9.1))
+      vue-tsc:
+        specifier: 'catalog:'
+        version: 3.3.11(typescript@5.9.3)
+      ws:
+        specifier: 'catalog:'
+        version: 8.21.3
+
+  modules/browser/apps/gateway:
+    dependencies:
+      '@fastify/websocket':
+        specifier: 'catalog:'
+        version: 11.3.1
+      '@sym-browser/core':
+        specifier: workspace:*
+        version: link:../../packages/core
+      '@sym-browser/db':
+        specifier: workspace:*
+        version: link:../../packages/db
+      '@sym-browser/node':
+        specifier: workspace:*
+        version: link:../node
+      '@sym/contracts':
+        specifier: workspace:*
+        version: link:../../../../packages/contracts
+      ajv:
+        specifier: 'catalog:'
+        version: 8.20.0
+      fastify:
+        specifier: 'catalog:'
+        version: 5.12.5
+      pg:
+        specifier: 'catalog:'
+        version: 8.23.0
+      ws:
+        specifier: 'catalog:'
+        version: 8.21.3
+    devDependencies:
+      '@testcontainers/postgresql':
+        specifier: 'catalog:'
+        version: 12.1.0(supports-color@10.2.2)
+      '@types/node':
+        specifier: 'catalog:'
+        version: 24.13.6
+      '@types/pg':
+        specifier: 'catalog:'
+        version: 8.23.1
+      '@types/ws':
+        specifier: 'catalog:'
+        version: 8.18.1
+      standardwebhooks:
+        specifier: 'catalog:'
+        version: 1.1.1
+      typescript:
+        specifier: 'catalog:'
+        version: 5.9.3
+      vitest:
+        specifier: 'catalog:'
+        version: 5.0.1(@types/node@24.13.6)(@vitest/coverage-v8@5.0.1)(msw@2.15.0(@types/node@24.13.6)(typescript@5.9.3))(vite@8.3.0(@types/node@24.13.6)(jiti@2.7.0)(yaml@2.9.1))
+
+  modules/browser/apps/node:
+    dependencies:
+      '@sym-browser/core':
+        specifier: workspace:*
+        version: link:../../packages/core
+      '@sym/contracts':
+        specifier: workspace:*
+        version: link:../../../../packages/contracts
+      playwright-core:
+        specifier: 'catalog:'
+        version: 1.63.0
+      ws:
+        specifier: 'catalog:'
+        version: 8.21.3
+    devDependencies:
+      '@types/node':
+        specifier: 'catalog:'
+        version: 24.13.6
+      '@types/ws':
+        specifier: 'catalog:'
+        version: 8.18.1
+      fast-check:
+        specifier: 'catalog:'
+        version: 4.10.2
+      typescript:
+        specifier: 'catalog:'
+        version: 5.9.3
+      vitest:
+        specifier: 'catalog:'
+        version: 5.0.1(@types/node@24.13.6)(@vitest/coverage-v8@5.0.1)(msw@2.15.0(@types/node@24.13.6)(typescript@5.9.3))(vite@8.3.0(@types/node@24.13.6)(jiti@2.7.0)(yaml@2.9.1))
+
+  modules/browser/packages/core:
+    dependencies:
+      '@sym/contracts':
+        specifier: workspace:*
+        version: link:../../../../packages/contracts
+      pino:
+        specifier: 'catalog:'
+        version: 10.3.1
+    devDependencies:
+      '@types/node':
+        specifier: 'catalog:'
+        version: 24.13.6
+      fast-check:
+        specifier: 'catalog:'
+        version: 4.10.2
+      typescript:
+        specifier: 'catalog:'
+        version: 5.9.3
+      vitest:
+        specifier: 'catalog:'
+        version: 5.0.1(@types/node@24.13.6)(@vitest/coverage-v8@5.0.1)(msw@2.15.0(@types/node@24.13.6)(typescript@5.9.3))(vite@8.3.0(@types/node@24.13.6)(jiti@2.7.0)(yaml@2.9.1))
+
+  modules/browser/packages/db:
+    dependencies:
+      '@sym-browser/core':
+        specifier: workspace:*
+        version: link:../core
+      '@sym/contracts':
+        specifier: workspace:*
+        version: link:../../../../packages/contracts
+      drizzle-orm:
+        specifier: 'catalog:'
+        version: 0.45.3(@types/pg@8.23.1)(kysely@0.29.6)(pg@8.23.0)
+      pg:
+        specifier: 'catalog:'
+        version: 8.23.0
+    devDependencies:
+      '@testcontainers/postgresql':
+        specifier: 'catalog:'
+        version: 12.1.0(supports-color@10.2.2)
+      '@types/node':
+        specifier: 'catalog:'
+        version: 24.13.6
+      '@types/pg':
+        specifier: 'catalog:'
+        version: 8.23.1
+      fast-check:
+        specifier: 'catalog:'
+        version: 4.10.2
+      typescript:
+        specifier: 'catalog:'
+        version: 5.9.3
+      vitest:
+        specifier: 'catalog:'
+        version: 5.0.1(@types/node@24.13.6)(@vitest/coverage-v8@5.0.1)(msw@2.15.0(@types/node@24.13.6)(typescript@5.9.3))(vite@8.3.0(@types/node@24.13.6)(jiti@2.7.0)(yaml@2.9.1))
+
+  modules/browser/packages/sdk:
+    dependencies:
+      '@sym/contracts':
+        specifier: workspace:*
+        version: link:../../../../packages/contracts
+      playwright-core:
+        specifier: 'catalog:'
+        version: 1.63.0
+    devDependencies:
+      '@types/node':
+        specifier: 'catalog:'
+        version: 24.13.6
+      openapi-typescript:
+        specifier: 'catalog:'
+        version: 7.13.0(typescript@5.9.3)
+      typescript:
+        specifier: 'catalog:'
+        version: 5.9.3
+      vitest:
+        specifier: 'catalog:'
+        version: 5.0.1(@types/node@24.13.6)(@vitest/coverage-v8@5.0.1)(msw@2.15.0(@types/node@24.13.6)(typescript@5.9.3))(vite@8.3.0(@types/node@24.13.6)(jiti@2.7.0)(yaml@2.9.1))
+
   packages/agent:
     dependencies:
       '@browserbasehq/stagehand':
@@ -696,6 +972,21 @@ importers:
       '@types/node':
         specifier: 'catalog:'
         version: 24.13.6
+      typescript:
+        specifier: 'catalog:'
+        version: 5.9.3
+      vitest:
+        specifier: 'catalog:'
+        version: 5.0.1(@types/node@24.13.6)(@vitest/coverage-v8@5.0.1)(msw@2.15.0(@types/node@24.13.6)(typescript@5.9.3))(vite@8.3.0(@types/node@24.13.6)(jiti@2.7.0)(yaml@2.9.1))
+
+  packages/contracts:
+    devDependencies:
+      '@types/node':
+        specifier: 'catalog:'
+        version: 24.13.6
+      ajv:
+        specifier: 'catalog:'
+        version: 8.20.0
       typescript:
         specifier: 'catalog:'
         version: 5.9.3
@@ -5778,7 +6069,6 @@ snapshots:
     dependencies:
       eslint: 10.11.0(jiti@2.7.0)
       eslint-visitor-keys: 3.4.3
-    optional: true
 
   '@eslint-community/regexpp@4.12.2': {}
 
@@ -7808,7 +8098,6 @@ snapshots:
       jiti: 2.7.0
     transitivePeerDependencies:
       - supports-color
-    optional: true
 
   eslint@10.11.0(jiti@2.7.0)(supports-color@10.2.2):
     dependencies:

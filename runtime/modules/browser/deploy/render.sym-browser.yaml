@@ -1,0 +1,73 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Blueprint Render « SYM Browser seul » (cdc/sym-browser 03 § 4, 04g § 6, 04b § 9 ; tâche 5.1) : passerelle (service web,
+# TLS de Render), un nœud (service privé, réseau privé de Render seulement) et PostgreSQL. Même image GHCR pour les deux.
+# Non déployé tant que le GO n'est pas donné (recette 08 étape 24) ; à la publication du miroir (tâche 5.8), ce fichier
+# devient le render.yaml du dépôt public et le bouton « Deploy to Render » du README pointe dessus.
+# À valider sur Render réel (étape 24) : `fromService` du nœud vers lui-même (hostport), seccomp de Render (non réglable :
+# le nœud vérifie le bac à sable de Chromium au lancement et `/readyz` reste 503 s'il ne démarre pas).
+# Ajouter un nœud : dupliquer le service `sym-browser-node` (nom et NODE_ID propres) ; une instance par service, car la
+# passerelle route chaque session vers l'URL privée de son nœud (03 AD4).
+envVarGroups:
+  - name: sym-browser-secrets
+    envVars:
+      # Valeur générée par Render : 256 bits en base64, le format exact de MASTER_KEY. À sauvegarder hors de Render.
+      - key: MASTER_KEY
+        generateValue: true
+      - key: NODE_TOKEN
+        generateValue: true
+
+databases:
+  - name: sym-browser-db
+    databaseName: sym_browser
+    user: sym_browser
+    plan: basic-256mb
+    postgresMajorVersion: "16"
+    # Aucune connexion depuis Internet : seuls les services du compte.
+    ipAllowList: []
+
+services:
+  - type: web
+    name: sym-browser-gateway
+    runtime: image
+    image:
+      url: ghcr.io/scrap-yo-mama/sym-browser:1
+    plan: starter
+    # Prête quand la base est à jour et qu'au moins un nœud bat (04d § 3.3).
+    healthCheckPath: /readyz
+    envVars:
+      - key: SYMB_MODE
+        value: gateway
+      - fromGroup: sym-browser-secrets
+      - key: DATABASE_URL
+        fromDatabase:
+          name: sym-browser-db
+          property: connectionString
+      # Première clé d'API, demandée au déploiement (`pnpm --filter @sym-browser/core apikey`).
+      - key: SYMB_BOOTSTRAP_API_KEY
+        sync: false
+
+  - type: pserv
+    name: sym-browser-node
+    runtime: image
+    image:
+      url: ghcr.io/scrap-yo-mama/sym-browser:1
+    # 2 Go : au moins un slot avec les constantes provisoires de capacité (04b § 3, tâche 0.6).
+    plan: standard
+    # Couvre la grâce de drainage (SHUTDOWN_GRACE_SECONDS = 270 s) : sessions finies proprement (04b § 9, tâche 2.7).
+    maxShutdownDelaySeconds: 300
+    envVars:
+      - key: SYMB_MODE
+        value: node
+      - fromGroup: sym-browser-secrets
+      - key: DATABASE_URL
+        fromDatabase:
+          name: sym-browser-db
+          property: connectionString
+      - key: NODE_ID
+        value: node-1
+      # hôte:port privé du service, complété en http:// par SYM Browser.
+      - key: NODE_PUBLIC_URL
+        fromService:
+          type: pserv
+          name: sym-browser-node
+          property: hostport
