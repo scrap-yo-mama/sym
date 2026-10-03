@@ -30,10 +30,11 @@ describe.skipIf(!hasChromium)('PlaywrightStepChannel (contrat agent_step, 07 §3
     fx = await startFixtureServer({ port: 0 });
     browser = await chromium.launch({ args: ['--host-resolver-rules=MAP *.localhost 127.0.0.1, MAP * ~NOTFOUND, EXCLUDE 127.0.0.1'] });
   }, 60_000);
+  // Fermeture de Chromium sous charge (autre suite lourde sur la machine) : même délai que le lancement.
   afterAll(async () => {
     await browser?.close();
     await fx?.close();
-  });
+  }, 60_000);
   beforeEach(async () => {
     await fetch(`http://127.0.0.1:${fx.port}/__reset`, { method: 'POST' });
     await context?.close();
