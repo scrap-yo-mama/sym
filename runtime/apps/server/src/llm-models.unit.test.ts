@@ -41,3 +41,11 @@ describe('mergeModels (UX-17)', () => {
     expect(old).toEqual({ m: { price: PRICE } });
   });
 });
+
+describe('mergeModels : retrait d’un modèle (revue fix-ux-11, point 5)', () => {
+  test('models[m]: null retire le modèle entier ; les autres sont gardés', () => {
+    const merged = mergeModels({ a: { price: PRICE }, b: { price: { in: 1, out: 2 } } }, { a: null });
+    expect(merged).toEqual({ b: { price: { in: 1, out: 2 } } });
+    expect('a' in merged).toBe(false);
+  });
+});

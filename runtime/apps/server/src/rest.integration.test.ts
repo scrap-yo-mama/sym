@@ -1574,6 +1574,43 @@ describe('réglages de l’admin (08 § 1, § 2, § 7) : secrets en écriture se
     await api(admin, 'PUT', '/api/settings/llm', '/api/settings/llm', { providers: [] });
   });
 
+  test('revue fix-ux-11 — known_prices en lecture seule (forme KnownModelPrice) ; prix fermé (>= 0) ; models[m]: null retire ; table bornée à 50', async () => {
+    const got = await api(admin, 'GET', '/api/settings/llm', '/api/settings/llm');
+    expect(got.status).toBe(200);
+    const known = got.body['known_prices'] as { model: string; provider: string; status: string; price: { in: number; out: number; in_cached?: number } | null; source: string }[];
+    expect(known.length).toBeGreaterThan(0);
+    for (const entry of known) {
+      expect(['verified', 'to_validate']).toContain(entry.status);
+      expect(typeof entry.model).toBe('string');
+      expect(typeof entry.source).toBe('string');
+      if (entry.status === 'verified') expect(entry.price).toMatchObject({ in: expect.any(Number), out: expect.any(Number) });
+      else expect(entry.price).toBeNull();
+    }
+    // Lecture seule : une écriture qui renvoie known_prices est refusée.
+    expect((await api(admin, 'PUT', '/api/settings/llm', '/api/settings/llm', { providers: [], known_prices: [] })).status).toBe(400);
+    const provider = { id: 'zz-closed', preset: 'custom', base_url: 'http://127.0.0.1:9/v1', api_key: 'zz_test_llm_key_closed_0123456789' };
+    const put = (models: Record<string, unknown>, withKey = true) => {
+      const { api_key: _key, ...keep } = provider;
+      return api(admin, 'PUT', '/api/settings/llm', '/api/settings/llm', { providers: [{ ...(withKey ? provider : keep), models }] });
+    };
+    const modelsOf = async () => ((await api(admin, 'GET', '/api/settings/llm', '/api/settings/llm')).body['providers'] as { id: string; models: Record<string, unknown> }[]).find((p) => p.id === 'zz-closed')?.models ?? {};
+    // Prix fermé : négatif, sans `out`, clé inconnue.
+    expect((await put({ m: { price: { in: -1, out: 2 } } })).status).toBe(400);
+    expect((await put({ m: { price: { in: 1 } } })).status).toBe(400);
+    expect((await put({ m: { price: { in: 1, out: 2, zz: 1 } } })).status).toBe(400);
+    expect((await put({ m: { price: { in: 0, out: 0 } } })).status).toBe(200);
+    // Retrait d'un modèle entier.
+    expect((await put({ n: { price: { in: 1, out: 2 } } }, false)).status).toBe(200);
+    expect(Object.keys(await modelsOf()).sort()).toEqual(['m', 'n']);
+    expect((await put({ m: null }, false)).status).toBe(200);
+    expect(Object.keys(await modelsOf())).toEqual(['n']);
+    // La table fusionnée reste bornée à 50.
+    const fifty = Object.fromEntries(Array.from({ length: 50 }, (_, i) => [`zz-m${i}`, { price: { in: 1, out: 2 } }]));
+    expect((await put(fifty, false)).status).toBe(400);
+    expect(Object.keys(await modelsOf())).toEqual(['n']);
+    await api(admin, 'PUT', '/api/settings/llm', '/api/settings/llm', { providers: [] });
+  });
+
   test('sonde « Tester » LLM pendant un changement de fournisseur : le profil relevé n’écrase jamais la nouvelle destination ni sa clé', async () => {
     // Fournisseur lent : la première requête de la sonde attend qu'on la libère ; chaque réponse est un 400 (paramètre non
     // supporté), donc la sonde aboutit et veut écrire son profil.

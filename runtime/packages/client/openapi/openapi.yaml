@@ -5290,17 +5290,23 @@ components:
             top_p:
               type: boolean
     LlmPrice:
+      description: USD par million de jetons ; nombres positifs ou nuls, `in` et `out` obligatoires (un prix négatif est refusé).
       type: object
       additionalProperties: false
+      required: [in, out]
       properties:
         in:
           type: number
+          minimum: 0
         in_cached:
           type: number
+          minimum: 0
         in_cache_write:
           type: number
+          minimum: 0
         out:
           type: number
+          minimum: 0
         windows:
           type: array
           items:
@@ -5385,9 +5391,18 @@ components:
           minimum: 0
           maximum: 3
         models:
+          description: >-
+            Modèles du fournisseur (au plus 50), indexés par identifiant. En écriture (`PUT /api/settings/llm`), la requête est
+            FUSIONNÉE avec la table enregistrée, modèle par modèle puis clé par clé : un modèle ou une clé absents de la requête
+            sont gardés (le prix survit à toute écriture qui ne le mentionne pas) ; `models[m].price: null` (ou `profile`,
+            `extra_body`) retire cette clé ; `models[m]: null` retire le modèle entier. La table fusionnée est bornée à 50 modèles
+            (sinon `too_many_models`, 400).
           type: object
+          maxProperties: 50
           additionalProperties:
-            $ref: '#/components/schemas/LlmModel'
+            oneOf:
+              - $ref: '#/components/schemas/LlmModel'
+              - type: 'null'
     LlmProvider:
       allOf:
         - $ref: '#/components/schemas/LlmProviderBase'

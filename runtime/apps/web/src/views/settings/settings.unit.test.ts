@@ -164,6 +164,29 @@ describe('Réglages > Modèles IA', () => {
       expect(html).toContain(en.settings.models.price.roleMissing.replace('{model}', 'claude-sonnet-5-5'));
     });
 
+    test('revue fix-ux-11 (4) — le signalement d’un rôle sans prix est EN ROUGE (sym-error) ; le résultat de Tester le répète', async () => {
+      const calls = installFakeServer({
+        ...sessionRoutes,
+        'GET /api/settings/llm': () => json(200, anthropic),
+        'POST /api/settings/llm/test': () => json(200, { ok: true, tested_at: '2026-10-03T10:00:00Z', error: null, profile: {} }),
+      });
+      const html = await view(ModelsSettingsView);
+      const missing = /<p[^>]*data-testid="role-price-missing"[^>]*>/.exec(html)?.[0] ?? '';
+      expect(missing).toMatch(/class="[^"]*\bsym-error\b/);
+      // Avant tout test : pas d'avertissement de test ; après Tester sur le rôle sans prix : avertissement ; rôle prisé : aucun.
+      const settings = useLlmSettings();
+      await settings.load();
+      expect(settings.testPriceWarning('extract')).toBe(false);
+      await settings.test('extract');
+      await settings.test('investigate');
+      expect(calls.filter((c) => c.path === '/api/settings/llm/test')).toHaveLength(2);
+      expect(settings.testPriceWarning('extract')).toBe(true);
+      expect(settings.testPriceWarning('investigate')).toBe(false);
+      settings.setModelPrice(0, 'claude-sonnet-5-5', 'in', '3');
+      settings.setModelPrice(0, 'claude-sonnet-5-5', 'out', '15');
+      expect(settings.testPriceWarning('extract')).toBe(false);
+    });
+
     test('enregistrer : le prix connu et le prix saisi partent dans providers[].models[m].price du PUT existant', async () => {
       const calls = installFakeServer({ 'GET /api/settings/llm': () => json(200, anthropic), 'PUT /api/settings/llm': () => json(200, anthropic) });
       const settings = useLlmSettings();

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // UX-04 : la cause stable d'un run en échec est publiée avec son message, sa marche à suivre et `retryable`.
 import { describe, expect, test } from 'vitest';
-import { runErrorFor, runErrorOf } from './run-error.js';
+import { runErrorFor, runErrorOf, runNotStarted } from './run-error.js';
 
 describe('cause d’un run en échec (UX-04)', () => {
   test('instance_contact_missing : code stable, message lisible, what_to_do, retryable', () => {
@@ -15,18 +15,36 @@ describe('cause d’un run en échec (UX-04)', () => {
     expect(runErrorFor('instance_contact_missing')).toEqual(error);
   });
 
-  test('UX-12 — llm_price_missing : le modèle nommé dans le message, what_to_do, retryable ; sans modèle, message générique', () => {
+  test('UX-12 — llm_price_missing:<modèle> (run arrêté AVANT l’appel) : modèle nommé, « aucun appel », message terminé par un point', () => {
     const error = runErrorOf({ state: 'failed', error_detail: 'llm_price_missing:claude-opus-4-8' });
     expect(error).toEqual({
       code: 'llm_price_missing',
-      message: 'Renseigne le prix du modèle claude-opus-4-8 dans Réglages > Modèles IA',
+      message: 'Renseigne le prix du modèle claude-opus-4-8 dans Réglages > Modèles IA.',
       what_to_do: expect.stringContaining('Settings > AI models'),
       retryable: true,
     });
     expect(error?.what_to_do).toContain('claude-opus-4-8');
-    expect(runErrorOf({ state: 'failed', error_detail: 'llm_price_missing' })).toMatchObject({ code: 'llm_price_missing', message: 'Renseigne le prix du modèle utilisé dans Réglages > Modèles IA' });
+    expect(error?.what_to_do).toContain('no model call was made and nothing was spent');
     // Seul un nom de modèle plausible est publié (INV8 : jamais un détail libre).
-    expect(runErrorOf({ state: 'failed', error_detail: 'llm_price_missing:https://zz-test.example/secret?k=1' })).toMatchObject({ message: 'Renseigne le prix du modèle utilisé dans Réglages > Modèles IA' });
+    expect(runErrorOf({ state: 'failed', error_detail: 'llm_price_missing:https://zz-test.example/secret?k=1' })).toMatchObject({ message: 'Renseigne le prix du modèle utilisé dans Réglages > Modèles IA.' });
+  });
+
+  test('revue fix-ux-11 — llm_price_missing sans modèle (run déjà exécuté, hors enquête) : le modèle a été appelé, coût inconnu (null), jamais « aucun appel »', () => {
+    const error = runErrorOf({ state: 'failed', error_detail: 'llm_price_missing' });
+    expect(error).toMatchObject({ code: 'llm_price_missing', retryable: true });
+    expect(error?.what_to_do).toContain('was called');
+    expect(error?.what_to_do).toContain('unknown (null');
+    expect(error?.what_to_do).not.toMatch(/no model call was made|nothing was spent/);
+    expect(error?.message).toMatch(/coût.*inconnu/i);
+    expect(error?.message.endsWith('.')).toBe(true);
+  });
+
+  test('runNotStarted : vrai seulement pour les causes qui arrêtent le run avant tout appel', () => {
+    expect(runNotStarted({ state: 'failed', error_detail: 'instance_contact_missing' })).toBe(true);
+    expect(runNotStarted({ state: 'failed', error_detail: 'llm_price_missing:zz-model' })).toBe(true);
+    expect(runNotStarted({ state: 'failed', error_detail: 'llm_price_missing' })).toBe(false);
+    expect(runNotStarted({ state: 'failed', error_detail: 'https://zz-test.example/secret' })).toBe(false);
+    expect(runNotStarted({ state: 'succeeded', error_detail: 'instance_contact_missing' })).toBe(false);
   });
 
   test('un run qui n’a pas échoué, ou un détail non nommé, ne publie aucune cause', () => {

@@ -35,7 +35,7 @@ const call = async (name: string, args: Record<string, unknown>) => (await clien
 const textOf = (result: ToolResult) => result.content.map((c) => c.text ?? '').join('\n');
 
 beforeAll(async () => {
-  srv = await startTestServer('instance-contact', { MAX_WAIT_SECONDS: '3', MAX_CONCURRENT_RUNS: '1000', MAX_ACTIVE_RUNS_PER_USER: '1000', MAX_RUNS_PER_KEY_PER_MINUTE: '1000', MCP_ALLOWED_HOSTS: '127.0.0.1' }, { rest: { pollMs: 40 } });
+  srv = await startTestServer('instcontact', { MAX_WAIT_SECONDS: '3', MAX_CONCURRENT_RUNS: '1000', MAX_ACTIVE_RUNS_PER_USER: '1000', MAX_RUNS_PER_KEY_PER_MINUTE: '1000', MCP_ALLOWED_HOSTS: '127.0.0.1' }, { rest: { pollMs: 40 } });
   owner = await runSetup(srv);
   ownerCookie = await signIn(srv, owner);
   key = (await createKey(srv, ownerCookie, owner, ['apis:read', 'apis:run', 'apis:write', 'runs:read'])).key;
@@ -130,6 +130,26 @@ describe('UX-04 / UX-05 : la cause d’un run arrêté pour contact absent', () 
     expect(JSON.stringify(detail.json())).not.toContain('investigation_budget_exhausted');
   });
 
+  test('revue fix-ux-11 — run de stratégie hors enquête sans prix (llm_price_missing, coût null après l’appel) : cause nommée, aucun « could not start » ni « no model call »', async () => {
+    const api = await seedApi(srv.db.url, owner.id);
+    const run = await seedRun(srv.db.url, { apiId: api.id, ownerId: owner.id, state: 'failed', failureClass: 'run_budget_exceeded' });
+    await sql("UPDATE runs SET error_detail = 'llm_price_missing', retryable = false WHERE id = $1", [run.runId]);
+    const rest1 = (await rest('GET', `/api/runs/${run.runId}`)).json() as { error: { code: string; what_to_do: string } };
+    expect(rest1.error.code).toBe('llm_price_missing');
+    expect(rest1.error.what_to_do).toContain('was called');
+    expect(rest1.error.what_to_do).toContain('unknown (null');
+    expect(rest1.error.what_to_do).not.toMatch(/no model call was made|nothing was spent/);
+    const result = await call('get_run', { run_id: run.runId });
+    const message = String(result.structuredContent!['message']);
+    expect(message).toContain('llm_price_missing');
+    expect(message).not.toContain('could not start');
+    // Le même run arrêté AVANT l'appel (enquête, détail préfixé) garde « could not start », phrase ponctuée.
+    await sql("UPDATE runs SET error_detail = 'llm_price_missing:zz-model', failure_class = NULL WHERE id = $1", [run.runId]);
+    const before = String((await call('get_run', { run_id: run.runId })).structuredContent!['message']);
+    expect(before).toContain('could not start');
+    expect(before).toMatch(/Modèles IA\. The API is now /);
+  });
+
   test('un détail d’erreur qui n’est pas une cause nommée n’est jamais publié', async () => {
     const api = await seedApi(srv.db.url, owner.id);
     const run = await seedRun(srv.db.url, { apiId: api.id, ownerId: owner.id, state: 'failed', failureClass: 'code_error' });
@@ -150,12 +170,16 @@ describe('UX-07 : create_api dit l’état réel de l’enquête', () => {
 
   test('enquête échouée pendant l’attente : état failed avec sa cause, jamais « running »', async () => {
     await setContact('ops@zz-test.example');
+    // Les enquêtes en file des tests précédents (aucun worker) ne sont jamais celle de cet appel.
+    const before = new Set((await sql<{ id: string }>("SELECT id FROM runs WHERE kind = 'investigation'")).map((r) => r.id));
     const pending = call('create_api', { description: 'zz_test échec pendant l’attente', url: 'https://zz-test-failed.example/', wait_seconds: 3 });
     // Le worker simulé arrête l'enquête (contact retiré entre-temps) et la machine passe l'API en action_requise.
     const deadline = Date.now() + 2_000;
     let runId: string | undefined;
     while (runId === undefined && Date.now() < deadline) {
-      runId = (await sql<{ id: string }>("SELECT id FROM runs WHERE kind = 'investigation' AND state = 'queued' ORDER BY created_at DESC LIMIT 1"))[0]?.id;
+      runId = (await sql<{ id: string }>("SELECT id FROM runs WHERE kind = 'investigation' AND state = 'queued' ORDER BY created_at DESC"))
+        .map((r) => r.id)
+        .find((id) => !before.has(id));
       if (runId === undefined) await new Promise((resolve) => setTimeout(resolve, 20));
     }
     expect(runId).toBeDefined();

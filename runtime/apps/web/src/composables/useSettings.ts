@@ -127,6 +127,11 @@ export function useLlmSettings() {
     return !inputs || parsePrice(inputs.in) === null || parsePrice(inputs.out) === null;
   }
 
+  /** Tester a abouti pour un rôle dont le modèle n'a pas de prix : le résultat doit le dire (UX-11), le worker ne l'appellerait pas. */
+  function testPriceWarning(roleName: LlmRoleName): boolean {
+    return tester.outcomes.value[roleName]?.state === 'done' && priceMissing(roleName);
+  }
+
   watch([providers, roles], syncPriceRows, { deep: true });
 
   async function load(): Promise<void> {
@@ -234,7 +239,7 @@ export function useLlmSettings() {
     return tester.run(role, () => call(() => getApi().POST('/api/settings/llm/test', { body: { provider: choice.provider, model: choice.model } })));
   }
 
-  return { ...resource, providers, roles, validatedModels, knownPrices, saving, saveFailure, saved, outcomes: tester.outcomes, load, addProvider, removeProvider, save, test, modelRows, knownPrice, setModelPrice, priceMissing };
+  return { ...resource, providers, roles, validatedModels, knownPrices, saving, saveFailure, saved, outcomes: tester.outcomes, load, addProvider, removeProvider, save, test, modelRows, knownPrice, setModelPrice, priceMissing, testPriceWarning };
 }
 
 export type ProxyWrite = Schemas['ProxyWrite'];

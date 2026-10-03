@@ -178,7 +178,7 @@ function setRole(name: (typeof LLM_ROLES)[number], field: 'provider' | 'model', 
             <Input :id="`role-model-${role}`" autocomplete="off" :model-value="roles[role]?.model ?? ''" @update:model-value="(value: string | number) => setRole(role, 'model', String(value))" />
           </div>
           <Button type="button" variant="outline" :disabled="!roles[role]?.provider || !roles[role]?.model" @click="settings.test(role)">{{ t('settings.test') }}</Button>
-          <p v-if="settings.priceMissing(role)" class="text-sm font-medium sm:col-span-4" role="status" data-testid="role-price-missing">
+          <p v-if="settings.priceMissing(role)" class="text-sm font-medium sym-error sm:col-span-4" role="status" data-testid="role-price-missing">
             {{ t('settings.models.price.roleMissing', { model: roles[role]!.model.trim() }) }}
           </p>
           <p
@@ -191,6 +191,9 @@ function setRole(name: (typeof LLM_ROLES)[number], field: 'provider' | 'model', 
 {{ validationLabel(roles[role]!.model) }}
 </p>
           <div class="sm:col-span-4"><TestOutcome :outcome="outcomes[role]" /></div>
+          <p v-if="settings.testPriceWarning(role)" class="text-sm font-medium sym-error sm:col-span-4" role="status" data-testid="role-test-price-missing">
+            {{ t('settings.models.price.testMissing', { model: roles[role]!.model.trim() }) }}
+          </p>
         </div>
       </div>
 

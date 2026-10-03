@@ -742,7 +742,8 @@
         "toValidate": "Prix à valider : aucun n'est connu pour ce modèle, saisis-le toi-même.",
         "incomplete": "Renseigne le prix en entrée et le prix en sortie d’un modèle, ou laisse les deux vides.",
         "invalid": "Un prix est un nombre, zéro ou plus.",
-        "roleMissing": "Renseigne le prix du modèle {model} dans le tableau ci-dessus : sans lui, aucune enquête ne peut tourner."
+        "roleMissing": "Renseigne le prix du modèle {model} dans le tableau ci-dessus : sans lui, aucune enquête ne peut tourner.",
+        "testMissing": "Le test a abouti, mais le modèle {model} n’a pas de prix : il ne sera pas appelé tant que tu ne l’as pas renseigné dans le tableau ci-dessus."
       }
     },
     "proxies": {

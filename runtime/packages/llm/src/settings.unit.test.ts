@@ -69,3 +69,18 @@ describe('llmConfigFromSettings', () => {
     await expect(llmConfigFromSettings(null, read)).rejects.toThrow(LlmSettingsError);
   });
 });
+
+describe('prix invalide (revue fix-ux-11, point 10)', () => {
+  const modelWith = async (price: unknown) => {
+    const settings = { ...SETTINGS, providers: [{ ...SETTINGS.providers[0]!, models: { 'glm-5.3': { price } } }] };
+    return (await llmConfigFromSettings(settings, read, ['extract'])).providers[0]?.models[0] as { price?: unknown };
+  };
+  it('un prix négatif, infini ou NaN est un prix absent, jamais 0', async () => {
+    for (const price of [{ in: -1, out: 2 }, { in: 1, out: -2 }, { in: 1, out: 2, in_cached: -0.1 }, { in: 1, out: 2, in_cache_write: -3 }, { in: Infinity, out: 2 }, { in: 1, out: Number.NaN }]) {
+      expect((await modelWith(price)).price).toBeUndefined();
+    }
+  });
+  it('un prix à 0 reste un prix valide (modèle local gratuit)', async () => {
+    expect((await modelWith({ in: 0, out: 0 })).price).toEqual({ in: 0, out: 0 });
+  });
+});

@@ -29,7 +29,7 @@ export const KNOWN_PRICES: readonly KnownModelPrice[] = [
   { model: 'claude-opus-5-5', provider: 'anthropic', status: 'to_validate', price: null, source: 'aucun prix relevé dans le dépôt' },
   { model: 'claude-sonnet-5-5', provider: 'anthropic', status: 'to_validate', price: null, source: 'aucun prix relevé dans le dépôt' },
   { model: 'claude-haiku-4-5', provider: 'anthropic', status: 'to_validate', price: null, source: 'aucun prix relevé dans le dépôt' },
-  { model: 'zai-org/GLM-5.3', provider: 'deepinfra', status: 'verified', price: { in: 0.563, out: 2.5, in_cached: 0.125 }, source: 'docs/adr/0001-agent-engine.md (prix saisi) et tests/agent/agent-live.security.test.ts (PROVIDERS.deepinfra)', as_of: '2026-10-01' },
+  { model: 'zai-org/GLM-5.3', provider: 'deepinfra', status: 'verified', price: { in: 0.9, out: 4, in_cached: 0.2 }, source: 'docs/adr/0001-agent-engine.md : prix CATALOGUE (champ pricing de deepinfra). Le prix affiché au 2026-10-01 (0,563 / 2,5 / 0,125, tests/agent/agent-live.security.test.ts) est remisé de 37,5 % temporairement : pré-remplir le catalogue ne sous-estime ni coût ni plafond une fois la remise finie', as_of: '2026-10-01' },
   { model: 'z-ai/glm-5.3-flash', provider: 'openrouter', status: 'verified', price: { in: 0.15, out: 0.5, in_cached: 0.04 }, source: 'tests/agent/agent-live.security.test.ts (PROVIDERS.openrouter)', as_of: '2026-10-01' },
 ];
 

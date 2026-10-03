@@ -15,6 +15,12 @@ describe('table des prix connus (UX-11)', () => {
     }
   });
 
+  it('zai-org/GLM-5.3 : prix catalogue (0,90 / 4 / 0,20), pas le prix remisé temporaire, remise citée dans la source', () => {
+    const entry = knownPriceOf('zai-org/GLM-5.3');
+    expect(entry?.price).toEqual({ in: 0.9, out: 4, in_cached: 0.2 });
+    expect(entry?.source).toContain('37,5 %');
+  });
+
   it('un modèle inconnu n’a pas d’entrée ; la recherche ignore la casse et les espaces autour', () => {
     expect(knownPriceOf('zz-modele-inconnu')).toBeNull();
     expect(knownPriceOf('  Claude-Opus-4-8 ')?.model).toBe('claude-opus-4-8');

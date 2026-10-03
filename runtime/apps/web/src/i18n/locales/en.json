@@ -742,7 +742,8 @@
         "toValidate": "Price to validate: none is known for this model, enter it yourself.",
         "incomplete": "Enter both the input and the output price of a model, or leave both empty.",
         "invalid": "A price must be a number, zero or more.",
-        "roleMissing": "Enter the price of model {model} in the table above: without it no investigation can run."
+        "roleMissing": "Enter the price of model {model} in the table above: without it no investigation can run.",
+        "testMissing": "The test passed, but model {model} has no price: it cannot be called until you enter it in the table above."
       }
     },
     "proxies": {
