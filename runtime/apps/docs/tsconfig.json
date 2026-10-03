@@ -5,13 +5,16 @@
     "allowImportingTsExtensions": true,
     "lib": [
       "ES2024",
-      "DOM"
+      "DOM",
+      "DOM.Iterable"
     ],
     "declaration": false
   },
   "include": [
     "src",
     "scripts",
-    "content/.vitepress"
+    "content/.vitepress",
+    "e2e",
+    "playwright.config.ts"
   ]
 }

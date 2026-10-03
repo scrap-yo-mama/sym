@@ -100,4 +100,6 @@ describe("invariants (à implémenter)", () => {
   test.todo("assert_run_detail_error_open"); // 06 § 4.3 : écran Détail d'un run, confié à aucune tâche (ADR 0003 : 3.4 ou tâche nouvelle), E2E 3.6
   // 3.9 : assert_a11y_axe_clean, assert_keyboard_only_path, assert_live_regions_plan sont jugés en Chromium (apps/web/e2e/*.e2e.ts,
   // pnpm test:e2e) et leur couverture est gardée par apps/web/src/a11y.unit.test.ts ; 3.6 les rejoue sur l'instance réelle.
+  // 4.11 (V1.1) : le replay de la démo de la landing est écrit à la main en V1 ; sa génération depuis l'enregistrement d'enquête de la démo sans clé suit M2.
+  test.todo("assert_landing_demo_matches_recording"); // 22 § 2.4, V1.1
 });
