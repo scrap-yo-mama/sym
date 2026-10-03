@@ -57,6 +57,8 @@ export type SchedulingOptions = {
   smtpCa?: string[];
   /** Mode « SYM ne lâche pas » (D-49) : créneaux et plafonds lus au démarrage. */
   persistence: PersistencePolicy;
+  /** `USER_BUDGET_DAILY_USD` : budget USD par utilisateur et par jour, appliqué aux runs planifiés (08b § 3). */
+  userBudgetDailyUsd?: number;
   /** Mémoire négative (2.12) : indisponible tant qu'elle n'est pas branchée, le mode ne tente alors rien. */
   negativeMemory?: NegativeMemory;
 };
@@ -87,7 +89,7 @@ export async function startScheduling(options: SchedulingOptions): Promise<Sched
       return;
     }
     // `createdOn` : instant d'émission de l'occurrence par le cron (un job traité en retard garde son jour et son heure).
-    const outcome = await handleScheduledRun({ pool, queue, now, jobId: job.id, data, ...(job.createdOn ? { occurredAt: job.createdOn } : {}) });
+    const outcome = await handleScheduledRun({ pool, queue, now, jobId: job.id, data, ...(job.createdOn ? { occurredAt: job.createdOn } : {}), ...(options.userBudgetDailyUsd === undefined ? {} : { userBudgetDailyUsd: options.userBudgetDailyUsd }) });
     log.info({ scheduleId: data.schedule_id, ...outcome }, 'planification : déclenchement traité');
   };
   await queue.work<ScheduledRunJobData>(SCHEDULED_RUN_QUEUE, { concurrency: 2, ...polling }, onTrigger);

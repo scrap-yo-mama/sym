@@ -3,6 +3,7 @@
 import {
   loadKeyring,
   loadObservabilityConfig,
+  costCapsFromEnv,
   persistencePolicyFromEnv,
   scrubOtelEnvironment,
   subjectPhoneRegion,
@@ -51,6 +52,8 @@ export type WorkerConfig = {
   retentionTickSeconds: number;
   /** Mode « SYM ne lâche pas » (D-49) : `PERSISTENCE_SCHEDULE`, `PERSISTENCE_BUDGET_USD_DEFAULT`, `PERSISTENCE_MAX_DAYS`. */
   persistence: PersistencePolicy;
+  /** `USER_BUDGET_DAILY_USD` (défaut 50) : budget USD par utilisateur et par jour, appliqué aux runs planifiés (08b § 3). */
+  userBudgetDailyUsd: number;
 };
 
 function positive(env: NodeJS.ProcessEnv, name: string, fallback: number, min = 0.1): number {
@@ -79,9 +82,11 @@ export function loadWorkerConfig(env: NodeJS.ProcessEnv = process.env): WorkerCo
   if (!['true', 'false', '1', '0', ''].includes(disable)) throw new WorkerConfigError('DISABLE_BROWSER invalide : true ou false attendu.');
   let retention: RetentionPolicy;
   let persistence: PersistencePolicy;
+  let userBudgetDailyUsd: number;
   try {
     retention = retentionPolicyFromEnv(env);
     persistence = persistencePolicyFromEnv(env);
+    userBudgetDailyUsd = costCapsFromEnv(env).userBudgetDailyUsd;
     subjectPhoneRegion(env); // PHONE_DEFAULT_REGION : téléphones des sujets en E.164 (D-25), validée au démarrage
   } catch (error) {
     throw new WorkerConfigError((error as Error).message);
@@ -110,5 +115,6 @@ export function loadWorkerConfig(env: NodeJS.ProcessEnv = process.env): WorkerCo
     retention,
     retentionTickSeconds: positive(env, 'RETENTION_TICK_SECONDS', 300),
     persistence,
+    userBudgetDailyUsd,
   };
 }

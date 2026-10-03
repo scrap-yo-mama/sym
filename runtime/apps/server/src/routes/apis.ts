@@ -379,6 +379,9 @@ export function apiRoutes(app: FastifyInstance, ctx: ServerContext): void {
       return sendError(reply, 409, 'draft_required', 'un schéma se modifie par un brouillon puis une promotion (itération), jamais en place');
     }
     if (body.visibility === 'instance' && api.requires_session) return sendError(reply, 400, 'session_api_private', 'une API à session reste privée');
+    // Plafonds d'instance (08b § 3, PA-02) : le membre ne les dépasse pas en fixant les siens.
+    if ((body.max_cost_usd ?? 0) > ctx.rest.maxCostUsdPerRun) return sendError(reply, 400, 'cost_cap_exceeded', `max_cost_usd dépasse le plafond de l’instance (${ctx.rest.maxCostUsdPerRun} $ par run)`);
+    if ((body.budget_daily_usd ?? 0) > ctx.rest.userBudgetDailyUsd) return sendError(reply, 400, 'cost_cap_exceeded', `budget_daily_usd dépasse le plafond de l’instance (${ctx.rest.userBudgetDailyUsd} $ par jour)`);
     let policy: Record<string, unknown> | undefined;
     try {
       if (body.network_policy) policy = await checkNetworkPolicy(ctx, body.network_policy);

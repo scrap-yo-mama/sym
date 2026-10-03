@@ -646,3 +646,18 @@ export async function beatWorker(db: Queryable, beat: WorkerBeat): Promise<void>
 export async function removeWorkerBeat(db: Queryable, workerId: string): Promise<void> {
   await db.query('DELETE FROM worker_heartbeats WHERE worker_id = $1', [workerId]);
 }
+
+/**
+ * Dépense du jour (UTC) d'un utilisateur : coûts LLM et proxy de TOUS ses runs créés depuis minuit UTC (runs, enquêtes,
+ * validations, planifications ; les coûts des essais en cours y sont déjà versés, `recordAttempt`). Base du budget USD
+ * par utilisateur et par jour (08b § 3, `assert_budget_usd_daily`). Sous `withActor`, la RLS limite déjà aux runs de
+ * l'acteur ; le filtre `owner_id` reste explicite pour la connexion système (planificateur).
+ */
+export async function userSpentTodayUsd(tx: Queryable, userId: string, now: Date = new Date()): Promise<number> {
+  const { rows } = await tx.query<{ spent: string }>(
+    `SELECT coalesce(sum(cost_llm_usd + cost_proxy_usd), 0)::text AS spent FROM runs
+     WHERE owner_id = $1 AND created_at >= date_trunc('day', $2::timestamptz AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'`,
+    [userId, now],
+  );
+  return Number(rows[0]?.spent ?? 0);
+}
