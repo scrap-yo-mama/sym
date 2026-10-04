@@ -12,7 +12,7 @@ import type { Document } from 'domhandler';
 import { decodeEmbedded, type BlobKind, type BlobLocator } from '../dsl/blobs.js';
 import { elementAttribute, parseHtml, selectElements } from '../dsl/css.js';
 import { DEFAULT_DSL_LIMITS, type DslLimits } from '../dsl/limits.js';
-import { analyzeDom, slotDescription, type DomPagination, type DomSlot } from './dom.js';
+import { analyzeDomBlocks, DOM_MIN_BLOCKS, slotDescription, type DomBlocks, type DomPagination, type DomSlot } from './dom.js';
 import { narrativeUrl } from './events.js';
 
 /** Un échange capturé pendant la reconnaissance (requête de données de la page, ou sonde statique). */
@@ -41,6 +41,11 @@ export type ReconCapture = {
   readonly assets?: { readonly hosts: number; readonly requests: number };
   /** Réponses de données (fetch, XHR) d'un domaine de l'API vues par la passe navigateur, capturées, écartées par raison (codes). */
   readonly data?: { readonly seen: number; readonly captured: number; readonly skipped: Readonly<Record<string, number>> };
+  /**
+   * Bouton « charger plus » cliqué par la passe navigateur (R13) : sélecteur vérifié ; les réponses XHR qu'il a déclenchées
+   * (fragments HTML compris) sont dans `exchanges`.
+   */
+  readonly loadMore?: { readonly clicked: boolean; readonly selector: string };
 };
 
 /** Squelette d'un enregistrement : chemin relatif (`$.a.b`) → type JSON. Aucune valeur. */
@@ -52,6 +57,8 @@ export type DomCandidateInfo = {
   readonly pagination: DomPagination | null;
   /** Bloc lu dans le DOM RENDU par Chromium (absent du document servi) : E1 ne le verra pas, E3 si. */
   readonly rendered: boolean;
+  /** Rôle du bloc (R13) : carrousel (pénalisé) ou liste de résultats. */
+  readonly hints?: DomBlocks['hints'];
 };
 
 export type DataCandidate = {
@@ -72,6 +79,11 @@ export type DataCandidate = {
   readonly unsupported?: 'client_signature';
   /** Gisement `dom` : emplacements (clés `$.<nom>` du squelette) et pagination détectés par le code. */
   readonly dom?: DomCandidateInfo;
+  /**
+   * Compteur de résultats affiché par la page (R13 : « 6197 annonces ») : contrôle de complétude d'un essai et plafond dur de
+   * pages à sa mesure. Absent d'un carrousel.
+   */
+  readonly counter?: number;
 };
 
 /** Nombre de gisements gardés au plus (les plus gros tableaux d'abord). */
@@ -352,27 +364,78 @@ export function analyzeCapture(capture: ReconCapture, allowedHosts: readonly str
         }
       }
     }
-    // Blocs répétés du DOM (04b §2, troisième source) : document servi d'abord (E1 le lit tel quel), sinon DOM rendu.
-    const served = analyzeDom(doc.html, doc.url, limits);
-    const rendered = served === null && doc.renderedHtml !== null ? analyzeDom(doc.renderedHtml, doc.url, limits) : null;
-    const dom = served ?? rendered;
-    if (dom !== null) {
+    // Blocs répétés du DOM (04b §2, troisième source) : document servi d'abord (E1 le lit tel quel), puis les blocs du DOM
+    // RENDU absents du document servi (E2, E3), au plus 3 (R13 : un carrousel « Nouveautés » servi et la liste de résultats
+    // rendue après un XHR). Liste de résultats avant carrousel ; compteur de résultats affiché et pagination par bouton
+    // « charger plus » (fragment HTML capturé après le clic) portés par chaque bloc qui n'est pas un carrousel.
+    const served = analyzeDomBlocks(doc.html, doc.url, limits);
+    const rendered = doc.renderedHtml !== null && doc.renderedHtml !== doc.html ? analyzeDomBlocks(doc.renderedHtml, doc.url, limits) : null;
+    const counter = served?.counter ?? rendered?.counter ?? null;
+    const blocks = [
+      ...(served?.blocks ?? []).map((b) => ({ b, rendered: false })),
+      ...(rendered?.blocks ?? []).filter((b) => !(served?.blocks ?? []).some((s) => s.records === b.records)).map((b) => ({ b, rendered: true })),
+    ]
+      .sort((x, y) => Number(x.b.hints?.carousel === true) - Number(y.b.hints?.carousel === true) || Number(y.b.hints?.results === true) - Number(x.b.hints?.results === true))
+      .slice(0, 3);
+    for (const { b, rendered: fromRendered } of blocks) {
+      const carousel = b.hints?.carousel === true;
+      const loadMore = carousel ? null : loadMorePagination(capture, b.records, b.count, docHost, limits);
+      const { pagination: own, ...block } = b;
       candidates.push({
         from: 'dom',
         request: { method: 'GET', url: doc.url },
         host: docHost,
-        records: dom.blocks.records,
-        count: dom.blocks.count,
+        records: block.records,
+        count: block.count,
         bytes: doc.bytes,
-        skeleton: Object.fromEntries(dom.blocks.slots.map((slot) => [`$.${slot.name}`, slotDescription(slot, dom.blocks.count)])),
-        dom: { slots: dom.blocks.slots, pagination: dom.pagination, rendered: served === null },
+        skeleton: Object.fromEntries(block.slots.map((slot) => [`$.${slot.name}`, slotDescription(slot, block.count)])),
+        dom: { slots: block.slots, pagination: loadMore ?? own, rendered: fromRendered, ...(block.hints === undefined ? {} : { hints: block.hints }) },
+        ...(carousel || counter === null ? {} : { counter }),
       });
     }
   }
-  // Le bloc du DOM garde sa place même derrière beaucoup de réponses JSON : il est la seule voie sans LLM d'une liste HTML.
-  const domIndex = candidates.findIndex((c) => c.from === 'dom');
-  const kept = domIndex < MAX_CANDIDATES ? candidates.slice(0, MAX_CANDIDATES) : [...candidates.slice(0, MAX_CANDIDATES - 1), candidates[domIndex]!];
+  // Les blocs du DOM gardent leur place même derrière beaucoup de réponses JSON : ils sont la seule voie sans LLM d'une liste HTML.
+  const dom = candidates.filter((c) => c.from === 'dom');
+  const others = candidates.filter((c) => c.from !== 'dom');
+  const kept = [...others.slice(0, Math.max(0, MAX_CANDIDATES - dom.length)), ...dom].slice(0, MAX_CANDIDATES);
   return kept.map((c, i) => ({ id: `c${i + 1}`, ...c }));
+}
+
+/** Paramètre entier d'une URL de « charger plus » qui vaut le nombre de cartes de la page 1 (décalage) ou 2 (numéro de page). */
+const PAGE_PARAM_NAME = /^[A-Za-z0-9_.-]{1,64}$/;
+
+/**
+ * Pagination par bouton « charger plus » (R13) : après le clic de la reconnaissance, une réponse XHR GET du même hôte dont le
+ * corps est un fragment HTML où le sélecteur des enregistrements trouve des cartes ; son paramètre entier qui vaut le nombre
+ * de cartes de la page 1 est un décalage (`begin=24` : départ 0, pas de 24), celui qui vaut 2 un numéro de page. La page 1
+ * reste la page, les suivantes cette URL (`next_url`, paramètre remis au départ). `null` sinon.
+ */
+function loadMorePagination(capture: ReconCapture, records: string, count: number, host: string, limits: DslLimits): DomPagination | null {
+  if (capture.loadMore?.clicked !== true) return null;
+  for (const exchange of capture.exchanges) {
+    if (exchange.method.toUpperCase() !== 'GET' || exchange.status < 200 || exchange.status >= 300 || !/html/i.test(exchange.contentType) || hostOf(exchange.url) !== host) continue;
+    let found: number;
+    try {
+      found = selectElements(records, parseHtml(exchange.body, limits), 10_000).length;
+    } catch {
+      continue;
+    }
+    if (found < DOM_MIN_BLOCKS && found < count) continue;
+    const url = new URL(exchange.url);
+    for (const [name, value] of url.searchParams) {
+      if (!PAGE_PARAM_NAME.test(name) || !/^\d{1,7}$/.test(value)) continue;
+      const n = Number(value);
+      if (n === count) {
+        url.searchParams.set(name, '0');
+        return { type: 'offset', param: `url.query.${name}`, start: 0, step: count, last: null, next_url: url.href };
+      }
+      if (n === 2) {
+        url.searchParams.set(name, '1');
+        return { type: 'page_param', param: `url.query.${name}`, start: 1, last: null, next_url: url.href };
+      }
+    }
+  }
+  return null;
 }
 
 const SCRIPT_URL_PATTERNS: readonly RegExp[] = [

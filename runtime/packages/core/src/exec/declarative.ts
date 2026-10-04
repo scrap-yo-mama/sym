@@ -224,10 +224,19 @@ export async function runDeclarative(options: DeclarativeRunOptions): Promise<De
       ctx.page = { number: state.pages + 1, offset: state.received, ...(param === undefined ? {} : { value: param.value }), ...(state.cursor === null ? {} : { cursor: state.cursor }) };
       let request = nextUrl === undefined ? renderRequest(spec.request, allowed, ctx) : { ...renderRequest(spec.request, allowed, ctx), method: 'GET' as const, url: nextUrl, body: undefined };
       if (nextUrl === undefined && param !== undefined) {
-        request =
-          param.at === 'url.path' && pagination?.path_pattern !== undefined
-            ? applyPathPattern(request, pagination.path_pattern, param.value, pagination.start ?? 1)
-            : applyParamAt(request, param.at, param.value);
+        if (pagination?.next_url !== undefined) {
+          // Pages suivantes servies par une autre URL (R13, bouton « charger plus » en XHR) : la page 1 est la requête telle
+          // quelle, la page N l'URL des pages suivantes (GET, hôte revérifié contre allowed_hosts) avec le paramètre posé.
+          if (state.pages >= 1) {
+            const next = renderRequest({ method: 'GET', url: pagination.next_url, ...(spec.request.headers === undefined ? {} : { headers: spec.request.headers }) }, allowed, ctx);
+            request = applyParamAt(next, param.at, param.value);
+          }
+        } else {
+          request =
+            param.at === 'url.path' && pagination?.path_pattern !== undefined
+              ? applyPathPattern(request, pagination.path_pattern, param.value, pagination.start ?? 1)
+              : applyParamAt(request, param.at, param.value);
+        }
       }
       if (request.body === undefined) delete (request as { body?: unknown }).body;
 

@@ -10,7 +10,7 @@
 // Fonctions pures, sans I/O.
 import { extractRecords } from '../dsl/extract.js';
 import type { BlobLocator } from '../dsl/blobs.js';
-import { validateDeclarativeSpec, type DeclarativeSpec, type PaginationSpec, type StopCondition } from '../dsl/spec.js';
+import { HARD_MAX_PAGES_LIMIT, validateDeclarativeSpec, type DeclarativeSpec, type PaginationSpec, type StopCondition } from '../dsl/spec.js';
 import { assertSchemaAcceptable, DRAFT_2020_12, SchemaError, validateOutput } from '../schema/validator.js';
 import { classValueOps, HTML_LIST_HARD_MAX_PAGES, type DomPagination, type DomSlot } from './dom.js';
 import type { DataCandidate, ReconCapture } from './recon.js';
@@ -218,6 +218,10 @@ function domField(slot: DomSlot, type: string, required: boolean, proposed: read
   // Liste (étiquettes) : tous les éléments du sélecteur, chacun nettoyé.
   if (type === 'array') return { ...(slot.css === null ? {} : { css: slot.css }), attr: slot.attr, ...(slot.up === undefined ? {} : { up: slot.up }), type, reduce: 'all', ...(required ? { required: true } : {}), ops: ['collapse_spaces', 'trim'] };
   const ops: (string | Record<string, unknown>)[] = ['collapse_spaces', 'trim'];
+  // Partie d'un texte composé (« À vendre Maison | Mougins », R13) : le code coupe au séparateur et retire le libellé de tête.
+  if (slot.part !== undefined) ops.push(...partOps(slot.part));
+  // Préfixe technique d'un identifiant (« carousel-APM-… », R13) : retiré par le code.
+  if (slot.strip !== undefined) ops.push({ op: 'regex_extract', pattern: `${slot.strip}(.+)`, group: 1 });
   if (type === 'number' || type === 'integer') {
     ops.push({ op: 'regex_extract', pattern: FIRST_NUMBER, group: 0 }, 'trim', { op: type === 'number' ? 'to_number' : 'to_integer', decimal: slot.decimal });
   } else if (type === 'boolean') {
@@ -232,24 +236,42 @@ function domField(slot: DomSlot, type: string, required: boolean, proposed: read
   return { ...(slot.css === null ? {} : { css: slot.css }), attr: slot.attr, ...(slot.up === undefined ? {} : { up: slot.up }), type, ...(required ? { required: true } : {}), ops };
 }
 
+/** Opérateurs d'une partie de texte composé : I-Regexp, séparateur échappé, libellé de tête (lettres et espaces) retiré. */
+function partOps(part: NonNullable<DomSlot['part']>): Record<string, unknown>[] {
+  const sep = part.sep === '|' ? '\\|' : part.sep;
+  const notSep = part.sep === '|' ? '[^\\|]+' : `[^${part.sep}]+`;
+  const pattern = part.index === 1 ? `${sep}(.+)` : part.lead !== undefined ? `${part.lead} (${notSep})` : `(${notSep})`;
+  return [{ op: 'regex_extract', pattern, group: 1 }, { op: 'trim' }];
+}
+
 /**
  * Pagination déclarative d'une liste HTML, détectée par le CODE (jamais proposée par le LLM) : numéro dans le chemin ou
  * paramètre de page, décalage, ou lien `rel=next`. Règles d'arrêt : page vide (`records_empty`), et dans l'exécuteur page
  * 404 ou page déjà vue (`no_next`) ; plafond dur `HTML_LIST_HARD_MAX_PAGES`.
  */
-function domPaginationOf(p: DomPagination | null): { pagination?: PaginationSpec; param?: string } {
+function domPaginationOf(p: DomPagination | null, size: { readonly counter?: number; readonly count?: number } = {}): { pagination?: PaginationSpec; param?: string } {
   if (p === null) return {};
-  const limits = { max_pages_input: 'input.max_pages', hard_max_pages: HTML_LIST_HARD_MAX_PAGES };
+  const limits = { max_pages_input: 'input.max_pages', hard_max_pages: hardMaxPagesFor(size.counter, size.count) };
+  const next = 'next_url' in p && p.next_url !== undefined ? { next_url: p.next_url } : {};
   switch (p.type) {
     case 'page_param':
       return 'path_pattern' in p
         ? { pagination: { type: 'page_param', param: 'url.path', path_pattern: p.path_pattern, start: p.start, stop: [{ when: 'records_empty' }], limits }, param: 'url.path' }
-        : { pagination: { type: 'page_param', param: p.param, start: p.start, stop: [{ when: 'records_empty' }], limits }, param: p.param };
+        : { pagination: { type: 'page_param', param: p.param, start: p.start, ...next, stop: [{ when: 'records_empty' }], limits }, param: p.param };
     case 'offset':
-      return { pagination: { type: 'offset', param: p.param, start: p.start, step: p.step, stop: [{ when: 'records_empty' }], limits }, param: p.param };
+      return { pagination: { type: 'offset', param: p.param, start: p.start, step: p.step, ...next, stop: [{ when: 'records_empty' }], limits }, param: p.param };
     case 'next_link':
       return { pagination: { type: 'next_link', stop: [{ when: 'records_empty' }, { when: 'repeated_cursor' }], limits } };
   }
+}
+
+/**
+ * Plafond dur de pages d'une liste HTML (04b §2) : `HTML_LIST_HARD_MAX_PAGES`, ou, quand la page affiche un compteur de
+ * résultats (R13 : « 6197 annonces » à 24 par page), le nombre de pages qu'il annonce plus une marge, borné par le format.
+ */
+export function hardMaxPagesFor(counter: number | undefined, perPage: number | undefined): number {
+  if (counter === undefined || perPage === undefined || perPage <= 0) return HTML_LIST_HARD_MAX_PAGES;
+  return Math.min(HARD_MAX_PAGES_LIMIT, Math.max(HTML_LIST_HARD_MAX_PAGES, Math.ceil(counter / perPage) + 5));
 }
 
 /**
@@ -393,7 +415,7 @@ export function buildFromProposal(
       rejected.push({ candidate: candidate.id, reason: 'no_known_slot' });
       continue;
     }
-    const { pagination, param } = dom !== undefined ? domPaginationOf(dom.pagination) : paginationOf(source.pagination);
+    const { pagination, param } = dom !== undefined ? domPaginationOf(dom.pagination, { ...(candidate.counter === undefined ? {} : { counter: candidate.counter }), count: candidate.count }) : paginationOf(source.pagination);
     const request: Record<string, unknown> = {
       method: candidate.request.method,
       url: candidate.request.url,

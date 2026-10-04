@@ -220,7 +220,7 @@ describe('validation à l\'enregistrement', () => {
     expect(errors(p({ type: 'page_param', param: 'url.query.page', stop: [{ when: 'records_empty' }], limits: { hard_max_pages: 10 } }))).toEqual([]);
     expect(errors(p({ type: 'page_param', param: 'url.query.autre', stop: [{ when: 'records_empty' }], limits: { hard_max_pages: 10 } }))).toContain('param_not_declared');
     expect(errors(p({ type: 'none' }))).toEqual([]);
-    expect(errors(p({ type: 'cursor', param: 'url.query.page', stop: [{ when: 'records_empty' }], limits: { hard_max_pages: 500 } }))).toContain('schema_maximum');
+    expect(errors(p({ type: 'cursor', param: 'url.query.page', stop: [{ when: 'records_empty' }], limits: { hard_max_pages: 1500 } }))).toContain('schema_maximum');
   });
 });
 

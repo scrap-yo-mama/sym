@@ -9,6 +9,12 @@ import { compileJsonPath } from './jsonpath.js';
 import { compileOperators, OPERATOR_NAMES, type OperatorSpec } from './operators.js';
 
 export const SPEC_SCHEMA_VERSION = 1;
+/**
+ * Borne du format pour `pagination.limits.hard_max_pages` (04b §2). 1000 depuis R13 (liste de 6197 biens à 24 par page :
+ * 259 pages) ; le plafond de requêtes d'un run (`domain_pacing.max_requests_per_run`) et la cadence du domaine tiennent la
+ * charge, la borne ne fait que garantir l'arrêt.
+ */
+export const HARD_MAX_PAGES_LIMIT = 1000;
 
 export type FieldType = 'string' | 'number' | 'integer' | 'boolean' | 'array' | 'object';
 export type SourceFrom = 'response' | 'html' | 'embedded';
@@ -84,6 +90,12 @@ export interface PaginationSpec {
    */
   path_pattern?: string;
   next_path?: string;
+  /**
+   * URL des pages SUIVANTES quand elles ne sont pas servies par la requête de la page 1 (R13 : bouton « charger plus » qui
+   * charge un fragment HTML en XHR, `viewAjax.php?…&begin=24`) : la page 1 est `request`, la page N cette URL (GET, même
+   * hôte, dans `allowed_hosts`) avec le paramètre de pagination posé. `page_param` et `offset` sur `url.query.*` seulement.
+   */
+  next_url?: string;
   start?: number;
   step?: number | 'items_received';
   stop?: StopCondition[];
@@ -281,6 +293,7 @@ export const DECLARATIVE_SPEC_SCHEMA = {
         param: POINTER_LIKE,
         path_pattern: { type: 'string', maxLength: 500, pattern: '^/[^?#{}\\s]*\\{page\\}[^?#{}\\s]*$' },
         next_path: PATH,
+        next_url: { type: 'string', pattern: '^https?://', maxLength: 2000 },
         start: { type: 'integer', minimum: 0, maximum: 1_000_000 },
         step: { oneOf: [{ type: 'integer', minimum: 1, maximum: 10_000 }, { const: 'items_received' }] },
         stop: {
@@ -298,7 +311,7 @@ export const DECLARATIVE_SPEC_SCHEMA = {
         limits: {
           type: 'object',
           additionalProperties: false,
-          properties: { max_pages_input: { type: 'string', pattern: '^input\\.[A-Za-z_][A-Za-z0-9_]{0,63}$' }, hard_max_pages: { type: 'integer', minimum: 1, maximum: 200 } },
+          properties: { max_pages_input: { type: 'string', pattern: '^input\\.[A-Za-z_][A-Za-z0-9_]{0,63}$' }, hard_max_pages: { type: 'integer', minimum: 1, maximum: HARD_MAX_PAGES_LIMIT } },
         },
       },
     },
@@ -500,6 +513,16 @@ function checkPagination(spec: DeclarativeSpec, issues: SpecIssue[]): void {
   if ((p.type === 'page_param' || p.type === 'offset' || p.type === 'cursor') && p.param === undefined) issues.push({ path: '/pagination/param', code: 'param_required', message: 'param obligatoire' });
   if (p.type === 'cursor' && p.next_path === undefined) issues.push({ path: '/pagination/next_path', code: 'next_path_required', message: 'next_path obligatoire' });
   if (p.next_path !== undefined) tryCompile(() => compileJsonPath(p.next_path as string), '/pagination/next_path', issues);
+  if (p.next_url !== undefined) {
+    let host: string | null;
+    try {
+      host = new URL(p.next_url).hostname.toLowerCase();
+    } catch {
+      host = null;
+    }
+    if ((p.type !== 'page_param' && p.type !== 'offset') || p.param === undefined || !p.param.startsWith('url.query.')) issues.push({ path: '/pagination/next_url', code: 'param_not_applicable', message: 'next_url ne vaut que pour page_param ou offset sur url.query.*' });
+    if (host === null || !spec.request.allowed_hosts.map((h) => h.toLowerCase()).includes(host)) issues.push({ path: '/pagination/next_url', code: 'host_not_allowed', message: 'next_url : hôte absent de allowed_hosts' });
+  }
   for (const [i, stop] of (p.stop ?? []).entries()) {
     if ('path' in stop) tryCompile(() => compileJsonPath(stop.path), `/pagination/stop/${i}/path`, issues);
     if (stop.when === 'repeated_cursor' && p.type !== 'cursor' && p.type !== 'next_link') issues.push({ path: `/pagination/stop/${i}`, code: 'stop_not_applicable', message: 'repeated_cursor ne vaut que pour cursor et next_link' });
