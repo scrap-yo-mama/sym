@@ -20,6 +20,7 @@ export const OPERATOR_NAMES = [
   'join',
   'first',
   'count',
+  'url_template',
 ] as const;
 export type OperatorName = (typeof OPERATOR_NAMES)[number];
 
@@ -36,6 +37,26 @@ export interface CompiledOperator {
 const MAX_OPERATORS_PER_FIELD = 16;
 const MAX_MAP_ENTRIES = 200;
 const MAX_JOIN_SEPARATOR = 20;
+const MAX_URL_TEMPLATE = 500;
+const URL_PLACEHOLDER = '{value}';
+const URL_SENTINEL = 'zz-value-zz';
+
+/**
+ * Modèle d'URL de `url_template` : http(s), un seul `{value}`, jamais dans l'hôte (l'identifiant ne peut pas changer de
+ * serveur), aucun identifiant de connexion. Rend l'URL de contrôle (avec une valeur sentinelle). L'hôte doit encore figurer
+ * dans `allowed_hosts` (vérifié à l'enregistrement de la spécification, spec.ts).
+ */
+export function parseUrlTemplate(template: unknown): URL | undefined {
+  if (typeof template !== 'string' || template.length > MAX_URL_TEMPLATE || template.split(URL_PLACEHOLDER).length !== 2) return undefined;
+  const authority = template.replace(/^https?:\/\//i, '').split(/[/?#]/, 1)[0] ?? '';
+  if (authority.includes('{') || authority.includes('}') || !/^https?:\/\//i.test(template)) return undefined;
+  try {
+    const url = new URL(template.replace(URL_PLACEHOLDER, URL_SENTINEL));
+    return url.username === '' && url.password === '' && (url.protocol === 'http:' || url.protocol === 'https:') ? url : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 const ALLOWED_OPTIONS: Record<OperatorName, readonly string[]> = {
   trim: [], lower: [], upper: [], collapse_spaces: [], to_boolean: [], first: [], count: [],
@@ -47,6 +68,7 @@ const ALLOWED_OPTIONS: Record<OperatorName, readonly string[]> = {
   default: ['value'],
   map_value: ['table', 'default'],
   join: ['separator'],
+  url_template: ['template'],
 };
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -118,6 +140,9 @@ function validateOptions(name: OperatorName, o: Record<string, unknown>, index: 
       if (o['default'] !== undefined && !isScalar(o['default'])) bad('invalid_spec', `${where} : default scalaire`);
       break;
     }
+    case 'url_template':
+      if (parseUrlTemplate(o['template']) === undefined) bad('invalid_spec', `${where} : template http(s) avec un seul {value}, hors de l'hôte`);
+      break;
     case 'join':
       if (o['separator'] !== undefined && (typeof o['separator'] !== 'string' || o['separator'].length > MAX_JOIN_SEPARATOR)) {
         bad('invalid_spec', `${where} : separator chaîne de ${MAX_JOIN_SEPARATOR} caractères au plus`);
@@ -240,6 +265,11 @@ function applyScalar(op: CompiledOperator, v: unknown): unknown {
       return parseDate(v, (o['format'] as DateFormat | undefined) ?? 'iso');
     case 'abs_url':
       return absUrl(v, o['base'] as string);
+    case 'url_template': {
+      const id = typeof v === 'string' ? v : typeof v === 'number' && Number.isFinite(v) ? String(v) : fail('url_template', 'identifiant scalaire attendu');
+      if (id === '' || id.length > 200) fail('url_template', 'identifiant vide ou trop long');
+      return (o['template'] as string).replace(URL_PLACEHOLDER, encodeURIComponent(id));
+    }
     case 'regex_extract': {
       const hit = regexExtract(needString('regex_extract', v), o['pattern'] as string, (o['group'] as number | undefined) ?? 0);
       return hit === undefined ? fail('regex_extract', 'aucun appariement') : hit;

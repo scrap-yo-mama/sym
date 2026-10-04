@@ -72,7 +72,30 @@ export type DataCandidate = {
   readonly unsupported?: 'client_signature';
   /** Gisement `dom` : emplacements (clés `$.<nom>` du squelette) et pagination détectés par le code. */
   readonly dom?: DomCandidateInfo;
+  /** Gisement `response` : jointures vers d'autres tableaux de la même réponse, trouvées par le code (clés `<local>~<champ>` du squelette). */
+  readonly joins?: readonly CandidateJoin[];
+  /** Gisement `response` : URL de fiche déduite des liens de la page et d'un identifiant (clé `<local>^url` du squelette). */
+  readonly urls?: readonly CandidateUrl[];
 };
+
+/**
+ * Jointure d'un gisement (banc réel R05 : offres et équipes dans la même réponse GraphQL). `local` : chemin de la clé de
+ * liaison dans un enregistrement (`$.teamId`) ; `from` : tableau joint ; `key` : sa clé (`$.id`) ; `take` : champs lisibles
+ * de l'enregistrement joint, avec leur type ; `parent` : clé de son parent dans le même tableau (`$.parentTeamId`).
+ * Squelette : `<local>~<champ>` et, avec `parent`, `<local>~parent~<champ>`.
+ */
+export type CandidateJoin = {
+  readonly local: string;
+  readonly from: string;
+  readonly key: string;
+  readonly take: Readonly<Record<string, string>>;
+  readonly parent?: string;
+};
+
+/** URL de fiche (`<local>^url`) : `template` porte un seul `{value}`, l'identifiant de `local` ; hôte = hôte du gisement. */
+export type CandidateUrl = { readonly local: string; readonly template: string };
+
+export const JOIN_PARENT_SEGMENT = '~parent~';
 
 /** Nombre de gisements gardés au plus (les plus gros tableaux d'abord). */
 export const MAX_CANDIDATES = 8;
@@ -133,7 +156,7 @@ export function recordSkeleton(record: unknown): RecordSkeleton {
   return out;
 }
 
-type FoundArray = { path: string; count: number; first: Record<string, unknown> };
+type FoundArray = { path: string; count: number; first: Record<string, unknown>; items: Record<string, unknown>[] };
 
 /**
  * Tableaux d'objets d'un document JSON (enregistrements possibles), les plus longs d'abord. Une clé non sûre
@@ -148,7 +171,12 @@ export function findRecordArrays(root: unknown, max = MAX_ARRAYS_PER_SOURCE): Fo
     if (visited > 20_000 || depth > MAX_WALK_DEPTH) return;
     if (Array.isArray(value)) {
       const objects = value.filter(isRecord);
-      if (objects.length > 0 && objects.length >= value.length / 2) found.push({ path: `${path}[*]`, count: objects.length, first: objects[0]! });
+      if (objects.length > 0 && objects.length >= value.length / 2) {
+      const entry: FoundArray = { path: `${path}[*]`, count: objects.length, first: objects[0]!, items: [] };
+      // Enregistrements gardés hors de la forme énumérable (jointures seulement) : les comparaisons de la forme restent inchangées.
+      Object.defineProperty(entry, 'items', { value: objects, enumerable: false });
+      found.push(entry);
+      }
       // Un tableau d'enregistrements n'est pas parcouru plus loin (ses sous-tableaux seraient des champs).
       if (objects.length > 0) return;
       value.slice(0, 50).forEach((child, i) => walk(child, `${path}[${i}]`, depth + 1));
@@ -158,6 +186,123 @@ export function findRecordArrays(root: unknown, max = MAX_ARRAYS_PER_SOURCE): Fo
   };
   walk(root, '$', 0);
   return found.sort((a, b) => b.count - a.count).slice(0, max);
+}
+
+const LINK_KEY = /(?:^|_)id$|[a-z0-9]Id$|[a-z0-9]ID$/;
+const MAX_JOINS = 6;
+const MAX_JOIN_FIELDS = 6;
+
+const scalarKey = (v: unknown): string | undefined => (typeof v === 'string' && v !== '' ? v : typeof v === 'number' && Number.isFinite(v) ? String(v) : undefined);
+
+/**
+ * Jointures d'un tableau d'enregistrements avec les AUTRES tableaux de la même réponse (banc réel R05, offres et équipes) :
+ * une clé de liaison (`teamId`, `department_id`) dont (presque) toutes les valeurs sont des identifiants (`id`) d'un autre
+ * tableau. Le code n'expose au LLM que des chemins virtuels du squelette (`$.teamId~name`), jamais une valeur ; il construit
+ * lui-même la jointure (`join` de la stratégie déclarative). Les clés de liaison sont des noms en `…Id` / `…_id` ; un tableau
+ * lié à lui-même n'est pas joint. `urls` : l'identifiant d'un enregistrement se retrouve dans les liens de la page (même hôte) :
+ * le modèle d'URL en est déduit (`https://hôte/chemin/{value}`), jamais inventé.
+ */
+export function detectJoins(
+  found: FoundArray,
+  arrays: readonly FoundArray[],
+  capture: ReconCapture,
+  host: string,
+  allowedHosts: ReadonlySet<string>,
+): { joins: CandidateJoin[]; urls: CandidateUrl[]; skeleton: Record<string, string> } {
+  const joins: CandidateJoin[] = [];
+  const urls: CandidateUrl[] = [];
+  const skeleton: Record<string, string> = {};
+  for (const [key, sample] of Object.entries(found.first)) {
+    if (!isSafeKey(key) || scalarKey(sample) === undefined || !LINK_KEY.test(key) || joins.length >= MAX_JOINS) continue;
+    const values = found.items.map((r) => scalarKey(r[key]));
+    const present = values.filter((v): v is string => v !== undefined);
+    if (present.length === 0) continue;
+    for (const other of arrays) {
+      if (other.path === found.path || !('id' in other.first) || key === 'id') continue;
+      const index = new Map<string, Record<string, unknown>>();
+      for (const item of other.items) {
+        const id = scalarKey(item['id']);
+        if (id !== undefined && !index.has(id)) index.set(id, item);
+      }
+      const matched = present.filter((v) => index.has(v)).length;
+      if (matched === 0 || matched < present.length * 0.8) continue;
+      const take: Record<string, string> = {};
+      for (const [k, v] of Object.entries(other.first)) {
+        if (!isSafeKey(k) || k === 'id' || LINK_KEY.test(k) || !['string', 'number', 'integer', 'boolean'].includes(jsonType(v)) || Object.keys(take).length >= MAX_JOIN_FIELDS) continue;
+        take[k] = jsonType(v);
+      }
+      // Parent dans le même tableau : une clé dont les valeurs non nulles sont toutes des identifiants du tableau (équipe → département).
+      let parent: string | undefined;
+      for (const [k, v] of Object.entries(other.first)) {
+        if (!isSafeKey(k) || k === 'id' || (scalarKey(v) === undefined && v !== null)) continue;
+        const refs = other.items.map((r) => scalarKey(r[k])).filter((x): x is string => x !== undefined);
+        if (refs.length > 0 && refs.every((x) => index.has(x)) && LINK_KEY.test(k)) {
+          parent = k;
+          break;
+        }
+      }
+      if (Object.keys(take).length === 0) continue;
+      const local = '$' + pathSegment(key);
+      joins.push({ local, from: other.path, key: '$.id', take, ...(parent === undefined ? {} : { parent: '$' + pathSegment(parent) }) });
+      for (const [k, t] of Object.entries(take)) {
+        skeleton[`${local}~${k}`] = t;
+        if (parent !== undefined) skeleton[`${local}${JOIN_PARENT_SEGMENT}${k}`] = t;
+      }
+      break;
+    }
+  }
+  // URL de la fiche : seulement si la réponse n'en porte aucune et que les liens de la page la déduisent.
+  const hasUrl = Object.entries(found.first).some(([k, v]) => /url|link|href/i.test(k) || (typeof v === 'string' && /^https?:\/\//i.test(v)));
+  if (!hasUrl && scalarKey(found.first['id']) !== undefined) {
+    const ids = found.items.map((r) => scalarKey(r['id'])).filter((v): v is string => v !== undefined);
+    const template = urlTemplateFromLinks(capture, ids, host, allowedHosts);
+    if (template !== null) {
+      urls.push({ local: '$.id', template });
+      skeleton['$.id^url'] = 'string';
+    }
+  }
+  return { joins, urls, skeleton };
+}
+
+/**
+ * Modèle d'URL (`…/{value}…`) d'après les liens du document (servi ou rendu) qui portent l'identifiant d'enregistrements :
+ * au moins 5 identifiants (ou tous s'il y en a moins) retrouvés dans un lien du même hôte, tous au même modèle.
+ */
+function urlTemplateFromLinks(capture: ReconCapture, ids: readonly string[], host: string, allowedHosts: ReadonlySet<string>): string | null {
+  const doc = capture.document;
+  if (doc === null || ids.length === 0 || !allowedHosts.has(host)) return null;
+  const html = doc.renderedHtml ?? doc.html;
+  let parsed: Document;
+  try {
+    parsed = parseHtml(html, DEFAULT_DSL_LIMITS);
+  } catch {
+    return null;
+  }
+  const hrefs: URL[] = [];
+  for (const a of selectElements('a[href]', parsed, 5_000)) {
+    const raw = elementAttribute(a, 'href');
+    if (raw === undefined) continue;
+    try {
+      const url = new URL(raw, doc.url);
+      if ((url.protocol === 'http:' || url.protocol === 'https:') && url.hostname.toLowerCase() === host && url.username === '') hrefs.push(url);
+    } catch {
+      // lien illisible : ignoré
+    }
+  }
+  const templates = new Map<string, number>();
+  let hits = 0;
+  for (const id of new Set(ids.slice(0, 300))) {
+    const link = hrefs.find((u) => u.pathname.split('/').includes(encodeURIComponent(id)) || u.pathname.split('/').includes(id));
+    if (link === undefined) continue;
+    const segments = link.pathname.split('/').map((s) => (s === id || s === encodeURIComponent(id) ? '{value}' : s));
+    const template = `${link.origin}${segments.join('/')}${link.search}`;
+    if (template.split('{value}').length !== 2 || /\{(?!value\})|(?<!\{value)\}/.test(template.replace('{value}', ''))) continue;
+    templates.set(template, (templates.get(template) ?? 0) + 1);
+    hits += 1;
+  }
+  const best = [...templates.entries()].sort((a, b) => b[1] - a[1])[0];
+  const needed = Math.min(5, new Set(ids.slice(0, 300)).size);
+  return best !== undefined && hits >= needed && best[1] >= hits * 0.9 ? best[0] : null;
 }
 
 /**
@@ -312,7 +457,9 @@ export function analyzeCapture(capture: ReconCapture, allowedHosts: readonly str
     }
     const request = { method, url: exchange.url, ...(bodyJson === undefined ? {} : { body_json: bodyJson }) } as const;
     const unsupported = hasClientSignature(request);
-    for (const found of findRecordArrays(root)) {
+    const arrays = findRecordArrays(root, 8);
+    for (const found of arrays.slice(0, MAX_ARRAYS_PER_SOURCE)) {
+      const joined = unsupported ? { joins: [], urls: [], skeleton: {} } : detectJoins(found, arrays, capture, host, hosts);
       candidates.push({
         from: 'response',
         request,
@@ -320,7 +467,9 @@ export function analyzeCapture(capture: ReconCapture, allowedHosts: readonly str
         records: found.path,
         count: found.count,
         bytes: exchange.bytes,
-        skeleton: recordSkeleton(found.first),
+        skeleton: { ...recordSkeleton(found.first), ...joined.skeleton },
+        ...(joined.joins.length === 0 ? {} : { joins: joined.joins }),
+        ...(joined.urls.length === 0 ? {} : { urls: joined.urls }),
         ...(unsupported ? { unsupported: 'client_signature' as const } : {}),
       });
     }
@@ -442,7 +591,9 @@ function queryNames(url: string): string[] {
 export function storedCandidate(c: DataCandidate): StoredCandidate {
   const body = c.request.body_json;
   // Gisement `dom` : ni emplacements ni libellés constants dans l'état (sélecteurs et forme relus au run suivant).
-  const { dom, ...rest } = c;
+  const { dom, joins: _joins, urls: _urls, ...rest } = c;
+  void _joins;
+  void _urls;
   const skeleton = dom === undefined ? c.skeleton : Object.fromEntries(Object.entries(c.skeleton).map(([k, v]) => [k, v.split(';').filter((part) => !/^(prefix|suffix|value)=/.test(part)).join(';')]));
   return {
     ...rest,

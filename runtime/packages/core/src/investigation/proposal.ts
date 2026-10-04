@@ -13,7 +13,7 @@ import type { BlobLocator } from '../dsl/blobs.js';
 import { validateDeclarativeSpec, type DeclarativeSpec, type PaginationSpec, type StopCondition } from '../dsl/spec.js';
 import { assertSchemaAcceptable, DRAFT_2020_12, SchemaError, validateOutput } from '../schema/validator.js';
 import { classValueOps, HTML_LIST_HARD_MAX_PAGES, type DomPagination, type DomSlot } from './dom.js';
-import type { DataCandidate, ReconCapture } from './recon.js';
+import { JOIN_PARENT_SEGMENT, pathSegment, type DataCandidate, type ReconCapture } from './recon.js';
 
 /** Types d'un champ proposé : scalaires, ou `array` (liste de chaînes : étiquettes, banc réel R10). */
 export const PROPOSAL_FIELD_TYPES = ['string', 'number', 'integer', 'boolean', 'array'] as const;
@@ -316,6 +316,27 @@ export type ProposalOutcome =
     }
   | { readonly ok: false; readonly reason: 'invalid_schema' | 'no_valid_source' | 'no_conformant_sample'; readonly rejected: readonly { readonly candidate: string; readonly reason: string }[] };
 
+/** Champ d'un chemin virtuel du squelette (jointure, URL de fiche), `undefined` si le chemin n'en est pas un. */
+function virtualField(path: string, candidate: DataCandidate, type: string, required: boolean): Record<string, unknown> | undefined {
+  const url = /^(.+)\^url$/.exec(path);
+  if (url !== null) {
+    const hit = candidate.urls?.find((u) => u.local === url[1]);
+    return hit === undefined ? undefined : { path: hit.local, type, ...(required ? { required: true } : {}), ops: [{ op: 'url_template', template: hit.template }] };
+  }
+  const parent = path.indexOf(JOIN_PARENT_SEGMENT);
+  const plain = parent === -1 ? path.lastIndexOf('~') : -1;
+  const local = parent !== -1 ? path.slice(0, parent) : plain !== -1 ? path.slice(0, plain) : undefined;
+  const take = parent !== -1 ? path.slice(parent + JOIN_PARENT_SEGMENT.length) : plain !== -1 ? path.slice(plain + 1) : undefined;
+  if (local === undefined || take === undefined) return undefined;
+  const join = candidate.joins?.find((j) => j.local === local);
+  if (join === undefined || !(take in join.take) || (parent !== -1 && join.parent === undefined)) return undefined;
+  return {
+    join: { from: join.from, on: join.local, key: join.key, take: '$' + pathSegment(take), ...(parent !== -1 ? { parent: join.parent } : {}) },
+    type,
+    ...(required ? { required: true } : {}),
+  };
+}
+
 /** Corps capturé d'un gisement : réponse JSON (`response`), document servi (`embedded`, `dom`) ou rendu (`dom` vu après rendu). */
 export function capturedBody(candidate: DataCandidate, capture: ReconCapture): string | undefined {
   if (candidate.from === 'dom') return candidate.dom?.rendered === true ? (capture.document?.renderedHtml ?? undefined) : capture.document?.html;
@@ -386,6 +407,14 @@ export function buildFromProposal(
         // Bloc du DOM : le chemin désigne un emplacement par son nom ; le code pose sélecteur, attribut et opérateurs.
         const slot = dom.slots.find((s) => s.name === slotNameOf(p.path));
         if (slot !== undefined) fields[p.field] = domField(slot, t.type, t.required, p.ops, candidate.request.url);
+        continue;
+      }
+      // Chemin virtuel du squelette d'un gisement JSON : jointure vers un autre tableau de la réponse (`$.teamId~name`,
+      // `$.teamId~parent~name`) ou URL de la fiche déduite des liens de la page (`$.id^url`) ; le code pose la jointure
+      // (opérateur fermé) et le modèle d'URL (hôte déjà dans allowed_hosts), jamais le LLM.
+      const virtual = candidate.from === 'response' ? virtualField(p.path, candidate, t.type, t.required) : undefined;
+      if (virtual !== undefined) {
+        fields[p.field] = virtual;
         continue;
       }
       // Liste lue par un joker (`$.tags[*]`) : toutes les valeurs ; par la clé du tableau (`$.tags`) : le tableau lui-même.

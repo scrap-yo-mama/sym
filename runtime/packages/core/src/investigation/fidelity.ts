@@ -31,7 +31,7 @@ export const FIDELITY_JUDGE_SAMPLES = 3;
 /** Plafond du coût d'un appel du juge (USD), connu avant l'envoi. */
 export const FIDELITY_JUDGE_MAX_USD = 0.01;
 
-export type FidelityIssueCode = 'empty' | 'duplicate' | 'not_a_date' | 'not_a_url' | 'not_an_email' | 'looks_like_url' | 'judge_wrong' | 'judge_missing';
+export type FidelityIssueCode = 'empty' | 'duplicate' | 'not_a_date' | 'not_a_url' | 'not_an_email' | 'looks_like_url' | 'looks_like_id' | 'judge_wrong' | 'judge_missing';
 export type FidelityIssue = {
   readonly field: string;
   readonly code: FidelityIssueCode;
@@ -76,6 +76,11 @@ export function looksLikeDate(v: unknown): boolean {
   if (/\b(?:19|20)\d{2}\b/.test(s)) return true;
   return MONTH.test(s) && /\d/.test(s);
 }
+
+/** Identifiant opaque : UUID, ou condensé hexadécimal long (banc réel R05 : `team` valait un UUID). */
+const OPAQUE_ID = /^(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[0-9a-f]{24,})$/i;
+const ID_NAME = /(?:^|_)(?:id|ids|uuid|guid|ref|reference|code|slug|sku|key|token|hash)(?:_|$)/;
+const looksLikeId = (v: unknown): boolean => typeof v === 'string' && OPAQUE_ID.test(v.trim());
 
 const looksLikeUrl = (v: unknown): boolean => typeof v === 'string' && /^(?:https?:\/\/|\/)[^\s]*$/i.test(v.trim());
 
@@ -149,6 +154,11 @@ export function fidelityCheck(input: {
     } else if (f.type === 'string' && LABEL_NAME.test(name)) {
       const urls = filled.filter(looksLikeUrl).length / filled.length;
       if (urls >= 0.5) issues.push({ field: f.name, code: 'looks_like_url', share: round(urls) });
+    }
+    // Un libellé (équipe, département, lieu, nom…) qui reçoit un identifiant opaque : la clé de liaison a été lue à la place du libellé.
+    if (f.type === 'string' && !ID_NAME.test(name) && !URL_NAME.test(name)) {
+      const ids = filled.filter(looksLikeId).length / filled.length;
+      if (ids >= 0.5) issues.push({ field: f.name, code: 'looks_like_id', share: round(ids) });
     }
   }
   // Doublons : deux champs texte aux mêmes valeurs (hors URL : un lien de fiche et un lien « postuler » peuvent coïncider).
@@ -282,6 +292,7 @@ const MESSAGES: Record<FidelityIssueCode, (i: FidelityIssue) => string> = {
   not_a_url: (i) => `${Math.round((i.share ?? 1) * 100)}% of values are not URLs: wrong slot or key`,
   not_an_email: (i) => `${Math.round((i.share ?? 1) * 100)}% of values are not e-mail addresses: wrong slot or key`,
   looks_like_url: (i) => `${Math.round((i.share ?? 1) * 100)}% of values are URLs, not a name: wrong slot or key`,
+  looks_like_id: (i) => `${Math.round((i.share ?? 1) * 100)}% of values are opaque identifiers, not a label: a joined path such as "$.<key>~<field>" holds the label`,
   judge_wrong: () => 'a reviewer compared the values with the source blocks and found them wrong: wrong slot or key',
   judge_missing: () => 'a reviewer found the value in the source blocks while the extraction left it empty',
 };
