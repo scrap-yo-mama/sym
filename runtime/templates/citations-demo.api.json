@@ -17,7 +17,6 @@
       "type": "object"
     },
     "legal_basis": null,
-    "max_cost_usd": 0.5,
     "network_policy": {
       "allow": [
         "direct"
@@ -72,7 +71,7 @@
   "format_version": "1.0",
   "history": [],
   "integrity": {
-    "sha256": "2233bca75ae382697fa99b79a1bd5eb4cef9109e5991b43bd5c810d76769c880"
+    "sha256": "48eed1d4ec0532b939493a66f2ee48c483e280d3da11d926e8cd01645c50ca51"
   },
   "min_runtime_version": "0.0.0",
   "schedules": [

@@ -98,6 +98,17 @@ describe('format portable (16 § 6)', () => {
     expect(out.export.strategy?.execution).toBe('fetch');
   });
 
+  test('D-123 : `max_cost_usd` null (aucun plafond par run) ou absent est accepté ; un nombre reste un plafond', () => {
+    const base = draft();
+    for (const value of [null, undefined, 2]) {
+      const api = { ...base.api, max_cost_usd: value } as unknown as ApiExportDraft['api'];
+      if (value === undefined) delete (api as { max_cost_usd?: unknown }).max_cost_usd;
+      const out = parse(sealExport({ ...base, api }));
+      expect(out.ok, JSON.stringify(out)).toBe(true);
+      if (out.ok) expect(out.export.api.max_cost_usd ?? null).toBe(value ?? null);
+    }
+  });
+
   test('le format n’a AUCUN champ de session, cookie, secret ni réglage de contournement', () => {
     const names = new Set<string>();
     const walk = (node: unknown) => {

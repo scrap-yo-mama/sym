@@ -3286,8 +3286,9 @@ components:
         `user_queue_full` au-delà de `MAX_ACTIVE_RUNS_PER_USER` pour l'appelant, `key_rate_limited` au-delà de
         `MAX_RUNS_PER_KEY_PER_MINUTE` créations par clé d'API ; réessayer après `Retry-After`. Exception :
         `budget_exceeded` (budget USD du jour de l'appelant, `USER_BUDGET_DAILY_USD` : dépense du jour,
-        enveloppes maximales des runs actifs et enveloppe du nouveau run, 08b § 3) n'a PAS de `Retry-After` et
-        n'est pas réessayable avant minuit UTC.
+        enveloppes maximales des runs actifs et enveloppe du nouveau run, 08b § 3 ; une API sans plafond par run ne
+        réserve aucune enveloppe, D-123) n'a PAS de `Retry-After` et n'est pas réessayable avant minuit UTC ; un admin
+        peut relever `USER_BUDGET_DAILY_USD`.
       headers:
         Retry-After:
           schema:
@@ -4016,6 +4017,7 @@ components:
             allow_write_actions:
               type: boolean
             max_cost_usd:
+              description: Plafond de coût d'un run ; `null` = aucun plafond par run (D-123).
               type: [number, 'null']
             budget_daily_usd:
               type: [number, 'null']
@@ -4480,7 +4482,10 @@ components:
         contains_personal_data:
           type: boolean
         max_cost_usd:
-          description: Plafond de coût d'un run ; `null` revient au défaut de l'instance (0,5 $).
+          description: >-
+            Plafond de coût d'un run, facultatif ; `null` retire le plafond (D-123 : aucun plafond par run par défaut, le
+            budget du jour de l'utilisateur `USER_BUDGET_DAILY_USD` reste le filet). Borné par `MAX_COST_USD_PER_RUN`
+            (400 `cost_cap_exceeded` au-delà).
           type: [number, 'null']
           minimum: 0
         budget_daily_usd:
@@ -4642,7 +4647,8 @@ components:
         contains_personal_data:
           type: boolean
         max_cost_usd:
-          type: number
+          description: Plafond de coût d'un run ; absent ou `null` = aucun plafond par run (D-123).
+          type: [number, 'null']
           minimum: 0
         budget_daily_usd:
           type: number

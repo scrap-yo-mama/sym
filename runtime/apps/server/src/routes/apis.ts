@@ -511,8 +511,9 @@ export function apiRoutes(app: FastifyInstance, ctx: ServerContext): void {
     if (body.purpose !== undefined) set('purpose', body.purpose ?? '');
     if (body.legal_basis !== undefined) set('legal_basis', body.legal_basis);
     if (body.contains_personal_data !== undefined) set('contains_personal_data', body.contains_personal_data);
-    // `null` : retour au défaut de l'instance (défaut de la colonne, 0,5 $ par run et 5 $ par jour), jamais ignoré.
-    if (body.max_cost_usd === null) sets.push('max_cost_usd = DEFAULT');
+    // `null` : max_cost_usd retire le plafond par run (D-123 : NULL, le budget du jour reste le filet) ; budget_daily_usd
+    // revient au défaut de la colonne (5 $ par jour). Jamais ignoré.
+    if (body.max_cost_usd === null) sets.push('max_cost_usd = NULL');
     else if (body.max_cost_usd !== undefined) set('max_cost_usd', body.max_cost_usd);
     if (body.budget_daily_usd === null) sets.push('budget_daily_usd = DEFAULT');
     else if (body.budget_daily_usd !== undefined) set('budget_daily_usd', body.budget_daily_usd);
