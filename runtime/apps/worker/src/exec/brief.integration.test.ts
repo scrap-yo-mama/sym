@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Dossier d'enquête de bout en bout côté worker (tâche 2.14, 19c § 3 et § 9.4) : base réelle, worker réel, faux fournisseur
-// LLM, fixtures locales, sans navigateur. Sonde GET par le pipeline d'accès (portée, garde SSRF, cadence, classifieur ; robots.txt jamais lu, D-91),
-// 0 appel LLM pour la sonde, reconnaissance réduite, même stratégie retenue que sans dossier, hôte tiers sans requête,
-// section `<untrusted_agent_brief>` à sa place, faits du code et `source.brief`, refus passé lu
+// LLM, fixtures locales, sans navigateur. Sonde GET par le pipeline d'accès (portée, garde SSRF, cadence, classifieur ;
+// robots.txt jamais lu, D-91), 0 appel LLM pour la sonde, reconnaissance réduite, même stratégie retenue que sans dossier,
+// hôte tiers sans requête, section `<untrusted_agent_brief>` à sa place, faits du code et `source.brief`, refus passé lu
 // AVANT le dossier, API derrière connexion sans sonde directe, aucun texte de dossier d'une autre API, rejeux sans dossier.
 import { randomUUID } from 'node:crypto';
 import { DomainPacer, generateMasterKey, MasterKey, Secret, type RunExecutor } from '@runtime/core';
@@ -227,10 +227,12 @@ describe('dossier d’enquête dans l’enquête (2.14)', () => {
     const source = (await pool.query<{ source: { brief: { ref: { version: number }; used: string[]; ignored: { id: string; reason: string }[] } } }>('SELECT source FROM strategy_versions WHERE api_id = $1 AND version = 1', [apiId])).rows[0]!.source;
     expect(source.brief.ref.version).toBe(1);
     expect(source.brief.used).toHaveLength(1);
-    expect(source.brief.ignored.map((i) => i.id).sort()).toEqual(['h2', 'h3', 'h4']);
+    // h2 (chemin que robots.txt interdit) : sondé et vérifié comme toute URL du même hôte (D-91), donc pas écarté.
+    expect(source.brief.ignored.map((i) => i.id).sort()).toEqual(['h3', 'h4']);
     const facts = (await pool.query<{ hint_id: string; state: string }>('SELECT hint_id, state FROM brief_hint_outcomes WHERE api_id = $1 ORDER BY hint_id', [apiId])).rows;
     expect(facts.find((f) => f.hint_id === 'h1')!.state).toBe('used');
     expect(facts.find((f) => f.hint_id === 'h4')!.state).toBe('probe_failed');
+    expect(facts.find((f) => f.hint_id === 'h2')!.state).toBe('verified_unused');
     expect(JSON.stringify(evs)).not.toMatch(/zz_test_hostile|residential/);
     expect(evs.some((e) => e.kind === 'brief_hint_verified')).toBe(true);
     // Aucun essai hors politique : réseau direct seulement, aucun proxy ni tunnel.

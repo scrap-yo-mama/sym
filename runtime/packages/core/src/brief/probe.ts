@@ -2,10 +2,11 @@
 // Sonde du code (tâche 2.14, 19c § 3, r7 R4) : chaque indice vérifiable est vérifié SANS LLM avant que l'agent s'y fie.
 // `endpoint` et `example_url` : une requête GET chacun, jamais avec la méthode déclarée, par le PIPELINE D'ACCÈS de l'API
 // (port `check` = portée de l'API, puis port `get` = session réseau gardée : SSRF à chaque saut, cadence, plafond de
-// coût ; classifieur de 04 § 7). Le robots.txt n'est jamais lu par la sonde (D-91). Au plus `BRIEF_PROBE_MAX` sondes et `BRIEF_PROBE_BUDGET_SHARE` du budget
-// d'enquête ; coupe-circuit après deux sondes en échec : l'enquête continue sans le dossier. Un refus ou un défi pendant une
-// sonde arrête tout (`blocking`) : l'exécuteur applique la classe (`bloquee`), aucune escalade. Une sonde ne lit jamais
-// `seen_on`, `tried.target` ni `sample` : seuls `endpoint` et `example_url` peuvent produire une requête.
+// coût ; classifieur de 04 § 7). Le robots.txt n'est jamais lu par la sonde (D-91). Au plus `BRIEF_PROBE_MAX` sondes
+// et `BRIEF_PROBE_BUDGET_SHARE` du budget d'enquête ; coupe-circuit après deux sondes en échec : l'enquête continue sans
+// le dossier. Un refus ou un défi pendant une sonde arrête tout (`blocking`) : l'exécuteur applique la classe (`bloquee`),
+// aucune escalade. Une sonde ne lit jamais `seen_on`, `tried.target` ni `sample` : seuls `endpoint` et `example_url`
+// peuvent produire une requête.
 import type { ExecFailure, HttpExchange } from '../exec/types.js';
 import type { FailureClass } from '../model/index.js';
 import { BRIEF_DEFAULTS, DEFAULT_BRIEF_CONFIG, type BriefConfig, type BriefReason } from './schema.js';

@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Dossier d'enquête (tâche 2.14, 19c § 9.4 et § 9.5), niveau SERVICE et GÉNÉRATEUR DE RÉCIT : schéma fermé, taille, secrets,
 // masquage, digest (portée, GET seul, session, péremption, mémoire négative), sonde par les ports du pipeline d'accès
-// (portée, robots.txt jamais lu, coupe-circuit, part du budget), ordre dans l'ensemble autorisé (test différentiel), prompt non fiable, rapport et
-// récit sans écho, condensé de reprise, promotion par gabarit fermé.
+// (portée, robots.txt jamais lu, coupe-circuit, part du budget), ordre dans l'ensemble autorisé (test différentiel),
+// prompt non fiable, rapport et récit sans écho, condensé de reprise, promotion par gabarit fermé.
 import { describe, expect, test } from 'vitest';
 import { orderTrials, type TrialPair } from '../investigation/plan.js';
 import { runTrials, type TrialExecution, type TrialPorts } from '../investigation/trials.js';
