@@ -154,6 +154,12 @@ export function applyStatusEvent(state: ApiStatusState, event: StatusEventInput,
       if (!includes(BACKOFF_CLASSES, event.failureClass)) return reject(state, 'backoff_class_not_allowed');
       return apply(state, ctx, [{ id: 16, to: 'enquete', reason: 'persistence_attempt', patch: { previousStatus: 'erreur' } }]);
 
+    case 'version_promoted':
+      // 22 (3.14, 19 §6) : depuis `erreur` seulement. Sur `sain` ou `warning` : pas une transition, statut inchangé.
+      if (status === 'erreur') return apply(state, ctx, [{ id: 22, to: 'warning', reason: event.via, patch: signalPatch(now, true) }]);
+      if (status === 'sain' || status === 'warning') return unchanged(state);
+      return reject(state, 'status_not_promotable');
+
     case 'user_acted':
       if (status !== 'action_requise') return reject(state, 'no_action_required');
       return apply(state, ctx, [{ id: 17, to: 'enquete', reason: 'user_acted', patch: { previousStatus: null } }]);
