@@ -3,7 +3,7 @@
 // code vient d'un CDN tiers (Ashby : `jobs.ashbyhq.com` charge `cdn.ashbyprd.com/…/index.js`, puis appelle son API
 // GraphQL en POST sur son propre hôte) et d'une page à défilement infini nourrie par XHR (`/api/quotes?page=N`). Vrai
 // Chromium du pool, proxy de lancement fermé, proxy d'egress de la passe (garde SSRF), verrou de domaines :
-// - les scripts et feuilles de style d'un hôte tiers sont chargés (GET, bornés en hôtes et en requêtes) pour que la page
+// - les scripts, feuilles de style, polices et préchargements d'un hôte tiers sont chargés (GET, bornés en hôtes et en requêtes) pour que la page
 //   se rende ; tout le reste vers un tiers (XHR, fetch, image, pixel) reste coupé, sans connexion ;
 // - la réponse JSON que la page charge elle-même (POST GraphQL) est capturée et proposée comme gisement « API JSON » ;
 //   le DOM rendu donne aussi son bloc répété ;
@@ -14,7 +14,7 @@ import { createStaticAssetAllowance, openBrowserEgress, startEgressProxy, type E
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'vitest';
 import { fixtureGuard } from '../../../../tests/helpers/fixture-net.ts';
 import { BrowserPool, playwrightLauncher } from '../browser/pool.js';
-import { startMiniSite, type MiniSite } from '../testing/mini-site.testkit.js';
+import { startMiniSite, type MiniResponse, type MiniSite } from '../testing/mini-site.testkit.js';
 import { runReconnaissancePass } from './browser-executors.js';
 
 const APP = 'zz_test_jsapp.localhost';
@@ -50,12 +50,14 @@ const appJs = (evil: string) => `
 })();`;
 
 beforeAll(async () => {
-  site = await startMiniSite(async (req) => {
+  site = await startMiniSite(async (req): Promise<MiniResponse | undefined> => {
     switch (req.host) {
       case APP:
         if (req.path === '/zz') {
           return {
-            body: `<!doctype html><html><head><link rel="stylesheet" href="${site.url(CDN, '/assets/app.css')}"><script src="${site.url(CDN, '/assets/app.js')}" defer></script></head><body><div id="root"></div><img alt="" src="${site.url(EVIL, '/img.gif')}"></body></html>`,
+            // Comme Ashby (constat du 2026-10-04) : manifeste Vite préchargé (`preload as=fetch`, type `other`), police préchargée,
+            // feuille de style, puis le chargeur en ligne lit le manifeste et injecte le module du CDN.
+            body: `<!doctype html><html><head><link id="vite-preload" rel="preload" as="fetch" href="${site.url(CDN, '/.vite/manifest.json')}" crossorigin><link rel="preload" as="font" type="font/woff2" crossorigin="anonymous" href="${site.url(CDN, '/fonts/zz.woff2')}"><link rel="stylesheet" href="${site.url(CDN, '/assets/app.css')}"></head><body><div id="root"></div><img alt="" src="${site.url(EVIL, '/img.gif')}"><script>fetch(document.getElementById('vite-preload').href,{mode:'cors'}).then(function(r){return r.json()}).then(function(m){var s=document.createElement('script');s.type='module';s.crossOrigin='anonymous';s.src=${JSON.stringify(`http://${CDN}:`)}+location.port+'/'+m.entry;document.head.appendChild(s)});</script></body></html>`,
           };
         }
         if (req.path === '/api/non-user-graphql' && req.method === 'POST') {
@@ -64,7 +66,9 @@ beforeAll(async () => {
         }
         return undefined;
       case CDN:
-        if (req.path === '/assets/app.js') return { headers: { 'content-type': 'text/javascript' }, body: appJs(`http://${EVIL}:${site.port}`) };
+        if (req.path === '/.vite/manifest.json') return { headers: { 'content-type': 'application/json', 'access-control-allow-origin': '*' }, body: JSON.stringify({ entry: 'assets/app.js' }) };
+        if (req.path === '/fonts/zz.woff2') return { headers: { 'content-type': 'font/woff2', 'access-control-allow-origin': '*' }, body: 'zz' };
+        if (req.path === '/assets/app.js') return { headers: { 'content-type': 'text/javascript', 'access-control-allow-origin': '*' }, body: appJs(`http://${EVIL}:${site.port}`) };
         if (req.path === '/assets/app.css') return { headers: { 'content-type': 'text/css' }, body: '.job-link{display:block}' };
         return undefined;
       case EVIL:
@@ -128,7 +132,8 @@ describe('reconnaissance d’une application rendue en JavaScript (R05)', () => 
     const dom = candidates.find((c) => c.from === 'dom');
     expect(dom).toMatchObject({ count: JOBS, dom: { rendered: true } });
     expect(candidates.indexOf(api!)).toBeLessThan(candidates.indexOf(dom!));
-    expect(capture.assets).toEqual({ hosts: 1, requests: 2 });
+    expect(site.hits.some((h) => h.host === CDN && h.path === '/.vite/manifest.json')).toBe(true);
+    expect(capture.assets?.hosts).toBe(1);
   }, 90_000);
 
   test('assert_recon_static_assets_bounded — plafond d’hôtes tiers atteint : le code du CDN n’est plus chargé, aucune connexion', async () => {

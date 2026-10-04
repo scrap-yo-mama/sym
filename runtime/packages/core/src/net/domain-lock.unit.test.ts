@@ -25,17 +25,21 @@ describe('verrou de domaines', () => {
 });
 
 describe('createStaticAssetAllowance (reconnaissance, banc R05)', () => {
-  test('assert_recon_static_assets_only — script et feuille de style en GET seulement ; jamais XHR, fetch, image, document ni POST', () => {
+  test('assert_recon_static_assets_only — script, feuille de style, police et préchargement en GET seulement ; jamais XHR, fetch, image, document ni POST', () => {
     const allow = createStaticAssetAllowance();
     expect(allow.admit('https://cdn.zz-test.example/app.js', 'script', 'GET')).toBe(true);
     expect(allow.admit('https://cdn.zz-test.example/app.css', 'Stylesheet', 'GET')).toBe(true);
-    for (const type of ['xhr', 'fetch', 'image', 'document', 'websocket', 'ping', 'other', 'font', 'media']) expect(allow.admit('https://cdn.zz-test.example/x', type, 'GET')).toBe(false);
+    for (const type of ['xhr', 'fetch', 'image', 'document', 'websocket', 'ping', 'media', 'eventsource', 'manifest']) expect(allow.admit('https://cdn.zz-test.example/x', type, 'GET')).toBe(false);
     expect(allow.admit('https://cdn.zz-test.example/app.js', 'script', 'POST')).toBe(false);
     expect(allow.admit('https://user:pw@cdn.zz-test.example/app.js', 'script', 'GET')).toBe(false);
     expect(allow.admit('ftp://cdn.zz-test.example/app.js', 'script', 'GET')).toBe(false);
     expect(allow.has('CDN.zz-test.example.')).toBe(true);
     expect(allow.has('evil.zz-test.example')).toBe(false);
     expect(allow.usage()).toEqual({ hosts: 1, requests: 2 });
+    // Préchargement (`<link rel="preload" as="fetch">`, manifeste Vite) et police : admis aussi, en GET.
+    expect(allow.admit('https://cdn.zz-test.example/.vite/manifest.json', 'other', 'GET')).toBe(true);
+    expect(allow.admit('https://cdn.zz-test.example/f.woff2', 'font', 'GET')).toBe(true);
+    expect(allow.admit('https://cdn.zz-test.example/x', 'other', 'POST')).toBe(false);
   });
 
   test('plafonds : hôtes tiers distincts et requêtes de la passe', () => {

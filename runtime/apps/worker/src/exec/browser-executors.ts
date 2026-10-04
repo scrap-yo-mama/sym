@@ -462,7 +462,7 @@ const STOPPING_ROUTES = new Set(['stop', 'action_required', 'slow_down']);
  * refus, un défi, une connexion requise ou un 429 sur un point de données arrête la passe ; un 404 ou un 5xx n'est
  * qu'une voie vide.
  * Aucun clic, aucune saisie : la page n'est que regardée. Une application rendue en JavaScript dont le code vient d'un CDN
- * tiers (banc R05) se rend : `staticAssets` admet ses scripts et feuilles de style (GET, bornés), rien d'autre vers un tiers ;
+ * tiers (banc R05) se rend : `staticAssets` admet ses scripts, feuilles de style, polices et préchargements (GET, bornés), rien d'autre vers un tiers ;
  * ses réponses JSON sur un domaine de l'API sont capturées comme les autres, et son DOM rendu est lu.
  */
 export async function runReconnaissancePass(options: ReconnaissancePassOptions): Promise<{ result: DeclarativeRunResult; capture: ReconCapture }> {

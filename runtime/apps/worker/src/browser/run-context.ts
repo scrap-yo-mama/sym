@@ -47,7 +47,7 @@ export type RunContextOptions = {
   /** Portées de site admises en plus (domaine et sous-domaines) : reconnaissance de l'enquête seulement (2.1, 04b §2). */
   readonly allowedHostSuffixes?: readonly string[];
   /**
-   * Sous-ressources statiques (script, feuille de style, GET) d'hôtes TIERS admises, bornées : reconnaissance de l'enquête
+   * Sous-ressources statiques (script, feuille de style, police, préchargement ; GET) d'hôtes TIERS admises, bornées : reconnaissance de l'enquête
    * seulement (banc R05, application rendue en JavaScript servie par un CDN). Le même objet est passé au proxy d'egress de
    * la passe. Toute autre requête vers un tiers reste coupée.
    */

@@ -45,14 +45,19 @@ export function findDomainNotAllowed(error: unknown): DomainNotAllowedError | un
   return undefined;
 }
 
-/** Types de sous-ressource « statiques » qu'une page rendue charge pour s'afficher (noms Playwright ou CDP, casse ignorée). */
-const STATIC_ASSET_TYPES = new Set(['script', 'stylesheet']);
+/**
+ * Types de sous-ressource « statiques » qu'une page rendue charge pour s'afficher (noms Playwright ou CDP, casse ignorée) :
+ * script, feuille de style, police, et préchargement (`<link rel="preload" as="fetch">`, type `other` : le manifeste Vite
+ * d'Ashby, sans lequel le chargeur n'injecte pas le module). Jamais XHR, fetch, image, média, balise de mesure (ping),
+ * WebSocket ni document.
+ */
+const STATIC_ASSET_TYPES = new Set(['script', 'stylesheet', 'font', 'other']);
 
 /**
  * Sous-ressources statiques d'hôtes TIERS admises pendant la reconnaissance de l'enquête seulement (banc R05 : l'application
  * Ashby de `jobs.ashbyhq.com` charge son code depuis `cdn.ashbyprd.com`, puis appelle son API sur son propre hôte ; sans ce
- * code, la page ne se rend pas et ne charge aucune donnée). Admis : un GET http(s) de type script ou feuille de style, sans
- * identifiants dans l'URL, dans la limite de `maxHosts` hôtes tiers distincts et de `maxRequests` requêtes pour la passe.
+ * code, la page ne se rend pas et ne charge aucune donnée). Admis : un GET http(s) de type script, feuille de style, police ou
+ * préchargement (`other`), sans identifiants dans l'URL, dans la limite de `maxHosts` hôtes tiers distincts et de `maxRequests` requêtes pour la passe.
  * Tout le reste vers un tiers (XHR, fetch, document, image, pixel, WebSocket, POST) reste coupé par le verrou de domaines ;
  * la garde SSRF s'applique à chaque connexion (proxy d'egress), une réponse tierce n'est jamais un gisement. Posé par le
  * code de la reconnaissance, jamais tiré d'une stratégie, d'un dossier ou d'une règle ; jamais pour un essai ni un run.
