@@ -14,3 +14,4 @@ export * from './dom.js';
 export * from './fidelity.js';
 export * from './sources.js';
 export * from './schema-validation.js';
+export * from './field-fix.js';

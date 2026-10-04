@@ -5000,6 +5000,15 @@ components:
           type: array
           items:
             type: string
+        api_id:
+          description: >-
+            Réponse de création d'API (`auto_validate`, enquête terminée pendant l'attente) : l'API créée, toujours présente.
+          type: string
+          format: uuid
+        slug:
+          description: >-
+            Réponse de création d'API (`auto_validate`, enquête terminée pendant l'attente) : le slug de l'API créée, toujours présent.
+          type: string
         run_id:
           type: string
           format: uuid

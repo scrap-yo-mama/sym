@@ -3,6 +3,7 @@
 // schéma, taille et domaine, puis agit. `ctx.fetch` passe par la garde SSRF (INV10) et reste dans les domaines de l'API.
 // Toute violation est journalisée `sandbox_violation` (puits unique : `violation`, 32 au plus par run) et tue l'enfant
 // (engine.ts). Budgets côté hôte, par run : octets d'éléments retenus, octets de réponses lus, octets de journal.
+import { decodeBody } from '@runtime/core/exec';
 import type { Logger } from 'pino';
 import type {
   SandboxBridges,
@@ -224,7 +225,7 @@ async function readCapped(response: BridgeResponse, max: number): Promise<{ body
     chunks.push(value);
     size += value.byteLength;
   }
-  return { body: Buffer.concat(chunks).toString('utf8'), truncated };
+  return { body: decodeBody(Buffer.concat(chunks), response.headers.get('content-type')), truncated };
 }
 
 /** Construit les ponts d'un run. Un jeu par exécution : quotas et annulation sont par run. */

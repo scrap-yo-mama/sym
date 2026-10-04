@@ -5,6 +5,7 @@
 // d'une chaîne primitive ne se surchargent pas, donc une page qui remplace `JSON.stringify`, `TextDecoder`, `outerHTML`
 // ou `ArrayBuffer.prototype.byteLength` peut fausser les données qu'elle sert (c'est son contenu), jamais la borne.
 // Le plafond en octets est ensuite revérifié côté hôte (UTF-8) ; le cgroup reste le dernier filet.
+import { decodeBody } from '@runtime/core/exec';
 import type { CDPSession, Page, Response } from 'playwright-core';
 
 /** Valeur trop grande ou illisible : l'appelant la refuse (`response_too_large`, `output_limit`). */
@@ -128,7 +129,7 @@ export async function boundedRawBody(page: Page, response: Response, maxBytes: n
     // Taille inconnue sans Content-Length : refus plutôt qu'un transfert non borné.
     return TOO_LARGE;
   }
-  const body = await response.text();
+  const body = decodeBody(await response.body(), response.headers()['content-type']);
   return bytesOk(body, maxBytes) ? body : TOO_LARGE;
 }
 
@@ -241,7 +242,7 @@ export async function boundedDocumentBody(response: Response, maxBytes: number, 
     if (decoded === undefined) return undefined;
     if (decoded > maxBytes) return TOO_LARGE;
   }
-  const body = await withTimeout(response.text(), timeoutMs);
+  const body = await withTimeout(response.body().then((bytes) => decodeBody(bytes, headers['content-type'])), timeoutMs);
   if (body === undefined) return undefined;
   return bytesOk(body, maxBytes) ? body : TOO_LARGE;
 }

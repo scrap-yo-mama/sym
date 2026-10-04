@@ -6,7 +6,7 @@ import { BLOB_KINDS, SCRIPT_ID_PATTERN, VARIABLE_PATTERN, type BlobLocator } fro
 import { compileSelector } from './css.js';
 import { DslError } from './errors.js';
 import { compileJsonPath } from './jsonpath.js';
-import { compileOperators, OPERATOR_NAMES, type OperatorSpec } from './operators.js';
+import { compileOperators, OPERATOR_NAMES, parseUrlTemplate, type OperatorSpec } from './operators.js';
 
 export const SPEC_SCHEMA_VERSION = 1;
 /**
@@ -51,6 +51,15 @@ export interface FieldLocator {
    * d'une offre est le titre de la section qui réunit ses offres). Borné à 3 niveaux.
    */
   up?: number;
+  /**
+   * Source JSON seulement : valeur lue dans un AUTRE tableau de la même réponse, lié par identifiant (banc réel R05 : offres
+   * et équipes). `from` : JSONPath (depuis la racine) des enregistrements joints ; `on` : chemin, dans l'enregistrement, de la
+   * clé de liaison ; `key` : chemin, dans un enregistrement joint, de sa clé ; `take` : chemin de la valeur lue dans
+   * l'enregistrement joint. Égalité de clés seulement (opérateur fermé, aucun code), première correspondance. `parent` : chemin,
+   * dans l'enregistrement joint, de la clé de SON parent dans le même tableau ; `take` est alors lu chez le parent (le
+   * département d'une équipe). Sans correspondance, le champ est absent (jamais la clé brute).
+   */
+  join?: { from: string; on: string; key: string; take: string; parent?: string };
 }
 
 export interface FieldSpec extends FieldLocator {
@@ -145,6 +154,12 @@ const locatorProps = {
   attr: { type: 'string', pattern: '^(text|[A-Za-z_:][A-Za-z0-9_:.-]{0,63})$' },
   fallback_paths: { type: 'array', maxItems: 5, items: PATH },
   up: { type: 'integer', minimum: 1, maximum: 3 },
+  join: {
+    type: 'object',
+    additionalProperties: false,
+    required: ['from', 'on', 'key', 'take'],
+    properties: { from: PATH, on: PATH, key: PATH, take: PATH, parent: PATH },
+  },
 };
 
 export const DECLARATIVE_SPEC_SCHEMA = {
@@ -472,7 +487,9 @@ export function validateDeclarativeSpec(input: unknown, options: ValidateSpecOpt
     checkLocator(field, at, issues);
     for (const [i, source] of spec.sources.entries()) {
       const effective = { ...field, ...(source.field_overrides?.[name] ?? {}) };
-      const usable = source.from === 'html' ? effective.css !== undefined || effective.attr !== undefined : effective.path !== undefined;
+      const usable = source.from === 'html' ? effective.css !== undefined || effective.attr !== undefined : effective.path !== undefined || effective.join !== undefined;
+      if (source.from === 'html' && effective.join !== undefined) issues.push({ path: `${at}/join`, code: 'field_locator_mismatch', message: `la source « ${source.id} » est HTML : join n'a pas de sens` });
+      if (effective.join !== undefined && (effective.path !== undefined || effective.fallback_paths !== undefined)) issues.push({ path: `${at}/join`, code: 'field_locator_mismatch', message: 'join exclut path et fallback_paths' });
       if (!usable) issues.push({ path: at, code: 'field_missing_locator', message: `aucun ${source.from === 'html' ? 'sélecteur css' : 'chemin path'} pour la source « ${source.id} » (#${i})` });
       // Un repli est un sélecteur CSS pour une source HTML, un chemin JSONPath sinon.
       for (const [k, alt] of (effective.fallback_paths ?? []).entries()) {
@@ -485,6 +502,7 @@ export function validateDeclarativeSpec(input: unknown, options: ValidateSpecOpt
   }
 
   checkPagination(spec, issues);
+  checkUrlTemplates(spec, issues);
 
   if (options.outputSchema !== undefined && isRecord(options.outputSchema)) {
     const required = options.outputSchema['required'];
@@ -501,6 +519,25 @@ export function validateDeclarativeSpec(input: unknown, options: ValidateSpecOpt
 function checkLocator(loc: FieldLocator, at: string, issues: SpecIssue[]): void {
   if (loc.path !== undefined) tryCompile(() => compileJsonPath(loc.path as string), `${at}/path`, issues);
   if (loc.css !== undefined) tryCompile(() => compileSelector(loc.css as string), `${at}/css`, issues);
+  if (loc.join !== undefined) {
+    for (const k of ['from', 'on', 'key', 'take', 'parent'] as const) {
+      const p = loc.join[k];
+      if (p !== undefined) tryCompile(() => compileJsonPath(p), `${at}/join/${k}`, issues);
+    }
+  }
+}
+
+/** `url_template` : l'hôte du modèle est un hôte de `allowed_hosts` (INV10 : un identifiant ne mène jamais hors des hôtes autorisés). */
+function checkUrlTemplates(spec: DeclarativeSpec, issues: SpecIssue[]): void {
+  for (const [name, field] of Object.entries(spec.fields)) {
+    for (const [i, op] of (field.ops ?? []).entries()) {
+      if (typeof op !== 'object' || op === null || op.op !== 'url_template') continue;
+      const url = parseUrlTemplate(op['template']);
+      if (url !== undefined && !spec.request.allowed_hosts.includes(url.hostname)) {
+        issues.push({ path: `/fields/${name}/ops/${i}`, code: 'host_not_allowed', message: "l'hôte du modèle d'URL n'est pas dans allowed_hosts" });
+      }
+    }
+  }
 }
 
 function checkPagination(spec: DeclarativeSpec, issues: SpecIssue[]): void {

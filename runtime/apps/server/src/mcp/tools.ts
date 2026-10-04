@@ -77,6 +77,8 @@ export const RUN_RESULT_SCHEMA: JsonSchema = {
   required: ['run_id', 'state', 'status', 'items', 'total', 'truncated', 'next_cursor', 'message', 'next_action', 'poll_after_seconds', 'console_url'],
   properties: {
     run_id: { type: 'string' },
+    api_id: { type: 'string', description: 'create_api only: the created API.' },
+    slug: { type: 'string', description: 'create_api only: the slug of the created API.' },
     state: { type: 'string' },
     status: { type: 'string' },
     items: { type: 'array', maxItems: 20, items: { type: 'object' } },

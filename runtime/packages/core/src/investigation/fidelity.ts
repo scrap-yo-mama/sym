@@ -41,6 +41,7 @@ export type FidelityIssueCode =
   | 'not_a_url'
   | 'not_an_email'
   | 'looks_like_url'
+  | 'looks_like_id'
   | 'implausible'
   | 'outlier'
   | 'inconsistent'
@@ -95,6 +96,11 @@ export function looksLikeDate(v: unknown): boolean {
   if (/\b(?:19|20)\d{2}\b/.test(s)) return true;
   return MONTH.test(s) && /\d/.test(s);
 }
+
+/** Identifiant opaque : UUID, ou condensé hexadécimal long (banc réel R05 : `team` valait un UUID). */
+const OPAQUE_ID = /^(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[0-9a-f]{24,})$/i;
+const ID_NAME = /(?:^|_)(?:id|ids|uuid|guid|ref|reference|code|slug|sku|key|token|hash)(?:_|$)/;
+const looksLikeId = (v: unknown): boolean => typeof v === 'string' && OPAQUE_ID.test(v.trim());
 
 const looksLikeUrl = (v: unknown): boolean => typeof v === 'string' && /^(?:https?:\/\/|\/)[^\s]*$/i.test(v.trim());
 
@@ -433,6 +439,11 @@ export function fidelityCheck(input: {
       const urls = filled.filter(looksLikeUrl).length / filled.length;
       if (urls >= 0.5) issues.push({ field: f.name, code: 'looks_like_url', share: round(urls) });
     }
+    // Un libellé (équipe, département, lieu, nom…) qui reçoit un identifiant opaque : la clé de liaison a été lue à la place du libellé.
+    if (f.type === 'string' && !ID_NAME.test(name) && !URL_NAME.test(name)) {
+      const ids = filled.filter(looksLikeId).length / filled.length;
+      if (ids >= 0.5) issues.push({ field: f.name, code: 'looks_like_id', share: round(ids) });
+    }
   }
   // Doublons : deux champs texte aux mêmes valeurs (hors URL : un lien de fiche et un lien « postuler » peuvent coïncider).
   const texts = fields.filter((f) => f.type === 'string');
@@ -593,6 +604,7 @@ const MESSAGES: Record<FidelityIssueCode, (i: FidelityIssue) => string> = {
       : `values look like what "${i.other}" should hold on ${pct(i)}% of records: the two fields read each other's slot, exchange their paths`,
   marketing_label: (i) => `${pct(i)}% of values are a marketing badge of the card (such as new, exclusive or sold), not this field: map the slot that holds the field, or leave it out`,
   technical_prefix: (i) => `${pct(i)}% of values carry a technical prefix of the page markup (a carousel, slide or card element id) before the code: map a slot that holds the bare code`,
+  looks_like_id: (i) => `${Math.round((i.share ?? 1) * 100)}% of values are opaque identifiers, not a label: a joined path such as "$.<key>~<field>" holds the label`,
   judge_wrong: () => 'a reviewer compared the values with the source blocks and found them wrong: wrong slot or key',
   judge_missing: () => 'a reviewer found the value in the source blocks while the extraction left it empty',
 };

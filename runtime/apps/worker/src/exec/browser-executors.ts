@@ -336,7 +336,14 @@ export function runFetchInPageExecutor(options: BrowserExecutorOptions): Promise
             r.headers.forEach((value, name) => {
               h[name.toLowerCase()] = value;
             });
-            const text: unknown = new TextDecoder().decode(buffer);
+            const label = /charset\s*=\s*"?([\w:.-]+)/i.exec(h['content-type'] ?? '')?.[1];
+            let text: unknown;
+            try {
+              text = new TextDecoder(label ?? 'utf-8', { fatal: label === undefined }).decode(buffer);
+            } catch {
+              // Charset inconnu ou octets non UTF-8 sans déclaration : Windows-1252 (R08), jamais des caractères de remplacement.
+              text = new TextDecoder(label === undefined ? 'windows-1252' : 'utf-8').decode(buffer);
+            }
             const meta: unknown = JSON.stringify(h);
             const url: unknown = r.url;
             const status: unknown = r.status;

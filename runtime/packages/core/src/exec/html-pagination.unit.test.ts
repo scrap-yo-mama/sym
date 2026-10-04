@@ -159,3 +159,128 @@ describe('banc réel : lien « suivant » sans rel=next, doublons entre pages (R
     if (out.ok) expect(out.records.map((x) => x['title'])).toEqual(['bien 1a', 'bien 1b', 'bien 2a', 'bien 2b', 'bien 3a', 'bien 3b', 'prog 1', 'prog 2', 'prog 3']);
   });
 });
+
+describe('banc réel R02 (passage 2) : doublons entre pages sur une clé robuste, écart avec le compteur d’en-tête', () => {
+  const SCHEMA_REF = { type: 'object', required: ['title'], properties: { title: { type: 'string' }, reference: { type: 'string' }, url: { type: 'string' }, surface: { type: 'number' } }, additionalProperties: false };
+  const raw = (fields: Record<string, unknown>) => ({
+    schema_version: 1,
+    kind: 'declarative',
+    request: { method: 'GET', url: BASE, allowed_hosts: [HOST], params: [{ at: 'url.query.page', role: 'pagination' }] },
+    sources: [{ id: 'page', from: 'html', records: 'article.item' }],
+    fields,
+    pagination: { type: 'page_param', param: 'url.query.page', start: 1, stop: [{ when: 'records_empty' }], limits: { hard_max_pages: 200 } },
+  });
+  const specOf = (fields: Record<string, unknown>): DeclarativeSpec => {
+    const check = validateDeclarativeSpec(raw(fields), { outputSchema: SCHEMA_REF });
+    if (!check.ok) throw new Error(JSON.stringify(check.errors));
+    return check.spec;
+  };
+  const FIELDS = {
+    title: { css: 'h3', type: 'string', required: true, ops: ['collapse_spaces', 'trim'] },
+    reference: { css: 'p.ref', type: 'string', ops: ['collapse_spaces', 'trim'] },
+    url: { css: 'a', attr: 'href', type: 'string', ops: [{ op: 'abs_url', base: BASE }] },
+  };
+  const card = (title: string, ref: string, href: string) => `<article class="item"><h3>${title}</h3><p class="ref">${ref}</p><a href="${href}">voir</a></article>`;
+  const header = (n: number) => `<h1>${n} annonces</h1>`;
+  const html = (cards: string[], n = 359) => `<html><body>${header(n)}${cards.join('')}</body></html>`;
+
+  /** Pages 1 à 3 : 3 biens distincts. Pages 4 à 7 : les 2 mêmes programmes neufs, référence de lot différente à chaque ligne. */
+  const transport = (seen: number[]) => async (r: RenderedRequest): Promise<HttpExchange> => {
+    const n = Number(new URL(r.url).searchParams.get('page') ?? '1');
+    seen.push(n);
+    if (n <= 3) return ok(r.url, html([card(`Bien ${n}a`, `R${n}a`, `/bien/${n}a`), card(`Bien ${n}b`, `R${n}b`, `/bien/${n}b`), card(`Bien ${n}c`, `R${n}c`, `/bien/${n}c?utm_source=x#top`)]));
+    if (n <= 7) return ok(r.url, html(['A', 'B', 'A', 'B'].map((p, k) => card(`Programme ${p}`, `PROG ${p} LOT ${n * 10 + k}`, `https://neuf.${HOST}/prog/${p}/`))));
+    return ok(r.url, html([]));
+  };
+
+  it('même URL de fiche, références différentes : une seule ligne par fiche ; la page qui ne répète que des fiches vues arrête la liste', async () => {
+    const seen: number[] = [];
+    const out = await runDeclarative({ spec: specOf(FIELDS), input: {}, outputSchema: SCHEMA_REF, signal, transport: transport(seen) });
+    expect(out).toMatchObject({ ok: true, stop: 'no_next' });
+    expect(seen).toEqual([1, 2, 3, 4, 5]);
+    if (!out.ok) return;
+    expect(out.records.map((r) => r['title'])).toEqual(['Bien 1a', 'Bien 1b', 'Bien 1c', 'Bien 2a', 'Bien 2b', 'Bien 2c', 'Bien 3a', 'Bien 3b', 'Bien 3c', 'Programme A', 'Programme B']);
+    // Le doublon d'une même page (A, B, A, B) et des pages 5 : comptés et dits.
+    expect(out.duplicates).toBe(2 + 4);
+  });
+
+  it('compteur d’en-tête (« 359 annonces ») différent du nombre livré : écart rendu dans le résultat', async () => {
+    const out = await runDeclarative({ spec: specOf(FIELDS), input: {}, outputSchema: SCHEMA_REF, signal, transport: transport([]) });
+    expect(out).toMatchObject({ ok: true, announced: 359 });
+  });
+
+  it('sans champ lien : empreinte des champs principaux (la référence, qui varie d’une ligne à l’autre, n’en fait pas partie)', async () => {
+    const { url: _url, ...noUrl } = FIELDS;
+    void _url;
+    const seen: number[] = [];
+    const out = await runDeclarative({ spec: specOf(noUrl), input: {}, outputSchema: SCHEMA_REF, signal, transport: transport(seen) });
+    expect(out).toMatchObject({ ok: true, stop: 'no_next' });
+    if (!out.ok) return;
+    expect(out.records.map((r) => r['title'])).toEqual(['Bien 1a', 'Bien 1b', 'Bien 1c', 'Bien 2a', 'Bien 2b', 'Bien 2c', 'Bien 3a', 'Bien 3b', 'Bien 3c', 'Programme A', 'Programme B']);
+  });
+
+  it('un lien identique sur toutes les cartes (« # ») n’est pas une clé : aucune carte distincte n’est fusionnée', async () => {
+    const out = await runDeclarative({
+      spec: specOf(FIELDS),
+      input: {},
+      outputSchema: SCHEMA_REF,
+      signal,
+      transport: async (r) => {
+        const n = Number(new URL(r.url).searchParams.get('page') ?? '1');
+        return ok(r.url, n <= 2 ? html([card(`Bien ${n}a`, `R${n}a`, '/liste'), card(`Bien ${n}b`, `R${n}b`, '/liste'), card(`Bien ${n}c`, `R${n}c`, '/liste')]) : html([]));
+      },
+    });
+    expect(out).toMatchObject({ ok: true });
+    if (out.ok) expect(out.records).toHaveLength(6);
+  });
+});
+
+describe('banc réel R01 (passage 2) : vérification de la pagination d’une longue liste sur un échantillon de pages', () => {
+  const LAST = 53;
+  /** 52 pages de 2 biens, la 53e d'un seul ; la page 54 répond 200 sans carte (comme Janssens). Pager réel : 1 2 3 … 52 53 ›. */
+  const pager = (n: number): string => {
+    const link = (p: number) => (p === n ? `<li class="current">${p}</li>` : `<li><a href="/nos-biens/page/${p}/">${p}</a></li>`);
+    return `<ul class="pagination">${[1, 2, 3, LAST - 1, LAST].map(link).join('')}${n < LAST ? `<li><a rel="next" class="next" href="/nos-biens/page/${n + 1}/">›</a></li>` : ''}</ul>`;
+  };
+  const site = (seen: number[], last = LAST) => async (r: RenderedRequest): Promise<HttpExchange> => {
+    const m = /\/page\/(\d+)\/$/.exec(new URL(r.url).pathname);
+    const n = m === null ? 1 : Number(m[1]);
+    seen.push(n);
+    const body = n > last ? page([]) : page(n === last ? [`bien ${n}a`] : [`bien ${n}a`, `bien ${n}b`]);
+    return ok(r.url, body.replace('</body>', `${pager(n).replaceAll(String(LAST), String(last))}</body>`));
+  };
+
+  it('échantillon : page 1, page 2, une page du milieu, la dernière annoncée et la suivante (5 pages au plus), règle d’arrêt constatée', async () => {
+    const seen: number[] = [];
+    const out = await runDeclarative({ spec: htmlSpec(PATH_PAGINATION), input: { max_pages: 200 }, outputSchema: SCHEMA, signal, samplePages: true, transport: site(seen) });
+    expect(seen).toEqual([1, 2, 27, 53, 54]);
+    expect(out).toMatchObject({ ok: true, stop: 'records_empty', pages: 5 });
+  });
+
+  it('liste dont la dernière page annoncée est déjà plus longue que le pager : la page suivante qui a des cartes n’est pas une fin constatée', async () => {
+    const seen: number[] = [];
+    // Le site annonce 53 pages mais en sert 70 : la page 54 a des cartes, le plafond d'échantillon est atteint.
+    const out = await runDeclarative({ spec: htmlSpec(PATH_PAGINATION), input: { max_pages: 200 }, outputSchema: SCHEMA, signal, samplePages: true, transport: site(seen, 70) });
+    expect(seen.length).toBeLessThanOrEqual(5);
+    expect(out).toMatchObject({ ok: true });
+  });
+
+  it('liste courte (6 pages au plus) ou pager sans dernière page : lecture complète, comme avant', async () => {
+    const seen: number[] = [];
+    const out = await runDeclarative({ spec: htmlSpec(PATH_PAGINATION), input: { max_pages: 200 }, outputSchema: SCHEMA, signal, samplePages: true, transport: async (r) => {
+      const m = /\/page\/(\d+)\/$/.exec(new URL(r.url).pathname);
+      const n = m === null ? 1 : Number(m[1]);
+      seen.push(n);
+      return ok(r.url, page(n <= 4 ? [`bien ${n}`] : []));
+    } });
+    expect(seen).toEqual([1, 2, 3, 4, 5]);
+    expect(out).toMatchObject({ ok: true, stop: 'records_empty' });
+  });
+
+  it('sans l’option, toutes les pages sont lues (le run n’échantillonne jamais)', async () => {
+    const seen: number[] = [];
+    const out = await runDeclarative({ spec: htmlSpec(PATH_PAGINATION), input: { max_pages: 200 }, outputSchema: SCHEMA, signal, transport: site(seen) });
+    expect(seen).toHaveLength(54);
+    expect(out).toMatchObject({ ok: true, stop: 'records_empty' });
+  });
+});

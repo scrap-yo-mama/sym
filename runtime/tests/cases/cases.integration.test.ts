@@ -387,10 +387,10 @@ describe('cas de référence en version fixtures, au niveau du worker (gate M2)'
     expect(await attemptsOf(run.id)).toEqual([{ execution: 'fetch', network: 'direct', result_class: 'ok' }]);
     expect(fake.requests).toBe(2);
     expect(run.cost.proxy_usd).toBe(0);
-    // Page 2 atteinte par les essais ; règle d'arrêt constatée sur la page vide qui suit la dernière (53).
+    // Page 2 atteinte par les essais ; règle d'arrêt constatée sur un échantillon de 5 pages (1, 2, milieu, dernière annoncée, page vide qui suit : banc réel R01, passage 2).
     const finished = (await eventsOf(run.id)).filter((e) => e.kind === 'attempt.finished').map((e) => e.payload as { executions: { pages: number }[]; pagination?: { verified: boolean; stop: string | null; pages: number } });
     expect(finished[0]!.executions.every((e) => e.pages === 2)).toBe(true);
-    expect(finished[0]!.pagination).toEqual({ verified: true, stop: 'records_empty', pages: 53 });
+    expect(finished[0]!.pagination).toEqual({ verified: true, stop: 'records_empty', pages: 5 });
 
     // Rejeu : un run ordinaire lit les 52 pages (et la 53e, vide), 0 appel LLM, 519 biens conformes au schéma validé.
     await client.reset();
