@@ -1377,6 +1377,10 @@ export function slotDescription(slot: DomSlot, count: number): string {
     ...(slot.suffix === null ? [] : [`suffix=${slot.suffix}`]),
     ...(slot.constant === undefined ? [] : ['constant=yes', ...(slot.constant.label === null ? [] : [`value=${slot.constant.label}`])]),
     ...(slot.up === undefined ? [] : ['scope=group']),
+    // Préfixe technique retiré par le code (R13 : `carousel-APM-…` → `APM-…`) ; partie d'un texte composé (« type | ville »).
+    ...(slot.strip === undefined ? [] : ['technical_prefix_removed']),
+    ...(slot.part === undefined ? [] : [slot.part.index === 0 ? 'part=before_separator' : 'part=after_separator']),
+    ...(slot.label === undefined ? [] : ['read_by_label']),
   ].join(';');
 }
 

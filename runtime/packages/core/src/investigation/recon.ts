@@ -390,7 +390,9 @@ export function analyzeCapture(capture: ReconCapture, allowedHosts: readonly str
         bytes: doc.bytes,
         skeleton: Object.fromEntries(block.slots.map((slot) => [`$.${slot.name}`, slotDescription(slot, block.count)])),
         dom: { slots: block.slots, pagination: loadMore ?? own, rendered: fromRendered, ...(block.hints === undefined ? {} : { hints: block.hints }) },
-        ...(carousel || counter === null ? {} : { counter }),
+        // Compteur porté par la liste de résultats (ou, à défaut, le premier bloc qui n'est pas un carrousel), jamais par un
+        // bloc de texte éditorial voisin.
+        ...(carousel || counter === null || !(block.hints?.results === true || b === blocks.find((x) => x.b.hints?.carousel !== true)?.b) ? {} : { counter }),
       });
     }
   }
