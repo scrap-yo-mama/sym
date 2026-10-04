@@ -707,6 +707,23 @@ export async function userBudgetCommittedUsd(tx: Queryable, userId: string, caps
   return spent + reserved;
 }
 
+/** Verrou consultatif de transaction des créations de run : le même que `reserve_run_slot` (REST, MCP), pris par toutes les voies. */
+export async function lockRunSlots(tx: Queryable): Promise<void> {
+  await tx.query("SELECT pg_advisory_xact_lock(hashtext('runtime.reserve_run_slot'))");
+}
+
+/**
+ * Contrôle unique du budget USD du jour (`assert_budget_usd_daily`, AF-01) pour toutes les voies de création de run (REST,
+ * MCP, planification) : sous le verrou de `reserve_run_slot`, la dépense du jour PLUS les enveloppes des runs actifs PLUS
+ * l'enveloppe du nouveau run doivent tenir dans le budget. `true` : le run peut être créé dans cette transaction.
+ */
+export async function budgetAdmitsRun(tx: Queryable, userId: string, caps: BudgetCaps, target: { kind: RunKind; apiId?: string; runId?: string }, now: Date = new Date()): Promise<boolean> {
+  await lockRunSlots(tx);
+  const committed = await userBudgetCommittedUsd(tx, userId, caps, now);
+  const envelope = await runEnvelopeUsd(tx, target, caps);
+  return !(committed >= caps.userBudgetDailyUsd || committed + envelope > caps.userBudgetDailyUsd + 1e-9);
+}
+
 /**
  * Enveloppe maximale du run à créer ou à reprendre (même borne que le worker) : `runId` (reprise), `apiId` (l'API
  * existante) ou rien (API en création : enquête au budget par défaut). API invisible : 0 (la route répond 404 ensuite).

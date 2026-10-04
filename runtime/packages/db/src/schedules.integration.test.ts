@@ -628,4 +628,30 @@ describe('règles', () => {
     expect((await withBudget(1)).outcome).toBe('run');
     expect((await fire(id, now)).outcome).toBe('run');
   });
+
+  test('assert_budget_usd_daily : 20 déclenchements simultanés à 49 $ sur 50 $ ne dépassent pas le budget (AF-01)', async () => {
+    await resetSchedules();
+    // Dépense du jour du propriétaire connue : on retire les runs laissés par les autres tests.
+    await pool.query('DELETE FROM runs WHERE owner_id = $1', [owner]);
+    const apiIds: string[] = [];
+    for (let i = 0; i < 20; i++) {
+      const api = await newApi();
+      await pool.query('UPDATE apis SET max_cost_usd = 10 WHERE id = $1', [api]);
+      apiIds.push(api);
+    }
+    const ids: string[] = [];
+    for (const api of apiIds) ids.push(await newSchedule(api, { overlap: 'allow' }));
+    // 49 $ déjà dépensés aujourd'hui sur un budget de 50 $ : l'enveloppe de 10 $ d'un run ne tient pour aucun.
+    const { rows } = await pool.query<{ id: string }>("INSERT INTO runs (api_id, owner_id, api_owner_id, trigger, state, cost_llm_usd, cost_proxy_usd) VALUES ($1, $2, $2, 'rest', 'succeeded', 49, 0) RETURNING id", [apiIds[0], owner]);
+    const now = new Date().toISOString();
+    const burst = () =>
+      Promise.all(ids.map((id) => handleScheduledRun({ pool, queue: plain, now: () => new Date(now), jobId: randomUUID(), data: { schedule_id: id } satisfies ScheduledRunJobData, userBudgetDailyUsd: 50, maxCostUsdPerRun: 10 })));
+    const first = await burst();
+    expect(first.filter((o) => o.outcome === 'run')).toHaveLength(0);
+    expect(first.every((o) => o.outcome === 'skipped' && o.reason === 'budget_exceeded')).toBe(true);
+    // 30 $ de marge : trois enveloppes de 10 $ tiennent, jamais plus, quelle que soit la rafale.
+    await pool.query('UPDATE runs SET cost_llm_usd = 20 WHERE id = $1', [rows[0]!.id]);
+    const second = await burst();
+    expect(second.filter((o) => o.outcome === 'run')).toHaveLength(3);
+  });
 });

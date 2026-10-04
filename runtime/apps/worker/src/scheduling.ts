@@ -91,7 +91,7 @@ export async function startScheduling(options: SchedulingOptions): Promise<Sched
       return;
     }
     // `createdOn` : instant d'émission de l'occurrence par le cron (un job traité en retard garde son jour et son heure).
-    const outcome = await handleScheduledRun({ pool, queue, now, jobId: job.id, data, ...(job.createdOn ? { occurredAt: job.createdOn } : {}), ...(options.userBudgetDailyUsd === undefined ? {} : { userBudgetDailyUsd: options.userBudgetDailyUsd }) });
+    const outcome = await handleScheduledRun({ pool, queue, now, jobId: job.id, data, ...(job.createdOn ? { occurredAt: job.createdOn } : {}), ...(options.userBudgetDailyUsd === undefined ? {} : { userBudgetDailyUsd: options.userBudgetDailyUsd, ...(options.maxCostUsdPerRun === undefined ? {} : { maxCostUsdPerRun: options.maxCostUsdPerRun }) }) });
     log.info({ scheduleId: data.schedule_id, ...outcome }, 'planification : déclenchement traité');
   };
   await queue.work<ScheduledRunJobData>(SCHEDULED_RUN_QUEUE, { concurrency: 2, ...polling }, onTrigger);
