@@ -2616,6 +2616,17 @@ export interface components {
             error?: components["schemas"]["RunError"];
             next_action: components["schemas"]["NextAction"] | null;
             poll_after_seconds: number | null;
+            /** @description Enquête en cours : phase, stratégies déjà essayées, dernier essai et une phrase (anglais) pour le client, qui rappelle que SYM fait l'extraction ; `null` sinon. */
+            progress?: {
+                phase: string;
+                strategies_tried: number;
+                last_attempt: {
+                    execution: string;
+                    network: string;
+                    result: string;
+                } | null;
+                message: string;
+            } | null;
             timeline: {
                 [key: string]: unknown;
             }[];

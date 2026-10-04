@@ -4980,6 +4980,35 @@ components:
             - type: 'null'
         poll_after_seconds:
           type: [integer, 'null']
+        progress:
+          description: >-
+            Enquête en cours : phase, stratégies déjà essayées, dernier essai et une phrase (anglais) pour le client, qui
+            rappelle que SYM fait l'extraction ; `null` sinon.
+          oneOf:
+            - type: object
+              additionalProperties: false
+              required: [phase, strategies_tried, last_attempt, message]
+              properties:
+                phase:
+                  type: string
+                strategies_tried:
+                  type: integer
+                last_attempt:
+                  oneOf:
+                    - type: object
+                      additionalProperties: false
+                      required: [execution, network, result]
+                      properties:
+                        execution:
+                          type: string
+                        network:
+                          type: string
+                        result:
+                          type: string
+                    - type: 'null'
+                message:
+                  type: string
+            - type: 'null'
         timeline:
           type: array
           items:

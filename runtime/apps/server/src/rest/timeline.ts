@@ -202,3 +202,37 @@ export async function investigationProgressOf(ctx: ServerContext, actor: Actor, 
   const last = events.at(-1);
   return last === undefined ? null : { seq: last.seq, timeline: buildTimeline(events, slug) };
 }
+
+/** Progression lisible d'une enquête en cours (indice `progress` de RunResult) : codes et nombres seulement, aucun texte du site. */
+export type InvestigationProgress = {
+  readonly phase: string;
+  readonly strategies_tried: number;
+  readonly last_attempt: { readonly execution: string; readonly network: string; readonly result: string } | null;
+  readonly message: string;
+};
+
+/**
+ * Indice `progress` pendant une enquête (constat Janssens : le client, sans nouvelles, a extrait le site lui-même) : la phase
+ * courante, les stratégies déjà essayées et une phrase pour le modèle client (anglais, 21 § 4.3) qui rappelle que SYM fait
+ * l'extraction et qu'il suffit de relire `get_run`.
+ */
+export function investigationProgress(timeline: readonly TimelineEntry[]): InvestigationProgress {
+  const start = timeline.find((e): e is TimelineStart => e.kind === 'investigation');
+  const attempts = timeline.filter((e): e is TimelineAttempt => e.kind === 'attempt');
+  const last = attempts.at(-1);
+  const phase = start?.phase ?? 'investigating';
+  const doing =
+    phase === 'testing'
+      ? `SYM is testing extraction strategies, cheapest first: ${attempts.length} tried${last === undefined ? '' : ` (last: ${last.execution} on ${last.network}, ${last.result})`}.`
+      : phase === 'reconnaissance'
+        ? 'SYM is looking for the data on the page: JSON responses, embedded data, repeated HTML blocks and pagination.'
+        : phase === 'awaiting_schema_validation' || phase === 'schema'
+          ? 'SYM is proposing the output schema.'
+          : 'SYM is checking access to the site.';
+  return {
+    phase,
+    strategies_tried: attempts.length,
+    last_attempt: last === undefined ? null : { execution: last.execution, network: last.network, result: last.result },
+    message: `${doing} SYM extracts every page itself: keep polling get_run, do not fetch the site yourself.`,
+  };
+}
