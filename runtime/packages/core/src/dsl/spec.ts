@@ -69,7 +69,14 @@ export type StopCondition =
 
 export interface PaginationSpec {
   type: PaginationType;
+  /** Emplacement du numéro de page : `url.query.<nom>`, `body.json.<chemin>`, `body.form.<nom>`, ou `url.path` (avec `path_pattern`). */
   param?: string;
+  /**
+   * Chemin des pages suivantes quand le numéro est dans le chemin (`/annonces/page/{page}/`) : `param` vaut `url.path`, la
+   * première page est l'URL de la requête telle quelle, la page N remplace le chemin par ce motif. Chemin seul : l'hôte et
+   * le schéma restent ceux de la requête (INV10).
+   */
+  path_pattern?: string;
   next_path?: string;
   start?: number;
   step?: number | 'items_received';
@@ -265,6 +272,7 @@ export const DECLARATIVE_SPEC_SCHEMA = {
       properties: {
         type: { enum: ['page_param', 'offset', 'cursor', 'next_link', 'infinite_scroll', 'none'] },
         param: POINTER_LIKE,
+        path_pattern: { type: 'string', maxLength: 500, pattern: '^/[^?#{}\\s]*\\{page\\}[^?#{}\\s]*$' },
         next_path: PATH,
         start: { type: 'integer', minimum: 0, maximum: 1_000_000 },
         step: { oneOf: [{ type: 'integer', minimum: 1, maximum: 10_000 }, { const: 'items_received' }] },
@@ -486,6 +494,16 @@ function checkPagination(spec: DeclarativeSpec, issues: SpecIssue[]): void {
   for (const [i, stop] of (p.stop ?? []).entries()) {
     if ('path' in stop) tryCompile(() => compileJsonPath(stop.path), `/pagination/stop/${i}/path`, issues);
     if (stop.when === 'repeated_cursor' && p.type !== 'cursor' && p.type !== 'next_link') issues.push({ path: `/pagination/stop/${i}`, code: 'stop_not_applicable', message: 'repeated_cursor ne vaut que pour cursor et next_link' });
+  }
+  // Numéro de page dans le chemin : motif obligatoire, `page_param` seulement, aucun segment `.` ni `..` (le chemin ne remonte pas).
+  if (p.param === 'url.path') {
+    if (p.type !== 'page_param') issues.push({ path: '/pagination/param', code: 'param_not_applicable', message: 'url.path ne vaut que pour page_param' });
+    if (p.path_pattern === undefined) issues.push({ path: '/pagination/path_pattern', code: 'path_pattern_required', message: 'path_pattern obligatoire avec url.path' });
+    else if (p.path_pattern.split('{page}').length !== 2 || p.path_pattern.split('/').some((seg) => seg === '..' || seg === '.')) {
+      issues.push({ path: '/pagination/path_pattern', code: 'invalid_path_pattern', message: 'path_pattern : un seul {page}, aucun segment . ou ..' });
+    }
+  } else if (p.path_pattern !== undefined) {
+    issues.push({ path: '/pagination/path_pattern', code: 'param_not_applicable', message: 'path_pattern ne vaut qu’avec param url.path' });
   }
   if (p.param !== undefined && !spec.request.params?.some((x) => x.at === p.param && x.role === 'pagination')) {
     issues.push({ path: '/pagination/param', code: 'param_not_declared', message: 'param doit figurer dans request.params avec le rôle pagination' });

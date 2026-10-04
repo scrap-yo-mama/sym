@@ -37,6 +37,19 @@ function setDeep(root: unknown, steps: Step[], value: unknown): unknown {
   return out;
 }
 
+/**
+ * Numéro de page dans le chemin (`param: url.path`, `pagination.path_pattern`, 04b §2) : la page `start` est l'URL de la
+ * requête telle quelle ; les suivantes remplacent le CHEMIN par le motif (`{page}` → numéro). Hôte, schéma et requête
+ * restent ceux de la requête rendue : la pagination ne sort jamais du domaine (INV10).
+ */
+export function applyPathPattern(request: RenderedRequest, pattern: string, value: string | number, start: number): RenderedRequest {
+  if (value === start) return request;
+  if (!/^\/[^?#{}\s]*\{page\}[^?#{}\s]*$/.test(pattern) || pattern.split('{page}').length !== 2) throw new DslError('invalid_template', 'motif de chemin de pagination invalide');
+  const url = new URL(request.url);
+  url.pathname = pattern.replace('{page}', encodeURIComponent(String(value)));
+  return { ...request, url: url.href };
+}
+
 /** Renvoie une copie de `request` dont l'emplacement `at` vaut `value`. */
 export function applyParamAt(request: RenderedRequest, at: string, value: string | number): RenderedRequest {
   if (at.startsWith('url.query.')) {

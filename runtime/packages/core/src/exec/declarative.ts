@@ -12,7 +12,7 @@ import { advancePagination, initialParam, resolveNextUrl, ScrollTracker, startPa
 import type { DeclarativeSpec } from '../dsl/spec.js';
 import { renderRequest, type RenderedRequest, type TemplateContext } from '../dsl/template.js';
 import { classifyExchange, classifyTransportError, TransportRefusal, type ClassifyContext } from './classify.js';
-import { applyParamAt } from './params.js';
+import { applyParamAt, applyPathPattern } from './params.js';
 import type { ExecFailure, HttpExchange, RequestPacer, ScrollTransport, Transport } from './types.js';
 
 export type DeclarativeRunOptions = {
@@ -199,9 +199,11 @@ export async function runDeclarative(options: DeclarativeRunOptions): Promise<De
     /**
      * Pagination par paramètre (`page_param`, `offset`) : contenu de la page précédente. Une page identique à la précédente
      * veut dire que le site ignore le paramètre (pagination changée côté site) : casse `extraction` (réparation), jamais une
-     * sortie pleine de doublons jusqu'au plafond dur rendue comme un succès (faux succès, 15 §11).
+     * sortie pleine de doublons jusqu'au plafond dur rendue comme un succès (faux succès, 15 §11). Au-delà de la page 2, une
+     * page déjà vue (site qui ramène une page hors liste à la dernière page ou à la première) est la FIN de la liste.
      */
     let previousPage: string | undefined;
+    const seenPages = new Set<string>();
     const scrollVia: Transport | undefined = options.scroll === undefined ? undefined : (_request, sig) => options.scroll!(sig);
     /** Preuve d'une sortie réussie : première page aux enregistrements écartés, sinon la dernière page lue. */
     let rejectedPage: HttpExchange | undefined;
@@ -214,7 +216,12 @@ export async function runDeclarative(options: DeclarativeRunOptions): Promise<De
     for (;;) {
       ctx.page = { number: state.pages + 1, offset: state.received, ...(param === undefined ? {} : { value: param.value }), ...(state.cursor === null ? {} : { cursor: state.cursor }) };
       let request = nextUrl === undefined ? renderRequest(spec.request, allowed, ctx) : { ...renderRequest(spec.request, allowed, ctx), method: 'GET' as const, url: nextUrl, body: undefined };
-      if (nextUrl === undefined && param !== undefined) request = applyParamAt(request, param.at, param.value);
+      if (nextUrl === undefined && param !== undefined) {
+        request =
+          param.at === 'url.path' && pagination?.path_pattern !== undefined
+            ? applyPathPattern(request, pagination.path_pattern, param.value, pagination.start ?? 1)
+            : applyParamAt(request, param.at, param.value);
+      }
       if (request.body === undefined) delete (request as { body?: unknown }).body;
 
       let exchange: HttpExchange;
@@ -222,6 +229,10 @@ export async function runDeclarative(options: DeclarativeRunOptions): Promise<De
         exchange = await (scrolling && scrollVia !== undefined ? send(request, scrollVia) : send(request));
       } catch (error) {
         if (error instanceof RequestCapReached && pages > 0) return done('max_requests_per_run', true);
+        // Page suivante absente (404, 410) après la première : fin de la liste, pas une casse (04b §2, règle d'arrêt).
+        if (error instanceof RunFailure && error.failure.failure_class === 'not_found' && pages > 0 && (pagination?.type === 'page_param' || pagination?.type === 'offset' || pagination?.type === 'next_link')) {
+          return done('no_next', false);
+        }
         throw error;
       }
       pages += 1;
@@ -238,7 +249,9 @@ export async function runDeclarative(options: DeclarativeRunOptions): Promise<De
       const got = out.ok ? (pagination?.type === 'infinite_scroll' ? scrollSeen.fresh(out.records) : out.records) : [];
       if ((pagination?.type === 'page_param' || pagination?.type === 'offset') && got.length > 0) {
         const content = JSON.stringify(got);
-        if (content === previousPage) return failed({ failure_class: 'extraction', retryable: false, detail: 'pagination_repeated_page' });
+        if (content === previousPage && pages <= 2) return failed({ failure_class: 'extraction', retryable: false, detail: 'pagination_repeated_page' });
+        if (seenPages.has(content)) return done('no_next', false);
+        seenPages.add(content);
         previousPage = content;
       }
       escalated ||= out.ok && out.escalated;
