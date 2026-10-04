@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Interface de file (T2 R1) : le code métier ne voit que `JobQueue`. L'adaptateur pg-boss 12 (`@runtime/db`) est le
 // seul endroit où pg-boss est importé et le seul à toucher le schéma `pgboss` (SQL brut interdit ailleurs).
-import type { Execution, FailureClass, Network, RunKind, RunOutcome, StepOutcome } from '../model/enums.js';
+import type { Execution, FailureClass, Network, RunKind, RunOutcome, RunTrigger, StepOutcome } from '../model/enums.js';
 import type { LogLevel } from '../observability/config.js';
 import type { PersonalValueRegistry } from '../privacy/mask.js';
 import type { ActionReason, StatusEventInput } from '../status/types.js';
@@ -170,6 +170,8 @@ export type RunContext = {
   input: unknown;
   /** Nature du run (`runs.kind`, migration 0016) : exécution d'une stratégie (défaut) ou enquête (04 §4). */
   kind?: RunKind;
+  /** Déclencheur du run (`runs.trigger`) : `draft_test` (3.14) rejoue un brouillon, sans statut, sans réparation, sans mesure de qualité. */
+  trigger?: RunTrigger;
   /** `runs.locale` : langue de la prose écrite par le LLM (bloc `Language:`, 21 § 4.5). Jamais envoyée à un site cible. */
   proseLocale?: string;
   /** Levé à l'annulation, à la perte du bail (`job_id` changé), à l'expiration du job et à l'arrêt du worker. */

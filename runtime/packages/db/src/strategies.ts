@@ -28,6 +28,8 @@ export type RunTarget = {
     readonly description: string;
   };
   readonly strategy: {
+    /** `strategy_versions.state` : un brouillon (3.14) se teste avec son propre schéma de sortie, sans jamais toucher au statut. */
+    readonly state?: 'draft' | 'current' | 'archived';
     readonly version: number;
     readonly execution: Execution;
     readonly network: Network;
@@ -70,14 +72,16 @@ export async function loadRunTarget(pool: pg.Pool, args: { apiId: string; ownerI
     const api = rows[0];
     if (api === undefined) return null;
     let strategy: RunTarget['strategy'] = null;
+    let draftSchema: unknown = undefined;
     if (args.version !== null) {
-      const sv = await tx.query<{ version: number; execution: Execution; network: Network; spec: unknown; script_ref: string | null; est_cost_usd: string | null; compilable: StrategyCompilable; source_steps: unknown; instructed_steps: unknown; instructed_steps_confirmed: { by?: string | null; at?: string | null; sha256?: string } | null }>(
-        'SELECT version, execution, network, spec, script_ref, est_cost_usd, compilable, source_steps, instructed_steps, instructed_steps_confirmed FROM strategy_versions WHERE api_id = $1 AND version = $2',
+      const sv = await tx.query<{ state: 'draft' | 'current' | 'archived'; draft_schema: unknown; version: number; execution: Execution; network: Network; spec: unknown; script_ref: string | null; est_cost_usd: string | null; compilable: StrategyCompilable; source_steps: unknown; instructed_steps: unknown; instructed_steps_confirmed: { by?: string | null; at?: string | null; sha256?: string } | null }>(
+        'SELECT state, output_schema AS draft_schema, version, execution, network, spec, script_ref, est_cost_usd, compilable, source_steps, instructed_steps, instructed_steps_confirmed FROM strategy_versions WHERE api_id = $1 AND version = $2',
         [args.apiId, args.version],
       );
       const s = sv.rows[0];
       if (s !== undefined) {
         strategy = {
+          state: s.state,
           version: s.version,
           execution: s.execution,
           network: s.network,
@@ -90,13 +94,14 @@ export async function loadRunTarget(pool: pg.Pool, args: { apiId: string; ownerI
           instructedConfirmation:
             s.instructed_steps_confirmed === null ? null : { by: s.instructed_steps_confirmed.by ?? null, at: s.instructed_steps_confirmed.at ?? null, sha256: s.instructed_steps_confirmed.sha256 ?? '' },
         };
+        if (s.state === 'draft' && s.draft_schema !== null && s.draft_schema !== undefined) draftSchema = s.draft_schema;
       }
     }
     return {
       api: {
         id: api.id,
         projectId: api.project_id,
-        outputSchema: api.output_schema,
+        outputSchema: draftSchema === undefined ? api.output_schema : draftSchema,
         networkPolicy: api.network_policy,
         domainPacing: api.domain_pacing ?? {},
         maxCostUsd: Math.min(Number(api.max_cost_usd), args.caps?.maxCostUsdPerRun ?? Number.POSITIVE_INFINITY),

@@ -54,6 +54,7 @@ import {
   quarantineSummary,
   rejectionVerdict,
   volumeAnomaly,
+  isDraftTrigger,
   type DegradedSignal,
   type Execution,
   type ItemPartition,
@@ -1242,12 +1243,47 @@ export function createStrategyRuntime(deps: StrategyExecutorDeps): StrategyRunti
     }
   };
 
+  /**
+   * Run `draft_test` (3.14, 19 §6) : rejoue la stratégie d'un brouillon (ou la version en service, run de référence du diff) avec
+   * TOUTES les gardes d'un run (SSRF, cadence, plafond de coût, classification des refus, bac à sable, traçage), contre le schéma
+   * de sortie du brouillon. Rien n'est promu, réparé ni compilé ; aucun événement de statut (INV3) ; le profil de qualité et
+   * le volume ne sont pas mesurés (la baseline ne vient jamais d'un essai). Une sortie non conforme échoue le run : un brouillon
+   * ne livre pas d'items écartés.
+   */
+  const executeDraftTest = async (ctx: RunCtx, target: RunTarget, strategy: NonNullable<RunTarget['strategy']>, started: number): Promise<RunResult> => {
+    const trial = await runTrial(ctx, target, strategy, started, 'quarantine');
+    const version = strategy.version;
+    if (trial.outcome.stop === 'tunnel_offline') return { state: 'skipped_tunnel_offline', stop_reason: 'tunnel_offline', error_detail: 'tunnel_offline', strategy_version: version };
+    if (trial.llm !== null && trial.llm.usd === null) await ctx.log('warn', 'llm_price_missing', { model: trial.llm.modelId });
+    const sorted = sortItems(target, trial);
+    await recordTrial(ctx, strategy, trial, sorted?.verdict ?? null, null);
+    if (trial.outcome.stop !== undefined) return { state: 'failed', failure_class: 'blocked_by_protection', retryable: false, error_detail: trial.outcome.stop, strategy_version: version };
+    if (trial.llmUsd === null) return { state: 'failed', failure_class: 'run_budget_exceeded', retryable: false, error_detail: 'llm_price_missing', strategy_version: version };
+    if (trial.proxyUsd + trial.llmUsd > target.api.maxCostUsd) return { state: 'failed', failure_class: 'run_budget_exceeded', retryable: false, error_detail: 'max_cost_usd', strategy_version: version };
+    if (!trial.result.ok) {
+      const failure = trial.guardedFailure ?? trial.result.failure;
+      return { state: 'failed', failure_class: failure.failure_class, retryable: failure.retryable, error_detail: failure.detail, strategy_version: version };
+    }
+    if (sorted === null) return { state: 'failed', failure_class: 'extraction', retryable: false, error_detail: 'schema_mismatch', strategy_version: version };
+    const { partition } = sorted;
+    if (sorted.verdict === 'break') {
+      await quarantine(ctx, target, partition, sorted.verdict);
+      await ctx.log('warn', 'schema_mismatch', { conform: partition.conform.length, rejected: partition.rejected.length, draft: true });
+      return { state: 'failed', failure_class: 'extraction', retryable: false, error_detail: partition.conform.length === 0 ? 'schema_mismatch' : 'items_rejected', items_rejected: partition.rejected.length, strategy_version: version };
+    }
+    await quarantine(ctx, target, partition, sorted.verdict);
+    const saved = await saveRunDataset(deps.pool, { runId: ctx.runId, apiId: ctx.apiId, ownerId: ctx.ownerId, projectId: target.api.projectId, items: partition.conform });
+    return { state: 'succeeded', outcome: partition.rejected.length > 0 ? 'degraded' : 'clean', degraded_reasons: partition.rejected.length > 0 ? ['items_rejected'] : [], items: partition.conform.length, items_rejected: partition.rejected.length, dataset_id: saved.datasetId, strategy_version: version };
+  };
+
   const executeRun = async (ctx: RunCtx): Promise<RunResult> => {
     const started = now();
     const target = await loadRunTarget(deps.pool, { apiId: ctx.apiId, ownerId: ctx.ownerId, version: ctx.strategyVersion, ...(deps.costCaps === undefined ? {} : { caps: deps.costCaps }) });
     if (target === null) return { state: 'failed', failure_class: 'code_error', retryable: false, error_detail: 'api_not_found' };
     const strategy = target.strategy;
     if (strategy === null) return { state: 'failed', failure_class: 'code_error', retryable: false, error_detail: 'no_strategy_version' };
+    // Test d'un brouillon (3.14) : mêmes gardes que tout run, mais ni statut, ni réparation, ni compilation, ni mesure de qualité.
+    if (isDraftTrigger(ctx.trigger)) return executeDraftTest(ctx, target, strategy, started);
 
     // Runs : politique `quarantine` (D-49) — chaque item est trié contre `output_schema`, les non conformes ne sont jamais livrés.
     const trial = await runTrial(ctx, target, strategy, started, 'quarantine');

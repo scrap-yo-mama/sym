@@ -312,6 +312,8 @@ export type RunClaim = {
   kind: RunKind;
   /** `runs.locale` (0025) : langue du demandeur au lancement ; prose du LLM seulement, jamais une requête vers un site (21 § 6). */
   locale: string;
+  /** `runs.trigger` : `draft_test` (3.14) n'applique aucun statut, aucune réparation, aucune mesure de qualité. */
+  trigger: RunTrigger;
 };
 
 /**
@@ -327,12 +329,13 @@ export async function claimRun(db: Queryable, args: { runId: string; jobId: stri
     allow_write_actions: boolean;
     kind: RunKind;
     locale: string;
+    trigger: RunTrigger;
   }>(
     `UPDATE runs r SET state = 'running', worker_id = $3, started_at = coalesce(r.started_at, now()), heartbeat_at = now(),
        strategy_version = coalesce(r.strategy_version, a.current_strategy_version)
      FROM apis a
      WHERE r.id = $1 AND r.job_id = $2 AND r.state = 'queued' AND r.paused_at IS NULL AND a.id = r.api_id
-     RETURNING r.api_id, r.owner_id, r.strategy_version, r.input, a.allow_write_actions, r.kind, r.locale`,
+     RETURNING r.api_id, r.owner_id, r.strategy_version, r.input, a.allow_write_actions, r.kind, r.locale, r.trigger`,
     [args.runId, args.jobId, args.workerId],
   );
   const r = rows[0];
@@ -347,6 +350,7 @@ export async function claimRun(db: Queryable, args: { runId: string; jobId: stri
     allowWriteActions: r.allow_write_actions,
     kind: r.kind,
     locale: r.locale,
+    trigger: r.trigger,
   };
 }
 

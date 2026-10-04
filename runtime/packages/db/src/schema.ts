@@ -15,6 +15,7 @@ import {
   STRATEGY_ARCHIVE_REASONS,
   STRATEGY_COMPILABLE,
   STRATEGY_CREATORS,
+  STRATEGY_STATES,
   VISIBILITIES,
   type AttemptResult,
   type FailureClass,
@@ -101,6 +102,8 @@ export const users = pgTable(
     timezone: text('timezone'),
     // Migration 0025_i18n : fuseau déjà initialisé (toute écriture, même null) ; la console ne le pose qu'à la première connexion.
     timezoneInitialized: boolean('timezone_initialized').notNull().default(false),
+    // Migration 0026_iteration (3.14) : porte de promotion, jamais plus large que ces deux valeurs.
+    promotionGate: text('promotion_gate', { enum: ['major_in_console', 'all_in_console'] }).notNull().default('major_in_console'),
   },
   (t) => [uniqueIndex('users_single_owner').on(t.role).where(sql`role = 'owner'`)],
 );
@@ -369,6 +372,10 @@ export const apis = pgTable(
     cleanStreak: integer('clean_streak').notNull().default(0),
     lastSignalAt: tstz('last_signal_at'),
     currentStrategyVersion: integer('current_strategy_version'),
+    // 0026_iteration (3.14) : brouillon en cours, version du schéma en service, budget d'itération (NULL : repair_budget_usd).
+    draftStrategyVersion: integer('draft_strategy_version'),
+    outputSchemaVersion: text('output_schema_version').notNull().default('1.0.0'),
+    iterationBudgetUsd: numeric('iteration_budget_usd', { precision: 12, scale: 6 }),
     requires: jsonb('requires').notNull().default({}),
     requiresSession: boolean('requires_session').notNull().default(false),
     networkPolicy: jsonb('network_policy').notNull().default({ allow: ['direct'] }),
@@ -473,6 +480,14 @@ export const strategyVersions = pgTable(
     source: jsonb('source'),
     // 0020_catalog_memory_quality (2.12) : signature calculée par le code.
     signature: jsonb('signature'),
+    // 0026_iteration (3.14) : état (draft | current | archived), base et péremption du brouillon, schéma propre, dernier test.
+    state: text('state', { enum: STRATEGY_STATES }).notNull().default('archived'),
+    baseVersion: integer('base_version'),
+    baseStale: boolean('base_stale').notNull().default(false),
+    expiresAt: tstz('expires_at'),
+    outputSchema: jsonb('output_schema'),
+    outputSchemaVersion: text('output_schema_version').notNull().default('1.0.0'),
+    lastTest: jsonb('last_test'),
   },
   (t) => [primaryKey({ columns: [t.apiId, t.version] }), index('strategy_versions_owner_id_idx').on(t.ownerId)],
 );

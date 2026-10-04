@@ -10,7 +10,7 @@ type Json = Record<string, unknown>;
 const isRecord = (v: unknown): v is Json => typeof v === 'object' && v !== null && !Array.isArray(v);
 
 export const DIFF_SAMPLE_MAX = 5;
-export const PERSONAL_MASK = '[masked]';
+export const DIFF_PERSONAL_MASK = '[masked]';
 
 const sortKeys = (v: unknown, depth = 0): unknown =>
   depth > 32 ? null : Array.isArray(v) ? v.map((x) => sortKeys(x, depth + 1)) : isRecord(v) ? Object.fromEntries(Object.keys(v).sort().map((k) => [k, sortKeys(v[k], depth + 1)])) : v;
@@ -90,7 +90,7 @@ export function diffItems(current: readonly Item[], draft: readonly Item[], opti
     fields.set(field, f);
   };
   const samples: DiffSample[] = [];
-  const mask = (field: string, value: unknown): unknown => (personal.has(field) ? PERSONAL_MASK : value);
+  const mask = (field: string, value: unknown): unknown => (personal.has(field) ? DIFF_PERSONAL_MASK : value);
 
   let added = 0;
   let removed = 0;
@@ -137,7 +137,7 @@ export function diffItems(current: readonly Item[], draft: readonly Item[], opti
       if (a === undefined) bump(field, 'filled');
       else if (b === undefined) bump(field, 'dropped');
       else bump(field, 'changed');
-      if (samples.length < DIFF_SAMPLE_MAX) samples.push({ key: keyFields.map((f) => String(personal.has(f) ? PERSONAL_MASK : (item[f] ?? ''))).join('|').slice(0, 120), field, before: mask(field, a), after: mask(field, b) });
+      if (samples.length < DIFF_SAMPLE_MAX) samples.push({ key: keyFields.map((f) => String(personal.has(f) ? DIFF_PERSONAL_MASK : (item[f] ?? ''))).join('|').slice(0, 120), field, before: mask(field, a), after: mask(field, b) });
     }
     if (itemChanged) changed += 1;
     else unchanged += 1;
