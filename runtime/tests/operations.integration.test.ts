@@ -68,6 +68,25 @@ async function expectPinnedExemption(url: string, pinned: SeededInstance['pinned
   expect(days).toBeLessThan(90.1);
 }
 
+/**
+ * Chemins de données VOULUS de la dernière migration, exclus du « 0 perte » et vérifiés à part : 0026_no_run_cap (D-123)
+ * passe l'ancien défaut 0,5 de `apis.max_cost_usd` à NULL (aucun plafond par run). Sans effet dès qu'une migration suit.
+ */
+const LAST_MIGRATION_DATA_PATHS: Record<string, Record<string, readonly string[]>> = { no_run_cap: { apis: ['max_cost_usd'] } };
+const lastDataPaths = LAST_MIGRATION_DATA_PATHS[migrations.at(-1)!.name] ?? {};
+
+function withoutDataPaths(columns: Record<string, string[]>): Record<string, string[]> {
+  return Object.fromEntries(Object.entries(columns).map(([t, cs]) => [t, cs.filter((c) => !(lastDataPaths[t] ?? []).includes(c))]));
+}
+
+/** Chemin de données de 0026 : les API à l'ancien défaut (toutes celles de l'instance N-1 peuplée) n'ont plus de plafond. */
+async function expectLastMigrationDataPath(url: string): Promise<void> {
+  if (migrations.at(-1)!.name !== 'no_run_cap') return;
+  const row = await withClient(url, async (c) => (await c.query<{ total: number; capped: number }>('SELECT count(*)::int AS total, count(max_cost_usd)::int AS capped FROM apis')).rows[0]);
+  expect(row?.total).toBeGreaterThan(0);
+  expect(row?.capped).toBe(0);
+}
+
 const apiState = (url: string) =>
   withClient(url, async (c) =>
     (await c.query('SELECT id, slug, status, status_reason, current_strategy_version, clean_streak FROM apis ORDER BY id')).rows,
@@ -202,7 +221,7 @@ describe(`mise à jour N-1 → N et retour arrière (PostgreSQL ${inject('pgVers
     // Instance N-1 : schéma sans la dernière migration, API saines, 10 runs, 3 secrets.
     await migrateUp({ connectionString: db.url, migrations: migrations.slice(0, -1) });
     seeded = await seedInstance(db.url, loadKeyring({ DATABASE_URL: db.url, MASTER_KEY: key }));
-    projection = await withClient(reference.url, columnsSnapshot);
+    projection = withoutDataPaths(await withClient(reference.url, columnsSnapshot));
     before = { data: await withClient(db.url, dataN1), apis: await apiState(db.url) };
     // Point 2 de la procédure (14 § 6) : sauvegarde juste avant la migration.
     preMigrationDump = dumpDatabase(containerId, db.name);
@@ -237,6 +256,7 @@ describe(`mise à jour N-1 → N et retour arrière (PostgreSQL ${inject('pgVers
     await secretsReadable(db.url, key, seeded.secrets);
     // Chemin de données de la migration (UPDATE ... WHERE pinned) : l'épinglage reçoit sa raison et son échéance.
     await expectPinnedExemption(db.url, seeded.pinned);
+    await expectLastMigrationDataPath(db.url);
     const doctor = JSON.parse((await run(['doctor', '--json'], { env: serverEnv(db.url, key) })).out) as { checks: { id: string; status: string; code: string }[] };
     expect(doctor.checks.filter((c) => c.status === 'error')).toEqual([]);
     expect(doctor.checks.find((c) => c.id === 'schema')?.code).toBe('schema_ok');
@@ -268,5 +288,6 @@ describe(`mise à jour N-1 → N et retour arrière (PostgreSQL ${inject('pgVers
     expect(await readyStatus(restored.url, key)).toMatchObject({ ready: 200 });
     expect(await withClient(restored.url, dataN1)).toEqual(before.data);
     await expectPinnedExemption(restored.url, seeded.pinned);
+    await expectLastMigrationDataPath(restored.url);
   });
 });

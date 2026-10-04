@@ -15,6 +15,7 @@ import { randomUUID } from 'node:crypto';
 import {
   ACTIVE_RUN_STATES,
   boundErrorDetail,
+  COST_CAPS_DEFAULTS,
   currentTraceparent,
   maxRunRequeues,
   RUN_LOST_DETAIL,
@@ -657,7 +658,6 @@ export async function removeWorkerBeat(db: Queryable, workerId: string): Promise
 
 /** Plafonds d'instance qui bornent l'enveloppe d'un run (`MAX_COST_USD_PER_RUN`, `USER_BUDGET_DAILY_USD`, 08b § 3). */
 export type BudgetCaps = { readonly userBudgetDailyUsd: number; readonly maxCostUsdPerRun: number };
-const NO_CAPS: BudgetCaps = { userBudgetDailyUsd: 1e9, maxCostUsdPerRun: 1e9 };
 
 /**
  * Enveloppe maximale d'un run (SQL, alias `r` pour le run et `a` pour son API) : `apis.max_cost_usd` pour un run,
@@ -701,7 +701,7 @@ async function budgetFigures(tx: Queryable, userId: string, now: Date, caps: Bud
 }
 
 /** Dépense du jour (UTC) d'un utilisateur : base du budget USD par utilisateur et par jour (08b § 3, `assert_budget_usd_daily`). */
-export async function userSpentTodayUsd(tx: Queryable, userId: string, now: Date = new Date(), caps: BudgetCaps = NO_CAPS): Promise<number> {
+export async function userSpentTodayUsd(tx: Queryable, userId: string, now: Date = new Date(), caps: BudgetCaps = COST_CAPS_DEFAULTS): Promise<number> {
   return (await budgetFigures(tx, userId, now, caps)).spent;
 }
 
