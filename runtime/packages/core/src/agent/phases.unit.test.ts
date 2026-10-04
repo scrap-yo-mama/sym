@@ -2,7 +2,7 @@
 // Règle des deux par phase (tâche 2.12, 19 §7, r6 R1, R3 à R6) : registre d'outils construit par le code et politique
 // de requêtes de l'agent, en tests unitaires (la partie « agent » se rejoue en 2.13 et 4.3).
 import { describe, expect, test } from 'vitest';
-import { AGENT_PHASES, agentRequestPolicy, legsOf, toolRegistryForPhase, type AgentRequestContext } from './phases.js';
+import { AGENT_PHASES, agentRequestPolicy, bodyHasSensitiveValue, legsOf, phaseAllowsTool, toolRegistryForPhase, type AgentRequestContext } from './phases.js';
 
 describe('assert_rule_of_two_by_phase', () => {
   test('aucune phase ne réunit A, B et C complets ; aucune n’a de pont MCP en V1', () => {
@@ -67,5 +67,92 @@ describe('assert_agent_request_policy (politique en test unitaire ; corpus sur l
     const many = Array.from({ length: 12 }, (_, i) => `p${i}=1`).join('&');
     expect(blocked(`https://shop.a.fr/api/items?page=1&${many}`, { templates: [] , trafficUrls: [`https://shop.a.fr/api/items?page=1&${many}`] })).toMatchObject({ allowed: false, reason: 'too_many_params' });
     expect(blocked('javascript:alert(1)')).toMatchObject({ allowed: false });
+  });
+});
+
+describe('assert_agent_request_policy : valeurs des paramètres (PA-09) et outil hors phase (PA-01)', () => {
+  const ctx = (over: Partial<AgentRequestContext> = {}): AgentRequestContext => ({
+    targetHosts: ['shop.a.fr'],
+    targetSuffixes: ['a.fr'],
+    domUrls: ['https://shop.a.fr/search?q=chaise&page=1'],
+    trafficUrls: [],
+    templates: [],
+    runInputs: { query: 'table' },
+    sensitiveValues: [],
+    ...over,
+  });
+  const decide = (url: string, over: Partial<AgentRequestContext> = {}) => agentRequestPolicy({ method: 'GET', url }, ctx(over));
+
+  test('mêmes clés que l’URL connue mais valeur libre : refusée (param_value_untrusted)', () => {
+    expect(decide('https://shop.a.fr/search?q=un-item-d-un-autre-domaine&page=1')).toEqual({ allowed: false, code: 'agent_request_blocked', reason: 'param_value_untrusted' });
+  });
+
+  test('valeur identique à l’URL connue, entrée du run, nombre (pagination) ou texte de la consigne du propriétaire : permise', () => {
+    expect(decide('https://shop.a.fr/search?q=chaise&page=1')).toEqual({ allowed: true });
+    expect(decide('https://shop.a.fr/search?q=chaise&page=12')).toEqual({ allowed: true });
+    expect(decide('https://shop.a.fr/search?q=table&page=1')).toEqual({ allowed: true });
+    expect(decide('https://shop.a.fr/search?q=fauteuil&page=1')).toMatchObject({ allowed: false, reason: 'param_value_untrusted' });
+    expect(decide('https://shop.a.fr/search?q=fauteuil&page=1', { trustedValues: ['fauteuil'] })).toEqual({ allowed: true });
+  });
+});
+
+describe('assert_rule_of_two_by_phase : outil hors phase refusé', () => {
+  test('un outil hors du registre de la phase est refusé, y compris pour les phases sans outil', () => {
+    expect(phaseAllowsTool(toolRegistryForPhase('e5_e6'), 'navigate')).toBe(true);
+    expect(phaseAllowsTool(toolRegistryForPhase('e5_e6'), 'shell')).toBe(false);
+    for (const phase of ['replay', 'e4_extract', 'investigation', 'recompile', 'judge', 'reflect'] as const) {
+      expect(phaseAllowsTool(toolRegistryForPhase(phase), 'navigate')).toBe(false);
+      expect(phaseAllowsTool(toolRegistryForPhase(phase), 'click')).toBe(false);
+    }
+  });
+});
+
+describe('assert_agent_request_policy : gabarits, URL de départ et valeurs sensibles normalisées (fix-pa01, points 6, 9, 11)', () => {
+  const ctx = (over: Partial<AgentRequestContext> = {}): AgentRequestContext => ({
+    targetHosts: ['shop.a.fr'],
+    targetSuffixes: [],
+    domUrls: [],
+    trafficUrls: [],
+    templates: [],
+    runInputs: { query: 'chaise' },
+    sensitiveValues: [],
+    ...over,
+  });
+  const decide = (url: string, over: Partial<AgentRequestContext> = {}) => agentRequestPolicy({ method: 'GET', url }, ctx(over));
+
+  test('URL de départ à paramètres connue (pas un gabarit) : une valeur libre sur ses clés est refusée, la pagination reste permise', () => {
+    const known = { trafficUrls: ['https://shop.a.fr/search?q=chaise&page=1'] };
+    expect(decide('https://shop.a.fr/search?q=chaise&page=1', known)).toEqual({ allowed: true });
+    expect(decide('https://shop.a.fr/search?q=chaise&page=2', known)).toEqual({ allowed: true });
+    expect(decide('https://shop.a.fr/search?q=item-d-une-autre-api', known)).toMatchObject({ allowed: false, reason: 'param_value_untrusted' });
+  });
+
+  test('vrai gabarit {param} : la valeur substituée doit être une entrée du run ou un nombre (clé, segment de chemin)', () => {
+    const q = { templates: ['https://shop.a.fr/search?q={q}&sort=price'] };
+    expect(decide('https://shop.a.fr/search?q=item-d-une-autre-api', q)).toMatchObject({ allowed: false, reason: 'param_value_untrusted' });
+    expect(decide('https://shop.a.fr/search?q=chaise', q)).toEqual({ allowed: true });
+    expect(decide('https://shop.a.fr/search?q=12', q)).toEqual({ allowed: true });
+    // Clé non variable du gabarit : sa valeur littérale seulement (point 6).
+    expect(decide('https://shop.a.fr/search?q=chaise&sort=price', q)).toEqual({ allowed: true });
+    expect(decide('https://shop.a.fr/search?q=chaise&sort=donnee-hors-liste', q)).toMatchObject({ allowed: false, reason: 'param_value_untrusted' });
+    const path = { templates: ['https://shop.a.fr/produit/{id}'] };
+    expect(decide('https://shop.a.fr/produit/42', path)).toEqual({ allowed: true });
+    expect(decide('https://shop.a.fr/produit/item-d-une-autre-api', path)).toMatchObject({ allowed: false, reason: 'param_value_untrusted' });
+  });
+
+  test('valeur sensible multi-mots (+ en espace), téléphone écrit à la française, secret découpé entre deux paramètres : refusés', () => {
+    const base = { domUrls: ['https://shop.a.fr/search?q=a'], sensitiveValues: ['jean dupont', '+33612345678', 'zz-secret-7731'] };
+    expect(decide('https://shop.a.fr/search?q=jean+dupont', base)).toMatchObject({ allowed: false, reason: 'sensitive_value' });
+    expect(decide('https://shop.a.fr/search?q=0612345678', base)).toMatchObject({ allowed: false, reason: 'sensitive_value' });
+    expect(decide('https://shop.a.fr/search?q=06.12.34.56.78', base)).toMatchObject({ allowed: false, reason: 'sensitive_value' });
+    expect(decide('https://shop.a.fr/search?q=a&r=zz-sec&s=ret-7731', { ...base, domUrls: ['https://shop.a.fr/search?q=a&r=zz-sec&s=ret-7731'] })).toMatchObject({ allowed: false, reason: 'sensitive_value' });
+    expect(decide('https://shop.a.fr/search?q=a', base)).toEqual({ allowed: true });
+  });
+
+  test('corps d’une écriture : les mêmes valeurs sensibles sont repérées (form-urlencoded, JSON)', () => {
+    const sensitive = ['jean dupont', 'zz-secret-7731'];
+    expect(bodyHasSensitiveValue('nom=jean+dupont&x=1', sensitive, {})).toBe(true);
+    expect(bodyHasSensitiveValue('{"k":"ZZ-SECRET-7731"}', sensitive, {})).toBe(true);
+    expect(bodyHasSensitiveValue('nom=martin', sensitive, {})).toBe(false);
   });
 });

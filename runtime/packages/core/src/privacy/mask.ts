@@ -48,6 +48,10 @@ export class PersonalValueRegistry {
   get size(): number {
     return this.#values.size;
   }
+  /** Valeurs normalisées vues pendant le run (politique de requêtes de l'agent : jamais dans une URL, PA-01). */
+  values(): string[] {
+    return [...this.#values];
+  }
   #regexes(): RegExp[] {
     if (this.#patterns === undefined) {
       // Une seule alternance géante coûte des secondes à compiler (V8) : des paquets bornés gardent un coût linéaire.

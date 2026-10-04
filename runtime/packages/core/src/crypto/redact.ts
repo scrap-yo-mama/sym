@@ -70,6 +70,14 @@ export class SecretValueRegistry {
   get size(): number {
     return this.#values.size;
   }
+  /** Secrets enregistrés (politique de requêtes de l'agent : jamais dans une URL, PA-01). */
+  values(): string[] {
+    return [...this.#values];
+  }
+  /** Encodages usuels des secrets (URL, form-urlencoded, JSON, fragments base64) : formes à refuser dans une URL de l'agent (PA-01, point 11). */
+  variants(): string[] {
+    return [...this.#patterns];
+  }
 
   #rebuild(): void {
     const variants = new Set<string>();

@@ -30,6 +30,7 @@ import { runStepAgent, type StepAgentOutcome } from '@runtime/agent';
 import { readHealthyItems } from '@runtime/db';
 import { roleTarget, type LlmClient, type LlmConfig } from '@runtime/llm';
 import type pg from 'pg';
+import { createAgentRequestGate, runSensitiveValues } from '../browser/agent-request-gate.js';
 import type { CandidateCheck, RepairOutcome, RepairPort } from './strategy-executor.js';
 
 type Request = Parameters<RepairPort>[0];
@@ -127,27 +128,47 @@ export async function repairStepsUnderLease(deps: StepRepairDeps, request: Reque
       ledger.propose(null);
       const client = llm.client({ ...cfg, roles: { agent: cfg.roles.agent! } });
       let outcome: StepAgentOutcome | null = null;
+      // Politique de requêtes de l'agent (19 §7, PA-01) : la reprise d'étape y est soumise comme E5 et E6, pendant la phase de
+      // l'agent seulement (le rejeu des étapes garde son régime) ; refus journalisés par code, jamais d'URL ni de valeur.
+      const gate = createAgentRequestGate({
+        phase: 'step_repair',
+        allowedHosts: req.spec.allowed_hosts,
+        startUrl: req.spec.start_url,
+        templates: req.spec.steps.flatMap((st) => (st.op === 'goto' && st.url !== undefined ? [st.url] : [])),
+        allowWriteActions: target.api.allowWriteActions,
+        agentActive: false,
+        sensitiveValues: runSensitiveValues(ctx.personal),
+        runInputs,
+      });
       const check = await stepTrial(
         { ...strategy, spec: req.spec },
         {
           stopBefore: req.stepIndex,
+          gate,
           afterPause: async (tools, host) => {
-            outcome = await runStepAgent(client, {
-              page: host.agentPage(tools, runInputs),
-              step: { id: req.step.id, op: req.step.op, oldTarget: req.step.target === undefined ? null : primaryTarget(req.step.target) },
-              intent: req.intent.replace(BLOCK, ''),
-              pre: req.pre,
-              post: req.post,
-              runInputs,
-              budget,
-              price,
-              rules: [],
-              // Annulation du run ou refus retenu par la garde pendant la phase de l'agent : la boucle s'arrête aussitôt.
-              signal: tools.signal === undefined ? ctx.signal : AbortSignal.any([ctx.signal, tools.signal]),
-            });
+            gate.setAgentActive(true);
+            try {
+              outcome = await runStepAgent(client, {
+                page: host.agentPage(tools, runInputs),
+                step: { id: req.step.id, op: req.step.op, oldTarget: req.step.target === undefined ? null : primaryTarget(req.step.target) },
+                intent: req.intent.replace(BLOCK, ''),
+                pre: req.pre,
+                post: req.post,
+                runInputs,
+                budget,
+                price,
+                rules: [],
+                // Annulation du run ou refus retenu par la garde pendant la phase de l'agent : la boucle s'arrête aussitôt.
+                signal: tools.signal === undefined ? ctx.signal : AbortSignal.any([ctx.signal, tools.signal]),
+              });
+            } finally {
+              gate.setAgentActive(false);
+            }
           },
         },
       );
+      const policy = gate.summary();
+      if (policy.blocked > 0) await ctx.log('warn', 'agent_request_blocked', { code: 'agent_request_blocked', count: policy.blocked, reasons: [...new Set(policy.reasons)] });
       ledger.spend(check.costUsd);
       const out = outcome as StepAgentOutcome | null;
       // Prix inconnu (null) : le budget de réparation est épuisé, jamais compté 0 (INV4).

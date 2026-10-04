@@ -13,7 +13,7 @@
 // - Budget : `agent_budget` de l'étape (pas et dollars), plafond d'un appel connu AVANT l'envoi ; prix inconnu : aucun
 //   appel (le plafond n'est pas tenable).
 import { randomBytes } from 'node:crypto';
-import { sanitizeStepIntent, STEP_AGENT_TOOLS, StepAgentMeter, untrustedStepIntent, type StepAgentBudget, type StepPost, type StepPre } from '@runtime/core';
+import { sanitizeStepIntent, STEP_AGENT_TOOLS, StepAgentMeter, toolRegistryForPhase, untrustedStepIntent, type StepAgentBudget, type StepPost, type StepPre } from '@runtime/core';
 import { LlmError, type ChatMessage, type JsonSchema, type LlmClient } from '@runtime/llm';
 
 export type SemanticTarget = { readonly role: string; readonly name: string };
@@ -42,7 +42,12 @@ export type StepAgentArgs = {
   /** Règles à jour (2.10) ; vides avant sa fusion. */
   readonly rules: readonly { readonly name: string; readonly body: string }[];
   readonly signal?: AbortSignal;
+  /** Outils du registre de la phase `step_repair` (19 §7, `toolRegistryForPhase`) ; un outil hors liste est refusé sans exécution. */
+  readonly phaseTools?: readonly string[];
 };
+
+/** Outil de l'agent d'étape → outil du registre de phase (liste fermée de 1.6). */
+const STEP_TOOL_IN_REGISTRY = { click: 'click', type: 'type', scroll: 'scroll', done: 'finish' } as const;
 
 export type StepAgentOutcome = {
   readonly status: 'done' | 'budget' | 'max_steps' | 'error';
@@ -168,6 +173,14 @@ export async function runStepAgent(client: LlmClient, args: StepAgentArgs): Prom
       const after = client.meter.snapshot();
       meter.spend(after.cost_usd === null ? null : (after.cost_usd_known ?? 0) - (before.cost_usd_known ?? 0));
       if (action === null) continue;
+      // Registre de la phase (19 §7) : l'outil doit y figurer, sinon refus sans exécution ; `read_skill` (sans réseau) exige au moins un outil de phase.
+      const offered = args.phaseTools ?? toolRegistryForPhase('step_repair').tools;
+      const inPhase = action.tool === 'read_skill' ? offered.length > 0 : offered.includes(STEP_TOOL_IN_REGISTRY[action.tool]);
+      if (!inPhase) {
+        refused.push('tool_not_in_phase');
+        history.push(`${action.tool}:tool_not_in_phase`);
+        continue;
+      }
       switch (action.tool) {
         case 'click': {
           const target = onPage(obs, action.role, action.name);

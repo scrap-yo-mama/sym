@@ -117,6 +117,7 @@ import { runFetchInPageExecutor, runPlaywrightExecutor } from './browser-executo
 import { robotIdentity, type RobotIdentity } from './robot-identity.js';
 import { runScriptExecutor, type ScriptPort } from './script-executor.js';
 import type { AgentBrowser, AgentBrowserOptions } from '../browser/agent-browser.js';
+import { runSensitiveValues, type AgentRequestGate } from '../browser/agent-request-gate.js';
 import { runAgentExecutor, runAgentFetchExecutor, runHybridExecutor, type AgentOutcome, type EngineFactory, type LlmSpend } from './agent-executors.js';
 import { AttemptCost } from './attempt-cost.js';
 import { runTunnelExecutor, TunnelSession, type TunnelStop } from './tunnel-executor.js';
@@ -219,7 +220,12 @@ export type RepairedStrategy = {
  * Essai d'une stratégie `steps` (2.13) : arrêt de l'interprète AVANT une étape et action de l'hôte sur la page gardée
  * (agent d'étape, niveaux 2 et 3), sans que la page ne quitte l'hôte.
  */
-type StepsTrialExtras = { readonly stopBefore?: number; readonly afterPause?: (tools: StepPageTools, host: StepsHost) => Promise<void> };
+type StepsTrialExtras = {
+  readonly stopBefore?: number;
+  /** Garde de requêtes de l'agent d'étape (19 §7, PA-01) : appliquée aux requêtes de la page pendant sa phase seulement. */
+  readonly gate?: AgentRequestGate;
+  readonly afterPause?: (tools: StepPageTools, host: StepsHost) => Promise<void>;
+};
 
 /** Issue d'une réparation (04 §5). */
 export type RepairOutcome =
@@ -682,7 +688,7 @@ export function createStrategyRuntime(deps: StrategyExecutorDeps): StrategyRunti
         allowWriteActions: target.api.allowWriteActions,
         ...(deps.classify === undefined ? {} : { classify: deps.classify }),
         userAgent,
-        steps: { host, ...(afterPause === undefined ? {} : { afterPause: (tools: StepPageTools) => afterPause(tools, host) }) },
+        steps: { host, ...(args.extras?.gate === undefined ? {} : { gate: args.extras.gate }), ...(afterPause === undefined ? {} : { afterPause: (tools: StepPageTools) => afterPause(tools, host) }) },
       });
       let result = run.result;
       const itemPolicy = args.common.itemPolicy ?? 'strict';
@@ -784,6 +790,9 @@ export function createStrategyRuntime(deps: StrategyExecutorDeps): StrategyRunti
           signal: ctx.signal,
           maxCostUsd: target.api.maxCostUsd,
           cost,
+          // Politique de requêtes de l'agent (19 §7, PA-01) : jamais de valeur sensible du run (données personnelles vues,
+          // secrets) dans une URL de l'agent ; relues à chaque requête.
+          sensitiveValues: runSensitiveValues(ctx.personal),
           ...(pacer === undefined ? {} : { pacer }),
           ...(maxRequests === undefined ? {} : { maxRequests }),
           ...(deps.classify === undefined ? {} : { classify: deps.classify }),
@@ -820,6 +829,7 @@ export function createStrategyRuntime(deps: StrategyExecutorDeps): StrategyRunti
             // chaque run ; coût estimé journalisé avant le lancement ; compilation tentée après K runs réussis.
             let spec = agentic.spec;
             let compile = true;
+            const instructed = strategy.compilable === 'no' && target.api.instructedMode;
             if (strategy.compilable === 'no' && target.api.instructedMode) {
               const steps = validateInstructedSteps(strategy.instructedSteps ?? []);
               // Revérifié AU RUN, sur la version exécutée : étapes confirmées par un humain sur leur empreinte exacte.
@@ -835,6 +845,7 @@ export function createStrategyRuntime(deps: StrategyExecutorDeps): StrategyRunti
               ...common,
               spec,
               compile,
+              phase: instructed ? 'instructed' : 'e5_e6',
               guard: deps.guard,
               egress: egress!,
               agentBrowser,
@@ -1254,6 +1265,8 @@ export function createStrategyRuntime(deps: StrategyExecutorDeps): StrategyRunti
     // Prix absent : coût LLM inconnu, écrit null (jamais 0, 08 §1 ; INV4), avec avertissement.
     if (llm !== null && llm.usd === null) await ctx.log('warn', 'llm_price_missing', { model: llm.modelId });
     if ((outcome.agent?.domainBlocked ?? 0) > 0) await ctx.log('warn', 'agent_domain_blocked', { count: outcome.agent?.domainBlocked });
+    // Requêtes de l'agent refusées par la politique de requêtes (19 §7) : le code et le motif, jamais l'URL ni le contenu.
+    if (outcome.agent?.requestPolicy !== undefined) await ctx.log('warn', 'agent_request_blocked', { code: 'agent_request_blocked', count: outcome.agent.requestPolicy.blocked, reasons: [...new Set(outcome.agent.requestPolicy.reasons)] });
     const sorted = sortItems(target, trial);
     const broke = sorted?.verdict === 'break' ? await thresholdFailure(target, trial, sorted) : null;
     await recordTrial(ctx, strategy, trial, sorted?.verdict ?? null, broke?.failure ?? null);

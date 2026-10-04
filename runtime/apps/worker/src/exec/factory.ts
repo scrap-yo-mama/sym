@@ -44,7 +44,7 @@ const STAGEHAND_PROMPT_VERSION = `stagehand-${STAGEHAND_VERSION}-dom`;
  * permis (08 §1 : coût null avec avertissement) ; le plafond étant alors intenable, le run s'arrête après le premier appel.
  */
 export function stagehandEngineFor(config: LlmConfig, env: NodeJS.ProcessEnv = process.env, onNote?: (note: LlmNote) => void): EngineFactory {
-  return ({ cdpUrl, recorder, hooks }) => {
+  return ({ cdpUrl, recorder, hooks, phase }) => {
     const target = roleTarget(config, 'agent');
     if (target === undefined) return null;
     // Même règle que le client LLM (08 §1) : le rôle agent exige un profil sondé avec appel d'outils.
@@ -65,6 +65,7 @@ export function stagehandEngineFor(config: LlmConfig, env: NodeJS.ProcessEnv = p
         // Profil sans mesure (route de sonde pas encore livrée) : un 400 qui nomme le paramètre => nouvel essai sans lui, noté.
         ...(onNote === undefined ? {} : { onSamplingRejected: (param) => onNote({ event: 'llm_sampling_param_rejected', provider: target.provider.id, model: target.model.id, param }) }),
         ...(config.redact === undefined ? {} : { redact: config.redact }),
+        phase,
         ...hooks,
       }),
       modelId: target.model.id,

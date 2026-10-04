@@ -19,7 +19,7 @@
 import { createHash, randomBytes } from 'node:crypto';
 import type { AgentEvidence, ExecFailure } from '@runtime/core/exec';
 import { narrativeUrl } from '@runtime/core/investigation';
-import { maskTextForLlm, type DeclarativeSpec, type HealthyProfile, type JsonPatchOperation, type RejectionReason } from '@runtime/core';
+import { maskTextForLlm, toolRegistryForPhase, type DeclarativeSpec, type HealthyProfile, type JsonPatchOperation, type RejectionReason } from '@runtime/core';
 import type { ChatMessage, JsonSchema, LlmCallResult, LlmClient } from '@runtime/llm';
 
 export const REPAIR_SYSTEM_PROMPT = [
@@ -179,6 +179,8 @@ export async function proposeRepair(client: LlmClient, args: RepairArgs & { read
     schema: REPAIR_PROPOSAL_SCHEMA as unknown as JsonSchema,
     name: 'repair_proposal',
     maxTokens: REPAIR_MAX_TOKENS,
+    // Registre de la phase `recompile` (19 §7) : aucun outil, pas même celui de soumission du profil S2.
+    noTools: toolRegistryForPhase('recompile').tools.length === 0,
     ...(args.signal === undefined ? {} : { signal: args.signal }),
     ...(args.beforeCall === undefined ? {} : { beforeCall: args.beforeCall }),
   });

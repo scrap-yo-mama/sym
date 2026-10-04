@@ -37,6 +37,7 @@ import {
   validateOutput,
   type AgentEngine,
   type AgentFetchSpec,
+  type AgentPhase,
   type AgentRunResult,
   type AgentTraceStep,
   type AgentSpec,
@@ -71,6 +72,7 @@ import type { Browser, BrowserContext, Page, Request, Response } from 'playwrigh
 import { boundedContent, boundedDocumentBody, TOO_LARGE, trackDecodedSizes, type DecodedSizes } from '../browser/bounded.js';
 import type { AgentBrowser, AgentBrowserOptions } from '../browser/agent-browser.js';
 import type { BrowserPool, SlotLease } from '../browser/pool.js';
+import { createAgentRequestGate, type AgentRequestGate } from '../browser/agent-request-gate.js';
 import { hostAllowed, isMainNavigation, openRunContext, trackStrategyRequests } from '../browser/run-context.js';
 import { AttemptBudgetExceededError, AttemptCost, type RunBudget } from './attempt-cost.js';
 
@@ -94,6 +96,31 @@ export type AgentOutcome = {
   readonly compileFailure?: string;
   /** Navigations ou requêtes de l'agent coupées par le verrou de domaines (hôtes, jamais d'URL). */
   readonly domainBlocked?: number;
+  /** Requêtes refusées par la politique de requêtes de l'agent (`agent_request_blocked`, 19 §7) : codes seulement, jamais d'URL ni de valeur. */
+  readonly requestPolicy?: { readonly blocked: number; readonly reasons: readonly string[] };
+};
+
+/** Options communes de la politique de requêtes de l'agent (PA-01) : valeurs sensibles du run et entrées du run. */
+type AgentPolicyOptions = {
+  /** Valeurs sensibles du run (registre de masquage RGPD, secrets) : jamais dans une URL de l'agent. Relues à chaque requête. */
+  readonly sensitiveValues?: () => readonly string[];
+  readonly runInputs?: Readonly<Record<string, unknown>>;
+};
+
+/**
+ * Écritures coupées avant le contrôle de requêtes (garde d'écriture du contexte, consultée AVANT lui) : même refus, même code
+ * (`method_not_allowed`), pour que le journal porte tous les refus de la politique. Le verdict de la garde sur la DERNIÈRE
+ * écriture arrive après la fin du run (course constatée sous charge) : le compte est le maximum de celui de la garde et de celui
+ * des écritures lancées (`settleWrites`), jamais le seul premier. Le journal est complété de l'écart, sans double compte.
+ */
+const noteWriteRefusals = (gate: AgentRequestGate, ab: AgentBrowser, launchedWrites: number): void => {
+  gate.ensureWriteRefusals(Math.max(ab.guard.blocked.filter((b) => b.reason === 'write').length, launchedWrites));
+};
+
+/** Résumé du relevé d'une garde, ou rien si aucune requête n'a été refusée. */
+const policyOutcome = (gate: AgentRequestGate | undefined): Pick<AgentOutcome, 'requestPolicy'> => {
+  const summary = gate?.summary();
+  return summary === undefined || summary.blocked === 0 ? {} : { requestPolicy: summary };
 };
 
 /** Garde de classification (1.7) : `classifyExchange` par défaut. */
@@ -103,7 +130,7 @@ type ClassifyFn = (exchange: HttpExchange, context?: ClassifyContext) => ExecFai
  * Moteur d'un essai : construit sur le Chromium dédié (Stagehand par `cdpUrl`), ou `null` si le rôle `agent` manque.
  * `hooks` : plafond de coût partagé de l'essai et garde de classification, à passer au moteur (StagehandEngineOptions).
  */
-export type EngineFactory = (args: { cdpUrl: string; recorder: SemanticRecorder; hooks: StagehandEngineHooks }) => { engine: AgentEngine; modelId: string; promptVersion: string } | null;
+export type EngineFactory = (args: { cdpUrl: string; recorder: SemanticRecorder; hooks: StagehandEngineHooks; phase: AgentPhase }) => { engine: AgentEngine; modelId: string; promptVersion: string } | null;
 
 const NAVIGATION_TIMEOUT_MS = 30_000;
 const fail = (failure: ExecFailure, requests = 0): DeclarativeRunResult => ({ ok: false, failure, pages: 0, requests });
@@ -189,7 +216,7 @@ function pageText(exchange: HttpExchange, maxChars: number): { text: string; tru
 }
 
 // --------------------------------------------------------------------------------------------------------------- E4
-export type AgentFetchOptions = {
+export type AgentFetchOptions = AgentPolicyOptions & {
   readonly spec: AgentFetchSpec;
   readonly outputSchema: unknown;
   /** Politique des items non conformes (D-49) : `strict` (défaut, enquête) ou `quarantine` (runs). */
@@ -212,8 +239,12 @@ export type AgentFetchOptions = {
   readonly rulesText?: string;
 };
 
-async function fetchPage(options: AgentFetchOptions): Promise<HttpExchange> {
+async function fetchPage(options: AgentFetchOptions, gate: AgentRequestGate): Promise<HttpExchange> {
   const url = options.spec.request.url;
+  // Politique de requêtes de l'agent (19 §7, PA-01) sur la requête déclarée, avant tout réseau : refus explicite, sans exécution.
+  if (!(await gate.check({ url, redirect: false, rootUrl: url, resourceType: 'Document', mainFrame: true, method: 'GET' }))) {
+    throw withFailure({ failure_class: 'code_error', retryable: false, detail: 'agent_request_blocked' });
+  }
   if (options.spec.via === 'fetch') {
     if (options.session === undefined) throw new Error('session réseau absente');
     const transport = fetchTransport(options.session, { maxResponseBytes: options.spec.limits.max_response_bytes, timeoutMs: NAVIGATION_TIMEOUT_MS });
@@ -222,6 +253,8 @@ async function fetchPage(options: AgentFetchOptions): Promise<HttpExchange> {
   const b = options.browser;
   if (b === undefined) throw new Error('navigateur absent');
   return b.pool.run(options.signal, async (browser) => {
+    // E4 n'a ni agent ni outil : seule la requête DÉCLARÉE est contrôlée (ci-dessus). Le trafic de la page (POST, navigation par
+    // script, XHR) garde le régime d'avant la garde ; le verrou de domaines du contexte le borne toujours.
     const rc = await openRunContext(browser, { egressServer: b.egress.server, allowedHosts: options.spec.request.allowed_hosts, ...(b.userAgent === undefined ? {} : { userAgent: b.userAgent }) });
     const strategy = trackStrategyRequests(rc.context, options.spec.request.allowed_hosts);
     try {
@@ -240,6 +273,20 @@ async function fetchPage(options: AgentFetchOptions): Promise<HttpExchange> {
 
 /** E4 : une page, classée avant tout prompt, mise en forme par le rôle `extract`. */
 export async function runAgentFetchExecutor(options: AgentFetchOptions): Promise<AgentOutcome> {
+  // Phase e4_extract (aucun outil) : la seule requête permise est celle que la stratégie déclare.
+  const gate = createAgentRequestGate({
+    phase: 'e4_extract',
+    allowedHosts: options.spec.request.allowed_hosts,
+    startUrl: options.spec.request.url,
+    allowWriteActions: false,
+    ...(options.sensitiveValues === undefined ? {} : { sensitiveValues: options.sensitiveValues }),
+    ...(options.runInputs === undefined ? {} : { runInputs: options.runInputs }),
+  });
+  const out = await runAgentFetch(options, gate);
+  return { ...out, ...policyOutcome(gate) };
+}
+
+async function runAgentFetch(options: AgentFetchOptions, gate: AgentRequestGate): Promise<AgentOutcome> {
   const url = options.spec.request.url;
   if (options.pacer !== undefined) {
     const slot = await options.pacer.acquire(url);
@@ -247,7 +294,7 @@ export async function runAgentFetchExecutor(options: AgentFetchOptions): Promise
   }
   let exchange: HttpExchange;
   try {
-    exchange = await fetchPage(options);
+    exchange = await fetchPage(options, gate);
   } catch (error) {
     if (options.signal.aborted) throw error;
     const code = (error as { code?: unknown }).code;
@@ -288,7 +335,7 @@ export async function runAgentFetchExecutor(options: AgentFetchOptions): Promise
 }
 
 // --------------------------------------------------------------------------------------------------------------- E5
-export type HybridOptions = {
+export type HybridOptions = AgentPolicyOptions & {
   readonly spec: HybridSpec;
   readonly outputSchema: unknown;
   /** Politique des items non conformes (D-49) : `strict` (défaut, enquête) ou `quarantine` (runs). */
@@ -495,11 +542,25 @@ export async function runHybridExecutor(options: HybridOptions): Promise<AgentOu
   if (!hybridUsesLlm(spec)) return { result: await runHybridWithoutLlm(options), llm: null };
   const agentBrowser = options.agentBrowser;
   if (agentBrowser === undefined || options.pool === null) return { result: fail({ failure_class: 'code_error', retryable: false, detail: 'browser_disabled' }), llm: null };
+  // Politique de requêtes de l'agent (19 §7, PA-01) : départ et `goto` déclarés connus d'avance, le reste doit venir de la page.
+  const gate = createAgentRequestGate({
+    phase: 'e5_e6',
+    allowedHosts: spec.allowed_hosts,
+    startUrl: spec.start_url,
+    templates: spec.steps.flatMap((s) => (s.op === 'goto' ? [s.url] : [])),
+    allowWriteActions: options.allowWriteActions,
+    // Les étapes code (goto, clic, attente) sont celles du propriétaire : l'agent ne pilote la page que pendant une étape `agent`.
+    agentActive: false,
+    trustedText: [...spec.steps.flatMap((s) => (s.op === 'agent' ? [s.instruction] : [])), spec.extract.mode === 'agent' ? spec.extract.instruction : ''].join(' '),
+    ...(options.sensitiveValues === undefined ? {} : { sensitiveValues: options.sensitiveValues }),
+    ...(options.runInputs === undefined ? {} : { runInputs: options.runInputs }),
+  });
   // Chromium dédié dans un slot du pool (BROWSER_CONCURRENCY), tenu jusqu'à la fin de l'essai.
-  return options.pool.hold(options.signal, (lease) => runHybridDelegated(options, agentBrowser, lease));
+  const out = await options.pool.hold(options.signal, (lease) => runHybridDelegated(options, agentBrowser, lease, gate));
+  return { ...out, ...policyOutcome(gate) };
 }
 
-async function runHybridDelegated(options: HybridOptions, agentBrowser: NonNullable<HybridOptions['agentBrowser']>, lease: SlotLease): Promise<AgentOutcome> {
+async function runHybridDelegated(options: HybridOptions, agentBrowser: NonNullable<HybridOptions['agentBrowser']>, lease: SlotLease, gate: AgentRequestGate): Promise<AgentOutcome> {
   const spec = options.spec;
   const needsEngine = spec.steps.some((s) => s.op === 'agent');
   const cost = options.cost ?? new AttemptCost(options.maxCostUsd);
@@ -511,10 +572,12 @@ async function runHybridDelegated(options: HybridOptions, agentBrowser: NonNulla
     agentBrowser({
       allowedHosts: spec.allowed_hosts,
       allowWriteActions: options.allowWriteActions,
+      checkRequest: gate.check,
       ...(options.pacer === undefined ? {} : { pacer: options.pacer }),
       ...(options.maxRequests === undefined ? {} : { maxRequests: options.maxRequests }),
     }),
   );
+  gate.attach(ab.page);
   let spend: LlmSpend | null = null;
   const stop = new AbortController();
   const watch = watchDocuments(ab.context, options.classify, () => stop.abort(), await decodedSizes(ab.context, ab.page));
@@ -527,7 +590,7 @@ async function runHybridDelegated(options: HybridOptions, agentBrowser: NonNulla
     beforeModelCall: () => watch.gate(),
   };
   try {
-    const made = needsEngine ? (options.engineFor?.({ cdpUrl: ab.cdpUrl, recorder: ab.recorder, hooks }) ?? null) : null;
+    const made = needsEngine ? (options.engineFor?.({ cdpUrl: ab.cdpUrl, recorder: ab.recorder, hooks, phase: 'e5_e6' }) ?? null) : null;
     if (needsEngine && made === null) return { result: fail({ failure_class: 'code_error', retryable: false, detail: 'llm_not_configured' }), llm: null };
     const agentStep = async (instruction: string): Promise<{ ok: true } | { ok: false; failure: HybridFailure }> => {
       await watch.gate();
@@ -537,6 +600,7 @@ async function runHybridDelegated(options: HybridOptions, agentBrowser: NonNulla
       current = budget;
       let run: AgentRunResult;
       try {
+        gate.setAgentActive(true);
         run = await made!.engine.run(
           {
             taskId: 'hybrid_step',
@@ -550,6 +614,7 @@ async function runHybridDelegated(options: HybridOptions, agentBrowser: NonNulla
           { model: { modelId: made!.modelId, temperature: 0, promptVersion: made!.promptVersion }, signal: AbortSignal.any([signal, deadline]) },
         );
       } finally {
+        gate.setAgentActive(false);
         current = undefined;
       }
       budget.report(run.costUsd);
@@ -608,12 +673,14 @@ async function runHybridDelegated(options: HybridOptions, agentBrowser: NonNulla
     }
   } finally {
     watch.dispose();
+    // Verdict tardif de la garde sur la dernière écriture de l'agent : barrière des écritures lancées (comme en E6).
+    noteWriteRefusals(gate, ab, options.allowWriteActions ? 0 : await ab.settleWrites(WRITE_BARRIER_TIMEOUT_MS).catch(() => 0));
     await ab.close();
   }
 }
 
 // --------------------------------------------------------------------------------------------------------------- E6
-export type AgentOptions = {
+export type AgentOptions = AgentPolicyOptions & {
   readonly spec: AgentSpec;
   readonly outputSchema: unknown;
   /** Politique des items non conformes (D-49) : `strict` (défaut, enquête) ou `quarantine` (runs). */
@@ -649,6 +716,8 @@ export type AgentOptions = {
    * `spec.rules` (empreintes vérifiées) et `read_skill` sur les seuls skills référencés, à leur version épinglée.
    */
   readonly rules?: AgentTaskRules;
+  /** Phase de l'agent (registre d'outils de 19 §7) : `e5_e6` (défaut) ou `instructed` (agent instruit). */
+  readonly phase?: AgentPhase;
 };
 
 function agentFailure(run: AgentRunResult, cost?: AttemptCost): ExecFailure {
@@ -680,8 +749,12 @@ async function compileAndVerify(
   records: readonly Record<string, unknown>[],
   engine: string,
   writesBlocked: number,
+  requestsRefused: number,
 ): Promise<{ spec: HybridSpec } | { failure: string }> {
   if (writesBlocked > 0) return { failure: 'write_blocked' };
+  // Une trace qui porte une requête refusée par la politique de requêtes (page piégée) ne se rejoue jamais : le rejeu E5 n'est pas
+  // sous la politique de l'agent et enverrait la requête refusée (PA-01).
+  if (requestsRefused > 0) return { failure: 'request_refused' };
   if (records.length !== 1) return { failure: 'list_not_compilable' };
   const steps = compileAgentTrace(run.steps, run.status, options.spec.allowed_hosts);
   if (!steps.ok) return { failure: steps.reason };
@@ -719,23 +792,38 @@ async function compileAndVerify(
  */
 export async function runAgentExecutor(options: AgentOptions): Promise<AgentOutcome> {
   if (options.pool === null) return { result: fail({ failure_class: 'code_error', retryable: false, detail: 'browser_disabled' }), llm: null };
-  return options.pool.hold(options.signal, (lease) => runAgentInSlot(options, lease));
+  // Politique de requêtes de l'agent (19 §7, PA-01) : l'agent ne navigue que vers le départ ou une URL venue de la page.
+  const phase: AgentPhase = options.phase ?? 'e5_e6';
+  const gate = createAgentRequestGate({
+    phase,
+    allowedHosts: options.spec.allowed_hosts,
+    startUrl: options.spec.start_url,
+    allowWriteActions: options.allowWriteActions,
+    trustedText: options.spec.instruction,
+    ...(options.sensitiveValues === undefined ? {} : { sensitiveValues: options.sensitiveValues }),
+    ...(options.runInputs === undefined ? {} : { runInputs: options.runInputs }),
+  });
+  const out = await options.pool.hold(options.signal, (lease) => runAgentInSlot(options, lease, gate, phase));
+  return { ...out, ...policyOutcome(gate) };
 }
 
-async function runAgentInSlot(options: AgentOptions, lease: SlotLease): Promise<AgentOutcome> {
+async function runAgentInSlot(options: AgentOptions, lease: SlotLease, gate: AgentRequestGate, phase: AgentPhase): Promise<AgentOutcome> {
   const cost = options.cost ?? new AttemptCost(options.maxCostUsd);
   const ab = await lease.dedicated(() =>
     options.agentBrowser({
       allowedHosts: options.spec.allowed_hosts,
       allowWriteActions: options.allowWriteActions,
+      checkRequest: gate.check,
       ...(options.pacer === undefined ? {} : { pacer: options.pacer }),
       ...(options.maxRequests === undefined ? {} : { maxRequests: options.maxRequests }),
     }),
   );
+  gate.attach(ab.page);
   let run: AgentRunResult;
   let made: ReturnType<EngineFactory>;
   let domainBlocked: number;
   let writesBlocked: number;
+  let launchedWrites = 0;
   // Refus vu sur un document (401, 403, 429, défi…) : l'agent est arrêté aussitôt, sans autre action (INV6).
   const stop = new AbortController();
   const watch = watchDocuments(ab.context, options.classify, () => stop.abort(), await decodedSizes(ab.context, ab.page));
@@ -746,6 +834,7 @@ async function runAgentInSlot(options: AgentOptions, lease: SlotLease): Promise<
       cdpUrl: ab.cdpUrl,
       recorder: ab.recorder,
       hooks: { spentElsewhereUsd: () => budget.spentElsewhereUsd(), onCost: (usd) => budget.report(usd), beforeModelCall: () => watch.gate() },
+      phase,
     });
     if (made === null) return { result: fail({ failure_class: 'code_error', retryable: false, detail: 'llm_not_configured' }), llm: null };
     const { engine, modelId, promptVersion } = made;
@@ -784,11 +873,12 @@ async function runAgentInSlot(options: AgentOptions, lease: SlotLease): Promise<
     // et une écriture coupée par la route des domaines ne l'atteint jamais. Sans
     // `allow_write_actions`, toute écriture LANCÉE est coupée : c'est elle qui est comptée, quel que soit son verdict
     // (`settleWrites`, toutes cibles). Les deux comptes sont des minorants des mêmes écritures.
-    const launchedWrites = options.allowWriteActions ? 0 : await ab.settleWrites(WRITE_BARRIER_TIMEOUT_MS);
+    launchedWrites = options.allowWriteActions ? 0 : await ab.settleWrites(WRITE_BARRIER_TIMEOUT_MS);
     domainBlocked = ab.guard.blocked.filter((b) => b.reason === 'domain').length + ab.violations() + options.egress.domainBlockedCount();
     writesBlocked = Math.max(ab.guard.blocked.filter((b) => b.reason === 'write').length, launchedWrites);
   } finally {
     watch.dispose();
+    noteWriteRefusals(gate, ab, launchedWrites);
     await ab.close();
   }
   const spend = spendFromAgent(run, made.modelId, made.promptVersion, `${made.engine.id}@${made.engine.version}`);
@@ -805,6 +895,6 @@ async function runAgentInSlot(options: AgentOptions, lease: SlotLease): Promise<
   // `result.records`) ; une sortie dont un item est écarté n'est pas compilée (une liste réduite à un item conforme
   // passerait pour une fiche).
   if (options.itemPolicy === 'quarantine' && partitionItems(options.outputSchema, result.records).rejected.length > 0) return { result, llm: spend, compileFailure: 'items_rejected', domainBlocked };
-  const compiled = await compileAndVerify(options, lease, run, result.records, `${made.engine.id}@${made.engine.version}`, writesBlocked);
+  const compiled = await compileAndVerify(options, lease, run, result.records, `${made.engine.id}@${made.engine.version}`, writesBlocked, gate.summary().blocked);
   return 'spec' in compiled ? { result, llm: spend, compiled: compiled.spec, trace: run.steps, domainBlocked } : { result, llm: spend, compileFailure: compiled.failure, domainBlocked };
 }
