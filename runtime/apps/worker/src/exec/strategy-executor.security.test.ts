@@ -14,7 +14,8 @@ import { createRun, keyCheck, migrateUp, PgBossJobQueue, PgPacingStore, readRun,
 import pg from 'pg';
 import { pino } from 'pino';
 import { afterAll, beforeAll, describe, expect, test, vi } from 'vitest';
-import { BrowserPool, playwrightLauncher } from '../browser/pool.js';
+import { BrowserPool } from '../browser/pool.js';
+import { createLocalProvider } from '../browser/provider-local.js';
 import { loadWorkerConfig } from '../config.js';
 import { loadInlineScript } from './script-executor.js';
 import { createStrategyExecutor } from './strategy-executor.js';
@@ -90,7 +91,7 @@ beforeAll(async () => {
   ]);
   const guard = fixtureGuard(client.server.port, [SPA, PERSONAL], net);
   launchProxy = await net.startEgressProxy({ guard, refuseAll: true });
-  browsers = new BrowserPool({ size: 1, launch: playwrightLauncher(launchProxy.url, process.env), recycleAfterRuns: 100 });
+  browsers = new BrowserPool({ size: 1, launch: createLocalProvider({ launchProxyUrl: launchProxy.url, env: process.env }).launchShared, recycleAfterRuns: 100 });
   const engine = new ProcessSandboxEngine({ ...sandboxOptionsFromEnv(process.env), production: false });
   const logger = pino({ level: 'trace' }, { write: (line: string) => void workerLog.push(line) });
   const executor = createStrategyExecutor({

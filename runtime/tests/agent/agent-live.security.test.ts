@@ -13,7 +13,8 @@ import { openBrowserEgress, startEgressProxy, type BrowserEgress, type EgressPro
 import { appendFileSync } from 'node:fs';
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import { launchAgentBrowser } from '../../apps/worker/src/browser/agent-browser.ts';
-import { BrowserPool, playwrightLauncher } from '../../apps/worker/src/browser/pool.ts';
+import { BrowserPool } from '../../apps/worker/src/browser/pool.ts';
+import { createLocalProvider } from '../../apps/worker/src/browser/provider-local.ts';
 import { runAgentExecutor, runHybridExecutor, type EngineFactory } from '../../apps/worker/src/exec/agent-executors.ts';
 import { AGENT_CANARY, AGENT_HOSTS } from '../../fixtures/src/sites/agent-sites.ts';
 import { agentReference, agentTasks, type AgentFixtureKey } from '../../fixtures/src/agent-tasks.ts';
@@ -92,7 +93,7 @@ describe.skipIf(!LIVE)(`E6 réel (Stagehand 3.7.3 + ${MODEL} via ${PROVIDER_ID})
     client = await startClient();
     guard = fixtureGuard(client.server.port, [AGENT_HOSTS.e6, AGENT_HOSTS.inj, AGENT_HOSTS.trap], net);
     launchProxy = await startEgressProxy({ guard, refuseAll: true });
-    pool = new BrowserPool({ size: 1, launch: playwrightLauncher(launchProxy.url, process.env) });
+    pool = new BrowserPool({ size: 1, launch: createLocalProvider({ launchProxyUrl: launchProxy.url, env: process.env }).launchShared });
   }, 120_000);
   afterAll(async () => {
     await pool?.close();

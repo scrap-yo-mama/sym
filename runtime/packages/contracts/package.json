@@ -20,7 +20,11 @@
     "test": "vitest run"
   },
   "dependencies": {},
+  "peerDependencies": {
+    "playwright-core": "catalog:"
+  },
   "devDependencies": {
+    "playwright-core": "catalog:",
     "@types/node": "catalog:",
     "ajv": "catalog:",
     "typescript": "catalog:",

@@ -13,7 +13,8 @@ import { createLlmClient } from '@runtime/llm';
 import { createFakeProvider, scripted, type FakeProvider } from '@runtime/llm/testing';
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'vitest';
 import { launchAgentBrowser } from '../../apps/worker/src/browser/agent-browser.ts';
-import { BrowserPool, playwrightLauncher } from '../../apps/worker/src/browser/pool.ts';
+import { BrowserPool } from '../../apps/worker/src/browser/pool.ts';
+import { createLocalProvider } from '../../apps/worker/src/browser/provider-local.ts';
 import { runAgentExecutor, runAgentFetchExecutor, runHybridExecutor, type EngineFactory } from '../../apps/worker/src/exec/agent-executors.ts';
 import { fixtureGuard } from '../helpers/fixture-net.ts';
 import { stagehandScript } from '../helpers/stagehand-script.ts';
@@ -61,7 +62,7 @@ beforeAll(async () => {
   port = (server.address() as AddressInfo).port;
   guard = fixtureGuard(port, [SITE_HOST, TRAP_HOST], net);
   launchProxy = await startEgressProxy({ guard, refuseAll: true });
-  pool = new BrowserPool({ size: 1, launch: playwrightLauncher(launchProxy.url, process.env), recycleAfterRuns: 100 });
+  pool = new BrowserPool({ size: 1, launch: createLocalProvider({ launchProxyUrl: launchProxy.url, env: process.env }).launchShared, recycleAfterRuns: 100 });
   fake = await createFakeProvider();
 }, 120_000);
 

@@ -13,7 +13,8 @@ import { createServer as createTcpServer, type AddressInfo } from 'node:net';
 import { execFileSync } from 'node:child_process';
 import { request as playwrightRequest, type Browser } from 'playwright-core';
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'vitest';
-import { BrowserPool, playwrightLauncher, type BrowserPoolEvent } from '../../apps/worker/src/browser/pool.ts';
+import { BrowserPool, type BrowserPoolEvent } from '../../apps/worker/src/browser/pool.ts';
+import { createLocalProvider } from '../../apps/worker/src/browser/provider-local.ts';
 import { newEgressRequestContext, openRunContext } from '../../apps/worker/src/browser/run-context.ts';
 import { runFetchInPageExecutor, runPlaywrightExecutor } from '../../apps/worker/src/exec/browser-executors.ts';
 import { createPageBridge, hostViolationWatch, PAGE_OPERATIONS } from '../../apps/worker/src/exec/script.ts';
@@ -72,7 +73,7 @@ beforeAll(async () => {
   guard = fixtureGuard(client.server.port, HOSTS, net);
   // Proxy de lancement FERMÉ : tout ce que Chromium émettrait hors d'un contexte de run y arrive et y est refusé.
   launchProxy = await startEgressProxy({ guard, refuseAll: true, onRequest: (t) => launchSeen.push(`${t.via} ${t.host}:${t.port}`) });
-  pool = new BrowserPool({ size: 1, launch: playwrightLauncher(launchProxy.url, process.env), recycleAfterRuns: 100, onEvent: (e) => events.push(e) });
+  pool = new BrowserPool({ size: 1, launch: createLocalProvider({ launchProxyUrl: launchProxy.url, env: process.env }).launchShared, recycleAfterRuns: 100, onEvent: (e) => events.push(e) });
 }, 120_000);
 afterAll(async () => {
   await pool?.close();
@@ -922,7 +923,7 @@ describe('E3 en script dans le bac à sable (1.5) : ctx.page.*, ctx.fetch, ctx.e
 
 test('recyclage réel : un Chromium neuf après N runs, l’ancien fermé', async () => {
   const local: BrowserPoolEvent[] = [];
-  const recycled = new BrowserPool({ size: 1, launch: playwrightLauncher(launchProxy.url, process.env), recycleAfterRuns: 1, onEvent: (e) => local.push(e) });
+  const recycled = new BrowserPool({ size: 1, launch: createLocalProvider({ launchProxyUrl: launchProxy.url, env: process.env }).launchShared, recycleAfterRuns: 1, onEvent: (e) => local.push(e) });
   try {
     const versions: string[] = [];
     let first: Browser | undefined;

@@ -23,7 +23,8 @@ vi.hoisted(() => {
   process.env['DEBUG'] = [process.env['DEBUG'], 'pw:protocol'].filter(Boolean).join(',');
 });
 
-import { BrowserPool, playwrightLauncher } from '../../apps/worker/src/browser/pool.ts';
+import { BrowserPool } from '../../apps/worker/src/browser/pool.ts';
+import { createLocalProvider } from '../../apps/worker/src/browser/provider-local.ts';
 import { chromiumLaunchOptions } from '../../apps/worker/src/browser/launch.ts';
 import { launchAgentBrowser } from '../../apps/worker/src/browser/agent-browser.ts';
 import { openRunContext } from '../../apps/worker/src/browser/run-context.ts';
@@ -113,7 +114,7 @@ beforeAll(async () => {
   port = (server.address() as { port: number }).port;
   guard = fixtureGuard(port, [HOST, HOST2], net);
   launchProxy = await startEgressProxy({ guard, refuseAll: true });
-  pool = new BrowserPool({ size: 1, launch: playwrightLauncher(launchProxy.url, process.env), recycleAfterRuns: 100 });
+  pool = new BrowserPool({ size: 1, launch: createLocalProvider({ launchProxyUrl: launchProxy.url, env: process.env }).launchShared, recycleAfterRuns: 100 });
   browserVersion = await pool.run(signal, async (browser) => browser.version());
 }, 120_000);
 

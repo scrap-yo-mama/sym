@@ -23,6 +23,9 @@
     },
     {
       "path": "../../packages/agent"
+    },
+    {
+      "path": "../../packages/contracts"
     }
   ]
 }

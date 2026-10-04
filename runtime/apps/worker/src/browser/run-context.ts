@@ -38,9 +38,25 @@ import { installPageGuard } from './page-guard.js';
 import { blockBackgroundWorkers, installRequestGuard, type RequestCheck } from './request-guard.js';
 import { engineUserAgentMetadata, installUserAgentOverride, NO_MEDIA_EMULATION } from './user-agent-override.js';
 
+/** Option `proxy` de `newContext` : le proxy d'egress local de l'essai ; aucune quand le nœud distant impose le sien (`null`). */
+export function runContextProxy(egressServer: string | null): { proxy?: { server: string } } {
+  return egressServer === null ? {} : { proxy: { server: egressServer } };
+}
+
 export type RunContextOptions = {
-  /** `BrowserEgress.server` de l'essai (http://127.0.0.1:PORT). */
-  readonly egressServer: string;
+  /**
+   * L'egress de SYM voit chaque saut du navigateur et applique le verrou de domaines (défaut : `local`, `sym-browser`). `false`
+   * (`capabilities.egressPolicy` faux, fournisseur `cdp`) : la garde des requêtes coupe elle-même tout saut de redirection hors
+   * domaines (`request_guard_blocks_offsite_redirect`, tâche 4.6).
+   */
+  readonly egressEnforcesDomains?: boolean;
+  /**
+   * Fournisseur dont le lancement ne coupe pas `WebSocketStream` (`capabilities.launchArgs` faux, tâche 4.6) : le script d'init le
+   * retire des documents et des workers dédiés. Absent : le lancement l'a déjà coupé (`local`, `sym-browser`).
+   */
+  readonly neutralizeLaunchFeatures?: boolean;
+  /** `BrowserEgress.server` de l'essai (http://127.0.0.1:PORT) ; `null` : le nœud distant impose son egress (aucun `proxy`). */
+  readonly egressServer: string | null;
   /** Domaines de l'API (`allowed_hosts`) : toute autre requête du navigateur est coupée. */
   readonly allowedHosts: readonly string[];
   /** Portées de site admises en plus (domaine et sous-domaines) : reconnaissance de l'enquête seulement (2.1, 04b §2). */
@@ -154,7 +170,7 @@ export async function openRunContext(browser: Browser, options: RunContextOption
     } else {
       context = await browser.newContext({
         ...NO_MEDIA_EMULATION,
-        proxy: { server: options.egressServer },
+        ...runContextProxy(options.egressServer),
         serviceWorkers: 'block',
         acceptDownloads: false,
         ignoreHTTPSErrors: false,
@@ -216,7 +232,7 @@ export async function openRunContext(browser: Browser, options: RunContextOption
       ws.connectToServer();
     });
     // Garde des documents (workers blob:/data:, règles de spéculation), avant la création de la page.
-    await installPageGuard(context);
+    await installPageGuard(context, { neutralizeLaunchFeatures: options.neutralizeLaunchFeatures === true });
     // Chromium dédié : sa page initiale (about:blank, rien chargé) devient la page du run ; toute autre est fermée.
     const page = dedicated ? (context.pages()[0] ?? (await context.newPage())) : await context.newPage();
     runPage = page;
@@ -224,7 +240,13 @@ export async function openRunContext(browser: Browser, options: RunContextOption
     if (metadata !== undefined) await installUserAgentOverride(context, page, userAgent, metadata);
     // La session du contrôle n'est jamais détachée avant la fermeture du contexte : détachée, elle laisserait repartir
     // les requêtes encore suspendues.
-    await installRequestGuard(context, page, (url) => hostAllowed(url, options.allowedHosts, options.allowedHostSuffixes), checkRequest);
+    // Saut de redirection hors domaines : coupé par la garde elle-même quand l'egress de SYM ne le voit pas (tâche 4.6), compté
+    // comme toute coupure du verrou de domaines.
+    await installRequestGuard(context, page, (url) => hostAllowed(url, options.allowedHosts, options.allowedHostSuffixes), checkRequest, {
+      cutOffsiteRedirects: options.egressEnforcesDomains === false,
+      onDomainBlocked: (url) => note(url),
+      neutralizeLaunchFeatures: options.neutralizeLaunchFeatures === true,
+    });
     context.on('page', (other) => {
       if (other !== page) void other.close().catch(() => undefined);
     });

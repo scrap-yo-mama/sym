@@ -268,7 +268,22 @@ const GUARD = String.raw`function () {
 /** Script injecté dans chaque document du contexte (`context.addInitScript`). */
 const PAGE_GUARD_SCRIPT = `(${GUARD})();`;
 
+/**
+ * Neutralisation de `WebSocketStream` (tâche 4.6 ; 04g §4), pour un navigateur dont le lancement ne coupe pas la fonction
+ * (`--disable-features=WebSocketStream`, launch.ts : fournisseur dont `capabilities.launchArgs` est faux). `routeWebSocket`
+ * ne voit pas `WebSocketStream` : sans cette coupe, une page ou un worker ouvrirait un WebSocket hors de tout contrôle.
+ * La fonction est retirée (`undefined`, non reconfigurable), rien n'est maquillé. Posée dans chaque document (script d'init) et
+ * dans le script principal de chaque worker dédié (réponse précédée du retrait : request-guard.ts). Les règles
+ * de spéculation (prérendu) restent retirées par la garde ci-dessus, avec ou sans cette option.
+ */
+export const WEBSOCKET_STREAM_NEUTRALIZER = `(() => { try { Object.defineProperty(globalThis, 'WebSocketStream', { value: undefined, writable: false, configurable: false, enumerable: false }); } catch (e) {} })();`;
+
+export type PageGuardOptions = {
+  /** Retire `WebSocketStream` des documents : à poser quand le lancement du navigateur ne le coupe pas (`launchArgs` faux). */
+  readonly neutralizeLaunchFeatures?: boolean;
+};
+
 /** Pose la garde sur chaque document du contexte (à appeler AVANT la création de la page du run). */
-export async function installPageGuard(context: BrowserContext): Promise<void> {
-  await context.addInitScript({ content: PAGE_GUARD_SCRIPT });
+export async function installPageGuard(context: BrowserContext, options: PageGuardOptions = {}): Promise<void> {
+  await context.addInitScript({ content: options.neutralizeLaunchFeatures === true ? `${PAGE_GUARD_SCRIPT}\n${WEBSOCKET_STREAM_NEUTRALIZER}` : PAGE_GUARD_SCRIPT });
 }

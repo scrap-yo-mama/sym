@@ -51,8 +51,9 @@ const OPENERS: readonly { name: string; re: RegExp }[] = [
  *   `request.newContext` (APIRequestContext : hors Chromium, proxy d'egress imposé) ;
  * - user-agent-override.ts : contexte-sonde vierge (lecture des indices clients du moteur, une fois par navigateur) : sa seule
  *   route sert l'URL de sonde (http://localhost/) et coupe tout le reste, aucune requête n'en sort ; ce n'est pas un contexte de run ;
- * - pool.ts : lancement du Chromium partagé derrière un proxy FERMÉ (aucun contexte, aucune page) ;
- * - agent-browser.ts : raccordement au Chromium dédié, dont l'unique contexte passe par `openRunContext` (vérifié plus bas) ;
+ * - provider-local.ts : fournisseur `local` (tâche 4.1) : lancement du Chromium partagé derrière un proxy FERMÉ (aucun contexte,
+ *   aucune page) et raccordement au Chromium dédié ;
+ * - agent-browser.ts : le contexte du Chromium dédié passe par `openRunContext` (vérifié plus bas) ;
  * - stagehand-engine.ts : Stagehand pilote le Chromium dédié et prend sa page du run (`pages()[0]`) ; à défaut il en
  *   ouvrirait une, aussitôt fermée par la garde du contexte de run (requêtes coupées) ;
  * - playwright-channel.ts : `newAgentContext`, API du paquet, jamais appelée par le worker (vérifié).
@@ -61,8 +62,7 @@ const OPENERS: readonly { name: string; re: RegExp }[] = [
 const ALLOWED: Readonly<Record<string, Readonly<Record<string, number>>>> = {
   'apps/worker/src/browser/run-context.ts': { newContext: 2, newPage: 2 },
   'apps/worker/src/browser/user-agent-override.ts': { newContext: 1 },
-  'apps/worker/src/browser/pool.ts': { launchServer: 1, connect: 1 },
-  'apps/worker/src/browser/agent-browser.ts': { connectOverCDP: 1 },
+  'apps/worker/src/browser/provider-local.ts': { launchServer: 1, connect: 1, connectOverCDP: 1 },
   'packages/agent/src/stagehand-engine.ts': { newPage: 1 },
   'apps/worker/src/sandbox/quickjs-runner.ts': { newContext: 1 },
   'packages/agent/src/playwright-channel.ts': { newContext: 1, newAgentContext: 1 },

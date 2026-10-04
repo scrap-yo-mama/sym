@@ -19,7 +19,8 @@ import { createFakeProvider, scripted, type FakeProvider, type FakeRequestContex
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'vitest';
 import { launchAgentBrowser, type AgentBrowser } from '../../apps/worker/src/browser/agent-browser.ts';
 import type { RequestCheck } from '../../apps/worker/src/browser/request-guard.ts';
-import { BrowserPool, playwrightLauncher, type BrowserLauncher } from '../../apps/worker/src/browser/pool.ts';
+import { BrowserPool, type BrowserLauncher } from '../../apps/worker/src/browser/pool.ts';
+import { createLocalProvider } from '../../apps/worker/src/browser/provider-local.ts';
 import { runAgentExecutor, runAgentFetchExecutor, runHybridExecutor, type EngineFactory } from '../../apps/worker/src/exec/agent-executors.ts';
 import { AGENT_CANARY, AGENT_HOSTS, AGENT_TRAP_TYPED_PATH } from '../../fixtures/src/sites/agent-sites.ts';
 import { agentReference, agentTasks, type AgentFixtureKey } from '../../fixtures/src/agent-tasks.ts';
@@ -204,7 +205,7 @@ beforeAll(async () => {
   client = await startClient();
   guard = fixtureGuard(client.server.port, HOSTS, net);
   launchProxy = await startEgressProxy({ guard, refuseAll: true });
-  pool = new BrowserPool({ size: 1, launch: playwrightLauncher(launchProxy.url, process.env), recycleAfterRuns: 100 });
+  pool = new BrowserPool({ size: 1, launch: createLocalProvider({ launchProxyUrl: launchProxy.url, env: process.env }).launchShared, recycleAfterRuns: 100 });
   fake = await createFakeProvider();
   local = await startLocalServer();
   localGuard = fixtureGuard(local.port, [LOCAL, OTHER], net);
@@ -1252,7 +1253,7 @@ describe('BROWSER_CONCURRENCY (14 §11) : le Chromium dédié de l’agent prend
     };
     const down = () => void (alive -= 1);
     // Chromium du pool comptés du lancement à la fermeture (ou à l'arrêt forcé).
-    const pooledLaunch = playwrightLauncher(launchProxy.url, process.env);
+    const pooledLaunch = createLocalProvider({ launchProxyUrl: launchProxy.url, env: process.env }).launchShared;
     const counted: BrowserLauncher = async () => {
       up();
       let open = true;

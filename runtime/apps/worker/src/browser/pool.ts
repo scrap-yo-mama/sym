@@ -5,16 +5,12 @@
 // Le Chromium DÉDIÉ d'un essai agentique (E5 à étapes `agent`, E6 : tâche 2.4, `agent-browser.ts`) est lancé DANS un
 // slot (`hold`) : le Chromium partagé du slot est fermé d'abord, un seul dédié à la fois, et les rejeux de compilation
 // de l'essai empruntent le slot déjà tenu. Un slot, un Chromium : `BROWSER_CONCURRENCY` borne aussi les essais agentiques.
-import { chromium, type Browser } from 'playwright-core';
-import { assertNotRoot, chromiumLaunchOptions } from './launch.js';
+import type { LaunchedBrowser } from '@sym/contracts/browser';
+import type { Browser } from 'playwright-core';
 
-export type LaunchedBrowser = {
-  readonly browser: Browser;
-  /** Fermeture propre. */
-  close(): Promise<void>;
-  /** Arrêt forcé du processus Chromium. */
-  kill(): Promise<void>;
-};
+// Contrat du Chromium prêté : `@sym/contracts/browser` (tâche 4.1). Le lanceur de production est `launchShared` du fournisseur
+// de navigateur (provider-local.ts pour `local`).
+export type { LaunchedBrowser };
 
 export type BrowserLauncher = () => Promise<LaunchedBrowser>;
 
@@ -259,27 +255,4 @@ export class BrowserPool {
     await Promise.all([...this.#dedicated].map((close) => close()));
     await Promise.all(this.#slots.map((slot) => this.#retire(slot, 'shutdown')));
   }
-}
-
-/** Lanceur de production : `launchServer` (processus tuable) puis `connect`, options figées (`launch.ts`). */
-export function playwrightLauncher(launchProxyUrl: string, env: Readonly<Record<string, string | undefined>> = process.env): BrowserLauncher {
-  return async () => {
-    assertNotRoot();
-    const options = chromiumLaunchOptions(launchProxyUrl, env);
-    const server = await chromium.launchServer({ ...options, args: [...options.args], proxy: { ...options.proxy } });
-    try {
-      const browser = await chromium.connect(server.wsEndpoint());
-      return {
-        browser,
-        close: async () => {
-          await browser.close().catch(() => undefined);
-          await server.close();
-        },
-        kill: () => server.kill(),
-      };
-    } catch (error) {
-      await server.kill().catch(() => undefined);
-      throw error;
-    }
-  };
 }

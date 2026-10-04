@@ -30,7 +30,8 @@ import { openBrowserEgress, openNetworkSession, startEgressProxy, type BrowserEg
 import { isValidTimeZone, resolveLocale } from '@runtime/i18n';
 import { launchAgentBrowser } from '../../apps/worker/src/browser/agent-browser.ts';
 import { chromiumLaunchOptions } from '../../apps/worker/src/browser/launch.ts';
-import { BrowserPool, playwrightLauncher } from '../../apps/worker/src/browser/pool.ts';
+import { BrowserPool } from '../../apps/worker/src/browser/pool.ts';
+import { createLocalProvider } from '../../apps/worker/src/browser/provider-local.ts';
 import { openRunContext } from '../../apps/worker/src/browser/run-context.ts';
 import { robotIdentity } from '../../apps/worker/src/exec/robot-identity.ts';
 import { fixtureGuard } from '../helpers/fixture-net.ts';
@@ -106,7 +107,7 @@ beforeAll(async () => {
   port = (server.address() as { port: number }).port;
   guard = fixtureGuard(port, [HOST], net);
   launchProxy = await startEgressProxy({ guard, refuseAll: true });
-  pool = new BrowserPool({ size: 1, launch: playwrightLauncher(launchProxy.url, process.env), recycleAfterRuns: 100 });
+  pool = new BrowserPool({ size: 1, launch: createLocalProvider({ launchProxyUrl: launchProxy.url, env: process.env }).launchShared, recycleAfterRuns: 100 });
   await pool.run(signal, async (browser) => browser.version());
 }, 120_000);
 

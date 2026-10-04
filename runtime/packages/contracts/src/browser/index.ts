@@ -6,4 +6,5 @@ export * from './session.js';
 export * from './egress.js';
 export * from './events.js';
 export * from './errors.js';
+export * from './provider.js';
 export { browserOpenApi } from './openapi.js';

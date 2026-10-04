@@ -25,23 +25,23 @@
 // la fermeture. Un seul contexte : la couche CDP de la garde vaut pour tout le navigateur.
 // Ce Chromium est lancé DANS un slot du pool (`BrowserPool.hold`, appelé par les exécuteurs E5 et E6) : le Chromium
 // partagé du slot est fermé avant, `BROWSER_CONCURRENCY` borne donc aussi les essais agentiques (14 §11).
-import { spawn, type ChildProcess } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import { installDomainGuard, installSemanticRecorder, type DomainGuard, type SemanticRecorder } from '@runtime/agent';
 import type { RequestPacer } from '@runtime/core/exec';
 import { buildUserAgent } from '@runtime/core/access';
-import { chromiumEgressLaunchOptions } from '@runtime/core/net';
-import { chromium, type Browser, type BrowserContext, type Page } from 'playwright-core';
-import { installedEngineIdentity } from './engine-identity.js';
-import { assertNotRoot, chromiumEnv, CHROMIUM_LAUNCH_TIMEOUT_MS, CHROMIUM_SILENT_ARGS, GUARD_DISABLED_FEATURES } from './launch.js';
+import type { BrowserProvider } from '@sym/contracts/browser';
+import type { Browser, BrowserContext, Page } from 'playwright-core';
+import { createLocalProvider } from './provider-local.js';
 import type { RequestCheck } from './request-guard.js';
 import { openRunContext, type RunContext } from './run-context.js';
 
+// Le lancement du Chromium (spawn, port CDP, arguments figés) vit dans le fournisseur `local` (provider-local.ts, tâche 4.1) ;
+// ce module reste propriétaire de tout ce qui suit le lancement (garde, cadence, écritures, enregistreur). Réexportés pour
+// les appelants et tests existants.
+export { agentChromiumArgs, ChromiumLaunchError } from './provider-local.js';
+
 export type AgentBrowserOptions = {
-  /** `BrowserEgress.server` de l'essai (http://127.0.0.1:PORT). */
-  readonly egressServer: string;
+  /** `BrowserEgress.server` de l'essai (http://127.0.0.1:PORT) ; `null` : le nœud distant impose son egress. */
+  readonly egressServer: string | null;
   readonly allowedHosts: readonly string[];
   readonly allowWriteActions: boolean;
   readonly pacer?: RequestPacer;
@@ -56,6 +56,8 @@ export type AgentBrowserOptions = {
   readonly env?: Readonly<Record<string, string | undefined>>;
   /** Exécutable Chromium (défaut : celui de Playwright). */
   readonly executablePath?: string;
+  /** Fournisseur de navigateur (`BrowserProvider`, factory.ts) ; défaut : le Chromium local du worker. */
+  readonly provider?: BrowserProvider;
   readonly launchTimeoutMs?: number;
   /**
    * User-Agent du robot de l'essai (`buildUserAgent`, 1.11, 17 §5), posé au lancement par `--user-agent` : la chaîne
@@ -182,66 +184,6 @@ function settle(step: Promise<unknown>, ms = 5000): Promise<void> {
   });
 }
 
-/** Fin de la sortie d'erreur de Chromium gardée pour dire la cause d'un lancement raté (bornée, sans le bruit D-Bus). */
-const STDERR_TAIL_CHARS = 4000;
-
-/**
- * Lancement raté du Chromium agentique. Le message est un CODE FERMÉ (`chromium_launch_signal:SIGTRAP`,
- * `chromium_launch_exit:3`, `chromium_launch_timeout`, `chromium_not_started:ENOENT`) : il remonte jusqu'à `error_detail`,
- * lisible par le propriétaire du run. La fin du stderr de Chromium (chemins, arguments, port du proxy d'egress) reste sur
- * `stderr`, pour le journal de l'opérateur seulement.
- */
-export class ChromiumLaunchError extends Error {
-  readonly stderr: string;
-  constructor(message: string, stderr = '') {
-    super(message);
-    this.name = 'ChromiumLaunchError';
-    this.stderr = stderr;
-  }
-}
-
-/** Sortie d'erreur du Chromium lue en continu (le tube ne se remplit jamais) ; seule sa fin est gardée. */
-function stderrTail(child: ChildProcess): () => string {
-  let tail = '';
-  child.stderr?.setEncoding('utf8');
-  child.stderr?.on('data', (chunk: string) => {
-    tail = (tail + chunk).slice(-STDERR_TAIL_CHARS);
-  });
-  return () =>
-    tail
-      .split('\n')
-      .filter((line) => line.trim() !== '' && !/dbus|OOM score/i.test(line))
-      .join(' | ')
-      .replace(/[^\x20-\x7e]/g, '?')
-      .slice(-300);
-}
-
-/** Code système (ENOENT, SIGTRAP) restreint à des majuscules, chiffres et tiret bas : jamais un texte libre. */
-const closedCode = (value: string): string => (/^[A-Z0-9_]{1,20}$/.test(value) ? value : 'UNKNOWN');
-
-/**
- * Attend le port CDP du Chromium dédié. Un Chromium arrêté au lancement (code de sortie, SIGNAL : un CHECK de Chromium ou
- * de crashpad finit en SIGTRAP, `exitCode` reste alors null) ou jamais lancé (binaire absent) échoue AUSSITÔT, avec un
- * code fermé (UX-23 ; la fin du stderr reste sur l'erreur pour l'opérateur), au lieu d'attendre tout le délai de lancement.
- */
-async function waitForFile(path: string, timeoutMs: number, child: ChildProcess, spawnError: () => Error | undefined, stderr: () => string): Promise<string> {
-  const end = Date.now() + timeoutMs;
-  for (;;) {
-    try {
-      const text = await readFile(path, 'utf8');
-      if (text.includes('\n')) return text;
-    } catch {
-      // pas encore écrit
-    }
-    const failed = spawnError();
-    if (failed !== undefined) throw new ChromiumLaunchError(`chromium_not_started:${closedCode((failed as NodeJS.ErrnoException).code ?? failed.name)}`, stderr());
-    if (child.exitCode !== null) throw new ChromiumLaunchError(`chromium_launch_exit:${child.exitCode}`, stderr());
-    if (child.signalCode !== null) throw new ChromiumLaunchError(`chromium_launch_signal:${closedCode(child.signalCode)}`, stderr());
-    if (Date.now() > end) throw new ChromiumLaunchError('chromium_launch_timeout', stderr());
-    await new Promise((r) => setTimeout(r, 50));
-  }
-}
-
 /**
  * Script de page du Chromium agentique (monde principal, avant tout script de la page). Les écouteurs sont posés en
  * capture sur `window` : ils passent avant ceux de la page (y compris les attributs `oninput`) et arrêtent l'événement.
@@ -284,60 +226,22 @@ function agentPageGuardScript(allowedHosts: readonly string[]): string {
 })();`;
 }
 
-/** Arguments figés du Chromium agentique (aucune entrée de stratégie, de prompt ni de membre). */
-export function agentChromiumArgs(egressServer: string, profileDir: string, userAgent: string, env: Readonly<Record<string, string | undefined>> = process.env): string[] {
-  const egress = chromiumEgressLaunchOptions(egressServer, env);
-  return [
-    ...egress.args,
-    `--proxy-server=${egress.proxy.server}`,
-    // Sans cette règle, Chromium contournerait le proxy pour la boucle locale.
-    '--proxy-bypass-list=<-loopback>',
-    ...CHROMIUM_SILENT_ARGS,
-    // Garde des requêtes (revue de 1.11) : mêmes fonctions coupées que le Chromium du pool (launch.ts).
-    `--disable-features=${GUARD_DISABLED_FEATURES.join(',')}`,
-    '--headless=new',
-    `--user-agent=${userAgent}`,
-    '--remote-debugging-address=127.0.0.1',
-    '--remote-debugging-port=0',
-    `--user-data-dir=${profileDir}`,
-    '--window-size=1280,900',
-    'about:blank',
-  ];
-}
-
 export async function launchAgentBrowser(options: AgentBrowserOptions): Promise<AgentBrowser> {
-  assertNotRoot();
   const env = options.env ?? process.env;
-  const profile = await mkdtemp(join(tmpdir(), 'zz_agent_chromium_'));
-  // HOME à lui, dans le profil jetable (UX-23) : le HOME hérité du worker peut être illisible (Render : le conteneur part
-  // en root, HOME=/root, et le point d'entrée descend sur pwuser sans le changer) ; Chromium complet et son gestionnaire
-  // crashpad s'y arrêtent alors en SIGTRAP. Le Chromium du pool (headless shell) n'en dépend pas.
-  const home = join(profile, 'home');
-  await mkdir(home, { mode: 0o700 });
-  const child = spawn(options.executablePath ?? chromium.executablePath(), agentChromiumArgs(options.egressServer, profile, options.userAgent ?? buildUserAgent({ engine: installedEngineIdentity() }), env), {
-    stdio: ['ignore', 'ignore', 'pipe'],
-    env: { ...chromiumEnv(env), HOME: home, XDG_CONFIG_HOME: join(home, '.config'), XDG_CACHE_HOME: join(home, '.cache') },
+  // Fournisseur : celui du câblage (factory.ts) ; à défaut le Chromium local du worker (sans proxy de lancement : seul le Chromium dédié en sort).
+  const provider = options.provider ?? createLocalProvider({ launchProxyUrl: '', env, ...(options.executablePath === undefined ? {} : { executablePath: options.executablePath }) });
+  const launched = await provider.launchDedicated({
+    userAgent: options.userAgent ?? buildUserAgent({ engine: await provider.engineIdentity() }),
+    egress: { allowedHosts: [...options.allowedHosts] },
+    egressServer: options.egressServer,
+    launchArgs: [],
+    ...(options.launchTimeoutMs === undefined ? {} : { launchTimeoutMs: options.launchTimeoutMs }),
   });
-  let spawnError: Error | undefined;
-  child.once('error', (error) => {
-    spawnError = error;
-  });
-  const stderr = stderrTail(child);
+  const { cdpUrl } = launched;
   let browser: Browser | undefined;
   let rc: RunContext | undefined;
-  /** Processus tué et attendu : plus rien ne part, aucune requête suspendue par une interception ne peut repartir. */
-  const kill = async () => {
-    if (spawnError === undefined && child.exitCode === null && child.signalCode === null) {
-      const exited = new Promise<void>((resolve) => child.once('exit', () => resolve()));
-      child.kill('SIGKILL');
-      await Promise.race([exited, new Promise((resolve) => setTimeout(resolve, 5000))]);
-    }
-    await rm(profile, { recursive: true, force: true }).catch(() => undefined);
-  };
   try {
-    const [port, path] = (await waitForFile(join(profile, 'DevToolsActivePort'), options.launchTimeoutMs ?? CHROMIUM_LAUNCH_TIMEOUT_MS, child, () => spawnError, stderr)).trim().split('\n');
-    const cdpUrl = `ws://127.0.0.1:${Number(port)}${path ?? ''}`;
-    browser = await chromium.connectOverCDP(cdpUrl);
+    browser = launched.browser;
     const context = browser.contexts()[0];
     if (context === undefined) throw new Error('Chromium : aucun contexte par défaut');
     // Avant toute page : service workers et saisies vers un formulaire hors domaines (voir agentPageGuardScript).
@@ -401,19 +305,17 @@ export async function launchAgentBrowser(options: AgentBrowserOptions): Promise<
       settleWrites,
       close: async () => {
         recorder.dispose();
-        // Processus tué AVANT tout détachement CDP : une requête encore suspendue par une interception (contrôle de chaque
-        // requête de la page, verrou de domaines, workers d'arrière-plan) repartirait dès que sa session se détache (`Fetch.disable`,
-        // fermeture de la connexion de Playwright) — constaté : saut de redirection vers /prive/ envoyé à la fermeture.
-        await kill();
-        // Connexion constatée fermée d'abord (`close` attend la déconnexion) : tout appel CDP qui suit échoue aussitôt.
-        await settle(opened.close());
+        // Processus tué AVANT tout détachement CDP (`launched.close()` : `kill()` du fournisseur, puis connexion constatée
+        // fermée) : une requête encore suspendue par une interception (contrôle de chaque requête de la page, verrou de
+        // domaines, workers d'arrière-plan) repartirait dès que sa session se détache (`Fetch.disable`, fermeture de la
+        // connexion de Playwright) — constaté : saut de redirection vers /prive/ envoyé à la fermeture.
+        await launched.close();
         await settle(guard.dispose());
         await settle(run.close());
       },
     };
   } catch (error) {
-    await kill();
-    if (browser !== undefined) await settle(browser.close());
+    await launched.close();
     if (rc !== undefined) await settle(rc.close());
     throw error;
   }

@@ -15,7 +15,8 @@ import { createRun, keyCheck, migrateUp, PgBossJobQueue, PgPacingStore, readRun,
 import pg from 'pg';
 import { pino } from 'pino';
 import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from 'vitest';
-import { BrowserPool, playwrightLauncher } from '../browser/pool.js';
+import { BrowserPool } from '../browser/pool.js';
+import { createLocalProvider } from '../browser/provider-local.js';
 import { loadWorkerConfig } from '../config.js';
 import { ProcessSandboxEngine, sandboxOptionsFromEnv } from '../sandbox/engine.js';
 import { startWorker, type Worker } from '../worker.js';
@@ -104,7 +105,7 @@ beforeAll(async () => {
   client = await startClient();
   const guard = fixtureGuard(client.server.port, [ROBOTS, UNREACHABLE, OTHER], net);
   launchProxy = await net.startEgressProxy({ guard, refuseAll: true });
-  browsers = new BrowserPool({ size: 1, launch: playwrightLauncher(launchProxy.url, process.env), recycleAfterRuns: 100 });
+  browsers = new BrowserPool({ size: 1, launch: createLocalProvider({ launchProxyUrl: launchProxy.url, env: process.env }).launchShared, recycleAfterRuns: 100 });
   const engine = new ProcessSandboxEngine({ ...sandboxOptionsFromEnv(process.env), production: false });
   const executor = createStrategyExecutor({
     pool,

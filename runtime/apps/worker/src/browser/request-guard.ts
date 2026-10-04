@@ -33,6 +33,7 @@
 // ils sont coupés par une interception `Fetch` au niveau du navigateur (`blockBackgroundWorkers`, ci-dessous), qui ne
 // dépend d'aucune suspension de cible (Playwright et Stagehand relancent eux-mêmes les workers qu'ils joignent).
 import type { Browser, BrowserContext, CDPSession, Page } from 'playwright-core';
+import { WEBSOCKET_STREAM_NEUTRALIZER } from './page-guard.js';
 
 /** Requête présentée au contrôle (un saut d'une chaîne de redirections, ou la requête initiale). */
 export type BrowserRequestCheck = {
@@ -153,7 +154,7 @@ type HeaderEntry = { name: string; value: string };
  * Script ou ressource « autre » interceptés à la réception : règles de spéculation coupées ; CSP `WORKER_CSP` ajoutée au
  * reste. Échec fermé : une réponse dont la CSP ne peut pas être posée est coupée.
  */
-async function onResponse(channel: Channel, params: Record<string, unknown>): Promise<void> {
+async function onResponse(channel: Channel, params: Record<string, unknown>, neutralize: boolean): Promise<void> {
   const requestId = params['requestId'];
   const fail = () => channel.send('Fetch.failRequest', { requestId, errorReason: 'BlockedByClient' }).catch(() => undefined);
   if (typeof params['responseErrorReason'] === 'string') {
@@ -166,6 +167,14 @@ async function onResponse(channel: Channel, params: Record<string, unknown>): Pr
     await fail();
     return;
   }
+  // Script principal d'un worker dédié (type « Other », JavaScript) : `WebSocketStream` retiré avant son exécution (tâche 4.6).
+  // Un document est couvert par le script d'init (page-guard.ts) ; une évaluation dans la cible du worker suspendue au
+  // démarrage ne vaut pas (contexte jeté avant le script, constaté sur Chromium 153).
+  const javascript = headers.some((h) => String(h.name).toLowerCase() === 'content-type' && /^(?:text|application)\/(?:x-)?(?:java|ecma)script$/.test(mime(h)));
+  if (neutralize && params['resourceType'] === 'Other' && javascript) {
+    await neutralizeWorkerScript(channel, params, headers);
+    return;
+  }
   const phrase = typeof params['responseStatusText'] === 'string' && params['responseStatusText'] !== '' ? { responsePhrase: params['responseStatusText'] } : {};
   const responseHeaders = [...headers, { name: 'Content-Security-Policy', value: WORKER_CSP }];
   const sent = await channel.send('Fetch.continueResponse', { requestId, responseCode: params['responseStatusCode'], ...phrase, responseHeaders }).then(
@@ -175,19 +184,49 @@ async function onResponse(channel: Channel, params: Record<string, unknown>): Pr
   if (!sent) await fail();
 }
 
+/** Réponse du script principal d'un worker dédié, précédée du retrait de `WebSocketStream`, avec la CSP sans WebSocket. Échec fermé. */
+async function neutralizeWorkerScript(channel: Channel, params: Record<string, unknown>, headers: readonly HeaderEntry[]): Promise<void> {
+  const requestId = params['requestId'];
+  try {
+    const got = (await channel.send('Fetch.getResponseBody', { requestId })) as { body?: unknown; base64Encoded?: unknown };
+    if (typeof got['body'] !== 'string') throw new Error('corps illisible');
+    const source = got['base64Encoded'] === true ? Buffer.from(got['body'], 'base64').toString('utf8') : got['body'];
+    const body = Buffer.from(`${WEBSOCKET_STREAM_NEUTRALIZER}\n${source}`, 'utf8').toString('base64');
+    // Le corps lu est décodé : ni longueur ni codage de transfert d'origine.
+    const kept = headers.filter((h) => !['content-length', 'content-encoding', 'transfer-encoding'].includes(String(h.name).toLowerCase()));
+    const phrase = typeof params['responseStatusText'] === 'string' && params['responseStatusText'] !== '' ? { responsePhrase: params['responseStatusText'] } : {};
+    await channel.send('Fetch.fulfillRequest', { requestId, responseCode: params['responseStatusCode'], ...phrase, responseHeaders: [...kept, { name: 'Content-Security-Policy', value: WORKER_CSP }], body });
+  } catch {
+    await channel.send('Fetch.failRequest', { requestId, errorReason: 'BlockedByClient' }).catch(() => undefined);
+  }
+}
+
 /**
  * Verdict d'une requête présentée par CDP : `check` pour toute requête http(s) d'un domaine de l'API ; hors http(s)
  * (data:, blob:) ou hors des domaines (coupée par le verrou de domaines et le proxy d'egress), rien à contrôler ici.
  * Échec fermé : une URL illisible est coupée, comme un contrôle qui échoue.
  */
-export async function requestVerdict(url: string, inScope: (url: string) => boolean, check: RequestCheck, hop: Omit<BrowserRequestCheck, 'url'>): Promise<boolean> {
+export async function requestVerdict(
+  url: string,
+  inScope: (url: string) => boolean,
+  check: RequestCheck,
+  hop: Omit<BrowserRequestCheck, 'url'>,
+  offsiteRedirect?: { readonly cut: boolean; readonly onBlocked?: (url: string) => void },
+): Promise<boolean> {
   let protocol: string;
   try {
     protocol = new URL(url).protocol;
   } catch {
     return false;
   }
-  if ((protocol !== 'http:' && protocol !== 'https:') || !inScope(url)) return true;
+  if (protocol !== 'http:' && protocol !== 'https:') return true;
+  if (!inScope(url)) {
+    // Saut de redirection hors des domaines (tâche 4.6 ; 04g §4) : coupé ICI, sans compter sur l'egress (un navigateur distant
+    // n'a pas celui de SYM). Une requête initiale hors domaines, elle, est coupée par la route du contexte de run.
+    if (!hop.redirect || offsiteRedirect?.cut !== true) return true;
+    offsiteRedirect.onBlocked?.(url);
+    return false;
+  }
   return check({ url, ...hop }).catch(() => false);
 }
 
@@ -204,7 +243,20 @@ function postBodyOf(request: { postData?: unknown; postDataEntries?: unknown } |
  * Pose le contrôle de chaque requête sur `page` (et ses cibles enfants) AVANT toute navigation. La session vit jusqu'à
  * la fermeture du contexte : jamais détachée avant (détachée, elle laisserait repartir les requêtes suspendues).
  */
-export async function installRequestGuard(context: BrowserContext, page: Page, inScope: (url: string) => boolean, check: RequestCheck): Promise<void> {
+export type RequestGuardOptions = {
+  /**
+   * Saut de redirection hors domaines coupé par la garde elle-même (`Fetch.failRequest`), sans compter sur l'egress ; défaut
+   * `true`. `false` : l'egress de SYM voit chaque saut et le coupe (fournisseurs `local` et `sym-browser` : même guet, mêmes
+   * compteurs qu'avant la tâche 4.6).
+   */
+  readonly cutOffsiteRedirects?: boolean;
+  /** Saut de redirection hors domaines coupé par la garde (l'URL du saut) : comptage et signalement de l'appelant. */
+  readonly onDomainBlocked?: (url: string) => void;
+  /** `WebSocketStream` retiré du script principal de chaque worker dédié (voir `WEBSOCKET_STREAM_NEUTRALIZER`, page-guard.ts). */
+  readonly neutralizeLaunchFeatures?: boolean;
+};
+
+export async function installRequestGuard(context: BrowserContext, page: Page, inScope: (url: string) => boolean, check: RequestCheck, options: RequestGuardOptions = {}): Promise<void> {
   const session = await context.newCDPSession(page);
   const roots = new Map<string, string>();
   const remember = (networkId: string, url: string) => {
@@ -217,7 +269,7 @@ export async function installRequestGuard(context: BrowserContext, page: Page, i
 
   const onPaused = (channel: Channel, mainFrameId: string | undefined) => async (params: Record<string, unknown>) => {
     if (params['responseStatusCode'] !== undefined || params['responseErrorReason'] !== undefined) {
-      await onResponse(channel, params);
+      await onResponse(channel, params, options.neutralizeLaunchFeatures === true);
       return;
     }
     const requestId = params['requestId'];
@@ -234,7 +286,7 @@ export async function installRequestGuard(context: BrowserContext, page: Page, i
     const resourceType = typeof params['resourceType'] === 'string' ? params['resourceType'] : 'Other';
     const mainFrame = mainFrameId !== undefined && params['frameId'] === mainFrameId && resourceType === 'Document';
     const body = postBodyOf(request);
-    const allowed = await requestVerdict(url, inScope, check, { redirect, rootUrl, resourceType, mainFrame, method, ...(body === undefined ? {} : { body }) });
+    const allowed = await requestVerdict(url, inScope, check, { redirect, rootUrl, resourceType, mainFrame, method, ...(body === undefined ? {} : { body }) }, { cut: options.cutOffsiteRedirects !== false, ...(options.onDomainBlocked === undefined ? {} : { onBlocked: options.onDomainBlocked }) });
     if (allowed) await channel.send('Fetch.continueRequest', { requestId }).catch(() => undefined);
     else await channel.send('Fetch.failRequest', { requestId, errorReason: 'BlockedByClient' }).catch(() => undefined);
   };

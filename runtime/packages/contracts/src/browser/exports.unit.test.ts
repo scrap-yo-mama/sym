@@ -33,12 +33,13 @@ describe('@sym/contracts : exports fermés', () => {
     },
   );
 
-  test('feuille : aucune dépendance, seuls des imports relatifs internes au paquet', () => {
+  test('feuille : aucune dépendance, seuls des imports relatifs internes au paquet et le type `Browser` de playwright-core (pair, import type)', () => {
     expect(manifest.dependencies ?? {}).toEqual({});
     const offenders: string[] = [];
     for (const file of sources(join(pkgDir, 'src')).filter((f) => !f.endsWith('.test.ts'))) {
       for (const match of readFileSync(file, 'utf8').matchAll(/(?:^|\s)(?:import|export)\b[^'"]*?from\s+['"]([^'"]+)['"]/gm)) {
-        if (!match[1]?.startsWith('./')) offenders.push(`${file} : ${match[1] ?? ''}`);
+        const typeOnlyPlaywright = match[1] === 'playwright-core' && match[0].includes('import type');
+        if (!match[1]?.startsWith('./') && !typeOnlyPlaywright) offenders.push(`${file} : ${match[1] ?? ''}`);
       }
     }
     expect(offenders).toEqual([]);

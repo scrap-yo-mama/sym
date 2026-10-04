@@ -5,7 +5,8 @@
 // lancé par le pool du worker, proxy d'egress par essai (garde SSRF), contexte de run gardé (verrou de domaines à chaque
 // requête, navigations de la page coupées). Chaque défilement est une requête pour la cadence.
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'vitest';
-import { BrowserPool, playwrightLauncher } from '../../apps/worker/src/browser/pool.ts';
+import { BrowserPool } from '../../apps/worker/src/browser/pool.ts';
+import { createLocalProvider } from '../../apps/worker/src/browser/provider-local.ts';
 import { scrollStep } from '../../apps/worker/src/browser/bounded.ts';
 import { runPlaywrightExecutor } from '../../apps/worker/src/exec/browser-executors.ts';
 import { startClient, type Client } from '../../fixtures/src/test-helpers.ts';
@@ -31,7 +32,7 @@ beforeAll(async () => {
   base = (host) => `http://${host}:${client.server.port}`;
   guard = fixtureGuard(client.server.port, HOSTS, net);
   launchProxy = await startEgressProxy({ guard, refuseAll: true });
-  pool = new BrowserPool({ size: 1, launch: playwrightLauncher(launchProxy.url, process.env), recycleAfterRuns: 100 });
+  pool = new BrowserPool({ size: 1, launch: createLocalProvider({ launchProxyUrl: launchProxy.url, env: process.env }).launchShared, recycleAfterRuns: 100 });
 }, 120_000);
 afterAll(async () => {
   await pool?.close();

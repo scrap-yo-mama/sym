@@ -14,9 +14,10 @@ import { identityFromEnv, instanceContactEnvInvalid, resolveIdentifyInstance, re
 import { PgPacingStore, publishRobotEngine, readIdentifyInstanceSetting, readInstanceContactSetting, readLlmSettings, scheduleRunJudge, secretStore } from '@runtime/db';
 import { createLlmClient, llmConfigFromSettings, roleProblems, roleTarget, type LlmConfig, type LlmNote } from '@runtime/llm';
 import { launchAgentBrowser } from '../browser/agent-browser.js';
+import { createLocalProvider } from '../browser/provider-local.js';
 import { installedEngineIdentity } from '../browser/engine-identity.js';
 import { cgroupMemoryLimitBytes, cgroupMemoryWorkingSetBytes } from '../browser/cgroup.js';
-import { BrowserPool, playwrightLauncher } from '../browser/pool.js';
+import { BrowserPool } from '../browser/pool.js';
 import { chromiumSandboxCheck, seccompMode, type ChromiumSandboxStatus } from '../browser/sandbox-check.js';
 import { ProcessSandboxEngine, sandboxOptionsFromEnv, type IsolationProbe } from '../sandbox/index.js';
 import type { ExecutorFactory } from '../worker.js';
@@ -130,6 +131,7 @@ export function productionExecutorFactory(env: Readonly<Record<string, string | 
     }
     let browsers: BrowserPool | null = null;
     let launchProxy: EgressProxy | undefined;
+    let provider: ReturnType<typeof createLocalProvider> | undefined;
     if (!config.disableBrowser) {
       launchProxy = await startEgressProxy({
         guard,
@@ -137,9 +139,10 @@ export function productionExecutorFactory(env: Readonly<Record<string, string | 
         onRequest: (target) => logger.warn({ host: target.host, port: target.port }, 'Chromium : trafic hors contexte de run refusé'),
       });
       const limit = cgroupMemoryLimitBytes();
+      provider = createLocalProvider({ launchProxyUrl: launchProxy.url, env });
       browsers = new BrowserPool({
         size: config.browserConcurrency,
-        launch: playwrightLauncher(launchProxy.url, env),
+        launch: provider.launchShared,
         ...(limit === undefined ? {} : { memoryHigh: () => (cgroupMemoryWorkingSetBytes() ?? 0) > limit * BROWSER_MEMORY_RECYCLE_RATIO }),
         onEvent: (event) => logger.info(event, 'navigateur'),
       });
@@ -169,7 +172,7 @@ export function productionExecutorFactory(env: Readonly<Record<string, string | 
       client: (config) => createLlmClient(config, { note: (note) => logger.info(note, 'llm') }),
       engineFor: (config) => stagehandEngineFor(config, env as NodeJS.ProcessEnv, (note) => logger.info(note, 'llm')),
       // Lancé par les exécuteurs E5 et E6 DANS un slot du pool (BrowserPool.hold) : BROWSER_CONCURRENCY le borne (14 §11).
-      agentBrowser: (options) => launchAgentBrowser({ ...options, env }),
+      agentBrowser: (options) => launchAgentBrowser({ ...options, env, ...(provider === undefined ? {} : { provider }) }),
     };
     // Mode tunnel (2.7) : commandes par `tunnel_jobs`, réponses réveillées par LISTEN sur la connexion de session.
     const tunnel = new TunnelJobClient({ pool, sessionUrl: config.databaseUrlDirect ?? config.databaseUrl, logger });

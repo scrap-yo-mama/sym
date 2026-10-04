@@ -18,7 +18,8 @@ import pg from 'pg';
 import { pino } from 'pino';
 import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from 'vitest';
 import { launchAgentBrowser } from '../browser/agent-browser.js';
-import { BrowserPool, playwrightLauncher } from '../browser/pool.js';
+import { BrowserPool } from '../browser/pool.js';
+import { createLocalProvider } from '../browser/provider-local.js';
 import { loadWorkerConfig } from '../config.js';
 import { startWorker, type Worker } from '../worker.js';
 import { stagehandEngineFor } from './factory.js';
@@ -136,7 +137,7 @@ beforeAll(async () => {
   fake = await createFakeProvider();
   const guard = fixtureGuard(client.server.port, [ROBOTS], net);
   launchProxy = await net.startEgressProxy({ guard, refuseAll: true });
-  browsers = new BrowserPool({ size: 1, launch: playwrightLauncher(launchProxy.url, process.env), recycleAfterRuns: 100 });
+  browsers = new BrowserPool({ size: 1, launch: createLocalProvider({ launchProxyUrl: launchProxy.url, env: process.env }).launchShared, recycleAfterRuns: 100 });
   const llmConfig: LlmConfig = {
     providers: [
       {
