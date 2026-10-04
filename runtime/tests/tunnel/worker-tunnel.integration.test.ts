@@ -38,6 +38,10 @@ let user: TestUser;
 const hits: string[] = [];
 let ext: SimExtension;
 let browserCalls: string[];
+/** Pour rouvrir une WSS de la même extension (U3.4) : adresse de l'instance, jeton de l'appareil, exécuteur réel. */
+let instanceBase: string;
+let deviceToken: string;
+let runCommand: (frame: Parameters<TunnelExecutor['run']>[0]) => ReturnType<TunnelExecutor['run']>;
 
 function fixtureServer(): Server {
   return createServer((req, res) => {
@@ -142,6 +146,9 @@ beforeAll(async () => {
   const browser = nodeBrowserApi(port);
   browserCalls = browser.calls;
   const executorExt = new TunnelExecutor({ browser: browser.api, connectedDomains: async () => new Set([SHOP]) });
+  instanceBase = base;
+  deviceToken = token;
+  runCommand = (frame) => executorExt.run(frame);
   ext = new SimExtension(base, token, { handler: (frame) => executorExt.run(frame) });
   expect(await ext.welcome).toBe(true);
 }, 180_000);
@@ -261,5 +268,64 @@ describe('mode tunnel : stratégie déclarative par l’extension du propriétai
     // Le statut de l'API ne change pas (04 §6).
     expect((await pool.query('SELECT status FROM apis WHERE id = $1', [apiId])).rows[0]).toEqual({ status: 'sain' });
     expect((await pool.query<{ n: number }>("SELECT count(*)::int AS n FROM run_attempts WHERE run_id = $1 AND result_class = 'network'", [runId])).rows[0]!.n).toBe(0);
+  });
+});
+
+describe('U3.4 : tunnel stable', () => {
+  test('assert_tunnel_reconnects — la connexion tombe en plein run : l’extension se reconnecte (attente de 1 s, bien moins de 10 s), la commande coupée est rejouée, le run finit succeeded avec ses 30 contacts', async () => {
+    const apiId = await insertApi('zz_test_tunnel_reconnect', { execution: 'fetch', network: 'tunnel', spec: contactsSpecInput(`http://${SHOP}:${port}`, SHOP, 10) });
+    const live: SimExtension[] = [];
+    let dropped = false;
+    let droppedAt = 0;
+    let reconnectedAt = 0;
+    const handler = (frame: Parameters<typeof runCommand>[0]) => {
+      if (!dropped) {
+        // Deuxième page : la passerelle perd la connexion (redéploiement simulé) pendant la commande.
+        dropped = true;
+        droppedAt = Date.now();
+        live.at(-1)!.socket.terminate();
+        // Reconnexion comme l'extension : première attente de 1 s (TUNNEL_RECONNECT_BACKOFF_MS).
+        setTimeout(() => {
+          const again = new SimExtension(instanceBase, deviceToken, { handler: runCommand });
+          live.push(again);
+          void again.welcome.then(() => (reconnectedAt = Date.now()));
+        }, 1000);
+        return null;
+      }
+      return runCommand(frame);
+    };
+    const first = new SimExtension(instanceBase, deviceToken, { handler });
+    live.push(first);
+    expect(await first.welcome).toBe(true);
+    try {
+      const run = await finished(await startRun(apiId));
+      expect(run).toMatchObject({ state: 'succeeded', items: 30 });
+      expect(dropped).toBe(true);
+      expect(reconnectedAt).toBeGreaterThan(droppedAt);
+      expect(reconnectedAt - droppedAt).toBeLessThan(10_000);
+    } finally {
+      await Promise.all(live.map((e) => e.close()));
+    }
+  });
+
+  test('tunnel perdu : l’extension a servi la page 1 puis disparaît et ne revient pas : le run est arrêté avec la cause tunnel_lost (état skipped_tunnel_offline, aucune classe d’échec), « Relancer »', async () => {
+    const apiId = await insertApi('zz_test_tunnel_lost', { execution: 'fetch', network: 'tunnel', spec: contactsSpecInput(`http://${SHOP}:${port}`, SHOP, 10) });
+    let served = 0;
+    const lost = new SimExtension(instanceBase, deviceToken, {
+      handler: (frame) => {
+        served += 1;
+        if (served === 1) return runCommand(frame);
+        lost.socket.terminate(); // disparaît pendant la page 2
+        return null;
+      },
+    });
+    expect(await lost.welcome).toBe(true);
+    const runId = await startRun(apiId);
+    const run = await finished(runId);
+    expect(run).toMatchObject({ state: 'skipped_tunnel_offline', failure_class: null, items: 0 });
+    expect(await detail(runId)).toBe('tunnel_lost');
+    // Le statut de l'API ne change pas (04 §6) : rien n'est perdu, le run se relance.
+    expect((await pool.query('SELECT status FROM apis WHERE id = $1', [apiId])).rows[0]).toEqual({ status: 'sain' });
+    await lost.close();
   });
 });

@@ -7035,10 +7035,13 @@ components:
     PairingCode:
       type: object
       additionalProperties: false
-      required: [code, expires_at]
+      required: [code, pairing_code, expires_at]
       properties:
         code:
-          description: Code à usage unique, valable 10 minutes.
+          description: Code à usage unique, valable 10 minutes (saisie à la main).
+          type: string
+        pairing_code:
+          description: Code en un collage `sym-pair:v1:<base64url({url, code})>` (adresse de l'instance et code à usage unique, 10 minutes) ; l'extension le lit sans saisie d'URL.
           type: string
         expires_at:
           type: string
@@ -7053,10 +7056,13 @@ components:
     ExtensionPairingCode:
       type: object
       additionalProperties: false
-      required: [code, expiresAt]
+      required: [code, pairingCode, expiresAt]
       properties:
         code:
-          description: Code à usage unique, valable 10 minutes.
+          description: Code à usage unique, valable 10 minutes (saisie à la main).
+          type: string
+        pairingCode:
+          description: Code en un collage `sym-pair:v1:<base64url({url, code})>` (adresse de l'instance et code à usage unique, 10 minutes) ; l'extension le lit sans saisie d'URL.
           type: string
         expiresAt:
           type: string

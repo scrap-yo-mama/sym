@@ -5,6 +5,7 @@ import { readFileSync } from 'node:fs';
 import type { components } from '@runtime/client';
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
 import { nextTick, watch } from 'vue';
+import PairingCard from '@/components/settings/PairingCard.vue';
 import TestOutcome from '@/components/settings/TestOutcome.vue';
 import { resetSession } from '@/composables/useSession';
 import { LLM_PRESETS, useExtensionSettings, useLlmSettings, useProxies, useSmtp, useWebhooks } from '@/composables/useSettings';
@@ -343,6 +344,57 @@ describe('Réglages > Extension et sessions', () => {
     expect(html).not.toMatch(/cookie/i);
   });
 
+  test('U3.1 — code en un collage : affiché avec ses deux étapes ; l’extension qui s’appaire passe l’écran à « Extension connectée » sans recharger, en moins de 5 s', async () => {
+    let devices: { id: string; deviceLabel: string | null; createdAt: string; lastSeenAt: string | null; expiresAt: string; revokedAt: string | null }[] = [
+      { id: 'old', deviceLabel: 'Ancien appareil', createdAt: '2026-09-01T10:00:00Z', lastSeenAt: null, expiresAt: '2026-12-01T10:00:00Z', revokedAt: null },
+    ];
+    installFakeServer({
+      ...sessionRoutes,
+      'GET /api/extension/devices': () => json(200, { items: devices }),
+      'GET /api/sites': () => json(200, { items: [] }),
+      'POST /api/extension/pairing-codes': () => json(201, { code: 'ABCDE-12345', pairingCode: 'sym-pair:v1:eyJ1cmwiOiJodHRwczovL3p6In0', expiresAt: '2026-10-01T10:10:00Z' }),
+    });
+    const extension = useExtensionSettings();
+    await extension.devices.reload();
+    expect(await extension.createPairingCode('bon')).toBe(true);
+    expect(extension.pairing.value).toMatchObject({ code: 'ABCDE-12345', pairingCode: 'sym-pair:v1:eyJ1cmwiOiJodHRwczovL3p6In0', connected: null });
+    // Aucun nouvel appareil : toujours en attente. Un appareil que l'écran connaissait déjà ne compte pas.
+    const stop = extension.watchPairing(20);
+    await new Promise((r) => setTimeout(r, 80));
+    expect(extension.pairing.value?.connected).toBeNull();
+    // L'extension s'appaire : la console le voit au prochain relevé.
+    devices = [...devices, { id: 'new', deviceLabel: 'Chrome du bureau', createdAt: '2026-10-01T10:00:05Z', lastSeenAt: null, expiresAt: '2026-12-01T10:00:00Z', revokedAt: null }];
+    const t0 = Date.now();
+    await new Promise<void>((resolve) => {
+      const check = setInterval(() => {
+        if (extension.pairing.value?.connected !== null) {
+          clearInterval(check);
+          resolve();
+        }
+      }, 10);
+    });
+    expect(Date.now() - t0).toBeLessThan(5_000);
+    expect(extension.pairing.value?.connected).toMatchObject({ id: 'new', deviceLabel: 'Chrome du bureau' });
+    stop();
+  });
+
+  test('U3.1 — le rendu du code : étape 1 (installer), étape 2 (copier), le code complet, la saisie à la main en secours ; puis « Extension connectée »', async () => {
+    const pairing = { code: 'ABCDE-12345', pairingCode: 'sym-pair:v1:eyJ1cmwiOiJodHRwczovL3p6In0', expiresAt: '2026-10-01T10:10:00Z', knownDeviceIds: [], connected: null };
+    const waiting = await view(PairingCard, { pairing, instanceUrl: 'https://zz-test.example' });
+    expect(waiting).toContain(en.settings.extension.step1Title);
+    expect(waiting).toContain(en.settings.extension.step2Title);
+    expect(waiting).toMatch(/data-testid="pairing-text"[^>]*>sym-pair:v1:eyJ1cmwiOiJodHRwczovL3p6In0</);
+    expect(waiting).toContain('ABCDE-12345');
+    expect(waiting).toContain('https://zz-test.example');
+    expect(waiting).toContain(en.settings.extension.waiting);
+    expect(waiting).not.toContain('data-testid="pairing-connected"');
+    const connected = await view(PairingCard, { pairing: { ...pairing, connected: { id: 'new', deviceLabel: 'Chrome du bureau', createdAt: '2026-10-01T10:00:05Z', lastSeenAt: null, expiresAt: '2026-12-01T10:00:00Z', revokedAt: null } } });
+    expect(connected).toContain('data-testid="pairing-connected"');
+    expect(connected).toContain(en.settings.extension.connectedTitle);
+    expect(connected).toContain('Chrome du bureau');
+    expect(connected).not.toContain('data-testid="pairing-text"');
+  });
+
   test('code d’appairage : mot de passe actuel envoyé une fois, code affiché une fois puis masqué, refus lisible', async () => {
     const calls = installFakeServer({
       'POST /api/extension/pairing-codes': (call) => ((call.body as { currentPassword: string }).currentPassword === 'bon' ? json(201, { code: 'ABCD-1234', expiresAt: '2026-10-01T10:10:00Z' }) : json(403, { error: { code: 'reauth_failed', message: 'x' } })),
@@ -352,7 +404,7 @@ describe('Réglages > Extension et sessions', () => {
     expect(extension.failure.value).toBe('errors.reauth_failed');
     expect(extension.pairing.value).toBeNull();
     expect(await extension.createPairingCode('bon')).toBe(true);
-    expect(extension.pairing.value).toEqual({ code: 'ABCD-1234', expiresAt: '2026-10-01T10:10:00Z' });
+    expect(extension.pairing.value).toMatchObject({ code: 'ABCD-1234', expiresAt: '2026-10-01T10:10:00Z', connected: null });
     extension.dismissPairing();
     expect(extension.pairing.value).toBeNull();
     expect(calls).toHaveLength(2);

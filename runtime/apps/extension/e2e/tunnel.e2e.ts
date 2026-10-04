@@ -139,6 +139,7 @@ test('appairage et site connecté en tunnel : le service worker ouvre la WSS (un
   const code = await h.console(alice.cookie, 'POST', '/api/extension/pairing-codes', { currentPassword: alice.password });
   expect(code.status).toBe(201);
   const page: Page = await h.popup();
+  await page.click('#manual summary'); // saisie à la main (secours de l'appairage en un collage)
   await page.fill('#instance-url', h.publicUrl);
   await page.fill('#pairing-code', (code.data as { code: string }).code);
   await h.grantHosts(['http://127.0.0.1/*']);

@@ -3,6 +3,7 @@
 // « Connected as », consentement par domaine AVANT toute lecture de cookie, liste des domaines et déconnexion.
 // Les permissions d'hôte sont demandées ici, au clic de l'utilisateur (`chrome.permissions.request` exige un geste).
 // Aucune lecture de cookie dans ce contexte : elle n'a lieu que dans le service worker, après consentement.
+import { decodePairingCode } from '@runtime/core/tunnel';
 import { SYM_GHOST_PATH, SYM_GHOST_VIEWBOX } from '@runtime/ui/sym-ghost';
 import { createApp, defineComponent, h, reactive, type VNode } from 'vue';
 import { browser } from 'wxt/browser';
@@ -63,6 +64,8 @@ const App = defineComponent({
       // Révocation faite ici mais pas sur l'instance (injoignable) : avertissement gardé jusqu'au geste suivant.
       notice: '',
       status: { paired: false } as Status,
+      /** Code d'appairage en un collage (`sym-pair:v1:…`, U3.1) : le seul champ de l'écran d'appairage. */
+      pasted: '',
       instanceUrl: '',
       code: '',
       deviceLabel: '',
@@ -110,6 +113,26 @@ const App = defineComponent({
         state.code = '';
       });
 
+    /**
+     * Appairage en UN collage (U3.1, 05 § 2) : l'adresse de l'instance et le code sont lus dans le texte collé, sans saisie
+     * d'URL. Contrôles locaux AVANT toute requête : forme du code, version, `https://` (boucle locale exceptée) ; l'adresse
+     * refusée n'est jamais contactée. Un code à l'ancienne (`XXXXX-XXXXX`) renvoie vers la saisie à la main.
+     */
+    const pairByPaste = () =>
+      run(async () => {
+        const decoded = decodePairingCode(state.pasted);
+        if (!decoded.ok) {
+          if (decoded.reason === 'version') throw new Error('This pairing code comes from a newer version: update the extension.');
+          if (decoded.reason === 'format') throw new Error('This is not a pairing code. Copy the whole code that starts with "sym-pair:" from your console, or open "Enter by hand".');
+          throw new Error('This pairing code is damaged: generate a new one in your console.');
+        }
+        const instance = checkInstanceUrl(decoded.url);
+        if (!instance.ok) throw new Error('Instance URL refused: https:// is required. No request was sent to this address.');
+        if (!(await browser.permissions.request({ origins: [instancePattern(instance.origin)] }))) throw new Error('Access to the instance was not granted.');
+        state.status = await send<Status>({ type: 'pair', instanceUrl: instance.origin, code: decoded.code, deviceLabel: state.deviceLabel.trim() || null });
+        state.pasted = '';
+      });
+
     const accept = () =>
       run(async () => {
         const domain = state.domain;
@@ -135,7 +158,7 @@ const App = defineComponent({
 
     void refresh();
 
-    const field = (id: string, label: string, key: 'instanceUrl' | 'code' | 'deviceLabel', placeholder: string): VNode =>
+    const field = (id: string, label: string, key: 'pasted' | 'instanceUrl' | 'code' | 'deviceLabel', placeholder: string): VNode =>
       h('label', { for: id }, [
         label,
         h('input', {
@@ -150,12 +173,22 @@ const App = defineComponent({
       ]);
 
     function pairingView(): VNode {
-      return h('form', { id: 'pairing', onSubmit: (e: Event) => (e.preventDefault(), void pair()) }, [
-        h('p', 'Pair this browser with your Scrapyomama instance. Generate a code in Settings › Extension.'),
-        field('instance-url', 'Instance URL', 'instanceUrl', 'https://runtime.example.org'),
-        field('pairing-code', 'Pairing code', 'code', 'XXXXX-XXXXX'),
-        field('device-label', 'Device name (optional)', 'deviceLabel', 'Work laptop'),
-        h('button', { id: 'pair', type: 'submit', disabled: state.busy }, 'Pair'),
+      return h('div', { id: 'pairing' }, [
+        h('form', { id: 'pairing-paste-form', onSubmit: (e: Event) => (e.preventDefault(), void pairByPaste()) }, [
+          h('p', 'Pair this browser with your Scrapyomama instance. In your console, open Settings › Extension, copy the pairing code and paste it here.'),
+          field('pairing-paste', 'Pairing code', 'pasted', 'sym-pair:v1:…'),
+          h('button', { id: 'pair-paste', type: 'submit', disabled: state.busy }, 'Pair'),
+        ]),
+        // Saisie à la main (secours) : adresse de l'instance et code séparés, comme avant.
+        h('details', { id: 'manual' }, [
+          h('summary', 'Enter by hand'),
+          h('form', { id: 'pairing-manual', onSubmit: (e: Event) => (e.preventDefault(), void pair()) }, [
+            field('instance-url', 'Instance URL', 'instanceUrl', 'https://runtime.example.org'),
+            field('pairing-code', 'Pairing code', 'code', 'XXXXX-XXXXX'),
+            field('device-label', 'Device name (optional)', 'deviceLabel', 'Work laptop'),
+            h('button', { id: 'pair', type: 'submit', disabled: state.busy }, 'Pair'),
+          ]),
+        ]),
       ]);
     }
 
