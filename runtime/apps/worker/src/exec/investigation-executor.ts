@@ -915,6 +915,7 @@ function investigationRun(deps: InvestigationExecutorDeps): RunExecutor {
           document_bytes: capture.document?.bytes ?? 0,
           total_bytes: capture.totalBytes,
           ...(capture.assets === undefined || capture.assets.requests === 0 ? {} : { third_party_assets: capture.assets }),
+          ...(capture.data === undefined || capture.data.seen === 0 ? {} : { data_responses: capture.data }),
           ...(recon.requests === undefined ? {} : { requests: recon.requests }),
           budget: budgetView(),
         });

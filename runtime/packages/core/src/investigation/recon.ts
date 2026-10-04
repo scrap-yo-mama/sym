@@ -39,6 +39,8 @@ export type ReconCapture = {
   readonly totalBytes: number;
   /** Sous-ressources statiques d'hôtes tiers chargées pour le rendu (mode navigateur) : hôtes et requêtes, sans URL. */
   readonly assets?: { readonly hosts: number; readonly requests: number };
+  /** Réponses de données (fetch, XHR) d'un domaine de l'API vues par la passe navigateur, capturées, écartées par raison (codes). */
+  readonly data?: { readonly seen: number; readonly captured: number; readonly skipped: Readonly<Record<string, number>> };
 };
 
 /** Squelette d'un enregistrement : chemin relatif (`$.a.b`) → type JSON. Aucune valeur. */

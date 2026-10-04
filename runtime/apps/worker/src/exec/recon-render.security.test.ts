@@ -134,6 +134,8 @@ describe('reconnaissance d’une application rendue en JavaScript (R05)', () => 
     expect(candidates.indexOf(api!)).toBeLessThan(candidates.indexOf(dom!));
     expect(site.hits.some((h) => h.host === CDN && h.path === '/.vite/manifest.json')).toBe(true);
     expect(capture.assets?.hosts).toBe(1);
+    // Récit : réponses de données du site vues et capturées (codes seulement).
+    expect(capture.data).toMatchObject({ seen: 1, captured: 1 });
   }, 90_000);
 
   test('assert_recon_static_assets_bounded — plafond d’hôtes tiers atteint : le code du CDN n’est plus chargé, aucune connexion', async () => {

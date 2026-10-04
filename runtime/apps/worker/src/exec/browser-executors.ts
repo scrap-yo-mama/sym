@@ -447,6 +447,8 @@ export type ReconnaissancePassOptions = Omit<BrowserExecutorOptions, 'spec' | 'i
   readonly allowedHosts: readonly string[];
 };
 
+/** Délai de grâce des lectures de réponses de données encore en cours après l'attente du rendu. */
+const RECON_READ_GRACE_MS = 10_000;
 /** Corps lu d'une réponse de données non JSON ou en erreur, pour la seule classification (défi, refus signé). */
 const RECON_MAX_CLASSIFY_BYTES = 256 * 1024;
 /** Suites qui arrêtent la passe : refus ou défi, connexion ou paiement requis, 429 (ralentir, jamais insister). */
@@ -481,6 +483,12 @@ export async function runReconnaissancePass(options: ReconnaissancePassOptions):
   const seen: { document: ReconCapture['document']; received: number } = { document: null, received: 0 };
   /** Premier refus vu sur une réponse de données de la page (défi, 403, connexion requise) : il arrête la passe. */
   let dataRefusal: { failure: ExecFailure; exchange: HttpExchange } | null = null;
+  /** Réponses de données vues sur un domaine de l'API et sort de chacune (codes, aucune URL) : récit de la reconnaissance. */
+  const data = { seen: 0, captured: 0, skipped: {} as Record<string, number> };
+  const skip = (reason: string) => {
+    data.skipped[reason] = (data.skipped[reason] ?? 0) + 1;
+  };
+  let settled = 0;
   const result = await withRunContext(base, async ({ page }, strategy, nav) => {
     const reads: Promise<void>[] = [];
     let captured = 0;
@@ -488,7 +496,9 @@ export async function runReconnaissancePass(options: ReconnaissancePassOptions):
       const request = response.request();
       const type = request.resourceType();
       if (type !== 'fetch' && type !== 'xhr') return;
-      if (!hostAllowed(response.url(), options.allowedHosts, options.allowedHostSuffixes) || reads.length >= RECON_MAX_EXCHANGES) return;
+      if (!hostAllowed(response.url(), options.allowedHosts, options.allowedHostSuffixes)) return;
+      data.seen += 1;
+      if (reads.length >= RECON_MAX_EXCHANGES) return skip('max_exchanges');
       const contentType = response.headers()['content-type'] ?? '';
       const json = /json/i.test(contentType);
       const ok = response.status() >= 200 && response.status() < 300;
@@ -500,12 +510,15 @@ export async function runReconnaissancePass(options: ReconnaissancePassOptions):
           const refused = classify(exchange, { requestUrl: request.url() });
           if (refused !== null && STOPPING_ROUTES.has(failureRoute(refused.failure_class).next)) {
             dataRefusal ??= { failure: refused, exchange };
-            return;
+            return skip('refused_stop');
           }
-          if (refused !== null || !json || typeof body !== 'string') return;
+          if (refused !== null) return skip(`refused_${refused.failure_class}`);
+          if (!json) return skip('not_json');
+          if (typeof body !== 'string') return skip(body === TOO_LARGE ? 'too_large' : 'body_unread');
           const bytes = Buffer.byteLength(body);
-          if (captured + bytes > RECON_MAX_CAPTURE_BYTES) return;
+          if (captured + bytes > RECON_MAX_CAPTURE_BYTES) return skip('capture_bytes');
           captured += bytes;
+          data.captured += 1;
           const post = request.postData();
           exchanges.push({
             url: response.url(),
@@ -517,7 +530,11 @@ export async function runReconnaissancePass(options: ReconnaissancePassOptions):
             body,
             bytes,
           });
-        })().catch(() => undefined),
+        })()
+          .catch(() => skip('read_error'))
+          .finally(() => {
+            settled += 1;
+          }),
       );
     });
     if (options.pacer !== undefined) {
@@ -547,6 +564,9 @@ export async function runReconnaissancePass(options: ReconnaissancePassOptions):
       // page (défi qui se résout seul, redirection) interrompt la passe.
       await nav.during(() => page.waitForLoadState('networkidle', { timeout: renderWaitMs }).catch(() => undefined), () => served);
       await nav.during(() => Promise.race([Promise.all(reads), new Promise((resolve) => setTimeout(resolve, renderWaitMs))]), () => served);
+      // Lectures encore en cours (corps lent, machine chargée) : un délai de grâce borné avant de les perdre (constat R05).
+      if (settled < reads.length) await nav.during(() => Promise.race([Promise.all(reads), new Promise((resolve) => setTimeout(resolve, RECON_READ_GRACE_MS))]), () => served);
+      if (settled < reads.length) data.skipped['pending'] = reads.length - settled;
       // Un refus sur un point de données de la page : la passe s'arrête, aucun gisement n'en sort (INV6).
       const refusedData = dataRefusal as { failure: ExecFailure; exchange: HttpExchange } | null;
       if (refusedData !== null) return failed(refusedData.failure, refusedData.exchange);
@@ -575,6 +595,7 @@ export async function runReconnaissancePass(options: ReconnaissancePassOptions):
       exchanges,
       totalBytes: Math.max(seen.received, capturedBytes),
       ...(options.staticAssets === undefined ? {} : { assets: options.staticAssets.usage() }),
+      data: { seen: data.seen, captured: data.captured, skipped: { ...data.skipped } },
     },
   };
 }
