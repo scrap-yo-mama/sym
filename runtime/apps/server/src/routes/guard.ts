@@ -61,8 +61,11 @@ declare module 'fastify' {
   }
 }
 
-export function sendError(reply: FastifyReply, status: number, code: string, message: string): FastifyReply {
-  return reply.code(status).send({ error: { code, message } });
+/** Champs facultatifs de l'enveloppe d'erreur (03-specs-mcp § 10.3) : le crochet `onSend` y ajoute `action_label`, `what_to_do` et `retryable`. */
+export type ErrorExtra = { field?: string; scope_required?: string; details?: Record<string, unknown>; what_to_do?: string; retryable?: boolean; console_url?: string };
+
+export function sendError(reply: FastifyReply, status: number, code: string, message: string, extra?: ErrorExtra): FastifyReply {
+  return reply.code(status).send({ error: { code, message, ...extra } });
 }
 
 /** 404 uniforme : objet inexistant, objet d'autrui ou chemin inconnu (aucun indice d'existence, 13 § 3). */
@@ -279,7 +282,7 @@ export function guard(ctx: ServerContext) {
     const denied = async (reason: string) => {
       await audit(ctx, request, actor, { action: 'access.denied', outcome: 'denied', meta: { route: `${spec.method} ${spec.url}`, reason } });
       // Clé sans le scope de la route : `insufficient_scope` (05 § 4.4), pour que l'agent sache quel droit demander.
-      if (reason === 'scope_missing') await sendError(reply, 403, 'insufficient_scope', `scope ${spec.scope ?? ''} requis pour cette clé d’API`);
+      if (reason === 'scope_missing') await sendError(reply, 403, 'insufficient_scope', `scope ${spec.scope ?? ''} requis pour cette clé d’API`, spec.scope ? { scope_required: spec.scope } : undefined);
       else await sendError(reply, 403, 'forbidden', 'action non autorisée');
     };
     if (actor.via === 'apikey') {

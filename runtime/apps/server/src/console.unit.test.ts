@@ -68,7 +68,7 @@ const expectNotFoundJson = (res: { statusCode: number; headers: Record<string, u
   expect(String(res.headers['content-type']), what).toMatch(/^application\/json/);
   // 404 uniforme : le `code` est le contrat ; le `message` est celui du catalogue dans la langue résolue (3.20, 21 § 4.4),
   // ici `en` (ni Accept-Language, ni compte, ni langue d'instance lisible).
-  expect(JSON.parse(res.body), what).toEqual({ error: { code: 'not_found', message: NOT_FOUND_EN } });
+  expect(JSON.parse(res.body), what).toMatchObject({ error: { code: 'not_found', message: NOT_FOUND_EN } });
 };
 
 describe('assert_console_served — la console est servie par le serveur, à la racine', () => {

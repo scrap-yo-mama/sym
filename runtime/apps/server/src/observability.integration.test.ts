@@ -71,7 +71,7 @@ describe('sondes', () => {
       // Aucune autre route tant que le schéma manque (ni assistant, ni auth, ni métriques).
       const setupEarly = await inject('POST', '/api/setup', { token: bootstrap, email: 'zz_test_owner@example.test', password: 'zz_test_password_123456' });
       expect(setupEarly.statusCode).toBe(503);
-      expect(setupEarly.json()).toEqual({ error: { code: 'not_ready', message: expect.any(String) } });
+      expect(setupEarly.json()).toMatchObject({ error: { code: 'not_ready', message: expect.any(String) } });
       expect((await inject('POST', '/api/auth/sign-in/email', { email: 'a@example.test', password: 'x' })).statusCode).toBe(503);
       expect((await inject('GET', '/api/ready?detail=1')).statusCode).toBe(503);
       // Aucun effet de bord avant la migration : pas de key_check écrit.

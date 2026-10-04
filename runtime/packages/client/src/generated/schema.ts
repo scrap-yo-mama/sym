@@ -188,6 +188,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/me/prerequisites": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Ce qu'il reste à régler avant qu'une enquête parte (UX-09, UX-19), lisible par toute clé d'API */
+        get: operations["getPrerequisites"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/me": {
         parameters: {
             query?: never;
@@ -1824,6 +1841,23 @@ export interface webhooks {
 }
 export interface components {
     schemas: {
+        Prerequisites: {
+            ready: boolean;
+            /** @description Nombre d'éléments bloquants à régler. */
+            missing: number;
+            items: {
+                /** @enum {string} */
+                id: "instance_contact" | "llm_model:investigate" | "llm_price:investigate" | "llm_key_readable" | "responsible_use";
+                /** @description `null` quand l'état est inconnu (aucun worker n'a encore publié son environnement). */
+                ok: boolean | null;
+                blocking: boolean;
+                /** @description Code du catalogue d'erreurs quand l'élément est à régler. */
+                code: string | null;
+                message: string;
+                action_label: string | null;
+                console_path: string | null;
+            }[];
+        };
         ApiError: {
             error: {
                 code: string;
@@ -1834,6 +1868,19 @@ export interface components {
                 what_to_do?: string;
                 /** @description L'appel peut être refait tel quel une fois la marche à suivre faite (ex. `instance_contact_missing` : le contact du robot posé, UX-04). */
                 retryable?: boolean;
+                /** @description Langue de `message` (`fr`, `en`) ; `fr` quand le message porte le détail écrit par la route. */
+                message_locale?: string;
+                /** @description Ce que la personne fait ensuite, verbe d'abord, dans la langue de la requête (UX-09). */
+                action_label?: string;
+                /** @description Champ nommé par l'erreur (ex. `minimal_content`). */
+                field?: string;
+                /** @description Droit manquant à la clé (`insufficient_scope`, UX-09). */
+                scope_required?: string;
+                console_url?: string;
+                /** @description Détails publiables et sans secret (compte, motif). */
+                details?: {
+                    [key: string]: unknown;
+                };
             };
         };
         /** @description Erreur de la bibliothèque d'authentification (format à plat, sans enveloppe `error`). */
@@ -4077,6 +4124,28 @@ export interface operations {
                 };
                 content?: never;
             };
+        };
+    };
+    getPrerequisites: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Contact du robot, modèle et prix du rôle enquête, clé du fournisseur, case « usage responsable » de la personne. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Prerequisites"];
+                };
+            };
+            401: components["responses"]["Error"];
+            503: components["responses"]["Error"];
         };
     };
     getMe: {

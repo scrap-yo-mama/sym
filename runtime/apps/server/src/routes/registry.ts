@@ -75,6 +75,8 @@ export const ROUTES: readonly RouteSpec[] = [
   { method: 'POST', url: '/api/auth/sign-out', auth: 'public', library: true },
   { method: 'GET', url: '/api/auth/get-session', auth: 'public', library: true },
   { method: 'GET', url: '/api/me', auth: 'session_or_key', mfa: 'enroll' },
+  // Prérequis d'une enquête (UX-09, UX-19) : lisibles par toute clé, sans scope ; la personne ne voit que ses propres cases.
+  { method: 'GET', url: '/api/me/prerequisites', auth: 'session_or_key' },
   // Langue, fuseau et thème du compte (21b § 1) : session d'interface seulement.
   { method: 'PATCH', url: '/api/me', auth: 'session', permission: 'account:update', mfa: 'enroll' },
   { method: 'GET', url: '/api/api-keys', auth: 'session', permission: 'apikeys:manage', resource: { type: 'api_key', kind: 'collection' } },

@@ -54,7 +54,7 @@ describe('appairage et version minimale de l’extension', () => {
     const code = await pairingCode();
     const refused = await pair(code, 'zz_test_dev_old_1', '0.3.9');
     expect(refused.statusCode).toBe(426);
-    expect(refused.json()).toEqual({ error: { code: 'extension_outdated', message: expect.stringContaining(MIN) } });
+    expect(refused.json()).toMatchObject({ error: { code: 'extension_outdated', message: expect.stringContaining(MIN) } });
     expect(refused.json<{ error: { message: string } }>().error.message).toContain('0.3.9');
     // Version illisible : refusée aussi.
     expect((await pair(code, 'zz_test_dev_old_2', 'dev-build')).statusCode).toBe(426);
@@ -67,7 +67,7 @@ describe('appairage et version minimale de l’extension', () => {
     const code = await pairingCode();
     const refused = await pair(code, 'zz_test_dev_nover_1');
     expect(refused.statusCode, refused.body).toBe(426);
-    expect(refused.json()).toEqual({ error: { code: 'extension_outdated', message: expect.stringContaining(MIN) } });
+    expect(refused.json()).toMatchObject({ error: { code: 'extension_outdated', message: expect.stringContaining(MIN) } });
     // Le code n'a pas été consommé.
     expect((await pair(code, 'zz_test_dev_nover_2', MIN)).statusCode).toBe(201);
   });

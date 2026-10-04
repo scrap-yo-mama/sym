@@ -42,12 +42,14 @@ async function call(client: Client, name: string, args: Record<string, unknown>)
 }
 
 /** Erreur d'outil (05 § 4.3) : un bloc texte JSON, `isError: true`, sans `structuredContent`. */
-function toolError(result: ToolResult): { code: string; message: string; what_to_do: string; retryable: boolean; next_action: unknown } {
+function toolError(result: ToolResult): { code: string; message: string; message_locale: string; action_label: string; what_to_do: string; retryable: boolean; next_action: unknown } {
   expect(result.isError, JSON.stringify(result).slice(0, 400)).toBe(true);
   expect(result).not.toHaveProperty('structuredContent');
   expect(result.content).toHaveLength(1);
   const parsed = JSON.parse(result.content[0]!.text!) as ReturnType<typeof toolError>;
-  expect(Object.keys(parsed).sort()).toEqual(['code', 'message', 'next_action', 'retryable', 'what_to_do']);
+  // Enveloppe commune (03-specs-mcp § 10.3) : les champs de base, plus la langue du message et l'action (U1.5) ; `field` et d'autres facultatifs.
+  expect(Object.keys(parsed)).toEqual(expect.arrayContaining(['code', 'message', 'message_locale', 'action_label', 'next_action', 'retryable', 'what_to_do']));
+  for (const key of ['message', 'action_label', 'what_to_do']) expect(parsed[key as 'message'], key).toMatch(/\S/);
   return parsed;
 }
 

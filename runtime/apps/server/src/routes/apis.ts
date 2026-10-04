@@ -37,6 +37,8 @@ import {
   type InvestigationState,
 } from '@runtime/db';
 import type { BriefRejection, InvestigationBrief } from '@runtime/core';
+import { findSsrfBlocked } from '@runtime/core/net';
+import { isIP } from 'node:net';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type pg from 'pg';
 import type { ServerContext } from '../context.js';
@@ -219,6 +221,26 @@ async function investigationUrlOf(db: Pick<pg.ClientBase, 'query'>, apiId: strin
   return rows[0]?.url ?? 'https://invalid.invalid/';
 }
 
+/**
+ * UX-34 : adresse de départ interne ou réservée (IP privée, boucle locale, métadonnées cloud, port hors liste) : 400
+ * `url_not_allowed` avant toute création. Contrôle statique et noms/IP littéraux seulement (aucune résolution DNS ici : le
+ * worker recontrôle à la connexion, INV10) ; l'adresse reçue n'est jamais renvoyée. Vrai si la réponse est partie.
+ */
+async function rejectUrlNotAllowed(ctx: ServerContext, reply: FastifyReply, raw: string): Promise<boolean> {
+  if (!URL.canParse(raw)) return false;
+  const url = new URL(raw);
+  try {
+    const target = ctx.guard.checkUrlStatic(url);
+    const literal = isIP(target.host) !== 0 || target.host === 'localhost' || target.host.endsWith('.localhost') || target.host.startsWith('metadata.');
+    if (literal) await ctx.guard.resolveAnyPort(target.host, target.port);
+    return false;
+  } catch (error) {
+    if (findSsrfBlocked(error) === undefined) throw error;
+    await sendError(reply, 400, 'url_not_allowed', 'adresse interne ou réservée : donne une adresse publique');
+    return true;
+  }
+}
+
 /** Erreur d'état d'enquête → code HTTP (05 § 4.3). */
 export function investigationError(reply: FastifyReply, error: InvestigationStateError): FastifyReply {
   const status = error.code === 'api_not_found' ? 404 : error.code === 'invalid_request' || error.code === 'invalid_schema' ? 400 : 409;
@@ -358,6 +380,8 @@ export function apiRoutes(app: FastifyInstance, ctx: ServerContext): void {
     const actor = request.actor!;
     const body = request.body;
     if (await rejectIfKeyRateLimited(ctx, reply, actor)) return reply;
+    // UX-34 : une adresse interne ou réservée est refusée AVANT de créer quoi que ce soit (même garde que le worker).
+    if (await rejectUrlNotAllowed(ctx, reply, body.url)) return reply;
     // UX-04 : sans contact d'instance, l'enquête échouerait aussitôt (17 § 5) : refus AVANT de créer l'API ou le run.
     if (await rejectWithoutInstanceContact(ctx, reply)) return reply;
     // Validation automatique : le schéma proposé n'est pas encore connu ; s'il porte `x-personal`, la case est exigée.
