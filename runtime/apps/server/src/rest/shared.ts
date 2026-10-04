@@ -100,7 +100,7 @@ export async function reserveRunSlot(tx: Queryable, ctx: ServerContext, target: 
  * Budget du jour atteint (D-123 : seul filet quand l'API n'a pas de plafond par run) : ce qui est atteint, quand il se
  * réinitialise, et qui peut le relever.
  */
-export const BUDGET_EXCEEDED_MESSAGE =
+const BUDGET_EXCEEDED_MESSAGE =
   'budget du jour atteint pour ce compte (coûts LLM et proxy) : il se réinitialise à minuit UTC ; un admin peut le relever (USER_BUDGET_DAILY_USD)';
 
 /** Réponse 429 d'un plafond atteint (`RunSlotError`). */
