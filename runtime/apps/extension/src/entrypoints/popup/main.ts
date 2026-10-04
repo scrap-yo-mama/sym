@@ -66,6 +66,8 @@ const App = defineComponent({
       status: { paired: false } as Status,
       /** Code d'appairage en un collage (`sym-pair:v1:…`, U3.1) : le seul champ de l'écran d'appairage. */
       pasted: '',
+      /** Origine décodée en attente de confirmation explicite avant l'appairage (collage). */
+      pending: null as { origin: string; code: string } | null,
       instanceUrl: '',
       code: '',
       deviceLabel: '',
@@ -128,9 +130,19 @@ const App = defineComponent({
         }
         const instance = checkInstanceUrl(decoded.url);
         if (!instance.ok) throw new Error('Instance URL refused: https:// is required. No request was sent to this address.');
-        if (!(await browser.permissions.request({ origins: [instancePattern(instance.origin)] }))) throw new Error('Access to the instance was not granted.');
-        state.status = await send<Status>({ type: 'pair', instanceUrl: instance.origin, code: decoded.code, deviceLabel: state.deviceLabel.trim() || null });
+        // Revue sécurité : l'adresse n'est plus tapée, donc elle est montrée (forme ASCII/punycode de `URL.origin`) et confirmée
+        // AVANT toute permission d'hôte ou requête ; un code hostile ne peut pas se faire passer pour votre instance.
+        state.pending = { origin: instance.origin, code: decoded.code };
+      });
+
+    const confirmPair = () =>
+      run(async () => {
+        const pending = state.pending;
+        if (!pending) return;
+        if (!(await browser.permissions.request({ origins: [instancePattern(pending.origin)] }))) throw new Error('Access to the instance was not granted.');
+        state.status = await send<Status>({ type: 'pair', instanceUrl: pending.origin, code: pending.code, deviceLabel: state.deviceLabel.trim() || null });
         state.pasted = '';
+        state.pending = null;
       });
 
     const accept = () =>
@@ -173,6 +185,15 @@ const App = defineComponent({
       ]);
 
     function pairingView(): VNode {
+      if (state.pending) {
+        const origin = state.pending.origin;
+        return h('section', { id: 'pair-confirm-view', role: 'dialog', 'aria-label': 'Confirm pairing' }, [
+          h('h2', ['Pair with ', h('strong', { id: 'pair-confirm-origin' }, origin), '?']),
+          h('p', 'Check that this is the address of YOUR instance. A code from someone else would hand this browser to their server.'),
+          h('button', { id: 'pair-confirm', type: 'button', disabled: state.busy, onClick: confirmPair }, 'Pair with this instance'),
+          h('button', { id: 'pair-cancel', type: 'button', onClick: () => (state.pending = null) }, 'Cancel'),
+        ]);
+      }
       return h('div', { id: 'pairing' }, [
         h('form', { id: 'pairing-paste-form', onSubmit: (e: Event) => (e.preventDefault(), void pairByPaste()) }, [
           h('p', 'Pair this browser with your Scrapyomama instance. In your console, open Settings › Extension, copy the pairing code and paste it here.'),
@@ -220,7 +241,7 @@ const App = defineComponent({
       // Connecté depuis CE navigateur (consentement local) ; un domaine connecté ailleurs peut être connecté ici aussi.
       const connected = status.sites.some((s) => s.domain === state.domain && s.onThisBrowser);
       return h('div', { id: 'paired' }, [
-        h('p', { id: 'identity' }, `Connected as ${status.email}`),
+        h('p', { id: 'identity' }, `Connected as ${status.email} to ${status.origin}`),
         status.instanceError ? h('p', { id: 'instance-error', role: 'status' }, status.instanceError) : null,
         h('section', [
           h('h2', 'This site'),

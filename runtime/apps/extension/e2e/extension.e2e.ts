@@ -9,7 +9,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { expect, test, type Page } from '@playwright/test';
 import { kekFor, MasterKey } from '@runtime/core';
-import { encodePairingCode } from '@runtime/core/tunnel';
+import { decodePairingCode, encodePairingCode } from '@runtime/core/tunnel';
 import { siteCookiesForRun } from '@runtime/db';
 import pg from 'pg';
 import { auditSymSignature, EXTENSION_DIR, expectNoCspViolation, fakeInstance, startHarness, type Harness, type User } from './harness.ts';
@@ -192,7 +192,7 @@ test('appairage : URL de l’instance + code à usage unique → « Connected as
   await page.fill('#device-label', 'zz_test_e2e_browser');
   await h.grantHosts(['http://127.0.0.1/*']); // l'utilisateur accepte l'accès à SON instance
   await page.click('#pair');
-  await expect(page.locator('#identity')).toHaveText(`Connected as ${alice.email}`);
+  await expect(page.locator('#identity')).toContainText(`Connected as ${alice.email}`);
   // Popup appairé : la signature reste l'icône à côté de « SYM », une seule, hors des zones d'état.
   expect(await auditSymSignature(page)).toEqual({ problems: [], signatures: 1 });
 
@@ -214,7 +214,7 @@ test('appairage : URL de l’instance + code à usage unique → « Connected as
   });
   expect(replay.status).toBe(400);
   await page.reload();
-  await expect(page.locator('#identity')).toHaveText(`Connected as ${alice.email}`);
+  await expect(page.locator('#identity')).toContainText(`Connected as ${alice.email}`);
 });
 
 test('assert_consent_before_capture : aucune lecture de cookie avant le clic de consentement, même hôte accordé', async () => {
@@ -325,7 +325,7 @@ async function pairAliceAndConnectShop(): Promise<Page> {
     await page.fill('#device-label', 'zz_test_e2e_browser');
     await h.grantHosts(['http://127.0.0.1/*']);
     await page.click('#pair');
-    await expect(page.locator('#identity')).toHaveText(`Connected as ${alice.email}`);
+    await expect(page.locator('#identity')).toContainText(`Connected as ${alice.email}`);
   }
   await visit(SHOP);
   page = await openPopup();
@@ -351,7 +351,7 @@ test('« Disconnect » depuis la console : permission d’hôte retirée, 0 lect
   expect((await cookieReads()).length).toBe(before);
   expect(await h.sql<{ n: number }>('SELECT count(*)::int AS n FROM site_sessions WHERE domain = $1', [SHOP])).toEqual([{ n: 0 }]);
   const page = await openPopup();
-  await expect(page.locator('#identity')).toHaveText(`Connected as ${alice.email}`);
+  await expect(page.locator('#identity')).toContainText(`Connected as ${alice.email}`);
   await expect(page.locator(`#sites li[data-domain="${SHOP}"]`)).toHaveCount(0);
 });
 
@@ -400,7 +400,7 @@ test('ré-appairage vers une autre instance : consentements et permissions effac
     expect(await hasHosts(patterns(SHOP))).toBe(false);
     expect(await hasHosts(['http://127.0.0.1/*'])).toBe(true);
     const popup = await openPopup();
-    await expect(popup.locator('#identity')).toHaveText('Connected as zz_test_b@instance-b.test');
+    await expect(popup.locator('#identity')).toContainText('Connected as zz_test_b@instance-b.test');
     await expect(popup.locator(`#sites li[data-domain="${SHOP}"]`)).toContainText('connected from another browser');
   } finally {
     await b.close();
@@ -558,7 +558,14 @@ test('assert_pairing_single_paste — un seul collage du code de la console, san
   await h.grantHosts(['http://127.0.0.1/*']); // l'utilisateur accepte l'accès à SON instance
   const clicked = Date.now();
   await page.click('#pair-paste');
-  await expect(page.locator('#identity')).toHaveText(`Connected as ${carol.email}`);
+  // Revue sécurité : l'origine décodée est montrée AVANT toute permission, et rien n'est appairé sans confirmation explicite.
+  const decoded = decodePairingCode(pairingCode);
+  if (!decoded.ok) throw new Error('pairing code undecodable');
+  const origin = new URL(decoded.url).origin;
+  await expect(page.locator('#pair-confirm-origin')).toHaveText(origin);
+  await expect(page.locator('#paired')).toHaveCount(0);
+  await page.click('#pair-confirm');
+  await expect(page.locator('#identity')).toHaveText(`Connected as ${carol.email} to ${origin}`);
   // Console à jour : l'appareil figure dans la liste de l'utilisateur moins de 5 s après le collage.
   await expect
     .poll(async () => ((await h.console(carol.cookie, 'GET', '/api/extension/devices')).data as { items: { revokedAt: string | null }[] }).items.filter((d) => d.revokedAt === null).length, { timeout: 5_000 })
