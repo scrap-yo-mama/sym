@@ -249,7 +249,7 @@ async function investigationOf(ctx: ServerContext, actor: Actor, apiId: string):
 }
 
 /** Attend (borné) que l'API quitte `enquete` après l'échec de son enquête : le statut est posé juste après la fin du run. */
-async function waitApiLeavesEnquete(ctx: ServerContext, actor: Actor, apiId: string, deadline: number, signal: AbortSignal): Promise<void> {
+export async function waitApiLeavesEnquete(ctx: ServerContext, actor: Actor, apiId: string, deadline: number, signal: AbortSignal): Promise<void> {
   for (;;) {
     const api = await withActor(ctx.pool, actor, (db) => readApiById(db, apiId));
     if (api === null || api.status !== 'enquete' || Date.now() >= deadline || signal.aborted) return;

@@ -419,9 +419,9 @@ describe('catalogue (05 § 4.2) : création, liste, fiche, modification, suppres
     for (const party of [b, admin]) {
       const other = await api(party, 'GET', `/api/apis/${slug}/brief`, '/api/apis/{slug}/brief');
       expect(other.status).toBe(404);
-      expect(other.body).toEqual({ error: { code: 'not_found', message: 'ressource introuvable' } });
+      expect(other.body).toEqual({ error: { code: 'not_found', message: 'Resource not found.' } });
     }
-    expect((await api(b, 'GET', '/api/apis/zz-test-does-not-exist/brief', '/api/apis/{slug}/brief')).body).toEqual({ error: { code: 'not_found', message: 'ressource introuvable' } });
+    expect((await api(b, 'GET', '/api/apis/zz-test-does-not-exist/brief', '/api/apis/{slug}/brief')).body).toEqual({ error: { code: 'not_found', message: 'Resource not found.' } });
   });
 
   test('admin et owner : métadonnées seules d’une API à session d’autrui ; un membre reçoit 404', async () => {

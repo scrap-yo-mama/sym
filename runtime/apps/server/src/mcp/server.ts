@@ -46,7 +46,7 @@ import { buildRunResult, decodeItemsCursor, itemsCursor, readRunRow, runMetadata
 import { investigationProgressOf, type TimelineEntry } from '../rest/timeline.js';
 import { waitSecondsOf } from '../rest/shared.js';
 import { UUID } from '../routes/account-helpers.js';
-import { createdView } from '../routes/apis.js';
+import { createdView, waitApiLeavesEnquete } from '../routes/apis.js';
 import { audit, MCP_CHANNEL_HEADER, type Actor } from '../routes/guard.js';
 import { attemptsOf, createdSummary, renderNarrative } from './narrative.js';
 import { createProgressSink, progressMessage, type ProgressSink } from './progress.js';
@@ -496,6 +496,8 @@ function handlers(ctx: ServerContext): Record<GenericToolName, Handler> {
       const apiId = String(answer.body['api_id']);
       const runId = String(answer.body['run_id']);
       const row = await waitRun(ctx, caller, call, runId, wait(args));
+      // UX-07 : le worker clôt le run PUIS applique le statut (transaction suivante) : on attend (borné) qu'il en découle.
+      if (row?.state === 'failed') await waitApiLeavesEnquete(ctx, caller.actor, apiId, Date.now() + 2_000, call.signal);
       const terminal = row !== null && isTerminalRunState(row.state);
       // Validation automatique terminée : l'enveloppe RunResult (05 § 4.1).
       if (args['auto_validate'] === true && terminal) {
