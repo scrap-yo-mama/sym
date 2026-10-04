@@ -2335,6 +2335,21 @@ export interface components {
             run_state?: components["schemas"]["RunState"];
             status?: components["schemas"]["ApiStatus"];
             error?: components["schemas"]["RunError"];
+            /** @description Enquête encore en cours à la réponse (validation automatique plus longue que l'attente) : relire `get_run` (ou GET /api/runs/{id}) après ce délai ; `null` en pause. Absent si l'enquête est terminée. */
+            poll_after_seconds?: number | null;
+            /** @description Enquête encore en cours à la réponse : même indice que `RunResult.progress` (phase, essais, phrase). */
+            progress?: {
+                phase: string;
+                strategies_tried: number;
+                last_attempt: {
+                    execution: string;
+                    network: string;
+                    result: string;
+                } | null;
+                message: string;
+            };
+            /** @description Enquête encore en cours à la réponse : l'appel suivant (`get_run` avec `run_id`). */
+            next_action?: components["schemas"]["NextAction"];
         };
         /** @description Champs modifiables. Un schéma (`output_schema`, `input_schema`) ne change que par un brouillon puis une promotion (19 § 6, itération) : en place, 409 `draft_required`. `access_policy` n'est pas modifiable (INV11) ; une API avec session reste `private` (400 `session_api_private`). */
         ApiPatch: {

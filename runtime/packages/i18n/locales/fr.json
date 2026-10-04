@@ -2249,6 +2249,7 @@
     "phase_started": "Étape : {phase}.",
     "access_report": {
       "proceed": "Rapport d'accès : page sondée [{duration}, {cost}].",
+      "redirected": "{from} redirige de façon permanente vers {domain} : l'API utilise désormais {domain}.",
       "review": "Rapport d'accès : page sondée, signaux d'usage à lire [{duration}, {cost}].",
       "stopped": "Rapport d'accès : le site refuse l'accès. SYM s'arrête là [{duration}, {cost}].",
       "unknown": "Rapport d'accès terminé [{duration}, {cost}]."

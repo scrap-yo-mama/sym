@@ -305,3 +305,26 @@ describe('proposition → schéma de sortie, stratégie, échantillon', () => {
     expect(noBrowser.map((p) => p.execution)).toEqual(['fetch']);
   });
 });
+
+describe('banc R06, R08 : essai IA compilé et vérifié sans LLM, plus d’exécution LLM de plus', () => {
+  test('assert_ai_trial_accepted_after_compiled_check — `acceptEarly` vrai après la 1re exécution conforme : couple retenu sur 1 exécution', async () => {
+    const plan = orderTrials([pair('agent_fetch', 'direct', 0.05, 'page')]);
+    const ports = fakePorts(() => okRun(1, 0.04));
+    const asked: string[] = [];
+    const out = await runTrials(plan, { ...ports, acceptEarly: async (p) => (asked.push(p.execution), true) }, budget);
+    expect(out.kind).toBe('conformant');
+    expect(ports.calls).toEqual(['agent_fetch/direct#0']);
+    expect(asked).toEqual(['agent_fetch']);
+    expect(out.spentUsd).toBe(0.04);
+    expect(ports.finishedLog[0]).toMatchObject({ result: 'ok', cost_usd: 0.04 });
+    expect(ports.finishedLog[0]!.executions).toHaveLength(1);
+  });
+
+  test('`acceptEarly` faux (compilation refusée) : les N exécutions comme avant', async () => {
+    const plan = orderTrials([pair('agent_fetch', 'direct', 0.05, 'page')]);
+    const ports = fakePorts(() => okRun(1, 0.04));
+    const out = await runTrials(plan, { ...ports, acceptEarly: async () => false }, budget);
+    expect(out.kind).toBe('conformant');
+    expect(ports.calls).toEqual(['agent_fetch/direct#0', 'agent_fetch/direct#1', 'agent_fetch/direct#2']);
+  });
+});

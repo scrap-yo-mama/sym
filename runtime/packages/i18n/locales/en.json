@@ -2249,6 +2249,7 @@
     "phase_started": "Step: {phase}.",
     "access_report": {
       "proceed": "Access report: page probed [{duration}, {cost}].",
+      "redirected": "{from} permanently redirects to {domain}: the API now uses {domain}.",
       "review": "Access report: page probed, usage signals to read [{duration}, {cost}].",
       "stopped": "Access report: the site refuses access. SYM stops here [{duration}, {cost}].",
       "unknown": "Access report done [{duration}, {cost}]."

@@ -978,6 +978,7 @@ export type MessageKey =
   | 'mcp.user.prompt.review_catalog.title'
   | 'mcp.user.sym_signature'
   | 'narrative.access_report.proceed'
+  | 'narrative.access_report.redirected'
   | 'narrative.access_report.review'
   | 'narrative.access_report.stopped'
   | 'narrative.access_report.unknown'

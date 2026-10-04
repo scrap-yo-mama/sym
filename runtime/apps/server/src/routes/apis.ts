@@ -60,6 +60,7 @@ import {
 import { briefViewOf, ownerNarrativeLocale, prepareBrief, rejectBrief, saveBrief } from '../rest/briefs.js';
 import { runErrorOf } from '../rest/run-error.js';
 import { buildRunResult, readRunRow, waitForRun } from '../rest/runs.js';
+import { investigationProgress, investigationTimeline } from '../rest/timeline.js';
 import { BLOCKING_STATUS, rejectIfKeyRateLimited, rejectWithoutAck, reasonMessage, reserveRunSlot, RunSlotError, sendRunSlotError, triggerOf, waitSecondsOf } from '../rest/shared.js';
 import { CURSOR_TIME, decodeCursor, encodeCursor, INT4_MAX, UUID } from './account-helpers.js';
 import { audit, notFound, sendError, type Actor } from './guard.js';
@@ -260,7 +261,7 @@ export async function waitApiLeavesEnquete(ctx: ServerContext, actor: Actor, api
 /** Corps de `ApiCreated` (05 § 4.1) : phase, schéma proposé et échantillon (propriétaire), rapport d'accès, run. */
 export async function createdView(ctx: ServerContext, actor: Actor, apiId: string, runId: string) {
   const locale = await ownerNarrativeLocale(ctx, actor.userId);
-  return withActor(ctx.pool, actor, async (db) => {
+  const view = await withActor(ctx.pool, actor, async (db) => {
     const api = await readApiById(db, apiId);
     const proposal = await latestProposal(db, apiId);
     // Dossier d'enquête (19c § 7) : rapport et récit du code, propriétaire seulement (lecture filtrée par owner_id).
@@ -280,8 +281,15 @@ export async function createdView(ctx: ServerContext, actor: Actor, apiId: strin
       ...(run === null ? {} : { run_state: run.state }),
       ...(api === null ? {} : { status: api.status }),
       ...(error === null ? {} : { error }),
+      active: run !== null && !isTerminalRunState(run.state) ? { paused: run.paused_at !== null } : null,
     };
   });
+  // Enquête encore en cours à la réponse (validation automatique plus longue que l'attente, plafonnée à 25 s) : de quoi la suivre
+  // sans deviner, comme RunResult (banc, passage 1) : quand relire, ce que fait SYM, et l'appel suivant (get_run).
+  const { active, ...rest } = view;
+  if (active === null) return rest;
+  const progress = investigationProgress(await investigationTimeline(ctx, actor, runId, view.slug));
+  return { ...rest, poll_after_seconds: active.paused ? null : 5, progress, next_action: { tool: 'get_run', args: { run_id: runId } } };
 }
 
 /** Champs JSON d'une diff (chemins pointés), du plus haut niveau aux feuilles. */

@@ -8,7 +8,7 @@
 // compilation d'un essai E4 conforme, vérifiée sans LLM (html-compile.ts, UX-20). Le tunnel ne sert que s'il est dans la
 // politique réseau de l'API, jamais E6 ni un script.
 import type { AgentTraceStep } from '../agent/engine.js';
-import type { HybridSpec } from '../agent/specs.js';
+import { E4_SAMPLE_INPUT_CHARS, E4_SAMPLE_ITEMS, type HybridSpec } from '../agent/specs.js';
 import type { Execution, Network } from '../model/enums.js';
 import { compileHybridToSteps } from '../steps/compile.js';
 import type { StepSource } from '../steps/spec.js';
@@ -47,8 +47,6 @@ export type BuildPlanInput = {
   readonly totalBytes: number;
 };
 
-/** Caractères d'entrée de la mise en forme E4 (`limits.max_input_chars` par défaut de 2.4). */
-const E4_MAX_INPUT_CHARS = 60_000;
 
 /** Couples essayables, chiffrés et triés par coût croissant (puis E, puis N, puis l'ordre des gisements). */
 export function buildTrialPlan(input: BuildPlanInput): PlanEntry[] {
@@ -70,8 +68,10 @@ export function buildTrialPlan(input: BuildPlanInput): PlanEntry[] {
     }
     const allowedHosts = [input.pageHost];
     if (input.agentic.extract !== undefined && !tunnel) {
-      const spec = { schema_version: 1, kind: 'agent_fetch', request: { url: input.pageUrl, allowed_hosts: allowedHosts }, via: 'fetch', instruction: input.instruction };
-      add('agent_fetch', network, 'page', spec, false, input.documentBytes, input.agentic.extract, Math.ceil(Math.min(input.documentBytes, E4_MAX_INPUT_CHARS) / 4));
+      // Essai d'enquête en échantillon (banc R06, R08) : les premiers éléments de la page 1 seulement, entrée bornée ; la liste
+      // entière est relue par la stratégie compilée, sans LLM. Retiré de la version retenue (`retainedStrategy`).
+      const spec = { schema_version: 1, kind: 'agent_fetch', request: { url: input.pageUrl, allowed_hosts: allowedHosts }, via: 'fetch', instruction: input.instruction, limits: { sample_items: E4_SAMPLE_ITEMS } };
+      add('agent_fetch', network, 'page', spec, false, input.documentBytes, input.agentic.extract, Math.ceil(Math.min(input.documentBytes, E4_SAMPLE_INPUT_CHARS) / 4));
     }
     // E6 limité au serveur (0.6b, ADR 0001) : jamais en tunnel.
     if (input.agentic.agent !== undefined && input.browser && !tunnel) {
@@ -81,6 +81,15 @@ export function buildTrialPlan(input: BuildPlanInput): PlanEntry[] {
   }
   const order = [...input.strategies.map((s) => s.candidate.id), 'page'];
   return orderTrials(entries, order) as PlanEntry[];
+}
+
+/** Spec E4 sans l'échantillon de l'essai d'enquête : la version retenue extrait toute la page à chaque run. */
+function withoutSample(spec: unknown): unknown {
+  if (typeof spec !== 'object' || spec === null) return spec;
+  const limits = (spec as { limits?: unknown }).limits;
+  if (typeof limits !== 'object' || limits === null || !('sample_items' in limits)) return spec;
+  const { sample_items: _sample, ...rest } = limits as Record<string, unknown>;
+  return { ...spec, limits: rest };
 }
 
 /** Version retenue au terme de l'enquête, ou refus (`not_compilable`). */
@@ -114,6 +123,7 @@ export function retainedStrategy(
   measuredUsd: number | null,
   context: StepsCompileContext = { modelId: null, at: new Date().toISOString() },
 ): RetainedStrategy {
+  if (entry.execution === 'agent_fetch') return { ok: true, execution: entry.execution, network: entry.network, spec: withoutSample(entry.spec), estCostUsd: entry.est_cost_usd };
   if (entry.execution !== 'agent') return { ok: true, execution: entry.execution, network: entry.network, spec: entry.spec, estCostUsd: entry.est_cost_usd };
   if (compiled === undefined || compiled === null) return { ok: false, reason: 'not_compilable' };
   let steps: ReturnType<typeof compileHybridToSteps>;

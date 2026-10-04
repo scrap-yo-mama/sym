@@ -50,6 +50,11 @@ export type EgressProxyOptions = {
   allowHosts?: readonly string[];
   /** Portées de site admises en plus d'`allowHosts` (domaine et sous-domaines), posées par le code seulement (`domainLock`). */
   allowHostSuffixes?: readonly string[];
+  /**
+   * Hôtes admis en plus, décidés requête par requête par le code (sous-ressources statiques d'un tiers pendant la
+   * reconnaissance, `createStaticAssetAllowance`) ; jamais tirés d'une stratégie. La garde SSRF reste appliquée.
+   */
+  allowExtraHost?: (host: string) => boolean;
   /** Journal : demande refusée par le verrou de domaines (hôte normalisé). */
   onDomainBlocked?: (target: EgressTarget) => void;
   /** Admission d'une nouvelle connexion sortante (plafond de coût) : `false` → 403 `run_budget_exceeded`. */
@@ -168,7 +173,7 @@ export async function startEgressProxy(options: EgressProxyOptions): Promise<Egr
     requests += 1;
     onRequest?.({ host, port, via });
     if (refuseAll === true) throw new EgressRefusedError('egress_closed');
-    if (allowHost !== undefined && !allowHost(host)) {
+    if (allowHost !== undefined && !allowHost(host) && options.allowExtraHost?.(host) !== true) {
       onDomainBlocked?.({ host: normalizeHost(host), port, via });
       throw new EgressRefusedError('domain_not_allowed');
     }

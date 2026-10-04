@@ -37,6 +37,8 @@ export type ReconCapture = {
   readonly exchanges: readonly CapturedExchange[];
   /** Octets reçus par toute la passe (sous-ressources comprises) : base du coût estimé de E2 et E3. */
   readonly totalBytes: number;
+  /** Sous-ressources statiques d'hôtes tiers chargées pour le rendu (mode navigateur) : hôtes et requêtes, sans URL. */
+  readonly assets?: { readonly hosts: number; readonly requests: number };
 };
 
 /** Squelette d'un enregistrement : chemin relatif (`$.a.b`) → type JSON. Aucune valeur. */

@@ -36,7 +36,7 @@ import {
 } from '@runtime/core/exec';
 import { DslError } from '@runtime/core';
 import type { CapturedExchange, ReconCapture } from '@runtime/core/investigation';
-import { DomainNotAllowedError, guardedGoto, type BrowserEgress, type SsrfGuard } from '@runtime/core/net';
+import { DomainNotAllowedError, guardedGoto, type BrowserEgress, type SsrfGuard, type StaticAssetAllowance } from '@runtime/core/net';
 import type { Page, Request, Response } from 'playwright-core';
 import { boundedContent, boundedDocumentBody, boundedRawBody, countMatching, scrollStep, TOO_LARGE, trackDecodedSizes, type DecodedSizes } from '../browser/bounded.js';
 import type { BrowserPool } from '../browser/pool.js';
@@ -62,6 +62,8 @@ export type BrowserExecutorOptions = Omit<DeclarativeRunOptions, 'transport'> & 
   readonly trackData?: boolean;
   /** Portées de site admises en plus d'`allowed_hosts` (domaine et sous-domaines) : reconnaissance de l'enquête seulement. */
   readonly allowedHostSuffixes?: readonly string[];
+  /** Sous-ressources statiques d'hôtes tiers admises (reconnaissance seulement), même objet que le proxy d'egress de la passe. */
+  readonly staticAssets?: StaticAssetAllowance;
 };
 
 const maxBytesOf = (options: BrowserExecutorOptions): number => options.spec.limits?.max_response_bytes ?? 5_000_000;
@@ -179,6 +181,7 @@ async function withRunContext(
       egressServer: options.egress.server,
       allowedHosts: options.spec.request.allowed_hosts,
       ...(options.allowedHostSuffixes === undefined ? {} : { allowedHostSuffixes: options.allowedHostSuffixes }),
+      ...(options.staticAssets === undefined ? {} : { staticAssets: options.staticAssets }),
       ...(options.userAgent === undefined ? {} : { userAgent: options.userAgent }),
       admit: async (request) => nav.admit(request),
       // Navigation lancée par la page vers un hôte hors API (redirection JS d'un défi vers son éditeur) : coupée par la
@@ -458,7 +461,9 @@ const STOPPING_ROUTES = new Set(['stop', 'action_required', 'slow_down']);
  * CHAQUE réponse `fetch` / XHR d'un domaine de l'API est classée aussi (INV6, comme la reconnaissance statique) : un
  * refus, un défi, une connexion requise ou un 429 sur un point de données arrête la passe ; un 404 ou un 5xx n'est
  * qu'une voie vide.
- * Aucun clic, aucune saisie : la page n'est que regardée.
+ * Aucun clic, aucune saisie : la page n'est que regardée. Une application rendue en JavaScript dont le code vient d'un CDN
+ * tiers (banc R05) se rend : `staticAssets` admet ses scripts et feuilles de style (GET, bornés), rien d'autre vers un tiers ;
+ * ses réponses JSON sur un domaine de l'API sont capturées comme les autres, et son DOM rendu est lu.
  */
 export async function runReconnaissancePass(options: ReconnaissancePassOptions): Promise<{ result: DeclarativeRunResult; capture: ReconCapture }> {
   const url = new URL(options.url).href;
@@ -561,5 +566,15 @@ export async function runReconnaissancePass(options: ReconnaissancePassOptions):
     return { ok: true, records: [], pages: 1, requests: 1 + exchanges.length, escalated: false, stop: 'no_pagination', truncated: false };
   });
   const capturedBytes = exchanges.reduce((sum, e) => sum + e.bytes, 0) + (seen.document?.bytes ?? 0);
-  return { result, capture: { mode: 'browser', pageUrl: url, document: seen.document, exchanges, totalBytes: Math.max(seen.received, capturedBytes) } };
+  return {
+    result,
+    capture: {
+      mode: 'browser',
+      pageUrl: url,
+      document: seen.document,
+      exchanges,
+      totalBytes: Math.max(seen.received, capturedBytes),
+      ...(options.staticAssets === undefined ? {} : { assets: options.staticAssets.usage() }),
+    },
+  };
 }

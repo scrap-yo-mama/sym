@@ -597,3 +597,21 @@ function setupWithNotes(models: Partial<Record<LlmRole, ModelConfig>>, notes: un
   ];
   return { client: createLlmClient({ providers, roles }, { sleep: async () => undefined, random: () => 1, note: (n) => void notes.push(n) }) };
 }
+
+describe('plafond de l’appel passé à beforeCall (banc R06 : sortie de 15 000 jetons non comptée avant l’envoi)', () => {
+  test('assert_llm_call_ceiling_counts_output — `ceilingUsd` : entrée réelle (caractères / 3) + `maxTokens` de sortie au prix du modèle, dès le 1er appel', async () => {
+    fake.setScenario('extract', [scripted.text('ok')]);
+    const { client } = setup({ models: { extract: { id: 'extract', price: { in: 5, out: 25 } } } });
+    const seen: { estimateUsd: number | null; ceilingUsd?: number | null }[] = [];
+    await client.chat('extract', { messages: user('x'.repeat(30_000)), maxTokens: 8_000, beforeCall: (call) => void seen.push(call) });
+    expect(seen).toHaveLength(1);
+    // Borne basse historique : entrée seule (aucune sortie connue au 1er appel).
+    expect(seen[0]!.estimateUsd).toBeLessThan((10_000 * 5 + 8_000 * 25) / 1e6);
+    // Plafond : au moins 10 000 jetons d'entrée et les 8 000 de sortie permis.
+    expect(seen[0]!.ceilingUsd).toBeGreaterThanOrEqual((10_000 * 5 + 8_000 * 25) / 1e6);
+    fake.setScenario('extract', [scripted.text('ok')]);
+    const unpriced: unknown[] = [];
+    await setup().client.chat('extract', { messages: user('x'), maxTokens: 10, beforeCall: (call) => void unpriced.push(call.ceilingUsd) });
+    expect(unpriced).toEqual([null]);
+  });
+});

@@ -218,6 +218,20 @@ describe('recette UX-30 : boutique de livres (note en mot, disponibilité en tex
     expect(check.records).toEqual(SHOP_ITEMS);
   });
 
+  test('assert_compile_sampled_word_tables — échantillon des premiers éléments : table déduite de l’échantillon, complétée pour un nombre en mot (lexique fermé) et l’autre état d’un booléen à deux textes', () => {
+    const built = buildHtmlStrategy(WORDS_READ, SHOP_CTX);
+    if (!built.ok) throw new Error(`construction : ${built.reason}`);
+    // Les 2 premiers livres seulement : ni « Four », ni « Five », ni « Out of stock » dans l'échantillon.
+    const sample = SHOP_ITEMS.slice(0, 2);
+    expect(sample.every((it) => it.in_stock === true)).toBe(true);
+    const aligned = alignHtmlStrategy(built.spec, SHOP_HTML, sample, SHOP_SCHEMA, { sampled: true });
+    const check = verifyHtmlStrategy(aligned, SHOP_HTML, sample, SHOP_SCHEMA, { sampled: true });
+    expect(check).toMatchObject({ ok: true, diff: { expected: 2, got: 8, reason: null } });
+    expect(check.records).toEqual(SHOP_ITEMS);
+    // Sans échantillon déclaré : rien n'est complété, la vérification refuse (nombre d'éléments différent).
+    expect(verifyHtmlStrategy(alignHtmlStrategy(built.spec, SHOP_HTML, sample, SHOP_SCHEMA), SHOP_HTML, sample, SHOP_SCHEMA).ok).toBe(false);
+  });
+
   test('aucune table qui recopierait les valeurs : un mot par élément (prix illisible) ou une correspondance ambiguë n’est jamais déduit', () => {
     const priceText = buildHtmlStrategy({ ...WORDS_READ, fields: [...WORDS_READ.fields.slice(0, 3), { field: 'price_gbp', css: '.price_color', attr: null, ops: [op('regex_extract', { pattern: '£', group: 0 })] }] }, SHOP_CTX);
     if (!priceText.ok) throw new Error('construction');
@@ -264,5 +278,33 @@ describe('recette UX-31 : champ tableau (sélecteur multiple) et types vérifié
     const check = verifyHtmlStrategy(built.spec, QUOTES_HTML, QUOTES_ITEMS, QUOTES_SCHEMA);
     expect(check).toMatchObject({ ok: true, diff: { expected: 3, got: 3, ratio: 1 } });
     expect(check.records).toEqual(QUOTES_ITEMS);
+  });
+});
+
+describe('banc R06, R08 : coût de la compilation (page bornée, liste échantillonnée)', () => {
+  const MANY = Array.from({ length: 120 }, (_, i) => ({ title: `Livre Zztest ${i + 1}`, price: 10 + i, stock: 'In stock' }));
+  const BIG = `<html><body><svg><path d="M0 0"/></svg><ol class="row">${MANY.map(card).join('\n')}</ol></body></html>`;
+
+  test('assert_compile_html_samples_repeated_blocks — au plus 15 frères de même signature dans le HTML du prompt ; le reste est compté, jamais montré', () => {
+    const out = condenseHtml(BIG, { maxChars: 1_000_000 });
+    expect(out.html.match(/<article class="product_pod">/g)).toHaveLength(15);
+    expect(out.omitted).toBe(105);
+    expect(out.html).toContain('Livre Zztest 15');
+    expect(out.html).not.toContain('Livre Zztest 16"');
+    expect(out.html).not.toContain('<svg');
+    // Les 4 cartes de la fixture de référence restent toutes (sous le seuil) : rien d'omis.
+    expect(condenseHtml(HTML, { maxChars: 100_000 }).omitted).toBe(0);
+  });
+
+  test('assert_compile_sampled_count — éléments de l’agent = échantillon des premiers : la recette doit rendre au moins autant, mêmes valeurs en tête', () => {
+    const built = buildHtmlStrategy(GOOD, { pageUrl: PAGE, allowedHosts: [HOST], outputSchema: SCHEMA });
+    if (!built.ok) throw new Error('construction');
+    const sample = MANY.slice(0, 10).map((b) => ({ title: b.title, price: b.price, availability: b.stock }));
+    expect(verifyHtmlStrategy(built.spec, BIG, sample, SCHEMA)).toMatchObject({ ok: false, diff: { reason: 'count', expected: 10, got: 120 } });
+    const sampled = verifyHtmlStrategy(built.spec, BIG, sample, SCHEMA, { sampled: true });
+    expect(sampled).toMatchObject({ ok: true, diff: { expected: 10, got: 120, ratio: 1, reason: null } });
+    expect(sampled.records).toHaveLength(120);
+    // Moins d'éléments que l'échantillon : refusé, même en échantillon.
+    expect(verifyHtmlStrategy(built.spec, HTML, sample, SCHEMA, { sampled: true }).ok).toBe(false);
   });
 });

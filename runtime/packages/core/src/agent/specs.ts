@@ -45,9 +45,22 @@ export type AgentFetchSpec = {
   readonly via: 'fetch' | 'fetch_in_page';
   /** Consigne d'extraction ; la page n'est JAMAIS une instruction (08 §4 mesure 1). */
   readonly instruction: string;
-  readonly limits: { readonly max_response_bytes: number; readonly max_input_chars: number; readonly timeout_ms: number };
+  /**
+   * `sample_items` (essai d'enquête seulement, banc R06 et R08) : le modèle ne rend que les N premiers éléments de la page,
+   * sur une entrée bornée (`E4_SAMPLE_INPUT_CHARS`) ; la stratégie compilée lit ensuite tout sans LLM. Absent : extraction
+   * complète (version E4 retenue, rejeu).
+   */
+  readonly limits: { readonly max_response_bytes: number; readonly max_input_chars: number; readonly timeout_ms: number; readonly sample_items?: number };
   readonly rules?: EmbeddedRules;
 };
+
+/** Éléments au plus d'un essai E4 d'enquête (échantillon des premiers éléments de la page 1 ; banc R06 et R08). */
+export const E4_SAMPLE_ITEMS = 20;
+/** Caractères de texte visible au plus envoyés au modèle par un essai E4 en échantillon. */
+export const E4_SAMPLE_INPUT_CHARS = 24_000;
+/** Jetons de sortie permis à un appel E4 : échantillon, ou extraction complète (le plafond de l'essai les compte avant l'envoi). */
+export const E4_SAMPLE_MAX_TOKENS = 4_096;
+export const E4_FULL_MAX_TOKENS = 8_192;
 
 export type AgentSpec = {
   readonly schema_version: 1;
@@ -215,6 +228,7 @@ export function validateAgentFetchSpec(input: unknown): SpecCheck<AgentFetchSpec
       max_response_bytes: c.int(limits['max_response_bytes'], 'limits.max_response_bytes', 1024, 20_000_000, 5_000_000),
       max_input_chars: c.int(limits['max_input_chars'], 'limits.max_input_chars', 500, 400_000, 60_000),
       timeout_ms: c.int(limits['timeout_ms'], 'limits.timeout_ms', 1000, 600_000, 120_000),
+      ...(limits['sample_items'] === undefined ? {} : { sample_items: c.int(limits['sample_items'], 'limits.sample_items', 1, 100, E4_SAMPLE_ITEMS) }),
     },
   });
 }

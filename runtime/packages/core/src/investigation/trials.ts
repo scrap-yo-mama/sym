@@ -91,6 +91,13 @@ export type TrialPorts = {
    */
   contentCheck?(pair: TrialPair): { readonly failure_class: FailureClass; readonly detail: string } | null | Promise<{ readonly failure_class: FailureClass; readonly detail: string } | null>;
   /**
+   * Essai IA d'enquête (E4 en échantillon, banc R06 et R08) : appelé après la PREMIÈRE exécution conforme d'un couple ; vrai
+   * si une stratégie compilée de cet essai a été vérifiée SANS LLM (exécution E1 conforme sous toutes les gardes d'un run) :
+   * elle tient lieu des exécutions suivantes, qui repaieraient le modèle. Le couple est alors conforme sur 1 exécution. Absent
+   * ou faux : les N exécutions comme avant.
+   */
+  acceptEarly?(pair: TrialPair): boolean | Promise<boolean>;
+  /**
    * Dépense de l'enquête faite HORS des exécutions de couples pendant les essais (compilation et vérification de page 2
    * d'un essai E4) : comptée dans le budget restant et dans la dépense rendue. Absent : 0.
    */
@@ -190,21 +197,27 @@ export async function runTrials(
       }
       return { stop: budgetStop !== null, run, perRunCap };
     };
+    /** Exécutions exigées pour ce couple : N, ou 1 si l'essai IA compilé a été vérifié sans LLM (`acceptEarly`). */
+    let needed = samples;
     for (let i = 0; i < samples; i += 1) {
       const step = await execute(i, 'sample');
       if (step.run !== null) executions.push(step.run);
       if (step.stop) break;
+      if (i === 0 && samples > 1 && step.run?.ok === true && ports.acceptEarly !== undefined && (await ports.acceptEarly(pair))) {
+        needed = 1;
+        break;
+      }
     }
     const paginates = options.paginated?.(pair) === true;
     // Page 2 (04 §4) : une stratégie qui pagine doit l'atteindre au moins une fois, sauf liste finie dès la page 1.
-    if (failure === null && budgetStop === null && executions.length === samples && paginates) {
+    if (failure === null && budgetStop === null && executions.length === needed && paginates) {
       const reached = executions.some((e) => e.pages >= 2);
       const finished = executions.every((e) => e.pages === 1 && e.stop !== null && NATURAL_STOPS.has(e.stop));
       if (!reached && !finished) failure = { cls: 'extraction', detail: 'pagination_page2' };
     }
     // Règle d'arrêt sur la dernière page (04 §4, tâche 2.2) : une exécution d'échantillon qui a fini par la fin naturelle de
     // la liste l'a déjà constatée ; sinon une exécution de plus, au plafond dur, doit y arriver.
-    if (failure === null && budgetStop === null && executions.length === samples && paginates) {
+    if (failure === null && budgetStop === null && executions.length === needed && paginates) {
       const natural = executions.find((e) => e.stop !== null && NATURAL_STOPS.has(e.stop));
       if (natural !== undefined) {
         stopCheck = { verified: true, stop: natural.stop, pages: natural.pages, records: natural.records };
@@ -221,11 +234,11 @@ export async function runTrials(
         }
       }
     }
-    if (failure === null && budgetStop === null && executions.length === samples && ports.contentCheck !== undefined) {
+    if (failure === null && budgetStop === null && executions.length === needed && ports.contentCheck !== undefined) {
       const content = await ports.contentCheck(pair);
       if (content !== null) failure = { cls: content.failure_class, detail: content.detail };
     }
-    const done = executions.length === samples && failure === null && budgetStop === null;
+    const done = executions.length === needed && failure === null && budgetStop === null;
     const all = checkRun === null ? executions : [...executions, checkRun];
     const outcome: PairOutcome = {
       pair,
