@@ -38,7 +38,7 @@ services:
     name: scrapyomama-runtime
     runtime: image
     image:
-      url: ghcr.io/scrap-yo-mama/sym:0.0.0 # x-release-please-version
+      url: ghcr.io/scrap-yo-mama/sym:1.0.0 # x-release-please-version
     region: frankfurt
     plan: 0.5c-512mb
     numInstances: 1
@@ -67,7 +67,7 @@ services:
     name: scrapyomama-runtime-worker
     runtime: image
     image:
-      url: ghcr.io/scrap-yo-mama/sym:0.0.0 # x-release-please-version
+      url: ghcr.io/scrap-yo-mama/sym:1.0.0 # x-release-please-version
     region: frankfurt
     plan: 1c-2g
     numInstances: 1

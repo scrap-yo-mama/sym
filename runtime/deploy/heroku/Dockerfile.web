@@ -1,6 +1,6 @@
 # Heroku (best-effort, tâche 4.1) : processus web. L'image publique de GHCR, épinglée X.Y.Z, avec le rôle `server`.
 # heroku.yml compile ce fichier ; le contexte de build est CE dossier (il ne contient que les quatre fichiers Heroku).
 # x-release-please-start-version
-FROM ghcr.io/scrap-yo-mama/sym:0.0.0
+FROM ghcr.io/scrap-yo-mama/sym:1.0.0
 # x-release-please-end
 ENV RUNTIME_MODE=server

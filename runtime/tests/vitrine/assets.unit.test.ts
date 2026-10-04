@@ -237,9 +237,9 @@ describe('assert_demo_recording_reproducible : quickstart.tape rejoué deux fois
 
 describe('assert_media_index_current : une MINOR cite sa version et une URL user-attachments dans MEDIA.md', () => {
   const media = readFileSync(join(assetsDir, 'MEDIA.md'), 'utf8');
-  test('avant la première MINOR, rien à citer ; MEDIA.md existe et dit qu\'aucune vidéo n\'est envoyée', () => {
+  test('1.0.0 (publication manuelle, D-107) : la ligne de la version dit que la vidéo n\'est pas envoyée (démo sans clé en 1.1) ; MEDIA.md existe', () => {
     const version = (JSON.parse(readFileSync(join(assetsDir, '../../runtime/package.json'), 'utf8')) as { version: string }).version;
-    expect(mediaProblems(version, media)).toEqual([]);
+    expect(mediaProblems(version, media)).toEqual(version === '1.0.0' ? ['la ligne 1.0.0 de MEDIA.md ne porte aucune URL github.com/user-attachments'] : []);
     expect(media).toMatch(/not uploaded yet/);
   });
 

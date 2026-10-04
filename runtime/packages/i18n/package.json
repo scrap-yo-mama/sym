@@ -1,7 +1,7 @@
 {
   "name": "@runtime/i18n",
   "private": true,
-  "version": "0.0.0",
+  "version": "1.0.0",
   "type": "module",
   "license": "AGPL-3.0-only",
   "description": "Paquet de langues commun (tâche 3.20, 21 et 21b) : catalogues en/fr, registre, résolution de la langue, rendu, formats Intl, pseudo-locale, parité sur toutes les surfaces.",

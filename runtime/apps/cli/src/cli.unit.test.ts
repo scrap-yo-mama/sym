@@ -3,7 +3,7 @@ import { expect, test } from 'vitest';
 import { run } from './cli.js';
 
 test('--version affiche la version', async () => {
-  expect(await run(['--version'])).toEqual({ code: 0, out: '0.0.0' });
+  expect(await run(['--version'])).toEqual({ code: 0, out: '1.0.0' });
 });
 
 test('commande inconnue : code 1', async () => {

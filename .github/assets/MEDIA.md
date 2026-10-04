@@ -6,4 +6,4 @@ version and a `github.com/user-attachments` URL.
 
 | Version | Video | URL |
 |---|---|---|
-| none yet | Console demo (recorded on fixtures) | not uploaded yet (needs the demo mode, task 3.11, and a human upload) |
+| 1.0.0 | Console demo (recorded on fixtures) | not uploaded yet (needs the demo mode, task 3.11, moved to 1.1, and a human upload) |

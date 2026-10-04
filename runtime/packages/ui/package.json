@@ -1,7 +1,7 @@
 {
   "name": "@runtime/ui",
   "private": true,
-  "version": "0.0.0",
+  "version": "1.0.0",
   "type": "module",
   "license": "AGPL-3.0-only",
   "description": "Design system SYM : jetons, polices auto-hébergées, thèmes clair et sombre, icône SYM (tâche 3.15). Paquet de sources : consommé tel quel par Vite, sans étape de build.",

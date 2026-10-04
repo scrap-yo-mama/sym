@@ -25,7 +25,7 @@
 name: scrapyomama-runtime
 
 x-runtime: &runtime
-  image: ${RUNTIME_IMAGE:-ghcr.io/scrap-yo-mama/sym:0.0.0} # x-release-please-version
+  image: ${RUNTIME_IMAGE:-ghcr.io/scrap-yo-mama/sym:1.0.0} # x-release-please-version
   pull_policy: missing
   restart: unless-stopped
   stop_grace_period: 45s
